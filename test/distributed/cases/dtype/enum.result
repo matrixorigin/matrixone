@@ -55,7 +55,7 @@ enum01  ¦  CREATE TABLE `enum01` (
 )
 select table_name, COLUMN_NAME, data_type, is_nullable from information_schema.columns where table_name like 'enum01' and COLUMN_NAME not like '__mo%';
 ➤ table_name[12,-1,0]  ¦  COLUMN_NAME[12,-1,0]  ¦  data_type[12,-1,0]  ¦  is_nullable[12,-1,0]  𝄀
-enum01  ¦  col1  ¦  ENUM  ¦  YES
+enum01  ¦  col1  ¦  enum  ¦  YES
 select * from enum01;
 ➤ col1[12,-1,0]  𝄀
 red
@@ -75,7 +75,7 @@ show columns from enum03;
 no such table enum.enum03
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'enum02' and COLUMN_NAME not like '__mo%';
 ➤ table_name[12,-1,0]  ¦  COLUMN_NAME[12,-1,0]  ¦  data_type[12,-1,0]  ¦  is_nullable[12,-1,0]  𝄀
-enum02  ¦  col1  ¦  ENUM  ¦  YES
+enum02  ¦  col1  ¦  enum  ¦  YES
 drop table enum02;
 drop table if exists enum03;
 create table enum03 (col1 enum('ejwuijfew', 'ewrwrewretr', 'werwre') not null);
@@ -190,8 +190,8 @@ col1  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 col2  ¦  ENUM('数据库','数据库系统','数据库管理系统')  ¦  YES  ¦    ¦  null  ¦    ¦  
 select table_name, COLUMN_NAME, data_type, is_nullable from information_schema.columns where table_name like 'pri02' and COLUMN_NAME not like '__mo%';
 ➤ table_name[12,-1,0]  ¦  COLUMN_NAME[12,-1,0]  ¦  data_type[12,-1,0]  ¦  is_nullable[12,-1,0]  𝄀
-pri02  ¦  col1  ¦  INT  ¦  YES  𝄀
-pri02  ¦  col2  ¦  ENUM  ¦  YES
+pri02  ¦  col1  ¦  int  ¦  YES  𝄀
+pri02  ¦  col2  ¦  enum  ¦  YES
 drop table pri02;
 drop table if exists pri03;
 create table pri03 (col1 int, col2 enum('数据库', '数据库系统', '数据库管理系统'));
@@ -215,8 +215,8 @@ col1  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 col2  ¦  ENUM('数据库','数据库系统','数据库管理系统')  ¦  YES  ¦    ¦  null  ¦    ¦  
 select table_name, COLUMN_NAME, data_type, is_nullable from information_schema.columns where table_name like 'pri03' and COLUMN_NAME not like '__mo%';
 ➤ table_name[12,-1,0]  ¦  COLUMN_NAME[12,-1,0]  ¦  data_type[12,-1,0]  ¦  is_nullable[12,-1,0]  𝄀
-pri03  ¦  col1  ¦  INT  ¦  YES  𝄀
-pri03  ¦  col2  ¦  ENUM  ¦  YES
+pri03  ¦  col1  ¦  int  ¦  YES  𝄀
+pri03  ¦  col2  ¦  enum  ¦  YES
 drop table pri03;
 drop table if exists pri04;
 create table pri04 (col1 int, col2 enum('database', 'database management', 'database management system'));
@@ -243,8 +243,8 @@ select * from pri04 where col2 = 'database';
 1  ¦  database
 select table_name, COLUMN_NAME, data_type, is_nullable from information_schema.columns where table_name like 'pri04' and COLUMN_NAME not like '__mo%';
 ➤ table_name[12,-1,0]  ¦  COLUMN_NAME[12,-1,0]  ¦  data_type[12,-1,0]  ¦  is_nullable[12,-1,0]  𝄀
-pri04  ¦  col1  ¦  INT  ¦  YES  𝄀
-pri04  ¦  col2  ¦  ENUM  ¦  YES
+pri04  ¦  col1  ¦  int  ¦  YES  𝄀
+pri04  ¦  col2  ¦  enum  ¦  YES
 drop table pri04;
 drop table if exists enum_idx01;
 create table enum_idx01 (id varchar(191) primary key, role enum('a','b','c'), index idx_role(role));

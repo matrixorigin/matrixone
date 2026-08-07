@@ -286,6 +286,7 @@ func (s *Scope) resetForReuse(c *Compile) (err error) {
 	// state so the edges can carry the next execution's signals.
 	// See: https://github.com/matrixorigin/matrixone/issues/25614
 	if s.Proc != nil {
+		s.Proc.CopyPlanSnapshotFrom(c.proc)
 		for _, reg := range s.Proc.Reg.MergeReceivers {
 			reg.ResetTerminalStateForReuse()
 		}
@@ -1320,11 +1321,16 @@ func receiveMsgAndForward(sender *messageSenderOnClient, forwardReg *process.Wai
 		}
 
 		var receiverDone bool
-		if receiverDone, err = forwardRemoteBatchWithContext(sender, forwardReg, bat, sender.mp); err != nil || receiverDone {
+		if receiverDone, err = forwardRemoteBatchWithContext(sender, forwardReg, bat, sender.mp); err != nil {
 			return err
 		}
+		// A stopped receiver intentionally discarded the decoded batch, but the
+		// remote sender still owns its credit until this ACK is sent.
 		if err = sender.acknowledgeRemoteBatch(); err != nil {
 			return err
+		}
+		if receiverDone {
+			return nil
 		}
 	}
 }

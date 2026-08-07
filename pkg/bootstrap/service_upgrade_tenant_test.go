@@ -158,6 +158,118 @@ func Test_asyncUpgradeTenantTask_SkipsTenantAtTargetVersion(t *testing.T) {
 	)
 }
 
+func TestShouldRunTenantUpgrade(t *testing.T) {
+	for _, test := range []struct {
+		name          string
+		createVersion string
+		fromVersion   string
+		toVersion     string
+		want          bool
+	}{
+		{name: "older tenant on version transition", createVersion: "3.0.0", fromVersion: "3.0.0", toVersion: "3.0.1", want: true},
+		{name: "target tenant on version transition", createVersion: "3.0.1", fromVersion: "3.0.0", toVersion: "3.0.1"},
+		{name: "target tenant on offset upgrade", createVersion: "4.0.6", fromVersion: "4.0.6", toVersion: "4.0.6", want: true},
+		{name: "newer tenant on offset upgrade", createVersion: "4.0.7", fromVersion: "4.0.6", toVersion: "4.0.6"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			upgrade := versions.VersionUpgrade{
+				FromVersion: test.fromVersion,
+				ToVersion:   test.toVersion,
+			}
+			require.Equal(t, test.want, shouldRunTenantUpgrade(test.createVersion, upgrade))
+		})
+	}
+}
+
+func Test_asyncUpgradeTenantTask_RunsSameVersionOffsetUpgrade(t *testing.T) {
+	sid := ""
+	runtime.RunTest(
+		sid,
+		func(rt runtime.Runtime) {
+			const (
+				tenantID            = int32(10)
+				currentVersion      = "4.0.6"
+				newVersionOffset    = uint32(5)
+				upgradeID           = uint64(100)
+				upgradeTenantTaskID = uint64(200)
+			)
+
+			var taskReady atomic.Bool
+			var finalized atomic.Bool
+			var tenantVersionUpdated atomic.Bool
+			ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond*50)
+			defer cancel()
+
+			sqlExecutor := executor.NewMemExecutor(func(sql string) (executor.Result, error) {
+				switch {
+				case strings.Contains(sql, "from mo_upgrade") &&
+					strings.Contains(sql, "where state = 1") &&
+					!strings.Contains(sql, "for update"):
+					if finalized.Load() {
+						return executor.Result{}, nil
+					}
+					return buildUpgradeVersionResult(upgradeID, versions.StateUpgradingTenant,
+						currentVersion, currentVersion, newVersionOffset, 0,
+						versions.Yes, versions.Yes, 1, 0), nil
+				case strings.Contains(sql, "from mo_upgrade_tenant where from_account_id >= 0"):
+					if taskReady.Load() {
+						return executor.Result{}, nil
+					}
+					return buildUpgradeTenantTaskRows(
+						[]uint64{upgradeTenantTaskID}, []int32{tenantID}, []int32{tenantID}), nil
+				case strings.Contains(sql, "select account_id, create_version from mo_account"):
+					return buildUpgradeTenantAccountRows([]int32{tenantID}, []string{currentVersion}), nil
+				case sql == fmt.Sprintf("update mo_account set create_version = '%s' where account_id = %d", currentVersion, tenantID):
+					tenantVersionUpdated.Store(true)
+					return executor.Result{AffectedRows: 1}, nil
+				case strings.Contains(sql, "update mo_upgrade_tenant set ready = 1") &&
+					strings.Contains(sql, fmt.Sprintf("where id = %d", upgradeTenantTaskID)):
+					taskReady.Store(true)
+					return executor.Result{AffectedRows: 1}, nil
+				case strings.Contains(sql, "from mo_upgrade") &&
+					strings.Contains(sql, fmt.Sprintf("where id = %d for update", upgradeID)):
+					return buildUpgradeVersionResult(upgradeID, versions.StateUpgradingTenant,
+						currentVersion, currentVersion, newVersionOffset, 0,
+						versions.Yes, versions.Yes, 1, 0), nil
+				case strings.Contains(sql, "update mo_upgrade set total_tenant = 1, ready_tenant = 1") &&
+					strings.Contains(sql, "state = 2"):
+					finalized.Store(true)
+					cancel()
+					return executor.Result{AffectedRows: 1}, nil
+				default:
+					return executor.Result{}, fmt.Errorf("unexpected sql: %s", sql)
+				}
+			})
+
+			h := newTestVersionHandler(currentVersion, currentVersion, versions.Yes, versions.Yes, newVersionOffset)
+			s := newServiceForTest(
+				sid,
+				&memLocker{},
+				clock.NewHLCClock(func() int64 { return 0 }, 0),
+				nil,
+				sqlExecutor,
+				func(s *service) {
+					s.handles = append(s.handles, h)
+				},
+				WithCheckUpgradeTenantDuration(time.Millisecond),
+			)
+
+			txnOperator := mock_frontend.NewMockTxnOperator(gomock.NewController(t))
+			txnOperator.EXPECT().TxnOptions().Return(txn.TxnOptions{CN: sid}).AnyTimes()
+
+			s.exec = executor.NewMemExecutor2(func(sql string) (executor.Result, error) {
+				return sqlExecutor.Exec(context.Background(), sql, executor.Options{})
+			}, txnOperator)
+
+			s.asyncUpgradeTenantTask(ctx)
+			require.True(t, taskReady.Load())
+			require.True(t, finalized.Load())
+			require.True(t, tenantVersionUpdated.Load())
+			require.Equal(t, uint64(1), h.callHandleTenantUpgrade.Load())
+		},
+	)
+}
+
 func Test_asyncUpgradeTenantTask_AutoCompletesDeletedTenantTasks(t *testing.T) {
 	sid := ""
 	runtime.RunTest(
