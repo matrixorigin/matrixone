@@ -15,7 +15,7 @@
 package malloc
 
 import (
-	"sync/atomic"
+	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
@@ -25,6 +25,35 @@ import (
 // rather than the visible slice length returned by Allocate.
 type BackingSizer interface {
 	BackingSize(size uint64) (uint64, error)
+}
+
+// BackingSizeContract identifies an immutable backing-size mapping. Unknown
+// values are rejected, which limits sharded allocators to built-in,
+// verifiable mappings rather than accepting an arbitrary caller-provided key.
+type BackingSizeContract uint8
+
+const (
+	backingSizeContractUnknown BackingSizeContract = iota
+	BackingSizeContractExact
+	BackingSizeContractClass
+)
+
+func (c BackingSizeContract) String() string {
+	switch c {
+	case BackingSizeContractExact:
+		return "exact"
+	case BackingSizeContractClass:
+		return "class"
+	default:
+		return "unknown"
+	}
+}
+
+// BackingSizeContracter exposes the stable backing-size mapping of an
+// allocator. ShardedAllocator requires this contract so it can validate all
+// shards once without memoizing per-request predictions.
+type BackingSizeContracter interface {
+	BackingSizeContract() (BackingSizeContract, error)
 }
 
 // BackingSize reports the allocator-backed size for a request. Allocators that
@@ -54,6 +83,23 @@ func BackingSize(allocator Allocator, size uint64) (uint64, error) {
 	return backingSize, nil
 }
 
+func backingSizeContract(allocator Allocator) (BackingSizeContract, error) {
+	contracter, ok := allocator.(BackingSizeContracter)
+	if !ok {
+		return backingSizeContractUnknown, moerr.NewInvalidStateNoCtxf(
+			"allocator %T does not report a stable backing-size contract", allocator)
+	}
+	contract, err := contracter.BackingSizeContract()
+	if err != nil {
+		return backingSizeContractUnknown, err
+	}
+	if contract != BackingSizeContractExact && contract != BackingSizeContractClass {
+		return backingSizeContractUnknown, moerr.NewInvalidStateNoCtxf(
+			"allocator %T reported an unknown backing-size contract", allocator)
+	}
+	return contract, nil
+}
+
 func (c *ClassAllocator[T]) BackingSize(size uint64) (uint64, error) {
 	backingSize, ok := ClassAllocationSize(size)
 	if !ok {
@@ -65,84 +111,75 @@ func (c *ClassAllocator[T]) BackingSize(size uint64) (uint64, error) {
 	return backingSize, nil
 }
 
+func (*ClassAllocator[T]) BackingSizeContract() (BackingSizeContract, error) {
+	return BackingSizeContractClass, nil
+}
+
 func (c *CAllocator) BackingSize(size uint64) (uint64, error) {
 	return size, nil
+}
+
+func (*CAllocator) BackingSizeContract() (BackingSizeContract, error) {
+	return BackingSizeContractExact, nil
 }
 
 func (s ShardedAllocator[T]) BackingSize(size uint64) (uint64, error) {
 	if len(s) == 0 {
 		return 0, moerr.NewInternalErrorNoCtx("backing size requested from empty sharded allocator")
 	}
-	if cache := s[0].backingSizeCache; cache != nil {
-		return cache.resolve(size, s.validateBackingSize)
-	}
-	return s.validateBackingSize(size)
-}
-
-func (s ShardedAllocator[T]) validateBackingSize(size uint64) (uint64, error) {
-	backingSize, err := BackingSize(s[0].Allocator, size)
-	if err != nil {
+	if _, err := s.BackingSizeContract(); err != nil {
 		return 0, err
 	}
+	return BackingSize(s[0].Allocator, size)
+}
+
+type shardedBackingSizeContractState struct {
+	once     sync.Once
+	contract BackingSizeContract
+	err      error
+}
+
+func (s ShardedAllocator[T]) BackingSizeContract() (BackingSizeContract, error) {
+	if len(s) == 0 {
+		return backingSizeContractUnknown, moerr.NewInternalErrorNoCtx("backing-size contract requested from empty sharded allocator")
+	}
+	if state := s[0].backingSizeContractState; state != nil {
+		state.once.Do(func() {
+			state.contract, state.err = s.validateBackingSizeContract()
+		})
+		return state.contract, state.err
+	}
+	return s.validateBackingSizeContract()
+}
+
+func (s ShardedAllocator[T]) validateBackingSizeContract() (BackingSizeContract, error) {
+	contract, err := backingSizeContract(s[0].Allocator)
+	if err != nil {
+		return backingSizeContractUnknown, err
+	}
 	for i := 1; i < len(s); i++ {
-		shardBackingSize, err := BackingSize(s[i].Allocator, size)
+		shardContract, err := backingSizeContract(s[i].Allocator)
 		if err != nil {
-			return 0, err
+			return backingSizeContractUnknown, err
 		}
-		if shardBackingSize != backingSize {
-			return 0, moerr.NewInvalidStateNoCtxf(
-				"sharded allocator backing sizes differ: shard 0 reports %d, shard %d reports %d",
-				backingSize,
+		if shardContract != contract {
+			return backingSizeContractUnknown, moerr.NewInvalidStateNoCtxf(
+				"sharded allocator backing-size contracts differ: shard 0 reports %s, shard %d reports %s",
+				contract,
 				i,
-				shardBackingSize,
+				shardContract,
 			)
 		}
 	}
-	return backingSize, nil
-}
-
-const (
-	shardedBackingSizeCacheSlots    = 1 << 8
-	shardedBackingSizeCacheSlotBits = 8
-)
-
-// shardedBackingSizeCache holds a bounded, lock-free cache of validated shard
-// contracts. A miss validates every shard before publishing its result; a hit
-// predicts in O(1). The bounded table prevents arbitrary allocation requests
-// from becoming permanently retained cache metadata.
-type shardedBackingSizeCache struct {
-	entries [shardedBackingSizeCacheSlots]atomic.Pointer[shardedBackingSizeEntry]
-}
-
-type shardedBackingSizeEntry struct {
-	requestSize uint64
-	backingSize uint64
-	err         error
-}
-
-func (c *shardedBackingSizeCache) resolve(
-	size uint64,
-	validate func(uint64) (uint64, error),
-) (uint64, error) {
-	slot := shardedBackingSizeCacheSlot(size)
-	if entry := c.entries[slot].Load(); entry != nil && entry.requestSize == size {
-		return entry.backingSize, entry.err
-	}
-	backingSize, err := validate(size)
-	c.entries[slot].Store(&shardedBackingSizeEntry{
-		requestSize: size,
-		backingSize: backingSize,
-		err:         err,
-	})
-	return backingSize, err
-}
-
-func shardedBackingSizeCacheSlot(size uint64) uint64 {
-	return (size * 11400714819323198485) >> (64 - shardedBackingSizeCacheSlotBits)
+	return contract, nil
 }
 
 func (m *MetricsAllocator[U]) BackingSize(size uint64) (uint64, error) {
 	return BackingSize(m.upstream, size)
+}
+
+func (m *MetricsAllocator[U]) BackingSizeContract() (BackingSizeContract, error) {
+	return backingSizeContract(m.upstream)
 }
 
 func (r *RandomAllocator[A, B]) BackingSize(size uint64) (uint64, error) {
@@ -161,26 +198,66 @@ func (r *RandomAllocator[A, B]) BackingSize(size uint64) (uint64, error) {
 	return first, nil
 }
 
+func (r *RandomAllocator[A, B]) BackingSizeContract() (BackingSizeContract, error) {
+	first, err := backingSizeContract(r.upstream1)
+	if err != nil {
+		return backingSizeContractUnknown, err
+	}
+	second, err := backingSizeContract(r.upstream2)
+	if err != nil {
+		return backingSizeContractUnknown, err
+	}
+	if first != second {
+		return backingSizeContractUnknown, moerr.NewInvalidStateNoCtxf(
+			"random allocator backing-size contracts differ: %s and %s", first, second)
+	}
+	return first, nil
+}
+
 func (r *ReadOnlyAllocator[U]) BackingSize(size uint64) (uint64, error) {
 	return BackingSize(r.upstream, size)
+}
+
+func (r *ReadOnlyAllocator[U]) BackingSizeContract() (BackingSizeContract, error) {
+	return backingSizeContract(r.upstream)
 }
 
 func (c *CheckedAllocator[U]) BackingSize(size uint64) (uint64, error) {
 	return BackingSize(c.upstream, size)
 }
 
+func (c *CheckedAllocator[U]) BackingSizeContract() (BackingSizeContract, error) {
+	return backingSizeContract(c.upstream)
+}
+
 func (p *ProfileAllocator[U]) BackingSize(size uint64) (uint64, error) {
 	return BackingSize(p.upstream, size)
+}
+
+func (p *ProfileAllocator[U]) BackingSizeContract() (BackingSizeContract, error) {
+	return backingSizeContract(p.upstream)
 }
 
 func (s *InuseTrackingAllocator[U]) BackingSize(size uint64) (uint64, error) {
 	return BackingSize(s.upstream, size)
 }
 
+func (s *InuseTrackingAllocator[U]) BackingSizeContract() (BackingSizeContract, error) {
+	return backingSizeContract(s.upstream)
+}
+
 func (t *LeaksTrackingAllocator[U]) BackingSize(size uint64) (uint64, error) {
 	return BackingSize(t.upstream, size)
 }
 
+func (t *LeaksTrackingAllocator[U]) BackingSizeContract() (BackingSizeContract, error) {
+	return backingSizeContract(t.upstream)
+}
+
 func (s *SizeBoundedAllocator[U]) BackingSize(size uint64) (uint64, error) {
 	return BackingSize(s.upstream, size)
+}
+
+func (s *SizeBoundedAllocator[U]) BackingSizeContract() (BackingSizeContract, error) {
+	return backingSizeContract(s.upstream)
 }

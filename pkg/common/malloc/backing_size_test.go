@@ -57,18 +57,33 @@ func TestBackingSizeRejectsAllocatorWithoutCapacityContract(t *testing.T) {
 	}
 }
 
+type backingSizeOnlyAllocator struct{}
+
+func (backingSizeOnlyAllocator) Allocate(uint64, Hints) ([]byte, Deallocator, error) {
+	return nil, nil, nil
+}
+
+func (backingSizeOnlyAllocator) BackingSize(size uint64) (uint64, error) {
+	return size, nil
+}
+
 type countingBackingSizeAllocator struct {
-	backingSize uint64
-	calls       atomic.Int32
+	calls         atomic.Int32
+	contractCalls atomic.Int32
 }
 
 func (*countingBackingSizeAllocator) Allocate(uint64, Hints) ([]byte, Deallocator, error) {
 	return nil, nil, nil
 }
 
-func (c *countingBackingSizeAllocator) BackingSize(uint64) (uint64, error) {
+func (c *countingBackingSizeAllocator) BackingSize(size uint64) (uint64, error) {
 	c.calls.Add(1)
-	return c.backingSize, nil
+	return size, nil
+}
+
+func (c *countingBackingSizeAllocator) BackingSizeContract() (BackingSizeContract, error) {
+	c.contractCalls.Add(1)
+	return BackingSizeContractExact, nil
 }
 
 func TestBackingSizePropagatesThroughDecorators(t *testing.T) {
@@ -84,18 +99,19 @@ func TestBackingSizePropagatesThroughDecorators(t *testing.T) {
 		name      string
 		allocator Allocator
 		want      uint64
+		contract  BackingSizeContract
 	}{
-		{"class", upstream, want},
-		{"c", NewCAllocator(), request},
-		{"sharded", NewShardedAllocator(1, newClassAllocator), want},
-		{"metrics", NewMetricsAllocator(upstream, nil, nil, nil, nil, nil), want},
-		{"random", NewRandomAllocator(upstream, NewReadOnlyAllocator(upstream), 100), want},
-		{"read-only", NewReadOnlyAllocator(upstream), want},
-		{"checked", NewCheckedAllocator(upstream), want},
-		{"profile", &ProfileAllocator[*ClassAllocator[*fixedSizeMakeAllocator]]{upstream: upstream}, want},
-		{"in-use-tracking", &InuseTrackingAllocator[*ClassAllocator[*fixedSizeMakeAllocator]]{upstream: upstream}, want},
-		{"leaks-tracking", &LeaksTrackingAllocator[*ClassAllocator[*fixedSizeMakeAllocator]]{upstream: upstream}, want},
-		{"size-bounded", &SizeBoundedAllocator[*ClassAllocator[*fixedSizeMakeAllocator]]{upstream: upstream}, want},
+		{"class", upstream, want, BackingSizeContractClass},
+		{"c", NewCAllocator(), request, BackingSizeContractExact},
+		{"sharded", NewShardedAllocator(1, newClassAllocator), want, BackingSizeContractClass},
+		{"metrics", NewMetricsAllocator(upstream, nil, nil, nil, nil, nil), want, BackingSizeContractClass},
+		{"random", NewRandomAllocator(upstream, NewReadOnlyAllocator(upstream), 100), want, BackingSizeContractClass},
+		{"read-only", NewReadOnlyAllocator(upstream), want, BackingSizeContractClass},
+		{"checked", NewCheckedAllocator(upstream), want, BackingSizeContractClass},
+		{"profile", &ProfileAllocator[*ClassAllocator[*fixedSizeMakeAllocator]]{upstream: upstream}, want, BackingSizeContractClass},
+		{"in-use-tracking", &InuseTrackingAllocator[*ClassAllocator[*fixedSizeMakeAllocator]]{upstream: upstream}, want, BackingSizeContractClass},
+		{"leaks-tracking", &LeaksTrackingAllocator[*ClassAllocator[*fixedSizeMakeAllocator]]{upstream: upstream}, want, BackingSizeContractClass},
+		{"size-bounded", &SizeBoundedAllocator[*ClassAllocator[*fixedSizeMakeAllocator]]{upstream: upstream}, want, BackingSizeContractClass},
 	}
 
 	for _, test := range tests {
@@ -103,6 +119,9 @@ func TestBackingSizePropagatesThroughDecorators(t *testing.T) {
 			got, err := BackingSize(test.allocator, request)
 			require.NoError(t, err)
 			require.Equal(t, test.want, got)
+			contract, err := backingSizeContract(test.allocator)
+			require.NoError(t, err)
+			require.Equal(t, test.contract, contract)
 		})
 	}
 }
@@ -114,7 +133,10 @@ func TestBackingSizeRejectsInconsistentContracts(t *testing.T) {
 	require.Error(t, err)
 
 	classAllocator := NewClassAllocator(NewFixedSizeMakeAllocator)
-	_, err = BackingSize(NewRandomAllocator(classAllocator, NewCAllocator(), 100), 3)
+	randomWithInconsistentContracts := NewRandomAllocator(classAllocator, NewCAllocator(), 100)
+	_, err = BackingSize(randomWithInconsistentContracts, 3)
+	require.Error(t, err)
+	_, err = backingSizeContract(randomWithInconsistentContracts)
 	require.Error(t, err)
 
 	nextShard := 0
@@ -127,12 +149,17 @@ func TestBackingSizeRejectsInconsistentContracts(t *testing.T) {
 	})
 	_, err = BackingSize(inconsistentShards, 3)
 	require.Error(t, err)
+
+	_, err = BackingSize(NewShardedAllocator(2, func() backingSizeOnlyAllocator {
+		return backingSizeOnlyAllocator{}
+	}), 3)
+	require.Error(t, err)
 }
 
-func TestShardedBackingSizeCachesValidatedRequest(t *testing.T) {
+func TestShardedBackingSizeValidatesContractOnce(t *testing.T) {
 	var allocators []*countingBackingSizeAllocator
 	allocator := NewShardedAllocator(2, func() *countingBackingSizeAllocator {
-		ret := &countingBackingSizeAllocator{backingSize: 4}
+		ret := new(countingBackingSizeAllocator)
 		allocators = append(allocators, ret)
 		return ret
 	})
@@ -140,15 +167,25 @@ func TestShardedBackingSizeCachesValidatedRequest(t *testing.T) {
 	for range 20 {
 		backingSize, err := BackingSize(allocator, 3)
 		require.NoError(t, err)
-		require.Equal(t, uint64(4), backingSize)
+		require.Equal(t, uint64(3), backingSize)
 	}
-	for _, shard := range allocators {
-		require.Equal(t, int32(1), shard.calls.Load())
+	for i, shard := range allocators {
+		wantCalls := int32(0)
+		if i == 0 {
+			wantCalls = 20
+		}
+		require.Equal(t, wantCalls, shard.calls.Load())
+		require.Equal(t, int32(1), shard.contractCalls.Load())
 	}
 
 	_, err := BackingSize(allocator, 4)
 	require.NoError(t, err)
-	for _, shard := range allocators {
-		require.Equal(t, int32(2), shard.calls.Load())
+	for i, shard := range allocators {
+		wantCalls := int32(0)
+		if i == 0 {
+			wantCalls = 21
+		}
+		require.Equal(t, wantCalls, shard.calls.Load())
+		require.Equal(t, int32(1), shard.contractCalls.Load())
 	}
 }
