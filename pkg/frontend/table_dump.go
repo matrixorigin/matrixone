@@ -176,6 +176,44 @@ func tableDumpRelationKey(role, indexName, indexAlgoTableType string) string {
 	return role + "\x00" + indexName + "\x00" + indexAlgoTableType
 }
 
+func tableDumpLegacyTinyTextResolver(
+	ses *Session,
+	defaultDB string,
+	defaultDatabase engine.Database,
+) sqlplan.LegacyTinyTextTableResolver {
+	return func(
+		ctx context.Context,
+		sourceDB string,
+		sourceTable string,
+	) (*plan.TableDef, error) {
+		if sourceDB == "" {
+			sourceDB = defaultDB
+		}
+		database := defaultDatabase
+		if database == nil || !strings.EqualFold(sourceDB, defaultDB) {
+			var err error
+			database, err = ses.GetTxnHandler().GetStorage().Database(
+				ctx, sourceDB, ses.GetTxnHandler().GetTxn(),
+			)
+			if err != nil {
+				return nil, err
+			}
+		}
+		relation, err := database.Relation(ctx, sourceTable, nil)
+		if err != nil {
+			if moerr.IsMoErrCode(err, moerr.ErrNoSuchTable) {
+				return nil, nil
+			}
+			return nil, err
+		}
+		sourceDef := sqlplan.CloneTableDefForPlan(relation.GetTableDef(ctx), true)
+		if sourceDef.DbName == "" {
+			sourceDef.DbName = sourceDB
+		}
+		return sourceDef, nil
+	}
+}
+
 func getTableDumpRelations(
 	ctx context.Context,
 	ses *Session,
@@ -190,7 +228,8 @@ func getTableDumpRelations(
 	if err != nil {
 		return nil, err
 	}
-	masterHash, err := tableSchemaHash(def)
+	resolve := tableDumpLegacyTinyTextResolver(ses, dbName, db)
+	masterHash, err := tableSchemaHashWithResolver(ctx, def, resolve)
 	if err != nil {
 		return nil, err
 	}
@@ -212,7 +251,7 @@ func getTableDumpRelations(
 		if err != nil {
 			return nil, err
 		}
-		indexHash, err := tableSchemaHash(indexRel.GetTableDef(ctx))
+		indexHash, err := tableSchemaHashWithResolver(ctx, indexRel.GetTableDef(ctx), resolve)
 		if err != nil {
 			return nil, err
 		}
@@ -232,19 +271,30 @@ func getTableDumpRelations(
 }
 
 func tableSchemaHash(def *plan.TableDef) (string, error) {
+	return tableSchemaHashWithResolver(context.Background(), def, nil)
+}
+
+func tableSchemaHashWithResolver(
+	ctx context.Context,
+	def *plan.TableDef,
+	resolve sqlplan.LegacyTinyTextTableResolver,
+) (string, error) {
 	if def == nil {
 		return "", moerr.NewInternalErrorNoCtx("table definition is unavailable")
+	}
+	// Catalogs written before TINYTEXT had a durable width marker retain the
+	// subtype only in Createsql. Normalize a planner-owned clone before hashing
+	// so DUMP and LOAD compare the same logical schema without mutating the
+	// catalog definition shared by the engine cache. Keeping this at the common
+	// hash boundary covers both main and index relations.
+	def = sqlplan.CloneTableDefForPlan(def, true)
+	if err := sqlplan.RecoverLegacyTinyText(ctx, def, resolve); err != nil {
+		return "", moerr.NewInternalErrorNoCtxf("cannot normalize table schema: %v", err)
 	}
 	// For ordinary tables, reconstruct the DDL from the expanded TableDef. This
 	// makes CREATE TABLE ... LIKE ... compare equal to an equivalent explicit
 	// CREATE TABLE statement stored by another cluster.
-	canReconstruct := def.TableType != catalog.SystemClusterRel &&
-		def.TableType != catalog.SystemExternalRel &&
-		def.Partition == nil && len(def.Fkeys) == 0 && def.ViewSql == nil && def.TblFunc == nil
-	for _, col := range def.Cols {
-		canReconstruct = canReconstruct && col != nil && col.Default != nil
-	}
-	if canReconstruct {
+	if canReconstructTableSchema(def) {
 		clone := *def
 		clone.Name = "__table_dump_target__"
 		clone.DbName = ""
@@ -295,6 +345,42 @@ func tableSchemaHash(def *plan.TableDef) (string, error) {
 	}
 	sum := sha256.Sum256(data)
 	return hex.EncodeToString(sum[:]), nil
+}
+
+func canReconstructTableSchema(def *plan.TableDef) bool {
+	if def == nil || def.TableType == catalog.SystemClusterRel ||
+		def.TableType == catalog.SystemExternalRel || def.Partition != nil ||
+		len(def.Fkeys) != 0 || def.ViewSql != nil || def.TblFunc != nil {
+		return false
+	}
+	for _, col := range def.Cols {
+		if col == nil || col.Default == nil {
+			return false
+		}
+	}
+	return true
+}
+
+func tableDumpManifestCreateSQL(
+	ctx context.Context,
+	def *plan.TableDef,
+	resolve sqlplan.LegacyTinyTextTableResolver,
+) (string, error) {
+	if def == nil {
+		return "", moerr.NewInternalErrorNoCtx("table definition is unavailable")
+	}
+	if !sqlplan.LegacyTinyTextCreateSQLNeedsRebuild(def) || !canReconstructTableSchema(def) {
+		return def.Createsql, nil
+	}
+	clone := sqlplan.CloneTableDefForPlan(def, true)
+	if err := sqlplan.RecoverLegacyTinyText(ctx, clone, resolve); err != nil {
+		return "", moerr.NewInternalErrorNoCtxf("cannot normalize table schema: %v", err)
+	}
+	canonical, _, err := sqlplan.ConstructCreateTableSQL(nil, clone, nil, false, nil)
+	if err != nil {
+		return "", moerr.NewInternalErrorNoCtxf("cannot reconstruct table schema: %v", err)
+	}
+	return canonical, nil
 }
 
 func validateTableDumpSchema(def *plan.TableDef) error {
@@ -968,11 +1054,13 @@ func handleDumpTable(ctx context.Context, ses *Session, stmt *tree.DumpTable) er
 	if err = validateTableDumpSchema(def); err != nil {
 		return err
 	}
-	schemaHash, err := tableSchemaHash(def)
+	refs, err := getTableDumpRelations(ctx, ses, dbName, rel)
 	if err != nil {
 		return err
 	}
-	refs, err := getTableDumpRelations(ctx, ses, dbName, rel)
+	manifestCreateSQL, err := tableDumpManifestCreateSQL(
+		ctx, def, tableDumpLegacyTinyTextResolver(ses, dbName, nil),
+	)
 	if err != nil {
 		return err
 	}
@@ -982,7 +1070,7 @@ func handleDumpTable(ctx context.Context, ses *Session, stmt *tree.DumpTable) er
 
 	manifest := &tableDumpManifest{
 		Version: tableDumpFormatVersion, SourceDatabase: dbName, SourceTable: tableName,
-		CreateSQL: def.Createsql, SchemaHash: schemaHash, MetadataOnly: stmt.MetadataOnly,
+		CreateSQL: manifestCreateSQL, SchemaHash: refs[0].SchemaHash, MetadataOnly: stmt.MetadataOnly,
 		Relations: make([]tableDumpRelation, 0, len(refs)),
 	}
 	dumpFS, closeDumpFS, err := openTableDumpFS(ctx, ses, stmt.Path)
@@ -1383,19 +1471,15 @@ func handleLoadTable(ctx context.Context, ses *Session, stmt *tree.LoadTable) (e
 			return moerr.NewInvalidInputNoCtx("table dump is incomplete: READY marker is missing")
 		}
 	}
-	targetHash, err := tableSchemaHash(targetDef)
-	if err != nil {
-		return err
-	}
-	if targetHash != manifest.SchemaHash {
-		return moerr.NewInvalidInputNoCtx("target table schema does not match table dump")
-	}
 	targetRefs, err := getTableDumpRelations(ctx, ses, dbName, rel)
 	if err != nil {
 		return err
 	}
 	if err = validateTableDumpRelations(ctx, targetRefs); err != nil {
 		return err
+	}
+	if targetRefs[0].SchemaHash != manifest.SchemaHash {
+		return moerr.NewInvalidInputNoCtx("target table schema does not match table dump")
 	}
 	if len(targetRefs) != len(manifest.Relations) {
 		return moerr.NewInvalidInputNoCtx("target table index topology does not match table dump")
