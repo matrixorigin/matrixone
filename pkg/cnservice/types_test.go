@@ -18,6 +18,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/stretchr/testify/require"
 )
 
@@ -33,7 +34,8 @@ func TestValidateRejectsRemovedMemoryEngines(t *testing.T) {
 
 func TestValidateHeartbeatDurations(t *testing.T) {
 	for name, interval := range map[string]time.Duration{
-		"negative interval": -time.Nanosecond,
+		"negative interval":       -time.Nanosecond,
+		"exceeds progress budget": logservice.ScheduleCommandPollInterval + time.Nanosecond,
 	} {
 		t.Run(name, func(t *testing.T) {
 			cfg := Config{UUID: "cn1"}
