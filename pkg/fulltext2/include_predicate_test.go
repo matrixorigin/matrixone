@@ -160,6 +160,19 @@ func TestCompileIncludePredicatesErrors(t *testing.T) {
 	require.Nil(t, preds)
 }
 
+// TestBitPkComparable (B2): a BIT primary key is comparable — the planner peels a pk
+// predicate on a BIT pk, so compileIncludePredicates must accept T_bit (via the unsigned
+// path) rather than erroring "col -1 type not comparable" (which failed the whole query).
+func TestBitPkComparable(t *testing.T) {
+	require.True(t, isComparableIncludeType(int32(types.T_bit)))
+	preds, err := compileIncludePredicates([]byte(`[{"col":-1,"op":"=","val":5}]`), nil, int32(types.T_bit))
+	require.NoError(t, err)
+	require.Len(t, preds, 1)
+	require.True(t, preds[0].isUnsigned)
+	require.True(t, preds[0].test(uint64(5), false))
+	require.False(t, preds[0].test(uint64(6), false))
+}
+
 // TestResultCarriesInclude pins the covering primitive: a top-k search Result carries the
 // doc's INCLUDE column values (in index order, NULL-aware) across the WAND/boolean path
 // (heapToResults) and the NL phrase path (boundedTopK) — so a covering query is served from

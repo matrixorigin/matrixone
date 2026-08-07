@@ -300,8 +300,7 @@ func (s *Fulltext2Search) SearchInto(proc *sqlexec.SqlProcess, query any, rt vec
 		appendAnyPk(out.Keys, w, results[i].Pk)
 		out.Dists = append(out.Dists, results[i].Score)
 	}
-	s.fillInclude(rt, results, out)
-	return nil
+	return s.fillInclude(rt, results, out)
 }
 
 // fillInclude populates out.Include with one nullable ColumnBuffer per FULL index INCLUDE
@@ -315,10 +314,10 @@ func (s *Fulltext2Search) SearchInto(proc *sqlexec.SqlProcess, query any, rt vec
 // Source note: this re-encodes each result's already-materialized boxed Include value — the
 // top-k's per-winner decodeInclude boxing (O(limit), bounded) is retained; what this removes
 // is the transport map + the reflection AppendAny.
-func (s *Fulltext2Search) fillInclude(rt vectorindex.RuntimeConfig, results []Result, out *vectorindex.SearchOutput) {
+func (s *Fulltext2Search) fillInclude(rt vectorindex.RuntimeConfig, results []Result, out *vectorindex.SearchOutput) error {
 	if len(rt.RequestedIncludeColumns) == 0 {
 		out.Include = out.Include[:0]
-		return
+		return nil
 	}
 	it := s.idx.includeTypes()
 	if cap(out.Include) < len(it) {
@@ -341,9 +340,12 @@ func (s *Fulltext2Search) fillInclude(rt vectorindex.RuntimeConfig, results []Re
 			if c < len(inc) {
 				v = inc[c]
 			}
-			appendAnyInclude(out.Include[c], v)
+			if err := appendAnyInclude(out.Include[c], v); err != nil {
+				return err
+			}
 		}
 	}
+	return nil
 }
 
 // SearchFloat32 is unsupported (fulltext scores are float64; the vector float32

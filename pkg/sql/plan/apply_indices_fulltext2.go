@@ -27,9 +27,40 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
+
+// fulltext2PeelablePkColName returns the pk column name ONLY when the pk's type is one the
+// fulltext2 in-index predicate evaluator can actually compare — the integer family (incl.
+// BIT) and varchar/char, i.e. exactly isComparableIncludeType's set. For any other pk type
+// (uuid, decimal, date, datetime, ...) it returns "", so buildFilterPredicateJSON leaves a
+// pk predicate RESIDUAL on the base scan instead of peeling one the TVF would reject at
+// runtime ("col -1 type not comparable"). This keeps the planner peel and the executor eval
+// in agreement (the peel resolves the pk sentinel by name with no type gate of its own).
+func fulltext2PeelablePkColName(scanNode *plan.Node) string {
+	if scanNode.TableDef == nil || scanNode.TableDef.Pkey == nil {
+		return ""
+	}
+	pkColName := scanNode.TableDef.Pkey.PkeyColName
+	if pkColName == "" {
+		return ""
+	}
+	for _, c := range scanNode.TableDef.Cols {
+		if c.Name != pkColName {
+			continue
+		}
+		switch types.T(c.Typ.Id) {
+		case types.T_int8, types.T_int16, types.T_int32, types.T_int64,
+			types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
+			types.T_bit, types.T_varchar, types.T_char:
+			return pkColName
+		}
+		return ""
+	}
+	return ""
+}
 
 const fulltext2_search_func_name = "fulltext2_search"
 
@@ -76,13 +107,29 @@ func (builder *QueryBuilder) buildFulltext2SearchCfg(scanNode *plan.Node, idxdef
 	return string(cfgBytes), nil
 }
 
+// ft2SearchBaseColDefs returns the fulltext2_search TVF's built-in output coldefs: the same
+// (pk, relevance) shape and types as classic fulltext's ftIndexColdefs, but RENAMED to the
+// reserved __mo_ft_* aliases. The covered path emits INCLUDE columns as sibling outputs and
+// the runtime (fulltext2_search.go start()) classifies the output batch BY NAME, so the pk/
+// score outputs must use names no user INCLUDE column can equal — otherwise an INCLUDE column
+// named "doc_id"/"score" collides and is misrouted (silent wrong output / shuffle panic).
+// This is also what decouples fulltext2 from classic fulltext's coldef list (it only borrowed
+// the shape). Kept as a copy-then-rename so the classic types (T_any pk / T_float32 score)
+// stay the single source of truth.
+func ft2SearchBaseColDefs() []*plan.ColDef {
+	cds := DeepCopyColDefList(ftIndexColdefs)
+	cds[0].Name = catalog.FullText2Search_OutCol_DocId
+	cds[1].Name = catalog.FullText2Search_OutCol_Score
+	return cds
+}
+
 // buildFulltext2SearchNode builds the fulltext2_search FUNCTION_SCAN node for a MATCH
 // resolved to a fulltext2 index. exprs are the TVF args [cfg(const), pattern, mode];
 // pattern is passed as an expression, so a prepared-statement '?' parameter is bound
-// and evaluated at execution time (the TVF reads it per row). The node emits the same
-// (doc_id, score) shape as fulltext_index_scan, so the downstream join/sort is shared.
+// and evaluated at execution time (the TVF reads it per row). The node emits the reserved
+// (__mo_ft_doc_id, __mo_ft_score) shape, so the downstream join/sort binds by position.
 func (builder *QueryBuilder) buildFulltext2SearchNode(ctx *BindContext, exprs []*plan.Expr, children []int32) (int32, error) {
-	colDefs := DeepCopyColDefList(ftIndexColdefs)
+	colDefs := ft2SearchBaseColDefs()
 	node := &plan.Node{
 		NodeType: plan.Node_FUNCTION_SCAN,
 		Stats:    &plan.Stats{},
@@ -109,7 +156,7 @@ func (builder *QueryBuilder) buildFulltext2SearchNode(ctx *BindContext, exprs []
 // type (looked up from scanNode.TableDef.Cols by name). Everything else matches the plain
 // buildFulltext2SearchNode (used by the JOIN path).
 func (builder *QueryBuilder) buildFulltext2SearchNodeCovered(ctx *BindContext, exprs []*plan.Expr, children []int32, scanNode *plan.Node, includeCols []string) (int32, error) {
-	colDefs := DeepCopyColDefList(ftIndexColdefs)
+	colDefs := ft2SearchBaseColDefs()
 	for _, name := range includeCols {
 		colTyp, ok := baseColTypeByName(scanNode, name)
 		if !ok {

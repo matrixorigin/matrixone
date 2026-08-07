@@ -41,7 +41,7 @@ func TestFillInclude(t *testing.T) {
 	out := &vectorindex.SearchOutput{}
 	// The requested set only gates the no-op; buffers are built in FULL include order.
 	rt := vectorindex.RuntimeConfig{RequestedIncludeColumns: []string{"prio", "status"}}
-	s.fillInclude(rt, results, out)
+	require.NoError(t, s.fillInclude(rt, results, out))
 	require.Len(t, out.Include, 2)
 
 	// Col 0 = status (varchar): ["active", NULL].
@@ -64,10 +64,10 @@ func TestFillInclude(t *testing.T) {
 	require.Equal(t, []int64{20}, vector.MustFixedColWithTypeCheck[int64](pageVec))
 
 	// Reuse: a second fill on the SAME out Resets its buffers (no stale rows appended).
-	s.fillInclude(rt, results[:1], out)
+	require.NoError(t, s.fillInclude(rt, results[:1], out))
 	require.Equal(t, 1, out.Include[1].N)
 
 	// No requested columns → out.Include emptied (no panic).
-	s.fillInclude(vectorindex.RuntimeConfig{}, results, out)
+	require.NoError(t, s.fillInclude(vectorindex.RuntimeConfig{}, results, out))
 	require.Empty(t, out.Include)
 }

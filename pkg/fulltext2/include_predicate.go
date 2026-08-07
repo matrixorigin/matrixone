@@ -274,7 +274,8 @@ func isComparableIncludeType(t int32) bool {
 	}
 	switch types.T(t) {
 	case types.T_int8, types.T_int16, types.T_int32, types.T_int64,
-		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64:
+		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
+		types.T_bit: // BIT is uint64-backed; compiledIncludePred handles it on the unsigned path
 		return true
 	default:
 		return false

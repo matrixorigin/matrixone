@@ -15,6 +15,7 @@
 package plan
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	planplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/plan"
@@ -33,8 +34,8 @@ const FullText2SearchFuncName = "fulltext2_search"
 // garbage). Same shape as the MATCH-rewrite path's ftIndexColdefs; a direct
 // `FROM fulltext2_search(...)` call uses THESE defs, so they must be correct too.
 var fulltext2SearchColDefs = []*plan.ColDef{
-	{Name: "doc_id", Typ: plan.Type{Id: int32(types.T_any)}},
-	{Name: "score", Typ: plan.Type{Id: int32(types.T_float32), Width: 4}},
+	{Name: catalog.FullText2Search_OutCol_DocId, Typ: plan.Type{Id: int32(types.T_any)}},
+	{Name: catalog.FullText2Search_OutCol_Score, Typ: plan.Type{Id: int32(types.T_float32), Width: 4}},
 }
 
 // FullText2CreateFuncName is the build TVF: CROSS APPLY'd over the source table

@@ -19,6 +19,7 @@ import (
 	"encoding/binary"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -34,8 +35,8 @@ import (
 
 func ft2SearchRets() []*plan.ColDef {
 	return []*plan.ColDef{
-		{Name: "doc_id", Typ: plan.Type{Id: int32(types.T_int64)}},
-		{Name: "score", Typ: plan.Type{Id: int32(types.T_float32), Width: 4}},
+		{Name: catalog.FullText2Search_OutCol_DocId, Typ: plan.Type{Id: int32(types.T_int64)}},
+		{Name: catalog.FullText2Search_OutCol_Score, Typ: plan.Type{Id: int32(types.T_float32), Width: 4}},
 	}
 }
 

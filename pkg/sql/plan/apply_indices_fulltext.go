@@ -277,7 +277,7 @@ func (builder *QueryBuilder) applyJoinFullTextIndices(nodeID int32, projNode *pl
 	var ft2PredsJSON string
 	if len(indexDefs) > 0 && catalog.IsFullText2IndexAlgo(indexDefs[0].IndexAlgo) {
 		if incCols := indexDefIncludedColumnsBestEffort(indexDefs[0]); len(incCols) > 0 {
-			pkColName := scanNode.TableDef.Pkey.PkeyColName
+			pkColName := fulltext2PeelablePkColName(scanNode) // "" for a non-evaluable pk type
 			preds, serialized, residual, perr := buildFilterPredicateJSON(scanNode.FilterList, scanNode, incCols, pkColName, true)
 			if perr == nil && len(serialized) > 0 {
 				ft2PredsJSON = preds
@@ -796,7 +796,11 @@ func (builder *QueryBuilder) tryApplyCoveredFulltext2(nodeID int32, projNode, so
 		}
 		nonMatchFilters = append(nonMatchFilters, f)
 	}
-	ft2PredsJSON, _, residual, perr := buildFilterPredicateJSON(nonMatchFilters, scanNode, incCols, pkColName, true)
+	// Gate the pk peel on an evaluable pk type: a pk predicate on a non-evaluable type
+	// (uuid/decimal/date/...) is left RESIDUAL (pkColName ""), which makes residual non-empty
+	// below → not covered → safe 2-JOIN fallback, instead of peeling a predicate the TVF
+	// would reject at runtime. (pkColName above stays the real name for the coverage check.)
+	ft2PredsJSON, _, residual, perr := buildFilterPredicateJSON(nonMatchFilters, scanNode, incCols, fulltext2PeelablePkColName(scanNode), true)
 	if perr != nil {
 		return false, nil // a peel error → fall back to the safe JOIN path
 	}

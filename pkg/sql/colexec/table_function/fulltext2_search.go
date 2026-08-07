@@ -19,6 +19,7 @@ import (
 	"fmt"
 
 	"github.com/bytedance/sonic"
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -213,10 +214,10 @@ func (u *fulltext2SearchState) call(tf *TableFunction, proc *process.Process) (v
 		}
 	}
 
-	// start() bailed before running SearchInto (e.g. a NULL/empty pattern, or a runtime-filter
-	// that yielded nothing) — u.out is nil, meaning no results. Signal end of stream. (Before
-	// the SearchOutput migration this was a nil u.keys slice whose len was 0.)
-	if u.out == nil {
+	// start() bailed before running SearchInto (e.g. a NULL/empty pattern) — u.out is nil, or
+	// (on a reused operator) was emptied in start()'s reset. Either way no results this row →
+	// signal end of stream. (Before the SearchOutput migration this was a nil u.keys slice.)
+	if u.out == nil || u.out.Keys == nil {
 		return vm.CancelResult, nil
 	}
 
@@ -315,18 +316,19 @@ func (u *fulltext2SearchState) start(tf *TableFunction, proc *process.Process, n
 		// Name-driven output map. createResultBatch built one vector per SURVIVING plan
 		// coldef (column pruning may have dropped/compacted doc_id, score, and/or any
 		// unprojected INCLUDE col), so classify each result vector by its coldef NAME
-		// rather than by a fixed position: "doc_id" -> pk, "score" -> score, everything
-		// else -> the INCLUDE column of that name (mapped to its position in the full
-		// index include list = segment / decodeInclude order). A non-covered query's batch
-		// is just (doc_id, score) -> pkVecIdx=0, scoreVecIdx=1, no include output.
+		// rather than by a fixed position: the RESERVED __mo_ft_doc_id -> pk, __mo_ft_score
+		// -> score, everything else -> the INCLUDE column of that name (mapped to its
+		// position in the full index include list = segment / decodeInclude order). The pk/
+		// score outputs use reserved names (catalog.FullText2Search_OutCol_*) precisely so an
+		// INCLUDE column named "doc_id"/"score" can't collide with this classification.
 		u.pkVecIdx, u.scoreVecIdx = -1, -1
 		u.includeOut = nil
 		u.includeNames = nil
 		for vi, name := range u.batch.Attrs {
 			switch {
-			case strings.EqualFold(name, "doc_id"):
+			case strings.EqualFold(name, catalog.FullText2Search_OutCol_DocId):
 				u.pkVecIdx = vi
-			case strings.EqualFold(name, "score"):
+			case strings.EqualFold(name, catalog.FullText2Search_OutCol_Score):
 				u.scoreVecIdx = vi
 			default:
 				segPos := -1
@@ -347,7 +349,18 @@ func (u *fulltext2SearchState) start(tf *TableFunction, proc *process.Process, n
 	u.offset = 0
 	u.streaming = false
 	u.done = false
-	// u.out is kept and REUSED across queries (SearchInto Resets it per query).
+	// u.out is kept and REUSED across queries (SearchInto Resets it per query), but EMPTY it
+	// here too: a subsequent early-return below (NULL/empty pattern) skips SearchInto, so
+	// without this a reused operator would page the PREVIOUS query's results as this row's
+	// output. Emptying leaves call() with 0 rows on the bailed path. (Pre-SearchOutput this
+	// was a nil u.keys slice.)
+	if u.out != nil {
+		if u.out.Keys != nil {
+			u.out.Keys.Reset()
+		}
+		u.out.Dists = u.out.Dists[:0]
+		u.out.Include = u.out.Include[:0]
+	}
 	u.batch.CleanOnlyData()
 
 	patVec := tf.ctr.argVecs[1]
