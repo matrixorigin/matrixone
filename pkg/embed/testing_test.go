@@ -162,6 +162,10 @@ func TestStartTestClusterReturnsCleanupOwnerOnRollbackFailure(t *testing.T) {
 	service := &closeTrackingService{closeErr: closeErr}
 
 	value, err := StartTestCluster(Option(func(c *cluster) {
+		// The package's shared base can already be active when this rollback
+		// test runs. Bypass admission only to reach the injected partial-start
+		// cleanup path; no second complete cluster is created.
+		c.options.allowConcurrentTestClusters = true
 		c.startFn = func(op *operator) error {
 			op.state = started
 			op.reset.svc = service
