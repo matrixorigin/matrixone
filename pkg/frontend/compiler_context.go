@@ -421,6 +421,36 @@ func (tcc *TxnCompilerContext) getRelation(
 	return tempCtx, table, nil
 }
 
+func (tcc *TxnCompilerContext) recoverLegacyTinyText(
+	ctx context.Context,
+	dbName string,
+	tableDef *plan2.TableDef,
+	sub *plan.SubscriptionMeta,
+	snapshot *plan2.Snapshot,
+) error {
+	if tableDef.DbName == "" {
+		tableDef.DbName = dbName
+	}
+	return plan2.RecoverLegacyTinyText(ctx, tableDef, func(
+		_ context.Context,
+		sourceDB string,
+		sourceTable string,
+	) (*plan2.TableDef, error) {
+		if sourceDB == "" {
+			sourceDB = dbName
+		}
+		sourceCtx, relation, err := tcc.getRelation(sourceDB, sourceTable, sub, snapshot)
+		if err != nil || relation == nil {
+			return nil, err
+		}
+		sourceDef := plan2.CloneTableDefForPlan(relation.GetTableDef(sourceCtx), true)
+		if sourceDef.DbName == "" {
+			sourceDef.DbName = sourceDB
+		}
+		return sourceDef, nil
+	})
+}
+
 func (tcc *TxnCompilerContext) ensureDatabaseIsNotEmpty(dbName string, checkSub bool, snapshot *plan2.Snapshot) (string, *plan.SubscriptionMeta, error) {
 	start := time.Now()
 	defer func() {
@@ -469,6 +499,9 @@ func (tcc *TxnCompilerContext) ResolveById(tableId uint64, snapshot *plan2.Snaps
 		Obj:        returnTableID,
 	}
 	tableDef := plan2.CloneTableDefForPlan(table.GetTableDef(tempCtx), true)
+	if err := tcc.recoverLegacyTinyText(tempCtx, dbName, tableDef, nil, snapshot); err != nil {
+		return nil, nil, err
+	}
 	return obj, tableDef, nil
 }
 
@@ -494,6 +527,9 @@ func (tcc *TxnCompilerContext) ResolveSubscriptionTableById(tableId uint64, subM
 		Obj:        returnTableID,
 	}
 	tableDef := plan2.CloneTableDefForPlan(table.GetTableDef(pubContext), true)
+	if err := tcc.recoverLegacyTinyText(pubContext, dbName, tableDef, subMeta, nil); err != nil {
+		return nil, nil, err
+	}
 	return obj, tableDef, nil
 }
 
@@ -540,6 +576,9 @@ func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string, snapshot
 		return nil, nil, nil
 	}
 	tableDef := plan2.CloneTableDefForPlan(table.GetTableDef(ctx), true)
+	if err := tcc.recoverLegacyTinyText(ctx, dbName, tableDef, sub, snapshot); err != nil {
+		return nil, nil, err
+	}
 	tableDef.IsTemporary = isTmpTable
 
 	// convert
@@ -612,6 +651,9 @@ func (tcc *TxnCompilerContext) ResolveIndexTableByRef(
 	}
 
 	tableDef := plan2.CloneTableDefForPlan(table.GetTableDef(ctx), true)
+	if err := tcc.recoverLegacyTinyText(ctx, ref.SchemaName, tableDef, subMeta, snapshot); err != nil {
+		return nil, nil, err
+	}
 	if tableDef.IsTemporary {
 		tableDef.Name = tblName
 	}

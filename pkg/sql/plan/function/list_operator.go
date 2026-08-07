@@ -2827,7 +2827,7 @@ var supportedOperators = []FuncNew{
 		class:      plan.Function_STRICT,
 		layout:     CAST_EXPRESSION,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
-			// cast_strict is internal assignment conversion. Character targets
+			// cast_strict is internal assignment conversion. String targets
 			// reject over-width values; temporal targets preserve zero sentinels
 			// so the write boundary can apply the statement's SQL-mode policy.
 			if len(inputs) == 2 && isStrictAssignmentCastTarget(inputs[1].Oid) {
@@ -2852,13 +2852,13 @@ var supportedOperators = []FuncNew{
 	},
 
 	// operator `cast_assign`
-	// Used by DML assignment paths (INSERT/UPDATE projection) for CHAR/VARCHAR
+	// Used by DML assignment paths (INSERT/UPDATE projection) for width-constrained strings
 	// targets. Unlike `cast_strict` (which always rejects over-length writes),
 	// `cast_assign` honors `sql_mode` at runtime: strict mode rejects (1406),
-	// non-strict mode truncates. Over-length that is only trailing spaces is
-	// accepted (truncated) even in strict mode, matching MySQL. The overload is
-	// marked volatile so it is not constant-folded, letting prepared statements
-	// resolve sql_mode at execution time rather than at prepare time.
+	// non-strict mode truncates. For CHAR/VARCHAR only, excess trailing spaces
+	// are accepted in strict mode too. The overload is marked volatile so it is
+	// not constant-folded, letting prepared statements resolve sql_mode at
+	// execution time rather than at prepare time.
 	{
 		functionId: CAST_ASSIGN,
 		class:      plan.Function_STRICT,
@@ -2888,7 +2888,7 @@ var supportedOperators = []FuncNew{
 
 	// operator `cast_ignore`
 	// Used by INSERT IGNORE and UPDATE IGNORE assignment paths. It always
-	// truncates over-width CHAR/VARCHAR values and records warning 1265.
+	// truncates over-width string values and records warning 1265.
 	{
 		functionId: CAST_IGNORE,
 		class:      plan.Function_STRICT,
@@ -3380,7 +3380,7 @@ var supportedOperators = []FuncNew{
 
 func isStrictAssignmentCastTarget(target types.T) bool {
 	switch target {
-	case types.T_char, types.T_varchar, types.T_date, types.T_datetime, types.T_timestamp:
+	case types.T_char, types.T_varchar, types.T_text, types.T_date, types.T_datetime, types.T_timestamp:
 		return true
 	default:
 		return false

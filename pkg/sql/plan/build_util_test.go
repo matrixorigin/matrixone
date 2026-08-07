@@ -16,6 +16,7 @@ package plan
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -309,6 +310,18 @@ func TestGetTypeFromAstArrayAsJson(t *testing.T) {
 	require.Equal(t, "array(varchar(20))", typ.Enumvalues)
 }
 
+func TestGetTypeFromAstTinyTextPreservesByteLimit(t *testing.T) {
+	stmt, err := mysql.ParseOne(context.Background(), "create table t (value tinytext)", 1)
+	require.NoError(t, err)
+
+	createTable := stmt.(*tree.CreateTable)
+	colDef := createTable.Defs[0].(*tree.ColumnTableDef)
+	typ, err := getTypeFromAst(context.Background(), colDef.Type)
+	require.NoError(t, err)
+	require.Equal(t, int32(types.T_text), typ.Id)
+	require.Equal(t, int32(types.MaxTinyTextLen), typ.Width)
+}
+
 func TestGetTypeFromAstArrayValidatesElementType(t *testing.T) {
 	stmt, err := mysql.ParseOne(context.Background(), "create table t (tags array(varchar(16777217)))", 1)
 	require.NoError(t, err)
@@ -501,7 +514,7 @@ func TestBuildDefaultExprKeepsBareUuidTypeGuard(t *testing.T) {
 }
 
 // Column DEFAULT / ON UPDATE validation must use the strict assignment cast for
-// CHAR/VARCHAR targets: an over-length value is rejected, not silently truncated.
+// width-constrained string targets: an over-length value is rejected, not silently truncated.
 func TestBuildDefaultAndOnUpdateRejectOversizedCharVarchar(t *testing.T) {
 	proc := testutil.NewProcess(t)
 
@@ -530,6 +543,24 @@ func TestBuildDefaultAndOnUpdateRejectOversizedCharVarchar(t *testing.T) {
 		require.Error(t, err, "oversized ON UPDATE for %v(3) must be rejected", oid)
 		require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidDefault))
 	}
+}
+
+func TestBuildDefaultExprRejectsOversizedTinyText(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	value := strings.Repeat("a", types.MaxTinyTextLen+1)
+	defaultCol := tree.NewColumnTableDef(
+		tree.NewUnresolvedColName("a"),
+		nil,
+		[]tree.ColumnAttribute{
+			&tree.AttributeDefault{Expr: tree.NewNumVal(value, value, false, tree.P_char)},
+		},
+	)
+
+	_, err := buildDefaultExpr(defaultCol, plan.Type{
+		Id: int32(types.T_text), Width: types.MaxTinyTextLen,
+	}, proc)
+	require.Error(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidDefault))
 }
 
 // A value that fits the CHAR/VARCHAR width is accepted as a column DEFAULT.
@@ -573,8 +604,15 @@ func TestMakePlan2AssignmentCastExprUsesStrictForAssignmentTargets(t *testing.T)
 	ctx := context.Background()
 	srcText := &Expr{Typ: plan.Type{Id: int32(types.T_text)}}
 
-	for _, oid := range []types.T{types.T_varchar, types.T_char, types.T_date, types.T_datetime, types.T_timestamp} {
-		target := plan.Type{Id: int32(oid), Width: 3}
+	targets := []plan.Type{
+		{Id: int32(types.T_varchar), Width: 3},
+		{Id: int32(types.T_char), Width: 3},
+		{Id: int32(types.T_text), Width: types.MaxTinyTextLen},
+		{Id: int32(types.T_date), Width: 3},
+		{Id: int32(types.T_datetime), Width: 3},
+		{Id: int32(types.T_timestamp), Width: 3},
+	}
+	for _, target := range targets {
 
 		strictExpr, err := makePlan2AssignmentCastExpr(ctx, DeepCopyExpr(srcText), target)
 		require.NoError(t, err)
@@ -595,12 +633,19 @@ func TestForceAssignmentCastExprUsesAssignmentSemantics(t *testing.T) {
 	ctx := context.Background()
 	srcText := &Expr{Typ: plan.Type{Id: int32(types.T_text)}}
 
-	for _, oid := range []types.T{types.T_varchar, types.T_char, types.T_date, types.T_datetime, types.T_timestamp} {
-		target := plan.Type{Id: int32(oid), Width: 3}
+	targets := []plan.Type{
+		{Id: int32(types.T_varchar), Width: 3},
+		{Id: int32(types.T_char), Width: 3},
+		{Id: int32(types.T_text), Width: types.MaxTinyTextLen},
+		{Id: int32(types.T_date), Width: 3},
+		{Id: int32(types.T_datetime), Width: 3},
+		{Id: int32(types.T_timestamp), Width: 3},
+	}
+	for _, target := range targets {
 		strictExpr, err := forceAssignmentCastExpr(ctx, DeepCopyExpr(srcText), target)
 		require.NoError(t, err)
 		want := "cast_strict"
-		if oid == types.T_varchar || oid == types.T_char {
+		if useSqlModeStringAssignmentCast(target) {
 			want = "cast_assign"
 		}
 		require.Equal(t, want, strictExpr.GetF().GetFunc().GetObjName())
@@ -608,6 +653,61 @@ func TestForceAssignmentCastExprUsesAssignmentSemantics(t *testing.T) {
 		genericExpr, err := forceCastExpr(ctx, DeepCopyExpr(srcText), target)
 		require.NoError(t, err)
 		require.Equal(t, "cast", genericExpr.GetF().GetFunc().GetObjName())
+	}
+}
+
+func TestTinyTextSameTypeAssignmentStillValidates(t *testing.T) {
+	ctx := context.Background()
+	tinyText := plan.Type{Id: int32(types.T_text), Width: types.MaxTinyTextLen}
+	source := &Expr{Typ: tinyText}
+
+	for _, funcName := range []string{"cast_assign", "cast_ignore", "cast_strict"} {
+		casted, err := forceAssignmentCastExprWithName(ctx, DeepCopyExpr(source), tinyText, funcName)
+		require.NoError(t, err)
+		require.Equal(t, funcName, casted.GetF().GetFunc().GetObjName())
+	}
+
+	// Generic casts retain the ordinary same-type no-op behavior. Only a
+	// constrained assignment boundary must revalidate recovered legacy rows.
+	generic, err := forceCastExprWithName(ctx, DeepCopyExpr(source), tinyText, "cast")
+	require.NoError(t, err)
+	require.Nil(t, generic.GetF())
+
+	proc := testutil.NewProcess(t)
+	rt := moruntime.ServiceRuntime(proc.GetService())
+	defer rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+	target := &plan.Expr{Typ: tinyText, Expr: &plan.Expr_T{T: &plan.TargetType{}}}
+	for _, test := range []struct {
+		version int64
+		ignore  bool
+		want    string
+	}{
+		{version: defines.MORPCVersion4, want: "cast_strict"},
+		{version: defines.MORPCVersion4, ignore: true, want: "cast"},
+		{version: defines.MORPCVersion5, want: "cast_assign"},
+		{version: defines.MORPCVersion5, ignore: true, want: "cast_ignore"},
+	} {
+		rt.SetGlobalVariables(moruntime.MOProtocolVersion, test.version)
+		casted, err := forceCastExpr2WithProcess(
+			ctx,
+			DeepCopyExpr(source),
+			makeTypeByPlan2Type(tinyText),
+			DeepCopyExpr(target),
+			test.ignore,
+			proc,
+		)
+		require.NoError(t, err)
+		require.Equal(t, test.want, casted.GetF().GetFunc().GetObjName())
+
+		casted, err = forceAssignmentCastExprWithProcess(
+			ctx,
+			DeepCopyExpr(source),
+			tinyText,
+			test.ignore,
+			proc,
+		)
+		require.NoError(t, err)
+		require.Equal(t, test.want, casted.GetF().GetFunc().GetObjName())
 	}
 }
 
@@ -742,6 +842,13 @@ func TestAssignmentCastProtocolGate(t *testing.T) {
 		require.Equal(t, test.want, casted.GetF().GetFunc().GetObjName())
 	}
 	require.Equal(t, "cast", assignmentCastFunctionName(plan.Type{Id: int32(types.T_int64)}, false, proc))
+	require.Equal(t, "cast_assign", assignmentCastFunctionName(plan.Type{
+		Id: int32(types.T_text), Width: types.MaxTinyTextLen,
+	}, false, proc))
+	require.Equal(t, "cast_ignore", assignmentCastFunctionName(plan.Type{
+		Id: int32(types.T_text), Width: types.MaxTinyTextLen,
+	}, true, proc))
+	require.Equal(t, "cast", assignmentCastFunctionName(plan.Type{Id: int32(types.T_text)}, false, proc))
 }
 
 func TestSubstituteColRefsInExprPreservesAggregateConfig(t *testing.T) {

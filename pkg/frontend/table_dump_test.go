@@ -43,7 +43,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	sqlplan "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/stage"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -378,6 +380,64 @@ func TestGetTableDumpRelations(t *testing.T) {
 	require.Equal(t, tableDumpRelationKey("index", "idx", "regular"), "index\x00idx\x00regular")
 }
 
+func TestGetTableDumpRelationsRecoversLegacyTinyTextHashes(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	ses := newTestSession(t, ctrl)
+	defer ses.Close()
+	eng := mock_frontend.NewMockEngine(ctrl)
+	db := mock_frontend.NewMockDatabase(ctrl)
+	master := mock_frontend.NewMockRelation(ctrl)
+	sourceRel := mock_frontend.NewMockRelation(ctrl)
+	indexRel := mock_frontend.NewMockRelation(ctrl)
+	ses.txnHandler.storage = eng
+	eng.EXPECT().Database(gomock.Any(), "tpch", gomock.Any()).Return(db, nil)
+	db.EXPECT().Relation(gomock.Any(), "tinytext_source", nil).Return(sourceRel, nil)
+	db.EXPECT().Relation(gomock.Any(), "__idx", nil).Return(indexRel, nil)
+
+	newTinyTextDef := func(name, createSQL string, width int32) *plan.TableDef {
+		return &plan.TableDef{
+			TblId:     1,
+			LogicalId: 1,
+			Name:      name,
+			TableType: catalog.SystemOrdinaryRel,
+			Createsql: createSQL,
+			Cols: []*plan.ColDef{{
+				Name: "payload",
+				Typ:  plan.Type{Id: int32(types.T_text), Width: width},
+				Default: &plan.Default{
+					NullAbility: true,
+				},
+			}},
+		}
+	}
+	sourceDef := newTinyTextDef("tinytext_source", "create table tinytext_source(payload tinytext)", 0)
+	sourceDef.Cols[0].Seqnum = 0
+	sourceRel.EXPECT().GetTableDef(gomock.Any()).Return(sourceDef)
+	masterDef := newTinyTextDef("orders", "create table orders like tinytext_source", 0)
+	masterDef.Indexes = []*plan.IndexDef{{
+		IndexName: "idx", IndexTableName: "__idx", IndexAlgoTableType: "regular",
+	}}
+	indexDef := newTinyTextDef("__idx", "create table __idx(payload tinytext)", 0)
+	master.EXPECT().GetTableDef(gomock.Any()).Return(masterDef)
+	master.EXPECT().GetTableName().Return("orders")
+	indexRel.EXPECT().GetTableDef(gomock.Any()).Return(indexDef)
+
+	refs, err := getTableDumpRelations(context.Background(), ses, "tpch", master)
+	require.NoError(t, err)
+	require.Len(t, refs, 2)
+
+	fixedMaster := newTinyTextDef("orders", "create table orders(payload tinytext)", types.MaxTinyTextLen)
+	fixedMaster.Indexes = masterDef.Indexes
+	fixedMasterHash, err := tableSchemaHash(fixedMaster)
+	require.NoError(t, err)
+	fixedIndexHash, err := tableSchemaHash(newTinyTextDef("__idx", indexDef.Createsql, types.MaxTinyTextLen))
+	require.NoError(t, err)
+	require.Equal(t, fixedMasterHash, refs[0].SchemaHash)
+	require.Equal(t, fixedIndexHash, refs[1].SchemaHash)
+	require.Zero(t, masterDef.Cols[0].Typ.Width)
+	require.Zero(t, indexDef.Cols[0].Typ.Width)
+}
+
 func TestValidateTableDumpRelationsAcceptsHiddenAutoIncrement(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	rel := mock_frontend.NewMockRelation(ctrl)
@@ -462,7 +522,7 @@ func TestValidateAndApplyTableDumpAutoIncrementRestore(t *testing.T) {
 			return nil
 		},
 	)
-	autoService.EXPECT().SetOffset(ctx, uint64(42), "hist_id", uint64(100), txnOp).Return(nil)
+	autoService.EXPECT().SetOffset(ctx, uint64(42), 0, "hist_id", uint64(100), txnOp).Return(nil)
 
 	restores, schemaOffset, err := validateTableDumpAutoIncrementRestore(
 		ctx,
@@ -492,7 +552,7 @@ func TestApplyTableDumpAutoIncrementRestoreReportsCleanupOnSetOffsetFailure(t *t
 	rel.EXPECT().GetTableID(ctx).Return(uint64(42))
 	rel.EXPECT().AlterTable(ctx, nil, gomock.Any()).Return(nil)
 	wantErr := errors.New("set offset failed")
-	autoService.EXPECT().SetOffset(ctx, uint64(42), "hist_id", uint64(100), txnOp).Return(wantErr)
+	autoService.EXPECT().SetOffset(ctx, uint64(42), 0, "hist_id", uint64(100), txnOp).Return(wantErr)
 
 	installed, err := applyTableDumpAutoIncrementRestore(
 		ctx,
@@ -914,6 +974,116 @@ func TestHandleDumpTable(t *testing.T) {
 	require.Equal(t, object.Name, manifest.Relations[0].Objects[0].Name)
 	_, err = dumpFS.StatFile(context.Background(), tableDumpReadyName)
 	require.NoError(t, err)
+}
+
+func TestDumpLoadLegacyTinyTextUpgrade(t *testing.T) {
+	ctx := context.Background()
+	ctrl := gomock.NewController(t)
+	ses := newTestSession(t, ctrl)
+	defer ses.Close()
+	ses.SetDatabaseName("tpch")
+
+	eng := mock_frontend.NewMockEngine(ctrl)
+	db := mock_frontend.NewMockDatabase(ctrl)
+	source := mock_frontend.NewMockRelation(ctrl)
+	target := mock_frontend.NewMockRelation(ctrl)
+	reader := mock_frontend.NewMockReader(ctrl)
+	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+	workspace := newTestWorkspace()
+	ses.txnHandler.storage = eng
+	ses.txnHandler.txnOp = txnOp
+	eng.EXPECT().Database(gomock.Any(), "tpch", txnOp).Return(db, nil).Times(4)
+	db.EXPECT().Relation(gomock.Any(), "source", nil).Return(source, nil)
+	db.EXPECT().Relation(gomock.Any(), "source", nil).Return(target, nil)
+
+	const createSQL = "create table source(payload tinytext)"
+	legacyDef := &plan.TableDef{
+		TblId:     1,
+		LogicalId: 1,
+		Name:      "source",
+		TableType: catalog.SystemOrdinaryRel,
+		Createsql: createSQL,
+		Cols: []*plan.ColDef{{
+			Name: "payload",
+			Typ:  plan.Type{Id: int32(types.T_text)},
+			Default: &plan.Default{
+				NullAbility: true,
+			},
+		}},
+	}
+	source.EXPECT().GetTableDef(gomock.Any()).Return(legacyDef).AnyTimes()
+	source.EXPECT().GetTableName().Return("source")
+
+	reader.EXPECT().Read(gomock.Any(), nil, nil, gomock.Any(), gomock.Any()).Return(false, nil).Times(2)
+	reader.EXPECT().Close().Return(nil)
+	readerStub := gostub.Stub(&newImmutableTableMetaReader, func(context.Context, engine.Relation, int) (engine.Reader, error) {
+		return reader, nil
+	})
+	defer readerStub.Reset()
+
+	objectFS, err := fileservice.NewLocalETLFS("object", t.TempDir())
+	require.NoError(t, err)
+	fsStub := gostub.Stub(&GetObjectFSProvider, func(*Session) (fileservice.FileService, error) {
+		return objectFS, nil
+	})
+	defer fsStub.Reset()
+
+	txnOp.EXPECT().Txn().Return(txn.TxnMeta{}).AnyTimes()
+	txnOp.EXPECT().GetWorkspace().Return(workspace).AnyTimes()
+	lockStub := gostub.Stub(&lockTableDumpLoadTargets, func(_ context.Context, _ *Session, refs []tableDumpRelationRef, install bool) error {
+		require.Len(t, refs, 1)
+		require.False(t, install)
+		return nil
+	})
+	defer lockStub.Reset()
+
+	dumpRoot := t.TempDir()
+	tableName := tree.NewTableName("source", tree.ObjectNamePrefix{}, nil)
+	require.NoError(t, handleDumpTable(ctx, ses, &tree.DumpTable{
+		Table: tableName, Path: dumpRoot, MetadataOnly: true,
+	}))
+	// Hashing must recover metadata on a clone, not rewrite the engine's cached
+	// pre-fix definition.
+	require.Zero(t, legacyDef.Cols[0].Typ.Width)
+
+	dumpFS, err := fileservice.NewLocalETLFS("dump", dumpRoot)
+	require.NoError(t, err)
+	manifest, err := readTableDumpManifest(ctx, dumpFS)
+	require.NoError(t, err)
+	require.Equal(t, createSQL, manifest.CreateSQL)
+
+	// Recreate the target definition from the DDL carried by the manifest. A
+	// fixed binary persists the recovered 255-byte TINYTEXT marker.
+	stmt, err := mysql.ParseOne(ctx, manifest.CreateSQL, 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+	create, ok := stmt.(*tree.CreateTable)
+	require.True(t, ok)
+	require.Len(t, create.Defs, 1)
+	column, ok := create.Defs[0].(*tree.ColumnTableDef)
+	require.True(t, ok)
+	targetType, err := sqlplan.GetTypeFromAst(ctx, column.Type)
+	require.NoError(t, err)
+	require.Equal(t, int32(types.MaxTinyTextLen), targetType.Width)
+	targetDef := &plan.TableDef{
+		Name:      "source",
+		TableType: catalog.SystemOrdinaryRel,
+		Createsql: manifest.CreateSQL,
+		Cols: []*plan.ColDef{{
+			Name: column.Name.ColName(),
+			Typ:  targetType,
+			Default: &plan.Default{
+				NullAbility: true,
+			},
+		}},
+	}
+	target.EXPECT().GetTableDef(gomock.Any()).Return(targetDef).AnyTimes()
+	target.EXPECT().GetTableName().Return("source")
+	target.EXPECT().Rows(gomock.Any()).Return(uint64(0), nil)
+
+	require.NoError(t, handleLoadTable(ctx, ses, &tree.LoadTable{
+		Table: tableName, Path: dumpRoot,
+	}))
 }
 
 func TestHandleDumpTableRejectsUnsupportedSchemas(t *testing.T) {
@@ -1529,6 +1699,92 @@ func TestTableSchemaHashExpandsCreateLike(t *testing.T) {
 	rightHash, err = tableSchemaHash(right)
 	require.NoError(t, err)
 	require.NotEqual(t, leftHash, rightHash)
+}
+
+func TestTableSchemaHashPreservesAlteredLegacyText(t *testing.T) {
+	definition := func(
+		version uint32,
+		tableID uint64,
+		logicalID uint64,
+		width int32,
+		createSQL string,
+		seqnum uint32,
+	) *plan.TableDef {
+		return &plan.TableDef{
+			TblId:     tableID,
+			LogicalId: logicalID,
+			Name:      "source",
+			TableType: catalog.SystemOrdinaryRel,
+			Createsql: createSQL,
+			Version:   version,
+			Cols: []*plan.ColDef{{
+				Name:   "payload",
+				Seqnum: seqnum,
+				Typ:    plan.Type{Id: int32(types.T_text), Width: width},
+				Default: &plan.Default{
+					NullAbility: true,
+				},
+			}},
+		}
+	}
+	plainTextHash, err := tableSchemaHash(definition(0, 10, 10, 0, "create table source(payload text)", 0))
+	require.NoError(t, err)
+	tinyTextHash, err := tableSchemaHash(definition(0, 10, 10, types.MaxTinyTextLen, "create table source(payload tinytext)", 0))
+	require.NoError(t, err)
+	require.NotEqual(t, plainTextHash, tinyTextHash)
+
+	inPlaceHash, err := tableSchemaHash(
+		definition(1, 10, 10, 0, "create table source(payload tinytext)", 0),
+	)
+	require.NoError(t, err)
+	require.Equal(t, tinyTextHash, inPlaceHash)
+
+	for _, altered := range []*plan.TableDef{
+		definition(0, 11, 10, 0, "create table source(payload tinytext)", 0),
+		definition(0, 12, 10, 0, "create table source(payload tinytext)", 1),
+	} {
+		alteredHash, err := tableSchemaHash(altered)
+		require.NoError(t, err)
+		require.Equal(t, plainTextHash, alteredHash)
+		require.NotEqual(t, tinyTextHash, alteredHash)
+	}
+}
+
+func TestTableDumpManifestCreateSQLRebuildsAlteredLegacyText(t *testing.T) {
+	legacySQL := "CREATE TABLE source(payload TINYTEXT)"
+	definition := func(version uint32, tableID, logicalID uint64) *plan.TableDef {
+		return &plan.TableDef{
+			TblId:     tableID,
+			LogicalId: logicalID,
+			Name:      "source",
+			TableType: catalog.SystemOrdinaryRel,
+			Createsql: legacySQL,
+			Version:   version,
+			Cols: []*plan.ColDef{{
+				Name: "payload",
+				Typ:  plan.Type{Id: int32(types.T_text)},
+				Default: &plan.Default{
+					NullAbility: true,
+				},
+			}},
+		}
+	}
+
+	createSQL, err := tableDumpManifestCreateSQL(t.Context(), definition(0, 10, 10), nil)
+	require.NoError(t, err)
+	require.Equal(t, legacySQL, createSQL)
+
+	createSQL, err = tableDumpManifestCreateSQL(t.Context(), definition(1, 10, 10), nil)
+	require.NoError(t, err)
+	require.Contains(t, strings.ToUpper(createSQL), "`PAYLOAD` TINYTEXT")
+
+	createSQL, err = tableDumpManifestCreateSQL(t.Context(), definition(0, 11, 10), nil)
+	require.NoError(t, err)
+	require.NotContains(t, strings.ToUpper(createSQL), "TINYTEXT")
+	require.Contains(t, strings.ToUpper(createSQL), "`PAYLOAD` TEXT")
+
+	_, err = tableDumpManifestCreateSQL(t.Context(), nil, nil)
+	require.Error(t, err)
 }
 
 func TestTableSchemaHashFallback(t *testing.T) {
