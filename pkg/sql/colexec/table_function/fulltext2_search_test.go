@@ -143,9 +143,11 @@ func TestFulltext2SearchCallMaterialized(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mp)
 
 	st := &fulltext2SearchState{
-		limit:     10,
-		keys:      []any{int64(11), int64(22), int64(33)},
-		distances: []float64{0.5, 0.4, 0.3},
+		limit: 10,
+		out: &vectorindex.SearchOutput{
+			Keys:  ft2Int64ColumnBuffer(11, 22, 33),
+			Dists: []float32{0.5, 0.4, 0.3},
+		},
 	}
 	st.batch = batch.NewWithSize(2)
 	st.batch.Vecs[0] = vector.NewVec(types.T_int64.ToType())
@@ -179,7 +181,7 @@ func TestFulltext2SearchCallMaterializedCovered(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mp)
 
 	// One include col ("prio" int64): [10, NULL, 30] — placeholder + Nulls flag (the
-	// buildIncludeBuffers layout). segPos 0 in the FULL include list.
+	// fillInclude layout). segPos 0 in the FULL include list.
 	prio := &vectorindex.ColumnBuffer{Type: types.T_int64}
 	var b [8]byte
 	binary.LittleEndian.PutUint64(b[:], 10)
@@ -191,11 +193,13 @@ func TestFulltext2SearchCallMaterializedCovered(t *testing.T) {
 	prio.Nulls = []bool{false, true, false}
 
 	st := &fulltext2SearchState{
-		limit:         10,
-		keys:          []any{int64(11), int64(22), int64(33)},
-		distances:     []float64{0.5, 0.4, 0.3},
-		includeResult: &vectorindex.IncludeResult{Cols: []*vectorindex.ColumnBuffer{prio}},
-		includeOut:    []ft2IncludeOut{{vecIdx: 2, segPos: 0, name: "prio"}},
+		limit: 10,
+		out: &vectorindex.SearchOutput{
+			Keys:    ft2Int64ColumnBuffer(11, 22, 33),
+			Dists:   []float32{0.5, 0.4, 0.3},
+			Include: []*vectorindex.ColumnBuffer{prio},
+		},
+		includeOut: []ft2IncludeOut{{vecIdx: 2, segPos: 0, name: "prio"}},
 	}
 	st.batch = batch.NewWithSize(3)
 	st.batch.Attrs = []string{"doc_id", "score", "prio"}
@@ -214,6 +218,23 @@ func TestFulltext2SearchCallMaterializedCovered(t *testing.T) {
 	require.True(t, res.Batch.Vecs[2].IsNull(1)) // NULL include -> SQL NULL
 	require.Equal(t, int64(30), vector.GetFixedAtWithTypeCheck[int64](res.Batch.Vecs[2], 2))
 
+	st.free(tf, proc, false, nil)
+}
+
+// TestFulltext2SearchCallNilOut: when start() bails before running SearchInto (e.g. a NULL
+// pattern), u.out stays nil; call() must return end-of-stream, NOT nil-deref u.out.Keys.
+func TestFulltext2SearchCallNilOut(t *testing.T) {
+	proc := testutil.NewProc(t)
+	st := &fulltext2SearchState{limit: 10} // u.out == nil, not streaming
+	st.batch = batch.NewWithSize(2)
+	st.batch.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+	st.batch.Vecs[1] = vector.NewVec(types.T_float32.ToType())
+	st.pkVecIdx, st.scoreVecIdx = 0, 1
+
+	tf := &TableFunction{}
+	res, err := st.call(tf, proc)
+	require.NoError(t, err)
+	require.Equal(t, vm.CancelResult, res)
 	st.free(tf, proc, false, nil)
 }
 
@@ -240,12 +261,16 @@ func TestFulltext2SearchMaterializedAppendError(t *testing.T) {
 	// Far more keys than one call()'s 8192 window, and their append demand dwarfs the
 	// headroom left below, so the drain loop hits an allocation failure mid-batch.
 	n := 20000
-	st.keys = make([]any, n)
-	st.distances = make([]float64, n)
+	keysBuf := &vectorindex.ColumnBuffer{Type: types.T_int64}
+	dists := make([]float32, n)
+	var kb [8]byte
 	for i := 0; i < n; i++ {
-		st.keys[i] = int64(i)
-		st.distances[i] = float64(i)
+		binary.LittleEndian.PutUint64(kb[:], uint64(i))
+		keysBuf.Data = append(keysBuf.Data, kb[:]...)
+		keysBuf.N++
+		dists[i] = float32(i)
 	}
+	st.out = &vectorindex.SearchOutput{Keys: keysBuf, Dists: dists}
 
 	// Consume the pool down to ~4 KB of headroom (offHeap → cap is enforced), so the first
 	// call()'s appends succeed for a while, then fail — exercising the mid-loop error.

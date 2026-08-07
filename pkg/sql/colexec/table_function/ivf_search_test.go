@@ -1307,3 +1307,7 @@ func makeBatchIvfSearchFail(proc *process.Process) []failBatch {
 	}
 	return failBatches
 }
+
+func (m *MockIvfSearch[T]) SearchInto(_ *sqlexec.SqlProcess, _ any, _ vectorindex.RuntimeConfig, _ *vectorindex.SearchOutput) error {
+	return nil
+}

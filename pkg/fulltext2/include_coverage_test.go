@@ -24,12 +24,12 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestBuildIncludeBuffers pins the box-free covering side channel: Search builds one
+// TestFillInclude pins the box-free covered side of SearchInto: fillInclude builds one
 // nullable ColumnBuffer per FULL index INCLUDE column (segment order) from each result's
-// positional Include values, into rt.IncludeBuffers.Cols — so the TVF emits the projected
-// INCLUDE columns (mapped by segment position) with no base-table JOIN, no map[string][]any,
-// and no per-row reflection. NULLs round-trip to SQL NULL.
-func TestBuildIncludeBuffers(t *testing.T) {
+// positional Include values, into out.Include — so the TVF emits the projected INCLUDE
+// columns (mapped by segment position) with no base-table JOIN, no map[string][]any, and no
+// per-row reflection. NULLs round-trip to SQL NULL, and out is reused across calls.
+func TestFillInclude(t *testing.T) {
 	mp := mpool.MustNewZero()
 	idx := incIdx(t) // include cols: [0]=status(varchar), [1]=prio(int64)
 	s := &Fulltext2Search{idx: idx, cfg: TableConfig{IncludeColumns: []string{"status", "prio"}}}
@@ -38,33 +38,36 @@ func TestBuildIncludeBuffers(t *testing.T) {
 		{Pk: int64(2), Score: 1, Include: []any{nil, int64(20)}}, // NULL status
 	}
 
-	fr := &vectorindex.IncludeResult{}
+	out := &vectorindex.SearchOutput{}
 	// The requested set only gates the no-op; buffers are built in FULL include order.
-	rt := vectorindex.RuntimeConfig{RequestedIncludeColumns: []string{"prio", "status"}, IncludeBuffers: fr}
-	s.buildIncludeBuffers(rt, results)
-	require.Len(t, fr.Cols, 2)
+	rt := vectorindex.RuntimeConfig{RequestedIncludeColumns: []string{"prio", "status"}}
+	s.fillInclude(rt, results, out)
+	require.Len(t, out.Include, 2)
 
 	// Col 0 = status (varchar): ["active", NULL].
 	statusVec := vector.NewVec(types.T_varchar.ToType())
-	require.NoError(t, vectorindex.AppendColumnBuffer(fr.Cols[0], statusVec, mp))
+	require.NoError(t, vectorindex.AppendColumnBuffer(out.Include[0], statusVec, mp))
 	require.Equal(t, "active", statusVec.GetStringAt(0))
 	require.False(t, statusVec.IsNull(0))
 	require.True(t, statusVec.IsNull(1)) // pk2 status is NULL
 
 	// Col 1 = prio (int64): [10, 20], no NULLs.
 	prioVec := vector.NewVec(types.T_int64.ToType())
-	require.NoError(t, vectorindex.AppendColumnBuffer(fr.Cols[1], prioVec, mp))
+	require.NoError(t, vectorindex.AppendColumnBuffer(out.Include[1], prioVec, mp))
 	require.Equal(t, []int64{10, 20}, vector.MustFixedColWithTypeCheck[int64](prioVec))
 	require.False(t, prioVec.IsNull(0))
 	require.False(t, prioVec.IsNull(1))
 
 	// AppendColumnBufferRange pages a subset: row [1,2) of prio = just 20.
 	pageVec := vector.NewVec(types.T_int64.ToType())
-	require.NoError(t, vectorindex.AppendColumnBufferRange(fr.Cols[1], pageVec, 1, 1, mp))
+	require.NoError(t, vectorindex.AppendColumnBufferRange(out.Include[1], pageVec, 1, 1, mp))
 	require.Equal(t, []int64{20}, vector.MustFixedColWithTypeCheck[int64](pageVec))
 
-	// No requested columns → no-op (no panic, IncludeBuffers untouched).
-	empty := &vectorindex.IncludeResult{}
-	s.buildIncludeBuffers(vectorindex.RuntimeConfig{IncludeBuffers: empty}, results)
-	require.Nil(t, empty.Cols)
+	// Reuse: a second fill on the SAME out Resets its buffers (no stale rows appended).
+	s.fillInclude(rt, results[:1], out)
+	require.Equal(t, 1, out.Include[1].N)
+
+	// No requested columns → out.Include emptied (no panic).
+	s.fillInclude(vectorindex.RuntimeConfig{}, results, out)
+	require.Empty(t, out.Include)
 }

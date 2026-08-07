@@ -304,13 +304,10 @@ type RuntimeConfig struct {
 	RequestedIncludeColumns []string
 	PushdownFilterSQL       string
 	IncludeResult           *IvfIncludeResult
-	// IncludeBuffers is the box-free LIMIT-path covered-INCLUDE carrier (see IncludeResult).
-	// ivfflat uses the legacy []any IncludeResult field above; fulltext2 uses this.
-	IncludeBuffers   *IncludeResult
-	TargetRows       uint
-	SearchRoundLimit uint
-	BucketExpandStep uint
-	SearchCursor     *IvfSearchCursor
+	TargetRows              uint
+	SearchRoundLimit        uint
+	BucketExpandStep        uint
+	SearchCursor            *IvfSearchCursor
 }
 
 type IvfIncludeResult struct {
@@ -319,17 +316,22 @@ type IvfIncludeResult struct {
 	Nulls    map[string][]bool
 }
 
-// IncludeResult is the box-free, column-major covered-INCLUDE result for the LIMIT
-// (non-streaming) path — the pull-path analogue of RuntimeConfig.Emit's includes arg (which
-// serves the no-LIMIT streaming path). Cols[c] is the c-th FULL index INCLUDE column
-// (segment-include order) as a nullable ColumnBuffer covering the whole result set; the TVF
-// maps its requested output columns to segment positions exactly as it does for the stream,
-// then bulk-appends each buffer with AppendColumnBuffer(Range) — no per-row boxing, no
-// reflection append, no map[string][]any intermediate. Carried on RuntimeConfig.IncludeBuffers.
-// fulltext2 uses this; ivfflat keeps the legacy []any IvfIncludeResult, so this path leaves
-// it untouched (ivfpq/cagra do not use covered-INCLUDE results at all).
-type IncludeResult struct {
-	Cols []*ColumnBuffer
+// SearchOutput is the box-free, caller-owned result container filled by
+// VectorIndexSearchIf.SearchInto — the pull-path (LIMIT) analogue of RuntimeConfig.Emit's
+// (keys, distances, includes) callback args (which serve the no-LIMIT streaming path). The
+// caller pools it and Resets it per query, so a warm query allocates nothing for its
+// results:
+//   - Keys: the pk column, box-free for EVERY pk type (unlike SearchFloat32's []int64).
+//   - Dists: scores aligned to Keys (float32 matches the T_float32 score column).
+//   - Include: one nullable ColumnBuffer per FULL index INCLUDE column (segment order), or
+//     nil when rt.RequestedIncludeColumns is empty; the TVF maps its projected columns to
+//     segment positions exactly as it does for the stream.
+//
+// SearchInto Resets these before filling; on return len(Dists) == Keys.N.
+type SearchOutput struct {
+	Keys    *ColumnBuffer
+	Dists   []float32
+	Include []*ColumnBuffer
 }
 
 type IvfSearchCursor struct {

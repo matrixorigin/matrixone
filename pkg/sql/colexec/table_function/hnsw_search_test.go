@@ -473,3 +473,7 @@ func TestNewHnswAlgoFn(t *testing.T) {
 	idxcfg.Usearch.Quantization = usearch.I8
 	assert.Panics(t, func() { newHnswAlgoFn(idxcfg, tblcfg) }, "panic")
 }
+
+func (m *MockSearch) SearchInto(_ *sqlexec.SqlProcess, _ any, _ vectorindex.RuntimeConfig, _ *vectorindex.SearchOutput) error {
+	return nil
+}

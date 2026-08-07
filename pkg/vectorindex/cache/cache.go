@@ -68,6 +68,17 @@ type VectorIndexSearchIf interface {
 	// outKeys and outDists must be pre-allocated to nQueries*rt.Limit elements.
 	// GPU implementations write float32 distances directly; CPU implementations convert on write.
 	SearchFloat32(proc *sqlexec.SqlProcess, query any, rt vectorindex.RuntimeConfig, outKeys []int64, outDists []float32) error
+	// SearchInto is the box-free, alloc-free-after-warmup twin of Search: instead of
+	// returning keys as []any (a heap box per key), it fills a CALLER-OWNED SearchResult —
+	// pk column, scores, and covered-INCLUDE columns, all as reusable ColumnBuffers/slices
+	// the caller pools and Resets across queries, so a warm query allocates nothing for its
+	// results. It is the arbitrary-pk generalization of SearchFloat32 (whose outKeys []int64
+	// cannot hold varchar/uuid/decimal pks). The callee Resets out before filling; on return
+	// out.Keys.N is the result count, len(out.Dists) == out.Keys.N, and out.Include (when
+	// rt.RequestedIncludeColumns is set) holds one buffer per FULL index INCLUDE column.
+	// Implemented by fulltext2; the vector algos stub it "not supported" until each migrates
+	// (mirrors how fulltext2 stubs SearchFloat32).
+	SearchInto(proc *sqlexec.SqlProcess, query any, rt vectorindex.RuntimeConfig, out *vectorindex.SearchOutput) error
 	Load(*sqlexec.SqlProcess) error
 	Destroy()
 }
@@ -189,6 +200,25 @@ func (s *VectorIndexSearch) Search(sqlproc *sqlexec.SqlProcess, newalgo VectorIn
 	// cached algo, so concurrent searches on one entry cannot race on its config.
 	s.extend(false)
 	return s.Algo.Search(sqlproc, query, rt)
+}
+
+// SearchInto mirrors Search but routes to the box-free SearchInto (caller-owned out
+// SearchResult). Same shared-read-lock / status discipline.
+func (s *VectorIndexSearch) SearchInto(sqlproc *sqlexec.SqlProcess, query any, rt vectorindex.RuntimeConfig, out *vectorindex.SearchOutput) error {
+	s.Cond.L.Lock()
+	defer s.Cond.L.Unlock()
+	for s.Status.Load() == 0 {
+		s.Cond.Wait()
+	}
+	status := s.Status.Load()
+	if status >= STATUS_DESTROYED {
+		if status == STATUS_DESTROYED {
+			return moerr.NewInvalidStateNoCtx("Index destroyed")
+		}
+		return moerr.NewInternalErrorNoCtx("Load index error")
+	}
+	s.extend(false)
+	return s.Algo.SearchInto(sqlproc, query, rt, out)
 }
 
 // implementation of VectorIndexCache
@@ -369,6 +399,33 @@ func (c *VectorIndexCache) Search(sqlproc *sqlexec.SqlProcess, key string, newal
 		}
 
 		return keys, distances, nil
+	}
+}
+
+// SearchInto is the box-free twin of Search: it fills the caller-owned out SearchResult
+// (pk/scores/includes as reusable ColumnBuffers) instead of returning boxed []any keys.
+// Same LoadOrStore / Load / ErrInvalidState-retry discipline as Search.
+func (c *VectorIndexCache) SearchInto(sqlproc *sqlexec.SqlProcess, key string, newalgo VectorIndexSearchIf,
+	query any, rt vectorindex.RuntimeConfig, out *vectorindex.SearchOutput) error {
+	for {
+		s := &VectorIndexSearch{Algo: newalgo}
+		s.Cond = sync.NewCond(s.Mutex.RLocker())
+		value, loaded := c.IndexMap.LoadOrStore(key, s)
+		algo := value.(*VectorIndexSearch)
+		if !loaded {
+			if err := algo.Load(sqlproc); err != nil {
+				c.IndexMap.Delete(key)
+				return err
+			}
+		}
+		err := algo.SearchInto(sqlproc, query, rt, out)
+		if err != nil {
+			if moerr.IsMoErrCode(err, moerr.ErrInvalidState) {
+				continue // index destroyed by Remove()/HouseKeeping — retry
+			}
+			return err
+		}
+		return nil
 	}
 }
 

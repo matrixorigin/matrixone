@@ -46,10 +46,15 @@ type fulltext2SearchState struct {
 	tblcfg      fulltext2.TableConfig
 	limit       uint64
 	offset      int
-	keys        []any
-	distances   []float64
 	filterBytes []byte // serialized docfilter membership (WHERE-clause prefilter), if any
 	batch       *batch.Batch
+
+	// LIMIT (non-streaming) path: SearchInto fills this caller-owned, box-free result — pk
+	// (out.Keys), scores (out.Dists), covered INCLUDE cols (out.Include). Held on the state
+	// and Reset per query by SearchInto, so a warm query allocates nothing for its results
+	// (the alloc-free twin of the old keys []any / distances []float64). call() pages it via
+	// u.offset with AppendColumnBufferRange.
+	out *vectorindex.SearchOutput
 
 	// Streaming no-LIMIT path (u.limit == 0): rather than materialize every matching
 	// doc, a producer goroutine runs the search with an Emit callback that hands bounded
@@ -70,15 +75,14 @@ type fulltext2SearchState struct {
 	// (u.batch.Attrs): "doc_id" <- pk, "score" <- score, everything else <- the include
 	// column of that name. pkVecIdx/scoreVecIdx are the batch vector indices for doc_id /
 	// score (-1 when pruned); includeOut lists the surviving include output vectors.
-	// includeNames (== includeOut names) drives rt.RequestedIncludeColumns; includeResult
-	// carries the non-streaming (LIMIT) include values box-free — one ColumnBuffer per FULL
-	// index include column (segment order), indexed by includeOut.segPos, EXACTLY like the
-	// streaming ft2StreamBatch.includes, so both paths share one consumer.
-	pkVecIdx      int
-	scoreVecIdx   int
-	includeOut    []ft2IncludeOut
-	includeNames  []string
-	includeResult *vectorindex.IncludeResult
+	// includeNames (== includeOut names) drives rt.RequestedIncludeColumns. The non-streaming
+	// (LIMIT) include values arrive box-free in u.out.Include (one ColumnBuffer per FULL index
+	// include column, segment order, indexed by includeOut.segPos) — the streaming path uses
+	// ft2StreamBatch.includes; both share one consumer.
+	pkVecIdx     int
+	scoreVecIdx  int
+	includeOut   []ft2IncludeOut
+	includeNames []string
 }
 
 // ft2IncludeOut maps one surviving INCLUDE output vector to its source: vecIdx is the
@@ -110,13 +114,12 @@ func (u *fulltext2SearchState) reset(tf *TableFunction, proc *process.Process) {
 		u.batch.CleanOnlyData()
 	}
 	u.offset = 0
-	u.keys = nil
-	u.distances = nil
 	u.filterBytes = nil
 	u.streaming = false
 	u.errCh = nil
 	u.done = false
-	u.includeResult = nil // per-query; includeColumns is stable (cfg-derived, set at init)
+	// u.out is kept and REUSED across queries (SearchInto Resets its buffers per query) so
+	// the LIMIT path is alloc-free after warmup; includeColumns is stable (cfg-derived).
 }
 
 // stopStream cancels the producer goroutine (if streaming) and drains streamCh until
@@ -210,34 +213,48 @@ func (u *fulltext2SearchState) call(tf *TableFunction, proc *process.Process) (v
 		}
 	}
 
-	nkeys := len(u.keys)
-	start := u.offset
-	n := 0
-	for i := u.offset; i < nkeys && n < 8192; i++ {
-		// Check each append before incrementing n / publishing the batch — an mpool
-		// allocation failure must surface as the error, not a batch that claims more
-		// rows than its vectors hold (the streaming sibling propagates these too).
-		if u.pkVecIdx >= 0 {
-			if err := vector.AppendAny(u.batch.Vecs[u.pkVecIdx], u.keys[i], false, proc.Mp()); err != nil {
-				return vm.CancelResult, err
-			}
-		}
-		if u.scoreVecIdx >= 0 {
-			if err := vector.AppendFixed[float32](u.batch.Vecs[u.scoreVecIdx], float32(u.distances[i]), false, proc.Mp()); err != nil {
-				return vm.CancelResult, err
-			}
-		}
-		n++
+	// start() bailed before running SearchInto (e.g. a NULL/empty pattern, or a runtime-filter
+	// that yielded nothing) — u.out is nil, meaning no results. Signal end of stream. (Before
+	// the SearchOutput migration this was a nil u.keys slice whose len was 0.)
+	if u.out == nil {
+		return vm.CancelResult, nil
 	}
-	// Include columns: bulk box-free, paged over the [start, start+n) rows just emitted.
-	// u.includeResult.Cols is column-major (one nullable ColumnBuffer per FULL include col,
-	// segment order); segPos maps each output col — IDENTICAL to the streaming consumer, so
-	// AppendColumnBufferRange pages the whole-result buffer into this batch with no per-row
-	// boxing. A segPos out of range (should not happen on the covered path) fills SQL NULLs.
+
+	// LIMIT (non-streaming) path: page the box-free SearchInto result (u.out) into this
+	// batch. pk / score / each include col are bulk-appended via AppendColumnBufferRange over
+	// the [start, start+n) rows — no per-row boxing, no reflection append; identical shape to
+	// the streaming consumer above.
+	nkeys := u.out.Keys.N
+	start := u.offset
+	n := nkeys - start
+	if n > 8192 {
+		n = 8192
+	}
+	if n < 0 {
+		n = 0
+	}
+	// pk column (box-free). An mpool failure must surface as the error, not a batch that
+	// claims more rows than its vectors hold (the streaming sibling propagates these too).
+	if u.pkVecIdx >= 0 {
+		if err := vectorindex.AppendColumnBufferRange(u.out.Keys, u.batch.Vecs[u.pkVecIdx], start, n, proc.Mp()); err != nil {
+			return vm.CancelResult, err
+		}
+	}
+	if u.scoreVecIdx >= 0 {
+		for i := start; i < start+n; i++ {
+			if err := vector.AppendFixed[float32](u.batch.Vecs[u.scoreVecIdx], u.out.Dists[i], false, proc.Mp()); err != nil {
+				return vm.CancelResult, err
+			}
+		}
+	}
+	// Include columns: bulk box-free, paged over the same [start, start+n) rows. u.out.Include
+	// is column-major (one nullable ColumnBuffer per FULL include col, segment order); segPos
+	// maps each output col — IDENTICAL to the streaming consumer. A segPos out of range (should
+	// not happen on the covered path) fills SQL NULLs.
 	for _, ic := range u.includeOut {
 		vec := u.batch.Vecs[ic.vecIdx]
-		if u.includeResult != nil && ic.segPos >= 0 && ic.segPos < len(u.includeResult.Cols) {
-			if err := vectorindex.AppendColumnBufferRange(u.includeResult.Cols[ic.segPos], vec, start, n, proc.Mp()); err != nil {
+		if ic.segPos >= 0 && ic.segPos < len(u.out.Include) {
+			if err := vectorindex.AppendColumnBufferRange(u.out.Include[ic.segPos], vec, start, n, proc.Mp()); err != nil {
 				return vm.CancelResult, err
 			}
 		} else {
@@ -328,11 +345,9 @@ func (u *fulltext2SearchState) start(tf *TableFunction, proc *process.Process, n
 
 	u.stopStream()
 	u.offset = 0
-	u.keys = nil
-	u.distances = nil
 	u.streaming = false
 	u.done = false
-	u.includeResult = nil
+	// u.out is kept and REUSED across queries (SearchInto Resets it per query).
 	u.batch.CleanOnlyData()
 
 	patVec := tf.ctr.argVecs[1]
@@ -411,12 +426,11 @@ func (u *fulltext2SearchState) start(tf *TableFunction, proc *process.Process, n
 				return ctx.Err()
 			}
 		}}
-		// Covered fast path: signal the stream to carry each doc's INCLUDE values. The gate
-		// in Fulltext2Search.Search is (IncludeBuffers != nil && RequestedIncludeColumns > 0),
-		// so set both — the streaming path carries includes through Emit, not IncludeBuffers.
+		// Covered fast path: signal the stream to carry each doc's INCLUDE values. The gate in
+		// Fulltext2Search.Search is len(RequestedIncludeColumns) > 0; the streaming path carries
+		// the includes through Emit's 3rd arg, not through a result buffer.
 		if len(u.includeNames) > 0 {
 			rt.RequestedIncludeColumns = u.includeNames
-			rt.IncludeBuffers = &vectorindex.IncludeResult{}
 		}
 		go func() {
 			_, _, serr := veccache.Cache.Search(sp, u.tblcfg.IndexTable, newsearch, q, rt)
@@ -426,26 +440,20 @@ func (u *fulltext2SearchState) start(tf *TableFunction, proc *process.Process, n
 		return nil
 	}
 
-	// With a pushed LIMIT: WAND top-K, returned all at once (bounded by the LIMIT).
+	// With a pushed LIMIT: WAND top-K, filled box-free into the caller-owned u.out via
+	// SearchInto (pk/scores/includes as reusable ColumnBuffers) — no []any keys. u.out is
+	// pooled on the state and Reset per query by SearchInto, so a warm query allocates nothing
+	// for its results; call() pages u.out via u.offset.
 	rt := vectorindex.RuntimeConfig{Limit: uint(u.limit)}
-	// Covered fast path: request the INCLUDE column values; Search fills IncludeBuffers
-	// (box-free, column-major, whole result set), which call() pages on the output.
 	if len(u.includeNames) > 0 {
-		u.includeResult = &vectorindex.IncludeResult{}
+		// Request the covered INCLUDE columns; SearchInto fills u.out.Include (box-free,
+		// column-major, whole result set), which call() pages by segPos.
 		rt.RequestedIncludeColumns = u.includeNames
-		rt.IncludeBuffers = u.includeResult
 	}
-	keys, dists, serr := veccache.Cache.Search(sp, u.tblcfg.IndexTable, newsearch, q, rt)
-	if serr != nil {
-		return serr
+	if u.out == nil {
+		u.out = &vectorindex.SearchOutput{}
 	}
-	ks, ok := keys.([]any)
-	if !ok {
-		return moerr.NewInternalError(proc.Ctx, "fulltext2_search: unexpected result key type")
-	}
-	u.keys = ks
-	u.distances = dists
-	return nil
+	return veccache.Cache.SearchInto(sp, u.tblcfg.IndexTable, newsearch, q, rt, u.out)
 }
 
 // fulltext2ScoreAlgo resolves the relevance formula from fulltext2's OWN session

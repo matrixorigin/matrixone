@@ -519,3 +519,23 @@ func TestCacheReuseKeepsRuntimeConfigQueryScoped(t *testing.T) {
 	require.Empty(t, cachedAlgo.searchCalls[1].PushdownFilterSQL)
 	require.Equal(t, uint(2), cachedAlgo.searchCalls[1].SearchCursor.Round)
 }
+
+func (m *MockSearch) SearchInto(_ *sqlexec.SqlProcess, _ any, _ vectorindex.RuntimeConfig, _ *vectorindex.SearchOutput) error {
+	return nil
+}
+
+func (m *MockAnySearch) SearchInto(_ *sqlexec.SqlProcess, _ any, _ vectorindex.RuntimeConfig, _ *vectorindex.SearchOutput) error {
+	return nil
+}
+
+func (m *MockSearchLoadError) SearchInto(_ *sqlexec.SqlProcess, _ any, _ vectorindex.RuntimeConfig, _ *vectorindex.SearchOutput) error {
+	return nil
+}
+
+func (m *MockSearchSearchError) SearchInto(_ *sqlexec.SqlProcess, _ any, _ vectorindex.RuntimeConfig, _ *vectorindex.SearchOutput) error {
+	return nil
+}
+
+func (m *MockRuntimeSearch) SearchInto(_ *sqlexec.SqlProcess, _ any, _ vectorindex.RuntimeConfig, _ *vectorindex.SearchOutput) error {
+	return nil
+}

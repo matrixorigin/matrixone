@@ -498,3 +498,9 @@ func (s *CagraSearch[B, Q]) Destroy() {
 	}
 	s.Indexes = nil
 }
+
+// SearchInto is not yet implemented for this algo (box-free LIMIT path); it will migrate
+// from the []any Search per the SearchOutput plan. Mirrors fulltext2's SearchFloat32 stub.
+func (s *CagraSearch[B, Q]) SearchInto(_ *sqlexec.SqlProcess, _ any, _ vectorindex.RuntimeConfig, _ *vectorindex.SearchOutput) error {
+	return moerr.NewInternalErrorNoCtx("SearchInto not supported")
+}

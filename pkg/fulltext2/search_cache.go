@@ -154,63 +154,85 @@ func (s *Fulltext2Search) IsStale() (bool, error) {
 	return stale, nil
 }
 
-// Search runs the WAND positional query (NL exact-phrase or boolean) and returns
-// ([]any pks of the source type, []float64 scores).
-func (s *Fulltext2Search) Search(proc *sqlexec.SqlProcess, query any, rt vectorindex.RuntimeConfig) (keys any, distances []float64, err error) {
+// prepare validates the query, resolves the top-k bound, and builds the WHERE prefilter,
+// shared by Search and SearchInto. free is ALWAYS non-nil and must be deferred by the caller
+// even on error (it frees the C-backed docfilter created here, so it never outlives the
+// query — the cached Index is shared, so the filter must be per-query local). empty=true means
+// a loaded but doc-less index (matches nothing) — the caller returns an empty result.
+func (s *Fulltext2Search) prepare(proc *sqlexec.SqlProcess, query any, rt vectorindex.RuntimeConfig) (q Fulltext2Query, k int, pf *prefilter, free func(), empty bool, err error) {
+	free = func() {}
 	if !s.loaded || s.idx == nil {
-		return nil, nil, moerr.NewInternalError(proc.GetContext(), "fulltext2 index not loaded")
+		err = moerr.NewInternalError(proc.GetContext(), "fulltext2 index not loaded")
+		return
 	}
 	if s.idx.NumDocs() == 0 {
-		// A loaded but empty index (no docs yet) matches nothing.
-		return []any{}, []float64{}, nil
+		empty = true
+		return
 	}
-	q, ok := query.(Fulltext2Query)
-	if !ok {
-		return nil, nil, moerr.NewInternalError(proc.GetContext(), "fulltext2 search: invalid query payload")
+	var ok bool
+	if q, ok = query.(Fulltext2Query); !ok {
+		err = moerr.NewInternalError(proc.GetContext(), "fulltext2 search: invalid query payload")
+		return
 	}
-	// rt.Limit is uint; a value past MaxInt32 (an absurd pushed LIMIT) would wrap
-	// negative in int(...), and 0 means "no pushed LIMIT" — return the whole result
-	// set (the TVF's call() paginates). Mirror bm25's clamp.
-	k := int(rt.Limit)
+	// rt.Limit is uint; a value past MaxInt32 (an absurd pushed LIMIT) would wrap negative
+	// in int(...), and 0 means "no pushed LIMIT" — return the whole result set (the TVF
+	// paginates). Mirror bm25's clamp.
+	k = int(rt.Limit)
 	if rt.Limit > uint(math.MaxInt32) {
 		k = math.MaxInt32
 	} else if k <= 0 {
 		k = int(s.idx.NumDocs())
 	}
-	// Build the WHERE prefilter once per query from the pushed-down membership bytes;
-	// it resolves against each segment's ord→pk dict inside SearchQuery. Freed here so
-	// the C-backed filter never outlives the query (the cached Index is shared, so the
-	// filter must be per-query local, never stored on s.idx).
-	var filter docfilter.MembershipFilter
-	var pf *prefilter
 	if len(q.FilterBytes) > 0 || len(q.IncludePredsJSON) > 0 {
 		pf = &prefilter{}
 		if len(q.FilterBytes) > 0 {
-			filter, err = docfilter.New(q.FilterBytes)
-			if err != nil {
-				return nil, nil, err
+			var filter docfilter.MembershipFilter
+			if filter, err = docfilter.New(q.FilterBytes); err != nil {
+				return
 			}
-			defer filter.Free()
+			free = filter.Free // freed via the caller's defer, incl. the error paths below
 			pf.docFilter = filter
 		}
 		if len(q.IncludePredsJSON) > 0 {
-			preds, cerr := compileIncludePredicates(q.IncludePredsJSON, s.idx.includeTypes(), s.idx.pkType())
-			if cerr != nil {
-				return nil, nil, cerr
+			var preds []compiledIncludePred
+			if preds, err = compileIncludePredicates(q.IncludePredsJSON, s.idx.includeTypes(), s.idx.pkType()); err != nil {
+				return
 			}
 			pf.include = preds
 		}
 	}
+	return
+}
 
-	// No-LIMIT streaming path: when the caller passes an Emit callback (the TVF does
-	// this only for a query with no pushed LIMIT), yield every matching doc in bounded
-	// batches — no top-K heap, no materialization of the whole result set. Results are
-	// handed off through Emit, so return empty keys/distances (mirrors bm25).
+// runTopK dispatches the bounded top-k search (ranked bag-of-words vs positional query).
+func (s *Fulltext2Search) runTopK(q Fulltext2Query, k int, pf *prefilter) ([]Result, error) {
+	if q.BagOfWords {
+		return s.idx.SearchBagOfWords(q.Pattern, s.cfg.Parser, q.Algo, k, pf)
+	}
+	return s.idx.SearchQuery(q.Pattern, q.Boolean, s.cfg.Parser, q.Algo, k, pf)
+}
+
+// Search runs the WAND positional query (NL exact-phrase or boolean) and returns
+// ([]any pks of the source type, []float64 scores). The covered LIMIT path is served by the
+// box-free SearchInto instead; this []any form is the streaming (Emit) path and the legacy
+// non-covered return.
+func (s *Fulltext2Search) Search(proc *sqlexec.SqlProcess, query any, rt vectorindex.RuntimeConfig) (keys any, distances []float64, err error) {
+	q, k, pf, free, empty, err := s.prepare(proc, query, rt)
+	defer free()
+	if err != nil {
+		return nil, nil, err
+	}
+	if empty {
+		return []any{}, []float64{}, nil
+	}
+
+	// No-LIMIT streaming path: when the caller passes an Emit callback (the TVF does this
+	// only for a query with no pushed LIMIT), yield every matching doc in bounded batches —
+	// no top-K heap, no materialization. Results are handed off through Emit, so return empty
+	// keys/distances (mirrors bm25). wantInclude tells the stream to carry each doc's INCLUDE
+	// values (segment order) through Emit's 3rd arg.
 	if rt.Emit != nil {
-		// Covered fast path: when the caller requested INCLUDE columns, tell the stream
-		// to carry each doc's decoded INCLUDE values (in segment order) through Emit's 3rd
-		// arg. The consumer (fulltext2_search TVF) maps its requested columns by position.
-		wantInclude := rt.IncludeBuffers != nil && len(rt.RequestedIncludeColumns) > 0
+		wantInclude := len(rt.RequestedIncludeColumns) > 0
 		var serr error
 		if q.BagOfWords {
 			serr = s.idx.StreamBagOfWords(q.Pattern, s.cfg.Parser, q.Algo, pf, wantInclude, rt.Emit)
@@ -223,12 +245,7 @@ func (s *Fulltext2Search) Search(proc *sqlexec.SqlProcess, query any, rt vectori
 		return []any{}, []float64{}, nil
 	}
 
-	var results []Result
-	if q.BagOfWords {
-		results, err = s.idx.SearchBagOfWords(q.Pattern, s.cfg.Parser, q.Algo, k, pf)
-	} else {
-		results, err = s.idx.SearchQuery(q.Pattern, q.Boolean, s.cfg.Parser, q.Algo, k, pf)
-	}
+	results, err := s.runTopK(q, k, pf)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -238,44 +255,95 @@ func (s *Fulltext2Search) Search(proc *sqlexec.SqlProcess, query any, rt vectori
 		keysOut[i] = r.Pk
 		dist[i] = float64(r.Score)
 	}
-	s.buildIncludeBuffers(rt, results)
 	return keysOut, dist, nil
 }
 
-// buildIncludeBuffers populates rt.IncludeBuffers (fulltext2's box-free covering side
-// channel) with one nullable ColumnBuffer per FULL index INCLUDE column (segment-include
-// order), covering the whole result set — so a covered LIMIT query reads its projected
-// INCLUDE columns straight from the index with no base-table JOIN, no map[string][]any
-// intermediate, and no per-row reflection append. The TVF maps its requested output columns
-// to segment positions exactly as it does for the streaming path (by includeOut.segPos), so
-// both paths share one box-free consumer. No-op when no include columns were requested. rt is
-// by value but IncludeBuffers is a pointer, so the caller observes the population.
+// SearchInto is the box-free LIMIT-path twin of Search: it fills the caller-owned out
+// SearchOutput (pk column, scores, covered INCLUDE columns) instead of returning boxed []any
+// keys — so a warm query allocates nothing for its results (the TVF pools out and Resets it
+// per query). out.Keys is the pk in ColumnBuffer form (box-free for every pk type), out.Dists
+// the float32 scores, out.Include one nullable buffer per FULL index INCLUDE column (populated
+// only when rt.RequestedIncludeColumns is set; the TVF projects what it needs by segPos).
+func (s *Fulltext2Search) SearchInto(proc *sqlexec.SqlProcess, query any, rt vectorindex.RuntimeConfig, out *vectorindex.SearchOutput) error {
+	if out == nil {
+		return moerr.NewInternalError(proc.GetContext(), "fulltext2 SearchInto: nil out")
+	}
+	q, k, pf, free, empty, err := s.prepare(proc, query, rt)
+	defer free()
+	if err != nil {
+		return err
+	}
+	// Reset the caller-owned buffers (reused across queries → alloc-free after warmup).
+	pkType := s.idx.pkType()
+	if out.Keys == nil {
+		out.Keys = &vectorindex.ColumnBuffer{}
+	} else {
+		out.Keys.Reset()
+	}
+	out.Keys.Type = types.T(pkType)
+	out.Dists = out.Dists[:0]
+	if empty {
+		out.Include = out.Include[:0]
+		return nil
+	}
+
+	results, err := s.runTopK(q, k, pf)
+	if err != nil {
+		return err
+	}
+	// pk column (box-free re-encode of each already-materialized boxed pk) + scores.
+	w, fixed := fixedPkByteWidth(pkType)
+	if !fixed {
+		w = 0
+	}
+	for i := range results {
+		appendAnyPk(out.Keys, w, results[i].Pk)
+		out.Dists = append(out.Dists, results[i].Score)
+	}
+	s.fillInclude(rt, results, out)
+	return nil
+}
+
+// fillInclude populates out.Include with one nullable ColumnBuffer per FULL index INCLUDE
+// column (segment order), covering the whole result set — so a covered LIMIT query reads its
+// projected INCLUDE columns straight from the index (no base-table JOIN, no map[string][]any,
+// no per-row reflection append). The TVF maps its requested output columns to segment
+// positions (by includeOut.segPos), exactly as the streaming consumer does. No-op (empties
+// out.Include) when no include columns were requested. The buffers are REUSED across queries
+// (Reset in place) so includes are alloc-free after warmup, like out.Keys/out.Dists.
 //
-// The buffers are built in FULL include order (not just the requested subset) to match the
-// stream, which also carries the full set; the TVF projects what it needs. Source note: this
-// re-encodes each result's already-materialized boxed Include value — the top-k's per-winner
-// decodeInclude boxing (O(limit), bounded) is retained; what this removes is the transport
-// map + the reflection AppendAny, the parts the streaming path never paid.
-func (s *Fulltext2Search) buildIncludeBuffers(rt vectorindex.RuntimeConfig, results []Result) {
-	if rt.IncludeBuffers == nil || len(rt.RequestedIncludeColumns) == 0 {
+// Source note: this re-encodes each result's already-materialized boxed Include value — the
+// top-k's per-winner decodeInclude boxing (O(limit), bounded) is retained; what this removes
+// is the transport map + the reflection AppendAny.
+func (s *Fulltext2Search) fillInclude(rt vectorindex.RuntimeConfig, results []Result, out *vectorindex.SearchOutput) {
+	if len(rt.RequestedIncludeColumns) == 0 {
+		out.Include = out.Include[:0]
 		return
 	}
 	it := s.idx.includeTypes()
-	cols := make([]*vectorindex.ColumnBuffer, len(it))
-	for c := range cols {
-		cols[c] = &vectorindex.ColumnBuffer{Type: types.T(it[c])}
+	if cap(out.Include) < len(it) {
+		out.Include = make([]*vectorindex.ColumnBuffer, len(it))
+	} else {
+		out.Include = out.Include[:len(it)]
+	}
+	for c := range it {
+		if out.Include[c] == nil {
+			out.Include[c] = &vectorindex.ColumnBuffer{}
+		} else {
+			out.Include[c].Reset()
+		}
+		out.Include[c].Type = types.T(it[c])
 	}
 	for r := range results {
 		inc := results[r].Include
-		for c := range cols {
+		for c := range out.Include {
 			var v any
 			if c < len(inc) {
 				v = inc[c]
 			}
-			appendAnyInclude(cols[c], v)
+			appendAnyInclude(out.Include[c], v)
 		}
 	}
-	rt.IncludeBuffers.Cols = cols
 }
 
 // SearchFloat32 is unsupported (fulltext scores are float64; the vector float32

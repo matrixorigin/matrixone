@@ -619,3 +619,7 @@ func TestValidateReindexParams_EmptyOpTypeIsUnchanged(t *testing.T) {
 	})
 	require.Error(t, err)
 }
+
+func (f *fakeCachedIndex) SearchInto(_ *sqlexec.SqlProcess, _ any, _ vectorindex.RuntimeConfig, _ *vectorindex.SearchOutput) error {
+	return nil
+}
