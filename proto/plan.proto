@@ -1721,6 +1721,7 @@ message AlterTable {
       AlterReplaceDef alter_replace_def = 11;
       AlterRenameColumn alter_rename_column = 12;
       AlterTableAlterAutoUpdate alter_auto_update = 13;
+      AlterTableAutoIncrement alter_auto_increment = 14;
     }
   }
   string database = 1;
@@ -1985,4 +1986,8 @@ enum AlterPartitionType {
 
 message RankOption {
   string mode = 1; // "pre", "post", "force", or "auto"
+}
+
+message AlterTableAutoIncrement {
+  uint64 new_offset = 1;
 }

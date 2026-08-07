@@ -31,20 +31,22 @@ const (
 	helperPathEnv = "MO_CLUSTER_ADMISSION_HELPER_PATH"
 )
 
-func TestAdmissionIsReentrantWithinProcessAndExclusiveAcrossManagers(t *testing.T) {
+func TestAdmissionRejectsImplicitReentrancyAndAllowsExplicitConcurrency(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "cluster.lock")
 	owner := newManager(path, time.Millisecond)
 	contender := newManager(path, time.Millisecond)
 
-	first, err := owner.acquire(context.Background())
+	first, err := owner.acquire(context.Background(), Exclusive)
 	require.NoError(t, err)
-	second, err := owner.acquire(context.Background())
+	_, err = owner.acquire(context.Background(), Exclusive)
+	require.ErrorContains(t, err, "another complete test cluster")
+	second, err := owner.acquire(context.Background(), AllowConcurrent)
 	require.NoError(t, err)
 
 	tryContender := func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 		defer cancel()
-		_, err := contender.acquire(ctx)
+		_, err := contender.acquire(ctx, Exclusive)
 		require.ErrorIs(t, err, context.DeadlineExceeded)
 	}
 	tryContender()
@@ -52,7 +54,7 @@ func TestAdmissionIsReentrantWithinProcessAndExclusiveAcrossManagers(t *testing.
 	tryContender()
 	require.NoError(t, second.Release())
 
-	next, err := contender.acquire(context.Background())
+	next, err := contender.acquire(context.Background(), Exclusive)
 	require.NoError(t, err)
 	require.NoError(t, next.Release())
 	require.NoError(t, next.Release())
@@ -61,19 +63,19 @@ func TestAdmissionIsReentrantWithinProcessAndExclusiveAcrossManagers(t *testing.
 func TestAcquireRejectsInvalidContexts(t *testing.T) {
 	manager := newManager(filepath.Join(t.TempDir(), "cluster.lock"), time.Millisecond)
 
-	_, err := manager.acquire(nil)
+	_, err := manager.acquire(nil, Exclusive)
 	require.ErrorContains(t, err, "requires a context")
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	_, err = manager.acquire(ctx)
+	_, err = manager.acquire(ctx, Exclusive)
 	require.True(t, errors.Is(err, context.Canceled))
 }
 
 func TestAdmissionIsExclusiveAcrossProcesses(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "cluster.lock")
 	owner := newManager(path, time.Millisecond)
-	lease, err := owner.acquire(context.Background())
+	lease, err := owner.acquire(context.Background(), Exclusive)
 	require.NoError(t, err)
 
 	runAdmissionHelper(t, path, "blocked")
@@ -89,7 +91,7 @@ func TestAdmissionSubprocessHelper(t *testing.T) {
 	manager := newManager(os.Getenv(helperPathEnv), time.Millisecond)
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
-	lease, err := manager.acquire(ctx)
+	lease, err := manager.acquire(ctx, Exclusive)
 
 	switch mode {
 	case "blocked":
