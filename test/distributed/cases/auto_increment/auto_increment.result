@@ -664,6 +664,12 @@ select * from auto_increment17;
 col1
 10
 drop table auto_increment17;
+create table auto_increment17(col1 int auto_increment) auto_increment = 0;
+insert into auto_increment17 values();
+select * from auto_increment17;
+col1
+10
+drop table auto_increment17;
 set auto_increment_offset = 100;
 create table auto_increment17(col1 int auto_increment);
 insert into auto_increment17 values();
@@ -672,3 +678,104 @@ col1
 100
 drop table auto_increment17;
 set auto_increment_offset = 1;
+drop table if exists auto_increment_alter;
+create table auto_increment_alter(col1 int auto_increment primary key, col2 int);
+insert into auto_increment_alter values(),();
+alter table auto_increment_alter auto_increment = 100;
+insert into auto_increment_alter values();
+select * from auto_increment_alter order by col1;
+col1    col2
+1    null
+2    null
+100    null
+drop table auto_increment_alter;
+drop table if exists auto_increment_alter_max;
+create table auto_increment_alter_max(col1 int auto_increment primary key, col2 int);
+insert into auto_increment_alter_max values (1, 1), (200, 200);
+alter table auto_increment_alter_max auto_increment = 100;
+insert into auto_increment_alter_max(col2) values (201);
+select * from auto_increment_alter_max order by col1;
+col1    col2
+1    1
+200    200
+201    201
+drop table auto_increment_alter_max;
+drop table if exists auto_increment_alter_quoted;
+create table auto_increment_alter_quoted(`1id` int auto_increment primary key, col2 int);
+insert into auto_increment_alter_quoted(col2) values (1);
+alter table auto_increment_alter_quoted auto_increment = 10;
+insert into auto_increment_alter_quoted(col2) values (10);
+select * from auto_increment_alter_quoted order by `1id`;
+1id    col2
+1    1
+10    10
+drop table auto_increment_alter_quoted;
+drop table if exists auto_increment_alter_copy;
+create table auto_increment_alter_copy(id bigint primary key auto_increment, v int) auto_increment = 10;
+insert into auto_increment_alter_copy(v) values (1);
+delete from auto_increment_alter_copy;
+alter table auto_increment_alter_copy auto_increment = 100, algorithm = copy;
+insert into auto_increment_alter_copy(v) values (2);
+insert into auto_increment_alter_copy(id, v) values (500, 3);
+alter table auto_increment_alter_copy add column extra int, auto_increment = 100, algorithm = copy;
+insert into auto_increment_alter_copy(v) values (4);
+select id from auto_increment_alter_copy order by id;
+id
+100
+500
+501
+drop table auto_increment_alter_copy;
+drop table if exists auto_increment_alter_add_empty;
+set auto_increment_offset = 10;
+create table auto_increment_alter_add_empty(v int);
+alter table auto_increment_alter_add_empty add column id bigint auto_increment, algorithm = copy;
+insert into auto_increment_alter_add_empty(v) values (1);
+select * from auto_increment_alter_add_empty;
+v    id
+1    10
+drop table auto_increment_alter_add_empty;
+set auto_increment_offset = 1;
+drop table if exists auto_increment_alter_rename;
+create table auto_increment_alter_rename(id bigint primary key auto_increment, v int);
+insert into auto_increment_alter_rename(v) values (1), (2);
+alter table auto_increment_alter_rename algorithm = instant, rename column id to new_id;
+alter table auto_increment_alter_rename auto_increment = 100;
+insert into auto_increment_alter_rename(v) values (3);
+select * from auto_increment_alter_rename order by new_id;
+new_id    v
+1    1
+2    2
+100    3
+drop table auto_increment_alter_rename;
+drop table if exists auto_increment_alter_partitioned;
+create table auto_increment_alter_partitioned(id bigint primary key auto_increment, v int) partition by key(id) partitions 2;
+insert into auto_increment_alter_partitioned(v) values (1), (2);
+alter table auto_increment_alter_partitioned auto_increment = 100;
+insert into auto_increment_alter_partitioned(v) values (3);
+select * from auto_increment_alter_partitioned order by id;
+id    v
+1    1
+2    2
+100    3
+drop table auto_increment_alter_partitioned;
+drop table if exists auto_increment_alter_rename_combined;
+create table auto_increment_alter_rename_combined(id bigint primary key auto_increment, v int);
+insert into auto_increment_alter_rename_combined(v) values (1), (2);
+alter table auto_increment_alter_rename_combined rename column id to new_id, auto_increment = 100;
+insert into auto_increment_alter_rename_combined(v) values (3);
+select * from auto_increment_alter_rename_combined order by new_id;
+new_id    v
+1    1
+2    2
+100    3
+drop table auto_increment_alter_rename_combined;
+drop table if exists auto_increment_alter_create_txn;
+begin;
+create table auto_increment_alter_create_txn(id bigint primary key auto_increment, v int);
+alter table auto_increment_alter_create_txn rename column id to new_id, auto_increment = 100;
+insert into auto_increment_alter_create_txn(v) values (1);
+select * from auto_increment_alter_create_txn order by new_id;
+new_id    v
+100    1
+commit;
+drop table auto_increment_alter_create_txn;
