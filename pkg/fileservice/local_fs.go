@@ -448,6 +448,15 @@ func (l *LocalFS) write(ctx context.Context, vector IOVector) (bytesWritten int,
 }
 
 func (l *LocalFS) Read(ctx context.Context, vector *IOVector) (err error) {
+	// Cache updates are deferred below. Keep the merge generation active until
+	// those updates finish so a completed follower can reuse the leader output.
+	var finishMerge func()
+	defer func() {
+		if finishMerge != nil {
+			finishMerge()
+		}
+	}()
+
 	// Record diskIO IO and netwokIO(un memory IO) time Consumption
 	stats := statistic.StatsInfoFromContext(ctx)
 	ioStart := time.Now()
@@ -574,18 +583,25 @@ read_disk_cache:
 	if mayReadMemoryCache || mayReadDiskCache {
 		// may read caches, merge
 		startLock := time.Now()
-		done, wait := l.ioMerger.Merge(vector.ioMergeKey(), maxIOWaitDuration)
+		mergeKey := vector.ioMergeKey()
+		done, generation := l.ioMerger.merge(mergeKey)
 		if done != nil {
-			defer done()
+			finishMerge = done
 			stats.AddLocalFSReadIOMergerTimeConsumption(time.Since(startLock))
 		} else {
-			wait()
+			completed, waitErr := waitForIOGeneration(ctx, mergeKey, generation, maxIOWaitDuration)
 			stats.AddLocalFSReadIOMergerTimeConsumption(time.Since(startLock))
-			if mayReadMemoryCache {
-				goto read_memory_cache
-			} else {
+			if waitErr != nil {
+				return waitErr
+			}
+			if completed {
+				if mayReadMemoryCache {
+					goto read_memory_cache
+				}
 				goto read_disk_cache
 			}
+			// A timed-out follower must not rejoin the same generation forever.
+			// Fall through to its own bounded local read.
 		}
 	}
 
