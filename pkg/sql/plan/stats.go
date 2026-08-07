@@ -696,7 +696,6 @@ func estimateEquiJoinNDV(
 		if keyNDV <= 0 || math.IsNaN(keyNDV) || math.IsInf(keyNDV, 0) {
 			continue
 		}
-		pair.pred.Ndv = keyNDV
 		joinNDV = math.Max(joinNDV, keyNDV)
 	}
 
@@ -1526,14 +1525,10 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 			return //dont calc shuffle nodes again
 		}
 
-		ndv, hasEquiJoinNDV, equiPredicates := estimateEquiJoinNDV(node, leftStats, rightStats, builder)
-		if !hasEquiJoinNDV {
-			ndv = math.Min(leftStats.Outcnt, rightStats.Outcnt)
-			if ndv < 1 {
-				ndv = 1
-			}
+		ndv := math.Min(leftStats.Outcnt, rightStats.Outcnt)
+		if ndv < 1 {
+			ndv = 1
 		}
-		residualSelectivity := estimateJoinResidualSelectivity(node, equiPredicates, builder)
 		leftSelectivity := clampSelectivity(leftStats.Selectivity, 1)
 		rightSelectivity := clampSelectivity(rightStats.Selectivity, 1)
 		selectivity := clampSelectivity(math.Pow(rightSelectivity, math.Pow(leftSelectivity, 0.2)), 1)
@@ -1549,6 +1544,11 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 
 		switch node.JoinType {
 		case plan.Node_INNER:
+			joinNDV, hasEquiJoinNDV, equiPredicates := estimateEquiJoinNDV(node, leftStats, rightStats, builder)
+			if hasEquiJoinNDV {
+				ndv = joinNDV
+			}
+			residualSelectivity := estimateJoinResidualSelectivity(node, equiPredicates, builder)
 			leftUnique, rightUnique := getEquiJoinKeyUniqueness(node, builder)
 			// A unique equality-key tuple has exactly one distinct value per
 			// surviving row, regardless of a stale sampled column NDV.
@@ -1816,7 +1816,14 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 		}
 
 	case plan.Node_FILTER:
-		filterSelectivity := estimateExprSelectivity(colexec.RewriteFilterExprList(node.FilterList), builder, nil)
+		// Estimation annotates expressions with selectivity. Work on copies so
+		// cardinality estimation cannot reorder filters or affect later physical
+		// decisions through those annotations.
+		filterList := make([]*plan.Expr, len(node.FilterList))
+		for i, filter := range node.FilterList {
+			filterList[i] = DeepCopyExpr(filter)
+		}
+		filterSelectivity := estimateExprSelectivity(colexec.RewriteFilterExprList(filterList), builder, nil)
 		node.Stats.Outcnt = childStats.Outcnt * filterSelectivity
 		if node.Stats.Outcnt < 1 {
 			node.Stats.Outcnt = 1

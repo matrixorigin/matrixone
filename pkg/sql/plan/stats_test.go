@@ -504,6 +504,7 @@ func TestSampledNDVDoesNotAmplifyUnboundedManyToManyJoin(t *testing.T) {
 		{Typ: planpb.Type{Id: int32(types.T_int64)}, Expr: &planpb.Expr_Col{Col: &planpb.ColRef{RelPos: 2, ColPos: 0, Name: "k"}}},
 	})
 	require.NoError(t, err)
+	predicate.Ndv = 37
 	join := &planpb.Node{
 		NodeType: planpb.Node_JOIN, JoinType: planpb.Node_INNER,
 		Children: []int32{0, 1}, OnList: []*planpb.Expr{predicate}, Stats: DefaultStats(),
@@ -514,9 +515,11 @@ func TestSampledNDVDoesNotAmplifyUnboundedManyToManyJoin(t *testing.T) {
 
 	require.Equal(t, float64(1_000_000), join.Stats.Outcnt,
 		"a sampled single-column NDV is not a safe fanout bound for an unconstrained many-to-many join")
+	require.Equal(t, float64(37), predicate.Ndv,
+		"cardinality estimation must not overwrite the NDV used by physical planning")
 }
 
-func TestStandaloneFilterUsesExpressionSelectivity(t *testing.T) {
+func TestStandaloneFilterUsesExpressionSelectivityWithoutMutatingPredicates(t *testing.T) {
 	builder := NewQueryBuilder(planpb.Query_SELECT, &MockCompilerContext{ctx: context.Background()}, false, false)
 	predicate, err := BindFuncExprImplByPlanExpr(context.Background(), "!=", []*planpb.Expr{
 		{Typ: planpb.Type{Id: int32(types.T_int64)}, Expr: &planpb.Expr_Col{Col: &planpb.ColRef{RelPos: 1, ColPos: 0}}},
@@ -545,6 +548,8 @@ func TestStandaloneFilterUsesExpressionSelectivity(t *testing.T) {
 
 	require.Equal(t, 0.9, filter.Stats.Selectivity)
 	require.Equal(t, float64(900), filter.Stats.Outcnt)
+	require.Zero(t, predicate.Selectivity,
+		"cardinality estimation must not annotate predicates used by physical planning")
 }
 
 func TestContainedUniqueJoinCardinalityRequiresReliableContainment(t *testing.T) {
