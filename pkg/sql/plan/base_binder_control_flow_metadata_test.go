@@ -65,6 +65,297 @@ func TestBindControlFlowMetadata(t *testing.T) {
 		require.True(t, expr.Typ.NotNullable)
 	})
 
+	for _, test := range []struct {
+		name   string
+		args   []*planpb.Expr
+		argPos int
+	}{
+		{
+			name: "text column keeps conservative varchar capacity",
+			args: []*planpb.Expr{
+				makePlan2BoolConstExprWithType(true),
+				{Typ: planpb.Type{Id: int32(types.T_text)}, Expr: &planpb.Expr_Col{Col: &planpb.ColRef{RelPos: 0, ColPos: 0}}},
+				makePlan2Int64ConstExprWithType(3),
+			},
+			argPos: 1,
+		},
+		{
+			name: "blob column keeps conservative varchar capacity",
+			args: []*planpb.Expr{
+				makePlan2BoolConstExprWithType(true),
+				{Typ: planpb.Type{Id: int32(types.T_blob)}, Expr: &planpb.Expr_Col{Col: &planpb.ColRef{RelPos: 0, ColPos: 0}}},
+				makePlan2Int64ConstExprWithType(3),
+			},
+			argPos: 1,
+		},
+		{
+			name: "float column keeps conservative varchar capacity",
+			args: []*planpb.Expr{
+				makePlan2BoolConstExprWithType(false),
+				makePlan2StringConstExprWithType("x"),
+				{Typ: planpb.Type{Id: int32(types.T_float32)}, Expr: &planpb.Expr_Col{Col: &planpb.ColRef{RelPos: 0, ColPos: 0}}},
+			},
+			argPos: 2,
+		},
+		{
+			name: "double expression keeps conservative varchar capacity",
+			args: []*planpb.Expr{
+				makePlan2BoolConstExprWithType(false),
+				makePlan2StringConstExprWithType("x"),
+				{Typ: planpb.Type{Id: int32(types.T_float64)}, Expr: &planpb.Expr_F{F: &planpb.Function{Func: &planpb.ObjectRef{ObjName: "cast"}}}},
+			},
+			argPos: 2,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			expr, err := BindFuncExprImplByPlanExpr(ctx, "if", test.args)
+			require.NoError(t, err)
+			require.Equal(t, int32(types.T_varchar), expr.Typ.Id)
+			require.Equal(t, int32(types.MaxVarcharLen), expr.Typ.Width)
+
+			// The branch must not be rewritten to a narrow VARCHAR cast; otherwise
+			// runtime values such as a TEXT column's "abcdef" would be truncated.
+			valueArg := expr.GetF().Args[test.argPos]
+			require.Equal(t, int32(types.T_varchar), valueArg.Typ.Id)
+			require.Equal(t, int32(types.MaxVarcharLen), valueArg.Typ.Width)
+		})
+	}
+
+	date := makePlan2DateConstExprWithType(0)
+	for _, test := range []struct {
+		name     string
+		function string
+		args     []*planpb.Expr
+		width    int32
+	}{
+		{
+			name:     "case combines string numeric and temporal bounds",
+			function: "case",
+			args: []*planpb.Expr{
+				makePlan2BoolConstExprWithType(false), makePlan2StringConstExprWithType("x"),
+				makePlan2BoolConstExprWithType(true), makePlan2Int64ConstExprWithType(1234567890123),
+				date,
+			},
+			width: 14,
+		},
+		{
+			name:     "coalesce combines string numeric and temporal bounds",
+			function: "coalesce",
+			args: []*planpb.Expr{
+				MakePlan2NullTextConstExprWithType(""), makePlan2StringConstExprWithType("x"),
+				makePlan2Int64ConstExprWithType(1234567890123), date,
+			},
+			width: 14,
+		},
+		{
+			name:     "case keeps unknown double conservative with temporal branch",
+			function: "case",
+			args: []*planpb.Expr{
+				makePlan2BoolConstExprWithType(false), makePlan2StringConstExprWithType("x"),
+				makePlan2BoolConstExprWithType(true),
+				{Typ: planpb.Type{Id: int32(types.T_float64)}, Expr: &planpb.Expr_Col{Col: &planpb.ColRef{RelPos: 0, ColPos: 0}}},
+				date,
+			},
+			width: types.MaxVarcharLen,
+		},
+		{
+			name:     "coalesce keeps unknown double conservative with temporal branch",
+			function: "coalesce",
+			args: []*planpb.Expr{
+				MakePlan2NullTextConstExprWithType(""), makePlan2StringConstExprWithType("x"),
+				{Typ: planpb.Type{Id: int32(types.T_float64)}, Expr: &planpb.Expr_Col{Col: &planpb.ColRef{RelPos: 0, ColPos: 0}}},
+				date,
+			},
+			width: types.MaxVarcharLen,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			expr, err := BindFuncExprImplByPlanExpr(ctx, test.function, test.args)
+			require.NoError(t, err)
+			require.Equal(t, int32(types.T_varchar), expr.Typ.Id)
+			require.Equal(t, test.width, expr.Typ.Width)
+		})
+	}
+
+	for _, test := range []struct {
+		name     string
+		function string
+		args     []*planpb.Expr
+	}{
+		{
+			name:     "if keeps unicode string cast conservative",
+			function: "if",
+			args:     []*planpb.Expr{makePlan2BoolConstExprWithType(true), makePlan2StringConstExprWithType("你好"), makePlan2Int64ConstExprWithType(12)},
+		},
+		{
+			name:     "case keeps unicode string cast conservative",
+			function: "case",
+			args:     []*planpb.Expr{makePlan2BoolConstExprWithType(true), makePlan2StringConstExprWithType("你好"), makePlan2Int64ConstExprWithType(12)},
+		},
+		{
+			name:     "coalesce keeps unicode string cast conservative",
+			function: "coalesce",
+			args:     []*planpb.Expr{makePlan2StringConstExprWithType("你好"), makePlan2Int64ConstExprWithType(12)},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			expr, err := BindFuncExprImplByPlanExpr(ctx, test.function, test.args)
+			require.NoError(t, err)
+			require.Equal(t, int32(types.T_varchar), expr.Typ.Id)
+			require.Equal(t, int32(3), expr.Typ.Width)
+			for _, arg := range expr.GetF().Args {
+				if types.T(arg.Typ.Id) == types.T_varchar {
+					require.Equal(t, int32(types.MaxVarcharLen), arg.Typ.Width)
+				}
+			}
+		})
+	}
+
+	for _, test := range []struct {
+		name     string
+		function string
+		args     func(*planpb.Expr) []*planpb.Expr
+	}{
+		{
+			name:     "if decimal and integer literal keeps decimal precision",
+			function: "if",
+			args: func(decimal *planpb.Expr) []*planpb.Expr {
+				return []*planpb.Expr{makePlan2BoolConstExprWithType(true), decimal, makePlan2Int64ConstExprWithType(0)}
+			},
+		},
+		{
+			name:     "case decimal and integer literal keeps decimal precision",
+			function: "case",
+			args: func(decimal *planpb.Expr) []*planpb.Expr {
+				return []*planpb.Expr{makePlan2BoolConstExprWithType(true), decimal, makePlan2Int64ConstExprWithType(0)}
+			},
+		},
+		{
+			name:     "coalesce decimal and integer literal keeps decimal precision",
+			function: "coalesce",
+			args: func(decimal *planpb.Expr) []*planpb.Expr {
+				return []*planpb.Expr{decimal, makePlan2Int64ConstExprWithType(0)}
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			decimal, err := makePlan2DecimalExprWithType(ctx, "12.50")
+			require.NoError(t, err)
+			decimal.Typ.Width = 8
+			decimal.Typ.Scale = 2
+
+			expr, err := BindFuncExprImplByPlanExpr(ctx, test.function, test.args(decimal))
+			require.NoError(t, err)
+			require.True(t, types.T(expr.Typ.Id).IsDecimal())
+			require.Equal(t, int32(8), expr.Typ.Width)
+			require.Equal(t, int32(2), expr.Typ.Scale)
+			for _, arg := range expr.GetF().Args {
+				if types.T(arg.Typ.Id).IsDecimal() {
+					require.Equal(t, int32(8), arg.Typ.Width)
+					require.Equal(t, int32(2), arg.Typ.Scale)
+				}
+			}
+		})
+	}
+
+	for _, test := range []struct {
+		name  string
+		args  func(*planpb.Expr) []*planpb.Expr
+		width int32
+	}{
+		{
+			name: "coalesce date and string uses date display width",
+			args: func(temporal *planpb.Expr) []*planpb.Expr {
+				return []*planpb.Expr{temporal, makePlan2StringConstExprWithType("fallback")}
+			},
+			width: 10,
+		},
+		{
+			name: "coalesce datetime and string uses datetime display width",
+			args: func(temporal *planpb.Expr) []*planpb.Expr {
+				return []*planpb.Expr{temporal, makePlan2StringConstExprWithType("fallback")}
+			},
+			width: 19,
+		},
+		{
+			name: "coalesce timestamp fsp and string uses timestamp display width",
+			args: func(temporal *planpb.Expr) []*planpb.Expr {
+				return []*planpb.Expr{temporal, makePlan2StringConstExprWithType("fallback")}
+			},
+			width: 26,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var temporal *planpb.Expr
+			switch test.width {
+			case 10:
+				temporal = makePlan2DateConstExprWithType(0)
+			case 19:
+				temporal = makePlan2DateTimeConstExprWithType(0)
+			default:
+				temporal = makePlan2TimestampConstExprWithType(0)
+				temporal.Typ.Scale = 6
+			}
+
+			expr, err := BindFuncExprImplByPlanExpr(ctx, "coalesce", test.args(temporal))
+			require.NoError(t, err)
+			require.Equal(t, int32(types.T_varchar), expr.Typ.Id)
+			require.Equal(t, test.width, expr.Typ.Width)
+		})
+	}
+
+	for _, test := range []struct {
+		name  string
+		typ   types.Type
+		width int32
+	}{
+		{
+			name:  "time uses its full display bound",
+			typ:   types.T_time.ToTypeWithScale(6),
+			width: 24,
+		},
+		{
+			name:  "bool keeps conservative varchar capacity",
+			typ:   types.T_bool.ToType(),
+			width: types.MaxVarcharLen,
+		},
+		{
+			name:  "bit keeps conservative varchar capacity",
+			typ:   types.T_bit.ToType(),
+			width: types.MaxVarcharLen,
+		},
+		{
+			name:  "uuid keeps conservative varchar capacity",
+			typ:   types.T_uuid.ToType(),
+			width: types.MaxVarcharLen,
+		},
+		{
+			name:  "json keeps conservative varchar capacity",
+			typ:   types.T_json.ToType(),
+			width: types.MaxVarcharLen,
+		},
+		{
+			name:  "datalink keeps conservative varchar capacity",
+			typ:   types.T_datalink.ToType(),
+			width: types.MaxVarcharLen,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			value := &planpb.Expr{
+				Typ:  planpb.Type{Id: int32(test.typ.Oid), Width: test.typ.Width, Scale: test.typ.Scale},
+				Expr: &planpb.Expr_Col{Col: &planpb.ColRef{RelPos: 0, ColPos: 0}},
+			}
+			expr, err := BindFuncExprImplByPlanExpr(ctx, "coalesce", []*planpb.Expr{
+				makePlan2StringConstExprWithType("x"),
+				makePlan2Int64ConstExprWithType(1),
+				value,
+			})
+			require.NoError(t, err)
+			require.Equal(t, int32(types.T_varchar), expr.Typ.Id)
+			require.Equal(t, test.width, expr.Typ.Width)
+		})
+	}
+
 	t.Run("greatest remains nullable in metadata", func(t *testing.T) {
 		expr, err := BindFuncExprImplByPlanExpr(ctx, "greatest", []*planpb.Expr{
 			makePlan2DateConstExprWithType(0),
@@ -227,6 +518,97 @@ func TestBuildControlFlowDecimalStringMetadataWidth(t *testing.T) {
 	}
 
 	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, test.sql, 1)
+			require.NoError(t, err)
+
+			pl, err := BuildPlan(NewMockCompilerContext(true), stmt, false)
+			require.NoError(t, err)
+			query := pl.GetQuery()
+			projectList := query.Nodes[query.Steps[len(query.Steps)-1]].ProjectList
+			require.Len(t, projectList, 1)
+			require.Equal(t, int32(types.T_varchar), projectList[0].Typ.Id)
+			require.Equal(t, test.width, projectList[0].Typ.Width)
+		})
+	}
+}
+
+func TestBuildControlFlowTimeVarcharMetadata(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		sql  string
+	}{
+		{
+			name: "case",
+			sql: `select case
+				when false then 'x'
+				when false then 1
+				else cast('12:34:56.123456' as time(6))
+			end`,
+		},
+		{
+			name: "coalesce",
+			sql: `select coalesce(
+				'x',
+				1,
+				cast('12:34:56.123456' as time(6)))`,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, test.sql, 1)
+			require.NoError(t, err)
+
+			pl, err := BuildPlan(NewMockCompilerContext(true), stmt, false)
+			require.NoError(t, err)
+			query := pl.GetQuery()
+			projectList := query.Nodes[query.Steps[len(query.Steps)-1]].ProjectList
+			require.Len(t, projectList, 1)
+			require.Equal(t, int32(types.T_varchar), projectList[0].Typ.Id)
+			require.Equal(t, int32(24), projectList[0].Typ.Width)
+		})
+	}
+}
+
+func TestBuildControlFlowTypedNullVarcharMetadata(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		sql   string
+		width int32
+	}{
+		{
+			name:  "coalesce typed null",
+			sql:   `select coalesce(cast(null as char(10)), 'x', 1)`,
+			width: 10,
+		},
+		{
+			name: "case typed null",
+			sql: `select case
+				when false then cast(null as char(10))
+				when true then 'x'
+				else 1
+			end`,
+			width: 10,
+		},
+		{
+			name:  "if typed null",
+			sql:   `select if(true, cast(null as char(10)), 1)`,
+			width: 10,
+		},
+		{
+			name:  "coalesce plain null",
+			sql:   `select coalesce(null, 'x', 1)`,
+			width: 2,
+		},
+		{
+			name: "case plain null",
+			sql: `select case
+				when false then null
+				when true then 'x'
+				else 1
+			end`,
+			width: 2,
+		},
+	} {
 		t.Run(test.name, func(t *testing.T) {
 			stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, test.sql, 1)
 			require.NoError(t, err)

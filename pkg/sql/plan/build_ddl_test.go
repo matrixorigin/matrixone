@@ -38,7 +38,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 type rootSQLCompilerContext struct {
@@ -2778,4 +2780,251 @@ func TestPartitionCreateSQLIsModeIndependentForAddPartition(t *testing.T) {
 	defs, err := constructAddedPartitionDefs(ctx, tableDef, clause)
 	require.NoError(t, err)
 	require.Len(t, defs, 1)
+}
+
+func TestCheckFkColsAreValidRecordsReferencedKey(t *testing.T) {
+	ctx := NewMockCompilerContext(true)
+	ctx.SetContext(context.Background())
+	intType := plan.Type{Id: int32(types.T_int32)}
+	parent := &TableDef{
+		Name: "parent",
+		Cols: []*plan.ColDef{
+			{ColId: 1, Name: "id", Typ: intType},
+			{ColId: 2, Name: "code", Typ: intType},
+		},
+		Pkey: &plan.PrimaryKeyDef{Names: []string{"id", "code"}},
+		Indexes: []*plan.IndexDef{
+			{IndexName: "uq_parent_id", Unique: true, Parts: []string{"id"}},
+			{IndexName: "uq_parent_code", Unique: true, Parts: []string{"code"}},
+		},
+	}
+	newFK := func(columns ...string) *FkData {
+		return &FkData{
+			ParentTableName: "parent",
+			Cols:            &plan.FkColName{Cols: columns},
+			ColsReferred:    &plan.FkColName{Cols: columns},
+			Def:             &plan.ForeignKeyDef{},
+			ColTyps: map[int]*plan.Type{
+				0: &intType,
+			},
+		}
+	}
+
+	fk := newFK("id")
+	require.NoError(t, checkFkColsAreValid(ctx, fk, parent))
+	require.Equal(t, "PRIMARY", fk.Def.ReferencedIndexName)
+	require.Equal(t, []uint64{1}, fk.Def.ForeignCols)
+
+	composite := newFK("id", "code")
+	composite.ColTyps[1] = &intType
+	require.NoError(t, checkFkColsAreValid(ctx, composite, parent))
+	require.Equal(t, "PRIMARY", composite.Def.ReferencedIndexName)
+	require.Equal(t, []uint64{1, 2}, composite.Def.ForeignCols)
+
+	nonPrefix := newFK("code", "id")
+	nonPrefix.ColTyps[1] = &intType
+	require.Error(t, checkFkColsAreValid(ctx, nonPrefix, parent), "a non-prefix key must not be accepted")
+
+	unique := newFK("code")
+	require.NoError(t, checkFkColsAreValid(ctx, unique, parent))
+	require.Equal(t, "uq_parent_code", unique.Def.ReferencedIndexName)
+}
+
+func TestDropSelectedForeignKeyIndexIsRejected(t *testing.T) {
+	for _, referencedIndexName := range []string{"idx1", ""} {
+		mode := "persisted name"
+		if referencedIndexName == "" {
+			mode = "legacy inferred name"
+		}
+		t.Run(mode, func(t *testing.T) {
+			for _, sql := range []string{
+				"drop index idx1 on test_idx",
+				"alter table test_idx drop index idx1",
+			} {
+				t.Run(sql, func(t *testing.T) {
+					mock := NewMockOptimizer(true)
+					parent := mock.ctxt.tables["test_idx"]
+					parent.TblId = 100
+					parent.Pkey = nil
+					parent.RefChildTbls = []uint64{200}
+					parent.Indexes = []*plan.IndexDef{
+						{IndexName: "idx1", Unique: true, Parts: []string{"n_nationkey"}},
+						{IndexName: "idx_alternative", Unique: true, Parts: []string{"n_nationkey"}},
+						{IndexName: "idx_unrelated", Unique: true, Parts: []string{"n_name"}},
+					}
+					child := &TableDef{
+						Name:  "fk_child",
+						TblId: 200,
+						Fkeys: []*plan.ForeignKeyDef{{
+							Name:                "fk_child_parent",
+							ForeignTbl:          parent.TblId,
+							ForeignCols:         []uint64{parent.Cols[0].ColId},
+							ReferencedIndexName: referencedIndexName,
+						}},
+					}
+					mock.ctxt.tables[child.Name] = child
+					mock.ctxt.objects[child.Name] = &ObjectRef{SchemaName: "tpch", ObjName: child.Name}
+					mock.ctxt.id2name[child.TblId] = child.Name
+
+					_, err := runOneStmt(mock, t, sql)
+					require.Error(t, err)
+					require.True(t, moerr.IsMoErrCode(err, moerr.ErrDropIndexNeededInForeignKey), err.Error())
+
+					plan, err := runOneStmt(mock, t, "drop index idx_unrelated on test_idx")
+					require.NoError(t, err)
+					require.Equal(t, "idx_unrelated", plan.GetDdl().GetDropIndex().GetIndexName())
+
+					_, err = runOneStmt(mock, t, "drop index idx_alternative on test_idx")
+					if referencedIndexName == "" {
+						require.Error(t, err, "legacy metadata must not guess which compatible key was bound")
+						require.True(t, moerr.IsMoErrCode(err, moerr.ErrDropIndexNeededInForeignKey), err.Error())
+					} else {
+						require.NoError(t, err, "a persisted binding makes an alternative key independently droppable")
+					}
+				})
+			}
+		})
+	}
+}
+
+func TestAlterCanDropSelfForeignKeyAndItsSelectedIndexTogether(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	tableDef := mock.ctxt.tables["test_idx"]
+	tableDef.TblId = 100
+	tableDef.Pkey = nil
+	tableDef.RefChildTbls = []uint64{0}
+	tableDef.Indexes = []*plan.IndexDef{{
+		IndexName: "idx1", Unique: true, Parts: []string{"n_nationkey"},
+	}}
+	tableDef.Fkeys = []*plan.ForeignKeyDef{{
+		Name:                "fk_self",
+		ForeignTbl:          0,
+		ForeignCols:         []uint64{tableDef.Cols[0].ColId},
+		ReferencedIndexName: "idx1",
+	}}
+
+	logicPlan, err := runOneStmt(mock, t,
+		"alter table test_idx drop foreign key fk_self, drop index idx1")
+	require.NoError(t, err)
+	require.Len(t, logicPlan.GetDdl().GetAlterTable().GetActions(), 2)
+}
+
+func TestDropReferencedPrimaryKeyIsRejected(t *testing.T) {
+	for _, referencedIndexName := range []string{"PRIMARY", ""} {
+		mock := NewMockOptimizer(true)
+		parent := mock.ctxt.tables["test_idx"]
+		parent.TblId = 100
+		parent.RefChildTbls = []uint64{200}
+		child := &TableDef{
+			Name:  "fk_child_primary",
+			TblId: 200,
+			Fkeys: []*plan.ForeignKeyDef{{
+				Name:                "fk_child_primary",
+				ForeignTbl:          parent.TblId,
+				ForeignCols:         []uint64{parent.Cols[0].ColId},
+				ReferencedIndexName: referencedIndexName,
+			}},
+		}
+		mock.ctxt.tables[child.Name] = child
+		mock.ctxt.objects[child.Name] = &ObjectRef{SchemaName: "tpch", ObjName: child.Name}
+		mock.ctxt.id2name[child.TblId] = child.Name
+
+		_, err := runOneStmt(mock, t, "alter table test_idx drop primary key")
+		require.Error(t, err)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrDropIndexNeededInForeignKey), err.Error())
+	}
+}
+
+func TestCreateForeignKeyUsesLegacyCatalogBeforeTenantUpgrade(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	legacyColumnNames := []string{
+		"constraint_name", "constraint_id", "db_name", "db_id", "table_name", "table_id",
+		"column_name", "column_id", "refer_db_name", "refer_db_id", "refer_table_name",
+		"refer_table_id", "refer_column_name", "refer_column_id", "on_delete", "on_update",
+	}
+	legacyCatalog := &TableDef{Name: catalog.MOForeignKeys}
+	for _, name := range legacyColumnNames {
+		legacyCatalog.Cols = append(legacyCatalog.Cols, &ColDef{Name: name})
+	}
+	mock.ctxt.tables[catalog.MOForeignKeys] = legacyCatalog
+
+	proc := testutil.NewProcess(t)
+	proc.ReplaceTopCtx(defines.AttachAccountId(context.Background(), catalog.System_Account))
+	mock.ctxt.GetProcessFunc = func() *process.Process { return proc }
+	var internalQueries []string
+	moruntime.ServiceRuntime(proc.GetService()).SetGlobalVariables(
+		moruntime.InternalSQLExecutor,
+		executor.NewMemExecutor(func(sql string) (executor.Result, error) {
+			internalQueries = append(internalQueries, sql)
+			return executor.Result{}, nil
+		}),
+	)
+
+	logicPlan, err := runOneStmt(mock, t,
+		"create table fk_before_upgrade (parent_id int, constraint fk_before_upgrade_parent foreign key (parent_id) references nation(n_nationkey))")
+	require.NoError(t, err)
+	createTable := logicPlan.GetDdl().GetCreateTable()
+	require.Len(t, createTable.UpdateFkSqls, 1)
+	require.NotContains(t, createTable.UpdateFkSqls[0], "referenced_index_name")
+	require.NotContains(t, createTable.UpdateFkSqls[0], "on_delete_origin")
+	require.Len(t, internalQueries, 1)
+	require.NotContains(t, internalQueries[0], "referenced_index_name")
+	require.NotContains(t, internalQueries[0], "on_delete_origin")
+}
+
+func TestForwardForeignKeyCatalogLifecycle(t *testing.T) {
+	ctx := NewMockCompilerContext(true)
+	ctx.SetContext(context.Background())
+	ctx.tables[catalog.MOForeignKeys] = &TableDef{
+		Name: catalog.MOForeignKeys,
+		Cols: []*ColDef{
+			{Name: "referenced_index_name"},
+			{Name: "on_delete_origin"},
+			{Name: "on_update_origin"},
+		},
+	}
+	ctx.ResolveVariableFunc = func(name string, _, _ bool) (interface{}, error) {
+		if name == "foreign_key_checks" {
+			return int64(0), nil
+		}
+		return nil, moerr.NewInternalError(context.Background(), "unexpected variable")
+	}
+	intType := plan.Type{Id: int32(types.T_int32)}
+	child := &TableDef{
+		Name: "child",
+		Cols: []*plan.ColDef{{ColId: 1, Name: "parent_id", Typ: intType}},
+	}
+	stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL,
+		"create table child (parent_id int, constraint fk_child_parent foreign key (parent_id) references parent (id))", 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+	var foreignKey *tree.ForeignKey
+	for _, def := range stmt.(*tree.CreateTable).Defs {
+		if foreignKey, _ = def.(*tree.ForeignKey); foreignKey != nil {
+			break
+		}
+	}
+	require.NotNil(t, foreignKey)
+
+	data, err := getForeignKeyData(ctx, "db", child, foreignKey)
+	require.NoError(t, err)
+	require.True(t, data.ForwardRefer)
+	require.NotEmpty(t, data.UpdateSql, "the child must persist its deferred FK catalog row")
+	require.Contains(t, data.UpdateSql, "'fk_child_parent'")
+	require.Contains(t, data.UpdateSql, "''", "the parent key is intentionally unresolved at child creation")
+
+	ctx.tables["child"] = child
+	parent := &TableDef{
+		Name: "parent",
+		Cols: []*plan.ColDef{{ColId: 2, Name: "id", Typ: intType}},
+		Pkey: &plan.PrimaryKeyDef{Names: []string{"id"}},
+	}
+	resolved, err := buildFkDataOfForwardRefer(ctx, "fk_child_parent", []*FkReferDef{{
+		Db: "db", Tbl: "child", Col: "parent_id", ReferCol: "id", OnDelete: "NO_ACTION", OnUpdate: "NO_ACTION",
+	}}, &plan.CreateTable{Database: "db", TableDef: parent})
+	require.NoError(t, err)
+	require.Equal(t, "PRIMARY", resolved.Def.ReferencedIndexName)
+	require.Equal(t,
+		"update `mo_catalog`.`mo_foreign_keys` set referenced_index_name = 'PRIMARY' where db_name = 'db' and table_name = 'child' and constraint_name = 'fk_child_parent'",
+		getSqlForUpdateFkReferencedIndex("db", "child", "fk_child_parent", resolved.Def.ReferencedIndexName))
 }

@@ -18,6 +18,7 @@ import (
 	"context"
 	"reflect"
 	"testing"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
@@ -192,4 +193,16 @@ func TestDumpCommonConfig(t *testing.T) {
 	cfg1 := newServiceConfig()
 	_, err := dumpCommonConfig(cfg1)
 	assert.NoError(t, err)
+}
+
+func TestStartupRetryIntervalsDefaultAndConfigurable(t *testing.T) {
+	cfg := newServiceConfig()
+	assert.Equal(t, time.Second, cfg.HAKeeperRunningRetryInterval.Duration)
+	assert.Equal(t, time.Second, cfg.TNShardReadyRetryInterval.Duration)
+
+	cfg.HAKeeperRunningRetryInterval.Duration = 100 * time.Millisecond
+	cfg.TNShardReadyRetryInterval.Duration = 200 * time.Millisecond
+	assert.NoError(t, cfg.setStartupRetryIntervalsDefault())
+	assert.Equal(t, 100*time.Millisecond, cfg.HAKeeperRunningRetryInterval.Duration)
+	assert.Equal(t, 200*time.Millisecond, cfg.TNShardReadyRetryInterval.Duration)
 }
