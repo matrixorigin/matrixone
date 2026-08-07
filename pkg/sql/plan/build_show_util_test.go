@@ -814,6 +814,14 @@ func TestFormatColTypeGeometrySubtype(t *testing.T) {
 	}))
 }
 
+func TestFormatColTypeTinyText(t *testing.T) {
+	require.Equal(t, "TINYTEXT", FormatColType(plan.Type{
+		Id:    int32(types.T_text),
+		Width: types.MaxTinyTextLen,
+	}))
+	require.Equal(t, "TEXT", FormatColType(plan.Type{Id: int32(types.T_text)}))
+}
+
 func TestFormatColTypeArrayMetadata(t *testing.T) {
 	require.Equal(t, "ARRAY(varchar(20))", FormatColType(plan.Type{
 		Id:         int32(types.T_json),
