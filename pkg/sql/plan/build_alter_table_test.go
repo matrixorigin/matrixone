@@ -120,6 +120,84 @@ func TestAlterTable1(t *testing.T) {
 	outPutPlan(logicPlan, true, t)
 }
 
+func TestSameNameChangeColumnUsesInplaceAlter(t *testing.T) {
+	mock := newMetadataOnlyChangeColumnOptimizer()
+	const sql = `ALTER TABLE metadata_only CHANGE v v INT NULL COMMENT 'metadata only';`
+	logicPlan, err := buildSingleStmt(
+		mock,
+		t,
+		sql,
+	)
+	require.NoError(t, err)
+
+	alter := logicPlan.GetDdl().GetAlterTable()
+	require.Equal(t, plan.AlterTable_INPLACE, alter.AlgorithmType)
+	require.NotNil(t, alter.CopyTableDef)
+	require.Equal(t, "metadata only", FindColumn(alter.CopyTableDef.Cols, "v").Comment)
+	require.Empty(t, FindColumn(mock.ctxt.tables["metadata_only"].Cols, "v").Comment)
+	require.NotNil(t, alter.Actions[len(alter.Actions)-1].GetAlterReplaceDef())
+}
+
+func TestRenameChangeColumnStillUsesCopyAlter(t *testing.T) {
+	mock := newMetadataOnlyChangeColumnOptimizer()
+	logicPlan, err := buildSingleStmt(
+		mock,
+		t,
+		`ALTER TABLE metadata_only CHANGE v renamed_v INT;`,
+	)
+	require.NoError(t, err)
+	require.Equal(t, plan.AlterTable_COPY, logicPlan.GetDdl().GetAlterTable().AlgorithmType)
+}
+
+func newMetadataOnlyChangeColumnOptimizer() *MockOptimizer {
+	mock := NewMockOptimizer(false)
+	mock.ctxt.objects["metadata_only"] = &ObjectRef{
+		SchemaName: "tpch",
+		ObjName:    "metadata_only",
+	}
+	mock.ctxt.tables["metadata_only"] = &TableDef{
+		DbName:    "tpch",
+		TblId:     987654,
+		Name:      "metadata_only",
+		TableType: catalog.SystemOrdinaryRel,
+		Cols: []*ColDef{
+			{
+				ColId:      1,
+				Name:       "id",
+				OriginName: "id",
+				Primary:    true,
+				Typ: plan.Type{
+					Id:          int32(types.T_int32),
+					NotNullable: true,
+					Width:       32,
+					Scale:       -1,
+				},
+				Default: &plan.Default{NullAbility: false},
+			},
+			{
+				ColId:      2,
+				Name:       "v",
+				OriginName: "v",
+				Typ:        plan.Type{Id: int32(types.T_int32), Width: 32, Scale: -1},
+				Default:    &plan.Default{NullAbility: true},
+			},
+		},
+		Name2ColIndex: map[string]int32{"id": 0, "v": 1},
+		Pkey: &plan.PrimaryKeyDef{
+			PkeyColName: "id",
+			Cols:        []uint64{1},
+			Names:       []string{"id"},
+		},
+		Indexes: []*plan.IndexDef{{
+			IndexName:      "idx_v",
+			Parts:          []string{"v"},
+			IndexTableName: "__mo_index_metadata_only_v",
+			TableExist:     true,
+		}},
+	}
+	return mock
+}
+
 func TestAlterTableAddColumns(t *testing.T) {
 	mock := NewMockOptimizer(false)
 	// CREATE TABLE t1 (a INTEGER, b CHAR(10));

@@ -531,90 +531,107 @@ const (
 )
 
 func (def *ConstraintDef) MarshalBinary() (data []byte, err error) {
-	buf := bytes.NewBuffer(make([]byte, 0))
+	data = make([]byte, 0, def.marshalSize())
 	for _, ct := range def.Cts {
 		switch def := ct.(type) {
 		case *IndexDef:
-			if err := binary.Write(buf, binary.BigEndian, Index); err != nil {
-				return nil, err
-			}
-			if err := binary.Write(buf, binary.BigEndian, uint64(len(def.Indexes))); err != nil {
-				return nil, err
-			}
-
+			data = append(data, byte(Index))
+			data = appendConstraintUint64(data, uint64(len(def.Indexes)))
 			for _, indexdef := range def.Indexes {
-				bytes, err := indexdef.Marshal()
+				data, err = appendConstraintProto(data, indexdef)
 				if err != nil {
 					return nil, err
 				}
-				if err := binary.Write(buf, binary.BigEndian, uint64(len(bytes))); err != nil {
-					return nil, err
-				}
-				buf.Write(bytes)
 			}
 		case *RefChildTableDef:
-			if err := binary.Write(buf, binary.BigEndian, RefChildTable); err != nil {
-				return nil, err
-			}
-			if err := binary.Write(buf, binary.BigEndian, uint64(len(def.Tables))); err != nil {
-				return nil, err
-			}
+			data = append(data, byte(RefChildTable))
+			data = appendConstraintUint64(data, uint64(len(def.Tables)))
 			for _, tblId := range def.Tables {
-				if err := binary.Write(buf, binary.BigEndian, tblId); err != nil {
-					return nil, err
-				}
+				data = appendConstraintUint64(data, tblId)
 			}
 
 		case *ForeignKeyDef:
-			if err := binary.Write(buf, binary.BigEndian, ForeignKey); err != nil {
-				return nil, err
-			}
-			if err := binary.Write(buf, binary.BigEndian, uint64(len(def.Fkeys))); err != nil {
-				return nil, err
-			}
+			data = append(data, byte(ForeignKey))
+			data = appendConstraintUint64(data, uint64(len(def.Fkeys)))
 			for _, fk := range def.Fkeys {
-				bytes, err := fk.Marshal()
+				data, err = appendConstraintProto(data, fk)
 				if err != nil {
 					return nil, err
 				}
-
-				if err := binary.Write(buf, binary.BigEndian, uint64(len(bytes))); err != nil {
-					return nil, err
-				}
-				buf.Write(bytes)
 			}
 		case *PrimaryKeyDef:
-			if err := binary.Write(buf, binary.BigEndian, PrimaryKey); err != nil {
-				return nil, err
-			}
-			bytes, err := def.Pkey.Marshal()
+			data = append(data, byte(PrimaryKey))
+			data, err = appendConstraintProto(data, def.Pkey)
 			if err != nil {
 				return nil, err
 			}
-			if err := binary.Write(buf, binary.BigEndian, uint64((len(bytes)))); err != nil {
-				return nil, err
-			}
-			buf.Write(bytes)
 		case *StreamConfigsDef:
-			if err := binary.Write(buf, binary.BigEndian, StreamConfig); err != nil {
-				return nil, err
-			}
-			if err := binary.Write(buf, binary.BigEndian, uint64(len(def.Configs))); err != nil {
-				return nil, err
-			}
+			data = append(data, byte(StreamConfig))
+			data = appendConstraintUint64(data, uint64(len(def.Configs)))
 			for _, c := range def.Configs {
-				bytes, err := c.Marshal()
+				data, err = appendConstraintProto(data, c)
 				if err != nil {
 					return nil, err
 				}
-				if err := binary.Write(buf, binary.BigEndian, uint64(len(bytes))); err != nil {
-					return nil, err
-				}
-				buf.Write(bytes)
 			}
 		}
 	}
-	return buf.Bytes(), nil
+	return data, nil
+}
+
+type constraintProtoMarshaler interface {
+	ProtoSize() int
+	MarshalTo([]byte) (int, error)
+}
+
+func (def *ConstraintDef) marshalSize() int {
+	size := 0
+	for _, ct := range def.Cts {
+		switch def := ct.(type) {
+		case *IndexDef:
+			size += 1 + 8
+			for _, indexdef := range def.Indexes {
+				size += 8 + indexdef.ProtoSize()
+			}
+		case *RefChildTableDef:
+			size += 1 + 8 + 8*len(def.Tables)
+		case *ForeignKeyDef:
+			size += 1 + 8
+			for _, fk := range def.Fkeys {
+				size += 8 + fk.ProtoSize()
+			}
+		case *PrimaryKeyDef:
+			size += 1 + 8 + def.Pkey.ProtoSize()
+		case *StreamConfigsDef:
+			size += 1 + 8
+			for _, config := range def.Configs {
+				size += 8 + config.ProtoSize()
+			}
+		}
+	}
+	return size
+}
+
+func appendConstraintUint64(data []byte, value uint64) []byte {
+	start := len(data)
+	data = append(data, 0, 0, 0, 0, 0, 0, 0, 0)
+	binary.BigEndian.PutUint64(data[start:], value)
+	return data
+}
+
+func appendConstraintProto(data []byte, message constraintProtoMarshaler) ([]byte, error) {
+	size := message.ProtoSize()
+	data = appendConstraintUint64(data, uint64(size))
+	start := len(data)
+	data = data[:start+size]
+	written, err := message.MarshalTo(data[start:])
+	if err != nil {
+		return nil, err
+	}
+	if written != size {
+		return nil, moerr.NewInternalErrorNoCtx("constraint protobuf size mismatch")
+	}
+	return data, nil
 }
 
 func (def *ConstraintDef) UnmarshalBinary(data []byte) error {
