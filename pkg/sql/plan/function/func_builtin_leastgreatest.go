@@ -314,11 +314,11 @@ func leastGreatestSameOidAlignedType(inputs []types.Type) (types.Type, bool) {
 		mergedCharset := types.MergeStringCharset(inputs, target.Charset)
 		for i := range inputs {
 			if inputs[i].Charset != mergedCharset {
-				target.Charset = mergedCharset
 				// Aligning collation requires casts even when the OIDs already
-				// match. Use the widest source so that metadata alignment cannot
-				// truncate a wider CHAR/VARCHAR operand.
-				setMaxWidthFromSource(&target, inputs)
+				// match. Reuse the conditional-string derivation so CHAR/VARCHAR
+				// widths widen normally while unbounded TEXT is never collapsed
+				// to the T_text/Width=255 TINYTEXT marker.
+				target = commonConditionalStringType(target, inputs)
 				return target, true
 			}
 		}
