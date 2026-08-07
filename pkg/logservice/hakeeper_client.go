@@ -22,7 +22,6 @@ import (
 	"io"
 	"math/rand"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/gogo/protobuf/proto"
@@ -792,9 +791,9 @@ func (c *managedHAKeeperClient) SendTNHeartbeat(ctx context.Context,
 	}
 }
 
-// GetScheduleCommands reads pending commands without mutating HAKeeper state.
-// Capability negotiation turns this into a local no-op against an older
-// HAKeeper, whose heartbeat responses preserve the legacy delivery path.
+// GetScheduleCommands makes one bounded read attempt without mutating HAKeeper
+// state. The command worker owns the retry cadence; retrying here would multiply
+// one outer poll into an unbounded reconnect loop during a HAKeeper outage.
 func (c *managedHAKeeperClient) GetScheduleCommands(
 	ctx context.Context,
 	serviceType pb.ServiceType,
@@ -802,38 +801,25 @@ func (c *managedHAKeeperClient) GetScheduleCommands(
 	if err := validateHAKeeperClientContext(ctx); err != nil {
 		return pb.CommandBatch{}, err
 	}
-	for {
-		client, err := c.getPreparedClient(ctx)
-		if err != nil {
-			if c.isRetryableError(err) {
-				if err := c.waitRetry(ctx); err != nil {
-					return pb.CommandBatch{}, err
-				}
-				continue
-			}
-			return pb.CommandBatch{}, err
-		}
-		if !client.commandDeliverySupported.Load() {
-			return pb.CommandBatch{}, nil
-		}
-		// The read-only endpoint is safe as soon as the server binary advertises
-		// delivery support. Before the replicated barrier it hides zero-ID legacy
-		// batches; during preparation it can already return durable batches while
-		// the heartbeat RPC is blocked. Do not gate this on CommandPollSupported,
-		// which is intentionally false until phase two and would reintroduce the
-		// startup liveness dependency this independent read is meant to remove.
-		batch, err := client.getScheduleCommands(ctx, c.sid, serviceType)
-		if shouldResetHAKeeperClient(err) {
-			c.resetClientIfCurrent(client)
-		}
-		if c.isRetryableError(err) {
-			if err := c.waitRetry(ctx); err != nil {
-				return pb.CommandBatch{}, err
-			}
-			continue
-		}
-		return batch, err
+	client, err := c.getPreparedClient(ctx)
+	if err != nil {
+		return pb.CommandBatch{}, err
 	}
+	// Never gate the recovery path on a capability cached by an earlier
+	// connection. MORPC can reconnect the same managed generation after a server
+	// upgrade, and the cached bit would remain stale precisely when heartbeat is
+	// blocked. The endpoint is authoritative for every degraded read instead.
+	batch, err := client.getScheduleCommands(ctx, c.sid, serviceType)
+	if moerr.IsMoErrCode(err, moerr.ErrNotSupported) {
+		// Old HAKeeper binaries decode the additive method and reject it normally.
+		// Keep the connection: a rolling upgrade can make the same endpoint support
+		// the read on the next outer cadence.
+		return pb.CommandBatch{}, nil
+	}
+	if shouldResetHAKeeperClient(err) {
+		c.resetClientIfCurrent(client)
+	}
+	return batch, err
 }
 
 func (c *managedHAKeeperClient) SendLogHeartbeat(ctx context.Context,
@@ -1258,19 +1244,17 @@ func normalizeHAKeeperClientError(ctx context.Context, err error) error {
 }
 
 type hakeeperClient struct {
-	cfg                      HAKeeperClientConfig
-	client                   morpc.RPCClient
-	addr                     string
-	sid                      string
-	pool                     *sync.Pool
-	respPool                 *sync.Pool
-	backendOptions           []morpc.BackendOption
-	clientOptions            []morpc.ClientOption
-	pollMu                   sync.Mutex
-	pollClient               morpc.RPCClient
-	closed                   bool
-	commandPollSupported     atomic.Bool
-	commandDeliverySupported atomic.Bool
+	cfg            HAKeeperClientConfig
+	client         morpc.RPCClient
+	addr           string
+	sid            string
+	pool           *sync.Pool
+	respPool       *sync.Pool
+	backendOptions []morpc.BackendOption
+	clientOptions  []morpc.ClientOption
+	pollMu         sync.Mutex
+	pollClient     morpc.RPCClient
+	closed         bool
 }
 
 func newHAKeeperClient(
@@ -1535,9 +1519,13 @@ func (c *hakeeperClient) getScheduleCommandClient(ctx context.Context) (morpc.RP
 	if len(c.backendOptions) > 0 {
 		pollCtx = SetBackendOptions(pollCtx, c.backendOptions...)
 	}
-	if len(c.clientOptions) > 0 {
-		pollCtx = SetClientOptions(pollCtx, c.clientOptions...)
-	}
+	// The command worker, not MORPC, owns retry timing. Put the no-retry option
+	// last so injected/general client options cannot turn one poll into an inner
+	// reconnect loop.
+	clientOptions := make([]morpc.ClientOption, 0, len(c.clientOptions)+1)
+	clientOptions = append(clientOptions, c.clientOptions...)
+	clientOptions = append(clientOptions, morpc.WithClientDisableRetry())
+	pollCtx = SetClientOptions(pollCtx, clientOptions...)
 	client, err := getRPCClient(
 		pollCtx,
 		c.sid,
@@ -1584,13 +1572,6 @@ func (c *hakeeperClient) sendHeartbeatWithClient(
 	resp, err := c.requestWithClient(ctx, client, req)
 	if err != nil {
 		return pb.CommandBatch{}, err
-	}
-	if resp.CommandPollSupported {
-		c.commandPollSupported.Store(true)
-		// A server can be upgraded in place while this client generation stays
-		// connected. Poll support is stronger evidence than the initial
-		// CHECK_HAKEEPER capability bit, so promote the delivery capability too.
-		c.commandDeliverySupported.Store(true)
 	}
 	if resp.CommandBatch == nil {
 		return pb.CommandBatch{}, nil
@@ -1706,16 +1687,7 @@ func (c *hakeeperClient) checkIsHAKeeper(ctx context.Context) (bool, error) {
 }
 
 func (c *hakeeperClient) acceptHAKeeperResponse(resp pb.Response) bool {
-	if !resp.IsHAKeeper {
-		return false
-	}
-	// connectToHAKeeper reuses this object while trying candidate addresses.
-	// Publish capabilities only for the endpoint that passed admission, and
-	// replace both bits so a rejected/newer candidate cannot contaminate the
-	// next accepted generation.
-	c.commandPollSupported.Store(resp.CommandPollSupported)
-	c.commandDeliverySupported.Store(resp.CommandDeliverySupported)
-	return true
+	return resp.IsHAKeeper
 }
 
 func (c *hakeeperClient) request(ctx context.Context, req pb.Request) (pb.Response, error) {

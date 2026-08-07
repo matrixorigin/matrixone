@@ -583,8 +583,6 @@ func (s *Service) handleLogHeartbeat(ctx context.Context, req pb.Request) pb.Res
 	} else {
 		resp.CommandBatch = &cb
 	}
-	resp.CommandPollSupported = s.store.commandDeliveryEnabled.Load()
-
 	return resp
 }
 
@@ -602,9 +600,6 @@ func (s *Service) handleCNHeartbeat(ctx context.Context, req pb.Request) pb.Resp
 	} else {
 		resp.CommandBatch = &cb
 	}
-	resp.CommandPollSupported = s.store.commandDeliveryEnabled.Load() &&
-		hb.CommandDeliveryAckSupported
-
 	return resp
 }
 
@@ -633,22 +628,17 @@ func (s *Service) handleTNHeartbeat(ctx context.Context, req pb.Request) pb.Resp
 	} else {
 		resp.CommandBatch = &cb
 	}
-	resp.CommandPollSupported = s.store.commandDeliveryEnabled.Load() &&
-		hb.CommandDeliveryAckSupported
-
 	return resp
 }
 
 func (s *Service) handleCheckHAKeeper(ctx context.Context, req pb.Request) pb.Response {
 	resp := getResponse(req)
-	resp.CommandDeliverySupported = true
 	if atomic.LoadUint64(&s.store.haKeeperReplicaID) != 0 {
 		resp.IsHAKeeper = true
 		delivery, err := s.store.getCommandDeliveryState(ctx)
 		if err == nil && delivery.Enabled {
 			s.store.commandDeliveryEnabled.Store(true)
 		}
-		resp.CommandPollSupported = s.store.commandDeliveryEnabled.Load()
 	}
 	return resp
 }

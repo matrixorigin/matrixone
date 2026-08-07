@@ -381,13 +381,6 @@ message Response {
   ShardInfoQueryResult ShardInfo = 10;
   AllocateIDResponse AllocateID  = 11;
   CheckerState CheckerState      = 12;
-  // CommandPollSupported is advertised by HAKeeper so services avoid the new
-  // RPC while connected to an older server during a rolling upgrade.
-  bool CommandPollSupported      = 13;
-  // CommandDeliverySupported describes this server binary. Unlike
-  // CommandPollSupported it does not imply that the replicated protocol has
-  // been activated cluster-wide.
-  bool CommandDeliverySupported  = 14;
 };
 
 message LogRecordResponse {

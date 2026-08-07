@@ -20,6 +20,7 @@ import (
 	"net"
 	"os"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -38,6 +39,43 @@ import (
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 )
+
+type countingErrorRPCClient struct {
+	err    error
+	sends  atomic.Int32
+	closes atomic.Int32
+}
+
+func (c *countingErrorRPCClient) Send(
+	_ context.Context,
+	_ string,
+	request morpc.Message,
+) (*morpc.Future, error) {
+	c.sends.Add(1)
+	request.(*RPCRequest).Release()
+	return nil, c.err
+}
+
+func (c *countingErrorRPCClient) NewStream(
+	context.Context,
+	string,
+	bool,
+) (morpc.Stream, error) {
+	return nil, c.err
+}
+
+func (c *countingErrorRPCClient) Ping(context.Context, string) error {
+	return c.err
+}
+
+func (c *countingErrorRPCClient) Close() error {
+	c.closes.Add(1)
+	return nil
+}
+
+func (c *countingErrorRPCClient) CloseBackend() error {
+	return nil
+}
 
 func TestHAKeeperClientConfigIsValidated(t *testing.T) {
 	cfg := HAKeeperClientConfig{}
@@ -153,6 +191,7 @@ func TestScheduleCommandPollUsesIndependentMORPCConnection(t *testing.T) {
 	require.NoError(t, err)
 	heartbeatEntered := make(chan struct{}, 1)
 	heartbeatRelease := make(chan struct{})
+	var upgraded atomic.Bool
 	var releaseHeartbeat sync.Once
 	t.Cleanup(func() {
 		releaseHeartbeat.Do(func() { close(heartbeatRelease) })
@@ -175,8 +214,6 @@ func TestScheduleCommandPollUsesIndependentMORPCConnection(t *testing.T) {
 		switch request.Method {
 		case pb.CHECK_HAKEEPER:
 			response.IsHAKeeper = true
-			response.CommandPollSupported = true
-			response.CommandDeliverySupported = true
 		case pb.CN_HEARTBEAT:
 			select {
 			case heartbeatEntered <- struct{}{}:
@@ -188,7 +225,11 @@ func TestScheduleCommandPollUsesIndependentMORPCConnection(t *testing.T) {
 				return ctx.Err()
 			}
 		case pb.GET_SCHEDULE_COMMANDS:
-			response.CommandPollSupported = true
+			if !upgraded.Load() {
+				response.ErrorCode, response.ErrorMessage = toErrorCode(
+					moerr.NewNotSupported(ctx, "schedule-command polling"))
+				break
+			}
 			response.CommandBatch = &pb.CommandBatch{BatchID: 7}
 		default:
 			return moerr.NewInternalErrorf(ctx, "unexpected request method %s", request.Method)
@@ -207,6 +248,21 @@ func TestScheduleCommandPollUsesIndependentMORPCConnection(t *testing.T) {
 	cancelConnect()
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, client.close()) })
+	managed := &managedHAKeeperClient{sid: "cn-1"}
+	managed.mu.client = client
+
+	// Admission happened while the endpoint behaved like an old HAKeeper. The
+	// additive method must be one compatible no-op, not a permanent local gate.
+	oldCtx, cancelOld := context.WithTimeout(context.Background(), time.Second)
+	oldBatch, err := managed.GetScheduleCommands(oldCtx, pb.CNService)
+	cancelOld()
+	require.NoError(t, err)
+	require.Empty(t, oldBatch.Commands)
+
+	// Keep the managed generation and both MORPC clients alive while the same
+	// endpoint upgrades. The next heartbeat is deliberately blocked, so only the
+	// independent read can discover the new capability and make progress.
+	upgraded.Store(true)
 
 	heartbeatDone := make(chan error, 1)
 	heartbeatCtx, cancelHeartbeat := context.WithTimeout(context.Background(), 5*time.Second)
@@ -222,7 +278,7 @@ func TestScheduleCommandPollUsesIndependentMORPCConnection(t *testing.T) {
 	}
 
 	pollCtx, cancelPoll := context.WithTimeout(context.Background(), time.Second)
-	batch, err := client.getScheduleCommands(pollCtx, "cn-1", pb.CNService)
+	batch, err := managed.GetScheduleCommands(pollCtx, pb.CNService)
 	cancelPoll()
 	require.NoError(t, err)
 	require.Equal(t, uint64(7), batch.BatchID)
@@ -681,15 +737,41 @@ func TestHAKeeperClientPollScheduleCommands(t *testing.T) {
 	runServiceTest(t, true, true, fn)
 }
 
-func TestHAKeeperClientCommandPollNoopForOlderServer(t *testing.T) {
+func TestManagedHAKeeperClientCommandPollMakesOneAttempt(t *testing.T) {
+	originalNew := newHAKeeperClientFunc
+	defer func() {
+		newHAKeeperClientFunc = originalNew
+	}()
+
+	requestPool := &sync.Pool{}
+	requestPool.New = func() any {
+		return &RPCRequest{pool: requestPool}
+	}
+	transport := &countingErrorRPCClient{err: io.EOF}
+	newInnerClient := func() *hakeeperClient {
+		return &hakeeperClient{pool: requestPool, pollClient: transport}
+	}
+	var reconnectAttempts atomic.Int32
+	newHAKeeperClientFunc = func(
+		context.Context,
+		string,
+		HAKeeperClientConfig,
+	) (*hakeeperClient, error) {
+		reconnectAttempts.Add(1)
+		return newInnerClient(), nil
+	}
+
 	client := &managedHAKeeperClient{}
-	client.mu.client = &hakeeperClient{}
+	client.mu.client = newInnerClient()
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 
-	batch, err := client.GetScheduleCommands(ctx, pb.TNService)
-	require.NoError(t, err)
-	require.Empty(t, batch.Commands)
+	_, err := client.GetScheduleCommands(ctx, pb.TNService)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrUnexpectedEOF))
+	require.Equal(t, int32(1), transport.sends.Load())
+	require.Equal(t, int32(1), transport.closes.Load())
+	require.Zero(t, reconnectAttempts.Load(),
+		"the outer command worker owns the next retry cadence")
 }
 
 func TestManagedHAKeeperClientResetIsGenerationScoped(t *testing.T) {
@@ -738,36 +820,6 @@ func TestManagedHAKeeperClientRejectsNilPreparedClient(t *testing.T) {
 	prepared, err := client.getPreparedClient(context.Background())
 	require.Nil(t, prepared)
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrNoHAKeeper))
-}
-
-func TestHAKeeperCapabilitiesBelongToAcceptedCandidate(t *testing.T) {
-	client := &hakeeperClient{}
-	require.False(t, client.acceptHAKeeperResponse(pb.Response{
-		IsHAKeeper:               false,
-		CommandPollSupported:     true,
-		CommandDeliverySupported: true,
-	}))
-	require.False(t, client.commandPollSupported.Load())
-	require.False(t, client.commandDeliverySupported.Load())
-
-	require.True(t, client.acceptHAKeeperResponse(pb.Response{IsHAKeeper: true}))
-	require.False(t, client.commandPollSupported.Load(),
-		"a rejected candidate must not leak poll capability")
-	require.False(t, client.commandDeliverySupported.Load(),
-		"a rejected candidate must not leak delivery capability")
-
-	require.True(t, client.acceptHAKeeperResponse(pb.Response{
-		IsHAKeeper:               true,
-		CommandPollSupported:     true,
-		CommandDeliverySupported: true,
-	}))
-	require.True(t, client.commandPollSupported.Load())
-	require.True(t, client.commandDeliverySupported.Load())
-	require.True(t, client.acceptHAKeeperResponse(pb.Response{IsHAKeeper: true}))
-	require.False(t, client.commandPollSupported.Load(),
-		"an accepted endpoint replaces the prior endpoint's poll capability")
-	require.False(t, client.commandDeliverySupported.Load(),
-		"an accepted endpoint replaces the prior endpoint's delivery capability")
 }
 
 func TestScheduleCommandBatchFingerprintDeterministic(t *testing.T) {

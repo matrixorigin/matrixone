@@ -579,13 +579,15 @@ func TestServiceCommandDeliveryActivationWaitsForServiceCapabilities(t *testing.
 		// begin while a current command target still advertises the old protocol.
 		require.False(t, advanceCommandDelivery(t, ctx, s))
 		first := sendLogHeartbeat()
-		require.False(t, first.CommandPollSupported)
+		require.Equal(t, uint32(moerr.Ok), first.ErrorCode)
+		require.False(t, s.store.commandDeliveryEnabled.Load())
 
 		require.Equal(t, uint32(moerr.Ok), sendCNHeartbeat(true).ErrorCode)
 		require.Equal(t, uint32(moerr.Ok), sendTNHeartbeat(true).ErrorCode)
 		require.False(t, advanceCommandDelivery(t, ctx, s))
 		phaseOne := sendLogHeartbeat()
-		require.False(t, phaseOne.CommandPollSupported)
+		require.Equal(t, uint32(moerr.Ok), phaseOne.ErrorCode)
+		require.False(t, s.store.commandDeliveryEnabled.Load())
 
 		// Phase-one is a replicated cutover point. The capability observations
 		// above are intentionally insufficient; repeat them after the barrier.
@@ -593,7 +595,8 @@ func TestServiceCommandDeliveryActivationWaitsForServiceCapabilities(t *testing.
 		require.Equal(t, uint32(moerr.Ok), sendTNHeartbeat(true).ErrorCode)
 		require.True(t, advanceCommandDelivery(t, ctx, s))
 		phaseTwo := sendLogHeartbeat()
-		require.True(t, phaseTwo.CommandPollSupported)
+		require.Equal(t, uint32(moerr.Ok), phaseTwo.ErrorCode)
+		require.True(t, s.store.commandDeliveryEnabled.Load())
 	}
 	runServiceTest(t, true, true, fn)
 }
@@ -610,7 +613,6 @@ func TestLogHeartbeatDoesNotDriveCommandDeliveryActivation(t *testing.T) {
 				LogHeartbeat: &heartbeat,
 			})
 			require.Equal(t, uint32(moerr.Ok), resp.ErrorCode)
-			require.False(t, resp.CommandPollSupported)
 		}
 		delivery, err := s.store.getCommandDeliveryState(ctx)
 		require.NoError(t, err)
@@ -644,7 +646,7 @@ func activateCommandDelivery(t *testing.T, ctx context.Context, s *Service) {
 		LogHeartbeat: &logHeartbeat,
 	})
 	require.Equal(t, uint32(moerr.Ok), priming.ErrorCode)
-	require.False(t, priming.CommandPollSupported)
+	require.False(t, s.store.commandDeliveryEnabled.Load())
 	for phase := 0; phase < 2; phase++ {
 		enabled := advanceCommandDelivery(t, ctx, s)
 		logHeartbeat = s.store.getHeartbeatMessage()
@@ -655,11 +657,11 @@ func activateCommandDelivery(t *testing.T, ctx context.Context, s *Service) {
 		require.Equal(t, uint32(moerr.Ok), activation.ErrorCode)
 		if phase == 0 {
 			require.False(t, enabled)
-			require.False(t, activation.CommandPollSupported,
+			require.False(t, s.store.commandDeliveryEnabled.Load(),
 				"the first checker pass establishes the replicated upgrade barrier")
 		} else {
 			require.True(t, enabled)
-			require.True(t, activation.CommandPollSupported)
+			require.True(t, s.store.commandDeliveryEnabled.Load())
 		}
 	}
 }
