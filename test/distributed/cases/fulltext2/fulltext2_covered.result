@@ -1,0 +1,85 @@
+set experimental_fulltext2_index = 1;
+drop database if exists fulltext2_covered;
+create database fulltext2_covered;
+use fulltext2_covered;
+create table docs (
+id bigint primary key,
+body text not null,
+status varchar(20),           -- INCLUDE
+prio int,                     -- INCLUDE
+category varchar(20) not null -- NOT included
+);
+insert into docs values
+(1, 'quick brown fox',      'active',   10, 'tech'),
+(2, 'lazy fox sleeps',      'archived', 20, 'food'),
+(3, 'red fox runs fast',    'active',   30, 'tech'),
+(4, 'fox fox everywhere',   'active',   40, 'tech'),
+(5, 'quiet sleeping cat',   'active',   50, 'home'),
+(6, 'a clever silver fox',  null,       60, 'tech'),
+(7, 'the lazy brown dog',   'archived', null, 'home');
+create fulltext2 index ftidx on docs (body) include (status, prio);
+select id, prio from docs where match(body) against('fox') and prio > 5 order by id;
+➤ id[-5,64,0]  ¦  prio[4,32,0]  𝄀
+1  ¦  10  𝄀
+2  ¦  20  𝄀
+3  ¦  30  𝄀
+4  ¦  40  𝄀
+6  ¦  60
+select id, status from docs where match(body) against('fox') and prio > 5 order by id;
+➤ id[-5,64,0]  ¦  status[12,20,0]  𝄀
+1  ¦  active  𝄀
+2  ¦  archived  𝄀
+3  ¦  active  𝄀
+4  ¦  active  𝄀
+6  ¦  null
+select id, status, prio from docs where match(body) against('fox') order by id;
+➤ id[-5,64,0]  ¦  status[12,20,0]  ¦  prio[4,32,0]  𝄀
+1  ¦  active  ¦  10  𝄀
+2  ¦  archived  ¦  20  𝄀
+3  ¦  active  ¦  30  𝄀
+4  ¦  active  ¦  40  𝄀
+6  ¦  null  ¦  60
+select id, prio, status from docs where match(body) against('fox') order by id;
+➤ id[-5,64,0]  ¦  prio[4,32,0]  ¦  status[12,20,0]  𝄀
+1  ¦  10  ¦  active  𝄀
+2  ¦  20  ¦  archived  𝄀
+3  ¦  30  ¦  active  𝄀
+4  ¦  40  ¦  active  𝄀
+6  ¦  60  ¦  null
+select id from docs where match(body) against('fox') order by id;
+➤ id[-5,64,0]  𝄀
+1  𝄀
+2  𝄀
+3  𝄀
+4  𝄀
+6
+select id, prio from docs where match(body) against('fox') and prio > 5 order by id limit 3;
+➤ id[-5,64,0]  ¦  prio[4,32,0]  𝄀
+1  ¦  10  𝄀
+2  ¦  20  𝄀
+3  ¦  30
+select id, prio from docs where match(body) against('fox') and prio = 30 order by id;
+➤ id[-5,64,0]  ¦  prio[4,32,0]  𝄀
+3  ¦  30
+select id, prio from docs where match(body) against('fox') and prio between 15 and 45 order by id;
+➤ id[-5,64,0]  ¦  prio[4,32,0]  𝄀
+2  ¦  20  𝄀
+3  ¦  30  𝄀
+4  ¦  40
+select id, prio from docs where match(body) against('fox') and prio in (10, 40, 60) order by id;
+➤ id[-5,64,0]  ¦  prio[4,32,0]  𝄀
+1  ¦  10  𝄀
+4  ¦  40  𝄀
+6  ¦  60
+select id, status from docs where match(body) against('fox') and id in (1, 4, 6) order by id;
+➤ id[-5,64,0]  ¦  status[12,20,0]  𝄀
+1  ¦  active  𝄀
+4  ¦  active  𝄀
+6  ¦  null
+select id, status, prio from docs where match(body) against('fox') and (status is null or prio is null) order by id;
+➤ id[-5,64,0]  ¦  status[12,20,0]  ¦  prio[4,32,0]  𝄀
+6  ¦  null  ¦  60
+select count(*) from docs where match(body) against('fox') and prio > 25;
+➤ count(*)[-5,64,0]  𝄀
+3
+drop database fulltext2_covered;
