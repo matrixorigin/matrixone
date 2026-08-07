@@ -422,6 +422,7 @@ func TestServicePollCommandsIsNonDestructiveAndDeduplicable(t *testing.T) {
 	fn := func(t *testing.T, s *Service) {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 		defer cancel()
+		activateCommandDelivery(t, ctx, s)
 
 		command := pb.ScheduleCommand{
 			UUID:        "uuid1",
@@ -496,6 +497,7 @@ func TestServiceRejectsInvalidScheduleCommandQueries(t *testing.T) {
 			resp := s.handleGetScheduleCommands(ctx, req)
 			require.NotEqual(t, uint32(moerr.Ok), resp.ErrorCode)
 		}
+		activateCommandDelivery(t, ctx, s)
 
 		command := pb.ScheduleCommand{
 			UUID:        "uuid1",
@@ -525,6 +527,24 @@ func TestServiceRejectsInvalidScheduleCommandQueries(t *testing.T) {
 		require.Equal(t, []pb.ScheduleCommand{command}, resp.CommandBatch.Commands)
 	}
 	runServiceTest(t, true, true, fn)
+}
+
+func activateCommandDelivery(t *testing.T, ctx context.Context, s *Service) {
+	t.Helper()
+	for phase := 0; phase < 2; phase++ {
+		logHeartbeat := s.store.getHeartbeatMessage()
+		activation := s.handleLogHeartbeat(ctx, pb.Request{
+			Method:       pb.LOG_HEARTBEAT,
+			LogHeartbeat: &logHeartbeat,
+		})
+		require.Equal(t, uint32(moerr.Ok), activation.ErrorCode)
+		if phase == 0 {
+			require.False(t, activation.CommandPollSupported,
+				"the first heartbeat establishes the replicated upgrade barrier")
+		} else {
+			require.True(t, activation.CommandPollSupported)
+		}
+	}
 }
 
 func TestServiceHandleAppend(t *testing.T) {

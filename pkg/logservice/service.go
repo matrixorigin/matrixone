@@ -419,8 +419,9 @@ func (s *Service) handleGetScheduleCommands(ctx context.Context, req pb.Request)
 	}
 	// A batch installed before every HAKeeper replica understood BatchID cannot
 	// be safely deduplicated against a concurrent heartbeat response. Let the
-	// legacy heartbeat path consume it; an upgraded RSM assigns a stable ID on
-	// its next existing TickUpdate, without introducing a new Raft command.
+	// legacy heartbeat path consume it; protocol activation (or a later existing
+	// TickUpdate after snapshot recovery) assigns a stable ID without adding a
+	// delivery-specific Raft write.
 	if len(batch.Commands) > 0 && batch.BatchID == 0 {
 		resp.CommandBatch = &pb.CommandBatch{}
 		return resp
@@ -582,6 +583,9 @@ func (s *Service) handleLogHeartbeat(ctx context.Context, req pb.Request) pb.Res
 	} else {
 		resp.CommandBatch = &cb
 	}
+	if enabled, err := s.store.tryEnableCommandDelivery(ctx); err == nil {
+		resp.CommandPollSupported = enabled
+	}
 
 	return resp
 }
@@ -600,6 +604,7 @@ func (s *Service) handleCNHeartbeat(ctx context.Context, req pb.Request) pb.Resp
 	} else {
 		resp.CommandBatch = &cb
 	}
+	resp.CommandPollSupported = s.store.commandDeliveryEnabled.Load()
 
 	return resp
 }
@@ -629,15 +634,25 @@ func (s *Service) handleTNHeartbeat(ctx context.Context, req pb.Request) pb.Resp
 	} else {
 		resp.CommandBatch = &cb
 	}
+	resp.CommandPollSupported = s.store.commandDeliveryEnabled.Load()
 
 	return resp
 }
 
 func (s *Service) handleCheckHAKeeper(ctx context.Context, req pb.Request) pb.Response {
 	resp := getResponse(req)
-	resp.CommandPollSupported = true
+	resp.CommandDeliverySupported = true
 	if atomic.LoadUint64(&s.store.haKeeperReplicaID) != 0 {
 		resp.IsHAKeeper = true
+		enabled, err := s.store.tryEnableCommandDelivery(ctx)
+		if err != nil {
+			// Capability negotiation must not make an otherwise usable HAKeeper
+			// connection fail. Followers and a leader transition can reject this
+			// best-effort activation; a later heartbeat/check retries it.
+			s.runtime.Logger().Debug("command delivery activation deferred", zap.Error(err))
+		} else {
+			resp.CommandPollSupported = enabled
+		}
 	}
 	return resp
 }

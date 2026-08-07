@@ -135,6 +135,8 @@ func (s *store) heartbeat(ctx context.Context) {
 		ShardServiceAddress:         s.shardServiceServiceAddr(),
 		ConfigData:                  s.config.GetData(),
 		AutoIncrEpochFenceSupported: true,
+		AckedCommandBatchID:         s.ackedCommandBatchID.Load(),
+		CommandDeliveryAckSupported: true,
 		// if the replayed LSN is 0, then it is the master TN.
 		ReplayedLsn: 0,
 	}
@@ -194,6 +196,7 @@ func (s *store) handleCommandBatch(batch logservicepb.CommandBatch) {
 	s.handleCommandsLocked(batch.Commands)
 	if batch.BatchID != 0 {
 		s.lastCommandBatchID = batch.BatchID
+		s.ackedCommandBatchID.Store(batch.BatchID)
 		s.lastCommandHash = logservice.ScheduleCommandBatchFingerprint(batch)
 		s.legacyDedupeArmed = true
 	}

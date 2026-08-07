@@ -23,6 +23,7 @@ import (
 	"io"
 	"math/rand"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"go.uber.org/zap"
@@ -332,7 +333,7 @@ type managedHAKeeperClient struct {
 	sid string
 	cfg HAKeeperClientConfig
 
-	// Method `prepareClient` may update moprc.Client.
+	// Method `getPreparedClient` may update morpc.Client.
 	// So we need to keep options for morpc.Client.
 	backendOptions []morpc.BackendOption
 	clientOptions  []morpc.ClientOption
@@ -363,7 +364,8 @@ func (c *managedHAKeeperClient) CheckLogServiceHealth(ctx context.Context) error
 		return err
 	}
 	for {
-		if err := c.prepareClient(ctx); err != nil {
+		client, err := c.getPreparedClient(ctx)
+		if err != nil {
 			if c.isRetryableError(err) {
 				if err := c.waitRetry(ctx); err != nil {
 					return err
@@ -372,10 +374,10 @@ func (c *managedHAKeeperClient) CheckLogServiceHealth(ctx context.Context) error
 			}
 			return err
 		}
-		details, err := c.getClient().getClusterDetails(ctx)
+		details, err := client.getClusterDetails(ctx)
 		if err != nil {
 			if c.isRetryableError(err) {
-				c.resetClient()
+				c.resetClientIfCurrent(client)
 				if err := c.waitRetry(ctx); err != nil {
 					return err
 				}
@@ -390,7 +392,7 @@ func (c *managedHAKeeperClient) CheckLogServiceHealth(ctx context.Context) error
 		var err1 error
 		for _, tnStore := range details.TNStores {
 			for _, shard := range tnStore.Shards {
-				err1 = firstError(err1, c.getClient().checkLogServiceHealth(
+				err1 = firstError(err1, client.checkLogServiceHealth(
 					ctx,
 					pb.CheckHealth{
 						ShardID: shard.ShardID,
@@ -407,7 +409,8 @@ func (c *managedHAKeeperClient) GetClusterDetails(ctx context.Context) (pb.Clust
 		return pb.ClusterDetails{}, err
 	}
 	for {
-		if err := c.prepareClient(ctx); err != nil {
+		client, err := c.getPreparedClient(ctx)
+		if err != nil {
 			if c.isRetryableError(err) {
 				if err := c.waitRetry(ctx); err != nil {
 					return pb.ClusterDetails{}, err
@@ -416,9 +419,9 @@ func (c *managedHAKeeperClient) GetClusterDetails(ctx context.Context) (pb.Clust
 			}
 			return pb.ClusterDetails{}, err
 		}
-		cd, err := c.getClient().getClusterDetails(ctx)
+		cd, err := client.getClusterDetails(ctx)
 		if shouldResetHAKeeperClient(err) {
-			c.resetClient()
+			c.resetClientIfCurrent(client)
 		}
 		if c.isRetryableError(err) {
 			if err := c.waitRetry(ctx); err != nil {
@@ -435,7 +438,8 @@ func (c *managedHAKeeperClient) GetClusterState(ctx context.Context) (pb.Checker
 		return pb.CheckerState{}, err
 	}
 	for {
-		if err := c.prepareClient(ctx); err != nil {
+		client, err := c.getPreparedClient(ctx)
+		if err != nil {
 			if c.isRetryableError(err) {
 				if err := c.waitRetry(ctx); err != nil {
 					return pb.CheckerState{}, err
@@ -444,9 +448,9 @@ func (c *managedHAKeeperClient) GetClusterState(ctx context.Context) (pb.Checker
 			}
 			return pb.CheckerState{}, err
 		}
-		s, err := c.getClient().getClusterState(ctx)
+		s, err := client.getClusterState(ctx)
 		if shouldResetHAKeeperClient(err) {
-			c.resetClient()
+			c.resetClientIfCurrent(client)
 		}
 		if c.isRetryableError(err) {
 			if err := c.waitRetry(ctx); err != nil {
@@ -645,7 +649,8 @@ func (c *managedHAKeeperClient) SendCNHeartbeat(ctx context.Context,
 		return pb.CommandBatch{}, err
 	}
 	for {
-		if err := c.prepareClient(ctx); err != nil {
+		client, err := c.getPreparedClient(ctx)
+		if err != nil {
 			if c.isRetryableError(err) {
 				if err := c.waitRetry(ctx); err != nil {
 					return pb.CommandBatch{}, err
@@ -654,9 +659,9 @@ func (c *managedHAKeeperClient) SendCNHeartbeat(ctx context.Context,
 			}
 			return pb.CommandBatch{}, err
 		}
-		result, err := c.getClient().sendCNHeartbeat(ctx, hb)
+		result, err := client.sendCNHeartbeat(ctx, hb)
 		if shouldResetHAKeeperClient(err) {
-			c.resetClient()
+			c.resetClientIfCurrent(client)
 		}
 		if c.isRetryableError(err) {
 			if err := c.waitRetry(ctx); err != nil {
@@ -674,7 +679,8 @@ func (c *managedHAKeeperClient) SendTNHeartbeat(ctx context.Context,
 		return pb.CommandBatch{}, err
 	}
 	for {
-		if err := c.prepareClient(ctx); err != nil {
+		client, err := c.getPreparedClient(ctx)
+		if err != nil {
 			if c.isRetryableError(err) {
 				if err := c.waitRetry(ctx); err != nil {
 					return pb.CommandBatch{}, err
@@ -683,9 +689,9 @@ func (c *managedHAKeeperClient) SendTNHeartbeat(ctx context.Context,
 			}
 			return pb.CommandBatch{}, err
 		}
-		cb, err := c.getClient().sendTNHeartbeat(ctx, hb)
+		cb, err := client.sendTNHeartbeat(ctx, hb)
 		if shouldResetHAKeeperClient(err) {
-			c.resetClient()
+			c.resetClientIfCurrent(client)
 		}
 		if c.isRetryableError(err) {
 			if err := c.waitRetry(ctx); err != nil {
@@ -708,7 +714,8 @@ func (c *managedHAKeeperClient) GetScheduleCommands(
 		return pb.CommandBatch{}, err
 	}
 	for {
-		if err := c.prepareClient(ctx); err != nil {
+		client, err := c.getPreparedClient(ctx)
+		if err != nil {
 			if c.isRetryableError(err) {
 				if err := c.waitRetry(ctx); err != nil {
 					return pb.CommandBatch{}, err
@@ -717,13 +724,29 @@ func (c *managedHAKeeperClient) GetScheduleCommands(
 			}
 			return pb.CommandBatch{}, err
 		}
-		client := c.getClient()
-		if !client.commandPollSupported {
+		if !client.commandDeliverySupported.Load() {
 			return pb.CommandBatch{}, nil
+		}
+		if !client.commandPollSupported.Load() {
+			if _, err := client.checkIsHAKeeper(ctx); err != nil {
+				if shouldResetHAKeeperClient(err) {
+					c.resetClientIfCurrent(client)
+				}
+				if c.isRetryableError(err) {
+					if err := c.waitRetry(ctx); err != nil {
+						return pb.CommandBatch{}, err
+					}
+					continue
+				}
+				return pb.CommandBatch{}, err
+			}
+			if !client.commandPollSupported.Load() {
+				return pb.CommandBatch{}, nil
+			}
 		}
 		batch, err := client.getScheduleCommands(ctx, c.sid, serviceType)
 		if shouldResetHAKeeperClient(err) {
-			c.resetClient()
+			c.resetClientIfCurrent(client)
 		}
 		if c.isRetryableError(err) {
 			if err := c.waitRetry(ctx); err != nil {
@@ -741,7 +764,8 @@ func (c *managedHAKeeperClient) SendLogHeartbeat(ctx context.Context,
 		return pb.CommandBatch{}, err
 	}
 	for {
-		if err := c.prepareClient(ctx); err != nil {
+		client, err := c.getPreparedClient(ctx)
+		if err != nil {
 			if c.isRetryableError(err) {
 				if err := c.waitRetry(ctx); err != nil {
 					return pb.CommandBatch{}, err
@@ -750,9 +774,9 @@ func (c *managedHAKeeperClient) SendLogHeartbeat(ctx context.Context,
 			}
 			return pb.CommandBatch{}, err
 		}
-		cb, err := c.getClient().sendLogHeartbeat(ctx, hb)
+		cb, err := client.sendLogHeartbeat(ctx, hb)
 		if shouldResetHAKeeperClient(err) {
-			c.resetClient()
+			c.resetClientIfCurrent(client)
 		}
 		if c.isRetryableError(err) {
 			if err := c.waitRetry(ctx); err != nil {
@@ -770,7 +794,8 @@ func (c *managedHAKeeperClient) GetCNState(ctx context.Context) (pb.CNState, err
 		return pb.CNState{}, err
 	}
 	for {
-		if err := c.prepareClient(ctx); err != nil {
+		client, err := c.getPreparedClient(ctx)
+		if err != nil {
 			if c.isRetryableError(err) {
 				if err := c.waitRetry(ctx); err != nil {
 					return pb.CNState{}, err
@@ -779,9 +804,9 @@ func (c *managedHAKeeperClient) GetCNState(ctx context.Context) (pb.CNState, err
 			}
 			return pb.CNState{}, err
 		}
-		s, err := c.getClient().getCNState(ctx)
+		s, err := client.getCNState(ctx)
 		if shouldResetHAKeeperClient(err) {
-			c.resetClient()
+			c.resetClientIfCurrent(client)
 		}
 		if c.isRetryableError(err) {
 			if err := c.waitRetry(ctx); err != nil {
@@ -801,7 +826,8 @@ func (c *managedHAKeeperClient) UpdateCNLabel(
 		return err
 	}
 	for {
-		if err := c.prepareClient(ctx); err != nil {
+		client, err := c.getPreparedClient(ctx)
+		if err != nil {
 			if c.isRetryableError(err) {
 				if err := c.waitRetry(ctx); err != nil {
 					return err
@@ -810,9 +836,9 @@ func (c *managedHAKeeperClient) UpdateCNLabel(
 			}
 			return err
 		}
-		err := c.getClient().updateCNLabel(ctx, label)
+		err = client.updateCNLabel(ctx, label)
 		if shouldResetHAKeeperClient(err) {
-			c.resetClient()
+			c.resetClientIfCurrent(client)
 		}
 		if c.isRetryableError(err) {
 			if err := c.waitRetry(ctx); err != nil {
@@ -832,7 +858,8 @@ func (c *managedHAKeeperClient) UpdateCNWorkState(
 		return err
 	}
 	for {
-		if err := c.prepareClient(ctx); err != nil {
+		client, err := c.getPreparedClient(ctx)
+		if err != nil {
 			if c.isRetryableError(err) {
 				if err := c.waitRetry(ctx); err != nil {
 					return err
@@ -841,9 +868,9 @@ func (c *managedHAKeeperClient) UpdateCNWorkState(
 			}
 			return err
 		}
-		err := c.getClient().updateCNWorkState(ctx, state)
+		err = client.updateCNWorkState(ctx, state)
 		if shouldResetHAKeeperClient(err) {
-			c.resetClient()
+			c.resetClientIfCurrent(client)
 		}
 		if c.isRetryableError(err) {
 			if err := c.waitRetry(ctx); err != nil {
@@ -863,7 +890,8 @@ func (c *managedHAKeeperClient) PatchCNStore(
 		return err
 	}
 	for {
-		if err := c.prepareClient(ctx); err != nil {
+		client, err := c.getPreparedClient(ctx)
+		if err != nil {
 			if c.isRetryableError(err) {
 				if err := c.waitRetry(ctx); err != nil {
 					return err
@@ -872,9 +900,9 @@ func (c *managedHAKeeperClient) PatchCNStore(
 			}
 			return err
 		}
-		err := c.getClient().patchCNStore(ctx, stateLabel)
+		err = client.patchCNStore(ctx, stateLabel)
 		if shouldResetHAKeeperClient(err) {
-			c.resetClient()
+			c.resetClientIfCurrent(client)
 		}
 		if c.isRetryableError(err) {
 			if err := c.waitRetry(ctx); err != nil {
@@ -894,7 +922,8 @@ func (c *managedHAKeeperClient) DeleteCNStore(
 		return err
 	}
 	for {
-		if err := c.prepareClient(ctx); err != nil {
+		client, err := c.getPreparedClient(ctx)
+		if err != nil {
 			if c.isRetryableError(err) {
 				if err := c.waitRetry(ctx); err != nil {
 					return err
@@ -903,9 +932,9 @@ func (c *managedHAKeeperClient) DeleteCNStore(
 			}
 			return err
 		}
-		err := c.getClient().deleteCNStore(ctx, cnStore)
+		err = client.deleteCNStore(ctx, cnStore)
 		if shouldResetHAKeeperClient(err) {
-			c.resetClient()
+			c.resetClientIfCurrent(client)
 		}
 		if c.isRetryableError(err) {
 			if err := c.waitRetry(ctx); err != nil {
@@ -925,7 +954,8 @@ func (c *managedHAKeeperClient) SendProxyHeartbeat(
 		return pb.CommandBatch{}, err
 	}
 	for {
-		if err := c.prepareClient(ctx); err != nil {
+		client, err := c.getPreparedClient(ctx)
+		if err != nil {
 			if c.isRetryableError(err) {
 				if err := c.waitRetry(ctx); err != nil {
 					return pb.CommandBatch{}, err
@@ -934,9 +964,9 @@ func (c *managedHAKeeperClient) SendProxyHeartbeat(
 			}
 			return pb.CommandBatch{}, err
 		}
-		cb, err := c.getClient().sendProxyHeartbeat(ctx, hb)
+		cb, err := client.sendProxyHeartbeat(ctx, hb)
 		if shouldResetHAKeeperClient(err) {
-			c.resetClient()
+			c.resetClientIfCurrent(client)
 		}
 		if c.isRetryableError(err) {
 			if err := c.waitRetry(ctx); err != nil {
@@ -954,7 +984,8 @@ func (c *managedHAKeeperClient) GetBackupData(ctx context.Context) ([]byte, erro
 		return nil, err
 	}
 	for {
-		if err := c.prepareClient(ctx); err != nil {
+		client, err := c.getPreparedClient(ctx)
+		if err != nil {
 			if c.isRetryableError(err) {
 				if err := c.waitRetry(ctx); err != nil {
 					return nil, err
@@ -963,9 +994,9 @@ func (c *managedHAKeeperClient) GetBackupData(ctx context.Context) ([]byte, erro
 			}
 			return nil, err
 		}
-		s, err := c.getClient().getBackupData(ctx)
+		s, err := client.getBackupData(ctx)
 		if shouldResetHAKeeperClient(err) {
-			c.resetClient()
+			c.resetClientIfCurrent(client)
 		}
 		if c.isRetryableError(err) {
 			if err := c.waitRetry(ctx); err != nil {
@@ -985,7 +1016,8 @@ func (c *managedHAKeeperClient) UpdateNonVotingReplicaNum(
 		return err
 	}
 	for {
-		if err := c.prepareClient(ctx); err != nil {
+		client, err := c.getPreparedClient(ctx)
+		if err != nil {
 			if c.isRetryableError(err) {
 				if err := c.waitRetry(ctx); err != nil {
 					return err
@@ -994,9 +1026,9 @@ func (c *managedHAKeeperClient) UpdateNonVotingReplicaNum(
 			}
 			return err
 		}
-		err := c.getClient().updateNonVotingReplicaNum(ctx, num)
+		err = client.updateNonVotingReplicaNum(ctx, num)
 		if shouldResetHAKeeperClient(err) {
-			c.resetClient()
+			c.resetClientIfCurrent(client)
 		}
 		if c.isRetryableError(err) {
 			if err := c.waitRetry(ctx); err != nil {
@@ -1016,7 +1048,8 @@ func (c *managedHAKeeperClient) UpdateNonVotingLocality(
 		return err
 	}
 	for {
-		if err := c.prepareClient(ctx); err != nil {
+		client, err := c.getPreparedClient(ctx)
+		if err != nil {
 			if c.isRetryableError(err) {
 				if err := c.waitRetry(ctx); err != nil {
 					return err
@@ -1025,9 +1058,9 @@ func (c *managedHAKeeperClient) UpdateNonVotingLocality(
 			}
 			return err
 		}
-		err := c.getClient().updateNonVotingLocality(ctx, locality)
+		err = client.updateNonVotingLocality(ctx, locality)
 		if shouldResetHAKeeperClient(err) {
-			c.resetClient()
+			c.resetClientIfCurrent(client)
 		}
 		if c.isRetryableError(err) {
 			if err := c.waitRetry(ctx); err != nil {
@@ -1056,16 +1089,31 @@ func shouldResetHAKeeperClient(err error) bool {
 		!errors.Is(err, context.DeadlineExceeded)
 }
 
-func (c *managedHAKeeperClient) resetClient() {
+// resetClientIfCurrent invalidates only the client generation used by the
+// failed request. A late failure from an older request must not close a client
+// that another goroutine has already prepared and published.
+func (c *managedHAKeeperClient) resetClientIfCurrent(client *hakeeperClient) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if c.mu.client != client {
+		return
+	}
 	c.resetClientLocked()
 }
 
-func (c *managedHAKeeperClient) prepareClient(ctx context.Context) error {
+// getPreparedClient prepares and snapshots one client generation under the
+// same lock. The caller may use the snapshot without holding c.mu; a concurrent
+// reset can close it, in which case the request returns an error and retries.
+func (c *managedHAKeeperClient) getPreparedClient(ctx context.Context) (*hakeeperClient, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return c.prepareClientLocked(ctx)
+	if err := c.prepareClientLocked(ctx); err != nil {
+		return nil, err
+	}
+	if c.mu.client == nil {
+		return nil, moerr.NewNoHAKeeper(ctx)
+	}
+	return c.mu.client, nil
 }
 
 func (c *managedHAKeeperClient) resetClientLocked() {
@@ -1132,12 +1180,13 @@ func normalizeHAKeeperClientError(ctx context.Context, err error) error {
 }
 
 type hakeeperClient struct {
-	cfg                  HAKeeperClientConfig
-	client               morpc.RPCClient
-	addr                 string
-	pool                 *sync.Pool
-	respPool             *sync.Pool
-	commandPollSupported bool
+	cfg                      HAKeeperClientConfig
+	client                   morpc.RPCClient
+	addr                     string
+	pool                     *sync.Pool
+	respPool                 *sync.Pool
+	commandPollSupported     atomic.Bool
+	commandDeliverySupported atomic.Bool
 }
 
 func newHAKeeperClient(
@@ -1390,6 +1439,9 @@ func (c *hakeeperClient) sendHeartbeat(ctx context.Context,
 	if err != nil {
 		return pb.CommandBatch{}, err
 	}
+	if resp.CommandPollSupported {
+		c.commandPollSupported.Store(true)
+	}
 	if resp.CommandBatch == nil {
 		return pb.CommandBatch{}, nil
 	}
@@ -1500,7 +1552,12 @@ func (c *hakeeperClient) checkIsHAKeeper(ctx context.Context) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	c.commandPollSupported = resp.CommandPollSupported
+	if resp.CommandPollSupported {
+		c.commandPollSupported.Store(true)
+	}
+	if resp.CommandDeliverySupported {
+		c.commandDeliverySupported.Store(true)
+	}
 	return resp.IsHAKeeper, nil
 }
 
@@ -1535,12 +1592,6 @@ func (c *hakeeperClient) request(ctx context.Context, req pb.Request) (pb.Respon
 		return pb.Response{}, err
 	}
 	return resp, nil
-}
-
-func (c *managedHAKeeperClient) getClient() *hakeeperClient {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	return c.mu.client
 }
 
 func (c *hakeeperClient) getBackupData(ctx context.Context) ([]byte, error) {

@@ -697,17 +697,18 @@ type service struct {
 	incrservice          incrservice.AutoIncrementService
 	txnTraceService      trace.Service
 
-	stopper            *stopper.Stopper
-	heartbeatInFlight  atomic.Bool
-	commandMu          sync.Mutex
-	lastCommandBatchID uint64
-	lastCommandHash    [32]byte
-	legacyDedupeArmed  bool
-	aicm               *defines.AutoIncrCacheManager
-	lifecycleMu        sync.Mutex
-	lifecycle          serviceLifecycleState
-	closeOnce          sync.Once
-	closeErr           error
+	stopper             *stopper.Stopper
+	heartbeatInFlight   atomic.Bool
+	commandMu           sync.Mutex
+	lastCommandBatchID  uint64
+	ackedCommandBatchID atomic.Uint64
+	lastCommandHash     [32]byte
+	legacyDedupeArmed   bool
+	aicm                *defines.AutoIncrCacheManager
+	lifecycleMu         sync.Mutex
+	lifecycle           serviceLifecycleState
+	closeOnce           sync.Once
+	closeErr            error
 
 	task struct {
 		sync.RWMutex

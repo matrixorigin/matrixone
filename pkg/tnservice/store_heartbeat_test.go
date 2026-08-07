@@ -52,7 +52,7 @@ func (c *canceledTNResponseClient) SendTNHeartbeat(
 		close(c.heartbeatEntered)
 	}
 	<-ctx.Done()
-	return pb.CommandBatch{Commands: []pb.ScheduleCommand{c.command}}, nil
+	return pb.CommandBatch{BatchID: 7, Commands: []pb.ScheduleCommand{c.command}}, nil
 }
 
 func (c *canceledTNResponseClient) GetScheduleCommands(
@@ -65,7 +65,7 @@ func (c *canceledTNResponseClient) GetScheduleCommands(
 		close(c.pollEntered)
 	}
 	<-ctx.Done()
-	return pb.CommandBatch{Commands: []pb.ScheduleCommand{c.command}}, nil
+	return pb.CommandBatch{BatchID: 7, Commands: []pb.ScheduleCommand{c.command}}, nil
 }
 
 func (c *blockingHeartbeatCommandClient) SendTNHeartbeat(
@@ -289,6 +289,8 @@ func TestCanceledControlResponsesAreNotApplied(t *testing.T) {
 		t.Fatal("response returned after cancellation was applied")
 	default:
 	}
+	require.Zero(t, store.ackedCommandBatchID.Load(),
+		"a response returned after cancellation must not be acknowledged")
 }
 
 func TestHeartbeatDropsResponseAfterRequestDeadline(t *testing.T) {
@@ -342,6 +344,7 @@ func TestCommandBatchDeduplicatesPollHeartbeatRace(t *testing.T) {
 	}
 
 	store.handleCommandBatch(pb.CommandBatch{BatchID: 10, Commands: []pb.ScheduleCommand{command}})
+	require.Equal(t, uint64(10), store.ackedCommandBatchID.Load())
 	store.handleCommandBatch(pb.CommandBatch{BatchID: 10, Commands: []pb.ScheduleCommand{command}})
 	store.handleCommandBatch(pb.CommandBatch{BatchID: 9, Commands: []pb.ScheduleCommand{command}})
 	require.Equal(t, 1, len(store.shutdownC), "duplicate and stale batches must not be applied")
@@ -352,4 +355,5 @@ func TestCommandBatchDeduplicatesPollHeartbeatRace(t *testing.T) {
 
 	store.handleCommandBatch(pb.CommandBatch{BatchID: 11, Commands: []pb.ScheduleCommand{command}})
 	require.Equal(t, 3, len(store.shutdownC), "a new checker generation must remain retryable")
+	require.Equal(t, uint64(11), store.ackedCommandBatchID.Load())
 }

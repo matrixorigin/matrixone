@@ -145,6 +145,10 @@ message CNStoreHeartbeat {
   Resource        Resource           = 13 [(gogoproto.nullable) = false];
   string  ShardServiceAddress   = 14;
   string          CommitID           = 15;
+  // AckedCommandBatchID is the last schedule-command batch accepted by this
+  // service. It is meaningful only when CommandDeliveryAckSupported is true.
+  uint64          AckedCommandBatchID = 16;
+  bool            CommandDeliveryAckSupported = 17;
 }
 
 // CNAllocateID is the periodic message sent tp the HAKeeper by CN stores.
@@ -175,6 +179,10 @@ message LogStoreHeartbeat {
 
   ConfigData ConfigData = 7;
   Locality Locality = 8 [(gogoproto.nullable) = false];
+  // CommandDeliverySupported is a binary capability used to activate the
+  // acknowledged delivery protocol only after every HAKeeper replica has
+  // upgraded.
+  bool CommandDeliverySupported = 9;
 };
 
 // TNShardInfo contains information of a launched TN shard.
@@ -212,6 +220,8 @@ message TNStoreHeartbeat {
   // AutoIncrEpochFenceSupported reports that this TN rejects writes whose
   // allocator epoch does not match the table epoch.
   bool AutoIncrEpochFenceSupported = 12;
+  uint64 AckedCommandBatchID = 13;
+  bool CommandDeliveryAckSupported = 14;
 };
 
 message RSMState {
@@ -374,6 +384,10 @@ message Response {
   // CommandPollSupported is advertised by HAKeeper so services avoid the new
   // RPC while connected to an older server during a rolling upgrade.
   bool CommandPollSupported      = 13;
+  // CommandDeliverySupported describes this server binary. Unlike
+  // CommandPollSupported it does not imply that the replicated protocol has
+  // been activated cluster-wide.
+  bool CommandDeliverySupported  = 14;
 };
 
 message LogRecordResponse {
@@ -409,6 +423,7 @@ enum HAKeeperUpdateType {
   LogShardUpdate = 17;
   RestoreIDWatermarkUpdate = 18;
   CompleteLogServiceRecoveryUpdate = 19;
+  EnableCommandDeliveryUpdate = 20;
 }
 
 // HAKeeperState state transition diagram
@@ -691,6 +706,7 @@ message LogStoreInfo {
   bool TaskServiceCreated = 6;
   ConfigData ConfigData = 7;
   Locality Locality = 8 [(gogoproto.nullable) = false];
+  bool CommandDeliverySupported = 9;
 }
 
 message LogState {
@@ -772,6 +788,13 @@ message HAKeeperRSMState {
   uint64 IDWatermarkRestoreGeneration = 20;
   bool LogServiceRecoveryPrepared = 21;
   bool LogServiceRecoveryCompleted = 22;
+  // CommandDeliveryEnabled is a one-way cluster capability transition. Once
+  // set, upgraded CN/TN heartbeats use persistent delivery plus explicit ack.
+  bool CommandDeliveryEnabled = 23;
+  // Preparing/Ready form a replicated barrier: capability heartbeats observed
+  // before every RSM replica upgraded cannot be used to enable new semantics.
+  bool CommandDeliveryPreparing = 24;
+  map<string, bool> CommandDeliveryReady = 25;
 }
 
 // ReplicaInfo contains details of a replica

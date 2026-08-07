@@ -519,6 +519,7 @@ func TestHAKeeperClientPollScheduleCommands(t *testing.T) {
 			require.NoError(t, baseClient.Close())
 		}()
 		client := baseClient.(ScheduleCommandHAKeeperClient)
+		activateCommandDelivery(t, ctx, s)
 
 		command := pb.ScheduleCommand{
 			UUID:        s.ID(),
@@ -539,22 +540,84 @@ func TestHAKeeperClientPollScheduleCommands(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, batch, retry)
 
-		delivered, err := baseClient.SendTNHeartbeat(ctx, pb.TNStoreHeartbeat{UUID: s.ID()})
+		delivered, err := baseClient.SendTNHeartbeat(ctx, pb.TNStoreHeartbeat{
+			UUID:                        s.ID(),
+			CommandDeliveryAckSupported: true,
+		})
 		require.NoError(t, err)
 		require.Equal(t, batch, delivered)
+
+		acked, err := baseClient.SendTNHeartbeat(ctx, pb.TNStoreHeartbeat{
+			UUID:                        s.ID(),
+			AckedCommandBatchID:         batch.BatchID,
+			CommandDeliveryAckSupported: true,
+		})
+		require.NoError(t, err)
+		require.Empty(t, acked.Commands)
+		afterAck, err := client.GetScheduleCommands(ctx, pb.TNService)
+		require.NoError(t, err)
+		require.Empty(t, afterAck.Commands)
 	}
 	runServiceTest(t, true, true, fn)
 }
 
 func TestHAKeeperClientCommandPollNoopForOlderServer(t *testing.T) {
 	client := &managedHAKeeperClient{}
-	client.mu.client = &hakeeperClient{commandPollSupported: false}
+	client.mu.client = &hakeeperClient{}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 
 	batch, err := client.GetScheduleCommands(ctx, pb.TNService)
 	require.NoError(t, err)
 	require.Empty(t, batch.Commands)
+}
+
+func TestManagedHAKeeperClientResetIsGenerationScoped(t *testing.T) {
+	client := &managedHAKeeperClient{}
+	oldClient := &hakeeperClient{}
+	newClient := &hakeeperClient{}
+	client.mu.client = oldClient
+
+	snapshot, err := client.getPreparedClient(context.Background())
+	require.NoError(t, err)
+	require.Same(t, oldClient, snapshot)
+
+	client.mu.Lock()
+	client.mu.client = newClient
+	client.mu.Unlock()
+	client.resetClientIfCurrent(snapshot)
+
+	client.mu.RLock()
+	current := client.mu.client
+	client.mu.RUnlock()
+	require.Same(t, newClient, current,
+		"a late failure from an old request must not close the replacement client")
+
+	client.resetClientIfCurrent(newClient)
+	client.mu.RLock()
+	current = client.mu.client
+	client.mu.RUnlock()
+	require.Nil(t, current,
+		"a failure from the current generation must invalidate that generation")
+}
+
+func TestManagedHAKeeperClientRejectsNilPreparedClient(t *testing.T) {
+	original := newHAKeeperClientFunc
+	newHAKeeperClientFunc = func(
+		context.Context,
+		string,
+		HAKeeperClientConfig,
+	) (*hakeeperClient, error) {
+		return nil, nil
+	}
+	defer func() {
+		newHAKeeperClientFunc = original
+	}()
+
+	client := &managedHAKeeperClient{}
+	prepared, err := client.getPreparedClient(context.Background())
+	require.Nil(t, prepared)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrNoHAKeeper))
 }
 
 func TestScheduleCommandBatchFingerprintDeterministic(t *testing.T) {
@@ -930,7 +993,7 @@ func TestPrepareClientLockedNormalizesInitialConnectionError(t *testing.T) {
 	}()
 
 	c := &managedHAKeeperClient{}
-	err := c.prepareClient(context.Background())
+	_, err := c.getPreparedClient(context.Background())
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrUnexpectedEOF))
 }
 

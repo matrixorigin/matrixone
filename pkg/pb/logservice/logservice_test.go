@@ -142,10 +142,11 @@ func TestLogStateUpdateStores(t *testing.T) {
 	}
 
 	hb1 := LogStoreHeartbeat{
-		UUID:           "log-a",
-		RaftAddress:    "raft-a",
-		ServiceAddress: "addr-a",
-		GossipAddress:  "gossip-a",
+		UUID:                     "log-a",
+		RaftAddress:              "raft-a",
+		ServiceAddress:           "addr-a",
+		GossipAddress:            "gossip-a",
+		CommandDeliverySupported: true,
 		Replicas: []LogReplicaInfo{{
 			LogShardInfo: LogShardInfo{
 				ShardID:  1,
@@ -160,11 +161,12 @@ func TestLogStateUpdateStores(t *testing.T) {
 	tick1 := uint64(100)
 	state.Update(hb1, tick1)
 	assert.Equal(t, state.Stores[hb1.UUID], LogStoreInfo{
-		Tick:           tick1,
-		RaftAddress:    hb1.RaftAddress,
-		ServiceAddress: hb1.ServiceAddress,
-		GossipAddress:  hb1.GossipAddress,
-		Replicas:       hb1.Replicas,
+		Tick:                     tick1,
+		RaftAddress:              hb1.RaftAddress,
+		ServiceAddress:           hb1.ServiceAddress,
+		GossipAddress:            hb1.GossipAddress,
+		Replicas:                 hb1.Replicas,
+		CommandDeliverySupported: true,
 	})
 
 	hb2 := LogStoreHeartbeat{
@@ -185,6 +187,8 @@ func TestLogStateUpdateStores(t *testing.T) {
 	}
 	tick2 := uint64(200)
 	state.Update(hb2, tick2)
+	assert.False(t, state.Stores[hb2.UUID].CommandDeliverySupported,
+		"a legacy heartbeat must clear a capability cached for the same UUID")
 	assert.Equal(t, state.Stores[hb2.UUID], LogStoreInfo{
 		Tick:           tick2,
 		RaftAddress:    hb2.RaftAddress,

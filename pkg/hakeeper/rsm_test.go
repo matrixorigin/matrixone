@@ -993,7 +993,8 @@ func TestScheduleCommandReadIsStableUntilHeartbeatDelivery(t *testing.T) {
 	value, err := rsm.Lookup(&ScheduleCommandQuery{UUID: command.UUID})
 	require.NoError(t, err)
 	readBatch := value.(*pb.CommandBatch)
-	require.Equal(t, uint64(42), readBatch.BatchID)
+	require.Zero(t, readBatch.BatchID,
+		"delivery IDs stay disabled until every HAKeeper replica upgrades")
 	require.Equal(t, []pb.ScheduleCommand{command}, readBatch.Commands)
 	_, ok := rsm.state.ScheduleCommands[command.UUID]
 	require.True(t, ok, "read-only polling must not consume commands")
@@ -1006,7 +1007,10 @@ func TestScheduleCommandReadIsStableUntilHeartbeatDelivery(t *testing.T) {
 	require.NoError(t, err)
 	readBatch = value.(*pb.CommandBatch)
 
-	heartbeat, err := (&pb.TNStoreHeartbeat{UUID: command.UUID}).Marshal()
+	heartbeat, err := (&pb.TNStoreHeartbeat{
+		UUID:                        command.UUID,
+		CommandDeliveryAckSupported: true,
+	}).Marshal()
 	require.NoError(t, err)
 	result, err := rsm.Update(sm.Entry{Index: 43, Cmd: GetTNStoreHeartbeatCmd(heartbeat)})
 	require.NoError(t, err)
@@ -1014,11 +1018,13 @@ func TestScheduleCommandReadIsStableUntilHeartbeatDelivery(t *testing.T) {
 	require.NoError(t, delivered.Unmarshal(result.Data))
 	require.Equal(t, *readBatch, delivered)
 	_, ok = rsm.state.ScheduleCommands[command.UUID]
-	require.False(t, ok, "heartbeat keeps the legacy atomic consume semantics")
+	require.False(t, ok,
+		"mixed HAKeeper versions keep legacy consumption even for a new TN")
 }
 
 func TestTickAssignsIDsToLegacyScheduleCommandBatchesOnce(t *testing.T) {
 	rsm := NewStateMachine(0, 1).(*stateMachine)
+	rsm.state.CommandDeliveryEnabled = true
 	command := pb.ScheduleCommand{UUID: "tn-1", ServiceType: pb.TNService}
 	rsm.state.ScheduleCommands[command.UUID] = pb.CommandBatch{
 		Commands: []pb.ScheduleCommand{command},
@@ -1032,6 +1038,182 @@ func TestTickAssignsIDsToLegacyScheduleCommandBatchesOnce(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, uint64(41), rsm.state.ScheduleCommands[command.UUID].BatchID,
 		"subsequent ticks must not rewrite a stable delivery generation")
+}
+
+func TestCommandDeliveryActivationUsesPostBarrierCapabilities(t *testing.T) {
+	newRSM := func(allCapabilitiesObserved bool) *stateMachine {
+		rsm := NewStateMachine(0, 1).(*stateMachine)
+		rsm.state.LogState.Shards[DefaultHAKeeperShardID] = pb.LogShardInfo{
+			ShardID: DefaultHAKeeperShardID,
+			Replicas: map[uint64]string{
+				1: "log-1",
+				2: "log-2",
+			},
+			NonVotingReplicas: map[uint64]string{3: "log-3"},
+		}
+		if allCapabilitiesObserved {
+			for _, uuid := range []string{"log-1", "log-2", "log-3"} {
+				rsm.state.LogState.Stores[uuid] = pb.LogStoreInfo{
+					CommandDeliverySupported: true,
+				}
+			}
+		}
+		return rsm
+	}
+	// Model a leader that observed the capability heartbeats before an upgraded
+	// follower. Applying the same phase-one entry must erase that difference.
+	rsms := []*stateMachine{newRSM(true), newRSM(false)}
+	for _, rsm := range rsms {
+		result, err := rsm.Update(sm.Entry{Index: 40, Cmd: GetEnableCommandDeliveryCmd()})
+		require.NoError(t, err)
+		require.Equal(t, uint64(2), result.Value)
+		require.True(t, rsm.state.CommandDeliveryPreparing)
+		require.False(t, rsm.state.CommandDeliveryEnabled)
+		require.Empty(t, rsm.state.CommandDeliveryReady)
+	}
+
+	heartbeat := func(rsm *stateMachine, index uint64, uuid string, supported bool) {
+		t.Helper()
+		data, err := (&pb.LogStoreHeartbeat{
+			UUID:                     uuid,
+			CommandDeliverySupported: supported,
+		}).Marshal()
+		require.NoError(t, err)
+		_, err = rsm.Update(sm.Entry{Index: index, Cmd: GetLogStoreHeartbeatCmd(data)})
+		require.NoError(t, err)
+	}
+	for _, rsm := range rsms {
+		heartbeat(rsm, 41, "log-1", true)
+		heartbeat(rsm, 42, "log-2", true)
+		heartbeat(rsm, 43, "log-3", false)
+		value, err := rsm.Lookup(&CommandDeliveryStateQuery{})
+		require.NoError(t, err)
+		delivery := value.(CommandDeliveryState)
+		delivery.Ready["log-1"] = false
+		require.True(t, rsm.state.CommandDeliveryReady["log-1"],
+			"read results must not alias replicated readiness state")
+		result, err := rsm.Update(sm.Entry{Index: 44, Cmd: GetEnableCommandDeliveryCmd()})
+		require.NoError(t, err)
+		require.Zero(t, result.Value)
+		require.False(t, rsm.state.CommandDeliveryEnabled)
+
+		heartbeat(rsm, 45, "log-3", true)
+		result, err = rsm.Update(sm.Entry{Index: 46, Cmd: GetEnableCommandDeliveryCmd()})
+		require.NoError(t, err)
+		require.Equal(t, uint64(1), result.Value)
+		require.True(t, rsm.state.CommandDeliveryEnabled)
+		require.False(t, rsm.state.CommandDeliveryPreparing)
+		require.Nil(t, rsm.state.CommandDeliveryReady)
+	}
+	require.Equal(t, rsms[0].state, rsms[1].state)
+}
+
+func TestAcknowledgedCommandDeliverySurvivesLostResponse(t *testing.T) {
+	rsm := NewStateMachine(0, 1).(*stateMachine)
+	rsm.state.CommandDeliveryEnabled = true
+	first := pb.ScheduleCommand{
+		UUID:        "tn-1",
+		ServiceType: pb.TNService,
+		ConfigChange: &pb.ConfigChange{
+			ChangeType: pb.StartReplica,
+			Replica:    pb.Replica{ShardID: 2, ReplicaID: 7},
+		},
+	}
+	_, err := rsm.Update(sm.Entry{
+		Index: 42,
+		Cmd:   GetUpdateCommandsCmd(1, []pb.ScheduleCommand{first}),
+	})
+	require.NoError(t, err)
+
+	heartbeat := func(ack uint64, supported bool) sm.Result {
+		t.Helper()
+		data, err := (&pb.TNStoreHeartbeat{
+			UUID:                        first.UUID,
+			AckedCommandBatchID:         ack,
+			CommandDeliveryAckSupported: supported,
+		}).Marshal()
+		require.NoError(t, err)
+		result, err := rsm.Update(sm.Entry{Index: rsm.state.Index + 1, Cmd: GetTNStoreHeartbeatCmd(data)})
+		require.NoError(t, err)
+		return result
+	}
+
+	// The proposal commits and returns the command, but model a lost response by
+	// deliberately ignoring it. The durable batch must remain pollable.
+	_ = heartbeat(0, true)
+	value, err := rsm.Lookup(&ScheduleCommandQuery{UUID: first.UUID})
+	require.NoError(t, err)
+	pending := value.(*pb.CommandBatch)
+	require.Equal(t, uint64(42), pending.BatchID)
+	require.Equal(t, []pb.ScheduleCommand{first}, pending.Commands)
+
+	// A second operator for the same store is dispatched only once. It must be
+	// merged with the unacknowledged commands under a new generation; dropping
+	// it or overwriting the old command would lose work in one failure ordering.
+	second := first
+	second.ConfigChange = &pb.ConfigChange{
+		ChangeType: pb.StartReplica,
+		Replica:    pb.Replica{ShardID: 2, ReplicaID: 8},
+	}
+	_, err = rsm.Update(sm.Entry{
+		Index: 44,
+		Cmd:   GetUpdateCommandsCmd(2, []pb.ScheduleCommand{second}),
+	})
+	require.NoError(t, err)
+	value, err = rsm.Lookup(&ScheduleCommandQuery{UUID: first.UUID})
+	require.NoError(t, err)
+	pending = value.(*pb.CommandBatch)
+	require.Equal(t, uint64(44), pending.BatchID)
+	require.Equal(t, []pb.ScheduleCommand{first, second}, pending.Commands)
+
+	// A delayed ack for the old generation cannot delete either command.
+	result := heartbeat(42, true)
+	var delivered pb.CommandBatch
+	require.NoError(t, delivered.Unmarshal(result.Data))
+	require.Equal(t, *pending, delivered)
+
+	// Only the merged generation's exact ack removes it. Losing this heartbeat's
+	// response is harmless because removal itself is replicated.
+	result = heartbeat(44, true)
+	require.Empty(t, result.Data)
+	_, ok := rsm.state.ScheduleCommands[first.UUID]
+	require.False(t, ok)
+
+	// The next checker run can install another generation. Replaying the prior
+	// exact ack is now stale and cannot delete it.
+	third := second
+	third.ConfigChange = &pb.ConfigChange{
+		ChangeType: pb.StartReplica,
+		Replica:    pb.Replica{ShardID: 2, ReplicaID: 9},
+	}
+	_, err = rsm.Update(sm.Entry{
+		Index: rsm.state.Index + 1,
+		Cmd:   GetUpdateCommandsCmd(3, []pb.ScheduleCommand{third}),
+	})
+	require.NoError(t, err)
+	require.Equal(t, uint64(47), rsm.state.ScheduleCommands[first.UUID].BatchID)
+	result = heartbeat(44, true)
+	delivered = pb.CommandBatch{}
+	require.NoError(t, delivered.Unmarshal(result.Data))
+	require.Equal(t, uint64(47), delivered.BatchID)
+	require.Equal(t, []pb.ScheduleCommand{third}, delivered.Commands)
+
+	result = heartbeat(47, true)
+	require.Empty(t, result.Data)
+	_, ok = rsm.state.ScheduleCommands[first.UUID]
+	require.False(t, ok)
+
+	// Old CN/TN binaries do not send the capability bit and retain the legacy
+	// consume-on-heartbeat contract during a rolling service upgrade.
+	_, err = rsm.Update(sm.Entry{
+		Index: rsm.state.Index + 1,
+		Cmd:   GetUpdateCommandsCmd(4, []pb.ScheduleCommand{first}),
+	})
+	require.NoError(t, err)
+	result = heartbeat(0, false)
+	require.NotEmpty(t, result.Data)
+	_, ok = rsm.state.ScheduleCommands[first.UUID]
+	require.False(t, ok)
 }
 
 func TestBootstrapReplicaCommandsRetriedUntilHeartbeatAcknowledges(t *testing.T) {
@@ -1117,6 +1299,68 @@ func TestBootstrapReplicaCommandsRetriedUntilHeartbeatAcknowledges(t *testing.T)
 			require.NoError(t, err)
 			return GetTNStoreHeartbeatCmd(data)
 		})
+	})
+
+	t.Run("acknowledged-tn-service", func(t *testing.T) {
+		rsm := NewStateMachine(0, 1).(*stateMachine)
+		rsm.state.State = pb.HAKeeperBootstrapping
+		rsm.state.CommandDeliveryEnabled = true
+		command := pb.ScheduleCommand{
+			UUID:          storeID,
+			Bootstrapping: true,
+			ServiceType:   pb.TNService,
+			ConfigChange: &pb.ConfigChange{
+				Replica: pb.Replica{
+					UUID:      storeID,
+					ShardID:   shardID,
+					ReplicaID: replicaID,
+				},
+				ChangeType: pb.StartReplica,
+			},
+		}
+		_, err := rsm.Update(sm.Entry{
+			Index: 10,
+			Cmd:   GetUpdateCommandsCmd(1, []pb.ScheduleCommand{command}),
+		})
+		require.NoError(t, err)
+
+		heartbeat := func(reported bool) sm.Result {
+			t.Helper()
+			hb := pb.TNStoreHeartbeat{
+				UUID:                        storeID,
+				AckedCommandBatchID:         10,
+				CommandDeliveryAckSupported: true,
+			}
+			if reported {
+				hb.Shards = []pb.TNShardInfo{{
+					ShardID:   shardID,
+					ReplicaID: replicaID,
+				}}
+			}
+			data, err := hb.Marshal()
+			require.NoError(t, err)
+			result, err := rsm.Update(sm.Entry{
+				Index: rsm.state.Index + 1,
+				Cmd:   GetTNStoreHeartbeatCmd(data),
+			})
+			require.NoError(t, err)
+			return result
+		}
+
+		// Transport acknowledgement alone is insufficient: a transient local
+		// start failure leaves the shard absent and must redeliver the command.
+		result := heartbeat(false)
+		var batch pb.CommandBatch
+		require.NoError(t, batch.Unmarshal(result.Data))
+		require.Equal(t, uint64(10), batch.BatchID)
+		require.Equal(t, []pb.ScheduleCommand{command}, batch.Commands)
+		_, ok := rsm.state.ScheduleCommands[storeID]
+		require.True(t, ok)
+
+		result = heartbeat(true)
+		require.Empty(t, result.Data)
+		_, ok = rsm.state.ScheduleCommands[storeID]
+		require.False(t, ok)
 	})
 }
 

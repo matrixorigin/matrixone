@@ -62,7 +62,14 @@ const (
 type IndexQuery struct{}
 type StateQuery struct{}
 type ScheduleCommandQuery struct{ UUID string }
+type CommandDeliveryStateQuery struct{}
 type ClusterDetailsQuery struct{ Cfg Config }
+
+type CommandDeliveryState struct {
+	Preparing bool
+	Enabled   bool
+	Ready     map[string]bool
+}
 
 type stateMachine struct {
 	replicaID uint64
@@ -142,6 +149,15 @@ func GetRestoreIDWatermarkCmd(
 func GetCompleteLogServiceRecoveryCmd() []byte {
 	cmd := make([]byte, headerSize)
 	binaryEnc.PutUint32(cmd, uint32(pb.CompleteLogServiceRecoveryUpdate))
+	return cmd
+}
+
+// GetEnableCommandDeliveryCmd creates the one-way protocol activation entry.
+// It must only be proposed after every current HAKeeper replica has advertised
+// support; older state machines deliberately reject the unknown command tag.
+func GetEnableCommandDeliveryCmd() []byte {
+	cmd := make([]byte, headerSize)
+	binaryEnc.PutUint32(cmd, uint32(pb.EnableCommandDeliveryUpdate))
 	return cmd
 }
 
@@ -465,25 +481,45 @@ func (s *stateMachine) handleUpdateCommandsCmd(cmd []byte) sm.Result {
 	}
 
 	s.state.Term = b.Term
-	s.state.ScheduleCommands = make(map[string]pb.CommandBatch)
+	if s.state.CommandDeliveryEnabled {
+		if s.state.ScheduleCommands == nil {
+			s.state.ScheduleCommands = make(map[string]pb.CommandBatch)
+		}
+	} else {
+		// Preserve the legacy replacement contract until the cluster-wide
+		// capability transition has committed.
+		s.state.ScheduleCommands = make(map[string]pb.CommandBatch)
+	}
 	for _, c := range b.Commands {
 		if c.Bootstrapping {
 			s.handleSetStateCmd(GetSetStateCmd(pb.HAKeeperBootstrapCommandsReceived))
 		}
 		if c.DeleteCNStore != nil {
 			s.handleDeleteCNCmd(c.UUID)
+			delete(s.state.ScheduleCommands, c.UUID)
 			continue
 		}
 		if c.DeleteProxyStore != nil {
 			s.handleDeleteProxyCmd(c.UUID)
+			delete(s.state.ScheduleCommands, c.UUID)
 			continue
 		}
 		l, ok := s.state.ScheduleCommands[c.UUID]
 		if !ok {
 			l = pb.CommandBatch{
-				BatchID:  s.state.Index,
 				Commands: make([]pb.ScheduleCommand, 0),
 			}
+			if s.state.CommandDeliveryEnabled {
+				l.BatchID = s.state.Index
+			}
+		} else if s.state.CommandDeliveryEnabled {
+			// The operator controller dispatches a newly generated command once.
+			// Dropping it merely because this UUID still has an unacknowledged
+			// batch would lose that command forever. Roll the old and new commands
+			// into a new generation instead. A service that already applied the
+			// old generation may replay it, while its stale ack cannot delete the
+			// newly appended commands.
+			l.BatchID = s.state.Index
 		}
 		plog.Infof("adding schedule command to hakeeper rsm: %s", c.LogString())
 		l.Commands = append(l.Commands, c)
@@ -525,6 +561,39 @@ func (s *stateMachine) getCommandBatch(uuid string) sm.Result {
 	}
 	return sm.Result{}
 
+}
+
+// getCommandBatchWithAck implements at-least-once transport. Delivery is a
+// read of durable replicated state; only a later heartbeat that names the
+// exact batch can complete it. Bootstrap StartReplica commands keep their
+// stronger existing contract and remain pending until the heartbeat reports
+// the replica. A stale ack can therefore never delete a newer batch, and a
+// local start failure cannot be mistaken for bootstrap completion.
+func (s *stateMachine) getCommandBatchWithAck(uuid string, ack uint64) sm.Result {
+	batch, ok := s.state.ScheduleCommands[uuid]
+	if !ok {
+		return sm.Result{}
+	}
+	if ack != 0 && ack == batch.BatchID {
+		pending := make([]pb.ScheduleCommand, 0, len(batch.Commands))
+		for _, command := range batch.Commands {
+			retryable, applied := s.bootstrapReplicaCommandStatus(command)
+			if retryable && !applied {
+				pending = append(pending, command)
+			}
+		}
+		if len(pending) == 0 {
+			delete(s.state.ScheduleCommands, uuid)
+			return sm.Result{}
+		}
+		batch.Commands = pending
+		s.state.ScheduleCommands[uuid] = batch
+	}
+	data, err := batch.Marshal()
+	if err != nil {
+		panic(err)
+	}
+	return sm.Result{Data: data}
 }
 
 // bootstrapReplicaCommandStatus returns whether a bootstrap command must be
@@ -580,6 +649,9 @@ func (s *stateMachine) handleCNHeartbeat(cmd []byte) sm.Result {
 		panic(err)
 	}
 	s.state.CNState.Update(hb, s.state.Tick)
+	if s.state.CommandDeliveryEnabled && hb.CommandDeliveryAckSupported {
+		return s.getCommandBatchWithAck(hb.UUID, hb.AckedCommandBatchID)
+	}
 	return s.getCommandBatch(hb.UUID)
 }
 
@@ -590,6 +662,9 @@ func (s *stateMachine) handleTNHeartbeat(cmd []byte) sm.Result {
 		panic(err)
 	}
 	s.state.TNState.Update(hb, s.state.Tick)
+	if s.state.CommandDeliveryEnabled && hb.CommandDeliveryAckSupported {
+		return s.getCommandBatchWithAck(hb.UUID, hb.AckedCommandBatchID)
+	}
 	return s.getCommandBatch(hb.UUID)
 }
 
@@ -600,6 +675,16 @@ func (s *stateMachine) handleLogHeartbeat(cmd []byte) sm.Result {
 		panic(err)
 	}
 	s.state.LogState.Update(hb, s.state.Tick)
+	if s.state.CommandDeliveryPreparing {
+		if s.state.CommandDeliveryReady == nil {
+			s.state.CommandDeliveryReady = make(map[string]bool)
+		}
+		if hb.CommandDeliverySupported {
+			s.state.CommandDeliveryReady[hb.UUID] = true
+		} else {
+			delete(s.state.CommandDeliveryReady, hb.UUID)
+		}
+	}
 	return s.getCommandBatch(hb.UUID)
 }
 
@@ -609,14 +694,54 @@ func (s *stateMachine) handleTick(cmd []byte) sm.Result {
 	// poll-safe. The decision depends only on replicated state, so replicas that
 	// recovered at different times still produce the same state. Current batches
 	// are skipped, and an empty command map makes this loop constant-time.
+	if s.state.CommandDeliveryEnabled {
+		for uuid, batch := range s.state.ScheduleCommands {
+			if batch.BatchID == 0 {
+				batch.BatchID = s.state.Index
+				s.state.ScheduleCommands[uuid] = batch
+			}
+		}
+	}
+	s.state.Tick++
+	return sm.Result{}
+}
+
+func (s *stateMachine) handleEnableCommandDelivery() sm.Result {
+	if s.state.CommandDeliveryEnabled {
+		return sm.Result{Value: 1}
+	}
+	if !s.state.CommandDeliveryPreparing {
+		// This replicated barrier deliberately discards capability observations
+		// made before every state-machine replica upgraded. Heartbeats after this
+		// entry are interpreted by one protocol version on every replica.
+		s.state.CommandDeliveryPreparing = true
+		s.state.CommandDeliveryReady = make(map[string]bool)
+		return sm.Result{Value: 2}
+	}
+	shard, ok := s.state.LogState.Shards[DefaultHAKeeperShardID]
+	if !ok || len(shard.Replicas) == 0 {
+		return sm.Result{}
+	}
+	for _, uuid := range shard.Replicas {
+		if !s.state.CommandDeliveryReady[uuid] {
+			return sm.Result{}
+		}
+	}
+	for _, uuid := range shard.NonVotingReplicas {
+		if !s.state.CommandDeliveryReady[uuid] {
+			return sm.Result{}
+		}
+	}
+	s.state.CommandDeliveryEnabled = true
+	s.state.CommandDeliveryPreparing = false
+	s.state.CommandDeliveryReady = nil
 	for uuid, batch := range s.state.ScheduleCommands {
 		if batch.BatchID == 0 {
 			batch.BatchID = s.state.Index
 			s.state.ScheduleCommands[uuid] = batch
 		}
 	}
-	s.state.Tick++
-	return sm.Result{}
+	return sm.Result{Value: 1}
 }
 
 func (s *stateMachine) handleGetIDCmd(cmd []byte) sm.Result {
@@ -1022,6 +1147,8 @@ func (s *stateMachine) Update(e sm.Entry) (sm.Result, error) {
 		return s.handleRestoreIDWatermarkCmd(cmd), nil
 	case pb.CompleteLogServiceRecoveryUpdate:
 		return s.handleCompleteLogServiceRecoveryCmd(), nil
+	case pb.EnableCommandDeliveryUpdate:
+		return s.handleEnableCommandDelivery(), nil
 	case pb.SetTaskTableUserUpdate:
 		s.assertState()
 		return s.handleTaskTableUserCmd(cmd), nil
@@ -1193,6 +1320,16 @@ func (s *stateMachine) Lookup(query interface{}) (interface{}, error) {
 		return s.handleStateQuery(), nil
 	} else if q, ok := query.(*ScheduleCommandQuery); ok {
 		return s.handleScheduleCommandQuery(q.UUID), nil
+	} else if _, ok := query.(*CommandDeliveryStateQuery); ok {
+		ready := make(map[string]bool, len(s.state.CommandDeliveryReady))
+		for uuid, value := range s.state.CommandDeliveryReady {
+			ready[uuid] = value
+		}
+		return CommandDeliveryState{
+			Preparing: s.state.CommandDeliveryPreparing,
+			Enabled:   s.state.CommandDeliveryEnabled,
+			Ready:     ready,
+		}, nil
 	} else if q, ok := query.(*ClusterDetailsQuery); ok {
 		return s.handleClusterDetailsQuery(q.Cfg), nil
 	} else if _, ok := query.(*IndexQuery); ok {

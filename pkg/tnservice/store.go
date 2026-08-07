@@ -117,6 +117,7 @@ type store struct {
 	heartbeatInFlight   atomic.Bool
 	commandMu           sync.Mutex
 	lastCommandBatchID  uint64
+	ackedCommandBatchID atomic.Uint64
 	lastCommandHash     [32]byte
 	legacyDedupeArmed   bool
 

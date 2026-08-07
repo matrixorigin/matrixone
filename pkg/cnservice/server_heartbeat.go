@@ -154,7 +154,9 @@ func (s *service) heartbeat(ctx context.Context) {
 			MemTotal:     system.MemoryTotal(),
 			MemAvailable: system.MemoryAvailable(),
 		},
-		CommitID: version.CommitID,
+		CommitID:                    version.CommitID,
+		AckedCommandBatchID:         s.ackedCommandBatchID.Load(),
+		CommandDeliveryAckSupported: true,
 	}
 	if s.gossipNode != nil {
 		hb.GossipAddress = s.gossipServiceAddr()
@@ -186,12 +188,6 @@ func (s *service) heartbeat(ctx context.Context) {
 	s.handleCommandBatch(cb)
 }
 
-func (s *service) handleCommands(cmds []logservicepb.ScheduleCommand) {
-	s.commandMu.Lock()
-	defer s.commandMu.Unlock()
-	s.handleCommandsLocked(cmds)
-}
-
 func (s *service) handleCommandBatch(batch logservicepb.CommandBatch) {
 	if len(batch.Commands) == 0 {
 		return
@@ -213,6 +209,7 @@ func (s *service) handleCommandBatch(batch logservicepb.CommandBatch) {
 	s.handleCommandsLocked(batch.Commands)
 	if batch.BatchID != 0 {
 		s.lastCommandBatchID = batch.BatchID
+		s.ackedCommandBatchID.Store(batch.BatchID)
 		s.lastCommandHash = logservice.ScheduleCommandBatchFingerprint(batch)
 		s.legacyDedupeArmed = true
 	}

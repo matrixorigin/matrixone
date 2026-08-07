@@ -130,14 +130,15 @@ func getRaftConfig(shardID uint64, replicaID uint64) config.Config {
 
 // store manages log shards including the HAKeeper shard on each node.
 type store struct {
-	cfg               Config
-	nh                *dragonboat.NodeHost
-	haKeeperReplicaID uint64
-	checker           hakeeper.Checker
-	alloc             hakeeper.IDAllocator
-	stopper           *stopper.Stopper
-	tickerStopper     *stopper.Stopper
-	runtime           runtime.Runtime
+	cfg                    Config
+	nh                     *dragonboat.NodeHost
+	haKeeperReplicaID      uint64
+	commandDeliveryEnabled atomic.Bool
+	checker                hakeeper.Checker
+	alloc                  hakeeper.IDAllocator
+	stopper                *stopper.Stopper
+	tickerStopper          *stopper.Stopper
+	runtime                runtime.Runtime
 
 	bootstrapCheckCycles uint64
 	bootstrapMgr         *bootstrap.Manager
@@ -859,6 +860,70 @@ func (l *store) getCommandBatch(ctx context.Context,
 	return *(v.(*pb.CommandBatch)), nil
 }
 
+func (l *store) getCommandDeliveryState(ctx context.Context) (hakeeper.CommandDeliveryState, error) {
+	v, err := l.read(ctx, hakeeper.DefaultHAKeeperShardID,
+		&hakeeper.CommandDeliveryStateQuery{})
+	if err != nil {
+		return hakeeper.CommandDeliveryState{}, handleNotHAKeeperError(ctx, err)
+	}
+	return v.(hakeeper.CommandDeliveryState), nil
+}
+
+func (l *store) tryEnableCommandDelivery(ctx context.Context) (bool, error) {
+	if l.commandDeliveryEnabled.Load() {
+		return true, nil
+	}
+	delivery, err := l.getCommandDeliveryState(ctx)
+	if err != nil {
+		return false, err
+	}
+	if delivery.Enabled {
+		l.commandDeliveryEnabled.Store(true)
+		return true, nil
+	}
+	// Phase one is proposed only after the leader has observed support from
+	// every current voter/non-voter. An old replica cannot decode the new update
+	// tag. The committed phase-one barrier then discards these possibly
+	// divergent pre-upgrade observations on every replica.
+	state, err := l.getCheckerStateWithContext(ctx)
+	if err != nil {
+		return false, err
+	}
+	shard, ok := state.LogState.Shards[hakeeper.DefaultHAKeeperShardID]
+	if !ok || len(shard.Replicas) == 0 {
+		return false, nil
+	}
+	allMembers := func(replicas map[uint64]string, predicate func(string) bool) bool {
+		for _, uuid := range replicas {
+			if !predicate(uuid) {
+				return false
+			}
+		}
+		return true
+	}
+	ready := func(uuid string) bool {
+		if delivery.Preparing {
+			return delivery.Ready[uuid]
+		}
+		store, ok := state.LogState.Stores[uuid]
+		return ok && store.CommandDeliverySupported
+	}
+	if !allMembers(shard.Replicas, ready) || !allMembers(shard.NonVotingReplicas, ready) {
+		return false, nil
+	}
+	cmd := hakeeper.GetEnableCommandDeliveryCmd()
+	session := l.nh.GetNoOPSession(hakeeper.DefaultHAKeeperShardID)
+	result, err := l.propose(ctx, session, cmd)
+	if err != nil {
+		return false, handleNotHAKeeperError(ctx, err)
+	}
+	enabled := result.Value == 1
+	if enabled {
+		l.commandDeliveryEnabled.Store(true)
+	}
+	return enabled, nil
+}
+
 func (l *store) getClusterDetails(ctx context.Context) (pb.ClusterDetails, error) {
 	v, err := l.read(ctx,
 		hakeeper.DefaultHAKeeperShardID, &hakeeper.ClusterDetailsQuery{Cfg: l.cfg.GetHAKeeperConfig()})
@@ -1291,12 +1356,13 @@ func (l *store) hakeeperTick() {
 
 func (l *store) getHeartbeatMessage() pb.LogStoreHeartbeat {
 	m := pb.LogStoreHeartbeat{
-		UUID:           l.id(),
-		RaftAddress:    l.cfg.RaftServiceAddr(),
-		ServiceAddress: l.cfg.LogServiceServiceAddr(),
-		GossipAddress:  l.cfg.GossipServiceAddr(),
-		Replicas:       make([]pb.LogReplicaInfo, 0),
-		Locality:       l.cfg.getLocality(),
+		UUID:                     l.id(),
+		RaftAddress:              l.cfg.RaftServiceAddr(),
+		ServiceAddress:           l.cfg.LogServiceServiceAddr(),
+		GossipAddress:            l.cfg.GossipServiceAddr(),
+		Replicas:                 make([]pb.LogReplicaInfo, 0),
+		Locality:                 l.cfg.getLocality(),
+		CommandDeliverySupported: true,
 	}
 	opts := dragonboat.NodeHostInfoOption{
 		SkipLogInfo: true,
