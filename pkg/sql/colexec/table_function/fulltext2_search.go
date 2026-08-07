@@ -62,20 +62,31 @@ type fulltext2SearchState struct {
 	cancel    context.CancelFunc
 	done      bool
 
-	// Covered fast path (Phase 6): when the result batch has >2 vectors (the plan built
-	// include coldefs at positions 2+), the TVF also OUTPUTS each requested INCLUDE
-	// column, served straight from the index's per-doc values — no base-table JOIN.
-	// includeColumns are the OUTPUT INCLUDE column NAMES, read from the ACTUAL result
-	// coldefs (u.batch.Attrs[2:]) — NOT the full cfg list: column pruning may drop an
-	// unprojected include col from the TVF output, so the runtime must follow the pruned
-	// coldefs. includeSegPos[j] is includeColumns[j]'s position in the FULL index include
-	// list (= segment / decodeInclude order = tblcfg.IncludeColumns), used to pull the
-	// right value out of the streaming path's segment-ordered include slice.
-	// includeResult receives the non-streaming (LIMIT) path's per-doc include values
-	// (keyed by output name; fillIncludeResult maps name -> full-list position internally).
-	includeColumns []string
-	includeSegPos  []int
-	includeResult  *vectorindex.IvfIncludeResult
+	// Covered fast path (Phase 6): the TVF outputs pk/score/INCLUDE columns straight from
+	// the index (no base-table JOIN). Column pruning can drop ANY unreferenced output
+	// column — doc_id when the pk isn't projected, score when the ORDER BY is on another
+	// column, an unprojected include col — and COMPACT the batch, so the runtime must NOT
+	// assume fixed positions. It maps each SURVIVING result vector by its coldef NAME
+	// (u.batch.Attrs): "doc_id" <- pk, "score" <- score, everything else <- the include
+	// column of that name. pkVecIdx/scoreVecIdx are the batch vector indices for doc_id /
+	// score (-1 when pruned); includeOut lists the surviving include output vectors.
+	// includeNames (== includeOut names) drives rt.RequestedIncludeColumns; includeResult
+	// carries the non-streaming (LIMIT) per-doc include values (keyed by output name).
+	pkVecIdx      int
+	scoreVecIdx   int
+	includeOut    []ft2IncludeOut
+	includeNames  []string
+	includeResult *vectorindex.IvfIncludeResult
+}
+
+// ft2IncludeOut maps one surviving INCLUDE output vector to its source: vecIdx is the
+// position in u.batch.Vecs; name is the column name (non-streaming IncludeResult lookup);
+// segPos is the column's position in the FULL index include list (= segment / decodeInclude
+// order), used to pull the value from the streaming path's segment-ordered include slice.
+type ft2IncludeOut struct {
+	vecIdx int
+	segPos int
+	name   string
 }
 
 // ft2StreamBatch is one emitted batch (<= streamBatch rows); the producer hands
@@ -131,10 +142,6 @@ func (u *fulltext2SearchState) free(tf *TableFunction, proc *process.Process, pi
 
 func (u *fulltext2SearchState) call(tf *TableFunction, proc *process.Process) (vm.CallResult, error) {
 	u.batch.CleanOnlyData()
-	withScore := u.batch.VectorCount() > 1
-	// Covered fast path: the plan built one extra output vector per requested INCLUDE
-	// column (Vecs[2..]); serve them straight from the index's per-doc values.
-	withInclude := u.batch.VectorCount() > 2
 
 	if u.streaming {
 		if u.done {
@@ -156,39 +163,32 @@ func (u *fulltext2SearchState) call(tf *TableFunction, proc *process.Process) (v
 			// failure leaks the pooled buffer. Safe to defer: AppendColumnBuffer copies
 			// into u.batch, so u.batch never aliases b.keys.
 			defer fulltext2.PutColumnBuffer(b.keys)
-			// Typed bulk decode of the pk column — no per-pk boxing (the mirror of the
-			// producer's box-free encode).
-			if err := fulltext2.AppendColumnBuffer(b.keys, u.batch.Vecs[0], proc.Mp()); err != nil {
-				return vm.CancelResult, err
+			// Name-driven output: write pk / score / each include col to its ACTUAL result
+			// vector (column pruning may have dropped or shifted any of them).
+			if u.pkVecIdx >= 0 {
+				// Typed bulk decode of the pk column — no per-pk boxing.
+				if err := fulltext2.AppendColumnBuffer(b.keys, u.batch.Vecs[u.pkVecIdx], proc.Mp()); err != nil {
+					return vm.CancelResult, err
+				}
 			}
-			if withScore {
-				for i := 0; i < b.keys.N; i++ {
-					// score column is T_float32 (matches ftIndexColdefs / classic fulltext);
-					// the engine computes float64 relevance, narrow it on append. Propagate
-					// the append error — otherwise SetRowCount below would publish a batch
-					// with fewer scores than keys (a malformed, mismatched-length batch).
-					if err := vector.AppendFixed[float32](u.batch.Vecs[1], float32(b.distances[i]), false, proc.Mp()); err != nil {
+			for i := 0; i < b.keys.N; i++ {
+				if u.scoreVecIdx >= 0 {
+					// score is T_float32 (engine computes float64 relevance, narrow on append).
+					// Propagate the append error — else SetRowCount would publish a batch with
+					// fewer scores than keys (a malformed, mismatched-length batch).
+					if err := vector.AppendFixed[float32](u.batch.Vecs[u.scoreVecIdx], float32(b.distances[i]), false, proc.Mp()); err != nil {
 						return vm.CancelResult, err
 					}
 				}
-			}
-			if withInclude {
-				// Covered fast path: b.includes[i] is the doc's include slice in segment
-				// order; the plan builds output col j (Vecs[2+j]) in the SAME order, so
-				// Vecs[2+j] <- b.includes[i][j]. A nil value becomes a SQL NULL. Propagate
-				// the append error (same reason as the score loop).
-				for i := 0; i < b.keys.N; i++ {
-					for j := 0; j < len(u.includeColumns); j++ {
-						// b.includes[i] is the doc's FULL include slice in segment order;
-						// includeSegPos[j] maps output col j to its segment position
-						// (handles column pruning / reorder). Out-of-range ⇒ SQL NULL.
-						var val any
-						if p := u.includeSegPos[j]; p >= 0 && i < len(b.includes) && p < len(b.includes[i]) {
-							val = b.includes[i][p]
-						}
-						if err := vector.AppendAny(u.batch.Vecs[2+j], val, val == nil, proc.Mp()); err != nil {
-							return vm.CancelResult, err
-						}
+				for _, ic := range u.includeOut {
+					// b.includes[i] is the doc's FULL include slice in segment order; segPos
+					// maps this output col to its segment position. Out-of-range ⇒ SQL NULL.
+					var val any
+					if ic.segPos >= 0 && i < len(b.includes) && ic.segPos < len(b.includes[i]) {
+						val = b.includes[i][ic.segPos]
+					}
+					if err := vector.AppendAny(u.batch.Vecs[ic.vecIdx], val, val == nil, proc.Mp()); err != nil {
+						return vm.CancelResult, err
 					}
 				}
 			}
@@ -205,36 +205,33 @@ func (u *fulltext2SearchState) call(tf *TableFunction, proc *process.Process) (v
 		// Check each append before incrementing n / publishing the batch — an mpool
 		// allocation failure must surface as the error, not a batch that claims more
 		// rows than its vectors hold (the streaming sibling propagates these too).
-		if err := vector.AppendAny(u.batch.Vecs[0], u.keys[i], false, proc.Mp()); err != nil {
-			return vm.CancelResult, err
-		}
-		if withScore {
-			// score column is T_float32 (matches ftIndexColdefs / classic fulltext);
-			// the engine computes float64 relevance, narrow it on append.
-			if err := vector.AppendFixed[float32](u.batch.Vecs[1], float32(u.distances[i]), false, proc.Mp()); err != nil {
+		if u.pkVecIdx >= 0 {
+			if err := vector.AppendAny(u.batch.Vecs[u.pkVecIdx], u.keys[i], false, proc.Mp()); err != nil {
 				return vm.CancelResult, err
 			}
 		}
-		if withInclude {
-			// Covered fast path: index IncludeResult by the ABSOLUTE result position i
-			// (this loop pages via u.offset), NOT the page-relative n. Output col j
-			// (Vecs[2+j]) matches includeColumns[j] order (= coldefs order).
-			for j := 0; j < len(u.includeColumns); j++ {
-				name := u.includeColumns[j]
-				var val any
-				isNull := true
-				if data := u.includeResult.Data[name]; i < len(data) {
-					nulls := u.includeResult.Nulls[name]
-					if i < len(nulls) && nulls[i] {
-						isNull = true
-					} else {
-						val = data[i]
-						isNull = val == nil
-					}
+		if u.scoreVecIdx >= 0 {
+			if err := vector.AppendFixed[float32](u.batch.Vecs[u.scoreVecIdx], float32(u.distances[i]), false, proc.Mp()); err != nil {
+				return vm.CancelResult, err
+			}
+		}
+		for _, ic := range u.includeOut {
+			// IncludeResult is indexed by the ABSOLUTE result position i (this loop pages via
+			// u.offset), NOT the page-relative n. Keyed by output name (fillIncludeResult
+			// mapped name -> full-list position).
+			var val any
+			isNull := true
+			if data := u.includeResult.Data[ic.name]; i < len(data) {
+				nulls := u.includeResult.Nulls[ic.name]
+				if i < len(nulls) && nulls[i] {
+					isNull = true
+				} else {
+					val = data[i]
+					isNull = val == nil
 				}
-				if err := vector.AppendAny(u.batch.Vecs[2+j], val, isNull, proc.Mp()); err != nil {
-					return vm.CancelResult, err
-				}
+			}
+			if err := vector.AppendAny(u.batch.Vecs[ic.vecIdx], val, isNull, proc.Mp()); err != nil {
+				return vm.CancelResult, err
 			}
 		}
 		n++
@@ -286,27 +283,32 @@ func (u *fulltext2SearchState) start(tf *TableFunction, proc *process.Process, n
 			return moerr.NewInvalidInput(proc.Ctx, "fulltext2_search: second argument (pattern) must be a string")
 		}
 		u.batch = tf.createResultBatch()
-		// Covered fast path: createResultBatch built one vector per plan coldef. When the
-		// plan added INCLUDE coldefs (Vecs[2..]), the batch has >2 vectors — take the
-		// requested INCLUDE column NAMES from cfg IN OUTPUT ORDER (the plan builds coldefs
-		// in the SAME order as cfg include_columns). Only then does the TVF emit include
-		// columns; a non-covered query leaves this nil and outputs just (doc_id, score).
-		if u.batch.VectorCount() > 2 {
-			// Output include cols = the ACTUAL coldefs after plan column-pruning
-			// (u.batch.Attrs[2:]), which may be a subset of the full index include list.
-			// Map each to its position in the full list (segment / decodeInclude order)
-			// so the streaming path pulls the right value; the non-streaming path maps by
-			// name via fillIncludeResult.
-			u.includeColumns = append([]string(nil), u.batch.Attrs[2:]...)
-			u.includeSegPos = make([]int, len(u.includeColumns))
-			for j, name := range u.includeColumns {
-				u.includeSegPos[j] = -1
+		// Name-driven output map. createResultBatch built one vector per SURVIVING plan
+		// coldef (column pruning may have dropped/compacted doc_id, score, and/or any
+		// unprojected INCLUDE col), so classify each result vector by its coldef NAME
+		// rather than by a fixed position: "doc_id" -> pk, "score" -> score, everything
+		// else -> the INCLUDE column of that name (mapped to its position in the full
+		// index include list = segment / decodeInclude order). A non-covered query's batch
+		// is just (doc_id, score) -> pkVecIdx=0, scoreVecIdx=1, no include output.
+		u.pkVecIdx, u.scoreVecIdx = -1, -1
+		u.includeOut = nil
+		u.includeNames = nil
+		for vi, name := range u.batch.Attrs {
+			switch {
+			case strings.EqualFold(name, "doc_id"):
+				u.pkVecIdx = vi
+			case strings.EqualFold(name, "score"):
+				u.scoreVecIdx = vi
+			default:
+				segPos := -1
 				for p, full := range u.tblcfg.IncludeColumns {
 					if strings.EqualFold(full, name) {
-						u.includeSegPos[j] = p
+						segPos = p
 						break
 					}
 				}
+				u.includeOut = append(u.includeOut, ft2IncludeOut{vecIdx: vi, segPos: segPos, name: name})
+				u.includeNames = append(u.includeNames, name)
 			}
 		}
 		u.inited = true
@@ -400,8 +402,8 @@ func (u *fulltext2SearchState) start(tf *TableFunction, proc *process.Process, n
 		// Covered fast path: signal the stream to carry each doc's INCLUDE values. The gate
 		// in Fulltext2Search.Search is (IncludeResult != nil && RequestedIncludeColumns > 0),
 		// so set both — the streaming path uses the Emit includes, not IncludeResult.
-		if len(u.includeColumns) > 0 {
-			rt.RequestedIncludeColumns = u.includeColumns
+		if len(u.includeNames) > 0 {
+			rt.RequestedIncludeColumns = u.includeNames
 			rt.IncludeResult = &vectorindex.IvfIncludeResult{}
 		}
 		go func() {
@@ -416,9 +418,9 @@ func (u *fulltext2SearchState) start(tf *TableFunction, proc *process.Process, n
 	rt := vectorindex.RuntimeConfig{Limit: uint(u.limit)}
 	// Covered fast path: request the INCLUDE column values; Search fills IncludeResult
 	// (indexed by absolute result position), which call() reads on the paged output.
-	if len(u.includeColumns) > 0 {
+	if len(u.includeNames) > 0 {
 		u.includeResult = &vectorindex.IvfIncludeResult{}
-		rt.RequestedIncludeColumns = u.includeColumns
+		rt.RequestedIncludeColumns = u.includeNames
 		rt.IncludeResult = u.includeResult
 	}
 	keys, dists, serr := veccache.Cache.Search(sp, u.tblcfg.IndexTable, newsearch, q, rt)

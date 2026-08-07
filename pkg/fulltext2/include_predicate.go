@@ -78,11 +78,13 @@ var includeOpKinds = map[string]includeCmpKind{
 // INCLUDE column types are the same across an index's segments); includePredMembership binds
 // it to a segment's includeVal.
 type compiledIncludePred struct {
-	col   int
-	kind  includeCmpKind
-	isStr bool
-	ints  []int64  // integer-column operands
-	strs  [][]byte // varchar/char-column operands (also the prefix)
+	col        int
+	kind       includeCmpKind
+	isStr      bool
+	isUnsigned bool     // uint64/bit column: compare as uint64 (int64 wraps values above MaxInt64)
+	ints       []int64  // signed integer-column operands (all int types + uint8/16/32, which fit int64)
+	uints      []uint64 // unsigned-64 column operands
+	strs       [][]byte // varchar/char-column operands (also the prefix)
 }
 
 // compileIncludePredicates parses the JSON spec and type-binds each predicate against the
@@ -119,7 +121,12 @@ func compileIncludePredicates(specJSON []byte, includeTypes []int32, pkType int3
 		if !isComparableIncludeType(colType) {
 			return nil, moerr.NewInternalErrorNoCtxf("fulltext2 include predicate: col %d type not comparable", p.Col)
 		}
-		cp := compiledIncludePred{col: p.Col, kind: kind, isStr: isVarlenaIncludeType(colType)}
+		// uint64/bit columns store values that overflow int64 (> MaxInt64), so they need an
+		// unsigned comparison path — int64 casting would wrap a large value to negative and
+		// silently exclude a matching row. All other integer types (int8..64, uint8..32) fit
+		// in int64. isStr takes precedence (varchar/char).
+		unsigned := colType == int32(types.T_uint64) || colType == int32(types.T_bit)
+		cp := compiledIncludePred{col: p.Col, kind: kind, isStr: isVarlenaIncludeType(colType), isUnsigned: unsigned}
 		// Gather the op's operands from the shape-appropriate field(s).
 		var operands []any
 		switch kind {
@@ -133,13 +140,20 @@ func compileIncludePredicates(specJSON []byte, includeTypes []int32, pkType int3
 			operands = []any{p.Val}
 		}
 		for _, o := range operands {
-			if cp.isStr {
+			switch {
+			case cp.isStr:
 				s, ok := includeOperandString(o)
 				if !ok {
 					return nil, moerr.NewInternalErrorNoCtxf("fulltext2 include predicate: col %d expects a string operand", p.Col)
 				}
 				cp.strs = append(cp.strs, []byte(s))
-			} else {
+			case cp.isUnsigned:
+				u, ok := includeOperandUint64(o)
+				if !ok {
+					return nil, moerr.NewInternalErrorNoCtxf("fulltext2 include predicate: col %d expects an unsigned-integer operand", p.Col)
+				}
+				cp.uints = append(cp.uints, u)
+			default:
 				n, ok := includeOperandInt64(o)
 				if !ok {
 					return nil, moerr.NewInternalErrorNoCtxf("fulltext2 include predicate: col %d expects an integer operand", p.Col)
@@ -188,6 +202,65 @@ func isVarlenaIncludeType(t int32) bool {
 		return true
 	default:
 		return false
+	}
+}
+
+// includeOperandUint64 extracts a uint64 operand from a decoded JSON value, for uint64/bit
+// columns whose values can exceed MaxInt64 (where includeOperandInt64 would fail or saturate).
+func includeOperandUint64(v any) (uint64, bool) {
+	switch x := v.(type) {
+	case json.Number:
+		if u, err := strconv.ParseUint(x.String(), 10, 64); err == nil {
+			return u, true
+		}
+		if f, err := x.Float64(); err == nil && f >= 0 { // e.g. "1.0"
+			return uint64(f), true
+		}
+		return 0, false
+	case float64:
+		if x < 0 {
+			return 0, false
+		}
+		return uint64(x), true
+	case uint64:
+		return x, true
+	case int64:
+		if x < 0 {
+			return 0, false
+		}
+		return uint64(x), true
+	case string:
+		u, err := strconv.ParseUint(x, 10, 64)
+		return u, err == nil
+	default:
+		return 0, false
+	}
+}
+
+// includeUint64 coerces a stored unsigned INCLUDE/pk value to uint64 (decodePk yields uint64
+// for T_uint64/T_bit; the smaller unsigned/signed types are widened losslessly).
+func includeUint64(v any) (uint64, bool) {
+	switch x := v.(type) {
+	case uint64:
+		return x, true
+	case uint32:
+		return uint64(x), true
+	case uint16:
+		return uint64(x), true
+	case uint8:
+		return uint64(x), true
+	case int64:
+		if x < 0 {
+			return 0, false
+		}
+		return uint64(x), true
+	case int32:
+		if x < 0 {
+			return 0, false
+		}
+		return uint64(x), true
+	default:
+		return 0, false
 	}
 }
 
@@ -247,6 +320,38 @@ func (p *compiledIncludePred) test(v any, isNull bool) bool {
 				}
 			}
 			return false
+		}
+		return false
+	}
+	if p.isUnsigned {
+		u, ok := includeUint64(v)
+		if !ok {
+			return false
+		}
+		switch p.kind {
+		case incEq:
+			return u == p.uints[0]
+		case incNe:
+			return u != p.uints[0]
+		case incLt:
+			return u < p.uints[0]
+		case incLe:
+			return u <= p.uints[0]
+		case incGt:
+			return u > p.uints[0]
+		case incGe:
+			return u >= p.uints[0]
+		case incBetween:
+			return u >= p.uints[0] && u <= p.uints[1]
+		case incIn:
+			for _, x := range p.uints {
+				if u == x {
+					return true
+				}
+			}
+			return false
+		case incPrefix:
+			return false // prefix is string-only
 		}
 		return false
 	}

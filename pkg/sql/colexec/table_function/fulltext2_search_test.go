@@ -150,6 +150,7 @@ func TestFulltext2SearchCallMaterialized(t *testing.T) {
 	st.batch = batch.NewWithSize(2)
 	st.batch.Vecs[0] = vector.NewVec(types.T_int64.ToType())
 	st.batch.Vecs[1] = vector.NewVec(types.T_float32.ToType())
+	st.pkVecIdx, st.scoreVecIdx = 0, 1 // non-covered [doc_id, score] layout (start() builds this from Attrs)
 
 	tf := &TableFunction{}
 	res, err := st.call(tf, proc)
@@ -185,7 +186,8 @@ func TestFulltext2SearchMaterializedAppendError(t *testing.T) {
 	st.batch = batch.NewWithSize(2)
 	st.batch.Vecs[0] = vector.NewVec(types.T_int64.ToType())
 	st.batch.Vecs[1] = vector.NewVec(types.T_float32.ToType())
-	st.batch.Vecs[0].SetOffHeap(true) // route data allocations through the cap-enforced path
+	st.pkVecIdx, st.scoreVecIdx = 0, 1 // non-covered [doc_id, score] layout (start() builds this from Attrs)
+	st.batch.Vecs[0].SetOffHeap(true)  // route data allocations through the cap-enforced path
 	st.batch.Vecs[1].SetOffHeap(true)
 
 	// Far more keys than one call()'s 8192 window, and their append demand dwarfs the
@@ -229,6 +231,7 @@ func TestFulltext2SearchCallStreaming(t *testing.T) {
 		st.batch = batch.NewWithSize(2)
 		st.batch.Vecs[0] = vector.NewVec(types.T_int64.ToType())
 		st.batch.Vecs[1] = vector.NewVec(types.T_float32.ToType())
+		st.pkVecIdx, st.scoreVecIdx = 0, 1 // non-covered [doc_id, score] layout (start() builds this from Attrs)
 		st.streamCh = make(chan ft2StreamBatch, 4)
 		st.errCh = make(chan error, 1)
 		return st

@@ -15,6 +15,8 @@
 package fulltext2
 
 import (
+	"fmt"
+	"math"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -107,6 +109,36 @@ func TestIncludePredicateUnit(t *testing.T) {
 	require.True(t, (&compiledIncludePred{kind: incIsNull}).test(nil, true))
 	require.False(t, (&compiledIncludePred{kind: incIsNull}).test([]byte("x"), false))
 	require.True(t, (&compiledIncludePred{kind: incIsNotNull}).test([]byte("x"), false))
+}
+
+// TestIncludePredicateUint64 pins the unsigned path: a uint64 column with values ABOVE
+// MaxInt64 must compare as uint64. The old int64 path wrapped such a stored value to
+// negative (and saturated the operand), silently dropping a matching row.
+func TestIncludePredicateUint64(t *testing.T) {
+	const big = uint64(math.MaxInt64) + 100 // 9223372036854775907, > MaxInt64
+
+	// compile a pk predicate (col=-1) on a T_uint64 pk with a huge operand: unsigned path,
+	// operand parsed into uints (not wrapped/saturated).
+	preds, err := compileIncludePredicates(
+		[]byte(fmt.Sprintf(`[{"col":-1,"op":"=","val":%d}]`, big)), nil, int32(types.T_uint64))
+	require.NoError(t, err)
+	require.Len(t, preds, 1)
+	require.True(t, preds[0].isUnsigned)
+	require.Equal(t, []uint64{big}, preds[0].uints)
+	require.True(t, preds[0].test(big, false)) // exact match (int64 path would miss it)
+	require.False(t, preds[0].test(big-1, false))
+	require.False(t, preds[0].test(uint64(1), false))
+
+	// '>' at the MaxInt64 boundary: big > MaxInt64 must be TRUE (int64 wrap would say false).
+	gt := compiledIncludePred{col: 0, kind: incGt, isUnsigned: true, uints: []uint64{uint64(math.MaxInt64)}}
+	require.True(t, gt.test(big, false))
+	require.False(t, gt.test(uint64(5), false))
+
+	// IN including a huge value.
+	in := compiledIncludePred{col: 0, kind: incIn, isUnsigned: true, uints: []uint64{1, big}}
+	require.True(t, in.test(big, false))
+	require.True(t, in.test(uint64(1), false))
+	require.False(t, in.test(uint64(2), false))
 }
 
 // TestCompileIncludePredicatesErrors: bad op / out-of-range col / bad int literal are rejected.

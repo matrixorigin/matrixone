@@ -17,6 +17,7 @@ package fulltext2
 import (
 	"context"
 	"math"
+	"strings"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/docfilter"
@@ -252,11 +253,14 @@ func (s *Fulltext2Search) fillIncludeResult(rt vectorindex.RuntimeConfig, result
 		return
 	}
 	// Map each requested name to its position in the index's INCLUDE columns (from cfg).
+	// EqualFold to match the streaming path's mapper (fulltext2_search includeOut) — the
+	// requested names come from the plan coldef Attrs and the cfg names from algo_params,
+	// so a case difference between the two sources must not silently NULL the column.
 	pos := make([]int, len(rt.RequestedIncludeColumns))
 	for i, name := range rt.RequestedIncludeColumns {
 		pos[i] = -1
 		for j, c := range s.cfg.IncludeColumns {
-			if c == name {
+			if strings.EqualFold(c, name) {
 				pos[i] = j
 				break
 			}
