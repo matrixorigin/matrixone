@@ -1,0 +1,36 @@
+drop database if exists mysql_compat_batch_error;
+create database mysql_compat_batch_error;
+use mysql_compat_batch_error;
+create table t (id int primary key, note varchar(20));
+insert into t values (1, 'first');
+insert into t values (1, 'duplicate');
+-- @regex("Duplicate entry", true)
+Duplicate entry '1' for key 'PRIMARY'
+insert into t values (3, 'after_error');
+select id, note from t order by id;
+➤ id[4,32,0]  ¦  note[12,-1,0]  𝄀
+1  ¦  first  𝄀
+3  ¦  after_error
+truncate table t;
+start transaction;
+insert into t values (10, 'before_error');
+insert into t values (10, 'duplicate');
+-- @regex("Duplicate entry", true)
+Duplicate entry '10' for key 'PRIMARY'
+insert into t values (11, 'after_error');
+rollback;
+select count(*) from t;
+➤ count(*)[-5,64,0]  𝄀
+0
+start transaction;
+insert into t values (20, 'before_error');
+insert into t values (20, 'duplicate');
+-- @regex("Duplicate entry", true)
+Duplicate entry '20' for key 'PRIMARY'
+insert into t values (21, 'after_error');
+commit;
+select id, note from t order by id;
+➤ id[4,32,0]  ¦  note[12,-1,0]  𝄀
+20  ¦  before_error  𝄀
+21  ¦  after_error
+drop database mysql_compat_batch_error;
