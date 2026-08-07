@@ -123,3 +123,18 @@ func TestCbitmapConstVector(t *testing.T) {
 		return f
 	})
 }
+
+func TestBuildIntegerFilterStaleNullBits(t *testing.T) {
+	mp := mpool.MustNewZero()
+	v := buildIntVec(t, mp, types.T_int64.ToType(), []int64{0, 1, 2, 3, 4, 5, 6, 7, 8, 9}, nil)
+	defer v.Free(mp)
+	v.SetNull(18)
+	require.Equal(t, uint64(10), integerValueCountUpperBound(v))
+
+	payload, err := BuildSorted64Bytes(v)
+	require.NoError(t, err)
+	f, err := NewSorted64Filter(payload)
+	require.NoError(t, err)
+	defer f.Free()
+	require.Equal(t, []uint8{1, 1, 1, 1, 1, 1, 1, 1, 1, 1}, f.TestVector(v, nil))
+}

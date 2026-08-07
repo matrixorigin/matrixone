@@ -82,9 +82,7 @@ func TestBuildMemoryAdmissionAtAllocationSite(t *testing.T) {
 				return buildIntVec(t, mp, types.T_int64.ToType(), []int64{1, 2, 3, 4}, nil)
 			},
 			want: func(v *vector.Vector) int64 {
-				sortedBytes, ok := sorted64BuildPeakUpperBound(v)
-				require.True(t, ok)
-				return max(cbitmapBuildPeakUpperBound(cbitmapBitCap(v)), sortedBytes)
+				return cbitmapBuildPeakUpperBound(4)
 			},
 		},
 		{
@@ -95,7 +93,7 @@ func TestBuildMemoryAdmissionAtAllocationSite(t *testing.T) {
 			want: func(v *vector.Vector) int64 {
 				sortedBytes, ok := sorted64BuildPeakUpperBound(v)
 				require.True(t, ok)
-				return max(cbitmapBuildPeakUpperBound(cbitmapBitCap(v)), sortedBytes)
+				return sortedBytes
 			},
 		},
 		{
@@ -192,7 +190,7 @@ func TestNewMemoryLeaseFollowsLastReader(t *testing.T) {
 	}
 }
 
-func TestNewSorted64NeedsNoOpaqueMemoryAdmission(t *testing.T) {
+func TestNewSorted64ChargesConsumerForPayloadBytes(t *testing.T) {
 	mp := mpool.MustNewZero()
 	v := buildIntVec(t, mp, types.T_int64.ToType(), []int64{0, 1 << 30}, nil)
 	defer v.Free(mp)
@@ -200,10 +198,12 @@ func TestNewSorted64NeedsNoOpaqueMemoryAdmission(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, TagSorted64, payload[0])
 
-	admission := &recordingMemoryAdmission{grant: false}
+	admission := &recordingMemoryAdmission{grant: true}
 	f, err := NewWithMemoryAdmission(payload, admission)
 	require.NoError(t, err)
-	require.Empty(t, admission.acquired)
+	require.Len(t, admission.acquired, 1)
+	require.Equal(t, int64(len(payload)-1), admission.acquired[0],
+		"Sored64 consumer must charge the payload size")
 	f.Free()
 }
 

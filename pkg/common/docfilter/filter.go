@@ -196,12 +196,6 @@ func NewWithMemoryAdmission(
 	}
 }
 
-// buildBloomBytes builds a CBloomFilter over the vector and marshals it (the
-// non-integer-PK fallback).
-func buildBloomBytes(v *vector.Vector) ([]byte, error) {
-	return buildBloomBytesMode(v, false)
-}
-
 func buildTaggedBloomBytes(v *vector.Vector) ([]byte, error) {
 	return buildBloomBytesMode(v, true)
 }

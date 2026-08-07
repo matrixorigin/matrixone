@@ -15,12 +15,19 @@
 package readutil
 
 import (
+	"context"
+	"errors"
+	"sync/atomic"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/stretchr/testify/require"
 )
 
@@ -158,4 +165,95 @@ func TestReaderSetIndexParamIgnoresUnevaluatedLimit(t *testing.T) {
 		require.NotPanics(t, func() { r.SetIndexParam(param) })
 		require.Nil(t, r.orderByLimit)
 	}
+}
+
+type countingReader struct {
+	rows         int
+	emit         int32
+	closeCount   *int32
+	readErrAfter int
+	readErr      error
+	closeErr     error
+}
+
+func (r *countingReader) Read(_ context.Context, _ []string, _ *plan.Expr, _ *mpool.MPool, _ *batch.Batch) (bool, error) {
+	if r.readErr != nil && int(atomic.LoadInt32(&r.emit)) >= r.readErrAfter {
+		return false, r.readErr
+	}
+	atomic.AddInt32(&r.emit, 1)
+	return int(atomic.LoadInt32(&r.emit)) > r.rows, nil
+}
+
+func (r *countingReader) Close() error {
+	atomic.AddInt32(r.closeCount, 1)
+	return r.closeErr
+}
+
+func (r *countingReader) SetOrderBy([]*plan.OrderBySpec)       {}
+func (r *countingReader) GetOrderBy() []*plan.OrderBySpec      { return nil }
+func (r *countingReader) SetIndexParam(*plan.IndexReaderParam) {}
+func (r *countingReader) SetFilterZM(objectio.ZoneMap)         {}
+
+var _ engine.Reader = (*countingReader)(nil)
+
+func TestMergeReaderClosesEachChildOnExhaustion(t *testing.T) {
+	var closed int32
+	c0 := &countingReader{rows: 1, closeCount: &closed}
+	c1 := &countingReader{rows: 2, closeCount: &closed}
+	mr := NewMergeReader([]engine.Reader{c0, c1})
+
+	for i := 0; i < 2; i++ {
+		_, err := mr.Read(context.Background(), nil, nil, nil, nil)
+		require.NoError(t, err)
+	}
+	_, err := mr.Read(context.Background(), nil, nil, nil, nil)
+	require.NoError(t, err)
+	require.Equal(t, int32(1), atomic.LoadInt32(&closed))
+	_, err = mr.Read(context.Background(), nil, nil, nil, nil)
+	require.NoError(t, err)
+	require.Equal(t, int32(2), atomic.LoadInt32(&closed))
+
+	require.NoError(t, mr.Close())
+	require.Equal(t, int32(2), atomic.LoadInt32(&closed))
+}
+
+func TestMergeReaderCloseIsIdempotent(t *testing.T) {
+	var closed int32
+	mr := NewMergeReader([]engine.Reader{
+		&countingReader{rows: 5, closeCount: &closed},
+		&countingReader{rows: 5, closeCount: &closed},
+	})
+
+	require.NoError(t, mr.Close())
+	require.NoError(t, mr.Close())
+	require.Equal(t, int32(2), atomic.LoadInt32(&closed))
+}
+
+func TestMergeReaderReadErrorClosesRemainingChildren(t *testing.T) {
+	var closed int32
+	readErr := errors.New("read failure")
+	c0 := &countingReader{rows: 1, closeCount: &closed}
+	c1 := &countingReader{readErr: readErr, closeCount: &closed}
+	mr := NewMergeReader([]engine.Reader{c0, c1})
+
+	_, err := mr.Read(context.Background(), nil, nil, nil, nil)
+	require.NoError(t, err)
+	_, err = mr.Read(context.Background(), nil, nil, nil, nil)
+	require.ErrorIs(t, err, readErr)
+	require.Equal(t, int32(2), atomic.LoadInt32(&closed))
+	require.NoError(t, mr.Close())
+	require.Equal(t, int32(2), atomic.LoadInt32(&closed))
+}
+
+func TestMergeReaderReturnsCloseErrorAndDoesNotRetry(t *testing.T) {
+	var closed int32
+	closeErr := errors.New("close failure")
+	mr := NewMergeReader([]engine.Reader{
+		&countingReader{rows: 5, closeCount: &closed, closeErr: closeErr},
+	})
+
+	err := mr.Close()
+	require.ErrorIs(t, err, closeErr)
+	require.NoError(t, mr.Close())
+	require.Equal(t, int32(1), atomic.LoadInt32(&closed))
 }

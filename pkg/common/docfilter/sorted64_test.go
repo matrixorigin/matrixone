@@ -85,6 +85,28 @@ func TestSorted64ConstVector(t *testing.T) {
 	})
 }
 
+func TestSorted64TestVectorZeroLengthNonNullConst(t *testing.T) {
+	mp := mpool.MustNewZero()
+	typ := types.T_int64.ToType()
+	source, err := vector.NewConstFixed[int64](typ, 77, 1, mp)
+	require.NoError(t, err)
+	defer source.Free(mp)
+	source.SetLength(0)
+
+	payload, err := BuildSorted64Bytes(source)
+	require.NoError(t, err)
+	filter, err := NewSorted64Filter(payload)
+	require.NoError(t, err)
+	defer filter.Free()
+
+	probe, err := vector.NewConstFixed[int64](typ, 77, 2, mp)
+	require.NoError(t, err)
+	defer probe.Free(mp)
+	require.NotPanics(t, func() {
+		require.Equal(t, []uint8{0, 0}, filter.TestVector(probe, nil))
+	})
+}
+
 func TestSorted64RejectsNonCanonicalPayload(t *testing.T) {
 	encode := func(values ...uint64) []byte {
 		data := make([]byte, 8+len(values)*8)

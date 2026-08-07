@@ -17,6 +17,7 @@ package readutil
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -358,7 +359,15 @@ func (r *mergeReader) SetIndexParam(param *plan.IndexReaderParam) {
 }
 
 func (r *mergeReader) Close() error {
-	return nil
+	readers := r.rds
+	r.rds = nil
+	var firstErr error
+	for _, rd := range readers {
+		if err := rd.Close(); err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	return firstErr
 }
 
 func (r *mergeReader) Read(
@@ -379,13 +388,14 @@ func (r *mergeReader) Read(
 	for len(r.rds) > 0 {
 		isEnd, err := r.rds[0].Read(ctx, cols, expr, mp, outBatch)
 		if err != nil {
-			for _, rd := range r.rds {
-				rd.Close()
-			}
-			return false, err
+			return false, errors.Join(err, r.Close())
 		}
 		if isEnd {
+			child := r.rds[0]
 			r.rds = r.rds[1:]
+			if closeErr := child.Close(); closeErr != nil {
+				return false, errors.Join(closeErr, r.Close())
+			}
 		} else {
 			if logutil.GetSkip1Logger().Core().Enabled(zap.DebugLevel) {
 				logutil.Debug("merge reader catch batch")

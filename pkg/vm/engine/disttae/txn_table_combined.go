@@ -168,6 +168,7 @@ func (t *combinedTxnTable) BuildReaders(
 				filterHint,
 			)
 			if err != nil {
+				closeReaders(readers)
 				return nil, err
 			}
 			readers = append(readers, r...)
@@ -190,11 +191,18 @@ func (t *combinedTxnTable) BuildReaders(
 			filterHint,
 		)
 		if err != nil {
+			closeReaders(readers)
 			return nil, err
 		}
 		readers = append(readers, r...)
 	}
 	return ensureReaders(readers, num), nil
+}
+
+func closeReaders(readers []engine.Reader) {
+	for _, rd := range readers {
+		rd.Close()
+	}
 }
 
 func ensureReaders(readers []engine.Reader, num int) []engine.Reader {

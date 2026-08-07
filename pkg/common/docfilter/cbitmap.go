@@ -155,6 +155,11 @@ func buildTaggedCbitmapBytes(v *vector.Vector) (data []byte, ok bool, err error)
 // integerValueCountUpperBound is exact except for duplicates, which only make
 // the bound conservative. Constant vectors have one physical value regardless
 // of their logical row count.
+//
+// The count is derived by scanning only [0, v.Length()) so stale null bits that
+// SetLength preserves beyond the logical length cannot shrink the estimate and
+// cause BuildSorted64Bytes (or any other downstream allocation sized from this
+// bound) to under-allocate and panic.
 func integerValueCountUpperBound(v *vector.Vector) uint64 {
 	if v == nil || v.Length() == 0 || v.IsConstNull() {
 		return 0
@@ -162,11 +167,16 @@ func integerValueCountUpperBound(v *vector.Vector) uint64 {
 	if v.IsConst() {
 		return 1
 	}
-	return uint64(v.Length() - v.GetNulls().Count())
+	length := uint64(v.Length())
+	nullCount := v.GetNulls().GetBitmap().CountRange(0, length)
+	return uint64(v.Length() - nullCount)
 }
 
 func cbitmapBitCap(v *vector.Vector) uint64 {
-	count := integerValueCountUpperBound(v)
+	return cbitmapBitCapForCount(integerValueCountUpperBound(v))
+}
+
+func cbitmapBitCapForCount(count uint64) uint64 {
 	// Sorted64 needs one uint64 header plus one uint64 per value; cbitmap needs
 	// two header words plus its bitmap words. Select dense only when its
 	// serialized representation is no larger than Sorted64.
@@ -177,6 +187,41 @@ func cbitmapBitCap(v *vector.Vector) uint64 {
 		return MaxCbitmapBits
 	}
 	return min(MaxCbitmapBits, (count-1)*64)
+}
+
+type integerRange struct {
+	min   uint64
+	max   uint64
+	count uint64
+}
+
+func integerValueRange(v *vector.Vector) (integerRange, bool) {
+	if v == nil || !SupportsBitset(*v.GetType()) {
+		return integerRange{}, false
+	}
+	physicalRows := v.Length()
+	if v.IsConst() {
+		if v.IsConstNull() || physicalRows == 0 {
+			physicalRows = 0
+		} else {
+			physicalRows = 1
+		}
+	}
+	var result integerRange
+	for i := 0; i < physicalRows; i++ {
+		if v.IsNull(uint64(i)) {
+			continue
+		}
+		value := rawIntToUint64(v.GetRawBytesAt(i))
+		if result.count == 0 {
+			result.min, result.max = value, value
+		} else {
+			result.min = min(result.min, value)
+			result.max = max(result.max, value)
+		}
+		result.count++
+	}
+	return result, true
 }
 
 // buildCbitmapBytesCap is BuildCbitmapBytes with an explicit bit cap and offset

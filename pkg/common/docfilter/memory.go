@@ -110,7 +110,10 @@ func cbitmapBuildPeakUpperBound(maxBits uint64) int64 {
 }
 
 func sorted64BuildPeakUpperBound(v *vector.Vector) (int64, bool) {
-	count := integerValueCountUpperBound(v)
+	return sorted64BuildPeakUpperBoundForCount(integerValueCountUpperBound(v))
+}
+
+func sorted64BuildPeakUpperBoundForCount(count uint64) (int64, bool) {
 	// Tagged construction uses one aligned scratch word before the canonical
 	// [count][values] payload and shifts left in the same allocation.
 	if count > uint64((math.MaxInt64/8)-2) {
@@ -124,18 +127,27 @@ func buildAllocationBytes(v *vector.Vector) (int64, bool) {
 		return 0, false
 	}
 	if SupportsBitset(*v.GetType()) {
-		sortedBytes, ok := sorted64BuildPeakUpperBound(v)
+		valueRange, ok := integerValueRange(v)
 		if !ok {
 			return 0, false
 		}
-		bitCap := cbitmapBitCap(v)
-		if bitCap == 0 {
+		sortedBytes, ok := sorted64BuildPeakUpperBoundForCount(valueRange.count)
+		if !ok {
+			return 0, false
+		}
+		bitCap := cbitmapBitCapForCount(valueRange.count)
+		if bitCap == 0 || valueRange.count == 0 {
 			return sortedBytes, true
 		}
-		// Routing depends on the value span, which the C builder discovers before
-		// allocating. Reserve the larger possible peak so both the dense and
-		// sparse branch are protected under a concurrent start.
-		return max(cbitmapBuildPeakUpperBound(bitCap), sortedBytes), true
+		base := uint64(0)
+		if CbitmapUseOffset {
+			base = valueRange.min
+		}
+		span := valueRange.max - base
+		if span >= bitCap {
+			return sortedBytes, true
+		}
+		return cbitmapBuildPeakUpperBound(span + 1), true
 	}
 	cBytes, ok := bloomfilter.EstimateCBloomFilterMemoryBytes(
 		int64(v.Length()), bloomFpProbability)
@@ -150,7 +162,14 @@ func reconstructAllocationBytes(tag byte, payload []byte) (int64, bool) {
 	switch tag {
 	case TagSorted64:
 		// The payload itself is the live filter and remains Go-owned.
-		return 0, true
+		// Charge the consumer CN for the serialized payload size: these
+		// bytes become long-lived reader state and would otherwise
+		// accumulate outside the throttler across many concurrent remote
+		// sparse filters.
+		if len(payload) > math.MaxInt64-1 {
+			return 0, false
+		}
+		return int64(len(payload)), true
 	case TagCbitmap:
 		// Serialized header is two uint64s; the live C object header is three.
 		if len(payload) > math.MaxInt64-8 {

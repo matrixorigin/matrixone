@@ -74,9 +74,13 @@ func vecFixedArgs(v *vector.Vector) (data unsafe.Pointer, dataLen C.size_t, elem
 		dataLen = C.size_t(len(fixed))
 	}
 	// A non-null constant has no per-row nulls; a const-null produces no physical element.
+	// Only report the nullmap bytes actually needed for the logical nitem — the
+	// underlying bitmap may be larger (vector.SetLength preserves bits beyond the
+	// logical length), but C callers iterate [0, nitem) and should never read past
+	// the logical range.
 	if nb := v.GetNulls().GetBitmap(); nb != nil && !isConst {
 		nullPtr = unsafe.Pointer(nb.Ptr())
-		nullLen = C.size_t(nb.Size())
+		nullLen = C.size_t((uint64(nitem) + 7) / 8)
 	}
 	return
 }
@@ -85,8 +89,16 @@ func vecFixedArgs(v *vector.Vector) (data unsafe.Pointer, dataLen C.size_t, elem
 // For a CONSTANT vector only res[0] was filled by C (one physical element), so it is broadcast
 // to every row (const-null stays all-zero, every row NULL). For a regular vector res is already
 // per-row (#25621).
+//
+// A zero-length vector is safe to return immediately: both callers (CbitmapFilter.TestVector,
+// CRoaringFilter.TestVector) already return early for length==0, but this guard makes the
+// function self-sufficient so a future caller that skips that check cannot panic on res[0]
+// for a zero-length non-null constant.
 func finalizeVecResults(v *vector.Vector, res []uint8, cb func(bool, bool, int)) {
 	length := v.Length()
+	if length == 0 {
+		return
+	}
 	if v.IsConst() {
 		r := uint8(0)
 		if !v.IsConstNull() {

@@ -1243,7 +1243,8 @@ type Engine interface {
 		expr *plan.Expr,
 		def *plan.TableDef,
 		relData RelData,
-		num int) ([]Reader, error)
+		num int,
+		filterHint ...FilterHint) ([]Reader, error)
 
 	// Get database name & table name by table id
 	GetNameById(ctx context.Context, op client.TxnOperator, tableId uint64) (dbName string, tblName string, err error)
