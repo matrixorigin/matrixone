@@ -72,6 +72,124 @@ func TestHasInnerColumnInDeepCorrelatedFilters(t *testing.T) {
 	}))
 }
 
+func TestFlattenOuterJoinConditionSubqueriesList(t *testing.T) {
+	builder := &QueryBuilder{}
+	expr := &plan.Expr{
+		Expr: &plan.Expr_List{List: &plan.ExprList{List: []*plan.Expr{
+			makePlan2Int64ConstExprWithType(1),
+		}}},
+	}
+
+	leftID, rightID, rewritten, err := builder.flattenOuterJoinConditionSubqueries(
+		1, 2, expr, nil, nil, nil, nil, JoinSideLeft, true)
+	require.NoError(t, err)
+	require.Equal(t, int32(1), leftID)
+	require.Equal(t, int32(2), rightID)
+	require.Same(t, expr, rewritten)
+}
+
+func TestOuterJoinExprInputSide(t *testing.T) {
+	const (
+		leftTag  int32 = 10
+		rightTag int32 = 20
+	)
+	leftTags := map[int32]bool{leftTag: true}
+	rightTags := map[int32]bool{rightTag: true}
+	corrExpr := func(tag, depth int32) *plan.Expr {
+		return &plan.Expr{Expr: &plan.Expr_Corr{Corr: &plan.CorrColRef{
+			RelPos: tag,
+			Depth:  depth,
+		}}}
+	}
+
+	expr := &plan.Expr{Expr: &plan.Expr_F{F: &plan.Function{Args: []*plan.Expr{
+		{Expr: &plan.Expr_Lit{Lit: &plan.Literal{Src: corrExpr(leftTag, 1)}}},
+		{Expr: &plan.Expr_List{List: &plan.ExprList{List: []*plan.Expr{corrExpr(rightTag, 1)}}}},
+		{Expr: &plan.Expr_Sub{Sub: &plan.SubqueryRef{Child: corrExpr(leftTag, 1)}}},
+		{Expr: &plan.Expr_W{W: &plan.WindowSpec{
+			WindowFunc:  corrExpr(leftTag, 1),
+			PartitionBy: []*plan.Expr{corrExpr(rightTag, 1)},
+			OrderBy:     []*plan.OrderBySpec{{Expr: corrExpr(leftTag, 1)}},
+			Frame: &plan.FrameClause{
+				Start: &plan.FrameBound{Val: corrExpr(rightTag, 1)},
+				End:   &plan.FrameBound{Val: corrExpr(leftTag, 1)},
+			},
+		}}},
+	}}}}
+
+	require.Equal(t, int8(JoinSideBoth), outerJoinExprInputSide(expr, leftTags, rightTags, true))
+	require.Equal(t, int8(JoinSideNone), outerJoinExprInputSide(nil, leftTags, rightTags, true))
+	require.Equal(t, int8(JoinSideNone), outerJoinExprInputSide(
+		newFlattenSubqueryTestColExpr(leftTag), leftTags, rightTags, false))
+	require.Equal(t, int8(JoinSideLeft), outerJoinExprInputSide(
+		newFlattenSubqueryTestColExpr(leftTag), leftTags, rightTags, true))
+	require.Equal(t, int8(JoinSideOuter), outerJoinExprInputSide(
+		corrExpr(leftTag, 2), leftTags, rightTags, true))
+	require.Equal(t, int8(JoinSideBoth), outerJoinTagInputSide(999, leftTags, rightTags))
+}
+
+func TestOuterJoinSubqueryInputSidePlanFields(t *testing.T) {
+	const (
+		leftTag  int32 = 10
+		rightTag int32 = 20
+	)
+	leftTags := map[int32]bool{leftTag: true}
+	rightTags := map[int32]bool{rightTag: true}
+	corrExpr := func(tag int32) *plan.Expr {
+		return &plan.Expr{Expr: &plan.Expr_Corr{Corr: &plan.CorrColRef{
+			RelPos: tag,
+			Depth:  1,
+		}}}
+	}
+
+	leftExpr := corrExpr(leftTag)
+	rightExpr := corrExpr(rightTag)
+	builder := &QueryBuilder{qry: &plan.Query{Nodes: []*plan.Node{
+		{
+			Limit:                 leftExpr,
+			Offset:                leftExpr,
+			Interval:              leftExpr,
+			Sliding:               leftExpr,
+			Timestamp:             leftExpr,
+			WEnd:                  leftExpr,
+			OnList:                []*plan.Expr{leftExpr},
+			FilterList:            []*plan.Expr{leftExpr},
+			ProjectList:           []*plan.Expr{leftExpr},
+			GroupBy:               []*plan.Expr{leftExpr},
+			AggList:               []*plan.Expr{leftExpr},
+			WinSpecList:           []*plan.Expr{leftExpr},
+			TblFuncExprList:       []*plan.Expr{leftExpr},
+			BlockFilterList:       []*plan.Expr{leftExpr},
+			FillVal:               []*plan.Expr{leftExpr},
+			OnUpdateExprs:         []*plan.Expr{leftExpr},
+			TimeWindowPartitionBy: []*plan.Expr{leftExpr},
+		},
+		{
+			Children: []int32{0, 0},
+			OrderBy:  []*plan.OrderBySpec{{Expr: rightExpr}},
+			IndexReaderParam: &plan.IndexReaderParam{
+				Limit:   leftExpr,
+				OrderBy: []*plan.OrderBySpec{{Expr: rightExpr}},
+				DistRange: &plan.DistRange{
+					LowerBound: leftExpr,
+					UpperBound: rightExpr,
+				},
+			},
+		},
+	}}}
+
+	subquery := &plan.SubqueryRef{
+		NodeId: 1,
+		Child:  newFlattenSubqueryTestColExpr(leftTag),
+	}
+	require.Equal(t, int8(JoinSideBoth),
+		builder.outerJoinSubqueryInputSide(subquery, leftTags, rightTags))
+	require.Equal(t, int8(JoinSideBoth),
+		builder.outerJoinSubqueryInputSide(nil, leftTags, rightTags))
+	require.Equal(t, int8(JoinSideBoth),
+		builder.outerJoinSubqueryInputSide(&plan.SubqueryRef{NodeId: 99}, leftTags, rightTags))
+}
+
 func TestScalarAggregatePlanSupportsDeepCorrelation(t *testing.T) {
 	const (
 		groupTag     int32 = 10
