@@ -19,8 +19,9 @@ import "golang.org/x/sys/cpu"
 type ShardedAllocator[T Allocator] []allocatorShard[T]
 
 type allocatorShard[T Allocator] struct {
-	Allocator T
-	_         cpu.CacheLinePad
+	Allocator        T
+	backingSizeCache *shardedBackingSizeCache
+	_                cpu.CacheLinePad
 }
 
 func NewShardedAllocator[T Allocator](
@@ -28,9 +29,11 @@ func NewShardedAllocator[T Allocator](
 	newShard func() T,
 ) ShardedAllocator[T] {
 	var ret ShardedAllocator[T]
+	backingSizeCache := new(shardedBackingSizeCache)
 	for i := 0; i < numShards; i++ {
 		ret = append(ret, allocatorShard[T]{
-			Allocator: newShard(),
+			Allocator:        newShard(),
+			backingSizeCache: backingSizeCache,
 		})
 	}
 	return ret

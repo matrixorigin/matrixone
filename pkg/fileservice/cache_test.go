@@ -80,6 +80,22 @@ func Test_readCache(t *testing.T) {
 	assert.Error(t, err)
 }
 
+func benchmarkFileServiceAllocateCacheData(
+	b *testing.B,
+	allocate func(context.Context, int) fscache.Data,
+) {
+	b.Helper()
+	ctx := context.Background()
+	b.ReportAllocs()
+	b.ResetTimer()
+	b.RunParallel(func(pb *testing.PB) {
+		for pb.Next() {
+			data := allocate(ctx, 42)
+			data.Release()
+		}
+	})
+}
+
 var _ IOVectorCache = (*testCache)(nil)
 
 type testCache struct {

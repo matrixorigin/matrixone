@@ -1738,13 +1738,7 @@ func BenchmarkS3FSAllocateCacheData(b *testing.B) {
 	assert.Nil(b, err)
 	defer fs.Close(ctx)
 
-	b.ResetTimer()
-	b.RunParallel(func(pb *testing.PB) {
-		for pb.Next() {
-			data := fs.AllocateCacheData(ctx, 42)
-			data.Release()
-		}
-	})
+	benchmarkFileServiceAllocateCacheData(b, fs.AllocateCacheData)
 }
 
 func TestS3FSFromSpecs(t *testing.T) {

@@ -178,6 +178,21 @@ func BenchmarkLocalFS(b *testing.B) {
 	})
 }
 
+func BenchmarkLocalFSAllocateCacheData(b *testing.B) {
+	ctx := context.Background()
+	fs, err := NewLocalFS(
+		ctx,
+		"local",
+		b.TempDir(),
+		CacheConfig{MemoryCapacity: ptrTo[toml.ByteSize](128 * 1024)},
+		nil,
+	)
+	assert.NoError(b, err)
+	b.Cleanup(func() { fs.Close(ctx) })
+
+	benchmarkFileServiceAllocateCacheData(b, fs.AllocateCacheData)
+}
+
 func TestLocalFSWithDiskCache(t *testing.T) {
 	ctx := context.Background()
 	var counter perfcounter.CounterSet

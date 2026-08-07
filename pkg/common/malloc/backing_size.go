@@ -14,7 +14,11 @@
 
 package malloc
 
-import "github.com/matrixorigin/matrixone/pkg/common/moerr"
+import (
+	"sync/atomic"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+)
 
 // BackingSizer reports the number of bytes an allocator reserves for a
 // requested allocation. Cache admission must use this value before allocating,
@@ -69,6 +73,13 @@ func (s ShardedAllocator[T]) BackingSize(size uint64) (uint64, error) {
 	if len(s) == 0 {
 		return 0, moerr.NewInternalErrorNoCtx("backing size requested from empty sharded allocator")
 	}
+	if cache := s[0].backingSizeCache; cache != nil {
+		return cache.resolve(size, s.validateBackingSize)
+	}
+	return s.validateBackingSize(size)
+}
+
+func (s ShardedAllocator[T]) validateBackingSize(size uint64) (uint64, error) {
 	backingSize, err := BackingSize(s[0].Allocator, size)
 	if err != nil {
 		return 0, err
@@ -88,6 +99,46 @@ func (s ShardedAllocator[T]) BackingSize(size uint64) (uint64, error) {
 		}
 	}
 	return backingSize, nil
+}
+
+const (
+	shardedBackingSizeCacheSlots    = 1 << 8
+	shardedBackingSizeCacheSlotBits = 8
+)
+
+// shardedBackingSizeCache holds a bounded, lock-free cache of validated shard
+// contracts. A miss validates every shard before publishing its result; a hit
+// predicts in O(1). The bounded table prevents arbitrary allocation requests
+// from becoming permanently retained cache metadata.
+type shardedBackingSizeCache struct {
+	entries [shardedBackingSizeCacheSlots]atomic.Pointer[shardedBackingSizeEntry]
+}
+
+type shardedBackingSizeEntry struct {
+	requestSize uint64
+	backingSize uint64
+	err         error
+}
+
+func (c *shardedBackingSizeCache) resolve(
+	size uint64,
+	validate func(uint64) (uint64, error),
+) (uint64, error) {
+	slot := shardedBackingSizeCacheSlot(size)
+	if entry := c.entries[slot].Load(); entry != nil && entry.requestSize == size {
+		return entry.backingSize, entry.err
+	}
+	backingSize, err := validate(size)
+	c.entries[slot].Store(&shardedBackingSizeEntry{
+		requestSize: size,
+		backingSize: backingSize,
+		err:         err,
+	})
+	return backingSize, err
+}
+
+func shardedBackingSizeCacheSlot(size uint64) uint64 {
+	return (size * 11400714819323198485) >> (64 - shardedBackingSizeCacheSlotBits)
 }
 
 func (m *MetricsAllocator[U]) BackingSize(size uint64) (uint64, error) {

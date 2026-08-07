@@ -15,6 +15,7 @@
 package malloc
 
 import (
+	"sync/atomic"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -54,6 +55,20 @@ func TestBackingSizeRejectsAllocatorWithoutCapacityContract(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected allocator without BackingSizer to be rejected")
 	}
+}
+
+type countingBackingSizeAllocator struct {
+	backingSize uint64
+	calls       atomic.Int32
+}
+
+func (*countingBackingSizeAllocator) Allocate(uint64, Hints) ([]byte, Deallocator, error) {
+	return nil, nil, nil
+}
+
+func (c *countingBackingSizeAllocator) BackingSize(uint64) (uint64, error) {
+	c.calls.Add(1)
+	return c.backingSize, nil
 }
 
 func TestBackingSizePropagatesThroughDecorators(t *testing.T) {
@@ -112,4 +127,28 @@ func TestBackingSizeRejectsInconsistentContracts(t *testing.T) {
 	})
 	_, err = BackingSize(inconsistentShards, 3)
 	require.Error(t, err)
+}
+
+func TestShardedBackingSizeCachesValidatedRequest(t *testing.T) {
+	var allocators []*countingBackingSizeAllocator
+	allocator := NewShardedAllocator(2, func() *countingBackingSizeAllocator {
+		ret := &countingBackingSizeAllocator{backingSize: 4}
+		allocators = append(allocators, ret)
+		return ret
+	})
+
+	for range 20 {
+		backingSize, err := BackingSize(allocator, 3)
+		require.NoError(t, err)
+		require.Equal(t, uint64(4), backingSize)
+	}
+	for _, shard := range allocators {
+		require.Equal(t, int32(1), shard.calls.Load())
+	}
+
+	_, err := BackingSize(allocator, 4)
+	require.NoError(t, err)
+	for _, shard := range allocators {
+		require.Equal(t, int32(2), shard.calls.Load())
+	}
 }
