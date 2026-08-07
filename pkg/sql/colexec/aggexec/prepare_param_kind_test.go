@@ -55,6 +55,21 @@ func TestAggPrepareParamKindLifecycle(t *testing.T) {
 
 	expr.ResetPrepareParamKind()
 	require.Equal(t, vector.PrepareParamNone, expr.GetPrepareParamKind())
+	kind, seen := expr.GetPrepareParamKindState()
+	require.Equal(t, vector.PrepareParamNone, kind)
+	require.False(t, seen)
+
+	expr.ObservePrepareParamKindState(vector.PrepareParamFloat, false)
+	kind, seen = expr.GetPrepareParamKindState()
+	require.Equal(t, vector.PrepareParamNone, kind)
+	require.False(t, seen)
+
+	expr.ObservePrepareParamKindState(vector.PrepareParamNone, true)
+	kind, seen = expr.GetPrepareParamKindState()
+	require.Equal(t, vector.PrepareParamNone, kind)
+	require.True(t, seen)
+
+	expr.ResetPrepareParamKind()
 	expr.ObservePrepareParamKind(vector.PrepareParamInteger)
 	require.Equal(t, vector.PrepareParamInteger, expr.GetPrepareParamKind())
 }

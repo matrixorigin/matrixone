@@ -108,6 +108,23 @@ func (ag *AggFuncExecExpression) ObservePrepareParamKind(kind vector.PreparePara
 	}
 }
 
+func (ag *AggFuncExecExpression) ObservePrepareParamKindState(
+	kind vector.PrepareParamKind,
+	seen bool,
+) {
+	if !seen {
+		return
+	}
+	ag.ObservePrepareParamKind(kind)
+}
+
+func (ag *AggFuncExecExpression) GetPrepareParamKindState() (
+	vector.PrepareParamKind,
+	bool,
+) {
+	return ag.prepareParamKind, ag.prepareParamKindSeen
+}
+
 func (ag *AggFuncExecExpression) GetPrepareParamKind() vector.PrepareParamKind {
 	if !ag.prepareParamKindSeen {
 		return vector.PrepareParamNone
