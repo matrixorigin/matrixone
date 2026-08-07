@@ -96,6 +96,28 @@ func TestCommandDeliveryTargetsReadyFiltersExpiredStores(t *testing.T) {
 	require.False(t, store.commandDeliveryTargetsReady(delivery, state))
 }
 
+func TestCommandDeliveryLogStoresReadyFiltersExpiredStores(t *testing.T) {
+	store := &store{cfg: DefaultConfig()}
+	store.cfg.HAKeeperConfig.TickPerSecond = 1
+	store.cfg.HAKeeperConfig.LogStoreTimeout = toml.Duration{Duration: 10 * time.Second}
+	state := &pb.CheckerState{
+		Tick: 20,
+		LogState: pb.LogState{Stores: map[string]pb.LogStoreInfo{
+			"log-live": {
+				Tick:                     20,
+				CommandDeliverySupported: true,
+			},
+			"log-dead": {Tick: 1},
+		}},
+	}
+
+	require.True(t, store.commandDeliveryLogStoresReady(state))
+	live := state.LogState.Stores["log-live"]
+	live.CommandDeliverySupported = false
+	state.LogState.Stores["log-live"] = live
+	require.False(t, store.commandDeliveryLogStoresReady(state))
+}
+
 func TestRaftConfig(t *testing.T) {
 	cfg := getRaftConfig(1, 1)
 	assert.True(t, cfg.CheckQuorum)

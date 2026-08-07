@@ -572,9 +572,19 @@ func TestServiceCommandDeliveryActivationWaitsForServiceCapabilities(t *testing.
 				LogHeartbeat: &logHeartbeat,
 			})
 		}
+		sendLegacyLogHeartbeat := func(supported bool) pb.Response {
+			return s.handleLogHeartbeat(ctx, pb.Request{
+				Method: pb.LOG_HEARTBEAT,
+				LogHeartbeat: &pb.LogStoreHeartbeat{
+					UUID:                     "legacy-log",
+					CommandDeliverySupported: supported,
+				},
+			})
+		}
 
 		require.Equal(t, uint32(moerr.Ok), sendCNHeartbeat(false).ErrorCode)
 		require.Equal(t, uint32(moerr.Ok), sendTNHeartbeat(false).ErrorCode)
+		require.Equal(t, uint32(moerr.Ok), sendLegacyLogHeartbeat(false).ErrorCode)
 		// HAKeeper/logservice may already be upgraded, but activation cannot
 		// begin while a current command target still advertises the old protocol.
 		require.False(t, advanceCommandDelivery(t, ctx, s))
@@ -585,6 +595,15 @@ func TestServiceCommandDeliveryActivationWaitsForServiceCapabilities(t *testing.
 		require.Equal(t, uint32(moerr.Ok), sendCNHeartbeat(true).ErrorCode)
 		require.Equal(t, uint32(moerr.Ok), sendTNHeartbeat(true).ErrorCode)
 		require.False(t, advanceCommandDelivery(t, ctx, s))
+		delivery, err := s.store.getCommandDeliveryState(ctx)
+		require.NoError(t, err)
+		require.False(t, delivery.Preparing,
+			"a live legacy LogStore remains eligible for HAKeeper admission")
+		require.Equal(t, uint32(moerr.Ok), sendLegacyLogHeartbeat(true).ErrorCode)
+		require.False(t, advanceCommandDelivery(t, ctx, s))
+		delivery, err = s.store.getCommandDeliveryState(ctx)
+		require.NoError(t, err)
+		require.True(t, delivery.Preparing)
 		phaseOne := sendLogHeartbeat()
 		require.Equal(t, uint32(moerr.Ok), phaseOne.ErrorCode)
 		require.False(t, s.store.commandDeliveryEnabled.Load())
@@ -597,6 +616,59 @@ func TestServiceCommandDeliveryActivationWaitsForServiceCapabilities(t *testing.
 		phaseTwo := sendLogHeartbeat()
 		require.Equal(t, uint32(moerr.Ok), phaseTwo.ErrorCode)
 		require.True(t, s.store.commandDeliveryEnabled.Load())
+	}
+	runServiceTest(t, true, true, fn)
+}
+
+func TestServiceCommandDeliveryActivationWaitsForPendingHAKeeperAdmission(t *testing.T) {
+	fn := func(t *testing.T, s *Service) {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+
+		heartbeat := func(uuid string, supported bool) pb.Response {
+			message := pb.LogStoreHeartbeat{
+				UUID:                     uuid,
+				CommandDeliverySupported: supported,
+			}
+			if uuid == s.store.id() {
+				message = s.store.getHeartbeatMessage()
+			}
+			return s.handleLogHeartbeat(ctx, pb.Request{
+				Method:       pb.LOG_HEARTBEAT,
+				LogHeartbeat: &message,
+			})
+		}
+
+		require.Equal(t, uint32(moerr.Ok), heartbeat(s.store.id(), true).ErrorCode)
+		require.Equal(t, uint32(moerr.Ok), heartbeat("legacy", false).ErrorCode)
+		command := pb.ScheduleCommand{
+			UUID:        s.store.id(),
+			ServiceType: pb.LogService,
+			ConfigChange: &pb.ConfigChange{
+				ChangeType: pb.AddReplica,
+				Replica: pb.Replica{
+					UUID:    "legacy",
+					ShardID: hapkg.DefaultHAKeeperShardID,
+				},
+			},
+		}
+		require.NoError(t, s.store.addScheduleCommands(ctx, 1, []pb.ScheduleCommand{command}))
+
+		// The leader-side read prevents even proposing an update tag that the
+		// pending legacy member could later replay.
+		require.False(t, advanceCommandDelivery(t, ctx, s))
+		delivery, err := s.store.getCommandDeliveryState(ctx)
+		require.NoError(t, err)
+		require.False(t, delivery.Preparing)
+
+		require.Equal(t, uint32(moerr.Ok), heartbeat("legacy", true).ErrorCode)
+		response := heartbeat(s.store.id(), true)
+		require.Equal(t, uint32(moerr.Ok), response.ErrorCode)
+		require.Equal(t, []pb.ScheduleCommand{command}, response.CommandBatch.Commands)
+		require.False(t, advanceCommandDelivery(t, ctx, s))
+		delivery, err = s.store.getCommandDeliveryState(ctx)
+		require.NoError(t, err)
+		require.True(t, delivery.Preparing)
 	}
 	runServiceTest(t, true, true, fn)
 }

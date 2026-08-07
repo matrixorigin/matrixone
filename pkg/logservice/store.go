@@ -888,6 +888,18 @@ func (l *store) commandDeliveryTargetsReady(
 	return true
 }
 
+func (l *store) commandDeliveryLogStoresReady(state *pb.CheckerState) bool {
+	cfg := l.cfg.GetHAKeeperConfig()
+	cfg.Fill()
+	for _, info := range state.LogState.Stores {
+		if !cfg.LogStoreExpired(info.Tick, state.Tick) &&
+			!info.CommandDeliverySupported {
+			return false
+		}
+	}
+	return true
+}
+
 func (l *store) tryEnableCommandDelivery(
 	ctx context.Context,
 	state *pb.CheckerState,
@@ -904,11 +916,12 @@ func (l *store) tryEnableCommandDelivery(
 		return true, nil
 	}
 	// Phase one is proposed only after the leader has observed support from
-	// every current HAKeeper voter/non-voter and every current CN/TN command
-	// target. An old replica cannot decode the new update tag, and an old
-	// service would otherwise consume a command destructively. The committed
-	// phase-one barrier then discards these possibly divergent pre-upgrade
-	// observations on every replica.
+	// every current HAKeeper voter/non-voter, every live LogStore that can be
+	// admitted, and every current CN/TN command target, and only after all earlier
+	// HAKeeper admissions have completed. An old replica cannot decode the new
+	// update tag, and an old service would otherwise consume a command
+	// destructively. The committed phase-one barrier then discards these possibly
+	// divergent pre-upgrade observations on every replica.
 	if state == nil {
 		state, err = l.getCheckerStateWithContext(ctx)
 		if err != nil {
@@ -921,6 +934,8 @@ func (l *store) tryEnableCommandDelivery(
 	}
 	resetServiceBarrier := delivery.Preparing &&
 		(delivery.Ready == nil || delivery.CNReady == nil || delivery.TNReady == nil)
+	cfg := l.cfg.GetHAKeeperConfig()
+	cfg.Fill()
 	allMembers := func(replicas map[uint64]string, predicate func(string) bool) bool {
 		for _, uuid := range replicas {
 			if !predicate(uuid) {
@@ -939,13 +954,17 @@ func (l *store) tryEnableCommandDelivery(
 	if !allMembers(shard.Replicas, ready) || !allMembers(shard.NonVotingReplicas, ready) {
 		return false, nil
 	}
+	if !delivery.Preparing && !delivery.HAKeeperAdmissionReady {
+		return false, nil
+	}
 	if delivery.Preparing && !resetServiceBarrier {
 		if !l.commandDeliveryTargetsReady(delivery, state) {
 			return false, nil
 		}
 	} else {
-		cfg := l.cfg.GetHAKeeperConfig()
-		cfg.Fill()
+		if !l.commandDeliveryLogStoresReady(state) {
+			return false, nil
+		}
 		for _, info := range state.CNState.Stores {
 			if !cfg.CNStoreExpired(info.Tick, state.Tick) && !info.CommandDeliveryAckSupported {
 				return false, nil

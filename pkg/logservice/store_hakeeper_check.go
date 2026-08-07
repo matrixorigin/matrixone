@@ -257,11 +257,26 @@ func (l *store) hakeeperCheck() {
 	if state == nil {
 		return
 	}
-
-	switch state.State {
-	case pb.HAKeeperCreated:
+	if state.State == pb.HAKeeperCreated {
 		l.runtime.Logger().Warn("waiting for initial cluster info to be set, check skipped")
 		return
+	}
+
+	// Establish the replicated protocol barrier before this checker pass can
+	// schedule a command that admits another HAKeeper member. Once preparing,
+	// the RSM retains admission commands until their targets advertise support.
+	ctx, cancel := context.WithTimeoutCause(
+		context.Background(),
+		hakeeperDefaultTimeout,
+		moerr.CauseHealthCheck,
+	)
+	if _, err := l.tryEnableCommandDelivery(ctx, state); err != nil {
+		err = moerr.AttachCause(ctx, err)
+		l.runtime.Logger().Debug("command delivery activation deferred", zap.Error(err))
+	}
+	cancel()
+
+	switch state.State {
 	case pb.HAKeeperBootstrapping:
 		l.bootstrap(term, state)
 	case pb.HAKeeperBootstrapCommandsReceived:
@@ -276,17 +291,6 @@ func (l *store) hakeeperCheck() {
 		l.healthCheck(term, state)
 	default:
 		panic("unknown HAKeeper state")
-	}
-
-	ctx, cancel := context.WithTimeoutCause(
-		context.Background(),
-		hakeeperDefaultTimeout,
-		moerr.CauseHealthCheck,
-	)
-	defer cancel()
-	if _, err := l.tryEnableCommandDelivery(ctx, state); err != nil {
-		err = moerr.AttachCause(ctx, err)
-		l.runtime.Logger().Debug("command delivery activation deferred", zap.Error(err))
 	}
 }
 

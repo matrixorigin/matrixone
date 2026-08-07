@@ -68,11 +68,12 @@ type CommandDeliveryStateQuery struct{}
 type ClusterDetailsQuery struct{ Cfg Config }
 
 type CommandDeliveryState struct {
-	Preparing bool
-	Enabled   bool
-	Ready     map[string]bool
-	CNReady   map[string]bool
-	TNReady   map[string]bool
+	Preparing              bool
+	Enabled                bool
+	HAKeeperAdmissionReady bool
+	Ready                  map[string]bool
+	CNReady                map[string]bool
+	TNReady                map[string]bool
 }
 
 type stateMachine struct {
@@ -788,6 +789,13 @@ func coalescibleReplicaChange(serviceType pb.ServiceType, change *pb.ConfigChang
 }
 
 func (s *stateMachine) getCommandBatch(uuid string) sm.Result {
+	return s.getCommandBatchFiltered(uuid, false)
+}
+
+func (s *stateMachine) getCommandBatchFiltered(
+	uuid string,
+	filterHAKeeperAdmissions bool,
+) sm.Result {
 	if batch, ok := s.state.ScheduleCommands[uuid]; ok {
 		deliver := make([]pb.ScheduleCommand, 0, len(batch.Commands))
 		pending := make([]pb.ScheduleCommand, 0, len(batch.Commands))
@@ -797,6 +805,13 @@ func (s *stateMachine) getCommandBatch(uuid string) sm.Result {
 			pendingIDs = make([]pb.ScheduleCommandID, 0, len(batch.CommandIDs))
 		}
 		for i, cmd := range batch.Commands {
+			if filterHAKeeperAdmissions && !s.logScheduleCommandDeliverable(cmd) {
+				pending = append(pending, cmd)
+				if pendingIDs != nil {
+					pendingIDs = append(pendingIDs, batch.CommandIDs[i])
+				}
+				continue
+			}
 			retryable, applied := s.bootstrapReplicaCommandStatus(cmd)
 			if applied {
 				continue
@@ -832,6 +847,46 @@ func (s *stateMachine) getCommandBatch(uuid string) sm.Result {
 	}
 	return sm.Result{}
 
+}
+
+// hakeeperAdmissionTarget returns the LogStore that a schedule command would
+// admit into the HAKeeper shard. Such a target must understand every entry in
+// that replicated state machine before an existing member is allowed to add it.
+func hakeeperAdmissionTarget(cmd pb.ScheduleCommand) (string, bool) {
+	if cmd.ServiceType != pb.LogService || cmd.ConfigChange == nil ||
+		cmd.ConfigChange.Replica.ShardID != DefaultHAKeeperShardID {
+		return "", false
+	}
+	switch cmd.ConfigChange.ChangeType {
+	case pb.AddReplica, pb.AddNonVotingReplica,
+		pb.StartReplica, pb.StartNonVotingReplica:
+		return cmd.ConfigChange.Replica.UUID, true
+	default:
+		return "", false
+	}
+}
+
+func (s *stateMachine) hasPendingHAKeeperAdmission() bool {
+	for _, batch := range s.state.ScheduleCommands {
+		for _, cmd := range batch.Commands {
+			if _, admission := hakeeperAdmissionTarget(cmd); admission {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func (s *stateMachine) logScheduleCommandDeliverable(cmd pb.ScheduleCommand) bool {
+	if !s.state.CommandDeliveryPreparing && !s.state.CommandDeliveryEnabled {
+		return true
+	}
+	uuid, admission := hakeeperAdmissionTarget(cmd)
+	if !admission {
+		return true
+	}
+	store, ok := s.state.LogState.Stores[uuid]
+	return ok && store.CommandDeliverySupported
 }
 
 // getCommandBatchWithAck implements at-least-once transport. Delivery is a
@@ -993,7 +1048,7 @@ func (s *stateMachine) handleLogHeartbeat(cmd []byte) sm.Result {
 			delete(s.state.CommandDeliveryReady, hb.UUID)
 		}
 	}
-	return s.getCommandBatch(hb.UUID)
+	return s.getCommandBatchFiltered(hb.UUID, true)
 }
 
 func (s *stateMachine) handleTick(cmd []byte) sm.Result {
@@ -1024,13 +1079,18 @@ func (s *stateMachine) handleEnableCommandDelivery(cmd []byte) sm.Result {
 		return sm.Result{Value: 1}
 	}
 	if !s.state.CommandDeliveryPreparing {
+		// Do not place an entry unknown to an old HAKeeper behind a pending
+		// membership command. Unlike capability fields recovered from an old
+		// snapshot, the presence of a command is identical on every replica, so
+		// this commit-time guard cannot make state machines diverge.
+		if s.hasPendingHAKeeperAdmission() {
+			return sm.Result{}
+		}
 		// This replicated barrier deliberately discards capability observations
 		// made before every state-machine replica upgraded. Heartbeats after this
 		// entry are interpreted by one protocol version on every replica.
 		s.state.CommandDeliveryPreparing = true
-		s.state.CommandDeliveryReady = make(map[string]bool)
-		s.state.CommandDeliveryCNReady = make(map[string]bool)
-		s.state.CommandDeliveryTNReady = make(map[string]bool)
+		s.resetCommandDeliveryBarrier()
 		return sm.Result{Value: 2}
 	}
 	// A snapshot created by the first version of the barrier can have
@@ -1040,9 +1100,7 @@ func (s *stateMachine) handleEnableCommandDelivery(cmd []byte) sm.Result {
 	if s.state.CommandDeliveryReady == nil ||
 		s.state.CommandDeliveryCNReady == nil ||
 		s.state.CommandDeliveryTNReady == nil {
-		s.state.CommandDeliveryReady = make(map[string]bool)
-		s.state.CommandDeliveryCNReady = make(map[string]bool)
-		s.state.CommandDeliveryTNReady = make(map[string]bool)
+		s.resetCommandDeliveryBarrier()
 		return sm.Result{Value: 2}
 	}
 	shard, ok := s.state.LogState.Shards[DefaultHAKeeperShardID]
@@ -1121,6 +1179,21 @@ func (s *stateMachine) handleEnableCommandDelivery(cmd []byte) sm.Result {
 	s.state.CommandDeliveryBatchIDsAssigned = true
 	s.state.CommandDeliveryCommandIDsAssigned = true
 	return sm.Result{Value: 1}
+}
+
+// resetCommandDeliveryBarrier removes capability observations that may have
+// been recovered differently by replicas upgraded from old snapshots. New
+// heartbeats after the replicated barrier repopulate them deterministically.
+// Clearing LogState as well as the readiness maps makes the admission filter
+// safe without retaining a second, ever-growing registry after activation.
+func (s *stateMachine) resetCommandDeliveryBarrier() {
+	for uuid, store := range s.state.LogState.Stores {
+		store.CommandDeliverySupported = false
+		s.state.LogState.Stores[uuid] = store
+	}
+	s.state.CommandDeliveryReady = make(map[string]bool)
+	s.state.CommandDeliveryCNReady = make(map[string]bool)
+	s.state.CommandDeliveryTNReady = make(map[string]bool)
 }
 
 func (s *stateMachine) handleGetIDCmd(cmd []byte) sm.Result {
@@ -1700,6 +1773,10 @@ func (s *stateMachine) Lookup(query interface{}) (interface{}, error) {
 	} else if q, ok := query.(*ScheduleCommandQuery); ok {
 		return s.handleScheduleCommandQuery(q.UUID), nil
 	} else if _, ok := query.(*CommandDeliveryStateQuery); ok {
+		admissionReady := true
+		if !s.state.CommandDeliveryPreparing && !s.state.CommandDeliveryEnabled {
+			admissionReady = !s.hasPendingHAKeeperAdmission()
+		}
 		ready := make(map[string]bool, len(s.state.CommandDeliveryReady))
 		for uuid, value := range s.state.CommandDeliveryReady {
 			ready[uuid] = value
@@ -1719,11 +1796,12 @@ func (s *stateMachine) Lookup(query interface{}) (interface{}, error) {
 			}
 		}
 		return CommandDeliveryState{
-			Preparing: s.state.CommandDeliveryPreparing,
-			Enabled:   s.state.CommandDeliveryEnabled,
-			Ready:     ready,
-			CNReady:   cnReady,
-			TNReady:   tnReady,
+			Preparing:              s.state.CommandDeliveryPreparing,
+			Enabled:                s.state.CommandDeliveryEnabled,
+			HAKeeperAdmissionReady: admissionReady,
+			Ready:                  ready,
+			CNReady:                cnReady,
+			TNReady:                tnReady,
 		}, nil
 	} else if q, ok := query.(*ClusterDetailsQuery); ok {
 		return s.handleClusterDetailsQuery(q.Cfg), nil
