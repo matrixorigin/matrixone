@@ -16,7 +16,9 @@ package lifecycle
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/hex"
+	"strings"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -104,6 +106,53 @@ func TestSQLReleaseConfigAcceptsDisabledBootstrapScope(t *testing.T) {
 	)
 	require.NoError(t, err)
 	require.False(t, enabled)
+}
+
+func TestSQLReleaseConfigRejectsArchiveResolutionWhileDisabledBeforeStageRead(t *testing.T) {
+	mp := mpool.MustNewZero()
+	fake := &scriptedLifecycleSQLExecutor{
+		t: t,
+		steps: []lifecycleSQLStep{{
+			contains:  "from mo_catalog.mo_feature_registry",
+			accountID: 0,
+			result: lifecycleReleaseResult(
+				t,
+				mp,
+				false,
+				`{"archive_stages":[]}`,
+			),
+		}},
+	}
+	_, err := (SQLReleaseConfig{Executor: fake}).ResolveArchiveTarget(
+		context.Background(),
+		17,
+		12,
+		strings.Repeat("00", sha256.Size),
+	)
+	require.ErrorContains(t, err, "Lifecycle release is disabled")
+	// A disabled release must fail before touching a tenant Stage or its
+	// credentials. This keeps the global kill switch free of external I/O.
+	require.Equal(t, 1, fake.offset)
+}
+
+func TestSQLReleaseConfigRejectsUnknownReleaseScopeFields(t *testing.T) {
+	mp := mpool.MustNewZero()
+	fake := &scriptedLifecycleSQLExecutor{
+		t: t,
+		steps: []lifecycleSQLStep{{
+			contains:  "from mo_catalog.mo_feature_registry",
+			accountID: 0,
+			result: lifecycleReleaseResult(
+				t,
+				mp,
+				true,
+				`{"archive_stages":[],"unexpected":true}`,
+			),
+		}},
+	}
+	_, err := (SQLReleaseConfig{Executor: fake}).Enabled(context.Background())
+	require.ErrorContains(t, err, "invalid Lifecycle release scope")
+	require.Equal(t, 1, fake.offset)
 }
 
 func lifecycleReleaseResult(

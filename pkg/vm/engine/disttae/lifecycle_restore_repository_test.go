@@ -125,16 +125,17 @@ func TestLifecycleRestoreAutoIncrementOffsetValidatesColumnTypeLimit(t *testing.
 		TypeID:        int32(types.T_uint8),
 		AutoIncrement: true,
 	}}}
-	name, offset, err := lifecycleRestoreAutoIncrementOffset(
+	index, name, offset, err := lifecycleRestoreAutoIncrementOffset(
 		context.Background(),
 		schema,
 		lifecyclepkg.AutoIncrementMax{ColumnOrdinal: 0, Value: "255"},
 	)
 	require.NoError(t, err)
+	require.Equal(t, 0, index)
 	require.Equal(t, "id", name)
 	require.Equal(t, uint64(255), offset)
 
-	_, _, err = lifecycleRestoreAutoIncrementOffset(
+	_, _, _, err = lifecycleRestoreAutoIncrementOffset(
 		context.Background(),
 		schema,
 		lifecyclepkg.AutoIncrementMax{ColumnOrdinal: 0, Value: "256"},
@@ -779,7 +780,7 @@ func TestSQLRestorePublishesVerifiedHiddenTableAtomically(t *testing.T) {
 	controller := gomock.NewController(t)
 	increments := mock_incr.NewMockAutoIncrementService(controller)
 	increments.EXPECT().SetOffset(
-		gomock.Any(), uint64(88), "id", uint64(255), gomock.Nil(),
+		gomock.Any(), uint64(88), 0, "id", uint64(255), gomock.Nil(),
 	).Return(nil)
 	verified := [32]byte{7, 8, 9}
 	attempt := lifecycleRestoreAttemptForTest("IMPORTING")

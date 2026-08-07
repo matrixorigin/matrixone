@@ -861,7 +861,7 @@ and next_chunk_ordinal=%d and restored_rows=%d`,
 			}
 			if repository.AutoIncrement != nil {
 				for _, maximum := range autoIncrementMaxima {
-					columnName, offset, maximumErr :=
+					columnIndex, columnName, offset, maximumErr :=
 						lifecycleRestoreAutoIncrementOffset(ctx, schema, maximum)
 					if maximumErr != nil {
 						return maximumErr
@@ -869,6 +869,7 @@ and next_chunk_ordinal=%d and restored_rows=%d`,
 					if setErr := repository.AutoIncrement.SetOffset(
 						ctx,
 						attempt.StagingTableID,
+						columnIndex,
 						columnName,
 						offset,
 						txn.Txn(),
@@ -943,14 +944,14 @@ func lifecycleRestoreAutoIncrementOffset(
 	ctx context.Context,
 	schema lifecyclepkg.SchemaDescriptor,
 	maximum lifecyclepkg.AutoIncrementMax,
-) (string, uint64, error) {
+) (int, string, uint64, error) {
 	if int(maximum.ColumnOrdinal) >= len(schema.Columns) ||
 		!schema.Columns[maximum.ColumnOrdinal].AutoIncrement {
-		return "", 0, moerr.NewInternalErrorNoCtxf("Lifecycle auto-increment maximum is corrupt")
+		return 0, "", 0, moerr.NewInternalErrorNoCtxf("Lifecycle auto-increment maximum is corrupt")
 	}
 	offset, err := strconv.ParseUint(maximum.Value, 10, 64)
 	if err != nil {
-		return "", 0, err
+		return 0, "", 0, err
 	}
 	column := schema.Columns[maximum.ColumnOrdinal]
 	if err = incrservice.ValidateAutoColumnOffset(
@@ -958,9 +959,9 @@ func lifecycleRestoreAutoIncrementOffset(
 		types.T(column.TypeID),
 		offset,
 	); err != nil {
-		return "", 0, err
+		return 0, "", 0, err
 	}
-	return column.Name, offset, nil
+	return int(maximum.ColumnOrdinal), column.Name, offset, nil
 }
 
 func (repository SQLRestoreRepository) CleanupHidden(
