@@ -81,6 +81,47 @@ func TestBuildOrderedSetPercentileRejectsNonConstant(t *testing.T) {
 	require.ErrorContains(t, err, "percentile argument of percentile_cont must be a non-null constant")
 }
 
+func TestBuildOrderedSetPercentileRejectsInvalidWithinGroupShape(t *testing.T) {
+	ctx := NewMockCompilerContext(true)
+	for _, tc := range []struct {
+		name string
+		sql  string
+		want string
+	}{
+		{
+			name: "missing within group",
+			sql:  "select percentile_cont(0.5) from select_test.bind_select",
+			want: "percentile_cont requires WITHIN GROUP",
+		},
+		{
+			name: "multiple order expressions",
+			sql:  "select percentile_cont(0.5) within group (order by a, b) from select_test.bind_select",
+			want: "percentile_cont requires exactly one WITHIN GROUP ORDER BY expression",
+		},
+		{
+			name: "null percentile",
+			sql:  "select percentile_cont(null) within group (order by a) from select_test.bind_select",
+			want: "percentile argument of percentile_cont must be a non-null constant",
+		},
+		{
+			name: "non numeric order expression",
+			sql:  "select percentile_cont(0.5) within group (order by n_name) from nation",
+			want: "",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, tc.sql, 1)
+			require.NoError(t, err)
+			_, err = BuildPlan(ctx, stmt, false)
+			if tc.want == "" {
+				require.Error(t, err)
+			} else {
+				require.ErrorContains(t, err, tc.want)
+			}
+		})
+	}
+}
+
 func TestBuildOrderedSetPercentileRejectsWindowForm(t *testing.T) {
 	stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL,
 		"select percentile_cont(0.5) within group (order by a) over () from select_test.bind_select", 1)
