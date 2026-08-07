@@ -78,6 +78,8 @@ type fileServiceCloser interface {
 const (
 	defaultHAKeeperRunningTimeout = 2 * time.Minute
 	testingHAKeeperRunningTimeout = 5 * time.Minute
+	defaultAnyShardReadyTimeout   = 30 * time.Second
+	testingAnyShardReadyTimeout   = 5 * time.Minute
 )
 
 func newService(
@@ -482,9 +484,20 @@ func (op *operator) hakeeperRunningTimeout() time.Duration {
 }
 
 func (op *operator) waitAnyShardReadyLocked(client logservice.CNHAKeeperClient) error {
-	ctx, cancel := context.WithTimeoutCause(context.TODO(), time.Second*30, moerr.CauseWaitAnyShardReadyLocked)
+	ctx, cancel := context.WithTimeoutCause(
+		context.TODO(),
+		op.anyShardReadyTimeout(),
+		moerr.CauseWaitAnyShardReadyLocked,
+	)
 	defer cancel()
 	return op.waitAnyShardReady(ctx, client)
+}
+
+func (op *operator) anyShardReadyTimeout() time.Duration {
+	if op.testing {
+		return testingAnyShardReadyTimeout
+	}
+	return defaultAnyShardReadyTimeout
 }
 
 func (op *operator) waitAnyShardReady(ctx context.Context, client logservice.CNHAKeeperClient) error {
