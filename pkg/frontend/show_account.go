@@ -250,7 +250,8 @@ func requestStorageUsage(ctx context.Context, ses *Session, accIds [][]int64) (r
 		return nil, tried, err
 	}
 
-	return result.Data.([]any)[0], tried, nil
+	response, err := ctl.GetFirstTNResponse(ctx, result)
+	return response, tried, err
 }
 
 func handleStorageUsageResponse_V2(

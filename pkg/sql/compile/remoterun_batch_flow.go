@@ -40,6 +40,7 @@ type pipelineBatchFlow struct {
 	bytes    uint64
 	pending  map[uint64]uint64
 	changed  chan struct{}
+	abortErr error
 }
 
 func newPipelineBatchFlow(requestedCount uint32, requestedBytes uint64) *pipelineBatchFlow {
@@ -76,6 +77,11 @@ func (f *pipelineBatchFlow) reserve(
 	}
 	for {
 		f.mu.Lock()
+		if f.abortErr != nil {
+			err := f.abortErr
+			f.mu.Unlock()
+			return 0, err
+		}
 		countAvailable := uint32(len(f.pending)) < f.maxCount
 		bytesAvailable := f.bytes+size <= f.maxBytes || len(f.pending) == 0
 		if countAvailable && bytesAvailable {
@@ -99,6 +105,27 @@ func (f *pipelineBatchFlow) reserve(
 	}
 }
 
+// abort makes the flow terminal without pretending that outstanding batches
+// were acknowledged. It releases retained batch accounting and wakes both
+// credit waiters and the terminal-response drain barrier. The first abort cause
+// owns the terminal state; later StopSending messages and late ACKs are benign.
+func (f *pipelineBatchFlow) abort(cause error) {
+	if f == nil {
+		return
+	}
+	if cause == nil {
+		cause = context.Canceled
+	}
+	f.mu.Lock()
+	if f.abortErr == nil {
+		f.abortErr = cause
+		clear(f.pending)
+		f.bytes = 0
+		f.notifyLocked()
+	}
+	f.mu.Unlock()
+}
+
 func (f *pipelineBatchFlow) rollback(seq uint64) {
 	if f == nil || seq == 0 {
 		return
@@ -118,6 +145,9 @@ func (f *pipelineBatchFlow) acknowledge(seq uint64) error {
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.abortErr != nil {
+		return nil
+	}
 	if seq <= f.ackedSeq {
 		return nil
 	}
@@ -149,6 +179,11 @@ func (f *pipelineBatchFlow) waitUntilDrained(
 	delayC := timer.C
 	for {
 		f.mu.Lock()
+		if f.abortErr != nil {
+			err := f.abortErr
+			f.mu.Unlock()
+			return err
+		}
 		if len(f.pending) == 0 {
 			f.mu.Unlock()
 			return nil
@@ -170,6 +205,15 @@ func (f *pipelineBatchFlow) waitUntilDrained(
 			}
 		}
 	}
+}
+
+func abortPipelineBatchFlow(cs morpc.ClientSession, id uint64, cause error) {
+	key := pipelineStreamLifecycleKey{session: cs, id: id}
+	value, ok := pipelineStreamLifecycles.Load(key)
+	if !ok {
+		return
+	}
+	value.(*pipelineStreamLifecycle).batchFlow.abort(cause)
 }
 
 func handlePipelineBatchAck(message *pipeline.Message, cs morpc.ClientSession) error {
