@@ -666,6 +666,11 @@ message ProcessInfo {
   // Statement-level INSERT IGNORE semantics used by casts in remote pipelines.
   // Absent in messages from older CNs, which safely decodes as false.
   bool statement_runtime_ignore = 13;
+  // Snapshot against which this execution generation's plan was bound. It is
+  // immutable for the generation even when RC lock handling advances the
+  // transaction snapshot. Absent on older senders, receivers fall back to the
+  // transaction snapshot for rolling-upgrade compatibility.
+  timestamp.Timestamp plan_snapshot_ts = 14;
 }
 
 message SessionInfo {

@@ -68,6 +68,9 @@ func (proc *Process) BuildProcessInfo(
 		// semantics with the process so those casts take the same adjustment
 		// path as they do on the coordinating CN.
 		procInfo.StatementRuntimeIgnore = proc.GetStmtProfile().GetStatementIgnore()
+		if planSnapshotTS, ok := proc.GetPlanSnapshotTS(); ok {
+			procInfo.PlanSnapshotTs = &planSnapshotTS
+		}
 		snapshot, err := proc.GetTxnOperator().Snapshot()
 		if err != nil {
 			return procInfo, err
@@ -239,6 +242,9 @@ func (c *codecService) Decode(
 	proc.Base.Lim = ConvertToProcessLimitation(value.Lim)
 	proc.Base.SessionInfo = sessionInfo
 	proc.Base.SessionInfo.StorageEngine = c.engine
+	if value.PlanSnapshotTs != nil {
+		proc.SetPlanSnapshotTS(*value.PlanSnapshotTs)
+	}
 	proc.SetAffectedRows(value.AffectedRows)
 	stmtProfile := NewStmtProfile(uuid.Nil, uuid.Nil)
 	stmtProfile.SetStatementRuntimeProfile("", "", value.StatementRuntimeIgnore)

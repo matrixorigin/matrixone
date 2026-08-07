@@ -110,6 +110,7 @@ func (proc *Process) NewNoContextChildProc(dataEntryCount int) *Process {
 	child := &Process{
 		Base: proc.Base,
 	}
+	child.CopyPlanSnapshotFrom(proc)
 
 	if dataEntryCount > 0 {
 		child.Reg.MergeReceivers = make([]*WaitRegister, dataEntryCount)
@@ -126,6 +127,7 @@ func (proc *Process) NewNoContextChildProcWithChannel(dataEntryCount int, channe
 	child := &Process{
 		Base: proc.Base,
 	}
+	child.CopyPlanSnapshotFrom(proc)
 
 	if dataEntryCount > 0 {
 		child.Reg.MergeReceivers = make([]*WaitRegister, dataEntryCount)

@@ -583,6 +583,52 @@ func newTestTxnClientAndOpWithIsolation(
 	return txnClient, txnOperator
 }
 
+func TestPlanSnapshotGenerationCaptureAndScopeReuse(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
+	currentSnapshot := timestamp.Timestamp{PhysicalTime: 10}
+	txnOperator.EXPECT().Txn().DoAndReturn(func() txn.TxnMeta {
+		return txn.TxnMeta{SnapshotTS: currentSnapshot}
+	}).AnyTimes()
+
+	proc := testutil.NewProcess(t)
+	proc.Base.TxnOperator = txnOperator
+	c := &Compile{proc: proc}
+	c.capturePlanSnapshot()
+
+	child := proc.NewNoContextChildProc(0)
+	got, ok := child.GetPlanSnapshotTS()
+	require.True(t, ok)
+	require.Equal(t, currentSnapshot, got)
+
+	// Prepared scope reuse is a new execution generation. Refresh both the top
+	// process and every retained pipeline process before locks can run.
+	currentSnapshot = timestamp.Timestamp{PhysicalTime: 20}
+	c.capturePlanSnapshot()
+	scope := &Scope{Proc: child}
+	require.NoError(t, scope.resetForReuse(c))
+	got, ok = child.GetPlanSnapshotTS()
+	require.True(t, ok)
+	require.Equal(t, currentSnapshot, got)
+
+	// A data-only retry recompiles pipelines from the same logical plan. It
+	// retains the original binding even after the transaction snapshot moves.
+	currentSnapshot = timestamp.Timestamp{PhysicalTime: 30}
+	c.reusePlanSnapshot = true
+	c.bindPlanSnapshotForCompile()
+	got, ok = proc.GetPlanSnapshotTS()
+	require.True(t, ok)
+	require.Equal(t, timestamp.Timestamp{PhysicalTime: 20}, got)
+
+	// A definition-change retry rebuilds the logical plan and starts a new plan
+	// generation at the transaction's refreshed snapshot.
+	c.reusePlanSnapshot = false
+	c.bindPlanSnapshotForCompile()
+	got, ok = proc.GetPlanSnapshotTS()
+	require.True(t, ok)
+	require.Equal(t, currentSnapshot, got)
+}
+
 var (
 	_ func(*Compile, client.TxnOperator)       = MarkQueryRunning
 	_ func(*Compile, client.TxnOperator) error = TryMarkQueryRunning

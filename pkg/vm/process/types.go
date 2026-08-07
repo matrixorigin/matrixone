@@ -41,6 +41,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/partitionservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	qclient "github.com/matrixorigin/matrixone/pkg/queryservice/client"
 	"github.com/matrixorigin/matrixone/pkg/stage"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
@@ -433,6 +434,15 @@ type Process struct {
 	Base *BaseProcess
 	Reg  Register
 
+	// planSnapshotTS is the snapshot against which this execution generation's
+	// plan was bound. Unlike the transaction snapshot, it must not advance while
+	// RC lock handling refreshes visibility. It belongs to Process rather than
+	// shared BaseProcess so nested or overlapping pipeline generations cannot
+	// overwrite each other's definition-fence reference point. Child processes
+	// share this immutable object, keeping the per-pipeline footprint to one
+	// pointer rather than one protobuf timestamp.
+	planSnapshotTS *timestamp.Timestamp
+
 	// Ctx and Cancel are pipeline's context and cancel function.
 	// Every pipeline has its own context, and the lifecycle of the pipeline is controlled by the context.
 	Ctx     context.Context
@@ -628,6 +638,37 @@ func (proc *Process) GetCloneTxnOperator() client.TxnOperator {
 
 func (proc *Process) GetTxnOperator() client.TxnOperator {
 	return proc.Base.TxnOperator
+}
+
+// SetPlanSnapshotTS binds this process to the snapshot used to build its plan.
+// Child pipeline processes inherit the immutable binding pointer.
+func (proc *Process) SetPlanSnapshotTS(ts timestamp.Timestamp) {
+	proc.planSnapshotTS = &ts
+}
+
+// ClearPlanSnapshotTS removes the plan binding. Lock callers without a plan
+// then retain the legacy transaction-snapshot behavior.
+func (proc *Process) ClearPlanSnapshotTS() {
+	proc.planSnapshotTS = nil
+}
+
+// GetPlanSnapshotTS returns the immutable plan snapshot for this execution
+// generation and whether one was bound.
+func (proc *Process) GetPlanSnapshotTS() (timestamp.Timestamp, bool) {
+	if proc.planSnapshotTS == nil {
+		return timestamp.Timestamp{}, false
+	}
+	return *proc.planSnapshotTS, true
+}
+
+// CopyPlanSnapshotFrom propagates one execution generation's binding to a
+// child or reused pipeline process without exposing the presence bit.
+func (proc *Process) CopyPlanSnapshotFrom(parent *Process) {
+	if parent == nil {
+		proc.ClearPlanSnapshotTS()
+		return
+	}
+	proc.planSnapshotTS = parent.planSnapshotTS
 }
 
 func (proc *Process) GetBaseProcessRunningStatus() bool {
