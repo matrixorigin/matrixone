@@ -265,6 +265,9 @@ func funcExprExplain(ctx context.Context, funcExpr *plan.Function, Typ *plan.Typ
 		if funcExpr.AggConfigType == plan.AggregateConfigType_AGG_CONFIG_GROUP_CONCAT_ORDER {
 			return explainOrderedGroupConcat(ctx, funcExpr, options, buf)
 		}
+		if funcName == "percentile_cont" || funcName == "percentile_disc" {
+			return explainOrderedPercentile(ctx, funcExpr, options, buf)
+		}
 		buf.WriteString(funcExpr.Func.GetObjName() + "(")
 		if needSpecialHandling(funcExpr) {
 			//contains invisible character, need special handling
@@ -477,6 +480,33 @@ func funcExprExplain(ctx context.Context, funcExpr *plan.Function, Typ *plan.Typ
 	case function.UNKNOW_KIND_FUNCTION:
 		return moerr.NewInvalidInput(ctx, "explain contains UNKNOW_KIND_FUNCTION")
 	}
+	return nil
+}
+
+func explainOrderedPercentile(
+	ctx context.Context,
+	funcExpr *plan.Function,
+	options *ExplainOptions,
+	buf *bytes.Buffer,
+) error {
+	if len(funcExpr.Args) != 2 {
+		return moerr.NewInvalidInput(ctx, "invalid ordered percentile arguments")
+	}
+	buf.WriteString(funcExpr.Func.GetObjName())
+	buf.WriteString("(")
+	if err := describeExpr(ctx, funcExpr.Args[1], options, buf); err != nil {
+		return err
+	}
+	buf.WriteString(") WITHIN GROUP (ORDER BY ")
+	if err := describeExpr(ctx, funcExpr.Args[0], options, buf); err != nil {
+		return err
+	}
+	if len(funcExpr.AggConfig) > 0 && funcExpr.AggConfig[0] != 0 {
+		buf.WriteString(" DESC")
+	} else {
+		buf.WriteString(" ASC")
+	}
+	buf.WriteString(")")
 	return nil
 }
 

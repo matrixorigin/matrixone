@@ -951,6 +951,10 @@ type FuncExpr struct {
 	WindowSpec *WindowSpec
 
 	OrderBy OrderBy
+	// WithinGroup marks an ORDER BY clause that belongs to an ordered-set
+	// aggregate. OrderBy is also used for GROUP_CONCAT's function-local
+	// ordering, so the marker keeps the two syntaxes distinct.
+	WithinGroup bool
 }
 
 func (node *FuncExpr) Format(ctx *FmtCtx) {
@@ -988,7 +992,7 @@ func (node *FuncExpr) Format(ctx *FmtCtx) {
 		// The parser stores GROUP_CONCAT's separator as the final expression so
 		// binders can consume it uniformly. It is not a concatenated argument.
 		node.Exprs[:len(node.Exprs)-1].Format(ctx)
-		if node.OrderBy != nil {
+		if node.OrderBy != nil && !node.WithinGroup {
 			ctx.WriteByte(' ')
 			node.OrderBy.Format(ctx)
 		}
@@ -999,12 +1003,17 @@ func (node *FuncExpr) Format(ctx *FmtCtx) {
 	} else {
 		formatFuncExprs(ctx, node)
 
-		if node.OrderBy != nil {
+		if node.OrderBy != nil && !node.WithinGroup {
 			node.OrderBy.Format(ctx)
 		}
 	}
 
 	ctx.WriteByte(')')
+	if node.WithinGroup && node.OrderBy != nil {
+		ctx.WriteString(" within group (")
+		node.OrderBy.Format(ctx)
+		ctx.WriteByte(')')
+	}
 
 	if node.WindowSpec != nil {
 		ctx.WriteString(" ")
@@ -1115,6 +1124,16 @@ func (node *FuncExpr) Accept(v Visitor) (Expr, bool) {
 			return node, false
 		}
 		node.Exprs[i] = tmpNode
+	}
+	for _, order := range node.OrderBy {
+		if order == nil || order.Expr == nil {
+			continue
+		}
+		tmpNode, ok := order.Expr.Accept(v)
+		if !ok {
+			return node, false
+		}
+		order.Expr = tmpNode
 	}
 	return v.Exit(node)
 }

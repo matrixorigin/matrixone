@@ -218,6 +218,22 @@ func TestConstructAggregateConfigPreservesOrderedGroupConcatArgs(t *testing.T) {
 	require.Equal(t, aggexec.EncodeGroupConcatOrderedConfig(planConfig, 5), config)
 }
 
+func TestConstructAggregateConfigOrderedPercentile(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+
+	value := &plan.Expr{Typ: plan.Type{Id: int32(types.T_int64)}}
+	percentile := plan2.MakePlan2Float64ConstExprWithType(0.95)
+	args, config := constructAggregateConfig(&plan.Function{
+		Func:      &plan.ObjectRef{ObjName: plan2.NamePercentileCont},
+		Args:      []*plan.Expr{value, percentile},
+		AggConfig: []byte{1},
+	}, proc)
+
+	require.Equal(t, []*plan.Expr{value}, args)
+	require.Equal(t, aggexec.EncodeOrderedPercentileConfig([]byte("0.95"), true), config)
+}
+
 func TestDupHashBuildPreservesNullTracking(t *testing.T) {
 	source := hashbuild.NewArgument()
 	defer source.Release()

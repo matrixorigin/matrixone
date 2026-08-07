@@ -561,6 +561,34 @@ var supportedAggInNewFramework = []FuncNew{
 			},
 		},
 	},
+	{
+		functionId: PERCENTILE_CONT,
+		class:      plan.Function_AGG,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    orderedSetPercentileCheck,
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				isAgg:      true,
+				retType:    aggexec.PercentileContReturnType,
+				aggName:    "percentile_cont",
+			},
+		},
+	},
+	{
+		functionId: PERCENTILE_DISC,
+		class:      plan.Function_AGG,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    orderedSetPercentileCheck,
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				isAgg:      true,
+				retType:    aggexec.PercentileDiscReturnType,
+				aggName:    "percentile_disc",
+			},
+		},
+	},
 
 	// function `BITMAP_CONSTRUCT_AGG`
 	{
