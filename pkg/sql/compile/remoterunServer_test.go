@@ -593,6 +593,63 @@ func TestHandlePipelineStopSendingAbortsOutstandingBatchFlow(t *testing.T) {
 	require.Zero(t, session.closeCalls)
 }
 
+func TestPipelineStopBeforeLifecycleRegistrationIsReconciled(t *testing.T) {
+	server := colexec.NewServer("")
+	sessionCtx, closeSession := context.WithCancel(context.Background())
+	session := &lifecycleTestSession{ctx: sessionCtx}
+	const streamID = 405
+	t.Cleanup(func() {
+		server.RemoveRelatedPipeline(session, streamID)
+		closeSession()
+	})
+
+	stopReceiver := &messageReceiverOnServer{
+		messageCtx:    context.Background(),
+		messageId:     streamID,
+		messageTyp:    pipeline.Method_StopSending,
+		clientSession: session,
+		colexecServer: server,
+	}
+	require.NoError(t, handlePipelineMessage(stopReceiver))
+	require.True(t, server.HasPendingPipelineCancellation(session, streamID))
+
+	flow := newPipelineBatchFlow(1, 1024)
+	lifecycle, err := registerPipelineStreamLifecycle(session, streamID, flow)
+	require.NoError(t, err)
+	t.Cleanup(lifecycle.remove)
+
+	// Model the failure mode directly: the lifecycle is now published, and an
+	// outstanding batch appears before the pre-registration Stop is reconciled.
+	seq, err := flow.reserve(context.Background(), context.Background(), 10)
+	require.NoError(t, err)
+	pipelineReceiver := &messageReceiverOnServer{
+		messageCtx:      context.Background(),
+		messageId:       streamID,
+		clientSession:   session,
+		streamLifecycle: lifecycle,
+		colexecServer:   server,
+	}
+	pipelineReceiver.abortBatchFlowForPendingStop()
+
+	err = flow.waitUntilDrained(context.Background(), context.Background(), nil)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrQueryInterrupted), err)
+	_, err = flow.reserve(context.Background(), context.Background(), 1)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrQueryInterrupted), err)
+	require.NoError(t, flow.acknowledge(seq), "a late ACK must be harmless after reconciliation")
+
+	dispatchReceiver := &process.WrapCs{
+		MsgId: streamID,
+		Uid:   uuid.Must(uuid.NewV7()),
+		Cs:    session,
+		Err:   make(chan error, 1),
+	}
+	server.RecordDispatchPipeline(session, streamID, dispatchReceiver)
+	require.False(t, dispatchReceiver.ReceiverDone,
+		"lifecycle cancellation must not change dispatch ReceiverDone semantics")
+	require.False(t, server.HasPendingPipelineCancellation(session, streamID),
+		"dispatch registration must retain its existing stale-tombstone cleanup")
+}
+
 func TestMessageReceiverSendBatchUsesNegotiatedCredits(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	session := mock_morpc.NewMockClientSession(ctrl)
