@@ -73,6 +73,11 @@ func (c *Compile) Compile(
 	// clear the clone txn operator to avoid reuse.
 	c.proc.ResetCloneTxnOperator()
 
+	// Bind a new plan to the transaction snapshot before any pipeline or
+	// pre-pipeline lock can advance an RC transaction's mutable snapshot. A
+	// normal data retry reuses the same plan and therefore keeps its binding.
+	c.bindPlanSnapshotForCompile()
+
 	// statistical information record and trace.
 	compileStart := time.Now()
 	_, task := gotrace.NewTask(context.TODO(), "pipeline.Compile")
@@ -861,6 +866,7 @@ func (c *Compile) buildRetryCompile(defChanged bool) (*Compile, error) {
 
 	var e error
 	runC := NewCompile(c.addr, c.db, c.sql, c.tenant, c.uid, c.e, c.proc, c.stmt, c.isInternal, c.cnLabel, c.startAt)
+	runC.reusePlanSnapshot = !defChanged
 	runC.resultSink = c.resultSink
 	runC.executionGeneration = c.executionGeneration
 	c.copyAllocationAccountLifecycleTo(runC)
