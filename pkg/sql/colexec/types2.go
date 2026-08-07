@@ -133,6 +133,20 @@ func (srv *Server) CancelPipelineSending(
 	srv.ensureSessionCleanupLocked(session)
 }
 
+// HasPendingPipelineCancellation reports whether StopSending arrived before
+// the pipeline record was published. The tombstone remains owned by the
+// colexec registry so RecordBuiltPipeline and RecordDispatchPipeline preserve
+// their existing, distinct cancellation semantics.
+func (srv *Server) HasPendingPipelineCancellation(
+	session morpc.ClientSession, streamID uint64,
+) bool {
+	key := generateRecordKey(session, streamID)
+	srv.receivedRunningPipeline.Lock()
+	defer srv.receivedRunningPipeline.Unlock()
+	info, ok := srv.receivedRunningPipeline.fromRpcClientToRelatedPipeline[key]
+	return ok && info.alreadyDone && info.receiver == nil && info.queryCancel == nil
+}
+
 func (srv *Server) RemoveRelatedPipeline(session morpc.ClientSession, streamID uint64) {
 	key := generateRecordKey(session, streamID)
 	srv.receivedRunningPipeline.Lock()
