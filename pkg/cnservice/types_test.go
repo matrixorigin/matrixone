@@ -16,7 +16,9 @@ package cnservice
 
 import (
 	"testing"
+	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/stretchr/testify/require"
 )
 
@@ -28,4 +30,20 @@ func TestValidateRejectsRemovedMemoryEngines(t *testing.T) {
 			require.ErrorContains(t, cfg.Validate(), "unsupported CN engine")
 		})
 	}
+}
+
+func TestValidateHeartbeatDurations(t *testing.T) {
+	for name, interval := range map[string]time.Duration{
+		"negative interval":       -time.Nanosecond,
+		"exceeds progress budget": logservice.ScheduleCommandPollInterval + time.Nanosecond,
+	} {
+		t.Run(name, func(t *testing.T) {
+			cfg := Config{UUID: "cn1"}
+			cfg.HAKeeper.HeatbeatInterval.Duration = interval
+			require.ErrorContains(t, cfg.Validate(), "hakeeper heartbeat interval")
+		})
+	}
+	cfg := Config{UUID: "cn1"}
+	cfg.HAKeeper.HeatbeatTimeout.Duration = -time.Nanosecond
+	require.ErrorContains(t, cfg.Validate(), "hakeeper heartbeat timeout")
 }

@@ -433,6 +433,10 @@ create table auto_increment17(col1 int auto_increment);
 insert into auto_increment17 values();
 select * from auto_increment17;
 drop table auto_increment17;
+create table auto_increment17(col1 int auto_increment) auto_increment = 0;
+insert into auto_increment17 values();
+select * from auto_increment17;
+drop table auto_increment17;
 set auto_increment_offset = 100;
 create table auto_increment17(col1 int auto_increment);
 insert into auto_increment17 values();
@@ -440,3 +444,94 @@ select * from auto_increment17;
 drop table auto_increment17;
 # reset to 1
 set auto_increment_offset = 1;
+
+-- ALTER TABLE AUTO_INCREMENT through the production SQL path.
+drop table if exists auto_increment_alter;
+create table auto_increment_alter(col1 int auto_increment primary key, col2 int);
+insert into auto_increment_alter values(),();
+alter table auto_increment_alter auto_increment = 100;
+insert into auto_increment_alter values();
+select * from auto_increment_alter order by col1;
+drop table auto_increment_alter;
+
+-- A request below the stored maximum must allocate MAX(id) + 1.
+drop table if exists auto_increment_alter_max;
+create table auto_increment_alter_max(col1 int auto_increment primary key, col2 int);
+insert into auto_increment_alter_max values (1, 1), (200, 200);
+alter table auto_increment_alter_max auto_increment = 100;
+insert into auto_increment_alter_max(col2) values (201);
+select * from auto_increment_alter_max order by col1;
+drop table auto_increment_alter_max;
+
+-- Quoted AUTO_INCREMENT column names must remain safe in the MAX query.
+drop table if exists auto_increment_alter_quoted;
+create table auto_increment_alter_quoted(`1id` int auto_increment primary key, col2 int);
+insert into auto_increment_alter_quoted(col2) values (1);
+alter table auto_increment_alter_quoted auto_increment = 10;
+insert into auto_increment_alter_quoted(col2) values (10);
+select * from auto_increment_alter_quoted order by `1id`;
+drop table auto_increment_alter_quoted;
+
+-- COPY reconciles the explicit request, copied maximum, and source allocator.
+drop table if exists auto_increment_alter_copy;
+create table auto_increment_alter_copy(id bigint primary key auto_increment, v int) auto_increment = 10;
+insert into auto_increment_alter_copy(v) values (1);
+delete from auto_increment_alter_copy;
+alter table auto_increment_alter_copy auto_increment = 100, algorithm = copy;
+insert into auto_increment_alter_copy(v) values (2);
+insert into auto_increment_alter_copy(id, v) values (500, 3);
+alter table auto_increment_alter_copy add column extra int, auto_increment = 100, algorithm = copy;
+insert into auto_increment_alter_copy(v) values (4);
+select id from auto_increment_alter_copy order by id;
+drop table auto_increment_alter_copy;
+
+-- COPY must preserve the session-initialized allocator for a newly added
+-- AUTO_INCREMENT column when the source table is empty.
+drop table if exists auto_increment_alter_add_empty;
+set auto_increment_offset = 10;
+create table auto_increment_alter_add_empty(v int);
+alter table auto_increment_alter_add_empty add column id bigint auto_increment, algorithm = copy;
+insert into auto_increment_alter_add_empty(v) values (1);
+select * from auto_increment_alter_add_empty;
+drop table auto_increment_alter_add_empty;
+set auto_increment_offset = 1;
+
+-- INPLACE rename must not orphan the allocator row used by a later reset.
+-- This canonical case also runs through the proxy/multi-CN BVT suite.
+drop table if exists auto_increment_alter_rename;
+create table auto_increment_alter_rename(id bigint primary key auto_increment, v int);
+insert into auto_increment_alter_rename(v) values (1), (2);
+alter table auto_increment_alter_rename algorithm = instant, rename column id to new_id;
+alter table auto_increment_alter_rename auto_increment = 100;
+insert into auto_increment_alter_rename(v) values (3);
+select * from auto_increment_alter_rename order by new_id;
+drop table auto_increment_alter_rename;
+
+-- A partitioned ALTER owns logical and physical allocator resets as one SQL
+-- statement and publishes the same next value through the public table.
+drop table if exists auto_increment_alter_partitioned;
+create table auto_increment_alter_partitioned(id bigint primary key auto_increment, v int) partition by key(id) partitions 2;
+insert into auto_increment_alter_partitioned(v) values (1), (2);
+alter table auto_increment_alter_partitioned auto_increment = 100;
+insert into auto_increment_alter_partitioned(v) values (3);
+select * from auto_increment_alter_partitioned order by id;
+drop table auto_increment_alter_partitioned;
+
+-- A same-statement rename must read the old column and publish the final cache key.
+drop table if exists auto_increment_alter_rename_combined;
+create table auto_increment_alter_rename_combined(id bigint primary key auto_increment, v int);
+insert into auto_increment_alter_rename_combined(v) values (1), (2);
+alter table auto_increment_alter_rename_combined rename column id to new_id, auto_increment = 100;
+insert into auto_increment_alter_rename_combined(v) values (3);
+select * from auto_increment_alter_rename_combined order by new_id;
+drop table auto_increment_alter_rename_combined;
+
+-- CREATE, combined rename/reset, and implicit allocation must share the final name and post-ALTER epoch.
+drop table if exists auto_increment_alter_create_txn;
+begin;
+create table auto_increment_alter_create_txn(id bigint primary key auto_increment, v int);
+alter table auto_increment_alter_create_txn rename column id to new_id, auto_increment = 100;
+insert into auto_increment_alter_create_txn(v) values (1);
+select * from auto_increment_alter_create_txn order by new_id;
+commit;
+drop table auto_increment_alter_create_txn;
