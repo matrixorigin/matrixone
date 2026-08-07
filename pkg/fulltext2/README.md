@@ -1,23 +1,35 @@
 # `pkg/fulltext2` — WAND-based positional fulltext engine
 
-`fulltext2` is the full-text index engine selected by `CREATE FULLTEXT INDEX … WITH (VERSION = 2)`
-(and by the experimental `CREATE FULLTEXT2 INDEX`). It is a **completely separate engine** from
-classic v1 fulltext (generated-SQL + Go `Eval`) and from `bm25` (position-free ranked retrieval).
-The `fulltext` plugin is a thin version-router that delegates each hook to v1 verbatim or to this
-package.
+`fulltext2` is a full-text index engine registered as the distinct index algorithm `"fulltext2"`
+and created with `CREATE FULLTEXT2 INDEX` (experimental, gated by the
+`experimental_fulltext2_index` session var). It is a **completely separate engine** from classic
+v1 fulltext (generated-SQL + Go `Eval`): a from-scratch Block-Max WAND positional engine with its
+own registered plugin (`pkg/fulltext2/plugin`), segment format, and query pipeline — **not** a
+version of the `fulltext` plugin.
 
-It reuses the shared **index-plugin framework** with bm25 — the plugin hooks, the ISCP CDC
-consumer, `VectorIndexCache`, idxcron `MERGE`/`REBUILD`, and the payload-agnostic CDC chunk
-framing — plus bm25's leaf serialization patterns (tar members, little-endian buffers, PK
-encode/decode). But the segment *backbone* genuinely diverges from bm25, so the engine is kept
-separate rather than sharing a lowest-common-denominator core:
+> There is no `WITH (VERSION = 2)` syntax. fulltext2 is its own algorithm keyed by
+> `catalog.MoIndexFullText2Algo`; you select it with `CREATE FULLTEXT2 INDEX`, not by versioning a
+> classic `FULLTEXT` index.
 
-| | bm25 | fulltext2 (here) |
+fulltext2 also **absorbs the position-free ranked-retrieval role** once served by the former
+standalone `bm25` engine (now removed): a `POSITION_FREE` fulltext2 index queried `IN BM25 MODE`
+is the bag-of-words path.
+
+It rides the shared **index-plugin framework** — the plugin hooks, the ISCP CDC consumer,
+`VectorIndexCache`, idxcron `MERGE`/`REBUILD`, and the payload-agnostic CDC chunk framing — plus
+common leaf serialization patterns (tar members, little-endian buffers, PK encode/decode).
+
+One engine serves two build modes, chosen at CREATE:
+
+| | positional (default) | `POSITION_FREE = TRUE` (bag-of-words) |
 |---|---|---|
-| **term dict** | jieba dict-id + unordered overflow map | **sorted** dict of the actual indexed terms (needed for `word*`) |
-| **posting payload** | df / impact only | **+ positions** (phrase, ngram reassembly) |
-| **query model** | whole-sentence bag → WAND | parser → operator tree |
-| **scoring** | BM25 | **TF-IDF *and* BM25** |
+| **term dict** | **sorted** FST of the actual indexed terms (`word*`) | same sorted FST |
+| **posting payload** | **+ positions** (phrase, ngram reassembly) | df / tf only (no positions, ~57% smaller) |
+| **query model** | NL phrase · BOOLEAN tree · BM25 bag | `IN BM25 MODE` bag-of-words **only** |
+| **scoring** | **TF-IDF *and* BM25** | **TF-IDF *and* BM25** |
+
+A `POSITION_FREE` index rejects NL / BOOLEAN phrase queries up front (it has no positions) — only
+`MATCH(…) AGAINST(… IN BM25 MODE)` is valid against it.
 
 ---
 
@@ -31,9 +43,10 @@ separate rather than sharing a lowest-common-denominator core:
 6. [Algorithm: phrase & boolean evaluation](#6-algorithm-phrase--boolean-evaluation)
 7. [Scoring: TF-IDF and BM25](#7-scoring-tf-idf-and-bm25)
 8. [Multi-segment: liveness, deletes, recency](#8-multi-segment-liveness-deletes-recency)
-9. [Build & lifecycle: sync build, CDC, MERGE/REBUILD](#9-build--lifecycle-sync-build-cdc-mergerebuild)
-10. [Memory model: mmap, lazy decode, bounded build](#10-memory-model-mmap-lazy-decode-bounded-build)
-11. [File map](#11-file-map)
+9. [INCLUDE columns: in-index prefilter & coverage](#9-include-columns-in-index-prefilter--coverage)
+10. [Build & lifecycle: sync build, CDC, MERGE/REBUILD](#10-build--lifecycle-sync-build-cdc-mergerebuild)
+11. [Memory model: mmap, lazy decode, bounded build](#11-memory-model-mmap-lazy-decode-bounded-build)
+12. [File map](#12-file-map)
 
 ---
 
@@ -79,7 +92,7 @@ logical shape (`doc.go`, `serialize.go`):
 segment
  ├─ term dict :  term(string) → byte offset of its posting directory   (SORTED, dictionary-free)
  ├─ postings  :  per term, doc-sorted:  docID/tf blocks + block-max meta + POSITIONS
- ├─ docmap    :  ord → { pk, docLen };   N = doc count
+ ├─ docmap    :  ord → { pk, docLen [, INCLUDE values] };   N = doc count
  └─ avgDocLen :  Σ docLen / N   (computed at LOAD across all loaded segments)
 ```
 
@@ -87,7 +100,7 @@ segment
 
 | Member | Contents | Residency at load |
 |---|---|---|
-| `docmap` | `pkType`, `N`, `ord→pk` (length-prefixed), `ord→docLen` | viewed (mmap); pk decoded on demand |
+| `docmap` | `pkType`, `N`, `ord→pk` (length-prefixed), `ord→docLen`, optional `ord→INCLUDE values` (§9) | viewed (mmap); pk / include decoded on demand |
 | `termdict` | the **vellum FST**: `term → offset of its directory entry` | resident (compact, minimized) |
 | `postings` | the **ranking directory**: per-term `df`, per-block max-TF / skip meta | resident (small) |
 | `blocks` | per-term `docID/tf` blocks (delta + varint) | **mmap; block-decoded on demand** |
@@ -391,7 +404,8 @@ their expansion).
 | **phrase** | `AGAINST('a b')` (default NL) / `"a b"` | `matchPhraseCursor` | conjunctive, converge on rarest-slot doc | yes (skip to anchor) | **yes** (offset check) |
 
 All three top-k paths use `vectorindex.FastMaxHeap` (SoA, keyed by ord, distance = −score) — zero
-per-candidate allocation, ties unspecified (bm25 parity).
+per-candidate allocation, ties unspecified (the top-k *set* and score *multiset* are stable; the
+order among exactly-equal scores is not).
 
 ---
 
@@ -433,15 +447,86 @@ A skipped/dead doc is never scored and never emitted; `globalN` counts only live
 
 ---
 
-## 9. Build & lifecycle: sync build, CDC, MERGE/REBUILD
+## 9. INCLUDE columns: in-index prefilter & coverage
+
+A fulltext2 index can carry **INCLUDE columns** — the actual per-document values of chosen scalar
+columns, stored *inside* the segments (and the CDC tail) alongside the pk. They let a filtered
+top-k query run entirely inside `fulltext2_search`, dropping the two JOINs a plain fulltext query
+needs (a prefilter second-scan for the WHERE, and a base-table join-back for the SELECT):
+
+```sql
+CREATE FULLTEXT2 INDEX ftidx ON docs (body)
+  WITH PARSER json
+  INCLUDE (status, priority);
+
+-- filter on an include column is evaluated INSIDE the WAND walk; status/priority are
+-- served straight from the index — no base-table JOIN, no prefilter second-scan:
+SELECT id, status, priority
+FROM docs
+WHERE status = 'active' AND priority > 3
+  AND MATCH(body) AGAINST('search terms');
+```
+
+**Supported types.** Exactly what the segment pk codec already round-trips
+(`CatalogHooks.SupportedIncludeColumnTypes`, `pkcodec.go`): the integer family
+`int8/16/32/64`, `uint8/16/32/64` (+ `bit`), and `varchar`/`char`. The value is stored as its
+**actual value, not a hash** — so both prefiltering *and* covering projection work, including
+range and prefix/`LIKE 'x%'` predicates that a hash could not answer. `float`/`date`/`decimal`/
+`text` are deferred (the codec has no float case; widening the set is a codec extension, not a
+plan change). The set + column names are pinned into `IndexAlgoParams` at CREATE and read back on
+every build / CDC / query path.
+
+**Storage.** Include values live in the segment **docmap**, ord-aligned next to `pk` and `docLen`
+(`serialize.go` `encodeDocmap`/`decodeDocmap`): a `[nCols][per-col type]` header, then per-doc,
+per-col values encoded with the same codec as pks — integers dense fixed-width, strings as
+`[u32 len][content]` varlena. A NULL include value carries a per-element null flag plus a
+well-formed placeholder so the byte cursor stays aligned. On load the section is an mmap view
+(`Segment.includeRaw` + per-varlena-col offset tables); lazy accessors decode on demand:
+`Segment.includeVal(ord, colIdx)` (for the predicate evaluator) and the box-free
+`Segment.appendIncludeTo(buf, colIdx, ord)` (for covering TVF output — the mirror of `appendPkTo`).
+
+**Prefilter** (`include_predicate.go`). A WHERE predicate on include columns is pushed into the
+TVF as JSON and parsed into an `includePredMembership` implementing the existing
+`Membership.Contains(ord)`: it decodes `seg.includeVal(ord, colIdx)` and tests the op
+(`= < > BETWEEN IN`, string comparison, and **prefix** / `LIKE 'x%'`) with 3-valued NULL logic.
+It is `andAllow`'d with the liveness/docfilter memberships, so it runs **inside** the Block-Max
+WAND walk *before* top-k admission — a pushed `LIMIT` therefore bounds the already-filtered set
+(no over-fetch). Block-skip stays valid: `blockSum` bounds every doc in a region regardless of the
+filter. A pk predicate is peeled only when the pk type is one the evaluator can compare
+(`fulltext2PeelablePkColName`); otherwise it stays a residual on the base scan and the JOIN is
+retained — correct, just unoptimized.
+
+**Coverage** (`buildFulltext2SearchNodeCovered`, `search_cache.go` `SearchInto`/streaming). When
+the index's INCLUDE columns cover the query's SELECT, the `fulltext2_search` TVF's output coldefs
+are `[__mo_ft_doc_id, __mo_ft_score, <include cols with their real base types>]`, so the projection
+reads pk/score/include directly from the TVF with **no base-table JOIN**. The pk/score outputs use
+the reserved names `catalog.FullText2Search_OutCol_DocId` / `_Score` (`__mo_ft_doc_id` /
+`__mo_ft_score`) precisely so an INCLUDE column named `doc_id` or `score` cannot collide with them
+(the runtime classifies the output batch by name). Results carry include values box-free through
+`vectorindex.ColumnBuffer` / `SearchOutput` on both the LIMIT (`SearchInto`) and no-LIMIT
+(streaming `Emit`) paths.
+
+**Value source.** Build (CREATE/REBUILD) selects the INCLUDE columns after the text columns and
+passes them as trailing `fulltext2_create` args (the tokenizer stops *before* them so they are not
+indexed as text); CDC (ISCP `Fulltext2SqlWriter`) resolves each include column's position from
+`Name2ColIndex` and threads its value through `cdc.Insert/Upsert` into `SetDoc`, which replaces
+include values in lock-step with terms so an UPSERT supersedes them.
+
+Cost tradeoff: the docmap grows by the include values per doc (full string values bloat the
+segment — the same tradeoff fulltext2 already accepts for varchar pks; prefer small scalar
+include columns).
+
+---
+
+## 10. Build & lifecycle: sync build, CDC, MERGE/REBUILD
 
 Index CREATE → sync build → CDC maintenance → periodic compaction. All bases/tails are chunk rows
 in two hidden tables (storage + metadata), framed with the shared CDC chunk format.
 
 - **Sync build** (`fulltext2_create` TVF): CROSS APPLY over the source table, tokenize each row
   (datalink → plain text, json → values, ngram/gojieba parser), `Add` to a streaming `Builder`,
-  seal + persist tag=0 base sub-segments as they fill. `CREATE FULLTEXT` with `VERSION=2` (or
-  `CREATE FULLTEXT2`) registers this + an always-async CDC task.
+  seal + persist tag=0 base sub-segments as they fill. `CREATE FULLTEXT2 INDEX` registers this +
+  an always-async CDC task.
 - **CDC** (`cdc.go`, `tailbuild.go`, `sink.go`, ISCP consumer): INSERT/UPSERT/DELETE flow into the
   tag=1 tail. `TailBuilder` tokenizes inserts into capped, spilled tail segments; deletes into
   spilled tombstone frames; on flush it appends them (delete-frames first, then insert segments) at
@@ -455,7 +540,7 @@ in two hidden tables (storage + metadata), framed with the shared CDC chunk form
 
 ---
 
-## 10. Memory model: mmap, lazy decode, bounded build
+## 11. Memory model: mmap, lazy decode, bounded build
 
 Full-text indexes are large; the engine is careful on both the query and build sides.
 
@@ -479,19 +564,21 @@ build memory regardless of document shape.
 
 ---
 
-## 11. File map
+## 12. File map
 
 | File | Responsibility |
 |---|---|
 | `doc.go` | package overview + segment-format summary |
 | `index.go` | `Index` type, `resolve()`, `SearchPhrase`/`SearchBoolean`/`SearchText` entry points, liveness |
-| `segment.go` | `Segment` (build-side vs loaded-side), `termPostings`, `deriveTermStats`, `BlockSize` |
+| `segment.go` | `Segment` (build-side vs loaded-side), `termPostings`, `deriveTermStats`, `BlockSize`, INCLUDE accessors (`includeVal`, `appendIncludeTo`) |
 | `wand.go` | `wandIter`, Block-Max WAND (`searchWAND`), `buildWandIters`, top-k heap |
 | `stream.go` | no-LIMIT streaming WAND (`streamWAND`, `StreamQuery`, `StreamBagOfWords`) |
 | `query.go` | `SearchQuery` dispatch, `SearchBagOfWords`, boolean-query build, phrase slots |
 | `boolean.go` | boolean operator tree (`clause`, `clauseKind`), boolean evaluation |
 | `search.go` | phrase evaluation, per-segment scoring glue, `boundedTopK` |
 | `membership.go` | WHERE-prefilter + liveness `Membership` adapters |
+| `include_predicate.go` | in-index INCLUDE-column predicate → `Membership` (`= < > BETWEEN IN`, prefix/`LIKE`, 3-valued NULL) |
+| `pkcodec.go` | typed pk / INCLUDE value encode/decode (integer family dense fixed-width; varchar/char varlena `[len][value]`) |
 | `termdict.go` | vellum FST term dict: build, load, exact `get`, `prefixIter`, `forEachTerm` |
 | `build.go` | `Builder` (Add/Finish/FinishSegments), `TokenizedDoc`, `ReachedSegmentCap`, seal caps |
 | `tailbuild.go` | streaming CDC `TailBuilder` (spill-as-you-fill) |
@@ -500,7 +587,7 @@ build memory regardless of document shape.
 | `frames.go` | CDC chunk framing (`FrameSegment`, `UnframeTail`) |
 | `sink.go` | ISCP sink adapter glue |
 | `compact.go` | `CompactSegments` (MERGE): reconstruct live docs → fresh bounded base |
-| `serialize.go` | tar-archive segment encode/decode (docmap/termdict/postings/blocks/positions) |
+| `serialize.go` | tar-archive segment encode/decode (docmap incl. INCLUDE section / termdict/postings/blocks/positions) |
 | `storage.go` | chunk-row persistence, `LoadAllBases`/tail, `__fulltext2` spill, load budgets, `TableConfig` |
 | `search_cache.go` | `VectorIndexCache` integration (per-CN cached loaded index) |
 | `mmap_unix.go` / `mmap_other.go` | read-only mmap + munmap (platform) |

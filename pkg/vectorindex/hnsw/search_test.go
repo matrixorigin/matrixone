@@ -525,3 +525,8 @@ func TestQueryHnswGenerationReadError(t *testing.T) {
 	_, _, err := queryHnswGeneration(context.Background(), "cn", 0, cfg)
 	require.Error(t, err)
 }
+
+// TestSearchIntoUnsupported covers the SearchInto stub.
+func TestSearchIntoUnsupported(t *testing.T) {
+	require.ErrorContains(t, (&HnswSearch[float32]{}).SearchInto(nil, nil, vectorindex.RuntimeConfig{}, nil), "not supported")
+}

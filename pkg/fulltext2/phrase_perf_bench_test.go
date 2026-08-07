@@ -90,8 +90,8 @@ func BenchmarkPhraseSearchConcurrent(b *testing.B) {
 func BenchmarkPhraseStreamNoLimit(b *testing.B) {
 	idx := benchPhraseIndex(b, 20000, 3)
 	pat := []byte("alpha beta")
-	emit := func(keys *vectorindex.ColumnBuffer, _ []float64, _ []*vectorindex.ColumnBuffer) error {
-		PutColumnBuffer(keys) // recycle like the real consumer
+	emit := func(o *vectorindex.SearchOutput) error {
+		PutColumnBuffer(o.Keys) // recycle like the real consumer
 		return nil
 	}
 	b.ReportAllocs()
@@ -110,8 +110,8 @@ func BenchmarkPhraseStreamNoLimit(b *testing.B) {
 func BenchmarkDisjunctionStreamNoLimit(b *testing.B) {
 	idx := benchPhraseIndex(b, 20000, 3)
 	pat := []byte("alpha beta")
-	emit := func(keys *vectorindex.ColumnBuffer, _ []float64, _ []*vectorindex.ColumnBuffer) error {
-		PutColumnBuffer(keys)
+	emit := func(o *vectorindex.SearchOutput) error {
+		PutColumnBuffer(o.Keys)
 		return nil
 	}
 	b.ReportAllocs()

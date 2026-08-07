@@ -305,7 +305,7 @@ func TestFulltext2SearchCallStreaming(t *testing.T) {
 		st.batch.Vecs[0] = vector.NewVec(types.T_int64.ToType())
 		st.batch.Vecs[1] = vector.NewVec(types.T_float32.ToType())
 		st.pkVecIdx, st.scoreVecIdx = 0, 1 // non-covered [doc_id, score] layout (start() builds this from Attrs)
-		st.streamCh = make(chan ft2StreamBatch, 4)
+		st.streamCh = make(chan *vectorindex.SearchOutput, 4)
 		st.errCh = make(chan error, 1)
 		return st
 	}
@@ -314,7 +314,7 @@ func TestFulltext2SearchCallStreaming(t *testing.T) {
 	// happy path: one batch then a clean (nil-error) close.
 	{
 		st := newState()
-		st.streamCh <- ft2StreamBatch{keys: ft2Int64ColumnBuffer(7, 8), distances: []float64{1.5, 2.5}}
+		st.streamCh <- &vectorindex.SearchOutput{Keys: ft2Int64ColumnBuffer(7, 8), Dists: []float32{1.5, 2.5}}
 		close(st.streamCh)
 		st.errCh <- nil
 
@@ -363,7 +363,7 @@ func TestFulltext2SearchCallStreamingCovered(t *testing.T) {
 	st.batch.Vecs[2] = vector.NewVec(types.T_varchar.ToType())
 	st.pkVecIdx, st.scoreVecIdx = 0, 1
 	st.includeOut = []ft2IncludeOut{{vecIdx: 2, segPos: 0, name: "tag"}}
-	st.streamCh = make(chan ft2StreamBatch, 4)
+	st.streamCh = make(chan *vectorindex.SearchOutput, 4)
 	st.errCh = make(chan error, 1)
 
 	// One include col ("tag" varchar): ["x", NULL] — a well-formed [u32 len][content] entry
@@ -374,7 +374,7 @@ func TestFulltext2SearchCallStreamingCovered(t *testing.T) {
 	tag.N = 2
 	tag.Nulls = []bool{false, true}
 
-	st.streamCh <- ft2StreamBatch{keys: ft2Int64ColumnBuffer(7, 8), distances: []float64{1.5, 2.5}, includes: []*vectorindex.ColumnBuffer{tag}}
+	st.streamCh <- &vectorindex.SearchOutput{Keys: ft2Int64ColumnBuffer(7, 8), Dists: []float32{1.5, 2.5}, Include: []*vectorindex.ColumnBuffer{tag}}
 	close(st.streamCh)
 	st.errCh <- nil
 
@@ -398,8 +398,8 @@ func TestFulltext2SearchStopStreamDrains(t *testing.T) {
 	st := &fulltext2SearchState{streaming: true}
 	_, cancel := context.WithCancel(context.Background())
 	st.cancel = cancel
-	st.streamCh = make(chan ft2StreamBatch, 4)
-	st.streamCh <- ft2StreamBatch{keys: ft2Int64ColumnBuffer(1), distances: []float64{1}}
+	st.streamCh = make(chan *vectorindex.SearchOutput, 4)
+	st.streamCh <- &vectorindex.SearchOutput{Keys: ft2Int64ColumnBuffer(1), Dists: []float32{1}}
 	close(st.streamCh)
 
 	st.stopStream()

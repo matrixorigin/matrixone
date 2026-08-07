@@ -59,11 +59,12 @@ type fulltext2SearchState struct {
 
 	// Streaming no-LIMIT path (u.limit == 0): rather than materialize every matching
 	// doc, a producer goroutine runs the search with an Emit callback that hands bounded
-	// batches to streamCh; call() drains one batch per invocation and the upstream ORDER
-	// BY score node ranks them. cancel stops the producer (and releases the cache read
-	// lock it holds) if the consumer aborts early. Mirrors bm25_search.
+	// batches (box-free *vectorindex.SearchOutput, the SAME shape SearchInto fills) to
+	// streamCh; call() drains one batch per invocation and the upstream ORDER BY score
+	// node ranks them. cancel stops the producer (and releases the cache read lock it
+	// holds) if the consumer aborts early. Mirrors bm25_search.
 	streaming bool
-	streamCh  chan ft2StreamBatch
+	streamCh  chan *vectorindex.SearchOutput
 	errCh     chan error
 	cancel    context.CancelFunc
 	done      bool
@@ -96,17 +97,6 @@ type ft2IncludeOut struct {
 	name   string
 }
 
-// ft2StreamBatch is one emitted batch (<= streamBatch rows); the producer hands
-// ownership to the consumer, so the buffers are not reused. keys is a TYPED, box-free
-// ColumnBuffer (fixed-width or varlena) — no per-pk interface allocation. includes, when
-// the covered fast path is on, is COLUMN-MAJOR: one nullable ColumnBuffer per FULL index
-// INCLUDE column (segment order), each covering the whole batch box-free.
-type ft2StreamBatch struct {
-	keys      *vectorindex.ColumnBuffer
-	distances []float64
-	includes  []*vectorindex.ColumnBuffer
-}
-
 func (u *fulltext2SearchState) end(tf *TableFunction, proc *process.Process) error { return nil }
 
 func (u *fulltext2SearchState) reset(tf *TableFunction, proc *process.Process) {
@@ -133,7 +123,7 @@ func (u *fulltext2SearchState) stopStream() {
 	u.cancel()
 	if u.streamCh != nil {
 		for b := range u.streamCh { // drain to the producer's close()
-			fulltext2.PutColumnBuffer(b.keys) // recycle drained (unconsumed) batches
+			fulltext2.PutColumnBuffer(b.Keys) // recycle drained (unconsumed) batches
 		}
 	}
 	u.cancel = nil
@@ -165,49 +155,17 @@ func (u *fulltext2SearchState) call(tf *TableFunction, proc *process.Process) (v
 				}
 				return vm.CancelResult, nil
 			}
-			// b.keys ownership was received from the producer; recycle it on EVERY exit
-			// from here (incl. the append error paths below), else a mid-stream mpool
-			// failure leaks the pooled buffer. Safe to defer: AppendColumnBuffer copies
-			// into u.batch, so u.batch never aliases b.keys.
-			defer fulltext2.PutColumnBuffer(b.keys)
-			// Name-driven output: write pk / score / each include col to its ACTUAL result
-			// vector (column pruning may have dropped or shifted any of them).
-			if u.pkVecIdx >= 0 {
-				// Typed bulk decode of the pk column — no per-pk boxing.
-				if err := vectorindex.AppendColumnBuffer(b.keys, u.batch.Vecs[u.pkVecIdx], proc.Mp()); err != nil {
-					return vm.CancelResult, err
-				}
+			// b ownership (its pooled Keys buffer) was received from the producer; recycle it
+			// on EVERY exit from here (incl. the append error paths in appendOutputRange), else
+			// a mid-stream mpool failure leaks the pooled buffer. Safe to defer: the append
+			// copies into u.batch, so u.batch never aliases b.Keys.
+			defer fulltext2.PutColumnBuffer(b.Keys)
+			// Write the whole emitted batch (rows [0, N)) — pk / score / each include col,
+			// name-driven — via the SAME consumer the LIMIT path uses.
+			if err := u.appendOutputRange(b, 0, b.Keys.N, proc); err != nil {
+				return vm.CancelResult, err
 			}
-			if u.scoreVecIdx >= 0 {
-				for i := 0; i < b.keys.N; i++ {
-					// score is T_float32 (engine computes float64 relevance, narrow on append).
-					// Propagate the append error — else SetRowCount would publish a batch with
-					// fewer scores than keys (a malformed, mismatched-length batch).
-					if err := vector.AppendFixed[float32](u.batch.Vecs[u.scoreVecIdx], float32(b.distances[i]), false, proc.Mp()); err != nil {
-						return vm.CancelResult, err
-					}
-				}
-			}
-			// Include columns: bulk box-free. b.includes is column-major (one nullable
-			// ColumnBuffer per FULL include col in segment order); segPos maps this output
-			// col to its segment position, so AppendColumnBuffer copies the whole column in
-			// one pass — no per-row boxing. A segPos out of range (should not happen on the
-			// covered path) fills N SQL NULLs to keep the batch column-aligned.
-			for _, ic := range u.includeOut {
-				vec := u.batch.Vecs[ic.vecIdx]
-				if ic.segPos >= 0 && ic.segPos < len(b.includes) {
-					if err := vectorindex.AppendColumnBuffer(b.includes[ic.segPos], vec, proc.Mp()); err != nil {
-						return vm.CancelResult, err
-					}
-				} else {
-					for i := 0; i < b.keys.N; i++ {
-						if err := vector.AppendAny(vec, nil, true, proc.Mp()); err != nil {
-							return vm.CancelResult, err
-						}
-					}
-				}
-			}
-			u.batch.SetRowCount(b.keys.N)
+			u.batch.SetRowCount(b.Keys.N)
 			return vm.CallResult{Status: vm.ExecNext, Batch: u.batch}, nil
 		case <-proc.Ctx.Done():
 			return vm.CancelResult, proc.Ctx.Err()
@@ -234,37 +192,10 @@ func (u *fulltext2SearchState) call(tf *TableFunction, proc *process.Process) (v
 	if n < 0 {
 		n = 0
 	}
-	// pk column (box-free). An mpool failure must surface as the error, not a batch that
-	// claims more rows than its vectors hold (the streaming sibling propagates these too).
-	if u.pkVecIdx >= 0 {
-		if err := vectorindex.AppendColumnBufferRange(u.out.Keys, u.batch.Vecs[u.pkVecIdx], start, n, proc.Mp()); err != nil {
-			return vm.CancelResult, err
-		}
-	}
-	if u.scoreVecIdx >= 0 {
-		for i := start; i < start+n; i++ {
-			if err := vector.AppendFixed[float32](u.batch.Vecs[u.scoreVecIdx], u.out.Dists[i], false, proc.Mp()); err != nil {
-				return vm.CancelResult, err
-			}
-		}
-	}
-	// Include columns: bulk box-free, paged over the same [start, start+n) rows. u.out.Include
-	// is column-major (one nullable ColumnBuffer per FULL include col, segment order); segPos
-	// maps each output col — IDENTICAL to the streaming consumer. A segPos out of range (should
-	// not happen on the covered path) fills SQL NULLs.
-	for _, ic := range u.includeOut {
-		vec := u.batch.Vecs[ic.vecIdx]
-		if ic.segPos >= 0 && ic.segPos < len(u.out.Include) {
-			if err := vectorindex.AppendColumnBufferRange(u.out.Include[ic.segPos], vec, start, n, proc.Mp()); err != nil {
-				return vm.CancelResult, err
-			}
-		} else {
-			for j := 0; j < n; j++ {
-				if err := vector.AppendAny(vec, nil, true, proc.Mp()); err != nil {
-					return vm.CancelResult, err
-				}
-			}
-		}
+	// Page rows [start, start+n) of the box-free SearchInto result (u.out) into this batch
+	// via the SAME consumer the streaming path uses.
+	if err := u.appendOutputRange(u.out, start, n, proc); err != nil {
+		return vm.CancelResult, err
 	}
 	u.offset += n
 	u.batch.SetRowCount(n)
@@ -272,6 +203,46 @@ func (u *fulltext2SearchState) call(tf *TableFunction, proc *process.Process) (v
 		return vm.CancelResult, nil
 	}
 	return vm.CallResult{Status: vm.ExecNext, Batch: u.batch}, nil
+}
+
+// appendOutputRange writes rows [start, start+n) of a box-free SearchOutput (pk / score /
+// covered INCLUDE cols) into u.batch, name-driven so column pruning can't misalign the
+// columns. It is the ONE consumer shared by both result paths: the streaming path passes the
+// per-batch emitted output with start=0, n=Keys.N; the LIMIT path pages the whole-result output
+// by u.offset. pk and each include col bulk-append via AppendColumnBufferRange (no per-row
+// boxing); score narrows float32 per row. Any mpool failure surfaces as the error so the caller
+// never SetRowCounts a batch whose vectors disagree in length. A segPos out of range (should not
+// happen on the covered path) fills SQL NULLs to keep the batch column-aligned.
+func (u *fulltext2SearchState) appendOutputRange(out *vectorindex.SearchOutput, start, n int, proc *process.Process) error {
+	mp := proc.Mp()
+	if u.pkVecIdx >= 0 {
+		if err := vectorindex.AppendColumnBufferRange(out.Keys, u.batch.Vecs[u.pkVecIdx], start, n, mp); err != nil {
+			return err
+		}
+	}
+	if u.scoreVecIdx >= 0 {
+		vec := u.batch.Vecs[u.scoreVecIdx]
+		for i := start; i < start+n; i++ {
+			if err := vector.AppendFixed[float32](vec, out.Dists[i], false, mp); err != nil {
+				return err
+			}
+		}
+	}
+	for _, ic := range u.includeOut {
+		vec := u.batch.Vecs[ic.vecIdx]
+		if ic.segPos >= 0 && ic.segPos < len(out.Include) {
+			if err := vectorindex.AppendColumnBufferRange(out.Include[ic.segPos], vec, start, n, mp); err != nil {
+				return err
+			}
+		} else {
+			for j := 0; j < n; j++ {
+				if err := vector.AppendAny(vec, nil, true, mp); err != nil {
+					return err
+				}
+			}
+		}
+	}
+	return nil
 }
 
 func fulltext2SearchPrepare(proc *process.Process, arg *TableFunction) (tvfState, error) {
@@ -427,13 +398,13 @@ func (u *fulltext2SearchState) start(tf *TableFunction, proc *process.Process, n
 		// per invocation and the upstream ORDER BY score node ranks. cancel/ctx let
 		// reset()/free() stop the producer and release the cache read-lock it holds.
 		u.streaming = true
-		u.streamCh = make(chan ft2StreamBatch, 4)
+		u.streamCh = make(chan *vectorindex.SearchOutput, 4)
 		u.errCh = make(chan error, 1)
 		ctx, cancel := context.WithCancel(proc.Ctx)
 		u.cancel = cancel
-		rt := vectorindex.RuntimeConfig{Emit: func(keys *vectorindex.ColumnBuffer, dists []float64, includes []*vectorindex.ColumnBuffer) error {
+		rt := vectorindex.RuntimeConfig{Emit: func(out *vectorindex.SearchOutput) error {
 			select {
-			case u.streamCh <- ft2StreamBatch{keys: keys, distances: dists, includes: includes}:
+			case u.streamCh <- out:
 				return nil
 			case <-ctx.Done():
 				return ctx.Err()

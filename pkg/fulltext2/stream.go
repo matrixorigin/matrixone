@@ -31,10 +31,10 @@ const streamBatch = 8192
 // WITHOUT materializing them all and WITHOUT boxing a pk per doc. On an emit error it
 // records it and stops (the walk checks stopped and bails).
 type streamSink struct {
-	emit   func(keys *vectorindex.ColumnBuffer, distances []float64, includes []*vectorindex.ColumnBuffer) error
+	emit   func(out *vectorindex.SearchOutput) error
 	keys   *vectorindex.ColumnBuffer // pooled; nil until the first push after a flush
 	pkType types.T
-	scores []float64
+	scores []float32
 	// includeCols is COLUMN-MAJOR: one nullable ColumnBuffer per FULL index INCLUDE column
 	// (segment-include order), each covering the whole batch — the box-free analogue of the
 	// old per-row [][]any. nil until the first push after a flush; len == len(includeTypes)
@@ -52,7 +52,7 @@ type streamSink struct {
 // itself is fetched from the pool lazily on the first push. Callers create it only after
 // the globalN==0 early-out, so segments is non-empty. wantInclude turns on the covered
 // fast path: each pushed doc also carries its INCLUDE values (box-free) through emit.
-func newStreamSink(idx *Index, wantInclude bool, emit func(keys *vectorindex.ColumnBuffer, distances []float64, includes []*vectorindex.ColumnBuffer) error) *streamSink {
+func newStreamSink(idx *Index, wantInclude bool, emit func(out *vectorindex.SearchOutput) error) *streamSink {
 	pkType := idx.segments[0].PkType
 	w, fixed := fixedPkByteWidth(pkType)
 	if !fixed {
@@ -99,7 +99,7 @@ func (s *streamSink) pushPk(seg *Segment, ord int64, score float32) {
 	}
 	s.ensure()
 	seg.appendPkTo(s.keys, s.fixedW, ord)
-	s.scores = append(s.scores, float64(score))
+	s.scores = append(s.scores, score)
 	if s.wantInclude {
 		s.appendIncludes(seg, ord)
 		if s.stopped {
@@ -120,7 +120,7 @@ func (s *streamSink) pushAny(seg *Segment, ord int64, pk any, score float32) {
 	}
 	s.ensure()
 	appendAnyPk(s.keys, s.fixedW, pk)
-	s.scores = append(s.scores, float64(score))
+	s.scores = append(s.scores, score)
 	if s.wantInclude {
 		s.appendIncludes(seg, ord)
 		if s.stopped {
@@ -136,7 +136,12 @@ func (s *streamSink) flush() {
 	if s.stopped || s.keys == nil || s.keys.N == 0 {
 		return
 	}
-	if e := s.emit(s.keys, s.scores, s.includeCols); e != nil {
+	// Hand the batch to the consumer as a *SearchOutput — the SAME box-free container
+	// SearchInto fills on the LIMIT path, so both share one consumer (Dists is float32,
+	// matching the T_float32 score column). This SearchOutput is producer-owned per batch;
+	// the consumer recycles out.Keys (pooled) after copying and drops Dists/Include.
+	out := &vectorindex.SearchOutput{Keys: s.keys, Dists: s.scores, Include: s.includeCols}
+	if e := s.emit(out); e != nil {
 		s.err = e
 		s.stopped = true
 		PutColumnBuffer(s.keys) // emit didn't hand it off; recycle here
@@ -219,7 +224,7 @@ func (s *Segment) streamWAND(clauses []clause, algo ScoreAlgo, gs *globalStats, 
 // streamPhrase; and a full boolean with MUST/MUST-NOT/mixed-phrase via streamBoolean
 // (each segment's dense evalBoolean, freed before the next). All share the same sink — a
 // uniform emit interface, and no separate paginated copy in the caller.
-func (idx *Index) StreamQuery(pattern []byte, boolean bool, parser string, algo ScoreAlgo, filter *prefilter, wantInclude bool, emit func(keys *vectorindex.ColumnBuffer, distances []float64, includes []*vectorindex.ColumnBuffer) error) error {
+func (idx *Index) StreamQuery(pattern []byte, boolean bool, parser string, algo ScoreAlgo, filter *prefilter, wantInclude bool, emit func(out *vectorindex.SearchOutput) error) error {
 	if idx.globalN == 0 {
 		return nil
 	}
@@ -315,7 +320,7 @@ func (idx *Index) streamPhrase(slots []phraseSlot, algo ScoreAlgo, filter *prefi
 // heap-free via streamWAND — the position-free analogue of StreamQuery's disjunctive
 // branch, but a CJK run is tokenized to OR terms instead of a positional phrase, so it
 // works on a POSITION_FREE index.
-func (idx *Index) StreamBagOfWords(pattern []byte, parser string, algo ScoreAlgo, filter *prefilter, wantInclude bool, emit func(keys *vectorindex.ColumnBuffer, distances []float64, includes []*vectorindex.ColumnBuffer) error) error {
+func (idx *Index) StreamBagOfWords(pattern []byte, parser string, algo ScoreAlgo, filter *prefilter, wantInclude bool, emit func(out *vectorindex.SearchOutput) error) error {
 	if idx.globalN == 0 {
 		return nil
 	}

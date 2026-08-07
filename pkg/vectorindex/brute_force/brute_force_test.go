@@ -477,3 +477,9 @@ func TestGoBruteForceHeapLogic(t *testing.T) {
 		}
 	}
 }
+
+// TestSearchIntoUnsupported covers the SearchInto stubs on the CPU brute-force impls.
+func TestSearchIntoUnsupported(t *testing.T) {
+	require.ErrorContains(t, (&UsearchBruteForceIndex[float32]{}).SearchInto(nil, nil, vectorindex.RuntimeConfig{}, nil), "not supported")
+	require.ErrorContains(t, (&GoBruteForceIndex[float32, float32]{}).SearchInto(nil, nil, vectorindex.RuntimeConfig{}, nil), "not supported")
+}

@@ -126,9 +126,9 @@ func TestStreamLoadedSegmentAllPkTypes(t *testing.T) {
 		idx := NewIndex([]*Segment{loaded}, nil)
 		out := vector.NewVec(pkType.ToType())
 		err = idx.StreamBagOfWords([]byte("alpha"), ParserDefault, BM25, nil, false,
-			func(k *vectorindex.ColumnBuffer, _ []float64, _ []*vectorindex.ColumnBuffer) error {
-				e := vectorindex.AppendColumnBuffer(k, out, mp)
-				PutColumnBuffer(k) // recycle, as the real consumer does
+			func(o *vectorindex.SearchOutput) error {
+				e := vectorindex.AppendColumnBuffer(o.Keys, out, mp)
+				PutColumnBuffer(o.Keys) // recycle, as the real consumer does
 				return e
 			})
 		require.NoError(t, err)
@@ -153,7 +153,7 @@ func TestStreamLoadedSegmentAllPkTypes(t *testing.T) {
 // TestStreamBagOfWordsEdges covers the two early-out branches of StreamBagOfWords: an
 // empty index (globalN==0) and a pattern that resolves to no tokens.
 func TestStreamBagOfWordsEdges(t *testing.T) {
-	noEmit := func(*vectorindex.ColumnBuffer, []float64, []*vectorindex.ColumnBuffer) error {
+	noEmit := func(*vectorindex.SearchOutput) error {
 		t.Fatal("emit should not be called")
 		return nil
 	}

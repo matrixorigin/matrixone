@@ -39,6 +39,9 @@ func (s *stubIndexSearch) Search(*sqlexec.SqlProcess, any, vectorindex.RuntimeCo
 func (s *stubIndexSearch) SearchFloat32(*sqlexec.SqlProcess, any, vectorindex.RuntimeConfig, []int64, []float32) error {
 	return nil
 }
+func (s *stubIndexSearch) SearchInto(*sqlexec.SqlProcess, any, vectorindex.RuntimeConfig, *vectorindex.SearchOutput) error {
+	return nil
+}
 func (s *stubIndexSearch) Load(*sqlexec.SqlProcess) error { return nil }
 func (s *stubIndexSearch) Destroy()                       { s.destroyed = true }
 

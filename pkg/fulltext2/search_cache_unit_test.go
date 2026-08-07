@@ -150,8 +150,9 @@ func TestFulltext2SearchStreamingEmit(t *testing.T) {
 	// Emit set + no pushed LIMIT → streaming: results handed off via Emit, empty return.
 	for _, bagOfWords := range []bool{false, true} {
 		emitted := 0
-		emit := func(k *vectorindex.ColumnBuffer, _ []float64, _ []*vectorindex.ColumnBuffer) error {
-			emitted += k.N
+		emit := func(o *vectorindex.SearchOutput) error {
+			emitted += o.Keys.N
+			PutColumnBuffer(o.Keys) // recycle like the real consumer
 			return nil
 		}
 		keys, dists, err := s.Search(proc,
@@ -229,4 +230,81 @@ func TestFulltext2IsStaleQueryError(t *testing.T) {
 	stale, err := s.IsStale()
 	require.Error(t, err)
 	require.True(t, stale)
+}
+
+// TestFulltext2SearchInto pins the box-free LIMIT path: SearchInto fills the caller-owned
+// SearchOutput (pk column, float32 scores, one nullable ColumnBuffer per FULL INCLUDE column)
+// — box-free and reused across calls. incIdx has 5 docs all matching "x", includes
+// [status varchar, prio int64] with a NULL status (pk4).
+func TestFulltext2SearchInto(t *testing.T) {
+	proc := newSearchProc(t)
+	idx := incIdx(t)
+	s := &Fulltext2Search{idx: idx, loaded: true, cfg: TableConfig{IndexTable: "__store", Parser: ParserDefault}}
+	mp := mpool.MustNewZero()
+
+	out := &vectorindex.SearchOutput{}
+	rt := vectorindex.RuntimeConfig{Limit: 10, RequestedIncludeColumns: []string{"status", "prio"}}
+	require.NoError(t, s.SearchInto(proc, Fulltext2Query{Pattern: []byte("x"), Algo: BM25}, rt, out))
+
+	require.Equal(t, 5, out.Keys.N) // all 5 docs contain "x"
+	require.Len(t, out.Dists, 5)
+	require.Len(t, out.Include, 2) // status, prio (FULL include order)
+
+	// Decode the box-free buffers into vectors and zip by row (Keys[i] <-> Include[*][i]) into
+	// a pk -> (status, prio) map (result order is score-desc; equal scores are unspecified).
+	keyVec := vector.NewVec(types.T_int64.ToType())
+	require.NoError(t, vectorindex.AppendColumnBuffer(out.Keys, keyVec, mp))
+	statusVec := vector.NewVec(types.T_varchar.ToType())
+	require.NoError(t, vectorindex.AppendColumnBuffer(out.Include[0], statusVec, mp))
+	prioVec := vector.NewVec(types.T_int64.ToType())
+	require.NoError(t, vectorindex.AppendColumnBuffer(out.Include[1], prioVec, mp))
+
+	pks := vector.MustFixedColWithTypeCheck[int64](keyVec)
+	prios := vector.MustFixedColWithTypeCheck[int64](prioVec)
+	require.Len(t, pks, 5)
+	type sv struct {
+		status any
+		prio   int64
+	}
+	got := map[int64]sv{}
+	for i := range pks {
+		var st any
+		if !statusVec.IsNull(uint64(i)) {
+			st = statusVec.GetStringAt(i)
+		}
+		got[pks[i]] = sv{st, prios[i]}
+	}
+	require.Equal(t, sv{"active", int64(10)}, got[1])
+	require.Equal(t, sv{"inactive", int64(20)}, got[2])
+	require.Equal(t, sv{"active", int64(30)}, got[3])
+	require.Equal(t, sv{nil, int64(40)}, got[4]) // NULL status preserved
+	require.Equal(t, sv{"archived", int64(5)}, got[5])
+
+	// Reuse: a second SearchInto Resets out and refills (no stale rows accumulated).
+	require.NoError(t, s.SearchInto(proc, Fulltext2Query{Pattern: []byte("x"), Algo: BM25}, rt, out))
+	require.Equal(t, 5, out.Keys.N)
+	require.Len(t, out.Dists, 5)
+
+	// No requested INCLUDE columns → out.Include emptied.
+	require.NoError(t, s.SearchInto(proc, Fulltext2Query{Pattern: []byte("x"), Algo: BM25},
+		vectorindex.RuntimeConfig{Limit: 10}, out))
+	require.Equal(t, 5, out.Keys.N)
+	require.Empty(t, out.Include)
+
+	// nil out → error, not a nil-deref.
+	require.Error(t, s.SearchInto(proc, Fulltext2Query{Pattern: []byte("x")}, rt, nil))
+}
+
+// TestFulltext2SearchIntoNotLoaded / empty: the two prepare() early-outs on the SearchInto path.
+func TestFulltext2SearchIntoNotLoadedAndEmpty(t *testing.T) {
+	proc := newSearchProc(t)
+	out := &vectorindex.SearchOutput{}
+
+	// not loaded → error.
+	s := NewFulltext2Search(TableConfig{IndexTable: "__store"})
+	require.ErrorContains(t, s.SearchInto(proc, Fulltext2Query{Pattern: []byte("x")}, vectorindex.RuntimeConfig{Limit: 10}, out), "not loaded")
+
+	// loaded but empty index → no rows, no error, out emptied.
+	s2 := &Fulltext2Search{idx: NewIndex(nil, nil), loaded: true, cfg: TableConfig{IndexTable: "__store"}}
+	require.NoError(t, s2.SearchInto(proc, Fulltext2Query{Pattern: []byte("x")}, vectorindex.RuntimeConfig{Limit: 10}, out))
 }

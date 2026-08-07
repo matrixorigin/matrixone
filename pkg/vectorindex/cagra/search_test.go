@@ -236,3 +236,8 @@ func TestCagraSearchLoad(t *testing.T) {
 	s.Destroy()
 	require.Empty(t, s.Indexes)
 }
+
+// TestSearchIntoUnsupported covers the SearchInto stub (cagra has not migrated to SearchOutput).
+func TestSearchIntoUnsupported(t *testing.T) {
+	require.ErrorContains(t, (&CagraSearch[float32, float32]{}).SearchInto(nil, nil, vectorindex.RuntimeConfig{}, nil), "not supported")
+}
