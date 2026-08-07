@@ -39,6 +39,10 @@ const (
 	nextBatch   = 5
 	firstWindow = 6
 	interval    = 7
+	// resumeAfterFlush advances to the next active window after an internal
+	// result flush. The boundary window was already published by the previous
+	// aggregate generation, so this transition must not emit it again.
+	resumeAfterFlush = 8
 )
 
 type container struct {
