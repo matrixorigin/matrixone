@@ -819,11 +819,12 @@ func (s *stateMachine) handleCNHeartbeat(cmd []byte) sm.Result {
 		hb.CommandDeliveryAckSupported {
 		return s.getCommandBatchWithAck(hb.UUID, hb.AckedCommandBatchID)
 	}
-	if s.state.CommandDeliveryEnabled {
+	if s.state.CommandDeliveryEnabled || s.state.CommandDeliveryPreparing {
 		// An old CN may still heartbeat after HAKeeper activates the protocol
-		// (for example, after a restart). Do not fall back to destructive
-		// delivery: that would recreate the command-loss window. The command
-		// remains durable until this CN is upgraded and starts acknowledging it.
+		// or while the activation barrier is being evaluated. Do not fall back
+		// to destructive delivery: a lost response would recreate the command-
+		// loss window. The command remains durable until this CN is upgraded and
+		// starts acknowledging it.
 		return sm.Result{}
 	}
 	return s.getCommandBatch(hb.UUID)
@@ -846,9 +847,9 @@ func (s *stateMachine) handleTNHeartbeat(cmd []byte) sm.Result {
 		hb.CommandDeliveryAckSupported {
 		return s.getCommandBatchWithAck(hb.UUID, hb.AckedCommandBatchID)
 	}
-	if s.state.CommandDeliveryEnabled {
+	if s.state.CommandDeliveryEnabled || s.state.CommandDeliveryPreparing {
 		// See the CN path above. A legacy TN must not consume a pending batch
-		// once acknowledged delivery is active.
+		// once acknowledged delivery is active or preparing.
 		return sm.Result{}
 	}
 	return s.getCommandBatch(hb.UUID)

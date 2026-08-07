@@ -72,6 +72,9 @@ func (c *blockingHeartbeatCommandClient) SendTNHeartbeat(
 	ctx context.Context,
 	hb pb.TNStoreHeartbeat,
 ) (pb.CommandBatch, error) {
+	if hb.AckedCommandBatchID != 0 {
+		return pb.CommandBatch{}, nil
+	}
 	select {
 	case <-c.heartbeatEntered:
 	default:
@@ -395,15 +398,64 @@ func TestCommandBatchDeduplicatesPollHeartbeatRace(t *testing.T) {
 
 	store.handleCommandBatch(pb.CommandBatch{BatchID: 10, Commands: []pb.ScheduleCommand{command}})
 	require.Equal(t, uint64(10), store.ackedCommandBatchID.Load())
+	require.Equal(t, uint64(10), store.shutdownBatchID.Load())
 	store.handleCommandBatch(pb.CommandBatch{BatchID: 10, Commands: []pb.ScheduleCommand{command}})
 	store.handleCommandBatch(pb.CommandBatch{BatchID: 9, Commands: []pb.ScheduleCommand{command}})
-	require.Equal(t, 1, len(store.shutdownC), "duplicate and stale batches must not be applied")
+	require.Empty(t, store.shutdownC, "shutdown must wait for its durable acknowledgement")
+	store.handleHeartbeatResponse(9, pb.CommandBatch{})
+	require.Empty(t, store.shutdownC, "a stale acknowledgement must not complete shutdown")
+	store.handleHeartbeatResponse(10, pb.CommandBatch{BatchID: 10, Commands: []pb.ScheduleCommand{command}})
+	require.Empty(t, store.shutdownC, "a retained shutdown command is not acknowledged")
+	store.handleHeartbeatResponse(10, pb.CommandBatch{})
+	require.Equal(t, 1, len(store.shutdownC), "an exact committed acknowledgement completes shutdown")
 	store.handleCommandBatch(pb.CommandBatch{Commands: []pb.ScheduleCommand{command}})
 	require.Equal(t, 1, len(store.shutdownC), "one legacy replay after leader downgrade must be suppressed")
 	store.handleCommandBatch(pb.CommandBatch{Commands: []pb.ScheduleCommand{command}})
 	require.Equal(t, 2, len(store.shutdownC), "a later legacy checker retry must remain applicable")
 
 	store.handleCommandBatch(pb.CommandBatch{BatchID: 11, Commands: []pb.ScheduleCommand{command}})
-	require.Equal(t, 3, len(store.shutdownC), "a new checker generation must remain retryable")
+	require.Equal(t, 2, len(store.shutdownC), "a new acknowledged generation must wait for its own ack")
 	require.Equal(t, uint64(11), store.ackedCommandBatchID.Load())
+	store.handleHeartbeatResponse(11, pb.CommandBatch{})
+	require.Equal(t, 3, len(store.shutdownC), "a new checker generation remains independently completable")
+}
+
+func TestShutdownWaitsForAcknowledgementTransport(t *testing.T) {
+	rt := runtime.DefaultRuntime()
+	runtime.SetupServiceBasedRuntime("", rt)
+	client := &testHAClient{}
+	store := &store{
+		cfg: &Config{
+			UUID: "tn-1",
+		},
+		replicas:       &sync.Map{},
+		config:         &util.ConfigData{},
+		hakeeperClient: client,
+		rt:             rt,
+		shutdownC:      make(chan struct{}, 1),
+	}
+	store.cfg.HAKeeper.HeatbeatTimeout.Duration = time.Second
+	command := pb.ScheduleCommand{
+		UUID:        "tn-1",
+		ServiceType: pb.TNService,
+		ShutdownStore: &pb.ShutdownStore{
+			StoreID: "tn-1",
+		},
+	}
+
+	store.handlePolledCommandBatch(context.Background(), pb.CommandBatch{
+		BatchID: 10,
+		Commands: []pb.ScheduleCommand{
+			command,
+		},
+	})
+	require.Equal(t, uint64(10), client.lastHeartbeat.AckedCommandBatchID)
+	require.Equal(t, uint64(10), store.shutdownBatchID.Load())
+	require.Empty(t, store.shutdownC,
+		"a failed acknowledgement RPC must not trigger process termination")
+
+	store.handleHeartbeatResponse(10, pb.CommandBatch{})
+	require.Zero(t, store.shutdownBatchID.Load())
+	require.Len(t, store.shutdownC, 1,
+		"a later heartbeat can safely complete an acknowledgement whose response was lost")
 }

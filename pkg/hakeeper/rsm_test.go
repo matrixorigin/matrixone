@@ -1313,6 +1313,88 @@ func TestLegacyServiceCannotConsumeAfterCommandDeliveryActivation(t *testing.T) 
 	require.True(t, ok, "an old service must not consume a durable batch")
 }
 
+func TestLegacyServiceCannotConsumeDuringCommandDeliveryPreparation(t *testing.T) {
+	tests := []struct {
+		name        string
+		serviceType pb.ServiceType
+		heartbeat   func(t *testing.T, uuid string, supported bool, ack uint64) []byte
+	}{
+		{
+			name:        "cn",
+			serviceType: pb.CNService,
+			heartbeat: func(t *testing.T, uuid string, supported bool, ack uint64) []byte {
+				data, err := (&pb.CNStoreHeartbeat{
+					UUID:                        uuid,
+					CommandDeliveryAckSupported: supported,
+					AckedCommandBatchID:         ack,
+				}).Marshal()
+				require.NoError(t, err)
+				return GetCNStoreHeartbeatCmd(data)
+			},
+		},
+		{
+			name:        "tn",
+			serviceType: pb.TNService,
+			heartbeat: func(t *testing.T, uuid string, supported bool, ack uint64) []byte {
+				data, err := (&pb.TNStoreHeartbeat{
+					UUID:                        uuid,
+					CommandDeliveryAckSupported: supported,
+					AckedCommandBatchID:         ack,
+				}).Marshal()
+				require.NoError(t, err)
+				return GetTNStoreHeartbeatCmd(data)
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			rsm := NewStateMachine(0, 1).(*stateMachine)
+			rsm.state.CommandDeliveryPreparing = true
+			command := pb.ScheduleCommand{
+				UUID:        test.name + "-1",
+				ServiceType: test.serviceType,
+				CreateTaskService: &pb.CreateTaskService{
+					TaskDatabase: "mo_task",
+				},
+			}
+			_, err := rsm.Update(sm.Entry{
+				Index: 10,
+				Cmd:   GetUpdateCommandsCmd(1, []pb.ScheduleCommand{command}),
+			})
+			require.NoError(t, err)
+
+			result, err := rsm.Update(sm.Entry{
+				Index: 11,
+				Cmd:   test.heartbeat(t, command.UUID, false, 0),
+			})
+			require.NoError(t, err)
+			require.Empty(t, result.Data)
+			pending, ok := rsm.state.ScheduleCommands[command.UUID]
+			require.True(t, ok, "a legacy preparation heartbeat must not consume work")
+			require.Equal(t, uint64(10), pending.BatchID)
+
+			result, err = rsm.Update(sm.Entry{
+				Index: 12,
+				Cmd:   test.heartbeat(t, command.UUID, true, 0),
+			})
+			require.NoError(t, err)
+			var delivered pb.CommandBatch
+			require.NoError(t, delivered.Unmarshal(result.Data))
+			require.Equal(t, pending, delivered)
+
+			result, err = rsm.Update(sm.Entry{
+				Index: 13,
+				Cmd:   test.heartbeat(t, command.UUID, true, delivered.BatchID),
+			})
+			require.NoError(t, err)
+			require.Empty(t, result.Data)
+			_, ok = rsm.state.ScheduleCommands[command.UUID]
+			require.False(t, ok)
+		})
+	}
+}
+
 func TestPreparingCommandDeliveryIsNonDestructiveForSupportedService(t *testing.T) {
 	rsm := NewStateMachine(0, 1).(*stateMachine)
 	rsm.state.CommandDeliveryPreparing = true
