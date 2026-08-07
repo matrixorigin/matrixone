@@ -22,11 +22,17 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/system"
+	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/version"
 )
+
+var cnCommandPollFailed = logutil.Event{
+	Name:    "cn.schedule-command.poll.failed",
+	Message: "failed to poll cn schedule commands",
+}
 
 func (s *service) startCNStoreHeartbeat() error {
 	if s._hakeeperClient == nil {
@@ -34,7 +40,7 @@ func (s *service) startCNStoreHeartbeat() error {
 			return err
 		}
 	}
-	return s.stopper.RunNamedTask("cnservice-heartbeat", s.heartbeatTask)
+	return s.stopper.RunNamedTask("cnservice-control-plane", s.controlTask)
 }
 
 func (s *service) heartbeatTask(ctx context.Context) {
@@ -65,6 +71,108 @@ func (s *service) heartbeatTask(ctx context.Context) {
 	}
 }
 
+func (s *service) controlTask(ctx context.Context) {
+	s.commandPollWakeup = make(chan struct{}, 1)
+	commandDone := make(chan struct{})
+	go func() {
+		defer close(commandDone)
+		s.commandTask(ctx)
+	}()
+	s.heartbeatTask(ctx)
+	<-commandDone
+}
+
+func (s *service) commandTask(ctx context.Context) {
+	client, ok := s._hakeeperClient.(logservice.ScheduleCommandHAKeeperClient)
+	if !ok {
+		return
+	}
+	poll := func() {
+		// A healthy heartbeat remains the primary command-delivery RPC. Polling
+		// is a bounded hedge while it is in flight, and remains enabled after a
+		// failed/deadline heartbeat until one succeeds; the healthy steady state
+		// therefore adds no network or Raft traffic.
+		start := time.Now()
+		defer func() {
+			v2.CNCommandPollHistogram.Observe(time.Since(start).Seconds())
+		}()
+		ctx2, cancel := context.WithTimeout(ctx, logservice.ScheduleCommandPollTimeout)
+		defer cancel()
+		batch, err := client.GetScheduleCommands(ctx2, logservicepb.CNService)
+		if err != nil {
+			if ctx.Err() == nil {
+				v2.CNCommandPollFailureCounter.Inc()
+				cnCommandPollFailed.Error(
+					zap.String("uuid", s.cfg.UUID),
+					zap.Error(err))
+			}
+			return
+		}
+		if ctx2.Err() != nil {
+			return
+		}
+		s.handleCommandBatch(batch)
+	}
+
+	active := func() bool {
+		return s.heartbeatInFlight.Load() || s.commandPollNeeded.Load()
+	}
+	timer := time.NewTimer(time.Hour)
+	if !timer.Stop() {
+		<-timer.C
+	}
+	defer timer.Stop()
+	var timerC <-chan time.Time
+	arm := func(delay time.Duration) {
+		timer.Reset(delay)
+		timerC = timer.C
+	}
+	disarm := func() {
+		if timerC != nil && !timer.Stop() {
+			select {
+			case <-timer.C:
+			default:
+			}
+		}
+		timerC = nil
+	}
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-s.commandPollWakeup:
+			if !active() {
+				disarm()
+			} else if timerC == nil {
+				arm(logservice.ScheduleCommandInitialPollDelay(s.cfg.UUID))
+			}
+		case <-timerC:
+			timerC = nil
+			if !active() {
+				continue
+			}
+			pollStarted := time.Now()
+			poll()
+			if active() {
+				// Pull delivery has no server-side wakeup. Keep a start-to-start
+				// cadence so RPC latency cannot silently extend the discovery bound.
+				delay := logservice.ScheduleCommandPollInterval - time.Since(pollStarted)
+				if delay < 0 {
+					delay = 0
+				}
+				arm(delay)
+			}
+		}
+	}
+}
+
+func (s *service) notifyCommandPoll() {
+	select {
+	case s.commandPollWakeup <- struct{}{}:
+	default:
+	}
+}
+
 func (s *service) heartbeat(ctx context.Context) {
 	start := time.Now()
 	defer func() {
@@ -91,20 +199,34 @@ func (s *service) heartbeat(ctx context.Context) {
 			MemTotal:     system.MemoryTotal(),
 			MemAvailable: system.MemoryAvailable(),
 		},
-		CommitID: version.CommitID,
+		CommitID:                    version.CommitID,
+		AckedCommandBatchID:         s.ackedCommandBatchID.Load(),
+		CommandDeliveryAckSupported: true,
 	}
 	if s.gossipNode != nil {
 		hb.GossipAddress = s.gossipServiceAddr()
 		hb.GossipJoined = s.gossipNode.Joined()
 	}
 
+	s.heartbeatInFlight.Store(true)
+	s.notifyCommandPoll()
 	cb, err := s._hakeeperClient.SendCNHeartbeat(ctx2, hb)
+	s.heartbeatInFlight.Store(false)
 	if err != nil {
+		s.commandPollNeeded.Store(true)
+		s.notifyCommandPoll()
 		err = moerr.AttachCause(ctx2, err)
 		v2.CNHeartbeatFailureCounter.Inc()
 		s.logger.Error("failed to send cn heartbeat", zap.Error(err))
 		return
 	}
+	if ctx2.Err() != nil {
+		s.commandPollNeeded.Store(true)
+		s.notifyCommandPoll()
+		return
+	}
+	s.commandPollNeeded.Store(false)
+	s.notifyCommandPoll()
 
 	select {
 	case <-s.hakeeperConnected:
@@ -113,10 +235,67 @@ func (s *service) heartbeat(ctx context.Context) {
 		close(s.hakeeperConnected)
 	}
 	s.config.DecrCount()
-	s.handleCommands(cb.Commands)
+	s.handleHeartbeatResponse(hb.AckedCommandBatchID, cb)
 }
 
-func (s *service) handleCommands(cmds []logservicepb.ScheduleCommand) {
+func (s *service) handleCommandBatch(batch logservicepb.CommandBatch) {
+	s.commandMu.Lock()
+	defer s.commandMu.Unlock()
+	s.handleCommandBatchLocked(batch)
+}
+
+func (s *service) handleCommandBatchLocked(batch logservicepb.CommandBatch) {
+	if len(batch.Commands) == 0 {
+		return
+	}
+	if batch.BatchID == 0 {
+		s.appliedCommandIDs = nil
+		fingerprint := logservice.ScheduleCommandBatchFingerprint(batch)
+		if s.legacyDedupeArmed && fingerprint == s.lastCommandHash {
+			s.legacyDedupeArmed = false
+			return
+		}
+		s.legacyDedupeArmed = false
+		s.handleCommandsLocked(batch.Commands)
+		return
+	} else {
+		if batch.BatchID <= s.lastCommandBatchID {
+			return
+		}
+	}
+	commands, applied, ok := logservice.FilterUnappliedScheduleCommands(
+		batch,
+		s.appliedCommandIDs,
+	)
+	if !ok {
+		s.logger.Error("received acknowledged schedule-command batch without stable command IDs",
+			zap.Uint64("batch-id", batch.BatchID))
+		return
+	}
+	s.handleCommandsLocked(commands)
+	s.appliedCommandIDs = applied
+	if batch.BatchID != 0 {
+		s.lastCommandBatchID = batch.BatchID
+		s.ackedCommandBatchID.Store(batch.BatchID)
+		s.lastCommandHash = logservice.ScheduleCommandBatchFingerprint(batch)
+		s.legacyDedupeArmed = true
+	}
+}
+
+func (s *service) handleHeartbeatResponse(
+	sentAck uint64,
+	batch logservicepb.CommandBatch,
+) {
+	s.commandMu.Lock()
+	defer s.commandMu.Unlock()
+	if sentAck != 0 && sentAck == s.lastCommandBatchID &&
+		(batch.BatchID == 0 || batch.BatchID == sentAck) {
+		s.appliedCommandIDs = nil
+	}
+	s.handleCommandBatchLocked(batch)
+}
+
+func (s *service) handleCommandsLocked(cmds []logservicepb.ScheduleCommand) {
 	for _, cmd := range cmds {
 		if cmd.ServiceType != logservicepb.CNService {
 			s.logger.Fatal("received invalid command", zap.String("command", cmd.LogString()))
@@ -126,7 +305,7 @@ func (s *service) handleCommands(cmds []logservicepb.ScheduleCommand) {
 			s.createTaskService(cmd.CreateTaskService)
 			s.createSQLLogger(cmd.CreateTaskService)
 			s.createProxyUser(cmd.CreateTaskService)
-		} else if s.gossipNode.Created() && cmd.JoinGossipCluster != nil {
+		} else if s.gossipNode.Created() && !s.gossipNode.Joined() && cmd.JoinGossipCluster != nil {
 			s.gossipNode.SetJoined()
 
 			// Start an async task to join the gossip cluster to avoid the long time joining, and if

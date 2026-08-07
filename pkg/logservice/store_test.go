@@ -66,6 +66,58 @@ func TestNodeHostConfig(t *testing.T) {
 	assert.True(t, nhConfig.AddressByNodeHostID)
 }
 
+func TestCommandDeliveryTargetsReadyFiltersExpiredStores(t *testing.T) {
+	store := &store{cfg: DefaultConfig()}
+	store.cfg.HAKeeperConfig.TickPerSecond = 1
+	store.cfg.HAKeeperConfig.CNStoreTimeout = toml.Duration{Duration: 10 * time.Second}
+	store.cfg.HAKeeperConfig.TNStoreTimeout = toml.Duration{Duration: 10 * time.Second}
+	state := &pb.CheckerState{
+		Tick: 20,
+		CNState: pb.CNState{Stores: map[string]pb.CNStoreInfo{
+			"cn-live": {Tick: 20},
+			"cn-dead": {Tick: 1},
+		}},
+		TNState: pb.TNState{Stores: map[string]pb.TNStoreInfo{
+			"tn-live": {Tick: 20},
+			"tn-dead": {Tick: 1},
+		}},
+	}
+
+	delivery := hakeeper.CommandDeliveryState{
+		CNReady: map[string]bool{"cn-live": true},
+		TNReady: map[string]bool{"tn-live": true},
+	}
+	require.True(t, store.commandDeliveryTargetsReady(delivery, state))
+
+	delivery.CNReady["cn-live"] = false
+	require.False(t, store.commandDeliveryTargetsReady(delivery, state))
+	delivery.CNReady["cn-live"] = true
+	delivery.TNReady["tn-live"] = false
+	require.False(t, store.commandDeliveryTargetsReady(delivery, state))
+}
+
+func TestCommandDeliveryLogStoresReadyFiltersExpiredStores(t *testing.T) {
+	store := &store{cfg: DefaultConfig()}
+	store.cfg.HAKeeperConfig.TickPerSecond = 1
+	store.cfg.HAKeeperConfig.LogStoreTimeout = toml.Duration{Duration: 10 * time.Second}
+	state := &pb.CheckerState{
+		Tick: 20,
+		LogState: pb.LogState{Stores: map[string]pb.LogStoreInfo{
+			"log-live": {
+				Tick:                     20,
+				CommandDeliverySupported: true,
+			},
+			"log-dead": {Tick: 1},
+		}},
+	}
+
+	require.True(t, store.commandDeliveryLogStoresReady(state))
+	live := state.LogState.Stores["log-live"]
+	live.CommandDeliverySupported = false
+	state.LogState.Stores["log-live"] = live
+	require.False(t, store.commandDeliveryLogStoresReady(state))
+}
+
 func TestRaftConfig(t *testing.T) {
 	cfg := getRaftConfig(1, 1)
 	assert.True(t, cfg.CheckQuorum)
