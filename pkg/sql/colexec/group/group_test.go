@@ -20,6 +20,7 @@ import (
 	"context"
 	"encoding/binary"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 	"testing"
@@ -203,40 +204,185 @@ func buildPartialH0Batch(t *testing.T, proc *process.Process, values []int32) *b
 	return cloneBatch(t, proc, batches[0])
 }
 
-func TestMergeGroupPreservesPreparedParamKind(t *testing.T) {
-	proc := testutil.NewProcess(t)
-	defer proc.Free()
+type preparedPartialSpec struct {
+	rows int
+	kind vector.PrepareParamKind
+}
+
+func buildPreparedMinPartial(
+	t *testing.T,
+	proc *process.Process,
+	spec preparedPartialSpec,
+) *batch.Batch {
+	t.Helper()
+
 	params := vector.NewVec(types.T_text.ToType())
+	defer params.Free(proc.Mp())
 	require.NoError(t, vector.AppendBytes(params, []byte("5"), false, proc.Mp()))
-	proc.SetPrepareParamsWithMeta(params, nil, []vector.PrepareParamKind{vector.PrepareParamFloat})
+	proc.SetPrepareParamsWithMeta(params, nil, []vector.PrepareParamKind{spec.kind})
+	defer proc.SetPrepareParams(nil)
 
 	input := batch.NewWithSize(1)
-	input.Vecs[0] = testutil.MakeInt32Vector([]int32{1, 2}, nil, proc.Mp())
-	input.SetRowCount(2)
-	partialChild := colexec.NewMockOperator().WithBatchs([]*batch.Batch{input})
+	input.Vecs[0] = testutil.MakeInt32Vector(make([]int32, spec.rows), nil, proc.Mp())
+	input.SetRowCount(spec.rows)
+	child := colexec.NewMockOperator().WithBatchs([]*batch.Batch{input})
+	defer child.Free(proc, false, nil)
+
 	partial := newGroupOp(proc, nil, []aggexec.AggFuncExecExpression{minPreparedParamAgg()})
 	partial.NeedEval = false
-	partial.AppendChild(partialChild)
-	require.NoError(t, partial.Prepare(proc))
-	partialBatches := collectBatches(t, partial, proc)
-	require.Len(t, partialBatches, 1)
-	partialBatch := cloneBatch(t, proc, partialBatches[0])
-	partial.Free(proc, false, nil)
-	partialChild.Free(proc, false, nil)
+	partial.AppendChild(child)
+	defer partial.Free(proc, false, nil)
 
-	mergeChild := colexec.NewMockOperator().WithBatchs([]*batch.Batch{partialBatch})
-	merge := newMergeGroupOp([]aggexec.AggFuncExecExpression{minPreparedParamAgg()})
-	merge.AppendChild(mergeChild)
-	require.NoError(t, merge.Prepare(proc))
-	outputs := collectBatches(t, merge, proc)
-	require.Len(t, outputs, 1)
-	require.Equal(t, vector.PrepareParamFloat, outputs[0].Vecs[0].GetPrepareParamKind())
-	require.Equal(t, "5", outputs[0].Vecs[0].GetStringAt(0))
-	merge.Free(proc, false, nil)
-	mergeChild.Free(proc, false, nil)
-	proc.SetPrepareParams(nil)
-	params.Free(proc.Mp())
-	require.Zero(t, proc.Mp().CurrNB())
+	require.NoError(t, partial.Prepare(proc))
+	partials := collectBatches(t, partial, proc)
+	require.Len(t, partials, 1)
+	return cloneBatch(t, proc, partials[0])
+}
+
+func TestMergeGroupPreservesPreparedParamKind(t *testing.T) {
+	tests := []struct {
+		name     string
+		partials []preparedPartialSpec
+		wantKind vector.PrepareParamKind
+	}{
+		{
+			name: "empty-before-float",
+			partials: []preparedPartialSpec{
+				{rows: 0, kind: vector.PrepareParamDecimal},
+				{rows: 2, kind: vector.PrepareParamFloat},
+			},
+			wantKind: vector.PrepareParamFloat,
+		},
+		{
+			name: "float-before-empty",
+			partials: []preparedPartialSpec{
+				{rows: 2, kind: vector.PrepareParamFloat},
+				{rows: 0, kind: vector.PrepareParamDecimal},
+			},
+			wantKind: vector.PrepareParamFloat,
+		},
+		{
+			name: "empty-before-integer",
+			partials: []preparedPartialSpec{
+				{rows: 0, kind: vector.PrepareParamFloat},
+				{rows: 2, kind: vector.PrepareParamInteger},
+			},
+			wantKind: vector.PrepareParamInteger,
+		},
+		{
+			name: "string-before-float",
+			partials: []preparedPartialSpec{
+				{rows: 1, kind: vector.PrepareParamNone},
+				{rows: 2, kind: vector.PrepareParamFloat},
+			},
+			wantKind: vector.PrepareParamNone,
+		},
+		{
+			name: "float-before-string",
+			partials: []preparedPartialSpec{
+				{rows: 2, kind: vector.PrepareParamFloat},
+				{rows: 1, kind: vector.PrepareParamNone},
+			},
+			wantKind: vector.PrepareParamNone,
+		},
+		{
+			name: "float-before-integer",
+			partials: []preparedPartialSpec{
+				{rows: 2, kind: vector.PrepareParamFloat},
+				{rows: 1, kind: vector.PrepareParamInteger},
+			},
+			wantKind: vector.PrepareParamNone,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			t.Cleanup(func() {
+				require.Zero(t, proc.Mp().CurrNB())
+				proc.Free()
+			})
+
+			partials := make([]*batch.Batch, len(tc.partials))
+			for i, spec := range tc.partials {
+				partials[i] = buildPreparedMinPartial(t, proc, spec)
+			}
+
+			child := colexec.NewMockOperator().WithBatchs(partials)
+			t.Cleanup(func() { child.Free(proc, false, nil) })
+			merge := newMergeGroupOp([]aggexec.AggFuncExecExpression{minPreparedParamAgg()})
+			merge.AppendChild(child)
+			t.Cleanup(func() { merge.Free(proc, false, nil) })
+
+			require.NoError(t, merge.Prepare(proc))
+			outputs := collectBatches(t, merge, proc)
+			require.Len(t, outputs, 1)
+			require.Equal(t, "5", outputs[0].Vecs[0].GetStringAt(0))
+			require.Equal(t, tc.wantKind, outputs[0].Vecs[0].GetPrepareParamKind())
+		})
+	}
+}
+
+func TestMergeGroupRejectsInvalidPrepareParamKindState(t *testing.T) {
+	tests := []struct {
+		name    string
+		mutate  func([]byte, int) []byte
+		wantErr error
+	}{
+		{
+			name: "out-of-range",
+			mutate: func(extra []byte, stateOffset int) []byte {
+				extra[stateOffset] = byte(vector.PrepareParamBoolean) + 2
+				return extra
+			},
+		},
+		{
+			name: "truncated",
+			mutate: func(extra []byte, stateOffset int) []byte {
+				return extra[:stateOffset]
+			},
+			wantErr: io.EOF,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			t.Cleanup(func() {
+				require.Zero(t, proc.Mp().CurrNB())
+				proc.Free()
+			})
+
+			partial := buildPreparedMinPartial(t, proc, preparedPartialSpec{
+				rows: 1,
+				kind: vector.PrepareParamFloat,
+			})
+			reader := bytes.NewReader(partial.ExtraBuf)
+			_, err := types.ReadInt32(reader)
+			require.NoError(t, err)
+			_, err = types.ReadBool(reader)
+			require.NoError(t, err)
+			_, err = types.ReadInt32(reader)
+			require.NoError(t, err)
+			stateOffset := len(partial.ExtraBuf) - reader.Len()
+			partial.ExtraBuf = tc.mutate(partial.ExtraBuf, stateOffset)
+
+			child := colexec.NewMockOperator().WithBatchs([]*batch.Batch{partial})
+			t.Cleanup(func() { child.Free(proc, false, nil) })
+			merge := newMergeGroupOp([]aggexec.AggFuncExecExpression{minPreparedParamAgg()})
+			merge.AppendChild(child)
+			t.Cleanup(func() { merge.Free(proc, true, tc.wantErr) })
+			require.NoError(t, merge.Prepare(proc))
+
+			result, err := vm.Exec(merge, proc)
+			require.Nil(t, result.Batch)
+			if tc.wantErr != nil {
+				require.ErrorIs(t, err, tc.wantErr)
+			} else {
+				require.ErrorContains(t, err, "invalid aggregate prepared parameter state 6")
+			}
+		})
+	}
 }
 
 func buildPartialGroupBatches(t *testing.T, proc *process.Process, sources []*batch.Batch, forceGroupTypesNotNull bool) []*batch.Batch {

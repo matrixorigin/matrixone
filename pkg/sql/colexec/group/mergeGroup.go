@@ -22,7 +22,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -197,17 +196,16 @@ func (mergeGroup *MergeGroup) buildOneBatch(proc *process.Process, bat *batch.Ba
 			return false, moerr.NewInternalError(proc.Ctx, "nAggs != len(mergeGroup.ctr.spillAggList)")
 		}
 		for i := int32(0); i < nAggs; i++ {
-			kind, err := types.ReadByte(reader)
+			encoded, err := types.ReadByte(reader)
 			if err != nil {
 				return false, err
 			}
-			if kind > byte(vector.PrepareParamBoolean) {
+			kind, seen, ok := decodePrepareParamKindState(encoded)
+			if !ok {
 				return false, moerr.NewInternalErrorf(proc.Ctx,
-					"invalid aggregate prepared parameter kind %d", kind)
+					"invalid aggregate prepared parameter state %d", encoded)
 			}
-			if mergeGroup.Aggs[i].PreservesFirstArgPrepareParamKind() {
-				mergeGroup.Aggs[i].ObservePrepareParamKind(vector.PrepareParamKind(kind))
-			}
+			mergeGroup.Aggs[i].ObservePrepareParamKindState(kind, seen)
 		}
 
 		for i := int32(0); i < nAggs; i++ {

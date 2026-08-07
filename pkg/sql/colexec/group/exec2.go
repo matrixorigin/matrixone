@@ -636,7 +636,8 @@ func (group *Group) getNextIntermediateResult(proc *process.Process) (vm.CallRes
 	nAggs := int32(len(group.ctr.aggList))
 	buf.Write(types.EncodeInt32(&nAggs))
 	for i := range group.ctr.aggList {
-		buf.WriteByte(byte(group.Aggs[i].GetPrepareParamKind()))
+		kind, seen := group.Aggs[i].GetPrepareParamKindState()
+		buf.WriteByte(encodePrepareParamKindState(kind, seen))
 	}
 	for _, ag := range group.ctr.aggList {
 		ag.SaveIntermediateResultOfChunk(curr, &buf)
