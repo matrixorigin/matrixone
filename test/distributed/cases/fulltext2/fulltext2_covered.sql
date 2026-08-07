@@ -64,4 +64,20 @@ select id, status, prio from docs where match(body) against('fox') and (status i
 -- covered aggregate over the fast path.
 select count(*) from docs where match(body) against('fox') and prio > 25;
 
+-- covered VARCHAR include prefilter (peeled into the TVF -> 0-join): =, IN, LIKE prefix.
+select id, status from docs where match(body) against('fox') and status = 'active' order by id;
+select id, status from docs where match(body) against('fox') and status in ('active', 'archived') order by id;
+select id, status from docs where match(body) against('fox') and status like 'ar%' order by id;
+-- covered mixed: varchar = + numeric range (both peel).
+select id, status, prio from docs where match(body) against('fox') and status = 'active' and prio > 15 order by id;
+
+-- byte-exact: MO compares varchar byte-exact regardless of declared collation, so a covered
+-- '=' / LIKE matches only the exact bytes (case-sensitive), NOT case-folded.
+create table cs (id bigint primary key, body text not null, tag varchar(10));
+insert into cs values (1, 'red fox', 'Active'), (2, 'blue fox', 'active'), (3, 'grey fox', 'ACTIVE');
+create fulltext2 index csidx on cs (body) include (tag);
+select id, tag from cs where match(body) against('fox') and tag = 'active' order by id;  -- only id 2
+select id, tag from cs where match(body) against('fox') and tag like 'Act%' order by id; -- only id 1
+drop table cs;
+
 drop database fulltext2_covered;

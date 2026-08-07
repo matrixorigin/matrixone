@@ -82,4 +82,32 @@ select id, status, prio from docs where match(body) against('fox') and (status i
 select count(*) from docs where match(body) against('fox') and prio > 25;
 ➤ count(*)[-5,64,0]  𝄀
 3
+select id, status from docs where match(body) against('fox') and status = 'active' order by id;
+➤ id[-5,64,0]  ¦  status[12,20,0]  𝄀
+1  ¦  active  𝄀
+3  ¦  active  𝄀
+4  ¦  active
+select id, status from docs where match(body) against('fox') and status in ('active', 'archived') order by id;
+➤ id[-5,64,0]  ¦  status[12,20,0]  𝄀
+1  ¦  active  𝄀
+2  ¦  archived  𝄀
+3  ¦  active  𝄀
+4  ¦  active
+select id, status from docs where match(body) against('fox') and status like 'ar%' order by id;
+➤ id[-5,64,0]  ¦  status[12,20,0]  𝄀
+2  ¦  archived
+select id, status, prio from docs where match(body) against('fox') and status = 'active' and prio > 15 order by id;
+➤ id[-5,64,0]  ¦  status[12,20,0]  ¦  prio[4,32,0]  𝄀
+3  ¦  active  ¦  30  𝄀
+4  ¦  active  ¦  40
+create table cs (id bigint primary key, body text not null, tag varchar(10));
+insert into cs values (1, 'red fox', 'Active'), (2, 'blue fox', 'active'), (3, 'grey fox', 'ACTIVE');
+create fulltext2 index csidx on cs (body) include (tag);
+select id, tag from cs where match(body) against('fox') and tag = 'active' order by id;  -- only id 2
+➤ id[-5,64,0]  ¦  tag[12,10,0]  𝄀
+2  ¦  active
+select id, tag from cs where match(body) against('fox') and tag like 'Act%' order by id; -- only id 1
+➤ id[-5,64,0]  ¦  tag[12,10,0]  𝄀
+1  ¦  Active
+drop table cs;
 drop database fulltext2_covered;

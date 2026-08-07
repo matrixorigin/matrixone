@@ -278,7 +278,7 @@ func (builder *QueryBuilder) applyJoinFullTextIndices(nodeID int32, projNode *pl
 	if len(indexDefs) > 0 && catalog.IsFullText2IndexAlgo(indexDefs[0].IndexAlgo) {
 		if incCols := indexDefIncludedColumnsBestEffort(indexDefs[0]); len(incCols) > 0 {
 			pkColName := scanNode.TableDef.Pkey.PkeyColName
-			preds, serialized, residual, perr := buildFilterPredicateJSON(scanNode.FilterList, scanNode, incCols, pkColName)
+			preds, serialized, residual, perr := buildFilterPredicateJSON(scanNode.FilterList, scanNode, incCols, pkColName, true)
 			if perr == nil && len(serialized) > 0 {
 				ft2PredsJSON = preds
 				scanNode.FilterList = residual
@@ -796,7 +796,7 @@ func (builder *QueryBuilder) tryApplyCoveredFulltext2(nodeID int32, projNode, so
 		}
 		nonMatchFilters = append(nonMatchFilters, f)
 	}
-	ft2PredsJSON, _, residual, perr := buildFilterPredicateJSON(nonMatchFilters, scanNode, incCols, pkColName)
+	ft2PredsJSON, _, residual, perr := buildFilterPredicateJSON(nonMatchFilters, scanNode, incCols, pkColName, true)
 	if perr != nil {
 		return false, nil // a peel error → fall back to the safe JOIN path
 	}
