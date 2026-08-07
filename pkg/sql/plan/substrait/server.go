@@ -36,9 +36,9 @@ type ResolverServer struct {
 	closed   bool
 }
 
-func NewResolverServer(address string, tlsConfig *tls.Config, leases *LeaseManager) (*ResolverServer, error) {
-	if address == "" || leases == nil || !leases.Ready() || !leases.Protected() {
-		return nil, moerr.NewInternalErrorNoCtx("substrait: resolver requires an address and a replayed lease manager")
+func NewResolverServer(address string, tlsConfig *tls.Config, leases *LeaseManager, auditor ResolveAuditRecorder) (*ResolverServer, error) {
+	if address == "" || leases == nil || !leases.Ready() || !leases.Protected() || auditor == nil {
+		return nil, moerr.NewInternalErrorNoCtx("substrait: resolver requires an address, a replayed lease manager, and an audit recorder")
 	}
 	if tlsConfig == nil || tlsConfig.ClientAuth != tls.RequireAndVerifyClientCert || tlsConfig.ClientCAs == nil || len(tlsConfig.Certificates) == 0 {
 		return nil, moerr.NewInternalErrorNoCtx("substrait: resolver requires a server certificate and verified client CA")
@@ -47,7 +47,7 @@ func NewResolverServer(address string, tlsConfig *tls.Config, leases *LeaseManag
 	if config.MinVersion < tls.VersionTLS12 {
 		config.MinVersion = tls.VersionTLS12
 	}
-	return &ResolverServer{server: &http.Server{Addr: address, Handler: ResolveHandler(leases, nil), TLSConfig: config, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 30 * time.Second, WriteTimeout: 30 * time.Second, IdleTimeout: time.Minute, MaxHeaderBytes: 8 << 10}, done: make(chan error, 1)}, nil
+	return &ResolverServer{server: &http.Server{Addr: address, Handler: ResolveHandler(leases, nil, auditor), TLSConfig: config, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 30 * time.Second, WriteTimeout: 30 * time.Second, IdleTimeout: time.Minute, MaxHeaderBytes: 8 << 10}, done: make(chan error, 1)}, nil
 }
 
 func (s *ResolverServer) Start() error {

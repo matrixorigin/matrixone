@@ -156,6 +156,20 @@ func (tbl *txnTableDelegate) CollectObjectList(ctx context.Context, from, to typ
 	return tbl.origin.CollectObjectList(ctx, from, to, bat, mp)
 }
 
+// VisitSnapshotObjects is the bounded sidecar-read path. The callback owns no
+// storage memory and may stop enumeration as soon as its wire-size budget is
+// exhausted.
+func (tbl *txnTableDelegate) VisitSnapshotObjects(
+	ctx context.Context,
+	to types.TS,
+	visit func(objectio.ObjectStats, bool) error,
+) error {
+	if tbl.combined.is {
+		return moerr.NewInternalErrorNoCtx("partitioned snapshot object visitation is unsupported")
+	}
+	return tbl.origin.visitSnapshotObjects(ctx, to, visit)
+}
+
 func (tbl *txnTableDelegate) Stats(
 	ctx context.Context,
 	sync bool,

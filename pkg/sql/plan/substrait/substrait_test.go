@@ -22,6 +22,7 @@ import (
 	"crypto/x509"
 	"encoding/base64"
 	"errors"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"sync"
@@ -51,6 +52,7 @@ func TestExportBuildSupportedSubset(t *testing.T) {
 	p := new(spb.Plan)
 	require.NoError(t, proto.Unmarshal(b, p))
 	require.Equal(t, uint32(78), p.Version.MinorNumber)
+	require.Equal(t, []string{"a"}, p.Relations[0].GetRoot().Names)
 	require.Equal(t, TaeReadTypeURL, p.Relations[0].GetRoot().Input.GetFilter().Input.GetRead().GetExtensionTable().Detail.TypeUrl)
 }
 
@@ -115,8 +117,9 @@ func TestAggregateDistinctAndBadArityAreRejected(t *testing.T) {
 
 func TestAggregateSortFetchLowering(t *testing.T) {
 	q := scanQuery()
-	q.Nodes = append(q.Nodes, &planpb.Node{NodeId: 1, NodeType: planpb.Node_AGG, Children: []int32{0}, GroupBy: []*planpb.Expr{col(0)}, AggList: []*planpb.Expr{fn("min", i64Type(), col(0))}}, &planpb.Node{NodeId: 2, NodeType: planpb.Node_SORT, Children: []int32{1}, OrderBy: []*planpb.OrderBySpec{{Expr: col(0), Flag: planpb.OrderBySpec_ASC}}, Limit: i64(5)})
+	q.Nodes = append(q.Nodes, &planpb.Node{NodeId: 1, NodeType: planpb.Node_AGG, Children: []int32{0}, GroupBy: []*planpb.Expr{col(0)}, AggList: []*planpb.Expr{fn("min", i64Type(), col(0))}}, &planpb.Node{NodeId: 2, NodeType: planpb.Node_SORT, Children: []int32{1}, OrderBy: []*planpb.OrderBySpec{{Expr: col(0), Flag: planpb.OrderBySpec_ASC}}, Limit: u64(5)})
 	q.Steps[0] = 2
+	q.Headings = []string{"a", "min(a)"}
 	c, err := Export(q)
 	require.NoError(t, err)
 	b, err := c.Build(map[int32][]byte{0: {1}})
@@ -128,9 +131,109 @@ func TestAggregateSortFetchLowering(t *testing.T) {
 	require.NotNil(t, fetch.Input.GetSort().Input.GetAggregate())
 }
 
+func TestSortPreservesMatrixOneNullOrdering(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		flag planpb.OrderBySpec_OrderByFlag
+		want spb.SortField_SortDirection
+	}{
+		{name: "default ascending", flag: planpb.OrderBySpec_INTERNAL | planpb.OrderBySpec_ASC, want: spb.SortField_SORT_DIRECTION_ASC_NULLS_FIRST},
+		{name: "default descending", flag: planpb.OrderBySpec_INTERNAL | planpb.OrderBySpec_DESC, want: spb.SortField_SORT_DIRECTION_DESC_NULLS_LAST},
+		{name: "explicit ascending last", flag: planpb.OrderBySpec_ASC | planpb.OrderBySpec_NULLS_LAST, want: spb.SortField_SORT_DIRECTION_ASC_NULLS_LAST},
+		{name: "explicit descending first", flag: planpb.OrderBySpec_DESC | planpb.OrderBySpec_NULLS_FIRST, want: spb.SortField_SORT_DIRECTION_DESC_NULLS_FIRST},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			q := scanQuery()
+			q.Nodes = append(q.Nodes, &planpb.Node{NodeId: 1, NodeType: planpb.Node_SORT, Children: []int32{0}, OrderBy: []*planpb.OrderBySpec{{Expr: col(0), Flag: tc.flag}}})
+			q.Steps[0] = 1
+			candidate, err := Export(q)
+			require.NoError(t, err)
+			wire, err := candidate.Build(map[int32][]byte{0: {1}})
+			require.NoError(t, err)
+			plan := new(spb.Plan)
+			require.NoError(t, proto.Unmarshal(wire, plan))
+			require.Equal(t, tc.want, plan.Relations[0].GetRoot().Input.GetSort().Sorts[0].GetDirection())
+		})
+	}
+}
+
+func TestFetchAcceptsBoundUint64AndPreservesAbsentCount(t *testing.T) {
+	q := scanQuery()
+	q.Nodes[0].Offset = u64(2)
+	candidate, err := Export(q)
+	require.NoError(t, err)
+	wire, err := candidate.Build(map[int32][]byte{0: {1}})
+	require.NoError(t, err)
+	plan := new(spb.Plan)
+	require.NoError(t, proto.Unmarshal(wire, plan))
+	fetch := plan.Relations[0].GetRoot().Input.GetFetch()
+	require.Equal(t, int64(2), fetch.GetOffset())
+	require.Nil(t, fetch.CountMode)
+}
+
+func TestPlannerModAliasUsesExactSemanticRegistry(t *testing.T) {
+	q := scanQuery()
+	q.Nodes = append(q.Nodes, &planpb.Node{NodeId: 1, NodeType: planpb.Node_PROJECT, Children: []int32{0}, ProjectList: []*planpb.Expr{fn("mod", i64Type(), col(0), i64(2))}})
+	q.Steps[0] = 1
+	candidate, err := Export(q)
+	require.NoError(t, err)
+	wire, err := candidate.Build(map[int32][]byte{0: {1}})
+	require.NoError(t, err)
+	plan := new(spb.Plan)
+	require.NoError(t, proto.Unmarshal(wire, plan))
+	require.Equal(t, "modulus", plan.Extensions[0].GetExtensionFunction().Name)
+
+	floatInputs := []types.Type{types.T_float64.ToType(), types.T_float64.ToType()}
+	floatMod, err := function.GetFunctionByName(context.Background(), "mod", floatInputs)
+	require.NoError(t, err)
+	floatResult := floatMod.GetReturnType()
+	q = scanQuery()
+	q.Nodes = append(q.Nodes, &planpb.Node{NodeId: 1, NodeType: planpb.Node_PROJECT, Children: []int32{0}, ProjectList: []*planpb.Expr{{
+		Typ:  planpb.Type{Id: int32(floatResult.Oid), Width: floatResult.Width, Scale: floatResult.Scale},
+		Expr: &planpb.Expr_F{F: &planpb.Function{Func: &planpb.ObjectRef{ObjName: "mod", Obj: floatMod.GetEncodedOverloadID()}, Args: []*planpb.Expr{f64(7.5), f64(2)}}},
+	}}})
+	q.Steps[0] = 1
+	_, err = Export(q)
+	require.ErrorContains(t, err, "no declared Sirius semantic equivalence")
+}
+
+func TestSemanticRegistryRejectsForgedNullability(t *testing.T) {
+	registry, err := loadSemanticRegistry()
+	require.NoError(t, err)
+	require.NotEmpty(t, registry)
+	resolved, err := function.GetFunctionByName(
+		context.Background(),
+		"mod",
+		[]types.Type{types.T_int64.ToType(), types.T_int64.ToType()},
+	)
+	require.NoError(t, err)
+	ref := &planpb.ObjectRef{ObjName: "mod", Obj: resolved.GetEncodedOverloadID()}
+	args := []*planpb.Expr{{Typ: i64Type()}, {Typ: i64Type()}}
+
+	require.True(t, hasSemanticCapability(semanticScalar, "modulus", ref, args, ptrType(i64Type())))
+	forgedResult := i64Type()
+	forgedResult.NotNullable = true
+	require.False(t, hasSemanticCapability(semanticScalar, "modulus", ref, args, &forgedResult))
+
+	for i := range args {
+		args[i].Typ.NotNullable = true
+	}
+	require.True(t, hasSemanticCapability(semanticScalar, "modulus", ref, args, &forgedResult))
+	require.False(t, hasSemanticCapability(semanticScalar, "modulus", ref, args, ptrType(i64Type())))
+}
+
+func TestExportRequiresCompleteBoundOutputHeadings(t *testing.T) {
+	q := scanQuery()
+	q.Headings = nil
+	_, err := Export(q)
+	require.ErrorContains(t, err, "headings")
+}
+
 func TestStarCountAggregateLowering(t *testing.T) {
 	q := scanQuery()
-	q.Nodes = append(q.Nodes, &planpb.Node{NodeId: 1, NodeType: planpb.Node_AGG, Children: []int32{0}, AggList: []*planpb.Expr{fn("starcount", i64Type(), i64(1))}})
+	countType := i64Type()
+	countType.NotNullable = true
+	q.Nodes = append(q.Nodes, &planpb.Node{NodeId: 1, NodeType: planpb.Node_AGG, Children: []int32{0}, AggList: []*planpb.Expr{fn("starcount", countType, i64(1))}})
 	q.Steps[0] = 1
 	c, err := Export(q)
 	require.NoError(t, err)
@@ -139,12 +242,18 @@ func TestStarCountAggregateLowering(t *testing.T) {
 	p := new(spb.Plan)
 	require.NoError(t, proto.Unmarshal(b, p))
 	require.Len(t, p.Relations[0].GetRoot().Input.GetAggregate().Measures[0].Measure.Arguments, 1)
+
+	q = scanQuery()
+	q.Nodes = append(q.Nodes, &planpb.Node{NodeId: 1, NodeType: planpb.Node_AGG, Children: []int32{0}, AggList: []*planpb.Expr{fn("starcount", countType, col(0))}})
+	q.Steps[0] = 1
+	_, err = Export(q)
+	require.ErrorContains(t, err, "non-NULL literal")
 }
 
 func TestTaeReadStrictWire(t *testing.T) {
 	now := uint64(time.Now().UnixMilli())
 	h := sha256.Sum256([]byte("x"))
-	r := &TaeRead{ProtocolVersion: 1, ReadRef: bytes.Repeat([]byte{1}, 32), QueryID: []byte("q"), AccountID: 1, TableID: 2, SnapshotTS: make([]byte, 12), SchemaDigest: h[:], ManifestSHA256: h[:], CapabilityHash: CapabilityHash[:], ExpiresAtUnixMS: now + 1000}
+	r := &TaeRead{ProtocolVersion: 1, ReadRef: bytes.Repeat([]byte{1}, 32), QueryID: []byte("q"), AccountID: 1, DatabaseID: 3, TableID: 2, SnapshotTS: make([]byte, 12), SchemaDigest: h[:], ManifestSHA256: h[:], CapabilityHash: CapabilityHash[:], ExpiresAtUnixMS: now + 1000}
 	b, err := MarshalTaeRead(r)
 	require.NoError(t, err)
 	got, err := UnmarshalTaeRead(b, now)
@@ -163,6 +272,7 @@ func TestProtocolRejectsMalformedWireShapes(t *testing.T) {
 			ReadRef:         bytes.Repeat([]byte{1}, 32),
 			QueryID:         []byte("query"),
 			AccountID:       1,
+			DatabaseID:      3,
 			TableID:         2,
 			SnapshotTS:      make([]byte, 12),
 			SchemaDigest:    digest[:],
@@ -183,7 +293,7 @@ func TestProtocolRejectsMalformedWireShapes(t *testing.T) {
 	read.CapabilityHash = bytes.Repeat([]byte{9}, sha256.Size)
 	require.ErrorContains(t, read.Validate(now), "capability mismatch")
 
-	unknown := protowire.AppendTag(nil, 12, protowire.BytesType)
+	unknown := protowire.AppendTag(nil, 13, protowire.BytesType)
 	unknown = protowire.AppendBytes(unknown, []byte{1})
 	wrongType := protowire.AppendTag(nil, 1, protowire.BytesType)
 	wrongType = protowire.AppendBytes(wrongType, []byte{1})
@@ -245,6 +355,22 @@ func testVerifiedTLS(spki []byte) *tls.ConnectionState {
 	return &tls.ConnectionState{PeerCertificates: []*x509.Certificate{certificate}, VerifiedChains: [][]*x509.Certificate{{certificate}}}
 }
 
+type fakeResolveAuditor struct {
+	events      []ResolveAuditEvent
+	err         error
+	sawDeadline bool
+}
+
+func (f *fakeResolveAuditor) RecordResolve(ctx context.Context, event ResolveAuditEvent) error {
+	_, f.sawDeadline = ctx.Deadline()
+	f.events = append(f.events, event)
+	return f.err
+}
+
+func acceptResolveAudit() ResolveAuditRecorder {
+	return ResolveAuditFunc(func(context.Context, ResolveAuditEvent) error { return nil })
+}
+
 func (f *fakeProvider) PrepareSnapshotRead(context.Context, Read, []byte) (SnapshotFacts, error) {
 	f.calls++
 	if f.onPrepare != nil {
@@ -277,11 +403,12 @@ func (f *fakeProtector) Register(context.Context, []byte, []string, time.Time) e
 }
 
 type fakeLeaseJournal struct {
-	events                       []string
-	leases                       []*Lease
-	loaded                       int
-	storeErr, markErr, deleteErr error
-	sawCleanupDeadline           bool
+	events                           []string
+	leases                           []*Lease
+	loaded                           int
+	storeErr, markErr, deleteErr     error
+	sawCleanupDeadline               bool
+	markContextErr, deleteContextErr error
 }
 
 func (f *fakeLeaseJournal) Store(_ context.Context, lease *Lease) error {
@@ -293,6 +420,7 @@ func (f *fakeLeaseJournal) Store(_ context.Context, lease *Lease) error {
 func (f *fakeLeaseJournal) MarkReleased(ctx context.Context, readRef []byte) error {
 	f.events = append(f.events, "mark-released")
 	_, f.sawCleanupDeadline = ctx.Deadline()
+	f.markContextErr = ctx.Err()
 	for _, lease := range f.leases {
 		if equalBytes(lease.Read.ReadRef, readRef) {
 			lease.Released = true
@@ -301,8 +429,9 @@ func (f *fakeLeaseJournal) MarkReleased(ctx context.Context, readRef []byte) err
 	return f.markErr
 }
 
-func (f *fakeLeaseJournal) Delete(_ context.Context, readRef []byte) error {
+func (f *fakeLeaseJournal) Delete(ctx context.Context, readRef []byte) error {
 	f.events = append(f.events, "delete")
+	f.deleteContextErr = ctx.Err()
 	if f.deleteErr != nil {
 		return f.deleteErr
 	}
@@ -345,6 +474,7 @@ func testDurableLease(t *testing.T, seed byte, expiresAt uint64) *Lease {
 		ReadRef:         bytes.Repeat([]byte{seed}, 32),
 		QueryID:         []byte{'q', seed},
 		AccountID:       1,
+		DatabaseID:      2,
 		TableID:         uint64(seed),
 		SnapshotTS:      make([]byte, types.TxnTsSize),
 		SchemaDigest:    schemaHash[:],
@@ -522,6 +652,33 @@ func TestReleaseFailureRevokesLeaseAndRetainsRetryState(t *testing.T) {
 	require.False(t, ok)
 }
 
+func TestReleaseUsesIndependentBoundedCleanupContext(t *testing.T) {
+	c, err := Export(scanQuery())
+	require.NoError(t, err)
+	read := c.Reads()[0]
+	journal := new(fakeLeaseJournal)
+	protector := new(fakeProtector)
+	manager := NewLeaseManager(1, protector)
+	manager.journal = journal
+	now := time.Now()
+	wires, err := Admit(context.Background(), AdmissionRequest{
+		Candidate: c, Provider: &fakeProvider{facts: SnapshotFacts{Manifest: []byte("m"), CanonicalSchema: read.Schema}},
+		Leases: manager, AccountID: 1, QueryID: []byte("q"), SnapshotTS: make([]byte, 12), AuthorizedClientSPKIHash: testClientSPKIHash(), TTL: time.Minute,
+		ReadOnly: true, Random: bytes.NewReader(bytes.Repeat([]byte{4}, 32)), Now: now,
+	})
+	require.NoError(t, err)
+	tr, err := UnmarshalTaeRead(wires[0], uint64(now.UnixMilli()))
+	require.NoError(t, err)
+	canceled, cancel := context.WithCancel(context.Background())
+	cancel()
+	require.NoError(t, manager.Release(canceled, tr.ReadRef))
+	require.True(t, journal.sawCleanupDeadline)
+	require.NoError(t, journal.markContextErr)
+	require.NoError(t, journal.deleteContextErr)
+	require.Equal(t, []string{"store", "mark-released", "delete"}, journal.events)
+	require.Equal(t, 1, protector.unregistered)
+}
+
 func TestPersistentLeaseReplayAndReleasedCrashRecovery(t *testing.T) {
 	ctx := context.Background()
 	fs, err := fileservice.NewMemoryFS("lease-test", fileservice.CacheConfig{}, nil)
@@ -632,7 +789,8 @@ func TestResolveRequiresVerifiedMTLSAndExactSchema(t *testing.T) {
 	require.NoError(t, err)
 	body := appendBytes(nil, 1, wires[0])
 	body = appendBytes(body, 2, read.Schema)
-	handler := ResolveHandler(leases, func() time.Time { return now })
+	auditor := new(fakeResolveAuditor)
+	handler := ResolveHandler(leases, func() time.Time { return now }, auditor)
 	req := httptest.NewRequest(http.MethodPost, ResolvePath, bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/x-protobuf")
 	w := httptest.NewRecorder()
@@ -650,6 +808,23 @@ func TestResolveRequiresVerifiedMTLSAndExactSchema(t *testing.T) {
 	w = httptest.NewRecorder()
 	handler.ServeHTTP(w, req)
 	require.Equal(t, http.StatusOK, w.Code)
+	require.Len(t, auditor.events, 1)
+	require.True(t, auditor.sawDeadline)
+	require.Equal(t, uint64(1), auditor.events[0].AccountID)
+	require.Equal(t, uint64(7), auditor.events[0].DatabaseID)
+	require.Equal(t, uint64(42), auditor.events[0].TableID)
+	require.Equal(t, []byte("q"), auditor.events[0].QueryID)
+	require.Len(t, auditor.events[0].ReadRefSHA256, sha256.Size)
+
+	failingAudit := &fakeResolveAuditor{err: errors.New("audit unavailable")}
+	req = httptest.NewRequest(http.MethodPost, ResolvePath, bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/x-protobuf")
+	req.TLS = testVerifiedTLS(testClientSPKI)
+	w = httptest.NewRecorder()
+	ResolveHandler(leases, func() time.Time { return now }, failingAudit).ServeHTTP(w, req)
+	require.Equal(t, http.StatusInternalServerError, w.Code)
+	var nilAudit ResolveAuditFunc
+	require.ErrorContains(t, nilAudit.RecordResolve(context.Background(), ResolveAuditEvent{}), "nil resolution audit")
 }
 
 func TestAdmissionRejectsInvalidInputsBeforePublishing(t *testing.T) {
@@ -779,7 +954,7 @@ func TestResolveHandlerRejectsInvalidRequests(t *testing.T) {
 			req.Header.Set("Content-Type", tc.contentType)
 			req.TLS = tc.tls
 			w := httptest.NewRecorder()
-			ResolveHandler(tc.manager, func() time.Time { return now }).ServeHTTP(w, req)
+			ResolveHandler(tc.manager, func() time.Time { return now }, acceptResolveAudit()).ServeHTTP(w, req)
 			require.Equal(t, tc.want, w.Code)
 		})
 	}
@@ -793,14 +968,17 @@ func TestResolverServerLifecycle(t *testing.T) {
 		ClientCAs:    x509.NewCertPool(),
 		Certificates: []tls.Certificate{{Certificate: [][]byte{{1}}}},
 	}
-	_, err := NewResolverServer("", validTLS, leases)
+	auditor := acceptResolveAudit()
+	_, err := NewResolverServer("", validTLS, leases, auditor)
 	require.Error(t, err)
-	_, err = NewResolverServer("127.0.0.1:0", nil, leases)
+	_, err = NewResolverServer("127.0.0.1:0", nil, leases, auditor)
 	require.Error(t, err)
-	_, err = NewResolverServer("127.0.0.1:0", &tls.Config{}, leases)
+	_, err = NewResolverServer("127.0.0.1:0", &tls.Config{}, leases, auditor)
 	require.Error(t, err)
+	_, err = NewResolverServer("127.0.0.1:0", validTLS, leases, nil)
+	require.ErrorContains(t, err, "audit recorder")
 
-	server, err := NewResolverServer("127.0.0.1:0", validTLS, leases)
+	server, err := NewResolverServer("127.0.0.1:0", validTLS, leases, auditor)
 	require.NoError(t, err)
 	require.Equal(t, uint16(tls.VersionTLS12), server.server.TLSConfig.MinVersion)
 	require.Equal(t, uint16(tls.VersionTLS10), validTLS.MinVersion)
@@ -940,7 +1118,9 @@ func TestExportAcceptsBinderNullPredicateAliases(t *testing.T) {
 	for _, name := range []string{"isnull", "isnotnull"} {
 		t.Run(name, func(t *testing.T) {
 			q := scanQuery()
-			q.Nodes = append(q.Nodes, &planpb.Node{NodeId: 1, NodeType: planpb.Node_FILTER, Children: []int32{0}, FilterList: []*planpb.Expr{fn(name, boolType(), col(0))}})
+			resultType := boolType()
+			resultType.NotNullable = true
+			q.Nodes = append(q.Nodes, &planpb.Node{NodeId: 1, NodeType: planpb.Node_FILTER, Children: []int32{0}, FilterList: []*planpb.Expr{fn(name, resultType, col(0))}})
 			q.Steps[0] = 1
 			_, err := Export(q)
 			require.NoError(t, err)
@@ -954,6 +1134,7 @@ func TestNonnegativeIntegerLiteralForms(t *testing.T) {
 		{Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{Value: &planpb.Literal_I16Val{I16Val: 2}}}},
 		{Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{Value: &planpb.Literal_I32Val{I32Val: 3}}}},
 		{Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{Value: &planpb.Literal_I64Val{I64Val: 4}}}},
+		{Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{Value: &planpb.Literal_U64Val{U64Val: math.MaxInt64}}}},
 	} {
 		value, err := nonnegativeIntLiteral(expr, -1)
 		require.NoError(t, err)
@@ -965,9 +1146,11 @@ func TestNonnegativeIntegerLiteralForms(t *testing.T) {
 	_, err = nonnegativeIntLiteral(&planpb.Expr{Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{Isnull: true}}}, 0)
 	require.ErrorContains(t, err, "constant integer")
 	_, err = nonnegativeIntLiteral(&planpb.Expr{Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{Value: &planpb.Literal_Sval{Sval: "1"}}}}, 0)
-	require.ErrorContains(t, err, "signed integer")
+	require.ErrorContains(t, err, "integer")
 	_, err = nonnegativeIntLiteral(&planpb.Expr{Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{Value: &planpb.Literal_I64Val{I64Val: -1}}}}, 0)
 	require.ErrorContains(t, err, "non-negative")
+	_, err = nonnegativeIntLiteral(&planpb.Expr{Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{Value: &planpb.Literal_U64Val{U64Val: math.MaxInt64 + 1}}}}, 0)
+	require.ErrorContains(t, err, "signed integer range")
 }
 
 func TestExporterValidationGuards(t *testing.T) {
@@ -1033,18 +1216,25 @@ func ptrType(value planpb.Type) *planpb.Type { return &value }
 func intExpr(value int64) *planpb.Expr { return i64(value) }
 
 func scanQuery() *planpb.Query {
-	return &planpb.Query{StmtType: planpb.Query_SELECT, Steps: []int32{0}, Nodes: []*planpb.Node{{NodeId: 0, NodeType: planpb.Node_TABLE_SCAN, ObjRef: &planpb.ObjectRef{Obj: 42, ObjName: "t"}, TableDef: &planpb.TableDef{TblId: 42, Name: "t", TableType: "r", Cols: []*planpb.ColDef{{Name: "a", Typ: i64Type()}}}}}}
+	return &planpb.Query{StmtType: planpb.Query_SELECT, Steps: []int32{0}, Headings: []string{"a"}, Nodes: []*planpb.Node{{NodeId: 0, NodeType: planpb.Node_TABLE_SCAN, ObjRef: &planpb.ObjectRef{Db: 7, Obj: 42, ObjName: "t"}, TableDef: &planpb.TableDef{TblId: 42, Version: 3, Name: "t", TableType: "r", Cols: []*planpb.ColDef{{Name: "a", ColId: 11, Seqnum: 5, Typ: i64Type()}}}}}}
 }
 func i64Type() planpb.Type  { return planpb.Type{Id: int32(types.T_int64)} }
 func boolType() planpb.Type { return planpb.Type{Id: int32(types.T_bool)} }
+func f64Type() planpb.Type  { return planpb.Type{Id: int32(types.T_float64)} }
 func col(pos int32) *planpb.Expr {
 	return &planpb.Expr{Typ: i64Type(), Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: pos}}}
 }
 func i64(v int64) *planpb.Expr {
 	return &planpb.Expr{Typ: i64Type(), Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{Value: &planpb.Literal_I64Val{I64Val: v}}}}
 }
+func u64(v uint64) *planpb.Expr {
+	return &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_uint64)}, Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{Value: &planpb.Literal_U64Val{U64Val: v}}}}
+}
+func f64(v float64) *planpb.Expr {
+	return &planpb.Expr{Typ: f64Type(), Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{Value: &planpb.Literal_Dval{Dval: v}}}}
+}
 func fn(name string, typ planpb.Type, args ...*planpb.Expr) *planpb.Expr {
-	ids := map[string]int32{"=": function.EQUAL, ">": function.GREAT_THAN, "not": function.NOT, "isnull": function.ISNULL, "isnotnull": function.ISNOTNULL, "sum": function.SUM, "min": function.MIN, "starcount": function.STARCOUNT}
+	ids := map[string]int32{"=": function.EQUAL, ">": function.GREAT_THAN, "not": function.NOT, "isnull": function.ISNULL, "isnotnull": function.ISNOTNULL, "mod": function.MOD, "sum": function.SUM, "min": function.MIN, "starcount": function.STARCOUNT}
 	id, ok := ids[name]
 	if !ok {
 		panic("missing test function id: " + name)

@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/cmd_util"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
@@ -39,6 +40,18 @@ func (tbl *txnTable) CollectObjectList(
 		return collectObjectListFromSnapshot(ctx, tbl, to, bat, mp)
 	}
 	return collectObjectListFromPartition(ctx, tbl, from, to, bat, mp)
+}
+
+func (tbl *txnTable) visitSnapshotObjects(
+	ctx context.Context,
+	snapshotTS types.TS,
+	visit func(objectio.ObjectStats, bool) error,
+) error {
+	state, err := tbl.getPartitionState(ctx)
+	if err != nil {
+		return err
+	}
+	return logtailreplay.VisitSnapshotObjects(ctx, state, snapshotTS, visit)
 }
 
 func collectObjectListFromSnapshot(

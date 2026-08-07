@@ -30,4 +30,5 @@ message TaeRead {
   bytes manifest_sha256 = 9;
   bytes capability_hash = 10;
   uint64 expires_at_unix_ms = 11;
+  uint64 database_id = 12;
 }

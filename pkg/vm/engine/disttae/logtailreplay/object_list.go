@@ -17,6 +17,7 @@ package logtailreplay
 import (
 	"context"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -90,6 +91,39 @@ func snapshotCheckFn(objEntry objectio.ObjectEntry, snapshotTS types.TS) bool {
 		return false
 	}
 	return true
+}
+
+// VisitSnapshotObjects streams snapshot-visible object metadata in name-index
+// order. A visitor error stops enumeration immediately, allowing consumers to
+// enforce their own memory or wire-size bound without materializing a batch.
+func VisitSnapshotObjects(
+	ctx context.Context,
+	state *PartitionState,
+	snapshotTS types.TS,
+	visit func(objectio.ObjectStats, bool) error,
+) error {
+	if state == nil || visit == nil {
+		return moerr.NewInternalErrorNoCtx("invalid snapshot object visitor")
+	}
+	visitIndex := func(iter btree.IterG[objectio.ObjectEntry], isTombstone bool) error {
+		defer iter.Release()
+		for iter.Next() {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			entry := iter.Item()
+			if snapshotCheckFn(entry, snapshotTS) {
+				if err := visit(entry.ObjectStats, isTombstone); err != nil {
+					return err
+				}
+			}
+		}
+		return nil
+	}
+	if err := visitIndex(state.dataObjectsNameIndex.Iter(), false); err != nil {
+		return err
+	}
+	return visitIndex(state.tombstoneObjectsNameIndex.Iter(), true)
 }
 
 func CollectObjectList(

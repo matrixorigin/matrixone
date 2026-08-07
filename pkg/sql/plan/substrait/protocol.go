@@ -24,7 +24,7 @@ import (
 const (
 	ProtocolVersion        = 1
 	TaeReadProtocolVersion = 1
-	CapabilityDocument     = `{"protocol_version":1,"substrait_version":"0.78.0","tae_read_protocol_version":1,"tae_read_feature_bits":0,"operators":["read","filter","project","aggregate","sort","fetch"],"types":["bool","i8","i16","i32","i64","fp32","fp64","string","date","varchar","precision_timestamp_us"],"scalar_functions":["and","or","not","equal","not_equal","lt","lte","gt","gte","is_null","is_not_null","is_not_distinct_from","add","subtract","multiply","divide","modulus","between"],"aggregate_functions":["count","sum","min","max","avg"],"transport":"arrow-flight","sirius_execution_contract":1,"max_plan_bytes":16777216}`
+	CapabilityDocument     = `{"protocol_version":1,"substrait_version":"0.78.0","tae_read_protocol_version":1,"tae_read_feature_bits":0,"operators":["read","filter","project","aggregate","sort","fetch"],"types":["bool","i8","i16","i32","i64","fp32","fp64","string","date","varchar","precision_timestamp_us"],"semantic_registry":"exact-mo-overload-argument-result-nullability-v1","scalar_overloads":["and(bool,bool)->bool","or(bool,bool)->bool","not(bool)->bool","equal(i64,i64)->bool","not_equal(i64,i64)->bool","lt(i64,i64)->bool","lte(i64,i64)->bool","gt(i64,i64)->bool","gte(i64,i64)->bool","is_null(i64)->bool","is_not_null(i64)->bool","is_not_distinct_from(i64,i64)->bool","add(i64,i64)->i64","subtract(i64,i64)->i64","multiply(i64,i64)->i64","modulus(i64,i64)->i64","between(i64,i64,i64)->bool"],"aggregate_overloads":["count(i64)->i64","count_all(i64_literal)->i64","sum(i64)->i64","min(i64)->i64","max(i64)->i64"],"transport":"arrow-flight","sirius_execution_contract":1,"max_plan_bytes":16777216}`
 )
 
 var CapabilityHash = sha256.Sum256([]byte(CapabilityDocument))
@@ -34,7 +34,7 @@ type TaeRead struct {
 	ProtocolVersion                                          uint32
 	FeatureBits                                              uint64
 	ReadRef, QueryID                                         []byte
-	AccountID, TableID                                       uint64
+	AccountID, DatabaseID, TableID                           uint64
 	SnapshotTS, SchemaDigest, ManifestSHA256, CapabilityHash []byte
 	ExpiresAtUnixMS                                          uint64
 }
@@ -46,7 +46,7 @@ func (r *TaeRead) Validate(nowUnixMS uint64) error {
 	if len(r.ReadRef) != 32 || len(r.QueryID) == 0 || len(r.QueryID) > 4096 || len(r.SnapshotTS) != 12 || len(r.SchemaDigest) != sha256.Size || len(r.ManifestSHA256) != sha256.Size || len(r.CapabilityHash) != sha256.Size {
 		return moerr.NewInternalErrorNoCtx("invalid TaeRead identity or digest length")
 	}
-	if r.AccountID == 0 || r.TableID == 0 || r.ExpiresAtUnixMS <= nowUnixMS {
+	if r.AccountID == 0 || r.DatabaseID == 0 || r.TableID == 0 || r.ExpiresAtUnixMS <= nowUnixMS {
 		return moerr.NewInternalErrorNoCtx("invalid or expired TaeRead")
 	}
 	if !equalBytes(r.CapabilityHash, CapabilityHash[:]) {
@@ -71,6 +71,7 @@ func MarshalTaeRead(r *TaeRead) ([]byte, error) {
 	b = appendBytes(b, 9, r.ManifestSHA256)
 	b = appendBytes(b, 10, r.CapabilityHash)
 	b = appendUint(b, 11, r.ExpiresAtUnixMS)
+	b = appendUint(b, 12, r.DatabaseID)
 	return b, nil
 }
 
@@ -86,11 +87,11 @@ func UnmarshalTaeRead(b []byte, nowUnixMS uint64) (*TaeRead, error) {
 			return nil, protowire.ParseError(n)
 		}
 		b = b[n:]
-		if num < 1 || num > 11 || seen&(1<<uint(num-1)) != 0 {
+		if num < 1 || num > 12 || seen&(1<<uint(num-1)) != 0 {
 			return nil, moerr.NewInternalErrorNoCtx("unknown or duplicate TaeRead field")
 		}
 		seen |= 1 << uint(num-1)
-		integer := num == 1 || num == 2 || num == 5 || num == 6 || num == 11
+		integer := num == 1 || num == 2 || num == 5 || num == 6 || num == 11 || num == 12
 		if integer && typ != protowire.VarintType || !integer && typ != protowire.BytesType {
 			return nil, moerr.NewInternalErrorNoCtx("wrong TaeRead wire type")
 		}
@@ -114,6 +115,8 @@ func UnmarshalTaeRead(b []byte, nowUnixMS uint64) (*TaeRead, error) {
 				r.TableID = v
 			case 11:
 				r.ExpiresAtUnixMS = v
+			case 12:
+				r.DatabaseID = v
 			}
 		} else {
 			v, m := protowire.ConsumeBytes(b)
@@ -140,7 +143,7 @@ func UnmarshalTaeRead(b []byte, nowUnixMS uint64) (*TaeRead, error) {
 	}
 	// feature_bits is the only zero-valued field in v1, and canonical proto3
 	// encoding omits it. Every identity and digest field remains mandatory.
-	if seen != ((1<<11)-1)&^(1<<1) && seen != (1<<11)-1 {
+	if seen != ((1<<12)-1)&^(1<<1) && seen != (1<<12)-1 {
 		return nil, moerr.NewInternalErrorNoCtx("missing TaeRead field")
 	}
 	if err := r.Validate(nowUnixMS); err != nil {

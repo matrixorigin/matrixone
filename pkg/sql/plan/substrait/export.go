@@ -19,7 +19,9 @@ package substrait
 
 import (
 	"context"
+	"math"
 	"strings"
+	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -40,18 +42,40 @@ const (
 // Candidate is a fully validated logical plan with unresolved storage reads.
 // The read handles are installed only after snapshot admission succeeds.
 type Candidate struct {
-	query *planpb.Query
-	reads []Read
+	query    *planpb.Query
+	reads    []Read
+	headings []string
 }
 
 // Read identifies one physical table scan which needs a TaeRead lease.
 type Read struct {
-	NodeID  int32
-	TableID uint64
-	Schema  []byte // deterministic Substrait NamedStruct bytes
+	NodeID int32
+	// AccountID is bound by Admit immediately before snapshot preparation;
+	// logical export deliberately leaves it unset.
+	AccountID     uint64
+	DatabaseID    uint64
+	TableID       uint64
+	SchemaVersion uint32
+	Columns       []ColumnMapping
+	Schema        []byte // deterministic Substrait NamedStruct bytes
 }
 
-func (c *Candidate) Reads() []Read { return append([]Read(nil), c.reads...) }
+// ColumnMapping binds one exported ordinal to the physical TAE column used at
+// the planning snapshot. Names and logical types alone are not stable across a
+// drop/re-add schema evolution.
+type ColumnMapping struct {
+	ColumnID       uint64
+	SequenceNumber uint32
+}
+
+func (c *Candidate) Reads() []Read {
+	result := append([]Read(nil), c.reads...)
+	for i := range result {
+		result[i].Schema = append([]byte(nil), result[i].Schema...)
+		result[i].Columns = append([]ColumnMapping(nil), result[i].Columns...)
+	}
+	return result
+}
 
 // Export validates q without performing I/O.
 func Export(q *planpb.Query) (*Candidate, error) {
@@ -63,7 +87,15 @@ func Export(q *planpb.Query) (*Candidate, error) {
 	if _, err := e.node(q.Steps[0]); err != nil {
 		return nil, err
 	}
+	width, err := e.nodeWidth(q.Steps[0])
+	if err != nil {
+		return nil, err
+	}
+	if len(q.Headings) != width {
+		return nil, moerr.NewInternalErrorNoCtxf("substrait: query has %d headings for %d output columns", len(q.Headings), width)
+	}
 	c.reads = e.reads
+	c.headings = append([]string(nil), q.Headings...)
 	return c, nil
 }
 
@@ -79,7 +111,7 @@ func (c *Candidate) Build(readValues map[int32][]byte) ([]byte, error) {
 	}
 	p := &spb.Plan{
 		Version:          &spb.Version{MajorNumber: 0, MinorNumber: 78, PatchNumber: 0, Producer: "matrixone"},
-		Relations:        []*spb.PlanRel{{RelType: &spb.PlanRel_Root{Root: &spb.RelRoot{Input: root}}}},
+		Relations:        []*spb.PlanRel{{RelType: &spb.PlanRel_Root{Root: &spb.RelRoot{Input: root, Names: append([]string(nil), c.headings...)}}}},
 		ExpectedTypeUrls: []string{TaeReadTypeURL},
 		Extensions:       e.extensions(),
 	}
@@ -219,7 +251,7 @@ func (e *exporter) unary(n *planpb.Node) (*spb.Rel, error) {
 }
 
 func (e *exporter) read(n *planpb.Node) (*spb.Rel, error) {
-	if len(n.Children) != 0 || n.TableDef == nil || n.ObjRef == nil || n.TableDef.TblId == 0 || uint64(n.ObjRef.Obj) != n.TableDef.TblId || n.TableDef.IsTemporary || n.ScanSnapshot != nil || n.ObjRef.Snapshot != nil || n.ObjRef.PubInfo != nil || (n.TableDef.TableType != "" && n.TableDef.TableType != "r") {
+	if len(n.Children) != 0 || n.TableDef == nil || n.ObjRef == nil || n.ObjRef.Db <= 0 || n.TableDef.TblId == 0 || uint64(n.ObjRef.Obj) != n.TableDef.TblId || n.TableDef.IsTemporary || n.ScanSnapshot != nil || n.ObjRef.Snapshot != nil || n.ObjRef.PubInfo != nil || (n.TableDef.TableType != "" && n.TableDef.TableType != "r") {
 		return nil, moerr.NewInternalErrorNoCtxf("substrait: node %d is not a persistent TAE table scan", n.NodeId)
 	}
 	schema, err := namedStruct(n.TableDef)
@@ -230,7 +262,18 @@ func (e *exporter) read(n *planpb.Node) (*spb.Rel, error) {
 	if err != nil {
 		return nil, err
 	}
-	e.reads = append(e.reads, Read{NodeID: n.NodeId, TableID: n.TableDef.TblId, Schema: schemaBytes})
+	columns, err := columnMapping(n.TableDef)
+	if err != nil {
+		return nil, err
+	}
+	e.reads = append(e.reads, Read{
+		NodeID:        n.NodeId,
+		DatabaseID:    uint64(n.ObjRef.Db),
+		TableID:       n.TableDef.TblId,
+		SchemaVersion: n.TableDef.Version,
+		Columns:       columns,
+		Schema:        schemaBytes,
+	})
 	value := e.readValues[n.NodeId]
 	if !e.validateOnly && len(value) == 0 {
 		return nil, moerr.NewInternalErrorNoCtxf("substrait: node %d has no admitted TaeRead", n.NodeId)
@@ -303,15 +346,22 @@ func (e *exporter) aggregate(n *planpb.Node) (*spb.Rel, error) {
 		if uint64(f.Func.Obj)&function.Distinct != 0 || len(f.AggConfig) != 0 {
 			return nil, moerr.NewInternalErrorNoCtxf("substrait: unsupported aggregate form %q", f.Func.ObjName)
 		}
-		name, ok := aggregateIdentity(f.Func)
+		name, ok := aggregateName(f.Func.ObjName)
 		if !ok {
 			return nil, moerr.NewInternalErrorNoCtxf("substrait: unsupported aggregate %q", f.Func.ObjName)
 		}
 		if len(f.Args) != 1 {
 			return nil, moerr.NewInternalErrorNoCtxf("substrait: unsupported aggregate form %q", f.Func.ObjName)
 		}
-		if err := validateMOOverload(f.Func, f.Args, &x.Typ); err != nil {
-			return nil, err
+		functionID, _ := function.DecodeOverloadID(f.Func.Obj)
+		if functionID == function.STARCOUNT {
+			literal := f.Args[0].GetLit()
+			if literal == nil || literal.Isnull {
+				return nil, moerr.NewInternalErrorNoCtxf("substrait: starcount requires a non-NULL literal argument")
+			}
+		}
+		if !hasSemanticCapability(semanticAggregate, name, f.Func, f.Args, &x.Typ) {
+			return nil, moerr.NewInternalErrorNoCtxf("substrait: aggregate overload %q has no declared Sirius semantic equivalence", f.Func.ObjName)
 		}
 		if err := validateExprFields(f.Args, inputWidth); err != nil {
 			return nil, err
@@ -364,7 +414,7 @@ func (e *exporter) sort(n *planpb.Node) (*spb.Rel, error) {
 		desc := flag&int32(planpb.OrderBySpec_DESC) != 0
 		nullsFirst := flag&int32(planpb.OrderBySpec_NULLS_FIRST) != 0
 		if flag&int32(planpb.OrderBySpec_NULLS_LAST) == 0 && !nullsFirst {
-			nullsFirst = desc
+			nullsFirst = !desc
 		}
 		direction := spb.SortField_SORT_DIRECTION_ASC_NULLS_LAST
 		if !desc && nullsFirst {
@@ -385,15 +435,22 @@ func (e *exporter) fetch(input *spb.Rel, n *planpb.Node) (*spb.Rel, error) {
 	if n.Limit == nil && n.Offset == nil {
 		return input, nil
 	}
-	count, err := nonnegativeIntLiteral(n.Limit, -1)
-	if err != nil {
-		return nil, moerr.NewInternalErrorNoCtxf("substrait: limit: %v", err)
+	fetch := &spb.FetchRel{Input: input}
+	if n.Limit != nil {
+		count, err := nonnegativeIntLiteral(n.Limit, 0)
+		if err != nil {
+			return nil, moerr.NewInternalErrorNoCtxf("substrait: limit: %v", err)
+		}
+		fetch.CountMode = &spb.FetchRel_Count{Count: count}
 	}
-	offset, err := nonnegativeIntLiteral(n.Offset, 0)
-	if err != nil {
-		return nil, moerr.NewInternalErrorNoCtxf("substrait: offset: %v", err)
+	if n.Offset != nil {
+		offset, err := nonnegativeIntLiteral(n.Offset, 0)
+		if err != nil {
+			return nil, moerr.NewInternalErrorNoCtxf("substrait: offset: %v", err)
+		}
+		fetch.OffsetMode = &spb.FetchRel_Offset{Offset: offset}
 	}
-	return &spb.Rel{RelType: &spb.Rel_Fetch{Fetch: &spb.FetchRel{Input: input, OffsetMode: &spb.FetchRel_Offset{Offset: offset}, CountMode: &spb.FetchRel_Count{Count: count}}}}, nil
+	return &spb.Rel{RelType: &spb.Rel_Fetch{Fetch: fetch}}, nil
 }
 
 func (e *exporter) conjunction(xs []*planpb.Expr) (*spb.Expression, error) {
@@ -441,18 +498,18 @@ func (e *exporter) expr(x *planpb.Expr) (*spb.Expression, error) {
 		if v.F == nil || v.F.Func == nil {
 			return nil, moerr.NewInternalErrorNoCtxf("substrait: malformed function")
 		}
-		name, ok := scalarIdentity(v.F.Func)
+		name, ok := scalarName(v.F.Func.ObjName)
 		if !ok {
 			return nil, moerr.NewInternalErrorNoCtxf("substrait: unsupported scalar function %q", v.F.Func.ObjName)
 		}
 		if want := scalarArity(name); len(v.F.Args) != want {
 			return nil, moerr.NewInternalErrorNoCtxf("substrait: %s requires %d arguments", name, want)
 		}
-		if err := validateMOOverload(v.F.Func, v.F.Args, &x.Typ); err != nil {
-			return nil, err
-		}
 		if err := validateScalarSignature(name, &x.Typ, v.F.Args); err != nil {
 			return nil, err
+		}
+		if !hasSemanticCapability(semanticScalar, name, v.F.Func, v.F.Args, &x.Typ) {
+			return nil, moerr.NewInternalErrorNoCtxf("substrait: scalar overload %q has no declared Sirius semantic equivalence", v.F.Func.ObjName)
 		}
 		if _, err := substraitType(&x.Typ); err != nil {
 			return nil, err
@@ -530,6 +587,31 @@ func namedStruct(t *planpb.TableDef) (*spb.NamedStruct, error) {
 		return nil, moerr.NewInternalErrorNoCtxf("substrait: table %q has no exportable columns", t.Name)
 	}
 	return &spb.NamedStruct{Names: names, Struct: &spb.Type_Struct{Types: fields, Nullability: spb.Type_NULLABILITY_REQUIRED}}, nil
+}
+
+func columnMapping(t *planpb.TableDef) ([]ColumnMapping, error) {
+	if t == nil {
+		return nil, moerr.NewInternalErrorNoCtx("substrait: missing table for column mapping")
+	}
+	result := make([]ColumnMapping, 0, len(t.Cols))
+	hidden := false
+	for _, column := range t.Cols {
+		if column == nil {
+			return nil, moerr.NewInternalErrorNoCtxf("substrait: table %q has a nil column", t.Name)
+		}
+		if column.Hidden {
+			hidden = true
+			continue
+		}
+		if hidden {
+			return nil, moerr.NewInternalErrorNoCtxf("substrait: table %q has non-suffix hidden columns", t.Name)
+		}
+		result = append(result, ColumnMapping{ColumnID: column.ColId, SequenceNumber: column.Seqnum})
+	}
+	if len(result) == 0 {
+		return nil, moerr.NewInternalErrorNoCtxf("substrait: table %q has no exportable columns", t.Name)
+	}
+	return result, nil
 }
 
 func validateExprFields(exprs []*planpb.Expr, width int) error {
@@ -697,23 +779,9 @@ func valueArg(x *spb.Expression) *spb.FunctionArgument {
 
 func scalarName(name string) (string, bool) {
 	n := strings.ToLower(name)
-	m := map[string]string{"and": "and", "or": "or", "not": "not", "=": "equal", "equal": "equal", "!=": "not_equal", "<>": "not_equal", "<": "lt", "<=": "lte", ">": "gt", ">=": "gte", "is_null": "is_null", "isnull": "is_null", "is_not_null": "is_not_null", "isnotnull": "is_not_null", "<=>": "is_not_distinct_from", "+": "add", "-": "subtract", "*": "multiply", "/": "divide", "%": "modulus", "between": "between"}
+	m := map[string]string{"and": "and", "or": "or", "not": "not", "=": "equal", "equal": "equal", "!=": "not_equal", "<>": "not_equal", "<": "lt", "<=": "lte", ">": "gt", ">=": "gte", "is_null": "is_null", "isnull": "is_null", "is_not_null": "is_not_null", "isnotnull": "is_not_null", "<=>": "is_not_distinct_from", "+": "add", "-": "subtract", "*": "multiply", "/": "divide", "%": "modulus", "mod": "modulus", "between": "between"}
 	v, ok := m[n]
 	return v, ok
-}
-
-func scalarIdentity(ref *planpb.ObjectRef) (string, bool) {
-	if ref == nil || uint64(ref.Obj)&function.Distinct != 0 {
-		return "", false
-	}
-	fid, _ := function.DecodeOverloadID(ref.Obj)
-	ids := map[int32]string{function.AND: "and", function.OR: "or", function.NOT: "not", function.EQUAL: "equal", function.NOT_EQUAL: "not_equal", function.LESS_THAN: "lt", function.LESS_EQUAL: "lte", function.GREAT_THAN: "gt", function.GREAT_EQUAL: "gte", function.ISNULL: "is_null", function.ISNOTNULL: "is_not_null", function.NULL_SAFE_EQUAL: "is_not_distinct_from", function.PLUS: "add", function.MINUS: "subtract", function.MULTI: "multiply", function.DIV: "divide", function.MOD: "modulus", function.BETWEEN: "between"}
-	name, ok := ids[fid]
-	if !ok {
-		return "", false
-	}
-	display, ok := scalarName(ref.ObjName)
-	return name, ok && display == name
 }
 
 func scalarArity(name string) int {
@@ -727,21 +795,156 @@ func scalarArity(name string) int {
 	}
 }
 
-func aggregateIdentity(ref *planpb.ObjectRef) (string, bool) {
-	if ref == nil {
+func aggregateName(name string) (string, bool) {
+	switch strings.ToLower(name) {
+	case "count", "starcount":
+		return "count", true
+	case "sum":
+		return "sum", true
+	case "min":
+		return "min", true
+	case "max":
+		return "max", true
+	default:
 		return "", false
 	}
-	fid, _ := function.DecodeOverloadID(ref.Obj)
-	ids := map[int32]string{function.COUNT: "count", function.STARCOUNT: "count", function.SUM: "sum", function.MIN: "min", function.MAX: "max", function.AVG: "avg"}
-	name, ok := ids[fid]
-	if !ok {
-		return "", false
+}
+
+type semanticCapabilityKind uint8
+
+const (
+	semanticScalar semanticCapabilityKind = iota + 1
+	semanticAggregate
+)
+
+type semanticTypeKey struct {
+	id, width, scale int32
+	notNullable      bool
+}
+
+type semanticCapabilityKey struct {
+	kind       semanticCapabilityKind
+	overloadID int64
+	argumentN  uint8
+	arguments  [3]semanticTypeKey
+	result     semanticTypeKey
+}
+
+type semanticCapability struct {
+	name        string
+	equivalence string
+}
+
+type semanticDeclaration struct {
+	kind        semanticCapabilityKind
+	functionID  int32
+	moName      string
+	name        string
+	inputs      []types.Type
+	equivalence string
+}
+
+// The registry is deliberately exact: a declaration resolves to one MatrixOne
+// overload ID and is expanded across explicit argument/result nullability
+// shapes. A base function ID or display name is never sufficient admission.
+var semanticDeclarations = []semanticDeclaration{
+	{semanticScalar, function.AND, "and", "and", []types.Type{types.T_bool.ToType(), types.T_bool.ToType()}, "sirius-v1:boolean-three-valued-logic"},
+	{semanticScalar, function.OR, "or", "or", []types.Type{types.T_bool.ToType(), types.T_bool.ToType()}, "sirius-v1:boolean-three-valued-logic"},
+	{semanticScalar, function.NOT, "not", "not", []types.Type{types.T_bool.ToType()}, "sirius-v1:boolean-three-valued-logic"},
+	{semanticScalar, function.EQUAL, "=", "equal", []types.Type{types.T_int64.ToType(), types.T_int64.ToType()}, "sirius-v1:signed-i64-comparison"},
+	{semanticScalar, function.NOT_EQUAL, "!=", "not_equal", []types.Type{types.T_int64.ToType(), types.T_int64.ToType()}, "sirius-v1:signed-i64-comparison"},
+	{semanticScalar, function.LESS_THAN, "<", "lt", []types.Type{types.T_int64.ToType(), types.T_int64.ToType()}, "sirius-v1:signed-i64-comparison"},
+	{semanticScalar, function.LESS_EQUAL, "<=", "lte", []types.Type{types.T_int64.ToType(), types.T_int64.ToType()}, "sirius-v1:signed-i64-comparison"},
+	{semanticScalar, function.GREAT_THAN, ">", "gt", []types.Type{types.T_int64.ToType(), types.T_int64.ToType()}, "sirius-v1:signed-i64-comparison"},
+	{semanticScalar, function.GREAT_EQUAL, ">=", "gte", []types.Type{types.T_int64.ToType(), types.T_int64.ToType()}, "sirius-v1:signed-i64-comparison"},
+	{semanticScalar, function.ISNULL, "isnull", "is_null", []types.Type{types.T_int64.ToType()}, "sirius-v1:null-predicate"},
+	{semanticScalar, function.ISNOTNULL, "isnotnull", "is_not_null", []types.Type{types.T_int64.ToType()}, "sirius-v1:null-predicate"},
+	{semanticScalar, function.NULL_SAFE_EQUAL, "<=>", "is_not_distinct_from", []types.Type{types.T_int64.ToType(), types.T_int64.ToType()}, "sirius-v1:null-safe-signed-i64-equality"},
+	{semanticScalar, function.PLUS, "+", "add", []types.Type{types.T_int64.ToType(), types.T_int64.ToType()}, "sirius-v1:checked-signed-i64-arithmetic"},
+	{semanticScalar, function.MINUS, "-", "subtract", []types.Type{types.T_int64.ToType(), types.T_int64.ToType()}, "sirius-v1:checked-signed-i64-arithmetic"},
+	{semanticScalar, function.MULTI, "*", "multiply", []types.Type{types.T_int64.ToType(), types.T_int64.ToType()}, "sirius-v1:checked-signed-i64-arithmetic"},
+	{semanticScalar, function.MOD, "mod", "modulus", []types.Type{types.T_int64.ToType(), types.T_int64.ToType()}, "sirius-v1:mysql-signed-i64-modulus"},
+	{semanticScalar, function.BETWEEN, "between", "between", []types.Type{types.T_int64.ToType(), types.T_int64.ToType(), types.T_int64.ToType()}, "sirius-v1:signed-i64-between"},
+	{semanticAggregate, function.COUNT, "count", "count", []types.Type{types.T_int64.ToType()}, "sirius-v1:count-i64"},
+	{semanticAggregate, function.STARCOUNT, "starcount", "count", []types.Type{types.T_int64.ToType()}, "sirius-v1:count-all"},
+	{semanticAggregate, function.SUM, "sum", "sum", []types.Type{types.T_int64.ToType()}, "sirius-v1:checked-signed-i64-sum"},
+	{semanticAggregate, function.MIN, "min", "min", []types.Type{types.T_int64.ToType()}, "sirius-v1:signed-i64-min"},
+	{semanticAggregate, function.MAX, "max", "max", []types.Type{types.T_int64.ToType()}, "sirius-v1:signed-i64-max"},
+}
+
+var (
+	semanticRegistryOnce sync.Once
+	semanticRegistry     map[semanticCapabilityKey]semanticCapability
+	semanticRegistryErr  error
+)
+
+func loadSemanticRegistry() (map[semanticCapabilityKey]semanticCapability, error) {
+	semanticRegistryOnce.Do(func() {
+		semanticRegistry, semanticRegistryErr = buildSemanticCapabilities(semanticDeclarations)
+	})
+	return semanticRegistry, semanticRegistryErr
+}
+
+func buildSemanticCapabilities(declarations []semanticDeclaration) (map[semanticCapabilityKey]semanticCapability, error) {
+	result := make(map[semanticCapabilityKey]semanticCapability)
+	for _, declaration := range declarations {
+		resolved, err := function.GetFunctionByName(context.Background(), declaration.moName, declaration.inputs)
+		if err != nil {
+			return nil, moerr.NewInternalErrorNoCtxf("substrait semantic capability %q: %v", declaration.moName, err)
+		}
+		_, casts := resolved.ShouldDoImplicitTypeCast()
+		functionID, _ := function.DecodeOverloadID(resolved.GetEncodedOverloadID())
+		if casts || functionID != declaration.functionID || declaration.equivalence == "" || len(declaration.inputs) > 3 {
+			return nil, moerr.NewInternalErrorNoCtxf("substrait semantic capability %q has an invalid MatrixOne declaration", declaration.moName)
+		}
+		for nullability := 0; nullability < 1<<len(declaration.inputs); nullability++ {
+			key := semanticCapabilityKey{kind: declaration.kind, overloadID: resolved.GetEncodedOverloadID(), argumentN: uint8(len(declaration.inputs))}
+			arguments := make([]*planpb.Expr, len(declaration.inputs))
+			for i, input := range declaration.inputs {
+				notNullable := nullability&(1<<i) != 0
+				key.arguments[i] = semanticTypeKey{id: int32(input.Oid), width: input.Width, scale: input.Scale, notNullable: notNullable}
+				arguments[i] = &planpb.Expr{Typ: planpb.Type{Id: int32(input.Oid), Width: input.Width, Scale: input.Scale, NotNullable: notNullable}}
+			}
+			output := resolved.GetReturnType()
+			key.result = semanticTypeKey{
+				id:          int32(output.Oid),
+				width:       output.Width,
+				scale:       output.Scale,
+				notNullable: function.DeduceNotNullable(resolved.GetEncodedOverloadID(), arguments),
+			}
+			if existing, ok := result[key]; ok && existing != (semanticCapability{name: declaration.name, equivalence: declaration.equivalence}) {
+				return nil, moerr.NewInternalErrorNoCtxf("substrait semantic capability collision for %q", declaration.moName)
+			}
+			result[key] = semanticCapability{name: declaration.name, equivalence: declaration.equivalence}
+		}
 	}
-	display := strings.ToLower(ref.ObjName)
-	if fid == function.STARCOUNT {
-		return name, display == "starcount" || display == "count"
+	return result, nil
+}
+
+func hasSemanticCapability(kind semanticCapabilityKind, name string, ref *planpb.ObjectRef, args []*planpb.Expr, out *planpb.Type) bool {
+	if ref == nil || out == nil || len(args) > 3 {
+		return false
 	}
-	return name, display == name
+	key := semanticCapabilityKey{kind: kind, overloadID: ref.Obj, argumentN: uint8(len(args)), result: semanticTypeFromPlan(out)}
+	for i, argument := range args {
+		if argument == nil {
+			return false
+		}
+		key.arguments[i] = semanticTypeFromPlan(&argument.Typ)
+	}
+	registry, err := loadSemanticRegistry()
+	if err != nil {
+		return false
+	}
+	capability, ok := registry[key]
+	return ok && capability.name == name && capability.equivalence != ""
+}
+
+func semanticTypeFromPlan(value *planpb.Type) semanticTypeKey {
+	if value == nil {
+		return semanticTypeKey{}
+	}
+	return semanticTypeKey{id: value.Id, width: value.Width, scale: value.Scale, notNullable: value.NotNullable}
 }
 
 func validateScalarSignature(name string, out *planpb.Type, args []*planpb.Expr) error {
@@ -793,26 +996,6 @@ func validateScalarSignature(name string, out *planpb.Type, args []*planpb.Expr)
 	return nil
 }
 
-func validateMOOverload(ref *planpb.ObjectRef, args []*planpb.Expr, out *planpb.Type) error {
-	inputs := make([]types.Type, len(args))
-	for i, a := range args {
-		if a == nil {
-			return moerr.NewInternalErrorNoCtxf("substrait: nil function argument")
-		}
-		inputs[i] = types.Type{Oid: types.T(a.Typ.Id), Width: a.Typ.Width, Scale: a.Typ.Scale}
-	}
-	resolved, err := function.GetFunctionByName(context.Background(), ref.ObjName, inputs)
-	if err != nil {
-		return moerr.NewInternalErrorNoCtxf("substrait: resolve MO overload %q: %v", ref.ObjName, err)
-	}
-	_, cast := resolved.ShouldDoImplicitTypeCast()
-	ret := resolved.GetReturnType()
-	if cast || resolved.GetEncodedOverloadID() != ref.Obj || out == nil || ret.Oid != types.T(out.Id) || ret.Width != out.Width || ret.Scale != out.Scale {
-		return moerr.NewInternalErrorNoCtxf("substrait: MO overload identity or result type mismatch for %q", ref.ObjName)
-	}
-	return nil
-}
-
 func nonnegativeIntLiteral(x *planpb.Expr, absent int64) (int64, error) {
 	if x == nil {
 		return absent, nil
@@ -831,8 +1014,13 @@ func nonnegativeIntLiteral(x *planpb.Expr, absent int64) (int64, error) {
 		v = int64(n.I32Val)
 	case *planpb.Literal_I64Val:
 		v = n.I64Val
+	case *planpb.Literal_U64Val:
+		if n.U64Val > math.MaxInt64 {
+			return 0, moerr.NewInternalErrorNoCtxf("must fit the Substrait signed integer range")
+		}
+		v = int64(n.U64Val)
 	default:
-		return 0, moerr.NewInternalErrorNoCtxf("must be a signed integer")
+		return 0, moerr.NewInternalErrorNoCtxf("must be an integer")
 	}
 	if v < 0 {
 		return 0, moerr.NewInternalErrorNoCtxf("must be non-negative")

@@ -16,6 +16,7 @@ package logtailreplay
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -28,6 +29,41 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestVisitSnapshotObjectsFiltersAndStopsOnVisitorError(t *testing.T) {
+	state := NewPartitionState("test", false, 42, false)
+	add := func(tombstone bool, create, deleteAt types.TS) {
+		id := objectio.NewObjectid()
+		stats := objectio.NewObjectStatsWithObjectID(&id, false, false, false)
+		entry := objectio.ObjectEntry{ObjectStats: *stats, CreateTime: create, DeleteTime: deleteAt}
+		if tombstone {
+			state.tombstoneObjectsNameIndex.Set(entry)
+		} else {
+			state.dataObjectsNameIndex.Set(entry)
+		}
+	}
+	snapshot := types.BuildTS(20, 0)
+	add(false, types.BuildTS(10, 0), types.TS{})
+	add(false, types.BuildTS(30, 0), types.TS{})
+	add(false, types.BuildTS(5, 0), types.BuildTS(20, 0))
+	add(true, types.BuildTS(15, 0), types.TS{})
+
+	var kinds []bool
+	require.NoError(t, VisitSnapshotObjects(context.Background(), state, snapshot, func(_ objectio.ObjectStats, tombstone bool) error {
+		kinds = append(kinds, tombstone)
+		return nil
+	}))
+	require.Equal(t, []bool{false, true}, kinds)
+
+	stop := errors.New("stop")
+	calls := 0
+	err := VisitSnapshotObjects(context.Background(), state, snapshot, func(objectio.ObjectStats, bool) error {
+		calls++
+		return stop
+	})
+	require.ErrorIs(t, err, stop)
+	require.Equal(t, 1, calls)
+}
 
 // TestTailCheckFn tests the tailCheckFn function which filters objects based on time range
 func TestTailCheckFn(t *testing.T) {

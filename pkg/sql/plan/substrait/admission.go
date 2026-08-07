@@ -31,8 +31,10 @@ import (
 const (
 	ResolvePath            = "/internal/v1/sidecar/read/resolve"
 	MaxLeaseTTL            = 20 * time.Minute
+	MaxManifestBytes       = 64 << 20
 	rollbackCleanupTimeout = 30 * time.Second
-	maxManifestSize        = 64 << 20
+	resolveAuditTimeout    = 5 * time.Second
+	maxManifestSize        = MaxManifestBytes
 	maxCanonicalSchemaSize = 1 << 20
 )
 
@@ -262,6 +264,8 @@ func (m *LeaseManager) Resolve(readRef []byte) (*Lease, bool) {
 }
 
 func (m *LeaseManager) Release(ctx context.Context, readRef []byte) error {
+	cleanupCtx, cancel := leaseCleanupContext(ctx)
+	defer cancel()
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if !m.ready {
@@ -271,26 +275,21 @@ func (m *LeaseManager) Release(ctx context.Context, readRef []byte) error {
 	if l == nil {
 		return nil
 	}
-	if !l.Released {
-		if m.journal != nil {
-			if err := m.journal.MarkReleased(ctx, readRef); err != nil {
-				return moerr.NewInternalErrorNoCtxf("substrait: persist read lease release: %v", err)
-			}
-		}
-		l.Released = true
+	if err := m.releaseLocked(cleanupCtx, l); err != nil {
+		return moerr.NewInternalErrorNoCtxf("substrait: release read lease: %v", err)
 	}
-	if m.protector != nil {
-		if err := m.protector.Unregister(ctx, readRef); err != nil {
-			return err
-		}
-	}
-	if m.journal != nil {
-		if err := m.journal.Delete(ctx, readRef); err != nil {
-			return moerr.NewInternalErrorNoCtxf("substrait: delete released read lease: %v", err)
-		}
-	}
-	delete(m.leases, string(readRef))
 	return nil
+}
+
+func leaseCleanupContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return context.WithTimeoutCause(
+		context.WithoutCancel(ctx),
+		rollbackCleanupTimeout,
+		moerr.NewInternalErrorNoCtx("substrait: read lease cleanup timed out"),
+	)
 }
 
 func (m *LeaseManager) pruneExpiredLocked(ctx context.Context) error {
@@ -523,6 +522,7 @@ func Admit(ctx context.Context, r AdmissionRequest) (map[int32][]byte, error) {
 		leases := make([]*Lease, 0, len(reads))
 		wires = make(map[int32][]byte, len(reads))
 		for _, read := range reads {
+			read.AccountID = r.AccountID
 			facts, err := r.Provider.PrepareSnapshotRead(ctx, read, r.SnapshotTS)
 			if err != nil {
 				return nil, moerr.NewInternalErrorNoCtxf("substrait: prepare table %d: %v", read.TableID, err)
@@ -539,7 +539,7 @@ func Admit(ctx context.Context, r AdmissionRequest) (map[int32][]byte, error) {
 			}
 			schemaHash := sha256.Sum256(facts.CanonicalSchema)
 			manifestHash := sha256.Sum256(facts.Manifest)
-			tr := &TaeRead{ProtocolVersion: TaeReadProtocolVersion, ReadRef: ref, QueryID: append([]byte(nil), r.QueryID...), AccountID: r.AccountID, TableID: read.TableID, SnapshotTS: append([]byte(nil), r.SnapshotTS...), SchemaDigest: schemaHash[:], ManifestSHA256: manifestHash[:], CapabilityHash: CapabilityHash[:], ExpiresAtUnixMS: uint64(expires)}
+			tr := &TaeRead{ProtocolVersion: TaeReadProtocolVersion, ReadRef: ref, QueryID: append([]byte(nil), r.QueryID...), AccountID: r.AccountID, DatabaseID: read.DatabaseID, TableID: read.TableID, SnapshotTS: append([]byte(nil), r.SnapshotTS...), SchemaDigest: schemaHash[:], ManifestSHA256: manifestHash[:], CapabilityHash: CapabilityHash[:], ExpiresAtUnixMS: uint64(expires)}
 			wire, err := MarshalTaeRead(tr)
 			if err != nil {
 				return nil, err
@@ -555,8 +555,32 @@ func Admit(ctx context.Context, r AdmissionRequest) (map[int32][]byte, error) {
 	return wires, nil
 }
 
+// ResolveAuditEvent is emitted exactly once before a successful manifest
+// resolution. ReadRefSHA256 identifies the capability without logging it.
+type ResolveAuditEvent struct {
+	AccountID, DatabaseID, TableID uint64
+	QueryID                        []byte
+	ClientSPKIHash, ReadRefSHA256  []byte
+}
+
+type ResolveAuditRecorder interface {
+	// RecordResolve must honor ctx. The resolver supplies a bounded deadline
+	// and fails closed rather than returning an unaudited manifest.
+	RecordResolve(context.Context, ResolveAuditEvent) error
+}
+
+type ResolveAuditFunc func(context.Context, ResolveAuditEvent) error
+
+func (f ResolveAuditFunc) RecordResolve(ctx context.Context, event ResolveAuditEvent) error {
+	if f == nil {
+		return moerr.NewInternalErrorNoCtx("substrait: nil resolution audit function")
+	}
+	return f(ctx, event)
+}
+
 // ResolveHandler exposes the exact strict, mTLS-only Sirius resolver route.
-func ResolveHandler(leases *LeaseManager, now func() time.Time) http.Handler {
+// An audit recorder is mandatory so no successful resolution is unaudited.
+func ResolveHandler(leases *LeaseManager, now func() time.Time, auditor ResolveAuditRecorder) http.Handler {
 	if now == nil {
 		now = time.Now
 	}
@@ -595,13 +619,13 @@ func ResolveHandler(leases *LeaseManager, now func() time.Time) http.Handler {
 			http.Error(w, "invalid TaeRead", http.StatusUnauthorized)
 			return
 		}
-		if leases == nil {
+		if leases == nil || auditor == nil {
 			http.Error(w, "resolver unavailable", http.StatusServiceUnavailable)
 			return
 		}
 		lease, ok := leases.Resolve(tr.ReadRef)
 		if !ok || !equalBytes(lease.AuthorizedClientSPKIHash, principalHash[:]) ||
-			lease.Read.AccountID != tr.AccountID || !equalBytes(lease.Read.QueryID, tr.QueryID) ||
+			lease.Read.AccountID != tr.AccountID || lease.Read.DatabaseID != tr.DatabaseID || !equalBytes(lease.Read.QueryID, tr.QueryID) ||
 			!equalBytes(lease.Read.SchemaDigest, tr.SchemaDigest) || !equalBytes(lease.Read.ManifestSHA256, tr.ManifestSHA256) ||
 			!equalBytes(lease.Wire, req.TaeRead) || !equalBytes(lease.CanonicalSchema, req.RequestedSchema) {
 			http.Error(w, "read lease not found", http.StatusNotFound)
@@ -610,6 +634,22 @@ func ResolveHandler(leases *LeaseManager, now func() time.Time) http.Handler {
 		response, err := MarshalResolveResponse(ResolveTaeReadResponse{TaeRead: lease.Wire, Manifest: lease.Manifest, CanonicalSchema: lease.CanonicalSchema})
 		if err != nil {
 			http.Error(w, "invalid lease", http.StatusInternalServerError)
+			return
+		}
+		readRefHash := sha256.Sum256(tr.ReadRef)
+		audit := ResolveAuditEvent{
+			AccountID:      tr.AccountID,
+			DatabaseID:     tr.DatabaseID,
+			TableID:        tr.TableID,
+			QueryID:        append([]byte(nil), tr.QueryID...),
+			ClientSPKIHash: append([]byte(nil), principalHash[:]...),
+			ReadRefSHA256:  append([]byte(nil), readRefHash[:]...),
+		}
+		auditCtx, cancelAudit := context.WithTimeout(r.Context(), resolveAuditTimeout)
+		err = auditor.RecordResolve(auditCtx, audit)
+		cancelAudit()
+		if err != nil {
+			http.Error(w, "resolution audit unavailable", http.StatusInternalServerError)
 			return
 		}
 		w.Header().Set("Content-Type", "application/x-protobuf")
