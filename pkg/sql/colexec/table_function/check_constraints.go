@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -35,6 +36,7 @@ type checkConstraintRow struct {
 
 type checkConstraintsState struct {
 	simpleOneBatchState
+	collectRows func(*process.Process) ([]checkConstraintRow, error)
 }
 
 const (
@@ -66,7 +68,7 @@ func checkConstraintOutputPositions(attrs []string) [4]int {
 }
 
 func checkConstraintsPrepare(_ *process.Process, _ *TableFunction) (tvfState, error) {
-	return &checkConstraintsState{}, nil
+	return &checkConstraintsState{collectRows: collectCheckConstraintRows}, nil
 }
 
 func (s *checkConstraintsState) start(
@@ -80,7 +82,11 @@ func (s *checkConstraintsState) start(
 		return nil
 	}
 
-	rows, err := collectCheckConstraintRows(proc)
+	collectRows := s.collectRows
+	if collectRows == nil {
+		collectRows = collectCheckConstraintRows
+	}
+	rows, err := collectRows(proc)
 	if err != nil {
 		return err
 	}
@@ -132,6 +138,14 @@ func collectCheckConstraintRows(proc *process.Process) ([]checkConstraintRow, er
 	if err != nil {
 		return nil, err
 	}
+	return collectCheckConstraintRowsFromResult(result)
+}
+
+// collectCheckConstraintRowsFromResult decodes the catalog result separately
+// from the SQL execution boundary.  Besides keeping the executor path small,
+// this makes the metadata decoding testable without starting a MatrixOne
+// service in a table-function unit test.
+func collectCheckConstraintRowsFromResult(result executor.Result) ([]checkConstraintRow, error) {
 	defer result.Close()
 
 	rows := make([]checkConstraintRow, 0)
