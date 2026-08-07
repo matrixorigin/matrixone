@@ -241,23 +241,27 @@ func (l *LocalFS) contentSize(fileSize int64) int64 {
 
 func (l *LocalFS) AllocateCacheData(ctx context.Context, size int) fscache.Data {
 	if l.memCache != nil {
-		l.memCache.cache.EnsureNBytes(withoutEventLogger(ctx), size)
+		ensureCacheDataCapacity(ctx, l.memCache.cache, DefaultCacheDataAllocator(), size)
 	}
 	return DefaultCacheDataAllocator().AllocateCacheData(ctx, size)
 }
 
 func (l *LocalFS) AllocateCacheDataWithHint(ctx context.Context, size int, hints malloc.Hints) fscache.Data {
 	if l.memCache != nil {
-		l.memCache.cache.EnsureNBytes(withoutEventLogger(ctx), size)
+		ensureCacheDataCapacity(ctx, l.memCache.cache, DefaultCacheDataAllocator(), size)
 	}
 	return DefaultCacheDataAllocator().AllocateCacheDataWithHint(ctx, size, hints)
 }
 
 func (l *LocalFS) CopyToCacheData(ctx context.Context, data []byte) fscache.Data {
 	if l.memCache != nil {
-		l.memCache.cache.EnsureNBytes(withoutEventLogger(ctx), len(data))
+		ensureCacheDataCapacity(ctx, l.memCache.cache, DefaultCacheDataAllocator(), len(data))
 	}
 	return DefaultCacheDataAllocator().CopyToCacheData(ctx, data)
+}
+
+func (l *LocalFS) BackingSize(size int) int {
+	return DefaultCacheDataAllocator().BackingSize(size)
 }
 
 func (l *LocalFS) initCaches(ctx context.Context, config CacheConfig) error {

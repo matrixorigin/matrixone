@@ -118,6 +118,14 @@ func (t testBytes) Bytes() []byte {
 	return t
 }
 
+func (t testBytes) Size() int64 {
+	return int64(len(t))
+}
+
+func (t testBytes) Capacity() int64 {
+	return int64(cap(t))
+}
+
 func (t testBytes) Release() {
 }
 
@@ -138,11 +146,12 @@ func (s *sizedTestData) Bytes() []byte {
 }
 
 func (*sizedTestData) Size() int64              { return 3 }
+func (*sizedTestData) Capacity() int64          { return 7 }
 func (*sizedTestData) Release()                 {}
 func (*sizedTestData) Retain()                  {}
 func (s *sizedTestData) Slice(int) fscache.Data { return s }
 
-func TestDataCacheSetUsesSizeWithoutExposingBytes(t *testing.T) {
+func TestDataCacheSetUsesCapacityWithoutExposingBytes(t *testing.T) {
 	cache := NewDataCache(fscache.ConstCapacity(1024), nil, nil, nil)
 	data := new(sizedTestData)
 	err := cache.Set(context.Background(), fscache.CacheKey{Path: "foo", Sz: 3}, data)
@@ -151,5 +160,8 @@ func TestDataCacheSetUsesSizeWithoutExposingBytes(t *testing.T) {
 	}
 	if data.bytesCalls != 0 {
 		t.Fatalf("Bytes called %d times", data.bytesCalls)
+	}
+	if got := cache.Used(); got != 7 {
+		t.Fatalf("cache used bytes = %d, want physical capacity 7", got)
 	}
 }

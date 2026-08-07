@@ -30,9 +30,21 @@ import (
 )
 
 type MemCache struct {
-	cache       fscache.DataCache
-	counterSets []*perfcounter.CounterSet
-	callbacksMu [256]sync.Mutex
+	cache        fscache.DataCache
+	counterSets  []*perfcounter.CounterSet
+	callbacksMu  [256]sync.Mutex
+	accountingMu sync.Mutex
+	accounting   map[memCacheEntry]memCacheAccounting
+}
+
+type memCacheEntry struct {
+	key fscache.CacheKey
+	seq uint64
+}
+
+type memCacheAccounting struct {
+	logicalSize int64
+	accounted   bool
 }
 
 var memCacheCallbackSeed = maphash.MakeSeed()
@@ -162,6 +174,8 @@ func NewMemCache(
 ) *MemCache {
 
 	inuseBytes, capacityBytes := metric.GetFsCacheBytesGauge(name, "mem")
+	logicalInuseBytes := metric.GetFsCacheLogicalBytesGauge(name, "mem")
+	backingOverheadBytes := metric.GetFsCacheBackingOverheadBytesGauge(name, "mem")
 	capacityBytes.Set(float64(capacity()))
 
 	capacityFunc := func() int64 {
@@ -176,12 +190,20 @@ func NewMemCache(
 	var dataCache *fifocache.DataCache
 	ret := &MemCache{
 		counterSets: counterSets,
+		accounting:  make(map[memCacheEntry]memCacheAccounting),
 	}
 
-	prepareSetFn := func(ctx context.Context, key fscache.CacheKey, value fscache.Data, size int64, seq uint64) func(inserted bool) {
+	prepareSetFn := func(ctx context.Context, key fscache.CacheKey, value fscache.Data, logicalSize, size int64, seq uint64) func(inserted bool) {
+		entry := memCacheEntry{key: key, seq: seq}
+		ret.accountingMu.Lock()
+		ret.accounting[entry] = memCacheAccounting{logicalSize: logicalSize}
+		ret.accountingMu.Unlock()
 		value.Retain()
 		return func(inserted bool) {
 			if !inserted {
+				ret.accountingMu.Lock()
+				delete(ret.accounting, entry)
+				ret.accountingMu.Unlock()
 				value.Release()
 			}
 		}
@@ -194,9 +216,22 @@ func NewMemCache(
 
 		// metrics
 		LogEvent(ctx, str_update_metrics_begin)
-		inuseBytes.Add(float64(size))
-		capacityBytes.Set(float64(capacityFunc()))
+		entry := memCacheEntry{key: key, seq: seq}
+		ret.accountingMu.Lock()
+		accounting, ok := ret.accounting[entry]
+		if ok {
+			accounting.accounted = true
+			ret.accounting[entry] = accounting
+			inuseBytes.Add(float64(size))
+			logicalInuseBytes.Add(float64(accounting.logicalSize))
+			backingOverheadBytes.Add(float64(size - accounting.logicalSize))
+			capacityBytes.Set(float64(capacityFunc()))
+		}
+		ret.accountingMu.Unlock()
 		LogEvent(ctx, str_update_metrics_end)
+		if !ok {
+			return
+		}
 
 		// callbacks
 		if callbacks != nil {
@@ -234,14 +269,28 @@ func NewMemCache(
 		LogEvent(ctx, str_memory_cache_post_evict_begin)
 		defer LogEvent(ctx, str_memory_cache_post_evict_end)
 
-		// relaese
-		value.Release()
-
 		// metrics
 		LogEvent(ctx, str_update_metrics_begin)
-		inuseBytes.Add(float64(-size))
-		capacityBytes.Set(float64(capacityFunc()))
+		entry := memCacheEntry{key: key, seq: seq}
+		ret.accountingMu.Lock()
+		accounting, ok := ret.accounting[entry]
+		if ok {
+			delete(ret.accounting, entry)
+			if accounting.accounted {
+				inuseBytes.Add(float64(-size))
+				logicalInuseBytes.Add(float64(-accounting.logicalSize))
+				backingOverheadBytes.Add(float64(accounting.logicalSize - size))
+				capacityBytes.Set(float64(capacityFunc()))
+			}
+		}
+		ret.accountingMu.Unlock()
+		if !ok {
+			panic("memory cache eviction is missing logical-size accounting")
+		}
 		LogEvent(ctx, str_update_metrics_end)
+
+		// release
+		value.Release()
 
 		// callbacks
 		if callbacks != nil {

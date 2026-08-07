@@ -15,11 +15,14 @@
 package fileservice
 
 import (
+	"context"
 	"sync"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/malloc"
+	"github.com/matrixorigin/matrixone/pkg/fileservice/fscache"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestBytes(t *testing.T) {
@@ -101,6 +104,7 @@ func TestBytesResurrection(t *testing.T) {
 	assert.Panics(t, func() { bs.Bytes() }, "use after free")
 	assert.Panics(t, func() { bs.Slice(1) }, "slice after free")
 	assert.Panics(t, func() { bs.Size() }, "size after free")
+	assert.Panics(t, func() { bs.Capacity() }, "capacity after free")
 	assert.Equal(t, 1, deallocated, "still exactly one deallocation")
 }
 
@@ -193,4 +197,81 @@ func TestBytesConcurrent(t *testing.T) {
 	bs.Release()
 	assert.Equal(t, 1, deallocated, "exactly one deallocation")
 	assert.Panics(t, func() { bs.Release() }, "double free")
+}
+
+func TestBytesSliceKeepsBackingCapacity(t *testing.T) {
+	data := NewBytes(make([]byte, 700, 1024))
+	defer data.Release()
+
+	data.Slice(3)
+	require.Equal(t, int64(3), data.Size())
+	require.Equal(t, int64(1024), data.Capacity())
+}
+
+func TestDefaultCacheDataAllocatorReportsClassBackingSize(t *testing.T) {
+	const request = 700 * 1024
+	const want = 1 << 20
+	require.Equal(t, want, DefaultCacheDataAllocator().BackingSize(request))
+}
+
+type recordingDataCache struct {
+	ensured int
+}
+
+var _ fscache.DataCache = (*recordingDataCache)(nil)
+
+func (c *recordingDataCache) EnsureNBytes(_ context.Context, want int) { c.ensured = want }
+func (*recordingDataCache) Capacity() int64                            { return 0 }
+func (*recordingDataCache) Used() int64                                { return 0 }
+func (*recordingDataCache) Available() int64                           { return 0 }
+func (*recordingDataCache) Get(context.Context, fscache.CacheKey) (fscache.Data, bool) {
+	return nil, false
+}
+func (*recordingDataCache) Set(context.Context, fscache.CacheKey, fscache.Data) error {
+	return nil
+}
+func (*recordingDataCache) DeletePaths(context.Context, []string) {}
+func (*recordingDataCache) Flush(context.Context)                 {}
+func (*recordingDataCache) Evict(context.Context, chan int64)     {}
+func (*recordingDataCache) EvictToTargetWithWait(context.Context, int64) int64 {
+	return 0
+}
+
+type cacheDataAllocatorForTest struct {
+	cache       *recordingDataCache
+	backingSize int
+}
+
+func (a *cacheDataAllocatorForTest) BackingSize(int) int {
+	return a.backingSize
+}
+
+func (a *cacheDataAllocatorForTest) AllocateCacheData(_ context.Context, size int) fscache.Data {
+	if a.cache.ensured != a.backingSize {
+		panic("cache data allocated before its physical capacity was reserved")
+	}
+	return NewBytes(make([]byte, size, a.backingSize))
+}
+
+func (a *cacheDataAllocatorForTest) AllocateCacheDataWithHint(ctx context.Context, size int, _ malloc.Hints) fscache.Data {
+	return a.AllocateCacheData(ctx, size)
+}
+
+func (a *cacheDataAllocatorForTest) CopyToCacheData(ctx context.Context, data []byte) fscache.Data {
+	cacheData := a.AllocateCacheData(ctx, len(data))
+	copy(cacheData.Bytes(), data)
+	return cacheData
+}
+
+func TestCacheCapacityGuardedAllocatorReservesBackingCapacityBeforeAllocation(t *testing.T) {
+	cache := new(recordingDataCache)
+	allocator := &cacheDataAllocatorForTest{cache: cache, backingSize: 1024}
+	guarded := cacheCapacityGuardedAllocator{cache: cache, allocator: allocator}
+
+	data := guarded.AllocateCacheData(context.Background(), 700)
+	defer data.Release()
+
+	require.Equal(t, 1024, cache.ensured)
+	require.Equal(t, int64(700), data.Size())
+	require.Equal(t, int64(1024), data.Capacity())
 }
