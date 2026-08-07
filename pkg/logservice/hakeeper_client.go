@@ -17,7 +17,6 @@ package logservice
 import (
 	"context"
 	"crypto/sha256"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -26,6 +25,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/gogo/protobuf/proto"
 	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -51,15 +51,44 @@ var hakeeperClientRetryInterval = 10 * time.Millisecond
 // ScheduleCommandBatchFingerprint identifies the command content independently
 // of its delivery ID. It is used only on the rare command path to suppress one
 // legacy heartbeat replay after a rolling-upgrade leader change.
-func ScheduleCommandBatchFingerprint(batch pb.CommandBatch) [sha256.Size]byte {
+type ScheduleCommandFingerprint [sha256.Size]byte
+
+func scheduleCommandFingerprint(message proto.Message) ScheduleCommandFingerprint {
+	// gogo's compact text encoder sorts map keys and preserves unknown fields.
+	// Its generated binary fast path does not honor deterministic marshaling.
+	return sha256.Sum256([]byte(proto.CompactTextString(message)))
+}
+
+func ScheduleCommandBatchFingerprint(batch pb.CommandBatch) ScheduleCommandFingerprint {
 	normalized := pb.CommandBatch{
 		Commands: batch.Commands,
 	}
-	data, err := json.Marshal(&normalized)
-	if err != nil {
-		panic(err)
+	return scheduleCommandFingerprint(&normalized)
+}
+
+// FilterUnappliedScheduleCommands suppresses commands inherited by a newer
+// batch generation while preserving the existing retry-until-state-confirmed
+// contract for bootstrap commands. Fingerprint occurrence counts preserve
+// intentionally repeated equal commands. The returned multiset is bounded by
+// the current pending batch and replaces, rather than grows, caller state.
+func FilterUnappliedScheduleCommands(
+	commands []pb.ScheduleCommand,
+	applied map[ScheduleCommandFingerprint]uint32,
+) ([]pb.ScheduleCommand, map[ScheduleCommandFingerprint]uint32) {
+	filtered := make([]pb.ScheduleCommand, 0, len(commands))
+	current := make(map[ScheduleCommandFingerprint]uint32, len(commands))
+	for i := range commands {
+		if IsRetryableScheduleCommand(commands[i]) {
+			filtered = append(filtered, commands[i])
+			continue
+		}
+		fingerprint := scheduleCommandFingerprint(&commands[i])
+		current[fingerprint]++
+		if current[fingerprint] > applied[fingerprint] {
+			filtered = append(filtered, commands[i])
+		}
 	}
-	return sha256.Sum256(data)
+	return filtered, current
 }
 
 // IsRetryableScheduleCommand reports commands whose existing HAKeeper
@@ -1545,13 +1574,20 @@ func (c *hakeeperClient) checkIsHAKeeper(ctx context.Context) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	if resp.CommandPollSupported {
-		c.commandPollSupported.Store(true)
+	return c.acceptHAKeeperResponse(resp), nil
+}
+
+func (c *hakeeperClient) acceptHAKeeperResponse(resp pb.Response) bool {
+	if !resp.IsHAKeeper {
+		return false
 	}
-	if resp.CommandDeliverySupported {
-		c.commandDeliverySupported.Store(true)
-	}
-	return resp.IsHAKeeper, nil
+	// connectToHAKeeper reuses this object while trying candidate addresses.
+	// Publish capabilities only for the endpoint that passed admission, and
+	// replace both bits so a rejected/newer candidate cannot contaminate the
+	// next accepted generation.
+	c.commandPollSupported.Store(resp.CommandPollSupported)
+	c.commandDeliverySupported.Store(resp.CommandDeliverySupported)
+	return true
 }
 
 func (c *hakeeperClient) request(ctx context.Context, req pb.Request) (pb.Response, error) {

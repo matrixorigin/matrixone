@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"sort"
 	"testing"
+	"time"
 
 	sm "github.com/lni/dragonboat/v4/statemachine"
 	"github.com/stretchr/testify/assert"
@@ -1207,7 +1208,13 @@ func TestCommandDeliveryActivationWaitsForServiceCapabilities(t *testing.T) {
 }
 
 func TestCommandDeliveryActivationIgnoresExpiredServiceRecords(t *testing.T) {
+	cfg := Config{
+		TickPerSecond:  1,
+		CNStoreTimeout: 10 * time.Second,
+		TNStoreTimeout: 10 * time.Second,
+	}
 	rsm := NewStateMachine(0, 1).(*stateMachine)
+	rsm.state.Tick = 20
 	rsm.state.CommandDeliveryPreparing = true
 	rsm.state.CommandDeliveryReady = map[string]bool{"log-1": true}
 	rsm.state.CommandDeliveryCNReady = map[string]bool{
@@ -1223,16 +1230,16 @@ func TestCommandDeliveryActivationIgnoresExpiredServiceRecords(t *testing.T) {
 		Replicas: map[uint64]string{1: "log-1"},
 	}
 	// TN records are retained after a store stops heartbeating. The replicated
-	// target list must be allowed to omit such a record, otherwise one dead
-	// pre-upgrade TN would keep every HAKeeper replica in Preparing forever.
-	rsm.state.CNState.Stores["cn-live"] = pb.CNStoreInfo{}
-	rsm.state.CNState.Stores["cn-dead"] = pb.CNStoreInfo{}
-	rsm.state.TNState.Stores["tn-live"] = pb.TNStoreInfo{}
-	rsm.state.TNState.Stores["tn-dead"] = pb.TNStoreInfo{}
+	// command carries the deterministic expiry thresholds, and the RSM applies
+	// them to its current store state at the activation entry's commit point.
+	rsm.state.CNState.Stores["cn-live"] = pb.CNStoreInfo{Tick: 20}
+	rsm.state.CNState.Stores["cn-dead"] = pb.CNStoreInfo{Tick: 1}
+	rsm.state.TNState.Stores["tn-live"] = pb.TNStoreInfo{Tick: 20}
+	rsm.state.TNState.Stores["tn-dead"] = pb.TNStoreInfo{Tick: 1}
 
 	result, err := rsm.Update(sm.Entry{
 		Index: 10,
-		Cmd:   GetEnableCommandDeliveryCmdForTargets([]string{"cn-live"}, []string{"tn-live"}),
+		Cmd:   GetEnableCommandDeliveryCmdForConfig(cfg),
 	})
 	require.NoError(t, err)
 	require.Equal(t, uint64(1), result.Value)
@@ -1240,6 +1247,7 @@ func TestCommandDeliveryActivationIgnoresExpiredServiceRecords(t *testing.T) {
 
 	// An active unsupported target remains a hard barrier.
 	rsm = NewStateMachine(0, 1).(*stateMachine)
+	rsm.state.Tick = 20
 	rsm.state.CommandDeliveryPreparing = true
 	rsm.state.CommandDeliveryReady = map[string]bool{"log-1": true}
 	rsm.state.CommandDeliveryTNReady = map[string]bool{"tn-live": false}
@@ -1247,11 +1255,49 @@ func TestCommandDeliveryActivationIgnoresExpiredServiceRecords(t *testing.T) {
 		ShardID:  DefaultHAKeeperShardID,
 		Replicas: map[uint64]string{1: "log-1"},
 	}
-	rsm.state.TNState.Stores["tn-live"] = pb.TNStoreInfo{}
+	rsm.state.TNState.Stores["tn-live"] = pb.TNStoreInfo{Tick: 20}
 	result, err = rsm.Update(sm.Entry{
 		Index: 10,
-		Cmd:   GetEnableCommandDeliveryCmdForTargets(nil, []string{"tn-live"}),
+		Cmd:   GetEnableCommandDeliveryCmdForConfig(cfg),
 	})
+	require.NoError(t, err)
+	require.Zero(t, result.Value)
+	require.False(t, rsm.state.CommandDeliveryEnabled)
+}
+
+func TestCommandDeliveryActivationUsesStoreStateAtCommit(t *testing.T) {
+	cfg := Config{
+		TickPerSecond:  1,
+		CNStoreTimeout: 10 * time.Second,
+		TNStoreTimeout: 10 * time.Second,
+	}
+	rsm := NewStateMachine(0, 1).(*stateMachine)
+	rsm.state.Tick = 20
+	rsm.state.CommandDeliveryPreparing = true
+	rsm.state.CommandDeliveryReady = map[string]bool{"log-1": true}
+	rsm.state.CommandDeliveryCNReady = make(map[string]bool)
+	rsm.state.CommandDeliveryTNReady = map[string]bool{"tn-1": false}
+	rsm.state.LogState.Shards[DefaultHAKeeperShardID] = pb.LogShardInfo{
+		ShardID:  DefaultHAKeeperShardID,
+		Replicas: map[uint64]string{1: "log-1"},
+	}
+	// The TN was expired when the leader performed its phase-two precheck.
+	rsm.state.TNState.Stores["tn-1"] = pb.TNStoreInfo{Tick: 1}
+	activation := GetEnableCommandDeliveryCmdForConfig(cfg)
+
+	// Before the activation entry commits, an old TN heartbeats and becomes a
+	// current command target. The RSM must observe that heartbeat, rather than
+	// enabling from the leader's stale pre-proposal view.
+	data, err := (&pb.TNStoreHeartbeat{
+		UUID:                        "tn-1",
+		CommandDeliveryAckSupported: false,
+	}).Marshal()
+	require.NoError(t, err)
+	_, err = rsm.Update(sm.Entry{Index: 21, Cmd: GetTNStoreHeartbeatCmd(data)})
+	require.NoError(t, err)
+	require.Equal(t, uint64(20), rsm.state.TNState.Stores["tn-1"].Tick)
+
+	result, err := rsm.Update(sm.Entry{Index: 22, Cmd: activation})
 	require.NoError(t, err)
 	require.Zero(t, result.Value)
 	require.False(t, rsm.state.CommandDeliveryEnabled)

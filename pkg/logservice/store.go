@@ -18,7 +18,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -870,30 +869,29 @@ func (l *store) getCommandDeliveryState(ctx context.Context) (hakeeper.CommandDe
 	return v.(hakeeper.CommandDeliveryState), nil
 }
 
-// getCommandDeliveryTargets returns the CN/TN stores that are live according
-// to the same replicated tick/timeout rules used by HAKeeper's checkers. CN/TN
-// records are intentionally retained after a store stops heartbeating, so
-// iterating the raw maps would make a pre-upgrade store permanently block the
-// one-way activation barrier.
-func (l *store) getCommandDeliveryTargets(state *pb.CheckerState) (cn, tn []string) {
+func (l *store) commandDeliveryTargetsReady(
+	delivery hakeeper.CommandDeliveryState,
+	state *pb.CheckerState,
+) bool {
 	cfg := l.cfg.GetHAKeeperConfig()
 	cfg.Fill()
 	for uuid, info := range state.CNState.Stores {
-		if !cfg.CNStoreExpired(info.Tick, state.Tick) {
-			cn = append(cn, uuid)
+		if !cfg.CNStoreExpired(info.Tick, state.Tick) && !delivery.CNReady[uuid] {
+			return false
 		}
 	}
 	for uuid, info := range state.TNState.Stores {
-		if !cfg.TNStoreExpired(info.Tick, state.Tick) {
-			tn = append(tn, uuid)
+		if !cfg.TNStoreExpired(info.Tick, state.Tick) && !delivery.TNReady[uuid] {
+			return false
 		}
 	}
-	sort.Strings(cn)
-	sort.Strings(tn)
-	return cn, tn
+	return true
 }
 
-func (l *store) tryEnableCommandDelivery(ctx context.Context) (bool, error) {
+func (l *store) tryEnableCommandDelivery(
+	ctx context.Context,
+	state *pb.CheckerState,
+) (bool, error) {
 	if l.commandDeliveryEnabled.Load() {
 		return true, nil
 	}
@@ -911,9 +909,11 @@ func (l *store) tryEnableCommandDelivery(ctx context.Context) (bool, error) {
 	// service would otherwise consume a command destructively. The committed
 	// phase-one barrier then discards these possibly divergent pre-upgrade
 	// observations on every replica.
-	state, err := l.getCheckerStateWithContext(ctx)
-	if err != nil {
-		return false, err
+	if state == nil {
+		state, err = l.getCheckerStateWithContext(ctx)
+		if err != nil {
+			return false, err
+		}
 	}
 	shard, ok := state.LogState.Shards[hakeeper.DefaultHAKeeperShardID]
 	if !ok || len(shard.Replicas) == 0 {
@@ -939,33 +939,27 @@ func (l *store) tryEnableCommandDelivery(ctx context.Context) (bool, error) {
 	if !allMembers(shard.Replicas, ready) || !allMembers(shard.NonVotingReplicas, ready) {
 		return false, nil
 	}
-	cnTargets, tnTargets := l.getCommandDeliveryTargets(state)
 	if delivery.Preparing && !resetServiceBarrier {
-		for _, uuid := range cnTargets {
-			if !delivery.CNReady[uuid] {
-				return false, nil
-			}
-		}
-		for _, uuid := range tnTargets {
-			if !delivery.TNReady[uuid] {
-				return false, nil
-			}
+		if !l.commandDeliveryTargetsReady(delivery, state) {
+			return false, nil
 		}
 	} else {
-		for _, uuid := range cnTargets {
-			if !state.CNState.Stores[uuid].CommandDeliveryAckSupported {
+		cfg := l.cfg.GetHAKeeperConfig()
+		cfg.Fill()
+		for _, info := range state.CNState.Stores {
+			if !cfg.CNStoreExpired(info.Tick, state.Tick) && !info.CommandDeliveryAckSupported {
 				return false, nil
 			}
 		}
-		for _, uuid := range tnTargets {
-			if !state.TNState.Stores[uuid].CommandDeliveryAckSupported {
+		for _, info := range state.TNState.Stores {
+			if !cfg.TNStoreExpired(info.Tick, state.Tick) && !info.CommandDeliveryAckSupported {
 				return false, nil
 			}
 		}
 	}
 	cmd := hakeeper.GetEnableCommandDeliveryCmd()
 	if delivery.Preparing && !resetServiceBarrier {
-		cmd = hakeeper.GetEnableCommandDeliveryCmdForTargets(cnTargets, tnTargets)
+		cmd = hakeeper.GetEnableCommandDeliveryCmdForConfig(l.cfg.GetHAKeeperConfig())
 	}
 	session := l.nh.GetNoOPSession(hakeeper.DefaultHAKeeperShardID)
 	result, err := l.propose(ctx, session, cmd)

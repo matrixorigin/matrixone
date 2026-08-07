@@ -620,6 +620,36 @@ func TestManagedHAKeeperClientRejectsNilPreparedClient(t *testing.T) {
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrNoHAKeeper))
 }
 
+func TestHAKeeperCapabilitiesBelongToAcceptedCandidate(t *testing.T) {
+	client := &hakeeperClient{}
+	require.False(t, client.acceptHAKeeperResponse(pb.Response{
+		IsHAKeeper:               false,
+		CommandPollSupported:     true,
+		CommandDeliverySupported: true,
+	}))
+	require.False(t, client.commandPollSupported.Load())
+	require.False(t, client.commandDeliverySupported.Load())
+
+	require.True(t, client.acceptHAKeeperResponse(pb.Response{IsHAKeeper: true}))
+	require.False(t, client.commandPollSupported.Load(),
+		"a rejected candidate must not leak poll capability")
+	require.False(t, client.commandDeliverySupported.Load(),
+		"a rejected candidate must not leak delivery capability")
+
+	require.True(t, client.acceptHAKeeperResponse(pb.Response{
+		IsHAKeeper:               true,
+		CommandPollSupported:     true,
+		CommandDeliverySupported: true,
+	}))
+	require.True(t, client.commandPollSupported.Load())
+	require.True(t, client.commandDeliverySupported.Load())
+	require.True(t, client.acceptHAKeeperResponse(pb.Response{IsHAKeeper: true}))
+	require.False(t, client.commandPollSupported.Load(),
+		"an accepted endpoint replaces the prior endpoint's poll capability")
+	require.False(t, client.commandDeliverySupported.Load(),
+		"an accepted endpoint replaces the prior endpoint's delivery capability")
+}
+
 func TestScheduleCommandBatchFingerprintDeterministic(t *testing.T) {
 	batch := pb.CommandBatch{
 		Term:    7,
@@ -645,6 +675,57 @@ func TestScheduleCommandBatchFingerprintDeterministic(t *testing.T) {
 	batch.BatchID++
 	require.Equal(t, want, ScheduleCommandBatchFingerprint(batch),
 		"delivery metadata must not change command identity")
+}
+
+func TestFilterUnappliedScheduleCommandsAcrossGenerations(t *testing.T) {
+	command := func(replicaID uint64) pb.ScheduleCommand {
+		return pb.ScheduleCommand{
+			UUID:        "tn-1",
+			ServiceType: pb.TNService,
+			ConfigChange: &pb.ConfigChange{
+				ChangeType: pb.AddReplica,
+				Replica: pb.Replica{
+					ShardID:   1,
+					ReplicaID: replicaID,
+				},
+				InitialMembers: map[uint64]string{
+					2: "b",
+					1: "a",
+				},
+			},
+		}
+	}
+	first := command(1)
+	second := command(2)
+
+	filtered, applied := FilterUnappliedScheduleCommands(
+		[]pb.ScheduleCommand{first},
+		nil,
+	)
+	require.Equal(t, []pb.ScheduleCommand{first}, filtered)
+	require.Len(t, applied, 1)
+
+	filtered, next := FilterUnappliedScheduleCommands(
+		[]pb.ScheduleCommand{first, second},
+		applied,
+	)
+	require.Equal(t, []pb.ScheduleCommand{second}, filtered)
+	require.Len(t, next, 2)
+
+	filtered, next = FilterUnappliedScheduleCommands(
+		[]pb.ScheduleCommand{first, first},
+		applied,
+	)
+	require.Equal(t, []pb.ScheduleCommand{first}, filtered,
+		"a newly appended identical occurrence must not be hidden by its inherited peer")
+	require.Equal(t, uint32(2), next[scheduleCommandFingerprint(&first)])
+
+	first.ConfigChange.InitialMembers = map[uint64]string{1: "a", 2: "b"}
+	filtered, _ = FilterUnappliedScheduleCommands(
+		[]pb.ScheduleCommand{first},
+		applied,
+	)
+	require.Empty(t, filtered, "map iteration order must not change command identity")
 }
 
 func TestIsRetryableScheduleCommand(t *testing.T) {

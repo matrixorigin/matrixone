@@ -546,18 +546,22 @@ message ScheduleCommandQuery {
   ServiceType ServiceType = 2;
 }
 
-// CommandDeliveryTargets is the set of CN/TN stores that were live when the
-// leader evaluated the second phase of the command-delivery barrier. Stores
-// that have already expired are intentionally omitted: CN/TN state keeps
-// historical records, and an offline legacy store must not block activation
-// forever. A store that returns before activation is still observed by its
-// post-barrier heartbeat and can block the transition if it is unsupported.
+// CommandDeliveryTargets carries deterministic phase-two evaluation inputs.
+// CN/TN state keeps historical records, so current entries carry timeout ticks
+// and let the RSM determine the live target set at commit. The UUID lists are
+// retained for wire compatibility with the earlier snapshot-based form.
 message CommandDeliveryTargets {
+  // UUID snapshots are retained for compatibility with the first unpublished
+  // implementation of the activation barrier. New phase-two entries evaluate
+  // the live set inside the RSM at the activation entry's linearization point.
   repeated string CNStoreUUIDs = 1;
   repeated string TNStoreUUIDs = 2;
   // Explicit distinguishes a replicated empty target set from the legacy
   // no-payload activation command.
   bool Explicit = 3;
+  uint64 CNStoreTimeoutTicks = 4;
+  uint64 TNStoreTimeoutTicks = 5;
+  bool EvaluateCurrentStores = 6;
 }
 
 message JoinGossipCluster {

@@ -372,3 +372,65 @@ func TestCNHeartbeatDropsResponseAfterRequestDeadline(t *testing.T) {
 	// late response escaped the per-request deadline guard.
 	service.heartbeat(context.Background())
 }
+
+func TestCNCommandGenerationRolloverDoesNotReplayInheritedCommands(t *testing.T) {
+	conf := &Config{UUID: "cn-1"}
+	holder := &observingTaskHolder{
+		createErr: errors.New("observe command application"),
+		created:   make(chan struct{}, 3),
+	}
+	service := &service{
+		cfg:    conf,
+		logger: logutil.GetPanicLogger(),
+	}
+	service.task.holder = holder
+	command := func(user string) pb.ScheduleCommand {
+		return pb.ScheduleCommand{
+			UUID:        conf.UUID,
+			ServiceType: pb.CNService,
+			CreateTaskService: &pb.CreateTaskService{
+				User: pb.TaskTableUser{Username: user},
+			},
+		}
+	}
+	first := command("first")
+	second := command("second")
+
+	service.handleCommandBatch(pb.CommandBatch{
+		BatchID: 10,
+		Commands: []pb.ScheduleCommand{
+			first,
+		},
+	})
+	service.handleCommandBatch(pb.CommandBatch{
+		BatchID: 11,
+		Commands: []pb.ScheduleCommand{
+			first,
+			second,
+		},
+	})
+	require.Equal(t, int32(2), holder.createCount.Load(),
+		"a newer generation must apply only newly appended commands")
+
+	service.handleHeartbeatResponse(10, pb.CommandBatch{})
+	service.handleCommandBatch(pb.CommandBatch{
+		BatchID: 12,
+		Commands: []pb.ScheduleCommand{
+			first,
+			second,
+			command("third"),
+		},
+	})
+	require.Equal(t, int32(3), holder.createCount.Load(),
+		"a stale acknowledgement must not erase the newer generation's lineage")
+
+	service.handleHeartbeatResponse(12, pb.CommandBatch{})
+	service.handleCommandBatch(pb.CommandBatch{
+		BatchID: 13,
+		Commands: []pb.ScheduleCommand{
+			first,
+		},
+	})
+	require.Equal(t, int32(4), holder.createCount.Load(),
+		"the same command may be intentional work after the prior batch is acknowledged")
+}

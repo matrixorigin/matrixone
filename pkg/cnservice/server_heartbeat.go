@@ -189,16 +189,21 @@ func (s *service) heartbeat(ctx context.Context) {
 		close(s.hakeeperConnected)
 	}
 	s.config.DecrCount()
-	s.handleCommandBatch(cb)
+	s.handleHeartbeatResponse(hb.AckedCommandBatchID, cb)
 }
 
 func (s *service) handleCommandBatch(batch logservicepb.CommandBatch) {
+	s.commandMu.Lock()
+	defer s.commandMu.Unlock()
+	s.handleCommandBatchLocked(batch)
+}
+
+func (s *service) handleCommandBatchLocked(batch logservicepb.CommandBatch) {
 	if len(batch.Commands) == 0 {
 		return
 	}
-	s.commandMu.Lock()
-	defer s.commandMu.Unlock()
 	if batch.BatchID == 0 {
+		s.appliedCommands = nil
 		fingerprint := logservice.ScheduleCommandBatchFingerprint(batch)
 		if s.legacyDedupeArmed && fingerprint == s.lastCommandHash {
 			s.legacyDedupeArmed = false
@@ -210,13 +215,31 @@ func (s *service) handleCommandBatch(batch logservicepb.CommandBatch) {
 			return
 		}
 	}
-	s.handleCommandsLocked(batch.Commands)
+	commands, applied := logservice.FilterUnappliedScheduleCommands(
+		batch.Commands,
+		s.appliedCommands,
+	)
+	s.handleCommandsLocked(commands)
+	s.appliedCommands = applied
 	if batch.BatchID != 0 {
 		s.lastCommandBatchID = batch.BatchID
 		s.ackedCommandBatchID.Store(batch.BatchID)
 		s.lastCommandHash = logservice.ScheduleCommandBatchFingerprint(batch)
 		s.legacyDedupeArmed = true
 	}
+}
+
+func (s *service) handleHeartbeatResponse(
+	sentAck uint64,
+	batch logservicepb.CommandBatch,
+) {
+	s.commandMu.Lock()
+	defer s.commandMu.Unlock()
+	if sentAck != 0 && sentAck == s.lastCommandBatchID &&
+		(batch.BatchID == 0 || batch.BatchID == sentAck) {
+		s.appliedCommands = nil
+	}
+	s.handleCommandBatchLocked(batch)
 }
 
 func (s *service) handleCommandsLocked(cmds []logservicepb.ScheduleCommand) {

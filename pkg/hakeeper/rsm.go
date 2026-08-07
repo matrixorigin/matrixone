@@ -180,6 +180,21 @@ func GetEnableCommandDeliveryCmdForTargets(
 	return getEnableCommandDeliveryCmd(&targets)
 }
 
+// GetEnableCommandDeliveryCmdForConfig creates a phase-two entry whose RSM
+// evaluates the current live CN/TN set at commit time. Carrying timeout ticks
+// keeps that decision deterministic across replicas without depending on
+// leader-local configuration or a pre-proposal UUID snapshot.
+func GetEnableCommandDeliveryCmdForConfig(cfg Config) []byte {
+	cfg.Fill()
+	targets := pb.CommandDeliveryTargets{
+		Explicit:              true,
+		CNStoreTimeoutTicks:   uint64(cfg.CNStoreTimeout/time.Second) * uint64(cfg.TickPerSecond),
+		TNStoreTimeoutTicks:   uint64(cfg.TNStoreTimeout/time.Second) * uint64(cfg.TickPerSecond),
+		EvaluateCurrentStores: true,
+	}
+	return getEnableCommandDeliveryCmd(&targets)
+}
+
 func getEnableCommandDeliveryCmd(targets *pb.CommandDeliveryTargets) []byte {
 	payload := []byte(nil)
 	if targets != nil {
@@ -203,6 +218,10 @@ func parseEnableCommandDeliveryCmd(cmd []byte) (pb.CommandDeliveryTargets, bool)
 		panic(err)
 	}
 	return targets, targets.Explicit
+}
+
+func commandDeliveryStoreExpired(last, current, timeout uint64) bool {
+	return current > last && current-last > timeout
 }
 
 func parseInitialClusterRequestCmd(cmd []byte) pb.InitialClusterRequest {
@@ -938,7 +957,28 @@ func (s *stateMachine) handleEnableCommandDelivery(cmd []byte) sm.Result {
 		}
 	}
 	targets, hasTargets := parseEnableCommandDeliveryCmd(cmd)
-	if hasTargets {
+	if hasTargets && targets.EvaluateCurrentStores {
+		for uuid, info := range s.state.CNState.Stores {
+			if commandDeliveryStoreExpired(
+				info.Tick, s.state.Tick, targets.CNStoreTimeoutTicks,
+			) {
+				continue
+			}
+			if !s.state.CommandDeliveryCNReady[uuid] {
+				return sm.Result{}
+			}
+		}
+		for uuid, info := range s.state.TNState.Stores {
+			if commandDeliveryStoreExpired(
+				info.Tick, s.state.Tick, targets.TNStoreTimeoutTicks,
+			) {
+				continue
+			}
+			if !s.state.CommandDeliveryTNReady[uuid] {
+				return sm.Result{}
+			}
+		}
+	} else if hasTargets {
 		for _, uuid := range targets.CNStoreUUIDs {
 			if _, ok := s.state.CNState.Stores[uuid]; ok &&
 				!s.state.CommandDeliveryCNReady[uuid] {

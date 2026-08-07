@@ -277,6 +277,17 @@ func (l *store) hakeeperCheck() {
 	default:
 		panic("unknown HAKeeper state")
 	}
+
+	ctx, cancel := context.WithTimeoutCause(
+		context.Background(),
+		hakeeperDefaultTimeout,
+		moerr.CauseHealthCheck,
+	)
+	defer cancel()
+	if _, err := l.tryEnableCommandDelivery(ctx, state); err != nil {
+		err = moerr.AttachCause(ctx, err)
+		l.runtime.Logger().Debug("command delivery activation deferred", zap.Error(err))
+	}
 }
 
 func (l *store) assertHAKeeperState(s pb.HAKeeperState) {

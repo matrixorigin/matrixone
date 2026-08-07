@@ -192,6 +192,7 @@ func (s *store) handleCommandBatchLocked(batch logservicepb.CommandBatch) {
 		return
 	}
 	if batch.BatchID == 0 {
+		s.appliedCommands = nil
 		fingerprint := logservice.ScheduleCommandBatchFingerprint(batch)
 		if s.legacyDedupeArmed && fingerprint == s.lastCommandHash {
 			s.legacyDedupeArmed = false
@@ -208,16 +209,21 @@ func (s *store) handleCommandBatchLocked(batch logservicepb.CommandBatch) {
 			return
 		}
 	}
+	commands, applied := logservice.FilterUnappliedScheduleCommands(
+		batch.Commands,
+		s.appliedCommands,
+	)
 	shutdown := batch.BatchID != 0 && hasShutdownCommand(batch.Commands)
 	if shutdown {
 		// Shutdown is the one command whose side effect prevents a later
 		// heartbeat from carrying its acknowledgement. Apply the rest of the
 		// batch now, but defer process termination until HAKeeper has committed
 		// the exact batch acknowledgement.
-		s.handleNonShutdownCommandsLocked(batch.Commands)
+		s.handleNonShutdownCommandsLocked(commands)
 	} else {
-		s.handleCommandsLocked(batch.Commands)
+		s.handleCommandsLocked(commands)
 	}
+	s.appliedCommands = applied
 	if batch.BatchID != 0 {
 		s.lastCommandBatchID = batch.BatchID
 		s.ackedCommandBatchID.Store(batch.BatchID)
@@ -271,6 +277,10 @@ func (s *store) handleHeartbeatResponse(
 ) {
 	s.commandMu.Lock()
 	defer s.commandMu.Unlock()
+	if sentAck != 0 && sentAck == s.lastCommandBatchID &&
+		(batch.BatchID == 0 || batch.BatchID == sentAck) {
+		s.appliedCommands = nil
+	}
 	s.handleCommandBatchLocked(batch)
 	for {
 		pending := s.shutdownBatchID.Load()

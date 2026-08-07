@@ -399,6 +399,7 @@ func TestCommandBatchDeduplicatesPollHeartbeatRace(t *testing.T) {
 	store.handleCommandBatch(pb.CommandBatch{BatchID: 10, Commands: []pb.ScheduleCommand{command}})
 	require.Equal(t, uint64(10), store.ackedCommandBatchID.Load())
 	require.Equal(t, uint64(10), store.shutdownBatchID.Load())
+	require.Len(t, store.appliedCommands, 1)
 	store.handleCommandBatch(pb.CommandBatch{BatchID: 10, Commands: []pb.ScheduleCommand{command}})
 	store.handleCommandBatch(pb.CommandBatch{BatchID: 9, Commands: []pb.ScheduleCommand{command}})
 	require.Empty(t, store.shutdownC, "shutdown must wait for its durable acknowledgement")
@@ -416,8 +417,11 @@ func TestCommandBatchDeduplicatesPollHeartbeatRace(t *testing.T) {
 	store.handleCommandBatch(pb.CommandBatch{BatchID: 11, Commands: []pb.ScheduleCommand{command}})
 	require.Equal(t, 2, len(store.shutdownC), "a new acknowledged generation must wait for its own ack")
 	require.Equal(t, uint64(11), store.ackedCommandBatchID.Load())
+	require.Len(t, store.appliedCommands, 1,
+		"an inherited terminal command must retain one bounded command identity")
 	store.handleHeartbeatResponse(11, pb.CommandBatch{})
 	require.Equal(t, 3, len(store.shutdownC), "a new checker generation remains independently completable")
+	require.Empty(t, store.appliedCommands)
 }
 
 func TestShutdownWaitsForAcknowledgementTransport(t *testing.T) {

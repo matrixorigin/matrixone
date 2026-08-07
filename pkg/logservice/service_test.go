@@ -576,11 +576,13 @@ func TestServiceCommandDeliveryActivationWaitsForServiceCapabilities(t *testing.
 		require.Equal(t, uint32(moerr.Ok), sendTNHeartbeat(false).ErrorCode)
 		// HAKeeper/logservice may already be upgraded, but activation cannot
 		// begin while a current command target still advertises the old protocol.
+		require.False(t, advanceCommandDelivery(t, ctx, s))
 		first := sendLogHeartbeat()
 		require.False(t, first.CommandPollSupported)
 
 		require.Equal(t, uint32(moerr.Ok), sendCNHeartbeat(true).ErrorCode)
 		require.Equal(t, uint32(moerr.Ok), sendTNHeartbeat(true).ErrorCode)
+		require.False(t, advanceCommandDelivery(t, ctx, s))
 		phaseOne := sendLogHeartbeat()
 		require.False(t, phaseOne.CommandPollSupported)
 
@@ -588,25 +590,74 @@ func TestServiceCommandDeliveryActivationWaitsForServiceCapabilities(t *testing.
 		// above are intentionally insufficient; repeat them after the barrier.
 		require.Equal(t, uint32(moerr.Ok), sendCNHeartbeat(true).ErrorCode)
 		require.Equal(t, uint32(moerr.Ok), sendTNHeartbeat(true).ErrorCode)
+		require.True(t, advanceCommandDelivery(t, ctx, s))
 		phaseTwo := sendLogHeartbeat()
 		require.True(t, phaseTwo.CommandPollSupported)
 	}
 	runServiceTest(t, true, true, fn)
 }
 
+func TestLogHeartbeatDoesNotDriveCommandDeliveryActivation(t *testing.T) {
+	fn := func(t *testing.T, s *Service) {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+
+		for range 2 {
+			heartbeat := s.store.getHeartbeatMessage()
+			resp := s.handleLogHeartbeat(ctx, pb.Request{
+				Method:       pb.LOG_HEARTBEAT,
+				LogHeartbeat: &heartbeat,
+			})
+			require.Equal(t, uint32(moerr.Ok), resp.ErrorCode)
+			require.False(t, resp.CommandPollSupported)
+		}
+		delivery, err := s.store.getCommandDeliveryState(ctx)
+		require.NoError(t, err)
+		require.False(t, delivery.Preparing,
+			"the high-frequency heartbeat path must not propose activation")
+	}
+	runServiceTest(t, true, true, fn)
+}
+
+func advanceCommandDelivery(
+	t *testing.T,
+	ctx context.Context,
+	s *Service,
+) bool {
+	t.Helper()
+	state, err := s.store.getCheckerStateWithContext(ctx)
+	require.NoError(t, err)
+	enabled, err := s.store.tryEnableCommandDelivery(ctx, state)
+	require.NoError(t, err)
+	return enabled
+}
+
 func activateCommandDelivery(t *testing.T, ctx context.Context, s *Service) {
 	t.Helper()
+	// Seed the leader's capability view before the checker is allowed to enter
+	// phase one. Heartbeats only publish capability and advertise cached state;
+	// the checker owns activation progress.
+	logHeartbeat := s.store.getHeartbeatMessage()
+	priming := s.handleLogHeartbeat(ctx, pb.Request{
+		Method:       pb.LOG_HEARTBEAT,
+		LogHeartbeat: &logHeartbeat,
+	})
+	require.Equal(t, uint32(moerr.Ok), priming.ErrorCode)
+	require.False(t, priming.CommandPollSupported)
 	for phase := 0; phase < 2; phase++ {
-		logHeartbeat := s.store.getHeartbeatMessage()
+		enabled := advanceCommandDelivery(t, ctx, s)
+		logHeartbeat = s.store.getHeartbeatMessage()
 		activation := s.handleLogHeartbeat(ctx, pb.Request{
 			Method:       pb.LOG_HEARTBEAT,
 			LogHeartbeat: &logHeartbeat,
 		})
 		require.Equal(t, uint32(moerr.Ok), activation.ErrorCode)
 		if phase == 0 {
+			require.False(t, enabled)
 			require.False(t, activation.CommandPollSupported,
-				"the first heartbeat establishes the replicated upgrade barrier")
+				"the first checker pass establishes the replicated upgrade barrier")
 		} else {
+			require.True(t, enabled)
 			require.True(t, activation.CommandPollSupported)
 		}
 	}

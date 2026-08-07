@@ -583,9 +583,7 @@ func (s *Service) handleLogHeartbeat(ctx context.Context, req pb.Request) pb.Res
 	} else {
 		resp.CommandBatch = &cb
 	}
-	if enabled, err := s.store.tryEnableCommandDelivery(ctx); err == nil {
-		resp.CommandPollSupported = enabled
-	}
+	resp.CommandPollSupported = s.store.commandDeliveryEnabled.Load()
 
 	return resp
 }
@@ -646,15 +644,11 @@ func (s *Service) handleCheckHAKeeper(ctx context.Context, req pb.Request) pb.Re
 	resp.CommandDeliverySupported = true
 	if atomic.LoadUint64(&s.store.haKeeperReplicaID) != 0 {
 		resp.IsHAKeeper = true
-		enabled, err := s.store.tryEnableCommandDelivery(ctx)
-		if err != nil {
-			// Capability negotiation must not make an otherwise usable HAKeeper
-			// connection fail. Followers and a leader transition can reject this
-			// best-effort activation; a later heartbeat/check retries it.
-			s.runtime.Logger().Debug("command delivery activation deferred", zap.Error(err))
-		} else {
-			resp.CommandPollSupported = enabled
+		delivery, err := s.store.getCommandDeliveryState(ctx)
+		if err == nil && delivery.Enabled {
+			s.store.commandDeliveryEnabled.Store(true)
 		}
+		resp.CommandPollSupported = s.store.commandDeliveryEnabled.Load()
 	}
 	return resp
 }

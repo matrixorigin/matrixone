@@ -66,7 +66,7 @@ func TestNodeHostConfig(t *testing.T) {
 	assert.True(t, nhConfig.AddressByNodeHostID)
 }
 
-func TestGetCommandDeliveryTargetsFiltersExpiredStores(t *testing.T) {
+func TestCommandDeliveryTargetsReadyFiltersExpiredStores(t *testing.T) {
 	store := &store{cfg: DefaultConfig()}
 	store.cfg.HAKeeperConfig.TickPerSecond = 1
 	store.cfg.HAKeeperConfig.CNStoreTimeout = toml.Duration{Duration: 10 * time.Second}
@@ -83,9 +83,17 @@ func TestGetCommandDeliveryTargetsFiltersExpiredStores(t *testing.T) {
 		}},
 	}
 
-	cn, tn := store.getCommandDeliveryTargets(state)
-	require.Equal(t, []string{"cn-live"}, cn)
-	require.Equal(t, []string{"tn-live"}, tn)
+	delivery := hakeeper.CommandDeliveryState{
+		CNReady: map[string]bool{"cn-live": true},
+		TNReady: map[string]bool{"tn-live": true},
+	}
+	require.True(t, store.commandDeliveryTargetsReady(delivery, state))
+
+	delivery.CNReady["cn-live"] = false
+	require.False(t, store.commandDeliveryTargetsReady(delivery, state))
+	delivery.CNReady["cn-live"] = true
+	delivery.TNReady["tn-live"] = false
+	require.False(t, store.commandDeliveryTargetsReady(delivery, state))
 }
 
 func TestRaftConfig(t *testing.T) {

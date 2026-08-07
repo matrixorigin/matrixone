@@ -703,6 +703,7 @@ type service struct {
 	commandMu           sync.Mutex
 	lastCommandBatchID  uint64
 	ackedCommandBatchID atomic.Uint64
+	appliedCommands     map[logservice.ScheduleCommandFingerprint]uint32
 	lastCommandHash     [32]byte
 	legacyDedupeArmed   bool
 	aicm                *defines.AutoIncrCacheManager
