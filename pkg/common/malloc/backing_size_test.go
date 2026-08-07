@@ -14,7 +14,11 @@
 
 package malloc
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/stretchr/testify/require"
+)
 
 func TestBackingSizeMatchesClassAllocation(t *testing.T) {
 	const request = 700 * 1024
@@ -50,4 +54,51 @@ func TestBackingSizeRejectsAllocatorWithoutCapacityContract(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected allocator without BackingSizer to be rejected")
 	}
+}
+
+func TestBackingSizePropagatesThroughDecorators(t *testing.T) {
+	const request = 3
+	const want = 4
+
+	newClassAllocator := func() *ClassAllocator[*fixedSizeMakeAllocator] {
+		return NewClassAllocator(NewFixedSizeMakeAllocator)
+	}
+	upstream := newClassAllocator()
+
+	tests := []struct {
+		name      string
+		allocator Allocator
+		want      uint64
+	}{
+		{"class", upstream, want},
+		{"c", NewCAllocator(), request},
+		{"sharded", NewShardedAllocator(1, newClassAllocator), want},
+		{"metrics", NewMetricsAllocator(upstream, nil, nil, nil, nil, nil), want},
+		{"random", NewRandomAllocator(upstream, NewReadOnlyAllocator(upstream), 100), want},
+		{"read-only", NewReadOnlyAllocator(upstream), want},
+		{"checked", NewCheckedAllocator(upstream), want},
+		{"profile", &ProfileAllocator[*ClassAllocator[*fixedSizeMakeAllocator]]{upstream: upstream}, want},
+		{"in-use-tracking", &InuseTrackingAllocator[*ClassAllocator[*fixedSizeMakeAllocator]]{upstream: upstream}, want},
+		{"leaks-tracking", &LeaksTrackingAllocator[*ClassAllocator[*fixedSizeMakeAllocator]]{upstream: upstream}, want},
+		{"size-bounded", &SizeBoundedAllocator[*ClassAllocator[*fixedSizeMakeAllocator]]{upstream: upstream}, want},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got, err := BackingSize(test.allocator, request)
+			require.NoError(t, err)
+			require.Equal(t, test.want, got)
+		})
+	}
+}
+
+func TestBackingSizeRejectsInconsistentContracts(t *testing.T) {
+	_, err := BackingSize(NewShardedAllocator(0, func() *ClassAllocator[*fixedSizeMakeAllocator] {
+		return NewClassAllocator(NewFixedSizeMakeAllocator)
+	}), 1)
+	require.Error(t, err)
+
+	classAllocator := NewClassAllocator(NewFixedSizeMakeAllocator)
+	_, err = BackingSize(NewRandomAllocator(classAllocator, NewCAllocator(), 100), 3)
+	require.Error(t, err)
 }

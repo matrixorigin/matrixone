@@ -264,14 +264,111 @@ func (a *cacheDataAllocatorForTest) CopyToCacheData(ctx context.Context, data []
 }
 
 func TestCacheCapacityGuardedAllocatorReservesBackingCapacityBeforeAllocation(t *testing.T) {
-	cache := new(recordingDataCache)
-	allocator := &cacheDataAllocatorForTest{cache: cache, backingSize: 1024}
-	guarded := cacheCapacityGuardedAllocator{cache: cache, allocator: allocator}
+	operations := []struct {
+		name     string
+		allocate func(CacheDataAllocator) fscache.Data
+	}{
+		{
+			name: "allocate",
+			allocate: func(allocator CacheDataAllocator) fscache.Data {
+				return allocator.AllocateCacheData(context.Background(), 700)
+			},
+		},
+		{
+			name: "allocate-with-hint",
+			allocate: func(allocator CacheDataAllocator) fscache.Data {
+				return allocator.AllocateCacheDataWithHint(context.Background(), 700, malloc.NoClear)
+			},
+		},
+		{
+			name: "copy",
+			allocate: func(allocator CacheDataAllocator) fscache.Data {
+				return allocator.CopyToCacheData(context.Background(), make([]byte, 700))
+			},
+		},
+	}
 
-	data := guarded.AllocateCacheData(context.Background(), 700)
-	defer data.Release()
+	for _, operation := range operations {
+		t.Run(operation.name, func(t *testing.T) {
+			cache := new(recordingDataCache)
+			allocator := &cacheDataAllocatorForTest{cache: cache, backingSize: 1024}
+			guarded := cacheCapacityGuardedAllocator{cache: cache, allocator: allocator}
 
-	require.Equal(t, 1024, cache.ensured)
-	require.Equal(t, int64(700), data.Size())
-	require.Equal(t, int64(1024), data.Capacity())
+			require.Equal(t, 1024, guarded.BackingSize(700))
+			data := operation.allocate(guarded)
+			defer data.Release()
+
+			require.Equal(t, 1024, cache.ensured)
+			require.Equal(t, int64(700), data.Size())
+			require.Equal(t, int64(1024), data.Capacity())
+		})
+	}
+}
+
+func TestFileServiceCacheDataAllocatorsReserveBackingCapacity(t *testing.T) {
+	ctx := context.Background()
+	const request = 10
+	want := DefaultCacheDataAllocator().BackingSize(request)
+
+	allocators := []struct {
+		name string
+		new  func(*MemCache) CacheDataAllocator
+	}{
+		{
+			name: "local",
+			new: func(cache *MemCache) CacheDataAllocator {
+				return &LocalFS{memCache: cache}
+			},
+		},
+		{
+			name: "s3",
+			new: func(cache *MemCache) CacheDataAllocator {
+				return &S3FS{memCache: cache}
+			},
+		},
+	}
+	operations := []struct {
+		name     string
+		allocate func(CacheDataAllocator) fscache.Data
+	}{
+		{
+			name: "allocate",
+			allocate: func(allocator CacheDataAllocator) fscache.Data {
+				return allocator.AllocateCacheData(ctx, request)
+			},
+		},
+		{
+			name: "allocate-with-hint",
+			allocate: func(allocator CacheDataAllocator) fscache.Data {
+				return allocator.AllocateCacheDataWithHint(ctx, request, malloc.NoClear)
+			},
+		},
+		{
+			name: "copy",
+			allocate: func(allocator CacheDataAllocator) fscache.Data {
+				return allocator.CopyToCacheData(ctx, make([]byte, request))
+			},
+		},
+	}
+
+	for _, allocatorTest := range allocators {
+		for _, operation := range operations {
+			t.Run(allocatorTest.name+"/"+operation.name, func(t *testing.T) {
+				cache := NewMemCache(fscache.ConstCapacity(int64(want)), nil, nil, "")
+				defer cache.Close(ctx)
+
+				seed := NewBytes(make([]byte, 1))
+				require.NoError(t, cache.cache.Set(ctx, fscache.CacheKey{Path: "seed", Sz: 1}, seed))
+				seed.Release()
+
+				allocator := allocatorTest.new(cache)
+				require.Equal(t, want, allocator.BackingSize(request))
+
+				data := operation.allocate(allocator)
+				defer data.Release()
+				require.Equal(t, int64(0), cache.cache.Used())
+				require.Equal(t, int64(want), data.Capacity())
+			})
+		}
+	}
 }
