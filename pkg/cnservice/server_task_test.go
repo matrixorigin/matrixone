@@ -155,6 +155,14 @@ type testHolder struct {
 	closed   int
 }
 
+func TestInitTaskServiceHolderIsIdempotent(t *testing.T) {
+	holder := &testHolder{}
+	sv := &service{cfg: &Config{SQLAddress: "127.0.0.1:6001"}}
+	sv.task.holder = holder
+	sv.initTaskServiceHolder()
+	require.Same(t, holder, sv.task.holder)
+}
+
 func (holder *testHolder) Close() error {
 	holder.closed++
 	return holder.closeErr

@@ -17,6 +17,7 @@ package frontend
 import (
 	"context"
 	"fmt"
+	"io"
 	"sync"
 	"testing"
 	"time"
@@ -24,6 +25,7 @@ import (
 	"github.com/fagongzi/goetty/v2/buf"
 	"github.com/golang/mock/gomock"
 	"github.com/smartystreets/goconvey/convey"
+	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -838,6 +840,40 @@ func TestCommitTxnUnknownInvalidatesTxnOperator(t *testing.T) {
 		convey.So(ses.GetTxnHandler().GetTxn(), convey.ShouldBeNil)
 		convey.So(ses.GetTxnHandler().InActiveTxn(), convey.ShouldBeFalse)
 	})
+}
+
+func TestFinishTxnPreservesEOFOnRollback(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	ctx := defines.AttachAccountId(context.Background(), sysAccountID)
+	ses := newTestSession(t, ctrl)
+	defer ses.Close()
+	eng := mock_frontend.NewMockEngine(ctrl)
+	eng.EXPECT().Hints().Return(engine.Hints{
+		CommitOrRollbackTimeout: time.Second,
+	}).AnyTimes()
+	ses.txnHandler.storage = eng
+
+	txnOp := newTestTxnOp()
+	txnOp.meta = txn.TxnMeta{
+		ID:     []byte{1, 2, 3, 4},
+		Status: txn.TxnStatus_Active,
+	}
+	ses.txnHandler.txnOp = txnOp
+	ses.txnHandler.txnCtx = ctx
+	ses.txnHandler.shareTxn = false
+
+	execCtx := newTestExecCtx(ctx, ctrl)
+	execCtx.ses = ses
+	execCtx.stmt = &tree.Select{}
+	execCtx.txnOpt = FeTxnOption{autoCommit: true}
+
+	var err error
+	require.NotPanics(t, func() {
+		err = finishTxnFunc(ses, io.EOF, execCtx)
+	})
+	require.ErrorIs(t, err, io.EOF)
+	require.Equal(t, 1, txnOp.rollbackCalls)
+	require.Nil(t, ses.GetTxnHandler().GetTxn())
 }
 
 func TestCommitFailureAdvancesSessionGeneration(t *testing.T) {
