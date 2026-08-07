@@ -106,7 +106,11 @@ func MoCtl(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *pr
 		return err
 	}
 	if command == InspectMethod {
-		obj := res.Data.([]any)[0].(*cmd_util.InspectResp)
+		response, err := GetFirstTNResponse(proc.Ctx, res)
+		if err != nil {
+			return err
+		}
+		obj := response.(*cmd_util.InspectResp)
 		err = rs.AppendBytes([]byte(obj.ConsoleString()), false)
 		return err
 	}
