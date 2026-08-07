@@ -178,7 +178,10 @@ func TestClusterCanStartNewCNServices(t *testing.T) {
 
 func TestMultiClusterCanWork(t *testing.T) {
 	new := func() *cluster {
-		value, err := StartTestCluster(WithCNCount(1))
+		value, err := StartTestCluster(
+			WithCNCount(1),
+			WithConcurrentTestClusters(),
+		)
 		if value != nil {
 			t.Cleanup(func() { require.NoError(t, value.Close()) })
 		}
@@ -202,7 +205,10 @@ func TestBaseClusterCanWorkWithNewCluster(t *testing.T) {
 		},
 	)
 
-	c, err := StartTestCluster(WithCNCount(1))
+	c, err := StartTestCluster(
+		WithCNCount(1),
+		WithConcurrentTestClusters(),
+	)
 	if c != nil {
 		t.Cleanup(func() { require.NoError(t, c.Close()) })
 	}
@@ -504,8 +510,23 @@ func TestClusterRejectsNegativeCNCounts(t *testing.T) {
 }
 
 func TestClusterAdmissionCoversFullLifecycle(t *testing.T) {
-	c := &cluster{state: stopped}
+	portLease, err := acquireClusterPortLease()
+	require.NoError(t, err)
+	c := &cluster{
+		state:         stopped,
+		portLease:     portLease,
+		portLeaseBase: portLease.base,
+		portLeaseNext: portLease.base,
+	}
 	c.options.testing = true
+	// This synthetic cluster has no services. Allow it to exercise admission
+	// lifecycle while the package's shared base cluster may be alive.
+	c.options.allowConcurrentTestClusters = true
+	t.Cleanup(func() {
+		if c.portLease != nil {
+			require.NoError(t, c.releasePortLeaseLocked())
+		}
+	})
 
 	require.NoError(t, c.Start())
 	require.NotNil(t, c.testAdmission)
@@ -658,11 +679,21 @@ func TestDoStartLockedErrorPaths(t *testing.T) {
 			serviceType: metadata.ServiceType_LOG,
 			state:       started,
 		}
+		portLease, err := acquireClusterPortLease()
+		require.NoError(t, err)
 		c := &cluster{
-			state:    stopped,
-			services: []*operator{op},
+			state:         stopped,
+			services:      []*operator{op},
+			portLease:     portLease,
+			portLeaseBase: portLease.base,
+			portLeaseNext: portLease.base,
 		}
-		err := c.Start()
+		t.Cleanup(func() {
+			if c.portLease != nil {
+				require.NoError(t, c.releasePortLeaseLocked())
+			}
+		})
+		err = c.Start()
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "already started")
 	})
@@ -709,6 +740,9 @@ func TestClusterStartRollbackClosesPartiallyStartedServices(t *testing.T) {
 		portLeaseNext: portLease.base,
 	}
 	c.options.testing = true
+	// This only injects a partial startup failure; it cannot create another
+	// complete cluster beside the package's shared base.
+	c.options.allowConcurrentTestClusters = true
 	t.Cleanup(func() {
 		if c.portLease != nil {
 			require.NoError(t, c.releasePortLeaseLocked())
@@ -771,7 +805,10 @@ func TestClusterCloseContinuesAfterServiceError(t *testing.T) {
 		state:    started,
 		services: []*operator{firstOp, secondOp},
 	}
-	admission, err := clusteradmission.Acquire(context.Background())
+	admission, err := clusteradmission.Acquire(
+		context.Background(),
+		clusteradmission.AllowConcurrent,
+	)
 	require.NoError(t, err)
 	c.testAdmission = admission
 
