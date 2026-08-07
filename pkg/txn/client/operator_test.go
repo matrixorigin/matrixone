@@ -824,17 +824,14 @@ func TestCheckLockTableBindsCleanSecondCallIsThrottled(t *testing.T) {
 	})
 }
 
-func TestContextWithoutDeadlineWillPanic(t *testing.T) {
-	runOperatorTests(t, func(_ context.Context, tc *txnOperator, _ *testTxnSender) {
-		defer func() {
-			if err := recover(); err != nil {
-				return
-			}
-			assert.Fail(t, "must panic")
-		}()
-
+func TestContextWithoutDeadlineReturnsError(t *testing.T) {
+	runOperatorTests(t, func(_ context.Context, tc *txnOperator, sender *testTxnSender) {
 		_, err := tc.Write(context.Background(), nil)
-		assert.NoError(t, err)
+		require.ErrorContains(t, err, "txn operation context deadline not set")
+
+		sender.Lock()
+		defer sender.Unlock()
+		require.Empty(t, sender.lastRequests)
 	})
 }
 
@@ -1084,6 +1081,30 @@ func TestUpdateSnapshotTSWithWaiter(t *testing.T) {
 				require.Equal(t, newTestTimestamp(ts).Next(), tc.Txn().SnapshotTS)
 			})
 	})
+}
+
+func TestUpdateSnapshotPreservesSnapshotOnWaitError(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		waiter TimestampWaiter
+	}{
+		{name: "close-aware waiter", waiter: &blockingTimestampWaiter{entered: make(chan struct{}, 1)}},
+		{name: "legacy waiter", waiter: &legacyBlockingTimestampWaiter{entered: make(chan struct{}, 1)}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			runOperatorTests(t, func(_ context.Context, tc *txnOperator, _ *testTxnSender) {
+				initial := newTestTimestamp(10)
+				tc.timestampWaiter = test.waiter
+				tc.mu.txn.SnapshotTS = initial
+
+				ctx, cancel := context.WithCancel(context.Background())
+				cancel()
+				err := tc.UpdateSnapshot(ctx, newTestTimestamp(20))
+				require.ErrorIs(t, err, context.Canceled)
+				require.Equal(t, initial, tc.SnapshotTS())
+			})
+		})
+	}
 }
 
 func TestRollbackMultiTimes(t *testing.T) {

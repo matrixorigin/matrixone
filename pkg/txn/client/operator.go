@@ -989,13 +989,20 @@ func (tc *txnOperator) updateSnapshot(
 		time.Time{},
 		UpdateSnapshotEvent,
 		func() error {
-			var err error
+			var (
+				next timestamp.Timestamp
+				err  error
+			)
 			if waiter, ok := tc.timestampWaiter.(closeAwareTimestampWaiter); ok {
-				tc.mu.txn.SnapshotTS, err = waiter.GetTimestampWithClose(ctx, ts, closeC)
+				next, err = waiter.GetTimestampWithClose(ctx, ts, closeC)
 			} else {
-				tc.mu.txn.SnapshotTS, err = tc.timestampWaiter.GetTimestamp(ctx, ts)
+				next, err = tc.timestampWaiter.GetTimestamp(ctx, ts)
 			}
-			return err
+			if err != nil {
+				return err
+			}
+			tc.mu.txn.SnapshotTS = next
+			return nil
 		},
 		true)
 	return err
@@ -1636,7 +1643,7 @@ func (tc *txnOperator) addPartitionLocked(tn metadata.TNShard) {
 
 func (tc *txnOperator) validate(ctx context.Context, locked bool) error {
 	if _, ok := ctx.Deadline(); !ok {
-		tc.logger.Fatal("context deadline not set")
+		return moerr.NewInvalidInput(ctx, "txn operation context deadline not set")
 	}
 
 	return tc.checkStatus(locked)
