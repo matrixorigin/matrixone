@@ -37,15 +37,23 @@ func TestPrepareParamKindStateCodec(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			encoded := encodePrepareParamKindState(tc.kind, tc.seen)
+			encoded, ok := encodePrepareParamKindState(tc.kind, tc.seen)
+			require.True(t, ok)
 			require.Equal(t, tc.encoded, encoded)
-			require.Len(t, []byte{encoded}, 1)
 
 			kind, seen, ok := decodePrepareParamKindState(encoded)
 			require.True(t, ok)
 			require.Equal(t, tc.kind, kind)
 			require.Equal(t, tc.seen, seen)
 		})
+	}
+	for _, kind := range []vector.PrepareParamKind{
+		vector.PrepareParamBoolean + 1,
+		vector.PrepareParamKind(255),
+	} {
+		encoded, ok := encodePrepareParamKindState(kind, true)
+		require.False(t, ok)
+		require.Zero(t, encoded)
 	}
 
 	for _, encoded := range []byte{6, 255} {

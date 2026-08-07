@@ -385,6 +385,29 @@ func TestMergeGroupRejectsInvalidPrepareParamKindState(t *testing.T) {
 	}
 }
 
+func TestGroupRejectsInvalidPrepareParamKindState(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	t.Cleanup(func() {
+		require.Zero(t, proc.Mp().CurrNB())
+		proc.Free()
+	})
+
+	input := batch.NewWithSize(1)
+	input.Vecs[0] = testutil.MakeInt32Vector(nil, nil, proc.Mp())
+	child := colexec.NewMockOperator().WithBatchs([]*batch.Batch{input})
+	t.Cleanup(func() { child.Free(proc, true, nil) })
+	partial := newGroupOp(proc, nil, []aggexec.AggFuncExecExpression{minPreparedParamAgg()})
+	partial.NeedEval = false
+	partial.AppendChild(child)
+	t.Cleanup(func() { partial.Free(proc, true, nil) })
+
+	require.NoError(t, partial.Prepare(proc))
+	partial.Aggs[0].ObservePrepareParamKind(vector.PrepareParamKind(255))
+	result, err := vm.Exec(partial, proc)
+	require.Nil(t, result.Batch)
+	require.ErrorContains(t, err, "invalid aggregate prepared parameter kind 255")
+}
+
 func buildPartialGroupBatches(t *testing.T, proc *process.Process, sources []*batch.Batch, forceGroupTypesNotNull bool) []*batch.Batch {
 	t.Helper()
 

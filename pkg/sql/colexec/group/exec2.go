@@ -637,7 +637,12 @@ func (group *Group) getNextIntermediateResult(proc *process.Process) (vm.CallRes
 	buf.Write(types.EncodeInt32(&nAggs))
 	for i := range group.ctr.aggList {
 		kind, seen := group.Aggs[i].GetPrepareParamKindState()
-		buf.WriteByte(encodePrepareParamKindState(kind, seen))
+		encoded, ok := encodePrepareParamKindState(kind, seen)
+		if !ok {
+			return vm.CancelResult, false, moerr.NewInternalErrorf(proc.Ctx,
+				"invalid aggregate prepared parameter kind %d", kind)
+		}
+		buf.WriteByte(encoded)
 	}
 	for _, ag := range group.ctr.aggList {
 		ag.SaveIntermediateResultOfChunk(curr, &buf)

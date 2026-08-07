@@ -18,11 +18,14 @@ import "github.com/matrixorigin/matrixone/pkg/container/vector"
 
 // Zero is reserved for an unobserved aggregate input. Observed kinds are
 // shifted by one so the complete state remains one byte per aggregate.
-func encodePrepareParamKindState(kind vector.PrepareParamKind, seen bool) byte {
+func encodePrepareParamKindState(kind vector.PrepareParamKind, seen bool) (byte, bool) {
 	if !seen {
-		return 0
+		return 0, true
 	}
-	return byte(kind) + 1
+	if kind > vector.PrepareParamBoolean {
+		return 0, false
+	}
+	return byte(kind) + 1, true
 }
 
 func decodePrepareParamKindState(encoded byte) (
