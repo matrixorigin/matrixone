@@ -370,6 +370,16 @@ message ForeignKeyDef {
     NO_ACTION = 4;
   }
 
+  // Whether a reference action was written in the FK declaration.  This is
+  // persisted separately from RefAction because an omitted action and an
+  // explicit RESTRICT have the same execution behavior but distinct MySQL
+  // metadata/SHOW CREATE representations.
+  enum RefActionOrigin {
+    ACTION_ORIGIN_EXPLICIT = 0;
+    ACTION_ORIGIN_DEFAULT = 1;
+    ACTION_ORIGIN_LEGACY_AMBIGUOUS = 2;
+  }
+
   // letter case: lower
   string name = 1;
   repeated uint64 cols = 2;
@@ -379,6 +389,10 @@ message ForeignKeyDef {
   repeated uint64 foreign_cols = 4;
   RefAction on_delete = 5;
   RefAction on_update = 6;
+  // Exact PRIMARY/UNIQUE parent key selected when this FK was bound.
+  string referenced_index_name = 7;
+  RefActionOrigin on_delete_origin = 8;
+  RefActionOrigin on_update_origin = 9;
 }
 
 message CheckDef {
@@ -1702,6 +1716,7 @@ message AlterTable {
       AlterReplaceDef alter_replace_def = 11;
       AlterRenameColumn alter_rename_column = 12;
       AlterTableAlterAutoUpdate alter_auto_update = 13;
+      AlterTableAutoIncrement alter_auto_increment = 14;
     }
   }
   string database = 1;
@@ -1966,4 +1981,8 @@ enum AlterPartitionType {
 
 message RankOption {
   string mode = 1; // "pre", "post", "force", or "auto"
+}
+
+message AlterTableAutoIncrement {
+  uint64 new_offset = 1;
 }

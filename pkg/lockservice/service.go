@@ -1719,6 +1719,9 @@ type mapBasedTxnHolder struct {
 	serviceID string
 	logger    *log.MOLogger
 	fsp       *fixedSlicePool
+	// beforeFenceTxnLock is a test-only phase hook for holder/transaction lock
+	// interleavings.
+	beforeFenceTxnLock func(*activeTxn)
 	// validTxn returns an authoritative liveness result only when err is nil.
 	// Any error means the remote transaction state is unknown; transport
 	// reachability is not evidence that the transaction is inactive.
@@ -1879,12 +1882,43 @@ func (h *mapBasedTxnHolder) fenceByBindChanged(bind pb.LockTable) int {
 	for i := range h.activeTxns {
 		shard := &h.activeTxns[i]
 		shard.RLock()
-		for _, entry := range shard.txns {
-			if entry.txn.fenceByBindChanged(bind, h.logger) {
-				n++
-			}
+		txnKeys := make([]string, 0, len(shard.txns))
+		for txnKey := range shard.txns {
+			txnKeys = append(txnKeys, txnKey)
 		}
 		shard.RUnlock()
+
+		for _, txnKey := range txnKeys {
+			for {
+				shard.RLock()
+				entry, ok := shard.txns[txnKey]
+				if !ok {
+					shard.RUnlock()
+					break
+				}
+				if h.beforeFenceTxnLock != nil {
+					h.beforeFenceTxnLock(entry.txn)
+				}
+
+				// Unknown-commit cleanup holds txn.Lock while releasing owner
+				// locks, then removes the transaction from this shard. Never
+				// wait for txn.Lock while retaining shard.RLock: doing so
+				// reverses that order and deadlocks both cleanup paths. TryLock
+				// keeps the pooled transaction alive under shard.RLock; on
+				// contention, release the shard so cleanup can make progress.
+				if !entry.txn.TryLock() {
+					shard.RUnlock()
+					time.Sleep(time.Millisecond)
+					continue
+				}
+				if entry.txn.fenceByBindChangedLocked(bind, h.logger) {
+					n++
+				}
+				entry.txn.Unlock()
+				shard.RUnlock()
+				break
+			}
+		}
 	}
 	return n
 }

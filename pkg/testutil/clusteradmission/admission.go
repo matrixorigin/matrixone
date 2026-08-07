@@ -12,9 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Package clusteradmission serializes complete in-process test clusters across
-// test binaries sharing a runner. A process may acquire more than one lease so
-// tests that intentionally run multiple clusters together keep working.
+// Package clusteradmission serializes complete test-cluster lifecycles across
+// test binaries sharing a runner.
 package clusteradmission
 
 import (
@@ -39,6 +38,16 @@ var processAdmission = newManager(
 	retryDelay,
 )
 
+// Mode controls whether a test deliberately starts another complete cluster in
+// the same test process. The default must be Exclusive: accidental overlap is
+// otherwise invisible to the runner-wide file lock and can starve HAKeeper.
+type Mode uint8
+
+const (
+	Exclusive Mode = iota
+	AllowConcurrent
+)
+
 // Lease represents one complete test cluster owned by the current process.
 // Release is idempotent. The runner-wide lock is released after the process's
 // last active lease is released, or automatically when the process exits.
@@ -48,10 +57,11 @@ type Lease struct {
 	released bool
 }
 
-// Acquire waits until this test process has exclusive runner-wide admission.
-// Further acquisitions in the same process are reentrant.
-func Acquire(ctx context.Context) (*Lease, error) {
-	return processAdmission.acquire(ctx)
+// Acquire waits until this test process has runner-wide admission. A second
+// cluster in the same process is rejected unless the caller explicitly opts
+// into AllowConcurrent for a test whose subject is multi-cluster behavior.
+func Acquire(ctx context.Context, mode Mode) (*Lease, error) {
+	return processAdmission.acquire(ctx, mode)
 }
 
 // Release relinquishes this cluster's share of the process admission.
@@ -84,7 +94,7 @@ func newManager(path string, delay time.Duration) *manager {
 	return &manager{path: path, retryDelay: delay}
 }
 
-func (m *manager) acquire(ctx context.Context) (*Lease, error) {
+func (m *manager) acquire(ctx context.Context, mode Mode) (*Lease, error) {
 	if ctx == nil {
 		return nil, moerr.NewInvalidInputNoCtx("cluster admission requires a context")
 	}
@@ -92,6 +102,11 @@ func (m *manager) acquire(ctx context.Context) (*Lease, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.references > 0 {
+		if mode != AllowConcurrent {
+			return nil, moerr.NewInvalidStateNoCtx(
+				"another complete test cluster is already active in this process",
+			)
+		}
 		m.references++
 		return &Lease{manager: m}, nil
 	}

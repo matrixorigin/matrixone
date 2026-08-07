@@ -17,6 +17,7 @@ package plan
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -4607,18 +4608,49 @@ type FkReferKey struct {
 
 // FkReferDef holds the definition & details of the foreign key
 type FkReferDef struct {
-	Db       string //fk database name
-	Tbl      string //fk table name
-	Name     string //fk constraint name
-	Col      string //fk column name, letter case: lower
-	ReferCol string //referenced column name, letter case: lower
-	OnDelete string //on delete action
-	OnUpdate string //on update action
+	Db                  string //fk database name
+	Tbl                 string //fk table name
+	Name                string //fk constraint name
+	Col                 string //fk column name, letter case: lower
+	ReferCol            string //referenced column name, letter case: lower
+	OnDelete            string //on delete action
+	OnUpdate            string //on update action
+	ReferencedIndexName string
+	OnDeleteOrigin      string
+	OnUpdateOrigin      string
 }
 
 func (fk FkReferDef) String() string {
 	return fmt.Sprintf("%s.%s %s %s => %s",
 		fk.Db, fk.Tbl, fk.Name, fk.Col, fk.ReferCol)
+}
+
+type foreignKeyCatalogLayout uint8
+
+const (
+	foreignKeyCatalogLegacy foreignKeyCatalogLayout = iota
+	foreignKeyCatalogExtended
+)
+
+// resolveForeignKeyCatalogLayout negotiates the tenant-local catalog shape.
+// Tenant upgrades are asynchronous and add the metadata columns one at a time,
+// so the extended layout is usable only after all three columns are visible.
+// Legacy reads and explicit 16-column inserts remain valid during every earlier
+// state, including a partially applied migration.
+func resolveForeignKeyCatalogLayout(ctx CompilerContext) (foreignKeyCatalogLayout, error) {
+	_, tableDef, err := ctx.Resolve(catalog.MO_CATALOG, catalog.MOForeignKeys, nil)
+	if err != nil {
+		return foreignKeyCatalogLegacy, err
+	}
+	if tableDef == nil {
+		return foreignKeyCatalogLegacy, nil
+	}
+	for _, column := range []string{"referenced_index_name", "on_delete_origin", "on_update_origin"} {
+		if FindColumn(tableDef.Cols, column) == nil {
+			return foreignKeyCatalogLegacy, nil
+		}
+	}
+	return foreignKeyCatalogExtended, nil
 }
 
 // quoteSQLStringLiteral emits a literal that MatrixOne's MySQL scanner reads
@@ -4635,6 +4667,17 @@ func quoteSQLStringLiteral(s string) string {
 // GetSqlForFkReferredTo returns the query that retrieves the fk relationships
 // that refer to the table
 func GetSqlForFkReferredTo(db, table string) string {
+	return getSqlForFkReferredToWithCatalogLayout(db, table, foreignKeyCatalogExtended)
+}
+
+func getSqlForFkReferredToWithCatalogLayout(db, table string, layout foreignKeyCatalogLayout) string {
+	metadataColumns := ""
+	if layout == foreignKeyCatalogExtended {
+		metadataColumns =
+			", referenced_index_name, " +
+				"on_delete_origin, " +
+				"on_update_origin"
+	}
 	return fmt.Sprintf(
 		"select "+
 			"db_name, "+
@@ -4643,25 +4686,35 @@ func GetSqlForFkReferredTo(db, table string) string {
 			"column_name, "+
 			"refer_column_name, "+
 			"on_delete, "+
-			"on_update "+
-			"from "+
+			"on_update"+
+			metadataColumns+
+			" from "+
 			"`mo_catalog`.`mo_foreign_keys` "+
 			"where "+
 			"refer_db_name = %s and refer_table_name = %s "+
 			" and "+
 			"(db_name != %s or db_name = %s and table_name != %s) "+
-			"order by db_name, table_name, constraint_name;",
+			"order by db_name, table_name, constraint_name, constraint_id;",
 		quoteSQLStringLiteral(db), quoteSQLStringLiteral(table),
 		quoteSQLStringLiteral(db), quoteSQLStringLiteral(db), quoteSQLStringLiteral(table))
 }
 
 // GetFkReferredTo returns the foreign key relationships that refer to the table
 func GetFkReferredTo(ctx CompilerContext, db, table string) (map[FkReferKey]map[string][]*FkReferDef, error) {
+	ret, _, err := getFkReferredToWithCatalogLayout(ctx, db, table)
+	return ret, err
+}
+
+func getFkReferredToWithCatalogLayout(ctx CompilerContext, db, table string) (map[FkReferKey]map[string][]*FkReferDef, foreignKeyCatalogLayout, error) {
 	//exclude fk self reference
-	sql := GetSqlForFkReferredTo(db, table)
+	layout, err := resolveForeignKeyCatalogLayout(ctx)
+	if err != nil {
+		return nil, foreignKeyCatalogLegacy, err
+	}
+	sql := getSqlForFkReferredToWithCatalogLayout(db, table, layout)
 	res, err := runSql(ctx, sql)
 	if err != nil {
-		return nil, err
+		return nil, layout, err
 	}
 	defer res.Close()
 	ret := make(map[FkReferKey]map[string][]*FkReferDef)
@@ -4672,6 +4725,9 @@ func GetFkReferredTo(ctx CompilerContext, db, table string) (map[FkReferKey]map[
 	const referColIdx = 4
 	const deleteIdx = 5
 	const updateIdx = 6
+	const referencedIndexIdx = 7
+	const deleteOriginIdx = 8
+	const updateOriginIdx = 9
 	if res.Batches != nil {
 		for _, batch := range res.Batches {
 			if batch != nil &&
@@ -4687,6 +4743,14 @@ func GetFkReferredTo(ctx CompilerContext, db, table string) (map[FkReferKey]map[
 						OnDelete: string(batch.Vecs[deleteIdx].GetBytesAt(i)),
 						OnUpdate: string(batch.Vecs[updateIdx].GetBytesAt(i)),
 					}
+					if layout == foreignKeyCatalogExtended {
+						fk.ReferencedIndexName = string(batch.Vecs[referencedIndexIdx].GetBytesAt(i))
+						fk.OnDeleteOrigin = string(batch.Vecs[deleteOriginIdx].GetBytesAt(i))
+						fk.OnUpdateOrigin = string(batch.Vecs[updateOriginIdx].GetBytesAt(i))
+					} else {
+						fk.OnDeleteOrigin = legacyForeignKeyActionOrigin(fk.OnDelete)
+						fk.OnUpdateOrigin = legacyForeignKeyActionOrigin(fk.OnUpdate)
+					}
 					key := FkReferKey{Db: fk.Db, Tbl: fk.Tbl}
 					var constraint map[string][]*FkReferDef
 					var ok bool
@@ -4699,7 +4763,16 @@ func GetFkReferredTo(ctx CompilerContext, db, table string) (map[FkReferKey]map[
 			}
 		}
 	}
-	return ret, nil
+	return ret, layout, nil
+}
+
+func legacyForeignKeyActionOrigin(action string) string {
+	switch strings.ToUpper(strings.ReplaceAll(strings.TrimSpace(action), " ", "_")) {
+	case plan.ForeignKeyDef_RESTRICT.String(), plan.ForeignKeyDef_NO_ACTION.String():
+		return plan.ForeignKeyDef_ACTION_ORIGIN_LEGACY_AMBIGUOUS.String()
+	default:
+		return plan.ForeignKeyDef_ACTION_ORIGIN_EXPLICIT.String()
+	}
 }
 
 func convertIntoReferAction(s string) plan.ForeignKeyDef_RefAction {
@@ -4725,17 +4798,41 @@ func convertIntoReferAction(s string) plan.ForeignKeyDef_RefAction {
 	}
 }
 
+func convertIntoReferActionOrigin(s string) plan.ForeignKeyDef_RefActionOrigin {
+	switch strings.ToUpper(strings.TrimSpace(s)) {
+	case plan.ForeignKeyDef_ACTION_ORIGIN_DEFAULT.String():
+		return plan.ForeignKeyDef_ACTION_ORIGIN_DEFAULT
+	case plan.ForeignKeyDef_ACTION_ORIGIN_LEGACY_AMBIGUOUS.String():
+		return plan.ForeignKeyDef_ACTION_ORIGIN_LEGACY_AMBIGUOUS
+	default:
+		return plan.ForeignKeyDef_ACTION_ORIGIN_EXPLICIT
+	}
+}
+
 // getSqlForAddFk returns the insert sql that adds a fk relationship
 // into the mo_foreign_keys table
 func getSqlForAddFk(db, table string, data *FkData) string {
-	row := make([]string, 16)
+	return getSqlForAddFkWithCatalogLayout(db, table, data, foreignKeyCatalogExtended)
+}
+
+func getSqlForAddFkWithCatalogLayout(db, table string, data *FkData, layout foreignKeyCatalogLayout) string {
+	columnCount := 16
+	columns := "constraint_name, constraint_id, db_name, db_id, table_name, table_id, column_name, column_id, refer_db_name, refer_db_id, refer_table_name, refer_table_id, refer_column_name, refer_column_id, on_delete, on_update"
+	if layout == foreignKeyCatalogExtended {
+		columnCount = 19
+		columns += ", referenced_index_name, on_delete_origin, on_update_origin"
+	}
+	row := make([]string, columnCount)
 	rows := 0
 	sb := strings.Builder{}
-	sb.WriteString("insert into `mo_catalog`.`mo_foreign_keys`  ")
+	sb.WriteString("insert into `mo_catalog`.`mo_foreign_keys` (")
+	sb.WriteString(columns)
+	sb.WriteByte(')')
 	sb.WriteString(" values ")
 	for childIdx, childCol := range data.Cols.Cols {
 		row[0] = data.Def.Name
-		row[1] = "0"
+		// constraint_id preserves the declaration order of composite foreign-key columns.
+		row[1] = strconv.Itoa(childIdx + 1)
 		row[2] = db
 		row[3] = "0"
 		row[4] = table
@@ -4750,6 +4847,17 @@ func getSqlForAddFk(db, table string, data *FkData) string {
 		row[13] = "0"
 		row[14] = data.Def.OnDelete.String()
 		row[15] = data.Def.OnUpdate.String()
+		if layout == foreignKeyCatalogExtended {
+			row[16] = data.Def.ReferencedIndexName
+			row[17] = data.Def.OnDeleteOrigin.String()
+			row[18] = data.Def.OnUpdateOrigin.String()
+		}
+		if data.Def.OnDeleteOrigin == plan.ForeignKeyDef_ACTION_ORIGIN_DEFAULT {
+			row[14] = plan.ForeignKeyDef_NO_ACTION.String()
+		}
+		if data.Def.OnUpdateOrigin == plan.ForeignKeyDef_ACTION_ORIGIN_DEFAULT {
+			row[15] = plan.ForeignKeyDef_NO_ACTION.String()
+		}
 		{
 			if rows > 0 {
 				sb.WriteByte(',')
@@ -4766,6 +4874,16 @@ func getSqlForAddFk(db, table string, data *FkData) string {
 		}
 	}
 	return sb.String()
+}
+
+func getSqlForUpdateFkReferencedIndex(db, table, constraintName, referencedIndexName string) string {
+	return fmt.Sprintf(
+		"update `mo_catalog`.`mo_foreign_keys` set referenced_index_name = %s where db_name = %s and table_name = %s and constraint_name = %s",
+		quoteSQLStringLiteral(referencedIndexName),
+		quoteSQLStringLiteral(db),
+		quoteSQLStringLiteral(table),
+		quoteSQLStringLiteral(constraintName),
+	)
 }
 
 // getSqlForDeleteTable returns the delete sql that deletes all the fk relationships from mo_foreign_keys

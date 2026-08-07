@@ -62,6 +62,8 @@ func init() {
 
 	registry.MustRegister(HeartbeatHistogram)
 	registry.MustRegister(HeartbeatFailureCounter)
+	registry.MustRegister(ScheduleCommandPollHistogram)
+	registry.MustRegister(ScheduleCommandPollFailureCounter)
 	registry.MustRegister(HeartbeatRecvHistogram)
 	registry.MustRegister(HeartbeatRecvFailureCounter)
 	registry.MustRegister(statsTriggerCounter)

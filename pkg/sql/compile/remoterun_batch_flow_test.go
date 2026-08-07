@@ -16,7 +16,9 @@ package compile
 
 import (
 	"context"
+	"errors"
 	"testing"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/stretchr/testify/require"
@@ -112,6 +114,51 @@ func TestPipelineBatchFlowWaitsForCreditAndObservesConnectionClose(t *testing.T)
 	flow.rollback(0)
 	require.NoError(t, flow.acknowledge(0))
 	require.NoError(t, flow.acknowledge(seq))
+}
+
+func TestPipelineBatchFlowAbortWakesWaitersAndReleasesAccounting(t *testing.T) {
+	flow := newPipelineBatchFlow(1, 1024)
+	seq, err := flow.reserve(context.Background(), context.Background(), 10)
+	require.NoError(t, err)
+
+	reserveStarted := make(chan struct{})
+	reserveDone := make(chan error, 1)
+	go func() {
+		close(reserveStarted)
+		_, err := flow.reserve(context.Background(), context.Background(), 1)
+		reserveDone <- err
+	}()
+	waitStarted := make(chan struct{})
+	waitDone := make(chan error, 1)
+	go func() {
+		close(waitStarted)
+		waitDone <- flow.waitUntilDrained(context.Background(), context.Background(), nil)
+	}()
+	<-reserveStarted
+	<-waitStarted
+
+	firstCause := errors.New("stop sending")
+	flow.abort(firstCause)
+	flow.abort(errors.New("later abort"))
+
+	select {
+	case err := <-reserveDone:
+		require.ErrorIs(t, err, firstCause)
+	case <-time.After(time.Second):
+		t.Fatal("abort did not wake a blocked credit reservation")
+	}
+	select {
+	case err := <-waitDone:
+		require.ErrorIs(t, err, firstCause)
+	case <-time.After(time.Second):
+		t.Fatal("abort did not wake the terminal-response drain barrier")
+	}
+
+	flow.mu.Lock()
+	require.Empty(t, flow.pending)
+	require.Zero(t, flow.bytes)
+	flow.mu.Unlock()
+	require.NoError(t, flow.acknowledge(seq), "an ACK already in flight must be harmless after abort")
 }
 
 func TestHandlePipelineBatchAck(t *testing.T) {
