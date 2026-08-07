@@ -16,8 +16,10 @@ package fulltext2
 
 import (
 	"errors"
+	"reflect"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/stretchr/testify/require"
 )
@@ -93,4 +95,78 @@ func TestStreamBoolean(t *testing.T) {
 	err := split.StreamQuery([]byte("+alpha beta"), true, ParserDefault, BM25, nil, false,
 		func(keys *vectorindex.ColumnBuffer, dists []float64, _ [][]any) error { return sentinel })
 	require.ErrorIs(t, err, sentinel)
+}
+
+// buildPhraseSeg builds a segment [lo,hi) where EVERY doc is "common foo bar" — so the
+// term "common" and the contiguous phrase "foo bar" each match every doc (low selectivity).
+func buildPhraseSeg(t *testing.T, id string, rec int64, lo, hi int) *Segment {
+	b := NewBuilder(id, int32(types.T_int64))
+	for i := lo; i < hi; i++ {
+		feed(t, b, int64(i), "common", "foo", "bar")
+	}
+	s, err := b.Finish()
+	require.NoError(t, err)
+	s.Recency = rec
+	return s
+}
+
+// TestStreamBooleanMixedPhraseLowSelectivity is the bounded-memory regression for the
+// no-LIMIT streaming path: a mixed boolean query with a LOW-SELECTIVITY phrase over MANY
+// segments must stream correctly WITHOUT retaining every segment's phrase hits. The old
+// phraseHitsCache held one []docTf per (phrase, segment) for the whole query, so the first
+// segment's scoring — which triggers the cross-segment phraseDf scan — materialized O(the
+// global matching corpus) before a single row could be emitted (CN OOM). The phrase here
+// matches ALL 120 docs across 3 segments; the streamed result must equal the materialized
+// SearchQuery and be non-empty. (Correctness of count-and-discard phraseDf: the global
+// phrase idf must still be identical to the retaining version — verified via score parity.)
+func TestStreamBooleanMixedPhraseLowSelectivity(t *testing.T) {
+	idx := NewIndex([]*Segment{
+		buildPhraseSeg(t, "a", 0, 0, 40),
+		buildPhraseSeg(t, "b", 1, 40, 80),
+		buildPhraseSeg(t, "c", 2, 80, 120),
+	}, nil)
+
+	const pat = `+common "foo bar"` // MUST term + phrase (mixed, non-disjunctive → streamBoolean)
+	q, err := buildBooleanQuery(pat, normalizeParser(ParserDefault))
+	require.NoError(t, err)
+	_, disj := disjunctiveTerms(q)
+	require.False(t, disj, "must route to streamBoolean")
+
+	got := map[int64]float64{}
+	err = idx.StreamQuery([]byte(pat), true, ParserDefault, BM25, nil, false,
+		func(keys *vectorindex.ColumnBuffer, dists []float64, _ [][]any) error {
+			require.LessOrEqual(t, keys.N, streamBatch)
+			for i, k := range int64ColumnBuffer(keys) {
+				_, dup := got[k]
+				require.Falsef(t, dup, "pk %d emitted twice", k)
+				got[k] = dists[i]
+			}
+			return nil
+		})
+	require.NoError(t, err)
+
+	want, err := idx.SearchQuery([]byte(pat), true, ParserDefault, BM25, 1000, nil)
+	require.NoError(t, err)
+	require.NotEmpty(t, got)              // non-empty, low selectivity
+	require.Equal(t, 120, len(got))       // the phrase matches every doc across all 3 segments
+	require.Equal(t, len(want), len(got)) // parity with the materialized path
+	for _, r := range want {
+		g, ok := got[r.Pk.(int64)]
+		require.Truef(t, ok, "pk %v streamed", r.Pk)
+		require.InDeltaf(t, r.Score, g, 1e-5, "pk %v score parity (global phrase idf unchanged)", r.Pk)
+	}
+}
+
+// TestGlobalStatsNoPhraseHitRetention structurally guards the fix above: global phrase DF
+// must be count-and-discard, so globalStats must NOT hold a field that retains per-segment
+// matchPhrase slices ([]docTf). Reintroducing a cross-segment []docTf cache (the removed
+// phraseHitsCache) would defeat the no-LIMIT streaming O(one segment) bound.
+func TestGlobalStatsNoPhraseHitRetention(t *testing.T) {
+	typ := reflect.TypeOf(globalStats{})
+	for i := 0; i < typ.NumField(); i++ {
+		f := typ.Field(i)
+		require.NotContainsf(t, f.Type.String(), "docTf",
+			"globalStats.%s (%s) retains phrase hit slices; global phrase DF must count-and-discard, not cache []docTf",
+			f.Name, f.Type)
+	}
 }

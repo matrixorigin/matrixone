@@ -327,38 +327,31 @@ func (idx *Index) SearchText(query []byte, tok tokenizer.Tokenizer, algo ScoreAl
 // segments (like bm25's gdf) and memoized per query; it is built fresh per query and
 // used sequentially across segments, so the cache needs no lock.
 type globalStats struct {
-	n             int64
-	avgDocLen     float64
-	idx           *Index
-	dfCache       map[string]int
+	n         int64
+	avgDocLen float64
+	idx       *Index
+	dfCache   map[string]int
+	// phraseDfCache memoizes only the corpus-global phrase COUNT per phrase (an int),
+	// never the per-segment hit slices — see phraseDf. Retaining the slices would defeat
+	// the no-LIMIT streaming O(one segment) bound: a low-selectivity phrase over many
+	// capacity-sized segments would hold O(global matching corpus) before the first
+	// segment could finish emitting.
 	phraseDfCache map[string]int
-	// phraseHitsCache memoizes matchPhrase per (phrase, segment) so a boolean phrase
-	// clause's own scoring scan and phraseDf's cross-segment df scan share ONE
-	// matchPhrase per segment instead of running it twice.
-	phraseHitsCache map[string]map[*Segment][]docTf
 }
 
 func (idx *Index) newGlobalStats() *globalStats {
 	return &globalStats{n: idx.globalN, avgDocLen: idx.globalAvgDocLen, idx: idx,
-		dfCache: make(map[string]int), phraseDfCache: make(map[string]int),
-		phraseHitsCache: make(map[string]map[*Segment][]docTf)}
+		dfCache: make(map[string]int), phraseDfCache: make(map[string]int)}
 }
 
-// phraseHits returns seg's matchPhrase hits, memoized per (phrase, segment) so the
-// scoring pass and the phraseDf pass share one scan.
+// phraseHits returns seg's matchPhrase hits WITHOUT retaining them across segments: the
+// caller (evalClause) uses the slice transiently to score one segment and drops it, so
+// only O(one segment) of phrase hits is live at a time. phraseDf recomputes-and-discards
+// its own cross-segment scan for the same reason; the two intentionally do NOT share a
+// cache (that sharing is what broke the streaming memory bound). The doubled matchPhrase
+// work is the accepted cost of bounded memory on the no-LIMIT streaming path.
 func (gs *globalStats) phraseHits(seg *Segment, slots []phraseSlot) []docTf {
-	key := slotsKey(slots)
-	m := gs.phraseHitsCache[key]
-	if m == nil {
-		m = make(map[*Segment][]docTf)
-		gs.phraseHitsCache[key] = m
-	}
-	if h, ok := m[seg]; ok {
-		return h
-	}
-	h := seg.matchPhrase(slots)
-	m[seg] = h
-	return h
+	return seg.matchPhrase(slots)
 }
 
 // df returns term's corpus-global document frequency (summed over segments). Dead
@@ -388,8 +381,10 @@ func (gs *globalStats) idfFor(seg *Segment, term string, pl *termPostings) float
 }
 
 // phraseDf returns the corpus-global document frequency of a phrase (the number of
-// docs matching the contiguous phrase, summed over segments), memoized per query.
-// Dead copies are counted, matching the term df above.
+// docs matching the contiguous phrase, summed over segments), memoizing only the COUNT.
+// Each segment's matchPhrase slice is counted and immediately discarded (count-and-
+// discard), so the df scan holds at most one segment's hits at a time — never the whole
+// corpus. Dead copies are counted, matching the term df above.
 func (gs *globalStats) phraseDf(slots []phraseSlot) int {
 	key := slotsKey(slots)
 	if d, ok := gs.phraseDfCache[key]; ok {
@@ -397,7 +392,7 @@ func (gs *globalStats) phraseDf(slots []phraseSlot) int {
 	}
 	d := 0
 	for _, seg := range gs.idx.segments {
-		d += len(gs.phraseHits(seg, slots)) // shares the memoized scan with scoring
+		d += len(seg.matchPhrase(slots)) // counted, then the slice is released this iteration
 	}
 	gs.phraseDfCache[key] = d
 	return d
