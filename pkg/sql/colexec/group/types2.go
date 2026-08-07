@@ -130,7 +130,8 @@ type container struct {
 	hashKeyVecs    []*vector.Vector
 
 	// aggs, which holds the intermediate state of agg functions.
-	aggList []aggexec.AggFuncExec
+	aggList          []aggexec.AggFuncExec
+	prepareParamKind aggexec.PrepareParamKindStates
 
 	// spill, agglist to load spilled data.
 	spillMem        int64
@@ -249,6 +250,7 @@ func (ctr *container) free() {
 
 	ctr.freeGroupByBatches()
 	ctr.freeAggList()
+	ctr.prepareParamKind.Reset(nil)
 	ctr.freeSpillAggList()
 	ctr.freeSpillBkts()
 	if ctr.spillGbBatch != nil {

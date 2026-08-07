@@ -744,7 +744,6 @@ func (ctr *container) loadSpilledData(proc *process.Process, opAnalyzer process.
 
 func (ctr *container) getNextFinalResult(
 	proc *process.Process,
-	aggExprs []aggexec.AggFuncExecExpression,
 ) (vm.CallResult, error) {
 	// the groupby batches are now in groupbybatches, partial agg result is in agglist.
 	// now we need to flush the final result of agg to output batches.
@@ -766,11 +765,9 @@ func (ctr *container) getNextFinalResult(
 			if err != nil {
 				return vm.CancelResult, err
 			}
-			if i < len(aggExprs) && aggExprs[i].PreservesFirstArgPrepareParamKind() {
-				kind := aggExprs[i].GetPrepareParamKind()
-				for _, vec := range vecs {
-					vec.SetPrepareParamKind(kind)
-				}
+			kind := ctr.prepareParamKind.Get(i)
+			for _, vec := range vecs {
+				vec.SetPrepareParamKind(kind)
 			}
 			for j := range vecs {
 				ctr.groupByBatches[j].Vecs = append(
@@ -790,7 +787,7 @@ func (ctr *container) getNextFinalResult(
 
 func (ctr *container) outputOneBatchFinal(proc *process.Process, opAnalyzer process.Analyzer, aggExprs []aggexec.AggFuncExecExpression) (vm.CallResult, error) {
 	// read next result batch
-	res, err := ctr.getNextFinalResult(proc, aggExprs)
+	res, err := ctr.getNextFinalResult(proc)
 	if err != nil {
 		return vm.CancelResult, err
 	}

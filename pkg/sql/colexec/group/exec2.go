@@ -57,14 +57,12 @@ func hasInactiveGroupingColumn(flags []bool) bool {
 }
 
 func (group *Group) Prepare(proc *process.Process) (err error) {
-	for i := range group.Aggs {
-		group.Aggs[i].ResetPrepareParamKind()
-	}
 	group.diagnosticsLogged = false
 	group.ctr.state = vm.Build
 	if group.ctr.mp != nil {
 		group.ctr.free()
 	}
+	group.ctr.prepareParamKind.Reset(group.Aggs)
 	group.ctr.mp = mpool.MustNewNoLock("group_mpool")
 
 	// debug,
@@ -351,7 +349,7 @@ func (group *Group) buildOneBatch(proc *process.Process, bat *batch.Batch) (bool
 	}
 	for i := range group.Aggs {
 		if i < len(group.ctr.aggArgEvaluate) && len(group.ctr.aggArgEvaluate[i].Vec) > 0 {
-			group.Aggs[i].ObservePrepareParamKind(
+			group.ctr.prepareParamKind.Observe(i,
 				group.ctr.aggArgEvaluate[i].Vec[0].GetPrepareParamKind())
 		}
 	}
@@ -636,7 +634,7 @@ func (group *Group) getNextIntermediateResult(proc *process.Process) (vm.CallRes
 	nAggs := int32(len(group.ctr.aggList))
 	buf.Write(types.EncodeInt32(&nAggs))
 	for i := range group.ctr.aggList {
-		kind, seen := group.Aggs[i].GetPrepareParamKindState()
+		kind, seen := group.ctr.prepareParamKind.GetState(i)
 		encoded, ok := encodePrepareParamKindState(kind, seen)
 		if !ok {
 			return vm.CancelResult, false, moerr.NewInternalErrorf(proc.Ctx,

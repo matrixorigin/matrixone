@@ -41,9 +41,6 @@ type AggFuncExecExpression struct {
 	argExpressions []*plan.Expr
 	extraConfig    []byte
 	configType     plan.AggregateConfigType
-
-	prepareParamKind     vector.PrepareParamKind
-	prepareParamKindSeen bool
 }
 
 func MakeAggFunctionExpression(
@@ -85,51 +82,6 @@ func (ag *AggFuncExecExpression) PreservesFirstArgPrepareParamKind() bool {
 	default:
 		return false
 	}
-}
-
-func (ag *AggFuncExecExpression) ResetPrepareParamKind() {
-	ag.prepareParamKind = vector.PrepareParamNone
-	ag.prepareParamKindSeen = false
-}
-
-func (ag *AggFuncExecExpression) ObservePrepareParamKind(kind vector.PrepareParamKind) {
-	if !ag.PreservesFirstArgPrepareParamKind() {
-		return
-	}
-	if !ag.prepareParamKindSeen {
-		ag.prepareParamKind = kind
-		ag.prepareParamKindSeen = true
-		return
-	}
-	if ag.prepareParamKind != kind {
-		// A vector-wide category cannot represent mixed source semantics.
-		// Falling back to ordinary string conversion is conservative.
-		ag.prepareParamKind = vector.PrepareParamNone
-	}
-}
-
-func (ag *AggFuncExecExpression) ObservePrepareParamKindState(
-	kind vector.PrepareParamKind,
-	seen bool,
-) {
-	if !seen {
-		return
-	}
-	ag.ObservePrepareParamKind(kind)
-}
-
-func (ag *AggFuncExecExpression) GetPrepareParamKindState() (
-	vector.PrepareParamKind,
-	bool,
-) {
-	return ag.prepareParamKind, ag.prepareParamKindSeen
-}
-
-func (ag *AggFuncExecExpression) GetPrepareParamKind() vector.PrepareParamKind {
-	if !ag.prepareParamKindSeen {
-		return vector.PrepareParamNone
-	}
-	return ag.prepareParamKind
 }
 
 func (ag *AggFuncExecExpression) IsDistinct() bool {

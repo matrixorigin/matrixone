@@ -23,6 +23,7 @@ import (
 	"io"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -105,6 +106,46 @@ func newMergeGroupOp(aggs []aggexec.AggFuncExecExpression) *MergeGroup {
 		OperatorInfo: vm.OperatorInfo{Idx: 0, IsFirst: false, IsLast: false},
 	}
 	return mg
+}
+
+func TestSharedAggExpressionsPrepareConcurrently(t *testing.T) {
+	groupProc := testutil.NewProcess(t)
+	mergeProc := testutil.NewProcess(t)
+	sharedAggs := []aggexec.AggFuncExecExpression{minPreparedParamAgg()}
+	group := newGroupOp(groupProc, nil, sharedAggs)
+	merge := newMergeGroupOp(sharedAggs)
+	t.Cleanup(func() {
+		group.Free(groupProc, true, nil)
+		merge.Free(mergeProc, true, nil)
+		require.Zero(t, groupProc.Mp().CurrNB())
+		require.Zero(t, mergeProc.Mp().CurrNB())
+		groupProc.Free()
+		mergeProc.Free()
+	})
+
+	start := make(chan struct{})
+	errs := make(chan error, 2)
+	var wg sync.WaitGroup
+	prepare := func(op vm.Operator, proc *process.Process) {
+		defer wg.Done()
+		<-start
+		for range 100 {
+			if err := op.Prepare(proc); err != nil {
+				errs <- err
+				return
+			}
+		}
+	}
+
+	wg.Add(2)
+	go prepare(group, groupProc)
+	go prepare(merge, mergeProc)
+	close(start)
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		require.NoError(t, err)
+	}
 }
 
 type cancelOnDoneCheckContext struct {
@@ -402,7 +443,7 @@ func TestGroupRejectsInvalidPrepareParamKindState(t *testing.T) {
 	t.Cleanup(func() { partial.Free(proc, true, nil) })
 
 	require.NoError(t, partial.Prepare(proc))
-	partial.Aggs[0].ObservePrepareParamKind(vector.PrepareParamKind(255))
+	partial.ctr.prepareParamKind.Observe(0, vector.PrepareParamKind(255))
 	result, err := vm.Exec(partial, proc)
 	require.Nil(t, result.Batch)
 	require.ErrorContains(t, err, "invalid aggregate prepared parameter kind 255")

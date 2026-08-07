@@ -22,7 +22,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestAggPrepareParamKindLifecycle(t *testing.T) {
+func TestPrepareParamKindStatesLifecycle(t *testing.T) {
 	oneArg := []*plan.Expr{{}}
 	threeArgs := []*plan.Expr{{}, {}, {}}
 
@@ -45,31 +45,61 @@ func TestAggPrepareParamKindLifecycle(t *testing.T) {
 		})
 	}
 
-	expr := MakeAggFunctionExpression(AggIdOfMin, false, oneArg, nil)
-	expr.ObservePrepareParamKind(vector.PrepareParamFloat)
-	expr.ObservePrepareParamKind(vector.PrepareParamFloat)
-	require.Equal(t, vector.PrepareParamFloat, expr.GetPrepareParamKind())
-
-	expr.ObservePrepareParamKind(vector.PrepareParamDecimal)
-	require.Equal(t, vector.PrepareParamNone, expr.GetPrepareParamKind())
-
-	expr.ResetPrepareParamKind()
-	require.Equal(t, vector.PrepareParamNone, expr.GetPrepareParamKind())
-	kind, seen := expr.GetPrepareParamKindState()
+	preserving := MakeAggFunctionExpression(AggIdOfMin, false, oneArg, nil)
+	converting := MakeAggFunctionExpression(AggIdOfSum, false, oneArg, nil)
+	var states PrepareParamKindStates
+	require.Equal(t, vector.PrepareParamNone, states.Get(0))
+	kind, seen := states.GetState(0)
 	require.Equal(t, vector.PrepareParamNone, kind)
 	require.False(t, seen)
 
-	expr.ObservePrepareParamKindState(vector.PrepareParamFloat, false)
-	kind, seen = expr.GetPrepareParamKindState()
+	states.Reset([]AggFuncExecExpression{preserving, converting})
+
+	states.Observe(0, vector.PrepareParamFloat)
+	states.Observe(0, vector.PrepareParamFloat)
+	require.Equal(t, vector.PrepareParamFloat, states.Get(0))
+
+	states.Observe(0, vector.PrepareParamDecimal)
+	require.Equal(t, vector.PrepareParamNone, states.Get(0))
+
+	states.Observe(1, vector.PrepareParamInteger)
+	kind, seen = states.GetState(1)
 	require.Equal(t, vector.PrepareParamNone, kind)
 	require.False(t, seen)
 
-	expr.ObservePrepareParamKindState(vector.PrepareParamNone, true)
-	kind, seen = expr.GetPrepareParamKindState()
+	states.Reset([]AggFuncExecExpression{preserving})
+	require.Equal(t, vector.PrepareParamNone, states.Get(0))
+	kind, seen = states.GetState(0)
+	require.Equal(t, vector.PrepareParamNone, kind)
+	require.False(t, seen)
+
+	states.ObserveState(0, vector.PrepareParamFloat, false)
+	kind, seen = states.GetState(0)
+	require.Equal(t, vector.PrepareParamNone, kind)
+	require.False(t, seen)
+
+	states.ObserveState(0, vector.PrepareParamNone, true)
+	kind, seen = states.GetState(0)
 	require.Equal(t, vector.PrepareParamNone, kind)
 	require.True(t, seen)
 
-	expr.ResetPrepareParamKind()
-	expr.ObservePrepareParamKind(vector.PrepareParamInteger)
-	require.Equal(t, vector.PrepareParamInteger, expr.GetPrepareParamKind())
+	states.Reset([]AggFuncExecExpression{preserving})
+	states.Observe(0, vector.PrepareParamInteger)
+	require.Equal(t, vector.PrepareParamInteger, states.Get(0))
+}
+
+func TestPrepareParamKindStatesReuseDoesNotAllocate(t *testing.T) {
+	aggs := []AggFuncExecExpression{
+		MakeAggFunctionExpression(AggIdOfMin, false, []*plan.Expr{{}}, nil),
+		MakeAggFunctionExpression(AggIdOfSum, false, []*plan.Expr{{}}, nil),
+	}
+	var states PrepareParamKindStates
+	states.Reset(aggs)
+
+	allocs := testing.AllocsPerRun(100, func() {
+		states.Reset(aggs)
+		states.Observe(0, vector.PrepareParamInteger)
+		states.Observe(1, vector.PrepareParamFloat)
+	})
+	require.Zero(t, allocs)
 }

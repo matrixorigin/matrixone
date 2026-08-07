@@ -43,10 +43,8 @@ func (timeWin *TimeWin) OpType() vm.OpType {
 }
 
 func (timeWin *TimeWin) Prepare(proc *process.Process) (err error) {
-	for i := range timeWin.Aggs {
-		timeWin.Aggs[i].ResetPrepareParamKind()
-	}
 	ctr := &timeWin.ctr
+	ctr.prepareParamKind.Reset(timeWin.Aggs)
 	if timeWin.OpAnalyzer == nil {
 		timeWin.OpAnalyzer = process.NewAnalyzer(timeWin.GetIdx(), timeWin.IsFirst, timeWin.IsLast, "time_window")
 	} else {
@@ -349,7 +347,7 @@ func (timeWin *TimeWin) observePrepareParamKinds() {
 	for i := range timeWin.Aggs {
 		if i < len(timeWin.ctr.aggVec[batchIndex]) &&
 			len(timeWin.ctr.aggVec[batchIndex][i]) > 0 {
-			timeWin.Aggs[i].ObservePrepareParamKind(
+			timeWin.ctr.prepareParamKind.Observe(i,
 				timeWin.ctr.aggVec[batchIndex][i][0].GetPrepareParamKind())
 		}
 	}
@@ -658,7 +656,7 @@ func (ctr *container) calRes(ap *TimeWin, proc *process.Process) (err error) {
 		if err != nil {
 			return err
 		}
-		result.SetPrepareParamKind(ap.Aggs[aggIndex].GetPrepareParamKind())
+		result.SetPrepareParamKind(ctr.prepareParamKind.Get(aggIndex))
 
 		ctr.bat.SetVector(int32(i), result)
 		i++
@@ -732,7 +730,7 @@ func (ctr *container) calResForInterval(ap *TimeWin, proc *process.Process) (err
 	ctr.bat = batch.NewWithSize(ctr.colCnt)
 	i := 0
 	for aggIndex, vecs := range ctr.aggVec[ctr.i-1] {
-		vecs[0].SetPrepareParamKind(ap.Aggs[aggIndex].GetPrepareParamKind())
+		vecs[0].SetPrepareParamKind(ctr.prepareParamKind.Get(aggIndex))
 		ctr.bat.SetVector(int32(i), vecs[0])
 		i++
 	}

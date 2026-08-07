@@ -63,9 +63,7 @@ func (window *Window) OpType() vm.OpType {
 }
 
 func (window *Window) Prepare(proc *process.Process) (err error) {
-	for i := range window.Aggs {
-		window.Aggs[i].ResetPrepareParamKind()
-	}
+	window.ctr.prepareParamKind.Reset(window.Aggs)
 	if window.OpAnalyzer == nil {
 		window.OpAnalyzer = process.NewAnalyzer(window.GetIdx(), window.IsFirst, window.IsLast, "window")
 	} else {
@@ -248,7 +246,7 @@ func (window *Window) Call(proc *process.Process) (vm.CallResult, error) {
 			}
 			for i := range window.Aggs {
 				if i < len(ctr.aggVecs) && len(ctr.aggVecs[i].Vec) > 0 {
-					window.Aggs[i].ObservePrepareParamKind(
+					ctr.prepareParamKind.Observe(i,
 						ctr.aggVecs[i].Vec[0].GetPrepareParamKind())
 				}
 			}
@@ -375,7 +373,7 @@ func (ctr *container) processFunc(idx int, ap *Window, proc *process.Process, an
 			return err
 		}
 		if ctr.vec != nil {
-			ctr.vec.SetPrepareParamKind(ap.Aggs[idx].GetPrepareParamKind())
+			ctr.vec.SetPrepareParamKind(ctr.prepareParamKind.Get(idx))
 			analyzer.Alloc(int64(ctr.vec.Size()))
 		}
 		ctr.os = nil
@@ -492,7 +490,7 @@ func (ctr *container) processFunc(idx int, ap *Window, proc *process.Process, an
 	if err != nil {
 		return err
 	}
-	ctr.vec.SetPrepareParamKind(ap.Aggs[idx].GetPrepareParamKind())
+	ctr.vec.SetPrepareParamKind(ctr.prepareParamKind.Get(idx))
 	if isWinOrder {
 		ctr.vec.SetNulls(nil)
 	}

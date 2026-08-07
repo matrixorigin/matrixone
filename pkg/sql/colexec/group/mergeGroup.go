@@ -27,13 +27,11 @@ import (
 )
 
 func (mergeGroup *MergeGroup) Prepare(proc *process.Process) error {
-	for i := range mergeGroup.Aggs {
-		mergeGroup.Aggs[i].ResetPrepareParamKind()
-	}
 	mergeGroup.ctr.state = vm.Build
 	if mergeGroup.ctr.mp != nil {
 		mergeGroup.ctr.free()
 	}
+	mergeGroup.ctr.prepareParamKind.Reset(mergeGroup.Aggs)
 	mergeGroup.ctr.mp = mpool.MustNew("merge_group_mpool")
 	mergeGroup.ctr.groupByTypes = nil
 	mergeGroup.ctr.keyNullable = false
@@ -205,7 +203,7 @@ func (mergeGroup *MergeGroup) buildOneBatch(proc *process.Process, bat *batch.Ba
 				return false, moerr.NewInternalErrorf(proc.Ctx,
 					"invalid aggregate prepared parameter state %d", encoded)
 			}
-			mergeGroup.Aggs[i].ObservePrepareParamKindState(kind, seen)
+			mergeGroup.ctr.prepareParamKind.ObserveState(int(i), kind, seen)
 		}
 
 		for i := int32(0); i < nAggs; i++ {
