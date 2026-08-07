@@ -244,6 +244,23 @@ SELECT concat(HOUR(v), '/', MINUTE(v), '/', SECOND(v)) AS v_clock,
 FROM time_extract_one_digit_year_clock_width;
 DROP TABLE time_extract_one_digit_year_clock_width;
 
+-- The complete candidate owns the consumed clock before suffix/fallback logic.
+-- Keep the same boundaries in VARCHAR, CHAR, and TEXT columns.
+DROP TABLE IF EXISTS time_extract_consumption_boundaries;
+CREATE TABLE time_extract_consumption_boundaries (v VARCHAR(48), c CHAR(48), t TEXT);
+INSERT INTO time_extract_consumption_boundaries VALUES
+  ('1-1-1 1:2:3 ', '1-1-1 1:2:3 ', '1-1-1 1:2:3 '),
+  ('0-1-1 12::56', '0-1-1 12::56', '0-1-1 12::56'),
+  ('12:1:1 12:34:56', '12:1:1 12:34:56', '12:1:1 12:34:56'),
+  ('12345/1/1 12:34:56', '12345/1/1 12:34:56', '12345/1/1 12:34:56'),
+  ('12345!1!1 12:34:56', '12345!1!1 12:34:56', '12345!1!1 12:34:56'),
+  ('2024-12-20 1:2:3 abc', '2024-12-20 1:2:3 abc', '2024-12-20 1:2:3 abc');
+SELECT concat(HOUR(v), '/', MINUTE(v), '/', SECOND(v)) AS v_clock,
+       concat(HOUR(c), '/', MINUTE(c), '/', SECOND(c)) AS c_clock,
+       concat(HOUR(t), '/', MINUTE(t), '/', SECOND(t)) AS t_clock
+FROM time_extract_consumption_boundaries;
+DROP TABLE time_extract_consumption_boundaries;
+
 -- Preserve nonempty trailing whitespace until the ordered parser assigns its owner.
 SELECT HOUR('123:34:56 78') AS unpadded_123_hour,
        HOUR('123:34:56 78 ') AS padded_123_hour,
