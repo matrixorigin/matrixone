@@ -55,6 +55,7 @@ var (
 		InformationSchemaViewsDDL,
 		InformationSchemaStatisticsDDL,
 		InformationSchemaReferentialConstraintsDDL,
+		InformationSchemaCheckConstraintsDDL,
 		InformationSchemaEnginesDDL,
 		InformationSchemaRoutinesDDL,
 		InformationSchemaParametersDDL,

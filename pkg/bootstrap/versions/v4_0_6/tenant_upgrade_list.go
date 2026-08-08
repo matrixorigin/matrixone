@@ -33,6 +33,7 @@ var tenantUpgEntries = []versions.UpgradeEntry{
 	upgradeInformationSchemaReferentialConstraints(),
 	populateInformationSchemaCharacterSets(),
 	upgradeInformationSchemaColumns(),
+	upgradeInformationSchemaCheckConstraints(),
 }
 
 // Keep this as a separate upgrade entry so tenants that already completed
@@ -119,6 +120,19 @@ func upgradeInformationSchemaReferentialConstraints() versions.UpgradeEntry {
 		UpgSql:    sysview.InformationSchemaReferentialConstraintsDDL,
 		CheckFunc: checkViewDefinition("REFERENTIAL_CONSTRAINTS", sysview.InformationSchemaReferentialConstraintsDDL),
 		PreSql:    fmt.Sprintf("DROP VIEW IF EXISTS %s.%s;", sysview.InformationDBConst, "REFERENTIAL_CONSTRAINTS"),
+	}
+}
+
+func upgradeInformationSchemaCheckConstraints() versions.UpgradeEntry {
+	return versions.UpgradeEntry{
+		Schema:    sysview.InformationDBConst,
+		TableName: "CHECK_CONSTRAINTS",
+		UpgType:   versions.CREATE_VIEW,
+		UpgSql:    sysview.InformationSchemaCheckConstraintsDDL,
+		CheckFunc: checkViewDefinition("CHECK_CONSTRAINTS",
+			sysview.InformationSchemaCheckConstraintsDDL),
+		PreSql: fmt.Sprintf("DROP VIEW IF EXISTS %s.%s;",
+			sysview.InformationDBConst, "CHECK_CONSTRAINTS"),
 	}
 }
 

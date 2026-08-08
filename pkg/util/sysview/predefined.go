@@ -428,6 +428,17 @@ var (
 		"GROUP BY db_name, table_name, constraint_name, refer_db_name, refer_table_name, on_update, on_delete, referenced_index_name" +
 		") fk"
 
+	// CHECK_CONSTRAINTS is backed by a table function because CHECK metadata is
+	// stored in the serialized SchemaExtra of each table.  The function decodes
+	// that metadata at query time and applies the current tenant's visibility.
+	InformationSchemaCheckConstraintsDDL = "CREATE VIEW information_schema.CHECK_CONSTRAINTS AS " +
+		"SELECT " +
+		"cc.constraint_catalog AS CONSTRAINT_CATALOG, " +
+		"cc.constraint_schema AS CONSTRAINT_SCHEMA, " +
+		"cc.constraint_name AS CONSTRAINT_NAME, " +
+		"cc.check_clause AS CHECK_CLAUSE " +
+		"FROM mo_check_constraints() cc"
+
 	InformationSchemaEnginesDDL = "CREATE TABLE information_schema.ENGINES (" +
 		"ENGINE varchar(64)," +
 		"SUPPORT varchar(8)," +
