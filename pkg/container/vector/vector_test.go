@@ -4189,6 +4189,20 @@ func kindsToBytes(kinds []PrepareParamKind) []byte {
 	return data
 }
 
+// unexpectedEOFReader models a transport that has delivered a partial
+// payload and reports the truncation on the next read. bytes.Reader returns
+// io.EOF when that next read has no bytes, which is a distinct failure mode.
+type unexpectedEOFReader struct {
+	reader *bytes.Reader
+}
+
+func (r *unexpectedEOFReader) Read(p []byte) (int, error) {
+	if r.reader.Len() == 0 {
+		return 0, io.ErrUnexpectedEOF
+	}
+	return r.reader.Read(p)
+}
+
 func TestSetPrepareParamKindsFromReaderCollapsesUniformAndNullRows(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -4265,8 +4279,16 @@ func TestSetPrepareParamKindsFromReaderErrorsReleaseTemporarySidecar(t *testing.
 			wantString: "row count 1 does not match vector length 2",
 		},
 		{
-			name:     "truncated",
-			reader:   bytes.NewReader([]byte{byte(PrepareParamFloat)}),
+			name:     "no-byte EOF",
+			reader:   bytes.NewReader(nil),
+			rowCount: 2,
+			wantErr:  io.EOF,
+		},
+		{
+			name: "partial-read unexpected EOF",
+			reader: &unexpectedEOFReader{
+				reader: bytes.NewReader([]byte{byte(PrepareParamFloat)}),
+			},
 			rowCount: 2,
 			wantErr:  io.ErrUnexpectedEOF,
 		},
@@ -4305,7 +4327,9 @@ func TestSetPrepareParamKindsFromReaderFailedGenerationCanReuse(t *testing.T) {
 	before := mp.CurrNB()
 
 	err := vec.SetPrepareParamKindsFromReader(
-		bytes.NewReader([]byte{byte(PrepareParamInteger)}), 2, mp)
+		&unexpectedEOFReader{
+			reader: bytes.NewReader([]byte{byte(PrepareParamInteger)}),
+		}, 2, mp)
 	require.ErrorIs(t, err, io.ErrUnexpectedEOF)
 	require.Equal(t, before, mp.CurrNB())
 
@@ -4435,6 +4459,72 @@ func TestPrepareParamKindCheckpointRollbackReaccountsSidecar(t *testing.T) {
 	ordinary.Free(mp)
 	vec.Free(mp)
 	require.Equal(t, int64(0), mp.CurrNB())
+}
+
+func TestPrepareParamKindMetadataBoundaryLifecycle(t *testing.T) {
+	var nilVec *Vector
+	require.False(t, nilVec.HasPrepareParamKind())
+	require.Equal(t, PrepareParamNone, nilVec.GetPrepareParamKindAt(0))
+	require.NoError(t, nilVec.SetPrepareParamKindAtWithMP(0, PrepareParamInteger, nil))
+	require.NoError(t, nilVec.CopyPrepareParamMetadataToWithMP(nil, nil))
+
+	mp := mpool.MustNewZero()
+	vec := NewVec(types.T_int64.ToType())
+	defer func() {
+		vec.Free(mp)
+		require.Zero(t, mp.CurrNB())
+	}()
+	require.NoError(t, AppendFixedList(vec, []int64{1, 2, 3}, nil, mp))
+
+	// Invalid and empty inputs leave the existing scalar representation intact
+	// while a length mismatch is rejected before touching metadata.
+	vec.SetPrepareParamKind(PrepareParamFloat)
+	require.ErrorContains(t, vec.SetPrepareParamKindsWithMP([]PrepareParamKind{PrepareParamInteger}, mp), "row count")
+	require.NoError(t, vec.SetPrepareParamKindsWithMP(nil, mp))
+	require.False(t, vec.HasPrepareParamKind())
+
+	// Uniform and all-NULL rows stay on the scalar fast path; a real conflict
+	// promotes exactly once to the owned sidecar.
+	require.NoError(t, vec.SetPrepareParamKindsWithMP(
+		[]PrepareParamKind{PrepareParamInteger, PrepareParamInteger, PrepareParamInteger}, mp))
+	require.Equal(t, PrepareParamInteger, vec.GetPrepareParamKind())
+	require.Nil(t, vec.GetPrepareParamKinds())
+	for row := uint64(0); row < 3; row++ {
+		vec.GetNulls().Add(row)
+	}
+	require.NoError(t, vec.SetPrepareParamKindsWithMP(
+		[]PrepareParamKind{PrepareParamFloat, PrepareParamDecimal, PrepareParamBoolean}, mp))
+	require.False(t, vec.HasPrepareParamKind())
+	require.Nil(t, vec.GetPrepareParamKinds())
+	vec.GetNulls().Clear()
+	require.NoError(t, vec.SetPrepareParamKindsWithMP(
+		[]PrepareParamKind{PrepareParamInteger, PrepareParamFloat, PrepareParamDecimal}, mp))
+	require.Len(t, vec.GetPrepareParamKinds(), 3)
+
+	// Sidecar resize exercises both in-capacity clearing and owner-preserving
+	// growth. A NULL write clears one row and all-NULL resets the sidecar.
+	vec.SetLength(2)
+	require.Len(t, vec.GetPrepareParamKinds(), 2)
+	vec.SetLength(6)
+	require.Len(t, vec.GetPrepareParamKinds(), 6)
+	vec.SetPrepareParamKindAt(-1, PrepareParamBoolean)
+	vec.SetPrepareParamKindAt(99, PrepareParamBoolean)
+	vec.GetNulls().Add(0)
+	require.NoError(t, vec.SetPrepareParamKindAtWithMP(0, PrepareParamBoolean, mp))
+	vec.SetAllNulls(vec.Length())
+	require.False(t, vec.HasPrepareParamKind())
+	require.Nil(t, vec.GetPrepareParamKinds())
+
+	// Reader zero-row input and scalar row updates are no-op/reset boundaries.
+	zero := NewVec(types.T_int8.ToType())
+	require.NoError(t, zero.SetPrepareParamKindsFromReader(bytes.NewReader(nil), 0, mp))
+	zero.Free(mp)
+	vec.SetNulls(nil)
+	vec.SetLength(3)
+	vec.SetPrepareParamKindAt(0, PrepareParamDecimal)
+	require.Equal(t, PrepareParamDecimal, vec.GetPrepareParamKindAt(0))
+	require.Equal(t, PrepareParamNone, vec.GetPrepareParamKindAt(-1))
+	require.Equal(t, PrepareParamNone, vec.GetPrepareParamKindAt(vec.Length()))
 }
 
 func BenchmarkUnionBatchPrepareParamKind(b *testing.B) {
