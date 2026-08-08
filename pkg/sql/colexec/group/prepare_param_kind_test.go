@@ -24,9 +24,24 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
+
+// unknownGroupServiceLockService supplies only the service identity needed by
+// Process.GetService. The embedded interface keeps this regression focused on
+// the runtime lookup boundary rather than lock-service behavior.
+type unknownGroupServiceLockService struct {
+	lockservice.LockService
+	cfg lockservice.Config
+}
+
+func (s *unknownGroupServiceLockService) GetConfig() lockservice.Config {
+	return s.cfg
+}
 
 func makeSpillGroupBatchForTest(t *testing.T, mp *mpool.MPool, prepared bool) *batch.Batch {
 	t.Helper()
@@ -39,6 +54,28 @@ func makeSpillGroupBatchForTest(t *testing.T, mp *mpool.MPool, prepared bool) *b
 	}
 	bat.SetRowCount(2)
 	return bat
+}
+
+func TestPrepareParamKindWireUnknownServiceFailsClosed(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	proc.Base.LockService = &unknownGroupServiceLockService{
+		cfg: lockservice.Config{ServiceID: "group-unknown-service"},
+	}
+
+	var enabled bool
+	require.NotPanics(t, func() {
+		enabled = prepareParamKindWireV1Enabled(proc)
+	})
+	require.False(t, enabled)
+
+	// Keep the nil-process behavior paired with the unknown-service boundary:
+	// both must fail closed without consulting a runtime.
+	var nilEnabled bool
+	require.NotPanics(t, func() {
+		nilEnabled = prepareParamKindWireV1Enabled((*process.Process)(nil))
+	})
+	require.False(t, nilEnabled)
 }
 
 func TestGroupSpillGroupKeyPrepareParamKindCodec(t *testing.T) {

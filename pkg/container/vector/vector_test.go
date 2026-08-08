@@ -4170,6 +4170,160 @@ func TestPrepareParamKindPerRowMaterialization(t *testing.T) {
 	source.Free(mp)
 }
 
+func makePrepareParamKindReaderVector(t *testing.T, mp *mpool.MPool, rows int) *Vector {
+	t.Helper()
+	vec := NewVec(types.T_int8.ToType())
+	values := make([]int8, rows)
+	for i := range values {
+		values[i] = int8(i + 1)
+	}
+	require.NoError(t, AppendFixedList(vec, values, nil, mp))
+	return vec
+}
+
+func kindsToBytes(kinds []PrepareParamKind) []byte {
+	data := make([]byte, len(kinds))
+	for i, kind := range kinds {
+		data[i] = byte(kind)
+	}
+	return data
+}
+
+func TestSetPrepareParamKindsFromReaderCollapsesUniformAndNullRows(t *testing.T) {
+	tests := []struct {
+		name        string
+		kinds       []PrepareParamKind
+		nullRows    []uint64
+		wantKind    PrepareParamKind
+		wantSeen    bool
+		wantSidecar bool
+	}{
+		{
+			name:        "mixed",
+			kinds:       []PrepareParamKind{PrepareParamInteger, PrepareParamFloat, PrepareParamNone},
+			wantKind:    PrepareParamNone,
+			wantSeen:    true,
+			wantSidecar: true,
+		},
+		{
+			name:     "uniform",
+			kinds:    []PrepareParamKind{PrepareParamDecimal, PrepareParamDecimal, PrepareParamDecimal},
+			wantKind: PrepareParamDecimal,
+			wantSeen: true,
+		},
+		{
+			name:     "all-null",
+			kinds:    []PrepareParamKind{PrepareParamBoolean, PrepareParamInteger, PrepareParamFloat},
+			nullRows: []uint64{0, 1, 2},
+			wantKind: PrepareParamNone,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			vec := makePrepareParamKindReaderVector(t, mp, len(tc.kinds))
+			defer vec.Free(mp)
+			for _, row := range tc.nullRows {
+				vec.GetNulls().Add(row)
+			}
+			before := mp.CurrNB()
+
+			err := vec.SetPrepareParamKindsFromReader(
+				bytes.NewReader(kindsToBytes(tc.kinds)), len(tc.kinds), mp)
+			require.NoError(t, err)
+			require.Equal(t, tc.wantKind, vec.GetPrepareParamKind())
+			require.Equal(t, tc.wantSeen, vec.prepareParamKindSeen)
+			if tc.wantSidecar {
+				require.Equal(t, tc.kinds, vec.GetPrepareParamKinds())
+				require.Greater(t, mp.CurrNB(), before)
+			} else {
+				require.Nil(t, vec.GetPrepareParamKinds())
+				require.Equal(t, before, mp.CurrNB(),
+					"uniform/all-null metadata must release its temporary sidecar")
+			}
+		})
+	}
+}
+
+func TestSetPrepareParamKindsFromReaderErrorsReleaseTemporarySidecar(t *testing.T) {
+	tests := []struct {
+		name       string
+		reader     io.Reader
+		rowCount   int
+		wantErr    error
+		wantString string
+	}{
+		{
+			name:     "nil reader",
+			rowCount: 2,
+			wantErr:  io.ErrClosedPipe,
+		},
+		{
+			name:       "row count mismatch",
+			reader:     bytes.NewReader([]byte{byte(PrepareParamFloat)}),
+			rowCount:   1,
+			wantString: "row count 1 does not match vector length 2",
+		},
+		{
+			name:     "truncated",
+			reader:   bytes.NewReader([]byte{byte(PrepareParamFloat)}),
+			rowCount: 2,
+			wantErr:  io.ErrUnexpectedEOF,
+		},
+		{
+			name:       "invalid kind",
+			reader:     bytes.NewReader([]byte{byte(PrepareParamFloat), 0xff}),
+			rowCount:   2,
+			wantString: "invalid prepared parameter row kind 255",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			vec := makePrepareParamKindReaderVector(t, mp, 2)
+			before := mp.CurrNB()
+			err := vec.SetPrepareParamKindsFromReader(tc.reader, tc.rowCount, mp)
+			if tc.wantErr != nil {
+				require.ErrorIs(t, err, tc.wantErr)
+			} else {
+				require.ErrorContains(t, err, tc.wantString)
+			}
+			require.Equal(t, before, mp.CurrNB(),
+				"failed metadata generation must release its temporary allocation")
+			require.Nil(t, vec.GetPrepareParamKinds())
+			require.Equal(t, PrepareParamNone, vec.GetPrepareParamKind())
+			vec.Free(mp)
+			require.Zero(t, mp.CurrNB())
+		})
+	}
+}
+
+func TestSetPrepareParamKindsFromReaderFailedGenerationCanReuse(t *testing.T) {
+	mp := mpool.MustNewZero()
+	vec := makePrepareParamKindReaderVector(t, mp, 2)
+	defer vec.Free(mp)
+	before := mp.CurrNB()
+
+	err := vec.SetPrepareParamKindsFromReader(
+		bytes.NewReader([]byte{byte(PrepareParamInteger)}), 2, mp)
+	require.ErrorIs(t, err, io.ErrUnexpectedEOF)
+	require.Equal(t, before, mp.CurrNB())
+
+	require.NoError(t, vec.SetPrepareParamKindsFromReader(
+		bytes.NewReader(kindsToBytes([]PrepareParamKind{PrepareParamInteger, PrepareParamFloat})),
+		2, mp))
+	require.Equal(t, []PrepareParamKind{PrepareParamInteger, PrepareParamFloat}, vec.GetPrepareParamKinds())
+	require.True(t, vec.prepareParamKindSeen)
+
+	require.NoError(t, vec.SetPrepareParamKindsFromReader(
+		bytes.NewReader(kindsToBytes([]PrepareParamKind{PrepareParamDecimal, PrepareParamDecimal})),
+		2, mp))
+	require.Nil(t, vec.GetPrepareParamKinds())
+	require.Equal(t, PrepareParamDecimal, vec.GetPrepareParamKind())
+	require.Equal(t, before, mp.CurrNB(),
+		"reuse must release the failed generation and collapsed sidecar")
+}
+
 func TestPrepareParamKindReordersWithoutSidecarAllocation(t *testing.T) {
 	mp := mpool.MustNewZero()
 	makeVector := func() *Vector {

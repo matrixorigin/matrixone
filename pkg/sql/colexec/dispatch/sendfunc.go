@@ -56,8 +56,11 @@ func prepareParamKindRemoteWireEnabled(proc *process.Process) bool {
 	if proc == nil {
 		return false
 	}
-	value, _ := moruntime.ServiceRuntime(proc.GetService()).
-		GetGlobalVariables(moruntime.MOProtocolVersion)
+	rt := moruntime.ServiceRuntime(proc.GetService())
+	if rt == nil {
+		return false
+	}
+	value, _ := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
 	version, ok := value.(int64)
 	return ok && version >= defines.MORPCVersion11
 }
@@ -70,14 +73,15 @@ func marshalRemoteBatch(proc *process.Process, bat *batch.Batch, buf *bytes.Buff
 	if bat == nil {
 		return nil, moerr.NewInvalidInputNoCtx("cannot marshal a nil remote batch")
 	}
-	if bat.HasPrepareParamKindMetadata() && !prepareParamKindRemoteWireEnabled(proc) {
+	wireEnabled := prepareParamKindRemoteWireEnabled(proc)
+	if bat.HasPrepareParamKindMetadata() && !wireEnabled {
 		return nil, moerr.NewInvalidStateNoCtx(
 			"prepared parameter provenance requires MORPCVersion11 for remote dispatch")
 	}
 	if _, err := bat.MarshalBinaryWithBuffer(buf, true); err != nil {
 		return nil, err
 	}
-	if prepareParamKindRemoteWireEnabled(proc) {
+	if wireEnabled {
 		if err := bat.AppendPrepareParamKindMetadata(buf); err != nil {
 			return nil, err
 		}

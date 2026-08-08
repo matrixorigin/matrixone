@@ -528,6 +528,28 @@ func TestVectorAllocationAccountPrepareParamShuffleFailureIsTransactional(t *tes
 	finalizeTestVectorAllocationAccount(t, state)
 }
 
+func TestVectorAllocationAccountPrepareParamReaderFailureIsTransactional(t *testing.T) {
+	// The vector data consumes the sole admitted allocation slot. The reader
+	// path must reject the sidecar allocation without changing either the
+	// vector's metadata or the account's charged bytes.
+	state := newTestVectorAllocationAccount(t, 1<<20, 1)
+	mp := mpool.MustNewZero()
+	vec := newAccountedTestVector(t, types.T_int8.ToType(), state.selection)
+	require.NoError(t, AppendFixedList(vec, []int8{1, 2}, nil, mp))
+	before := state.account.Snapshot()
+
+	err := vec.SetPrepareParamKindsFromReader(
+		bytes.NewReader([]byte{byte(PrepareParamInteger), byte(PrepareParamFloat)}),
+		2, mp)
+	require.ErrorIs(t, err, mpool.ErrAllocationMetadataSlots)
+	require.Equal(t, before.Used, state.account.Snapshot().Used)
+	require.Nil(t, vec.GetPrepareParamKinds())
+	require.Equal(t, PrepareParamNone, vec.GetPrepareParamKind())
+
+	vec.Free(mp)
+	finalizeTestVectorAllocationAccount(t, state)
+}
+
 func TestVectorAllocationAccountBitmapGrowthFailurePreservesOwner(t *testing.T) {
 	state := newTestVectorAllocationAccount(t, 1000, 8)
 	mp := mpool.MustNewZero()
