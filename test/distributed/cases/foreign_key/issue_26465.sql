@@ -107,6 +107,31 @@ select count(*) from information_schema.key_column_usage
       and table_name = 'candidates'
       and referenced_table_name is not null;
 
+-- A case-only CHANGE is a real rename for the FK catalog, even though the
+-- identifiers compare equal with lower_case_table_names enabled. Check both
+-- the child-side column_name and parent-side refer_column_name metadata.
+create table case_parent (
+    id int primary key,
+    v int unique
+);
+create table case_child (
+    id int primary key,
+    v int,
+    constraint fk_case_child foreign key (v) references case_parent(v)
+);
+alter table case_child change v V int;
+select column_name, referenced_column_name
+    from information_schema.key_column_usage
+    where constraint_schema = 'issue_26465'
+      and constraint_name = 'fk_case_child';
+alter table case_parent change v V int;
+select column_name, referenced_column_name
+    from information_schema.key_column_usage
+    where constraint_schema = 'issue_26465'
+      and constraint_name = 'fk_case_child';
+
+drop table case_child;
+drop table case_parent;
 drop table candidates;
 drop table users;
 drop table departments;

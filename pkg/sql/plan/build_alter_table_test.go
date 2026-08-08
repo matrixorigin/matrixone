@@ -149,6 +149,24 @@ func TestRenameChangeColumnStillUsesCopyAlter(t *testing.T) {
 	require.Equal(t, plan.AlterTable_COPY, logicPlan.GetDdl().GetAlterTable().AlgorithmType)
 }
 
+func TestCaseOnlyChangeColumnUsesCopyAlterAndUpdatesForeignKeyCatalog(t *testing.T) {
+	mock := newMetadataOnlyChangeColumnOptimizer()
+	logicPlan, err := buildSingleStmt(
+		mock,
+		t,
+		`ALTER TABLE metadata_only CHANGE v V INT;`,
+	)
+	require.NoError(t, err)
+
+	alter := logicPlan.GetDdl().GetAlterTable()
+	require.Equal(t, plan.AlterTable_COPY, alter.AlgorithmType)
+	require.Equal(t, "V", FindColumn(alter.CopyTableDef.Cols, "v").OriginName)
+	// These update the child-side column_name and parent-side refer_column_name
+	// entries respectively, so either side of an FK relation retains the new
+	// spelling after the COPY replacement.
+	require.Equal(t, getSqlForRenameColumn("tpch", "metadata_only", "v", "V"), alter.UpdateFkSqls)
+}
+
 func newMetadataOnlyChangeColumnOptimizer() *MockOptimizer {
 	mock := NewMockOptimizer(false)
 	mock.ctxt.objects["metadata_only"] = &ObjectRef{

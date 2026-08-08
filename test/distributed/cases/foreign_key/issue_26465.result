@@ -94,6 +94,31 @@ and table_name = 'candidates'
 and referenced_table_name is not null;
 ➤ count(*)[-5,64,0]  𝄀
 6
+create table case_parent (
+id int primary key,
+v int unique
+);
+create table case_child (
+id int primary key,
+v int,
+constraint fk_case_child foreign key (v) references case_parent(v)
+);
+alter table case_child change v V int;
+select column_name, referenced_column_name
+from information_schema.key_column_usage
+where constraint_schema = 'issue_26465'
+and constraint_name = 'fk_case_child';
+➤ column_name[12,64,0]  ¦  referenced_column_name[12,64,0]  𝄀
+V  ¦  v
+alter table case_parent change v V int;
+select column_name, referenced_column_name
+from information_schema.key_column_usage
+where constraint_schema = 'issue_26465'
+and constraint_name = 'fk_case_child';
+➤ column_name[12,64,0]  ¦  referenced_column_name[12,64,0]  𝄀
+V  ¦  V
+drop table case_child;
+drop table case_parent;
 drop table candidates;
 drop table users;
 drop table departments;

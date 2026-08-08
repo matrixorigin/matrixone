@@ -729,7 +729,10 @@ func isInplaceChangeColumn(
 	clause *tree.AlterTableChangeColumnClause,
 	tableDef *TableDef,
 ) (ok bool, err error) {
-	if clause.OldColumnName.ColName() != clause.NewColumn.Name.ColName() {
+	// CHANGE keeps the original spelling for catalog metadata. A case-only
+	// rename is therefore not equivalent to MODIFY when identifiers compare
+	// case-insensitively: it must use COPY to update foreign-key catalog rows.
+	if clause.OldColumnName.ColNameOrigin() != clause.NewColumn.Name.ColNameOrigin() {
 		return false, nil
 	}
 	return isInplaceColumnDefinition(ctx, clause.NewColumn, clause.Position, tableDef)
