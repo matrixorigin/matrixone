@@ -21,6 +21,8 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -241,12 +243,36 @@ func needSpecialHandling(funcExpr *plan.Function) bool {
 	if len(funcExpr.Args) > 1 {
 		col := funcExpr.Args[0].GetCol()
 		if col != nil && funcExpr.Args[1].GetCol() == nil {
-			if strings.Contains(col.Name, catalog.PrefixCBColName) || strings.Contains(col.Name, catalog.PrefixPriColName) {
+			if strings.Contains(col.Name, catalog.PrefixCBColName) ||
+				strings.Contains(col.Name, catalog.PrefixPriColName) {
+				return true
+			}
+			isIndexKey := col.Name == catalog.IndexTableIndexColName ||
+				strings.HasSuffix(col.Name, "."+catalog.IndexTableIndexColName)
+			if isIndexKey && isUnprintableStringLiteral(funcExpr.Args[1]) {
 				return true
 			}
 		}
 	}
 	return false
+}
+
+func isUnprintableStringLiteral(expr *plan.Expr) bool {
+	if expr == nil || expr.Typ.Id == int32(types.T_geometry) || expr.Typ.Id == int32(types.T_geometry32) {
+		return false
+	}
+	lit := expr.GetLit()
+	if lit == nil {
+		return false
+	}
+	val, ok := lit.Value.(*plan.Literal_Sval)
+	if !ok {
+		return false
+	}
+	if !utf8.ValidString(val.Sval) {
+		return true
+	}
+	return strings.IndexFunc(val.Sval, func(r rune) bool { return !unicode.IsPrint(r) }) >= 0
 }
 
 // generator function expression(Expr_F) explain information
