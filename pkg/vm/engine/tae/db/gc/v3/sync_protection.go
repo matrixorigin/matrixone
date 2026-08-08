@@ -15,6 +15,7 @@
 package gc
 
 import (
+	"bytes"
 	"encoding/base64"
 	"sync"
 	"sync/atomic"
@@ -46,13 +47,133 @@ type SyncProtection struct {
 	CreateTime time.Time         // Creation time for logging
 }
 
+// EnsureSyncProtection makes crash replay idempotent while still rejecting a
+// read reference that is already bound to different protection facts.
+func (m *SyncProtectionManager) EnsureSyncProtection(jobID, bfData string, validTS int64, taskID string) error {
+	guard, err := m.BeginProtection()
+	if err != nil {
+		return err
+	}
+	defer guard.Close()
+	return guard.EnsureSyncProtection(jobID, bfData, validTS, taskID)
+}
+
+func (m *SyncProtectionManager) ensureSyncProtection(jobID, bfData string, validTS int64, taskID string) (*SyncProtection, bool, error) {
+	registered, err := m.registerSyncProtection(jobID, bfData, validTS, taskID)
+	if err == nil {
+		return registered, true, nil
+	}
+	if !moerr.IsMoErrCode(err, moerr.ErrSyncProtectionExists) {
+		return nil, false, err
+	}
+	expected, decodeErr := base64.StdEncoding.DecodeString(bfData)
+	if decodeErr != nil {
+		return nil, false, moerr.NewSyncProtectionInvalidNoCtx()
+	}
+	m.RLock()
+	p := m.protections[jobID]
+	if p == nil || p.SoftDelete || p.ValidTS != validTS {
+		m.RUnlock()
+		return nil, false, err
+	}
+	actual, marshalErr := p.BF.Marshal()
+	m.RUnlock()
+	if marshalErr != nil || !bytes.Equal(actual, expected) {
+		return nil, false, err
+	}
+	return p, false, nil
+}
+
 // SyncProtectionManager manages sync protection entries
 type SyncProtectionManager struct {
 	sync.RWMutex
-	protections map[string]*SyncProtection // jobID -> protection
-	gcRunning   atomic.Bool                // Whether GC is running
-	ttl         time.Duration              // TTL for non-soft-deleted protections
-	maxCount    int                        // Maximum number of protections
+	protections       map[string]*SyncProtection // jobID -> protection
+	protectionBarrier sync.RWMutex               // excludes GC from snapshot-to-registration handoffs
+	gcRunning         atomic.Bool                // Whether GC is running
+	ttl               time.Duration              // TTL for non-soft-deleted protections
+	maxCount          int                        // Maximum number of protections
+}
+
+// SyncProtectionGuard prevents GC from starting while a caller enumerates a
+// snapshot and installs its matching protection.
+type SyncProtectionGuard struct {
+	manager *SyncProtectionManager
+	mu      sync.Mutex
+	once    sync.Once
+	owned   map[string]*SyncProtection
+	closed  bool
+}
+
+// BeginProtection acquires the read side of the GC handoff barrier without
+// waiting. Once GC has started (or is waiting to start), new work fails fast.
+func (m *SyncProtectionManager) BeginProtection() (*SyncProtectionGuard, error) {
+	if m == nil || !m.protectionBarrier.TryRLock() {
+		return nil, moerr.NewGCIsRunningNoCtx()
+	}
+	if m.gcRunning.Load() {
+		m.protectionBarrier.RUnlock()
+		return nil, moerr.NewGCIsRunningNoCtx()
+	}
+	return &SyncProtectionGuard{manager: m}, nil
+}
+
+func (g *SyncProtectionGuard) EnsureSyncProtection(jobID, bfData string, validTS int64, taskID string) error {
+	if g == nil || g.manager == nil {
+		return moerr.NewSyncProtectionInvalidNoCtx()
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.closed {
+		return moerr.NewSyncProtectionInvalidNoCtx()
+	}
+	protection, created, err := g.manager.ensureSyncProtection(jobID, bfData, validTS, taskID)
+	if err == nil && created {
+		if g.owned == nil {
+			g.owned = make(map[string]*SyncProtection)
+		}
+		g.owned[jobID] = protection
+	}
+	return err
+}
+
+// RollbackSyncProtection removes the exact registration created by this guard.
+// An idempotently accepted preexisting registration belongs to another
+// generation and is never removed. The guard's GC barrier makes immediate
+// removal safe: GC cannot have observed a new registration while the
+// admission/replay handoff is incomplete.
+func (g *SyncProtectionGuard) RollbackSyncProtection(jobID string) error {
+	if g == nil || g.manager == nil {
+		return moerr.NewSyncProtectionInvalidNoCtx()
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.closed {
+		return moerr.NewSyncProtectionInvalidNoCtx()
+	}
+	owned := g.owned[jobID]
+	if owned == nil {
+		return nil
+	}
+	g.manager.Lock()
+	if g.manager.protections[jobID] == owned {
+		delete(g.manager.protections, jobID)
+	}
+	g.manager.Unlock()
+	delete(g.owned, jobID)
+	return nil
+}
+
+func (g *SyncProtectionGuard) Close() {
+	if g == nil || g.manager == nil {
+		return
+	}
+	g.once.Do(func() {
+		g.mu.Lock()
+		defer g.mu.Unlock()
+		g.closed = true
+		g.owned = nil
+		g.manager.protectionBarrier.RUnlock()
+	})
 }
 
 // NewSyncProtectionManager creates a new SyncProtectionManager
@@ -66,7 +187,13 @@ func NewSyncProtectionManager() *SyncProtectionManager {
 
 // SetGCRunning sets the GC running state
 func (m *SyncProtectionManager) SetGCRunning(running bool) {
-	m.gcRunning.Store(running)
+	if running {
+		m.protectionBarrier.Lock()
+		m.gcRunning.Store(true)
+	} else {
+		m.gcRunning.Store(false)
+		m.protectionBarrier.Unlock()
+	}
 	logutil.Debug(
 		"GC-Sync-Protection-GC-State-Changed",
 		zap.Bool("running", running),
@@ -88,6 +215,21 @@ func (m *SyncProtectionManager) RegisterSyncProtection(
 	validTS int64,
 	taskID string,
 ) error {
+	guard, err := m.BeginProtection()
+	if err != nil {
+		return err
+	}
+	defer guard.Close()
+	_, err = m.registerSyncProtection(jobID, bfData, validTS, taskID)
+	return err
+}
+
+func (m *SyncProtectionManager) registerSyncProtection(
+	jobID string,
+	bfData string,
+	validTS int64,
+	taskID string,
+) (*SyncProtection, error) {
 	m.Lock()
 	defer m.Unlock()
 
@@ -98,7 +240,7 @@ func (m *SyncProtectionManager) RegisterSyncProtection(
 			zap.String("task-id", taskID),
 			zap.String("job-id", jobID),
 		)
-		return moerr.NewGCIsRunningNoCtx()
+		return nil, moerr.NewGCIsRunningNoCtx()
 	}
 
 	// Check if job already exists
@@ -108,7 +250,7 @@ func (m *SyncProtectionManager) RegisterSyncProtection(
 			zap.String("task-id", taskID),
 			zap.String("job-id", jobID),
 		)
-		return moerr.NewSyncProtectionExistsNoCtx(jobID)
+		return nil, moerr.NewSyncProtectionExistsNoCtx(jobID)
 	}
 
 	// Check max count
@@ -120,7 +262,7 @@ func (m *SyncProtectionManager) RegisterSyncProtection(
 			zap.Int("current-count", len(m.protections)),
 			zap.Int("max-count", m.maxCount),
 		)
-		return moerr.NewSyncProtectionMaxCountNoCtx(m.maxCount)
+		return nil, moerr.NewSyncProtectionMaxCountNoCtx(m.maxCount)
 	}
 
 	// Check if BF data is empty
@@ -130,7 +272,7 @@ func (m *SyncProtectionManager) RegisterSyncProtection(
 			zap.String("task-id", taskID),
 			zap.String("job-id", jobID),
 		)
-		return moerr.NewSyncProtectionInvalidNoCtx()
+		return nil, moerr.NewSyncProtectionInvalidNoCtx()
 	}
 
 	// Decode base64 BloomFilter data
@@ -142,7 +284,7 @@ func (m *SyncProtectionManager) RegisterSyncProtection(
 			zap.String("job-id", jobID),
 			zap.Error(err),
 		)
-		return moerr.NewSyncProtectionInvalidNoCtx()
+		return nil, moerr.NewSyncProtectionInvalidNoCtx()
 	}
 
 	// Unmarshal BloomFilter (using index.BloomFilter which is based on xorfilter - deterministic)
@@ -155,7 +297,7 @@ func (m *SyncProtectionManager) RegisterSyncProtection(
 			zap.String("job-id", jobID),
 			zap.Int("size", len(bfBytes)),
 		)
-		return moerr.NewSyncProtectionInvalidNoCtx()
+		return nil, moerr.NewSyncProtectionInvalidNoCtx()
 	}
 
 	var bf index.BloomFilter
@@ -166,16 +308,17 @@ func (m *SyncProtectionManager) RegisterSyncProtection(
 			zap.String("job-id", jobID),
 			zap.Error(err),
 		)
-		return moerr.NewSyncProtectionInvalidNoCtx()
+		return nil, moerr.NewSyncProtectionInvalidNoCtx()
 	}
 
-	m.protections[jobID] = &SyncProtection{
+	protection := &SyncProtection{
 		JobID:      jobID,
 		BF:         bf,
 		ValidTS:    validTS,
 		SoftDelete: false,
 		CreateTime: time.Now(),
 	}
+	m.protections[jobID] = protection
 
 	logutil.Info(
 		"GC-Sync-Protection-Registered",
@@ -185,7 +328,7 @@ func (m *SyncProtectionManager) RegisterSyncProtection(
 		zap.Int("bf-size", len(bfBytes)),
 		zap.Int("total-protections", len(m.protections)),
 	)
-	return nil
+	return protection, nil
 }
 
 // RenewSyncProtection renews the valid timestamp of a sync protection
@@ -239,6 +382,25 @@ func (m *SyncProtectionManager) UnregisterSyncProtection(jobID string) error {
 
 	p.SoftDelete = true
 
+	logutil.Info(
+		"GC-Sync-Protection-Soft-Deleted",
+		zap.String("job-id", jobID),
+		zap.Int64("valid-ts", p.ValidTS),
+	)
+	return nil
+}
+
+// ReleaseSyncProtection is the idempotent terminal form used by durable read
+// leases. A replay may repeat release after the protection was already soft
+// deleted or cleaned.
+func (m *SyncProtectionManager) ReleaseSyncProtection(jobID string) error {
+	m.Lock()
+	defer m.Unlock()
+	p := m.protections[jobID]
+	if p == nil || p.SoftDelete {
+		return nil
+	}
+	p.SoftDelete = true
 	logutil.Info(
 		"GC-Sync-Protection-Soft-Deleted",
 		zap.String("job-id", jobID),
