@@ -28,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
+	"github.com/stretchr/testify/require"
 )
 
 func TestGetNodeBasicInfoApplyType(t *testing.T) {
@@ -1012,5 +1013,56 @@ func TestExplainOrderedGroupConcat(t *testing.T) {
 		if err == nil {
 			t.Fatal("expected invalid ordered group_concat argument index")
 		}
+	})
+}
+
+func TestExplainOrderedPercentile(t *testing.T) {
+	ctx := context.Background()
+	value := &plan2.Expr{
+		Typ:  plan2.Type{Id: int32(types.T_int64)},
+		Expr: &plan2.Expr_Col{Col: &plan2.ColRef{Name: "tw.v"}},
+	}
+	percentile := plan2.MakePlan2Float64ConstExprWithType(0.95)
+
+	for _, tc := range []struct {
+		name string
+		fn   string
+		desc byte
+		want string
+	}{
+		{name: "ascending continuous", fn: "percentile_cont", want: "percentile_cont(0.95) WITHIN GROUP (ORDER BY tw.v ASC)"},
+		{name: "descending discrete", fn: "percentile_disc", desc: 1, want: "percentile_disc(0.95) WITHIN GROUP (ORDER BY tw.v DESC)"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			registered, err := function.GetFunctionByName(ctx, tc.fn,
+				[]types.Type{types.T_int64.ToType(), types.T_float64.ToType()})
+			require.NoError(t, err)
+			fn := &plan2.Function{
+				Func: &plan2.ObjectRef{Obj: registered.GetEncodedOverloadID(), ObjName: tc.fn},
+				Args: []*plan2.Expr{value, percentile}, AggConfig: []byte{tc.desc},
+			}
+			buf := bytes.NewBuffer(nil)
+			require.NoError(t, explainOrderedPercentile(ctx, fn, &ExplainOptions{}, buf))
+			require.Equal(t, tc.want, buf.String())
+
+			// Exercise the normal EXPLAIN dispatcher as well as the formatter
+			// helper. Ordered percentiles are STANDARD_FUNCTIONs with a special
+			// WITHIN GROUP rendering.
+			expr := &plan2.Expr{
+				Typ:  plan2.Type{Id: int32(types.T_float64)},
+				Expr: &plan2.Expr_F{F: fn},
+			}
+			buf.Reset()
+			require.NoError(t, describeExpr(ctx, expr, &ExplainOptions{}, buf))
+			require.Equal(t, tc.want, buf.String())
+		})
+	}
+
+	t.Run("invalid argument count", func(t *testing.T) {
+		err := explainOrderedPercentile(ctx, &plan2.Function{
+			Func: &plan2.ObjectRef{ObjName: "percentile_cont"},
+			Args: []*plan2.Expr{value},
+		}, &ExplainOptions{}, bytes.NewBuffer(nil))
+		require.Error(t, err)
 	})
 }

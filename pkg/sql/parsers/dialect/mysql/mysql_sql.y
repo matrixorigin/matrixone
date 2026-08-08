@@ -690,7 +690,7 @@ func sqlTaskInt64(v any) int64 {
 %type <direction> asc_desc_opt
 %type <nullsPosition> nulls_first_last_opt
 %type <order> order
-%type <orderBy> order_list order_by_clause order_by_opt
+%type <orderBy> order_list order_by_clause order_by_opt within_group_opt
 %type <limit> limit_opt limit_clause
 %type <rankOption> rank_opt
 %type <str> insert_column optype_opt
@@ -953,6 +953,10 @@ func sqlTaskInt64(v any) int64 {
 %token <str> QUERY_RESULT
 %left <str> RETURNING
 %token <str> ARRAY
+// Ordered-set aggregate syntax. Keep these tokens at the end of the token
+// declarations so adding them does not renumber the existing generated lexer
+// constants and downstream serialized plans.
+%token <str> WITHIN PERCENTILE_CONT PERCENTILE_DISC
 %type<tableLock> table_lock_elem
 %type<tableLocks> table_lock_list
 %type<tableLockType> table_lock_type
@@ -6602,6 +6606,15 @@ order_by_opt:
 |   order_by_clause
     {
         $$ = $1
+    }
+
+within_group_opt:
+    {
+        $$ = nil
+    }
+|   WITHIN GROUP '(' order_by_clause ')'
+    {
+        $$ = $4
     }
 
 order_by_clause:
@@ -12505,17 +12518,46 @@ window_spec:
     }
 
 function_call_aggregate:
-    GROUP_CONCAT '(' func_type_opt expression_list order_by_opt separator_opt ')' window_spec_opt
+    GROUP_CONCAT '(' func_type_opt expression_list order_by_opt separator_opt ')' within_group_opt window_spec_opt
     {
-	    name := tree.NewUnresolvedColName($1)
-	        $$ = &tree.FuncExpr{
-	        Func: tree.FuncName2ResolvableFunctionReference(name),
+        name := tree.NewUnresolvedColName($1)
+        orderBy := $5
+        if $8 != nil {
+            orderBy = $8
+        }
+        $$ = &tree.FuncExpr{
+            Func: tree.FuncName2ResolvableFunctionReference(name),
             FuncName: tree.NewCStr($1, 1),
-	        Exprs: append($4,tree.NewNumVal($6, $6, false, tree.P_char)),
-	        Type: $3,
-	        WindowSpec: $8,
-            OrderBy:$5,
-	    }
+            Exprs: append($4,tree.NewNumVal($6, $6, false, tree.P_char)),
+            Type: $3,
+            WindowSpec: $9,
+            OrderBy: orderBy,
+			WithinGroup: $8 != nil,
+        }
+    }
+|   PERCENTILE_CONT '(' expression ')' WITHIN GROUP '(' order_by_clause ')' window_spec_opt
+    {
+        name := tree.NewUnresolvedColName($1)
+        $$ = &tree.FuncExpr{
+            Func: tree.FuncName2ResolvableFunctionReference(name),
+            FuncName: tree.NewCStr($1, 1),
+            Exprs: tree.Exprs{$3},
+            WindowSpec: $10,
+            OrderBy: $8,
+            WithinGroup: true,
+        }
+    }
+|   PERCENTILE_DISC '(' expression ')' WITHIN GROUP '(' order_by_clause ')' window_spec_opt
+    {
+        name := tree.NewUnresolvedColName($1)
+        $$ = &tree.FuncExpr{
+            Func: tree.FuncName2ResolvableFunctionReference(name),
+            FuncName: tree.NewCStr($1, 1),
+            Exprs: tree.Exprs{$3},
+            WindowSpec: $10,
+            OrderBy: $8,
+            WithinGroup: true,
+        }
     }
 |  CLUSTER_CENTERS '(' func_type_opt expression_list order_by_opt kmeans_opt ')' window_spec_opt
       {
@@ -15411,6 +15453,8 @@ not_keyword:
 |   BITMAP_BIT_POSITION
 |   BITMAP_BUCKET_NUMBER
 |   BITMAP_COUNT
+|   PERCENTILE_CONT
+|   PERCENTILE_DISC
 
 //mo_keywords:
 //    PROPERTIES

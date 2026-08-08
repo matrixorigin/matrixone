@@ -750,6 +750,7 @@ INSERT INTO information_schema.KEYWORDS VALUES
 ('WHILE'                                  , 1),
 ('WINDOW'                                 , 1),
 ('WITH'                                   , 1),
+('WITHIN'                                 , 1),
 ('WITHOUT'                                , 0),
 ('WORK'                                   , 0),
 ('WRAPPER'                                , 0),

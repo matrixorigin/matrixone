@@ -804,9 +804,13 @@ const (
 	MAX_BY          = 559
 	MAX_BY_NON_NULL = 560
 
+	// SQL ordered-set aggregate functions.
+	PERCENTILE_CONT = 562
+	PERCENTILE_DISC = 563
+
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
-	FUNCTION_END_NUMBER = 562
+	FUNCTION_END_NUMBER = 564
 )
 
 // functionIdRegister is what function we have registered already.
@@ -907,6 +911,8 @@ var functionIdRegister = map[string]int32{
 	"mo_is_legacy_temporary_table": MO_IS_LEGACY_TEMPORARY_TABLE,
 	"max_by":                       MAX_BY,
 	"max_by_non_null":              MAX_BY_NON_NULL,
+	"percentile_cont":              PERCENTILE_CONT,
+	"percentile_disc":              PERCENTILE_DISC,
 	// count window
 	"rank":         RANK,
 	"row_number":   ROW_NUMBER,

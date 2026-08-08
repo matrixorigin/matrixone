@@ -4794,6 +4794,27 @@ func TestGroupConcatDeparseRoundTrip(t *testing.T) {
 	}
 }
 
+func TestOrderedSetAggregateDeparseRoundTrip(t *testing.T) {
+	for _, sql := range []string{
+		"select group_concat(v) within group (order by k desc) from t",
+		"select percentile_cont(0.95) within group (order by v) from t",
+		"select percentile_disc(1) within group (order by v desc) from t",
+	} {
+		ast, err := ParseOne(context.Background(), sql, 1)
+		require.NoError(t, err, sql)
+
+		fmtCtx := tree.NewFmtCtx(dialect.MYSQL, tree.WithQuoteString(true))
+		ast.Format(fmtCtx)
+		formatted := fmtCtx.String()
+		roundTripped, err := ParseOne(context.Background(), formatted, 1)
+		require.NoError(t, err, formatted)
+		roundTripFmtCtx := tree.NewFmtCtx(dialect.MYSQL, tree.WithQuoteString(true))
+		roundTripped.Format(roundTripFmtCtx)
+		require.Equal(t, formatted, roundTripFmtCtx.String())
+		require.Contains(t, strings.ToLower(formatted), "within group (order by")
+	}
+}
+
 // TestFullTextMatchDeparseRoundTrip is the #24823 regression on the DEFAULT tree.String path
 // (not only the WithSingleQuoteString path): MATCH(...) AGAINST('...') must deparse to a
 // quoted, re-parseable string literal so re-serialized statements (CREATE TABLE AS SELECT,
