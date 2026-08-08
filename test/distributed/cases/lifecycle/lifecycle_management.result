@@ -1,0 +1,137 @@
+drop account if exists lifecycle_bvt_acc;
+create account lifecycle_bvt_acc admin_name = 'admin' identified by '111';
+select mo_feature_registry_upsert(
+'lifecycle',
+'TAE object Lifecycle',
+'{"archive_stages":[]}',
+false
+);
+➤ mo_feature_registry_upsert(lifecycle, TAE object Lifecycle, {"archive_stages":[]}, false)[12,-1,0]  𝄀
+{
+  "now": {
+    "feature_code": "LIFECYCLE",
+    "description": "TAE object Lifecycle",
+    "scope_spec": {
+      "archive_stages": []
+    },
+    "enabled": false
+  },
+  "old": {
+    "feature_code": "LIFECYCLE",
+    "description": "TAE object lifecycle retirement",
+    "scope_spec": {
+      "archive_stages": []
+    },
+    "enabled": false
+  }
+}
+
+drop database if exists lifecycle_bvt;
+create database lifecycle_bvt;
+use lifecycle_bvt;
+create table events(
+id bigint primary key,
+created_at timestamp not null,
+payload varchar(32)
+);
+alter table events set lifecycle (
+column created_at,
+expire after interval 7 day,
+action delete
+);
+not supported: TAE object Lifecycle retirement is disabled by the cluster release gate
+select mo_feature_registry_upsert(
+'lifecycle',
+'TAE object Lifecycle',
+'{"archive_stages":[]}',
+true
+);
+➤ mo_feature_registry_upsert(lifecycle, TAE object Lifecycle, {"archive_stages":[]}, true)[12,-1,0]  𝄀
+{
+  "now": {
+    "feature_code": "LIFECYCLE",
+    "description": "TAE object Lifecycle",
+    "scope_spec": {
+      "archive_stages": []
+    },
+    "enabled": true
+  },
+  "old": {
+    "feature_code": "LIFECYCLE",
+    "description": "TAE object Lifecycle",
+    "scope_spec": {
+      "archive_stages": []
+    },
+    "enabled": false
+  }
+}
+
+alter table events set lifecycle (
+column created_at,
+expire after interval 7 day,
+action delete
+);
+show lifecycle for table events;
+➤ action[12,0,0]  ¦  state[12,0,0]  ¦  expire_after_days[-5,0,0]  ¦  stage_id[-5,0,0]  ¦  purge_after_days[-5,0,0]  ¦  binding_generation[-5,0,0]  ¦  updated_at[12,0,0]  𝄀
+DELETE  ¦  ACTIVE  ¦  7  ¦  null  ¦  null  ¦  1  ¦  2026-08-04 15:07:03
+alter table events pause lifecycle;
+show lifecycle for table events;
+➤ action[12,0,0]  ¦  state[12,0,0]  ¦  expire_after_days[-5,0,0]  ¦  stage_id[-5,0,0]  ¦  purge_after_days[-5,0,0]  ¦  binding_generation[-5,0,0]  ¦  updated_at[12,0,0]  𝄀
+DELETE  ¦  PAUSED  ¦  7  ¦  null  ¦  null  ¦  2  ¦  2026-08-04 15:07:03
+alter table events resume lifecycle;
+show lifecycle for table events;
+➤ action[12,0,0]  ¦  state[12,0,0]  ¦  expire_after_days[-5,0,0]  ¦  stage_id[-5,0,0]  ¦  purge_after_days[-5,0,0]  ¦  binding_generation[-5,0,0]  ¦  updated_at[12,0,0]  𝄀
+DELETE  ¦  ACTIVE  ¦  7  ¦  null  ¦  null  ¦  3  ¦  2026-08-04 15:07:03
+create index idx_events_created_at on events(created_at);
+not supported: CREATE INDEX on a Lifecycle-bound table; UNSET LIFECYCLE first
+show lifecycle datasets for table events limit 1;
+➤ dataset_id[12,0,0]  ¦  state[12,0,0]  ¦  row_count[-5,0,0]  ¦  logical_bytes[-5,0,0]  ¦  purge_eligible_at[12,0,0]  ¦  manifest_key[12,0,0]
+show lifecycle jobs limit 1;
+➤ root_id[12,0,0]  ¦  mode[12,0,0]  ¦  state[12,0,0]  ¦  cleanup_after[12,0,0]  ¦  last_error[12,0,0]
+create table indexed_events(
+id bigint primary key,
+created_at timestamp not null,
+key idx_created_at(created_at)
+);
+alter table indexed_events set lifecycle (
+column created_at,
+expire after interval 7 day,
+action delete
+);
+not supported: Lifecycle on tables with secondary indexes
+select mo_feature_registry_upsert(
+'lifecycle',
+'TAE object Lifecycle',
+'{"archive_stages":[]}',
+false
+);
+➤ mo_feature_registry_upsert(lifecycle, TAE object Lifecycle, {"archive_stages":[]}, false)[12,-1,0]  𝄀
+{
+  "now": {
+    "feature_code": "LIFECYCLE",
+    "description": "TAE object Lifecycle",
+    "scope_spec": {
+      "archive_stages": []
+    },
+    "enabled": false
+  },
+  "old": {
+    "feature_code": "LIFECYCLE",
+    "description": "TAE object Lifecycle",
+    "scope_spec": {
+      "archive_stages": []
+    },
+    "enabled": true
+  }
+}
+
+alter table events pause lifecycle;
+alter table events resume lifecycle;
+not supported: TAE object Lifecycle retirement is disabled by the cluster release gate
+alter table events unset lifecycle;
+show lifecycle for table events;
+➤ action[12,0,0]  ¦  state[12,0,0]  ¦  expire_after_days[-5,0,0]  ¦  stage_id[-5,0,0]  ¦  purge_after_days[-5,0,0]  ¦  binding_generation[-5,0,0]  ¦  updated_at[12,0,0]
+drop table indexed_events;
+drop table events;
+drop database lifecycle_bvt;
+drop account lifecycle_bvt_acc;

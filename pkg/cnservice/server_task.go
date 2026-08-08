@@ -45,6 +45,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/metric/mometric"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/idxcron"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
+	lifecyclepkg "github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/lifecycle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"go.uber.org/zap"
 )
@@ -334,6 +335,16 @@ func (s *service) registerExecutorsLocked() {
 			return moerr.AttachCause(ctx, err)
 		},
 	)
+	s.task.runner.RegisterExecutor(
+		task.TaskCode_LifecycleCoordinator,
+		disttae.LifecycleTaskExecutorFactory(
+			s.storeEngine,
+			s._txnClient,
+			s.sqlExecutor,
+			s.fileService,
+			lifecyclepkg.MOFaultInjector{},
+		),
+	)
 
 	s.task.runner.RegisterExecutor(task.TaskCode_InitCdc,
 		frontend.CDCTaskExecutorFactory(
@@ -395,5 +406,12 @@ func (s *service) registerExecutorsLocked() {
 		databranchutils.LineageGCTaskCronExpr,
 	); err != nil {
 		s.logger.Error("failed to create data branch lineage GC task", zap.Error(err))
+	}
+	if err := ts.CreateCronTask(
+		ctx,
+		lifecyclepkg.CoordinatorTaskMetadata(),
+		lifecyclepkg.CoordinatorTaskCronExpr,
+	); err != nil {
+		s.logger.Error("failed to create TAE object lifecycle task", zap.Error(err))
 	}
 }

@@ -490,6 +490,14 @@ func (tcc *TxnCompilerContext) ResolveById(tableId uint64, snapshot *plan2.Snaps
 	if err != nil {
 		return nil, nil, err
 	}
+	if err = plan2.ValidateLifecycleRestoreTableAccess(
+		tempCtx,
+		tcc.execCtx.proc != nil && tcc.execCtx.proc.Base != nil &&
+			tcc.execCtx.proc.Base.IsFrontend,
+		tableName,
+	); err != nil {
+		return nil, nil, err
+	}
 
 	// convert
 	returnTableID := int64(tableId)
@@ -534,6 +542,14 @@ func (tcc *TxnCompilerContext) ResolveSubscriptionTableById(tableId uint64, subM
 }
 
 func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string, snapshot *plan2.Snapshot) (*plan2.ObjectRef, *plan2.TableDef, error) {
+	if err := plan2.ValidateLifecycleRestoreTableAccess(
+		tcc.execCtx.reqCtx,
+		tcc.execCtx.proc != nil && tcc.execCtx.proc.Base != nil &&
+			tcc.execCtx.proc.Base.IsFrontend,
+		tableName,
+	); err != nil {
+		return nil, nil, err
+	}
 	start := time.Now()
 	defer func() {
 		end := time.Since(start).Seconds()

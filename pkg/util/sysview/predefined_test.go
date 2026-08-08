@@ -48,6 +48,17 @@ func TestInformationSchemaMetadataViewsHideTemporaryTables(t *testing.T) {
 	}
 }
 
+func TestInformationSchemaMetadataViewsHideLifecycleRestoreStaging(t *testing.T) {
+	for _, ddl := range []string{
+		InformationSchemaTablesDDL,
+		InformationSchemaColumnsDDL,
+		InformationSchemaStatisticsDDL,
+		InformationSchemaTableConstraintsDDL,
+	} {
+		assert.Contains(t, ddl, catalog.LifecycleRestoreTableSQLRegexpPattern)
+	}
+}
+
 func TestInformationSchemaStatisticsDDL_ContainsIdxAlgo(t *testing.T) {
 	assert.True(t, strings.Contains(InformationSchemaStatisticsDDL, "`idx`.`algo` AS `INDEX_TYPE`"))
 	assert.False(t, strings.Contains(InformationSchemaStatisticsDDL, "NULL AS `INDEX_TYPE`"))
