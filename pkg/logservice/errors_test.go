@@ -48,6 +48,11 @@ func TestErrorConversion(t *testing.T) {
 			assert.Equal(t, err, rec.err)
 		}
 	}
+
+	notSupported := moerr.NewNotSupported(ctx, "new rpc method")
+	code, message := toErrorCode(notSupported)
+	err := toError(ctx, pb.Response{ErrorCode: code, ErrorMessage: message})
+	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported))
 }
 
 func TestUnknownErrorIsHandled(t *testing.T) {

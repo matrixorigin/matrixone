@@ -18,7 +18,9 @@ import (
 	"container/list"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"math"
 	"sort"
 	"strings"
@@ -69,6 +71,36 @@ type accountingMysqlWriter struct {
 	packets       int64
 	calls         int
 	outputTracker *responseOutputWaitTracker
+}
+
+func TestLogStatementStringStatusErrorAccounting(t *testing.T) {
+	const service = "test-statement-status-error-accounting"
+	InitServerLevelVars(service)
+	setPu(service, config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil))
+
+	for _, tc := range []struct {
+		name string
+		err  error
+	}{
+		{name: "nil error"},
+		{name: "direct EOF", err: io.EOF},
+		{name: "wrapped EOF", err: fmt.Errorf("client stream closed: %w", io.EOF)},
+		{name: "unexpected EOF", err: io.ErrUnexpectedEOF},
+		{name: "ordinary error", err: errors.New("statement failed")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			writer := &accountingMysqlWriter{}
+			ses := NewSession(context.Background(), service, writer, nil)
+			defer ses.Close()
+
+			require.NotPanics(t, func() {
+				logStatementStringStatus(
+					context.Background(), ses, "select 1", fail, tc.err)
+			})
+			require.Equal(t, 1, writer.calls,
+				"error logging must not skip statement accounting")
+		})
+	}
 }
 
 func (w *accountingMysqlWriter) CalculateOutTrafficBytes(reset bool) (int64, int64) {

@@ -267,11 +267,16 @@ func (txn *Transaction) WriteBatch(
 	tableName string,
 	bat *batch.Batch,
 	tnStore DNStore) (genRowidVec *vector.Vector, err error) {
-	return txn.writeBatchWithAutoIncrEpochKnown(typ, note, accountId, databaseId, tableId,
+	ctx := context.Background()
+	if txn.proc != nil && txn.proc.Ctx != nil {
+		ctx = txn.proc.Ctx
+	}
+	return txn.writeBatchWithAutoIncrEpochKnown(ctx, typ, note, accountId, databaseId, tableId,
 		databaseName, tableName, bat, tnStore, 0, false)
 }
 
 func (txn *Transaction) writeBatchWithAutoIncrEpoch(
+	ctx context.Context,
 	typ int, note string,
 	accountId uint32,
 	databaseId uint64,
@@ -282,11 +287,12 @@ func (txn *Transaction) writeBatchWithAutoIncrEpoch(
 	tnStore DNStore,
 	autoIncrEpoch uint32,
 ) (genRowidVec *vector.Vector, err error) {
-	return txn.writeBatchWithAutoIncrEpochKnown(typ, note, accountId, databaseId, tableId,
+	return txn.writeBatchWithAutoIncrEpochKnown(ctx, typ, note, accountId, databaseId, tableId,
 		databaseName, tableName, bat, tnStore, autoIncrEpoch, true)
 }
 
 func (txn *Transaction) writeBatchWithAutoIncrEpochKnown(
+	ctx context.Context,
 	typ int, note string,
 	accountId uint32,
 	databaseId uint64,
@@ -298,6 +304,12 @@ func (txn *Transaction) writeBatchWithAutoIncrEpochKnown(
 	autoIncrEpoch uint32,
 	autoIncrEpochKnown bool,
 ) (genRowidVec *vector.Vector, err error) {
+	if ctx == nil {
+		return nil, moerr.NewInvalidInputNoCtx("disttae workspace write context is nil")
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if err := txn.requireAutoIncrEpochFenceCommit(autoIncrEpoch, autoIncrEpochKnown); err != nil {
 		return nil, err
 	}
@@ -329,6 +341,7 @@ func (txn *Transaction) writeBatchWithAutoIncrEpochKnown(
 		// internal SQL on the current txn and reenter txn.Lock via
 		// UpdateSnapshotWriteOffset. Resolve the PK position before taking txn.Lock.
 		pkCheckPos, pkCheckReady, err = txn.resolvePKCheckPosForWrite(
+			ctx,
 			typ,
 			accountId,
 			databaseName,
@@ -646,7 +659,7 @@ func checkPKDup(
 }
 
 // checkDup check whether the txn.writes has duplicate pk entry
-func (txn *Transaction) checkDup() error {
+func (txn *Transaction) checkDup(ctx context.Context) error {
 	start := time.Now()
 	defer func() {
 		v2.TxnCheckPKDupDurationHistogram.Observe(time.Since(start).Seconds())
@@ -664,7 +677,7 @@ func (txn *Transaction) checkDup() error {
 			return idx, nil
 		}
 		if _, ok := tablesDef[e.tableId]; !ok {
-			tbl, err := txn.getTable(e.accountId, e.databaseName, e.tableName)
+			tbl, err := txn.getTable(ctx, e.accountId, e.databaseName, e.tableName)
 			if err != nil {
 				return -1, err
 			}
@@ -1050,7 +1063,7 @@ func (txn *Transaction) dumpInsertBatchLocked(
 	// Resolve every table that will be flushed BEFORE mutating txn.writes:
 	// getTable must never run while this goroutine holds the lock. See
 	// resolveDumpTablesLocked for the window contract.
-	tables, ok, err := txn.resolveDumpTablesLocked(offset, skipTable, INSERT)
+	tables, ok, err := txn.resolveDumpTablesLocked(ctx, offset, skipTable, INSERT)
 	if err != nil {
 		return err
 	}
@@ -1194,7 +1207,7 @@ func (txn *Transaction) dumpDeleteBatchLocked(
 
 	// See the comment in dumpInsertBatchLocked: tables must be resolved
 	// while txn.writes is still consistent, with the lock released.
-	tables, ok, err := txn.resolveDumpTablesLocked(offset, nil, DELETE)
+	tables, ok, err := txn.resolveDumpTablesLocked(ctx, offset, nil, DELETE)
 	if err != nil {
 		return err
 	}
@@ -1345,6 +1358,7 @@ func (txn *Transaction) dumpDeleteBatchLocked(
 // offset during the window, so there is nothing left this dump round may
 // safely touch.
 func (txn *Transaction) resolveDumpTablesLocked(
+	ctx context.Context,
 	offset int,
 	skipTable map[uint64]bool,
 	typ int,
@@ -1384,7 +1398,7 @@ func (txn *Transaction) resolveDumpTablesLocked(
 
 	txn.Unlock()
 	for _, k := range keys {
-		tbl, terr := txn.getTable(k.accountId, k.dbName, k.name)
+		tbl, terr := txn.getTable(ctx, k.accountId, k.dbName, k.name)
 		if terr != nil {
 			txn.Lock()
 			return nil, false, terr
@@ -1405,12 +1419,19 @@ func (txn *Transaction) resolveDumpTablesLocked(
 }
 
 func (txn *Transaction) getTable(
+	ctx context.Context,
 	id uint32,
 	dbName string,
 	tbName string,
 ) (engine.Relation, error) {
 	if txn.engine == nil {
 		return nil, moerr.NewInternalErrorNoCtx("disttae txn engine is nil")
+	}
+	if ctx == nil {
+		return nil, moerr.NewInvalidInputNoCtx("disttae table lookup context is nil")
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
 
 	if injected, rogueUpdate, errorOut := objectio.CNReenterSnapshotOffsetOnGetTableInjected(); injected {
@@ -1443,11 +1464,7 @@ func (txn *Transaction) getTable(
 		return nil, moerr.NewInternalErrorNoCtx("disttae txn operator is nil")
 	}
 
-	ctx := context.WithValue(
-		context.Background(),
-		defines.TenantIDKey{},
-		id,
-	)
+	ctx = defines.AttachAccountId(ctx, id)
 
 	database, err := txn.engine.Database(ctx, dbName, txnOp)
 	if err != nil {
@@ -1461,6 +1478,7 @@ func (txn *Transaction) getTable(
 }
 
 func (txn *Transaction) resolvePKCheckPosForWrite(
+	ctx context.Context,
 	typ int,
 	accountId uint32,
 	databaseName, tableName string,
@@ -1484,15 +1502,11 @@ func (txn *Transaction) resolvePKCheckPosForWrite(
 		return -1, false, nil
 	}
 
-	tbl, err := txn.getTable(accountId, databaseName, tableName)
+	tbl, err := txn.getTable(ctx, accountId, databaseName, tableName)
 	if err != nil {
 		return -1, false, err
 	}
-	tableDefCtx := context.Background()
-	if txn.proc != nil && txn.proc.Ctx != nil {
-		tableDefCtx = txn.proc.Ctx
-	}
-	tableDef := tbl.GetTableDef(tableDefCtx)
+	tableDef := tbl.GetTableDef(defines.AttachAccountId(ctx, accountId))
 	if tableDef == nil || tableDef.Pkey == nil {
 		return -1, true, nil
 	}
@@ -2207,7 +2221,7 @@ func (txn *Transaction) mergeTxnWorkspaceLocked(ctx context.Context) error {
 // resolveDumpTablesLocked). Because other goroutines may add deletions while
 // the lock is released, the scan-resolve cycle repeats until every table
 // referenced by txn.deletedBlocks is resolved.
-func (txn *Transaction) resolveCompactTablesLocked() (map[tableKey]engine.Relation, error) {
+func (txn *Transaction) resolveCompactTablesLocked(ctx context.Context) (map[tableKey]engine.Relation, error) {
 	tables := make(map[tableKey]engine.Relation)
 	for {
 		var missing []tableKey
@@ -2232,7 +2246,7 @@ func (txn *Transaction) resolveCompactTablesLocked() (map[tableKey]engine.Relati
 
 		txn.Unlock()
 		for _, k := range missing {
-			tbl, err := txn.getTable(k.accountId, k.dbName, k.name)
+			tbl, err := txn.getTable(ctx, k.accountId, k.dbName, k.name)
 			if err != nil {
 				txn.Lock()
 				return nil, err
@@ -2253,7 +2267,7 @@ func (txn *Transaction) compactDeletionOnObjsLocked(ctx context.Context) error {
 	// resolve every affected table BEFORE building the compaction state and
 	// spawning workers; workers must not call getTable (see
 	// resolveCompactTablesLocked)
-	tables, err := txn.resolveCompactTablesLocked()
+	tables, err := txn.resolveCompactTablesLocked(ctx)
 	if err != nil {
 		return err
 	}
@@ -2715,7 +2729,7 @@ func (txn *Transaction) Commit(ctx context.Context) (reqs []txn.TxnRequest, err 
 
 	if !txn.hasS3Op.Load() &&
 		txn.op.TxnOptions().CheckDupEnabled() {
-		if err := txn.checkDup(); err != nil {
+		if err := txn.checkDup(ctx); err != nil {
 			return nil, err
 		}
 	}

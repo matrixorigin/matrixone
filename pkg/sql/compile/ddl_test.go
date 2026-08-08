@@ -1821,6 +1821,47 @@ func TestRemoveFkeysRelationshipsSkipsDeletedParentTableIds(t *testing.T) {
 	require.NoError(t, s.removeFkeysRelationships(c, "acc_test02"))
 }
 
+func TestAddChildTableIDToDistinctParents(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	parentOne := mock_frontend.NewMockRelation(ctrl)
+	duplicateParentOne := mock_frontend.NewMockRelation(ctrl)
+	parentTwo := mock_frontend.NewMockRelation(ctrl)
+	parentOne.EXPECT().GetTableID(gomock.Any()).Return(uint64(10)).Times(1)
+	duplicateParentOne.EXPECT().GetTableID(gomock.Any()).Return(uint64(10)).Times(1)
+	parentTwo.EXPECT().GetTableID(gomock.Any()).Return(uint64(20)).Times(1)
+
+	constraintFor := func() *engine.ConstraintDef {
+		return &engine.ConstraintDef{Cts: []engine.Constraint{
+			&engine.RefChildTableDef{Tables: []uint64{1}},
+		}}
+	}
+	getConstraintDef := gostub.Stub(&GetConstraintDef, func(_ context.Context, relation engine.Relation) (*engine.ConstraintDef, error) {
+		switch relation {
+		case parentOne, parentTwo:
+			return constraintFor(), nil
+		default:
+			t.Fatalf("unexpected parent relation")
+			return nil, nil
+		}
+	})
+	defer getConstraintDef.Reset()
+
+	assertRefChild := func(_ context.Context, constraint *engine.ConstraintDef) error {
+		require.Equal(t, []uint64{1, 77}, canonicalRefChildTableIDs(constraint))
+		return nil
+	}
+	parentOne.EXPECT().UpdateConstraint(gomock.Any(), gomock.Any()).DoAndReturn(assertRefChild).Times(1)
+	parentTwo.EXPECT().UpdateConstraint(gomock.Any(), gomock.Any()).DoAndReturn(assertRefChild).Times(1)
+
+	require.NoError(t, addChildTableIDToDistinctParents(
+		context.Background(),
+		[]engine.Relation{parentOne, duplicateParentOne, parentTwo},
+		77,
+	))
+}
+
 func TestMissingTablePredicates(t *testing.T) {
 	ctx := context.Background()
 

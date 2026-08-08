@@ -72,6 +72,9 @@ func (s *service) initTaskServiceHolder() {
 	}
 	s.task.Lock()
 	defer s.task.Unlock()
+	if s.task.holder != nil {
+		return
+	}
 	if s.task.storageFactory == nil {
 		s.task.holder = taskservice.NewTaskServiceHolder(
 			runtime.ServiceRuntime(s.cfg.UUID),
