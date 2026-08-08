@@ -695,7 +695,8 @@ func initExecuteStmtParamWithResolver(
 func binaryProtocolPrepareParamKind(mysqlType defines.MysqlType) vector.PrepareParamKind {
 	switch mysqlType {
 	case defines.MYSQL_TYPE_TINY, defines.MYSQL_TYPE_SHORT, defines.MYSQL_TYPE_INT24,
-		defines.MYSQL_TYPE_LONG, defines.MYSQL_TYPE_LONGLONG, defines.MYSQL_TYPE_YEAR:
+		defines.MYSQL_TYPE_LONG, defines.MYSQL_TYPE_LONGLONG, defines.MYSQL_TYPE_BIT,
+		defines.MYSQL_TYPE_YEAR:
 		return vector.PrepareParamInteger
 	case defines.MYSQL_TYPE_FLOAT, defines.MYSQL_TYPE_DOUBLE:
 		return vector.PrepareParamFloat

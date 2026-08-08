@@ -307,7 +307,7 @@ func TestBinaryProtocolPrepareParamKind(t *testing.T) {
 		{defines.MYSQL_TYPE_DOUBLE, vector.PrepareParamFloat},
 		{defines.MYSQL_TYPE_DECIMAL, vector.PrepareParamDecimal},
 		{defines.MYSQL_TYPE_NEWDECIMAL, vector.PrepareParamDecimal},
-		{defines.MYSQL_TYPE_BIT, vector.PrepareParamNone},
+		{defines.MYSQL_TYPE_BIT, vector.PrepareParamInteger},
 		{defines.MYSQL_TYPE_VAR_STRING, vector.PrepareParamNone},
 	} {
 		require.Equal(t, test.want, binaryProtocolPrepareParamKind(test.mysqlType), "type %v", test.mysqlType)

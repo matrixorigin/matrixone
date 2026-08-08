@@ -19,14 +19,87 @@ import (
 	"database/sql"
 	"fmt"
 	"math"
+	"net"
+	"sync"
 	"testing"
 	"time"
 
-	_ "github.com/go-sql-driver/mysql"
+	mysqlDriver "github.com/go-sql-driver/mysql"
 	"github.com/stretchr/testify/require"
 
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/embed"
 )
+
+// issue26725BitTypeConn rewrites one prepared execute packet after the driver
+// has encoded it. This keeps the test on the real COM_STMT_EXECUTE path while
+// forcing the second parameter to use MYSQL_TYPE_BIT, which the driver does
+// not normally emit for an int64 binding.
+type issue26725BitTypeConn struct {
+	net.Conn
+
+	mu         sync.Mutex
+	rewriteBit bool
+	rewritten  bool
+}
+
+func (c *issue26725BitTypeConn) rewriteNextBitExecute() {
+	c.mu.Lock()
+	c.rewriteBit = true
+	c.rewritten = false
+	c.mu.Unlock()
+}
+
+func (c *issue26725BitTypeConn) wasRewritten() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.rewritten
+}
+
+func (c *issue26725BitTypeConn) Write(data []byte) (int, error) {
+	c.mu.Lock()
+	if c.rewriteBit {
+		modified := append([]byte(nil), data...)
+		if issue26725RewriteSecondParamAsBit(modified) {
+			data = modified
+			c.rewriteBit = false
+			c.rewritten = true
+		}
+	}
+	c.mu.Unlock()
+	return c.Conn.Write(data)
+}
+
+func issue26725RewriteSecondParamAsBit(data []byte) bool {
+	const (
+		packetHeaderSize = 4
+		stmtExecute      = 0x17
+		paramCount       = 2
+	)
+
+	for pos := 0; pos+packetHeaderSize <= len(data); {
+		payloadLen := int(data[pos]) | int(data[pos+1])<<8 | int(data[pos+2])<<16
+		end := pos + packetHeaderSize + payloadLen
+		if end > len(data) {
+			return false
+		}
+		payload := data[pos+packetHeaderSize : end]
+		const nullBitmapLen = (paramCount + 7) / 8
+		const executeHeaderLen = 1 + 4 + 1 + 4
+		newTypesFlagPos := executeHeaderLen + nullBitmapLen
+		typesStart := newTypesFlagPos + 1
+		secondTypePos := typesStart + 2
+		if len(payload) > secondTypePos &&
+			payload[0] == stmtExecute &&
+			payload[newTypesFlagPos] == 1 &&
+			payload[secondTypePos] == byte(defines.MYSQL_TYPE_LONGLONG) {
+			payload[secondTypePos] = byte(defines.MYSQL_TYPE_BIT)
+			return true
+		}
+		pos = end
+	}
+	return false
+}
 
 // TestIssue26725PreparedBit64Numeric exercises the same binary prepared
 // statement path used by numeric client bindings, including the legacy
@@ -39,9 +112,24 @@ func TestIssue26725PreparedBit64Numeric(t *testing.T) {
 		cn, err := c.GetCNService(0)
 		require.NoError(t, err)
 		port := cn.GetServiceConfig().CN.Frontend.Port
+		var connMu sync.Mutex
+		var bitConn *issue26725BitTypeConn
+		mysqlDriver.RegisterDialContext("issue26725bit", func(ctx context.Context, addr string) (net.Conn, error) {
+			conn, dialErr := (&net.Dialer{}).DialContext(ctx, "tcp", addr)
+			if dialErr != nil {
+				return nil, dialErr
+			}
+			wrapped := &issue26725BitTypeConn{Conn: conn}
+			connMu.Lock()
+			bitConn = wrapped
+			connMu.Unlock()
+			return wrapped, nil
+		})
 		db, err := sql.Open("mysql", fmt.Sprintf(
-			"dump:111@tcp(127.0.0.1:%d)/?interpolateParams=false", port))
+			"dump:111@issue26725bit(127.0.0.1:%d)/?interpolateParams=false", port))
 		require.NoError(t, err)
+		db.SetMaxOpenConns(1)
+		db.SetMaxIdleConns(1)
 		defer db.Close()
 
 		const dbName = "issue_26725_prepared_bit64"
@@ -92,16 +180,37 @@ func TestIssue26725PreparedBit64Numeric(t *testing.T) {
 		require.NoError(t, db.QueryRowContext(ctx,
 			"select cast(b as unsigned) from "+dbName+".t64 where id = 6").Scan(&stringValue))
 		require.Equal(t, "53", stringValue)
-		_, err = singleStmt.ExecContext(ctx, int64(7), "-6109877384019645241")
+		connMu.Lock()
+		capturedConn := bitConn
+		connMu.Unlock()
+		require.NotNil(t, capturedConn)
+		capturedConn.rewriteNextBitExecute()
+		_, err = singleStmt.ExecContext(ctx, int64(7), int64(5))
+		require.NoError(t, err)
+		require.True(t, capturedConn.wasRewritten(), "test did not send MYSQL_TYPE_BIT on COM_STMT_EXECUTE")
+		var wireBitValue string
+		require.NoError(t, db.QueryRowContext(ctx,
+			"select cast(b as unsigned) from "+dbName+".t64 where id = 7").Scan(&wireBitValue))
+		require.Equal(t, "5", wireBitValue)
+		// The driver still believes the parameter type is LONGLONG, so this
+		// execution sends new_params_bound_flag=0. The server must reuse the
+		// cached MYSQL_TYPE_BIT metadata from the previous packet.
+		_, err = singleStmt.ExecContext(ctx, int64(8), int64(6))
+		require.NoError(t, err)
+		var reusedWireBitValue string
+		require.NoError(t, db.QueryRowContext(ctx,
+			"select cast(b as unsigned) from "+dbName+".t64 where id = 8").Scan(&reusedWireBitValue))
+		require.Equal(t, "6", reusedWireBitValue)
+		_, err = singleStmt.ExecContext(ctx, int64(33), "-6109877384019645241")
 		require.ErrorContains(t, err, "data out of range")
 
 		// Rebinding the same statement as DOUBLE must refresh string provenance
 		// and use numeric rather than ASCII byte semantics.
-		_, err = singleStmt.ExecContext(ctx, int64(8), float64(5))
+		_, err = singleStmt.ExecContext(ctx, int64(40), float64(5))
 		require.NoError(t, err)
 		var floatValue string
 		require.NoError(t, db.QueryRowContext(ctx,
-			"select cast(b as unsigned) from "+dbName+".t64 where id = 8").Scan(&floatValue))
+			"select cast(b as unsigned) from "+dbName+".t64 where id = 40").Scan(&floatValue))
 		require.Equal(t, "5", floatValue)
 
 		// SQL PREPARE/EXECUTE must preserve the numeric type of user variables too.
