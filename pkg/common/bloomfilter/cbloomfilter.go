@@ -242,7 +242,10 @@ func (bf *CBloomFilter) marshal(prefix byte, prefixed bool) ([]byte, error) {
 	if prefixed {
 		data[0] = prefix
 	}
-	runtime.KeepAlive(bf)
+	// bloomfilter_marshal aliases the explicitly ref-counted C allocation. The
+	// synchronous copy completes before this method returns; Go reachability
+	// does not own or free that allocation, and KeepAlive would not make a
+	// concurrent Free safe.
 	return data, nil
 }
 

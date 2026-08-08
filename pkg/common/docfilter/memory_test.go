@@ -190,6 +190,78 @@ func TestNewMemoryLeaseFollowsLastReader(t *testing.T) {
 	}
 }
 
+func TestNewMemoryLeaseRefreshesBeforeLastRelease(t *testing.T) {
+	mp := mpool.MustNewZero()
+
+	for _, tc := range []struct {
+		name string
+		vec  func() *vector.Vector
+	}{
+		{
+			name: "cbitmap",
+			vec: func() *vector.Vector {
+				return buildIntVec(t, mp, types.T_int64.ToType(), []int64{1, 2, 3, 4}, nil)
+			},
+		},
+		{
+			name: "sorted64",
+			vec: func() *vector.Vector {
+				return buildIntVec(t, mp, types.T_int64.ToType(), []int64{0, 1 << 30}, nil)
+			},
+		},
+		{
+			name: "bloom",
+			vec: func() *vector.Vector {
+				return buildVarcharVec(t, mp, []string{"alpha", "beta"})
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			v := tc.vec()
+			defer v.Free(mp)
+			payload, err := Build(v)
+			require.NoError(t, err)
+
+			admission := &refreshingMemoryAdmission{
+				recordingMemoryAdmission: recordingMemoryAdmission{grant: true},
+			}
+			filter, err := NewWithMemoryAdmission(payload, admission)
+			require.NoError(t, err)
+			shared := filter.Share()
+
+			filter.Free()
+			require.Empty(t, admission.order,
+				"a shared filter must retain its single consumer lease")
+			shared.Free()
+			require.Equal(t, []string{"refresh", "release"}, admission.order)
+			require.Equal(t, 1, admission.refreshes)
+			require.Equal(t, admission.acquired, admission.released)
+		})
+	}
+}
+
+func TestReconstructAllocationCoversWireAndLiveFilter(t *testing.T) {
+	const payloadBytes = 128
+	payload := make([]byte, payloadBytes)
+
+	for _, tc := range []struct {
+		name string
+		tag  byte
+		want int64
+	}{
+		{name: "cbitmap", tag: TagCbitmap, want: 2*payloadBytes + 8},
+		{name: "sorted64", tag: TagSorted64, want: payloadBytes},
+		{name: "bloom", tag: TagBloom, want: 2 * payloadBytes},
+		{name: "legacy croaring", tag: TagCRoaring, want: 32*payloadBytes + 64<<10},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, ok := reconstructAllocationBytes(tc.tag, payload)
+			require.True(t, ok)
+			require.Equal(t, tc.want, got)
+		})
+	}
+}
+
 func TestNewSorted64ChargesConsumerForPayloadBytes(t *testing.T) {
 	mp := mpool.MustNewZero()
 	v := buildIntVec(t, mp, types.T_int64.ToType(), []int64{0, 1 << 30}, nil)

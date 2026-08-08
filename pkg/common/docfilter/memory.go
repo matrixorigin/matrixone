@@ -69,14 +69,23 @@ func acquireMemory(admission MemoryAdmission, bytes int64) (func(), error) {
 	if _, ok := admission.Acquire(bytes); !ok {
 		return nil, &MemoryAdmissionError{Requested: bytes}
 	}
-	return func() { admission.Release(bytes) }, nil
+	// Keep the reservation until a current RSS sample can take over accounting
+	// for any allocation that remains resident after its logical owner releases
+	// it. This applies equally to producer scratch/payload memory and to
+	// consumer-side reconstructed filters; centralizing the handoff here keeps
+	// every success and rollback path on the same release contract.
+	return func() {
+		refreshBeforeRelease(admission)
+		admission.Release(bytes)
+	}, nil
 }
 
-// refreshBeforeBuildRelease closes the gap between dropping a forward-looking
-// reservation and the next admission observing the returned Go payload in RSS.
-// The production throttler exposes these optional methods; the narrow base
-// interface keeps tests and non-CN callers independent of its implementation.
-func refreshBeforeBuildRelease(admission MemoryAdmission) {
+// refreshBeforeRelease closes the gap between dropping a forward-looking
+// reservation and the next admission observing the allocation (or allocator-
+// retained pages after Free) in RSS. The production throttler exposes these
+// optional methods; the narrow base interface keeps tests and non-CN callers
+// independent of its implementation.
+func refreshBeforeRelease(admission MemoryAdmission) {
 	type refreshDecider interface {
 		ShouldRefreshBeforeRelease() bool
 	}
@@ -171,18 +180,26 @@ func reconstructAllocationBytes(tag byte, payload []byte) (int64, bool) {
 		}
 		return int64(len(payload)), true
 	case TagCbitmap:
-		// Serialized header is two uint64s; the live C object header is three.
-		if len(payload) > math.MaxInt64-8 {
+		// The wire payload remains reachable through FilterHint while the
+		// reconstructed C object is live. The C object has one additional
+		// uint64 header word: payload + (payload + 8).
+		if uint64(len(payload)) > uint64((math.MaxInt64-8)/2) {
 			return 0, false
 		}
-		return int64(len(payload) + 8), true
+		return int64(len(payload))*2 + 8, true
 	case TagBloom:
-		return int64(len(payload)), true
+		// Unmarshal copies the complete wire payload into C-owned memory while
+		// the transported bytes remain live in FilterHint.
+		if uint64(len(payload)) > uint64(math.MaxInt64/2) {
+			return 0, false
+		}
+		return int64(len(payload)) * 2, true
 	case TagCRoaring:
 		// Compatibility only: new producers emit Sorted64. CRoaring's public API
 		// does not expose exact allocator usage, so reserve a deliberately broad
-		// expansion bound for mixed-version clusters. This path disappears once
-		// all senders use TagSorted64.
+		// expansion bound that includes the retained wire payload for
+		// mixed-version clusters. This path disappears once all senders use
+		// TagSorted64.
 		const expansion = int64(32)
 		const fixed = int64(64 << 10)
 		if uint64(len(payload)) > uint64((math.MaxInt64-fixed)/expansion) {

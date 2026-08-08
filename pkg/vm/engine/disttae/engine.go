@@ -24,6 +24,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
+	"github.com/matrixorigin/matrixone/pkg/common/docfilter"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/rscthrottler"
@@ -1165,8 +1166,32 @@ func (e *Engine) BuildBlockReaders(
 	if len(filterHint) > 0 {
 		hint = filterHint[0]
 	}
+
+	// Remote scopes transport only the tagged bytes. Reconstruct the filter on
+	// the consuming CN, then give every reader its own share; passing the bytes
+	// through to NewReader is insufficient because readers intentionally consume
+	// only FilterHint.BF. Keep the builder reference until all reader creation
+	// succeeds so every rollback path can deterministically reach the last Free.
+	var mainFilter docfilter.MembershipFilter
+	if len(hint.MembershipFilterBytes) > 0 {
+		mainFilter, err = docfilter.NewWithMemoryAdmission(
+			hint.MembershipFilterBytes,
+			docfilter.AdmissionForService(e.service),
+		)
+		if err != nil {
+			return nil, err
+		}
+		defer mainFilter.Free()
+	}
+
 	shards := relData.Split(newNum)
 	for i := 0; i < newNum; i++ {
+		readerHint := hint
+		var readerFilter docfilter.MembershipFilter
+		if mainFilter != nil {
+			readerFilter = mainFilter.Share()
+			readerHint.BF = readerFilter
+		}
 		ds := readutil.NewRemoteDataSource(ctx, fs, ts, shards[i])
 		rd, err := readutil.NewReader(
 			ctx,
@@ -1178,9 +1203,14 @@ func (e *Engine) BuildBlockReaders(
 			expr,
 			ds,
 			readutil.GetThresholdForReader(newNum),
-			hint,
+			readerHint,
 		)
 		if err != nil {
+			ds.Close()
+			if readerFilter != nil {
+				readerFilter.Free()
+			}
+			closeReaders(rds)
 			return nil, err
 		}
 		rds = append(rds, rd)

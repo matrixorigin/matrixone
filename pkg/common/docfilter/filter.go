@@ -111,13 +111,7 @@ func BuildWithMemoryAdmission(
 		return nil, err
 	}
 	if release != nil {
-		defer func() {
-			// The C build scratch is already freed when this runs, but the
-			// returned Go payload remains live. Publish it to the production
-			// throttler's RSS baseline before dropping the reservation.
-			refreshBeforeBuildRelease(admission)
-			release()
-		}()
+		defer release()
 	}
 	if SupportsBitset(*v.GetType()) {
 		return buildTaggedIntegerFilter(v)
@@ -130,8 +124,9 @@ func New(data []byte) (MembershipFilter, error) {
 	return NewWithMemoryAdmission(data, nil)
 }
 
-// NewWithMemoryAdmission is New with a lease covering any reconstructed C
-// allocation. The lease is released after the last shared reader frees it.
+// NewWithMemoryAdmission is New with one shared lease covering the retained
+// wire payload and any reconstructed allocation. The last shared reader frees
+// the filter, refreshes RSS, and then releases the reservation.
 func NewWithMemoryAdmission(
 	data []byte,
 	admission MemoryAdmission,
