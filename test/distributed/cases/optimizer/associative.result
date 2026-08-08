@@ -176,18 +176,18 @@ Project  𝄀
               Filter Cond: (cast(lineitem.l_quantity AS DECIMAL128(38, 2)) < (0.2 * avg(lineitem.l_quantity)))
               -- HINT: Cast expression may prevent index usage  𝄀
               ->  Join  𝄀
-                    Join Type: RIGHT  𝄀
-                    Join Cond: (lineitem.l_partkey = part.p_partkey)  𝄀
-                    ->  Aggregate  𝄀
-                          Group Key: lineitem.l_partkey  𝄀
-                          Aggregate Functions: avg(lineitem.l_quantity)  𝄀
-                          ->  Table Scan on associative.lineitem  𝄀
+                    Join Type: LEFT  𝄀
+                    Join Cond: (part.p_partkey = lineitem.l_partkey)  𝄀
                     ->  Join  𝄀
                           Join Type: INNER   hashOnPK  𝄀
                           Join Cond: (lineitem.l_partkey = part.p_partkey)  𝄀
                           ->  Table Scan on associative.lineitem  𝄀
                           ->  Table Scan on associative.part  𝄀
-                                Filter Cond: (part.p_container = 'LG BAG'), (part.p_brand = 'Brand#54')
+                                Filter Cond: (part.p_container = 'LG BAG'), (part.p_brand = 'Brand#54')  𝄀
+                    ->  Aggregate  𝄀
+                          Group Key: lineitem.l_partkey  𝄀
+                          Aggregate Functions: avg(lineitem.l_quantity)  𝄀
+                          ->  Table Scan on associative.lineitem
 drop table if exists associative.lineitem;
 drop table if exists associative.part;
 drop table if exists associative.file;

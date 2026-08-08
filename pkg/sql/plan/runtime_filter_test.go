@@ -990,7 +990,8 @@ func TestSingleJoinStatsUseSemanticPreservedSide(t *testing.T) {
 		rightSingle := builder.qry.Nodes[2]
 		require.Equal(t, float64(3), rightSingle.Stats.Outcnt)
 		require.Equal(t, rightSingle.Stats.Outcnt, downstreamJoin.Stats.HashmapStats.HashmapSize)
-		require.Equal(t, float64(1_000), downstreamJoin.Stats.Outcnt)
+		require.Equal(t, float64(3), downstreamJoin.Stats.Outcnt,
+			"joining three rows against a unique key can produce at most three rows")
 	})
 
 	t.Run("right SINGLE applies limit after selecting the preserved side", func(t *testing.T) {

@@ -16,6 +16,7 @@ package plan
 
 import (
 	"context"
+	"fmt"
 	"math"
 	"testing"
 
@@ -301,6 +302,652 @@ func TestStatsSelectivityClampAvoidsNonFiniteJoin(t *testing.T) {
 		require.GreaterOrEqual(t, join.Stats.Selectivity, 0.0)
 		require.LessOrEqual(t, join.Stats.Selectivity, 1.0)
 	})
+}
+
+func TestSampledNDVChangesIntermediateCardinalityAndBuildSide(t *testing.T) {
+	build := func(t *testing.T, joinKeyNDV float64) (*QueryBuilder, *planpb.Node, *planpb.Node) {
+		t.Helper()
+
+		statsCache := NewStatsCache()
+		for tableID := uint64(1); tableID <= 3; tableID++ {
+			stats := NewStatsInfo()
+			stats.TableCnt = 10_000_000
+			stats.NdvMap["k"] = joinKeyNDV
+			if tableID == 2 {
+				stats.NdvMap["k"] = 1_000_000
+			}
+			statsCache.Set(tableID, stats)
+		}
+		ctx := &statsCacheCompilerContext{
+			MockCompilerContext: &MockCompilerContext{ctx: context.Background()},
+			statsCache:          statsCache,
+		}
+		builder := NewQueryBuilder(planpb.Query_SELECT, ctx, false, false)
+
+		makeScan := func(tag int32, tableID uint64, rows float64) *planpb.Node {
+			tableDef := &planpb.TableDef{
+				TblId: tableID,
+				Cols: []*planpb.ColDef{{
+					Name: "k",
+					Typ:  planpb.Type{Id: int32(types.T_int64)},
+				}},
+			}
+			if tableID == 2 {
+				tableDef.Pkey = &planpb.PrimaryKeyDef{Names: []string{"k"}, PkeyColName: "k"}
+				tableDef.Name2ColIndex = map[string]int32{"k": 0}
+			}
+			builder.tag2Table[tag] = tableDef
+			return &planpb.Node{
+				NodeType:    planpb.Node_TABLE_SCAN,
+				BindingTags: []int32{tag},
+				TableDef:    tableDef,
+				Stats: &planpb.Stats{
+					TableCnt:     rows,
+					Outcnt:       rows,
+					Cost:         rows,
+					Selectivity:  1,
+					BlockNum:     1,
+					HashmapStats: &planpb.HashMapStats{},
+				},
+			}
+		}
+		makeEquality := func(leftTag, rightTag int32) *planpb.Expr {
+			expr, err := BindFuncExprImplByPlanExpr(context.Background(), "=", []*planpb.Expr{
+				{Typ: planpb.Type{Id: int32(types.T_int64)}, Expr: &planpb.Expr_Col{Col: &planpb.ColRef{RelPos: leftTag, ColPos: 0, Name: "k"}}},
+				{Typ: planpb.Type{Id: int32(types.T_int64)}, Expr: &planpb.Expr_Col{Col: &planpb.ColRef{RelPos: rightTag, ColPos: 0, Name: "k"}}},
+			})
+			require.NoError(t, err)
+			return expr
+		}
+
+		left := makeScan(1, 1, 10_000_000)
+		right := makeScan(2, 2, 1_000_000)
+		third := makeScan(3, 3, 5_000_000)
+		firstJoin := &planpb.Node{
+			NodeType: planpb.Node_JOIN,
+			JoinType: planpb.Node_INNER,
+			Children: []int32{0, 1},
+			OnList:   []*planpb.Expr{makeEquality(1, 2)},
+			Stats:    DefaultStats(),
+		}
+		parentJoin := &planpb.Node{
+			NodeType: planpb.Node_JOIN,
+			JoinType: planpb.Node_INNER,
+			Children: []int32{3, 2},
+			OnList:   []*planpb.Expr{makeEquality(1, 3)},
+			Stats:    DefaultStats(),
+		}
+		builder.qry.Nodes = []*planpb.Node{left, right, third, firstJoin, parentJoin}
+
+		ReCalcNodeStats(3, builder, false, false, false)
+		ReCalcNodeStats(4, builder, false, false, false)
+		builder.determineBuildAndProbeSide(4, false)
+		return builder, firstJoin, parentJoin
+	}
+
+	_, lowNDVJoin, lowNDVParent := build(t, 10_000)
+	require.Equal(t, float64(10_000_000), lowNDVJoin.Stats.Outcnt)
+	require.Equal(t, []int32{3, 2}, lowNDVParent.Children,
+		"large intermediate stays on the probe side and the smaller third table is built")
+
+	_, highNDVJoin, highNDVParent := build(t, 10_000_000)
+	require.Equal(t, float64(1_000_000), highNDVJoin.Stats.Outcnt)
+	require.Equal(t, []int32{2, 3}, highNDVParent.Children,
+		"small intermediate becomes the build side")
+
+	_, missingNDVJoin, missingNDVParent := build(t, 0)
+	require.Equal(t, float64(10_000_000), missingNDVJoin.Stats.Outcnt,
+		"missing key statistics retain the previous row-count fallback")
+	require.Equal(t, []int32{3, 2}, missingNDVParent.Children)
+}
+
+func TestEquiJoinNDVStillAppliesResidualPredicates(t *testing.T) {
+	statsCache := NewStatsCache()
+	ctx := &statsCacheCompilerContext{
+		MockCompilerContext: &MockCompilerContext{ctx: context.Background()},
+		statsCache:          statsCache,
+	}
+	builder := NewQueryBuilder(planpb.Query_SELECT, ctx, false, false)
+
+	makeScan := func(tag int32, tableID uint64) *planpb.Node {
+		stats := NewStatsInfo()
+		stats.TableCnt = 1_000
+		stats.NdvMap["k"] = 1_000
+		stats.NdvMap["v"] = 100
+		statsCache.Set(tableID, stats)
+		tableDef := &planpb.TableDef{
+			TblId: tableID,
+			Cols: []*planpb.ColDef{
+				{Name: "k", Typ: planpb.Type{Id: int32(types.T_int64)}},
+				{Name: "v", Typ: planpb.Type{Id: int32(types.T_int64)}},
+			},
+		}
+		builder.tag2Table[tag] = tableDef
+		return &planpb.Node{
+			NodeType: planpb.Node_TABLE_SCAN, BindingTags: []int32{tag}, TableDef: tableDef,
+			Stats: &planpb.Stats{
+				TableCnt: 1_000, Outcnt: 1_000, Cost: 1_000, Selectivity: 1,
+				BlockNum: 1, HashmapStats: &planpb.HashMapStats{},
+			},
+		}
+	}
+	makeCol := func(tag, pos int32, name string) *planpb.Expr {
+		return &planpb.Expr{
+			Typ:  planpb.Type{Id: int32(types.T_int64)},
+			Expr: &planpb.Expr_Col{Col: &planpb.ColRef{RelPos: tag, ColPos: pos, Name: name}},
+		}
+	}
+	makePred := func(name string, leftPos, rightPos int32, colName string) *planpb.Expr {
+		expr, err := BindFuncExprImplByPlanExpr(context.Background(), name, []*planpb.Expr{
+			makeCol(1, leftPos, colName), makeCol(2, rightPos, colName),
+		})
+		require.NoError(t, err)
+		return expr
+	}
+
+	left := makeScan(1, 1)
+	right := makeScan(2, 2)
+	equality := makePred("=", 0, 0, "k")
+	secondEquality := makePred("=", 1, 1, "v")
+	residual := makePred("!=", 1, 1, "v")
+	builder.qry.Nodes = []*planpb.Node{left, right}
+
+	joinWithEqualities := &planpb.Node{
+		NodeType: planpb.Node_JOIN, JoinType: planpb.Node_INNER,
+		Children: []int32{0, 1}, OnList: []*planpb.Expr{equality, secondEquality}, Stats: DefaultStats(),
+	}
+	builder.qry.Nodes = append(builder.qry.Nodes, joinWithEqualities)
+	ReCalcNodeStats(2, builder, false, false, false)
+	require.Equal(t, float64(1_000), joinWithEqualities.Stats.Outcnt,
+		"additional equi keys are not guessed independent without multi-column NDV")
+
+	joinWithResidual := &planpb.Node{
+		NodeType: planpb.Node_JOIN, JoinType: planpb.Node_INNER,
+		Children: []int32{0, 1}, OnList: []*planpb.Expr{equality, residual}, Stats: DefaultStats(),
+	}
+	builder.qry.Nodes = append(builder.qry.Nodes, joinWithResidual)
+	ReCalcNodeStats(3, builder, false, false, false)
+	require.Equal(t, float64(900), joinWithResidual.Stats.Outcnt,
+		"the NDV denominator must not suppress a non-equality join predicate")
+}
+
+func TestSampledNDVDoesNotAmplifyUnboundedManyToManyJoin(t *testing.T) {
+	statsCache := NewStatsCache()
+	ctx := &statsCacheCompilerContext{
+		MockCompilerContext: &MockCompilerContext{ctx: context.Background()},
+		statsCache:          statsCache,
+	}
+	builder := NewQueryBuilder(planpb.Query_SELECT, ctx, false, false)
+
+	makeScan := func(tag int32, tableID uint64) *planpb.Node {
+		stats := NewStatsInfo()
+		stats.TableCnt = 1_000_000
+		stats.NdvMap["k"] = 100
+		statsCache.Set(tableID, stats)
+		tableDef := &planpb.TableDef{
+			TblId: tableID,
+			Cols:  []*planpb.ColDef{{Name: "k", Typ: planpb.Type{Id: int32(types.T_int64)}}},
+		}
+		builder.tag2Table[tag] = tableDef
+		return &planpb.Node{
+			NodeType: planpb.Node_TABLE_SCAN, BindingTags: []int32{tag}, TableDef: tableDef,
+			Stats: &planpb.Stats{
+				TableCnt: 1_000_000, Outcnt: 1_000_000, Cost: 1_000_000, Selectivity: 1,
+				BlockNum: 1, HashmapStats: &planpb.HashMapStats{},
+			},
+		}
+	}
+	left := makeScan(1, 1)
+	right := makeScan(2, 2)
+	predicate, err := BindFuncExprImplByPlanExpr(context.Background(), "=", []*planpb.Expr{
+		{Typ: planpb.Type{Id: int32(types.T_int64)}, Expr: &planpb.Expr_Col{Col: &planpb.ColRef{RelPos: 1, ColPos: 0, Name: "k"}}},
+		{Typ: planpb.Type{Id: int32(types.T_int64)}, Expr: &planpb.Expr_Col{Col: &planpb.ColRef{RelPos: 2, ColPos: 0, Name: "k"}}},
+	})
+	require.NoError(t, err)
+	predicate.Ndv = 37
+	join := &planpb.Node{
+		NodeType: planpb.Node_JOIN, JoinType: planpb.Node_INNER,
+		Children: []int32{0, 1}, OnList: []*planpb.Expr{predicate}, Stats: DefaultStats(),
+	}
+	builder.qry.Nodes = []*planpb.Node{left, right, join}
+
+	ReCalcNodeStats(2, builder, false, false, false)
+
+	require.Equal(t, float64(1_000_000), join.Stats.Outcnt,
+		"a sampled single-column NDV is not a safe fanout bound for an unconstrained many-to-many join")
+	require.Equal(t, float64(37), predicate.Ndv,
+		"cardinality estimation must not overwrite the NDV used by physical planning")
+}
+
+func TestStandaloneFilterUsesExpressionSelectivityWithoutMutatingPredicates(t *testing.T) {
+	builder := NewQueryBuilder(planpb.Query_SELECT, &MockCompilerContext{ctx: context.Background()}, false, false)
+	predicate, err := BindFuncExprImplByPlanExpr(context.Background(), "!=", []*planpb.Expr{
+		{Typ: planpb.Type{Id: int32(types.T_int64)}, Expr: &planpb.Expr_Col{Col: &planpb.ColRef{RelPos: 1, ColPos: 0}}},
+		{Typ: planpb.Type{Id: int32(types.T_int64)}, Expr: &planpb.Expr_Col{Col: &planpb.ColRef{RelPos: 1, ColPos: 1}}},
+	})
+	require.NoError(t, err)
+
+	child := &planpb.Node{
+		NodeType: planpb.Node_VALUE_SCAN,
+		Stats: &planpb.Stats{
+			Outcnt:      1_000,
+			Cost:        1_000,
+			Selectivity: 1,
+			BlockNum:    1,
+		},
+	}
+	filter := &planpb.Node{
+		NodeType:   planpb.Node_FILTER,
+		Children:   []int32{0},
+		FilterList: []*planpb.Expr{predicate},
+		Stats:      DefaultStats(),
+	}
+	builder.qry.Nodes = []*planpb.Node{child, filter}
+
+	ReCalcNodeStats(1, builder, false, false, false)
+
+	require.Equal(t, 0.9, filter.Stats.Selectivity)
+	require.Equal(t, float64(900), filter.Stats.Outcnt)
+	require.Zero(t, predicate.Selectivity,
+		"cardinality estimation must not annotate predicates used by physical planning")
+}
+
+func TestContainedUniqueJoinCardinalityRequiresReliableContainment(t *testing.T) {
+	tests := []struct {
+		name              string
+		uniqueOnLeft      bool
+		withPrimaryKey    bool
+		uniqueOutcnt      float64
+		uniqueSelectivity float64
+		probeMax          float64
+		uniqueMax         float64
+		want              float64
+	}{
+		{"complete dense unique right", false, true, 1_000, 1, 1_000, 1_000, 1_000_000},
+		{"complete dense unique left", true, true, 1_000, 1, 1_000, 1_000, 1_000_000},
+		{"adjacent sentinel keeps conservative upper bound", false, true, 1_000, 1, 1_001, 1_000, 1_000_000},
+		{"insufficient range coverage falls back", false, true, 1_000, 1, 2_000, 1_000, 1_000},
+		{"filtered unique side falls back", false, true, 500, 0.5, 1_000, 1_000, 500},
+		{"sparse unique domain falls back", false, true, 1_000, 1, 1_000, 10_000, 1_000},
+		{"missing uniqueness falls back", false, false, 1_000, 1, 1_000, 1_000, 1_000_000},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			statsCache := NewStatsCache()
+			addStats := func(tableID uint64, rows, ndv, max float64) {
+				stats := NewStatsInfo()
+				stats.TableCnt = rows
+				stats.NdvMap["k"] = ndv
+				stats.MinValMap["k"] = 1
+				stats.MaxValMap["k"] = max
+				statsCache.Set(tableID, stats)
+			}
+			addStats(1, 1_000_000, 5_000_000, tt.probeMax)
+			addStats(2, 1_000, 1_000, tt.uniqueMax)
+			ctx := &statsCacheCompilerContext{
+				MockCompilerContext: &MockCompilerContext{ctx: context.Background()},
+				statsCache:          statsCache,
+			}
+			builder := NewQueryBuilder(planpb.Query_SELECT, ctx, false, false)
+
+			makeScan := func(tag int32, tableID uint64, rows, outcnt, selectivity float64, primary bool) *planpb.Node {
+				tableDef := &planpb.TableDef{
+					TblId: tableID,
+					Cols: []*planpb.ColDef{{
+						Name: "k", Typ: planpb.Type{Id: int32(types.T_int64), NotNullable: primary},
+					}},
+					Name2ColIndex: map[string]int32{"k": 0},
+				}
+				if primary {
+					tableDef.Pkey = &planpb.PrimaryKeyDef{Names: []string{"k"}, PkeyColName: "k"}
+				}
+				builder.tag2Table[tag] = tableDef
+				return &planpb.Node{
+					NodeType: planpb.Node_TABLE_SCAN, BindingTags: []int32{tag}, TableDef: tableDef,
+					Stats: &planpb.Stats{
+						TableCnt: rows, Outcnt: outcnt, Cost: outcnt, Selectivity: selectivity,
+						BlockNum: 1, HashmapStats: &planpb.HashMapStats{},
+					},
+				}
+			}
+			probe := makeScan(1, 1, 1_000_000, 1_000_000, 1, false)
+			unique := makeScan(2, 2, 1_000, tt.uniqueOutcnt, tt.uniqueSelectivity, tt.withPrimaryKey)
+			left, right := probe, unique
+			leftTag, rightTag := int32(1), int32(2)
+			if tt.uniqueOnLeft {
+				left, right = unique, probe
+				leftTag, rightTag = rightTag, leftTag
+			}
+			predicate, err := BindFuncExprImplByPlanExpr(context.Background(), "=", []*planpb.Expr{
+				{Typ: planpb.Type{Id: int32(types.T_int64)}, Expr: &planpb.Expr_Col{Col: &planpb.ColRef{RelPos: leftTag, ColPos: 0, Name: "k"}}},
+				{Typ: planpb.Type{Id: int32(types.T_int64)}, Expr: &planpb.Expr_Col{Col: &planpb.ColRef{RelPos: rightTag, ColPos: 0, Name: "k"}}},
+			})
+			require.NoError(t, err)
+			join := &planpb.Node{
+				NodeType: planpb.Node_JOIN, JoinType: planpb.Node_INNER,
+				Children: []int32{0, 1}, OnList: []*planpb.Expr{predicate}, Stats: DefaultStats(),
+			}
+			builder.qry.Nodes = []*planpb.Node{left, right, join}
+
+			ReCalcNodeStats(2, builder, false, false, false)
+
+			require.InDelta(t, tt.want, join.Stats.Outcnt, 1e-6)
+		})
+	}
+}
+
+func TestFilteredCompositeUniqueJoinUsesRetainedTupleRatio(t *testing.T) {
+	const keyCount = 2
+	t.Run("composite key uses filtered tuple ratio", func(t *testing.T) {
+		statsCache := NewStatsCache()
+		ctx := &statsCacheCompilerContext{
+			MockCompilerContext: &MockCompilerContext{ctx: context.Background()},
+			statsCache:          statsCache,
+		}
+		builder := NewQueryBuilder(planpb.Query_SELECT, ctx, false, false)
+
+		makeScan := func(tag int32, tableID uint64, rows, outcnt, selectivity float64, unique bool) *planpb.Node {
+			cols := make([]*planpb.ColDef, keyCount)
+			name2ColIndex := make(map[string]int32, keyCount)
+			stats := NewStatsInfo()
+			stats.TableCnt = rows
+			for i := range keyCount {
+				name := fmt.Sprintf("k%d", i)
+				cols[i] = &planpb.ColDef{Name: name, Typ: planpb.Type{Id: int32(types.T_int64)}}
+				name2ColIndex[name] = int32(i)
+				stats.NdvMap[name] = 100
+			}
+			statsCache.Set(tableID, stats)
+			tableDef := &planpb.TableDef{TblId: tableID, Cols: cols, Name2ColIndex: name2ColIndex}
+			if unique {
+				names := make([]string, keyCount)
+				for i := range keyCount {
+					names[i] = fmt.Sprintf("k%d", i)
+				}
+				tableDef.Pkey = &planpb.PrimaryKeyDef{Names: names, PkeyColName: names[0]}
+			}
+			builder.tag2Table[tag] = tableDef
+			return &planpb.Node{
+				NodeType: planpb.Node_TABLE_SCAN, BindingTags: []int32{tag}, TableDef: tableDef,
+				Stats: &planpb.Stats{
+					TableCnt: rows, Outcnt: outcnt, Cost: outcnt, Selectivity: selectivity,
+					BlockNum: 1, HashmapStats: &planpb.HashMapStats{},
+				},
+			}
+		}
+
+		probe := makeScan(1, 1, 1_000_000, 1_000_000, 1, false)
+		unique := makeScan(2, 2, 100_000, 20_000, 0.2, true)
+		predicates := make([]*planpb.Expr, keyCount)
+		for i := range keyCount {
+			name := fmt.Sprintf("k%d", i)
+			predicate, err := BindFuncExprImplByPlanExpr(context.Background(), "=", []*planpb.Expr{
+				{Typ: planpb.Type{Id: int32(types.T_int64)}, Expr: &planpb.Expr_Col{Col: &planpb.ColRef{RelPos: 1, ColPos: int32(i), Name: name}}},
+				{Typ: planpb.Type{Id: int32(types.T_int64)}, Expr: &planpb.Expr_Col{Col: &planpb.ColRef{RelPos: 2, ColPos: int32(i), Name: name}}},
+			})
+			require.NoError(t, err)
+			predicates[i] = predicate
+		}
+		join := &planpb.Node{
+			NodeType: planpb.Node_JOIN, JoinType: planpb.Node_INNER,
+			Children: []int32{0, 1}, OnList: predicates, Stats: DefaultStats(),
+		}
+		builder.qry.Nodes = []*planpb.Node{probe, unique, join}
+
+		ReCalcNodeStats(2, builder, false, false, false)
+
+		require.Equal(t, float64(200_000), join.Stats.Outcnt)
+	})
+}
+
+func TestUniqueKeyCanSpanBothInnerJoinInputs(t *testing.T) {
+	for _, rightUnique := range []bool{true, false} {
+		t.Run(fmt.Sprintf("right_unique_%v", rightUnique), func(t *testing.T) {
+			builder := NewQueryBuilder(planpb.Query_SELECT, &MockCompilerContext{ctx: context.Background()}, false, false)
+			makeTable := func(tag int32, names []string, primary []string) *planpb.Node {
+				cols := make([]*planpb.ColDef, len(names))
+				name2ColIndex := make(map[string]int32, len(names))
+				for i, name := range names {
+					cols[i] = &planpb.ColDef{Name: name, Typ: planpb.Type{Id: int32(types.T_int64)}}
+					name2ColIndex[name] = int32(i)
+				}
+				tableDef := &planpb.TableDef{Cols: cols, Name2ColIndex: name2ColIndex}
+				if len(primary) > 0 {
+					tableDef.Pkey = &planpb.PrimaryKeyDef{Names: primary, PkeyColName: primary[0]}
+				}
+				return &planpb.Node{NodeType: planpb.Node_TABLE_SCAN, BindingTags: []int32{tag}, TableDef: tableDef}
+			}
+			left := makeTable(1, []string{"a", "b"}, []string{"a", "b"})
+			rightPrimary := []string(nil)
+			if rightUnique {
+				rightPrimary = []string{"b"}
+			}
+			right := makeTable(2, []string{"b"}, rightPrimary)
+			predicate, err := BindFuncExprImplByPlanExpr(context.Background(), "=", []*planpb.Expr{
+				{Typ: planpb.Type{Id: int32(types.T_int64)}, Expr: &planpb.Expr_Col{Col: &planpb.ColRef{RelPos: 1, ColPos: 1, Name: "b"}}},
+				{Typ: planpb.Type{Id: int32(types.T_int64)}, Expr: &planpb.Expr_Col{Col: &planpb.ColRef{RelPos: 2, ColPos: 0, Name: "b"}}},
+			})
+			require.NoError(t, err)
+			join := &planpb.Node{
+				NodeType: planpb.Node_JOIN, JoinType: planpb.Node_INNER,
+				Children: []int32{0, 1}, OnList: []*planpb.Expr{predicate},
+			}
+			builder.qry.Nodes = []*planpb.Node{left, right, join}
+
+			requested := map[uint64]struct{}{
+				colRefKey(&planpb.ColRef{RelPos: 1, ColPos: 0}): {},
+				colRefKey(&planpb.ColRef{RelPos: 2, ColPos: 0}): {},
+			}
+			require.Equal(t, rightUnique, uniqueColsInSubtree(2, requested, builder))
+		})
+	}
+}
+
+func TestTPCDSQ64SampledStatsChangeRiskyJoinTopology(t *testing.T) {
+	type fixtureColumn struct {
+		name string
+		ndv  float64
+		min  float64
+		max  float64
+		typ  types.T
+	}
+
+	statsCache := NewStatsCache()
+	ctx := &statsCacheCompilerContext{
+		MockCompilerContext: &MockCompilerContext{ctx: context.Background()},
+		statsCache:          statsCache,
+	}
+	builder := NewQueryBuilder(planpb.Query_SELECT, ctx, false, false)
+	columnPos := make(map[int32]map[string]int32)
+	nextTableID := uint64(1)
+
+	addScan := func(tag int32, rows, outcnt float64, columns ...fixtureColumn) int32 {
+		tableID := nextTableID
+		nextTableID++
+		stats := NewStatsInfo()
+		stats.TableCnt = rows
+		defs := make([]*planpb.ColDef, len(columns))
+		name2ColIndex := make(map[string]int32, len(columns))
+		columnPos[tag] = make(map[string]int32, len(columns))
+		for i, column := range columns {
+			stats.NdvMap[column.name] = column.ndv
+			stats.MinValMap[column.name] = column.min
+			stats.MaxValMap[column.name] = column.max
+			defs[i] = &planpb.ColDef{Name: column.name, Typ: planpb.Type{Id: int32(column.typ)}}
+			columnPos[tag][column.name] = int32(i)
+			name2ColIndex[column.name] = int32(i)
+		}
+		statsCache.Set(tableID, stats)
+		tableDef := &planpb.TableDef{TblId: tableID, Cols: defs, Name2ColIndex: name2ColIndex}
+		builder.tag2Table[tag] = tableDef
+		node := &planpb.Node{
+			NodeType:    planpb.Node_TABLE_SCAN,
+			BindingTags: []int32{tag},
+			TableDef:    tableDef,
+			Stats: &planpb.Stats{
+				TableCnt: rows, Outcnt: outcnt, Cost: outcnt,
+				Selectivity: outcnt / rows, BlockNum: 1,
+				HashmapStats: &planpb.HashMapStats{},
+			},
+		}
+		builder.qry.Nodes = append(builder.qry.Nodes, node)
+		return int32(len(builder.qry.Nodes) - 1)
+	}
+	markPrimaryKey := func(nodeID int32, names ...string) {
+		tableDef := builder.qry.Nodes[nodeID].TableDef
+		tableDef.Pkey = &planpb.PrimaryKeyDef{Names: names, PkeyColName: names[0]}
+		for _, name := range names {
+			tableDef.Cols[tableDef.Name2ColIndex[name]].Typ.NotNullable = true
+		}
+	}
+	makeCol := func(tag int32, name string) *planpb.Expr {
+		def := builder.tag2Table[tag].Cols[columnPos[tag][name]]
+		return &planpb.Expr{
+			Typ: def.Typ,
+			Expr: &planpb.Expr_Col{Col: &planpb.ColRef{
+				RelPos: tag, ColPos: columnPos[tag][name], Name: name,
+			}},
+		}
+	}
+	makeBinary := func(name string, leftTag int32, leftCol string, rightTag int32, rightCol string) *planpb.Expr {
+		expr, err := BindFuncExprImplByPlanExpr(context.Background(), name, []*planpb.Expr{
+			makeCol(leftTag, leftCol), makeCol(rightTag, rightCol),
+		})
+		require.NoError(t, err)
+		return expr
+	}
+	addJoin := func(left, right int32, predicates ...*planpb.Expr) int32 {
+		node := &planpb.Node{
+			NodeType: planpb.Node_JOIN, JoinType: planpb.Node_INNER,
+			Children: []int32{left, right}, OnList: predicates, Stats: DefaultStats(),
+		}
+		builder.qry.Nodes = append(builder.qry.Nodes, node)
+		nodeID := int32(len(builder.qry.Nodes) - 1)
+		ReCalcNodeStats(nodeID, builder, false, false, false)
+		return nodeID
+	}
+
+	// These are the sampled table counts and NDVs captured with the failing
+	// TPC-DS 1T Q64 plan in #26742.  Keep the fixture typed and focused on the
+	// cardinalities that select the store_returns hash-join topology.
+	ss := addScan(1, 2_879_987_999, 2_879_987_999,
+		fixtureColumn{"ss_sold_date_sk", 1_810, 0, 73_049, types.T_int64},
+		fixtureColumn{"ss_store_sk", 499, 0, 1_000, types.T_int64},
+		fixtureColumn{"ss_promo_sk", 1_489, 0, 1_500, types.T_int64},
+		fixtureColumn{"ss_hdemo_sk", 7_898, 0, 7_200, types.T_int64},
+		fixtureColumn{"ss_cdemo_sk", 22_262_368.548327174, 0, 1_920_800, types.T_int64},
+		fixtureColumn{"ss_addr_sk", 24_253_356.946427356, 0, 6_000_000, types.T_int64},
+		fixtureColumn{"ss_customer_sk", 24_780_616.288858734, 0, 12_000_000, types.T_int64},
+		fixtureColumn{"ss_item_sk", 2_162_541.164143982, 1, 300_000, types.T_int64},
+		fixtureColumn{"ss_ticket_number", 9_797_871.261877812, 1, 239_811_735, types.T_int64})
+	d1 := addScan(2, 73_049, 73_049.0/202,
+		fixtureColumn{"d_date_sk", 73_049, 1, 73_049, types.T_int64})
+	store := addScan(3, 1_002, 1_002,
+		fixtureColumn{"s_store_sk", 1_002, 1, 1_002, types.T_int64})
+	promotion := addScan(4, 1_500, 1_500,
+		fixtureColumn{"p_promo_sk", 1_500, 1, 1_500, types.T_int64})
+	hd1 := addScan(5, 7_200, 7_200,
+		fixtureColumn{"hd_demo_sk", 7_200, 1, 7_200, types.T_int64},
+		fixtureColumn{"hd_income_band_sk", 20, 1, 20, types.T_int64})
+	ib1 := addScan(6, 20, 20,
+		fixtureColumn{"ib_income_band_sk", 20, 1, 20, types.T_int64})
+	cd1 := addScan(7, 1_920_800, 1_920_800,
+		fixtureColumn{"cd_demo_sk", 1_920_800, 1, 1_920_800, types.T_int64},
+		fixtureColumn{"cd_marital_status", 5, 0, 0, types.T_varchar})
+	ad1 := addScan(8, 6_000_000, 6_000_000,
+		fixtureColumn{"ca_address_sk", 6_000_000, 1, 6_000_000, types.T_int64})
+	markPrimaryKey(ss, "ss_item_sk", "ss_ticket_number")
+	markPrimaryKey(d1, "d_date_sk")
+	markPrimaryKey(store, "s_store_sk")
+	markPrimaryKey(promotion, "p_promo_sk")
+	markPrimaryKey(hd1, "hd_demo_sk")
+	markPrimaryKey(ib1, "ib_income_band_sk")
+	markPrimaryKey(cd1, "cd_demo_sk")
+	markPrimaryKey(ad1, "ca_address_sk")
+
+	hd1WithIncome := addJoin(hd1, ib1, makeBinary("=", 5, "hd_income_band_sk", 6, "ib_income_band_sk"))
+	fact := addJoin(ss, d1, makeBinary("=", 1, "ss_sold_date_sk", 2, "d_date_sk"))
+	dateJoin := builder.qry.Nodes[fact]
+	fact = addJoin(fact, store, makeBinary("=", 1, "ss_store_sk", 3, "s_store_sk"))
+	fact = addJoin(fact, promotion, makeBinary("=", 1, "ss_promo_sk", 4, "p_promo_sk"))
+	fact = addJoin(fact, hd1WithIncome, makeBinary("=", 1, "ss_hdemo_sk", 5, "hd_demo_sk"))
+	fact = addJoin(fact, cd1, makeBinary("=", 1, "ss_cdemo_sk", 7, "cd_demo_sk"))
+	fact = addJoin(fact, ad1, makeBinary("=", 1, "ss_addr_sk", 8, "ca_address_sk"))
+
+	customer := addScan(9, 12_000_000, 12_000_000,
+		fixtureColumn{"c_customer_sk", 12_000_000, 1, 12_000_000, types.T_int64},
+		fixtureColumn{"c_current_hdemo_sk", 7_180, 0, 7_200, types.T_int64},
+		fixtureColumn{"c_first_sales_date_sk", 3_618, 1, 73_049, types.T_int64},
+		fixtureColumn{"c_first_shipto_date_sk", 3_614, 1, 73_049, types.T_int64},
+		fixtureColumn{"c_current_cdemo_sk", 1_366_731, 0, 1_920_800, types.T_int64},
+		fixtureColumn{"c_current_addr_sk", 1_556_334, 3, 6_000_000, types.T_int64})
+	hd2 := addScan(10, 7_200, 7_200,
+		fixtureColumn{"hd_demo_sk", 7_200, 1, 7_200, types.T_int64},
+		fixtureColumn{"hd_income_band_sk", 20, 1, 20, types.T_int64})
+	ib2 := addScan(11, 20, 20,
+		fixtureColumn{"ib_income_band_sk", 20, 1, 20, types.T_int64})
+	d2 := addScan(12, 73_049, 73_049,
+		fixtureColumn{"d_date_sk", 73_049, 1, 73_049, types.T_int64})
+	d3 := addScan(13, 73_049, 73_049,
+		fixtureColumn{"d_date_sk", 73_049, 1, 73_049, types.T_int64})
+	cd2 := addScan(14, 1_920_800, 1_920_800,
+		fixtureColumn{"cd_demo_sk", 1_920_800, 1, 1_920_800, types.T_int64},
+		fixtureColumn{"cd_marital_status", 5, 0, 0, types.T_varchar})
+	ad2 := addScan(15, 6_000_000, 6_000_000,
+		fixtureColumn{"ca_address_sk", 6_000_000, 1, 6_000_000, types.T_int64})
+	markPrimaryKey(customer, "c_customer_sk")
+	markPrimaryKey(hd2, "hd_demo_sk")
+	markPrimaryKey(ib2, "ib_income_band_sk")
+	markPrimaryKey(d2, "d_date_sk")
+	markPrimaryKey(d3, "d_date_sk")
+	markPrimaryKey(cd2, "cd_demo_sk")
+	markPrimaryKey(ad2, "ca_address_sk")
+
+	hd2WithIncome := addJoin(hd2, ib2, makeBinary("=", 10, "hd_income_band_sk", 11, "ib_income_band_sk"))
+	customerBranch := addJoin(customer, hd2WithIncome, makeBinary("=", 9, "c_current_hdemo_sk", 10, "hd_demo_sk"))
+	customerBranch = addJoin(customerBranch, d2, makeBinary("=", 9, "c_first_sales_date_sk", 12, "d_date_sk"))
+	customerBranch = addJoin(customerBranch, d3, makeBinary("=", 9, "c_first_shipto_date_sk", 13, "d_date_sk"))
+	customerBranch = addJoin(customerBranch, cd2, makeBinary("=", 9, "c_current_cdemo_sk", 14, "cd_demo_sk"))
+	customerBranch = addJoin(customerBranch, ad2, makeBinary("=", 9, "c_current_addr_sk", 15, "ca_address_sk"))
+	fact = addJoin(fact, customerBranch, makeBinary("=", 1, "ss_customer_sk", 9, "c_customer_sk"))
+
+	maritalFilter := &planpb.Node{
+		NodeType: planpb.Node_FILTER, Children: []int32{fact},
+		FilterList: []*planpb.Expr{makeBinary("!=", 7, "cd_marital_status", 14, "cd_marital_status")},
+		Stats:      DefaultStats(),
+	}
+	builder.qry.Nodes = append(builder.qry.Nodes, maritalFilter)
+	filterID := int32(len(builder.qry.Nodes) - 1)
+	ReCalcNodeStats(filterID, builder, false, false, false)
+
+	storeReturns := addScan(16, 287_999_764, 287_999_764,
+		fixtureColumn{"sr_item_sk", 1_062_228.7817510783, 1, 295_699, types.T_int64},
+		fixtureColumn{"sr_ticket_number", 3_563_997.0795, 2, 239_999_998, types.T_int64})
+	markPrimaryKey(storeReturns, "sr_item_sk", "sr_ticket_number")
+	returnsJoinID := addJoin(storeReturns, filterID,
+		makeBinary("=", 16, "sr_item_sk", 1, "ss_item_sk"),
+		makeBinary("=", 16, "sr_ticket_number", 1, "ss_ticket_number"))
+	returnsJoin := builder.qry.Nodes[returnsJoinID]
+	builder.determineBuildAndProbeSide(returnsJoinID, false)
+	ReCalcNodeStats(returnsJoinID, builder, false, false, false)
+	determineShuffleForJoin(returnsJoin, builder)
+
+	const oldDateJoinEstimate = 14_257_366.33
+	const oldMaritalFilterEstimate = 712_868.32
+	require.InDelta(t, 575_406_824.95, dateJoin.Stats.Outcnt, 1)
+	require.InDelta(t, 517_866_142.46, maritalFilter.Stats.Outcnt, 1)
+	require.Greater(t, dateJoin.Stats.Outcnt, oldDateJoinEstimate*40)
+	require.Greater(t, maritalFilter.Stats.Outcnt, oldMaritalFilterEstimate*700)
+	require.Equal(t, []int32{filterID, storeReturns}, returnsJoin.Children,
+		"the smaller store_returns input becomes the hash-build side")
+	require.InDelta(t, 287_999_764, returnsJoin.Stats.HashmapStats.HashmapSize, 1)
+	require.True(t, returnsJoin.Stats.HashmapStats.Shuffle,
+		"the corrected build estimate crosses the shuffle threshold")
+	t.Logf("Q64 sampled stats: date join %.0f -> %.0f, marital filter %.0f -> %.0f, returns join %.0f, shuffle=%v",
+		oldDateJoinEstimate, dateJoin.Stats.Outcnt,
+		oldMaritalFilterEstimate, maritalFilter.Stats.Outcnt,
+		returnsJoin.Stats.Outcnt, returnsJoin.Stats.HashmapStats.Shuffle)
 }
 
 func newStatsTestBuilderWithNDV(colName string, ndv float64) *QueryBuilder {
