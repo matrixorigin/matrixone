@@ -36,6 +36,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
+	planbuilder "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/stretchr/testify/require"
 	spb "github.com/substrait-io/substrait-protobuf/go/substraitpb"
@@ -140,7 +142,8 @@ func TestSortPreservesMatrixOneNullOrdering(t *testing.T) {
 		flag planpb.OrderBySpec_OrderByFlag
 		want spb.SortField_SortDirection
 	}{
-		{name: "default ascending", flag: planpb.OrderBySpec_INTERNAL | planpb.OrderBySpec_ASC, want: spb.SortField_SORT_DIRECTION_ASC_NULLS_FIRST},
+		{name: "implicit ascending", flag: planpb.OrderBySpec_INTERNAL, want: spb.SortField_SORT_DIRECTION_ASC_NULLS_FIRST},
+		{name: "explicit ascending", flag: planpb.OrderBySpec_ASC, want: spb.SortField_SORT_DIRECTION_ASC_NULLS_FIRST},
 		{name: "default descending", flag: planpb.OrderBySpec_INTERNAL | planpb.OrderBySpec_DESC, want: spb.SortField_SORT_DIRECTION_DESC_NULLS_LAST},
 		{name: "explicit ascending last", flag: planpb.OrderBySpec_ASC | planpb.OrderBySpec_NULLS_LAST, want: spb.SortField_SORT_DIRECTION_ASC_NULLS_LAST},
 		{name: "explicit descending first", flag: planpb.OrderBySpec_DESC | planpb.OrderBySpec_NULLS_FIRST, want: spb.SortField_SORT_DIRECTION_DESC_NULLS_FIRST},
@@ -158,6 +161,56 @@ func TestSortPreservesMatrixOneNullOrdering(t *testing.T) {
 			require.Equal(t, tc.want, plan.Relations[0].GetRoot().Input.GetSort().Sorts[0].GetDirection())
 		})
 	}
+}
+
+func TestBoundImplicitSortExportsAsAscending(t *testing.T) {
+	query := boundSQLQuery(t, "select a from select_test.bind_select order by a")
+	sortNode := boundNode(t, query, planpb.Node_SORT)
+	require.Len(t, sortNode.OrderBy, 1)
+	require.Equal(t, planpb.OrderBySpec_INTERNAL, sortNode.OrderBy[0].Flag)
+
+	plan := buildSubstraitPlan(t, query)
+	sort := findSubstraitSort(plan.Relations[0].GetRoot().Input)
+	require.NotNil(t, sort)
+	require.Len(t, sort.Sorts, 1)
+	require.Equal(t, spb.SortField_SORT_DIRECTION_ASC_NULLS_FIRST, sort.Sorts[0].GetDirection())
+}
+
+func TestBoundNullOnEmptyAggregateUsesNullableOutput(t *testing.T) {
+	for _, tc := range []struct {
+		name            string
+		sql             string
+		wantNullability spb.Type_Nullability
+	}{
+		{name: "global empty input", sql: "select min(a) from select_test.bind_select where false", wantNullability: spb.Type_NULLABILITY_NULLABLE},
+		{name: "global max empty input", sql: "select max(a) from select_test.bind_select where false", wantNullability: spb.Type_NULLABILITY_NULLABLE},
+		{name: "grouped", sql: "select a, min(a) from select_test.bind_select group by a", wantNullability: spb.Type_NULLABILITY_REQUIRED},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			query := boundSQLQuery(t, tc.sql)
+			aggregateNode := boundNode(t, query, planpb.Node_AGG)
+			require.Len(t, aggregateNode.AggList, 1)
+			require.True(t, aggregateNode.AggList[0].Typ.NotNullable)
+			require.True(t, aggregateNode.AggList[0].GetF().Args[0].Typ.NotNullable)
+
+			plan := buildSubstraitPlan(t, query)
+			aggregate := findSubstraitAggregate(plan.Relations[0].GetRoot().Input)
+			require.NotNil(t, aggregate)
+			require.Len(t, aggregate.Measures, 1)
+			require.Equal(t, tc.wantNullability, aggregate.Measures[0].Measure.OutputType.GetI64().GetNullability())
+		})
+	}
+}
+
+func TestBoundInt64SumIsNotAdvertised(t *testing.T) {
+	query := boundSQLQuery(t, "select sum(a) from select_test.bind_select")
+	aggregateNode := boundNode(t, query, planpb.Node_AGG)
+	require.Len(t, aggregateNode.AggList, 1)
+	require.Equal(t, int32(types.T_decimal128), aggregateNode.AggList[0].Typ.Id)
+
+	_, err := Export(query)
+	require.ErrorContains(t, err, "no declared Sirius semantic equivalence")
+	require.NotContains(t, CapabilityDocument, "sum(i64)->i64")
 }
 
 func TestFetchAcceptsBoundUint64AndPreservesAbsentCount(t *testing.T) {
@@ -1277,6 +1330,8 @@ func TestExporterValidationGuards(t *testing.T) {
 		{Expr: col(0), Collation: "utf8"},
 		{Expr: col(0), Flag: planpb.OrderBySpec_UNIQUE},
 		{Expr: col(0), Flag: planpb.OrderBySpec_ASC | planpb.OrderBySpec_DESC},
+		{Expr: col(0), Flag: planpb.OrderBySpec_NULLS_FIRST | planpb.OrderBySpec_NULLS_LAST},
+		{Expr: col(0), Flag: planpb.OrderBySpec_OrderByFlag(1 << 15)},
 	} {
 		q = scanQuery()
 		q.Nodes = append(q.Nodes, &planpb.Node{NodeId: 1, NodeType: planpb.Node_SORT, Children: []int32{0}, OrderBy: []*planpb.OrderBySpec{order}})
@@ -1289,6 +1344,101 @@ func TestExporterValidationGuards(t *testing.T) {
 func ptrType(value planpb.Type) *planpb.Type { return &value }
 
 func intExpr(value int64) *planpb.Expr { return i64(value) }
+
+func boundSQLQuery(t *testing.T, sql string) *planpb.Query {
+	t.Helper()
+	statement, err := mysql.ParseOne(context.Background(), sql, 1)
+	require.NoError(t, err)
+	built, err := planbuilder.BuildPlan(planbuilder.NewMockCompilerContext(false), statement, false)
+	require.NoError(t, err)
+	query := built.GetQuery()
+	require.NotNil(t, query)
+	for _, node := range query.Nodes {
+		if node == nil || node.NodeType != planpb.Node_TABLE_SCAN {
+			continue
+		}
+		require.NotNil(t, node.ObjRef)
+		require.NotNil(t, node.TableDef)
+		// The mock compiler intentionally leaves catalog IDs unset. Supply only
+		// those physical identities so Export sees an otherwise real bound plan.
+		node.ObjRef.Db = 7
+		if node.TableDef.TblId == 0 {
+			node.TableDef.TblId = uint64(node.NodeId) + 42
+		}
+		node.ObjRef.Obj = int64(node.TableDef.TblId)
+	}
+	return query
+}
+
+func boundNode(t *testing.T, query *planpb.Query, nodeType planpb.Node_NodeType) *planpb.Node {
+	t.Helper()
+	var found *planpb.Node
+	for _, node := range query.Nodes {
+		if node != nil && node.NodeType == nodeType {
+			require.Nil(t, found, "multiple %s nodes", nodeType.String())
+			found = node
+		}
+	}
+	require.NotNil(t, found, "missing %s node", nodeType.String())
+	return found
+}
+
+func buildSubstraitPlan(t *testing.T, query *planpb.Query) *spb.Plan {
+	t.Helper()
+	candidate, err := Export(query)
+	require.NoError(t, err)
+	reads := make(map[int32][]byte, len(candidate.Reads()))
+	for _, read := range candidate.Reads() {
+		reads[read.NodeID] = []byte{1}
+	}
+	wire, err := candidate.Build(reads)
+	require.NoError(t, err)
+	plan := new(spb.Plan)
+	require.NoError(t, proto.Unmarshal(wire, plan))
+	return plan
+}
+
+func findSubstraitAggregate(rel *spb.Rel) *spb.AggregateRel {
+	for rel != nil {
+		if aggregate := rel.GetAggregate(); aggregate != nil {
+			return aggregate
+		}
+		switch {
+		case rel.GetProject() != nil:
+			rel = rel.GetProject().Input
+		case rel.GetFilter() != nil:
+			rel = rel.GetFilter().Input
+		case rel.GetSort() != nil:
+			rel = rel.GetSort().Input
+		case rel.GetFetch() != nil:
+			rel = rel.GetFetch().Input
+		default:
+			return nil
+		}
+	}
+	return nil
+}
+
+func findSubstraitSort(rel *spb.Rel) *spb.SortRel {
+	for rel != nil {
+		if sort := rel.GetSort(); sort != nil {
+			return sort
+		}
+		switch {
+		case rel.GetProject() != nil:
+			rel = rel.GetProject().Input
+		case rel.GetFilter() != nil:
+			rel = rel.GetFilter().Input
+		case rel.GetAggregate() != nil:
+			rel = rel.GetAggregate().Input
+		case rel.GetFetch() != nil:
+			rel = rel.GetFetch().Input
+		default:
+			return nil
+		}
+	}
+	return nil
+}
 
 func scanQuery() *planpb.Query {
 	return &planpb.Query{StmtType: planpb.Query_SELECT, Steps: []int32{0}, Headings: []string{"a"}, Nodes: []*planpb.Node{{NodeId: 0, NodeType: planpb.Node_TABLE_SCAN, ObjRef: &planpb.ObjectRef{Db: 7, Obj: 42, ObjName: "t"}, TableDef: &planpb.TableDef{TblId: 42, Version: 3, Name: "t", TableType: "r", Cols: []*planpb.ColDef{{Name: "a", ColId: 11, Seqnum: 5, Typ: i64Type()}}}}}}

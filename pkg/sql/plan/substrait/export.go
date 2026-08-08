@@ -312,9 +312,14 @@ func (e *exporter) read(n *planpb.Node) (*spb.Rel, error) {
 }
 
 func (e *exporter) aggregate(n *planpb.Node) (*spb.Rel, error) {
-	for _, flag := range n.GroupingFlag {
-		if flag {
+	if len(n.GroupingFlag) != 0 {
+		if len(n.GroupingFlag) != len(n.GroupBy) {
 			return nil, moerr.NewInternalErrorNoCtxf("substrait: grouping sets are unsupported")
+		}
+		for _, flag := range n.GroupingFlag {
+			if !flag {
+				return nil, moerr.NewInternalErrorNoCtxf("substrait: grouping sets are unsupported")
+			}
 		}
 	}
 	input, err := e.unary(n)
@@ -360,7 +365,11 @@ func (e *exporter) aggregate(n *planpb.Node) (*spb.Rel, error) {
 				return nil, moerr.NewInternalErrorNoCtxf("substrait: starcount requires a non-NULL literal argument")
 			}
 		}
-		if !hasSemanticCapability(semanticAggregate, name, f.Func, f.Args, &x.Typ) {
+		outputType := x.Typ
+		if len(n.GroupBy) == 0 && aggregateCanReturnNullOnEmpty(functionID) {
+			outputType.NotNullable = false
+		}
+		if !hasSemanticCapability(semanticAggregate, name, f.Func, f.Args, &outputType) {
 			return nil, moerr.NewInternalErrorNoCtxf("substrait: aggregate overload %q has no declared Sirius semantic equivalence", f.Func.ObjName)
 		}
 		if err := validateExprFields(f.Args, inputWidth); err != nil {
@@ -374,7 +383,7 @@ func (e *exporter) aggregate(n *planpb.Node) (*spb.Rel, error) {
 			}
 			args[j] = valueArg(a)
 		}
-		out, xerr := substraitType(&x.Typ)
+		out, xerr := substraitType(&outputType)
 		if xerr != nil {
 			return nil, xerr
 		}
@@ -408,10 +417,12 @@ func (e *exporter) sort(n *planpb.Node) (*spb.Rel, error) {
 		directionBits := flag & (int32(planpb.OrderBySpec_ASC) | int32(planpb.OrderBySpec_DESC))
 		nullBits := flag & (int32(planpb.OrderBySpec_NULLS_FIRST) | int32(planpb.OrderBySpec_NULLS_LAST))
 		known := directionBits | nullBits
-		if directionBits != int32(planpb.OrderBySpec_ASC) && directionBits != int32(planpb.OrderBySpec_DESC) || nullBits == int32(planpb.OrderBySpec_NULLS_FIRST)|int32(planpb.OrderBySpec_NULLS_LAST) || flag != known {
+		invalidDirection := directionBits != 0 && directionBits != int32(planpb.OrderBySpec_ASC) && directionBits != int32(planpb.OrderBySpec_DESC)
+		conflictingNulls := nullBits == int32(planpb.OrderBySpec_NULLS_FIRST)|int32(planpb.OrderBySpec_NULLS_LAST)
+		if invalidDirection || conflictingNulls || flag != known {
 			return nil, moerr.NewInternalErrorNoCtxf("substrait: unsupported sort flags %d", flag)
 		}
-		desc := flag&int32(planpb.OrderBySpec_DESC) != 0
+		desc := directionBits == int32(planpb.OrderBySpec_DESC)
 		nullsFirst := flag&int32(planpb.OrderBySpec_NULLS_FIRST) != 0
 		if flag&int32(planpb.OrderBySpec_NULLS_LAST) == 0 && !nullsFirst {
 			nullsFirst = !desc
@@ -867,7 +878,6 @@ var semanticDeclarations = []semanticDeclaration{
 	{semanticScalar, function.BETWEEN, "between", "between", []types.Type{types.T_int64.ToType(), types.T_int64.ToType(), types.T_int64.ToType()}, "sirius-v1:signed-i64-between"},
 	{semanticAggregate, function.COUNT, "count", "count", []types.Type{types.T_int64.ToType()}, "sirius-v1:count-i64"},
 	{semanticAggregate, function.STARCOUNT, "starcount", "count", []types.Type{types.T_int64.ToType()}, "sirius-v1:count-all"},
-	{semanticAggregate, function.SUM, "sum", "sum", []types.Type{types.T_int64.ToType()}, "sirius-v1:checked-signed-i64-sum"},
 	{semanticAggregate, function.MIN, "min", "min", []types.Type{types.T_int64.ToType()}, "sirius-v1:signed-i64-min"},
 	{semanticAggregate, function.MAX, "max", "max", []types.Type{types.T_int64.ToType()}, "sirius-v1:signed-i64-max"},
 }
@@ -912,13 +922,37 @@ func buildSemanticCapabilities(declarations []semanticDeclaration) (map[semantic
 				scale:       output.Scale,
 				notNullable: function.DeduceNotNullable(resolved.GetEncodedOverloadID(), arguments),
 			}
-			if existing, ok := result[key]; ok && existing != (semanticCapability{name: declaration.name, equivalence: declaration.equivalence}) {
-				return nil, moerr.NewInternalErrorNoCtxf("substrait semantic capability collision for %q", declaration.moName)
+			capability := semanticCapability{name: declaration.name, equivalence: declaration.equivalence}
+			if err := addSemanticCapability(result, key, capability, declaration.moName); err != nil {
+				return nil, err
 			}
-			result[key] = semanticCapability{name: declaration.name, equivalence: declaration.equivalence}
+			if declaration.kind == semanticAggregate && aggregateCanReturnNullOnEmpty(functionID) && key.result.notNullable {
+				nullableKey := key
+				nullableKey.result.notNullable = false
+				if err := addSemanticCapability(result, nullableKey, capability, declaration.moName); err != nil {
+					return nil, err
+				}
+			}
 		}
 	}
 	return result, nil
+}
+
+func aggregateCanReturnNullOnEmpty(functionID int32) bool {
+	switch functionID {
+	case function.MIN, function.MAX:
+		return true
+	default:
+		return false
+	}
+}
+
+func addSemanticCapability(result map[semanticCapabilityKey]semanticCapability, key semanticCapabilityKey, capability semanticCapability, moName string) error {
+	if existing, ok := result[key]; ok && existing != capability {
+		return moerr.NewInternalErrorNoCtxf("substrait semantic capability collision for %q", moName)
+	}
+	result[key] = capability
+	return nil
 }
 
 func hasSemanticCapability(kind semanticCapabilityKind, name string, ref *planpb.ObjectRef, args []*planpb.Expr, out *planpb.Type) bool {
