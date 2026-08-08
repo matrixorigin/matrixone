@@ -47,6 +47,13 @@ func (b *Bytes) Size() int64 {
 	return int64(len(b.bytes))
 }
 
+func (b *Bytes) Capacity() int64 {
+	if b.refs.Load() <= 0 {
+		panic("Bytes.Capacity: use after free")
+	}
+	return int64(cap(b.bytes))
+}
+
 func (b *Bytes) Bytes() []byte {
 	if b.refs.Load() <= 0 {
 		panic("Bytes.Bytes: use after free")
@@ -127,6 +134,17 @@ func (b *bytesAllocator) CopyToCacheData(ctx context.Context, data []byte) fscac
 	return ret
 }
 
+func (b *bytesAllocator) BackingSize(size int) int {
+	backingSize, err := malloc.BackingSize(b.allocator, uint64(size))
+	if err != nil {
+		panic(err)
+	}
+	if uint64(int(backingSize)) != backingSize {
+		panic("cache backing size overflows int")
+	}
+	return int(backingSize)
+}
+
 type cacheCapacityGuardedAllocator struct {
 	cache     fscache.DataCache
 	allocator CacheDataAllocator
@@ -135,16 +153,29 @@ type cacheCapacityGuardedAllocator struct {
 var _ CacheDataAllocator = cacheCapacityGuardedAllocator{}
 
 func (c cacheCapacityGuardedAllocator) AllocateCacheData(ctx context.Context, size int) fscache.Data {
-	c.cache.EnsureNBytes(withoutEventLogger(ctx), size)
+	ensureCacheDataCapacity(ctx, c.cache, c.allocator, size)
 	return c.allocator.AllocateCacheData(ctx, size)
 }
 
 func (c cacheCapacityGuardedAllocator) AllocateCacheDataWithHint(ctx context.Context, size int, hints malloc.Hints) fscache.Data {
-	c.cache.EnsureNBytes(withoutEventLogger(ctx), size)
+	ensureCacheDataCapacity(ctx, c.cache, c.allocator, size)
 	return c.allocator.AllocateCacheDataWithHint(ctx, size, hints)
 }
 
 func (c cacheCapacityGuardedAllocator) CopyToCacheData(ctx context.Context, data []byte) fscache.Data {
-	c.cache.EnsureNBytes(withoutEventLogger(ctx), len(data))
+	ensureCacheDataCapacity(ctx, c.cache, c.allocator, len(data))
 	return c.allocator.CopyToCacheData(ctx, data)
+}
+
+func (c cacheCapacityGuardedAllocator) BackingSize(size int) int {
+	return c.allocator.BackingSize(size)
+}
+
+func ensureCacheDataCapacity(
+	ctx context.Context,
+	cache fscache.DataCache,
+	allocator CacheDataAllocator,
+	size int,
+) {
+	cache.EnsureNBytes(withoutEventLogger(ctx), allocator.BackingSize(size))
 }
