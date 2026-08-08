@@ -103,6 +103,19 @@ func (shortBatchMarshalWriter) Write(value []byte) (int, error) {
 	return len(value) - 1, nil
 }
 
+type mpoolTrackingReader struct {
+	reader    *bytes.Reader
+	mp        *mpool.MPool
+	maxCurrNB int64
+}
+
+func (r *mpoolTrackingReader) Read(value []byte) (int, error) {
+	if current := r.mp.CurrNB(); current > r.maxCurrNB {
+		r.maxCurrNB = current
+	}
+	return r.reader.Read(value)
+}
+
 func TestMarshalBinarySizeRejectsInvalidBatch(t *testing.T) {
 	var nilBatch *Batch
 	_, err := nilBatch.MarshalBinarySize()
@@ -664,6 +677,170 @@ func TestPrepareParamKindTransportRejectsMismatchedCountsBeforeAllocation(t *tes
 	require.ErrorContains(t, reused.UnmarshalBinaryWithPrepareParamKinds(malformed, mp),
 		"row count mismatch")
 	reused.Clean(mp)
+}
+
+func TestPrepareParamKindStreamingRejectsTruncatedRowsBeforeAllocation(t *testing.T) {
+	sourceMP := mpool.MustNewZero()
+	source := NewWithSize(1)
+	source.Vecs[0] = vector.NewConstNull(
+		types.T_int8.ToType(),
+		int(prepareParamKindBatchMaxRows),
+		sourceMP,
+	)
+	source.SetRowCount(int(prepareParamKindBatchMaxRows))
+	stable, err := source.MarshalBinary()
+	require.NoError(t, err)
+	source.Clean(sourceMP)
+	require.Zero(t, sourceMP.CurrNB())
+
+	var trailer bytes.Buffer
+	trailer.Write([]byte{
+		prepareParamKindBatchMagic0,
+		prepareParamKindBatchMagic1,
+		prepareParamKindBatchMagic2,
+		prepareParamKindBatchVersion,
+	})
+	nVecs := int32(1)
+	trailer.Write(types.EncodeInt32(&nVecs))
+	rowCount := int64(prepareParamKindBatchMaxRows)
+	trailer.Write(types.EncodeInt64(&rowCount))
+	trailer.WriteByte(prepareParamKindBatchModeRows)
+	count := prepareParamKindBatchMaxRows
+	trailer.Write(types.EncodeInt32(&count))
+	trailer.WriteByte(byte(vector.PrepareParamFloat))
+	trailerLen := uint32(trailer.Len() + 4)
+	trailer.Write(types.EncodeUint32(&trailerLen))
+
+	wire := append(append([]byte(nil), stable...), trailer.Bytes()...)
+	mp := mpool.MustNewZero()
+	reader := &mpoolTrackingReader{
+		reader: bytes.NewReader(wire),
+		mp:     mp,
+	}
+	target := NewOffHeapEmpty()
+	err = target.UnmarshalFromReaderWithPrepareParamKinds(reader, int64(len(wire)), mp)
+	require.ErrorIs(t, err, io.ErrUnexpectedEOF)
+	require.Equal(t, int(prepareParamKindBatchMaxRows), target.Vecs[0].Length())
+	require.Empty(t, target.Vecs[0].GetPrepareParamKinds())
+	require.Equal(t, mp.CurrNB(), reader.maxCurrNB,
+		"truncated row metadata must not transiently amplify the MPool")
+	target.Clean(mp)
+	require.Zero(t, mp.CurrNB())
+}
+
+func makePrepareParamKindStreamingWire(t *testing.T) (encoded, legacy []byte) {
+	t.Helper()
+	mp := mpool.MustNewZero()
+	source := NewWithSize(2)
+	source.Vecs[0] = vector.NewVec(types.T_text.ToType())
+	source.Vecs[1] = vector.NewVec(types.T_int64.ToType())
+	for i, value := range []string{"1.5", "plain", "9.5"} {
+		require.NoError(t, vector.AppendBytes(source.Vecs[0], []byte(value), false, mp))
+		require.NoError(t, vector.AppendFixed(source.Vecs[1], int64(i+1), false, mp))
+	}
+	require.NoError(t, source.Vecs[0].SetPrepareParamKindsWithMP([]vector.PrepareParamKind{
+		vector.PrepareParamFloat,
+		vector.PrepareParamNone,
+		vector.PrepareParamDecimal,
+	}, mp))
+	source.SetRowCount(3)
+
+	legacy, err := source.MarshalBinary()
+	require.NoError(t, err)
+	var wire bytes.Buffer
+	encoded, err = source.MarshalBinaryWithPrepareParamKinds(&wire, true)
+	require.NoError(t, err)
+	encoded = append([]byte(nil), encoded...)
+	source.Clean(mp)
+	require.Zero(t, mp.CurrNB())
+	return encoded, legacy
+}
+
+func TestPrepareParamKindStreamingRoundTrip(t *testing.T) {
+	encoded, legacy := makePrepareParamKindStreamingWire(t)
+	require.Greater(t, len(encoded), len(legacy))
+	require.Equal(t, legacy, encoded[:len(legacy)],
+		"the streaming extension must not change the stable Batch prefix")
+
+	mp := mpool.MustNewZero()
+	target := NewOffHeapEmpty()
+	require.NoError(t, target.UnmarshalFromReaderWithPrepareParamKinds(
+		bytes.NewReader(encoded), int64(len(encoded)), mp))
+	require.Equal(t, 3, target.RowCount())
+	require.Equal(t, []vector.PrepareParamKind{
+		vector.PrepareParamFloat,
+		vector.PrepareParamNone,
+		vector.PrepareParamDecimal,
+	}, target.Vecs[0].GetPrepareParamKinds())
+	require.Equal(t, int64(3), vector.GetFixedAtWithTypeCheck[int64](target.Vecs[1], 2))
+	require.False(t, target.Vecs[1].HasPrepareParamKind())
+	target.Clean(mp)
+	require.Zero(t, mp.CurrNB())
+}
+
+func TestPrepareParamKindStreamingReservesRemainingRecordsAndFooter(t *testing.T) {
+	encoded, legacy := makePrepareParamKindStreamingWire(t)
+	// Header + first rows mode + count + three row kinds ends immediately
+	// before the second vector's mode byte.
+	firstRowsEnd := len(legacy) + 4 + 4 + 8 + 1 + 4 + 3
+	require.Less(t, firstRowsEnd, len(encoded))
+
+	t.Run("valid multi-vector record", func(t *testing.T) {
+		mp := mpool.MustNewZero()
+		target := NewOffHeapEmpty()
+		require.NoError(t, target.UnmarshalFromReaderWithPrepareParamKinds(
+			bytes.NewReader(encoded), int64(len(encoded)), mp))
+		require.Equal(t, vector.PrepareParamDecimal, target.Vecs[0].GetPrepareParamKindAt(2))
+		target.Clean(mp)
+		require.Zero(t, mp.CurrNB())
+	})
+
+	for _, tc := range []struct {
+		name string
+		wire []byte
+	}{
+		{name: "missing remaining vector record and footer", wire: encoded[:firstRowsEnd]},
+		{name: "footer short by one byte", wire: encoded[:len(encoded)-1]},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			reader := &mpoolTrackingReader{reader: bytes.NewReader(tc.wire), mp: mp}
+			target := NewOffHeapEmpty()
+			err := target.UnmarshalFromReaderWithPrepareParamKinds(reader, int64(len(tc.wire)), mp)
+			require.ErrorIs(t, err, io.ErrUnexpectedEOF)
+			require.Empty(t, target.Vecs[0].GetPrepareParamKinds())
+			require.Equal(t, mp.CurrNB(), reader.maxCurrNB,
+				"framing rejection must happen before row metadata allocation")
+			target.Clean(mp)
+			require.Zero(t, mp.CurrNB())
+		})
+	}
+}
+
+func TestPrepareParamKindStreamingMalformedReuseClearsMetadata(t *testing.T) {
+	encoded, legacy := makePrepareParamKindStreamingWire(t)
+	secondModeOffset := len(legacy) + 4 + 4 + 8 + 1 + 4 + 3
+	malformed := append([]byte(nil), encoded...)
+	malformed[secondModeOffset] = 0xff
+
+	mp := mpool.MustNewZero()
+	target := NewOffHeapEmpty()
+	require.NoError(t, target.UnmarshalFromReaderWithPrepareParamKinds(
+		bytes.NewReader(encoded), int64(len(encoded)), mp))
+	require.NotEmpty(t, target.Vecs[0].GetPrepareParamKinds())
+
+	require.ErrorContains(t, target.UnmarshalFromReaderWithPrepareParamKinds(
+		bytes.NewReader(malformed), int64(len(malformed)), mp),
+		"invalid prepared parameter metadata mode")
+	require.Empty(t, target.Vecs[0].GetPrepareParamKinds())
+	require.Equal(t, vector.PrepareParamNone, target.Vecs[0].GetPrepareParamKindAt(0))
+
+	require.NoError(t, target.UnmarshalFromReaderWithPrepareParamKinds(
+		bytes.NewReader(legacy), int64(len(legacy)), mp))
+	require.Empty(t, target.Vecs[0].GetPrepareParamKinds())
+	require.Equal(t, vector.PrepareParamNone, target.Vecs[0].GetPrepareParamKindAt(2))
+	target.Clean(mp)
+	require.Zero(t, mp.CurrNB())
 }
 
 // TestBatchUnmarshalWithAnyMp_Bug23156 tests the fix for bug #23156

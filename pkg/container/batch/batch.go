@@ -584,6 +584,14 @@ func (bat *Batch) UnmarshalFromReaderWithPrepareParamKinds(
 			if count < 0 || count > prepareParamKindBatchMaxRows || count != int32(bat.Vecs[i].Length()) {
 				return fail(moerr.NewInvalidInputNoCtx("prepared parameter metadata row count mismatch"))
 			}
+			// Before the vector allocates count bytes, prove that the frame can
+			// contain this row payload, at least one mode byte for every
+			// remaining vector record, and the four-byte trailer footer.
+			// nVecs is capped above, so this int64 sum cannot overflow.
+			minimumRemaining := int64(len(bat.Vecs)-i-1) + 4
+			if limited.N < minimumRemaining || int64(count) > limited.N-minimumRemaining {
+				return fail(io.ErrUnexpectedEOF)
+			}
 			if err := bat.Vecs[i].SetPrepareParamKindsFromReader(limited, int(count), mp); err != nil {
 				return fail(err)
 			}
