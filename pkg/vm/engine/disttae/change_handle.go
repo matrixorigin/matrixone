@@ -45,6 +45,19 @@ const DefaultLoadParallism = 20
 // from the partition state. It is a variable so tests can stub it.
 var NewPartitionStateChangesHandler = logtailreplay.NewChangesHandler
 
+var newPartitionChangesHandle = func(
+	ctx context.Context,
+	tbl *txnTable,
+	from, to types.TS,
+	skipDeletes bool,
+	snapshotReadPolicy engine.SnapshotReadPolicy,
+	mp *mpool.MPool,
+) (engine.ChangesHandle, error) {
+	return NewPartitionChangesHandle(
+		ctx, tbl, from, to, skipDeletes, snapshotReadPolicy, mp,
+	)
+}
+
 func GetPartitionStateStart(
 	ctx context.Context,
 	rel engine.Relation,
@@ -67,10 +80,10 @@ func (tbl *txnTable) CollectChanges(
 	skipDeletes bool,
 	mp *mpool.MPool,
 ) (engine.ChangesHandle, error) {
-	if from.IsEmpty() {
+	if from.IsEmpty() && !useBoundedVisibleStateRange(ctx) {
 		return NewCheckpointChangesHandle(ctx, tbl, to, mp)
 	}
-	return NewPartitionChangesHandle(
+	return newPartitionChangesHandle(
 		ctx,
 		tbl,
 		from,
@@ -81,10 +94,14 @@ func (tbl *txnTable) CollectChanges(
 	)
 }
 
-type queuedChangeBatch struct {
-	data      *batch.Batch
-	tombstone *batch.Batch
-	hint      engine.ChangesHandle_Hint
+// useBoundedVisibleStateRange keeps opt-in visible-state callers on the
+// range-aware path even when their lower watermark is empty. In particular,
+// table_changes supplies both this policy and a ChangeRangeLimit; routing it
+// through CheckpointChangesHandle would bypass that limit while decoding
+// legacy persisted columns.
+func useBoundedVisibleStateRange(ctx context.Context) bool {
+	return engine.SnapshotReadPolicyFromContext(ctx) == engine.SnapshotReadPolicyVisibleState &&
+		engine.ChangeRangeLimitFromContext(ctx).Enabled()
 }
 
 type PartitionChangesHandle struct {
@@ -103,9 +120,6 @@ type PartitionChangesHandle struct {
 	snapshotReadPolicy engine.SnapshotReadPolicy
 	mp                 *mpool.MPool
 	fs                 fileservice.FileService
-
-	bufferedBatches     []queuedChangeBatch
-	currentRangeDrained bool
 }
 
 func NewPartitionChangesHandle(
@@ -140,11 +154,6 @@ func NewPartitionChangesHandle(
 }
 
 func (h *PartitionChangesHandle) Next(ctx context.Context, mp *mpool.MPool) (data, tombstone *batch.Batch, hint engine.ChangesHandle_Hint, err error) {
-	// The normal path keeps the existing replay behavior. The VisibleState
-	// policy enables snapshot-recovery on FileNotFound (via SnapshotStateRange).
-	if h.snapshotReadPolicy == engine.SnapshotReadPolicyVisibleState {
-		return h.nextWithSnapshotRecovery(ctx, mp)
-	}
 	return h.nextReplay(ctx, mp)
 }
 
@@ -167,93 +176,6 @@ func (h *PartitionChangesHandle) nextReplay(ctx context.Context, mp *mpool.MPool
 		if end {
 			return
 		}
-	}
-}
-
-// nextWithSnapshotRecovery drains one logical sub-range at a time. The whole
-// sub-range is buffered before anything is returned so that a late
-// FileNotFound can discard partial output and rebuild the same range via
-// SnapshotStateRange without exposing inconsistent batches.
-func (h *PartitionChangesHandle) nextWithSnapshotRecovery(ctx context.Context, mp *mpool.MPool) (data, tombstone *batch.Batch, hint engine.ChangesHandle_Hint, err error) {
-	hint = engine.ChangesHandle_Tail_done
-	for {
-		if len(h.bufferedBatches) > 0 {
-			next := h.bufferedBatches[0]
-			h.bufferedBatches = h.bufferedBatches[1:]
-			return next.data, next.tombstone, next.hint, nil
-		}
-		if h.currentRangeDrained {
-			var end bool
-			end, err = h.getNextChangeHandle(ctx)
-			if err != nil {
-				return nil, nil, hint, err
-			}
-			if end {
-				return nil, nil, hint, nil
-			}
-			h.currentRangeDrained = false
-		}
-		if err = h.bufferCurrentRange(ctx, mp); err != nil {
-			return nil, nil, hint, err
-		}
-	}
-}
-
-// bufferCurrentRange eagerly consumes the current sub-range into memory so
-// that a mid-iteration FileNotFound can discard partial output and rebuild
-// the same range via SnapshotStateRange recovery.
-func (h *PartitionChangesHandle) bufferCurrentRange(ctx context.Context, mp *mpool.MPool) (err error) {
-	var queued []queuedChangeBatch
-	snapshotStateRangeTried := false
-	cleanQueued := func() {
-		for i := range queued {
-			if queued[i].data != nil {
-				queued[i].data.Clean(mp)
-			}
-			if queued[i].tombstone != nil {
-				queued[i].tombstone.Clean(mp)
-			}
-		}
-	}
-	for {
-		data, tombstone, hint, nextErr := h.currentChangeHandle.Next(ctx, mp)
-		if nextErr != nil {
-			if moerr.IsMoErrCode(nextErr, moerr.ErrFileNotFound) {
-				// A late FileNotFound means the replay handle for this sub-range is
-				// no longer trustworthy. Drop buffered output for the whole range,
-				// then rebuild from the end-snapshot partition state with
-				// delete-chain object rewrite.
-				cleanQueued()
-				queued = nil
-				if !snapshotStateRangeTried {
-					snapshotStateRangeTried = true
-					swapErr := h.swapCurrentHandleToSnapshotStateRange(ctx)
-					if swapErr == nil {
-						continue
-					}
-					logutil.Error("ChangesHandle-SnapshotStateRange rebuild failed",
-						zap.Uint64("table-id", h.tbl.tableId),
-						zap.String("from", h.currentPSFrom.ToString()),
-						zap.String("to", h.currentPSTo.ToString()),
-						zap.Error(swapErr),
-					)
-				}
-				cleanQueued()
-				return nextErr
-			}
-			cleanQueued()
-			return nextErr
-		}
-		if data == nil && tombstone == nil {
-			h.bufferedBatches = append(h.bufferedBatches, queued...)
-			h.currentRangeDrained = true
-			return nil
-		}
-		queued = append(queued, queuedChangeBatch{
-			data:      data,
-			tombstone: tombstone,
-			hint:      hint,
-		})
 	}
 }
 
@@ -300,20 +222,32 @@ func (h *PartitionChangesHandle) getNextChangeHandle(ctx context.Context) (end b
 	if h.currentPSTo.EQ(&h.toTs) {
 		return true, nil
 	}
-	ctxWithTimeout, cancel := context.WithTimeout(ctx, time.Minute)
-	defer cancel()
-	state, err := h.tbl.getPartitionState(ctxWithTimeout)
-	if err != nil {
-		return
-	}
 	var nextFrom types.TS
 	if h.currentPSFrom.IsEmpty() {
 		nextFrom = h.fromTs
 	} else {
 		nextFrom = h.currentPSTo.Next()
 	}
+	if h.snapshotReadPolicy == engine.SnapshotReadPolicyVisibleState {
+		// Visible-state callers require the exact net effect of the requested
+		// range. Build that range from its end snapshot up front and stream the
+		// resulting handle one batch at a time. This avoids replaying first and
+		// retaining the whole range in case a later object has been GC-ed.
+		h.currentPSFrom = nextFrom
+		h.currentPSTo = h.toTs
+		h.handleIdx++
+		if err = h.swapCurrentHandleToSnapshotStateRange(ctx); err != nil {
+			return false, err
+		}
+		return false, nil
+	}
+	ctxWithTimeout, cancel := context.WithTimeout(ctx, time.Minute)
+	defer cancel()
+	state, err := h.tbl.getPartitionState(ctxWithTimeout)
+	if err != nil {
+		return false, err
+	}
 	stateStart := state.GetStart()
-
 	if stateStart.LE(&nextFrom) {
 		h.currentPSTo = h.toTs
 		h.currentPSFrom = nextFrom
@@ -367,37 +301,6 @@ func (h *PartitionChangesHandle) getNextChangeHandle(ctx context.Context) (end b
 	logutil.Info("ChangesHandle-Split request snapshot read",
 		zap.String("from", nextFrom.ToString()),
 	)
-	if h.snapshotReadPolicy == engine.SnapshotReadPolicyVisibleState {
-		h.currentPSFrom = nextFrom
-		h.currentPSTo = h.toTs
-		logutil.Debug("ChangesHandle-Split change handles",
-			zap.String("from", h.fromTs.ToString()),
-			zap.String("to", h.toTs.ToString()),
-			zap.String("ps from", h.currentPSFrom.ToString()),
-			zap.String("ps to", h.currentPSTo.ToString()),
-			zap.Int("handle idx", h.handleIdx),
-		)
-		h.handleIdx++
-		snapshotRangeStart := time.Now()
-		if err = h.swapCurrentHandleToSnapshotStateRange(ctx); err != nil {
-			logutil.Error("ChangesHandle-SnapshotStateRange init failed",
-				zap.Uint64("table-id", h.tbl.tableId),
-				zap.String("from", h.currentPSFrom.ToString()),
-				zap.String("to", h.currentPSTo.ToString()),
-				zap.Duration("snapshot-range-attempt", time.Since(snapshotRangeStart)),
-				zap.Error(err),
-			)
-			return false, err
-		}
-		logutil.Info("ChangesHandle-SnapshotStateRange-Ready",
-			zap.Uint64("table-id", h.tbl.tableId),
-			zap.String("from", h.currentPSFrom.ToString()),
-			zap.String("to", h.currentPSTo.ToString()),
-			zap.Duration("duration", time.Since(snapshotRangeStart)),
-		)
-		return false, nil
-	}
-
 	var checkpointEntries []*checkpoint.CheckpointEntry
 	var minTS, maxTS types.TS
 	checkpointEntries, minTS, maxTS, err = h.loadCheckpointEntries(ctx, nextFrom)
@@ -471,17 +374,66 @@ func (h *PartitionChangesHandle) swapCurrentHandleToSnapshotStateRange(ctx conte
 	if err = h.closeCurrentChangeHandle(); err != nil {
 		return err
 	}
-	h.currentChangeHandle, err = logtailreplay.NewChangesHandlerWithPartitionStateRange(
-		ctx,
-		state,
-		h.currentPSFrom,
-		h.currentPSTo,
-		h.skipDeletes,
-		objectio.BlockMaxRows,
-		h.primarySeqnum,
-		h.mp,
-		h.fs,
-	)
+	pkFilter := engine.PKFilterFromContext(ctx)
+	rangeLimit := engine.ChangeRangeLimitFromContext(ctx)
+	spillConfig := engine.ChangeRangeSpillFromContext(ctx)
+	debugLabel := engine.CollectChangesDebugLabelFromContext(ctx)
+	retainRowID := engine.RetainRowIDFromContext(ctx)
+	rangeFrom, rangeTo := h.currentPSFrom, h.currentPSTo
+	skipDeletes, primarySeqnum := h.skipDeletes, h.primarySeqnum
+	rangeMP, rangeFS := h.mp, h.fs
+	h.currentChangeHandle = &deferredChangesHandle{
+		build: func(nextCtx context.Context) (engine.ChangesHandle, error) {
+			nextCtx = engine.WithPKFilter(nextCtx, pkFilter)
+			nextCtx = engine.WithChangeRangeLimit(nextCtx, rangeLimit)
+			nextCtx = engine.WithChangeRangeSpill(nextCtx, spillConfig)
+			nextCtx = engine.WithCollectChangesDebugLabel(nextCtx, debugLabel)
+			nextCtx = engine.WithRetainRowID(nextCtx, retainRowID)
+			return logtailreplay.NewChangesHandlerWithPartitionStateRange(
+				nextCtx,
+				state,
+				rangeFrom,
+				rangeTo,
+				skipDeletes,
+				objectio.BlockMaxRows,
+				primarySeqnum,
+				rangeMP,
+				rangeFS,
+			)
+		},
+	}
+	return nil
+}
+
+// deferredChangesHandle keeps CollectChanges construction cheap. The
+// partition-state range is materialized only when the consumer requests its
+// first batch, where any caller-provided range limit applies.
+type deferredChangesHandle struct {
+	build    func(context.Context) (engine.ChangesHandle, error)
+	handle   engine.ChangesHandle
+	buildErr error
+}
+
+func (h *deferredChangesHandle) Next(
+	ctx context.Context,
+	mp *mpool.MPool,
+) (data, tombstone *batch.Batch, hint engine.ChangesHandle_Hint, err error) {
+	if h.handle == nil && h.buildErr == nil {
+		h.handle, h.buildErr = h.build(ctx)
+		h.build = nil
+	}
+	if h.buildErr != nil {
+		return nil, nil, engine.ChangesHandle_Tail_done, h.buildErr
+	}
+	return h.handle.Next(ctx, mp)
+}
+
+func (h *deferredChangesHandle) Close() error {
+	if h == nil || h.handle == nil {
+		return nil
+	}
+	err := h.handle.Close()
+	h.handle = nil
 	return err
 }
 
@@ -509,15 +461,6 @@ func (h *PartitionChangesHandle) Close() error {
 	if h == nil {
 		return nil
 	}
-	for i := range h.bufferedBatches {
-		if h.bufferedBatches[i].data != nil {
-			h.bufferedBatches[i].data.Clean(h.mp)
-		}
-		if h.bufferedBatches[i].tombstone != nil {
-			h.bufferedBatches[i].tombstone.Clean(h.mp)
-		}
-	}
-	h.bufferedBatches = nil
 	return h.closeCurrentChangeHandle()
 }
 

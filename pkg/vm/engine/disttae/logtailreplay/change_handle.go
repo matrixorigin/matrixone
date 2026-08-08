@@ -15,13 +15,18 @@
 package logtailreplay
 
 import (
+	"bytes"
 	"context"
+	"encoding/binary"
 	"fmt"
+	"io"
+	"os"
 	"sync"
 	"time"
 
 	goSort "sort"
 
+	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -29,6 +34,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/sort"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
 	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -50,6 +56,13 @@ import (
 const (
 	JTCDCLoad tasks.JobType = 300 + iota
 )
+
+func objectPrefetchWidth(maxRows, maxBytes int) int {
+	if maxRows > 0 || maxBytes > 0 {
+		return 1
+	}
+	return LoadParallism
+}
 
 var (
 	_jobPool = sync.Pool{
@@ -102,6 +115,16 @@ type BatchHandle struct {
 
 	baseHandle *baseHandle
 	tombstone  bool
+}
+
+type replayRowHandle interface {
+	init(bool, *mpool.MPool) error
+	IsEmpty() bool
+	Rows() int
+	NextTS() types.TS
+	Close()
+	Next(**batch.Batch, *mpool.MPool) error
+	QuickNext(**batch.Batch, *mpool.MPool) error
 }
 
 func batchesShareAppendSchema(dst, src *batch.Batch) bool {
@@ -169,7 +192,11 @@ func (r *BatchHandle) NextTS() types.TS {
 	return vector.GetFixedAtNoTypeCheck[types.TS](commitTSVec, r.rowOffsetCursor)
 }
 func (r *BatchHandle) Close() {
+	if r == nil || r.batches == nil {
+		return
+	}
 	r.batches.Clean(r.mp)
+	r.batches = nil
 }
 func (r *BatchHandle) Next(data **batch.Batch, mp *mpool.MPool) (err error) {
 	if r.isEnd() {
@@ -222,18 +249,1055 @@ func (r *BatchHandle) next(bat **batch.Batch, mp *mpool.MPool, start, end int) (
 	return
 }
 
+const rangeSpillRecordHeaderSize = int64(8)
+
+type rangeSpillRecord struct {
+	offset int64
+	size   int64
+	rows   int
+}
+
+type rangeSpillRun struct {
+	firstRecord int
+	endRecord   int
+}
+
+type rangeSpillFile struct {
+	file        *os.File
+	records     []rangeSpillRecord
+	bytes       int64
+	disk        engine.ChangeRangeGrowingSpillReservation
+	fileReserve engine.ChangeRangeSpillReservation
+}
+
+type legacyColumnSpill struct {
+	owner *rangeSpillFile
+}
+
+func newLegacyColumnSpill(
+	ctx context.Context,
+	config engine.ChangeRangeSpillConfig,
+) (objectio.ColumnWindowSpill, error) {
+	owner, err := newRangeSpillFile(ctx, config)
+	if err != nil {
+		return nil, err
+	}
+	return &legacyColumnSpill{owner: owner}, nil
+}
+
+func (s *legacyColumnSpill) ReadAt(data []byte, offset int64) (int, error) {
+	if s == nil || s.owner == nil || s.owner.file == nil {
+		return 0, os.ErrClosed
+	}
+	return s.owner.file.ReadAt(data, offset)
+}
+
+func (s *legacyColumnSpill) Write(data []byte) (int, error) {
+	if s == nil || s.owner == nil || s.owner.file == nil {
+		return 0, os.ErrClosed
+	}
+	return s.owner.file.Write(data)
+}
+
+func (s *legacyColumnSpill) Grow(size uint64) error {
+	if s == nil || s.owner == nil || s.owner.disk == nil {
+		return moerr.NewInternalErrorNoCtx("legacy object column spill reservation is missing")
+	}
+	return s.owner.disk.Grow(size)
+}
+
+func (s *legacyColumnSpill) Close() error {
+	if s == nil || s.owner == nil {
+		return nil
+	}
+	err := s.owner.Close()
+	s.owner = nil
+	return err
+}
+
+func newRangeSpillFile(ctx context.Context, config engine.ChangeRangeSpillConfig) (*rangeSpillFile, error) {
+	if !config.Enabled() {
+		return nil, moerr.NewInternalErrorNoCtx("change range spill is unavailable")
+	}
+	fileReserve, err := config.ReserveFiles(1)
+	if err != nil {
+		return nil, err
+	}
+	if fileReserve == nil {
+		return nil, moerr.NewInternalErrorNoCtx("change range spill file reservation is nil")
+	}
+	disk, err := config.ReserveDisk(0)
+	if err != nil || disk == nil {
+		fileReserve.Release()
+		if err != nil {
+			return nil, err
+		}
+		return nil, moerr.NewInternalErrorNoCtx("change range spill disk reservation is nil")
+	}
+	file, err := config.FileFactory(ctx, "table_changes_range_"+uuid.NewString())
+	if err != nil || file == nil {
+		fileReserve.Release()
+		disk.Release()
+		if file != nil {
+			_ = file.Close()
+		}
+		if err != nil {
+			return nil, err
+		}
+		return nil, moerr.NewInternalErrorNoCtx("change range spill file is nil")
+	}
+	return &rangeSpillFile{file: file, fileReserve: fileReserve, disk: disk}, nil
+}
+
+func (f *rangeSpillFile) Append(bat *batch.Batch) error {
+	if f == nil || f.file == nil || bat == nil || bat.RowCount() == 0 {
+		return moerr.NewInternalErrorNoCtx("invalid change range spill append")
+	}
+	size, err := bat.MarshalBinarySize()
+	if err != nil {
+		return err
+	}
+	recordBytes := uint64(rangeSpillRecordHeaderSize) + uint64(size)
+	if f.disk == nil {
+		return moerr.NewInternalErrorNoCtx("change range spill disk reservation is missing")
+	}
+	if err := f.disk.Grow(recordBytes); err != nil {
+		return err
+	}
+	var header [rangeSpillRecordHeaderSize]byte
+	binary.LittleEndian.PutUint64(header[:], uint64(size))
+	if n, err := f.file.Write(header[:]); err != nil {
+		return err
+	} else if n != len(header) {
+		return io.ErrShortWrite
+	}
+	if err := bat.MarshalBinaryTo(f.file); err != nil {
+		return err
+	}
+	f.records = append(f.records, rangeSpillRecord{
+		offset: f.bytes + rangeSpillRecordHeaderSize,
+		size:   int64(size),
+		rows:   bat.RowCount(),
+	})
+	f.bytes += int64(recordBytes)
+	return nil
+}
+
+func (f *rangeSpillFile) Read(record int, mp *mpool.MPool) (*batch.Batch, error) {
+	if f == nil || f.file == nil || record < 0 || record >= len(f.records) {
+		return nil, moerr.NewInternalErrorNoCtx("invalid change range spill record")
+	}
+	metadata := f.records[record]
+	maxInt := int64(^uint(0) >> 1)
+	if metadata.size < 0 || metadata.size > maxInt {
+		return nil, moerr.NewInternalErrorNoCtx("invalid change range spill record size")
+	}
+	data := make([]byte, int(metadata.size))
+	if _, err := f.file.ReadAt(data, metadata.offset); err != nil {
+		return nil, err
+	}
+	bat := batch.NewWithSize(0)
+	if err := bat.UnmarshalBinaryWithAnyMp(data, mp); err != nil {
+		bat.Clean(mp)
+		return nil, err
+	}
+	if bat.RowCount() != metadata.rows {
+		bat.Clean(mp)
+		return nil, moerr.NewInternalErrorNoCtx("change range spill row count mismatch")
+	}
+	return bat, nil
+}
+
+func (f *rangeSpillFile) Close() error {
+	if f == nil {
+		return nil
+	}
+	var firstErr error
+	if f.file != nil {
+		firstErr = f.file.Close()
+		f.file = nil
+	}
+	if f.disk != nil {
+		f.disk.Release()
+		f.disk = nil
+	}
+	if f.fileReserve != nil {
+		f.fileReserve.Release()
+		f.fileReserve = nil
+	}
+	return firstErr
+}
+
+type rangeSpillRunReader struct {
+	file      *rangeSpillFile
+	run       rangeSpillRun
+	record    int
+	bat       *batch.Batch
+	row       int
+	mp        *mpool.MPool
+	exhausted bool
+}
+
+func newRangeSpillRunReader(file *rangeSpillFile, run rangeSpillRun, mp *mpool.MPool) (*rangeSpillRunReader, error) {
+	r := &rangeSpillRunReader{file: file, run: run, record: run.firstRecord, mp: mp}
+	if err := r.load(); err != nil {
+		return nil, err
+	}
+	return r, nil
+}
+
+func (r *rangeSpillRunReader) load() error {
+	if r.bat != nil {
+		r.bat.Clean(r.mp)
+		r.bat = nil
+	}
+	if r.record >= r.run.endRecord {
+		r.exhausted = true
+		return nil
+	}
+	bat, err := r.file.Read(r.record, r.mp)
+	if err != nil {
+		return err
+	}
+	r.record++
+	r.bat = bat
+	r.row = 0
+	return nil
+}
+
+func (r *rangeSpillRunReader) next() error {
+	if r.exhausted {
+		return nil
+	}
+	r.row++
+	if r.row >= r.bat.RowCount() {
+		return r.load()
+	}
+	return nil
+}
+
+func (r *rangeSpillRunReader) ts() types.TS {
+	if r == nil || r.exhausted || r.bat == nil {
+		return types.TS{}
+	}
+	return vector.GetFixedAtNoTypeCheck[types.TS](r.bat.Vecs[len(r.bat.Vecs)-1], r.row)
+}
+
+func (r *rangeSpillRunReader) close() {
+	if r != nil && r.bat != nil {
+		r.bat.Clean(r.mp)
+		r.bat = nil
+	}
+}
+
+func appendRangeSpillRow(dst **batch.Batch, src *batch.Batch, row int, mp *mpool.MPool) error {
+	if *dst == nil {
+		*dst = batch.NewWithSize(len(src.Vecs))
+		(*dst).Attrs = append((*dst).Attrs, src.Attrs...)
+		for idx := range src.Vecs {
+			(*dst).Vecs[idx] = vector.NewVec(*src.Vecs[idx].GetType())
+		}
+	} else if !batchesShareAppendSchema(*dst, src) {
+		return moerr.GetOkExpectedEOB()
+	}
+	for idx := range src.Vecs {
+		if err := (*dst).Vecs[idx].UnionOne(src.Vecs[idx], int64(row), mp); err != nil {
+			return err
+		}
+	}
+	(*dst).SetRowCount((*dst).Vecs[0].Length())
+	return nil
+}
+
+func mergeRangeSpillRuns(
+	ctx context.Context,
+	input *rangeSpillFile,
+	runs []rangeSpillRun,
+	config engine.ChangeRangeSpillConfig,
+	mp *mpool.MPool,
+	chunkRows, chunkBytes int,
+) (*rangeSpillFile, []rangeSpillRun, error) {
+	for len(runs) > 1 {
+		output, err := newRangeSpillFile(ctx, config)
+		if err != nil {
+			_ = input.Close()
+			return nil, nil, err
+		}
+		outputRuns := make([]rangeSpillRun, 0, (len(runs)+1)/2)
+		for idx := 0; idx < len(runs); idx += 2 {
+			firstRecord := len(output.records)
+			var right *rangeSpillRun
+			if idx+1 < len(runs) {
+				right = &runs[idx+1]
+			}
+			if err = mergeRangeSpillRunPair(ctx, input, runs[idx], right, output, mp, chunkRows, chunkBytes); err != nil {
+				_ = output.Close()
+				_ = input.Close()
+				return nil, nil, err
+			}
+			outputRuns = append(outputRuns, rangeSpillRun{firstRecord: firstRecord, endRecord: len(output.records)})
+		}
+		if err = input.Close(); err != nil {
+			_ = output.Close()
+			return nil, nil, err
+		}
+		input, runs = output, outputRuns
+	}
+	return input, runs, nil
+}
+
+func mergeRangeSpillRunPair(
+	ctx context.Context,
+	input *rangeSpillFile,
+	leftRun rangeSpillRun,
+	rightRun *rangeSpillRun,
+	output *rangeSpillFile,
+	mp *mpool.MPool,
+	chunkRows, chunkBytes int,
+) (err error) {
+	left, err := newRangeSpillRunReader(input, leftRun, mp)
+	if err != nil {
+		return err
+	}
+	defer left.close()
+	var right *rangeSpillRunReader
+	if rightRun != nil {
+		right, err = newRangeSpillRunReader(input, *rightRun, mp)
+		if err != nil {
+			return err
+		}
+		defer right.close()
+	}
+	var out *batch.Batch
+	defer func() {
+		if out != nil {
+			out.Clean(mp)
+		}
+	}()
+	flush := func() error {
+		if out == nil || out.RowCount() == 0 {
+			return nil
+		}
+		if err := output.Append(out); err != nil {
+			return err
+		}
+		out.Clean(mp)
+		out = nil
+		return nil
+	}
+	for !left.exhausted || (right != nil && !right.exhausted) {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
+		selected := left
+		leftTS, rightTS := left.ts(), types.TS{}
+		if right != nil {
+			rightTS = right.ts()
+		}
+		if left.exhausted || (right != nil && !right.exhausted && rightTS.LT(&leftTS)) {
+			selected = right
+		}
+		if err := appendRangeSpillRow(&out, selected.bat, selected.row, mp); err != nil {
+			return err
+		}
+		if err := selected.next(); err != nil {
+			return err
+		}
+		if (chunkRows > 0 && out.RowCount() >= chunkRows) ||
+			(chunkBytes > 0 && out.Allocated() >= chunkBytes) {
+			if err := flush(); err != nil {
+				return err
+			}
+		}
+	}
+	return flush()
+}
+
+func batchPrimaryKeyIndex(bat *batch.Batch, primarySeqnum int, tombstone bool) int {
+	idx := primarySeqnum
+	if tombstone {
+		idx = 0
+	}
+	if len(bat.Vecs) > 0 && bat.Vecs[0] != nil && bat.Vecs[0].GetType().Oid == types.T_Rowid {
+		idx++
+	}
+	return idx
+}
+
+func encodedPrimaryKeyAt(bat *batch.Batch, pkIdx, row int, packer *types.Packer) []byte {
+	return readutil.EncodePrimaryKey(vector.GetAny(bat.Vecs[pkIdx], row, false), packer)
+}
+
+func sortBatchByPrimaryKeyAndTS(bat *batch.Batch, pkIdx int, mp *mpool.MPool) error {
+	if bat == nil || bat.RowCount() < 2 {
+		return nil
+	}
+	packer := types.NewPacker()
+	keys := readutil.EncodePrimaryKeyVector(bat.Vecs[pkIdx], packer)
+	packer.Close()
+	timestamps := vector.MustFixedColWithTypeCheck[types.TS](bat.Vecs[len(bat.Vecs)-1])
+	sels := make([]int64, bat.RowCount())
+	for row := range sels {
+		sels[row] = int64(row)
+	}
+	goSort.Slice(sels, func(i, j int) bool {
+		left, right := int(sels[i]), int(sels[j])
+		if cmp := bytes.Compare(keys[left], keys[right]); cmp != 0 {
+			return cmp < 0
+		}
+		return timestamps[left].LT(&timestamps[right])
+	})
+	for _, vec := range bat.Vecs {
+		if err := vec.Shuffle(sels, mp); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func rangeSpillRowLessByPrimaryKey(
+	left *rangeSpillRunReader,
+	leftPKIdx int,
+	right *rangeSpillRunReader,
+	rightPKIdx int,
+	leftPacker, rightPacker *types.Packer,
+) bool {
+	leftKey := encodedPrimaryKeyAt(left.bat, leftPKIdx, left.row, leftPacker)
+	rightKey := encodedPrimaryKeyAt(right.bat, rightPKIdx, right.row, rightPacker)
+	if cmp := bytes.Compare(leftKey, rightKey); cmp != 0 {
+		return cmp < 0
+	}
+	leftTS, rightTS := left.ts(), right.ts()
+	return leftTS.LT(&rightTS)
+}
+
+func mergeRangeSpillRunPairByPrimaryKey(
+	ctx context.Context,
+	input *rangeSpillFile,
+	leftRun rangeSpillRun,
+	rightRun *rangeSpillRun,
+	output *rangeSpillFile,
+	pkIdx int,
+	mp *mpool.MPool,
+	chunkRows, chunkBytes int,
+) (err error) {
+	left, err := newRangeSpillRunReader(input, leftRun, mp)
+	if err != nil {
+		return err
+	}
+	defer left.close()
+	var right *rangeSpillRunReader
+	if rightRun != nil {
+		right, err = newRangeSpillRunReader(input, *rightRun, mp)
+		if err != nil {
+			return err
+		}
+		defer right.close()
+	}
+	leftPacker, rightPacker := types.NewPacker(), types.NewPacker()
+	defer leftPacker.Close()
+	defer rightPacker.Close()
+	var out *batch.Batch
+	defer func() {
+		if out != nil {
+			out.Clean(mp)
+		}
+	}()
+	flush := func() error {
+		if out == nil || out.RowCount() == 0 {
+			return nil
+		}
+		if err := output.Append(out); err != nil {
+			return err
+		}
+		out.Clean(mp)
+		out = nil
+		return nil
+	}
+	for !left.exhausted || (right != nil && !right.exhausted) {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
+		selected := left
+		if left.exhausted || (right != nil && !right.exhausted &&
+			rangeSpillRowLessByPrimaryKey(right, pkIdx, left, pkIdx, rightPacker, leftPacker)) {
+			selected = right
+		}
+		if err := appendRangeSpillRow(&out, selected.bat, selected.row, mp); err != nil {
+			return err
+		}
+		if err := selected.next(); err != nil {
+			return err
+		}
+		if (chunkRows > 0 && out.RowCount() >= chunkRows) ||
+			(chunkBytes > 0 && out.Allocated() >= chunkBytes) {
+			if err := flush(); err != nil {
+				return err
+			}
+		}
+	}
+	return flush()
+}
+
+func mergeRangeSpillRunsByPrimaryKey(
+	ctx context.Context,
+	input *rangeSpillFile,
+	runs []rangeSpillRun,
+	config engine.ChangeRangeSpillConfig,
+	pkIdx int,
+	mp *mpool.MPool,
+	chunkRows, chunkBytes int,
+) (*rangeSpillFile, []rangeSpillRun, error) {
+	for len(runs) > 1 {
+		output, err := newRangeSpillFile(ctx, config)
+		if err != nil {
+			_ = input.Close()
+			return nil, nil, err
+		}
+		outputRuns := make([]rangeSpillRun, 0, (len(runs)+1)/2)
+		for idx := 0; idx < len(runs); idx += 2 {
+			firstRecord := len(output.records)
+			var right *rangeSpillRun
+			if idx+1 < len(runs) {
+				right = &runs[idx+1]
+			}
+			if err = mergeRangeSpillRunPairByPrimaryKey(
+				ctx, input, runs[idx], right, output, pkIdx, mp, chunkRows, chunkBytes,
+			); err != nil {
+				_ = output.Close()
+				_ = input.Close()
+				return nil, nil, err
+			}
+			outputRuns = append(outputRuns, rangeSpillRun{firstRecord: firstRecord, endRecord: len(output.records)})
+		}
+		if err = input.Close(); err != nil {
+			_ = output.Close()
+			return nil, nil, err
+		}
+		input, runs = output, outputRuns
+	}
+	return input, runs, nil
+}
+
+func spillBaseHandleByPrimaryKey(
+	ctx context.Context,
+	source *baseHandle,
+	primarySeqnum int,
+	tombstone bool,
+	config engine.ChangeRangeSpillConfig,
+	mp *mpool.MPool,
+	chunkRows, chunkBytes int,
+) (file *rangeSpillFile, run *rangeSpillRun, rows int, err error) {
+	var runs []rangeSpillRun
+	defer func() {
+		if err != nil && file != nil {
+			_ = file.Close()
+			file = nil
+		}
+	}()
+	for {
+		var bat *batch.Batch
+		nextErr := source.QuickNext(ctx, &bat, mp)
+		if bat != nil && bat.RowCount() > 0 {
+			pkIdx := batchPrimaryKeyIndex(bat, primarySeqnum, tombstone)
+			if err = sortBatchByPrimaryKeyAndTS(bat, pkIdx, mp); err != nil {
+				bat.Clean(mp)
+				return
+			}
+			if file == nil {
+				if file, err = newRangeSpillFile(ctx, config); err != nil {
+					bat.Clean(mp)
+					return
+				}
+			}
+			first := len(file.records)
+			rows += bat.RowCount()
+			if err = file.Append(bat); err != nil {
+				bat.Clean(mp)
+				return
+			}
+			runs = append(runs, rangeSpillRun{firstRecord: first, endRecord: len(file.records)})
+		}
+		if bat != nil {
+			bat.Clean(mp)
+		}
+		if moerr.IsMoErrCode(nextErr, moerr.OkExpectedEOF) {
+			break
+		}
+		if nextErr != nil && !moerr.IsMoErrCode(nextErr, moerr.OkExpectedEOB) {
+			err = nextErr
+			return
+		}
+	}
+	if file == nil {
+		return nil, nil, 0, nil
+	}
+	pkIdx := batchPrimaryKeyIndexFromSpill(file, primarySeqnum, tombstone, mp)
+	if pkIdx < 0 {
+		err = moerr.NewInternalErrorNoCtx("cannot resolve change range spill primary key")
+		return
+	}
+	file, _, err = mergeRangeSpillRunsByPrimaryKey(
+		ctx, file, runs, config, pkIdx, mp, chunkRows, chunkBytes,
+	)
+	if err != nil {
+		return
+	}
+	r := rangeSpillRun{endRecord: len(file.records)}
+	run = &r
+	return
+}
+
+func batchPrimaryKeyIndexFromSpill(
+	file *rangeSpillFile,
+	primarySeqnum int,
+	tombstone bool,
+	mp *mpool.MPool,
+) int {
+	if file == nil || len(file.records) == 0 {
+		return -1
+	}
+	bat, err := file.Read(0, mp)
+	if err != nil {
+		return -1
+	}
+	defer bat.Clean(mp)
+	return batchPrimaryKeyIndex(bat, primarySeqnum, tombstone)
+}
+
+type rangeNetEffectRow struct {
+	bat        *batch.Batch
+	isDelete   bool
+	primaryKey []byte
+}
+
+func (r *rangeNetEffectRow) clean(mp *mpool.MPool) {
+	if r != nil && r.bat != nil {
+		r.bat.Clean(mp)
+		r.bat = nil
+	}
+}
+
+func copyRangeNetEffectRow(
+	reader *rangeSpillRunReader,
+	pkIdx int,
+	isDelete bool,
+	packer *types.Packer,
+	mp *mpool.MPool,
+) (*rangeNetEffectRow, error) {
+	row := &rangeNetEffectRow{
+		isDelete:   isDelete,
+		primaryKey: bytes.Clone(encodedPrimaryKeyAt(reader.bat, pkIdx, reader.row, packer)),
+	}
+	if err := appendRangeSpillRow(&row.bat, reader.bat, reader.row, mp); err != nil {
+		row.clean(mp)
+		return nil, err
+	}
+	return row, nil
+}
+
+func sameRangeNetEffectKey(left, right []byte) bool {
+	return bytes.Equal(left, right)
+}
+
+func selectRangeNetEffectRows(
+	first, last *rangeNetEffectRow,
+	skipDeletes, recovery bool,
+) (keepFirst, keepLast bool) {
+	if first == nil || last == nil {
+		return false, false
+	}
+	if first == last {
+		return true, false
+	}
+	if first.isDelete {
+		if last.isDelete {
+			return false, true
+		}
+		return !skipDeletes, true
+	}
+	if last.isDelete {
+		return false, recovery
+	}
+	return false, true
+}
+
+type rangeNetEffectOutput struct {
+	file  *rangeSpillFile
+	runs  []rangeSpillRun
+	batch *batch.Batch
+	rows  int
+}
+
+func (o *rangeNetEffectOutput) append(
+	ctx context.Context,
+	row *rangeNetEffectRow,
+	config engine.ChangeRangeSpillConfig,
+	mp *mpool.MPool,
+	chunkRows, chunkBytes int,
+) error {
+	if row == nil || row.bat == nil {
+		return nil
+	}
+	if err := appendRangeSpillRow(&o.batch, row.bat, 0, mp); err != nil {
+		return err
+	}
+	o.rows++
+	if (chunkRows > 0 && o.batch.RowCount() >= chunkRows) ||
+		(chunkBytes > 0 && o.batch.Allocated() >= chunkBytes) {
+		return o.flush(ctx, config, mp)
+	}
+	return nil
+}
+
+func (o *rangeNetEffectOutput) flush(
+	ctx context.Context,
+	config engine.ChangeRangeSpillConfig,
+	mp *mpool.MPool,
+) error {
+	if o.batch == nil || o.batch.RowCount() == 0 {
+		return nil
+	}
+	if err := sortBatch(o.batch, len(o.batch.Vecs)-1, mp); err != nil {
+		return err
+	}
+	if o.file == nil {
+		file, err := newRangeSpillFile(ctx, config)
+		if err != nil {
+			return err
+		}
+		o.file = file
+	}
+	first := len(o.file.records)
+	if err := o.file.Append(o.batch); err != nil {
+		return err
+	}
+	o.runs = append(o.runs, rangeSpillRun{firstRecord: first, endRecord: len(o.file.records)})
+	o.batch.Clean(mp)
+	o.batch = nil
+	return nil
+}
+
+func (o *rangeNetEffectOutput) close(mp *mpool.MPool) {
+	if o.batch != nil {
+		o.batch.Clean(mp)
+		o.batch = nil
+	}
+	if o.file != nil {
+		_ = o.file.Close()
+		o.file = nil
+	}
+}
+
+func prepareRangeNetEffectSpill(
+	ctx context.Context,
+	dataSource, tombstoneSource *baseHandle,
+	primarySeqnum int,
+	skipDeletes, recovery bool,
+	config engine.ChangeRangeSpillConfig,
+	mp *mpool.MPool,
+	chunkRows, chunkBytes int,
+) (dataHandle, tombstoneHandle replayRowHandle, err error) {
+	dataFile, dataRun, _, err := spillBaseHandleByPrimaryKey(
+		ctx, dataSource, primarySeqnum, false, config, mp, chunkRows, chunkBytes,
+	)
+	if err != nil {
+		return nil, nil, err
+	}
+	if dataFile != nil {
+		defer func() {
+			if dataFile != nil {
+				_ = dataFile.Close()
+			}
+		}()
+	}
+	tombstoneFile, tombstoneRun, _, err := spillBaseHandleByPrimaryKey(
+		ctx, tombstoneSource, primarySeqnum, true, config, mp, chunkRows, chunkBytes,
+	)
+	if err != nil {
+		return nil, nil, err
+	}
+	if tombstoneFile != nil {
+		defer func() {
+			if tombstoneFile != nil {
+				_ = tombstoneFile.Close()
+			}
+		}()
+	}
+	var dataReader, tombstoneReader *rangeSpillRunReader
+	if dataFile != nil {
+		dataReader, err = newRangeSpillRunReader(dataFile, *dataRun, mp)
+		if err != nil {
+			return nil, nil, err
+		}
+		defer dataReader.close()
+	}
+	if tombstoneFile != nil {
+		tombstoneReader, err = newRangeSpillRunReader(tombstoneFile, *tombstoneRun, mp)
+		if err != nil {
+			return nil, nil, err
+		}
+		defer tombstoneReader.close()
+	}
+	dataPKIdx, tombstonePKIdx := -1, -1
+	if dataReader != nil && !dataReader.exhausted {
+		dataPKIdx = batchPrimaryKeyIndex(dataReader.bat, primarySeqnum, false)
+	}
+	if tombstoneReader != nil && !tombstoneReader.exhausted {
+		tombstonePKIdx = batchPrimaryKeyIndex(tombstoneReader.bat, primarySeqnum, true)
+	}
+	dataPacker, tombstonePacker := types.NewPacker(), types.NewPacker()
+	defer dataPacker.Close()
+	defer tombstonePacker.Close()
+	dataOutput, tombstoneOutput := &rangeNetEffectOutput{}, &rangeNetEffectOutput{}
+	defer func() {
+		if err != nil {
+			dataOutput.close(mp)
+			tombstoneOutput.close(mp)
+			if dataHandle != nil {
+				dataHandle.Close()
+				dataHandle = nil
+			}
+			if tombstoneHandle != nil {
+				tombstoneHandle.Close()
+				tombstoneHandle = nil
+			}
+		}
+	}()
+	var first, last *rangeNetEffectRow
+	defer func() {
+		first.clean(mp)
+		if last != first {
+			last.clean(mp)
+		}
+	}()
+	emitGroup := func() error {
+		keepFirst, keepLast := selectRangeNetEffectRows(first, last, skipDeletes, recovery)
+		appendSelected := func(row *rangeNetEffectRow) error {
+			if row == nil {
+				return nil
+			}
+			if row.isDelete {
+				return tombstoneOutput.append(ctx, row, config, mp, chunkRows, chunkBytes)
+			}
+			return dataOutput.append(ctx, row, config, mp, chunkRows, chunkBytes)
+		}
+		if keepFirst {
+			if err := appendSelected(first); err != nil {
+				return err
+			}
+		}
+		if keepLast {
+			if err := appendSelected(last); err != nil {
+				return err
+			}
+		}
+		first.clean(mp)
+		if last != first {
+			last.clean(mp)
+		}
+		first, last = nil, nil
+		return nil
+	}
+	for (dataReader != nil && !dataReader.exhausted) ||
+		(tombstoneReader != nil && !tombstoneReader.exhausted) {
+		select {
+		case <-ctx.Done():
+			return nil, nil, ctx.Err()
+		default:
+		}
+		selected, pkIdx, isDelete, packer := dataReader, dataPKIdx, false, dataPacker
+		if selected == nil || selected.exhausted {
+			selected, pkIdx, isDelete, packer = tombstoneReader, tombstonePKIdx, true, tombstonePacker
+		} else if tombstoneReader != nil && !tombstoneReader.exhausted {
+			dataKey := encodedPrimaryKeyAt(dataReader.bat, dataPKIdx, dataReader.row, dataPacker)
+			tombstoneKey := encodedPrimaryKeyAt(tombstoneReader.bat, tombstonePKIdx, tombstoneReader.row, tombstonePacker)
+			cmp := bytes.Compare(tombstoneKey, dataKey)
+			dataTS, tombstoneTS := dataReader.ts(), tombstoneReader.ts()
+			if cmp < 0 || (cmp == 0 && !dataTS.LT(&tombstoneTS)) {
+				selected, pkIdx, isDelete, packer = tombstoneReader, tombstonePKIdx, true, tombstonePacker
+			}
+		}
+		row, copyErr := copyRangeNetEffectRow(selected, pkIdx, isDelete, packer, mp)
+		if copyErr != nil {
+			return nil, nil, copyErr
+		}
+		if first != nil && !sameRangeNetEffectKey(first.primaryKey, row.primaryKey) {
+			if err = emitGroup(); err != nil {
+				row.clean(mp)
+				return nil, nil, err
+			}
+		}
+		if first == nil {
+			first, last = row, row
+		} else {
+			if last != first {
+				last.clean(mp)
+			}
+			last = row
+		}
+		if err = selected.next(); err != nil {
+			return nil, nil, err
+		}
+	}
+	if first != nil {
+		if err = emitGroup(); err != nil {
+			return nil, nil, err
+		}
+	}
+	if err = dataOutput.flush(ctx, config, mp); err != nil {
+		return nil, nil, err
+	}
+	if err = tombstoneOutput.flush(ctx, config, mp); err != nil {
+		return nil, nil, err
+	}
+	makeHandle := func(output *rangeNetEffectOutput) (replayRowHandle, error) {
+		if output.file == nil {
+			return (*BatchHandle)(nil), nil
+		}
+		merged, _, mergeErr := mergeRangeSpillRuns(
+			ctx, output.file, output.runs, config, mp, chunkRows, chunkBytes,
+		)
+		output.file = nil
+		if mergeErr != nil {
+			return nil, mergeErr
+		}
+		return newSpilledBatchHandle(merged, output.rows, chunkRows, chunkBytes, mp)
+	}
+	if dataHandle, err = makeHandle(dataOutput); err != nil {
+		return nil, nil, err
+	}
+	if tombstoneHandle, err = makeHandle(tombstoneOutput); err != nil {
+		return nil, nil, err
+	}
+	return dataHandle, tombstoneHandle, nil
+}
+
+type spilledBatchHandle struct {
+	file     *rangeSpillFile
+	reader   *rangeSpillRunReader
+	rows     int
+	maxRows  int
+	maxBytes int
+	mp       *mpool.MPool
+}
+
+func newSpilledBatchHandle(
+	file *rangeSpillFile,
+	rows, maxRows, maxBytes int,
+	mp *mpool.MPool,
+) (*spilledBatchHandle, error) {
+	if file == nil || len(file.records) == 0 {
+		return nil, moerr.NewInternalErrorNoCtx("empty change range spill")
+	}
+	reader, err := newRangeSpillRunReader(file, rangeSpillRun{endRecord: len(file.records)}, mp)
+	if err != nil {
+		_ = file.Close()
+		return nil, err
+	}
+	if maxRows <= 0 {
+		maxRows = int(objectio.BlockMaxRows)
+	}
+	return &spilledBatchHandle{
+		file: file, reader: reader, rows: rows,
+		maxRows: maxRows, maxBytes: maxBytes, mp: mp,
+	}, nil
+}
+
+func (h *spilledBatchHandle) init(bool, *mpool.MPool) error { return nil }
+func (h *spilledBatchHandle) IsEmpty() bool                 { return h == nil || h.rows == 0 }
+func (h *spilledBatchHandle) Rows() int {
+	if h == nil {
+		return 0
+	}
+	return h.rows
+}
+func (h *spilledBatchHandle) NextTS() types.TS {
+	if h == nil || h.reader == nil {
+		return types.TS{}
+	}
+	return h.reader.ts()
+}
+func (h *spilledBatchHandle) Close() {
+	if h == nil {
+		return
+	}
+	if h.reader != nil {
+		h.reader.close()
+		h.reader = nil
+	}
+	if h.file != nil {
+		_ = h.file.Close()
+		h.file = nil
+	}
+}
+func (h *spilledBatchHandle) Next(dst **batch.Batch, mp *mpool.MPool) error {
+	if h == nil || h.reader == nil || h.reader.exhausted {
+		return moerr.GetOkExpectedEOF()
+	}
+	if h.outputLimitReached(*dst) {
+		return moerr.GetOkExpectedEOB()
+	}
+	if err := appendRangeSpillRow(dst, h.reader.bat, h.reader.row, mp); err != nil {
+		return err
+	}
+	if err := h.reader.next(); err != nil {
+		return err
+	}
+	if h.outputLimitReached(*dst) {
+		return moerr.GetOkExpectedEOB()
+	}
+	return nil
+}
+func (h *spilledBatchHandle) QuickNext(dst **batch.Batch, mp *mpool.MPool) error {
+	if h == nil || h.reader == nil || h.reader.exhausted {
+		return moerr.GetOkExpectedEOF()
+	}
+	if h.outputLimitReached(*dst) {
+		return moerr.GetOkExpectedEOB()
+	}
+	for !h.reader.exhausted {
+		if err := appendRangeSpillRow(dst, h.reader.bat, h.reader.row, mp); err != nil {
+			return err
+		}
+		if err := h.reader.next(); err != nil {
+			return err
+		}
+		if h.outputLimitReached(*dst) {
+			return moerr.GetOkExpectedEOB()
+		}
+	}
+	return nil
+}
+
+func (h *spilledBatchHandle) outputLimitReached(bat *batch.Batch) bool {
+	if h == nil || bat == nil {
+		return false
+	}
+	return (h.maxRows > 0 && bat.RowCount() >= h.maxRows) ||
+		(h.maxBytes > 0 && bat.Allocated() >= h.maxBytes)
+}
+
 type CNObjectHandle struct {
 	isTombstone        bool
 	objectOffsetCursor int
 	blkOffsetCursor    int
+	blockRowOffset     int
 	objects            []*objectio.ObjectEntry
 	fs                 fileservice.FileService
 	mp                 *mpool.MPool
 	base               *baseHandle
 
-	cache []*batch.Batch
-	blks  []types.Blockid
-	TSs   []types.TS
+	cache    []*batch.Batch
+	prepared []bool
+	blks     []types.Blockid
+	TSs      []types.TS
+	maxRows  int
+	maxBytes int
 }
 
 func NewCNObjectHandle(isTombstone bool, objects []*objectio.ObjectEntry, fs fileservice.FileService, baseHandle *baseHandle, mp *mpool.MPool) *CNObjectHandle {
@@ -245,27 +1309,37 @@ func NewCNObjectHandle(isTombstone bool, objects []*objectio.ObjectEntry, fs fil
 		mp:          mp,
 		cache:       make([]*batch.Batch, 0),
 		blks:        make([]types.Blockid, 0),
+		maxRows:     baseHandle.changesHandle.maxInMemoryRows,
+		maxBytes:    baseHandle.changesHandle.maxInMemoryBytes,
 	}
 }
 func (h *CNObjectHandle) prefetch(ctx context.Context) (err error) {
 	t0 := time.Now()
 	jobs := make([]*tasks.Job, 0)
 	blks := make([]types.Blockid, 0)
-	for i := 0; i < LoadParallism; i++ {
+	prefetchWidth := objectPrefetchWidth(h.maxRows, h.maxBytes)
+	bounded := h.maxRows > 0 || h.maxBytes > 0
+	for i := 0; i < prefetchWidth; i++ {
 		if h.objectOffsetCursor >= len(h.objects) {
 			break
 		}
 		entry := h.objects[h.objectOffsetCursor]
 		stats := entry.ObjectStats
 		blk := uint16(h.blkOffsetCursor)
+		rowOffset := 0
+		if bounded {
+			rowOffset = h.blockRowOffset
+		}
 		h.TSs = append(h.TSs, entry.CreateTime)
 		blks = append(blks, objectio.NewBlockidWithObjectID(stats.ObjectName().ObjectId(), blk))
-		job := prefetchObjects(ctx, uint32(h.blkOffsetCursor), h.fs, &stats, h.base.changesHandle.scheduler)
+		job := prefetchObjects(
+			ctx, uint32(h.blkOffsetCursor), rowOffset, h.fs, &stats,
+			h.base.changesHandle.scheduler, h.maxRows, h.maxBytes,
+			h.base.changesHandle.spillConfig, h.mp,
+		)
 		jobs = append(jobs, job)
-		h.blkOffsetCursor++
-		if h.blkOffsetCursor >= int(stats.BlkCnt()) {
-			h.blkOffsetCursor = 0
-			h.objectOffsetCursor++
+		if !bounded {
+			h.advanceBlock(stats.BlkCnt())
 		}
 	}
 	for i, job := range jobs {
@@ -280,12 +1354,28 @@ func (h *CNObjectHandle) prefetch(ctx context.Context) (err error) {
 			return
 		}
 		putJob(job)
-		loaded := res.Res.(*loadedAObjectBlock)
-		h.cache = append(h.cache, loaded.batch)
+		window := res.Res.(*persistedBlockWindow)
+		h.cache = append(h.cache, window.batch)
+		h.prepared = append(h.prepared, false)
 		h.blks = append(h.blks, blks[i])
+		if bounded {
+			h.blockRowOffset += window.rows
+			if h.blockRowOffset >= window.totalRows {
+				h.blockRowOffset = 0
+				h.advanceBlock(h.objects[h.objectOffsetCursor].ObjectStats.BlkCnt())
+			}
+		}
 	}
 	h.base.changesHandle.readDuration += time.Since(t0)
 	return
+}
+
+func (h *CNObjectHandle) advanceBlock(blockCount uint32) {
+	h.blkOffsetCursor++
+	if h.blkOffsetCursor >= int(blockCount) {
+		h.blkOffsetCursor = 0
+		h.objectOffsetCursor++
+	}
 }
 func (h *CNObjectHandle) isEnd() bool {
 	return h.objectOffsetCursor >= len(h.objects) && len(h.cache) == 0
@@ -309,30 +1399,41 @@ func (h *CNObjectHandle) Next(ctx context.Context, bat **batch.Batch, mp *mpool.
 		blk = &h.blks[0]
 	}
 	ts := h.TSs[0]
-	t0 := time.Now()
-	if h.isTombstone {
-		if err = updateCNTombstoneBatch(
-			data,
-			ts,
-			blk,
-			h.base.changesHandle.retainRowID,
-			h.mp,
-		); err != nil {
-			return err
+	discardSource := func() {
+		h.cache = h.cache[1:]
+		if len(h.prepared) > 0 {
+			h.prepared = h.prepared[1:]
 		}
-	} else {
-		if err = updateCNDataBatch(
-			data,
-			ts,
-			blk,
-			h.base.changesHandle.retainRowID,
-			h.mp,
-		); err != nil {
-			return err
+		if len(h.blks) > 0 {
+			h.blks = h.blks[1:]
 		}
+		h.TSs = h.TSs[1:]
+		data.Clean(h.mp)
 	}
-	h.base.changesHandle.updateDuration += time.Since(t0)
-	t0 = time.Now()
+	prepared := len(h.prepared) > 0 && h.prepared[0]
+	if !prepared {
+		t0 := time.Now()
+		if h.isTombstone {
+			err = updateCNTombstoneBatch(
+				data, ts, blk, h.base.changesHandle.retainRowID, h.mp,
+			)
+		} else {
+			err = updateCNDataBatch(
+				data, ts, blk, h.base.changesHandle.retainRowID, h.mp,
+			)
+		}
+		if err != nil {
+			discardSource()
+			return err
+		}
+		if len(h.prepared) == 0 {
+			h.prepared = append(h.prepared, true)
+		} else {
+			h.prepared[0] = true
+		}
+		h.base.changesHandle.updateDuration += time.Since(t0)
+	}
+	t0 := time.Now()
 	if *bat == nil {
 		*bat = batch.NewWithSize(0)
 		(*bat).Attrs = append((*bat).Attrs, data.Attrs...)
@@ -346,11 +1447,6 @@ func (h *CNObjectHandle) Next(ctx context.Context, bat **batch.Batch, mp *mpool.
 	} else if !batchesShareAppendSchema(*bat, data) {
 		return moerr.GetOkExpectedEOB()
 	}
-	h.cache = h.cache[1:]
-	if len(h.blks) > 0 {
-		h.blks = h.blks[1:]
-	}
-	h.TSs = h.TSs[1:]
 	srcLen := data.Vecs[0].Length()
 	sels := make([]int64, srcLen)
 	for j := 0; j < srcLen; j++ {
@@ -358,15 +1454,34 @@ func (h *CNObjectHandle) Next(ctx context.Context, bat **batch.Batch, mp *mpool.
 	}
 	for i, vec := range (*bat).Vecs {
 		src := data.Vecs[i]
-		vec.Union(src, sels, mp)
+		if err = vec.Union(src, sels, mp); err != nil {
+			discardSource()
+			return err
+		}
 	}
 	(*bat).SetRowCount((*bat).Vecs[0].Length())
+	discardSource()
 	h.base.changesHandle.copyDuration += time.Since(t0)
 	return
 }
 
 func (h *CNObjectHandle) QuickNext(ctx context.Context, data **batch.Batch, mp *mpool.MPool) (err error) {
 	return h.Next(ctx, data, mp)
+}
+
+func (h *CNObjectHandle) Close() {
+	if h == nil {
+		return
+	}
+	for _, bat := range h.cache {
+		if bat != nil {
+			bat.Clean(h.mp)
+		}
+	}
+	h.cache = nil
+	h.prepared = nil
+	h.blks = nil
+	h.TSs = nil
 }
 
 func (h *CNObjectHandle) NextTS() types.TS {
@@ -398,7 +1513,12 @@ type AObjectHandle struct {
 
 	// blockPlans caches block-level commit-ts overlap decisions for objects.
 	// It is only populated when checkpoint-range mode enables block pruning.
-	blockPlans map[string]*aobjBlockPlan
+	blockPlans     map[string]*aobjBlockPlan
+	maxRows        int
+	maxBytes       int
+	pendingObject  *objectio.ObjectEntry
+	pendingBlock   uint16
+	blockRowOffset int
 }
 
 type aobjBlockPlan struct {
@@ -430,6 +1550,8 @@ func NewAObjectHandle(ctx context.Context, p *baseHandle, isTombstone bool, star
 		cache:       make([]*batch.Batch, 0),
 		blks:        make([]types.Blockid, 0),
 		blockPlans:  make(map[string]*aobjBlockPlan),
+		maxRows:     p.changesHandle.maxInMemoryRows,
+		maxBytes:    p.changesHandle.maxInMemoryBytes,
 	}
 	return handle
 }
@@ -694,18 +1816,35 @@ func (h *AObjectHandle) prefetch(ctx context.Context) (err error) {
 	t0 := time.Now()
 	jobs := make([]*tasks.Job, 0)
 	blks := make([]types.Blockid, 0)
-	for i := 0; i < LoadParallism; i++ {
-		obj, blk, ok, targetErr := h.nextPrefetchTarget(ctx)
-		if targetErr != nil {
-			err = targetErr
-			h.p.changesHandle.readDuration += time.Since(t0)
-			return
-		}
-		if !ok {
-			break
+	prefetchWidth := objectPrefetchWidth(h.maxRows, h.maxBytes)
+	bounded := h.maxRows > 0 || h.maxBytes > 0
+	for i := 0; i < prefetchWidth; i++ {
+		var obj *objectio.ObjectEntry
+		var blk uint16
+		if bounded && h.pendingObject != nil {
+			obj, blk = h.pendingObject, h.pendingBlock
+		} else {
+			var ok bool
+			var targetErr error
+			obj, blk, ok, targetErr = h.nextPrefetchTarget(ctx)
+			if targetErr != nil {
+				err = targetErr
+				h.p.changesHandle.readDuration += time.Since(t0)
+				return
+			}
+			if !ok {
+				break
+			}
+			if bounded {
+				h.pendingObject, h.pendingBlock = obj, blk
+			}
 		}
 		stats := obj.ObjectStats
-		job := prefetchObjects(ctx, uint32(blk), h.fs, &stats, h.p.changesHandle.scheduler)
+		job := prefetchObjects(
+			ctx, uint32(blk), h.blockRowOffset, h.fs, &stats,
+			h.p.changesHandle.scheduler, h.maxRows, h.maxBytes,
+			h.p.changesHandle.spillConfig, h.mp,
+		)
 		jobs = append(jobs, job)
 		blks = append(blks, objectio.NewBlockidWithObjectID(stats.ObjectName().ObjectId(), blk))
 	}
@@ -721,10 +1860,17 @@ func (h *AObjectHandle) prefetch(ctx context.Context) (err error) {
 			return
 		}
 		putJob(job)
-		loaded := res.Res.(*loadedAObjectBlock)
-		h.cache = append(h.cache, loaded.batch)
-		h.specialLayouts = append(h.specialLayouts, loaded.specialLayout)
+		window := res.Res.(*persistedBlockWindow)
+		h.cache = append(h.cache, window.batch)
+		h.specialLayouts = append(h.specialLayouts, window.specialLayout)
 		h.blks = append(h.blks, blks[i])
+		if bounded {
+			h.blockRowOffset += window.rows
+			if h.blockRowOffset >= window.totalRows {
+				h.blockRowOffset = 0
+				h.pendingObject = nil
+			}
+		}
 	}
 	h.p.changesHandle.readDuration += time.Since(t0)
 	return
@@ -791,7 +1937,7 @@ func (h *AObjectHandle) getNextAObject(ctx context.Context) (err error) {
 	}
 }
 func (h *AObjectHandle) isEnd() bool {
-	return h.objectOffsetCursor >= len(h.objects) && len(h.cache) == 0
+	return h.pendingObject == nil && h.objectOffsetCursor >= len(h.objects) && len(h.cache) == 0
 }
 
 func (h *AObjectHandle) QuickNext(ctx context.Context, data **batch.Batch, mp *mpool.MPool) (err error) {
@@ -862,10 +2008,29 @@ func (h *AObjectHandle) NextTS() types.TS {
 	return vector.GetFixedAtNoTypeCheck[types.TS](commitTSVec, h.rowOffsetCursor)
 }
 
+func (h *AObjectHandle) Close() {
+	if h == nil {
+		return
+	}
+	if h.currentBatch != nil {
+		h.currentBatch.Clean(h.mp)
+		h.currentBatch = nil
+	}
+	for _, bat := range h.cache {
+		if bat != nil {
+			bat.Clean(h.mp)
+		}
+	}
+	h.cache = nil
+	h.blks = nil
+	h.batchLength = 0
+	h.rowOffsetCursor = 0
+}
+
 type baseHandle struct {
 	aobjHandle     *AObjectHandle
 	cnObjectHandle *CNObjectHandle
-	inMemoryHandle *BatchHandle
+	inMemoryHandle replayRowHandle
 
 	changesHandle *ChangeHandler
 
@@ -886,6 +2051,12 @@ func NewBaseHandler(state *PartitionState, changesHandle *ChangeHandler, start, 
 		skipTS:        make(map[types.TS]struct{}),
 		changesHandle: changesHandle,
 	}
+	owned := p
+	defer func() {
+		if err != nil {
+			owned.Close()
+		}
+	}()
 	var iter btree.IterG[objectio.ObjectEntry]
 	if tombstone {
 		iter = state.tombstoneObjectsNameIndex.Iter()
@@ -900,9 +2071,12 @@ func NewBaseHandler(state *PartitionState, changesHandle *ChangeHandler, start, 
 	}
 	rowIter, rowIterKind, pkFilterApplied := p.newReplayRowsIter(state, start, end, tombstone)
 	defer rowIter.Close()
-	p.inMemoryHandle = p.newBatchHandleWithRowIterator(
+	p.inMemoryHandle, err = p.newBatchHandleWithRowIterator(
 		ctx, rowIter, rowIterKind, pkFilterApplied, start, end, tombstone, mp,
 	)
+	if err != nil {
+		return nil, err
+	}
 	aobj, cnObj, tnByCreateTS, tnCreateTSKeys := p.getObjectEntries(iter, start, end)
 	if p.changesHandle.enableDeleteChainResolve {
 		resolvedAObj, resolveErr := p.resolveVisibleObjectsByDeleteChain(
@@ -963,7 +2137,9 @@ func (p *baseHandle) init(ctx context.Context, quick bool, mp *mpool.MPool) (err
 	if err != nil {
 		return
 	}
-	err = p.inMemoryHandle.init(quick, mp)
+	if p.inMemoryHandle != nil {
+		err = p.inMemoryHandle.init(quick, mp)
+	}
 	return
 }
 func (p *baseHandle) fillInSkipTS(iter btree.IterG[objectio.ObjectEntry], start, end types.TS) {
@@ -992,14 +2168,18 @@ func (p *baseHandle) fillInSkipTSFromObjects(start, end types.TS, groups ...[]*o
 	}
 }
 func (p *baseHandle) IsEmpty() bool {
-	return p.aobjHandle.IsEmpty() && p.inMemoryHandle.IsEmpty() && p.cnObjectHandle.IsEmpty()
+	inMemoryEmpty := p.inMemoryHandle == nil || p.inMemoryHandle.IsEmpty()
+	return p.aobjHandle.IsEmpty() && inMemoryEmpty && p.cnObjectHandle.IsEmpty()
 }
 
 func (p *baseHandle) IsSmall() bool {
 	if !p.cnObjectHandle.IsEmpty() {
 		return false
 	}
-	count := p.aobjHandle.RowCount() + p.inMemoryHandle.Rows()
+	count := p.aobjHandle.RowCount()
+	if p.inMemoryHandle != nil {
+		count += p.inMemoryHandle.Rows()
+	}
 	return count < SmallBatchThreshold
 }
 func (p *baseHandle) Close() {
@@ -1009,6 +2189,8 @@ func (p *baseHandle) Close() {
 	if p.inMemoryHandle != nil {
 		p.inMemoryHandle.Close()
 	}
+	p.aobjHandle.Close()
+	p.cnObjectHandle.Close()
 }
 func (p *baseHandle) less(a, b types.TS) bool {
 	if a.IsEmpty() {
@@ -1020,7 +2202,10 @@ func (p *baseHandle) less(a, b types.TS) bool {
 	return a.LE(&b)
 }
 func (p *baseHandle) nextTS() (types.TS, int) {
-	inMemoryTS := p.inMemoryHandle.NextTS()
+	var inMemoryTS types.TS
+	if p.inMemoryHandle != nil {
+		inMemoryTS = p.inMemoryHandle.NextTS()
+	}
 	aobjTS := p.aobjHandle.NextTS()
 	cnObjTS := p.cnObjectHandle.NextTS()
 	if p.less(inMemoryTS, aobjTS) && p.less(inMemoryTS, cnObjTS) {
@@ -1051,6 +2236,7 @@ func (p *baseHandle) QuickNext(ctx context.Context, bat **batch.Batch, mp *mpool
 	if p.aobjHandle != nil {
 		err = p.aobjHandle.QuickNext(ctx, bat, mp)
 		if moerr.IsMoErrCode(err, moerr.OkExpectedEOF) {
+			p.aobjHandle.Close()
 			p.aobjHandle = nil
 			err = nil
 		}
@@ -1075,8 +2261,21 @@ func (p *baseHandle) QuickNext(ctx context.Context, bat **batch.Batch, mp *mpool
 	if (*bat) != nil && (*bat).RowCount() > p.changesHandle.coarseMaxRow {
 		return
 	}
-	err = p.cnObjectHandle.QuickNext(ctx, bat, mp)
-	return
+	if p.cnObjectHandle != nil {
+		err = p.cnObjectHandle.QuickNext(ctx, bat, mp)
+		if moerr.IsMoErrCode(err, moerr.OkExpectedEOF) {
+			p.cnObjectHandle.Close()
+			p.cnObjectHandle = nil
+			err = nil
+		}
+		if err != nil {
+			return
+		}
+	}
+	if p.aobjHandle == nil && p.inMemoryHandle == nil && p.cnObjectHandle == nil {
+		return moerr.GetOkExpectedEOF()
+	}
+	return nil
 }
 func (p *baseHandle) newBatchHandleWithRowIterator(
 	ctx context.Context,
@@ -1086,30 +2285,62 @@ func (p *baseHandle) newBatchHandleWithRowIterator(
 	start, end types.TS,
 	tombstone bool,
 	mp *mpool.MPool,
-) (h *BatchHandle) {
-	bat := p.getBatchesFromRowIterator(iter, iterKind, pkFilterApplied, start, end, tombstone, mp)
-	if bat == nil {
+) (h replayRowHandle, err error) {
+	var bat *batch.Batch
+	var spillFile *rangeSpillFile
+	var spillRuns []rangeSpillRun
+	var scanned, tsMatched, emitted int
+	defer func() {
+		if err != nil {
+			if bat != nil {
+				bat.Clean(mp)
+			}
+			if spillFile != nil {
+				_ = spillFile.Close()
+			}
+		}
+	}()
+	flush := func() error {
+		if bat == nil || bat.RowCount() == 0 {
+			return nil
+		}
+		if !p.changesHandle.spillConfig.Enabled() {
+			return moerr.NewInvalidInputNoCtx(
+				"visible-state change range exceeded its memory limit and spill is unavailable",
+			)
+		}
+		if err := sortBatch(bat, len(bat.Vecs)-1, mp); err != nil {
+			return err
+		}
+		if spillFile == nil {
+			spillFile, err = newRangeSpillFile(ctx, p.changesHandle.spillConfig)
+			if err != nil {
+				return err
+			}
+		}
+		first := len(spillFile.records)
+		if err := spillFile.Append(bat); err != nil {
+			return err
+		}
+		spillRuns = append(spillRuns, rangeSpillRun{firstRecord: first, endRecord: len(spillFile.records)})
+		bat.Clean(mp)
+		bat = nil
 		return nil
 	}
-	h = NewRowHandle(bat, mp, p, ctx, tombstone)
-	return
-}
-func (p *baseHandle) getBatchesFromRowIterator(
-	iter RowsIter,
-	iterKind string,
-	pkFilterApplied bool,
-	start, end types.TS,
-	tombstone bool,
-	mp *mpool.MPool,
-) (bat *batch.Batch) {
-	var scanned, tsMatched, emitted int
+	chunkRows, chunkBytes := p.changesHandle.rangeSpillChunkLimits()
 	for iter.Next() {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		default:
+		}
 		scanned++
 		entry := iter.Entry()
 		if checkTS(start, end, entry.Time) {
 			tsMatched++
 			if !entry.Deleted && !tombstone {
 				fillInInsertBatch(&bat, entry, p.changesHandle.retainRowID, mp)
+				bat.SetRowCount(bat.Vecs[0].Length())
 				emitted++
 			}
 			if entry.Deleted && tombstone {
@@ -1120,7 +2351,14 @@ func (p *baseHandle) getBatchesFromRowIterator(
 					}
 				}
 				fillInDeleteBatch(&bat, entry, p.changesHandle.retainRowID, mp)
+				bat.SetRowCount(bat.Vecs[0].Length())
 				emitted++
+			}
+			if bat != nil && ((chunkRows > 0 && bat.RowCount() >= chunkRows) ||
+				(chunkBytes > 0 && bat.Allocated() >= chunkBytes)) {
+				if err = flush(); err != nil {
+					return nil, err
+				}
 			}
 		}
 	}
@@ -1137,7 +2375,29 @@ func (p *baseHandle) getBatchesFromRowIterator(
 			zap.Int("emitted", emitted),
 		)
 	}
-	return
+	if spillFile == nil {
+		if bat == nil {
+			// Keep a typed nil so baseHandle can use the nil-safe BatchHandle
+			// methods through replayRowHandle.
+			return (*BatchHandle)(nil), nil
+		}
+		return NewRowHandle(bat, mp, p, ctx, tombstone), nil
+	}
+	if err = flush(); err != nil {
+		return nil, err
+	}
+	spillFile, spillRuns, err = mergeRangeSpillRuns(
+		ctx, spillFile, spillRuns, p.changesHandle.spillConfig, mp, chunkRows, chunkBytes,
+	)
+	if err != nil {
+		return nil, err
+	}
+	h, err = newSpilledBatchHandle(spillFile, emitted, chunkRows, chunkBytes, mp)
+	if err != nil {
+		return nil, err
+	}
+	spillFile = nil
+	return h, nil
 }
 func (p *baseHandle) getObjectEntries(
 	objIter btree.IterG[objectio.ObjectEntry],
@@ -1519,12 +2779,31 @@ type ChangeHandler struct {
 	// pkFilter, when non-nil, enables PK-based pruning at the object, block,
 	// and row level.  Only DATA BRANCH PICK sets this; other callers leave it nil.
 	pkFilter *engine.PKFilter
+
+	maxInMemoryRows         int
+	maxInMemoryBytes        int
+	spillConfig             engine.ChangeRangeSpillConfig
+	spillNetEffectData      replayRowHandle
+	spillNetEffectTombstone replayRowHandle
 	// debugLabel scopes temporary diagnostics to a single CollectChanges call chain.
 	debugLabel string
 
 	retainRowID bool
 
 	LogThreshold time.Duration
+}
+
+func (p *ChangeHandler) rangeSpillChunkLimits() (rows, bytes int) {
+	// Construction can retain one chunk for the other replay side while a
+	// merge holds two inputs and one output. Quarters keep that working set
+	// within the caller's combined data+tombstone memory budget.
+	if p.maxInMemoryRows > 0 {
+		rows = max(1, p.maxInMemoryRows/4)
+	}
+	if p.maxInMemoryBytes > 0 {
+		bytes = max(1, p.maxInMemoryBytes/4)
+	}
+	return
 }
 
 type checkpointObjectSelection uint8
@@ -1649,8 +2928,11 @@ func NewChangesHandlerWithCheckpointRangeRecovery(
 //   - delete-time chain rewrite for GC-ed visible objects
 //   - commit-ts zonemap block pruning on TN non-appendable objects
 //
-// It is used only by snapshot-read policies that need exact range meaning after
-// normal partition-state replay can no longer read older object files.
+// It is used by snapshot-read policies that need exact range meaning. Output
+// is returned in batches. Callers may opt into bounded in-memory
+// materialization with engine.WithChangeRangeLimit and provide spill ownership
+// with engine.WithChangeRangeSpill. Existing callers remain unbounded by
+// default.
 func NewChangesHandlerWithPartitionStateRange(
 	ctx context.Context,
 	state *PartitionState,
@@ -1661,7 +2943,14 @@ func NewChangesHandlerWithPartitionStateRange(
 	mp *mpool.MPool,
 	fs fileservice.FileService,
 ) (changeHandle *ChangeHandler, err error) {
+	rangeLimit := engine.ChangeRangeLimitFromContext(ctx)
+	if rangeLimit.MaxInMemoryRows > 0 && rangeLimit.MaxInMemoryBytes <= 0 {
+		return nil, moerr.NewInvalidInputNoCtx(
+			"change range MaxInMemoryRows requires MaxInMemoryBytes to bound variable-width persisted columns",
+		)
+	}
 	stateStart := state.GetStart()
+	spillConfig := engine.ChangeRangeSpillFromContext(ctx)
 	if stateStart.GT(&start) {
 		logutil.Info("ChangesHandlerWithPartitionStateRange: stateStart > start, proceeding with range-aware scan",
 			zap.String("stateStart", stateStart.ToString()),
@@ -1683,6 +2972,10 @@ func NewChangesHandlerWithPartitionStateRange(
 		enableCommitTSBlockPrune: true,
 		strictCommitTSBlockPrune: true,
 		enableDeleteChainResolve: true,
+		pkFilter:                 engine.PKFilterFromContext(ctx),
+		maxInMemoryRows:          rangeLimit.MaxInMemoryRows,
+		maxInMemoryBytes:         rangeLimit.MaxInMemoryBytes,
+		spillConfig:              spillConfig,
 		debugLabel:               engine.CollectChangesDebugLabelFromContext(ctx),
 		retainRowID:              engine.RetainRowIDFromContext(ctx),
 	}
@@ -1723,6 +3016,26 @@ func NewChangesHandlerWithPartitionStateRange(
 		changeHandle.tombstoneHandle.aobjHandle.objects,
 		changeHandle.tombstoneHandle.cnObjectHandle.objects,
 	)
+	if rangeLimit.Enabled() {
+		chunkRows, chunkBytes := changeHandle.rangeSpillChunkLimits()
+		changeHandle.spillNetEffectData, changeHandle.spillNetEffectTombstone, err =
+			prepareRangeNetEffectSpill(
+				ctx,
+				changeHandle.dataHandle,
+				changeHandle.tombstoneHandle,
+				primarySeqnum,
+				skipDeletes,
+				false,
+				spillConfig,
+				mp,
+				chunkRows,
+				chunkBytes,
+			)
+		if err != nil {
+			return nil, err
+		}
+		changeHandle.quick = true
+	}
 	return changeHandle, nil
 }
 
@@ -2027,6 +3340,14 @@ func (p *ChangeHandler) Close() error {
 	if p.tombstoneHandle != nil {
 		p.tombstoneHandle.Close()
 	}
+	if p.spillNetEffectData != nil {
+		p.spillNetEffectData.Close()
+		p.spillNetEffectData = nil
+	}
+	if p.spillNetEffectTombstone != nil {
+		p.spillNetEffectTombstone.Close()
+		p.spillNetEffectTombstone = nil
+	}
 	if p.scheduler != nil {
 		p.scheduler.Stop()
 	}
@@ -2058,6 +3379,26 @@ func (p *ChangeHandler) decideNextHandle() int {
 	return NextChangeHandle_Data
 }
 func (p *ChangeHandler) quickNext(ctx context.Context, mp *mpool.MPool) (data, tombstone *batch.Batch, err error) {
+	if p.spillNetEffectData != nil || p.spillNetEffectTombstone != nil {
+		read := func(handle replayRowHandle, dst **batch.Batch) error {
+			if handle == nil || handle.IsEmpty() {
+				return nil
+			}
+			nextErr := handle.QuickNext(dst, mp)
+			if moerr.IsMoErrCode(nextErr, moerr.OkExpectedEOF) ||
+				moerr.IsMoErrCode(nextErr, moerr.OkExpectedEOB) {
+				return nil
+			}
+			return nextErr
+		}
+		if err = read(p.spillNetEffectData, &data); err != nil {
+			return
+		}
+		if err = read(p.spillNetEffectTombstone, &tombstone); err != nil {
+			return
+		}
+		return
+	}
 	for {
 		dataEnd := false
 		tombstoneEnd := false
@@ -2620,18 +3961,74 @@ func checkTS(start, end types.TS, ts types.TS) bool {
 	return ts.LE(&end) && ts.GE(&start)
 }
 
+type persistedBlockWindow struct {
+	batch         *batch.Batch
+	rows          int
+	totalRows     int
+	specialLayout objectio.SpecialColumnLayout
+}
+
 func prefetchObjects(
 	ctx context.Context,
 	blockID uint32,
+	rowOffset int,
 	fs fileservice.FileService,
 	stats *objectio.ObjectStats,
-	scheduler tasks.JobScheduler) (job *tasks.Job) {
+	scheduler tasks.JobScheduler,
+	maxRows int,
+	maxBytes int,
+	spillConfig engine.ChangeRangeSpillConfig,
+	mp *mpool.MPool,
+) (job *tasks.Job) {
 	job = getJob(
 		ctx,
 		stats.ObjectName().String(),
 		JTCDCLoad,
 		func(ctx context.Context) (res *tasks.JobResult) {
 			loc := stats.BlockLocation(uint16(blockID), 8192)
+			if maxRows > 0 || maxBytes > 0 {
+				meta, err := objectio.FastLoadObjectMeta(ctx, &loc, false, fs)
+				if err != nil {
+					return &tasks.JobResult{Err: err}
+				}
+				dataMeta := meta.MustGetMeta(objectio.SchemaData)
+				blockMeta := dataMeta.GetBlockMeta(blockID)
+				var decodedBytes uint64
+				for seqnum := uint16(0); seqnum < blockMeta.GetMetaColumnCount(); seqnum++ {
+					decodedBytes += uint64(blockMeta.ColumnMeta(seqnum).Location().OriginSize())
+				}
+				totalRows := int(blockMeta.GetRows())
+				windowRows := totalRows - rowOffset
+				if maxRows > 0 {
+					windowRows = min(windowRows, max(1, maxRows/4))
+				}
+				windowByteBudget := 0
+				if decodedBytes > 0 && totalRows > 0 {
+					if maxBytes > 0 {
+						windowByteBudget = max(1, maxBytes/4)
+						windowRows = min(windowRows, max(1, int(uint64(windowByteBudget)*uint64(totalRows)/decodedBytes)))
+					}
+				}
+				cols := make([]uint16, blockMeta.GetMetaColumnCount())
+				for i := range cols {
+					cols[i] = uint16(i)
+				}
+				bat, err := objectio.ReadOneBlockAllColumnsWindow(
+					ctx, &dataMeta, loc.Name().String(), blockID, cols,
+					rowOffset, windowRows, fileservice.SkipAllCache, fs, mp,
+					windowByteBudget,
+					func(ctx context.Context) (objectio.ColumnWindowSpill, error) {
+						return newLegacyColumnSpill(ctx, spillConfig)
+					},
+				)
+				if err != nil {
+					return &tasks.JobResult{Err: err}
+				}
+				return &tasks.JobResult{Res: &persistedBlockWindow{
+					batch: bat, rows: windowRows, totalRows: totalRows,
+					specialLayout: objectio.ResolveSpecialColumnLayout(blockMeta),
+				}}
+			}
 			bat, _, specialLayout, err := ioutil.LoadOneBlockWithSpecialLayout(
 				ctx,
 				fs,
@@ -2642,18 +4039,16 @@ func prefetchObjects(
 			if err != nil {
 				res.Err = err
 			} else {
-				res.Res = &loadedAObjectBlock{batch: bat, specialLayout: specialLayout}
+				res.Res = &persistedBlockWindow{
+					batch: bat, rows: bat.RowCount(), totalRows: bat.RowCount(),
+					specialLayout: specialLayout,
+				}
 			}
 			return
 		},
 	)
 	scheduler.Schedule(job)
 	return
-}
-
-type loadedAObjectBlock struct {
-	batch         *batch.Batch
-	specialLayout objectio.SpecialColumnLayout
 }
 
 func prependRowIDVectorIfNeeded(bat *batch.Batch, blk *types.Blockid, mp *mpool.MPool) error {

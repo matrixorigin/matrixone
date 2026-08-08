@@ -41,3 +41,9 @@ func TestLz4(t *testing.T) {
 	}
 	fmt.Printf("dat: %v\n", data)
 }
+
+func TestTypeString(t *testing.T) {
+	if got := T(Lz4Chunked).String(); got != "LZ4Chunked" {
+		t.Fatalf("unexpected chunked compression name %q", got)
+	}
+}

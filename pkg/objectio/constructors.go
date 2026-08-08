@@ -124,6 +124,9 @@ func constructorFactory(size int64, algo uint8) CacheConstructor {
 				return
 			}
 		}
+		if algo == compress.Lz4Chunked {
+			return decodeChunkedColumn(ctx, data, allocator)
+		}
 
 		// no compress
 		if algo == compress.None {
@@ -141,6 +144,31 @@ func constructorFactory(size int64, algo uint8) CacheConstructor {
 		decompressedData = decompressedData.Slice(len(bs))
 		return decompressedData, nil
 	}
+}
+
+// DecompressColumnExtent materializes one serialized object column from its
+// physical extent encoding. Raw object consumers must use this entry point so
+// Lz4Chunked columns are not mistaken for legacy single-frame LZ4 data.
+func DecompressColumnExtent(
+	ctx context.Context,
+	data []byte,
+	ext Extent,
+	allocator fileservice.CacheDataAllocator,
+) (fscache.Data, error) {
+	if uint64(len(data)) != uint64(ext.Length()) {
+		return nil, moerr.NewInvalidInputNoCtxf(
+			"object column extent length %d does not match data length %d",
+			ext.Length(), len(data),
+		)
+	}
+	switch ext.Alg() {
+	case compress.None, compress.Lz4, compress.Lz4Chunked:
+	default:
+		return nil, moerr.NewInvalidInputNoCtxf(
+			"unsupported object column compression algorithm %d", ext.Alg(),
+		)
+	}
+	return constructorFactory(int64(ext.OriginSize()), ext.Alg())(ctx, nil, data, allocator)
 }
 
 // columnCacheConstructorFactory validates V2 column data once, after
@@ -296,6 +324,39 @@ func CopyCachedVectorRows(toVec *vector.Vector, data fscache.Data, sels []int64,
 // without exposing a writable alias to the cached representation.
 func CopyCachedVectorAll(toVec *vector.Vector, data fscache.Data, mp *mpool.MPool) error {
 	return copyCachedVector(toVec, data, nil, true, mp)
+}
+
+// MaterializeCachedVectorWindow copies one row window from a cache-backed
+// object column without cloning or exposing the complete decoded Vector.
+func MaterializeCachedVectorWindow(
+	data fscache.Data,
+	offset, length int,
+	mp *mpool.MPool,
+) (*vector.Vector, error) {
+	if mp == nil {
+		return nil, moerr.NewInvalidInputNoCtx("nil mpool for object column materialization")
+	}
+	var source vector.Vector
+	if err := bindCachedVectorForScope(&source, data); err != nil {
+		return nil, err
+	}
+	defer source.Free(nil)
+	if offset < 0 || length < 0 || offset > source.Length()-length {
+		return nil, moerr.NewInvalidInputNoCtxf(
+			"object column window [%d, %d) out of range [0, %d)",
+			offset, offset+length, source.Length(),
+		)
+	}
+	dst := vector.NewVec(*source.GetType())
+	sels := make([]int64, length)
+	for i := range sels {
+		sels[i] = int64(offset + i)
+	}
+	if err := dst.Union(&source, sels, mp); err != nil {
+		dst.Free(mp)
+		return nil, err
+	}
+	return dst, nil
 }
 
 func copyCachedVector(
