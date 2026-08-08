@@ -1141,7 +1141,8 @@ func (e *Engine) BuildBlockReaders(
 	expr *plan.Expr,
 	def *plan.TableDef,
 	relData engine.RelData,
-	num int) ([]engine.Reader, error) {
+	num int,
+	filterHint ...engine.FilterHint) ([]engine.Reader, error) {
 	var rds []engine.Reader
 	proc := p.(*process.Process)
 	blkCnt := relData.DataCnt()
@@ -1160,6 +1161,10 @@ func (e *Engine) BuildBlockReaders(
 		return nil, err
 	}
 
+	hint := engine.FilterHint{}
+	if len(filterHint) > 0 {
+		hint = filterHint[0]
+	}
 	shards := relData.Split(newNum)
 	for i := 0; i < newNum; i++ {
 		ds := readutil.NewRemoteDataSource(ctx, fs, ts, shards[i])
@@ -1173,7 +1178,7 @@ func (e *Engine) BuildBlockReaders(
 			expr,
 			ds,
 			readutil.GetThresholdForReader(newNum),
-			engine.FilterHint{},
+			hint,
 		)
 		if err != nil {
 			return nil, err

@@ -69,9 +69,10 @@ const (
 )
 
 // docfilter.MembershipFilter (producer view, with Share) must stay assignable to
-// engine.MembershipFilter (consumer view) so docfilter.New(...).Share() can be
-// stored in FilterHint.BF. This compile-time assertion locks that relationship
-// from a package that imports both, since docfilter cannot import engine.
+// engine.MembershipFilter (consumer view) so a reconstructed docfilter share
+// can be stored in FilterHint.BF. This compile-time assertion locks that
+// relationship from a package that imports both, since docfilter cannot import
+// engine.
 var _ engine.MembershipFilter = (docfilter.MembershipFilter)(nil)
 
 var traceFilterExprInterval atomic.Uint64
@@ -2404,11 +2405,15 @@ func (tbl *txnTable) BuildReaders(
 	shards := relData.Split(newNum)
 
 	// Reconstruct the doc_id filter from the tagged bytes. docfilter hides which
-	// structure (cbitmap / CRoaring / bloom) backs it; we just hand each reader
+	// structure (cbitmap / Sorted64 / legacy CRoaring / bloom) backs it; we hand
+	// each reader
 	// a share and free the builder reference at the end.
 	var mainFilter docfilter.MembershipFilter
 	if len(filterHint.MembershipFilterBytes) > 0 {
-		f, ferr := docfilter.New(filterHint.MembershipFilterBytes)
+		f, ferr := docfilter.NewWithMemoryAdmission(
+			filterHint.MembershipFilterBytes,
+			docfilter.AdmissionForService(proc.GetService()),
+		)
 		if ferr != nil {
 			// A non-empty payload that fails to decode must NOT be silently
 			// dropped to a nil filter (which disables filtering and lets all rows

@@ -1516,6 +1516,15 @@ func (s *Scope) buildReaders(c *Compile) (readers []engine.Reader, err error) {
 		if s.DataSource.AccountId != nil {
 			ctx = defines.AttachAccountId(ctx, uint32(s.DataSource.AccountId.GetTenantId()))
 		}
+		hint := engine.FilterHint{MembershipFilterBytes: s.DataSource.MembershipFilterBytes}
+		if len(hint.MembershipFilterBytes) == 0 {
+			for _, key := range []any{defines.IvfMembershipFilter{}, defines.FulltextMembershipFilter{}} {
+				if bytes, ok := c.proc.Ctx.Value(key).([]byte); ok && len(bytes) > 0 {
+					hint.MembershipFilterBytes = bytes
+					break
+				}
+			}
+		}
 
 		readers, err = c.e.BuildBlockReaders(
 			ctx,
@@ -1524,7 +1533,8 @@ func (s *Scope) buildReaders(c *Compile) (readers []engine.Reader, err error) {
 			s.DataSource.FilterExpr,
 			s.DataSource.TableDef,
 			s.NodeInfo.Data,
-			s.NodeInfo.Mcpu)
+			s.NodeInfo.Mcpu,
+			hint)
 		if err != nil {
 			return
 		}
