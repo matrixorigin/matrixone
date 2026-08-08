@@ -800,7 +800,7 @@ func TestLifecycleRewriteRegisteredTransferFaultRollsBackCatalogOnly(
 	requireLifecycleRPCRows(t, ctx, h, table, 9)
 }
 
-func TestLifecycleRewriteNeedRetryRebuildsFromImmutableBooking(t *testing.T) {
+func TestLifecycleRewriteNeedRetryAbortsWithoutReplayingBooking(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	ctx := context.Background()
 	opts := config.WithLongScanAndCKPOpts(nil)
@@ -839,15 +839,16 @@ func TestLifecycleRewriteNeedRetryRebuildsFromImmutableBooking(t *testing.T) {
 	})
 
 	_, err = h.HandleCommit(ctx, meta, nil, request)
-	require.NoError(t, err)
+	require.ErrorIs(t, err, txnif.ErrTxnNeedRetry)
 	require.Equal(t, 1, prepareCount)
 	require.Equal(t, txnif.TxnStateRollbacked, generationOne.GetTxnState(true))
+	createdBlock := objectio.NewBlockidWithObjectID(rewrite.created.ObjectName().ObjectId(), 0)
+	require.Nil(t, h.db.Runtime.TransferDelsMap.GetDelsForBlk(createdBlock))
 	require.True(t, bytes.Equal(originalPayload, request.Payload[0].CNRequest.Payload))
-	require.False(t, lifecycleRPCObjectVisible(t, ctx, h.db, table))
-	require.True(t, lifecycleRPCObjectStatsVisible(t, ctx, h, table, rewrite.created))
+	require.True(t, lifecycleRPCObjectVisible(t, ctx, h.db, table))
+	require.False(t, lifecycleRPCObjectStatsVisible(t, ctx, h, table, rewrite.created))
 	requireLifecycleRPCRootFiles(t, ctx, h, rewrite)
-	requireLifecycleRPCRows(t, ctx, h, table, 4)
-	require.Equal(t, []int16{6, 7, 8, 9}, lifecycleRPCPrimaryKeys(t, ctx, h, table))
+	requireLifecycleRPCRows(t, ctx, h, table, 9)
 
 	directory := h.db.Dir
 	require.NoError(t, h.HandleClose(ctx))
@@ -855,10 +856,9 @@ func TestLifecycleRewriteNeedRetryRebuildsFromImmutableBooking(t *testing.T) {
 	reopened, err := db.Open(ctx, directory, opts)
 	require.NoError(t, err)
 	h.Handle = &Handle{db: reopened}
-	require.False(t, lifecycleRPCObjectVisible(t, ctx, h.db, table))
-	require.True(t, lifecycleRPCObjectStatsVisible(t, ctx, h, table, rewrite.created))
-	requireLifecycleRPCRows(t, ctx, h, table, 4)
-	require.Equal(t, []int16{6, 7, 8, 9}, lifecycleRPCPrimaryKeys(t, ctx, h, table))
+	require.True(t, lifecycleRPCObjectVisible(t, ctx, h.db, table))
+	require.False(t, lifecycleRPCObjectStatsVisible(t, ctx, h, table, rewrite.created))
+	requireLifecycleRPCRows(t, ctx, h, table, 9)
 }
 
 func TestLifecycleRewriteRestartLosesProtectionAndFailsClosed(t *testing.T) {

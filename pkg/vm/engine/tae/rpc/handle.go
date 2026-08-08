@@ -232,7 +232,7 @@ func (h *Handle) handleRequests(
 	commitRequests *txn.TxnCommitRequest,
 	response *txn.TxnResponse,
 	txnMeta txn.TxnMeta,
-) (bigDelete []uint64, hasDDL bool, err error) {
+) (bigDelete []uint64, hasDDL, hasLifecycle bool, err error) {
 
 	var (
 		entry any
@@ -309,6 +309,7 @@ func (h *Handle) handleRequests(
 				}
 			}
 		case *api.LifecycleCommitEntry:
+			hasLifecycle = true
 			err = h.HandleLifecycleCommit(ctx, txn, req)
 
 		case *cmd_util.WriteReq, *api.Entry:
@@ -570,9 +571,10 @@ func (h *Handle) HandleCommit(
 	start := time.Now()
 
 	var (
-		txn      txnif.AsyncTxn
-		releaseF []func()
-		hasDDL   bool = false
+		txn          txnif.AsyncTxn
+		releaseF     []func()
+		hasDDL       bool = false
+		hasLifecycle bool
 	)
 	defer func() {
 		for _, f := range releaseF {
@@ -612,7 +614,7 @@ func (h *Handle) HandleCommit(
 	}
 
 	var bigDeleteTbls []uint64
-	if bigDeleteTbls, hasDDL, err = h.handleRequests(
+	if bigDeleteTbls, hasDDL, hasLifecycle, err = h.handleRequests(
 		ctx, txn, commitRequests, response, meta); err != nil {
 		return
 	}
@@ -632,7 +634,13 @@ func (h *Handle) HandleCommit(
 		h.db.Runtime.BigDeleteHinter.RecordBigDel(bigDeleteTbls, types.TimestampToTS(cts))
 	}
 
-	if moerr.IsMoErrCode(err, moerr.ErrTAENeedRetry) {
+	// A Lifecycle finalization owns immutable external payloads.  Retrying its
+	// TAE transaction in-process would reuse the same output Object identity
+	// after a prepared generation has been rolled back. Ordinary Merge rebuilds
+	// its output for that case; Lifecycle deliberately does not. Return the
+	// definitive abort to CN so the Root cleanup/fresh-attempt path owns it.
+	// Ordinary commit retries retain their existing behavior.
+	if moerr.IsMoErrCode(err, moerr.ErrTAENeedRetry) && !hasLifecycle {
 		for {
 			for _, f := range releaseF {
 				f()
@@ -648,7 +656,9 @@ func (h *Handle) HandleCommit(
 				zap.String("new-txn", txn.GetID()),
 			)
 			//Handle precommit-write command for 1PC
-			bigDeleteTbls, hasDDL, err = h.handleRequests(ctx, txn, commitRequests, response, meta)
+			bigDeleteTbls, hasDDL, hasLifecycle, err = h.handleRequests(
+				ctx, txn, commitRequests, response, meta,
+			)
 			if err != nil && !moerr.IsMoErrCode(err, moerr.ErrTAENeedRetry) {
 				break
 			}
