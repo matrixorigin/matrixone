@@ -23,6 +23,44 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
+func normalizeGroupByName(name *tree.UnresolvedName) {
+	for i := 0; i < name.NumParts; i++ {
+		if name.CStrParts[i] != nil {
+			name.CStrParts[i] = tree.NewCStr(name.CStrParts[i].Compare(), 0)
+		}
+	}
+}
+
+// canonicalGroupByAstKey folds only identifiers and function names through
+// their comparison form. String literals and all other case-sensitive values
+// retain their original spelling.
+func canonicalGroupByAstKey(astExpr tree.Expr) string {
+	normalized := cloneTreeExpr(astExpr)
+	walkGroupingSetOrderByExpr(normalized, func(expr tree.Expr) bool {
+		switch node := expr.(type) {
+		case *tree.UnresolvedName:
+			normalizeGroupByName(node)
+		case *tree.FuncExpr:
+			if node.FuncName != nil {
+				node.FuncName = tree.NewCStr(node.FuncName.Compare(), 0)
+			}
+			if name, ok := node.Func.FunctionReference.(*tree.UnresolvedName); ok {
+				normalizeGroupByName(name)
+			}
+		}
+		return true
+	})
+	return semanticAstKey(normalized)
+}
+
+func lookupGroupByAst(ctx *BindContext, astExpr tree.Expr, astKey string) (int32, bool) {
+	if pos, ok := ctx.groupByAst[astKey]; ok {
+		return pos, true
+	}
+	pos, ok := ctx.groupByCanonicalAst[canonicalGroupByAstKey(astExpr)]
+	return pos, ok
+}
+
 func NewGroupBinder(builder *QueryBuilder, ctx *BindContext, selectList tree.SelectExprs) *GroupBinder {
 	b := &GroupBinder{}
 	b.sysCtx = builder.GetContext()
@@ -100,7 +138,12 @@ func (b *GroupBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool) (*pl
 			if _, ok := b.ctx.groupByAst[astStr]; ok {
 				return nil, nil
 			}
-			b.ctx.groupByAst[astStr] = int32(len(b.ctx.groups))
+			pos := int32(len(b.ctx.groups))
+			b.ctx.groupByAst[astStr] = pos
+			canonicalKey := canonicalGroupByAstKey(astExpr)
+			if _, ok := b.ctx.groupByCanonicalAst[canonicalKey]; !ok {
+				b.ctx.groupByCanonicalAst[canonicalKey] = pos
+			}
 		}
 		if hasParam {
 			key := parameterizedGroupByKey(astStr, expr)
@@ -118,7 +161,7 @@ func (b *GroupBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool) (*pl
 
 	if isRoot && b.ctx.isGroupingSet {
 		astStr := semanticAstKey(astExpr)
-		pos, ok := b.ctx.groupByAst[astStr]
+		pos, ok := lookupGroupByAst(b.ctx, astExpr, astStr)
 		if containsDynamicParam(expr) {
 			pos, ok = b.ctx.groupByParamAst[parameterizedGroupByKey(astStr, expr)]
 		}
