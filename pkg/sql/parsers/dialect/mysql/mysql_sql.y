@@ -2712,21 +2712,21 @@ set_transaction_stmt:
     SET TRANSACTION transaction_characteristic_list
     {
 	$$ = &tree.SetTransaction{
-	    Global: false,
+	    Scope: tree.TransactionScopeNext,
 	    CharacterList: $3,
 	    }
     }
 |   SET GLOBAL TRANSACTION transaction_characteristic_list
     {
         $$ = &tree.SetTransaction{
-            Global: true,
+            Scope: tree.TransactionScopeGlobal,
             CharacterList: $4,
             }
     }
 |   SET SESSION TRANSACTION transaction_characteristic_list
     {
         $$ = &tree.SetTransaction{
-            Global: false,
+            Scope: tree.TransactionScopeSession,
             CharacterList: $4,
             }
     }

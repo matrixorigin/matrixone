@@ -56,6 +56,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	pbtxn "github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/compile"
@@ -1159,6 +1160,99 @@ func handleSetVar(ses FeSession, execCtx *ExecCtx, sv *tree.SetVar, sql string) 
 		return err
 	}
 
+	return nil
+}
+
+func handleSetTransaction(ses *Session, execCtx *ExecCtx, stmt *tree.SetTransaction) error {
+	var isolationCharacteristic *tree.TransactionCharacteristic
+	var accessCharacteristic *tree.TransactionCharacteristic
+	for i, characteristic := range stmt.CharacterList {
+		if characteristic == nil {
+			return moerr.NewInvalidInputf(execCtx.reqCtx,
+				"transaction characteristic %d is empty", i+1)
+		}
+		if characteristic.IsLevel {
+			if isolationCharacteristic != nil {
+				return moerr.NewInvalidInput(execCtx.reqCtx,
+					"transaction isolation level specified more than once")
+			}
+			isolationCharacteristic = characteristic
+		} else {
+			if accessCharacteristic != nil {
+				return moerr.NewInvalidInput(execCtx.reqCtx,
+					"transaction access mode specified more than once")
+			}
+			accessCharacteristic = characteristic
+		}
+	}
+
+	if accessCharacteristic != nil {
+		var accessMode string
+		switch accessCharacteristic.Access {
+		case tree.ACCESS_MODE_READ_ONLY:
+			accessMode = "READ ONLY"
+		case tree.ACCESS_MODE_READ_WRITE:
+			accessMode = "READ WRITE"
+		default:
+			return moerr.NewInvalidInputf(execCtx.reqCtx,
+				"unsupported transaction access mode %d", accessCharacteristic.Access)
+		}
+		return moerr.NewNotSupported(execCtx.reqCtx,
+			"transaction access mode "+accessMode+" is not supported")
+	}
+	if isolationCharacteristic == nil {
+		return moerr.NewInvalidInput(execCtx.reqCtx,
+			"transaction characteristic list must not be empty")
+	}
+
+	var value string
+	var isolation pbtxn.TxnIsolation
+	switch isolationCharacteristic.Isolation {
+	case tree.ISOLATION_LEVEL_REPEATABLE_READ:
+		value = "REPEATABLE-READ"
+		isolation = pbtxn.TxnIsolation_SI
+	case tree.ISOLATION_LEVEL_READ_COMMITTED:
+		value = "READ-COMMITTED"
+		isolation = pbtxn.TxnIsolation_RC
+	case tree.ISOLATION_LEVEL_READ_UNCOMMITTED:
+		return moerr.NewNotSupported(execCtx.reqCtx,
+			"transaction isolation level READ-UNCOMMITTED is not supported")
+	case tree.ISOLATION_LEVEL_SERIALIZABLE:
+		return moerr.NewNotSupported(execCtx.reqCtx,
+			"transaction isolation level SERIALIZABLE is not supported")
+	default:
+		return moerr.NewInvalidInputf(execCtx.reqCtx, "unsupported transaction isolation level %d", isolationCharacteristic.Isolation)
+	}
+
+	switch stmt.Scope {
+	case tree.TransactionScopeNext:
+		txnHandler := ses.GetTxnHandler()
+		if txnHandler == nil {
+			return moerr.NewInternalError(execCtx.reqCtx, "transaction handler is not initialized")
+		}
+		allowCurrentStatementTxn := execCtx.txnOpt.activeTxnAtStartKnown &&
+			!execCtx.txnOpt.activeTxnAtStart
+		if err := txnHandler.setNextTxnIsolation(
+			execCtx.reqCtx,
+			isolation,
+			allowCurrentStatementTxn,
+		); err != nil {
+			return err
+		}
+	case tree.TransactionScopeSession:
+		if err := ses.SetSessionSysVar(execCtx.reqCtx, "transaction_isolation", value); err != nil {
+			return err
+		}
+	case tree.TransactionScopeGlobal:
+		if err := doCheckRole(execCtx.reqCtx, ses); err != nil {
+			return err
+		}
+		if err := ses.SetGlobalSysVar(execCtx.reqCtx, "transaction_isolation", value); err != nil {
+			return err
+		}
+	default:
+		return moerr.NewInvalidInputf(execCtx.reqCtx, "unsupported transaction scope %d", stmt.Scope)
+	}
 	return nil
 }
 
@@ -4146,6 +4240,8 @@ func executeStmtWithWorkspace(ses FeSession,
 	//special BEGIN,COMMIT,ROLLBACK
 	beginStmt := false
 	execCtx.txnOpt.Close()
+	execCtx.txnOpt.activeTxnAtStart = ses.GetTxnHandler().InActiveTxn()
+	execCtx.txnOpt.activeTxnAtStartKnown = true
 	switch execCtx.stmt.(type) {
 	case *tree.BeginTransaction:
 		execCtx.txnOpt.byBegin = true

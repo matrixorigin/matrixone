@@ -98,6 +98,27 @@ func TestSetNamesAssignmentKind(t *testing.T) {
 	}
 }
 
+func TestSetTransactionScope(t *testing.T) {
+	tests := []struct {
+		sql   string
+		scope tree.TransactionScope
+	}{
+		{sql: "set transaction isolation level read committed", scope: tree.TransactionScopeNext},
+		{sql: "set session transaction isolation level read committed", scope: tree.TransactionScopeSession},
+		{sql: "set global transaction isolation level read committed", scope: tree.TransactionScopeGlobal},
+	}
+
+	for _, test := range tests {
+		t.Run(test.sql, func(t *testing.T) {
+			stmt, err := ParseOne(context.Background(), test.sql, 1)
+			require.NoError(t, err)
+			setTxn, ok := stmt.(*tree.SetTransaction)
+			require.True(t, ok)
+			require.Equal(t, test.scope, setTxn.Scope)
+		})
+	}
+}
+
 func TestDropFunctionIfExists(t *testing.T) {
 	tests := []struct {
 		sql      string
@@ -4102,11 +4123,11 @@ var (
 		},
 		{
 			input:  "set session transaction isolation level read committed , read write , isolation level read committed , read only;",
-			output: "set transaction isolation level read committed , read write , isolation level read committed , read only",
+			output: "set session transaction isolation level read committed , read write , isolation level read committed , read only",
 		},
 		{
 			input:  "set session transaction isolation level read committed , isolation level read uncommitted , isolation level repeatable read , isolation level serializable;",
-			output: "set transaction isolation level read committed , isolation level read uncommitted , isolation level repeatable read , isolation level serializable",
+			output: "set session transaction isolation level read committed , isolation level read uncommitted , isolation level repeatable read , isolation level serializable",
 		},
 		{
 			input:  "create table t1(a int) STORAGE DISK;",
