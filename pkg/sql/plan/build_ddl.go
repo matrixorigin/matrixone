@@ -4512,6 +4512,32 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 			if err != nil {
 				return nil, err
 			}
+		case *tree.AlterTableChangeColumnClause:
+			// A same-name CHANGE with an unchanged storage layout has the same
+			// execution semantics as MODIFY, but historically took the COPY path.
+			ok, _ := isInplaceChangeColumn(ctx.GetContext(), opt, tableDef)
+			if !ok {
+				return nil, moerr.NewInvalidInputf(
+					ctx.GetContext(),
+					"failed inplace check: %s",
+					formatTreeNode(opt),
+				)
+			}
+
+			if alterTable.CopyTableDef == nil {
+				alterTable.CopyTableDef = DeepCopyTableDef(tableDef, true)
+			}
+
+			_, err := updateNewColumnInTableDef(
+				ctx,
+				alterTable.CopyTableDef,
+				FindColumn(alterTable.CopyTableDef.Cols, opt.OldColumnName.ColName()),
+				opt.NewColumn,
+				opt.Position,
+			)
+			if err != nil {
+				return nil, err
+			}
 		case *tree.AlterTableRenameColumnClause:
 			if err := checkTableType(ctx.GetContext(), tableDef, ""); err != nil {
 				return nil, err
