@@ -409,21 +409,21 @@ func TestVersionHandleLifecycleWithNoLegacyDefinitions(t *testing.T) {
 		})
 		defer tableStub.Reset()
 
+		views := map[string]string{
+			"KEY_COLUMN_USAGE":        sysview.InformationSchemaKeyColumnUsageDDL,
+			"REFERENTIAL_CONSTRAINTS": sysview.InformationSchemaReferentialConstraintsDDL,
+			"TABLES":                  sysview.InformationSchemaTablesDDL,
+			"COLUMNS":                 sysview.InformationSchemaColumnsDDL,
+			"STATISTICS":              sysview.InformationSchemaStatisticsDDL,
+			"CHECK_CONSTRAINTS":       sysview.InformationSchemaCheckConstraintsDDL,
+			"TABLE_CONSTRAINTS":       sysview.InformationSchemaTableConstraintsDDL,
+		}
 		stub := gostub.Stub(&versions.CheckViewDefinition, func(_ executor.TxnExecutor, _ uint32, _ string, viewName string) (bool, string, error) {
-			switch viewName {
-			case "KEY_COLUMN_USAGE":
-				return true, sysview.InformationSchemaKeyColumnUsageDDL, nil
-			case "REFERENTIAL_CONSTRAINTS":
-				return true, sysview.InformationSchemaReferentialConstraintsDDL, nil
-			case "CHECK_CONSTRAINTS":
-				return true, sysview.InformationSchemaCheckConstraintsDDL, nil
-			case "TABLE_CONSTRAINTS":
-				return true, sysview.InformationSchemaTableConstraintsDDL, nil
-			case "COLUMNS":
-				return true, sysview.InformationSchemaColumnsDDL, nil
-			default:
+			definition, ok := views[viewName]
+			if !ok {
 				return false, "", errors.New("unexpected view")
 			}
+			return true, definition, nil
 		})
 		defer stub.Reset()
 
@@ -991,7 +991,7 @@ func TestPopulateInformationSchemaCharacterSetsIsIdempotent(t *testing.T) {
 }
 
 func TestLifecycleInformationSchemaUpgradeEntries(t *testing.T) {
-	start := baseTenantUpgradeEntries + len(catalog.LifecycleTenantTableDefinitions)
+	start := lifecycleTenantUpgradeEntriesStart(t) + len(catalog.LifecycleTenantTableDefinitions)
 	for _, entry := range tenantUpgEntries[start:] {
 		require.Equal(t, versions.MODIFY_VIEW, entry.UpgType)
 		require.Contains(t, entry.UpgSql, catalog.LifecycleRestoreTableSQLRegexpPattern)
@@ -999,8 +999,9 @@ func TestLifecycleInformationSchemaUpgradeEntries(t *testing.T) {
 }
 
 func TestLifecycleCatalogUpgradeEntries(t *testing.T) {
+	existingTenantEntries := lifecycleTenantUpgradeEntriesStart(t)
 	for i, definition := range catalog.LifecycleTenantTableDefinitions {
-		entry := tenantUpgEntries[baseTenantUpgradeEntries+i]
+		entry := tenantUpgEntries[existingTenantEntries+i]
 		require.Equal(t, definition.Schema, entry.Schema)
 		require.Equal(t, definition.Name, entry.TableName)
 		require.Equal(t, versions.CREATE_NEW_TABLE, entry.UpgType)
@@ -1037,6 +1038,19 @@ func TestLifecycleCatalogUpgradeEntries(t *testing.T) {
 	for _, required := range []string{"tae_object_lifecycle", "sys_cron_task", "on duplicate key"} {
 		require.Contains(t, strings.ToLower(coordinator.UpgSql), required)
 	}
+}
+
+func lifecycleTenantUpgradeEntriesStart(t *testing.T) int {
+	t.Helper()
+	require.NotEmpty(t, catalog.LifecycleTenantTableDefinitions)
+	first := catalog.LifecycleTenantTableDefinitions[0]
+	for index, entry := range tenantUpgEntries {
+		if entry.Schema == first.Schema && entry.TableName == first.Name {
+			return index
+		}
+	}
+	t.Fatalf("missing Lifecycle tenant upgrade for %s.%s", first.Schema, first.Name)
+	return 0
 }
 
 func TestLifecycleCatalogRollingUpgradeCompatibility(t *testing.T) {
