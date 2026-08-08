@@ -131,6 +131,49 @@ func TestDoComQueryPrepareMultiReplacesPreviousDiagnostics(t *testing.T) {
 	require.NotContains(t, info.msgs, "stale diagnostic marker")
 }
 
+func TestDoComQueryStopsAfterStatementError(t *testing.T) {
+	ctx := defines.AttachAccountId(context.Background(), sysAccountID)
+	ctrl := gomock.NewController(t)
+	ses, execCtx := newAnalyzeHandlerTestSession(t, ctrl)
+	defer ses.Close()
+
+	// Keep this test focused on the statement loop.  Skipping authentication
+	// avoids coupling the regression to privilege/catalog setup.
+	ses.SetTenantInfo(nil)
+	ses.SetCmd(COM_QUERY)
+	ctx, recordStubs := mockRecordStatement(ctx)
+	defer recordStubs.Reset()
+	execCtx.reqCtx = ctx
+
+	const query = "select 1; select 2"
+	stmts, err := parsers.Parse(ctx, dialect.MYSQL, query, 1)
+	require.NoError(t, err)
+	require.Len(t, stmts, 2)
+
+	firstErr := moerr.NewInternalError(ctx, "first statement failed")
+	first := mock_frontend.NewMockComputationWrapper(ctrl)
+	first.EXPECT().GetAst().Return(stmts[0]).AnyTimes()
+	first.EXPECT().Plan().Return(nil).AnyTimes()
+	first.EXPECT().Compile(gomock.Any(), gomock.Any()).Return(nil, firstErr)
+	first.EXPECT().Free().AnyTimes()
+
+	// If doComQuery incorrectly continues after the error, this wrapper would
+	// be asked for its AST or plan.  Only Free is expected because all parsed
+	// wrappers are released by the request cleanup defer.
+	second := mock_frontend.NewMockComputationWrapper(ctrl)
+	second.EXPECT().Free().AnyTimes()
+
+	wrapperStubs := gostub.Stub(&GetComputationWrapper, func(
+		*ExecCtx, string, string, engine.Engine, *process.Process, *Session,
+	) ([]ComputationWrapper, error) {
+		return []ComputationWrapper{first, second}, nil
+	})
+	defer wrapperStubs.Reset()
+
+	err = doComQuery(ses, execCtx, &UserInput{sql: query})
+	require.ErrorContains(t, err, "first statement failed")
+}
+
 func TestResetDiagnosticsForStatementLifecycle(t *testing.T) {
 	ses := &Session{errInfo: &errInfo{maxCnt: MoDefaultErrorCount}}
 	execCtx := &ExecCtx{}
