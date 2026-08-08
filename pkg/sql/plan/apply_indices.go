@@ -2915,6 +2915,10 @@ func (builder *QueryBuilder) applyForcedJoinAccess(accessID int32) (int32, error
 		if !usableRegularHintIndex(idxDef) {
 			continue
 		}
+		if builder.indexAccessUsesIndex(accessID, idxDef.IndexName) {
+			builder.protectedScans[scan.NodeId]++
+			return accessID, nil
+		}
 		forcedID, _, err := builder.buildHintedIndexBackfillJoin(idxDef, scan)
 		if err != nil {
 			return -1, err
@@ -2925,4 +2929,26 @@ func (builder *QueryBuilder) applyForcedJoinAccess(accessID int32) (int32, error
 		}
 	}
 	return accessID, nil
+}
+
+func (builder *QueryBuilder) indexAccessUsesIndex(nodeID int32, indexName string) bool {
+	if nodeID < 0 || int(nodeID) >= len(builder.qry.Nodes) {
+		return false
+	}
+	node := builder.qry.Nodes[nodeID]
+	if node == nil {
+		return false
+	}
+	if node.NodeType == plan.Node_TABLE_SCAN {
+		return node.IndexScanInfo.IsIndexScan && strings.EqualFold(node.IndexScanInfo.IndexName, indexName)
+	}
+	if node.NodeType != plan.Node_JOIN || node.JoinType != plan.Node_INDEX {
+		return false
+	}
+	for _, childID := range node.Children {
+		if builder.indexAccessUsesIndex(childID, indexName) {
+			return true
+		}
+	}
+	return false
 }
