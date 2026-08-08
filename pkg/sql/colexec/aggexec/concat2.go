@@ -53,6 +53,7 @@ type groupConcatExec struct {
 	h0SpillData      *os.File
 	orderedSpillRuns [][]groupConcatSpillRun
 	maxLen           uint64
+	binaryString     bool
 }
 
 var (
@@ -194,6 +195,9 @@ func (exec *groupConcatExec) BatchFill(offset int, groups []uint64, vectors []*v
 			len(vectors),
 			len(exec.argTypes),
 		)
+	}
+	for _, vec := range vectors[:exec.concatArgCnt] {
+		exec.binaryString = exec.binaryString || isBinaryStringVector(vec)
 	}
 
 	if exec.distinct && exec.orderArgCnt == 0 {
@@ -389,6 +393,7 @@ func (exec *groupConcatExec) Merge(next AggFuncExec, groupIdx1, groupIdx2 int) e
 
 func (exec *groupConcatExec) BatchMerge(next AggFuncExec, offset int, groups []uint64) error {
 	other := next.(*groupConcatExec)
+	exec.binaryString = exec.binaryString || other.binaryString
 	if exec.distinct && exec.orderArgCnt == 0 {
 		if err := exec.distinctHash.merge(&other.distinctHash); err != nil {
 			return err
@@ -510,6 +515,7 @@ func (exec *groupConcatExec) FlushWithContext(ctx context.Context) (_ []*vector.
 	}()
 	for i, st := range exec.state {
 		vecs[i] = vector.NewOffHeapVecWithType(exec.retType)
+		vecs[i].SetIsBinaryString(exec.binaryString)
 		if err := vecs[i].PreExtend(int(st.length), exec.mp); err != nil {
 			return nil, err
 		}

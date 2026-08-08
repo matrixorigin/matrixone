@@ -15,6 +15,170 @@ CHAR_LENGTH(_binary '你好'),
 CHARACTER_LENGTH(_binary '你好');
 LENGTH(_binary '你好')	CHAR_LENGTH(_binary '你好')	CHARACTER_LENGTH(_binary '你好')
 6	6	6
+SELECT LENGTH(X'e4bda0'),
+CHAR_LENGTH(X'e4bda0'),
+CHARACTER_LENGTH(X'e4bda0');
+LENGTH(X'e4bda0')	CHAR_LENGTH(X'e4bda0')	CHARACTER_LENGTH(X'e4bda0')
+3	3	3
+SELECT CHAR_LENGTH(0xE4BDA0),
+CHAR_LENGTH(B'111001001011110110100000'),
+CHAR_LENGTH(X''),
+CHAR_LENGTH(B'');
+CHAR_LENGTH(0xE4BDA0)	CHAR_LENGTH(B'111001001011110110100000')	CHAR_LENGTH(X'')	CHAR_LENGTH(B'')
+3	3	0	0
+SELECT CHAR_LENGTH(_binary X'e4bda0'),
+CHAR_LENGTH(_binary '你好'),
+CHAR_LENGTH('你好');
+CHAR_LENGTH(_binary X'e4bda0')	CHAR_LENGTH(_binary '你好')	CHAR_LENGTH('你好')
+3	6	2
+SELECT CHAR_LENGTH(CAST(X'e4bda0' AS CHAR)),
+CHAR_LENGTH(CAST(X'e4bda0' AS BINARY));
+CHAR_LENGTH(CAST(X'e4bda0' AS CHAR))	CHAR_LENGTH(CAST(X'e4bda0' AS BINARY))
+1	3
+SELECT CHAR_LENGTH(CONCAT(X'e4bda0', 'a')),
+CHAR_LENGTH(SUBSTR(X'e4bda0', 1)),
+CHAR_LENGTH(LOWER(X'e4bda0')),
+CHAR_LENGTH(REPEAT(X'e4bda0', 2)),
+CHAR_LENGTH(COALESCE(NULL, X'e4bda0'));
+CHAR_LENGTH(CONCAT(0xe4bda0, a))	CHAR_LENGTH(SUBSTR(0xe4bda0, 1))	CHAR_LENGTH(LOWER(0xe4bda0))	CHAR_LENGTH(REPEAT(0xe4bda0, 2))	CHAR_LENGTH(COALESCE(null, 0xe4bda0))
+4	3	3	6	3
+SELECT HEX(SUBSTR(X'e4bda0', 2, 1)),
+HEX(LOWER(X'4142')),
+HEX(UPPER(X'6162'));
+HEX(SUBSTR(0xe4bda0, 2, 1))	HEX(LOWER(0x4142))	HEX(UPPER(0x6162))
+BD	4142	6162
+CREATE TABLE binary_literal_ids (id INT);
+INSERT INTO binary_literal_ids VALUES (1), (2);
+SELECT id,
+CHAR_LENGTH(IF(id = 1, X'e4bda0', '你好')),
+CHAR_LENGTH(CASE WHEN id = 1 THEN X'e4bda0' ELSE '你好' END)
+FROM binary_literal_ids ORDER BY id;
+id	CHAR_LENGTH(IF(id = 1, 0xe4bda0, 你好))	CHAR_LENGTH(case when id = 1 then 0xe4bda0 else 你好 end)
+1	3	3
+2	6	6
+DROP TABLE binary_literal_ids;
+SET @binary_literal_v = X'e4bda0';
+SELECT CHAR_LENGTH(@binary_literal_v);
+CHAR_LENGTH(@binary_literal_v)
+3
+SELECT CHAR_LENGTH(CONCAT(@binary_literal_v, 'a')),
+CHAR_LENGTH(SUBSTR(@binary_literal_v, 1)),
+CHAR_LENGTH(LOWER(@binary_literal_v)),
+CHAR_LENGTH(REPEAT(@binary_literal_v, 2)),
+CHAR_LENGTH(IF(TRUE, @binary_literal_v, '你好')),
+CHAR_LENGTH(CASE WHEN TRUE THEN @binary_literal_v ELSE '你好' END),
+CHAR_LENGTH(COALESCE(NULL, @binary_literal_v));
+CHAR_LENGTH(CONCAT(@binary_literal_v, a))	CHAR_LENGTH(SUBSTR(@binary_literal_v, 1))	CHAR_LENGTH(LOWER(@binary_literal_v))	CHAR_LENGTH(REPEAT(@binary_literal_v, 2))	CHAR_LENGTH(IF(true, @binary_literal_v, 你好))	CHAR_LENGTH(case when true then @binary_literal_v else 你好 end)	CHAR_LENGTH(COALESCE(null, @binary_literal_v))
+4	3	3	6	3	3	3
+SET @binary_numeric_v = X'3132';
+SELECT @binary_numeric_v + 0;
+@binary_numeric_v + 0
+12
+PREPARE binary_literal_stmt FROM 'SELECT CHAR_LENGTH(?)';
+SET @binary_literal_v = X'e4bda0';
+EXECUTE binary_literal_stmt USING @binary_literal_v;
+CHAR_LENGTH(?)
+3
+SET @binary_literal_v = '你好';
+EXECUTE binary_literal_stmt USING @binary_literal_v;
+CHAR_LENGTH(?)
+2
+SET @binary_literal_v = X'e4bda0';
+EXECUTE binary_literal_stmt USING @binary_literal_v;
+CHAR_LENGTH(?)
+3
+DEALLOCATE PREPARE binary_literal_stmt;
+PREPARE binary_numeric_stmt FROM 'SELECT ? + 0';
+SET @binary_numeric_v = X'31';
+EXECUTE binary_numeric_stmt USING @binary_numeric_v;
+? + 0
+1
+SET @binary_numeric_v = '2';
+EXECUTE binary_numeric_stmt USING @binary_numeric_v;
+? + 0
+2
+SET @binary_numeric_v = X'31';
+EXECUTE binary_numeric_stmt USING @binary_numeric_v;
+? + 0
+1
+DEALLOCATE PREPARE binary_numeric_stmt;
+CREATE TABLE binary_literal_bigint (id INT AUTO_INCREMENT PRIMARY KEY, v BIGINT);
+INSERT INTO binary_literal_bigint(v) VALUES (X'31');
+SET @binary_numeric_v = X'31';
+INSERT INTO binary_literal_bigint(v) VALUES (@binary_numeric_v);
+SET @binary_numeric_v = '2';
+INSERT INTO binary_literal_bigint(v) VALUES (@binary_numeric_v);
+SET @binary_numeric_v = X'31';
+INSERT INTO binary_literal_bigint(v) VALUES (@binary_numeric_v);
+SELECT v FROM binary_literal_bigint ORDER BY id;
+v
+49
+1
+2
+1
+DROP TABLE binary_literal_bigint;
+CREATE TABLE binary_literal_ctas AS SELECT X'e4bda0' x;
+SELECT DATA_TYPE, CHARACTER_MAXIMUM_LENGTH
+FROM INFORMATION_SCHEMA.COLUMNS
+WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'binary_literal_ctas' AND COLUMN_NAME = 'x';
+DATA_TYPE	CHARACTER_MAXIMUM_LENGTH
+varbinary	3
+SELECT CHAR_LENGTH(x) FROM binary_literal_ctas;
+CHAR_LENGTH(x)
+3
+SELECT tag, CHAR_LENGTH(x)
+FROM (
+SELECT 1 tag, X'e4bda0' x
+UNION ALL
+SELECT 2 tag, '你好' x
+) u ORDER BY tag;
+tag	CHAR_LENGTH(x)
+1	3
+2	6
+SELECT x + 0, CHAR_LENGTH(x) FROM (SELECT X'31' x) d;
+x + 0	CHAR_LENGTH(x)
+1	1
+DROP TABLE binary_literal_ctas;
+CREATE TABLE binary_literal_nested_ctas AS SELECT
+CONCAT(X'e4bda0', 'a') concat_value,
+SUBSTR(X'e4bda0', 1) substr_value,
+LOWER(X'e4bda0') lower_value,
+REPEAT(X'e4bda0', 2) repeat_value,
+IF(TRUE, X'e4bda0', '你好') if_value,
+CASE WHEN TRUE THEN X'e4bda0' ELSE '你好' END case_value,
+COALESCE(NULL, X'e4bda0') coalesce_value;
+SELECT COLUMN_NAME, DATA_TYPE, CHARACTER_MAXIMUM_LENGTH
+FROM INFORMATION_SCHEMA.COLUMNS
+WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'binary_literal_nested_ctas'
+AND COLUMN_NAME != '__mo_fake_pk_col'
+ORDER BY ORDINAL_POSITION;
+COLUMN_NAME	DATA_TYPE	CHARACTER_MAXIMUM_LENGTH
+concat_value	varbinary	7
+substr_value	varbinary	3
+lower_value	varbinary	3
+repeat_value	varbinary	6
+if_value	varbinary	8
+case_value	varbinary	8
+coalesce_value	varbinary	3
+SELECT CHAR_LENGTH(concat_value), CHAR_LENGTH(substr_value), CHAR_LENGTH(lower_value),
+CHAR_LENGTH(repeat_value), CHAR_LENGTH(if_value), CHAR_LENGTH(case_value),
+CHAR_LENGTH(coalesce_value)
+FROM binary_literal_nested_ctas;
+CHAR_LENGTH(concat_value)	CHAR_LENGTH(substr_value)	CHAR_LENGTH(lower_value)	CHAR_LENGTH(repeat_value)	CHAR_LENGTH(if_value)	CHAR_LENGTH(case_value)	CHAR_LENGTH(coalesce_value)
+4	3	3	6	3	3	3
+DROP TABLE binary_literal_nested_ctas;
+SELECT X'41' + 0,
+B'1000001' + 0,
+CAST(X'3132' AS UNSIGNED),
+CAST(B'11000100110010' AS UNSIGNED),
+HEX(CHAR(X'41'));
+0x41 + 0	0b1000001 + 0	cast(0x3132 as unsigned)	cast(0b11000100110010 as unsigned)	HEX(CHAR(0x41))
+65	65	12594	12594	41
+SELECT X'40' | X'01',
+~X'31',
+1.0 * (X'312E35' | X'312E35');
+0x40 | 0x01	~0x31	1.0 * (0x312E35 | 0x312E35)
+65	18446744073709551566	3223093.0
 CREATE TABLE binary_char_length (
 b BINARY(8),
 vb VARBINARY(8),
@@ -26,6 +190,15 @@ FROM binary_char_length;
 CHAR_LENGTH(b)	CHAR_LENGTH(vb)	CHAR_LENGTH(bl)
 8	6	6
 DROP TABLE binary_char_length;
+CREATE TABLE binary_padding_compare (b BINARY(4));
+INSERT INTO binary_padding_compare VALUES ('a');
+SELECT b = X'61', X'61' = b FROM binary_padding_compare;
+b = 0x61	0x61 = b
+0	0
+SELECT COUNT(*) FROM binary_padding_compare WHERE b = X'61';
+COUNT(*)
+0
+DROP TABLE binary_padding_compare;
 SELECT CHAR_LENGTH(NULL);
 CHAR_LENGTH(NULL)
 null

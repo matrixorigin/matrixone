@@ -363,26 +363,28 @@ type BaseProcess struct {
 	// statement in the same session, used by the ROW_COUNT() builtin.
 	// It follows MySQL semantics: -1 after a result-set statement (e.g. SELECT),
 	// 0 after DDL, and the affected row count after DML.
-	AffectedRows             *int64
-	LoadLocalReader          *io.PipeReader
-	Aicm                     *defines.AutoIncrCacheManager
-	resolveVariableFunc      func(varName string, isSystemVar, isGlobalVar bool) (interface{}, error)
-	resolveVariableIsBinFunc func(varName string, isSystemVar, isGlobalVar bool) (bool, error)
-	prepareParams            *vector.Vector
-	prepareParamsIsBin       []bool
-	prepareParamsOwned       bool
-	QueryClient              qclient.QueryClient
-	Hakeeper                 logservice.CNHAKeeperClient
-	UdfService               udf.Service
-	WaitPolicy               lock.WaitPolicy
-	messageBoard             *message.MessageBoard
-	hashBuildBudgetMu        sync.Mutex
-	hashBuildBudget          *HashBuildBudgetGeneration
-	cteMemoryBudgetMu        sync.Mutex
-	cteMemoryBudget          *CTEMemoryBudget
-	logger                   *log.MOLogger
-	TxnOperator              client.TxnOperator
-	CloneTxnOperator         client.TxnOperator
+	AffectedRows                    *int64
+	LoadLocalReader                 *io.PipeReader
+	Aicm                            *defines.AutoIncrCacheManager
+	resolveVariableFunc             func(varName string, isSystemVar, isGlobalVar bool) (interface{}, error)
+	resolveVariableIsBinFunc        func(varName string, isSystemVar, isGlobalVar bool) (bool, error)
+	resolveVariableBinaryStringFunc func(varName string, isSystemVar, isGlobalVar bool) (bool, error)
+	prepareParams                   *vector.Vector
+	prepareParamsIsBin              []bool
+	prepareParamsBinaryString       []bool
+	prepareParamsOwned              bool
+	QueryClient                     qclient.QueryClient
+	Hakeeper                        logservice.CNHAKeeperClient
+	UdfService                      udf.Service
+	WaitPolicy                      lock.WaitPolicy
+	messageBoard                    *message.MessageBoard
+	hashBuildBudgetMu               sync.Mutex
+	hashBuildBudget                 *HashBuildBudgetGeneration
+	cteMemoryBudgetMu               sync.Mutex
+	cteMemoryBudget                 *CTEMemoryBudget
+	logger                          *log.MOLogger
+	TxnOperator                     client.TxnOperator
+	CloneTxnOperator                client.TxnOperator
 	// userLevelLockIdentity is session-scoped rather than statement-scoped.
 	// SessionInfo is rebuilt before every statement, so keeping this identity
 	// there would lose the synthetic transaction owner while locks are held.
@@ -547,6 +549,10 @@ func (proc *Process) GetPrepareParamIsBin(i int) bool {
 	return i >= 0 && i < len(proc.Base.prepareParamsIsBin) && proc.Base.prepareParamsIsBin[i]
 }
 
+func (proc *Process) GetPrepareParamIsBinaryString(i int) bool {
+	return i >= 0 && i < len(proc.Base.prepareParamsBinaryString) && proc.Base.prepareParamsBinaryString[i]
+}
+
 // SetIncrStatementDisabled marks this process (and every child process
 // sharing its BaseProcess) as running internal SQL that must not advance the
 // workspace snapshot write offset. See BaseProcess.incrStatementDisabled.
@@ -574,6 +580,14 @@ func (proc *Process) SetResolveVariableIsBinFunc(f func(varName string, isSystem
 
 func (proc *Process) GetResolveVariableIsBinFunc() func(varName string, isSystemVar, isGlobalVar bool) (bool, error) {
 	return proc.Base.resolveVariableIsBinFunc
+}
+
+func (proc *Process) SetResolveVariableBinaryStringFunc(f func(varName string, isSystemVar, isGlobalVar bool) (bool, error)) {
+	proc.Base.resolveVariableBinaryStringFunc = f
+}
+
+func (proc *Process) GetResolveVariableBinaryStringFunc() func(varName string, isSystemVar, isGlobalVar bool) (bool, error) {
+	return proc.Base.resolveVariableBinaryStringFunc
 }
 
 func (proc *Process) SetLastInsertID(num uint64) {

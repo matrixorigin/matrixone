@@ -59,9 +59,10 @@ func (op *opBuiltInRegexp) likeFn(parameters []*vector.Vector, result vector.Fun
 	p1 := vector.GenerateFunctionStrParameter(parameters[0])
 	p2 := vector.GenerateFunctionStrParameter(parameters[1])
 	rs := vector.MustFunctionResult[bool](result)
+	binaryInput := isBinaryStringVector(parameters[0]) || isBinaryStringVector(parameters[1])
 
 	// optimize rule for some special case.
-	if parameters[1].IsConst() {
+	if parameters[1].IsConst() && !binaryInput {
 		canOptimize, err := optimizeRuleForLike(p1, p2, rs, length, func(i []byte) []byte {
 			return i
 		})
@@ -71,6 +72,9 @@ func (op *opBuiltInRegexp) likeFn(parameters []*vector.Vector, result vector.Fun
 	}
 
 	return opBinaryBytesBytesToFixedWithErrorCheck[bool](parameters, result, proc, length, func(v1, v2 []byte) (bool, error) {
+		if binaryInput {
+			return op.regMap.regularMatchForBinaryLikeOp(v2, v1, DefaultEscapeChar, true)
+		}
 		return op.regMap.regularMatchForLikeOp(v2, v1)
 	}, selectList)
 }
@@ -376,6 +380,15 @@ func (op *opBuiltInRegexp) builtInNotRegMatch(parameters []*vector.Vector, resul
 func (op *opBuiltInRegexp) builtInRegexpSubstr(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
 	p1 := vector.GenerateFunctionStrParameter(parameters[0])
 	p2 := vector.GenerateFunctionStrParameter(parameters[1])
+	binaryInput := isBinaryStringVector(parameters[0]) || isBinaryStringVector(parameters[1])
+	regularSubstr := func(expr, pat []byte, pos, occurrence int64) (bool, []byte, error) {
+		if binaryInput {
+			return op.regMap.regularSubstrBinary(pat, expr, pos, occurrence)
+		}
+		match, value, err := op.regMap.regularSubstr(
+			functionUtil.QuickBytesToStr(pat), functionUtil.QuickBytesToStr(expr), pos, occurrence)
+		return match, functionUtil.QuickStrToBytes(value), err
+	}
 
 	rs := vector.MustFunctionResult[types.Varlena](result)
 	switch len(parameters) {
@@ -388,12 +401,11 @@ func (op *opBuiltInRegexp) builtInRegexpSubstr(parameters []*vector.Vector, resu
 					return err
 				}
 			} else {
-				expr, pat := functionUtil.QuickBytesToStr(v1), functionUtil.QuickBytesToStr(v2)
-				match, res, err := op.regMap.regularSubstr(pat, expr, 1, 1)
+				match, res, err := regularSubstr(v1, v2, 1, 1)
 				if err != nil {
 					return err
 				}
-				if err = rs.AppendBytes(functionUtil.QuickStrToBytes(res), !match); err != nil {
+				if err = rs.AppendBytes(res, !match); err != nil {
 					return err
 				}
 			}
@@ -410,12 +422,11 @@ func (op *opBuiltInRegexp) builtInRegexpSubstr(parameters []*vector.Vector, resu
 					return err
 				}
 			} else {
-				expr, pat := functionUtil.QuickBytesToStr(v1), functionUtil.QuickBytesToStr(v2)
-				match, res, err := op.regMap.regularSubstr(pat, expr, pos, 1)
+				match, res, err := regularSubstr(v1, v2, pos, 1)
 				if err != nil {
 					return err
 				}
-				if err = rs.AppendBytes(functionUtil.QuickStrToBytes(res), !match); err != nil {
+				if err = rs.AppendBytes(res, !match); err != nil {
 					return err
 				}
 			}
@@ -434,18 +445,20 @@ func (op *opBuiltInRegexp) builtInRegexpSubstr(parameters []*vector.Vector, resu
 					return err
 				}
 			} else {
-				expr, pat := functionUtil.QuickBytesToStr(v1), functionUtil.QuickBytesToStr(v2)
-				match, res, err := op.regMap.regularSubstr(pat, expr, pos, ocur)
+				match, res, err := regularSubstr(v1, v2, pos, ocur)
 				if err != nil {
 					return err
 				}
-				if err = rs.AppendBytes(functionUtil.QuickStrToBytes(res), !match); err != nil {
+				if err = rs.AppendBytes(res, !match); err != nil {
 					return err
 				}
 			}
 		}
 		return nil
 
+	}
+	if binaryInput {
+		result.GetResultVector().SetIsBinaryString(true)
 	}
 	return nil
 }
@@ -697,6 +710,59 @@ func (rs *regexpSet) regularMatchForLikeOp(pat []byte, str []byte) (match bool, 
 	return rs.regularMatchForLikeOpWithEscape(pat, str, DefaultEscapeChar, true, false)
 }
 
+func binaryBytesToRegexpString(value []byte) string {
+	runes := make([]rune, len(value))
+	for i, b := range value {
+		runes[i] = rune(b)
+	}
+	return string(runes)
+}
+
+func binaryRegexpStringToBytes(value string) []byte {
+	runes := []rune(value)
+	result := make([]byte, len(runes))
+	for i, r := range runes {
+		result[i] = byte(r)
+	}
+	return result
+}
+
+func (rs *regexpSet) regularMatchForBinaryLikeOp(
+	pat, str []byte,
+	escape byte,
+	escapeEnabled bool,
+) (bool, error) {
+	var pattern strings.Builder
+	pattern.WriteString("^(?s:")
+	escaped := false
+	for _, b := range pat {
+		if escaped {
+			pattern.WriteString(regexp.QuoteMeta(binaryBytesToRegexpString([]byte{b})))
+			escaped = false
+			continue
+		}
+		switch {
+		case escapeEnabled && b == escape:
+			escaped = true
+		case b == '_':
+			pattern.WriteByte('.')
+		case b == '%':
+			pattern.WriteString(".*")
+		default:
+			pattern.WriteString(regexp.QuoteMeta(binaryBytesToRegexpString([]byte{b})))
+		}
+	}
+	if escaped {
+		pattern.WriteString(regexp.QuoteMeta(binaryBytesToRegexpString([]byte{escape})))
+	}
+	pattern.WriteString(")$")
+	matcher, err := rs.getRegularMatcher(pattern.String())
+	if err != nil {
+		return false, nil
+	}
+	return matcher.MatchString(binaryBytesToRegexpString(str)), nil
+}
+
 func (rs *regexpSet) regularMatchForLikeOpWithEscape(
 	pat []byte,
 	str []byte,
@@ -787,6 +853,30 @@ func (rs *regexpSet) regularSubstr(pat string, str string, pos, occurrence int64
 		return false, "", nil
 	}
 	return true, matches[occurrence-1], nil
+}
+
+func (rs *regexpSet) regularSubstrBinary(
+	pat, str []byte,
+	pos, occurrence int64,
+) (bool, []byte, error) {
+	if pos < 1 || pos > int64(len(str)) {
+		return false, nil, moerr.NewInvalidInputNoCtxf(
+			"regexp_substr: Index out of bounds in regular expression search. Search start position: %d, Search string length: %d",
+			pos, len(str))
+	}
+	if occurrence < 1 {
+		return false, nil, moerr.NewInvalidInputNoCtxf(
+			"regexp_substr have Index out of bounds in regular expression search, return occurrence %d", occurrence)
+	}
+	matcher, err := rs.getRegularMatcher(binaryBytesToRegexpString(pat))
+	if err != nil {
+		return false, nil, err
+	}
+	matches := matcher.FindAllString(binaryBytesToRegexpString(str[pos-1:]), -1)
+	if int64(len(matches)) < occurrence {
+		return false, nil, nil
+	}
+	return true, binaryRegexpStringToBytes(matches[occurrence-1]), nil
 }
 
 func (rs *regexpSet) regularReplace(pat string, str string, repl string, pos, occurrence int64) (r string, err error) {

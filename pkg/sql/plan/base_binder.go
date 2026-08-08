@@ -333,6 +333,10 @@ func useExplicitCastOverload(typ tree.ResolvableTypeReference) bool {
 	switch defines.MysqlType(internal.Oid) {
 	case defines.MYSQL_TYPE_DECIMAL, defines.MYSQL_TYPE_NEWDECIMAL:
 		return true
+	case defines.MYSQL_TYPE_STRING, defines.MYSQL_TYPE_VARCHAR,
+		defines.MYSQL_TYPE_VAR_STRING, defines.MYSQL_TYPE_TEXT:
+		family := strings.ToLower(internal.FamilyString)
+		return !internal.Binary && family != "binary" && family != "varbinary" && family != "blob"
 	case defines.MYSQL_TYPE_LONGLONG:
 		family := strings.ToLower(internal.FamilyString)
 		return family == "signed" || family == "integer" ||
@@ -3812,7 +3816,8 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 	var argsCastType []types.Type
 
 	// get function definition
-	fGet, err := function.GetFunctionByName(ctx, name, argsType)
+	lookupArgsType := binaryLiteralStringLookupTypes(name, args, argsType)
+	fGet, err := function.GetFunctionByName(ctx, name, lookupArgsType)
 	if err != nil {
 		if name == "between" {
 			leftFn, err := BindFuncExprImplByPlanExpr(ctx, ">=", []*plan.Expr{DeepCopyExpr(args[0]), args[1]})
@@ -3834,6 +3839,7 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 	funcID = fGet.GetEncodedOverloadID()
 	returnType = fGet.GetReturnType()
 	argsCastType, _ = fGet.ShouldDoImplicitTypeCast()
+	adjustBinaryStringFunctionMetadata(name, args, &returnType)
 	adjustControlFlowMetadata(name, args, argsType, &returnType, argsCastType)
 
 	// Optimization: avoid casting columns in comparisons to preserve index usage
@@ -4181,6 +4187,100 @@ func utcFunctionFSPFromPlanExpr(ctx context.Context, name string, expr *Expr) (i
 		return 0, moerr.NewErrTooBigPrecision(ctx, fsp.I64Val, name, 6)
 	}
 	return int32(fsp.I64Val), nil
+}
+
+func binaryLiteralStringType(expr *Expr) (types.Type, bool) {
+	literal := expr.GetLit()
+	if literal == nil || !literal.IsBin || literal.Isnull {
+		return types.Type{}, false
+	}
+	value, ok := literal.Value.(*plan.Literal_Sval)
+	if !ok {
+		return types.Type{}, false
+	}
+	return types.New(types.T_varbinary, int32(len(value.Sval)), 0), true
+}
+
+func binaryLiteralStringLookupTypes(name string, args []*Expr, argTypes []types.Type) []types.Type {
+	binaryValueIndex := func(idx int) bool {
+		switch name {
+		case "concat", "concat_ws", "coalesce":
+			return true
+		case "substring", "substr", "mid", "lower", "lcase", "upper", "ucase", "repeat":
+			return idx == 0
+		case "if", "iff":
+			return idx == 1 || idx == 2
+		case "case":
+			return idx%2 == 1 || len(args)%2 == 1 && idx == len(args)-1
+		default:
+			return false
+		}
+	}
+
+	lookupTypes := argTypes
+	cloned := false
+	for idx, arg := range args {
+		if !binaryValueIndex(idx) {
+			continue
+		}
+		binaryType, ok := binaryLiteralStringType(arg)
+		if !ok {
+			continue
+		}
+		if !cloned {
+			lookupTypes = append([]types.Type(nil), argTypes...)
+			cloned = true
+		}
+		lookupTypes[idx] = binaryType
+	}
+	return lookupTypes
+}
+
+func literalNonNegativeInt64(expr *Expr) (int64, bool) {
+	literal := expr.GetLit()
+	if literal == nil || literal.Isnull {
+		return 0, false
+	}
+	var value int64
+	switch v := literal.Value.(type) {
+	case *plan.Literal_I8Val:
+		value = int64(v.I8Val)
+	case *plan.Literal_I16Val:
+		value = int64(v.I16Val)
+	case *plan.Literal_I32Val:
+		value = int64(v.I32Val)
+	case *plan.Literal_I64Val:
+		value = v.I64Val
+	case *plan.Literal_U8Val:
+		value = int64(v.U8Val)
+	case *plan.Literal_U16Val:
+		value = int64(v.U16Val)
+	case *plan.Literal_U32Val:
+		value = int64(v.U32Val)
+	case *plan.Literal_U64Val:
+		if v.U64Val > math.MaxInt64 {
+			return 0, false
+		}
+		value = int64(v.U64Val)
+	default:
+		return 0, false
+	}
+	return value, value >= 0
+}
+
+func adjustBinaryStringFunctionMetadata(name string, args []*Expr, returnType *types.Type) {
+	if name != "repeat" || len(args) != 2 || returnType.Oid != types.T_varbinary {
+		return
+	}
+	repeatCount, ok := literalNonNegativeInt64(args[1])
+	if !ok {
+		return
+	}
+	width := int64(returnType.Width) * repeatCount
+	if width > int64(types.MaxVarBinaryLen) {
+		width = int64(types.MaxVarBinaryLen)
+	}
+	returnType.Width = int32(width)
 }
 
 // adjustControlFlowMetadata keeps MySQL-visible metadata for conditional

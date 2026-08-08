@@ -33,6 +33,15 @@ const (
 	GroupNotMatched = 0
 )
 
+func isBinaryStringVector(vec *vector.Vector) bool {
+	switch vec.GetType().Oid {
+	case types.T_binary, types.T_varbinary, types.T_blob:
+		return true
+	default:
+		return vec.GetIsBinaryString()
+	}
+}
+
 // AggFuncExecExpression is the exporting structure for the aggregation information.
 // it is used to indicate the information of the aggregation function for the operators like 'group' or 'merge group'.
 type AggFuncExecExpression struct {

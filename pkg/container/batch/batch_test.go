@@ -97,6 +97,26 @@ func TestBatchMarshalAndUnmarshal(t *testing.T) {
 	}
 }
 
+func TestCloneToSeparatesBinaryStringFromLiteralNumericMetadata(t *testing.T) {
+	mp := mpool.MustNewZero()
+	source := NewWithSchema(false, []string{"v"}, []types.Type{types.T_varchar.ToType()})
+	destination := NewWithSchema(false, source.Attrs, []types.Type{types.T_varchar.ToType()})
+	defer source.Clean(mp)
+	defer destination.Clean(mp)
+
+	require.NoError(t, vector.AppendBytes(source.Vecs[0], []byte("binary"), false, mp))
+	source.SetRowCount(1)
+	source.Vecs[0].SetIsBin(true)
+	source.Vecs[0].SetIsBinaryString(true)
+	require.NoError(t, source.CloneTo(destination, mp))
+	require.False(t, destination.Vecs[0].GetIsBin())
+	require.True(t, destination.Vecs[0].GetIsBinaryString())
+
+	source.Vecs[0].SetIsBinaryString(false)
+	require.NoError(t, source.CloneTo(destination, mp))
+	require.False(t, destination.Vecs[0].GetIsBinaryString())
+}
+
 type shortBatchMarshalWriter struct{}
 
 func (shortBatchMarshalWriter) Write(value []byte) (int, error) {

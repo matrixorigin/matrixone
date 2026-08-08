@@ -1523,12 +1523,22 @@ func ConstantFold(bat *batch.Batch, expr *plan.Expr, proc *process.Process, varA
 	if rule.IsDivisionByZeroConstant(fn) {
 		return expr, nil
 	}
+	if function.ExpressionContainsRuntimeBinaryString(expr) {
+		return expr, nil
+	}
 
 	vec, free, err := colexec.GetReadonlyResultFromExpression(proc, expr, []*batch.Batch{bat})
 	if err != nil {
 		return nil, err
 	}
 	defer free()
+	// binaryString is runtime string metadata and is deliberately distinct from
+	// Literal.IsBin, which also controls numeric interpretation of a raw hex/bit
+	// literal. A folded plan literal cannot represent binaryString without
+	// changing those semantics, so keep the function expression for execution.
+	if vec.GetIsBinaryString() {
+		return expr, nil
+	}
 
 	if isVec {
 		data, err := vec.MarshalBinary()
@@ -3142,17 +3152,20 @@ func FillValuesOfParamsInPlan(ctx context.Context, preparePlan *Plan, paramVals 
 }
 
 type ParamValue struct {
-	Value any
-	IsBin bool
+	Value        any
+	IsBin        bool
+	BinaryString bool
 }
 
 func replaceParamVals(ctx context.Context, plan0 *Plan, paramVals []any) error {
 	params := make([]*Expr, len(paramVals))
 	for i, val := range paramVals {
 		isBin := false
+		binaryString := false
 		if param, ok := val.(ParamValue); ok {
 			val = param.Value
 			isBin = param.IsBin
+			binaryString = param.BinaryString
 		}
 		if val == nil {
 			pc := &plan.Literal{
@@ -3171,6 +3184,14 @@ func replaceParamVals(ctx context.Context, plan0 *Plan, paramVals []any) error {
 				Expr: &plan.Expr_Lit{
 					Lit: pc,
 				},
+			}
+			if binaryString {
+				binaryType := types.New(
+					types.T_varbinary,
+					int32(len(fmt.Sprintf("%v", val))),
+					0,
+				)
+				params[i].Typ = makePlan2Type(&binaryType)
 			}
 		}
 	}

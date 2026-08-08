@@ -248,11 +248,12 @@ func TestNewCompile_CreatesCorrectStructure(t *testing.T) {
 			txnClient:              txnClient,
 			txnOperator:            txnOperator,
 			prepareParams: pipeline.PrepareParamInfo{
-				Length: 2,
-				Data:   append([]byte(nil), params.GetData()...),
-				Area:   append([]byte(nil), params.GetArea()...),
-				Nulls:  []bool{false, false},
-				IsBin:  []bool{true, false},
+				Length:         2,
+				Data:           append([]byte(nil), params.GetData()...),
+				Area:           append([]byte(nil), params.GetArea()...),
+				Nulls:          []bool{false, false},
+				IsBin:          []bool{true, false},
+				IsBinaryString: []bool{false, true},
 			},
 		},
 		messageAcquirer: func() morpc.Message {
@@ -270,6 +271,8 @@ func TestNewCompile_CreatesCorrectStructure(t *testing.T) {
 	require.Equal(t, "text", compile.proc.GetPrepareParams().GetStringAt(1))
 	require.True(t, compile.proc.GetPrepareParamIsBin(0))
 	require.False(t, compile.proc.GetPrepareParamIsBin(1))
+	require.False(t, compile.proc.GetPrepareParamIsBinaryString(0))
+	require.True(t, compile.proc.GetPrepareParamIsBinaryString(1))
 	require.Equal(t, int64(42), compile.proc.GetAffectedRows())
 	require.True(t, compile.proc.GetStmtProfile().GetStatementIgnore())
 	planSnapshot, ok := compile.proc.GetPlanSnapshotTS()
@@ -364,11 +367,12 @@ func TestGenerateProcessHelper_WithSnapshot(t *testing.T) {
 			},
 		},
 		PrepareParams: pipeline.PrepareParamInfo{
-			Length: 2,
-			Data:   append([]byte(nil), params.GetData()...),
-			Area:   append([]byte(nil), params.GetArea()...),
-			Nulls:  []bool{false, false},
-			IsBin:  []bool{true, false},
+			Length:         2,
+			Data:           append([]byte(nil), params.GetData()...),
+			Area:           append([]byte(nil), params.GetArea()...),
+			Nulls:          []bool{false, false},
+			IsBin:          []bool{true, false},
+			IsBinaryString: []bool{false, true},
 		},
 	}
 
@@ -380,6 +384,7 @@ func TestGenerateProcessHelper_WithSnapshot(t *testing.T) {
 	require.Equal(t, "test-proc-id", helper.id)
 	require.Equal(t, catalog.System_Account, helper.accountId)
 	require.Equal(t, []bool{true, false}, helper.prepareParams.IsBin)
+	require.Equal(t, []bool{false, true}, helper.prepareParams.IsBinaryString)
 	require.Equal(t, procInfo.PrepareParams.Data, helper.prepareParams.Data)
 	require.Equal(t, procInfo.PrepareParams.Area, helper.prepareParams.Area)
 	require.Equal(t, int64(42), helper.affectedRows)

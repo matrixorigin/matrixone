@@ -67,6 +67,10 @@ type Vector struct {
 
 	// FIXME: Bad design! Will be deleted soon.
 	isBin bool
+	// binaryString records byte-string semantics for dynamically typed values.
+	// Unlike isBin, it does not change numeric conversion into big-endian literal
+	// conversion and is therefore safe to preserve across local materialization.
+	binaryString bool
 
 	offHeap bool
 
@@ -141,6 +145,8 @@ func (v *Vector) Reset(typ types.Type) {
 	v.nsp.Clear()
 	v.gsp.Clear()
 	v.sorted = false
+	v.isBin = false
+	v.binaryString = false
 	v.areaDisjoint = true
 }
 
@@ -153,6 +159,8 @@ func (v *Vector) ResetWithSameType() {
 	v.nsp.Reset()
 	v.gsp.Reset()
 	v.sorted = false
+	v.isBin = false
+	v.binaryString = false
 	v.areaDisjoint = true
 }
 
@@ -172,6 +180,8 @@ func (v *Vector) ResetWithNewType(t *types.Type) {
 	v.gsp.Clear()
 	v.length = 0
 	v.sorted = false
+	v.isBin = false
+	v.binaryString = false
 	v.areaDisjoint = true
 }
 
@@ -357,6 +367,14 @@ func (v *Vector) GetIsBin() bool {
 
 func (v *Vector) SetIsBin(isBin bool) {
 	v.isBin = isBin
+}
+
+func (v *Vector) GetIsBinaryString() bool {
+	return v.binaryString
+}
+
+func (v *Vector) SetIsBinaryString(binaryString bool) {
+	v.binaryString = binaryString
 }
 
 func (v *Vector) NeedDup() bool {
@@ -837,6 +855,7 @@ func (v *Vector) Free(mp *mpool.MPool) {
 	v.gsp.Reset()
 	v.sorted = false
 	v.isBin = false
+	v.binaryString = false
 	v.allocationAccount = nil
 	v.areaDisjoint = true
 
@@ -1698,6 +1717,7 @@ func (v *Vector) dup(
 	w.class = v.class
 	w.typ = v.typ
 	w.sorted = v.sorted
+	w.binaryString = v.binaryString
 
 	if v.IsConstNull() {
 		w.length = v.length
@@ -1800,6 +1820,7 @@ func (v *Vector) cloneToFlatCompact(
 			return nil, err
 		}
 	}
+	w.binaryString = v.binaryString
 	if v.class != FLAT || (!v.typ.IsFixedLen() && !v.typ.IsVarlen()) {
 		if err := GetUnionAllFunction(v.typ, mp)(w, v); err != nil {
 			w.Free(mp)
@@ -5266,6 +5287,7 @@ func (v *Vector) window(
 	w.class = v.class
 	w.length = end - start
 	w.sorted = v.sorted
+	w.binaryString = v.binaryString
 	if err := v.copyWindowBitmaps(w, start, end, mp); err != nil {
 		w.Free(mp)
 		return nil, err
@@ -5331,6 +5353,7 @@ func (v *Vector) CloneWindowWithAllocation(
 ) (*Vector, error) {
 	if start == end {
 		w := NewOffHeapVecWithType(v.typ)
+		w.binaryString = v.binaryString
 		if selection != nil {
 			if err := w.SetAllocationAccount(selection); err != nil {
 				return nil, err
@@ -5357,6 +5380,7 @@ func (v *Vector) CloneWindowWithAllocation(
 }
 
 func (v *Vector) CloneWindowTo(w *Vector, start, end int, mp *mpool.MPool) error {
+	w.binaryString = v.binaryString
 	if start == end {
 		return nil
 	}

@@ -1153,6 +1153,7 @@ func (bat *Batch) CloneTo(toBat *Batch, mp *mpool.MPool) (err error) {
 			return
 		}
 		toVec.SetSorted(srcVec.GetSorted())
+		toVec.SetIsBinaryString(srcVec.GetIsBinaryString())
 	}
 	toBat.rowCount = bat.rowCount
 	toBat.ShuffleIDX = bat.ShuffleIDX

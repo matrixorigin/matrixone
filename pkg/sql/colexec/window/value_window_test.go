@@ -214,6 +214,22 @@ func TestProcessValueFunc_NthValue(t *testing.T) {
 	}
 }
 
+func TestProcessValueFuncPropagatesBinaryStringMetadata(t *testing.T) {
+	tests := []string{"lag", "lead", "first_value", "last_value", "nth_value"}
+	for _, name := range tests {
+		t.Run(name, func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			bat := makeVarcharBatch(mp, []string{"你", "好"})
+			bat.Vecs[0].SetIsBinaryString(true)
+			result := runValueWindowTest(t,
+				makeValueWindowSpecWithName(name, int32(types.T_varchar)), bat, mp)
+			defer result.Free(mp)
+
+			require.True(t, result.GetIsBinaryString())
+		})
+	}
+}
+
 func TestProcessValueFuncHonorsCancellation(t *testing.T) {
 	testCases := []struct {
 		name string

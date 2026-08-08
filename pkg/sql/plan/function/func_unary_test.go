@@ -4899,6 +4899,32 @@ func TestLengthUTF8(t *testing.T) {
 	}
 }
 
+func TestLengthUTF8SeparatesBinaryStringFromLiteralNumericMetadata(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	mp := proc.Mp()
+	input := testutil.MakeVarlenaVector(
+		[][]byte{[]byte("你好"), {}, {0xff, 0xfe, 0xfd}},
+		nil,
+		types.T_varchar.ToType(),
+		mp,
+	)
+	defer input.Free(mp)
+	input.SetIsBinaryString(true)
+
+	result := vector.NewFunctionResultWrapper(types.T_uint64.ToType(), mp)
+	defer result.Free()
+	require.NoError(t, result.PreExtendAndReset(input.Length()))
+
+	require.NoError(t, LengthUTF8([]*vector.Vector{input}, result, proc, input.Length(), nil))
+	require.Equal(t, []uint64{6, 0, 3}, vector.MustFixedColNoTypeCheck[uint64](result.GetResultVector()))
+
+	input.SetIsBinaryString(false)
+	input.SetIsBin(true)
+	require.NoError(t, result.PreExtendAndReset(input.Length()))
+	require.NoError(t, LengthUTF8([]*vector.Vector{input}, result, proc, input.Length(), nil))
+	require.Equal(t, []uint64{2, 0, 3}, vector.MustFixedColNoTypeCheck[uint64](result.GetResultVector()))
+}
+
 func TestLengthBinary(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	for _, typ := range []types.Type{

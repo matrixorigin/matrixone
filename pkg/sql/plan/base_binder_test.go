@@ -615,7 +615,16 @@ func TestBindScoreBinaryHexnumKeepsBinarySemanticsExceptNumericCast(t *testing.T
 	plainHex := tree.NewNumVal("0x3132", "0x3132", false, tree.P_hexnum)
 	plainHexExpr, err := binder.bindNumVal(plainHex, plan.Type{})
 	require.NoError(t, err)
+	require.Equal(t, int32(types.T_varchar), plainHexExpr.Typ.Id)
+	require.Equal(t, int32(2), plainHexExpr.Typ.Width)
 	require.True(t, plainHexExpr.GetLit().GetIsBin())
+
+	plainBit := tree.NewNumVal("0b1100001110101001", "0b1100001110101001", false, tree.P_bit)
+	plainBitExpr, err := binder.bindNumVal(plainBit, plan.Type{})
+	require.NoError(t, err)
+	require.Equal(t, int32(types.T_varchar), plainBitExpr.Typ.Id)
+	require.Equal(t, int32(1), plainBitExpr.Typ.Width)
+	require.True(t, plainBitExpr.GetLit().GetIsBin())
 
 	bitOrExpr, err := BindFuncExprImplByPlanExpr(context.Background(), "|", []*plan.Expr{rawExpr, plainHexExpr})
 	require.NoError(t, err)
@@ -625,6 +634,62 @@ func TestBindScoreBinaryHexnumKeepsBinarySemanticsExceptNumericCast(t *testing.T
 	require.NoError(t, err)
 	require.Equal(t, int32(types.T_uint64), bitCountExpr.Typ.Id)
 	require.Equal(t, int32(types.T_varbinary), bitCountExpr.GetF().Args[0].Typ.Id)
+}
+
+func TestRawBinaryLiteralUsesBinaryStringTypesOnlyInStringConsumers(t *testing.T) {
+	binder := &baseBinder{sysCtx: context.Background()}
+	raw, err := binder.bindNumVal(
+		tree.NewNumVal("0xe4bda0", "0xe4bda0", false, tree.P_hexnum),
+		plan.Type{},
+	)
+	require.NoError(t, err)
+	require.Equal(t, int32(types.T_varchar), raw.GetTyp().Id)
+	require.True(t, raw.GetLit().GetIsBin())
+
+	bind := func(name string, args ...*plan.Expr) *plan.Expr {
+		expr, bindErr := BindFuncExprImplByPlanExpr(context.Background(), name, args)
+		require.NoError(t, bindErr)
+		return expr
+	}
+	assertType := func(expr *plan.Expr, oid types.T, width int32) {
+		require.Equal(t, int32(oid), expr.GetTyp().Id)
+		require.Equal(t, width, expr.GetTyp().Width)
+	}
+
+	assertType(bind("concat", raw, makePlan2StringConstExprWithType("a")), types.T_varbinary, 7)
+	assertType(bind("substring", raw, makePlan2Int64ConstExprWithType(1)), types.T_varbinary, 3)
+	assertType(bind("lower", raw), types.T_varbinary, 3)
+	assertType(bind("repeat", raw, makePlan2Int64ConstExprWithType(2)), types.T_varbinary, 6)
+	assertType(bind("coalesce", makePlan2NullConstExprWithType(), raw), types.T_varbinary, 3)
+	assertType(bind("if", makePlan2BoolConstExprWithType(true), raw,
+		makePlan2StringConstExprWithType("你好")), types.T_varbinary, 8)
+	assertType(bind("case", makePlan2BoolConstExprWithType(true), raw,
+		makePlan2StringConstExprWithType("你好")), types.T_varbinary, 8)
+
+	assertType(bind("|", raw, makePlan2StringConstExprWithType("\x01", true)), types.T_uint64, 0)
+	assertType(bind("unary_tilde", raw), types.T_uint64, 0)
+}
+
+func TestBinaryColumnComparisonDoesNotPadRawLiteral(t *testing.T) {
+	binder := &baseBinder{sysCtx: context.Background()}
+	raw, err := binder.bindNumVal(
+		tree.NewNumVal("0x61", "0x61", false, tree.P_hexnum),
+		plan.Type{},
+	)
+	require.NoError(t, err)
+	column := &plan.Expr{
+		Typ:  plan.Type{Id: int32(types.T_binary), Width: 4},
+		Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 0, ColPos: 0}},
+	}
+
+	for _, args := range [][]*plan.Expr{{column, raw}, {raw, column}} {
+		eq, bindErr := BindFuncExprImplByPlanExpr(context.Background(), "=", args)
+		require.NoError(t, bindErr)
+		require.Len(t, eq.GetF().GetArgs(), 2)
+		for _, arg := range eq.GetF().GetArgs() {
+			require.Equal(t, int32(types.T_varchar), arg.GetTyp().Id)
+		}
+	}
 }
 
 func TestBindScoreBinaryStringUsesBinaryStringSemantics(t *testing.T) {

@@ -494,6 +494,65 @@ func TestBuildCTASPreservesMySQLSpecialColumnTypes(t *testing.T) {
 	require.Equal(t, int32(types.T_varchar), cols[2].Typ.GetId())
 }
 
+func TestBuildCTASMaterializesBinaryLiteralExpressionTypes(t *testing.T) {
+	const sql = `create table copied as select
+		X'e4bda0' direct_value,
+		concat(X'e4bda0', 'a') concat_value,
+		substr(X'e4bda0', 1) substr_value,
+		lower(X'e4bda0') lower_value,
+		repeat(X'e4bda0', 2) repeat_value,
+		if(true, X'e4bda0', '你好') if_value,
+		case when true then X'e4bda0' else '你好' end case_value,
+		coalesce(null, X'e4bda0') coalesce_value`
+
+	stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, sql, 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+	p, err := BuildPlan(NewMockCompilerContext(false), stmt, false)
+	require.NoError(t, err)
+	cols := p.GetDdl().GetCreateTable().GetTableDef().GetCols()
+	require.GreaterOrEqual(t, len(cols), 8)
+	wantWidths := []int32{3, 7, 3, 3, 6, 8, 8, 3}
+	for i, width := range wantWidths {
+		require.Equal(t, int32(types.T_varbinary), cols[i].GetTyp().Id, cols[i].GetName())
+		require.Equal(t, width, cols[i].GetTyp().Width, cols[i].GetName())
+	}
+}
+
+func TestBuildCTASMaterializesDynamicBinaryStringTypes(t *testing.T) {
+	ctx := NewMockCompilerContext(false)
+	ctx.ResolveVariableBinaryStringFunc = func(name string, system, global bool) (bool, error) {
+		return name == "u" && !system && !global, nil
+	}
+	stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL,
+		`create table copied as select @u variable_value, replace(X'e4bda0', X'bd', X'78') replace_value`, 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+
+	p, err := BuildPlan(ctx, stmt, false)
+	require.NoError(t, err)
+	cols := p.GetDdl().GetCreateTable().GetTableDef().GetCols()
+	require.GreaterOrEqual(t, len(cols), 2)
+	require.Equal(t, int32(types.T_blob), cols[0].Typ.Id)
+	require.Equal(t, int32(types.T_varbinary), cols[1].Typ.Id)
+	require.Equal(t, int32(3), cols[1].Typ.Width)
+}
+
+func TestBuildCTASEmptyBinaryLiteralCanBeReparsed(t *testing.T) {
+	stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL,
+		`create table copied as select X'' empty_value`, 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+
+	p, err := BuildPlan(NewMockCompilerContext(false), stmt, false)
+	require.NoError(t, err)
+	create := p.GetDdl().GetCreateTable()
+	require.Equal(t, int32(types.T_varbinary), create.TableDef.Cols[0].Typ.Id)
+	require.Equal(t, int32(0), create.TableDef.Cols[0].Typ.Width)
+	_, err = parsers.ParseOne(t.Context(), dialect.MYSQL, create.CreateAsSelectSql, 1)
+	require.NoError(t, err)
+}
+
 func TestViewRebindPreservesMySQLSpecialColumnSemantics(t *testing.T) {
 	const createViewSQL = "create view v_enum_set as select priority, flags, n_name from nation"
 	ctx := NewMockCompilerContext(false)

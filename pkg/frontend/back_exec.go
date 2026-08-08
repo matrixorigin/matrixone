@@ -413,6 +413,7 @@ func doComQueryInBack(
 	proc.SetStmtProfile(&backSes.stmtProfile)
 	proc.SetResolveVariableFunc(backSes.txnCompileCtx.ResolveVariable)
 	proc.SetResolveVariableIsBinFunc(backSes.txnCompileCtx.ResolveVariableIsBin)
+	proc.SetResolveVariableBinaryStringFunc(backSes.txnCompileCtx.ResolveVariableBinaryString)
 	// backExec.Exec and ExecRestore reject multi-statement SQL before reaching
 	// this path, so one snapshot here covers the complete background statement.
 	refreshBackgroundStatementScopedSessionInfo(backSes, input, proc)
