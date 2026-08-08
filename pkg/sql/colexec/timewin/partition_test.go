@@ -16,6 +16,7 @@ package timewin
 
 import (
 	"testing"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -598,6 +599,188 @@ func runPartArgBats(t *testing.T, arg *TimeWin, proc *process.Process, bats []*b
 		}
 	}
 	return
+}
+
+func makeFlushBoundaryRows(gap int, part int64) []row {
+	start := time.Date(2023, time.August, 1, 0, 0, 0, 0, time.UTC)
+	end := start.Add(time.Duration(gap) * 5 * time.Second)
+	return []row{
+		{start.Format("2006-01-02 15:04:05"), 1, part},
+		{end.Format("2006-01-02 15:04:05"), 2, part},
+	}
+}
+
+func makeDenseWindowRows(count int, part int64) []row {
+	start := time.Date(2023, time.August, 1, 0, 0, 0, 0, time.UTC)
+	rows := make([]row, count)
+	for i := range rows {
+		rows[i] = row{
+			ts:   start.Add(time.Duration(i) * 5 * time.Second).Format("2006-01-02 15:04:05"),
+			val:  int32(i + 1),
+			part: part,
+		}
+	}
+	return rows
+}
+
+func requireStrictWindowSequence(t *testing.T, starts []types.Datetime, sliding types.Datetime, want int) {
+	t.Helper()
+	require.Len(t, starts, want)
+	for i := 1; i < len(starts); i++ {
+		require.Equal(t, sliding, starts[i]-starts[i-1], "window %d must advance exactly one slide", i)
+	}
+}
+
+// The boundary window is already included in the flushed generation. The
+// replacement generation must start at the following window, including when a
+// second internal flush is required.
+func TestTimeWinGapFillInternalFlushKeepsWindowsUnique(t *testing.T) {
+	sliding, err := calcDatetime(5, types.Second)
+	require.NoError(t, err)
+
+	for _, tc := range []struct {
+		name string
+		gap  int
+	}{
+		{name: "adjacent control", gap: maxTimeWindowRows + 1},
+		{name: "first internal flush", gap: maxTimeWindowRows + 2},
+		{name: "second internal flush", gap: 2*maxTimeWindowRows + 5},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+			rows := makeFlushBoundaryRows(tc.gap, 1)
+			bats := []*batch.Batch{
+				makePartInput(t, proc.Mp(), rows[:1]),
+				makePartInput(t, proc.Mp(), rows[1:]),
+			}
+			arg := newPartArg(t, proc, sliding, true)
+			arg.GapFill = true
+
+			starts, sums, parts := runPartArgBats(t, arg, proc, bats)
+			requireStrictWindowSequence(t, starts, sliding, tc.gap+1)
+			require.Len(t, sums, tc.gap+1)
+			require.Equal(t, int64(1), sums[0])
+			require.Equal(t, int64(2), sums[len(sums)-1])
+			require.Len(t, parts, tc.gap+1)
+			for _, part := range parts {
+				require.Equal(t, int64(1), part)
+			}
+			require.Equal(t, int64(tc.gap+1), arg.ctr.partitionWindows)
+			require.Equal(t, int64(tc.gap+1), arg.ctr.gapFillWindows)
+
+			arg.Free(proc, false, nil)
+			for _, bat := range bats {
+				bat.Clean(proc.Mp())
+			}
+			proc.Free()
+			require.Equal(t, int64(0), proc.Mp().CurrNB())
+		})
+	}
+}
+
+// A dense non-GAPFILL input also crosses the result flush threshold. Its
+// existing semantics must remain unchanged even though the replacement
+// generation now resumes through the explicit post-flush state.
+func TestTimeWinInternalFlushPreservesDenseWindowsWithoutGapFill(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	sliding, err := calcDatetime(5, types.Second)
+	require.NoError(t, err)
+	rows := makeDenseWindowRows(maxTimeWindowRows+3, 1)
+	bats := []*batch.Batch{
+		makePartInput(t, proc.Mp(), rows[:maxTimeWindowRows]),
+		makePartInput(t, proc.Mp(), rows[maxTimeWindowRows:]),
+	}
+	arg := newPartArg(t, proc, sliding, true)
+
+	starts, sums, parts := runPartArgBats(t, arg, proc, bats)
+	requireStrictWindowSequence(t, starts, sliding, len(rows))
+	require.Len(t, sums, len(rows))
+	for i, sum := range sums {
+		require.Equal(t, int64(i+1), sum)
+	}
+	require.Len(t, parts, len(rows))
+	for _, part := range parts {
+		require.Equal(t, int64(1), part)
+	}
+	require.Zero(t, arg.ctr.gapFillWindows)
+
+	arg.Free(proc, false, nil)
+	for _, bat := range bats {
+		bat.Clean(proc.Mp())
+	}
+	proc.Free()
+	require.Equal(t, int64(0), proc.Mp().CurrNB())
+}
+
+func TestTimeWinGapFillInternalFlushResetsPerPartition(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	sliding, err := calcDatetime(5, types.Second)
+	require.NoError(t, err)
+	rows := append(makeFlushBoundaryRows(maxTimeWindowRows+2, 1), makeFlushBoundaryRows(maxTimeWindowRows+1, 2)...)
+	bats := []*batch.Batch{
+		makePartInput(t, proc.Mp(), rows[:2]),
+		makePartInput(t, proc.Mp(), rows[2:]),
+	}
+	arg := newPartArg(t, proc, sliding, true)
+	arg.GapFill = true
+
+	starts, _, parts := runPartArgBats(t, arg, proc, bats)
+	wantCounts := map[int64]int{1: maxTimeWindowRows + 3, 2: maxTimeWindowRows + 2}
+	seen := make(map[int64]int)
+	last := make(map[int64]types.Datetime)
+	for i, part := range parts {
+		seen[part]++
+		if count := seen[part]; count > 1 {
+			require.Equal(t, sliding, starts[i]-last[part], "partition %d window %d must advance one slide", part, count)
+		}
+		last[part] = starts[i]
+	}
+	require.Equal(t, wantCounts, seen)
+	require.Equal(t, int64(maxTimeWindowRows+2), arg.ctr.partitionWindows)
+	require.Equal(t, int64(2*maxTimeWindowRows+5), arg.ctr.gapFillWindows)
+
+	arg.Free(proc, false, nil)
+	for _, bat := range bats {
+		bat.Clean(proc.Mp())
+	}
+	proc.Free()
+	require.Equal(t, int64(0), proc.Mp().CurrNB())
+}
+
+func TestTimeWinGapFillInternalFlushReuseAfterReset(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	sliding, err := calcDatetime(5, types.Second)
+	require.NoError(t, err)
+	rows := makeFlushBoundaryRows(maxTimeWindowRows+2, 1)
+	arg := newPartArg(t, proc, sliding, true)
+	arg.GapFill = true
+
+	bats1 := []*batch.Batch{
+		makePartInput(t, proc.Mp(), rows[:1]),
+		makePartInput(t, proc.Mp(), rows[1:]),
+	}
+	starts1, sums1, parts1 := runPartArgBats(t, arg, proc, bats1)
+	requireStrictWindowSequence(t, starts1, sliding, maxTimeWindowRows+3)
+
+	arg.Reset(proc, false, nil)
+	bats2 := []*batch.Batch{
+		makePartInput(t, proc.Mp(), rows[:1]),
+		makePartInput(t, proc.Mp(), rows[1:]),
+	}
+	starts2, sums2, parts2 := runPartArgBats(t, arg, proc, bats2)
+	require.Equal(t, starts1, starts2)
+	require.Equal(t, sums1, sums2)
+	require.Equal(t, parts1, parts2)
+
+	arg.Free(proc, false, nil)
+	for _, bat := range bats1 {
+		bat.Clean(proc.Mp())
+	}
+	for _, bat := range bats2 {
+		bat.Clean(proc.Mp())
+	}
+	proc.Free()
+	require.Equal(t, int64(0), proc.Mp().CurrNB())
 }
 
 // The same rows produce the same windows regardless of how the child chops

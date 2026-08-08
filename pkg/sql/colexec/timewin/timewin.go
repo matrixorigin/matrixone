@@ -211,6 +211,13 @@ func (timeWin *TimeWin) Call(proc *process.Process) (vm.CallResult, error) {
 			}
 			ctr.status = fill
 
+		case resumeAfterFlush:
+
+			if err = ctr.resumeWindowAfterFlush(timeWin); err != nil {
+				return result, err
+			}
+			ctr.status = fill
+
 		case nextBatch:
 			if ctr.curVecIdx < ctr.i-1 {
 				ctr.curVecIdx++
@@ -318,7 +325,7 @@ func (timeWin *TimeWin) Call(proc *process.Process) (vm.CallResult, error) {
 				// normal terminal cleanup path.
 				ctr.freeAgg()
 				ctr.aggs = replacements
-				ctr.status = nextWindow
+				ctr.status = resumeAfterFlush
 				ctr.group = 0
 				ctr.withoutFill = true
 			}
@@ -444,6 +451,31 @@ func (ctr *container) nextWindow(t *TimeWin) error {
 		}
 	}
 	// See firstWindow: the new window is empty until a row lands in it.
+	ctr.withoutFill = true
+	return nil
+}
+
+// resumeWindowAfterFlush starts the replacement aggregate generation at the
+// next window. fillRows already appended the current window before requesting
+// the flush, and makeAggExecutors grew the replacement generation's first
+// group. Re-entering nextWindow here would append the old bounds a second time
+// and grow a second group for the same transition.
+func (ctr *container) resumeWindowAfterFlush(t *TimeWin) error {
+	ctr.left = ctr.nextLeft
+	ctr.right = ctr.nextRight
+
+	ctr.nextLeft = ctr.left + t.Sliding
+	ctr.nextRight = ctr.nextLeft + t.Interval
+
+	ctr.curVecIdx = ctr.preVecIdx
+	ctr.curRowIdx = ctr.preRowIdx
+
+	if t.GapFill {
+		ctr.partitionWindows++
+		if err := ctr.accountGapFillWindow(t); err != nil {
+			return err
+		}
+	}
 	ctr.withoutFill = true
 	return nil
 }
