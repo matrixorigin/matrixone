@@ -178,8 +178,8 @@ func TestBindUpdateProducesTypedPlannerRoutes(t *testing.T) {
 		{
 			name:       "multi target",
 			sql:        "UPDATE emp, dept SET emp.sal = 1, dept.loc = 'x'",
-			wantRoute:  updatePlannerLegacy,
-			wantReason: updateRouteReasonMultiTarget,
+			wantRoute:  updatePlannerModern,
+			wantReason: updateRouteReasonNone,
 		},
 		{
 			name: "irregular index column",
@@ -229,6 +229,24 @@ func TestBindUpdateProducesTypedPlannerRoutes(t *testing.T) {
 			require.Equal(t, test.wantReason, reason, "bind error: %v", err)
 		})
 	}
+}
+
+func TestMultiTableUpdateNeverFallsBackToLegacyPlanner(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	logicPlan, err := runOneStmt(
+		mock,
+		t,
+		"UPDATE emp, dept SET emp.sal = 1, dept.loc = 'x'",
+	)
+	require.NoError(t, err)
+
+	multiUpdates := 0
+	for _, node := range logicPlan.GetQuery().Nodes {
+		if node.NodeType == planpb.Node_MULTI_UPDATE {
+			multiUpdates++
+		}
+	}
+	require.Equal(t, 1, multiUpdates)
 }
 
 func TestBindUpdateForeignKeyRoutingByAffectedColumns(t *testing.T) {
@@ -338,7 +356,7 @@ func TestBindUpdateForeignKeyRoutingByAffectedColumns(t *testing.T) {
 		))
 	})
 
-	t.Run("auto increment child key uses legacy final row validation", func(t *testing.T) {
+	t.Run("auto increment child key uses modern final row validation", func(t *testing.T) {
 		mock := NewMockOptimizer(true)
 		prepareEmpDept(mock)
 		emp := mock.ctxt.tables["emp"]
@@ -359,10 +377,9 @@ func TestBindUpdateForeignKeyRoutingByAffectedColumns(t *testing.T) {
 
 		builder := NewQueryBuilder(planpb.Query_UPDATE, mock.CurrentContext(), false, true)
 		_, err = builder.bindUpdate(stmt.(*tree.Update), NewBindContext(builder, nil))
-		require.Error(t, err)
-		route, reason, _ := classifyUpdatePlannerError(err)
-		require.Equal(t, updatePlannerLegacy, route)
-		require.Equal(t, updateRouteReasonAutoIncrementFK, reason)
+		require.NoError(t, err)
+		require.Equal(t, 1, countUpdateFkPlanNodes(builder.qry, planpb.Node_PRE_INSERT))
+		require.Equal(t, 1, countUpdateFkAsserts(builder.qry))
 	})
 
 	t.Run("disabled checks keep auto increment child key on modern route", func(t *testing.T) {
@@ -388,6 +405,38 @@ func TestBindUpdateForeignKeyRoutingByAffectedColumns(t *testing.T) {
 		require.Equal(t, 1, countUpdateFkPlanNodes(query, planpb.Node_MULTI_UPDATE))
 		require.Equal(t, 1, countUpdateFkPlanNodes(query, planpb.Node_PRE_INSERT))
 		require.Equal(t, 0, countUpdateFkMarkJoins(query))
+	})
+
+	t.Run("multi target auto increment child key stays modern", func(t *testing.T) {
+		mock := NewMockOptimizer(true)
+		prepareEmpDept(mock)
+		for _, col := range mock.ctxt.tables["emp"].Cols {
+			if col.Name == "deptno" {
+				col.Typ.AutoIncr = true
+			}
+		}
+
+		logicPlan, err := runOneStmt(mock, t,
+			"UPDATE emp, dept SET emp.deptno = DEFAULT, dept.loc = 'changed' "+
+				"WHERE emp.deptno = dept.deptno")
+		require.NoError(t, err)
+		query := logicPlan.GetQuery()
+		require.Equal(t, 1, countUpdateFkPlanNodes(query, planpb.Node_PRE_INSERT))
+		require.Equal(t, 1, countUpdateFkPlanNodes(query, planpb.Node_MULTI_UPDATE))
+		var preInsert *planpb.Node
+		for _, node := range query.Nodes {
+			if node.NodeType == planpb.Node_PRE_INSERT {
+				preInsert = node
+				break
+			}
+		}
+		require.NotNil(t, preInsert)
+		require.True(t, preInsert.PreInsertCtx.HasTargetSelector)
+		require.Len(t, preInsert.Children, 1)
+		inputCols := int32(len(query.Nodes[preInsert.Children[0]].ProjectList))
+		require.Less(t, preInsert.PreInsertCtx.TargetRowNumberCol, inputCols)
+		require.Less(t, preInsert.PreInsertCtx.TargetActiveCol, inputCols)
+		require.Less(t, preInsert.PreInsertCtx.TargetRowIdCol, inputCols)
 	})
 
 	t.Run("affected restricted parent key stays modern with child probe", func(t *testing.T) {
@@ -912,10 +961,14 @@ func TestBindUpdateAutoIncrementRunsBeforeForeignKeys(t *testing.T) {
 		return -1
 	}
 
-	t.Run("child generated key uses legacy final row validation", func(t *testing.T) {
+	t.Run("child generated key uses modern final row validation", func(t *testing.T) {
 		mock := NewMockOptimizer(true)
 		prepareEmpDept(mock)
-		mock.ctxt.tables["emp"].Cols[7].Typ.AutoIncr = true
+		for _, col := range mock.ctxt.tables["emp"].Cols {
+			if col.Name == "deptno" {
+				col.Typ.AutoIncr = true
+			}
+		}
 		stmt, err := parsers.ParseOne(
 			mock.CurrentContext().GetContext(),
 			dialect.MYSQL,
@@ -925,15 +978,14 @@ func TestBindUpdateAutoIncrementRunsBeforeForeignKeys(t *testing.T) {
 		require.NoError(t, err)
 		defer stmt.Free()
 
-		builder := NewQueryBuilder(planpb.Query_UPDATE, mock.CurrentContext(), false, true)
-		_, err = builder.bindUpdate(stmt.(*tree.Update), NewBindContext(builder, nil))
-		require.ErrorContains(t, err, "auto_increment foreign key update")
-		route, reason, _ := classifyUpdatePlannerError(err)
-		require.Equal(t, updatePlannerLegacy, route)
-		require.Equal(t, updateRouteReasonAutoIncrementFK, reason)
+		query := bindDirect(t, mock, "UPDATE emp SET deptno = DEFAULT")
+		preInsertPos := firstNode(query, func(node *planpb.Node) bool {
+			return node.NodeType == planpb.Node_PRE_INSERT
+		})
+		require.NotEqual(t, -1, preInsertPos)
 	})
 
-	t.Run("parent action on generated key uses legacy planner", func(t *testing.T) {
+	t.Run("parent action on generated key uses modern planner", func(t *testing.T) {
 		mock := NewMockOptimizer(true)
 		prepareEmpDept(mock)
 		mock.ctxt.tables["dept"].Cols[0].Typ.AutoIncr = true
@@ -947,12 +999,14 @@ func TestBindUpdateAutoIncrementRunsBeforeForeignKeys(t *testing.T) {
 		require.NoError(t, err)
 		defer stmt.Free()
 
-		builder := NewQueryBuilder(planpb.Query_UPDATE, mock.CurrentContext(), false, true)
-		_, err = builder.bindUpdate(stmt.(*tree.Update), NewBindContext(builder, nil))
-		require.ErrorContains(t, err, "auto-increment referenced key")
-		route, reason, _ := classifyUpdatePlannerError(err)
-		require.Equal(t, updatePlannerLegacy, route)
-		require.Equal(t, updateRouteReasonForeignKey, reason)
+		query := bindDirect(t, mock, "UPDATE dept SET deptno = DEFAULT")
+		require.NotNil(t, query)
+		require.NotEqual(t, -1, firstNode(query, func(node *planpb.Node) bool {
+			return node.NodeType == planpb.Node_PRE_INSERT
+		}))
+		require.NotEqual(t, -1, firstNode(query, func(node *planpb.Node) bool {
+			return node.NodeType == planpb.Node_MULTI_UPDATE
+		}))
 	})
 
 	t.Run("disabled checks preserve pre-insert input schema", func(t *testing.T) {

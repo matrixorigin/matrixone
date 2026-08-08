@@ -15,8 +15,12 @@
 package multi_update
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
+	"github.com/matrixorigin/matrixone/pkg/common/rscthrottler"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/hashtable"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -26,6 +30,14 @@ import (
 var _ vm.Operator = new(MultiUpdate)
 
 const opName = "MultiUpdate"
+
+const multiUpdateAllocationOwner mpool.AllocationOwner = 1
+
+const (
+	multiUpdateAllocationSiteHashCell mpool.AllocationSite = iota + 1
+	multiUpdateAllocationSiteHashDescriptor
+	multiUpdateAllocationSiteHashIterator
+)
 
 type UpdateAction int
 
@@ -82,7 +94,68 @@ type MultiUpdate struct {
 	getFlushableS3WriterFunc func() *s3WriterDelegate
 	addAffectedRowsFunc      func(uint64)
 
+	allocationAccount  *mpool.AllocationAccount
+	mapAllocation      *hashtable.AllocationAccountSelection
+	iteratorAllocation *hashmap.IteratorAllocation
+
 	vm.OperatorBase
+}
+
+func (update *MultiUpdate) SetAllocationAccount(account *mpool.AllocationAccount) error {
+	if account == nil {
+		return mpool.ErrAllocationAccountInvalid
+	}
+	if update.allocationAccount != nil {
+		if update.allocationAccount == account {
+			return nil
+		}
+		return mpool.ErrAllocationAccountMismatch
+	}
+	selection, err := hashtable.NewAllocationAccountSelection(
+		account,
+		multiUpdateAllocationOwner,
+		multiUpdateAllocationSiteHashCell,
+		multiUpdateAllocationSiteHashDescriptor,
+	)
+	if err != nil {
+		return err
+	}
+	iteratorAllocation, err := hashmap.NewIteratorAllocation(
+		account,
+		multiUpdateAllocationOwner,
+		multiUpdateAllocationSiteHashIterator,
+	)
+	if err != nil {
+		return err
+	}
+	update.allocationAccount = account
+	update.mapAllocation = selection
+	update.iteratorAllocation = iteratorAllocation
+	return nil
+}
+
+func (update *MultiUpdate) ClearAllocationAccount(account *mpool.AllocationAccount) error {
+	if update.allocationAccount == nil {
+		return nil
+	}
+	if update.allocationAccount != account {
+		return mpool.ErrAllocationAccountMismatch
+	}
+	if len(update.ctr.seenTargetRows) != 0 {
+		return mpool.ErrAllocationAccountInvariant
+	}
+	update.allocationAccount = nil
+	update.mapAllocation = nil
+	update.iteratorAllocation = nil
+	return nil
+}
+
+// MultiUpdate participates in an allocation generation when another operator
+// (normally the join feeding a multi-target UPDATE) activates it. It must not
+// activate the statement-wide lifecycle by itself because ordinary single-
+// table writes do not need the physical-target deduplication map.
+func (update *MultiUpdate) ActivatesAllocationAccountLifecycle() bool {
+	return false
 }
 
 type updateCtxInfo struct {
@@ -105,6 +178,10 @@ type container struct {
 
 	insertBuf []*batch.Batch
 	deleteBuf []*batch.Batch
+
+	seenTargetRows map[uint64]*hashmap.StrHashMap
+	seenRowsGrant  int64
+	seenRowsRSC    rscthrottler.RSCThrottler
 }
 
 type MultiUpdateCtx struct {
@@ -118,6 +195,14 @@ type MultiUpdateCtx struct {
 	// used with SkipInsertOnNullPk for REPLACE delete-only rows.
 	InsertPkColIdx     int
 	IgnoreAffectedRows bool
+	// DedupByTargetRowID makes this context consume only the whole input row
+	// selected for its physical target row. The planner supplies an independent
+	// row_number() partition for every updated target table.
+	DedupByTargetRowID bool
+	TargetUpdateCtxIdx int
+	// TargetTableID stays logical when a partition wrapper replaces TableDef
+	// with a physical partition definition.
+	TargetTableID uint64
 }
 
 func (update MultiUpdate) TypeName() string {
@@ -160,7 +245,7 @@ func (update *MultiUpdate) Reset(proc *process.Process, pipelineFailed bool, err
 	if update.ctr.s3Writer != nil {
 		update.ctr.s3Writer.reset(proc)
 	}
-
+	update.freeSeenTargetRows()
 	update.ctr.state = vm.Build
 }
 
@@ -184,9 +269,22 @@ func (update *MultiUpdate) Free(proc *process.Process, pipelineFailed bool, err 
 		update.ctr.s3Writer.free(proc)
 		update.ctr.s3Writer = nil
 	}
+	update.freeSeenTargetRows()
 
 	update.ctr.updateCtxInfos = nil
 	update.ctr.sources = nil
+}
+
+func (update *MultiUpdate) freeSeenTargetRows() {
+	if update.ctr.seenRowsGrant > 0 {
+		update.ctr.seenRowsRSC.Release(update.ctr.seenRowsGrant)
+		update.ctr.seenRowsGrant = 0
+	}
+	update.ctr.seenRowsRSC = nil
+	for _, seen := range update.ctr.seenTargetRows {
+		seen.Free()
+	}
+	update.ctr.seenTargetRows = nil
 }
 
 func (update *MultiUpdate) ExecProjection(proc *process.Process, input *batch.Batch) (*batch.Batch, error) {

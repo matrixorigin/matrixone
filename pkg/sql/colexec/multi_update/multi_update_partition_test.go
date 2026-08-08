@@ -19,9 +19,48 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/features"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/require"
 )
+
+func TestPartitionMultiUpdateForwardsAllocationAccountLifecycle(t *testing.T) {
+	registry, err := mpool.NewAllocationAccountRegistry(1, 16)
+	require.NoError(t, err)
+	account, err := registry.Open(1 << 20)
+	require.NoError(t, err)
+
+	raw := &MultiUpdate{}
+	op := &PartitionMultiUpdate{raw: raw}
+	require.False(t, op.ActivatesAllocationAccountLifecycle())
+	require.NoError(t, op.SetAllocationAccount(account))
+	require.Same(t, account, raw.allocationAccount)
+	require.NoError(t, op.ClearAllocationAccount(account))
+	require.Nil(t, raw.allocationAccount)
+}
+
+func TestClonePartitionPhaseContextsSeparatesDeleteAndInsert(t *testing.T) {
+	contexts := []*MultiUpdateCtx{{
+		ObjRef:             &plan.ObjectRef{},
+		TableDef:           &plan.TableDef{},
+		InsertCols:         []int{1, 2},
+		DeleteCols:         []int{3, 4},
+		DedupByTargetRowID: true,
+	}}
+	deleteContexts := clonePartitionPhaseContexts(contexts, true)
+	insertContexts := clonePartitionPhaseContexts(contexts, false)
+
+	require.Empty(t, deleteContexts[0].InsertCols)
+	require.Equal(t, []int{3, 4}, deleteContexts[0].DeleteCols)
+	require.Empty(t, insertContexts[0].DeleteCols)
+	require.Equal(t, []int{1, 2}, insertContexts[0].InsertCols)
+	require.False(t, deleteContexts[0].DedupByTargetRowID)
+	require.False(t, insertContexts[0].DedupByTargetRowID)
+	require.Equal(t, []int{1, 2}, contexts[0].InsertCols)
+	require.Equal(t, []int{3, 4}, contexts[0].DeleteCols)
+}
 
 func TestResetMultiUpdateCtxsClassifiesTemporaryIndexTables(t *testing.T) {
 	uniqueName := "__mo_tmp_018f1f767b9d7f35b2d99b8d7774bde8_db_" +
@@ -48,10 +87,58 @@ func TestPartitionMultiUpdateString(t *testing.T) {
 	require.Equal(t, "MultiUpdate: partition_multi_update", buf.String())
 }
 
+func TestBuildPartitionUpdateTargetsKeepsPhysicalTargetsIndependent(t *testing.T) {
+	contexts := []*MultiUpdateCtx{
+		{
+			ObjRef:             &plan.ObjectRef{},
+			TableDef:           &plan.TableDef{TblId: 10, Name: "plain"},
+			TargetUpdateCtxIdx: 0,
+		},
+		{
+			ObjRef: &plan.ObjectRef{},
+			TableDef: &plan.TableDef{
+				TblId:       20,
+				Name:        "partitioned",
+				FeatureFlag: features.Partitioned,
+			},
+			TargetUpdateCtxIdx: 1,
+		},
+		{
+			ObjRef: &plan.ObjectRef{},
+			TableDef: &plan.TableDef{
+				TblId:       21,
+				Name:        "partition_index",
+				FeatureFlag: features.IndexTable,
+			},
+			TargetUpdateCtxIdx: 1,
+		},
+	}
+
+	targets := buildPartitionUpdateTargets(contexts)
+
+	require.Len(t, targets, 2)
+	require.Equal(t, uint64(10), targets[0].tableID)
+	require.Len(t, targets[0].contexts, 1)
+	require.Equal(t, uint64(20), targets[1].tableID)
+	require.Len(t, targets[1].contexts, 2)
+	require.Equal(t, 0, targets[1].contexts[1].TargetUpdateCtxIdx)
+	require.NotSame(t, contexts[1].TableDef, targets[1].contexts[0].TableDef)
+	require.NotSame(t, contexts[1], targets[1].contexts[0])
+}
+
+func TestPartitionWriterIDsSeparateAliasesOfSamePhysicalTable(t *testing.T) {
+	first := &partitionUpdateTarget{writerIDs: make(map[uint64]uint64)}
+	second := &partitionUpdateTarget{writerIDs: make(map[uint64]uint64)}
+	op := &PartitionMultiUpdate{}
+
+	firstID := op.writerID(first, 100)
+	require.Equal(t, firstID, op.writerID(first, 100))
+	require.NotEqual(t, firstID, op.writerID(second, 100))
+}
+
 func TestNewPartitionMultiUpdateFrom(t *testing.T) {
 	ps := &PartitionMultiUpdate{
-		raw:     &MultiUpdate{RejectZeroTemporal: true},
-		tableID: 1,
+		raw: &MultiUpdate{RejectZeroTemporal: true},
 	}
 	op := NewPartitionMultiUpdateFrom(ps)
 	require.Equal(t, ps.raw.MultiUpdateCtx, op.(*PartitionMultiUpdate).raw.MultiUpdateCtx)
@@ -59,7 +146,6 @@ func TestNewPartitionMultiUpdateFrom(t *testing.T) {
 	require.Equal(t, ps.raw.IsOnduplicateKeyUpdate, op.(*PartitionMultiUpdate).raw.IsOnduplicateKeyUpdate)
 	require.Equal(t, ps.raw.Engine, op.(*PartitionMultiUpdate).raw.Engine)
 	require.Equal(t, ps.raw.RejectZeroTemporal, op.(*PartitionMultiUpdate).raw.RejectZeroTemporal)
-	require.Equal(t, ps.tableID, op.(*PartitionMultiUpdate).tableID)
 }
 
 func TestPartitionMultiUpdateSetRejectZeroTemporalUpdatesWriters(t *testing.T) {
@@ -75,6 +161,27 @@ func TestPartitionMultiUpdateSetRejectZeroTemporalUpdatesWriters(t *testing.T) {
 	require.True(t, op.raw.RejectZeroTemporal)
 	require.True(t, active.rejectZeroTemporal)
 	require.True(t, free.rejectZeroTemporal)
+}
+
+func TestPartitionMultiUpdateResetRebuildsRawContextMetadata(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	original := &MultiUpdateCtx{TableDef: &plan.TableDef{Name: "logical"}}
+	raw := &MultiUpdate{
+		MultiUpdateCtx: []*MultiUpdateCtx{original},
+		ctr: container{updateCtxInfos: map[string]*updateCtxInfo{
+			"physical_partition": {},
+		}},
+	}
+	op := &PartitionMultiUpdate{
+		raw:         raw,
+		rawContexts: []*MultiUpdateCtx{original},
+	}
+
+	op.Reset(proc, false, nil)
+
+	require.Same(t, original, raw.MultiUpdateCtx[0])
+	require.Contains(t, raw.ctr.updateCtxInfos, "logical")
+	require.NotContains(t, raw.ctr.updateCtxInfos, "physical_partition")
 }
 
 func TestAddInsertAffectRows(t *testing.T) {
@@ -252,11 +359,13 @@ func TestDeleteAffectedRows(t *testing.T) {
 // PartitionCols and keeps nested objects independent.
 func TestMultiUpdateCtxClonePartitionCols(t *testing.T) {
 	original := &MultiUpdateCtx{
-		InsertCols:    []int{1, 2, 3},
-		DeleteCols:    []int{4, 5},
-		PartitionCols: []int{6, 7, 8, 9},
-		ObjRef:        &plan.ObjectRef{SchemaName: "test", ObjName: "t1"},
-		TableDef:      &plan.TableDef{Name: "t1"},
+		InsertCols:         []int{1, 2, 3},
+		DeleteCols:         []int{4, 5},
+		PartitionCols:      []int{6, 7, 8, 9},
+		DedupByTargetRowID: true,
+		TargetUpdateCtxIdx: 10,
+		ObjRef:             &plan.ObjectRef{SchemaName: "test", ObjName: "t1"},
+		TableDef:           &plan.TableDef{Name: "t1"},
 	}
 
 	cloned := original.clone()
@@ -267,6 +376,8 @@ func TestMultiUpdateCtxClonePartitionCols(t *testing.T) {
 		"PartitionCols should not be DeleteCols")
 	require.Equal(t, original.InsertCols, cloned.InsertCols)
 	require.Equal(t, original.DeleteCols, cloned.DeleteCols)
+	require.True(t, cloned.DedupByTargetRowID)
+	require.Equal(t, original.TargetUpdateCtxIdx, cloned.TargetUpdateCtxIdx)
 	require.Equal(t, original.ObjRef.SchemaName, cloned.ObjRef.SchemaName)
 	require.Equal(t, original.TableDef.Name, cloned.TableDef.Name)
 	require.NotSame(t, original.ObjRef, cloned.ObjRef)

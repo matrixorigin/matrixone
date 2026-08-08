@@ -408,6 +408,10 @@ func bindAndOptimizeUpdateQuery(ctx CompilerContext, stmt *tree.Update, isPrepar
 		route, reason, routedErr := classifyUpdatePlannerError(err)
 		switch route {
 		case updatePlannerLegacy:
+			if updateHasMultiTableTargetShape(stmt) {
+				recordUpdatePlannerRoute(updatePlannerRejected, reason, "rejected")
+				return nil, routedErr
+			}
 			recordUpdatePlannerRoute(route, reason, "selected")
 			if stmt.HasReturning() {
 				if reason == updateRouteReasonExternalTable {

@@ -823,6 +823,10 @@ func constructPreInsert(nodes []*plan.Node, node *plan.Node, eng engine.Engine, 
 	op.CompPkeyExpr = preCtx.CompPkeyExpr
 	op.ClusterByExpr = preCtx.ClusterByExpr
 	op.ColOffset = preCtx.ColOffset
+	op.HasTargetSelector = preCtx.HasTargetSelector
+	op.TargetRowNumberCol = preCtx.TargetRowNumberCol
+	op.TargetActiveCol = preCtx.TargetActiveCol
+	op.TargetRowIDCol = preCtx.TargetRowIdCol
 	op.RejectZeroTemporal, err = util.RejectZeroTemporalWritePolicy(proc)
 	if err != nil {
 		return nil, err
@@ -918,19 +922,32 @@ func constructMultiUpdate(
 			SkipInsertOnNullPk: updateCtx.SkipInsertOnNullPk,
 			InsertPkColIdx:     int(updateCtx.InsertPkColIdx),
 			IgnoreAffectedRows: updateCtx.IgnoreAffectedRows,
+			DedupByTargetRowID: updateCtx.DedupByTargetRowId,
+			TargetUpdateCtxIdx: int(updateCtx.TargetUpdateCtxIdx),
+			TargetTableID:      updateCtx.TableDef.TblId,
 		}
 	}
 	arg.Action = action
 
 	ps := proc.GetPartitionService()
-	if !ps.Enabled() || !features.IsPartitioned(node.UpdateCtxList[0].TableDef.FeatureFlag) {
+	if !ps.Enabled() {
+		return arg, nil
+	}
+	if !hasPartitionedUpdateTarget(node.UpdateCtxList) {
 		return arg, nil
 	}
 
-	return multi_update.NewPartitionMultiUpdate(
-		arg,
-		node.UpdateCtxList[0].TableDef.TblId,
-	), nil
+	return multi_update.NewPartitionMultiUpdate(arg), nil
+}
+
+func hasPartitionedUpdateTarget(contexts []*plan.UpdateCtx) bool {
+	for _, updateCtx := range contexts {
+		if !features.IsIndexTable(updateCtx.TableDef.FeatureFlag) &&
+			features.IsPartitioned(updateCtx.TableDef.FeatureFlag) {
+			return true
+		}
+	}
+	return false
 }
 
 func constructInsert(

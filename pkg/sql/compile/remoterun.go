@@ -883,6 +883,8 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 				InsertPkColIdx:        int32(muCtx.InsertPkColIdx),
 				IgnoreAffectedRows:    muCtx.IgnoreAffectedRows,
 				CountDeleteAffectRows: t.CountDeleteAffectRows,
+				DedupByTargetRowId:    muCtx.DedupByTargetRowID,
+				TargetUpdateCtxIdx:    int32(muCtx.TargetUpdateCtxIdx),
 			}
 
 			updateCtxList[i].InsertCols = make([]plan.ColRef, len(muCtx.InsertCols))
@@ -1397,6 +1399,9 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 				SkipInsertOnNullPk: muCtx.SkipInsertOnNullPk,
 				InsertPkColIdx:     int(muCtx.InsertPkColIdx),
 				IgnoreAffectedRows: muCtx.IgnoreAffectedRows,
+				DedupByTargetRowID: muCtx.DedupByTargetRowId,
+				TargetUpdateCtxIdx: int(muCtx.TargetUpdateCtxIdx),
+				TargetTableID:      muCtx.TableDef.TblId,
 			}
 
 			arg.MultiUpdateCtx[i].InsertCols = make([]int, len(muCtx.InsertCols))

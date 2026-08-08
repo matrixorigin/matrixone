@@ -409,24 +409,40 @@ func (builder *QueryBuilder) appendTaggedSinkScan(bindCtx *BindContext, sourceSt
 func (builder *QueryBuilder) appendOnDupIrregularMaintSource(
 	bindCtx *BindContext,
 	finalProjNodeID, finalProjTag, deletePkPos int32, deletePkTyp plan.Type,
+	targetRowNumberPos, targetActivePos int32,
 	irregularIndexes []*plan.IndexDef,
 	tableDef *plan.TableDef,
 	objRef *plan.ObjectRef,
-) int32 {
+) (int32, error) {
 	sinkID := appendSinkNodeWithTag(builder, bindCtx, finalProjNodeID, finalProjTag)
 	joinStep := builder.appendStep(sinkID)
+	maintStep := joinStep
+	if targetRowNumberPos >= 0 {
+		selectedScanID := builder.appendTaggedSinkScan(bindCtx, joinStep, finalProjTag)
+		selectedScan := builder.qry.Nodes[selectedScanID]
+		selected, err := builder.buildTargetSelectedExpr(
+			finalProjTag, selectedScan, targetRowNumberPos, targetActivePos)
+		if err != nil {
+			return 0, err
+		}
+		selectedID := builder.appendNode(&plan.Node{
+			NodeType: plan.Node_FILTER, Children: []int32{selectedScanID}, FilterList: []*plan.Expr{selected},
+		}, bindCtx)
+		selectedSinkID := appendSinkNodeWithTag(builder, bindCtx, selectedID, finalProjTag)
+		maintStep = builder.appendStep(selectedSinkID)
+	}
 
 	maintTableDef := *tableDef
 	maintTableDef.Indexes = irregularIndexes
-	builder.irregularMaintSourceStep = joinStep
-	builder.irregularMaintDeleteStep = joinStep
+	builder.irregularMaintSourceStep = maintStep
+	builder.irregularMaintDeleteStep = maintStep
 	builder.irregularMaintDeletePkPos = deletePkPos
 	builder.irregularMaintDeletePkTyp = deletePkTyp
 	builder.irregularMaintIndexes = irregularIndexes
 	builder.irregularMaintTableDef = &maintTableDef
 	builder.irregularMaintObjRef = objRef
 
-	return builder.appendTaggedSinkScan(bindCtx, joinStep, finalProjTag)
+	return builder.appendTaggedSinkScan(bindCtx, joinStep, finalProjTag), nil
 }
 
 // buildIrregularIndexMaintenance appends, after createQuery, the synchronous
@@ -858,10 +874,23 @@ func (builder *QueryBuilder) buildIrregularMasterDeleteByPk(bindCtx *BindContext
 // path uses (reduceSinkSinkScanNodes + tempOptimizeForDML). It is a no-op when the
 // table has no irregular indexes. Shared by the modern INSERT and LOAD paths.
 func (builder *QueryBuilder) finishIrregularIndexMaintenance(query *plan.Query, bindCtx *BindContext) error {
-	if len(builder.irregularMaintIndexes) == 0 {
+	if len(builder.irregularMaintIndexes) == 0 && len(builder.irregularUpdateMaints) == 0 {
 		return nil
 	}
-	if len(builder.irregularMaintIndexes) > 0 {
+	if len(builder.irregularUpdateMaints) > 0 {
+		for _, maint := range builder.irregularUpdateMaints {
+			builder.irregularMaintSourceStep = maint.sourceStep
+			builder.irregularMaintDeleteStep = maint.deleteStep
+			builder.irregularMaintDeletePkPos = maint.deletePkPos
+			builder.irregularMaintDeletePkTyp = maint.deletePkTyp
+			builder.irregularMaintIndexes = maint.indexes
+			builder.irregularMaintTableDef = maint.tableDef
+			builder.irregularMaintObjRef = maint.objRef
+			if err := builder.buildIrregularIndexMaintenance(bindCtx); err != nil {
+				return err
+			}
+		}
+	} else if len(builder.irregularMaintIndexes) > 0 {
 		if err := builder.buildIrregularIndexMaintenance(bindCtx); err != nil {
 			return err
 		}
@@ -2891,9 +2920,13 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 			// ODKU cannot change the PK, so the stale entries are keyed by the same
 			// PK the final image carries at its natural position.
 			odkuPkPos, odkuPkTyp := getPkPos(tableDef, false)
-			lastNodeID = builder.appendOnDupIrregularMaintSource(
+			lastNodeID, err = builder.appendOnDupIrregularMaintSource(
 				bindCtx, lastNodeID, finalProjTag, int32(odkuPkPos), odkuPkTyp,
+				-1, -1,
 				irregularIndexes, tableDef, dmlCtx.objRefs[0])
+			if err != nil {
+				return 0, err
+			}
 			selectNode = builder.qry.Nodes[lastNodeID]
 		}
 	}

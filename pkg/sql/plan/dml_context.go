@@ -114,13 +114,6 @@ func (dmlCtx *DMLContext) ResolveUpdateTables(ctx CompilerContext, stmt *tree.Up
 		}
 	}
 
-	if len(usedTbl) > 1 {
-		return newLegacyUpdatePlannerRouteError(
-			updateRouteReasonMultiTarget,
-			moerr.NewUnsupportedDML(ctx.GetContext(), "multi-table update"),
-		)
-	}
-
 	dmlCtx.updateCol2Expr = make([]map[string]tree.Expr, len(dmlCtx.tableDefs))
 	for alias, columnMap := range usedTbl {
 		idx := dmlCtx.aliasMap[alias]
@@ -159,10 +152,21 @@ func classifyUpdateTableResolutionError(ctx CompilerContext, stmt *tree.Update, 
 			moerr.NewInvalidInput(ctx.GetContext(), "cannot insert/update/delete from external table"),
 		)
 	case foreignKeyUnsupportedDMLMsg:
+		if updateHasMultiTableTargetShape(stmt) {
+			return newUpdatePlannerRouteError(
+				updatePlannerRejected,
+				updateRouteReasonForeignKey,
+				err,
+			)
+		}
 		return newLegacyUpdatePlannerRouteError(updateRouteReasonForeignKey, err)
 	case unsupportedTableTypeDMLMsg:
 		if updateHasMultiTableTargetShape(stmt) {
-			return newLegacyUpdatePlannerRouteError(updateRouteReasonMultiTarget, err)
+			return newUpdatePlannerRouteError(
+				updatePlannerRejected,
+				updateRouteReasonTableForm,
+				err,
+			)
 		}
 		return newUpdatePlannerRouteError(
 			updatePlannerRejected,
@@ -275,34 +279,53 @@ func (dmlCtx *DMLContext) resolveSingleTable(
 ) error {
 	var tblName, dbName, alias string
 
-	if aliasTbl, ok := tbl.(*tree.AliasedTableExpr); ok {
-		alias = string(aliasTbl.As.Alias)
-		tbl = aliasTbl.Expr
-	}
-
 	for {
-		if baseTbl, ok := tbl.(*tree.ParenTableExpr); ok {
+		if aliasTbl, ok := tbl.(*tree.AliasedTableExpr); ok {
+			alias = string(aliasTbl.As.Alias)
+			tbl = aliasTbl.Expr
+		} else if baseTbl, ok := tbl.(*tree.ParenTableExpr); ok {
 			tbl = baseTbl.Expr
 		} else {
 			break
 		}
 	}
 
-	//if joinTbl, ok := tbl.(*tree.JoinTableExpr); ok {
-	//	dmlCtx.needAggFilter = true
-	//	err := setTableExprToDmlTableInfo(ctx, joinTbl.Left, dmlCtx, aliasMap, withMap)
-	//	if err != nil {
-	//		return err
-	//	}
-	//	if joinTbl.Right != nil {
-	//		return setTableExprToDmlTableInfo(ctx, joinTbl.Right, dmlCtx, aliasMap, withMap)
-	//	}
-	//	return nil
-	//}
+	if joinTbl, ok := tbl.(*tree.JoinTableExpr); ok {
+		if err := dmlCtx.resolveSingleTable(
+			ctx,
+			joinTbl.Left,
+			aliasMap,
+			withMap,
+			foreignKeyPolicy,
+		); err != nil {
+			return err
+		}
+		if joinTbl.Right != nil {
+			return dmlCtx.resolveSingleTable(
+				ctx,
+				joinTbl.Right,
+				aliasMap,
+				withMap,
+				foreignKeyPolicy,
+			)
+		}
+		return nil
+	}
 
 	if baseTbl, ok := tbl.(*tree.TableName); ok {
 		dbName = string(baseTbl.SchemaName)
 		tblName = string(baseTbl.ObjectName)
+	} else if _, ok := tbl.(*tree.Subquery); ok {
+		// Derived tables are read-only UPDATE sources. The SELECT binder owns
+		// their plan; DML target discovery must not route the whole statement to
+		// the legacy planner merely because a joined source is not writable.
+		return nil
+	} else if _, ok := tbl.(*tree.StatementSource); ok {
+		return nil
+	} else if _, ok := tbl.(*tree.ParenSelect); ok {
+		return nil
+	} else if _, ok := tbl.(*tree.Select); ok {
+		return nil
 	} else {
 		return moerr.NewUnsupportedDML(ctx.GetContext(), "unsupported table type")
 	}

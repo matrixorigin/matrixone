@@ -20,8 +20,10 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/hashtable"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
@@ -62,6 +64,390 @@ func TestUpdateTableWithUniqueKey(t *testing.T) {
 
 	proc, case1 := buildUpdateTestCase(t, hasUniqueKey, hasSecondaryKey, false)
 	runTestCases(t, proc, []*testCase{case1})
+}
+
+func TestFilterTargetRowsKeepsIndependentWholeRows(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	mp := proc.Mp()
+
+	bat := batch.NewWithSize(5)
+	bat.Vecs[0] = testutil.MakeRowIdVector(
+		[]types.Rowid{
+			types.BuildTestRowid(1, 1),
+			types.BuildTestRowid(1, 1),
+			types.BuildTestRowid(1, 2),
+			types.BuildTestRowid(1, 3),
+		},
+		[]uint64{3},
+		mp,
+	)
+	bat.Vecs[1] = testutil.NewInt64Vector(
+		4,
+		types.T_int64.ToType(),
+		mp,
+		false,
+		nil,
+		[]int64{1, 2, 1, 1},
+	)
+	bat.Vecs[2] = testutil.MakeRowIdVector(
+		[]types.Rowid{
+			types.BuildTestRowid(2, 1),
+			types.BuildTestRowid(2, 2),
+			types.BuildTestRowid(2, 2),
+			types.BuildTestRowid(2, 3),
+		},
+		nil,
+		mp,
+	)
+	bat.Vecs[3] = testutil.NewInt64Vector(
+		4,
+		types.T_int64.ToType(),
+		mp,
+		false,
+		nil,
+		[]int64{1, 1, 2, 1},
+	)
+	bat.Vecs[4] = testutil.NewInt32Vector(
+		4,
+		types.T_int32.ToType(),
+		mp,
+		false,
+		nil,
+		[]int32{10, 20, 30, 40},
+	)
+	bat.SetRowCount(4)
+	defer bat.Clean(mp)
+
+	first, clean, duplicateRows, err := filterTargetRows(proc, &MultiUpdateCtx{
+		TableDef:           &plan.TableDef{TblId: 1},
+		DedupByTargetRowID: true,
+		DeleteCols:         []int{0, 4, 1},
+	}, bat, nil)
+	require.NoError(t, err)
+	require.True(t, clean)
+	require.Zero(t, duplicateRows)
+	defer first.Clean(mp)
+	require.Equal(t, []int32{10, 30}, vector.MustFixedColWithTypeCheck[int32](first.Vecs[4]))
+
+	second, clean, duplicateRows, err := filterTargetRows(proc, &MultiUpdateCtx{
+		TableDef:           &plan.TableDef{TblId: 2},
+		DedupByTargetRowID: true,
+		DeleteCols:         []int{2, 4, 3},
+	}, bat, nil)
+	require.NoError(t, err)
+	require.True(t, clean)
+	require.Zero(t, duplicateRows)
+	defer second.Clean(mp)
+	require.Equal(t, []int32{10, 20, 40}, vector.MustFixedColWithTypeCheck[int32](second.Vecs[4]))
+}
+
+func TestFilterTargetRowsDedupsAliasesAcrossBatchesWithAccountedHashMap(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	mp := proc.Mp()
+	rowID1 := types.BuildTestRowid(1, 1)
+	rowID2 := types.BuildTestRowid(1, 2)
+	makeBatch := func() *batch.Batch {
+		bat := batch.NewWithSize(3)
+		bat.Vecs[0] = testutil.MakeRowIdVector([]types.Rowid{rowID1, rowID2}, nil, mp)
+		bat.Vecs[1] = testutil.NewInt64Vector(
+			2,
+			types.T_int64.ToType(),
+			mp,
+			false,
+			nil,
+			[]int64{1, 1},
+		)
+		bat.Vecs[2] = testutil.NewInt32Vector(
+			2,
+			types.T_int32.ToType(),
+			mp,
+			false,
+			nil,
+			[]int32{10, 20},
+		)
+		bat.SetRowCount(2)
+		return bat
+	}
+	updateCtx := &MultiUpdateCtx{
+		TableDef:           &plan.TableDef{TblId: 42},
+		DedupByTargetRowID: true,
+		DeleteCols:         []int{0, 2, 1},
+	}
+	registry, err := mpool.NewAllocationAccountRegistry(1, 16)
+	require.NoError(t, err)
+	account, err := registry.Open(1 << 20)
+	require.NoError(t, err)
+	selection, err := hashtable.NewAllocationAccountSelection(
+		account,
+		multiUpdateAllocationOwner,
+		multiUpdateAllocationSiteHashCell,
+		multiUpdateAllocationSiteHashDescriptor,
+	)
+	require.NoError(t, err)
+	iteratorAllocation, err := hashmap.NewIteratorAllocation(
+		account,
+		multiUpdateAllocationOwner,
+		multiUpdateAllocationSiteHashIterator,
+	)
+	require.NoError(t, err)
+	seen, err := hashmap.NewStrHashMapWithAllocations(
+		false,
+		mp,
+		selection,
+		iteratorAllocation,
+	)
+	require.NoError(t, err)
+	defer seen.Free()
+
+	firstInput := makeBatch()
+	defer firstInput.Clean(mp)
+	first, clean, duplicateRows, err := filterTargetRows(proc, updateCtx, firstInput, seen)
+	require.NoError(t, err)
+	require.True(t, clean)
+	defer first.Clean(mp)
+	require.Equal(t, 2, first.RowCount())
+	require.Zero(t, duplicateRows)
+
+	secondInput := makeBatch()
+	defer secondInput.Clean(mp)
+	second, clean, duplicateRows, err := filterTargetRows(proc, updateCtx, secondInput, seen)
+	require.NoError(t, err)
+	require.True(t, clean)
+	defer second.Clean(mp)
+	require.Zero(t, second.RowCount())
+	require.Equal(t, uint64(2), duplicateRows)
+	require.Positive(t, seen.Size())
+}
+
+func TestFilterTargetRowsSkipsInactivePhysicalTargetBranch(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	mp := proc.Mp()
+
+	bat := batch.NewWithSize(4)
+	bat.Vecs[0] = testutil.MakeRowIdVector(
+		[]types.Rowid{
+			types.BuildTestRowid(1, 1),
+			types.BuildTestRowid(1, 2),
+			types.BuildTestRowid(1, 3),
+		},
+		nil,
+		mp,
+	)
+	bat.Vecs[1] = testutil.NewInt64Vector(
+		3,
+		types.T_int64.ToType(),
+		mp,
+		false,
+		nil,
+		[]int64{1, 1, 2},
+	)
+	bat.Vecs[2] = testutil.NewBoolVector(
+		3,
+		types.T_bool.ToType(),
+		mp,
+		false,
+		nil,
+		[]bool{false, true, true},
+	)
+	bat.Vecs[3] = testutil.NewInt32Vector(
+		3,
+		types.T_int32.ToType(),
+		mp,
+		false,
+		nil,
+		[]int32{10, 20, 30},
+	)
+	bat.SetRowCount(3)
+	defer bat.Clean(mp)
+
+	filtered, clean, duplicateRows, err := filterTargetRows(proc, &MultiUpdateCtx{
+		TableDef:           &plan.TableDef{TblId: 42},
+		DedupByTargetRowID: true,
+		DeleteCols:         []int{0, 3, 1, 2},
+	}, bat, nil)
+	require.NoError(t, err)
+	require.True(t, clean)
+	require.Zero(t, duplicateRows)
+	defer filtered.Clean(mp)
+	require.Equal(t, []int32{20}, vector.MustFixedColWithTypeCheck[int32](filtered.Vecs[3]))
+}
+
+func TestFilterTargetRowsReadsConstantActiveSelectorLogically(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	mp := proc.Mp()
+
+	bat := batch.NewWithSize(4)
+	bat.Vecs[0] = testutil.MakeRowIdVector(
+		[]types.Rowid{
+			types.BuildTestRowid(1, 1),
+			types.BuildTestRowid(1, 2),
+			types.BuildTestRowid(1, 3),
+		},
+		nil,
+		mp,
+	)
+	bat.Vecs[1] = testutil.NewInt64Vector(
+		3,
+		types.T_int64.ToType(),
+		mp,
+		false,
+		nil,
+		[]int64{1, 1, 1},
+	)
+	active, err := vector.NewConstFixed(types.T_bool.ToType(), true, 3, mp)
+	require.NoError(t, err)
+	bat.Vecs[2] = active
+	bat.Vecs[3] = testutil.NewInt32Vector(
+		3,
+		types.T_int32.ToType(),
+		mp,
+		false,
+		nil,
+		[]int32{10, 20, 30},
+	)
+	bat.SetRowCount(3)
+	defer bat.Clean(mp)
+
+	filtered, clean, duplicateRows, err := filterTargetRows(proc, &MultiUpdateCtx{
+		TableDef:           &plan.TableDef{TblId: 42},
+		DedupByTargetRowID: true,
+		DeleteCols:         []int{0, 3, 1, 2},
+	}, bat, nil)
+	require.NoError(t, err)
+	require.True(t, clean)
+	require.Zero(t, duplicateRows)
+	defer filtered.Clean(mp)
+	require.Equal(t, []int32{10, 20, 30}, vector.MustFixedColWithTypeCheck[int32](filtered.Vecs[3]))
+}
+
+type testSeenRowsThrottler struct {
+	available int64
+	acquired  int64
+	released  int64
+}
+
+func (m *testSeenRowsThrottler) Refresh()    {}
+func (m *testSeenRowsThrottler) PrintUsage() {}
+func (m *testSeenRowsThrottler) Available() int64 {
+	return m.available
+}
+func (m *testSeenRowsThrottler) Acquire(size int64) (int64, bool) {
+	if size > m.available {
+		return m.available, false
+	}
+	m.available -= size
+	m.acquired += size
+	return m.available, true
+}
+func (m *testSeenRowsThrottler) Release(size int64) int64 {
+	m.available += size
+	m.released += size
+	return m.available
+}
+
+func TestSeenTargetRowsGrowthUsesS3MemoryAdmission(t *testing.T) {
+	throttler := &testSeenRowsThrottler{available: 128}
+	update := &MultiUpdate{}
+	update.ctr.seenRowsRSC = throttler
+
+	require.NoError(t, update.admitSeenTargetRowsGrowth(96))
+	require.Equal(t, int64(96), update.ctr.seenRowsGrant)
+	require.Equal(t, int64(96), throttler.acquired)
+	require.Error(t, update.admitSeenTargetRowsGrowth(64))
+	require.Equal(t, int64(96), update.ctr.seenRowsGrant)
+
+	update.freeSeenTargetRows()
+	require.Equal(t, int64(96), throttler.released)
+	require.Zero(t, update.ctr.seenRowsGrant)
+	require.Nil(t, update.ctr.seenRowsRSC)
+}
+
+func TestRetainedS3InputColsCountsEveryContextCopy(t *testing.T) {
+	updateCtxs := []*MultiUpdateCtx{
+		{
+			InsertCols: []int{0, 1, 2},
+			DeleteCols: []int{3, 4, 9},
+		},
+		{
+			InsertCols: []int{0, 5},
+			DeleteCols: []int{6, 7},
+		},
+		{
+			InsertCols: []int{8, 2},
+			DeleteCols: []int{10, 11},
+		},
+	}
+
+	require.Equal(
+		t,
+		[]int{0, 1, 2, 3, 4, 0, 5, 6, 7, 8, 2, 10, 11},
+		retainedS3InputCols(updateCtxs, actionUpdate),
+	)
+	require.Equal(
+		t,
+		[]int{0, 1, 2, 0, 5, 8, 2},
+		retainedS3InputCols(updateCtxs, actionInsert),
+	)
+	require.Equal(
+		t,
+		[]int{3, 4, 6, 7, 10, 11},
+		retainedS3InputCols(updateCtxs, actionDelete),
+	)
+}
+
+func TestS3WriterActionDoesNotRequireMainTableContext(t *testing.T) {
+	tests := []struct {
+		name       string
+		updateCtxs []*MultiUpdateCtx
+		want       actionType
+	}{
+		{
+			name: "index backfill insert",
+			updateCtxs: []*MultiUpdateCtx{
+				{InsertCols: []int{0, 1}},
+				{InsertCols: []int{2, 3}},
+			},
+			want: actionInsert,
+		},
+		{
+			name:       "delete only",
+			updateCtxs: []*MultiUpdateCtx{{DeleteCols: []int{0, 1}}},
+			want:       actionDelete,
+		},
+		{
+			name: "mixed contexts",
+			updateCtxs: []*MultiUpdateCtx{
+				{InsertCols: []int{0, 1}},
+				{DeleteCols: []int{2, 3}},
+			},
+			want: actionUpdate,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			require.Equal(t, test.want, s3WriterAction(test.updateCtxs))
+		})
+	}
+}
+
+func TestNewS3WriterAllowsIndexOnlyContext(t *testing.T) {
+	_, _, proc := prepareTestCtx(t, false)
+	objRef, tableDef := getTestSecondaryIndexTable("index_backfill")
+	updateCtx := &MultiUpdateCtx{
+		ObjRef:     objRef,
+		TableDef:   tableDef,
+		InsertCols: []int{0, 1},
+	}
+	update := &MultiUpdate{MultiUpdateCtx: []*MultiUpdateCtx{updateCtx}}
+	update.resetMultiUpdateCtxs()
+
+	writer, err := newS3Writer(proc.GetService(), update)
+	require.NoError(t, err)
+	require.Equal(t, actionInsert, writer.action)
+	require.Equal(t, InsertWriteS3Threshold, writer.flushThreshold)
+	require.Equal(t, []int{0, 1}, writer.checkSizeCols)
+	require.NoError(t, writer.free(proc))
 }
 
 // update table s3
