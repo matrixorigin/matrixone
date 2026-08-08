@@ -2003,6 +2003,7 @@ func (builder *QueryBuilder) replaceNonEqualCondition(idxDef *IndexDef, filter *
 		}
 	}
 
+	indexedPartType := fn.Args[0].Typ
 	fn.Args[0].GetCol().RelPos = idxTag
 	fn.Args[0].GetCol().ColPos = 0
 	fn.Args[0].Typ = idxTableDef.Cols[0].Typ
@@ -2010,6 +2011,8 @@ func (builder *QueryBuilder) replaceNonEqualCondition(idxDef *IndexDef, filter *
 		serialFunc := indexTableLookupSerialFunc(idxDef)
 		switch fn.Func.ObjName {
 		case "between":
+			fn.Args[1] = builder.normalizeDecimalIndexRangeBound(fn.Args[1], indexedPartType)
+			fn.Args[2] = builder.normalizeDecimalIndexRangeBound(fn.Args[2], indexedPartType)
 			fn.Args[1], _ = BindFuncExprImplByPlanExpr(builder.GetContext(), serialFunc, []*plan.Expr{fn.Args[1]})
 			fn.Args[2], _ = BindFuncExprImplByPlanExpr(builder.GetContext(), serialFunc, []*plan.Expr{fn.Args[2]})
 			expr, _ = BindFuncExprImplByPlanExpr(builder.GetContext(), "prefix_between", fn.Args)
@@ -2017,9 +2020,12 @@ func (builder *QueryBuilder) replaceNonEqualCondition(idxDef *IndexDef, filter *
 			fn.Args[1], _ = BindFuncExprImplByPlanExpr(builder.GetContext(), serialFunc, []*plan.Expr{fn.Args[1]})
 			expr, _ = BindFuncExprImplByPlanExpr(builder.GetContext(), "prefix_in", fn.Args)
 		case ">", ">=", "<", "<=":
+			fn.Args[1] = builder.normalizeDecimalIndexRangeBound(fn.Args[1], indexedPartType)
 			fn.Args[1], _ = BindFuncExprImplByPlanExpr(builder.GetContext(), serialFunc, []*plan.Expr{fn.Args[1]})
 			expr, _ = BindFuncExprImplByPlanExpr(builder.GetContext(), fn.Func.ObjName, fn.Args)
 		case "in_range":
+			fn.Args[1] = builder.normalizeDecimalIndexRangeBound(fn.Args[1], indexedPartType)
+			fn.Args[2] = builder.normalizeDecimalIndexRangeBound(fn.Args[2], indexedPartType)
 			fn.Args[1], _ = BindFuncExprImplByPlanExpr(builder.GetContext(), serialFunc, []*plan.Expr{fn.Args[1]})
 			fn.Args[2], _ = BindFuncExprImplByPlanExpr(builder.GetContext(), serialFunc, []*plan.Expr{fn.Args[2]})
 			if comparesByteStringColumn {
@@ -2291,12 +2297,16 @@ func (builder *QueryBuilder) tryIndexOnlyScan(idxDef *IndexDef, node *plan.Node,
 		}
 	}
 
-	// For multi-part indexes, single <= or > with raw byte comparison is incorrect.
-	// <= under-fetches (misses rows at boundary), > over-fetches.
-	// Only allow these when paired (handled by getIndexForNonEquiCond).
-	// This check recurses into OR arms to catch `col <= 5 OR col > 9`.
-	if !leadingEqualCond && numParts > 1 && len(leadingPos) == 1 {
+	if !leadingEqualCond && numParts > 1 {
 		fn := node.FilterList[leadingPos[0]].GetF()
+		leadingColIdx := node.TableDef.Name2ColIndex[idxDef.Parts[0]]
+		if !canSerializeDecimalIndexRangeBounds(fn, node.TableDef.Cols[leadingColIdx].Typ) {
+			return -1
+		}
+		// For multi-part indexes, single <= or > with raw byte comparison is incorrect.
+		// <= under-fetches (misses rows at boundary), > over-fetches.
+		// Only allow these when paired (handled by getIndexForNonEquiCond).
+		// This check recurses into OR arms to catch `col <= 5 OR col > 9`.
 		if fn != nil && hasUnsafeRangeOp(fn) {
 			return -1
 		}
@@ -2540,6 +2550,9 @@ func (builder *QueryBuilder) getIndexForNonEquiCond(indexes []*IndexDef, node *p
 		if _, ok := colPos2Idx[col.ColPos]; !ok {
 			continue
 		}
+		if !canSerializeDecimalIndexRangeBounds(fn, node.TableDef.Cols[col.ColPos].Typ) {
+			continue
+		}
 		if isLower {
 			colLowerBounds[col.ColPos] = int32(i)
 		} else {
@@ -2554,6 +2567,9 @@ func (builder *QueryBuilder) getIndexForNonEquiCond(indexes []*IndexDef, node *p
 		if filterType == NonEqualIndexCondition {
 			idxPos, ok := colPos2Idx[col.ColPos]
 			if !ok {
+				continue
+			}
+			if !canSerializeDecimalIndexRangeBounds(fn, node.TableDef.Cols[col.ColPos].Typ) {
 				continue
 			}
 			if rangeCol, _ := classifyRangeBound(fn); rangeCol != nil {
@@ -2661,6 +2677,77 @@ func rangeFilterConstValue(fn *plan.Function) *plan.Expr {
 	return nil
 }
 
+func rangeFilterColumnType(fn *plan.Function) (plan.Type, bool) {
+	if len(fn.Args) < 2 {
+		return plan.Type{}, false
+	}
+	if fn.Args[0].GetCol() != nil && isRuntimeConstExpr(fn.Args[1]) {
+		return fn.Args[0].Typ, true
+	}
+	if isRuntimeConstExpr(fn.Args[0]) && fn.Args[1].GetCol() != nil {
+		return fn.Args[1].Typ, true
+	}
+	return plan.Type{}, false
+}
+
+func canSerializeDecimalIndexRangeBound(bound *plan.Expr, indexedPartType plan.Type) bool {
+	indexedType := makeTypeByPlan2Type(indexedPartType)
+	if !indexedType.Oid.IsDecimal() {
+		return true
+	}
+	if bound == nil {
+		return false
+	}
+	boundType := makeTypeByPlan2Expr(bound)
+	if !boundType.Oid.IsDecimal() {
+		return false
+	}
+	if boundType.Oid == indexedType.Oid && boundType.Scale == indexedType.Scale {
+		return true
+	}
+	return checkNoNeedCast(boundType, indexedType, bound)
+}
+
+func canSerializeDecimalIndexRangeBounds(fn *plan.Function, indexedPartType plan.Type) bool {
+	if fn == nil || fn.Func == nil {
+		return false
+	}
+	if fn.Func.ObjName == "or" {
+		for _, arg := range fn.Args {
+			if !canSerializeDecimalIndexRangeBounds(arg.GetF(), indexedPartType) {
+				return false
+			}
+		}
+		return true
+	}
+	if !types.T(indexedPartType.Id).IsDecimal() {
+		return true
+	}
+	switch fn.Func.ObjName {
+	case "between", "in_range":
+		return len(fn.Args) >= 3 &&
+			canSerializeDecimalIndexRangeBound(fn.Args[1], indexedPartType) &&
+			canSerializeDecimalIndexRangeBound(fn.Args[2], indexedPartType)
+	case ">", ">=", "<", "<=":
+		return canSerializeDecimalIndexRangeBound(rangeFilterConstValue(fn), indexedPartType)
+	default:
+		return true
+	}
+}
+
+func (builder *QueryBuilder) normalizeDecimalIndexRangeBound(bound *plan.Expr, indexedPartType plan.Type) *plan.Expr {
+	if bound == nil || !types.T(indexedPartType.Id).IsDecimal() ||
+		(bound.Typ.Id == indexedPartType.Id && bound.Typ.Scale == indexedPartType.Scale) ||
+		!canSerializeDecimalIndexRangeBound(bound, indexedPartType) {
+		return bound
+	}
+	normalized, err := forceCastExpr(builder.GetContext(), bound, indexedPartType)
+	if err != nil {
+		return bound
+	}
+	return normalized
+}
+
 func (builder *QueryBuilder) replaceRangePairCondition(idxDef *IndexDef, filterList []*plan.Expr, filterIdx []int32, idxTag int32, idxTableDef *plan.TableDef) *plan.Expr {
 	numParts := len(idxDef.Parts)
 	lowerFn := filterList[filterIdx[0]].GetF()
@@ -2676,6 +2763,12 @@ func (builder *QueryBuilder) replaceRangePairCondition(idxDef *IndexDef, filterL
 	compositeFilterSel := filterList[filterIdx[0]].Selectivity * filterList[filterIdx[1]].Selectivity
 
 	if numParts > 1 {
+		if indexedPartType, ok := rangeFilterColumnType(lowerFn); ok {
+			lowerVal = builder.normalizeDecimalIndexRangeBound(lowerVal, indexedPartType)
+		}
+		if indexedPartType, ok := rangeFilterColumnType(upperFn); ok {
+			upperVal = builder.normalizeDecimalIndexRangeBound(upperVal, indexedPartType)
+		}
 		serialFunc := indexTableLookupSerialFunc(idxDef)
 		lowerVal, _ = BindFuncExprImplByPlanExpr(builder.GetContext(), serialFunc, []*plan.Expr{lowerVal})
 		upperVal, _ = BindFuncExprImplByPlanExpr(builder.GetContext(), serialFunc, []*plan.Expr{upperVal})

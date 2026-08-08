@@ -5190,6 +5190,111 @@ func TestReplaceRangePairConditionWidensByteStringOpenLowerBound(t *testing.T) {
 	require.Equal(t, uint32(1), fixedWidthLookup.GetF().Args[3].GetLit().GetU8Val())
 }
 
+func TestIndexRangeSerializationNormalizesDecimalBounds(t *testing.T) {
+	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true), false, true)
+	bindTag := builder.genNewBindTag()
+	idxDef := &planpb.IndexDef{
+		Parts:  []string{"price", catalog.CreateAlias(catalog.CPrimaryKeyColName)},
+		Unique: false,
+	}
+	idxTableDef := makeTestIndexTableDef()
+	columnType := planpb.Type{Id: int32(types.T_decimal64), Width: 10, Scale: 2}
+	higherScaleType := planpb.Type{Id: int32(types.T_decimal64), Width: 10, Scale: 6}
+
+	t.Run("closed pair", func(t *testing.T) {
+		filters := []*planpb.Expr{
+			makeDecimalRangeFilterExpr(t, bindTag, 1, ">=", "10.250000", columnType, higherScaleType),
+			makeDecimalRangeFilterExpr(t, bindTag, 1, "<=", "15.750000", columnType, higherScaleType),
+		}
+
+		expr := builder.replaceRangePairCondition(idxDef, filters, []int32{0, 1}, 42, idxTableDef)
+
+		require.Equal(t, "prefix_between", expr.GetF().Func.ObjName)
+		requireSerializedRangeBoundType(t, expr.GetF().Args[1], columnType, true)
+		requireSerializedRangeBoundType(t, expr.GetF().Args[2], columnType, true)
+	})
+
+	t.Run("open pair", func(t *testing.T) {
+		filters := []*planpb.Expr{
+			makeDecimalRangeFilterExpr(t, bindTag, 1, ">", "10.250000", columnType, higherScaleType),
+			makeDecimalRangeFilterExpr(t, bindTag, 1, "<", "15.750000", columnType, higherScaleType),
+		}
+
+		expr := builder.replaceRangePairCondition(idxDef, filters, []int32{0, 1}, 42, idxTableDef)
+
+		require.Equal(t, "prefix_in_range", expr.GetF().Func.ObjName)
+		requireSerializedRangeBoundType(t, expr.GetF().Args[1], columnType, true)
+		requireSerializedRangeBoundType(t, expr.GetF().Args[2], columnType, true)
+	})
+
+	for _, tc := range []struct {
+		name string
+		op   string
+	}{
+		{name: "lower only", op: ">="},
+		{name: "upper only", op: "<"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			filter := makeDecimalRangeFilterExpr(t, bindTag, 1, tc.op, "10.250000", columnType, higherScaleType)
+
+			expr := builder.replaceNonEqualCondition(idxDef, filter, 42, idxTableDef)
+
+			require.Equal(t, tc.op, expr.GetF().Func.ObjName)
+			requireSerializedRangeBoundType(t, expr.GetF().Args[1], columnType, true)
+		})
+	}
+
+	t.Run("equal scale decimal remains direct", func(t *testing.T) {
+		filters := []*planpb.Expr{
+			makeDecimalRangeFilterExpr(t, bindTag, 1, ">=", "10.25", columnType, columnType),
+			makeDecimalRangeFilterExpr(t, bindTag, 1, "<=", "15.75", columnType, columnType),
+		}
+
+		expr := builder.replaceRangePairCondition(idxDef, filters, []int32{0, 1}, 42, idxTableDef)
+
+		requireSerializedRangeBoundType(t, expr.GetF().Args[1], columnType, false)
+		requireSerializedRangeBoundType(t, expr.GetF().Args[2], columnType, false)
+	})
+
+	t.Run("non decimal remains direct", func(t *testing.T) {
+		intType := planpb.Type{Id: int32(types.T_int64)}
+		filters := []*planpb.Expr{
+			makeTypedInt64RangeFilterExpr(bindTag, 1, ">=", 10, intType),
+			makeTypedInt64RangeFilterExpr(bindTag, 1, "<=", 15, intType),
+		}
+
+		expr := builder.replaceRangePairCondition(idxDef, filters, []int32{0, 1}, 42, idxTableDef)
+
+		requireSerializedRangeBoundType(t, expr.GetF().Args[1], intType, false)
+		requireSerializedRangeBoundType(t, expr.GetF().Args[2], intType, false)
+	})
+
+	t.Run("non representable decimal falls back from index", func(t *testing.T) {
+		filters := []*planpb.Expr{
+			makeDecimalRangeFilterExpr(t, bindTag, 1, ">", "10.255000", columnType, higherScaleType),
+			makeDecimalRangeFilterExpr(t, bindTag, 1, "<=", "15.755000", columnType, higherScaleType),
+		}
+		node := &planpb.Node{
+			TableDef: &planpb.TableDef{
+				Name2ColIndex: map[string]int32{
+					catalog.FakePrimaryKeyColName: 0,
+					"price":                       1,
+				},
+				Cols: []*planpb.ColDef{
+					{Name: catalog.FakePrimaryKeyColName, Typ: planpb.Type{Id: int32(types.T_uint64)}},
+					{Name: "price", Typ: columnType},
+				},
+			},
+			FilterList: filters,
+		}
+
+		idxPos, filterIdx := builder.getIndexForNonEquiCond([]*planpb.IndexDef{idxDef}, node)
+
+		require.Equal(t, -1, idxPos)
+		require.Nil(t, filterIdx)
+	})
+}
+
 func TestGetIndexForNonEquiCond_PrefersFirstPairedRangeByFilterOrder(t *testing.T) {
 	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true), false, true)
 	bindTag := builder.genNewBindTag()
@@ -5785,6 +5890,69 @@ func makeRangeFilterExpr(relPos, colPos int32, op string, val int64) *planpb.Exp
 				},
 			},
 		},
+	}
+}
+
+func makeDecimalRangeFilterExpr(
+	t *testing.T,
+	relPos, colPos int32,
+	op, val string,
+	columnType, boundType planpb.Type,
+) *planpb.Expr {
+	t.Helper()
+	decimal, err := types.ParseDecimal64(val, boundType.Width, boundType.Scale)
+	require.NoError(t, err)
+	return &planpb.Expr{
+		Typ: planpb.Type{Id: int32(types.T_bool)},
+		Expr: &planpb.Expr_F{
+			F: &planpb.Function{
+				Func: &planpb.ObjectRef{ObjName: op},
+				Args: []*planpb.Expr{
+					{
+						Typ: columnType,
+						Expr: &planpb.Expr_Col{
+							Col: &planpb.ColRef{RelPos: relPos, ColPos: colPos},
+						},
+					},
+					{
+						Typ: boundType,
+						Expr: &planpb.Expr_Lit{
+							Lit: &planpb.Literal{
+								Value: &planpb.Literal_Decimal64Val{
+									Decimal64Val: &planpb.Decimal64{A: int64(decimal)},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+}
+
+func makeTypedInt64RangeFilterExpr(relPos, colPos int32, op string, val int64, typ planpb.Type) *planpb.Expr {
+	expr := makeRangeFilterExpr(relPos, colPos, op, val)
+	expr.Typ = planpb.Type{Id: int32(types.T_bool)}
+	expr.GetF().Args[0].Typ = typ
+	expr.GetF().Args[1].Typ = typ
+	return expr
+}
+
+func requireSerializedRangeBoundType(t *testing.T, expr *planpb.Expr, want planpb.Type, wantCast bool) {
+	t.Helper()
+	serial := expr.GetF()
+	require.NotNil(t, serial)
+	require.Equal(t, "serial_full", serial.Func.ObjName)
+	require.Len(t, serial.Args, 1)
+	bound := serial.Args[0]
+	require.Equal(t, want.Id, bound.Typ.Id)
+	require.Equal(t, want.Width, bound.Typ.Width)
+	require.Equal(t, want.Scale, bound.Typ.Scale)
+	if wantCast {
+		require.NotNil(t, bound.GetF())
+		require.Equal(t, "cast", bound.GetF().Func.ObjName)
+	} else {
+		require.Nil(t, bound.GetF())
 	}
 }
 
