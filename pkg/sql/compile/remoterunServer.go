@@ -143,6 +143,7 @@ func CnServerMessageHandler(
 			return err
 		}
 		receiver.streamLifecycle = lifecycle
+		receiver.abortBatchFlowForPendingStop()
 		receiver.acceptedTeardownMode = pipeline.StreamTeardownMode_FinishAck
 	}
 
@@ -211,6 +212,23 @@ func (receiver *messageReceiverOnServer) waitUntilDisconnectedOrCancelled() {
 	select {
 	case <-receiver.connectionCtx.Done():
 	case <-receiver.messageCtx.Done():
+	}
+}
+
+// abortBatchFlowForPendingStop closes the registration race with StopSending.
+// StopSending first publishes a colexec cancellation tombstone and then looks
+// up the lifecycle; registration publishes the lifecycle and then checks that
+// tombstone. Whichever message wins, one side observes the other side's state.
+func (receiver *messageReceiverOnServer) abortBatchFlowForPendingStop() {
+	if receiver.streamLifecycle == nil || receiver.colexecServer == nil {
+		return
+	}
+	if receiver.colexecServer.HasPendingPipelineCancellation(
+		receiver.clientSession, receiver.messageId,
+	) {
+		receiver.streamLifecycle.batchFlow.abort(
+			moerr.NewQueryInterrupted(receiver.messageCtx),
+		)
 	}
 }
 
@@ -515,6 +533,11 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) (err error) {
 
 	case pipeline.Method_StopSending:
 		receiver.colexecServer.CancelPipelineSending(receiver.clientSession, receiver.messageId)
+		abortPipelineBatchFlow(
+			receiver.clientSession,
+			receiver.messageId,
+			moerr.NewQueryInterrupted(receiver.messageCtx),
+		)
 
 	default:
 		panic(fmt.Sprintf("unknown pipeline message type %d.", receiver.messageTyp))

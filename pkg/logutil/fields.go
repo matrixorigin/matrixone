@@ -16,7 +16,6 @@ package logutil
 
 import (
 	"errors"
-	"fmt"
 	"io"
 	"strings"
 
@@ -53,9 +52,14 @@ func StatementIdField(val string) zap.Field { return zap.String("statement_id", 
 func NoReportFiled() zap.Field { return zap.Bool(MOInternalFiledKeyNoopReport, true) }
 func Discardable() zap.Field   { return zap.Bool(MOInternalFiledKeyDiscardable, true) }
 
+// ErrorField returns a structured field for err. Errors that represent normal
+// control flow and must not be logged are omitted. The helper is safe to call
+// from error-handling and cleanup paths: logging never introduces a panic.
 func ErrorField(err error) zap.Field {
 	if isDisallowedError(err) {
-		panic(fmt.Sprintf("this error should not be logged: %v", err))
+		// Logging must not turn a recoverable control-flow error into a panic.
+		// Keep disallowed errors out of the encoded log entry instead.
+		return zap.Skip()
 	}
 	return zap.Error(err)
 }
