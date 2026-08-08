@@ -1813,6 +1813,10 @@ func (bat *Batch) Window(start, end int) (*Batch, error) {
 	for i, vec := range bat.Vecs {
 		b.Vecs[i], err = vec.Window(start, end)
 		if err != nil {
+			// Plain vector windows borrow data/area and keep any provenance
+			// sidecar's physical MPool owner internally, so nil is the correct
+			// cleanup pool for the successfully-created prefix.
+			b.Clean(nil)
 			return nil, err
 		}
 		b.Vecs[i].SetOffHeap(bat.offHeap)

@@ -97,6 +97,68 @@ func TestBatchMarshalAndUnmarshal(t *testing.T) {
 	}
 }
 
+func TestBatchWindowCleansPreparedParamMetadataAfterPartialFailure(t *testing.T) {
+	const (
+		rows    = 128
+		poolCap = int64(1 << 20)
+	)
+	dataMP := mpool.MustNew(t.Name() + "-data")
+	firstOwner, err := mpool.NewMPool(t.Name()+"-first", 0, mpool.NoLock)
+	require.NoError(t, err)
+	secondOwner, err := mpool.NewMPool(t.Name()+"-second", poolCap, mpool.NoLock)
+	require.NoError(t, err)
+	defer mpool.DeleteMPool(dataMP)
+	defer mpool.DeleteMPool(firstOwner)
+	defer mpool.DeleteMPool(secondOwner)
+
+	source := NewWithSize(2)
+	source.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+	source.Vecs[1] = vector.NewVec(types.T_int64.ToType())
+	kinds := make([]vector.PrepareParamKind, rows)
+	for row := range kinds {
+		if row%2 == 0 {
+			kinds[row] = vector.PrepareParamInteger
+		} else {
+			kinds[row] = vector.PrepareParamFloat
+		}
+	}
+	for _, vec := range source.Vecs {
+		require.NoError(t, vector.AppendFixedList(vec, make([]int64, rows), nil, dataMP))
+	}
+	require.NoError(t, source.Vecs[0].SetPrepareParamKindsWithMP(kinds, firstOwner))
+	require.NoError(t, source.Vecs[1].SetPrepareParamKindsWithMP(kinds, secondOwner))
+	source.SetRowCount(rows)
+	firstBaseline := firstOwner.CurrNB()
+	secondBaseline := secondOwner.CurrNB()
+	fill, err := secondOwner.Alloc(int(poolCap-secondOwner.CurrNB()), true)
+	require.NoError(t, err)
+	defer func() {
+		secondOwner.Free(fill)
+		source.Clean(dataMP)
+		require.Zero(t, dataMP.CurrNB())
+		require.Zero(t, firstOwner.CurrNB())
+		require.Zero(t, secondOwner.CurrNB())
+	}()
+
+	var window *Batch
+	require.NotPanics(t, func() {
+		window, err = source.Window(0, rows)
+	})
+	require.Nil(t, window)
+	require.Error(t, err)
+	require.Equal(t, firstBaseline, firstOwner.CurrNB(),
+		"the successfully-created prefix window must release its sidecar")
+
+	secondOwner.Free(fill)
+	fill = nil
+	window, err = source.Window(0, rows)
+	require.NoError(t, err)
+	require.NotNil(t, window)
+	window.Clean(nil)
+	require.Equal(t, firstBaseline, firstOwner.CurrNB())
+	require.Equal(t, secondBaseline, secondOwner.CurrNB())
+}
+
 type shortBatchMarshalWriter struct{}
 
 func (shortBatchMarshalWriter) Write(value []byte) (int, error) {

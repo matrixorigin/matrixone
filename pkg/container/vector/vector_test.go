@@ -25,6 +25,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/stretchr/testify/require"
@@ -4587,6 +4588,278 @@ func TestAppendPrepareParamKindsContinueAfterDivergence(t *testing.T) {
 		require.Equal(t, kind, allDestination.GetPrepareParamKindAt(row))
 	}
 	require.Len(t, allDestination.GetPrepareParamKinds(), allDestination.Length())
+}
+
+func TestRawAppendOrdinaryRowsDivergeFromScalarPrepareParamKind(t *testing.T) {
+	jsonValue, err := bytejson.ParseFromString(`{"value":"ordinary"}`)
+	require.NoError(t, err)
+	tests := []struct {
+		name       string
+		typ        types.Type
+		seed       func(*Vector, *mpool.MPool) error
+		appendRows func(*Vector, *mpool.MPool) error
+		wantNull   map[int]bool
+	}{
+		{
+			name: "fixed one",
+			typ:  types.T_int64.ToType(),
+			seed: func(vec *Vector, mp *mpool.MPool) error {
+				return AppendFixed(vec, int64(1), false, mp)
+			},
+			appendRows: func(vec *Vector, mp *mpool.MPool) error {
+				return AppendFixed(vec, int64(2), false, mp)
+			},
+		},
+		{
+			name: "fixed multi",
+			typ:  types.T_int64.ToType(),
+			seed: func(vec *Vector, mp *mpool.MPool) error {
+				return AppendFixed(vec, int64(1), false, mp)
+			},
+			appendRows: func(vec *Vector, mp *mpool.MPool) error {
+				return AppendMultiFixed(vec, int64(2), false, 2, mp)
+			},
+		},
+		{
+			name: "fixed list with null",
+			typ:  types.T_int64.ToType(),
+			seed: func(vec *Vector, mp *mpool.MPool) error {
+				return AppendFixed(vec, int64(1), false, mp)
+			},
+			appendRows: func(vec *Vector, mp *mpool.MPool) error {
+				return AppendFixedList(vec, []int64{2, 3}, []bool{true, false}, mp)
+			},
+			wantNull: map[int]bool{1: true},
+		},
+		{
+			name: "bytes one",
+			typ:  types.T_varchar.ToType(),
+			seed: func(vec *Vector, mp *mpool.MPool) error {
+				return AppendBytes(vec, []byte("seed"), false, mp)
+			},
+			appendRows: func(vec *Vector, mp *mpool.MPool) error {
+				return AppendBytes(vec, []byte("ordinary"), false, mp)
+			},
+		},
+		{
+			name: "bytes multi",
+			typ:  types.T_varchar.ToType(),
+			seed: func(vec *Vector, mp *mpool.MPool) error {
+				return AppendBytes(vec, []byte("seed"), false, mp)
+			},
+			appendRows: func(vec *Vector, mp *mpool.MPool) error {
+				return AppendMultiBytes(vec, []byte("ordinary"), false, 2, mp)
+			},
+		},
+		{
+			name: "bytes list with null",
+			typ:  types.T_varchar.ToType(),
+			seed: func(vec *Vector, mp *mpool.MPool) error {
+				return AppendBytes(vec, []byte("seed"), false, mp)
+			},
+			appendRows: func(vec *Vector, mp *mpool.MPool) error {
+				return AppendBytesList(vec, [][]byte{nil, []byte("ordinary")}, []bool{true, false}, mp)
+			},
+			wantNull: map[int]bool{1: true},
+		},
+		{
+			name: "string list",
+			typ:  types.T_varchar.ToType(),
+			seed: func(vec *Vector, mp *mpool.MPool) error {
+				return AppendBytes(vec, []byte("seed"), false, mp)
+			},
+			appendRows: func(vec *Vector, mp *mpool.MPool) error {
+				return AppendStringList(vec, []string{"ordinary", "ordinary"}, nil, mp)
+			},
+		},
+		{
+			name: "bytejson one",
+			typ:  types.T_json.ToType(),
+			seed: func(vec *Vector, mp *mpool.MPool) error {
+				return AppendByteJson(vec, jsonValue, false, mp)
+			},
+			appendRows: func(vec *Vector, mp *mpool.MPool) error {
+				return AppendByteJson(vec, jsonValue, false, mp)
+			},
+		},
+		{
+			name: "bytejson encoded",
+			typ:  types.T_json.ToType(),
+			seed: func(vec *Vector, mp *mpool.MPool) error {
+				return AppendByteJson(vec, jsonValue, false, mp)
+			},
+			appendRows: func(vec *Vector, mp *mpool.MPool) error {
+				return AppendByteJsonEncoded(vec, testByteJsonEncoder{value: jsonValue}, mp)
+			},
+		},
+		{
+			name: "array one",
+			typ:  types.New(types.T_array_float32, 3, 0),
+			seed: func(vec *Vector, mp *mpool.MPool) error {
+				return AppendArray(vec, []float32{1, 2, 3}, false, mp)
+			},
+			appendRows: func(vec *Vector, mp *mpool.MPool) error {
+				return AppendArray(vec, []float32{4, 5, 6}, false, mp)
+			},
+		},
+		{
+			name: "array list",
+			typ:  types.New(types.T_array_float32, 3, 0),
+			seed: func(vec *Vector, mp *mpool.MPool) error {
+				return AppendArray(vec, []float32{1, 2, 3}, false, mp)
+			},
+			appendRows: func(vec *Vector, mp *mpool.MPool) error {
+				return AppendArrayList(vec, [][]float32{{4, 5, 6}, {7, 8, 9}}, nil, mp)
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			mp := mpool.MustNew(t.Name())
+			vec := NewVec(test.typ)
+			t.Cleanup(func() {
+				vec.Free(mp)
+				require.Zero(t, mp.CurrNB())
+			})
+			require.NoError(t, test.seed(vec, mp))
+			vec.SetPrepareParamKind(PrepareParamFloat)
+			require.NoError(t, test.appendRows(vec, mp))
+
+			require.Equal(t, PrepareParamFloat, vec.GetPrepareParamKindAt(0))
+			require.Len(t, vec.GetPrepareParamKinds(), vec.Length())
+			for row := 1; row < vec.Length(); row++ {
+				require.Equal(t, PrepareParamNone, vec.GetPrepareParamKindAt(row))
+				require.Equal(t, test.wantNull[row], vec.IsNull(uint64(row)))
+			}
+		})
+	}
+}
+
+func TestRawAppendPrepareParamKindFastPathsDoNotAllocate(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		kind      PrepareParamKind
+		isNull    bool
+		wantKind  PrepareParamKind
+		wantSeen  bool
+		wantNulls bool
+	}{
+		{name: "unobserved ordinary", wantKind: PrepareParamNone},
+		{name: "observed ordinary", kind: PrepareParamNone, wantKind: PrepareParamNone, wantSeen: true},
+		{name: "prepared null", kind: PrepareParamFloat, isNull: true, wantKind: PrepareParamFloat, wantSeen: true, wantNulls: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			mp := mpool.MustNew(t.Name())
+			vec := NewVec(types.T_int64.ToType())
+			t.Cleanup(func() {
+				vec.Free(mp)
+				require.Zero(t, mp.CurrNB())
+			})
+			require.NoError(t, vec.PreExtend(2, mp))
+			require.NoError(t, AppendFixed(vec, int64(1), false, mp))
+			if test.wantSeen {
+				vec.SetPrepareParamKind(test.kind)
+			}
+			before := mp.CurrNB()
+			require.NoError(t, AppendFixed(vec, int64(2), test.isNull, mp))
+			require.Equal(t, before, mp.CurrNB())
+			require.Nil(t, vec.GetPrepareParamKinds())
+			require.Equal(t, test.wantKind, vec.GetPrepareParamKindAt(0))
+			require.Equal(t, test.wantNulls, vec.IsNull(1))
+		})
+	}
+}
+
+func TestRawAppendPrepareParamKindOwnerlessPrefixStaysScalar(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		seed func(*Vector, *mpool.MPool) error
+	}{
+		{name: "empty"},
+		{
+			name: "all null",
+			seed: func(vec *Vector, mp *mpool.MPool) error {
+				return AppendFixed(vec, int64(0), true, mp)
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			mp := mpool.MustNew(t.Name())
+			vec := NewVec(types.T_int64.ToType())
+			t.Cleanup(func() {
+				vec.Free(mp)
+				require.Zero(t, mp.CurrNB())
+			})
+			require.NoError(t, vec.PreExtend(2, mp))
+			if test.seed != nil {
+				require.NoError(t, test.seed(vec, mp))
+			}
+			vec.SetPrepareParamKind(PrepareParamFloat)
+			before := mp.CurrNB()
+			require.NoError(t, AppendFixed(vec, int64(1), false, mp))
+
+			require.Equal(t, before, mp.CurrNB())
+			require.Nil(t, vec.GetPrepareParamKinds())
+			require.False(t, vec.HasPrepareParamKind())
+			require.Equal(t, PrepareParamNone, vec.GetPrepareParamKindAt(vec.Length()-1))
+		})
+	}
+}
+
+func TestRawAppendPrepareParamKindOOMDoesNotPublishRow(t *testing.T) {
+	const poolCap = int64(1 << 20)
+	mp, err := mpool.NewMPool(t.Name(), poolCap, mpool.NoLock)
+	require.NoError(t, err)
+	defer mpool.DeleteMPool(mp)
+
+	vec := NewVec(types.T_int64.ToType())
+	require.NoError(t, vec.PreExtend(2, mp))
+	require.NoError(t, AppendFixed(vec, int64(1), false, mp))
+	vec.SetPrepareParamKind(PrepareParamFloat)
+	fill, err := mp.Alloc(int(poolCap-mp.CurrNB()), true)
+	require.NoError(t, err)
+	defer func() {
+		mp.Free(fill)
+		vec.Free(mp)
+		require.Zero(t, mp.CurrNB())
+	}()
+
+	err = AppendFixed(vec, int64(2), false, mp)
+	require.Error(t, err)
+	require.Equal(t, 1, vec.Length())
+	require.Equal(t, PrepareParamFloat, vec.GetPrepareParamKindAt(0))
+	require.Nil(t, vec.GetPrepareParamKinds())
+
+	mp.Free(fill)
+	fill = nil
+	require.NoError(t, AppendFixed(vec, int64(2), false, mp))
+	require.Equal(t, 2, vec.Length())
+	require.Equal(t, PrepareParamFloat, vec.GetPrepareParamKindAt(0))
+	require.Equal(t, PrepareParamNone, vec.GetPrepareParamKindAt(1))
+}
+
+func TestRawAppendPrepareParamKindRollbackRestoresScalar(t *testing.T) {
+	mp := mpool.MustNew(t.Name())
+	vec := NewVec(types.T_int64.ToType())
+	defer func() {
+		vec.Free(mp)
+		require.Zero(t, mp.CurrNB())
+	}()
+	require.NoError(t, vec.PreExtend(2, mp))
+	require.NoError(t, AppendFixed(vec, int64(1), false, mp))
+	vec.SetPrepareParamKind(PrepareParamFloat)
+	before := mp.CurrNB()
+	checkpoint := vec.MakeAppendCheckpoint()
+
+	require.NoError(t, AppendFixed(vec, int64(2), false, mp))
+	require.NotNil(t, vec.GetPrepareParamKinds())
+	vec.RollbackAppend(checkpoint, 1)
+
+	require.Equal(t, 1, vec.Length())
+	require.Nil(t, vec.GetPrepareParamKinds())
+	require.Equal(t, PrepareParamFloat, vec.GetPrepareParamKindAt(0))
+	require.Equal(t, before, mp.CurrNB())
 }
 
 func TestPrepareParamKindWindowRetainsSidecarOnlyForDivergence(t *testing.T) {

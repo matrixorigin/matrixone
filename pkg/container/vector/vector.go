@@ -746,6 +746,46 @@ func (v *Vector) preExtendPrepareParamKinds(n int, mp *mpool.MPool) error {
 	return nil
 }
 
+// needsPrepareOrdinaryAppend is the inlineable fast-path guard for raw appends.
+// Check the default None value first so both unobserved and observed ordinary
+// vectors return after one comparison; inspect the sidecar only for a prepared
+// scalar candidate.
+func (v *Vector) needsPrepareOrdinaryAppend() bool {
+	return v.prepareParamKind != PrepareParamNone && v.prepareParamKindSeen &&
+		v.prepareParamKinds == nil
+}
+
+// prepareOrdinaryAppend promotes a prepared scalar provenance to the exact
+// row representation when a raw append introduces ordinary non-NULL rows.
+// Callers invoke it after their physical capacity preflight when possible and
+// before publishing the new logical length. The common unobserved/ordinary,
+// NULL-only, and existing-sidecar paths remain allocation-free.
+func (v *Vector) prepareOrdinaryAppend(rows int, mp *mpool.MPool) error {
+	if rows <= 0 || !v.needsPrepareOrdinaryAppend() {
+		return nil
+	}
+	if v.length == 0 || v.AllNull() {
+		// Metadata on an empty/all-NULL prefix has no value owner. The appended
+		// ordinary rows establish the first real provenance without a sidecar.
+		v.resetPrepareParamKind()
+		return nil
+	}
+	kinds, owner, err := v.allocatePrepareParamKinds(v.length+rows, mp)
+	if err != nil {
+		return err
+	}
+	clear(kinds)
+	for row := 0; row < v.length; row++ {
+		kinds[row] = v.prepareParamKind
+	}
+	v.releasePrepareParamKinds()
+	v.prepareParamKind = PrepareParamNone
+	v.prepareParamKindSeen = true
+	v.prepareParamKinds = kinds[:v.length]
+	v.prepareParamKindsMP = owner
+	return nil
+}
+
 // setLengthAfterExtend publishes a length whose row-parallel capacities were
 // already reserved. It cannot allocate and initializes newly visible ordinary
 // rows with PrepareParamNone.
@@ -5738,6 +5778,11 @@ func AppendByteJsonEncoded(
 	if err := extend(vec, 1, mp); err != nil {
 		return err
 	}
+	if vec.needsPrepareOrdinaryAppend() {
+		if err := vec.prepareOrdinaryAppend(1, mp); err != nil {
+			return err
+		}
+	}
 	index := vec.length
 	values := toSliceOfLengthNoTypeCheck[types.Varlena](vec, index+1)
 	oldValue := values[index]
@@ -5854,6 +5899,11 @@ func appendOneFixed[T any](vec *Vector, val T, isNull bool, mp *mpool.MPool) err
 	if err := extendWithBitmaps(vec, 1, mp, isNull, false); err != nil {
 		return err
 	}
+	if !isNull && vec.needsPrepareOrdinaryAppend() {
+		if err := vec.prepareOrdinaryAppend(1, mp); err != nil {
+			return err
+		}
+	}
 	length := vec.length
 	vec.setLengthAfterExtend(vec.length + 1)
 	if isNull {
@@ -5885,6 +5935,11 @@ func appendOneBytes(vec *Vector, val []byte, isNull bool, mp *mpool.MPool) error
 		// treating every null as a varlena descriptor.
 		return appendOneFixed(vec, va, true, mp)
 	} else {
+		if vec.needsPrepareOrdinaryAppend() {
+			if err = vec.prepareOrdinaryAppend(1, mp); err != nil {
+				return err
+			}
+		}
 		err = BuildVarlenaFromByteSlice(vec, &va, &val, mp)
 		if err != nil {
 			return err
@@ -5903,6 +5958,11 @@ func appendOneByteJson(vec *Vector, bj bytejson.ByteJson, isNull bool, mp *mpool
 	if isNull {
 		return appendOneFixed(vec, va, true, mp)
 	} else {
+		if vec.needsPrepareOrdinaryAppend() {
+			if err = vec.prepareOrdinaryAppend(1, mp); err != nil {
+				return err
+			}
+		}
 		err = BuildVarlenaFromByteJson(vec, &va, bj, mp)
 		if err != nil {
 			return err
@@ -5922,6 +5982,11 @@ func appendOneArray[T types.ArrayElement](vec *Vector, val []T, isNull bool, mp 
 	if isNull {
 		return appendOneFixed(vec, va, true, mp)
 	} else {
+		if vec.needsPrepareOrdinaryAppend() {
+			if err = vec.prepareOrdinaryAppend(1, mp); err != nil {
+				return err
+			}
+		}
 		err = BuildVarlenaFromArray[T](vec, &va, &val, mp)
 		if err != nil {
 			return err
@@ -5954,6 +6019,11 @@ func appendMultiFixed[T any](vec *Vector, val T, isNull bool, cnt int, mp *mpool
 	if err := extendWithBitmaps(vec, cnt, mp, isNull, false); err != nil {
 		return err
 	}
+	if !isNull && vec.needsPrepareOrdinaryAppend() {
+		if err := vec.prepareOrdinaryAppend(cnt, mp); err != nil {
+			return err
+		}
+	}
 	length := vec.length
 	vec.setLengthAfterExtend(vec.length + cnt)
 	if isNull {
@@ -5977,6 +6047,11 @@ func appendMultiBytes(vec *Vector, val []byte, isNull bool, cnt int, mp *mpool.M
 	var va types.Varlena
 	if err = extendWithBitmaps(vec, cnt, mp, isNull, false); err != nil {
 		return err
+	}
+	if !isNull && vec.needsPrepareOrdinaryAppend() {
+		if err = vec.prepareOrdinaryAppend(cnt, mp); err != nil {
+			return err
+		}
 	}
 	length := vec.length
 	vec.setLengthAfterExtend(vec.length + cnt)
@@ -6009,6 +6084,12 @@ func appendList[T any](vec *Vector, vals []T, isNulls []bool, mp *mpool.MPool) e
 	); err != nil {
 		return err
 	}
+	if vec.needsPrepareOrdinaryAppend() &&
+		(len(isNulls) == 0 || slices.Contains(isNulls, false)) {
+		if err := vec.prepareOrdinaryAppend(len(vals), mp); err != nil {
+			return err
+		}
+	}
 	length := vec.length
 	vec.setLengthAfterExtend(vec.length + len(vals))
 	col := MustFixedColWithTypeCheck[T](vec)
@@ -6034,6 +6115,12 @@ func appendBytesList(vec *Vector, vals [][]byte, isNulls []bool, mp *mpool.MPool
 		false,
 	); err != nil {
 		return err
+	}
+	if vec.needsPrepareOrdinaryAppend() &&
+		(len(isNulls) == 0 || slices.Contains(isNulls, false)) {
+		if err = vec.prepareOrdinaryAppend(len(vals), mp); err != nil {
+			return err
+		}
 	}
 	length := vec.length
 	vec.setLengthAfterExtend(vec.length + len(vals))
@@ -6068,6 +6155,12 @@ func appendStringList(vec *Vector, vals []string, isNulls []bool, mp *mpool.MPoo
 		false,
 	); err != nil {
 		return err
+	}
+	if vec.needsPrepareOrdinaryAppend() &&
+		(len(isNulls) == 0 || slices.Contains(isNulls, false)) {
+		if err = vec.prepareOrdinaryAppend(len(vals), mp); err != nil {
+			return err
+		}
 	}
 	length := vec.length
 	vec.setLengthAfterExtend(vec.length + len(vals))
@@ -6104,6 +6197,12 @@ func appendArrayList[T types.ArrayElement](vec *Vector, vals [][]T, isNulls []bo
 		false,
 	); err != nil {
 		return err
+	}
+	if vec.needsPrepareOrdinaryAppend() &&
+		(len(isNulls) == 0 || slices.Contains(isNulls, false)) {
+		if err = vec.prepareOrdinaryAppend(len(vals), mp); err != nil {
+			return err
+		}
 	}
 	length := vec.length
 	vec.setLengthAfterExtend(vec.length + len(vals))
