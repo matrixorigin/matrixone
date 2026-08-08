@@ -42,6 +42,131 @@ func TestCreateServerWithOptions(t *testing.T) {
 		WithServerSessionBufferSize(200))
 }
 
+type connectionTrackingApplication struct {
+	tracker       *serverConnectionTracker
+	stopReturned  chan struct{}
+	releaseClosed chan struct{}
+}
+
+func (a *connectionTrackingApplication) Start() error {
+	return nil
+}
+
+func (a *connectionTrackingApplication) Stop() error {
+	go func() {
+		close(a.stopReturned)
+		<-a.releaseClosed
+		a.tracker.finish()
+	}()
+	return nil
+}
+
+func (a *connectionTrackingApplication) GetSession(uint64) (goetty.IOSession, error) {
+	return nil, nil
+}
+
+func TestServerCloseWaitsForAcceptedConnections(t *testing.T) {
+	tracker := &serverConnectionTracker{}
+	application := &connectionTrackingApplication{
+		tracker:       tracker,
+		stopReturned:  make(chan struct{}),
+		releaseClosed: make(chan struct{}),
+	}
+	require.True(t, tracker.begin())
+	var releaseOnce sync.Once
+	releaseConnection := func() {
+		releaseOnce.Do(func() {
+			close(application.releaseClosed)
+		})
+	}
+	t.Cleanup(releaseConnection)
+	s := &server{
+		logger:      logutil.GetPanicLoggerWithLevel(zap.FatalLevel),
+		application: application,
+		stopper:     stopper.NewStopper("test-server-close-connections"),
+		connections: tracker,
+	}
+	closeDone := make(chan error, 1)
+	go func() {
+		closeDone <- s.Close()
+	}()
+
+	select {
+	case <-application.stopReturned:
+	case <-time.After(time.Second):
+		t.Fatal("application Stop did not return")
+	}
+	select {
+	case err := <-closeDone:
+		t.Fatalf("server Close returned before the accepted connection closed: %v", err)
+	default:
+	}
+
+	releaseConnection()
+	select {
+	case err := <-closeDone:
+		require.NoError(t, err)
+	case <-time.After(time.Second):
+		t.Fatal("server Close did not return after the accepted connection closed")
+	}
+}
+
+type recordingSessionAware struct {
+	created chan struct{}
+	closed  chan struct{}
+}
+
+func (a *recordingSessionAware) Created(goetty.IOSession) {
+	select {
+	case a.created <- struct{}{}:
+	default:
+	}
+}
+
+func (a *recordingSessionAware) Closed(goetty.IOSession) {
+	select {
+	case a.closed <- struct{}{}:
+	default:
+	}
+}
+
+func TestServerPreservesCallerSessionAware(t *testing.T) {
+	aware := &recordingSessionAware{
+		created: make(chan struct{}, 1),
+		closed:  make(chan struct{}, 1),
+	}
+	testRPCServer(t, func(rs *server) {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		client := newTestClient(t)
+		t.Cleanup(func() {
+			require.NoError(t, client.Close())
+		})
+		rs.RegisterRequestHandler(func(_ context.Context, request RPCMessage, _ uint64, cs ClientSession) error {
+			return cs.Write(ctx, request.Message)
+		})
+
+		future, err := client.Send(ctx, testAddr, newTestMessage(1))
+		require.NoError(t, err)
+		defer future.Close()
+		_, err = future.Get()
+		require.NoError(t, err)
+		select {
+		case <-aware.created:
+		case <-ctx.Done():
+			t.Fatal("caller IOSessionAware did not receive Created")
+		}
+
+		require.NoError(t, client.Close())
+		require.NoError(t, rs.Close())
+		select {
+		case <-aware.closed:
+		case <-ctx.Done():
+			t.Fatal("caller IOSessionAware did not receive Closed")
+		}
+	}, WithServerGoettyOptions(goetty.WithSessionAware(aware)))
+}
+
 func TestHandleServer(t *testing.T) {
 	testRPCServer(t, func(rs *server) {
 		c := newTestClient(t)

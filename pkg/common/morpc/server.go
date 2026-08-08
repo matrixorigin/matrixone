@@ -17,6 +17,7 @@ package morpc
 import (
 	"context"
 	"fmt"
+	"io"
 	"sync"
 	"time"
 
@@ -116,6 +117,7 @@ type server struct {
 	codec       Codec
 	application goetty.NetApplication
 	stopper     *stopper.Stopper
+	connections *serverConnectionTracker
 	handler     func(ctx context.Context, request RPCMessage, sequence uint64, cs ClientSession) error
 	sessions    *sync.Map // session-id => *clientSession
 	options     struct {
@@ -132,6 +134,57 @@ type server struct {
 	}
 }
 
+// serverConnectionTracker joins MORPC connection handlers without occupying
+// goetty's public IOSessionAware callback. Once sealed, handlers that have not
+// entered MORPC are rejected and every admitted handler has one finish owner.
+type serverConnectionTracker struct {
+	mu struct {
+		sync.Mutex
+		sealed bool
+		active int
+		done   chan struct{}
+	}
+}
+
+func (t *serverConnectionTracker) begin() bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.mu.sealed {
+		return false
+	}
+	t.mu.active++
+	return true
+}
+
+func (t *serverConnectionTracker) finish() {
+	t.mu.Lock()
+	t.mu.active--
+	if t.mu.active < 0 {
+		t.mu.Unlock()
+		panic("morpc: negative active server connection count")
+	}
+	if t.mu.sealed && t.mu.active == 0 && t.mu.done != nil {
+		close(t.mu.done)
+		t.mu.done = nil
+	}
+	t.mu.Unlock()
+}
+
+func (t *serverConnectionTracker) sealAndWait() {
+	t.mu.Lock()
+	t.mu.sealed = true
+	if t.mu.active == 0 {
+		t.mu.Unlock()
+		return
+	}
+	if t.mu.done == nil {
+		t.mu.done = make(chan struct{})
+	}
+	done := t.mu.done
+	t.mu.Unlock()
+	<-done
+}
+
 // NewRPCServer create rpc server with options. After the rpc server starts, one link corresponds to two
 // goroutines, one read and one write. All messages to be written are first written to a buffer chan and
 // sent to the client by the write goroutine.
@@ -140,12 +193,13 @@ func NewRPCServer(
 	codec Codec,
 	options ...ServerOption) (RPCServer, error) {
 	s := &server{
-		name:     name,
-		metrics:  newServerMetrics(name),
-		address:  address,
-		codec:    codec,
-		stopper:  stopper.NewStopper(name),
-		sessions: &sync.Map{},
+		name:        name,
+		metrics:     newServerMetrics(name),
+		address:     address,
+		codec:       codec,
+		stopper:     stopper.NewStopper(name),
+		connections: &serverConnectionTracker{},
+		sessions:    &sync.Map{},
 	}
 	for _, opt := range options {
 		opt(s)
@@ -161,6 +215,7 @@ func NewRPCServer(
 		s.address,
 		s.onMessage,
 		goetty.WithAppLogger(s.logger),
+		goetty.WithAppHandleSessionFunc(s.handleConnection),
 		goetty.WithAppSessionOptions(s.options.goettyOptions...),
 	)
 	if err != nil {
@@ -180,6 +235,28 @@ func NewRPCServer(
 	return s, nil
 }
 
+func (s *server) handleConnection(rs goetty.IOSession) error {
+	if !s.connections.begin() {
+		return nil
+	}
+	defer s.connections.finish()
+
+	sequence := uint64(0)
+	for {
+		value, err := rs.Read(goetty.ReadOptions{})
+		if err != nil {
+			if err == io.EOF {
+				return nil
+			}
+			return err
+		}
+		sequence++
+		if err := s.onMessage(rs, value, sequence); err != nil {
+			return err
+		}
+	}
+}
+
 func (s *server) Start() error {
 	err := s.application.Start()
 	if err != nil {
@@ -196,6 +273,12 @@ func (s *server) Close() error {
 	if err != nil {
 		s.logger.Error("stop rpc server failed",
 			zap.Error(err))
+	}
+	if err == nil {
+		// application.Stop first seals listener admission and disconnects every
+		// active session. Seal MORPC handler admission after that point, then
+		// join every handler that entered before the seal.
+		s.connections.sealAndWait()
 	}
 
 	return err
