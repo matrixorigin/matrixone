@@ -3885,6 +3885,16 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 						return false
 					}
 
+					// Follow MySQL's temporal column-vs-constant coercion. For a
+					// statement-constant TIMESTAMP value with compatible fractional-second
+					// precision, cast the value to DATETIME instead of wrapping the column.
+					// Keep volatile and column-dependent expressions on the original
+					// TIMESTAMP comparison path because changing their cast direction can
+					// change timezone-sensitive comparison semantics.
+					if colOid == types.T_datetime && otherOid == types.T_timestamp {
+						return colType.Scale >= otherType.Scale && rule.IsConstant(otherExpr, true)
+					}
+
 					return false
 				}
 
