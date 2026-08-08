@@ -59,9 +59,7 @@ func (s *PrepareParamKindStates) Observe(index int, kind vector.PrepareParamKind
 		state.seen = true
 		return
 	}
-	if state.kind != kind {
-		state.kind = vector.PrepareParamNone
-	}
+	state.kind = vector.MergePrepareParamKinds(state.kind, kind)
 }
 
 // ObserveState folds a serialized partial aggregate state. An unobserved

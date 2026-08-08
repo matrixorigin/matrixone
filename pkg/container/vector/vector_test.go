@@ -4073,6 +4073,98 @@ func TestPrepareParamKindPerRowMaterialization(t *testing.T) {
 	source.Free(mp)
 }
 
+func TestPrepareParamKindReordersWithoutSidecarAllocation(t *testing.T) {
+	mp := mpool.MustNewZero()
+	makeVector := func() *Vector {
+		v := NewVec(types.T_text.ToType())
+		for _, value := range []string{"1", "2", "3", "4"} {
+			require.NoError(t, AppendBytes(v, []byte(value), false, mp))
+		}
+		require.NoError(t, v.SetPrepareParamKindsWithMP([]PrepareParamKind{
+			PrepareParamInteger,
+			PrepareParamFloat,
+			PrepareParamNone,
+			PrepareParamDecimal,
+		}, mp))
+		return v
+	}
+
+	vec := makeVector()
+	before := mp.CurrNB()
+	vec.Shrink([]int64{1, 3}, false)
+	require.Equal(t, before, mp.CurrNB(), "ordered shrink must reuse the sidecar")
+	require.Equal(t, PrepareParamFloat, vec.GetPrepareParamKindAt(0))
+	require.Equal(t, PrepareParamDecimal, vec.GetPrepareParamKindAt(1))
+	vec.Free(mp)
+
+	vec = makeVector()
+	before = mp.CurrNB()
+	var mask bitmap.Bitmap
+	mask.InitWithSize(2)
+	mask.AddMany([]uint64{0, 1})
+	vec.ShrinkByMask(&mask, false, 1)
+	require.Equal(t, before, mp.CurrNB(), "mask shrink must reuse the sidecar")
+	require.Equal(t, PrepareParamFloat, vec.GetPrepareParamKindAt(0))
+	require.Equal(t, PrepareParamNone, vec.GetPrepareParamKindAt(1))
+	vec.Free(mp)
+
+	vec = makeVector()
+	before = mp.CurrNB()
+	require.NoError(t, vec.Shuffle([]int64{3, 1, 3}, mp))
+	require.Equal(t, before, mp.CurrNB(), "shuffle must not allocate a replacement sidecar")
+	require.Equal(t, PrepareParamDecimal, vec.GetPrepareParamKindAt(0))
+	require.Equal(t, PrepareParamFloat, vec.GetPrepareParamKindAt(1))
+	require.Equal(t, PrepareParamDecimal, vec.GetPrepareParamKindAt(2))
+	var scratch []byte
+	require.NoError(t, vec.ShuffleWithBuf([]int64{1, 0, 1}, mp, &scratch))
+	require.Equal(t, []PrepareParamKind{
+		PrepareParamFloat,
+		PrepareParamDecimal,
+		PrepareParamFloat,
+	}, []PrepareParamKind{
+		vec.GetPrepareParamKindAt(0),
+		vec.GetPrepareParamKindAt(1),
+		vec.GetPrepareParamKindAt(2),
+	})
+	vec.Free(mp)
+
+	vec = makeVector()
+	require.NoError(t, vec.Shuffle([]int64{3, 1, 0, 3, 2}, mp))
+	require.Equal(t, []PrepareParamKind{
+		PrepareParamDecimal,
+		PrepareParamFloat,
+		PrepareParamInteger,
+		PrepareParamDecimal,
+		PrepareParamNone,
+	}, vec.GetPrepareParamKinds())
+	vec.Free(mp)
+	require.Zero(t, mp.CurrNB())
+}
+
+func TestConstSetFunctionCopiesSelectedPrepareParamKind(t *testing.T) {
+	mp := mpool.MustNewZero()
+	source := NewVec(types.T_text.ToType())
+	require.NoError(t, AppendBytes(source, []byte("5"), false, mp))
+	require.NoError(t, AppendBytes(source, []byte("5"), false, mp))
+	require.NoError(t, source.SetPrepareParamKindsWithMP(
+		[]PrepareParamKind{PrepareParamInteger, PrepareParamFloat}, mp))
+	destination := NewVec(types.T_text.ToType())
+	set := GetConstSetFunction(types.T_text.ToType(), mp)
+	require.NoError(t, set(destination, source, 1, 3))
+	require.Equal(t, PrepareParamFloat, destination.GetPrepareParamKindAt(0))
+	require.Equal(t, PrepareParamFloat, destination.GetPrepareParamKindAt(2))
+
+	nullSource := NewVec(types.T_text.ToType())
+	require.NoError(t, AppendBytes(nullSource, nil, true, mp))
+	require.NoError(t, set(destination, nullSource, 0, 2))
+	require.False(t, destination.HasPrepareParamKind())
+
+	destination.Free(mp)
+	nullSource.Free(mp)
+	source.Free(mp)
+	require.Zero(t, mp.CurrNB())
+}
+
 func TestPrepareParamKindCheckpointRollbackReaccountsSidecar(t *testing.T) {
 	mp := mpool.MustNewZero()
 	vec := NewVec(types.T_text.ToType())

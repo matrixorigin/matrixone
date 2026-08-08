@@ -20,11 +20,72 @@ import (
 	"context"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
 	"github.com/stretchr/testify/require"
 )
+
+func makeSpillGroupBatchForTest(t *testing.T, mp *mpool.MPool, prepared bool) *batch.Batch {
+	t.Helper()
+	bat := batch.NewWithSize(1)
+	bat.Vecs[0] = vector.NewVec(types.T_text.ToType())
+	require.NoError(t, vector.AppendBytes(bat.Vecs[0], []byte("5"), false, mp))
+	require.NoError(t, vector.AppendBytes(bat.Vecs[0], []byte("5"), false, mp))
+	if prepared {
+		bat.Vecs[0].SetPrepareParamKind(vector.PrepareParamFloat)
+	}
+	bat.SetRowCount(2)
+	return bat
+}
+
+func TestGroupSpillGroupKeyPrepareParamKindCodec(t *testing.T) {
+	mp := mpool.MustNewZero()
+	legacy := makeSpillGroupBatchForTest(t, mp, false)
+	prepared := makeSpillGroupBatchForTest(t, mp, true)
+	defer func() {
+		prepared.Clean(mp)
+		legacy.Clean(mp)
+		require.Zero(t, mp.CurrNB())
+	}()
+	require.NoError(t, prepared.Vecs[0].SetPrepareParamKindsWithMP(
+		[]vector.PrepareParamKind{vector.PrepareParamFloat, vector.PrepareParamInteger}, mp))
+
+	var payload bytes.Buffer
+	var legacyRecord bytes.Buffer
+	require.NoError(t, appendSpillGroupByBatch(&legacyRecord, legacy, &payload))
+	decoded := batch.NewWithSize(0)
+	require.NoError(t, unmarshalSpillGroupByBatch(
+		bufio.NewReader(bytes.NewReader(legacyRecord.Bytes())), decoded, mp))
+	require.False(t, decoded.Vecs[0].HasPrepareParamKind())
+	decoded.Clean(mp)
+
+	var preparedRecord bytes.Buffer
+	require.NoError(t, appendSpillGroupByBatch(&preparedRecord, prepared, &payload))
+	decoded = batch.NewWithSize(0)
+	require.NoError(t, unmarshalSpillGroupByBatch(
+		bufio.NewReader(bytes.NewReader(preparedRecord.Bytes())), decoded, mp))
+	require.Equal(t, vector.PrepareParamFloat, decoded.Vecs[0].GetPrepareParamKindAt(0))
+	require.Equal(t, vector.PrepareParamInteger, decoded.Vecs[0].GetPrepareParamKindAt(1))
+	decoded.Clean(mp)
+
+	truncated := append([]byte(nil), preparedRecord.Bytes()[:preparedRecord.Len()-1]...)
+	decoded = batch.NewWithSize(0)
+	require.Error(t, unmarshalSpillGroupByBatch(
+		bufio.NewReader(bytes.NewReader(truncated)), decoded, mp))
+	decoded.Clean(mp)
+
+	invalid := append([]byte(nil), preparedRecord.Bytes()...)
+	trailer := bytes.Index(invalid, []byte{'P', 'P', 'B'})
+	require.Positive(t, trailer)
+	invalid[trailer] = 'X'
+	decoded = batch.NewWithSize(0)
+	require.Error(t, unmarshalSpillGroupByBatch(
+		bufio.NewReader(bytes.NewReader(invalid)), decoded, mp))
+	decoded.Clean(mp)
+}
 
 func prepareParamKindRowsTrailerForTest(rowCount int32, rows []byte) []byte {
 	var buf bytes.Buffer

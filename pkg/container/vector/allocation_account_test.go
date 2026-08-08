@@ -494,6 +494,40 @@ func TestVectorAllocationAccountBitmapShuffleFailurePreservesVector(t *testing.T
 	finalizeTestVectorAllocationAccount(t, state)
 }
 
+func TestVectorAllocationAccountPrepareParamShuffleFailureIsTransactional(t *testing.T) {
+	state := newTestVectorAllocationAccount(t, 1<<20, 2)
+	mp := mpool.MustNewZero()
+	vec := newAccountedTestVector(t, types.T_text.ToType(), state.selection)
+	for _, value := range []string{"1", "2", "3", "4"} {
+		require.NoError(t, AppendBytes(vec, []byte(value), false, mp))
+	}
+	require.NoError(t, vec.SetPrepareParamKindsWithMP([]PrepareParamKind{
+		PrepareParamInteger,
+		PrepareParamFloat,
+		PrepareParamNone,
+		PrepareParamDecimal,
+	}, mp))
+	before := state.account.Snapshot()
+	beforeBytes := make([][]byte, vec.Length())
+	for row := range beforeBytes {
+		beforeBytes[row] = vec.CloneBytesAt(row)
+	}
+	beforeKinds := append([]PrepareParamKind(nil), vec.GetPrepareParamKinds()...)
+
+	var err error
+	require.NotPanics(t, func() {
+		err = vec.Shuffle([]int64{3, 1, 0, 3, 2}, mp)
+	})
+	require.Error(t, err)
+	require.Equal(t, before.Used, state.account.Snapshot().Used)
+	require.Equal(t, 4, vec.Length())
+	require.Equal(t, beforeBytes, InefficientMustBytesCol(vec))
+	require.Equal(t, beforeKinds, vec.GetPrepareParamKinds())
+
+	vec.Free(mp)
+	finalizeTestVectorAllocationAccount(t, state)
+}
+
 func TestVectorAllocationAccountBitmapGrowthFailurePreservesOwner(t *testing.T) {
 	state := newTestVectorAllocationAccount(t, 1000, 8)
 	mp := mpool.MustNewZero()

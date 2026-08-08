@@ -56,6 +56,17 @@ const (
 	PrepareParamBoolean
 )
 
+// MergePrepareParamKinds folds two observed source categories.  Equal
+// categories are idempotent; a conflict conservatively becomes ordinary
+// string conversion.  This is intentionally commutative and associative so
+// parallel reductions cannot make the result depend on arrival order.
+func MergePrepareParamKinds(left, right PrepareParamKind) PrepareParamKind {
+	if left == right {
+		return left
+	}
+	return PrepareParamNone
+}
+
 // Vector represent a column
 type Vector struct {
 	// vector's class
@@ -2713,7 +2724,7 @@ func (v *Vector) Shrink(sels []int64, negate bool) {
 	}
 
 	shrinkSortedCheckIfRaceDetectorEnabled(sels)
-	oldKinds := slices.Clone(v.prepareParamKinds)
+	oldKinds := v.prepareParamKinds
 	oldLength := v.length
 
 	if v.IsConst() {
@@ -2800,7 +2811,7 @@ func (v *Vector) ShrinkByMask(sels *bitmap.Bitmap, negate bool, offset uint64) {
 		}
 		return
 	}
-	oldKinds := slices.Clone(v.prepareParamKinds)
+	oldKinds := v.prepareParamKinds
 	oldLength := v.length
 
 	switch v.typ.Oid {
@@ -2863,14 +2874,7 @@ func (v *Vector) ShrinkByMask(sels *bitmap.Bitmap, negate bool, offset uint64) {
 	default:
 		panic(fmt.Sprintf("unexpect type %s for function vector.Shrink", v.typ))
 	}
-	if oldKinds != nil {
-		selected := make([]int64, 0, sels.Count())
-		itr := sels.Iterator()
-		for itr.HasNext() {
-			selected = append(selected, int64(itr.Next()+offset))
-		}
-		v.remapPrepareParamKindsAfterShrink(oldKinds, oldLength, selected, negate)
-	}
+	v.remapPrepareParamKindsAfterShrinkMask(oldKinds, oldLength, sels, negate, offset)
 }
 
 func (v *Vector) remapPrepareParamKindsAfterShrink(
@@ -2882,63 +2886,150 @@ func (v *Vector) remapPrepareParamKindsAfterShrink(
 	if oldKinds == nil {
 		return
 	}
-	selected := make([]PrepareParamKind, 0, v.length)
+	newLength := v.length
 	if !negate {
-		for _, sel := range sels {
+		for i, sel := range sels {
+			if i >= newLength {
+				break
+			}
 			if sel >= 0 && int(sel) < oldLength && int(sel) < len(oldKinds) {
-				selected = append(selected, oldKinds[sel])
+				// sels is ordered, so the destination never overtakes the
+				// source.  The sidecar can therefore be compacted in place.
+				oldKinds[i] = oldKinds[sel]
+			} else {
+				oldKinds[i] = PrepareParamNone
 			}
 		}
 	} else {
-		removed := make(map[int64]struct{}, len(sels))
-		for _, sel := range sels {
-			removed[sel] = struct{}{}
-		}
+		write := 0
+		selIdx := 0
 		for row := 0; row < oldLength && row < len(oldKinds); row++ {
-			if _, ok := removed[int64(row)]; !ok {
-				selected = append(selected, oldKinds[row])
+			if selIdx < len(sels) && int64(row) == sels[selIdx] {
+				selIdx++
+				continue
+			}
+			if write < newLength {
+				oldKinds[write] = oldKinds[row]
+				write++
 			}
 		}
 	}
-	if len(selected) == 0 {
+	v.finishInPlacePrepareParamKindRemap(oldKinds, oldLength, newLength)
+}
+
+func (v *Vector) remapPrepareParamKindsAfterShrinkMask(
+	oldKinds []PrepareParamKind,
+	oldLength int,
+	sels *bitmap.Bitmap,
+	negate bool,
+	offset uint64,
+) {
+	if oldKinds == nil {
+		return
+	}
+	newLength := v.length
+	if !negate {
+		itr := sels.Iterator()
+		for row := 0; row < newLength && itr.HasNext(); row++ {
+			sel := itr.Next() + offset
+			if sel < uint64(oldLength) {
+				oldKinds[row] = oldKinds[sel]
+			} else {
+				oldKinds[row] = PrepareParamNone
+			}
+		}
+	} else if sels.Count() > 0 {
+		itr := sels.Iterator()
+		next := itr.Next() + offset
+		write := 0
+		for row := 0; row < oldLength && row < len(oldKinds); row++ {
+			if uint64(row) == next {
+				if itr.HasNext() {
+					next = itr.Next() + offset
+				}
+				continue
+			}
+			if write < newLength {
+				oldKinds[write] = oldKinds[row]
+				write++
+			}
+		}
+	}
+	v.finishInPlacePrepareParamKindRemap(oldKinds, oldLength, newLength)
+}
+
+func (v *Vector) finishInPlacePrepareParamKindRemap(
+	kinds []PrepareParamKind,
+	oldLength int,
+	newLength int,
+) {
+	if newLength == 0 {
 		v.resetPrepareParamKind()
 		return
 	}
-	kinds, owner, err := v.allocatePrepareParamKinds(len(selected), nil)
-	if err != nil {
-		panic(err)
+	if newLength < oldLength && newLength < len(kinds) {
+		clear(kinds[newLength:min(oldLength, len(kinds))])
 	}
-	copy(kinds, selected)
-	v.releasePrepareParamKinds()
-	v.prepareParamKinds = kinds
-	v.prepareParamKindsMP = owner
+	v.prepareParamKinds = kinds[:newLength]
 	v.prepareParamKind = PrepareParamNone
 	v.prepareParamKindSeen = true
 	v.normalizePrepareParamKinds()
 }
 
-func (v *Vector) remapPrepareParamKindsAfterShuffle(oldKinds []PrepareParamKind, sels []int64) {
+// remapPrepareParamKindsAfterShuffle uses the existing sidecar whenever the
+// selection fits in it.  A larger selection is uncommon, but its replacement
+// sidecar is prepared before the payload shuffle so an MPool error cannot
+// leave a half-committed vector or panic after the payload changed.
+func (v *Vector) remapPrepareParamKindsAfterShuffle(
+	oldKinds []PrepareParamKind,
+	sels []int64,
+	prepared []PrepareParamKind,
+	preparedOwner *mpool.MPool,
+) {
 	if oldKinds == nil {
 		return
 	}
-	selected := make([]PrepareParamKind, 0, len(sels))
-	for _, sel := range sels {
-		if sel >= 0 && int(sel) < len(oldKinds) {
-			selected = append(selected, oldKinds[sel])
+	if prepared != nil {
+		for i, sel := range sels {
+			if sel >= 0 && int(sel) < len(oldKinds) {
+				prepared[i] = oldKinds[sel]
+			} else {
+				prepared[i] = PrepareParamNone
+			}
 		}
+		v.releasePrepareParamKinds()
+		v.prepareParamKinds = prepared
+		v.prepareParamKindsMP = preparedOwner
+		v.prepareParamKind = PrepareParamNone
+		v.prepareParamKindSeen = true
+		v.normalizePrepareParamKinds()
+		return
 	}
-	if len(selected) == 0 {
+	newLength := len(sels)
+	if newLength == 0 {
 		v.resetPrepareParamKind()
 		return
 	}
-	kinds, owner, err := v.allocatePrepareParamKinds(len(selected), nil)
-	if err != nil {
-		panic(err)
+	// Keep the original source category in the low three bits and stage the
+	// output category in the next three bits.  The sidecar categories are a
+	// five-value enum, so this lets arbitrary permutations and duplicate
+	// selections be remapped in place without a second allocation.
+	for i := range oldKinds {
+		oldKinds[i] &= 0x07
 	}
-	copy(kinds, selected)
-	v.releasePrepareParamKinds()
-	v.prepareParamKinds = kinds
-	v.prepareParamKindsMP = owner
+	for i, sel := range sels {
+		if sel >= 0 && int(sel) < len(oldKinds) {
+			oldKinds[i] |= (oldKinds[sel] & 0x07) << 3
+		} else {
+			oldKinds[i] |= PrepareParamNone << 3
+		}
+		oldKinds[i] |= 0x40
+	}
+	for i := 0; i < newLength; i++ {
+		oldKinds[i] = PrepareParamKind((oldKinds[i] >> 3) & 0x07)
+	}
+	clear(oldKinds[newLength:])
+	v.prepareParamKinds = oldKinds[:newLength]
 	v.prepareParamKind = PrepareParamNone
 	v.prepareParamKindSeen = true
 	v.normalizePrepareParamKinds()
@@ -2952,7 +3043,15 @@ func (v *Vector) Shuffle(sels []int64, mp *mpool.MPool) (err error) {
 	if v.IsConst() {
 		return nil
 	}
-	oldKinds := slices.Clone(v.prepareParamKinds)
+	oldKinds := v.prepareParamKinds
+	var preparedKinds []PrepareParamKind
+	var preparedOwner *mpool.MPool
+	if oldKinds != nil && len(sels) > len(oldKinds) {
+		preparedKinds, preparedOwner, err = v.allocatePrepareParamKinds(len(sels), mp)
+		if err != nil {
+			return err
+		}
+	}
 
 	switch v.typ.Oid {
 	case types.T_bool:
@@ -3012,9 +3111,13 @@ func (v *Vector) Shuffle(sels []int64, mp *mpool.MPool) (err error) {
 		panic(fmt.Sprintf("unexpect type %s for function vector.Shuffle", v.typ))
 	}
 
-	if err == nil {
-		v.remapPrepareParamKindsAfterShuffle(oldKinds, sels)
+	if err != nil {
+		if preparedOwner != nil {
+			mpool.FreeSlice(preparedOwner, preparedKinds)
+		}
+		return err
 	}
+	v.remapPrepareParamKindsAfterShuffle(oldKinds, sels, preparedKinds, preparedOwner)
 	return err
 }
 
@@ -3028,7 +3131,7 @@ func (v *Vector) ShuffleWithBuf(sels []int64, mp *mpool.MPool, buf *[]byte) (err
 	if v.IsConst() {
 		return nil
 	}
-	oldKinds := slices.Clone(v.prepareParamKinds)
+	oldKinds := v.prepareParamKinds
 	// The reusable buffer is Go-heap storage and therefore has no physical
 	// allocation provenance. Allocation-accounted vectors must use Shuffle,
 	// whose replacement data and bitmap scratch are admitted to their owner.
@@ -3100,7 +3203,7 @@ func (v *Vector) ShuffleWithBuf(sels []int64, mp *mpool.MPool, buf *[]byte) (err
 	}
 
 	if err == nil {
-		v.remapPrepareParamKindsAfterShuffle(oldKinds, sels)
+		v.remapPrepareParamKindsAfterShuffle(oldKinds, sels, nil, nil)
 	}
 	return err
 }
@@ -4350,6 +4453,15 @@ func GetConstSetFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector, sel
 		}
 		if err := set(v, w, sel, length); err != nil {
 			return err
+		}
+		// SetConst* materializes a selected source row into one logical
+		// constant value.  The value and its prepared-parameter provenance are
+		// one state: copy only the selected row's category, never the source
+		// sidecar's whole row layout.  NULL has no observed source category.
+		if length == 0 || w.IsConstNull() || w.IsNull(uint64(sel)) {
+			v.resetPrepareParamKind()
+		} else {
+			v.SetPrepareParamKind(w.GetPrepareParamKindAt(int(sel)))
 		}
 		v.gsp.Reset()
 		if grouping && length > 0 {

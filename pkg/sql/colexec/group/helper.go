@@ -29,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -37,6 +38,57 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
+
+// Group-key provenance is a local spill extension around the stable Batch
+// payload.  Keeping the wrapper here preserves the stable codec and leaves
+// records without metadata byte-for-byte compatible with the legacy layout.
+var spillGroupByPrepareParamKindMagic = [...]byte{'G', 'B', 'P', 'K', 1, 'M', 'D', '1'}
+
+func appendSpillGroupByBatch(
+	buf *bytes.Buffer,
+	gbBatch *batch.Batch,
+	payload *bytes.Buffer,
+) error {
+	if !gbBatch.HasPrepareParamKindMetadata() {
+		_, err := gbBatch.MarshalBinaryWithBuffer(buf, false)
+		return err
+	}
+	if payload == nil {
+		return moerr.NewInternalErrorNoCtx("missing spilled group-by provenance buffer")
+	}
+	payload.Reset()
+	if _, err := gbBatch.MarshalBinaryWithPrepareParamKinds(payload, false); err != nil {
+		return err
+	}
+	buf.Write(spillGroupByPrepareParamKindMagic[:])
+	payloadSize := int64(payload.Len())
+	buf.Write(types.EncodeInt64(&payloadSize))
+	_, err := buf.Write(payload.Bytes())
+	return err
+}
+
+func unmarshalSpillGroupByBatch(
+	r *bufio.Reader,
+	gbBatch *batch.Batch,
+	mp *mpool.MPool,
+) error {
+	peek, err := r.Peek(len(spillGroupByPrepareParamKindMagic))
+	if err == nil && bytes.Equal(peek, spillGroupByPrepareParamKindMagic[:]) {
+		var magic [len(spillGroupByPrepareParamKindMagic)]byte
+		if _, err = io.ReadFull(r, magic[:]); err != nil {
+			return err
+		}
+		payloadSize, err := types.ReadInt64(r)
+		if err != nil {
+			return err
+		}
+		if payloadSize <= 0 || payloadSize > int64(^uint(0)>>1) {
+			return moerr.NewInvalidInputNoCtx("invalid spilled group-by batch payload size")
+		}
+		return gbBatch.UnmarshalFromReaderWithPrepareParamKinds(r, payloadSize, mp)
+	}
+	return gbBatch.UnmarshalFromReader(r, mp)
+}
 
 type ResHashRelated struct {
 	mp       *mpool.MPool
@@ -404,7 +456,14 @@ func (ctr *container) spillDataToDisk(proc *process.Process, opAnalyzer process.
 				}
 			}
 			gbBatch.SetRowCount(int(cnt))
-			if _, err := gbBatch.MarshalBinaryWithBuffer(buf, false); err != nil {
+			var payload *bytes.Buffer
+			if gbBatch.HasPrepareParamKindMetadata() {
+				if ctr.spillGbPayload == nil {
+					ctr.spillGbPayload = bytes.NewBuffer(nil)
+				}
+				payload = ctr.spillGbPayload
+			}
+			if err := appendSpillGroupByBatch(buf, gbBatch, payload); err != nil {
 				return 0, 0, err
 			}
 
@@ -622,7 +681,7 @@ func (ctr *container) loadSpilledData(proc *process.Process, opAnalyzer process.
 		if err = gbBatch.PreExtend(ctr.mp, int(cnt)); err != nil {
 			return false, err
 		}
-		if err = gbBatch.UnmarshalFromReader(bufferedFile, ctr.mp); err != nil {
+		if err = unmarshalSpillGroupByBatch(bufferedFile, gbBatch, ctr.mp); err != nil {
 			return false, err
 		}
 

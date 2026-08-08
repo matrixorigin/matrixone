@@ -397,8 +397,9 @@ func TestMergeGroupPreservesPreparedParamKind(t *testing.T) {
 				{rows: 2, kind: vector.PrepareParamFloat},
 				{rows: 1, kind: vector.PrepareParamNone},
 			},
-			// Equal MIN values retain the incumbent partial's provenance.
-			wantKind: vector.PrepareParamFloat,
+			// Equal MIN values fold conflicting provenance independent of
+			// partial arrival order.
+			wantKind: vector.PrepareParamNone,
 		},
 		{
 			name: "float-before-integer",
@@ -406,8 +407,9 @@ func TestMergeGroupPreservesPreparedParamKind(t *testing.T) {
 				{rows: 2, kind: vector.PrepareParamFloat},
 				{rows: 1, kind: vector.PrepareParamInteger},
 			},
-			// Equal values retain the earlier Float winner.
-			wantKind: vector.PrepareParamFloat,
+			// Equal values fold conflicting provenance independent of
+			// partial arrival order.
+			wantKind: vector.PrepareParamNone,
 		},
 	}
 
@@ -1308,6 +1310,54 @@ func TestGroupSpillPreservesUniformPreparedParamKind(t *testing.T) {
 	for key, kind := range seen {
 		require.Equal(t, vector.PrepareParamFloat, kind, "group %d", key)
 	}
+	g.Free(proc, false, nil)
+	input.Clean(proc.Mp())
+	require.Zero(t, proc.Mp().CurrNB())
+}
+
+func TestGroupSpillPreservesGroupKeyPreparedParamKind(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+
+	const rows = 1024
+	input := batch.NewWithSize(2)
+	input.Vecs[0] = vector.NewVec(types.T_text.ToType())
+	input.Vecs[1] = vector.NewVec(types.T_text.ToType())
+	for i := 0; i < rows; i++ {
+		key := []byte("0")
+		if i%2 != 0 {
+			key = []byte("1")
+		}
+		require.NoError(t, vector.AppendBytes(input.Vecs[0], key, false, proc.Mp()))
+		require.NoError(t, vector.AppendBytes(input.Vecs[1], []byte("5"), false, proc.Mp()))
+	}
+	input.Vecs[0].SetPrepareParamKind(vector.PrepareParamFloat)
+	input.Vecs[1].SetPrepareParamKind(vector.PrepareParamFloat)
+	input.SetRowCount(rows)
+
+	g := newGroupOp(proc, []*plan.Expr{
+		colExpr(0, types.T_text),
+	}, []aggexec.AggFuncExecExpression{minTextColumnAgg(1)})
+	g.SpillMem = 10 << 10
+	g.AppendChild(colexec.NewMockOperator().WithBatchs([]*batch.Batch{input}))
+	require.NoError(t, g.Prepare(proc))
+
+	seen := make(map[string]vector.PrepareParamKind)
+	for {
+		result, err := vm.Exec(g, proc)
+		require.NoError(t, err)
+		if result.Status == vm.ExecStop || result.Batch == nil {
+			break
+		}
+		keys := result.Batch.Vecs[0]
+		for row := 0; row < keys.Length(); row++ {
+			seen[string(keys.GetBytesAt(row))] = keys.GetPrepareParamKindAt(row)
+		}
+	}
+	require.Equal(t, map[string]vector.PrepareParamKind{
+		"0": vector.PrepareParamFloat,
+		"1": vector.PrepareParamFloat,
+	}, seen)
 	g.Free(proc, false, nil)
 	input.Clean(proc.Mp())
 	require.Zero(t, proc.Mp().CurrNB())

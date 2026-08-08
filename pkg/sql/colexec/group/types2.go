@@ -148,6 +148,7 @@ type container struct {
 	spillReader          *bufio.Reader // reused across loadSpilledData calls
 	spillGbBatch         *batch.Batch  // reused staging batch across spillDataToDisk calls
 	spillBuf             *bytes.Buffer // reused write buffer across spillDataToDisk calls
+	spillGbPayload       *bytes.Buffer // transient group-key provenance payload
 	spillNonEmptyBuckets []int         // reused list of non-empty bucket indices
 	spillBucketRowIds    [][]int32     // per-bucket row index lists, reused across batches
 
@@ -262,6 +263,7 @@ func (ctr *container) free() {
 		ctr.spillGbBatch = nil
 	}
 	ctr.spillBuf = nil
+	ctr.spillGbPayload = nil
 	ctr.spillReader = nil
 	ctr.spillHashCodes = nil
 	ctr.spillChunkFlags = nil

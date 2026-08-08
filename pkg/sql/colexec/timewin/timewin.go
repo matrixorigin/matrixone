@@ -147,7 +147,12 @@ func getPartitionSetFunction(
 		if !w.IsConstNull() && !w.IsNull(uint64(sel)) {
 			return moerr.NewInternalErrorNoCtx("time window received a non-NULL T_any partition key")
 		}
-		return vector.SetConstNull(v, length, mp)
+		if err := vector.SetConstNull(v, length, mp); err != nil {
+			return err
+		}
+		// A reused output vector may carry metadata from an earlier flush;
+		// NULL is not an observed conversion category.
+		return v.SetPrepareParamKindsWithMP(nil, mp)
 	}
 }
 
