@@ -1692,6 +1692,42 @@ func TestCloneWindow(t *testing.T) {
 	require.Equal(t, payload, v5.GetBytesAt(0))
 }
 
+func TestBinaryStringMetadataSurvivesPublicCopies(t *testing.T) {
+	mp := mpool.MustNewZero()
+	source := NewVec(types.T_text.ToType())
+	require.NoError(t, AppendBytes(source, []byte{0xe4, 0xbd, 0xa0, 0xff}, false, mp))
+	source.SetIsBinaryString(true)
+	t.Cleanup(func() {
+		source.Free(mp)
+		require.Equal(t, int64(0), mp.CurrNB())
+	})
+
+	dup, err := source.Dup(mp)
+	require.NoError(t, err)
+	require.True(t, dup.GetIsBinaryString())
+	dup.Free(mp)
+
+	window, err := source.Window(0, 1)
+	require.NoError(t, err)
+	require.True(t, window.GetIsBinaryString())
+	window.Free(mp)
+
+	cloneWindow, err := source.CloneWindow(0, 1, mp)
+	require.NoError(t, err)
+	require.True(t, cloneWindow.GetIsBinaryString())
+	cloneWindow.Free(mp)
+
+	cloneTo := NewVec(types.T_text.ToType())
+	require.NoError(t, source.CloneWindowTo(cloneTo, 0, 1, mp))
+	require.True(t, cloneTo.GetIsBinaryString())
+	cloneTo.Free(mp)
+
+	compact, err := source.CloneToFlatCompact(mp)
+	require.NoError(t, err)
+	require.True(t, compact.GetIsBinaryString())
+	compact.Free(mp)
+}
+
 func TestCloneWindowWithMpNil(t *testing.T) {
 	mp := mpool.MustNewZero()
 	vec1 := NewVec(types.T_int32.ToType())

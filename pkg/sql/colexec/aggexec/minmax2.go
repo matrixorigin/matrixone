@@ -33,9 +33,10 @@ type minMaxExecFixed[T types.FixedSizeT] struct {
 
 type minMaxExecBytes struct {
 	aggExec
-	comp     func([]byte, []byte) int
-	hasExtra bool
-	extra    []byte
+	comp         func([]byte, []byte) int
+	hasExtra     bool
+	extra        []byte
+	binaryString bool
 }
 
 func (exec *minMaxExecFixed[T]) Fill(groupIndex int, row int, vectors []*vector.Vector) error {
@@ -221,6 +222,7 @@ func (exec *minMaxExecBytes) BulkFill(groupIndex int, vectors []*vector.Vector) 
 }
 
 func (exec *minMaxExecBytes) BatchFill(offset int, groups []uint64, vectors []*vector.Vector) error {
+	exec.binaryString = exec.binaryString || isBinaryStringVector(vectors[0])
 	for i, grp := range groups {
 		if grp == GroupNotMatched {
 			continue
@@ -252,6 +254,7 @@ func (exec *minMaxExecBytes) Merge(next AggFuncExec, groupIdx1, groupIdx2 int) e
 
 func (exec *minMaxExecBytes) BatchMerge(next AggFuncExec, offset int, groups []uint64) error {
 	other := next.(*minMaxExecBytes)
+	exec.binaryString = exec.binaryString || other.binaryString
 	for i, grp := range groups {
 		if grp == GroupNotMatched {
 			continue
@@ -293,6 +296,7 @@ func (exec *minMaxExecBytes) Flush() ([]*vector.Vector, error) {
 	vecs := make([]*vector.Vector, len(exec.state))
 	for i := range vecs {
 		vecs[i] = exec.state[i].vecs[0]
+		vecs[i].SetIsBinaryString(exec.binaryString)
 		exec.state[i].vecs[0] = nil
 		exec.state[i].length = 0
 		exec.state[i].capacity = 0

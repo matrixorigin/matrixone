@@ -310,6 +310,7 @@ type PrepareStmt struct {
 	defaultDatabase    string
 
 	params              *vector.Vector
+	paramsBinaryString  []bool
 	getFromSendLongData map[int]struct{}
 
 	compile *compile.Compile
@@ -690,6 +691,7 @@ func (prepareStmt *PrepareStmt) Close() {
 	if prepareStmt.ParamTypes != nil {
 		prepareStmt.ParamTypes = nil
 	}
+	prepareStmt.paramsBinaryString = nil
 	if prepareStmt.ColDefData != nil {
 		prepareStmt.ColDefData = nil
 	}
@@ -716,6 +718,7 @@ func (prepareStmt *PrepareStmt) clearBinaryParamState(proc *process.Process) {
 		prepareStmt.params.Free(proc.Mp())
 		prepareStmt.params = nil
 	}
+	prepareStmt.paramsBinaryString = nil
 	for k := range prepareStmt.getFromSendLongData {
 		delete(prepareStmt.getFromSendLongData, k)
 	}

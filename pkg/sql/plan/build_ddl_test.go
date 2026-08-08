@@ -519,6 +519,40 @@ func TestBuildCTASMaterializesBinaryLiteralExpressionTypes(t *testing.T) {
 	}
 }
 
+func TestBuildCTASMaterializesDynamicBinaryStringTypes(t *testing.T) {
+	ctx := NewMockCompilerContext(false)
+	ctx.ResolveVariableBinaryStringFunc = func(name string, system, global bool) (bool, error) {
+		return name == "u" && !system && !global, nil
+	}
+	stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL,
+		`create table copied as select @u variable_value, replace(X'e4bda0', X'bd', X'78') replace_value`, 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+
+	p, err := BuildPlan(ctx, stmt, false)
+	require.NoError(t, err)
+	cols := p.GetDdl().GetCreateTable().GetTableDef().GetCols()
+	require.GreaterOrEqual(t, len(cols), 2)
+	require.Equal(t, int32(types.T_blob), cols[0].Typ.Id)
+	require.Equal(t, int32(types.T_varbinary), cols[1].Typ.Id)
+	require.Equal(t, int32(3), cols[1].Typ.Width)
+}
+
+func TestBuildCTASEmptyBinaryLiteralCanBeReparsed(t *testing.T) {
+	stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL,
+		`create table copied as select X'' empty_value`, 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+
+	p, err := BuildPlan(NewMockCompilerContext(false), stmt, false)
+	require.NoError(t, err)
+	create := p.GetDdl().GetCreateTable()
+	require.Equal(t, int32(types.T_varbinary), create.TableDef.Cols[0].Typ.Id)
+	require.Equal(t, int32(0), create.TableDef.Cols[0].Typ.Width)
+	_, err = parsers.ParseOne(t.Context(), dialect.MYSQL, create.CreateAsSelectSql, 1)
+	require.NoError(t, err)
+}
+
 func TestViewRebindPreservesMySQLSpecialColumnSemantics(t *testing.T) {
 	const createViewSQL = "create view v_enum_set as select priority, flags, n_name from nation"
 	ctx := NewMockCompilerContext(false)

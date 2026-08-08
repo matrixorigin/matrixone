@@ -504,6 +504,7 @@ func (ctr *container) processValueFunc(idx int, ap *Window, proc *process.Proces
 	srcVec := ctr.aggVecs[idx].Vec[0] // the expression column
 	retType := types.New(types.T(w.WindowFunc.Typ.Id), w.WindowFunc.Typ.Width, w.WindowFunc.Typ.Scale)
 	localResult := vector.NewVec(retType)
+	localResult.SetIsBinaryString(isBinaryStringVector(srcVec))
 	defer func() {
 		if err != nil && localResult != nil {
 			localResult.Free(proc.Mp())
@@ -714,6 +715,15 @@ func (ctr *container) processValueFunc(idx int, ap *Window, proc *process.Proces
 	}
 
 	return localResult, nil
+}
+
+func isBinaryStringVector(vec *vector.Vector) bool {
+	switch vec.GetType().Oid {
+	case types.T_binary, types.T_varbinary, types.T_blob:
+		return true
+	default:
+		return vec.GetIsBinaryString()
+	}
 }
 
 // getInt64FromVec extracts an int64 value from a vector at the given row.

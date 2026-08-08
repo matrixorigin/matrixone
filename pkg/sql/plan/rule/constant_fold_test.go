@@ -104,3 +104,40 @@ func TestConstantFoldStillFoldsUnaffectedCasts(t *testing.T) {
 	preparedStrictTemporal := makeConstantCastExpr(t, "cast_strict", stringType, types.T_date.ToType(), "2024-01-02")
 	require.NotNil(t, NewConstantFold(true).constantFold(preparedStrictTemporal, proc).GetLit())
 }
+
+func TestConstantFoldKeepsBinaryStringMetadataProducingFunction(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	f, err := function.GetFunctionByName(context.Background(), "char",
+		[]types.Type{types.T_int64.ToType(), types.T_int64.ToType(), types.T_int64.ToType()})
+	require.NoError(t, err)
+	args := make([]*plan.Expr, 3)
+	for i, value := range []int64{228, 189, 160} {
+		args[i] = &plan.Expr{
+			Typ: plan.Type{Id: int32(types.T_int64)},
+			Expr: &plan.Expr_Lit{Lit: &plan.Literal{
+				Value: &plan.Literal_I64Val{I64Val: value},
+			}},
+		}
+	}
+	expr := &plan.Expr{
+		Typ: plan.Type{Id: int32(types.T_varchar)},
+		Expr: &plan.Expr_F{F: &plan.Function{
+			Func: &plan.ObjectRef{Obj: f.GetEncodedOverloadID(), ObjName: "char"},
+			Args: args,
+		}},
+	}
+	lengthFn, err := function.GetFunctionByName(context.Background(), "char_length",
+		[]types.Type{types.T_varchar.ToType()})
+	require.NoError(t, err)
+	expr = &plan.Expr{
+		Typ: plan.Type{Id: int32(types.T_uint64)},
+		Expr: &plan.Expr_F{F: &plan.Function{
+			Func: &plan.ObjectRef{Obj: lengthFn.GetEncodedOverloadID(), ObjName: "char_length"},
+			Args: []*plan.Expr{expr},
+		}},
+	}
+
+	folded := NewConstantFold(false).constantFold(expr, proc)
+	require.NotNil(t, folded.GetF())
+	require.NotNil(t, folded.GetF().Args[0].GetF())
+}

@@ -877,7 +877,8 @@ func initExecuteStmtParamWithResolverInSession(
 		if prepareStmt.params.Length() != numParams {
 			return nil, nil, nil, originSQL, false, moerr.NewInvalidInput(reqCtx, "Incorrect arguments to EXECUTE")
 		}
-		cwft.proc.SetPrepareParams(prepareStmt.params)
+		cwft.proc.SetPrepareParamsWithMetadata(
+			prepareStmt.params, nil, prepareStmt.paramsBinaryString)
 		cwft.paramVals, err = preparedParamValues(cwft.proc)
 		if err != nil {
 			return nil, nil, nil, originSQL, false, err

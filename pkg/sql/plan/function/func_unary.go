@@ -466,6 +466,14 @@ func OrdString(val []byte) int64 {
 }
 
 func Ord(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
+	if isBinaryStringVector(ivecs[0]) {
+		return opUnaryBytesToFixed[int64](ivecs, result, proc, length, func(v []byte) int64 {
+			if len(v) == 0 {
+				return 0
+			}
+			return int64(v[0])
+		}, selectList)
+	}
 	return opUnaryBytesToFixed[int64](ivecs, result, proc, length, func(v []byte) int64 {
 		return OrdString(v)
 	}, selectList)
@@ -6098,6 +6106,19 @@ func rtrim(xs string) string {
 }
 
 func Reverse(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	if isBinaryStringVector(ivecs[0]) {
+		err := opUnaryBytesToBytes(ivecs, result, proc, length, func(v []byte) []byte {
+			out := bytes.Clone(v)
+			for i, j := 0, len(out)-1; i < j; i, j = i+1, j-1 {
+				out[i], out[j] = out[j], out[i]
+			}
+			return out
+		}, selectList)
+		if err == nil {
+			result.GetResultVector().SetIsBinaryString(true)
+		}
+		return err
+	}
 	return opUnaryStrToStr(ivecs, result, proc, length, reverse, selectList)
 }
 

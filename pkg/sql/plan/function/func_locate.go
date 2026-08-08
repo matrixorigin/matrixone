@@ -26,6 +26,7 @@ import (
 
 // LOCATE(substr, str)
 func buildInLocate2Args(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	binaryInput := isBinaryStringVector(parameters[0]) || isBinaryStringVector(parameters[1])
 	rs := vector.MustFunctionResult[int64](result)
 	substrVs := vector.GenerateFunctionStrParameter(parameters[0])
 	strVs := vector.GenerateFunctionStrParameter(parameters[1])
@@ -39,7 +40,15 @@ func buildInLocate2Args(parameters []*vector.Vector, result vector.FunctionResul
 				return err
 			}
 		} else {
-			pos := Locate2Args(functionUtil.QuickBytesToStr(bytes.ToUpper(str)), functionUtil.QuickBytesToStr(bytes.ToUpper(substr)))
+			var pos int64
+			if binaryInput {
+				idx := bytes.Index(str, substr)
+				if idx >= 0 {
+					pos = int64(idx + 1)
+				}
+			} else {
+				pos = Locate2Args(functionUtil.QuickBytesToStr(bytes.ToUpper(str)), functionUtil.QuickBytesToStr(bytes.ToUpper(substr)))
+			}
 			rs.AppendMustValue(pos)
 		}
 	}
@@ -48,6 +57,7 @@ func buildInLocate2Args(parameters []*vector.Vector, result vector.FunctionResul
 
 // LOCATE(substr, str, [position])
 func buildInLocate3Args(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	binaryInput := isBinaryStringVector(parameters[0]) || isBinaryStringVector(parameters[1])
 	rs := vector.MustFunctionResult[int64](result)
 	substrVs := vector.GenerateFunctionStrParameter(parameters[0])
 	strVs := vector.GenerateFunctionStrParameter(parameters[1])
@@ -63,7 +73,17 @@ func buildInLocate3Args(parameters []*vector.Vector, result vector.FunctionResul
 				return err
 			}
 		} else {
-			pos := Locate3Args(functionUtil.QuickBytesToStr(bytes.ToUpper(str)), functionUtil.QuickBytesToStr(bytes.ToUpper(substr)), position)
+			var pos int64
+			if binaryInput {
+				if position > 0 && position <= int64(len(str))+1 {
+					idx := bytes.Index(str[position-1:], substr)
+					if idx >= 0 {
+						pos = position + int64(idx)
+					}
+				}
+			} else {
+				pos = Locate3Args(functionUtil.QuickBytesToStr(bytes.ToUpper(str)), functionUtil.QuickBytesToStr(bytes.ToUpper(substr)), position)
+			}
 			rs.AppendMustValue(pos)
 		}
 	}

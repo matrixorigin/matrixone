@@ -4944,6 +4944,7 @@ func eltCheck(overloads []overload, inputs []types.Type) checkResult {
 // Elt: ELT(N, str1, str2, str3, ...) - Returns str1 if N = 1, str2 if N = 2, and so on.
 // Returns NULL if N is less than 1, greater than the number of strings, or NULL.
 func Elt(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
+	propagateBinaryStringResult(ivecs[1:], result)
 	rs := vector.MustFunctionResult[types.Varlena](result)
 
 	// Rest arguments are strings
@@ -6910,10 +6911,21 @@ func FindInSet(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc
 }
 
 func Instr(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
+	if isBinaryStringVector(ivecs[0]) || isBinaryStringVector(ivecs[1]) {
+		return opBinaryBytesBytesToFixedWithErrorCheck[int64](ivecs, result, proc, length,
+			func(value, needle []byte) (int64, error) {
+				idx := bytes.Index(value, needle)
+				if idx < 0 {
+					return 0, nil
+				}
+				return int64(idx + 1), nil
+			}, selectList)
+	}
 	return opBinaryStrStrToFixed[int64](ivecs, result, proc, length, instr.Single, nil)
 }
 
 func Left(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) (err error) {
+	binaryInput := isBinaryStringVector(ivecs[0])
 	p1 := vector.GenerateFunctionStrParameter(ivecs[0])
 	p2 := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[1])
 	rs := vector.MustFunctionResult[types.Varlena](result)
@@ -6927,13 +6939,31 @@ func Left(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *proces
 			}
 		} else {
 			//TODO: Ignoring 4 switch cases: https://github.com/m-schen/matrixone/blob/0c480ca11b6302de26789f916a3e2faca7f79d47/pkg/sql/plan/function/builtin/binary/left.go#L38
-			res := evalLeft(functionUtil.QuickBytesToStr(v1), v2)
+			var res string
+			if binaryInput {
+				res = evalLeftBytes(v1, v2)
+			} else {
+				res = evalLeft(functionUtil.QuickBytesToStr(v1), v2)
+			}
 			if err = rs.AppendBytes(functionUtil.QuickStrToBytes(res), false); err != nil {
 				return err
 			}
 		}
 	}
+	if binaryInput {
+		result.GetResultVector().SetIsBinaryString(true)
+	}
 	return nil
+}
+
+func evalLeftBytes(str []byte, length int64) string {
+	if length <= 0 {
+		return ""
+	}
+	if length >= int64(len(str)) {
+		return string(str)
+	}
+	return string(str[:length])
 }
 
 func evalLeft(str string, length int64) string {
@@ -6948,6 +6978,7 @@ func evalLeft(str string, length int64) string {
 }
 
 func Right(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) (err error) {
+	binaryInput := isBinaryStringVector(ivecs[0])
 	p1 := vector.GenerateFunctionStrParameter(ivecs[0])
 	p2 := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[1])
 	rs := vector.MustFunctionResult[types.Varlena](result)
@@ -6960,13 +6991,31 @@ func Right(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *proce
 				return err
 			}
 		} else {
-			res := evalRight(functionUtil.QuickBytesToStr(v1), v2)
+			var res string
+			if binaryInput {
+				res = evalRightBytes(v1, v2)
+			} else {
+				res = evalRight(functionUtil.QuickBytesToStr(v1), v2)
+			}
 			if err = rs.AppendBytes(functionUtil.QuickStrToBytes(res), false); err != nil {
 				return err
 			}
 		}
 	}
+	if binaryInput {
+		result.GetResultVector().SetIsBinaryString(true)
+	}
 	return nil
+}
+
+func evalRightBytes(str []byte, length int64) string {
+	if length <= 0 {
+		return ""
+	}
+	if length >= int64(len(str)) {
+		return string(str)
+	}
+	return string(str[int64(len(str))-length:])
 }
 
 func evalRight(str string, length int64) string {
@@ -8395,6 +8444,7 @@ func SecToTime(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *p
 }
 
 func Replace(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) (err error) {
+	propagateBinaryStringResult(ivecs, result)
 	p1 := vector.GenerateFunctionStrParameter(ivecs[0])
 	p2 := vector.GenerateFunctionStrParameter(ivecs[1])
 	p3 := vector.GenerateFunctionStrParameter(ivecs[2])
@@ -8497,6 +8547,7 @@ func Insert(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *proc
 }
 
 func Trim(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
+	propagateBinaryStringResult(ivecs[1:], result)
 	p1 := vector.GenerateFunctionStrParameter(ivecs[0])
 	p2 := vector.GenerateFunctionStrParameter(ivecs[1])
 	p3 := vector.GenerateFunctionStrParameter(ivecs[2])

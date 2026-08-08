@@ -209,12 +209,20 @@ func (r *ConstantFold) constantFold(expr *plan.Expr, proc *process.Process) *pla
 	if IsDivisionByZeroConstant(fn) {
 		return expr
 	}
+	if function.ExpressionContainsRuntimeBinaryString(expr) {
+		return expr
+	}
 
 	vec, free, err := colexec.GetReadonlyResultFromExpression(proc, expr, []*batch.Batch{r.bat})
 	if err != nil {
 		return expr
 	}
 	defer free()
+	// binaryString is runtime string metadata and cannot be represented by
+	// Literal.IsBin without also changing raw hex/bit numeric semantics.
+	if vec.GetIsBinaryString() {
+		return expr
+	}
 
 	if isVec {
 		data, err := vec.MarshalBinary()

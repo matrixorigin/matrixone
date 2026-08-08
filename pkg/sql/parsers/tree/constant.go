@@ -188,6 +188,10 @@ func NewNumVal[T bool | int64 | uint64 | float64 | string](val T, originString s
 }
 
 func (node *NumVal) Format(ctx *FmtCtx) {
+	if node.ValType == P_hexnum && strings.EqualFold(node.origString, "0x") {
+		ctx.WriteString("x''")
+		return
+	}
 	if ctx.ModeIndependentStringLiterals() {
 		switch node.ValType {
 		case P_char:

@@ -1523,12 +1523,22 @@ func ConstantFold(bat *batch.Batch, expr *plan.Expr, proc *process.Process, varA
 	if rule.IsDivisionByZeroConstant(fn) {
 		return expr, nil
 	}
+	if function.ExpressionContainsRuntimeBinaryString(expr) {
+		return expr, nil
+	}
 
 	vec, free, err := colexec.GetReadonlyResultFromExpression(proc, expr, []*batch.Batch{bat})
 	if err != nil {
 		return nil, err
 	}
 	defer free()
+	// binaryString is runtime string metadata and is deliberately distinct from
+	// Literal.IsBin, which also controls numeric interpretation of a raw hex/bit
+	// literal. A folded plan literal cannot represent binaryString without
+	// changing those semantics, so keep the function expression for execution.
+	if vec.GetIsBinaryString() {
+		return expr, nil
+	}
 
 	if isVec {
 		data, err := vec.MarshalBinary()

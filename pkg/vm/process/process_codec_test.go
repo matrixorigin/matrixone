@@ -278,6 +278,35 @@ func TestBuildProcessInfoAndMockProcessInfoWithPro(t *testing.T) {
 	require.Equal(t, "UTC", proc.Base.SessionInfo.TimeZone.String())
 }
 
+func TestBuildProcessInfoGatesBinaryStringMetadataByProtocolVersion(t *testing.T) {
+	proc, _ := newCodecTestProcess(t)
+	serviceRuntime := rt.ServiceRuntime(proc.GetService())
+	original, hadOriginal := serviceRuntime.GetGlobalVariables(rt.MOProtocolVersion)
+	defer func() {
+		if hadOriginal {
+			serviceRuntime.SetGlobalVariables(rt.MOProtocolVersion, original)
+		} else {
+			serviceRuntime.SetGlobalVariables(rt.MOProtocolVersion, defines.MORPCLatestVersion)
+		}
+		proc.Free()
+	}()
+
+	serviceRuntime.SetGlobalVariables(rt.MOProtocolVersion, defines.MORPCVersion10)
+	_, err := proc.BuildProcessInfo("select ?")
+	require.Error(t, err)
+
+	proc.SetPrepareParamsWithMetadata(proc.GetPrepareParams(), []bool{false, false}, []bool{false, false})
+	info, err := proc.BuildProcessInfo("select ?")
+	require.NoError(t, err)
+	require.Empty(t, info.PrepareParams.IsBinaryString)
+
+	serviceRuntime.SetGlobalVariables(rt.MOProtocolVersion, defines.MORPCVersion11)
+	proc.SetPrepareParamsWithMetadata(proc.GetPrepareParams(), []bool{false, false}, []bool{false, true})
+	info, err = proc.BuildProcessInfo("select ?")
+	require.NoError(t, err)
+	require.Equal(t, []bool{false, true}, info.PrepareParams.IsBinaryString)
+}
+
 func TestCodecServiceEncodeDecodeAndLookup(t *testing.T) {
 	proc, _ := newCodecTestProcess(t)
 	decodedTxn := fakeCodecTxnOperator{}

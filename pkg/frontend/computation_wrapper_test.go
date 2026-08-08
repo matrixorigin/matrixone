@@ -264,6 +264,24 @@ func TestPreparedSetExpressionParamsAfterInit(t *testing.T) {
 	require.Same(t, second, prepareStmt.params)
 }
 
+func TestBinaryProtocolPrepareMetadataInstalledOnProcess(t *testing.T) {
+	ses, prepareStmt, cw, execCtx := newPreparedExecuteEnvForSQL(
+		t, 109, "select char_length(?)")
+	defer prepareStmt.Close()
+
+	params := vector.NewVec(types.T_text.ToType())
+	require.NoError(t, vector.AppendBytes(params, []byte{0xe4, 0xbd, 0xa0}, false, cw.proc.Mp()))
+	prepareStmt.params = params
+	prepareStmt.paramsBinaryString = []bool{true}
+
+	_, _, _, _, _, err := initExecuteStmtParam(
+		execCtx, ses, cw, nil, prepareStmt.Name)
+	require.NoError(t, err)
+	require.True(t, cw.proc.GetPrepareParamIsBinaryString(0))
+
+	cw.proc.SetPrepareParams(nil)
+}
+
 func TestInitExecuteStmtParamFreesParamsOnResolveError(t *testing.T) {
 	ses, prepareStmt, cw, _ := newPreparedExecuteEnvForSQL(t, 103, "select ?, ?")
 	defer prepareStmt.Close()

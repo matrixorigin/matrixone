@@ -281,7 +281,7 @@ func genAsSelectCols(ctx CompilerContext, stmt *tree.Select, isPrepareStmt bool)
 	for i, expr := range rootNode.ProjectList {
 		defaultVal := ""
 		typ := &expr.Typ
-		if binaryType, ok := binaryLiteralStringType(expr); ok {
+		if binaryType, ok := ctasBinaryStringType(ctx, expr); ok {
 			planType := makePlan2Type(&binaryType)
 			typ = &planType
 		}
@@ -307,6 +307,93 @@ func genAsSelectCols(ctx CompilerContext, stmt *tree.Select, isPrepareStmt bool)
 		}
 	}
 	return cols, builder.qry, nil
+}
+
+type binaryStringVariableResolver interface {
+	ResolveVariableBinaryString(varName string, isSystemVar, isGlobalVar bool) (bool, error)
+}
+
+func ctasBinaryStringType(ctx CompilerContext, expr *Expr) (types.Type, bool) {
+	if binaryType, ok := binaryLiteralStringType(expr); ok {
+		return binaryType, true
+	}
+	exprType := makeTypeByPlan2Expr(expr)
+	if exprType.Oid == types.T_binary || exprType.Oid == types.T_varbinary || exprType.Oid == types.T_blob {
+		return exprType, true
+	}
+	if variable := expr.GetV(); variable != nil {
+		resolver, ok := ctx.(binaryStringVariableResolver)
+		if !ok {
+			return types.Type{}, false
+		}
+		binaryString, err := resolver.ResolveVariableBinaryString(
+			variable.Name, variable.System, variable.Global)
+		if err != nil || !binaryString {
+			return types.Type{}, false
+		}
+		return types.T_blob.ToType(), true
+	}
+
+	fn := expr.GetF()
+	if fn == nil || fn.Func == nil {
+		return types.Type{}, false
+	}
+	name := strings.ToLower(fn.Func.ObjName)
+	if name == "cast" {
+		return types.Type{}, false
+	}
+	if name == "char" {
+		return types.T_blob.ToType(), true
+	}
+
+	usesArgument := func(idx int) bool {
+		switch name {
+		case "concat", "concat_ws", "coalesce", "group_concat":
+			return true
+		case "elt":
+			return idx > 0
+		case "if", "iff":
+			return idx == 1 || idx == 2
+		case "case":
+			return idx%2 == 1 || len(fn.Args)%2 == 1 && idx == len(fn.Args)-1
+		case "lpad", "rpad":
+			return idx == 0 || idx == 2
+		case "replace", "trim":
+			return true
+		case "substring", "substr", "mid", "left", "right", "lower", "lcase", "upper", "ucase",
+			"repeat", "reverse", "ltrim", "rtrim", "regexp_substr", "min", "max", "any_value",
+			"first_value", "last_value", "nth_value", "lag", "lead":
+			return idx == 0
+		default:
+			return false
+		}
+	}
+
+	var resultType types.Type
+	found := false
+	for idx, arg := range fn.Args {
+		if !usesArgument(idx) {
+			continue
+		}
+		argType, ok := ctasBinaryStringType(ctx, arg)
+		if !ok {
+			continue
+		}
+		found = true
+		if argType.Oid == types.T_blob {
+			return argType, true
+		}
+		if resultType.Oid == types.T_any || resultType.Oid == 0 {
+			resultType = argType
+		}
+	}
+	if !found {
+		return types.Type{}, false
+	}
+	if name == "group_concat" {
+		return types.T_blob.ToType(), true
+	}
+	return resultType, true
 }
 
 func ctasExprCanBeNull(expr *Expr) bool {

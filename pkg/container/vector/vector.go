@@ -1717,6 +1717,7 @@ func (v *Vector) dup(
 	w.class = v.class
 	w.typ = v.typ
 	w.sorted = v.sorted
+	w.binaryString = v.binaryString
 
 	if v.IsConstNull() {
 		w.length = v.length
@@ -1819,6 +1820,7 @@ func (v *Vector) cloneToFlatCompact(
 			return nil, err
 		}
 	}
+	w.binaryString = v.binaryString
 	if v.class != FLAT || (!v.typ.IsFixedLen() && !v.typ.IsVarlen()) {
 		if err := GetUnionAllFunction(v.typ, mp)(w, v); err != nil {
 			w.Free(mp)
@@ -5285,6 +5287,7 @@ func (v *Vector) window(
 	w.class = v.class
 	w.length = end - start
 	w.sorted = v.sorted
+	w.binaryString = v.binaryString
 	if err := v.copyWindowBitmaps(w, start, end, mp); err != nil {
 		w.Free(mp)
 		return nil, err
@@ -5350,6 +5353,7 @@ func (v *Vector) CloneWindowWithAllocation(
 ) (*Vector, error) {
 	if start == end {
 		w := NewOffHeapVecWithType(v.typ)
+		w.binaryString = v.binaryString
 		if selection != nil {
 			if err := w.SetAllocationAccount(selection); err != nil {
 				return nil, err
@@ -5376,6 +5380,7 @@ func (v *Vector) CloneWindowWithAllocation(
 }
 
 func (v *Vector) CloneWindowTo(w *Vector, start, end int, mp *mpool.MPool) error {
+	w.binaryString = v.binaryString
 	if start == end {
 		return nil
 	}

@@ -333,6 +333,10 @@ func useExplicitCastOverload(typ tree.ResolvableTypeReference) bool {
 	switch defines.MysqlType(internal.Oid) {
 	case defines.MYSQL_TYPE_DECIMAL, defines.MYSQL_TYPE_NEWDECIMAL:
 		return true
+	case defines.MYSQL_TYPE_STRING, defines.MYSQL_TYPE_VARCHAR,
+		defines.MYSQL_TYPE_VAR_STRING, defines.MYSQL_TYPE_TEXT:
+		family := strings.ToLower(internal.FamilyString)
+		return !internal.Binary && family != "binary" && family != "varbinary" && family != "blob"
 	case defines.MYSQL_TYPE_LONGLONG:
 		family := strings.ToLower(internal.FamilyString)
 		return family == "signed" || family == "integer" ||

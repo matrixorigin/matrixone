@@ -20,6 +20,8 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/stretchr/testify/require"
@@ -46,6 +48,23 @@ func TestExplicitCastUsesDedicatedOverload(t *testing.T) {
 	require.Equal(t, int32(1), explicitOverload)
 }
 
+func TestExplicitCharacterCastsUseDedicatedOverload(t *testing.T) {
+	stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL,
+		"select cast(@u as char), cast(@u as char(10)), convert(@u, char)", 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+
+	p, err := BuildPlan(NewMockCompilerContext(false), stmt, false)
+	require.NoError(t, err)
+	projects := p.GetQuery().Nodes[p.GetQuery().Steps[0]].ProjectList
+	require.Len(t, projects, 3)
+	for idx, project := range projects {
+		require.Equal(t, "cast", project.GetF().GetFunc().GetObjName())
+		_, overload := function.DecodeOverloadID(project.GetF().GetFunc().GetObj())
+		require.Equal(t, int32(1), overload, "project %d", idx)
+	}
+}
+
 func TestUseExplicitCastOverload(t *testing.T) {
 	tests := []struct {
 		name string
@@ -56,6 +75,8 @@ func TestUseExplicitCastOverload(t *testing.T) {
 		{name: "signed integer", typ: tree.InternalType{Oid: uint32(defines.MYSQL_TYPE_LONGLONG), FamilyString: "integer"}, want: true},
 		{name: "unsigned", typ: tree.InternalType{Oid: uint32(defines.MYSQL_TYPE_LONGLONG), Unsigned: true}, want: true},
 		{name: "decimal", typ: tree.InternalType{Oid: uint32(defines.MYSQL_TYPE_NEWDECIMAL), FamilyString: "decimal"}, want: true},
+		{name: "char", typ: tree.InternalType{Oid: uint32(defines.MYSQL_TYPE_STRING), FamilyString: "char"}, want: true},
+		{name: "binary", typ: tree.InternalType{Oid: uint32(defines.MYSQL_TYPE_VAR_STRING), FamilyString: "binary"}},
 		{name: "tinyint", typ: tree.InternalType{Oid: uint32(defines.MYSQL_TYPE_TINY), FamilyString: "tinyint"}},
 		{name: "smallint", typ: tree.InternalType{Oid: uint32(defines.MYSQL_TYPE_SHORT), FamilyString: "smallint"}},
 		{name: "int", typ: tree.InternalType{Oid: uint32(defines.MYSQL_TYPE_LONG), FamilyString: "int"}},

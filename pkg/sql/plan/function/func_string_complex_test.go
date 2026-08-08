@@ -21,6 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
 
@@ -166,6 +167,155 @@ func TestBinaryStringFunctionsPreserveDynamicSemantics(t *testing.T) {
 		[]*vector.Vector{binary, repeatCounts}, repeatResult, proc, binary.Length(), nil))
 	require.False(t, repeatResult.GetResultVector().GetIsBin())
 	require.True(t, repeatResult.GetResultVector().GetIsBinaryString())
+}
+
+func TestBinaryStringFunctionsUseByteSemantics(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	mp := proc.Mp()
+	binary := testutil.MakeVarlenaVector(
+		[][]byte{{0xe4, 0xbd, 0xa0, 0x61}, {0xff, 0x61}}, nil, types.T_varchar.ToType(), mp)
+	binary.SetIsBinaryString(true)
+	defer binary.Free(mp)
+
+	lengths := testutil.MakeInt64Vector([]int64{1, 1}, nil, mp)
+	defer lengths.Free(mp)
+	leftResult := vector.NewFunctionResultWrapper(types.T_varchar.ToType(), mp)
+	defer leftResult.Free()
+	require.NoError(t, leftResult.PreExtendAndReset(binary.Length()))
+	require.NoError(t, Left([]*vector.Vector{binary, lengths}, leftResult, proc, binary.Length(), nil))
+	require.True(t, leftResult.GetResultVector().GetIsBinaryString())
+	require.Equal(t, []string{string([]byte{0xe4}), string([]byte{0xff})},
+		vector.InefficientMustStrCol(leftResult.GetResultVector()))
+
+	reverseResult := vector.NewFunctionResultWrapper(types.T_varchar.ToType(), mp)
+	defer reverseResult.Free()
+	require.NoError(t, reverseResult.PreExtendAndReset(binary.Length()))
+	require.NoError(t, Reverse([]*vector.Vector{binary}, reverseResult, proc, binary.Length(), nil))
+	require.True(t, reverseResult.GetResultVector().GetIsBinaryString())
+	require.Equal(t, []string{string([]byte{0x61, 0xa0, 0xbd, 0xe4}), string([]byte{0x61, 0xff})},
+		vector.InefficientMustStrCol(reverseResult.GetResultVector()))
+
+	ordResult := vector.NewFunctionResultWrapper(types.T_int64.ToType(), mp)
+	defer ordResult.Free()
+	require.NoError(t, ordResult.PreExtendAndReset(binary.Length()))
+	require.NoError(t, Ord([]*vector.Vector{binary}, ordResult, proc, binary.Length(), nil))
+	require.Equal(t, []int64{0xe4, 0xff}, vector.MustFixedColWithTypeCheck[int64](ordResult.GetResultVector()))
+
+	needle := testutil.MakeVarlenaVector([][]byte{{0xbd}, {0x61}}, nil, types.T_varchar.ToType(), mp)
+	needle.SetIsBinaryString(true)
+	defer needle.Free(mp)
+	instrResult := vector.NewFunctionResultWrapper(types.T_int64.ToType(), mp)
+	defer instrResult.Free()
+	require.NoError(t, instrResult.PreExtendAndReset(binary.Length()))
+	require.NoError(t, Instr([]*vector.Vector{binary, needle}, instrResult, proc, binary.Length(), nil))
+	require.Equal(t, []int64{2, 2}, vector.MustFixedColWithTypeCheck[int64](instrResult.GetResultVector()))
+
+	locateResult := vector.NewFunctionResultWrapper(types.T_int64.ToType(), mp)
+	defer locateResult.Free()
+	require.NoError(t, locateResult.PreExtendAndReset(binary.Length()))
+	require.NoError(t, buildInLocate2Args(
+		[]*vector.Vector{needle, binary}, locateResult, proc, binary.Length(), nil))
+	require.Equal(t, []int64{2, 2}, vector.MustFixedColWithTypeCheck[int64](locateResult.GetResultVector()))
+
+	pad := testutil.MakeVarlenaVector([][]byte{[]byte("x"), []byte("x")}, nil, types.T_varchar.ToType(), mp)
+	defer pad.Free(mp)
+	padLengths := testutil.MakeInt64Vector([]int64{5, 5}, nil, mp)
+	defer padLengths.Free(mp)
+	for name, fn := range map[string]func([]*vector.Vector, vector.FunctionResultWrapper, *process.Process, int, *FunctionSelectList) error{
+		"lpad": builtInLpad,
+		"rpad": builtInRpad,
+	} {
+		t.Run(name, func(t *testing.T) {
+			result := vector.NewFunctionResultWrapper(types.T_varchar.ToType(), mp)
+			defer result.Free()
+			require.NoError(t, result.PreExtendAndReset(binary.Length()))
+			require.NoError(t, fn(
+				[]*vector.Vector{binary, padLengths, pad}, result, proc, binary.Length(), nil))
+			require.True(t, result.GetResultVector().GetIsBinaryString())
+			values := vector.InefficientMustStrCol(result.GetResultVector())
+			if name == "lpad" {
+				require.Equal(t, []string{
+					string([]byte{'x', 0xe4, 0xbd, 0xa0, 0x61}),
+					string([]byte{'x', 'x', 'x', 0xff, 0x61}),
+				}, values)
+			} else {
+				require.Equal(t, []string{
+					string([]byte{0xe4, 0xbd, 0xa0, 0x61, 'x'}),
+					string([]byte{0xff, 0x61, 'x', 'x', 'x'}),
+				}, values)
+			}
+		})
+	}
+
+	patterns := testutil.MakeVarlenaVector(
+		[][]byte{[]byte("____"), []byte("__")}, nil, types.T_varchar.ToType(), mp)
+	defer patterns.Free(mp)
+	likeResult := vector.NewFunctionResultWrapper(types.T_bool.ToType(), mp)
+	defer likeResult.Free()
+	require.NoError(t, likeResult.PreExtendAndReset(binary.Length()))
+	require.NoError(t, newOpBuiltInRegexp().likeFn(
+		[]*vector.Vector{binary, patterns}, likeResult, proc, binary.Length(), nil))
+	require.Equal(t, []bool{true, true}, vector.MustFixedColWithTypeCheck[bool](likeResult.GetResultVector()))
+
+	dot := testutil.MakeVarlenaVector([][]byte{[]byte("."), []byte(".")}, nil, types.T_varchar.ToType(), mp)
+	defer dot.Free(mp)
+	regexpResult := vector.NewFunctionResultWrapper(types.T_varchar.ToType(), mp)
+	defer regexpResult.Free()
+	require.NoError(t, regexpResult.PreExtendAndReset(binary.Length()))
+	require.NoError(t, newOpBuiltInRegexp().builtInRegexpSubstr(
+		[]*vector.Vector{binary, dot}, regexpResult, proc, binary.Length(), nil))
+	require.True(t, regexpResult.GetResultVector().GetIsBinaryString())
+	require.Equal(t, []string{string([]byte{0xe4}), string([]byte{0xff})},
+		vector.InefficientMustStrCol(regexpResult.GetResultVector()))
+}
+
+func TestBinaryStringScalarResultsPropagateMetadata(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	mp := proc.Mp()
+	binary := testutil.MakeVarlenaVector(
+		[][]byte{{0xe4, 0xbd, 0xa0}}, nil, types.T_varchar.ToType(), mp)
+	binary.SetIsBinaryString(true)
+	defer binary.Free(mp)
+	text := testutil.MakeVarlenaVector([][]byte{[]byte("x")}, nil, types.T_varchar.ToType(), mp)
+	defer text.Free(mp)
+
+	tests := []struct {
+		name   string
+		fn     func([]*vector.Vector, vector.FunctionResultWrapper, *process.Process, int, *FunctionSelectList) error
+		params []*vector.Vector
+	}{
+		{name: "replace", fn: Replace, params: []*vector.Vector{binary, text, text}},
+		{name: "ltrim", fn: Ltrim, params: []*vector.Vector{binary}},
+		{name: "rtrim", fn: Rtrim, params: []*vector.Vector{binary}},
+		{name: "elt", fn: Elt, params: []*vector.Vector{
+			testutil.MakeInt64Vector([]int64{1}, nil, mp), binary,
+		}},
+		{name: "trim", fn: Trim, params: []*vector.Vector{
+			testutil.MakeVarlenaVector([][]byte{[]byte("both")}, nil, types.T_varchar.ToType(), mp),
+			binary, text,
+		}},
+	}
+	defer tests[3].params[0].Free(mp)
+	defer tests[4].params[0].Free(mp)
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			result := vector.NewFunctionResultWrapper(types.T_varchar.ToType(), mp)
+			defer result.Free()
+			require.NoError(t, result.PreExtendAndReset(1))
+			require.NoError(t, test.fn(test.params, result, proc, 1, nil))
+			require.True(t, result.GetResultVector().GetIsBinaryString())
+		})
+	}
+
+	charInput := testutil.MakeInt64Vector([]int64{0xe4bda0}, nil, mp)
+	defer charInput.Free(mp)
+	charResult := vector.NewFunctionResultWrapper(types.T_varchar.ToType(), mp)
+	defer charResult.Free()
+	require.NoError(t, charResult.PreExtendAndReset(1))
+	require.NoError(t, builtInChar(
+		[]*vector.Vector{charInput}, charResult, proc, 1, nil))
+	require.True(t, charResult.GetResultVector().GetIsBinaryString())
 }
 
 // Test_ConcatWs tests CONCAT_WS function (concat with separator)

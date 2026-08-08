@@ -1143,6 +1143,7 @@ func builtInCharCheck(_ []overload, inputs []types.Type) checkResult {
 }
 
 func builtInChar(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
+	result.GetResultVector().SetIsBinaryString(true)
 	rs := vector.MustFunctionResult[types.Varlena](result)
 
 	// After builtInCharCheck, parameters are either integer or string types.
@@ -1567,6 +1568,42 @@ func doRpad(src string, tgtLen int64, pad string) (string, bool) {
 	}
 }
 
+func doLpadBytes(src []byte, tgtLen int64, pad []byte) ([]byte, bool) {
+	if tgtLen < 0 || tgtLen > types.MaxVarcharLen {
+		return nil, true
+	}
+	if tgtLen <= int64(len(src)) {
+		return src[:tgtLen], false
+	}
+	if len(pad) == 0 {
+		return nil, false
+	}
+	missing := int(tgtLen) - len(src)
+	out := make([]byte, 0, int(tgtLen))
+	out = append(out, bytes.Repeat(pad, missing/len(pad))...)
+	out = append(out, pad[:missing%len(pad)]...)
+	out = append(out, src...)
+	return out, false
+}
+
+func doRpadBytes(src []byte, tgtLen int64, pad []byte) ([]byte, bool) {
+	if tgtLen < 0 || tgtLen > types.MaxVarcharLen {
+		return nil, true
+	}
+	if tgtLen <= int64(len(src)) {
+		return src[:tgtLen], false
+	}
+	if len(pad) == 0 {
+		return nil, false
+	}
+	missing := int(tgtLen) - len(src)
+	out := make([]byte, 0, int(tgtLen))
+	out = append(out, src...)
+	out = append(out, bytes.Repeat(pad, missing/len(pad))...)
+	out = append(out, pad[:missing%len(pad)]...)
+	return out, false
+}
+
 func builtInRepeat(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	binaryInput := isBinaryStringVector(parameters[0])
 	// repeat the string n times.
@@ -1615,6 +1652,7 @@ func builtInRepeat(parameters []*vector.Vector, result vector.FunctionResultWrap
 }
 
 func builtInLpad(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
+	binaryInput := isBinaryStringVector(parameters[0]) || isBinaryStringVector(parameters[2])
 	p1 := vector.GenerateFunctionStrParameter(parameters[0])
 	p2 := vector.GenerateFunctionFixedTypeParameter[int64](parameters[1])
 	p3 := vector.GenerateFunctionStrParameter(parameters[2])
@@ -1625,9 +1663,17 @@ func builtInLpad(parameters []*vector.Vector, result vector.FunctionResultWrappe
 		v2, null2 := p2.GetValue(i)
 		v3, null3 := p3.GetStrValue(i)
 		if !(null1 || null2 || null3) {
-			rval, shouldNull := doLpad(string(v1), v2, string(v3))
+			var rvalue []byte
+			var shouldNull bool
+			if binaryInput {
+				rvalue, shouldNull = doLpadBytes(v1, v2, v3)
+			} else {
+				var value string
+				value, shouldNull = doLpad(string(v1), v2, string(v3))
+				rvalue = []byte(value)
+			}
 			if !shouldNull {
-				if err := rs.AppendBytes([]byte(rval), false); err != nil {
+				if err := rs.AppendBytes(rvalue, false); err != nil {
 					return err
 				}
 				continue
@@ -1637,10 +1683,14 @@ func builtInLpad(parameters []*vector.Vector, result vector.FunctionResultWrappe
 			return err
 		}
 	}
+	if binaryInput {
+		result.GetResultVector().SetIsBinaryString(true)
+	}
 	return nil
 }
 
 func builtInRpad(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
+	binaryInput := isBinaryStringVector(parameters[0]) || isBinaryStringVector(parameters[2])
 	p1 := vector.GenerateFunctionStrParameter(parameters[0])
 	p2 := vector.GenerateFunctionFixedTypeParameter[int64](parameters[1])
 	p3 := vector.GenerateFunctionStrParameter(parameters[2])
@@ -1651,9 +1701,17 @@ func builtInRpad(parameters []*vector.Vector, result vector.FunctionResultWrappe
 		v2, null2 := p2.GetValue(i)
 		v3, null3 := p3.GetStrValue(i)
 		if !(null1 || null2 || null3) {
-			rval, shouldNull := doRpad(string(v1), v2, string(v3))
+			var rvalue []byte
+			var shouldNull bool
+			if binaryInput {
+				rvalue, shouldNull = doRpadBytes(v1, v2, v3)
+			} else {
+				var value string
+				value, shouldNull = doRpad(string(v1), v2, string(v3))
+				rvalue = []byte(value)
+			}
 			if !shouldNull {
-				if err := rs.AppendBytes([]byte(rval), false); err != nil {
+				if err := rs.AppendBytes(rvalue, false); err != nil {
 					return err
 				}
 				continue
@@ -1662,6 +1720,9 @@ func builtInRpad(parameters []*vector.Vector, result vector.FunctionResultWrappe
 		if err := rs.AppendBytes(nil, true); err != nil {
 			return err
 		}
+	}
+	if binaryInput {
+		result.GetResultVector().SetIsBinaryString(true)
 	}
 	return nil
 }

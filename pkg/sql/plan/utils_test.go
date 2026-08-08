@@ -23,11 +23,14 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/stage"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -1637,6 +1640,44 @@ func TestInitInfileOrStageParam_NonStageFallsThrough(t *testing.T) {
 	require.NoError(t, InitInfileOrStageParam(param, nil))
 	assert.Equal(t, "/data/x", param.Filepath)
 	assert.Equal(t, "parquet", param.Format)
+}
+
+func TestConstantFoldKeepsBinaryStringMetadataProducingFunction(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	f, err := function.GetFunctionByName(context.Background(), "char",
+		[]types.Type{types.T_int64.ToType(), types.T_int64.ToType(), types.T_int64.ToType()})
+	require.NoError(t, err)
+	args := make([]*plan.Expr, 3)
+	for i, value := range []int64{228, 189, 160} {
+		args[i] = &plan.Expr{
+			Typ: plan.Type{Id: int32(types.T_int64)},
+			Expr: &plan.Expr_Lit{Lit: &plan.Literal{
+				Value: &plan.Literal_I64Val{I64Val: value},
+			}},
+		}
+	}
+	expr := &plan.Expr{
+		Typ: plan.Type{Id: int32(types.T_varchar)},
+		Expr: &plan.Expr_F{F: &plan.Function{
+			Func: &plan.ObjectRef{Obj: f.GetEncodedOverloadID(), ObjName: "char"},
+			Args: args,
+		}},
+	}
+	lengthFn, err := function.GetFunctionByName(context.Background(), "char_length",
+		[]types.Type{types.T_varchar.ToType()})
+	require.NoError(t, err)
+	expr = &plan.Expr{
+		Typ: plan.Type{Id: int32(types.T_uint64)},
+		Expr: &plan.Expr_F{F: &plan.Function{
+			Func: &plan.ObjectRef{Obj: lengthFn.GetEncodedOverloadID(), ObjName: "char_length"},
+			Args: []*plan.Expr{expr},
+		}},
+	}
+
+	folded, err := ConstantFold(batch.EmptyForConstFoldBatch, expr, proc, false, true)
+	require.NoError(t, err)
+	require.NotNil(t, folded.GetF())
+	require.NotNil(t, folded.GetF().Args[0].GetF())
 }
 
 // Avoid unused import warning when some branches of types are not directly referenced.
