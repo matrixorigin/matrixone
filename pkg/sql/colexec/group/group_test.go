@@ -248,8 +248,9 @@ func buildPartialH0Batch(t *testing.T, proc *process.Process, values []int32) *b
 }
 
 type preparedPartialSpec struct {
-	rows int
-	kind vector.PrepareParamKind
+	rows    int
+	kind    vector.PrepareParamKind
+	allNull bool
 }
 
 func buildPreparedMinPartial(
@@ -271,7 +272,7 @@ func buildPreparedPartial(
 
 	params := vector.NewVec(types.T_text.ToType())
 	defer params.Free(proc.Mp())
-	require.NoError(t, vector.AppendBytes(params, []byte("5"), false, proc.Mp()))
+	require.NoError(t, vector.AppendBytes(params, []byte("5"), spec.allNull, proc.Mp()))
 	proc.SetPrepareParamsWithMeta(params, nil, []vector.PrepareParamKind{spec.kind})
 	defer proc.SetPrepareParams(nil)
 
@@ -359,6 +360,14 @@ func TestMergeGroupPreservesPreparedParamKind(t *testing.T) {
 				{rows: 2, kind: vector.PrepareParamInteger},
 			},
 			wantKind: vector.PrepareParamInteger,
+		},
+		{
+			name: "all-null-before-float",
+			partials: []preparedPartialSpec{
+				{rows: 1, kind: vector.PrepareParamDecimal, allNull: true},
+				{rows: 2, kind: vector.PrepareParamFloat},
+			},
+			wantKind: vector.PrepareParamFloat,
 		},
 		{
 			name: "string-before-float",

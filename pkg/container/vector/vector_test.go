@@ -73,6 +73,7 @@ func TestAppendCheckpointRollback(t *testing.T) {
 	vec.GetGrouping().Set(0)
 	vec.SetSorted(true)
 	checkpoint := vec.MakeAppendCheckpoint()
+	vec.SetPrepareParamKind(PrepareParamFloat)
 
 	require.NoError(t, AppendBytes(vec, []byte(strings.Repeat("b", 96)), false, mp))
 	vec.GetNulls().Set(1)
@@ -88,6 +89,8 @@ func TestAppendCheckpointRollback(t *testing.T) {
 	require.False(t, vec.GetNulls().Contains(1))
 	require.True(t, vec.GetGrouping().Contains(0))
 	require.False(t, vec.GetGrouping().Contains(1))
+	require.Equal(t, PrepareParamNone, vec.GetPrepareParamKind(),
+		"the checkpoint predates the explicit provenance assignment")
 	require.False(t, vec.GetGrouping().Contains(2))
 	require.True(t, vec.GetSorted())
 }
@@ -3940,4 +3943,116 @@ func TestPrepareParamKindValueLifecycle(t *testing.T) {
 	clone.CleanOnlyData()
 	require.Equal(t, PrepareParamNone, clone.GetPrepareParamKind())
 	clone.Free(mp)
+}
+
+func TestPrepareParamKindPropagationAcrossAppendAndClone(t *testing.T) {
+	mp := mpool.MustNewZero()
+	numeric := NewVec(types.T_text.ToType())
+	require.NoError(t, AppendBytes(numeric, []byte("5.5"), false, mp))
+	numeric.SetPrepareParamKind(PrepareParamFloat)
+	defer numeric.Free(mp)
+
+	for name, appendFn := range map[string]func(*Vector) error{
+		"one":       func(dst *Vector) error { return dst.UnionOne(numeric, 0, mp) },
+		"multi":     func(dst *Vector) error { return dst.UnionMulti(numeric, 0, 2, mp) },
+		"selection": func(dst *Vector) error { return dst.Union(numeric, []int64{0}, mp) },
+		"batch":     func(dst *Vector) error { return dst.UnionBatch(numeric, 0, 1, nil, mp) },
+	} {
+		t.Run(name, func(t *testing.T) {
+			dst := NewVec(types.T_text.ToType())
+			defer dst.Free(mp)
+			require.NoError(t, appendFn(dst))
+			require.Equal(t, PrepareParamFloat, dst.GetPrepareParamKind())
+		})
+	}
+
+	ordinary := NewVec(types.T_text.ToType())
+	require.NoError(t, AppendBytes(ordinary, []byte("text"), false, mp))
+	defer ordinary.Free(mp)
+	dst := NewVec(types.T_text.ToType())
+	require.NoError(t, dst.UnionBatch(numeric, 0, 1, nil, mp))
+	require.NoError(t, dst.UnionBatch(ordinary, 0, 1, nil, mp))
+	require.Equal(t, PrepareParamNone, dst.GetPrepareParamKind(),
+		"mixed prepared and ordinary sources must be conservative")
+	dst.Free(mp)
+
+	clone, err := numeric.CloneToFlatCompact(mp)
+	require.NoError(t, err)
+	require.Equal(t, PrepareParamFloat, clone.GetPrepareParamKind())
+	clone.Free(mp)
+	dup, err := numeric.Dup(mp)
+	require.NoError(t, err)
+	require.Equal(t, PrepareParamFloat, dup.GetPrepareParamKind())
+	dup.Free(mp)
+	window, err := numeric.Window(0, 1)
+	require.NoError(t, err)
+	require.Equal(t, PrepareParamFloat, window.GetPrepareParamKind())
+	window.Free(mp)
+}
+
+func TestPrepareParamKindEmptyReuseCopyAndRollback(t *testing.T) {
+	mp := mpool.MustNewZero()
+	decimal := NewVec(types.T_text.ToType())
+	require.NoError(t, AppendBytes(decimal, []byte("5.9"), false, mp))
+	decimal.SetPrepareParamKind(PrepareParamDecimal)
+	defer decimal.Free(mp)
+
+	for name, makeDestination := range map[string]func() *Vector{
+		"empty": func() *Vector { return NewVec(types.T_text.ToType()) },
+		"all-null": func() *Vector {
+			v := NewVec(types.T_text.ToType())
+			require.NoError(t, AppendBytes(v, nil, true, mp))
+			v.SetPrepareParamKind(PrepareParamFloat)
+			return v
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			dst := makeDestination()
+			defer dst.Free(mp)
+			require.NoError(t, dst.UnionOne(decimal, 0, mp))
+			require.Equal(t, PrepareParamDecimal, dst.GetPrepareParamKind())
+		})
+	}
+
+	ordinary := NewVec(types.T_text.ToType())
+	require.NoError(t, AppendBytes(ordinary, []byte("ordinary"), false, mp))
+	defer ordinary.Free(mp)
+	require.NoError(t, ordinary.Copy(decimal, 0, 0, mp))
+	require.Equal(t, PrepareParamNone, ordinary.GetPrepareParamKind())
+
+	union := NewVec(types.T_text.ToType())
+	require.NoError(t, GetUnionAllFunction(types.T_text.ToType(), mp)(union, decimal))
+	require.Equal(t, PrepareParamDecimal, union.GetPrepareParamKind())
+	union.Free(mp)
+
+	rollback := NewVec(types.T_text.ToType())
+	require.NoError(t, AppendBytes(rollback, []byte("5.5"), false, mp))
+	rollback.SetPrepareParamKind(PrepareParamFloat)
+	defer rollback.Free(mp)
+	checkpoint := rollback.MakeAppendCheckpoint()
+	require.NoError(t, rollback.UnionOne(decimal, 0, mp))
+	require.Equal(t, PrepareParamNone, rollback.GetPrepareParamKind())
+	rollback.RollbackAppend(checkpoint, 1)
+	require.Equal(t, PrepareParamFloat, rollback.GetPrepareParamKind(),
+		"rollback must restore the mixed-source provenance")
+}
+
+func BenchmarkUnionBatchPrepareParamKind(b *testing.B) {
+	mp := mpool.MustNewZero()
+	source := NewVec(types.T_int64.ToType())
+	defer source.Free(mp)
+	for i := 0; i < 1024; i++ {
+		require.NoError(b, AppendFixed(source, int64(i), false, mp))
+	}
+	source.SetPrepareParamKind(PrepareParamFloat)
+	destination := NewVec(types.T_int64.ToType())
+	defer destination.Free(mp)
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		destination.ResetWithSameType()
+		if err := destination.UnionBatch(source, 0, source.Length(), nil, mp); err != nil {
+			b.Fatal(err)
+		}
+	}
 }

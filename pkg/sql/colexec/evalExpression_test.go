@@ -361,6 +361,148 @@ func TestParamExpressionExecutorPreservesProtocolMetadataPerParameter(t *testing
 	require.Equal(t, "text", textVec.GetStringAt(0))
 }
 
+func TestFlowControlPreservesPreparedParamKindOnPartialSelection(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	params := vector.NewVec(types.T_text.ToType())
+	require.NoError(t, vector.AppendBytes(params, []byte("5.5"), false, proc.Mp()))
+	params.SetPrepareParamKind(vector.PrepareParamFloat)
+	proc.SetPrepareParamsWithMeta(params, nil, []vector.PrepareParamKind{vector.PrepareParamFloat})
+	defer params.Free(proc.Mp())
+
+	column := &plan.Expr{
+		Typ:  plan.Type{Id: int32(types.T_bool), NotNullable: true},
+		Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}},
+	}
+	parameter := &plan.Expr{
+		Typ:  plan.Type{Id: int32(types.T_text)},
+		Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: 0}},
+	}
+	stringConst := func(value string) *plan.Expr {
+		return &plan.Expr{
+			Typ: plan.Type{Id: int32(types.T_varchar), NotNullable: true},
+			Expr: &plan.Expr_Lit{Lit: &plan.Literal{
+				Value: &plan.Literal_Sval{Sval: value},
+			}},
+		}
+	}
+	bindFunction := func(name string, args ...*plan.Expr) *plan.Expr {
+		argTypes := make([]types.Type, len(args))
+		for i := range args {
+			argTypes[i] = types.New(types.T(args[i].Typ.Id), args[i].Typ.Width, args[i].Typ.Scale)
+		}
+		fn, err := function.GetFunctionByName(proc.Ctx, name, argTypes)
+		require.NoError(t, err)
+		retType := fn.GetReturnType()
+		return &plan.Expr{
+			Typ: plan.Type{Id: int32(retType.Oid), Width: retType.Width, Scale: retType.Scale},
+			Expr: &plan.Expr_F{F: &plan.Function{
+				Func: &plan.ObjectRef{Obj: fn.GetEncodedOverloadID(), ObjName: name},
+				Args: args,
+			}},
+		}
+	}
+
+	input := testutil.NewBatchWithVectors([]*vector.Vector{
+		testutil.NewVector(2, types.T_bool.ToType(), proc.Mp(), false, []bool{true, true}),
+	}, nil)
+	defer input.Clean(proc.Mp())
+	for name, expression := range map[string]*plan.Expr{
+		"if":       bindFunction("if", column, parameter, stringConst("fallback")),
+		"case":     bindFunction("case", column, parameter),
+		"coalesce": bindFunction("coalesce", parameter, stringConst("fallback")),
+	} {
+		t.Run(name, func(t *testing.T) {
+			executor, err := NewExpressionExecutor(proc, expression)
+			require.NoError(t, err)
+			defer executor.Free()
+
+			result, err := executor.Eval(proc, []*batch.Batch{input}, []bool{true, false})
+			require.NoError(t, err)
+			require.Equal(t, vector.PrepareParamFloat, result.GetPrepareParamKind())
+			require.Equal(t, "5.5", result.GetStringAt(0))
+			require.True(t, result.IsNull(1))
+
+			result, err = executor.Eval(proc, []*batch.Batch{input}, nil)
+			require.NoError(t, err)
+			require.Equal(t, vector.PrepareParamFloat, result.GetPrepareParamKind(),
+				"full selection must retain the active prepared branch")
+
+			result, err = executor.Eval(proc, []*batch.Batch{input}, []bool{false, true})
+			require.NoError(t, err)
+			require.Equal(t, vector.PrepareParamFloat, result.GetPrepareParamKind(),
+				"reused selection buffers must retain only the active branch lineage")
+			require.Equal(t, "5.5", result.GetStringAt(1))
+			require.True(t, result.IsNull(0))
+		})
+	}
+
+	mixedInput := testutil.NewBatchWithVectors([]*vector.Vector{
+		testutil.NewVector(2, types.T_bool.ToType(), proc.Mp(), false, []bool{true, false}),
+	}, nil)
+	defer mixedInput.Clean(proc.Mp())
+	for name, expression := range map[string]*plan.Expr{
+		"if-mixed":   bindFunction("if", column, parameter, stringConst("fallback")),
+		"case-mixed": bindFunction("case", column, parameter, stringConst("fallback")),
+	} {
+		t.Run(name, func(t *testing.T) {
+			executor, err := NewExpressionExecutor(proc, expression)
+			require.NoError(t, err)
+			defer executor.Free()
+			result, err := executor.Eval(proc, []*batch.Batch{mixedInput}, nil)
+			require.NoError(t, err)
+			require.Equal(t, vector.PrepareParamNone, result.GetPrepareParamKind(),
+				"active branches with mixed source categories must be conservative")
+		})
+	}
+
+	maskedBranchColumn := &plan.Expr{
+		Typ:  plan.Type{Id: int32(types.T_varchar)},
+		Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 1}},
+	}
+	maskedBranchInput := testutil.NewBatchWithVectors([]*vector.Vector{
+		testutil.NewVector(2, types.T_bool.ToType(), proc.Mp(), false, []bool{true, false}),
+		testutil.MakeVarcharVector([]string{"", "outside-selection"}, []uint64{0}, proc.Mp()),
+	}, nil)
+	defer maskedBranchInput.Clean(proc.Mp())
+	maskedBranchExecutor, err := NewExpressionExecutor(
+		proc,
+		bindFunction("if", column, maskedBranchColumn, parameter),
+	)
+	require.NoError(t, err)
+	maskedResult, err := maskedBranchExecutor.Eval(proc, []*batch.Batch{maskedBranchInput}, nil)
+	require.NoError(t, err)
+	require.Equal(t, vector.PrepareParamFloat, maskedResult.GetPrepareParamKind(),
+		"non-NULL values outside an IF arm's selected rows must be ignored")
+	require.True(t, maskedResult.IsNull(0))
+	require.Equal(t, "5.5", maskedResult.GetStringAt(1))
+	maskedResult, err = maskedBranchExecutor.Eval(
+		proc, []*batch.Batch{maskedBranchInput}, []bool{true, false})
+	require.NoError(t, err)
+	require.Equal(t, vector.PrepareParamNone, maskedResult.GetPrepareParamKind())
+	maskedBranchExecutor.Free()
+
+	coalesceColumn := &plan.Expr{
+		Typ:  plan.Type{Id: int32(types.T_varchar)},
+		Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 1}},
+	}
+	coalesceInput := testutil.NewBatchWithVectors([]*vector.Vector{
+		testutil.NewVector(2, types.T_bool.ToType(), proc.Mp(), false, []bool{true, true}),
+		testutil.MakeVarcharVector([]string{"", "ordinary"}, []uint64{0}, proc.Mp()),
+	}, nil)
+	defer coalesceInput.Clean(proc.Mp())
+	executor, err := NewExpressionExecutor(
+		proc,
+		bindFunction("coalesce", coalesceColumn, parameter),
+	)
+	require.NoError(t, err)
+	result, err := executor.Eval(proc, []*batch.Batch{coalesceInput}, nil)
+	executor.Free()
+	require.NoError(t, err)
+	require.Equal(t, vector.PrepareParamNone, result.GetPrepareParamKind(),
+		"coalesce must fold all active source categories")
+}
+
 func TestFixedExpressionExecutor(t *testing.T) {
 	proc := testutil.NewProcess(t)
 

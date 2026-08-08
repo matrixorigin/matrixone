@@ -82,6 +82,10 @@ type Vector struct {
 	// FIXME: Bad design! Will be deleted soon.
 	isBin            bool
 	prepareParamKind PrepareParamKind
+	// prepareParamKindSeen distinguishes an observed string/byte source
+	// (kind None) from an empty vector that has not contributed a value yet.
+	// It is local lineage state and is not part of the vector wire format.
+	prepareParamKindSeen bool
 
 	offHeap bool
 
@@ -147,6 +151,7 @@ func (v *Vector) SetSorted(b bool) {
 func (v *Vector) Reset(typ types.Type) {
 	v.typ = typ
 	v.prepareParamKind = PrepareParamNone
+	v.prepareParamKindSeen = false
 
 	v.class = FLAT
 	if v.area != nil {
@@ -162,6 +167,7 @@ func (v *Vector) Reset(typ types.Type) {
 
 func (v *Vector) ResetWithSameType() {
 	v.prepareParamKind = PrepareParamNone
+	v.prepareParamKindSeen = false
 	v.class = FLAT
 	if v.area != nil {
 		v.area = v.area[:0]
@@ -182,6 +188,7 @@ func (v *Vector) ResetArea() {
 func (v *Vector) ResetWithNewType(t *types.Type) {
 	v.typ = *t
 	v.prepareParamKind = PrepareParamNone
+	v.prepareParamKindSeen = false
 	v.class = FLAT
 	if v.area != nil {
 		v.area = v.area[:0]
@@ -233,16 +240,20 @@ func (v *Vector) SetLength(n int) {
 // Capacity growth is deliberately not rolled back: it remains owned by the
 // vector and can be reused by a later append.
 type AppendCheckpoint struct {
-	length     int
-	areaLength int
-	sorted     bool
+	length               int
+	areaLength           int
+	sorted               bool
+	prepareParamKind     PrepareParamKind
+	prepareParamKindSeen bool
 }
 
 func (v *Vector) MakeAppendCheckpoint() AppendCheckpoint {
 	return AppendCheckpoint{
-		length:     v.length,
-		areaLength: len(v.area),
-		sorted:     v.sorted,
+		length:               v.length,
+		areaLength:           len(v.area),
+		sorted:               v.sorted,
+		prepareParamKind:     v.prepareParamKind,
+		prepareParamKindSeen: v.prepareParamKindSeen,
 	}
 }
 
@@ -261,6 +272,8 @@ func (v *Vector) RollbackAppend(checkpoint AppendCheckpoint, attemptedRows int) 
 	v.length = checkpoint.length
 	v.area = v.area[:checkpoint.areaLength]
 	v.sorted = checkpoint.sorted
+	v.prepareParamKind = checkpoint.prepareParamKind
+	v.prepareParamKindSeen = checkpoint.prepareParamKindSeen
 }
 
 // Size of data, I think this function is inherently broken.  This
@@ -383,6 +396,45 @@ func (v *Vector) GetPrepareParamKind() PrepareParamKind {
 
 func (v *Vector) SetPrepareParamKind(kind PrepareParamKind) {
 	v.prepareParamKind = kind
+	v.prepareParamKindSeen = true
+}
+
+// mergePrepareParamKind reconciles one successfully appended source. None is
+// a real observed string/byte category here; an unseen destination is the only
+// state that may adopt the source kind. This keeps mixed-source vectors
+// conservative without adding row-level metadata or allocations.
+func (v *Vector) mergePrepareParamKind(
+	kind PrepareParamKind,
+	sourceHasValue bool,
+	destinationHasValue bool,
+) {
+	if !sourceHasValue {
+		return
+	}
+	if !destinationHasValue {
+		v.prepareParamKind = kind
+		v.prepareParamKindSeen = true
+		return
+	}
+	if !v.prepareParamKindSeen {
+		v.prepareParamKind = PrepareParamNone
+		v.prepareParamKindSeen = true
+		return
+	}
+	if v.prepareParamKind != kind {
+		v.prepareParamKind = PrepareParamNone
+	}
+}
+
+func (v *Vector) copyPrepareParamKindTo(dst *Vector) {
+	dst.prepareParamKind = v.prepareParamKind
+	dst.prepareParamKindSeen = v.prepareParamKindSeen
+	if !dst.prepareParamKindSeen && dst.prepareParamKind == PrepareParamNone &&
+		v.length > 0 && !v.AllNull() {
+		// A non-empty ordinary string vector is an observed None source even
+		// when it was created without prepared-parameter metadata.
+		dst.prepareParamKindSeen = true
+	}
 }
 
 func (v *Vector) NeedDup() bool {
@@ -458,6 +510,7 @@ func (v *Vector) CleanOnlyData() {
 	v.gsp.Clear()
 	v.sorted = false
 	v.prepareParamKind = PrepareParamNone
+	v.prepareParamKindSeen = false
 	v.areaDisjoint = v.length == 0
 }
 
@@ -865,6 +918,7 @@ func (v *Vector) Free(mp *mpool.MPool) {
 	v.sorted = false
 	v.isBin = false
 	v.prepareParamKind = PrepareParamNone
+	v.prepareParamKindSeen = false
 	v.allocationAccount = nil
 	v.areaDisjoint = true
 
@@ -1727,6 +1781,7 @@ func (v *Vector) dup(
 	w.typ = v.typ
 	w.sorted = v.sorted
 	w.prepareParamKind = v.prepareParamKind
+	w.prepareParamKindSeen = v.prepareParamKindSeen
 
 	if v.IsConstNull() {
 		w.length = v.length
@@ -1791,6 +1846,7 @@ func (v *Vector) dup(
 		copy(w.area, v.area)
 	}
 	w.areaDisjoint = v.areaDisjoint
+	v.copyPrepareParamKindTo(w)
 	return w, nil
 }
 
@@ -1835,10 +1891,12 @@ func (v *Vector) cloneToFlatCompact(
 			return nil, err
 		}
 		copyBitmapWithinLength(&w.gsp, &v.gsp, v.length)
+		v.copyPrepareParamKindTo(w)
 		return w, nil
 	}
 
 	if v.length == 0 {
+		v.copyPrepareParamKindTo(w)
 		return w, nil
 	}
 	if err := extendWithBitmaps(
@@ -1858,6 +1916,7 @@ func (v *Vector) cloneToFlatCompact(
 	if v.typ.IsFixedLen() {
 		dataLen := v.length * v.typ.TypeSize()
 		copy(w.data[:dataLen], v.data[:dataLen])
+		v.copyPrepareParamKindTo(w)
 		return w, nil
 	}
 
@@ -1897,6 +1956,7 @@ func (v *Vector) cloneToFlatCompact(
 		offset += len(value)
 	}
 	w.areaDisjoint = true
+	v.copyPrepareParamKindTo(w)
 	return w, nil
 }
 
@@ -2224,6 +2284,7 @@ func (v *Vector) ShuffleWithBuf(sels []int64, mp *mpool.MPool, buf *[]byte) (err
 // Copy simply does v[vi] = w[wi]
 func (v *Vector) Copy(w *Vector, vi, wi int64, mp *mpool.MPool) error {
 	disjoint := v.areaDisjoint
+	destinationHasValue := v.length > 0 && !v.AllNull()
 	sourceGrouping := w.GetGrouping().Contains(uint64(wi))
 	if sourceGrouping && v.allocationAccount != nil {
 		if err := v.ensureGroupingCapacity(int(vi)+1, mp); err != nil {
@@ -2237,6 +2298,7 @@ func (v *Vector) Copy(w *Vector, vi, wi int64, mp *mpool.MPool) error {
 	}
 	sourceNull := w.IsConstNull() ||
 		(!w.IsConst() && w.GetNulls().Contains(uint64(wi)))
+	sourceHasValue := w.length > 0 && !sourceNull
 	if sourceNull && v.allocationAccount != nil {
 		if err := v.ensureNullCapacity(int(vi)+1, mp); err != nil {
 			return err
@@ -2251,6 +2313,10 @@ func (v *Vector) Copy(w *Vector, vi, wi int64, mp *mpool.MPool) error {
 				vva[vi] = types.Varlena{}
 			}
 			v.nsp.Set(uint64(vi))
+			if v.AllNull() {
+				v.prepareParamKind = PrepareParamNone
+				v.prepareParamKindSeen = false
+			}
 			return nil
 		}
 		// Non-null constant vectors still share the regular null/data path below.
@@ -2262,6 +2328,10 @@ func (v *Vector) Copy(w *Vector, vi, wi int64, mp *mpool.MPool) error {
 			vva[vi] = types.Varlena{}
 		}
 		v.GetNulls().Set(uint64(vi))
+		if v.AllNull() {
+			v.prepareParamKind = PrepareParamNone
+			v.prepareParamKindSeen = false
+		}
 		return nil
 	}
 	if v.typ.IsFixedLen() {
@@ -2288,6 +2358,7 @@ func (v *Vector) Copy(w *Vector, vi, wi int64, mp *mpool.MPool) error {
 	if v.typ.IsVarlen() && disjoint {
 		v.areaDisjoint = true
 	}
+	v.mergePrepareParamKind(w.GetPrepareParamKind(), sourceHasValue, destinationHasValue)
 	return nil
 }
 
@@ -2297,6 +2368,8 @@ func GetUnionAllFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) err
 	union := getUnionAllFunction(typ, mp)
 	return func(v, w *Vector) error {
 		oldLength := v.length
+		destinationHasValue := v.length > 0 && !v.AllNull()
+		sourceHasValue := w.length > 0 && !w.AllNull()
 		if w.gsp.Any() {
 			if err := v.ensureGroupingCapacity(oldLength+w.length, mp); err != nil {
 				return err
@@ -2308,6 +2381,7 @@ func GetUnionAllFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) err
 		if w.gsp.Any() {
 			unionVectorBitmap(&v.gsp, &w.gsp, oldLength, w.length)
 		}
+		v.mergePrepareParamKind(w.GetPrepareParamKind(), sourceHasValue, destinationHasValue)
 		return nil
 	}
 }
@@ -3513,6 +3587,7 @@ func (v *Vector) UnionOne(w *Vector, sel int64, mp *mpool.MPool) error {
 	sourceGrouping := nulls.Contains(&w.gsp, uint64(sel))
 	sourceNull := w.IsConstNull() ||
 		(!w.IsConst() && nulls.Contains(&w.nsp, uint64(sel)))
+	destinationHasValue := v.length > 0 && !v.AllNull()
 	if err := extendWithBitmaps(
 		v,
 		1,
@@ -3525,6 +3600,7 @@ func (v *Vector) UnionOne(w *Vector, sel int64, mp *mpool.MPool) error {
 
 	oldLen := v.length
 	v.length++
+	sourceHasValue := !sourceNull
 	if sourceGrouping {
 		nulls.Add(&v.gsp, uint64(oldLen))
 	}
@@ -3568,6 +3644,7 @@ func (v *Vector) UnionOne(w *Vector, sel int64, mp *mpool.MPool) error {
 		}
 	}
 
+	v.mergePrepareParamKind(w.GetPrepareParamKind(), sourceHasValue, destinationHasValue)
 	return nil
 }
 
@@ -3599,6 +3676,7 @@ func (v *Vector) UnionMulti(w *Vector, sel int64, cnt int, mp *mpool.MPool) erro
 	sourceGrouping := nulls.Contains(&w.gsp, uint64(sel))
 	sourceNull := w.IsConstNull() ||
 		(!w.IsConst() && nulls.Contains(&w.nsp, uint64(sel)))
+	destinationHasValue := v.length > 0 && !v.AllNull()
 	if err := extendWithBitmaps(
 		v,
 		cnt,
@@ -3611,6 +3689,7 @@ func (v *Vector) UnionMulti(w *Vector, sel int64, cnt int, mp *mpool.MPool) erro
 
 	oldLen := v.length
 	v.length += cnt
+	sourceHasValue := !sourceNull
 	if sourceGrouping {
 		nulls.AddRange(&v.gsp, uint64(oldLen), uint64(oldLen+cnt))
 	}
@@ -3642,6 +3721,7 @@ func (v *Vector) UnionMulti(w *Vector, sel int64, cnt int, mp *mpool.MPool) erro
 		broadcastFixed(v.data[oldLen*tlen:v.length*tlen], tlen)
 	}
 
+	v.mergePrepareParamKind(w.GetPrepareParamKind(), sourceHasValue, destinationHasValue)
 	return nil
 }
 
@@ -3683,6 +3763,44 @@ func (v *Vector) UnionInt32(w *Vector, sels []int32, mp *mpool.MPool) error {
 	return unionT[int32](v, w, sels, mp)
 }
 
+func hasSelectedNonNull[T int32 | int64](w *Vector, sels []T) bool {
+	if len(sels) == 0 || w.IsConstNull() {
+		return false
+	}
+	if w.IsConst() || w.nsp.EmptyByFlag() {
+		return true
+	}
+	for _, sel := range sels {
+		if !w.nsp.Contains(uint64(sel)) {
+			return true
+		}
+	}
+	return false
+}
+
+func hasSelectedBatchNonNull(w *Vector, offset int64, cnt int, flags []uint8) bool {
+	if cnt <= 0 || w.IsConstNull() {
+		return false
+	}
+	if w.IsConst() || w.nsp.EmptyByFlag() {
+		return true
+	}
+	if flags == nil {
+		for i := 0; i < cnt; i++ {
+			if !w.nsp.Contains(uint64(offset) + uint64(i)) {
+				return true
+			}
+		}
+		return false
+	}
+	for i, selected := range flags {
+		if selected != 0 && !w.nsp.Contains(uint64(offset)+uint64(i)) {
+			return true
+		}
+	}
+	return false
+}
+
 func unionT[T int32 | int64](v, w *Vector, sels []T, mp *mpool.MPool) error {
 	if v.typ.IsVarlen() {
 		v.areaDisjoint = false
@@ -3702,6 +3820,8 @@ func unionT[T int32 | int64](v, w *Vector, sels []T, mp *mpool.MPool) error {
 	}
 
 	oldLen := v.length
+	sourceHasValue := hasSelectedNonNull(w, sels)
+	destinationHasValue := oldLen > 0 && !v.AllNull()
 	v.length += len(sels)
 	if w.IsConst() {
 		if w.IsGrouping() {
@@ -3727,6 +3847,7 @@ func unionT[T int32 | int64](v, w *Vector, sels []T, mp *mpool.MPool) error {
 			broadcastFixed(v.data[oldLen*tlen:v.length*tlen], tlen)
 		}
 
+		v.mergePrepareParamKind(w.GetPrepareParamKind(), sourceHasValue, destinationHasValue)
 		return nil
 	}
 	appendSelectedGrouping(v, w, oldLen, sels)
@@ -3817,6 +3938,7 @@ func unionT[T int32 | int64](v, w *Vector, sels []T, mp *mpool.MPool) error {
 		}
 	}
 
+	v.mergePrepareParamKind(w.GetPrepareParamKind(), sourceHasValue, destinationHasValue)
 	return nil
 }
 
@@ -3836,6 +3958,8 @@ func (v *Vector) UnionBatch(w *Vector, offset int64, cnt int, flags []uint8, mp 
 	if addCnt == 0 {
 		return nil
 	}
+	sourceHasValue := hasSelectedBatchNonNull(w, offset, cnt, flags)
+	destinationHasValue := v.length > 0 && !v.AllNull()
 
 	if err := extendWithBitmaps(
 		v,
@@ -3873,6 +3997,7 @@ func (v *Vector) UnionBatch(w *Vector, offset int64, cnt int, flags []uint8, mp 
 			broadcastFixed(v.data[oldLen*tlen:v.length*tlen], tlen)
 		}
 
+		v.mergePrepareParamKind(w.GetPrepareParamKind(), sourceHasValue, destinationHasValue)
 		return nil
 	}
 	appendBatchGrouping(v, w, v.length, offset, cnt, flags)
@@ -3944,6 +4069,7 @@ func (v *Vector) UnionBatch(w *Vector, offset int64, cnt int, flags []uint8, mp 
 				})
 			}
 			v.length += cnt
+			v.mergePrepareParamKind(w.GetPrepareParamKind(), sourceHasValue, destinationHasValue)
 			return nil
 		}
 
@@ -4087,6 +4213,7 @@ func (v *Vector) UnionBatch(w *Vector, offset int64, cnt int, flags []uint8, mp 
 		}
 	}
 
+	v.mergePrepareParamKind(w.GetPrepareParamKind(), sourceHasValue, destinationHasValue)
 	return nil
 }
 
@@ -5295,7 +5422,7 @@ func (v *Vector) window(
 	w.class = v.class
 	w.length = end - start
 	w.sorted = v.sorted
-	w.prepareParamKind = v.prepareParamKind
+	v.copyPrepareParamKindTo(w)
 	if err := v.copyWindowBitmaps(w, start, end, mp); err != nil {
 		w.Free(mp)
 		return nil, err
@@ -5387,7 +5514,7 @@ func (v *Vector) CloneWindowWithAllocation(
 }
 
 func (v *Vector) CloneWindowTo(w *Vector, start, end int, mp *mpool.MPool) error {
-	w.prepareParamKind = v.prepareParamKind
+	v.copyPrepareParamKindTo(w)
 	if start == end {
 		return nil
 	}

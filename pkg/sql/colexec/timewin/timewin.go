@@ -347,8 +347,10 @@ func (timeWin *TimeWin) observePrepareParamKinds() {
 	for i := range timeWin.Aggs {
 		if i < len(timeWin.ctr.aggVec[batchIndex]) &&
 			len(timeWin.ctr.aggVec[batchIndex][i]) > 0 {
-			timeWin.ctr.prepareParamKind.Observe(i,
-				timeWin.ctr.aggVec[batchIndex][i][0].GetPrepareParamKind())
+			arg := timeWin.ctr.aggVec[batchIndex][i][0]
+			if arg.Length() > 0 && !arg.AllNull() {
+				timeWin.ctr.prepareParamKind.Observe(i, arg.GetPrepareParamKind())
+			}
 		}
 	}
 }

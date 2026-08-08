@@ -246,8 +246,10 @@ func (window *Window) Call(proc *process.Process) (vm.CallResult, error) {
 			}
 			for i := range window.Aggs {
 				if i < len(ctr.aggVecs) && len(ctr.aggVecs[i].Vec) > 0 {
-					ctr.prepareParamKind.Observe(i,
-						ctr.aggVecs[i].Vec[0].GetPrepareParamKind())
+					arg := ctr.aggVecs[i].Vec[0]
+					if arg.Length() > 0 && !arg.AllNull() {
+						ctr.prepareParamKind.Observe(i, arg.GetPrepareParamKind())
+					}
 				}
 			}
 

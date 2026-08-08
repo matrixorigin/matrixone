@@ -351,8 +351,10 @@ func (group *Group) buildOneBatch(proc *process.Process, bat *batch.Batch) (bool
 	}
 	for i := range group.Aggs {
 		if i < len(group.ctr.aggArgEvaluate) && len(group.ctr.aggArgEvaluate[i].Vec) > 0 {
-			group.ctr.prepareParamKind.Observe(i,
-				group.ctr.aggArgEvaluate[i].Vec[0].GetPrepareParamKind())
+			arg := group.ctr.aggArgEvaluate[i].Vec[0]
+			if arg.Length() > 0 && !arg.AllNull() {
+				group.ctr.prepareParamKind.Observe(i, arg.GetPrepareParamKind())
+			}
 		}
 	}
 
