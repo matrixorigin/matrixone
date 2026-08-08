@@ -1332,7 +1332,7 @@ func classifyIrregularIndexesForUpdate(
 		if desc.AlwaysAsync {
 			continue
 		}
-		async, err := catalog.IsIndexAsync(idxDef.IndexAlgoParams)
+		async, err := catalog.IndexParamAsync(idxDef.IndexAlgoParams)
 		if err != nil {
 			return nil, false, err
 		}

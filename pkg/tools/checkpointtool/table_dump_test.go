@@ -2254,6 +2254,36 @@ func TestRenderCreateTableDDLFromSchema_FullTextParserAndAnonymousName(t *testin
 	assert.NotContains(t, ddl, "FULLTEXT `content`")
 }
 
+// TestRenderCreateTableDDLFromSchema_FullText2InlineConstraint pins that a FULLTEXT2 index
+// reconstructed from a mo_tables constraint renders as a FULLTEXT2 clause (with parser +
+// the async SECOND cadence), NOT `KEY ... USING fulltext2`. The latter routes to
+// BuildSecondaryIndexDefs on restore, which rejects fulltext2 (it needs
+// BuildFullTextIndexDefs) — breaking checkpoint restore of a fulltext2 table.
+func TestRenderCreateTableDDLFromSchema_FullText2InlineConstraint(t *testing.T) {
+	ddl := RenderCreateTableDDLFromSchema(&TableSchema{
+		TableName: "ft2_test",
+		Columns: []TableColumn{
+			{Name: "id", SQLType: "BIGINT", Position: 1, NotNull: true},
+			{Name: "content", SQLType: "TEXT", Position: 2},
+		},
+		PrimaryKey: []string{"id"},
+		UniqueKeys: []TableUniqueKey{
+			{
+				Name:       "idx_ft2",
+				Columns:    []string{"content"},
+				Algo:       catalog.MoIndexFullText2Algo.ToString(),
+				AlgoParams: `{"parser":"ngram","auto_update":"true","second":"5"}`,
+			},
+		},
+	})
+
+	assert.Contains(t, ddl, "FULLTEXT2 `idx_ft2`(`content`) WITH PARSER ngram", ddl)
+	assert.Contains(t, ddl, "second = 5", ddl)
+	// Must NOT downgrade to the generic KEY ... USING fulltext2 form (restore-breaking).
+	assert.NotContains(t, ddl, "USING fulltext2", ddl)
+	assert.NotContains(t, ddl, "KEY `idx_ft2`", ddl)
+}
+
 func TestRenderCreateTableDDLFromSchema_PreservesIndexOrder(t *testing.T) {
 	ddl := RenderCreateTableDDLFromSchema(&TableSchema{
 		TableName: "file_working",

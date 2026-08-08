@@ -1377,7 +1377,7 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfflat(nodeID int32, vecCt
 			bucketExpandStep = 1
 		}
 	}
-	asyncIndex, err := catalog.IsIndexAsync(ivfCtx.metaDef.IndexAlgoParams)
+	asyncIndex, err := catalog.IndexParamAsync(ivfCtx.metaDef.IndexAlgoParams)
 	if err != nil {
 		return nodeID, err
 	}

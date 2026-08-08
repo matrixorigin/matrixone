@@ -280,6 +280,7 @@ func (m mockCatalogHooks) ParamsFromTree(_ *tree.Index) (map[string]string, erro
 func (m mockCatalogHooks) DefaultOptions() map[string]string                       { return nil }
 func (m mockCatalogHooks) SupportedOpTypes() map[string]string                     { return nil }
 func (m mockCatalogHooks) SupportedVectorTypes() []types.T                         { return nil }
+func (m mockCatalogHooks) IsVectorIndex() bool                                     { return true }
 func (m mockCatalogHooks) SupportedPrimaryKeyTypes() []types.T                     { return nil }
 func (m mockCatalogHooks) SupportedIncludeColumnTypes() []types.T                  { return nil }
 func (m mockCatalogHooks) ValidQuantization(_, _ string) error                     { return nil }

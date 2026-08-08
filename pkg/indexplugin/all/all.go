@@ -65,6 +65,7 @@ package all
 
 import (
 	_ "github.com/matrixorigin/matrixone/pkg/fulltext/plugin"
+	_ "github.com/matrixorigin/matrixone/pkg/fulltext2/plugin"
 	_ "github.com/matrixorigin/matrixone/pkg/vectorindex/hnsw/plugin"
 	_ "github.com/matrixorigin/matrixone/pkg/vectorindex/ivfflat/plugin"
 )
