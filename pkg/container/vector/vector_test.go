@@ -4527,6 +4527,132 @@ func TestPrepareParamKindMetadataBoundaryLifecycle(t *testing.T) {
 	require.Equal(t, PrepareParamNone, vec.GetPrepareParamKindAt(vec.Length()))
 }
 
+func TestAppendPrepareParamKindsContinueAfterDivergence(t *testing.T) {
+	mp := mpool.MustNewZero()
+	source := NewVec(types.T_int64.ToType())
+	destination := NewVec(types.T_int64.ToType())
+	batchDestination := NewVec(types.T_int64.ToType())
+	allDestination := NewVec(types.T_int64.ToType())
+	defer func() {
+		source.Free(mp)
+		destination.Free(mp)
+		batchDestination.Free(mp)
+		allDestination.Free(mp)
+		require.Zero(t, mp.CurrNB())
+	}()
+
+	require.NoError(t, AppendFixedList(source, []int64{1, 2, 3, 4}, nil, mp))
+	want := []PrepareParamKind{
+		PrepareParamInteger,
+		PrepareParamFloat,
+		PrepareParamDecimal,
+		PrepareParamBoolean,
+	}
+	require.NoError(t, source.SetPrepareParamKindsWithMP(want, mp))
+
+	for row := range want {
+		require.NoError(t, destination.UnionOne(source, int64(row), mp))
+	}
+	require.Len(t, destination.GetPrepareParamKinds(), destination.Length())
+	for row, kind := range want {
+		require.Equal(t, kind, destination.GetPrepareParamKindAt(row))
+	}
+
+	// Once the exact representation exists, a raw ordinary append must extend
+	// the sidecar and initialize the new row to None.
+	require.NoError(t, AppendFixed(destination, int64(5), false, mp))
+	require.Len(t, destination.GetPrepareParamKinds(), destination.Length())
+	require.Equal(t, PrepareParamNone, destination.GetPrepareParamKindAt(4))
+
+	// Batch and whole-vector appends share the same row-parallel growth
+	// boundary. Split each operation after the first divergence so the second
+	// call must extend and populate an existing sidecar.
+	require.NoError(t, batchDestination.UnionBatch(source, 0, 2, nil, mp))
+	require.NoError(t, batchDestination.UnionBatch(source, 2, 2, nil, mp))
+	for row, kind := range want {
+		require.Equal(t, kind, batchDestination.GetPrepareParamKindAt(row))
+	}
+	require.Len(t, batchDestination.GetPrepareParamKinds(), batchDestination.Length())
+
+	first, err := source.Window(0, 2)
+	require.NoError(t, err)
+	defer first.Free(mp)
+	second, err := source.Window(2, 4)
+	require.NoError(t, err)
+	defer second.Free(mp)
+	unionAll := GetUnionAllFunction(types.T_int64.ToType(), mp)
+	require.NoError(t, unionAll(allDestination, first))
+	require.NoError(t, unionAll(allDestination, second))
+	for row, kind := range want {
+		require.Equal(t, kind, allDestination.GetPrepareParamKindAt(row))
+	}
+	require.Len(t, allDestination.GetPrepareParamKinds(), allDestination.Length())
+}
+
+func TestPrepareParamKindWindowRetainsSidecarOnlyForDivergence(t *testing.T) {
+	mp := mpool.MustNewZero()
+	source := NewVec(types.T_int64.ToType())
+	require.NoError(t, AppendFixedList(source, []int64{1, 2, 3}, nil, mp))
+	source.GetNulls().Add(1)
+	require.NoError(t, source.SetPrepareParamKindsWithMP([]PrepareParamKind{
+		PrepareParamInteger,
+		PrepareParamFloat,
+		PrepareParamDecimal,
+	}, mp))
+	defer func() {
+		source.Free(mp)
+		require.Zero(t, mp.CurrNB())
+	}()
+
+	uniform, err := source.Window(0, 1)
+	require.NoError(t, err)
+	require.Nil(t, uniform.GetPrepareParamKinds())
+	require.Equal(t, PrepareParamInteger, uniform.GetPrepareParamKind())
+	uniform.Free(mp)
+
+	nullOnly, err := source.Window(1, 2)
+	require.NoError(t, err)
+	require.Nil(t, nullOnly.GetPrepareParamKinds())
+	require.False(t, nullOnly.HasPrepareParamKind())
+	nullOnly.Free(mp)
+
+	mixed, err := source.Window(0, 3)
+	require.NoError(t, err)
+	require.Len(t, mixed.GetPrepareParamKinds(), mixed.Length())
+	require.Equal(t, PrepareParamInteger, mixed.GetPrepareParamKindAt(0))
+	require.Equal(t, PrepareParamDecimal, mixed.GetPrepareParamKindAt(2))
+	mixed.Free(mp)
+}
+
+func BenchmarkUnionOnePrepareParamKindLateDivergence(b *testing.B) {
+	const rows = 16 * 1024
+	mp := mpool.MustNewZero()
+	source := NewVec(types.T_int64.ToType())
+	destination := NewVec(types.T_int64.ToType())
+	defer source.Free(mp)
+	defer destination.Free(mp)
+
+	values := make([]int64, rows)
+	require.NoError(b, AppendFixedList(source, values, nil, mp))
+	kinds := make([]PrepareParamKind, rows)
+	for row := range kinds {
+		kinds[row] = PrepareParamInteger
+	}
+	kinds[rows/2] = PrepareParamFloat
+	require.NoError(b, source.SetPrepareParamKindsWithMP(kinds, mp))
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for b.Loop() {
+		destination.ResetWithSameType()
+		for row := range rows {
+			if err := destination.UnionOne(source, int64(row), mp); err != nil {
+				b.Fatal(err)
+			}
+		}
+	}
+}
+
 func BenchmarkUnionBatchPrepareParamKind(b *testing.B) {
 	mp := mpool.MustNewZero()
 	source := NewVec(types.T_int64.ToType())

@@ -148,29 +148,34 @@ func (ag *aggState) init(mp *mpool.MPool, l, c int32, info *aggInfo, setNulls bo
 	return nil
 }
 
-func (ag *aggState) grow(mp *mpool.MPool, more int32, expandLen bool) (int32, int32) {
+func (ag *aggState) grow(mp *mpool.MPool, more int32, expandLen bool) (int32, int32, error) {
 	canAdd := int32(ag.capacity - ag.length)
 	var toAdd int32
 
 	if more <= canAdd {
 		canAdd = more
-		if expandLen {
-			ag.length += more
-		}
 	} else {
-		if expandLen {
-			ag.length = ag.capacity
-		}
 		toAdd = more - canAdd
 	}
 
-	if expandLen {
-		for _, vec := range ag.vecs {
-			vec.SetLength(int(ag.length))
-		}
+	if !expandLen || canAdd == 0 {
+		return canAdd, toAdd, nil
 	}
 
-	return canAdd, toAdd
+	// Reserve every row-parallel allocation before publishing the group count.
+	// Successful capacity growth is reusable if a later vector fails, while all
+	// logical lengths remain unchanged and the caller receives the OOM.
+	for _, vec := range ag.vecs {
+		if err := vec.PreExtend(int(canAdd), mp); err != nil {
+			return 0, more, err
+		}
+	}
+	ag.length += canAdd
+	for _, vec := range ag.vecs {
+		vec.SetLength(int(ag.length))
+	}
+
+	return canAdd, toAdd, nil
 }
 
 func (ag *aggState) writeStateArg(i int32, buf *bytes.Buffer, info *aggInfo) error {
@@ -958,17 +963,24 @@ func (ae *aggExec) GetNumGroups() int {
 func (ae *aggExec) GroupGrow(more int) error {
 	if ae.chunkSize == 1 {
 		ae.state = make([]aggState, 1)
-		if err := ae.state[0].init(ae.mp, 1, 1, &ae.aggInfo, true); err != nil {
-			panic(err)
+		if err := ae.state[0].init(ae.mp, 0, 1, &ae.aggInfo, true); err != nil {
+			ae.state = nil
+			return err
 		}
-		ae.state[0].grow(ae.mp, 1, true)
 		// Ensure vecs have AggBatchSize capacity so chunkArr is safe.
 		for _, vec := range ae.state[0].vecs {
 			if vec != nil && vec.Capacity() < AggBatchSize {
 				if err := vec.PreExtend(AggBatchSize, ae.mp); err != nil {
-					panic(err)
+					ae.state[0].free(ae.mp)
+					ae.state = nil
+					return err
 				}
 			}
+		}
+		if _, _, err := ae.state[0].grow(ae.mp, 1, true); err != nil {
+			ae.state[0].free(ae.mp)
+			ae.state = nil
+			return err
 		}
 		return nil
 	}
@@ -976,7 +988,11 @@ func (ae *aggExec) GroupGrow(more int) error {
 	// grow the state until the more groups are added
 	for remain := int32(more); remain > 0; {
 		if len(ae.state) != 0 {
-			_, remain = ae.state[len(ae.state)-1].grow(ae.mp, remain, true)
+			var err error
+			_, remain, err = ae.state[len(ae.state)-1].grow(ae.mp, remain, true)
+			if err != nil {
+				return err
+			}
 		}
 
 		if remain == 0 {
@@ -984,6 +1000,7 @@ func (ae *aggExec) GroupGrow(more int) error {
 		}
 		ae.state = append(ae.state, aggState{})
 		if err := ae.state[len(ae.state)-1].init(ae.mp, 0, AggBatchSize, &ae.aggInfo, true); err != nil {
+			ae.state = ae.state[:len(ae.state)-1]
 			return err
 		}
 	}
@@ -998,7 +1015,7 @@ func (ae *aggExec) preAllocateGroupsWithNulls(more int, setNulls bool) error {
 	// grow the state until the more groups are added
 	for remain := int32(more); remain > 0; {
 		if len(ae.state) != 0 {
-			_, remain = ae.state[len(ae.state)-1].grow(ae.mp, remain, false)
+			_, remain, _ = ae.state[len(ae.state)-1].grow(ae.mp, remain, false)
 		}
 
 		if remain == 0 {
@@ -1006,6 +1023,7 @@ func (ae *aggExec) preAllocateGroupsWithNulls(more int, setNulls bool) error {
 		}
 		ae.state = append(ae.state, aggState{})
 		if err := ae.state[len(ae.state)-1].init(ae.mp, 0, AggBatchSize, &ae.aggInfo, setNulls); err != nil {
+			ae.state = ae.state[:len(ae.state)-1]
 			return err
 		}
 	}

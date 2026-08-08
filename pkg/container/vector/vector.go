@@ -253,25 +253,10 @@ func (v *Vector) SetLength(n int) {
 	if v.typ.IsVarlen() && n != v.length {
 		v.areaDisjoint = false
 	}
-	if v.prepareParamKinds != nil {
-		if n <= cap(v.prepareParamKinds) {
-			oldLen := len(v.prepareParamKinds)
-			v.prepareParamKinds = v.prepareParamKinds[:n]
-			if n > oldLen {
-				clear(v.prepareParamKinds[oldLen:])
-			}
-		} else {
-			kinds, owner, err := v.allocatePrepareParamKinds(n, nil)
-			if err != nil {
-				panic(err)
-			}
-			copy(kinds, v.prepareParamKinds)
-			v.releasePrepareParamKinds()
-			v.prepareParamKinds = kinds
-			v.prepareParamKindsMP = owner
-		}
+	if err := v.preExtendPrepareParamKinds(n, nil); err != nil {
+		panic(err)
 	}
-	v.length = n
+	v.setLengthAfterExtend(n)
 }
 
 // AppendCheckpoint captures the logical state changed by append operations.
@@ -736,6 +721,48 @@ func (v *Vector) allocatePrepareParamKinds(n int, mp *mpool.MPool) ([]PreparePar
 	return kinds, owner, err
 }
 
+// preExtendPrepareParamKinds reserves row-parallel provenance capacity without
+// publishing a new logical vector length. Append and aggregate growth call it
+// before mutating length so allocation failure remains an ordinary error.
+func (v *Vector) preExtendPrepareParamKinds(n int, mp *mpool.MPool) error {
+	if v.prepareParamKinds == nil || n <= cap(v.prepareParamKinds) {
+		return nil
+	}
+	newCapacity, ok := mpool.GrowCapacity(int64(cap(v.prepareParamKinds)), int64(n))
+	if !ok {
+		return moerr.NewInternalErrorNoCtxf(
+			"invalid prepared parameter sidecar capacity, old %d, required %d",
+			cap(v.prepareParamKinds), n)
+	}
+	oldLength := len(v.prepareParamKinds)
+	kinds, owner, err := v.allocatePrepareParamKinds(int(newCapacity), mp)
+	if err != nil {
+		return err
+	}
+	copy(kinds, v.prepareParamKinds)
+	v.releasePrepareParamKinds()
+	v.prepareParamKinds = kinds[:oldLength]
+	v.prepareParamKindsMP = owner
+	return nil
+}
+
+// setLengthAfterExtend publishes a length whose row-parallel capacities were
+// already reserved. It cannot allocate and initializes newly visible ordinary
+// rows with PrepareParamNone.
+func (v *Vector) setLengthAfterExtend(n int) {
+	if v.prepareParamKinds != nil {
+		if n > cap(v.prepareParamKinds) {
+			panic("prepared parameter sidecar capacity was not extended")
+		}
+		oldLength := len(v.prepareParamKinds)
+		v.prepareParamKinds = v.prepareParamKinds[:n]
+		if n > oldLength {
+			clear(v.prepareParamKinds[oldLength:])
+		}
+	}
+	v.length = n
+}
+
 func (v *Vector) copyPrepareParamKindToWithMP(dst *Vector, mp *mpool.MPool) error {
 	oldKind := dst.prepareParamKind
 	oldSeen := dst.prepareParamKindSeen
@@ -793,6 +820,33 @@ func (v *Vector) copyPrepareParamKindWindowToWithMP(dst *Vector, start, end int,
 	if start < 0 || end < start || end > len(v.prepareParamKinds) {
 		return nil
 	}
+	var (
+		first PrepareParamKind
+		seen  bool
+		mixed bool
+	)
+	for row := start; row < end; row++ {
+		if v.IsNull(uint64(row)) {
+			continue
+		}
+		kind := v.prepareParamKinds[row]
+		if !seen {
+			first, seen = kind, true
+		} else if first != kind {
+			mixed = true
+			break
+		}
+	}
+	if !seen {
+		dst.resetPrepareParamKind()
+		return nil
+	}
+	if !mixed {
+		dst.releasePrepareParamKinds()
+		dst.prepareParamKind = first
+		dst.prepareParamKindSeen = true
+		return nil
+	}
 	if mp == nil {
 		mp = v.prepareParamKindsMP
 	}
@@ -805,16 +859,7 @@ func (v *Vector) copyPrepareParamKindWindowToWithMP(dst *Vector, start, end int,
 	dst.prepareParamKinds = kinds
 	dst.prepareParamKindsMP = owner
 	dst.prepareParamKind = PrepareParamNone
-	dst.prepareParamKindSeen = false
-	for row := start; row < end; row++ {
-		if !v.IsNull(uint64(row)) {
-			dst.prepareParamKindSeen = true
-			break
-		}
-	}
-	if dst.prepareParamKindSeen {
-		dst.prepareParamKind = PrepareParamNone
-	}
+	dst.prepareParamKindSeen = true
 	return nil
 }
 
@@ -886,7 +931,7 @@ func (v *Vector) mergePrepareParamKindAt(row int, kind PrepareParamKind, sourceH
 // pre-grown destination would mistake its later rows for conflicting
 // provenance and allocate a row sidecar for an otherwise uniform source.
 func (v *Vector) prepareParamKindAppendStart(oldLength int) {
-	if v.prepareParamKindSeen || oldLength <= 0 {
+	if oldLength <= 0 {
 		return
 	}
 	// CountRange is bitmap-backed and avoids a row scan on the ordinary
@@ -894,7 +939,17 @@ func (v *Vector) prepareParamKindAppendStart(oldLength int) {
 	// value, so only a non-NULL prefix establishes the conservative None
 	// summary.
 	limit := min(oldLength, v.length)
-	if limit > 0 && v.nsp.GetBitmap().CountRange(0, uint64(limit)) != limit {
+	if limit <= 0 {
+		return
+	}
+	if !v.nsp.EmptyByFlag() && v.nsp.Count() >= limit &&
+		v.nsp.GetBitmap().CountRange(0, uint64(limit)) == limit {
+		// Scalar metadata attached to an all-NULL prefix has no value owner.
+		// Drop it before the first appended value establishes the lineage.
+		v.resetPrepareParamKind()
+		return
+	}
+	if !v.prepareParamKindSeen {
 		v.prepareParamKind = PrepareParamNone
 		v.prepareParamKindSeen = true
 	}
@@ -1033,7 +1088,6 @@ func (v *Vector) propagatePrepareParamKindsAll(w *Vector, oldLength int, mp *mpo
 			return err
 		}
 	}
-	v.normalizePrepareParamKinds()
 	return nil
 }
 
@@ -1064,7 +1118,6 @@ func (v *Vector) propagatePrepareParamKindsBatch(
 			}
 			output++
 		}
-		v.normalizePrepareParamKinds()
 		return nil
 	}
 	for i, selected := range flags {
@@ -1079,7 +1132,6 @@ func (v *Vector) propagatePrepareParamKindsBatch(
 		}
 		output++
 	}
-	v.normalizePrepareParamKinds()
 	return nil
 }
 
@@ -1120,7 +1172,6 @@ func propagatePrepareParamKindsSelection[T int32 | int64](
 			return err
 		}
 	}
-	v.normalizePrepareParamKinds()
 	return nil
 }
 
@@ -2416,10 +2467,6 @@ func (v *Vector) PreExtend(rows int, mp *mpool.MPool) error {
 	if v.class == CONSTANT {
 		return nil
 	}
-	if mp != nil {
-		v.prepareParamKindsMP = mp
-	}
-
 	return extend(v, rows, mp)
 }
 
@@ -3384,7 +3431,7 @@ func getUnionAllFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) err
 			}
 			sz := v.typ.TypeSize()
 			copy(v.data[v.length*sz:], w.data[:w.length*sz])
-			v.length += w.length
+			v.setLengthAfterExtend(v.length + w.length)
 			return nil
 		}
 	case types.T_bit:
@@ -3413,7 +3460,7 @@ func getUnionAllFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) err
 			}
 			sz := v.typ.TypeSize()
 			copy(v.data[v.length*sz:], w.data[:w.length*sz])
-			v.length += w.length
+			v.setLengthAfterExtend(v.length + w.length)
 			return nil
 		}
 	case types.T_int8:
@@ -3442,7 +3489,7 @@ func getUnionAllFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) err
 			}
 			sz := v.typ.TypeSize()
 			copy(v.data[v.length*sz:], w.data[:w.length*sz])
-			v.length += w.length
+			v.setLengthAfterExtend(v.length + w.length)
 			return nil
 		}
 	case types.T_int16:
@@ -3471,7 +3518,7 @@ func getUnionAllFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) err
 			}
 			sz := v.typ.TypeSize()
 			copy(v.data[v.length*sz:], w.data[:w.length*sz])
-			v.length += w.length
+			v.setLengthAfterExtend(v.length + w.length)
 			return nil
 		}
 	case types.T_int32:
@@ -3500,7 +3547,7 @@ func getUnionAllFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) err
 			}
 			sz := v.typ.TypeSize()
 			copy(v.data[v.length*sz:], w.data[:w.length*sz])
-			v.length += w.length
+			v.setLengthAfterExtend(v.length + w.length)
 			return nil
 		}
 	case types.T_int64:
@@ -3529,7 +3576,7 @@ func getUnionAllFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) err
 			}
 			sz := v.typ.TypeSize()
 			copy(v.data[v.length*sz:], w.data[:w.length*sz])
-			v.length += w.length
+			v.setLengthAfterExtend(v.length + w.length)
 			return nil
 		}
 	case types.T_uint8:
@@ -3558,7 +3605,7 @@ func getUnionAllFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) err
 			}
 			sz := v.typ.TypeSize()
 			copy(v.data[v.length*sz:], w.data[:w.length*sz])
-			v.length += w.length
+			v.setLengthAfterExtend(v.length + w.length)
 			return nil
 		}
 	case types.T_uint16:
@@ -3587,7 +3634,7 @@ func getUnionAllFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) err
 			}
 			sz := v.typ.TypeSize()
 			copy(v.data[v.length*sz:], w.data[:w.length*sz])
-			v.length += w.length
+			v.setLengthAfterExtend(v.length + w.length)
 			return nil
 		}
 	case types.T_uint32:
@@ -3616,7 +3663,7 @@ func getUnionAllFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) err
 			}
 			sz := v.typ.TypeSize()
 			copy(v.data[v.length*sz:], w.data[:w.length*sz])
-			v.length += w.length
+			v.setLengthAfterExtend(v.length + w.length)
 			return nil
 		}
 	case types.T_uint64:
@@ -3645,7 +3692,7 @@ func getUnionAllFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) err
 			}
 			sz := v.typ.TypeSize()
 			copy(v.data[v.length*sz:], w.data[:w.length*sz])
-			v.length += w.length
+			v.setLengthAfterExtend(v.length + w.length)
 			return nil
 		}
 	case types.T_float32:
@@ -3674,7 +3721,7 @@ func getUnionAllFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) err
 			}
 			sz := v.typ.TypeSize()
 			copy(v.data[v.length*sz:], w.data[:w.length*sz])
-			v.length += w.length
+			v.setLengthAfterExtend(v.length + w.length)
 			return nil
 		}
 	case types.T_float64:
@@ -3703,7 +3750,7 @@ func getUnionAllFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) err
 			}
 			sz := v.typ.TypeSize()
 			copy(v.data[v.length*sz:], w.data[:w.length*sz])
-			v.length += w.length
+			v.setLengthAfterExtend(v.length + w.length)
 			return nil
 		}
 	case types.T_date:
@@ -3732,7 +3779,7 @@ func getUnionAllFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) err
 			}
 			sz := v.typ.TypeSize()
 			copy(v.data[v.length*sz:], w.data[:w.length*sz])
-			v.length += w.length
+			v.setLengthAfterExtend(v.length + w.length)
 			return nil
 		}
 	case types.T_year:
@@ -3761,7 +3808,7 @@ func getUnionAllFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) err
 			}
 			sz := v.typ.TypeSize()
 			copy(v.data[v.length*sz:], w.data[:w.length*sz])
-			v.length += w.length
+			v.setLengthAfterExtend(v.length + w.length)
 			return nil
 		}
 	case types.T_datetime:
@@ -3790,7 +3837,7 @@ func getUnionAllFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) err
 			}
 			sz := v.typ.TypeSize()
 			copy(v.data[v.length*sz:], w.data[:w.length*sz])
-			v.length += w.length
+			v.setLengthAfterExtend(v.length + w.length)
 			return nil
 		}
 	case types.T_time:
@@ -3819,7 +3866,7 @@ func getUnionAllFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) err
 			}
 			sz := v.typ.TypeSize()
 			copy(v.data[v.length*sz:], w.data[:w.length*sz])
-			v.length += w.length
+			v.setLengthAfterExtend(v.length + w.length)
 			return nil
 		}
 	case types.T_timestamp:
@@ -3848,7 +3895,7 @@ func getUnionAllFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) err
 			}
 			sz := v.typ.TypeSize()
 			copy(v.data[v.length*sz:], w.data[:w.length*sz])
-			v.length += w.length
+			v.setLengthAfterExtend(v.length + w.length)
 			return nil
 		}
 	case types.T_enum:
@@ -3877,7 +3924,7 @@ func getUnionAllFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) err
 			}
 			sz := v.typ.TypeSize()
 			copy(v.data[v.length*sz:], w.data[:w.length*sz])
-			v.length += w.length
+			v.setLengthAfterExtend(v.length + w.length)
 			return nil
 		}
 	case types.T_decimal64:
@@ -3906,7 +3953,7 @@ func getUnionAllFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) err
 			}
 			sz := v.typ.TypeSize()
 			copy(v.data[v.length*sz:], w.data[:w.length*sz])
-			v.length += w.length
+			v.setLengthAfterExtend(v.length + w.length)
 			return nil
 		}
 	case types.T_decimal128:
@@ -3935,7 +3982,7 @@ func getUnionAllFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) err
 			}
 			sz := v.typ.TypeSize()
 			copy(v.data[v.length*sz:], w.data[:w.length*sz])
-			v.length += w.length
+			v.setLengthAfterExtend(v.length + w.length)
 			return nil
 		}
 	case types.T_decimal256:
@@ -3964,7 +4011,7 @@ func getUnionAllFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) err
 			}
 			sz := v.typ.TypeSize()
 			copy(v.data[v.length*sz:], w.data[:w.length*sz])
-			v.length += w.length
+			v.setLengthAfterExtend(v.length + w.length)
 			return nil
 		}
 	case types.T_uuid:
@@ -3993,7 +4040,7 @@ func getUnionAllFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) err
 			}
 			sz := v.typ.TypeSize()
 			copy(v.data[v.length*sz:], w.data[:w.length*sz])
-			v.length += w.length
+			v.setLengthAfterExtend(v.length + w.length)
 			return nil
 		}
 	case types.T_TS:
@@ -4022,7 +4069,7 @@ func getUnionAllFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) err
 			}
 			sz := v.typ.TypeSize()
 			copy(v.data[v.length*sz:], w.data[:w.length*sz])
-			v.length += w.length
+			v.setLengthAfterExtend(v.length + w.length)
 			return nil
 		}
 	case types.T_Rowid:
@@ -4051,7 +4098,7 @@ func getUnionAllFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) err
 			}
 			sz := v.typ.TypeSize()
 			copy(v.data[v.length*sz:], w.data[:w.length*sz])
-			v.length += w.length
+			v.setLengthAfterExtend(v.length + w.length)
 			return nil
 		}
 	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary,
@@ -4100,7 +4147,7 @@ func getUnionAllFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) err
 							return err
 						}
 					}
-					v.length++
+					v.setLengthAfterExtend(v.length + 1)
 				}
 			} else {
 				for i := range ws {
@@ -4108,7 +4155,7 @@ func getUnionAllFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) err
 					if err != nil {
 						return err
 					}
-					v.length++
+					v.setLengthAfterExtend(v.length + 1)
 				}
 			}
 			return nil
@@ -4139,7 +4186,7 @@ func getUnionAllFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) err
 			}
 			sz := v.typ.TypeSize()
 			copy(v.data[v.length*sz:], w.data[:w.length*sz])
-			v.length += w.length
+			v.setLengthAfterExtend(v.length + w.length)
 			return nil
 		}
 	default:
@@ -4544,7 +4591,7 @@ func (v *Vector) UnionOne(w *Vector, sel int64, mp *mpool.MPool) error {
 	}
 
 	oldLen := v.length
-	v.length++
+	v.setLengthAfterExtend(v.length + 1)
 	sourceHasValue := !sourceNull
 	if sourceGrouping {
 		nulls.Add(&v.gsp, uint64(oldLen))
@@ -4594,7 +4641,6 @@ func (v *Vector) UnionOne(w *Vector, sel int64, mp *mpool.MPool) error {
 		if err := v.appendPrepareParamKindAt(oldLen, w.GetPrepareParamKindAt(int(sel)), mp); err != nil {
 			return err
 		}
-		v.normalizePrepareParamKinds()
 	}
 	return nil
 }
@@ -4638,7 +4684,7 @@ func (v *Vector) UnionMulti(w *Vector, sel int64, cnt int, mp *mpool.MPool) erro
 	}
 
 	oldLen := v.length
-	v.length += cnt
+	v.setLengthAfterExtend(v.length + cnt)
 	sourceHasValue := !sourceNull
 	if sourceGrouping {
 		nulls.AddRange(&v.gsp, uint64(oldLen), uint64(oldLen+cnt))
@@ -4681,7 +4727,6 @@ func (v *Vector) UnionMulti(w *Vector, sel int64, cnt int, mp *mpool.MPool) erro
 			}
 		}
 	}
-	v.normalizePrepareParamKinds()
 	return nil
 }
 
@@ -4742,7 +4787,7 @@ func unionT[T int32 | int64](v, w *Vector, sels []T, mp *mpool.MPool) error {
 	}
 
 	oldLen := v.length
-	v.length += len(sels)
+	v.setLengthAfterExtend(v.length + len(sels))
 	if w.IsConst() {
 		if w.IsGrouping() {
 			nulls.AddRange(&v.gsp, uint64(oldLen), uint64(oldLen+len(sels)))
@@ -4896,7 +4941,7 @@ func (v *Vector) UnionBatch(w *Vector, offset int64, cnt int, flags []uint8, mp 
 
 	if w.IsConst() {
 		oldLen := v.length
-		v.length += addCnt
+		v.setLengthAfterExtend(v.length + addCnt)
 		if w.IsGrouping() {
 			nulls.AddRange(&v.gsp, uint64(oldLen), uint64(v.length))
 		}
@@ -4993,7 +5038,7 @@ func (v *Vector) UnionBatch(w *Vector, offset int64, cnt int, flags []uint8, mp 
 					return true
 				})
 			}
-			v.length += cnt
+			v.setLengthAfterExtend(v.length + cnt)
 			if err := v.propagatePrepareParamKindsBatch(w, oldLen, offset, cnt, flags, mp); err != nil {
 				return err
 			}
@@ -5049,7 +5094,7 @@ func (v *Vector) UnionBatch(w *Vector, offset int64, cnt int, flags []uint8, mp 
 							return err
 						}
 					}
-					v.length++
+					v.setLengthAfterExtend(v.length + 1)
 				}
 			} else {
 				for i := range flags {
@@ -5064,7 +5109,7 @@ func (v *Vector) UnionBatch(w *Vector, offset int64, cnt int, flags []uint8, mp 
 							return err
 						}
 					}
-					v.length++
+					v.setLengthAfterExtend(v.length + 1)
 				}
 			}
 		} else {
@@ -5074,7 +5119,7 @@ func (v *Vector) UnionBatch(w *Vector, offset int64, cnt int, flags []uint8, mp 
 					if err != nil {
 						return err
 					}
-					v.length++
+					v.setLengthAfterExtend(v.length + 1)
 				}
 			} else {
 				for i := range flags {
@@ -5085,7 +5130,7 @@ func (v *Vector) UnionBatch(w *Vector, offset int64, cnt int, flags []uint8, mp 
 					if err != nil {
 						return err
 					}
-					v.length++
+					v.setLengthAfterExtend(v.length + 1)
 				}
 			}
 		}
@@ -5099,7 +5144,7 @@ func (v *Vector) UnionBatch(w *Vector, offset int64, cnt int, flags []uint8, mp 
 					} else {
 						copy(v.data[v.length*tlen:(v.length+1)*tlen], w.data[(int(offset)+i)*tlen:(int(offset)+i+1)*tlen])
 					}
-					v.length++
+					v.setLengthAfterExtend(v.length + 1)
 				}
 			} else {
 				for i := range flags {
@@ -5111,7 +5156,7 @@ func (v *Vector) UnionBatch(w *Vector, offset int64, cnt int, flags []uint8, mp 
 					} else {
 						copy(v.data[v.length*tlen:(v.length+1)*tlen], w.data[(int(offset)+i)*tlen:(int(offset)+i+1)*tlen])
 					}
-					v.length++
+					v.setLengthAfterExtend(v.length + 1)
 				}
 			}
 		} else {
@@ -5122,11 +5167,11 @@ func (v *Vector) UnionBatch(w *Vector, offset int64, cnt int, flags []uint8, mp 
 							nulls.Add(&v.nsp, uint64(v.length))
 						}
 						copy(v.data[v.length*tlen:(v.length+1)*tlen], w.data[(int(offset)+i)*tlen:(int(offset)+i+1)*tlen])
-						v.length++
+						v.setLengthAfterExtend(v.length + 1)
 					}
 				} else {
 					copy(v.data[v.length*tlen:(v.length+cnt)*tlen], w.data[(int(offset))*tlen:(int(offset)+cnt)*tlen])
-					v.length += cnt
+					v.setLengthAfterExtend(v.length + cnt)
 				}
 			} else {
 				for i := range flags {
@@ -5134,7 +5179,7 @@ func (v *Vector) UnionBatch(w *Vector, offset int64, cnt int, flags []uint8, mp 
 						continue
 					}
 					copy(v.data[v.length*tlen:(v.length+1)*tlen], w.data[(int(offset)+i)*tlen:(int(offset)+i+1)*tlen])
-					v.length++
+					v.setLengthAfterExtend(v.length + 1)
 				}
 			}
 		}
@@ -5709,7 +5754,7 @@ func AppendByteJsonEncoded(
 		return err
 	}
 	vec.nsp.Del(uint64(index))
-	vec.length++
+	vec.setLengthAfterExtend(vec.length + 1)
 	return nil
 }
 
@@ -5810,7 +5855,7 @@ func appendOneFixed[T any](vec *Vector, val T, isNull bool, mp *mpool.MPool) err
 		return err
 	}
 	length := vec.length
-	vec.length++
+	vec.setLengthAfterExtend(vec.length + 1)
 	if isNull {
 		if vec.typ.IsVarlen() {
 			// Reused data capacity can contain a stale descriptor. Keep null rows
@@ -5897,7 +5942,7 @@ func appendOneOwnedVarlena(
 		return err
 	}
 	index := vec.length
-	vec.length++
+	vec.setLengthAfterExtend(vec.length + 1)
 	toSliceOfLengthNoTypeCheck[types.Varlena](vec, vec.length)[index] = value
 	return nil
 }
@@ -5910,7 +5955,7 @@ func appendMultiFixed[T any](vec *Vector, val T, isNull bool, cnt int, mp *mpool
 		return err
 	}
 	length := vec.length
-	vec.length += cnt
+	vec.setLengthAfterExtend(vec.length + cnt)
 	if isNull {
 		if vec.typ.IsVarlen() && cnt > 0 {
 			clear(toSliceOfLengthNoTypeCheck[types.Varlena](vec, vec.length)[length:])
@@ -5934,7 +5979,7 @@ func appendMultiBytes(vec *Vector, val []byte, isNull bool, cnt int, mp *mpool.M
 		return err
 	}
 	length := vec.length
-	vec.length += cnt
+	vec.setLengthAfterExtend(vec.length + cnt)
 	if isNull {
 		nulls.AddRange(&vec.nsp, uint64(length), uint64(length+cnt))
 	} else {
@@ -5965,7 +6010,7 @@ func appendList[T any](vec *Vector, vals []T, isNulls []bool, mp *mpool.MPool) e
 		return err
 	}
 	length := vec.length
-	vec.length += len(vals)
+	vec.setLengthAfterExtend(vec.length + len(vals))
 	col := MustFixedColWithTypeCheck[T](vec)
 	for i, w := range vals {
 		if len(isNulls) > 0 && isNulls[i] {
@@ -5991,7 +6036,7 @@ func appendBytesList(vec *Vector, vals [][]byte, isNulls []bool, mp *mpool.MPool
 		return err
 	}
 	length := vec.length
-	vec.length += len(vals)
+	vec.setLengthAfterExtend(vec.length + len(vals))
 	col := MustFixedColNoTypeCheck[types.Varlena](vec)
 	for i, w := range vals {
 		if len(isNulls) > 0 && isNulls[i] {
@@ -6025,7 +6070,7 @@ func appendStringList(vec *Vector, vals []string, isNulls []bool, mp *mpool.MPoo
 		return err
 	}
 	length := vec.length
-	vec.length += len(vals)
+	vec.setLengthAfterExtend(vec.length + len(vals))
 	col := MustFixedColNoTypeCheck[types.Varlena](vec)
 	for i, w := range vals {
 		if len(isNulls) > 0 && isNulls[i] {
@@ -6061,7 +6106,7 @@ func appendArrayList[T types.ArrayElement](vec *Vector, vals [][]T, isNulls []bo
 		return err
 	}
 	length := vec.length
-	vec.length += len(vals)
+	vec.setLengthAfterExtend(vec.length + len(vals))
 	col := MustFixedColNoTypeCheck[types.Varlena](vec)
 	for i, w := range vals {
 		if len(isNulls) > 0 && isNulls[i] {
