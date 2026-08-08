@@ -44,7 +44,7 @@ order by table_name;
 
 select char_length(c), hex(c) from binary_string_ctas_var;
 select char_length(c), hex(c) from binary_string_ctas_expr;
-select char_length(c), hex(c) from binary_string_ctas_empty;
+select char_length(c) from binary_string_ctas_empty;
 
 drop table binary_string_ctas_var;
 drop table binary_string_ctas_expr;

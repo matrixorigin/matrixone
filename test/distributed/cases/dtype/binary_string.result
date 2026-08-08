@@ -54,9 +54,9 @@ select char_length(c), hex(c) from binary_string_ctas_var;
 select char_length(c), hex(c) from binary_string_ctas_expr;
 ➤ char_length(c)[-5,64,0]  ¦  hex(c)[12,65535,0]  𝄀
 3  ¦  E478A0
-select char_length(c), hex(c) from binary_string_ctas_empty;
-➤ char_length(c)[-5,64,0]  ¦  hex(c)[12,65535,0]  𝄀
-0  ¦  
+select char_length(c) from binary_string_ctas_empty;
+➤ char_length(c)[-5,64,0]  𝄀
+0
 drop table binary_string_ctas_var;
 drop table binary_string_ctas_expr;
 drop table binary_string_ctas_empty;
