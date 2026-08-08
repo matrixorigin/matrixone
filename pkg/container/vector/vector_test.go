@@ -4037,6 +4037,103 @@ func TestPrepareParamKindEmptyReuseCopyAndRollback(t *testing.T) {
 		"rollback must restore the mixed-source provenance")
 }
 
+func TestCopyOrdinaryPrepareParamKindKeepsScalarMetadata(t *testing.T) {
+	mp := mpool.MustNewZero()
+	source := NewVec(types.T_int64.ToType())
+	destination := NewVec(types.T_int64.ToType())
+	t.Cleanup(func() {
+		destination.Free(mp)
+		source.Free(mp)
+		if got := mp.CurrNB(); got != 0 {
+			t.Errorf("mpool retains %d bytes after vector cleanup", got)
+		}
+	})
+
+	require.NoError(t, AppendFixed(source, int64(1), false, mp))
+	require.NoError(t, AppendFixedList(destination, make([]int64, 100), nil, mp))
+	require.False(t, source.HasPrepareParamKind())
+	require.False(t, destination.HasPrepareParamKind())
+
+	before := mp.CurrNB()
+	require.NoError(t, destination.Copy(source, 50, 0, mp))
+	require.Equal(t, int64(0), mp.CurrNB()-before,
+		"copying ordinary metadata must not materialize a row sidecar")
+	require.True(t, destination.HasPrepareParamKind())
+	require.Equal(t, PrepareParamNone, destination.GetPrepareParamKind())
+	require.Nil(t, destination.GetPrepareParamKinds())
+	require.Equal(t, PrepareParamNone, destination.GetPrepareParamKindAt(0))
+	require.Equal(t, PrepareParamNone, destination.GetPrepareParamKindAt(50))
+}
+
+func TestCopyPrepareParamKindMaterializesOnlyDivergence(t *testing.T) {
+	newVector := func(t *testing.T, mp *mpool.MPool, rows int) *Vector {
+		t.Helper()
+		vec := NewVec(types.T_int64.ToType())
+		require.NoError(t, AppendFixedList(vec, make([]int64, rows), nil, mp))
+		return vec
+	}
+
+	t.Run("scalar none and non-none", func(t *testing.T) {
+		mp := mpool.MustNewZero()
+		source := newVector(t, mp, 1)
+		destination := newVector(t, mp, 2)
+		t.Cleanup(func() {
+			destination.Free(mp)
+			source.Free(mp)
+		})
+		source.SetPrepareParamKind(PrepareParamFloat)
+		destination.SetPrepareParamKind(PrepareParamNone)
+
+		require.NoError(t, destination.Copy(source, 1, 0, mp))
+		require.Equal(t, []PrepareParamKind{
+			PrepareParamNone,
+			PrepareParamFloat,
+		}, destination.GetPrepareParamKinds())
+	})
+
+	t.Run("scalar non-none and none", func(t *testing.T) {
+		mp := mpool.MustNewZero()
+		source := newVector(t, mp, 1)
+		destination := newVector(t, mp, 2)
+		t.Cleanup(func() {
+			destination.Free(mp)
+			source.Free(mp)
+		})
+		destination.SetPrepareParamKind(PrepareParamFloat)
+
+		require.NoError(t, destination.Copy(source, 1, 0, mp))
+		require.Equal(t, []PrepareParamKind{
+			PrepareParamFloat,
+			PrepareParamNone,
+		}, destination.GetPrepareParamKinds())
+	})
+
+	t.Run("existing sidecar", func(t *testing.T) {
+		mp := mpool.MustNewZero()
+		source := newVector(t, mp, 1)
+		destination := newVector(t, mp, 3)
+		t.Cleanup(func() {
+			destination.Free(mp)
+			source.Free(mp)
+		})
+		source.SetPrepareParamKind(PrepareParamBoolean)
+		require.NoError(t, destination.SetPrepareParamKindsWithMP([]PrepareParamKind{
+			PrepareParamInteger,
+			PrepareParamFloat,
+			PrepareParamDecimal,
+		}, mp))
+		before := mp.CurrNB()
+
+		require.NoError(t, destination.Copy(source, 1, 0, mp))
+		require.Equal(t, before, mp.CurrNB())
+		require.Equal(t, []PrepareParamKind{
+			PrepareParamInteger,
+			PrepareParamBoolean,
+			PrepareParamDecimal,
+		}, destination.GetPrepareParamKinds())
+	})
+}
+
 func TestPrepareParamKindPerRowMaterialization(t *testing.T) {
 	mp := mpool.MustNewZero()
 	source := NewVec(types.T_text.ToType())

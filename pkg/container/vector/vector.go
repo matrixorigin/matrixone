@@ -830,6 +830,11 @@ func (v *Vector) mergePrepareParamKindAt(row int, kind PrepareParamKind, sourceH
 		v.prepareParamKind = PrepareParamNone
 		return nil
 	}
+	if !v.prepareParamKindSeen && kind == PrepareParamNone {
+		v.prepareParamKind = PrepareParamNone
+		v.prepareParamKindSeen = true
+		return nil
+	}
 	if !destinationHasValue && !v.hasPrepareParamValueExcept(row) {
 		v.prepareParamKind = kind
 		v.prepareParamKindSeen = true
@@ -4716,44 +4721,6 @@ func (v *Vector) Union(w *Vector, sels []int64, mp *mpool.MPool) error {
 }
 func (v *Vector) UnionInt32(w *Vector, sels []int32, mp *mpool.MPool) error {
 	return unionT[int32](v, w, sels, mp)
-}
-
-func hasSelectedNonNull[T int32 | int64](w *Vector, sels []T) bool {
-	if len(sels) == 0 || w.IsConstNull() {
-		return false
-	}
-	if w.IsConst() || w.nsp.EmptyByFlag() {
-		return true
-	}
-	for _, sel := range sels {
-		if !w.nsp.Contains(uint64(sel)) {
-			return true
-		}
-	}
-	return false
-}
-
-func hasSelectedBatchNonNull(w *Vector, offset int64, cnt int, flags []uint8) bool {
-	if cnt <= 0 || w.IsConstNull() {
-		return false
-	}
-	if w.IsConst() || w.nsp.EmptyByFlag() {
-		return true
-	}
-	if flags == nil {
-		for i := 0; i < cnt; i++ {
-			if !w.nsp.Contains(uint64(offset) + uint64(i)) {
-				return true
-			}
-		}
-		return false
-	}
-	for i, selected := range flags {
-		if selected != 0 && !w.nsp.Contains(uint64(offset)+uint64(i)) {
-			return true
-		}
-	}
-	return false
 }
 
 func unionT[T int32 | int64](v, w *Vector, sels []T, mp *mpool.MPool) error {

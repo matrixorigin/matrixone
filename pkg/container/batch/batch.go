@@ -705,8 +705,7 @@ func parsePrepareParamKindBatchTrailer(
 	if rowCount != expectedRowCount {
 		return nil, 0, moerr.NewInvalidInputNoCtx("prepared parameter metadata batch row count mismatch")
 	}
-	var records []prepareParamKindBatchRecord
-	records = make([]prepareParamKindBatchRecord, len(vecs))
+	records := make([]prepareParamKindBatchRecord, len(vecs))
 	for i := range records {
 		mode, err := types.ReadByte(reader)
 		if err != nil {
