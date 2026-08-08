@@ -7589,7 +7589,7 @@ func strToBit(
 			// Prepared parameters are transported internally in canonical text.
 			// Provenance restores their source conversion category;
 			// SQL strings containing the same characters retain byte-string semantics.
-			kind := from.GetSourceVector().GetPrepareParamKind()
+			kind := from.GetSourceVector().GetPrepareParamKindAt(i)
 			if kind != vector.PrepareParamNone {
 				input := string(v)
 				var value uint64

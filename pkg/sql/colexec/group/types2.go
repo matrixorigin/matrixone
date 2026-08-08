@@ -131,6 +131,7 @@ type container struct {
 
 	// aggs, which holds the intermediate state of agg functions.
 	aggList                []aggexec.AggFuncExec
+	aggExprs               []aggexec.AggFuncExecExpression
 	prepareParamKind       aggexec.PrepareParamKindStates
 	prepareParamKindWireV1 bool
 
@@ -252,6 +253,7 @@ func (ctr *container) free() {
 	ctr.freeGroupByBatches()
 	ctr.freeAggList()
 	ctr.prepareParamKind.Reset(nil)
+	ctr.aggExprs = nil
 	ctr.prepareParamKindWireV1 = false
 	ctr.freeSpillAggList()
 	ctr.freeSpillBkts()

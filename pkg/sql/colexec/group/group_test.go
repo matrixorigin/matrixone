@@ -73,6 +73,15 @@ func minPreparedParamAgg() aggexec.AggFuncExecExpression {
 	)
 }
 
+func minTextColumnAgg(pos int32) aggexec.AggFuncExecExpression {
+	return aggexec.MakeAggFunctionExpression(
+		aggexec.AggIdOfMin,
+		false,
+		[]*plan.Expr{colExpr(pos, types.T_text)},
+		nil,
+	)
+}
+
 func orderedGroupConcatAgg(distinct bool) aggexec.AggFuncExecExpression {
 	config := []byte{2}
 	config = binary.BigEndian.AppendUint32(config, 1)
@@ -251,6 +260,7 @@ type preparedPartialSpec struct {
 	rows    int
 	kind    vector.PrepareParamKind
 	allNull bool
+	value   string
 }
 
 func buildPreparedMinPartial(
@@ -272,7 +282,11 @@ func buildPreparedPartial(
 
 	params := vector.NewVec(types.T_text.ToType())
 	defer params.Free(proc.Mp())
-	require.NoError(t, vector.AppendBytes(params, []byte("5"), spec.allNull, proc.Mp()))
+	value := spec.value
+	if value == "" {
+		value = "5"
+	}
+	require.NoError(t, vector.AppendBytes(params, []byte(value), spec.allNull, proc.Mp()))
 	proc.SetPrepareParamsWithMeta(params, nil, []vector.PrepareParamKind{spec.kind})
 	defer proc.SetPrepareParams(nil)
 
@@ -383,7 +397,8 @@ func TestMergeGroupPreservesPreparedParamKind(t *testing.T) {
 				{rows: 2, kind: vector.PrepareParamFloat},
 				{rows: 1, kind: vector.PrepareParamNone},
 			},
-			wantKind: vector.PrepareParamNone,
+			// Equal MIN values retain the incumbent partial's provenance.
+			wantKind: vector.PrepareParamFloat,
 		},
 		{
 			name: "float-before-integer",
@@ -391,7 +406,8 @@ func TestMergeGroupPreservesPreparedParamKind(t *testing.T) {
 				{rows: 2, kind: vector.PrepareParamFloat},
 				{rows: 1, kind: vector.PrepareParamInteger},
 			},
-			wantKind: vector.PrepareParamNone,
+			// Equal values retain the earlier Float winner.
+			wantKind: vector.PrepareParamFloat,
 		},
 	}
 
@@ -423,12 +439,109 @@ func TestMergeGroupPreservesPreparedParamKind(t *testing.T) {
 	}
 }
 
+func TestMergeGroupUsesIncomingWinnerPrepareParamKind(t *testing.T) {
+	tests := []struct {
+		name     string
+		partials []preparedPartialSpec
+		want     vector.PrepareParamKind
+	}{
+		{
+			name: "later-float-winner",
+			partials: []preparedPartialSpec{
+				{rows: 1, kind: vector.PrepareParamNone, value: "6"},
+				{rows: 1, kind: vector.PrepareParamFloat, value: "5"},
+			},
+			want: vector.PrepareParamFloat,
+		},
+		{
+			name: "later-ordinary-winner",
+			partials: []preparedPartialSpec{
+				{rows: 1, kind: vector.PrepareParamFloat, value: "5"},
+				{rows: 1, kind: vector.PrepareParamNone, value: "4"},
+			},
+			want: vector.PrepareParamNone,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			t.Cleanup(func() {
+				require.Zero(t, proc.Mp().CurrNB())
+				proc.Free()
+			})
+			setPrepareParamKindProtocolVersion(t, proc, defines.MORPCVersion11)
+
+			partials := make([]*batch.Batch, len(tc.partials))
+			for i, spec := range tc.partials {
+				partials[i] = buildPreparedMinPartial(t, proc, spec)
+			}
+			child := colexec.NewMockOperator().WithBatchs(partials)
+			t.Cleanup(func() { child.Free(proc, false, nil) })
+			merge := newMergeGroupOp([]aggexec.AggFuncExecExpression{minPreparedParamAgg()})
+			merge.AppendChild(child)
+			t.Cleanup(func() { merge.Free(proc, false, nil) })
+
+			require.NoError(t, merge.Prepare(proc))
+			outputs := collectBatches(t, merge, proc)
+			require.Len(t, outputs, 1)
+			require.Equal(t, tc.want, outputs[0].Vecs[0].GetPrepareParamKindAt(0))
+		})
+	}
+}
+
+func TestMergeGroupPreservesHeterogeneousPartialProvenance(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	setPrepareParamKindProtocolVersion(t, proc, defines.MORPCVersion11)
+
+	input := batch.NewWithSize(2)
+	input.Vecs[0] = testutil.MakeInt32Vector([]int32{0, 1}, nil, proc.Mp())
+	input.Vecs[1] = vector.NewVec(types.T_text.ToType())
+	for range 2 {
+		require.NoError(t, vector.AppendBytes(input.Vecs[1], []byte("5"), false, proc.Mp()))
+	}
+	input.Vecs[1].SetPrepareParamKinds([]vector.PrepareParamKind{
+		vector.PrepareParamFloat,
+		vector.PrepareParamNone,
+	})
+	input.SetRowCount(2)
+
+	partial := newGroupOp(proc, []*plan.Expr{colExpr(0, types.T_int32)},
+		[]aggexec.AggFuncExecExpression{minTextColumnAgg(1)})
+	partial.NeedEval = false
+	partial.AppendChild(colexec.NewMockOperator().WithBatchs([]*batch.Batch{input}))
+	require.NoError(t, partial.Prepare(proc))
+	partials := collectBatches(t, partial, proc)
+	require.Len(t, partials, 1)
+	partialBatch := cloneBatch(t, proc, partials[0])
+	partial.Free(proc, false, nil)
+	input.Clean(proc.Mp())
+
+	merge := newMergeGroupOp([]aggexec.AggFuncExecExpression{minTextColumnAgg(1)})
+	merge.AppendChild(colexec.NewMockOperator().WithBatchs([]*batch.Batch{partialBatch}))
+	require.NoError(t, merge.Prepare(proc))
+	outputs := collectBatches(t, merge, proc)
+	require.Len(t, outputs, 1)
+	seen := make(map[int32]vector.PrepareParamKind)
+	keys := vector.MustFixedColNoTypeCheck[int32](outputs[0].Vecs[0])
+	for row, key := range keys {
+		seen[key] = outputs[0].Vecs[1].GetPrepareParamKindAt(row)
+	}
+	require.Equal(t, vector.PrepareParamFloat, seen[0])
+	require.Equal(t, vector.PrepareParamNone, seen[1])
+	merge.Free(proc, false, nil)
+	partialBatch.Clean(proc.Mp())
+	require.Zero(t, proc.Mp().CurrNB())
+}
+
 func TestMergeGroupPartialWireCompatibility(t *testing.T) {
 	tests := []struct {
 		name          string
 		writerVersion int64
 		readerVersion int64
 		wantKind      vector.PrepareParamKind
+		wantErr       string
 	}{
 		{
 			name:          "new writer and new reader",
@@ -446,7 +559,7 @@ func TestMergeGroupPartialWireCompatibility(t *testing.T) {
 			name:          "new writer and legacy reader",
 			writerVersion: defines.MORPCVersion11,
 			readerVersion: defines.MORPCVersion10,
-			wantKind:      vector.PrepareParamNone,
+			wantErr:       "prepared parameter aggregate trailer requires MORPCVersion11",
 		},
 	}
 
@@ -465,6 +578,18 @@ func TestMergeGroupPartialWireCompatibility(t *testing.T) {
 			moruntime.ServiceRuntime(proc.GetService()).SetGlobalVariables(
 				moruntime.MOProtocolVersion, tc.readerVersion)
 
+			if tc.wantErr != "" {
+				child := colexec.NewMockOperator().WithBatchs([]*batch.Batch{partial})
+				t.Cleanup(func() { child.Free(proc, false, nil) })
+				merge := newMergeGroupOp([]aggexec.AggFuncExecExpression{minPreparedParamAgg()})
+				merge.AppendChild(child)
+				t.Cleanup(func() { merge.Free(proc, true, nil) })
+				require.NoError(t, merge.Prepare(proc))
+				result, err := vm.Exec(merge, proc)
+				require.Nil(t, result.Batch)
+				require.ErrorContains(t, err, tc.wantErr)
+				return
+			}
 			output := mergePreparedMinPartial(t, proc, partial)
 			require.Equal(t, "5", output.Vecs[0].GetStringAt(0))
 			require.Equal(t, tc.wantKind, output.Vecs[0].GetPrepareParamKind())
@@ -572,10 +697,14 @@ func TestMergeGroupRejectsInvalidPrepareParamKindState(t *testing.T) {
 				prepareParamKindTrailerMagic0,
 				prepareParamKindTrailerMagic1,
 				prepareParamKindTrailerMagic2,
-				prepareParamKindTrailerVersion,
 			})
 			require.NotEqual(t, -1, trailerOffset)
+			// The one-row prepared partial can use the compact v1 scalar
+			// record; heterogeneous rows use the v2 marker + row count form.
 			stateOffset := trailerOffset + 8
+			if partial.ExtraBuf[trailerOffset+3] == prepareParamKindTrailerRowsVersion {
+				stateOffset += 5 // marker plus int32 row count
+			}
 			partial.ExtraBuf = tc.mutate(partial.ExtraBuf, stateOffset)
 
 			child := colexec.NewMockOperator().WithBatchs([]*batch.Batch{partial})
@@ -590,7 +719,11 @@ func TestMergeGroupRejectsInvalidPrepareParamKindState(t *testing.T) {
 			if tc.wantErr != nil {
 				require.ErrorIs(t, err, tc.wantErr)
 			} else {
-				require.ErrorContains(t, err, "invalid aggregate prepared parameter state 6")
+				if partial.ExtraBuf[trailerOffset+3] == prepareParamKindTrailerRowsVersion {
+					require.ErrorContains(t, err, "invalid aggregate prepared parameter row kind 6")
+				} else {
+					require.ErrorContains(t, err, "invalid aggregate prepared parameter state 6")
+				}
 			}
 		})
 	}
@@ -613,10 +746,10 @@ func TestMergeGroupRejectsInvalidPrepareParamKindTrailer(t *testing.T) {
 		{
 			name: "unsupported version",
 			mutate: func(extra []byte, trailerOffset int) []byte {
-				extra[trailerOffset+3]++
+				extra[trailerOffset+3] = 3
 				return extra
 			},
-			wantErr: "unsupported aggregate prepared parameter trailer version 2",
+			wantErr: "unsupported aggregate prepared parameter trailer version 3",
 		},
 		{
 			name: "aggregate count mismatch",
@@ -652,7 +785,6 @@ func TestMergeGroupRejectsInvalidPrepareParamKindTrailer(t *testing.T) {
 				prepareParamKindTrailerMagic0,
 				prepareParamKindTrailerMagic1,
 				prepareParamKindTrailerMagic2,
-				prepareParamKindTrailerVersion,
 			})
 			require.NotEqual(t, -1, trailerOffset)
 			partial.ExtraBuf = tc.mutate(partial.ExtraBuf, trailerOffset)
@@ -1057,7 +1189,7 @@ func TestGroupSpillReloadUsesReducedHashKey(t *testing.T) {
 		[]*plan.Expr{colExpr(0, types.T_int32), colExpr(1, types.T_int32)},
 		[]aggexec.AggFuncExecExpression{countStarAgg()})
 	g.GroupByHashKey = []int32{0}
-	g.SpillMem = 4096
+	g.SpillMem = 64
 	g.AppendChild(colexec.NewMockOperator().WithBatchs([]*batch.Batch{input}))
 	require.NoError(t, g.Prepare(proc))
 
@@ -1076,6 +1208,108 @@ func TestGroupSpillReloadUsesReducedHashKey(t *testing.T) {
 	require.Equal(t, groups, rows)
 	require.Positive(t, g.OpAnalyzer.GetOpStats().ExtraStats["GroupSpillReloadRecords"])
 	g.Free(proc, false, nil)
+	require.Zero(t, proc.Mp().CurrNB())
+}
+
+func TestGroupSpillPreservesPerGroupPrepareParamKind(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+
+	const groups = 2
+	const rows = 1024
+	keys := make([]int32, rows)
+	kinds := make([]vector.PrepareParamKind, rows)
+	for i := range keys {
+		keys[i] = int32(i % groups)
+		if keys[i]%2 == 0 {
+			kinds[i] = vector.PrepareParamFloat
+		}
+	}
+	input := batch.NewWithSize(2)
+	input.Vecs[0] = testutil.MakeInt32Vector(keys, nil, proc.Mp())
+	input.Vecs[1] = vector.NewVec(types.T_text.ToType())
+	for range keys {
+		require.NoError(t, vector.AppendBytes(input.Vecs[1], []byte("5"), false, proc.Mp()))
+	}
+	input.Vecs[1].SetPrepareParamKinds(kinds)
+	input.SetRowCount(rows)
+
+	g := newGroupOp(proc, []*plan.Expr{colExpr(0, types.T_int32)},
+		[]aggexec.AggFuncExecExpression{minTextColumnAgg(1)})
+	g.SpillMem = 10 << 10
+	g.AppendChild(colexec.NewMockOperator().WithBatchs([]*batch.Batch{input}))
+	require.NoError(t, g.Prepare(proc))
+	seen := make(map[int32]vector.PrepareParamKind)
+	for {
+		result, err := vm.Exec(g, proc)
+		require.NoError(t, err)
+		if result.Status == vm.ExecStop || result.Batch == nil {
+			break
+		}
+		if result.Batch.RowCount() != 0 {
+			outKeys := vector.MustFixedColNoTypeCheck[int32](result.Batch.Vecs[0])
+			for row, key := range outKeys {
+				seen[key] = result.Batch.Vecs[1].GetPrepareParamKindAt(row)
+			}
+		}
+	}
+	require.Len(t, seen, groups)
+	for key, kind := range seen {
+		want := vector.PrepareParamNone
+		if key%2 == 0 {
+			want = vector.PrepareParamFloat
+		}
+		require.Equal(t, want, kind, "group %d", key)
+	}
+	g.Free(proc, false, nil)
+	input.Clean(proc.Mp())
+	require.Zero(t, proc.Mp().CurrNB())
+}
+
+func TestGroupSpillPreservesUniformPreparedParamKind(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+
+	const groups = 2
+	const rows = 1024
+	keys := make([]int32, rows)
+	for i := range keys {
+		keys[i] = int32(i % groups)
+	}
+	input := batch.NewWithSize(2)
+	input.Vecs[0] = testutil.MakeInt32Vector(keys, nil, proc.Mp())
+	input.Vecs[1] = vector.NewVec(types.T_text.ToType())
+	for range keys {
+		require.NoError(t, vector.AppendBytes(input.Vecs[1], []byte("5"), false, proc.Mp()))
+	}
+	input.Vecs[1].SetPrepareParamKind(vector.PrepareParamFloat)
+	input.SetRowCount(rows)
+
+	g := newGroupOp(proc, []*plan.Expr{colExpr(0, types.T_int32)},
+		[]aggexec.AggFuncExecExpression{minTextColumnAgg(1)})
+	g.SpillMem = 10 << 10
+	g.AppendChild(colexec.NewMockOperator().WithBatchs([]*batch.Batch{input}))
+	require.NoError(t, g.Prepare(proc))
+	seen := make(map[int32]vector.PrepareParamKind)
+	for {
+		result, err := vm.Exec(g, proc)
+		require.NoError(t, err)
+		if result.Status == vm.ExecStop || result.Batch == nil {
+			break
+		}
+		if result.Batch.RowCount() != 0 {
+			outKeys := vector.MustFixedColNoTypeCheck[int32](result.Batch.Vecs[0])
+			for row, key := range outKeys {
+				seen[key] = result.Batch.Vecs[1].GetPrepareParamKindAt(row)
+			}
+		}
+	}
+	require.Len(t, seen, groups)
+	for key, kind := range seen {
+		require.Equal(t, vector.PrepareParamFloat, kind, "group %d", key)
+	}
+	g.Free(proc, false, nil)
+	input.Clean(proc.Mp())
 	require.Zero(t, proc.Mp().CurrNB())
 }
 

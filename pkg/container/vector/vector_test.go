@@ -4037,6 +4037,63 @@ func TestPrepareParamKindEmptyReuseCopyAndRollback(t *testing.T) {
 		"rollback must restore the mixed-source provenance")
 }
 
+func TestPrepareParamKindPerRowMaterialization(t *testing.T) {
+	mp := mpool.MustNewZero()
+	source := NewVec(types.T_text.ToType())
+	require.NoError(t, AppendBytes(source, []byte("5"), false, mp))
+	require.NoError(t, AppendBytes(source, []byte("5"), false, mp))
+	source.SetPrepareParamKinds([]PrepareParamKind{PrepareParamInteger, PrepareParamNone})
+	require.Equal(t, PrepareParamNone, source.GetPrepareParamKind())
+	require.Equal(t, PrepareParamInteger, source.GetPrepareParamKindAt(0))
+	require.Equal(t, PrepareParamNone, source.GetPrepareParamKindAt(1))
+
+	dst := NewVec(types.T_text.ToType())
+	require.NoError(t, dst.Union(source, []int64{1, 0}, mp))
+	require.Equal(t, PrepareParamNone, dst.GetPrepareParamKind())
+	require.Equal(t, PrepareParamNone, dst.GetPrepareParamKindAt(0))
+	require.Equal(t, PrepareParamInteger, dst.GetPrepareParamKindAt(1))
+
+	clone, err := dst.CloneToFlatCompact(mp)
+	require.NoError(t, err)
+	require.Equal(t, PrepareParamNone, clone.GetPrepareParamKind())
+	require.Equal(t, PrepareParamNone, clone.GetPrepareParamKindAt(0))
+	require.Equal(t, PrepareParamInteger, clone.GetPrepareParamKindAt(1))
+	clone.Free(mp)
+
+	resized := NewVec(types.T_text.ToType())
+	require.NoError(t, resized.PreExtend(3, mp))
+	resized.SetLength(3)
+	resized.SetAllNulls(3)
+	require.NoError(t, resized.Copy(source, 2, 0, mp))
+	require.NoError(t, resized.Copy(source, 0, 1, mp))
+	require.Equal(t, PrepareParamInteger, resized.GetPrepareParamKindAt(2))
+	require.Equal(t, PrepareParamNone, resized.GetPrepareParamKindAt(0))
+	resized.Free(mp)
+	dst.Free(mp)
+	source.Free(mp)
+}
+
+func TestPrepareParamKindCheckpointRollbackReaccountsSidecar(t *testing.T) {
+	mp := mpool.MustNewZero()
+	vec := NewVec(types.T_text.ToType())
+	require.NoError(t, AppendBytes(vec, []byte("5"), false, mp))
+	require.NoError(t, AppendBytes(vec, []byte("text"), false, mp))
+	require.NoError(t, vec.SetPrepareParamKindsWithMP(
+		[]PrepareParamKind{PrepareParamInteger, PrepareParamNone}, mp))
+	before := mp.CurrNB()
+	checkpoint := vec.MakeAppendCheckpoint()
+	ordinary := NewVec(types.T_text.ToType())
+	require.NoError(t, AppendBytes(ordinary, []byte("later"), false, mp))
+	require.NoError(t, vec.UnionOne(ordinary, 0, mp))
+	vec.RollbackAppend(checkpoint, 1)
+	require.Equal(t, PrepareParamInteger, vec.GetPrepareParamKindAt(0))
+	require.Equal(t, PrepareParamNone, vec.GetPrepareParamKindAt(1))
+	require.Equal(t, before, mp.CurrNB())
+	ordinary.Free(mp)
+	vec.Free(mp)
+	require.Equal(t, int64(0), mp.CurrNB())
+}
+
 func BenchmarkUnionBatchPrepareParamKind(b *testing.B) {
 	mp := mpool.MustNewZero()
 	source := NewVec(types.T_int64.ToType())

@@ -30,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
 	"github.com/matrixorigin/matrixone/pkg/util/list"
@@ -420,8 +421,24 @@ func (ctr *container) spillDataToDisk(proc *process.Process, opAnalyzer process.
 			if nBatches > 1 {
 				compactedAggChunks += int64(nBatches-1) * int64(len(ctr.aggList))
 			}
-			for _, ag := range ctr.aggList {
+			prepareParamKinds := make([][]vector.PrepareParamKind, len(ctr.aggList))
+			prepareParamKindSummaries := make([]prepareParamKindSummary, len(ctr.aggList))
+			hasPrepareParamKinds := false
+			for j, ag := range ctr.aggList {
 				if err := ag.SaveIntermediateResult(cnt, fullFlags, buf); err != nil {
+					return 0, 0, err
+				}
+				if accessor, ok := ag.(aggexec.PrepareParamKindStateAccessor); ok {
+					prepareParamKinds[j] = accessor.PrepareParamKindsForSelection(fullFlags)
+					hasPrepareParamKinds = hasPrepareParamKinds || len(prepareParamKinds[j]) != 0
+					prepareParamKindSummaries[j].kind, prepareParamKindSummaries[j].seen =
+						accessor.PrepareParamKindSummaryForSelection(fullFlags)
+					hasPrepareParamKinds = hasPrepareParamKinds || prepareParamKindSummaries[j].seen
+				}
+			}
+			if hasPrepareParamKinds {
+				if err := writePrepareParamKindTrailer(proc.Ctx, buf, ctr.aggExprs,
+					&ctr.prepareParamKind, prepareParamKinds, prepareParamKindSummaries); err != nil {
 					return 0, 0, err
 				}
 			}
@@ -646,6 +663,54 @@ func (ctr *container) loadSpilledData(proc *process.Process, opAnalyzer process.
 			reusedAggExecRecords++
 		}
 
+		// The stable aggregate/vector codec deliberately has no prepared
+		// provenance fields.  A local spill record therefore carries an
+		// optional self-identifying PPK trailer between the aggregate payload
+		// and the existing end marker.  Peek keeps the ordinary spill layout
+		// byte-for-byte unchanged when no preserving winner was observed.
+		if peek, peekErr := bufferedFile.Peek(3); peekErr == nil &&
+			len(peek) == 3 && peek[0] == prepareParamKindTrailerMagic0 &&
+			peek[1] == prepareParamKindTrailerMagic1 && peek[2] == prepareParamKindTrailerMagic2 {
+			var spillPrepareParamKind aggexec.PrepareParamKindStates
+			spillPrepareParamKind.Reset(aggExprs)
+			expectedRows := make([]int, len(ctr.spillAggList))
+			for i, ag := range ctr.spillAggList {
+				expectedRows[i] = -1
+				if accessor, ok := ag.(interface {
+					PrepareParamKindRowCountFlat() int
+				}); ok {
+					expectedRows[i] = accessor.PrepareParamKindRowCountFlat()
+				}
+			}
+			prepareParamKinds, prepareParamKindSummaries, err := readPrepareParamKindTrailer(proc.Ctx, bufferedFile,
+				int32(len(ctr.spillAggList)), &spillPrepareParamKind, expectedRows)
+			if err != nil {
+				return false, err
+			}
+			for i, ag := range ctr.spillAggList {
+				if i >= len(aggExprs) || !aggExprs[i].PreservesFirstArgPrepareParamKind() {
+					continue
+				}
+				if i < len(prepareParamKinds) && len(prepareParamKinds[i]) != 0 {
+					accessor, ok := ag.(aggexec.PrepareParamKindStateAccessor)
+					if !ok {
+						return false, moerr.NewInternalErrorNoCtx(
+							"aggregate spill state cannot restore prepared parameter rows")
+					}
+					if err := accessor.RestorePrepareParamKindsFlat(
+						prepareParamKinds[i], ctr.mp); err != nil {
+						return false, err
+					}
+				} else if setter, ok := ag.(interface {
+					SetPrepareParamKind(vector.PrepareParamKind)
+				}); ok {
+					if i < len(prepareParamKindSummaries) && prepareParamKindSummaries[i].seen {
+						setter.SetPrepareParamKind(prepareParamKindSummaries[i].kind)
+					}
+				}
+			}
+		}
+
 		checkMagic, err = types.ReadUint64(bufferedFile)
 		if err != nil {
 			return false, err
@@ -767,7 +832,14 @@ func (ctr *container) getNextFinalResult(
 			}
 			kind := ctr.prepareParamKind.Get(i)
 			for _, vec := range vecs {
-				vec.SetPrepareParamKind(kind)
+				// Preserving aggregates (MIN/MAX/ANY/MAX_BY and value
+				// windows) attach the winner's row provenance directly to
+				// their state vector. Keep that exact metadata; the scalar
+				// execution summary is only a compatibility fallback for
+				// aggregate implementations that materialize ordinary state.
+				if !vec.HasPrepareParamKind() {
+					vec.SetPrepareParamKind(kind)
+				}
 			}
 			for j := range vecs {
 				ctr.groupByBatches[j].Vecs = append(

@@ -351,6 +351,7 @@ type FunctionExpressionExecutor struct {
 	parameterExecutor   []ExpressionExecutor
 	flowControlKind     vector.PrepareParamKind
 	flowControlKindSeen bool
+	flowControlKinds    []vector.PrepareParamKind
 	iffNullResults      [2]*vector.Vector
 }
 
@@ -811,6 +812,22 @@ func hasSelectedRows(selectList []bool) bool {
 func (expr *FunctionExpressionExecutor) resetFlowControlPrepareParamKind() {
 	expr.flowControlKind = vector.PrepareParamNone
 	expr.flowControlKindSeen = false
+	if expr.flowControlKinds != nil {
+		expr.flowControlKinds = expr.flowControlKinds[:0]
+	}
+}
+
+func (expr *FunctionExpressionExecutor) ensureFlowControlPrepareParamRows(rows int) {
+	if rows <= len(expr.flowControlKinds) {
+		return
+	}
+	old := len(expr.flowControlKinds)
+	if rows <= cap(expr.flowControlKinds) {
+		expr.flowControlKinds = expr.flowControlKinds[:rows]
+		clear(expr.flowControlKinds[old:])
+		return
+	}
+	expr.flowControlKinds = append(expr.flowControlKinds, make([]vector.PrepareParamKind, rows-old)...)
 }
 
 // observeFlowControlPrepareParamKind inspects only rows that can reach one
@@ -827,16 +844,43 @@ func (expr *FunctionExpressionExecutor) observeFlowControlPrepareParamKind(
 	for row, selected := range selection {
 		if selected && (value.IsConst() || row < value.Length()) &&
 			!value.IsNull(uint64(row)) {
-			kind := value.GetPrepareParamKind()
+			kind := value.GetPrepareParamKindAt(row)
 			if !expr.flowControlKindSeen {
 				expr.flowControlKind = kind
 				expr.flowControlKindSeen = true
-			} else if expr.flowControlKind != kind {
+			} else if len(expr.flowControlKinds) == 0 && expr.flowControlKind != kind {
+				expr.ensureFlowControlPrepareParamRows(len(selection))
+				for i := range expr.flowControlKinds {
+					expr.flowControlKinds[i] = expr.flowControlKind
+				}
 				expr.flowControlKind = vector.PrepareParamNone
 			}
-			return
+			if len(expr.flowControlKinds) > 0 {
+				expr.flowControlKinds[row] = kind
+			}
 		}
 	}
+}
+
+func (expr *FunctionExpressionExecutor) applyFlowControlPrepareParamKinds(
+	result *vector.Vector,
+	rows int,
+	mp *mpool.MPool,
+) error {
+	if result == nil || rows <= 0 {
+		return nil
+	}
+	if len(expr.flowControlKinds) == 0 {
+		if expr.flowControlKindSeen {
+			result.SetPrepareParamKind(expr.flowControlKind)
+		}
+		return nil
+	}
+	expr.ensureFlowControlPrepareParamRows(rows)
+	if err := result.SetPrepareParamKindsWithMP(expr.flowControlKinds[:rows], mp); err != nil {
+		return err
+	}
+	return nil
 }
 
 func (expr *FunctionExpressionExecutor) getFlowControlPrepareParamKind() vector.PrepareParamKind {
@@ -1012,7 +1056,6 @@ func (expr *FunctionExpressionExecutor) evalSelectedRows(
 				selected.Reset(*parameter.GetType())
 			}
 			selected.SetIsBin(parameter.GetIsBin())
-			selected.SetPrepareParamKind(parameter.GetPrepareParamKind())
 			if err := selected.Union(parameter, expr.selectedRows, proc.Mp()); err != nil {
 				return nil, err
 			}
@@ -1056,7 +1099,6 @@ func (expr *FunctionExpressionExecutor) evalSelectedRows(
 	result.SetType(runtimeType)
 	result.SetIsBin(runtimeIsBin)
 	result.ResetWithSameType()
-	result.SetPrepareParamKind(runtimePrepareParamKind)
 	if expr.selectedNullResult == nil {
 		var err error
 		expr.selectedNullResult, err = newExpressionConstNull(
@@ -1081,7 +1123,18 @@ func (expr *FunctionExpressionExecutor) evalSelectedRows(
 			return nil, err
 		}
 	}
-	result.SetPrepareParamKind(runtimePrepareParamKind)
+	if expr.fid == function.IFF || expr.fid == function.CASE || expr.fid == function.COALESCE {
+		if err := expr.applyFlowControlPrepareParamKinds(result, rowCount, proc.Mp()); err != nil {
+			return nil, err
+		}
+	} else {
+		// A selected function result may already carry exact row provenance
+		// from a type-preserving materialization. Keep that sidecar; the scalar
+		// summary is only the compatibility fallback for uniform results.
+		if len(result.GetPrepareParamKinds()) == 0 {
+			result.SetPrepareParamKind(runtimePrepareParamKind)
+		}
+	}
 	return result, nil
 }
 
@@ -1173,9 +1226,10 @@ func (expr *FunctionExpressionExecutor) Eval(proc *process.Process, batches []*b
 		return nil, err
 	}
 	if expr.fid == function.IFF || expr.fid == function.CASE || expr.fid == function.COALESCE {
-		expr.resultVector.GetResultVector().SetPrepareParamKind(
-			expr.getFlowControlPrepareParamKind(),
-		)
+		if err := expr.applyFlowControlPrepareParamKinds(
+			expr.resultVector.GetResultVector(), rowCount, proc.Mp()); err != nil {
+			return nil, err
+		}
 	}
 
 	return expr.resultVector.GetResultVector(), nil

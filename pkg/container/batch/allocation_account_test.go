@@ -714,6 +714,13 @@ func TestBatchAllocationAccountDestinationCloneUnionAndReuse(t *testing.T) {
 	state := newTestBatchAllocationAccount(t, 64)
 	mp := mpool.MustNewZero()
 	source := newBatchAllocationTestSource(t, mp, nil)
+	kinds := make([]vector.PrepareParamKind, source.RowCount())
+	for i := range kinds {
+		if i%2 == 0 {
+			kinds[i] = vector.PrepareParamFloat
+		}
+	}
+	source.Vecs[1].SetPrepareParamKinds(kinds)
 
 	destination := NewWithSchema(
 		true,
@@ -724,6 +731,14 @@ func TestBatchAllocationAccountDestinationCloneUnionAndReuse(t *testing.T) {
 	require.NoError(t, source.CloneTo(destination, mp))
 	require.NotZero(t, state.account.Snapshot().Used)
 	require.Equal(t, source.RowCount(), destination.RowCount())
+	for i, kind := range kinds {
+		require.Equal(t, kind, destination.Vecs[1].GetPrepareParamKindAt(i))
+	}
+	// UnionBatch owns the one destination sidecar. A second metadata copy
+	// would temporarily raise the account high-water mark above its final
+	// live usage and can fail under a tight allocation cap.
+	snapshot := state.account.Snapshot()
+	require.Equal(t, snapshot.Used, snapshot.Peak)
 
 	destination.FreeColumns(mp)
 	require.Zero(t, state.account.Snapshot().Used)

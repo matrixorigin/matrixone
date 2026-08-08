@@ -165,7 +165,15 @@ func (cb *cachedBatch) GetCopiedBatch(
 			dst.Vecs[i].SetGrouping(vec.GetGrouping())
 		}
 		dst.Vecs[i].SetIsBin(vec.GetIsBin())
-		dst.Vecs[i].SetPrepareParamKind(vec.GetPrepareParamKind())
+		if vec.IsConst() {
+			// GetUnionAllFunction already propagates row provenance for the
+			// non-constant path. Constants still need their scalar metadata
+			// copied after the const setter has materialized the value.
+			if err = vec.CopyPrepareParamMetadataToWithMP(dst.Vecs[i], cb.mp); err != nil {
+				cb.CacheBatch(true, cacheID, dst)
+				return nil, false, 0, err
+			}
+		}
 
 		// range src and found the same vector.
 		for j := i + 1; j < len(src.Vecs); j++ {

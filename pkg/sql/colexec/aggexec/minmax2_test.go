@@ -80,3 +80,39 @@ func TestDecimal256MinMax(t *testing.T) {
 		})
 	}
 }
+
+func TestMinMaxPreservesWinningPrepareParamKind(t *testing.T) {
+	mp := mpool.MustNewZero()
+	input := vector.NewVec(types.T_text.ToType())
+	require.NoError(t, vector.AppendBytes(input, []byte("5"), false, mp))
+	require.NoError(t, vector.AppendBytes(input, []byte("9"), false, mp))
+	input.SetPrepareParamKinds([]vector.PrepareParamKind{
+		vector.PrepareParamInteger,
+		vector.PrepareParamNone,
+	})
+	defer func() {
+		input.Free(mp)
+		require.Zero(t, mp.CurrNB())
+	}()
+
+	for _, tc := range []struct {
+		name string
+		id   int64
+		want vector.PrepareParamKind
+	}{
+		{name: "min", id: AggIdOfMin, want: vector.PrepareParamInteger},
+		{name: "max", id: AggIdOfMax, want: vector.PrepareParamNone},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			agg := makeMinMaxExec(mp, tc.id, tc.id == AggIdOfMin, types.T_text.ToType())
+			require.NoError(t, agg.GroupGrow(1))
+			require.NoError(t, agg.BulkFill(0, []*vector.Vector{input}))
+			results, err := agg.Flush()
+			require.NoError(t, err)
+			require.Len(t, results, 1)
+			require.Equal(t, tc.want, results[0].GetPrepareParamKindAt(0))
+			results[0].Free(mp)
+			agg.Free()
+		})
+	}
+}

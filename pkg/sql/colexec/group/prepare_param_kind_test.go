@@ -15,11 +15,80 @@
 package group
 
 import (
+	"bufio"
+	"bytes"
+	"context"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
 	"github.com/stretchr/testify/require"
 )
+
+func prepareParamKindRowsTrailerForTest(rowCount int32, rows []byte) []byte {
+	var buf bytes.Buffer
+	buf.Write([]byte{prepareParamKindTrailerMagic0, prepareParamKindTrailerMagic1,
+		prepareParamKindTrailerMagic2, prepareParamKindTrailerRowsVersion})
+	nAggs := int32(1)
+	buf.Write(types.EncodeInt32(&nAggs))
+	buf.WriteByte(prepareParamKindTrailerRowsMarker)
+	buf.Write(types.EncodeInt32(&rowCount))
+	buf.Write(rows)
+	return buf.Bytes()
+}
+
+func TestPrepareParamKindTrailerRejectsRowAmplificationBeforeAllocation(t *testing.T) {
+	states := aggexec.PrepareParamKindStates{}
+	states.Reset([]aggexec.AggFuncExecExpression{
+		aggexec.MakeAggFunctionExpression(aggexec.AggIdOfMin, false, nil, nil),
+	})
+
+	tests := []struct {
+		name    string
+		payload []byte
+		wantErr string
+	}{
+		{
+			name:    "zero rows marker",
+			payload: prepareParamKindRowsTrailerForTest(0, nil),
+			wantErr: "invalid aggregate prepared parameter row count 0",
+		},
+		{
+			name:    "amplified rows mismatch",
+			payload: prepareParamKindRowsTrailerForTest(1<<24, nil),
+			wantErr: "row count 16777216 does not match 1",
+		},
+		{
+			name:    "truncated rows",
+			payload: prepareParamKindRowsTrailerForTest(1, nil),
+			wantErr: "unexpected EOF",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			localStates := aggexec.PrepareParamKindStates{}
+			localStates.Reset([]aggexec.AggFuncExecExpression{
+				aggexec.MakeAggFunctionExpression(aggexec.AggIdOfMin, false, nil, nil),
+			})
+			_, _, err := readPrepareParamKindTrailer(
+				context.Background(), bytes.NewReader(tc.payload), 1, &localStates, []int{1})
+			require.Error(t, err)
+			require.ErrorContains(t, err, tc.wantErr)
+		})
+	}
+}
+
+func TestPrepareParamKindTrailerRejectsBufferedSpillAmplification(t *testing.T) {
+	states := aggexec.PrepareParamKindStates{}
+	states.Reset([]aggexec.AggFuncExecExpression{
+		aggexec.MakeAggFunctionExpression(aggexec.AggIdOfMin, false, nil, nil),
+	})
+	payload := prepareParamKindRowsTrailerForTest(1<<24, nil)
+	_, _, err := readPrepareParamKindTrailer(
+		context.Background(), bufio.NewReader(bytes.NewReader(payload)), 1, &states, []int{1})
+	require.ErrorContains(t, err, "row count 16777216 does not match 1")
+}
 
 func TestPrepareParamKindStateCodec(t *testing.T) {
 	tests := []struct {

@@ -561,6 +561,111 @@ func TestClonePreservesPrepareParamKind(t *testing.T) {
 	require.Equal(t, vector.PrepareParamDecimal, cloned.Vecs[0].GetPrepareParamKind())
 }
 
+func TestPrepareParamKindTransportRoundTripAndReuse(t *testing.T) {
+	mp := mpool.MustNewZero()
+	source := NewWithSize(1)
+	source.Vecs[0] = vector.NewVec(types.T_text.ToType())
+	require.NoError(t, vector.AppendBytes(source.Vecs[0], []byte("5"), false, mp))
+	require.NoError(t, vector.AppendBytes(source.Vecs[0], []byte("5"), false, mp))
+	source.Vecs[0].SetPrepareParamKinds([]vector.PrepareParamKind{
+		vector.PrepareParamFloat,
+		vector.PrepareParamNone,
+	})
+	source.SetRowCount(2)
+	defer source.Clean(mp)
+
+	legacy, err := source.MarshalBinary()
+	require.NoError(t, err)
+	var wire bytes.Buffer
+	encoded, err := source.MarshalBinaryWithPrepareParamKinds(&wire, true)
+	require.NoError(t, err)
+	require.Equal(t, wire.Bytes(), encoded)
+	require.Greater(t, len(encoded), len(legacy))
+	require.Equal(t, legacy, encoded[:len(legacy)])
+
+	decoded := NewOffHeapEmpty()
+	require.NoError(t, decoded.UnmarshalBinaryWithPrepareParamKinds(encoded, mp))
+	require.Equal(t, vector.PrepareParamFloat, decoded.Vecs[0].GetPrepareParamKindAt(0))
+	require.Equal(t, vector.PrepareParamNone, decoded.Vecs[0].GetPrepareParamKindAt(1))
+
+	// Reusing the receiver with a legacy payload must clear the previous
+	// sidecar rather than leaking the first generation's provenance.
+	require.NoError(t, decoded.UnmarshalBinaryWithPrepareParamKinds(legacy, mp))
+	require.Equal(t, vector.PrepareParamNone, decoded.Vecs[0].GetPrepareParamKindAt(0))
+	decoded.Clean(mp)
+}
+
+func TestPrepareParamKindTransportRejectsMalformedTrailer(t *testing.T) {
+	mp := mpool.MustNewZero()
+	bat := NewWithSize(1)
+	bat.Vecs[0] = vector.NewVec(types.T_text.ToType())
+	require.NoError(t, vector.AppendBytes(bat.Vecs[0], []byte("5"), false, mp))
+	bat.Vecs[0].SetPrepareParamKind(vector.PrepareParamFloat)
+	bat.SetRowCount(1)
+	defer bat.Clean(mp)
+	var wire bytes.Buffer
+	encoded, err := bat.MarshalBinaryWithPrepareParamKinds(&wire, true)
+	require.NoError(t, err)
+	for _, malformed := range [][]byte{
+		encoded[:len(encoded)-1],
+		append(append([]byte(nil), encoded...), 0),
+	} {
+		reused := NewOffHeapEmpty()
+		require.Error(t, reused.UnmarshalBinaryWithPrepareParamKinds(malformed, mp))
+		reused.Clean(mp)
+	}
+}
+
+func TestPrepareParamKindTransportRejectsMismatchedCountsBeforeAllocation(t *testing.T) {
+	mp := mpool.MustNewZero()
+	source := NewWithSize(1)
+	source.Vecs[0] = vector.NewVec(types.T_text.ToType())
+	require.NoError(t, vector.AppendBytes(source.Vecs[0], []byte("5"), false, mp))
+	source.Vecs[0].SetPrepareParamKind(vector.PrepareParamFloat)
+	source.SetRowCount(1)
+	defer source.Clean(mp)
+	var wire bytes.Buffer
+	encoded, err := source.MarshalBinaryWithPrepareParamKinds(&wire, true)
+	require.NoError(t, err)
+	prefixLen, err := stableBatchPayloadLength(encoded)
+	require.NoError(t, err)
+
+	for _, nVecs := range []int32{0, 2} {
+		malformed := append([]byte(nil), encoded...)
+		copy(malformed[prefixLen+4:prefixLen+8], types.EncodeInt32(&nVecs))
+		reused := NewOffHeapEmpty()
+		require.ErrorContains(t, reused.UnmarshalBinaryWithPrepareParamKinds(malformed, mp),
+			"vector count mismatch")
+		reused.Clean(mp)
+	}
+
+	heterogeneous := NewWithSize(1)
+	heterogeneous.Vecs[0] = vector.NewVec(types.T_text.ToType())
+	for range 2 {
+		require.NoError(t, vector.AppendBytes(heterogeneous.Vecs[0], []byte("5"), false, mp))
+	}
+	heterogeneous.Vecs[0].SetPrepareParamKinds([]vector.PrepareParamKind{
+		vector.PrepareParamFloat,
+		vector.PrepareParamNone,
+	})
+	heterogeneous.SetRowCount(2)
+	defer heterogeneous.Clean(mp)
+	wire.Reset()
+	heterogeneousEncoded, err := heterogeneous.MarshalBinaryWithPrepareParamKinds(&wire, true)
+	require.NoError(t, err)
+	heterogeneousPrefix, err := stableBatchPayloadLength(heterogeneousEncoded)
+	require.NoError(t, err)
+	// PPB header (16 bytes) + mode byte precede the rows count.
+	rowCountOffset := heterogeneousPrefix + 17
+	malformed := append([]byte(nil), heterogeneousEncoded...)
+	amplified := int32(prepareParamKindBatchMaxRows)
+	copy(malformed[rowCountOffset:rowCountOffset+4], types.EncodeInt32(&amplified))
+	reused := NewOffHeapEmpty()
+	require.ErrorContains(t, reused.UnmarshalBinaryWithPrepareParamKinds(malformed, mp),
+		"row count mismatch")
+	reused.Clean(mp)
+}
+
 // TestBatchUnmarshalWithAnyMp_Bug23156 tests the fix for bug #23156
 // This test verifies that Vecs and Attrs length remain consistent when batch is reused
 // The bug occurred when batch was reused with different Attrs/Vecs configurations,

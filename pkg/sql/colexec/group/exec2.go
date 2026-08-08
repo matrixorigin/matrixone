@@ -63,6 +63,7 @@ func (group *Group) Prepare(proc *process.Process) (err error) {
 		group.ctr.free()
 	}
 	group.ctr.prepareParamKind.Reset(group.Aggs)
+	group.ctr.aggExprs = group.Aggs
 	group.ctr.prepareParamKindWireV1 = prepareParamKindWireV1Enabled(proc) &&
 		hasPrepareParamKindPreservingAgg(group.Aggs)
 	group.ctr.mp = mpool.MustNewNoLock("group_mpool")
@@ -637,12 +638,21 @@ func (group *Group) getNextIntermediateResult(proc *process.Process) (vm.CallRes
 	buf.Write(types.EncodeBool(&group.ctr.keyNullable))
 	nAggs := int32(len(group.ctr.aggList))
 	buf.Write(types.EncodeInt32(&nAggs))
-	for _, ag := range group.ctr.aggList {
-		ag.SaveIntermediateResultOfChunk(curr, &buf)
+	prepareParamKinds := make([][]vector.PrepareParamKind, len(group.ctr.aggList))
+	prepareParamKindSummaries := make([]prepareParamKindSummary, len(group.ctr.aggList))
+	for i, ag := range group.ctr.aggList {
+		if err := ag.SaveIntermediateResultOfChunk(curr, &buf); err != nil {
+			return vm.CancelResult, false, err
+		}
+		if accessor, ok := ag.(aggexec.PrepareParamKindStateAccessor); ok {
+			prepareParamKinds[i] = accessor.PrepareParamKindsForChunk(curr)
+			prepareParamKindSummaries[i].kind, prepareParamKindSummaries[i].seen =
+				accessor.PrepareParamKindSummaryForChunk(curr)
+		}
 	}
 	if group.ctr.prepareParamKindWireV1 {
 		if err := writePrepareParamKindTrailer(proc.Ctx, &buf, group.Aggs,
-			&group.ctr.prepareParamKind); err != nil {
+			&group.ctr.prepareParamKind, prepareParamKinds, prepareParamKindSummaries); err != nil {
 			return vm.CancelResult, false, err
 		}
 	}

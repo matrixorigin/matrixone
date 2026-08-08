@@ -456,6 +456,37 @@ func TestFlowControlPreservesPreparedParamKindOnPartialSelection(t *testing.T) {
 		})
 	}
 
+	t.Run("mixed materialization keeps row lineage for a later bit cast", func(t *testing.T) {
+		flowExpr := bindFunction("if", column, parameter, stringConst("5"))
+		flowExecutor, err := NewExpressionExecutor(proc, flowExpr)
+		require.NoError(t, err)
+		defer flowExecutor.Free()
+		flowResult, err := flowExecutor.Eval(proc, []*batch.Batch{mixedInput}, nil)
+		require.NoError(t, err)
+		require.Equal(t, vector.PrepareParamFloat, flowResult.GetPrepareParamKindAt(0))
+		require.Equal(t, vector.PrepareParamNone, flowResult.GetPrepareParamKindAt(1))
+
+		materialized := batch.NewWithSize(1)
+		materialized.Vecs[0] = flowResult
+		materialized.SetRowCount(flowResult.Length())
+		textColumn := &plan.Expr{
+			Typ:  plan.Type{Id: int32(types.T_text)},
+			Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}},
+		}
+		target := &plan.Expr{
+			Typ:  plan.Type{Id: int32(types.T_bit), Width: 64, NotNullable: true},
+			Expr: &plan.Expr_T{T: &plan.TargetType{}},
+		}
+		castExpr := bindFunction("cast", textColumn, target)
+		castExecutor, err := NewExpressionExecutor(proc, castExpr)
+		require.NoError(t, err)
+		defer castExecutor.Free()
+		castResult, err := castExecutor.Eval(proc, []*batch.Batch{materialized}, nil)
+		require.NoError(t, err)
+		require.Equal(t, []uint64{6, 53}, vector.MustFixedColWithTypeCheck[uint64](castResult))
+		materialized.Vecs[0] = nil
+	})
+
 	maskedBranchColumn := &plan.Expr{
 		Typ:  plan.Type{Id: int32(types.T_varchar)},
 		Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 1}},

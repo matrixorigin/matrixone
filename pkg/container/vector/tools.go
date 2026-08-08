@@ -211,6 +211,9 @@ func extendWithBitmaps(
 	needNulls bool,
 	needGrouping bool,
 ) error {
+	if m != nil {
+		v.prepareParamKindsMP = m
+	}
 	if rows <= 0 {
 		// we will at least extent by 1.
 		// This is a pure hack to

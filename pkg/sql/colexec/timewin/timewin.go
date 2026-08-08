@@ -658,7 +658,9 @@ func (ctr *container) calRes(ap *TimeWin, proc *process.Process) (err error) {
 		if err != nil {
 			return err
 		}
-		result.SetPrepareParamKind(ctr.prepareParamKind.Get(aggIndex))
+		if !result.HasPrepareParamKind() {
+			result.SetPrepareParamKind(ctr.prepareParamKind.Get(aggIndex))
+		}
 
 		ctr.bat.SetVector(int32(i), result)
 		i++
@@ -732,7 +734,9 @@ func (ctr *container) calResForInterval(ap *TimeWin, proc *process.Process) (err
 	ctr.bat = batch.NewWithSize(ctr.colCnt)
 	i := 0
 	for aggIndex, vecs := range ctr.aggVec[ctr.i-1] {
-		vecs[0].SetPrepareParamKind(ctr.prepareParamKind.Get(aggIndex))
+		if !vecs[0].HasPrepareParamKind() {
+			vecs[0].SetPrepareParamKind(ctr.prepareParamKind.Get(aggIndex))
+		}
 		ctr.bat.SetVector(int32(i), vecs[0])
 		i++
 	}
@@ -936,7 +940,9 @@ func (ctr *container) evalAggVector(bat *batch.Batch, proc *process.Process) err
 				if err = ctr.aggVec[ctr.i][i][j].UnionBatch(vec, 0, vec.Length(), nil, proc.Mp()); err != nil {
 					return err
 				}
-				ctr.aggVec[ctr.i][i][j].SetPrepareParamKind(vec.GetPrepareParamKind())
+				if !ctr.aggVec[ctr.i][i][j].HasPrepareParamKind() {
+					ctr.aggVec[ctr.i][i][j].SetPrepareParamKind(vec.GetPrepareParamKind())
+				}
 			} else {
 				ctr.aggVec[ctr.i][i][j], err = vec.Dup(proc.Mp())
 				if err != nil {

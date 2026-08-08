@@ -925,6 +925,36 @@ func TestVectorAccountedUnionPreservesGroupingWithoutNulls(t *testing.T) {
 	finalizeTestVectorAllocationAccount(t, state)
 }
 
+func TestVectorAccountedUnionPreservesHeterogeneousPrepareParamKinds(t *testing.T) {
+	state := newTestVectorAllocationAccount(t, 1<<20, 16)
+	mp := mpool.MustNewZero()
+	source := NewVec(types.T_text.ToType())
+	for range 2 {
+		require.NoError(t, AppendBytes(source, []byte("5"), false, mp))
+	}
+	source.SetPrepareParamKinds([]PrepareParamKind{PrepareParamFloat, PrepareParamNone})
+
+	for _, name := range []string{"union-one", "union-batch", "union-all"} {
+		t.Run(name, func(t *testing.T) {
+			destination := newAccountedTestVector(t, types.T_text.ToType(), state.selection)
+			switch name {
+			case "union-one":
+				require.NoError(t, destination.UnionOne(source, 0, mp))
+				require.NoError(t, destination.UnionOne(source, 1, mp))
+			case "union-batch":
+				require.NoError(t, destination.UnionBatch(source, 0, 2, nil, mp))
+			case "union-all":
+				require.NoError(t, GetUnionAllFunction(types.T_text.ToType(), mp)(destination, source))
+			}
+			require.Equal(t, PrepareParamFloat, destination.GetPrepareParamKindAt(0))
+			require.Equal(t, PrepareParamNone, destination.GetPrepareParamKindAt(1))
+			destination.Free(mp)
+		})
+	}
+	source.Free(mp)
+	finalizeTestVectorAllocationAccount(t, state)
+}
+
 func TestVectorAllocationAccountDecodeCopyAndReader(t *testing.T) {
 	state := newTestVectorAllocationAccount(t, 1<<20, 16)
 	mp := mpool.MustNewZero()

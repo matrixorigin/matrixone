@@ -203,6 +203,17 @@ func TestPreparedTypedTextToBit(t *testing.T) {
 	run("boolean", vector.PrepareParamBoolean,
 		[]string{"true", "false"}, bit64, []uint64{1, 0}, false)
 	run("string bytes", vector.PrepareParamNone, []string{"5"}, bit64, []uint64{53}, false)
+	mixed := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{"5", "5"}, nil),
+			NewFunctionTestInput(bit64, []uint64{}, nil),
+		},
+		NewFunctionTestResult(bit64, false, []uint64{5, 53}, nil), NewCast)
+	mixed.parameters[0].SetPrepareParamKinds([]vector.PrepareParamKind{
+		vector.PrepareParamInteger, vector.PrepareParamNone,
+	})
+	succeed, info := mixed.Run()
+	require.True(t, succeed, info)
 	run("negative string rejected", vector.PrepareParamNone,
 		[]string{"-6109877384019645241"}, bit64, nil, true)
 	run("narrow integer rejected", vector.PrepareParamInteger, []string{"-1"}, bit63, nil, true)
