@@ -67,6 +67,25 @@ func executeStatusStmt(ses *Session, execCtx *ExecCtx) (err error) {
 			}
 			return
 		}
+		if len(st.IntoVars) > 0 {
+			if err = validateSelectIntoArity(execCtx.reqCtx, execCtx.cw.Plan(), len(st.IntoVars)); err != nil {
+				return
+			}
+			runBegin := time.Now()
+			if execCtx.runResult, err = execCtx.runner.Run(0); err != nil {
+				return
+			}
+			if execCtx.selectInto == nil {
+				return moerr.NewInternalError(execCtx.reqCtx, "SELECT INTO user-variable collector is not initialized")
+			}
+			if err = execCtx.selectInto.apply(execCtx.reqCtx, ses, execCtx.sqlOfStmt); err != nil {
+				return
+			}
+			if time.Since(runBegin) > time.Second {
+				ses.Infof(execCtx.reqCtx, "time of Exec.Run : %s", time.Since(runBegin).String())
+			}
+			return
+		}
 		if ep.needExportToFile() {
 			defer ep.Close()
 			columns, err = execCtx.cw.GetColumns(execCtx.reqCtx)

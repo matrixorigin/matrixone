@@ -189,8 +189,12 @@ func TestInitExecuteStmtParamPreservesBinaryFlagPerUserVariable(t *testing.T) {
 	isBin, err = ses.txnCompileCtx.ResolveVariableIsBin("system_var", true, false)
 	require.NoError(t, err)
 	require.False(t, isBin)
-	_, err = ses.txnCompileCtx.ResolveVariableIsBin("missing", false, false)
-	require.Error(t, err)
+	value, err := ses.txnCompileCtx.ResolveVariable("missing", false, false)
+	require.NoError(t, err)
+	require.Nil(t, value)
+	isBin, err = ses.txnCompileCtx.ResolveVariableIsBin("missing", false, false)
+	require.NoError(t, err)
+	require.False(t, isBin)
 	cw.proc.SetResolveVariableFunc(func(name string, _, _ bool) (interface{}, error) {
 		variable, err := ses.GetUserDefinedVar(name)
 		if err != nil {

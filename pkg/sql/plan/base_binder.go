@@ -370,7 +370,12 @@ func (b *baseBinder) baseBindParam(astExpr *tree.ParamExpr, depth int32, isRoot 
 
 func (b *baseBinder) baseBindVar(astExpr *tree.VarExpr, depth int32, isRoot bool) (expr *plan.Expr, err error) {
 	typ := types.T_text.ToType()
-	return &Expr{
+	if !astExpr.System {
+		if resolved, ok := b.resolveUserVariableType(astExpr); ok {
+			typ = makeTypeByPlan2Type(resolved)
+		}
+	}
+	variable := &Expr{
 		Typ: makePlan2Type(&typ),
 		Expr: &plan.Expr_V{
 			V: &plan.VarRef{
@@ -379,7 +384,70 @@ func (b *baseBinder) baseBindVar(astExpr *tree.VarExpr, depth int32, isRoot bool
 				Global: astExpr.Global,
 			},
 		},
-	}, nil
+	}
+	if !astExpr.System && b.numericParamType != nil {
+		return appendCastBeforeExpr(b.GetContext(), variable, *b.numericParamType)
+	}
+	return variable, nil
+}
+
+func (b *baseBinder) resolveUserVariableType(expr *tree.VarExpr) (Type, bool) {
+	if b.builder == nil || b.builder.compCtx == nil {
+		return Type{}, false
+	}
+	resolver, ok := b.builder.compCtx.(UserVariableTypeResolver)
+	if !ok {
+		return Type{}, false
+	}
+	typ, err := resolver.ResolveVariableType(expr.Name, expr.System, expr.Global)
+	if err != nil || typ.Id == 0 {
+		return Type{}, false
+	}
+	return typ, true
+}
+
+// resolveUserVariableNumericType returns the numeric type to use when a user
+// variable participates in an arithmetic expression. Variables assigned a
+// numeric value already carry that assignment type. Text-backed variables are
+// still accepted by MySQL in numeric contexts; when their current value is a
+// numeric string, infer a numeric target instead of letting an integer sibling
+// literal force an invalid integer cast.
+func (b *baseBinder) resolveUserVariableNumericType(expr *tree.VarExpr) (Type, bool) {
+	if typ, ok := b.resolveUserVariableType(expr); ok && makeTypeByPlan2Type(typ).IsNumeric() {
+		return typ, true
+	}
+	if b.builder == nil || b.builder.compCtx == nil {
+		return Type{}, false
+	}
+	value, err := b.builder.compCtx.ResolveVariable(expr.Name, expr.System, expr.Global)
+	if err != nil {
+		return Type{}, false
+	}
+	var text string
+	switch value := value.(type) {
+	case string:
+		text = value
+	case []byte:
+		text = string(value)
+	default:
+		return Type{}, false
+	}
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return Type{}, false
+	}
+	if _, err = strconv.ParseInt(text, 10, 64); err == nil {
+		return makeSimplePlan2Type(types.T_int64), true
+	}
+	if _, err = strconv.ParseUint(text, 10, 64); err == nil {
+		return makeSimplePlan2Type(types.T_uint64), true
+	}
+	if _, err = types.ParseDecimal128(text, 38, 18); err == nil {
+		typ := types.T_decimal128.ToType()
+		typ.Width, typ.Scale = 38, 18
+		return makePlan2Type(&typ), true
+	}
+	return Type{}, false
 }
 
 const (
@@ -847,7 +915,7 @@ func isNumericBinaryOp(op tree.BinaryOp) bool {
 
 func isNumericContextNode(astExpr tree.Expr) bool {
 	switch expr := astExpr.(type) {
-	case *tree.ParamExpr, *tree.NumVal, *tree.ParenExpr, *tree.CastExpr:
+	case *tree.ParamExpr, *tree.VarExpr, *tree.NumVal, *tree.ParenExpr, *tree.CastExpr:
 		return true
 	case *tree.BinaryExpr:
 		return isNumericBinaryOp(expr.Op)
@@ -927,15 +995,14 @@ func (b *baseBinder) bindNumericExprWithContextMode(
 	if b.numericParamType != nil {
 		return b.impl.BindExpr(astExpr, depth, false)
 	}
-	if b.builder == nil || !b.builder.isPrepareStatement {
-		return b.bindNumericExprWithoutNewContext(astExpr, depth)
-	}
-
 	scan, err := b.numericAstTypesWithHint(astExpr, depth, outer)
-	if err != nil || !scan.hasParam || scan.incompatible {
+	if err != nil || (!scan.hasParam && !scan.hasVar) || scan.incompatible {
 		if err != nil {
 			return nil, err
 		}
+		return b.bindNumericExprWithoutNewContext(astExpr, depth)
+	}
+	if scan.hasParam && (b.builder == nil || !b.builder.isPrepareStatement) {
 		return b.bindNumericExprWithoutNewContext(astExpr, depth)
 	}
 
@@ -976,6 +1043,7 @@ type numericAstTypeScan struct {
 	strong       []Type
 	weakDecimals []Type
 	hasParam     bool
+	hasVar       bool
 	hasUnknown   bool
 	incompatible bool
 }
@@ -984,6 +1052,7 @@ func (s numericAstTypeScan) merge(other numericAstTypeScan) numericAstTypeScan {
 	s.strong = append(s.strong, other.strong...)
 	s.weakDecimals = append(s.weakDecimals, other.weakDecimals...)
 	s.hasParam = s.hasParam || other.hasParam
+	s.hasVar = s.hasVar || other.hasVar
 	s.hasUnknown = s.hasUnknown || other.hasUnknown
 	s.incompatible = s.incompatible || other.incompatible
 	return s
@@ -1043,6 +1112,16 @@ func (b *baseBinder) numericAstTypesInternalWithHint(
 	switch expr := astExpr.(type) {
 	case *tree.ParamExpr:
 		return numericAstTypeScan{hasParam: true}, nil
+	case *tree.VarExpr:
+		if expr.System {
+			return numericAstTypeScan{hasUnknown: true}, nil
+		}
+		if typ, ok := b.resolveUserVariableNumericType(expr); ok {
+			scan := numericAstTypedOperand(typ)
+			scan.hasVar = true
+			return scan, nil
+		}
+		return numericAstTypeScan{hasVar: true}, nil
 	case *tree.Subquery:
 		if expr.Exists {
 			return numericAstTypeScan{}, nil
@@ -1120,6 +1199,7 @@ func (b *baseBinder) numericAstTypesInternalWithHint(
 						return numericAstTypeScan{}, scanErr
 					}
 					scan.hasParam = scan.hasParam || argScan.hasParam
+					scan.hasVar = scan.hasVar || argScan.hasVar
 				}
 				return scan, nil
 			}
@@ -1130,6 +1210,7 @@ func (b *baseBinder) numericAstTypesInternalWithHint(
 					return numericAstTypeScan{}, scanErr
 				}
 				scan.hasParam = scan.hasParam || argScan.hasParam
+				scan.hasVar = scan.hasVar || argScan.hasVar
 			}
 			return scan, nil
 		}

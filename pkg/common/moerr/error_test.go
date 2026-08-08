@@ -216,6 +216,36 @@ func TestErrSubqueryNo1RowContract(t *testing.T) {
 	require.Equal(t, err, decoded)
 }
 
+func TestErrTooManyRowsContract(t *testing.T) {
+	err := NewTooManyRows(context.Background())
+	require.Equal(t, ErrTooManyRows, err.ErrorCode())
+	require.Equal(t, ER_TOO_MANY_ROWS, err.MySQLCode())
+	require.Equal(t, "42000", err.SqlState())
+	require.Equal(t, "Result consisted of more than one row", err.Error())
+
+	data, marshalErr := err.MarshalBinary()
+	require.NoError(t, marshalErr)
+
+	decoded := new(Error)
+	require.NoError(t, decoded.UnmarshalBinary(data))
+	require.Equal(t, err, decoded)
+}
+
+func TestErrWrongNumberOfColumnsInSelectContract(t *testing.T) {
+	err := NewWrongNumberOfColumnsInSelect(context.Background())
+	require.Equal(t, ErrWrongNumberOfColumnsInSelect, err.ErrorCode())
+	require.Equal(t, ER_WRONG_NUMBER_OF_COLUMNS_IN_SELECT, err.MySQLCode())
+	require.Equal(t, "21000", err.SqlState())
+	require.Equal(t, "The used SELECT statements have a different number of columns", err.Error())
+
+	data, marshalErr := err.MarshalBinary()
+	require.NoError(t, marshalErr)
+
+	decoded := new(Error)
+	require.NoError(t, decoded.UnmarshalBinary(data))
+	require.Equal(t, err, decoded)
+}
+
 type fakeErr struct {
 }
 
