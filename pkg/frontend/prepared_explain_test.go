@@ -54,6 +54,18 @@ func TestPreparedExplainUsesBinaryParameterValues(t *testing.T) {
 	require.NotNil(t, filled.GetQuery())
 }
 
+func TestPreparedProtocolBlobRegexpParameterIsAllowed(t *testing.T) {
+	ses, prepareStmt, cw, execCtx := newPreparedExecuteEnvForSQL(t, 108, "select regexp_like(?, 'a')")
+	defer prepareStmt.Close()
+
+	prepareStmt.params = vector.NewVec(types.T_text.ToType())
+	require.NoError(t, vector.AppendBytes(prepareStmt.params, []byte("abc"), false, cw.proc.Mp()))
+	prepareStmt.ParamTypes = []byte{byte(defines.MYSQL_TYPE_BLOB), 0}
+
+	_, _, _, _, _, err := initExecuteStmtParam(execCtx, ses, cw, nil, prepareStmt.Name)
+	require.NoError(t, err)
+}
+
 func TestHandlePreparedExplainDoesNotRebuildUnderlyingStatement(t *testing.T) {
 	ses, prepareStmt, cw, execCtx := newPreparedExecuteEnvForSQL(t, 106, "explain select ?")
 	defer prepareStmt.Close()

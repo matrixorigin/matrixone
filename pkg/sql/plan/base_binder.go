@@ -3830,6 +3830,9 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 
 		return nil, err
 	}
+	if err := validateRegexpBinaryOperands(ctx, name, args); err != nil {
+		return nil, err
+	}
 
 	funcID = fGet.GetEncodedOverloadID()
 	returnType = fGet.GetReturnType()
@@ -4159,6 +4162,77 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 		},
 		Typ: Typ,
 	}, nil
+}
+
+func validateRegexpBinaryOperands(ctx context.Context, name string, args []*Expr) error {
+	functionName := ""
+	argumentIndexes := []int{1}
+	switch name {
+	case "reg_match", "not_reg_match", "regexp_like":
+		functionName = "regexp_like"
+	case "regexp_instr":
+		functionName = "regexp_instr"
+	case "regexp_replace":
+		functionName = "regexp_replace"
+		argumentIndexes = append(argumentIndexes, 2)
+	case "regexp_substr":
+		functionName = "regexp_substr"
+	default:
+		return nil
+	}
+
+	for _, index := range argumentIndexes {
+		if index >= len(args) || !regexpOperandsHaveCharacterSetMismatch(args[0], args[index]) {
+			continue
+		}
+		return moerr.NewCharacterSetMismatch(
+			ctx, regexpOperandCharacterSet(args[0]), regexpOperandCharacterSet(args[index]), functionName)
+	}
+	return nil
+}
+
+func regexpOperandsHaveCharacterSetMismatch(left, right *Expr) bool {
+	return regexpOperandIsBinaryString(left) && !regexpOperandIsBinaryCompatible(right) ||
+		regexpOperandIsBinaryString(right) && !regexpOperandIsBinaryCompatible(left)
+}
+
+func regexpOperandIsBinaryString(expr *Expr) bool {
+	if expr == nil || expr.GetP() != nil {
+		return false
+	}
+	// MySQL excludes NULL_ITEM itself, but not a typed expression such as
+	// CAST(NULL AS BINARY), from the static binary-string check.
+	if lit := expr.GetLit(); lit != nil && lit.Isnull {
+		return false
+	}
+	switch types.T(expr.Typ.Id) {
+	case types.T_binary, types.T_varbinary, types.T_blob:
+		return true
+	default:
+		return false
+	}
+}
+
+func regexpOperandIsBinaryCompatible(expr *Expr) bool {
+	if expr == nil || expr.GetP() != nil || regexpOperandIsBinaryString(expr) {
+		return true
+	}
+	if lit := expr.GetLit(); lit != nil && lit.Isnull {
+		return true
+	}
+	switch types.T(expr.Typ.Id) {
+	case types.T_char, types.T_varchar, types.T_text:
+		return false
+	default:
+		return true
+	}
+}
+
+func regexpOperandCharacterSet(expr *Expr) string {
+	if regexpOperandIsBinaryString(expr) {
+		return "binary"
+	}
+	return "utf8mb4_general_ci"
 }
 
 func invalidUTCFunctionFSPError(ctx context.Context, name string) error {

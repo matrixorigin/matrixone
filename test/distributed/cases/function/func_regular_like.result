@@ -93,7 +93,7 @@ a    regexp_like(b, ^P)
 9    0
 drop table t1;
 select regexp_like('Cat', '*');
-error parsing regexp: missing argument to repetition operator: `*`
+Syntax error in regular expression on line 1, character 1.
 select regexp_like('CAT','cat','i') r;
 r
 1

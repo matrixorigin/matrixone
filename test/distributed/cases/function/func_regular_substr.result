@@ -35,8 +35,7 @@ SELECT REGEXP_SUBSTR(NULL, NULL, 2, 1);
 regexp_substr(null, null, 2, 1)
 NULL
 SELECT REGEXP_SUBSTR('Cat Cut Cot', "", 2, 1);
-regexp_substr(Cat Cut Cot, , 2, 1)
-NULL
+Illegal argument to a regular expression.
 create table t1(a int, b varchar(100));
 insert into t1 values(1 , "PowerSlave");
 insert into t1 values(2 , "Powerage");
@@ -102,5 +101,5 @@ CREATE TABLE t(str1 VARCHAR(20), str2 CHAR(20));
 INSERT INTO t VALUES ('W * P', 'W + Z - O'), ('have has having', 'do does doing');
 INSERT INTO t VALUES ('XV*XZ', 'PP-ZZ-DXA'), ('aa bbb cc ddd', 'k ii lll oooo');
 SELECT REGEXP_SUBSTR(str1, '*'), REGEXP_SUBSTR(str2,'hav','hiv') FROM t;
-error parsing regexp: missing argument to repetition operator: `*`
+Syntax error in regular expression on line 1, character 1.
 drop table t;

@@ -56,10 +56,10 @@ insert into t1 values(7 , 'Dog Cat Dog Cat Cat Dog Cat Dog Cat Cat');
 insert into t1 values(8 , 'Dog Cat Dog Cat Cat Dog Cat Dog Cat Cat');
 SELECT a, REGEXP_REPLACE(b, 'Cat', 'pig', 3) from t1;
 a    regexp_replace(b, Cat, pig, 3)
-1    pig Dog pig Dog pig pig Dog pig Dog pig
-2    pig Dog pig Dog pig pig Dog pig Dog pig
-3    pig Dog pig Dog pig pig Dog pig Dog pig
-4    pig Dog pig Dog pig pig Dog pig Dog pig
+1    Cat Dog pig Dog pig pig Dog pig Dog pig
+2    Cat Dog pig Dog pig pig Dog pig Dog pig
+3    Cat Dog pig Dog pig pig Dog pig Dog pig
+4    Cat Dog pig Dog pig pig Dog pig Dog pig
 5    Dog pig Dog pig pig Dog pig Dog pig pig
 6    Dog pig Dog pig pig Dog pig Dog pig pig
 7    Dog pig Dog pig pig Dog pig Dog pig pig
@@ -90,5 +90,5 @@ CREATE TABLE t(str1 VARCHAR(20), str2 CHAR(20));
 INSERT INTO t VALUES ('W * P', 'W + Z - O'), ('have has having', 'do does doing');
 INSERT INTO t VALUES ('XV*XZ', 'PP-ZZ-DXA'), ('aa bbb cc ddd', 'k ii lll oooo');
 SELECT REGEXP_REPLACE(str1, '*', 'i'), REGEXP_REPLACE(str2,'hav','hiv') FROM t;
-invalid argument regexp_replace have invalid regexp pattern arg, bad value [*]
+Syntax error in regular expression on line 1, character 1.
 drop table t;

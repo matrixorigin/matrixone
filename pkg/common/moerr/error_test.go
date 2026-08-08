@@ -100,6 +100,63 @@ func TestNew_MyErrorCode(t *testing.T) {
 	)
 }
 
+func TestNewCharacterSetMismatch(t *testing.T) {
+	err := NewCharacterSetMismatch(context.Background(), "binary", "utf8mb4_general_ci", "regexp_like")
+	require.Equal(t, ErrCharacterSetMismatch, err.ErrorCode())
+	require.Equal(t, uint16(ER_CHARACTER_SET_MISMATCH), err.MySQLCode())
+	require.Equal(t, "HY000", err.SqlState())
+	require.Equal(t,
+		"Character set 'binary' cannot be used in conjunction with 'utf8mb4_general_ci' in call to regexp_like.",
+		err.Error())
+}
+
+func TestNewRegexpIndexOutOfBounds(t *testing.T) {
+	err := NewRegexpIndexOutOfBounds(context.Background())
+	require.Equal(t, ErrRegexpIndexOutOfBounds, err.ErrorCode())
+	require.Equal(t, uint16(ER_REGEXP_INDEX_OUTOFBOUNDS_ERROR), err.MySQLCode())
+	require.Equal(t, "HY000", err.SqlState())
+	require.Equal(t, "Index out of bounds in regular expression search.", err.Error())
+}
+
+func TestNewRegexpInvalidCaptureGroup(t *testing.T) {
+	err := NewRegexpInvalidCaptureGroup(context.Background())
+	require.Equal(t, uint16(ER_REGEXP_INVALID_CAPTURE_GROUP_NAME), err.MySQLCode())
+	require.Equal(t, "HY000", err.SqlState())
+	require.Equal(t, "A capture group has an invalid name.", err.Error())
+}
+
+func TestNewRegexpTimeout(t *testing.T) {
+	err := NewRegexpTimeoutNoCtx()
+	require.Equal(t, uint16(ER_REGEXP_TIME_OUT), err.MySQLCode())
+	require.Equal(t, "HY000", err.SqlState())
+}
+
+func TestNewRegexpError(t *testing.T) {
+	tests := []struct {
+		code    uint16
+		args    []any
+		message string
+	}{
+		{ErrRegexpRuleSyntax, []any{1, 1}, "Syntax error in regular expression on line 1, character 1."},
+		{ErrRegexpMismatchedParen, nil, "Mismatched parenthesis in regular expression."},
+		{ErrRegexpInvalidRange, nil, "The regular expression contains an [x-y] character range where x comes after y."},
+	}
+	for _, test := range tests {
+		err := NewRegexpErrorNoCtx(test.code, test.args...)
+		require.Equal(t, test.code, err.ErrorCode())
+		require.Equal(t, "HY000", err.SqlState())
+		require.Equal(t, test.message, err.Error())
+	}
+}
+
+func TestNewWrongParametersToNativeFct(t *testing.T) {
+	err := NewWrongParametersToNativeFctNoCtx("regexp_substr")
+	require.Equal(t, ErrWrongParametersToNativeFct, err.ErrorCode())
+	require.Equal(t, uint16(ER_WRONG_PARAMETERS_TO_NATIVE_FCT), err.MySQLCode())
+	require.Equal(t, "42000", err.SqlState())
+	require.Equal(t, "Incorrect parameters in the call to native function 'regexp_substr'", err.Error())
+}
+
 func TestWrongArgumentsMySQLError(t *testing.T) {
 	err := NewWrongArguments(context.Background(), "nth_value")
 	require.Equal(t, ErrWrongArguments, err.ErrorCode())

@@ -20,6 +20,116 @@ select 'a ' like 'a' as like_no_space,
        null regexp 'a' as regexp_null_left,
        'abc' not regexp null as not_regexp_null_pat;
 
+-- Binary character set operands are incompatible with regexp functions.
+select _binary 'abc' regexp 'a';
+select 'abc' regexp _binary 'a';
+select _binary 'abc' not regexp 'z';
+select regexp_like(_binary 'abc', 'a');
+select regexp_like('abc', _binary 'a');
+select regexp_instr(_binary 'abc', 'b');
+select regexp_substr(_binary 'abc123', '[0-9]+');
+select regexp_replace(_binary 'abc123', '[0-9]+', 'X');
+select regexp_replace('abc123', '[0-9]+', _binary 'X');
+select regexp_like('abc', 'A', _binary 'i');
+select binary('abc') regexp 'a';
+select regexp_like('abc', binary('a'));
+select regexp_instr(unhex('616263'), 'b');
+select regexp_substr(from_base64('YWJjMTIz'), '[0-9]+');
+select regexp_replace(concat('abc', _binary '123'), '[0-9]+', 'X');
+select _binary '' regexp '^$';
+select cast(null as binary) regexp 'a' as binary_null_regexp;
+select unhex('ff') regexp '.';
+select regexp_like(null, 'a') as regexp_null_subject;
+
+-- Optional match_type overloads. An explicit empty match_type preserves
+-- MatrixOne's existing case-sensitive default until collation metadata is
+-- available to the function executor.
+select regexp_instr('Cat cat', 'cat', 1, 1, 0, 'i') as instr_i,
+       regexp_instr('Cat cat', 'cat', 1, 1, 0, 'c') as instr_c,
+       regexp_instr('Cat cat', 'cat', 1, 1, 0, 'ic') as instr_ic,
+       regexp_instr('Cat cat', 'cat', 1, 1, 0, 'ci') as instr_ci;
+select regexp_substr('Cat cat', 'cat', 1, 1, 'i') as substr_i,
+       regexp_substr('Cat cat', 'cat', 1, 1, 'c') as substr_c;
+select regexp_replace('Cat cat', 'cat', 'X', 1, 0, 'i') as replace_i,
+       regexp_replace('Cat cat', 'cat', 'X', 1, 0, 'c') as replace_c;
+select regexp_instr('a\nb', '^b', 1, 1, 0, 'm') as instr_m,
+       regexp_substr('a\nb', 'a.b', 1, 1, 'n') as substr_n,
+       regexp_replace('a\nb', 'a.b', 'X', 1, 0, 'mn') as replace_mn;
+select regexp_instr('Cat', 'cat', 1, 1, 0, _binary 'i') as binary_match_type;
+select regexp_substr('Cat', 'cat', 1, 1, null) as null_match_type;
+select regexp_replace('Cat', 'cat', 'X', 1, 0, 'x');
+select regexp_instr('a', 'a', 1, 1, -1, 'c');
+select regexp_replace('abcabc', 'a', 'X', 4, 0, 'c') as replace_from_pos;
+select regexp_instr('你a', 'a', 1, 1, 0, 'c') as utf8_instr,
+       regexp_substr('你a', 'a', 2, 1, 'c') as utf8_substr,
+       regexp_replace('你a', 'a', 'X', 2, 0, 'c') as utf8_replace;
+select regexp_instr('a\rb', '^b', 1, 1, 0, 'm') as cr_multiline,
+       regexp_instr('a\rb', '^b', 1, 1, 0, 'mu') as cr_unix_lines;
+select regexp_instr('abc', '', 1, 1, 0, 'c');
+select regexp_substr('abc', '', 1, 1, 'c');
+select regexp_replace('abc', '', 'X', 1, 0, 'c');
+select regexp_substr('abc', 'a', 4, 1, 'c') as substr_after_end,
+       regexp_replace('abc', 'a', 'X', 4, 0, 'c') as replace_after_end;
+select regexp_instr('abc', 'a', 1, -1, 0, 'c') as instr_negative_occurrence,
+       regexp_substr('abc', 'a', 1, 0, 'c') as substr_zero_occurrence,
+       regexp_replace('abcabc', 'a', 'X', 1, -1, 'c') as replace_negative_occurrence;
+select regexp_replace('abc123', '([a-z]+)([0-9]+)', '$2-$1', 1, 0, 'c') as capture_replace;
+select _binary 'a' regexp _binary 'a' as binary_binary_regexp,
+       null regexp _binary 'a' as null_binary_regexp,
+       1 regexp _binary '1' as numeric_binary_regexp;
+select cast(null as binary) regexp 'a';
+select regexp_replace(_binary 'abc', _binary 'a', _binary 'X') as all_binary_replace;
+select regexp_like('a\r', '\r', 'm') as literal_cr_match,
+       regexp_like('\r', '.', 'c') as dot_does_not_match_cr;
+select regexp_instr('a\r\nb', '^$', 1, 1, 0, 'm') as no_empty_line_inside_crlf,
+       regexp_instr('a\r\nb', '$', 1, 2, 0, 'm') as second_multiline_end,
+       regexp_instr('a\rb', '(?m)^b', 1, 1, 0, 'c') as inline_multiline;
+select regexp_instr('abc', '^b', 2, 1, 0, 'c') as instr_resets_subject,
+       regexp_substr('abc', '^b', 2, 1, 'c') as substr_keeps_subject_anchor,
+       regexp_replace('abc', '^b', 'X', 2, 0, 'c') as replace_keeps_subject_anchor;
+select regexp_replace('abc123', '([a-z]+)([0-9]+)', '$10', 1, 0, 'c') as capture_one_then_zero,
+       regexp_replace('abc123', '([a-z]+)([0-9]+)', '$1x', 1, 0, 'c') as capture_one_then_literal;
+select regexp_replace('a', '(a)', '$2');
+select regexp_replace('a', '(a)', '${1}');
+select regexp_replace('a', '(a)', '$$');
+select regexp_substr('', '');
+select regexp_replace('', '', 'X');
+select regexp_substr('a', '', 2, 1, 'c');
+select regexp_instr(null, '', 1, 1, 0, 'c');
+select regexp_replace(null, 'a', 'X', 1, 0, 'x');
+
+set @regexp_match_type = binary 'i';
+prepare regexp_match_type_stmt from 'select regexp_instr(''Cat'', ''cat'', 1, 1, 0, ?)';
+execute regexp_match_type_stmt using @regexp_match_type;
+deallocate prepare regexp_match_type_stmt;
+
+drop table if exists t_regexp_binary_operands;
+create table t_regexp_binary_operands (
+  id int primary key,
+  b binary(8),
+  vb varbinary(8),
+  bl blob,
+  tx text
+);
+insert into t_regexp_binary_operands values (1, 'abc', 'abc', 'abc', 'abc');
+select b regexp 'a' from t_regexp_binary_operands;
+select 'abc' not regexp vb from t_regexp_binary_operands;
+select regexp_like(bl, 'a') from t_regexp_binary_operands;
+select regexp_instr(tx, vb) from t_regexp_binary_operands;
+select regexp_substr(cast(tx as binary), 'a') from t_regexp_binary_operands;
+select regexp_replace(tx, 'a', bl) from t_regexp_binary_operands;
+select regexp_like(derived_b, 'a') from (
+  select concat(vb, _binary '') as derived_b from t_regexp_binary_operands
+) dt;
+drop table t_regexp_binary_operands;
+
+set @regexp_binary_param = binary 'abc';
+prepare regexp_binary_stmt from 'select regexp_like(?, ''a'')';
+execute regexp_binary_stmt using @regexp_binary_param;
+set @regexp_text_param = 'abc';
+execute regexp_binary_stmt using @regexp_text_param;
+deallocate prepare regexp_binary_stmt;
+
 drop table if exists t_string_binary_cmp;
 create table t_string_binary_cmp (
   id int primary key,
