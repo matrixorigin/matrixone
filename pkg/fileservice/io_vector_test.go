@@ -15,6 +15,7 @@
 package fileservice
 
 import (
+	"math"
 	"sync/atomic"
 	"testing"
 
@@ -129,4 +130,75 @@ func TestIOVectorIOMergeKeyDoesNotMutateReadToEndEntry(t *testing.T) {
 	require.Equal(t, int64(4), key.Offset)
 	require.Equal(t, int64(0), key.End)
 	require.Equal(t, int64(-1), vector.Entries[0].Size)
+}
+
+func TestIOVectorExpensiveMinimalRangeRead(t *testing.T) {
+	tests := []struct {
+		name      string
+		entries   []IOEntry
+		expensive bool
+	}{
+		{
+			name: "large sparse range",
+			entries: []IOEntry{
+				{Offset: 0, Size: 1 << 20},
+				{Offset: 32 << 20, Size: 1 << 20},
+			},
+			expensive: true,
+		},
+		{
+			name: "adjacent ranges",
+			entries: []IOEntry{
+				{Offset: 0, Size: 5 << 20},
+				{Offset: 5 << 20, Size: 5 << 20},
+			},
+		},
+		{
+			name: "small sparse range",
+			entries: []IOEntry{
+				{Offset: 0, Size: 1 << 10},
+				{Offset: 4 << 20, Size: 1 << 10},
+			},
+		},
+		{
+			name: "exact amplification boundary",
+			entries: []IOEntry{
+				{Offset: 0, Size: 1 << 20},
+				{Offset: 15 << 20, Size: 1 << 20},
+			},
+		},
+		{
+			name:    "single range",
+			entries: []IOEntry{{Offset: 32 << 20, Size: 1 << 10}},
+		},
+		{
+			name: "completed sparse range",
+			entries: []IOEntry{
+				{Offset: 0, Size: 1 << 20},
+				{Offset: 32 << 20, Size: 1 << 20, done: true},
+			},
+		},
+		{
+			name: "read to end",
+			entries: []IOEntry{
+				{Offset: 0, Size: 1 << 20},
+				{Offset: 32 << 20, Size: -1},
+			},
+		},
+		{
+			name: "overflowing range",
+			entries: []IOEntry{
+				{Offset: 0, Size: 1 << 20},
+				{Offset: math.MaxInt64, Size: 1},
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			vector := IOVector{Entries: test.entries}
+			_, _, expensive := vector.expensiveMinimalRangeRead()
+			require.Equal(t, test.expensive, expensive)
+		})
+	}
 }

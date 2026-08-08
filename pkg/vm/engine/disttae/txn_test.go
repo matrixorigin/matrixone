@@ -163,6 +163,7 @@ func TestAutoIncrEpochWritePathsRejectBeforeWorkspaceMutation(t *testing.T) {
 	t.Run("row", func(t *testing.T) {
 		txn := newTxn(t)
 		_, err := txn.writeBatchWithAutoIncrEpochKnown(
+			context.Background(),
 			INSERT, "", 1, 2, 3, "db", "tbl", nil, DNStore{}, 1, true,
 		)
 		require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported), err)
@@ -374,7 +375,7 @@ func TestWriteBatchRecordsPKCheckState(t *testing.T) {
 		txn := newTransactionWithActivePKTableForTest(t, "pk")
 		bat := newInt64BatchForTest(t, txn.proc, []string{"pk"}, []int64{1})
 
-		_, err := txn.writeBatchWithAutoIncrEpoch(INSERT, "", 1, 7, 42, "db", "tbl", bat, DNStore{}, 7)
+		_, err := txn.writeBatchWithAutoIncrEpoch(context.Background(), INSERT, "", 1, 7, 42, "db", "tbl", bat, DNStore{}, 7)
 		require.NoError(t, err)
 		require.Len(t, txn.writes, 1)
 		require.Equal(t, uint32(7), txn.writes[0].autoIncrEpoch)
@@ -417,7 +418,7 @@ func TestTransactionCheckDupUsesWriteEntryPKMetadata(t *testing.T) {
 			},
 		}
 
-		err := txn.checkDup()
+		err := txn.checkDup(context.Background())
 		require.Error(t, err)
 		require.True(t, moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry))
 	})
@@ -442,7 +443,7 @@ func TestTransactionCheckDupUsesWriteEntryPKMetadata(t *testing.T) {
 			},
 		}
 
-		err := txn.checkDup()
+		err := txn.checkDup(context.Background())
 		require.Error(t, err)
 		require.True(t, moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry))
 	})
@@ -477,7 +478,7 @@ func TestTransactionCheckDupUsesWriteEntryPKMetadata(t *testing.T) {
 			},
 		}
 
-		require.NoError(t, txn.checkDup())
+		require.NoError(t, txn.checkDup(context.Background()))
 	})
 
 	t.Run("out of range falls back to legacy", func(t *testing.T) {
@@ -496,7 +497,7 @@ func TestTransactionCheckDupUsesWriteEntryPKMetadata(t *testing.T) {
 			},
 		}
 
-		err := txn.checkDup()
+		err := txn.checkDup(context.Background())
 		require.Error(t, err)
 		require.True(t, moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry))
 	})
@@ -516,7 +517,7 @@ func TestTransactionCheckDupUsesWriteEntryPKMetadata(t *testing.T) {
 			},
 		}
 
-		err := txn.checkDup()
+		err := txn.checkDup(context.Background())
 		require.Error(t, err)
 		require.True(t, moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry))
 	})
@@ -536,7 +537,7 @@ func TestTransactionCheckDupUsesWriteEntryPKMetadata(t *testing.T) {
 			},
 		}
 
-		err := txn.checkDup()
+		err := txn.checkDup(context.Background())
 		require.Error(t, err)
 		require.True(t, moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry))
 	})
@@ -556,7 +557,7 @@ func TestTransactionCheckDupUsesWriteEntryPKMetadata(t *testing.T) {
 			},
 		}
 
-		require.NoError(t, txn.checkDup())
+		require.NoError(t, txn.checkDup(context.Background()))
 	})
 }
 
@@ -611,20 +612,57 @@ func TestAdjustUpdateOrderLockedUsesAdjustedWriteOffset(t *testing.T) {
 func TestTransactionGetTableNilGuards(t *testing.T) {
 	txn := &Transaction{}
 
-	_, err := txn.getTable(0, "db", "tbl")
+	_, err := txn.getTable(context.Background(), 0, "db", "tbl")
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "disttae txn engine is nil")
 
 	txn.engine = &Engine{}
-	_, err = txn.getTable(0, "db", "tbl")
+	_, err = txn.getTable(nil, 0, "db", "tbl")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "disttae table lookup context is nil")
+
+	_, err = txn.getTable(context.Background(), 0, "db", "tbl")
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "disttae txn operator is nil")
+}
+
+func TestTxnTableWriteTnPartitionHonorsCanceledContext(t *testing.T) {
+	txn := newTransactionWithActivePKTableForTest(t, "pk")
+	txn.tnStores = []DNStore{{}}
+	tbl := txn.tableOps.existAndActive(genTableKey(1, "tbl", 7, "db"))
+	require.NotNil(t, tbl)
+	tbl.extraInfo = &api.SchemaExtra{}
+	bat := newDeleteBatchForTest(t, txn.proc, []int64{1})
+	defer bat.Clean(txn.proc.Mp())
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	err := tbl.writeTnPartition(ctx, bat)
+	require.ErrorIs(t, err, context.Canceled)
+	require.Empty(t, txn.writes)
+}
+
+func TestTxnTableDeleteHonorsCanceledContext(t *testing.T) {
+	txn := newTransactionWithActivePKTableForTest(t, "pk")
+	txn.op.(*mock_frontend.MockTxnOperator).EXPECT().IsSnapOp().Return(false)
+	txn.tnStores = []DNStore{{}}
+	tbl := txn.tableOps.existAndActive(genTableKey(1, "tbl", 7, "db"))
+	require.NotNil(t, tbl)
+	tbl.extraInfo = &api.SchemaExtra{}
+	bat := newDeleteBatchForTest(t, txn.proc, []int64{1})
+	defer bat.Clean(txn.proc.Mp())
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	err := tbl.Delete(ctx, bat, "")
+	require.ErrorIs(t, err, context.Canceled)
+	require.Empty(t, txn.writes)
 }
 
 func TestResolvePKCheckPosForWriteEarlyExit(t *testing.T) {
 	txn := &Transaction{}
 
-	pos, ready, err := txn.resolvePKCheckPosForWrite(INSERT, 0, "db", "tbl", 1, nil)
+	pos, ready, err := txn.resolvePKCheckPosForWrite(context.Background(), INSERT, 0, "db", "tbl", 1, nil)
 	require.NoError(t, err)
 	require.True(t, ready)
 	require.Equal(t, -1, pos)
@@ -632,17 +670,17 @@ func TestResolvePKCheckPosForWriteEarlyExit(t *testing.T) {
 	proc := testutil.NewProc(t)
 	bat := newInt64BatchForTest(t, proc, []string{"pk"}, []int64{1})
 
-	pos, ready, err = txn.resolvePKCheckPosForWrite(ALTER, 0, "db", "tbl", 1, bat)
+	pos, ready, err = txn.resolvePKCheckPosForWrite(context.Background(), ALTER, 0, "db", "tbl", 1, bat)
 	require.NoError(t, err)
 	require.True(t, ready)
 	require.Equal(t, -1, pos)
 
-	pos, ready, err = txn.resolvePKCheckPosForWrite(INSERT, 0, "db", "tbl", catalog.MO_TABLES_ID, bat)
+	pos, ready, err = txn.resolvePKCheckPosForWrite(context.Background(), INSERT, 0, "db", "tbl", catalog.MO_TABLES_ID, bat)
 	require.NoError(t, err)
 	require.True(t, ready)
 	require.Equal(t, -1, pos)
 
-	pos, ready, err = txn.resolvePKCheckPosForWrite(INSERT, 0, "db", "tbl", 42, bat)
+	pos, ready, err = txn.resolvePKCheckPosForWrite(context.Background(), INSERT, 0, "db", "tbl", 42, bat)
 	require.NoError(t, err)
 	require.False(t, ready)
 	require.Equal(t, -1, pos)
@@ -940,6 +978,7 @@ func TestResolvePKCheckPosForWriteWithActiveTxnTable(t *testing.T) {
 	txn := newTransactionWithActivePKTableForTest(t, "pk")
 
 	pos, ready, err := txn.resolvePKCheckPosForWrite(
+		context.Background(),
 		INSERT,
 		1,
 		"db",
@@ -952,6 +991,7 @@ func TestResolvePKCheckPosForWriteWithActiveTxnTable(t *testing.T) {
 	require.Equal(t, 0, pos)
 
 	pos, ready, err = txn.resolvePKCheckPosForWrite(
+		context.Background(),
 		INSERT,
 		1,
 		"db",
@@ -964,6 +1004,7 @@ func TestResolvePKCheckPosForWriteWithActiveTxnTable(t *testing.T) {
 	require.Equal(t, 0, pos)
 
 	pos, ready, err = txn.resolvePKCheckPosForWrite(
+		context.Background(),
 		DELETE,
 		1,
 		"db",
@@ -976,6 +1017,7 @@ func TestResolvePKCheckPosForWriteWithActiveTxnTable(t *testing.T) {
 	require.Equal(t, 1, pos)
 
 	pos, ready, err = txn.resolvePKCheckPosForWrite(
+		context.Background(),
 		INSERT,
 		1,
 		"db",
