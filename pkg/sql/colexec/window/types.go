@@ -50,6 +50,8 @@ type container struct {
 	os      []int64 // Sorted partitions
 	aggVecs []colexec.ExprEvalVector
 
+	prepareParamKind aggexec.PrepareParamKindStates
+
 	vec  *vector.Vector
 	rBat *batch.Batch
 
@@ -102,6 +104,7 @@ func (window *Window) Reset(proc *process.Process, pipelineFailed bool, err erro
 	ctr := &window.ctr
 
 	ctr.resetParam()
+	ctr.prepareParamKind.Reset(nil)
 	ctr.resetVectors()
 	// Release aggregators here too: on an error exit from Call the normal
 	// freeAggFun() at the end of the eval loop is skipped, so batAggs would
@@ -128,6 +131,7 @@ func (window *Window) Free(proc *process.Process, pipelineFailed bool, err error
 	ctr.freeBatch(proc.Mp())
 	ctr.freeExes()
 	ctr.freeVector(proc.Mp())
+	ctr.prepareParamKind.Reset(nil)
 }
 
 func (window *Window) ExecProjection(proc *process.Process, input *batch.Batch) (*batch.Batch, error) {

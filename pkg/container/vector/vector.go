@@ -42,6 +42,31 @@ const (
 	DIST            // dictionary vector
 )
 
+// PrepareParamKind preserves the source conversion category of a transient
+// text vector produced by MySQL prepared-statement execution.
+type PrepareParamKind uint8
+
+// Values are bit-packed into bool sections for remote Process transport. Keep
+// the numeric assignments stable and within three bits.
+const (
+	PrepareParamNone PrepareParamKind = iota
+	PrepareParamInteger
+	PrepareParamFloat
+	PrepareParamDecimal
+	PrepareParamBoolean
+)
+
+// MergePrepareParamKinds folds two observed source categories.  Equal
+// categories are idempotent; a conflict conservatively becomes ordinary
+// string conversion.  This is intentionally commutative and associative so
+// parallel reductions cannot make the result depend on arrival order.
+func MergePrepareParamKinds(left, right PrepareParamKind) PrepareParamKind {
+	if left == right {
+		return left
+	}
+	return PrepareParamNone
+}
+
 // Vector represent a column
 type Vector struct {
 	// vector's class
@@ -66,7 +91,20 @@ type Vector struct {
 	sorted bool // for some optimization
 
 	// FIXME: Bad design! Will be deleted soon.
-	isBin bool
+	isBin            bool
+	prepareParamKind PrepareParamKind
+	// prepareParamKindSeen distinguishes an observed string/byte source
+	// (kind None) from an empty vector that has not contributed a value yet.
+	// It is local lineage state and is not part of the vector wire format.
+	prepareParamKindSeen bool
+	// prepareParamKinds is allocated only when one logical vector contains
+	// different source categories. A nil slice keeps the existing scalar fast
+	// path for ordinary and uniform vectors.
+	prepareParamKinds []PrepareParamKind
+	// prepareParamKindsMP owns the optional sidecar allocation and is cleared
+	// whenever that sidecar is released, so reused vectors cannot retain a stale
+	// MPool pointer across query generations.
+	prepareParamKindsMP *mpool.MPool
 
 	offHeap bool
 
@@ -131,6 +169,7 @@ func (v *Vector) SetSorted(b bool) {
 // we should redefine the value of capacity and values-ptr because of the possible change in type.
 func (v *Vector) Reset(typ types.Type) {
 	v.typ = typ
+	v.resetPrepareParamKind()
 
 	v.class = FLAT
 	if v.area != nil {
@@ -145,6 +184,7 @@ func (v *Vector) Reset(typ types.Type) {
 }
 
 func (v *Vector) ResetWithSameType() {
+	v.resetPrepareParamKind()
 	v.class = FLAT
 	if v.area != nil {
 		v.area = v.area[:0]
@@ -164,6 +204,7 @@ func (v *Vector) ResetArea() {
 // TODO: It is semantically same as Reset, need to merge them later.
 func (v *Vector) ResetWithNewType(t *types.Type) {
 	v.typ = *t
+	v.resetPrepareParamKind()
 	v.class = FLAT
 	if v.area != nil {
 		v.area = v.area[:0]
@@ -200,13 +241,35 @@ func (v *Vector) Capacity() int {
 func (v *Vector) Allocated() int {
 	return cap(v.data) +
 		cap(v.area) +
+		cap(v.prepareParamKinds)*int(unsafe.Sizeof(PrepareParamKind(0))) +
 		8*v.nsp.GetBitmap().ExternalStorageCapacity() +
 		8*v.gsp.GetBitmap().ExternalStorageCapacity()
 }
 
 func (v *Vector) SetLength(n int) {
+	if n < 0 {
+		panic("negative vector length")
+	}
 	if v.typ.IsVarlen() && n != v.length {
 		v.areaDisjoint = false
+	}
+	if v.prepareParamKinds != nil {
+		if n <= cap(v.prepareParamKinds) {
+			oldLen := len(v.prepareParamKinds)
+			v.prepareParamKinds = v.prepareParamKinds[:n]
+			if n > oldLen {
+				clear(v.prepareParamKinds[oldLen:])
+			}
+		} else {
+			kinds, owner, err := v.allocatePrepareParamKinds(n, nil)
+			if err != nil {
+				panic(err)
+			}
+			copy(kinds, v.prepareParamKinds)
+			v.releasePrepareParamKinds()
+			v.prepareParamKinds = kinds
+			v.prepareParamKindsMP = owner
+		}
 	}
 	v.length = n
 }
@@ -215,16 +278,22 @@ func (v *Vector) SetLength(n int) {
 // Capacity growth is deliberately not rolled back: it remains owned by the
 // vector and can be reused by a later append.
 type AppendCheckpoint struct {
-	length     int
-	areaLength int
-	sorted     bool
+	length               int
+	areaLength           int
+	sorted               bool
+	prepareParamKind     PrepareParamKind
+	prepareParamKindSeen bool
+	prepareParamKinds    []PrepareParamKind
 }
 
 func (v *Vector) MakeAppendCheckpoint() AppendCheckpoint {
 	return AppendCheckpoint{
-		length:     v.length,
-		areaLength: len(v.area),
-		sorted:     v.sorted,
+		length:               v.length,
+		areaLength:           len(v.area),
+		sorted:               v.sorted,
+		prepareParamKind:     v.prepareParamKind,
+		prepareParamKindSeen: v.prepareParamKindSeen,
+		prepareParamKinds:    slices.Clone(v.prepareParamKinds),
 	}
 }
 
@@ -243,12 +312,29 @@ func (v *Vector) RollbackAppend(checkpoint AppendCheckpoint, attemptedRows int) 
 	v.length = checkpoint.length
 	v.area = v.area[:checkpoint.areaLength]
 	v.sorted = checkpoint.sorted
+	v.prepareParamKind = checkpoint.prepareParamKind
+	v.prepareParamKindSeen = checkpoint.prepareParamKindSeen
+	owner := v.prepareParamKindsMP
+	v.releasePrepareParamKinds()
+	if checkpoint.prepareParamKinds != nil {
+		// The checkpoint owns a temporary Go-heap snapshot. Re-materialize the
+		// live sidecar through the vector's owner before publishing it; assigning
+		// the snapshot directly would later ask the MPool to free foreign memory.
+		kinds, owner, err := v.allocatePrepareParamKinds(len(checkpoint.prepareParamKinds), owner)
+		if err != nil {
+			panic(err)
+		}
+		copy(kinds, checkpoint.prepareParamKinds)
+		v.prepareParamKinds = kinds
+		v.prepareParamKindsMP = owner
+	}
 }
 
 // Size of data, I think this function is inherently broken.  This
 // Size is not meaningful other than used in (approximate) memory accounting.
 func (v *Vector) Size() int {
-	return v.length*v.typ.TypeSize() + len(v.area)
+	return v.length*v.typ.TypeSize() + len(v.area) +
+		len(v.prepareParamKinds)*int(unsafe.Sizeof(PrepareParamKind(0)))
 }
 
 func (v *Vector) GetType() *types.Type {
@@ -324,11 +410,21 @@ func (v *Vector) SetNulls(nsp *nulls.Nulls) {
 		return
 	}
 	v.nsp.Or(nsp)
+	if v.prepareParamKinds != nil {
+		v.nsp.Foreach(func(row uint64) bool {
+			v.clearPrepareParamKindAt(int(row))
+			return true
+		})
+	}
+	if v.AllNull() {
+		v.resetPrepareParamKind()
+	}
 }
 
 func (v *Vector) SetAllNulls(length int) {
 	v.nsp.InitWithSize(int(length))
 	v.nsp.AddRange(0, uint64(length))
+	v.resetPrepareParamKind()
 }
 
 func (v *Vector) SetGrouping(gsp *nulls.Nulls) {
@@ -357,6 +453,715 @@ func (v *Vector) GetIsBin() bool {
 
 func (v *Vector) SetIsBin(isBin bool) {
 	v.isBin = isBin
+}
+
+func (v *Vector) GetPrepareParamKind() PrepareParamKind {
+	return v.prepareParamKind
+}
+
+// HasPrepareParamKind reports whether at least one non-NULL logical row has
+// an observed source category. It distinguishes an ordinary/unobserved
+// vector from an observed ordinary-string category (PrepareParamNone).
+func (v *Vector) HasPrepareParamKind() bool {
+	return v != nil && v.prepareParamKindSeen
+}
+
+func (v *Vector) SetPrepareParamKind(kind PrepareParamKind) {
+	v.prepareParamKind = kind
+	v.prepareParamKindSeen = true
+	v.releasePrepareParamKinds()
+}
+
+// GetPrepareParamKindAt returns the source category for one logical row.
+// Constants use their single physical value for every logical row. The scalar
+// field remains the common fast path; heterogeneous vectors consult the
+// optional row sidecar.
+func (v *Vector) GetPrepareParamKindAt(row int) PrepareParamKind {
+	if v == nil {
+		return PrepareParamNone
+	}
+	if v.IsConst() {
+		row = 0
+	}
+	if row < 0 || row >= v.length || v.IsNull(uint64(row)) {
+		return PrepareParamNone
+	}
+	if row >= 0 && row < len(v.prepareParamKinds) {
+		return v.prepareParamKinds[row]
+	}
+	return v.prepareParamKind
+}
+
+// GetPrepareParamKinds returns the exact row sidecar, or nil for the uniform
+// scalar representation. Callers must treat the returned slice as read-only.
+func (v *Vector) GetPrepareParamKinds() []PrepareParamKind {
+	return v.prepareParamKinds
+}
+
+// SetPrepareParamKinds installs exact row categories. NULL rows are ignored
+// when deciding whether the vector is observed or uniform. The sidecar is
+// retained only when non-NULL rows disagree, preserving the scalar fast path.
+func (v *Vector) SetPrepareParamKinds(kinds []PrepareParamKind) {
+	if err := v.SetPrepareParamKindsWithMP(kinds, nil); err != nil {
+		panic(err)
+	}
+}
+
+// SetPrepareParamKindsWithMP is the ownership-aware form used by execution
+// paths. Heterogeneous row metadata is charged to the vector's MPool (and its
+// allocation account, when present) just like physical vector storage.
+func (v *Vector) SetPrepareParamKindsWithMP(kinds []PrepareParamKind, mp *mpool.MPool) error {
+	if len(kinds) == 0 || v.length == 0 {
+		v.resetPrepareParamKind()
+		return nil
+	}
+	if len(kinds) != v.length {
+		return moerr.NewInvalidInputNoCtxf(
+			"prepared parameter row count %d does not match vector length %d",
+			len(kinds), v.length)
+	}
+
+	var (
+		first PrepareParamKind
+		seen  bool
+		mixed bool
+	)
+	for row := 0; row < v.length && row < len(kinds); row++ {
+		if v.IsNull(uint64(row)) {
+			continue
+		}
+		kind := kinds[row]
+		if !seen {
+			first = kind
+			seen = true
+		} else if first != kind {
+			mixed = true
+		}
+	}
+	if !seen {
+		v.prepareParamKind = PrepareParamNone
+		v.prepareParamKindSeen = false
+		v.releasePrepareParamKinds()
+		return nil
+	}
+	if !mixed {
+		v.prepareParamKind = first
+		v.prepareParamKindSeen = true
+		v.releasePrepareParamKinds()
+		return nil
+	}
+	kindsCopy, owner, err := v.allocatePrepareParamKinds(v.length, mp)
+	if err != nil {
+		return err
+	}
+	clear(kindsCopy)
+	copy(kindsCopy, kinds)
+	v.releasePrepareParamKinds()
+	v.prepareParamKind = PrepareParamNone
+	v.prepareParamKindSeen = seen
+	v.prepareParamKinds = kindsCopy
+	v.prepareParamKindsMP = owner
+	return nil
+}
+
+// SetPrepareParamKindsFromReader restores exact row provenance without first
+// materializing a data-scaled Go-heap slice.  Spill/transport decoders use it
+// while the stable batch payload is still owned by the reader; heterogeneous
+// metadata is allocated by the vector's MPool owner and uniform metadata is
+// immediately collapsed back to the scalar representation.
+func (v *Vector) SetPrepareParamKindsFromReader(r io.Reader, n int, mp *mpool.MPool) error {
+	if v == nil || r == nil {
+		return io.ErrClosedPipe
+	}
+	if n < 0 || n != v.length {
+		return moerr.NewInvalidInputNoCtxf(
+			"prepared parameter row count %d does not match vector length %d", n, v.length)
+	}
+	if n == 0 {
+		v.resetPrepareParamKind()
+		return nil
+	}
+	kinds, owner, err := v.allocatePrepareParamKinds(n, mp)
+	if err != nil {
+		return err
+	}
+	var one [1]byte
+	for row := range kinds {
+		if _, err = io.ReadFull(r, one[:]); err != nil {
+			if owner != nil {
+				mpool.FreeSlice(owner, kinds)
+			}
+			return err
+		}
+		kind := PrepareParamKind(one[0])
+		if kind > PrepareParamBoolean {
+			if owner != nil {
+				mpool.FreeSlice(owner, kinds)
+			}
+			return moerr.NewInvalidInputNoCtxf(
+				"invalid prepared parameter row kind %d", kind)
+		}
+		kinds[row] = kind
+	}
+
+	var first PrepareParamKind
+	seen := false
+	mixed := false
+	for row, kind := range kinds {
+		if v.IsNull(uint64(row)) {
+			continue
+		}
+		if !seen {
+			first, seen = kind, true
+		} else if first != kind {
+			mixed = true
+		}
+	}
+	v.releasePrepareParamKinds()
+	if !seen {
+		if owner != nil {
+			mpool.FreeSlice(owner, kinds)
+		}
+		v.prepareParamKind = PrepareParamNone
+		v.prepareParamKindSeen = false
+		return nil
+	}
+	if !mixed {
+		if owner != nil {
+			mpool.FreeSlice(owner, kinds)
+		}
+		v.prepareParamKind = first
+		v.prepareParamKindSeen = true
+		return nil
+	}
+	v.prepareParamKind = PrepareParamNone
+	v.prepareParamKindSeen = true
+	v.prepareParamKinds = kinds
+	v.prepareParamKindsMP = owner
+	return nil
+}
+
+// SetPrepareParamKindAt updates one logical row and promotes a scalar vector
+// to the sidecar representation only when that row conflicts with the scalar
+// category. It is intended for data movers that already copied the row.
+func (v *Vector) SetPrepareParamKindAt(row int, kind PrepareParamKind) {
+	if err := v.SetPrepareParamKindAtWithMP(row, kind, nil); err != nil {
+		panic(err)
+	}
+}
+
+// SetPrepareParamKindAtWithMP is the ownership-aware row setter.
+func (v *Vector) SetPrepareParamKindAtWithMP(row int, kind PrepareParamKind, mp *mpool.MPool) error {
+	if v == nil || row < 0 {
+		return nil
+	}
+	if v.IsConst() {
+		row = 0
+	}
+	if row >= v.length {
+		return nil
+	}
+	if v.IsNull(uint64(row)) {
+		v.clearPrepareParamKindAt(row)
+		if v.AllNull() {
+			v.resetPrepareParamKind()
+		}
+		return nil
+	}
+	if v.prepareParamKinds == nil && (!v.prepareParamKindSeen || v.prepareParamKind == kind) {
+		v.prepareParamKind = kind
+		v.prepareParamKindSeen = true
+		return nil
+	}
+	if v.prepareParamKinds == nil {
+		kinds, owner, err := v.allocatePrepareParamKinds(v.length, mp)
+		if err != nil {
+			return err
+		}
+		for i := range kinds {
+			kinds[i] = v.prepareParamKind
+		}
+		v.prepareParamKinds = kinds
+		v.prepareParamKindsMP = owner
+	}
+	v.prepareParamKinds[row] = kind
+	v.prepareParamKindSeen = true
+	v.prepareParamKind = PrepareParamNone
+	return nil
+}
+
+func (v *Vector) resetPrepareParamKind() {
+	v.prepareParamKind = PrepareParamNone
+	v.prepareParamKindSeen = false
+	v.releasePrepareParamKinds()
+}
+
+func (v *Vector) releasePrepareParamKinds() {
+	if cap(v.prepareParamKinds) != 0 && v.prepareParamKindsMP != nil {
+		mpool.FreeSlice(v.prepareParamKindsMP, v.prepareParamKinds)
+	}
+	v.prepareParamKinds = nil
+	// Do not retain an MPool pointer after the sidecar it owns has been
+	// released.  Vectors are routinely Reset and reused by a later query;
+	// retaining the old owner would make a subsequent non-MP setter allocate
+	// against a stale/freed pool.
+	v.prepareParamKindsMP = nil
+}
+
+func (v *Vector) allocatePrepareParamKinds(n int, mp *mpool.MPool) ([]PrepareParamKind, *mpool.MPool, error) {
+	if n <= 0 {
+		return nil, nil, nil
+	}
+	owner := mp
+	if owner == nil {
+		owner = v.prepareParamKindsMP
+	}
+	if v.allocationAccount != nil {
+		if owner == nil {
+			return nil, nil, mpool.ErrAllocationAccountInvalid
+		}
+		kinds, err := mpool.MakeSliceAccounted[PrepareParamKind](
+			n,
+			owner,
+			v.allocationAccount.account,
+			v.allocationAccount.owner,
+			v.allocationAccount.dataSite,
+		)
+		return kinds, owner, err
+	}
+	if owner == nil {
+		return make([]PrepareParamKind, n), nil, nil
+	}
+	kinds, err := mpool.MakeSlice[PrepareParamKind](n, owner, true)
+	return kinds, owner, err
+}
+
+func (v *Vector) copyPrepareParamKindToWithMP(dst *Vector, mp *mpool.MPool) error {
+	oldKind := dst.prepareParamKind
+	oldSeen := dst.prepareParamKindSeen
+	if v.prepareParamKinds != nil {
+		if mp == nil {
+			mp = v.prepareParamKindsMP
+		}
+		kinds, owner, err := dst.allocatePrepareParamKinds(len(v.prepareParamKinds), mp)
+		if err != nil {
+			dst.prepareParamKind = oldKind
+			dst.prepareParamKindSeen = oldSeen
+			return err
+		}
+		copy(kinds, v.prepareParamKinds)
+		dst.releasePrepareParamKinds()
+		dst.prepareParamKinds = kinds
+		dst.prepareParamKindsMP = owner
+		dst.prepareParamKind = v.prepareParamKind
+		dst.prepareParamKindSeen = v.prepareParamKindSeen
+	} else {
+		dst.releasePrepareParamKinds()
+		dst.prepareParamKind = v.prepareParamKind
+		dst.prepareParamKindSeen = v.prepareParamKindSeen
+	}
+	if !dst.prepareParamKindSeen && dst.prepareParamKind == PrepareParamNone &&
+		v.length > 0 && !v.AllNull() {
+		// A non-empty ordinary string vector is an observed None source even
+		// when it was created without prepared-parameter metadata.
+		dst.prepareParamKindSeen = true
+	}
+	return nil
+}
+
+// CopyPrepareParamMetadataTo copies the exact source-category metadata to a
+// destination vector after its logical rows have been materialized.
+func (v *Vector) CopyPrepareParamMetadataTo(dst *Vector) {
+	if err := v.CopyPrepareParamMetadataToWithMP(dst, nil); err != nil {
+		panic(err)
+	}
+}
+
+// CopyPrepareParamMetadataToWithMP is the ownership-aware metadata copy used
+// by batch/pSpool/clone data movers.
+func (v *Vector) CopyPrepareParamMetadataToWithMP(dst *Vector, mp *mpool.MPool) error {
+	if v == nil || dst == nil {
+		return nil
+	}
+	return v.copyPrepareParamKindToWithMP(dst, mp)
+}
+
+func (v *Vector) copyPrepareParamKindWindowToWithMP(dst *Vector, start, end int, mp *mpool.MPool) error {
+	if v.prepareParamKinds == nil {
+		return v.copyPrepareParamKindToWithMP(dst, mp)
+	}
+	if start < 0 || end < start || end > len(v.prepareParamKinds) {
+		return nil
+	}
+	if mp == nil {
+		mp = v.prepareParamKindsMP
+	}
+	kinds, owner, err := dst.allocatePrepareParamKinds(end-start, mp)
+	if err != nil {
+		return err
+	}
+	copy(kinds, v.prepareParamKinds[start:end])
+	dst.releasePrepareParamKinds()
+	dst.prepareParamKinds = kinds
+	dst.prepareParamKindsMP = owner
+	dst.prepareParamKind = PrepareParamNone
+	dst.prepareParamKindSeen = false
+	for row := start; row < end; row++ {
+		if !v.IsNull(uint64(row)) {
+			dst.prepareParamKindSeen = true
+			break
+		}
+	}
+	if dst.prepareParamKindSeen {
+		dst.prepareParamKind = PrepareParamNone
+	}
+	return nil
+}
+
+func (v *Vector) mergePrepareParamKindAt(row int, kind PrepareParamKind, sourceHasValue bool, destinationHasValue bool, mp *mpool.MPool) error {
+	if !sourceHasValue {
+		return nil
+	}
+	if v.prepareParamKinds != nil {
+		if row >= 0 && row < len(v.prepareParamKinds) {
+			v.prepareParamKinds[row] = kind
+		}
+		v.prepareParamKindSeen = true
+		v.prepareParamKind = PrepareParamNone
+		return nil
+	}
+	if !v.prepareParamKindSeen && kind == PrepareParamNone {
+		v.prepareParamKind = PrepareParamNone
+		v.prepareParamKindSeen = true
+		return nil
+	}
+	if !destinationHasValue && !v.hasPrepareParamValueExcept(row) {
+		v.prepareParamKind = kind
+		v.prepareParamKindSeen = true
+		v.prepareParamKinds = nil
+		return nil
+	}
+	if !v.prepareParamKindSeen {
+		if v.length > 0 && !v.AllNull() {
+			kinds, owner, err := v.allocatePrepareParamKinds(v.length, mp)
+			if err != nil {
+				return err
+			}
+			for i := range kinds {
+				kinds[i] = PrepareParamNone
+			}
+			if row >= 0 && row < len(kinds) {
+				kinds[row] = kind
+			}
+			v.prepareParamKind = PrepareParamNone
+			v.prepareParamKindSeen = true
+			v.prepareParamKinds = kinds
+			v.prepareParamKindsMP = owner
+		} else {
+			v.prepareParamKind = kind
+			v.prepareParamKindSeen = true
+		}
+		return nil
+	}
+	if v.prepareParamKind != kind {
+		kinds, owner, err := v.allocatePrepareParamKinds(v.length, mp)
+		if err != nil {
+			return err
+		}
+		v.prepareParamKinds = kinds
+		v.prepareParamKindsMP = owner
+		for i := range v.prepareParamKinds {
+			v.prepareParamKinds[i] = v.prepareParamKind
+		}
+		if row >= 0 && row < len(v.prepareParamKinds) {
+			v.prepareParamKinds[row] = kind
+		}
+		v.prepareParamKind = PrepareParamNone
+	}
+	return nil
+}
+
+// prepareParamKindAppendStart records an already-materialized ordinary prefix
+// before an append propagation pass. Without this one-time check, a fresh
+// pre-grown destination would mistake its later rows for conflicting
+// provenance and allocate a row sidecar for an otherwise uniform source.
+func (v *Vector) prepareParamKindAppendStart(oldLength int) {
+	if v.prepareParamKindSeen || oldLength <= 0 {
+		return
+	}
+	// CountRange is bitmap-backed and avoids a row scan on the ordinary
+	// uniform append path. Reserved null slots are not evidence of a prior
+	// value, so only a non-NULL prefix establishes the conservative None
+	// summary.
+	limit := min(oldLength, v.length)
+	if limit > 0 && v.nsp.GetBitmap().CountRange(0, uint64(limit)) != limit {
+		v.prepareParamKind = PrepareParamNone
+		v.prepareParamKindSeen = true
+	}
+}
+
+// mergeUniformPrepareParamKind handles the common scalar-source append in
+// constant time. A heterogeneous destination still needs row writes, so its
+// callers use appendPrepareParamKindAt instead.
+func (v *Vector) mergeUniformPrepareParamKind(oldLength int, kind PrepareParamKind, sourceHasValue bool, mp *mpool.MPool) error {
+	if !sourceHasValue {
+		return nil
+	}
+	v.prepareParamKindAppendStart(oldLength)
+	if v.prepareParamKinds != nil {
+		return nil
+	}
+	if !v.prepareParamKindSeen {
+		v.prepareParamKind = kind
+		v.prepareParamKindSeen = true
+		return nil
+	}
+	if v.prepareParamKind == kind {
+		return nil
+	}
+	kinds, owner, err := v.allocatePrepareParamKinds(v.length, mp)
+	if err != nil {
+		return err
+	}
+	for row := range kinds {
+		kinds[row] = v.prepareParamKind
+	}
+	for row := oldLength; row < len(kinds); row++ {
+		kinds[row] = kind
+	}
+	v.releasePrepareParamKinds()
+	v.prepareParamKinds = kinds
+	v.prepareParamKindsMP = owner
+	v.prepareParamKind = PrepareParamNone
+	v.prepareParamKindSeen = true
+	return nil
+}
+
+func (v *Vector) appendPrepareParamKindAt(row int, kind PrepareParamKind, mp *mpool.MPool) error {
+	if v.prepareParamKinds != nil {
+		if row >= 0 && row < len(v.prepareParamKinds) {
+			v.prepareParamKinds[row] = kind
+		}
+		v.prepareParamKindSeen = true
+		v.prepareParamKind = PrepareParamNone
+		return nil
+	}
+	if !v.prepareParamKindSeen {
+		v.prepareParamKind = kind
+		v.prepareParamKindSeen = true
+		return nil
+	}
+	if v.prepareParamKind == kind {
+		return nil
+	}
+	kinds, owner, err := v.allocatePrepareParamKinds(v.length, mp)
+	if err != nil {
+		return err
+	}
+	for i := range kinds {
+		kinds[i] = v.prepareParamKind
+	}
+	if row >= 0 && row < len(kinds) {
+		kinds[row] = kind
+	}
+	v.releasePrepareParamKinds()
+	v.prepareParamKinds = kinds
+	v.prepareParamKindsMP = owner
+	v.prepareParamKind = PrepareParamNone
+	v.prepareParamKindSeen = true
+	return nil
+}
+
+func (v *Vector) hasPrepareParamValueExcept(row int) bool {
+	for i := 0; i < v.length; i++ {
+		if i != row && !v.IsNull(uint64(i)) {
+			return true
+		}
+	}
+	return false
+}
+
+func (v *Vector) normalizePrepareParamKinds() {
+	if v.prepareParamKinds == nil {
+		return
+	}
+	var (
+		first PrepareParamKind
+		seen  bool
+	)
+	for row := 0; row < v.length && row < len(v.prepareParamKinds); row++ {
+		if v.IsNull(uint64(row)) {
+			continue
+		}
+		kind := v.prepareParamKinds[row]
+		if !seen {
+			first = kind
+			seen = true
+		} else if first != kind {
+			v.prepareParamKind = PrepareParamNone
+			v.prepareParamKindSeen = true
+			return
+		}
+	}
+	if !seen {
+		v.resetPrepareParamKind()
+		return
+	}
+	v.prepareParamKind = first
+	v.prepareParamKindSeen = true
+	v.releasePrepareParamKinds()
+}
+
+func (v *Vector) propagatePrepareParamKindsAll(w *Vector, oldLength int, mp *mpool.MPool) error {
+	if w == nil || w.length == 0 {
+		return nil
+	}
+	if w.prepareParamKinds == nil {
+		if !prepareParamRangeHasValue(w, 0, w.length, nil) {
+			return nil
+		}
+		if v.prepareParamKinds == nil {
+			return v.mergeUniformPrepareParamKind(oldLength, w.prepareParamKind, true, mp)
+		}
+	}
+	v.prepareParamKindAppendStart(oldLength)
+	for row := 0; row < w.length; row++ {
+		if w.IsNull(uint64(row)) {
+			continue
+		}
+		if err := v.appendPrepareParamKindAt(oldLength+row, w.GetPrepareParamKindAt(row), mp); err != nil {
+			return err
+		}
+	}
+	v.normalizePrepareParamKinds()
+	return nil
+}
+
+func (v *Vector) propagatePrepareParamKindsBatch(
+	w *Vector,
+	oldLength int,
+	offset int64,
+	cnt int,
+	flags []uint8,
+	mp *mpool.MPool,
+) error {
+	if w == nil || cnt <= 0 {
+		return nil
+	}
+	if w.prepareParamKinds == nil && v.prepareParamKinds == nil &&
+		prepareParamRangeHasValue(w, int(offset), cnt, flags) {
+		return v.mergeUniformPrepareParamKind(oldLength, w.prepareParamKind, true, mp)
+	}
+	v.prepareParamKindAppendStart(oldLength)
+	output := oldLength
+	if flags == nil {
+		for i := 0; i < cnt; i++ {
+			row := int(offset) + i
+			if !w.IsNull(uint64(row)) {
+				if err := v.appendPrepareParamKindAt(output, w.GetPrepareParamKindAt(row), mp); err != nil {
+					return err
+				}
+			}
+			output++
+		}
+		v.normalizePrepareParamKinds()
+		return nil
+	}
+	for i, selected := range flags {
+		if selected == 0 {
+			continue
+		}
+		row := int(offset) + i
+		if !w.IsNull(uint64(row)) {
+			if err := v.appendPrepareParamKindAt(output, w.GetPrepareParamKindAt(row), mp); err != nil {
+				return err
+			}
+		}
+		output++
+	}
+	v.normalizePrepareParamKinds()
+	return nil
+}
+
+func propagatePrepareParamKindsSelection[T int32 | int64](
+	v *Vector,
+	w *Vector,
+	oldLength int,
+	sels []T,
+	mp *mpool.MPool,
+) error {
+	if w.prepareParamKinds == nil && v.prepareParamKinds == nil {
+		hasValue := false
+		if w.IsConstNull() {
+			return nil
+		}
+		if w.GetNulls().EmptyByFlag() {
+			hasValue = len(sels) > 0
+		} else {
+			for _, sel := range sels {
+				if !w.IsNull(uint64(sel)) {
+					hasValue = true
+					break
+				}
+			}
+		}
+		if hasValue {
+			return v.mergeUniformPrepareParamKind(oldLength, w.prepareParamKind, true, mp)
+		}
+		return nil
+	}
+	v.prepareParamKindAppendStart(oldLength)
+	for i, sel := range sels {
+		row := int64(sel)
+		if w.IsNull(uint64(row)) {
+			continue
+		}
+		if err := v.appendPrepareParamKindAt(oldLength+i, w.GetPrepareParamKindAt(int(row)), mp); err != nil {
+			return err
+		}
+	}
+	v.normalizePrepareParamKinds()
+	return nil
+}
+
+// prepareParamRangeHasValue is deliberately cheap for the common no-null
+// source. Only sparse null ranges require a scan to distinguish an all-NULL
+// selection from one that contributes the uniform scalar kind.
+func prepareParamRangeHasValue(w *Vector, offset, cnt int, flags []uint8) bool {
+	if w == nil || cnt <= 0 || w.IsConstNull() {
+		return false
+	}
+	if w.IsConst() || w.GetNulls().EmptyByFlag() {
+		if flags == nil {
+			return true
+		}
+		for _, selected := range flags {
+			if selected != 0 {
+				return true
+			}
+		}
+		return false
+	}
+	if flags == nil {
+		for i := 0; i < cnt; i++ {
+			if !w.IsNull(uint64(offset + i)) {
+				return true
+			}
+		}
+		return false
+	}
+	for i, selected := range flags {
+		if selected != 0 && !w.IsNull(uint64(offset+i)) {
+			return true
+		}
+	}
+	return false
+}
+
+func (v *Vector) clearPrepareParamKindAt(row int) {
+	if v.prepareParamKinds != nil && row >= 0 && row < len(v.prepareParamKinds) {
+		v.prepareParamKinds[row] = PrepareParamNone
+	}
 }
 
 func (v *Vector) NeedDup() bool {
@@ -431,6 +1236,7 @@ func (v *Vector) CleanOnlyData() {
 	v.nsp.Clear()
 	v.gsp.Clear()
 	v.sorted = false
+	v.resetPrepareParamKind()
 	v.areaDisjoint = v.length == 0
 }
 
@@ -700,6 +1506,10 @@ func (v *Vector) IsNull(i uint64) bool {
 
 func (v *Vector) SetNull(i uint64) {
 	v.nsp.Add(i)
+	v.clearPrepareParamKindAt(int(i))
+	if v.AllNull() {
+		v.resetPrepareParamKind()
+	}
 }
 
 func (v *Vector) UnsetNull(i uint64) {
@@ -837,6 +1647,8 @@ func (v *Vector) Free(mp *mpool.MPool) {
 	v.gsp.Reset()
 	v.sorted = false
 	v.isBin = false
+	v.resetPrepareParamKind()
+	v.prepareParamKindsMP = nil
 	v.allocationAccount = nil
 	v.areaDisjoint = true
 
@@ -1204,8 +2016,10 @@ func (v *Vector) unmarshalBinary(data []byte, validateValues bool) error {
 	v.nsp = decodedNulls
 	v.gsp.Reset()
 	v.sorted = layout.sorted
+	v.resetPrepareParamKind()
 	v.cantFreeData = true
 	v.cantFreeArea = true
+	v.prepareParamKindsMP = nil
 	v.allocationAccount = nil
 	return nil
 }
@@ -1602,6 +2416,9 @@ func (v *Vector) PreExtend(rows int, mp *mpool.MPool) error {
 	if v.class == CONSTANT {
 		return nil
 	}
+	if mp != nil {
+		v.prepareParamKindsMP = mp
+	}
 
 	return extend(v, rows, mp)
 }
@@ -1698,6 +2515,10 @@ func (v *Vector) dup(
 	w.class = v.class
 	w.typ = v.typ
 	w.sorted = v.sorted
+	if err := v.copyPrepareParamKindToWithMP(w, mp); err != nil {
+		w.Free(mp)
+		return nil, err
+	}
 
 	if v.IsConstNull() {
 		w.length = v.length
@@ -1806,10 +2627,18 @@ func (v *Vector) cloneToFlatCompact(
 			return nil, err
 		}
 		copyBitmapWithinLength(&w.gsp, &v.gsp, v.length)
+		if err := v.copyPrepareParamKindToWithMP(w, mp); err != nil {
+			w.Free(mp)
+			return nil, err
+		}
 		return w, nil
 	}
 
 	if v.length == 0 {
+		if err := v.copyPrepareParamKindToWithMP(w, mp); err != nil {
+			w.Free(mp)
+			return nil, err
+		}
 		return w, nil
 	}
 	if err := extendWithBitmaps(
@@ -1829,6 +2658,10 @@ func (v *Vector) cloneToFlatCompact(
 	if v.typ.IsFixedLen() {
 		dataLen := v.length * v.typ.TypeSize()
 		copy(w.data[:dataLen], v.data[:dataLen])
+		if err := v.copyPrepareParamKindToWithMP(w, mp); err != nil {
+			w.Free(mp)
+			return nil, err
+		}
 		return w, nil
 	}
 
@@ -1868,6 +2701,10 @@ func (v *Vector) cloneToFlatCompact(
 		offset += len(value)
 	}
 	w.areaDisjoint = true
+	if err := v.copyPrepareParamKindToWithMP(w, mp); err != nil {
+		w.Free(mp)
+		return nil, err
+	}
 	return w, nil
 }
 
@@ -1892,6 +2729,8 @@ func (v *Vector) Shrink(sels []int64, negate bool) {
 	}
 
 	shrinkSortedCheckIfRaceDetectorEnabled(sels)
+	oldKinds := v.prepareParamKinds
+	oldLength := v.length
 
 	if v.IsConst() {
 		if negate {
@@ -1962,6 +2801,7 @@ func (v *Vector) Shrink(sels []int64, negate bool) {
 	default:
 		panic(fmt.Sprintf("unexpect type %s for function vector.Shrink", v.typ))
 	}
+	v.remapPrepareParamKindsAfterShrink(oldKinds, oldLength, sels, negate)
 }
 
 func (v *Vector) ShrinkByMask(sels *bitmap.Bitmap, negate bool, offset uint64) {
@@ -1976,6 +2816,8 @@ func (v *Vector) ShrinkByMask(sels *bitmap.Bitmap, negate bool, offset uint64) {
 		}
 		return
 	}
+	oldKinds := v.prepareParamKinds
+	oldLength := v.length
 
 	switch v.typ.Oid {
 	case types.T_bool:
@@ -2037,6 +2879,165 @@ func (v *Vector) ShrinkByMask(sels *bitmap.Bitmap, negate bool, offset uint64) {
 	default:
 		panic(fmt.Sprintf("unexpect type %s for function vector.Shrink", v.typ))
 	}
+	v.remapPrepareParamKindsAfterShrinkMask(oldKinds, oldLength, sels, negate, offset)
+}
+
+func (v *Vector) remapPrepareParamKindsAfterShrink(
+	oldKinds []PrepareParamKind,
+	oldLength int,
+	sels []int64,
+	negate bool,
+) {
+	if oldKinds == nil {
+		return
+	}
+	newLength := v.length
+	if !negate {
+		for i, sel := range sels {
+			if i >= newLength {
+				break
+			}
+			if sel >= 0 && int(sel) < oldLength && int(sel) < len(oldKinds) {
+				// sels is ordered, so the destination never overtakes the
+				// source.  The sidecar can therefore be compacted in place.
+				oldKinds[i] = oldKinds[sel]
+			} else {
+				oldKinds[i] = PrepareParamNone
+			}
+		}
+	} else {
+		write := 0
+		selIdx := 0
+		for row := 0; row < oldLength && row < len(oldKinds); row++ {
+			if selIdx < len(sels) && int64(row) == sels[selIdx] {
+				selIdx++
+				continue
+			}
+			if write < newLength {
+				oldKinds[write] = oldKinds[row]
+				write++
+			}
+		}
+	}
+	v.finishInPlacePrepareParamKindRemap(oldKinds, oldLength, newLength)
+}
+
+func (v *Vector) remapPrepareParamKindsAfterShrinkMask(
+	oldKinds []PrepareParamKind,
+	oldLength int,
+	sels *bitmap.Bitmap,
+	negate bool,
+	offset uint64,
+) {
+	if oldKinds == nil {
+		return
+	}
+	newLength := v.length
+	if !negate {
+		itr := sels.Iterator()
+		for row := 0; row < newLength && itr.HasNext(); row++ {
+			sel := itr.Next() + offset
+			if sel < uint64(oldLength) {
+				oldKinds[row] = oldKinds[sel]
+			} else {
+				oldKinds[row] = PrepareParamNone
+			}
+		}
+	} else if sels.Count() > 0 {
+		itr := sels.Iterator()
+		next := itr.Next() + offset
+		write := 0
+		for row := 0; row < oldLength && row < len(oldKinds); row++ {
+			if uint64(row) == next {
+				if itr.HasNext() {
+					next = itr.Next() + offset
+				}
+				continue
+			}
+			if write < newLength {
+				oldKinds[write] = oldKinds[row]
+				write++
+			}
+		}
+	}
+	v.finishInPlacePrepareParamKindRemap(oldKinds, oldLength, newLength)
+}
+
+func (v *Vector) finishInPlacePrepareParamKindRemap(
+	kinds []PrepareParamKind,
+	oldLength int,
+	newLength int,
+) {
+	if newLength == 0 {
+		v.resetPrepareParamKind()
+		return
+	}
+	if newLength < oldLength && newLength < len(kinds) {
+		clear(kinds[newLength:min(oldLength, len(kinds))])
+	}
+	v.prepareParamKinds = kinds[:newLength]
+	v.prepareParamKind = PrepareParamNone
+	v.prepareParamKindSeen = true
+	v.normalizePrepareParamKinds()
+}
+
+// remapPrepareParamKindsAfterShuffle uses the existing sidecar whenever the
+// selection fits in it.  A larger selection is uncommon, but its replacement
+// sidecar is prepared before the payload shuffle so an MPool error cannot
+// leave a half-committed vector or panic after the payload changed.
+func (v *Vector) remapPrepareParamKindsAfterShuffle(
+	oldKinds []PrepareParamKind,
+	sels []int64,
+	prepared []PrepareParamKind,
+	preparedOwner *mpool.MPool,
+) {
+	if oldKinds == nil {
+		return
+	}
+	if prepared != nil {
+		for i, sel := range sels {
+			if sel >= 0 && int(sel) < len(oldKinds) {
+				prepared[i] = oldKinds[sel]
+			} else {
+				prepared[i] = PrepareParamNone
+			}
+		}
+		v.releasePrepareParamKinds()
+		v.prepareParamKinds = prepared
+		v.prepareParamKindsMP = preparedOwner
+		v.prepareParamKind = PrepareParamNone
+		v.prepareParamKindSeen = true
+		v.normalizePrepareParamKinds()
+		return
+	}
+	newLength := len(sels)
+	if newLength == 0 {
+		v.resetPrepareParamKind()
+		return
+	}
+	// Keep the original source category in the low three bits and stage the
+	// output category in the next three bits.  The sidecar categories are a
+	// five-value enum, so this lets arbitrary permutations and duplicate
+	// selections be remapped in place without a second allocation.
+	for i := range oldKinds {
+		oldKinds[i] &= 0x07
+	}
+	for i, sel := range sels {
+		if sel >= 0 && int(sel) < len(oldKinds) {
+			oldKinds[i] |= (oldKinds[sel] & 0x07) << 3
+		} else {
+			oldKinds[i] |= PrepareParamNone << 3
+		}
+		oldKinds[i] |= 0x40
+	}
+	for i := 0; i < newLength; i++ {
+		oldKinds[i] = PrepareParamKind((oldKinds[i] >> 3) & 0x07)
+	}
+	clear(oldKinds[newLength:])
+	v.prepareParamKinds = oldKinds[:newLength]
+	v.prepareParamKind = PrepareParamNone
+	v.prepareParamKindSeen = true
+	v.normalizePrepareParamKinds()
 }
 
 // Shuffle use to shrink vectors, sels can be disordered
@@ -2046,6 +3047,15 @@ func (v *Vector) Shuffle(sels []int64, mp *mpool.MPool) (err error) {
 	}
 	if v.IsConst() {
 		return nil
+	}
+	oldKinds := v.prepareParamKinds
+	var preparedKinds []PrepareParamKind
+	var preparedOwner *mpool.MPool
+	if oldKinds != nil && len(sels) > len(oldKinds) {
+		preparedKinds, preparedOwner, err = v.allocatePrepareParamKinds(len(sels), mp)
+		if err != nil {
+			return err
+		}
 	}
 
 	switch v.typ.Oid {
@@ -2106,6 +3116,13 @@ func (v *Vector) Shuffle(sels []int64, mp *mpool.MPool) (err error) {
 		panic(fmt.Sprintf("unexpect type %s for function vector.Shuffle", v.typ))
 	}
 
+	if err != nil {
+		if preparedOwner != nil {
+			mpool.FreeSlice(preparedOwner, preparedKinds)
+		}
+		return err
+	}
+	v.remapPrepareParamKindsAfterShuffle(oldKinds, sels, preparedKinds, preparedOwner)
 	return err
 }
 
@@ -2119,6 +3136,7 @@ func (v *Vector) ShuffleWithBuf(sels []int64, mp *mpool.MPool, buf *[]byte) (err
 	if v.IsConst() {
 		return nil
 	}
+	oldKinds := v.prepareParamKinds
 	// The reusable buffer is Go-heap storage and therefore has no physical
 	// allocation provenance. Allocation-accounted vectors must use Shuffle,
 	// whose replacement data and bitmap scratch are admitted to their owner.
@@ -2189,12 +3207,16 @@ func (v *Vector) ShuffleWithBuf(sels []int64, mp *mpool.MPool, buf *[]byte) (err
 		panic(fmt.Sprintf("unexpect type %s for function vector.ShuffleWithBuf", v.typ))
 	}
 
+	if err == nil {
+		v.remapPrepareParamKindsAfterShuffle(oldKinds, sels, nil, nil)
+	}
 	return err
 }
 
 // Copy simply does v[vi] = w[wi]
 func (v *Vector) Copy(w *Vector, vi, wi int64, mp *mpool.MPool) error {
 	disjoint := v.areaDisjoint
+	destinationHasValue := vi >= 0 && vi < int64(v.length) && !v.IsNull(uint64(vi))
 	sourceGrouping := w.GetGrouping().Contains(uint64(wi))
 	if sourceGrouping && v.allocationAccount != nil {
 		if err := v.ensureGroupingCapacity(int(vi)+1, mp); err != nil {
@@ -2208,6 +3230,7 @@ func (v *Vector) Copy(w *Vector, vi, wi int64, mp *mpool.MPool) error {
 	}
 	sourceNull := w.IsConstNull() ||
 		(!w.IsConst() && w.GetNulls().Contains(uint64(wi)))
+	sourceHasValue := w.length > 0 && !sourceNull
 	if sourceNull && v.allocationAccount != nil {
 		if err := v.ensureNullCapacity(int(vi)+1, mp); err != nil {
 			return err
@@ -2222,6 +3245,10 @@ func (v *Vector) Copy(w *Vector, vi, wi int64, mp *mpool.MPool) error {
 				vva[vi] = types.Varlena{}
 			}
 			v.nsp.Set(uint64(vi))
+			v.clearPrepareParamKindAt(int(vi))
+			if v.AllNull() {
+				v.resetPrepareParamKind()
+			}
 			return nil
 		}
 		// Non-null constant vectors still share the regular null/data path below.
@@ -2233,6 +3260,10 @@ func (v *Vector) Copy(w *Vector, vi, wi int64, mp *mpool.MPool) error {
 			vva[vi] = types.Varlena{}
 		}
 		v.GetNulls().Set(uint64(vi))
+		v.clearPrepareParamKindAt(int(vi))
+		if v.AllNull() {
+			v.resetPrepareParamKind()
+		}
 		return nil
 	}
 	if v.typ.IsFixedLen() {
@@ -2259,6 +3290,12 @@ func (v *Vector) Copy(w *Vector, vi, wi int64, mp *mpool.MPool) error {
 	if v.typ.IsVarlen() && disjoint {
 		v.areaDisjoint = true
 	}
+	if sourceHasValue {
+		kind := w.GetPrepareParamKindAt(int(wi))
+		if err := v.mergePrepareParamKindAt(int(vi), kind, true, destinationHasValue, mp); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -2278,6 +3315,9 @@ func GetUnionAllFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) err
 		}
 		if w.gsp.Any() {
 			unionVectorBitmap(&v.gsp, &w.gsp, oldLength, w.length)
+		}
+		if err := v.propagatePrepareParamKindsAll(w, oldLength, mp); err != nil {
+			return err
 		}
 		return nil
 	}
@@ -3419,6 +4459,15 @@ func GetConstSetFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector, sel
 		if err := set(v, w, sel, length); err != nil {
 			return err
 		}
+		// SetConst* materializes a selected source row into one logical
+		// constant value.  The value and its prepared-parameter provenance are
+		// one state: copy only the selected row's category, never the source
+		// sidecar's whole row layout.  NULL has no observed source category.
+		if length == 0 || w.IsConstNull() || w.IsNull(uint64(sel)) {
+			v.resetPrepareParamKind()
+		} else {
+			v.SetPrepareParamKind(w.GetPrepareParamKindAt(int(sel)))
+		}
 		v.gsp.Reset()
 		if grouping && length > 0 {
 			v.gsp.AddRange(0, uint64(length))
@@ -3496,6 +4545,7 @@ func (v *Vector) UnionOne(w *Vector, sel int64, mp *mpool.MPool) error {
 
 	oldLen := v.length
 	v.length++
+	sourceHasValue := !sourceNull
 	if sourceGrouping {
 		nulls.Add(&v.gsp, uint64(oldLen))
 	}
@@ -3539,6 +4589,13 @@ func (v *Vector) UnionOne(w *Vector, sel int64, mp *mpool.MPool) error {
 		}
 	}
 
+	if sourceHasValue {
+		v.prepareParamKindAppendStart(oldLen)
+		if err := v.appendPrepareParamKindAt(oldLen, w.GetPrepareParamKindAt(int(sel)), mp); err != nil {
+			return err
+		}
+		v.normalizePrepareParamKinds()
+	}
 	return nil
 }
 
@@ -3582,6 +4639,7 @@ func (v *Vector) UnionMulti(w *Vector, sel int64, cnt int, mp *mpool.MPool) erro
 
 	oldLen := v.length
 	v.length += cnt
+	sourceHasValue := !sourceNull
 	if sourceGrouping {
 		nulls.AddRange(&v.gsp, uint64(oldLen), uint64(oldLen+cnt))
 	}
@@ -3613,6 +4671,17 @@ func (v *Vector) UnionMulti(w *Vector, sel int64, cnt int, mp *mpool.MPool) erro
 		broadcastFixed(v.data[oldLen*tlen:v.length*tlen], tlen)
 	}
 
+	if sourceHasValue {
+		v.prepareParamKindAppendStart(oldLen)
+	}
+	for i := 0; i < cnt; i++ {
+		if sourceHasValue {
+			if err := v.appendPrepareParamKindAt(oldLen+i, w.GetPrepareParamKindAt(int(sel)), mp); err != nil {
+				return err
+			}
+		}
+	}
+	v.normalizePrepareParamKinds()
 	return nil
 }
 
@@ -3698,6 +4767,9 @@ func unionT[T int32 | int64](v, w *Vector, sels []T, mp *mpool.MPool) error {
 			broadcastFixed(v.data[oldLen*tlen:v.length*tlen], tlen)
 		}
 
+		if err := propagatePrepareParamKindsSelection(v, w, oldLen, sels, mp); err != nil {
+			return err
+		}
 		return nil
 	}
 	appendSelectedGrouping(v, w, oldLen, sels)
@@ -3788,6 +4860,9 @@ func unionT[T int32 | int64](v, w *Vector, sels []T, mp *mpool.MPool) error {
 		}
 	}
 
+	if err := propagatePrepareParamKindsSelection(v, w, oldLen, sels, mp); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -3807,6 +4882,7 @@ func (v *Vector) UnionBatch(w *Vector, offset int64, cnt int, flags []uint8, mp 
 	if addCnt == 0 {
 		return nil
 	}
+	oldLen := v.length
 
 	if err := extendWithBitmaps(
 		v,
@@ -3844,6 +4920,9 @@ func (v *Vector) UnionBatch(w *Vector, offset int64, cnt int, flags []uint8, mp 
 			broadcastFixed(v.data[oldLen*tlen:v.length*tlen], tlen)
 		}
 
+		if err := v.propagatePrepareParamKindsBatch(w, oldLen, offset, cnt, flags, mp); err != nil {
+			return err
+		}
 		return nil
 	}
 	appendBatchGrouping(v, w, v.length, offset, cnt, flags)
@@ -3915,6 +4994,9 @@ func (v *Vector) UnionBatch(w *Vector, offset int64, cnt int, flags []uint8, mp 
 				})
 			}
 			v.length += cnt
+			if err := v.propagatePrepareParamKindsBatch(w, oldLen, offset, cnt, flags, mp); err != nil {
+				return err
+			}
 			return nil
 		}
 
@@ -4058,6 +5140,9 @@ func (v *Vector) UnionBatch(w *Vector, offset int64, cnt int, flags []uint8, mp 
 		}
 	}
 
+	if err := v.propagatePrepareParamKindsBatch(w, oldLen, offset, cnt, flags, mp); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -5266,6 +6351,17 @@ func (v *Vector) window(
 	w.class = v.class
 	w.length = end - start
 	w.sorted = v.sorted
+	if v.prepareParamKinds != nil {
+		if err := v.copyPrepareParamKindWindowToWithMP(w, start, end, mp); err != nil {
+			w.Free(mp)
+			return nil, err
+		}
+	} else {
+		if err := v.copyPrepareParamKindToWithMP(w, mp); err != nil {
+			w.Free(mp)
+			return nil, err
+		}
+	}
 	if err := v.copyWindowBitmaps(w, start, end, mp); err != nil {
 		w.Free(mp)
 		return nil, err
@@ -5358,7 +6454,17 @@ func (v *Vector) CloneWindowWithAllocation(
 
 func (v *Vector) CloneWindowTo(w *Vector, start, end int, mp *mpool.MPool) error {
 	if start == end {
+		w.resetPrepareParamKind()
 		return nil
+	}
+	if v.prepareParamKinds != nil {
+		if err := v.copyPrepareParamKindWindowToWithMP(w, start, end, mp); err != nil {
+			return err
+		}
+	} else {
+		if err := v.copyPrepareParamKindToWithMP(w, mp); err != nil {
+			return err
+		}
 	}
 	if err := v.copyWindowBitmaps(w, start, end, mp); err != nil {
 		return err

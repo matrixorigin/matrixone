@@ -667,6 +667,259 @@ type aggExec struct {
 	state     []aggState
 }
 
+// SetPrepareParamKind restores the scalar compatibility summary on a
+// deserialized preserving aggregate state. Row-exact metadata, when present,
+// is installed by the aggregate implementation and remains authoritative;
+// this method is only the v1 partial-state fallback.
+func (ae *aggExec) SetPrepareParamKind(kind vector.PrepareParamKind) {
+	for i := range ae.state {
+		if len(ae.state[i].vecs) > 0 && ae.state[i].vecs[0] != nil {
+			// An exact winner sidecar is authoritative. A scalar trailer can
+			// restore only legacy states that did not carry row provenance.
+			if len(ae.state[i].vecs[0].GetPrepareParamKinds()) == 0 {
+				ae.state[i].vecs[0].SetPrepareParamKind(kind)
+			}
+		}
+	}
+}
+
+// prepareParamKindsFromVector returns a compact copy only when at least one
+// non-NULL row carries provenance.  The nil result is the ordinary/unobserved
+// fast path and keeps spill/partial records byte-for-byte unchanged.
+func prepareParamKindsFromVector(vec *vector.Vector) []vector.PrepareParamKind {
+	// A uniform scalar is already represented by the aggregate's legacy
+	// summary.  Only the heterogeneous sidecar needs an O(rows) payload.
+	if vec == nil || len(vec.GetPrepareParamKinds()) == 0 {
+		return nil
+	}
+	kinds := make([]vector.PrepareParamKind, vec.Length())
+	hasKind := false
+	for i := range kinds {
+		if vec.IsNull(uint64(i)) {
+			continue
+		}
+		kind := vec.GetPrepareParamKindAt(i)
+		kinds[i] = kind
+		if kind != vector.PrepareParamNone {
+			hasKind = true
+		}
+	}
+	if !hasKind {
+		return nil
+	}
+	return kinds
+}
+
+// PrepareParamKindsForChunk returns winner provenance in the same row order as
+// SaveIntermediateResultOfChunk.  Preserving aggregates use vecs[0] as their
+// result vector; callers only request this capability for those aggregates.
+func (ae *aggExec) PrepareParamKindsForChunk(chunk int) []vector.PrepareParamKind {
+	if chunk < 0 || chunk >= len(ae.state) || len(ae.state[chunk].vecs) == 0 {
+		return nil
+	}
+	return prepareParamKindsFromVector(ae.state[chunk].vecs[0])
+}
+
+// PrepareParamKindRowCountForChunk returns the number of rows serialized by
+// SaveIntermediateResultOfChunk.  It is used only as a validation bound by
+// the transient PPK decoder; it must not allocate or inspect provenance.
+func (ae *aggExec) PrepareParamKindRowCountForChunk(chunk int) int {
+	if chunk < 0 || chunk >= len(ae.state) || len(ae.state[chunk].vecs) == 0 ||
+		ae.state[chunk].vecs[0] == nil {
+		return -1
+	}
+	return ae.state[chunk].vecs[0].Length()
+}
+
+// PrepareParamKindRowCountFlat returns the packed row count consumed by
+// RestorePrepareParamKindsFlat after UnmarshalFromReader has compacted all
+// serialized chunks into the aggregate state.
+func (ae *aggExec) PrepareParamKindRowCountFlat() int {
+	rows := 0
+	for i := range ae.state {
+		if len(ae.state[i].vecs) == 0 || ae.state[i].vecs[0] == nil {
+			continue
+		}
+		rows += ae.state[i].vecs[0].Length()
+	}
+	return rows
+}
+
+// prepareParamKindSummaryFromVector returns the transport-significant scalar
+// summary for a result vector.  Uniform metadata is deliberately kept O(1);
+// a heterogeneous sidecar is scanned only when the caller needs to summarize
+// a selected subset (the exact sidecar is emitted separately in that case).
+func prepareParamKindSummaryFromVector(vec *vector.Vector) (vector.PrepareParamKind, bool) {
+	if vec == nil || vec.Length() == 0 || vec.AllNull() {
+		return vector.PrepareParamNone, false
+	}
+	if len(vec.GetPrepareParamKinds()) == 0 {
+		kind := vec.GetPrepareParamKind()
+		if kind == vector.PrepareParamNone {
+			return vector.PrepareParamNone, false
+		}
+		return kind, true
+	}
+	var kind vector.PrepareParamKind
+	seen := false
+	for row := 0; row < vec.Length(); row++ {
+		if vec.IsNull(uint64(row)) {
+			continue
+		}
+		current := vec.GetPrepareParamKindAt(row)
+		if !seen {
+			kind, seen = current, true
+		} else if current != kind {
+			kind = vector.PrepareParamNone
+		}
+	}
+	if !seen || kind == vector.PrepareParamNone {
+		return vector.PrepareParamNone, false
+	}
+	return kind, true
+}
+
+// PrepareParamKindSummaryForChunk returns the scalar source category for the
+// rows written by SaveIntermediateResultOfChunk.  It is separate from
+// PrepareParamKindsForChunk so uniform vectors do not allocate a row payload.
+func (ae *aggExec) PrepareParamKindSummaryForChunk(chunk int) (vector.PrepareParamKind, bool) {
+	if chunk < 0 || chunk >= len(ae.state) || len(ae.state[chunk].vecs) == 0 {
+		return vector.PrepareParamNone, false
+	}
+	return prepareParamKindSummaryFromVector(ae.state[chunk].vecs[0])
+}
+
+// PrepareParamKindSummaryForSelection summarizes the rows emitted by
+// writeStateToBuf without materializing a uniform per-row representation.
+func (ae *aggExec) PrepareParamKindSummaryForSelection(flags [][]uint8) (vector.PrepareParamKind, bool) {
+	var kind vector.PrepareParamKind
+	seen := false
+	for chunk, chunkFlags := range flags {
+		if len(chunkFlags) == 0 || chunk >= len(ae.state) || len(ae.state[chunk].vecs) == 0 {
+			continue
+		}
+		vec := ae.state[chunk].vecs[0]
+		if vec == nil {
+			continue
+		}
+		for row, flag := range chunkFlags {
+			if flag == 0 || row >= vec.Length() || vec.IsNull(uint64(row)) {
+				continue
+			}
+			current := vec.GetPrepareParamKindAt(row)
+			if current == vector.PrepareParamNone {
+				continue
+			}
+			if !seen {
+				kind, seen = current, true
+			} else if current != kind {
+				kind = vector.PrepareParamNone
+			}
+		}
+	}
+	if !seen || kind == vector.PrepareParamNone {
+		return vector.PrepareParamNone, false
+	}
+	return kind, true
+}
+
+// PrepareParamKindsForSelection follows writeStateToBuf's packed row order:
+// chunks in ascending order, then selected rows within each chunk.
+func (ae *aggExec) PrepareParamKindsForSelection(flags [][]uint8) []vector.PrepareParamKind {
+	hasMetadata := false
+	rowCount := 0
+	for chunk, chunkFlags := range flags {
+		if len(chunkFlags) == 0 || chunk >= len(ae.state) || len(ae.state[chunk].vecs) == 0 {
+			continue
+		}
+		vec := ae.state[chunk].vecs[0]
+		if vec != nil && len(vec.GetPrepareParamKinds()) != 0 {
+			hasMetadata = true
+		}
+		for _, flag := range chunkFlags {
+			if flag != 0 {
+				rowCount++
+			}
+		}
+	}
+	if !hasMetadata || rowCount == 0 {
+		return nil
+	}
+	kinds := make([]vector.PrepareParamKind, 0, rowCount)
+	for chunk, chunkFlags := range flags {
+		if len(chunkFlags) == 0 || chunk >= len(ae.state) || len(ae.state[chunk].vecs) == 0 {
+			continue
+		}
+		vec := ae.state[chunk].vecs[0]
+		for row, flag := range chunkFlags {
+			if flag == 0 {
+				continue
+			}
+			if vec == nil {
+				kinds = append(kinds, vector.PrepareParamNone)
+			} else {
+				kinds = append(kinds, vec.GetPrepareParamKindAt(row))
+			}
+		}
+	}
+	for _, kind := range kinds {
+		if kind != vector.PrepareParamNone {
+			return kinds
+		}
+	}
+	return nil
+}
+
+func (ae *aggExec) RestorePrepareParamKindsForChunk(
+	chunk int,
+	kinds []vector.PrepareParamKind,
+	mp *mpool.MPool,
+) error {
+	if chunk < 0 || chunk >= len(ae.state) || len(ae.state[chunk].vecs) == 0 {
+		return moerr.NewInternalErrorNoCtxf("aggregate provenance chunk out of range: %d", chunk)
+	}
+	vec := ae.state[chunk].vecs[0]
+	if vec == nil {
+		return moerr.NewInternalErrorNoCtx("aggregate provenance vector is nil")
+	}
+	if len(kinds) != vec.Length() {
+		return moerr.NewInternalErrorNoCtxf(
+			"aggregate provenance row count %d does not match %d", len(kinds), vec.Length())
+	}
+	return vec.SetPrepareParamKindsWithMP(kinds, mp)
+}
+
+// RestorePrepareParamKindsFlat restores rows packed by UnmarshalFromReader.
+// The aggregate reader may repack several serialized chunks into fresh
+// AggBatchSize chunks, so the wire metadata is intentionally a flat sequence.
+func (ae *aggExec) RestorePrepareParamKindsFlat(
+	kinds []vector.PrepareParamKind,
+	mp *mpool.MPool,
+) error {
+	if len(kinds) == 0 {
+		return nil
+	}
+	pos := 0
+	for chunk := range ae.state {
+		if len(ae.state[chunk].vecs) == 0 || ae.state[chunk].vecs[0] == nil {
+			continue
+		}
+		vec := ae.state[chunk].vecs[0]
+		n := vec.Length()
+		if pos+n > len(kinds) {
+			return moerr.NewInternalErrorNoCtx("aggregate provenance payload is shorter than state")
+		}
+		if err := vec.SetPrepareParamKindsWithMP(kinds[pos:pos+n], mp); err != nil {
+			return err
+		}
+		pos += n
+	}
+	if pos != len(kinds) {
+		return moerr.NewInternalErrorNoCtx("aggregate provenance payload has trailing rows")
+	}
+	return nil
+}
+
 func (ae *aggExec) getChunkSize() int {
 	return ae.chunkSize
 }

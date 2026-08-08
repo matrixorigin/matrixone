@@ -96,7 +96,7 @@ func appendSpillPayload(buf *bytes.Buffer, bat *batch.Batch) error {
 	sizePos := buf.Len()
 	buf.Write(types.EncodeInt64(&zero))
 	start := buf.Len()
-	if _, err := bat.MarshalBinaryWithBuffer(buf, false); err != nil {
+	if _, err := bat.MarshalBinaryWithPrepareParamKinds(buf, false); err != nil {
 		return err
 	}
 	payloadSize := int64(buf.Len() - start)
@@ -153,13 +153,12 @@ func readSpillPayload(proc *process.Process, reader *bufio.Reader, reuseBat *bat
 		return nil, err
 	}
 	batchSize := types.DecodeInt64(header[:])
-	reuseBat.CleanOnlyData()
-	limited := io.LimitReader(reader, batchSize)
-	if err := reuseBat.UnmarshalFromReader(limited, proc.Mp()); err != nil {
-		return nil, err
+	if batchSize < 0 {
+		return nil, moerr.NewInternalError(proc.Ctx, "negative merge-order spill payload size")
 	}
-	if n, _ := io.Copy(io.Discard, limited); n > 0 {
-		return nil, moerr.NewInternalErrorf(proc.Ctx, "batch unmarshal did not consume all bytes: %d remaining", n)
+	reuseBat.CleanOnlyData()
+	if err := reuseBat.UnmarshalFromReaderWithPrepareParamKinds(reader, batchSize, proc.Mp()); err != nil {
+		return nil, err
 	}
 	return reuseBat, nil
 }

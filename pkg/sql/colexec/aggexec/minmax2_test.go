@@ -80,3 +80,189 @@ func TestDecimal256MinMax(t *testing.T) {
 		})
 	}
 }
+
+func TestMinMaxPreservesWinningPrepareParamKind(t *testing.T) {
+	mp := mpool.MustNewZero()
+	input := vector.NewVec(types.T_text.ToType())
+	require.NoError(t, vector.AppendBytes(input, []byte("5"), false, mp))
+	require.NoError(t, vector.AppendBytes(input, []byte("9"), false, mp))
+	input.SetPrepareParamKinds([]vector.PrepareParamKind{
+		vector.PrepareParamInteger,
+		vector.PrepareParamNone,
+	})
+	defer func() {
+		input.Free(mp)
+		require.Zero(t, mp.CurrNB())
+	}()
+
+	for _, tc := range []struct {
+		name string
+		id   int64
+		want vector.PrepareParamKind
+	}{
+		{name: "min", id: AggIdOfMin, want: vector.PrepareParamInteger},
+		{name: "max", id: AggIdOfMax, want: vector.PrepareParamNone},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			agg := makeMinMaxExec(mp, tc.id, tc.id == AggIdOfMin, types.T_text.ToType())
+			require.NoError(t, agg.GroupGrow(1))
+			require.NoError(t, agg.BulkFill(0, []*vector.Vector{input}))
+			results, err := agg.Flush()
+			require.NoError(t, err)
+			require.Len(t, results, 1)
+			require.Equal(t, tc.want, results[0].GetPrepareParamKindAt(0))
+			results[0].Free(mp)
+			agg.Free()
+		})
+	}
+}
+
+func TestMinMaxEqualValuesFoldPrepareParamKinds(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		id     int64
+		isByte bool
+	}{
+		{name: "min-fixed", id: AggIdOfMin},
+		{name: "max-fixed", id: AggIdOfMax},
+		{name: "min-bytes", id: AggIdOfMin, isByte: true},
+		{name: "max-bytes", id: AggIdOfMax, isByte: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			for _, reverse := range []bool{false, true} {
+				t.Run(map[bool]string{false: "forward", true: "reverse"}[reverse], func(t *testing.T) {
+					mp := mpool.MustNewZero()
+					var input *vector.Vector
+					var agg AggFuncExec
+					if tc.isByte {
+						input = vector.NewVec(types.T_text.ToType())
+						require.NoError(t, vector.AppendBytes(input, []byte("5"), false, mp))
+						require.NoError(t, vector.AppendBytes(input, []byte("5"), false, mp))
+						agg = makeMinMaxExec(mp, tc.id, tc.id == AggIdOfMin, types.T_text.ToType())
+					} else {
+						input = vector.NewVec(types.T_int64.ToType())
+						require.NoError(t, vector.AppendFixed(input, int64(5), false, mp))
+						require.NoError(t, vector.AppendFixed(input, int64(5), false, mp))
+						agg = makeMinMaxExec(mp, tc.id, tc.id == AggIdOfMin, types.T_int64.ToType())
+					}
+					kinds := []vector.PrepareParamKind{
+						vector.PrepareParamFloat,
+						vector.PrepareParamNone,
+					}
+					if reverse {
+						kinds[0], kinds[1] = kinds[1], kinds[0]
+					}
+					require.NoError(t, input.SetPrepareParamKindsWithMP(kinds, mp))
+					require.NoError(t, agg.GroupGrow(1))
+					require.NoError(t, agg.BulkFill(0, []*vector.Vector{input}))
+					results, err := agg.Flush()
+					require.NoError(t, err)
+					require.Equal(t, vector.PrepareParamNone, results[0].GetPrepareParamKindAt(0))
+					results[0].Free(mp)
+					agg.Free()
+					input.Free(mp)
+					require.Zero(t, mp.CurrNB())
+				})
+			}
+		})
+	}
+}
+
+func TestMinMaxBatchMergeEqualValuesFoldsPrepareParamKinds(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		id     int64
+		isByte bool
+	}{
+		{name: "fixed", id: AggIdOfMin},
+		{name: "bytes", id: AggIdOfMax, isByte: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			for _, reverse := range []bool{false, true} {
+				mp := mpool.MustNewZero()
+				leftKind, rightKind := vector.PrepareParamFloat, vector.PrepareParamNone
+				if reverse {
+					leftKind, rightKind = rightKind, leftKind
+				}
+				makeInput := func(kind vector.PrepareParamKind) *vector.Vector {
+					var input *vector.Vector
+					if tc.isByte {
+						input = vector.NewVec(types.T_text.ToType())
+						require.NoError(t, vector.AppendBytes(input, []byte("5"), false, mp))
+					} else {
+						input = vector.NewVec(types.T_int64.ToType())
+						require.NoError(t, vector.AppendFixed(input, int64(5), false, mp))
+					}
+					input.SetPrepareParamKind(kind)
+					return input
+				}
+				leftInput := makeInput(leftKind)
+				rightInput := makeInput(rightKind)
+				var typ types.Type
+				if tc.isByte {
+					typ = types.T_text.ToType()
+				} else {
+					typ = types.T_int64.ToType()
+				}
+				left := makeMinMaxExec(mp, tc.id, tc.id == AggIdOfMin, typ)
+				right := makeMinMaxExec(mp, tc.id, tc.id == AggIdOfMin, typ)
+				require.NoError(t, left.GroupGrow(1))
+				require.NoError(t, right.GroupGrow(1))
+				require.NoError(t, left.BulkFill(0, []*vector.Vector{leftInput}))
+				require.NoError(t, right.BulkFill(0, []*vector.Vector{rightInput}))
+				require.NoError(t, left.Merge(right, 0, 0))
+				results, err := left.Flush()
+				require.NoError(t, err)
+				require.Equal(t, vector.PrepareParamNone, results[0].GetPrepareParamKindAt(0))
+				results[0].Free(mp)
+				left.Free()
+				right.Free()
+				leftInput.Free(mp)
+				rightInput.Free(mp)
+				require.Zero(t, mp.CurrNB())
+			}
+		})
+	}
+}
+
+func TestMinMaxExtraEqualValueFoldsPrepareParamKind(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		id     int64
+		isByte bool
+	}{
+		{name: "fixed", id: AggIdOfMin},
+		{name: "bytes", id: AggIdOfMax, isByte: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			var input *vector.Vector
+			var typ types.Type
+			var extra any
+			if tc.isByte {
+				typ = types.T_text.ToType()
+				input = vector.NewVec(typ)
+				require.NoError(t, vector.AppendBytes(input, []byte("5"), false, mp))
+				input.SetPrepareParamKind(vector.PrepareParamFloat)
+				extra = []byte("5")
+			} else {
+				typ = types.T_int64.ToType()
+				input = vector.NewVec(typ)
+				require.NoError(t, vector.AppendFixed(input, int64(5), false, mp))
+				input.SetPrepareParamKind(vector.PrepareParamFloat)
+				extra = int64(5)
+			}
+			agg := makeMinMaxExec(mp, tc.id, tc.id == AggIdOfMin, typ)
+			require.NoError(t, agg.GroupGrow(1))
+			require.NoError(t, agg.BulkFill(0, []*vector.Vector{input}))
+			require.NoError(t, agg.SetExtraInformation(extra, 0))
+			results, err := agg.Flush()
+			require.NoError(t, err)
+			require.Equal(t, vector.PrepareParamNone, results[0].GetPrepareParamKindAt(0))
+			results[0].Free(mp)
+			agg.Free()
+			input.Free(mp)
+			require.Zero(t, mp.CurrNB())
+		})
+	}
+}
