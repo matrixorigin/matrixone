@@ -169,6 +169,9 @@ func (builder *QueryBuilder) flattenSubquery(
 	}
 
 	filterPreds, joinPreds := decreaseDepthAndDispatch(preds)
+	if subquery.Typ == plan.SubqueryRef_SCALAR && len(subCtx.aggregates) > 0 {
+		builder.pushdownScalarAggregateKeys(subID, joinPreds, ctx)
+	}
 
 	if len(filterPreds) > 0 {
 		deepScalarAggregate := subquery.Typ == plan.SubqueryRef_SCALAR &&
@@ -959,6 +962,170 @@ func (builder *QueryBuilder) findNonEqPred(preds []*plan.Expr) bool {
 		}
 	}
 	return false
+}
+
+// pushdownScalarAggregateKeys limits a decorrelated scalar aggregate to keys
+// that can actually occur in the outer relation.  Decorrelating
+//
+//	... where inner.key = outer.key
+//
+// currently adds inner.key to the aggregate GROUP BY, but leaves the
+// aggregate input independent of the filtered outer relation.  A SEMI join
+// provides the missing dependency without duplicating rows (which an ordinary
+// INNER JOIN would do when the outer relation has duplicate keys).
+//
+// This is deliberately conservative.  Only direct equality correlations whose
+// outer operand belongs to one binding and whose inner operand is one of the
+// pulled-up aggregate group keys are rewritten.  Other shapes retain the
+// existing decorrelation plan.
+func correlatedOrLocalCol(expr *plan.Expr) (*plan.ColRef, bool) {
+	switch e := expr.Expr.(type) {
+	case *plan.Expr_Col:
+		return e.Col, e.Col != nil
+	case *plan.Expr_Corr:
+		if e.Corr == nil {
+			return nil, false
+		}
+		return &plan.ColRef{RelPos: e.Corr.RelPos, ColPos: e.Corr.ColPos}, true
+	default:
+		return nil, false
+	}
+}
+
+func (builder *QueryBuilder) pushdownScalarAggregateKeys(subID int32, preds []*plan.Expr, ctx *BindContext) {
+	aggNode := builder.findAggNodeBelow(subID)
+	if aggNode == nil || len(aggNode.Children) != 1 || len(aggNode.BindingTags) == 0 {
+		return
+	}
+
+	groupTag := aggNode.BindingTags[0]
+	type keyPair struct {
+		outerTag int32
+		outerPos int32
+		groupPos int32
+	}
+	var pairs []keyPair
+	var outerTag int32 = -1
+
+	for _, pred := range splitPlanConjunctions(preds) {
+		f := pred.GetF()
+		if f == nil || f.Func == nil {
+			return
+		}
+		if f.Func.ObjName == "istrue" && len(f.Args) == 1 {
+			f = f.Args[0].GetF()
+			if f == nil || f.Func == nil {
+				return
+			}
+		}
+		if (f.Func.ObjName != "=" && !IsEqualFunc(f.Func.GetObj())) || len(f.Args) != 2 {
+			return
+		}
+
+		left, leftOK := correlatedOrLocalCol(f.Args[0])
+		right, rightOK := correlatedOrLocalCol(f.Args[1])
+		if !leftOK || !rightOK {
+			return
+		}
+
+		var outer, inner *plan.ColRef
+		groupPos := int32(-1)
+		_, leftIsCorr := f.Args[0].Expr.(*plan.Expr_Corr)
+		_, rightIsCorr := f.Args[1].Expr.(*plan.Expr_Corr)
+		switch {
+		case leftIsCorr && !rightIsCorr:
+			outer, inner = left, right
+		case rightIsCorr && !leftIsCorr:
+			outer, inner = right, left
+		case left.RelPos == groupTag:
+			inner, outer = left, right
+		case right.RelPos == groupTag:
+			inner, outer = right, left
+		default:
+			for i, group := range aggNode.GroupBy {
+				g, ok := correlatedOrLocalCol(group)
+				if !ok {
+					continue
+				}
+				if g.RelPos == left.RelPos && g.ColPos == left.ColPos {
+					inner, outer, groupPos = left, right, int32(i)
+				} else if g.RelPos == right.RelPos && g.ColPos == right.ColPos {
+					inner, outer, groupPos = right, left, int32(i)
+				}
+			}
+			if inner == nil {
+				for i, group := range aggNode.GroupBy {
+					g, ok := correlatedOrLocalCol(group)
+					if ok && g.ColPos == left.ColPos {
+						inner, outer, groupPos = left, right, int32(i)
+						break
+					}
+				}
+			}
+			if inner == nil {
+				return
+			}
+		}
+		if groupPos < 0 {
+			groupPos = inner.ColPos
+		}
+		if ctx == nil || ctx.bindingByTag[outer.RelPos] == nil {
+			return
+		}
+		if outerTag >= 0 && outerTag != outer.RelPos {
+			return
+		}
+		if int(groupPos) < 0 || int(groupPos) >= len(aggNode.GroupBy) {
+			return
+		}
+		outerTag = outer.RelPos
+		pairs = append(pairs, keyPair{
+			outerTag: outer.RelPos,
+			outerPos: outer.ColPos,
+			groupPos: groupPos,
+		})
+	}
+	if len(pairs) == 0 {
+		return
+	}
+
+	outerBinding := ctx.bindingByTag[outerTag]
+	if outerBinding == nil || outerBinding.nodeId < 0 {
+		return
+	}
+
+	semiPreds := make([]*plan.Expr, len(pairs))
+	for i, pair := range pairs {
+		if pair.outerPos < 0 || int(pair.outerPos) >= len(outerBinding.types) {
+			return
+		}
+		innerKey := replaceGroupTagRefs(
+			DeepCopyExpr(aggNode.GroupBy[pair.groupPos]),
+			groupTag,
+			aggNode.GroupBy,
+		)
+		rightKey := &plan.Expr{
+			Typ: *outerBinding.types[pair.outerPos],
+			Expr: &plan.Expr_Col{Col: &plan.ColRef{
+				RelPos: outerTag,
+				ColPos: pair.outerPos,
+			}},
+		}
+		cond, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*plan.Expr{innerKey, rightKey})
+		if err != nil {
+			return
+		}
+		semiPreds[i] = cond
+	}
+
+	semiID := builder.appendNode(&plan.Node{
+		NodeType: plan.Node_JOIN,
+		Children: []int32{aggNode.Children[0], builder.copyNode(ctx, outerBinding.nodeId)},
+		JoinType: plan.Node_SEMI,
+		OnList:   semiPreds,
+		SpillMem: builder.joinSpillMem,
+	}, ctx)
+	aggNode.Children[0] = semiID
 }
 
 // containsNonEqComparison reports whether expr contains a comparison

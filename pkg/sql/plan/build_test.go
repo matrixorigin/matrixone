@@ -5727,6 +5727,36 @@ func TestSubQuery(t *testing.T) {
 	}
 }
 
+func TestCorrelatedScalarAggregatePushdown(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	sql := `select
+		sum(l_extendedprice) / 7.0 as avg_yearly
+	from lineitem, part
+	where p_partkey = l_partkey
+	  and p_brand = 'Brand#54'
+	  and p_container = 'LG BAG'
+	  and l_quantity < (
+		select 0.2 * avg(l_quantity)
+		from lineitem
+		where l_partkey = p_partkey
+	  )`
+	logicPlan, err := runOneStmt(mock, t, sql)
+	if err != nil {
+		t.Fatal(err)
+	}
+	query := logicPlan.GetQuery()
+	for _, node := range query.Nodes {
+		if node.NodeType != plan.Node_AGG || len(node.Children) != 1 {
+			continue
+		}
+		child := query.Nodes[node.Children[0]]
+		if child.NodeType == plan.Node_JOIN && child.JoinType == plan.Node_SEMI {
+			return
+		}
+	}
+	t.Fatal("correlated scalar aggregate was not restricted by a SEMI join")
+}
+
 func TestAggregateArgumentScalarSubqueryFlattened(t *testing.T) {
 	tests := []string{
 		`SELECT AVG((SELECT COUNT(*) FROM REGION r WHERE r.R_REGIONKEY = n.N_NATIONKEY))
