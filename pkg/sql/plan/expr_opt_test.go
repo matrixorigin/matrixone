@@ -661,6 +661,25 @@ func TestDeduplicateBlockFiltersHandlesConstantLiteralVec(t *testing.T) {
 	require.Empty(t, emptySet)
 }
 
+func TestBlockFilterConstantSetIgnoresSerializedProvenance(t *testing.T) {
+	mp := mpool.MustNew(t.Name())
+	serializedList := &planpb.Expr{
+		Typ: planpb.Type{Id: int32(types.T_varchar)},
+		Expr: &planpb.Expr_List{List: &planpb.ExprList{List: []*planpb.Expr{
+			MakePlan2StringConstExprWithType("A"),
+			MakePlan2StringConstExprWithType("B"),
+		}}},
+	}
+	vectorSet := makeExprOptStringVec(t, mp, "A", "B")
+	for _, item := range serializedList.GetList().List {
+		item.Typ = vectorSet.Typ
+		item.GetLit().IsSerialized = true
+	}
+
+	require.True(t, blockFilterConstantSetsEqual(serializedList, vectorSet),
+		"diagnostic provenance must not change block-filter set semantics")
+}
+
 func TestDeduplicateBlockFiltersRetainsDifferentCompoundPredicates(t *testing.T) {
 	ctx := NewMockCompilerContext(true)
 	tag := int32(1)

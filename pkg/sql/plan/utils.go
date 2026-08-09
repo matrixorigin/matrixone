@@ -1550,6 +1550,7 @@ func ConstantFold(bat *batch.Batch, expr *plan.Expr, proc *process.Process, varA
 	if c == nil {
 		return expr, nil
 	}
+	rule.MarkFoldedSerialLiteralSerialized(overloadID, c)
 	ec := &plan.Expr_Lit{
 		Lit: c,
 	}

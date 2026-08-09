@@ -105,7 +105,7 @@ func TestConstantFoldStillFoldsUnaffectedCasts(t *testing.T) {
 	require.NotNil(t, NewConstantFold(true).constantFold(preparedStrictTemporal, proc).GetLit())
 }
 
-func TestConstantFoldMarksSerializedResultsBinary(t *testing.T) {
+func TestConstantFoldPreservesSerializedResultProvenance(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	inputType := types.T_bool.ToType()
 
@@ -129,7 +129,8 @@ func TestConstantFoldMarksSerializedResultsBinary(t *testing.T) {
 			literal := folded.GetLit()
 			require.NotNil(t, literal)
 			require.Equal(t, string([]byte{0x27}), literal.GetSval())
-			require.True(t, literal.GetIsBin(), "serialized bytes lost their binary provenance")
+			require.False(t, literal.GetIsBin(), "serial folding must not acquire SQL hex/bit semantics")
+			require.True(t, literal.GetIsSerialized(), "serialized bytes lost their diagnostic provenance")
 		})
 	}
 
@@ -157,5 +158,6 @@ func TestConstantFoldMarksSerializedResultsBinary(t *testing.T) {
 		require.NotNil(t, literal)
 		require.True(t, literal.GetIsnull())
 		require.False(t, literal.GetIsBin(), "NULL must not acquire binary identity metadata")
+		require.False(t, literal.GetIsSerialized(), "NULL must not acquire serialized provenance")
 	})
 }

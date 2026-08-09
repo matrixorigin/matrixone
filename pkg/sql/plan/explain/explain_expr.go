@@ -21,6 +21,8 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -104,12 +106,16 @@ func describeExpr(ctx context.Context, expr *plan.Expr, options *ExplainOptions,
 				// printable; render its WKT so EXPLAIN output is readable and
 				// stable rather than emitting binary into the plan text.
 				buf.WriteString("'" + geometryLiteralText(expr.Typ.Id, val.Sval) + "'")
-			} else if exprImpl.Lit.IsBin {
-				// Binary-valued varchar literals include tuple-encoded composite
-				// keys. Never emit those opaque bytes into text EXPLAIN: they may
-				// be invalid UTF-8, contain control characters, or happen to look
-				// printable while still carrying no useful textual meaning.
+			} else if exprImpl.Lit.IsSerialized {
+				// Tuple-encoded serial values have no meaningful text form. Keep
+				// their bytes out of diagnostic output even when they happen to be
+				// valid and printable UTF-8.
 				buf.WriteString("'<opaque>'")
+			} else if exprImpl.Lit.IsBin || !isPrintableUTF8(val.Sval) {
+				// SQL hex/bit literals and arbitrary non-text bytes remain useful
+				// when rendered canonically, without leaking invalid UTF-8 or
+				// terminal control characters into EXPLAIN output.
+				fmt.Fprintf(buf, "0x%X", []byte(val.Sval))
 			} else {
 				buf.WriteString("'" + val.Sval + "'")
 			}
@@ -218,6 +224,11 @@ func describeExpr(ctx context.Context, expr *plan.Expr, options *ExplainOptions,
 		panic("unsupported expr")
 	}
 	return nil
+}
+
+func isPrintableUTF8(value string) bool {
+	return utf8.ValidString(value) &&
+		strings.IndexFunc(value, func(r rune) bool { return !unicode.IsPrint(r) }) == -1
 }
 
 // geometryLiteralText renders a geometry literal's WKB payload as WKT so

@@ -238,14 +238,7 @@ func (r *ConstantFold) constantFold(expr *plan.Expr, proc *process.Process) *pla
 		return expr
 	}
 
-	// serial and serial_full return tuple-encoded bytes in a varchar carrier.
-	// Constant folding must preserve that binary provenance; otherwise later
-	// consumers (notably text EXPLAIN) can mistake the payload for user text.
-	canonicalOverloadID := overloadID & function.DistinctMask
-	if !c.Isnull && (canonicalOverloadID == function.SerialFunctionEncodeID ||
-		canonicalOverloadID == function.SerialFullFunctionEncodeID) {
-		c.IsBin = true
-	}
+	MarkFoldedSerialLiteralSerialized(overloadID, c)
 
 	if f.IsRealTimeRelated() {
 		c.Src = &plan.Expr{
@@ -669,6 +662,22 @@ func GetConstantValue2(proc *process.Process, expr *plan.Expr, vec *vector.Vecto
 	} else {
 		err = vector.AppendBytes(vec, nil, true, proc.Mp())
 		return false, err
+	}
+}
+
+// MarkFoldedSerialLiteralSerialized preserves the diagnostic provenance of
+// tuple-encoded serial results when a function expression is replaced with a
+// varchar literal. All constant-folding entry points must apply this metadata
+// transition; IsBin must remain reserved for SQL hex and bit literal semantics.
+func MarkFoldedSerialLiteralSerialized(overloadID int64, literal *plan.Literal) {
+	if literal == nil || literal.Isnull {
+		return
+	}
+
+	canonicalOverloadID := overloadID & function.DistinctMask
+	if canonicalOverloadID == function.SerialFunctionEncodeID ||
+		canonicalOverloadID == function.SerialFullFunctionEncodeID {
+		literal.IsSerialized = true
 	}
 }
 

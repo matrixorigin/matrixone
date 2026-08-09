@@ -976,9 +976,10 @@ func DeepCopyExpr(expr *Expr) *Expr {
 	switch item := expr.Expr.(type) {
 	case *plan.Expr_Lit:
 		pc := &plan.Literal{
-			Isnull: item.Lit.GetIsnull(),
-			IsBin:  item.Lit.GetIsBin(),
-			Src:    DeepCopyExpr(item.Lit.Src),
+			Isnull:       item.Lit.GetIsnull(),
+			IsBin:        item.Lit.GetIsBin(),
+			Src:          DeepCopyExpr(item.Lit.Src),
+			IsSerialized: item.Lit.GetIsSerialized(),
 		}
 
 		switch c := item.Lit.Value.(type) {

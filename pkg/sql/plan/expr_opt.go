@@ -553,6 +553,14 @@ func blockFilterLiteralKey(lit *plan.Literal, typ plan.Type) (string, bool) {
 	if lit == nil {
 		return "", false
 	}
+	// IsSerialized only controls diagnostic rendering. A constant list can
+	// carry that provenance while the equivalent folded vector cannot, so it
+	// must not make otherwise identical block-filter sets compare different.
+	if lit.IsSerialized {
+		literalCopy := *lit
+		literalCopy.IsSerialized = false
+		lit = &literalCopy
+	}
 	litBytes, err := lit.Marshal()
 	if err != nil {
 		return "", false
