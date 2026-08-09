@@ -1030,7 +1030,9 @@ select id as unsafe_or from t11 where k_bigint < 97 or k_bigint > 1000 order by 
 ➤ unsafe_or[-5,64,0]  𝄀
 3  𝄀
 4
-update t11 set payload = concat(payload, '-matched'), k_bigint = k_bigint + 100 where k_bigint < 97;
+update t11
+set payload = concat(payload, '-matched'), k_bigint = k_bigint + 100
+where k_bigint < 97;
 select id, k_bigint, payload from t11 order by id;
 ➤ id[-5,64,0]  ¦  k_bigint[-5,64,0]  ¦  payload[12,-1,0]  𝄀
 1  ¦  null  ¦  null  𝄀
@@ -1039,7 +1041,12 @@ select id, k_bigint, payload from t11 order by id;
 4  ¦  196  ¦  below-96-matched  𝄀
 5  ¦  97  ¦  boundary  𝄀
 6  ¦  1000  ¦  upper
-set @t11_idx = (select index_table_name from mo_catalog.mo_indexes where name = 'idx_bigint' and table_id = (select rel_id from mo_catalog.mo_tables where reldatabase = 'd1' and relname = 't11') limit 1);
+set @t11_idx = (
+select index_table_name from mo_catalog.mo_indexes
+where name = 'idx_bigint'
+and table_id = (select rel_id from mo_catalog.mo_tables where reldatabase = 'd1' and relname = 't11')
+limit 1
+);
 set @t11_idx_sql = concat(
 'select count(*) as physical_rows, count(distinct __mo_index_pri_col) as primary_mappings from d1.`',
 @t11_idx, '`'
