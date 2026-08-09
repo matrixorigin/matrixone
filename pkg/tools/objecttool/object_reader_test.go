@@ -65,6 +65,8 @@ func TestObjectReaderAccessorsAndBounds(t *testing.T) {
 
 type staticCacheData []byte
 
+func (d staticCacheData) Size() int64              { return int64(len(d)) }
+func (d staticCacheData) Capacity() int64          { return int64(cap(d)) }
 func (d staticCacheData) Bytes() []byte            { return d }
 func (d staticCacheData) Slice(n int) fscache.Data { return d[:n] }
 func (d staticCacheData) Retain()                  {}

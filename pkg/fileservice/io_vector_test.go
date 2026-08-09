@@ -32,6 +32,10 @@ func (r *releaseCountingData) Size() int64 {
 	return 0
 }
 
+func (r *releaseCountingData) Capacity() int64 {
+	return 0
+}
+
 func (r *releaseCountingData) Bytes() []byte {
 	return nil
 }
