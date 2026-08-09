@@ -1130,9 +1130,27 @@ func useAssignmentStrictCast(targetType Type) bool {
 	switch targetType.Id {
 	case int32(types.T_char), int32(types.T_varchar), int32(types.T_date), int32(types.T_datetime), int32(types.T_timestamp):
 		return true
+	case int32(types.T_text):
+		return targetType.Width == types.MaxTinyTextLen
 	default:
 		return false
 	}
+}
+
+func useSqlModeStringAssignmentCast(targetType Type) bool {
+	return targetType.Id == int32(types.T_char) ||
+		targetType.Id == int32(types.T_varchar) ||
+		(targetType.Id == int32(types.T_text) && targetType.Width == types.MaxTinyTextLen)
+}
+
+// needsSameTypeAssignmentCast reports whether values with the same planner
+// type still need to cross an assignment cast. Legacy TINYTEXT columns are
+// recovered as T_text/Width=255 without rewriting their stored data, so they
+// can expose rows that predate the width constraint. A same-type assignment
+// into a constrained TINYTEXT column must validate those rows instead of
+// treating planner-type equality as proof that the values are already valid.
+func needsSameTypeAssignmentCast(targetType Type) bool {
+	return targetType.Id == int32(types.T_text) && targetType.Width == types.MaxTinyTextLen
 }
 
 func forceCastExpr2(ctx context.Context, expr *Expr, t2 types.Type, targetType *plan.Expr) (*Expr, error) {
@@ -1140,7 +1158,7 @@ func forceCastExpr2(ctx context.Context, expr *Expr, t2 types.Type, targetType *
 }
 
 // forceCastExpr2WithIgnore builds the assignment cast for a DML write when the
-// target plan.Expr is already known. For CHAR/VARCHAR targets it normally uses
+// target plan.Expr is already known. For width-constrained string targets it normally uses
 // cast_assign, which honors sql_mode at runtime (strict rejects over-length,
 // non-strict truncates). INSERT IGNORE and generic casts stay lenient.
 func forceCastExpr2WithIgnore(ctx context.Context, expr *Expr, t2 types.Type, targetType *plan.Expr, isIgnore bool) (*Expr, error) {
@@ -1171,12 +1189,12 @@ func forceCastExpr2WithProcess(
 		return funcCastForTypedArrayType(ctx, expr, targetType.Typ)
 	}
 	t1 := makeTypeByPlan2Expr(expr)
-	if t1.Eq(t2) {
+	if t1.Eq(t2) && !needsSameTypeAssignmentCast(targetType.Typ) {
 		return expr, nil
 	}
 
 	targetType.Typ.NotNullable = expr.Typ.NotNullable
-	// CHAR/VARCHAR assignments use the protocol-gated runtime assignment cast.
+	// Width-constrained string assignments use the protocol-gated runtime assignment cast.
 	// Temporal assignments retain main's cast_strict behavior, while other
 	// conversions continue to use the generic cast.
 	funcName := assignmentCastFunctionName(targetType.Typ, isIgnore, proc)
@@ -1220,7 +1238,7 @@ func forceAssignmentCastExpr(ctx context.Context, expr *Expr, targetType Type) (
 }
 
 func assignmentCastFunctionName(targetType Type, isIgnore bool, proc *process.Process) string {
-	if targetType.Id != int32(types.T_char) && targetType.Id != int32(types.T_varchar) {
+	if !useSqlModeStringAssignmentCast(targetType) {
 		if useAssignmentStrictCast(targetType) {
 			return "cast_strict"
 		}
@@ -1243,7 +1261,7 @@ func assignmentCastFunctionName(targetType Type, isIgnore bool, proc *process.Pr
 }
 
 // forceAssignmentCastExprWithIgnore builds the assignment cast for a DML write.
-// For CHAR/VARCHAR targets it normally uses cast_assign (sql_mode-gated width
+// For width-constrained string targets it normally uses cast_assign (sql_mode-gated width
 // check). When isIgnore is true (INSERT IGNORE or UPDATE IGNORE), over-length
 // writes are downgraded to truncation regardless of sql_mode and warning 1265
 // is recorded.
@@ -1258,7 +1276,7 @@ func forceAssignmentCastExprWithProcess(
 	isIgnore bool,
 	proc *process.Process,
 ) (*Expr, error) {
-	return forceCastExprWithName(ctx, expr, targetType, assignmentCastFunctionName(targetType, isIgnore, proc))
+	return forceAssignmentCastExprWithName(ctx, expr, targetType, assignmentCastFunctionName(targetType, isIgnore, proc))
 }
 
 func (builder *QueryBuilder) forceAssignmentCastExpr(expr *Expr, targetType Type, isIgnore bool) (*Expr, error) {
@@ -1464,6 +1482,20 @@ func (builder *QueryBuilder) materializeProjectedSetBitmapAtNode(
 }
 
 func forceCastExprWithName(ctx context.Context, expr *Expr, targetType Type, funcName string) (*Expr, error) {
+	return forceCastExprWithNameAndAssignment(ctx, expr, targetType, funcName, false)
+}
+
+func forceAssignmentCastExprWithName(ctx context.Context, expr *Expr, targetType Type, funcName string) (*Expr, error) {
+	return forceCastExprWithNameAndAssignment(ctx, expr, targetType, funcName, true)
+}
+
+func forceCastExprWithNameAndAssignment(
+	ctx context.Context,
+	expr *Expr,
+	targetType Type,
+	funcName string,
+	isAssignment bool,
+) (*Expr, error) {
 	if targetType.Id == 0 {
 		return expr, nil
 	}
@@ -1480,7 +1512,7 @@ func forceCastExprWithName(ctx context.Context, expr *Expr, targetType Type, fun
 		return funcCastForTypedArrayType(ctx, expr, targetType)
 	}
 	t1, t2 := makeTypeByPlan2Expr(expr), makeTypeByPlan2Type(targetType)
-	if t1.Eq(t2) {
+	if t1.Eq(t2) && !(isAssignment && needsSameTypeAssignmentCast(targetType)) {
 		return expr, nil
 	}
 

@@ -296,6 +296,10 @@ type Compile struct {
 
 	// proc stores the execution context.
 	proc *process.Process
+	// reusePlanSnapshot is set only when a retry recompiles pipelines from the
+	// same logical plan. Such a retry must retain the plan's original binding
+	// snapshot even if RC lock handling advanced the transaction snapshot.
+	reusePlanSnapshot bool
 	// runSqlToken tracks the current statement in txn operator coordination.
 	runSqlToken uint64
 	// TxnOffset read starting offset position within the transaction during the execute current statement

@@ -908,10 +908,9 @@ func NewStrictCast(parameters []*vector.Vector, result vector.FunctionResultWrap
 }
 
 // NewAssignCast is used by DML assignment paths (INSERT/UPDATE projection) for
-// CHAR/VARCHAR targets. It honors sql_mode at runtime: strict mode rejects
-// over-length writes (1406), non-strict mode truncates. Over-length values
-// whose excess is only trailing spaces are accepted (truncated) even in strict
-// mode, matching MySQL.
+// width-constrained string targets. It honors sql_mode at runtime: strict mode
+// rejects over-length writes (1406), while non-strict mode truncates. For
+// CHAR/VARCHAR only, excess trailing spaces are accepted in strict mode too.
 func NewAssignCast(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	mode := castModeAssignment
 	if isStrictSqlMode(proc) {
@@ -2493,15 +2492,27 @@ func geometryToTextCast(
 		if err != nil {
 			return err
 		}
-		if (toType.Oid == types.T_char || toType.Oid == types.T_varchar) &&
-			toType.Width >= 0 && utf8.RuneCountInString(wkt) > int(toType.Width) {
+		overWidth := false
+		if isTinyTextType(toType) {
+			overWidth = len(wkt) > int(toType.Width)
+		} else if toType.Oid == types.T_char || toType.Oid == types.T_varchar {
+			overWidth = toType.Width >= 0 && utf8.RuneCountInString(wkt) > int(toType.Width)
+		}
+		if overWidth {
 			destLen := int(toType.Width)
-			if (allowTrailingSpaceTrim && overLenIsAllTrailingSpaces(wkt, destLen)) || !strictStringWidth {
+			if isTinyTextType(toType) && !strictStringWidth {
+				wkt = string(truncateTextByBytes([]byte(wkt), destLen))
+			} else if !isTinyTextType(toType) &&
+				((allowTrailingSpaceTrim && overLenIsAllTrailingSpaces(wkt, destLen)) || !strictStringWidth) {
 				wkt = truncateStringByRunes(wkt, destLen)
 			} else if allowTrailingSpaceTrim {
+				sourceLen := utf8.RuneCountInString(wkt)
+				if isTinyTextType(toType) {
+					sourceLen = len(wkt)
+				}
 				extraInfo := fmt.Sprintf(
 					"Src length %v is larger than Dest length %v",
-					utf8.RuneCountInString(wkt),
+					sourceLen,
 					destLen,
 				)
 				return formatGeometryWidthError(
@@ -2513,9 +2524,13 @@ func geometryToTextCast(
 					reportDataTooLong,
 				)
 			} else {
+				sourceLen := utf8.RuneCountInString(wkt)
+				if isTinyTextType(toType) {
+					sourceLen = len(wkt)
+				}
 				extraInfo := fmt.Sprintf(
 					"Src length %v is larger than Dest length %v",
-					utf8.RuneCountInString(wkt),
+					sourceLen,
 					destLen,
 				)
 				return formatGeometryWidthError(
@@ -3306,8 +3321,7 @@ func boolToStr(
 				result = []byte("1")
 			}
 			result = truncateCastBytesResult(result, toType, strictStringWidth...)
-			if len(result) > int(toType.Width) &&
-				(toType.Oid == types.T_char || toType.Oid == types.T_varchar) {
+			if castResultExceedsByteWidth(result, toType) {
 				return formatDataTruncationError(
 					ctx,
 					from.GetSourceVector(),
@@ -3440,7 +3454,7 @@ func bitToStr(
 				b = append(b, byte(0))
 			}
 		}
-		if len(b) > int(toType.Width) && toType.Oid != types.T_text && toType.Oid != types.T_blob && toType.Oid != types.T_datalink {
+		if castResultExceedsByteWidth(b, toType) {
 			return formatDataTruncationError(ctx, from.GetSourceVector(), toType, fmt.Sprintf(
 				"%v is larger than Dest length %v", v, toType.Width), assignmentCast(strictStringWidth))
 		}
@@ -3752,7 +3766,7 @@ func signedToStr[T constraints.Integer](
 				}
 			}
 			result = truncateCastBytesResult(result, toType, strictStringWidth...)
-			if len(result) > int(toType.Width) && toType.Oid != types.T_text && toType.Oid != types.T_blob && toType.Oid != types.T_datalink {
+			if castResultExceedsByteWidth(result, toType) {
 				return formatDataTruncationError(ctx, from.GetSourceVector(), toType, fmt.Sprintf(
 					"%v is larger than Dest length %v", v, toType.Width), assignmentCast(strictStringWidth))
 			}
@@ -3801,7 +3815,7 @@ func unsignedToStr[T constraints.Unsigned](
 				}
 			}
 			result = truncateCastBytesResult(result, toType, strictStringWidth...)
-			if len(result) > int(toType.Width) && toType.Oid != types.T_text && toType.Oid != types.T_blob && toType.Oid != types.T_datalink {
+			if castResultExceedsByteWidth(result, toType) {
 				return formatDataTruncationError(ctx, from.GetSourceVector(), toType, fmt.Sprintf(
 					"%v is larger than Dest length %v", v, toType.Width), assignmentCast(strictStringWidth))
 			}
@@ -3852,7 +3866,7 @@ func floatToStr[T constraints.Float](
 				}
 			}
 			result = truncateCastBytesResult(result, toType, strictStringWidth...)
-			if len(result) > int(toType.Width) && toType.Oid != types.T_text && toType.Oid != types.T_blob && toType.Oid != types.T_datalink {
+			if castResultExceedsByteWidth(result, toType) {
 				return formatDataTruncationError(ctx, from.GetSourceVector(), toType, fmt.Sprintf(
 					"%v is larger than Dest length %v", v, toType.Width), assignmentCast(strictStringWidth))
 			}
@@ -4611,7 +4625,7 @@ func dateToStr(
 				}
 			}
 			result = truncateCastBytesResult(result, toType, strictStringWidth...)
-			if len(result) > int(toType.Width) && toType.Oid != types.T_text && toType.Oid != types.T_blob && toType.Oid != types.T_datalink {
+			if castResultExceedsByteWidth(result, toType) {
 				return formatDataTruncationError(ctx, from.GetSourceVector(), toType, fmt.Sprintf(
 					"%v is larger than Dest length %v", v.String(), toType.Width), assignmentCast(strictStringWidth))
 			}
@@ -4661,7 +4675,7 @@ func datetimeToStr(
 				}
 			}
 			result = truncateCastBytesResult(result, toType, strictStringWidth...)
-			if len(result) > int(toType.Width) && toType.Oid != types.T_text && toType.Oid != types.T_blob && toType.Oid != types.T_datalink {
+			if castResultExceedsByteWidth(result, toType) {
 				return formatDataTruncationError(ctx, from.GetSourceVector(), toType, fmt.Sprintf(
 					"%v is larger than Dest length %v", v.String(), toType.Width), assignmentCast(strictStringWidth))
 			}
@@ -4712,7 +4726,7 @@ func timestampToStr(
 				}
 			}
 			result = truncateCastBytesResult(result, toType, strictStringWidth...)
-			if len(result) > int(toType.Width) && toType.Oid != types.T_text && toType.Oid != types.T_blob && toType.Oid != types.T_datalink {
+			if castResultExceedsByteWidth(result, toType) {
 				return formatDataTruncationError(ctx, from.GetSourceVector(), toType, fmt.Sprintf(
 					"%v is larger than Dest length %v", v.String(), toType.Width), assignmentCast(strictStringWidth))
 			}
@@ -4762,7 +4776,7 @@ func timeToStr(
 				}
 			}
 			result = truncateCastBytesResult(result, toType, strictStringWidth...)
-			if len(result) > int(toType.Width) && toType.Oid != types.T_text && toType.Oid != types.T_blob && toType.Oid != types.T_datalink {
+			if castResultExceedsByteWidth(result, toType) {
 				return formatDataTruncationError(ctx, from.GetSourceVector(), toType, fmt.Sprintf(
 					"%v is larger than Dest length %v", v.String(), toType.Width), assignmentCast(strictStringWidth))
 			}
@@ -5878,7 +5892,7 @@ func decimal64ToStr(
 				}
 			}
 			result = truncateCastBytesResult(result, toType, strictStringWidth...)
-			if len(result) > int(toType.Width) && toType.Oid != types.T_text && toType.Oid != types.T_blob && toType.Oid != types.T_datalink {
+			if castResultExceedsByteWidth(result, toType) {
 				return formatDataTruncationError(ctx, from.GetSourceVector(), toType, fmt.Sprintf(
 					"%v is larger than Dest length %v", v.Format(fromType.Scale), toType.Width),
 					assignmentCast(strictStringWidth))
@@ -5929,7 +5943,7 @@ func decimal128ToStr(
 				}
 			}
 			result = truncateCastBytesResult(result, toType, strictStringWidth...)
-			if len(result) > int(toType.Width) && toType.Oid != types.T_text && toType.Oid != types.T_blob && toType.Oid != types.T_datalink {
+			if castResultExceedsByteWidth(result, toType) {
 				return formatDataTruncationError(ctx, from.GetSourceVector(), toType, fmt.Sprintf(
 					"%v is larger than Dest length %v", v.Format(fromType.Scale), toType.Width),
 					assignmentCast(strictStringWidth))
@@ -5999,7 +6013,7 @@ func decimal256ToStr(
 				}
 			}
 			result = truncateCastBytesResult(result, toType, strictStringWidth...)
-			if len(result) > int(toType.Width) && toType.Oid != types.T_text && toType.Oid != types.T_blob && toType.Oid != types.T_datalink {
+			if castResultExceedsByteWidth(result, toType) {
 				return formatDataTruncationError(ctx, from.GetSourceVector(), toType, fmt.Sprintf(
 					"%v is larger than Dest length %v", v.Format(fromType.Scale), toType.Width),
 					assignmentCast(strictStringWidth))
@@ -7488,7 +7502,7 @@ func strToStr(
 		return nil
 	}
 
-	if totype.Oid != types.T_text &&
+	if (totype.Oid != types.T_text || isTinyTextType(totype)) &&
 		(destLen != 0 || totype.Oid == types.T_char || totype.Oid == types.T_varchar) {
 		for i = 0; i < l; i++ {
 			v, null := from.GetStrValue(i)
@@ -7526,6 +7540,13 @@ func strToStr(
 						utf8.RuneCountInString(s),
 						destLen,
 					))
+				}
+			} else if isTinyTextType(toType) && len(v) > destLen {
+				if !strictStringWidth {
+					v = truncateTextByBytes(v, destLen)
+				} else {
+					return formatDataTruncationError(ctx, from.GetSourceVector(), totype, fmt.Sprintf(
+						"Src length %v is larger than Dest length %v", len(v), destLen), reportDataTooLong)
 				}
 			} else if utf8.RuneCountInString(s) > destLen {
 				return formatDataTruncationError(ctx, from.GetSourceVector(), totype, fmt.Sprintf(
@@ -7736,7 +7757,7 @@ func uuidToStr(
 				}
 			}
 			result = truncateCastBytesResult(result, toType, strictStringWidth...)
-			if len(result) > int(toType.Width) && toType.Oid != types.T_text && toType.Oid != types.T_blob && toType.Oid != types.T_datalink {
+			if castResultExceedsByteWidth(result, toType) {
 				return formatDataTruncationError(ctx, from.GetSourceVector(), toType, fmt.Sprintf(
 					"%v is larger than Dest length %v", v.String(), toType.Width), assignmentCast(strictStringWidth))
 			}
@@ -7765,7 +7786,7 @@ func tsToStr(
 			str := tsVal.ToString()
 			result := []byte(str)
 			result = truncateCastBytesResult(result, toType, strictStringWidth...)
-			if len(result) > int(toType.Width) && toType.Oid != types.T_text && toType.Oid != types.T_blob && toType.Oid != types.T_datalink {
+			if castResultExceedsByteWidth(result, toType) {
 				return formatDataTruncationError(ctx, from.GetSourceVector(), toType, fmt.Sprintf(
 					"%v is larger than Dest length %v", tsVal, toType.Width), assignmentCast(strictStringWidth))
 			}
@@ -7864,10 +7885,8 @@ func jsonToStr(
 				str = string(bs)
 			}
 			val := []byte(str)
-			// CHAR/VARCHAR width enforcement: use rune count (not byte
-			// count) for multi-byte-safe truncation. JSON output may
-			// contain Unicode characters. Mirror strToStr's semantics so the
-			// trailing-space exemption and sql_mode gating apply to JSON too.
+			// CHAR/VARCHAR widths count runes; TINYTEXT's limit counts bytes.
+			// Both paths preserve valid UTF-8 while applying sql_mode at runtime.
 			destLen := int(toType.Width)
 			if toType.Oid == types.T_char || toType.Oid == types.T_varchar {
 				runeCount := utf8.RuneCountInString(str)
@@ -7890,9 +7909,16 @@ func jsonToStr(
 							"Src length %v is larger than Dest length %v", runeCount, destLen))
 					}
 				}
+			} else if isTinyTextType(toType) && len(val) > destLen {
+				if !strictStringWidth {
+					val = truncateTextByBytes(val, destLen)
+				} else {
+					return formatDataTruncationError(ctx, from.GetSourceVector(), toType, fmt.Sprintf(
+						"Src length %v is larger than Dest length %v", len(val), destLen), reportDataTooLong)
+				}
 			} else {
 				val = truncateCastBytesResult(val, toType, strictStringWidth)
-				if len(val) > int(toType.Width) && toType.Oid != types.T_text && toType.Oid != types.T_blob && toType.Oid != types.T_datalink {
+				if castResultExceedsByteWidth(val, toType) {
 					return formatDataTruncationError(ctx, from.GetSourceVector(), toType, fmt.Sprintf(
 						"Src length %v is larger than Dest length %v", len(val), toType.Width), reportDataTooLong)
 				}
@@ -7939,7 +7965,7 @@ func enumToStr(
 		} else {
 			result := []byte(strconv.FormatUint(uint64(v), 10))
 			result = truncateCastBytesResult(result, toType, strictStringWidth...)
-			if len(result) > int(toType.Width) && toType.Oid != types.T_text && toType.Oid != types.T_blob && toType.Oid != types.T_datalink {
+			if castResultExceedsByteWidth(result, toType) {
 				return formatDataTruncationError(ctx, from.GetSourceVector(), toType, fmt.Sprintf(
 					"%v is larger than Dest length %v", v, toType.Width), assignmentCast(strictStringWidth))
 			}
@@ -8354,6 +8380,9 @@ func truncateCastBytesResult(result []byte, toType types.Type, strictStringWidth
 	if len(strictStringWidth) > 0 && strictStringWidth[0] {
 		return result
 	}
+	if toType.Oid == types.T_text && toType.Width == types.MaxTinyTextLen {
+		return truncateTextByBytes(result, int(toType.Width))
+	}
 	if toType.Oid != types.T_char && toType.Oid != types.T_varchar {
 		return result
 	}
@@ -8364,6 +8393,34 @@ func truncateCastBytesResult(result []byte, toType types.Type, strictStringWidth
 		return result
 	}
 	return result[:toType.Width]
+}
+
+func isTinyTextType(typ types.Type) bool {
+	return typ.Oid == types.T_text && typ.Width == types.MaxTinyTextLen
+}
+
+func castResultExceedsByteWidth(result []byte, toType types.Type) bool {
+	if toType.Width < 0 || toType.Oid == types.T_blob || toType.Oid == types.T_datalink {
+		return false
+	}
+	if toType.Oid == types.T_text && !isTinyTextType(toType) {
+		return false
+	}
+	return len(result) > int(toType.Width)
+}
+
+func truncateTextByBytes(value []byte, maxBytes int) []byte {
+	if maxBytes < 0 || len(value) <= maxBytes {
+		return value
+	}
+	truncated := value[:maxBytes]
+	if !utf8.Valid(value) {
+		return truncated
+	}
+	for len(truncated) > 0 && !utf8.Valid(truncated) {
+		truncated = truncated[:len(truncated)-1]
+	}
+	return truncated
 }
 
 func assignmentCast(castFlags []bool) bool {
@@ -8418,7 +8475,7 @@ func formatCastError(ctx context.Context, vec *vector.Vector, typ types.Type, ex
 }
 
 // formatDataTruncationError preserves the legacy internal-error contract for
-// generic casts and reports 1406 only for CHAR/VARCHAR DML assignment casts.
+// generic casts and reports 1406 only for width-constrained DML assignments.
 func formatDataTruncationError(
 	ctx context.Context,
 	vec *vector.Vector,
@@ -8427,7 +8484,7 @@ func formatDataTruncationError(
 	assignment ...bool,
 ) error {
 	if len(assignment) == 0 || !assignment[0] ||
-		(typ.Oid != types.T_char && typ.Oid != types.T_varchar) {
+		(typ.Oid != types.T_char && typ.Oid != types.T_varchar && !isTinyTextType(typ)) {
 		return formatCastError(ctx, vec, typ, extraInfo)
 	}
 	var errStr string
@@ -8694,7 +8751,7 @@ func yearToStr(ctx context.Context,
 		} else {
 			result := []byte(v.String())
 			result = truncateCastBytesResult(result, toType, strictStringWidth...)
-			if len(result) > int(toType.Width) && toType.Oid != types.T_text && toType.Oid != types.T_blob && toType.Oid != types.T_datalink {
+			if castResultExceedsByteWidth(result, toType) {
 				return formatDataTruncationError(ctx, source.GetSourceVector(), toType, fmt.Sprintf(
 					"%v is larger than Dest length %v", v, toType.Width), assignmentCast(strictStringWidth))
 			}

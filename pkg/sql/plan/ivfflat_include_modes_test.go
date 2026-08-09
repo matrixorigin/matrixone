@@ -19,7 +19,9 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -334,6 +336,48 @@ func TestApplyIndicesForSortUsingIvfflat_IncludeModeResidualOnlyUsesSingleRoundP
 	require.Len(t, tableFuncNode.RuntimeFilterProbeList, 1)
 	require.True(t, tableFuncNode.RuntimeFilterProbeList[0].UseMembershipFilter)
 	require.True(t, tableFuncNode.Stats.GetForceOneCN())
+	require.Len(t, scanNode.FilterList, 1)
+	require.Equal(t, "note", scanNode.FilterList[0].GetF().Args[0].GetCol().Name)
+}
+
+func TestApplyIndicesForSortUsingIvfflat_OldProtocolKeepsRelationalPlan(t *testing.T) {
+	builder, _, scanNode, scanNodeID, multiTableIndex := newIvfIncludeModeTestBuilder(t)
+
+	scanTag := scanNode.BindingTags[0]
+	scanNode.FilterList = []*plan.Expr{
+		{
+			Typ: plan.Type{Id: int32(types.T_bool)},
+			Expr: &plan.Expr_F{F: &plan.Function{
+				Func: &plan.ObjectRef{ObjName: "="},
+				Args: []*plan.Expr{
+					{Typ: scanNode.TableDef.Cols[4].Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: scanTag, ColPos: 4, Name: "note"}}},
+					makePlan2StringConstExprWithType("n2"),
+				},
+			}},
+		},
+	}
+
+	sid := builder.compCtx.GetProcess().GetService()
+	rt := moruntime.ServiceRuntime(sid)
+	original, hadOriginal := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	t.Cleanup(func() {
+		if hadOriginal {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, original)
+		} else {
+			rt.SetGlobalVariables(
+				moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+		}
+	})
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion10)
+
+	vecCtx := newIvfIncludeModeVectorSortContext(
+		scanNode, scanNodeID, "include", 0, 2, 4)
+	nodeCount := len(builder.qry.Nodes)
+	gotNodeID, err := builder.applyIndicesForSortUsingIvfflat(
+		scanNodeID, vecCtx, multiTableIndex, nil, nil)
+	require.NoError(t, err)
+	require.Equal(t, scanNodeID, gotNodeID)
+	require.Len(t, builder.qry.Nodes, nodeCount)
 	require.Len(t, scanNode.FilterList, 1)
 	require.Equal(t, "note", scanNode.FilterList[0].GetF().Args[0].GetCol().Name)
 }

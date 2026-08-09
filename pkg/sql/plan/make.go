@@ -663,7 +663,7 @@ func makePlan2CastExpr(ctx context.Context, expr *Expr, targetType Type) (*Expr,
 
 // makePlan2AssignmentCastExpr builds a cast used when validating/storing a value
 // against a real column type at the DDL layer (e.g. column DEFAULT / ON UPDATE).
-// It uses cast_strict for CHAR/VARCHAR width checks and temporal zero-date
+// It uses cast_strict for width-constrained strings and temporal zero-date
 // preservation. DDL-specific error mapping is applied by the DDL validation
 // layer rather than changing cast_strict's execution contract.
 func makePlan2AssignmentCastExpr(ctx context.Context, expr *Expr, targetType Type) (*Expr, error) {
