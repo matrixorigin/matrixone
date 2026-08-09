@@ -411,6 +411,51 @@ set @t11_idx_sql = concat(
 prepare stmt_t11_idx from @t11_idx_sql;
 execute stmt_t11_idx;
 deallocate prepare stmt_t11_idx;
+ -- 30. Regression #26801: DECIMAL range bounds must be serialized at the
+-- indexed part's scale. The composite PK and direct hidden-table checks keep
+-- index maintenance independent from the range-result oracle.
+drop table if exists t10;
+create table t10 (
+    tenant_id int not null,
+    id bigint not null,
+    price decimal(10,2) not null,
+    primary key (tenant_id, id),
+    key idx_price_owner (price, tenant_id, id)
+);
+insert into t10
+select 1 + result % 8, result, cast(result / 100.0 as decimal(10,2))
+from generate_series(1, 10000) g;
+
+set @t10_idx = (select distinct index_table_name from mo_catalog.mo_indexes where name = 'idx_price_owner' limit 1);
+set @t10_idx_sql = concat(
+    'select count(*) as physical_rows, count(distinct __mo_index_idx_col) as physical_keys, ',
+    'count(distinct __mo_index_pri_col) as primary_mappings from d1.`', @t10_idx, '`'
+);
+prepare stmt_t10_idx from @t10_idx_sql;
+execute stmt_t10_idx;
+deallocate prepare stmt_t10_idx;
+
+select count(*) as closed_default from t10 where price between 10.250000 and 15.750000;
+select count(*) as closed_force from t10 force index(idx_price_owner) where price between 10.250000 and 15.750000;
+select count(*) as closed_ignore from t10 ignore index(idx_price_owner) where price between 10.250000 and 15.750000;
+
+select count(*) as open_default from t10 where price > 10.250000 and price < 15.750000;
+select count(*) as open_force from t10 force index(idx_price_owner) where price > 10.250000 and price < 15.750000;
+select count(*) as open_ignore from t10 ignore index(idx_price_owner) where price > 10.250000 and price < 15.750000;
+
+select count(*) as lower_force from t10 force index(idx_price_owner) where price >= 10.250000;
+select count(*) as lower_ignore from t10 ignore index(idx_price_owner) where price >= 10.250000;
+select count(*) as upper_force from t10 force index(idx_price_owner) where price < 15.750000;
+select count(*) as upper_ignore from t10 ignore index(idx_price_owner) where price < 15.750000;
+
+select count(*) as equality_force from t10 force index(idx_price_owner) where price = 10.250000;
+select count(*) as equality_ignore from t10 ignore index(idx_price_owner) where price = 10.250000;
+select count(*) as equal_scale_force from t10 force index(idx_price_owner) where price between 10.25 and 15.75;
+select count(*) as equal_scale_ignore from t10 ignore index(idx_price_owner) where price between 10.25 and 15.75;
+select count(*) as rounding_force from t10 force index(idx_price_owner) where price > 10.255000 and price <= 15.755000;
+select count(*) as rounding_ignore from t10 ignore index(idx_price_owner) where price > 10.255000 and price <= 15.755000;
+select count(*) as rounding_between_force from t10 force index(idx_price_owner) where price between 10.255000 and 15.755000;
+select count(*) as rounding_between_ignore from t10 ignore index(idx_price_owner) where price between 10.255000 and 15.755000;
 
 -- Cleanup
 drop database d1;
