@@ -211,6 +211,9 @@ func extendWithBitmaps(
 	needNulls bool,
 	needGrouping bool,
 ) error {
+	if m != nil && v.prepareParamKinds == nil {
+		v.prepareParamKindsMP = m
+	}
 	if rows <= 0 {
 		// we will at least extent by 1.
 		// This is a pure hack to
@@ -239,6 +242,11 @@ func extendWithBitmaps(
 			return err
 		}
 		v.data = ndata
+	}
+	if v.prepareParamKinds != nil {
+		if err := v.preExtendPrepareParamKinds(tgtLen, m); err != nil {
+			return err
+		}
 	}
 	v.data = v.data[:cap(v.data)]
 	return nil

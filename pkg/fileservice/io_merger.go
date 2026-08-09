@@ -36,8 +36,8 @@ type IOMergeKey struct {
 	Policy Policy
 	// FullObject describes the physical read range. CacheFill additionally
 	// distinguishes requests whose successful leader publishes a reusable
-	// full-object disk-cache entry. Followers must not long-wait a generation
-	// that cannot publish the artifact they intend to reuse.
+	// cache entry. Followers must not wait for a generation that cannot publish
+	// the artifact they intend to reuse.
 	FullObject bool
 	CacheFill  bool
 }

@@ -776,6 +776,7 @@ type valueWindowExec struct {
 type valueEntry struct {
 	isNull bool
 	data   []byte
+	kind   vector.PrepareParamKind
 }
 
 func (exec *valueWindowExec) GroupGrow(more int) error {
@@ -809,6 +810,7 @@ func (exec *valueWindowExec) Fill(groupIndex int, row int, vectors []*vector.Vec
 	}
 
 	if !entry.isNull {
+		entry.kind = vec.GetPrepareParamKindAt(row)
 		// Copy the value data
 		if vec.GetType().IsVarlen() {
 			bs := vec.GetBytesAt(row)
@@ -955,7 +957,11 @@ func (exec *valueWindowExec) flushLag() (_ []*vector.Vector, retErr error) {
 					return nil, err
 				}
 			} else {
+				row := result.Length()
 				if err := appendValueToVector(result, entry.data, exec.retType, exec.mp); err != nil {
+					return nil, err
+				}
+				if err := result.SetPrepareParamKindAtWithMP(row, entry.kind, exec.mp); err != nil {
 					return nil, err
 				}
 			}
@@ -1008,7 +1014,11 @@ func (exec *valueWindowExec) flushLead() (_ []*vector.Vector, retErr error) {
 					return nil, err
 				}
 			} else {
+				row := result.Length()
 				if err := appendValueToVector(result, entry.data, exec.retType, exec.mp); err != nil {
+					return nil, err
+				}
+				if err := result.SetPrepareParamKindAtWithMP(row, entry.kind, exec.mp); err != nil {
 					return nil, err
 				}
 			}
@@ -1043,7 +1053,11 @@ func (exec *valueWindowExec) flushFirstValue() (_ []*vector.Vector, retErr error
 				return nil, err
 			}
 		} else {
+			row := result.Length()
 			if err := appendValueToVector(result, entry.data, exec.retType, exec.mp); err != nil {
+				return nil, err
+			}
+			if err := result.SetPrepareParamKindAtWithMP(row, entry.kind, exec.mp); err != nil {
 				return nil, err
 			}
 		}
@@ -1077,7 +1091,11 @@ func (exec *valueWindowExec) flushLastValue() (_ []*vector.Vector, retErr error)
 				return nil, err
 			}
 		} else {
+			row := result.Length()
 			if err := appendValueToVector(result, entry.data, exec.retType, exec.mp); err != nil {
+				return nil, err
+			}
+			if err := result.SetPrepareParamKindAtWithMP(row, entry.kind, exec.mp); err != nil {
 				return nil, err
 			}
 		}
