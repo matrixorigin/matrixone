@@ -322,5 +322,95 @@ select count(*) as count_after_odku_closed from t9 where status = 'closed';
 -- @sortkey:0
 select id, status, attempts from t9 order by id;
 
+-- 29. Regression #26821: a strict upper bound on a nullable leading
+-- secondary-index part must recheck SQL NULL semantics on covering scans.
+-- DECIMAL and VARCHAR controls prove that the rule is serialization-generic;
+-- the payload query exercises the non-covering index-join/backfill path.
+drop table if exists t11;
+create table t11 (
+    id bigint primary key,
+    k_bigint bigint null,
+    k_decimal decimal(20,4) null,
+    k_varchar varchar(16) null,
+    payload varchar(16) not null,
+    key idx_bigint(k_bigint),
+    key idx_decimal(k_decimal),
+    key idx_varchar(k_varchar)
+);
+insert into t11 values
+    (1, NULL, NULL, NULL, 'null'),
+    (2, 98, 98.0000, '098', 'above'),
+    (3, 95, 95.0000, '095', 'below-95'),
+    (4, 96, 96.0000, '096', 'below-96'),
+    (5, 97, 97.0000, '097', 'boundary'),
+    (6, 1000, 1000.0000, '1000', 'upper');
+
+-- @regex("Index Table Scan",true)
+explain select id from t11 where k_bigint < 97;
+select id as bigint_auto from t11 where k_bigint < 97 order by id;
+select id as bigint_primary from t11 ignore index(idx_bigint) where k_bigint < 97 order by id;
+select id as decimal_auto from t11 where k_decimal < 97.0000 order by id;
+select id as decimal_primary from t11 ignore index(idx_decimal) where k_decimal < 97.0000 order by id;
+select id as varchar_auto from t11 where k_varchar < '097' order by id;
+select id as varchar_primary from t11 ignore index(idx_varchar) where k_varchar < '097' order by id;
+
+-- LIMIT without ORDER BY makes the serialized NULL entry the first visible
+-- wrong row unless the decoded SQL residual is retained.
+select id, k_bigint from t11 force index(idx_bigint) where k_bigint < 97 limit 1;
+
+-- Constant-left normalization reaches the same strict upper-bound rule.
+select id as constant_left from t11 where 97 > k_bigint order by id;
+
+-- Prepared bounds already retain a residual; preserve that control.
+prepare stmt_t11_lt from 'select id as prepared_bound from t11 where k_bigint < ? order by id';
+set @t11_bound = 97;
+execute stmt_t11_lt using @t11_bound;
+deallocate prepare stmt_t11_lt;
+
+-- @regex("Join Type: INDEX",true)
+explain select id, payload from t11 where k_bigint < 97;
+select id, payload from t11 where k_bigint < 97 order by id;
+
+-- A paired lower bound excludes NULL before the strict upper bound.
+-- @regex("Index",true)
+explain select id from t11 where k_bigint >= 95 and k_bigint < 97;
+select id as paired_range from t11 where k_bigint >= 95 and k_bigint < 97 order by id;
+
+-- Both arms are safe serialized prefix comparisons, but the strict upper arm
+-- still requires the decoded residual to reject NULL.
+select id as safe_or from t11 force index(idx_bigint) where k_bigint < 97 or k_bigint >= 1000 order by id;
+
+-- <= and > remain unsafe against a serialized prefix. The unsafe OR arm must
+-- also keep the whole predicate on the base scan.
+-- @regex("Index",false)
+explain select id from t11 where k_bigint <= 97;
+select id as inclusive_upper from t11 where k_bigint <= 97 order by id;
+-- @regex("Index",false)
+explain select id from t11 where k_bigint > 97;
+select id as strict_lower from t11 where k_bigint > 97 order by id;
+-- @regex("Index",false)
+explain select id from t11 where k_bigint < 97 or k_bigint > 1000;
+select id as unsafe_or from t11 where k_bigint < 97 or k_bigint > 1000 order by id;
+
+-- UPDATE must select exactly the same rows and maintain the serialized index.
+update t11
+set payload = concat(payload, '-matched'), k_bigint = k_bigint + 100
+where k_bigint < 97;
+select id, k_bigint, payload from t11 order by id;
+
+set @t11_idx = (
+    select index_table_name from mo_catalog.mo_indexes
+    where name = 'idx_bigint'
+      and table_id = (select rel_id from mo_catalog.mo_tables where reldatabase = 'd1' and relname = 't11')
+    limit 1
+);
+set @t11_idx_sql = concat(
+    'select count(*) as physical_rows, count(distinct __mo_index_pri_col) as primary_mappings from d1.`',
+    @t11_idx, '`'
+);
+prepare stmt_t11_idx from @t11_idx_sql;
+execute stmt_t11_idx;
+deallocate prepare stmt_t11_idx;
+
 -- Cleanup
 drop database d1;

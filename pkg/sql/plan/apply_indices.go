@@ -1911,7 +1911,19 @@ func indexFilterMayCompareNullAtRuntime(expr *plan.Expr) bool {
 	case "between":
 		return len(fn.Args) > 2 && (runtimeConstMayBeNull(fn.Args[1]) || runtimeConstMayBeNull(fn.Args[2]))
 	case ">", ">=", "<", "<=":
-		return len(fn.Args) > 1 && (runtimeConstMayBeNull(fn.Args[0]) || runtimeConstMayBeNull(fn.Args[1]))
+		if len(fn.Args) < 2 {
+			return false
+		}
+		if runtimeConstMayBeNull(fn.Args[0]) || runtimeConstMayBeNull(fn.Args[1]) {
+			return true
+		}
+		if canonicalRangeOp(fn) != "<" {
+			return false
+		}
+		if fn.Args[0].GetCol() != nil && isRuntimeConstExpr(fn.Args[1]) {
+			return !fn.Args[0].Typ.NotNullable
+		}
+		return isRuntimeConstExpr(fn.Args[0]) && fn.Args[1].GetCol() != nil && !fn.Args[1].Typ.NotNullable
 	case "in_range":
 		return len(fn.Args) > 2 && (runtimeConstMayBeNull(fn.Args[1]) || runtimeConstMayBeNull(fn.Args[2]))
 	case "or":
@@ -2061,8 +2073,8 @@ func (builder *QueryBuilder) tryIndexOnlyScan(idxDef *IndexDef, node *plan.Node,
 	newFilterList = append(newFilterList, newLeadingFilter)
 	if needsIndexOnlyResidualLeadingFilters(idxDef, node.FilterList, leadingPos) {
 		// serial_full preserves NULL as key bytes. Keep the original SQL
-		// predicate as a residual recheck so prepared NULL values still follow
-		// SQL three-valued logic on covering index-only scans.
+		// predicate as a residual recheck so index-only scans preserve SQL
+		// three-valued logic.
 		for _, idx := range leadingPos {
 			newFilterList = append(newFilterList, replaceColumnsForExpr(DeepCopyExpr(node.FilterList[idx]), idxColMap))
 		}
