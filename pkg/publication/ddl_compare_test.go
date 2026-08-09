@@ -118,6 +118,21 @@ func TestBuildIndexMap_Fulltext(t *testing.T) {
 	assert.Equal(t, "FULLTEXT", idx.indexType)
 }
 
+func TestBuildIndexMap_VisibilityDefaultsAndExplicitInvisible(t *testing.T) {
+	ctx := context.Background()
+	sql := "CREATE TABLE `t1` (`id` INT, `name` VARCHAR(100), `body` TEXT, " +
+		"INDEX `idx_default` (`name`) COMMENT 'keeps default visibility', " +
+		"UNIQUE INDEX `idx_invisible` (`name`) INVISIBLE, " +
+		"FULLTEXT INDEX `ft_invisible` (`body`) INVISIBLE)"
+	stmt, err := parseCreateTableSQL(ctx, sql)
+	require.NoError(t, err)
+
+	indexes := buildIndexMap(stmt)
+	require.True(t, indexes["idx_default"].visible)
+	require.False(t, indexes["idx_invisible"].visible)
+	require.False(t, indexes["ft_invisible"].visible)
+}
+
 func TestBuildForeignKeyMap_Empty(t *testing.T) {
 	ctx := context.Background()
 	sql := "CREATE TABLE `t1` (`id` INT, `name` VARCHAR(100))"

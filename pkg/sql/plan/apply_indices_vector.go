@@ -262,7 +262,7 @@ func (builder *QueryBuilder) directScanWithVectorIndex(node *plan.Node) *plan.No
 		// from drifting back into hardcoded algo lists like the previous
 		// IsIvfIndexAlgo || IsHnswIndexAlgo gate, which silently
 		// excluded CAGRA / IVF-PQ from the join-through path.
-		if indexplugin.IsVectorIndexAlgo(idx.IndexAlgo) {
+		if catalog.IsIndexVisible(idx) && indexplugin.IsVectorIndexAlgo(idx.IndexAlgo) {
 			return node
 		}
 	}

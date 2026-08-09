@@ -292,6 +292,9 @@ func constructCreateTableSQL(
 					}
 
 				}
+				if !catalog.IsIndexVisible(indexdef) {
+					indexStr += " INVISIBLE"
+				}
 
 			} else {
 				rewriteIndexStr := ""
@@ -358,6 +361,10 @@ func constructCreateTableSQL(
 				includeList := indexIncludeColumnsToString(includedColumns, colNameToOriginName)
 				indexStr += includeList
 				rewriteIndexStr += includeList
+				if !catalog.IsIndexVisible(indexdef) {
+					indexStr += " INVISIBLE"
+					rewriteIndexStr += " INVISIBLE"
+				}
 				if indexStr != rewriteIndexStr {
 					rewritePairs = append(rewritePairs, struct {
 						display string
