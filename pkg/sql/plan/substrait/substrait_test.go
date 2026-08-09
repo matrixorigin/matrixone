@@ -485,10 +485,47 @@ type fakeLeaseJournal struct {
 	markContextErr, deleteContextErr error
 }
 
+type gatedProtector struct {
+	registerCount                  int
+	registerStarted, registerAllow chan struct{}
+	unregisterStarted              chan struct{}
+	unregisterAllow                chan struct{}
+}
+
+func (p *gatedProtector) Begin(context.Context) (func(context.Context, []byte, []string, time.Time) error, func(context.Context, []byte) error, func(), error) {
+	return func(context.Context, []byte, []string, time.Time) error {
+		p.registerCount++
+		if p.registerCount == 2 && p.registerStarted != nil {
+			close(p.registerStarted)
+			<-p.registerAllow
+		}
+		return nil
+	}, func(context.Context, []byte) error { return nil }, func() {}, nil
+}
+
+func (p *gatedProtector) Unregister(context.Context, []byte) error {
+	if p.unregisterStarted != nil {
+		close(p.unregisterStarted)
+		<-p.unregisterAllow
+	}
+	return nil
+}
+
 func (f *fakeLeaseJournal) Store(_ context.Context, lease *Lease) error {
 	f.events = append(f.events, "store")
 	f.leases = append(f.leases, cloneLease(lease))
 	return f.storeErr
+}
+
+func (f *fakeLeaseJournal) Active(_ context.Context, lease *Lease) (bool, error) {
+	for _, stored := range f.leases {
+		if stored.Released || !equalBytes(stored.Read.ReadRef, lease.Read.ReadRef) {
+			continue
+		}
+		return equalBytes(stored.Wire, lease.Wire) &&
+			equalBytes(stored.AuthorizedClientSPKIHash, lease.AuthorizedClientSPKIHash), nil
+	}
+	return false, nil
 }
 
 func (f *fakeLeaseJournal) MarkReleased(ctx context.Context, readRef []byte) error {
@@ -757,6 +794,65 @@ func TestReleaseFailureRevokesLeaseAndRetainsRetryState(t *testing.T) {
 	require.False(t, ok)
 }
 
+func TestResolveDoesNotWaitForLeaseMutationIO(t *testing.T) {
+	now := time.Now()
+	first := testDurableLease(t, 1, uint64(now.Add(time.Minute).UnixMilli()))
+	second := testDurableLease(t, 2, uint64(now.Add(time.Minute).UnixMilli()))
+	protector := &gatedProtector{
+		registerStarted: make(chan struct{}), registerAllow: make(chan struct{}),
+		unregisterStarted: make(chan struct{}), unregisterAllow: make(chan struct{}),
+	}
+	defer closeChannelIfOpen(protector.registerAllow)
+	defer closeChannelIfOpen(protector.unregisterAllow)
+	manager := NewLeaseManager(2, protector)
+	require.NoError(t, manager.Acquire(context.Background(), []*Lease{first}))
+
+	acquireDone := make(chan error, 1)
+	go func() { acquireDone <- manager.Acquire(context.Background(), []*Lease{second}) }()
+	select {
+	case <-protector.registerStarted:
+	case <-time.After(time.Second):
+		t.Fatal("second registration did not start")
+	}
+	assertResolvePromptly(t, manager, first.Read.ReadRef)
+	close(protector.registerAllow)
+	require.NoError(t, <-acquireDone)
+
+	releaseDone := make(chan error, 1)
+	go func() { releaseDone <- manager.Release(context.Background(), first.Read.ReadRef) }()
+	select {
+	case <-protector.unregisterStarted:
+	case <-time.After(time.Second):
+		t.Fatal("unregistration did not start")
+	}
+	assertResolvePromptly(t, manager, second.Read.ReadRef)
+	close(protector.unregisterAllow)
+	require.NoError(t, <-releaseDone)
+}
+
+func closeChannelIfOpen(ch chan struct{}) {
+	select {
+	case <-ch:
+	default:
+		close(ch)
+	}
+}
+
+func assertResolvePromptly(t *testing.T, manager *LeaseManager, readRef []byte) {
+	t.Helper()
+	resolved := make(chan bool, 1)
+	go func() {
+		_, ok := manager.Resolve(readRef)
+		resolved <- ok
+	}()
+	select {
+	case ok := <-resolved:
+		require.True(t, ok)
+	case <-time.After(time.Second):
+		t.Fatal("resolve waited for unrelated lease mutation I/O")
+	}
+}
+
 func TestReleaseUsesIndependentBoundedCleanupContext(t *testing.T) {
 	c, err := Export(scanQuery())
 	require.NoError(t, err)
@@ -817,6 +913,9 @@ func TestPersistentLeaseReplayAndReleasedCrashRecovery(t *testing.T) {
 	require.Error(t, replayed.Release(ctx, tr.ReadRef))
 	_, ok = replayed.Resolve(tr.ReadRef)
 	require.False(t, ok)
+	_, ok = leases.Resolve(tr.ReadRef)
+	require.False(t, ok, "a manager with stale replay state must observe durable revocation")
+	require.Empty(t, leases.leases, "durably revoked stale state must not retain local capacity")
 
 	protector.failUnregister = false
 	afterCrash := NewPersistentLeaseManager(1, protector, journal)
@@ -1125,6 +1224,22 @@ func TestFileServiceLeaseJournalValidationAndReleaseMarker(t *testing.T) {
 	require.NoError(t, journal.Load(context.Background(), func(*Lease) error { return nil }))
 	_, err = fs.StatFile(context.Background(), journal.releasedPath(orphanRef))
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrFileNotFound))
+
+	lease := testDurableLease(t, 6, uint64(time.Now().Add(time.Minute).UnixMilli()))
+	require.NoError(t, journal.Store(context.Background(), lease))
+	active, err := journal.Active(context.Background(), lease)
+	require.NoError(t, err)
+	require.True(t, active)
+	stale := cloneLease(lease)
+	stale.AuthorizedClientSPKIHash[0] ^= 1
+	active, err = journal.Active(context.Background(), stale)
+	require.NoError(t, err)
+	require.False(t, active)
+	require.NoError(t, journal.MarkReleased(context.Background(), lease.Read.ReadRef))
+	active, err = journal.Active(context.Background(), lease)
+	require.NoError(t, err)
+	require.False(t, active)
+	require.NoError(t, journal.Delete(context.Background(), lease.Read.ReadRef))
 }
 
 func TestJournalBoundIncludesJSONBase64Expansion(t *testing.T) {
@@ -1149,7 +1264,11 @@ func TestFileServiceLeaseJournalRejectsCorruption(t *testing.T) {
 			journal, err := NewFileServiceLeaseJournal(fs, "sirius/read-leases")
 			require.NoError(t, err)
 			name := journal.activePath(bytes.Repeat([]byte{5}, 32))
-			require.NoError(t, fs.Write(ctx, fileservice.IOVector{FilePath: name, Entries: []fileservice.IOEntry{{Offset: 0, Size: int64(len(tc.data)), Data: tc.data}}}))
+			data := make([]byte, 0, journalHeaderSize+len(tc.data))
+			data = append(data, journalHeaderMagic...)
+			data = append(data, make([]byte, sha256.Size)...)
+			data = append(data, tc.data...)
+			require.NoError(t, fs.Write(ctx, fileservice.IOVector{FilePath: name, Entries: []fileservice.IOEntry{{Offset: 0, Size: int64(len(data)), Data: data}}}))
 			err = journal.Load(ctx, func(*Lease) error { return nil })
 			require.ErrorContains(t, err, tc.want)
 		})

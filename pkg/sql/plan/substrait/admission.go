@@ -29,13 +29,14 @@ import (
 )
 
 const (
-	ResolvePath            = "/internal/v1/sidecar/read/resolve"
-	MaxLeaseTTL            = 20 * time.Minute
-	MaxManifestBytes       = 64 << 20
-	rollbackCleanupTimeout = 30 * time.Second
-	resolveAuditTimeout    = 5 * time.Second
-	maxManifestSize        = MaxManifestBytes
-	maxCanonicalSchemaSize = 1 << 20
+	ResolvePath             = "/internal/v1/sidecar/read/resolve"
+	MaxLeaseTTL             = 20 * time.Minute
+	MaxManifestBytes        = 64 << 20
+	rollbackCleanupTimeout  = 30 * time.Second
+	resolveAuditTimeout     = 5 * time.Second
+	resolveAuthorityTimeout = 5 * time.Second
+	maxManifestSize         = MaxManifestBytes
+	maxCanonicalSchemaSize  = 1 << 20
 )
 
 // SnapshotFacts are produced by a snapshot-bound TAE relation lookup. A
@@ -64,11 +65,14 @@ type Protector interface {
 }
 
 // LeaseJournal is the durable boundary for resolver authority. Store must
-// make a complete lease durable before returning. MarkReleased must durably
-// prevent replay before GC protection is removed. Load must visit records one
-// at a time and must not retain a record after visit returns.
+// make a complete lease durable before returning. Active must check durable
+// revocation before authority, so a concurrent resolve either precedes a
+// release or observes it. MarkReleased must durably prevent resolution and
+// replay before GC protection is removed. Load must visit records one at a
+// time and must not retain a record after visit returns.
 type LeaseJournal interface {
 	Store(context.Context, *Lease) error
+	Active(context.Context, *Lease) (bool, error)
 	MarkReleased(context.Context, []byte) error
 	Delete(context.Context, []byte) error
 	Load(context.Context, func(*Lease) error) error
@@ -82,11 +86,25 @@ type Lease struct {
 	Released                        bool
 }
 
+type releasePhase uint8
+
+const (
+	releaseNone releasePhase = iota
+	releaseRevoking
+	releaseMarked
+	releaseUnprotected
+)
+
 // LeaseManager owns the single bounded lifetime from admission through
 // terminal release. It never evicts a live lease to make room.
 type LeaseManager struct {
-	mu        sync.RWMutex
-	leases    map[string]*Lease
+	// mutation serializes lease lifecycle changes without blocking Resolve on
+	// storage or protector I/O. mu protects only the published resolver state.
+	mutation sync.Mutex
+	mu       sync.RWMutex
+	leases   map[string]*Lease
+	releases map[string]releasePhase
+
 	protector Protector
 	journal   LeaseJournal
 	maximum   int
@@ -102,7 +120,11 @@ func NewPersistentLeaseManager(maximum int, protector Protector, journal LeaseJo
 	if maximum <= 0 {
 		maximum = 1
 	}
-	return &LeaseManager{leases: make(map[string]*Lease), protector: protector, journal: journal, maximum: maximum, now: time.Now, ready: journal == nil}
+	return &LeaseManager{
+		leases: make(map[string]*Lease), releases: make(map[string]releasePhase),
+		protector: protector, journal: journal, maximum: maximum, now: time.Now,
+		ready: journal == nil,
+	}
 }
 
 func (m *LeaseManager) Acquire(ctx context.Context, leases []*Lease) error {
@@ -115,6 +137,8 @@ func (m *LeaseManager) acquirePrepared(ctx context.Context, prepare func() ([]*L
 	if prepare == nil {
 		return moerr.NewInternalErrorNoCtx("substrait: missing lease preparation")
 	}
+	m.mutation.Lock()
+	defer m.mutation.Unlock()
 	m.mu.RLock()
 	ready, protector := m.ready, m.protector
 	m.mu.RUnlock()
@@ -151,21 +175,20 @@ func (m *LeaseManager) acquireProtected(
 	if len(leases) == 0 {
 		return moerr.NewInternalErrorNoCtx("substrait: empty lease acquisition")
 	}
-	m.mu.Lock()
+	if err := m.pruneExpired(ctx); err != nil {
+		return err
+	}
+	m.mu.RLock()
 	if !m.ready {
-		m.mu.Unlock()
+		m.mu.RUnlock()
 		return moerr.NewInternalErrorNoCtx("substrait: durable read leases have not been replayed")
 	}
 	if m.protector == nil || register == nil || rollback == nil {
-		m.mu.Unlock()
+		m.mu.RUnlock()
 		return moerr.NewInternalErrorNoCtx("substrait: read lease GC protection is not configured")
 	}
-	if err := m.pruneExpiredLocked(ctx); err != nil {
-		m.mu.Unlock()
-		return err
-	}
 	if len(m.leases)+len(leases) > m.maximum {
-		m.mu.Unlock()
+		m.mu.RUnlock()
 		return moerr.NewInternalErrorNoCtx("substrait: read lease capacity reached")
 	}
 	seen := make(map[string]struct{}, len(leases))
@@ -177,11 +200,12 @@ func (m *LeaseManager) acquireProtected(
 		}
 		_, duplicate := seen[key]
 		if validateLease(l, now, false) != nil || m.leases[key] != nil || duplicate {
-			m.mu.Unlock()
+			m.mu.RUnlock()
 			return moerr.NewInternalErrorNoCtx("substrait: invalid or duplicate read lease")
 		}
 		seen[key] = struct{}{}
 	}
+	m.mu.RUnlock()
 	stored := make([]*Lease, 0, len(leases))
 	for _, l := range leases {
 		if m.journal != nil {
@@ -190,7 +214,6 @@ func (m *LeaseManager) acquireProtected(
 				// ambiguous record in the durable revocation set.
 				stored = append(stored, l)
 				rollbackErr := m.rollbackAcquisition(ctx, rollback, stored, nil)
-				m.mu.Unlock()
 				return errors.Join(moerr.NewInternalErrorNoCtxf("substrait: persist read lease: %v", err), rollbackErr)
 			}
 		}
@@ -201,11 +224,11 @@ func (m *LeaseManager) acquireProtected(
 		err := register(ctx, l.Read.ReadRef, l.ObjectNames, time.UnixMilli(int64(l.Read.ExpiresAtUnixMS)))
 		if err != nil {
 			rollbackErr := m.rollbackAcquisition(ctx, rollback, stored, registered)
-			m.mu.Unlock()
 			return errors.Join(moerr.NewInternalErrorNoCtxf("substrait: protect read lease: %v", err), rollbackErr)
 		}
 		registered = append(registered, l)
 	}
+	m.mu.Lock()
 	for _, l := range leases {
 		m.leases[string(l.Read.ReadRef)] = cloneLease(l)
 	}
@@ -261,33 +284,73 @@ func (m *LeaseManager) rollbackAcquisition(
 }
 
 func (m *LeaseManager) Resolve(readRef []byte) (*Lease, bool) {
+	result, ok, _ := m.resolve(context.Background(), readRef)
+	return result, ok
+}
+
+func (m *LeaseManager) resolve(ctx context.Context, readRef []byte) (*Lease, bool, error) {
 	m.mu.RLock()
 	if !m.ready {
 		m.mu.RUnlock()
-		return nil, false
+		return nil, false, nil
 	}
-	l := m.leases[string(readRef)]
-	if l != nil && (l.Released || l.Read.ExpiresAtUnixMS <= uint64(m.now().UnixMilli())) {
+	key := string(readRef)
+	l := m.leases[key]
+	if l != nil && (l.Released || m.releases[key] != releaseNone || l.Read.ExpiresAtUnixMS <= uint64(m.now().UnixMilli())) {
 		l = nil
 	}
-	result := cloneLease(l)
+	journal := m.journal
 	m.mu.RUnlock()
-	return result, result != nil
+	// Published leases are immutable; copy the potentially large manifest
+	// after dropping the resolver state lock.
+	result := cloneLease(l)
+	if result == nil {
+		return nil, false, nil
+	}
+	if journal != nil {
+		if ctx == nil {
+			ctx = context.Background()
+		}
+		authorityCtx, cancel := context.WithTimeoutCause(
+			ctx,
+			resolveAuthorityTimeout,
+			moerr.NewInternalErrorNoCtx("substrait: durable read lease validation timed out"),
+		)
+		active, err := journal.Active(authorityCtx, result)
+		cancel()
+		if err != nil {
+			return nil, false, moerr.NewInternalErrorNoCtxf("substrait: validate durable read lease: %v", err)
+		}
+		if !active {
+			m.mu.Lock()
+			if m.leases[key] == l {
+				delete(m.leases, key)
+				delete(m.releases, key)
+			}
+			m.mu.Unlock()
+			return nil, false, nil
+		}
+	}
+	return result, true, nil
 }
 
 func (m *LeaseManager) Release(ctx context.Context, readRef []byte) error {
+	m.mutation.Lock()
+	defer m.mutation.Unlock()
 	cleanupCtx, cancel := leaseCleanupContext(ctx)
 	defer cancel()
-	m.mu.Lock()
-	defer m.mu.Unlock()
+	m.mu.RLock()
 	if !m.ready {
+		m.mu.RUnlock()
 		return moerr.NewInternalErrorNoCtx("substrait: durable read leases have not been replayed")
 	}
-	l := m.leases[string(readRef)]
+	key := string(readRef)
+	l := m.leases[key]
+	m.mu.RUnlock()
 	if l == nil {
 		return nil
 	}
-	if err := m.releaseLocked(cleanupCtx, l); err != nil {
+	if err := m.releaseLease(cleanupCtx, key); err != nil {
 		return moerr.NewInternalErrorNoCtxf("substrait: release read lease: %v", err)
 	}
 	return nil
@@ -304,38 +367,83 @@ func leaseCleanupContext(ctx context.Context) (context.Context, context.CancelFu
 	)
 }
 
-func (m *LeaseManager) pruneExpiredLocked(ctx context.Context) error {
+func (m *LeaseManager) pruneExpired(ctx context.Context) error {
 	now := uint64(m.now().UnixMilli())
-	for _, l := range m.leases {
+	m.mu.RLock()
+	expired := make([]string, 0)
+	for key, l := range m.leases {
 		if l.Read.ExpiresAtUnixMS <= now {
-			if err := m.releaseLocked(ctx, l); err != nil {
-				return moerr.NewInternalErrorNoCtxf("substrait: prune expired read lease: %v", err)
-			}
+			expired = append(expired, key)
+		}
+	}
+	m.mu.RUnlock()
+	for _, key := range expired {
+		if err := m.releaseLease(ctx, key); err != nil {
+			return moerr.NewInternalErrorNoCtxf("substrait: prune expired read lease: %v", err)
 		}
 	}
 	return nil
 }
 
-func (m *LeaseManager) releaseLocked(ctx context.Context, l *Lease) error {
-	if !l.Released {
+// releaseLease advances a retryable three-phase revocation. Resolver state is
+// hidden before I/O, durable revocation precedes unprotection, and journal
+// deletion is last. mutation must be held by the caller.
+func (m *LeaseManager) releaseLease(ctx context.Context, key string) error {
+	m.mu.Lock()
+	l := m.leases[key]
+	if l == nil {
+		delete(m.releases, key)
+		m.mu.Unlock()
+		return nil
+	}
+	phase := m.releases[key]
+	if phase == releaseNone {
+		phase = releaseRevoking
+		m.releases[key] = phase
+	}
+	readRef := append([]byte(nil), l.Read.ReadRef...)
+	m.mu.Unlock()
+
+	if phase == releaseRevoking {
 		if m.journal != nil {
-			if err := m.journal.MarkReleased(ctx, l.Read.ReadRef); err != nil {
+			if err := m.journal.MarkReleased(ctx, readRef); err != nil {
+				m.mu.Lock()
+				if m.releases[key] == releaseRevoking {
+					delete(m.releases, key)
+				}
+				m.mu.Unlock()
 				return err
 			}
 		}
-		l.Released = true
+		m.mu.Lock()
+		if m.leases[key] != nil {
+			m.releases[key] = releaseMarked
+		}
+		m.mu.Unlock()
+		phase = releaseMarked
 	}
-	if m.protector != nil {
-		if err := m.protector.Unregister(ctx, l.Read.ReadRef); err != nil {
+	if phase == releaseMarked {
+		if m.protector != nil {
+			if err := m.protector.Unregister(ctx, readRef); err != nil {
+				return err
+			}
+		}
+		m.mu.Lock()
+		if m.leases[key] != nil {
+			m.releases[key] = releaseUnprotected
+		}
+		m.mu.Unlock()
+		phase = releaseUnprotected
+	}
+	if phase == releaseUnprotected && m.journal != nil {
+		if err := m.journal.Delete(ctx, readRef); err != nil {
 			return err
 		}
 	}
-	if m.journal != nil {
-		if err := m.journal.Delete(ctx, l.Read.ReadRef); err != nil {
-			return err
-		}
-	}
-	delete(m.leases, string(l.Read.ReadRef))
+	m.mu.Lock()
+	delete(m.leases, key)
+	delete(m.releases, key)
+	m.mu.Unlock()
 	return nil
 }
 
@@ -345,11 +453,14 @@ func (m *LeaseManager) Replay(ctx context.Context) error {
 	if m.journal == nil {
 		return nil
 	}
-	m.mu.Lock()
-	defer m.mu.Unlock()
+	m.mutation.Lock()
+	defer m.mutation.Unlock()
+	m.mu.RLock()
 	if m.ready || len(m.leases) != 0 {
+		m.mu.RUnlock()
 		return moerr.NewInternalErrorNoCtx("substrait: cannot replay into a live lease manager")
 	}
+	m.mu.RUnlock()
 	var register func(context.Context, []byte, []string, time.Time) error
 	var rollback func(context.Context, []byte) error
 	var closeProtection func()
@@ -376,7 +487,7 @@ func (m *LeaseManager) Replay(ctx context.Context) error {
 			return replayErr
 		}
 		if l.Released || l.Read.ExpiresAtUnixMS <= now {
-			if err := m.releaseLocked(ctx, l); err != nil {
+			if err := m.cleanReplayLease(ctx, l); err != nil {
 				replayErr = moerr.NewInternalErrorNoCtxf("substrait: clean durable read lease: %v", err)
 				return replayErr
 			}
@@ -405,11 +516,29 @@ func (m *LeaseManager) Replay(ctx context.Context) error {
 			registered = append(registered, l)
 		}
 	}
+	m.mu.Lock()
 	for _, l := range live {
 		m.leases[string(l.Read.ReadRef)] = cloneLease(l)
 	}
 	m.ready = true
+	m.mu.Unlock()
 	return nil
+}
+
+// cleanReplayLease removes a terminal durable record that was never published
+// in this manager. Replay holds mutation, but never the resolver map lock.
+func (m *LeaseManager) cleanReplayLease(ctx context.Context, l *Lease) error {
+	if !l.Released {
+		if err := m.journal.MarkReleased(ctx, l.Read.ReadRef); err != nil {
+			return err
+		}
+	}
+	if m.protector != nil {
+		if err := m.protector.Unregister(ctx, l.Read.ReadRef); err != nil {
+			return err
+		}
+	}
+	return m.journal.Delete(ctx, l.Read.ReadRef)
 }
 
 func (m *LeaseManager) rollbackReplayProtections(
@@ -653,7 +782,11 @@ func ResolveHandler(leases *LeaseManager, now func() time.Time, auditor ResolveA
 			http.Error(w, "resolver unavailable", http.StatusServiceUnavailable)
 			return
 		}
-		lease, ok := leases.Resolve(tr.ReadRef)
+		lease, ok, resolveErr := leases.resolve(r.Context(), tr.ReadRef)
+		if resolveErr != nil {
+			http.Error(w, "resolver unavailable", http.StatusServiceUnavailable)
+			return
+		}
 		if !ok || !equalBytes(lease.AuthorizedClientSPKIHash, principalHash[:]) ||
 			lease.Read.AccountID != tr.AccountID || lease.Read.DatabaseID != tr.DatabaseID || !equalBytes(lease.Read.QueryID, tr.QueryID) ||
 			!equalBytes(lease.Read.SchemaDigest, tr.SchemaDigest) || !equalBytes(lease.Read.ManifestSHA256, tr.ManifestSHA256) ||

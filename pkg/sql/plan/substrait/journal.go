@@ -34,6 +34,11 @@ import (
 // journal also carries the canonical wire and the manifest's object names.
 const maxJournalRecordSize = 160 << 20
 
+const (
+	journalHeaderMagic = "MO-SUBSTRAIT-LEASE\x01"
+	journalHeaderSize  = len(journalHeaderMagic) + sha256.Size
+)
+
 // FileServiceLeaseJournal persists leases in the shared file service. Active
 // records and release markers are write-once objects, so a crash cannot expose
 // a partially overwritten authority record.
@@ -78,14 +83,45 @@ func (j *FileServiceLeaseJournal) Store(ctx context.Context, lease *Lease) error
 		return err
 	}
 	digest := sha256.Sum256(recordBytes)
-	b, err := json.Marshal(journalEnvelope{Record: record, SHA256: digest[:]})
+	payload, err := json.Marshal(journalEnvelope{Record: record, SHA256: digest[:]})
 	if err != nil {
 		return err
 	}
-	if len(b) > maxJournalRecordSize {
+	if len(payload)+journalHeaderSize > maxJournalRecordSize {
 		return moerr.NewInternalErrorNoCtx("substrait: lease journal record is too large")
 	}
+	authority := leaseAuthorityDigest(lease)
+	b := make([]byte, 0, journalHeaderSize+len(payload))
+	b = append(b, journalHeaderMagic...)
+	b = append(b, authority[:]...)
+	b = append(b, payload...)
 	return j.writeOnce(ctx, j.activePath(lease.Read.ReadRef), b)
+}
+
+// Active checks the release marker first and the matching record header
+// second. That ordering gives Resolve a durable linearization point against
+// MarkReleased even when multiple managers replay the same journal.
+func (j *FileServiceLeaseJournal) Active(ctx context.Context, lease *Lease) (bool, error) {
+	if lease == nil || lease.Read == nil || len(lease.Read.ReadRef) != 32 {
+		return false, moerr.NewInternalErrorNoCtx("substrait: invalid active read lease")
+	}
+	if _, err := j.fs.StatFile(ctx, j.releasedPath(lease.Read.ReadRef)); err == nil {
+		return false, nil
+	} else if !moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
+		return false, err
+	}
+	header, err := j.readHeader(ctx, j.activePath(lease.Read.ReadRef))
+	if moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	if string(header[:len(journalHeaderMagic)]) != journalHeaderMagic {
+		return false, moerr.NewInternalErrorNoCtx("substrait: invalid lease journal header")
+	}
+	want := leaseAuthorityDigest(lease)
+	return equalBytes(header[len(journalHeaderMagic):], want[:]), nil
 }
 
 func (j *FileServiceLeaseJournal) MarkReleased(ctx context.Context, readRef []byte) error {
@@ -144,8 +180,12 @@ func (j *FileServiceLeaseJournal) Load(ctx context.Context, visit func(*Lease) e
 		if err != nil {
 			return err
 		}
+		if len(b) <= journalHeaderSize || string(b[:len(journalHeaderMagic)]) != journalHeaderMagic {
+			return moerr.NewInternalErrorNoCtxf("substrait: invalid lease journal header %q", name)
+		}
+		authority := b[len(journalHeaderMagic):journalHeaderSize]
 		var envelope journalEnvelope
-		decoder := json.NewDecoder(bytes.NewReader(b))
+		decoder := json.NewDecoder(bytes.NewReader(b[journalHeaderSize:]))
 		decoder.DisallowUnknownFields()
 		if err = decoder.Decode(&envelope); err != nil {
 			return moerr.NewInternalErrorNoCtxf("substrait: decode lease journal record %q: %v", name, err)
@@ -166,12 +206,18 @@ func (j *FileServiceLeaseJournal) Load(ctx context.Context, visit func(*Lease) e
 		if err != nil || !equalBytes(tr.ReadRef, readRef) {
 			return moerr.NewInternalErrorNoCtxf("substrait: lease journal identity mismatch %q", name)
 		}
+		lease := &Lease{Read: tr, Wire: record.Wire, Manifest: record.Manifest, CanonicalSchema: record.CanonicalSchema, AuthorizedClientSPKIHash: record.AuthorizedClientSPKIHash, ObjectNames: record.ObjectNames}
+		wantAuthority := leaseAuthorityDigest(lease)
+		if !equalBytes(authority, wantAuthority[:]) {
+			return moerr.NewInternalErrorNoCtxf("substrait: lease journal authority mismatch %q", name)
+		}
 		_, statErr := j.fs.StatFile(ctx, j.releasedPath(readRef))
 		released := statErr == nil
 		if statErr != nil && !moerr.IsMoErrCode(statErr, moerr.ErrFileNotFound) {
 			return statErr
 		}
-		if err := visit(&Lease{Read: tr, Wire: record.Wire, Manifest: record.Manifest, CanonicalSchema: record.CanonicalSchema, AuthorizedClientSPKIHash: record.AuthorizedClientSPKIHash, ObjectNames: record.ObjectNames, Released: released}); err != nil {
+		lease.Released = released
+		if err := visit(lease); err != nil {
 			return err
 		}
 	}
@@ -196,6 +242,16 @@ func (j *FileServiceLeaseJournal) Load(ctx context.Context, visit func(*Lease) e
 	return nil
 }
 
+func leaseAuthorityDigest(lease *Lease) [sha256.Size]byte {
+	h := sha256.New()
+	_, _ = h.Write([]byte("matrixone/substrait/read-lease-authority/v1\x00"))
+	_, _ = h.Write(lease.Wire)
+	_, _ = h.Write(lease.AuthorizedClientSPKIHash)
+	var result [sha256.Size]byte
+	copy(result[:], h.Sum(nil))
+	return result
+}
+
 func (j *FileServiceLeaseJournal) writeOnce(ctx context.Context, name string, data []byte) error {
 	return j.fs.Write(ctx, fileservice.IOVector{FilePath: name, Entries: []fileservice.IOEntry{{Offset: 0, Size: int64(len(data)), Data: data}}})
 }
@@ -208,6 +264,18 @@ func (j *FileServiceLeaseJournal) read(ctx context.Context, name string) ([]byte
 	defer vector.Release()
 	if len(vector.Entries) != 1 || len(vector.Entries[0].Data) == 0 || len(vector.Entries[0].Data) > maxJournalRecordSize {
 		return nil, moerr.NewInternalErrorNoCtx("substrait: invalid lease journal record size")
+	}
+	return append([]byte(nil), vector.Entries[0].Data...), nil
+}
+
+func (j *FileServiceLeaseJournal) readHeader(ctx context.Context, name string) ([]byte, error) {
+	vector := fileservice.IOVector{FilePath: name, Entries: []fileservice.IOEntry{{Offset: 0, Size: int64(journalHeaderSize)}}}
+	if err := j.fs.Read(ctx, &vector); err != nil {
+		return nil, err
+	}
+	defer vector.Release()
+	if len(vector.Entries) != 1 || len(vector.Entries[0].Data) != journalHeaderSize {
+		return nil, moerr.NewInternalErrorNoCtx("substrait: invalid lease journal header size")
 	}
 	return append([]byte(nil), vector.Entries[0].Data...), nil
 }
