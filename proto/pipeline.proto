@@ -35,6 +35,7 @@ enum Method {
   StopSending = 4;
   PipelineStreamFinish = 5;
   PipelineStreamFinishAck = 6;
+  PipelineBatchAck = 7;
 }
 
 // StreamTeardownMode negotiates whether a completed logical pipeline stream can
@@ -66,6 +67,12 @@ message Message {
   string debugMsg = 10;
   StreamTeardownMode requested_teardown_mode = 11;
   StreamTeardownMode accepted_teardown_mode = 12;
+  uint32 requested_batch_credit_count = 13;
+  uint64 requested_batch_credit_bytes = 14;
+  uint32 accepted_batch_credit_count = 15;
+  uint64 accepted_batch_credit_bytes = 16;
+  uint64 batch_sequence = 17;
+  uint64 batch_ack_sequence = 18;
 }
 
 message Connector {
@@ -133,6 +140,8 @@ message Group {
   repeated uint32 PartialResultTypes = 9;
   repeated bool grouping_flag = 10;
   int64 spill_mem = 11;
+  // Positions in exprs used for physical hash/equality. Empty means all exprs.
+  repeated int32 group_by_hash_key = 12;
 }
 
 message Insert {
@@ -656,6 +665,11 @@ message ProcessInfo {
   // Statement-level INSERT IGNORE semantics used by casts in remote pipelines.
   // Absent in messages from older CNs, which safely decodes as false.
   bool statement_runtime_ignore = 13;
+  // Snapshot against which this execution generation's plan was bound. It is
+  // immutable for the generation even when RC lock handling advances the
+  // transaction snapshot. Absent on older senders, receivers fall back to the
+  // transaction snapshot for rolling-upgrade compatibility.
+  timestamp.Timestamp plan_snapshot_ts = 14;
 }
 
 message SessionInfo {

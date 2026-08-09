@@ -40,6 +40,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
+	"github.com/matrixorigin/matrixone/pkg/pb/partition"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_clone"
@@ -687,20 +688,20 @@ func convertDBEOBToNoSuchTable(ctx context.Context, e error, dbName, tblName str
 	return e
 }
 
-type alterCopyAutoIncrementCleanup struct {
+type alterAutoIncrementResetCleanup struct {
 	c        *Compile
 	tableIDs []uint64
 	tracked  map[uint64]struct{}
 }
 
-func newAlterCopyAutoIncrementCleanup(c *Compile) *alterCopyAutoIncrementCleanup {
-	return &alterCopyAutoIncrementCleanup{
+func newAlterAutoIncrementResetCleanup(c *Compile) *alterAutoIncrementResetCleanup {
+	return &alterAutoIncrementResetCleanup{
 		c:       c,
 		tracked: make(map[uint64]struct{}),
 	}
 }
 
-func (cleanup *alterCopyAutoIncrementCleanup) track(tableID uint64) {
+func (cleanup *alterAutoIncrementResetCleanup) track(tableID uint64) {
 	if _, ok := cleanup.tracked[tableID]; ok {
 		return
 	}
@@ -708,7 +709,7 @@ func (cleanup *alterCopyAutoIncrementCleanup) track(tableID uint64) {
 	cleanup.tableIDs = append(cleanup.tableIDs, tableID)
 }
 
-func (cleanup *alterCopyAutoIncrementCleanup) finish(statementErr *error) {
+func (cleanup *alterAutoIncrementResetCleanup) finish(statementErr *error) {
 	if *statementErr == nil && cleanup.c.proc.Ctx != nil {
 		*statementErr = cleanup.c.proc.Ctx.Err()
 	}
@@ -736,7 +737,7 @@ func (cleanup *alterCopyAutoIncrementCleanup) finish(statementErr *error) {
 	if _, ok := (*statementErr).(*moerr.Error); ok {
 		cleanup.c.proc.Error(
 			ctx,
-			"alter.table.copy.discard.auto.increment.reset",
+			"alter.table.discard.auto.increment.reset",
 			zap.Error(cleanupErr),
 		)
 		return
@@ -1034,9 +1035,12 @@ func (c *Compile) precheckAlterCopyPkDedup(dbName, tblName string, qry *plan.Alt
 }
 
 func (s *Scope) AlterTableCopy(c *Compile) (err error) {
-	cleanup := newAlterCopyAutoIncrementCleanup(c)
+	cleanup := newAlterAutoIncrementResetCleanup(c)
 	defer cleanup.finish(&err)
+	return s.alterTableCopy(c, cleanup)
+}
 
+func (s *Scope) alterTableCopy(c *Compile, cleanup *alterAutoIncrementResetCleanup) error {
 	qry := s.Plan.GetDdl().GetAlterTable()
 	dbName := qry.Database
 
@@ -1218,7 +1222,10 @@ func (s *Scope) AlterTableCopy(c *Compile) (err error) {
 	// 3. create temporary replica table which doesn't have foreign key constraints
 	// Get logicalId from tableDef and pass it when creating the temporary table
 	oldLogicalId := qry.GetTableDef().GetLogicalId()
-	createTmpOpts := executor.StatementOption{}
+	// The temporary relation is not externally visible. Its parent backrefs are
+	// reconciled after the original relation is replaced, so avoid materializing
+	// an intermediate parent->temporary-table relationship here.
+	createTmpOpts := executor.StatementOption{}.WithIgnoreForeignKey()
 
 	if oldLogicalId != 0 {
 		createTmpOpts = createTmpOpts.WithKeepLogicalId(oldLogicalId)
@@ -1306,6 +1313,7 @@ func (s *Scope) AlterTableCopy(c *Compile) (err error) {
 		qry.TableDef,
 		qry.CopyTableDef,
 		newRel,
+		hasAlterAutoIncrementReset(qry.Actions),
 		cleanup,
 	); err != nil {
 		return err
@@ -1546,38 +1554,33 @@ func (s *Scope) AlterTableCopy(c *Compile) (err error) {
 			return err
 		}
 
-		// update foreign key child table references to the current table
-		for _, tblId := range qry.CopyTableDef.RefChildTbls {
-			err = updateTableForeignKeyColId(
-				c, qry.ChangeTblColIdMap, tblId,
-				originRel.GetTableID(c.proc.Ctx),
-				newRel.GetTableID(c.proc.Ctx),
-			)
-			if err != nil {
-				c.proc.Error(c.proc.Ctx, "update foreign key child table references to the current table for alter table",
-					zap.String("origin tableName", qry.GetTableDef().Name),
-					zap.String("copy table name", qry.CopyTableDef.Name),
-					zap.Error(err))
-				return err
-			}
+		if err = reconcileAlterCopyChildForeignKeyReferences(
+			c,
+			qry.ChangeTblColIdMap,
+			qry.CopyTableDef.RefChildTbls,
+			originRel.GetTableID(c.proc.Ctx),
+			newRel.GetTableID(c.proc.Ctx),
+		); err != nil {
+			c.proc.Error(c.proc.Ctx, "update foreign key child table references to the current table for alter table",
+				zap.String("origin tableName", qry.GetTableDef().Name),
+				zap.String("copy table name", qry.CopyTableDef.Name),
+				zap.Error(err))
+			return err
 		}
 	}
 
 	if len(qry.TableDef.Fkeys) > 0 {
-		for _, fkey := range qry.CopyTableDef.Fkeys {
-			err = notifyParentTableFkTableIdChange(
-				c,
-				fkey,
-				originRel.GetTableID(c.proc.Ctx),
-				newRel.GetTableID(c.proc.Ctx),
-			)
-			if err != nil {
-				c.proc.Error(c.proc.Ctx, "notify parent table foreign key TableId Change for alter table",
-					zap.String("origin tableName", qry.GetTableDef().Name),
-					zap.String("copy table name", qry.CopyTableDef.Name),
-					zap.Error(err))
-				return err
-			}
+		if err = reconcileAlterCopyParentForeignKeyReferences(
+			c,
+			qry.CopyTableDef.Fkeys,
+			originRel.GetTableID(c.proc.Ctx),
+			newRel.GetTableID(c.proc.Ctx),
+		); err != nil {
+			c.proc.Error(c.proc.Ctx, "notify parent table foreign key TableId Change for alter table",
+				zap.String("origin tableName", qry.GetTableDef().Name),
+				zap.String("copy table name", qry.CopyTableDef.Name),
+				zap.Error(err))
+			return err
 		}
 	}
 
@@ -1596,6 +1599,15 @@ func (s *Scope) AlterTableCopy(c *Compile) (err error) {
 	return nil
 }
 
+func hasAlterAutoIncrementReset(actions []*plan.AlterTable_Action) bool {
+	for _, action := range actions {
+		if action != nil && action.GetAlterAutoIncrement() != nil {
+			return true
+		}
+	}
+	return false
+}
+
 // reconcileAlterCopyAutoIncrement publishes allocator state for the temporary
 // table only after copied rows are visible in the ALTER transaction. Retained
 // source columns are matched by stable planner column ID, never by position or
@@ -1605,13 +1617,14 @@ func (c *Compile) reconcileAlterCopyAutoIncrement(
 	srcDef *plan.TableDef,
 	copyDef *plan.TableDef,
 	newRel engine.Relation,
-	cleanup *alterCopyAutoIncrementCleanup,
+	explicitReset bool,
+	cleanup *alterAutoIncrementResetCleanup,
 ) error {
 	if err := c.proc.Ctx.Err(); err != nil {
 		return err
 	}
-	autoCols := incrservice.GetUserAutoColumnFromDef(copyDef)
-	if len(autoCols) == 0 {
+	plannedAutoCols := incrservice.GetUserAutoColumnFromDef(copyDef)
+	if len(plannedAutoCols) == 0 {
 		return nil
 	}
 	if !engine.TxnSupportsAutoIncrEpochFence(c.proc.GetTxnOperator()) {
@@ -1620,10 +1633,43 @@ func (c *Compile) reconcileAlterCopyAutoIncrement(
 			"AUTO_INCREMENT allocator reset requires epoch fencing on every TN service",
 		)
 	}
+	// The planner copy definition can retain hidden source columns that are not
+	// emitted into the temporary CREATE SQL. Use the created relation definition
+	// so ColIndex matches mo_increment_columns for SetOffset.
+	createdDef := newRel.GetTableDef(c.proc.Ctx)
+	if createdDef == nil {
+		return moerr.NewInternalError(c.proc.Ctx, "missing ALTER COPY table definition")
+	}
+	autoCols := incrservice.GetUserAutoColumnFromDef(createdDef)
+	plannedNames := make(map[string]struct{}, len(plannedAutoCols))
+	for _, col := range plannedAutoCols {
+		plannedNames[strings.ToLower(col.ColName)] = struct{}{}
+	}
+	for _, col := range autoCols {
+		name := strings.ToLower(col.ColName)
+		if _, ok := plannedNames[name]; !ok {
+			return moerr.NewInternalErrorf(
+				c.proc.Ctx,
+				"unexpected AUTO_INCREMENT column %q on ALTER COPY table",
+				col.ColName,
+			)
+		}
+		delete(plannedNames, name)
+	}
+	if len(plannedNames) != 0 {
+		return moerr.NewInternalError(c.proc.Ctx, "missing AUTO_INCREMENT column on ALTER COPY table")
+	}
 
 	sourceOffsets := make(map[string]uint64)
 	sourceNames := mapCloneAutoIncrColumns(srcDef, copyDef, true)
-	if len(sourceNames) > 0 {
+	retainedNames := make(map[string]struct{}, len(sourceNames))
+	for _, name := range sourceNames {
+		retainedNames[name] = struct{}{}
+	}
+	// Ordinary COPY preserves the source allocator high-water mark because old
+	// CN caches can still own reserved values. An explicit AUTO_INCREMENT reset
+	// is epoch-fenced, so its contract intentionally replaces those reservations.
+	if !explicitReset && len(sourceNames) > 0 {
 		sql := fmt.Sprintf(
 			"select col_index, offset from mo_catalog.mo_increment_columns where table_id = %d",
 			srcDef.TblId,
@@ -1654,6 +1700,11 @@ func (c *Compile) reconcileAlterCopyAutoIncrement(
 
 	tableID := newRel.GetTableID(c.proc.Ctx)
 	svc := incrservice.GetAutoIncrementService(c.proc.GetService())
+	epochReqs := make([]*api.AlterTableReq, 0, len(autoCols))
+	var (
+		freshColumnOffset         uint64
+		freshColumnOffsetResolved bool
+	)
 	for _, col := range autoCols {
 		if err := c.proc.Ctx.Err(); err != nil {
 			return err
@@ -1686,10 +1737,46 @@ func (c *Compile) reconcileAlterCopyAutoIncrement(
 		}()
 
 		name := strings.ToLower(col.ColName)
-		effectiveOffset := max(copyDef.AutoIncrOffset, copiedMax, sourceOffsets[name])
+		_, retained := retainedNames[name]
+		// Internal ALTER COPY SQL may execute without the client session variables.
+		// Reapply a non-default session offset to an empty newly added column from
+		// the outer compile instead of assuming the temporary CREATE inherited it.
+		if !explicitReset && !retained && copyDef.AutoIncrOffset == 0 && copiedMax == 0 {
+			if !freshColumnOffsetResolved {
+				value, err := resolveVariableOrDefault(
+					c.proc,
+					"auto_increment_offset",
+					true,
+					false,
+				)
+				if err != nil {
+					return err
+				}
+				offset, ok := value.(int64)
+				if !ok {
+					return moerr.NewInternalErrorf(
+						c.proc.Ctx,
+						"invalid auto_increment_offset type %T",
+						value,
+					)
+				}
+				if offset > 1 {
+					freshColumnOffset = uint64(offset - 1)
+				}
+				freshColumnOffsetResolved = true
+			}
+			if freshColumnOffset == 0 {
+				continue
+			}
+			copiedMax = freshColumnOffset
+		}
+		effectiveOffset := max(copyDef.AutoIncrOffset, copiedMax)
+		if !explicitReset {
+			effectiveOffset = max(effectiveOffset, sourceOffsets[name])
+		}
 		if err := incrservice.ValidateAutoColumnOffset(
 			c.proc.Ctx,
-			types.T(copyDef.Cols[col.ColIndex].Typ.Id),
+			types.T(createdDef.Cols[col.ColIndex].Typ.Id),
 			effectiveOffset,
 		); err != nil {
 			return err
@@ -1697,6 +1784,7 @@ func (c *Compile) reconcileAlterCopyAutoIncrement(
 		if err := svc.SetOffset(
 			c.proc.Ctx,
 			tableID,
+			col.ColIndex,
 			col.ColName,
 			effectiveOffset,
 			c.proc.GetTxnOperator(),
@@ -1704,8 +1792,27 @@ func (c *Compile) reconcileAlterCopyAutoIncrement(
 			return err
 		}
 		cleanup.track(tableID)
+		epochReqs = append(epochReqs, api.NewUpdateAutoIncrementReq(
+			0,
+			tableID,
+			effectiveOffset,
+			0,
+		))
 	}
-	return nil
+	if err := c.proc.Ctx.Err(); err != nil {
+		return err
+	}
+	if len(epochReqs) == 0 {
+		return nil
+	}
+	// SetOffset publishes the next allocator generation. Publish the matching
+	// catalog generation on the COPY replacement before it becomes visible, so
+	// the next implicit insert does not observe a stale table definition.
+	databaseID := newRel.GetDBID(c.proc.Ctx)
+	for _, req := range epochReqs {
+		req.DbId = databaseID
+	}
+	return newRel.AlterTable(c.proc.Ctx, nil, epochReqs)
 }
 
 func (s *Scope) AlterTable(c *Compile) (err error) {
@@ -1714,6 +1821,8 @@ func (s *Scope) AlterTable(c *Compile) (err error) {
 	}
 	s.ScopeAnalyzer.Start()
 	defer s.ScopeAnalyzer.Stop()
+	cleanup := newAlterAutoIncrementResetCleanup(c)
+	defer cleanup.finish(&err)
 
 	qry := s.Plan.GetDdl().GetAlterTable()
 
@@ -1725,16 +1834,16 @@ func (s *Scope) AlterTable(c *Compile) (err error) {
 	ps := c.proc.GetPartitionService()
 	if !ps.Enabled() ||
 		!features.IsPartitioned(qry.TableDef.FeatureFlag) {
-		return s.doAlterTable(c)
+		return s.doAlterTable(c, cleanup)
 	}
 
 	if qry.AlterPartition == nil {
 		switch qry.AlgorithmType {
 		case plan.AlterTable_COPY:
-			return s.doAlterTable(c)
+			return s.doAlterTable(c, cleanup)
 		default:
 			// alter primary table
-			if err := s.doAlterTable(c); err != nil {
+			if err := s.doAlterTable(c, cleanup); err != nil {
 				return err
 			}
 
@@ -1771,26 +1880,12 @@ func (s *Scope) AlterTable(c *Compile) (err error) {
 				qry.RawSQL,
 				c.getLower(),
 			)
-			stmt := st.(*tree.AlterTable)
-			table := stmt.Table
-			stmt.PartitionOption = nil
-			for _, p := range metadata.Partitions {
-				stmt.Table = tree.NewTableName(
-					tree.Identifier(p.PartitionTableName),
-					table.ObjectNamePrefix,
-					table.AtTsExpr,
-				)
-				sql := tree.StringWithOpts(
-					stmt,
-					dialect.MYSQL,
-					tree.WithQuoteIdentifier(),
-					tree.WithSingleQuoteString(),
-				)
-				if err := c.runSql(sql); err != nil {
-					return err
-				}
-			}
-			return nil
+			return c.alterPartitionTables(
+				st.(*tree.AlterTable),
+				metadata.Partitions,
+				hasAlterAutoIncrementReset(qry.Actions),
+				cleanup,
+			)
 		}
 	}
 
@@ -1868,16 +1963,45 @@ func (s *Scope) AlterTable(c *Compile) (err error) {
 	return moerr.NewInternalError(c.proc.Ctx, "unsupported alter partition type")
 }
 
-func (s *Scope) doAlterTable(c *Compile) error {
+func (c *Compile) alterPartitionTables(
+	stmt *tree.AlterTable,
+	partitions []partition.Partition,
+	trackAutoIncrementReset bool,
+	cleanup *alterAutoIncrementResetCleanup,
+) error {
+	table := stmt.Table
+	stmt.PartitionOption = nil
+	for _, p := range partitions {
+		stmt.Table = tree.NewTableName(
+			tree.Identifier(p.PartitionTableName),
+			table.ObjectNamePrefix,
+			table.AtTsExpr,
+		)
+		sql := tree.StringWithOpts(
+			stmt,
+			dialect.MYSQL,
+			tree.WithQuoteIdentifier(),
+			tree.WithSingleQuoteString(),
+		)
+		if err := c.runSql(sql); err != nil {
+			return err
+		}
+		if trackAutoIncrementReset {
+			cleanup.track(p.PartitionID)
+		}
+	}
+	return nil
+}
+
+func (s *Scope) doAlterTable(c *Compile, cleanup *alterAutoIncrementResetCleanup) (err error) {
 	qry := s.Plan.GetDdl().GetAlterTable()
 
-	var err error
 	if qry.AlgorithmType == plan.AlterTable_COPY {
 		// COPY ALTER transfers mo_foreign_keys around the source-table drop,
 		// so its catalog statements are executed inside AlterTableCopy.
-		return s.AlterTableCopy(c)
+		return s.alterTableCopy(c, cleanup)
 	} else {
-		err = s.AlterTableInplace(c)
+		err = s.alterTableInplace(c, cleanup)
 	}
 	if err != nil {
 		return err
@@ -1924,45 +2048,91 @@ func (s *Scope) RenameTable(c *Compile) (err error) {
 	return nil
 }
 
-// updateTableForeignKeyColId update foreign key colid of child table references
-func updateTableForeignKeyColId(
+func reconcileAlterCopyChildForeignKeyReferences(
 	c *Compile,
 	changeColDefMap map[uint64]*plan.ColDef,
-	childTblId uint64,
+	childTblIDs []uint64,
 	oldParentTblId uint64,
 	newParentTblId uint64,
 ) error {
-	var childRel engine.Relation
-	var err error
-	if childTblId == 0 {
-		//fk self refer does not update
-		return nil
-	} else {
-		_, _, childRel, err = c.e.GetRelationById(c.proc.Ctx, c.proc.GetTxnOperator(), childTblId)
-		if err != nil {
+	for _, childTblID := range uniqueNonZeroTableIDs(childTblIDs) {
+		if err := updateTableForeignKeyColId(
+			c,
+			changeColDefMap,
+			childTblID,
+			oldParentTblId,
+			newParentTblId,
+		); err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+// updateTableForeignKeyColId updates one child relation only when it still
+// references the replaced parent relation.
+func updateTableForeignKeyColId(
+	c *Compile,
+	changeColDefMap map[uint64]*plan.ColDef,
+	childTblID uint64,
+	oldParentTblId uint64,
+	newParentTblId uint64,
+) error {
+	_, _, childRel, err := c.e.GetRelationById(c.proc.Ctx, c.proc.GetTxnOperator(), childTblID)
+	if err != nil {
+		return err
 	}
 	oldCt, err := GetConstraintDef(c.proc.Ctx, childRel)
 	if err != nil {
 		return err
 	}
-	for _, ct := range oldCt.Cts {
+	changed, err := rewriteForeignKeyReferencesForAlterCopy(
+		c.proc.Ctx,
+		oldCt,
+		changeColDefMap,
+		oldParentTblId,
+		newParentTblId,
+	)
+	if err != nil {
+		return err
+	}
+	if !changed {
+		return nil
+	}
+	return childRel.UpdateConstraint(c.proc.Ctx, oldCt)
+}
+
+func rewriteForeignKeyReferencesForAlterCopy(
+	ctx context.Context,
+	constraintDef *engine.ConstraintDef,
+	changeColDefMap map[uint64]*plan.ColDef,
+	oldParentTblID uint64,
+	newParentTblID uint64,
+) (bool, error) {
+	changed := false
+	for _, ct := range constraintDef.Cts {
 		if def, ok1 := ct.(*engine.ForeignKeyDef); ok1 {
-			for i := 0; i < len(def.Fkeys); i++ {
-				fkey := def.Fkeys[i]
-				if fkey.ForeignTbl == oldParentTblId {
-					for j := 0; j < len(fkey.ForeignCols); j++ {
-						if newColDef, ok2 := changeColDefMap[fkey.ForeignCols[j]]; ok2 {
-							fkey.ForeignCols[j] = newColDef.ColId
-						}
+			for _, fkey := range def.Fkeys {
+				if fkey == nil {
+					return false, moerr.NewInternalError(ctx, "nil foreign key definition in ALTER COPY constraint")
+				}
+				if fkey.ForeignTbl != oldParentTblID {
+					continue
+				}
+				for j, foreignColID := range fkey.ForeignCols {
+					if newColDef, ok := changeColDefMap[foreignColID]; ok && foreignColID != newColDef.ColId {
+						fkey.ForeignCols[j] = newColDef.ColId
+						changed = true
 					}
-					fkey.ForeignTbl = newParentTblId
+				}
+				if fkey.ForeignTbl != newParentTblID {
+					fkey.ForeignTbl = newParentTblID
+					changed = true
 				}
 			}
 		}
 	}
-	return childRel.UpdateConstraint(c.proc.Ctx, oldCt)
+	return changed, nil
 }
 
 func updateNewTableColId(c *Compile, copyRel engine.Relation, changeColDefMap map[uint64]*plan.ColDef) error {
@@ -1993,29 +2163,37 @@ func restoreNewTableRefChildTbls(c *Compile, copyRel engine.Relation, refChildTb
 	return copyRel.UpdateConstraint(c.proc.Ctx, oldCt)
 }
 
-// notifyParentTableFkTableIdChange Notify the parent table of changes in the tableid of the foreign key table
-func reconcileParentRefChildTableID(
-	constraintDef *engine.ConstraintDef,
-	oldTableID uint64,
-	newTableID uint64,
-) {
-	reconcileRefChildTableID(constraintDef, oldTableID, newTableID)
-}
-
-func notifyParentTableFkTableIdChange(
+func reconcileAlterCopyParentForeignKeyReferences(
 	c *Compile,
-	fkey *plan.ForeignKeyDef,
+	fkeys []*plan.ForeignKeyDef,
 	oldTableID uint64,
 	newTableID uint64,
 ) error {
-	foreignTblId := fkey.ForeignTbl
-	if foreignTblId == 0 {
-		// Self-referencing foreign keys use 0 as the parent-table sentinel.
-		// The ALTER copy is already carrying that constraint on newRel, and
-		// there is no separate parent relation to update.
-		return nil
+	for _, fkey := range fkeys {
+		if fkey == nil {
+			return moerr.NewInternalError(c.proc.Ctx, "nil foreign key definition in ALTER COPY")
+		}
 	}
-	_, _, fatherRelation, err := c.e.GetRelationById(c.proc.Ctx, c.proc.GetTxnOperator(), foreignTblId)
+	for _, parentTableID := range foreignKeyParentTableIDs(fkeys) {
+		if err := updateParentTableRefChildTableIDForAlterCopy(
+			c,
+			parentTableID,
+			oldTableID,
+			newTableID,
+		); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func updateParentTableRefChildTableIDForAlterCopy(
+	c *Compile,
+	parentTableID uint64,
+	oldTableID uint64,
+	newTableID uint64,
+) error {
+	_, _, fatherRelation, err := c.e.GetRelationById(c.proc.Ctx, c.proc.GetTxnOperator(), parentTableID)
 	if err != nil {
 		return err
 	}
@@ -2023,8 +2201,32 @@ func notifyParentTableFkTableIdChange(
 	if err != nil {
 		return err
 	}
-	reconcileParentRefChildTableID(oldCt, oldTableID, newTableID)
+	reconcileRefChildTableID(oldCt, oldTableID, newTableID)
 	return fatherRelation.UpdateConstraint(c.proc.Ctx, oldCt)
+}
+
+func uniqueNonZeroTableIDs(tableIDs []uint64) []uint64 {
+	unique := make([]uint64, 0, len(tableIDs))
+	seen := make(map[uint64]struct{}, len(tableIDs))
+	for _, tableID := range tableIDs {
+		if tableID == 0 {
+			continue
+		}
+		if _, exists := seen[tableID]; exists {
+			continue
+		}
+		seen[tableID] = struct{}{}
+		unique = append(unique, tableID)
+	}
+	return unique
+}
+
+func foreignKeyParentTableIDs(fkeys []*plan.ForeignKeyDef) []uint64 {
+	parentTableIDs := make([]uint64, 0, len(fkeys))
+	for _, fkey := range fkeys {
+		parentTableIDs = append(parentTableIDs, fkey.ForeignTbl)
+	}
+	return uniqueNonZeroTableIDs(parentTableIDs)
 }
 
 func cloneUnaffectedIndexes(

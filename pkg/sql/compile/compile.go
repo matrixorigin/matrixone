@@ -213,6 +213,8 @@ func (c *Compile) Reset(proc *process.Process, startAt time.Time, fill func(*bat
 	proc.ResetQueryContext()
 	proc.ResetCloneTxnOperator()
 	c.proc = proc
+	c.reusePlanSnapshot = false
+	c.capturePlanSnapshot()
 
 	c.fill = fill
 	c.sql = sql
@@ -268,6 +270,24 @@ func (c *Compile) Reset(proc *process.Process, startAt time.Time, fill func(*bat
 		c.recordQuerySchedulingTrace(c.queryPlacement)
 	}
 	return nil
+}
+
+// capturePlanSnapshot starts a new plan-execution generation. Definition
+// fences must be compared with this immutable timestamp, not with a mutable RC
+// transaction snapshot that an earlier lock may have advanced.
+func (c *Compile) capturePlanSnapshot() {
+	txnOp := c.proc.GetTxnOperator()
+	if txnOp == nil {
+		c.proc.ClearPlanSnapshotTS()
+		return
+	}
+	c.proc.SetPlanSnapshotTS(txnOp.Txn().SnapshotTS)
+}
+
+func (c *Compile) bindPlanSnapshotForCompile() {
+	if !c.reusePlanSnapshot {
+		c.capturePlanSnapshot()
+	}
 }
 
 func UpdateScopeTxnOffset(scope *Scope, txnOffset int) {
@@ -331,6 +351,7 @@ func (c *Compile) clear() {
 	}
 	c.proc = nil
 	c.preservePrepareParamsOnClose = false
+	c.reusePlanSnapshot = false
 
 	c.cnList = c.cnList[:0]
 	c.queryPlacement = schedule.QueryDecision{}
@@ -5518,6 +5539,13 @@ func (c *Compile) compileMultiUpdate(node *plan.Node, ss []*Scope) ([]*Scope, er
 
 func (c *Compile) compilePreInsertUk(node *plan.Node, ss []*Scope) []*Scope {
 	currentFirstFlag := c.anal.isFirst
+	if node.PreInsertUkCtx.GetInsertIgnoreMultiDedup() &&
+		(len(ss) > 1 || ss[0].NodeInfo.Mcpu > 1) {
+		// Multi-key INSERT IGNORE arbitration is row-global: partitioning by one
+		// key cannot observe conflicts on the other keys.  Merge candidate streams
+		// before the stateful arbiter; ordinary index PRE_INSERT_UK stays parallel.
+		ss = []*Scope{c.newMergeScope(ss)}
+	}
 	for i := range ss {
 		preInsertUkArg := constructPreInsertUk(node)
 		preInsertUkArg.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)

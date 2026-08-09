@@ -101,16 +101,15 @@ func Sort(desc, nullsLast, hasNull bool, os []int64, vec *vector.Vector) {
 			for cursor < sz && !nulls.Contains(vec.GetNulls(), uint64(os[cursor])) {
 				cursor++
 			}
-			if cursor == sz {
-				return
-			}
-			for i := cursor; i < sz; i++ {
-				if !nulls.Contains(vec.GetNulls(), uint64(os[i])) {
-					os[cursor], os[i] = os[i], os[cursor]
-					cursor++
+			if cursor < sz {
+				for i := cursor; i < sz; i++ {
+					if !nulls.Contains(vec.GetNulls(), uint64(os[i])) {
+						os[cursor], os[i] = os[i], os[cursor]
+						cursor++
+					}
 				}
+				os = os[:cursor]
 			}
-			os = os[:cursor]
 		} else { // move null rows to the head
 			var cursor int
 			for cursor < sz && nulls.Contains(vec.GetNulls(), uint64(os[cursor])) {

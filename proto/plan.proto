@@ -370,6 +370,16 @@ message ForeignKeyDef {
     NO_ACTION = 4;
   }
 
+  // Whether a reference action was written in the FK declaration.  This is
+  // persisted separately from RefAction because an omitted action and an
+  // explicit RESTRICT have the same execution behavior but distinct MySQL
+  // metadata/SHOW CREATE representations.
+  enum RefActionOrigin {
+    ACTION_ORIGIN_EXPLICIT = 0;
+    ACTION_ORIGIN_DEFAULT = 1;
+    ACTION_ORIGIN_LEGACY_AMBIGUOUS = 2;
+  }
+
   // letter case: lower
   string name = 1;
   repeated uint64 cols = 2;
@@ -379,6 +389,10 @@ message ForeignKeyDef {
   repeated uint64 foreign_cols = 4;
   RefAction on_delete = 5;
   RefAction on_update = 6;
+  // Exact PRIMARY/UNIQUE parent key selected when this FK was bound.
+  string referenced_index_name = 7;
+  RefActionOrigin on_delete_origin = 8;
+  RefActionOrigin on_update_origin = 9;
 }
 
 message CheckDef {
@@ -1001,6 +1015,12 @@ message Node {
   // FUZZY_FILTER only. Keeping this separate from runtime-filter metadata
   // makes build-side selection idempotent across repeated optimizer passes.
   FuzzyBuildSide fuzzy_build_side = 77;
+
+  // AGG only: positions in group_by that form the physical hash/equality key.
+  // An empty list preserves the legacy meaning that every group_by expression
+  // participates in hashing. A non-empty list must be a strict subset proven
+  // by the optimizer to determine all remaining group_by expressions.
+  repeated int32 group_by_hash_key = 78;
 }
 
 message SnapshotExtraInfo {
@@ -1155,6 +1175,16 @@ message PreInsertUkCtx {
   int32 pk_column = 2;
   Type pk_type = 3 [(gogoproto.nullable) = false];
   Type uk_type = 4 [(gogoproto.nullable) = false];
+  // INSERT IGNORE with multiple independent unique constraints cannot be
+  // implemented by chaining per-key dedup operators: a row rejected by one
+  // constraint must not reserve another key.  In this mode key_columns and
+  // conflict_columns are parallel arrays.  conflict_columns mark conflicts
+  // with rows that existed before the statement; key_columns are arbitrated
+  // together, in input order, against keys accepted earlier in the statement.
+  bool insert_ignore_multi_dedup = 5;
+  repeated int32 key_columns = 6;
+  repeated int32 conflict_columns = 7;
+  int32 output_columns = 8;
 }
 
 message PreInsertCtx {
@@ -1685,6 +1715,7 @@ message AlterTable {
       AlterReplaceDef alter_replace_def = 11;
       AlterRenameColumn alter_rename_column = 12;
       AlterTableAlterAutoUpdate alter_auto_update = 13;
+      AlterTableAutoIncrement alter_auto_increment = 14;
     }
   }
   string database = 1;
@@ -1949,4 +1980,8 @@ enum AlterPartitionType {
 
 message RankOption {
   string mode = 1; // "pre", "post", "force", or "auto"
+}
+
+message AlterTableAutoIncrement {
+  uint64 new_offset = 1;
 }

@@ -16,6 +16,7 @@ package hashmap
 
 import (
 	"io"
+	"math"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -23,6 +24,49 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/stretchr/testify/require"
 )
+
+func TestIntHashMapRejectsJoinNaN(t *testing.T) {
+	mp := mpool.MustNewZero()
+	m, err := NewIntHashMap(false, mp)
+	require.NoError(t, err)
+	require.NoError(t, m.SetRejectNaN())
+	defer func() {
+		m.Free()
+		require.Zero(t, mp.CurrNB())
+	}()
+
+	keys := vector.NewVec(types.T_float64.ToType())
+	defer keys.Free(mp)
+	require.NoError(t, vector.AppendFixed(keys, math.NaN(), false, mp))
+	require.NoError(t, vector.AppendFixed(keys, float64(7), false, mp))
+
+	values, zValues, err := m.NewIterator().Insert(0, 2, []*vector.Vector{keys})
+	require.NoError(t, err)
+	require.Equal(t, []uint64{0, 1}, values)
+	require.Equal(t, []int64{1, 1}, zValues)
+
+	encoded, err := m.MarshalBinary()
+	require.NoError(t, err)
+	restored := &IntHashMap{}
+	require.NoError(t, restored.UnmarshalBinary(encoded, mp))
+	defer restored.Free()
+	require.True(t, restored.rejectNaN)
+
+	values, zValues, err = restored.NewIterator().Find(0, 2, []*vector.Vector{keys})
+	require.NoError(t, err)
+	require.Equal(t, []uint64{0, 1}, values)
+	require.Equal(t, []int64{1, 1}, zValues)
+
+	constNaN, err := vector.NewConstFixed(types.T_float64.ToType(), math.NaN(), 2, mp)
+	require.NoError(t, err)
+	defer constNaN.Free(mp)
+	values, zValues, err = restored.NewIterator().Find(
+		0, 2, []*vector.Vector{constNaN},
+	)
+	require.NoError(t, err)
+	require.Equal(t, []uint64{0, 0}, values)
+	require.Equal(t, []int64{1, 1}, zValues)
+}
 
 func TestIntHashMapProbeGroupingDoesNotMatchRawKey(t *testing.T) {
 	mp := mpool.MustNewZero()

@@ -19,6 +19,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"math"
 	"math/rand"
 	"os"
 	"strconv"
@@ -1667,9 +1668,12 @@ func setMysqlColumnTypeInfo(ctx context.Context, typ types.Type, col *MysqlColum
 	setCharacter(col)
 	if typ.Oid == types.T_binary || typ.Oid == types.T_varbinary {
 		col.SetCharset(charsetBinary)
+		col.SetFlag(col.Flag() | uint16(defines.BINARY_FLAG))
 	}
 	return nil
 }
+
+const mysqlDecimalNotSpecified = 0x1f
 
 func setMysqlColumnTypeMetadata(col *MysqlColumn, typ types.Type) {
 	if typ.IsDecimal() {
@@ -1678,10 +1682,42 @@ func setMysqlColumnTypeMetadata(col *MysqlColumn, typ types.Type) {
 	} else if typ.Oid == types.T_year {
 		// Keep YEAR metadata consistent with regular query result columns.
 		col.SetLength(uint32(types.MaxVarcharLen))
+	} else if typ.Oid == types.T_char || typ.Oid == types.T_varchar {
+		// Protocol::ColumnDefinition41 expresses column_length in bytes. Character
+		// string widths are declared in characters and use utf8mb3 metadata.
+		if typ.Oid == types.T_varchar && typ.Width == 0 {
+			// Synthesized VARCHAR result columns historically use zero as an
+			// unspecified width and must keep their unbounded metadata.
+			col.SetLength(math.MaxUint32)
+		} else {
+			col.SetLength(mysqlStringColumnLength(typ.Width, charsetVarcharMaxBytesPerCharacter))
+		}
+	} else if typ.Oid == types.T_binary || typ.Oid == types.T_varbinary {
+		// Binary string widths are already declared in bytes.
+		col.SetLength(mysqlStringColumnLength(typ.Width, 1))
 	} else {
 		setColLength(col, typ.Width)
 	}
+	// MySQL uses 0x1f (DECIMAL_NOT_SPECIFIED) for FLOAT and DOUBLE
+	// without an explicit display scale. Clients use this metadata when
+	// converting binary floating-point results to text.
+	if (typ.Oid == types.T_float32 || typ.Oid == types.T_float64) &&
+		(typ.Scale < 0 || typ.Width == 0 && typ.Scale == 0) {
+		col.SetDecimal(mysqlDecimalNotSpecified)
+		return
+	}
 	col.SetDecimal(typ.Scale)
+}
+
+func mysqlStringColumnLength(width int32, maxBytesPerCharacter uint32) uint32 {
+	if width < 0 {
+		return math.MaxUint32
+	}
+	length := uint64(width) * uint64(maxBytesPerCharacter)
+	if length > math.MaxUint32 {
+		return math.MaxUint32
+	}
+	return uint32(length)
 }
 
 // errCodeRollbackWholeTxn denotes that the error code
@@ -2125,8 +2161,6 @@ func colDef2MysqlColumn(ctx context.Context, col *plan.ColDef) (*MysqlColumn, er
 		return nil, err
 	}
 	setColFlag(c)
-
-	c.SetDecimal(col.Typ.Scale)
 
 	// For TIMESTAMPADD function compatibility with MySQL:
 	// GetResultColumnsFromPlan sets the return type based on input type and unit:

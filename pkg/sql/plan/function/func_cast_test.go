@@ -136,6 +136,29 @@ func TestCastEnumToNumericTypes(t *testing.T) {
 	}
 }
 
+func TestSignedIntegerToBit64PreservesBitPattern(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	bit64 := types.New(types.T_bit, 64, 0)
+
+	for _, tc := range []struct {
+		name  string
+		input FunctionTestInput
+	}{
+		{"int8", NewFunctionTestInput(types.T_int8.ToType(), []int8{-1}, nil)},
+		{"int16", NewFunctionTestInput(types.T_int16.ToType(), []int16{-1}, nil)},
+		{"int32", NewFunctionTestInput(types.T_int32.ToType(), []int32{-1}, nil)},
+		{"int64", NewFunctionTestInput(types.T_int64.ToType(), []int64{-1}, nil)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tcc := NewFunctionTestCase(proc,
+				[]FunctionTestInput{tc.input, NewFunctionTestInput(bit64, []uint64{}, nil)},
+				NewFunctionTestResult(bit64, false, []uint64{math.MaxUint64}, nil), NewCast)
+			succeed, info := tcc.Run()
+			require.True(t, succeed, info)
+		})
+	}
+}
+
 func TestInsertIgnoreCastsSpecialValues(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	proc.SetStmtProfile(&process.StmtProfile{})

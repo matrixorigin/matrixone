@@ -397,13 +397,30 @@ func checkInsertBatch(userBatch *containers.Batch, bat *batch.Batch, t *testing.
 		return
 	}
 	length := bat.RowCount()
-	assert.Equal(t, len(bat.Vecs), len(userBatch.Vecs)+1) // user rows + committs
+	require.GreaterOrEqual(t, len(bat.Vecs), len(userBatch.Vecs)+1)
 	for i, vec := range userBatch.Vecs {
 		assert.Equal(t, bat.Vecs[i].GetType().Oid, vec.GetType().Oid)
 		assert.Equal(t, bat.Vecs[i].Length(), length)
 	}
-	assert.Equal(t, bat.Vecs[len(userBatch.Vecs)].GetType().Oid, types.T_TS)
-	assert.Equal(t, bat.Vecs[len(userBatch.Vecs)].Length(), length)
+	commitPos := -1
+	for pos, attr := range bat.Attrs {
+		if attr == objectio.DefaultCommitTS_Attr {
+			commitPos = pos
+			break
+		}
+	}
+	if commitPos == -1 {
+		for pos := len(bat.Vecs) - 1; pos >= len(userBatch.Vecs); pos-- {
+			if bat.Vecs[pos].GetType().Oid == types.T_TS {
+				commitPos = pos
+				break
+			}
+		}
+	}
+	require.NotEqual(t, -1, commitPos)
+	require.Less(t, commitPos, len(bat.Vecs))
+	assert.Equal(t, types.T_TS, bat.Vecs[commitPos].GetType().Oid)
+	assert.Equal(t, length, bat.Vecs[commitPos].Length())
 }
 
 func changesHandleTestRowCount() int {
@@ -1818,6 +1835,10 @@ func TestISCPExecutor1(t *testing.T) {
 	require.NoError(t, err)
 	err = mock_mo_foreign_keys(disttaeEngine, ctxWithTimeout)
 	require.NoError(t, err)
+	result, err := execSql(disttaeEngine, ctxWithTimeout,
+		"SELECT referenced_index_name, on_delete_origin, on_update_origin FROM mo_catalog.mo_foreign_keys")
+	require.NoError(t, err)
+	result.Close()
 	err = mock_mo_intra_system_change_propagation_log(disttaeEngine, ctxWithTimeout)
 	require.NoError(t, err)
 	t.Log(taeHandler.GetDB().Catalog.SimplePPString(3))

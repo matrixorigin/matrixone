@@ -18,6 +18,7 @@ import (
 	"context"
 	"encoding/hex"
 	"fmt"
+	"math"
 	"sync"
 	"time"
 
@@ -328,6 +329,7 @@ func (s *service) Reload(
 func (s *service) SetOffset(
 	ctx context.Context,
 	tableID uint64,
+	colIndex int,
 	colName string,
 	offset uint64,
 	txnOp client.TxnOperator,
@@ -336,14 +338,15 @@ func (s *service) SetOffset(
 		return moerr.NewNotSupported(ctx, "transaction operator cannot enforce AUTO_INCREMENT epochs")
 	}
 	var (
-		txnKey           string
-		ownedCreate      bool
-		createCache      incrTableCache
-		createEpoch      uint32
-		createGeneration uint64
-		createResetKey   privateResetKey
-		staleCreateCache incrTableCache
-		trackGeneration  bool
+		txnKey                string
+		ownedCreate           bool
+		createCache           incrTableCache
+		createEpoch           uint32
+		createGeneration      uint64
+		createResetKey        privateResetKey
+		originalCreateCache   incrTableCache
+		supersededCreateCache incrTableCache
+		trackGeneration       bool
 	)
 
 	s.mu.Lock()
@@ -357,8 +360,7 @@ func (s *service) SetOffset(
 		ownedCreate = s.ownsCreateLocked(txnKey, tableID)
 		if ownedCreate {
 			createResetKey = privateResetKey{txnID: txnKey, tableID: tableID}
-			staleCreateCache = s.mu.createdResets[createResetKey]
-			delete(s.mu.createdResets, createResetKey)
+			originalCreateCache = s.mu.createdResets[createResetKey]
 			createCache = s.mu.tables[tableID]
 			if createCache != nil {
 				createEpoch = createCache.epoch()
@@ -373,13 +375,13 @@ func (s *service) SetOffset(
 	if trackGeneration {
 		defer s.finishGenerationBuild(tableID)
 	}
-	if staleCreateCache != nil {
-		staleCreateCache.retire()
-	}
 
 	if ownedCreate {
 		if createCache == nil {
 			return moerr.NewTxnNeedRetryWithDefChanged(ctx)
+		}
+		if createEpoch == math.MaxUint32 {
+			return moerr.NewInternalErrorNoCtx("AUTO_INCREMENT epoch exhausted")
 		}
 	} else {
 		if err := s.Reload(ctx, tableID); err != nil {
@@ -390,7 +392,7 @@ func (s *service) SetOffset(
 	// ALTER TABLE AUTO_INCREMENT explicitly resets the next value. The caller
 	// has already checked table data and holds the DDL lock, so bypass the
 	// store-level monotonic guard that protects normal pre-allocation updates.
-	if err := s.allocator.forceSetOffset(ctx, tableID, colName, offset, txnOp); err != nil {
+	if err := s.allocator.forceSetOffset(ctx, tableID, colIndex, colName, offset, txnOp); err != nil {
 		return err
 	}
 	if txnOp == nil {
@@ -413,7 +415,7 @@ func (s *service) SetOffset(
 			ctx,
 			s.sid,
 			tableID,
-			createEpoch,
+			createEpoch+1,
 			cols,
 			s.cfg,
 			s.allocator,
@@ -434,8 +436,15 @@ func (s *service) SetOffset(
 			return moerr.NewTxnNeedRetryWithDefChanged(ctx)
 		}
 		s.mu.tables[tableID] = replacement
-		s.mu.createdResets[createResetKey] = createCache
+		if originalCreateCache == nil {
+			s.mu.createdResets[createResetKey] = createCache
+		} else {
+			supersededCreateCache = createCache
+		}
 		s.mu.Unlock()
+		if supersededCreateCache != nil {
+			supersededCreateCache.retire()
+		}
 		return nil
 	}
 

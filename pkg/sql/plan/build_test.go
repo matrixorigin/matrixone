@@ -896,6 +896,19 @@ func TestInsertSelectProjectedSetUsesStoredBitmap(t *testing.T) {
 	require.True(t, planHasPlainUint64ColRef(logicPlan))
 }
 
+func TestInsertSelectSetTargetRejectsUnknownSourceColumn(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	addSetBitmapDestinationForTest(mock)
+	mock.ctxt.tables["set_bitmap_destination"].Cols[1].Typ.Enumvalues = "a,b"
+
+	_, err := runOneStmt(
+		mock,
+		t,
+		"insert into set_bitmap_destination(id, bitmap) select n_nationkey, missing from nation",
+	)
+	require.ErrorContains(t, err, "column missing does not exist")
+}
+
 func addSetBitmapDestinationForTest(mock *MockOptimizer) {
 	const tableName = "set_bitmap_destination"
 	idType := plan.Type{Id: int32(types.T_int32), NotNullable: true}
@@ -2222,6 +2235,58 @@ func TestInsertIgnoreIntoInternalIndexTableRemainsUnsupported(t *testing.T) {
 		"insert ignore into `__mo_index_secondary_meta` (`__mo_index_key`, `__mo_index_val`) "+
 			"values ('version', '0')")
 	require.ErrorContains(t, err, "insert into vector/text index table")
+}
+
+func TestInsertIgnoreWithMultipleUniqueConstraintsUsesCoordinatedDedup(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	logicPlan, err := runOneStmt(mock, t,
+		"INSERT IGNORE INTO dept VALUES (1, 'Sales', 'NY'), (1, 'Marketing', 'SF')")
+	require.NoError(t, err)
+
+	coordinated := 0
+	legacyIgnoreDedups := 0
+	for _, node := range logicPlan.GetQuery().Nodes {
+		if node.NodeType == plan.Node_PRE_INSERT_UK &&
+			node.PreInsertUkCtx.GetInsertIgnoreMultiDedup() {
+			coordinated++
+			require.Len(t, node.PreInsertUkCtx.KeyColumns, 2)
+			require.Len(t, node.PreInsertUkCtx.ConflictColumns, 2)
+			require.Equal(t, node.PreInsertUkCtx.OutputColumns, node.PreInsertUkCtx.KeyColumns[0])
+			for i := range node.PreInsertUkCtx.KeyColumns {
+				require.Equal(t, node.PreInsertUkCtx.KeyColumns[i]+1,
+					node.PreInsertUkCtx.ConflictColumns[i])
+			}
+		}
+		if node.NodeType == plan.Node_JOIN && node.JoinType == plan.Node_DEDUP &&
+			node.OnDuplicateAction == plan.Node_IGNORE {
+			legacyIgnoreDedups++
+		}
+	}
+	require.Equal(t, 1, coordinated)
+	require.Zero(t, legacyIgnoreDedups,
+		"independent per-key IGNORE joins would discard fallback rows before all constraints are known")
+}
+
+func TestInsertIgnoreSingleUniqueConstraintKeepsExistingDedupPath(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	logicPlan, err := runOneStmt(mock, t,
+		"INSERT IGNORE INTO fake_pk_t VALUES (1, 'x'), (1, 'y')")
+	require.NoError(t, err)
+
+	coordinated := 0
+	legacyIgnoreDedups := 0
+	for _, node := range logicPlan.GetQuery().Nodes {
+		if node.NodeType == plan.Node_PRE_INSERT_UK &&
+			node.PreInsertUkCtx.GetInsertIgnoreMultiDedup() {
+			coordinated++
+		}
+		if node.NodeType == plan.Node_JOIN && node.JoinType == plan.Node_DEDUP &&
+			node.OnDuplicateAction == plan.Node_IGNORE {
+			legacyIgnoreDedups++
+		}
+	}
+	require.Zero(t, coordinated)
+	require.Equal(t, 1, legacyIgnoreDedups)
 }
 
 func TestUpdate(t *testing.T) {

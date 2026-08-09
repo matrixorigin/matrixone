@@ -2940,7 +2940,11 @@ func getChangedTableList(
 		if err != nil {
 			return err
 		}
-		resp = ret.Data.([]any)[0].(*cmd_util.GetChangedTableListResp)
+		response, err := ctl.GetFirstTNResponse(ctx, ret)
+		if err != nil {
+			return err
+		}
+		resp = response.(*cmd_util.GetChangedTableListResp)
 	}
 
 	//if resp.Newest == nil {

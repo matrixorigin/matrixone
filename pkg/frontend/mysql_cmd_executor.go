@@ -916,10 +916,54 @@ func doSetVar(
 	sql string,
 	preparedExpression bool,
 ) error {
+	if preparedExpression && len(sv.Assignments) > 1 {
+		for _, assign := range sv.Assignments {
+			if assign.System || assign.SetNames {
+				return moerr.NewNotSupported(execCtx.reqCtx,
+					"prepared multi-assignment SET supports user variables only")
+			}
+		}
+	}
+
 	var err error = nil
 	var ok bool
 	var userVarIsBin bool
 	var userVarRuntimeType types.T
+	type evaluatedAssignment struct {
+		assign             *tree.VarAssignmentExpr
+		value              interface{}
+		userVarIsBin       bool
+		userVarRuntimeType types.T
+	}
+	evaluateAssignment := func(assignmentIndex int, assign *tree.VarAssignmentExpr) (evaluatedAssignment, error) {
+		isBin := false
+		var value interface{}
+		var runtimeType types.T
+		var evalErr error
+		if preparedPlanExpr := preparedSetPlanExpr(execCtx, assignmentIndex); preparedExpression &&
+			preparedPlanExpr != nil && !planExprContainsSubquery(preparedPlanExpr) {
+			value, runtimeType, evalErr = getPreparedPlanExprValue(
+				ses, execCtx, preparedPlanExpr, &isBin)
+		} else {
+			value, runtimeType, evalErr = getExprValueWithPrepareMode(
+				assign.Value, ses, execCtx, preparedExpression, &isBin)
+		}
+		if evalErr != nil {
+			return evaluatedAssignment{}, evalErr
+		}
+
+		if systemVar, exists := gSysVarsDefs[assign.Name]; exists {
+			if isDefault, isBool := value.(bool); isBool && isDefault {
+				value = systemVar.Default
+			}
+		}
+		return evaluatedAssignment{
+			assign:             assign,
+			value:              value,
+			userVarIsBin:       isBin,
+			userVarRuntimeType: runtimeType,
+		}, nil
+	}
 	setVarFunc := func(system, global bool, name string, value interface{}, sql string) error {
 		var oldValueRaw interface{}
 		if system {
@@ -964,31 +1008,15 @@ func doSetVar(
 		return nil
 	}
 
-	for assignmentIndex, assign := range sv.Assignments {
+	applyAssignment := func(item evaluatedAssignment) error {
+		assign := item.assign
 		name := assign.Name
-		var value interface{}
-		userVarIsBin = false
-
-		if preparedPlanExpr := preparedSetPlanExpr(execCtx, assignmentIndex); preparedExpression &&
-			preparedPlanExpr != nil && !planExprContainsSubquery(preparedPlanExpr) {
-			value, userVarRuntimeType, err = getPreparedPlanExprValue(
-				ses, execCtx, preparedPlanExpr, &userVarIsBin)
-		} else {
-			value, userVarRuntimeType, err = getExprValueWithPrepareMode(
-				assign.Value, ses, execCtx, preparedExpression, &userVarIsBin)
-		}
-		if err != nil {
-			return err
-		}
-
-		if systemVar, ok := gSysVarsDefs[name]; ok {
-			if isDefault, ok := value.(bool); ok && isDefault {
-				value = systemVar.Default
-			}
-		}
+		value := item.value
+		userVarIsBin = item.userVarIsBin
+		userVarRuntimeType = item.userVarRuntimeType
 
 		//TODO : fix SET NAMES after parser is ready
-		if name == "names" {
+		if assign.SetNames {
 			//replaced into three system variable:
 			//character_set_client, character_set_connection, and character_set_results
 			replacedBy := []string{
@@ -1000,7 +1028,7 @@ func doSetVar(
 					return err
 				}
 			}
-		} else if name == "clear_privilege_cache" {
+		} else if assign.System && name == "clear_privilege_cache" {
 			//if it is global variable, it does nothing.
 			if !assign.Global {
 				//if the value is 'on or off', just invalidate the privilege cache
@@ -1020,7 +1048,7 @@ func doSetVar(
 					return err
 				}
 			}
-		} else if name == "enable_privilege_cache" {
+		} else if assign.System && name == "enable_privilege_cache" {
 			ok, err = valueIsBoolTrue(value)
 			if err != nil {
 				return err
@@ -1037,25 +1065,25 @@ func doSetVar(
 			if err != nil {
 				return err
 			}
-		} else if name == "optimizer_hints" {
+		} else if assign.System && name == "optimizer_hints" {
 			err = setVarFunc(assign.System, assign.Global, name, value, sql)
 			if err != nil {
 				return err
 			}
 			runtime.ServiceRuntime(ses.service).SetGlobalVariables("optimizer_hints", value)
-		} else if name == "runtime_filter_limit_in" {
+		} else if assign.System && name == "runtime_filter_limit_in" {
 			err = setVarFunc(assign.System, assign.Global, name, value, sql)
 			if err != nil {
 				return err
 			}
 			runtime.ServiceRuntime(ses.service).SetGlobalVariables("runtime_filter_limit_in", value)
-		} else if name == "runtime_filter_limit_bloom_filter" {
+		} else if assign.System && name == "runtime_filter_limit_bloom_filter" {
 			err = setVarFunc(assign.System, assign.Global, name, value, sql)
 			if err != nil {
 				return err
 			}
 			runtime.ServiceRuntime(ses.service).SetGlobalVariables("runtime_filter_limit_bloom_filter", value)
-		} else if name == "disable_agg_statement" {
+		} else if assign.System && name == "disable_agg_statement" {
 			err = setVarFunc(assign.System, assign.Global, name, value, sql)
 			if err != nil {
 				return err
@@ -1068,8 +1096,69 @@ func doSetVar(
 				return err
 			}
 		}
+		return err
 	}
-	return err
+
+	if preparedExpression && len(sv.Assignments) > 1 {
+		type userDefinedVarSnapshot struct {
+			value  *UserDefinedVar
+			exists bool
+		}
+		original := make(map[string]userDefinedVarSnapshot, len(sv.Assignments))
+		ses.mu.Lock()
+		for _, assign := range sv.Assignments {
+			name := strings.ToLower(assign.Name)
+			if _, captured := original[name]; captured {
+				continue
+			}
+			value, exists := ses.userDefinedVars[name]
+			if value != nil {
+				copied := *value
+				value = &copied
+			}
+			original[name] = userDefinedVarSnapshot{value: value, exists: exists}
+		}
+		ses.mu.Unlock()
+
+		completed := false
+		defer func() {
+			if completed {
+				return
+			}
+			ses.mu.Lock()
+			defer ses.mu.Unlock()
+			for name, snapshot := range original {
+				if snapshot.exists {
+					ses.userDefinedVars[name] = snapshot.value
+				} else {
+					delete(ses.userDefinedVars, name)
+				}
+			}
+		}()
+
+		for assignmentIndex, assign := range sv.Assignments {
+			item, evalErr := evaluateAssignment(assignmentIndex, assign)
+			if evalErr != nil {
+				return evalErr
+			}
+			if err = applyAssignment(item); err != nil {
+				return err
+			}
+		}
+		completed = true
+		return nil
+	}
+
+	for assignmentIndex, assign := range sv.Assignments {
+		item, evalErr := evaluateAssignment(assignmentIndex, assign)
+		if evalErr != nil {
+			return evalErr
+		}
+		if err = applyAssignment(item); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func planExprContainsSubquery(expr *plan.Expr) bool {
@@ -3389,9 +3478,8 @@ var GetComputationWrapper = func(execCtx *ExecCtx, db string, user string, eng e
 			if err != nil {
 				return nil, err
 			}
-			// COM_STMT_PREPARE rewrites the statement before wrapping it in
-			// PREPARE ... FROM. The wrapper SQL no longer starts with the hint,
-			// so use the policy captured on UserInput for its single nested stmt.
+			// Protocol callers may explicitly restore a remap captured with an
+			// already prepared statement whose current SQL text has no hint.
 			if len(execCtx.input.remapDb) > 0 && len(statementRemaps) == 1 {
 				statementRemaps[0] = execCtx.input.remapDb
 			}
@@ -5136,7 +5224,8 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 		ses.SetCmd(COM_STMT_PREPARE)
 		sql = commonutil.UnsafeBytesToString(req.GetData().([]byte))
 		var preparedRemapDb map[string]string
-		// Inject rewrite rules hint before prepare wrapping (only if enabled)
+		// Materialize rewrite rules on the protocol payload before it enters the
+		// prepareable_stmt grammar. The resulting AST consumes the hint once.
 		if ses.rewriteEnabled.Load() {
 			var rewriteErr error
 			sql, rewriteErr = rewriteSQL(execCtx.reqCtx, ses, sql)
@@ -5150,10 +5239,12 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 		}
 		ses.addSqlCount(1)
 
-		// rewrite to "Prepare stmt_name from 'xxx'"
+		// Keep the protocol acceptance boundary in prepareable_stmt. EXPLAIN is
+		// admitted there explicitly; unsupported and empty payloads fail parsing
+		// before planning.
 		newLastStmtID := ses.GenNewStmtId()
 		newStmtName := getPrepareStmtName(newLastStmtID)
-		sql = fmt.Sprintf("prepare %s from %s", newStmtName, sql)
+		sql = fmt.Sprintf("prepare %s from %s", quotePrepareStmtName(newStmtName), sql)
 		ses.Debug(execCtx.reqCtx, "query trace", logutil.QueryField(sql))
 
 		savedRowCount := ses.GetLastAffectedRows()

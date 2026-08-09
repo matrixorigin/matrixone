@@ -478,6 +478,9 @@ var (
 			refer_column_id BIGINT UNSIGNED not null default 0,
 			on_delete varchar(128) not null,
 			on_update varchar(128) not null,
+			referenced_index_name varchar(5000) not null default '',
+			on_delete_origin varchar(64) not null default 'ACTION_ORIGIN_EXPLICIT',
+			on_update_origin varchar(64) not null default 'ACTION_ORIGIN_EXPLICIT',
 	
 			primary key(
 				constraint_name,

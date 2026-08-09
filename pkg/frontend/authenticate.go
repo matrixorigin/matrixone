@@ -1537,13 +1537,6 @@ const (
 					and rp.privilege_id in (%s)
 					and rp.privilege_level = "%s";`
 
-	getUserRolesExpectPublicRoleFormat = `select role.role_id, role.role_name 
-				from mo_catalog.mo_role role, mo_catalog.mo_user_grant mg 
-				where role.role_id = mg.role_id 
-					and role.role_id != %d  
-					and mg.user_id = %d 
-					order by role.created_time asc limit 1;`
-
 	checkUdfArgs = `select args,function_id,body from mo_catalog.mo_user_defined_function where name = "%s" and db = "%s" order by function_id;`
 
 	checkUdfWithDb = `select function_id,body from mo_catalog.mo_user_defined_function where db = "%s" order by function_id;`
@@ -2095,10 +2088,6 @@ func privilegeTypeListSQL(objTyp objectType, privId PrivilegeType, includeSysSco
 		parts = append(parts, fmt.Sprintf("%d", p))
 	}
 	return strings.Join(parts, ",")
-}
-
-func getSqlForgetUserRolesExpectPublicRole(pRoleId int, userId uint32) string {
-	return fmt.Sprintf(getUserRolesExpectPublicRoleFormat, pRoleId, userId)
 }
 
 func getTableColumnDefSql(accountId uint64, dbName, tableName string) (string, error) {
@@ -3566,61 +3555,21 @@ func doAlterAccount(ctx context.Context, ses *Session, aa *alterAccount) (err er
 	return err
 }
 
-// doSetSecondaryRoleAll validates user role metadata before enabling all secondary roles.
-// The current primary role must not change; SET SECONDARY ROLE ALL only affects secondary roles.
-func doSetSecondaryRoleAll(ctx context.Context, ses *Session) (err error) {
-	var sql string
-	var userId uint32
-
-	account := ses.GetTenantInfo()
-	// get current user_id
-	userId = account.GetUserID()
-
-	// step1:get all roles expect public
-	bh := ses.GetBackgroundExec(ctx)
-	defer bh.Close()
-
-	err = bh.Exec(ctx, "begin;")
-	defer func() {
-		err = finishTxn(ctx, bh, err)
-	}()
-	if err != nil {
-		return err
-	}
-
-	sql = getSqlForgetUserRolesExpectPublicRole(publicRoleID, userId)
-	bh.ClearExecResultSet()
-	err = bh.Exec(ctx, sql)
-	if err != nil {
-		return err
-	}
-
-	_, err = getResultSet(ctx, bh)
-	return err
-}
-
-// doSwitchRole accomplishes the Use Role and Use Secondary Role statement
+// doSwitchRole changes the session's sole active role.
 func doSwitchRole(ctx context.Context, ses *Session, sr *tree.SetRole) (err error) {
 	var sql string
 	var erArray []ExecResult
 	var roleId int64
 
+	if sr.SecondaryRole {
+		// Keep MySQL-compatible syntax accepted, but secondary roles are not
+		// active in MatrixOne. A session always has exactly one active role.
+		return nil
+	}
+
 	account := ses.GetTenantInfo()
 
-	if sr.SecondaryRole {
-		// use secondary role all or none
-		switch sr.SecondaryRoleType {
-		case tree.SecondaryRoleTypeAll:
-			if err = doSetSecondaryRoleAll(ctx, ses); err != nil {
-				return err
-			}
-			account.SetUseSecondaryRole(true)
-			ses.InvalidatePrivilegeCache()
-		case tree.SecondaryRoleTypeNone:
-			account.SetUseSecondaryRole(false)
-			ses.InvalidatePrivilegeCache()
-		}
-	} else if sr.Role != nil {
+	if sr.Role != nil {
 		err = normalizeNameOfRole(ctx, sr.Role)
 		if err != nil {
 			return err
@@ -6885,6 +6834,80 @@ func (pota privilegeTipsArray) String() string {
 	return b.String()
 }
 
+func firstColumnChildIndex(expr *plan.Expr) (int32, bool) {
+	if expr == nil {
+		return 0, false
+	}
+	if col := expr.GetCol(); col != nil {
+		return col.RelPos, true
+	}
+	if function := expr.GetF(); function != nil {
+		for _, arg := range function.Args {
+			if childIndex, ok := firstColumnChildIndex(arg); ok {
+				return childIndex, true
+			}
+		}
+	}
+	return 0, false
+}
+
+// insertDedupTargetScans returns the TABLE_SCAN nodes used only to probe an
+// INSERT target for duplicate keys. The INSERT/REPLACE binders set
+// DedupColName for these internal joins. A SQL-visible DEDUP JOIN uses the
+// same node type and defaults to FAIL, but has no DedupColName; it must retain
+// its SELECT privilege checks. During final plan remapping, BindingTags are
+// removed and DEDUP condition column RelPos values become physical child
+// indexes. The first operand remains the target side even if recursive-plan
+// optimization swaps children, so use that child index rather than stale tags
+// or IsRightJoin.
+func insertDedupTargetScans(q *plan.Query) map[int32]struct{} {
+	if q == nil || q.StmtType != plan.Query_INSERT {
+		return nil
+	}
+
+	scans := make(map[int32]struct{})
+	var collect func(int32, map[int32]struct{})
+	collect = func(nodeID int32, visited map[int32]struct{}) {
+		if nodeID < 0 || int(nodeID) >= len(q.Nodes) {
+			return
+		}
+		if _, ok := visited[nodeID]; ok {
+			return
+		}
+		visited[nodeID] = struct{}{}
+
+		node := q.Nodes[nodeID]
+		if node == nil {
+			return
+		}
+		if node.NodeType == plan.Node_TABLE_SCAN {
+			scans[nodeID] = struct{}{}
+			return
+		}
+		for _, childID := range node.Children {
+			collect(childID, visited)
+		}
+	}
+
+	for _, node := range q.Nodes {
+		if node == nil || node.NodeType != plan.Node_JOIN ||
+			node.JoinType != plan.Node_DEDUP || len(node.Children) != 2 ||
+			node.DedupColName == "" ||
+			(node.OnDuplicateAction != plan.Node_FAIL && node.OnDuplicateAction != plan.Node_IGNORE) {
+			continue
+		}
+		if len(node.OnList) == 0 || node.OnList[0].GetF() == nil || len(node.OnList[0].GetF().Args) == 0 {
+			continue
+		}
+		targetChild, ok := firstColumnChildIndex(node.OnList[0].GetF().Args[0])
+		if !ok || targetChild < 0 || int(targetChild) >= len(node.Children) {
+			continue
+		}
+		collect(node.Children[targetChild], make(map[int32]struct{}))
+	}
+	return scans
+}
+
 // extractPrivilegeTipsFromPlan extracts the privilege tips from the plan
 func extractPrivilegeTipsFromPlan(p *plan2.Plan) privilegeTipsArray {
 	// NOTE: the pts may be nil when the plan does operate any table.
@@ -6895,6 +6918,7 @@ func extractPrivilegeTipsFromPlan(p *plan2.Plan) privilegeTipsArray {
 
 	if p.GetQuery() != nil { // select,insert select, update, delete
 		q := p.GetQuery()
+		insertDedupScans := insertDedupTargetScans(q)
 
 		// lastNode := q.Nodes[len(q.Nodes)-1]
 		var t PrivilegeType
@@ -6930,8 +6954,11 @@ func extractPrivilegeTipsFromPlan(p *plan2.Plan) privilegeTipsArray {
 			}
 		}
 
-		for _, node := range q.Nodes {
+		for nodeID, node := range q.Nodes {
 			if node.NodeType == plan.Node_TABLE_SCAN {
+				if _, ok := insertDedupScans[int32(nodeID)]; ok {
+					continue
+				}
 				if node.ObjRef != nil {
 					if node.TableDef != nil && node.TableDef.TableType == catalog.SystemClusterRel {
 						clusterTable = true

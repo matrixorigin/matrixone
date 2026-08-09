@@ -287,6 +287,9 @@ func receiveMessageFromCnServerIfOnlyRun(s *Scope, sender *messageSenderOnClient
 			return err
 		}
 		bat.Clean(mp)
+		if err = sender.acknowledgeRemoteBatch(); err != nil {
+			return err
+		}
 	}
 }
 
@@ -309,8 +312,16 @@ func receiveMessageFromCnServerIfConnector(s *Scope, sender *messageSenderOnClie
 		connectorAnalyze.Network(bat)
 
 		var receiverDone bool
-		if receiverDone, err = forwardRemoteBatchWithContext(sender, nextReg, bat, mp); err != nil || receiverDone {
+		if receiverDone, err = forwardRemoteBatchWithContext(sender, nextReg, bat, mp); err != nil {
 			return err
+		}
+		// A stopped receiver intentionally discarded the decoded batch, but the
+		// remote sender still owns its credit until this ACK is sent.
+		if err = sender.acknowledgeRemoteBatch(); err != nil {
+			return err
+		}
+		if receiverDone {
+			return nil
 		}
 	}
 }
@@ -352,8 +363,16 @@ func receiveMessageFromCnServerIfDispatch(s *Scope, sender *messageSenderOnClien
 
 		result, errCall := vm.Exec(dispatchRunner, s.Proc)
 		bat.Clean(mp)
-		if errCall != nil || result.Status == vm.ExecStop {
+		if errCall != nil {
 			return errCall
+		}
+		// ExecStop can mean that every receiver has already stopped. Release the
+		// decoded batch's remote credit before ending the receive loop.
+		if err = sender.acknowledgeRemoteBatch(); err != nil {
+			return err
+		}
+		if result.Status == vm.ExecStop {
+			return nil
 		}
 	}
 }
@@ -428,6 +447,7 @@ type messageSenderOnClient struct {
 	stateMu            sync.Mutex
 	closeOnce          sync.Once
 	requestFinishAck   bool
+	pendingBatchAck    uint64
 	// allowCleanupCancellation is set after successful local cleanup. Pipeline
 	// and query contexts may be intentionally cancelled by that cleanup; FIN
 	// then runs on its own bounded context. Cancellation before this transition
@@ -522,6 +542,15 @@ func pipelineStreamReuseEnabled(serviceID string) bool {
 	return ok && enabled
 }
 
+func (sender *messageSenderOnClient) requestStreamProtocols(message *pipeline.Message) {
+	if !sender.requestFinishAck {
+		return
+	}
+	message.RequestedTeardownMode = pipeline.StreamTeardownMode_FinishAck
+	message.RequestedBatchCreditCount = pipelineBatchCreditCount
+	message.RequestedBatchCreditBytes = pipelineBatchCreditBytes
+}
+
 func (sender *messageSenderOnClient) sendPipeline(
 	scopeData, procData []byte, noDataBack bool, eachMessageSizeLimitation int, debugMsg string) error {
 	sdLen := len(scopeData)
@@ -533,9 +562,7 @@ func (sender *messageSenderOnClient) sendPipeline(
 		message.SetData(scopeData)
 		message.SetProcData(procData)
 		message.SetSid(pipeline.Status_Last)
-		if sender.requestFinishAck {
-			message.RequestedTeardownMode = pipeline.StreamTeardownMode_FinishAck
-		}
+		sender.requestStreamProtocols(message)
 		message.NeedNotReply = noDataBack
 		if err := sender.streamSender.Send(sender.ctx, message); err != nil {
 			return err
@@ -561,9 +588,7 @@ func (sender *messageSenderOnClient) sendPipeline(
 			message.SetSid(pipeline.Status_WaitingNext)
 		}
 		message.NeedNotReply = noDataBack
-		if sender.requestFinishAck {
-			message.RequestedTeardownMode = pipeline.StreamTeardownMode_FinishAck
-		}
+		sender.requestStreamProtocols(message)
 
 		if err := sender.streamSender.Send(sender.ctx, message); err != nil {
 			return err
@@ -631,6 +656,7 @@ func (sender *messageSenderOnClient) receiveBatch() (bat *batch.Batch, over bool
 	var val morpc.Message
 	var m *pipeline.Message
 	var dataBuffer []byte
+	var batchSequence uint64
 
 	for {
 		val, err = sender.receiveMessage()
@@ -645,6 +671,14 @@ func (sender *messageSenderOnClient) receiveBatch() (bat *batch.Batch, over bool
 		}
 
 		m = val.(*pipeline.Message)
+		if sequence := m.GetBatchSequence(); sequence != 0 {
+			if batchSequence != 0 && batchSequence != sequence {
+				return nil, false, moerr.NewInvalidStateNoCtxf(
+					"remote batch fragments changed sequence from %d to %d",
+					batchSequence, sequence)
+			}
+			batchSequence = sequence
+		}
 		if m.IsEndMessage() && len(m.GetAnalyse()) > 0 {
 			if err = sender.dealRemoteTerminal(m.GetAnalyse()); err != nil {
 				return nil, false, err
@@ -675,8 +709,33 @@ func (sender *messageSenderOnClient) receiveBatch() (bat *batch.Batch, over bool
 		   			bat.Clean(sender.mp)
 		   			return bat, false, err
 		   		} */
+		if err == nil {
+			if sender.pendingBatchAck != 0 {
+				bat.Clean(sender.mp)
+				return nil, false, moerr.NewInvalidStateNoCtx(
+					"remote batch ACK was not sent before receiving the next batch")
+			}
+			sender.pendingBatchAck = batchSequence
+		}
 		return bat, false, err
 	}
+}
+
+func (sender *messageSenderOnClient) acknowledgeRemoteBatch() error {
+	sequence := sender.pendingBatchAck
+	if sequence == 0 {
+		return nil
+	}
+	message := cnclient.AcquireMessage()
+	message.SetID(sender.streamSender.ID())
+	message.SetMessageType(pipeline.Method_PipelineBatchAck)
+	message.SetSid(pipeline.Status_Last)
+	message.BatchAckSequence = sequence
+	if err := sender.streamSender.Send(sender.ctx, message); err != nil {
+		return err
+	}
+	sender.pendingBatchAck = 0
+	return nil
 }
 
 func (sender *messageSenderOnClient) contextDoneError() error {

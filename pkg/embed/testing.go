@@ -125,39 +125,53 @@ func StartTestCluster(opts ...Option) (Cluster, error) {
 }
 
 const (
-	basicClusterHAKeeperStoreTimeout = 60 * time.Second
+	basicClusterHAKeeperStoreTimeout           = 60 * time.Second
+	basicClusterHAKeeperCheckInterval          = time.Second
+	basicClusterHAKeeperBootstrapRetryInterval = 500 * time.Millisecond
+	basicClusterServiceStartupRetryInterval    = 100 * time.Millisecond
 )
 
 func startBasicCluster() (Cluster, error) {
 	return StartTestCluster(
 		WithCNCount(3),
-		WithPreStart(func(svc ServiceOperator) {
-			switch svc.ServiceType() {
-			case metadata.ServiceType_CN:
-				svc.Adjust(
-					func(config *ServiceConfig) {
-						config.CN.LockService.MaxFixedSliceSize = 10001
-						config.CN.LockService.MaxLockRowCount = 10000
-						config.CN.Frontend.SkipCheckUser = false
-						config.CN.Frontend.Iceberg.Enable = true
-						config.CN.Frontend.Iceberg.EnableWrite = true
-						config.CN.Frontend.Iceberg.EnableDelete = true
-						config.CN.Frontend.Iceberg.EnableDML = true
-						config.CN.Frontend.Iceberg.EnableMaintenance = true
-					},
-				)
-			case metadata.ServiceType_LOG:
-				svc.Adjust(
-					func(config *ServiceConfig) {
-						config.LogService.HAKeeperConfig.TNStoreTimeout.Duration =
-							basicClusterHAKeeperStoreTimeout
-						config.LogService.HAKeeperConfig.CNStoreTimeout.Duration =
-							basicClusterHAKeeperStoreTimeout
-					},
-				)
-			}
-		}),
+		WithPreStart(adjustBasicClusterService),
 	)
+}
+
+func adjustBasicClusterService(svc ServiceOperator) {
+	switch svc.ServiceType() {
+	case metadata.ServiceType_CN:
+		svc.Adjust(
+			func(config *ServiceConfig) {
+				config.TNShardReadyRetryInterval.Duration = basicClusterServiceStartupRetryInterval
+				config.CN.LockService.MaxFixedSliceSize = 10001
+				config.CN.LockService.MaxLockRowCount = 10000
+				config.CN.Frontend.SkipCheckUser = false
+				config.CN.Frontend.Iceberg.Enable = true
+				config.CN.Frontend.Iceberg.EnableWrite = true
+				config.CN.Frontend.Iceberg.EnableDelete = true
+				config.CN.Frontend.Iceberg.EnableDML = true
+				config.CN.Frontend.Iceberg.EnableMaintenance = true
+			},
+		)
+	case metadata.ServiceType_LOG:
+		svc.Adjust(
+			func(config *ServiceConfig) {
+				config.LogService.HAKeeperCheckInterval.Duration = basicClusterHAKeeperCheckInterval
+				config.LogService.HAKeeperBootstrapRetryInterval.Duration = basicClusterHAKeeperBootstrapRetryInterval
+				config.LogService.HAKeeperConfig.TNStoreTimeout.Duration =
+					basicClusterHAKeeperStoreTimeout
+				config.LogService.HAKeeperConfig.CNStoreTimeout.Duration =
+					basicClusterHAKeeperStoreTimeout
+			},
+		)
+	case metadata.ServiceType_TN:
+		svc.Adjust(
+			func(config *ServiceConfig) {
+				config.HAKeeperRunningRetryInterval.Duration = basicClusterServiceStartupRetryInterval
+			},
+		)
+	}
 }
 
 func prepareBasicCluster(c Cluster) {

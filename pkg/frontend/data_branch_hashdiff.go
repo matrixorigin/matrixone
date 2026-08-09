@@ -249,10 +249,17 @@ func handleDelsOnLCA(
 		lcaTblDef    = tblStuff.lcaRel.GetTableDef(ctx)
 		targetTblDef = tblStuff.tarRel.GetTableDef(ctx)
 
-		colTypes           = tblStuff.def.colTypes
-		expandedPKColIdxes = tblStuff.def.pkColIdxes
-		snapshotTS         = types.TimestampToTS(snapshot)
+		colTypes        = tblStuff.def.colTypes
+		probePKColIdxes = tblStuff.def.pkColIdxes
+		snapshotTS      = types.TimestampToTS(snapshot)
 	)
+	if tblStuff.def.pkKind == fakeKind {
+		// pkColIdxes contains the visible columns that define a fake PK for
+		// hash-diff matching. The SQL LCA probe joins on the generated hidden
+		// PK instead, so its cast and equality type must come from that hidden
+		// column rather than from the first visible column.
+		probePKColIdxes = []int{tblStuff.def.pkColIdx}
+	}
 	lcaLayout, err := lcaProbeColumnLayout(
 		lcaTblDef, targetTblDef, tblStuff.def.colNames, tblStuff.def.colTypes,
 		tblStuff.def.tarOnlyIdxes, tblStuff.def.lcaColNames,
@@ -288,7 +295,7 @@ func handleDelsOnLCA(
 			// The synthetic hash column is internal and cannot be renamed.
 			pkNames = []string{catalog.FakePrimaryKeyColName}
 		} else {
-			pkNames, err = lcaLayout.columnNamesForTargetIndexes(expandedPKColIdxes)
+			pkNames, err = lcaLayout.columnNamesForTargetIndexes(probePKColIdxes)
 			if err != nil {
 				return nil, err
 			}
@@ -314,7 +321,7 @@ func handleDelsOnLCA(
 				valsBuf.WriteString(fmt.Sprintf("row(%d,", i))
 				for j := range tuple {
 					if err = formatValIntoStringWithFloatCast(
-						ses, tuple[j], colTypes[expandedPKColIdxes[j]], valsBuf, true,
+						ses, tuple[j], colTypes[probePKColIdxes[j]], valsBuf, true,
 					); err != nil {
 						return nil, err
 					}
@@ -339,7 +346,7 @@ func handleDelsOnLCA(
 		} else {
 			// real pk
 			valsBuf.Reset()
-			pkType := colTypes[expandedPKColIdxes[0]]
+			pkType := colTypes[probePKColIdxes[0]]
 			for i := range tBat.Vecs[0].Length() {
 				valsBuf.WriteString(fmt.Sprintf("row(%d,", i))
 				b := tBat.Vecs[0].GetRawBytesAt(i)
@@ -383,11 +390,11 @@ func handleDelsOnLCA(
 		for i := range quotedPKNames {
 			left := fmt.Sprintf("lca.%s", quotedPKNames[i])
 			right := fmt.Sprintf("pks.%s", quotedPKValueAliases[i])
-			if castType, ok := lcaProbeJoinCastType(colTypes[expandedPKColIdxes[i]]); ok {
+			if castType, ok := lcaProbeJoinCastType(colTypes[probePKColIdxes[i]]); ok {
 				right = fmt.Sprintf("cast(%s as %s)", right, castType)
 			}
 			sqlBuf.WriteString(dataBranchSQLKeyEqual(
-				left, right, colTypes[expandedPKColIdxes[i]],
+				left, right, colTypes[probePKColIdxes[i]],
 			))
 			if i != len(quotedPKNames)-1 {
 				sqlBuf.WriteString(" AND ")
