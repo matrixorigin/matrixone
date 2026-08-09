@@ -67,28 +67,65 @@ func syncCommitTimestampToCNs(
 		return nil
 	}
 
-	nodes := make([]string, 0, 4)
-	cluster.GetCNService(clusterservice.NewSelector(), func(cn metadata.CNService) bool {
-		if cn.QueryAddress != "" {
-			nodes = append(nodes, cn.QueryAddress)
-		}
-		return true
-	})
-	if len(nodes) == 0 {
-		return nil
-	}
-
 	genRequest := func() *querypb.Request {
 		req := qc.NewRequest(querypb.CmdMethod_SyncCommit)
 		req.SycnCommit = &querypb.SyncCommitRequest{LatestCommitTS: commitTS}
 		return req
 	}
-	return queryservice.RequestMultipleCn(
-		ctx,
-		nodes,
-		qc,
-		genRequest,
-		func(string, *querypb.Response) {},
-		nil,
-	)
+	refresher, ok := cluster.(clusterservice.AuthoritativeRefresher)
+	if !ok {
+		return moerr.NewInternalError(ctx, "cluster service does not support authoritative refresh")
+	}
+
+	type syncTarget struct {
+		generation string
+		address    string
+	}
+	synced := make(map[string]struct{}, 4)
+	for {
+		if err := refresher.Refresh(ctx); err != nil {
+			return err
+		}
+		targets := make([]syncTarget, 0, 4)
+		err := clusterservice.GetCNServiceWithContext(
+			ctx,
+			cluster,
+			clusterservice.NewSelector(),
+			func(cn metadata.CNService) bool {
+				if cn.QueryAddress != "" {
+					generation := cn.ServiceID + "\x00" + cn.QueryAddress
+					if _, ok := synced[generation]; !ok {
+						targets = append(targets, syncTarget{
+							generation: generation,
+							address:    cn.QueryAddress,
+						})
+					}
+				}
+				return true
+			},
+		)
+		if err != nil {
+			return err
+		}
+		if len(targets) == 0 {
+			return nil
+		}
+		nodes := make([]string, 0, len(targets))
+		for _, target := range targets {
+			nodes = append(nodes, target.address)
+		}
+		if err := queryservice.RequestMultipleCn(
+			ctx,
+			nodes,
+			qc,
+			genRequest,
+			func(string, *querypb.Response) {},
+			nil,
+		); err != nil {
+			return err
+		}
+		for _, target := range targets {
+			synced[target.generation] = struct{}{}
+		}
+	}
 }

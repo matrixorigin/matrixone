@@ -82,6 +82,45 @@ func GetMOClusterWithContext(ctx context.Context, service string) (MOCluster, er
 	}
 }
 
+// GetCNServiceWithContext returns the routable CN snapshot without allowing
+// the built-in cluster's initial readiness wait to outlive ctx.
+func GetCNServiceWithContext(
+	ctx context.Context,
+	service MOCluster,
+	selector Selector,
+	apply func(metadata.CNService) bool,
+) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if service == nil {
+		return moerr.NewInternalErrorNoCtx("mocluster service is not initialized")
+	}
+	if builtIn, ok := service.(*cluster); ok {
+		if err := builtIn.waitReadyWithContext(ctx); err != nil {
+			return err
+		}
+		if selector.regexpCache == nil && builtIn.regexpCache != nil {
+			selector.regexpCache = builtIn.regexpCache
+		}
+		services := builtIn.services.Load()
+		for _, cn := range services.cn {
+			if (selector.all || cn.WorkState == metadata.WorkState_Working ||
+				cn.WorkState == metadata.WorkState_Unknown) &&
+				selector.filterCN(cn) && !apply(cn) {
+				break
+			}
+		}
+		return ctx.Err()
+	}
+
+	service.GetCNService(selector, apply)
+	return ctx.Err()
+}
+
 // GetCNServiceWithoutWorkingStateWithContext is the context-aware snapshot
 // counterpart of MOCluster.GetCNServiceWithoutWorkingState. The built-in
 // cluster can cancel its startup wait; external implementations retain their

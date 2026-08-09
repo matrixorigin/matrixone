@@ -47,6 +47,52 @@ func TestClusterReady(t *testing.T) {
 		})
 }
 
+func TestGetCNServiceWithContextCancelsInitialReadinessWait(t *testing.T) {
+	sid := t.Name()
+	runtime.RunTest(sid, func(runtime.Runtime) {
+		hc := &testHAKeeperClient{err: errors.New("hakeeper unavailable")}
+		service := NewMOCluster(sid, hc, time.Hour)
+		defer service.Close()
+
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+		defer cancel()
+		err := GetCNServiceWithContext(ctx, service, NewSelector(), func(metadata.CNService) bool {
+			t.Fatal("an unready cluster must not publish a snapshot")
+			return false
+		})
+		require.ErrorIs(t, err, context.DeadlineExceeded)
+	})
+}
+
+func TestGetCNServiceWithContextReturnsReadyRoutableSnapshot(t *testing.T) {
+	sid := t.Name()
+	runtime.RunTest(sid, func(runtime.Runtime) {
+		service := NewMOCluster(sid, &testHAKeeperClient{}, time.Hour, WithDisableRefresh())
+		defer service.Close()
+		service.AddCN(metadata.CNService{ServiceID: "working", WorkState: metadata.WorkState_Working})
+		service.AddCN(metadata.CNService{ServiceID: "draining", WorkState: metadata.WorkState_Draining})
+
+		var got []string
+		require.NoError(t, GetCNServiceWithContext(
+			nil, service, NewSelector(), func(cn metadata.CNService) bool {
+				got = append(got, cn.ServiceID)
+				return true
+			}))
+		require.Equal(t, []string{"working"}, got)
+
+		canceledCtx, cancel := context.WithCancel(context.Background())
+		cancel()
+		require.ErrorIs(t, GetCNServiceWithContext(
+			canceledCtx, service, NewSelector(), func(metadata.CNService) bool { return true }),
+			context.Canceled)
+	})
+
+	err := GetCNServiceWithContext(context.Background(), nil, NewSelector(), func(metadata.CNService) bool {
+		return true
+	})
+	require.ErrorContains(t, err, "mocluster service is not initialized")
+}
+
 func TestGetMOClusterWithContextHonorsCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()

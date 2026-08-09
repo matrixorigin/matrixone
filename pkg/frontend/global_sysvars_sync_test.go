@@ -117,18 +117,52 @@ func (m *globalSysVarSyncQueryClient) snapshot() ([]globalSysVarSyncRequest, int
 }
 
 type globalSysVarSyncCluster struct {
-	cnServices []metadata.CNService
+	mu               sync.Mutex
+	cnServices       []metadata.CNService
+	refreshSnapshots [][]metadata.CNService
+	refreshErr       error
+	refreshBlock     <-chan struct{}
+	refreshCalls     int
 }
 
 func (m *globalSysVarSyncCluster) GetCNService(
 	_ clusterservice.Selector,
 	apply func(metadata.CNService) bool,
 ) {
-	for _, cn := range m.cnServices {
+	m.mu.Lock()
+	services := append([]metadata.CNService(nil), m.cnServices...)
+	m.mu.Unlock()
+	for _, cn := range services {
 		if !apply(cn) {
 			return
 		}
 	}
+}
+
+func (m *globalSysVarSyncCluster) Refresh(ctx context.Context) error {
+	if m.refreshBlock != nil {
+		select {
+		case <-m.refreshBlock:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.refreshErr != nil {
+		return m.refreshErr
+	}
+	if m.refreshCalls < len(m.refreshSnapshots) {
+		m.cnServices = append([]metadata.CNService(nil), m.refreshSnapshots[m.refreshCalls]...)
+	}
+	m.refreshCalls++
+	return nil
+}
+
+func (m *globalSysVarSyncCluster) refreshCount() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.refreshCalls
 }
 
 func (*globalSysVarSyncCluster) GetTNService(clusterservice.Selector, func(metadata.TNService) bool) {
@@ -283,6 +317,91 @@ func TestSyncCommitTimestampToCNsReturnsPartialFailure(t *testing.T) {
 	requests, releaseCount := qc.snapshot()
 	require.Len(t, requests, 2)
 	require.Equal(t, 1, releaseCount)
+}
+
+func TestSyncCommitTimestampToCNsRefreshesStaleMembership(t *testing.T) {
+	commitTS := timestamp.Timestamp{PhysicalTime: 100, LogicalTime: 7}
+	qc := newGlobalSysVarSyncQueryClient()
+	cluster := &globalSysVarSyncCluster{
+		cnServices: []metadata.CNService{{QueryAddress: "cn-1"}},
+		refreshSnapshots: [][]metadata.CNService{
+			{{QueryAddress: "cn-1"}, {QueryAddress: "cn-2"}},
+			{{QueryAddress: "cn-1"}, {QueryAddress: "cn-2"}},
+		},
+	}
+
+	require.NoError(t, syncCommitTimestampToCNs(context.Background(), qc, cluster, commitTS))
+	requests, releaseCount := qc.snapshot()
+	require.ElementsMatch(t, []globalSysVarSyncRequest{
+		{address: "cn-1", method: querypb.CmdMethod_SyncCommit, commitTS: commitTS},
+		{address: "cn-2", method: querypb.CmdMethod_SyncCommit, commitTS: commitTS},
+	}, requests)
+	require.Equal(t, 2, releaseCount)
+	require.Equal(t, 2, cluster.refreshCount())
+}
+
+func TestSyncCommitTimestampToCNsConvergesGrowingMembership(t *testing.T) {
+	commitTS := timestamp.Timestamp{PhysicalTime: 100, LogicalTime: 7}
+	qc := newGlobalSysVarSyncQueryClient()
+	cluster := &globalSysVarSyncCluster{refreshSnapshots: [][]metadata.CNService{
+		{{QueryAddress: "cn-1"}},
+		{{QueryAddress: "cn-1"}, {QueryAddress: "cn-2"}},
+		{{QueryAddress: "cn-1"}, {QueryAddress: "cn-2"}},
+	}}
+
+	require.NoError(t, syncCommitTimestampToCNs(context.Background(), qc, cluster, commitTS))
+	requests, releaseCount := qc.snapshot()
+	require.Equal(t, []globalSysVarSyncRequest{
+		{address: "cn-1", method: querypb.CmdMethod_SyncCommit, commitTS: commitTS},
+		{address: "cn-2", method: querypb.CmdMethod_SyncCommit, commitTS: commitTS},
+	}, requests)
+	require.Equal(t, 2, releaseCount)
+	require.Equal(t, 3, cluster.refreshCount())
+}
+
+func TestSyncCommitTimestampToCNsResyncsReplacedCNGeneration(t *testing.T) {
+	commitTS := timestamp.Timestamp{PhysicalTime: 100, LogicalTime: 7}
+	qc := newGlobalSysVarSyncQueryClient()
+	cluster := &globalSysVarSyncCluster{refreshSnapshots: [][]metadata.CNService{
+		{{ServiceID: "cn-old", QueryAddress: "cn-address"}},
+		{{ServiceID: "cn-new", QueryAddress: "cn-address"}},
+		{{ServiceID: "cn-new", QueryAddress: "cn-address"}},
+	}}
+
+	require.NoError(t, syncCommitTimestampToCNs(context.Background(), qc, cluster, commitTS))
+	requests, releaseCount := qc.snapshot()
+	require.Equal(t, []globalSysVarSyncRequest{
+		{address: "cn-address", method: querypb.CmdMethod_SyncCommit, commitTS: commitTS},
+		{address: "cn-address", method: querypb.CmdMethod_SyncCommit, commitTS: commitTS},
+	}, requests)
+	require.Equal(t, 2, releaseCount)
+	require.Equal(t, 3, cluster.refreshCount())
+}
+
+func TestSyncCommitTimestampToCNsRefreshFailure(t *testing.T) {
+	qc := newGlobalSysVarSyncQueryClient()
+	refreshErr := errors.New("hakeeper unavailable")
+	cluster := &globalSysVarSyncCluster{refreshErr: refreshErr}
+
+	err := syncCommitTimestampToCNs(
+		context.Background(), qc, cluster, timestamp.Timestamp{PhysicalTime: 100})
+	require.ErrorIs(t, err, refreshErr)
+	requests, releaseCount := qc.snapshot()
+	require.Empty(t, requests)
+	require.Zero(t, releaseCount)
+}
+
+func TestSyncCommitTimestampToCNsRefreshHonorsContext(t *testing.T) {
+	qc := newGlobalSysVarSyncQueryClient()
+	cluster := &globalSysVarSyncCluster{refreshBlock: make(chan struct{})}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	err := syncCommitTimestampToCNs(ctx, qc, cluster, timestamp.Timestamp{PhysicalTime: 100})
+	require.ErrorIs(t, err, context.Canceled)
+	requests, releaseCount := qc.snapshot()
+	require.Empty(t, requests)
+	require.Zero(t, releaseCount)
 }
 
 func TestSyncCommitTimestampToCNsNoop(t *testing.T) {

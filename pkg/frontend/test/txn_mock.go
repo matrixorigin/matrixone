@@ -94,6 +94,20 @@ func (mr *MockTxnTimestampAwareMockRecorder) SyncLatestCommitTS(arg0 interface{}
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SyncLatestCommitTS", reflect.TypeOf((*MockTxnTimestampAware)(nil).SyncLatestCommitTS), arg0)
 }
 
+// SyncLatestCommitTSWithContext mocks base method.
+func (m *MockTxnTimestampAware) SyncLatestCommitTSWithContext(arg0 context.Context, arg1 timestamp.Timestamp) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "SyncLatestCommitTSWithContext", arg0, arg1)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// SyncLatestCommitTSWithContext indicates an expected call of SyncLatestCommitTSWithContext.
+func (mr *MockTxnTimestampAwareMockRecorder) SyncLatestCommitTSWithContext(arg0, arg1 interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SyncLatestCommitTSWithContext", reflect.TypeOf((*MockTxnTimestampAware)(nil).SyncLatestCommitTSWithContext), arg0, arg1)
+}
+
 // WaitLogTailAppliedAt mocks base method.
 func (m *MockTxnTimestampAware) WaitLogTailAppliedAt(ctx context.Context, ts timestamp.Timestamp) (timestamp.Timestamp, error) {
 	m.ctrl.T.Helper()
@@ -370,6 +384,20 @@ func (m *MockTxnClient) SyncLatestCommitTS(arg0 timestamp.Timestamp) {
 func (mr *MockTxnClientMockRecorder) SyncLatestCommitTS(arg0 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SyncLatestCommitTS", reflect.TypeOf((*MockTxnClient)(nil).SyncLatestCommitTS), arg0)
+}
+
+// SyncLatestCommitTSWithContext mocks base method.
+func (m *MockTxnClient) SyncLatestCommitTSWithContext(arg0 context.Context, arg1 timestamp.Timestamp) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "SyncLatestCommitTSWithContext", arg0, arg1)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// SyncLatestCommitTSWithContext indicates an expected call of SyncLatestCommitTSWithContext.
+func (mr *MockTxnClientMockRecorder) SyncLatestCommitTSWithContext(arg0, arg1 interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SyncLatestCommitTSWithContext", reflect.TypeOf((*MockTxnClient)(nil).SyncLatestCommitTSWithContext), arg0, arg1)
 }
 
 // WaitLogTailAppliedAt mocks base method.
