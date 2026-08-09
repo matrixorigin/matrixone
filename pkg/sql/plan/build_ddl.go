@@ -1761,6 +1761,17 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 	if stmt.IsAsSelect {
 		// add as select cols
 		for _, col := range asSelectCols {
+			if !checkTableColumnNameValid(col.Name) {
+				colName := col.OriginName
+				if colName == "" {
+					colName = col.Name
+				}
+				return moerr.NewInvalidInputf(
+					ctx.GetContext(),
+					"table column name '%s' is illegal and conflicts with internal keyword",
+					colName,
+				)
+			}
 			colMap[col.Name] = col
 			createTable.TableDef.Cols = append(createTable.TableDef.Cols, col)
 		}

@@ -345,7 +345,7 @@ func checkIndexedColumnTypeChange(ctx context.Context, tableDef *plan.TableDef, 
 
 // Check if the column name is valid and conflicts with internal hidden columns
 func checkColumnNameValid(ctx context.Context, colName string) error {
-	if _, ok := catalog.InternalColumns[colName]; ok {
+	if _, ok := catalog.InternalColumns[colName]; ok || catalog.IsAlias(colName) {
 		return moerr.NewErrWrongColumnName(ctx, colName)
 	}
 	return nil

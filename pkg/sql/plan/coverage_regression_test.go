@@ -252,6 +252,16 @@ func TestChangeColumnEncodesDelimiterBearingPrefixLengthMetadata(t *testing.T) {
 	require.JSONEq(t, `{"head:line":4}`, params[catalog.IndexAlgoParamPrefixLengthsV2])
 }
 
+func TestInternalAliasPrefixIsRejectedForUserColumns(t *testing.T) {
+	aliasName := catalog.CreateAlias("payload")
+	require.False(t, checkTableColumnNameValid(aliasName))
+	require.True(t, checkTableColumnNameValid("payload"))
+
+	mock := NewMockOptimizer(false)
+	require.Error(t, checkColumnNameValid(mock.CurrentContext().GetContext(), aliasName))
+	require.NoError(t, checkColumnNameValid(mock.CurrentContext().GetContext(), "payload"))
+}
+
 func TestAppendAffectedAlterColumnNamesKeepsOldNameForChangeColumn(t *testing.T) {
 	affectedCols := appendAffectedAlterColumnNames(nil, "title", "headline")
 	require.Equal(t, []string{"title", "headline"}, affectedCols)
