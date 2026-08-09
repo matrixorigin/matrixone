@@ -53,17 +53,24 @@ type connectionAdmissionListener struct {
 	net.Listener
 	limiter *connectionLimiter
 	reject  func(net.Conn)
+	admit   func() bool
 }
 
 func newConnectionAdmissionListener(
 	listener net.Listener,
 	limiter *connectionLimiter,
 	reject func(net.Conn),
+	admit ...func() bool,
 ) net.Listener {
+	var admission func() bool
+	if len(admit) > 0 {
+		admission = admit[0]
+	}
 	return &connectionAdmissionListener{
 		Listener: listener,
 		limiter:  limiter,
 		reject:   reject,
+		admit:    admission,
 	}
 }
 
@@ -72,6 +79,10 @@ func (l *connectionAdmissionListener) Accept() (net.Conn, error) {
 		conn, err := l.Listener.Accept()
 		if err != nil {
 			return nil, err
+		}
+		if l.admit != nil && !l.admit() {
+			_ = conn.Close()
+			continue
 		}
 		lease, ok := l.limiter.acquire()
 		if ok {

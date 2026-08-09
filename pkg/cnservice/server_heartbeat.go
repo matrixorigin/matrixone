@@ -73,8 +73,7 @@ func (s *service) heartbeatTask(ctx context.Context) {
 }
 
 func (s *service) controlTask(ctx context.Context) {
-	s.commandPollWakeup = make(chan struct{}, 1)
-	s.globalSysVarWakeup = make(chan struct{}, 1)
+	s.initControlChannels()
 	commandDone := make(chan struct{})
 	watermarkDone := make(chan struct{})
 	go func() {
@@ -88,6 +87,20 @@ func (s *service) controlTask(ctx context.Context) {
 	s.heartbeatTask(ctx)
 	<-commandDone
 	<-watermarkDone
+}
+
+func (s *service) initControlChannels() {
+	s.controlChannelsOnce.Do(func() {
+		if s.commandPollWakeup == nil {
+			s.commandPollWakeup = make(chan struct{}, 1)
+		}
+		if s.globalSysVarWakeup == nil {
+			s.globalSysVarWakeup = make(chan struct{}, 1)
+		}
+		if s.globalSysVarAppliedC == nil {
+			s.globalSysVarAppliedC = make(chan struct{}, 1)
+		}
+	})
 }
 
 func (s *service) observeGlobalSysVarCommitTS(ts timestamp.Timestamp) {
@@ -118,9 +131,55 @@ func (s *service) publishGlobalSysVarCommitTS(ts timestamp.Timestamp) {
 		}
 		next := ts
 		if s.globalSysVarApplied.CompareAndSwap(current, &next) {
+			select {
+			case s.globalSysVarAppliedC <- struct{}{}:
+			default:
+			}
 			return
 		}
 	}
+}
+
+func (s *service) renewServingLease() {
+	duration := s.cfg.HAKeeper.HeatbeatInterval.Duration +
+		s.cfg.HAKeeper.HeatbeatTimeout.Duration
+	deadline := time.Now().Add(duration)
+	s.servingLeaseDeadline.Store(&deadline)
+}
+
+func (s *service) revokeServingLease() {
+	s.servingLeaseDeadline.Store(nil)
+}
+
+func (s *service) globalSysVarCaughtUp() bool {
+	desired := s.globalSysVarDesired.Load()
+	if desired == nil || desired.IsEmpty() {
+		return true
+	}
+	applied := s.globalSysVarApplied.Load()
+	return applied != nil && applied.GreaterEq(*desired)
+}
+
+// CanAcceptNewConnections implements frontend.SQLConnectionAdmissionController.
+func (s *service) CanAcceptNewConnections() bool {
+	deadline := s.servingLeaseDeadline.Load()
+	return deadline != nil && time.Now().Before(*deadline) && s.globalSysVarCaughtUp()
+}
+
+func (s *service) waitGlobalSysVarAdmission(ctx context.Context) error {
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-s.hakeeperConnected:
+	}
+	for !s.globalSysVarCaughtUp() {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-s.globalSysVarAppliedC:
+		}
+	}
+	return nil
 }
 
 func (s *service) globalSysVarWatermarkTask(ctx context.Context) {
@@ -299,6 +358,7 @@ func (s *service) heartbeat(ctx context.Context) {
 	cb, err := s._hakeeperClient.SendCNHeartbeat(ctx2, hb)
 	s.heartbeatInFlight.Store(false)
 	if err != nil {
+		s.revokeServingLease()
 		s.commandPollNeeded.Store(true)
 		s.notifyCommandPoll()
 		err = moerr.AttachCause(ctx2, err)
@@ -307,6 +367,7 @@ func (s *service) heartbeat(ctx context.Context) {
 		return
 	}
 	if ctx2.Err() != nil {
+		s.revokeServingLease()
 		s.commandPollNeeded.Store(true)
 		s.notifyCommandPoll()
 		return
@@ -314,14 +375,16 @@ func (s *service) heartbeat(ctx context.Context) {
 	s.commandPollNeeded.Store(false)
 	s.notifyCommandPoll()
 
+	s.config.DecrCount()
+	s.handleHeartbeatResponse(hb.AckedCommandBatchID, cb)
+	s.renewServingLease()
+
 	select {
 	case <-s.hakeeperConnected:
 	default:
 		s.initTaskServiceHolder()
 		close(s.hakeeperConnected)
 	}
-	s.config.DecrCount()
-	s.handleHeartbeatResponse(hb.AckedCommandBatchID, cb)
 }
 
 func (s *service) handleCommandBatch(batch logservicepb.CommandBatch) {

@@ -97,7 +97,12 @@ func newProxyHandler(
 	)
 
 	// Create the MO cluster.
-	mc := clusterservice.NewMOCluster(cfg.UUID, haKeeperClient, cfg.Cluster.RefreshInterval.Duration)
+	mc := clusterservice.NewMOCluster(
+		cfg.UUID,
+		haKeeperClient,
+		cfg.Cluster.RefreshInterval.Duration,
+		clusterservice.WithGlobalSysVarRoutingFilter(),
+	)
 	rt.SetGlobalVariables(runtime.ClusterService, mc)
 
 	// Create the rebalancer.

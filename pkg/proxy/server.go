@@ -17,6 +17,7 @@ package proxy
 import (
 	"context"
 	"net"
+	"sync/atomic"
 	"time"
 
 	"github.com/fagongzi/goetty/v2"
@@ -66,6 +67,7 @@ type Server struct {
 	configData             *util.ConfigData
 	test                   bool
 	globalSysVarGeneration string
+	servingLeaseDeadline   atomic.Pointer[time.Time]
 }
 
 // NewServer creates the proxy server.
@@ -150,6 +152,7 @@ func NewServer(ctx context.Context, config Config, opts ...Option) (*Server, err
 		listener,
 		s.handler.connectionLimiter,
 		s.handler.rejectBeforeSession,
+		s.canAcceptNewConnections,
 	)
 	app, err := goetty.NewApplicationWithListeners([]net.Listener{listener}, nil,
 		goetty.WithAppLogger(s.runtime.Logger().RawLogger()),

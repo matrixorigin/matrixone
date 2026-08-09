@@ -55,6 +55,22 @@ func (s *Server) doHeartbeat(ctx context.Context) {
 	}
 }
 
+func (s *Server) renewServingLease() {
+	duration := s.config.HAKeeper.HeartbeatInterval.Duration +
+		s.config.HAKeeper.HeartbeatTimeout.Duration
+	deadline := time.Now().Add(duration)
+	s.servingLeaseDeadline.Store(&deadline)
+}
+
+func (s *Server) revokeServingLease() {
+	s.servingLeaseDeadline.Store(nil)
+}
+
+func (s *Server) canAcceptNewConnections() bool {
+	deadline := s.servingLeaseDeadline.Load()
+	return deadline != nil && time.Now().Before(*deadline)
+}
+
 func (s *Server) sendHeartbeat(ctx context.Context) error {
 	hb := pb.ProxyHeartbeat{
 		UUID:                   s.config.UUID,
@@ -67,7 +83,16 @@ func (s *Server) sendHeartbeat(ctx context.Context) error {
 	}
 	_, err := s.haKeeperClient.SendProxyHeartbeat(ctx, hb)
 	s.configData.DecrCount()
-	return err
+	if err != nil {
+		s.revokeServingLease()
+		return err
+	}
+	if err := ctx.Err(); err != nil {
+		s.revokeServingLease()
+		return err
+	}
+	s.renewServingLease()
+	return nil
 }
 
 func (s *Server) initializeGlobalSysVarRouteBarrier(ctx context.Context) error {

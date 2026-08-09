@@ -188,6 +188,16 @@ func WithDisableRefresh() Option {
 	}
 }
 
+// WithGlobalSysVarRoutingFilter makes the cluster snapshot suitable for SQL
+// routing by excluding CNs that have not applied the durable global-system-
+// variable watermark. It must not be enabled for the process-wide discovery
+// view used by lockservice and other internal components.
+func WithGlobalSysVarRoutingFilter() Option {
+	return func(c *cluster) {
+		c.options.globalSysVarRoutingFilter = true
+	}
+}
+
 type cluster struct {
 	logger          *log.MOLogger
 	stopper         *stopper.Stopper
@@ -213,7 +223,8 @@ type cluster struct {
 	globalSysVarCommitTS atomic.Pointer[timestamp.Timestamp]
 	regexpCache          *regexpCache
 	options              struct {
-		disableRefresh bool
+		disableRefresh            bool
+		globalSysVarRoutingFilter bool
 	}
 }
 
@@ -528,7 +539,8 @@ func (c *cluster) refreshWithContext(ctx context.Context) error {
 
 	new := &services{}
 	for _, cn := range details.CNStores {
-		if !details.GlobalSysVarCommitTS.IsEmpty() &&
+		if c.options.globalSysVarRoutingFilter &&
+			!details.GlobalSysVarCommitTS.IsEmpty() &&
 			cn.GlobalSysVarCommitTS.Less(details.GlobalSysVarCommitTS) {
 			if c.logger.Enabled(zap.DebugLevel) {
 				c.logger.Debug("cn service fenced by global sysvar watermark",

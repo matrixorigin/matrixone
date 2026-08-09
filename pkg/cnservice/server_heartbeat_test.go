@@ -117,6 +117,46 @@ func TestGlobalSysVarWatermarkTaskCancelsVisibilityWait(t *testing.T) {
 	require.Nil(t, svc.globalSysVarApplied.Load())
 }
 
+func TestCNGlobalSysVarAdmissionWaitsForAppliedWatermark(t *testing.T) {
+	desired := timestamp.Timestamp{PhysicalTime: 100, LogicalTime: 1}
+	connected := make(chan struct{})
+	close(connected)
+	s := &service{
+		hakeeperConnected:    connected,
+		globalSysVarAppliedC: make(chan struct{}, 1),
+	}
+	s.globalSysVarDesired.Store(&desired)
+	deadline := time.Now().Add(time.Minute)
+	s.servingLeaseDeadline.Store(&deadline)
+	require.False(t, s.CanAcceptNewConnections(),
+		"a CN must not admit direct SQL while the durable watermark is behind")
+
+	done := make(chan error, 1)
+	go func() {
+		done <- s.waitGlobalSysVarAdmission(context.Background())
+	}()
+	select {
+	case err := <-done:
+		t.Fatalf("startup admission returned before watermark apply: %v", err)
+	default:
+	}
+
+	s.publishGlobalSysVarCommitTS(desired)
+	require.NoError(t, <-done)
+	require.True(t, s.CanAcceptNewConnections())
+	deadline = time.Now().Add(-time.Nanosecond)
+	s.servingLeaseDeadline.Store(&deadline)
+	require.False(t, s.CanAcceptNewConnections(),
+		"an expired control-plane lease must fail-close direct SQL admission")
+}
+
+func TestCNGlobalSysVarAdmissionHonorsContext(t *testing.T) {
+	s := &service{hakeeperConnected: make(chan struct{})}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	require.ErrorIs(t, s.waitGlobalSysVarAdmission(ctx), context.Canceled)
+}
+
 type blockingCNHeartbeatCommandClient struct {
 	*testHAKClient
 	heartbeatEntered   chan struct{}

@@ -100,33 +100,33 @@ func setupGlobalSysVarFenceSession(
 }
 
 func TestValidateGlobalSysVarSyncProtocolRollingUpgrade(t *testing.T) {
-	t.Run("version 11 fails closed", func(t *testing.T) {
+	t.Run("previous latest version fails closed", func(t *testing.T) {
 		hakeeper := &globalSysVarFenceHAKeeper{}
 		ses := setupGlobalSysVarFenceSession(
-			t, defines.MORPCVersion11, hakeeper, nil)
+			t, defines.MORPCVersion13, hakeeper, nil)
 		err := validateGlobalSysVarSyncProtocol(context.Background(), ses)
-		require.ErrorContains(t, err, "protocol version 12")
+		require.ErrorContains(t, err, "protocol version 14")
 		updates, gets := hakeeper.snapshot()
 		require.Empty(t, updates)
 		require.Zero(t, gets)
 	})
 
-	t.Run("version 12 enables fence", func(t *testing.T) {
+	t.Run("version 14 enables fence", func(t *testing.T) {
 		ses := setupGlobalSysVarFenceSession(
-			t, defines.MORPCVersion12, &globalSysVarFenceHAKeeper{}, nil)
+			t, defines.MORPCVersion14, &globalSysVarFenceHAKeeper{}, nil)
 		require.NoError(t, validateGlobalSysVarSyncProtocol(context.Background(), ses))
 	})
 
 	t.Run("missing capability fails closed", func(t *testing.T) {
 		hakeeper := struct{ logservice.CNHAKeeperClient }{}
-		ses := setupGlobalSysVarFenceSession(t, defines.MORPCVersion12, hakeeper, nil)
+		ses := setupGlobalSysVarFenceSession(t, defines.MORPCVersion14, hakeeper, nil)
 		require.ErrorContains(t,
 			validateGlobalSysVarSyncProtocol(context.Background(), ses),
 			"does not support global system variable fencing")
 	})
 
 	t.Run("standalone remains compatible", func(t *testing.T) {
-		ses := setupGlobalSysVarFenceSession(t, defines.MORPCVersion11, nil, nil)
+		ses := setupGlobalSysVarFenceSession(t, defines.MORPCVersion13, nil, nil)
 		require.NoError(t, validateGlobalSysVarSyncProtocol(context.Background(), ses))
 	})
 }
@@ -143,7 +143,7 @@ func TestSetGlobalSysVarRollingUpgradeRejectsBeforeCatalogWrite(t *testing.T) {
 	hakeeper := &globalSysVarFenceHAKeeper{}
 	getPuIfPresent(ses.GetService()).HAKeeperClient = hakeeper
 	rt := runtime.NewRuntime(metadata.ServiceType_CN, ses.GetService(), zap.NewNop())
-	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion11)
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion13)
 	runtime.SetupServiceBasedRuntime(ses.GetService(), rt)
 
 	background := &backgroundExecTest{}
@@ -152,7 +152,7 @@ func TestSetGlobalSysVarRollingUpgradeRejectsBeforeCatalogWrite(t *testing.T) {
 	t.Cleanup(stub.Reset)
 
 	err := ses.SetGlobalSysVar(context.Background(), "autocommit", int64(0))
-	require.ErrorContains(t, err, "protocol version 12")
+	require.ErrorContains(t, err, "protocol version 14")
 	require.Empty(t, background.executedSQLs,
 		"rolling-upgrade rejection must happen before opening the catalog transaction")
 	updates, gets := hakeeper.snapshot()
@@ -180,7 +180,7 @@ func TestSyncGlobalSysVarCommitPublishesAndWaitsForFence(t *testing.T) {
 		},
 	}}}
 	ses := setupGlobalSysVarFenceSession(
-		t, defines.MORPCVersion12, hakeeper, txnClient)
+		t, defines.MORPCVersion14, hakeeper, txnClient)
 
 	require.NoError(t, syncGlobalSysVarCommit(context.Background(), ses))
 	updates, gets := hakeeper.snapshot()
@@ -294,7 +294,7 @@ func TestSyncGlobalSysVarCommitRejectsInvalidState(t *testing.T) {
 		txnClient.EXPECT().GetLatestCommitTS().Return(timestamp.Timestamp{})
 		hakeeper := &globalSysVarFenceHAKeeper{}
 		ses := setupGlobalSysVarFenceSession(
-			t, defines.MORPCVersion12, hakeeper, txnClient)
+			t, defines.MORPCVersion14, hakeeper, txnClient)
 		require.ErrorContains(t,
 			syncGlobalSysVarCommit(context.Background(), ses),
 			"commit timestamp is empty")
@@ -311,7 +311,7 @@ func TestSyncGlobalSysVarCommitRejectsInvalidState(t *testing.T) {
 		want := errors.New("raft unavailable")
 		hakeeper := &globalSysVarFenceHAKeeper{updateErr: want}
 		ses := setupGlobalSysVarFenceSession(
-			t, defines.MORPCVersion12, hakeeper, txnClient)
+			t, defines.MORPCVersion14, hakeeper, txnClient)
 		require.ErrorIs(t, syncGlobalSysVarCommit(context.Background(), ses), want)
 		_, gets := hakeeper.snapshot()
 		require.Zero(t, gets)

@@ -47,9 +47,10 @@ const (
 	MORPCVersion9      int64 = 9  // AUTO_INCREMENT epoch-fenced commit
 	MORPCVersion10     int64 = 10 // persisted appendable-object abort metadata
 	MORPCVersion11     int64 = 11 // bounded Sorted64 membership-filter wire format
-	MORPCVersion12     int64 = 12 // prepared provenance and HAKeeper-fenced global-sysvar visibility
+	MORPCVersion12     int64 = 12 // prepared provenance
 	MORPCVersion13     int64 = 13 // lossless v2 prefix-index metadata
-	MORPCLatestVersion       = MORPCVersion13
+	MORPCVersion14     int64 = 14 // HAKeeper-fenced global-system-variable visibility
+	MORPCLatestVersion       = MORPCVersion14
 )
 
 // DefaultLockWaitTimeoutSeconds is shared by the frontend default and by

@@ -34,6 +34,18 @@ type closeErrorListener struct {
 	err error
 }
 
+type scriptedSQLAdmissionListener struct {
+	accept func() (net.Conn, error)
+}
+
+func (l *scriptedSQLAdmissionListener) Accept() (net.Conn, error) {
+	return l.accept()
+}
+
+func (l *scriptedSQLAdmissionListener) Close() error { return nil }
+
+func (l *scriptedSQLAdmissionListener) Addr() net.Addr { return nil }
+
 type testMOServerBaseService struct {
 	MockBaseService
 	id string
@@ -107,6 +119,27 @@ func TestMOServerStopBeforeStartReleasesListener(t *testing.T) {
 	rebound, err := net.Listen("tcp", addr)
 	require.NoError(t, err)
 	require.NoError(t, rebound.Close())
+}
+
+func TestMOServerRejectsDirectSQLWhenCNAdmissionIsClosed(t *testing.T) {
+	serverSide, clientSide := net.Pipe()
+	defer clientSide.Close()
+	sentinel := errors.New("listener stopped")
+	step := 0
+	listener := &scriptedSQLAdmissionListener{accept: func() (net.Conn, error) {
+		step++
+		if step == 1 {
+			return serverSide, nil
+		}
+		return nil, sentinel
+	}}
+	mo := &MOServer{canAcceptNewConnections: func() bool { return false }}
+	mo.wg.Add(1)
+	mo.startAccept(context.Background(), listener)
+
+	buf := make([]byte, 1)
+	_, err := clientSide.Read(buf)
+	require.Error(t, err, "CN admission must close the direct SQL socket before session creation")
 }
 
 func Test_handshake(t *testing.T) {

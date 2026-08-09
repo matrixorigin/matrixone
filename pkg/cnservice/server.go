@@ -165,6 +165,7 @@ func NewService(
 		gossipNode:             gossipNode,
 		globalSysVarGeneration: uuid.NewString(),
 	}
+	srv.initControlChannels()
 	srv.colexecServer = colexec.NewServer(cfg.UUID)
 
 	srv.requestHandler = func(ctx context.Context,
@@ -413,6 +414,15 @@ func (s *service) Start() (err error) {
 	if err = s.bootstrap(); err != nil {
 		return err
 	}
+	admissionCtx, admissionCancel := context.WithTimeout(
+		context.Background(), s.cfg.HAKeeper.DiscoveryTimeout.Duration)
+	err = s.waitGlobalSysVarAdmission(admissionCtx)
+	if err != nil {
+		err = moerr.AttachCause(admissionCtx, err)
+		admissionCancel()
+		return err
+	}
+	admissionCancel()
 
 	s.initSqlWriterFactory()
 

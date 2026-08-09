@@ -45,9 +45,9 @@ func validateGlobalSysVarSyncProtocol(ctx context.Context, ses *Session) error {
 	}
 	value, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
 	version, valid := value.(int64)
-	if !ok || !valid || version < defines.MORPCVersion12 {
+	if !ok || !valid || version < defines.MORPCVersion14 {
 		return moerr.NewInternalErrorf(ctx,
-			"SET GLOBAL requires MORPC protocol version %d", defines.MORPCVersion12)
+			"SET GLOBAL requires MORPC protocol version %d", defines.MORPCVersion14)
 	}
 	if _, ok := pu.HAKeeperClient.(logservice.GlobalSysVarHAKeeperClient); !ok {
 		return moerr.NewInternalError(ctx,

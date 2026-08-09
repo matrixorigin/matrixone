@@ -700,6 +700,7 @@ type service struct {
 	txnTraceService      trace.Service
 
 	stopper                *stopper.Stopper
+	controlChannelsOnce    sync.Once
 	heartbeatInFlight      atomic.Bool
 	commandPollNeeded      atomic.Bool
 	commandPollWakeup      chan struct{}
@@ -709,7 +710,9 @@ type service struct {
 	globalSysVarDesired    atomic.Pointer[timestamp.Timestamp]
 	globalSysVarApplied    atomic.Pointer[timestamp.Timestamp]
 	globalSysVarWakeup     chan struct{}
+	globalSysVarAppliedC   chan struct{}
 	globalSysVarGeneration string
+	servingLeaseDeadline   atomic.Pointer[time.Time]
 	appliedCommandIDs      map[logservice.ScheduleCommandIdentity]struct{}
 	lastCommandHash        [32]byte
 	legacyDedupeArmed      bool

@@ -155,14 +155,50 @@ func TestServerInitialRouteBarrierAcknowledgesPublishedWatermark(t *testing.T) {
 		handler:                &handler{moCluster: cluster},
 	}
 	server.config.UUID = "proxy-1"
+	server.config.HAKeeper.HeartbeatInterval.Duration = time.Second
 	server.config.HAKeeper.HeartbeatTimeout.Duration = time.Second
 	require.NoError(t, server.initializeGlobalSysVarRouteBarrier(context.Background()))
+	require.True(t, server.canAcceptNewConnections())
 
 	client.Lock()
 	hb := client.heartbeat
 	client.Unlock()
 	require.Equal(t, commitTS, hb.GlobalSysVarCommitTS)
 	require.Equal(t, "proxy-generation", hb.GlobalSysVarGeneration)
+}
+
+func TestProxyServingLeaseExpiresAndHeartbeatFailureRevokesIt(t *testing.T) {
+	server := &Server{
+		haKeeperClient: &testHAClient{},
+		configData:     util.NewConfigData(nil),
+		runtime:        runtime.ServiceRuntime(""),
+	}
+	server.config.HAKeeper.HeartbeatInterval.Duration = time.Second
+	server.config.HAKeeper.HeartbeatTimeout.Duration = time.Second
+	deadline := time.Now().Add(time.Minute)
+	server.servingLeaseDeadline.Store(&deadline)
+	require.True(t, server.canAcceptNewConnections())
+	server.doHeartbeat(context.Background())
+	require.False(t, server.canAcceptNewConnections(),
+		"a failed HAKeeper heartbeat must immediately fail-close Proxy admission")
+
+	deadline = time.Now().Add(-time.Nanosecond)
+	server.servingLeaseDeadline.Store(&deadline)
+	require.False(t, server.canAcceptNewConnections())
+}
+
+func TestProxyHeartbeatDoesNotRenewLeaseAfterCallerCancellation(t *testing.T) {
+	client := &watermarkHAClient{testHAClient: &testHAClient{}}
+	server := &Server{
+		haKeeperClient: client,
+		configData:     util.NewConfigData(nil),
+	}
+	server.config.HAKeeper.HeartbeatInterval.Duration = time.Second
+	server.config.HAKeeper.HeartbeatTimeout.Duration = time.Second
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	require.ErrorIs(t, server.sendHeartbeat(ctx), context.Canceled)
+	require.False(t, server.canAcceptNewConnections())
 }
 
 func TestServer_NewServer(t *testing.T) {

@@ -331,6 +331,31 @@ func TestConnectionAdmissionOwnershipTransfer(t *testing.T) {
 	})
 }
 
+func TestConnectionAdmissionListenerRejectsInvalidServingLeaseBeforeLimiter(t *testing.T) {
+	limiter := newConnectionLimiter(1, 1)
+	proxySide, peerSide := net.Pipe()
+	defer peerSide.Close()
+	sentinel := errors.New("listener stopped")
+	step := 0
+	raw := &scriptedAdmissionListener{accept: func() (net.Conn, error) {
+		step++
+		if step == 1 {
+			return proxySide, nil
+		}
+		return nil, sentinel
+	}}
+	listener := newConnectionAdmissionListener(raw, limiter, nil, func() bool { return false })
+
+	conn, err := listener.Accept()
+	require.Nil(t, conn)
+	require.ErrorIs(t, err, sentinel)
+	require.Zero(t, limiter.total,
+		"a control-plane-rejected socket must not consume a connection slot")
+	buf := make([]byte, 1)
+	_, err = peerSide.Read(buf)
+	require.Error(t, err)
+}
+
 func TestRewriteProxyError(t *testing.T) {
 	t.Run("connection limit", func(t *testing.T) {
 		err := fmt.Errorf("wrapped: %w", errProxyConnectionLimit)
