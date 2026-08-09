@@ -160,6 +160,13 @@ func evalValue(
 func mustColConstValueFromBinaryFuncExpr(
 	expr *plan.Expr_F,
 ) (*plan.Expr_Col, [][]byte, bool) {
+	colExpr, vals, _, ok := mustColConstValueWithTypeFromBinaryFuncExpr(expr)
+	return colExpr, vals, ok
+}
+
+func mustColConstValueWithTypeFromBinaryFuncExpr(
+	expr *plan.Expr_F,
+) (*plan.Expr_Col, [][]byte, []*plan.Expr, bool) {
 	var (
 		colExpr  *plan.Expr_Col
 		tmpExpr  *plan.Expr_Col
@@ -176,14 +183,14 @@ func mustColConstValueFromBinaryFuncExpr(
 	}
 
 	if len(valExprs) == 0 || colExpr == nil {
-		return nil, nil, false
+		return nil, nil, nil, false
 	}
 
 	vals, ok := getConstBytesFromExpr(valExprs)
 	if !ok {
-		return nil, nil, false
+		return nil, nil, nil, false
 	}
-	return colExpr, vals, true
+	return colExpr, vals, valExprs, true
 }
 
 func getConstBytesFromExpr(exprs []*plan.Expr) ([][]byte, bool) {

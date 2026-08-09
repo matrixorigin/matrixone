@@ -27,6 +27,7 @@ import (
 	indexplugin "github.com/matrixorigin/matrixone/pkg/indexplugin"
 	planplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
 )
 
@@ -777,6 +778,104 @@ func indexLeadingColumnsMatch(idxDef *plan.IndexDef, tableDef *plan.TableDef, co
 	return true
 }
 
+func indexOrderColumnsMatch(idxDef *plan.IndexDef, scanNode *plan.Node, colPositions []int32) bool {
+	if idxDef == nil || scanNode == nil || scanNode.TableDef == nil || len(scanNode.BindingTags) == 0 || len(colPositions) == 0 {
+		return false
+	}
+
+	fixedPrefix := 0
+	for fixedPrefix < len(idxDef.Parts) && indexPartFixedByEquality(idxDef.Parts[fixedPrefix], scanNode) {
+		fixedPrefix++
+	}
+
+	nextPart := fixedPrefix
+	for _, colPos := range colPositions {
+		if colPos < 0 || int(colPos) >= len(scanNode.TableDef.Cols) {
+			return false
+		}
+		colName := scanNode.TableDef.Cols[colPos].Name
+		fixedOrderColumn := false
+		for i := 0; i < fixedPrefix; i++ {
+			if catalog.ResolveAlias(idxDef.Parts[i]) == colName {
+				fixedOrderColumn = true
+				break
+			}
+		}
+		if fixedOrderColumn {
+			continue
+		}
+		if nextPart >= len(idxDef.Parts) || catalog.ResolveAlias(idxDef.Parts[nextPart]) != colName {
+			return false
+		}
+		nextPart++
+	}
+	return true
+}
+
+func indexPartFixedByEquality(part string, scanNode *plan.Node) bool {
+	colPos, ok := scanNode.TableDef.Name2ColIndex[catalog.ResolveAlias(part)]
+	if !ok {
+		return false
+	}
+	tag := scanNode.BindingTags[0]
+	for _, filter := range scanNode.FilterList {
+		fn := filter.GetF()
+		if fn == nil || fn.Func == nil || fn.Func.ObjName != "=" || len(fn.Args) != 2 {
+			continue
+		}
+		leftCol := fn.Args[0].GetCol()
+		rightCol := fn.Args[1].GetCol()
+		if leftCol != nil && leftCol.RelPos == tag && leftCol.ColPos == colPos && isScanInvariantRuntimeConstExpr(fn.Args[1]) {
+			return true
+		}
+		if rightCol != nil && rightCol.RelPos == tag && rightCol.ColPos == colPos && isScanInvariantRuntimeConstExpr(fn.Args[0]) {
+			return true
+		}
+	}
+	return false
+}
+
+// isScanInvariantRuntimeConstExpr is stricter than isRuntimeConstExpr: an
+// expression can be independent of table columns while still producing a new
+// value for every row. Such volatile expressions cannot fix an index prefix to
+// one value for the duration of a scan.
+func isScanInvariantRuntimeConstExpr(expr *plan.Expr) bool {
+	return !containsVolatileFunction(expr) && isRuntimeConstExpr(expr)
+}
+
+func containsVolatileFunction(expr *plan.Expr) bool {
+	if expr == nil {
+		return true
+	}
+
+	switch exprImpl := expr.Expr.(type) {
+	case *plan.Expr_F:
+		if exprImpl.F == nil || exprImpl.F.Func == nil {
+			return true
+		}
+		overload, ok := function.GetFunctionByIdWithoutError(exprImpl.F.Func.Obj)
+		if !ok || overload.CannotFold() {
+			return true
+		}
+		for _, arg := range exprImpl.F.Args {
+			if containsVolatileFunction(arg) {
+				return true
+			}
+		}
+	case *plan.Expr_List:
+		if exprImpl.List == nil {
+			return true
+		}
+		for _, item := range exprImpl.List.List {
+			if containsVolatileFunction(item) {
+				return true
+			}
+		}
+	}
+
+	return false
+}
+
 type forceIndexScope int
 
 const (
@@ -967,8 +1066,14 @@ func (builder *QueryBuilder) applyForceIndexHintToScan(scanNode *plan.Node, requ
 		indexes := filterIndexesByHintScope(scanNode.TableDef.Indexes, scope)
 		for _, idxDef := range indexes {
 			if !usableRegularHintIndex(idxDef) ||
-				(hintSet.join.forceSpecified && !indexAllowedByHintScope(idxDef.IndexName, hintSet.join)) ||
-				!indexLeadingColumnsMatch(idxDef, scanNode.TableDef, colPositions) {
+				(hintSet.join.forceSpecified && !indexAllowedByHintScope(idxDef.IndexName, hintSet.join)) {
+				continue
+			}
+			columnsMatch := indexLeadingColumnsMatch(idxDef, scanNode.TableDef, colPositions)
+			if requirement.scope == forceIndexForOrder {
+				columnsMatch = indexOrderColumnsMatch(idxDef, scanNode, colPositions)
+			}
+			if !columnsMatch {
 				continue
 			}
 			accessNodeID, idxNodeID, covering, err := builder.tryHintedIndexAccess(idxDef, scanNode, colRefCnt, idxColMap)
@@ -992,7 +1097,14 @@ func (builder *QueryBuilder) applyForceIndexHintToScan(scanNode *plan.Node, requ
 			return accessNodeID, nil
 		}
 		if hintSet.join.forceSpecified {
-			return builder.applyForcedJoinHintToScan(scanNode, hintSet.join, colRefCnt, idxColMap)
+			return builder.applyForcedHintAccessToScan(scanNode, hintSet.join, colRefCnt, idxColMap)
+		}
+		if requirement.scope == forceIndexForOrder && hintSet.scan.forceSpecified {
+			// An unscoped FORCE INDEX constrains access as well as ordering. If the
+			// named index cannot provide this ORDER BY, retain the forced access and
+			// let the Sort enforce ordering. An explicit FORCE INDEX FOR ORDER BY has
+			// no scan-scope fallback and therefore leaves base access unchanged.
+			return builder.applyForcedHintAccessToScan(scanNode, hintSet.scan, colRefCnt, idxColMap)
 		}
 		// A FORCE hint that cannot provide the requested ordering/grouping still
 		// excludes other secondary indexes from replacing the base scan.
@@ -1002,11 +1114,11 @@ func (builder *QueryBuilder) applyForceIndexHintToScan(scanNode *plan.Node, requ
 	return scanNode.NodeId, nil
 }
 
-// applyForcedJoinHintToScan resolves incompatible ORDER/GROUP and JOIN force
-// scopes before a covering access publishes hidden-column replacements to its
-// ancestors. JOIN access has the same precedence that applyIndicesForJoins
-// historically enforced, but choosing it here keeps the replacement atomic.
-func (builder *QueryBuilder) applyForcedJoinHintToScan(scanNode *plan.Node, scope indexHintScopeSet,
+// applyForcedHintAccessToScan resolves a forced access scope before a covering
+// access publishes hidden-column replacements to its ancestors. JOIN access
+// has the same precedence that applyIndicesForJoins historically enforced, but
+// choosing it here keeps the replacement atomic.
+func (builder *QueryBuilder) applyForcedHintAccessToScan(scanNode *plan.Node, scope indexHintScopeSet,
 	colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr) (int32, error) {
 	if indexAllowedByHintScope(PrimaryKeyName, scope) {
 		builder.protectedScans[scanNode.NodeId]++
@@ -1770,14 +1882,21 @@ func (builder *QueryBuilder) applyExtraFiltersOnIndex(idxDef *IndexDef, node *pl
 				continue
 			}
 			idxColExpr := GetColExpr(idxTableNode.TableDef.Cols[0].Typ, idxTableNode.BindingTags[0], 0)
-			idxPartExpr := idxColExpr
+			mappedExpr := idxColExpr
 			if indexTableStoresSerializedKey(idxDef) {
-				idxPartExpr, _ = MakeSerialExtractExpr(builder.GetContext(), idxColExpr, fn.Args[colArgIdx].Typ, int64(k))
+				var err error
+				mappedExpr, err = MakeSerialExtractExpr(builder.GetContext(), idxColExpr, fn.Args[colArgIdx].Typ, int64(k))
+				if err != nil {
+					// Extra-filter pushdown is optional. The original filter remains on
+					// the base table, so skip an unsupported serialized-key mapping.
+					continue
+				}
 			}
 			newFilter := DeepCopyExpr(node.FilterList[i])
-			newFilter.GetF().Args[colArgIdx] = idxPartExpr
+			newFilter.GetF().Args[colArgIdx] = mappedExpr
 			idxTableNode.FilterList = append(idxTableNode.FilterList, newFilter)
 			applied = true
+			break
 		}
 		if applied {
 			continue
@@ -1794,11 +1913,14 @@ func (builder *QueryBuilder) applyExtraFiltersOnIndex(idxDef *IndexDef, node *pl
 			for k := range node.TableDef.Pkey.Names {
 				if col.Name == node.TableDef.Pkey.Names[k] {
 					idxColExpr := GetColExpr(idxTableNode.TableDef.Cols[1].Typ, idxTableNode.BindingTags[0], 1)
-					deserialExpr, _ := MakeSerialExtractExpr(builder.GetContext(), idxColExpr, fn.Args[colArgIdx].Typ, int64(k))
+					deserialExpr, err := MakeSerialExtractExpr(builder.GetContext(), idxColExpr, fn.Args[colArgIdx].Typ, int64(k))
+					if err != nil {
+						break
+					}
 					newFilter := DeepCopyExpr(node.FilterList[i])
 					newFilter.GetF().Args[colArgIdx] = deserialExpr
 					idxTableNode.FilterList = append(idxTableNode.FilterList, newFilter)
-					continue
+					break
 				}
 			}
 		}
@@ -2003,6 +2125,7 @@ func (builder *QueryBuilder) replaceNonEqualCondition(idxDef *IndexDef, filter *
 		}
 	}
 
+	indexedPartType := fn.Args[0].Typ
 	fn.Args[0].GetCol().RelPos = idxTag
 	fn.Args[0].GetCol().ColPos = 0
 	fn.Args[0].Typ = idxTableDef.Cols[0].Typ
@@ -2010,6 +2133,8 @@ func (builder *QueryBuilder) replaceNonEqualCondition(idxDef *IndexDef, filter *
 		serialFunc := indexTableLookupSerialFunc(idxDef)
 		switch fn.Func.ObjName {
 		case "between":
+			fn.Args[1] = builder.normalizeDecimalIndexRangeBound(fn.Args[1], indexedPartType)
+			fn.Args[2] = builder.normalizeDecimalIndexRangeBound(fn.Args[2], indexedPartType)
 			fn.Args[1], _ = BindFuncExprImplByPlanExpr(builder.GetContext(), serialFunc, []*plan.Expr{fn.Args[1]})
 			fn.Args[2], _ = BindFuncExprImplByPlanExpr(builder.GetContext(), serialFunc, []*plan.Expr{fn.Args[2]})
 			expr, _ = BindFuncExprImplByPlanExpr(builder.GetContext(), "prefix_between", fn.Args)
@@ -2017,9 +2142,12 @@ func (builder *QueryBuilder) replaceNonEqualCondition(idxDef *IndexDef, filter *
 			fn.Args[1], _ = BindFuncExprImplByPlanExpr(builder.GetContext(), serialFunc, []*plan.Expr{fn.Args[1]})
 			expr, _ = BindFuncExprImplByPlanExpr(builder.GetContext(), "prefix_in", fn.Args)
 		case ">", ">=", "<", "<=":
+			fn.Args[1] = builder.normalizeDecimalIndexRangeBound(fn.Args[1], indexedPartType)
 			fn.Args[1], _ = BindFuncExprImplByPlanExpr(builder.GetContext(), serialFunc, []*plan.Expr{fn.Args[1]})
 			expr, _ = BindFuncExprImplByPlanExpr(builder.GetContext(), fn.Func.ObjName, fn.Args)
 		case "in_range":
+			fn.Args[1] = builder.normalizeDecimalIndexRangeBound(fn.Args[1], indexedPartType)
+			fn.Args[2] = builder.normalizeDecimalIndexRangeBound(fn.Args[2], indexedPartType)
 			fn.Args[1], _ = BindFuncExprImplByPlanExpr(builder.GetContext(), serialFunc, []*plan.Expr{fn.Args[1]})
 			fn.Args[2], _ = BindFuncExprImplByPlanExpr(builder.GetContext(), serialFunc, []*plan.Expr{fn.Args[2]})
 			if comparesByteStringColumn {
@@ -2291,12 +2419,16 @@ func (builder *QueryBuilder) tryIndexOnlyScan(idxDef *IndexDef, node *plan.Node,
 		}
 	}
 
-	// For multi-part indexes, single <= or > with raw byte comparison is incorrect.
-	// <= under-fetches (misses rows at boundary), > over-fetches.
-	// Only allow these when paired (handled by getIndexForNonEquiCond).
-	// This check recurses into OR arms to catch `col <= 5 OR col > 9`.
-	if !leadingEqualCond && numParts > 1 && len(leadingPos) == 1 {
+	if !leadingEqualCond && indexTableStoresSerializedKey(idxDef) {
 		fn := node.FilterList[leadingPos[0]].GetF()
+		leadingColIdx := node.TableDef.Name2ColIndex[idxDef.Parts[0]]
+		if !canSerializeDecimalIndexRangeBounds(fn, node.TableDef.Cols[leadingColIdx].Typ) {
+			return -1
+		}
+		// For multi-part indexes, single <= or > with raw byte comparison is incorrect.
+		// <= under-fetches (misses rows at boundary), > over-fetches.
+		// Only allow these when paired (handled by getIndexForNonEquiCond).
+		// This check recurses into OR arms to catch `col <= 5 OR col > 9`.
 		if fn != nil && hasUnsafeRangeOp(fn) {
 			return -1
 		}
@@ -2498,7 +2630,12 @@ func classifyRangeBound(fn *plan.Function) (col *plan.ColRef, isLower bool) {
 }
 
 func (builder *QueryBuilder) getIndexForNonEquiCond(indexes []*IndexDef, node *plan.Node) (int, []int32) {
-	colPos2Idx := make(map[int32]int)
+	type indexCandidates struct {
+		preferred int
+		direct    int
+		hasDirect bool
+	}
+	colPos2Candidates := make(map[int32]indexCandidates)
 	for i, idxDef := range indexes {
 		// Prefix keys are lossy. IN and range operators can use block-level
 		// pruning implementations that compare the untruncated probe with the
@@ -2511,17 +2648,38 @@ func (builder *QueryBuilder) getIndexForNonEquiCond(indexes []*IndexDef, node *p
 		if !idxDef.Unique {
 			numParts--
 		}
-		if idxDef.Unique && numParts == 1 {
-			colPos, ok := node.TableDef.Name2ColIndex[catalog.ResolveAlias(idxDef.Parts[0])]
-			if ok {
-				colPos2Idx[colPos] = i
-			}
-		} else if !idxDef.Unique && numParts >= 1 {
-			colPos, ok := node.TableDef.Name2ColIndex[catalog.ResolveAlias(idxDef.Parts[0])]
-			if ok {
-				colPos2Idx[colPos] = i
-			}
+		if (idxDef.Unique && numParts != 1) || (!idxDef.Unique && numParts < 1) {
+			continue
 		}
+
+		colPos, ok := node.TableDef.Name2ColIndex[catalog.ResolveAlias(idxDef.Parts[0])]
+		if !ok {
+			continue
+		}
+		candidates := colPos2Candidates[colPos]
+		candidates.preferred = i
+		if !indexTableStoresSerializedKey(idxDef) {
+			candidates.direct = i
+			candidates.hasDirect = true
+		}
+		colPos2Candidates[colPos] = candidates
+	}
+	// Preserve the existing catalog-order preference for ordinary bounds. If a
+	// serialized candidate cannot represent the bound losslessly or safely as
+	// a single-ended range, use a direct unique key on the same column before
+	// giving up on the index lookup altogether. Unsafe operators are allowed
+	// while discovering, and after selecting, a paired range.
+	selectIndex := func(candidates indexCandidates, colPos int32, first, second *plan.Function, allowUnsafeRange bool) (int, bool) {
+		if !indexTableStoresSerializedKey(indexes[candidates.preferred]) ||
+			(canSerializeDecimalIndexRangeBounds(first, node.TableDef.Cols[colPos].Typ) &&
+				(second == nil || canSerializeDecimalIndexRangeBounds(second, node.TableDef.Cols[colPos].Typ)) &&
+				(allowUnsafeRange || !hasUnsafeRangeOp(first))) {
+			return candidates.preferred, true
+		}
+		if candidates.hasDirect {
+			return candidates.direct, true
+		}
+		return -1, false
 	}
 
 	// First pass: detect paired range conditions on index leading columns.
@@ -2537,7 +2695,11 @@ func (builder *QueryBuilder) getIndexForNonEquiCond(indexes []*IndexDef, node *p
 		if col == nil {
 			continue
 		}
-		if _, ok := colPos2Idx[col.ColPos]; !ok {
+		candidates, ok := colPos2Candidates[col.ColPos]
+		if !ok {
+			continue
+		}
+		if _, ok = selectIndex(candidates, col.ColPos, fn, nil, true); !ok {
 			continue
 		}
 		if isLower {
@@ -2552,7 +2714,7 @@ func (builder *QueryBuilder) getIndexForNonEquiCond(indexes []*IndexDef, node *p
 		fn := node.FilterList[i].GetF()
 		filterType, col := checkIndexFilter(fn)
 		if filterType == NonEqualIndexCondition {
-			idxPos, ok := colPos2Idx[col.ColPos]
+			candidates, ok := colPos2Candidates[col.ColPos]
 			if !ok {
 				continue
 			}
@@ -2560,20 +2722,28 @@ func (builder *QueryBuilder) getIndexForNonEquiCond(indexes []*IndexDef, node *p
 				lowerIdx, hasLower := colLowerBounds[rangeCol.ColPos]
 				upperIdx, hasUpper := colUpperBounds[rangeCol.ColPos]
 				if hasLower && hasUpper && int32(i) == min(lowerIdx, upperIdx) {
+					idxPos, usable := selectIndex(
+						candidates,
+						col.ColPos,
+						node.FilterList[lowerIdx].GetF(),
+						node.FilterList[upperIdx].GetF(),
+						true,
+					)
+					if !usable {
+						continue
+					}
 					if shouldSkipLargeRangeIndexByStats(node) {
 						continue
 					}
 					return idxPos, []int32{lowerIdx, upperIdx}
 				}
 			}
-			if fn != nil {
-				numParts := len(indexes[idxPos].Parts)
-				if numParts > 1 && hasUnsafeRangeOp(fn) {
-					continue
-				}
-				if isRangeOp(fn) && shouldSkipLargeRangeIndexByStats(node) {
-					continue
-				}
+			idxPos, usable := selectIndex(candidates, col.ColPos, fn, nil, false)
+			if !usable {
+				continue
+			}
+			if fn != nil && isRangeOp(fn) && shouldSkipLargeRangeIndexByStats(node) {
+				continue
 			}
 			return idxPos, []int32{int32(i)}
 		}
@@ -2661,6 +2831,77 @@ func rangeFilterConstValue(fn *plan.Function) *plan.Expr {
 	return nil
 }
 
+func rangeFilterColumnType(fn *plan.Function) (plan.Type, bool) {
+	if len(fn.Args) < 2 {
+		return plan.Type{}, false
+	}
+	if fn.Args[0].GetCol() != nil && isRuntimeConstExpr(fn.Args[1]) {
+		return fn.Args[0].Typ, true
+	}
+	if isRuntimeConstExpr(fn.Args[0]) && fn.Args[1].GetCol() != nil {
+		return fn.Args[1].Typ, true
+	}
+	return plan.Type{}, false
+}
+
+func canSerializeDecimalIndexRangeBound(bound *plan.Expr, indexedPartType plan.Type) bool {
+	indexedType := makeTypeByPlan2Type(indexedPartType)
+	if !indexedType.Oid.IsDecimal() {
+		return true
+	}
+	if bound == nil {
+		return false
+	}
+	boundType := makeTypeByPlan2Expr(bound)
+	if !boundType.Oid.IsDecimal() {
+		return false
+	}
+	if boundType.Oid == indexedType.Oid && boundType.Scale == indexedType.Scale {
+		return true
+	}
+	return checkNoNeedCast(boundType, indexedType, bound)
+}
+
+func canSerializeDecimalIndexRangeBounds(fn *plan.Function, indexedPartType plan.Type) bool {
+	if fn == nil || fn.Func == nil {
+		return false
+	}
+	if fn.Func.ObjName == "or" {
+		for _, arg := range fn.Args {
+			if !canSerializeDecimalIndexRangeBounds(arg.GetF(), indexedPartType) {
+				return false
+			}
+		}
+		return true
+	}
+	if !types.T(indexedPartType.Id).IsDecimal() {
+		return true
+	}
+	switch fn.Func.ObjName {
+	case "between", "in_range":
+		return len(fn.Args) >= 3 &&
+			canSerializeDecimalIndexRangeBound(fn.Args[1], indexedPartType) &&
+			canSerializeDecimalIndexRangeBound(fn.Args[2], indexedPartType)
+	case ">", ">=", "<", "<=":
+		return canSerializeDecimalIndexRangeBound(rangeFilterConstValue(fn), indexedPartType)
+	default:
+		return true
+	}
+}
+
+func (builder *QueryBuilder) normalizeDecimalIndexRangeBound(bound *plan.Expr, indexedPartType plan.Type) *plan.Expr {
+	if bound == nil || !types.T(indexedPartType.Id).IsDecimal() ||
+		(bound.Typ.Id == indexedPartType.Id && bound.Typ.Scale == indexedPartType.Scale) ||
+		!canSerializeDecimalIndexRangeBound(bound, indexedPartType) {
+		return bound
+	}
+	normalized, err := forceCastExpr(builder.GetContext(), bound, indexedPartType)
+	if err != nil {
+		return bound
+	}
+	return normalized
+}
+
 func (builder *QueryBuilder) replaceRangePairCondition(idxDef *IndexDef, filterList []*plan.Expr, filterIdx []int32, idxTag int32, idxTableDef *plan.TableDef) *plan.Expr {
 	numParts := len(idxDef.Parts)
 	lowerFn := filterList[filterIdx[0]].GetF()
@@ -2676,6 +2917,12 @@ func (builder *QueryBuilder) replaceRangePairCondition(idxDef *IndexDef, filterL
 	compositeFilterSel := filterList[filterIdx[0]].Selectivity * filterList[filterIdx[1]].Selectivity
 
 	if numParts > 1 {
+		if indexedPartType, ok := rangeFilterColumnType(lowerFn); ok {
+			lowerVal = builder.normalizeDecimalIndexRangeBound(lowerVal, indexedPartType)
+		}
+		if indexedPartType, ok := rangeFilterColumnType(upperFn); ok {
+			upperVal = builder.normalizeDecimalIndexRangeBound(upperVal, indexedPartType)
+		}
 		serialFunc := indexTableLookupSerialFunc(idxDef)
 		lowerVal, _ = BindFuncExprImplByPlanExpr(builder.GetContext(), serialFunc, []*plan.Expr{lowerVal})
 		upperVal, _ = BindFuncExprImplByPlanExpr(builder.GetContext(), serialFunc, []*plan.Expr{upperVal})
