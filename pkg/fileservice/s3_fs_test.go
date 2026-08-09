@@ -240,6 +240,18 @@ type blockingReadObjectStorage struct {
 	readCount   atomic.Int64
 }
 
+type generatedRangeObjectStorage struct {
+	dummyObjectStorage
+	mu    sync.Mutex
+	reads []objectStorageReadRange
+}
+
+type heldWriter struct {
+	once    sync.Once
+	started chan struct{}
+	release chan struct{}
+}
+
 type blockingDataCache struct {
 	fscache.DataCache
 	updateStarted chan struct{}
@@ -269,6 +281,37 @@ func (b *blockingDataCache) Set(ctx context.Context, key fscache.CacheKey, data 
 		}
 	}
 	return b.DataCache.Set(ctx, key, data)
+}
+
+func (g *generatedRangeObjectStorage) Read(
+	_ context.Context,
+	key string,
+	min *int64,
+	max *int64,
+) (io.ReadCloser, error) {
+	g.mu.Lock()
+	g.reads = append(g.reads, objectStorageReadRange{
+		key: key,
+		min: cloneInt64Pointer(min),
+		max: cloneInt64Pointer(max),
+	})
+	g.mu.Unlock()
+	if min == nil || max == nil || *max < *min {
+		return nil, errors.New("expected a bounded range read")
+	}
+	return io.NopCloser(bytes.NewReader(make([]byte, *max-*min))), nil
+}
+
+func (g *generatedRangeObjectStorage) readRanges() []objectStorageReadRange {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return append([]objectStorageReadRange(nil), g.reads...)
+}
+
+func (w *heldWriter) Write(p []byte) (int, error) {
+	w.once.Do(func() { close(w.started) })
+	<-w.release
+	return len(p), nil
 }
 
 func (r *readRangeRecordingObjectStorage) Read(ctx context.Context, key string, min *int64, max *int64) (io.ReadCloser, error) {
@@ -1059,7 +1102,7 @@ func TestS3FSRangeReadSkipsFullObjectDiskCacheUpdate(t *testing.T) {
 			},
 		},
 	}
-	doneMerge, waitMerge := fs.ioMerger.Merge(fullObjectVec.ioMergeKey(), maxIOWaitDuration)
+	doneMerge, waitMerge := fs.ioMerger.Merge(fs.readMergeKey(fullObjectVec), maxIOWaitDuration)
 	assert.NotNil(t, doneMerge)
 	assert.Nil(t, waitMerge)
 	releasedMerge := false
@@ -1155,7 +1198,7 @@ func TestS3FSRangeReadSkipsFullObjectIOMergeBeforeDiskCacheUpdate(t *testing.T) 
 			},
 		},
 	}
-	doneMerge, waitMerge := fs.ioMerger.Merge(fullObjectVec.ioMergeKey(), maxIOWaitDuration)
+	doneMerge, waitMerge := fs.ioMerger.Merge(fs.readMergeKey(fullObjectVec), maxIOWaitDuration)
 	assert.NotNil(t, doneMerge)
 	assert.Nil(t, waitMerge)
 	releasedMerge := false
@@ -1195,7 +1238,7 @@ func TestS3FSRangeReadSkipsFullObjectIOMergeBeforeDiskCacheUpdate(t *testing.T) 
 	case result := <-readDone:
 		assert.Nil(t, result.err)
 		assert.Equal(t, data[123:130], result.data)
-		assert.True(t, fs.ioMerger.IsMerging(fullObjectVec.ioMergeKey()))
+		assert.True(t, fs.ioMerger.IsMerging(fs.readMergeKey(fullObjectVec)))
 		assert.False(t, fs.diskCache.isUpdating(fs.diskCache.pathForFile("foo/bar")))
 		read, ok := recorder.lastRead()
 		assert.True(t, ok)
@@ -1210,6 +1253,286 @@ func TestS3FSRangeReadSkipsFullObjectIOMergeBeforeDiskCacheUpdate(t *testing.T) 
 		result := <-readDone
 		t.Fatalf("range read waited for full-object io merge before disk cache update: %v", result.err)
 	}
+}
+
+func TestS3FSExpensiveRangeWaitsForFullObjectMergeUntilContextDeadline(t *testing.T) {
+	ctx := context.Background()
+	originalShortWait := shortIOWaitDuration
+	shortIOWaitDuration = time.Millisecond
+	t.Cleanup(func() {
+		shortIOWaitDuration = originalShortWait
+	})
+
+	fs, err := NewS3FS(
+		ctx,
+		ObjectStorageArguments{
+			Name:      "s3",
+			Endpoint:  "disk",
+			Bucket:    t.TempDir(),
+			KeyPrefix: time.Now().Format("2006-01-02.15:04:05.000000"),
+		},
+		CacheConfig{
+			DiskPath:     ptrTo(t.TempDir()),
+			DiskCapacity: ptrTo[toml.ByteSize](1 << 30),
+		},
+		nil,
+		false,
+		false,
+	)
+	require.NoError(t, err)
+
+	storage := &blockingReadObjectStorage{
+		ObjectStorage: fs.storage,
+		readStarted:   make(chan struct{}),
+		releaseRead:   make(chan struct{}),
+	}
+	fs.storage = storage
+	vector := &IOVector{
+		FilePath: "foo/bar",
+		Entries: []IOEntry{
+			{Offset: 0, Size: 1 << 20},
+			{Offset: 32 << 20, Size: 1 << 20},
+		},
+	}
+	doneMerge, waitMerge := fs.ioMerger.Merge(fs.readMergeKey(vector), maxIOWaitDuration)
+	require.NotNil(t, doneMerge)
+	require.Nil(t, waitMerge)
+	releaseMerge := sync.OnceFunc(doneMerge)
+	releaseRead := sync.OnceFunc(func() { close(storage.releaseRead) })
+	readCtx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	t.Cleanup(func() {
+		cancel()
+		releaseRead()
+		releaseMerge()
+		vector.Release()
+		fs.Close(ctx)
+	})
+
+	err = fs.Read(readCtx, vector)
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	require.Equal(t, int64(0), storage.readCount.Load())
+}
+
+func TestS3FSExpensiveRangeHasBoundedPerEntryFallback(t *testing.T) {
+	ctx := context.Background()
+	originalShortWait := shortIOWaitDuration
+	originalMaxWait := maxIOWaitDuration
+	shortIOWaitDuration = time.Millisecond
+	maxIOWaitDuration = 5 * time.Millisecond
+	t.Cleanup(func() {
+		shortIOWaitDuration = originalShortWait
+		maxIOWaitDuration = originalMaxWait
+	})
+
+	fs, err := NewS3FS(
+		ctx,
+		ObjectStorageArguments{
+			Name:      "s3",
+			Endpoint:  "disk",
+			Bucket:    t.TempDir(),
+			KeyPrefix: time.Now().Format("2006-01-02.15:04:05.000000"),
+		},
+		CacheConfig{
+			DiskPath:     ptrTo(t.TempDir()),
+			DiskCapacity: ptrTo[toml.ByteSize](1 << 30),
+		},
+		nil,
+		false,
+		false,
+	)
+	require.NoError(t, err)
+
+	storage := &generatedRangeObjectStorage{}
+	fs.storage = storage
+	vector := &IOVector{
+		FilePath: "foo/bar",
+		Entries: []IOEntry{
+			{Offset: 0, Size: 1},
+			{Offset: 9 << 20, Size: 1},
+		},
+	}
+	doneMerge, waitMerge := fs.ioMerger.Merge(fs.readMergeKey(vector), maxIOWaitDuration)
+	require.NotNil(t, doneMerge)
+	require.Nil(t, waitMerge)
+	releaseMerge := sync.OnceFunc(doneMerge)
+	t.Cleanup(func() {
+		releaseMerge()
+		vector.Release()
+		fs.Close(ctx)
+	})
+
+	readDone := make(chan error, 1)
+	go func() {
+		readDone <- fs.Read(context.Background(), vector)
+	}()
+	select {
+	case err := <-readDone:
+		require.NoError(t, err)
+	case <-time.After(time.Second):
+		releaseMerge()
+		select {
+		case <-readDone:
+		case <-time.After(time.Second):
+			t.Fatal("follower did not terminate after releasing the merge leader")
+		}
+		t.Fatal("follower with no caller deadline did not reach a bounded fallback")
+	}
+
+	reads := storage.readRanges()
+	require.Len(t, reads, 2)
+	require.Equal(t, int64(0), *reads[0].min)
+	require.Equal(t, int64(1), *reads[0].max)
+	require.Equal(t, int64(9<<20), *reads[1].min)
+	require.Equal(t, int64(9<<20)+1, *reads[1].max)
+}
+
+func TestS3FSCacheFillDoesNotWaitForNonProducingLeader(t *testing.T) {
+	ctx := context.Background()
+	fs, err := NewS3FS(
+		ctx,
+		ObjectStorageArguments{
+			Name:      "s3",
+			Endpoint:  "disk",
+			Bucket:    t.TempDir(),
+			KeyPrefix: time.Now().Format("2006-01-02.15:04:05.000000"),
+		},
+		CacheConfig{
+			DiskPath:     ptrTo(t.TempDir()),
+			DiskCapacity: ptrTo[toml.ByteSize](1 << 30),
+		},
+		nil,
+		false,
+		false,
+	)
+	require.NoError(t, err)
+	t.Cleanup(func() { fs.Close(ctx) })
+
+	data := make([]byte, (9<<20)+1)
+	data[0] = 1
+	data[len(data)-1] = 2
+	require.NoError(t, fs.Write(ctx, IOVector{
+		FilePath: "foo/bar",
+		Entries:  []IOEntry{{Size: int64(len(data)), Data: data}},
+		Policy:   SkipAllCache,
+	}))
+
+	writer := &heldWriter{
+		started: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+	releaseWriter := sync.OnceFunc(func() { close(writer.release) })
+	leaderVector := &IOVector{
+		FilePath: "foo/bar",
+		Entries: []IOEntry{{
+			Offset:        0,
+			Size:          1,
+			WriterForRead: writer,
+		}},
+	}
+	followerVector := &IOVector{
+		FilePath: "foo/bar",
+		Entries: []IOEntry{
+			{Offset: 0, Size: 1},
+			{Offset: 9 << 20, Size: 1},
+		},
+	}
+	t.Cleanup(followerVector.Release)
+	require.False(t, fs.readMergeKey(leaderVector).CacheFill)
+	require.True(t, fs.readMergeKey(followerVector).CacheFill)
+	require.NotEqual(t, fs.readMergeKey(leaderVector), fs.readMergeKey(followerVector))
+
+	leaderDone := make(chan error, 1)
+	go func() { leaderDone <- fs.Read(ctx, leaderVector) }()
+	t.Cleanup(func() {
+		releaseWriter()
+		select {
+		case err := <-leaderDone:
+			require.NoError(t, err)
+		case <-time.After(5 * time.Second):
+			t.Error("non-cache-producing leader did not terminate")
+		}
+	})
+	select {
+	case <-writer.started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("non-cache-producing leader did not reach its writer")
+	}
+	require.False(t, fs.ioMerger.IsMerging(fs.readMergeKey(leaderVector)))
+
+	followerDone := make(chan error, 1)
+	go func() { followerDone <- fs.Read(ctx, followerVector) }()
+	select {
+	case err := <-followerDone:
+		require.NoError(t, err)
+	case <-time.After(2 * time.Second):
+		releaseWriter()
+		select {
+		case <-followerDone:
+		case <-time.After(5 * time.Second):
+			t.Fatal("cache-producing follower did not terminate after leader release")
+		}
+		t.Fatal("cache-producing follower waited for a non-cache-producing leader")
+	}
+	require.Equal(t, []byte{1}, followerVector.Entries[0].Data)
+	require.Equal(t, []byte{2}, followerVector.Entries[1].Data)
+}
+
+func TestS3FSRangeMergeWaitHasBoundedFallback(t *testing.T) {
+	ctx := context.Background()
+	originalMaxWait := maxIOWaitDuration
+	maxIOWaitDuration = 5 * time.Millisecond
+	t.Cleanup(func() { maxIOWaitDuration = originalMaxWait })
+
+	fs, err := NewS3FS(
+		ctx,
+		ObjectStorageArguments{
+			Name:      "s3",
+			Endpoint:  "disk",
+			Bucket:    t.TempDir(),
+			KeyPrefix: time.Now().Format("2006-01-02.15:04:05.000000"),
+		},
+		CacheConfig{
+			DiskPath:     ptrTo(t.TempDir()),
+			DiskCapacity: ptrTo[toml.ByteSize](1 << 30),
+		},
+		nil,
+		false,
+		false,
+	)
+	require.NoError(t, err)
+	t.Cleanup(func() { fs.Close(ctx) })
+	storage := &generatedRangeObjectStorage{}
+	fs.storage = storage
+	vector := &IOVector{
+		FilePath: "foo/bar",
+		Policy:   SkipFullFilePreloads,
+		Entries:  []IOEntry{{Offset: 0, Size: 1}},
+	}
+	t.Cleanup(vector.Release)
+	finishMerge, waitMerge := fs.ioMerger.Merge(fs.readMergeKey(vector), maxIOWaitDuration)
+	require.NotNil(t, finishMerge)
+	require.Nil(t, waitMerge)
+	releaseMerge := sync.OnceFunc(finishMerge)
+	t.Cleanup(releaseMerge)
+
+	readDone := make(chan error, 1)
+	go func() { readDone <- fs.Read(context.Background(), vector) }()
+	select {
+	case err := <-readDone:
+		require.NoError(t, err)
+	case <-time.After(time.Second):
+		releaseMerge()
+		select {
+		case <-readDone:
+		case <-time.After(time.Second):
+			t.Fatal("range follower did not terminate after merge release")
+		}
+		t.Fatal("range follower rejoined a timed-out merge generation")
+	}
+	reads := storage.readRanges()
+	require.Len(t, reads, 1)
+	require.Equal(t, int64(0), *reads[0].min)
+	require.Equal(t, int64(1), *reads[0].max)
 }
 
 func TestS3FSRangeReadSkipsPrefetchFullObjectIOMerge(t *testing.T) {
@@ -1249,6 +1572,7 @@ func TestS3FSRangeReadSkipsPrefetchFullObjectIOMerge(t *testing.T) {
 	doneMerge, waitMerge := fs.ioMerger.Merge(IOMergeKey{
 		Path:       "foo/bar",
 		FullObject: true,
+		CacheFill:  true,
 	}, maxIOWaitDuration)
 	assert.NotNil(t, doneMerge)
 	assert.Nil(t, waitMerge)
@@ -1486,6 +1810,63 @@ func TestS3FSShouldStreamFullObjectToDiskCacheExclusions(t *testing.T) {
 	}))
 }
 
+func TestS3FSWillCacheFullObject(t *testing.T) {
+	ctx := context.Background()
+	cache, err := NewDiskCache(ctx, t.TempDir(), fscache.ConstCapacity(1<<20), nil, false, nil, "")
+	require.NoError(t, err)
+	t.Cleanup(func() { cache.Close(ctx) })
+	fs := &S3FS{diskCache: cache}
+
+	writer := new(bytes.Buffer)
+	var reader io.ReadCloser
+	tests := []struct {
+		name   string
+		vector *IOVector
+		want   bool
+	}{
+		{
+			name:   "ordinary entry",
+			vector: &IOVector{Entries: []IOEntry{{Size: 1}}},
+			want:   true,
+		},
+		{
+			name:   "writer only",
+			vector: &IOVector{Entries: []IOEntry{{Size: 1, WriterForRead: writer}}},
+		},
+		{
+			name:   "read closer only",
+			vector: &IOVector{Entries: []IOEntry{{Size: 1, ReadCloserForRead: &reader}}},
+		},
+		{
+			name: "mixed ordinary and writer",
+			vector: &IOVector{Entries: []IOEntry{
+				{Size: 1, WriterForRead: writer},
+				{Offset: 1, Size: 1},
+			}},
+			want: true,
+		},
+		{
+			name: "zero-sized entry prevents publication",
+			vector: &IOVector{Entries: []IOEntry{
+				{Size: 1},
+				{Offset: 1, Size: 0},
+			}},
+		},
+		{
+			name: "disk cache writes disabled",
+			vector: &IOVector{
+				Policy:  SkipDiskCacheWrites,
+				Entries: []IOEntry{{Size: 1}},
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			require.Equal(t, test.want, fs.willCacheFullObject(test.vector))
+		})
+	}
+}
+
 type errorReadCloser struct {
 	reader *bytes.Reader
 	err    error
@@ -1695,7 +2076,7 @@ func TestS3FSIOMerger(t *testing.T) {
 	// at this point, otherwise a waiter can become a second merge leader before
 	// the first leader's cache contents are visible. This assertion is
 	// deterministically false with defer done() at the Merge call site.
-	require.True(t, fs.ioMerger.IsMerging(newReadVector().ioMergeKey()))
+	require.True(t, fs.ioMerger.IsMerging(fs.readMergeKey(newReadVector())))
 
 	waiterCtx := WithEventLogger(readCtx)
 	startRead(waiterCtx)
