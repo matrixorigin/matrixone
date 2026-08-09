@@ -162,6 +162,8 @@ func NewMemCache(
 ) *MemCache {
 
 	inuseBytes, capacityBytes := metric.GetFsCacheBytesGauge(name, "mem")
+	logicalInuseBytes := metric.GetFsCacheLogicalBytesGauge(name, "mem")
+	backingOverheadBytes := metric.GetFsCacheBackingOverheadBytesGauge(name, "mem")
 	capacityBytes.Set(float64(capacity()))
 
 	capacityFunc := func() int64 {
@@ -178,7 +180,7 @@ func NewMemCache(
 		counterSets: counterSets,
 	}
 
-	prepareSetFn := func(ctx context.Context, key fscache.CacheKey, value fscache.Data, size int64, seq uint64) func(inserted bool) {
+	prepareSetFn := func(_ context.Context, _ fscache.CacheKey, value fscache.Data, _, _ int64, _ uint64) func(inserted bool) {
 		value.Retain()
 		return func(inserted bool) {
 			if !inserted {
@@ -187,7 +189,7 @@ func NewMemCache(
 		}
 	}
 
-	postSetFn := func(ctx context.Context, key fscache.CacheKey, value fscache.Data, size int64, seq uint64) {
+	postSetFn := func(ctx context.Context, key fscache.CacheKey, value fscache.Data, logicalSize, size int64, seq uint64) {
 		// events
 		LogEvent(ctx, str_memory_cache_post_set_begin)
 		defer LogEvent(ctx, str_memory_cache_post_set_end)
@@ -195,6 +197,8 @@ func NewMemCache(
 		// metrics
 		LogEvent(ctx, str_update_metrics_begin)
 		inuseBytes.Add(float64(size))
+		logicalInuseBytes.Add(float64(logicalSize))
+		backingOverheadBytes.Add(float64(size - logicalSize))
 		capacityBytes.Set(float64(capacityFunc()))
 		LogEvent(ctx, str_update_metrics_end)
 
@@ -203,6 +207,11 @@ func NewMemCache(
 			callbackLock := ret.callbacksLock(key)
 			callbackLock.Lock()
 			defer callbackLock.Unlock()
+			if dataCache != nil {
+				if currentSeq, ok := dataCache.CurrentSeq(key); !ok || currentSeq != seq {
+					return
+				}
+			}
 			LogEvent(ctx, str_memory_cache_callbacks_begin)
 			for _, fn := range callbacks.PostSet {
 				fn(key, value)
@@ -229,19 +238,21 @@ func NewMemCache(
 		}
 	}
 
-	postEvictFn := func(ctx context.Context, key fscache.CacheKey, value fscache.Data, size int64, seq uint64) {
+	postEvictFn := func(ctx context.Context, key fscache.CacheKey, value fscache.Data, logicalSize, size int64, seq uint64) {
 		// events
 		LogEvent(ctx, str_memory_cache_post_evict_begin)
 		defer LogEvent(ctx, str_memory_cache_post_evict_end)
 
-		// relaese
-		value.Release()
-
 		// metrics
 		LogEvent(ctx, str_update_metrics_begin)
 		inuseBytes.Add(float64(-size))
+		logicalInuseBytes.Add(float64(-logicalSize))
+		backingOverheadBytes.Add(float64(logicalSize - size))
 		capacityBytes.Set(float64(capacityFunc()))
 		LogEvent(ctx, str_update_metrics_end)
+
+		// release
+		value.Release()
 
 		// callbacks
 		if callbacks != nil {
