@@ -920,34 +920,71 @@ func resultColumnProjectionAtNode(node *plan.Node, ref *plan.ColRef) *plan.Expr 
 	if node == nil || ref == nil {
 		return nil
 	}
-	if ref.ColPos >= 0 && int(ref.ColPos) < len(node.ProjectList) {
-		return node.ProjectList[ref.ColPos]
-	}
+	// ColPos identifies the source column, not the position of the expression
+	// in this node's projection.  A projection can reorder columns (for example
+	// SELECT unique_value, id), so looking up ProjectList[ref.ColPos] can attach
+	// the metadata of a different source column.  Resolve the source identity
+	// across the whole projection first.
 	for _, expr := range node.ProjectList {
 		col := expr.GetCol()
 		if col == nil {
 			continue
 		}
-		if resultColumnRefsMatch(ref, col) {
+		if resultColumnRefsHaveSamePosition(ref, col) {
+			return expr
+		}
+	}
+
+	// Some plan nodes omit relation/column positions while retaining names.
+	// Use names only after the identity lookup, and require the names that are
+	// available on both refs to agree so an ambiguous table-only match cannot
+	// claim key metadata.
+	for _, expr := range node.ProjectList {
+		col := expr.GetCol()
+		if col == nil {
+			continue
+		}
+		if resultColumnRefsMatchByName(ref, col) {
 			return expr
 		}
 	}
 	return nil
 }
 
-func resultColumnRefsMatch(left, right *plan.ColRef) bool {
+func resultColumnRefsHaveSamePosition(left, right *plan.ColRef) bool {
 	if left == nil || right == nil {
 		return false
 	}
-	if left.Name != "" && right.Name != "" && strings.EqualFold(left.Name, right.Name) {
-		return true
-	}
-	if left.TblName != "" && right.TblName != "" &&
-		strings.EqualFold(left.TblName, right.TblName) &&
-		(left.Name == "" || right.Name == "" || strings.EqualFold(left.Name, right.Name)) {
-		return true
-	}
 	return left.RelPos == right.RelPos && left.ColPos == right.ColPos
+}
+
+func resultColumnRefsMatchByName(left, right *plan.ColRef) bool {
+	if left == nil || right == nil {
+		return false
+	}
+	if left.Name != "" && right.Name != "" {
+		if !strings.EqualFold(left.Name, right.Name) {
+			return false
+		}
+		if left.TblName != "" && right.TblName != "" &&
+			!strings.EqualFold(left.TblName, right.TblName) {
+			return false
+		}
+		if left.DbName != "" && right.DbName != "" &&
+			!strings.EqualFold(left.DbName, right.DbName) {
+			return false
+		}
+		return true
+	}
+	if left.TblName == "" || right.TblName == "" ||
+		!strings.EqualFold(left.TblName, right.TblName) {
+		return false
+	}
+	if left.DbName != "" && right.DbName != "" &&
+		!strings.EqualFold(left.DbName, right.DbName) {
+		return false
+	}
+	return left.Name == "" && right.Name == ""
 }
 
 func isResultColumnSourceNode(nodeType plan.Node_NodeType) bool {

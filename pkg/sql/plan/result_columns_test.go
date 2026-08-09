@@ -94,3 +94,63 @@ func TestGetResultColumnsFromPlanCarriesConstraintMetadata(t *testing.T) {
 	require.NoError(t, roundTrip.Unmarshal(wire))
 	require.True(t, roundTrip.Unique)
 }
+
+func TestGetResultColumnsFromPlanPreservesReorderedConstraintMetadata(t *testing.T) {
+	tableDef := &planpb.TableDef{
+		Name: "t",
+		Pkey: &planpb.PrimaryKeyDef{Names: []string{"id"}},
+		Cols: []*planpb.ColDef{
+			{
+				Name:    "id",
+				Primary: true,
+				Typ: planpb.Type{
+					Id:          int32(types.T_int32),
+					NotNullable: true,
+					AutoIncr:    true,
+				},
+			},
+			{Name: "unique_value", Typ: planpb.Type{Id: int32(types.T_int32)}, NotNull: true},
+		},
+		Indexes: []*planpb.IndexDef{{IndexName: "uk_t", Parts: []string{"unique_value"}, Unique: true}},
+	}
+
+	const scanRelPos = int32(7)
+	scanProjects := []*planpb.Expr{
+		{Typ: tableDef.Cols[0].Typ, Expr: &planpb.Expr_Col{Col: &planpb.ColRef{
+			RelPos: scanRelPos, ColPos: 0, Name: "t.id", TblName: "t",
+		}}},
+		{Typ: tableDef.Cols[1].Typ, Expr: &planpb.Expr_Col{Col: &planpb.ColRef{
+			RelPos: scanRelPos, ColPos: 1, Name: "t.unique_value", TblName: "t",
+		}}},
+	}
+	// The output order differs from the source order. In particular, ColPos=1
+	// is the first output expression, not the second entry in ProjectList.
+	resultProjects := []*planpb.Expr{
+		{Typ: tableDef.Cols[1].Typ, Expr: &planpb.Expr_Col{Col: &planpb.ColRef{
+			RelPos: scanRelPos, ColPos: 1, Name: "t.unique_value", TblName: "t",
+		}}},
+		{Typ: tableDef.Cols[0].Typ, Expr: &planpb.Expr_Col{Col: &planpb.ColRef{
+			RelPos: scanRelPos, ColPos: 0, Name: "t.id", TblName: "t",
+		}}},
+	}
+
+	got := GetResultColumnsFromPlan(&planpb.Plan{Plan: &planpb.Plan_Query{Query: &planpb.Query{
+		StmtType: planpb.Query_SELECT,
+		Steps:    []int32{1},
+		Nodes: []*planpb.Node{
+			{NodeId: 0, NodeType: planpb.Node_TABLE_SCAN, TableDef: tableDef, ProjectList: scanProjects},
+			{NodeId: 1, NodeType: planpb.Node_PROJECT, Children: []int32{0}, ProjectList: resultProjects},
+		},
+		Headings: []string{"unique_value", "id"},
+	}}})
+
+	require.Len(t, got, 2)
+	require.False(t, got[0].Primary)
+	require.True(t, got[0].Unique)
+	require.True(t, got[0].NotNull)
+	require.False(t, got[0].Typ.AutoIncr)
+	require.True(t, got[1].Primary)
+	require.False(t, got[1].Unique)
+	require.True(t, got[1].NotNull)
+	require.True(t, got[1].Typ.AutoIncr)
+}
