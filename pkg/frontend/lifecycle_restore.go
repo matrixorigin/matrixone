@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/incrservice"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -40,6 +41,9 @@ const (
 	lifecycleMaxRestoreStagingBytesPerAccount = uint64(12) << 40
 	lifecycleArchiveCloseTimeout              = 30 * time.Second
 	lifecycleMaxConcurrentRestoresPerCN       = 1
+	lifecycleRangeRestoreBaseDeadline         = 24 * time.Hour
+	lifecycleRangeRestoreMaxDeadline          = 7 * 24 * time.Hour
+	lifecycleRangeRestoreBytesPerSecond       = uint64(32) << 20
 )
 
 var lifecycleRestoreSlots = make(
@@ -219,23 +223,6 @@ func handleRestoreArchiveRange(
 	if logicalTableID == 0 {
 		logicalTableID = tableDef.TblId
 	}
-	datasetReader := lifecyclepkg.SQLDatasetReader{Executor: sqlExecutor}
-	candidates, err := datasetReader.ListRestoreDatasets(ctx, accountID, logicalTableID)
-	if err != nil {
-		return err
-	}
-	if len(candidates) == 0 {
-		return moerr.NewInvalidInput(ctx, "Lifecycle Archive has no published Dataset for the source table")
-	}
-	selectedCandidates, start, end, err := lifecyclepkg.SelectRestoreDatasetsForRange(
-		ctx,
-		candidates,
-		statement.From,
-		statement.To,
-	)
-	if err != nil {
-		return err
-	}
 	databaseName := string(statement.Target.Schema())
 	if databaseName == "" {
 		databaseName = ses.GetDatabaseName()
@@ -266,16 +253,27 @@ func handleRestoreArchiveRange(
 	attempt, resumed, err := repository.FindRangeResumable(
 		ctx,
 		logicalTableID,
-		start,
-		end,
 		databaseID,
 		tableName,
 	)
 	if err != nil {
 		return err
 	}
-	if lifecycleRestoreAlreadyPublished(resumed, attempt.State) {
-		return nil
+	var start int64
+	var end int64
+	if resumed {
+		start, end, err = lifecycleRangeRestoreResumeBounds(
+			ctx,
+			attempt,
+			statement.From,
+			statement.To,
+		)
+		if err != nil {
+			return err
+		}
+		if lifecycleRestoreAlreadyPublished(true, attempt.State) {
+			return nil
+		}
 	}
 	if err = rejectExistingLifecycleRestoreTarget(
 		ctx,
@@ -286,18 +284,48 @@ func handleRestoreArchiveRange(
 	); err != nil {
 		return err
 	}
-	selected := selectedCandidates
+	datasetReader := lifecyclepkg.SQLDatasetReader{Executor: sqlExecutor}
+	var selected []lifecyclepkg.RestoreDataset
 	if resumed {
 		selected, err = datasetReader.GetRestoreDatasets(ctx, accountID, attempt.DatasetIDs)
 		if err != nil {
 			return err
 		}
 	} else {
+		candidates, listErr := datasetReader.ListRestoreDatasets(
+			ctx,
+			accountID,
+			logicalTableID,
+			statement.From,
+			statement.To,
+		)
+		if listErr != nil {
+			return listErr
+		}
+		if len(candidates) == 0 {
+			return moerr.NewInvalidInput(
+				ctx,
+				"Lifecycle Archive has no Dataset overlapping the requested range",
+			)
+		}
+		selected, start, end, err = lifecyclepkg.SelectRestoreDatasetsForRange(
+			ctx,
+			candidates,
+			statement.From,
+			statement.To,
+		)
+		if err != nil {
+			return err
+		}
+		deadline, deadlineErr := lifecycleRangeRestoreDeadline(time.Now(), selected)
+		if deadlineErr != nil {
+			return deadlineErr
+		}
 		restoreID := uuid.NewString()
 		attempt = lifecyclepkg.RestoreAttempt{
 			RestoreID:         restoreID,
 			LeaseID:           uuid.NewString(),
-			Deadline:          time.Now().Add(24 * time.Hour),
+			Deadline:          deadline,
 			StagingDatabaseID: databaseID,
 			HiddenName: catalog.LifecycleRestoreTableNamePrefix +
 				strings.ReplaceAll(restoreID, "-", ""),
@@ -342,6 +370,68 @@ func handleRestoreArchiveRange(
 		repository,
 	)
 	return coordinator.RestoreRange(ctx, selected, attempt, start, end)
+}
+
+func lifecycleRangeRestoreResumeBounds(
+	ctx context.Context,
+	attempt lifecyclepkg.RestoreAttempt,
+	from string,
+	to string,
+) (int64, int64, error) {
+	if attempt.Scope != lifecyclepkg.RestoreScopeRange {
+		return 0, 0, moerr.NewInternalErrorNoCtxf(
+			"Lifecycle resumable Attempt is not a range Restore",
+		)
+	}
+	oid := types.T(attempt.LifecycleRange.TypeID)
+	start, err := lifecyclepkg.ParseLifecycleRestoreBoundary(ctx, from, oid)
+	if err != nil {
+		return 0, 0, err
+	}
+	end, err := lifecyclepkg.ParseLifecycleRestoreBoundary(ctx, to, oid)
+	if err != nil {
+		return 0, 0, err
+	}
+	if start != attempt.RangeStart || end != attempt.RangeEnd {
+		return 0, 0, moerr.NewInvalidInput(
+			ctx,
+			"Lifecycle Restore range does not match the resumable Attempt for this target",
+		)
+	}
+	return start, end, nil
+}
+
+func lifecycleRangeRestoreDeadline(
+	now time.Time,
+	datasets []lifecyclepkg.RestoreDataset,
+) (time.Time, error) {
+	var logicalBytes uint64
+	for _, dataset := range datasets {
+		if dataset.LogicalBytes == 0 || ^uint64(0)-logicalBytes < dataset.LogicalBytes {
+			return time.Time{}, moerr.NewInternalErrorNoCtxf(
+				"Lifecycle Restore Dataset logical bytes are invalid",
+			)
+		}
+		logicalBytes += dataset.LogicalBytes
+	}
+	if logicalBytes == 0 {
+		return time.Time{}, moerr.NewInternalErrorNoCtxf(
+			"Lifecycle Restore Dataset selection is empty",
+		)
+	}
+	seconds := logicalBytes / lifecycleRangeRestoreBytesPerSecond
+	if logicalBytes%lifecycleRangeRestoreBytesPerSecond != 0 {
+		seconds++
+	}
+	maxTransferSeconds := uint64(
+		(lifecycleRangeRestoreMaxDeadline - lifecycleRangeRestoreBaseDeadline) /
+			time.Second,
+	)
+	if seconds > maxTransferSeconds {
+		seconds = maxTransferSeconds
+	}
+	duration := lifecycleRangeRestoreBaseDeadline + time.Duration(seconds)*time.Second
+	return now.Add(duration), nil
 }
 
 func tryAcquireLifecycleRestoreSlot(

@@ -452,21 +452,20 @@ order by a.updated_at desc,a.restore_id limit 2`,
 	return repository.decodeAttemptResult(result)
 }
 
-// FindRangeResumable finds only an Attempt whose frozen source table, range,
-// and target match the repeated user request. Dataset selection is then loaded
-// from that Attempt instead of being recomputed from newer Catalog state.
+// FindRangeResumable finds the live or published range Attempt for the source
+// table and target. Its frozen range and Dataset selection are authoritative;
+// the caller validates the repeated user boundary after loading the Attempt,
+// without enumerating newer Dataset Catalog state first.
 func (repository SQLRestoreRepository) FindRangeResumable(
 	ctx context.Context,
 	logicalTableID uint64,
-	start int64,
-	end int64,
 	targetDatabaseID uint64,
 	targetName string,
 ) (lifecyclepkg.RestoreAttempt, bool, error) {
 	if err := repository.validateReader(); err != nil {
 		return lifecyclepkg.RestoreAttempt{}, false, err
 	}
-	if logicalTableID == 0 || start >= end || targetDatabaseID == 0 || targetName == "" {
+	if logicalTableID == 0 || targetDatabaseID == 0 || targetName == "" {
 		return lifecyclepkg.RestoreAttempt{}, false, moerr.NewInternalErrorNoCtxf(
 			"Lifecycle range Restore resume identity is incomplete",
 		)
@@ -484,7 +483,6 @@ hex(a.selection_digest),a.dataset_selection,a.dataset_count,
 a.total_chunk_count,a.selected_logical_bytes
 from mo_catalog.mo_lifecycle_restore_attempts a
 where a.scope='RANGE' and a.source_logical_table_id=%d
-and a.range_start=%d and a.range_end=%d
 and a.target_database_id=%d and a.target_name=%s
 and ((a.state='IMPORTING' and a.deadline>utc_timestamp() and exists (
        select 1 from mo_catalog.mo_tables h
@@ -498,8 +496,6 @@ and ((a.state='IMPORTING' and a.deadline>utc_timestamp() and exists (
          and t.relname=a.target_name)))
 order by a.updated_at desc,a.restore_id limit 2`,
 			logicalTableID,
-			start,
-			end,
 			targetDatabaseID,
 			lifecycleCatalogQuote(targetName),
 		),

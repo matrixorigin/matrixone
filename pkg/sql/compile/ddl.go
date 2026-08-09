@@ -714,29 +714,6 @@ func (s *Scope) alterTableInplace(c *Compile, cleanup *alterAutoIncrementResetCl
 					return moerr.NewErrDuplicateKeyName(c.proc.Ctx, act.AddFk.Fkey.Name)
 				}
 				newAddedFkNames[act.AddFk.Fkey.Name] = true
-
-				// Lock the referenced parent mo_tables row. SET LIFECYCLE takes
-				// the same lock, so the following indexed Binding lookup closes
-				// the first-binding race without a global Guard.
-				if !lifecycleForeignKeyIsSelfReference(
-					dbName,
-					tblName,
-					act.AddFk.DbName,
-					act.AddFk.TableName,
-				) {
-					if err = lockMoTable(c, act.AddFk.DbName, act.AddFk.TableName, lock.LockMode_Exclusive); err != nil {
-						if !moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry) &&
-							!moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged) {
-							return err
-						}
-						retryErr = moerr.NewTxnNeedRetryWithDefChangedNoCtx()
-					} else if err = c.rejectLifecycleForeignKeyParentAfterLock(
-						act.AddFk.DbName,
-						act.AddFk.TableName,
-					); err != nil {
-						return err
-					}
-				}
 			}
 		}
 
@@ -1374,6 +1351,16 @@ func (s *Scope) alterTableInplace(c *Compile, cleanup *alterAutoIncrementResetCl
 			if err != nil {
 				return err
 			}
+			// UpdateConstraint is the ordinary FK path's existing parent
+			// mo_tables write/conflict point. Probe only after that write has
+			// established ordering with SET LIFECYCLE; rejection rolls this
+			// whole DDL transaction back without adding another parent lock.
+			if err = c.rejectBoundLifecycleDDL(
+				fkRelation.GetTableID(c.proc.Ctx),
+				"ADD FOREIGN KEY referencing",
+			); err != nil {
+				return err
+			}
 		}
 	}
 	return nil
@@ -1527,14 +1514,6 @@ func (s *Scope) createTable(c *Compile, tableCreated func()) error {
 				zap.String("tableName", qry.GetTableDef().GetName()),
 				zap.Error(err),
 			)
-			return err
-		}
-		if err = c.lockAndRejectLifecycleForeignKeyParents(
-			dbName,
-			tblName,
-			qry.GetFkDbs(),
-			qry.GetFkTables(),
-		); err != nil {
 			return err
 		}
 	}
@@ -1745,7 +1724,17 @@ func (s *Scope) createTable(c *Compile, tableCreated func()) error {
 			}
 		}
 
-		if err = addChildTableIDToDistinctParents(c.proc.Ctx, parentRelations, tblId); err != nil {
+		if err = addChildTableIDToDistinctParents(
+			c.proc.Ctx,
+			parentRelations,
+			tblId,
+			func(parent engine.Relation) error {
+				return c.rejectBoundLifecycleDDL(
+					parent.GetTableID(c.proc.Ctx),
+					"ADD FOREIGN KEY referencing",
+				)
+			},
+		); err != nil {
 			c.proc.Info(c.proc.Ctx, "createTable",
 				zap.String("databaseName", c.db),
 				zap.String("tableName", qry.GetTableDef().GetName()),
@@ -3154,6 +3143,7 @@ func addChildTableIDToDistinctParents(
 	ctx context.Context,
 	parentRelations []engine.Relation,
 	childTableID uint64,
+	afterUpdate func(engine.Relation) error,
 ) error {
 	updatedParents := make(map[uint64]struct{}, len(parentRelations))
 	for _, parentRelation := range parentRelations {
@@ -3163,6 +3153,11 @@ func addChildTableIDToDistinctParents(
 		}
 		if err := AddChildTblIdToParentTable(ctx, parentRelation, childTableID); err != nil {
 			return err
+		}
+		if afterUpdate != nil {
+			if err := afterUpdate(parentRelation); err != nil {
+				return err
+			}
 		}
 		updatedParents[parentTableID] = struct{}{}
 	}

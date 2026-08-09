@@ -16,6 +16,7 @@ package frontend
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	"github.com/golang/mock/gomock"
@@ -145,18 +146,24 @@ func TestHandleShowLifecycleRestoresIsBoundedAndTenantScoped(t *testing.T) {
 	ctx := context.Background()
 	background := &backgroundExecTest{}
 	background.init()
-	query := `select hex(restore_id),scope,dataset_count,source_logical_table_id,
+	query := fmt.Sprintf(`select hex(restore_id),scope,dataset_count,source_logical_table_id,
+case lifecycle_column_type when %d then 'DATE' when %d then 'DATETIME'
+when %d then 'TIMESTAMP' else concat('UNKNOWN(',cast(lifecycle_column_type as varchar),')') end,
 cast(range_start as varchar),cast(range_end as varchar),target_database_id,
 target_name,state,next_chunk_ordinal,total_chunk_count,restored_rows,
 cast(deadline as varchar),coalesce(last_error,''),cast(updated_at as varchar)
 from mo_catalog.mo_lifecycle_restore_attempts
-order by updated_at desc,restore_id desc limit 2 offset 4`
+order by updated_at desc,restore_id desc limit 2 offset 4`,
+		types.T_date,
+		types.T_datetime,
+		types.T_timestamp,
+	)
 	execResult := &MysqlResultSet{}
 	for _, column := range lifecycleRestoreShowColumns {
 		execResult.AddColumn(column)
 	}
 	row := []interface{}{
-		"00112233", "RANGE", uint64(3), uint64(42), "100", "200",
+		"00112233", "RANGE", uint64(3), uint64(42), "TIMESTAMP", "100", "200",
 		uint64(7), "events_q1", "IMPORTING", uint64(5), uint64(8),
 		uint64(1000), "2026-08-10 12:00:00", "", "2026-08-09 12:00:00",
 	}

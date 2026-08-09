@@ -149,16 +149,22 @@ from mo_catalog.mo_lifecycle_datasets where dataset_id=unhex('%s')`,
 	return datasets[0], nil
 }
 
-// ListRestoreDatasets returns a bounded, deterministic candidate set. Exact
-// interval overlap is evaluated from the verified physical range fields by the
-// caller after parsing the user boundary for the frozen Lifecycle column type.
+// ListRestoreDatasets returns a bounded, deterministic set of Datasets whose
+// verified physical ranges overlap the requested interval. The limit applies
+// to this selection, never to all historical Datasets of the table.
 func (reader SQLDatasetReader) ListRestoreDatasets(
 	ctx context.Context,
 	accountID uint32,
 	logicalTableID uint64,
+	from string,
+	to string,
 ) ([]RestoreDataset, error) {
 	if reader.Executor == nil || accountID == 0 || logicalTableID == 0 {
 		return nil, moerr.NewInternalErrorNoCtxf("Lifecycle Dataset range reader is incomplete")
+	}
+	overlap, err := lifecycleRestoreDatasetOverlapSQL(ctx, from, to)
+	if err != nil {
+		return nil, err
 	}
 	result, err := reader.Executor.Exec(
 		ctx,
@@ -172,10 +178,13 @@ coalesce(date_format(restore_deadline,'%%Y-%%m-%%d %%H:%%i:%%s.%%f'),''),
 logical_table_id,lifecycle_column_id,lifecycle_column_type,
 lifecycle_min,lifecycle_max
 from mo_catalog.mo_lifecycle_datasets
-where logical_table_id=%d and state='PUBLISHED'
+where account_id=%d and logical_table_id=%d and state='PUBLISHED'
+and (%s)
 order by lifecycle_min,lifecycle_max,created_at,dataset_id
 limit %d`,
+			accountID,
 			logicalTableID,
+			overlap,
 			maxRestoreRangeDatasets+1,
 		),
 		executor.Options{}.WithAccountID(accountID),
@@ -199,6 +208,38 @@ limit %d`,
 		)
 	}
 	return datasets, nil
+}
+
+func lifecycleRestoreDatasetOverlapSQL(
+	ctx context.Context,
+	from string,
+	to string,
+) (string, error) {
+	predicates := make([]string, 0, 3)
+	for _, oid := range []types.T{
+		types.T_date,
+		types.T_datetime,
+		types.T_timestamp,
+	} {
+		start, startErr := ParseLifecycleRestoreBoundary(ctx, from, oid)
+		end, endErr := ParseLifecycleRestoreBoundary(ctx, to, oid)
+		if startErr != nil || endErr != nil || start >= end {
+			continue
+		}
+		predicates = append(predicates, fmt.Sprintf(
+			"(lifecycle_column_type=%d and lifecycle_max>=%d and lifecycle_min<%d)",
+			oid,
+			start,
+			end,
+		))
+	}
+	if len(predicates) == 0 {
+		return "", moerr.NewInvalidInput(
+			ctx,
+			"Lifecycle Restore range is invalid for DATE, DATETIME, and TIMESTAMP",
+		)
+	}
+	return strings.Join(predicates, " or "), nil
 }
 
 func decodeRestoreDatasets(

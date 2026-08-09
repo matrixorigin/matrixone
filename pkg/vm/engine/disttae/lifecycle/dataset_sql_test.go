@@ -18,6 +18,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"strings"
 	"testing"
 	"time"
 
@@ -108,6 +109,37 @@ func TestSQLDatasetReaderReloadsFrozenSelectionInAttemptOrder(t *testing.T) {
 		datasets[0].DatasetID,
 		datasets[1].DatasetID,
 	})
+}
+
+func TestSQLDatasetReaderListsOnlyRangeOverlapsForAccount(t *testing.T) {
+	mp := mpool.MustNewZero()
+	datasetID := uuid.New()
+	fake := executor.NewMemExecutor(func(sql string) (executor.Result, error) {
+		lower := strings.ToLower(sql)
+		require.Contains(t, lower, "account_id=17")
+		require.Contains(t, lower, "logical_table_id=42")
+		require.Contains(t, lower, "state='published'")
+		require.Contains(t, lower, "lifecycle_column_type=")
+		require.Contains(t, lower, "lifecycle_max>=")
+		require.Contains(t, lower, "lifecycle_min<")
+		require.Contains(t, lower, "limit 4097")
+		return lifecycleDatasetResult(t, mp, lifecycleDatasetRow{
+			DatasetID: datasetID,
+			RootID:    uuid.New(),
+			AttemptID: uuid.New(),
+		}), nil
+	})
+
+	datasets, err := (SQLDatasetReader{Executor: fake}).ListRestoreDatasets(
+		context.Background(),
+		17,
+		42,
+		"2026-01-01 00:00:00",
+		"2026-02-01 00:00:00",
+	)
+	require.NoError(t, err)
+	require.Len(t, datasets, 1)
+	require.Equal(t, datasetID.String(), datasets[0].DatasetID)
 }
 
 func TestSQLDatasetReaderFailsClosedOnInvalidInputAndRows(t *testing.T) {

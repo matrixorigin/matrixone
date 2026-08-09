@@ -46,6 +46,64 @@ func TestLifecycleRestorePublishedRetryNeedsNoStaging(t *testing.T) {
 	require.False(t, lifecycleRestoreAlreadyPublished(false, "DONE"))
 }
 
+func TestLifecycleRangeRestoreResumeUsesFrozenBounds(t *testing.T) {
+	ctx := context.Background()
+	start, err := lifecyclepkg.ParseLifecycleRestoreBoundary(
+		ctx,
+		"2026-01-01 00:00:00",
+		types.T_timestamp,
+	)
+	require.NoError(t, err)
+	end, err := lifecyclepkg.ParseLifecycleRestoreBoundary(
+		ctx,
+		"2026-02-01 00:00:00",
+		types.T_timestamp,
+	)
+	require.NoError(t, err)
+	attempt := lifecyclepkg.RestoreAttempt{
+		Scope:      lifecyclepkg.RestoreScopeRange,
+		RangeStart: start,
+		RangeEnd:   end,
+		LifecycleRange: lifecyclepkg.ArchiveLifecycleRange{
+			TypeID: int32(types.T_timestamp),
+		},
+	}
+
+	gotStart, gotEnd, err := lifecycleRangeRestoreResumeBounds(
+		ctx,
+		attempt,
+		"2026-01-01 00:00:00",
+		"2026-02-01 00:00:00",
+	)
+	require.NoError(t, err)
+	require.Equal(t, start, gotStart)
+	require.Equal(t, end, gotEnd)
+
+	_, _, err = lifecycleRangeRestoreResumeBounds(
+		ctx,
+		attempt,
+		"2026-01-02 00:00:00",
+		"2026-02-01 00:00:00",
+	)
+	require.ErrorContains(t, err, "does not match the resumable Attempt")
+}
+
+func TestLifecycleRangeRestoreDeadlineScalesWithinBound(t *testing.T) {
+	now := time.Date(2026, 8, 9, 0, 0, 0, 0, time.UTC)
+	small, err := lifecycleRangeRestoreDeadline(now, []lifecyclepkg.RestoreDataset{{
+		LogicalBytes: 1 << 20,
+	}})
+	require.NoError(t, err)
+	require.GreaterOrEqual(t, small.Sub(now), 24*time.Hour)
+
+	tenTiB, err := lifecycleRangeRestoreDeadline(now, []lifecyclepkg.RestoreDataset{{
+		LogicalBytes: uint64(10) << 40,
+	}})
+	require.NoError(t, err)
+	require.Greater(t, tenTiB.Sub(now), 4*24*time.Hour)
+	require.LessOrEqual(t, tenTiB.Sub(now), 7*24*time.Hour)
+}
+
 func TestHandleRestoreArchiveDatasetFailsBeforeExternalSideEffects(t *testing.T) {
 	ctx := context.Background()
 	require.ErrorContains(t, handleRestoreArchiveRange(

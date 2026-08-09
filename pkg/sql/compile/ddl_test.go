@@ -1877,11 +1877,17 @@ func TestAddChildTableIDToDistinctParents(t *testing.T) {
 	parentOne.EXPECT().UpdateConstraint(gomock.Any(), gomock.Any()).DoAndReturn(assertRefChild).Times(1)
 	parentTwo.EXPECT().UpdateConstraint(gomock.Any(), gomock.Any()).DoAndReturn(assertRefChild).Times(1)
 
+	updated := make([]engine.Relation, 0, 2)
 	require.NoError(t, addChildTableIDToDistinctParents(
 		context.Background(),
 		[]engine.Relation{parentOne, duplicateParentOne, parentTwo},
 		77,
+		func(parent engine.Relation) error {
+			updated = append(updated, parent)
+			return nil
+		},
 	))
+	require.Equal(t, []engine.Relation{parentOne, parentTwo}, updated)
 }
 
 func TestMissingTablePredicates(t *testing.T) {

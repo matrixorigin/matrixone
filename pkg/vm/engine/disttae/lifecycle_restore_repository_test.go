@@ -443,8 +443,8 @@ func TestSQLRestoreFindsRangeResumableWithFrozenDatasetSelection(t *testing.T) {
 		lower := strings.ToLower(sql)
 		require.Contains(t, lower, "a.scope='range'")
 		require.Contains(t, lower, "a.source_logical_table_id=42")
-		require.Contains(t, lower, "a.range_start=100")
-		require.Contains(t, lower, "a.range_end=200")
+		require.NotContains(t, lower, "a.range_start=")
+		require.NotContains(t, lower, "a.range_end=")
 		require.Contains(t, lower, "a.target_database_id=7")
 		require.Contains(t, lower, "a.target_name='events_history'")
 
@@ -471,8 +471,6 @@ func TestSQLRestoreFindsRangeResumableWithFrozenDatasetSelection(t *testing.T) {
 	attempt, found, err := repository.FindRangeResumable(
 		context.Background(),
 		42,
-		100,
-		200,
 		7,
 		"events_history",
 	)

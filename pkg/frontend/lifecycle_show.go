@@ -21,6 +21,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -64,6 +65,7 @@ var lifecycleRestoreShowColumns = []Column{
 	lifecycleShowColumn("scope", defines.MYSQL_TYPE_VARCHAR),
 	lifecycleShowColumn("dataset_count", defines.MYSQL_TYPE_LONGLONG),
 	lifecycleShowColumn("source_logical_table_id", defines.MYSQL_TYPE_LONGLONG),
+	lifecycleShowColumn("lifecycle_column_type", defines.MYSQL_TYPE_VARCHAR),
 	lifecycleShowColumn("range_start", defines.MYSQL_TYPE_VARCHAR),
 	lifecycleShowColumn("range_end", defines.MYSQL_TYPE_VARCHAR),
 	lifecycleShowColumn("target_database_id", defines.MYSQL_TYPE_LONGLONG),
@@ -152,11 +154,16 @@ order by updated_at desc,root_id desc limit %d offset %d`,
 		}
 		query = fmt.Sprintf(
 			`select hex(restore_id),scope,dataset_count,source_logical_table_id,
+case lifecycle_column_type when %d then 'DATE' when %d then 'DATETIME'
+when %d then 'TIMESTAMP' else concat('UNKNOWN(',cast(lifecycle_column_type as varchar),')') end,
 cast(range_start as varchar),cast(range_end as varchar),target_database_id,
 target_name,state,next_chunk_ordinal,total_chunk_count,restored_rows,
 cast(deadline as varchar),coalesce(last_error,''),cast(updated_at as varchar)
 from mo_catalog.mo_lifecycle_restore_attempts
 order by updated_at desc,restore_id desc limit %d offset %d`,
+			types.T_date,
+			types.T_datetime,
+			types.T_timestamp,
 			limit,
 			offset,
 		)

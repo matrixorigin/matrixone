@@ -113,36 +113,3 @@ func TestLifecycleDatabaseDropBindingDeleteSQLIsTenantAndDatabaseScoped(t *testi
 	require.Contains(t, sql, "database_id=43")
 	require.NotContains(t, strings.ToLower(sql), "physical_table_id")
 }
-
-func TestLifecycleForeignKeyParentsAreDeduplicatedAndExcludeSelf(t *testing.T) {
-	require.True(t, lifecycleForeignKeyIsSelfReference(
-		"child_db", "child", "CHILD_DB", "CHILD",
-	))
-	require.False(t, lifecycleForeignKeyIsSelfReference(
-		"child_db", "child", "parent_db", "parent",
-	))
-
-	parents, err := lifecycleForeignKeyParents(
-		context.Background(),
-		"child_db",
-		"child",
-		[]string{"parent_db", "child_db", "parent_db", "child_db"},
-		[]string{"parent", "child", "parent", "parent_in_same_db"},
-	)
-	require.NoError(t, err)
-	require.Equal(t, []lifecycleForeignKeyParent{
-		{databaseName: "child_db", tableName: "parent_in_same_db"},
-		{databaseName: "parent_db", tableName: "parent"},
-	}, parents)
-}
-
-func TestLifecycleForeignKeyParentsRejectMalformedPlan(t *testing.T) {
-	_, err := lifecycleForeignKeyParents(
-		context.Background(),
-		"child_db",
-		"child",
-		[]string{"parent_db"},
-		nil,
-	)
-	require.ErrorContains(t, err, "foreign key parent metadata")
-}
