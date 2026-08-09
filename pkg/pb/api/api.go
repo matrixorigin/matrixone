@@ -198,6 +198,22 @@ func NewReplaceDefReq(did, tid uint64, planDef *plan.TableDef) *AlterTableReq {
 	}
 }
 
+func NewGuardedReplaceDefReq(
+	did, tid uint64,
+	expectedVersion uint32,
+	preservedCreator uint32,
+	preservedOwner uint32,
+	planDef *plan.TableDef,
+) *AlterTableReq {
+	request := NewReplaceDefReq(did, tid, planDef)
+	request.GetReplaceDef().ExpectedVersion = expectedVersion
+	request.GetReplaceDef().CheckVersion = true
+	request.GetReplaceDef().PreserveOwnership = true
+	request.GetReplaceDef().PreservedCreator = preservedCreator
+	request.GetReplaceDef().PreservedOwner = preservedOwner
+	return request
+}
+
 func (m *SyncLogTailReq) MarshalBinary() ([]byte, error) {
 	return m.Marshal()
 }

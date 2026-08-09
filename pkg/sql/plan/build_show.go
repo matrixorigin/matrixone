@@ -541,6 +541,15 @@ func buildShowColumns(stmt *tree.ShowColumns, ctx CompilerContext) (*Plan, error
 	if tableDef == nil {
 		return nil, moerr.NewNoSuchTable(ctx.GetContext(), dbName, tblName)
 	}
+	if tableDef.ViewSql != nil {
+		if checker, ok := ctx.(interface {
+			EnsureViewMetadataCurrent(string, string, uint64) error
+		}); ok {
+			if err = checker.EnsureViewMetadataCurrent(dbName, tblName, tableDef.TblId); err != nil {
+				return nil, err
+			}
+		}
+	}
 
 	colIdToOriginName := make(map[uint64]string)
 	colNameToOriginName := make(map[string]string)

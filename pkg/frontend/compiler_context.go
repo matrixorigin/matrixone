@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/pubsub"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -43,6 +44,7 @@ import (
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -365,10 +367,15 @@ func (tcc *TxnCompilerContext) getRelation(
 		}
 	}
 
-	account := ses.GetTenantInfo()
 	if isClusterTable(dbName, tableName) {
-		//if it is the cluster table in the general account, switch into the sys account
-		if account != nil && account.GetTenantID() != sysAccountID {
+		// The effective binding account can differ from the frontend session
+		// during tenant bootstrap and snapshot binding. Cluster relations always
+		// live in the system account.
+		effectiveAccountID, accountErr := defines.GetAccountId(tempCtx)
+		if accountErr != nil {
+			return nil, nil, accountErr
+		}
+		if effectiveAccountID != sysAccountID {
 			tempCtx = defines.AttachAccountId(tempCtx, sysAccountID)
 		}
 	}
@@ -555,7 +562,6 @@ func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string, snapshot
 		}
 		return nil, nil, err
 	}
-
 	if sub != nil {
 		isSubMetaTable := pubsub.InSubMetaTables(sub, tableName)
 		if !isSubMetaTable {
@@ -604,6 +610,80 @@ func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string, snapshot
 		}
 	}
 	return obj, tableDef, nil
+}
+
+// ResolveViewDependencyAccount reports the physical account selected by the
+// resolver. Dependency capture must use this mapping instead of reconstructing
+// it later from SQL text or an unqualified relation name.
+func (tcc *TxnCompilerContext) ResolveViewDependencyAccount(
+	obj *plan2.ObjectRef,
+	tableDef *plan2.TableDef,
+	snapshot *plan2.Snapshot,
+) (uint32, error) {
+	if obj != nil && obj.PubInfo != nil {
+		return uint32(obj.PubInfo.TenantId), nil
+	}
+	if plan2.IsSnapshotValid(snapshot) && snapshot.Tenant != nil {
+		return snapshot.Tenant.TenantID, nil
+	}
+	databaseName, relationName := "", ""
+	if obj != nil {
+		databaseName, relationName = obj.SchemaName, obj.ObjName
+	}
+	if tableDef != nil {
+		if databaseName == "" {
+			databaseName = tableDef.DbName
+		}
+		if relationName == "" {
+			relationName = tableDef.Name
+		}
+	}
+	if isClusterTable(databaseName, relationName) || ShouldSwitchToSysAccount(databaseName, relationName) {
+		return uint32(sysAccountID), nil
+	}
+	return tcc.GetAccountId()
+}
+
+// EnsureViewMetadataCurrent prevents DESC/SHOW COLUMNS from presenting a
+// durable but stale View TableDef as current while bounded recovery is pending.
+func (tcc *TxnCompilerContext) EnsureViewMetadataCurrent(
+	databaseName string,
+	relationName string,
+	relationID uint64,
+) error {
+	stale, err := tcc.hasNonCurrentViewMetadata(relationID)
+	if err != nil {
+		return err
+	}
+	if stale {
+		return moerr.NewBadView(tcc.GetContext(), databaseName, relationName)
+	}
+	return nil
+}
+
+func (tcc *TxnCompilerContext) hasNonCurrentViewMetadata(relationID uint64) (bool, error) {
+	v, ok := moruntime.ServiceRuntime(tcc.GetSession().GetService()).
+		GetGlobalVariables(moruntime.InternalSQLExecutor)
+	if !ok {
+		return false, moerr.NewInternalError(tcc.GetContext(), "internal SQL executor is unavailable")
+	}
+	result, err := v.(executor.SQLExecutor).Exec(tcc.GetContext(), fmt.Sprintf(
+		"select status from %s.%s where account_id=%d and target_relation_id=%d limit 1",
+		catalog.MO_CATALOG, catalog.MO_VIEW_REFRESH, tcc.GetSession().GetAccountId(), relationID),
+		executor.Options{}.WithDisableIncrStatement().WithTxn(tcc.GetTxnHandler().GetTxn()).
+			WithAccountID(catalog.System_Account))
+	if err != nil {
+		return false, err
+	}
+	defer result.Close()
+	stale := true
+	result.ReadRows(func(rows int, columns []*vector.Vector) bool {
+		if rows > 0 {
+			stale = columns[0].GetStringAt(0) != catalog.ViewRefreshStatusCurrent
+		}
+		return false
+	})
+	return stale, nil
 }
 
 func (tcc *TxnCompilerContext) ResolveIndexTableByRef(

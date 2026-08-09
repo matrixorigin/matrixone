@@ -378,7 +378,12 @@ func (db *txnDatabase) Create(ctx context.Context, name string, defs []engine.Ta
 		}
 	}
 	txn.tableOps.addCreatedInTxn(tableId, txn.statementID)
-	return db.createWithID(ctx, name, tableId, defs, false, nil)
+	return db.createWithID(ctx, name, tableId, defs, false, nil, nil)
+}
+
+type tableCatalogOwnership struct {
+	creator uint32
+	owner   uint32
 }
 
 func (db *txnDatabase) createWithID(
@@ -388,6 +393,7 @@ func (db *txnDatabase) createWithID(
 	defs []engine.TableDef,
 	useAlterNote bool,
 	extra *api.SchemaExtra,
+	preservedOwnership *tableCatalogOwnership,
 ) error {
 	if db.op.IsSnapOp() {
 		return moerr.NewInternalErrorNoCtx("create table in snapshot transaction")
@@ -415,7 +421,6 @@ func (db *txnDatabase) createWithID(
 		tbl.tableId = tableId
 		tbl.accountId = accountId
 		tbl.extraInfo = extra
-
 		if tbl.extraInfo == nil {
 			tbl.extraInfo = &api.SchemaExtra{}
 		}
@@ -532,6 +537,10 @@ func (db *txnDatabase) createWithID(
 			Version:       tbl.version,
 			ExtraInfo:     api.MustMarshalTblExtra(tbl.extraInfo),
 			LogicalId:     logicalId,
+		}
+		if preservedOwnership != nil {
+			arg.UserId = preservedOwnership.creator
+			arg.RoleId = preservedOwnership.owner
 		}
 		bat, err := catalog.GenCreateTableTuple(arg, m, packer)
 		if err != nil {

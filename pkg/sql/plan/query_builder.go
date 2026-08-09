@@ -8944,7 +8944,12 @@ func (builder *QueryBuilder) bindView(
 	if viewData.SQLMode != nil {
 		parserSQLMode = *viewData.SQLMode
 	}
-	originStmts, err := mysql.ParseWithSQLMode(builder.GetContext(), viewData.Stmt, ctx.lower, parserSQLMode)
+	viewLowerCaseTableNames := ctx.lower
+	if viewData.LowerCaseTableNames != nil {
+		viewLowerCaseTableNames = *viewData.LowerCaseTableNames
+	}
+	originStmts, err := mysql.ParseWithSQLMode(
+		builder.GetContext(), viewData.Stmt, viewLowerCaseTableNames, parserSQLMode)
 	defer func() {
 		for _, s := range originStmts {
 			s.Free()
@@ -9007,6 +9012,10 @@ func (builder *QueryBuilder) bindView(
 		builder.isForUpdate = savedIsForUpdate
 	}()
 
+	if capture, ok := builder.compCtx.(viewDependencyScope); ok {
+		capture.enterNestedView()
+		defer capture.leaveNestedView()
+	}
 	nodeID, err = builder.bindSelect(viewStmt.AsSource, viewCtx, false)
 	if err != nil {
 		return

@@ -193,6 +193,19 @@ func (s *Scope) DropDatabase(c *Compile) error {
 	if err != nil {
 		return err
 	}
+	if c.proc.Base.IsFrontend && !needSkipDbs[dbName] {
+		droppedDatabaseID, parseErr := strconv.ParseUint(database.GetDatabaseId(c.proc.Ctx), 10, 64)
+		if parseErr != nil {
+			return parseErr
+		}
+		generation := uint64(c.proc.GetTxnOperator().SnapshotTS().PhysicalTime)
+		if err = c.enqueueViewsAfterDatabaseRemoval(accountId, droppedDatabaseID, generation); err != nil {
+			return err
+		}
+		if err = c.deleteDroppedDatabaseViewMetadata(accountId, droppedDatabaseID, dbName); err != nil {
+			return err
+		}
+	}
 	var ignoreTables []string
 	existingRelations := make([]string, 0, len(relations))
 	for _, r := range relations {
@@ -244,7 +257,7 @@ func (s *Scope) DropDatabase(c *Compile) error {
 		dropSql := fmt.Sprintf("drop table if exists %s.%s;",
 			quoteMySQLIdent(dbName), quoteMySQLIdent(t))
 		if err = c.runSqlWithOptions(
-			dropSql, executor.StatementOption{}.WithDisableLog(),
+			dropSql, executor.StatementOption{}.WithDisableLog().WithIgnorePublish(),
 		); err != nil {
 			return err
 		}
@@ -440,12 +453,15 @@ func (s *Scope) AlterView(c *Compile) error {
 		}
 		return convertDBEOB(c.proc.Ctx, err, dbName)
 	}
-	if _, err = dbSource.Relation(c.proc.Ctx, tblName, nil); err != nil {
+	oldRelation, err := dbSource.Relation(c.proc.Ctx, tblName, nil)
+	if err != nil {
 		if qry.GetIfExists() {
 			return nil
 		}
 		return err
 	}
+	oldRelationID := oldRelation.GetTableID(c.proc.Ctx)
+	oldLogicalID := oldRelation.GetTableDef(c.proc.Ctx).GetLogicalId()
 
 	if err := lockMoTable(c, dbName, tblName, lock.LockMode_Exclusive); err != nil {
 		return err
@@ -467,7 +483,13 @@ func (s *Scope) AlterView(c *Compile) error {
 		return err
 	}
 
-	return dbSource.Create(context.WithValue(c.proc.Ctx, defines.SqlKey{}, c.sql), tblName, append(exeCols, exeDefs...))
+	if err = dbSource.Create(context.WithValue(c.proc.Ctx, defines.SqlKey{}, c.sql), tblName, append(exeCols, exeDefs...)); err != nil {
+		return err
+	}
+	if err = c.persistViewDependencies(dbSource, dbName, qry.GetTableDef()); err != nil {
+		return err
+	}
+	return c.refreshViewsAfterRelationMutation(dbName, tblName, oldRelationID, oldLogicalID)
 }
 
 // reindexSpecifiedParams extracts the build options the user wrote on
@@ -2089,6 +2111,11 @@ func (s *Scope) CreateTable(c *Compile) error {
 		// completed. Keep the alias registered in the session.
 		rollbackTempAlias = false
 	}
+	if !isTemp && !c.ignorePublish && c.proc.Base.IsFrontend {
+		if err = c.refreshViewsAfterRelationMutation(dbName, tblName, 0, 0); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -2455,6 +2482,15 @@ func (s *Scope) CreateView(c *Compile) error {
 		)
 		return err
 	}
+	var oldRelationID, oldLogicalID uint64
+	if exists && qry.GetReplace() {
+		oldRelation, relationErr := dbSource.Relation(c.proc.Ctx, viewName, nil)
+		if relationErr != nil {
+			return relationErr
+		}
+		oldRelationID = oldRelation.GetTableID(c.proc.Ctx)
+		oldLogicalID = oldRelation.GetTableDef(c.proc.Ctx).GetLogicalId()
+	}
 
 	if exists {
 		if qry.GetIfNotExists() {
@@ -2493,6 +2529,12 @@ func (s *Scope) CreateView(c *Compile) error {
 			zap.Error(err),
 		)
 		return err
+	}
+	if err = c.persistViewDependencies(dbSource, dbName, qry.GetTableDef()); err != nil {
+		return err
+	}
+	if oldRelationID != 0 {
+		return c.refreshViewsAfterRelationMutation(dbName, viewName, oldRelationID, oldLogicalID)
 	}
 	return nil
 }
@@ -3561,6 +3603,10 @@ func (s *Scope) dropTableSingle(c *Compile, qry *plan.DropTable) error {
 		}
 		return err
 	}
+	droppedRelationID := rel.GetTableID(c.proc.Ctx)
+	droppedTableDef := rel.GetTableDef(c.proc.Ctx)
+	droppedLogicalID := droppedTableDef.GetLogicalId()
+	droppedDatabaseID := droppedTableDef.GetDbId()
 
 	// Check if the table is a CCPR shared table
 	if !isTemp && !isView && !isSource {
@@ -3721,6 +3767,17 @@ func (s *Scope) dropTableSingle(c *Compile, qry *plan.DropTable) error {
 
 	if err := dbSource.Delete(c.proc.Ctx, tblName); err != nil {
 		return err
+	}
+	if !isTemp && !c.ignorePublish && c.proc.Base.IsFrontend {
+		if err = c.enqueueViewsAfterRelationRemoval(
+			dbName, tblName, droppedDatabaseID, droppedRelationID, droppedLogicalID); err != nil {
+			return err
+		}
+		if isView {
+			if err = c.deleteDroppedViewMetadata(droppedRelationID); err != nil {
+				return err
+			}
+		}
 	}
 	// Try to remove temp table alias from session if it exists.
 	// tblName is the real name here (because Binder resolved it using the temp name from session if it was an alias).

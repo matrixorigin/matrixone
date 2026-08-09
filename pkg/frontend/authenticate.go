@@ -1035,6 +1035,8 @@ var (
 		MoCatalogMoSnapshotsDDL,
 		MoCatalogMoPubsDDL,
 		MoCatalogMoSubsDDL,
+		MoCatalogMoViewDependenciesDDL,
+		MoCatalogMoViewRefreshDDL,
 		MoCatalogMoStoredProcedureDDL,
 		MoCatalogMoStagesDDL,
 		MoCatalogMoSessionsDDL,
@@ -10289,6 +10291,10 @@ func createTablesInMoCatalogOfGeneralTenant2(bh BackgroundExec, ca *createAccoun
 			return true
 		}
 		if strings.HasPrefix(sql, "create table mo_catalog.mo_subs") {
+			return true
+		}
+		if strings.HasPrefix(sql, "create cluster table mo_catalog.mo_view_depend") ||
+			strings.HasPrefix(sql, "create cluster table mo_catalog.mo_view_refresh") {
 			return true
 		}
 		if strings.HasPrefix(sql, "create table mo_catalog.mo_cdc_task") {

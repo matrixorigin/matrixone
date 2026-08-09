@@ -140,6 +140,7 @@ func createTableSQLForCatalog(ctx CompilerContext, stmt *tree.CreateTable) strin
 
 func genViewTableDef(ctx CompilerContext, stmt *tree.Select, colNames tree.IdentifierList) (*plan.TableDef, error) {
 	var tableDef plan.TableDef
+	captureCtx := newViewDependencyCaptureContext(ctx)
 	validate := func(query *Query) error {
 		for _, node := range query.Nodes {
 			if node == nil || node.NodeType != plan.Node_TABLE_SCAN || node.TableDef == nil {
@@ -171,13 +172,13 @@ func genViewTableDef(ctx CompilerContext, stmt *tree.Select, colNames tree.Ident
 	switch s := stmt.Select.(type) {
 	case *tree.ParenSelect:
 		stmtPlan, err = bindAndOptimizeSelectQueryWithValidatorAndCapture(
-			plan.Query_SELECT, ctx, s.Select, false, true, validate, captureColumnTypes, true)
+			plan.Query_SELECT, captureCtx, s.Select, false, true, validate, captureColumnTypes, true)
 		if err != nil {
 			return nil, err
 		}
 	default:
 		stmtPlan, err = bindAndOptimizeSelectQueryWithValidatorAndCapture(
-			plan.Query_SELECT, ctx, stmt, false, true, validate, captureColumnTypes, true)
+			plan.Query_SELECT, captureCtx, stmt, false, true, validate, captureColumnTypes, true)
 		if err != nil {
 			return nil, err
 		}
@@ -235,11 +236,14 @@ func genViewTableDef(ctx CompilerContext, stmt *tree.Select, colNames tree.Ident
 		}
 	}
 
+	lowerCaseTableNames := ctx.GetLowerCaseTableNames()
 	viewData, err := json.Marshal(ViewData{
-		Stmt:            viewSql,
-		DefaultDatabase: ctx.DefaultDatabase(),
-		SQLMode:         parserSQLModeFromContext(ctx),
-		SecurityType:    getViewSecurityTypeFromContext(ctx),
+		Stmt:                viewSql,
+		DefaultDatabase:     ctx.DefaultDatabase(),
+		SQLMode:             parserSQLModeFromContext(ctx),
+		SecurityType:        getViewSecurityTypeFromContext(ctx),
+		LowerCaseTableNames: &lowerCaseTableNames,
+		Dependencies:        captureCtx.dependencies(),
 	})
 	if err != nil {
 		return nil, err
