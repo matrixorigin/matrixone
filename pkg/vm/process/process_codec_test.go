@@ -248,7 +248,7 @@ func TestPrepareParamMetadataForRemoteCompatibility(t *testing.T) {
 
 	metadata := make([]bool, 8) // N=2: legacy flags + three one-bit sections.
 	metadata[2] = true          // parameter 0 has integer provenance.
-	runtime.SetGlobalVariables(rt.MOProtocolVersion, defines.MORPCVersion10)
+	runtime.SetGlobalVariables(rt.MOProtocolVersion, defines.MORPCVersion11)
 	_, err := PrepareParamMetadataForRemote("", 2, metadata)
 	require.Error(t, err)
 
@@ -258,7 +258,7 @@ func TestPrepareParamMetadataForRemoteCompatibility(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, []bool{true, false}, legacy)
 
-	runtime.SetGlobalVariables(rt.MOProtocolVersion, defines.MORPCVersion11)
+	runtime.SetGlobalVariables(rt.MOProtocolVersion, defines.MORPCVersion12)
 	metadata[2] = true
 	extended, err := PrepareParamMetadataForRemote("", 2, metadata)
 	require.NoError(t, err)
@@ -290,7 +290,7 @@ func TestCodecServiceRejectsPreparedProvenanceForOldProtocol(t *testing.T) {
 		vector.PrepareParamFloat,
 		vector.PrepareParamNone,
 	})
-	runtime.SetGlobalVariables(rt.MOProtocolVersion, defines.MORPCVersion11)
+	runtime.SetGlobalVariables(rt.MOProtocolVersion, defines.MORPCVersion12)
 	info, err := proc.BuildProcessInfo("select ?")
 	require.NoError(t, err)
 
@@ -298,11 +298,11 @@ func TestCodecServiceRejectsPreparedProvenanceForOldProtocol(t *testing.T) {
 		fakeCodecTxnClient{op: fakeCodecTxnOperator{}},
 		nil, nil, nil, nil, nil, nil, nil,
 	).(*codecService)
-	runtime.SetGlobalVariables(rt.MOProtocolVersion, defines.MORPCVersion10)
+	runtime.SetGlobalVariables(rt.MOProtocolVersion, defines.MORPCVersion11)
 	_, err = svc.Decode(context.Background(), info)
 	require.Error(t, err)
 
-	runtime.SetGlobalVariables(rt.MOProtocolVersion, defines.MORPCVersion11)
+	runtime.SetGlobalVariables(rt.MOProtocolVersion, defines.MORPCVersion12)
 	decoded, err := svc.Decode(context.Background(), info)
 	require.NoError(t, err)
 	defer decoded.Free()

@@ -62,7 +62,7 @@ func prepareParamKindRemoteWireEnabled(proc *process.Process) bool {
 	}
 	value, _ := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
 	version, ok := value.(int64)
-	return ok && version >= defines.MORPCVersion11
+	return ok && version >= defines.MORPCVersion12
 }
 
 // marshalRemoteBatch keeps the stable Batch prefix unchanged and appends the
@@ -76,7 +76,7 @@ func marshalRemoteBatch(proc *process.Process, bat *batch.Batch, buf *bytes.Buff
 	wireEnabled := prepareParamKindRemoteWireEnabled(proc)
 	if bat.HasPrepareParamKindMetadata() && !wireEnabled {
 		return nil, moerr.NewInvalidStateNoCtx(
-			"prepared parameter provenance requires MORPCVersion11 for remote dispatch")
+			"prepared parameter provenance requires MORPCVersion12 for remote dispatch")
 	}
 	if _, err := bat.MarshalBinaryWithBuffer(buf, true); err != nil {
 		return nil, err

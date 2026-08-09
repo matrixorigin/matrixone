@@ -90,13 +90,13 @@ func TestMarshalRemoteBatchPrepareParamProtocolGate(t *testing.T) {
 		}
 	})
 
-	runtime.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion10)
+	runtime.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion11)
 	buf := bytes.NewBufferString("sentinel")
 	_, err := marshalRemoteBatch(proc, bat, buf)
 	require.Error(t, err)
 	require.Equal(t, "sentinel", buf.String(), "protocol rejection must happen before writing")
 
-	runtime.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion11)
+	runtime.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion12)
 	buf.Reset()
 	encoded, err := marshalRemoteBatch(proc, bat, buf)
 	require.NoError(t, err)
@@ -130,7 +130,7 @@ func TestMarshalRemoteBatchUnknownServiceFailsClosed(t *testing.T) {
 	require.NotPanics(t, func() {
 		_, err = marshalRemoteBatch(proc, prepared, buf)
 	})
-	require.ErrorContains(t, err, "prepared parameter provenance requires MORPCVersion11")
+	require.ErrorContains(t, err, "prepared parameter provenance requires MORPCVersion12")
 	require.Equal(t, "sentinel", buf.String(),
 		"unknown service must reject metadata before writing the stable batch")
 

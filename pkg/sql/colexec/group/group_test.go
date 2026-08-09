@@ -472,7 +472,7 @@ func TestMergeGroupUsesIncomingWinnerPrepareParamKind(t *testing.T) {
 				require.Zero(t, proc.Mp().CurrNB())
 				proc.Free()
 			})
-			setPrepareParamKindProtocolVersion(t, proc, defines.MORPCVersion11)
+			setPrepareParamKindProtocolVersion(t, proc, defines.MORPCVersion12)
 
 			partials := make([]*batch.Batch, len(tc.partials))
 			for i, spec := range tc.partials {
@@ -495,7 +495,7 @@ func TestMergeGroupUsesIncomingWinnerPrepareParamKind(t *testing.T) {
 func TestMergeGroupPreservesHeterogeneousPartialProvenance(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	defer proc.Free()
-	setPrepareParamKindProtocolVersion(t, proc, defines.MORPCVersion11)
+	setPrepareParamKindProtocolVersion(t, proc, defines.MORPCVersion12)
 
 	input := batch.NewWithSize(2)
 	input.Vecs[0] = testutil.MakeInt32Vector([]int32{0, 1}, nil, proc.Mp())
@@ -547,21 +547,21 @@ func TestMergeGroupPartialWireCompatibility(t *testing.T) {
 	}{
 		{
 			name:          "new writer and new reader",
-			writerVersion: defines.MORPCVersion11,
-			readerVersion: defines.MORPCVersion11,
+			writerVersion: defines.MORPCVersion12,
+			readerVersion: defines.MORPCVersion12,
 			wantKind:      vector.PrepareParamFloat,
 		},
 		{
 			name:          "legacy writer and new reader",
-			writerVersion: defines.MORPCVersion10,
-			readerVersion: defines.MORPCVersion11,
+			writerVersion: defines.MORPCVersion11,
+			readerVersion: defines.MORPCVersion12,
 			wantKind:      vector.PrepareParamNone,
 		},
 		{
 			name:          "new writer and legacy reader",
-			writerVersion: defines.MORPCVersion11,
-			readerVersion: defines.MORPCVersion10,
-			wantErr:       "prepared parameter aggregate trailer requires MORPCVersion11",
+			writerVersion: defines.MORPCVersion12,
+			readerVersion: defines.MORPCVersion11,
+			wantErr:       "prepared parameter aggregate trailer requires MORPCVersion12",
 		},
 	}
 
@@ -609,7 +609,7 @@ func TestOrdinaryGroupPartialKeepsLegacyWireFormat(t *testing.T) {
 	legacy := buildPartialH0Batch(t, proc, []int32{1, 2})
 	t.Cleanup(func() { legacy.Clean(proc.Mp()) })
 	moruntime.ServiceRuntime(proc.GetService()).SetGlobalVariables(
-		moruntime.MOProtocolVersion, defines.MORPCVersion11)
+		moruntime.MOProtocolVersion, defines.MORPCVersion12)
 	current := buildPartialH0Batch(t, proc, []int32{1, 2})
 	t.Cleanup(func() { current.Clean(proc.Mp()) })
 

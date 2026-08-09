@@ -224,7 +224,7 @@ func prepareParamMetadata(
 // parameter metadata at a process wire boundary. The first N entries are the
 // legacy binary flags; a complete extended payload has four N entries, with
 // the remaining three sections carrying PrepareParamKind bits. A receiver
-// below MORPCVersion11 may safely receive binary-only metadata, but must not
+// below MORPCVersion12 may safely receive binary-only metadata, but must not
 // receive source-kind provenance that it would silently discard.
 func PrepareParamMetadataForRemote(
 	service string,
@@ -270,11 +270,11 @@ func PrepareParamMetadataForRemote(
 		}
 	}
 
-	if prepareParamProtocolVersion(service) < defines.MORPCVersion11 {
+	if prepareParamProtocolVersion(service) < defines.MORPCVersion12 {
 		if hasKind {
 			return nil, moerr.NewNotSupportedNoCtxf(
 				"prepared-parameter source provenance requires MORPC protocol version %d",
-				defines.MORPCVersion11)
+				defines.MORPCVersion12)
 		}
 		return append([]bool(nil), metadata[:paramCount]...), nil
 	}

@@ -206,7 +206,7 @@ func (mergeGroup *MergeGroup) buildOneBatch(proc *process.Process, bat *batch.Ba
 		}
 		if !mergeGroup.ctr.prepareParamKindWireV1 && reader.Len() > 0 {
 			return false, moerr.NewInvalidStateNoCtx(
-				"prepared parameter aggregate trailer requires MORPCVersion11")
+				"prepared parameter aggregate trailer requires MORPCVersion12")
 		}
 		if mergeGroup.ctr.prepareParamKindWireV1 && reader.Len() > 0 {
 			expectedRows := make([]int, len(mergeGroup.ctr.spillAggList))

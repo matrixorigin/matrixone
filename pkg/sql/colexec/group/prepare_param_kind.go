@@ -59,7 +59,7 @@ func prepareParamKindWireV1Enabled(proc *process.Process) bool {
 	}
 	value, _ := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
 	version, ok := value.(int64)
-	return ok && version >= defines.MORPCVersion11
+	return ok && version >= defines.MORPCVersion12
 }
 
 func hasPrepareParamKindPreservingAgg(aggs []aggexec.AggFuncExecExpression) bool {
