@@ -449,8 +449,8 @@ func (s *sqlStore) Delete(ctx context.Context, tableID uint64) error {
 				rowCount += rows
 				return true
 			})
+			res.Close()
 			if rowCount == 0 {
-				res.Close()
 				return nil
 			}
 			res, err = s.exec.Exec(

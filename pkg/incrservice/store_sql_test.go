@@ -27,7 +27,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
@@ -86,17 +85,24 @@ func TestDeleteWhenAccountExists(t *testing.T) {
 			"lazy metadata deletion must remain cancelable during service shutdown")
 		return execFunc(nil)
 	}).AnyTimes()
+	mp := mpool.MustNewZero()
+	accountResult := executor.NewMemResult([]types.Type{types.T_varchar.ToType()}, mp)
+	accountResult.NewBatchWithRowCount(1)
+	require.NoError(t, executor.AppendStringRows(accountResult, 0, []string{"account"}))
+	accountLookupResult := accountResult.GetResult()
+	t.Cleanup(func() {
+		accountLookupResult.Close()
+		mpool.DeleteMPool(mp)
+	})
 	var executedSQLs []string
 	mockSqlExecutor.EXPECT().Exec(gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(func(ctx context.Context, sql string, opts executor.Options) (executor.Result, error) {
 		require.False(t, opts.WaitCommittedLogApplied(),
 			"lazy metadata deletion statements must remain cancelable during service shutdown")
 		executedSQLs = append(executedSQLs, sql)
-		bat := &batch.Batch{}
-		bat.SetRowCount(1)
-		res := executor.Result{
-			Batches: []*batch.Batch{bat},
+		if strings.HasPrefix(sql, "select account_name") {
+			return accountLookupResult, nil
 		}
-		return res, nil
+		return executor.Result{}, nil
 	}).AnyTimes()
 
 	s := &sqlStore{
@@ -106,6 +112,7 @@ func TestDeleteWhenAccountExists(t *testing.T) {
 	err := s.Delete(ctx, 0)
 	require.NoError(t, err)
 	require.Equal(t, 2, len(executedSQLs))
+	require.Zero(t, mp.CurrNB(), "account lookup result must be closed")
 }
 
 var _ lockservice.LockService = new(testLockService)
