@@ -507,32 +507,124 @@ func TestCanonicalRefChildTableIDMutations(t *testing.T) {
 	})
 }
 
-func TestReconcileParentRefChildTableID(t *testing.T) {
+func TestRewriteForeignKeyReferencesForAlterCopy(t *testing.T) {
+	constraintDef := &engine.ConstraintDef{Cts: []engine.Constraint{
+		&engine.ForeignKeyDef{Fkeys: []*plan2.ForeignKeyDef{
+			{ForeignTbl: 10, ForeignCols: []uint64{1, 2}},
+			{ForeignTbl: 10, ForeignCols: []uint64{3}},
+			{ForeignTbl: 20, ForeignCols: []uint64{1}},
+		}},
+	}}
+
+	changed, err := rewriteForeignKeyReferencesForAlterCopy(
+		context.Background(),
+		constraintDef,
+		map[uint64]*plan2.ColDef{1: {ColId: 101}, 3: {ColId: 103}},
+		10,
+		11,
+	)
+	require.NoError(t, err)
+	require.True(t, changed)
+
+	fkeys := constraintDef.Cts[0].(*engine.ForeignKeyDef).Fkeys
+	require.Equal(t, uint64(11), fkeys[0].ForeignTbl)
+	require.Equal(t, []uint64{101, 2}, fkeys[0].ForeignCols)
+	require.Equal(t, uint64(11), fkeys[1].ForeignTbl)
+	require.Equal(t, []uint64{103}, fkeys[1].ForeignCols)
+	require.Equal(t, uint64(20), fkeys[2].ForeignTbl)
+	require.Equal(t, []uint64{1}, fkeys[2].ForeignCols)
+
+	changed, err = rewriteForeignKeyReferencesForAlterCopy(context.Background(), constraintDef, nil, 10, 11)
+	require.NoError(t, err)
+	require.False(t, changed)
+
+	_, err = rewriteForeignKeyReferencesForAlterCopy(context.Background(), &engine.ConstraintDef{Cts: []engine.Constraint{
+		&engine.ForeignKeyDef{Fkeys: []*plan2.ForeignKeyDef{nil}},
+	}}, nil, 10, 11)
+	require.ErrorContains(t, err, "nil foreign key definition")
+}
+
+func TestReconcileRefChildTableIDForAlterCopy(t *testing.T) {
 	t.Run("replace child in existing reverse reference", func(t *testing.T) {
 		constraintDef := &engine.ConstraintDef{Cts: []engine.Constraint{
 			&engine.RefChildTableDef{Tables: []uint64{10, 20, 30}},
 		}}
-		reconcileParentRefChildTableID(constraintDef, 20, 21)
+		reconcileRefChildTableID(constraintDef, 20, 21)
 
-		require.Len(t, constraintDef.Cts, 1)
-		require.Equal(
-			t,
-			[]uint64{10, 21, 30},
-			constraintDef.Cts[0].(*engine.RefChildTableDef).Tables,
-		)
+		require.Equal(t, []uint64{10, 21, 30}, canonicalRefChildTableIDs(constraintDef))
 	})
 
 	t.Run("restore reverse reference removed while dropping old child", func(t *testing.T) {
 		constraintDef := &engine.ConstraintDef{}
-		reconcileParentRefChildTableID(constraintDef, 20, 21)
+		reconcileRefChildTableID(constraintDef, 20, 21)
 
-		require.Len(t, constraintDef.Cts, 1)
-		require.Equal(
-			t,
-			[]uint64{21},
-			constraintDef.Cts[0].(*engine.RefChildTableDef).Tables,
-		)
+		require.Equal(t, []uint64{21}, canonicalRefChildTableIDs(constraintDef))
 	})
+}
+
+func TestReconcileAlterCopyForeignKeyReferencesOncePerRelation(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	proc := testutil.NewProcess(t)
+
+	childUpdated := mock_frontend.NewMockRelation(ctrl)
+	childUnchanged := mock_frontend.NewMockRelation(ctrl)
+	parentOne := mock_frontend.NewMockRelation(ctrl)
+	parentTwo := mock_frontend.NewMockRelation(ctrl)
+
+	childUpdatedConstraint := &engine.ConstraintDef{Cts: []engine.Constraint{
+		&engine.ForeignKeyDef{Fkeys: []*plan2.ForeignKeyDef{{ForeignTbl: 1}}},
+	}}
+	childUnchangedConstraint := &engine.ConstraintDef{Cts: []engine.Constraint{
+		&engine.ForeignKeyDef{Fkeys: []*plan2.ForeignKeyDef{{ForeignTbl: 99}}},
+	}}
+	parentOneConstraint := &engine.ConstraintDef{Cts: []engine.Constraint{
+		&engine.RefChildTableDef{Tables: []uint64{1}},
+	}}
+	parentTwoConstraint := &engine.ConstraintDef{Cts: []engine.Constraint{
+		&engine.RefChildTableDef{Tables: []uint64{1}},
+	}}
+
+	childUpdated.EXPECT().UpdateConstraint(gomock.Any(), childUpdatedConstraint).Return(nil).Times(1)
+	parentOne.EXPECT().UpdateConstraint(gomock.Any(), parentOneConstraint).Return(nil).Times(1)
+	parentTwo.EXPECT().UpdateConstraint(gomock.Any(), parentTwoConstraint).Return(nil).Times(1)
+
+	eng := mock_frontend.NewMockEngine(ctrl)
+	eng.EXPECT().GetRelationById(gomock.Any(), gomock.Any(), uint64(10)).Return("", "", childUpdated, nil).Times(1)
+	eng.EXPECT().GetRelationById(gomock.Any(), gomock.Any(), uint64(20)).Return("", "", childUnchanged, nil).Times(1)
+	eng.EXPECT().GetRelationById(gomock.Any(), gomock.Any(), uint64(30)).Return("", "", parentOne, nil).Times(1)
+	eng.EXPECT().GetRelationById(gomock.Any(), gomock.Any(), uint64(40)).Return("", "", parentTwo, nil).Times(1)
+
+	getConstraintDef := gostub.Stub(&GetConstraintDef, func(_ context.Context, rel engine.Relation) (*engine.ConstraintDef, error) {
+		switch rel {
+		case childUpdated:
+			return childUpdatedConstraint, nil
+		case childUnchanged:
+			return childUnchangedConstraint, nil
+		case parentOne:
+			return parentOneConstraint, nil
+		case parentTwo:
+			return parentTwoConstraint, nil
+		default:
+			t.Fatalf("unexpected relation passed to GetConstraintDef")
+			return nil, nil
+		}
+	})
+	defer getConstraintDef.Reset()
+
+	c := NewCompile("test", "test", "alter table child", "", "", eng, proc, nil, false, nil, time.Now())
+	require.NoError(t, reconcileAlterCopyChildForeignKeyReferences(c, nil, []uint64{10, 10, 0, 20}, 1, 2))
+	require.NoError(t, reconcileAlterCopyParentForeignKeyReferences(c, []*plan2.ForeignKeyDef{
+		{ForeignTbl: 30},
+		{ForeignTbl: 30},
+		{ForeignTbl: 0},
+		{ForeignTbl: 40},
+	}, 1, 2))
+
+	require.Equal(t, uint64(2), childUpdatedConstraint.Cts[0].(*engine.ForeignKeyDef).Fkeys[0].ForeignTbl)
+	require.Equal(t, uint64(99), childUnchangedConstraint.Cts[0].(*engine.ForeignKeyDef).Fkeys[0].ForeignTbl)
+	require.Equal(t, []uint64{2}, canonicalRefChildTableIDs(parentOneConstraint))
+	require.Equal(t, []uint64{2}, canonicalRefChildTableIDs(parentTwoConstraint))
+	require.ErrorContains(t, reconcileAlterCopyParentForeignKeyReferences(c, []*plan2.ForeignKeyDef{nil}, 1, 2), "nil foreign key definition")
 }
 
 func TestAlterCopyAutoIncrementCleanupDiscardsTrackedReset(t *testing.T) {
