@@ -60,48 +60,230 @@ func TestUnaryFixedToStrConstNullPreservesResultCardinality(t *testing.T) {
 
 func TestBinaryStrFixedToStrMixedNullPreservesRowPositions(t *testing.T) {
 	proc := testutil.NewProcess(t)
-	testCase := NewFunctionTestCase(
-		proc,
-		[]FunctionTestInput{
-			NewFunctionTestInput(
-				types.T_varchar.ToType(),
-				[]string{"a", "", "c"},
-				[]bool{false, true, false},
-			),
-			NewFunctionTestConstInput(
-				types.T_int64.ToType(),
-				[]int64{2, 2, 2},
-				nil,
-			),
+	tests := []struct {
+		name     string
+		inputs   []FunctionTestInput
+		expected []string
+	}{
+		{
+			name: "left constant",
+			inputs: []FunctionTestInput{
+				NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"a", "a", "a"}, nil),
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{1, 0, 3}, []bool{false, true, false}),
+			},
+			expected: []string{"a1", "", "a3"},
 		},
-		NewFunctionTestResult(
-			types.T_varchar.ToType(),
-			false,
-			[]string{"a2", "", "c2"},
-			[]bool{false, true, false},
-		),
-		func(
-			parameters []*vector.Vector,
-			result vector.FunctionResultWrapper,
-			proc *process.Process,
-			length int,
-			selectList *FunctionSelectList,
-		) error {
-			return opBinaryStrFixedToStrWithErrorCheck[int64](
-				parameters,
-				result,
-				proc,
-				length,
-				func(value string, suffix int64) (string, error) {
-					return fmt.Sprintf("%s%d", value, suffix), nil
-				},
-				selectList,
-			)
+		{
+			name: "right constant",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{"a", "", "c"}, []bool{false, true, false}),
+				NewFunctionTestConstInput(types.T_int64.ToType(), []int64{2, 2, 2}, nil),
+			},
+			expected: []string{"a2", "", "c2"},
 		},
-	)
+		{
+			name: "both vectors",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{"a", "", "c"}, []bool{false, true, false}),
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{1, 2, 3}, nil),
+			},
+			expected: []string{"a1", "", "c3"},
+		},
+	}
 
-	succeed, info := testCase.Run()
-	require.True(t, succeed, info)
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			testCase := NewFunctionTestCase(
+				proc,
+				test.inputs,
+				NewFunctionTestResult(
+					types.T_varchar.ToType(),
+					false,
+					test.expected,
+					[]bool{false, true, false},
+				),
+				func(
+					parameters []*vector.Vector,
+					result vector.FunctionResultWrapper,
+					proc *process.Process,
+					length int,
+					selectList *FunctionSelectList,
+				) error {
+					return opBinaryStrFixedToStrWithErrorCheck[int64](
+						parameters,
+						result,
+						proc,
+						length,
+						func(value string, suffix int64) (string, error) {
+							return fmt.Sprintf("%s%d", value, suffix), nil
+						},
+						selectList,
+					)
+				},
+			)
+
+			succeed, info := testCase.Run()
+			require.True(t, succeed, info)
+		})
+	}
+}
+
+func TestVarlenaConstNullTemplatesPreserveResultCardinality(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	constNullString := NewFunctionTestConstInput(
+		types.T_varchar.ToType(), []string{"", ""}, []bool{true, true})
+	constString := NewFunctionTestConstInput(
+		types.T_varchar.ToType(), []string{"a", "a"}, nil)
+	stringVector := NewFunctionTestInput(
+		types.T_varchar.ToType(), []string{"a", "b"}, nil)
+	constNullFixed := NewFunctionTestConstInput(
+		types.T_int64.ToType(), []int64{0, 0}, []bool{true, true})
+	constFixed := NewFunctionTestConstInput(
+		types.T_int64.ToType(), []int64{1, 1}, nil)
+	fixedVector := NewFunctionTestInput(
+		types.T_int64.ToType(), []int64{1, 2}, nil)
+
+	tests := []struct {
+		name       string
+		inputs     []FunctionTestInput
+		resultType types.Type
+		fn         fEvalFn
+	}{
+		{
+			name:   "binary string fixed both constant",
+			inputs: []FunctionTestInput{constNullString, constFixed},
+			fn: func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+				return opBinaryStrFixedToStrWithErrorCheck[int64](parameters, result, proc, length,
+					func(value string, suffix int64) (string, error) { return fmt.Sprintf("%s%d", value, suffix), nil }, selectList)
+			},
+		},
+		{
+			name:   "binary string fixed left constant",
+			inputs: []FunctionTestInput{constNullString, fixedVector},
+			fn: func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+				return opBinaryStrFixedToStrWithErrorCheck[int64](parameters, result, proc, length,
+					func(value string, suffix int64) (string, error) { return fmt.Sprintf("%s%d", value, suffix), nil }, selectList)
+			},
+		},
+		{
+			name:   "binary string fixed right constant",
+			inputs: []FunctionTestInput{stringVector, constNullFixed},
+			fn: func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+				return opBinaryStrFixedToStrWithErrorCheck[int64](parameters, result, proc, length,
+					func(value string, suffix int64) (string, error) { return fmt.Sprintf("%s%d", value, suffix), nil }, selectList)
+			},
+		},
+		{
+			name:   "binary bytes both constant",
+			inputs: []FunctionTestInput{constNullString, constString},
+			fn: func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+				return opBinaryBytesBytesToBytesWithErrorCheck(parameters, result, proc, length,
+					func(left, right []byte) ([]byte, error) { return append(left, right...), nil }, selectList)
+			},
+		},
+		{
+			name:   "binary bytes left constant",
+			inputs: []FunctionTestInput{constNullString, stringVector},
+			fn: func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+				return opBinaryBytesBytesToBytesWithErrorCheck(parameters, result, proc, length,
+					func(left, right []byte) ([]byte, error) { return append(left, right...), nil }, selectList)
+			},
+		},
+		{
+			name:   "binary bytes right constant",
+			inputs: []FunctionTestInput{stringVector, constNullString},
+			fn: func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+				return opBinaryBytesBytesToBytesWithErrorCheck(parameters, result, proc, length,
+					func(left, right []byte) ([]byte, error) { return append(left, right...), nil }, selectList)
+			},
+		},
+		{
+			name:   "unary bytes to bytes",
+			inputs: []FunctionTestInput{constNullString},
+			fn: func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+				return opUnaryBytesToBytes(parameters, result, proc, length, func(value []byte) []byte { return value }, selectList)
+			},
+		},
+		{
+			name:   "unary bytes to string",
+			inputs: []FunctionTestInput{constNullString},
+			fn: func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+				return opUnaryBytesToStr(parameters, result, proc, length, func(value []byte) string { return string(value) }, selectList)
+			},
+		},
+		{
+			name:   "unary string to string",
+			inputs: []FunctionTestInput{constNullString},
+			fn: func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+				return opUnaryStrToStr(parameters, result, proc, length, func(value string) string { return value }, selectList)
+			},
+		},
+		{
+			name:   "unary fixed to string with error",
+			inputs: []FunctionTestInput{constNullFixed},
+			fn: func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+				return opUnaryFixedToStrWithErrorCheck[int64](parameters, result, proc, length,
+					func(value int64) (string, error) { return fmt.Sprint(value), nil }, selectList)
+			},
+		},
+		{
+			name:   "unary string to bytes with error",
+			inputs: []FunctionTestInput{constNullString},
+			fn: func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+				return opUnaryStrToBytesWithErrorCheck(parameters, result, proc, length,
+					func(value string) ([]byte, error) { return []byte(value), nil }, selectList)
+			},
+		},
+		{
+			name:   "unary bytes to bytes with error",
+			inputs: []FunctionTestInput{constNullString},
+			fn: func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+				return opUnaryBytesToBytesWithErrorCheck(parameters, result, proc, length,
+					func(value []byte) ([]byte, error) { return value, nil }, selectList)
+			},
+		},
+		{
+			name:   "unary bytes to bytes with null on error",
+			inputs: []FunctionTestInput{constNullString},
+			fn: func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+				return opUnaryBytesToBytesWithNullOnError(parameters, result, proc, length,
+					func(value []byte) ([]byte, error) { return value, nil }, selectList)
+			},
+		},
+		{
+			name:   "unary bytes to string with error",
+			inputs: []FunctionTestInput{constNullString},
+			fn: func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+				return opUnaryBytesToStrWithErrorCheck(parameters, result, proc, length,
+					func(value []byte) (string, error) { return string(value), nil }, selectList)
+			},
+		},
+		{name: "inet6_aton", inputs: []FunctionTestInput{constNullString}, resultType: types.T_varbinary.ToType(), fn: Inet6Aton},
+		{name: "inet6_ntoa", inputs: []FunctionTestInput{constNullString}, fn: Inet6Ntoa},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			resultType := test.resultType
+			if resultType.Oid == types.T_any {
+				resultType = types.T_varchar.ToType()
+			}
+			testCase := NewFunctionTestCase(
+				proc,
+				test.inputs,
+				NewFunctionTestResult(
+					resultType,
+					false,
+					[]string{"", ""},
+					[]bool{true, true},
+				),
+				test.fn,
+			)
+
+			succeed, info := testCase.Run()
+			require.True(t, succeed, info)
+		})
+	}
 }
 
 func TestVarlenaTemplatesIgnoreAllRowsPreserveResultCardinality(t *testing.T) {
