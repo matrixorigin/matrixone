@@ -419,11 +419,15 @@ func (s *sqlStore) ForceSetOffset(
 }
 
 func (s *sqlStore) Delete(ctx context.Context, tableID uint64) error {
+	// This is lazy GC for a dropped table whose globally allocated ID is not
+	// reused. Commit durability is sufficient: no later operation depends on
+	// this CN observing the deletion immediately. In particular, do not wait
+	// for committed logtail visibility here, because service shutdown cancels
+	// and joins this worker and that wait does not observe the worker context.
 	opts := executor.Options{}.
 		WithDatabase(database).
 		WithEnableTrace().
 		WithDisableWaitPaused().
-		WithWaitCommittedLogApplied().
 		WithStatementOption(executor.StatementOption{}.WithDisableLog())
 
 	return s.exec.ExecTxn(ctx,
