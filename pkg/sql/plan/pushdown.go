@@ -21,6 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 )
 
@@ -368,6 +369,7 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 				if tryMark := filter.GetCol(); tryMark != nil {
 					if tryMark.RelPos == node.BindingTags[0] {
 						node.JoinType = plan.Node_SEMI
+						node.OnList = unwrapIsTrueFromMarkJoinEqualities(node.OnList, leftTags, rightTags, markTag)
 						node.BindingTags = nil
 						break
 					}
@@ -376,6 +378,7 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 					if tryMark := arg.GetCol(); tryMark != nil {
 						if tryMark.RelPos == node.BindingTags[0] {
 							node.JoinType = plan.Node_ANTI
+							node.OnList = unwrapIsTrueFromMarkJoinEqualities(node.OnList, leftTags, rightTags, markTag)
 							node.BindingTags = nil
 							break
 						}
@@ -608,6 +611,38 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 			fmt.Sprintf("pushdownFilters:after (nodeID: %d, no change, cantPushdown: %d)", nodeID, len(cantPushdown)))
 	}
 	return nodeID, cantPushdown
+}
+
+func unwrapIsTrueFromMarkJoinEqualities(
+	conditions []*plan.Expr,
+	leftTags, rightTags map[int32]bool,
+	markTag int32,
+) []*plan.Expr {
+	for i, condition := range conditions {
+		isTrue := condition.GetF()
+		if isTrue == nil || isTrue.Func == nil || len(isTrue.Args) != 1 {
+			continue
+		}
+		funcID, _ := function.DecodeOverloadID(isTrue.Func.GetObj())
+		if funcID != function.ISTRUE {
+			continue
+		}
+
+		equality := isTrue.Args[0]
+		equalFunc := equality.GetF()
+		if equalFunc == nil || equalFunc.Func == nil || len(equalFunc.Args) != 2 || !IsEqualFunc(equalFunc.Func.GetObj()) {
+			continue
+		}
+
+		leftSide := getJoinSideWithOuterScope(equalFunc.Args[0], leftTags, rightTags, markTag)
+		rightSide := getJoinSideWithOuterScope(equalFunc.Args[1], leftTags, rightTags, markTag)
+		if leftSide == JoinSideLeft && rightSide == JoinSideRight ||
+			leftSide == JoinSideRight && rightSide == JoinSideLeft {
+			conditions[i] = equality
+		}
+	}
+
+	return conditions
 }
 
 // referencesSyntheticGroupKey reports whether expr cannot be rewritten below
