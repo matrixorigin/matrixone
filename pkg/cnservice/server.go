@@ -210,6 +210,7 @@ func NewService(
 	if err = srv.initMetadata(); err != nil {
 		return nil, err
 	}
+	srv.initTaskServiceHolder()
 
 	srv.responsePool = &sync.Pool{
 		New: func() any {
@@ -311,7 +312,13 @@ func NewService(
 	if err := srv.registerDefaultIcebergMaintenanceExecutor(ctx); err != nil {
 		return nil, err
 	}
-
+	// Start control-plane workers only after every schedule-command target is
+	// initialized and construction can no longer fail. In particular,
+	// task-service creation and gossip join must not race partially constructed
+	// service state or escape from a failed NewService call.
+	if err := srv.startCNStoreHeartbeat(); err != nil {
+		return nil, err
+	}
 	return srv, nil
 }
 
@@ -847,9 +854,6 @@ func (s *service) getHAKeeperClient() (client logservice.CNHAKeeperClient, err e
 			ss.(*status.Server).SetHAKeeperClient(client)
 		}
 
-		if err = s.startCNStoreHeartbeat(); err != nil {
-			return
-		}
 	})
 	client = s._hakeeperClient
 	return

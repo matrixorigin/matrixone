@@ -31,6 +31,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
@@ -201,16 +202,21 @@ func genViewTableDef(ctx CompilerContext, stmt *tree.Select, colNames tree.Ident
 				typ = sourceType
 			}
 		}
+		defaultDef := &plan.Default{NullAbility: !expr.Typ.NotNullable}
+		if idx < len(outputColumnProvenance) {
+			provenance := outputColumnProvenance[idx]
+			if provenance.State == ProvenanceSingleSource && provenance.Source != nil &&
+				provenance.Source.Metadata.Default != nil {
+				defaultDef = DeepCopyDefault(provenance.Source.Metadata.Default)
+				defaultDef.NullAbility = !expr.Typ.NotNullable
+			}
+		}
 		cols[idx] = &plan.ColDef{
 			Name:       strings.ToLower(name),
 			OriginName: originName,
 			Alg:        plan.CompressType_Lz4,
 			Typ:        *typ,
-			Default: &plan.Default{
-				NullAbility:  !expr.Typ.NotNullable,
-				Expr:         nil,
-				OriginString: "",
-			},
+			Default:    defaultDef,
 		}
 	}
 	tableDef.Cols = cols
@@ -279,30 +285,130 @@ func genAsSelectCols(ctx CompilerContext, stmt *tree.Select, isPrepareStmt bool)
 
 	cols := make([]*plan.ColDef, len(rootNode.ProjectList))
 	for i, expr := range rootNode.ProjectList {
-		defaultVal := ""
 		typ := &expr.Typ
 		provenance := bindCtx.outputColumnProvenanceForProject(int32(i))
 		if provenance.State == ProvenanceSingleSource && provenance.Source != nil {
-			if provenance.CanInheritSourceDefault && provenance.Source.Metadata.HasDefault {
-				defaultVal = provenance.Source.Metadata.DefaultOriginString
-			}
 			if isEnumOrSetPlanType(&provenance.Source.Metadata.Typ) {
 				typ = &provenance.Source.Metadata.Typ
 			}
 		}
+		nullAbility := ctasExprCanBeNull(expr)
+		defaultDef := &plan.Default{NullAbility: nullAbility}
+		if provenance.State == ProvenanceSingleSource && provenance.Source != nil {
+			switch provenance.CTASDefaultPolicy {
+			case CTASDefaultInheritSource, CTASDefaultInheritViewSource:
+				if provenance.Source.Metadata.Default != nil {
+					defaultDef = DeepCopyDefault(provenance.Source.Metadata.Default)
+					defaultDef.NullAbility = nullAbility
+					if defaultDef.Expr == nil && defaultDef.OriginString != "" {
+						defaultDef, err = buildCTASDefaultFromOrigin(
+							ctx, *typ, nullAbility, defaultDef.OriginString)
+						if err != nil {
+							return nil, nil, err
+						}
+					}
+				}
+			case CTASDefaultUseTypeDefault:
+				defaultDef, err = buildCTASDefaultForView(ctx, *typ, nullAbility)
+				if err != nil {
+					return nil, nil, err
+				}
+			}
+		}
 
 		cols[i] = &plan.ColDef{
-			Name: strings.ToLower(bindCtx.headings[i]),
-			Alg:  plan.CompressType_Lz4,
-			Typ:  *typ,
-			Default: &plan.Default{
-				NullAbility:  ctasExprCanBeNull(expr),
-				Expr:         nil,
-				OriginString: defaultVal,
-			},
+			Name:    strings.ToLower(bindCtx.headings[i]),
+			Alg:     plan.CompressType_Lz4,
+			Typ:     *typ,
+			Default: defaultDef,
 		}
 	}
 	return cols, builder.qry, nil
+}
+
+func buildCTASDefaultForView(ctx CompilerContext, typ plan.Type, nullAbility bool) (*plan.Default, error) {
+	defaultDef := &plan.Default{NullAbility: nullAbility}
+	if nullAbility {
+		return defaultDef, nil
+	}
+
+	originString, ok := ctasViewTypeDefaultOrigin(typ)
+	if !ok {
+		return defaultDef, nil
+	}
+
+	return buildCTASDefaultFromOrigin(ctx, typ, false, originString)
+}
+
+func buildCTASDefaultFromOrigin(
+	ctx CompilerContext, typ plan.Type, nullAbility bool, originString string,
+) (*plan.Default, error) {
+	stmt, err := parsers.ParseOne(ctx.GetContext(), dialect.MYSQL, "select "+originString, 1)
+	if err != nil {
+		return nil, err
+	}
+	defer stmt.Free()
+	selectStmt, ok := stmt.(*tree.Select)
+	if !ok {
+		return nil, moerr.NewInternalError(ctx.GetContext(), "invalid CTAS type default expression")
+	}
+	selectClause, ok := selectStmt.Select.(*tree.SelectClause)
+	if !ok || len(selectClause.Exprs) != 1 {
+		return nil, moerr.NewInternalError(ctx.GetContext(), "invalid CTAS type default expression")
+	}
+
+	binder := NewDefaultBinder(ctx.GetContext(), nil, nil, typ, nil)
+	defaultExpr, err := binder.BindExpr(selectClause.Exprs[0].Expr, 0, false)
+	if err != nil {
+		return nil, err
+	}
+	defaultExpr, err = makePlan2AssignmentCastExpr(ctx.GetContext(), defaultExpr, typ)
+	if err != nil {
+		return nil, err
+	}
+	defaultExpr, err = ConstantFold(
+		batch.EmptyForConstFoldBatch, DeepCopyExpr(defaultExpr), ctx.GetProcess(), false, true)
+	if err != nil {
+		return nil, err
+	}
+	return &plan.Default{
+		NullAbility:  nullAbility,
+		Expr:         defaultExpr,
+		OriginString: originString,
+	}, nil
+}
+
+func ctasViewTypeDefaultOrigin(typ plan.Type) (string, bool) {
+	if isSetPlanType(&typ) {
+		return "''", true
+	}
+	if isEnumPlanType(&typ) {
+		elements := strings.Split(typ.Enumvalues, ",")
+		if len(elements) == 0 {
+			return "", false
+		}
+		return "'" + formatStrInSingleQuotes(elements[0]) + "'", true
+	}
+
+	switch types.T(typ.Id) {
+	case types.T_int8, types.T_int16, types.T_int32, types.T_int64,
+		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
+		types.T_float32, types.T_float64, types.T_bool, types.T_bit:
+		return "0", true
+	case types.T_decimal64, types.T_decimal128, types.T_decimal256:
+		if typ.Scale > 0 {
+			return "0." + strings.Repeat("0", int(typ.Scale)), true
+		}
+		return "0", true
+	case types.T_time:
+		return "'00:00:00'", true
+	case types.T_year:
+		return "'0000'", true
+	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary:
+		return "''", true
+	default:
+		return "", false
+	}
 }
 
 func ctasExprCanBeNull(expr *Expr) bool {
@@ -4506,6 +4612,32 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 				ctx,
 				alterTable.CopyTableDef,
 				FindColumn(tableDef.Cols, opt.NewColumn.Name.ColName()),
+				opt.NewColumn,
+				opt.Position,
+			)
+			if err != nil {
+				return nil, err
+			}
+		case *tree.AlterTableChangeColumnClause:
+			// A same-name CHANGE with an unchanged storage layout has the same
+			// execution semantics as MODIFY, but historically took the COPY path.
+			ok, _ := isInplaceChangeColumn(ctx.GetContext(), opt, tableDef)
+			if !ok {
+				return nil, moerr.NewInvalidInputf(
+					ctx.GetContext(),
+					"failed inplace check: %s",
+					formatTreeNode(opt),
+				)
+			}
+
+			if alterTable.CopyTableDef == nil {
+				alterTable.CopyTableDef = DeepCopyTableDef(tableDef, true)
+			}
+
+			_, err := updateNewColumnInTableDef(
+				ctx,
+				alterTable.CopyTableDef,
+				FindColumn(alterTable.CopyTableDef.Cols, opt.OldColumnName.ColName()),
 				opt.NewColumn,
 				opt.Position,
 			)

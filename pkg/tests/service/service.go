@@ -363,7 +363,10 @@ func (c *testCluster) acquireAdmissionLocked() error {
 	if c.mu.admission != nil {
 		return moerr.NewInvalidStateNoCtx("test cluster cleanup is incomplete")
 	}
-	admission, err := clusteradmission.Acquire(context.Background())
+	admission, err := clusteradmission.Acquire(
+		context.Background(),
+		clusteradmission.Exclusive,
+	)
 	if err != nil {
 		return err
 	}
