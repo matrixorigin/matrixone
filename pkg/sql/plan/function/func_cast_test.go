@@ -2748,6 +2748,18 @@ func TestImplicitStringCastPreservesBinaryCharsetMetadata(t *testing.T) {
 
 	t.Run("implicit", func(t *testing.T) { run(t, NewCast, true) })
 	t.Run("explicit", func(t *testing.T) { run(t, NewExplicitCast, false) })
+	t.Run("reused result does not retain binary metadata", func(t *testing.T) {
+		result := vector.NewFunctionResultWrapper(types.T_varchar.ToType(), proc.Mp())
+		defer result.Free()
+		require.NoError(t, result.PreExtendAndReset(1))
+		require.NoError(t, NewCast([]*vector.Vector{input, target}, result, proc, 1, nil))
+		require.True(t, result.GetResultVector().GetIsBin())
+
+		input.SetIsBin(false)
+		require.NoError(t, result.PreExtendAndReset(1))
+		require.NoError(t, NewCast([]*vector.Vector{input, target}, result, proc, 1, nil))
+		require.False(t, result.GetResultVector().GetIsBin())
+	})
 }
 
 func contains(slice []uint64, item uint64) bool {
