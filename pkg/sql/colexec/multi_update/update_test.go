@@ -320,6 +320,49 @@ func TestFilterTargetRowsReadsConstantActiveSelectorLogically(t *testing.T) {
 	require.Equal(t, []int32{10, 20, 30}, vector.MustFixedColWithTypeCheck[int32](filtered.Vecs[3]))
 }
 
+func TestFilterTargetRowsCountsActiveAliasesWithoutRepeatingPhysicalWrites(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	mp := proc.Mp()
+
+	bat := batch.NewWithSize(5)
+	bat.Vecs[0] = testutil.MakeRowIdVector(
+		[]types.Rowid{
+			types.BuildTestRowid(1, 1),
+			types.BuildTestRowid(1, 2),
+			types.BuildTestRowid(1, 3),
+			types.BuildTestRowid(1, 4),
+		},
+		nil,
+		mp,
+	)
+	bat.Vecs[1] = testutil.NewInt64Vector(
+		4, types.T_int64.ToType(), mp, false, nil, []int64{1, 1, 1, 1},
+	)
+	bat.Vecs[2] = testutil.NewBoolVector(
+		4, types.T_bool.ToType(), mp, false, nil, []bool{true, true, false, false},
+	)
+	bat.Vecs[3] = testutil.NewBoolVector(
+		4, types.T_bool.ToType(), mp, false, nil, []bool{true, false, true, false},
+	)
+	bat.Vecs[4] = testutil.NewInt32Vector(
+		4, types.T_int32.ToType(), mp, false, nil, []int32{10, 20, 30, 40},
+	)
+	bat.SetRowCount(4)
+	defer bat.Clean(mp)
+
+	filtered, clean, additionalAffectedRows, err := filterTargetRows(proc, &MultiUpdateCtx{
+		TableDef:           &plan.TableDef{TblId: 42},
+		DedupByTargetRowID: true,
+		DeleteCols:         []int{0, 4, 1},
+		AffectedRowsCols:   []int{2, 3},
+	}, bat, nil)
+	require.NoError(t, err)
+	require.True(t, clean)
+	defer filtered.Clean(mp)
+	require.Equal(t, []int32{10, 20, 30}, vector.MustFixedColWithTypeCheck[int32](filtered.Vecs[4]))
+	require.Equal(t, uint64(1), additionalAffectedRows)
+}
+
 type testSeenRowsThrottler struct {
 	available int64
 	acquired  int64

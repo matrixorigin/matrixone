@@ -237,6 +237,10 @@ type MultiUpdateCtx struct {
 	// row_number() partition for every updated target table.
 	DedupByTargetRowID bool
 	TargetUpdateCtxIdx int
+	// AffectedRowsCols contains one active selector for every writable alias
+	// coalesced into this physical target. Physical writes remain deduplicated,
+	// while affected rows count every selector that contributed to the Rowid.
+	AffectedRowsCols []int
 	// TargetTableID stays logical when a partition wrapper replaces TableDef
 	// with a physical partition definition.
 	TargetTableID uint64

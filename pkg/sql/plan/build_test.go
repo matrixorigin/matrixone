@@ -2704,6 +2704,7 @@ func TestSamePhysicalTargetAliasesShareMergedFinalRows(t *testing.T) {
 			}
 			mainContexts++
 			require.True(t, updateCtx.DedupByTargetRowId)
+			require.Len(t, updateCtx.AffectedRowsCols, 2)
 			if tableID == 0 {
 				tableID = updateCtx.TableDef.TblId
 			} else {

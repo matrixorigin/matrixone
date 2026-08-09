@@ -478,25 +478,43 @@ func filterTargetRows(
 	rowNumbers := vector.MustFixedColWithTypeCheck[int64](rowNumberVec)
 	rowIDNulls := rowIDVec.GetNulls()
 	rowNumberNulls := rowNumberVec.GetNulls()
-	var activeVec *vector.Vector
-	if len(updateCtx.DeleteCols) >= 4 {
-		activeVec = input.Vecs[updateCtx.DeleteCols[3]]
-		if activeVec.GetType().Oid != types.T_bool {
+	activeCols := updateCtx.AffectedRowsCols
+	if len(activeCols) == 0 && len(updateCtx.DeleteCols) >= 4 {
+		activeCols = updateCtx.DeleteCols[3:4]
+	}
+	activeVecs := make([]*vector.Vector, len(activeCols))
+	for i, col := range activeCols {
+		if col < 0 || col >= len(input.Vecs) {
+			return nil, false, 0, moerr.NewInternalError(proc.Ctx, "invalid multi-target update selector columns")
+		}
+		activeVecs[i] = input.Vecs[col]
+		if activeVecs[i].GetType().Oid != types.T_bool {
 			return nil, false, 0, moerr.NewInternalError(proc.Ctx, "invalid multi-target update selector types")
 		}
 	}
 	selections := make([]int64, 0, input.RowCount())
+	var semanticAffectedRows uint64
 	for i := 0; i < input.RowCount(); i++ {
 		if rowIDNulls.Contains(uint64(i)) ||
 			rowNumberNulls.Contains(uint64(i)) ||
 			rowNumbers[i] != 1 {
 			continue
 		}
-		if activeVec != nil && (activeVec.IsNull(uint64(i)) ||
-			!vector.GetFixedAtNoTypeCheck[bool](activeVec, i)) {
+		activeCount := 1
+		if len(activeVecs) > 0 {
+			activeCount = 0
+			for _, activeVec := range activeVecs {
+				if !activeVec.IsNull(uint64(i)) &&
+					vector.GetFixedAtNoTypeCheck[bool](activeVec, i) {
+					activeCount++
+				}
+			}
+		}
+		if activeCount == 0 {
 			continue
 		}
 		selections = append(selections, int64(i))
+		semanticAffectedRows += uint64(activeCount)
 	}
 
 	// Modern execution batches can carry a statement allocation account. Keep
@@ -509,7 +527,7 @@ func filterTargetRows(
 	filtered.Shrink(selections, false)
 	filtered.SetRowCount(len(selections))
 	if seen == nil || filtered.RowCount() == 0 {
-		return filtered, true, 0, nil
+		return filtered, true, semanticAffectedRows - uint64(filtered.RowCount()), nil
 	}
 
 	physicalSelections := make([]int64, 0, filtered.RowCount())
@@ -533,10 +551,9 @@ func filterTargetRows(
 			}
 		}
 	}
-	duplicateRows := uint64(filtered.RowCount() - len(physicalSelections))
 	filtered.Shrink(physicalSelections, false)
 	filtered.SetRowCount(len(physicalSelections))
-	return filtered, true, duplicateRows, nil
+	return filtered, true, semanticAffectedRows - uint64(len(physicalSelections)), nil
 }
 
 func (update *MultiUpdate) prepareSeenTargetRows(proc *process.Process) error {

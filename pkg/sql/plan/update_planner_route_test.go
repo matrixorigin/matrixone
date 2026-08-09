@@ -1064,7 +1064,11 @@ func TestRepeatedPhysicalTargetPrimaryKeyUpdateIsRejected(t *testing.T) {
 			"SET a.n_nationkey = a.n_nationkey + 1, b.n_name = 'b'",
 	)
 	require.Error(t, err)
-	require.ErrorContains(t, err, "Primary key update is not allowed")
+	require.ErrorContains(t, err, "Primary key/partition key update is not allowed")
+	moErr := err.(*moerr.Error)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrMultiUpdateKeyConflict))
+	require.Equal(t, uint16(moerr.ER_MULTI_UPDATE_KEY_CONFLICT), moErr.MySQLCode())
+	require.Equal(t, moerr.MySQLDefaultSqlState, moErr.SqlState())
 }
 
 func TestLegacyInsertForeignKeyKeepsGenericAssert(t *testing.T) {
