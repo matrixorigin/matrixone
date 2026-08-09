@@ -537,20 +537,68 @@ func TestHashMapIteratorsRejectMalformedRowShapes(t *testing.T) {
 		},
 	} {
 		m, iterator := makeIterator()
-		short, err := vector.NewConstFixed(types.T_int32.ToType(), int32(1), 1, mp)
-		require.NoError(t, err)
+		short := vector.NewVec(types.T_int32.ToType())
+		require.NoError(t, vector.AppendFixed(short, int32(1), false, mp))
 		for _, vecs := range [][]*vector.Vector{
 			nil,
 			{nil},
 			{short},
 		} {
-			_, _, err = iterator.Insert(0, 2, vecs)
+			_, _, err := iterator.Insert(0, 2, vecs)
 			require.ErrorIs(t, err, mpool.ErrAllocationAccountInvalid)
 			_, _, err = iterator.Find(1, 1, vecs)
 			require.ErrorIs(t, err, mpool.ErrAllocationAccountInvalid)
 		}
 		require.Zero(t, m.GroupCount())
 		short.Free(mp)
+		m.Free()
+	}
+	require.Zero(t, mp.CurrNB())
+}
+
+func TestHashMapIteratorsBroadcastConstVectors(t *testing.T) {
+	mp := mpool.MustNewZero()
+	for _, makeIterator := range []func() (HashMap, Iterator){
+		func() (HashMap, Iterator) {
+			m, err := NewIntHashMap(true, mp)
+			require.NoError(t, err)
+			return m, m.NewIterator()
+		},
+		func() (HashMap, Iterator) {
+			m, err := NewStrHashMap(true, mp)
+			require.NoError(t, err)
+			return m, m.NewIterator()
+		},
+	} {
+		m, iterator := makeIterator()
+		constant, err := vector.NewConstFixed(types.T_int32.ToType(), int32(7), 1, mp)
+		require.NoError(t, err)
+
+		values, zValues, err := iterator.Insert(UnitLimit, 2, []*vector.Vector{constant})
+		require.NoError(t, err)
+		require.Equal(t, []uint64{1, 1}, values)
+		require.Equal(t, []int64{1, 1}, zValues)
+		require.Equal(t, uint64(1), m.GroupCount())
+
+		values, zValues, err = iterator.Find(UnitLimit*2, 2, []*vector.Vector{constant})
+		require.NoError(t, err)
+		require.Equal(t, []uint64{1, 1}, values)
+		require.Equal(t, []int64{1, 1}, zValues)
+
+		constantNull := vector.NewConstNull(types.T_int32.ToType(), 1, mp)
+		values, zValues, err = iterator.Insert(UnitLimit*3, 2, []*vector.Vector{constantNull})
+		require.NoError(t, err)
+		require.Equal(t, []uint64{2, 2}, values)
+		require.Equal(t, []int64{1, 1}, zValues)
+		require.Equal(t, uint64(2), m.GroupCount())
+
+		emptyConstant := vector.NewConstNull(types.T_int32.ToType(), 0, mp)
+		_, _, err = iterator.Insert(UnitLimit*4, 1, []*vector.Vector{emptyConstant})
+		require.ErrorIs(t, err, mpool.ErrAllocationAccountInvalid)
+
+		emptyConstant.Free(mp)
+		constantNull.Free(mp)
+		constant.Free(mp)
 		m.Free()
 	}
 	require.Zero(t, mp.CurrNB())
