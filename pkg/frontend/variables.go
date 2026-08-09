@@ -28,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fulltext"
 	"github.com/matrixorigin/matrixone/pkg/util/gpumode"
@@ -4265,9 +4266,42 @@ func valueIsBoolTrue(value interface{}) (bool, error) {
 }
 
 type UserDefinedVar struct {
-	Value interface{}
-	Sql   string
-	IsBin bool
+	Value            interface{}
+	Sql              string
+	IsBin            bool
+	PrepareParamKind vector.PrepareParamKind
+}
+
+func prepareParamKindFromType(oid types.T) vector.PrepareParamKind {
+	switch oid {
+	case types.T_bit, types.T_int8, types.T_int16, types.T_int32, types.T_int64,
+		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
+		types.T_year:
+		return vector.PrepareParamInteger
+	case types.T_float32, types.T_float64:
+		return vector.PrepareParamFloat
+	case types.T_decimal64, types.T_decimal128, types.T_decimal256:
+		return vector.PrepareParamDecimal
+	case types.T_bool:
+		return vector.PrepareParamBoolean
+	default:
+		return vector.PrepareParamNone
+	}
+}
+
+func prepareParamKindFromValue(value any) vector.PrepareParamKind {
+	switch value.(type) {
+	case int, int8, int16, int32, int64, uint, uint8, uint16, uint32, uint64, types.MoYear:
+		return vector.PrepareParamInteger
+	case float32, float64:
+		return vector.PrepareParamFloat
+	case types.Decimal64, types.Decimal128, types.Decimal256:
+		return vector.PrepareParamDecimal
+	case bool:
+		return vector.PrepareParamBoolean
+	default:
+		return vector.PrepareParamNone
+	}
 }
 
 func autocommitValue(ses FeSession) (bool, error) {

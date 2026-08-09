@@ -1126,7 +1126,7 @@ func TestDiskCacheReadEnsuresMemoryCacheCapacity(t *testing.T) {
 	err = cache.Read(ctx, vec)
 	require.Nil(t, err)
 	require.Equal(t, 1, dataCache.ensureCalls)
-	require.Equal(t, 10, dataCache.ensureBytes)
+	require.Equal(t, DefaultCacheDataAllocator().BackingSize(10), dataCache.ensureBytes)
 	require.True(t, vec.Entries[0].done)
 	require.NotNil(t, vec.Entries[0].CachedData)
 }
