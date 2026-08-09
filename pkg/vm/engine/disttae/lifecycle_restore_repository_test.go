@@ -234,23 +234,7 @@ func TestSQLRestoreInitializeOwnsLeaseTableAndAttemptInOneTransaction(t *testing
 	}
 	attempt, err := repository.Initialize(
 		context.Background(),
-		lifecyclepkg.RestoreInitializeRequest{
-			Dataset: lifecyclepkg.RestoreDataset{
-				DatasetID:    "22222222-2222-2222-2222-222222222222",
-				Version:      3,
-				LogicalBytes: 10,
-			},
-			Attempt: lifecyclepkg.RestoreAttempt{
-				RestoreID:         "11111111-1111-1111-1111-111111111111",
-				LeaseID:           "33333333-3333-3333-3333-333333333333",
-				Deadline:          time.Now().Add(time.Minute),
-				StagingDatabaseID: 7,
-				HiddenName:        "__mo_lifecycle_restore_1",
-				TargetDatabaseID:  7,
-				TargetName:        "events_history",
-			},
-			HiddenCreateSQL: "create table history.__mo_lifecycle_restore_1(id bigint)",
-		},
+		lifecycleRestoreInitializeRequestForTest(10),
 	)
 	require.NoError(t, err)
 	require.Equal(t, uint64(88), attempt.StagingTableID)
@@ -258,7 +242,7 @@ func TestSQLRestoreInitializeOwnsLeaseTableAndAttemptInOneTransaction(t *testing
 	require.Contains(t, statements[0].sql, "from mo_catalog.mo_account")
 	require.Contains(t, statements[0].sql, "for update")
 	require.Equal(t, uint32(0), statements[0].accountID)
-	require.Contains(t, statements[2].sql, "sum(d.logical_bytes)")
+	require.Contains(t, statements[2].sql, "sum(a.selected_logical_bytes)")
 	require.Equal(t, uint32(17), statements[2].accountID)
 	require.Contains(t, statements[3].sql, "restore_lease_id")
 	require.Contains(t, statements[3].sql, "and restore_lease_id is null")
@@ -269,6 +253,39 @@ func TestSQLRestoreInitializeOwnsLeaseTableAndAttemptInOneTransaction(t *testing
 		require.NotContains(t, statement.sql, "mo_feature_registry")
 		require.NotContains(t, statement.sql, "mo_lifecycle_cleanup_roots")
 	}
+}
+
+func TestSQLRestoreInitializeRejectsSelectionDriftBeforeCatalogMutation(t *testing.T) {
+	mp := mpool.MustNewZero()
+	repository := lifecycleRestoreRepositoryForAdmissionTest(
+		mp,
+		executor.NewMemExecutor(func(sql string) (executor.Result, error) {
+			t.Fatalf("selection drift must be rejected before SQL execution: %s", sql)
+			return executor.Result{}, nil
+		}),
+		100,
+	)
+
+	t.Run("dataset-order", func(t *testing.T) {
+		request := lifecycleRestoreInitializeRequestForTest(10)
+		request.Attempt.DatasetIDs[0] = "44444444-4444-4444-4444-444444444444"
+		request.Attempt.SelectionDigest = lifecyclepkg.BuildRestoreSelectionDigest(
+			request.Attempt.Scope,
+			request.Attempt.SourceLogicalTableID,
+			request.Attempt.RangeStart,
+			request.Attempt.RangeEnd,
+			request.Attempt.DatasetIDs,
+		)
+		_, err := repository.Initialize(context.Background(), request)
+		require.ErrorContains(t, err, "selection identity is invalid")
+	})
+
+	t.Run("selection-digest", func(t *testing.T) {
+		request := lifecycleRestoreInitializeRequestForTest(10)
+		request.Attempt.SelectionDigest[0] ^= 0xff
+		_, err := repository.Initialize(context.Background(), request)
+		require.ErrorContains(t, err, "selection digest is invalid")
+	})
 }
 
 func TestSQLRestoreInitializeFailsClosedWhenOwnerAccountIsMissing(t *testing.T) {
@@ -322,7 +339,7 @@ func TestSQLRestoreInitializeEnforcesTransactionalStagingCaps(t *testing.T) {
 					return lifecycleRestoreUint64Rows(t, mp, 17), nil
 				case strings.Contains(lower, "where restore_id=unhex"):
 					return executor.Result{Mp: mp}, nil
-				case strings.Contains(lower, "sum(d.logical_bytes)"):
+				case strings.Contains(lower, "sum(a.selected_logical_bytes)"):
 					return lifecycleRestoreUint64Rows(t, mp, test.active), nil
 				default:
 					t.Fatalf("admission rejection must precede mutation: %s", sql)
@@ -383,50 +400,7 @@ func TestSQLRestoreFindsResumableAttemptByDatasetAndTarget(t *testing.T) {
 		require.Contains(t, lower, "h.relname=a.hidden_name")
 		require.Contains(t, strings.ToLower(sql), "target_database_id=7")
 		require.Contains(t, strings.ToLower(sql), "target_name='events_history'")
-		value := executor.NewMemResult([]types.Type{
-			types.T_varchar.ToType(),
-			types.T_varchar.ToType(),
-			types.T_varchar.ToType(),
-			types.T_varchar.ToType(),
-			types.T_uint64.ToType(),
-			types.T_uint64.ToType(),
-			types.T_varchar.ToType(),
-			types.T_uint64.ToType(),
-			types.T_varchar.ToType(),
-			types.T_varchar.ToType(),
-			types.T_uint64.ToType(),
-			types.T_uint64.ToType(),
-			types.T_varchar.ToType(),
-		}, mp)
-		value.NewBatchWithRowCount(1)
-		require.NoError(t, executor.AppendStringRows(value, 0, []string{
-			"11111111111111111111111111111111",
-		}))
-		require.NoError(t, executor.AppendStringRows(value, 1, []string{
-			"22222222222222222222222222222222",
-		}))
-		require.NoError(t, executor.AppendStringRows(value, 2, []string{
-			"33333333333333333333333333333333",
-		}))
-		require.NoError(t, executor.AppendStringRows(value, 3, []string{
-			"2026-08-01 09:00:00.000000",
-		}))
-		require.NoError(t, executor.AppendFixedRows(value, 4, []uint64{7}))
-		require.NoError(t, executor.AppendFixedRows(value, 5, []uint64{88}))
-		require.NoError(t, executor.AppendStringRows(value, 6, []string{
-			"__mo_lifecycle_restore_1",
-		}))
-		require.NoError(t, executor.AppendFixedRows(value, 7, []uint64{7}))
-		require.NoError(t, executor.AppendStringRows(value, 8, []string{
-			"events_history",
-		}))
-		require.NoError(t, executor.AppendStringRows(value, 9, []string{
-			"DONE",
-		}))
-		require.NoError(t, executor.AppendFixedRows(value, 10, []uint64{4}))
-		require.NoError(t, executor.AppendFixedRows(value, 11, []uint64{100}))
-		require.NoError(t, executor.AppendStringRows(value, 12, []string{""}))
-		return value.GetResult(), nil
+		return lifecycleRestoreAttemptRows(t, mp, "DONE"), nil
 	})
 	repository := SQLRestoreRepository{
 		AccountID:          17,
@@ -450,6 +424,67 @@ func TestSQLRestoreFindsResumableAttemptByDatasetAndTarget(t *testing.T) {
 	require.Equal(t, uint64(100), attempt.RestoredRows)
 	require.Equal(t, "DONE", attempt.State)
 	require.Equal(t, "history", attempt.TargetDatabaseName)
+}
+
+func TestSQLRestoreFindsRangeResumableWithFrozenDatasetSelection(t *testing.T) {
+	mp := mpool.MustNewZero()
+	datasetIDs := []string{
+		"22222222-2222-2222-2222-222222222222",
+		"44444444-4444-4444-4444-444444444444",
+	}
+	selectionDigest := lifecyclepkg.BuildRestoreSelectionDigest(
+		lifecyclepkg.RestoreScopeRange,
+		42,
+		100,
+		200,
+		datasetIDs,
+	)
+	sqlExecutor := executor.NewMemExecutor(func(sql string) (executor.Result, error) {
+		lower := strings.ToLower(sql)
+		require.Contains(t, lower, "a.scope='range'")
+		require.Contains(t, lower, "a.source_logical_table_id=42")
+		require.Contains(t, lower, "a.range_start=100")
+		require.Contains(t, lower, "a.range_end=200")
+		require.Contains(t, lower, "a.target_database_id=7")
+		require.Contains(t, lower, "a.target_name='events_history'")
+
+		result := lifecycleRestoreAttemptRows(t, mp, "IMPORTING")
+		vectors := result.Batches[0].Vecs
+		require.NoError(t, vector.SetBytesAt(vectors[13], 0, []byte(lifecyclepkg.RestoreScopeRange), mp))
+		require.NoError(t, vector.SetFixedAtNoTypeCheck(vectors[15], 0, int64(100)))
+		require.NoError(t, vector.SetFixedAtNoTypeCheck(vectors[16], 0, int64(200)))
+		require.NoError(t, vector.SetBytesAt(vectors[19], 0, []byte(hex.EncodeToString(selectionDigest[:])), mp))
+		require.NoError(t, vector.SetBytesAt(vectors[20], 0, []byte(`[
+"22222222-2222-2222-2222-222222222222",
+"44444444-4444-4444-4444-444444444444"
+]`), mp))
+		require.NoError(t, vector.SetFixedAtNoTypeCheck(vectors[21], 0, uint32(2)))
+		require.NoError(t, vector.SetFixedAtNoTypeCheck(vectors[22], 0, uint64(8)))
+		require.NoError(t, vector.SetFixedAtNoTypeCheck(vectors[23], 0, uint64(8192)))
+		return result, nil
+	})
+	repository := SQLRestoreRepository{
+		AccountID:          17,
+		TargetDatabaseName: "history",
+		Executor:           sqlExecutor,
+	}
+	attempt, found, err := repository.FindRangeResumable(
+		context.Background(),
+		42,
+		100,
+		200,
+		7,
+		"events_history",
+	)
+	require.NoError(t, err)
+	require.True(t, found)
+	require.Equal(t, lifecyclepkg.RestoreScopeRange, attempt.Scope)
+	require.Equal(t, datasetIDs, attempt.DatasetIDs)
+	require.Equal(t, int64(100), attempt.RangeStart)
+	require.Equal(t, int64(200), attempt.RangeEnd)
+	require.Equal(t, selectionDigest, attempt.SelectionDigest)
+	require.Equal(t, uint64(8), attempt.TotalChunkCount)
+	require.Equal(t, uint64(8192), attempt.SelectedLogicalBytes)
 }
 
 func TestValidateLifecycleRestoreHiddenIdentityIncludesDatabase(t *testing.T) {
@@ -489,52 +524,14 @@ func TestSQLRestorePublishRetryStopsAtDoneBeforeHiddenIdentityLookup(t *testing.
 			strings.ToLower(sql),
 			"from mo_catalog.mo_lifecycle_restore_attempts",
 		)
-		value := executor.NewMemResult([]types.Type{
-			types.T_varchar.ToType(),
-			types.T_varchar.ToType(),
-			types.T_varchar.ToType(),
-			types.T_varchar.ToType(),
-			types.T_uint64.ToType(),
-			types.T_uint64.ToType(),
-			types.T_varchar.ToType(),
-			types.T_uint64.ToType(),
-			types.T_varchar.ToType(),
-			types.T_varchar.ToType(),
-			types.T_uint64.ToType(),
-			types.T_uint64.ToType(),
-			types.T_varchar.ToType(),
-		}, mp)
-		value.NewBatchWithRowCount(1)
-		require.NoError(t, executor.AppendStringRows(
-			value, 0, []string{"11111111111111111111111111111111"},
+		value := lifecycleRestoreAttemptRows(t, mp, "DONE")
+		require.NoError(t, vector.SetBytesAt(
+			value.Batches[0].Vecs[12],
+			0,
+			[]byte(hex.EncodeToString(verified[:])),
+			mp,
 		))
-		require.NoError(t, executor.AppendStringRows(
-			value, 1, []string{"22222222222222222222222222222222"},
-		))
-		require.NoError(t, executor.AppendStringRows(
-			value, 2, []string{"33333333333333333333333333333333"},
-		))
-		require.NoError(t, executor.AppendStringRows(
-			value, 3, []string{"2026-08-01 09:00:00.000000"},
-		))
-		require.NoError(t, executor.AppendFixedRows(value, 4, []uint64{7}))
-		require.NoError(t, executor.AppendFixedRows(value, 5, []uint64{88}))
-		require.NoError(t, executor.AppendStringRows(
-			value, 6, []string{"events_history"},
-		))
-		require.NoError(t, executor.AppendFixedRows(value, 7, []uint64{7}))
-		require.NoError(t, executor.AppendStringRows(
-			value, 8, []string{"events_history"},
-		))
-		require.NoError(t, executor.AppendStringRows(
-			value, 9, []string{"DONE"},
-		))
-		require.NoError(t, executor.AppendFixedRows(value, 10, []uint64{4}))
-		require.NoError(t, executor.AppendFixedRows(value, 11, []uint64{100}))
-		require.NoError(t, executor.AppendStringRows(
-			value, 12, []string{hex.EncodeToString(verified[:])},
-		))
-		return value.GetResult(), nil
+		return value, nil
 	})
 	repository := SQLRestoreRepository{
 		AccountID: 17,
@@ -569,11 +566,16 @@ func TestSQLRestoreImportChunkReturnsCommittedReceiptIdempotently(t *testing.T) 
 		switch len(statements) {
 		case 1:
 			require.Contains(t, lower, "from mo_catalog.mo_lifecycle_restore_chunks")
-			return lifecycleRestoreStringRows(
-				t,
-				mp,
-				hex.EncodeToString(chunkDigest[:]),
-			), nil
+			result := executor.NewMemResult([]types.Type{
+				types.T_varchar.ToType(),
+				types.T_uint64.ToType(),
+				types.T_varchar.ToType(),
+			}, mp)
+			result.NewBatchWithRowCount(1)
+			require.NoError(t, executor.AppendStringRows(result, 0, []string{"22222222222222222222222222222222"}))
+			require.NoError(t, executor.AppendFixedRows(result, 1, []uint64{4}))
+			require.NoError(t, executor.AppendStringRows(result, 2, []string{hex.EncodeToString(chunkDigest[:])}))
+			return result.GetResult(), nil
 		case 2:
 			require.Contains(t, lower, "from mo_catalog.mo_lifecycle_restore_attempts")
 			return lifecycleRestoreAttemptRows(t, mp, "IMPORTING"), nil
@@ -593,9 +595,11 @@ func TestSQLRestoreImportChunkReturnsCommittedReceiptIdempotently(t *testing.T) 
 		context.Background(),
 		lifecycleRestoreAttemptForTest("IMPORTING"),
 		lifecyclepkg.RestoreChunkReceipt{
-			RestoreID:    "11111111-1111-1111-1111-111111111111",
-			ChunkOrdinal: 4,
-			ChunkDigest:  chunkDigest,
+			RestoreID:           "11111111-1111-1111-1111-111111111111",
+			DatasetID:           "22222222-2222-2222-2222-222222222222",
+			DatasetChunkOrdinal: 4,
+			ChunkOrdinal:        4,
+			ChunkDigest:         chunkDigest,
 		},
 		lifecyclepkg.SchemaDescriptor{},
 		nil,
@@ -629,6 +633,8 @@ func TestSQLRestoreImportsVerifiedChunkInOneTransaction(t *testing.T) {
 	require.NoError(t, encoder.WriteRow(context.Background(), rows[0]))
 	receipt := lifecyclepkg.RestoreChunkReceipt{
 		RestoreID:            "11111111-1111-1111-1111-111111111111",
+		DatasetID:            "22222222-2222-2222-2222-222222222222",
+		DatasetChunkOrdinal:  4,
 		ChunkOrdinal:         4,
 		FileOrdinal:          1,
 		RowGroupOrdinal:      2,
@@ -721,6 +727,8 @@ func TestSQLRestoreListsChunkReceiptsInManifestOrder(t *testing.T) {
 	sqlExecutor := executor.NewMemExecutor(func(sql string) (executor.Result, error) {
 		require.Contains(t, strings.ToLower(sql), "order by chunk_ordinal")
 		result := executor.NewMemResult([]types.Type{
+			types.T_varchar.ToType(),
+			types.T_uint64.ToType(),
 			types.T_uint64.ToType(),
 			types.T_uint32.ToType(),
 			types.T_uint32.ToType(),
@@ -730,16 +738,21 @@ func TestSQLRestoreListsChunkReceiptsInManifestOrder(t *testing.T) {
 			types.T_varchar.ToType(),
 		}, mp)
 		result.NewBatchWithRowCount(2)
-		require.NoError(t, executor.AppendFixedRows(result, 0, []uint64{0, 1}))
-		require.NoError(t, executor.AppendFixedRows(result, 1, []uint32{0, 0}))
-		require.NoError(t, executor.AppendFixedRows(result, 2, []uint32{0, 1}))
-		require.NoError(t, executor.AppendStringRows(result, 3, []string{
+		require.NoError(t, executor.AppendStringRows(result, 0, []string{
+			"22222222222222222222222222222222",
+			"22222222222222222222222222222222",
+		}))
+		require.NoError(t, executor.AppendFixedRows(result, 1, []uint64{0, 1}))
+		require.NoError(t, executor.AppendFixedRows(result, 2, []uint64{0, 1}))
+		require.NoError(t, executor.AppendFixedRows(result, 3, []uint32{0, 0}))
+		require.NoError(t, executor.AppendFixedRows(result, 4, []uint32{0, 1}))
+		require.NoError(t, executor.AppendStringRows(result, 5, []string{
 			hex.EncodeToString(firstDigest[:]),
 			hex.EncodeToString(secondDigest[:]),
 		}))
-		require.NoError(t, executor.AppendFixedRows(result, 4, []uint64{8, 9}))
-		require.NoError(t, executor.AppendFixedRows(result, 5, []uint64{80, 90}))
-		require.NoError(t, executor.AppendStringRows(result, 6, []string{
+		require.NoError(t, executor.AppendFixedRows(result, 6, []uint64{8, 9}))
+		require.NoError(t, executor.AppendFixedRows(result, 7, []uint64{80, 90}))
+		require.NoError(t, executor.AppendStringRows(result, 8, []string{
 			hex.EncodeToString(firstHash[:]),
 			hex.EncodeToString(secondHash[:]),
 		}))
@@ -754,6 +767,8 @@ func TestSQLRestoreListsChunkReceiptsInManifestOrder(t *testing.T) {
 	require.Equal(t, []lifecyclepkg.RestoreChunkReceipt{
 		{
 			RestoreID:            "11111111-1111-1111-1111-111111111111",
+			DatasetID:            "22222222-2222-2222-2222-222222222222",
+			DatasetChunkOrdinal:  0,
 			ChunkOrdinal:         0,
 			FileOrdinal:          0,
 			RowGroupOrdinal:      0,
@@ -764,6 +779,8 @@ func TestSQLRestoreListsChunkReceiptsInManifestOrder(t *testing.T) {
 		},
 		{
 			RestoreID:            "11111111-1111-1111-1111-111111111111",
+			DatasetID:            "22222222-2222-2222-2222-222222222222",
+			DatasetChunkOrdinal:  1,
 			ChunkOrdinal:         1,
 			FileOrdinal:          0,
 			RowGroupOrdinal:      1,
@@ -926,6 +943,32 @@ func TestSQLRestorePurgeTransitionsPublishedRootAfterDatasetCAS(t *testing.T) {
 	require.True(t, roots.transitioned)
 }
 
+func TestSQLRestoreReleasesEveryFrozenDatasetLease(t *testing.T) {
+	mp := mpool.MustNewZero()
+	datasetIDs := []string{
+		"22222222-2222-2222-2222-222222222222",
+		"44444444-4444-4444-4444-444444444444",
+	}
+	calls := 0
+	txn := restoreTxnExecutor{execute: func(
+		sql string,
+		option executor.StatementOption,
+	) (executor.Result, error) {
+		require.Equal(t, uint32(17), option.AccountID())
+		require.Contains(t, strings.ToLower(sql), "restore_lease_id=null")
+		require.Contains(t, sql, strings.ReplaceAll(datasetIDs[calls], "-", ""))
+		calls++
+		return executor.Result{AffectedRows: 1, Mp: mp}, nil
+	}}
+	repository := SQLRestoreRepository{AccountID: 17}
+	require.NoError(t, repository.releaseRestoreDatasetLeases(
+		txn,
+		datasetIDs,
+		"33333333333333333333333333333333",
+	))
+	require.Equal(t, 2, calls)
+}
+
 func TestSQLRestoreCleanupReleasesLeaseWhenHiddenTableWasDropped(t *testing.T) {
 	mp := mpool.MustNewZero()
 	var statements []string
@@ -992,8 +1035,26 @@ func lifecycleRestoreAttemptRows(
 		types.T_uint64.ToType(),
 		types.T_uint64.ToType(),
 		types.T_varchar.ToType(),
+		types.T_varchar.ToType(),
+		types.T_uint64.ToType(),
+		types.T_int64.ToType(),
+		types.T_int64.ToType(),
+		types.T_uint64.ToType(),
+		types.T_uint32.ToType(),
+		types.T_varchar.ToType(),
+		types.T_blob.ToType(),
+		types.T_uint32.ToType(),
+		types.T_uint64.ToType(),
+		types.T_uint64.ToType(),
 	}, mp)
 	result.NewBatchWithRowCount(1)
+	selectionDigest := lifecyclepkg.BuildRestoreSelectionDigest(
+		lifecyclepkg.RestoreScopeDataset,
+		42,
+		0,
+		0,
+		[]string{"22222222-2222-2222-2222-222222222222"},
+	)
 	for column, value := range map[int]string{
 		0:  "11111111111111111111111111111111",
 		1:  "22222222222222222222222222222222",
@@ -1003,6 +1064,9 @@ func lifecycleRestoreAttemptRows(
 		8:  "events_history",
 		9:  state,
 		12: "",
+		13: lifecyclepkg.RestoreScopeDataset,
+		19: hex.EncodeToString(selectionDigest[:]),
+		20: `["22222222-2222-2222-2222-222222222222"]`,
 	} {
 		require.NoError(t, executor.AppendStringRows(
 			result,
@@ -1016,6 +1080,10 @@ func lifecycleRestoreAttemptRows(
 		7:  7,
 		10: 4,
 		11: 100,
+		14: 42,
+		17: 7,
+		22: 4,
+		23: 4096,
 	} {
 		require.NoError(t, executor.AppendFixedRows(
 			result,
@@ -1023,25 +1091,46 @@ func lifecycleRestoreAttemptRows(
 			[]uint64{value},
 		))
 	}
+	require.NoError(t, executor.AppendFixedRows(result, 15, []int64{0}))
+	require.NoError(t, executor.AppendFixedRows(result, 16, []int64{0}))
+	require.NoError(t, executor.AppendFixedRows(result, 18, []uint32{uint32(types.T_timestamp)}))
+	require.NoError(t, executor.AppendFixedRows(result, 21, []uint32{1}))
 	return result.GetResult()
 }
 
 func lifecycleRestoreAttemptForTest(state string) lifecyclepkg.RestoreAttempt {
-	return lifecyclepkg.RestoreAttempt{
-		RestoreID:          "11111111-1111-1111-1111-111111111111",
-		DatasetID:          "22222222-2222-2222-2222-222222222222",
-		LeaseID:            "33333333-3333-3333-3333-333333333333",
-		Deadline:           time.Now().Add(time.Minute),
-		StagingDatabaseID:  7,
-		StagingTableID:     88,
-		HiddenName:         "__mo_lifecycle_restore_11111111111111111111111111111111",
-		TargetDatabaseID:   7,
-		TargetDatabaseName: "history",
-		TargetName:         "events_history",
-		State:              state,
-		NextChunkOrdinal:   4,
-		RestoredRows:       100,
+	attempt := lifecyclepkg.RestoreAttempt{
+		RestoreID:            "11111111-1111-1111-1111-111111111111",
+		DatasetID:            "22222222-2222-2222-2222-222222222222",
+		LeaseID:              "33333333-3333-3333-3333-333333333333",
+		Deadline:             time.Now().Add(time.Minute),
+		StagingDatabaseID:    7,
+		StagingTableID:       88,
+		HiddenName:           "__mo_lifecycle_restore_11111111111111111111111111111111",
+		TargetDatabaseID:     7,
+		TargetDatabaseName:   "history",
+		TargetName:           "events_history",
+		State:                state,
+		NextChunkOrdinal:     4,
+		RestoredRows:         100,
+		Scope:                lifecyclepkg.RestoreScopeDataset,
+		DatasetIDs:           []string{"22222222-2222-2222-2222-222222222222"},
+		SourceLogicalTableID: 42,
+		LifecycleRange: lifecyclepkg.ArchiveLifecycleRange{
+			SourceColumnID: 7,
+			TypeID:         int32(types.T_timestamp),
+		},
+		TotalChunkCount:      4,
+		SelectedLogicalBytes: 4096,
 	}
+	attempt.SelectionDigest = lifecyclepkg.BuildRestoreSelectionDigest(
+		attempt.Scope,
+		attempt.SourceLogicalTableID,
+		0,
+		0,
+		attempt.DatasetIDs,
+	)
+	return attempt
 }
 
 func lifecycleRestoreStringRows(
@@ -1233,21 +1322,37 @@ func lifecycleRestoreRepositoryForAdmissionTest(
 func lifecycleRestoreInitializeRequestForTest(
 	logicalBytes uint64,
 ) lifecyclepkg.RestoreInitializeRequest {
+	dataset := lifecyclepkg.RestoreDataset{
+		DatasetID:    "22222222-2222-2222-2222-222222222222",
+		Version:      3,
+		LogicalBytes: logicalBytes,
+	}
+	attempt := lifecyclepkg.RestoreAttempt{
+		RestoreID:            "11111111-1111-1111-1111-111111111111",
+		DatasetID:            dataset.DatasetID,
+		DatasetIDs:           []string{dataset.DatasetID},
+		LeaseID:              "33333333-3333-3333-3333-333333333333",
+		Deadline:             time.Now().Add(time.Minute),
+		StagingDatabaseID:    7,
+		HiddenName:           "__mo_lifecycle_restore_1",
+		TargetDatabaseID:     7,
+		TargetName:           "events_history",
+		Scope:                lifecyclepkg.RestoreScopeDataset,
+		SourceLogicalTableID: 42,
+		TotalChunkCount:      1,
+		SelectedLogicalBytes: logicalBytes,
+	}
+	attempt.SelectionDigest = lifecyclepkg.BuildRestoreSelectionDigest(
+		attempt.Scope,
+		attempt.SourceLogicalTableID,
+		0,
+		0,
+		attempt.DatasetIDs,
+	)
 	return lifecyclepkg.RestoreInitializeRequest{
-		Dataset: lifecyclepkg.RestoreDataset{
-			DatasetID:    "22222222-2222-2222-2222-222222222222",
-			Version:      3,
-			LogicalBytes: logicalBytes,
-		},
-		Attempt: lifecyclepkg.RestoreAttempt{
-			RestoreID:         "11111111-1111-1111-1111-111111111111",
-			LeaseID:           "33333333-3333-3333-3333-333333333333",
-			Deadline:          time.Now().Add(time.Minute),
-			StagingDatabaseID: 7,
-			HiddenName:        "__mo_lifecycle_restore_1",
-			TargetDatabaseID:  7,
-			TargetName:        "events_history",
-		},
+		Dataset:         dataset,
+		Datasets:        []lifecyclepkg.RestoreDataset{dataset},
+		Attempt:         attempt,
 		HiddenCreateSQL: "create table history.__mo_lifecycle_restore_1(id bigint)",
 	}
 }

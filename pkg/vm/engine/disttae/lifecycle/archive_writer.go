@@ -48,31 +48,35 @@ type ArchiveSideEffectGuard interface {
 }
 
 type ArchiveWriterConfig struct {
-	RootID               string
-	AttemptID            string
-	Prefix               string
-	WriteID              string
-	Schema               SchemaDescriptor
-	SchemaDigest         [32]byte
-	MaxRestoreChunkRows  uint64
-	MaxChunkLogicalBytes uint64
-	MaxPhysicalBytes     uint64
-	Faults               FaultInjector
+	RootID                 string
+	AttemptID              string
+	Prefix                 string
+	WriteID                string
+	Schema                 SchemaDescriptor
+	SchemaDigest           [32]byte
+	TrackLifecycleRange    bool
+	LifecycleColumnOrdinal int
+	MaxRestoreChunkRows    uint64
+	MaxChunkLogicalBytes   uint64
+	MaxPhysicalBytes       uint64
+	Faults                 FaultInjector
 }
 
 type ArchiveWriter struct {
-	config        ArchiveWriterConfig
-	store         ArchiveStore
-	guard         ArchiveSideEffectGuard
-	schema        *parquet.Schema
-	pending       []archiveRow
-	pendingBytes  uint64
-	physicalBytes uint64
-	files         []ArchiveFile
-	guarded       bool
-	closed        bool
-	autoMaxima    map[uint32]*big.Int
-	faults        FaultInjector
+	config            ArchiveWriterConfig
+	store             ArchiveStore
+	guard             ArchiveSideEffectGuard
+	schema            *parquet.Schema
+	pending           []archiveRow
+	pendingBytes      uint64
+	physicalBytes     uint64
+	files             []ArchiveFile
+	guarded           bool
+	closed            bool
+	autoMaxima        map[uint32]*big.Int
+	lifecycleRange    ArchiveLifecycleRange
+	lifecycleRangeSet bool
+	faults            FaultInjector
 }
 
 type archiveRow struct {
@@ -107,6 +111,16 @@ func NewArchiveWriter(
 	}
 	if digest != config.SchemaDigest {
 		return nil, moerr.NewInvalidInput(ctx, "Lifecycle archive schema digest mismatch")
+	}
+	if config.TrackLifecycleRange {
+		if config.LifecycleColumnOrdinal < 0 ||
+			config.LifecycleColumnOrdinal >= len(config.Schema.Columns) {
+			return nil, moerr.NewInvalidInput(ctx, "Lifecycle archive range column ordinal is invalid")
+		}
+		column := config.Schema.Columns[config.LifecycleColumnOrdinal]
+		if !column.NotNull || !isLifecycleRangeType(types.T(column.TypeID)) {
+			return nil, moerr.NewInvalidInput(ctx, "Lifecycle archive range column is invalid")
+		}
 	}
 	parquetSchema, err := buildArchiveParquetSchema(config.Schema)
 	if err != nil {
@@ -175,6 +189,20 @@ func (writer *ArchiveWriter) WriteBatch(
 		); err != nil {
 			return err
 		}
+		if writer.config.TrackLifecycleRange {
+			encoded, err := lifecycleRangeCellValue(
+				archiveValue.cells[writer.config.LifecycleColumnOrdinal],
+			)
+			if err != nil {
+				return err
+			}
+			if !writer.lifecycleRangeSet {
+				column := writer.config.Schema.Columns[writer.config.LifecycleColumnOrdinal]
+				writer.lifecycleRange.SourceColumnID = column.SourceColumnID
+				writer.lifecycleRange.TypeID = column.TypeID
+			}
+			updateLifecycleRange(&writer.lifecycleRange, &writer.lifecycleRangeSet, encoded)
+		}
 		writer.pending = append(writer.pending, archiveValue)
 		writer.pendingBytes += archiveValue.bytes
 	}
@@ -215,6 +243,15 @@ func (writer *ArchiveWriter) Close(
 		Files:                 writer.files,
 		AutoIncrementMaxima:   encodeAutoIncrementMaxima(writer.autoMaxima),
 		VerificationStatus:    "SOURCE_ENCODED",
+	}
+	if writer.config.TrackLifecycleRange {
+		if !writer.lifecycleRangeSet {
+			return nil, "", moerr.NewInternalErrorNoCtxf(
+				"Lifecycle archive contains no range values",
+			)
+		}
+		rangeCopy := writer.lifecycleRange
+		manifest.LifecycleRange = &rangeCopy
 	}
 	encoded, digest, err := MarshalArchiveManifest(manifest)
 	if err != nil {

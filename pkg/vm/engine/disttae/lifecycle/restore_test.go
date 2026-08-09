@@ -22,6 +22,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/stretchr/testify/require"
 )
 
@@ -61,6 +65,171 @@ func TestRestoreCoordinatorImportsStableChunksAndPublishes(t *testing.T) {
 	err = coordinator.Restore(context.Background(), dataset, attempt)
 	require.NoError(t, err)
 	require.Len(t, repository.rows, int(manifest.RowCount))
+}
+
+func TestFilterCanonicalRowsByLifecycleRangeUsesHalfOpenBounds(t *testing.T) {
+	schema := SchemaDescriptor{Columns: []SchemaColumn{
+		{Ordinal: 0, SourceColumnID: 1, TypeID: int32(types.T_int64)},
+		{Ordinal: 1, SourceColumnID: 7, TypeID: int32(types.T_timestamp), NotNull: true},
+	}}
+	rows := [][]CanonicalCell{
+		{{Type: types.T_int64.ToType(), Value: int64(1)}, {Type: types.T_timestamp.ToType(), Value: types.Timestamp(99)}},
+		{{Type: types.T_int64.ToType(), Value: int64(2)}, {Type: types.T_timestamp.ToType(), Value: types.Timestamp(100)}},
+		{{Type: types.T_int64.ToType(), Value: int64(3)}, {Type: types.T_timestamp.ToType(), Value: types.Timestamp(199)}},
+		{{Type: types.T_int64.ToType(), Value: int64(4)}, {Type: types.T_timestamp.ToType(), Value: types.Timestamp(200)}},
+	}
+	filtered, err := FilterCanonicalRowsByLifecycleRange(
+		context.Background(),
+		schema,
+		ArchiveLifecycleRange{SourceColumnID: 7, TypeID: int32(types.T_timestamp)},
+		100,
+		200,
+		rows,
+	)
+	require.NoError(t, err)
+	require.Len(t, filtered, 2)
+	require.Equal(t, int64(2), filtered[0][0].Value)
+	require.Equal(t, int64(3), filtered[1][0].Value)
+}
+
+func TestSelectRestoreDatasetsForRangeScopesGenerationCheckToOverlap(t *testing.T) {
+	ctx := context.Background()
+	oldMin, err := ParseLifecycleRestoreBoundary(ctx, "2024-01-01", types.T_date)
+	require.NoError(t, err)
+	oldMax, err := ParseLifecycleRestoreBoundary(ctx, "2024-01-31", types.T_date)
+	require.NoError(t, err)
+	currentMin, err := ParseLifecycleRestoreBoundary(ctx, "2025-01-01", types.T_date)
+	require.NoError(t, err)
+	currentMax, err := ParseLifecycleRestoreBoundary(ctx, "2025-01-31", types.T_date)
+	require.NoError(t, err)
+	datasets := []RestoreDataset{
+		{
+			DatasetID: "old-generation",
+			LifecycleRange: ArchiveLifecycleRange{
+				SourceColumnID: 3,
+				TypeID:         int32(types.T_date),
+				Min:            oldMin,
+				Max:            oldMax,
+			},
+			HasLifecycleRange: true,
+		},
+		{
+			DatasetID: "current-generation",
+			LifecycleRange: ArchiveLifecycleRange{
+				SourceColumnID: 7,
+				TypeID:         int32(types.T_date),
+				Min:            currentMin,
+				Max:            currentMax,
+			},
+			HasLifecycleRange: true,
+		},
+	}
+
+	selected, start, end, err := SelectRestoreDatasetsForRange(
+		ctx,
+		datasets,
+		"2025-01-01",
+		"2025-02-01",
+	)
+	require.NoError(t, err)
+	require.Equal(t, []RestoreDataset{datasets[1]}, selected)
+	require.Equal(t, currentMin, start)
+	require.Greater(t, end, currentMax)
+
+	_, _, _, err = SelectRestoreDatasetsForRange(
+		ctx,
+		datasets,
+		"2024-01-01",
+		"2025-02-01",
+	)
+	require.ErrorContains(t, err, "across Lifecycle column generations")
+}
+
+func TestRestoreRangeFiltersBoundaryDatasetsAndResumesIdempotently(t *testing.T) {
+	store := newMemoryArchiveStore()
+	const timestampSecond = int64(time.Second / time.Microsecond)
+	firstKey := writeArchiveRangeTestDataset(
+		t,
+		store,
+		"first",
+		types.Timestamp(50*timestampSecond),
+		types.Timestamp(100*timestampSecond),
+		types.Timestamp(150*timestampSecond),
+	)
+	secondKey := writeArchiveRangeTestDataset(
+		t,
+		store,
+		"second",
+		types.Timestamp(199*timestampSecond),
+		types.Timestamp(200*timestampSecond),
+		types.Timestamp(250*timestampSecond),
+	)
+	firstManifest, err := ReadArchiveManifest(context.Background(), store, firstKey)
+	require.NoError(t, err)
+	secondManifest, err := ReadArchiveManifest(context.Background(), store, secondKey)
+	require.NoError(t, err)
+	first := restoreTestDataset(t, "dataset-first", firstKey, firstManifest)
+	second := restoreTestDataset(t, "dataset-second", secondKey, secondManifest)
+	repository := newMemoryRestoreRepository()
+	coordinator := RestoreCoordinator{
+		Store:      store,
+		Repository: repository,
+		Config: RestoreConfig{
+			MaxChunkRows:         10,
+			MaxChunkLogicalBytes: 1 << 20,
+			Deadline:             time.Minute,
+		},
+	}
+	attempt := RestoreAttempt{
+		RestoreID:          "restore-range",
+		LeaseID:            "lease-range",
+		StagingDatabaseID:  7,
+		StagingTableID:     8,
+		HiddenName:         "__mo_lifecycle_restore_range",
+		TargetDatabaseID:   7,
+		TargetDatabaseName: "restore_db",
+		TargetName:         "events_history",
+	}
+	require.NoError(t, coordinator.RestoreRange(
+		context.Background(),
+		[]RestoreDataset{first, second},
+		attempt,
+		100*timestampSecond,
+		200*timestampSecond,
+	))
+	require.True(t, repository.published)
+	require.Equal(t, 1, repository.publishCount)
+	require.Len(t, repository.rows, 3)
+	require.Equal(t, types.Timestamp(100*timestampSecond), repository.rows[0][1].Value)
+	require.Equal(t, types.Timestamp(150*timestampSecond), repository.rows[1][1].Value)
+	require.Equal(t, types.Timestamp(199*timestampSecond), repository.rows[2][1].Value)
+
+	// A retry reuses the frozen selection and committed Chunk receipts.
+	require.NoError(t, coordinator.RestoreRange(
+		context.Background(),
+		[]RestoreDataset{first, second},
+		attempt,
+		100*timestampSecond,
+		200*timestampSecond,
+	))
+	require.Equal(t, 1, repository.publishCount)
+	require.Len(t, repository.rows, 3)
+}
+
+func TestRestoreRangeManifestMemoryBudgetFailsBeforeUnboundedGrowth(t *testing.T) {
+	manifest := archiveManifestV1GoldenFixture()
+	encoded, _, err := MarshalArchiveManifest(manifest)
+	require.NoError(t, err)
+
+	used, err := addRestoreRangeManifestBytes(0, manifest)
+	require.NoError(t, err)
+	require.Equal(t, uint64(len(encoded)), used)
+
+	_, err = addRestoreRangeManifestBytes(
+		maxRestoreRangeManifestBytes-used+1,
+		manifest,
+	)
+	require.ErrorContains(t, err, "Manifest bytes exceed the certified limit")
 }
 
 func TestRestoreRejectsDatasetManifestIdentityMismatch(t *testing.T) {
@@ -495,8 +664,9 @@ func restoreTestDataset(
 	t.Helper()
 	digest, err := manifestDigestFromKey(manifestKey)
 	require.NoError(t, err)
-	return RestoreDataset{
+	dataset := RestoreDataset{
 		DatasetID:      datasetID,
+		LogicalTableID: manifest.Schema.SourceTableID,
 		RootID:         manifest.RootID,
 		AttemptID:      manifest.AttemptID,
 		ManifestKey:    manifestKey,
@@ -510,6 +680,62 @@ func restoreTestDataset(
 		StageID:        1,
 		StageIdentity:  []byte("test-frozen-stage"),
 	}
+	if manifest.LifecycleRange != nil {
+		dataset.LifecycleRange = *manifest.LifecycleRange
+		dataset.HasLifecycleRange = true
+	}
+	return dataset
+}
+
+func writeArchiveRangeTestDataset(
+	t *testing.T,
+	store *memoryArchiveStore,
+	identity string,
+	values ...types.Timestamp,
+) string {
+	t.Helper()
+	ctx := context.Background()
+	schema := SchemaDescriptor{
+		FormatVersion:      schemaDescriptorFormatVersion,
+		SourceTableID:      42,
+		SourceTableVersion: 7,
+		SourceDatabaseName: "db",
+		SourceTableName:    "events",
+		Columns: []SchemaColumn{
+			{Ordinal: 0, SourceColumnID: 1, Name: "id", TypeID: int32(types.T_int64), NotNull: true},
+			{Ordinal: 1, SourceColumnID: 7, Name: "created_at", TypeID: int32(types.T_timestamp), NotNull: true},
+		},
+	}
+	schemaDigest, err := schema.Digest()
+	require.NoError(t, err)
+	writer, err := NewArchiveWriter(ctx, ArchiveWriterConfig{
+		RootID:                 "root-" + identity,
+		AttemptID:              "attempt-" + identity,
+		Prefix:                 "archive/root-" + identity + "/attempt-" + identity,
+		WriteID:                "write-" + identity,
+		Schema:                 schema,
+		SchemaDigest:           schemaDigest,
+		MaxRestoreChunkRows:    1,
+		MaxChunkLogicalBytes:   1 << 20,
+		MaxPhysicalBytes:       archiveTestMaxPhysicalBytes,
+		TrackLifecycleRange:    true,
+		LifecycleColumnOrdinal: 1,
+	}, store, &testArchiveSideEffectGuard{durable: true})
+	require.NoError(t, err)
+	mp := mpool.MustNewZero()
+	value := batch.New([]string{"id", "created_at"})
+	value.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+	value.Vecs[1] = vector.NewVec(types.T_timestamp.ToType())
+	for index, timestamp := range values {
+		require.NoError(t, vector.AppendFixed(value.Vecs[0], int64(index+1), false, mp))
+		require.NoError(t, vector.AppendFixed(value.Vecs[1], timestamp, false, mp))
+	}
+	value.SetRowCount(len(values))
+	defer value.Clean(mp)
+	require.NoError(t, writer.WriteBatch(ctx, value, nil))
+	_, key, err := writer.Close(ctx)
+	require.NoError(t, err)
+	return key
 }
 
 type oneShotRestoreFault struct {

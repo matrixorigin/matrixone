@@ -58,20 +58,21 @@ const (
 var archiveDatasetHashDomain = []byte("matrixone/lifecycle/archive-dataset/v1")
 
 type ArchiveManifest struct {
-	ManifestFormatVersion uint16             `json:"manifest_format_version"`
-	HashFormulaVersion    uint16             `json:"hash_formula_version"`
-	CanonicalEncoder      uint16             `json:"canonical_encoder_version"`
-	RootID                string             `json:"root_id"`
-	AttemptID             string             `json:"attempt_id"`
-	Schema                SchemaDescriptor   `json:"schema"`
-	SchemaDigest          [32]byte           `json:"schema_digest"`
-	ContentHash           [32]byte           `json:"content_hash"`
-	RowCount              uint64             `json:"row_count"`
-	LogicalBytes          uint64             `json:"logical_bytes"`
-	TotalChunkCount       uint64             `json:"total_chunk_count"`
-	Files                 []ArchiveFile      `json:"files"`
-	AutoIncrementMaxima   []AutoIncrementMax `json:"auto_increment_maxima,omitempty"`
-	VerificationStatus    string             `json:"verification_status"`
+	ManifestFormatVersion uint16                 `json:"manifest_format_version"`
+	HashFormulaVersion    uint16                 `json:"hash_formula_version"`
+	CanonicalEncoder      uint16                 `json:"canonical_encoder_version"`
+	RootID                string                 `json:"root_id"`
+	AttemptID             string                 `json:"attempt_id"`
+	Schema                SchemaDescriptor       `json:"schema"`
+	SchemaDigest          [32]byte               `json:"schema_digest"`
+	ContentHash           [32]byte               `json:"content_hash"`
+	RowCount              uint64                 `json:"row_count"`
+	LogicalBytes          uint64                 `json:"logical_bytes"`
+	TotalChunkCount       uint64                 `json:"total_chunk_count"`
+	Files                 []ArchiveFile          `json:"files"`
+	AutoIncrementMaxima   []AutoIncrementMax     `json:"auto_increment_maxima,omitempty"`
+	LifecycleRange        *ArchiveLifecycleRange `json:"lifecycle_range,omitempty"`
+	VerificationStatus    string                 `json:"verification_status"`
 }
 
 type ArchiveFile struct {
@@ -114,7 +115,15 @@ type archiveManifestV1Wire struct {
 	TotalChunkCount       string                        `json:"total_chunk_count"`
 	Files                 []archiveFileV1Wire           `json:"files"`
 	AutoIncrementMaxima   []archiveAutoIncrementV1Wire  `json:"auto_increment_maxima,omitempty"`
+	LifecycleRange        *archiveLifecycleRangeV1Wire  `json:"lifecycle_range,omitempty"`
 	VerificationStatus    string                        `json:"verification_status"`
+}
+
+type archiveLifecycleRangeV1Wire struct {
+	SourceColumnID string `json:"source_column_id"`
+	TypeID         int32  `json:"type_id"`
+	Min            string `json:"min"`
+	Max            string `json:"max"`
 }
 
 type archiveSchemaDescriptorV1Wire struct {
@@ -322,6 +331,17 @@ func validateArchiveManifestShape(manifest *ArchiveManifest) error {
 		}
 		previous = maximum.ColumnOrdinal
 	}
+	if manifest.LifecycleRange != nil {
+		if manifest.LifecycleRange.Min > manifest.LifecycleRange.Max {
+			return moerr.NewInternalErrorNoCtxf("Lifecycle archive range is invalid")
+		}
+		if _, err := lifecycleRangeColumnOrdinal(
+			manifest.Schema,
+			*manifest.LifecycleRange,
+		); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -407,6 +427,14 @@ func archiveManifestToV1Wire(manifest *ArchiveManifest) archiveManifestV1Wire {
 		)
 		for index, maximum := range manifest.AutoIncrementMaxima {
 			wire.AutoIncrementMaxima[index] = archiveAutoIncrementV1Wire(maximum)
+		}
+	}
+	if manifest.LifecycleRange != nil {
+		wire.LifecycleRange = &archiveLifecycleRangeV1Wire{
+			SourceColumnID: strconv.FormatUint(manifest.LifecycleRange.SourceColumnID, 10),
+			TypeID:         manifest.LifecycleRange.TypeID,
+			Min:            strconv.FormatInt(manifest.LifecycleRange.Min, 10),
+			Max:            strconv.FormatInt(manifest.LifecycleRange.Max, 10),
 		}
 	}
 	return wire
@@ -546,6 +574,29 @@ func archiveManifestFromV1Wire(wire archiveManifestV1Wire) (*ArchiveManifest, er
 			manifest.AutoIncrementMaxima[index] = AutoIncrementMax(maximum)
 		}
 	}
+	if wire.LifecycleRange != nil {
+		columnID, err := archiveUint64FromV1Wire(
+			"lifecycle_range.source_column_id",
+			wire.LifecycleRange.SourceColumnID,
+		)
+		if err != nil {
+			return nil, err
+		}
+		minimum, err := archiveInt64FromV1Wire("lifecycle_range.min", wire.LifecycleRange.Min)
+		if err != nil {
+			return nil, err
+		}
+		maximum, err := archiveInt64FromV1Wire("lifecycle_range.max", wire.LifecycleRange.Max)
+		if err != nil {
+			return nil, err
+		}
+		manifest.LifecycleRange = &ArchiveLifecycleRange{
+			SourceColumnID: columnID,
+			TypeID:         wire.LifecycleRange.TypeID,
+			Min:            minimum,
+			Max:            maximum,
+		}
+	}
 	return manifest, nil
 }
 
@@ -598,6 +649,25 @@ func archiveUint64FromV1Wire(field, value string) (uint64, error) {
 	parsed, err := strconv.ParseUint(value, 10, 64)
 	if err != nil {
 		return 0, moerr.NewInternalErrorNoCtxf("Lifecycle archive manifest %s is not a uint64: %v", field, err)
+	}
+	return parsed, nil
+}
+
+func archiveInt64FromV1Wire(field, value string) (int64, error) {
+	if value == "" || value == "+0" || value == "-0" ||
+		(len(value) > 1 && value[0] == '0') ||
+		(len(value) > 2 && value[0] == '-' && value[1] == '0') {
+		return 0, moerr.NewInternalErrorNoCtxf(
+			"Lifecycle archive manifest %s is not a canonical int64",
+			field,
+		)
+	}
+	parsed, err := strconv.ParseInt(value, 10, 64)
+	if err != nil || strconv.FormatInt(parsed, 10) != value {
+		return 0, moerr.NewInternalErrorNoCtxf(
+			"Lifecycle archive manifest %s is not an int64",
+			field,
+		)
 	}
 	return parsed, nil
 }

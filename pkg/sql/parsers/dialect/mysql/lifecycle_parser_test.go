@@ -45,7 +45,9 @@ func TestLifecycleStatementsParseAndFormat(t *testing.T) {
 		{sql: "show lifecycle jobs limit 100 offset 2000", wantType: &tree.ShowLifecycle{}},
 		{sql: "show lifecycle datasets for table db.t", wantType: &tree.ShowLifecycle{}},
 		{sql: "show lifecycle datasets for table db.t limit 500 offset 1000", wantType: &tree.ShowLifecycle{}},
+		{sql: "show lifecycle restores limit 100 offset 200", wantType: &tree.ShowLifecycle{}},
 		{sql: "restore archive dataset 'dataset-1' to table db.restored_t", wantType: &tree.RestoreArchiveDataset{}},
+		{sql: "restore archive table db.t between '2025-01-01 00:00:00' and '2025-04-01 00:00:00' to table db.restored_q1", wantType: &tree.RestoreArchiveRange{}},
 		{sql: "purge archive dataset 'dataset-1'", wantType: &tree.PurgeArchiveDataset{}},
 	}
 
@@ -107,6 +109,7 @@ func TestLifecycleStatementExecutionLocation(t *testing.T) {
 		"alter table db.t set lifecycle (column created_at, expire after interval 7 day, action delete)",
 		"alter table db.t pause lifecycle",
 		"restore archive dataset 'dataset-1' to table db.restored_t",
+		"restore archive table db.t between '2025-01-01 00:00:00' and '2025-04-01 00:00:00' to table db.restored_q1",
 		"purge archive dataset 'dataset-1'",
 	} {
 		stmt, err := ParseOne(context.Background(), sql, 1)

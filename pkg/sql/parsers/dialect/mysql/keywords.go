@@ -343,6 +343,7 @@ func init() {
 		"low_priority":               LOW_PRIORITY,
 		"local":                      LOCAL,
 		"lifecycle":                  LIFECYCLE,
+		"restores":                   RESTORES,
 		"master_bind":                UNUSED,
 		"match":                      MATCH,
 		"maxvalue":                   MAXVALUE,

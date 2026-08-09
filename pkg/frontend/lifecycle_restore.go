@@ -15,6 +15,7 @@
 package frontend
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"strings"
@@ -184,6 +185,163 @@ func handleRestoreArchiveDataset(
 		dataset,
 		restoreAttempt,
 	)
+}
+
+func handleRestoreArchiveRange(
+	ctx context.Context,
+	ses *Session,
+	statement *tree.RestoreArchiveRange,
+) error {
+	if statement == nil || statement.Source == nil || statement.Target == nil ||
+		statement.From == "" || statement.To == "" {
+		return moerr.NewInternalErrorNoCtxf("Lifecycle range Restore input is required")
+	}
+	releaseRestore, err := acquireLifecycleRestoreSlot(ctx, lifecycleRestoreSlots)
+	if err != nil {
+		return err
+	}
+	defer releaseRestore()
+	background := ses.GetBackgroundExec(ctx)
+	defer background.Close()
+	if err = ensureLifecycleFeatureEnabled(ctx, ses, background); err != nil {
+		return err
+	}
+	sqlExecutor, err := lifecycleSQLExecutor(ses.GetService())
+	if err != nil {
+		return err
+	}
+	accountID := ses.GetTenantInfo().GetTenantID()
+	tableDef, err := resolveLifecycleShowTable(ctx, ses, statement.Source)
+	if err != nil {
+		return err
+	}
+	logicalTableID := tableDef.LogicalId
+	if logicalTableID == 0 {
+		logicalTableID = tableDef.TblId
+	}
+	datasetReader := lifecyclepkg.SQLDatasetReader{Executor: sqlExecutor}
+	candidates, err := datasetReader.ListRestoreDatasets(ctx, accountID, logicalTableID)
+	if err != nil {
+		return err
+	}
+	if len(candidates) == 0 {
+		return moerr.NewInvalidInput(ctx, "Lifecycle Archive has no published Dataset for the source table")
+	}
+	selectedCandidates, start, end, err := lifecyclepkg.SelectRestoreDatasetsForRange(
+		ctx,
+		candidates,
+		statement.From,
+		statement.To,
+	)
+	if err != nil {
+		return err
+	}
+	databaseName := string(statement.Target.Schema())
+	if databaseName == "" {
+		databaseName = ses.GetDatabaseName()
+	}
+	tableName := string(statement.Target.Name())
+	if databaseName == "" || tableName == "" {
+		return moerr.NewInternalErrorNoCtxf("Lifecycle Restore target database and table are required")
+	}
+	if err = validateLifecycleRestoreTargetName(tableName); err != nil {
+		return err
+	}
+	databaseID, err := lifecycleDatabaseID(ctx, sqlExecutor, accountID, databaseName)
+	if err != nil {
+		return err
+	}
+	repository := disttae.SQLRestoreRepository{
+		AccountID:          accountID,
+		TargetDatabaseName: databaseName,
+		Executor:           sqlExecutor,
+		Engine:             getPu(ses.GetService()).StorageEngine,
+		MPool:              ses.proc.Mp(),
+		AutoIncrement: incrservice.GetAutoIncrementService(
+			ses.GetService(),
+		),
+		Roots:                            lifecyclepkg.SQLCleanupRootRepository{Executor: sqlExecutor},
+		MaxRestoreStagingBytesPerAccount: lifecycleMaxRestoreStagingBytesPerAccount,
+	}
+	attempt, resumed, err := repository.FindRangeResumable(
+		ctx,
+		logicalTableID,
+		start,
+		end,
+		databaseID,
+		tableName,
+	)
+	if err != nil {
+		return err
+	}
+	if lifecycleRestoreAlreadyPublished(resumed, attempt.State) {
+		return nil
+	}
+	if err = rejectExistingLifecycleRestoreTarget(
+		ctx,
+		background,
+		databaseName,
+		tableName,
+		accountID,
+	); err != nil {
+		return err
+	}
+	selected := selectedCandidates
+	if resumed {
+		selected, err = datasetReader.GetRestoreDatasets(ctx, accountID, attempt.DatasetIDs)
+		if err != nil {
+			return err
+		}
+	} else {
+		restoreID := uuid.NewString()
+		attempt = lifecyclepkg.RestoreAttempt{
+			RestoreID:         restoreID,
+			LeaseID:           uuid.NewString(),
+			Deadline:          time.Now().Add(24 * time.Hour),
+			StagingDatabaseID: databaseID,
+			HiddenName: catalog.LifecycleRestoreTableNamePrefix +
+				strings.ReplaceAll(restoreID, "-", ""),
+			TargetDatabaseID:   databaseID,
+			TargetDatabaseName: databaseName,
+			TargetName:         tableName,
+		}
+	}
+	first := selected[0]
+	for _, dataset := range selected[1:] {
+		if dataset.StageID != first.StageID ||
+			!bytes.Equal(dataset.StageIdentity, first.StageIdentity) {
+			return moerr.NewNotSupportedNoCtx(
+				"Lifecycle range Restore across Stage generations",
+			)
+		}
+	}
+	target, err := lifecyclepkg.ParseFrozenArchiveTarget(first.StageIdentity)
+	if err != nil {
+		return err
+	}
+	if target.StageID != first.StageID {
+		return moerr.NewInternalErrorNoCtxf("Lifecycle Dataset Stage identity mismatch")
+	}
+	archiveFS, err := lifecyclepkg.NewArchiveFileService(ctx, target)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		closeCtx, cancelClose := context.WithTimeout(
+			context.WithoutCancel(ctx),
+			lifecycleArchiveCloseTimeout,
+		)
+		defer cancelClose()
+		archiveFS.Close(closeCtx)
+	}()
+	coordinator := newLifecycleRestoreCoordinator(
+		lifecyclepkg.FileServiceArchiveStore{
+			FileService:    archiveFS,
+			MaxListEntries: 100_000,
+		},
+		repository,
+	)
+	return coordinator.RestoreRange(ctx, selected, attempt, start, end)
 }
 
 func tryAcquireLifecycleRestoreSlot(

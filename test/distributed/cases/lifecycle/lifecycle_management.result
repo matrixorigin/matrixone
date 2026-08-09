@@ -88,6 +88,8 @@ show lifecycle datasets for table events limit 1;
 ➤ dataset_id[12,0,0]  ¦  state[12,0,0]  ¦  row_count[-5,0,0]  ¦  logical_bytes[-5,0,0]  ¦  purge_eligible_at[12,0,0]  ¦  manifest_key[12,0,0]
 show lifecycle jobs limit 1;
 ➤ root_id[12,0,0]  ¦  mode[12,0,0]  ¦  state[12,0,0]  ¦  cleanup_after[12,0,0]  ¦  last_error[12,0,0]
+show lifecycle restores limit 1;
+➤ restore_id[12,0,0]  ¦  scope[12,0,0]  ¦  dataset_count[-5,0,0]  ¦  source_logical_table_id[-5,0,0]  ¦  range_start[12,0,0]  ¦  range_end[12,0,0]  ¦  target_database_id[-5,0,0]  ¦  target_name[12,0,0]  ¦  state[12,0,0]  ¦  next_chunk_ordinal[-5,0,0]  ¦  total_chunk_count[-5,0,0]  ¦  restored_rows[-5,0,0]  ¦  deadline[12,0,0]  ¦  last_error[12,0,0]  ¦  updated_at[12,0,0]
 create table indexed_events(
 id bigint primary key,
 created_at timestamp not null,

@@ -205,6 +205,7 @@ func validateLifecycleFinalizeRequest(request LifecycleFinalizeRequest) error {
 			(request.Root.Mode != lifecyclepkg.CleanupModeArchiveWhole &&
 				request.Root.Mode != lifecyclepkg.CleanupModeArchiveRewrite) ||
 			request.Manifest == nil ||
+			request.Manifest.LifecycleRange == nil ||
 			request.Manifest.VerificationStatus != "FULL_READBACK_VERIFIED" {
 			return moerr.NewInternalErrorNoCtxf(
 				"Lifecycle Archive is not full-readback verified and FINALIZING",
@@ -352,6 +353,11 @@ func (committer TxnLifecycleFinalCommitter) insertArchiveDataset(
 	operator client.TxnOperator,
 	request LifecycleFinalizeRequest,
 ) error {
+	if request.Manifest == nil || request.Manifest.LifecycleRange == nil {
+		return moerr.NewInternalErrorNoCtxf(
+			"Lifecycle Archive Manifest range identity is missing",
+		)
+	}
 	datasetID, err := lifecycleCatalogUUID(request.Control.DatasetId)
 	if err != nil {
 		return err
@@ -375,13 +381,14 @@ func (committer TxnLifecycleFinalCommitter) insertArchiveDataset(
 			`insert into mo_catalog.mo_lifecycle_datasets(
 dataset_id,account_id,binding_id,binding_generation,logical_table_id,
 source_physical_table_id,source_snapshot_ts,evaluation_time,cutoff,
-source_set_digest,schema_descriptor_digest,lifecycle_min,lifecycle_max,
+source_set_digest,schema_descriptor_digest,lifecycle_column_id,
+lifecycle_column_type,lifecycle_min,lifecycle_max,
 root_id,attempt_id,manifest_key,manifest_sha256,content_hash,row_count,
 logical_bytes,stage_id,stage_identity_blob,purge_eligible_at,state,version,
 access_generation,restore_lease_id,restore_deadline,publish_txn_id,
 created_at,updated_at)
 values(unhex('%s'),%d,unhex('%s'),%d,%d,%d,unhex('%s'),%s,%s,
-unhex('%s'),unhex('%s'),null,null,unhex('%s'),unhex('%s'),%s,unhex('%s'),
+unhex('%s'),unhex('%s'),%d,%d,%d,%d,unhex('%s'),unhex('%s'),%s,unhex('%s'),
 unhex('%s'),%d,%d,%d,%s,%s,'PUBLISHED',1,1,null,null,%s,
 utc_timestamp(),utc_timestamp())`,
 			datasetID,
@@ -395,6 +402,10 @@ utc_timestamp(),utc_timestamp())`,
 			lifecycleCatalogTime(request.Cutoff),
 			hex.EncodeToString(request.Root.SourceSetDigest[:]),
 			hex.EncodeToString(request.Manifest.SchemaDigest[:]),
+			request.Manifest.LifecycleRange.SourceColumnID,
+			request.Manifest.LifecycleRange.TypeID,
+			request.Manifest.LifecycleRange.Min,
+			request.Manifest.LifecycleRange.Max,
 			rootID,
 			attemptID,
 			lifecycleCatalogQuote(request.ManifestKey),

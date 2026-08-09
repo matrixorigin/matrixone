@@ -141,6 +141,48 @@ order by updated_at desc,root_id desc limit 1000 offset 0`
 	require.ErrorContains(t, err, "unknown SHOW LIFECYCLE kind")
 }
 
+func TestHandleShowLifecycleRestoresIsBoundedAndTenantScoped(t *testing.T) {
+	ctx := context.Background()
+	background := &backgroundExecTest{}
+	background.init()
+	query := `select hex(restore_id),scope,dataset_count,source_logical_table_id,
+cast(range_start as varchar),cast(range_end as varchar),target_database_id,
+target_name,state,next_chunk_ordinal,total_chunk_count,restored_rows,
+cast(deadline as varchar),coalesce(last_error,''),cast(updated_at as varchar)
+from mo_catalog.mo_lifecycle_restore_attempts
+order by updated_at desc,restore_id desc limit 2 offset 4`
+	execResult := &MysqlResultSet{}
+	for _, column := range lifecycleRestoreShowColumns {
+		execResult.AddColumn(column)
+	}
+	row := []interface{}{
+		"00112233", "RANGE", uint64(3), uint64(42), "100", "200",
+		uint64(7), "events_q1", "IMPORTING", uint64(5), uint64(8),
+		uint64(1000), "2026-08-10 12:00:00", "", "2026-08-09 12:00:00",
+	}
+	execResult.AddRow(row)
+	background.sql2result[query] = execResult
+	stub := gostub.StubFunc(&NewBackgroundExec, background)
+	t.Cleanup(stub.Reset)
+
+	ctrl := gomock.NewController(t)
+	ses := newSes(nil, ctrl)
+	ses.SetTenantInfo(&TenantInfo{TenantID: 17})
+	ses.mrs = &MysqlResultSet{}
+	require.NoError(t, handleShowLifecycle(ctx, ses, &tree.ShowLifecycle{
+		Kind: tree.ShowLifecycleRestores,
+		Page: tree.NewLimit(
+			tree.NewNumVal(int64(4), "4", false, tree.P_int64),
+			tree.NewNumVal(int64(2), "2", false, tree.P_int64),
+		),
+	}))
+	require.Equal(t, uint64(len(lifecycleRestoreShowColumns)), ses.mrs.GetColumnCount())
+	require.Equal(t, uint64(1), ses.mrs.GetRowCount())
+	actual, err := ses.mrs.GetRow(ctx, 0)
+	require.NoError(t, err)
+	require.Equal(t, row, actual)
+}
+
 func TestHandleShowLifecycleBindingAndDatasetsResolveExactTable(t *testing.T) {
 	tests := []struct {
 		name    string

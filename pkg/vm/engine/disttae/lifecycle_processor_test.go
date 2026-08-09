@@ -978,6 +978,13 @@ func newLifecycleProcessorFixture(t *testing.T) *lifecycleProcessorFixture {
 				TypeID:         int32(types.T_varchar),
 				Width:          64,
 			},
+			{
+				Ordinal:        2,
+				SourceColumnID: 3,
+				Name:           "created_at",
+				TypeID:         int32(types.T_timestamp),
+				NotNull:        true,
+			},
 		},
 	}
 	schemaDigest, err := schema.Digest()
@@ -1025,13 +1032,14 @@ func newLifecycleProcessorFixture(t *testing.T) *lifecycleProcessorFixture {
 			Version:         11,
 			SchemaDigest:    hex.EncodeToString(schemaDigest[:]),
 		},
-		Table:               table,
-		Sources:             []objectio.ObjectEntry{source},
-		SourceSnapshot:      snapshot,
-		Schema:              schema,
-		SchemaDigest:        schemaDigest,
-		BindingSchemaDigest: schemaDigest,
-		Whole:               true,
+		Table:                  table,
+		Sources:                []objectio.ObjectEntry{source},
+		SourceSnapshot:         snapshot,
+		Schema:                 schema,
+		SchemaDigest:           schemaDigest,
+		BindingSchemaDigest:    schemaDigest,
+		LifecycleColumnOrdinal: 2,
+		Whole:                  true,
 		ArchiveTarget: lifecyclepkg.FrozenArchiveTarget{
 			FormatVersion:     1,
 			StageID:           9,
@@ -1069,15 +1077,18 @@ func newLifecycleProcessorFixture(t *testing.T) *lifecycleProcessorFixture {
 func lifecycleProcessorBatch(t *testing.T) *batch.Batch {
 	t.Helper()
 	mp := mpool.MustNewZero()
-	value := batch.New([]string{"id", "name"})
+	value := batch.New([]string{"id", "name", "created_at"})
 	value.Vecs[0] = vector.NewVec(types.T_int64.ToType())
 	nameType := types.T_varchar.ToType()
 	nameType.Width = 64
 	value.Vecs[1] = vector.NewVec(nameType)
+	value.Vecs[2] = vector.NewVec(types.T_timestamp.ToType())
 	require.NoError(t, vector.AppendFixed(value.Vecs[0], int64(1), false, mp))
 	require.NoError(t, vector.AppendFixed(value.Vecs[0], int64(2), false, mp))
 	require.NoError(t, vector.AppendBytes(value.Vecs[1], []byte("one"), false, mp))
 	require.NoError(t, vector.AppendBytes(value.Vecs[1], []byte("two"), false, mp))
+	require.NoError(t, vector.AppendFixed(value.Vecs[2], types.Timestamp(1_000_000), false, mp))
+	require.NoError(t, vector.AppendFixed(value.Vecs[2], types.Timestamp(2_000_000), false, mp))
 	value.SetRowCount(2)
 	t.Cleanup(func() { value.Clean(mp) })
 	return value

@@ -64,9 +64,50 @@ func TestSQLDatasetReaderReturnsPublishedDataset(t *testing.T) {
 	require.Equal(t, uint64(4096), dataset.LogicalBytes)
 	require.Equal(t, uint64(3), dataset.Version)
 	require.Equal(t, uint64(9), dataset.StageID)
+	require.Equal(t, uint64(42), dataset.LogicalTableID)
+	require.Equal(t, uint64(7), dataset.LifecycleRange.SourceColumnID)
+	require.Equal(t, int32(types.T_timestamp), dataset.LifecycleRange.TypeID)
+	require.Equal(t, int64(100), dataset.LifecycleRange.Min)
+	require.Equal(t, int64(300), dataset.LifecycleRange.Max)
+	require.True(t, dataset.HasLifecycleRange)
 	require.Equal(t, []byte(`{"stage_id":9}`), dataset.StageIdentity)
 	require.Equal(t, "2026-08-05T12:00:00Z", dataset.RestoreDeadline.Format(time.RFC3339))
 	require.Equal(t, 1, fake.offset)
+}
+
+func TestSQLDatasetReaderReloadsFrozenSelectionInAttemptOrder(t *testing.T) {
+	mp := mpool.MustNewZero()
+	firstID := uuid.MustParse("11111111-1111-1111-1111-111111111111")
+	secondID := uuid.MustParse("22222222-2222-2222-2222-222222222222")
+	second := lifecycleDatasetResult(t, mp, lifecycleDatasetRow{
+		DatasetID: secondID,
+		RootID:    uuid.New(),
+		AttemptID: uuid.New(),
+	})
+	first := lifecycleDatasetResult(t, mp, lifecycleDatasetRow{
+		DatasetID: firstID,
+		RootID:    uuid.New(),
+		AttemptID: uuid.New(),
+	})
+	second.Batches = append(second.Batches, first.Batches...)
+	fake := &scriptedLifecycleSQLExecutor{
+		t: t,
+		steps: []lifecycleSQLStep{{
+			contains:  "where dataset_id in (",
+			accountID: 17,
+			result:    second,
+		}},
+	}
+	datasets, err := (SQLDatasetReader{Executor: fake}).GetRestoreDatasets(
+		context.Background(),
+		17,
+		[]string{firstID.String(), secondID.String()},
+	)
+	require.NoError(t, err)
+	require.Equal(t, []string{firstID.String(), secondID.String()}, []string{
+		datasets[0].DatasetID,
+		datasets[1].DatasetID,
+	})
 }
 
 func TestSQLDatasetReaderFailsClosedOnInvalidInputAndRows(t *testing.T) {
@@ -193,7 +234,7 @@ func lifecycleDatasetResult(
 	if row.PurgeEligibleAt == "" {
 		row.PurgeEligibleAt = "2026-09-01 00:00:00.000000"
 	}
-	value := batch.NewWithSize(16)
+	value := batch.NewWithSize(21)
 	strings := map[int]string{
 		0:  hex.EncodeToString(row.DatasetID[:]),
 		1:  hex.EncodeToString(row.RootID[:]),
@@ -214,8 +255,26 @@ func lifecycleDatasetResult(
 	if row.RestoreLeaseID != uuid.Nil {
 		strings[14] = hex.EncodeToString(row.RestoreLeaseID[:])
 	}
-	numbers := map[int]uint64{7: 8, 8: 4096, 9: 3, 11: 9}
+	numbers := map[int]uint64{7: 8, 8: 4096, 9: 3, 11: 9, 16: 42, 17: 7}
 	for column := range value.Vecs {
+		if column == 18 {
+			value.Vecs[column] = vector.NewVec(types.T_uint32.ToType())
+			require.NoError(t, vector.AppendFixed(
+				value.Vecs[column], uint32(types.T_timestamp), false, mp,
+			))
+			continue
+		}
+		if column == 19 || column == 20 {
+			value.Vecs[column] = vector.NewVec(types.T_int64.ToType())
+			physical := int64(100)
+			if column == 20 {
+				physical = 300
+			}
+			require.NoError(t, vector.AppendFixed(
+				value.Vecs[column], physical, false, mp,
+			))
+			continue
+		}
 		if number, ok := numbers[column]; ok {
 			value.Vecs[column] = vector.NewVec(types.T_uint64.ToType())
 			require.NoError(t, vector.AppendFixed(

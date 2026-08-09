@@ -265,7 +265,7 @@ func (ti *TenantInfo) IsNameOfAdminRoles(name string) bool {
 // database/table privilege checks as well.
 func lifecycleStatementRequiresAccountAdmin(stmt tree.Statement) bool {
 	switch statement := stmt.(type) {
-	case *tree.ShowLifecycle, *tree.RestoreArchiveDataset,
+	case *tree.ShowLifecycle, *tree.RestoreArchiveDataset, *tree.RestoreArchiveRange,
 		*tree.PurgeArchiveDataset:
 		return true
 	case *tree.AlterTable:
@@ -6467,6 +6467,15 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		}
 		dbName = string(st.Table.SchemaName)
 	case *tree.RestoreArchiveDataset:
+		objType = objectTypeDatabase
+		typs = append(typs, PrivilegeTypeCreateTable, PrivilegeTypeDatabaseAll, PrivilegeTypeDatabaseOwnership)
+		needMatchedRole = true
+		writeDatabaseAndTableDirectly = true
+		appendWriteTableNameDatabaseName(st.Target)
+		if st.Target != nil {
+			dbName = string(st.Target.SchemaName)
+		}
+	case *tree.RestoreArchiveRange:
 		objType = objectTypeDatabase
 		typs = append(typs, PrivilegeTypeCreateTable, PrivilegeTypeDatabaseAll, PrivilegeTypeDatabaseOwnership)
 		needMatchedRole = true

@@ -43,6 +43,20 @@ func ReadAndVerifyArchive(
 	}
 	verifiedChunks := make([]ArchiveChunk, 0, len(manifest.Files))
 	autoMaxima := make(map[uint32]*big.Int)
+	var readbackRange ArchiveLifecycleRange
+	var readbackRangeSet bool
+	var rangeOrdinal int
+	if manifest.LifecycleRange != nil {
+		rangeOrdinal, err = lifecycleRangeColumnOrdinal(
+			manifest.Schema,
+			*manifest.LifecycleRange,
+		)
+		if err != nil {
+			return nil, err
+		}
+		readbackRange.SourceColumnID = manifest.LifecycleRange.SourceColumnID
+		readbackRange.TypeID = manifest.LifecycleRange.TypeID
+	}
 	var rows uint64
 	var logicalBytes uint64
 	for _, file := range manifest.Files {
@@ -76,6 +90,13 @@ func ReadAndVerifyArchive(
 			); err != nil {
 				return nil, err
 			}
+			if manifest.LifecycleRange != nil {
+				value, err := lifecycleRangeCellValue(row[rangeOrdinal])
+				if err != nil {
+					return nil, err
+				}
+				updateLifecycleRange(&readbackRange, &readbackRangeSet, value)
+			}
 		}
 		verifiedChunks = append(verifiedChunks, chunk)
 		rows += chunk.RowCount
@@ -93,6 +114,12 @@ func ReadAndVerifyArchive(
 		manifest.AutoIncrementMaxima,
 	) {
 		return nil, moerr.NewInternalErrorNoCtxf("Lifecycle archive auto-increment maxima mismatch")
+	}
+	if manifest.LifecycleRange != nil &&
+		(!readbackRangeSet || readbackRange != *manifest.LifecycleRange) {
+		return nil, moerr.NewInternalErrorNoCtxf(
+			"Lifecycle archive range readback mismatch",
+		)
 	}
 	result := *manifest
 	result.VerificationStatus = "FULL_READBACK_VERIFIED"

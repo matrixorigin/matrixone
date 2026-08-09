@@ -16885,6 +16885,12 @@ func TestDeterminePrivilegeSetOfStatementLifecycleRestoreAndPurge(t *testing.T) 
 	require.True(t, seenRestore[PrivilegeTypeCreateTable])
 	require.True(t, seenRestore[PrivilegeTypeDatabaseAll])
 	require.True(t, seenRestore[PrivilegeTypeDatabaseOwnership])
+	rangePrivilege := determinePrivilegeSetOfStatement(
+		&tree.RestoreArchiveRange{Source: target, Target: target},
+	)
+	require.Equal(t, objectTypeDatabase, rangePrivilege.objectType())
+	require.True(t, rangePrivilege.writeDatabaseAndTableDirectly)
+	require.Equal(t, []string{"archive_restore"}, rangePrivilege.writeDatabaseTargets)
 
 	purgePrivilege := determinePrivilegeSetOfStatement(
 		&tree.PurgeArchiveDataset{DatasetID: "dataset-1"},
@@ -16920,6 +16926,7 @@ func TestLifecycleStatementRequiresAccountAdmin(t *testing.T) {
 
 	require.True(t, lifecycleStatementRequiresAccountAdmin(&tree.ShowLifecycle{}))
 	require.True(t, lifecycleStatementRequiresAccountAdmin(&tree.RestoreArchiveDataset{}))
+	require.True(t, lifecycleStatementRequiresAccountAdmin(&tree.RestoreArchiveRange{}))
 	require.True(t, lifecycleStatementRequiresAccountAdmin(archiveSet))
 	require.False(t, lifecycleStatementRequiresAccountAdmin(deleteSet))
 	require.False(t, lifecycleStatementRequiresAccountAdmin(pause))
@@ -16969,6 +16976,7 @@ func TestAuthenticateRejectsLifecycleAdminOperationsForOrdinaryRole(t *testing.T
 	statements := []tree.Statement{
 		&tree.ShowLifecycle{},
 		&tree.RestoreArchiveDataset{Target: archiveTarget},
+		&tree.RestoreArchiveRange{Source: archiveTarget, Target: archiveTarget},
 		&tree.PurgeArchiveDataset{DatasetID: "dataset-1"},
 		archiveSet,
 	}

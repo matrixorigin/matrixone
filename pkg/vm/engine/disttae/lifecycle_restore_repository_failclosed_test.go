@@ -121,10 +121,10 @@ func TestSQLRestoreChunkReceiptReaderRejectsCorruptRows(t *testing.T) {
 			result.Batches[0].Vecs = result.Batches[0].Vecs[:1]
 		}, "query is invalid"},
 		{"chunk-digest", func(result executor.Result) {
-			require.NoError(t, vector.SetBytesAt(result.Batches[0].Vecs[3], 0, []byte("bad"), mp))
+			require.NoError(t, vector.SetBytesAt(result.Batches[0].Vecs[5], 0, []byte("bad"), mp))
 		}, "invalid Lifecycle digest"},
 		{"content-hash", func(result executor.Result) {
-			require.NoError(t, vector.SetBytesAt(result.Batches[0].Vecs[6], 0, []byte("bad"), mp))
+			require.NoError(t, vector.SetBytesAt(result.Batches[0].Vecs[8], 0, []byte("bad"), mp))
 		}, "invalid Lifecycle digest"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -315,7 +315,16 @@ func TestSQLRestoreRepositoryIdentityReadersRejectMissingAndCorruptRows(t *testi
 		string,
 		executor.StatementOption,
 	) (executor.Result, error) {
-		return lifecycleRestoreStringRows(t, mp, "bad"), nil
+		result := executor.NewMemResult([]types.Type{
+			types.T_varchar.ToType(),
+			types.T_uint64.ToType(),
+			types.T_varchar.ToType(),
+		}, mp)
+		result.NewBatchWithRowCount(1)
+		require.NoError(t, executor.AppendStringRows(result, 0, []string{"22222222222222222222222222222222"}))
+		require.NoError(t, executor.AppendFixedRows(result, 1, []uint64{0}))
+		require.NoError(t, executor.AppendStringRows(result, 2, []string{"bad"}))
+		return result.GetResult(), nil
 	}}
 	_, _, err = repository.getChunkReceipt(
 		badDigestTxn,
@@ -414,9 +423,11 @@ func TestSQLRestoreImportChunkRejectsConflictingReceiptAndAttempt(t *testing.T) 
 	mp := mpool.MustNewZero()
 	attempt := lifecycleRestoreAttemptForTest("IMPORTING")
 	receipt := lifecyclepkg.RestoreChunkReceipt{
-		RestoreID:    attempt.RestoreID,
-		ChunkOrdinal: attempt.NextChunkOrdinal,
-		ChunkDigest:  [32]byte{1},
+		RestoreID:           attempt.RestoreID,
+		DatasetID:           attempt.DatasetID,
+		DatasetChunkOrdinal: attempt.NextChunkOrdinal,
+		ChunkOrdinal:        attempt.NextChunkOrdinal,
+		ChunkDigest:         [32]byte{1},
 	}
 
 	t.Run("conflicting-receipt", func(t *testing.T) {
@@ -429,7 +440,16 @@ func TestSQLRestoreImportChunkRejectsConflictingReceiptAndAttempt(t *testing.T) 
 				string,
 				executor.StatementOption,
 			) (executor.Result, error) {
-				return lifecycleRestoreStringRows(t, mp, stringsRepeatHex("02")), nil
+				result := executor.NewMemResult([]types.Type{
+					types.T_varchar.ToType(),
+					types.T_uint64.ToType(),
+					types.T_varchar.ToType(),
+				}, mp)
+				result.NewBatchWithRowCount(1)
+				require.NoError(t, executor.AppendStringRows(result, 0, []string{"22222222222222222222222222222222"}))
+				require.NoError(t, executor.AppendFixedRows(result, 1, []uint64{attempt.NextChunkOrdinal}))
+				require.NoError(t, executor.AppendStringRows(result, 2, []string{stringsRepeatHex("02")}))
+				return result.GetResult(), nil
 			}},
 		}
 		_, err := repository.ImportChunk(ctx, attempt, receipt, lifecyclepkg.SchemaDescriptor{}, nil)
@@ -551,7 +571,7 @@ func TestSQLRestorePublishFailsClosedBeforeOrDuringCatalogHandoff(t *testing.T) 
 			publishCAS: 1,
 			doneCAS:    1,
 			leaseCAS:   0,
-			match:      "Dataset lease release failed",
+			match:      "Dataset lease cleanup failed",
 		},
 	}
 	for _, test := range tests {
@@ -617,6 +637,8 @@ func lifecycleRestoreWriteBatchForTest(t *testing.T, mp *mpool.MPool) *batch.Bat
 func lifecycleRestoreChunkReceiptRows(t *testing.T, mp *mpool.MPool) executor.Result {
 	t.Helper()
 	result := executor.NewMemResult([]types.Type{
+		types.T_varchar.ToType(),
+		types.T_uint64.ToType(),
 		types.T_uint64.ToType(),
 		types.T_uint32.ToType(),
 		types.T_uint32.ToType(),
@@ -626,13 +648,15 @@ func lifecycleRestoreChunkReceiptRows(t *testing.T, mp *mpool.MPool) executor.Re
 		types.T_varchar.ToType(),
 	}, mp)
 	result.NewBatchWithRowCount(1)
-	require.NoError(t, executor.AppendFixedRows(result, 0, []uint64{0}))
-	require.NoError(t, executor.AppendFixedRows(result, 1, []uint32{0}))
-	require.NoError(t, executor.AppendFixedRows(result, 2, []uint32{0}))
-	require.NoError(t, executor.AppendStringRows(result, 3, []string{stringsRepeatHex("11")}))
-	require.NoError(t, executor.AppendFixedRows(result, 4, []uint64{10}))
-	require.NoError(t, executor.AppendFixedRows(result, 5, []uint64{100}))
-	require.NoError(t, executor.AppendStringRows(result, 6, []string{stringsRepeatHex("22")}))
+	require.NoError(t, executor.AppendStringRows(result, 0, []string{"22222222222222222222222222222222"}))
+	require.NoError(t, executor.AppendFixedRows(result, 1, []uint64{0}))
+	require.NoError(t, executor.AppendFixedRows(result, 2, []uint64{0}))
+	require.NoError(t, executor.AppendFixedRows(result, 3, []uint32{0}))
+	require.NoError(t, executor.AppendFixedRows(result, 4, []uint32{0}))
+	require.NoError(t, executor.AppendStringRows(result, 5, []string{stringsRepeatHex("11")}))
+	require.NoError(t, executor.AppendFixedRows(result, 6, []uint64{10}))
+	require.NoError(t, executor.AppendFixedRows(result, 7, []uint64{100}))
+	require.NoError(t, executor.AppendStringRows(result, 8, []string{stringsRepeatHex("22")}))
 	return result.GetResult()
 }
 

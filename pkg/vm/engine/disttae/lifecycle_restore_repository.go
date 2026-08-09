@@ -18,6 +18,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"math"
 	"strconv"
@@ -74,16 +75,48 @@ func (repository SQLRestoreRepository) Initialize(
 	if err := repository.validate(); err != nil {
 		return attempt, err
 	}
-	if err := repository.validateRestoreAdmission(request.Dataset.LogicalBytes); err != nil {
+	datasets := request.Datasets
+	if len(datasets) == 0 && request.Dataset.DatasetID != "" {
+		datasets = []lifecyclepkg.RestoreDataset{request.Dataset}
+	}
+	if len(datasets) == 0 || len(datasets) != len(request.Attempt.DatasetIDs) ||
+		request.Attempt.SelectedLogicalBytes == 0 ||
+		request.Attempt.TotalChunkCount == 0 ||
+		request.Attempt.SelectionDigest == ([sha256.Size]byte{}) {
+		return attempt, moerr.NewInternalErrorNoCtxf(
+			"Lifecycle Restore Dataset selection is incomplete",
+		)
+	}
+	if err := validateLifecycleRestoreSelection(request.Attempt); err != nil {
+		return attempt, err
+	}
+	for index, dataset := range datasets {
+		if dataset.DatasetID == "" ||
+			dataset.DatasetID != request.Attempt.DatasetIDs[index] {
+			return attempt, moerr.NewInternalErrorNoCtxf(
+				"Lifecycle Restore Dataset selection identity is invalid",
+			)
+		}
+	}
+	if err := repository.validateRestoreAdmission(request.Attempt.SelectedLogicalBytes); err != nil {
 		return attempt, err
 	}
 	restoreID, err := lifecycleCatalogUUID(request.Attempt.RestoreID)
 	if err != nil {
 		return attempt, err
 	}
-	datasetID, err := lifecycleCatalogUUID(request.Dataset.DatasetID)
+	datasetID, err := lifecycleCatalogUUID(datasets[0].DatasetID)
 	if err != nil {
 		return attempt, err
+	}
+	selectionJSON, err := json.Marshal(request.Attempt.DatasetIDs)
+	if err != nil {
+		return attempt, err
+	}
+	if len(selectionJSON) == 0 || len(selectionJSON) > 1<<20 {
+		return attempt, moerr.NewInternalErrorNoCtxf(
+			"Lifecycle Restore Dataset selection exceeds its certified byte limit",
+		)
 	}
 	leaseID, err := lifecycleCatalogUUID(request.Attempt.LeaseID)
 	if err != nil {
@@ -114,10 +147,11 @@ func (repository SQLRestoreRepository) Initialize(
 				return readErr
 			}
 			if found {
-				if existing.DatasetID != request.Dataset.DatasetID ||
+				if existing.DatasetID != datasets[0].DatasetID ||
 					existing.LeaseID != request.Attempt.LeaseID ||
 					existing.HiddenName != request.Attempt.HiddenName ||
-					existing.TargetName != request.Attempt.TargetName {
+					existing.TargetName != request.Attempt.TargetName ||
+					existing.SelectionDigest != request.Attempt.SelectionDigest {
 					return moerr.NewInternalErrorNoCtxf("Lifecycle Restore initialization identity mismatch")
 				}
 				attempt = existing
@@ -125,33 +159,39 @@ func (repository SQLRestoreRepository) Initialize(
 			}
 			if admissionErr := repository.checkRestoreAccountAdmission(
 				txn,
-				request.Dataset.LogicalBytes,
+				request.Attempt.SelectedLogicalBytes,
 			); admissionErr != nil {
 				return admissionErr
 			}
-			result, execErr := txn.Exec(
-				fmt.Sprintf(
-					`update mo_catalog.mo_lifecycle_datasets
+			for _, dataset := range datasets {
+				encodedDatasetID, encodeErr := lifecycleCatalogUUID(dataset.DatasetID)
+				if encodeErr != nil {
+					return encodeErr
+				}
+				result, execErr := txn.Exec(
+					fmt.Sprintf(
+						`update mo_catalog.mo_lifecycle_datasets
 set restore_lease_id=unhex('%s'),restore_deadline=%s,
 access_generation=access_generation+1,version=version+1,updated_at=utc_timestamp()
 where dataset_id=unhex('%s') and state='PUBLISHED' and version=%d
 and restore_lease_id is null`,
-					leaseID,
-					lifecycleCatalogTime(request.Attempt.Deadline),
-					datasetID,
-					request.Dataset.Version,
-				),
-				executor.StatementOption{}.WithAccountID(repository.AccountID),
-			)
-			if execErr != nil {
-				return execErr
+						leaseID,
+						lifecycleCatalogTime(request.Attempt.Deadline),
+						encodedDatasetID,
+						dataset.Version,
+					),
+					executor.StatementOption{}.WithAccountID(repository.AccountID),
+				)
+				if execErr != nil {
+					return execErr
+				}
+				affected := result.AffectedRows
+				result.Close()
+				if affected != 1 {
+					return lifecyclepkg.ErrRestoreInProgress
+				}
 			}
-			affected := result.AffectedRows
-			result.Close()
-			if affected != 1 {
-				return lifecyclepkg.ErrRestoreInProgress
-			}
-			result, execErr = txn.Exec(
+			result, execErr := txn.Exec(
 				request.HiddenCreateSQL,
 				executor.StatementOption{}.WithAccountID(repository.AccountID),
 			)
@@ -171,13 +211,28 @@ and restore_lease_id is null`,
 			result, execErr = txn.Exec(
 				fmt.Sprintf(
 					`insert into mo_catalog.mo_lifecycle_restore_attempts(
-restore_id,dataset_id,lease_id,deadline,staging_database_id,staging_table_id,
+restore_id,dataset_id,scope,source_logical_table_id,range_start,range_end,
+lifecycle_column_id,lifecycle_column_type,selection_digest,dataset_selection,
+dataset_count,total_chunk_count,selected_logical_bytes,
+lease_id,deadline,staging_database_id,staging_table_id,
 hidden_name,target_database_id,target_name,state,next_chunk_ordinal,
 restored_rows,verified_content_hash,last_error,updated_at)
-values(unhex('%s'),unhex('%s'),unhex('%s'),%s,%d,%d,%s,%d,%s,
+values(unhex('%s'),unhex('%s'),%s,%d,%d,%d,%d,%d,unhex('%s'),unhex('%s'),
+%d,%d,%d,unhex('%s'),%s,%d,%d,%s,%d,%s,
 'IMPORTING',0,0,null,null,utc_timestamp())`,
 					restoreID,
 					datasetID,
+					lifecycleCatalogQuote(request.Attempt.Scope),
+					request.Attempt.SourceLogicalTableID,
+					request.Attempt.RangeStart,
+					request.Attempt.RangeEnd,
+					request.Attempt.LifecycleRange.SourceColumnID,
+					request.Attempt.LifecycleRange.TypeID,
+					hex.EncodeToString(request.Attempt.SelectionDigest[:]),
+					hex.EncodeToString(selectionJSON),
+					len(datasets),
+					request.Attempt.TotalChunkCount,
+					request.Attempt.SelectedLogicalBytes,
 					leaseID,
 					lifecycleCatalogTime(request.Attempt.Deadline),
 					request.Attempt.StagingDatabaseID,
@@ -271,9 +326,8 @@ func restoreActiveLogicalBytes(
 	accountID uint32,
 ) (uint64, error) {
 	result, err := txn.Exec(
-		`select cast(coalesce(sum(d.logical_bytes),0) as bigint unsigned)
+		`select cast(coalesce(sum(a.selected_logical_bytes),0) as bigint unsigned)
 from mo_catalog.mo_lifecycle_restore_attempts a
-join mo_catalog.mo_lifecycle_datasets d on d.dataset_id=a.dataset_id
 where a.state in ('IMPORTING','PUBLISHING')`,
 		executor.StatementOption{}.WithAccountID(accountID),
 	)
@@ -368,7 +422,10 @@ func (repository SQLRestoreRepository) FindResumable(
 date_format(a.deadline,'%%Y-%%m-%%d %%H:%%i:%%s.%%f'),
 a.staging_database_id,a.staging_table_id,a.hidden_name,a.target_database_id,
 a.target_name,a.state,a.next_chunk_ordinal,a.restored_rows,
-coalesce(hex(a.verified_content_hash),'')
+coalesce(hex(a.verified_content_hash),''),a.scope,a.source_logical_table_id,
+a.range_start,a.range_end,a.lifecycle_column_id,a.lifecycle_column_type,
+hex(a.selection_digest),a.dataset_selection,a.dataset_count,
+a.total_chunk_count,a.selected_logical_bytes
 from mo_catalog.mo_lifecycle_restore_attempts a
 where a.dataset_id=unhex('%s') and a.target_database_id=%d and a.target_name=%s
 and ((a.state='IMPORTING' and a.deadline>utc_timestamp() and exists (
@@ -383,6 +440,66 @@ and ((a.state='IMPORTING' and a.deadline>utc_timestamp() and exists (
          and t.relname=a.target_name)))
 order by a.updated_at desc,a.restore_id limit 2`,
 			encodedDatasetID,
+			targetDatabaseID,
+			lifecycleCatalogQuote(targetName),
+		),
+		executor.Options{}.WithAccountID(repository.AccountID),
+	)
+	if err != nil {
+		return lifecyclepkg.RestoreAttempt{}, false, err
+	}
+	defer result.Close()
+	return repository.decodeAttemptResult(result)
+}
+
+// FindRangeResumable finds only an Attempt whose frozen source table, range,
+// and target match the repeated user request. Dataset selection is then loaded
+// from that Attempt instead of being recomputed from newer Catalog state.
+func (repository SQLRestoreRepository) FindRangeResumable(
+	ctx context.Context,
+	logicalTableID uint64,
+	start int64,
+	end int64,
+	targetDatabaseID uint64,
+	targetName string,
+) (lifecyclepkg.RestoreAttempt, bool, error) {
+	if err := repository.validateReader(); err != nil {
+		return lifecyclepkg.RestoreAttempt{}, false, err
+	}
+	if logicalTableID == 0 || start >= end || targetDatabaseID == 0 || targetName == "" {
+		return lifecyclepkg.RestoreAttempt{}, false, moerr.NewInternalErrorNoCtxf(
+			"Lifecycle range Restore resume identity is incomplete",
+		)
+	}
+	result, err := repository.Executor.Exec(
+		ctx,
+		fmt.Sprintf(
+			`select hex(a.restore_id),hex(a.dataset_id),hex(a.lease_id),
+date_format(a.deadline,'%%Y-%%m-%%d %%H:%%i:%%s.%%f'),
+a.staging_database_id,a.staging_table_id,a.hidden_name,a.target_database_id,
+a.target_name,a.state,a.next_chunk_ordinal,a.restored_rows,
+coalesce(hex(a.verified_content_hash),''),a.scope,a.source_logical_table_id,
+a.range_start,a.range_end,a.lifecycle_column_id,a.lifecycle_column_type,
+hex(a.selection_digest),a.dataset_selection,a.dataset_count,
+a.total_chunk_count,a.selected_logical_bytes
+from mo_catalog.mo_lifecycle_restore_attempts a
+where a.scope='RANGE' and a.source_logical_table_id=%d
+and a.range_start=%d and a.range_end=%d
+and a.target_database_id=%d and a.target_name=%s
+and ((a.state='IMPORTING' and a.deadline>utc_timestamp() and exists (
+       select 1 from mo_catalog.mo_tables h
+       where h.rel_id=a.staging_table_id
+         and h.reldatabase_id=a.staging_database_id
+         and h.relname=a.hidden_name)) or
+     (a.state='DONE' and a.verified_content_hash is not null and exists (
+       select 1 from mo_catalog.mo_tables t
+       where t.rel_id=a.staging_table_id
+         and t.reldatabase_id=a.target_database_id
+         and t.relname=a.target_name)))
+order by a.updated_at desc,a.restore_id limit 2`,
+			logicalTableID,
+			start,
+			end,
 			targetDatabaseID,
 			lifecycleCatalogQuote(targetName),
 		),
@@ -413,6 +530,10 @@ func (repository SQLRestoreRepository) ImportChunk(
 	if err != nil {
 		return updated, err
 	}
+	receiptDatasetID, err := lifecycleCatalogUUID(receipt.DatasetID)
+	if err != nil {
+		return updated, err
+	}
 	err = repository.Executor.ExecTxn(
 		ctx,
 		func(txn executor.TxnExecutor) error {
@@ -425,7 +546,9 @@ func (repository SQLRestoreRepository) ImportChunk(
 				return readErr
 			}
 			if found {
-				if existing.ChunkDigest != receipt.ChunkDigest {
+				if existing.ChunkDigest != receipt.ChunkDigest ||
+					existing.DatasetID != receipt.DatasetID ||
+					existing.DatasetChunkOrdinal != receipt.DatasetChunkOrdinal {
 					return moerr.NewInternalErrorNoCtxf("Lifecycle Restore Chunk digest corruption")
 				}
 				current, ok, getErr := repository.getAttempt(
@@ -467,60 +590,77 @@ func (repository SQLRestoreRepository) ImportChunk(
 				!current.Deadline.After(time.Now()) {
 				return moerr.NewInternalErrorNoCtxf("Lifecycle Restore Chunk lease or ordinal CAS failed")
 			}
-			_, _, relation, getErr := repository.Engine.GetRelationById(
-				ctx,
-				txn.Txn(),
-				current.StagingTableID,
-			)
-			if getErr != nil {
-				return getErr
-			}
-			value, batchErr := lifecyclepkg.CanonicalRowsToBatch(
-				ctx,
-				schema,
-				rows,
-				repository.MPool,
-			)
-			if batchErr != nil {
-				return batchErr
-			}
-			defer value.Clean(repository.MPool)
 			schemaDigest, digestErr := schema.Digest()
 			if digestErr != nil {
 				return digestErr
 			}
-			if verifyErr := lifecyclepkg.VerifyRestoreBatch(
-				ctx,
-				schemaDigest,
-				value,
-				receipt.RowCount,
-				receipt.LogicalBytes,
-				receipt.CanonicalContentHash,
-			); verifyErr != nil {
-				return verifyErr
+			encoder := lifecyclepkg.NewCanonicalValueEncoder(schemaDigest)
+			for _, row := range rows {
+				if encodeErr := encoder.WriteRow(ctx, row); encodeErr != nil {
+					return encodeErr
+				}
 			}
-			if prepareErr := prepareLifecycleRestoreWriteBatch(
-				ctx,
-				value,
-				relation.GetTableDef(ctx),
-				repository.AutoIncrement,
-				txn.Txn(),
-				repository.MPool,
-			); prepareErr != nil {
-				return prepareErr
+			if encoder.RowCount() != receipt.RowCount ||
+				encoder.LogicalBytes() != receipt.LogicalBytes ||
+				encoder.Sum() != receipt.CanonicalContentHash {
+				return moerr.NewInternalErrorNoCtxf(
+					"Lifecycle Restore canonical Chunk identity mismatch",
+				)
 			}
-			writeErr := relation.Write(ctx, value)
-			if writeErr != nil {
-				return writeErr
+			if len(rows) > 0 {
+				_, _, relation, getErr := repository.Engine.GetRelationById(
+					ctx,
+					txn.Txn(),
+					current.StagingTableID,
+				)
+				if getErr != nil {
+					return getErr
+				}
+				value, batchErr := lifecyclepkg.CanonicalRowsToBatch(
+					ctx,
+					schema,
+					rows,
+					repository.MPool,
+				)
+				if batchErr != nil {
+					return batchErr
+				}
+				defer value.Clean(repository.MPool)
+				if verifyErr := lifecyclepkg.VerifyRestoreBatch(
+					ctx,
+					schemaDigest,
+					value,
+					receipt.RowCount,
+					receipt.LogicalBytes,
+					receipt.CanonicalContentHash,
+				); verifyErr != nil {
+					return verifyErr
+				}
+				if prepareErr := prepareLifecycleRestoreWriteBatch(
+					ctx,
+					value,
+					relation.GetTableDef(ctx),
+					repository.AutoIncrement,
+					txn.Txn(),
+					repository.MPool,
+				); prepareErr != nil {
+					return prepareErr
+				}
+				if writeErr := relation.Write(ctx, value); writeErr != nil {
+					return writeErr
+				}
 			}
 			result, execErr := txn.Exec(
 				fmt.Sprintf(
 					`insert into mo_catalog.mo_lifecycle_restore_chunks(
-restore_id,chunk_ordinal,file_ordinal,row_group_ordinal,chunk_digest,
+restore_id,dataset_id,dataset_chunk_ordinal,chunk_ordinal,
+file_ordinal,row_group_ordinal,chunk_digest,
 row_count,logical_bytes,canonical_content_hash,created_at)
-values(unhex('%s'),%d,%d,%d,unhex('%s'),%d,%d,unhex('%s'),
+values(unhex('%s'),unhex('%s'),%d,%d,%d,%d,unhex('%s'),%d,%d,unhex('%s'),
 utc_timestamp())`,
 					restoreID,
+					receiptDatasetID,
+					receipt.DatasetChunkOrdinal,
 					receipt.ChunkOrdinal,
 					receipt.FileOrdinal,
 					receipt.RowGroupOrdinal,
@@ -700,8 +840,9 @@ func (repository SQLRestoreRepository) ListChunkReceipts(
 	result, err := repository.Executor.Exec(
 		ctx,
 		fmt.Sprintf(
-			`select chunk_ordinal,file_ordinal,row_group_ordinal,
-hex(chunk_digest),row_count,logical_bytes,hex(canonical_content_hash)
+			`select hex(dataset_id),dataset_chunk_ordinal,chunk_ordinal,
+file_ordinal,row_group_ordinal,hex(chunk_digest),row_count,logical_bytes,
+hex(canonical_content_hash)
 from mo_catalog.mo_lifecycle_restore_chunks
 where restore_id=unhex('%s') order by chunk_ordinal`,
 			encoded,
@@ -715,29 +856,31 @@ where restore_id=unhex('%s') order by chunk_ordinal`,
 	receipts := make([]lifecyclepkg.RestoreChunkReceipt, 0)
 	var decodeErr error
 	result.ReadRows(func(rows int, columns []*vector.Vector) bool {
-		if len(columns) != 7 {
+		if len(columns) != 9 {
 			decodeErr = moerr.NewInternalErrorNoCtxf("Lifecycle Restore Chunk query is invalid")
 			return false
 		}
 		for row := 0; row < rows; row++ {
-			digest, err := lifecycleRestoreDigest(columns[3].GetStringAt(row))
+			digest, err := lifecycleRestoreDigest(columns[5].GetStringAt(row))
 			if err != nil {
 				decodeErr = err
 				return false
 			}
-			contentHash, err := lifecycleRestoreDigest(columns[6].GetStringAt(row))
+			contentHash, err := lifecycleRestoreDigest(columns[8].GetStringAt(row))
 			if err != nil {
 				decodeErr = err
 				return false
 			}
 			receipts = append(receipts, lifecyclepkg.RestoreChunkReceipt{
 				RestoreID:            restoreID,
-				ChunkOrdinal:         vector.GetFixedAtNoTypeCheck[uint64](columns[0], row),
-				FileOrdinal:          vector.GetFixedAtNoTypeCheck[uint32](columns[1], row),
-				RowGroupOrdinal:      vector.GetFixedAtNoTypeCheck[uint32](columns[2], row),
+				DatasetID:            lifecycleRestoreUUID(columns[0].GetStringAt(row)),
+				DatasetChunkOrdinal:  vector.GetFixedAtNoTypeCheck[uint64](columns[1], row),
+				ChunkOrdinal:         vector.GetFixedAtNoTypeCheck[uint64](columns[2], row),
+				FileOrdinal:          vector.GetFixedAtNoTypeCheck[uint32](columns[3], row),
+				RowGroupOrdinal:      vector.GetFixedAtNoTypeCheck[uint32](columns[4], row),
 				ChunkDigest:          digest,
-				RowCount:             vector.GetFixedAtNoTypeCheck[uint64](columns[4], row),
-				LogicalBytes:         vector.GetFixedAtNoTypeCheck[uint64](columns[5], row),
+				RowCount:             vector.GetFixedAtNoTypeCheck[uint64](columns[6], row),
+				LogicalBytes:         vector.GetFixedAtNoTypeCheck[uint64](columns[7], row),
 				CanonicalContentHash: contentHash,
 			})
 		}
@@ -758,10 +901,6 @@ func (repository SQLRestoreRepository) Publish(
 		return err
 	}
 	leaseID, err := lifecycleCatalogUUID(attempt.LeaseID)
-	if err != nil {
-		return err
-	}
-	datasetID, err := lifecycleCatalogUUID(attempt.DatasetID)
 	if err != nil {
 		return err
 	}
@@ -914,25 +1053,18 @@ and state='PUBLISHING' and staging_table_id=%d`,
 				return moerr.NewInternalErrorNoCtxf("Lifecycle Restore DONE CAS failed")
 			}
 			result.Close()
-			result, execErr = txn.Exec(
-				fmt.Sprintf(
-					`update mo_catalog.mo_lifecycle_datasets
-set restore_lease_id=null,restore_deadline=null,
-access_generation=access_generation+1,version=version+1,
-updated_at=utc_timestamp()
-where dataset_id=unhex('%s') and state='PUBLISHED'
-and restore_lease_id=unhex('%s')`,
-					datasetID,
+			for _, selectedDatasetID := range current.DatasetIDs {
+				encodedDatasetID, encodeErr := lifecycleCatalogUUID(selectedDatasetID)
+				if encodeErr != nil {
+					return encodeErr
+				}
+				if execErr = repository.releaseRestoreDatasetLease(
+					txn,
+					encodedDatasetID,
 					leaseID,
-				),
-				executor.StatementOption{}.WithAccountID(repository.AccountID),
-			)
-			if execErr != nil {
-				return execErr
-			}
-			defer result.Close()
-			if result.AffectedRows != 1 {
-				return moerr.NewInternalErrorNoCtxf("Lifecycle Restore Dataset lease release failed")
+				); execErr != nil {
+					return execErr
+				}
 			}
 			return nil
 		},
@@ -979,10 +1111,6 @@ func (repository SQLRestoreRepository) CleanupHidden(
 		return nil
 	}
 	encoded, _ := lifecycleCatalogUUID(restoreID)
-	datasetID, err := lifecycleCatalogUUID(attempt.DatasetID)
-	if err != nil {
-		return err
-	}
 	leaseID, err := lifecycleCatalogUUID(attempt.LeaseID)
 	if err != nil {
 		return err
@@ -1014,7 +1142,6 @@ func (repository SQLRestoreRepository) CleanupHidden(
 				return repository.failRestoreAttemptAndReleaseLease(
 					txn,
 					encoded,
-					datasetID,
 					leaseID,
 					current,
 				)
@@ -1030,7 +1157,6 @@ func (repository SQLRestoreRepository) CleanupHidden(
 				return repository.failRestoreAttemptAndReleaseLease(
 					txn,
 					encoded,
-					datasetID,
 					leaseID,
 					current,
 				)
@@ -1077,11 +1203,7 @@ and staging_table_id=%d and hidden_name=%s`,
 			if execErr != nil {
 				return execErr
 			}
-			return repository.releaseRestoreDatasetLease(
-				txn,
-				datasetID,
-				leaseID,
-			)
+			return repository.releaseRestoreDatasetLeases(txn, current.DatasetIDs, leaseID)
 		},
 		executor.Options{}.WithAccountID(repository.AccountID),
 	)
@@ -1090,7 +1212,6 @@ and staging_table_id=%d and hidden_name=%s`,
 func (repository SQLRestoreRepository) failRestoreAttemptAndReleaseLease(
 	txn executor.TxnExecutor,
 	restoreID string,
-	datasetID string,
 	leaseID string,
 	attempt lifecyclepkg.RestoreAttempt,
 ) error {
@@ -1114,7 +1235,24 @@ and staging_table_id=%d and hidden_name=%s`,
 	if affected != 1 {
 		return moerr.NewInternalErrorNoCtxf("Lifecycle Restore cleanup CAS failed")
 	}
-	return repository.releaseRestoreDatasetLease(txn, datasetID, leaseID)
+	return repository.releaseRestoreDatasetLeases(txn, attempt.DatasetIDs, leaseID)
+}
+
+func (repository SQLRestoreRepository) releaseRestoreDatasetLeases(
+	txn executor.TxnExecutor,
+	datasetIDs []string,
+	leaseID string,
+) error {
+	for _, datasetID := range datasetIDs {
+		encoded, err := lifecycleCatalogUUID(datasetID)
+		if err != nil {
+			return err
+		}
+		if err = repository.releaseRestoreDatasetLease(txn, encoded, leaseID); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (repository SQLRestoreRepository) releaseRestoreDatasetLease(
@@ -1328,7 +1466,10 @@ func (repository SQLRestoreRepository) getAttempt(
 date_format(deadline,'%%Y-%%m-%%d %%H:%%i:%%s.%%f'),
 staging_database_id,staging_table_id,hidden_name,target_database_id,
 target_name,state,next_chunk_ordinal,restored_rows,
-coalesce(hex(verified_content_hash),'')
+coalesce(hex(verified_content_hash),''),scope,source_logical_table_id,
+range_start,range_end,lifecycle_column_id,lifecycle_column_type,
+hex(selection_digest),dataset_selection,dataset_count,total_chunk_count,
+selected_logical_bytes
 from mo_catalog.mo_lifecycle_restore_attempts
 where restore_id=unhex('%s')`,
 		encoded,
@@ -1347,7 +1488,7 @@ func (repository SQLRestoreRepository) decodeAttemptResult(
 	rowsRead := 0
 	var decodeErr error
 	result.ReadRows(func(rows int, columns []*vector.Vector) bool {
-		if len(columns) != 13 || rowsRead+rows != 1 {
+		if len(columns) != 24 || rowsRead+rows != 1 {
 			decodeErr = moerr.NewInternalErrorNoCtxf("Lifecycle Restore Attempt row is invalid")
 			return false
 		}
@@ -1382,6 +1523,40 @@ func (repository SQLRestoreRepository) decodeAttemptResult(
 				return false
 			}
 		}
+		attempt.Scope = columns[13].GetStringAt(0)
+		attempt.SourceLogicalTableID = vector.GetFixedAtNoTypeCheck[uint64](columns[14], 0)
+		attempt.RangeStart = vector.GetFixedAtNoTypeCheck[int64](columns[15], 0)
+		attempt.RangeEnd = vector.GetFixedAtNoTypeCheck[int64](columns[16], 0)
+		attempt.LifecycleRange = lifecyclepkg.ArchiveLifecycleRange{
+			SourceColumnID: vector.GetFixedAtNoTypeCheck[uint64](columns[17], 0),
+			TypeID:         int32(vector.GetFixedAtNoTypeCheck[uint32](columns[18], 0)),
+		}
+		attempt.SelectionDigest, decodeErr = lifecycleRestoreDigest(
+			columns[19].GetStringAt(0),
+		)
+		if decodeErr != nil {
+			return false
+		}
+		if decodeErr = json.Unmarshal(
+			columns[20].GetBytesAt(0),
+			&attempt.DatasetIDs,
+		); decodeErr != nil {
+			return false
+		}
+		datasetCount := vector.GetFixedAtNoTypeCheck[uint32](columns[21], 0)
+		attempt.TotalChunkCount = vector.GetFixedAtNoTypeCheck[uint64](columns[22], 0)
+		attempt.SelectedLogicalBytes = vector.GetFixedAtNoTypeCheck[uint64](columns[23], 0)
+		if datasetCount == 0 || int(datasetCount) != len(attempt.DatasetIDs) ||
+			len(attempt.DatasetIDs) > 4096 || attempt.DatasetIDs[0] != attempt.DatasetID ||
+			attempt.TotalChunkCount == 0 || attempt.SelectedLogicalBytes == 0 {
+			decodeErr = moerr.NewInternalErrorNoCtxf(
+				"Lifecycle Restore Attempt Dataset selection is corrupt",
+			)
+			return false
+		}
+		if decodeErr = validateLifecycleRestoreSelection(attempt); decodeErr != nil {
+			return false
+		}
 		rowsRead += rows
 		return true
 	})
@@ -1389,6 +1564,56 @@ func (repository SQLRestoreRepository) decodeAttemptResult(
 		return lifecyclepkg.RestoreAttempt{}, false, decodeErr
 	}
 	return attempt, rowsRead == 1, nil
+}
+
+func validateLifecycleRestoreSelection(
+	attempt lifecyclepkg.RestoreAttempt,
+) error {
+	if attempt.SourceLogicalTableID == 0 || len(attempt.DatasetIDs) == 0 ||
+		len(attempt.DatasetIDs) > 4096 {
+		return moerr.NewInternalErrorNoCtxf(
+			"Lifecycle Restore Dataset selection is invalid",
+		)
+	}
+	for _, datasetID := range attempt.DatasetIDs {
+		parsed, err := uuid.Parse(datasetID)
+		if err != nil || parsed.String() != datasetID {
+			return moerr.NewInternalErrorNoCtxf(
+				"Lifecycle Restore Dataset selection contains an invalid ID",
+			)
+		}
+	}
+	switch attempt.Scope {
+	case lifecyclepkg.RestoreScopeDataset:
+		if len(attempt.DatasetIDs) != 1 {
+			return moerr.NewInternalErrorNoCtxf(
+				"Lifecycle Dataset Restore selection is invalid",
+			)
+		}
+	case lifecyclepkg.RestoreScopeRange:
+		if attempt.RangeStart >= attempt.RangeEnd {
+			return moerr.NewInternalErrorNoCtxf(
+				"Lifecycle range Restore selection is invalid",
+			)
+		}
+	default:
+		return moerr.NewInternalErrorNoCtxf(
+			"Lifecycle Restore scope is invalid",
+		)
+	}
+	expected := lifecyclepkg.BuildRestoreSelectionDigest(
+		attempt.Scope,
+		attempt.SourceLogicalTableID,
+		attempt.RangeStart,
+		attempt.RangeEnd,
+		attempt.DatasetIDs,
+	)
+	if expected != attempt.SelectionDigest {
+		return moerr.NewInternalErrorNoCtxf(
+			"Lifecycle Restore Dataset selection digest is invalid",
+		)
+	}
+	return nil
 }
 
 func (repository SQLRestoreRepository) getChunkReceipt(
@@ -1402,7 +1627,8 @@ func (repository SQLRestoreRepository) getChunkReceipt(
 	}
 	result, err := txn.Exec(
 		fmt.Sprintf(
-			`select hex(chunk_digest) from mo_catalog.mo_lifecycle_restore_chunks
+			`select hex(dataset_id),dataset_chunk_ordinal,hex(chunk_digest)
+from mo_catalog.mo_lifecycle_restore_chunks
 where restore_id=unhex('%s') and chunk_ordinal=%d`,
 			encoded,
 			ordinal,
@@ -1417,15 +1643,23 @@ where restore_id=unhex('%s') and chunk_ordinal=%d`,
 	rowsRead := 0
 	var decodeErr error
 	result.ReadRows(func(rows int, columns []*vector.Vector) bool {
-		if len(columns) != 1 || rowsRead+rows != 1 {
+		if len(columns) != 3 || rowsRead+rows != 1 ||
+			columns[0].GetType().Oid != types.T_varchar ||
+			columns[1].GetType().Oid != types.T_uint64 ||
+			columns[2].GetType().Oid != types.T_varchar {
 			decodeErr = moerr.NewInternalErrorNoCtxf("Lifecycle Restore Chunk row is invalid")
 			return false
 		}
 		receipt.RestoreID = restoreID
+		receipt.DatasetID = lifecycleRestoreUUID(columns[0].GetStringAt(0))
+		receipt.DatasetChunkOrdinal = vector.GetFixedAtNoTypeCheck[uint64](columns[1], 0)
 		receipt.ChunkOrdinal = ordinal
 		receipt.ChunkDigest, decodeErr = lifecycleRestoreDigest(
-			columns[0].GetStringAt(0),
+			columns[2].GetStringAt(0),
 		)
+		if receipt.DatasetID == "" {
+			decodeErr = moerr.NewInternalErrorNoCtxf("Lifecycle Restore Chunk Dataset identity is invalid")
+		}
 		rowsRead += rows
 		return decodeErr == nil
 	})

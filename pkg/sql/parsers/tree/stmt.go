@@ -528,6 +528,10 @@ func (node *RestoreArchiveDataset) StmtKind() StmtKind {
 	return frontendStatusTyp
 }
 
+func (node *RestoreArchiveRange) StmtKind() StmtKind {
+	return frontendStatusTyp
+}
+
 func (node *PurgeArchiveDataset) StmtKind() StmtKind {
 	return frontendStatusTyp
 }

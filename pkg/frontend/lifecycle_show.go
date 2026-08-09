@@ -59,6 +59,24 @@ var lifecycleJobShowColumns = []Column{
 	lifecycleShowColumn("last_error", defines.MYSQL_TYPE_VARCHAR),
 }
 
+var lifecycleRestoreShowColumns = []Column{
+	lifecycleShowColumn("restore_id", defines.MYSQL_TYPE_VARCHAR),
+	lifecycleShowColumn("scope", defines.MYSQL_TYPE_VARCHAR),
+	lifecycleShowColumn("dataset_count", defines.MYSQL_TYPE_LONGLONG),
+	lifecycleShowColumn("source_logical_table_id", defines.MYSQL_TYPE_LONGLONG),
+	lifecycleShowColumn("range_start", defines.MYSQL_TYPE_VARCHAR),
+	lifecycleShowColumn("range_end", defines.MYSQL_TYPE_VARCHAR),
+	lifecycleShowColumn("target_database_id", defines.MYSQL_TYPE_LONGLONG),
+	lifecycleShowColumn("target_name", defines.MYSQL_TYPE_VARCHAR),
+	lifecycleShowColumn("state", defines.MYSQL_TYPE_VARCHAR),
+	lifecycleShowColumn("next_chunk_ordinal", defines.MYSQL_TYPE_LONGLONG),
+	lifecycleShowColumn("total_chunk_count", defines.MYSQL_TYPE_LONGLONG),
+	lifecycleShowColumn("restored_rows", defines.MYSQL_TYPE_LONGLONG),
+	lifecycleShowColumn("deadline", defines.MYSQL_TYPE_VARCHAR),
+	lifecycleShowColumn("last_error", defines.MYSQL_TYPE_VARCHAR),
+	lifecycleShowColumn("updated_at", defines.MYSQL_TYPE_VARCHAR),
+}
+
 func lifecycleShowColumn(name string, columnType defines.MysqlType) Column {
 	return &MysqlColumn{ColumnImpl: ColumnImpl{name: name, columnType: columnType}}
 }
@@ -126,6 +144,23 @@ order by updated_at desc,root_id desc limit %d offset %d`,
 		)
 		columns = lifecycleJobShowColumns
 		system = true
+
+	case tree.ShowLifecycleRestores:
+		limit, offset, err := lifecycleShowPage(ctx, statement)
+		if err != nil {
+			return err
+		}
+		query = fmt.Sprintf(
+			`select hex(restore_id),scope,dataset_count,source_logical_table_id,
+cast(range_start as varchar),cast(range_end as varchar),target_database_id,
+target_name,state,next_chunk_ordinal,total_chunk_count,restored_rows,
+cast(deadline as varchar),coalesce(last_error,''),cast(updated_at as varchar)
+from mo_catalog.mo_lifecycle_restore_attempts
+order by updated_at desc,restore_id desc limit %d offset %d`,
+			limit,
+			offset,
+		)
+		columns = lifecycleRestoreShowColumns
 
 	default:
 		return moerr.NewInvalidInput(ctx, "unknown SHOW LIFECYCLE kind")

@@ -97,6 +97,7 @@ const (
 	ShowLifecycleBinding ShowLifecycleKind = iota + 1
 	ShowLifecycleJobs
 	ShowLifecycleDatasets
+	ShowLifecycleRestores
 )
 
 type ShowLifecycle struct {
@@ -116,6 +117,8 @@ func (node *ShowLifecycle) Format(ctx *FmtCtx) {
 	case ShowLifecycleDatasets:
 		ctx.WriteString("show lifecycle datasets for table ")
 		node.Table.Format(ctx)
+	case ShowLifecycleRestores:
+		ctx.WriteString("show lifecycle restores")
 	}
 	if node.Page != nil {
 		ctx.WriteByte(' ')
@@ -145,6 +148,34 @@ func (node *RestoreArchiveDataset) Free()                    { *node = RestoreAr
 func (node RestoreArchiveDataset) TypeName() string          { return "tree.RestoreArchiveDataset" }
 func (node *RestoreArchiveDataset) GetStatementType() string { return "Restore Archive Dataset" }
 func (node *RestoreArchiveDataset) GetQueryType() string     { return QueryTypeDDL }
+
+// RestoreArchiveRange restores every archived row whose frozen Lifecycle
+// column value is in the half-open interval [From, To). Dataset is an
+// internal publication unit; Source is the user-facing table identity used to
+// select the immutable Dataset set before the first restore side effect.
+type RestoreArchiveRange struct {
+	statementImpl
+	Source *TableName
+	From   string
+	To     string
+	Target *TableName
+}
+
+func (node *RestoreArchiveRange) Format(ctx *FmtCtx) {
+	ctx.WriteString("restore archive table ")
+	node.Source.Format(ctx)
+	ctx.WriteString(" between '")
+	ctx.WriteString(node.From)
+	ctx.WriteString("' and '")
+	ctx.WriteString(node.To)
+	ctx.WriteString("' to table ")
+	node.Target.Format(ctx)
+}
+
+func (node *RestoreArchiveRange) Free()                    { *node = RestoreArchiveRange{} }
+func (node RestoreArchiveRange) TypeName() string          { return "tree.RestoreArchiveRange" }
+func (node *RestoreArchiveRange) GetStatementType() string { return "Restore Archive Range" }
+func (node *RestoreArchiveRange) GetQueryType() string     { return QueryTypeDDL }
 
 type PurgeArchiveDataset struct {
 	statementImpl

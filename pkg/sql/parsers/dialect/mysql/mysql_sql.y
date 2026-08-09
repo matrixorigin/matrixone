@@ -963,7 +963,7 @@ func sqlTaskInt64(v any) int64 {
 
 // TAE Object Lifecycle. Keep new tokens after every pre-existing token so
 // existing token IDs remain stable across a rolling upgrade.
-%token <str> LIFECYCLE ARCHIVE ELIGIBLE DATASET DATASETS PURGE UNSET JOBS
+%token <str> LIFECYCLE ARCHIVE ELIGIBLE DATASET DATASETS PURGE UNSET JOBS RESTORES
 %type<tableLock> table_lock_elem
 %type<tableLocks> table_lock_list
 %type<tableLockType> table_lock_type
@@ -4839,6 +4839,10 @@ show_lifecycle_stmt:
     {
         $$ = &tree.ShowLifecycle{Kind: tree.ShowLifecycleDatasets, Table: $6, Page: $7}
     }
+|   SHOW LIFECYCLE RESTORES limit_opt
+    {
+        $$ = &tree.ShowLifecycle{Kind: tree.ShowLifecycleRestores, Page: $4}
+    }
 
 lifecycle_data_stmt:
     RESTORE ARCHIVE DATASET STRING TO TABLE table_name
@@ -4848,6 +4852,10 @@ lifecycle_data_stmt:
 |   PURGE ARCHIVE DATASET STRING
     {
         $$ = &tree.PurgeArchiveDataset{DatasetID: $4}
+    }
+|   RESTORE ARCHIVE TABLE table_name BETWEEN STRING AND STRING TO TABLE table_name
+    {
+        $$ = &tree.RestoreArchiveRange{Source: $4, From: $6, To: $8, Target: $11}
     }
 
 show_sql_tasks_stmt:
@@ -15222,6 +15230,7 @@ non_reserved_keyword:
 |   ELIGIBLE
 |   LIFECYCLE
 |   JOBS
+|   RESTORES
 |   PURGE
 |   UNSET
 |   ERRORS

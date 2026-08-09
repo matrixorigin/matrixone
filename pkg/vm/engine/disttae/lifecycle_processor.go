@@ -103,12 +103,13 @@ type LifecycleObjectTask struct {
 	Table   LifecycleTable
 	Sources []objectio.ObjectEntry
 
-	SourceSnapshot      types.TS
-	Schema              lifecyclepkg.SchemaDescriptor
-	SchemaDigest        [sha256.Size]byte
-	BindingSchemaDigest [sha256.Size]byte
-	Classifier          lifecyclepkg.RewriteBlockClassifier
-	Whole               bool
+	SourceSnapshot         types.TS
+	Schema                 lifecyclepkg.SchemaDescriptor
+	SchemaDigest           [sha256.Size]byte
+	BindingSchemaDigest    [sha256.Size]byte
+	LifecycleColumnOrdinal int
+	Classifier             lifecyclepkg.RewriteBlockClassifier
+	Whole                  bool
 
 	ArchiveTarget lifecyclepkg.FrozenArchiveTarget
 	DatasetID     string
@@ -324,16 +325,18 @@ func (processor *LifecycleProcessor) ProcessArchiveObject(
 	writer, err := lifecyclepkg.NewArchiveWriter(
 		ctx,
 		lifecyclepkg.ArchiveWriterConfig{
-			RootID:               root.RootID,
-			AttemptID:            root.AttemptID,
-			Prefix:               root.ArchivePrefix,
-			WriteID:              id(),
-			Schema:               task.Schema,
-			SchemaDigest:         task.SchemaDigest,
-			MaxRestoreChunkRows:  processor.Config.MaxRestoreChunkRows,
-			MaxChunkLogicalBytes: processor.Config.MaxChunkBytes,
-			MaxPhysicalBytes:     archivePhysicalBytes,
-			Faults:               faults,
+			RootID:                 root.RootID,
+			AttemptID:              root.AttemptID,
+			Prefix:                 root.ArchivePrefix,
+			WriteID:                id(),
+			Schema:                 task.Schema,
+			SchemaDigest:           task.SchemaDigest,
+			TrackLifecycleRange:    true,
+			LifecycleColumnOrdinal: task.LifecycleColumnOrdinal,
+			MaxRestoreChunkRows:    processor.Config.MaxRestoreChunkRows,
+			MaxChunkLogicalBytes:   processor.Config.MaxChunkBytes,
+			MaxPhysicalBytes:       archivePhysicalBytes,
+			Faults:                 faults,
 		},
 		processor.Store,
 		lifecyclepkg.NewCleanupRootSideEffectGuard(processor.Roots),
@@ -819,6 +822,8 @@ func (processor *LifecycleProcessor) validateTask(
 		task.Binding.PhysicalTableID == 0 ||
 		task.Binding.Generation == 0 ||
 		task.Binding.Version == 0 ||
+		task.LifecycleColumnOrdinal < 0 ||
+		task.LifecycleColumnOrdinal >= len(task.Schema.Columns) ||
 		task.ExecutorEpoch == 0 ||
 		task.MaxCertifiedBlockReadBytes == 0 ||
 		task.Now.IsZero() ||

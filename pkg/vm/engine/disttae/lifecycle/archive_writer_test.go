@@ -91,6 +91,58 @@ func TestArchiveWriterRoundTripAndStableChunks(t *testing.T) {
 	require.Equal(t, "FULL_READBACK_VERIFIED", persisted.VerificationStatus)
 }
 
+func TestArchiveWriterFreezesAndReadbackVerifiesLifecycleRange(t *testing.T) {
+	ctx := context.Background()
+	schema := SchemaDescriptor{
+		FormatVersion:      schemaDescriptorFormatVersion,
+		SourceTableID:      84,
+		SourceTableVersion: 1,
+		SourceDatabaseName: "db",
+		SourceTableName:    "events",
+		Columns: []SchemaColumn{
+			{Ordinal: 0, SourceColumnID: 1, Name: "id", TypeID: int32(types.T_int64), NotNull: true},
+			{Ordinal: 1, SourceColumnID: 7, Name: "created_at", TypeID: int32(types.T_timestamp), Scale: 6, NotNull: true},
+		},
+	}
+	schemaDigest, err := schema.Digest()
+	require.NoError(t, err)
+	store := newMemoryArchiveStore()
+	writer, err := NewArchiveWriter(ctx, ArchiveWriterConfig{
+		RootID:                 "root-range",
+		AttemptID:              "attempt-range",
+		Prefix:                 "archive/root-range/attempt-range",
+		WriteID:                "write-range",
+		Schema:                 schema,
+		SchemaDigest:           schemaDigest,
+		TrackLifecycleRange:    true,
+		LifecycleColumnOrdinal: 1,
+		MaxRestoreChunkRows:    10,
+		MaxChunkLogicalBytes:   1 << 20,
+		MaxPhysicalBytes:       archiveTestMaxPhysicalBytes,
+	}, store, &testArchiveSideEffectGuard{durable: true})
+	require.NoError(t, err)
+
+	mp := mpool.MustNewZero()
+	value := batch.New([]string{"id", "created_at"})
+	defer value.Clean(mp)
+	value.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+	value.Vecs[1] = vector.NewVec(types.New(types.T_timestamp, 0, 6))
+	for index, timestamp := range []types.Timestamp{300, 100, 200} {
+		require.NoError(t, vector.AppendFixed(value.Vecs[0], int64(index+1), false, mp))
+		require.NoError(t, vector.AppendFixed(value.Vecs[1], timestamp, false, mp))
+	}
+	value.SetRowCount(3)
+	require.NoError(t, writer.WriteBatch(ctx, value, nil))
+	manifest, _, err := writer.Close(ctx)
+	require.NoError(t, err)
+	require.Equal(t, &ArchiveLifecycleRange{
+		SourceColumnID: 7,
+		TypeID:         int32(types.T_timestamp),
+		Min:            100,
+		Max:            300,
+	}, manifest.LifecycleRange)
+}
+
 func TestArchiveWriterLargeDynamicChunkRoundTrip(t *testing.T) {
 	ctx := context.Background()
 	store := newMemoryArchiveStore()

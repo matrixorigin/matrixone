@@ -840,13 +840,14 @@ func (runner *lifecycleBindingExecutor) run(
 			deltaBlocks = source.ObjectStats.BlkCnt()
 		}
 		objectTask := LifecycleObjectTask{
-			Binding:             binding,
-			Table:               table,
-			Sources:             objectPlan.Sources,
-			SourceSnapshot:      snapshot,
-			Schema:              schema,
-			SchemaDigest:        schemaDigest,
-			BindingSchemaDigest: bindingSchemaDigest,
+			Binding:                binding,
+			Table:                  table,
+			Sources:                objectPlan.Sources,
+			SourceSnapshot:         snapshot,
+			Schema:                 schema,
+			SchemaDigest:           schemaDigest,
+			BindingSchemaDigest:    bindingSchemaDigest,
+			LifecycleColumnOrdinal: columnOrdinal,
 			Classifier: lifecyclepkg.ExpirationClassifier{
 				ColumnOrdinal: columnOrdinal,
 				ColumnType:    columnType,

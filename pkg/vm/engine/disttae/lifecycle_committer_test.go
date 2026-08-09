@@ -66,6 +66,12 @@ func TestTxnLifecycleFinalCommitterWritesBindingFenceBeforeDataset(t *testing.T)
 			ContentHash:  [32]byte{3},
 			RowCount:     100,
 			LogicalBytes: 2048,
+			LifecycleRange: &lifecyclepkg.ArchiveLifecycleRange{
+				SourceColumnID: 5,
+				TypeID:         int32(types.T_timestamp),
+				Min:            100,
+				Max:            200,
+			},
 		},
 		ManifestKey:     "prefix/manifest.json",
 		ManifestDigest:  [32]byte{4},

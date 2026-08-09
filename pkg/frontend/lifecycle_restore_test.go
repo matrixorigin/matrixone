@@ -48,6 +48,11 @@ func TestLifecycleRestorePublishedRetryNeedsNoStaging(t *testing.T) {
 
 func TestHandleRestoreArchiveDatasetFailsBeforeExternalSideEffects(t *testing.T) {
 	ctx := context.Background()
+	require.ErrorContains(t, handleRestoreArchiveRange(
+		ctx,
+		nil,
+		&tree.RestoreArchiveRange{},
+	), "range Restore input is required")
 	require.ErrorContains(t, handleRestoreArchiveDataset(
 		ctx,
 		nil,

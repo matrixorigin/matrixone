@@ -385,6 +385,10 @@ func execInFrontend(ses *Session, execCtx *ExecCtx) (stats statistic.StatsArray,
 		if err = handleRestoreArchiveDataset(execCtx.reqCtx, ses, st); err != nil {
 			return
 		}
+	case *tree.RestoreArchiveRange:
+		if err = handleRestoreArchiveRange(execCtx.reqCtx, ses, st); err != nil {
+			return
+		}
 	case *tree.PurgeArchiveDataset:
 		if err = handlePurgeArchiveDataset(execCtx.reqCtx, ses, st); err != nil {
 			return

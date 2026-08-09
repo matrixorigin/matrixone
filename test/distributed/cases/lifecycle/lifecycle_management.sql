@@ -66,6 +66,7 @@ create index idx_events_created_at on events(created_at);
 -- Empty result paths still exercise the public, bounded SHOW endpoints.
 show lifecycle datasets for table events limit 1;
 show lifecycle jobs limit 1;
+show lifecycle restores limit 1;
 
 -- Phase 1 rejects secondary indexes instead of leaving a binding that the
 -- Object retire entry cannot keep consistent with an index child table.
