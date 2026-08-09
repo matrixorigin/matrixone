@@ -86,7 +86,9 @@ func TestMasterIndexPaginationIsAppliedOnce(t *testing.T) {
 	require.Equal(t, uint64(15), inner.Limit.GetLit().GetU64Val(), "inner index path must fetch LIMIT+OFFSET candidates")
 	require.Nil(t, inner.Offset, "the user-visible OFFSET must only be consumed by the outer result")
 	require.Equal(t, "prefix_in", inner.FilterList[0].GetF().Func.ObjName)
-	require.True(t, inner.FilterList[0].GetF().Args[1].GetVec().GetIsSerialized())
+	prefixValues := inner.FilterList[0].GetF().Args[1].GetVec()
+	require.Equal(t, int32(2), prefixValues.GetLen(), "LiteralVec.Len must be the logical element count")
+	require.True(t, prefixValues.GetIsSerialized())
 	require.Nil(t, builder.qry.Nodes[scanID].Limit)
 	require.Nil(t, builder.qry.Nodes[scanID].Offset)
 }
