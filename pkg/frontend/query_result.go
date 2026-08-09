@@ -109,17 +109,128 @@ func initQueryResulConfig(ctx context.Context, ses *Session) error {
 	return err
 }
 
-func saveBatch(ctx context.Context, ses *Session, bat *batch.Batch) error {
-	n := uint64(0)
-	if bat != nil && bat.Vecs[0] != nil {
-		n = uint64(bat.Vecs[0].Length())
+func validateQueryResultBatchForPersistence(bat *batch.Batch) (bool, error) {
+	if bat == nil {
+		return false, moerr.NewInternalErrorNoCtx("invalid nil query result batch")
 	}
+	rows := bat.RowCount()
+	if rows < 0 {
+		return false, moerr.NewInternalErrorNoCtxf(
+			"invalid query result batch row count %d", rows)
+	}
+	if len(bat.Vecs) == 0 {
+		return false, moerr.NewInternalErrorNoCtx(
+			"invalid query result batch without vectors")
+	}
+
+	needsNormalization := false
+	for i, vec := range bat.Vecs {
+		if vec == nil {
+			return false, moerr.NewInternalErrorNoCtxf(
+				"invalid query result batch: vector %d is nil", i)
+		}
+		if vec.Length() < 0 {
+			return false, moerr.NewInternalErrorNoCtxf(
+				"invalid query result batch: vector %d has negative length %d",
+				i, vec.Length())
+		}
+		if vec.Length() == rows {
+			continue
+		}
+		// A non-empty const physically owns one value and can be broadcast to
+		// any requested logical row range. Flat vectors and empty constants do
+		// not have storage for a mismatched positive row range.
+		if !vec.IsConst() || (rows > 0 && vec.Length() == 0) {
+			return false, moerr.NewInternalErrorNoCtxf(
+				"invalid query result batch: vector %d length %d does not match row count %d",
+				i, vec.Length(), rows)
+		}
+		needsNormalization = true
+	}
+	return needsNormalization, nil
+}
+
+// normalizeQueryResultBatchForPersistence returns an object-writer view whose
+// vector lengths match the batch's logical row count. Const vectors are
+// broadcast values, so only a compact const whose logical length differs needs
+// to be duplicated; aligned vectors remain borrowed from the executor batch.
+// The returned release function owns only those duplicated vectors.
+func normalizeQueryResultBatchForPersistence(
+	bat *batch.Batch,
+	mp *mpool.MPool,
+) (*batch.Batch, func(), error) {
+	needsNormalization, err := validateQueryResultBatchForPersistence(bat)
+	if err != nil {
+		return nil, nil, err
+	}
+	return normalizeValidatedQueryResultBatchForPersistence(bat, mp, needsNormalization)
+}
+
+func normalizeValidatedQueryResultBatchForPersistence(
+	bat *batch.Batch,
+	mp *mpool.MPool,
+	needsNormalization bool,
+) (*batch.Batch, func(), error) {
+	if !needsNormalization {
+		return bat, nil, nil
+	}
+	if mp == nil {
+		return nil, nil, moerr.NewInternalErrorNoCtx(
+			"cannot normalize query result batch without a memory pool")
+	}
+
+	rows := bat.RowCount()
+	normalized := batch.NewWithSize(len(bat.Vecs))
+	normalized.Attrs = bat.Attrs
+	normalized.SetRowCount(rows)
+	release := func() {
+		for i, vec := range normalized.Vecs {
+			if vec != nil && vec != bat.Vecs[i] {
+				vec.Free(mp)
+			}
+			normalized.Vecs[i] = nil
+		}
+		normalized.Vecs = nil
+		normalized.Attrs = nil
+		normalized.SetRowCount(0)
+	}
+
+	for i, vec := range bat.Vecs {
+		if vec.Length() == rows {
+			normalized.Vecs[i] = vec
+			continue
+		}
+		dup, err := vec.Dup(mp)
+		if err != nil {
+			release()
+			return nil, nil, err
+		}
+		dup.SetLength(rows)
+		normalized.Vecs[i] = dup
+	}
+	return normalized, release, nil
+}
+
+func saveBatch(ctx context.Context, ses *Session, bat *batch.Batch) error {
+	needsNormalization, err := validateQueryResultBatchForPersistence(bat)
+	if err != nil {
+		return err
+	}
+	n := uint64(bat.RowCount())
 	ses.queryRowCount += n
 
 	s := ses.curResultSize + float64(bat.Size())/(1024*1024)
 	if s > ses.limitResultSize {
 		ses.Debug(ctx, "open save query result", zap.Float64("current result size:", s))
 		return nil
+	}
+	persistedBat, release, err := normalizeValidatedQueryResultBatchForPersistence(
+		bat, ses.GetMemPool(), needsNormalization)
+	if err != nil {
+		return err
+	}
+	if release != nil {
+		defer release()
 	}
 	fs := getPu(ses.GetService()).FileService
 	// write query result
@@ -129,7 +240,7 @@ func saveBatch(ctx context.Context, ses *Session, bat *batch.Batch) error {
 	if err != nil {
 		return err
 	}
-	_, err = writer.Write(bat)
+	_, err = writer.Write(persistedBat)
 	if err != nil {
 		return err
 	}

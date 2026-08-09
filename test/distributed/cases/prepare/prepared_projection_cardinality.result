@@ -1,0 +1,60 @@
+DROP DATABASE IF EXISTS prepared_projection_cardinality;
+CREATE DATABASE prepared_projection_cardinality;
+USE prepared_projection_cardinality;
+CREATE TABLE metric_rows(bucket VARCHAR(20), value_col INT);
+INSERT INTO metric_rows VALUES ('a', 10), ('b', 20), ('c', 30);
+SET save_query_result = ON;
+PREPARE parameter_first FROM
+'SELECT ? AS projection_value, SUM(value_col) AS total FROM metric_rows GROUP BY bucket ORDER BY total';
+SET @projection_value = 7;
+EXECUTE parameter_first USING @projection_value;
+➤ projection_value[12,0,0]  ¦  total[-5,64,0]  𝄀
+7  ¦  10  𝄀
+7  ¦  20  𝄀
+7  ¦  30
+SELECT * FROM result_scan(last_query_id()) AS saved_parameter_first;
+➤ projection_value[12,0,0]  ¦  total[-5,64,0]  𝄀
+7  ¦  10  𝄀
+7  ¦  20  𝄀
+7  ¦  30
+SET @projection_value = NULL;
+EXECUTE parameter_first USING @projection_value;
+➤ projection_value[12,0,0]  ¦  total[-5,64,0]  𝄀
+null  ¦  10  𝄀
+null  ¦  20  𝄀
+null  ¦  30
+SELECT * FROM result_scan(last_query_id()) AS saved_parameter_null;
+➤ projection_value[12,0,0]  ¦  total[-5,64,0]  𝄀
+null  ¦  10  𝄀
+null  ¦  20  𝄀
+null  ¦  30
+DEALLOCATE PREPARE parameter_first;
+PREPARE parameter_second FROM
+'SELECT bucket, ? AS projection_value, SUM(value_col) AS total FROM metric_rows GROUP BY bucket ORDER BY total';
+SET @projection_value = 11;
+EXECUTE parameter_second USING @projection_value;
+➤ bucket[12,20,0]  ¦  projection_value[12,0,0]  ¦  total[-5,64,0]  𝄀
+a  ¦  11  ¦  10  𝄀
+b  ¦  11  ¦  20  𝄀
+c  ¦  11  ¦  30
+SELECT * FROM result_scan(last_query_id()) AS saved_parameter_second;
+➤ bucket[12,20,0]  ¦  projection_value[12,0,0]  ¦  total[-5,64,0]  𝄀
+a  ¦  11  ¦  10  𝄀
+b  ¦  11  ¦  20  𝄀
+c  ¦  11  ¦  30
+DEALLOCATE PREPARE parameter_second;
+SET save_query_result = OFF;
+SELECT 7 AS projection_value, SUM(value_col) AS total
+FROM metric_rows GROUP BY bucket ORDER BY total;
+➤ projection_value[-5,64,0]  ¦  total[-5,64,0]  𝄀
+7  ¦  10  𝄀
+7  ¦  20  𝄀
+7  ¦  30
+PREPARE parameter_group FROM
+'SELECT ? AS projection_value, SUM(value_col) AS total FROM metric_rows GROUP BY ?';
+SET @projection_value = 13, @group_value = 17;
+EXECUTE parameter_group USING @projection_value, @group_value;
+➤ projection_value[12,0,0]  ¦  total[-5,64,0]  𝄀
+13  ¦  60
+DEALLOCATE PREPARE parameter_group;
+DROP DATABASE prepared_projection_cardinality;
