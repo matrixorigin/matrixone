@@ -47,6 +47,7 @@ data branch create table no_pk_dst from no_pk_base;
 delete from no_pk_src where note = 'remove';
 update no_pk_src set note = 'updated' where note = 'update';
 
+data branch diff no_pk_src against no_pk_dst;
 data branch merge no_pk_src into no_pk_dst;
 select f, note from no_pk_dst order by note;
 
