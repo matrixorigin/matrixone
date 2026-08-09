@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/features"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vm"
@@ -32,7 +33,7 @@ import (
 )
 
 func TestAppendEncodedCheckConstraintRowsDecodesSchemaExtra(t *testing.T) {
-	rows := make([]checkConstraintRow, 0)
+	rows := make([]checkConstraintRow, 0, 1)
 	data := api.MustMarshalTblExtra(&api.SchemaExtra{
 		Checks: []*planpb.CheckDef{{
 			Name:      "amount_positive",
@@ -40,49 +41,49 @@ func TestAppendEncodedCheckConstraintRowsDecodesSchemaExtra(t *testing.T) {
 		}},
 	})
 
-	require.NoError(t, appendEncodedCheckConstraintRows(&rows, "app", data))
+	require.NoError(t, appendEncodedCheckConstraintRows(&rows, "app", "checks", "", data))
 	require.Equal(t, []checkConstraintRow{
-		{schema: "app", name: "amount_positive", clause: "`amount` > 0"},
+		{schema: "app", table: "checks", name: "amount_positive", clause: "`amount` > 0", constraintType: "CHECK", enforced: "YES"},
 	}, rows)
 }
 
 func TestAppendEncodedCheckConstraintRowsRejectsMalformedMetadata(t *testing.T) {
-	rows := make([]checkConstraintRow, 0)
-	require.Error(t, appendEncodedCheckConstraintRows(&rows, "app", []byte{0xff}))
+	rows := make([]checkConstraintRow, 0, 1)
+	require.Error(t, appendEncodedCheckConstraintRows(&rows, "app", "checks", "", []byte{0xff}))
 	require.Empty(t, rows)
 }
 
 func TestAppendCheckConstraintRowsDecodesCheckDef(t *testing.T) {
-	rows := make([]checkConstraintRow, 0)
-	appendCheckConstraintRows(&rows, "app", []*planpb.CheckDef{
+	rows := make([]checkConstraintRow, 0, 2)
+	appendCheckConstraintRows(&rows, "app", "checks", []*planpb.CheckDef{
 		{Name: "amount_positive", OriginSql: "`amount` > 0"},
 		{Name: "status_valid", OriginSql: "`status` in ('new','done')"},
 	})
 
 	require.Equal(t, []checkConstraintRow{
-		{schema: "app", name: "amount_positive", clause: "`amount` > 0"},
-		{schema: "app", name: "status_valid", clause: "`status` in ('new','done')"},
+		{schema: "app", table: "checks", name: "amount_positive", clause: "`amount` > 0", constraintType: "CHECK", enforced: "YES"},
+		{schema: "app", table: "checks", name: "status_valid", clause: "`status` in ('new','done')", constraintType: "CHECK", enforced: "YES"},
 	}, rows)
 }
 
 func TestAppendCheckConstraintRowsHandlesEmptyChecks(t *testing.T) {
-	rows := make([]checkConstraintRow, 0)
+	rows := make([]checkConstraintRow, 0, 1)
 	// Temporary and internal relation filtering is performed by the catalog
 	// predicate in collectCheckConstraintRows; this helper only decodes rows.
-	appendCheckConstraintRows(&rows, "app", nil)
+	appendCheckConstraintRows(&rows, "app", "checks", nil)
 	require.Empty(t, rows)
 }
 
 func TestCheckConstraintOutputPositionsAllowPrunedColumns(t *testing.T) {
 	require.Equal(t,
-		[4]int{checkConstraintCatalogColumn, checkConstraintSchemaColumn, checkConstraintNameColumn, -1},
+		[7]int{checkConstraintCatalogColumn, checkConstraintSchemaColumn, checkConstraintNameColumn, -1, -1, -1, -1},
 		checkConstraintOutputPositions([]string{
 			"constraint_catalog",
 			"constraint_schema",
 			"constraint_name",
 		}))
 	require.Equal(t,
-		[4]int{-1, 0, 1, 2},
+		[7]int{-1, 0, 1, 2, -1, -1, -1},
 		checkConstraintOutputPositions([]string{
 			"CONSTRAINT_SCHEMA",
 			"CONSTRAINT_NAME",
@@ -122,7 +123,7 @@ func TestAppendCheckConstraintRowAllowsPrunedColumns(t *testing.T) {
 
 func TestAppendCheckConstraintRowRejectsUnavailableVector(t *testing.T) {
 	proc := testutil.NewProc(t)
-	positions := [4]int{0, -1, -1, -1}
+	positions := [7]int{0, -1, -1, -1, -1, -1, -1}
 	require.Error(t, appendCheckConstraintRow(nil, positions, checkConstraintRow{}, proc))
 }
 
@@ -145,22 +146,34 @@ func TestCollectCheckConstraintRowsFromResult(t *testing.T) {
 	require.NoError(t, vector.AppendBytes(short.Vecs[0], []byte("ignored"), false, mp))
 	short.SetRowCount(1)
 
-	data := batch.NewWithSize(2)
+	data := batch.NewWithSize(4)
 	data.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
 	data.Vecs[1] = vector.NewVec(types.T_varchar.ToType())
+	data.Vecs[2] = vector.NewVec(types.T_varchar.ToType())
+	data.Vecs[3] = vector.NewVec(types.T_varchar.ToType())
 	appendCatalogBytes := func(vec *vector.Vector, value []byte, isNull bool) {
 		require.NoError(t, vector.AppendBytes(vec, value, isNull, mp))
 	}
 	appendCatalogBytes(data.Vecs[0], []byte("zdb"), false)
-	appendCatalogBytes(data.Vecs[1], first, false)
+	appendCatalogBytes(data.Vecs[1], []byte("ztable"), false)
+	appendCatalogBytes(data.Vecs[2], nil, true)
+	appendCatalogBytes(data.Vecs[3], first, false)
 	appendCatalogBytes(data.Vecs[0], []byte("adb"), false)
-	appendCatalogBytes(data.Vecs[1], second, false)
+	appendCatalogBytes(data.Vecs[1], []byte("atable"), false)
+	appendCatalogBytes(data.Vecs[2], nil, true)
+	appendCatalogBytes(data.Vecs[3], second, false)
 	appendCatalogBytes(data.Vecs[0], nil, true)
-	appendCatalogBytes(data.Vecs[1], first, false)
+	appendCatalogBytes(data.Vecs[1], []byte("null_extra"), false)
+	appendCatalogBytes(data.Vecs[2], nil, true)
+	appendCatalogBytes(data.Vecs[3], first, false)
 	appendCatalogBytes(data.Vecs[0], []byte("null_extra"), false)
-	appendCatalogBytes(data.Vecs[1], nil, true)
+	appendCatalogBytes(data.Vecs[1], []byte("null_extra"), false)
+	appendCatalogBytes(data.Vecs[2], nil, true)
+	appendCatalogBytes(data.Vecs[3], nil, true)
 	appendCatalogBytes(data.Vecs[0], []byte("empty_extra"), false)
-	appendCatalogBytes(data.Vecs[1], []byte{}, false)
+	appendCatalogBytes(data.Vecs[1], []byte("empty_extra"), false)
+	appendCatalogBytes(data.Vecs[2], []byte{}, false)
+	appendCatalogBytes(data.Vecs[3], []byte{}, false)
 	data.SetRowCount(5)
 
 	rows, err := collectCheckConstraintRowsFromResult(executor.Result{
@@ -169,9 +182,9 @@ func TestCollectCheckConstraintRowsFromResult(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.Equal(t, []checkConstraintRow{
-		{schema: "adb", name: "c_check", clause: "c > 0"},
-		{schema: "zdb", name: "a_check", clause: "a > 0"},
-		{schema: "zdb", name: "z_check", clause: "z > 0"},
+		{schema: "adb", table: "atable", name: "c_check", clause: "c > 0", constraintType: "CHECK", enforced: "YES"},
+		{schema: "zdb", table: "ztable", name: "a_check", clause: "a > 0", constraintType: "CHECK", enforced: "YES"},
+		{schema: "zdb", table: "ztable", name: "z_check", clause: "z > 0", constraintType: "CHECK", enforced: "YES"},
 	}, rows)
 }
 
@@ -179,11 +192,15 @@ func TestCollectCheckConstraintRowsFromResultRejectsMalformedMetadata(t *testing
 	mp := mpool.MustNewZero()
 	defer mpool.DeleteMPool(mp)
 
-	data := batch.NewWithSize(2)
+	data := batch.NewWithSize(4)
 	data.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
 	data.Vecs[1] = vector.NewVec(types.T_varchar.ToType())
+	data.Vecs[2] = vector.NewVec(types.T_varchar.ToType())
+	data.Vecs[3] = vector.NewVec(types.T_varchar.ToType())
 	require.NoError(t, vector.AppendBytes(data.Vecs[0], []byte("bad"), false, mp))
-	require.NoError(t, vector.AppendBytes(data.Vecs[1], []byte{0xff}, false, mp))
+	require.NoError(t, vector.AppendBytes(data.Vecs[1], []byte("bad"), false, mp))
+	require.NoError(t, vector.AppendBytes(data.Vecs[2], nil, true, mp))
+	require.NoError(t, vector.AppendBytes(data.Vecs[3], []byte{0xff}, false, mp))
 	data.SetRowCount(1)
 
 	rows, err := collectCheckConstraintRowsFromResult(executor.Result{
@@ -220,13 +237,17 @@ func TestCheckConstraintsStartUsesDecodedRowsAndAllColumns(t *testing.T) {
 			"constraint_schema",
 			"constraint_name",
 			"check_clause",
+			"table_name",
+			"constraint_type",
+			"enforced",
 		},
-		Rets: []*planpb.ColDef{
-			{Typ: planpb.Type{Id: int32(types.T_varchar)}},
-			{Typ: planpb.Type{Id: int32(types.T_varchar)}},
-			{Typ: planpb.Type{Id: int32(types.T_varchar)}},
-			{Typ: planpb.Type{Id: int32(types.T_varchar)}},
-		},
+		Rets: func() []*planpb.ColDef {
+			cols := make([]*planpb.ColDef, 7)
+			for i := range cols {
+				cols[i] = &planpb.ColDef{Typ: planpb.Type{Id: int32(types.T_varchar)}}
+			}
+			return cols
+		}(),
 		OperatorBase: vm.OperatorBase{
 			OperatorInfo: vm.OperatorInfo{Idx: 0},
 		},
@@ -235,9 +256,12 @@ func TestCheckConstraintsStartUsesDecodedRowsAndAllColumns(t *testing.T) {
 	state := tf.ctr.state.(*checkConstraintsState)
 	state.collectRows = func(*process.Process) ([]checkConstraintRow, error) {
 		return []checkConstraintRow{{
-			schema: "app",
-			name:   "amount_positive",
-			clause: "amount > 0",
+			schema:         "app",
+			table:          "checks",
+			name:           "amount_positive",
+			clause:         "amount > 0",
+			constraintType: "CHECK",
+			enforced:       "YES",
 		}}, nil
 	}
 
@@ -247,5 +271,27 @@ func TestCheckConstraintsStartUsesDecodedRowsAndAllColumns(t *testing.T) {
 	require.Equal(t, "app", state.batch.Vecs[1].GetStringAt(0))
 	require.Equal(t, "amount_positive", state.batch.Vecs[2].GetStringAt(0))
 	require.Equal(t, "amount > 0", state.batch.Vecs[3].GetStringAt(0))
+	require.Equal(t, "checks", state.batch.Vecs[4].GetStringAt(0))
+	require.Equal(t, "CHECK", state.batch.Vecs[5].GetStringAt(0))
+	require.Equal(t, "YES", state.batch.Vecs[6].GetStringAt(0))
 	tf.Free(proc, false, nil)
+}
+
+func TestParseLegacyCheckConstraintRows(t *testing.T) {
+	rows, err := parseLegacyCheckConstraintRows(context.Background(), "app", "legacy", "CREATE TABLE legacy (a int CHECK (a > 0), b int, CONSTRAINT named CHECK (b < 10))")
+	require.NoError(t, err)
+	require.Equal(t, []checkConstraintRow{
+		{schema: "app", table: "legacy", name: "__mo_chk_1", clause: "`a` > 0", constraintType: "CHECK", enforced: "YES"},
+		{schema: "app", table: "legacy", name: "named", clause: "`b` < 10", constraintType: "CHECK", enforced: "YES"},
+	}, rows)
+}
+
+func TestAppendEncodedCheckConstraintRowsSkipsPhysicalPartitions(t *testing.T) {
+	rows := make([]checkConstraintRow, 0, 1)
+	data := api.MustMarshalTblExtra(&api.SchemaExtra{
+		FeatureFlag: features.Partition,
+		Checks:      []*planpb.CheckDef{{Name: "partition_check", OriginSql: "a > 0"}},
+	})
+	require.NoError(t, appendEncodedCheckConstraintRows(&rows, "app", "p0", "", data))
+	require.Empty(t, rows)
 }

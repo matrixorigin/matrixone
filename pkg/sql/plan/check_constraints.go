@@ -50,6 +50,27 @@ var checkConstraintsColDefs = []*planpb.ColDef{
 			Width: types.MaxVarcharLen,
 		},
 	},
+	{
+		Name: "table_name",
+		Typ: planpb.Type{
+			Id:    int32(types.T_varchar),
+			Width: 64,
+		},
+	},
+	{
+		Name: "constraint_type",
+		Typ: planpb.Type{
+			Id:    int32(types.T_varchar),
+			Width: 64,
+		},
+	},
+	{
+		Name: "enforced",
+		Typ: planpb.Type{
+			Id:    int32(types.T_varchar),
+			Width: 3,
+		},
+	},
 }
 
 func (builder *QueryBuilder) buildCheckConstraints(
