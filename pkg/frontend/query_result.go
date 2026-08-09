@@ -137,10 +137,10 @@ func validateQueryResultBatchForPersistence(bat *batch.Batch) (bool, error) {
 		if vec.Length() == rows {
 			continue
 		}
-		// A non-empty const physically owns one value and can be broadcast to
-		// any requested logical row range. Flat vectors and empty constants do
-		// not have storage for a mismatched positive row range.
-		if !vec.IsConst() || (rows > 0 && vec.Length() == 0) {
+		// A non-empty const physically owns one value, while an empty const is
+		// the payload-free representation of const null. Both can be broadcast
+		// to the batch's logical row count; mismatched flat vectors cannot.
+		if !vec.IsConst() || (vec.Length() == 0 && !vec.IsConstNull()) {
 			return false, moerr.NewInternalErrorNoCtxf(
 				"invalid query result batch: vector %d length %d does not match row count %d",
 				i, vec.Length(), rows)

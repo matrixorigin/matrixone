@@ -161,6 +161,16 @@ func (ctr *container) probe(ap *Apply, proc *process.Process, result *vm.CallRes
 							return err
 						}
 					}
+					ctr.rbat.AddRowCount(1)
+					if ctr.rbat.RowCount() >= colexec.DefaultBatchSize {
+						ctr.batIdx = i + 1
+						ctr.tfFinish = true
+						if ctr.batIdx >= count {
+							ctr.inbat = nil
+						}
+						result.Batch = ctr.rbat
+						return nil
+					}
 				}
 				ctr.tfFinish = true
 				break

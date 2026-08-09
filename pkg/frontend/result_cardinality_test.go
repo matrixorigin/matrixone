@@ -58,7 +58,8 @@ func TestMysqlProtocolWriteUsesBatchLogicalRowCount(t *testing.T) {
 	setPu("", pu)
 	setSessionAlloc("", NewLeakCheckAllocator())
 
-	ioSession, err := NewIOSession(&testConn{}, pu, "")
+	conn := &testConn{}
+	ioSession, err := NewIOSession(conn, pu, "")
 	require.NoError(t, err)
 	proto := NewMysqlClientProtocol("", 0, ioSession, 1024, sv)
 	t.Cleanup(proto.Close)
@@ -82,6 +83,7 @@ func TestMysqlProtocolWriteUsesBatchLogicalRowCount(t *testing.T) {
 		name  string
 		rows  int
 		first func() *vector.Vector
+		null  bool
 	}{
 		{
 			name: "flat control",
@@ -114,6 +116,15 @@ func TestMysqlProtocolWriteUsesBatchLogicalRowCount(t *testing.T) {
 			first: func() *vector.Vector {
 				return vector.NewConstNull(types.T_int64.ToType(), 1, mp)
 			},
+			null: true,
+		},
+		{
+			name: "empty broadcast constant null",
+			rows: 1,
+			first: func() *vector.Vector {
+				return vector.NewConstNull(types.T_int64.ToType(), 0, mp)
+			},
+			null: true,
 		},
 	}
 
@@ -123,8 +134,17 @@ func TestMysqlProtocolWriteUsesBatchLogicalRowCount(t *testing.T) {
 			defer bat.Clean(mp)
 
 			before := proto.tcpConn.sequenceId
+			wireStart := len(conn.data)
 			require.NoError(t, proto.Write(execCtx, nil, bat))
 			require.Equal(t, uint8(test.rows), proto.tcpConn.sequenceId-before)
+			require.NoError(t, proto.tcpConn.Flush())
+			if test.null && test.rows == 1 {
+				packet := conn.data[wireStart:]
+				require.GreaterOrEqual(t, len(packet), 5)
+				payloadLength := int(packet[0]) | int(packet[1])<<8 | int(packet[2])<<16
+				require.Equal(t, payloadLength+4, len(packet))
+				require.Equal(t, byte(0xfb), packet[4])
+			}
 		})
 	}
 }
@@ -143,7 +163,7 @@ func TestGetDataFromPipelineUsesBatchLogicalRowCount(t *testing.T) {
 	require.Equal(t, int64(3), ses.sentRows.Load())
 	bat.Clean(mp)
 
-	nullBatch := frontendResultBatch(mp, vector.NewConstNull(types.T_int64.ToType(), 1, mp), 2)
+	nullBatch := frontendResultBatch(mp, vector.NewConstNull(types.T_int64.ToType(), 0, mp), 2)
 	require.NoError(t, getDataFromPipeline(ses, execCtx, nullBatch, nil))
 	require.Equal(t, int64(5), ses.sentRows.Load())
 	nullBatch.Clean(mp)
@@ -161,7 +181,7 @@ func TestSaveBatchUsesBatchLogicalRowCount(t *testing.T) {
 	require.Equal(t, uint64(3), ses.queryRowCount)
 	bat.Clean(mp)
 
-	nullBatch := frontendResultBatch(mp, vector.NewConstNull(types.T_int64.ToType(), 1, mp), 2)
+	nullBatch := frontendResultBatch(mp, vector.NewConstNull(types.T_int64.ToType(), 0, mp), 2)
 	require.NoError(t, saveBatch(context.Background(), ses, nullBatch))
 	require.Equal(t, uint64(5), ses.queryRowCount)
 	nullBatch.Clean(mp)
@@ -279,6 +299,31 @@ func TestNormalizeQueryResultBatchForPersistence(t *testing.T) {
 		})
 	})
 
+	t.Run("empty constant null is normalized on an owned duplicate", func(t *testing.T) {
+		constantNull := vector.NewConstNull(types.T_int64.ToType(), 0, mp)
+		bat := batch.NewWithSize(2)
+		bat.Vecs[0] = constantNull
+		bat.Vecs[1] = testutil.MakeInt64Vector([]int64{10}, nil, mp)
+		bat.SetRowCount(1)
+		defer bat.Clean(mp)
+		before := mp.CurrNB()
+
+		normalized, release, err := normalizeQueryResultBatchForPersistence(bat, mp)
+		require.NoError(t, err)
+		require.NotSame(t, bat, normalized)
+		require.NotNil(t, release)
+		require.NotSame(t, bat.Vecs[0], normalized.Vecs[0])
+		require.Same(t, bat.Vecs[1], normalized.Vecs[1])
+		require.Equal(t, 1, normalized.RowCount())
+		require.Equal(t, 1, normalized.Vecs[0].Length())
+		require.True(t, normalized.Vecs[0].IsNull(0))
+		require.Zero(t, bat.Vecs[0].Length())
+
+		release()
+		require.Equal(t, before, mp.CurrNB())
+		require.Zero(t, bat.Vecs[0].Length())
+	})
+
 	t.Run("zero rows shorten only the persistence view", func(t *testing.T) {
 		constant, err := vector.NewConstFixed(types.T_int64.ToType(), int64(7), 1, mp)
 		require.NoError(t, err)
@@ -304,43 +349,21 @@ func TestNormalizeQueryResultBatchForPersistence(t *testing.T) {
 		require.Equal(t, 1, bat.Vecs[1].Length())
 	})
 
-	t.Run("invalid row shapes are rejected without mutation", func(t *testing.T) {
-		tests := []struct {
-			name string
-			vec  func() *vector.Vector
-		}{
-			{
-				name: "short flat",
-				vec: func() *vector.Vector {
-					return testutil.MakeInt64Vector([]int64{7}, nil, mp)
-				},
-			},
-			{
-				name: "empty constant",
-				vec: func() *vector.Vector {
-					return vector.NewConstNull(types.T_int64.ToType(), 0, mp)
-				},
-			},
-		}
-		for _, test := range tests {
-			t.Run(test.name, func(t *testing.T) {
-				vec := test.vec()
-				bat := batch.NewWithSize(1)
-				bat.Vecs[0] = vec
-				bat.SetRowCount(3)
-				defer bat.Clean(mp)
-				before := mp.CurrNB()
-				originalLength := vec.Length()
+	t.Run("short flat vector is rejected without mutation", func(t *testing.T) {
+		vec := testutil.MakeInt64Vector([]int64{7}, nil, mp)
+		bat := batch.NewWithSize(1)
+		bat.Vecs[0] = vec
+		bat.SetRowCount(3)
+		defer bat.Clean(mp)
+		before := mp.CurrNB()
 
-				normalized, release, err := normalizeQueryResultBatchForPersistence(bat, mp)
-				require.Error(t, err)
-				require.Nil(t, normalized)
-				require.Nil(t, release)
-				require.Equal(t, originalLength, vec.Length())
-				require.Equal(t, 3, bat.RowCount())
-				require.Equal(t, before, mp.CurrNB())
-			})
-		}
+		normalized, release, err := normalizeQueryResultBatchForPersistence(bat, mp)
+		require.Error(t, err)
+		require.Nil(t, normalized)
+		require.Nil(t, release)
+		require.Equal(t, 1, vec.Length())
+		require.Equal(t, 3, bat.RowCount())
+		require.Equal(t, before, mp.CurrNB())
 	})
 
 	t.Run("duplicate failure releases prior replacements", func(t *testing.T) {
@@ -435,6 +458,17 @@ func TestSaveBatchPersistsBatchLogicalCardinalityForResultScan(t *testing.T) {
 					require.True(t, bat.Vecs[0].IsNull(uint64(row)))
 				}
 				require.Equal(t, []int64{10, 20, 30}, vector.MustFixedColWithTypeCheck[int64](bat.Vecs[1]))
+			},
+		},
+		{
+			name: "empty broadcast constant null first",
+			rows: 1,
+			makeBatch: func(mp *mpool.MPool) *batch.Batch {
+				return frontendResultBatch(mp, vector.NewConstNull(types.T_int64.ToType(), 0, mp), 1)
+			},
+			check: func(t *testing.T, bat *batch.Batch) {
+				require.True(t, bat.Vecs[0].IsNull(0))
+				require.Equal(t, []int64{10}, vector.MustFixedColWithTypeCheck[int64](bat.Vecs[1]))
 			},
 		},
 		{
