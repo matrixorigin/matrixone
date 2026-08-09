@@ -178,6 +178,7 @@ func TestIssue25299RegexpRejectsBinaryCharset(t *testing.T) {
 			require.Equal(t, expectedID == 2, value)
 		}
 		require.NoError(t, maskedRows.Err())
+		require.NoError(t, maskedRows.Close())
 
 		var operatorCR, likeCR bool
 		require.NoError(t, conn.QueryRowContext(ctx,

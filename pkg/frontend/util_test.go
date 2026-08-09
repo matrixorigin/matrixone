@@ -63,6 +63,19 @@ func init() {
 	testutil.SetupAutoIncrService("")
 }
 
+func TestVectorUsesBinaryCharset(t *testing.T) {
+	for _, oid := range []types.T{types.T_binary, types.T_varbinary, types.T_blob} {
+		vec := vector.NewVec(oid.ToType())
+		require.True(t, vectorUsesBinaryCharset(vec))
+	}
+
+	text := vector.NewVec(types.T_varchar.ToType())
+	require.False(t, vectorUsesBinaryCharset(text))
+	text.SetIsBin(true)
+	require.True(t, vectorUsesBinaryCharset(text))
+	require.False(t, vectorUsesBinaryCharset(nil))
+}
+
 type accountingMysqlWriter struct {
 	testMysqlWriter
 	bytes         int64

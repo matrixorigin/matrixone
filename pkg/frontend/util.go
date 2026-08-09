@@ -296,9 +296,20 @@ func getExprValueWithPrepareMode(
 	}
 
 	if len(isBin) > 0 {
-		*isBin[0] = resultVec.GetIsBin()
+		*isBin[0] = vectorUsesBinaryCharset(resultVec)
 	}
 	return getValueFromVector(execCtx.reqCtx, resultVec, ses, planExpr)
+}
+
+func vectorUsesBinaryCharset(vec *vector.Vector) bool {
+	if vec == nil {
+		return false
+	}
+	return isBinaryStringType(vec.GetType().Oid) || vec.GetIsBin()
+}
+
+func isBinaryStringType(oid types.T) bool {
+	return oid == types.T_binary || oid == types.T_varbinary || oid == types.T_blob
 }
 
 func bindSetVariableResultExpr(

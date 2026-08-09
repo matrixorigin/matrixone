@@ -1130,6 +1130,10 @@ func newCast(parameters []*vector.Vector, result vector.FunctionResultWrapper, p
 		// XXX we set the function here to adapt to the BVT cases.
 		err = formatCastError(proc.Ctx, from, *toType, "")
 	}
+	if err == nil && mode == castModeNormal && from.GetIsBin() &&
+		fromType.Oid.IsMySQLString() && toType.Oid.IsMySQLString() {
+		result.GetResultVector().SetIsBin(true)
+	}
 	return err
 }
 
