@@ -238,6 +238,13 @@ func AlterColumn(
 		if strings.EqualFold(col.Name, originalCol.Name) {
 			colDef := DeepCopyColDef(col)
 			if spec.OptionType == tree.AlterColumnOptionSetDefault {
+				if colDef.Typ.AutoIncr {
+					return false, moerr.NewErrInvalidDefault(ctx.GetContext(), spec.ColumnName.ColNameOrigin())
+				}
+				if colDef.GeneratedCol != nil {
+					return false, moerr.NewInvalidInputf(ctx.GetContext(),
+						"generated column '%s' cannot have a default value", spec.ColumnName.ColNameOrigin())
+				}
 				tmpColumnDef := tree.NewColumnTableDef(spec.ColumnName, nil, []tree.ColumnAttribute{spec.DefaultExpr})
 				defer func() {
 					tmpColumnDef.Free()

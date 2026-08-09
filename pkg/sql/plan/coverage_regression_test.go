@@ -19,6 +19,7 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
@@ -284,6 +285,66 @@ func TestAlterColumnSetDefaultUpdatesCopiedColumn(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, pkAffected)
 	require.Contains(t, copyTable.Cols[3].Default.OriginString, "memo")
+}
+
+func TestAlterColumnSetDefaultRejectsUnsupportedColumns(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		configure func(*ColDef)
+		checkErr  func(*testing.T, error)
+	}{
+		{
+			name: "auto increment",
+			configure: func(col *ColDef) {
+				col.Typ.AutoIncr = true
+			},
+			checkErr: func(t *testing.T, err error) {
+				require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidDefault))
+			},
+		},
+		{
+			name: "stored generated",
+			configure: func(col *ColDef) {
+				col.GeneratedCol = &planpb.GeneratedCol{IsStored: true}
+			},
+			checkErr: func(t *testing.T, err error) {
+				require.ErrorContains(t, err, "generated column 'note' cannot have a default value")
+			},
+		},
+		{
+			name: "virtual generated",
+			configure: func(col *ColDef) {
+				col.GeneratedCol = &planpb.GeneratedCol{IsStored: false}
+			},
+			checkErr: func(t *testing.T, err error) {
+				require.ErrorContains(t, err, "generated column 'note' cannot have a default value")
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mock := NewMockOptimizer(false)
+			origin := makeAlterCoverageTableDef()
+			tc.configure(origin.Cols[3])
+			copyTable := DeepCopyTableDef(origin, true)
+			before := DeepCopyColDef(copyTable.Cols[3])
+			alterCtx := initAlterTableContext(origin, copyTable, origin.DbName)
+			alterPlan := &planpb.AlterTable{
+				Database:     origin.DbName,
+				TableDef:     origin,
+				CopyTableDef: copyTable,
+			}
+			spec := mustParseAlterColumnClause(
+				t,
+				mock.CurrentContext(),
+				"alter table t1 alter column note set default 'memo'",
+			)
+
+			_, err := AlterColumn(mock.CurrentContext(), alterPlan, spec, alterCtx)
+			require.Error(t, err)
+			tc.checkErr(t, err)
+			require.Equal(t, before, copyTable.Cols[3])
+		})
+	}
 }
 
 func TestOrderByColumnRejectsUnknownColumn(t *testing.T) {
