@@ -234,6 +234,11 @@ func Test_waitAnyShardReadyLocked(t *testing.T) {
 	assert.NoError(t, err)
 }
 
+func TestAnyShardReadyTimeout(t *testing.T) {
+	assert.Equal(t, defaultAnyShardReadyTimeout, (&operator{}).anyShardReadyTimeout())
+	assert.Equal(t, testingAnyShardReadyTimeout, (&operator{testing: true}).anyShardReadyTimeout())
+}
+
 func TestStartupRetryWaitsHonorDeadline(t *testing.T) {
 	tests := []struct {
 		name      string

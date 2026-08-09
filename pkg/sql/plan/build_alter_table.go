@@ -79,6 +79,22 @@ func skipUniqueIdxDedup(old, new *TableDef) map[string]bool {
 	return skip
 }
 
+func tableHasAutoIncrementColumn(tableDef *TableDef) bool {
+	for _, col := range tableDef.Cols {
+		if col.Typ.AutoIncr && !col.Hidden {
+			return true
+		}
+	}
+	return false
+}
+
+func autoIncrementValueToOffset(value uint64) uint64 {
+	if value > 0 {
+		return value - 1
+	}
+	return 0
+}
+
 func buildAlterTableCopy(stmt *tree.AlterTable, cctx CompilerContext) (*Plan, error) {
 	ctx := cctx.GetContext()
 	// 1. get origin table name and Schema name
@@ -110,6 +126,11 @@ func buildAlterTableCopy(stmt *tree.AlterTable, cctx CompilerContext) (*Plan, er
 	if err != nil {
 		return nil, err
 	}
+	// The copied definition contains the source allocator's cached offset. It
+	// is not a user request and can be far ahead of the actual rows. The copy
+	// executor reconciles the explicit request, copied maximum, and source
+	// allocator state after the rows are visible in this transaction.
+	copyTableDef.AutoIncrOffset = 0
 	alterTableCtx := initAlterTableContext(tableDef, copyTableDef, schemaName)
 
 	// 3. check alter_option list
@@ -134,7 +155,8 @@ func buildAlterTableCopy(stmt *tree.AlterTable, cctx CompilerContext) (*Plan, er
 	}
 
 	var (
-		pkAffected bool
+		pkAffected             bool
+		hasAutoIncrementOption bool
 
 		affectedCols        = make([]string, 0, len(tableDef.Cols))
 		affectedIndexes     = make([]string, 0, len(tableDef.Indexes))
@@ -200,6 +222,16 @@ func buildAlterTableCopy(stmt *tree.AlterTable, cctx CompilerContext) (*Plan, er
 		case *tree.AlterTableAlterColumnClause:
 			pkAffected, err = AlterColumn(cctx, alterTablePlan, option, alterTableCtx)
 			affectedCols = append(affectedCols, option.ColumnName.String())
+		case *tree.TableOptionAutoIncrement:
+			hasAutoIncrementOption = true
+			copyTableDef.AutoIncrOffset = autoIncrementValueToOffset(option.Value)
+			alterTablePlan.Actions = append(alterTablePlan.Actions, &plan.AlterTable_Action{
+				Action: &plan.AlterTable_Action_AlterAutoIncrement{
+					AlterAutoIncrement: &plan.AlterTableAutoIncrement{
+						NewOffset: copyTableDef.AutoIncrOffset,
+					},
+				},
+			})
 		case *tree.AlterTableOrderByColumnClause:
 			err = OrderByColumn(cctx, alterTablePlan, option, alterTableCtx)
 			for _, order := range option.AlterOrderByList {
@@ -217,6 +249,10 @@ func buildAlterTableCopy(stmt *tree.AlterTable, cctx CompilerContext) (*Plan, er
 		if err != nil {
 			return nil, err
 		}
+	}
+	if hasAutoIncrementOption && !tableHasAutoIncrementColumn(copyTableDef) {
+		return nil, moerr.NewInvalidInputf(ctx,
+			"Table '%s' does not have an AUTO_INCREMENT column", tableDef.Name)
 	}
 
 	if pkAffected {
@@ -593,6 +629,14 @@ Loop:
 			}
 		case *tree.AlterTableChangeColumnClause:
 			algorithm = plan.AlterTable_COPY
+			var ok bool
+			ok, err = isInplaceChangeColumn(ctx, option, tableDef)
+			if err != nil {
+				return
+			}
+			if ok {
+				algorithm = plan.AlterTable_INPLACE
+			}
 		case *tree.AlterTableRenameColumnClause:
 			requiresRebuild, err := renameColumnRequiresPluginIndexRebuild(tableDef, option.OldColumnName.ColName())
 			if err != nil {
@@ -677,14 +721,37 @@ func isInplaceModifyColumn(
 	clause *tree.AlterTableModifyColumnClause,
 	tableDef *TableDef,
 ) (ok bool, err error) {
-	oCol := FindColumn(tableDef.Cols, clause.NewColumn.Name.ColName())
+	return isInplaceColumnDefinition(ctx, clause.NewColumn, clause.Position, tableDef)
+}
+
+func isInplaceChangeColumn(
+	ctx context.Context,
+	clause *tree.AlterTableChangeColumnClause,
+	tableDef *TableDef,
+) (ok bool, err error) {
+	// CHANGE keeps the original spelling for catalog metadata. A case-only
+	// rename is therefore not equivalent to MODIFY when identifiers compare
+	// case-insensitively: it must use COPY to update foreign-key catalog rows.
+	if clause.OldColumnName.ColNameOrigin() != clause.NewColumn.Name.ColNameOrigin() {
+		return false, nil
+	}
+	return isInplaceColumnDefinition(ctx, clause.NewColumn, clause.Position, tableDef)
+}
+
+func isInplaceColumnDefinition(
+	ctx context.Context,
+	column *tree.ColumnTableDef,
+	position *tree.ColumnPosition,
+	tableDef *TableDef,
+) (ok bool, err error) {
+	oCol := FindColumn(tableDef.Cols, column.Name.ColName())
 	if oCol == nil {
 		err = moerr.NewBadFieldError(
-			ctx, clause.NewColumn.Name.ColNameOrigin(), tableDef.Name)
+			ctx, column.Name.ColNameOrigin(), tableDef.Name)
 		return
 	}
 
-	ok, err = positionMatched(ctx, clause.Position, tableDef, oCol)
+	ok, err = positionMatched(ctx, position, tableDef, oCol)
 	if err != nil {
 		return
 	}
@@ -692,7 +759,7 @@ func isInplaceModifyColumn(
 		return
 	}
 
-	ok, err = storageAgnosticType(ctx, clause.NewColumn, oCol)
+	ok, err = storageAgnosticType(ctx, column, oCol)
 	if err != nil {
 		return
 	}
@@ -700,7 +767,7 @@ func isInplaceModifyColumn(
 		return
 	}
 
-	ok, err = storageAgnosticAttrs(ctx, clause.NewColumn, oCol)
+	ok, err = storageAgnosticAttrs(ctx, column, oCol)
 	if err != nil {
 		return
 	}
@@ -749,30 +816,21 @@ func storageAgnosticType(
 
 	oTy := oCol.Typ
 
-	if oTy.Id != nTy.Id {
+	if oTy.Id != nTy.Id ||
+		oTy.Scale != nTy.Scale ||
+		oTy.Enumvalues != nTy.Enumvalues ||
+		oTy.AutoIncr != nTy.AutoIncr {
 		return
 	}
 
-	if nTy.Id != int32(types.T_varchar) && nTy.Id != int32(types.T_char) {
+	if nTy.Id == int32(types.T_varchar) || nTy.Id == int32(types.T_char) {
+		ok = oTy.Width <= nTy.Width
 		return
 	}
 
-	// leave autoInrement check to storage agnostic attrs because the autoInrement
-	// in nTy should be determined by nCol.Attributes
-
-	scaleMatch := oTy.Scale == nTy.Scale
-	enumMatch := oTy.Enumvalues == nTy.Enumvalues
-
-	if !scaleMatch || !enumMatch {
-		return
-	}
-
-	widthIncrease := oTy.Width <= nTy.Width
-	if !widthIncrease {
-		return
-	}
-
-	ok = true
+	// For every other type, only a byte-for-byte identical storage layout can
+	// avoid a COPY. Attribute changes are checked separately below.
+	ok = oTy.Width == nTy.Width
 	return
 }
 
