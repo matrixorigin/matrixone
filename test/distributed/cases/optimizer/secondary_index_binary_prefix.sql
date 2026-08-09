@@ -70,8 +70,18 @@ from t_binary_prefix ignore index(primary, idx_b_amount_pk, idx_amount_b_pk)
 where b in (unhex(''), unhex('00'), unhex('410042'))
 order by id;
 
--- Paired range access is already exact and must not gain the point-lookup
--- residual or lose its selective prefix range.
+-- A closed range with equal byte-string bounds has the same encoded-prefix
+-- collision as equality. The access predicate remains useful, but the
+-- covering scan must recheck the SQL range predicate.
+select count(*) as force_binary_exact_range, sum(id) as force_binary_exact_range_sum
+from t_binary_prefix force index(idx_b_amount_pk)
+where b between unhex('00') and unhex('00');
+select count(*) as scan_binary_exact_range, sum(id) as scan_binary_exact_range_sum
+from t_binary_prefix ignore index(primary, idx_b_amount_pk, idx_amount_b_pk)
+where b between unhex('00') and unhex('00');
+
+-- A half-open range whose upper bound differs before the terminator is exact
+-- and keeps its selective prefix range without an unnecessary residual.
 select count(*) as force_binary_range
 from t_binary_prefix force index(idx_b_amount_pk)
 where b >= unhex('00') and b < unhex('01');
@@ -159,7 +169,10 @@ where fixed4 = cast(unhex('410042') as binary(4))
 order by id;
 
 set @idx_table = (select distinct index_table_name from mo_catalog.mo_indexes
-  where name = 'idx_b_amount_pk' limit 1);
+  where name = 'idx_b_amount_pk'
+    and table_id in (select rel_id from mo_catalog.mo_tables
+      where reldatabase = database() and relname = 't_binary_prefix')
+  limit 1);
 set @physical_sql = concat('select count(*) as physical_rows, ',
   'count(distinct __mo_index_idx_col) as distinct_keys, ',
   'count(distinct __mo_index_pri_col) as distinct_pks from `', @idx_table, '`');
@@ -168,7 +181,10 @@ execute physical_check;
 deallocate prepare physical_check;
 
 set @idx_table = (select distinct index_table_name from mo_catalog.mo_indexes
-  where name = 'idx_amount_b_pk' limit 1);
+  where name = 'idx_amount_b_pk'
+    and table_id in (select rel_id from mo_catalog.mo_tables
+      where reldatabase = database() and relname = 't_binary_prefix')
+  limit 1);
 set @physical_sql = concat('select count(*) as physical_rows, ',
   'count(distinct __mo_index_idx_col) as distinct_keys, ',
   'count(distinct __mo_index_pri_col) as distinct_pks from `', @idx_table, '`');
@@ -177,7 +193,10 @@ execute physical_check;
 deallocate prepare physical_check;
 
 set @idx_table = (select distinct index_table_name from mo_catalog.mo_indexes
-  where name = 'idx_fixed4_pk' limit 1);
+  where name = 'idx_fixed4_pk'
+    and table_id in (select rel_id from mo_catalog.mo_tables
+      where reldatabase = database() and relname = 't_binary_prefix')
+  limit 1);
 set @physical_sql = concat('select count(*) as physical_rows, ',
   'count(distinct __mo_index_idx_col) as distinct_keys, ',
   'count(distinct __mo_index_pri_col) as distinct_pks from `', @idx_table, '`');
@@ -206,7 +225,10 @@ where b in (unhex(''), unhex('00'), unhex('41'), unhex('00000000'))
 order by id;
 
 set @idx_table = (select distinct index_table_name from mo_catalog.mo_indexes
-  where name = 'idx_b_amount_pk' limit 1);
+  where name = 'idx_b_amount_pk'
+    and table_id in (select rel_id from mo_catalog.mo_tables
+      where reldatabase = database() and relname = 't_binary_prefix')
+  limit 1);
 set @physical_sql = concat('select count(*) as physical_rows, ',
   'count(distinct __mo_index_idx_col) as distinct_keys, ',
   'count(distinct __mo_index_pri_col) as distinct_pks from `', @idx_table, '`');
@@ -215,7 +237,10 @@ execute physical_check;
 deallocate prepare physical_check;
 
 set @idx_table = (select distinct index_table_name from mo_catalog.mo_indexes
-  where name = 'idx_amount_b_pk' limit 1);
+  where name = 'idx_amount_b_pk'
+    and table_id in (select rel_id from mo_catalog.mo_tables
+      where reldatabase = database() and relname = 't_binary_prefix')
+  limit 1);
 set @physical_sql = concat('select count(*) as physical_rows, ',
   'count(distinct __mo_index_idx_col) as distinct_keys, ',
   'count(distinct __mo_index_pri_col) as distinct_pks from `', @idx_table, '`');
@@ -224,7 +249,10 @@ execute physical_check;
 deallocate prepare physical_check;
 
 set @idx_table = (select distinct index_table_name from mo_catalog.mo_indexes
-  where name = 'idx_fixed4_pk' limit 1);
+  where name = 'idx_fixed4_pk'
+    and table_id in (select rel_id from mo_catalog.mo_tables
+      where reldatabase = database() and relname = 't_binary_prefix')
+  limit 1);
 set @physical_sql = concat('select count(*) as physical_rows, ',
   'count(distinct __mo_index_idx_col) as distinct_keys, ',
   'count(distinct __mo_index_pri_col) as distinct_pks from `', @idx_table, '`');

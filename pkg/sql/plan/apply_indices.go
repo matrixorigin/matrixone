@@ -1927,40 +1927,65 @@ func needsIndexOnlyResidualLeadingFilters(idxDef *IndexDef, tableDef *plan.Table
 		}
 	}
 
-	if lookupFilter == nil {
-		return false
-	}
-	lookupFn := lookupFilter.GetF()
-	if lookupFn == nil || lookupFn.Func == nil ||
-		(lookupFn.Func.ObjName != "prefix_eq" && lookupFn.Func.ObjName != "prefix_in") || len(leadingPos) == 0 {
+	if len(leadingPos) == 0 || !indexLookupUsesPrefixComparison(lookupFilter) {
 		return false
 	}
 	lastPos := leadingPos[len(leadingPos)-1]
 	if lastPos < 0 || int(lastPos) >= len(filterList) {
 		return false
 	}
-	return indexFilterComparesByteStringColumn(tableDef, filterList[lastPos])
+	return indexFilterUsesPrefixAmbiguousStringColumn(tableDef, filterList[lastPos])
 }
 
-func indexFilterComparesByteStringColumn(tableDef *plan.TableDef, expr *plan.Expr) bool {
-	if tableDef == nil || expr == nil {
+func indexLookupUsesPrefixComparison(expr *plan.Expr) bool {
+	if expr == nil {
 		return false
 	}
 	fn := expr.GetF()
-	if fn == nil || fn.Func == nil || (fn.Func.ObjName != "=" && fn.Func.ObjName != "in") {
+	if fn == nil || fn.Func == nil {
 		return false
 	}
+	switch fn.Func.ObjName {
+	case "prefix_eq", "prefix_in", "prefix_between", "prefix_in_range":
+		return true
+	}
 	for _, arg := range fn.Args {
-		col := arg.GetCol()
-		if col == nil || col.ColPos < 0 || int(col.ColPos) >= len(tableDef.Cols) {
-			continue
+		if indexLookupUsesPrefixComparison(arg) {
+			return true
 		}
-		oid := types.T(tableDef.Cols[col.ColPos].Typ.Id)
-		// CHAR, VARCHAR, BINARY, and VARBINARY all use Packer.EncodeStringType.
+	}
+	return false
+}
+
+func indexFilterUsesPrefixAmbiguousStringColumn(tableDef *plan.TableDef, expr *plan.Expr) bool {
+	if tableDef == nil || expr == nil {
+		return false
+	}
+	if col := expr.GetCol(); col != nil && col.ColPos >= 0 && int(col.ColPos) < len(tableDef.Cols) {
+		colDef := tableDef.Cols[col.ColPos]
+		if colDef == nil {
+			return false
+		}
+		oid := types.T(colDef.Typ.Id)
+		// CHAR, VARCHAR, BINARY, and VARBINARY use Packer.EncodeStringType.
 		// Its 0x00 terminator is also the first byte of an escaped embedded NUL,
-		// so an encoded value can prefix the encoding of value+NUL.
+		// so an encoded lookup value can prefix a distinct stored encoding.
 		return oid == types.T_char || oid == types.T_varchar ||
 			oid == types.T_binary || oid == types.T_varbinary
+	}
+	if fn := expr.GetF(); fn != nil {
+		for _, arg := range fn.Args {
+			if indexFilterUsesPrefixAmbiguousStringColumn(tableDef, arg) {
+				return true
+			}
+		}
+	}
+	if list := expr.GetList(); list != nil {
+		for _, item := range list.List {
+			if indexFilterUsesPrefixAmbiguousStringColumn(tableDef, item) {
+				return true
+			}
+		}
 	}
 	return false
 }
@@ -2127,9 +2152,14 @@ func (builder *QueryBuilder) tryIndexOnlyScan(idxDef *IndexDef, node *plan.Node,
 	}
 
 	newLeadingFilter := builder.replaceLeadingFilter(idxDef, node.FilterList, leadingPos, leadingEqualCond, idxTag, idxTableDef)
-	newFilterList := make([]*plan.Expr, 0, len(node.FilterList))
+	keepLeadingResidual := needsIndexOnlyResidualLeadingFilters(idxDef, node.TableDef, node.FilterList, leadingPos, newLeadingFilter)
+	filterCapacity := 1 + len(missFilterIdx)
+	if keepLeadingResidual {
+		filterCapacity += len(leadingPos)
+	}
+	newFilterList := make([]*plan.Expr, 0, filterCapacity)
 	newFilterList = append(newFilterList, newLeadingFilter)
-	if needsIndexOnlyResidualLeadingFilters(idxDef, node.TableDef, node.FilterList, leadingPos, newLeadingFilter) {
+	if keepLeadingResidual {
 		// Keep the original SQL predicate when serial_full lookup bytes are not
 		// an exact semantic oracle: NULL is encoded as key bytes, and a byte-string
 		// terminator can also begin an escaped embedded NUL.

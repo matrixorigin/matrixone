@@ -4211,7 +4211,7 @@ func TestTryIndexOnlyScanKeepsResidualFilterForSerialFullNullSemantics(t *testin
 	}
 }
 
-func TestTryIndexOnlyScanPreservesVarcharResidualForPointLiterals(t *testing.T) {
+func TestTryIndexOnlyScanPreservesVarcharResidualForPrefixLookups(t *testing.T) {
 	tests := []struct {
 		name       string
 		makeFilter func(relPos int32) *planpb.Expr
@@ -4240,6 +4240,7 @@ func TestTryIndexOnlyScanPreservesVarcharResidualForPointLiterals(t *testing.T) 
 				return makeStringBetweenFilterExpr(relPos, 1, "active", "expired")
 			},
 			lookupFunc: "prefix_between",
+			residual:   "between",
 		},
 	}
 
@@ -4326,6 +4327,7 @@ func TestTryIndexOnlyScanHandlesByteStringPrefixLookups(t *testing.T) {
 				return makeStringBetweenFilterExpr(relPos, 1, "\x00", "\x00\x01")
 			},
 			lookupFunc: "prefix_between",
+			residual:   "between",
 		},
 		{
 			name: "binary equality",
@@ -4352,6 +4354,7 @@ func TestTryIndexOnlyScanHandlesByteStringPrefixLookups(t *testing.T) {
 				return makeStringBetweenFilterExpr(relPos, 1, "\x00", "\x00\x01")
 			},
 			lookupFunc: "prefix_between",
+			residual:   "between",
 		},
 		{
 			name: "varchar equality with encoded terminator collision",
@@ -4433,6 +4436,56 @@ func TestTryIndexOnlyScanHandlesByteStringPrefixLookups(t *testing.T) {
 			require.Equal(t, int32(tt.typ), idxNode.FilterList[1].GetF().Args[0].Typ.Id)
 		})
 	}
+}
+
+func TestNeedsIndexOnlyResidualLeadingFiltersUsesTrailingPrefixPart(t *testing.T) {
+	idxDef := &planpb.IndexDef{
+		Parts:  []string{"v", "n", "id"},
+		Unique: false,
+	}
+	tableDef := &planpb.TableDef{Cols: []*planpb.ColDef{
+		{Name: "id", Typ: planpb.Type{Id: int32(types.T_int64)}},
+		{Name: "v", Typ: planpb.Type{Id: int32(types.T_varchar), Width: 16}},
+		{Name: "n", Typ: planpb.Type{Id: int32(types.T_int64)}},
+	}}
+	filters := []*planpb.Expr{
+		makeStringEqFilterExpr(0, 1, "a"),
+		makeEqFilterExpr(2),
+	}
+	lookupFilter := &planpb.Expr{Expr: &planpb.Expr_F{F: &planpb.Function{
+		Func: &planpb.ObjectRef{ObjName: "prefix_eq"},
+	}}}
+
+	// A byte-string component before another encoded component is delimited by
+	// that component's type byte. Only the trailing component can collide with
+	// the appended primary-key suffix, so a fixed-width trailing part needs no
+	// residual recheck.
+	require.False(t, needsIndexOnlyResidualLeadingFilters(
+		idxDef, tableDef, filters, []int32{0, 1}, lookupFilter,
+	))
+	require.True(t, needsIndexOnlyResidualLeadingFilters(
+		idxDef, tableDef, filters, []int32{1, 0}, lookupFilter,
+	))
+}
+
+func TestNeedsIndexOnlyResidualLeadingFiltersRecognizesNestedPrefixRange(t *testing.T) {
+	idxDef := &planpb.IndexDef{Parts: []string{"v", "id"}, Unique: false}
+	tableDef := &planpb.TableDef{Cols: []*planpb.ColDef{
+		{Name: "id", Typ: planpb.Type{Id: int32(types.T_int64)}},
+		{Name: "v", Typ: planpb.Type{Id: int32(types.T_varbinary), Width: 16}},
+	}}
+	filter := makeStringBetweenFilterExpr(0, 1, "\x00", "\x00")
+	prefixRange := &planpb.Expr{Expr: &planpb.Expr_F{F: &planpb.Function{
+		Func: &planpb.ObjectRef{ObjName: "prefix_in_range"},
+	}}}
+	lookupFilter := &planpb.Expr{Expr: &planpb.Expr_F{F: &planpb.Function{
+		Func: &planpb.ObjectRef{ObjName: "or"},
+		Args: []*planpb.Expr{prefixRange},
+	}}}
+
+	require.True(t, needsIndexOnlyResidualLeadingFilters(
+		idxDef, tableDef, []*planpb.Expr{filter}, []int32{0}, lookupFilter,
+	))
 }
 
 func TestReplaceRangePairCondition_UsesPrefixBetweenForSecondaryIndex(t *testing.T) {
