@@ -1032,6 +1032,8 @@ SELECT COUNT(*), SUM(id), SUM(amount) FROM nullable_decimal_cluster_zm WHERE amo
 SELECT COUNT(*), SUM(id), SUM(amount) FROM nullable_decimal_cluster_zm WHERE amount + 0 < 2000.0000;
 SELECT COUNT(*) FROM nullable_decimal_cluster_zm WHERE amount <= 2000.0000;
 SELECT COUNT(*) FROM nullable_decimal_cluster_zm WHERE amount > 2000.0000;
+SELECT COUNT(*) FROM nullable_decimal_cluster_zm WHERE amount IN (1000.0000, 2000.0000);
+SELECT COUNT(*) FROM nullable_decimal_cluster_zm WHERE amount + 0 IN (1000.0000, 2000.0000);
 DROP TABLE nullable_decimal_cluster_zm;
 
 DROP TABLE IF EXISTS nullable_bigint_cluster_zm;
@@ -1049,6 +1051,8 @@ SELECT COUNT(*) FROM nullable_bigint_cluster_zm WHERE amount < 20000;
 SELECT COUNT(*) FROM nullable_bigint_cluster_zm WHERE amount + 0 < 20000;
 SELECT COUNT(*) FROM nullable_bigint_cluster_zm WHERE amount <= 20000;
 SELECT COUNT(*) FROM nullable_bigint_cluster_zm WHERE amount > 20000;
+SELECT COUNT(*) FROM nullable_bigint_cluster_zm WHERE amount IN (10000, 20000);
+SELECT COUNT(*) FROM nullable_bigint_cluster_zm WHERE amount + 0 IN (10000, 20000);
 DROP TABLE nullable_bigint_cluster_zm;
 
 DROP TABLE IF EXISTS nullable_varchar_cluster_zm;
@@ -1067,4 +1071,8 @@ SELECT COUNT(*) FROM nullable_varchar_cluster_zm WHERE amount < '00020000';
 SELECT COUNT(*) FROM nullable_varchar_cluster_zm WHERE CONCAT(amount, '') < '00020000';
 SELECT COUNT(*) FROM nullable_varchar_cluster_zm WHERE amount <= '00020000';
 SELECT COUNT(*) FROM nullable_varchar_cluster_zm WHERE amount > '00020000';
+SELECT COUNT(*) FROM nullable_varchar_cluster_zm WHERE amount IN ('00010000', '00020000');
+SELECT COUNT(*) FROM nullable_varchar_cluster_zm WHERE CONCAT(amount, '') IN ('00010000', '00020000');
+SELECT COUNT(*) FROM nullable_varchar_cluster_zm WHERE amount LIKE '0001%';
+SELECT COUNT(*) FROM nullable_varchar_cluster_zm WHERE CONCAT(amount, '') LIKE '0001%';
 DROP TABLE nullable_varchar_cluster_zm;

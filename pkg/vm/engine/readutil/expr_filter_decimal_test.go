@@ -371,6 +371,16 @@ func TestZoneMapMatchHelpersDoNotAllocate(t *testing.T) {
 	decimalZM := decimalZoneMap(t, decimalType, "10.0000", "20.0000")
 	decimalValue, decimalBoundZM := decimalBoundZoneMap(t, decimalType, decimalBound{"15", 0})
 	unknownDecimalZM := index.NewZM(types.T_decimal128, decimalType.Scale)
+	intInExpr := sortedUnknownVectorFilter(t, intType, []string{"15", "20"}, false)
+	intInVec := vector.NewVec(types.T_any.ToType())
+	require.NoError(t, intInVec.UnmarshalBinary(intInExpr.GetF().Args[1].GetVec().Data))
+	prefixType := plan.Type{Id: int32(types.T_varchar), Width: 8}
+	prefixZM := sortedUnknownZoneMap(t, prefixType, "10", "20")
+	unknownPrefixZM := index.NewZM(types.T_varchar, 0)
+	prefixInExpr := sortedUnknownVectorFilter(t, prefixType, []string{"15", "20"}, true)
+	prefixInVec := vector.NewVec(types.T_any.ToType())
+	require.NoError(t, prefixInVec.UnmarshalBinary(prefixInExpr.GetF().Args[1].GetVec().Data))
+	prefixValue := encodeSortedUnknownValue(t, prefixType, "15")
 
 	tests := []struct {
 		name string
@@ -398,6 +408,30 @@ func TestZoneMapMatchHelpersDoNotAllocate(t *testing.T) {
 			name: "decimal unknown",
 			fn: func() zoneMapMatch {
 				return anyLTByBound(unknownDecimalZM, decimalValue, decimalBoundZM, types.T_decimal128)
+			},
+		},
+		{
+			name: "in initialized",
+			fn: func() zoneMapMatch {
+				return anyInVector(intZM, intInVec, types.T_int64)
+			},
+		},
+		{
+			name: "in unknown",
+			fn: func() zoneMapMatch {
+				return anyInVector(unknownIntZM, intInVec, types.T_int64)
+			},
+		},
+		{
+			name: "prefix initialized",
+			fn: func() zoneMapMatch {
+				return prefixEqByValue(prefixZM, prefixValue, types.T_varchar)
+			},
+		},
+		{
+			name: "prefix unknown",
+			fn: func() zoneMapMatch {
+				return prefixInVector(unknownPrefixZM, prefixInVec, types.T_varchar)
 			},
 		},
 	}
@@ -603,6 +637,7 @@ func TestCompileFilterExprSortedUnknownZoneMapDoesNotExcludeLaterBlocks(t *testi
 		bounds     []string
 		quickBreak bool
 		hints      []uint8
+		prefixOnly bool
 	}{
 		{name: "lt", op: "<", bounds: []string{"25"}, quickBreak: true},
 		{name: "le", op: "<=", bounds: []string{"20"}, quickBreak: true},
@@ -612,17 +647,26 @@ func TestCompileFilterExprSortedUnknownZoneMapDoesNotExcludeLaterBlocks(t *testi
 		{name: "between", op: "between", bounds: []string{"15", "25"}, quickBreak: true},
 		{name: "in_range", op: "in_range", bounds: []string{"15", "25"}, quickBreak: true,
 			hints: []uint8{0, 1, 2, 3}},
+		{name: "in", op: "in", bounds: []string{"20", "25"}, quickBreak: true},
+		{name: "prefix_eq", op: "prefix_eq", bounds: []string{"20"}, quickBreak: true, prefixOnly: true},
+		{name: "prefix_between", op: "prefix_between", bounds: []string{"15", "25"}, quickBreak: true, prefixOnly: true},
+		{name: "prefix_in_range", op: "prefix_in_range", bounds: []string{"15", "25"}, quickBreak: true,
+			hints: []uint8{0, 1, 2, 3}, prefixOnly: true},
+		{name: "prefix_in", op: "prefix_in", bounds: []string{"20", "25"}, quickBreak: true, prefixOnly: true},
 	}
 
 	for _, typ := range typesUnderTest {
 		for _, operation := range operations {
+			if operation.prefixOnly && types.T(typ.typ.Id) != types.T_varchar {
+				continue
+			}
 			hints := operation.hints
 			if len(hints) == 0 {
 				hints = []uint8{0}
 			}
 			for _, hint := range hints {
 				name := typ.name + "/" + operation.name
-				if operation.op == "in_range" {
+				if operation.op == "in_range" || operation.op == "prefix_in_range" {
 					name += "/hint_" + strconv.Itoa(int(hint))
 				}
 				t.Run(name, func(t *testing.T) {
@@ -697,32 +741,140 @@ func TestCompileFilterExprSortedIncompatibleZoneMapFailsOpen(t *testing.T) {
 			metadataType: plan.Type{Id: int32(types.T_json)},
 		},
 	}
+	operations := []struct {
+		op         string
+		bounds     []string
+		hint       uint8
+		prefixOnly bool
+	}{
+		{op: "=", bounds: []string{"20"}},
+		{op: "in", bounds: []string{"20", "25"}},
+		{op: "prefix_eq", bounds: []string{"20"}, prefixOnly: true},
+		{op: "prefix_between", bounds: []string{"15", "25"}, prefixOnly: true},
+		{op: "prefix_in_range", bounds: []string{"15", "25"}, hint: 3, prefixOnly: true},
+		{op: "prefix_in", bounds: []string{"20", "25"}, prefixOnly: true},
+	}
 	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			tableDef := decimalTableDef(test.columnType, false)
-			tableDef.Cols[0].ClusterBy = true
-			expr := sortedUnknownFilter(t, test.columnType, "=", []string{"20"}, 0)
-			fastFilter, _, _, blockFilter, seek, canCompile, _ := CompileFilterExpr(expr, tableDef, nil)
-			require.True(t, canCompile)
+		for _, operation := range operations {
+			if operation.prefixOnly && types.T(test.columnType.Id) != types.T_varchar {
+				continue
+			}
+			t.Run(test.name+"/"+operation.op, func(t *testing.T) {
+				tableDef := decimalTableDef(test.columnType, false)
+				tableDef.Cols[0].ClusterBy = true
+				expr := sortedUnknownFilter(t, test.columnType, operation.op, operation.bounds, operation.hint)
+				fastFilter, _, _, blockFilter, seek, canCompile, _ := CompileFilterExpr(expr, tableDef, nil)
+				require.True(t, canCompile)
 
-			mismatch := sortedUnknownZoneMap(t, test.metadataType, "20")
-			stats := objectio.NewObjectStats()
-			require.NoError(t, objectio.SetObjectStatsSortKeyZoneMap(stats, mismatch))
-			selected, err := fastFilter(stats)
-			require.NoError(t, err)
-			require.True(t, selected)
+				mismatch := sortedUnknownZoneMap(t, test.metadataType, "20")
+				stats := objectio.NewObjectStats()
+				require.NoError(t, objectio.SetObjectStatsSortKeyZoneMap(stats, mismatch))
+				selected, err := fastFilter(stats)
+				require.NoError(t, err)
+				require.True(t, selected)
 
-			dataMeta := objectio.BuildMetaData(2, 1)
-			dataMeta.MustGetColumn(0).SetZoneMap(mismatch)
-			dataMeta.GetBlockMeta(0).MustGetColumn(0).SetZoneMap(mismatch.Clone())
-			dataMeta.GetBlockMeta(1).MustGetColumn(0).SetZoneMap(mismatch.Clone())
-			quickBreak, selected, err := blockFilter(0, dataMeta.GetBlockMeta(0), nil)
-			require.NoError(t, err)
-			require.False(t, quickBreak)
-			require.True(t, selected)
-			require.Equal(t, 0, seek(dataMeta))
+				dataMeta := objectio.BuildMetaData(2, 1)
+				dataMeta.MustGetColumn(0).SetZoneMap(mismatch)
+				dataMeta.GetBlockMeta(0).MustGetColumn(0).SetZoneMap(mismatch.Clone())
+				dataMeta.GetBlockMeta(1).MustGetColumn(0).SetZoneMap(mismatch.Clone())
+				quickBreak, selected, err := blockFilter(0, dataMeta.GetBlockMeta(0), nil)
+				require.NoError(t, err)
+				require.False(t, quickBreak)
+				require.True(t, selected)
+				require.Equal(t, 0, seek(dataMeta))
+			})
+		}
+	}
+}
+
+func TestCompileFilterExprInVectorMetadataMismatchFailsOpen(t *testing.T) {
+	columnType := plan.Type{Id: int32(types.T_decimal128), Width: 20, Scale: 2}
+	vectorType := plan.Type{Id: int32(types.T_decimal128), Width: 20, Scale: 4}
+	tableDef := decimalTableDef(columnType, true)
+	expr := sortedUnknownVectorFilterWithType(
+		t, columnType, vectorType, []string{"20.0000", "25.0000"}, false,
+	)
+	fastFilter, _, _, blockFilter, _, canCompile, _ := CompileFilterExpr(expr, tableDef, nil)
+	require.True(t, canCompile)
+
+	stats := decimalObjectStats(t, columnType, "20.00", "25.00")
+	selected, err := fastFilter(stats)
+	require.NoError(t, err)
+	require.True(t, selected, "scale-mismatched IN vector must fail open")
+
+	dataMeta := decimalObjectDataMeta(t, columnType, "20.00", "25.00")
+	quickBreak, selected, err := blockFilter(0, dataMeta.GetBlockMeta(0), nil)
+	require.NoError(t, err)
+	require.False(t, quickBreak)
+	require.True(t, selected, "unsafe raw-byte Bloom lookup must be skipped")
+}
+
+func TestCompileFilterExprMalformedVectorDoesNotCompile(t *testing.T) {
+	typ := plan.Type{Id: int32(types.T_varchar), Width: 8}
+	tableDef := decimalTableDef(typ, false)
+	for _, prefix := range []bool{false, true} {
+		name := "in"
+		if prefix {
+			name = "prefix_in"
+		}
+		t.Run(name, func(t *testing.T) {
+			expr := sortedUnknownVectorFilter(t, typ, []string{"20"}, prefix)
+			expr.GetF().Args[1].GetVec().Data = []byte{1, 2, 3}
+			_, _, _, _, _, canCompile, _ := CompileFilterExpr(expr, tableDef, nil)
+			require.False(t, canCompile)
 		})
 	}
+
+	t.Run("prefix_in physical type mismatch", func(t *testing.T) {
+		expr := sortedUnknownVectorFilterWithType(
+			t, typ, plan.Type{Id: int32(types.T_int64)}, []string{"20"}, true,
+		)
+		_, _, _, _, _, canCompile, _ := CompileFilterExpr(expr, tableDef, nil)
+		require.False(t, canCompile)
+	})
+}
+
+func TestCompileFilterExprPrefixInNullableVectorFailsOpen(t *testing.T) {
+	typ := plan.Type{Id: int32(types.T_varchar), Width: 8}
+	proc := testutil.NewProcess(t)
+	vec := vector.NewVec(plan2.MakeTypeByPlan2Type(typ))
+	defer vec.Free(proc.Mp())
+	require.NoError(t, vector.AppendBytes(vec, nil, true, proc.Mp()))
+	require.NoError(t, vector.AppendBytes(vec, []byte("00000020"), false, proc.Mp()))
+	data, err := vec.MarshalBinary()
+	require.NoError(t, err)
+	expr := plan2.MakeInExpr(
+		context.Background(),
+		&plan.Expr{
+			Typ: typ,
+			Expr: &plan.Expr_Col{Col: &plan.ColRef{
+				RelPos: 0, ColPos: 0, Name: "amount",
+			}},
+		},
+		int32(vec.Length()),
+		data,
+		true,
+	)
+	tableDef := decimalTableDef(typ, false)
+	tableDef.Cols[0].ClusterBy = true
+	fastFilter, _, _, blockFilter, seek, canCompile, _ := CompileFilterExpr(expr, tableDef, nil)
+	require.True(t, canCompile)
+	require.Nil(t, seek)
+
+	stats := objectio.NewObjectStats()
+	require.NoError(t, objectio.SetObjectStatsSortKeyZoneMap(
+		stats, sortedUnknownZoneMap(t, typ, "40"),
+	))
+	selected, err := fastFilter(stats)
+	require.NoError(t, err)
+	require.True(t, selected)
+
+	dataMeta := objectio.BuildMetaData(1, 1)
+	dataMeta.GetBlockMeta(0).MustGetColumn(0).SetZoneMap(sortedUnknownZoneMap(t, typ, "40"))
+	quickBreak, selected, err := blockFilter(0, dataMeta.GetBlockMeta(0), nil)
+	require.NoError(t, err)
+	require.False(t, quickBreak)
+	require.True(t, selected)
 }
 
 func TestSeekFirstBlockFailsOpenForUnsampledUnknownZoneMap(t *testing.T) {
@@ -899,6 +1051,9 @@ func sortedUnknownFilter(
 	hint uint8,
 ) *plan.Expr {
 	t.Helper()
+	if op == "in" || op == "prefix_in" {
+		return sortedUnknownVectorFilter(t, typ, bounds, op == "prefix_in")
+	}
 	if types.T(typ.Id).IsDecimal() {
 		decimalBounds := make([]decimalBound, len(bounds))
 		for i, bound := range bounds {
@@ -925,7 +1080,7 @@ func sortedUnknownFilter(
 			}},
 		})
 	}
-	if op == "in_range" {
+	if op == "in_range" || op == "prefix_in_range" {
 		hintValue := hint
 		args = append(args, &plan.Expr{
 			Typ:  plan.Type{Id: int32(types.T_uint8)},
@@ -933,6 +1088,57 @@ func sortedUnknownFilter(
 		})
 	}
 	return foldedFunction(op, args)
+}
+
+func sortedUnknownVectorFilter(
+	t *testing.T,
+	typ plan.Type,
+	values []string,
+	prefix bool,
+) *plan.Expr {
+	return sortedUnknownVectorFilterWithType(t, typ, typ, values, prefix)
+}
+
+func sortedUnknownVectorFilterWithType(
+	t *testing.T,
+	columnType plan.Type,
+	vectorType plan.Type,
+	values []string,
+	prefix bool,
+) *plan.Expr {
+	t.Helper()
+	proc := testutil.NewProcess(t)
+	vec := vector.NewVec(plan2.MakeTypeByPlan2Type(vectorType))
+	defer vec.Free(proc.Mp())
+	for _, value := range values {
+		encoded := encodeSortedUnknownValue(t, vectorType, value)
+		switch types.T(vectorType.Id) {
+		case types.T_decimal64:
+			require.NoError(t, vector.AppendFixed(vec, types.DecodeDecimal64(encoded), false, proc.Mp()))
+		case types.T_decimal128:
+			require.NoError(t, vector.AppendFixed(vec, types.DecodeDecimal128(encoded), false, proc.Mp()))
+		case types.T_int64:
+			require.NoError(t, vector.AppendFixed(vec, types.DecodeInt64(encoded), false, proc.Mp()))
+		case types.T_char, types.T_varchar, types.T_text, types.T_blob, types.T_json:
+			require.NoError(t, vector.AppendBytes(vec, encoded, false, proc.Mp()))
+		default:
+			t.Fatalf("unsupported vector zonemap test type %v", types.T(vectorType.Id))
+		}
+	}
+	data, err := vec.MarshalBinary()
+	require.NoError(t, err)
+	return plan2.MakeInExpr(
+		context.Background(),
+		&plan.Expr{
+			Typ: columnType,
+			Expr: &plan.Expr_Col{Col: &plan.ColRef{
+				RelPos: 0, ColPos: 0, Name: "amount",
+			}},
+		},
+		int32(len(values)),
+		data,
+		prefix,
+	)
 }
 
 func sortedUnknownDataMeta(t *testing.T, typ plan.Type) objectio.ObjectDataMeta {

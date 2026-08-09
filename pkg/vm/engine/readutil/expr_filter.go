@@ -249,6 +249,118 @@ func inRangeBounds(
 	}
 }
 
+func zoneMapVectorComparable(
+	zm objectio.ZoneMap, vec *vector.Vector, columnType types.T,
+) bool {
+	if !rawZoneMapComparable(zm, columnType) || vec == nil || vec.GetType().Oid != columnType {
+		return false
+	}
+	return !columnType.IsDecimal() || zm.GetScale() == vec.GetType().Scale
+}
+
+func anyInVector(
+	zm objectio.ZoneMap, vec *vector.Vector, columnType types.T,
+) zoneMapMatch {
+	if !zoneMapVectorComparable(zm, vec, columnType) {
+		return zoneMapMatch{}
+	}
+	return zoneMapMatch{matches: zm.AnyIn(vec), comparable: true}
+}
+
+func prefixEqByValue(zm objectio.ZoneMap, value []byte, columnType types.T) zoneMapMatch {
+	if !rawZoneMapComparable(zm, columnType) {
+		return zoneMapMatch{}
+	}
+	return zoneMapMatch{matches: zm.PrefixEq(value), comparable: true}
+}
+
+func prefixBetweenByValue(
+	zm objectio.ZoneMap, lower, upper []byte, columnType types.T,
+) zoneMapMatch {
+	if !rawZoneMapComparable(zm, columnType) {
+		return zoneMapMatch{}
+	}
+	return zoneMapMatch{matches: zm.PrefixBetween(lower, upper), comparable: true}
+}
+
+func prefixInRangeByValue(
+	zm objectio.ZoneMap, lower, upper []byte, hint uint8, columnType types.T,
+) zoneMapMatch {
+	if !rawZoneMapComparable(zm, columnType) {
+		return zoneMapMatch{}
+	}
+	return zoneMapMatch{matches: zm.PrefixInRange(lower, upper, hint), comparable: true}
+}
+
+func prefixInVector(
+	zm objectio.ZoneMap, vec *vector.Vector, columnType types.T,
+) zoneMapMatch {
+	if !zoneMapVectorComparable(zm, vec, columnType) {
+		return zoneMapMatch{}
+	}
+	if vec.IsConstNull() || vec.GetNulls().Any() {
+		return zoneMapMatch{}
+	}
+	return zoneMapMatch{matches: zm.PrefixIn(vec), comparable: true}
+}
+
+func anyPrefixLTByValue(zm objectio.ZoneMap, value []byte, columnType types.T) zoneMapMatch {
+	if !rawZoneMapComparable(zm, columnType) {
+		return zoneMapMatch{}
+	}
+	return zoneMapMatch{
+		matches:    types.PrefixCompare(zm.GetMinBuf(), value) < 0,
+		comparable: true,
+	}
+}
+
+func anyPrefixLEByValue(zm objectio.ZoneMap, value []byte, columnType types.T) zoneMapMatch {
+	if !rawZoneMapComparable(zm, columnType) {
+		return zoneMapMatch{}
+	}
+	return zoneMapMatch{
+		matches:    types.PrefixCompare(zm.GetMinBuf(), value) <= 0,
+		comparable: true,
+	}
+}
+
+func anyPrefixGTByValue(zm objectio.ZoneMap, value []byte, columnType types.T) zoneMapMatch {
+	if !rawZoneMapComparable(zm, columnType) {
+		return zoneMapMatch{}
+	}
+	return zoneMapMatch{
+		matches:    types.PrefixCompare(zm.GetMaxBuf(), value) > 0,
+		comparable: true,
+	}
+}
+
+func anyPrefixGEByValue(zm objectio.ZoneMap, value []byte, columnType types.T) zoneMapMatch {
+	if !rawZoneMapComparable(zm, columnType) {
+		return zoneMapMatch{}
+	}
+	return zoneMapMatch{
+		matches:    types.PrefixCompare(zm.GetMaxBuf(), value) >= 0,
+		comparable: true,
+	}
+}
+
+func makeVectorValueZoneMapBound(
+	columnType types.T, vec *vector.Vector, value []byte,
+) (objectio.ZoneMap, bool) {
+	if vec == nil || vec.GetType().Oid != columnType {
+		return nil, false
+	}
+	if !columnType.IsDecimal() {
+		return nil, true
+	}
+	if columnType == types.T_decimal256 || len(value) != columnType.FixedLength() {
+		return nil, false
+	}
+	bound := index.NewZM(columnType, vec.GetType().Scale)
+	index.UpdateZM(bound, value)
+	return bound, true
+}
+
 func seekFirstBlockByZoneMap(
 	meta objectio.ObjectDataMeta,
 	seqNum uint16,
@@ -783,13 +895,14 @@ func CompileFilterExpr(
 				return
 			}
 			colDef := getColDefByName(expr, colExpr.Col.Name, colExpr.Col.ColPos, tableDef)
+			columnType := types.T(colDef.Typ.Id)
 			isPK, isSorted := isSortedKey(colDef)
 			if isSorted {
 				fastFilterOp = func(obj *objectio.ObjectStats) (bool, error) {
 					if obj.ZMIsEmpty() {
 						return true, nil
 					}
-					return obj.SortKeyZoneMap().PrefixEq(vals[0]), nil
+					return prefixEqByValue(obj.SortKeyZoneMap(), vals[0], columnType).mayMatch(), nil
 				}
 			}
 			highSelectivityHint = isPK
@@ -801,25 +914,23 @@ func CompileFilterExpr(
 					return true, nil
 				}
 				dataMeta := meta.MustDataMeta()
-				return dataMeta.MustGetColumn(uint16(seqNum)).ZoneMap().PrefixEq(vals[0]), nil
+				return prefixEqByValue(
+					dataMeta.MustGetColumn(uint16(seqNum)).ZoneMap(), vals[0], columnType,
+				).mayMatch(), nil
 			}
 			blockFilterOp = func(
 				_ int, blkMeta objectio.BlockObject, bf objectio.BloomFilter,
 			) (bool, bool, error) {
 				zm := blkMeta.MustGetColumn(uint16(seqNum)).ZoneMap()
-				if isSorted && types.PrefixCompare(zm.GetMinBuf(), vals[0]) > 0 {
+				if isSorted && anyPrefixLEByValue(zm, vals[0], columnType).excludes() {
 					return true, false, nil
 				}
-				return false, zm.PrefixEq(vals[0]), nil
+				return false, prefixEqByValue(zm, vals[0], columnType).mayMatch(), nil
 			}
 			if isSorted {
 				seekOp = func(meta objectio.ObjectDataMeta) int {
-					blockCnt := int(meta.BlockCount())
-					return sort.Search(blockCnt, func(j int) bool {
-						return types.PrefixCompare(
-							meta.GetBlockMeta(uint32(j)).MustGetColumn(uint16(seqNum)).ZoneMap().GetMaxBuf(),
-							vals[0],
-						) >= 0
+					return seekFirstBlockByZoneMap(meta, uint16(seqNum), nil, columnType, func(zm objectio.ZoneMap) zoneMapMatch {
+						return anyPrefixGEByValue(zm, vals[0], columnType)
 					})
 				}
 			}
@@ -830,13 +941,14 @@ func CompileFilterExpr(
 				return
 			}
 			colDef := getColDefByName(expr, colExpr.Col.Name, colExpr.Col.ColPos, tableDef)
+			columnType := types.T(colDef.Typ.Id)
 			_, isSorted := isSortedKey(colDef)
 			if isSorted {
 				fastFilterOp = func(obj *objectio.ObjectStats) (bool, error) {
 					if obj.ZMIsEmpty() {
 						return true, nil
 					}
-					return obj.SortKeyZoneMap().PrefixBetween(vals[0], vals[1]), nil
+					return prefixBetweenByValue(obj.SortKeyZoneMap(), vals[0], vals[1], columnType).mayMatch(), nil
 				}
 			}
 			loadOp = loadMetadataOnlyOpFactory(fs)
@@ -846,25 +958,23 @@ func CompileFilterExpr(
 					return true, nil
 				}
 				dataMeta := meta.MustDataMeta()
-				return dataMeta.MustGetColumn(uint16(seqNum)).ZoneMap().PrefixBetween(vals[0], vals[1]), nil
+				return prefixBetweenByValue(
+					dataMeta.MustGetColumn(uint16(seqNum)).ZoneMap(), vals[0], vals[1], columnType,
+				).mayMatch(), nil
 			}
 			blockFilterOp = func(
 				_ int, blkMeta objectio.BlockObject, bf objectio.BloomFilter,
 			) (bool, bool, error) {
 				zm := blkMeta.MustGetColumn(uint16(seqNum)).ZoneMap()
-				if isSorted && types.PrefixCompare(zm.GetMinBuf(), vals[1]) > 0 {
+				if isSorted && anyPrefixLEByValue(zm, vals[1], columnType).excludes() {
 					return true, false, nil
 				}
-				return false, zm.PrefixBetween(vals[0], vals[1]), nil
+				return false, prefixBetweenByValue(zm, vals[0], vals[1], columnType).mayMatch(), nil
 			}
 			if isSorted {
 				seekOp = func(meta objectio.ObjectDataMeta) int {
-					blockCnt := int(meta.BlockCount())
-					return sort.Search(blockCnt, func(j int) bool {
-						return types.PrefixCompare(
-							meta.GetBlockMeta(uint32(j)).MustGetColumn(uint16(seqNum)).ZoneMap().GetMaxBuf(),
-							vals[0],
-						) >= 0
+					return seekFirstBlockByZoneMap(meta, uint16(seqNum), nil, columnType, func(zm objectio.ZoneMap) zoneMapMatch {
+						return anyPrefixGEByValue(zm, vals[0], columnType)
 					})
 				}
 			}
@@ -876,13 +986,16 @@ func CompileFilterExpr(
 			}
 			hint := vals[2][0]
 			colDef := getColDefByName(expr, colExpr.Col.Name, colExpr.Col.ColPos, tableDef)
+			columnType := types.T(colDef.Typ.Id)
 			_, isSorted := isSortedKey(colDef)
 			if isSorted {
 				fastFilterOp = func(obj *objectio.ObjectStats) (bool, error) {
 					if obj.ZMIsEmpty() {
 						return true, nil
 					}
-					return obj.SortKeyZoneMap().PrefixInRange(vals[0], vals[1], hint), nil
+					return prefixInRangeByValue(
+						obj.SortKeyZoneMap(), vals[0], vals[1], hint, columnType,
+					).mayMatch(), nil
 				}
 			}
 			loadOp = loadMetadataOnlyOpFactory(fs)
@@ -892,29 +1005,32 @@ func CompileFilterExpr(
 					return true, nil
 				}
 				dataMeta := meta.MustDataMeta()
-				return dataMeta.MustGetColumn(uint16(seqNum)).ZoneMap().PrefixInRange(vals[0], vals[1], hint), nil
+				return prefixInRangeByValue(
+					dataMeta.MustGetColumn(uint16(seqNum)).ZoneMap(), vals[0], vals[1], hint, columnType,
+				).mayMatch(), nil
 			}
 			blockFilterOp = func(
 				_ int, blkMeta objectio.BlockObject, bf objectio.BloomFilter,
 			) (bool, bool, error) {
 				zm := blkMeta.MustGetColumn(uint16(seqNum)).ZoneMap()
 				if isSorted {
-					cmp := types.PrefixCompare(zm.GetMinBuf(), vals[1])
-					if cmp > 0 || (cmp == 0 && (hint == 2 || hint == 3)) {
+					upperResult := anyPrefixLEByValue(zm, vals[1], columnType)
+					if hint == 2 || hint == 3 {
+						upperResult = anyPrefixLTByValue(zm, vals[1], columnType)
+					}
+					if upperResult.excludes() {
 						return true, false, nil
 					}
 				}
-				return false, zm.PrefixInRange(vals[0], vals[1], hint), nil
+				return false, prefixInRangeByValue(zm, vals[0], vals[1], hint, columnType).mayMatch(), nil
 			}
 			if isSorted {
 				seekOp = func(meta objectio.ObjectDataMeta) int {
-					blockCnt := int(meta.BlockCount())
-					return sort.Search(blockCnt, func(j int) bool {
-						zm := meta.GetBlockMeta(uint32(j)).MustGetColumn(uint16(seqNum)).ZoneMap()
+					return seekFirstBlockByZoneMap(meta, uint16(seqNum), nil, columnType, func(zm objectio.ZoneMap) zoneMapMatch {
 						if hint == 1 || hint == 3 {
-							return types.PrefixCompare(zm.GetMaxBuf(), vals[0]) > 0
+							return anyPrefixGTByValue(zm, vals[0], columnType)
 						}
-						return types.PrefixCompare(zm.GetMaxBuf(), vals[0]) >= 0
+						return anyPrefixGEByValue(zm, vals[0], columnType)
 					})
 				}
 			}
@@ -1054,15 +1170,23 @@ func CompileFilterExpr(
 				return
 			}
 			vec := vector.NewVec(types.T_any.ToType())
-			_ = vec.UnmarshalBinary(val)
+			if err := vec.UnmarshalBinary(val); err != nil {
+				canCompile = false
+				return
+			}
 			colDef := getColDefByName(expr, colExpr.Col.Name, colExpr.Col.ColPos, tableDef)
+			columnType := types.T(colDef.Typ.Id)
+			if columnType != types.T_varchar || vec.GetType().Oid != types.T_varchar {
+				canCompile = false
+				return
+			}
 			isPK, isSorted := isSortedKey(colDef)
 			if isSorted {
 				fastFilterOp = func(obj *objectio.ObjectStats) (bool, error) {
 					if obj.ZMIsEmpty() {
 						return true, nil
 					}
-					return obj.SortKeyZoneMap().PrefixIn(vec), nil
+					return prefixInVector(obj.SortKeyZoneMap(), vec, columnType).mayMatch(), nil
 				}
 			}
 			highSelectivityHint = isPK && vec.Length() <= 10
@@ -1073,10 +1197,12 @@ func CompileFilterExpr(
 					return true, nil
 				}
 				dataMeta := meta.MustDataMeta()
-				return dataMeta.MustGetColumn(uint16(seqNum)).ZoneMap().PrefixIn(vec), nil
+				return prefixInVector(
+					dataMeta.MustGetColumn(uint16(seqNum)).ZoneMap(), vec, columnType,
+				).mayMatch(), nil
 			}
 			var minPrefix, maxPrefix []byte
-			if vec.Length() > 0 {
+			if vec.Length() > 0 && !vec.IsConstNull() && !vec.GetNulls().Any() {
 				col, area := vector.MustVarlenaRawData(vec)
 				minPrefix = col[0].GetByteSlice(area)
 				maxPrefix = col[len(col)-1].GetByteSlice(area)
@@ -1088,22 +1214,18 @@ func CompileFilterExpr(
 					return false, true, nil
 				}
 				zm := blkMeta.MustGetColumn(uint16(seqNum)).ZoneMap()
-				if isSorted && maxPrefix != nil && types.PrefixCompare(zm.GetMinBuf(), maxPrefix) > 0 {
+				if isSorted && maxPrefix != nil && anyPrefixLEByValue(zm, maxPrefix, columnType).excludes() {
 					return true, false, nil
 				}
-				if !zm.PrefixIn(vec) {
+				if prefixInVector(zm, vec, columnType).excludes() {
 					return false, false, nil
 				}
 				return false, true, nil
 			}
 			if isSorted && minPrefix != nil {
 				seekOp = func(meta objectio.ObjectDataMeta) int {
-					blockCnt := int(meta.BlockCount())
-					return sort.Search(blockCnt, func(j int) bool {
-						return types.PrefixCompare(
-							meta.GetBlockMeta(uint32(j)).MustGetColumn(uint16(seqNum)).ZoneMap().GetMaxBuf(),
-							minPrefix,
-						) >= 0
+					return seekFirstBlockByZoneMap(meta, uint16(seqNum), nil, columnType, func(zm objectio.ZoneMap) zoneMapMatch {
+						return anyPrefixGEByValue(zm, minPrefix, columnType)
 					})
 				}
 			}
@@ -1156,15 +1278,19 @@ func CompileFilterExpr(
 				return
 			}
 			vec := vector.NewVec(types.T_any.ToType())
-			_ = vec.UnmarshalBinary(val)
+			if err := vec.UnmarshalBinary(val); err != nil {
+				canCompile = false
+				return
+			}
 			colDef := getColDefByName(expr, colExpr.Col.Name, colExpr.Col.ColPos, tableDef)
+			columnType := types.T(colDef.Typ.Id)
 			isPK, isSorted := isSortedKey(colDef)
 			if isSorted {
 				fastFilterOp = func(obj *objectio.ObjectStats) (bool, error) {
 					if obj.ZMIsEmpty() {
 						return true, nil
 					}
-					return obj.SortKeyZoneMap().AnyIn(vec), nil
+					return anyInVector(obj.SortKeyZoneMap(), vec, columnType).mayMatch(), nil
 				}
 			}
 			if isPK {
@@ -1181,24 +1307,41 @@ func CompileFilterExpr(
 					return true, nil
 				}
 				dataMeta := meta.MustDataMeta()
-				return dataMeta.MustGetColumn(uint16(seqNum)).ZoneMap().AnyIn(vec), nil
+				return anyInVector(
+					dataMeta.MustGetColumn(uint16(seqNum)).ZoneMap(), vec, columnType,
+				).mayMatch(), nil
 			}
 			vecHasNull := vec.IsConstNull() || vec.GetNulls().Any()
-			var maxVal []byte
+			var minVal, maxVal []byte
 			if vec.Length() > 0 && !vecHasNull {
+				minVal = vec.GetRawBytesAt(0)
 				maxVal = vec.GetRawBytesAt(vec.Length() - 1)
+			}
+			var minBound, maxBound objectio.ZoneMap
+			if minVal != nil {
+				minBound, ok = makeVectorValueZoneMapBound(columnType, vec, minVal)
+				if !ok {
+					canCompile = false
+					return
+				}
+				maxBound, ok = makeVectorValueZoneMapBound(columnType, vec, maxVal)
+				if !ok {
+					canCompile = false
+					return
+				}
 			}
 			blockFilterOp = func(
 				blkIdx int, blkMeta objectio.BlockObject, bf objectio.BloomFilter,
 			) (bool, bool, error) {
 				zm := blkMeta.MustGetColumn(uint16(seqNum)).ZoneMap()
-				if isSorted && maxVal != nil && !zm.AnyLEByValue(maxVal) {
+				if isSorted && maxVal != nil && anyLEByBound(zm, maxVal, maxBound, columnType).excludes() {
 					return true, false, nil
 				}
-				if !zm.AnyIn(vec) {
+				membership := anyInVector(zm, vec, columnType)
+				if membership.excludes() {
 					return false, false, nil
 				}
-				if isPK {
+				if isPK && membership.comparable {
 					blkBf := bf.GetBloomFilter(uint32(blkIdx))
 					blkBfIdx := index.NewEmptyBloomFilter()
 					if err := index.DecodeBloomFilter(blkBfIdx, blkBf); err != nil {
@@ -1211,12 +1354,10 @@ func CompileFilterExpr(
 				}
 				return false, true, nil
 			}
-			if isSorted && vec.Length() > 0 && !vecHasNull {
-				minVal := vec.GetRawBytesAt(0)
+			if isSorted && minVal != nil {
 				seekOp = func(meta objectio.ObjectDataMeta) int {
-					blockCnt := int(meta.BlockCount())
-					return sort.Search(blockCnt, func(j int) bool {
-						return meta.GetBlockMeta(uint32(j)).MustGetColumn(uint16(seqNum)).ZoneMap().AnyGEByValue(minVal)
+					return seekFirstBlockByZoneMap(meta, uint16(seqNum), minBound, columnType, func(zm objectio.ZoneMap) zoneMapMatch {
+						return anyGEByBound(zm, minVal, minBound, columnType)
 					})
 				}
 			}
