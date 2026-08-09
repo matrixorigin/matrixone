@@ -929,17 +929,20 @@ func doSetVar(
 	var ok bool
 	var userVarIsBin bool
 	var userVarBinaryString bool
+	var userVarPrepareParamKind vector.PrepareParamKind
 	type evaluatedAssignment struct {
-		assign              *tree.VarAssignmentExpr
-		value               interface{}
-		userVarIsBin        bool
-		userVarBinaryString bool
+		assign                  *tree.VarAssignmentExpr
+		value                   interface{}
+		userVarIsBin            bool
+		userVarBinaryString     bool
+		userVarPrepareParamKind vector.PrepareParamKind
 	}
 	evaluateAssignment := func(assign *tree.VarAssignmentExpr) (evaluatedAssignment, error) {
 		isBin := false
 		binaryString := false
-		value, evalErr := getExprValueWithPrepareMode(
-			assign.Value, ses, execCtx, preparedExpression, &isBin, &binaryString)
+		prepareParamKind := vector.PrepareParamNone
+		value, evalErr := getExprValueWithPrepareMeta(
+			assign.Value, ses, execCtx, preparedExpression, &prepareParamKind, &isBin, &binaryString)
 		if evalErr != nil {
 			return evaluatedAssignment{}, evalErr
 		}
@@ -950,16 +953,13 @@ func doSetVar(
 			}
 		}
 		return evaluatedAssignment{
-			assign: assign,
-			value:  value,
-			// IsBin is literal-only numeric interpretation metadata. A user
-			// variable owns a materialized value, so carrying it across SET would
-			// reinterpret the stored bytes as a big-endian integer later.
-			userVarIsBin:        false,
-			userVarBinaryString: binaryString,
+			assign:                  assign,
+			value:                   value,
+			userVarIsBin:            false,
+			userVarBinaryString:     binaryString,
+			userVarPrepareParamKind: prepareParamKind,
 		}, nil
 	}
-
 	setVarFunc := func(system, global bool, name string, value interface{}, sql string) error {
 		var oldValueRaw interface{}
 		if system {
@@ -996,7 +996,8 @@ func doSetVar(
 				}
 			}
 		} else {
-			err = ses.setUserDefinedVar(name, value, sql, userVarIsBin, userVarBinaryString)
+			err = ses.setUserDefinedVarWithKind(
+				name, value, sql, userVarIsBin, userVarPrepareParamKind, userVarBinaryString)
 			if err != nil {
 				return err
 			}
@@ -1010,6 +1011,7 @@ func doSetVar(
 		value := item.value
 		userVarIsBin = item.userVarIsBin
 		userVarBinaryString = item.userVarBinaryString
+		userVarPrepareParamKind = item.userVarPrepareParamKind
 
 		//TODO : fix SET NAMES after parser is ready
 		if assign.SetNames {
@@ -4610,6 +4612,7 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 	proc.SetResolveVariableFunc(ses.txnCompileCtx.ResolveVariable)
 	proc.SetResolveVariableIsBinFunc(ses.txnCompileCtx.ResolveVariableIsBin)
 	proc.SetResolveVariableBinaryStringFunc(ses.txnCompileCtx.ResolveVariableBinaryString)
+	proc.SetResolveVariablePrepareParamKindFunc(ses.txnCompileCtx.ResolveVariablePrepareParamKind)
 	refreshStatementScopedSessionInfo(ses, proc)
 	// Frontend client SQL — session-bound resolver. Procs constructed
 	// via pkg/sql/compile/sql_executor.go's NewTopProcess inherit

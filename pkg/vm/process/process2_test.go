@@ -156,8 +156,23 @@ func TestOwnedPrepareParamsLifecycle(t *testing.T) {
 		return params
 	}
 
+	plain := newParams("plain")
+	proc.SetOwnedPrepareParamsWithMeta(
+		plain,
+		[]bool{false},
+		[]vector.PrepareParamKind{vector.PrepareParamNone},
+	)
+	require.Nil(t, proc.Base.prepareParamsIsBin, "default metadata must keep the zero-allocation path")
+
 	first := newParams("first")
-	proc.SetOwnedPrepareParamsWithIsBin(first, []bool{true})
+	proc.SetOwnedPrepareParamsWithMeta(
+		first,
+		[]bool{true},
+		[]vector.PrepareParamKind{vector.PrepareParamDecimal},
+	)
+	require.True(t, proc.GetPrepareParamIsBin(0))
+	require.Equal(t, vector.PrepareParamDecimal, proc.GetPrepareParamKind(0))
+	require.Zero(t, plain.Length(), "replacing owned default-metadata params must release them")
 	proc.SetPrepareParamsWithIsBin(first, []bool{false})
 	require.Equal(t, 1, first.Length(), "setting the same pointer must not release it")
 	require.True(t, proc.Base.prepareParamsOwned, "setting the same pointer must preserve ownership")

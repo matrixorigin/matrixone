@@ -27,10 +27,6 @@ func ExpressionContainsRuntimeBinaryString(expr *plan.Expr) bool {
 	if expr == nil {
 		return false
 	}
-	switch types.T(expr.Typ.Id) {
-	case types.T_binary, types.T_varbinary, types.T_blob:
-		return true
-	}
 	if literal := expr.GetLit(); literal != nil && literal.IsBin {
 		return true
 	}

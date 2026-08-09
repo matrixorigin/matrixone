@@ -105,39 +105,59 @@ func TestConstantFoldStillFoldsUnaffectedCasts(t *testing.T) {
 	require.NotNil(t, NewConstantFold(true).constantFold(preparedStrictTemporal, proc).GetLit())
 }
 
-func TestConstantFoldKeepsBinaryStringMetadataProducingFunction(t *testing.T) {
+func TestConstantFoldPreservesSerializedResultProvenance(t *testing.T) {
 	proc := testutil.NewProcess(t)
-	f, err := function.GetFunctionByName(context.Background(), "char",
-		[]types.Type{types.T_int64.ToType(), types.T_int64.ToType(), types.T_int64.ToType()})
-	require.NoError(t, err)
-	args := make([]*plan.Expr, 3)
-	for i, value := range []int64{228, 189, 160} {
-		args[i] = &plan.Expr{
-			Typ: plan.Type{Id: int32(types.T_int64)},
-			Expr: &plan.Expr_Lit{Lit: &plan.Literal{
-				Value: &plan.Literal_I64Val{I64Val: value},
-			}},
-		}
-	}
-	expr := &plan.Expr{
-		Typ: plan.Type{Id: int32(types.T_varchar)},
-		Expr: &plan.Expr_F{F: &plan.Function{
-			Func: &plan.ObjectRef{Obj: f.GetEncodedOverloadID(), ObjName: "char"},
-			Args: args,
-		}},
-	}
-	lengthFn, err := function.GetFunctionByName(context.Background(), "char_length",
-		[]types.Type{types.T_varchar.ToType()})
-	require.NoError(t, err)
-	expr = &plan.Expr{
-		Typ: plan.Type{Id: int32(types.T_uint64)},
-		Expr: &plan.Expr_F{F: &plan.Function{
-			Func: &plan.ObjectRef{Obj: lengthFn.GetEncodedOverloadID(), ObjName: "char_length"},
-			Args: []*plan.Expr{expr},
-		}},
+	inputType := types.T_bool.ToType()
+
+	for _, name := range []string{function.SerialFunctionName, function.SerialFullFunctionName} {
+		t.Run(name, func(t *testing.T) {
+			registered, err := function.GetFunctionByName(context.Background(), name, []types.Type{inputType})
+			require.NoError(t, err)
+
+			expr := &plan.Expr{
+				Typ: plan.Type{Id: int32(types.T_varchar)},
+				Expr: &plan.Expr_F{F: &plan.Function{
+					Func: &plan.ObjectRef{Obj: registered.GetEncodedOverloadID(), ObjName: name},
+					Args: []*plan.Expr{{
+						Typ:  plan.Type{Id: int32(types.T_bool)},
+						Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_Bval{Bval: true}}},
+					}},
+				}},
+			}
+
+			folded := NewConstantFold(false).constantFold(expr, proc)
+			literal := folded.GetLit()
+			require.NotNil(t, literal)
+			require.Equal(t, string([]byte{0x27}), literal.GetSval())
+			require.False(t, literal.GetIsBin(), "serial folding must not acquire SQL hex/bit semantics")
+			require.True(t, literal.GetIsSerialized(), "serialized bytes lost their diagnostic provenance")
+		})
 	}
 
-	folded := NewConstantFold(false).constantFold(expr, proc)
-	require.NotNil(t, folded.GetF())
-	require.NotNil(t, folded.GetF().Args[0].GetF())
+	t.Run("serial null remains an ordinary null", func(t *testing.T) {
+		registered, err := function.GetFunctionByName(
+			context.Background(), function.SerialFunctionName, []types.Type{inputType},
+		)
+		require.NoError(t, err)
+
+		expr := &plan.Expr{
+			Typ: plan.Type{Id: int32(types.T_varchar)},
+			Expr: &plan.Expr_F{F: &plan.Function{
+				Func: &plan.ObjectRef{
+					Obj:     registered.GetEncodedOverloadID(),
+					ObjName: function.SerialFunctionName,
+				},
+				Args: []*plan.Expr{{
+					Typ:  plan.Type{Id: int32(types.T_bool)},
+					Expr: &plan.Expr_Lit{Lit: &plan.Literal{Isnull: true}},
+				}},
+			}},
+		}
+
+		literal := NewConstantFold(false).constantFold(expr, proc).GetLit()
+		require.NotNil(t, literal)
+		require.True(t, literal.GetIsnull())
+		require.False(t, literal.GetIsBin(), "NULL must not acquire binary identity metadata")
+		require.False(t, literal.GetIsSerialized(), "NULL must not acquire serialized provenance")
+	})
 }

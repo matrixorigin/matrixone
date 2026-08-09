@@ -76,6 +76,23 @@ func (ag *AggFuncExecExpression) GetAggID() int64 {
 	return ag.aggID
 }
 
+// PreservesFirstArgPrepareParamKind reports aggregates whose result is one of
+// the first argument's original values without a semantic type conversion.
+// Source conversion provenance may cross these materialization boundaries.
+func (ag *AggFuncExecExpression) PreservesFirstArgPrepareParamKind() bool {
+	switch ag.aggID {
+	case AggIdOfMin, AggIdOfMax, AggIdOfAny, AggIdOfMaxBy, AggIdOfMaxByNonNull,
+		WinIdOfFirstValue, WinIdOfLastValue, WinIdOfNthValue:
+		return true
+	case WinIdOfLag, WinIdOfLead:
+		// With no explicit default, LAG/LEAD return the first argument or NULL.
+		// A default expression can introduce a different source category.
+		return len(ag.argExpressions) < 3
+	default:
+		return false
+	}
+}
+
 func (ag *AggFuncExecExpression) IsDistinct() bool {
 	return ag.isDistinct
 }
@@ -184,6 +201,26 @@ type AggFuncExec interface {
 
 	// Free clean the resource and reuse the aggregation if possible.
 	Free()
+}
+
+// PrepareParamKindStateAccessor is an optional capability implemented by the
+// aggregate state backed executors.  It exposes the provenance of the value
+// vector without widening AggFuncExec (value-window and other non-serializable
+// executors do not have a chunk state to expose).  Group spill/partial codecs
+// use this capability to carry the winner category alongside the packed state
+// rows.
+type PrepareParamKindStateAccessor interface {
+	PrepareParamKindsForChunk(chunk int) []vector.PrepareParamKind
+	PrepareParamKindsForSelection(flags [][]uint8) []vector.PrepareParamKind
+	// Row counts let transient provenance decoders validate an exact record
+	// before allocating its row payload. They are intentionally separate from
+	// the optional payload accessors because uniform states do not allocate.
+	PrepareParamKindRowCountForChunk(chunk int) int
+	PrepareParamKindRowCountFlat() int
+	PrepareParamKindSummaryForChunk(chunk int) (vector.PrepareParamKind, bool)
+	PrepareParamKindSummaryForSelection(flags [][]uint8) (vector.PrepareParamKind, bool)
+	RestorePrepareParamKindsForChunk(chunk int, kinds []vector.PrepareParamKind, mp *mpool.MPool) error
+	RestorePrepareParamKindsFlat(kinds []vector.PrepareParamKind, mp *mpool.MPool) error
 }
 
 // indicate who implements the AggFuncExec interface.

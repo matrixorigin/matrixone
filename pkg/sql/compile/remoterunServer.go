@@ -910,6 +910,16 @@ func (receiver *messageReceiverOnServer) newCompile() (*Compile, error) {
 	if pHelper.hasPlanSnapshotTS {
 		proc.SetPlanSnapshotTS(pHelper.planSnapshotTS)
 	}
+	prepareParamMetadata, err := process.PrepareParamMetadataForRemote(
+		proc.GetService(),
+		int(pHelper.prepareParams.Length),
+		pHelper.prepareParams.IsBin,
+	)
+	if err != nil {
+		proc.Free()
+		mpool.DeleteMPool(mp)
+		return nil, err
+	}
 	if pHelper.prepareParams.Length > 0 {
 		prepareParams, err := vector.NewVecWithDataCopy(
 			types.T_text.ToType(),
@@ -930,7 +940,7 @@ func (receiver *messageReceiverOnServer) newCompile() (*Compile, error) {
 		}
 		proc.SetOwnedPrepareParamsWithMetadata(
 			prepareParams,
-			append([]bool(nil), pHelper.prepareParams.IsBin...),
+			prepareParamMetadata,
 			append([]bool(nil), pHelper.prepareParams.IsBinaryString...),
 		)
 	}

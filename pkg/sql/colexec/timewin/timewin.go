@@ -44,6 +44,7 @@ func (timeWin *TimeWin) OpType() vm.OpType {
 
 func (timeWin *TimeWin) Prepare(proc *process.Process) (err error) {
 	ctr := &timeWin.ctr
+	ctr.prepareParamKind.Reset(timeWin.Aggs)
 	if timeWin.OpAnalyzer == nil {
 		timeWin.OpAnalyzer = process.NewAnalyzer(timeWin.GetIdx(), timeWin.IsFirst, timeWin.IsLast, "time_window")
 	} else {
@@ -146,7 +147,12 @@ func getPartitionSetFunction(
 		if !w.IsConstNull() && !w.IsNull(uint64(sel)) {
 			return moerr.NewInternalErrorNoCtx("time window received a non-NULL T_any partition key")
 		}
-		return vector.SetConstNull(v, length, mp)
+		if err := vector.SetConstNull(v, length, mp); err != nil {
+			return err
+		}
+		// A reused output vector may carry metadata from an earlier flush;
+		// NULL is not an observed conversion category.
+		return v.SetPrepareParamKindsWithMP(nil, mp)
 	}
 }
 
@@ -170,6 +176,7 @@ func (timeWin *TimeWin) Call(proc *process.Process) (vm.CallResult, error) {
 			if err = ctr.evalVector(result.Batch, proc); err != nil {
 				return result, err
 			}
+			timeWin.observePrepareParamKinds()
 
 			if err = ctr.calResForInterval(timeWin, proc); err != nil {
 				return result, err
@@ -190,6 +197,7 @@ func (timeWin *TimeWin) Call(proc *process.Process) (vm.CallResult, error) {
 			if err = ctr.evalVector(result.Batch, proc); err != nil {
 				return result, err
 			}
+			timeWin.observePrepareParamKinds()
 
 			if ctr.curVecIdx == 0 && ctr.curRowIdx == 0 {
 				ctr.status = firstWindow
@@ -333,6 +341,22 @@ func (timeWin *TimeWin) Call(proc *process.Process) (vm.CallResult, error) {
 
 		}
 
+	}
+}
+
+func (timeWin *TimeWin) observePrepareParamKinds() {
+	batchIndex := timeWin.ctr.i - 1
+	if batchIndex < 0 || batchIndex >= len(timeWin.ctr.aggVec) {
+		return
+	}
+	for i := range timeWin.Aggs {
+		if i < len(timeWin.ctr.aggVec[batchIndex]) &&
+			len(timeWin.ctr.aggVec[batchIndex][i]) > 0 {
+			arg := timeWin.ctr.aggVec[batchIndex][i][0]
+			if arg.Length() > 0 && !arg.AllNull() {
+				timeWin.ctr.prepareParamKind.Observe(i, arg.GetPrepareParamKind())
+			}
+		}
 	}
 }
 
@@ -630,7 +654,7 @@ func (ctr *container) calRes(ap *TimeWin, proc *process.Process) (err error) {
 	ctr.freeFlushedAggVecs(proc.Mp())
 	ctr.bat = batch.NewWithSize(ctr.colCnt)
 	i := 0
-	for _, agg := range ctr.aggs {
+	for aggIndex, agg := range ctr.aggs {
 		vecs, err := agg.Flush()
 		if err != nil {
 			return err
@@ -638,6 +662,9 @@ func (ctr *container) calRes(ap *TimeWin, proc *process.Process) (err error) {
 		result, err := aggexec.MergeSplitResult(vecs, proc.Mp())
 		if err != nil {
 			return err
+		}
+		if !result.HasPrepareParamKind() {
+			result.SetPrepareParamKind(ctr.prepareParamKind.Get(aggIndex))
 		}
 
 		ctr.bat.SetVector(int32(i), result)
@@ -711,7 +738,10 @@ func (ctr *container) calRes(ap *TimeWin, proc *process.Process) (err error) {
 func (ctr *container) calResForInterval(ap *TimeWin, proc *process.Process) (err error) {
 	ctr.bat = batch.NewWithSize(ctr.colCnt)
 	i := 0
-	for _, vecs := range ctr.aggVec[ctr.i-1] {
+	for aggIndex, vecs := range ctr.aggVec[ctr.i-1] {
+		if !vecs[0].HasPrepareParamKind() {
+			vecs[0].SetPrepareParamKind(ctr.prepareParamKind.Get(aggIndex))
+		}
 		ctr.bat.SetVector(int32(i), vecs[0])
 		i++
 	}
@@ -914,6 +944,9 @@ func (ctr *container) evalAggVector(bat *batch.Batch, proc *process.Process) err
 				ctr.aggVec[ctr.i][i][j].CleanOnlyData()
 				if err = ctr.aggVec[ctr.i][i][j].UnionBatch(vec, 0, vec.Length(), nil, proc.Mp()); err != nil {
 					return err
+				}
+				if !ctr.aggVec[ctr.i][i][j].HasPrepareParamKind() {
+					ctr.aggVec[ctr.i][i][j].SetPrepareParamKind(vec.GetPrepareParamKind())
 				}
 			} else {
 				ctr.aggVec[ctr.i][i][j], err = vec.Dup(proc.Mp())

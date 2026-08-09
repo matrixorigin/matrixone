@@ -39,6 +39,19 @@ type minMaxExecBytes struct {
 	binaryString bool
 }
 
+func mergeMinMaxPrepareParamKind(
+	vec *vector.Vector,
+	row int,
+	candidate vector.PrepareParamKind,
+	mp *mpool.MPool,
+) error {
+	return vec.SetPrepareParamKindAtWithMP(
+		row,
+		vector.MergePrepareParamKinds(vec.GetPrepareParamKindAt(row), candidate),
+		mp,
+	)
+}
+
 func (exec *minMaxExecFixed[T]) Fill(groupIndex int, row int, vectors []*vector.Vector) error {
 	return exec.BatchFill(row, []uint64{uint64(groupIndex + 1)}, vectors)
 }
@@ -61,6 +74,7 @@ func (exec *minMaxExecFixed[T]) BatchFill(offset int, groups []uint64, vectors [
 	var slotOf [256]uint8
 	var localVals [maxSlots]T
 	var localGrps [maxSlots]uint64
+	var localKinds [maxSlots]vector.PrepareParamKind
 	nSlots := 0
 
 	for i := range slotOf {
@@ -79,8 +93,10 @@ func (exec *minMaxExecFixed[T]) BatchFill(offset int, groups []uint64, vectors [
 
 		g := grp - 1
 		var value T
+		kind := vec.GetPrepareParamKindAt(int(uint64(i) + uint64(offset)))
 		if isConst {
 			value = vals[0]
+			kind = vec.GetPrepareParamKindAt(0)
 		} else {
 			value = vals[i+offset]
 		}
@@ -97,8 +113,21 @@ func (exec *minMaxExecFixed[T]) BatchFill(offset int, groups []uint64, vectors [
 					if aggVec.IsNull(y) {
 						aggVec.UnsetNull(y)
 						aggs[y] = value
-					} else if exec.comp(value, aggs[y]) < 0 {
-						aggs[y] = value
+						if err := aggVec.SetPrepareParamKindAtWithMP(int(y), kind, exec.mp); err != nil {
+							return err
+						}
+					} else {
+						switch cmp := exec.comp(value, aggs[y]); {
+						case cmp < 0:
+							aggs[y] = value
+							if err := aggVec.SetPrepareParamKindAtWithMP(int(y), kind, exec.mp); err != nil {
+								return err
+							}
+						case cmp == 0:
+							if err := mergeMinMaxPrepareParamKind(aggVec, int(y), kind, exec.mp); err != nil {
+								return err
+							}
+						}
 					}
 					break
 				}
@@ -106,12 +135,17 @@ func (exec *minMaxExecFixed[T]) BatchFill(offset int, groups []uint64, vectors [
 				slotOf[h] = s
 				localGrps[nSlots] = g
 				localVals[nSlots] = value
+				localKinds[nSlots] = kind
 				nSlots++
 				break
 			}
 			if localGrps[s] == g {
-				if exec.comp(value, localVals[s]) < 0 {
+				switch cmp := exec.comp(value, localVals[s]); {
+				case cmp < 0:
 					localVals[s] = value
+					localKinds[s] = kind
+				case cmp == 0:
+					localKinds[s] = vector.MergePrepareParamKinds(localKinds[s], kind)
 				}
 				break
 			}
@@ -134,8 +168,21 @@ func (exec *minMaxExecFixed[T]) BatchFill(offset int, groups []uint64, vectors [
 		if aggVec.IsNull(y) {
 			aggVec.UnsetNull(y)
 			aggs[y] = localVals[s]
-		} else if exec.comp(localVals[s], aggs[y]) < 0 {
-			aggs[y] = localVals[s]
+			if err := aggVec.SetPrepareParamKindAtWithMP(int(y), localKinds[s], exec.mp); err != nil {
+				return err
+			}
+		} else {
+			switch cmp := exec.comp(localVals[s], aggs[y]); {
+			case cmp < 0:
+				aggs[y] = localVals[s]
+				if err := aggVec.SetPrepareParamKindAtWithMP(int(y), localKinds[s], exec.mp); err != nil {
+					return err
+				}
+			case cmp == 0:
+				if err := mergeMinMaxPrepareParamKind(aggVec, int(y), localKinds[s], exec.mp); err != nil {
+					return err
+				}
+			}
 		}
 	}
 	return nil
@@ -168,8 +215,29 @@ func (exec *minMaxExecFixed[T]) BatchMerge(next AggFuncExec, offset int, groups 
 		if exec.state[x1].vecs[0].IsNull(y1) {
 			exec.state[x1].vecs[0].UnsetNull(y1)
 			aggs1[y1] = aggs2[y2]
-		} else if exec.comp(aggs2[y2], aggs1[y1]) < 0 {
-			aggs1[y1] = aggs2[y2]
+			if err := exec.state[x1].vecs[0].SetPrepareParamKindAtWithMP(
+				int(y1), other.state[x2].vecs[0].GetPrepareParamKindAt(int(y2)), exec.mp); err != nil {
+				return err
+			}
+		} else {
+			cmp := exec.comp(aggs2[y2], aggs1[y1])
+			switch {
+			case cmp < 0:
+				aggs1[y1] = aggs2[y2]
+				if err := exec.state[x1].vecs[0].SetPrepareParamKindAtWithMP(
+					int(y1), other.state[x2].vecs[0].GetPrepareParamKindAt(int(y2)), exec.mp); err != nil {
+					return err
+				}
+			case cmp == 0:
+				if err := mergeMinMaxPrepareParamKind(
+					exec.state[x1].vecs[0],
+					int(y1),
+					other.state[x2].vecs[0].GetPrepareParamKindAt(int(y2)),
+					exec.mp,
+				); err != nil {
+					return err
+				}
+			}
 		}
 	}
 	return nil
@@ -194,17 +262,40 @@ func (exec *minMaxExecFixed[T]) Flush() ([]*vector.Vector, error) {
 		exec.state[i].length = 0
 		exec.state[i].capacity = 0
 	}
+	freeResultsOnError := func(err error) ([]*vector.Vector, error) {
+		for _, vec := range vecs {
+			if vec != nil {
+				vec.Free(exec.mp)
+			}
+		}
+		return nil, err
+	}
 
 	if exec.hasExtra {
 		for _, vec := range vecs {
 			for i := range vec.Length() {
 				if vec.IsNull(uint64(i)) {
 					vec.UnsetNull(uint64(i))
-					vector.SetFixedAtNoTypeCheck(vec, int(i), exec.extra)
+					if err := vector.SetFixedAtNoTypeCheck(vec, int(i), exec.extra); err != nil {
+						return freeResultsOnError(err)
+					}
+					if err := vec.SetPrepareParamKindAtWithMP(i, vector.PrepareParamNone, exec.mp); err != nil {
+						return freeResultsOnError(err)
+					}
 				} else {
 					oldValue := vector.GetFixedAtNoTypeCheck[T](vec, int(i))
-					if exec.comp(exec.extra, oldValue) < 0 {
-						vector.SetFixedAtNoTypeCheck(vec, int(i), exec.extra)
+					switch cmp := exec.comp(exec.extra, oldValue); {
+					case cmp < 0:
+						if err := vector.SetFixedAtNoTypeCheck(vec, int(i), exec.extra); err != nil {
+							return freeResultsOnError(err)
+						}
+						if err := vec.SetPrepareParamKindAtWithMP(i, vector.PrepareParamNone, exec.mp); err != nil {
+							return freeResultsOnError(err)
+						}
+					case cmp == 0:
+						if err := mergeMinMaxPrepareParamKind(vec, i, vector.PrepareParamNone, exec.mp); err != nil {
+							return freeResultsOnError(err)
+						}
 					}
 				}
 			}
@@ -234,13 +325,29 @@ func (exec *minMaxExecBytes) BatchFill(offset int, groups []uint64, vectors []*v
 		} else {
 			x, y := exec.getXY(grp - 1)
 			value := vectors[0].GetBytesAt(int(idx))
+			kind := vectors[0].GetPrepareParamKindAt(int(idx))
 			if exec.state[x].vecs[0].IsNull(uint64(y)) {
 				exec.state[x].vecs[0].UnsetNull(uint64(y))
-				vector.SetBytesAt(exec.state[x].vecs[0], int(y), value, exec.mp)
+				if err := vector.SetBytesAt(exec.state[x].vecs[0], int(y), value, exec.mp); err != nil {
+					return err
+				}
+				if err := exec.state[x].vecs[0].SetPrepareParamKindAtWithMP(int(y), kind, exec.mp); err != nil {
+					return err
+				}
 			} else {
 				oldValue := exec.state[x].vecs[0].GetBytesAt(int(y))
-				if exec.comp(value, oldValue) < 0 {
-					vector.SetBytesAt(exec.state[x].vecs[0], int(y), value, exec.mp)
+				switch cmp := exec.comp(value, oldValue); {
+				case cmp < 0:
+					if err := vector.SetBytesAt(exec.state[x].vecs[0], int(y), value, exec.mp); err != nil {
+						return err
+					}
+					if err := exec.state[x].vecs[0].SetPrepareParamKindAtWithMP(int(y), kind, exec.mp); err != nil {
+						return err
+					}
+				case cmp == 0:
+					if err := mergeMinMaxPrepareParamKind(exec.state[x].vecs[0], int(y), kind, exec.mp); err != nil {
+						return err
+					}
 				}
 			}
 		}
@@ -269,12 +376,34 @@ func (exec *minMaxExecBytes) BatchMerge(next AggFuncExec, offset int, groups []u
 		if exec.state[x1].vecs[0].IsNull(uint64(y1)) {
 			value := other.state[x2].vecs[0].GetBytesAt(int(y2))
 			exec.state[x1].vecs[0].UnsetNull(uint64(y1))
-			vector.SetBytesAt(exec.state[x1].vecs[0], int(y1), value, exec.mp)
+			if err := vector.SetBytesAt(exec.state[x1].vecs[0], int(y1), value, exec.mp); err != nil {
+				return err
+			}
+			if err := exec.state[x1].vecs[0].SetPrepareParamKindAtWithMP(
+				int(y1), other.state[x2].vecs[0].GetPrepareParamKindAt(int(y2)), exec.mp); err != nil {
+				return err
+			}
 		} else {
 			value := other.state[x2].vecs[0].GetBytesAt(int(y2))
 			oldValue := exec.state[x1].vecs[0].GetBytesAt(int(y1))
-			if exec.comp(value, oldValue) < 0 {
-				vector.SetBytesAt(exec.state[x1].vecs[0], int(y1), value, exec.mp)
+			switch cmp := exec.comp(value, oldValue); {
+			case cmp < 0:
+				if err := vector.SetBytesAt(exec.state[x1].vecs[0], int(y1), value, exec.mp); err != nil {
+					return err
+				}
+				if err := exec.state[x1].vecs[0].SetPrepareParamKindAtWithMP(
+					int(y1), other.state[x2].vecs[0].GetPrepareParamKindAt(int(y2)), exec.mp); err != nil {
+					return err
+				}
+			case cmp == 0:
+				if err := mergeMinMaxPrepareParamKind(
+					exec.state[x1].vecs[0],
+					int(y1),
+					other.state[x2].vecs[0].GetPrepareParamKindAt(int(y2)),
+					exec.mp,
+				); err != nil {
+					return err
+				}
 			}
 		}
 	}
@@ -301,17 +430,40 @@ func (exec *minMaxExecBytes) Flush() ([]*vector.Vector, error) {
 		exec.state[i].length = 0
 		exec.state[i].capacity = 0
 	}
+	freeResultsOnError := func(err error) ([]*vector.Vector, error) {
+		for _, vec := range vecs {
+			if vec != nil {
+				vec.Free(exec.mp)
+			}
+		}
+		return nil, err
+	}
 
 	if exec.hasExtra {
 		for _, vec := range vecs {
 			for i := range vec.Length() {
 				if vec.IsNull(uint64(i)) {
 					vec.UnsetNull(uint64(i))
-					vector.SetBytesAt(vec, int(i), exec.extra, exec.mp)
+					if err := vector.SetBytesAt(vec, int(i), exec.extra, exec.mp); err != nil {
+						return freeResultsOnError(err)
+					}
+					if err := vec.SetPrepareParamKindAtWithMP(i, vector.PrepareParamNone, exec.mp); err != nil {
+						return freeResultsOnError(err)
+					}
 				} else {
 					oldValue := vec.GetBytesAt(int(i))
-					if exec.comp(exec.extra, oldValue) < 0 {
-						vector.SetBytesAt(vec, int(i), exec.extra, exec.mp)
+					switch cmp := exec.comp(exec.extra, oldValue); {
+					case cmp < 0:
+						if err := vector.SetBytesAt(vec, int(i), exec.extra, exec.mp); err != nil {
+							return freeResultsOnError(err)
+						}
+						if err := vec.SetPrepareParamKindAtWithMP(i, vector.PrepareParamNone, exec.mp); err != nil {
+							return freeResultsOnError(err)
+						}
+					case cmp == 0:
+						if err := mergeMinMaxPrepareParamKind(vec, i, vector.PrepareParamNone, exec.mp); err != nil {
+							return freeResultsOnError(err)
+						}
 					}
 				}
 			}

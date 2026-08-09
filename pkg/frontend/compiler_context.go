@@ -32,6 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/pubsub"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -887,22 +888,63 @@ func (tcc *TxnCompilerContext) ResolveVariableBinaryString(varName string, isSys
 	return udVar.BinaryString, nil
 }
 
+func (tcc *TxnCompilerContext) ResolveVariablePrepareParamKind(
+	varName string,
+	isSystemVar, isGlobalVar bool,
+) (vector.PrepareParamKind, error) {
+	if value, declaredType, hasDeclaredType, ok := resolveStoredProcedureVariableWithType(
+		tcc.execCtx.reqCtx, varName,
+	); ok {
+		if hasDeclaredType {
+			return prepareParamKindFromType(types.T(declaredType.Id)), nil
+		}
+		return prepareParamKindFromValue(value), nil
+	}
+	if isSystemVar {
+		value, err := tcc.ResolveVariable(varName, true, isGlobalVar)
+		if err != nil {
+			return vector.PrepareParamNone, err
+		}
+		return prepareParamKindFromValue(value), nil
+	}
+	udVar, err := tcc.GetSession().GetUserDefinedVar(varName)
+	if err != nil {
+		return vector.PrepareParamNone, err
+	}
+	return udVar.PrepareParamKind, nil
+}
+
 func resolveStoredProcedureVariable(ctx context.Context, varName string) (interface{}, bool) {
+	value, _, _, ok := resolveStoredProcedureVariableWithType(ctx, varName)
+	return value, ok
+}
+
+// resolveStoredProcedureVariableWithType resolves the value and its declared
+// type from the same lexical scope. A missing type in an inner scope must not
+// fall through to an outer declaration with the same name.
+func resolveStoredProcedureVariableWithType(
+	ctx context.Context, varName string,
+) (value interface{}, declaredType plan.Type, hasDeclaredType, ok bool) {
 	inSp, _ := ctx.Value(defines.InSp{}).(bool)
 	if !inSp {
-		return nil, false
+		return nil, plan.Type{}, false, false
 	}
 	tmpScope, ok := ctx.Value(defines.VarScopeKey{}).(*[]map[string]interface{})
 	if !ok {
-		return nil, false
+		return nil, plan.Type{}, false, false
 	}
+	typeScopes, hasTypeScopes := ctx.Value(defines.VarScopeTypeKey{}).(*[]map[string]plan.Type)
 	name := strings.ToLower(varName)
 	for i := len(*tmpScope) - 1; i >= 0; i-- {
 		if val, ok := (*tmpScope)[i][name]; ok {
-			return val, true
+			if hasTypeScopes && typeScopes != nil && i < len(*typeScopes) {
+				typ, found := (*typeScopes)[i][name]
+				return val, typ, found, true
+			}
+			return val, plan.Type{}, false, true
 		}
 	}
-	return nil, false
+	return nil, plan.Type{}, false, false
 }
 
 func (tcc *TxnCompilerContext) ResolveAccountIds(accountNames []string) (accountIds []uint32, err error) {

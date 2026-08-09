@@ -90,11 +90,11 @@ func (proc *Process) BuildProcessInfo(
 			for _, binaryString := range proc.Base.prepareParamsBinaryString {
 				hasBinaryString = hasBinaryString || binaryString
 			}
-			if hasBinaryString && protocolVersion < defines.MORPCVersion12 {
+			if hasBinaryString && protocolVersion < defines.MORPCVersion13 {
 				return procInfo, moerr.NewNotSupportedf(
 					proc.Ctx,
 					"binary string prepared parameters require protocol version %d",
-					defines.MORPCVersion12,
+					defines.MORPCVersion13,
 				)
 			}
 			procInfo.PrepareParams.Length = int64(vec.Length())
@@ -106,12 +106,18 @@ func (proc *Process) BuildProcessInfo(
 			for i := range procInfo.PrepareParams.Nulls {
 				procInfo.PrepareParams.Nulls[i] = vec.GetNulls().Contains(uint64(i))
 			}
-			procInfo.PrepareParams.IsBin = append(procInfo.PrepareParams.IsBin, proc.Base.prepareParamsIsBin...)
-			if protocolVersion >= defines.MORPCVersion12 {
+			metadata, err := PrepareParamMetadataForRemote(
+				proc.GetService(),
+				vec.Length(),
+				proc.Base.prepareParamsIsBin,
+			)
+			if err != nil {
+				return procInfo, err
+			}
+			procInfo.PrepareParams.IsBin = metadata
+			if hasBinaryString {
 				procInfo.PrepareParams.IsBinaryString = append(
-					procInfo.PrepareParams.IsBinaryString,
-					proc.Base.prepareParamsBinaryString...,
-				)
+					[]bool(nil), proc.Base.prepareParamsBinaryString...)
 			}
 		}
 	}
@@ -232,6 +238,18 @@ func (c *codecService) Decode(
 	ctx context.Context,
 	value pipeline.ProcessInfo,
 ) (*Process, error) {
+	service := ""
+	if c.lockService != nil {
+		service = c.lockService.GetConfig().ServiceID
+	}
+	prepareParamMetadata, err := PrepareParamMetadataForRemote(
+		service,
+		int(value.PrepareParams.Length),
+		value.PrepareParams.IsBin,
+	)
+	if err != nil {
+		return nil, err
+	}
 	txnOp, err := c.txnClient.NewWithSnapshot(ctx, value.Snapshot)
 	if err != nil {
 		return nil, err
@@ -288,8 +306,8 @@ func (c *codecService) Decode(
 		}
 		proc.SetOwnedPrepareParamsWithMetadata(
 			prepareParams,
-			append([]bool(nil), value.PrepareParams.IsBin...),
-			append([]bool(nil), value.PrepareParams.IsBinaryString...),
+			prepareParamMetadata,
+			value.PrepareParams.IsBinaryString,
 		)
 	}
 	return proc, nil

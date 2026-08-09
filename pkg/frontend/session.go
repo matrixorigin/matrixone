@@ -37,6 +37,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -366,16 +367,30 @@ func (ses *Session) SetUserDefinedVar(name string, value interface{}, sql string
 	return ses.setUserDefinedVar(name, value, sql, false, false)
 }
 
-func (ses *Session) setUserDefinedVar(
+func (ses *Session) setUserDefinedVar(name string, value interface{}, sql string, isBin, binaryString bool) error {
+	return ses.setUserDefinedVarWithKind(name, value, sql, isBin, prepareParamKindFromValue(value), binaryString)
+}
+
+func (ses *Session) setUserDefinedVarWithKind(
 	name string,
 	value interface{},
 	sql string,
-	isBin, binaryString bool,
+	isBin bool,
+	kind vector.PrepareParamKind,
+	binaryString ...bool,
 ) error {
+	var binary bool
+	if len(binaryString) > 0 {
+		binary = binaryString[0]
+	}
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
 	ses.userDefinedVars[strings.ToLower(name)] = &UserDefinedVar{
-		Value: value, Sql: sql, IsBin: isBin, BinaryString: binaryString,
+		Value:            value,
+		Sql:              sql,
+		IsBin:            isBin,
+		BinaryString:     binary,
+		PrepareParamKind: kind,
 	}
 	return nil
 }

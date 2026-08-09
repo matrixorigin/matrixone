@@ -44,16 +44,16 @@ CREATE TABLE binary_lpad_ctas AS SELECT LPAD(X'61', 5, 'x') c;
 CREATE TABLE binary_unary_ctas AS SELECT +X'3132' c;
 SHOW COLUMNS FROM binary_left_ctas;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
-c  ¦  BLOB(0)  ¦  YES  ¦    ¦  null  ¦    ¦
+c  ¦  BLOB(0)  ¦  YES  ¦    ¦  null  ¦    ¦  
 SHOW COLUMNS FROM binary_regexp_ctas;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
-c  ¦  BLOB(0)  ¦  YES  ¦    ¦  null  ¦    ¦
+c  ¦  BLOB(0)  ¦  YES  ¦    ¦  null  ¦    ¦  
 SHOW COLUMNS FROM binary_lpad_ctas;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
-c  ¦  VARBINARY(5)  ¦  NO  ¦    ¦  null  ¦    ¦
+c  ¦  VARBINARY(5)  ¦  NO  ¦    ¦  null  ¦    ¦  
 SHOW COLUMNS FROM binary_unary_ctas;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
-c  ¦  VARBINARY(2)  ¦  NO  ¦    ¦  null  ¦    ¦
+c  ¦  VARBINARY(2)  ¦  NO  ¦    ¦  null  ¦    ¦  
 SELECT HEX(c), CHAR_LENGTH(c) FROM binary_left_ctas;
 ➤ HEX(c)[12,65535,0]  ¦  CHAR_LENGTH(c)[-5,64,0]  𝄀
 E4  ¦  1
