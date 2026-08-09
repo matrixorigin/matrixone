@@ -353,6 +353,8 @@ func (s *Service) handle(ctx context.Context, req pb.Request,
 		return s.handleUpdateCNLabel(ctx, req), pb.LogRecordResponse{}
 	case pb.UPDATE_CN_WORK_STATE:
 		return s.handleUpdateCNWorkState(ctx, req), pb.LogRecordResponse{}
+	case pb.UPDATE_GLOBAL_SYS_VAR_COMMIT_TS:
+		return s.handleUpdateGlobalSysVarCommitTS(ctx, req), pb.LogRecordResponse{}
 	case pb.PATCH_CN_STORE:
 		return s.handlePatchCNStore(ctx, req), pb.LogRecordResponse{}
 	case pb.DELETE_CN_STORE:
@@ -659,6 +661,14 @@ func (s *Service) handleUpdateCNWorkState(ctx context.Context, req pb.Request) p
 	if err := s.store.updateCNWorkState(ctx, *workState); err != nil {
 		resp.ErrorCode, resp.ErrorMessage = toErrorCode(err)
 		return resp
+	}
+	return resp
+}
+
+func (s *Service) handleUpdateGlobalSysVarCommitTS(ctx context.Context, req pb.Request) pb.Response {
+	resp := getResponse(req)
+	if err := s.store.updateGlobalSysVarCommitTS(ctx, req.GlobalSysVarCommitTS); err != nil {
+		resp.ErrorCode, resp.ErrorMessage = toErrorCode(err)
 	}
 	return resp
 }

@@ -155,14 +155,15 @@ func NewService(
 			UUID: cfg.UUID,
 			Role: metadata.MustParseCNRole(cfg.Role),
 		},
-		cfg:         cfg,
-		logger:      logutil.GetGlobalLogger().Named("cn-service"),
-		metadataFS:  metadataFS,
-		etlFS:       etlFS,
-		fileService: fileService,
-		sessionMgr:  queryservice.NewSessionManager(),
-		addressMgr:  address.NewAddressManager(cfg.ServiceHost, cfg.PortBase),
-		gossipNode:  gossipNode,
+		cfg:                    cfg,
+		logger:                 logutil.GetGlobalLogger().Named("cn-service"),
+		metadataFS:             metadataFS,
+		etlFS:                  etlFS,
+		fileService:            fileService,
+		sessionMgr:             queryservice.NewSessionManager(),
+		addressMgr:             address.NewAddressManager(cfg.ServiceHost, cfg.PortBase),
+		gossipNode:             gossipNode,
+		globalSysVarGeneration: uuid.NewString(),
 	}
 	srv.colexecServer = colexec.NewServer(cfg.UUID)
 

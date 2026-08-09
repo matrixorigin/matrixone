@@ -21,13 +21,101 @@ import (
 	"testing"
 	"time"
 
+	"github.com/golang/mock/gomock"
 	"github.com/stretchr/testify/require"
 
+	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/util"
 )
+
+func TestGlobalSysVarWatermarkTaskAppliesLatestObservedCommit(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	txnClient := mock_frontend.NewMockTxnClient(ctrl)
+	first := timestamp.Timestamp{PhysicalTime: 100, LogicalTime: 1}
+	latest := timestamp.Timestamp{PhysicalTime: 200, LogicalTime: 2}
+	firstEntered := make(chan struct{})
+	firstRelease := make(chan struct{})
+	txnClient.EXPECT().SyncLatestCommitTSWithContext(gomock.Any(), first).
+		DoAndReturn(func(context.Context, timestamp.Timestamp) error {
+			close(firstEntered)
+			<-firstRelease
+			return nil
+		})
+	txnClient.EXPECT().SyncLatestCommitTSWithContext(gomock.Any(), latest).Return(nil)
+
+	s := &service{
+		_txnClient:         txnClient,
+		globalSysVarWakeup: make(chan struct{}, 1),
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		s.globalSysVarWatermarkTask(ctx)
+	}()
+
+	s.observeGlobalSysVarCommitTS(first)
+	select {
+	case <-firstEntered:
+	case <-time.After(time.Second):
+		t.Fatal("watermark worker did not start the first visibility wait")
+	}
+	s.observeGlobalSysVarCommitTS(latest)
+	close(firstRelease)
+	require.Eventually(t, func() bool {
+		applied := s.globalSysVarApplied.Load()
+		return applied != nil && applied.Equal(latest)
+	}, time.Second, time.Millisecond)
+
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("watermark worker did not stop after cancellation")
+	}
+}
+
+func TestGlobalSysVarWatermarkTaskCancelsVisibilityWait(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	txnClient := mock_frontend.NewMockTxnClient(ctrl)
+	ts := timestamp.Timestamp{PhysicalTime: 100, LogicalTime: 1}
+	entered := make(chan struct{})
+	txnClient.EXPECT().SyncLatestCommitTSWithContext(gomock.Any(), ts).
+		DoAndReturn(func(ctx context.Context, _ timestamp.Timestamp) error {
+			close(entered)
+			<-ctx.Done()
+			return ctx.Err()
+		})
+
+	svc := &service{
+		_txnClient:         txnClient,
+		globalSysVarWakeup: make(chan struct{}, 1),
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		svc.globalSysVarWatermarkTask(ctx)
+	}()
+	svc.observeGlobalSysVarCommitTS(ts)
+
+	select {
+	case <-entered:
+	case <-time.After(time.Second):
+		t.Fatal("watermark worker did not enter the visibility wait")
+	}
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("watermark worker outlived its service context")
+	}
+	require.Nil(t, svc.globalSysVarApplied.Load())
+}
 
 type blockingCNHeartbeatCommandClient struct {
 	*testHAKClient

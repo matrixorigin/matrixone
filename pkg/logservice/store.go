@@ -44,6 +44,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 )
 
@@ -1058,6 +1059,20 @@ func (l *store) updateCNWorkState(ctx context.Context, workState pb.CNWorkState)
 		MustUnmarshal(&cb, result.Data)
 		return nil
 	}
+}
+
+func (l *store) updateGlobalSysVarCommitTS(
+	ctx context.Context,
+	ts timestamp.Timestamp,
+) error {
+	cmd := hakeeper.GetUpdateGlobalSysVarCommitTSCmd(ts)
+	session := l.nh.GetNoOPSession(hakeeper.DefaultHAKeeperShardID)
+	if _, err := l.propose(ctx, session, cmd); err != nil {
+		l.runtime.Logger().Error("failed to propose global sysvar commit timestamp",
+			zap.Error(err))
+		return handleNotHAKeeperError(ctx, err)
+	}
+	return nil
 }
 
 func (l *store) patchCNStore(ctx context.Context, stateLabel pb.CNStateLabel) error {

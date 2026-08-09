@@ -30,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	logpb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 )
 
 // GetMOCluster get mo cluster from process level runtime
@@ -80,45 +81,6 @@ func GetMOClusterWithContext(ctx context.Context, service string) (MOCluster, er
 			}
 		}
 	}
-}
-
-// GetCNServiceWithContext returns the routable CN snapshot without allowing
-// the built-in cluster's initial readiness wait to outlive ctx.
-func GetCNServiceWithContext(
-	ctx context.Context,
-	service MOCluster,
-	selector Selector,
-	apply func(metadata.CNService) bool,
-) error {
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	if service == nil {
-		return moerr.NewInternalErrorNoCtx("mocluster service is not initialized")
-	}
-	if builtIn, ok := service.(*cluster); ok {
-		if err := builtIn.waitReadyWithContext(ctx); err != nil {
-			return err
-		}
-		if selector.regexpCache == nil && builtIn.regexpCache != nil {
-			selector.regexpCache = builtIn.regexpCache
-		}
-		services := builtIn.services.Load()
-		for _, cn := range services.cn {
-			if (selector.all || cn.WorkState == metadata.WorkState_Working ||
-				cn.WorkState == metadata.WorkState_Unknown) &&
-				selector.filterCN(cn) && !apply(cn) {
-				break
-			}
-		}
-		return ctx.Err()
-	}
-
-	service.GetCNService(selector, apply)
-	return ctx.Err()
 }
 
 // GetCNServiceWithoutWorkingStateWithContext is the context-aware snapshot
@@ -246,10 +208,11 @@ type cluster struct {
 	// Correctness: readyOnce.Do guarantees that ready.Store(true) happens before
 	// close(readyC), so if readyC is closed (i.e., <-readyC returns), ready is
 	// guaranteed to be true. If ready.Load() returns false, we fall back to channel wait.
-	ready       atomic.Bool
-	services    atomic.Pointer[services]
-	regexpCache *regexpCache
-	options     struct {
+	ready                atomic.Bool
+	services             atomic.Pointer[services]
+	globalSysVarCommitTS atomic.Pointer[timestamp.Timestamp]
+	regexpCache          *regexpCache
+	options              struct {
 		disableRefresh bool
 	}
 }
@@ -565,6 +528,16 @@ func (c *cluster) refreshWithContext(ctx context.Context) error {
 
 	new := &services{}
 	for _, cn := range details.CNStores {
+		if !details.GlobalSysVarCommitTS.IsEmpty() &&
+			cn.GlobalSysVarCommitTS.Less(details.GlobalSysVarCommitTS) {
+			if c.logger.Enabled(zap.DebugLevel) {
+				c.logger.Debug("cn service fenced by global sysvar watermark",
+					zap.String("cn", cn.UUID),
+					zap.String("required", details.GlobalSysVarCommitTS.DebugString()),
+					zap.String("applied", cn.GlobalSysVarCommitTS.DebugString()))
+			}
+			continue
+		}
 		v := newCNService(cn)
 		new.addCN([]metadata.CNService{v})
 		if c.logger.Enabled(zap.DebugLevel) {
@@ -588,11 +561,39 @@ func (c *cluster) refreshWithContext(ctx context.Context) error {
 		new.tn = new.tn[:1]
 	}
 	c.services.Store(new)
+	c.publishGlobalSysVarCommitTS(details.GlobalSysVarCommitTS)
 	c.readyOnce.Do(func() {
 		c.ready.Store(true)
 		close(c.readyC)
 	})
 	return nil
+}
+
+func (c *cluster) publishGlobalSysVarCommitTS(ts timestamp.Timestamp) {
+	if ts.IsEmpty() {
+		return
+	}
+	for {
+		current := c.globalSysVarCommitTS.Load()
+		if current != nil && current.GreaterEq(ts) {
+			return
+		}
+		next := ts
+		if c.globalSysVarCommitTS.CompareAndSwap(current, &next) {
+			return
+		}
+	}
+}
+
+// GlobalSysVarCommitTS returns the durable routing watermark represented by
+// service's currently published CN snapshot.
+func GlobalSysVarCommitTS(service MOCluster) timestamp.Timestamp {
+	if c, ok := service.(*cluster); ok {
+		if ts := c.globalSysVarCommitTS.Load(); ts != nil {
+			return *ts
+		}
+	}
+	return timestamp.Timestamp{}
 }
 
 func (c *cluster) acquireRefresh(ctx context.Context) error {

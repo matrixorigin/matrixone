@@ -21,6 +21,7 @@ import (
 
 	"github.com/fagongzi/goetty/v2"
 	"github.com/fagongzi/goetty/v2/codec"
+	"github.com/google/uuid"
 	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -62,8 +63,9 @@ type Server struct {
 	counterSet     *counterSet
 	haKeeperClient logservice.ProxyHAKeeperClient
 	// configData will be sent to HAKeeper.
-	configData *util.ConfigData
-	test       bool
+	configData             *util.ConfigData
+	test                   bool
+	globalSysVarGeneration string
 }
 
 // NewServer creates the proxy server.
@@ -81,8 +83,9 @@ func NewServer(ctx context.Context, config Config, opts ...Option) (*Server, err
 	opts = append(opts, WithConfigData(configKVMap))
 
 	s := &Server{
-		config:     config,
-		counterSet: newCounterSet(),
+		config:                 config,
+		counterSet:             newCounterSet(),
+		globalSysVarGeneration: uuid.NewString(),
 	}
 	for _, opt := range opts {
 		opt(s)
@@ -126,11 +129,19 @@ func NewServer(ctx context.Context, config Config, opts ...Option) (*Server, err
 		return nil, err
 	}
 
+	s.handler = h
+	barrierCtx, barrierCancel := context.WithTimeoutCause(
+		ctx, s.config.HAKeeper.HeartbeatTimeout.Duration, moerr.CauseNewServer)
+	defer barrierCancel()
+	if err := s.initializeGlobalSysVarRouteBarrier(barrierCtx); err != nil {
+		_ = h.Close()
+		s.stopper.Stop()
+		stats.Unregister(statsFamilyName)
+		return nil, moerr.AttachCause(barrierCtx, err)
+	}
 	if err := s.stopper.RunNamedTask("proxy heartbeat", s.heartbeat); err != nil {
 		return nil, err
 	}
-
-	s.handler = h
 	listener, err := newProxyListener(config.ListenAddress)
 	if err != nil {
 		return nil, err

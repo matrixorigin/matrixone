@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 )
 
 const (
@@ -156,7 +157,20 @@ func (s *CNState) Update(hb CNStoreHeartbeat, tick uint64) {
 	storeInfo.Resource = hb.Resource
 	storeInfo.CommitID = hb.CommitID
 	storeInfo.CommandDeliveryAckSupported = hb.CommandDeliveryAckSupported
+	if storeInfo.GlobalSysVarGeneration != hb.GlobalSysVarGeneration {
+		storeInfo.GlobalSysVarGeneration = hb.GlobalSysVarGeneration
+		storeInfo.GlobalSysVarCommitTS = hb.GlobalSysVarCommitTS
+	} else if storeInfo.GlobalSysVarCommitTS.Less(hb.GlobalSysVarCommitTS) {
+		storeInfo.GlobalSysVarCommitTS = hb.GlobalSysVarCommitTS
+	}
 	s.Stores[hb.UUID] = storeInfo
+}
+
+// UpdateGlobalSysVarCommitTS advances the durable routing-admission watermark.
+func (s *CNState) UpdateGlobalSysVarCommitTS(ts timestamp.Timestamp) {
+	if s.GlobalSysVarCommitTS.Less(ts) {
+		s.GlobalSysVarCommitTS = ts
+	}
 }
 
 // UpdateLabel updates labels of CN store.
@@ -382,6 +396,12 @@ func (s *ProxyState) Update(hb ProxyHeartbeat, tick uint64) {
 	storeInfo.ListenAddress = hb.ListenAddress
 	if hb.ConfigData != nil {
 		storeInfo.ConfigData = hb.ConfigData
+	}
+	if storeInfo.GlobalSysVarGeneration != hb.GlobalSysVarGeneration {
+		storeInfo.GlobalSysVarGeneration = hb.GlobalSysVarGeneration
+		storeInfo.GlobalSysVarCommitTS = hb.GlobalSysVarCommitTS
+	} else if storeInfo.GlobalSysVarCommitTS.Less(hb.GlobalSysVarCommitTS) {
+		storeInfo.GlobalSysVarCommitTS = hb.GlobalSysVarCommitTS
 	}
 	s.Stores[hb.UUID] = storeInfo
 }

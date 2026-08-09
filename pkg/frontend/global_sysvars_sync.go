@@ -18,22 +18,50 @@ import (
 	"context"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/logservice"
+	logpb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
-	querypb "github.com/matrixorigin/matrixone/pkg/pb/query"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
-	"github.com/matrixorigin/matrixone/pkg/queryservice"
-	queryclient "github.com/matrixorigin/matrixone/pkg/queryservice/client"
 )
 
-const globalSysVarCommitSyncTimeout = 10 * time.Second
+const (
+	globalSysVarCommitSyncTimeout = 10 * time.Second
+	globalSysVarFencePollInterval = 20 * time.Millisecond
+)
 
-// syncGlobalSysVarCommit makes a committed SET GLOBAL visible to transactions
-// created on every routable CN before the statement reports success.
+// validateGlobalSysVarSyncProtocol fails before the catalog mutation when a
+// rolling deployment has not activated the HAKeeper routing-fence protocol.
+func validateGlobalSysVarSyncProtocol(ctx context.Context, ses *Session) error {
+	pu := getPuIfPresent(ses.GetService())
+	if pu == nil || pu.HAKeeperClient == nil {
+		return nil
+	}
+	rt := moruntime.ServiceRuntime(ses.GetService())
+	if rt == nil {
+		return moerr.NewInternalError(ctx, "service runtime is not initialized")
+	}
+	value, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	version, valid := value.(int64)
+	if !ok || !valid || version < defines.MORPCVersion12 {
+		return moerr.NewInternalErrorf(ctx,
+			"SET GLOBAL requires MORPC protocol version %d", defines.MORPCVersion12)
+	}
+	if _, ok := pu.HAKeeperClient.(logservice.GlobalSysVarHAKeeperClient); !ok {
+		return moerr.NewInternalError(ctx,
+			"HAKeeper client does not support global system variable fencing")
+	}
+	return nil
+}
+
+// syncGlobalSysVarCommit publishes the committed timestamp as a durable
+// HAKeeper admission fence and waits until every CN routable at that
+// linearization point has applied it.
 func syncGlobalSysVarCommit(ctx context.Context, ses *Session) error {
 	pu := getPuIfPresent(ses.GetService())
-	if pu == nil || pu.QueryClient == nil {
+	if pu == nil || pu.HAKeeperClient == nil {
 		return nil
 	}
 	if pu.TxnClient == nil {
@@ -43,89 +71,75 @@ func syncGlobalSysVarCommit(ctx context.Context, ses *Session) error {
 	if commitTS.IsEmpty() {
 		return moerr.NewInternalError(ctx, "global system variable commit timestamp is empty")
 	}
+	fenceClient, ok := pu.HAKeeperClient.(logservice.GlobalSysVarHAKeeperClient)
+	if !ok {
+		return moerr.NewInternalError(ctx,
+			"HAKeeper client does not support global system variable fencing")
+	}
 
-	syncCtx, cancel := context.WithTimeoutCause(ctx, globalSysVarCommitSyncTimeout, moerr.CauseSyncLatestCommitT)
+	syncCtx, cancel := context.WithTimeoutCause(
+		ctx, globalSysVarCommitSyncTimeout, moerr.CauseSyncLatestCommitT)
 	defer cancel()
-
-	cluster, err := clusterservice.GetMOClusterWithContext(syncCtx, pu.QueryClient.ServiceID())
-	if err != nil {
+	if err := fenceClient.UpdateGlobalSysVarCommitTS(syncCtx, commitTS); err != nil {
 		return moerr.AttachCause(syncCtx, err)
 	}
-	if err = syncCommitTimestampToCNs(syncCtx, pu.QueryClient, cluster, commitTS); err != nil {
+	if err := waitGlobalSysVarCommitFence(
+		syncCtx, pu.HAKeeperClient.GetClusterDetails, commitTS); err != nil {
 		return moerr.AttachCause(syncCtx, err)
 	}
 	return nil
 }
 
-func syncCommitTimestampToCNs(
+func waitGlobalSysVarCommitFence(
 	ctx context.Context,
-	qc queryclient.QueryClient,
-	cluster clusterservice.MOCluster,
+	getDetails func(context.Context) (logpb.ClusterDetails, error),
 	commitTS timestamp.Timestamp,
 ) error {
-	if commitTS.IsEmpty() || qc == nil || cluster == nil {
+	if commitTS.IsEmpty() || getDetails == nil {
 		return nil
 	}
-
-	genRequest := func() *querypb.Request {
-		req := qc.NewRequest(querypb.CmdMethod_SyncCommit)
-		req.SycnCommit = &querypb.SyncCommitRequest{LatestCommitTS: commitTS}
-		return req
-	}
-	refresher, ok := cluster.(clusterservice.AuthoritativeRefresher)
-	if !ok {
-		return moerr.NewInternalError(ctx, "cluster service does not support authoritative refresh")
-	}
-
-	type syncTarget struct {
-		generation string
-		address    string
-	}
-	synced := make(map[string]struct{}, 4)
+	ticker := time.NewTicker(globalSysVarFencePollInterval)
+	defer ticker.Stop()
 	for {
-		if err := refresher.Refresh(ctx); err != nil {
-			return err
-		}
-		targets := make([]syncTarget, 0, 4)
-		err := clusterservice.GetCNServiceWithContext(
-			ctx,
-			cluster,
-			clusterservice.NewSelector(),
-			func(cn metadata.CNService) bool {
-				if cn.QueryAddress != "" {
-					generation := cn.ServiceID + "\x00" + cn.QueryAddress
-					if _, ok := synced[generation]; !ok {
-						targets = append(targets, syncTarget{
-							generation: generation,
-							address:    cn.QueryAddress,
-						})
-					}
-				}
-				return true
-			},
-		)
+		details, err := getDetails(ctx)
 		if err != nil {
 			return err
 		}
-		if len(targets) == 0 {
+		if details.GlobalSysVarCommitTS.GreaterEq(commitTS) &&
+			allRoutableCNsApplied(details.CNStores, commitTS) &&
+			allProxiesApplied(details.ProxyStores, commitTS) {
 			return nil
 		}
-		nodes := make([]string, 0, len(targets))
-		for _, target := range targets {
-			nodes = append(nodes, target.address)
-		}
-		if err := queryservice.RequestMultipleCn(
-			ctx,
-			nodes,
-			qc,
-			genRequest,
-			func(string, *querypb.Response) {},
-			nil,
-		); err != nil {
-			return err
-		}
-		for _, target := range targets {
-			synced[target.generation] = struct{}{}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
 		}
 	}
+}
+
+func allProxiesApplied(proxies []logpb.ProxyStore, commitTS timestamp.Timestamp) bool {
+	for _, proxy := range proxies {
+		if proxy.State != logpb.NormalState {
+			continue
+		}
+		if proxy.GlobalSysVarCommitTS.Less(commitTS) {
+			return false
+		}
+	}
+	return true
+}
+
+func allRoutableCNsApplied(cns []logpb.CNStore, commitTS timestamp.Timestamp) bool {
+	for _, cn := range cns {
+		if cn.State != logpb.NormalState || cn.SQLAddress == "" ||
+			(cn.WorkState != metadata.WorkState_Working &&
+				cn.WorkState != metadata.WorkState_Unknown) {
+			continue
+		}
+		if cn.GlobalSysVarCommitTS.Less(commitTS) {
+			return false
+		}
+	}
+	return true
 }

@@ -16,21 +16,32 @@ package proxy
 
 import (
 	"context"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
+	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/util"
 )
 
 var _ logservice.ProxyHAKeeperClient = new(testHAClient)
 
 type testHAClient struct {
+}
+
+type watermarkHAClient struct {
+	*testHAClient
+	sync.Mutex
+	details   pb.ClusterDetails
+	heartbeat pb.ProxyHeartbeat
 }
 
 func (tclient *testHAClient) Close() error {
@@ -97,6 +108,22 @@ func (tclient *testHAClient) SendProxyHeartbeat(ctx context.Context, hb pb.Proxy
 	return pb.CommandBatch{}, moerr.NewInternalErrorNoCtx("return err")
 }
 
+func (client *watermarkHAClient) GetClusterDetails(context.Context) (pb.ClusterDetails, error) {
+	client.Lock()
+	defer client.Unlock()
+	return client.details, nil
+}
+
+func (client *watermarkHAClient) SendProxyHeartbeat(
+	_ context.Context,
+	hb pb.ProxyHeartbeat,
+) (pb.CommandBatch, error) {
+	client.Lock()
+	defer client.Unlock()
+	client.heartbeat = hb
+	return pb.CommandBatch{}, nil
+}
+
 func TestServer_doHeartbeat(t *testing.T) {
 	rt := runtime.DefaultRuntime()
 	runtime.SetupServiceBasedRuntime("", rt)
@@ -108,6 +135,34 @@ func TestServer_doHeartbeat(t *testing.T) {
 		runtime:        runtime.ServiceRuntime(""),
 	}
 	ser.doHeartbeat(ctx)
+}
+
+func TestServerInitialRouteBarrierAcknowledgesPublishedWatermark(t *testing.T) {
+	rt := runtime.DefaultRuntime()
+	runtime.SetupServiceBasedRuntime("", rt)
+	commitTS := timestamp.Timestamp{PhysicalTime: 100, LogicalTime: 7}
+	client := &watermarkHAClient{
+		testHAClient: &testHAClient{},
+		details:      pb.ClusterDetails{GlobalSysVarCommitTS: commitTS},
+	}
+	cluster := clusterservice.NewMOCluster("", client, time.Hour)
+	defer cluster.Close()
+	server := &Server{
+		haKeeperClient:         client,
+		configData:             util.NewConfigData(nil),
+		runtime:                runtime.ServiceRuntime(""),
+		globalSysVarGeneration: "proxy-generation",
+		handler:                &handler{moCluster: cluster},
+	}
+	server.config.UUID = "proxy-1"
+	server.config.HAKeeper.HeartbeatTimeout.Duration = time.Second
+	require.NoError(t, server.initializeGlobalSysVarRouteBarrier(context.Background()))
+
+	client.Lock()
+	hb := client.heartbeat
+	client.Unlock()
+	require.Equal(t, commitTS, hb.GlobalSysVarCommitTS)
+	require.Equal(t, "proxy-generation", hb.GlobalSysVarGeneration)
 }
 
 func TestServer_NewServer(t *testing.T) {

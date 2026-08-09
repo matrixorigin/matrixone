@@ -42,6 +42,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/partitionservice"
 	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/queryservice"
 	qclient "github.com/matrixorigin/matrixone/pkg/queryservice/client"
@@ -697,21 +698,25 @@ type service struct {
 	incrservice          incrservice.AutoIncrementService
 	txnTraceService      trace.Service
 
-	stopper             *stopper.Stopper
-	heartbeatInFlight   atomic.Bool
-	commandPollNeeded   atomic.Bool
-	commandPollWakeup   chan struct{}
-	commandMu           sync.Mutex
-	lastCommandBatchID  uint64
-	ackedCommandBatchID atomic.Uint64
-	appliedCommandIDs   map[logservice.ScheduleCommandIdentity]struct{}
-	lastCommandHash     [32]byte
-	legacyDedupeArmed   bool
-	aicm                *defines.AutoIncrCacheManager
-	lifecycleMu         sync.Mutex
-	lifecycle           serviceLifecycleState
-	closeOnce           sync.Once
-	closeErr            error
+	stopper                *stopper.Stopper
+	heartbeatInFlight      atomic.Bool
+	commandPollNeeded      atomic.Bool
+	commandPollWakeup      chan struct{}
+	commandMu              sync.Mutex
+	lastCommandBatchID     uint64
+	ackedCommandBatchID    atomic.Uint64
+	globalSysVarDesired    atomic.Pointer[timestamp.Timestamp]
+	globalSysVarApplied    atomic.Pointer[timestamp.Timestamp]
+	globalSysVarWakeup     chan struct{}
+	globalSysVarGeneration string
+	appliedCommandIDs      map[logservice.ScheduleCommandIdentity]struct{}
+	lastCommandHash        [32]byte
+	legacyDedupeArmed      bool
+	aicm                   *defines.AutoIncrCacheManager
+	lifecycleMu            sync.Mutex
+	lifecycle              serviceLifecycleState
+	closeOnce              sync.Once
+	closeErr               error
 
 	task struct {
 		sync.RWMutex

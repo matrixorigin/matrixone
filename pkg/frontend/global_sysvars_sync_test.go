@@ -19,419 +19,301 @@ import (
 	"errors"
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/golang/mock/gomock"
+	"github.com/prashantv/gostub"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 
-	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/config"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
+	"github.com/matrixorigin/matrixone/pkg/logservice"
+	logpb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
-	querypb "github.com/matrixorigin/matrixone/pkg/pb/query"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 )
 
-type globalSysVarSyncRequest struct {
-	address  string
-	method   querypb.CmdMethod
-	commitTS timestamp.Timestamp
+type globalSysVarFenceHAKeeper struct {
+	logservice.CNHAKeeperClient
+	mu        sync.Mutex
+	updates   []timestamp.Timestamp
+	details   []logpb.ClusterDetails
+	updateErr error
+	detailErr error
+	gets      int
 }
 
-type globalSysVarSyncQueryClient struct {
-	mu           sync.Mutex
-	serviceID    string
-	requests     []globalSysVarSyncRequest
-	errors       map[string]error
-	entered      map[string]chan struct{}
-	blocks       map[string]chan struct{}
-	releaseCount int
-}
-
-func newGlobalSysVarSyncQueryClient() *globalSysVarSyncQueryClient {
-	return &globalSysVarSyncQueryClient{
-		serviceID: "global-sysvar-sync-test",
-		errors:    make(map[string]error),
-		entered:   make(map[string]chan struct{}),
-		blocks:    make(map[string]chan struct{}),
-	}
-}
-
-func (m *globalSysVarSyncQueryClient) ServiceID() string {
-	return m.serviceID
-}
-
-func (m *globalSysVarSyncQueryClient) SendMessage(
-	ctx context.Context,
-	address string,
-	req *querypb.Request,
-) (*querypb.Response, error) {
+func (m *globalSysVarFenceHAKeeper) UpdateGlobalSysVarCommitTS(
+	_ context.Context,
+	ts timestamp.Timestamp,
+) error {
 	m.mu.Lock()
-	record := globalSysVarSyncRequest{address: address, method: req.CmdMethod}
-	if req.SycnCommit != nil {
-		record.commitTS = req.SycnCommit.LatestCommitTS
-	}
-	m.requests = append(m.requests, record)
-	err := m.errors[address]
-	entered := m.entered[address]
-	block := m.blocks[address]
-	m.mu.Unlock()
+	defer m.mu.Unlock()
+	m.updates = append(m.updates, ts)
+	return m.updateErr
+}
 
-	if entered != nil {
-		close(entered)
+func (m *globalSysVarFenceHAKeeper) GetClusterDetails(
+	_ context.Context,
+) (logpb.ClusterDetails, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.detailErr != nil {
+		return logpb.ClusterDetails{}, m.detailErr
 	}
-	if block != nil {
-		select {
-		case <-block:
-		case <-ctx.Done():
-			return nil, ctx.Err()
+	if len(m.details) == 0 {
+		m.gets++
+		return logpb.ClusterDetails{}, nil
+	}
+	i := m.gets
+	if i >= len(m.details) {
+		i = len(m.details) - 1
+	}
+	m.gets++
+	return m.details[i], nil
+}
+
+func (m *globalSysVarFenceHAKeeper) snapshot() ([]timestamp.Timestamp, int) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return append([]timestamp.Timestamp(nil), m.updates...), m.gets
+}
+
+func setupGlobalSysVarFenceSession(
+	t *testing.T,
+	version int64,
+	hakeeper logservice.CNHAKeeperClient,
+	txnClient *mock_frontend.MockTxnClient,
+) *Session {
+	t.Helper()
+	serviceID := t.Name()
+	pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, txnClient, nil)
+	pu.HAKeeperClient = hakeeper
+	InitServerLevelVars(serviceID)
+	setPu(serviceID, pu)
+	rt := runtime.NewRuntime(metadata.ServiceType_CN, serviceID, zap.NewNop())
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, version)
+	runtime.SetupServiceBasedRuntime(serviceID, rt)
+	return &Session{feSessionImpl: feSessionImpl{service: serviceID}}
+}
+
+func TestValidateGlobalSysVarSyncProtocolRollingUpgrade(t *testing.T) {
+	t.Run("version 11 fails closed", func(t *testing.T) {
+		hakeeper := &globalSysVarFenceHAKeeper{}
+		ses := setupGlobalSysVarFenceSession(
+			t, defines.MORPCVersion11, hakeeper, nil)
+		err := validateGlobalSysVarSyncProtocol(context.Background(), ses)
+		require.ErrorContains(t, err, "protocol version 12")
+		updates, gets := hakeeper.snapshot()
+		require.Empty(t, updates)
+		require.Zero(t, gets)
+	})
+
+	t.Run("version 12 enables fence", func(t *testing.T) {
+		ses := setupGlobalSysVarFenceSession(
+			t, defines.MORPCVersion12, &globalSysVarFenceHAKeeper{}, nil)
+		require.NoError(t, validateGlobalSysVarSyncProtocol(context.Background(), ses))
+	})
+
+	t.Run("missing capability fails closed", func(t *testing.T) {
+		hakeeper := struct{ logservice.CNHAKeeperClient }{}
+		ses := setupGlobalSysVarFenceSession(t, defines.MORPCVersion12, hakeeper, nil)
+		require.ErrorContains(t,
+			validateGlobalSysVarSyncProtocol(context.Background(), ses),
+			"does not support global system variable fencing")
+	})
+
+	t.Run("standalone remains compatible", func(t *testing.T) {
+		ses := setupGlobalSysVarFenceSession(t, defines.MORPCVersion11, nil, nil)
+		require.NoError(t, validateGlobalSysVarSyncProtocol(context.Background(), ses))
+	})
+}
+
+func TestSetGlobalSysVarRollingUpgradeRejectsBeforeCatalogWrite(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	ses := newSes(nil, ctrl)
+	previousRuntime := runtime.ServiceRuntime(ses.GetService())
+	t.Cleanup(func() {
+		if previousRuntime != nil {
+			runtime.SetupServiceBasedRuntime(ses.GetService(), previousRuntime)
 		}
-	}
-	if err != nil {
-		return nil, err
-	}
-	return &querypb.Response{}, nil
+	})
+	hakeeper := &globalSysVarFenceHAKeeper{}
+	getPuIfPresent(ses.GetService()).HAKeeperClient = hakeeper
+	rt := runtime.NewRuntime(metadata.ServiceType_CN, ses.GetService(), zap.NewNop())
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion11)
+	runtime.SetupServiceBasedRuntime(ses.GetService(), rt)
+
+	background := &backgroundExecTest{}
+	background.init()
+	stub := gostub.StubFunc(&NewBackgroundExec, background)
+	t.Cleanup(stub.Reset)
+
+	err := ses.SetGlobalSysVar(context.Background(), "autocommit", int64(0))
+	require.ErrorContains(t, err, "protocol version 12")
+	require.Empty(t, background.executedSQLs,
+		"rolling-upgrade rejection must happen before opening the catalog transaction")
+	updates, gets := hakeeper.snapshot()
+	require.Empty(t, updates)
+	require.Zero(t, gets)
 }
 
-func (m *globalSysVarSyncQueryClient) NewRequest(method querypb.CmdMethod) *querypb.Request {
-	return &querypb.Request{CmdMethod: method}
-}
-
-func (m *globalSysVarSyncQueryClient) Release(*querypb.Response) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.releaseCount++
-}
-
-func (m *globalSysVarSyncQueryClient) Close() error {
-	return nil
-}
-
-func (m *globalSysVarSyncQueryClient) snapshot() ([]globalSysVarSyncRequest, int) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	requests := append([]globalSysVarSyncRequest(nil), m.requests...)
-	return requests, m.releaseCount
-}
-
-type globalSysVarSyncCluster struct {
-	mu               sync.Mutex
-	cnServices       []metadata.CNService
-	refreshSnapshots [][]metadata.CNService
-	refreshErr       error
-	refreshBlock     <-chan struct{}
-	refreshCalls     int
-}
-
-func (m *globalSysVarSyncCluster) GetCNService(
-	_ clusterservice.Selector,
-	apply func(metadata.CNService) bool,
-) {
-	m.mu.Lock()
-	services := append([]metadata.CNService(nil), m.cnServices...)
-	m.mu.Unlock()
-	for _, cn := range services {
-		if !apply(cn) {
-			return
-		}
-	}
-}
-
-func (m *globalSysVarSyncCluster) Refresh(ctx context.Context) error {
-	if m.refreshBlock != nil {
-		select {
-		case <-m.refreshBlock:
-		case <-ctx.Done():
-			return ctx.Err()
-		}
-	}
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if m.refreshErr != nil {
-		return m.refreshErr
-	}
-	if m.refreshCalls < len(m.refreshSnapshots) {
-		m.cnServices = append([]metadata.CNService(nil), m.refreshSnapshots[m.refreshCalls]...)
-	}
-	m.refreshCalls++
-	return nil
-}
-
-func (m *globalSysVarSyncCluster) refreshCount() int {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	return m.refreshCalls
-}
-
-func (*globalSysVarSyncCluster) GetTNService(clusterservice.Selector, func(metadata.TNService) bool) {
-}
-
-func (*globalSysVarSyncCluster) GetAllTNServices() []metadata.TNService {
-	return nil
-}
-
-func (*globalSysVarSyncCluster) GetCNServiceWithoutWorkingState(
-	clusterservice.Selector,
-	func(metadata.CNService) bool,
-) {
-}
-
-func (*globalSysVarSyncCluster) ForceRefresh(bool) {}
-func (*globalSysVarSyncCluster) Close()            {}
-func (*globalSysVarSyncCluster) DebugUpdateCNLabel(string, map[string][]string) error {
-	return nil
-}
-func (*globalSysVarSyncCluster) DebugUpdateCNWorkState(string, int) error { return nil }
-func (*globalSysVarSyncCluster) RemoveCN(string)                          {}
-func (*globalSysVarSyncCluster) AddCN(metadata.CNService)                 {}
-func (*globalSysVarSyncCluster) UpdateCN(metadata.CNService)              {}
-
-func TestSyncCommitTimestampToCNs(t *testing.T) {
-	commitTS := timestamp.Timestamp{PhysicalTime: 100, LogicalTime: 7}
-	qc := newGlobalSysVarSyncQueryClient()
-	cluster := &globalSysVarSyncCluster{cnServices: []metadata.CNService{
-		{QueryAddress: "cn-1"},
-		{QueryAddress: ""},
-		{QueryAddress: "cn-2"},
-	}}
-
-	require.NoError(t, syncCommitTimestampToCNs(context.Background(), qc, cluster, commitTS))
-
-	requests, releaseCount := qc.snapshot()
-	require.ElementsMatch(t, []globalSysVarSyncRequest{
-		{address: "cn-1", method: querypb.CmdMethod_SyncCommit, commitTS: commitTS},
-		{address: "cn-2", method: querypb.CmdMethod_SyncCommit, commitTS: commitTS},
-	}, requests)
-	require.Equal(t, 2, releaseCount)
-}
-
-func TestSyncGlobalSysVarCommitUsesLatestTxnClientCommit(t *testing.T) {
+func TestSyncGlobalSysVarCommitPublishesAndWaitsForFence(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	commitTS := timestamp.Timestamp{PhysicalTime: 100, LogicalTime: 7}
 	txnClient := mock_frontend.NewMockTxnClient(ctrl)
 	txnClient.EXPECT().GetLatestCommitTS().Return(commitTS)
-
-	serviceID := t.Name()
-	qc := newGlobalSysVarSyncQueryClient()
-	qc.serviceID = serviceID
-	cluster := &globalSysVarSyncCluster{cnServices: []metadata.CNService{{QueryAddress: "cn-1"}}}
-	pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, txnClient, nil)
-	pu.QueryClient = qc
-	InitServerLevelVars(serviceID)
-	setPu(serviceID, pu)
-	rt := runtime.NewRuntime(metadata.ServiceType_CN, serviceID, zap.NewNop())
-	rt.SetGlobalVariables(runtime.ClusterService, cluster)
-	runtime.SetupServiceBasedRuntime(serviceID, rt)
-	ses := &Session{feSessionImpl: feSessionImpl{service: serviceID}}
+	hakeeper := &globalSysVarFenceHAKeeper{details: []logpb.ClusterDetails{{
+		GlobalSysVarCommitTS: commitTS,
+		ProxyStores: []logpb.ProxyStore{{
+			UUID: "proxy-1", GlobalSysVarCommitTS: commitTS,
+		}},
+		CNStores: []logpb.CNStore{
+			{UUID: "cn-1", SQLAddress: "sql-1", State: logpb.NormalState,
+				WorkState: metadata.WorkState_Working, GlobalSysVarCommitTS: commitTS},
+			{UUID: "cn-draining", SQLAddress: "sql-2", State: logpb.NormalState,
+				WorkState: metadata.WorkState_Draining},
+			{UUID: "cn-expired", SQLAddress: "sql-3", State: logpb.TimeoutState,
+				WorkState: metadata.WorkState_Working},
+		},
+	}}}
+	ses := setupGlobalSysVarFenceSession(
+		t, defines.MORPCVersion12, hakeeper, txnClient)
 
 	require.NoError(t, syncGlobalSysVarCommit(context.Background(), ses))
-
-	requests, releaseCount := qc.snapshot()
-	require.Equal(t, []globalSysVarSyncRequest{
-		{address: "cn-1", method: querypb.CmdMethod_SyncCommit, commitTS: commitTS},
-	}, requests)
-	require.Equal(t, 1, releaseCount)
+	updates, gets := hakeeper.snapshot()
+	require.Equal(t, []timestamp.Timestamp{commitTS}, updates)
+	require.Equal(t, 1, gets)
 }
 
-func TestSyncGlobalSysVarCommitRejectsEmptyCommitTimestamp(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	txnClient := mock_frontend.NewMockTxnClient(ctrl)
-	txnClient.EXPECT().GetLatestCommitTS().Return(timestamp.Timestamp{})
-
-	serviceID := t.Name()
-	qc := newGlobalSysVarSyncQueryClient()
-	qc.serviceID = serviceID
-	pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, txnClient, nil)
-	pu.QueryClient = qc
-	InitServerLevelVars(serviceID)
-	setPu(serviceID, pu)
-	ses := &Session{feSessionImpl: feSessionImpl{service: serviceID}}
-
-	err := syncGlobalSysVarCommit(context.Background(), ses)
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "commit timestamp is empty")
-	requests, _ := qc.snapshot()
-	require.Empty(t, requests)
-}
-
-func TestSyncCommitTimestampToCNsWaitsForEveryCN(t *testing.T) {
-	qc := newGlobalSysVarSyncQueryClient()
-	entered := make(chan struct{})
-	unblock := make(chan struct{})
-	t.Cleanup(func() {
-		select {
-		case <-unblock:
-		default:
-			close(unblock)
-		}
-	})
-	qc.entered["cn-1"] = entered
-	qc.blocks["cn-1"] = unblock
-	cluster := &globalSysVarSyncCluster{cnServices: []metadata.CNService{{QueryAddress: "cn-1"}}}
-	done := make(chan error, 1)
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	go func() {
-		done <- syncCommitTimestampToCNs(
-			ctx,
-			qc,
-			cluster,
-			timestamp.Timestamp{PhysicalTime: 100},
-		)
-	}()
-
-	select {
-	case <-entered:
-	case <-ctx.Done():
-		t.Fatal("sync did not send the CN request")
-	}
-	select {
-	case err := <-done:
-		t.Fatalf("sync returned before the CN responded: %v", err)
-	default:
-	}
-	close(unblock)
-	require.NoError(t, <-done)
-}
-
-func TestSyncCommitTimestampToCNsReturnsPartialFailure(t *testing.T) {
-	qc := newGlobalSysVarSyncQueryClient()
-	qc.errors["cn-2"] = errors.New("send failed")
-	cluster := &globalSysVarSyncCluster{cnServices: []metadata.CNService{
-		{QueryAddress: "cn-1"},
-		{QueryAddress: "cn-2"},
+func TestWaitGlobalSysVarCommitFenceWaitsForProxyRouteBarrier(t *testing.T) {
+	commitTS := timestamp.Timestamp{PhysicalTime: 100}
+	hakeeper := &globalSysVarFenceHAKeeper{details: []logpb.ClusterDetails{
+		{
+			GlobalSysVarCommitTS: commitTS,
+			ProxyStores:          []logpb.ProxyStore{{UUID: "proxy-1"}},
+		},
+		{
+			GlobalSysVarCommitTS: commitTS,
+			ProxyStores: []logpb.ProxyStore{{
+				UUID: "proxy-1", GlobalSysVarCommitTS: commitTS,
+			}},
+		},
 	}}
-
-	err := syncCommitTimestampToCNs(
-		context.Background(),
-		qc,
-		cluster,
-		timestamp.Timestamp{PhysicalTime: 100},
-	)
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "cn-2")
-
-	requests, releaseCount := qc.snapshot()
-	require.Len(t, requests, 2)
-	require.Equal(t, 1, releaseCount)
+	require.NoError(t, waitGlobalSysVarCommitFence(
+		context.Background(), hakeeper.GetClusterDetails, commitTS))
+	_, gets := hakeeper.snapshot()
+	require.Equal(t, 2, gets)
 }
 
-func TestSyncCommitTimestampToCNsRefreshesStaleMembership(t *testing.T) {
-	commitTS := timestamp.Timestamp{PhysicalTime: 100, LogicalTime: 7}
-	qc := newGlobalSysVarSyncQueryClient()
-	cluster := &globalSysVarSyncCluster{
-		cnServices: []metadata.CNService{{QueryAddress: "cn-1"}},
-		refreshSnapshots: [][]metadata.CNService{
-			{{QueryAddress: "cn-1"}, {QueryAddress: "cn-2"}},
-			{{QueryAddress: "cn-1"}, {QueryAddress: "cn-2"}},
+func TestWaitGlobalSysVarCommitFenceIgnoresExpiredProxy(t *testing.T) {
+	commitTS := timestamp.Timestamp{PhysicalTime: 100}
+	details := logpb.ClusterDetails{
+		GlobalSysVarCommitTS: commitTS,
+		ProxyStores: []logpb.ProxyStore{
+			{UUID: "proxy-live", State: logpb.NormalState, GlobalSysVarCommitTS: commitTS},
+			{UUID: "proxy-expired", State: logpb.TimeoutState},
 		},
 	}
-
-	require.NoError(t, syncCommitTimestampToCNs(context.Background(), qc, cluster, commitTS))
-	requests, releaseCount := qc.snapshot()
-	require.ElementsMatch(t, []globalSysVarSyncRequest{
-		{address: "cn-1", method: querypb.CmdMethod_SyncCommit, commitTS: commitTS},
-		{address: "cn-2", method: querypb.CmdMethod_SyncCommit, commitTS: commitTS},
-	}, requests)
-	require.Equal(t, 2, releaseCount)
-	require.Equal(t, 2, cluster.refreshCount())
+	require.NoError(t, waitGlobalSysVarCommitFence(
+		context.Background(), func(context.Context) (logpb.ClusterDetails, error) {
+			return details, nil
+		}, commitTS))
 }
 
-func TestSyncCommitTimestampToCNsConvergesGrowingMembership(t *testing.T) {
-	commitTS := timestamp.Timestamp{PhysicalTime: 100, LogicalTime: 7}
-	qc := newGlobalSysVarSyncQueryClient()
-	cluster := &globalSysVarSyncCluster{refreshSnapshots: [][]metadata.CNService{
-		{{QueryAddress: "cn-1"}},
-		{{QueryAddress: "cn-1"}, {QueryAddress: "cn-2"}},
-		{{QueryAddress: "cn-1"}, {QueryAddress: "cn-2"}},
-	}}
-
-	require.NoError(t, syncCommitTimestampToCNs(context.Background(), qc, cluster, commitTS))
-	requests, releaseCount := qc.snapshot()
-	require.Equal(t, []globalSysVarSyncRequest{
-		{address: "cn-1", method: querypb.CmdMethod_SyncCommit, commitTS: commitTS},
-		{address: "cn-2", method: querypb.CmdMethod_SyncCommit, commitTS: commitTS},
-	}, requests)
-	require.Equal(t, 2, releaseCount)
-	require.Equal(t, 3, cluster.refreshCount())
-}
-
-func TestSyncCommitTimestampToCNsResyncsReplacedCNGeneration(t *testing.T) {
-	commitTS := timestamp.Timestamp{PhysicalTime: 100, LogicalTime: 7}
-	qc := newGlobalSysVarSyncQueryClient()
-	cluster := &globalSysVarSyncCluster{refreshSnapshots: [][]metadata.CNService{
-		{{ServiceID: "cn-old", QueryAddress: "cn-address"}},
-		{{ServiceID: "cn-new", QueryAddress: "cn-address"}},
-		{{ServiceID: "cn-new", QueryAddress: "cn-address"}},
-	}}
-
-	require.NoError(t, syncCommitTimestampToCNs(context.Background(), qc, cluster, commitTS))
-	requests, releaseCount := qc.snapshot()
-	require.Equal(t, []globalSysVarSyncRequest{
-		{address: "cn-address", method: querypb.CmdMethod_SyncCommit, commitTS: commitTS},
-		{address: "cn-address", method: querypb.CmdMethod_SyncCommit, commitTS: commitTS},
-	}, requests)
-	require.Equal(t, 2, releaseCount)
-	require.Equal(t, 3, cluster.refreshCount())
-}
-
-func TestSyncCommitTimestampToCNsRefreshFailure(t *testing.T) {
-	qc := newGlobalSysVarSyncQueryClient()
-	refreshErr := errors.New("hakeeper unavailable")
-	cluster := &globalSysVarSyncCluster{refreshErr: refreshErr}
-
-	err := syncCommitTimestampToCNs(
-		context.Background(), qc, cluster, timestamp.Timestamp{PhysicalTime: 100})
-	require.ErrorIs(t, err, refreshErr)
-	requests, releaseCount := qc.snapshot()
-	require.Empty(t, requests)
-	require.Zero(t, releaseCount)
-}
-
-func TestSyncCommitTimestampToCNsRefreshHonorsContext(t *testing.T) {
-	qc := newGlobalSysVarSyncQueryClient()
-	cluster := &globalSysVarSyncCluster{refreshBlock: make(chan struct{})}
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-
-	err := syncCommitTimestampToCNs(ctx, qc, cluster, timestamp.Timestamp{PhysicalTime: 100})
-	require.ErrorIs(t, err, context.Canceled)
-	requests, releaseCount := qc.snapshot()
-	require.Empty(t, requests)
-	require.Zero(t, releaseCount)
-}
-
-func TestSyncCommitTimestampToCNsNoop(t *testing.T) {
+func TestWaitGlobalSysVarCommitFenceIncludesLateJoin(t *testing.T) {
 	commitTS := timestamp.Timestamp{PhysicalTime: 100}
+	hakeeper := &globalSysVarFenceHAKeeper{details: []logpb.ClusterDetails{
+		{
+			GlobalSysVarCommitTS: commitTS,
+			CNStores: []logpb.CNStore{{
+				UUID: "cn-a", SQLAddress: "sql-a", State: logpb.NormalState,
+				WorkState: metadata.WorkState_Working, GlobalSysVarCommitTS: commitTS,
+			}},
+		},
+		{
+			GlobalSysVarCommitTS: commitTS,
+			CNStores: []logpb.CNStore{
+				{UUID: "cn-a", SQLAddress: "sql-a", State: logpb.NormalState,
+					WorkState: metadata.WorkState_Working, GlobalSysVarCommitTS: commitTS},
+				{UUID: "cn-b", SQLAddress: "sql-b", State: logpb.NormalState,
+					WorkState: metadata.WorkState_Working},
+			},
+		},
+		{
+			GlobalSysVarCommitTS: commitTS,
+			CNStores: []logpb.CNStore{
+				{UUID: "cn-a", SQLAddress: "sql-a", State: logpb.NormalState,
+					WorkState: metadata.WorkState_Working, GlobalSysVarCommitTS: commitTS},
+				{UUID: "cn-b", SQLAddress: "sql-b", State: logpb.NormalState,
+					WorkState: metadata.WorkState_Working, GlobalSysVarCommitTS: commitTS},
+			},
+		},
+	}}
 
+	// The first snapshot alone is intentionally not used as a success oracle:
+	// CN-B appears after it and must also acknowledge before the barrier opens.
+	_, err := hakeeper.GetClusterDetails(context.Background())
+	require.NoError(t, err)
+	require.NoError(t, waitGlobalSysVarCommitFence(
+		context.Background(), hakeeper.GetClusterDetails, commitTS))
+	_, gets := hakeeper.snapshot()
+	require.Equal(t, 3, gets)
+}
+
+func TestWaitGlobalSysVarCommitFenceErrorsAndCancellation(t *testing.T) {
+	commitTS := timestamp.Timestamp{PhysicalTime: 100}
+	t.Run("hakeeper error", func(t *testing.T) {
+		want := errors.New("hakeeper unavailable")
+		hakeeper := &globalSysVarFenceHAKeeper{detailErr: want}
+		require.ErrorIs(t, waitGlobalSysVarCommitFence(
+			context.Background(), hakeeper.GetClusterDetails, commitTS), want)
+	})
+
+	t.Run("caller cancellation", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		hakeeper := &globalSysVarFenceHAKeeper{details: []logpb.ClusterDetails{{
+			GlobalSysVarCommitTS: commitTS,
+			CNStores: []logpb.CNStore{{
+				SQLAddress: "sql", State: logpb.NormalState,
+				WorkState: metadata.WorkState_Working,
+			}},
+		}}}
+		require.ErrorIs(t, waitGlobalSysVarCommitFence(
+			ctx, hakeeper.GetClusterDetails, commitTS), context.Canceled)
+	})
+}
+
+func TestSyncGlobalSysVarCommitRejectsInvalidState(t *testing.T) {
 	t.Run("empty commit timestamp", func(t *testing.T) {
-		qc := newGlobalSysVarSyncQueryClient()
-		cluster := &globalSysVarSyncCluster{cnServices: []metadata.CNService{{QueryAddress: "cn-1"}}}
-		require.NoError(t, syncCommitTimestampToCNs(context.Background(), qc, cluster, timestamp.Timestamp{}))
-		requests, _ := qc.snapshot()
-		require.Empty(t, requests)
+		ctrl := gomock.NewController(t)
+		txnClient := mock_frontend.NewMockTxnClient(ctrl)
+		txnClient.EXPECT().GetLatestCommitTS().Return(timestamp.Timestamp{})
+		hakeeper := &globalSysVarFenceHAKeeper{}
+		ses := setupGlobalSysVarFenceSession(
+			t, defines.MORPCVersion12, hakeeper, txnClient)
+		require.ErrorContains(t,
+			syncGlobalSysVarCommit(context.Background(), ses),
+			"commit timestamp is empty")
+		updates, gets := hakeeper.snapshot()
+		require.Empty(t, updates)
+		require.Zero(t, gets)
 	})
 
-	t.Run("nil query client", func(t *testing.T) {
-		cluster := &globalSysVarSyncCluster{cnServices: []metadata.CNService{{QueryAddress: "cn-1"}}}
-		require.NoError(t, syncCommitTimestampToCNs(context.Background(), nil, cluster, commitTS))
-	})
-
-	t.Run("nil cluster", func(t *testing.T) {
-		qc := newGlobalSysVarSyncQueryClient()
-		require.NoError(t, syncCommitTimestampToCNs(context.Background(), qc, nil, commitTS))
-		requests, _ := qc.snapshot()
-		require.Empty(t, requests)
-	})
-
-	t.Run("no routable CN", func(t *testing.T) {
-		qc := newGlobalSysVarSyncQueryClient()
-		cluster := &globalSysVarSyncCluster{cnServices: []metadata.CNService{{QueryAddress: ""}}}
-		require.NoError(t, syncCommitTimestampToCNs(context.Background(), qc, cluster, commitTS))
-		requests, _ := qc.snapshot()
-		require.Empty(t, requests)
+	t.Run("watermark update error", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		commitTS := timestamp.Timestamp{PhysicalTime: 100}
+		txnClient := mock_frontend.NewMockTxnClient(ctrl)
+		txnClient.EXPECT().GetLatestCommitTS().Return(commitTS)
+		want := errors.New("raft unavailable")
+		hakeeper := &globalSysVarFenceHAKeeper{updateErr: want}
+		ses := setupGlobalSysVarFenceSession(
+			t, defines.MORPCVersion12, hakeeper, txnClient)
+		require.ErrorIs(t, syncGlobalSysVarCommit(context.Background(), ses), want)
+		_, gets := hakeeper.snapshot()
+		require.Zero(t, gets)
 	})
 }

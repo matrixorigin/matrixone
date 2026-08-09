@@ -28,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	logpb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 )
 
 func TestClusterReady(t *testing.T) {
@@ -45,52 +46,6 @@ func TestClusterReady(t *testing.T) {
 				assert.Fail(t, "wait ready timeout")
 			}
 		})
-}
-
-func TestGetCNServiceWithContextCancelsInitialReadinessWait(t *testing.T) {
-	sid := t.Name()
-	runtime.RunTest(sid, func(runtime.Runtime) {
-		hc := &testHAKeeperClient{err: errors.New("hakeeper unavailable")}
-		service := NewMOCluster(sid, hc, time.Hour)
-		defer service.Close()
-
-		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
-		defer cancel()
-		err := GetCNServiceWithContext(ctx, service, NewSelector(), func(metadata.CNService) bool {
-			t.Fatal("an unready cluster must not publish a snapshot")
-			return false
-		})
-		require.ErrorIs(t, err, context.DeadlineExceeded)
-	})
-}
-
-func TestGetCNServiceWithContextReturnsReadyRoutableSnapshot(t *testing.T) {
-	sid := t.Name()
-	runtime.RunTest(sid, func(runtime.Runtime) {
-		service := NewMOCluster(sid, &testHAKeeperClient{}, time.Hour, WithDisableRefresh())
-		defer service.Close()
-		service.AddCN(metadata.CNService{ServiceID: "working", WorkState: metadata.WorkState_Working})
-		service.AddCN(metadata.CNService{ServiceID: "draining", WorkState: metadata.WorkState_Draining})
-
-		var got []string
-		require.NoError(t, GetCNServiceWithContext(
-			nil, service, NewSelector(), func(cn metadata.CNService) bool {
-				got = append(got, cn.ServiceID)
-				return true
-			}))
-		require.Equal(t, []string{"working"}, got)
-
-		canceledCtx, cancel := context.WithCancel(context.Background())
-		cancel()
-		require.ErrorIs(t, GetCNServiceWithContext(
-			canceledCtx, service, NewSelector(), func(metadata.CNService) bool { return true }),
-			context.Canceled)
-	})
-
-	err := GetCNServiceWithContext(context.Background(), nil, NewSelector(), func(metadata.CNService) bool {
-		return true
-	})
-	require.ErrorContains(t, err, "mocluster service is not initialized")
 }
 
 func TestGetMOClusterWithContextHonorsCancellation(t *testing.T) {
@@ -393,6 +348,42 @@ func (c *testHAKeeperClient) addTN(tick uint64, serviceIDs ...string) {
 			Tick: tick,
 		})
 	}
+}
+
+func TestClusterFencesLateCNByGlobalSysVarWatermark(t *testing.T) {
+	runClusterTest(
+		time.Hour,
+		func(hc *testHAKeeperClient, c *cluster) {
+			commitTS := timestamp.Timestamp{PhysicalTime: 100, LogicalTime: 1}
+			hc.Lock()
+			hc.value = logpb.ClusterDetails{
+				GlobalSysVarCommitTS: commitTS,
+				CNStores: []logpb.CNStore{
+					{UUID: "cn-a", WorkState: metadata.WorkState_Working, GlobalSysVarCommitTS: commitTS},
+					{UUID: "cn-b", WorkState: metadata.WorkState_Working},
+				},
+			}
+			hc.Unlock()
+
+			c.ForceRefresh(true)
+			require.Equal(t, []string{"cn-a"}, routableCNIDs(c))
+
+			hc.Lock()
+			hc.value.CNStores[1].GlobalSysVarCommitTS = commitTS
+			hc.Unlock()
+			c.ForceRefresh(true)
+			require.ElementsMatch(t, []string{"cn-a", "cn-b"}, routableCNIDs(c))
+		},
+	)
+}
+
+func routableCNIDs(c *cluster) []string {
+	var ids []string
+	c.GetCNService(NewSelector(), func(cn metadata.CNService) bool {
+		ids = append(ids, cn.ServiceID)
+		return true
+	})
+	return ids
 }
 
 func TestNewTNServicePreservesAutoIncrEpochFenceCapability(t *testing.T) {

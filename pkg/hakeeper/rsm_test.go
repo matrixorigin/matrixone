@@ -26,6 +26,7 @@ import (
 
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 )
 
 func TestAssignID(t *testing.T) {
@@ -208,6 +209,91 @@ func TestHandleCNHeartbeat(t *testing.T) {
 	assert.True(t, ok)
 	assert.Equal(t, uint64(3), cninfo.Tick)
 	assert.Equal(t, hb.CommitID, cninfo.CommitID)
+}
+
+func TestGlobalSysVarCommitWatermarkIsDurableAndMonotonic(t *testing.T) {
+	rsm := NewStateMachine(0, 1).(*stateMachine)
+	latest := timestamp.Timestamp{PhysicalTime: 100, LogicalTime: 7}
+	older := timestamp.Timestamp{PhysicalTime: 90}
+
+	_, err := rsm.Update(sm.Entry{Index: 1, Cmd: GetUpdateGlobalSysVarCommitTSCmd(latest)})
+	require.NoError(t, err)
+	_, err = rsm.Update(sm.Entry{Index: 2, Cmd: GetUpdateGlobalSysVarCommitTSCmd(older)})
+	require.NoError(t, err)
+	require.Equal(t, latest, rsm.state.CNState.GlobalSysVarCommitTS)
+
+	hb := pb.CNStoreHeartbeat{
+		UUID:                        "cn-1",
+		SQLAddress:                  "sql-1",
+		CommandDeliveryAckSupported: true,
+		GlobalSysVarCommitTS:        older,
+	}
+	data, err := hb.Marshal()
+	require.NoError(t, err)
+	result, err := rsm.Update(sm.Entry{Index: 3, Cmd: GetCNStoreHeartbeatCmd(data)})
+	require.NoError(t, err)
+	var batch pb.CommandBatch
+	require.NoError(t, batch.Unmarshal(result.Data))
+	require.Equal(t, latest, batch.GlobalSysVarCommitTS)
+	require.Equal(t, older, rsm.state.CNState.Stores[hb.UUID].GlobalSysVarCommitTS)
+
+	hb.GlobalSysVarCommitTS = latest
+	data, err = hb.Marshal()
+	require.NoError(t, err)
+	_, err = rsm.Update(sm.Entry{Index: 4, Cmd: GetCNStoreHeartbeatCmd(data)})
+	require.NoError(t, err)
+	details := rsm.handleClusterDetailsQuery(Config{})
+	require.Equal(t, latest, details.GlobalSysVarCommitTS)
+	require.Len(t, details.CNStores, 1)
+	require.Equal(t, latest, details.CNStores[0].GlobalSysVarCommitTS)
+
+	hb.GlobalSysVarGeneration = "generation-a"
+	data, err = hb.Marshal()
+	require.NoError(t, err)
+	_, err = rsm.Update(sm.Entry{Index: 5, Cmd: GetCNStoreHeartbeatCmd(data)})
+	require.NoError(t, err)
+	hb.GlobalSysVarGeneration = "generation-b"
+	hb.GlobalSysVarCommitTS = timestamp.Timestamp{}
+	data, err = hb.Marshal()
+	require.NoError(t, err)
+	_, err = rsm.Update(sm.Entry{Index: 6, Cmd: GetCNStoreHeartbeatCmd(data)})
+	require.NoError(t, err)
+	require.Empty(t, rsm.state.CNState.Stores[hb.UUID].GlobalSysVarCommitTS,
+		"a restarted CN must not inherit the previous process's visibility ack")
+}
+
+func TestProxyGlobalSysVarCommitWatermarkTracksIncarnation(t *testing.T) {
+	state := pb.NewProxyState()
+	latest := timestamp.Timestamp{PhysicalTime: 100, LogicalTime: 7}
+	state.Update(pb.ProxyHeartbeat{
+		UUID: "proxy-1", GlobalSysVarGeneration: "generation-a",
+		GlobalSysVarCommitTS: latest,
+	}, 1)
+	require.Equal(t, latest, state.Stores["proxy-1"].GlobalSysVarCommitTS)
+
+	state.Update(pb.ProxyHeartbeat{
+		UUID: "proxy-1", GlobalSysVarGeneration: "generation-b",
+	}, 2)
+	require.Empty(t, state.Stores["proxy-1"].GlobalSysVarCommitTS,
+		"a restarted Proxy must not inherit the previous process's route-barrier ack")
+}
+
+func TestClusterDetailsReportsExpiredProxy(t *testing.T) {
+	rsm := NewStateMachine(0, 1).(*stateMachine)
+	rsm.state.Tick = 10
+	rsm.state.ProxyState.Stores["proxy-live"] = pb.ProxyStore{Tick: 10}
+	rsm.state.ProxyState.Stores["proxy-expired"] = pb.ProxyStore{Tick: 1}
+
+	details := rsm.handleClusterDetailsQuery(Config{
+		TickPerSecond:     1,
+		ProxyStoreTimeout: time.Second,
+	})
+	states := make(map[string]pb.NodeState, len(details.ProxyStores))
+	for _, proxy := range details.ProxyStores {
+		states[proxy.UUID] = proxy.State
+	}
+	require.Equal(t, pb.NormalState, states["proxy-live"])
+	require.Equal(t, pb.TimeoutState, states["proxy-expired"])
 }
 
 func TestGetIDCmd(t *testing.T) {

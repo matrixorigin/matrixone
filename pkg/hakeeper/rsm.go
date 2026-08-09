@@ -34,6 +34,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 )
 
 var (
@@ -426,6 +427,16 @@ func GetUpdateNonVotingLocality(locality pb.Locality) []byte {
 	return cmd
 }
 
+// GetUpdateGlobalSysVarCommitTSCmd advances the durable CN admission fence.
+func GetUpdateGlobalSysVarCommitTSCmd(ts timestamp.Timestamp) []byte {
+	cmd := make([]byte, headerSize+ts.ProtoSize())
+	binaryEnc.PutUint32(cmd, uint32(pb.UpdateGlobalSysVarCommitTS))
+	if _, err := ts.MarshalTo(cmd[headerSize:]); err != nil {
+		panic(err)
+	}
+	return cmd
+}
+
 func getHeartbeatCmd(data []byte, tag pb.HAKeeperUpdateType) []byte {
 	cmd := make([]byte, headerSize+len(data))
 	binaryEnc.PutUint32(cmd, uint32(tag))
@@ -792,6 +803,19 @@ func (s *stateMachine) getCommandBatch(uuid string) sm.Result {
 	return s.getCommandBatchFiltered(uuid, false)
 }
 
+func (s *stateMachine) commandBatchResult(batch pb.CommandBatch) sm.Result {
+	batch.GlobalSysVarCommitTS = s.state.CNState.GlobalSysVarCommitTS
+	if len(batch.Commands) == 0 && len(batch.CommandIDs) == 0 &&
+		batch.BatchID == 0 && batch.GlobalSysVarCommitTS.IsEmpty() {
+		return sm.Result{}
+	}
+	data, err := batch.Marshal()
+	if err != nil {
+		panic(err)
+	}
+	return sm.Result{Data: data}
+}
+
 func (s *stateMachine) getCommandBatchFiltered(
 	uuid string,
 	filterHAKeeperAdmissions bool,
@@ -839,13 +863,9 @@ func (s *stateMachine) getCommandBatchFiltered(
 
 		batch.Commands = deliver
 		batch.CommandIDs = deliverIDs
-		data, err := batch.Marshal()
-		if err != nil {
-			panic(err)
-		}
-		return sm.Result{Data: data}
+		return s.commandBatchResult(batch)
 	}
-	return sm.Result{}
+	return s.commandBatchResult(pb.CommandBatch{})
 
 }
 
@@ -898,7 +918,7 @@ func (s *stateMachine) logScheduleCommandDeliverable(cmd pb.ScheduleCommand) boo
 func (s *stateMachine) getCommandBatchWithAck(uuid string, ack uint64) sm.Result {
 	batch, ok := s.state.ScheduleCommands[uuid]
 	if !ok {
-		return sm.Result{}
+		return s.commandBatchResult(pb.CommandBatch{})
 	}
 	if ensureScheduleCommandIDs(&batch, s.state.Index) {
 		// A snapshot produced before delivery IDs were introduced can still
@@ -919,17 +939,13 @@ func (s *stateMachine) getCommandBatchWithAck(uuid string, ack uint64) sm.Result
 		}
 		if len(pending) == 0 {
 			delete(s.state.ScheduleCommands, uuid)
-			return sm.Result{}
+			return s.commandBatchResult(pb.CommandBatch{})
 		}
 		batch.Commands = pending
 		batch.CommandIDs = pendingIDs
 		s.state.ScheduleCommands[uuid] = batch
 	}
-	data, err := batch.Marshal()
-	if err != nil {
-		panic(err)
-	}
-	return sm.Result{Data: data}
+	return s.commandBatchResult(batch)
 }
 
 // bootstrapReplicaCommandStatus returns whether a bootstrap command must be
@@ -1601,6 +1617,13 @@ func (s *stateMachine) Update(e sm.Entry) (sm.Result, error) {
 		return s.handleCompleteLogServiceRecoveryCmd(), nil
 	case pb.EnableCommandDeliveryUpdate:
 		return s.handleEnableCommandDelivery(cmd), nil
+	case pb.UpdateGlobalSysVarCommitTS:
+		var ts timestamp.Timestamp
+		if err := ts.Unmarshal(cmd[headerSize:]); err != nil {
+			panic(err)
+		}
+		s.state.CNState.UpdateGlobalSysVarCommitTS(ts)
+		return sm.Result{}, nil
 	case pb.SetTaskTableUserUpdate:
 		s.assertState()
 		return s.handleTaskTableUserCmd(cmd), nil
@@ -1660,18 +1683,20 @@ func (s *stateMachine) handleScheduleCommandQuery(uuid string) *pb.CommandBatch 
 		if !ok {
 			panic("deep copy failed")
 		}
+		result.GlobalSysVarCommitTS = s.state.CNState.GlobalSysVarCommitTS
 		return result
 	}
-	return &pb.CommandBatch{}
+	return &pb.CommandBatch{GlobalSysVarCommitTS: s.state.CNState.GlobalSysVarCommitTS}
 }
 
 func (s *stateMachine) handleClusterDetailsQuery(cfg Config) *pb.ClusterDetails {
 	cfg.Fill()
 	cd := &pb.ClusterDetails{
-		CNStores:    make([]pb.CNStore, 0, len(s.state.CNState.Stores)),
-		TNStores:    make([]pb.TNStore, 0, len(s.state.TNState.Stores)),
-		LogStores:   make([]pb.LogStore, 0, len(s.state.LogState.Stores)),
-		ProxyStores: make([]pb.ProxyStore, 0, len(s.state.ProxyState.Stores)),
+		CNStores:             make([]pb.CNStore, 0, len(s.state.CNState.Stores)),
+		TNStores:             make([]pb.TNStore, 0, len(s.state.TNState.Stores)),
+		LogStores:            make([]pb.LogStore, 0, len(s.state.LogState.Stores)),
+		ProxyStores:          make([]pb.ProxyStore, 0, len(s.state.ProxyState.Stores)),
+		GlobalSysVarCommitTS: s.state.CNState.GlobalSysVarCommitTS,
 	}
 	for uuid, info := range s.state.CNState.Stores {
 		state := pb.NormalState
@@ -1679,20 +1704,22 @@ func (s *stateMachine) handleClusterDetailsQuery(cfg Config) *pb.ClusterDetails 
 			state = pb.TimeoutState
 		}
 		n := pb.CNStore{
-			UUID:                uuid,
-			Tick:                info.Tick,
-			ServiceAddress:      info.ServiceAddress,
-			SQLAddress:          info.SQLAddress,
-			LockServiceAddress:  info.LockServiceAddress,
-			ShardServiceAddress: info.ShardServiceAddress,
-			State:               state,
-			WorkState:           info.WorkState,
-			Labels:              info.Labels,
-			QueryAddress:        info.QueryAddress,
-			ConfigData:          info.ConfigData,
-			Resource:            info.Resource,
-			UpTime:              info.UpTime,
-			CommitID:            info.CommitID,
+			UUID:                   uuid,
+			Tick:                   info.Tick,
+			ServiceAddress:         info.ServiceAddress,
+			SQLAddress:             info.SQLAddress,
+			LockServiceAddress:     info.LockServiceAddress,
+			ShardServiceAddress:    info.ShardServiceAddress,
+			State:                  state,
+			WorkState:              info.WorkState,
+			Labels:                 info.Labels,
+			QueryAddress:           info.QueryAddress,
+			ConfigData:             info.ConfigData,
+			Resource:               info.Resource,
+			UpTime:                 info.UpTime,
+			CommitID:               info.CommitID,
+			GlobalSysVarCommitTS:   info.GlobalSysVarCommitTS,
+			GlobalSysVarGeneration: info.GlobalSysVarGeneration,
 		}
 		cd.CNStores = append(cd.CNStores, n)
 	}
@@ -1733,11 +1760,18 @@ func (s *stateMachine) handleClusterDetailsQuery(cfg Config) *pb.ClusterDetails 
 		cd.LogStores = append(cd.LogStores, n)
 	}
 	for uuid, info := range s.state.ProxyState.Stores {
+		state := pb.NormalState
+		if cfg.ProxyStoreExpired(info.Tick, s.state.Tick) {
+			state = pb.TimeoutState
+		}
 		cd.ProxyStores = append(cd.ProxyStores, pb.ProxyStore{
-			UUID:          uuid,
-			Tick:          info.Tick,
-			ListenAddress: info.ListenAddress,
-			ConfigData:    info.ConfigData,
+			UUID:                   uuid,
+			Tick:                   info.Tick,
+			ListenAddress:          info.ListenAddress,
+			ConfigData:             info.ConfigData,
+			GlobalSysVarCommitTS:   info.GlobalSysVarCommitTS,
+			GlobalSysVarGeneration: info.GlobalSysVarGeneration,
+			State:                  state,
 		})
 	}
 	for _, store := range s.state.DeletedStores {

@@ -32,6 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/hakeeper"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 )
 
@@ -207,6 +208,12 @@ type TNHAKeeperClient interface {
 // a type assertion so existing test doubles remain source-compatible.
 type ScheduleCommandHAKeeperClient interface {
 	GetScheduleCommands(ctx context.Context, serviceType pb.ServiceType) (pb.CommandBatch, error)
+}
+
+// GlobalSysVarHAKeeperClient is the version-gated HAKeeper capability used to
+// publish the durable global-system-variable routing watermark.
+type GlobalSysVarHAKeeperClient interface {
+	UpdateGlobalSysVarCommitTS(context.Context, timestamp.Timestamp) error
 }
 
 // LogHAKeeperClient is the HAKeeper client used by a Log store.
@@ -953,6 +960,39 @@ func (c *managedHAKeeperClient) UpdateCNWorkState(
 	}
 }
 
+// UpdateGlobalSysVarCommitTS advances the durable CN admission watermark.
+func (c *managedHAKeeperClient) UpdateGlobalSysVarCommitTS(
+	ctx context.Context,
+	ts timestamp.Timestamp,
+) error {
+	if err := validateHAKeeperClientContext(ctx); err != nil {
+		return err
+	}
+	for {
+		client, err := c.getPreparedClient(ctx)
+		if err != nil {
+			if c.isRetryableError(err) {
+				if err := c.waitRetry(ctx); err != nil {
+					return err
+				}
+				continue
+			}
+			return err
+		}
+		err = client.updateGlobalSysVarCommitTS(ctx, ts)
+		if shouldResetHAKeeperClient(err) {
+			c.resetClientIfCurrent(client)
+		}
+		if c.isRetryableError(err) {
+			if err := c.waitRetry(ctx); err != nil {
+				return err
+			}
+			continue
+		}
+		return err
+	}
+}
+
 // PatchCNStore implements the ProxyHAKeeperClient interface.
 func (c *managedHAKeeperClient) PatchCNStore(
 	ctx context.Context, stateLabel pb.CNStateLabel,
@@ -1616,6 +1656,18 @@ func (c *hakeeperClient) updateCNWorkState(ctx context.Context, state pb.CNWorkS
 		return err
 	}
 	return nil
+}
+
+func (c *hakeeperClient) updateGlobalSysVarCommitTS(
+	ctx context.Context,
+	ts timestamp.Timestamp,
+) error {
+	req := pb.Request{
+		Method:               pb.UPDATE_GLOBAL_SYS_VAR_COMMIT_TS,
+		GlobalSysVarCommitTS: ts,
+	}
+	_, err := c.request(ctx, req)
+	return err
 }
 
 func (c *hakeeperClient) patchCNStore(ctx context.Context, stateLabel pb.CNStateLabel) error {

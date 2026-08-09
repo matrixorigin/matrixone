@@ -1451,6 +1451,13 @@ func (ses *Session) SetGlobalSysVar(ctx context.Context, name string, val interf
 		}
 	}
 
+	// A mixed-version deployment must reject before the catalog mutation. Old
+	// CNs implement SyncCommit with an uninterruptible five-minute/Fatal path
+	// and do not participate in the HAKeeper routing fence.
+	if err = validateGlobalSysVarSyncProtocol(ctx, ses); err != nil {
+		return err
+	}
+
 	// save to table first
 	if err = doSetGlobalSystemVariable(ctx, ses, name, val); err != nil {
 		return

@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/version"
 )
@@ -73,13 +74,94 @@ func (s *service) heartbeatTask(ctx context.Context) {
 
 func (s *service) controlTask(ctx context.Context) {
 	s.commandPollWakeup = make(chan struct{}, 1)
+	s.globalSysVarWakeup = make(chan struct{}, 1)
 	commandDone := make(chan struct{})
+	watermarkDone := make(chan struct{})
 	go func() {
 		defer close(commandDone)
 		s.commandTask(ctx)
 	}()
+	go func() {
+		defer close(watermarkDone)
+		s.globalSysVarWatermarkTask(ctx)
+	}()
 	s.heartbeatTask(ctx)
 	<-commandDone
+	<-watermarkDone
+}
+
+func (s *service) observeGlobalSysVarCommitTS(ts timestamp.Timestamp) {
+	if ts.IsEmpty() {
+		return
+	}
+	for {
+		current := s.globalSysVarDesired.Load()
+		if current != nil && current.GreaterEq(ts) {
+			return
+		}
+		next := ts
+		if s.globalSysVarDesired.CompareAndSwap(current, &next) {
+			select {
+			case s.globalSysVarWakeup <- struct{}{}:
+			default:
+			}
+			return
+		}
+	}
+}
+
+func (s *service) publishGlobalSysVarCommitTS(ts timestamp.Timestamp) {
+	for {
+		current := s.globalSysVarApplied.Load()
+		if current != nil && current.GreaterEq(ts) {
+			return
+		}
+		next := ts
+		if s.globalSysVarApplied.CompareAndSwap(current, &next) {
+			return
+		}
+	}
+}
+
+func (s *service) globalSysVarWatermarkTask(ctx context.Context) {
+	retry := time.NewTimer(time.Hour)
+	if !retry.Stop() {
+		<-retry.C
+	}
+	defer retry.Stop()
+	var retryC <-chan time.Time
+	for {
+		desired := s.globalSysVarDesired.Load()
+		applied := s.globalSysVarApplied.Load()
+		if desired != nil && (applied == nil || applied.Less(*desired)) {
+			if err := s._txnClient.SyncLatestCommitTSWithContext(ctx, *desired); err != nil {
+				if ctx.Err() != nil {
+					return
+				}
+				s.logger.Error("failed to apply global sysvar commit timestamp", zap.Error(err))
+				retry.Reset(100 * time.Millisecond)
+				retryC = retry.C
+			} else {
+				s.publishGlobalSysVarCommitTS(*desired)
+				retryC = nil
+				continue
+			}
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-s.globalSysVarWakeup:
+			if retryC != nil && !retry.Stop() {
+				select {
+				case <-retry.C:
+				default:
+				}
+			}
+			retryC = nil
+		case <-retryC:
+			retryC = nil
+		}
+	}
 }
 
 func (s *service) commandTask(ctx context.Context) {
@@ -202,6 +284,10 @@ func (s *service) heartbeat(ctx context.Context) {
 		CommitID:                    version.CommitID,
 		AckedCommandBatchID:         s.ackedCommandBatchID.Load(),
 		CommandDeliveryAckSupported: true,
+		GlobalSysVarGeneration:      s.globalSysVarGeneration,
+	}
+	if applied := s.globalSysVarApplied.Load(); applied != nil {
+		hb.GlobalSysVarCommitTS = *applied
 	}
 	if s.gossipNode != nil {
 		hb.GossipAddress = s.gossipServiceAddr()
@@ -239,6 +325,7 @@ func (s *service) heartbeat(ctx context.Context) {
 }
 
 func (s *service) handleCommandBatch(batch logservicepb.CommandBatch) {
+	s.observeGlobalSysVarCommitTS(batch.GlobalSysVarCommitTS)
 	s.commandMu.Lock()
 	defer s.commandMu.Unlock()
 	s.handleCommandBatchLocked(batch)
@@ -286,6 +373,7 @@ func (s *service) handleHeartbeatResponse(
 	sentAck uint64,
 	batch logservicepb.CommandBatch,
 ) {
+	s.observeGlobalSysVarCommitTS(batch.GlobalSysVarCommitTS)
 	s.commandMu.Lock()
 	defer s.commandMu.Unlock()
 	if sentAck != 0 && sentAck == s.lastCommandBatchID &&
