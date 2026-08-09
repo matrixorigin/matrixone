@@ -21,6 +21,7 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -28,6 +29,27 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/stretchr/testify/require"
 )
+
+type viewMetadataCleanupRecordingExecutor struct {
+	sqls []string
+}
+
+func (e *viewMetadataCleanupRecordingExecutor) Exec(
+	_ context.Context,
+	sql string,
+	_ executor.Options,
+) (executor.Result, error) {
+	e.sqls = append(e.sqls, sql)
+	return executor.Result{}, nil
+}
+
+func (*viewMetadataCleanupRecordingExecutor) ExecTxn(
+	context.Context,
+	func(executor.TxnExecutor) error,
+	executor.Options,
+) error {
+	panic("unexpected ExecTxn")
+}
 
 type deadlineCheckingSQLExecutor struct {
 	t             *testing.T
@@ -121,6 +143,45 @@ func TestViewMetadataLifecycleSkipsRestoreCatalogDDL(t *testing.T) {
 	require.NoError(t, c.enqueueViewsAfterRelationRemoval("db", "t", 0, 0, 0))
 	require.NoError(t, c.deleteDroppedViewMetadata(1))
 	require.NoError(t, c.deleteDroppedDatabaseViewMetadata(0, 1, "db"))
+}
+
+func TestViewMetadataCleanupLocksLifecycleGateBeforeRows(t *testing.T) {
+	tests := []struct {
+		name string
+		run  func(*Compile) error
+	}{
+		{
+			name: "view",
+			run:  func(c *Compile) error { return c.deleteDroppedViewMetadata(11) },
+		},
+		{
+			name: "database",
+			run: func(c *Compile) error {
+				return c.deleteDroppedDatabaseViewMetadata(0, 7, "db")
+			},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			exec := &viewMetadataCleanupRecordingExecutor{}
+			runtime := moruntime.ServiceRuntime(proc.GetService())
+			oldExecutor, hadOldExecutor := runtime.GetGlobalVariables(moruntime.InternalSQLExecutor)
+			runtime.SetGlobalVariables(moruntime.InternalSQLExecutor, exec)
+			t.Cleanup(func() {
+				if hadOldExecutor {
+					runtime.SetGlobalVariables(moruntime.InternalSQLExecutor, oldExecutor)
+				} else {
+					runtime.CompareAndDeleteGlobalVariables(moruntime.InternalSQLExecutor, exec)
+				}
+			})
+			require.NoError(t, tc.run(&Compile{proc: proc, pn: &planpb.Plan{}}))
+			require.Len(t, exec.sqls, 3)
+			require.Equal(t, catalog.ViewMetadataLifecycleGateSQL, exec.sqls[0])
+			require.Contains(t, exec.sqls[1], catalog.MO_VIEW_DEPENDENCIES)
+			require.Contains(t, exec.sqls[2], catalog.MO_VIEW_REFRESH)
+		})
+	}
 }
 
 func TestViewDependencyMutationPredicateNeverTreatsUnknownIDAsIdentity(t *testing.T) {

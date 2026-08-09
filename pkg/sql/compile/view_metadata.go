@@ -416,6 +416,12 @@ func (c *Compile) deleteDroppedViewMetadata(relationID uint64) error {
 	if c.proc.GetSessionInfo().IsRestore {
 		return nil
 	}
+	// Recovery and catalog cleanup must acquire locks in the same order. In
+	// particular, never take a range lock on mo_view_refresh before the stable
+	// lifecycle gate: recovery owns the gate while claiming a refresh row.
+	if err := lockViewMetadataLifecycleGate(c.proc); err != nil {
+		return err
+	}
 	accountID, err := defines.GetAccountId(c.proc.Ctx)
 	if err != nil {
 		return err
@@ -437,6 +443,9 @@ func (c *Compile) deleteDroppedDatabaseViewMetadata(
 ) error {
 	if c.proc.GetSessionInfo().IsRestore {
 		return nil
+	}
+	if err := lockViewMetadataLifecycleGate(c.proc); err != nil {
+		return err
 	}
 	for _, tableName := range []string{catalog.MO_VIEW_DEPENDENCIES, catalog.MO_VIEW_REFRESH} {
 		if err := c.runSqlWithSystemTenant(fmt.Sprintf(

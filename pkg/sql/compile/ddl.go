@@ -145,6 +145,14 @@ func (s *Scope) DropDatabase(c *Compile) error {
 			}
 		}
 	}
+	if c.proc.Base.IsFrontend && !needSkipDbs[dbName] && !c.proc.GetSessionInfo().IsRestore {
+		// Recovery takes this gate before locking a target View. Take it before
+		// the database lock so DROP cannot hold catalog/target locks while
+		// waiting for recovery's refresh-row transaction.
+		if err = lockViewMetadataLifecycleGate(c.proc); err != nil {
+			return err
+		}
+	}
 
 	if err = lockMoDatabase(c, dbName, lock.LockMode_Exclusive); err != nil {
 		return err
@@ -3607,6 +3615,14 @@ func (s *Scope) dropTableSingle(c *Compile, qry *plan.DropTable) error {
 	droppedTableDef := rel.GetTableDef(c.proc.Ctx)
 	droppedLogicalID := droppedTableDef.GetLogicalId()
 	droppedDatabaseID := droppedTableDef.GetDbId()
+	if c.proc.Base.IsFrontend && !isTemp && !c.ignorePublish &&
+		!needSkipDbs[dbName] && !c.proc.GetSessionInfo().IsRestore {
+		// Keep the global gate ahead of the target/source relation lock. This is
+		// the same order used by recovery when it claims and regenerates a View.
+		if err = lockViewMetadataLifecycleGate(c.proc); err != nil {
+			return err
+		}
+	}
 
 	// Check if the table is a CCPR shared table
 	if !isTemp && !isView && !isSource {
