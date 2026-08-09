@@ -954,13 +954,16 @@ func (builder *QueryBuilder) applyForceIndexHintToScan(scanNode *plan.Node, requ
 		}
 
 		// FORCE PRIMARY keeps the base-table access and blocks ordinary secondary-index rewrites.
-		if _, forcePrimary := scope.force[strings.ToLower(PrimaryKeyName)]; forcePrimary {
+		if _, forcePrimary := scope.force[strings.ToLower(PrimaryKeyName)]; forcePrimary &&
+			(!hintSet.join.forceSpecified || indexAllowedByHintScope(PrimaryKeyName, hintSet.join)) {
 			builder.protectedScans[scanNode.NodeId]++
 			return scanNode.NodeId, nil
 		}
 		indexes := filterIndexesByHintScope(scanNode.TableDef.Indexes, scope)
 		for _, idxDef := range indexes {
-			if !usableRegularHintIndex(idxDef) || !indexLeadingColumnsMatch(idxDef, scanNode.TableDef, colPositions) {
+			if !usableRegularHintIndex(idxDef) ||
+				(hintSet.join.forceSpecified && !indexAllowedByHintScope(idxDef.IndexName, hintSet.join)) ||
+				!indexLeadingColumnsMatch(idxDef, scanNode.TableDef, colPositions) {
 				continue
 			}
 			accessNodeID, idxNodeID, covering, err := builder.tryHintedIndexAccess(idxDef, scanNode, colRefCnt, idxColMap)
@@ -983,11 +986,42 @@ func (builder *QueryBuilder) applyForceIndexHintToScan(scanNode *plan.Node, requ
 			}
 			return accessNodeID, nil
 		}
+		if hintSet.join.forceSpecified {
+			return builder.applyForcedJoinHintToScan(scanNode, hintSet.join, colRefCnt, idxColMap)
+		}
 		// A FORCE hint that cannot provide the requested ordering/grouping still
 		// excludes other secondary indexes from replacing the base scan.
 		builder.protectedScans[scanNode.NodeId]++
 		return scanNode.NodeId, nil
 	}
+	return scanNode.NodeId, nil
+}
+
+// applyForcedJoinHintToScan resolves incompatible ORDER/GROUP and JOIN force
+// scopes before a covering access publishes hidden-column replacements to its
+// ancestors. JOIN access has the same precedence that applyIndicesForJoins
+// historically enforced, but choosing it here keeps the replacement atomic.
+func (builder *QueryBuilder) applyForcedJoinHintToScan(scanNode *plan.Node, scope indexHintScopeSet,
+	colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr) (int32, error) {
+	if indexAllowedByHintScope(PrimaryKeyName, scope) {
+		builder.protectedScans[scanNode.NodeId]++
+		return scanNode.NodeId, nil
+	}
+	for _, idxDef := range filterIndexesByHintScope(scanNode.TableDef.Indexes, scope) {
+		if !usableRegularHintIndex(idxDef) {
+			continue
+		}
+		accessNodeID, _, _, err := builder.tryHintedIndexAccess(idxDef, scanNode, colRefCnt, idxColMap)
+		if err != nil {
+			return -1, err
+		}
+		if accessNodeID == -1 {
+			continue
+		}
+		builder.protectedScans[scanNode.NodeId]++
+		return accessNodeID, nil
+	}
+	builder.protectedScans[scanNode.NodeId]++
 	return scanNode.NodeId, nil
 }
 
@@ -1829,6 +1863,7 @@ func (builder *QueryBuilder) replaceNonEqualCondition(idxDef *IndexDef, filter *
 		}
 		return expr
 	}
+	comparesByteStringColumn := indexFunctionComparesByteStringColumn(fn)
 
 	switch fn.Func.ObjName {
 	case ">", ">=", "<", "<=":
@@ -1867,6 +1902,14 @@ func (builder *QueryBuilder) replaceNonEqualCondition(idxDef *IndexDef, filter *
 		case "in_range":
 			fn.Args[1], _ = BindFuncExprImplByPlanExpr(builder.GetContext(), serialFunc, []*plan.Expr{fn.Args[1]})
 			fn.Args[2], _ = BindFuncExprImplByPlanExpr(builder.GetContext(), serialFunc, []*plan.Expr{fn.Args[2]})
+			if comparesByteStringColumn {
+				// PrefixCompare cannot distinguish an encoded byte string from a
+				// longer value for which that encoding is a prefix.  An open lower
+				// bound would therefore drop valid longer values.  Widen the index
+				// candidate range to a closed lower bound; the original predicate is
+				// retained as an exact residual on index-only scans or the base scan.
+				fn.Args[3] = closePrefixRangeLowerBound(fn.Args[3])
+			}
 			expr, _ = BindFuncExprImplByPlanExpr(builder.GetContext(), "prefix_in_range", fn.Args)
 		}
 	}
@@ -1880,19 +1923,115 @@ func (builder *QueryBuilder) replaceLeadingFilter(idxDef *IndexDef, filterList [
 	return builder.replaceEqualCondition(idxDef, filterList, leadingPos, idxTag, idxTableDef)
 }
 
-func needsIndexOnlyResidualLeadingFilters(idxDef *IndexDef, filterList []*plan.Expr, leadingPos []int32) bool {
+func indexOnlyResidualLeadingFilterPositions(idxDef *IndexDef, tableDef *plan.TableDef, filterList []*plan.Expr, leadingPos []int32, lookupFilter *plan.Expr) []int32 {
 	if indexTableLookupSerialFunc(idxDef) != "serial_full" {
-		return false
+		return nil
 	}
+	residualPos := make([]int32, 0, len(leadingPos))
 	for _, pos := range leadingPos {
 		if pos < 0 || int(pos) >= len(filterList) {
 			continue
 		}
 		if indexFilterMayCompareNullAtRuntime(filterList[pos]) {
+			residualPos = append(residualPos, pos)
+		}
+	}
+
+	if len(leadingPos) == 0 || !indexLookupUsesPrefixComparison(lookupFilter) {
+		return residualPos
+	}
+	lastPos := leadingPos[len(leadingPos)-1]
+	if lastPos < 0 || int(lastPos) >= len(filterList) {
+		return residualPos
+	}
+	if !indexFilterUsesPrefixAmbiguousStringColumn(tableDef, filterList[lastPos]) {
+		return residualPos
+	}
+	for _, pos := range residualPos {
+		if pos == lastPos {
+			return residualPos
+		}
+	}
+	return append(residualPos, lastPos)
+}
+
+func indexLookupUsesPrefixComparison(expr *plan.Expr) bool {
+	if expr == nil {
+		return false
+	}
+	fn := expr.GetF()
+	if fn == nil || fn.Func == nil {
+		return false
+	}
+	switch fn.Func.ObjName {
+	case "prefix_eq", "prefix_in", "prefix_between", "prefix_in_range":
+		return true
+	}
+	for _, arg := range fn.Args {
+		if indexLookupUsesPrefixComparison(arg) {
 			return true
 		}
 	}
 	return false
+}
+
+func indexFilterUsesPrefixAmbiguousStringColumn(tableDef *plan.TableDef, expr *plan.Expr) bool {
+	if tableDef == nil || expr == nil {
+		return false
+	}
+	if col := expr.GetCol(); col != nil && col.ColPos >= 0 && int(col.ColPos) < len(tableDef.Cols) {
+		colDef := tableDef.Cols[col.ColPos]
+		if colDef == nil {
+			return false
+		}
+		oid := types.T(colDef.Typ.Id)
+		// CHAR, VARCHAR, BINARY, and VARBINARY use Packer.EncodeStringType.
+		// Its 0x00 terminator is also the first byte of an escaped embedded NUL,
+		// so an encoded lookup value can prefix a distinct stored encoding.
+		return oid == types.T_char || oid == types.T_varchar ||
+			oid == types.T_binary || oid == types.T_varbinary
+	}
+	if fn := expr.GetF(); fn != nil {
+		for _, arg := range fn.Args {
+			if indexFilterUsesPrefixAmbiguousStringColumn(tableDef, arg) {
+				return true
+			}
+		}
+	}
+	if list := expr.GetList(); list != nil {
+		for _, item := range list.List {
+			if indexFilterUsesPrefixAmbiguousStringColumn(tableDef, item) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func indexFunctionComparesByteStringColumn(fn *plan.Function) bool {
+	if fn == nil {
+		return false
+	}
+	for _, arg := range fn.Args {
+		if arg.GetCol() == nil {
+			continue
+		}
+		oid := types.T(arg.Typ.Id)
+		return oid == types.T_char || oid == types.T_varchar ||
+			oid == types.T_binary || oid == types.T_varbinary
+	}
+	return false
+}
+
+func closePrefixRangeLowerBound(flagExpr *plan.Expr) *plan.Expr {
+	if flagExpr == nil || flagExpr.GetLit() == nil {
+		return flagExpr
+	}
+	flag := uint8(flagExpr.GetLit().GetU8Val())
+	if flag&1 == 0 {
+		return flagExpr
+	}
+	return MakePlan2Uint8ConstExprWithType(flag &^ 1)
 }
 
 func indexFilterMayCompareNullAtRuntime(expr *plan.Expr) bool {
@@ -2057,13 +2196,15 @@ func (builder *QueryBuilder) tryIndexOnlyScan(idxDef *IndexDef, node *plan.Node,
 	}
 
 	newLeadingFilter := builder.replaceLeadingFilter(idxDef, node.FilterList, leadingPos, leadingEqualCond, idxTag, idxTableDef)
-	newFilterList := make([]*plan.Expr, 0, len(node.FilterList))
+	residualLeadingPos := indexOnlyResidualLeadingFilterPositions(idxDef, node.TableDef, node.FilterList, leadingPos, newLeadingFilter)
+	filterCapacity := 1 + len(missFilterIdx) + len(residualLeadingPos)
+	newFilterList := make([]*plan.Expr, 0, filterCapacity)
 	newFilterList = append(newFilterList, newLeadingFilter)
-	if needsIndexOnlyResidualLeadingFilters(idxDef, node.FilterList, leadingPos) {
-		// serial_full preserves NULL as key bytes. Keep the original SQL
-		// predicate as a residual recheck so prepared NULL values still follow
-		// SQL three-valued logic on covering index-only scans.
-		for _, idx := range leadingPos {
+	if len(residualLeadingPos) > 0 {
+		// Keep the original SQL predicate when serial_full lookup bytes are not
+		// an exact semantic oracle: NULL is encoded as key bytes, and a byte-string
+		// terminator can also begin an escaped embedded NUL.
+		for _, idx := range residualLeadingPos {
 			newFilterList = append(newFilterList, replaceColumnsForExpr(DeepCopyExpr(node.FilterList[idx]), idxColMap))
 		}
 	}
@@ -2400,6 +2541,11 @@ func (builder *QueryBuilder) replaceRangePairCondition(idxDef *IndexDef, filterL
 	}
 	if upperOp == "<" {
 		flag |= 2
+	}
+	if numParts > 1 && indexFunctionComparesByteStringColumn(lowerFn) {
+		// See replaceNonEqualCondition: make the prefix condition a candidate
+		// superset when the original lower bound is open.
+		flag &^= 1
 	}
 	funcName := "in_range"
 	if numParts > 1 {
@@ -2911,7 +3057,32 @@ func (builder *QueryBuilder) applyForcedJoinAccess(accessID int32) (int32, error
 	if scan == nil || scan.TableDef == nil {
 		return accessID, nil
 	}
-	for _, idxDef := range builder.filterRegularIndexesByJoinHints(scan, scan.TableDef.Indexes) {
+	// PRIMARY is represented by the base scan itself, not by TableDef.Indexes.
+	primaryAllowed := false
+	if !scan.IndexScanInfo.IsIndexScan {
+		if hints := builder.indexHintsByScan[scan.NodeId]; hints != nil && hints.join.forceSpecified {
+			primaryAllowed = indexAllowedByHintScope(PrimaryKeyName, hints.join)
+		}
+	}
+	if accessID == scan.NodeId && primaryAllowed {
+		builder.protectedScans[scan.NodeId]++
+		return accessID, nil
+	}
+	indexes := builder.filterRegularIndexesByJoinHints(scan, scan.TableDef.Indexes)
+	for _, idxDef := range indexes {
+		if !usableRegularHintIndex(idxDef) {
+			continue
+		}
+		if builder.indexAccessUsesIndex(accessID, idxDef.IndexName) {
+			builder.protectedScans[scan.NodeId]++
+			return accessID, nil
+		}
+	}
+	if primaryAllowed {
+		builder.protectedScans[scan.NodeId]++
+		return scan.NodeId, nil
+	}
+	for _, idxDef := range indexes {
 		if !usableRegularHintIndex(idxDef) {
 			continue
 		}
@@ -2925,4 +3096,26 @@ func (builder *QueryBuilder) applyForcedJoinAccess(accessID int32) (int32, error
 		}
 	}
 	return accessID, nil
+}
+
+func (builder *QueryBuilder) indexAccessUsesIndex(nodeID int32, indexName string) bool {
+	if nodeID < 0 || int(nodeID) >= len(builder.qry.Nodes) {
+		return false
+	}
+	node := builder.qry.Nodes[nodeID]
+	if node == nil {
+		return false
+	}
+	if node.NodeType == plan.Node_TABLE_SCAN {
+		return node.IndexScanInfo.IsIndexScan && strings.EqualFold(node.IndexScanInfo.IndexName, indexName)
+	}
+	if node.NodeType != plan.Node_JOIN || node.JoinType != plan.Node_INDEX {
+		return false
+	}
+	for _, childID := range node.Children {
+		if builder.indexAccessUsesIndex(childID, indexName) {
+			return true
+		}
+	}
+	return false
 }
