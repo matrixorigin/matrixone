@@ -17,6 +17,7 @@ package plan
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -109,8 +110,22 @@ func updateRenameColumnInTableDef(
 		for j, partCol := range indexInfo.Parts {
 			partCol = catalog.ResolveAlias(partCol)
 			if partCol == oldColName {
+				prefixMetadataAffected, err := renameIndexPrefixLengthMetadata(
+					indexInfo, oldColName, newColName,
+				)
+				if err != nil {
+					return nil, err
+				}
 				indexInfo.Parts[j] = newColName
 				indexAffected = true
+				if prefixMetadataAffected {
+					sqls = append(sqls, fmt.Sprintf(
+						"update `mo_catalog`.`mo_indexes` set algo_params = '%s' where table_id = %d and name = '%s' ; ",
+						sqlquote.EscapeString(indexInfo.IndexAlgoParams),
+						tableDef.TblId,
+						sqlquote.EscapeString(indexInfo.IndexName),
+					))
+				}
 				break
 			}
 		}
@@ -172,6 +187,63 @@ func updateRenameColumnInTableDef(
 	}
 
 	return
+}
+
+// renameIndexPrefixLengthMetadata rewrites the column-name keys in regular
+// index prefix metadata. Prefix lengths describe the physical hidden-index key,
+// so leaving an old logical column name behind causes later DML and reads to
+// disagree about whether the key is truncated.
+func renameIndexPrefixLengthMetadata(indexInfo *plan.IndexDef, oldColName, newColName string) (bool, error) {
+	if !catalog.IsRegularIndexAlgo(indexInfo.IndexAlgo) || indexInfo.IndexAlgoParams == "" {
+		return false, nil
+	}
+
+	prefixLengths, err := catalog.IndexPrefixLengthsFromParamsWithError(indexInfo.IndexAlgoParams)
+	if err != nil {
+		return false, err
+	}
+
+	oldPrefixName := oldColName
+	length, ok := prefixLengths[oldPrefixName]
+	if !ok {
+		for partName, partLength := range prefixLengths {
+			if strings.EqualFold(partName, oldColName) {
+				oldPrefixName = partName
+				length = partLength
+				ok = true
+				break
+			}
+		}
+	}
+	if !ok {
+		return false, nil
+	}
+
+	params, err := catalog.IndexParamsStringToMap(indexInfo.IndexAlgoParams)
+	if err != nil {
+		return false, err
+	}
+	sessionVars, err := catalog.IndexParamsSessionVars(indexInfo.IndexAlgoParams)
+	if err != nil {
+		return false, err
+	}
+	delete(prefixLengths, oldPrefixName)
+	prefixLengths[newColName] = length
+	parts := make([]string, 0, len(prefixLengths))
+	for partName := range prefixLengths {
+		parts = append(parts, partName)
+	}
+	sort.Strings(parts)
+	encoded := make([]string, 0, len(parts))
+	for _, partName := range parts {
+		encoded = append(encoded, fmt.Sprintf("%s:%d", partName, prefixLengths[partName]))
+	}
+	params[catalog.IndexAlgoParamPrefixLengths] = strings.Join(encoded, ",")
+	indexInfo.IndexAlgoParams, err = catalog.IndexParamsMapToJsonStringWithSessionVars(params, sessionVars)
+	if err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 func addRenameContextToAlterCtx(

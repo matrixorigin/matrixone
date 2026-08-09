@@ -247,6 +247,81 @@ func TestUpdateRenameColumnInTableDefEscapesMoIndexesColumnNameUpdate(t *testing
 	require.Contains(t, sqls[0], "column_name = 'ti''tle'")
 }
 
+func TestUpdateRenameColumnInTableDefRenamesPrefixLengthMetadata(t *testing.T) {
+	singleParams, err := catalog.IndexParamsMapToJsonString(map[string]string{
+		catalog.IndexAlgoParamPrefixLengths: "title:4",
+	})
+	require.NoError(t, err)
+	compositeParams, err := catalog.IndexParamsMapToJsonString(map[string]string{
+		"comment":                           "keep",
+		catalog.IndexAlgoParamPrefixLengths: "note:2,title:4",
+	})
+	require.NoError(t, err)
+
+	mock := NewMockOptimizer(false)
+	tableDef := &planpb.TableDef{
+		TblId: 42,
+		Cols: []*ColDef{
+			{Name: "id", OriginName: "id", Typ: planpb.Type{Id: int32(types.T_int64)}},
+			{Name: "title", OriginName: "title", Typ: planpb.Type{Id: int32(types.T_varchar), Width: 32}},
+			{Name: "note", OriginName: "note", Typ: planpb.Type{Id: int32(types.T_varchar), Width: 32}},
+		},
+		Pkey: &PrimaryKeyDef{Names: []string{"id"}, PkeyColName: "id"},
+		Indexes: []*planpb.IndexDef{
+			{
+				IndexName:       "uq_title",
+				IndexAlgo:       catalog.MoIndexDefaultAlgo.ToString(),
+				IndexAlgoParams: singleParams,
+				Parts:           []string{"title"},
+				Unique:          true,
+			},
+			{
+				IndexName:       "idx_title_note",
+				IndexAlgo:       catalog.MoIndexDefaultAlgo.ToString(),
+				IndexAlgoParams: compositeParams,
+				Parts:           []string{"title", "note", "id"},
+			},
+			{
+				IndexName: "idx_note",
+				IndexAlgo: catalog.MoIndexDefaultAlgo.ToString(),
+				Parts:     []string{"note", "id"},
+			},
+		},
+	}
+
+	sqls, err := updateRenameColumnInTableDef(
+		mock.CurrentContext(),
+		tableDef.Cols[1],
+		tableDef,
+		&tree.AlterTableRenameColumnClause{
+			OldColumnName: tree.NewUnresolvedColName("title"),
+			NewColumnName: tree.NewUnresolvedColName("headline"),
+		},
+	)
+	require.NoError(t, err)
+	require.Equal(t, "headline", tableDef.Cols[1].Name)
+	require.Equal(t, []string{"headline"}, tableDef.Indexes[0].Parts)
+	require.Equal(t, []string{"headline", "note", "id"}, tableDef.Indexes[1].Parts)
+
+	singlePrefixLengths, err := catalog.IndexPrefixLengthsFromParamsWithError(tableDef.Indexes[0].IndexAlgoParams)
+	require.NoError(t, err)
+	require.Equal(t, map[string]int{"headline": 4}, singlePrefixLengths)
+	compositePrefixLengths, err := catalog.IndexPrefixLengthsFromParamsWithError(tableDef.Indexes[1].IndexAlgoParams)
+	require.NoError(t, err)
+	require.Equal(t, map[string]int{"headline": 4, "note": 2}, compositePrefixLengths)
+	compositeMetadata, err := catalog.IndexParamsStringToMap(tableDef.Indexes[1].IndexAlgoParams)
+	require.NoError(t, err)
+	require.Equal(t, "keep", compositeMetadata["comment"])
+	require.Equal(t, "headline:4,note:2", compositeMetadata[catalog.IndexAlgoParamPrefixLengths])
+
+	allSQL := strings.Join(sqls, "\n")
+	require.Len(t, sqls, 3)
+	require.Contains(t, allSQL, "set column_name = 'headline'")
+	require.Contains(t, allSQL, "set algo_params = '{\"prefix_lengths\":\"headline:4\"}' where table_id = 42 and name = 'uq_title'")
+	require.Contains(t, allSQL, "set algo_params = '{\"comment\":\"keep\",\"prefix_lengths\":\"headline:4,note:2\"}' where table_id = 42 and name = 'idx_title_note'")
+	require.NotContains(t, allSQL, "name = 'idx_note'")
+}
+
 func TestUpdateRenameColumnInTableDefRejectsDuplicateTargetName(t *testing.T) {
 	mock := NewMockOptimizer(false)
 	tableDef := makeAlterCoverageTableDef()
