@@ -1939,10 +1939,10 @@ func needsIndexOnlyResidualLeadingFilters(idxDef *IndexDef, tableDef *plan.Table
 	if lastPos < 0 || int(lastPos) >= len(filterList) {
 		return false
 	}
-	return indexFilterComparesBinaryColumn(tableDef, filterList[lastPos])
+	return indexFilterComparesByteStringColumn(tableDef, filterList[lastPos])
 }
 
-func indexFilterComparesBinaryColumn(tableDef *plan.TableDef, expr *plan.Expr) bool {
+func indexFilterComparesByteStringColumn(tableDef *plan.TableDef, expr *plan.Expr) bool {
 	if tableDef == nil || expr == nil {
 		return false
 	}
@@ -1956,7 +1956,11 @@ func indexFilterComparesBinaryColumn(tableDef *plan.TableDef, expr *plan.Expr) b
 			continue
 		}
 		oid := types.T(tableDef.Cols[col.ColPos].Typ.Id)
-		return oid == types.T_binary || oid == types.T_varbinary
+		// CHAR, VARCHAR, BINARY, and VARBINARY all use Packer.EncodeStringType.
+		// Its 0x00 terminator is also the first byte of an escaped embedded NUL,
+		// so an encoded value can prefix the encoding of value+NUL.
+		return oid == types.T_char || oid == types.T_varchar ||
+			oid == types.T_binary || oid == types.T_varbinary
 	}
 	return false
 }
@@ -2127,8 +2131,8 @@ func (builder *QueryBuilder) tryIndexOnlyScan(idxDef *IndexDef, node *plan.Node,
 	newFilterList = append(newFilterList, newLeadingFilter)
 	if needsIndexOnlyResidualLeadingFilters(idxDef, node.TableDef, node.FilterList, leadingPos, newLeadingFilter) {
 		// Keep the original SQL predicate when serial_full lookup bytes are not
-		// an exact semantic oracle: NULL is encoded as key bytes, and a binary
-		// encoded terminator byte can also begin an escaped binary NUL.
+		// an exact semantic oracle: NULL is encoded as key bytes, and a byte-string
+		// terminator can also begin an escaped embedded NUL.
 		for _, idx := range leadingPos {
 			newFilterList = append(newFilterList, replaceColumnsForExpr(DeepCopyExpr(node.FilterList[idx]), idxColMap))
 		}

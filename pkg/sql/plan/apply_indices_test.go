@@ -4211,11 +4211,12 @@ func TestTryIndexOnlyScanKeepsResidualFilterForSerialFullNullSemantics(t *testin
 	}
 }
 
-func TestTryIndexOnlyScanSkipsResidualFilterForNonNullSerialFullLiterals(t *testing.T) {
+func TestTryIndexOnlyScanPreservesVarcharResidualForPointLiterals(t *testing.T) {
 	tests := []struct {
 		name       string
 		makeFilter func(relPos int32) *planpb.Expr
 		lookupFunc string
+		residual   string
 	}{
 		{
 			name: "literal equality",
@@ -4223,6 +4224,7 @@ func TestTryIndexOnlyScanSkipsResidualFilterForNonNullSerialFullLiterals(t *test
 				return makeStringEqFilterExpr(relPos, 1, "active")
 			},
 			lookupFunc: "prefix_eq",
+			residual:   "=",
 		},
 		{
 			name: "literal in list",
@@ -4230,6 +4232,7 @@ func TestTryIndexOnlyScanSkipsResidualFilterForNonNullSerialFullLiterals(t *test
 				return makeStringInFilterExpr(relPos, 1, "active", "expired")
 			},
 			lookupFunc: "prefix_in",
+			residual:   "in",
 		},
 		{
 			name: "literal between",
@@ -4279,13 +4282,18 @@ func TestTryIndexOnlyScanSkipsResidualFilterForNonNullSerialFullLiterals(t *test
 			require.NotEqual(t, int32(-1), idxNodeID)
 
 			idxNode := builder.qry.Nodes[idxNodeID]
-			require.Len(t, idxNode.FilterList, 1)
 			require.Equal(t, tt.lookupFunc, idxNode.FilterList[0].GetF().Func.ObjName)
+			if tt.residual == "" {
+				require.Len(t, idxNode.FilterList, 1)
+				return
+			}
+			require.Len(t, idxNode.FilterList, 2)
+			require.Equal(t, tt.residual, idxNode.FilterList[1].GetF().Func.ObjName)
 		})
 	}
 }
 
-func TestTryIndexOnlyScanHandlesBinaryPrefixLookups(t *testing.T) {
+func TestTryIndexOnlyScanHandlesByteStringPrefixLookups(t *testing.T) {
 	tests := []struct {
 		name       string
 		typ        types.T
@@ -4344,6 +4352,34 @@ func TestTryIndexOnlyScanHandlesBinaryPrefixLookups(t *testing.T) {
 				return makeStringBetweenFilterExpr(relPos, 1, "\x00", "\x00\x01")
 			},
 			lookupFunc: "prefix_between",
+		},
+		{
+			name: "varchar equality with encoded terminator collision",
+			typ:  types.T_varchar,
+			makeFilter: func(relPos int32) *planpb.Expr {
+				return makeStringEqFilterExpr(relPos, 1, "a")
+			},
+			lookupFunc: "prefix_eq",
+			residual:   "=",
+		},
+		{
+			name: "char in with encoded terminator collision",
+			typ:  types.T_char,
+			makeFilter: func(relPos int32) *planpb.Expr {
+				return makeStringInFilterExpr(relPos, 1, "a", "b")
+			},
+			lookupFunc: "prefix_in",
+			residual:   "in",
+		},
+		{
+			name: "int64 equality fixed-width control",
+			typ:  types.T_int64,
+			makeFilter: func(relPos int32) *planpb.Expr {
+				expr := makeEqFilterExpr(1)
+				expr.GetF().Args[0].GetCol().RelPos = relPos
+				return expr
+			},
+			lookupFunc: "prefix_eq",
 		},
 	}
 

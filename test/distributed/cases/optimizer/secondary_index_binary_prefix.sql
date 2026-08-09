@@ -232,4 +232,37 @@ prepare physical_check from @physical_sql;
 execute physical_check;
 deallocate prepare physical_check;
 
+-- CHAR/VARCHAR use the same zero-escaped tuple encoding.  The encoded value
+-- for 'a' is a byte prefix of the encoding for 'a\0', so these point lookups
+-- require the same typed residual even though the source column is textual.
+create table t_varchar_prefix (
+  id int primary key,
+  v varchar(16),
+  key idx_v_id(v, id)
+);
+create table t_varchar_prefix_scan (
+  id int primary key,
+  v varchar(16)
+);
+insert into t_varchar_prefix values
+  (1, cast(unhex('61') as varchar(16))),
+  (2, cast(unhex('6100') as varchar(16))),
+  (3, cast(unhex('62') as varchar(16))),
+  (4, null);
+insert into t_varchar_prefix_scan select id, v from t_varchar_prefix;
+
+select count(*) as force_varchar_exact
+from t_varchar_prefix force index(idx_v_id)
+where v = cast(unhex('61') as varchar(16));
+select count(*) as scan_varchar_exact
+from t_varchar_prefix_scan
+where v = cast(unhex('61') as varchar(16));
+
+select count(*) as force_varchar_in
+from t_varchar_prefix force index(idx_v_id)
+where v in (cast(unhex('61') as varchar(16)), cast(unhex('62') as varchar(16)));
+select count(*) as scan_varchar_in
+from t_varchar_prefix_scan
+where v in (cast(unhex('61') as varchar(16)), cast(unhex('62') as varchar(16)));
+
 drop database secondary_index_binary_prefix;
