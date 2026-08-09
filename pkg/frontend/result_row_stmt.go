@@ -465,7 +465,7 @@ func (resper *MysqlResp) respPrebuildResultRow(ses *Session,
 		return nil
 	}
 	mer := NewMysqlExecutionResult(0, 0, 0, 0, ses.GetMysqlResultSet())
-	res := ses.SetNewResponse(ResultResponse, 0, int(COM_QUERY), mer, execCtx.isLastStmt)
+	res := ses.SetNewResponse(ResultResponse, 0, int(ses.GetCmd()), mer, execCtx.isLastStmt)
 	if err := resper.mysqlRrWr.WriteResponse(execCtx.reqCtx, res); err != nil {
 		return moerr.NewInternalErrorf(execCtx.reqCtx, "routine send response failed, error: %v ", err)
 	}
