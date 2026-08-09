@@ -1056,7 +1056,7 @@ func opBinaryStrFixedToStrWithErrorCheck[
 
 	if selectList != nil {
 		if selectList.IgnoreAllRow() {
-			nulls.AddRange(rsNull, 0, uint64(length))
+			rs.SetNullResult(uint64(length))
 			return nil
 		}
 		if !selectList.ShouldEvalAllRow() {
@@ -1073,7 +1073,7 @@ func opBinaryStrFixedToStrWithErrorCheck[
 		v2, null2 := p2.GetValue(0)
 		ifNull := null1 || null2
 		if ifNull {
-			nulls.AddRange(rsNull, 0, uint64(length))
+			rs.SetNullResult(uint64(length))
 		} else {
 			r, err := resultFn(functionUtil.QuickBytesToStr(v1), v2)
 			if err != nil {
@@ -1092,7 +1092,7 @@ func opBinaryStrFixedToStrWithErrorCheck[
 	if c1 {
 		v1, null1 := p1.GetStrValue(0)
 		if null1 {
-			nulls.AddRange(rsNull, 0, uint64(length))
+			rs.SetNullResult(uint64(length))
 		} else {
 			if p2.WithAnyNullValue() || rsAnyNull {
 				nulls.Or(rsNull, parameters[1].GetNulls(), rsNull)
@@ -1100,6 +1100,9 @@ func opBinaryStrFixedToStrWithErrorCheck[
 				rv1 := functionUtil.QuickBytesToStr(v1)
 				for i := uint64(0); i < rowCount; i++ {
 					if rsNull.Contains(i) {
+						if err := rs.AppendMustNullForBytesResult(); err != nil {
+							return err
+						}
 						continue
 					}
 					v2, _ := p2.GetValue(i)
@@ -1132,13 +1135,16 @@ func opBinaryStrFixedToStrWithErrorCheck[
 	if c2 {
 		v2, null2 := p2.GetValue(0)
 		if null2 {
-			nulls.AddRange(rsNull, 0, uint64(length))
+			rs.SetNullResult(uint64(length))
 		} else {
 			if p1.WithAnyNullValue() || rsAnyNull {
 				nulls.Or(rsNull, parameters[0].GetNulls(), rsNull)
 				rowCount := uint64(length)
 				for i := uint64(0); i < rowCount; i++ {
 					if rsNull.Contains(i) {
+						if err := rs.AppendMustNullForBytesResult(); err != nil {
+							return err
+						}
 						continue
 					}
 					v1, _ := p1.GetStrValue(i)
@@ -1174,6 +1180,9 @@ func opBinaryStrFixedToStrWithErrorCheck[
 		rowCount := uint64(length)
 		for i := uint64(0); i < rowCount; i++ {
 			if rsNull.Contains(i) {
+				if err := rs.AppendMustNullForBytesResult(); err != nil {
+					return err
+				}
 				continue
 			}
 			v1, _ := p1.GetStrValue(i)
@@ -2107,7 +2116,7 @@ func opBinaryBytesBytesToBytesWithErrorCheck(
 
 	if selectList != nil {
 		if selectList.IgnoreAllRow() {
-			nulls.AddRange(rsNull, 0, uint64(length))
+			rs.SetNullResult(uint64(length))
 			return nil
 		}
 		if !selectList.ShouldEvalAllRow() {
@@ -2124,7 +2133,7 @@ func opBinaryBytesBytesToBytesWithErrorCheck(
 		v2, null2 := p2.GetStrValue(0)
 		ifNull := null1 || null2
 		if ifNull {
-			nulls.AddRange(rsNull, 0, uint64(length))
+			rs.SetNullResult(uint64(length))
 		} else {
 			r, err := fn(v1, v2)
 			if err != nil {
@@ -2143,7 +2152,7 @@ func opBinaryBytesBytesToBytesWithErrorCheck(
 	if c1 {
 		v1, null1 := p1.GetStrValue(0)
 		if null1 {
-			nulls.AddRange(rsNull, 0, uint64(length))
+			rs.SetNullResult(uint64(length))
 		} else {
 			if p2.WithAnyNullValue() || rsAnyNull {
 				nulls.Or(rsNull, parameters[1].GetNulls(), rsNull)
@@ -2187,7 +2196,7 @@ func opBinaryBytesBytesToBytesWithErrorCheck(
 	if c2 {
 		v2, null2 := p2.GetStrValue(0)
 		if null2 {
-			nulls.AddRange(rsNull, 0, uint64(length))
+			rs.SetNullResult(uint64(length))
 		} else {
 			if p1.WithAnyNullValue() || rsAnyNull {
 				nulls.Or(rsNull, parameters[0].GetNulls(), rsNull)
@@ -2784,7 +2793,7 @@ func opUnaryBytesToBytes(
 
 	if selectList != nil {
 		if selectList.IgnoreAllRow() {
-			nulls.AddRange(rsNull, 0, uint64(length))
+			rs.SetNullResult(uint64(length))
 			return nil
 		}
 		if !selectList.ShouldEvalAllRow() {
@@ -2799,7 +2808,7 @@ func opUnaryBytesToBytes(
 	if c1 {
 		v1, null1 := p1.GetStrValue(0)
 		if null1 {
-			nulls.AddRange(rsNull, 0, uint64(length))
+			rs.SetNullResult(uint64(length))
 		} else {
 			r := resultFn(v1)
 
@@ -2858,7 +2867,7 @@ func opUnaryBytesToStr(
 
 	if selectList != nil {
 		if selectList.IgnoreAllRow() {
-			nulls.AddRange(rsNull, 0, uint64(length))
+			rs.SetNullResult(uint64(length))
 			return nil
 		}
 		if !selectList.ShouldEvalAllRow() {
@@ -2873,7 +2882,7 @@ func opUnaryBytesToStr(
 	if c1 {
 		v1, null1 := p1.GetStrValue(0)
 		if null1 {
-			nulls.AddRange(rsNull, 0, uint64(length))
+			rs.SetNullResult(uint64(length))
 		} else {
 			r := resultFn(v1)
 
@@ -2932,7 +2941,7 @@ func opUnaryStrToStr(
 
 	if selectList != nil {
 		if selectList.IgnoreAllRow() {
-			nulls.AddRange(rsNull, 0, uint64(length))
+			rs.SetNullResult(uint64(length))
 			return nil
 		}
 		if !selectList.ShouldEvalAllRow() {
@@ -2947,7 +2956,7 @@ func opUnaryStrToStr(
 	if c1 {
 		v1, null1 := p1.GetStrValue(0)
 		if null1 {
-			nulls.AddRange(rsNull, 0, uint64(length))
+			rs.SetNullResult(uint64(length))
 		} else {
 			r := resultFn(functionUtil.QuickBytesToStr(v1))
 
@@ -3006,7 +3015,7 @@ func opUnaryFixedToStr[
 
 	if selectList != nil {
 		if selectList.IgnoreAllRow() {
-			nulls.AddRange(rsNull, 0, uint64(length))
+			rs.SetNullResult(uint64(length))
 			return nil
 		}
 		if !selectList.ShouldEvalAllRow() {
@@ -3021,7 +3030,7 @@ func opUnaryFixedToStr[
 	if c1 {
 		v1, null1 := p1.GetValue(0)
 		if null1 {
-			nulls.AddRange(rsNull, 0, uint64(length))
+			rs.SetNullResult(uint64(length))
 		} else {
 			rb := resultFn(v1)
 			r := functionUtil.QuickStrToBytes(rb)
@@ -3146,7 +3155,7 @@ func opUnaryFixedToStrWithErrorCheck[
 
 	if selectList != nil {
 		if selectList.IgnoreAllRow() {
-			nulls.AddRange(rsNull, 0, uint64(length))
+			rs.SetNullResult(uint64(length))
 			return nil
 		}
 		if !selectList.ShouldEvalAllRow() {
@@ -3161,7 +3170,7 @@ func opUnaryFixedToStrWithErrorCheck[
 	if c1 {
 		v1, null1 := p1.GetValue(0)
 		if null1 {
-			nulls.AddRange(rsNull, 0, uint64(length))
+			rs.SetNullResult(uint64(length))
 		} else {
 			rb, err := resultFn(v1)
 			if err != nil {
@@ -3232,7 +3241,7 @@ func opUnaryStrToBytesWithErrorCheck(
 
 	if selectList != nil {
 		if selectList.IgnoreAllRow() {
-			nulls.AddRange(rsNull, 0, uint64(length))
+			rs.SetNullResult(uint64(length))
 			return nil
 		}
 		if !selectList.ShouldEvalAllRow() {
@@ -3247,7 +3256,7 @@ func opUnaryStrToBytesWithErrorCheck(
 	if c1 {
 		v1, null1 := p1.GetStrValue(0)
 		if null1 {
-			nulls.AddRange(rsNull, 0, uint64(length))
+			rs.SetNullResult(uint64(length))
 		} else {
 			r, err := resultFn(functionUtil.QuickBytesToStr(v1))
 			if err != nil {
@@ -3315,7 +3324,7 @@ func opUnaryBytesToBytesWithErrorCheck(
 
 	if selectList != nil {
 		if selectList.IgnoreAllRow() {
-			nulls.AddRange(rsNull, 0, uint64(length))
+			rs.SetNullResult(uint64(length))
 			return nil
 		}
 		if !selectList.ShouldEvalAllRow() {
@@ -3330,7 +3339,7 @@ func opUnaryBytesToBytesWithErrorCheck(
 	if c1 {
 		v1, null1 := p1.GetStrValue(0)
 		if null1 {
-			nulls.AddRange(rsNull, 0, uint64(length))
+			rs.SetNullResult(uint64(length))
 		} else {
 			r, err := resultFn(v1)
 			if err != nil {
@@ -3398,7 +3407,7 @@ func opUnaryBytesToBytesWithNullOnError(
 
 	if selectList != nil {
 		if selectList.IgnoreAllRow() {
-			nulls.AddRange(rsNull, 0, uint64(length))
+			rs.SetNullResult(uint64(length))
 			return nil
 		}
 		if !selectList.ShouldEvalAllRow() {
@@ -3413,11 +3422,11 @@ func opUnaryBytesToBytesWithNullOnError(
 	if c1 {
 		v1, null1 := p1.GetStrValue(0)
 		if null1 {
-			nulls.AddRange(rsNull, 0, uint64(length))
+			rs.SetNullResult(uint64(length))
 		} else {
 			r, err := resultFn(v1)
 			if err != nil {
-				nulls.AddRange(rsNull, 0, uint64(length))
+				rs.SetNullResult(uint64(length))
 			} else {
 				rowCount := uint64(length)
 				for i := uint64(0); i < rowCount; i++ {
@@ -3487,7 +3496,7 @@ func opUnaryBytesToStrWithErrorCheck(
 
 	if selectList != nil {
 		if selectList.IgnoreAllRow() {
-			nulls.AddRange(rsNull, 0, uint64(length))
+			rs.SetNullResult(uint64(length))
 			return nil
 		}
 		if !selectList.ShouldEvalAllRow() {
@@ -3502,7 +3511,7 @@ func opUnaryBytesToStrWithErrorCheck(
 	if c1 {
 		v1, null1 := p1.GetStrValue(0)
 		if null1 {
-			nulls.AddRange(rsNull, 0, uint64(length))
+			rs.SetNullResult(uint64(length))
 		} else {
 			rb, err := resultFn(v1)
 			if err != nil {

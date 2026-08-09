@@ -4963,7 +4963,7 @@ func Inet6Aton(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc
 
 	if selectList != nil {
 		if selectList.IgnoreAllRow() {
-			nulls.AddRange(rsNull, 0, uint64(length))
+			rs.SetNullResult(uint64(length))
 			return nil
 		}
 		if !selectList.ShouldEvalAllRow() {
@@ -4979,13 +4979,13 @@ func Inet6Aton(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc
 	if c1 {
 		v1, null1 := p1.GetStrValue(0)
 		if null1 {
-			nulls.AddRange(rsNull, 0, uint64(length))
+			rs.SetNullResult(uint64(length))
 		} else {
 			ipStr := functionUtil.QuickBytesToStr(v1)
 			ip := net.ParseIP(ipStr)
 			if ip == nil {
 				// Invalid IP: return NULL for all rows
-				nulls.AddRange(rsNull, 0, uint64(length))
+				rs.SetNullResult(uint64(length))
 			} else {
 				var resultBytes []byte
 				if ip4 := ip.To4(); ip4 != nil {
@@ -5080,7 +5080,7 @@ func Inet6Ntoa(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc
 
 	if selectList != nil {
 		if selectList.IgnoreAllRow() {
-			nulls.AddRange(rsNull, 0, uint64(length))
+			rs.SetNullResult(uint64(length))
 			return nil
 		}
 		if !selectList.ShouldEvalAllRow() {
@@ -5096,7 +5096,7 @@ func Inet6Ntoa(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc
 	if c1 {
 		v1, null1 := p1.GetStrValue(0)
 		if null1 {
-			nulls.AddRange(rsNull, 0, uint64(length))
+			rs.SetNullResult(uint64(length))
 		} else {
 			var resultStr string
 			if len(v1) == 4 {
@@ -5114,7 +5114,7 @@ func Inet6Ntoa(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc
 				}
 			} else {
 				// Invalid length: return NULL for all rows
-				nulls.AddRange(rsNull, 0, uint64(length))
+				rs.SetNullResult(uint64(length))
 				return nil
 			}
 			rowCount := uint64(length)
