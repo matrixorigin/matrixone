@@ -2313,13 +2313,31 @@ func BenchmarkS3FSAllocateCacheData(b *testing.B) {
 	assert.Nil(b, err)
 	defer fs.Close(ctx)
 
-	b.ResetTimer()
-	b.RunParallel(func(pb *testing.PB) {
-		for pb.Next() {
-			data := fs.AllocateCacheData(ctx, 42)
-			data.Release()
-		}
-	})
+	benchmarkFileServiceAllocateCacheData(b, fs.AllocateCacheData, 42, 1)
+}
+
+func BenchmarkS3FSAllocateCacheDataHighCardinality(b *testing.B) {
+	ctx := context.Background()
+
+	fs, err := NewS3FS(
+		context.Background(),
+		ObjectStorageArguments{
+			Name:      "s3",
+			Endpoint:  "disk",
+			Bucket:    b.TempDir(),
+			KeyPrefix: time.Now().Format("2006-01-02.15:04:05.000000"),
+		},
+		CacheConfig{
+			MemoryCapacity: ptrTo[toml.ByteSize](128 * 1024),
+		},
+		nil,
+		false,
+		false,
+	)
+	assert.Nil(b, err)
+	defer fs.Close(ctx)
+
+	benchmarkFileServiceAllocateCacheData(b, fs.AllocateCacheData, 1, 1024)
 }
 
 func TestS3FSFromSpecs(t *testing.T) {
