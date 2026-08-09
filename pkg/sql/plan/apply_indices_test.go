@@ -4260,6 +4260,26 @@ func TestTryIndexOnlyScanKeepsResidualFilterForSerialFullNullSemantics(t *testin
 			lookupFunc:   "prefix_between",
 			residualFunc: "between",
 		},
+		{
+			name: "nullable strict upper bound literal",
+			makeFilter: func(relPos int32) *planpb.Expr {
+				filter := makeRangeFilterExpr(relPos, 1, "<", 10)
+				filter.Typ = planpb.Type{Id: int32(types.T_bool)}
+				filter.GetF().Args[0].Typ = planpb.Type{Id: int32(types.T_int32)}
+				filter.GetF().Args[1].Typ = planpb.Type{Id: int32(types.T_int32)}
+				return filter
+			},
+			lookupFunc:   "<",
+			residualFunc: "<",
+		},
+		{
+			name: "nullable strict upper bound prepared",
+			makeFilter: func(relPos int32) *planpb.Expr {
+				return makeParamRangeFilterExpr(relPos, 1, "<", 0)
+			},
+			lookupFunc:   "<",
+			residualFunc: "<",
+		},
 	}
 
 	for _, tt := range tests {
@@ -4308,6 +4328,155 @@ func TestTryIndexOnlyScanKeepsResidualFilterForSerialFullNullSemantics(t *testin
 			require.NotNil(t, residual)
 			require.Equal(t, tt.residualFunc, residual.Func.ObjName)
 			require.Equal(t, "serial_extract", wrappedSerialFuncName(t, residual.Args[0]))
+		})
+	}
+}
+
+func TestIndexFilterMayCompareNullAtRuntimeForStrictUpperBounds(t *testing.T) {
+	makeLiteralRange := func(op string, constOnLeft, notNullable bool) *planpb.Expr {
+		filter := makeRangeFilterExpr(7, 1, op, 10)
+		filter.Typ = planpb.Type{Id: int32(types.T_bool)}
+		filter.GetF().Args[0].Typ = planpb.Type{Id: int32(types.T_int64), NotNullable: notNullable}
+		filter.GetF().Args[1].Typ = planpb.Type{Id: int32(types.T_int64), NotNullable: true}
+		if constOnLeft {
+			filter.GetF().Args[0], filter.GetF().Args[1] = filter.GetF().Args[1], filter.GetF().Args[0]
+		}
+		return filter
+	}
+	makeOr := func(args ...*planpb.Expr) *planpb.Expr {
+		return &planpb.Expr{
+			Typ: planpb.Type{Id: int32(types.T_bool)},
+			Expr: &planpb.Expr_F{F: &planpb.Function{
+				Func: &planpb.ObjectRef{ObjName: "or"},
+				Args: args,
+			}},
+		}
+	}
+
+	tests := []struct {
+		name string
+		expr *planpb.Expr
+		want bool
+	}{
+		{name: "nullable column strict upper bound", expr: makeLiteralRange("<", false, false), want: true},
+		{name: "constant-left strict upper bound", expr: makeLiteralRange(">", true, false), want: true},
+		{name: "non-null column strict upper bound", expr: makeLiteralRange("<", false, true)},
+		{name: "nullable column inclusive lower bound", expr: makeLiteralRange(">=", false, false)},
+		{name: "prepared bound", expr: makeParamRangeFilterExpr(7, 1, "<", 0), want: true},
+		{
+			name: "or with strict upper arm",
+			expr: makeOr(
+				makeLiteralRange("<", false, false),
+				makeLiteralRange(">=", false, false),
+			),
+			want: true,
+		},
+		{
+			name: "or with lower-bound arms",
+			expr: makeOr(
+				makeLiteralRange(">=", false, false),
+				makeLiteralRange("<=", true, false),
+			),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, indexFilterMayCompareNullAtRuntime(tt.expr))
+		})
+	}
+}
+
+func TestNullableStrictUpperBoundRegularIndexPlans(t *testing.T) {
+	t.Run("one-part covering limit scan keeps decoded residual", func(t *testing.T) {
+		mock := NewMockOptimizer(true)
+		addIndexHintChoiceTableForTest(mock)
+
+		queryPlan, err := runOneStmt(mock, t, "select id, a from index_hint_t force index(idx_a) where a < 10 limit 1")
+		require.NoError(t, err)
+		indexScan := findFirstIndexScanNode(queryPlan)
+		require.NotNil(t, indexScan)
+		require.Equal(t, "idx_a", indexScan.IndexScanInfo.IndexName)
+		require.Len(t, indexScan.IndexScanInfo.Parts, 2)
+		require.Equal(t, "a", indexScan.IndexScanInfo.Parts[0])
+		require.True(t, catalog.IsAlias(indexScan.IndexScanInfo.Parts[1]))
+		require.Len(t, indexScan.FilterList, 2)
+		require.Equal(t, "<", indexScan.FilterList[0].GetF().Func.ObjName)
+		require.Equal(t, "<", indexScan.FilterList[1].GetF().Func.ObjName)
+		require.Equal(t, "serial_extract", wrappedSerialFuncName(t, indexScan.FilterList[1].GetF().Args[0]))
+		require.NotNil(t, indexScan.Limit)
+	})
+
+	t.Run("safe or keeps decoded residual", func(t *testing.T) {
+		mock := NewMockOptimizer(true)
+		addIndexHintChoiceTableForTest(mock)
+
+		queryPlan, err := runOneStmt(mock, t, "select id from index_hint_t force index(idx_a) where a < 10 or a >= 100")
+		require.NoError(t, err)
+		indexScan := findFirstIndexScanNode(queryPlan)
+		require.NotNil(t, indexScan)
+		require.Len(t, indexScan.FilterList, 2)
+		require.Equal(t, "or", indexScan.FilterList[0].GetF().Func.ObjName)
+
+		residual := indexScan.FilterList[1].GetF()
+		require.Equal(t, "or", residual.Func.ObjName)
+		require.Len(t, residual.Args, 2)
+		for _, arm := range residual.Args {
+			require.Equal(t, "serial_extract", wrappedSerialFuncName(t, arm.GetF().Args[0]))
+		}
+	})
+
+	t.Run("non-nullable strict upper bound skips residual", func(t *testing.T) {
+		mock := NewMockOptimizer(true)
+		addIndexHintChoiceTableForTest(mock)
+		mock.ctxt.tables["index_hint_t"].Cols[1].Typ.NotNullable = true
+
+		queryPlan, err := runOneStmt(mock, t, "select id from index_hint_t force index(idx_a) where a < 10")
+		require.NoError(t, err)
+		indexScan := findFirstIndexScanNode(queryPlan)
+		require.NotNil(t, indexScan)
+		require.Len(t, indexScan.FilterList, 1)
+	})
+
+	t.Run("backfill join keeps base residual", func(t *testing.T) {
+		mock := NewMockOptimizer(true)
+		addIndexHintChoiceTableForTest(mock)
+		tableDef := mock.ctxt.tables["index_hint_t"]
+		payloadPos := int32(len(tableDef.Cols))
+		tableDef.Cols = append(tableDef.Cols, &planpb.ColDef{
+			ColId: 4, Name: "payload", OriginName: "payload",
+			Typ:     planpb.Type{Id: int32(types.T_varchar), Width: types.MaxVarcharLen},
+			Default: &planpb.Default{NullAbility: true},
+		})
+		tableDef.Name2ColIndex["payload"] = payloadPos
+
+		queryPlan, err := runOneStmt(mock, t, "select payload from index_hint_t where a < 10")
+		require.NoError(t, err)
+		require.NotEmpty(t, findFirstIndexScanName(queryPlan))
+		require.True(t, planHasIndexJoin(queryPlan))
+		var baseScan *planpb.Node
+		for _, node := range queryPlan.GetQuery().Nodes {
+			if node.NodeType == planpb.Node_TABLE_SCAN && !node.IndexScanInfo.IsIndexScan && node.TableDef != nil && node.TableDef.Name == "index_hint_t" {
+				baseScan = node
+				break
+			}
+		}
+		require.NotNil(t, baseScan)
+		require.Len(t, baseScan.FilterList, 1)
+		require.Equal(t, "<", baseScan.FilterList[0].GetF().Func.ObjName)
+	})
+
+	for _, sql := range []string{
+		"select id from index_hint_t where a <= 10",
+		"select id from index_hint_t where a > 10",
+	} {
+		t.Run("unsafe prefix comparison stays on base scan "+sql, func(t *testing.T) {
+			mock := NewMockOptimizer(true)
+			addIndexHintChoiceTableForTest(mock)
+
+			queryPlan, err := runOneStmt(mock, t, sql)
+			require.NoError(t, err)
+			require.Empty(t, findFirstIndexScanName(queryPlan))
 		})
 	}
 }
@@ -5188,6 +5357,32 @@ func makeParamBetweenFilterExpr(relPos, colPos, lowerParamPos, upperParamPos int
 						Typ: typ,
 						Expr: &planpb.Expr_P{
 							P: &planpb.ParamRef{Pos: upperParamPos},
+						},
+					},
+				},
+			},
+		},
+	}
+}
+
+func makeParamRangeFilterExpr(relPos, colPos int32, op string, paramPos int32) *planpb.Expr {
+	typ := planpb.Type{Id: int32(types.T_int32)}
+	return &planpb.Expr{
+		Typ: planpb.Type{Id: int32(types.T_bool)},
+		Expr: &planpb.Expr_F{
+			F: &planpb.Function{
+				Func: &planpb.ObjectRef{ObjName: op},
+				Args: []*planpb.Expr{
+					{
+						Typ: typ,
+						Expr: &planpb.Expr_Col{
+							Col: &planpb.ColRef{RelPos: relPos, ColPos: colPos},
+						},
+					},
+					{
+						Typ: typ,
+						Expr: &planpb.Expr_P{
+							P: &planpb.ParamRef{Pos: paramPos},
 						},
 					},
 				},

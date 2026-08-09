@@ -2050,7 +2050,19 @@ func indexFilterMayCompareNullAtRuntime(expr *plan.Expr) bool {
 	case "between":
 		return len(fn.Args) > 2 && (runtimeConstMayBeNull(fn.Args[1]) || runtimeConstMayBeNull(fn.Args[2]))
 	case ">", ">=", "<", "<=":
-		return len(fn.Args) > 1 && (runtimeConstMayBeNull(fn.Args[0]) || runtimeConstMayBeNull(fn.Args[1]))
+		if len(fn.Args) < 2 {
+			return false
+		}
+		if runtimeConstMayBeNull(fn.Args[0]) || runtimeConstMayBeNull(fn.Args[1]) {
+			return true
+		}
+		if canonicalRangeOp(fn) != "<" {
+			return false
+		}
+		if fn.Args[0].GetCol() != nil && isRuntimeConstExpr(fn.Args[1]) {
+			return !fn.Args[0].Typ.NotNullable
+		}
+		return isRuntimeConstExpr(fn.Args[0]) && fn.Args[1].GetCol() != nil && !fn.Args[1].Typ.NotNullable
 	case "in_range":
 		return len(fn.Args) > 2 && (runtimeConstMayBeNull(fn.Args[1]) || runtimeConstMayBeNull(fn.Args[2]))
 	case "or":
