@@ -168,6 +168,112 @@ func TestDirectUniqueDecimalRangeResidualFilterUsesDirectKey(t *testing.T) {
 	require.Equal(t, decimalType, residualColExpr.Typ)
 }
 
+func TestApplyExtraFiltersOnIndexUsesPhysicalKeyEncoding(t *testing.T) {
+	intType := planpb.Type{Id: int32(types.T_int64)}
+	varcharType := planpb.Type{Id: int32(types.T_varchar)}
+	makeIndexNode := func(bindingTag int32, keyType, primaryType planpb.Type) *planpb.Node {
+		return &planpb.Node{
+			BindingTags: []int32{bindingTag},
+			TableDef: &planpb.TableDef{Cols: []*planpb.ColDef{
+				{Name: catalog.IndexTableIndexColName, Typ: keyType},
+				{Name: catalog.IndexTablePrimaryColName, Typ: primaryType},
+			}},
+		}
+	}
+
+	t.Run("serialized index part", func(t *testing.T) {
+		builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true), false, true)
+		baseTag := builder.genNewBindTag()
+		indexTag := builder.genNewBindTag()
+		filter := makeTypedInt64RangeFilterExpr(baseTag, 1, ">=", 10, intType)
+		node := &planpb.Node{
+			TableDef: &planpb.TableDef{
+				Cols: []*planpb.ColDef{
+					{Name: "id", Typ: intType},
+					{Name: "a", Typ: intType},
+				},
+				Name2ColIndex: map[string]int32{"id": 0, "a": 1},
+				Pkey:          &planpb.PrimaryKeyDef{PkeyColName: "id", Names: []string{"id"}},
+			},
+			BindingTags: []int32{baseTag},
+			FilterList:  []*planpb.Expr{filter},
+		}
+		idxDef := &planpb.IndexDef{Parts: []string{"a", catalog.CreateAlias("id")}}
+		indexNode := makeIndexNode(indexTag, varcharType, intType)
+
+		builder.applyExtraFiltersOnIndex(idxDef, node, indexNode, nil)
+
+		require.Len(t, indexNode.FilterList, 1)
+		mapped := indexNode.FilterList[0].GetF().Args[0]
+		require.Equal(t, "serial_extract", wrappedSerialFuncName(t, mapped))
+		require.Equal(t, int32(0), mapped.GetF().Args[0].GetCol().ColPos)
+	})
+
+	t.Run("composite primary key part", func(t *testing.T) {
+		builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true), false, true)
+		baseTag := builder.genNewBindTag()
+		indexTag := builder.genNewBindTag()
+		filter := makeTypedInt64RangeFilterExpr(baseTag, 0, ">=", 10, intType)
+		filter.GetF().Args[0].GetCol().Name = "tenant_id"
+		node := &planpb.Node{
+			TableDef: &planpb.TableDef{
+				Cols: []*planpb.ColDef{
+					{Name: "tenant_id", Typ: intType},
+					{Name: "id", Typ: intType},
+					{Name: "a", Typ: intType},
+					{Name: catalog.CPrimaryKeyColName, Typ: varcharType},
+				},
+				Name2ColIndex: map[string]int32{
+					"tenant_id":                0,
+					"id":                       1,
+					"a":                        2,
+					catalog.CPrimaryKeyColName: 3,
+				},
+				Pkey: &planpb.PrimaryKeyDef{
+					PkeyColName: catalog.CPrimaryKeyColName,
+					Names:       []string{"tenant_id", "id"},
+				},
+			},
+			BindingTags: []int32{baseTag},
+			FilterList:  []*planpb.Expr{filter},
+		}
+		idxDef := &planpb.IndexDef{Parts: []string{"a", catalog.CreateAlias(catalog.CPrimaryKeyColName)}}
+		indexNode := makeIndexNode(indexTag, varcharType, varcharType)
+
+		builder.applyExtraFiltersOnIndex(idxDef, node, indexNode, nil)
+
+		require.Len(t, indexNode.FilterList, 1)
+		mapped := indexNode.FilterList[0].GetF().Args[0]
+		require.Equal(t, "serial_extract", wrappedSerialFuncName(t, mapped))
+		require.Equal(t, int32(1), mapped.GetF().Args[0].GetCol().ColPos)
+
+		invalidPrimaryNode := makeIndexNode(builder.genNewBindTag(), varcharType, intType)
+		builder.applyExtraFiltersOnIndex(idxDef, node, invalidPrimaryNode, nil)
+		require.Empty(t, invalidPrimaryNode.FilterList)
+	})
+
+	t.Run("invalid serialized key metadata skips optional pushdown", func(t *testing.T) {
+		builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true), false, true)
+		baseTag := builder.genNewBindTag()
+		indexTag := builder.genNewBindTag()
+		node := &planpb.Node{
+			TableDef: &planpb.TableDef{
+				Cols:          []*planpb.ColDef{{Name: "id", Typ: intType}, {Name: "a", Typ: intType}},
+				Name2ColIndex: map[string]int32{"id": 0, "a": 1},
+				Pkey:          &planpb.PrimaryKeyDef{PkeyColName: "id", Names: []string{"id"}},
+			},
+			BindingTags: []int32{baseTag},
+			FilterList:  []*planpb.Expr{makeTypedInt64RangeFilterExpr(baseTag, 1, ">=", 10, intType)},
+		}
+		idxDef := &planpb.IndexDef{Parts: []string{"a", catalog.CreateAlias("id")}}
+		indexNode := makeIndexNode(indexTag, intType, intType)
+
+		builder.applyExtraFiltersOnIndex(idxDef, node, indexNode, nil)
+
+		require.Empty(t, indexNode.FilterList)
+	})
+}
+
 func TestFilterRegularIndexesByScanHints(t *testing.T) {
 	idxA := &planpb.IndexDef{IndexName: "idx_a"}
 	idxB := &planpb.IndexDef{IndexName: "idx_b"}
@@ -5323,6 +5429,29 @@ func TestIndexRangeSerializationNormalizesDecimalBounds(t *testing.T) {
 			requireSerializedRangeBoundType(t, expr.GetF().Args[1], columnType, true)
 		})
 	}
+
+	t.Run("in range", func(t *testing.T) {
+		lower := makeDecimalRangeFilterExpr(t, bindTag, 1, ">", "10.250000", columnType, higherScaleType)
+		upper := makeDecimalRangeFilterExpr(t, bindTag, 1, "<", "15.750000", columnType, higherScaleType)
+		filter := &planpb.Expr{
+			Typ: planpb.Type{Id: int32(types.T_bool)},
+			Expr: &planpb.Expr_F{F: &planpb.Function{
+				Func: &planpb.ObjectRef{ObjName: "in_range"},
+				Args: []*planpb.Expr{
+					DeepCopyExpr(lower.GetF().Args[0]),
+					DeepCopyExpr(lower.GetF().Args[1]),
+					DeepCopyExpr(upper.GetF().Args[1]),
+					MakePlan2Uint8ConstExprWithType(3),
+				},
+			}},
+		}
+
+		expr := builder.replaceNonEqualCondition(idxDef, filter, 42, idxTableDef)
+
+		require.Equal(t, "prefix_in_range", expr.GetF().Func.ObjName)
+		requireSerializedRangeBoundType(t, expr.GetF().Args[1], columnType, true)
+		requireSerializedRangeBoundType(t, expr.GetF().Args[2], columnType, true)
+	})
 
 	t.Run("equal scale decimal remains direct", func(t *testing.T) {
 		filters := []*planpb.Expr{
