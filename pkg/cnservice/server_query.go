@@ -18,6 +18,7 @@ import (
 	"context"
 	"runtime/debug"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -43,6 +44,7 @@ import (
 	qclient "github.com/matrixorigin/matrixone/pkg/queryservice/client"
 	sqlmongodb "github.com/matrixorigin/matrixone/pkg/sql/mongodb"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/ctl"
+	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
@@ -53,6 +55,61 @@ var (
 	iscpExecutorReadyTimeout = 2 * time.Second
 	iscpGetExecutorRuntimeFn = iscp.GetExecutorRuntime
 )
+
+type queryWorkLifecycle struct {
+	sync.Mutex
+	wg        sync.WaitGroup
+	ctx       context.Context
+	cancel    context.CancelFunc
+	closing   bool
+	closeOnce sync.Once
+	closeErr  error
+}
+
+func (l *queryWorkLifecycle) admit() (func(), bool) {
+	l.Lock()
+	defer l.Unlock()
+	if l.closing {
+		return nil, false
+	}
+	l.wg.Add(1)
+	return l.wg.Done, true
+}
+
+func (l *queryWorkLifecycle) launch(executor taskservice.TaskExecutor, asyncTask task.Task) bool {
+	l.Lock()
+	if l.closing {
+		l.Unlock()
+		return false
+	}
+	if l.cancel == nil {
+		l.ctx, l.cancel = context.WithCancel(context.Background())
+	}
+	ctx := l.ctx
+	l.wg.Add(1)
+	l.Unlock()
+
+	go func() {
+		defer l.wg.Done()
+		_ = executor(ctx, asyncTask)
+	}()
+	return true
+}
+
+func (l *queryWorkLifecycle) close(closeIngress func() error) error {
+	l.closeOnce.Do(func() {
+		l.Lock()
+		l.closing = true
+		if l.cancel != nil {
+			l.cancel()
+		}
+		l.Unlock()
+
+		l.closeErr = closeIngress()
+		l.wg.Wait()
+	})
+	return l.closeErr
+}
 
 func (s *service) initQueryService() error {
 	if s.gossipNode != nil {
@@ -124,14 +181,11 @@ func (s *service) addQueryCommandHandler(
 	s.queryService.AddHandleFunc(
 		method,
 		func(ctx context.Context, req *query.Request, resp *query.Response, buf *morpc.Buffer) error {
-			s.queryHandlers.Lock()
-			if s.queryHandlers.closing {
-				s.queryHandlers.Unlock()
+			release, ok := s.queryWork.admit()
+			if !ok {
 				return moerr.NewServiceUnavailableNoCtx("CN query service is closing")
 			}
-			s.queryHandlers.wg.Add(1)
-			s.queryHandlers.Unlock()
-			defer s.queryHandlers.wg.Done()
+			defer release()
 			return handler(ctx, req, resp, buf)
 		},
 		false,
@@ -139,16 +193,12 @@ func (s *service) addQueryCommandHandler(
 }
 
 func (s *service) closeQueryService() error {
-	s.queryHandlers.Lock()
-	s.queryHandlers.closing = true
-	s.queryHandlers.Unlock()
-
-	var err error
-	if s.queryService != nil {
-		err = s.queryService.Close()
-	}
-	s.queryHandlers.wg.Wait()
-	return err
+	return s.queryWork.close(func() error {
+		if s.queryService != nil {
+			return s.queryService.Close()
+		}
+		return nil
+	})
 }
 
 func (s *service) handleKillConn(ctx context.Context, req *query.Request, resp *query.Response, _ *morpc.Buffer) error {
@@ -445,12 +495,12 @@ func (s *service) handleRunTask(ctx context.Context, req *query.Request, resp *q
 		}
 		return nil
 	}
-	go func() {
-		_ = exec(context.Background(), &task.AsyncTask{
-			ID:       0,
-			Metadata: task.TaskMetadata{ID: code.String(), Executor: code},
-		})
-	}()
+	if !s.queryWork.launch(exec, &task.AsyncTask{
+		ID:       0,
+		Metadata: task.TaskMetadata{ID: code.String(), Executor: code},
+	}) {
+		return moerr.NewServiceUnavailableNoCtx("CN query service is closing")
+	}
 	resp.RunTask = &query.RunTaskResponse{
 		Result: "OK",
 	}

@@ -687,12 +687,8 @@ type service struct {
 	// queryService is used to handle query request from other CN service.
 	queryService queryservice.QueryService
 	// queryClient is used to send query request to other CN services.
-	queryClient   qclient.QueryClient
-	queryHandlers struct {
-		sync.Mutex
-		wg      sync.WaitGroup
-		closing bool
-	}
+	queryClient qclient.QueryClient
+	queryWork   queryWorkLifecycle
 	// udfService is used to handle non-sql udf
 	udfService       udf.Service
 	bootstrapMu      sync.RWMutex
