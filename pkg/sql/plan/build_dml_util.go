@@ -3360,6 +3360,11 @@ func appendPreInsertPlan(
 
 	var useColumns []int32
 	idxDef := tableDef.Indexes[indexIdx]
+	if catalog.IsRegularIndexAlgo(idxDef.IndexAlgo) {
+		if err := validateRegularIndexPrefixMetadata(idxDef); err != nil {
+			return 0, err
+		}
+	}
 	colsMap := make(map[string]int)
 	prefixLengths, err := catalog.IndexPrefixLengthsFromParamsWithError(idxDef.IndexAlgoParams)
 	if err != nil {

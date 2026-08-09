@@ -109,7 +109,7 @@ EXPLAIN SELECT * FROM t_float32 WHERE val < 10;
 ➤ TP QUERY PLAN[12,0,0]  𝄀
 Project  𝄀
   ->  Index Table Scan on t_float32.idx_val  𝄀
-        Filter Cond: (__mo_index_idx_col < '<opaque>')
+        Filter Cond: (__mo_index_idx_col < '<opaque>'), (serial_extract(__mo_index_idx_col, 0, FLOAT)) < 10)
 EXPLAIN SELECT * FROM t_float32 WHERE val <= 10;
 ➤ TP QUERY PLAN[12,0,0]  𝄀
 Project  𝄀
