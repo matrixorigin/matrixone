@@ -16,6 +16,14 @@ package malloc
 
 import "testing"
 
+type cappedTestAllocator struct {
+	capacity int
+}
+
+func (a cappedTestAllocator) Allocate(size uint64, _ Hints) ([]byte, Deallocator, error) {
+	return make([]byte, int(size), a.capacity), FuncDeallocator(func() {}), nil
+}
+
 func TestMetricsAllocator(t *testing.T) {
 	testAllocator(t, func() Allocator {
 		return NewMetricsAllocator(
@@ -23,6 +31,25 @@ func TestMetricsAllocator(t *testing.T) {
 			nil, nil, nil, nil, nil,
 		)
 	})
+}
+
+func TestMetricsAllocatorAccountsBackingCapacity(t *testing.T) {
+	allocator := NewMetricsAllocator(
+		cappedTestAllocator{capacity: 1024},
+		nil, nil, nil, nil, nil,
+	)
+	_, dec, err := allocator.Allocate(700, NoHints)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := allocator.currentInuse.Load(); got != 1024 {
+		t.Fatalf("in-use bytes = %d, want physical capacity 1024", got)
+	}
+
+	dec.Deallocate()
+	if got := allocator.currentInuse.Load(); got != 0 {
+		t.Fatalf("in-use bytes after release = %d, want 0", got)
+	}
 }
 
 func BenchmarkMetricsAllocator(b *testing.B) {
