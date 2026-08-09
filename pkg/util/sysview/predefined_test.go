@@ -53,6 +53,18 @@ func TestInformationSchemaStatisticsDDL_ContainsIdxAlgo(t *testing.T) {
 	assert.False(t, strings.Contains(InformationSchemaStatisticsDDL, "NULL AS `INDEX_TYPE`"))
 }
 
+func TestInformationSchemaTableConstraintsDDL_ContainsCheckConstraints(t *testing.T) {
+	assert.Contains(t, InformationSchemaTableConstraintsDDL, "UNION ALL")
+	assert.Contains(t, InformationSchemaTableConstraintsDDL, "FROM mo_check_constraints() cc")
+	assert.Contains(t, InformationSchemaTableConstraintsDDL, "cc.table_name AS TABLE_NAME")
+	assert.Contains(t, InformationSchemaTableConstraintsDDL, catalog.NonTemporaryTableSQLPredicate("tbl"))
+	statements, err := mysql.Parse(context.Background(), InformationSchemaTableConstraintsDDL, 1)
+	assert.NoError(t, err)
+	for _, statement := range statements {
+		statement.Free()
+	}
+}
+
 func TestInformationSchemaStatisticsDDL_RestrictsCatalogJoins(t *testing.T) {
 	assert.True(t, strings.Contains(InformationSchemaStatisticsDDL, "`tcl`.`account_id` = `tbl`.`account_id`"))
 	assert.True(t, strings.Contains(InformationSchemaStatisticsDDL, "`tcl`.`att_database` = `tbl`.`reldatabase`"))

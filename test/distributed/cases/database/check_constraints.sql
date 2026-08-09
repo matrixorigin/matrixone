@@ -21,6 +21,25 @@ where constraint_schema = 'check_constraints_metadata'
 order by constraint_name;
 
 use check_constraints_metadata;
+create table partitioned_values (
+    id int,
+    constraint chk_partition_positive check (id >= 0)
+) partition by range columns (id) (
+    partition p0 values less than (10),
+    partition p1 values less than (20)
+);
+
+use information_schema;
+select count(*)
+from check_constraints
+where constraint_schema = 'check_constraints_metadata'
+  and constraint_name = 'chk_partition_positive';
+select count(*)
+from table_constraints
+where constraint_schema = 'check_constraints_metadata'
+  and constraint_name = 'chk_partition_positive';
+
+use check_constraints_metadata;
 create temporary table check_values_tmp (
     id int primary key,
     amount int,

@@ -17,6 +17,27 @@ def  ¦  check_constraints_metadata  ¦  chk_amount_limit  ¦  `amount` < 100  �
 def  ¦  check_constraints_metadata  ¦  chk_amount_nonnegative  ¦  `amount` >= 0  𝄀
 def  ¦  check_constraints_metadata  ¦  chk_amount_positive  ¦  `amount` > 0
 use check_constraints_metadata;
+create table partitioned_values (
+id int,
+constraint chk_partition_positive check (id >= 0)
+) partition by range columns (id) (
+partition p0 values less than (10),
+partition p1 values less than (20)
+);
+use information_schema;
+select count(*)
+from check_constraints
+where constraint_schema = 'check_constraints_metadata'
+and constraint_name = 'chk_partition_positive';
+➤ count(*)[-5,64,0]  𝄀
+1
+select count(*)
+from table_constraints
+where constraint_schema = 'check_constraints_metadata'
+and constraint_name = 'chk_partition_positive';
+➤ count(*)[-5,64,0]  𝄀
+1
+use check_constraints_metadata;
 create temporary table check_values_tmp (
 id int primary key,
 amount int,

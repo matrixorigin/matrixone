@@ -36,7 +36,7 @@ import (
 )
 
 func TestUpgradeEntries(t *testing.T) {
-	require.Len(t, tenantUpgEntries, 10)
+	require.Len(t, tenantUpgEntries, 11)
 	require.Len(t, clusterUpgEntries, 1)
 	require.Equal(t, retireKafkaSinkDaemonTasks.UpgSql, clusterUpgEntries[0].UpgSql)
 	require.Equal(t, mongodb.TableConnections, tenantUpgEntries[0].TableName)
@@ -63,10 +63,16 @@ func TestUpgradeEntries(t *testing.T) {
 	require.Equal(t, versions.CREATE_VIEW, checkConstraints.UpgType)
 	require.Equal(t, sysview.InformationSchemaCheckConstraintsDDL, checkConstraints.UpgSql)
 	require.Contains(t, strings.ToLower(checkConstraints.PreSql), "drop view if exists information_schema.check_constraints")
+	tableConstraints := tenantUpgEntries[10]
+	require.Equal(t, sysview.InformationDBConst, tableConstraints.Schema)
+	require.Equal(t, "TABLE_CONSTRAINTS", tableConstraints.TableName)
+	require.Equal(t, versions.MODIFY_VIEW, tableConstraints.UpgType)
+	require.Equal(t, sysview.InformationSchemaTableConstraintsDDL, tableConstraints.UpgSql)
+	require.Contains(t, strings.ToLower(tableConstraints.PreSql), "drop view if exists information_schema.table_constraints")
 }
 
 func TestForeignKeyMetadataTenantUpgradeEntries(t *testing.T) {
-	require.Len(t, tenantUpgEntries, 10)
+	require.Len(t, tenantUpgEntries, 11)
 
 	for i, column := range []string{"referenced_index_name", "on_delete_origin", "on_update_origin"} {
 		entry := tenantUpgEntries[2+i]
@@ -300,6 +306,7 @@ func TestTenantViewDefinitionChecks(t *testing.T) {
 		upgradeInformationSchemaKeyColumnUsage(),
 		upgradeInformationSchemaReferentialConstraints(),
 		upgradeInformationSchemaCheckConstraints(),
+		upgradeInformationSchemaTableConstraints(),
 	}
 
 	for _, entry := range entries {
@@ -356,6 +363,8 @@ func TestVersionHandleLifecycleWithNoLegacyDefinitions(t *testing.T) {
 				return true, sysview.InformationSchemaReferentialConstraintsDDL, nil
 			case "CHECK_CONSTRAINTS":
 				return true, sysview.InformationSchemaCheckConstraintsDDL, nil
+			case "TABLE_CONSTRAINTS":
+				return true, sysview.InformationSchemaTableConstraintsDDL, nil
 			case "COLUMNS":
 				return true, sysview.InformationSchemaColumnsDDL, nil
 			default:

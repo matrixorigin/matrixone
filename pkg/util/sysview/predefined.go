@@ -553,7 +553,15 @@ var (
 		"'YES' AS ENFORCED "+
 		"FROM mo_catalog.mo_indexes idx "+
 		"join mo_catalog.mo_tables tbl on idx.table_id = tbl.rel_id "+
-		"where %s", catalog.NonTemporaryTableSQLPredicate("tbl"))
+		"where %s UNION ALL "+
+		"SELECT cc.constraint_catalog AS CONSTRAINT_CATALOG, "+
+		"cc.constraint_schema AS CONSTRAINT_SCHEMA, "+
+		"cc.constraint_name AS CONSTRAINT_NAME, "+
+		"cc.constraint_schema AS TABLE_SCHEMA, "+
+		"cc.table_name AS TABLE_NAME, "+
+		"cc.constraint_type AS CONSTRAINT_TYPE, "+
+		"cc.enforced AS ENFORCED "+
+		"FROM mo_check_constraints() cc", catalog.NonTemporaryTableSQLPredicate("tbl"))
 
 	InformationSchemaEventsDDL = "CREATE TABLE information_schema.EVENTS (" +
 		"EVENT_CATALOG varchar(64)," +
