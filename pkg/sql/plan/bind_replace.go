@@ -46,6 +46,9 @@ func (builder *QueryBuilder) bindReplace(stmt *tree.Replace, bindCtx *BindContex
 	// MASTER now has full synchronous modern maintenance (delete-by-pk + insert),
 	// same as IVF/fulltext. HNSW/CAGRA/IVF-PQ are cron-maintained.
 	tableDef := dmlCtx.tableDefs[0]
+	if err := validateTableRegularIndexPrefixMetadata(tableDef); err != nil {
+		return 0, err
+	}
 
 	irregularIndexes := getIrregularIndexes(tableDef)
 

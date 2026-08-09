@@ -202,7 +202,7 @@ func (s *service) newReadRequest(
 ) *pb.Request {
 	req := s.remote.pool.AcquireRequest()
 	req.RPCMethod = pb.Method_ShardRead
-	if hasBinaryPrepareParam(param) {
+	if hasVersionedPrepareParamMetadata(param) {
 		req.RPCMethod = pb.Method_ShardReadV2
 	}
 	req.ShardRead.Shard = shard

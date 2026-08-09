@@ -237,6 +237,38 @@ func TestTopSpill(t *testing.T) {
 	}
 }
 
+func TestTopSpillPrepareParamMetadata(t *testing.T) {
+	mp := mpool.MustNewZero()
+	src := batch.NewWithSize(1)
+	vec := vector.NewVec(types.T_text.ToType())
+	require.NoError(t, vector.AppendBytes(vec, []byte("5"), false, mp))
+	require.NoError(t, vector.AppendBytes(vec, []byte("5"), false, mp))
+	vec.SetPrepareParamKinds([]vector.PrepareParamKind{
+		vector.PrepareParamInteger, vector.PrepareParamNone,
+	})
+	src.Vecs[0] = vec
+	src.SetRowCount(2)
+	defer src.Clean(mp)
+	data, err := src.MarshalBinary()
+	require.NoError(t, err)
+	withMetadata, err := appendTopSpillPrepareParamMetadata(data, src)
+	require.NoError(t, err)
+	base, metadata, metadataRows, err := splitTopSpillPrepareParamMetadata(withMetadata)
+	require.NoError(t, err)
+	require.NotEqual(t, data, withMetadata)
+	decoded := batch.NewWithSize(1)
+	defer decoded.Clean(mp)
+	require.NoError(t, decoded.UnmarshalBinaryWithAnyMp(base, mp))
+	require.NoError(t, restoreTopSpillPrepareParamMetadata(decoded, metadata, metadataRows, mp))
+	require.Equal(t, vector.PrepareParamInteger, decoded.Vecs[0].GetPrepareParamKindAt(0))
+	require.Equal(t, vector.PrepareParamNone, decoded.Vecs[0].GetPrepareParamKindAt(1))
+
+	bad := append([]byte(nil), withMetadata...)
+	bad[len(bad)-1] = 0xff
+	_, _, _, err = splitTopSpillPrepareParamMetadata(bad)
+	require.Error(t, err)
+}
+
 func TestTopSpillEvalHonorsCancellationAfterInput(t *testing.T) {
 	limit := int64(topSpillThreshold + 1)
 	tc := newTestCase(t, mpool.MustNewZero(), []types.Type{types.T_int64.ToType()}, limit,

@@ -139,6 +139,9 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 		}
 
 		tableDef := dmlCtx.tableDefs[i]
+		if err := validateTableRegularIndexPrefixMetadata(tableDef); err != nil {
+			return 0, err
+		}
 		colOffsets[i] = int32(len(selectList))
 		useColInPartExpr := make(map[string]bool)
 
