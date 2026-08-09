@@ -16,6 +16,7 @@ package readutil
 
 import (
 	"context"
+	"strconv"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -151,15 +152,15 @@ type decimalBound struct {
 }
 
 type decimalScalePruningCase struct {
-	name     string
-	colType  plan.Type
-	min      string
-	max      string
-	op       string
-	bounds   []decimalBound
-	primary  bool
-	nullOnly bool
-	want     bool
+	name          string
+	colType       plan.Type
+	min           string
+	max           string
+	op            string
+	bounds        []decimalBound
+	primary       bool
+	uninitialized bool
+	want          bool
 }
 
 func TestCompileFilterExprDecimalScaleMatrix(t *testing.T) {
@@ -240,8 +241,8 @@ func TestCompileFilterExprDecimalScaleMatrix(t *testing.T) {
 				bounds: []decimalBound{{"1", 0}, {"2.0050", 4}}, want: false,
 			},
 			decimalScalePruningCase{
-				name: name + "/null_only_prunes", colType: colType, op: "<",
-				bounds: []decimalBound{{"2", 0}}, nullOnly: true, want: false,
+				name: name + "/unknown_zm_fails_open", colType: colType, op: "<",
+				bounds: []decimalBound{{"2", 0}}, uninitialized: true, want: true,
 			},
 			decimalScalePruningCase{
 				name: name + "/primary_eq_mismatched_scale_skips_bloom", colType: colType,
@@ -292,7 +293,7 @@ func TestCompileFilterExprDecimalScaleMatrix(t *testing.T) {
 			require.NotNil(t, blockFilter)
 
 			var meta objectio.BlockObject
-			if test.nullOnly {
+			if test.uninitialized {
 				meta = makeDecimalBlockMeta(t, test.colType)
 			} else {
 				meta = makeDecimalBlockMeta(t, test.colType, test.min, test.max)
@@ -323,16 +324,19 @@ func TestDecimalZoneMapScaleAwareComparisons(t *testing.T) {
 			oneScale1Value, oneScale1 := decimalBoundZoneMap(t, decimalType.typ, decimalBound{"1.0", 1})
 			fourValue, four := decimalBoundZoneMap(t, decimalType.typ, decimalBound{"4.00", 2})
 
-			require.True(t, anyLTByBound(zm, oneValue, one))
-			require.False(t, anyLTByBound(zm, minusTwoValue, minusTwo))
-			require.True(t, anyLEByBound(zm, minusTwoValue, minusTwo))
-			require.True(t, anyGTByBound(zm, oneValue, one))
-			require.False(t, anyGTByBound(zm, twoValue, two))
-			require.True(t, anyGEByBound(zm, twoValue, two))
-			require.True(t, intersectsBound(zm, oneValue, one))
-			require.False(t, intersectsBound(zm, threeValue, three))
-			require.True(t, anyBetweenBounds(zm, minusOneValue, oneScale1Value, minusOne, oneScale1))
-			require.False(t, anyBetweenBounds(zm, threeValue, fourValue, three, four))
+			columnType := types.T(decimalType.typ.Id)
+			require.True(t, anyLTByBound(zm, oneValue, one, columnType).mayMatch())
+			require.True(t, anyLTByBound(zm, minusTwoValue, minusTwo, columnType).excludes())
+			require.True(t, anyLEByBound(zm, minusTwoValue, minusTwo, columnType).mayMatch())
+			require.True(t, anyGTByBound(zm, oneValue, one, columnType).mayMatch())
+			require.True(t, anyGTByBound(zm, twoValue, two, columnType).excludes())
+			require.True(t, anyGEByBound(zm, twoValue, two, columnType).mayMatch())
+			require.True(t, intersectsBound(zm, oneValue, one, columnType).mayMatch())
+			require.True(t, intersectsBound(zm, threeValue, three, columnType).excludes())
+			require.True(t, anyBetweenBounds(
+				zm, minusOneValue, oneScale1Value, minusOne, oneScale1, columnType,
+			).mayMatch())
+			require.True(t, anyBetweenBounds(zm, threeValue, fourValue, three, four, columnType).excludes())
 
 			mismatchType := plan.Type{Id: int32(types.T_decimal128), Width: 20, Scale: 0}
 			if types.T(decimalType.typ.Id) == types.T_decimal128 {
@@ -341,14 +345,110 @@ func TestDecimalZoneMapScaleAwareComparisons(t *testing.T) {
 			mismatch := decimalZoneMap(t, mismatchType, "1")
 			// A persisted type mismatch makes index.ZM comparison return ok=false.
 			// Every decimal pruning helper must fail open in that case.
-			require.True(t, anyLTByBound(zm, nil, mismatch))
-			require.True(t, anyLEByBound(zm, nil, mismatch))
-			require.True(t, anyGTByBound(zm, nil, mismatch))
-			require.True(t, anyGEByBound(zm, nil, mismatch))
-			require.True(t, intersectsBound(zm, nil, mismatch))
-			require.True(t, anyBetweenBounds(zm, nil, nil, mismatch, mismatch))
+			require.True(t, anyLTByBound(zm, nil, mismatch, columnType).mayMatch())
+			require.True(t, anyLEByBound(zm, nil, mismatch, columnType).mayMatch())
+			require.True(t, anyGTByBound(zm, nil, mismatch, columnType).mayMatch())
+			require.True(t, anyGEByBound(zm, nil, mismatch, columnType).mayMatch())
+			require.True(t, intersectsBound(zm, nil, mismatch, columnType).mayMatch())
+			require.True(t, anyBetweenBounds(zm, nil, nil, mismatch, mismatch, columnType).mayMatch())
 			for hint := uint8(0); hint < 4; hint++ {
-				require.True(t, inRangeBounds(zm, nil, nil, mismatch, mismatch, hint))
+				require.True(t, inRangeBounds(zm, nil, nil, mismatch, mismatch, hint, columnType).mayMatch())
+			}
+		})
+	}
+}
+
+var zoneMapMatchSink zoneMapMatch
+var zoneMapSeekSink int
+
+func TestZoneMapMatchHelpersDoNotAllocate(t *testing.T) {
+	intType := plan.Type{Id: int32(types.T_int64)}
+	intZM := sortedUnknownZoneMap(t, intType, "10", "20")
+	intBound := encodeSortedUnknownValue(t, intType, "15")
+	unknownIntZM := index.NewZM(types.T_int64, 0)
+
+	decimalType := plan.Type{Id: int32(types.T_decimal128), Width: 20, Scale: 4}
+	decimalZM := decimalZoneMap(t, decimalType, "10.0000", "20.0000")
+	decimalValue, decimalBoundZM := decimalBoundZoneMap(t, decimalType, decimalBound{"15", 0})
+	unknownDecimalZM := index.NewZM(types.T_decimal128, decimalType.Scale)
+
+	tests := []struct {
+		name string
+		fn   func() zoneMapMatch
+	}{
+		{
+			name: "raw initialized",
+			fn: func() zoneMapMatch {
+				return anyLTByBound(intZM, intBound, nil, types.T_int64)
+			},
+		},
+		{
+			name: "raw unknown",
+			fn: func() zoneMapMatch {
+				return anyLTByBound(unknownIntZM, intBound, nil, types.T_int64)
+			},
+		},
+		{
+			name: "decimal initialized",
+			fn: func() zoneMapMatch {
+				return anyLTByBound(decimalZM, decimalValue, decimalBoundZM, types.T_decimal128)
+			},
+		},
+		{
+			name: "decimal unknown",
+			fn: func() zoneMapMatch {
+				return anyLTByBound(unknownDecimalZM, decimalValue, decimalBoundZM, types.T_decimal128)
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			allocations := testing.AllocsPerRun(1000, func() {
+				zoneMapMatchSink = test.fn()
+			})
+			require.Zero(t, allocations)
+		})
+	}
+
+	tableDef := decimalTableDef(decimalType, false)
+	tableDef.Cols[0].ClusterBy = true
+	expr := decimalFoldedFilter(t, decimalType, ">=", decimalBound{"15", 0})
+	_, _, _, _, seek, canCompile, _ := CompileFilterExpr(expr, tableDef, nil)
+	require.True(t, canCompile)
+	require.NotNil(t, seek)
+	dataMeta := decimalObjectDataMeta(t, decimalType, "10.0000", "20.0000", "30.0000")
+	allocations := testing.AllocsPerRun(1000, func() {
+		zoneMapSeekSink = seek(dataMeta)
+	})
+	require.Zero(t, allocations)
+}
+
+func BenchmarkSeekFirstBlockByZoneMap(b *testing.B) {
+	for _, blockCount := range []int{1, 16, 256, 4096} {
+		b.Run(strconv.Itoa(blockCount)+"_blocks", func(b *testing.B) {
+			dataMeta := objectio.BuildMetaData(uint16(blockCount), 1)
+			objectZM := index.NewZM(types.T_int64, 0)
+			for i := range blockCount {
+				value := int64(i)
+				valueBytes := types.EncodeInt64(&value)
+				index.UpdateZM(objectZM, valueBytes)
+				blockZM := index.NewZM(types.T_int64, 0)
+				index.UpdateZM(blockZM, valueBytes)
+				dataMeta.GetBlockMeta(uint32(i)).MustGetColumn(0).SetZoneMap(blockZM)
+			}
+			dataMeta.MustGetColumn(0).SetZoneMap(objectZM)
+			boundValue := int64(blockCount / 2)
+			boundBytes := types.EncodeInt64(&boundValue)
+
+			b.ReportAllocs()
+			b.ResetTimer()
+			for b.Loop() {
+				zoneMapSeekSink = seekFirstBlockByZoneMap(
+					dataMeta, 0, nil, types.T_int64,
+					func(zm objectio.ZoneMap) zoneMapMatch {
+						return anyGEByBound(zm, boundBytes, nil, types.T_int64)
+					},
+				)
 			}
 		})
 	}
@@ -487,6 +587,203 @@ func TestCompileFilterExprDecimalSortedInRangeHints(t *testing.T) {
 	}
 }
 
+func TestCompileFilterExprSortedUnknownZoneMapDoesNotExcludeLaterBlocks(t *testing.T) {
+	typesUnderTest := []struct {
+		name string
+		typ  plan.Type
+	}{
+		{name: "decimal64", typ: plan.Type{Id: int32(types.T_decimal64), Width: 12, Scale: 2}},
+		{name: "decimal128", typ: plan.Type{Id: int32(types.T_decimal128), Width: 20, Scale: 2}},
+		{name: "int64", typ: plan.Type{Id: int32(types.T_int64)}},
+		{name: "varchar", typ: plan.Type{Id: int32(types.T_varchar), Width: 8}},
+	}
+	operations := []struct {
+		name       string
+		op         string
+		bounds     []string
+		quickBreak bool
+		hints      []uint8
+	}{
+		{name: "lt", op: "<", bounds: []string{"25"}, quickBreak: true},
+		{name: "le", op: "<=", bounds: []string{"20"}, quickBreak: true},
+		{name: "gt", op: ">", bounds: []string{"15"}},
+		{name: "ge", op: ">=", bounds: []string{"20"}},
+		{name: "eq", op: "=", bounds: []string{"20"}, quickBreak: true},
+		{name: "between", op: "between", bounds: []string{"15", "25"}, quickBreak: true},
+		{name: "in_range", op: "in_range", bounds: []string{"15", "25"}, quickBreak: true,
+			hints: []uint8{0, 1, 2, 3}},
+	}
+
+	for _, typ := range typesUnderTest {
+		for _, operation := range operations {
+			hints := operation.hints
+			if len(hints) == 0 {
+				hints = []uint8{0}
+			}
+			for _, hint := range hints {
+				name := typ.name + "/" + operation.name
+				if operation.op == "in_range" {
+					name += "/hint_" + strconv.Itoa(int(hint))
+				}
+				t.Run(name, func(t *testing.T) {
+					tableDef := decimalTableDef(typ.typ, false)
+					tableDef.Cols[0].ClusterBy = true
+					expr := sortedUnknownFilter(t, typ.typ, operation.op, operation.bounds, hint)
+					fastFilter, _, _, blockFilter, seek, canCompile, _ := CompileFilterExpr(expr, tableDef, nil)
+					require.True(t, canCompile)
+					require.NotNil(t, fastFilter)
+					require.NotNil(t, blockFilter)
+
+					dataMeta := sortedUnknownDataMeta(t, typ.typ)
+					stats := objectio.NewObjectStats()
+					require.NoError(t, objectio.SetObjectStatsSortKeyZoneMap(
+						stats, index.NewZM(types.T(typ.typ.Id), typ.typ.Scale)))
+					selected, err := fastFilter(stats)
+					require.NoError(t, err)
+					require.True(t, selected, "unknown object ZM must fail open")
+
+					quickBreak, selected, err := blockFilter(0, dataMeta.GetBlockMeta(0), nil)
+					require.NoError(t, err)
+					require.False(t, quickBreak, "unknown first block must not stop the scan")
+					require.True(t, selected, "unknown first block must fail open")
+
+					quickBreak, selected, err = blockFilter(1, dataMeta.GetBlockMeta(1), nil)
+					require.NoError(t, err)
+					require.False(t, quickBreak)
+					require.True(t, selected, "later matching block must remain reachable")
+
+					quickBreak, _, err = blockFilter(2, dataMeta.GetBlockMeta(2), nil)
+					require.NoError(t, err)
+					require.Equal(t, operation.quickBreak, quickBreak)
+
+					if seek != nil {
+						require.Equal(t, 0, seek(dataMeta), "unknown leading block must make seek fail open")
+					}
+				})
+			}
+		}
+	}
+}
+
+func TestCompileFilterExprSortedIncompatibleZoneMapFailsOpen(t *testing.T) {
+	tests := []struct {
+		name         string
+		columnType   plan.Type
+		metadataType plan.Type
+	}{
+		{
+			name:         "int64 column with varchar metadata",
+			columnType:   plan.Type{Id: int32(types.T_int64)},
+			metadataType: plan.Type{Id: int32(types.T_varchar), Width: 8},
+		},
+		{
+			name:         "varchar column with int64 metadata",
+			columnType:   plan.Type{Id: int32(types.T_varchar), Width: 8},
+			metadataType: plan.Type{Id: int32(types.T_int64)},
+		},
+		{
+			name:         "varchar column with text metadata",
+			columnType:   plan.Type{Id: int32(types.T_varchar), Width: 8},
+			metadataType: plan.Type{Id: int32(types.T_text)},
+		},
+		{
+			name:         "varchar column with blob metadata",
+			columnType:   plan.Type{Id: int32(types.T_varchar), Width: 8},
+			metadataType: plan.Type{Id: int32(types.T_blob)},
+		},
+		{
+			name:         "varchar column with json metadata",
+			columnType:   plan.Type{Id: int32(types.T_varchar), Width: 8},
+			metadataType: plan.Type{Id: int32(types.T_json)},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			tableDef := decimalTableDef(test.columnType, false)
+			tableDef.Cols[0].ClusterBy = true
+			expr := sortedUnknownFilter(t, test.columnType, "=", []string{"20"}, 0)
+			fastFilter, _, _, blockFilter, seek, canCompile, _ := CompileFilterExpr(expr, tableDef, nil)
+			require.True(t, canCompile)
+
+			mismatch := sortedUnknownZoneMap(t, test.metadataType, "20")
+			stats := objectio.NewObjectStats()
+			require.NoError(t, objectio.SetObjectStatsSortKeyZoneMap(stats, mismatch))
+			selected, err := fastFilter(stats)
+			require.NoError(t, err)
+			require.True(t, selected)
+
+			dataMeta := objectio.BuildMetaData(2, 1)
+			dataMeta.MustGetColumn(0).SetZoneMap(mismatch)
+			dataMeta.GetBlockMeta(0).MustGetColumn(0).SetZoneMap(mismatch.Clone())
+			dataMeta.GetBlockMeta(1).MustGetColumn(0).SetZoneMap(mismatch.Clone())
+			quickBreak, selected, err := blockFilter(0, dataMeta.GetBlockMeta(0), nil)
+			require.NoError(t, err)
+			require.False(t, quickBreak)
+			require.True(t, selected)
+			require.Equal(t, 0, seek(dataMeta))
+		})
+	}
+}
+
+func TestSeekFirstBlockFailsOpenForUnsampledUnknownZoneMap(t *testing.T) {
+	typesUnderTest := []struct {
+		name         string
+		columnType   plan.Type
+		mismatchType plan.Type
+	}{
+		{
+			name:         "decimal64",
+			columnType:   plan.Type{Id: int32(types.T_decimal64), Width: 12, Scale: 2},
+			mismatchType: plan.Type{Id: int32(types.T_decimal128), Width: 20, Scale: 2},
+		},
+		{
+			name:         "decimal128",
+			columnType:   plan.Type{Id: int32(types.T_decimal128), Width: 20, Scale: 2},
+			mismatchType: plan.Type{Id: int32(types.T_decimal64), Width: 12, Scale: 2},
+		},
+		{
+			name:         "int64",
+			columnType:   plan.Type{Id: int32(types.T_int64)},
+			mismatchType: plan.Type{Id: int32(types.T_varchar), Width: 8},
+		},
+		{
+			name:         "varchar",
+			columnType:   plan.Type{Id: int32(types.T_varchar), Width: 8},
+			mismatchType: plan.Type{Id: int32(types.T_int64)},
+		},
+	}
+	for _, typ := range typesUnderTest {
+		for _, state := range []string{"uninitialized", "incompatible"} {
+			t.Run(typ.name+"/"+state, func(t *testing.T) {
+				tableDef := decimalTableDef(typ.columnType, false)
+				tableDef.Cols[0].ClusterBy = true
+				expr := sortedUnknownFilter(t, typ.columnType, ">=", []string{"35"}, 0)
+				_, _, _, _, seek, canCompile, _ := CompileFilterExpr(expr, tableDef, nil)
+				require.True(t, canCompile)
+				require.NotNil(t, seek)
+
+				dataMeta := objectio.BuildMetaData(5, 1)
+				dataMeta.MustGetColumn(0).SetZoneMap(sortedUnknownZoneMap(t, typ.columnType, "10", "50"))
+				dataMeta.GetBlockMeta(0).MustGetColumn(0).SetZoneMap(sortedUnknownZoneMap(t, typ.columnType, "10"))
+				if state == "uninitialized" {
+					dataMeta.GetBlockMeta(1).MustGetColumn(0).SetZoneMap(
+						index.NewZM(types.T(typ.columnType.Id), typ.columnType.Scale))
+				} else {
+					dataMeta.GetBlockMeta(1).MustGetColumn(0).SetZoneMap(
+						sortedUnknownZoneMap(t, typ.mismatchType, "15"))
+				}
+				dataMeta.GetBlockMeta(2).MustGetColumn(0).SetZoneMap(sortedUnknownZoneMap(t, typ.columnType, "20"))
+				dataMeta.GetBlockMeta(3).MustGetColumn(0).SetZoneMap(sortedUnknownZoneMap(t, typ.columnType, "40"))
+				dataMeta.GetBlockMeta(4).MustGetColumn(0).SetZoneMap(sortedUnknownZoneMap(t, typ.columnType, "50"))
+
+				// sort.Search for the ordinary boundary probes blocks 2, 4 and 3;
+				// block 1 is deliberately unsampled and must still force seek=0.
+				require.Equal(t, 0, seek(dataMeta))
+			})
+		}
+	}
+}
+
 func TestCompileFilterExprDecimalScaleNonDecimalControl(t *testing.T) {
 	tableDef := &plan.TableDef{
 		Name:          "int_scan",
@@ -593,6 +890,87 @@ func int64FoldedFilter(op string, bounds ...int64) *plan.Expr {
 		})
 	}
 	return foldedFunction(op, args)
+}
+
+func sortedUnknownFilter(
+	t *testing.T,
+	typ plan.Type,
+	op string,
+	bounds []string,
+	hint uint8,
+) *plan.Expr {
+	t.Helper()
+	if types.T(typ.Id).IsDecimal() {
+		decimalBounds := make([]decimalBound, len(bounds))
+		for i, bound := range bounds {
+			decimalBounds[i] = decimalBound{text: bound, scale: 0}
+		}
+		if op == "in_range" {
+			return decimalInRangeFoldedFilter(t, typ, decimalBounds[0], decimalBounds[1], hint)
+		}
+		return decimalFoldedFilter(t, typ, op, decimalBounds...)
+	}
+
+	args := []*plan.Expr{{
+		Typ: typ,
+		Expr: &plan.Expr_Col{Col: &plan.ColRef{
+			RelPos: 0, ColPos: 0, Name: "amount",
+		}},
+	}}
+	for _, bound := range bounds {
+		args = append(args, &plan.Expr{
+			Typ: typ,
+			Expr: &plan.Expr_Fold{Fold: &plan.FoldVal{
+				IsConst: true,
+				Data:    encodeSortedUnknownValue(t, typ, bound),
+			}},
+		})
+	}
+	if op == "in_range" {
+		hintValue := hint
+		args = append(args, &plan.Expr{
+			Typ:  plan.Type{Id: int32(types.T_uint8)},
+			Expr: &plan.Expr_Fold{Fold: &plan.FoldVal{IsConst: true, Data: types.EncodeUint8(&hintValue)}},
+		})
+	}
+	return foldedFunction(op, args)
+}
+
+func sortedUnknownDataMeta(t *testing.T, typ plan.Type) objectio.ObjectDataMeta {
+	t.Helper()
+	dataMeta := objectio.BuildMetaData(3, 1)
+	unknown := index.NewZM(types.T(typ.Id), typ.Scale)
+	dataMeta.MustGetColumn(0).SetZoneMap(unknown)
+	dataMeta.GetBlockMeta(0).MustGetColumn(0).SetZoneMap(unknown.Clone())
+	dataMeta.GetBlockMeta(1).MustGetColumn(0).SetZoneMap(sortedUnknownZoneMap(t, typ, "20"))
+	dataMeta.GetBlockMeta(2).MustGetColumn(0).SetZoneMap(sortedUnknownZoneMap(t, typ, "40"))
+	return dataMeta
+}
+
+func sortedUnknownZoneMap(t *testing.T, typ plan.Type, values ...string) objectio.ZoneMap {
+	t.Helper()
+	zm := index.NewZM(types.T(typ.Id), typ.Scale)
+	for _, value := range values {
+		index.UpdateZM(zm, encodeSortedUnknownValue(t, typ, value))
+	}
+	return zm
+}
+
+func encodeSortedUnknownValue(t *testing.T, typ plan.Type, value string) []byte {
+	t.Helper()
+	switch types.T(typ.Id) {
+	case types.T_decimal64, types.T_decimal128:
+		return encodeDecimal(t, typ, value)
+	case types.T_int64:
+		parsed, err := strconv.ParseInt(value, 10, 64)
+		require.NoError(t, err)
+		return types.EncodeInt64(&parsed)
+	case types.T_char, types.T_varchar, types.T_text, types.T_blob, types.T_json:
+		return []byte("000000" + value)
+	default:
+		t.Fatalf("unsupported sorted zonemap test type %v", types.T(typ.Id))
+		return nil
+	}
 }
 
 func foldedFunction(name string, args []*plan.Expr) *plan.Expr {

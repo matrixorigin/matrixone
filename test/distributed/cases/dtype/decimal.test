@@ -1013,3 +1013,58 @@ SELECT COUNT(*) AS decimal_nulls FROM decimal_zm_scale_scan WHERE d64 IS NULL AN
 SELECT COUNT(*) AS int_control FROM decimal_zm_scale_scan WHERE id < 1000;
 
 DROP TABLE decimal_zm_scale_scan;
+
+-- issues #26808 and #26817: an all-NULL leading block on a nullable sorted key
+-- leaves its zonemap uninitialized and must not exclude later matching blocks.
+DROP TABLE IF EXISTS nullable_decimal_cluster_zm;
+CREATE TABLE nullable_decimal_cluster_zm (
+    id BIGINT NOT NULL,
+    amount DECIMAL(20,4)
+) CLUSTER BY(amount);
+INSERT INTO nullable_decimal_cluster_zm
+SELECT result,
+       CASE WHEN result <= 20000 THEN NULL
+            ELSE CAST((result - 20000) / 10.0 AS DECIMAL(20,4)) END
+FROM generate_series(1, 50000) g;
+-- @separator:table
+SELECT mo_ctl('dn','flush', concat(database(), '.nullable_decimal_cluster_zm'));
+SELECT COUNT(*), SUM(id), SUM(amount) FROM nullable_decimal_cluster_zm WHERE amount < 2000.0000;
+SELECT COUNT(*), SUM(id), SUM(amount) FROM nullable_decimal_cluster_zm WHERE amount + 0 < 2000.0000;
+SELECT COUNT(*) FROM nullable_decimal_cluster_zm WHERE amount <= 2000.0000;
+SELECT COUNT(*) FROM nullable_decimal_cluster_zm WHERE amount > 2000.0000;
+DROP TABLE nullable_decimal_cluster_zm;
+
+DROP TABLE IF EXISTS nullable_bigint_cluster_zm;
+CREATE TABLE nullable_bigint_cluster_zm (
+    id BIGINT NOT NULL,
+    amount BIGINT
+) CLUSTER BY(amount);
+INSERT INTO nullable_bigint_cluster_zm
+SELECT result,
+       CASE WHEN result <= 20000 THEN NULL ELSE result - 20000 END
+FROM generate_series(1, 50000) g;
+-- @separator:table
+SELECT mo_ctl('dn','flush', concat(database(), '.nullable_bigint_cluster_zm'));
+SELECT COUNT(*) FROM nullable_bigint_cluster_zm WHERE amount < 20000;
+SELECT COUNT(*) FROM nullable_bigint_cluster_zm WHERE amount + 0 < 20000;
+SELECT COUNT(*) FROM nullable_bigint_cluster_zm WHERE amount <= 20000;
+SELECT COUNT(*) FROM nullable_bigint_cluster_zm WHERE amount > 20000;
+DROP TABLE nullable_bigint_cluster_zm;
+
+DROP TABLE IF EXISTS nullable_varchar_cluster_zm;
+CREATE TABLE nullable_varchar_cluster_zm (
+    id BIGINT NOT NULL,
+    amount VARCHAR(8)
+) CLUSTER BY(amount);
+INSERT INTO nullable_varchar_cluster_zm
+SELECT result,
+       CASE WHEN result <= 20000 THEN NULL
+            ELSE LPAD(CAST(result - 20000 AS VARCHAR), 8, '0') END
+FROM generate_series(1, 50000) g;
+-- @separator:table
+SELECT mo_ctl('dn','flush', concat(database(), '.nullable_varchar_cluster_zm'));
+SELECT COUNT(*) FROM nullable_varchar_cluster_zm WHERE amount < '00020000';
+SELECT COUNT(*) FROM nullable_varchar_cluster_zm WHERE CONCAT(amount, '') < '00020000';
+SELECT COUNT(*) FROM nullable_varchar_cluster_zm WHERE amount <= '00020000';
+SELECT COUNT(*) FROM nullable_varchar_cluster_zm WHERE amount > '00020000';
+DROP TABLE nullable_varchar_cluster_zm;
