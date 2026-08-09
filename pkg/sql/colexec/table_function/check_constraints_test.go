@@ -40,7 +40,8 @@ func TestAppendEncodedCheckConstraintRowsDecodesSchemaExtra(t *testing.T) {
 		}},
 	})
 
-	require.NoError(t, appendEncodedCheckConstraintRows(&rows, "app", data))
+	_, err := appendEncodedCheckConstraintRows(&rows, "app", data)
+	require.NoError(t, err)
 	require.Equal(t, []checkConstraintRow{
 		{schema: "app", name: "amount_positive", clause: "`amount` > 0"},
 	}, rows)
@@ -48,7 +49,8 @@ func TestAppendEncodedCheckConstraintRowsDecodesSchemaExtra(t *testing.T) {
 
 func TestAppendEncodedCheckConstraintRowsRejectsMalformedMetadata(t *testing.T) {
 	rows := make([]checkConstraintRow, 0)
-	require.Error(t, appendEncodedCheckConstraintRows(&rows, "app", []byte{0xff}))
+	_, err := appendEncodedCheckConstraintRows(&rows, "app", []byte{0xff})
+	require.Error(t, err)
 	require.Empty(t, rows)
 }
 
@@ -192,6 +194,34 @@ func TestCollectCheckConstraintRowsFromResultRejectsMalformedMetadata(t *testing
 	})
 	require.Error(t, err)
 	require.Nil(t, rows)
+}
+
+func TestCollectCheckConstraintRowsFromLegacyCreateSQL(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+
+	// A pre-#26382 catalog row has no SchemaExtra.Checks field; its legacy
+	// CHECK definitions are still present in mo_tables.rel_createsql.
+	data := batch.NewWithSize(3)
+	data.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
+	data.Vecs[1] = vector.NewVec(types.T_varchar.ToType())
+	data.Vecs[2] = vector.NewVec(types.T_varchar.ToType())
+	createSQL := "CREATE TABLE legacy_checks (id int CHECK (id >= 0), CONSTRAINT named_id CHECK (id > 0), CHECK (id < 10))"
+	require.NoError(t, vector.AppendBytes(data.Vecs[0], []byte("legacy_db"), false, mp))
+	require.NoError(t, vector.AppendBytes(data.Vecs[1], api.MustMarshalTblExtra(&api.SchemaExtra{OldName: "legacy_checks"}), false, mp))
+	require.NoError(t, vector.AppendBytes(data.Vecs[2], []byte(createSQL), false, mp))
+	data.SetRowCount(1)
+
+	rows, err := collectCheckConstraintRowsFromResult(executor.Result{
+		Mp:      mp,
+		Batches: []*batch.Batch{data},
+	})
+	require.NoError(t, err)
+	require.Equal(t, []checkConstraintRow{
+		{schema: "legacy_db", name: "__mo_chk_1", clause: "`id` >= 0"},
+		{schema: "legacy_db", name: "__mo_chk_3", clause: "`id` < 10"},
+		{schema: "legacy_db", name: "named_id", clause: "`id` > 0"},
+	}, rows)
 }
 
 func TestCheckConstraintsPrepareAndStartSkipsNonZeroInputRows(t *testing.T) {

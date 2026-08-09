@@ -9,8 +9,9 @@ use check_constraints_metadata;
 
 create table check_values (
     id int primary key,
-    amount int,
-    constraint chk_amount_positive check (amount > 0)
+    amount int constraint chk_amount_nonnegative check (amount >= 0),
+    constraint chk_amount_positive check (amount > 0),
+    constraint chk_amount_limit check (amount < 100)
 );
 
 use information_schema;

@@ -15,6 +15,8 @@
 package table_function
 
 import (
+	"context"
+	"fmt"
 	"sort"
 	"strings"
 
@@ -23,6 +25,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -130,7 +135,8 @@ func appendCheckConstraintRow(
 }
 
 func collectCheckConstraintRows(proc *process.Process) ([]checkConstraintRow, error) {
-	catalogQuery := "SELECT tbl.reldatabase, tbl.extra_info " +
+	catalogQuery := "SELECT tbl.reldatabase, tbl.extra_info, " +
+		"tbl.rel_createsql, tbl.relkind " +
 		"FROM mo_catalog.mo_tables tbl " +
 		"WHERE tbl.account_id = current_account_id() AND " +
 		catalog.NonTemporaryTableSQLPredicate("tbl")
@@ -156,19 +162,36 @@ func collectCheckConstraintRowsFromResult(result executor.Result) ([]checkConstr
 		databaseNames := bat.Vecs[0]
 		extraInfos := bat.Vecs[1]
 		for row := 0; row < bat.RowCount(); row++ {
-			if databaseNames.IsNull(uint64(row)) || extraInfos.IsNull(uint64(row)) {
+			if databaseNames.IsNull(uint64(row)) {
 				continue
 			}
-			extraBytes := extraInfos.GetBytesAt(row)
-			if len(extraBytes) == 0 {
-				continue
+			schema := databaseNames.GetStringAt(row)
+			var extraBytes []byte
+			if !extraInfos.IsNull(uint64(row)) {
+				extraBytes = extraInfos.GetBytesAt(row)
 			}
-			if err := appendEncodedCheckConstraintRows(
-				&rows,
-				databaseNames.GetStringAt(row),
-				extraBytes,
-			); err != nil {
-				return nil, err
+			createSQL := ""
+			if len(bat.Vecs) > 2 && !bat.Vecs[2].IsNull(uint64(row)) {
+				createSQL = bat.Vecs[2].GetStringAt(row)
+			}
+			isExternal := len(bat.Vecs) > 3 &&
+				!bat.Vecs[3].IsNull(uint64(row)) &&
+				bat.Vecs[3].GetStringAt(row) == catalog.SystemExternalRel
+
+			structuredChecks := false
+			if len(extraBytes) != 0 {
+				var err error
+				structuredChecks, err = appendEncodedCheckConstraintRows(
+					&rows, schema, extraBytes,
+				)
+				if err != nil {
+					return nil, err
+				}
+			}
+			if !structuredChecks && createSQL != "" && !isExternal {
+				if err := appendLegacyCheckConstraintRows(&rows, schema, createSQL); err != nil {
+					return nil, err
+				}
 			}
 		}
 	}
@@ -185,13 +208,15 @@ func collectCheckConstraintRowsFromResult(result executor.Result) ([]checkConstr
 	return rows, nil
 }
 
-func appendEncodedCheckConstraintRows(rows *[]checkConstraintRow, schema string, data []byte) error {
+func appendEncodedCheckConstraintRows(rows *[]checkConstraintRow, schema string, data []byte) (bool, error) {
 	extra := &api.SchemaExtra{}
 	if err := extra.Unmarshal(data); err != nil {
-		return err
+		return false, err
 	}
-	appendCheckConstraintRows(rows, schema, extra.GetChecks())
-	return nil
+	checks := extra.GetChecks()
+	before := len(*rows)
+	appendCheckConstraintRows(rows, schema, checks)
+	return len(*rows) != before, nil
 }
 
 func appendCheckConstraintRows(rows *[]checkConstraintRow, schema string, checks []*planpb.CheckDef) {
@@ -205,4 +230,56 @@ func appendCheckConstraintRows(rows *[]checkConstraintRow, schema string, checks
 			clause: check.OriginSql,
 		})
 	}
+}
+
+// appendLegacyCheckConstraintRows mirrors the existing rel_createsql parser
+// path used by bindLegacyChecksForCreateLike: parse table-level and
+// column-level CHECK clauses, and synthesize the same names used for unnamed
+// checks by the DDL binder.
+func appendLegacyCheckConstraintRows(rows *[]checkConstraintRow, schema, createSQL string) error {
+	if !strings.Contains(strings.ToUpper(createSQL), "CHECK") {
+		return nil
+	}
+	stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, createSQL, 1)
+	if err != nil {
+		return err
+	}
+	defer stmt.Free()
+
+	createTable, ok := stmt.(*tree.CreateTable)
+	if !ok {
+		return nil
+	}
+	checkOrdinal := 0
+	appendCheck := func(name string, expr tree.Expr) {
+		checkOrdinal++
+		if name == "" {
+			name = fmt.Sprintf("__mo_chk_%d", checkOrdinal)
+		}
+		*rows = append(*rows, checkConstraintRow{
+			schema: schema,
+			name:   name,
+			clause: tree.StringWithOpts(
+				expr,
+				dialect.MYSQL,
+				tree.WithSingleQuoteString(),
+				tree.WithQuoteIdentifier(),
+				tree.WithModeIndependentStringLiterals(),
+			),
+		})
+	}
+
+	for _, def := range createTable.Defs {
+		switch typedDef := def.(type) {
+		case *tree.CheckIndex:
+			appendCheck(typedDef.ConstraintSymbol, typedDef.Expr)
+		case *tree.ColumnTableDef:
+			for _, attr := range typedDef.Attributes {
+				if check, ok := attr.(*tree.AttributeCheckConstraint); ok {
+					appendCheck(check.Name, check.Expr)
+				}
+			}
+		}
+	}
+	return nil
 }
