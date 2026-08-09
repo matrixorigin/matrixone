@@ -24,6 +24,9 @@ const ViewRefreshStatusLegacyScan = "LEGACY_SCAN"
 const LegacyViewScanCursorDatabase = "__mo_legacy_view_scan__"
 const LegacyViewScanCursorRelation = "__mo_legacy_view_scan_cursor__"
 
+const ViewMetadataLifecycleGateSQL = "select rel_id from mo_catalog.mo_tables " +
+	"where account_id=0 and reldatabase='mo_catalog' and relname='mo_view_refresh' for update"
+
 const MoViewDependenciesColumns = "account_id,target_database_id,target_relation_id," +
 	"target_logical_id,target_database_name,target_relation_name,dependency_ordinal,source_account_id," +
 	"source_database_id,source_relation_id,source_logical_id,source_database_name," +

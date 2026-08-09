@@ -407,6 +407,7 @@ func doComQueryInBack(
 		TimeZone:      backSes.GetTimeZone(),
 		StorageEngine: pu.StorageEngine,
 		Buf:           backSes.buf,
+		IsRestore:     backSes.GetRestore(),
 	}
 	proc.SetAffectedRows(backSes.lastAffectedRows)
 	bindBackExecSession(proc, backSes)

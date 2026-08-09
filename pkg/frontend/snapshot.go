@@ -682,6 +682,12 @@ func doRestoreSnapshot(ctx context.Context, ses *Session, stmt *tree.RestoreSnap
 	defer func() {
 		err = finishTxnAndRetireMongoDBAccounts(ctx, bh, ses.GetService(), retiredMongoDBAccountIDs, err)
 	}()
+	// Serialize catalog restore with View metadata recovery before either path
+	// locks a target View. The gate row belongs to a preserved catalog table, so
+	// it remains stable while relation identities are rebuilt.
+	if err = bh.Exec(ctx, catalog.ViewMetadataLifecycleGateSQL); err != nil {
+		return stats, err
+	}
 
 	// check snapshot
 	snapshot, err := getSnapshotByName(ctx, bh, snapshotName)

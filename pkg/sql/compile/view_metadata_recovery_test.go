@@ -24,6 +24,7 @@ import (
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/stretchr/testify/require"
 )
@@ -109,6 +110,17 @@ func TestSynchronousViewRefreshCountNeverExceedsBudget(t *testing.T) {
 	require.Zero(t, synchronousViewRefreshCount(1, 0))
 	require.Zero(t, synchronousViewRefreshCount(1, -1))
 	require.Equal(t, 3, synchronousViewRefreshCount(3, 32))
+}
+
+func TestViewMetadataLifecycleSkipsRestoreCatalogDDL(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	proc.GetSessionInfo().IsRestore = true
+	c := &Compile{proc: proc}
+	require.NoError(t, c.persistViewDependencies(nil, "db", nil))
+	require.NoError(t, c.refreshViewsAfterRelationMutation("db", "t", 0, 0))
+	require.NoError(t, c.enqueueViewsAfterRelationRemoval("db", "t", 0, 0, 0))
+	require.NoError(t, c.deleteDroppedViewMetadata(1))
+	require.NoError(t, c.deleteDroppedDatabaseViewMetadata(0, 1, "db"))
 }
 
 func TestViewDependencyMutationPredicateNeverTreatsUnknownIDAsIdentity(t *testing.T) {

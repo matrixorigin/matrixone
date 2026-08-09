@@ -961,6 +961,9 @@ func doRestorePitr(ctx context.Context, ses *Session, stmt *tree.RestorePitr) (s
 	defer func() {
 		err = finishTxnAndRetireMongoDBAccounts(ctx, bh, ses.GetService(), retiredMongoDBAccountIDs, err)
 	}()
+	if err = bh.Exec(ctx, catalog.ViewMetadataLifecycleGateSQL); err != nil {
+		return stats, err
+	}
 
 	// check if the pitr exists
 	tenantInfo := ses.GetTenantInfo()

@@ -75,6 +75,9 @@ func (c *Compile) persistViewDependencies(
 	databaseName string,
 	viewDef *planpb.TableDef,
 ) error {
+	if c.proc.GetSessionInfo().IsRestore {
+		return nil
+	}
 	if !clusterservice.AllKnownCNsSupportViewMetadataRefresh(c.proc.GetService()) {
 		return nil
 	}
@@ -219,6 +222,9 @@ func (c *Compile) refreshViewsAfterRelationMutation(
 	oldRelationID uint64,
 	oldLogicalID uint64,
 ) error {
+	if c.proc.GetSessionInfo().IsRestore {
+		return nil
+	}
 	if !clusterservice.AllKnownCNsSupportViewMetadataRefresh(c.proc.GetService()) {
 		return nil
 	}
@@ -365,6 +371,9 @@ func (c *Compile) enqueueViewsAfterRelationRemoval(
 	relationID uint64,
 	logicalID uint64,
 ) error {
+	if c.proc.GetSessionInfo().IsRestore {
+		return nil
+	}
 	if needSkipDbs[databaseName] {
 		return nil
 	}
@@ -383,6 +392,9 @@ func (c *Compile) enqueueViewsAfterRelationRemoval(
 }
 
 func (c *Compile) deleteDroppedViewMetadata(relationID uint64) error {
+	if c.proc.GetSessionInfo().IsRestore {
+		return nil
+	}
 	accountID, err := defines.GetAccountId(c.proc.Ctx)
 	if err != nil {
 		return err
@@ -402,6 +414,9 @@ func (c *Compile) deleteDroppedDatabaseViewMetadata(
 	databaseID uint64,
 	databaseName string,
 ) error {
+	if c.proc.GetSessionInfo().IsRestore {
+		return nil
+	}
 	for _, tableName := range []string{catalog.MO_VIEW_DEPENDENCIES, catalog.MO_VIEW_REFRESH} {
 		if err := c.runSqlWithSystemTenant(fmt.Sprintf(
 			"delete from %s.%s where account_id=%d and "+

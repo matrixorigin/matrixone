@@ -130,6 +130,9 @@ func recoverViewMetadataCommand(proc *process.Process, parameter string) (int, e
 	if !clusterservice.AllKnownCNsSupportViewMetadataRefresh(proc.GetService()) {
 		return 0, nil
 	}
+	if err := lockViewMetadataLifecycleGate(proc); err != nil {
+		return 0, err
+	}
 	var command viewMetadataRecoveryCommand
 	if err := json.Unmarshal([]byte(parameter), &command); err != nil {
 		// Preserve compatibility with manually issued control calls.
@@ -139,6 +142,23 @@ func recoverViewMetadataCommand(proc *process.Process, parameter string) (int, e
 		return discoverLegacyViewMetadata(proc)
 	}
 	return recoverOnePendingViewMetadata(proc, command.WorkerID)
+}
+
+func lockViewMetadataLifecycleGate(proc *process.Process) error {
+	v, ok := moruntime.ServiceRuntime(proc.GetService()).GetGlobalVariables(moruntime.InternalSQLExecutor)
+	if !ok {
+		return moerr.NewInternalError(proc.Ctx, "internal SQL executor is unavailable")
+	}
+	result, err := v.(executor.SQLExecutor).Exec(proc.Ctx, catalog.ViewMetadataLifecycleGateSQL,
+		executor.Options{}.
+			WithDisableIncrStatement().
+			WithTxn(proc.GetTxnOperator()).
+			WithAccountID(catalog.System_Account))
+	if err != nil {
+		return err
+	}
+	result.Close()
+	return nil
 }
 
 func discoverLegacyViewMetadata(proc *process.Process) (int, error) {
