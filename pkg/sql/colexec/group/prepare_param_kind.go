@@ -205,8 +205,11 @@ func readPrepareParamKindTrailer(
 				return nil, nil, moerr.NewInternalErrorf(ctx,
 					"invalid aggregate prepared parameter row count %d", rowCount)
 			}
-			if i < int32(len(expectedRows)) && expectedRows[i] >= 0 &&
-				rowCount != int32(expectedRows[i]) {
+			if i >= int32(len(expectedRows)) || expectedRows[i] < 0 {
+				return nil, nil, moerr.NewInternalErrorf(ctx,
+					"aggregate %d does not expose a prepared parameter row count", i)
+			}
+			if rowCount != int32(expectedRows[i]) {
 				return nil, nil, moerr.NewInternalErrorf(ctx,
 					"aggregate prepared parameter row count %d does not match %d",
 					rowCount, expectedRows[i])

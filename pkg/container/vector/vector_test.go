@@ -4441,7 +4441,7 @@ func TestConstSetFunctionCopiesSelectedPrepareParamKind(t *testing.T) {
 	require.Zero(t, mp.CurrNB())
 }
 
-func TestPrepareParamKindCheckpointRollbackReaccountsSidecar(t *testing.T) {
+func TestPrepareParamKindCheckpointRollbackRetainsSidecarOwnership(t *testing.T) {
 	mp := mpool.MustNewZero()
 	vec := NewVec(types.T_text.ToType())
 	require.NoError(t, AppendBytes(vec, []byte("5"), false, mp))
@@ -4453,13 +4453,32 @@ func TestPrepareParamKindCheckpointRollbackReaccountsSidecar(t *testing.T) {
 	ordinary := NewVec(types.T_text.ToType())
 	require.NoError(t, AppendBytes(ordinary, []byte("later"), false, mp))
 	require.NoError(t, vec.UnionOne(ordinary, 0, mp))
+	afterAppend := mp.CurrNB()
 	vec.RollbackAppend(checkpoint, 1)
 	require.Equal(t, PrepareParamInteger, vec.GetPrepareParamKindAt(0))
 	require.Equal(t, PrepareParamNone, vec.GetPrepareParamKindAt(1))
-	require.Equal(t, before, mp.CurrNB())
+	require.GreaterOrEqual(t, afterAppend, before)
+	require.Equal(t, afterAppend, mp.CurrNB(),
+		"rollback should retain admitted sidecar capacity for reuse")
 	ordinary.Free(mp)
 	vec.Free(mp)
 	require.Equal(t, int64(0), mp.CurrNB())
+}
+
+func TestPrepareParamKindCheckpointDoesNotCopySidecar(t *testing.T) {
+	mp := mpool.MustNewZero()
+	vec := NewVec(types.T_text.ToType())
+	require.NoError(t, AppendBytesList(
+		vec, [][]byte{[]byte("5"), []byte("text")}, nil, mp))
+	require.NoError(t, vec.SetPrepareParamKindsWithMP(
+		[]PrepareParamKind{PrepareParamInteger, PrepareParamNone}, mp))
+
+	require.Zero(t, testing.AllocsPerRun(100, func() {
+		_ = vec.MakeAppendCheckpoint()
+	}))
+
+	vec.Free(mp)
+	require.Zero(t, mp.CurrNB())
 }
 
 func TestPrepareParamKindMetadataBoundaryLifecycle(t *testing.T) {

@@ -188,6 +188,17 @@ func TestPrepareParamKindTrailerRejectsBufferedSpillAmplification(t *testing.T) 
 	require.ErrorContains(t, err, "row count 16777216 does not match 1")
 }
 
+func TestPrepareParamKindTrailerRejectsRowsWithoutStateBound(t *testing.T) {
+	states := aggexec.PrepareParamKindStates{}
+	states.Reset([]aggexec.AggFuncExecExpression{
+		aggexec.MakeAggFunctionExpression(aggexec.AggIdOfMin, false, nil, nil),
+	})
+	payload := prepareParamKindRowsTrailerForTest(1<<24, nil)
+	_, _, err := readPrepareParamKindTrailer(
+		context.Background(), bufio.NewReader(bytes.NewReader(payload)), 1, &states, []int{-1})
+	require.ErrorContains(t, err, "does not expose a prepared parameter row count")
+}
+
 func TestPrepareParamKindStateCodec(t *testing.T) {
 	tests := []struct {
 		name    string

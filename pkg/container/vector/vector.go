@@ -268,7 +268,7 @@ type AppendCheckpoint struct {
 	sorted               bool
 	prepareParamKind     PrepareParamKind
 	prepareParamKindSeen bool
-	prepareParamKinds    []PrepareParamKind
+	hadPrepareParamKinds bool
 }
 
 func (v *Vector) MakeAppendCheckpoint() AppendCheckpoint {
@@ -278,7 +278,7 @@ func (v *Vector) MakeAppendCheckpoint() AppendCheckpoint {
 		sorted:               v.sorted,
 		prepareParamKind:     v.prepareParamKind,
 		prepareParamKindSeen: v.prepareParamKindSeen,
-		prepareParamKinds:    slices.Clone(v.prepareParamKinds),
+		hadPrepareParamKinds: v.prepareParamKinds != nil,
 	}
 }
 
@@ -297,22 +297,17 @@ func (v *Vector) RollbackAppend(checkpoint AppendCheckpoint, attemptedRows int) 
 	v.length = checkpoint.length
 	v.area = v.area[:checkpoint.areaLength]
 	v.sorted = checkpoint.sorted
+	if checkpoint.hadPrepareParamKinds {
+		if len(v.prepareParamKinds) < checkpoint.length {
+			panic("prepared parameter sidecar lost during append rollback")
+		}
+		clear(v.prepareParamKinds[checkpoint.length:])
+		v.prepareParamKinds = v.prepareParamKinds[:checkpoint.length]
+	} else {
+		v.releasePrepareParamKinds()
+	}
 	v.prepareParamKind = checkpoint.prepareParamKind
 	v.prepareParamKindSeen = checkpoint.prepareParamKindSeen
-	owner := v.prepareParamKindsMP
-	v.releasePrepareParamKinds()
-	if checkpoint.prepareParamKinds != nil {
-		// The checkpoint owns a temporary Go-heap snapshot. Re-materialize the
-		// live sidecar through the vector's owner before publishing it; assigning
-		// the snapshot directly would later ask the MPool to free foreign memory.
-		kinds, owner, err := v.allocatePrepareParamKinds(len(checkpoint.prepareParamKinds), owner)
-		if err != nil {
-			panic(err)
-		}
-		copy(kinds, checkpoint.prepareParamKinds)
-		v.prepareParamKinds = kinds
-		v.prepareParamKindsMP = owner
-	}
 }
 
 // Size of data, I think this function is inherently broken.  This
@@ -985,8 +980,16 @@ func (v *Vector) prepareParamKindAppendStart(oldLength int) {
 	if !v.nsp.EmptyByFlag() && v.nsp.Count() >= limit &&
 		v.nsp.GetBitmap().CountRange(0, uint64(limit)) == limit {
 		// Scalar metadata attached to an all-NULL prefix has no value owner.
-		// Drop it before the first appended value establishes the lineage.
-		v.resetPrepareParamKind()
+		// Drop it before the first appended value establishes the lineage. A
+		// preflighted sidecar is already sized for the pending append, so retain
+		// its storage and let row propagation populate the new range without a
+		// post-publication allocation.
+		if v.prepareParamKinds == nil {
+			v.resetPrepareParamKind()
+		} else {
+			v.prepareParamKind = PrepareParamNone
+			v.prepareParamKindSeen = false
+		}
 		return
 	}
 	if !v.prepareParamKindSeen {
@@ -1105,6 +1108,308 @@ func (v *Vector) normalizePrepareParamKinds() {
 	v.prepareParamKind = first
 	v.prepareParamKindSeen = true
 	v.releasePrepareParamKinds()
+}
+
+type prepareParamKindAppendSummary struct {
+	kind  PrepareParamKind
+	seen  bool
+	mixed bool
+}
+
+func (s *prepareParamKindAppendSummary) observe(kind PrepareParamKind) {
+	if !s.seen {
+		s.kind = kind
+		s.seen = true
+		return
+	}
+	if s.kind != kind {
+		s.mixed = true
+	}
+}
+
+func summarizePrepareParamKindAll(w *Vector) prepareParamKindAppendSummary {
+	var summary prepareParamKindAppendSummary
+	if w == nil || w.length == 0 || w.IsConstNull() {
+		return summary
+	}
+	if w.prepareParamKinds == nil {
+		if prepareParamRangeHasValue(w, 0, w.length, nil) {
+			summary.observe(w.prepareParamKind)
+		}
+		return summary
+	}
+	for row := 0; row < w.length; row++ {
+		if w.IsNull(uint64(row)) {
+			continue
+		}
+		summary.observe(w.GetPrepareParamKindAt(row))
+		if summary.mixed {
+			break
+		}
+	}
+	return summary
+}
+
+func summarizePrepareParamKindOne(w *Vector, sel int64) prepareParamKindAppendSummary {
+	var summary prepareParamKindAppendSummary
+	if w == nil || w.IsConstNull() || (!w.IsConst() && w.IsNull(uint64(sel))) {
+		return summary
+	}
+	if w.IsConst() {
+		sel = 0
+	}
+	summary.observe(w.GetPrepareParamKindAt(int(sel)))
+	return summary
+}
+
+func summarizePrepareParamKindSelection[T int32 | int64](
+	w *Vector,
+	sels []T,
+) prepareParamKindAppendSummary {
+	var summary prepareParamKindAppendSummary
+	if w == nil || len(sels) == 0 || w.IsConstNull() {
+		return summary
+	}
+	if w.prepareParamKinds == nil {
+		if w.IsConst() || w.GetNulls().EmptyByFlag() {
+			summary.observe(w.prepareParamKind)
+			return summary
+		}
+		for _, sel := range sels {
+			if !w.IsNull(uint64(sel)) {
+				summary.observe(w.prepareParamKind)
+				break
+			}
+		}
+		return summary
+	}
+	for _, sel := range sels {
+		row := int64(sel)
+		if w.IsNull(uint64(row)) {
+			continue
+		}
+		summary.observe(w.GetPrepareParamKindAt(int(row)))
+		if summary.mixed {
+			break
+		}
+	}
+	return summary
+}
+
+func summarizePrepareParamKindBatch(
+	w *Vector,
+	offset int64,
+	cnt int,
+	flags []uint8,
+) prepareParamKindAppendSummary {
+	var summary prepareParamKindAppendSummary
+	if w == nil || cnt <= 0 || w.IsConstNull() {
+		return summary
+	}
+	if w.prepareParamKinds == nil {
+		if prepareParamRangeHasValue(w, int(offset), cnt, flags) {
+			summary.observe(w.prepareParamKind)
+		}
+		return summary
+	}
+	if flags == nil {
+		for i := 0; i < cnt; i++ {
+			row := int(offset) + i
+			if w.IsNull(uint64(row)) {
+				continue
+			}
+			summary.observe(w.GetPrepareParamKindAt(row))
+			if summary.mixed {
+				break
+			}
+		}
+		return summary
+	}
+	for i, selected := range flags {
+		if selected == 0 {
+			continue
+		}
+		row := int(offset) + i
+		if w.IsNull(uint64(row)) {
+			continue
+		}
+		summary.observe(w.GetPrepareParamKindAt(row))
+		if summary.mixed {
+			break
+		}
+	}
+	return summary
+}
+
+// preflightPrepareParamKindAppend ensures that provenance propagation cannot
+// allocate after an append publishes payload or logical length. Representation
+// changes made here preserve every existing row's category; capacity growth is
+// intentionally retained after a later payload allocation failure, like data
+// and bitmap pre-extension.
+func (v *Vector) preflightPrepareParamKindAppend(
+	finalLength int,
+	summary prepareParamKindAppendSummary,
+	mp *mpool.MPool,
+) error {
+	if finalLength < v.length {
+		return moerr.NewInternalErrorNoCtxf(
+			"invalid prepared parameter append length %d below %d", finalLength, v.length)
+	}
+	if v.prepareParamKinds != nil {
+		return v.preExtendPrepareParamKinds(finalLength, mp)
+	}
+	if !summary.seen {
+		return nil
+	}
+
+	destinationHasValue := v.length > 0 && !v.AllNull()
+	destinationKind := v.prepareParamKind
+	if !v.prepareParamKindSeen {
+		destinationKind = PrepareParamNone
+	}
+	if !destinationHasValue {
+		// Empty/all-NULL rows do not own source semantics. Discard a stale
+		// scalar before the first appended value establishes the new lineage.
+		v.prepareParamKind = PrepareParamNone
+		v.prepareParamKindSeen = false
+		if !summary.mixed {
+			return nil
+		}
+	} else if !summary.mixed && destinationKind == summary.kind {
+		return nil
+	}
+
+	kinds, owner, err := v.allocatePrepareParamKinds(finalLength, mp)
+	if err != nil {
+		return err
+	}
+	clear(kinds)
+	if destinationHasValue {
+		for row := 0; row < v.length; row++ {
+			kinds[row] = destinationKind
+		}
+	}
+	v.releasePrepareParamKinds()
+	v.prepareParamKind = PrepareParamNone
+	v.prepareParamKindSeen = destinationHasValue
+	v.prepareParamKinds = kinds[:v.length]
+	v.prepareParamKindsMP = owner
+	return nil
+}
+
+// preflightPrepareParamKindCopy materializes an exact representation before
+// Copy overwrites a visible row. The later metadata merge is then a bounded
+// row assignment and cannot report an allocation failure after payload data
+// has already changed.
+func (v *Vector) preflightPrepareParamKindCopy(
+	row int,
+	kind PrepareParamKind,
+	destinationHasValue bool,
+	mp *mpool.MPool,
+) error {
+	if v.prepareParamKinds != nil {
+		return nil
+	}
+	if !v.prepareParamKindSeen && kind == PrepareParamNone {
+		return nil
+	}
+	if !destinationHasValue && !v.hasPrepareParamValueExcept(row) {
+		return nil
+	}
+	if v.prepareParamKindSeen && v.prepareParamKind == kind {
+		return nil
+	}
+
+	destinationKind := v.prepareParamKind
+	if !v.prepareParamKindSeen {
+		destinationKind = PrepareParamNone
+	}
+	kinds, owner, err := v.allocatePrepareParamKinds(v.length, mp)
+	if err != nil {
+		return err
+	}
+	if destinationKind == PrepareParamNone {
+		clear(kinds)
+	} else {
+		for i := range kinds {
+			kinds[i] = destinationKind
+		}
+	}
+	v.prepareParamKind = PrepareParamNone
+	v.prepareParamKindSeen = true
+	v.prepareParamKinds = kinds
+	v.prepareParamKindsMP = owner
+	return nil
+}
+
+// PreflightUnionOnePrepareParamKinds reserves all provenance state that a
+// subsequent UnionOne can require. Batch uses it for every column before any
+// column publishes a row.
+func (v *Vector) PreflightUnionOnePrepareParamKinds(
+	w *Vector,
+	sel int64,
+	mp *mpool.MPool,
+) error {
+	return v.preflightPrepareParamKindAppend(
+		v.length+1,
+		summarizePrepareParamKindOne(w, sel),
+		mp,
+	)
+}
+
+// PreflightUnionPrepareParamKinds is the batch-level preflight for Union.
+func (v *Vector) PreflightUnionPrepareParamKinds(
+	w *Vector,
+	sels []int64,
+	mp *mpool.MPool,
+) error {
+	return v.preflightPrepareParamKindAppend(
+		v.length+len(sels),
+		summarizePrepareParamKindSelection(w, sels),
+		mp,
+	)
+}
+
+// PreflightUnionBatchPrepareParamKinds is the batch-level preflight for
+// UnionBatch and whole-vector append paths.
+func (v *Vector) PreflightUnionBatchPrepareParamKinds(
+	w *Vector,
+	offset int64,
+	cnt int,
+	flags []uint8,
+	mp *mpool.MPool,
+) error {
+	addCnt := cnt
+	if flags != nil {
+		addCnt = 0
+		for _, selected := range flags {
+			addCnt += int(selected)
+		}
+	}
+	finalLength := v.length + addCnt
+	if finalLength < v.length {
+		return moerr.NewInternalErrorNoCtxf(
+			"invalid prepared parameter append length %d below %d", finalLength, v.length)
+	}
+	if v.prepareParamKinds != nil {
+		return v.preExtendPrepareParamKinds(finalLength, mp)
+	}
+	// A fresh destination can adopt a uniform source directly during the
+	// propagation pass. Keep this common reset-and-UnionBatch path O(1) without
+	// constructing and re-checking a summary; heterogeneous sources still need
+	// the exact preflight below.
+	if v.length == 0 && w != nil && w.prepareParamKinds == nil {
+		if prepareParamRangeHasValue(w, int(offset), cnt, flags) {
+			v.prepareParamKind = PrepareParamNone
+			v.prepareParamKindSeen = false
+		}
+		return nil
+	}
+	return v.preflightPrepareParamKindAppend(
+		finalLength,
+		summarizePrepareParamKindBatch(w, offset, cnt, flags),
+		mp,
+	)
 }
 
 func (v *Vector) propagatePrepareParamKindsAll(w *Vector, oldLength int, mp *mpool.MPool) error {
@@ -3305,8 +3610,23 @@ func (v *Vector) Copy(w *Vector, vi, wi int64, mp *mpool.MPool) error {
 	disjoint := v.areaDisjoint
 	destinationHasValue := vi >= 0 && vi < int64(v.length) && !v.IsNull(uint64(vi))
 	sourceGrouping := w.GetGrouping().Contains(uint64(wi))
+	sourceNull := w.IsConstNull() ||
+		(!w.IsConst() && w.GetNulls().Contains(uint64(wi)))
+	sourceHasValue := w.length > 0 && !sourceNull
+	if sourceHasValue {
+		kind := w.GetPrepareParamKindAt(int(wi))
+		if err := v.preflightPrepareParamKindCopy(
+			int(vi), kind, destinationHasValue, mp); err != nil {
+			return err
+		}
+	}
 	if sourceGrouping && v.allocationAccount != nil {
 		if err := v.ensureGroupingCapacity(int(vi)+1, mp); err != nil {
+			return err
+		}
+	}
+	if sourceNull && v.allocationAccount != nil {
+		if err := v.ensureNullCapacity(int(vi)+1, mp); err != nil {
 			return err
 		}
 	}
@@ -3314,14 +3634,6 @@ func (v *Vector) Copy(w *Vector, vi, wi int64, mp *mpool.MPool) error {
 		v.GetGrouping().Set(uint64(vi))
 	} else {
 		v.GetGrouping().Unset(uint64(vi))
-	}
-	sourceNull := w.IsConstNull() ||
-		(!w.IsConst() && w.GetNulls().Contains(uint64(wi)))
-	sourceHasValue := w.length > 0 && !sourceNull
-	if sourceNull && v.allocationAccount != nil {
-		if err := v.ensureNullCapacity(int(vi)+1, mp); err != nil {
-			return err
-		}
 	}
 	if w.class == CONSTANT {
 		if w.IsConstNull() {
@@ -3391,7 +3703,36 @@ func (v *Vector) Copy(w *Vector, vi, wi int64, mp *mpool.MPool) error {
 func GetUnionAllFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) error {
 	union := getUnionAllFunction(typ, mp)
 	return func(v, w *Vector) error {
+		if w.IsConst() {
+			// The raw const append helpers classify their input as ordinary data.
+			// UnionMulti copies a source value instead and therefore preserves its
+			// provenance without a second, post-publication sidecar transition.
+			// Preserve the const vector's logical grouping bitmap separately:
+			// UnionMulti broadcasts one physical row, while grouping can differ
+			// across the const vector's logical rows.
+			oldLength := v.length
+			if w.gsp.Any() {
+				if err := v.ensureGroupingCapacity(oldLength+w.length, mp); err != nil {
+					return err
+				}
+			}
+			if err := v.UnionMulti(w, 0, w.length, mp); err != nil {
+				return err
+			}
+			if w.gsp.Any() {
+				nulls.RemoveRange(&v.gsp, uint64(oldLength), uint64(oldLength+w.length))
+				unionVectorBitmap(&v.gsp, &w.gsp, oldLength, w.length)
+			}
+			return nil
+		}
 		oldLength := v.length
+		if err := v.preflightPrepareParamKindAppend(
+			oldLength+w.length,
+			summarizePrepareParamKindAll(w),
+			mp,
+		); err != nil {
+			return err
+		}
 		if w.gsp.Any() {
 			if err := v.ensureGroupingCapacity(oldLength+w.length, mp); err != nil {
 				return err
@@ -4620,6 +4961,9 @@ func (v *Vector) UnionOne(w *Vector, sel int64, mp *mpool.MPool) error {
 	sourceGrouping := nulls.Contains(&w.gsp, uint64(sel))
 	sourceNull := w.IsConstNull() ||
 		(!w.IsConst() && nulls.Contains(&w.nsp, uint64(sel)))
+	if err := v.PreflightUnionOnePrepareParamKinds(w, sel, mp); err != nil {
+		return err
+	}
 	if err := extendWithBitmaps(
 		v,
 		1,
@@ -4708,6 +5052,13 @@ func (v *Vector) UnionMulti(w *Vector, sel int64, cnt int, mp *mpool.MPool) erro
 	}
 	if cnt == 0 {
 		return nil
+	}
+	if err := v.preflightPrepareParamKindAppend(
+		v.length+cnt,
+		summarizePrepareParamKindOne(w, sel),
+		mp,
+	); err != nil {
+		return err
 	}
 
 	sourceGrouping := nulls.Contains(&w.gsp, uint64(sel))
@@ -4814,6 +5165,13 @@ func unionT[T int32 | int64](v, w *Vector, sels []T, mp *mpool.MPool) error {
 	}
 	if len(sels) == 0 {
 		return nil
+	}
+	if err := v.preflightPrepareParamKindAppend(
+		v.length+len(sels),
+		summarizePrepareParamKindSelection(w, sels),
+		mp,
+	); err != nil {
+		return err
 	}
 
 	if err := extendWithBitmaps(
@@ -4968,6 +5326,9 @@ func (v *Vector) UnionBatch(w *Vector, offset int64, cnt int, flags []uint8, mp 
 		return nil
 	}
 	oldLen := v.length
+	if err := v.PreflightUnionBatchPrepareParamKinds(w, offset, cnt, flags, mp); err != nil {
+		return err
+	}
 
 	if err := extendWithBitmaps(
 		v,

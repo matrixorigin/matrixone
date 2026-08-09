@@ -1519,6 +1519,135 @@ func TestUnionAllPreservesConstGrouping(t *testing.T) {
 	}
 }
 
+func TestPrepareParamKindUnionAllocationFailureDoesNotPublishRows(t *testing.T) {
+	tests := []struct {
+		name string
+		run  func(destination, source *Vector, mp *mpool.MPool) error
+	}{
+		{
+			name: "union-one",
+			run: func(destination, source *Vector, mp *mpool.MPool) error {
+				return destination.UnionOne(source, 0, mp)
+			},
+		},
+		{
+			name: "union-multi",
+			run: func(destination, source *Vector, mp *mpool.MPool) error {
+				return destination.UnionMulti(source, 0, 2, mp)
+			},
+		},
+		{
+			name: "union-int64",
+			run: func(destination, source *Vector, mp *mpool.MPool) error {
+				return destination.Union(source, []int64{0, 1}, mp)
+			},
+		},
+		{
+			name: "union-int32",
+			run: func(destination, source *Vector, mp *mpool.MPool) error {
+				return destination.UnionInt32(source, []int32{0, 1}, mp)
+			},
+		},
+		{
+			name: "union-batch",
+			run: func(destination, source *Vector, mp *mpool.MPool) error {
+				return destination.UnionBatch(source, 0, 2, nil, mp)
+			},
+		},
+		{
+			name: "union-batch-flags",
+			run: func(destination, source *Vector, mp *mpool.MPool) error {
+				return destination.UnionBatch(source, 0, 2, []uint8{0, 1}, mp)
+			},
+		},
+		{
+			name: "union-all",
+			run: func(destination, source *Vector, mp *mpool.MPool) error {
+				return GetUnionAllFunction(types.T_varchar.ToType(), mp)(destination, source)
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			state := newTestVectorAllocationAccount(t, 1<<20, 1)
+			mp := mpool.MustNewZero()
+			destination := newAccountedTestVector(
+				t, types.T_varchar.ToType(), state.selection)
+			require.NoError(t, destination.PreExtend(4, mp))
+			require.NoError(t, AppendBytes(destination, []byte("6"), false, mp))
+
+			source := NewOffHeapVecWithType(types.T_varchar.ToType())
+			require.NoError(t, AppendBytesList(
+				source, [][]byte{[]byte("5"), []byte("5")}, nil, mp))
+			source.SetPrepareParamKind(PrepareParamFloat)
+
+			before := state.account.Snapshot().Used
+			err := test.run(destination, source, mp)
+			require.ErrorIs(t, err, mpool.ErrAllocationMetadataSlots)
+			require.Equal(t, 1, destination.Length())
+			require.Equal(t, []byte("6"), destination.GetBytesAt(0))
+			require.Nil(t, destination.GetPrepareParamKinds())
+			require.Equal(t, PrepareParamNone, destination.GetPrepareParamKindAt(0))
+			require.Equal(t, before, state.account.Snapshot().Used)
+
+			source.Free(mp)
+			destination.Free(mp)
+			finalizeTestVectorAllocationAccount(t, state)
+			require.Zero(t, mp.CurrNB())
+		})
+	}
+}
+
+func TestPrepareParamKindUnionAllConstAllocationFailureDoesNotPublishRows(t *testing.T) {
+	state := newTestVectorAllocationAccount(t, 1<<20, 1)
+	mp := mpool.MustNewZero()
+	destination := newAccountedTestVector(t, types.T_varchar.ToType(), state.selection)
+	require.NoError(t, destination.PreExtend(4, mp))
+	require.NoError(t, AppendBytes(destination, []byte("6"), false, mp))
+	source, err := NewConstBytes(types.T_varchar.ToType(), []byte("5"), 2, mp)
+	require.NoError(t, err)
+	source.SetPrepareParamKind(PrepareParamFloat)
+
+	before := state.account.Snapshot().Used
+	err = GetUnionAllFunction(types.T_varchar.ToType(), mp)(destination, source)
+	require.ErrorIs(t, err, mpool.ErrAllocationMetadataSlots)
+	require.Equal(t, 1, destination.Length())
+	require.Equal(t, []byte("6"), destination.GetBytesAt(0))
+	require.Nil(t, destination.GetPrepareParamKinds())
+	require.Equal(t, before, state.account.Snapshot().Used)
+
+	source.Free(mp)
+	destination.Free(mp)
+	finalizeTestVectorAllocationAccount(t, state)
+	require.Zero(t, mp.CurrNB())
+}
+
+func TestPrepareParamKindCopyAllocationFailureDoesNotOverwriteRow(t *testing.T) {
+	state := newTestVectorAllocationAccount(t, 1<<20, 1)
+	mp := mpool.MustNewZero()
+	destination := newAccountedTestVector(t, types.T_int64.ToType(), state.selection)
+	require.NoError(t, destination.PreExtend(2, mp))
+	require.NoError(t, AppendFixedList(destination, []int64{6, 7}, nil, mp))
+	source := NewOffHeapVecWithType(types.T_int64.ToType())
+	require.NoError(t, AppendFixed(source, int64(5), false, mp))
+	source.SetPrepareParamKind(PrepareParamFloat)
+
+	before := state.account.Snapshot().Used
+	err := destination.Copy(source, 1, 0, mp)
+	require.ErrorIs(t, err, mpool.ErrAllocationMetadataSlots)
+	require.Equal(t, []int64{6, 7}, MustFixedColWithTypeCheck[int64](destination))
+	require.Nil(t, destination.GetPrepareParamKinds())
+	require.Equal(t, PrepareParamNone, destination.GetPrepareParamKindAt(0))
+	require.Equal(t, PrepareParamNone, destination.GetPrepareParamKindAt(1))
+	require.Equal(t, before, state.account.Snapshot().Used)
+
+	source.Free(mp)
+	destination.Free(mp)
+	finalizeTestVectorAllocationAccount(t, state)
+	require.Zero(t, mp.CurrNB())
+}
+
 func TestUnmarshalBinaryRejectsOwnedDestinationWithoutLosingBacking(t *testing.T) {
 	mp := mpool.MustNewZero()
 	source := NewOffHeapVecWithType(types.T_varchar.ToType())
