@@ -271,6 +271,9 @@ func buildColumnAndConstraint(
 			for j, partCol := range indexInfo.Parts {
 				partCol = catalog.ResolveAlias(partCol)
 				if partCol == oldCol.Name {
+					if _, err := renameIndexPrefixLengthMetadata(indexInfo, oldCol.Name, newColName); err != nil {
+						return nil, err
+					}
 					indexInfo.Parts[j] = newColName
 				}
 			}

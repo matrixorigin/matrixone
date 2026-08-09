@@ -68,4 +68,52 @@ select id, headline, b, payload
 from t ignore index(idx_ab) where headline = 'abce-two' and b = 'xz-two';
 ➤ id[4,32,0]  ¦  headline[12,32,0]  ¦  b[12,32,0]  ¦  payload[12,32,0]  𝄀
 3  ¦  abce-two  ¦  xz-two  ¦  p3
+create table change_t (
+id int primary key,
+a varchar(32),
+unique key uq_a(a(4))
+);
+insert into change_t values (1, 'wxyz-one');
+alter table change_t change column a headline varchar(32);
+show create table change_t;
+➤ Table[12,8,0]  ¦  Create Table[12,145,0]  𝄀
+change_t  ¦  CREATE TABLE `change_t` (
+  `id` int NOT NULL,
+  `headline` varchar(32) DEFAULT NULL,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uq_a` (`headline`(4))
+)
+select name, column_name, algo_params
+from mo_catalog.mo_indexes
+where table_id = (
+select rel_id from mo_catalog.mo_tables
+where reldatabase = 'rename_prefix_index' and relname = 'change_t'
+) and name = 'uq_a' and column_name = 'headline'
+order by name, column_name;
+➤ name[12,64,0]  ¦  column_name[12,256,0]  ¦  algo_params[12,2048,0]  𝄀
+uq_a  ¦  headline  ¦  {"prefix_lengths":"headline:4"}
+insert into change_t values (2, 'wxyz-two');
+Duplicate entry 'wxyz' for key 'headline'
+insert into change_t values (3, 'wxya-three');
+select id, headline from change_t order by id;
+➤ id[4,32,0]  ¦  headline[12,32,0]  𝄀
+1  ¦  wxyz-one  𝄀
+3  ¦  wxya-three
+select mo_ctl('dn', 'flush', 'rename_prefix_index.change_t');
+➤ mo_ctl(dn, flush, rename_prefix_index.change_t)[12,65535,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
+select id, headline from change_t force index(uq_a) where headline = 'wxyz-one';
+➤ id[4,32,0]  ¦  headline[12,32,0]  𝄀
+1  ¦  wxyz-one
+select id, headline from change_t ignore index(uq_a) where headline = 'wxyz-one';
+➤ id[4,32,0]  ¦  headline[12,32,0]  𝄀
+1  ¦  wxyz-one
 drop database rename_prefix_index;

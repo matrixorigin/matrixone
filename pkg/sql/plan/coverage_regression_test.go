@@ -175,6 +175,43 @@ func TestChangeColumnRenamesClusterByAndTracksIvfIncludeMetadata(t *testing.T) {
 	require.NotContains(t, copyTable.Indexes[0].IndexAlgoParams, "include_columns")
 }
 
+func TestChangeColumnRenamesPrefixLengthMetadata(t *testing.T) {
+	prefixParams, err := catalog.IndexParamsMapToJsonString(map[string]string{
+		catalog.IndexAlgoParamPrefixLengths: "title:4",
+	})
+	require.NoError(t, err)
+
+	mock := NewMockOptimizer(false)
+	origin := makeAlterCoverageTableDef()
+	origin.Indexes = append(origin.Indexes, &planpb.IndexDef{
+		IndexName:       "uq_title",
+		IndexAlgo:       catalog.MoIndexDefaultAlgo.ToString(),
+		IndexAlgoParams: prefixParams,
+		Parts:           []string{"title"},
+		Unique:          true,
+	})
+	copyTable := DeepCopyTableDef(origin, true)
+	alterCtx := initAlterTableContext(origin, copyTable, origin.DbName)
+	alterPlan := &planpb.AlterTable{
+		Database:     origin.DbName,
+		TableDef:     origin,
+		CopyTableDef: copyTable,
+	}
+	spec := mustParseAlterTableChangeColumnClause(
+		t,
+		mock.CurrentContext(),
+		"alter table t1 change column title headline varchar(64)",
+	)
+
+	_, err = ChangeColumn(mock.CurrentContext(), alterPlan, spec, alterCtx)
+	require.NoError(t, err)
+	idxDef := copyTable.Indexes[len(copyTable.Indexes)-1]
+	require.Equal(t, []string{"headline"}, idxDef.Parts)
+	prefixLengths, err := catalog.IndexPrefixLengthsFromParamsWithError(idxDef.IndexAlgoParams)
+	require.NoError(t, err)
+	require.Equal(t, map[string]int{"headline": 4}, prefixLengths)
+}
+
 func TestAppendAffectedAlterColumnNamesKeepsOldNameForChangeColumn(t *testing.T) {
 	affectedCols := appendAffectedAlterColumnNames(nil, "title", "headline")
 	require.Equal(t, []string{"title", "headline"}, affectedCols)
