@@ -45,8 +45,8 @@ Project  𝄀
   ->  Aggregate  𝄀
         Aggregate Functions: starcount(1)  𝄀
         ->  Index Table Scan on t1.t1i1  𝄀
-              Filter Cond: (__mo_index_idx_col < ':')  𝄀
-              Block Filter Cond: (__mo_index_idx_col < ':')
+              Filter Cond: (__mo_index_idx_col < '<opaque>')  𝄀
+              Block Filter Cond: (__mo_index_idx_col < '<opaque>')
 select count(*) from t1 where c3<30;
 ➤ count(*)[-5,64,0]  𝄀
 300
@@ -212,8 +212,8 @@ Project  𝄀
   ->  Aggregate  𝄀
         Aggregate Functions: starcount(1)  𝄀
         ->  Index Table Scan on t1.t1i1  𝄀
-              Filter Cond: (__mo_index_idx_col < ':�')  𝄀
-              Block Filter Cond: (__mo_index_idx_col < ':�')
+              Filter Cond: (__mo_index_idx_col < '<opaque>')  𝄀
+              Block Filter Cond: (__mo_index_idx_col < '<opaque>')
 select count(*) from t1 where c3 <500;
 ➤ count(*)[-5,64,0]  𝄀
 5000

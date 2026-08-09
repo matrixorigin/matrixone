@@ -204,8 +204,9 @@ func makeIndexTblScan(builder *QueryBuilder, bindCtx *BindContext, filterExp *pl
 			Typ: makePlan2Type(&varcharType),
 			Expr: &plan.Expr_Vec{
 				Vec: &plan.LiteralVec{
-					Len:  int32(len(arg1ForPrefixInBytes)),
-					Data: arg1ForPrefixInBytes,
+					Len:          int32(arg1ForPrefixInVec.Length()),
+					Data:         arg1ForPrefixInBytes,
+					IsSerialized: true,
 				},
 			},
 		}
