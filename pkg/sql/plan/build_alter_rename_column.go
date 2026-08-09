@@ -17,7 +17,6 @@ package plan
 import (
 	"context"
 	"fmt"
-	"sort"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -229,16 +228,9 @@ func renameIndexPrefixLengthMetadata(indexInfo *plan.IndexDef, oldColName, newCo
 	}
 	delete(prefixLengths, oldPrefixName)
 	prefixLengths[newColName] = length
-	parts := make([]string, 0, len(prefixLengths))
-	for partName := range prefixLengths {
-		parts = append(parts, partName)
+	if err := catalog.SetIndexPrefixLengthsInParamMap(params, prefixLengths); err != nil {
+		return false, err
 	}
-	sort.Strings(parts)
-	encoded := make([]string, 0, len(parts))
-	for _, partName := range parts {
-		encoded = append(encoded, fmt.Sprintf("%s:%d", partName, prefixLengths[partName]))
-	}
-	params[catalog.IndexAlgoParamPrefixLengths] = strings.Join(encoded, ",")
 	indexInfo.IndexAlgoParams, err = catalog.IndexParamsMapToJsonStringWithSessionVars(params, sessionVars)
 	if err != nil {
 		return false, err
