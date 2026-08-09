@@ -59,6 +59,37 @@ func TestSingleSQLQuery(t *testing.T) {
 	outPutPlan(logicPlan, false, t)
 }
 
+func TestRegularIndexDMLRejectsStalePrefixMetadata(t *testing.T) {
+	tests := []struct {
+		name string
+		sql  string
+	}{
+		{name: "insert", sql: "insert into constraint_test.dept values (1, 'SALES', 'NY')"},
+		{name: "update", sql: "update constraint_test.dept set dname = 'SALES' where deptno = 1"},
+		{name: "delete", sql: "delete from constraint_test.dept where deptno = 1"},
+		{name: "replace", sql: "replace into constraint_test.dept values (1, 'SALES', 'NY')"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name+"/valid", func(t *testing.T) {
+			_, err := runOneStmt(NewMockOptimizer(true), t, test.sql)
+			require.NoError(t, err)
+		})
+
+		t.Run(test.name+"/stale", func(t *testing.T) {
+			mock := NewMockOptimizer(true)
+			tableDef := mock.ctxt.tables["dept"]
+			require.NotNil(t, tableDef)
+			require.NotEmpty(t, tableDef.Indexes)
+			tableDef.Indexes[0].IndexName = "idx_dname"
+			tableDef.Indexes[0].IndexAlgoParams = `{"prefix_lengths":"old_dname:4"}`
+
+			_, err := runOneStmt(mock, t, test.sql)
+			require.ErrorContains(t, err, "invalid prefix metadata for index \"idx_dname\"")
+		})
+	}
+}
+
 // Single column unique index
 func TestSingleTableDeleteSQL(t *testing.T) {
 	mock := NewMockOptimizer(true)
