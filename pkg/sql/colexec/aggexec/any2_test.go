@@ -55,6 +55,31 @@ func TestAnyValueBatchMergeReturnsSetRawBytesAtError(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestAnyValuePreservesFirstPrepareParamKind(t *testing.T) {
+	mp := mpool.MustNewZero()
+	input := vector.NewVec(types.T_text.ToType())
+	require.NoError(t, vector.AppendBytes(input, []byte("5"), false, mp))
+	require.NoError(t, vector.AppendBytes(input, []byte("9"), false, mp))
+	input.SetPrepareParamKinds([]vector.PrepareParamKind{
+		vector.PrepareParamFloat,
+		vector.PrepareParamNone,
+	})
+
+	exec := makeAnyValueExec(mp, AggIdOfAny, types.T_text.ToType())
+	defer func() {
+		input.Free(mp)
+		exec.Free()
+		require.Zero(t, mp.CurrNB())
+	}()
+	require.NoError(t, exec.GroupGrow(1))
+	require.NoError(t, exec.BulkFill(0, []*vector.Vector{input}))
+	results, err := exec.Flush()
+	require.NoError(t, err)
+	require.Len(t, results, 1)
+	require.Equal(t, vector.PrepareParamFloat, results[0].GetPrepareParamKindAt(0))
+	results[0].Free(mp)
+}
+
 func newLimitedAnyValueExec(t *testing.T) (*anyExec, *mpool.MPool, []byte) {
 	t.Helper()
 

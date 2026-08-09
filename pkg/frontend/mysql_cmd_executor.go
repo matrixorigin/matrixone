@@ -928,15 +928,18 @@ func doSetVar(
 	var err error = nil
 	var ok bool
 	var userVarIsBin bool
+	var userVarPrepareParamKind vector.PrepareParamKind
 	type evaluatedAssignment struct {
-		assign       *tree.VarAssignmentExpr
-		value        interface{}
-		userVarIsBin bool
+		assign                  *tree.VarAssignmentExpr
+		value                   interface{}
+		userVarIsBin            bool
+		userVarPrepareParamKind vector.PrepareParamKind
 	}
 	evaluateAssignment := func(assign *tree.VarAssignmentExpr) (evaluatedAssignment, error) {
 		isBin := false
-		value, evalErr := getExprValueWithPrepareMode(
-			assign.Value, ses, execCtx, preparedExpression, &isBin)
+		prepareParamKind := vector.PrepareParamNone
+		value, evalErr := getExprValueWithPrepareMeta(
+			assign.Value, ses, execCtx, preparedExpression, &prepareParamKind, &isBin)
 		if evalErr != nil {
 			return evaluatedAssignment{}, evalErr
 		}
@@ -947,12 +950,12 @@ func doSetVar(
 			}
 		}
 		return evaluatedAssignment{
-			assign:       assign,
-			value:        value,
-			userVarIsBin: isBin,
+			assign:                  assign,
+			value:                   value,
+			userVarIsBin:            isBin,
+			userVarPrepareParamKind: prepareParamKind,
 		}, nil
 	}
-
 	setVarFunc := func(system, global bool, name string, value interface{}, sql string) error {
 		var oldValueRaw interface{}
 		if system {
@@ -989,7 +992,8 @@ func doSetVar(
 				}
 			}
 		} else {
-			err = ses.setUserDefinedVar(name, value, sql, userVarIsBin)
+			err = ses.setUserDefinedVarWithKind(
+				name, value, sql, userVarIsBin, userVarPrepareParamKind)
 			if err != nil {
 				return err
 			}
@@ -1002,6 +1006,7 @@ func doSetVar(
 		name := assign.Name
 		value := item.value
 		userVarIsBin = item.userVarIsBin
+		userVarPrepareParamKind = item.userVarPrepareParamKind
 
 		//TODO : fix SET NAMES after parser is ready
 		if assign.SetNames {
@@ -4601,6 +4606,7 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 	proc.SetAffectedRows(ses.GetLastAffectedRows())
 	proc.SetResolveVariableFunc(ses.txnCompileCtx.ResolveVariable)
 	proc.SetResolveVariableIsBinFunc(ses.txnCompileCtx.ResolveVariableIsBin)
+	proc.SetResolveVariablePrepareParamKindFunc(ses.txnCompileCtx.ResolveVariablePrepareParamKind)
 	refreshStatementScopedSessionInfo(ses, proc)
 	// Frontend client SQL — session-bound resolver. Procs constructed
 	// via pkg/sql/compile/sql_executor.go's NewTopProcess inherit
