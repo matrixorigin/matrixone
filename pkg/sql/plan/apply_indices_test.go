@@ -88,6 +88,33 @@ func TestIndexHintMissingIndexReturnsMysqlKeyDoesNotExist(t *testing.T) {
 	require.Contains(t, moErr.Error(), "Key 'idx_missing' doesn't exist in table 'single_idx_t'")
 }
 
+func TestSingleColumnUniqueDecimalRangeUsesIndex(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	addIndexHintChoiceTableForTest(mock)
+	decimalType := planpb.Type{Id: int32(types.T_decimal64), Width: 10, Scale: 2}
+	mainTable := mock.ctxt.tables["index_hint_t"]
+	mainTable.Cols[1].Typ = decimalType
+	mainTable.Indexes = []*planpb.IndexDef{
+		{
+			IndexName:      "uk_a",
+			Parts:          []string{"a"},
+			IndexTableName: "uk_hint_a",
+			TableExist:     true,
+			Unique:         true,
+		},
+	}
+	addIndexHintIndexTableForTest(mock, "uk_hint_a", 25365)
+	mock.ctxt.tables["uk_hint_a"].Cols[0].Typ = decimalType
+
+	queryPlan, err := runOneStmt(mock, t, `
+		select b
+		from index_hint_t force index(uk_a)
+		where a > 10.255000`)
+	require.NoError(t, err)
+	require.True(t, planHasIndexJoin(queryPlan))
+	require.Equal(t, "uk_a", findFirstIndexScanName(queryPlan))
+}
+
 func TestFilterRegularIndexesByScanHints(t *testing.T) {
 	idxA := &planpb.IndexDef{IndexName: "idx_a"}
 	idxB := &planpb.IndexDef{IndexName: "idx_b"}
@@ -5269,29 +5296,102 @@ func TestIndexRangeSerializationNormalizesDecimalBounds(t *testing.T) {
 		requireSerializedRangeBoundType(t, expr.GetF().Args[2], intType, false)
 	})
 
-	t.Run("non representable decimal falls back from index", func(t *testing.T) {
+	t.Run("non representable decimal follows index key encoding", func(t *testing.T) {
 		filters := []*planpb.Expr{
 			makeDecimalRangeFilterExpr(t, bindTag, 1, ">", "10.255000", columnType, higherScaleType),
 			makeDecimalRangeFilterExpr(t, bindTag, 1, "<=", "15.755000", columnType, higherScaleType),
 		}
-		node := &planpb.Node{
-			TableDef: &planpb.TableDef{
-				Name2ColIndex: map[string]int32{
-					catalog.FakePrimaryKeyColName: 0,
-					"price":                       1,
+		makeNode := func(filterList []*planpb.Expr) *planpb.Node {
+			return &planpb.Node{
+				TableDef: &planpb.TableDef{
+					Name2ColIndex: map[string]int32{
+						catalog.FakePrimaryKeyColName: 0,
+						"price":                       1,
+					},
+					Cols: []*planpb.ColDef{
+						{Name: catalog.FakePrimaryKeyColName, Typ: planpb.Type{Id: int32(types.T_uint64)}},
+						{Name: "price", Typ: columnType},
+					},
 				},
-				Cols: []*planpb.ColDef{
-					{Name: catalog.FakePrimaryKeyColName, Typ: planpb.Type{Id: int32(types.T_uint64)}},
-					{Name: "price", Typ: columnType},
-				},
-			},
-			FilterList: filters,
+				FilterList: filterList,
+			}
 		}
 
-		idxPos, filterIdx := builder.getIndexForNonEquiCond([]*planpb.IndexDef{idxDef}, node)
+		t.Run("serialized composite falls back", func(t *testing.T) {
+			idxPos, filterIdx := builder.getIndexForNonEquiCond(
+				[]*planpb.IndexDef{idxDef}, makeNode(filters))
 
-		require.Equal(t, -1, idxPos)
-		require.Nil(t, filterIdx)
+			require.Equal(t, -1, idxPos)
+			require.Nil(t, filterIdx)
+		})
+
+		directUniqueIdxDef := &planpb.IndexDef{
+			Parts:  []string{"price"},
+			Unique: true,
+		}
+
+		t.Run("direct unique single bound remains eligible", func(t *testing.T) {
+			idxPos, filterIdx := builder.getIndexForNonEquiCond(
+				[]*planpb.IndexDef{directUniqueIdxDef}, makeNode(filters[:1]))
+
+			require.Equal(t, 0, idxPos)
+			require.Equal(t, []int32{0}, filterIdx)
+		})
+
+		t.Run("direct unique paired bounds remain eligible", func(t *testing.T) {
+			idxPos, filterIdx := builder.getIndexForNonEquiCond(
+				[]*planpb.IndexDef{directUniqueIdxDef}, makeNode(filters))
+
+			require.Equal(t, 0, idxPos)
+			require.Equal(t, []int32{0, 1}, filterIdx)
+		})
+
+		for _, tc := range []struct {
+			name    string
+			indexes []*planpb.IndexDef
+			wantIdx int
+		}{
+			{
+				name:    "direct unique before serialized composite",
+				indexes: []*planpb.IndexDef{directUniqueIdxDef, idxDef},
+				wantIdx: 0,
+			},
+			{
+				name:    "direct unique after serialized composite",
+				indexes: []*planpb.IndexDef{idxDef, directUniqueIdxDef},
+				wantIdx: 1,
+			},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				idxPos, filterIdx := builder.getIndexForNonEquiCond(tc.indexes, makeNode(filters))
+
+				require.Equal(t, tc.wantIdx, idxPos)
+				require.Equal(t, []int32{0, 1}, filterIdx)
+			})
+		}
+
+		t.Run("direct unique paired fallback checks both bounds", func(t *testing.T) {
+			mixedBounds := []*planpb.Expr{
+				makeDecimalRangeFilterExpr(t, bindTag, 1, ">=", "10.250000", columnType, higherScaleType),
+				filters[1],
+			}
+
+			idxPos, filterIdx := builder.getIndexForNonEquiCond(
+				[]*planpb.IndexDef{directUniqueIdxDef, idxDef}, makeNode(mixedBounds))
+
+			require.Equal(t, 0, idxPos)
+			require.Equal(t, []int32{0, 1}, filterIdx)
+		})
+
+		t.Run("direct unique bypasses serialized operator restriction", func(t *testing.T) {
+			filter := makeDecimalRangeFilterExpr(t, bindTag, 1, ">", "10.25", columnType, columnType)
+
+			idxPos, filterIdx := builder.getIndexForNonEquiCond(
+				[]*planpb.IndexDef{directUniqueIdxDef, idxDef}, makeNode([]*planpb.Expr{filter}))
+
+			require.Equal(t, 0, idxPos)
+			require.Equal(t, []int32{0}, filterIdx)
+		})
 	})
 }
 

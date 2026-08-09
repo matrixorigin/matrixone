@@ -2297,7 +2297,7 @@ func (builder *QueryBuilder) tryIndexOnlyScan(idxDef *IndexDef, node *plan.Node,
 		}
 	}
 
-	if !leadingEqualCond && numParts > 1 {
+	if !leadingEqualCond && indexTableStoresSerializedKey(idxDef) {
 		fn := node.FilterList[leadingPos[0]].GetF()
 		leadingColIdx := node.TableDef.Name2ColIndex[idxDef.Parts[0]]
 		if !canSerializeDecimalIndexRangeBounds(fn, node.TableDef.Cols[leadingColIdx].Typ) {
@@ -2508,7 +2508,12 @@ func classifyRangeBound(fn *plan.Function) (col *plan.ColRef, isLower bool) {
 }
 
 func (builder *QueryBuilder) getIndexForNonEquiCond(indexes []*IndexDef, node *plan.Node) (int, []int32) {
-	colPos2Idx := make(map[int32]int)
+	type indexCandidates struct {
+		preferred int
+		direct    int
+		hasDirect bool
+	}
+	colPos2Candidates := make(map[int32]indexCandidates)
 	for i, idxDef := range indexes {
 		// Prefix keys are lossy. IN and range operators can use block-level
 		// pruning implementations that compare the untruncated probe with the
@@ -2521,17 +2526,38 @@ func (builder *QueryBuilder) getIndexForNonEquiCond(indexes []*IndexDef, node *p
 		if !idxDef.Unique {
 			numParts--
 		}
-		if idxDef.Unique && numParts == 1 {
-			colPos, ok := node.TableDef.Name2ColIndex[catalog.ResolveAlias(idxDef.Parts[0])]
-			if ok {
-				colPos2Idx[colPos] = i
-			}
-		} else if !idxDef.Unique && numParts >= 1 {
-			colPos, ok := node.TableDef.Name2ColIndex[catalog.ResolveAlias(idxDef.Parts[0])]
-			if ok {
-				colPos2Idx[colPos] = i
-			}
+		if (idxDef.Unique && numParts != 1) || (!idxDef.Unique && numParts < 1) {
+			continue
 		}
+
+		colPos, ok := node.TableDef.Name2ColIndex[catalog.ResolveAlias(idxDef.Parts[0])]
+		if !ok {
+			continue
+		}
+		candidates := colPos2Candidates[colPos]
+		candidates.preferred = i
+		if !indexTableStoresSerializedKey(idxDef) {
+			candidates.direct = i
+			candidates.hasDirect = true
+		}
+		colPos2Candidates[colPos] = candidates
+	}
+	// Preserve the existing catalog-order preference for ordinary bounds. If a
+	// serialized candidate cannot represent the bound losslessly or safely as
+	// a single-ended range, use a direct unique key on the same column before
+	// giving up on the index lookup altogether. Unsafe operators are allowed
+	// while discovering, and after selecting, a paired range.
+	selectIndex := func(candidates indexCandidates, colPos int32, first, second *plan.Function, allowUnsafeRange bool) (int, bool) {
+		if !indexTableStoresSerializedKey(indexes[candidates.preferred]) ||
+			(canSerializeDecimalIndexRangeBounds(first, node.TableDef.Cols[colPos].Typ) &&
+				(second == nil || canSerializeDecimalIndexRangeBounds(second, node.TableDef.Cols[colPos].Typ)) &&
+				(allowUnsafeRange || !hasUnsafeRangeOp(first))) {
+			return candidates.preferred, true
+		}
+		if candidates.hasDirect {
+			return candidates.direct, true
+		}
+		return -1, false
 	}
 
 	// First pass: detect paired range conditions on index leading columns.
@@ -2547,10 +2573,11 @@ func (builder *QueryBuilder) getIndexForNonEquiCond(indexes []*IndexDef, node *p
 		if col == nil {
 			continue
 		}
-		if _, ok := colPos2Idx[col.ColPos]; !ok {
+		candidates, ok := colPos2Candidates[col.ColPos]
+		if !ok {
 			continue
 		}
-		if !canSerializeDecimalIndexRangeBounds(fn, node.TableDef.Cols[col.ColPos].Typ) {
+		if _, ok = selectIndex(candidates, col.ColPos, fn, nil, true); !ok {
 			continue
 		}
 		if isLower {
@@ -2565,31 +2592,36 @@ func (builder *QueryBuilder) getIndexForNonEquiCond(indexes []*IndexDef, node *p
 		fn := node.FilterList[i].GetF()
 		filterType, col := checkIndexFilter(fn)
 		if filterType == NonEqualIndexCondition {
-			idxPos, ok := colPos2Idx[col.ColPos]
+			candidates, ok := colPos2Candidates[col.ColPos]
 			if !ok {
-				continue
-			}
-			if !canSerializeDecimalIndexRangeBounds(fn, node.TableDef.Cols[col.ColPos].Typ) {
 				continue
 			}
 			if rangeCol, _ := classifyRangeBound(fn); rangeCol != nil {
 				lowerIdx, hasLower := colLowerBounds[rangeCol.ColPos]
 				upperIdx, hasUpper := colUpperBounds[rangeCol.ColPos]
 				if hasLower && hasUpper && int32(i) == min(lowerIdx, upperIdx) {
+					idxPos, usable := selectIndex(
+						candidates,
+						col.ColPos,
+						node.FilterList[lowerIdx].GetF(),
+						node.FilterList[upperIdx].GetF(),
+						true,
+					)
+					if !usable {
+						continue
+					}
 					if shouldSkipLargeRangeIndexByStats(node) {
 						continue
 					}
 					return idxPos, []int32{lowerIdx, upperIdx}
 				}
 			}
-			if fn != nil {
-				numParts := len(indexes[idxPos].Parts)
-				if numParts > 1 && hasUnsafeRangeOp(fn) {
-					continue
-				}
-				if isRangeOp(fn) && shouldSkipLargeRangeIndexByStats(node) {
-					continue
-				}
+			idxPos, usable := selectIndex(candidates, col.ColPos, fn, nil, false)
+			if !usable {
+				continue
+			}
+			if fn != nil && isRangeOp(fn) && shouldSkipLargeRangeIndexByStats(node) {
+				continue
 			}
 			return idxPos, []int32{int32(i)}
 		}
