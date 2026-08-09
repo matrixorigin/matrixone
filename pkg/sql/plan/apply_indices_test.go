@@ -566,6 +566,14 @@ func TestGroupedJoinForceIndexCandidateClosure(t *testing.T) {
 			notIndexes:  []string{"idx_tenant_state_id"},
 		},
 		{
+			name: "primary group access matches allowed join candidate",
+			hints: `force index for group by(primary)
+				force index for join(primary, idx_state)`,
+			selectList: "p.tenant_id, p.id, count(*), sum(c.weight)",
+			tail:       "group by p.tenant_id, p.id",
+			notIndexes: []string{"idx_state", "idx_tenant_state_id"},
+		},
+		{
 			name:        "order access matches later forced candidate",
 			hints:       "force index(idx_state, idx_tenant_state_id)",
 			selectList:  "p.tenant_id, p.state, c.weight",
@@ -581,6 +589,14 @@ func TestGroupedJoinForceIndexCandidateClosure(t *testing.T) {
 			tail:        "order by p.tenant_id, p.state",
 			wantIndexes: []string{"idx_state"},
 			notIndexes:  []string{"idx_tenant_state_id"},
+		},
+		{
+			name: "primary order access matches allowed join candidate",
+			hints: `force index for order by(primary)
+				force index for join(primary, idx_state)`,
+			selectList: "p.tenant_id, p.id, c.weight",
+			tail:       "order by p.tenant_id, p.id",
+			notIndexes: []string{"idx_state", "idx_tenant_state_id"},
 		},
 	}
 
@@ -1220,6 +1236,41 @@ func TestForceIndexForJoinReplacesFilterIndexWrapper(t *testing.T) {
 	require.Equal(t, "idx_join", forcedIndexScan.IndexScanInfo.IndexName)
 }
 
+func TestForcePrimaryForJoinReplacesSecondaryAccess(t *testing.T) {
+	builder, joinID, _, _ := makeIndexHintJoinBuilder(t)
+	joinNode := builder.qry.Nodes[joinID]
+	rightScanID := joinNode.Children[1]
+	rightScan := builder.qry.Nodes[rightScanID]
+	rightScan.TableDef.Pkey = &planpb.PrimaryKeyDef{PkeyColName: "a", Names: []string{"a"}}
+	rightScan.TableDef.Indexes = []*planpb.IndexDef{{
+		IndexName: "idx_filter", IndexTableName: "idx_join_a_table",
+		Parts: []string{"a", catalog.CreateAlias("a")}, TableExist: true,
+	}}
+	require.NoError(t, builder.recordIndexHints(rightScanID, rightScan.TableDef, []*tree.IndexHint{{
+		HintType: tree.HintForce, HintScope: tree.HintForJoin, IndexNames: []string{PrimaryKeyName},
+	}}))
+
+	secondaryScanID := builder.appendNode(&planpb.Node{
+		NodeType: planpb.Node_TABLE_SCAN,
+		Stats:    DefaultStats(),
+		IndexScanInfo: planpb.IndexScanInfo{
+			IsIndexScan: true,
+			IndexName:   "idx_filter",
+		},
+	}, builder.ctxByNode[joinID])
+	secondaryAccessID := builder.appendNode(&planpb.Node{
+		NodeType: planpb.Node_JOIN,
+		JoinType: planpb.Node_INDEX,
+		Children: []int32{rightScanID, secondaryScanID},
+	}, builder.ctxByNode[joinID])
+	joinNode.Children[1] = secondaryAccessID
+
+	newID, err := builder.applyIndicesForJoins(joinID, joinNode, map[[2]int32]int{}, map[[2]int32]*planpb.Expr{})
+	require.NoError(t, err)
+	require.Equal(t, joinID, newID)
+	require.Equal(t, rightScanID, joinNode.Children[1])
+}
+
 func TestForceIndexForJoinPreservesMatchingIndexAccess(t *testing.T) {
 	builder, joinID, _, _ := makeIndexHintJoinBuilder(t)
 	joinNode := builder.qry.Nodes[joinID]
@@ -1242,8 +1293,13 @@ func TestForceIndexForJoinPreservesMatchingIndexAccess(t *testing.T) {
 	rightScan.TableDef.Pkey = &planpb.PrimaryKeyDef{PkeyColName: "a", Names: []string{"a"}}
 	rightScan.ObjRef = &planpb.ObjectRef{ObjName: "right_t"}
 	require.NoError(t, builder.recordIndexHints(rightScanID, rightScan.TableDef, []*tree.IndexHint{{
-		HintType: tree.HintForce, HintScope: tree.HintForJoin, IndexNames: []string{"idx_a", "idx_b"},
+		HintType: tree.HintForce, HintScope: tree.HintForJoin, IndexNames: []string{PrimaryKeyName, "idx_a", "idx_b"},
 	}}))
+
+	newID, err := builder.applyIndicesForJoins(joinID, joinNode, map[[2]int32]int{}, map[[2]int32]*planpb.Expr{})
+	require.NoError(t, err)
+	require.Equal(t, joinID, newID)
+	require.Equal(t, rightScanID, joinNode.Children[1])
 
 	matchingAccessID := builder.appendNode(&planpb.Node{
 		NodeType: planpb.Node_TABLE_SCAN,
@@ -1256,7 +1312,7 @@ func TestForceIndexForJoinPreservesMatchingIndexAccess(t *testing.T) {
 	builder.inheritIndexHints(matchingAccessID, rightScanID)
 	joinNode.Children[1] = matchingAccessID
 
-	newID, err := builder.applyIndicesForJoins(joinID, joinNode, map[[2]int32]int{}, map[[2]int32]*planpb.Expr{})
+	newID, err = builder.applyIndicesForJoins(joinID, joinNode, map[[2]int32]int{}, map[[2]int32]*planpb.Expr{})
 	require.NoError(t, err)
 	require.Equal(t, joinID, newID)
 	require.Equal(t, matchingAccessID, joinNode.Children[1])

@@ -2945,6 +2945,17 @@ func (builder *QueryBuilder) applyForcedJoinAccess(accessID int32) (int32, error
 	if scan == nil || scan.TableDef == nil {
 		return accessID, nil
 	}
+	// PRIMARY is represented by the base scan itself, not by TableDef.Indexes.
+	primaryAllowed := false
+	if !scan.IndexScanInfo.IsIndexScan {
+		if hints := builder.indexHintsByScan[scan.NodeId]; hints != nil && hints.join.forceSpecified {
+			primaryAllowed = indexAllowedByHintScope(PrimaryKeyName, hints.join)
+		}
+	}
+	if accessID == scan.NodeId && primaryAllowed {
+		builder.protectedScans[scan.NodeId]++
+		return accessID, nil
+	}
 	indexes := builder.filterRegularIndexesByJoinHints(scan, scan.TableDef.Indexes)
 	for _, idxDef := range indexes {
 		if !usableRegularHintIndex(idxDef) {
@@ -2954,6 +2965,10 @@ func (builder *QueryBuilder) applyForcedJoinAccess(accessID int32) (int32, error
 			builder.protectedScans[scan.NodeId]++
 			return accessID, nil
 		}
+	}
+	if primaryAllowed {
+		builder.protectedScans[scan.NodeId]++
+		return scan.NodeId, nil
 	}
 	for _, idxDef := range indexes {
 		if !usableRegularHintIndex(idxDef) {
