@@ -451,6 +451,10 @@ func (s *service) closeService() error {
 		s.stopper.Stop()
 
 		s.closeErr = closeCNServiceSteps(
+			// Query commands can reach frontend, task, engine, lock, shard,
+			// auto-increment, and transaction state. Stop and drain this remote
+			// ingress before clearing any of those dependencies.
+			s.closeQueryService,
 			s.stopFrontend,
 			s.closeBootstrapService,
 			// Frontend shutdown stops accepting interactive work, while stopTask
@@ -670,9 +674,6 @@ func (s *service) stopRPCs() error {
 	}
 	if s.lockService != nil {
 		err = errors.Join(err, s.lockService.Close())
-	}
-	if s.queryService != nil {
-		err = errors.Join(err, s.queryService.Close())
 	}
 	if s.queryClient != nil {
 		err = errors.Join(err, s.queryClient.Close())

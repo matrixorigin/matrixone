@@ -80,41 +80,75 @@ func (s *service) initQueryService() error {
 }
 
 func (s *service) initQueryCommandHandler() {
-	s.queryService.AddHandleFunc(query.CmdMethod_KillConn, s.handleKillConn, false)
-	s.queryService.AddHandleFunc(query.CmdMethod_AlterAccount, s.handleAlterAccount, false)
-	s.queryService.AddHandleFunc(query.CmdMethod_TraceSpan, s.handleTraceSpan, false)
-	s.queryService.AddHandleFunc(query.CmdMethod_GetLockInfo, s.handleGetLockInfo, false)
-	s.queryService.AddHandleFunc(query.CmdMethod_GetTxnInfo, s.handleGetTxnInfo, false)
-	s.queryService.AddHandleFunc(query.CmdMethod_GetCacheInfo, s.handleGetCacheInfo, false)
-	s.queryService.AddHandleFunc(query.CmdMethod_SyncCommit, s.handleSyncCommit, false)
-	s.queryService.AddHandleFunc(query.CmdMethod_GetCommit, s.handleGetCommit, false)
-	s.queryService.AddHandleFunc(query.CmdMethod_ShowProcessList, s.handleShowProcessList, false)
-	s.queryService.AddHandleFunc(query.CmdMethod_RunTask, s.handleRunTask, false)
-	s.queryService.AddHandleFunc(query.CmdMethod_RemoveRemoteLockTable, s.handleRemoveRemoteLockTable, false)
-	s.queryService.AddHandleFunc(query.CmdMethod_UnsubscribeTable, s.handleUnsubscribeTable, false)
-	s.queryService.AddHandleFunc(query.CmdMethod_GetCacheData, s.handleGetCacheData, false)
-	s.queryService.AddHandleFunc(query.CmdMethod_GetStatsInfo, s.handleGetStatsInfo, false)
-	s.queryService.AddHandleFunc(query.CmdMethod_GetPipelineInfo, s.handleGetPipelineInfo, false)
-	s.queryService.AddHandleFunc(query.CmdMethod_MigrateConnFrom, s.handleMigrateConnFrom, false)
-	s.queryService.AddHandleFunc(query.CmdMethod_MigrateConnTo, s.handleMigrateConnTo, false)
-	s.queryService.AddHandleFunc(query.CmdMethod_ReloadAutoIncrementCache, s.handleReloadAutoIncrementCache, false)
-	s.queryService.AddHandleFunc(query.CmdMethod_GetReplicaCount, s.handleGetReplicaCount, false)
-	s.queryService.AddHandleFunc(query.CmdMethod_CtlReader, s.handleCtlReader, false)
-	s.queryService.AddHandleFunc(query.CmdMethod_ResetSession, s.handleResetSession, false)
-	s.queryService.AddHandleFunc(query.CmdMethod_GOMAXPROCS, s.handleGoMaxProcs, false)
-	s.queryService.AddHandleFunc(query.CmdMethod_GOMEMLIMIT, s.handleGoMemLimit, false)
-	s.queryService.AddHandleFunc(query.CmdMethod_GOGCPercent, s.handleGoGCPercent, false)
-	s.queryService.AddHandleFunc(query.CmdMethod_FileServiceCache, s.handleFileServiceCacheRequest, false)
-	s.queryService.AddHandleFunc(query.CmdMethod_FileServiceCacheEvict, s.handleFileServiceCacheEvictRequest, false)
-	s.queryService.AddHandleFunc(query.CmdMethod_MetadataCache, s.handleMetadataCacheRequest, false)
-	s.queryService.AddHandleFunc(query.CmdMethod_FaultInject, s.handleFaultInjection, false)
-	s.queryService.AddHandleFunc(query.CmdMethod_CtlMoTableStats, s.handleMoTableStats, false)
-	s.queryService.AddHandleFunc(query.CmdMethod_WorkspaceThreshold, s.handleWorkspaceThresholdRequest, false)
-	s.queryService.AddHandleFunc(query.CmdMethod_MinTimestamp, s.handleGetMinTimestamp, false)
-	s.queryService.AddHandleFunc(query.CmdMethod_CtlPrefetchOnSubscribed, s.handleCtlPrefetchOnSubscribed, false)
-	s.queryService.AddHandleFunc(query.CmdMethod_ISCPDrainConsumer, s.handleISCPDrainConsumer, false)
-	s.queryService.AddHandleFunc(query.CmdMethod_IcebergCacheInvalidate, s.handleIcebergCacheInvalidate, false)
-	s.queryService.AddHandleFunc(query.CmdMethod_MongoDBClientRetire, s.handleMongoDBClientRetire, false)
+	s.addQueryCommandHandler(query.CmdMethod_KillConn, s.handleKillConn)
+	s.addQueryCommandHandler(query.CmdMethod_AlterAccount, s.handleAlterAccount)
+	s.addQueryCommandHandler(query.CmdMethod_TraceSpan, s.handleTraceSpan)
+	s.addQueryCommandHandler(query.CmdMethod_GetLockInfo, s.handleGetLockInfo)
+	s.addQueryCommandHandler(query.CmdMethod_GetTxnInfo, s.handleGetTxnInfo)
+	s.addQueryCommandHandler(query.CmdMethod_GetCacheInfo, s.handleGetCacheInfo)
+	s.addQueryCommandHandler(query.CmdMethod_SyncCommit, s.handleSyncCommit)
+	s.addQueryCommandHandler(query.CmdMethod_GetCommit, s.handleGetCommit)
+	s.addQueryCommandHandler(query.CmdMethod_ShowProcessList, s.handleShowProcessList)
+	s.addQueryCommandHandler(query.CmdMethod_RunTask, s.handleRunTask)
+	s.addQueryCommandHandler(query.CmdMethod_RemoveRemoteLockTable, s.handleRemoveRemoteLockTable)
+	s.addQueryCommandHandler(query.CmdMethod_UnsubscribeTable, s.handleUnsubscribeTable)
+	s.addQueryCommandHandler(query.CmdMethod_GetCacheData, s.handleGetCacheData)
+	s.addQueryCommandHandler(query.CmdMethod_GetStatsInfo, s.handleGetStatsInfo)
+	s.addQueryCommandHandler(query.CmdMethod_GetPipelineInfo, s.handleGetPipelineInfo)
+	s.addQueryCommandHandler(query.CmdMethod_MigrateConnFrom, s.handleMigrateConnFrom)
+	s.addQueryCommandHandler(query.CmdMethod_MigrateConnTo, s.handleMigrateConnTo)
+	s.addQueryCommandHandler(query.CmdMethod_ReloadAutoIncrementCache, s.handleReloadAutoIncrementCache)
+	s.addQueryCommandHandler(query.CmdMethod_GetReplicaCount, s.handleGetReplicaCount)
+	s.addQueryCommandHandler(query.CmdMethod_CtlReader, s.handleCtlReader)
+	s.addQueryCommandHandler(query.CmdMethod_ResetSession, s.handleResetSession)
+	s.addQueryCommandHandler(query.CmdMethod_GOMAXPROCS, s.handleGoMaxProcs)
+	s.addQueryCommandHandler(query.CmdMethod_GOMEMLIMIT, s.handleGoMemLimit)
+	s.addQueryCommandHandler(query.CmdMethod_GOGCPercent, s.handleGoGCPercent)
+	s.addQueryCommandHandler(query.CmdMethod_FileServiceCache, s.handleFileServiceCacheRequest)
+	s.addQueryCommandHandler(query.CmdMethod_FileServiceCacheEvict, s.handleFileServiceCacheEvictRequest)
+	s.addQueryCommandHandler(query.CmdMethod_MetadataCache, s.handleMetadataCacheRequest)
+	s.addQueryCommandHandler(query.CmdMethod_FaultInject, s.handleFaultInjection)
+	s.addQueryCommandHandler(query.CmdMethod_CtlMoTableStats, s.handleMoTableStats)
+	s.addQueryCommandHandler(query.CmdMethod_WorkspaceThreshold, s.handleWorkspaceThresholdRequest)
+	s.addQueryCommandHandler(query.CmdMethod_MinTimestamp, s.handleGetMinTimestamp)
+	s.addQueryCommandHandler(query.CmdMethod_CtlPrefetchOnSubscribed, s.handleCtlPrefetchOnSubscribed)
+	s.addQueryCommandHandler(query.CmdMethod_ISCPDrainConsumer, s.handleISCPDrainConsumer)
+	s.addQueryCommandHandler(query.CmdMethod_IcebergCacheInvalidate, s.handleIcebergCacheInvalidate)
+	s.addQueryCommandHandler(query.CmdMethod_MongoDBClientRetire, s.handleMongoDBClientRetire)
+}
+
+func (s *service) addQueryCommandHandler(
+	method query.CmdMethod,
+	handler func(context.Context, *query.Request, *query.Response, *morpc.Buffer) error,
+) {
+	s.queryService.AddHandleFunc(
+		method,
+		func(ctx context.Context, req *query.Request, resp *query.Response, buf *morpc.Buffer) error {
+			s.queryHandlers.Lock()
+			if s.queryHandlers.closing {
+				s.queryHandlers.Unlock()
+				return moerr.NewServiceUnavailableNoCtx("CN query service is closing")
+			}
+			s.queryHandlers.wg.Add(1)
+			s.queryHandlers.Unlock()
+			defer s.queryHandlers.wg.Done()
+			return handler(ctx, req, resp, buf)
+		},
+		false,
+	)
+}
+
+func (s *service) closeQueryService() error {
+	s.queryHandlers.Lock()
+	s.queryHandlers.closing = true
+	s.queryHandlers.Unlock()
+
+	var err error
+	if s.queryService != nil {
+		err = s.queryService.Close()
+	}
+	s.queryHandlers.wg.Wait()
+	return err
 }
 
 func (s *service) handleKillConn(ctx context.Context, req *query.Request, resp *query.Response, _ *morpc.Buffer) error {
