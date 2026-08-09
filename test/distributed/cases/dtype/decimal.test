@@ -971,3 +971,45 @@ ORDER BY r.id, l.id;
 
 DROP TABLE decimal_join_left;
 DROP TABLE decimal_join_right;
+
+-- issue #26808: normal-table zonemap pruning must preserve the literal scale.
+DROP TABLE IF EXISTS decimal_zm_scale_scan;
+CREATE TABLE decimal_zm_scale_scan (
+    id BIGINT NOT NULL PRIMARY KEY,
+    d64 DECIMAL(12,4),
+    d128 DECIMAL(20,4)
+);
+INSERT INTO decimal_zm_scale_scan
+SELECT result,
+       CAST((result - 20001) / 10.0 AS DECIMAL(12,4)),
+       CAST((result - 20001) / 10.0 AS DECIMAL(20,4))
+FROM generate_series(1, 40001) g;
+INSERT INTO decimal_zm_scale_scan VALUES (40002, NULL, NULL);
+-- @separator:table
+SELECT mo_ctl('dn','flush', concat(database(), '.decimal_zm_scale_scan'));
+
+SELECT COUNT(*) AS d64_lt_s0 FROM decimal_zm_scale_scan WHERE d64 < 1000;
+SELECT COUNT(*) AS d64_le_s0 FROM decimal_zm_scale_scan WHERE d64 <= 1000;
+SELECT COUNT(*) AS d64_gt_s0 FROM decimal_zm_scale_scan WHERE d64 > 1000;
+SELECT COUNT(*) AS d64_ge_s0 FROM decimal_zm_scale_scan WHERE d64 >= 1000;
+SELECT COUNT(*) AS d64_eq_s0 FROM decimal_zm_scale_scan WHERE d64 = 0;
+SELECT COUNT(*) AS d64_between_s0 FROM decimal_zm_scale_scan WHERE d64 BETWEEN -1000 AND 1000;
+SELECT COUNT(*) AS d64_lt_lossy_upper FROM decimal_zm_scale_scan WHERE d64 < 1000.00001;
+SELECT COUNT(*) AS d64_between_lossy_lower FROM decimal_zm_scale_scan WHERE d64 BETWEEN -999.99999 AND 1000;
+
+SELECT COUNT(*) AS d128_lt_s0 FROM decimal_zm_scale_scan WHERE d128 < 1000;
+SELECT COUNT(*) AS d128_lt_s1 FROM decimal_zm_scale_scan WHERE d128 < 1000.0;
+SELECT COUNT(*) AS d128_lt_s4 FROM decimal_zm_scale_scan WHERE d128 < 1000.0000;
+SELECT COUNT(*) AS d128_le_s0 FROM decimal_zm_scale_scan WHERE d128 <= 1000;
+SELECT COUNT(*) AS d128_gt_s0 FROM decimal_zm_scale_scan WHERE d128 > 1000;
+SELECT COUNT(*) AS d128_ge_s0 FROM decimal_zm_scale_scan WHERE d128 >= 1000;
+SELECT COUNT(*) AS d128_eq_s0 FROM decimal_zm_scale_scan WHERE d128 = 0;
+SELECT COUNT(*) AS d128_between_s0 FROM decimal_zm_scale_scan WHERE d128 BETWEEN -1000 AND 1000;
+SELECT COUNT(*) AS d128_between_mixed FROM decimal_zm_scale_scan WHERE d128 BETWEEN -1000.0 AND 1000.0000;
+SELECT COUNT(*) AS d128_lt_lossy_upper FROM decimal_zm_scale_scan WHERE d128 < 1000.00001;
+SELECT COUNT(*) AS d128_between_lossy_lower FROM decimal_zm_scale_scan WHERE d128 BETWEEN -999.99999 AND 1000;
+SELECT COUNT(*) AS d128_lt_oracle FROM decimal_zm_scale_scan WHERE d128 + 0 < 1000;
+SELECT COUNT(*) AS decimal_nulls FROM decimal_zm_scale_scan WHERE d64 IS NULL AND d128 IS NULL;
+SELECT COUNT(*) AS int_control FROM decimal_zm_scale_scan WHERE id < 1000;
+
+DROP TABLE decimal_zm_scale_scan;

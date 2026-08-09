@@ -200,6 +200,22 @@ func TestCompare64(t *testing.T) {
 	}
 }
 
+func TestCompareDecimal64WithScaleFallsBackOnSignedOverflow(t *testing.T) {
+	positive, err := ParseDecimal64("9.99999999999999998", 18, 17)
+	require.NoError(t, err)
+	negative, err := ParseDecimal64("-9.99999999999999998", 18, 17)
+	require.NoError(t, err)
+	positiveBound, err := ParseDecimal64("100", 18, 0)
+	require.NoError(t, err)
+	negativeBound, err := ParseDecimal64("-100", 18, 0)
+	require.NoError(t, err)
+
+	require.Less(t, CompareDecimal64WithScale(positive, positiveBound, 17, 0), 0)
+	require.Greater(t, CompareDecimal64WithScale(negative, negativeBound, 17, 0), 0)
+	require.Greater(t, CompareDecimal64WithScale(positiveBound, positive, 0, 17), 0)
+	require.Less(t, CompareDecimal64WithScale(negativeBound, negative, 0, 17), 0)
+}
+
 func TestCompare128(t *testing.T) {
 	x := Decimal128{0, 0}
 	y := Decimal128{^x.B0_63, ^x.B64_127}
