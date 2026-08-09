@@ -4815,6 +4815,24 @@ func TestOrderedSetAggregateDeparseRoundTrip(t *testing.T) {
 	}
 }
 
+func TestOrderedSetPercentileWithoutWithinGroupParses(t *testing.T) {
+	for _, sql := range []string{
+		"select percentile_cont(0.95) from t",
+		"select percentile_disc(0.95) from t",
+	} {
+		stmt, err := ParseOne(context.Background(), sql, 1)
+		require.NoError(t, err, sql)
+		selectStmt, ok := stmt.(*tree.Select)
+		require.True(t, ok, sql)
+		selectClause, ok := selectStmt.Select.(*tree.SelectClause)
+		require.True(t, ok, sql)
+		fn, ok := selectClause.Exprs[0].Expr.(*tree.FuncExpr)
+		require.True(t, ok, sql)
+		require.False(t, fn.WithinGroup, sql)
+		require.Nil(t, fn.OrderBy, sql)
+	}
+}
+
 // TestFullTextMatchDeparseRoundTrip is the #24823 regression on the DEFAULT tree.String path
 // (not only the WithSingleQuoteString path): MATCH(...) AGAINST('...') must deparse to a
 // quoted, re-parseable string literal so re-serialized statements (CREATE TABLE AS SELECT,

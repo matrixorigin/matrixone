@@ -12535,28 +12535,28 @@ function_call_aggregate:
 			WithinGroup: $8 != nil,
         }
     }
-|   PERCENTILE_CONT '(' expression ')' WITHIN GROUP '(' order_by_clause ')' window_spec_opt
+|   PERCENTILE_CONT '(' expression ')' within_group_opt window_spec_opt
     {
         name := tree.NewUnresolvedColName($1)
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
             FuncName: tree.NewCStr($1, 1),
             Exprs: tree.Exprs{$3},
-            WindowSpec: $10,
-            OrderBy: $8,
-            WithinGroup: true,
+            WindowSpec: $6,
+            OrderBy: $5,
+            WithinGroup: $5 != nil,
         }
     }
-|   PERCENTILE_DISC '(' expression ')' WITHIN GROUP '(' order_by_clause ')' window_spec_opt
+|   PERCENTILE_DISC '(' expression ')' within_group_opt window_spec_opt
     {
         name := tree.NewUnresolvedColName($1)
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
             FuncName: tree.NewCStr($1, 1),
             Exprs: tree.Exprs{$3},
-            WindowSpec: $10,
-            OrderBy: $8,
-            WithinGroup: true,
+            WindowSpec: $6,
+            OrderBy: $5,
+            WithinGroup: $5 != nil,
         }
     }
 |  CLUSTER_CENTERS '(' func_type_opt expression_list order_by_opt kmeans_opt ')' window_spec_opt
