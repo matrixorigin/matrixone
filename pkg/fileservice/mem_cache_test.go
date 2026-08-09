@@ -26,6 +26,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/fileservice/fscache"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
+	metric "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -118,6 +120,31 @@ func TestMemCacheLeak(t *testing.T) {
 
 }
 
+func TestMemCacheSeparatesPhysicalAndLogicalBytesMetrics(t *testing.T) {
+	ctx := context.Background()
+	name := t.Name()
+	cache := NewMemCache(fscache.ConstCapacity(1024), nil, nil, name)
+	defer cache.Close(ctx)
+
+	physical, _ := metric.GetFsCacheBytesGauge(name, "mem")
+	logical := metric.GetFsCacheLogicalBytesGauge(name, "mem")
+	backingOverhead := metric.GetFsCacheBackingOverheadBytesGauge(name, "mem")
+	data := NewBytes(make([]byte, 3, 8))
+	key := fscache.CacheKey{Path: "foo", Sz: 3}
+	require.NoError(t, cache.cache.Set(ctx, key, data))
+	data.Release()
+
+	require.Equal(t, int64(8), cache.cache.Used())
+	require.Equal(t, float64(8), testutil.ToFloat64(physical))
+	require.Equal(t, float64(3), testutil.ToFloat64(logical))
+	require.Equal(t, float64(5), testutil.ToFloat64(backingOverhead))
+
+	cache.EvictToTarget(ctx, 0)
+	require.Equal(t, float64(0), testutil.ToFloat64(physical))
+	require.Equal(t, float64(0), testutil.ToFloat64(logical))
+	require.Equal(t, float64(0), testutil.ToFloat64(backingOverhead))
+}
+
 // TestHighConcurrency this test is to mainly test concurrency issue in objectCache
 // and dataOverlap-checker.
 func TestHighConcurrency(t *testing.T) {
@@ -173,6 +200,14 @@ func (d *blockingReleaseData) Bytes() []byte {
 	return d.bytes
 }
 
+func (d *blockingReleaseData) Size() int64 {
+	return int64(len(d.bytes))
+}
+
+func (d *blockingReleaseData) Capacity() int64 {
+	return int64(cap(d.bytes))
+}
+
 func (d *blockingReleaseData) Slice(length int) fscache.Data {
 	return &blockingReleaseData{
 		bytes:   d.bytes[:length],
@@ -200,6 +235,14 @@ func (d staticTestData) Bytes() []byte {
 	return d
 }
 
+func (d staticTestData) Size() int64 {
+	return int64(len(d))
+}
+
+func (d staticTestData) Capacity() int64 {
+	return int64(cap(d))
+}
+
 func (d staticTestData) Slice(length int) fscache.Data {
 	return d[:length]
 }
@@ -221,6 +264,14 @@ var _ fscache.Data = (*blockingRetainData)(nil)
 
 func (d *blockingRetainData) Bytes() []byte {
 	return d.bytes
+}
+
+func (d *blockingRetainData) Size() int64 {
+	return int64(len(d.bytes))
+}
+
+func (d *blockingRetainData) Capacity() int64 {
+	return int64(cap(d.bytes))
 }
 
 func (d *blockingRetainData) Slice(length int) fscache.Data {
@@ -538,6 +589,47 @@ func BenchmarkMemoryCacheRead(b *testing.B) {
 		}
 	})
 
+}
+
+func BenchmarkMemCacheSetSequential(b *testing.B) {
+	benchmarkMemCacheSet(b, false)
+}
+
+func BenchmarkMemCacheSetParallel(b *testing.B) {
+	benchmarkMemCacheSet(b, true)
+}
+
+func benchmarkMemCacheSet(b *testing.B, parallel bool) {
+	ctx := context.Background()
+	cache := NewMemCache(fscache.ConstCapacity(1024), nil, nil, "")
+	b.Cleanup(func() { cache.Close(ctx) })
+
+	keys := make([]fscache.CacheKey, 2048)
+	for i := range keys {
+		keys[i] = fscache.CacheKey{Path: fmt.Sprintf("benchmark-%d", i), Sz: 1, Offset: int64(i)}
+	}
+	data := staticTestData([]byte("a"))
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	if !parallel {
+		for i := 0; i < b.N; i++ {
+			if err := cache.cache.Set(ctx, keys[i%len(keys)], data); err != nil {
+				b.Fatal(err)
+			}
+		}
+		return
+	}
+
+	var next atomic.Uint64
+	b.RunParallel(func(pb *testing.PB) {
+		for pb.Next() {
+			i := next.Add(1) - 1
+			if err := cache.cache.Set(ctx, keys[i%uint64(len(keys))], data); err != nil {
+				b.Fatal(err)
+			}
+		}
+	})
 }
 
 func TestMemoryCacheGlobalSizeHint(t *testing.T) {

@@ -51,6 +51,8 @@ void mo_croaring_test_fixed(void *r, const void *key, size_t len, size_t elemsz,
 // Caller frees with mo_croaring_free_buf. Returns NULL on OOM.
 uint8_t *mo_croaring_serialize(void *r, size_t *len);
 void mo_croaring_free_buf(uint8_t *buf);
+size_t mo_croaring_serialized_size(void *r);
+bool mo_croaring_serialize_into(void *r, uint8_t *buf, size_t len);
 
 // Portable-deserialize; returns NULL on error.
 void *mo_croaring_deserialize(const uint8_t *buf, size_t len);
