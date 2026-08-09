@@ -181,6 +181,9 @@ func (i IOEntry) String() string {
 }
 
 type CacheDataAllocator interface {
+	// BackingSize returns the physical capacity reserved by a following
+	// AllocateCacheData call. It is used to evict before allocating.
+	BackingSize(size int) int
 	AllocateCacheData(ctx context.Context, size int) fscache.Data
 	AllocateCacheDataWithHint(ctx context.Context, size int, hints malloc.Hints) fscache.Data
 	CopyToCacheData(ctx context.Context, data []byte) fscache.Data
