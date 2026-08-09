@@ -682,6 +682,38 @@ func TestBlockFilterConstantSetIgnoresSerializedProvenance(t *testing.T) {
 		"diagnostic provenance must not change block-filter set semantics")
 }
 
+func TestConstLiteralKeyIgnoresSerializedProvenance(t *testing.T) {
+	typ := planpb.Type{Id: int32(types.T_varchar), Width: 16}
+	makeLiteral := func(isSerialized, isBin bool) *planpb.Expr {
+		return &planpb.Expr{
+			Typ: typ,
+			Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{
+				Value:        &planpb.Literal_Sval{Sval: "'"},
+				IsBin:        isBin,
+				IsSerialized: isSerialized,
+			}},
+		}
+	}
+
+	ordinaryKey, ok := constLiteralKey(makeLiteral(false, false))
+	require.True(t, ok)
+	serializedKey, ok := constLiteralKey(makeLiteral(true, false))
+	require.True(t, ok)
+	require.Equal(t, ordinaryKey, serializedKey,
+		"diagnostic provenance must not change executable literal identity")
+	wideLiteral := makeLiteral(false, false)
+	wideLiteral.Typ.Width = 65535
+	wideKey, ok := constLiteralKey(wideLiteral)
+	require.True(t, ok)
+	require.Equal(t, ordinaryKey, wideKey,
+		"string declaration width must not change byte-value identity")
+
+	binaryKey, ok := constLiteralKey(makeLiteral(false, true))
+	require.True(t, ok)
+	require.NotEqual(t, ordinaryKey, binaryKey,
+		"SQL binary-literal semantics must remain part of executable literal identity")
+}
+
 func TestDeduplicateBlockFiltersRetainsDifferentCompoundPredicates(t *testing.T) {
 	ctx := NewMockCompilerContext(true)
 	tag := int32(1)

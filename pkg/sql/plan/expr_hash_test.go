@@ -183,6 +183,18 @@ func TestExprStructuralHashIgnoresDiagnosticProvenance(t *testing.T) {
 	require.Equal(t, exprStructuralHash(literal), exprStructuralHash(serializedLiteral))
 	require.True(t, exprStructuralEqual(literal, serializedLiteral))
 
+	decimalLiteral := &planpb.Expr{
+		Typ: planpb.Type{Id: int32(types.T_decimal64), Width: 8, Scale: 2},
+		Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{
+			Value: &planpb.Literal_Decimal64Val{Decimal64Val: &planpb.Decimal64{A: 1234}},
+		}},
+	}
+	serializedDecimal := DeepCopyExpr(decimalLiteral)
+	serializedDecimal.GetLit().IsSerialized = true
+	require.Equal(t, exprStructuralHash(decimalLiteral), exprStructuralHash(serializedDecimal),
+		"fallback literal variants must also ignore diagnostic provenance")
+	require.True(t, exprStructuralEqual(decimalLiteral, serializedDecimal))
+
 	vectorExpr := &planpb.Expr{
 		Typ: planpb.Type{Id: int32(types.T_varchar)},
 		Expr: &planpb.Expr_Vec{Vec: &planpb.LiteralVec{

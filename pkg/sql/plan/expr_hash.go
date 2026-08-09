@@ -147,6 +147,18 @@ func hashExprInto(h writeByter, expr *plan.Expr) {
 	}
 }
 
+// literalWithoutDiagnosticProvenance returns a shallow copy only when a
+// diagnostic-only field must be removed before deriving executable identity.
+// Keep all value-bearing fields, including IsBin and Src, intact.
+func literalWithoutDiagnosticProvenance(lit *plan.Literal) *plan.Literal {
+	if lit == nil || !lit.IsSerialized {
+		return lit
+	}
+	literalCopy := *lit
+	literalCopy.IsSerialized = false
+	return &literalCopy
+}
+
 func hashLitInto(h writeByter, lit *plan.Literal) {
 	if lit == nil {
 		writeByte(h, 0)
@@ -226,7 +238,7 @@ func hashLitInto(h writeByter, lit *plan.Literal) {
 	default:
 		// Uncommon literal variants — fall back to marshal.
 		writeByte(h, 0xff)
-		if b, err := lit.Marshal(); err == nil {
+		if b, err := literalWithoutDiagnosticProvenance(lit).Marshal(); err == nil {
 			_, _ = h.Write(b)
 		}
 	}
@@ -398,8 +410,8 @@ func literalEqual(a, b *plan.Literal) bool {
 		return ok && av.Jsonval == bv.Jsonval
 	default:
 		// Uncommon literal variant — binary fallback.
-		ab, aerr := a.Marshal()
-		bb, berr := b.Marshal()
+		ab, aerr := literalWithoutDiagnosticProvenance(a).Marshal()
+		bb, berr := literalWithoutDiagnosticProvenance(b).Marshal()
 		if aerr != nil || berr != nil {
 			return false
 		}

@@ -252,6 +252,45 @@ func TestOptimizerPreservesSerializedListProvenance(t *testing.T) {
 	}
 }
 
+func TestOptimizerDoesNotTreatSerializedProvenanceAsFilterValue(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		serialized string
+		wantFalse  bool
+	}{
+		{name: "byte-identical values", serialized: "true", wantFalse: false},
+		{name: "different values control", serialized: "false", wantFalse: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			stmt, err := mysql.ParseOne(
+				t.Context(),
+				"select n_name from nation where n_name = serial("+test.serialized+") and n_name = ''''",
+				1,
+			)
+			require.NoError(t, err)
+
+			query, err := NewBaseOptimizer(NewMockCompilerContext(true)).Optimize(stmt, false)
+			require.NoError(t, err)
+
+			seenScan := false
+			for _, node := range query.Nodes {
+				if node.NodeType != planpb.Node_TABLE_SCAN {
+					continue
+				}
+				seenScan = true
+				require.NotEmpty(t, node.FilterList)
+				hasFalse := false
+				for _, filter := range node.FilterList {
+					hasFalse = hasFalse || IsFalseExpr(filter)
+				}
+				require.Equal(t, test.wantFalse, hasFalse,
+					"filter-domain normalization changed serialized byte-value semantics")
+			}
+			require.True(t, seenScan)
+		})
+	}
+}
+
 func TestConstantFoldPreservesSerializedListProvenance(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	stringLiteral := func(value string, serialized bool) *planpb.Expr {
