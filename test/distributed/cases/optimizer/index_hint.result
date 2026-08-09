@@ -100,6 +100,153 @@ limit 8;
 42  ¦  g02  ¦  5  ¦  29  𝄀
 192  ¦  g02  ¦  7  ¦  19  𝄀
 82  ¦  g02  ¦  8  ¦  44
+explain select id,a,b,c
+from t force index for order by(idx_a_b_c_id)
+where a = 'g02' and b between 1 and 8
+order by b,c,id;
+-- @regex("Index Table Scan.*idx_a_b_c_id", true)
+➤ TP QUERY PLAN[12,0,0]  𝄀
+Project  𝄀
+  ->  Sort  𝄀
+        Sort Key: serial_extract(__mo_index_idx_col, 1, INT)) INTERNAL, serial_extract(__mo_index_idx_col, 2, INT)) INTERNAL, __mo_index_pri_col INTERNAL  𝄀
+        ->  Index Table Scan on t.idx_a_b_c_id  𝄀
+              Sort Key: __mo_index_idx_col INTERNAL  𝄀
+              Filter Cond: (serial_extract(__mo_index_idx_col, 0, VARCHAR)) = 'g02'), serial_extract(__mo_index_idx_col, 1, INT)) BETWEEN 1 AND 8
+select id,a,b,c
+from t force index for order by(idx_a_b_c_id)
+where a = 'g02' and b between 1 and 8
+order by b,c,id;
+➤ id[4,32,0]  ¦  a[12,8,0]  ¦  b[4,32,0]  ¦  c[4,32,0]  𝄀
+112  ¦  g02  ¦  1  ¦  42  𝄀
+2  ¦  g02  ¦  2  ¦  14  𝄀
+152  ¦  g02  ¦  4  ¦  4  𝄀
+42  ¦  g02  ¦  5  ¦  29  𝄀
+192  ¦  g02  ¦  7  ¦  19  𝄀
+82  ¦  g02  ¦  8  ¦  44
+explain select id,status,b,c
+from t force index(idx_a_b_c_id)
+where a = 'g02' and b between 1 and 8
+order by b desc,c desc,id desc
+limit 4;
+-- @regex("Index Table Scan.*idx_a_b_c_id", true)
+-- @regex("Join Type: INDEX", true)
+➤ TP QUERY PLAN[12,0,0]  𝄀
+Project  𝄀
+  ->  Sort  𝄀
+        Sort Key: t.b DESC, t.c DESC, t.id DESC  𝄀
+        Limit: 4  𝄀
+        ->  Join  𝄀
+              Join Type: INDEX  𝄀
+              Join Cond: (t.id = __mo_index_pri_col)  𝄀
+              Runtime Filter Build: #[-1,0]  𝄀
+              ->  Table Scan on mysql_compat_index_hint.t [ForceOneCN]  𝄀
+                    Filter Cond: (t.a = 'g02'), t.b BETWEEN 1 AND 8  𝄀
+                    Runtime Filter Probe: t.id  𝄀
+              ->  Index Table Scan on t.idx_a_b_c_id [ForceOneCN]  𝄀
+                    Sort Key: __mo_index_idx_col DESC
+select id,status,b,c
+from t force index(idx_a_b_c_id)
+where a = 'g02' and b between 1 and 8
+order by b desc,c desc,id desc
+limit 4;
+➤ id[4,32,0]  ¦  status[12,12,0]  ¦  b[4,32,0]  ¦  c[4,32,0]  𝄀
+82  ¦  archived  ¦  8  ¦  44  𝄀
+192  ¦  active  ¦  7  ¦  19  𝄀
+42  ¦  archived  ¦  5  ¦  29  𝄀
+152  ¦  active  ¦  4  ¦  4
+explain select id,a,b
+from t force index(idx_a_b_c_id)
+where a in ('g01','g02')
+order by b,id;
+-- @regex("Index Table Scan.*idx_a_b_c_id", true)
+-- @regex("Sort", true)
+-- @regex("Index Reader Param", false)
+➤ TP QUERY PLAN[12,0,0]  𝄀
+Project  𝄀
+  ->  Sort  𝄀
+        Sort Key: serial_extract(__mo_index_idx_col, 1, INT)) INTERNAL, __mo_index_pri_col INTERNAL  𝄀
+        ->  Index Table Scan on t.idx_a_b_c_id  𝄀
+              Filter Cond: serial_extract(__mo_index_idx_col, 0, VARCHAR)) in ([g01 g02])
+select id,a,b
+from t force index(idx_a_b_c_id)
+where a in ('g01','g02')
+order by b,id;
+➤ id[4,32,0]  ¦  a[12,8,0]  ¦  b[4,32,0]  𝄀
+222  ¦  g02  ¦  0  𝄀
+112  ¦  g02  ¦  1  𝄀
+2  ¦  g02  ¦  2  𝄀
+152  ¦  g02  ¦  4  𝄀
+42  ¦  g02  ¦  5  𝄀
+81  ¦  g01  ¦  7  𝄀
+192  ¦  g02  ¦  7  𝄀
+82  ¦  g02  ¦  8  𝄀
+232  ¦  g02  ¦  10
+explain select id,a,b
+from t force index(idx_a_b_c_id)
+where a between 'g01' and 'g02'
+order by b,id;
+-- @regex("Index Table Scan.*idx_a_b_c_id", true)
+-- @regex("Sort", true)
+➤ TP QUERY PLAN[12,0,0]  𝄀
+Project  𝄀
+  ->  Sort  𝄀
+        Sort Key: serial_extract(__mo_index_idx_col, 1, INT)) INTERNAL, __mo_index_pri_col INTERNAL  𝄀
+        ->  Index Table Scan on t.idx_a_b_c_id  𝄀
+              Filter Cond: serial_extract(__mo_index_idx_col, 0, VARCHAR)) BETWEEN 'g01' AND 'g02'
+select count(*) as range_rows, count(distinct id) as range_ids
+from (
+select id
+from t force index(idx_a_b_c_id)
+where a between 'g01' and 'g02'
+order by b,id
+) forced_range;
+➤ range_rows[-5,64,0]  ¦  range_ids[-5,64,0]  𝄀
+9  ¦  9
+explain select id,a,c
+from t force index(idx_a_b_c_id)
+where a = 'g02'
+order by c,id;
+-- @regex("Index Table Scan.*idx_a_b_c_id", true)
+-- @regex("Sort", true)
+➤ TP QUERY PLAN[12,0,0]  𝄀
+Project  𝄀
+  ->  Sort  𝄀
+        Sort Key: serial_extract(__mo_index_idx_col, 2, INT)) INTERNAL, __mo_index_pri_col INTERNAL  𝄀
+        ->  Index Table Scan on t.idx_a_b_c_id  𝄀
+              Filter Cond: (serial_extract(__mo_index_idx_col, 0, VARCHAR)) = 'g02')
+select id,a,c
+from t force index(idx_a_b_c_id)
+where a = 'g02'
+order by c,id;
+➤ id[4,32,0]  ¦  a[12,8,0]  ¦  c[4,32,0]  𝄀
+152  ¦  g02  ¦  4  𝄀
+2  ¦  g02  ¦  14  𝄀
+222  ¦  g02  ¦  17  𝄀
+192  ¦  g02  ¦  19  𝄀
+42  ¦  g02  ¦  29  𝄀
+232  ¦  g02  ¦  34  𝄀
+112  ¦  g02  ¦  42  𝄀
+82  ¦  g02  ¦  44
+explain select id,a,c
+from t force index for order by(idx_a_b_c_id)
+where a = 'g02'
+order by c,id;
+-- @regex("Index Table Scan.*idx_a_b_c_id", false)
+➤ TP QUERY PLAN[12,0,0]  𝄀
+Project  𝄀
+  ->  Sort  𝄀
+        Sort Key: t.c INTERNAL, t.id INTERNAL  𝄀
+        ->  Table Scan on mysql_compat_index_hint.t  𝄀
+              Filter Cond: (t.a = 'g02')
+explain select id,a,c
+from t
+order by c,id;
+-- @regex("Index Table Scan", false)
+➤ TP QUERY PLAN[12,0,0]  𝄀
+Project  𝄀
+  ->  Sort  𝄀
+        Sort Key: t.c INTERNAL, t.id INTERNAL  𝄀
+        ->  Table Scan on mysql_compat_index_hint.t
 explain select a,count(*)
 from t force index for group by(idx_a_b_c_id)
 group by a;
