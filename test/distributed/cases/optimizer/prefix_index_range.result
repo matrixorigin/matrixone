@@ -1,0 +1,185 @@
+drop database if exists prefix_index_range;
+create database prefix_index_range;
+use prefix_index_range;
+create table prefix_range_nonunique (
+id int primary key,
+s varchar(32),
+key idx_s(s(3))
+);
+insert into prefix_range_nonunique values
+(1, 'abbZ'),
+(2, 'abc'),
+(3, 'abcX'),
+(4, 'abcY'),
+(5, 'abd'),
+(6, 'abdA'),
+(7, 'abe'),
+(8, null);
+explain select id from prefix_range_nonunique force index(idx_s)
+where s between 'abcX' and 'abdA';
+-- @regex("Index Table Scan", false)
+➤ TP QUERY PLAN[12,0,0]  𝄀
+Project  𝄀
+  ->  Table Scan on prefix_index_range.prefix_range_nonunique  𝄀
+        Filter Cond: prefix_range_nonunique.s BETWEEN 'abcX' AND 'abdA'
+select id from prefix_range_nonunique force index(idx_s)
+where s between 'abcX' and 'abdA' order by id;
+➤ id[4,32,0]  𝄀
+3  𝄀
+4  𝄀
+5  𝄀
+6
+select id from prefix_range_nonunique ignore index(idx_s)
+where s between 'abcX' and 'abdA' order by id;
+➤ id[4,32,0]  𝄀
+3  𝄀
+4  𝄀
+5  𝄀
+6
+select id from prefix_range_nonunique force index(idx_s)
+where s >= 'abcX' order by id;
+➤ id[4,32,0]  𝄀
+3  𝄀
+4  𝄀
+5  𝄀
+6  𝄀
+7
+select id from prefix_range_nonunique ignore index(idx_s)
+where s >= 'abcX' order by id;
+➤ id[4,32,0]  𝄀
+3  𝄀
+4  𝄀
+5  𝄀
+6  𝄀
+7
+select id from prefix_range_nonunique force index(idx_s)
+where s > 'abcX' and s < 'abdA' order by id;
+➤ id[4,32,0]  𝄀
+4  𝄀
+5
+select id from prefix_range_nonunique ignore index(idx_s)
+where s > 'abcX' and s < 'abdA' order by id;
+➤ id[4,32,0]  𝄀
+4  𝄀
+5
+select id from prefix_range_nonunique force index(idx_s)
+where s between 'abcX' and 'abdA' or s in ('abe') order by id;
+➤ id[4,32,0]  𝄀
+3  𝄀
+4  𝄀
+5  𝄀
+6  𝄀
+7
+select id from prefix_range_nonunique ignore index(idx_s)
+where s between 'abcX' and 'abdA' or s in ('abe') order by id;
+➤ id[4,32,0]  𝄀
+3  𝄀
+4  𝄀
+5  𝄀
+6  𝄀
+7
+explain select id from prefix_range_nonunique force index(idx_s)
+where s in ('abcX', 'abdA');
+-- @regex("prefix_in", false)
+➤ TP QUERY PLAN[12,0,0]  𝄀
+Project  𝄀
+  ->  Table Scan on prefix_index_range.prefix_range_nonunique  𝄀
+        Filter Cond: prefix_range_nonunique.s IN ('abcX', 'abdA')
+select id from prefix_range_nonunique force index(idx_s)
+where s in ('abcX', 'abdA') order by id;
+➤ id[4,32,0]  𝄀
+3  𝄀
+6
+select id from prefix_range_nonunique ignore index(idx_s)
+where s in ('abcX', 'abdA') order by id;
+➤ id[4,32,0]  𝄀
+3  𝄀
+6
+prepare prefix_between_stmt from
+'select id from prefix_range_nonunique force index(idx_s) where s between ? and ? order by id';
+set @prefix_lower = 'abcX';
+set @prefix_upper = 'abdA';
+execute prefix_between_stmt using @prefix_lower, @prefix_upper;
+➤ id[4,32,0]  𝄀
+3  𝄀
+4  𝄀
+5  𝄀
+6
+deallocate prepare prefix_between_stmt;
+create table prefix_range_unique (
+id int primary key,
+s varchar(32),
+unique key uq_s(s(3))
+);
+insert into prefix_range_unique values
+(1, 'abbZ'),
+(2, 'abcY'),
+(3, 'abdA'),
+(4, 'abe');
+explain select id from prefix_range_unique force index(uq_s)
+where s between 'abcX' and 'abdA';
+-- @regex("Index Table Scan", false)
+➤ TP QUERY PLAN[12,0,0]  𝄀
+Project  𝄀
+  ->  Table Scan on prefix_index_range.prefix_range_unique  𝄀
+        Filter Cond: prefix_range_unique.s BETWEEN 'abcX' AND 'abdA'
+select id from prefix_range_unique force index(uq_s)
+where s between 'abcX' and 'abdA' order by id;
+➤ id[4,32,0]  𝄀
+2  𝄀
+3
+select id from prefix_range_unique ignore index(uq_s)
+where s between 'abcX' and 'abdA' order by id;
+➤ id[4,32,0]  𝄀
+2  𝄀
+3
+select mo_ctl('dn', 'flush', 'prefix_index_range.prefix_range_nonunique');
+➤ mo_ctl(dn, flush, prefix_index_range.prefix_range_nonunique)[12,65535,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
+select mo_ctl('dn', 'flush', 'prefix_index_range.prefix_range_unique');
+➤ mo_ctl(dn, flush, prefix_index_range.prefix_range_unique)[12,65535,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
+select id from prefix_range_nonunique force index(idx_s)
+where s between 'abcX' and 'abdA' order by id;
+➤ id[4,32,0]  𝄀
+3  𝄀
+4  𝄀
+5  𝄀
+6
+select id from prefix_range_unique force index(uq_s)
+where s between 'abcX' and 'abdA' order by id;
+➤ id[4,32,0]  𝄀
+2  𝄀
+3
+create index idx_s_complete on prefix_range_nonunique(s);
+explain select id from prefix_range_nonunique force index(idx_s_complete)
+where s between 'abcX' and 'abdA';
+-- @regex("Index Table Scan", true)
+➤ TP QUERY PLAN[12,0,0]  𝄀
+Project  𝄀
+  ->  Index Table Scan on prefix_range_nonunique.idx_s_complete  𝄀
+        Filter Cond: prefix_between(__mo_index_idx_col)
+select id from prefix_range_nonunique force index(idx_s_complete)
+where s between 'abcX' and 'abdA' order by id;
+➤ id[4,32,0]  𝄀
+3  𝄀
+4  𝄀
+5  𝄀
+6
+drop database prefix_index_range;
