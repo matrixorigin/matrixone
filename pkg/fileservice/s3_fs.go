@@ -21,6 +21,7 @@ import (
 	"errors"
 	"io"
 	"iter"
+	"math"
 	pathpkg "path"
 	"runtime"
 	"slices"
@@ -755,7 +756,7 @@ read_disk_cache:
 		}
 	}
 
-	if forcePerEntryRangeRead {
+	if forcePerEntryRangeRead || forceMinimalRangeRead {
 		goto read_s3
 	}
 	if mayReadMemoryCache || mayReadDiskCache {
@@ -827,6 +828,36 @@ read_disk_cache:
 					goto read_s3
 				}
 				forceMinimalRangeRead = true
+				if rangeKey, ok := s.singleEntryRangeMergeKey(vector); ok {
+					LogEvent(ctx, str_ioMerger_Merge_begin)
+					rangeMergeStart := time.Now()
+					rangeDone, rangeGeneration := s.ioMerger.merge(rangeKey)
+					if rangeDone != nil {
+						finishMerge = rangeDone
+						stats.AddS3FSReadIOMergerTimeConsumption(time.Since(rangeMergeStart))
+						metric.FSReadDurationIOMerger.Observe(time.Since(rangeMergeStart).Seconds())
+						LogEvent(ctx, str_ioMerger_Merge_initiate)
+						LogEvent(ctx, str_ioMerger_Merge_end)
+					} else {
+						LogEvent(ctx, str_ioMerger_Merge_wait)
+						completed, waitErr = waitForIOGeneration(
+							ctx, rangeKey, rangeGeneration, maxIOWaitDuration,
+						)
+						rangeMergeTime := time.Since(rangeMergeStart)
+						stats.AddS3FSReadIOMergerTimeConsumption(rangeMergeTime)
+						metric.FSReadDurationIOMerger.Observe(rangeMergeTime.Seconds())
+						LogEvent(ctx, str_ioMerger_Merge_end)
+						if waitErr != nil {
+							return waitErr
+						}
+						if completed {
+							if mayReadMemoryCache {
+								goto read_memory_cache
+							}
+							goto read_disk_cache
+						}
+					}
+				}
 				goto read_s3
 			}
 			if completed {
@@ -1224,6 +1255,43 @@ func (s *S3FS) readMergeKey(vector *IOVector) IOMergeKey {
 		key.CacheFill = s.willCacheFullObject(vector)
 	}
 	return key
+}
+
+func (s *S3FS) singleEntryRangeMergeKey(vector *IOVector) (IOMergeKey, bool) {
+	var target *IOEntry
+	for i := range vector.Entries {
+		entry := &vector.Entries[i]
+		if entry.done {
+			continue
+		}
+		if target != nil || entry.Offset < 0 || entry.Size <= 0 ||
+			entry.Offset > math.MaxInt64-entry.Size ||
+			entry.WriterForRead != nil || entry.ReadCloserForRead != nil {
+			return IOMergeKey{}, false
+		}
+		target = entry
+	}
+	if target == nil {
+		return IOMergeKey{}, false
+	}
+
+	canPublish := target.ToCacheData != nil && s.memCache != nil &&
+		!vector.Policy.Any(SkipMemoryCacheReads, SkipMemoryCacheWrites)
+	if !canPublish {
+		canPublish = s.diskCache != nil && vector.Policy.CacheIOEntry() &&
+			!vector.Policy.Any(SkipDiskCacheReads, SkipDiskCacheWrites)
+	}
+	if !canPublish {
+		return IOMergeKey{}, false
+	}
+
+	return IOMergeKey{
+		Path:      vector.FilePath,
+		Offset:    target.Offset,
+		End:       target.Offset + target.Size,
+		Policy:    vector.Policy,
+		CacheFill: true,
+	}, true
 }
 
 func (s *S3FS) willCacheFullObject(vector *IOVector) bool {
