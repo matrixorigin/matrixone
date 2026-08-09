@@ -6,16 +6,16 @@ select @never_set is null;
 1
 select abs(-5) into @out;
 select @out, @OUT;
-➤ @out[12,0,0]  ¦  @OUT[12,0,0]  𝄀
+➤ @out[-5,64,0]  ¦  @OUT[-5,64,0]  𝄀
 5  ¦  5
 select 7, 'ok', null into @out_number, @out_text, @out_null;
 select @out_number, @out_text, @out_null is null;
-➤ @out_number[12,0,0]  ¦  @out_text[12,0,0]  ¦  @out_null is null[-7,1,0]  𝄀
+➤ @out_number[-5,64,0]  ¦  @out_text[12,65535,0]  ¦  @out_null is null[-7,1,0]  𝄀
 7  ¦  ok  ¦  1
 set @a = 1, @b = 2;
 select @a + @b;
-➤ @a + @b[8,53,31]  𝄀
-3.0
+➤ @a + @b[-5,64,0]  𝄀
+3
 prepare ps_count from 'select ? + ? as sum_val';
 set @c1 = 1, @c2 = 2;
 execute ps_count using @c1, @c2;
@@ -29,34 +29,34 @@ create table uv_src(id int primary key, v varchar(10));
 insert into uv_src values (1, 'one'), (2, 'two'), (3, 'three');
 select id, v from uv_src where id = 2 into @row_id, @row_v;
 select @row_id, @row_v;
-➤ @row_id[12,0,0]  ¦  @row_v[12,0,0]  𝄀
+➤ @row_id[4,32,0]  ¦  @row_v[12,10,0]  𝄀
 2  ¦  two
 select v from uv_src order by id desc limit 1 into @last_v;
 select @last_v;
-➤ @last_v[12,0,0]  𝄀
+➤ @last_v[12,10,0]  𝄀
 three
 set @keep = 'old';
 select v from uv_src where id = 100 into @keep;
 select @keep;
-➤ @keep[12,0,0]  𝄀
+➤ @keep[12,65535,0]  𝄀
 old
 set @arity_a = 'old_a', @arity_b = 'old_b';
 select 1 where false into @arity_a, @arity_b;
 -- @regex("The used SELECT statements have a different number of columns", true)
 The used SELECT statements have a different number of columns
 select @arity_a, @arity_b;
-➤ @arity_a[12,0,0]  ¦  @arity_b[12,0,0]  𝄀
+➤ @arity_a[12,65535,0]  ¦  @arity_b[12,65535,0]  𝄀
 old_a  ¦  old_b
 select count(*) from uv_src where id = 100 into @empty_count;
 select @empty_count;
-➤ @empty_count[12,0,0]  𝄀
+➤ @empty_count[-5,64,0]  𝄀
 0
 drop procedure if exists p_select_into_user_var;
 set @proc_out = 'old';
 create procedure p_select_into_user_var() 'begin select 123 into @proc_out; end';
 call p_select_into_user_var();
 select @proc_out;
-➤ @proc_out[12,0,0]  𝄀
+➤ @proc_out[-5,64,0]  𝄀
 123
 drop procedure p_select_into_user_var;
 create table uv_bin(id int primary key, b binary(4), key idx_b(b));
@@ -72,6 +72,6 @@ select id from uv_src into @too_many;
 -- @regex("Result consisted of more than one row", true)
 Result consisted of more than one row
 select @too_many;
-➤ @too_many[12,0,0]  𝄀
+➤ @too_many[12,65535,0]  𝄀
 old
 drop database mysql_compat_user_variables;
