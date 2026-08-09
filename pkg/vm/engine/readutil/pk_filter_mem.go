@@ -95,31 +95,41 @@ func NewMemPKFilter(
 
 	filter.TS = types.TimestampToTS(ts)
 
-	if !basePKFilter.Valid || tableDef == nil || tableDef.Pkey == nil || packerPool == nil {
+	if tableDef == nil {
+		return
+	}
+	// The membership filter selects a separate key column for IVF/fulltext and
+	// remains useful even when the SQL predicate cannot produce a PK fast path.
+	filter.setFilterHint(tableDef, filterHint)
+
+	if !basePKFilter.Valid || tableDef.Pkey == nil || packerPool == nil {
 		return
 	}
 
 	if len(basePKFilter.Disjuncts) > 0 {
-		filter.disjuncts = make([]MemPKFilter, 0, len(basePKFilter.Disjuncts))
+		disjuncts := make([]MemPKFilter, 0, len(basePKFilter.Disjuncts))
 		for idx := range basePKFilter.Disjuncts {
-			disjunct, err := NewMemPKFilter(
+			disjunct, disjunctErr := NewMemPKFilter(
 				tableDef,
 				ts,
 				packerPool,
 				basePKFilter.Disjuncts[idx],
 				engine.FilterHint{},
 			)
-			if err != nil {
-				return MemPKFilter{}, err
+			if disjunctErr != nil {
+				return MemPKFilter{}, disjunctErr
 			}
 			if !disjunct.Valid() {
-				return MemPKFilter{TS: filter.TS}, nil
+				// PK pruning fails open as a unit: do not publish a
+				// partially constructed disjunction, and do not discard the
+				// independently initialized membership filter.
+				return
 			}
-			filter.disjuncts = append(filter.disjuncts, disjunct)
+			disjuncts = append(disjuncts, disjunct)
 		}
+		filter.disjuncts = disjuncts
 		filter.isValid = len(filter.disjuncts) > 0
 		filter.isVec = true
-		filter.setFilterHint(tableDef, filterHint)
 		return
 	}
 	if !validBlockPKSearchFilter(basePKFilter) {
@@ -305,8 +315,6 @@ func NewMemPKFilter(
 	default:
 		return
 	}
-
-	filter.setFilterHint(tableDef, filterHint)
 
 	return
 }

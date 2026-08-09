@@ -1260,7 +1260,8 @@ type Engine interface {
 		expr *plan.Expr,
 		def *plan.TableDef,
 		relData RelData,
-		num int) ([]Reader, error)
+		num int,
+		filterHint ...FilterHint) ([]Reader, error)
 
 	// Get database name & table name by table id
 	GetNameById(ctx context.Context, op client.TxnOperator, tableId uint64) (dbName string, tblName string, err error)
@@ -1446,8 +1447,8 @@ func GetPrefetchOnSubscribed() (bool, []*regexp.Regexp) {
 // MembershipFilter is a membership filter over the indexed primary-key values
 // (fulltext calls this PK doc_id) used to prune an index scan to the candidate
 // rows that pass the surrounding relational predicate. It is implemented in
-// pkg/common/docfilter by an exact bitset (cbitmap / CRoaring) for integer PKs
-// and by a CBloomFilter (approximate) for non-integer PKs.
+// pkg/common/docfilter by an exact set (dense cbitmap / sparse Sorted64) for
+// integer PKs and by a CBloomFilter (approximate) for non-integer PKs.
 //
 // This is the CONSUMER (probe) view, so it deliberately omits Share() — a plain
 // *bloomfilter.CBloomFilter satisfies it directly. The PRODUCER superset is
