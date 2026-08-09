@@ -89,7 +89,8 @@ func classifyViewRefreshFailure(err error) *viewRefreshFailure {
 		return &viewRefreshFailure{viewRefreshFailurePlannerIncompatible, viewRefreshMarkInvalid, err}
 	}
 	if moerr.IsMoErrCode(err, moerr.ErrBadView) ||
-		moerr.IsMoErrCode(err, moerr.ErrViewWrongList) {
+		moerr.IsMoErrCode(err, moerr.ErrViewWrongList) ||
+		moerr.IsMoErrCode(err, moerr.ErrInvalidInput) {
 		return &viewRefreshFailure{viewRefreshFailurePermanentlyInvalid, viewRefreshMarkInvalid, err}
 	}
 	if moerr.IsMoErrCode(err, moerr.ErrRPCTimeout) || moerr.IsMoErrCode(err, moerr.ErrBackendClosed) ||

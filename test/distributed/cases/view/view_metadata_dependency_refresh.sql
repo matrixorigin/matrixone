@@ -88,4 +88,19 @@ ALTER TABLE right_source MODIFY id BIGINT NOT NULL;
 CREATE TABLE copied_outer_join AS SELECT * FROM outer_join_view;
 SELECT count(*) FROM copied_outer_join WHERE rid IS NULL;
 
+CREATE TABLE invalid_left (a INT);
+CREATE TABLE invalid_right (a INT);
+CREATE VIEW invalid_direct AS
+SELECT invalid_left.a, invalid_right.a AS b FROM invalid_left LEFT JOIN invalid_right USING(a);
+CREATE VIEW invalid_downstream AS SELECT a FROM invalid_direct;
+ALTER TABLE invalid_left CHANGE a renamed_a BIGINT;
+SELECT target_relation_name, status, failure_code
+FROM mo_catalog.mo_view_refresh
+WHERE target_database_name = 'view_metadata_refresh'
+AND target_relation_name IN ('invalid_direct','invalid_downstream')
+ORDER BY target_relation_name;
+DROP TABLE invalid_left;
+CREATE TABLE invalid_left (c1 INT, c2 INT);
+SHOW CREATE TABLE invalid_left;
+
 DROP DATABASE view_metadata_refresh;

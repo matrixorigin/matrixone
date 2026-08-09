@@ -314,14 +314,22 @@ func (c *Compile) refreshViewsAfterRelationMutation(
 			remainingSynchronous--
 			if err = c.refreshOneView(target, current); err != nil {
 				failure := classifyViewRefreshFailure(err)
-				if failure.code == viewRefreshFailureDependencyUnavailable &&
-					failure.disposition == viewRefreshRetry {
+				switch failure.disposition {
+				case viewRefreshMarkInvalid:
+					if err = c.markSynchronousViewRefreshInvalid(target, failure.code); err != nil {
+						return err
+					}
+				case viewRefreshRetry:
+					if failure.code == viewRefreshFailureCanceled ||
+						failure.code == viewRefreshFailureTxnConflict {
+						return err
+					}
 					// enqueueDependentViews already made the target durable PENDING.
-					// A different unavailable dependency must not make source DDL
-					// success depend on target ordering or the synchronous budget.
-					continue
+					// A failed rebind must not make source DDL success depend on
+					// target ordering or the synchronous budget.
+				default:
+					return err
 				}
-				return err
 			}
 			processedGenerations[key] = target.generation
 			queue = append(queue, viewRelationMutation{
@@ -332,6 +340,19 @@ func (c *Compile) refreshViewsAfterRelationMutation(
 		}
 	}
 	return nil
+}
+
+func (c *Compile) markSynchronousViewRefreshInvalid(
+	target viewRefreshTarget,
+	code viewRefreshFailureCode,
+) error {
+	return c.runSqlWithSystemTenant(fmt.Sprintf(
+		"update %s.%s set status='%s',failure_code=%d,next_retry_at=null,"+
+			"lease_owner='',lease_expires_at=null where account_id=%d and target_relation_id=%d "+
+			"and target_generation=%d",
+		catalog.MO_CATALOG, catalog.MO_VIEW_REFRESH, viewRefreshStatusInvalid, code,
+		target.accountID, target.relationID, target.generation,
+	))
 }
 
 func synchronousViewRefreshCount(targets, remaining int) int {
