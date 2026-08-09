@@ -155,13 +155,13 @@ func TestDoComQueryStopsAfterStatementError(t *testing.T) {
 	first.EXPECT().GetAst().Return(stmts[0]).AnyTimes()
 	first.EXPECT().Plan().Return(nil).AnyTimes()
 	first.EXPECT().Compile(gomock.Any(), gomock.Any()).Return(nil, firstErr)
-	first.EXPECT().Free().AnyTimes()
+	first.EXPECT().Free().Times(1)
 
 	// If doComQuery incorrectly continues after the error, this wrapper would
 	// be asked for its AST or plan.  Only Free is expected because all parsed
 	// wrappers are released by the request cleanup defer.
 	second := mock_frontend.NewMockComputationWrapper(ctrl)
-	second.EXPECT().Free().AnyTimes()
+	second.EXPECT().Free().Times(1)
 
 	wrapperStubs := gostub.Stub(&GetComputationWrapper, func(
 		*ExecCtx, string, string, engine.Engine, *process.Process, *Session,

@@ -1,4 +1,5 @@
--- Regression coverage for matrixone#25118 (multi-statement error handling).
+-- Regression coverage for matrixone#25121 (sub-issue of matrixone#25118:
+-- multi-statement error handling).
 --
 -- The distributed-case runner sends each SQL statement as an independent
 -- request.  A statement error must therefore not poison the connection: the
