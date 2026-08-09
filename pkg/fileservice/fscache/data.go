@@ -15,6 +15,11 @@
 package fscache
 
 type Data interface {
+	// Size is the logical payload length visible to cache consumers.
+	Size() int64
+	// Capacity is the allocator-backed capacity retained while the data is live.
+	// Cache admission and physical-memory metrics use this value.
+	Capacity() int64
 	Bytes() []byte
 	Slice(length int) Data
 	Retain()

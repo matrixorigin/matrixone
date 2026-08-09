@@ -25,27 +25,59 @@ import (
 )
 
 type DataCache struct {
-	fifo *Cache[fscache.CacheKey, fscache.Data]
+	fifo *Cache[fscache.CacheKey, dataCacheValue]
+}
+
+// dataCacheValue captures the logical length at Set time. Data.Slice may
+// subsequently change the visible length, but cache accounting must describe
+// the entry that was admitted.
+type dataCacheValue struct {
+	data        fscache.Data
+	logicalSize int64
 }
 
 func NewDataCache(
 	capacity fscache.CapacityFunc,
-	postSet func(ctx context.Context, key fscache.CacheKey, value fscache.Data, size int64, seq uint64),
+	postSet func(ctx context.Context, key fscache.CacheKey, value fscache.Data, logicalSize, size int64, seq uint64),
 	postGet func(ctx context.Context, key fscache.CacheKey, value fscache.Data, size int64),
-	postEvict func(ctx context.Context, key fscache.CacheKey, value fscache.Data, size int64, seq uint64),
+	postEvict func(ctx context.Context, key fscache.CacheKey, value fscache.Data, logicalSize, size int64, seq uint64),
 ) *DataCache {
 	return NewDataCacheWithPrepareSet(capacity, nil, postSet, postGet, postEvict)
 }
 
 func NewDataCacheWithPrepareSet(
 	capacity fscache.CapacityFunc,
-	prepareSet func(ctx context.Context, key fscache.CacheKey, value fscache.Data, size int64, seq uint64) func(inserted bool),
-	postSet func(ctx context.Context, key fscache.CacheKey, value fscache.Data, size int64, seq uint64),
+	prepareSet func(ctx context.Context, key fscache.CacheKey, value fscache.Data, logicalSize, size int64, seq uint64) func(inserted bool),
+	postSet func(ctx context.Context, key fscache.CacheKey, value fscache.Data, logicalSize, size int64, seq uint64),
 	postGet func(ctx context.Context, key fscache.CacheKey, value fscache.Data, size int64),
-	postEvict func(ctx context.Context, key fscache.CacheKey, value fscache.Data, size int64, seq uint64),
+	postEvict func(ctx context.Context, key fscache.CacheKey, value fscache.Data, logicalSize, size int64, seq uint64),
 ) *DataCache {
+	var fifoPrepareSet func(ctx context.Context, key fscache.CacheKey, value dataCacheValue, size int64, seq uint64) func(inserted bool)
+	if prepareSet != nil {
+		fifoPrepareSet = func(ctx context.Context, key fscache.CacheKey, value dataCacheValue, size int64, seq uint64) func(inserted bool) {
+			return prepareSet(ctx, key, value.data, value.logicalSize, size, seq)
+		}
+	}
+	var fifoPostSet func(ctx context.Context, key fscache.CacheKey, value dataCacheValue, size int64, seq uint64)
+	if postSet != nil {
+		fifoPostSet = func(ctx context.Context, key fscache.CacheKey, value dataCacheValue, size int64, seq uint64) {
+			postSet(ctx, key, value.data, value.logicalSize, size, seq)
+		}
+	}
+	var fifoPostGet func(ctx context.Context, key fscache.CacheKey, value dataCacheValue, size int64)
+	if postGet != nil {
+		fifoPostGet = func(ctx context.Context, key fscache.CacheKey, value dataCacheValue, size int64) {
+			postGet(ctx, key, value.data, size)
+		}
+	}
+	var fifoPostEvict func(ctx context.Context, key fscache.CacheKey, value dataCacheValue, size int64, seq uint64)
+	if postEvict != nil {
+		fifoPostEvict = func(ctx context.Context, key fscache.CacheKey, value dataCacheValue, size int64, seq uint64) {
+			postEvict(ctx, key, value.data, value.logicalSize, size, seq)
+		}
+	}
 	return &DataCache{
-		fifo: NewWithPrepareSet(capacity, shardCacheKey, prepareSet, postSet, postGet, postEvict),
+		fifo: NewWithPrepareSet(capacity, shardCacheKey, fifoPrepareSet, fifoPostSet, fifoPostGet, fifoPostEvict),
 	}
 }
 
@@ -92,7 +124,7 @@ func (d *DataCache) DeletePaths(ctx context.Context, paths []string) {
 func (d *DataCache) deletePath(ctx context.Context, shardIndex int, path string) {
 	shard := &d.fifo.shards[shardIndex]
 	shard.Lock()
-	var pending []_PendingPostEvict[fscache.CacheKey, fscache.Data]
+	var pending []_PendingPostEvict[fscache.CacheKey, dataCacheValue]
 	for key, item := range shard.values {
 		if key.Path == path {
 			delete(shard.values, key)
@@ -135,7 +167,11 @@ func (d *DataCache) Flush(ctx context.Context) {
 }
 
 func (d *DataCache) Get(ctx context.Context, key query.CacheKey) (fscache.Data, bool) {
-	return d.fifo.Get(ctx, key)
+	value, ok := d.fifo.Get(ctx, key)
+	if !ok {
+		return nil, false
+	}
+	return value.data, true
 }
 
 func (d *DataCache) Contains(key query.CacheKey) bool {
@@ -147,14 +183,15 @@ func (d *DataCache) CurrentSeq(key query.CacheKey) (uint64, bool) {
 }
 
 func (d *DataCache) Set(ctx context.Context, key query.CacheKey, value fscache.Data) error {
-	size := int64(-1)
-	if sized, ok := value.(interface{ Size() int64 }); ok {
-		size = sized.Size()
+	logicalSize := value.Size()
+	size := value.Capacity()
+	if logicalSize < 0 || size < logicalSize {
+		panic("cache data reports an invalid logical size or backing capacity")
 	}
-	if size < 0 {
-		size = int64(len(value.Bytes()))
-	}
-	_, rejected := d.fifo.Set(ctx, key, value, size)
+	_, rejected := d.fifo.Set(ctx, key, dataCacheValue{
+		data:        value,
+		logicalSize: logicalSize,
+	}, size)
 	if rejected {
 		return fscache.ErrCacheAdmissionRejected
 	}
