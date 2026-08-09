@@ -176,6 +176,48 @@ func TestExprStructuralHashDistinguishesIsBin(t *testing.T) {
 	require.True(t, exprStructuralEqual(b, c))
 }
 
+func TestExprStructuralHashIgnoresDiagnosticProvenance(t *testing.T) {
+	literal := strLit("encoded")
+	serializedLiteral := DeepCopyExpr(literal)
+	serializedLiteral.GetLit().IsSerialized = true
+	require.Equal(t, exprStructuralHash(literal), exprStructuralHash(serializedLiteral))
+	require.True(t, exprStructuralEqual(literal, serializedLiteral))
+
+	decimalLiteral := &planpb.Expr{
+		Typ: planpb.Type{Id: int32(types.T_decimal64), Width: 8, Scale: 2},
+		Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{
+			Value: &planpb.Literal_Decimal64Val{Decimal64Val: &planpb.Decimal64{A: 1234}},
+		}},
+	}
+	serializedDecimal := DeepCopyExpr(decimalLiteral)
+	serializedDecimal.GetLit().IsSerialized = true
+	require.Equal(t, exprStructuralHash(decimalLiteral), exprStructuralHash(serializedDecimal),
+		"fallback literal variants must also ignore diagnostic provenance")
+	require.True(t, exprStructuralEqual(decimalLiteral, serializedDecimal))
+
+	vectorExpr := &planpb.Expr{
+		Typ: planpb.Type{Id: int32(types.T_varchar)},
+		Expr: &planpb.Expr_Vec{Vec: &planpb.LiteralVec{
+			Len:  2,
+			Data: []byte("same executable vector"),
+		}},
+	}
+	serializedVector := DeepCopyExpr(vectorExpr)
+	serializedVector.GetVec().IsSerialized = true
+	require.Equal(t, exprStructuralHash(vectorExpr), exprStructuralHash(serializedVector))
+	require.True(t, exprStructuralEqual(vectorExpr, serializedVector))
+
+	differentData := DeepCopyExpr(vectorExpr)
+	differentData.GetVec().Data = []byte("different executable vector")
+	require.NotEqual(t, exprStructuralHash(vectorExpr), exprStructuralHash(differentData))
+	require.False(t, exprStructuralEqual(vectorExpr, differentData))
+
+	differentLen := DeepCopyExpr(vectorExpr)
+	differentLen.GetVec().Len++
+	require.NotEqual(t, exprStructuralHash(vectorExpr), exprStructuralHash(differentLen))
+	require.False(t, exprStructuralEqual(vectorExpr, differentLen))
+}
+
 // TestExprStructuralEqualNullAndTypeMismatch covers the null-vs-non-null and
 // cross-variant paths (e.g. literal vs function, literal vs column).
 func TestExprStructuralEqualNullAndTypeMismatch(t *testing.T) {

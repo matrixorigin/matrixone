@@ -484,6 +484,10 @@ func inRHSValues(expr *plan.Expr, expectedType plan.Type) (values []*plan.Expr, 
 		if lit == nil {
 			return nil, false
 		}
+		// LiteralVec provenance is container-level. Conservatively restore it
+		// on every materialized value so subsequent composite-key rewrites
+		// cannot expose an encoded member after vector-to-literal conversion.
+		lit.IsSerialized = expr.GetVec().IsSerialized
 		literalTyp := typ
 		literalTyp.NotNullable = !lit.Isnull
 		values[i] = &plan.Expr{
@@ -553,6 +557,11 @@ func blockFilterLiteralKey(lit *plan.Literal, typ plan.Type) (string, bool) {
 	if lit == nil {
 		return "", false
 	}
+	// IsSerialized only controls diagnostic rendering. It must not make
+	// otherwise identical list/vector block-filter sets compare different,
+	// including plans produced by older peers that do not carry provenance.
+	lit = literalWithoutDiagnosticProvenance(lit)
+	typ = literalSemanticKeyType(typ)
 	litBytes, err := lit.Marshal()
 	if err != nil {
 		return "", false
@@ -1603,6 +1612,8 @@ func constLiteralKey(expr *plan.Expr) (string, bool) {
 	if !ok {
 		return "", false
 	}
+	lit = literalWithoutDiagnosticProvenance(lit)
+	typ = literalSemanticKeyType(typ)
 	// Serialize the literal with proto binary Marshal rather than String(),
 	// which goes through the reflection-driven TextMarshaler and can dominate
 	// CPU when called per-value across large IN lists.
@@ -1626,6 +1637,20 @@ func constLiteralKey(expr *plan.Expr) (string, bool) {
 	key = append(key, buf[:n]...)
 	key = append(key, litBytes...)
 	return string(key), true
+}
+
+// literalSemanticKeyType removes declaration metadata that the comparison
+// operators do not consult once a string value has been materialized. String
+// equality is byte-based, so different maximum widths cannot make identical
+// values distinct. Type identity, scale, and non-string widths remain part of
+// the key.
+func literalSemanticKeyType(typ plan.Type) plan.Type {
+	switch types.T(typ.Id) {
+	case types.T_char, types.T_varchar, types.T_blob, types.T_text,
+		types.T_binary, types.T_varbinary, types.T_datalink:
+		typ.Width = 0
+	}
+	return typ
 }
 
 func constLiteralKeyForOperand(expr *plan.Expr, operand *domainFilterOperand) (string, bool) {

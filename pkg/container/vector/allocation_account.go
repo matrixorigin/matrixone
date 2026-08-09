@@ -265,6 +265,7 @@ func (v *Vector) CanSetAllocationAccount(
 func (v *Vector) hasBackingStorage() bool {
 	return cap(v.data) != 0 ||
 		cap(v.area) != 0 ||
+		cap(v.prepareParamKinds) != 0 ||
 		v.nsp.GetBitmap().Size() != 0 ||
 		v.gsp.GetBitmap().Size() != 0 ||
 		v.nsp.GetBitmap().ExternalStorageCapacity() != 0 ||
@@ -278,6 +279,7 @@ func (v *Vector) hasBackingStorage() bool {
 func (v *Vector) hasOwnedBackingStorage() bool {
 	return cap(v.data) != 0 && !v.cantFreeData ||
 		cap(v.area) != 0 && !v.cantFreeArea ||
+		cap(v.prepareParamKinds) != 0 ||
 		v.nsp.GetBitmap().ExternalStorageCapacity() != 0 ||
 		v.gsp.GetBitmap().ExternalStorageCapacity() != 0
 }
