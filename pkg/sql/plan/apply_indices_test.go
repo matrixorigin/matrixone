@@ -480,6 +480,209 @@ func TestIndexHintOrderScopePreservesCoveringIndexFilters(t *testing.T) {
 	require.Nil(t, indexScan.IndexReaderParam)
 }
 
+func TestForceIndexOrderAcceptsEqualityFixedLeadingPrefix(t *testing.T) {
+	tests := []struct {
+		name       string
+		sql        string
+		descending bool
+		backfill   bool
+	}{
+		{
+			name: "ascending covering without limit",
+			sql: `select id, a, b from index_hint_t force index for order by(idx_ab)
+				where a = 1 and b between 10 and 20 order by b, id`,
+		},
+		{
+			name: "descending noncovering with limit",
+			sql: `select payload from index_hint_t force index for order by(idx_ab)
+				where a = 1 and b between 10 and 20 order by b desc, id desc limit 10`,
+			descending: true,
+			backfill:   true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mock := NewMockOptimizer(true)
+			addIndexHintChoiceTableForTest(mock)
+			addIndexHintPayloadColumnForTest(mock)
+
+			queryPlan, err := runOneStmt(mock, t, tt.sql)
+			require.NoError(t, err)
+			indexScan := findFirstIndexScanNode(queryPlan)
+			require.NotNil(t, indexScan)
+			require.Equal(t, "idx_ab", indexScan.IndexScanInfo.IndexName)
+			require.NotEmpty(t, indexScan.OrderBy)
+			require.Equal(t, tt.descending, indexScan.OrderBy[0].Flag&planpb.OrderBySpec_DESC != 0)
+			require.Equal(t, tt.backfill, planHasIndexJoin(queryPlan))
+			require.True(t, planHasSort(queryPlan))
+		})
+	}
+}
+
+func TestIndexOrderColumnsMatchEqualityFixedPrefix(t *testing.T) {
+	const scanTag int32 = 41
+	intType := planpb.Type{Id: int32(types.T_int32)}
+	tableDef := &planpb.TableDef{
+		Cols: []*planpb.ColDef{
+			{Name: "id", Typ: intType},
+			{Name: "a", Typ: intType},
+			{Name: "b", Typ: intType},
+		},
+		Name2ColIndex: map[string]int32{"id": 0, "a": 1, "b": 2},
+	}
+
+	literalEquality := func(commuted bool, relPos int32) *planpb.Expr {
+		expr := makeEqFilterExpr(1)
+		expr.GetF().Args[0].GetCol().RelPos = relPos
+		if commuted {
+			expr.GetF().Args[0], expr.GetF().Args[1] = expr.GetF().Args[1], expr.GetF().Args[0]
+		}
+		return expr
+	}
+	parameterEquality := makeEqFilterExpr(1)
+	parameterEquality.GetF().Args[0].GetCol().RelPos = scanTag
+	parameterEquality.GetF().Args[1] = &planpb.Expr{
+		Typ:  intType,
+		Expr: &planpb.Expr_P{P: &planpb.ParamRef{Pos: 0}},
+	}
+	columnEquality := makeEqFilterExpr(1)
+	columnEquality.GetF().Args[0].GetCol().RelPos = scanTag
+	columnEquality.GetF().Args[1] = GetColExpr(intType, scanTag, 2)
+	nonEquality := makeEqFilterExpr(1)
+	nonEquality.GetF().Func.ObjName = ">"
+	nonEquality.GetF().Args[0].GetCol().RelPos = scanTag
+
+	tests := []struct {
+		name       string
+		parts      []string
+		filters    []*planpb.Expr
+		orderCols  []int32
+		compatible bool
+	}{
+		{name: "literal fixes leading part", parts: []string{"a", "b", "id"}, filters: []*planpb.Expr{literalEquality(false, scanTag)}, orderCols: []int32{2, 0}, compatible: true},
+		{name: "commuted literal fixes leading part", parts: []string{"a", "b", "id"}, filters: []*planpb.Expr{literalEquality(true, scanTag)}, orderCols: []int32{2, 0}, compatible: true},
+		{name: "parameter fixes leading part", parts: []string{"a", "b", "id"}, filters: []*planpb.Expr{parameterEquality}, orderCols: []int32{2, 0}, compatible: true},
+		{name: "fixed part is order neutral", parts: []string{"a", "b", "id"}, filters: []*planpb.Expr{literalEquality(false, scanTag)}, orderCols: []int32{1, 2, 0}, compatible: true},
+		{name: "order by fixed part only", parts: []string{"a", "b", "id"}, filters: []*planpb.Expr{literalEquality(false, scanTag)}, orderCols: []int32{1}, compatible: true},
+		{name: "column equality does not fix a value", parts: []string{"a", "b", "id"}, filters: []*planpb.Expr{columnEquality}, orderCols: []int32{2, 0}},
+		{name: "foreign binding does not fix scan column", parts: []string{"a", "b", "id"}, filters: []*planpb.Expr{literalEquality(false, scanTag+1)}, orderCols: []int32{2, 0}},
+		{name: "non equality does not fix a value", parts: []string{"a", "b", "id"}, filters: []*planpb.Expr{nonEquality}, orderCols: []int32{2, 0}},
+		{name: "unconstrained suffix cannot be skipped", parts: []string{"a", "b", "id"}, filters: []*planpb.Expr{literalEquality(false, scanTag)}, orderCols: []int32{0}},
+		{name: "order cannot extend past index suffix", parts: []string{"a"}, filters: []*planpb.Expr{literalEquality(false, scanTag)}, orderCols: []int32{2}},
+		{name: "missing index part metadata is not fixed", parts: []string{"missing", "b"}, filters: []*planpb.Expr{literalEquality(false, scanTag)}, orderCols: []int32{2}},
+		{name: "invalid order column is rejected", parts: []string{"a", "b", "id"}, filters: []*planpb.Expr{literalEquality(false, scanTag)}, orderCols: []int32{3}},
+		{name: "empty order is rejected", parts: []string{"a", "b", "id"}, filters: []*planpb.Expr{literalEquality(false, scanTag)}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			scanNode := &planpb.Node{
+				BindingTags: []int32{scanTag},
+				TableDef:    tableDef,
+				FilterList:  tt.filters,
+			}
+			idxDef := &planpb.IndexDef{Parts: tt.parts}
+			require.Equal(t, tt.compatible, indexOrderColumnsMatch(idxDef, scanNode, tt.orderCols))
+		})
+	}
+}
+
+func TestPlainForceIndexRetainsAccessWhenOrderIsIncompatible(t *testing.T) {
+	tests := []struct {
+		name     string
+		sql      string
+		backfill bool
+	}{
+		{
+			name: "in predicate fixes multiple leading values",
+			sql:  "select id, a, b from index_hint_t force index(idx_ab) where a in (1, 2) order by b, id",
+		},
+		{
+			name: "range predicate leaves leading part varying with limit",
+			sql:  "select id, a, b from index_hint_t force index(idx_ab) where a between 1 and 2 order by b desc, id desc limit 10",
+		},
+		{
+			name:     "unconstrained middle part noncovering",
+			sql:      "select payload from index_hint_t force index(idx_ab) where a = 1 order by id",
+			backfill: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mock := NewMockOptimizer(true)
+			addIndexHintChoiceTableForTest(mock)
+			addIndexHintPayloadColumnForTest(mock)
+
+			queryPlan, err := runOneStmt(mock, t, tt.sql)
+			require.NoError(t, err)
+			indexScan := findFirstIndexScanNode(queryPlan)
+			require.NotNil(t, indexScan)
+			require.Equal(t, "idx_ab", indexScan.IndexScanInfo.IndexName)
+			require.Empty(t, indexScan.OrderBy)
+			require.Equal(t, tt.backfill, planHasIndexJoin(queryPlan))
+			require.True(t, planHasSort(queryPlan))
+		})
+	}
+}
+
+func TestForceIndexOrderIncompatibleControls(t *testing.T) {
+	for _, tt := range []struct {
+		name      string
+		predicate string
+	}{
+		{name: "volatile right operand", predicate: "a = floor(rand() * 2)"},
+		{name: "volatile left operand", predicate: "floor(rand() * 2) = a"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			mock := NewMockOptimizer(true)
+			addIndexHintChoiceTableForTest(mock)
+			mock.ctxt.tables["index_hint_t"].Cols[1].Typ = planpb.Type{Id: int32(types.T_float64)}
+
+			queryPlan, err := runOneStmt(mock, t,
+				"select id, a, b from index_hint_t force index for order by(idx_ab) where "+tt.predicate+" order by b, id")
+			require.NoError(t, err)
+			require.Empty(t, findFirstIndexScanName(queryPlan))
+			require.True(t, planHasSort(queryPlan))
+		})
+	}
+
+	t.Run("order-scoped force does not become scan force", func(t *testing.T) {
+		mock := NewMockOptimizer(true)
+		addIndexHintChoiceTableForTest(mock)
+
+		queryPlan, err := runOneStmt(mock, t,
+			"select id from index_hint_t force index for order by(idx_ab) where a = 1 order by id")
+		require.NoError(t, err)
+		require.Empty(t, findFirstIndexScanName(queryPlan))
+		require.True(t, planHasSort(queryPlan))
+	})
+
+	t.Run("ordinary optimizer remains unforced", func(t *testing.T) {
+		mock := NewMockOptimizer(true)
+		addIndexHintChoiceTableForTest(mock)
+
+		queryPlan, err := runOneStmt(mock, t,
+			"select id from index_hint_t where b = 1 order by b, id")
+		require.NoError(t, err)
+		require.Empty(t, findFirstIndexScanName(queryPlan))
+		require.True(t, planHasSort(queryPlan))
+	})
+
+	t.Run("invalid plain force still errors", func(t *testing.T) {
+		mock := NewMockOptimizer(true)
+		addIndexHintChoiceTableForTest(mock)
+
+		_, err := runOneStmt(mock, t,
+			"select id from index_hint_t force index(idx_missing) where a = 1 order by b, id")
+		require.Error(t, err)
+		var moErr *moerr.Error
+		require.ErrorAs(t, err, &moErr)
+		require.Equal(t, moerr.ER_KEY_DOES_NOT_EXIST, moErr.MySQLCode())
+	})
+}
+
 func TestIgnoreIndexForOrderByBlocksCoveringIndexOrderedRead(t *testing.T) {
 	mock := NewMockOptimizer(true)
 	addIndexHintChoiceTableForTest(mock)
@@ -2076,6 +2279,17 @@ func addGroupedJoinAlternativeIndexForTest(mock *MockOptimizer) {
 	mock.ctxt.pks[indexTable.Name] = []int{0}
 }
 
+func addIndexHintPayloadColumnForTest(mock *MockOptimizer) {
+	tableDef := mock.ctxt.tables["index_hint_t"]
+	payloadPos := int32(len(tableDef.Cols))
+	tableDef.Cols = append(tableDef.Cols, &planpb.ColDef{
+		ColId: 4, Name: "payload", OriginName: "payload",
+		Typ:     planpb.Type{Id: int32(types.T_varchar), Width: types.MaxVarcharLen},
+		Default: &planpb.Default{NullAbility: true},
+	})
+	tableDef.Name2ColIndex["payload"] = payloadPos
+}
+
 func addIndexHintIndexTableForTest(mock *MockOptimizer, name string, tableID uint64) {
 	keyType := planpb.Type{Id: int32(types.T_varchar), Width: types.MaxVarcharLen}
 	pkType := planpb.Type{Id: int32(types.T_int32), NotNullable: true}
@@ -2131,6 +2345,18 @@ func planHasIndexJoin(p *Plan) bool {
 	}
 	for _, node := range p.GetQuery().Nodes {
 		if node.NodeType == planpb.Node_JOIN && node.JoinType == planpb.Node_INDEX {
+			return true
+		}
+	}
+	return false
+}
+
+func planHasSort(p *Plan) bool {
+	if p == nil || p.GetQuery() == nil {
+		return false
+	}
+	for _, node := range p.GetQuery().Nodes {
+		if node.NodeType == planpb.Node_SORT {
 			return true
 		}
 	}

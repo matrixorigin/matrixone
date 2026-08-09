@@ -27,6 +27,7 @@ import (
 	indexplugin "github.com/matrixorigin/matrixone/pkg/indexplugin"
 	planplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
 )
 
@@ -777,6 +778,104 @@ func indexLeadingColumnsMatch(idxDef *plan.IndexDef, tableDef *plan.TableDef, co
 	return true
 }
 
+func indexOrderColumnsMatch(idxDef *plan.IndexDef, scanNode *plan.Node, colPositions []int32) bool {
+	if idxDef == nil || scanNode == nil || scanNode.TableDef == nil || len(scanNode.BindingTags) == 0 || len(colPositions) == 0 {
+		return false
+	}
+
+	fixedPrefix := 0
+	for fixedPrefix < len(idxDef.Parts) && indexPartFixedByEquality(idxDef.Parts[fixedPrefix], scanNode) {
+		fixedPrefix++
+	}
+
+	nextPart := fixedPrefix
+	for _, colPos := range colPositions {
+		if colPos < 0 || int(colPos) >= len(scanNode.TableDef.Cols) {
+			return false
+		}
+		colName := scanNode.TableDef.Cols[colPos].Name
+		fixedOrderColumn := false
+		for i := 0; i < fixedPrefix; i++ {
+			if catalog.ResolveAlias(idxDef.Parts[i]) == colName {
+				fixedOrderColumn = true
+				break
+			}
+		}
+		if fixedOrderColumn {
+			continue
+		}
+		if nextPart >= len(idxDef.Parts) || catalog.ResolveAlias(idxDef.Parts[nextPart]) != colName {
+			return false
+		}
+		nextPart++
+	}
+	return true
+}
+
+func indexPartFixedByEquality(part string, scanNode *plan.Node) bool {
+	colPos, ok := scanNode.TableDef.Name2ColIndex[catalog.ResolveAlias(part)]
+	if !ok {
+		return false
+	}
+	tag := scanNode.BindingTags[0]
+	for _, filter := range scanNode.FilterList {
+		fn := filter.GetF()
+		if fn == nil || fn.Func == nil || fn.Func.ObjName != "=" || len(fn.Args) != 2 {
+			continue
+		}
+		leftCol := fn.Args[0].GetCol()
+		rightCol := fn.Args[1].GetCol()
+		if leftCol != nil && leftCol.RelPos == tag && leftCol.ColPos == colPos && isScanInvariantRuntimeConstExpr(fn.Args[1]) {
+			return true
+		}
+		if rightCol != nil && rightCol.RelPos == tag && rightCol.ColPos == colPos && isScanInvariantRuntimeConstExpr(fn.Args[0]) {
+			return true
+		}
+	}
+	return false
+}
+
+// isScanInvariantRuntimeConstExpr is stricter than isRuntimeConstExpr: an
+// expression can be independent of table columns while still producing a new
+// value for every row. Such volatile expressions cannot fix an index prefix to
+// one value for the duration of a scan.
+func isScanInvariantRuntimeConstExpr(expr *plan.Expr) bool {
+	return !containsVolatileFunction(expr) && isRuntimeConstExpr(expr)
+}
+
+func containsVolatileFunction(expr *plan.Expr) bool {
+	if expr == nil {
+		return true
+	}
+
+	switch exprImpl := expr.Expr.(type) {
+	case *plan.Expr_F:
+		if exprImpl.F == nil || exprImpl.F.Func == nil {
+			return true
+		}
+		overload, ok := function.GetFunctionByIdWithoutError(exprImpl.F.Func.Obj)
+		if !ok || overload.CannotFold() {
+			return true
+		}
+		for _, arg := range exprImpl.F.Args {
+			if containsVolatileFunction(arg) {
+				return true
+			}
+		}
+	case *plan.Expr_List:
+		if exprImpl.List == nil {
+			return true
+		}
+		for _, item := range exprImpl.List.List {
+			if containsVolatileFunction(item) {
+				return true
+			}
+		}
+	}
+
+	return false
+}
+
 type forceIndexScope int
 
 const (
@@ -967,8 +1066,14 @@ func (builder *QueryBuilder) applyForceIndexHintToScan(scanNode *plan.Node, requ
 		indexes := filterIndexesByHintScope(scanNode.TableDef.Indexes, scope)
 		for _, idxDef := range indexes {
 			if !usableRegularHintIndex(idxDef) ||
-				(hintSet.join.forceSpecified && !indexAllowedByHintScope(idxDef.IndexName, hintSet.join)) ||
-				!indexLeadingColumnsMatch(idxDef, scanNode.TableDef, colPositions) {
+				(hintSet.join.forceSpecified && !indexAllowedByHintScope(idxDef.IndexName, hintSet.join)) {
+				continue
+			}
+			columnsMatch := indexLeadingColumnsMatch(idxDef, scanNode.TableDef, colPositions)
+			if requirement.scope == forceIndexForOrder {
+				columnsMatch = indexOrderColumnsMatch(idxDef, scanNode, colPositions)
+			}
+			if !columnsMatch {
 				continue
 			}
 			accessNodeID, idxNodeID, covering, err := builder.tryHintedIndexAccess(idxDef, scanNode, colRefCnt, idxColMap)
@@ -992,7 +1097,14 @@ func (builder *QueryBuilder) applyForceIndexHintToScan(scanNode *plan.Node, requ
 			return accessNodeID, nil
 		}
 		if hintSet.join.forceSpecified {
-			return builder.applyForcedJoinHintToScan(scanNode, hintSet.join, colRefCnt, idxColMap)
+			return builder.applyForcedHintAccessToScan(scanNode, hintSet.join, colRefCnt, idxColMap)
+		}
+		if requirement.scope == forceIndexForOrder && hintSet.scan.forceSpecified {
+			// An unscoped FORCE INDEX constrains access as well as ordering. If the
+			// named index cannot provide this ORDER BY, retain the forced access and
+			// let the Sort enforce ordering. An explicit FORCE INDEX FOR ORDER BY has
+			// no scan-scope fallback and therefore leaves base access unchanged.
+			return builder.applyForcedHintAccessToScan(scanNode, hintSet.scan, colRefCnt, idxColMap)
 		}
 		// A FORCE hint that cannot provide the requested ordering/grouping still
 		// excludes other secondary indexes from replacing the base scan.
@@ -1002,11 +1114,11 @@ func (builder *QueryBuilder) applyForceIndexHintToScan(scanNode *plan.Node, requ
 	return scanNode.NodeId, nil
 }
 
-// applyForcedJoinHintToScan resolves incompatible ORDER/GROUP and JOIN force
-// scopes before a covering access publishes hidden-column replacements to its
-// ancestors. JOIN access has the same precedence that applyIndicesForJoins
-// historically enforced, but choosing it here keeps the replacement atomic.
-func (builder *QueryBuilder) applyForcedJoinHintToScan(scanNode *plan.Node, scope indexHintScopeSet,
+// applyForcedHintAccessToScan resolves a forced access scope before a covering
+// access publishes hidden-column replacements to its ancestors. JOIN access
+// has the same precedence that applyIndicesForJoins historically enforced, but
+// choosing it here keeps the replacement atomic.
+func (builder *QueryBuilder) applyForcedHintAccessToScan(scanNode *plan.Node, scope indexHintScopeSet,
 	colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr) (int32, error) {
 	if indexAllowedByHintScope(PrimaryKeyName, scope) {
 		builder.protectedScans[scanNode.NodeId]++
