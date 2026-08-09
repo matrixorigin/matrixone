@@ -16,6 +16,7 @@ package plan
 
 import (
 	"context"
+	"fmt"
 	"math"
 	"reflect"
 	"slices"
@@ -516,6 +517,94 @@ func TestSecondaryIndexHiddenDependenciesSurviveGroupedJoinRemap(t *testing.T) {
 				require.Contains(t, indexNames, "idx_tenant_state_id")
 			} else {
 				require.NotContains(t, indexNames, "idx_tenant_state_id")
+			}
+		})
+	}
+}
+
+func TestGroupedJoinForceIndexCandidateClosure(t *testing.T) {
+	tests := []struct {
+		name        string
+		hints       string
+		selectList  string
+		tail        string
+		wantIndexes []string
+		notIndexes  []string
+	}{
+		{
+			name:        "group access matches later forced candidate",
+			hints:       "force index(idx_state, idx_tenant_state_id)",
+			selectList:  "p.tenant_id, p.state, count(*), sum(c.weight)",
+			tail:        "group by p.tenant_id, p.state",
+			wantIndexes: []string{"idx_tenant_state_id"},
+			notIndexes:  []string{"idx_state"},
+		},
+		{
+			name: "join force wins over incompatible group force",
+			hints: `force index for group by(idx_tenant_state_id)
+				force index for join(idx_state)`,
+			selectList:  "p.tenant_id, p.state, count(*), sum(c.weight)",
+			tail:        "group by p.tenant_id, p.state",
+			wantIndexes: []string{"idx_state"},
+			notIndexes:  []string{"idx_tenant_state_id"},
+		},
+		{
+			name: "forced primary join wins over secondary group access",
+			hints: `force index for group by(idx_tenant_state_id)
+				force index for join(primary)`,
+			selectList: "p.tenant_id, p.state, count(*), sum(c.weight)",
+			tail:       "group by p.tenant_id, p.state",
+			notIndexes: []string{"idx_state", "idx_tenant_state_id"},
+		},
+		{
+			name: "forced secondary join wins over primary group access",
+			hints: `force index for group by(primary)
+				force index for join(idx_state)`,
+			selectList:  "p.tenant_id, p.state, count(*), sum(c.weight)",
+			tail:        "group by p.tenant_id, p.state",
+			wantIndexes: []string{"idx_state"},
+			notIndexes:  []string{"idx_tenant_state_id"},
+		},
+		{
+			name:        "order access matches later forced candidate",
+			hints:       "force index(idx_state, idx_tenant_state_id)",
+			selectList:  "p.tenant_id, p.state, c.weight",
+			tail:        "order by p.tenant_id, p.state",
+			wantIndexes: []string{"idx_tenant_state_id"},
+			notIndexes:  []string{"idx_state"},
+		},
+		{
+			name: "join force wins over incompatible order force",
+			hints: `force index for order by(idx_tenant_state_id)
+				force index for join(idx_state)`,
+			selectList:  "p.tenant_id, p.state, c.weight",
+			tail:        "order by p.tenant_id, p.state",
+			wantIndexes: []string{"idx_state"},
+			notIndexes:  []string{"idx_tenant_state_id"},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			mock := NewMockOptimizer(true)
+			addGroupedJoinIndexTablesForTest(mock)
+			addGroupedJoinAlternativeIndexForTest(mock)
+			queryPlan, err := runOneStmt(mock, t, fmt.Sprintf(`
+				select %s
+				from grouped_join_parent p %s
+				join grouped_join_child c
+					on c.tenant_id = p.tenant_id and c.id = p.id
+				where p.tenant_id between 3 and 9
+					and p.state in ('READY', 'HOLD')
+					and c.tag_id = 1
+				%s`, test.selectList, test.hints, test.tail))
+			require.NoError(t, err)
+			indexNames := reachableIndexScanNames(queryPlan.GetQuery())
+			for _, indexName := range test.wantIndexes {
+				require.Contains(t, indexNames, indexName)
+			}
+			for _, indexName := range test.notIndexes {
+				require.NotContains(t, indexNames, indexName)
 			}
 		})
 	}
@@ -1136,16 +1225,24 @@ func TestForceIndexForJoinPreservesMatchingIndexAccess(t *testing.T) {
 	joinNode := builder.qry.Nodes[joinID]
 	rightScanID := joinNode.Children[1]
 	rightScan := builder.qry.Nodes[rightScanID]
-	rightScan.TableDef.Indexes = []*planpb.IndexDef{{
-		IndexName:      "idx_b",
-		IndexTableName: "idx_join_b_table",
-		Parts:          []string{"b", catalog.CreateAlias("a")},
-		TableExist:     true,
-	}}
+	rightScan.TableDef.Indexes = []*planpb.IndexDef{
+		{
+			IndexName:      "idx_a",
+			IndexTableName: "idx_join_a_table",
+			Parts:          []string{"a", catalog.CreateAlias("a")},
+			TableExist:     true,
+		},
+		{
+			IndexName:      "idx_b",
+			IndexTableName: "idx_join_b_table",
+			Parts:          []string{"b", catalog.CreateAlias("a")},
+			TableExist:     true,
+		},
+	}
 	rightScan.TableDef.Pkey = &planpb.PrimaryKeyDef{PkeyColName: "a", Names: []string{"a"}}
 	rightScan.ObjRef = &planpb.ObjectRef{ObjName: "right_t"}
 	require.NoError(t, builder.recordIndexHints(rightScanID, rightScan.TableDef, []*tree.IndexHint{{
-		HintType: tree.HintForce, HintScope: tree.HintForJoin, IndexNames: []string{"idx_b"},
+		HintType: tree.HintForce, HintScope: tree.HintForJoin, IndexNames: []string{"idx_a", "idx_b"},
 	}}))
 
 	matchingAccessID := builder.appendNode(&planpb.Node{
@@ -1701,6 +1798,26 @@ func addGroupedJoinIndexTablesForTest(mock *MockOptimizer) {
 	}
 	mock.ctxt.pks[parent.Name] = []int{0, 1}
 	mock.ctxt.pks[child.Name] = []int{0, 1, 2}
+	mock.ctxt.pks[indexTable.Name] = []int{0}
+}
+
+func addGroupedJoinAlternativeIndexForTest(mock *MockOptimizer) {
+	parent := mock.ctxt.tables["grouped_join_parent"]
+	parent.Indexes = append([]*planpb.IndexDef{{
+		IndexName:      "idx_state",
+		Parts:          []string{"state", catalog.CreateAlias(catalog.CPrimaryKeyColName)},
+		IndexTableName: "grouped_join_parent_idx_state",
+		TableExist:     true,
+	}}, parent.Indexes...)
+
+	indexTable := DeepCopyTableDef(mock.ctxt.tables["grouped_join_parent_idx"], true)
+	indexTable.TblId = 2680204
+	indexTable.Name = "grouped_join_parent_idx_state"
+	mock.ctxt.objects[indexTable.Name] = &ObjectRef{
+		SchemaName: "tpch", ObjName: indexTable.Name, Obj: int64(indexTable.TblId),
+	}
+	mock.ctxt.tables[indexTable.Name] = indexTable
+	mock.ctxt.id2name[indexTable.TblId] = indexTable.Name
 	mock.ctxt.pks[indexTable.Name] = []int{0}
 }
 

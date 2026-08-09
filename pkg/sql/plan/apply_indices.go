@@ -954,13 +954,16 @@ func (builder *QueryBuilder) applyForceIndexHintToScan(scanNode *plan.Node, requ
 		}
 
 		// FORCE PRIMARY keeps the base-table access and blocks ordinary secondary-index rewrites.
-		if _, forcePrimary := scope.force[strings.ToLower(PrimaryKeyName)]; forcePrimary {
+		if _, forcePrimary := scope.force[strings.ToLower(PrimaryKeyName)]; forcePrimary &&
+			(!hintSet.join.forceSpecified || indexAllowedByHintScope(PrimaryKeyName, hintSet.join)) {
 			builder.protectedScans[scanNode.NodeId]++
 			return scanNode.NodeId, nil
 		}
 		indexes := filterIndexesByHintScope(scanNode.TableDef.Indexes, scope)
 		for _, idxDef := range indexes {
-			if !usableRegularHintIndex(idxDef) || !indexLeadingColumnsMatch(idxDef, scanNode.TableDef, colPositions) {
+			if !usableRegularHintIndex(idxDef) ||
+				(hintSet.join.forceSpecified && !indexAllowedByHintScope(idxDef.IndexName, hintSet.join)) ||
+				!indexLeadingColumnsMatch(idxDef, scanNode.TableDef, colPositions) {
 				continue
 			}
 			accessNodeID, idxNodeID, covering, err := builder.tryHintedIndexAccess(idxDef, scanNode, colRefCnt, idxColMap)
@@ -983,11 +986,42 @@ func (builder *QueryBuilder) applyForceIndexHintToScan(scanNode *plan.Node, requ
 			}
 			return accessNodeID, nil
 		}
+		if hintSet.join.forceSpecified {
+			return builder.applyForcedJoinHintToScan(scanNode, hintSet.join, colRefCnt, idxColMap)
+		}
 		// A FORCE hint that cannot provide the requested ordering/grouping still
 		// excludes other secondary indexes from replacing the base scan.
 		builder.protectedScans[scanNode.NodeId]++
 		return scanNode.NodeId, nil
 	}
+	return scanNode.NodeId, nil
+}
+
+// applyForcedJoinHintToScan resolves incompatible ORDER/GROUP and JOIN force
+// scopes before a covering access publishes hidden-column replacements to its
+// ancestors. JOIN access has the same precedence that applyIndicesForJoins
+// historically enforced, but choosing it here keeps the replacement atomic.
+func (builder *QueryBuilder) applyForcedJoinHintToScan(scanNode *plan.Node, scope indexHintScopeSet,
+	colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr) (int32, error) {
+	if indexAllowedByHintScope(PrimaryKeyName, scope) {
+		builder.protectedScans[scanNode.NodeId]++
+		return scanNode.NodeId, nil
+	}
+	for _, idxDef := range filterIndexesByHintScope(scanNode.TableDef.Indexes, scope) {
+		if !usableRegularHintIndex(idxDef) {
+			continue
+		}
+		accessNodeID, _, _, err := builder.tryHintedIndexAccess(idxDef, scanNode, colRefCnt, idxColMap)
+		if err != nil {
+			return -1, err
+		}
+		if accessNodeID == -1 {
+			continue
+		}
+		builder.protectedScans[scanNode.NodeId]++
+		return accessNodeID, nil
+	}
+	builder.protectedScans[scanNode.NodeId]++
 	return scanNode.NodeId, nil
 }
 
@@ -2911,13 +2945,19 @@ func (builder *QueryBuilder) applyForcedJoinAccess(accessID int32) (int32, error
 	if scan == nil || scan.TableDef == nil {
 		return accessID, nil
 	}
-	for _, idxDef := range builder.filterRegularIndexesByJoinHints(scan, scan.TableDef.Indexes) {
+	indexes := builder.filterRegularIndexesByJoinHints(scan, scan.TableDef.Indexes)
+	for _, idxDef := range indexes {
 		if !usableRegularHintIndex(idxDef) {
 			continue
 		}
 		if builder.indexAccessUsesIndex(accessID, idxDef.IndexName) {
 			builder.protectedScans[scan.NodeId]++
 			return accessID, nil
+		}
+	}
+	for _, idxDef := range indexes {
+		if !usableRegularHintIndex(idxDef) {
+			continue
 		}
 		forcedID, _, err := builder.buildHintedIndexBackfillJoin(idxDef, scan)
 		if err != nil {
