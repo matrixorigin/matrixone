@@ -417,12 +417,14 @@ func TestDoMergeFiltersOnCompositeKeyRetainsUnaryNonMergeableOr(t *testing.T) {
 func TestInRHSValuesMaterializesFoldedVectorValues(t *testing.T) {
 	mp := mpool.MustNew(t.Name())
 	expr := MakePlan2StringVecExprWithType(mp, "safe value")
+	expr.GetVec().IsSerialized = true
 	originalData := append([]byte(nil), expr.GetVec().Data...)
 
 	values, ok := inRHSValues(expr, expr.Typ)
 	require.True(t, ok)
 	require.Len(t, values, 1)
 	require.Equal(t, "safe value", values[0].GetLit().GetSval())
+	require.True(t, values[0].GetLit().GetIsSerialized())
 	require.True(t, values[0].Typ.NotNullable)
 	require.Equal(t, originalData, expr.GetVec().Data)
 	for i := range expr.GetVec().Data {
@@ -659,6 +661,57 @@ func TestDeduplicateBlockFiltersHandlesConstantLiteralVec(t *testing.T) {
 	})
 	require.True(t, ok)
 	require.Empty(t, emptySet)
+}
+
+func TestBlockFilterConstantSetIgnoresSerializedProvenance(t *testing.T) {
+	mp := mpool.MustNew(t.Name())
+	serializedList := &planpb.Expr{
+		Typ: planpb.Type{Id: int32(types.T_varchar)},
+		Expr: &planpb.Expr_List{List: &planpb.ExprList{List: []*planpb.Expr{
+			MakePlan2StringConstExprWithType("A"),
+			MakePlan2StringConstExprWithType("B"),
+		}}},
+	}
+	vectorSet := makeExprOptStringVec(t, mp, "A", "B")
+	for _, item := range serializedList.GetList().List {
+		item.Typ = vectorSet.Typ
+		item.GetLit().IsSerialized = true
+	}
+
+	require.True(t, blockFilterConstantSetsEqual(serializedList, vectorSet),
+		"diagnostic provenance must not change block-filter set semantics")
+}
+
+func TestConstLiteralKeyIgnoresSerializedProvenance(t *testing.T) {
+	typ := planpb.Type{Id: int32(types.T_varchar), Width: 16}
+	makeLiteral := func(isSerialized, isBin bool) *planpb.Expr {
+		return &planpb.Expr{
+			Typ: typ,
+			Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{
+				Value:        &planpb.Literal_Sval{Sval: "'"},
+				IsBin:        isBin,
+				IsSerialized: isSerialized,
+			}},
+		}
+	}
+
+	ordinaryKey, ok := constLiteralKey(makeLiteral(false, false))
+	require.True(t, ok)
+	serializedKey, ok := constLiteralKey(makeLiteral(true, false))
+	require.True(t, ok)
+	require.Equal(t, ordinaryKey, serializedKey,
+		"diagnostic provenance must not change executable literal identity")
+	wideLiteral := makeLiteral(false, false)
+	wideLiteral.Typ.Width = 65535
+	wideKey, ok := constLiteralKey(wideLiteral)
+	require.True(t, ok)
+	require.Equal(t, ordinaryKey, wideKey,
+		"string declaration width must not change byte-value identity")
+
+	binaryKey, ok := constLiteralKey(makeLiteral(false, true))
+	require.True(t, ok)
+	require.NotEqual(t, ordinaryKey, binaryKey,
+		"SQL binary-literal semantics must remain part of executable literal identity")
 }
 
 func TestDeduplicateBlockFiltersRetainsDifferentCompoundPredicates(t *testing.T) {
