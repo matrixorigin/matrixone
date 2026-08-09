@@ -69,28 +69,7 @@ func TestIssue26859BinaryPreparedExplain(t *testing.T) {
 		defer explainStmt.Close()
 
 		for _, value := range []int64{7, 8, 7} {
-			rows, err := explainStmt.QueryContext(ctx, value)
-			require.NoError(t, err)
-
-			columns, err := rows.Columns()
-			require.NoError(t, err)
-			require.Len(t, columns, 1)
-			require.NotEmpty(t, columns[0])
-			columnTypes, err := rows.ColumnTypes()
-			require.NoError(t, err)
-			require.Len(t, columnTypes, 1)
-			require.Equal(t, "VARCHAR", columnTypes[0].DatabaseTypeName())
-
-			var lines []string
-			for rows.Next() {
-				var line string
-				require.NoError(t, rows.Scan(&line))
-				lines = append(lines, line)
-			}
-			require.NoError(t, rows.Err())
-			require.NoError(t, rows.Close())
-			require.NotEmpty(t, lines)
-			planText := strings.Join(lines, "\n")
+			planText := queryIssue26859Explain(t, ctx, explainStmt, value)
 			require.Contains(t, planText, "Table Scan")
 			require.Contains(t, planText, strconv.FormatInt(value, 10))
 		}
@@ -99,6 +78,32 @@ func TestIssue26859BinaryPreparedExplain(t *testing.T) {
 		require.NoError(t, conn.QueryRowContext(ctx, "select 1").Scan(&one))
 		require.Equal(t, 1, one)
 	})
+}
+
+func queryIssue26859Explain(t *testing.T, ctx context.Context, stmt *sql.Stmt, value int64) string {
+	t.Helper()
+	rows, err := stmt.QueryContext(ctx, value)
+	require.NoError(t, err)
+	defer rows.Close()
+
+	columns, err := rows.Columns()
+	require.NoError(t, err)
+	require.Len(t, columns, 1)
+	require.NotEmpty(t, columns[0])
+	columnTypes, err := rows.ColumnTypes()
+	require.NoError(t, err)
+	require.Len(t, columnTypes, 1)
+	require.Equal(t, "VARCHAR", columnTypes[0].DatabaseTypeName())
+
+	var lines []string
+	for rows.Next() {
+		var line string
+		require.NoError(t, rows.Scan(&line))
+		lines = append(lines, line)
+	}
+	require.NoError(t, rows.Err())
+	require.NotEmpty(t, lines)
+	return strings.Join(lines, "\n")
 }
 
 func queryIssue26859IDs(t *testing.T, ctx context.Context, stmt *sql.Stmt, value int64) []int64 {
