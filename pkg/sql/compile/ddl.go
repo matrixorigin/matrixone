@@ -6172,7 +6172,6 @@ func (opts *CDCCreateTaskOptions) handleLevel(
 	if patterTupples, err = CDCParsePitrGranularity(
 		ctx, level, tables,
 	); err != nil {
-		err = moerr.NewInternalErrorf(ctx, "invalid level: %s", level)
 		return
 	}
 
@@ -6392,7 +6391,6 @@ func (opts *CDCCreateTaskOptions) handleFrequency(
 	if patterTupples, err = CDCParsePitrGranularity(
 		ctx, level, tables,
 	); err != nil {
-		err = moerr.NewInternalErrorf(ctx, "invalid level: %s", level)
 		return
 	}
 
