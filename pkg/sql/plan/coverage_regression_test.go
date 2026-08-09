@@ -555,7 +555,7 @@ func TestRenamePrefixIndexV2ProtocolGate(t *testing.T) {
 		}
 	}()
 
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion11)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion12)
 	_, err = updateRenameColumnInTableDef(
 		mock.CurrentContext(),
 		tableDef.Cols[1],
@@ -565,12 +565,12 @@ func TestRenamePrefixIndexV2ProtocolGate(t *testing.T) {
 			NewColumnName: tree.NewUnresolvedColName("head:line"),
 		},
 	)
-	require.ErrorContains(t, err, "protocol version 12")
+	require.ErrorContains(t, err, "protocol version 13")
 	require.Equal(t, []string{"title", catalog.CreateAlias("id")}, tableDef.Indexes[0].Parts)
 	require.Equal(t, []string{"title", catalog.CreateAlias("id")}, tableDef.Indexes[1].Parts)
 	require.Equal(t, prefixParams, tableDef.Indexes[1].IndexAlgoParams)
 
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion12)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion13)
 	_, err = updateRenameColumnInTableDef(
 		mock.CurrentContext(),
 		tableDef.Cols[1],

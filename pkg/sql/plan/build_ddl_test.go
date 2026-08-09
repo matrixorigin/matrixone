@@ -2232,15 +2232,15 @@ func TestBuildPrefixIndexV2ProtocolGate(t *testing.T) {
 		}
 	}()
 
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion11)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion12)
 	_, err := runOneStmt(mock, t,
 		"CREATE TABLE prefix_v1_ok (id INT PRIMARY KEY, name VARCHAR(32), INDEX idx_name(name(4)))")
 	require.NoError(t, err)
 	_, err = runOneStmt(mock, t,
 		"CREATE TABLE prefix_v2_blocked (id INT PRIMARY KEY, `head:line` VARCHAR(32), INDEX idx_name(`head:line`(4)))")
-	require.ErrorContains(t, err, "protocol version 12")
+	require.ErrorContains(t, err, "protocol version 13")
 
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion12)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion13)
 	logicPlan, err := runOneStmt(mock, t,
 		"CREATE TABLE prefix_v2_ok (id INT PRIMARY KEY, `head:line` VARCHAR(32), INDEX idx_name(`head:line`(4)))")
 	require.NoError(t, err)

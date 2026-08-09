@@ -4443,7 +4443,8 @@ func TestIndexOnlyResidualLeadingFilterPositionsAreMinimal(t *testing.T) {
 	lastLiteral := makeStringEqFilterExpr(0, 2, "\x00")
 	setIndexFilterArgumentType(lastLiteral, tableDef.Cols[2].Typ)
 	filters := []*planpb.Expr{firstLiteral, lastLiteral}
-	lookup := builder.replaceEqualCondition(idxDef, filters, []int32{0, 1}, 42, makeTestIndexTableDef())
+	lookup, err := builder.replaceEqualCondition(idxDef, filters, []int32{0, 1}, 42, makeTestIndexTableDef())
+	require.NoError(t, err)
 
 	require.Equal(t, []int32{1}, indexOnlyResidualLeadingFilterPositions(
 		idxDef, tableDef, filters, []int32{0, 1}, lookup,
@@ -4451,7 +4452,8 @@ func TestIndexOnlyResidualLeadingFilterPositionsAreMinimal(t *testing.T) {
 
 	firstPrepared := makeParamEqFilterExpr(0, 1, 0)
 	filters[0] = firstPrepared
-	lookup = builder.replaceEqualCondition(idxDef, filters, []int32{0, 1}, 42, makeTestIndexTableDef())
+	lookup, err = builder.replaceEqualCondition(idxDef, filters, []int32{0, 1}, 42, makeTestIndexTableDef())
+	require.NoError(t, err)
 	require.Equal(t, []int32{0, 1}, indexOnlyResidualLeadingFilterPositions(
 		idxDef, tableDef, filters, []int32{0, 1}, lookup,
 	))
@@ -4463,7 +4465,8 @@ func TestIndexOnlyResidualLeadingFilterPositionsAreMinimal(t *testing.T) {
 	lastFixedWidth := makeEqFilterExpr(2)
 	lastFixedWidth.GetF().Args[0].GetCol().RelPos = 0
 	filters = []*planpb.Expr{firstByteString, lastFixedWidth}
-	lookup = builder.replaceEqualCondition(idxDef, filters, []int32{0, 1}, 42, makeTestIndexTableDef())
+	lookup, err = builder.replaceEqualCondition(idxDef, filters, []int32{0, 1}, 42, makeTestIndexTableDef())
+	require.NoError(t, err)
 	require.Empty(t, indexOnlyResidualLeadingFilterPositions(
 		idxDef, tableDef, filters, []int32{0, 1}, lookup,
 	))

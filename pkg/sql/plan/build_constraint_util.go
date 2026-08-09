@@ -200,10 +200,10 @@ func requirePrefixIndexV2Protocol(ctx context.Context, proc *process.Process, co
 	value, ok := moruntime.ServiceRuntime(proc.GetService()).
 		GetGlobalVariables(moruntime.MOProtocolVersion)
 	version, valid := value.(int64)
-	if !ok || !valid || version < defines.MORPCVersion12 {
+	if !ok || !valid || version < defines.MORPCVersion13 {
 		return moerr.NewNotSupported(
 			ctx,
-			"prefix indexes on column names containing ':' or ',' require all CNs to support protocol version 12",
+			"prefix indexes on column names containing ':' or ',' require all CNs to support protocol version 13",
 		)
 	}
 	return nil
