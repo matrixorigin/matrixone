@@ -1770,14 +1770,21 @@ func (builder *QueryBuilder) applyExtraFiltersOnIndex(idxDef *IndexDef, node *pl
 				continue
 			}
 			idxColExpr := GetColExpr(idxTableNode.TableDef.Cols[0].Typ, idxTableNode.BindingTags[0], 0)
-			idxPartExpr := idxColExpr
+			mappedExpr := idxColExpr
 			if indexTableStoresSerializedKey(idxDef) {
-				idxPartExpr, _ = MakeSerialExtractExpr(builder.GetContext(), idxColExpr, fn.Args[colArgIdx].Typ, int64(k))
+				var err error
+				mappedExpr, err = MakeSerialExtractExpr(builder.GetContext(), idxColExpr, fn.Args[colArgIdx].Typ, int64(k))
+				if err != nil {
+					// Extra-filter pushdown is optional. The original filter remains on
+					// the base table, so skip an unsupported serialized-key mapping.
+					continue
+				}
 			}
 			newFilter := DeepCopyExpr(node.FilterList[i])
-			newFilter.GetF().Args[colArgIdx] = idxPartExpr
+			newFilter.GetF().Args[colArgIdx] = mappedExpr
 			idxTableNode.FilterList = append(idxTableNode.FilterList, newFilter)
 			applied = true
+			break
 		}
 		if applied {
 			continue
@@ -1794,11 +1801,14 @@ func (builder *QueryBuilder) applyExtraFiltersOnIndex(idxDef *IndexDef, node *pl
 			for k := range node.TableDef.Pkey.Names {
 				if col.Name == node.TableDef.Pkey.Names[k] {
 					idxColExpr := GetColExpr(idxTableNode.TableDef.Cols[1].Typ, idxTableNode.BindingTags[0], 1)
-					deserialExpr, _ := MakeSerialExtractExpr(builder.GetContext(), idxColExpr, fn.Args[colArgIdx].Typ, int64(k))
+					deserialExpr, err := MakeSerialExtractExpr(builder.GetContext(), idxColExpr, fn.Args[colArgIdx].Typ, int64(k))
+					if err != nil {
+						break
+					}
 					newFilter := DeepCopyExpr(node.FilterList[i])
 					newFilter.GetF().Args[colArgIdx] = deserialExpr
 					idxTableNode.FilterList = append(idxTableNode.FilterList, newFilter)
-					continue
+					break
 				}
 			}
 		}

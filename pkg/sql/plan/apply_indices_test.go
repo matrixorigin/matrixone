@@ -115,6 +115,59 @@ func TestSingleColumnUniqueDecimalRangeUsesIndex(t *testing.T) {
 	require.Equal(t, "uk_a", findFirstIndexScanName(queryPlan))
 }
 
+func TestDirectUniqueDecimalRangeResidualFilterUsesDirectKey(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	addIndexHintChoiceTableForTest(mock)
+	decimalType := planpb.Type{Id: int32(types.T_decimal64), Width: 10, Scale: 2}
+	mainTable := mock.ctxt.tables["index_hint_t"]
+	mainTable.Cols[1].Typ = decimalType
+	mainTable.Indexes = []*planpb.IndexDef{
+		{
+			IndexName:      "uk_a",
+			Parts:          []string{"a"},
+			IndexTableName: "uk_hint_a",
+			TableExist:     true,
+			Unique:         true,
+		},
+		{
+			IndexName:      "idx_a",
+			Parts:          []string{"a", catalog.CreateAlias("id")},
+			IndexTableName: "idx_hint_a",
+			TableExist:     true,
+		},
+	}
+	addIndexHintIndexTableForTest(mock, "uk_hint_a", 25365)
+	mock.ctxt.tables["uk_hint_a"].Cols[0].Typ = decimalType
+	addIndexHintIndexTableForTest(mock, "idx_hint_a", 25366)
+
+	queryPlan, err := runOneStmt(mock, t, `
+		select b
+		from index_hint_t force index(uk_a, idx_a)
+		where a >= 10.255000 and a >= 20.255000`)
+	require.NoError(t, err)
+	require.True(t, planHasIndexJoin(queryPlan))
+	indexScan := findFirstIndexScanNode(queryPlan)
+	require.NotNil(t, indexScan)
+	require.Equal(t, "uk_a", indexScan.IndexScanInfo.IndexName)
+	require.Len(t, indexScan.FilterList, 2)
+
+	residualFn := indexScan.FilterList[1].GetF()
+	require.NotNil(t, residualFn)
+	require.Len(t, residualFn.Args, 2)
+	for _, arg := range residualFn.Args {
+		require.NotNil(t, arg)
+	}
+	residualColExpr := residualFn.Args[0]
+	if residualColExpr.GetCol() == nil {
+		residualColExpr = residualFn.Args[1]
+	}
+	residualCol := residualColExpr.GetCol()
+	require.NotNil(t, residualCol)
+	require.Equal(t, int32(0), residualCol.ColPos)
+	require.Nil(t, residualColExpr.GetF())
+	require.Equal(t, decimalType, residualColExpr.Typ)
+}
+
 func TestFilterRegularIndexesByScanHints(t *testing.T) {
 	idxA := &planpb.IndexDef{IndexName: "idx_a"}
 	idxB := &planpb.IndexDef{IndexName: "idx_b"}
