@@ -47,7 +47,7 @@ const (
 	MORPCVersion9      int64 = 9  // AUTO_INCREMENT epoch-fenced commit
 	MORPCVersion10     int64 = 10 // persisted appendable-object abort metadata
 	MORPCVersion11     int64 = 11 // bounded Sorted64 membership-filter wire format
-	MORPCVersion12     int64 = 12 // HAKeeper-fenced global system-variable visibility
+	MORPCVersion12     int64 = 12 // prepared provenance and HAKeeper-fenced global-sysvar visibility
 	MORPCLatestVersion       = MORPCVersion12
 )
 

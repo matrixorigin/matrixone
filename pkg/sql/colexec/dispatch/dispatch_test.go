@@ -15,6 +15,7 @@
 package dispatch
 
 import (
+	"bytes"
 	"context"
 	"testing"
 	"time"
@@ -27,10 +28,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	mock_morpc "github.com/matrixorigin/matrixone/pkg/common/morpc/mock_morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/pSpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/value_scan"
@@ -47,6 +51,102 @@ type emptyDispatchChild struct {
 func (child *emptyDispatchChild) Call(*process.Process) (vm.CallResult, error) {
 	close(child.called)
 	return vm.NewCallResult(), nil
+}
+
+// unknownServiceLockService supplies only the service identity needed by
+// Process.GetService. The embedded interface keeps this test independent of
+// lock-service behavior that is unrelated to protocol capability lookup.
+type unknownServiceLockService struct {
+	lockservice.LockService
+	cfg lockservice.Config
+}
+
+func (s *unknownServiceLockService) GetConfig() lockservice.Config {
+	return s.cfg
+}
+
+func TestMarshalRemoteBatchPrepareParamProtocolGate(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+
+	vec := vector.NewVec(types.T_text.ToType())
+	require.NoError(t, vector.AppendBytes(vec, []byte("5"), false, proc.Mp()))
+	require.NoError(t, vector.AppendBytes(vec, []byte("5"), false, proc.Mp()))
+	vec.SetPrepareParamKinds([]vector.PrepareParamKind{
+		vector.PrepareParamInteger, vector.PrepareParamNone,
+	})
+	bat := batch.NewWithSize(1)
+	bat.Vecs[0] = vec
+	bat.SetRowCount(2)
+	defer bat.Clean(proc.Mp())
+
+	runtime := moruntime.ServiceRuntime(proc.GetService())
+	original, hadOriginal := runtime.GetGlobalVariables(moruntime.MOProtocolVersion)
+	t.Cleanup(func() {
+		if hadOriginal {
+			runtime.SetGlobalVariables(moruntime.MOProtocolVersion, original)
+		} else {
+			runtime.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+		}
+	})
+
+	runtime.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion11)
+	buf := bytes.NewBufferString("sentinel")
+	_, err := marshalRemoteBatch(proc, bat, buf)
+	require.Error(t, err)
+	require.Equal(t, "sentinel", buf.String(), "protocol rejection must happen before writing")
+
+	runtime.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion12)
+	buf.Reset()
+	encoded, err := marshalRemoteBatch(proc, bat, buf)
+	require.NoError(t, err)
+	require.NotEmpty(t, encoded)
+	decoded := batch.NewOffHeapEmpty()
+	defer decoded.Clean(proc.Mp())
+	require.NoError(t, decoded.UnmarshalBinaryWithPrepareParamKinds(encoded, proc.Mp()))
+	require.Equal(t, vector.PrepareParamInteger, decoded.Vecs[0].GetPrepareParamKindAt(0))
+	require.Equal(t, vector.PrepareParamNone, decoded.Vecs[0].GetPrepareParamKindAt(1))
+}
+
+func TestMarshalRemoteBatchUnknownServiceFailsClosed(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	proc.Base.LockService = &unknownServiceLockService{
+		cfg: lockservice.Config{ServiceID: "dispatch-unknown-service"},
+	}
+
+	prepared := batch.NewWithSize(1)
+	prepared.Vecs[0] = vector.NewVec(types.T_text.ToType())
+	require.NoError(t, vector.AppendBytes(prepared.Vecs[0], []byte("5"), false, proc.Mp()))
+	prepared.Vecs[0].SetPrepareParamKind(vector.PrepareParamFloat)
+	prepared.SetRowCount(1)
+	defer prepared.Clean(proc.Mp())
+
+	require.NotPanics(t, func() {
+		require.False(t, prepareParamKindRemoteWireEnabled(proc))
+	})
+	buf := bytes.NewBufferString("sentinel")
+	var err error
+	require.NotPanics(t, func() {
+		_, err = marshalRemoteBatch(proc, prepared, buf)
+	})
+	require.ErrorContains(t, err, "prepared parameter provenance requires MORPCVersion12")
+	require.Equal(t, "sentinel", buf.String(),
+		"unknown service must reject metadata before writing the stable batch")
+
+	legacy := batch.NewWithSize(1)
+	legacy.Vecs[0] = vector.NewVec(types.T_text.ToType())
+	require.NoError(t, vector.AppendBytes(legacy.Vecs[0], []byte("plain"), false, proc.Mp()))
+	legacy.SetRowCount(1)
+	defer legacy.Clean(proc.Mp())
+
+	buf.Reset()
+	encoded, err := marshalRemoteBatch(proc, legacy, buf)
+	require.NoError(t, err)
+	expected, err := legacy.MarshalBinary()
+	require.NoError(t, err)
+	require.Equal(t, expected, encoded,
+		"unknown service without metadata keeps the legacy wire format")
 }
 
 func TestPrepareRemote(t *testing.T) {

@@ -80,6 +80,42 @@ func TestMaxByCompactsReplacedVarlenaState(t *testing.T) {
 	require.Less(t, state.Allocated(), 2<<20, "winner state must be bounded by live groups, not by replaced input rows")
 }
 
+func TestMaxByPreservesWinningPrepareParamKind(t *testing.T) {
+	mp := mpool.MustNewZero()
+	params := []types.Type{types.T_text.ToType(), types.T_int64.ToType(), types.T_int64.ToType()}
+	exec := makeMaxByExec(mp, AggIdOfMaxBy, false, params)
+	value := vector.NewVec(types.T_text.ToType())
+	order := vector.NewVec(types.T_int64.ToType())
+	tie := vector.NewVec(types.T_int64.ToType())
+	require.NoError(t, vector.AppendBytes(value, []byte("winner"), false, mp))
+	require.NoError(t, vector.AppendBytes(value, []byte("loser"), false, mp))
+	value.SetPrepareParamKinds([]vector.PrepareParamKind{
+		vector.PrepareParamInteger,
+		vector.PrepareParamNone,
+	})
+	require.NoError(t, vector.AppendFixed(order, int64(2), false, mp))
+	require.NoError(t, vector.AppendFixed(order, int64(1), false, mp))
+	require.NoError(t, vector.AppendFixed(tie, int64(1), false, mp))
+	require.NoError(t, vector.AppendFixed(tie, int64(2), false, mp))
+	defer func() {
+		value.Free(mp)
+		order.Free(mp)
+		tie.Free(mp)
+		exec.Free()
+		require.Zero(t, mp.CurrNB())
+	}()
+
+	require.NoError(t, exec.GroupGrow(1))
+	require.NoError(t, exec.BulkFill(0, []*vector.Vector{value, order, tie}))
+	results, err := exec.Flush()
+	require.NoError(t, err)
+	require.Len(t, results, 1)
+	require.Equal(t, vector.PrepareParamInteger, results[0].GetPrepareParamKindAt(0))
+	for _, result := range results {
+		result.Free(mp)
+	}
+}
+
 func TestCompactMaxByStateVectorPreservesAllocationOwner(t *testing.T) {
 	mp := mpool.MustNewZero()
 	registry, err := mpool.NewAllocationAccountRegistry(1, 8)

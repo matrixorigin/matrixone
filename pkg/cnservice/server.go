@@ -452,6 +452,10 @@ func (s *service) closeService() error {
 		s.stopper.Stop()
 
 		s.closeErr = closeCNServiceSteps(
+			// Query commands can reach frontend, task, engine, lock, shard,
+			// auto-increment, and transaction state. Stop and drain this remote
+			// ingress before clearing any of those dependencies.
+			s.closeQueryService,
 			s.stopFrontend,
 			s.closeBootstrapService,
 			// Frontend shutdown stops accepting interactive work, while stopTask
@@ -462,9 +466,12 @@ func (s *service) closeService() error {
 			s.closeMongoDBRuntime,
 			s.closePipelineAdmission,
 			s.server.Close,
-			s.stopRPCs,
+			// Pipeline handlers and the auto-increment cleanup worker can issue
+			// transactions. Drain both before closing their transaction and RPC
+			// dependencies, while keeping the trace consumer alive for final events.
 			s.waitPipelineHandlers,
 			s.closeIncrService,
+			s.stopRPCs,
 			s.closeTxnTraceService,
 			func() error {
 				// stop I/O pipeline
@@ -668,9 +675,6 @@ func (s *service) stopRPCs() error {
 	}
 	if s.lockService != nil {
 		err = errors.Join(err, s.lockService.Close())
-	}
-	if s.queryService != nil {
-		err = errors.Join(err, s.queryService.Close())
 	}
 	if s.queryClient != nil {
 		err = errors.Join(err, s.queryClient.Close())
