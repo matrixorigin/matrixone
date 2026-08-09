@@ -1761,14 +1761,14 @@ DROP TABLE decimal_join_left;
 DROP TABLE decimal_join_right;
 DROP TABLE IF EXISTS decimal_zm_scale_scan;
 CREATE TABLE decimal_zm_scale_scan (
-    id BIGINT NOT NULL PRIMARY KEY,
-    d64 DECIMAL(12,4),
-    d128 DECIMAL(20,4)
+id BIGINT NOT NULL PRIMARY KEY,
+d64 DECIMAL(12,4),
+d128 DECIMAL(20,4)
 );
 INSERT INTO decimal_zm_scale_scan
 SELECT result,
-       CAST((result - 20001) / 10.0 AS DECIMAL(12,4)),
-       CAST((result - 20001) / 10.0 AS DECIMAL(20,4))
+CAST((result - 20001) / 10.0 AS DECIMAL(12,4)),
+CAST((result - 20001) / 10.0 AS DECIMAL(20,4))
 FROM generate_series(1, 40001) g;
 INSERT INTO decimal_zm_scale_scan VALUES (40002, NULL, NULL);
 SELECT mo_ctl('dn','flush', concat(database(), '.decimal_zm_scale_scan'));
@@ -1851,13 +1851,13 @@ SELECT COUNT(*) AS int_control FROM decimal_zm_scale_scan WHERE id < 1000;
 DROP TABLE decimal_zm_scale_scan;
 DROP TABLE IF EXISTS nullable_decimal_cluster_zm;
 CREATE TABLE nullable_decimal_cluster_zm (
-    id BIGINT NOT NULL,
-    amount DECIMAL(20,4)
+id BIGINT NOT NULL,
+amount DECIMAL(20,4)
 ) CLUSTER BY(amount);
 INSERT INTO nullable_decimal_cluster_zm
 SELECT result,
-       CASE WHEN result <= 20000 THEN NULL
-            ELSE CAST((result - 20000) / 10.0 AS DECIMAL(20,4)) END
+CASE WHEN result <= 20000 THEN NULL
+ELSE CAST((result - 20000) / 10.0 AS DECIMAL(20,4)) END
 FROM generate_series(1, 50000) g;
 SELECT mo_ctl('dn','flush', concat(database(), '.nullable_decimal_cluster_zm'));
 ➤ mo_ctl(dn, flush, concat(database(), .nullable_decimal_cluster_zm))[12,-1,0]  𝄀
@@ -1885,12 +1885,12 @@ SELECT COUNT(*) FROM nullable_decimal_cluster_zm WHERE amount > 2000.0000;
 DROP TABLE nullable_decimal_cluster_zm;
 DROP TABLE IF EXISTS nullable_bigint_cluster_zm;
 CREATE TABLE nullable_bigint_cluster_zm (
-    id BIGINT NOT NULL,
-    amount BIGINT
+id BIGINT NOT NULL,
+amount BIGINT
 ) CLUSTER BY(amount);
 INSERT INTO nullable_bigint_cluster_zm
 SELECT result,
-       CASE WHEN result <= 20000 THEN NULL ELSE result - 20000 END
+CASE WHEN result <= 20000 THEN NULL ELSE result - 20000 END
 FROM generate_series(1, 50000) g;
 SELECT mo_ctl('dn','flush', concat(database(), '.nullable_bigint_cluster_zm'));
 ➤ mo_ctl(dn, flush, concat(database(), .nullable_bigint_cluster_zm))[12,-1,0]  𝄀
@@ -1918,13 +1918,13 @@ SELECT COUNT(*) FROM nullable_bigint_cluster_zm WHERE amount > 20000;
 DROP TABLE nullable_bigint_cluster_zm;
 DROP TABLE IF EXISTS nullable_varchar_cluster_zm;
 CREATE TABLE nullable_varchar_cluster_zm (
-    id BIGINT NOT NULL,
-    amount VARCHAR(8)
+id BIGINT NOT NULL,
+amount VARCHAR(8)
 ) CLUSTER BY(amount);
 INSERT INTO nullable_varchar_cluster_zm
 SELECT result,
-       CASE WHEN result <= 20000 THEN NULL
-            ELSE LPAD(CAST(result - 20000 AS VARCHAR), 8, '0') END
+CASE WHEN result <= 20000 THEN NULL
+ELSE LPAD(CAST(result - 20000 AS VARCHAR), 8, '0') END
 FROM generate_series(1, 50000) g;
 SELECT mo_ctl('dn','flush', concat(database(), '.nullable_varchar_cluster_zm'));
 ➤ mo_ctl(dn, flush, concat(database(), .nullable_varchar_cluster_zm))[12,-1,0]  𝄀

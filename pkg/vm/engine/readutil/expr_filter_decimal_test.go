@@ -172,7 +172,7 @@ func TestCompileFilterExprDecimalScaleMatrix(t *testing.T) {
 		{name: "decimal128", typ: plan.Type{Id: int32(types.T_decimal128), Width: 20, Scale: 4}},
 	}
 
-	var tests []decimalScalePruningCase
+	tests := make([]decimalScalePruningCase, 0, len(decimalTypes)*25+6)
 	for _, decimalType := range decimalTypes {
 		add := func(name, min, max, op string, want bool, bounds ...decimalBound) {
 			tests = append(tests, decimalScalePruningCase{
@@ -883,7 +883,6 @@ func int64FoldedFilter(op string, bounds ...int64) *plan.Expr {
 		}},
 	}}
 	for _, value := range bounds {
-		value := value
 		args = append(args, &plan.Expr{
 			Typ:  plan.Type{Id: int32(types.T_int64)},
 			Expr: &plan.Expr_Fold{Fold: &plan.FoldVal{IsConst: true, Data: types.EncodeInt64(&value)}},
