@@ -384,6 +384,7 @@ func TestMultiUpdateCtxClonePartitionCols(t *testing.T) {
 		PartitionCols:      []int{6, 7, 8, 9},
 		DedupByTargetRowID: true,
 		TargetUpdateCtxIdx: 10,
+		AffectedRowsCols:   []int{11, 12},
 		ObjRef:             &plan.ObjectRef{SchemaName: "test", ObjName: "t1"},
 		TableDef:           &plan.TableDef{Name: "t1"},
 	}
@@ -398,6 +399,7 @@ func TestMultiUpdateCtxClonePartitionCols(t *testing.T) {
 	require.Equal(t, original.DeleteCols, cloned.DeleteCols)
 	require.True(t, cloned.DedupByTargetRowID)
 	require.Equal(t, original.TargetUpdateCtxIdx, cloned.TargetUpdateCtxIdx)
+	require.Equal(t, original.AffectedRowsCols, cloned.AffectedRowsCols)
 	require.Equal(t, original.ObjRef.SchemaName, cloned.ObjRef.SchemaName)
 	require.Equal(t, original.TableDef.Name, cloned.TableDef.Name)
 	require.NotSame(t, original.ObjRef, cloned.ObjRef)

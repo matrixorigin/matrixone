@@ -1487,6 +1487,27 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 	}
 
 	finalProjNode.ProjectList = finalProjList
+	if isMultiTargetUpdate {
+		for targetIdx, owner := range physicalTargetOwner {
+			if owner < 0 {
+				continue
+			}
+			ownerCtxIdx := targetUpdateCtxIdx[owner]
+			if ownerCtxIdx < 0 || int(ownerCtxIdx) >= len(updateCtxList) {
+				return 0, moerr.NewInternalError(
+					builder.GetContext(),
+					"invalid multi-target update physical owner context",
+				)
+			}
+			updateCtxList[ownerCtxIdx].AffectedRowsCols = append(
+				updateCtxList[ownerCtxIdx].AffectedRowsCols,
+				plan.ColRef{
+					RelPos: finalProjTag,
+					ColPos: targetRowNumberFinalPos[targetIdx] + 1,
+				},
+			)
+		}
+	}
 	sort.SliceStable(lockTargets, func(i, j int) bool {
 		if lockTargets[i].TableId != lockTargets[j].TableId {
 			return lockTargets[i].TableId < lockTargets[j].TableId
@@ -1661,9 +1682,8 @@ func validateRepeatedPhysicalTargetPrimaryKeyUpdate(ctx context.Context, dmlCtx 
 			}
 			for _, pkName := range tableDef.Pkey.Names {
 				if _, updated := dmlCtx.updateCol2Expr[targetIdx][pkName]; updated {
-					return moerr.NewInternalErrorf(
+					return moerr.NewMultiUpdateKeyConflict(
 						ctx,
-						"Primary key update is not allowed since the table is updated both as '%s' and '%s'.",
 						dmlCtx.aliases[targets[0]],
 						dmlCtx.aliases[targets[1]],
 					)
@@ -2238,13 +2258,20 @@ func (builder *QueryBuilder) mergeSamePhysicalTargetAssignmentsAcrossTuples(
 		}
 	}
 	rowIDExpr := canonicalResultExpr(rowIDCanonicalPos)
+	activeMarkerByTarget := make(map[int]int32, len(targets))
+	for _, contribution := range contributions {
+		if _, ok := activeMarkerByTarget[contribution.targetIdx]; !ok {
+			activeMarkerByTarget[contribution.targetIdx] = contribution.markerPos
+		}
+	}
 	for targetIdx, activePos := range targetBranchActivePos {
 		if activePos < 0 {
 			continue
 		}
 		activeInput := DeepCopyExpr(rowIDExpr)
 		operator := "isnull"
-		if targetIdx == targets[0] {
+		if markerPos, ok := activeMarkerByTarget[targetIdx]; ok {
+			activeInput = canonicalResultExpr(markerPos)
 			operator = "isnotnull"
 		}
 		activeExpr, err := BindFuncExprImplByPlanExpr(
