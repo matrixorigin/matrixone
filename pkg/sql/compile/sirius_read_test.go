@@ -26,6 +26,7 @@ import (
 type siriusJournalStub struct{}
 
 func (siriusJournalStub) Store(context.Context, *substrait.Lease) error            { return nil }
+func (siriusJournalStub) Active(context.Context, *substrait.Lease) (bool, error)   { return false, nil }
 func (siriusJournalStub) MarkReleased(context.Context, []byte) error               { return nil }
 func (siriusJournalStub) Delete(context.Context, []byte) error                     { return nil }
 func (siriusJournalStub) Load(context.Context, func(*substrait.Lease) error) error { return nil }
