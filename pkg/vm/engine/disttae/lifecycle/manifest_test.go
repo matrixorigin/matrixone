@@ -15,10 +15,13 @@
 package lifecycle
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/binary"
+	"encoding/json"
 	"errors"
+	"math"
 	"strconv"
 	"strings"
 	"testing"
@@ -284,6 +287,235 @@ func TestArchiveManifestRejectsDatasetChunkCountAboveCertifiedLimit(t *testing.T
 	manifest.Files = files
 	err := validateArchiveManifestShape(manifest)
 	require.ErrorContains(t, err, "certified chunk limit")
+}
+
+func TestArchiveManifestV1RejectsCorruptPersistentShape(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(*ArchiveManifest)
+		match  string
+	}{
+		{"manifest-version", func(value *ArchiveManifest) { value.ManifestFormatVersion++ }, "manifest version"},
+		{"hash-version", func(value *ArchiveManifest) { value.HashFormulaVersion++ }, "hash formula"},
+		{"encoder-version", func(value *ArchiveManifest) { value.CanonicalEncoder++ }, "canonical encoder"},
+		{"empty-root", func(value *ArchiveManifest) { value.RootID = "" }, "identity"},
+		{"empty-attempt", func(value *ArchiveManifest) { value.AttemptID = "" }, "identity"},
+		{"schema-version", func(value *ArchiveManifest) { value.Schema.FormatVersion++ }, "schema identity"},
+		{"schema-table", func(value *ArchiveManifest) { value.Schema.SourceTableID = 0 }, "schema identity"},
+		{"schema-database", func(value *ArchiveManifest) { value.Schema.SourceDatabaseName = "" }, "schema name"},
+		{"schema-table-name", func(value *ArchiveManifest) { value.Schema.SourceTableName = "" }, "schema name"},
+		{"schema-columns-empty", func(value *ArchiveManifest) { value.Schema.Columns = nil }, "column count"},
+		{"schema-column-ordinal", func(value *ArchiveManifest) { value.Schema.Columns[0].Ordinal = 1 }, "column identity"},
+		{"schema-column-name", func(value *ArchiveManifest) { value.Schema.Columns[0].Name = "" }, "column identity"},
+		{"schema-column-enum", func(value *ArchiveManifest) { value.Schema.Columns[0].EnumValues = string([]byte{0xff}) }, "metadata"},
+		{"verification", func(value *ArchiveManifest) { value.VerificationStatus = "VERIFIED" }, "verification status"},
+		{"chunk-count", func(value *ArchiveManifest) { value.TotalChunkCount++ }, "chunk count"},
+		{"file-ordinal", func(value *ArchiveManifest) { value.Files[0].FileOrdinal = 1 }, "file ordinals"},
+		{"file-key", func(value *ArchiveManifest) { value.Files[0].Key = "" }, "file identity"},
+		{"file-size-zero", func(value *ArchiveManifest) { value.Files[0].Size = 0 }, "file identity"},
+		{"chunk-ordinal", func(value *ArchiveManifest) { value.Files[0].Chunks[0].ChunkOrdinal = 1 }, "chunk ordinals"},
+		{"chunk-file-ordinal", func(value *ArchiveManifest) { value.Files[0].Chunks[0].FileOrdinal = 1 }, "chunk ordinals"},
+		{"chunk-row-group", func(value *ArchiveManifest) { value.Files[0].Chunks[0].RowGroupOrdinal = 1 }, "chunk ordinals"},
+		{"chunk-rows-zero", func(value *ArchiveManifest) { value.Files[0].Chunks[0].RowCount = 0 }, "chunk size"},
+		{"chunk-bytes-zero", func(value *ArchiveManifest) { value.Files[0].Chunks[0].LogicalBytes = 0 }, "chunk size"},
+		{"totals", func(value *ArchiveManifest) { value.RowCount++ }, "totals"},
+		{"auto-increment-non-column", func(value *ArchiveManifest) {
+			value.AutoIncrementMaxima = []AutoIncrementMax{{ColumnOrdinal: 1, Value: "1"}}
+		}, "auto-increment ordinal"},
+		{"auto-increment-not-enabled", func(value *ArchiveManifest) {
+			value.AutoIncrementMaxima = []AutoIncrementMax{{ColumnOrdinal: 0, Value: "1"}}
+		}, "auto-increment ordinal"},
+		{"auto-increment-zero", func(value *ArchiveManifest) {
+			value.Schema.Columns[0].AutoIncrement = true
+			value.AutoIncrementMaxima = []AutoIncrementMax{{ColumnOrdinal: 0, Value: "0"}}
+		}, "maximum is invalid"},
+		{"auto-increment-text", func(value *ArchiveManifest) {
+			value.Schema.Columns[0].AutoIncrement = true
+			value.AutoIncrementMaxima = []AutoIncrementMax{{ColumnOrdinal: 0, Value: "invalid"}}
+		}, "maximum is invalid"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			manifest := archiveManifestV1GoldenFixture()
+			test.mutate(manifest)
+			require.ErrorContains(t, validateArchiveManifestShape(manifest), test.match)
+		})
+	}
+
+	require.ErrorContains(t, validateArchiveManifestShape(nil), "nil Lifecycle")
+
+	overflow := archiveManifestV1GoldenFixture()
+	overflowSecond := overflow.Files[0]
+	overflowSecond.Chunks = append([]ArchiveChunk(nil), overflow.Files[0].Chunks...)
+	overflow.Files = append(overflow.Files, overflowSecond)
+	overflow.TotalChunkCount = 2
+	overflow.Files[0].Chunks[0].RowCount = math.MaxUint64
+	overflow.Files[0].Chunks[0].LogicalBytes = math.MaxUint64
+	overflow.Files[1].FileOrdinal = 1
+	overflow.Files[1].Key = "second.parquet"
+	overflow.Files[1].Chunks[0].ChunkOrdinal = 1
+	overflow.Files[1].Chunks[0].FileOrdinal = 1
+	require.ErrorContains(t, validateArchiveManifestShape(overflow), "overflow")
+
+	duplicate := archiveManifestV1GoldenFixture()
+	duplicateSecond := duplicate.Files[0]
+	duplicateSecond.Chunks = append([]ArchiveChunk(nil), duplicate.Files[0].Chunks...)
+	duplicate.Files = append(duplicate.Files, duplicateSecond)
+	duplicate.TotalChunkCount = 2
+	duplicate.RowCount *= 2
+	duplicate.LogicalBytes *= 2
+	duplicate.Files[1].FileOrdinal = 1
+	duplicate.Files[1].Chunks[0].ChunkOrdinal = 1
+	duplicate.Files[1].Chunks[0].FileOrdinal = 1
+	require.ErrorContains(t, validateArchiveManifestShape(duplicate), "not unique")
+
+	maxima := archiveManifestV1GoldenFixture()
+	maxima.Schema.Columns = []SchemaColumn{
+		maxima.Schema.Columns[0],
+		{Ordinal: 1, SourceColumnID: 2, Name: "next_id", TypeID: int32(types.T_uint64), AutoIncrement: true},
+	}
+	maxima.Schema.Columns[0].AutoIncrement = true
+	maxima.AutoIncrementMaxima = []AutoIncrementMax{
+		{ColumnOrdinal: 1, Value: "2"},
+		{ColumnOrdinal: 0, Value: "1"},
+	}
+	require.ErrorContains(t, validateArchiveManifestShape(maxima), "not canonical")
+}
+
+func TestArchiveManifestV1RejectsCorruptWireScalarsBeforeRestore(t *testing.T) {
+	encoded, _, err := MarshalArchiveManifest(archiveManifestV1GoldenFixture())
+	require.NoError(t, err)
+	canonical := string(encoded)
+	tests := []struct {
+		name string
+		from string
+		to   string
+	}{
+		{"schema-table-id-empty", `"source_table_id":"9007199254740993"`, `"source_table_id":""`},
+		{"schema-table-id-overflow", `"source_table_id":"9007199254740993"`, `"source_table_id":"18446744073709551616"`},
+		{"schema-column-id-text", `"source_column_id":"9007199254740995"`, `"source_column_id":"x"`},
+		{"schema-digest-short", `"schema_digest":"01ab000000000000000000000000000000000000000000000000000000000000"`, `"schema_digest":"01"`},
+		{"content-hash-non-hex", `"content_hash":"02cd000000000000000000000000000000000000000000000000000000000000"`, `"content_hash":"zzzz000000000000000000000000000000000000000000000000000000000000"`},
+		{"file-size-text", `"size":"134217728"`, `"size":"x"`},
+		{"file-digest-short", `"sha256":"03ef000000000000000000000000000000000000000000000000000000000000"`, `"sha256":"03"`},
+		{"chunk-ordinal-text", `"chunk_ordinal":"0"`, `"chunk_ordinal":"x"`},
+		{"chunk-row-count-text", `"row_count":"9007199254740997"`, `"row_count":"x"`},
+		{"chunk-logical-bytes-text", `"logical_bytes":"9007199254740999"`, `"logical_bytes":"x"`},
+		{"chunk-digest-short", `"canonical_content_hash":"04aa000000000000000000000000000000000000000000000000000000000000"`, `"canonical_content_hash":"04"`},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			corrupt := strings.Replace(canonical, test.from, test.to, 1)
+			require.NotEqual(t, canonical, corrupt)
+			_, err := ParseArchiveManifest([]byte(corrupt))
+			require.Error(t, err)
+		})
+	}
+
+	raw := []string{
+		`[]`,
+		`{}`,
+		`{"other":1,"manifest_format_version":1}`,
+		`{"manifest_format_version":"1"}`,
+		`{"manifest_format_version":1,"extra":"` + strings.Repeat("x", maxArchiveManifestString+1) + `"}`,
+		`{"manifest_format_version":1,"extra":` + strings.Repeat("9", 33) + `}`,
+	}
+	for index, value := range raw {
+		t.Run("json-guard-"+strconv.Itoa(index), func(t *testing.T) {
+			_, err := ParseArchiveManifest([]byte(value))
+			require.Error(t, err)
+		})
+	}
+}
+
+func TestArchiveManifestV1JSONScannerBoundsNestedInput(t *testing.T) {
+	tests := []struct {
+		name  string
+		value string
+		match string
+	}{
+		{
+			name: "depth",
+			value: strings.Repeat("[", maxArchiveJSONDepth+2) + "0" +
+				strings.Repeat("]", maxArchiveJSONDepth+2),
+			match: "depth limit",
+		},
+		{
+			name:  "empty-key",
+			value: `{"":1}`,
+			match: "key is invalid",
+		},
+		{
+			name:  "truncated-object",
+			value: `{"key":`,
+			match: "EOF",
+		},
+		{
+			name:  "truncated-array",
+			value: `[1,`,
+			match: "EOF",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			decoder := json.NewDecoder(strings.NewReader(test.value))
+			decoder.UseNumber()
+			err := scanArchiveManifestJSONValue(decoder, 0)
+			require.ErrorContains(t, err, test.match)
+		})
+	}
+
+	var fields strings.Builder
+	fields.WriteByte('{')
+	for index := 0; index <= maxArchiveJSONObjectFields; index++ {
+		if index > 0 {
+			fields.WriteByte(',')
+		}
+		fields.WriteString(`"f`)
+		fields.WriteString(strconv.Itoa(index))
+		fields.WriteString(`":0`)
+	}
+	fields.WriteByte('}')
+	decoder := json.NewDecoder(strings.NewReader(fields.String()))
+	decoder.UseNumber()
+	require.ErrorContains(t, scanArchiveManifestJSONValue(decoder, 0), "field limit")
+
+	decoder = json.NewDecoder(bytes.NewReader([]byte(`{"a":1} trailing`)))
+	decoder.UseNumber()
+	require.NoError(t, scanArchiveManifestJSONValue(decoder, 0))
+	require.Error(t, requireArchiveManifestJSONEOF(decoder))
+}
+
+func TestArchiveManifestV1RejectsAutoIncrementAndChunkWireOverflow(t *testing.T) {
+	manifest := archiveManifestV1GoldenFixture()
+	manifest.AutoIncrementMaxima = make([]AutoIncrementMax, maxArchiveSchemaColumns+1)
+	require.ErrorContains(t, validateArchiveManifestShape(manifest), "collection exceeds limit")
+
+	manifest = archiveManifestV1GoldenFixture()
+	manifest.Schema.Columns[0].AutoIncrement = true
+	manifest.AutoIncrementMaxima = []AutoIncrementMax{{
+		ColumnOrdinal: 0,
+		Value:         strings.Repeat("9", maxArchiveManifestString+1),
+	}}
+	require.ErrorContains(t, validateArchiveManifestShape(manifest), "maximum is too large")
+
+	encoded, _, err := MarshalArchiveManifest(archiveManifestV1GoldenFixture())
+	require.NoError(t, err)
+	canonical := string(encoded)
+	corruptions := []string{
+		strings.Replace(canonical, `"total_chunk_count":"1"`, `"total_chunk_count":"x"`, 1),
+		strings.Replace(canonical,
+			`"row_group_ordinal":0,"row_count":"9007199254740997"`,
+			`"row_group_ordinal":0,"row_count":"x"`, 1),
+		strings.Replace(canonical,
+			`"row_count":"9007199254740997","logical_bytes":"9007199254740999","canonical_content_hash"`,
+			`"row_count":"9007199254740997","logical_bytes":"x","canonical_content_hash"`, 1),
+	}
+	for _, corrupt := range corruptions {
+		require.NotEqual(t, canonical, corrupt)
+		_, err := ParseArchiveManifest([]byte(corrupt))
+		require.Error(t, err)
+	}
 }
 
 func archiveManifestV1GoldenFixture() *ArchiveManifest {

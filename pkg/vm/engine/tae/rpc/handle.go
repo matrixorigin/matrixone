@@ -656,7 +656,7 @@ func (h *Handle) HandleCommit(
 				zap.String("new-txn", txn.GetID()),
 			)
 			//Handle precommit-write command for 1PC
-			bigDeleteTbls, hasDDL, hasLifecycle, err = h.handleRequests(
+			bigDeleteTbls, hasDDL, _, err = h.handleRequests(
 				ctx, txn, commitRequests, response, meta,
 			)
 			if err != nil && !moerr.IsMoErrCode(err, moerr.ErrTAENeedRetry) {
