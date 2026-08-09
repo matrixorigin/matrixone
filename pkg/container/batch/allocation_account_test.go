@@ -16,6 +16,7 @@ package batch
 
 import (
 	"bytes"
+	"context"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -714,6 +715,13 @@ func TestBatchAllocationAccountDestinationCloneUnionAndReuse(t *testing.T) {
 	state := newTestBatchAllocationAccount(t, 64)
 	mp := mpool.MustNewZero()
 	source := newBatchAllocationTestSource(t, mp, nil)
+	kinds := make([]vector.PrepareParamKind, source.RowCount())
+	for i := range kinds {
+		if i%2 == 0 {
+			kinds[i] = vector.PrepareParamFloat
+		}
+	}
+	source.Vecs[1].SetPrepareParamKinds(kinds)
 
 	destination := NewWithSchema(
 		true,
@@ -724,6 +732,14 @@ func TestBatchAllocationAccountDestinationCloneUnionAndReuse(t *testing.T) {
 	require.NoError(t, source.CloneTo(destination, mp))
 	require.NotZero(t, state.account.Snapshot().Used)
 	require.Equal(t, source.RowCount(), destination.RowCount())
+	for i, kind := range kinds {
+		require.Equal(t, kind, destination.Vecs[1].GetPrepareParamKindAt(i))
+	}
+	// UnionBatch owns the one destination sidecar. A second metadata copy
+	// would temporarily raise the account high-water mark above its final
+	// live usage and can fail under a tight allocation cap.
+	snapshot := state.account.Snapshot()
+	require.Equal(t, snapshot.Used, snapshot.Peak)
 
 	destination.FreeColumns(mp)
 	require.Zero(t, state.account.Snapshot().Used)
@@ -767,6 +783,87 @@ func TestBatchAllocationAccountCloneRollback(t *testing.T) {
 
 	source.Clean(mp)
 	finalizeTestBatchAllocationAccount(t, state)
+}
+
+func TestBatchUnionPrepareParamKindAllocationFailureDoesNotPublishRows(t *testing.T) {
+	tests := []struct {
+		name string
+		run  func(destination, source *Batch, mp *mpool.MPool) error
+	}{
+		{
+			name: "union-one",
+			run: func(destination, source *Batch, mp *mpool.MPool) error {
+				return destination.UnionOne(source, 0, mp)
+			},
+		},
+		{
+			name: "union",
+			run: func(destination, source *Batch, mp *mpool.MPool) error {
+				return destination.Union(source, []int64{0}, mp)
+			},
+		},
+		{
+			name: "union-window",
+			run: func(destination, source *Batch, mp *mpool.MPool) error {
+				return destination.UnionWindow(source, 0, 1, mp)
+			},
+		},
+		{
+			name: "append",
+			run: func(destination, source *Batch, mp *mpool.MPool) error {
+				_, err := destination.Append(context.Background(), mp, source)
+				return err
+			},
+		},
+		{
+			name: "append-with-copy",
+			run: func(destination, source *Batch, mp *mpool.MPool) error {
+				_, err := destination.AppendWithCopy(context.Background(), mp, source)
+				return err
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			state := newTestBatchAllocationAccount(t, 2)
+			mp := mpool.MustNewZero()
+			typ := types.T_varchar.ToType()
+			destination := NewWithSchema(
+				true, []string{"plain", "tagged"}, []types.Type{typ, typ})
+			require.NoError(t, destination.SetAllocationAccount(state.selection))
+			for _, vec := range destination.Vecs {
+				require.NoError(t, vec.PreExtend(2, mp))
+				require.NoError(t, vector.AppendBytes(vec, []byte("6"), false, mp))
+			}
+			destination.SetRowCount(1)
+
+			source := NewWithSchema(
+				true, []string{"plain", "tagged"}, []types.Type{typ, typ})
+			for _, vec := range source.Vecs {
+				require.NoError(t, vector.AppendBytes(vec, []byte("5"), false, mp))
+			}
+			source.Vecs[1].SetPrepareParamKind(vector.PrepareParamFloat)
+			source.SetRowCount(1)
+
+			before := state.account.Snapshot().Used
+			err := test.run(destination, source, mp)
+			require.ErrorIs(t, err, mpool.ErrAllocationMetadataSlots)
+			require.Equal(t, 1, destination.RowCount())
+			for _, vec := range destination.Vecs {
+				require.Equal(t, 1, vec.Length())
+				require.Equal(t, []byte("6"), vec.GetBytesAt(0))
+				require.Nil(t, vec.GetPrepareParamKinds())
+				require.Equal(t, vector.PrepareParamNone, vec.GetPrepareParamKindAt(0))
+			}
+			require.Equal(t, before, state.account.Snapshot().Used)
+
+			source.Clean(mp)
+			destination.Clean(mp)
+			finalizeTestBatchAllocationAccount(t, state)
+			require.Zero(t, mp.CurrNB())
+		})
+	}
 }
 
 func TestBatchAllocationAccountConfigurationIsAtomic(t *testing.T) {

@@ -103,7 +103,7 @@ Project  𝄀
               Filter Cond: (t1.val >= 900)  𝄀
               Runtime Filter Probe: t1.id  𝄀
         ->  Index Table Scan on t1.idx_val [ForceOneCN]  𝄀
-              Filter Cond: (__mo_index_idx_col >= ':�')
+              Filter Cond: (__mo_index_idx_col >= '<opaque>')
 select * from t1 where val >= 900 order by id;
 ➤ id[4,32,0]  ¦  val[4,32,0]  ¦  name[12,-1,0]  𝄀
 90  ¦  900  ¦  row90  𝄀
@@ -129,7 +129,7 @@ Project  𝄀
               Filter Cond: (t1.val < 30)  𝄀
               Runtime Filter Probe: t1.id  𝄀
         ->  Index Table Scan on t1.idx_val [ForceOneCN]  𝄀
-              Filter Cond: (__mo_index_idx_col < ':')
+              Filter Cond: (__mo_index_idx_col < '<opaque>')
 select * from t1 where val < 30 order by id;
 ➤ id[4,32,0]  ¦  val[4,32,0]  ¦  name[12,-1,0]  𝄀
 1  ¦  10  ¦  row1  𝄀
@@ -320,7 +320,7 @@ Project  𝄀
               Filter Cond: (t3.city >= 'Chicago')  𝄀
               Runtime Filter Probe: t3.id  𝄀
         ->  Index Table Scan on t3.idx_city [ForceOneCN]  𝄀
-              Filter Cond: (__mo_index_idx_col >= 'FChicago ')
+              Filter Cond: (__mo_index_idx_col >= '<opaque>')
 select * from t3 where city >= 'Chicago' order by id;
 ➤ id[12,-1,0]  ¦  city[12,-1,0]  ¦  score[4,32,0]  𝄀
 b  ¦  Chicago  ¦  92  𝄀
@@ -338,7 +338,7 @@ Project  𝄀
               Filter Cond: (t3.city < 'Chicago')  𝄀
               Runtime Filter Probe: t3.id  𝄀
         ->  Index Table Scan on t3.idx_city [ForceOneCN]  𝄀
-              Filter Cond: (__mo_index_idx_col < 'FChicago ')
+              Filter Cond: (__mo_index_idx_col < '<opaque>')
 select * from t3 where city < 'Chicago' order by id;
 ➤ id[12,-1,0]  ¦  city[12,-1,0]  ¦  score[4,32,0]  𝄀
 a  ¦  Boston  ¦  85  𝄀
@@ -449,7 +449,7 @@ Project  𝄀
               Filter Cond: ((t1.val >= 5) or (t1.val < 2))  𝄀
               Runtime Filter Probe: t1.id  𝄀
         ->  Index Table Scan on t1.idx_val [ForceOneCN]  𝄀
-              Filter Cond: ((__mo_index_idx_col >= ':') or (__mo_index_idx_col < ':'))
+              Filter Cond: ((__mo_index_idx_col >= '<opaque>') or (__mo_index_idx_col < '<opaque>'))
 select * from t1 where val >= 5 or val < 2 order by id;
 ➤ id[4,32,0]  ¦  val[4,32,0]  ¦  name[12,-1,0]  𝄀
 1  ¦  10  ¦  row1  𝄀
@@ -589,7 +589,7 @@ explain select * from t5 where val >= 100 and val <= 50;
 ➤ TP QUERY PLAN[12,0,0]  𝄀
 Project  𝄀
   ->  Index Table Scan on t5.idx_val  𝄀
-        Filter Cond: (__mo_index_idx_col >= ':d'), (serial_extract(__mo_index_idx_col, 0, INT)) <= 50)
+        Filter Cond: (__mo_index_idx_col >= '<opaque>'), (serial_extract(__mo_index_idx_col, 0, INT)) <= 50)
 select * from t5 where val >= 100 and val <= 50;
 ➤ id[4,32,0]  ¦  val[4,32,0]
 select * from t5 where val > 30 and val < 10;
@@ -694,7 +694,7 @@ explain select * from t7 where d >= '2024-03-01' and d <= '2024-09-30';
 ➤ TP QUERY PLAN[12,0,0]  𝄀
 Project  𝄀
   ->  Index Table Scan on t7.idx_d  𝄀
-        Filter Cond: (__mo_index_idx_col >= 'AF�'), (serial_extract(__mo_index_idx_col, 0, DATE)) <= 2024-09-30)
+        Filter Cond: (__mo_index_idx_col >= '<opaque>'), (serial_extract(__mo_index_idx_col, 0, DATE)) <= 2024-09-30)
 select * from t7 where d >= '2024-03-01' and d <= '2024-09-30' order by id;
 ➤ id[4,32,0]  ¦  d[91,64,0]  𝄀
 2  ¦  2024-03-15  𝄀
@@ -928,7 +928,7 @@ explain select id from t11 where k_bigint < 97;
 ➤ TP QUERY PLAN[12,0,0]  𝄀
 Project  𝄀
   ->  Index Table Scan on t11.idx_bigint  𝄀
-        Filter Cond: (__mo_index_idx_col < ';a'), (serial_extract(__mo_index_idx_col, 0, BIGINT)) < 97)
+        Filter Cond: (__mo_index_idx_col < '<opaque>'), (serial_extract(__mo_index_idx_col, 0, BIGINT)) < 97)
 select id as bigint_auto from t11 where k_bigint < 97 order by id;
 ➤ bigint_auto[-5,64,0]  𝄀
 3  𝄀
@@ -979,7 +979,7 @@ Project  𝄀
               Filter Cond: (t11.k_bigint < 97)  𝄀
               Runtime Filter Probe: t11.id  𝄀
         ->  Index Table Scan on t11.idx_bigint [ForceOneCN]  𝄀
-              Filter Cond: (__mo_index_idx_col < ';a')
+              Filter Cond: (__mo_index_idx_col < '<opaque>')
 select id, payload from t11 where k_bigint < 97 order by id;
 ➤ id[-5,64,0]  ¦  payload[12,-1,0]  𝄀
 3  ¦  below-95  𝄀
@@ -989,7 +989,7 @@ explain select id from t11 where k_bigint >= 95 and k_bigint < 97;
 ➤ TP QUERY PLAN[12,0,0]  𝄀
 Project  𝄀
   ->  Index Table Scan on t11.idx_bigint  𝄀
-        Filter Cond: (__mo_index_idx_col < ';a'), (serial_extract(__mo_index_idx_col, 0, BIGINT)) >= 95)
+        Filter Cond: (__mo_index_idx_col < '<opaque>'), (serial_extract(__mo_index_idx_col, 0, BIGINT)) >= 95)
 select id as paired_range from t11 where k_bigint >= 95 and k_bigint < 97 order by id;
 ➤ paired_range[-5,64,0]  𝄀
 3  𝄀
