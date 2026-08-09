@@ -37,23 +37,35 @@ func TestCompositeSecondaryIndexRangeBoundsArePrintable(t *testing.T) {
 		columnName string
 		op         string
 		boundHex   string
+		isBinary   bool
 	}{
 		{
 			name:       "invalid UTF-8 decimal lower bound",
 			columnName: catalog.IndexTableIndexColName,
 			op:         ">=",
 			boundHex:   "458000000000000000000000000002673c",
+			isBinary:   true,
 		},
 		{
 			name:       "non-printable varchar upper bound",
 			columnName: qualifiedColumn,
 			op:         "<",
 			boundHex:   "46016100",
+			isBinary:   true,
+		},
+		{
+			name:       "printable boolean bound",
+			columnName: catalog.IndexTableIndexColName,
+			op:         ">=",
+			boundHex:   "27",
+			isBinary:   true,
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			serializedBound := mustDecodeHex(t, test.boundHex)
-			got := describeComparisonForTest(t, test.columnName, test.op, string(serializedBound))
+			got := describeComparisonForLiteralTest(
+				t, test.columnName, test.op, string(serializedBound), types.T_varchar, test.isBinary,
+			)
 			if !utf8.ValidString(got) {
 				t.Fatalf("EXPLAIN expression is not valid UTF-8: %x", []byte(got))
 			}
@@ -62,11 +74,9 @@ func TestCompositeSecondaryIndexRangeBoundsArePrintable(t *testing.T) {
 					t.Fatalf("EXPLAIN expression contains non-printable rune %U: %q", r, got)
 				}
 			}
-			if strings.Contains(got, string(serializedBound)) {
-				t.Fatalf("EXPLAIN expression exposes serialized secondary-index bytes: %x", []byte(got))
-			}
-			if !strings.Contains(got, catalog.IndexTableIndexColName+" "+test.op) {
-				t.Fatalf("EXPLAIN expression lost the range predicate: %q", got)
+			want := "(" + catalog.IndexTableIndexColName + " " + test.op + " '<opaque>')"
+			if got != want {
+				t.Fatalf("serialized bound was not redacted: got %q, want %q", got, want)
 			}
 		})
 	}
@@ -95,12 +105,66 @@ func TestGeometryLiteralExplainRemainsWKT(t *testing.T) {
 	}
 }
 
+func TestBinaryLiteralRedactionAppliesAcrossExpressionLayouts(t *testing.T) {
+	registered, err := function.GetFunctionByName(
+		context.Background(), "between",
+		[]types.Type{types.T_varchar.ToType(), types.T_varchar.ToType(), types.T_varchar.ToType()},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	stringExpr := func(value string, isBinary bool) *planpb.Expr {
+		return &planpb.Expr{
+			Typ: planpb.Type{Id: int32(types.T_varchar)},
+			Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{
+				Value: &planpb.Literal_Sval{Sval: value},
+				IsBin: isBinary,
+			}},
+		}
+	}
+	expr := &planpb.Expr{
+		Typ: planpb.Type{Id: int32(types.T_bool)},
+		Expr: &planpb.Expr_F{F: &planpb.Function{
+			Func: &planpb.ObjectRef{Obj: registered.GetEncodedOverloadID(), ObjName: "between"},
+			Args: []*planpb.Expr{
+				{
+					Typ: planpb.Type{Id: int32(types.T_varchar)},
+					Expr: &planpb.Expr_Col{Col: &planpb.ColRef{
+						Name: catalog.CPrimaryKeyColName,
+					}},
+				},
+				stringExpr(string([]byte{0x27}), true),
+				stringExpr("ordinary text", false),
+			},
+		}},
+	}
+
+	var buf bytes.Buffer
+	if err := describeExpr(context.Background(), expr, NewExplainDefaultOptions(), &buf); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := buf.String(), catalog.CPrimaryKeyColName+" BETWEEN '<opaque>' AND 'ordinary text'"; got != want {
+		t.Fatalf("binary redaction depends on expression layout: got %q, want %q", got, want)
+	}
+}
+
 func describeComparisonForTest(t *testing.T, columnName, op, literal string) string {
 	t.Helper()
-	return describeComparisonForTypeTest(t, columnName, op, literal, types.T_varchar)
+	return describeComparisonForLiteralTest(t, columnName, op, literal, types.T_varchar, false)
 }
 
 func describeComparisonForTypeTest(t *testing.T, columnName, op, literal string, typ types.T) string {
+	t.Helper()
+	return describeComparisonForLiteralTest(t, columnName, op, literal, typ, false)
+}
+
+func describeComparisonForLiteralTest(
+	t *testing.T,
+	columnName, op, literal string,
+	typ types.T,
+	isBinary bool,
+) string {
 	t.Helper()
 
 	registered, err := function.GetFunctionByName(context.Background(), op, []types.Type{typ.ToType(), typ.ToType()})
@@ -122,6 +186,7 @@ func describeComparisonForTypeTest(t *testing.T, columnName, op, literal string,
 					Typ: planpb.Type{Id: int32(typ)},
 					Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{
 						Value: &planpb.Literal_Sval{Sval: literal},
+						IsBin: isBinary,
 					}},
 				},
 			},

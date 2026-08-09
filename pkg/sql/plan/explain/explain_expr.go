@@ -21,8 +21,6 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
-	"unicode"
-	"unicode/utf8"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -106,6 +104,12 @@ func describeExpr(ctx context.Context, expr *plan.Expr, options *ExplainOptions,
 				// printable; render its WKT so EXPLAIN output is readable and
 				// stable rather than emitting binary into the plan text.
 				buf.WriteString("'" + geometryLiteralText(expr.Typ.Id, val.Sval) + "'")
+			} else if exprImpl.Lit.IsBin {
+				// Binary-valued varchar literals include tuple-encoded composite
+				// keys. Never emit those opaque bytes into text EXPLAIN: they may
+				// be invalid UTF-8, contain control characters, or happen to look
+				// printable while still carrying no useful textual meaning.
+				buf.WriteString("'<opaque>'")
 			} else {
 				buf.WriteString("'" + val.Sval + "'")
 			}
@@ -247,32 +251,9 @@ func needSpecialHandling(funcExpr *plan.Function) bool {
 				strings.Contains(col.Name, catalog.PrefixPriColName) {
 				return true
 			}
-			isIndexKey := col.Name == catalog.IndexTableIndexColName ||
-				strings.HasSuffix(col.Name, "."+catalog.IndexTableIndexColName)
-			if isIndexKey && isUnprintableStringLiteral(funcExpr.Args[1]) {
-				return true
-			}
 		}
 	}
 	return false
-}
-
-func isUnprintableStringLiteral(expr *plan.Expr) bool {
-	if expr == nil || expr.Typ.Id == int32(types.T_geometry) || expr.Typ.Id == int32(types.T_geometry32) {
-		return false
-	}
-	lit := expr.GetLit()
-	if lit == nil {
-		return false
-	}
-	val, ok := lit.Value.(*plan.Literal_Sval)
-	if !ok {
-		return false
-	}
-	if !utf8.ValidString(val.Sval) {
-		return true
-	}
-	return strings.IndexFunc(val.Sval, func(r rune) bool { return !unicode.IsPrint(r) }) >= 0
 }
 
 // generator function expression(Expr_F) explain information

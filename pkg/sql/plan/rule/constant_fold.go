@@ -238,6 +238,15 @@ func (r *ConstantFold) constantFold(expr *plan.Expr, proc *process.Process) *pla
 		return expr
 	}
 
+	// serial and serial_full return tuple-encoded bytes in a varchar carrier.
+	// Constant folding must preserve that binary provenance; otherwise later
+	// consumers (notably text EXPLAIN) can mistake the payload for user text.
+	canonicalOverloadID := overloadID & function.DistinctMask
+	if !c.Isnull && (canonicalOverloadID == function.SerialFunctionEncodeID ||
+		canonicalOverloadID == function.SerialFullFunctionEncodeID) {
+		c.IsBin = true
+	}
+
 	if f.IsRealTimeRelated() {
 		c.Src = &plan.Expr{
 			Typ: plan.Type{

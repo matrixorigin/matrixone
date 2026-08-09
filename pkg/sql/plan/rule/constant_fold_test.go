@@ -104,3 +104,58 @@ func TestConstantFoldStillFoldsUnaffectedCasts(t *testing.T) {
 	preparedStrictTemporal := makeConstantCastExpr(t, "cast_strict", stringType, types.T_date.ToType(), "2024-01-02")
 	require.NotNil(t, NewConstantFold(true).constantFold(preparedStrictTemporal, proc).GetLit())
 }
+
+func TestConstantFoldMarksSerializedResultsBinary(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	inputType := types.T_bool.ToType()
+
+	for _, name := range []string{function.SerialFunctionName, function.SerialFullFunctionName} {
+		t.Run(name, func(t *testing.T) {
+			registered, err := function.GetFunctionByName(context.Background(), name, []types.Type{inputType})
+			require.NoError(t, err)
+
+			expr := &plan.Expr{
+				Typ: plan.Type{Id: int32(types.T_varchar)},
+				Expr: &plan.Expr_F{F: &plan.Function{
+					Func: &plan.ObjectRef{Obj: registered.GetEncodedOverloadID(), ObjName: name},
+					Args: []*plan.Expr{{
+						Typ:  plan.Type{Id: int32(types.T_bool)},
+						Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_Bval{Bval: true}}},
+					}},
+				}},
+			}
+
+			folded := NewConstantFold(false).constantFold(expr, proc)
+			literal := folded.GetLit()
+			require.NotNil(t, literal)
+			require.Equal(t, string([]byte{0x27}), literal.GetSval())
+			require.True(t, literal.GetIsBin(), "serialized bytes lost their binary provenance")
+		})
+	}
+
+	t.Run("serial null remains an ordinary null", func(t *testing.T) {
+		registered, err := function.GetFunctionByName(
+			context.Background(), function.SerialFunctionName, []types.Type{inputType},
+		)
+		require.NoError(t, err)
+
+		expr := &plan.Expr{
+			Typ: plan.Type{Id: int32(types.T_varchar)},
+			Expr: &plan.Expr_F{F: &plan.Function{
+				Func: &plan.ObjectRef{
+					Obj:     registered.GetEncodedOverloadID(),
+					ObjName: function.SerialFunctionName,
+				},
+				Args: []*plan.Expr{{
+					Typ:  plan.Type{Id: int32(types.T_bool)},
+					Expr: &plan.Expr_Lit{Lit: &plan.Literal{Isnull: true}},
+				}},
+			}},
+		}
+
+		literal := NewConstantFold(false).constantFold(expr, proc).GetLit()
+		require.NotNil(t, literal)
+		require.True(t, literal.GetIsnull())
+		require.False(t, literal.GetIsBin(), "NULL must not acquire binary identity metadata")
+	})
+}
