@@ -4112,6 +4112,107 @@ func TestReplaceNonEqualConditionWrapsEachPreparedInListItemWithSerialFull(t *te
 	}
 }
 
+func TestReplaceNonEqualConditionWidensByteStringOpenLowerBound(t *testing.T) {
+	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true), false, true)
+	idxDef := &planpb.IndexDef{
+		Parts:  []string{"b", catalog.CreateAlias(catalog.CPrimaryKeyColName)},
+		Unique: false,
+	}
+	tableDef := &planpb.TableDef{
+		Cols: []*planpb.ColDef{
+			{Name: catalog.CPrimaryKeyColName, Typ: planpb.Type{Id: int32(types.T_int64)}},
+			{Name: "b", Typ: planpb.Type{Id: int32(types.T_varbinary), Width: 8}},
+		},
+	}
+	original := makeStringInRangeFilterExpr(0, 1, "a", "b", 3)
+	setIndexRangeArgumentType(original, tableDef.Cols[1].Typ)
+	lookup := builder.replaceNonEqualCondition(idxDef, original, 42, makeTestIndexTableDef())
+
+	require.Equal(t, uint32(3), original.GetF().Args[3].GetLit().GetU8Val())
+	require.Equal(t, "prefix_in_range", lookup.GetF().Func.ObjName)
+	require.Equal(t, uint32(2), lookup.GetF().Args[3].GetLit().GetU8Val())
+	require.Equal(t, []int32{0}, indexOnlyResidualLeadingFilterPositions(
+		idxDef, tableDef, []*planpb.Expr{original}, []int32{0}, lookup,
+	))
+
+	fixedWidth := makeIntInRangeFilterExpr(0, 1, 1, 2, 3)
+	fixedLookup := builder.replaceNonEqualCondition(idxDef, fixedWidth, 42, makeTestIndexTableDef())
+	require.Equal(t, "prefix_in_range", fixedLookup.GetF().Func.ObjName)
+	require.Equal(t, uint32(3), fixedLookup.GetF().Args[3].GetLit().GetU8Val())
+}
+
+func TestIndexOnlyResidualDetectsNestedByteStringPrefixLookup(t *testing.T) {
+	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true), false, true)
+	idxDef := &planpb.IndexDef{
+		Parts:  []string{"b", catalog.CreateAlias(catalog.CPrimaryKeyColName)},
+		Unique: false,
+	}
+	tableDef := &planpb.TableDef{
+		Cols: []*planpb.ColDef{
+			{Name: catalog.CPrimaryKeyColName, Typ: planpb.Type{Id: int32(types.T_int64)}},
+			{Name: "b", Typ: planpb.Type{Id: int32(types.T_varbinary), Width: 8}},
+		},
+	}
+	original := makeOrFilterExpr(
+		makeStringBetweenFilterExpr(0, 1, "\x01", "\x01"),
+		makeStringInFilterExpr(0, 1, "", "\x00"),
+	)
+	setIndexFilterArgumentType(original.GetF().Args[0], tableDef.Cols[1].Typ)
+	setIndexFilterArgumentType(original.GetF().Args[1], tableDef.Cols[1].Typ)
+	lookup := builder.replaceNonEqualCondition(idxDef, original, 42, makeTestIndexTableDef())
+
+	require.Equal(t, "or", lookup.GetF().Func.ObjName)
+	require.Equal(t, "prefix_between", lookup.GetF().Args[0].GetF().Func.ObjName)
+	require.Equal(t, "prefix_in", lookup.GetF().Args[1].GetF().Func.ObjName)
+	require.Equal(t, []int32{0}, indexOnlyResidualLeadingFilterPositions(
+		idxDef, tableDef, []*planpb.Expr{original}, []int32{0}, lookup,
+	))
+}
+
+func TestIndexOnlyResidualLeadingFilterPositionsAreMinimal(t *testing.T) {
+	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true), false, true)
+	idxDef := &planpb.IndexDef{
+		Parts:  []string{"first", "last", catalog.CreateAlias(catalog.CPrimaryKeyColName)},
+		Unique: false,
+	}
+	tableDef := &planpb.TableDef{
+		Cols: []*planpb.ColDef{
+			{Name: catalog.CPrimaryKeyColName, Typ: planpb.Type{Id: int32(types.T_int64)}},
+			{Name: "first", Typ: planpb.Type{Id: int32(types.T_int64)}},
+			{Name: "last", Typ: planpb.Type{Id: int32(types.T_varbinary), Width: 8}},
+		},
+	}
+	firstLiteral := makeEqFilterExpr(1)
+	firstLiteral.GetF().Args[0].GetCol().RelPos = 0
+	lastLiteral := makeStringEqFilterExpr(0, 2, "\x00")
+	setIndexFilterArgumentType(lastLiteral, tableDef.Cols[2].Typ)
+	filters := []*planpb.Expr{firstLiteral, lastLiteral}
+	lookup := builder.replaceEqualCondition(idxDef, filters, []int32{0, 1}, 42, makeTestIndexTableDef())
+
+	require.Equal(t, []int32{1}, indexOnlyResidualLeadingFilterPositions(
+		idxDef, tableDef, filters, []int32{0, 1}, lookup,
+	))
+
+	firstPrepared := makeParamEqFilterExpr(0, 1, 0)
+	filters[0] = firstPrepared
+	lookup = builder.replaceEqualCondition(idxDef, filters, []int32{0, 1}, 42, makeTestIndexTableDef())
+	require.Equal(t, []int32{0, 1}, indexOnlyResidualLeadingFilterPositions(
+		idxDef, tableDef, filters, []int32{0, 1}, lookup,
+	))
+
+	tableDef.Cols[1].Typ = planpb.Type{Id: int32(types.T_varbinary), Width: 8}
+	tableDef.Cols[2].Typ = planpb.Type{Id: int32(types.T_int64)}
+	firstByteString := makeStringEqFilterExpr(0, 1, "\x00")
+	setIndexFilterArgumentType(firstByteString, tableDef.Cols[1].Typ)
+	lastFixedWidth := makeEqFilterExpr(2)
+	lastFixedWidth.GetF().Args[0].GetCol().RelPos = 0
+	filters = []*planpb.Expr{firstByteString, lastFixedWidth}
+	lookup = builder.replaceEqualCondition(idxDef, filters, []int32{0, 1}, 42, makeTestIndexTableDef())
+	require.Empty(t, indexOnlyResidualLeadingFilterPositions(
+		idxDef, tableDef, filters, []int32{0, 1}, lookup,
+	))
+}
+
 func TestTryIndexOnlyScanKeepsResidualFilterForSerialFullNullSemantics(t *testing.T) {
 	tests := []struct {
 		name         string
@@ -4211,7 +4312,7 @@ func TestTryIndexOnlyScanKeepsResidualFilterForSerialFullNullSemantics(t *testin
 	}
 }
 
-func TestTryIndexOnlyScanPreservesVarcharResidualForPrefixLookups(t *testing.T) {
+func TestTryIndexOnlyScanPreservesVarcharResidualForPrefixPredicates(t *testing.T) {
 	tests := []struct {
 		name       string
 		makeFilter func(relPos int32) *planpb.Expr
@@ -4438,7 +4539,7 @@ func TestTryIndexOnlyScanHandlesByteStringPrefixLookups(t *testing.T) {
 	}
 }
 
-func TestNeedsIndexOnlyResidualLeadingFiltersUsesTrailingPrefixPart(t *testing.T) {
+func TestIndexOnlyResidualLeadingFilterPositionsUsesTrailingPrefixPart(t *testing.T) {
 	idxDef := &planpb.IndexDef{
 		Parts:  []string{"v", "n", "id"},
 		Unique: false,
@@ -4460,15 +4561,15 @@ func TestNeedsIndexOnlyResidualLeadingFiltersUsesTrailingPrefixPart(t *testing.T
 	// that component's type byte. Only the trailing component can collide with
 	// the appended primary-key suffix, so a fixed-width trailing part needs no
 	// residual recheck.
-	require.False(t, needsIndexOnlyResidualLeadingFilters(
+	require.Empty(t, indexOnlyResidualLeadingFilterPositions(
 		idxDef, tableDef, filters, []int32{0, 1}, lookupFilter,
 	))
-	require.True(t, needsIndexOnlyResidualLeadingFilters(
+	require.Equal(t, []int32{0}, indexOnlyResidualLeadingFilterPositions(
 		idxDef, tableDef, filters, []int32{1, 0}, lookupFilter,
 	))
 }
 
-func TestNeedsIndexOnlyResidualLeadingFiltersRecognizesNestedPrefixRange(t *testing.T) {
+func TestIndexOnlyResidualLeadingFilterPositionsRecognizesNestedPrefixRange(t *testing.T) {
 	idxDef := &planpb.IndexDef{Parts: []string{"v", "id"}, Unique: false}
 	tableDef := &planpb.TableDef{Cols: []*planpb.ColDef{
 		{Name: "id", Typ: planpb.Type{Id: int32(types.T_int64)}},
@@ -4483,7 +4584,7 @@ func TestNeedsIndexOnlyResidualLeadingFiltersRecognizesNestedPrefixRange(t *test
 		Args: []*planpb.Expr{prefixRange},
 	}}}
 
-	require.True(t, needsIndexOnlyResidualLeadingFilters(
+	require.Equal(t, []int32{0}, indexOnlyResidualLeadingFilterPositions(
 		idxDef, tableDef, []*planpb.Expr{filter}, []int32{0}, lookupFilter,
 	))
 }
@@ -4521,6 +4622,33 @@ func TestReplaceRangePairCondition_UsesPrefixBetweenForSecondaryIndex(t *testing
 	assert.Equal(t, "serial_full", wrappedSerialFuncName(t, expr.GetF().Args[1]))
 	assert.Equal(t, "serial_full", wrappedSerialFuncName(t, expr.GetF().Args[2]))
 	require.InDelta(t, 0.12, expr.Selectivity, 1e-9)
+}
+
+func TestReplaceRangePairConditionWidensByteStringOpenLowerBound(t *testing.T) {
+	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true), false, true)
+	idxDef := &planpb.IndexDef{
+		Parts:  []string{"b", catalog.CreateAlias(catalog.CPrimaryKeyColName)},
+		Unique: false,
+	}
+	idxTableDef := makeTestIndexTableDef()
+	byteStringFilters := []*planpb.Expr{
+		makeStringRangeFilterExpr(0, 1, ">", "a"),
+		makeStringRangeFilterExpr(0, 1, "<=", "b"),
+	}
+	setIndexRangeArgumentType(byteStringFilters[0], planpb.Type{Id: int32(types.T_varbinary), Width: 8})
+	setIndexRangeArgumentType(byteStringFilters[1], planpb.Type{Id: int32(types.T_varbinary), Width: 8})
+
+	byteStringLookup := builder.replaceRangePairCondition(idxDef, byteStringFilters, []int32{0, 1}, 42, idxTableDef)
+	require.Equal(t, "prefix_in_range", byteStringLookup.GetF().Func.ObjName)
+	require.Equal(t, uint32(0), byteStringLookup.GetF().Args[3].GetLit().GetU8Val())
+
+	fixedWidthFilters := []*planpb.Expr{
+		makeRangeFilterExpr(0, 1, ">", 1),
+		makeRangeFilterExpr(0, 1, "<=", 2),
+	}
+	fixedWidthLookup := builder.replaceRangePairCondition(idxDef, fixedWidthFilters, []int32{0, 1}, 42, idxTableDef)
+	require.Equal(t, "prefix_in_range", fixedWidthLookup.GetF().Func.ObjName)
+	require.Equal(t, uint32(1), fixedWidthLookup.GetF().Args[3].GetLit().GetU8Val())
 }
 
 func TestGetIndexForNonEquiCond_PrefersFirstPairedRangeByFilterOrder(t *testing.T) {
@@ -4720,6 +4848,16 @@ func setIndexFilterArgumentType(expr *planpb.Expr, typ planpb.Type) {
 	}
 }
 
+func setIndexRangeArgumentType(expr *planpb.Expr, typ planpb.Type) {
+	fn := expr.GetF()
+	if fn == nil {
+		return
+	}
+	for i := 0; i < len(fn.Args) && i < 3; i++ {
+		setExprTypeRecursive(fn.Args[i], typ)
+	}
+}
+
 func setExprTypeRecursive(expr *planpb.Expr, typ planpb.Type) {
 	if expr == nil {
 		return
@@ -4908,6 +5046,59 @@ func makeStringBetweenFilterExpr(relPos, colPos int32, lower, upper string) *pla
 						},
 					},
 				},
+			},
+		},
+	}
+}
+
+func makeStringInRangeFilterExpr(relPos, colPos int32, lower, upper string, flag uint8) *planpb.Expr {
+	expr := makeStringBetweenFilterExpr(relPos, colPos, lower, upper)
+	expr.GetF().Func.ObjName = "in_range"
+	expr.GetF().Args = append(expr.GetF().Args, MakePlan2Uint8ConstExprWithType(flag))
+	return expr
+}
+
+func makeIntInRangeFilterExpr(relPos, colPos int32, lower, upper int64, flag uint8) *planpb.Expr {
+	typ := planpb.Type{Id: int32(types.T_int64)}
+	return &planpb.Expr{
+		Typ: planpb.Type{Id: int32(types.T_bool)},
+		Expr: &planpb.Expr_F{
+			F: &planpb.Function{
+				Func: &planpb.ObjectRef{ObjName: "in_range"},
+				Args: []*planpb.Expr{
+					GetColExpr(typ, relPos, colPos),
+					{Typ: typ, Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{Value: &planpb.Literal_I64Val{I64Val: lower}}}},
+					{Typ: typ, Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{Value: &planpb.Literal_I64Val{I64Val: upper}}}},
+					MakePlan2Uint8ConstExprWithType(flag),
+				},
+			},
+		},
+	}
+}
+
+func makeStringRangeFilterExpr(relPos, colPos int32, op, value string) *planpb.Expr {
+	typ := planpb.Type{Id: int32(types.T_varchar), Width: types.MaxVarcharLen}
+	return &planpb.Expr{
+		Typ: planpb.Type{Id: int32(types.T_bool)},
+		Expr: &planpb.Expr_F{
+			F: &planpb.Function{
+				Func: &planpb.ObjectRef{ObjName: op},
+				Args: []*planpb.Expr{
+					GetColExpr(typ, relPos, colPos),
+					{Typ: typ, Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{Value: &planpb.Literal_Sval{Sval: value}}}},
+				},
+			},
+		},
+	}
+}
+
+func makeOrFilterExpr(args ...*planpb.Expr) *planpb.Expr {
+	return &planpb.Expr{
+		Typ: planpb.Type{Id: int32(types.T_bool)},
+		Expr: &planpb.Expr_F{
+			F: &planpb.Function{
+				Func: &planpb.ObjectRef{ObjName: "or"},
+				Args: args,
 			},
 		},
 	}

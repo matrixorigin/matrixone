@@ -80,8 +80,53 @@ select count(*) as scan_binary_exact_range, sum(id) as scan_binary_exact_range_s
 from t_binary_prefix ignore index(primary, idx_b_amount_pk, idx_amount_b_pk)
 where b between unhex('00') and unhex('00');
 
--- A half-open range whose upper bound differs before the terminator is exact
--- and keeps its selective prefix range without an unnecessary residual.
+-- A point-prefix branch nested below OR is still only a candidate predicate.
+-- Keep the whole original disjunction as the exact residual.
+select id, hex(b) as b_hex
+from t_binary_prefix force index(idx_b_amount_pk)
+where b between unhex('01') and unhex('01')
+   or b in (unhex(''), unhex('00'))
+order by id;
+select id, hex(b) as b_hex
+from t_binary_prefix ignore index(primary, idx_b_amount_pk, idx_amount_b_pk)
+where b between unhex('01') and unhex('01')
+   or b in (unhex(''), unhex('00'))
+order by id;
+
+-- An inclusive prefix upper bound is also only a candidate: the encoded key
+-- for 0x41 prefixes 0x410042, but BETWEEN must return only the exact bound.
+-- @regex("prefix_between.*serial_extract",true)
+explain select id, hex(b) as b_hex
+from t_binary_prefix force index(idx_b_amount_pk)
+where b between unhex('41') and unhex('41');
+select id, hex(b) as b_hex
+from t_binary_prefix force index(idx_b_amount_pk)
+where b between unhex('41') and unhex('41')
+order by id;
+select id, hex(b) as b_hex
+from t_binary_prefix ignore index(primary, idx_b_amount_pk, idx_amount_b_pk)
+where b between unhex('41') and unhex('41')
+order by id;
+
+-- An open lower prefix bound has the opposite failure mode: PrefixCompare
+-- treats a longer value as equal to the shorter bound and would under-fetch it.
+-- Referencing code forces the index-join path, whose candidate range must be
+-- widened before the base-table predicate performs the exact recheck.
+-- @regex("prefix_in_range",true)
+explain select id, hex(b) as b_hex, code
+from t_binary_prefix force index(idx_b_amount_pk)
+where b > unhex('41') and b <= unhex('410042');
+select id, hex(b) as b_hex, code
+from t_binary_prefix force index(idx_b_amount_pk)
+where b > unhex('41') and b <= unhex('410042')
+order by id;
+select id, hex(b) as b_hex, code
+from t_binary_prefix ignore index(primary, idx_b_amount_pk, idx_amount_b_pk)
+where b > unhex('41') and b <= unhex('410042')
+order by id;
+
+-- A lower-inclusive/upper-open range is an exact candidate control and must
+-- retain its selective index range.
 select count(*) as force_binary_range
 from t_binary_prefix force index(idx_b_amount_pk)
 where b >= unhex('00') and b < unhex('01');

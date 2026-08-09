@@ -89,6 +89,71 @@ from t_binary_prefix ignore index(primary, idx_b_amount_pk, idx_amount_b_pk)
 where b between unhex('00') and unhex('00');
 ➤ scan_binary_exact_range[-5,64,0]  ¦  scan_binary_exact_range_sum[-5,64,0]  𝄀
 1  ¦  2
+select id, hex(b) as b_hex
+from t_binary_prefix force index(idx_b_amount_pk)
+where b between unhex('01') and unhex('01')
+or b in (unhex(''), unhex('00'))
+order by id;
+➤ id[4,32,0]  ¦  b_hex[12,65535,0]  𝄀
+1  ¦    𝄀
+2  ¦  00  𝄀
+5  ¦  01
+select id, hex(b) as b_hex
+from t_binary_prefix ignore index(primary, idx_b_amount_pk, idx_amount_b_pk)
+where b between unhex('01') and unhex('01')
+or b in (unhex(''), unhex('00'))
+order by id;
+➤ id[4,32,0]  ¦  b_hex[12,65535,0]  𝄀
+1  ¦    𝄀
+2  ¦  00  𝄀
+5  ¦  01
+explain select id, hex(b) as b_hex
+from t_binary_prefix force index(idx_b_amount_pk)
+where b between unhex('41') and unhex('41');
+-- @regex("prefix_between.*serial_extract", true)
+➤ TP QUERY PLAN[12,0,0]  𝄀
+Project  𝄀
+  ->  Index Table Scan on t_binary_prefix.idx_b_amount_pk  𝄀
+        Filter Cond: prefix_between(__mo_index_idx_col), serial_extract(__mo_index_idx_col, 0, VARBINARY)) BETWEEN 'A' AND 'A'
+select id, hex(b) as b_hex
+from t_binary_prefix force index(idx_b_amount_pk)
+where b between unhex('41') and unhex('41')
+order by id;
+➤ id[4,32,0]  ¦  b_hex[12,65535,0]  𝄀
+8  ¦  41
+select id, hex(b) as b_hex
+from t_binary_prefix ignore index(primary, idx_b_amount_pk, idx_amount_b_pk)
+where b between unhex('41') and unhex('41')
+order by id;
+➤ id[4,32,0]  ¦  b_hex[12,65535,0]  𝄀
+8  ¦  41
+explain select id, hex(b) as b_hex, code
+from t_binary_prefix force index(idx_b_amount_pk)
+where b > unhex('41') and b <= unhex('410042');
+-- @regex("prefix_in_range", true)
+➤ TP QUERY PLAN[12,0,0]  𝄀
+Project  𝄀
+  ->  Join  𝄀
+        Join Type: INDEX  𝄀
+        Join Cond: (t_binary_prefix.__mo_cpkey_col = __mo_index_pri_col)  𝄀
+        Runtime Filter Build: #[-1,0]  𝄀
+        ->  Table Scan on secondary_index_binary_prefix.t_binary_prefix [ForceOneCN]  𝄀
+              Filter Cond: (t_binary_prefix.b > 'A'), (t_binary_prefix.b <= 0x410042)  𝄀
+              Runtime Filter Probe: t_binary_prefix.__mo_cpkey_col  𝄀
+        ->  Index Table Scan on t_binary_prefix.idx_b_amount_pk [ForceOneCN]  𝄀
+              Filter Cond: prefix_in_range(__mo_index_idx_col)
+select id, hex(b) as b_hex, code
+from t_binary_prefix force index(idx_b_amount_pk)
+where b > unhex('41') and b <= unhex('410042')
+order by id;
+➤ id[4,32,0]  ¦  b_hex[12,65535,0]  ¦  code[12,16,0]  𝄀
+6  ¦  410042  ¦  code-6
+select id, hex(b) as b_hex, code
+from t_binary_prefix ignore index(primary, idx_b_amount_pk, idx_amount_b_pk)
+where b > unhex('41') and b <= unhex('410042')
+order by id;
+➤ id[4,32,0]  ¦  b_hex[12,65535,0]  ¦  code[12,16,0]  𝄀
+6  ¦  410042  ¦  code-6
 select count(*) as force_binary_range
 from t_binary_prefix force index(idx_b_amount_pk)
 where b >= unhex('00') and b < unhex('01');
