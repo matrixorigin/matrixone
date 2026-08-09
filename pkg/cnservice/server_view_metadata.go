@@ -31,7 +31,7 @@ func (s *service) startViewMetadataRecovery() error {
 		ticker := time.NewTicker(viewMetadataRecoveryInterval)
 		defer ticker.Stop()
 		runViewMetadataRecoveryLoop(ctx, ticker.C, func(ctx context.Context) error {
-			if !clusterservice.AllWorkingCNsSupportViewMetadataRefresh(s.cfg.UUID) {
+			if !clusterservice.AllKnownCNsSupportViewMetadataRefresh(s.cfg.UUID) {
 				return nil
 			}
 			return compile.RunViewMetadataRecovery(ctx, s.sqlExecutor, s.cfg.UUID)

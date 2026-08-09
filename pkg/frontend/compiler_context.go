@@ -652,7 +652,7 @@ func (tcc *TxnCompilerContext) EnsureViewMetadataCurrent(
 	relationName string,
 	relationID uint64,
 ) error {
-	if !clusterservice.AllWorkingCNsSupportViewMetadataRefresh(tcc.GetSession().GetService()) {
+	if !clusterservice.AllKnownCNsSupportViewMetadataRefresh(tcc.GetSession().GetService()) {
 		return nil
 	}
 	stale, err := tcc.hasNonCurrentViewMetadata(relationID)

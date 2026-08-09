@@ -16,16 +16,17 @@ package clusterservice
 
 import "github.com/matrixorigin/matrixone/pkg/pb/metadata"
 
-// AllWorkingCNsSupportViewMetadataRefresh is the rolling-upgrade activation
-// barrier. An empty cluster snapshot is not ready, and one old working CN keeps
-// the feature in legacy mode until its heartbeat advertises support.
-func AllWorkingCNsSupportViewMetadataRefresh(serviceID string) bool {
-	return allWorkingCNsSupportViewMetadataRefresh(GetMOCluster(serviceID))
+// AllKnownCNsSupportViewMetadataRefresh is the rolling-upgrade activation
+// barrier. An empty cluster snapshot is not ready, and one old CN, including a
+// draining CN that may still finish in-flight DDL, keeps the feature in legacy
+// mode until that CN leaves the snapshot or advertises support.
+func AllKnownCNsSupportViewMetadataRefresh(serviceID string) bool {
+	return allKnownCNsSupportViewMetadataRefresh(GetMOCluster(serviceID))
 }
 
-func allWorkingCNsSupportViewMetadataRefresh(cluster MOCluster) bool {
+func allKnownCNsSupportViewMetadataRefresh(cluster MOCluster) bool {
 	found, supported := false, true
-	cluster.GetCNService(NewSelector(), func(service metadata.CNService) bool {
+	cluster.GetCNService(NewSelectAll(), func(service metadata.CNService) bool {
 		found = true
 		if !service.ViewMetadataRefreshSupported {
 			supported = false

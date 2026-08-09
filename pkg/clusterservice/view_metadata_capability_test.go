@@ -21,7 +21,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestAllWorkingCNsSupportViewMetadataRefresh(t *testing.T) {
+func TestAllKnownCNsSupportViewMetadataRefresh(t *testing.T) {
 	newCluster := func(cns ...metadata.CNService) *cluster {
 		ready := make(chan struct{})
 		close(ready)
@@ -32,13 +32,18 @@ func TestAllWorkingCNsSupportViewMetadataRefresh(t *testing.T) {
 		return c
 	}
 
-	require.False(t, allWorkingCNsSupportViewMetadataRefresh(newCluster()))
-	require.False(t, allWorkingCNsSupportViewMetadataRefresh(newCluster(
+	require.False(t, allKnownCNsSupportViewMetadataRefresh(newCluster()))
+	require.False(t, allKnownCNsSupportViewMetadataRefresh(newCluster(
 		metadata.CNService{ServiceID: "new", WorkState: metadata.WorkState_Working,
 			ViewMetadataRefreshSupported: true},
 		metadata.CNService{ServiceID: "old", WorkState: metadata.WorkState_Working},
 	)))
-	require.True(t, allWorkingCNsSupportViewMetadataRefresh(newCluster(
+	require.False(t, allKnownCNsSupportViewMetadataRefresh(newCluster(
+		metadata.CNService{ServiceID: "new", WorkState: metadata.WorkState_Working,
+			ViewMetadataRefreshSupported: true},
+		metadata.CNService{ServiceID: "old-draining", WorkState: metadata.WorkState_Draining},
+	)))
+	require.True(t, allKnownCNsSupportViewMetadataRefresh(newCluster(
 		metadata.CNService{ServiceID: "new-1", WorkState: metadata.WorkState_Working,
 			ViewMetadataRefreshSupported: true},
 		metadata.CNService{ServiceID: "new-2", WorkState: metadata.WorkState_Working,

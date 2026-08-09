@@ -127,7 +127,7 @@ func init() {
 }
 
 func recoverViewMetadataCommand(proc *process.Process, parameter string) (int, error) {
-	if !clusterservice.AllWorkingCNsSupportViewMetadataRefresh(proc.GetService()) {
+	if !clusterservice.AllKnownCNsSupportViewMetadataRefresh(proc.GetService()) {
 		return 0, nil
 	}
 	var command viewMetadataRecoveryCommand

@@ -75,7 +75,7 @@ func (c *Compile) persistViewDependencies(
 	databaseName string,
 	viewDef *planpb.TableDef,
 ) error {
-	if !clusterservice.AllWorkingCNsSupportViewMetadataRefresh(c.proc.GetService()) {
+	if !clusterservice.AllKnownCNsSupportViewMetadataRefresh(c.proc.GetService()) {
 		return nil
 	}
 	return c.persistViewDependenciesWithContext(
@@ -219,7 +219,7 @@ func (c *Compile) refreshViewsAfterRelationMutation(
 	oldRelationID uint64,
 	oldLogicalID uint64,
 ) error {
-	if !clusterservice.AllWorkingCNsSupportViewMetadataRefresh(c.proc.GetService()) {
+	if !clusterservice.AllKnownCNsSupportViewMetadataRefresh(c.proc.GetService()) {
 		return nil
 	}
 	if needSkipDbs[databaseName] {
@@ -302,6 +302,10 @@ func (c *Compile) refreshViewsAfterRelationMutation(
 			if target.logicalID == 0 {
 				key[1] = target.relationID
 			}
+			// The budget bounds authoritative rebind attempts, not only successful
+			// replacements. A target deferred because another dependency is absent
+			// must not leave capacity for an unbounded downstream walk.
+			remainingSynchronous--
 			if err = c.refreshOneView(target, current); err != nil {
 				failure := classifyViewRefreshFailure(err)
 				if failure.code == viewRefreshFailureDependencyUnavailable &&
@@ -314,7 +318,6 @@ func (c *Compile) refreshViewsAfterRelationMutation(
 				return err
 			}
 			processedGenerations[key] = target.generation
-			remainingSynchronous--
 			queue = append(queue, viewRelationMutation{
 				accountID: target.accountID, databaseID: target.databaseID,
 				relationID: target.relationID, logicalID: target.logicalID,
