@@ -636,6 +636,26 @@ func TestClonePreservesPrepareParamKind(t *testing.T) {
 	require.Equal(t, vector.PrepareParamDecimal, cloned.Vecs[0].GetPrepareParamKind())
 }
 
+func TestClonePreservesConstantBinaryStringMetadata(t *testing.T) {
+	mp := mpool.MustNewZero()
+	source := NewWithSize(1)
+	var err error
+	source.Vecs[0], err = vector.NewConstBytes(
+		types.T_varchar.ToType(), []byte{0xe4, 0xbd, 0xa0}, 3, mp)
+	require.NoError(t, err)
+	source.Vecs[0].SetIsBinaryString(true)
+	source.SetRowCount(3)
+	defer source.Clean(mp)
+
+	cloned, err := source.Dup(mp)
+	require.NoError(t, err)
+	defer cloned.Clean(mp)
+	require.True(t, cloned.Vecs[0].GetIsBinaryString())
+	for row := 0; row < 3; row++ {
+		require.True(t, cloned.Vecs[0].GetIsBinaryStringAt(row))
+	}
+}
+
 func TestPrepareParamKindTransportRoundTripAndReuse(t *testing.T) {
 	mp := mpool.MustNewZero()
 	source := NewWithSize(1)
@@ -646,6 +666,7 @@ func TestPrepareParamKindTransportRoundTripAndReuse(t *testing.T) {
 		vector.PrepareParamFloat,
 		vector.PrepareParamNone,
 	})
+	require.NoError(t, source.Vecs[0].SetBinaryStringRows([]bool{true, false}))
 	source.SetRowCount(2)
 	defer source.Clean(mp)
 
@@ -662,11 +683,14 @@ func TestPrepareParamKindTransportRoundTripAndReuse(t *testing.T) {
 	require.NoError(t, decoded.UnmarshalBinaryWithPrepareParamKinds(encoded, mp))
 	require.Equal(t, vector.PrepareParamFloat, decoded.Vecs[0].GetPrepareParamKindAt(0))
 	require.Equal(t, vector.PrepareParamNone, decoded.Vecs[0].GetPrepareParamKindAt(1))
+	require.True(t, decoded.Vecs[0].GetIsBinaryStringAt(0))
+	require.False(t, decoded.Vecs[0].GetIsBinaryStringAt(1))
 
 	// Reusing the receiver with a legacy payload must clear the previous
 	// sidecar rather than leaking the first generation's provenance.
 	require.NoError(t, decoded.UnmarshalBinaryWithPrepareParamKinds(legacy, mp))
 	require.Equal(t, vector.PrepareParamNone, decoded.Vecs[0].GetPrepareParamKindAt(0))
+	require.False(t, decoded.Vecs[0].GetIsBinaryString())
 	decoded.Clean(mp)
 }
 

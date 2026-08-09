@@ -34,6 +34,11 @@ func hasVersionedPrepareParamMetadata(param pb.ReadParam) bool {
 			return true
 		}
 	}
+	for _, isBinaryString := range param.Process.PrepareParams.IsBinaryString {
+		if isBinaryString {
+			return true
+		}
+	}
 	return false
 }
 

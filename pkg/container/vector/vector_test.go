@@ -1732,6 +1732,97 @@ func TestBinaryStringMetadataSurvivesPublicCopies(t *testing.T) {
 	compact.Free(mp)
 }
 
+func TestMixedBinaryStringMetadataSurvivesMaterialization(t *testing.T) {
+	mp := mpool.MustNewZero()
+	source := NewVec(types.T_text.ToType())
+	for _, value := range []string{"a", "你", "b"} {
+		require.NoError(t, AppendBytes(source, []byte(value), false, mp))
+	}
+	source.SetIsBinaryStringAt(0, true)
+	source.SetIsBinaryStringAt(2, true)
+	t.Cleanup(func() {
+		source.Free(mp)
+		require.Equal(t, int64(0), mp.CurrNB())
+	})
+
+	assertRows := func(t *testing.T, vec *Vector, want []bool) {
+		t.Helper()
+		for row, expected := range want {
+			require.Equal(t, expected, vec.GetIsBinaryStringAt(row), "row %d", row)
+		}
+	}
+	assertRows(t, source, []bool{true, false, true})
+
+	dup, err := source.Dup(mp)
+	require.NoError(t, err)
+	assertRows(t, dup, []bool{true, false, true})
+	dup.Free(mp)
+
+	window, err := source.Window(1, 3)
+	require.NoError(t, err)
+	assertRows(t, window, []bool{false, true})
+	window.Free(mp)
+
+	cloneWindow, err := source.CloneWindow(1, 3, mp)
+	require.NoError(t, err)
+	assertRows(t, cloneWindow, []bool{false, true})
+	cloneWindow.Free(mp)
+
+	cloneTo := NewVec(types.T_text.ToType())
+	require.NoError(t, source.CloneWindowTo(cloneTo, 1, 3, mp))
+	assertRows(t, cloneTo, []bool{false, true})
+	cloneTo.Free(mp)
+
+	destination := NewVec(types.T_text.ToType())
+	require.NoError(t, destination.UnionBatch(source, 0, source.Length(), nil, mp))
+	assertRows(t, destination, []bool{true, false, true})
+	destination.Free(mp)
+
+	shrunk, err := source.Dup(mp)
+	require.NoError(t, err)
+	shrunk.Shrink([]int64{1, 2}, false)
+	assertRows(t, shrunk, []bool{false, true})
+	shrunk.Free(mp)
+
+	shuffled, err := source.Dup(mp)
+	require.NoError(t, err)
+	require.NoError(t, shuffled.Shuffle([]int64{2, 1, 0}, mp))
+	assertRows(t, shuffled, []bool{true, false, true})
+	shuffled.Free(mp)
+
+	copied, err := source.Dup(mp)
+	require.NoError(t, err)
+	require.NoError(t, copied.Copy(source, 0, 1, mp))
+	assertRows(t, copied, []bool{false, false, true})
+	copied.Free(mp)
+
+	staticBinary := NewVec(types.T_varbinary.ToType())
+	require.NoError(t, AppendBytes(staticBinary, nil, true, mp))
+	require.False(t, staticBinary.GetIsBinaryStringAt(0), "NULL rows have no selected-value provenance")
+	staticBinary.Free(mp)
+
+	nullable := NewVec(types.T_text.ToType())
+	require.NoError(t, AppendBytes(nullable, []byte("a"), false, mp))
+	require.NoError(t, AppendBytes(nullable, nil, true, mp))
+	require.NoError(t, AppendBytes(nullable, []byte("b"), false, mp))
+	nullable.SetIsBinaryString(true)
+	nullable.SetIsBinaryStringAt(0, false)
+	nullable.SetIsBinaryStringAt(2, false)
+	require.False(t, nullable.GetIsBinaryString())
+	require.False(t, nullable.HasBinaryStringRows())
+	nullable.Free(mp)
+
+	rollback, err := source.Dup(mp)
+	require.NoError(t, err)
+	checkpoint := rollback.MakeAppendCheckpoint()
+	require.NoError(t, AppendBytes(rollback, []byte("c"), false, mp))
+	rollback.SetIsBinaryStringAt(3, true)
+	rollback.RollbackAppend(checkpoint, 1)
+	assertRows(t, rollback, []bool{true, false, true})
+	require.Equal(t, 3, rollback.Length())
+	rollback.Free(mp)
+}
+
 func TestCloneWindowWithMpNil(t *testing.T) {
 	mp := mpool.MustNewZero()
 	vec1 := NewVec(types.T_int32.ToType())
@@ -4294,6 +4385,45 @@ func TestSetPrepareParamKindsFromReaderCollapsesUniformAndNullRows(t *testing.T)
 			}
 		})
 	}
+}
+
+func TestSetPrepareParamKindsAndBinaryStringFromReader(t *testing.T) {
+	mp := mpool.MustNewZero()
+	vec := makePrepareParamKindReaderVector(t, mp, 3)
+	defer func() {
+		vec.Free(mp)
+		require.Zero(t, mp.CurrNB())
+	}()
+
+	require.NoError(t, vec.SetPrepareParamKindsAndBinaryStringFromReader(
+		bytes.NewReader([]byte{
+			byte(PrepareParamInteger) | 0x80,
+			byte(PrepareParamFloat),
+			byte(PrepareParamNone) | 0x80,
+		}),
+		3,
+		mp,
+		0x80,
+	))
+	require.Equal(t, PrepareParamInteger, vec.GetPrepareParamKindAt(0))
+	require.Equal(t, PrepareParamFloat, vec.GetPrepareParamKindAt(1))
+	require.Equal(t, PrepareParamNone, vec.GetPrepareParamKindAt(2))
+	require.True(t, vec.GetIsBinaryStringAt(0))
+	require.False(t, vec.GetIsBinaryStringAt(1))
+	require.True(t, vec.GetIsBinaryStringAt(2))
+
+	before := mp.CurrNB()
+	err := vec.SetPrepareParamKindsAndBinaryStringFromReader(
+		bytes.NewReader([]byte{byte(PrepareParamDecimal) | 0x80}),
+		3,
+		mp,
+		0x80,
+	)
+	require.ErrorIs(t, err, io.EOF)
+	require.Equal(t, before, mp.CurrNB(), "a failed generation must release its temporary MPool slice")
+	// The last complete generation remains available after a truncated frame.
+	require.Equal(t, PrepareParamFloat, vec.GetPrepareParamKindAt(1))
+	require.True(t, vec.GetIsBinaryStringAt(2))
 }
 
 func TestSetPrepareParamKindsFromReaderErrorsReleaseTemporarySidecar(t *testing.T) {

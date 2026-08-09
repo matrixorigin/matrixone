@@ -39,6 +39,11 @@ type minMaxExecBytes struct {
 	binaryString bool
 }
 
+func (exec *minMaxExecBytes) BinaryStringState() bool { return exec.binaryString }
+func (exec *minMaxExecBytes) SetBinaryStringState(value bool) {
+	exec.binaryString = value
+}
+
 func mergeMinMaxPrepareParamKind(
 	vec *vector.Vector,
 	row int,

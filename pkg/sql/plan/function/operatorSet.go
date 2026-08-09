@@ -499,13 +499,6 @@ func generalCaseFn[T constraints.Integer | constraints.Float | bool | types.Date
 
 func strCaseFn(vecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
 	// case Xn then Yn else Z
-	binaryResult := false
-	for i := 1; i < len(vecs); i += 2 {
-		binaryResult = binaryResult || isBinaryStringVector(vecs[i])
-	}
-	if len(vecs)%2 == 1 {
-		binaryResult = binaryResult || isBinaryStringVector(vecs[len(vecs)-1])
-	}
 	xs := make([]vector.FunctionParameterWrapper[bool], 0, len(vecs)/2)
 	ys := make([]vector.FunctionParameterWrapper[types.Varlena], 0, len(vecs)/2)
 
@@ -528,6 +521,7 @@ func strCaseFn(vecs []*vector.Vector, result vector.FunctionResultWrapper, _ *pr
 					if err := rs.AppendBytes(ys[j].GetStrValue(i)); err != nil {
 						return err
 					}
+					result.GetResultVector().SetIsBinaryStringAt(int(i), vecs[2*j+1].GetIsBinaryStringAt(int(i)))
 					matchElse = false
 					break
 				}
@@ -536,6 +530,7 @@ func strCaseFn(vecs []*vector.Vector, result vector.FunctionResultWrapper, _ *pr
 				if err := rs.AppendBytes(z.GetStrValue(i)); err != nil {
 					return err
 				}
+				result.GetResultVector().SetIsBinaryStringAt(int(i), vecs[len(vecs)-1].GetIsBinaryStringAt(int(i)))
 			}
 		}
 	} else {
@@ -546,6 +541,7 @@ func strCaseFn(vecs []*vector.Vector, result vector.FunctionResultWrapper, _ *pr
 					if err := rs.AppendBytes(ys[j].GetStrValue(i)); err != nil {
 						return err
 					}
+					result.GetResultVector().SetIsBinaryStringAt(int(i), vecs[2*j+1].GetIsBinaryStringAt(int(i)))
 					matchElse = false
 					break
 				}
@@ -556,9 +552,6 @@ func strCaseFn(vecs []*vector.Vector, result vector.FunctionResultWrapper, _ *pr
 				}
 			}
 		}
-	}
-	if binaryResult {
-		result.GetResultVector().SetIsBinaryString(true)
 	}
 	return nil
 }
@@ -842,7 +835,6 @@ func generalIffFn[T constraints.Integer | constraints.Float | bool | types.Date 
 }
 
 func strIffFn(vecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	propagateBinaryStringResult(vecs[1:], result)
 	p2 := vector.GenerateFunctionStrParameter(vecs[1])
 	p3 := vector.GenerateFunctionStrParameter(vecs[2])
 
@@ -863,10 +855,12 @@ func strIffFn(vecs []*vector.Vector, result vector.FunctionResultWrapper, proc *
 			if err := rs.AppendBytes(p2.GetStrValue(i)); err != nil {
 				return err
 			}
+			result.GetResultVector().SetIsBinaryStringAt(int(i), vecs[1].GetIsBinaryStringAt(int(i)))
 		} else {
 			if err := rs.AppendBytes(p3.GetStrValue(i)); err != nil {
 				return err
 			}
+			result.GetResultVector().SetIsBinaryStringAt(int(i), vecs[2].GetIsBinaryStringAt(int(i)))
 		}
 	}
 	return nil

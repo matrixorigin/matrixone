@@ -3501,7 +3501,7 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 		}
 
 		for i, expr := range subCtx.results {
-			if binaryType, ok := binaryLiteralStringType(expr); ok {
+			if binaryType, ok := ctasBinaryStringType(builder.compCtx, expr); ok {
 				projectTypList[i][idx] = binaryType
 			} else {
 				projectTypList[i][idx] = makeTypeByPlan2Expr(expr)
@@ -3539,6 +3539,17 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 		}
 
 		if len(tmpArgsType) > 0 {
+			setBinaryString := false
+			setBinaryType := types.Type{}
+			for _, typ := range argsType {
+				switch typ.Oid {
+				case types.T_binary, types.T_varbinary, types.T_blob:
+					setBinaryString = true
+					if typ.Oid == types.T_blob || setBinaryType.Oid == 0 {
+						setBinaryType = typ
+					}
+				}
+			}
 			fGet, err := function.GetFunctionByName(builder.GetContext(), "coalesce", tmpArgsType)
 			if err != nil {
 				return 0, moerr.NewParseErrorf(builder.GetContext(), "the %d column cann't cast to a same type", columnIdx)
@@ -3564,6 +3575,15 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 				}
 			} else {
 				targetArgType = argsCastType[0]
+			}
+			if setBinaryString {
+				// Preserve the common expression width chosen above. A binary
+				// branch changes the set column's string category, not the width
+				// required to hold values from every branch.
+				targetArgType.Oid = setBinaryType.Oid
+				if setBinaryType.Oid == types.T_binary {
+					targetArgType.Oid = types.T_varbinary
+				}
 			}
 
 			preserveGroupingBinary := distinct && groupingOrderResolve != nil &&

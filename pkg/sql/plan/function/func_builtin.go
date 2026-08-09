@@ -1605,7 +1605,6 @@ func doRpadBytes(src []byte, tgtLen int64, pad []byte) ([]byte, bool) {
 }
 
 func builtInRepeat(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	binaryInput := isBinaryStringVector(parameters[0])
 	// repeat the string n times.
 	repeatNTimes := func(base string, n int64) (r string, null bool) {
 		if n <= 0 {
@@ -1644,15 +1643,14 @@ func builtInRepeat(parameters []*vector.Vector, result vector.FunctionResultWrap
 		if err != nil {
 			return err
 		}
-	}
-	if binaryInput {
-		result.GetResultVector().SetIsBinaryString(true)
+		if !(null1 || null2) {
+			result.GetResultVector().SetIsBinaryStringAt(int(i), parameters[0].GetIsBinaryStringAt(int(i)))
+		}
 	}
 	return nil
 }
 
 func builtInLpad(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
-	binaryInput := isBinaryStringVector(parameters[0]) || isBinaryStringVector(parameters[2])
 	p1 := vector.GenerateFunctionStrParameter(parameters[0])
 	p2 := vector.GenerateFunctionFixedTypeParameter[int64](parameters[1])
 	p3 := vector.GenerateFunctionStrParameter(parameters[2])
@@ -1663,6 +1661,7 @@ func builtInLpad(parameters []*vector.Vector, result vector.FunctionResultWrappe
 		v2, null2 := p2.GetValue(i)
 		v3, null3 := p3.GetStrValue(i)
 		if !(null1 || null2 || null3) {
+			binaryInput := parameters[0].GetIsBinaryStringAt(int(i))
 			var rvalue []byte
 			var shouldNull bool
 			if binaryInput {
@@ -1676,6 +1675,7 @@ func builtInLpad(parameters []*vector.Vector, result vector.FunctionResultWrappe
 				if err := rs.AppendBytes(rvalue, false); err != nil {
 					return err
 				}
+				result.GetResultVector().SetIsBinaryStringAt(int(i), binaryInput)
 				continue
 			}
 		}
@@ -1683,14 +1683,10 @@ func builtInLpad(parameters []*vector.Vector, result vector.FunctionResultWrappe
 			return err
 		}
 	}
-	if binaryInput {
-		result.GetResultVector().SetIsBinaryString(true)
-	}
 	return nil
 }
 
 func builtInRpad(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
-	binaryInput := isBinaryStringVector(parameters[0]) || isBinaryStringVector(parameters[2])
 	p1 := vector.GenerateFunctionStrParameter(parameters[0])
 	p2 := vector.GenerateFunctionFixedTypeParameter[int64](parameters[1])
 	p3 := vector.GenerateFunctionStrParameter(parameters[2])
@@ -1701,6 +1697,7 @@ func builtInRpad(parameters []*vector.Vector, result vector.FunctionResultWrappe
 		v2, null2 := p2.GetValue(i)
 		v3, null3 := p3.GetStrValue(i)
 		if !(null1 || null2 || null3) {
+			binaryInput := parameters[0].GetIsBinaryStringAt(int(i))
 			var rvalue []byte
 			var shouldNull bool
 			if binaryInput {
@@ -1714,15 +1711,13 @@ func builtInRpad(parameters []*vector.Vector, result vector.FunctionResultWrappe
 				if err := rs.AppendBytes(rvalue, false); err != nil {
 					return err
 				}
+				result.GetResultVector().SetIsBinaryStringAt(int(i), binaryInput)
 				continue
 			}
 		}
 		if err := rs.AppendBytes(nil, true); err != nil {
 			return err
 		}
-	}
-	if binaryInput {
-		result.GetResultVector().SetIsBinaryString(true)
 	}
 	return nil
 }
@@ -3879,6 +3874,10 @@ func isUTF8Charset(charset []byte) bool {
 }
 
 func builtInToUpper(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	if parameters[0].HasBinaryStringRows() {
+		return opUnaryBytesToBytesByBinaryRow(parameters, result, length,
+			func(v []byte) []byte { return v }, bytes.ToUpper, selectList)
+	}
 	if isBinaryStringVector(parameters[0]) {
 		err := opUnaryBytesToBytes(parameters, result, proc, length, func(v []byte) []byte {
 			return v
@@ -3894,6 +3893,10 @@ func builtInToUpper(parameters []*vector.Vector, result vector.FunctionResultWra
 }
 
 func builtInToLower(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	if parameters[0].HasBinaryStringRows() {
+		return opUnaryBytesToBytesByBinaryRow(parameters, result, length,
+			func(v []byte) []byte { return v }, bytes.ToLower, selectList)
+	}
 	if isBinaryStringVector(parameters[0]) {
 		err := opUnaryBytesToBytes(parameters, result, proc, length, func(v []byte) []byte {
 			return v
@@ -3917,12 +3920,96 @@ func isBinaryStringVector(vec *vector.Vector) bool {
 	}
 }
 
+func opUnaryBytesToBytesByBinaryRow(
+	parameters []*vector.Vector,
+	result vector.FunctionResultWrapper,
+	length int,
+	binaryFn func([]byte) []byte,
+	textFn func([]byte) []byte,
+	selectList *FunctionSelectList,
+) error {
+	p := vector.GenerateFunctionStrParameter(parameters[0])
+	rs := vector.MustFunctionResult[types.Varlena](result)
+	for row := 0; row < length; row++ {
+		if selectList != nil && selectList.Contains(uint64(row)) {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+		value, isNull := p.GetStrValue(uint64(row))
+		if isNull {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+		binaryString := parameters[0].GetIsBinaryStringAt(row)
+		output := textFn(value)
+		if binaryString {
+			output = binaryFn(value)
+		}
+		if err := rs.AppendBytes(output, false); err != nil {
+			return err
+		}
+		result.GetResultVector().SetIsBinaryStringAt(row, binaryString)
+	}
+	return nil
+}
+
+func opBinaryBytesBytesToFixedByBinaryRow[Tr types.FixedSizeTExceptStrType](
+	parameters []*vector.Vector,
+	result vector.FunctionResultWrapper,
+	length int,
+	fn func([]byte, []byte, bool) (Tr, error),
+	selectList *FunctionSelectList,
+) error {
+	p1 := vector.GenerateFunctionStrParameter(parameters[0])
+	p2 := vector.GenerateFunctionStrParameter(parameters[1])
+	rs := vector.MustFunctionResult[Tr](result)
+	var zero Tr
+	for row := 0; row < length; row++ {
+		v1, null1 := p1.GetStrValue(uint64(row))
+		v2, null2 := p2.GetStrValue(uint64(row))
+		if null1 || null2 || selectList != nil && selectList.Contains(uint64(row)) {
+			if err := rs.Append(zero, true); err != nil {
+				return err
+			}
+			continue
+		}
+		value, err := fn(v1, v2, parameters[0].GetIsBinaryStringAt(row))
+		if err != nil {
+			return err
+		}
+		if err = rs.Append(value, false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func propagateBinaryStringResult(parameters []*vector.Vector, result vector.FunctionResultWrapper) {
 	for _, parameter := range parameters {
 		if isBinaryStringVector(parameter) {
 			result.GetResultVector().SetIsBinaryString(true)
 			return
 		}
+	}
+}
+
+func propagateBinaryStringResultRows(parameters []*vector.Vector, result *vector.Vector, length int) {
+	for row := 0; row < length && row < result.Length(); row++ {
+		if result.IsNull(uint64(row)) {
+			continue
+		}
+		binaryString := false
+		for _, parameter := range parameters {
+			if parameter.GetIsBinaryStringAt(row) {
+				binaryString = true
+				break
+			}
+		}
+		result.SetIsBinaryStringAt(row, binaryString)
 	}
 }
 

@@ -69,6 +69,10 @@ func TestValidateRemoteReadCompatibility(t *testing.T) {
 	textParam.Process.PrepareParams.IsBin = []bool{false, false}
 	require.NoError(t, s.validateRemoteReadCompatibility(t.Context(), target, textParam))
 
+	binaryStringParam := textParam
+	binaryStringParam.Process.PrepareParams.IsBinaryString = []bool{true}
+	require.Error(t, s.validateRemoteReadCompatibility(t.Context(), target, binaryStringParam))
+
 	unknown := target
 	unknown.Replicas[0].CN = "unknown"
 	require.Error(t, s.validateRemoteReadCompatibility(t.Context(), unknown, binaryParam))
@@ -96,6 +100,17 @@ func TestNewReadRequestUsesVersionedMethodForPrepareParamMetadata(t *testing.T) 
 	)
 	require.Equal(t, shard.Method_ShardReadV2, binaryReq.RPCMethod)
 	s.remote.pool.ReleaseRequest(binaryReq)
+
+	binaryStringReq := s.newReadRequest(
+		target,
+		ReadRows,
+		shard.ReadParam{Process: pipeline.ProcessInfo{
+			PrepareParams: pipeline.PrepareParamInfo{IsBinaryString: []bool{true}},
+		}},
+		timestamp.Timestamp{},
+	)
+	require.Equal(t, shard.Method_ShardReadV2, binaryStringReq.RPCMethod)
+	s.remote.pool.ReleaseRequest(binaryStringReq)
 
 	numericReq := s.newReadRequest(
 		target,

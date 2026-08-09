@@ -4249,8 +4249,11 @@ func binaryLiteralLookupUsesArgument(name string, argCount, idx int) bool {
 
 func binaryStringResultUsesArgument(name string, argCount, idx int) bool {
 	switch name {
-	case "concat", "concat_ws", "coalesce", "least", "greatest", "trim":
+	case "concat", "concat_ws", "coalesce", "least", "greatest":
 		return true
+	case "trim":
+		// The executor receives direction, subject, trim-string.
+		return idx == 1
 	case "elt", "make_set":
 		return idx > 0
 	case "export_set":
@@ -4259,18 +4262,14 @@ func binaryStringResultUsesArgument(name string, argCount, idx int) bool {
 		return idx == 1 || idx == 2
 	case "case":
 		return idx%2 == 1 || argCount%2 == 1 && idx == argCount-1
-	case "lpad", "rpad":
-		return idx == 0 || idx == 2
-	case "replace", "regexp_replace":
-		return idx < 3
-	case "insert":
-		return idx == 0 || idx == 3
-	case "substring_index", "regexp_substr":
-		return idx < 2
+	case "lpad", "rpad", "replace", "regexp_replace", "insert", "substring_index", "regexp_substr":
+		return idx == 0
 	case "substring", "substr", "mid", "left", "right", "lower", "lcase", "upper", "ucase",
 		"repeat", "reverse", "ltrim", "rtrim", "min", "max", "any_value", "first_value", "last_value",
-		"nth_value", "lag", "lead":
+		"nth_value":
 		return idx == 0
+	case "lag", "lead":
+		return idx == 0 || idx == 2
 	default:
 		return false
 	}

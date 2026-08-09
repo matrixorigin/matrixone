@@ -977,6 +977,31 @@ func TestBuildCTASMaterializesDynamicBinaryStringTypes(t *testing.T) {
 	}
 }
 
+func TestBuildCTASIncludesLagDefaultAndSetBranchBinaryProvenance(t *testing.T) {
+	ctx := NewMockCompilerContext(false)
+	ctx.ResolveVariableBinaryStringFunc = func(name string, system, global bool) (bool, error) {
+		return name == "u" && !system && !global, nil
+	}
+
+	for name, sql := range map[string]string{
+		"lag-default": `create table copied as
+			select lag(n_name, 1, @u) over (order by n_nationkey) c from nation`,
+		"union-branch": `create table copied as
+			select @u c union all select '你' c`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, sql, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			p, err := BuildPlan(ctx, stmt, false)
+			require.NoError(t, err)
+			cols := p.GetDdl().GetCreateTable().GetTableDef().GetCols()
+			require.NotEmpty(t, cols)
+			require.Equal(t, int32(types.T_blob), cols[0].Typ.Id)
+		})
+	}
+}
+
 func TestBuildCTASUsesBinaryFunctionResultWidth(t *testing.T) {
 	stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL,
 		`create table copied as select lpad(X'61', 5, 'x') padded, +X'3132' unary_value`, 1)

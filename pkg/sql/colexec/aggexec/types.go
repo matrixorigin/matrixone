@@ -223,6 +223,14 @@ type PrepareParamKindStateAccessor interface {
 	RestorePrepareParamKindsFlat(kinds []vector.PrepareParamKind, mp *mpool.MPool) error
 }
 
+// BinaryStringStateAccessor carries the dynamic byte-string result summary
+// alongside aggregate partial state. It is optional because numeric and other
+// non-string executors have no such metadata.
+type BinaryStringStateAccessor interface {
+	BinaryStringState() bool
+	SetBinaryStringState(bool)
+}
+
 // indicate who implements the AggFuncExec interface.
 var (
 	_ AggFuncExec = &groupConcatExec{}

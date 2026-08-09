@@ -56,6 +56,11 @@ type groupConcatExec struct {
 	binaryString     bool
 }
 
+func (exec *groupConcatExec) BinaryStringState() bool { return exec.binaryString }
+func (exec *groupConcatExec) SetBinaryStringState(value bool) {
+	exec.binaryString = value
+}
+
 var (
 	groupConcatConfigMagic        = []byte{0xff, 'G', 'C', 1}
 	groupConcatOrderedConfigMagic = []byte{0xff, 'G', 'C', 'O', 1}

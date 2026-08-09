@@ -417,6 +417,113 @@ func TestBinaryStringScalarResultsPropagateMetadata(t *testing.T) {
 	require.Equal(t, []byte{0xe4, 0xbd, 0xa0}, convertResult.GetResultVector().GetBytesAt(0))
 }
 
+func TestBinaryAuxiliaryArgumentsDoNotChangeSubjectSemantics(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	mp := proc.Mp()
+	subject := testutil.MakeVarlenaVector(
+		[][]byte{[]byte("你x")}, nil, types.T_varchar.ToType(), mp)
+	auxiliary := testutil.MakeVarlenaVector(
+		[][]byte{[]byte("x")}, nil, types.T_varchar.ToType(), mp)
+	auxiliary.SetIsBinaryString(true)
+	defer subject.Free(mp)
+	defer auxiliary.Free(mp)
+
+	instrResult := vector.NewFunctionResultWrapper(types.T_int64.ToType(), mp)
+	defer instrResult.Free()
+	require.NoError(t, instrResult.PreExtendAndReset(1))
+	require.NoError(t, Instr([]*vector.Vector{subject, auxiliary}, instrResult, proc, 1, nil))
+	require.Equal(t, int64(2), vector.GetFixedAtWithTypeCheck[int64](instrResult.GetResultVector(), 0))
+
+	locateResult := vector.NewFunctionResultWrapper(types.T_int64.ToType(), mp)
+	defer locateResult.Free()
+	require.NoError(t, locateResult.PreExtendAndReset(1))
+	require.NoError(t, buildInLocate2Args(
+		[]*vector.Vector{auxiliary, subject}, locateResult, proc, 1, nil))
+	require.Equal(t, int64(2), vector.GetFixedAtWithTypeCheck[int64](locateResult.GetResultVector(), 0))
+
+	padLength := testutil.MakeInt64Vector([]int64{4}, nil, mp)
+	defer padLength.Free(mp)
+	padResult := vector.NewFunctionResultWrapper(types.T_varchar.ToType(), mp)
+	defer padResult.Free()
+	require.NoError(t, padResult.PreExtendAndReset(1))
+	require.NoError(t, builtInLpad(
+		[]*vector.Vector{subject, padLength, auxiliary}, padResult, proc, 1, nil))
+	require.Equal(t, "xx你x", string(padResult.GetResultVector().GetBytesAt(0)))
+	require.False(t, padResult.GetResultVector().GetIsBinaryString())
+
+	position := testutil.MakeInt64Vector([]int64{2}, nil, mp)
+	replaceLength := testutil.MakeInt64Vector([]int64{1}, nil, mp)
+	replacement := testutil.MakeVarlenaVector(
+		[][]byte{[]byte("z")}, nil, types.T_varchar.ToType(), mp)
+	replacement.SetIsBinaryString(true)
+	defer position.Free(mp)
+	defer replaceLength.Free(mp)
+	defer replacement.Free(mp)
+	insertResult := vector.NewFunctionResultWrapper(types.T_varchar.ToType(), mp)
+	defer insertResult.Free()
+	require.NoError(t, insertResult.PreExtendAndReset(1))
+	require.NoError(t, Insert([]*vector.Vector{
+		subject, position, replaceLength, replacement,
+	}, insertResult, proc, 1, nil))
+	require.Equal(t, "你z", string(insertResult.GetResultVector().GetBytesAt(0)))
+	require.False(t, insertResult.GetResultVector().GetIsBinaryString())
+
+	regexpSubject := testutil.MakeVarlenaVector(
+		[][]byte{[]byte("你")}, nil, types.T_varchar.ToType(), mp)
+	pattern := testutil.MakeVarlenaVector(
+		[][]byte{[]byte(".")}, nil, types.T_varchar.ToType(), mp)
+	pattern.SetIsBinaryString(true)
+	defer regexpSubject.Free(mp)
+	defer pattern.Free(mp)
+	regexpResult := vector.NewFunctionResultWrapper(types.T_varchar.ToType(), mp)
+	defer regexpResult.Free()
+	require.NoError(t, regexpResult.PreExtendAndReset(1))
+	require.NoError(t, newOpBuiltInRegexp().builtInRegexpSubstr(
+		[]*vector.Vector{regexpSubject, pattern}, regexpResult, proc, 1, nil))
+	require.Equal(t, []byte{'?'}, regexpResult.GetResultVector().GetBytesAt(0))
+	require.False(t, regexpResult.GetResultVector().GetIsBinaryString())
+}
+
+func TestCoalescePreservesSelectedRowBinarySemantics(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	mp := proc.Mp()
+	text := testutil.MakeVarlenaVector(
+		[][]byte{[]byte("你"), nil}, []uint64{1}, types.T_varchar.ToType(), mp)
+	fallback := testutil.MakeVarlenaVector(
+		[][]byte{[]byte("你"), []byte("你")}, nil, types.T_varchar.ToType(), mp)
+	fallback.SetIsBinaryString(true)
+	defer text.Free(mp)
+	defer fallback.Free(mp)
+
+	coalesced := vector.NewFunctionResultWrapper(types.T_varchar.ToType(), mp)
+	defer coalesced.Free()
+	require.NoError(t, coalesced.PreExtendAndReset(2))
+	require.NoError(t, CoalesceStr(
+		[]*vector.Vector{text, fallback}, coalesced, proc, 2, nil))
+	require.False(t, coalesced.GetResultVector().GetIsBinaryStringAt(0))
+	require.True(t, coalesced.GetResultVector().GetIsBinaryStringAt(1))
+
+	lengths := vector.NewFunctionResultWrapper(types.T_uint64.ToType(), mp)
+	defer lengths.Free()
+	require.NoError(t, lengths.PreExtendAndReset(2))
+	require.NoError(t, LengthUTF8(
+		[]*vector.Vector{coalesced.GetResultVector()}, lengths, proc, 2, nil))
+	require.Equal(t, []uint64{1, 3},
+		vector.MustFixedColWithTypeCheck[uint64](lengths.GetResultVector()))
+
+	ones := testutil.MakeInt64Vector([]int64{1, 1}, nil, mp)
+	defer ones.Free(mp)
+	left := vector.NewFunctionResultWrapper(types.T_varchar.ToType(), mp)
+	defer left.Free()
+	require.NoError(t, left.PreExtendAndReset(2))
+	require.NoError(t, Left(
+		[]*vector.Vector{coalesced.GetResultVector(), ones}, left, proc, 2, nil))
+	require.Equal(t, [][]byte{[]byte("你"), {0xe4}},
+		vector.InefficientMustBytesCol(left.GetResultVector()))
+	require.False(t, left.GetResultVector().GetIsBinaryStringAt(0))
+	require.True(t, left.GetResultVector().GetIsBinaryStringAt(1))
+}
+
 // Test_ConcatWs tests CONCAT_WS function (concat with separator)
 // This is a complex function with conditional logic for NULL handling
 func Test_ConcatWs(t *testing.T) {

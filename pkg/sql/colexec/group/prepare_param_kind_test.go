@@ -241,3 +241,23 @@ func TestPrepareParamKindStateCodec(t *testing.T) {
 		require.Equal(t, vector.PrepareParamNone, kind)
 	}
 }
+
+func TestPrepareParamKindTrailerCarriesBinaryStringState(t *testing.T) {
+	aggs := []aggexec.AggFuncExecExpression{
+		aggexec.MakeAggFunctionExpression(aggexec.AggIdOfMin, false, nil, nil),
+	}
+	var states aggexec.PrepareParamKindStates
+	states.Reset(aggs)
+	var payload bytes.Buffer
+	require.NoError(t, writePrepareParamKindTrailer(
+		context.Background(), &payload, aggs, &states, nil,
+		[]prepareParamKindSummary{{binaryString: true}},
+	))
+	require.Equal(t, prepareParamKindTrailerBinaryVersion, payload.Bytes()[3])
+
+	_, summaries, err := readPrepareParamKindTrailer(
+		context.Background(), bytes.NewReader(payload.Bytes()), 1, &states, []int{-1})
+	require.NoError(t, err)
+	require.Len(t, summaries, 1)
+	require.True(t, summaries[0].binaryString)
+}

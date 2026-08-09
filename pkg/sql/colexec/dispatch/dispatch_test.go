@@ -106,6 +106,18 @@ func TestMarshalRemoteBatchPrepareParamProtocolGate(t *testing.T) {
 	require.NoError(t, decoded.UnmarshalBinaryWithPrepareParamKinds(encoded, proc.Mp()))
 	require.Equal(t, vector.PrepareParamInteger, decoded.Vecs[0].GetPrepareParamKindAt(0))
 	require.Equal(t, vector.PrepareParamNone, decoded.Vecs[0].GetPrepareParamKindAt(1))
+
+	bat.Vecs[0].SetIsBinaryString(true)
+	buf.Reset()
+	_, err = marshalRemoteBatch(proc, bat, buf)
+	require.ErrorContains(t, err, "binary-string provenance requires MORPCVersion14")
+	require.Empty(t, buf.Bytes())
+
+	runtime.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion14)
+	encoded, err = marshalRemoteBatch(proc, bat, buf)
+	require.NoError(t, err)
+	require.NoError(t, decoded.UnmarshalBinaryWithPrepareParamKinds(encoded, proc.Mp()))
+	require.True(t, decoded.Vecs[0].GetIsBinaryString())
 }
 
 func TestMarshalRemoteBatchUnknownServiceFailsClosed(t *testing.T) {

@@ -1079,7 +1079,6 @@ func CoalesceGeneral[T NormalType](ivecs []*vector.Vector, result vector.Functio
 }
 
 func CoalesceStr(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) (err error) {
-	propagateBinaryStringResult(ivecs, result)
 	rs := vector.MustFunctionResult[types.Varlena](result)
 	vecs := make([]vector.FunctionParameterWrapper[types.Varlena], len(ivecs))
 	for i := range ivecs {
@@ -1095,6 +1094,7 @@ func CoalesceStr(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ 
 			if err = rs.AppendBytes(v, false); err != nil {
 				return err
 			}
+			result.GetResultVector().SetIsBinaryStringAt(int(i), ivecs[j].GetIsBinaryStringAt(int(i)))
 			isFill = true
 			break
 		}
@@ -6026,7 +6026,6 @@ func strcmp(s1, s2 string) (int8, error) {
 }
 
 func SubStringWith2Args(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) (err error) {
-	binaryInput := isBinaryStringVector(ivecs[0])
 	rs := vector.MustFunctionResult[types.Varlena](result)
 	vs := vector.GenerateFunctionStrParameter(ivecs[0])
 	starts := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[1])
@@ -6040,6 +6039,7 @@ func SubStringWith2Args(ivecs []*vector.Vector, result vector.FunctionResultWrap
 				return err
 			}
 		} else {
+			binaryInput := ivecs[0].GetIsBinaryStringAt(int(i))
 			var r string
 			if binaryInput && s > 0 {
 				r = getSliceFromLeftBytes(v, s-1)
@@ -6055,10 +6055,8 @@ func SubStringWith2Args(ivecs []*vector.Vector, result vector.FunctionResultWrap
 			if err = rs.AppendBytes(functionUtil.QuickStrToBytes(r), false); err != nil {
 				return err
 			}
+			result.GetResultVector().SetIsBinaryStringAt(int(i), binaryInput)
 		}
-	}
-	if binaryInput {
-		result.GetResultVector().SetIsBinaryString(true)
 	}
 	return nil
 }
@@ -6134,7 +6132,6 @@ func getSliceFromRightWithLength(s string, offset int64, length int64) string {
 }
 
 func SubStringWith3Args(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
-	binaryInput := isBinaryStringVector(ivecs[0])
 	rs := vector.MustFunctionResult[types.Varlena](result)
 	vs := vector.GenerateFunctionStrParameter(ivecs[0])
 	starts := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[1])
@@ -6150,6 +6147,7 @@ func SubStringWith3Args(ivecs []*vector.Vector, result vector.FunctionResultWrap
 				return err
 			}
 		} else {
+			binaryInput := ivecs[0].GetIsBinaryStringAt(int(i))
 			var r string
 			if binaryInput && s > 0 {
 				r = getSliceOffsetLenBytes(v, s-1, l)
@@ -6165,10 +6163,8 @@ func SubStringWith3Args(ivecs []*vector.Vector, result vector.FunctionResultWrap
 			if err = rs.AppendBytes(functionUtil.QuickStrToBytes(r), false); err != nil {
 				return err
 			}
+			result.GetResultVector().SetIsBinaryStringAt(int(i), binaryInput)
 		}
-	}
-	if binaryInput {
-		result.GetResultVector().SetIsBinaryString(true)
 	}
 	return nil
 }
@@ -6234,7 +6230,6 @@ func getCount[T number](typ types.Type, val T) int64 {
 }
 
 func SubStrIndex[T number](ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) (err error) {
-	propagateBinaryStringResult(ivecs[:2], result)
 	rs := vector.MustFunctionResult[types.Varlena](result)
 	vs := vector.GenerateFunctionStrParameter(ivecs[0])
 	delims := vector.GenerateFunctionStrParameter(ivecs[1])
@@ -6259,6 +6254,7 @@ func SubStrIndex[T number](ivecs []*vector.Vector, result vector.FunctionResultW
 			if err = rs.AppendBytes([]byte(r), false); err != nil {
 				return err
 			}
+			result.GetResultVector().SetIsBinaryStringAt(int(i), ivecs[0].GetIsBinaryStringAt(int(i)))
 		}
 	}
 	return nil
@@ -6914,7 +6910,34 @@ func FindInSet(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc
 }
 
 func Instr(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
-	if isBinaryStringVector(ivecs[0]) || isBinaryStringVector(ivecs[1]) {
+	if ivecs[0].HasBinaryStringRows() {
+		valueParam := vector.GenerateFunctionStrParameter(ivecs[0])
+		needleParam := vector.GenerateFunctionStrParameter(ivecs[1])
+		rs := vector.MustFunctionResult[int64](result)
+		for row := 0; row < length; row++ {
+			value, null1 := valueParam.GetStrValue(uint64(row))
+			needle, null2 := needleParam.GetStrValue(uint64(row))
+			if null1 || null2 || selectList != nil && selectList.Contains(uint64(row)) {
+				if err := rs.Append(0, true); err != nil {
+					return err
+				}
+				continue
+			}
+			position := int64(0)
+			if ivecs[0].GetIsBinaryStringAt(row) {
+				if idx := bytes.Index(value, needle); idx >= 0 {
+					position = int64(idx + 1)
+				}
+			} else {
+				position = instr.Single(functionUtil.QuickBytesToStr(value), functionUtil.QuickBytesToStr(needle))
+			}
+			if err := rs.Append(position, false); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	if isBinaryStringVector(ivecs[0]) {
 		return opBinaryBytesBytesToFixedWithErrorCheck[int64](ivecs, result, proc, length,
 			func(value, needle []byte) (int64, error) {
 				idx := bytes.Index(value, needle)
@@ -6928,7 +6951,6 @@ func Instr(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *pr
 }
 
 func Left(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) (err error) {
-	binaryInput := isBinaryStringVector(ivecs[0])
 	p1 := vector.GenerateFunctionStrParameter(ivecs[0])
 	p2 := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[1])
 	rs := vector.MustFunctionResult[types.Varlena](result)
@@ -6941,6 +6963,7 @@ func Left(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *proces
 				return err
 			}
 		} else {
+			binaryInput := ivecs[0].GetIsBinaryStringAt(int(i))
 			//TODO: Ignoring 4 switch cases: https://github.com/m-schen/matrixone/blob/0c480ca11b6302de26789f916a3e2faca7f79d47/pkg/sql/plan/function/builtin/binary/left.go#L38
 			var res string
 			if binaryInput {
@@ -6951,10 +6974,8 @@ func Left(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *proces
 			if err = rs.AppendBytes(functionUtil.QuickStrToBytes(res), false); err != nil {
 				return err
 			}
+			result.GetResultVector().SetIsBinaryStringAt(int(i), binaryInput)
 		}
-	}
-	if binaryInput {
-		result.GetResultVector().SetIsBinaryString(true)
 	}
 	return nil
 }
@@ -6981,7 +7002,6 @@ func evalLeft(str string, length int64) string {
 }
 
 func Right(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) (err error) {
-	binaryInput := isBinaryStringVector(ivecs[0])
 	p1 := vector.GenerateFunctionStrParameter(ivecs[0])
 	p2 := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[1])
 	rs := vector.MustFunctionResult[types.Varlena](result)
@@ -6994,6 +7014,7 @@ func Right(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *proce
 				return err
 			}
 		} else {
+			binaryInput := ivecs[0].GetIsBinaryStringAt(int(i))
 			var res string
 			if binaryInput {
 				res = evalRightBytes(v1, v2)
@@ -7003,10 +7024,8 @@ func Right(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *proce
 			if err = rs.AppendBytes(functionUtil.QuickStrToBytes(res), false); err != nil {
 				return err
 			}
+			result.GetResultVector().SetIsBinaryStringAt(int(i), binaryInput)
 		}
-	}
-	if binaryInput {
-		result.GetResultVector().SetIsBinaryString(true)
 	}
 	return nil
 }
@@ -8447,7 +8466,6 @@ func SecToTime(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *p
 }
 
 func Replace(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) (err error) {
-	propagateBinaryStringResult(ivecs, result)
 	p1 := vector.GenerateFunctionStrParameter(ivecs[0])
 	p2 := vector.GenerateFunctionStrParameter(ivecs[1])
 	p3 := vector.GenerateFunctionStrParameter(ivecs[2])
@@ -8475,16 +8493,13 @@ func Replace(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *pro
 			if err = rs.AppendBytes(functionUtil.QuickStrToBytes(res), false); err != nil {
 				return err
 			}
+			result.GetResultVector().SetIsBinaryStringAt(int(i), ivecs[0].GetIsBinaryStringAt(int(i)))
 		}
 	}
 	return nil
 }
 
 func Insert(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) (err error) {
-	binaryInput := isBinaryStringVector(ivecs[0]) || isBinaryStringVector(ivecs[3])
-	if binaryInput {
-		result.GetResultVector().SetIsBinaryString(true)
-	}
 	p1 := vector.GenerateFunctionStrParameter(ivecs[0])              // str
 	p2 := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[1]) // pos
 	p3 := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[2]) // len
@@ -8502,12 +8517,14 @@ func Insert(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *proc
 				return err
 			}
 		} else {
+			binaryInput := ivecs[0].GetIsBinaryStringAt(int(i))
 			if binaryInput {
 				strLen := int64(len(v1))
 				if v2 <= 0 || v2 > strLen {
 					if err = rs.AppendBytes(v1, false); err != nil {
 						return err
 					}
+					result.GetResultVector().SetIsBinaryStringAt(int(i), true)
 					continue
 				}
 				start := v2 - 1
@@ -8524,6 +8541,7 @@ func Insert(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *proc
 				if err = rs.AppendBytes(value, false); err != nil {
 					return err
 				}
+				result.GetResultVector().SetIsBinaryStringAt(int(i), true)
 				continue
 			}
 			str := functionUtil.QuickBytesToStr(v1)
@@ -8542,17 +8560,17 @@ func Insert(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *proc
 			// - Otherwise, replace replaceLen characters starting at pos with newstr
 			// - Position is 1-based
 
-			var result string
+			var output string
 			if pos <= 0 || pos > strLen {
 				// Invalid position, return original string
-				result = str
+				output = str
 			} else if replaceLen == 0 {
 				// Insert without removing
 				posIdx := int(pos - 1) // Convert to 0-based index
 				if posIdx >= len(runes) {
-					result = str + newstr
+					output = str + newstr
 				} else {
-					result = string(runes[:posIdx]) + newstr + string(runes[posIdx:])
+					output = string(runes[:posIdx]) + newstr + string(runes[posIdx:])
 				}
 			} else {
 				// Replace replaceLen characters starting at pos
@@ -8563,22 +8581,22 @@ func Insert(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *proc
 					endIdx = posIdx + int(replaceLen)
 				}
 				if posIdx >= len(runes) {
-					result = str + newstr
+					output = str + newstr
 				} else {
-					result = string(runes[:posIdx]) + newstr + string(runes[endIdx:])
+					output = string(runes[:posIdx]) + newstr + string(runes[endIdx:])
 				}
 			}
 
-			if err = rs.AppendBytes(functionUtil.QuickStrToBytes(result), false); err != nil {
+			if err = rs.AppendBytes(functionUtil.QuickStrToBytes(output), false); err != nil {
 				return err
 			}
+			result.GetResultVector().SetIsBinaryStringAt(int(i), false)
 		}
 	}
 	return nil
 }
 
 func Trim(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
-	propagateBinaryStringResult(ivecs[1:], result)
 	p1 := vector.GenerateFunctionStrParameter(ivecs[0])
 	p2 := vector.GenerateFunctionStrParameter(ivecs[1])
 	p3 := vector.GenerateFunctionStrParameter(ivecs[2])
@@ -8612,6 +8630,7 @@ func Trim(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *pro
 			if err = rs.AppendBytes([]byte(res), false); err != nil {
 				return err
 			}
+			result.GetResultVector().SetIsBinaryStringAt(int(i), ivecs[1].GetIsBinaryStringAt(int(i)))
 		}
 
 	}

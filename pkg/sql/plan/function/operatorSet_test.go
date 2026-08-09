@@ -1568,6 +1568,8 @@ func TestStrCaseFnPreservesDynamicBinarySemantics(t *testing.T) {
 		[]*vector.Vector{condition, binaryBranch, textBranch}, result, proc, 2, nil))
 	require.False(t, result.GetResultVector().GetIsBin())
 	require.True(t, result.GetResultVector().GetIsBinaryString())
+	require.True(t, result.GetResultVector().GetIsBinaryStringAt(0))
+	require.False(t, result.GetResultVector().GetIsBinaryStringAt(1))
 	require.Equal(t, []string{"a", "bc"}, vector.InefficientMustStrCol(result.GetResultVector()))
 }
 

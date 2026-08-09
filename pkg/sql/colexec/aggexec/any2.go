@@ -27,6 +27,11 @@ type anyExec struct {
 	binaryString bool
 }
 
+func (exec *anyExec) BinaryStringState() bool { return exec.binaryString }
+func (exec *anyExec) SetBinaryStringState(value bool) {
+	exec.binaryString = value
+}
+
 func (exec *anyExec) Fill(groupIndex int, row int, vectors []*vector.Vector) error {
 	return exec.BatchFill(row, []uint64{uint64(groupIndex + 1)}, vectors)
 }

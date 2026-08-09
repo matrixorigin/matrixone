@@ -26,7 +26,6 @@ import (
 
 // LOCATE(substr, str)
 func buildInLocate2Args(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	binaryInput := isBinaryStringVector(parameters[0]) || isBinaryStringVector(parameters[1])
 	rs := vector.MustFunctionResult[int64](result)
 	substrVs := vector.GenerateFunctionStrParameter(parameters[0])
 	strVs := vector.GenerateFunctionStrParameter(parameters[1])
@@ -40,6 +39,7 @@ func buildInLocate2Args(parameters []*vector.Vector, result vector.FunctionResul
 				return err
 			}
 		} else {
+			binaryInput := parameters[1].GetIsBinaryStringAt(int(i))
 			var pos int64
 			if binaryInput {
 				idx := bytes.Index(str, substr)
@@ -57,7 +57,6 @@ func buildInLocate2Args(parameters []*vector.Vector, result vector.FunctionResul
 
 // LOCATE(substr, str, [position])
 func buildInLocate3Args(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	binaryInput := isBinaryStringVector(parameters[0]) || isBinaryStringVector(parameters[1])
 	rs := vector.MustFunctionResult[int64](result)
 	substrVs := vector.GenerateFunctionStrParameter(parameters[0])
 	strVs := vector.GenerateFunctionStrParameter(parameters[1])
@@ -73,6 +72,7 @@ func buildInLocate3Args(parameters []*vector.Vector, result vector.FunctionResul
 				return err
 			}
 		} else {
+			binaryInput := parameters[1].GetIsBinaryStringAt(int(i))
 			var pos int64
 			if binaryInput {
 				if position > 0 && position <= int64(len(str))+1 {

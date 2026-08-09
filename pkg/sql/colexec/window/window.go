@@ -519,7 +519,6 @@ func (ctr *container) processValueFunc(idx int, ap *Window, proc *process.Proces
 	srcVec := ctr.aggVecs[idx].Vec[0] // the expression column
 	retType := types.New(types.T(w.WindowFunc.Typ.Id), w.WindowFunc.Typ.Width, w.WindowFunc.Typ.Scale)
 	localResult := vector.NewVec(retType)
-	localResult.SetIsBinaryString(isBinaryStringVector(srcVec))
 	defer func() {
 		if err != nil && localResult != nil {
 			localResult.Free(proc.Mp())
@@ -540,9 +539,6 @@ func (ctr *container) processValueFunc(idx int, ap *Window, proc *process.Proces
 		var defaultVec *vector.Vector
 		if len(ctr.aggVecs[idx].Vec) >= 3 {
 			defaultVec = ctr.aggVecs[idx].Vec[2]
-			if isBinaryStringVector(defaultVec) {
-				localResult.SetIsBinaryString(true)
-			}
 		}
 		for j := 0; j < n; j++ {
 			if err = checkCanceled(proc, j); err != nil {
@@ -586,9 +582,6 @@ func (ctr *container) processValueFunc(idx int, ap *Window, proc *process.Proces
 		var defaultVec *vector.Vector
 		if len(ctr.aggVecs[idx].Vec) >= 3 {
 			defaultVec = ctr.aggVecs[idx].Vec[2]
-			if isBinaryStringVector(defaultVec) {
-				localResult.SetIsBinaryString(true)
-			}
 		}
 		for j := 0; j < n; j++ {
 			if err = checkCanceled(proc, j); err != nil {

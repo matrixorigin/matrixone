@@ -287,7 +287,7 @@ func genAsSelectCols(ctx CompilerContext, stmt *tree.Select, isPrepareStmt bool)
 	cols := make([]*plan.ColDef, len(rootNode.ProjectList))
 	for i, expr := range rootNode.ProjectList {
 		typ := &expr.Typ
-		if binaryType, ok := ctasBinaryStringType(ctx, expr); ok {
+		if binaryType, ok := ctasBinaryStringTypeInQuery(ctx, builder.qry, expr, nil); ok {
 			planType := makePlan2Type(&binaryType)
 			typ = &planType
 		}
@@ -331,6 +331,54 @@ func genAsSelectCols(ctx CompilerContext, stmt *tree.Select, isPrepareStmt bool)
 	return cols, builder.qry, nil
 }
 
+func ctasBinaryStringTypeInQuery(
+	ctx CompilerContext,
+	qry *Query,
+	expr *Expr,
+	visited map[[2]int32]bool,
+) (types.Type, bool) {
+	if binaryType, ok := ctasBinaryStringType(ctx, expr); ok {
+		return binaryType, true
+	}
+	col := expr.GetCol()
+	if col == nil || qry == nil {
+		return types.Type{}, false
+	}
+	key := [2]int32{col.RelPos, col.ColPos}
+	if visited == nil {
+		visited = make(map[[2]int32]bool)
+	}
+	if visited[key] {
+		return types.Type{}, false
+	}
+	visited[key] = true
+	defer delete(visited, key)
+
+	for _, node := range qry.Nodes {
+		matched := false
+		for _, tag := range node.BindingTags {
+			if tag == col.RelPos {
+				matched = true
+				break
+			}
+		}
+		if !matched || col.ColPos < 0 {
+			continue
+		}
+		position := int(col.ColPos)
+		for _, expressions := range [][]*Expr{node.ProjectList, node.WinSpecList} {
+			if position >= len(expressions) {
+				continue
+			}
+			if binaryType, ok := ctasBinaryStringTypeInQuery(
+				ctx, qry, expressions[position], visited); ok {
+				return binaryType, true
+			}
+		}
+	}
+	return types.Type{}, false
+}
+
 type binaryStringVariableResolver interface {
 	ResolveVariableBinaryString(varName string, isSystemVar, isGlobalVar bool) (bool, error)
 }
@@ -354,6 +402,35 @@ func ctasBinaryStringType(ctx CompilerContext, expr *Expr) (types.Type, bool) {
 			return types.Type{}, false
 		}
 		return types.T_blob.ToType(), true
+	}
+	if window := expr.GetW(); window != nil && window.WindowFunc != nil {
+		windowFunc := window.WindowFunc.GetF()
+		if windowFunc == nil || windowFunc.Func == nil {
+			return types.Type{}, false
+		}
+		name := strings.ToLower(windowFunc.Func.ObjName)
+		var resultType types.Type
+		found := false
+		for idx, arg := range windowFunc.Args {
+			if !binaryStringResultUsesArgument(name, len(windowFunc.Args), idx) {
+				continue
+			}
+			argType, ok := ctasBinaryStringType(ctx, arg)
+			if !ok {
+				continue
+			}
+			found = true
+			if argType.Oid == types.T_blob {
+				return argType, true
+			}
+			if resultType.Oid == 0 {
+				resultType = argType
+			}
+		}
+		if found {
+			return ctasBinaryFunctionResultType(name, windowFunc.Args, makeTypeByPlan2Expr(expr), resultType), true
+		}
+		return types.Type{}, false
 	}
 
 	fn := expr.GetF()
