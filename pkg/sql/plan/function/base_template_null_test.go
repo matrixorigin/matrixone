@@ -260,6 +260,18 @@ func TestVarlenaConstNullTemplatesPreserveResultCardinality(t *testing.T) {
 		},
 		{name: "inet6_aton", inputs: []FunctionTestInput{constNullString}, resultType: types.T_varbinary.ToType(), fn: Inet6Aton},
 		{name: "inet6_ntoa", inputs: []FunctionTestInput{constNullString}, fn: Inet6Ntoa},
+		{
+			name:   "try_jq",
+			inputs: []FunctionTestInput{constNullString, constString},
+			fn:     newOpBuiltInJq().tryJq,
+		},
+		{name: "mo_tuple_expr", inputs: []FunctionTestInput{constNullString}, fn: MoTupleExpr},
+		{
+			name:       "load_file",
+			inputs:     []FunctionTestInput{constNullString},
+			resultType: types.T_text.ToType(),
+			fn:         LoadFile,
+		},
 	}
 
 	for _, test := range tests {
@@ -301,6 +313,17 @@ func TestVarlenaTemplatesIgnoreAllRowsPreserveResultCardinality(t *testing.T) {
 	stringInputs := []FunctionTestInput{
 		NewFunctionTestInput(types.T_varchar.ToType(), []string{"a", "b"}, nil),
 		NewFunctionTestInput(types.T_varchar.ToType(), []string{"c", "d"}, nil),
+	}
+	wasmInputs := []FunctionTestInput{
+		NewFunctionTestInput(types.T_varchar.ToType(), []string{"not-constant-a", "not-constant-b"}, nil),
+		NewFunctionTestInput(types.T_varchar.ToType(), []string{"fn-a", "fn-b"}, nil),
+		NewFunctionTestInput(types.T_varchar.ToType(), []string{"arg-a", "arg-b"}, nil),
+	}
+	onnxInputs := []FunctionTestInput{
+		NewFunctionTestInput(types.T_varbinary.ToType(), []string{"model-a", "model-b"}, nil),
+		NewFunctionTestInput(types.T_varchar.ToType(), []string{"input-a", "input-b"}, nil),
+		NewFunctionTestInput(types.T_varchar.ToType(), []string{"shape-a", "shape-b"}, nil),
+		NewFunctionTestInput(types.T_varchar.ToType(), []string{"shape-a", "shape-b"}, nil),
 	}
 
 	tests := []struct {
@@ -395,6 +418,11 @@ func TestVarlenaTemplatesIgnoreAllRowsPreserveResultCardinality(t *testing.T) {
 		},
 		{name: "inet6_aton", inputs: stringInput, resultType: types.T_varbinary.ToType(), fn: Inet6Aton},
 		{name: "inet6_ntoa", inputs: stringInput, fn: Inet6Ntoa},
+		{name: "try_jq", inputs: stringInputs, fn: newOpBuiltInJq().tryJq},
+		{name: "mo_tuple_expr", inputs: stringInput, fn: MoTupleExpr},
+		{name: "load_file", inputs: stringInput, resultType: types.T_text.ToType(), fn: LoadFile},
+		{name: "try_wasm", inputs: wasmInputs, fn: newOpBuiltInWasm().tryWasm},
+		{name: "onnx_run", inputs: onnxInputs, resultType: types.T_json.ToType(), fn: newOpOnnxRun().onnxRun},
 	}
 
 	for _, test := range tests {
@@ -478,4 +506,28 @@ func TestVarlenaConstErrorAndInvalidInputsPreserveResultCardinality(t *testing.T
 			require.True(t, succeed, info)
 		})
 	}
+}
+
+func TestMoTupleExprMixedNullPreservesRowPositions(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	testCase := NewFunctionTestCase(
+		proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(
+				types.T_varchar.ToType(),
+				[]string{"", "", ""},
+				[]bool{false, true, false},
+			),
+		},
+		NewFunctionTestResult(
+			types.T_varchar.ToType(),
+			false,
+			[]string{"()", "", "()"},
+			[]bool{false, true, false},
+		),
+		MoTupleExpr,
+	)
+
+	succeed, info := testCase.Run()
+	require.True(t, succeed, info)
 }

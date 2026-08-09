@@ -3531,37 +3531,46 @@ func TestLoadFile(t *testing.T) {
 	dir := t.TempDir()
 	proc := testutil.NewProc(t)
 	ctx := context.Background()
-	filepath := dir + "test"
-	fs, readPath, err := fileservice.GetForETL(ctx, proc.Base.FileService, filepath)
-	assert.Nil(t, err)
-	err = fs.Write(ctx, fileservice.IOVector{
-		FilePath: readPath,
-		Entries: []fileservice.IOEntry{
-			{
+	filePath1 := filepath.Join(dir, "test1")
+	filePath2 := filepath.Join(dir, "test2")
+	writeFile := func(filePath string, data []byte) {
+		t.Helper()
+		fs, readPath, err := fileservice.GetForETL(ctx, proc.Base.FileService, filePath)
+		require.NoError(t, err)
+		require.NoError(t, fs.Write(ctx, fileservice.IOVector{
+			FilePath: readPath,
+			Entries: []fileservice.IOEntry{{
 				Offset: 0,
-				Size:   4,
-				Data:   []byte("1234"),
-			},
-			{
-				Offset: 4,
-				Size:   4,
-				Data:   []byte("5678"),
-			},
-		},
-	})
-	assert.Nil(t, err)
+				Size:   int64(len(data)),
+				Data:   data,
+			}},
+		}))
+	}
+	writeFile(filePath1, []byte("12345678"))
+	writeFile(filePath2, []byte("abcdefgh"))
 
 	testCases := []tcTemp{
 		{
-			info: "test load file",
+			info: "test load file with constant path",
 			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_varchar.ToType(),
-					[]string{filepath},
-					[]bool{false}),
+				NewFunctionTestConstInput(types.T_varchar.ToType(),
+					[]string{filePath1, filePath1},
+					nil),
 			},
 			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
-				[]string{"12345678"},
-				[]bool{false}),
+				[]string{"12345678", "12345678"},
+				nil),
+		},
+		{
+			info: "test load file with row paths",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{filePath1, filePath2},
+					nil),
+			},
+			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
+				[]string{"12345678", "abcdefgh"},
+				nil),
 		},
 	}
 

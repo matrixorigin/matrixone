@@ -109,6 +109,12 @@ func (op *opBuiltInWasm) tryWasm(params []*vector.Vector, result vector.Function
 
 func (op *opBuiltInWasm) tryWasmImpl(params []*vector.Vector, result vector.FunctionResultWrapper,
 	proc *process.Process, length int, selectList *FunctionSelectList, isTry bool) error {
+	rs := vector.MustFunctionResult[types.Varlena](result)
+	if selectList.IgnoreAllRow() {
+		rs.SetNullResult(uint64(length))
+		return nil
+	}
+
 	p1 := vector.GenerateFunctionStrParameter(params[0])
 	if !params[0].IsConst() {
 		return moerr.NewInvalidInput(proc.Ctx, "wasm url must be constant.")
@@ -121,36 +127,44 @@ func (op *opBuiltInWasm) tryWasmImpl(params []*vector.Vector, result vector.Func
 		return err
 	}
 
-	rs := vector.MustFunctionResult[types.Varlena](result)
 	p2 := vector.GenerateFunctionStrParameter(params[1])
 	p3 := vector.GenerateFunctionStrParameter(params[2])
 
-	if selectList.IgnoreAllRow() {
-		rs.AddNullRange(0, uint64(length))
-		return nil
-	}
-
 	for i := uint64(0); i < uint64(length); i++ {
+		if selectList.Contains(i) {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
 		fn, isnull := p2.GetStrValue(i)
 		if isnull {
-			rs.AppendBytes(nil, true)
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
 			continue
 		}
 		arg, isnull := p3.GetStrValue(i)
 		if isnull {
-			rs.AppendBytes(nil, true)
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
 			continue
 		}
 
 		res, err := op.runWasm(string(fn), arg)
 		if err != nil {
 			if isTry {
-				rs.AppendBytes(nil, true)
+				if err = rs.AppendBytes(nil, true); err != nil {
+					return err
+				}
 			} else {
 				return err
 			}
 		} else {
-			rs.AppendBytes(res, false)
+			if err = rs.AppendBytes(res, false); err != nil {
+				return err
+			}
 		}
 	}
 	return nil

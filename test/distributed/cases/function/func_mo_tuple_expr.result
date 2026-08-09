@@ -7,6 +7,15 @@ null
 select mo_tuple_expr('') as result;
 result
 ()
+drop table if exists tuple_null_order_probe;
+create table tuple_null_order_probe(id int, payload varchar(32));
+insert into tuple_null_order_probe values (1, NULL), (2, 'invalid_bytes'), (3, '');
+select mo_tuple_expr(payload) as decoded_tuple from tuple_null_order_probe order by id;
+decoded_tuple
+null
+null
+()
+drop table tuple_null_order_probe;
 drop database if exists test_tuple;
 create database test_tuple;
 use test_tuple;

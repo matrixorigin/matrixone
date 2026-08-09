@@ -160,13 +160,18 @@ func (op *opOnnxRun) ensureSession(proc *process.Process, rawArg []byte, isDatal
 
 func (op *opOnnxRun) onnxRun(params []*vector.Vector, result vector.FunctionResultWrapper,
 	proc *process.Process, length int, selectList *FunctionSelectList) error {
+	rs := vector.MustFunctionResult[types.Varlena](result)
+	if selectList.IgnoreAllRow() {
+		rs.SetNullResult(uint64(length))
+		return nil
+	}
+
 	// If the onnxruntime library failed to load, every call fails cleanly while
 	// the database keeps running.
 	if err := onnx.Available(); err != nil {
 		return err
 	}
 
-	rs := vector.MustFunctionResult[types.Varlena](result)
 	pModel := vector.GenerateFunctionStrParameter(params[0])
 	pInput := vector.GenerateFunctionStrParameter(params[1])
 	pInShape := vector.GenerateFunctionStrParameter(params[2])
@@ -178,11 +183,6 @@ func (op *opOnnxRun) onnxRun(params []*vector.Vector, result vector.FunctionResu
 	// one of these ASCII schemes.
 	declaredDatalink := params[0].GetType().Oid == types.T_datalink
 	modelIsConst := params[0].IsConst()
-
-	if selectList.IgnoreAllRow() {
-		rs.AddNullRange(0, uint64(length))
-		return nil
-	}
 
 	for i := uint64(0); i < uint64(length); i++ {
 		if selectList.Contains(i) {

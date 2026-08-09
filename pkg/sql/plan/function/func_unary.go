@@ -4303,40 +4303,88 @@ func ReadFromFileOffsetSize(Filepath string, fs fileservice.FileService, offset,
 	return r, nil
 }
 
+func readLoadFileContents(filePath string, proc *process.Process) ([]byte, error) {
+	r, err := ReadFromFile(filePath, proc.GetFileService())
+	if err != nil {
+		return nil, err
+	}
+	contents, readErr := io.ReadAll(io.LimitReader(r, int64(types.MaxBlobLen)+1))
+	closeErr := r.Close()
+	if readErr != nil {
+		return nil, readErr
+	}
+	if closeErr != nil {
+		return nil, closeErr
+	}
+	if len(contents) > types.MaxBlobLen {
+		return nil, moerr.NewInternalError(proc.Ctx, "Data too long for blob")
+	}
+	return contents, nil
+}
+
 // Too confused.
 func LoadFile(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	rs := vector.MustFunctionResult[types.Varlena](result)
+	if length == 0 {
+		return nil
+	}
+	if selectList.IgnoreAllRow() {
+		rs.SetNullResult(uint64(length))
+		return nil
+	}
+
 	ivec := vector.GenerateFunctionStrParameter(ivecs[0])
-	Filepath, null := ivec.GetStrValue(0)
-	if null {
-		if err := rs.AppendBytes(nil, true); err != nil {
+
+	if ivecs[0].IsConst() {
+		filePath, isNull := ivec.GetStrValue(0)
+		if isNull {
+			rs.SetNullResult(uint64(length))
+			return nil
+		}
+		contents, err := readLoadFileContents(string(filePath), proc)
+		if err != nil {
 			return err
 		}
-		return nil
-	}
-	fs := proc.GetFileService()
-	r, err := ReadFromFile(string(Filepath), fs)
-	if err != nil {
-		return err
-	}
-	defer r.Close()
-	ctx, err := io.ReadAll(r)
-	if err != nil {
-		return err
-	}
-
-	if len(ctx) > types.MaxBlobLen /*blob size*/ {
-		return moerr.NewInternalError(proc.Ctx, "Data too long for blob")
-	}
-	if len(ctx) == 0 {
-		if err = rs.AppendBytes(nil, true); err != nil {
-			return err
+		isNull = len(contents) == 0
+		for i := uint64(0); i < uint64(length); i++ {
+			if isNull || selectList.Contains(i) {
+				err = rs.AppendBytes(nil, true)
+			} else {
+				err = rs.AppendBytes(contents, false)
+			}
+			if err != nil {
+				return err
+			}
 		}
 		return nil
 	}
 
-	if err = rs.AppendBytes(ctx, false); err != nil {
-		return err
+	for i := uint64(0); i < uint64(length); i++ {
+		if selectList.Contains(i) {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+		filePath, isNull := ivec.GetStrValue(i)
+		if isNull {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+		contents, err := readLoadFileContents(string(filePath), proc)
+		if err != nil {
+			return err
+		}
+		if len(contents) == 0 {
+			err = rs.AppendBytes(nil, true)
+		} else {
+			err = rs.AppendBytes(contents, false)
+		}
+		if err != nil {
+			return err
+		}
 	}
 	return nil
 }

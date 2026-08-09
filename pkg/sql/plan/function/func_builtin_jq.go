@@ -78,7 +78,7 @@ func (op *opBuiltInJq) tryJqImpl(params []*vector.Vector, result vector.Function
 
 	// special case
 	if selectList.IgnoreAllRow() {
-		rs.AddNullRange(0, uint64(length))
+		rs.SetNullResult(uint64(length))
 		return nil
 	}
 
@@ -88,7 +88,7 @@ func (op *opBuiltInJq) tryJqImpl(params []*vector.Vector, result vector.Function
 		v1, null1 := p1.GetStrValue(0)
 		v2, null2 := p2.GetStrValue(0)
 		if null1 || null2 {
-			rs.AddNullRange(0, uint64(length))
+			rs.SetNullResult(uint64(length))
 		} else {
 			code, err := op.getJqCode(string(v2))
 			if err == nil {
@@ -96,14 +96,13 @@ func (op *opBuiltInJq) tryJqImpl(params []*vector.Vector, result vector.Function
 			}
 			if err != nil {
 				if isTry {
-					rs.AddNullRange(0, uint64(length))
+					rs.SetNullResult(uint64(length))
 					return nil
 				} else {
 					return err
 				}
 			}
-			rs.AppendBytes(op.enc.bytes(), false)
-			op.enc.done()
+			return op.appendJqConstResult(rs, length, selectList)
 		}
 		return nil
 	} else if c1 {
@@ -111,13 +110,15 @@ func (op *opBuiltInJq) tryJqImpl(params []*vector.Vector, result vector.Function
 		// of json string.
 		v1, null1 := p1.GetStrValue(0)
 		if null1 {
-			rs.AddNullRange(0, uint64(length))
+			rs.SetNullResult(uint64(length))
 			return nil
 		} else {
 			for i := uint64(0); i < uint64(length); i++ {
 				v2, null2 := p2.GetStrValue(i)
 				if null2 || selectList.Contains(i) {
-					rs.AppendBytes(nil, true)
+					if err := rs.AppendBytes(nil, true); err != nil {
+						return err
+					}
 				} else {
 					code, err := op.getJqCode(string(v2))
 					if err == nil {
@@ -125,13 +126,16 @@ func (op *opBuiltInJq) tryJqImpl(params []*vector.Vector, result vector.Function
 					}
 					if err != nil {
 						if isTry {
-							rs.AppendBytes(nil, true)
+							if err = rs.AppendBytes(nil, true); err != nil {
+								return err
+							}
 						} else {
 							return err
 						}
 					} else {
-						rs.AppendBytes(op.enc.bytes(), false)
-						op.enc.done()
+						if err = op.appendJqRowResult(rs); err != nil {
+							return err
+						}
 					}
 				}
 			}
@@ -141,13 +145,13 @@ func (op *opBuiltInJq) tryJqImpl(params []*vector.Vector, result vector.Function
 		// this is the common case that need to be optimized.
 		v2, null2 := p2.GetStrValue(0)
 		if null2 {
-			rs.AddNullRange(0, uint64(length))
+			rs.SetNullResult(uint64(length))
 			return nil
 		}
 		code, err := op.getJqCode(string(v2))
 		if err != nil {
 			if isTry {
-				rs.AddNullRange(0, uint64(length))
+				rs.SetNullResult(uint64(length))
 				return nil
 			} else {
 				return err
@@ -157,18 +161,23 @@ func (op *opBuiltInJq) tryJqImpl(params []*vector.Vector, result vector.Function
 		for i := uint64(0); i < uint64(length); i++ {
 			v1, null1 := p1.GetStrValue(i)
 			if null1 || selectList.Contains(i) {
-				rs.AppendBytes(nil, true)
+				if err = rs.AppendBytes(nil, true); err != nil {
+					return err
+				}
 			} else {
 				err = op.jqImpl(v1, code)
 				if err != nil {
 					if isTry {
-						rs.AppendBytes(nil, true)
+						if err = rs.AppendBytes(nil, true); err != nil {
+							return err
+						}
 					} else {
 						return err
 					}
 				} else {
-					rs.AppendBytes(op.enc.bytes(), false)
-					op.enc.done()
+					if err = op.appendJqRowResult(rs); err != nil {
+						return err
+					}
 				}
 			}
 		}
@@ -178,7 +187,9 @@ func (op *opBuiltInJq) tryJqImpl(params []*vector.Vector, result vector.Function
 			v1, null1 := p1.GetStrValue(i)
 			v2, null2 := p2.GetStrValue(i)
 			if null1 || null2 || selectList.Contains(i) {
-				rs.AppendBytes(nil, true)
+				if err := rs.AppendBytes(nil, true); err != nil {
+					return err
+				}
 			} else {
 				code, err := op.getJqCode(string(v2))
 				if err == nil {
@@ -187,16 +198,43 @@ func (op *opBuiltInJq) tryJqImpl(params []*vector.Vector, result vector.Function
 
 				if err != nil {
 					if isTry {
-						rs.AppendBytes(nil, true)
-						// continue
+						if err = rs.AppendBytes(nil, true); err != nil {
+							return err
+						}
 					} else {
 						return err
 					}
 				} else {
-					rs.AppendBytes(op.enc.bytes(), false)
-					op.enc.done()
+					if err = op.appendJqRowResult(rs); err != nil {
+						return err
+					}
 				}
 			}
+		}
+	}
+	return nil
+}
+
+func (op *opBuiltInJq) appendJqRowResult(rs *vector.FunctionResult[types.Varlena]) (err error) {
+	defer op.enc.done()
+	return rs.AppendBytes(op.enc.bytes(), false)
+}
+
+func (op *opBuiltInJq) appendJqConstResult(
+	rs *vector.FunctionResult[types.Varlena],
+	length int,
+	selectList *FunctionSelectList,
+) (err error) {
+	defer op.enc.done()
+	value := op.enc.bytes()
+	for i := uint64(0); i < uint64(length); i++ {
+		if selectList.Contains(i) {
+			err = rs.AppendBytes(nil, true)
+		} else {
+			err = rs.AppendBytes(value, false)
+		}
+		if err != nil {
+			return err
 		}
 	}
 	return nil

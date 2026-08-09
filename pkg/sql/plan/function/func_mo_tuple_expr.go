@@ -30,21 +30,31 @@ func MoTupleExpr(params []*vector.Vector, result vector.FunctionResultWrapper, p
 
 	// special case: ignore all rows
 	if selectList.IgnoreAllRow() {
-		rs.AddNullRange(0, uint64(length))
+		rs.SetNullResult(uint64(length))
 		return nil
 	}
 
 	for i := uint64(0); i < uint64(length); i++ {
+		if selectList.Contains(i) {
+			if err := rs.AppendMustNullForBytesResult(); err != nil {
+				return err
+			}
+			continue
+		}
 		v, null := p.GetStrValue(i)
 		if null {
-			rs.AppendMustNull()
+			if err := rs.AppendMustNullForBytesResult(); err != nil {
+				return err
+			}
 			continue
 		}
 
 		// Decode the tuple bytes
 		tuple, _, schema, err := types.DecodeTuple(v)
 		if err != nil {
-			rs.AppendMustNull()
+			if err = rs.AppendMustNullForBytesResult(); err != nil {
+				return err
+			}
 			continue
 		}
 
