@@ -88,6 +88,192 @@ func TestIndexHintMissingIndexReturnsMysqlKeyDoesNotExist(t *testing.T) {
 	require.Contains(t, moErr.Error(), "Key 'idx_missing' doesn't exist in table 'single_idx_t'")
 }
 
+func TestSingleColumnUniqueDecimalRangeUsesIndex(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	addIndexHintChoiceTableForTest(mock)
+	decimalType := planpb.Type{Id: int32(types.T_decimal64), Width: 10, Scale: 2}
+	mainTable := mock.ctxt.tables["index_hint_t"]
+	mainTable.Cols[1].Typ = decimalType
+	mainTable.Indexes = []*planpb.IndexDef{
+		{
+			IndexName:      "uk_a",
+			Parts:          []string{"a"},
+			IndexTableName: "uk_hint_a",
+			TableExist:     true,
+			Unique:         true,
+		},
+	}
+	addIndexHintIndexTableForTest(mock, "uk_hint_a", 25365)
+	mock.ctxt.tables["uk_hint_a"].Cols[0].Typ = decimalType
+
+	queryPlan, err := runOneStmt(mock, t, `
+		select b
+		from index_hint_t force index(uk_a)
+		where a > 10.255000`)
+	require.NoError(t, err)
+	require.True(t, planHasIndexJoin(queryPlan))
+	require.Equal(t, "uk_a", findFirstIndexScanName(queryPlan))
+}
+
+func TestDirectUniqueDecimalRangeResidualFilterUsesDirectKey(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	addIndexHintChoiceTableForTest(mock)
+	decimalType := planpb.Type{Id: int32(types.T_decimal64), Width: 10, Scale: 2}
+	mainTable := mock.ctxt.tables["index_hint_t"]
+	mainTable.Cols[1].Typ = decimalType
+	mainTable.Indexes = []*planpb.IndexDef{
+		{
+			IndexName:      "uk_a",
+			Parts:          []string{"a"},
+			IndexTableName: "uk_hint_a",
+			TableExist:     true,
+			Unique:         true,
+		},
+		{
+			IndexName:      "idx_a",
+			Parts:          []string{"a", catalog.CreateAlias("id")},
+			IndexTableName: "idx_hint_a",
+			TableExist:     true,
+		},
+	}
+	addIndexHintIndexTableForTest(mock, "uk_hint_a", 25365)
+	mock.ctxt.tables["uk_hint_a"].Cols[0].Typ = decimalType
+	addIndexHintIndexTableForTest(mock, "idx_hint_a", 25366)
+
+	queryPlan, err := runOneStmt(mock, t, `
+		select b
+		from index_hint_t force index(uk_a, idx_a)
+		where a >= 10.255000 and a >= 20.255000`)
+	require.NoError(t, err)
+	require.True(t, planHasIndexJoin(queryPlan))
+	indexScan := findFirstIndexScanNode(queryPlan)
+	require.NotNil(t, indexScan)
+	require.Equal(t, "uk_a", indexScan.IndexScanInfo.IndexName)
+	require.Len(t, indexScan.FilterList, 2)
+
+	residualFn := indexScan.FilterList[1].GetF()
+	require.NotNil(t, residualFn)
+	require.Len(t, residualFn.Args, 2)
+	for _, arg := range residualFn.Args {
+		require.NotNil(t, arg)
+	}
+	residualColExpr := residualFn.Args[0]
+	if residualColExpr.GetCol() == nil {
+		residualColExpr = residualFn.Args[1]
+	}
+	residualCol := residualColExpr.GetCol()
+	require.NotNil(t, residualCol)
+	require.Equal(t, int32(0), residualCol.ColPos)
+	require.Nil(t, residualColExpr.GetF())
+	require.Equal(t, decimalType, residualColExpr.Typ)
+}
+
+func TestApplyExtraFiltersOnIndexUsesPhysicalKeyEncoding(t *testing.T) {
+	intType := planpb.Type{Id: int32(types.T_int64)}
+	varcharType := planpb.Type{Id: int32(types.T_varchar)}
+	makeIndexNode := func(bindingTag int32, keyType, primaryType planpb.Type) *planpb.Node {
+		return &planpb.Node{
+			BindingTags: []int32{bindingTag},
+			TableDef: &planpb.TableDef{Cols: []*planpb.ColDef{
+				{Name: catalog.IndexTableIndexColName, Typ: keyType},
+				{Name: catalog.IndexTablePrimaryColName, Typ: primaryType},
+			}},
+		}
+	}
+
+	t.Run("serialized index part", func(t *testing.T) {
+		builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true), false, true)
+		baseTag := builder.genNewBindTag()
+		indexTag := builder.genNewBindTag()
+		filter := makeTypedInt64RangeFilterExpr(baseTag, 1, ">=", 10, intType)
+		node := &planpb.Node{
+			TableDef: &planpb.TableDef{
+				Cols: []*planpb.ColDef{
+					{Name: "id", Typ: intType},
+					{Name: "a", Typ: intType},
+				},
+				Name2ColIndex: map[string]int32{"id": 0, "a": 1},
+				Pkey:          &planpb.PrimaryKeyDef{PkeyColName: "id", Names: []string{"id"}},
+			},
+			BindingTags: []int32{baseTag},
+			FilterList:  []*planpb.Expr{filter},
+		}
+		idxDef := &planpb.IndexDef{Parts: []string{"a", catalog.CreateAlias("id")}}
+		indexNode := makeIndexNode(indexTag, varcharType, intType)
+
+		builder.applyExtraFiltersOnIndex(idxDef, node, indexNode, nil)
+
+		require.Len(t, indexNode.FilterList, 1)
+		mapped := indexNode.FilterList[0].GetF().Args[0]
+		require.Equal(t, "serial_extract", wrappedSerialFuncName(t, mapped))
+		require.Equal(t, int32(0), mapped.GetF().Args[0].GetCol().ColPos)
+	})
+
+	t.Run("composite primary key part", func(t *testing.T) {
+		builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true), false, true)
+		baseTag := builder.genNewBindTag()
+		indexTag := builder.genNewBindTag()
+		filter := makeTypedInt64RangeFilterExpr(baseTag, 0, ">=", 10, intType)
+		filter.GetF().Args[0].GetCol().Name = "tenant_id"
+		node := &planpb.Node{
+			TableDef: &planpb.TableDef{
+				Cols: []*planpb.ColDef{
+					{Name: "tenant_id", Typ: intType},
+					{Name: "id", Typ: intType},
+					{Name: "a", Typ: intType},
+					{Name: catalog.CPrimaryKeyColName, Typ: varcharType},
+				},
+				Name2ColIndex: map[string]int32{
+					"tenant_id":                0,
+					"id":                       1,
+					"a":                        2,
+					catalog.CPrimaryKeyColName: 3,
+				},
+				Pkey: &planpb.PrimaryKeyDef{
+					PkeyColName: catalog.CPrimaryKeyColName,
+					Names:       []string{"tenant_id", "id"},
+				},
+			},
+			BindingTags: []int32{baseTag},
+			FilterList:  []*planpb.Expr{filter},
+		}
+		idxDef := &planpb.IndexDef{Parts: []string{"a", catalog.CreateAlias(catalog.CPrimaryKeyColName)}}
+		indexNode := makeIndexNode(indexTag, varcharType, varcharType)
+
+		builder.applyExtraFiltersOnIndex(idxDef, node, indexNode, nil)
+
+		require.Len(t, indexNode.FilterList, 1)
+		mapped := indexNode.FilterList[0].GetF().Args[0]
+		require.Equal(t, "serial_extract", wrappedSerialFuncName(t, mapped))
+		require.Equal(t, int32(1), mapped.GetF().Args[0].GetCol().ColPos)
+
+		invalidPrimaryNode := makeIndexNode(builder.genNewBindTag(), varcharType, intType)
+		builder.applyExtraFiltersOnIndex(idxDef, node, invalidPrimaryNode, nil)
+		require.Empty(t, invalidPrimaryNode.FilterList)
+	})
+
+	t.Run("invalid serialized key metadata skips optional pushdown", func(t *testing.T) {
+		builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true), false, true)
+		baseTag := builder.genNewBindTag()
+		indexTag := builder.genNewBindTag()
+		node := &planpb.Node{
+			TableDef: &planpb.TableDef{
+				Cols:          []*planpb.ColDef{{Name: "id", Typ: intType}, {Name: "a", Typ: intType}},
+				Name2ColIndex: map[string]int32{"id": 0, "a": 1},
+				Pkey:          &planpb.PrimaryKeyDef{PkeyColName: "id", Names: []string{"id"}},
+			},
+			BindingTags: []int32{baseTag},
+			FilterList:  []*planpb.Expr{makeTypedInt64RangeFilterExpr(baseTag, 1, ">=", 10, intType)},
+		}
+		idxDef := &planpb.IndexDef{Parts: []string{"a", catalog.CreateAlias("id")}}
+		indexNode := makeIndexNode(indexTag, intType, intType)
+
+		builder.applyExtraFiltersOnIndex(idxDef, node, indexNode, nil)
+
+		require.Empty(t, indexNode.FilterList)
+	})
+}
+
 func TestFilterRegularIndexesByScanHints(t *testing.T) {
 	idxA := &planpb.IndexDef{IndexName: "idx_a"}
 	idxB := &planpb.IndexDef{IndexName: "idx_b"}
@@ -5416,6 +5602,207 @@ func TestReplaceRangePairConditionWidensByteStringOpenLowerBound(t *testing.T) {
 	require.Equal(t, uint32(1), fixedWidthLookup.GetF().Args[3].GetLit().GetU8Val())
 }
 
+func TestIndexRangeSerializationNormalizesDecimalBounds(t *testing.T) {
+	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true), false, true)
+	bindTag := builder.genNewBindTag()
+	idxDef := &planpb.IndexDef{
+		Parts:  []string{"price", catalog.CreateAlias(catalog.CPrimaryKeyColName)},
+		Unique: false,
+	}
+	idxTableDef := makeTestIndexTableDef()
+	columnType := planpb.Type{Id: int32(types.T_decimal64), Width: 10, Scale: 2}
+	higherScaleType := planpb.Type{Id: int32(types.T_decimal64), Width: 10, Scale: 6}
+
+	t.Run("closed pair", func(t *testing.T) {
+		filters := []*planpb.Expr{
+			makeDecimalRangeFilterExpr(t, bindTag, 1, ">=", "10.250000", columnType, higherScaleType),
+			makeDecimalRangeFilterExpr(t, bindTag, 1, "<=", "15.750000", columnType, higherScaleType),
+		}
+
+		expr := builder.replaceRangePairCondition(idxDef, filters, []int32{0, 1}, 42, idxTableDef)
+
+		require.Equal(t, "prefix_between", expr.GetF().Func.ObjName)
+		requireSerializedRangeBoundType(t, expr.GetF().Args[1], columnType, true)
+		requireSerializedRangeBoundType(t, expr.GetF().Args[2], columnType, true)
+	})
+
+	t.Run("open pair", func(t *testing.T) {
+		filters := []*planpb.Expr{
+			makeDecimalRangeFilterExpr(t, bindTag, 1, ">", "10.250000", columnType, higherScaleType),
+			makeDecimalRangeFilterExpr(t, bindTag, 1, "<", "15.750000", columnType, higherScaleType),
+		}
+
+		expr := builder.replaceRangePairCondition(idxDef, filters, []int32{0, 1}, 42, idxTableDef)
+
+		require.Equal(t, "prefix_in_range", expr.GetF().Func.ObjName)
+		requireSerializedRangeBoundType(t, expr.GetF().Args[1], columnType, true)
+		requireSerializedRangeBoundType(t, expr.GetF().Args[2], columnType, true)
+	})
+
+	for _, tc := range []struct {
+		name string
+		op   string
+	}{
+		{name: "lower only", op: ">="},
+		{name: "upper only", op: "<"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			filter := makeDecimalRangeFilterExpr(t, bindTag, 1, tc.op, "10.250000", columnType, higherScaleType)
+
+			expr := builder.replaceNonEqualCondition(idxDef, filter, 42, idxTableDef)
+
+			require.Equal(t, tc.op, expr.GetF().Func.ObjName)
+			requireSerializedRangeBoundType(t, expr.GetF().Args[1], columnType, true)
+		})
+	}
+
+	t.Run("in range", func(t *testing.T) {
+		lower := makeDecimalRangeFilterExpr(t, bindTag, 1, ">", "10.250000", columnType, higherScaleType)
+		upper := makeDecimalRangeFilterExpr(t, bindTag, 1, "<", "15.750000", columnType, higherScaleType)
+		filter := &planpb.Expr{
+			Typ: planpb.Type{Id: int32(types.T_bool)},
+			Expr: &planpb.Expr_F{F: &planpb.Function{
+				Func: &planpb.ObjectRef{ObjName: "in_range"},
+				Args: []*planpb.Expr{
+					DeepCopyExpr(lower.GetF().Args[0]),
+					DeepCopyExpr(lower.GetF().Args[1]),
+					DeepCopyExpr(upper.GetF().Args[1]),
+					MakePlan2Uint8ConstExprWithType(3),
+				},
+			}},
+		}
+
+		expr := builder.replaceNonEqualCondition(idxDef, filter, 42, idxTableDef)
+
+		require.Equal(t, "prefix_in_range", expr.GetF().Func.ObjName)
+		requireSerializedRangeBoundType(t, expr.GetF().Args[1], columnType, true)
+		requireSerializedRangeBoundType(t, expr.GetF().Args[2], columnType, true)
+	})
+
+	t.Run("equal scale decimal remains direct", func(t *testing.T) {
+		filters := []*planpb.Expr{
+			makeDecimalRangeFilterExpr(t, bindTag, 1, ">=", "10.25", columnType, columnType),
+			makeDecimalRangeFilterExpr(t, bindTag, 1, "<=", "15.75", columnType, columnType),
+		}
+
+		expr := builder.replaceRangePairCondition(idxDef, filters, []int32{0, 1}, 42, idxTableDef)
+
+		requireSerializedRangeBoundType(t, expr.GetF().Args[1], columnType, false)
+		requireSerializedRangeBoundType(t, expr.GetF().Args[2], columnType, false)
+	})
+
+	t.Run("non decimal remains direct", func(t *testing.T) {
+		intType := planpb.Type{Id: int32(types.T_int64)}
+		filters := []*planpb.Expr{
+			makeTypedInt64RangeFilterExpr(bindTag, 1, ">=", 10, intType),
+			makeTypedInt64RangeFilterExpr(bindTag, 1, "<=", 15, intType),
+		}
+
+		expr := builder.replaceRangePairCondition(idxDef, filters, []int32{0, 1}, 42, idxTableDef)
+
+		requireSerializedRangeBoundType(t, expr.GetF().Args[1], intType, false)
+		requireSerializedRangeBoundType(t, expr.GetF().Args[2], intType, false)
+	})
+
+	t.Run("non representable decimal follows index key encoding", func(t *testing.T) {
+		filters := []*planpb.Expr{
+			makeDecimalRangeFilterExpr(t, bindTag, 1, ">", "10.255000", columnType, higherScaleType),
+			makeDecimalRangeFilterExpr(t, bindTag, 1, "<=", "15.755000", columnType, higherScaleType),
+		}
+		makeNode := func(filterList []*planpb.Expr) *planpb.Node {
+			return &planpb.Node{
+				TableDef: &planpb.TableDef{
+					Name2ColIndex: map[string]int32{
+						catalog.FakePrimaryKeyColName: 0,
+						"price":                       1,
+					},
+					Cols: []*planpb.ColDef{
+						{Name: catalog.FakePrimaryKeyColName, Typ: planpb.Type{Id: int32(types.T_uint64)}},
+						{Name: "price", Typ: columnType},
+					},
+				},
+				FilterList: filterList,
+			}
+		}
+
+		t.Run("serialized composite falls back", func(t *testing.T) {
+			idxPos, filterIdx := builder.getIndexForNonEquiCond(
+				[]*planpb.IndexDef{idxDef}, makeNode(filters))
+
+			require.Equal(t, -1, idxPos)
+			require.Nil(t, filterIdx)
+		})
+
+		directUniqueIdxDef := &planpb.IndexDef{
+			Parts:  []string{"price"},
+			Unique: true,
+		}
+
+		t.Run("direct unique single bound remains eligible", func(t *testing.T) {
+			idxPos, filterIdx := builder.getIndexForNonEquiCond(
+				[]*planpb.IndexDef{directUniqueIdxDef}, makeNode(filters[:1]))
+
+			require.Equal(t, 0, idxPos)
+			require.Equal(t, []int32{0}, filterIdx)
+		})
+
+		t.Run("direct unique paired bounds remain eligible", func(t *testing.T) {
+			idxPos, filterIdx := builder.getIndexForNonEquiCond(
+				[]*planpb.IndexDef{directUniqueIdxDef}, makeNode(filters))
+
+			require.Equal(t, 0, idxPos)
+			require.Equal(t, []int32{0, 1}, filterIdx)
+		})
+
+		for _, tc := range []struct {
+			name    string
+			indexes []*planpb.IndexDef
+			wantIdx int
+		}{
+			{
+				name:    "direct unique before serialized composite",
+				indexes: []*planpb.IndexDef{directUniqueIdxDef, idxDef},
+				wantIdx: 0,
+			},
+			{
+				name:    "direct unique after serialized composite",
+				indexes: []*planpb.IndexDef{idxDef, directUniqueIdxDef},
+				wantIdx: 1,
+			},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				idxPos, filterIdx := builder.getIndexForNonEquiCond(tc.indexes, makeNode(filters))
+
+				require.Equal(t, tc.wantIdx, idxPos)
+				require.Equal(t, []int32{0, 1}, filterIdx)
+			})
+		}
+
+		t.Run("direct unique paired fallback checks both bounds", func(t *testing.T) {
+			mixedBounds := []*planpb.Expr{
+				makeDecimalRangeFilterExpr(t, bindTag, 1, ">=", "10.250000", columnType, higherScaleType),
+				filters[1],
+			}
+
+			idxPos, filterIdx := builder.getIndexForNonEquiCond(
+				[]*planpb.IndexDef{directUniqueIdxDef, idxDef}, makeNode(mixedBounds))
+
+			require.Equal(t, 0, idxPos)
+			require.Equal(t, []int32{0, 1}, filterIdx)
+		})
+
+		t.Run("direct unique bypasses serialized operator restriction", func(t *testing.T) {
+			filter := makeDecimalRangeFilterExpr(t, bindTag, 1, ">", "10.25", columnType, columnType)
+
+			idxPos, filterIdx := builder.getIndexForNonEquiCond(
+				[]*planpb.IndexDef{directUniqueIdxDef, idxDef}, makeNode([]*planpb.Expr{filter}))
+
+			require.Equal(t, 0, idxPos)
+			require.Equal(t, []int32{0}, filterIdx)
+		})
+	})
+}
+
 func TestGetIndexForNonEquiCond_PrefersFirstPairedRangeByFilterOrder(t *testing.T) {
 	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true), false, true)
 	bindTag := builder.genNewBindTag()
@@ -6011,6 +6398,69 @@ func makeRangeFilterExpr(relPos, colPos int32, op string, val int64) *planpb.Exp
 				},
 			},
 		},
+	}
+}
+
+func makeDecimalRangeFilterExpr(
+	t *testing.T,
+	relPos, colPos int32,
+	op, val string,
+	columnType, boundType planpb.Type,
+) *planpb.Expr {
+	t.Helper()
+	decimal, err := types.ParseDecimal64(val, boundType.Width, boundType.Scale)
+	require.NoError(t, err)
+	return &planpb.Expr{
+		Typ: planpb.Type{Id: int32(types.T_bool)},
+		Expr: &planpb.Expr_F{
+			F: &planpb.Function{
+				Func: &planpb.ObjectRef{ObjName: op},
+				Args: []*planpb.Expr{
+					{
+						Typ: columnType,
+						Expr: &planpb.Expr_Col{
+							Col: &planpb.ColRef{RelPos: relPos, ColPos: colPos},
+						},
+					},
+					{
+						Typ: boundType,
+						Expr: &planpb.Expr_Lit{
+							Lit: &planpb.Literal{
+								Value: &planpb.Literal_Decimal64Val{
+									Decimal64Val: &planpb.Decimal64{A: int64(decimal)},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+}
+
+func makeTypedInt64RangeFilterExpr(relPos, colPos int32, op string, val int64, typ planpb.Type) *planpb.Expr {
+	expr := makeRangeFilterExpr(relPos, colPos, op, val)
+	expr.Typ = planpb.Type{Id: int32(types.T_bool)}
+	expr.GetF().Args[0].Typ = typ
+	expr.GetF().Args[1].Typ = typ
+	return expr
+}
+
+func requireSerializedRangeBoundType(t *testing.T, expr *planpb.Expr, want planpb.Type, wantCast bool) {
+	t.Helper()
+	serial := expr.GetF()
+	require.NotNil(t, serial)
+	require.Equal(t, "serial_full", serial.Func.ObjName)
+	require.Len(t, serial.Args, 1)
+	bound := serial.Args[0]
+	require.Equal(t, want.Id, bound.Typ.Id)
+	require.Equal(t, want.Width, bound.Typ.Width)
+	require.Equal(t, want.Scale, bound.Typ.Scale)
+	if wantCast {
+		require.NotNil(t, bound.GetF())
+		require.Equal(t, "cast", bound.GetF().Func.ObjName)
+	} else {
+		require.Nil(t, bound.GetF())
 	}
 }
 
