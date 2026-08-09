@@ -1456,7 +1456,7 @@ func (ses *Session) SetGlobalSysVar(ctx context.Context, name string, val interf
 		return
 	}
 	ses.gSysVars.Set(name, val)
-	return
+	return syncGlobalSysVarCommit(ctx, ses)
 }
 
 func (ses *feSessionImpl) GetSessionSysVars() *SystemVariables {
