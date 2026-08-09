@@ -88,7 +88,7 @@ int mo_cbitmap_build_fixed(const void *key, size_t len, size_t elemsz,
   uint64_t base = use_offset ? minv : 0;
   // span = maxv - base (never overflows: maxv >= base); span+1 is the bit count.
   uint64_t span = any ? (maxv - base) : 0;
-  // Feasibility gate: bail (caller falls back to the compact CRoaring filter)
+  // Feasibility gate: bail (caller selects its sparse exact representation)
   // if the bit count would exceed the cap. Checking span >= max_bits also
   // avoids the span+1 overflow for pathological ranges.
   if (any && span >= max_bits) return MO_CBITMAP_RANGE_TOO_LARGE;
@@ -177,6 +177,28 @@ uint8_t *mo_cbitmap_serialize(void *f, size_t *len) {
 }
 
 void mo_cbitmap_free_buf(uint8_t *buf) { free(buf); }
+
+size_t mo_cbitmap_serialized_size(void *f) {
+  if (!f) return 0;
+  mo_cbitmap_t *b = (mo_cbitmap_t *)f;
+  uint64_t nwords = bitmap_size(b->nbits);
+  return 2 * sizeof(uint64_t) + (size_t)nwords * sizeof(uint64_t);
+}
+
+bool mo_cbitmap_serialize_into(void *f, uint8_t *buf, size_t len) {
+  if (!f || !buf) return false;
+  mo_cbitmap_t *b = (mo_cbitmap_t *)f;
+  uint64_t nwords = bitmap_size(b->nbits);
+  size_t required = 2 * sizeof(uint64_t) + (size_t)nwords * sizeof(uint64_t);
+  if (len != required) return false;
+  memcpy(buf, &b->base, sizeof(uint64_t));
+  memcpy(buf + sizeof(uint64_t), &b->nbits, sizeof(uint64_t));
+  if (nwords) {
+    memcpy(buf + 2 * sizeof(uint64_t), b->words,
+           (size_t)nwords * sizeof(uint64_t));
+  }
+  return true;
+}
 
 void *mo_cbitmap_deserialize(const uint8_t *buf, size_t len) {
   if (!buf || len < 2 * sizeof(uint64_t)) return NULL;
