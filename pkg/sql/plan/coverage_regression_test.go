@@ -15,6 +15,7 @@
 package plan
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -448,6 +449,70 @@ func TestUpdateRenameColumnInTableDefEncodesDelimiterBearingPrefixName(t *testin
 	require.NoError(t, err)
 	require.NotContains(t, params, catalog.IndexAlgoParamPrefixLengths)
 	require.JSONEq(t, `{"head:line":4}`, params[catalog.IndexAlgoParamPrefixLengthsV2])
+}
+
+func TestRenameIndexPrefixLengthMetadataBoundaryCases(t *testing.T) {
+	t.Run("case-insensitive legacy key keeps nested session vars", func(t *testing.T) {
+		params, err := catalog.IndexParamsMapToJsonStringWithSessionVars(
+			map[string]string{catalog.IndexAlgoParamPrefixLengths: "Title:4"},
+			json.RawMessage(`{"cfg":{}}`),
+		)
+		require.NoError(t, err)
+		indexDef := &planpb.IndexDef{
+			IndexAlgo:       catalog.MoIndexDefaultAlgo.ToString(),
+			IndexAlgoParams: params,
+		}
+
+		affected, err := renameIndexPrefixLengthMetadata(indexDef, "title", "headline")
+		require.NoError(t, err)
+		require.True(t, affected)
+		require.Equal(t, map[string]int{"headline": 4}, catalog.IndexPrefixLengthsFromParams(indexDef.IndexAlgoParams))
+		sessionVars, err := catalog.IndexParamsSessionVars(indexDef.IndexAlgoParams)
+		require.NoError(t, err)
+		require.JSONEq(t, `{"cfg":{}}`, string(sessionVars))
+	})
+
+	t.Run("unprefixed renamed part does not rewrite params", func(t *testing.T) {
+		params, err := catalog.IndexParamsMapToJsonString(map[string]string{
+			catalog.IndexAlgoParamPrefixLengths: "note:2",
+		})
+		require.NoError(t, err)
+		indexDef := &planpb.IndexDef{
+			IndexAlgo:       catalog.MoIndexDefaultAlgo.ToString(),
+			IndexAlgoParams: params,
+		}
+
+		affected, err := renameIndexPrefixLengthMetadata(indexDef, "title", "headline")
+		require.NoError(t, err)
+		require.False(t, affected)
+		require.Equal(t, params, indexDef.IndexAlgoParams)
+	})
+
+	t.Run("invalid persisted metadata aborts rename before mutation", func(t *testing.T) {
+		tableDef := &planpb.TableDef{
+			Cols: []*ColDef{{Name: "title", OriginName: "title"}},
+			Pkey: &PrimaryKeyDef{},
+			Indexes: []*planpb.IndexDef{{
+				IndexName:       "idx_title",
+				IndexAlgo:       catalog.MoIndexDefaultAlgo.ToString(),
+				IndexAlgoParams: `{"prefix_lengths":"title:0"}`,
+				Parts:           []string{"title"},
+			}},
+		}
+		mock := NewMockOptimizer(false)
+
+		_, err := updateRenameColumnInTableDef(
+			mock.CurrentContext(),
+			tableDef.Cols[0],
+			tableDef,
+			&tree.AlterTableRenameColumnClause{
+				OldColumnName: tree.NewUnresolvedColName("title"),
+				NewColumnName: tree.NewUnresolvedColName("headline"),
+			},
+		)
+		require.Error(t, err)
+		require.Equal(t, []string{"title"}, tableDef.Indexes[0].Parts)
+	})
 }
 
 func TestUpdateRenameColumnInTableDefRejectsDuplicateTargetName(t *testing.T) {
