@@ -1022,7 +1022,7 @@ func TestExplainOrderedPercentile(t *testing.T) {
 		Typ:  plan2.Type{Id: int32(types.T_int64)},
 		Expr: &plan2.Expr_Col{Col: &plan2.ColRef{Name: "tw.v"}},
 	}
-	percentile := plan2.MakePlan2Float64ConstExprWithType(0.95)
+	percentile := plan.MakePlan2Float64ConstExprWithType(0.95)
 
 	for _, tc := range []struct {
 		name string
