@@ -1140,8 +1140,9 @@ func DeepCopyExpr(expr *Expr) *Expr {
 	case *plan.Expr_Vec:
 		newExpr.Expr = &plan.Expr_Vec{
 			Vec: &plan.LiteralVec{
-				Len:  item.Vec.Len,
-				Data: bytes.Clone(item.Vec.Data),
+				Len:          item.Vec.Len,
+				Data:         bytes.Clone(item.Vec.Data),
+				IsSerialized: item.Vec.IsSerialized,
 			},
 		}
 

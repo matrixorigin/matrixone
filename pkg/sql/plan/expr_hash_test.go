@@ -176,6 +176,36 @@ func TestExprStructuralHashDistinguishesIsBin(t *testing.T) {
 	require.True(t, exprStructuralEqual(b, c))
 }
 
+func TestExprStructuralHashIgnoresDiagnosticProvenance(t *testing.T) {
+	literal := strLit("encoded")
+	serializedLiteral := DeepCopyExpr(literal)
+	serializedLiteral.GetLit().IsSerialized = true
+	require.Equal(t, exprStructuralHash(literal), exprStructuralHash(serializedLiteral))
+	require.True(t, exprStructuralEqual(literal, serializedLiteral))
+
+	vectorExpr := &planpb.Expr{
+		Typ: planpb.Type{Id: int32(types.T_varchar)},
+		Expr: &planpb.Expr_Vec{Vec: &planpb.LiteralVec{
+			Len:  2,
+			Data: []byte("same executable vector"),
+		}},
+	}
+	serializedVector := DeepCopyExpr(vectorExpr)
+	serializedVector.GetVec().IsSerialized = true
+	require.Equal(t, exprStructuralHash(vectorExpr), exprStructuralHash(serializedVector))
+	require.True(t, exprStructuralEqual(vectorExpr, serializedVector))
+
+	differentData := DeepCopyExpr(vectorExpr)
+	differentData.GetVec().Data = []byte("different executable vector")
+	require.NotEqual(t, exprStructuralHash(vectorExpr), exprStructuralHash(differentData))
+	require.False(t, exprStructuralEqual(vectorExpr, differentData))
+
+	differentLen := DeepCopyExpr(vectorExpr)
+	differentLen.GetVec().Len++
+	require.NotEqual(t, exprStructuralHash(vectorExpr), exprStructuralHash(differentLen))
+	require.False(t, exprStructuralEqual(vectorExpr, differentLen))
+}
+
 // TestExprStructuralEqualNullAndTypeMismatch covers the null-vs-non-null and
 // cross-variant paths (e.g. literal vs function, literal vs column).
 func TestExprStructuralEqualNullAndTypeMismatch(t *testing.T) {

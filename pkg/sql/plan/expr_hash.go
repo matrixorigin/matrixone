@@ -15,6 +15,7 @@
 package plan
 
 import (
+	"bytes"
 	"hash/fnv"
 	"math"
 
@@ -80,6 +81,7 @@ const (
 	tagCol
 	tagFn
 	tagList
+	tagVec
 	tagOther
 )
 
@@ -127,6 +129,13 @@ func hashExprInto(h writeByter, expr *plan.Expr) {
 			for _, e := range v.List.List {
 				hashExprInto(h, e)
 			}
+		}
+	case *plan.Expr_Vec:
+		writeByte(h, tagVec)
+		if v.Vec != nil {
+			writeUint32(h, uint32(v.Vec.Len))
+			writeUint64(h, uint64(len(v.Vec.Data)))
+			_, _ = h.Write(v.Vec.Data)
 		}
 	default:
 		// Uncommon variants (Sub, Vec, Max, ...) — fall back to the proto
@@ -289,6 +298,17 @@ func exprStructuralEqual(a, b *plan.Expr) bool {
 			}
 		}
 		return true
+	case *plan.Expr_Vec:
+		bv, ok := b.Expr.(*plan.Expr_Vec)
+		if !ok {
+			return false
+		}
+		if av.Vec == nil || bv.Vec == nil {
+			return av.Vec == bv.Vec
+		}
+		// IsSerialized is diagnostic provenance and must not affect execution
+		// identity, just like Literal.IsSerialized.
+		return av.Vec.Len == bv.Vec.Len && bytes.Equal(av.Vec.Data, bv.Vec.Data)
 	default:
 		// Fallback: compare proto bytes.
 		ab, aerr := a.Marshal()

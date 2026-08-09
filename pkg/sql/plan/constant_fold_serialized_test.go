@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/rule"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
@@ -170,4 +171,138 @@ func TestConstantFoldPreservesSerialCastSemantics(t *testing.T) {
 		rule.GetConstantValue(foldedResult, false, 0),
 		"constant folding changed the expression value",
 	)
+}
+
+func TestOptimizerPreservesByteIdenticalSerializedProvenance(t *testing.T) {
+	for _, test := range []struct {
+		name           string
+		sql            string
+		wantValue      string
+		wantSerialized bool
+	}{
+		{
+			name:           "lossless cast",
+			sql:            "select cast(serial(true) as blob)",
+			wantValue:      string([]byte{0x27}),
+			wantSerialized: true,
+		},
+		{
+			name:           "transformed value control",
+			sql:            "select hex(serial(true))",
+			wantValue:      "27",
+			wantSerialized: false,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			stmt, err := mysql.ParseOne(t.Context(), test.sql, 1)
+			require.NoError(t, err)
+
+			query, err := NewBaseOptimizer(NewMockCompilerContext(true)).Optimize(stmt, false)
+			require.NoError(t, err)
+			require.NotEmpty(t, query.Steps)
+			root := query.Nodes[query.Steps[len(query.Steps)-1]]
+			require.NotEmpty(t, root.ProjectList)
+
+			literal := root.ProjectList[0].GetLit()
+			require.NotNil(t, literal)
+			require.Equal(t, test.wantValue, literal.GetSval())
+			require.Equal(t, test.wantSerialized, literal.GetIsSerialized())
+		})
+	}
+}
+
+func TestOptimizerPreservesSerializedListProvenance(t *testing.T) {
+	for _, test := range []struct {
+		name           string
+		sql            string
+		wantSerialized bool
+	}{
+		{
+			name: "serialized decimal list",
+			sql: "select n_name from nation where n_name in (" +
+				"serial(cast(99999 as decimal(38,0))), " +
+				"serial(cast(100000 as decimal(38,0))))",
+			wantSerialized: true,
+		},
+		{
+			name:           "ordinary unicode list control",
+			sql:            "select n_name from nation where n_name in ('Résumé', '東京')",
+			wantSerialized: false,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			stmt, err := mysql.ParseOne(t.Context(), test.sql, 1)
+			require.NoError(t, err)
+			query, err := NewBaseOptimizer(NewMockCompilerContext(true)).Optimize(stmt, false)
+			require.NoError(t, err)
+
+			literalVecExpr := findFirstLiteralVecExpr(query)
+			require.NotNil(t, literalVecExpr)
+			require.Equal(t, test.wantSerialized, literalVecExpr.GetVec().GetIsSerialized())
+
+			copied := DeepCopyExpr(literalVecExpr)
+			require.Equal(t, test.wantSerialized, copied.GetVec().GetIsSerialized())
+
+			payload, err := proto.Marshal(literalVecExpr)
+			require.NoError(t, err)
+			decoded := new(planpb.Expr)
+			require.NoError(t, proto.Unmarshal(payload, decoded))
+			require.Equal(t, test.wantSerialized, decoded.GetVec().GetIsSerialized())
+		})
+	}
+}
+
+func TestConstantFoldPreservesSerializedListProvenance(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	stringLiteral := func(value string, serialized bool) *planpb.Expr {
+		return &planpb.Expr{
+			Typ: planpb.Type{Id: int32(types.T_varchar)},
+			Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{
+				Value:        &planpb.Literal_Sval{Sval: value},
+				IsSerialized: serialized,
+			}},
+		}
+	}
+	expr := &planpb.Expr{
+		Typ: planpb.Type{Id: int32(types.T_varchar)},
+		Expr: &planpb.Expr_List{List: &planpb.ExprList{List: []*planpb.Expr{
+			stringLiteral(string([]byte{0x27}), true),
+			stringLiteral("ordinary", false),
+		}}},
+	}
+
+	folded, err := ConstantFold(batch.EmptyForConstFoldBatch, expr, proc, false, true)
+	require.NoError(t, err)
+	require.NotNil(t, folded.GetVec())
+	require.True(t, folded.GetVec().GetIsSerialized())
+}
+
+func findFirstLiteralVecExpr(query *planpb.Query) *planpb.Expr {
+	var found *planpb.Expr
+	var visit func(*planpb.Expr)
+	visit = func(expr *planpb.Expr) {
+		if expr == nil || found != nil {
+			return
+		}
+		if expr.GetVec() != nil {
+			found = expr
+			return
+		}
+		if fn := expr.GetF(); fn != nil {
+			for _, arg := range fn.Args {
+				visit(arg)
+			}
+		}
+		if list := expr.GetList(); list != nil {
+			for _, item := range list.List {
+				visit(item)
+			}
+		}
+	}
+	for _, node := range query.Nodes {
+		for _, filter := range node.FilterList {
+			visit(filter)
+		}
+	}
+	return found
 }

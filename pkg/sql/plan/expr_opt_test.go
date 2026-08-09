@@ -417,12 +417,14 @@ func TestDoMergeFiltersOnCompositeKeyRetainsUnaryNonMergeableOr(t *testing.T) {
 func TestInRHSValuesMaterializesFoldedVectorValues(t *testing.T) {
 	mp := mpool.MustNew(t.Name())
 	expr := MakePlan2StringVecExprWithType(mp, "safe value")
+	expr.GetVec().IsSerialized = true
 	originalData := append([]byte(nil), expr.GetVec().Data...)
 
 	values, ok := inRHSValues(expr, expr.Typ)
 	require.True(t, ok)
 	require.Len(t, values, 1)
 	require.Equal(t, "safe value", values[0].GetLit().GetSval())
+	require.True(t, values[0].GetLit().GetIsSerialized())
 	require.True(t, values[0].Typ.NotNullable)
 	require.Equal(t, originalData, expr.GetVec().Data)
 	for i := range expr.GetVec().Data {

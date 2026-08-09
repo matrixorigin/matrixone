@@ -147,6 +147,7 @@ func (r *ConstantFold) constantFold(expr *plan.Expr, proc *process.Process) *pla
 			if cannotFold {
 				return expr
 			}
+			isSerialized := ContainsSerializedLiteral(exprList)
 
 			vec, err := colexec.GenerateConstListExpressionExecutor(proc, exprList)
 			if err != nil {
@@ -168,8 +169,9 @@ func (r *ConstantFold) constantFold(expr *plan.Expr, proc *process.Process) *pla
 				Typ: expr.Typ,
 				Expr: &plan.Expr_Vec{
 					Vec: &plan.LiteralVec{
-						Len:  int32(vec.Length()),
-						Data: data,
+						Len:          int32(vec.Length()),
+						Data:         data,
+						IsSerialized: isSerialized,
 					},
 				},
 			}
@@ -238,7 +240,7 @@ func (r *ConstantFold) constantFold(expr *plan.Expr, proc *process.Process) *pla
 		return expr
 	}
 
-	MarkFoldedSerialLiteralSerialized(overloadID, c)
+	MarkFoldedLiteralSerialized(overloadID, fn.Args, c)
 
 	if f.IsRealTimeRelated() {
 		c.Src = &plan.Expr{
@@ -665,11 +667,13 @@ func GetConstantValue2(proc *process.Process, expr *plan.Expr, vec *vector.Vecto
 	}
 }
 
-// MarkFoldedSerialLiteralSerialized preserves the diagnostic provenance of
-// tuple-encoded serial results when a function expression is replaced with a
-// varchar literal. All constant-folding entry points must apply this metadata
-// transition; IsBin must remain reserved for SQL hex and bit literal semantics.
-func MarkFoldedSerialLiteralSerialized(overloadID int64, literal *plan.Literal) {
+// MarkFoldedLiteralSerialized preserves tuple-encoding provenance across
+// constant folding. A direct serial result always acquires provenance. An
+// outer function retains it only when its output bytes exactly match a marked
+// input literal, which covers representation-preserving casts and selectors
+// without incorrectly marking transformed values. IsBin remains reserved for
+// SQL hex and bit literal execution semantics.
+func MarkFoldedLiteralSerialized(overloadID int64, args []*plan.Expr, literal *plan.Literal) {
 	if literal == nil || literal.Isnull {
 		return
 	}
@@ -678,7 +682,35 @@ func MarkFoldedSerialLiteralSerialized(overloadID int64, literal *plan.Literal) 
 	if canonicalOverloadID == function.SerialFunctionEncodeID ||
 		canonicalOverloadID == function.SerialFullFunctionEncodeID {
 		literal.IsSerialized = true
+		return
 	}
+
+	result, ok := literal.Value.(*plan.Literal_Sval)
+	if !ok {
+		return
+	}
+	for _, arg := range args {
+		input := arg.GetLit()
+		if input == nil || !input.IsSerialized {
+			continue
+		}
+		if serialized, ok := input.Value.(*plan.Literal_Sval); ok &&
+			serialized.Sval == result.Sval {
+			literal.IsSerialized = true
+			return
+		}
+	}
+}
+
+// ContainsSerializedLiteral reports whether folding a literal list into a
+// LiteralVec must retain tuple-encoding provenance for diagnostic consumers.
+func ContainsSerializedLiteral(exprs []*plan.Expr) bool {
+	for _, expr := range exprs {
+		if literal := expr.GetLit(); literal != nil && literal.IsSerialized {
+			return true
+		}
+	}
+	return false
 }
 
 func isSqlModeDependentTemporalCast(fn *plan.Function) bool {

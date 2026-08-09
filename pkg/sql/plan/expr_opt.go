@@ -484,6 +484,10 @@ func inRHSValues(expr *plan.Expr, expectedType plan.Type) (values []*plan.Expr, 
 		if lit == nil {
 			return nil, false
 		}
+		// LiteralVec provenance is container-level. Conservatively restore it
+		// on every materialized value so subsequent composite-key rewrites
+		// cannot expose an encoded member after vector-to-literal conversion.
+		lit.IsSerialized = expr.GetVec().IsSerialized
 		literalTyp := typ
 		literalTyp.NotNullable = !lit.Isnull
 		values[i] = &plan.Expr{
@@ -553,9 +557,9 @@ func blockFilterLiteralKey(lit *plan.Literal, typ plan.Type) (string, bool) {
 	if lit == nil {
 		return "", false
 	}
-	// IsSerialized only controls diagnostic rendering. A constant list can
-	// carry that provenance while the equivalent folded vector cannot, so it
-	// must not make otherwise identical block-filter sets compare different.
+	// IsSerialized only controls diagnostic rendering. It must not make
+	// otherwise identical list/vector block-filter sets compare different,
+	// including plans produced by older peers that do not carry provenance.
 	if lit.IsSerialized {
 		literalCopy := *lit
 		literalCopy.IsSerialized = false

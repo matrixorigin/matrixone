@@ -256,6 +256,9 @@ message FoldVal {
 message LiteralVec {
   int32 len = 1;
   bytes data = 2;
+  // True when at least one element is a tuple-encoded serial value. This is
+  // diagnostic provenance only; execution semantics remain in data.
+  bool is_serialized = 3;
 }
 
 enum CompressType {

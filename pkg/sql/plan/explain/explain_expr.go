@@ -200,19 +200,7 @@ func describeExpr(ctx context.Context, expr *plan.Expr, options *ExplainOptions,
 			}
 		}
 	case *plan.Expr_Vec:
-		vec := vector.NewVec(types.T_any.ToType())
-		vec.UnmarshalBinary(exprImpl.Vec.Data)
-		if vec.Length() > 16 {
-			//don't display too long data in explain
-			originalLen := vec.Length()
-			vec.SetLength(16)
-			buf.WriteString(vec.String())
-			s := fmt.Sprintf("... %v values", originalLen)
-			buf.WriteString(s)
-		} else {
-			buf.WriteString(vec.String())
-		}
-		vec.Free(nil)
+		buf.WriteString(literalVecText(exprImpl.Vec))
 	case *plan.Expr_T:
 		tt := types.T(expr.Typ.Id)
 		if tt == types.T_decimal64 || tt == types.T_decimal128 {
@@ -229,6 +217,48 @@ func describeExpr(ctx context.Context, expr *plan.Expr, options *ExplainOptions,
 func isPrintableUTF8(value string) bool {
 	return utf8.ValidString(value) &&
 		strings.IndexFunc(value, func(r rune) bool { return !unicode.IsPrint(r) }) == -1
+}
+
+func printableVectorText(value string) string {
+	if isPrintableUTF8(value) {
+		return value
+	}
+	return fmt.Sprintf("0x%X", []byte(value))
+}
+
+func literalVecText(literalVec *plan.LiteralVec) (text string) {
+	if literalVec == nil {
+		return "<invalid-vector>"
+	}
+	if literalVec.IsSerialized {
+		// A LiteralVec cannot represent per-element diagnostic provenance.
+		// If any element is tuple-encoded, redact the container as a whole.
+		return "[<opaque>]"
+	}
+
+	// UnmarshalBinary is no-copy and vector formatting trusts encoded varlen
+	// metadata. Keep malformed internal plans from escaping this diagnostic
+	// boundary as a panic.
+	defer func() {
+		if recover() != nil {
+			text = "<invalid-vector>"
+		}
+	}()
+	vec := vector.NewVec(types.T_any.ToType())
+	defer vec.Free(nil)
+	if err := vec.UnmarshalBinary(literalVec.Data); err != nil {
+		return "<invalid-vector>"
+	}
+
+	originalLen := vec.Length()
+	if originalLen > 16 {
+		vec.SetLength(16)
+	}
+	text = printableVectorText(vec.String())
+	if originalLen > 16 {
+		text += fmt.Sprintf("... %v values", originalLen)
+	}
+	return text
 }
 
 // geometryLiteralText renders a geometry literal's WKB payload as WKT so

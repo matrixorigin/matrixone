@@ -24,8 +24,12 @@ import (
 	"unicode/utf8"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
+	planpkg "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 )
 
@@ -163,6 +167,113 @@ func TestNonPrintableStringLiteralExplainUsesHex(t *testing.T) {
 	}
 	if !utf8.ValidString(got) {
 		t.Fatalf("EXPLAIN expression is not valid UTF-8: %x", []byte(got))
+	}
+}
+
+func TestLiteralVecExplainNeverWritesRawNonTextBytes(t *testing.T) {
+	mp := mpool.MustNew(t.Name())
+	vec := vector.NewVec(types.T_varchar.ToType())
+	if err := vector.AppendBytes(vec, []byte{0xff, 0x00}, false, mp); err != nil {
+		t.Fatal(err)
+	}
+	data, err := vec.MarshalBinary()
+	if err != nil {
+		vec.Free(mp)
+		t.Fatal(err)
+	}
+	vec.Free(mp)
+
+	expr := &planpb.Expr{
+		Typ: planpb.Type{Id: int32(types.T_varchar)},
+		Expr: &planpb.Expr_Vec{Vec: &planpb.LiteralVec{
+			Len:  1,
+			Data: data,
+		}},
+	}
+	var buf bytes.Buffer
+	if err := describeExpr(t.Context(), expr, NewExplainDefaultOptions(), &buf); err != nil {
+		t.Fatal(err)
+	}
+	assertPrintableExplainText(t, buf.String())
+	if got, want := buf.String(), "0xFF00"; got != want {
+		t.Fatalf("non-text vector was not rendered canonically: got %q, want %q", got, want)
+	}
+}
+
+func TestPublicSerializedINListExplainIsOpaqueAndPrintable(t *testing.T) {
+	planText := explainSQLForSerializedTest(
+		t,
+		"select n_name from nation where n_name in ("+
+			"serial(cast(99999 as decimal(38,0))), "+
+			"serial(cast(100000 as decimal(38,0))))",
+	)
+	assertPrintableExplainText(t, planText)
+	if !strings.Contains(planText, "<opaque>") {
+		t.Fatalf("serialized IN-list was exposed in EXPLAIN: %q", planText)
+	}
+}
+
+func TestOrdinaryINListExplainRemainsMeaningful(t *testing.T) {
+	planText := explainSQLForSerializedTest(
+		t,
+		"select n_name from nation where n_name in ('Résumé', '東京')",
+	)
+	assertPrintableExplainText(t, planText)
+	for _, value := range []string{"Résumé", "東京"} {
+		if !strings.Contains(planText, value) {
+			t.Fatalf("ordinary IN-list value %q was hidden in EXPLAIN: %q", value, planText)
+		}
+	}
+	if strings.Contains(planText, "<opaque>") {
+		t.Fatalf("ordinary IN-list acquired serialized provenance: %q", planText)
+	}
+}
+
+func TestMalformedLiteralVecExplainIsTotal(t *testing.T) {
+	expr := &planpb.Expr{
+		Typ: planpb.Type{Id: int32(types.T_varchar)},
+		Expr: &planpb.Expr_Vec{Vec: &planpb.LiteralVec{
+			Len:  1,
+			Data: []byte{0xff},
+		}},
+	}
+	var buf bytes.Buffer
+	if err := describeExpr(t.Context(), expr, NewExplainDefaultOptions(), &buf); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := buf.String(), "<invalid-vector>"; got != want {
+		t.Fatalf("malformed vector diagnostic changed: got %q, want %q", got, want)
+	}
+}
+
+func explainSQLForSerializedTest(t *testing.T, sql string) string {
+	t.Helper()
+	stmt, err := mysql.ParseOne(t.Context(), sql, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	query, err := planpkg.NewBaseOptimizer(planpkg.NewMockCompilerContext(true)).Optimize(stmt, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	buffer := NewExplainDataBuffer()
+	if err := NewExplainQueryImpl(query).ExplainPlan(
+		t.Context(), buffer, NewExplainDefaultOptions(),
+	); err != nil {
+		t.Fatal(err)
+	}
+	return buffer.ToString()
+}
+
+func assertPrintableExplainText(t *testing.T, text string) {
+	t.Helper()
+	if !utf8.ValidString(text) {
+		t.Fatalf("EXPLAIN text is not valid UTF-8: %x", []byte(text))
+	}
+	for _, r := range text {
+		if r != '\n' && !unicode.IsPrint(r) {
+			t.Fatalf("EXPLAIN text contains non-printable rune %U: %q", r, text)
+		}
 	}
 }
 
