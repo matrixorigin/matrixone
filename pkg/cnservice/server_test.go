@@ -41,6 +41,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
 	"github.com/matrixorigin/matrixone/pkg/frontend/test/mock_lock"
+	"github.com/matrixorigin/matrixone/pkg/incrservice"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
@@ -110,6 +111,24 @@ type closeRecordingTraceService struct {
 func (s *closeRecordingTraceService) Close() {
 	close(s.closed)
 	s.Service.Close()
+}
+
+type closeOnlyIncrService struct {
+	incrservice.AutoIncrementService
+	onClose func()
+}
+
+func (s closeOnlyIncrService) Close() {
+	s.onClose()
+}
+
+type closeOnlyTxnClient struct {
+	client.TxnClient
+	onClose func() error
+}
+
+func (c closeOnlyTxnClient) Close() error {
+	return c.onClose()
 }
 
 func (s closeOnlyRPCServer) RegisterRequestHandler(
@@ -682,6 +701,65 @@ func TestServiceCloseWaitsForTraceProducers(t *testing.T) {
 			case <-recordingTrace.closed:
 			default:
 				t.Fatal("trace service was not closed")
+			}
+		},
+	)
+}
+
+func TestServiceCloseDrainsAutoIncrementBeforeTxnClient(t *testing.T) {
+	moruntime.RunTest(
+		t.Name(),
+		func(rt moruntime.Runtime) {
+			ctrl := gomock.NewController(t)
+			defer ctrl.Finish()
+			ls := mock_lock.NewMockLockService(ctrl)
+			ls.EXPECT().Close().Return(nil).Times(2)
+
+			incrCloseStarted := make(chan struct{})
+			releaseIncrClose := make(chan struct{})
+			txnClientClosed := make(chan struct{})
+			s := &service{
+				cfg:                &Config{UUID: t.Name()},
+				logger:             zap.NewNop(),
+				stopper:            stopper.NewStopper("test-incr-close-order"),
+				mo:                 closeErrorMOServer{},
+				cancelMoServerFunc: func() {},
+				server:             closeOnlyRPCServer{},
+				lockService:        ls,
+				incrservice: closeOnlyIncrService{onClose: func() {
+					close(incrCloseStarted)
+					<-releaseIncrClose
+				}},
+				_txnClient: closeOnlyTxnClient{onClose: func() error {
+					close(txnClientClosed)
+					return nil
+				}},
+			}
+
+			closeDone := make(chan error, 1)
+			go func() {
+				closeDone <- s.Close()
+			}()
+
+			select {
+			case <-incrCloseStarted:
+			case <-time.After(time.Second):
+				t.Fatal("auto-increment service close did not start")
+			}
+			txnClientClosedEarly := false
+			select {
+			case <-txnClientClosed:
+				txnClientClosedEarly = true
+			default:
+			}
+
+			close(releaseIncrClose)
+			require.NoError(t, <-closeDone)
+			require.False(t, txnClientClosedEarly, "transaction client closed before auto-increment service drained")
+			select {
+			case <-txnClientClosed:
+			default:
+				t.Fatal("transaction client was not closed")
 			}
 		},
 	)

@@ -461,9 +461,12 @@ func (s *service) closeService() error {
 			s.closeMongoDBRuntime,
 			s.closePipelineAdmission,
 			s.server.Close,
-			s.stopRPCs,
+			// Pipeline handlers and the auto-increment cleanup worker can issue
+			// transactions. Drain both before closing their transaction and RPC
+			// dependencies, while keeping the trace consumer alive for final events.
 			s.waitPipelineHandlers,
 			s.closeIncrService,
+			s.stopRPCs,
 			s.closeTxnTraceService,
 			func() error {
 				// stop I/O pipeline
