@@ -1823,6 +1823,20 @@ func findLeadingFilter(idxDef *IndexDef, node *plan.Node) ([]int32, bool) {
 	return nil, false
 }
 
+func (builder *QueryBuilder) makeIndexLookupPartExpr(idxDef *IndexDef, partPos int, inputExpr *plan.Expr) *plan.Expr {
+	prefixLengths, err := catalog.IndexPrefixLengthsFromParamsWithError(idxDef.IndexAlgoParams)
+	if err != nil || partPos < 0 || partPos >= len(idxDef.Parts) {
+		return DeepCopyExpr(inputExpr)
+	}
+
+	partName := catalog.ResolveAlias(idxDef.Parts[partPos])
+	lookupExpr, err := builder.makeIndexPartExprFromInputExpr(inputExpr, partName, prefixLengths)
+	if err != nil {
+		return DeepCopyExpr(inputExpr)
+	}
+	return lookupExpr
+}
+
 func (builder *QueryBuilder) replaceEqualCondition(idxDef *IndexDef, filterList []*plan.Expr, filterPos []int32, idxTag int32, idxTableDef *plan.TableDef) *plan.Expr {
 	numParts := len(idxDef.Parts)
 	if numParts == 1 { //directly equal
@@ -1830,6 +1844,7 @@ func (builder *QueryBuilder) replaceEqualCondition(idxDef *IndexDef, filterList 
 		args := expr.GetF().Args
 		args[0].GetCol().RelPos = idxTag
 		args[0].GetCol().ColPos = 0
+		args[1] = builder.makeIndexLookupPartExpr(idxDef, 0, args[1])
 		return expr
 	}
 
@@ -1838,7 +1853,7 @@ func (builder *QueryBuilder) replaceEqualCondition(idxDef *IndexDef, filterList 
 	serialArgs := make([]*plan.Expr, len(filterPos))
 	for i := range filterPos {
 		filter := filterList[filterPos[i]]
-		serialArgs[i] = DeepCopyExpr(filter.GetF().Args[1])
+		serialArgs[i] = builder.makeIndexLookupPartExpr(idxDef, i, filter.GetF().Args[1])
 		compositeFilterSel = compositeFilterSel * filter.Selectivity
 	}
 	rightArg, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), indexTableLookupSerialFunc(idxDef), serialArgs)
@@ -2095,6 +2110,14 @@ func runtimeConstMayBeNull(expr *plan.Expr) bool {
 }
 
 func (builder *QueryBuilder) tryIndexOnlyScan(idxDef *IndexDef, node *plan.Node, colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr, scanSnapshot *Snapshot) int32 {
+	prefixLengths, err := catalog.IndexPrefixLengthsFromParamsWithError(idxDef.IndexAlgoParams)
+	if err != nil || len(prefixLengths) > 0 {
+		// Prefix indexes store only a substring of each configured part. They are
+		// safe for locating candidates followed by a base-table lookup, but cannot
+		// reconstruct the full column value required by an index-only scan.
+		return -1
+	}
+
 	// check if this index contains all columns needed
 	for i := range node.TableDef.Cols {
 		if colRefCnt[[2]int32{node.BindingTags[0], int32(i)}] > 0 {

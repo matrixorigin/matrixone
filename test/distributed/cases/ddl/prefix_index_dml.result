@@ -23,6 +23,9 @@ select id, a, b from prefix_idx_dml_uk order by id;
 ➤ id[4,32,0]  ¦  a[12,-1,0]  ¦  b[4,32,0]  𝄀
 2  ¦  abcdef-new  ¦  20  𝄀
 3  ¦  uvwxyz-new  ¦  30
+select a from prefix_idx_dml_uk force index(uq_a) where a = 'abcdef-new';
+➤ a[12,32,0]  𝄀
+abcdef-new
 drop table prefix_idx_dml_uk;
 drop table if exists prefix_idx_dml_create_backfill;
 create table prefix_idx_dml_create_backfill(id int primary key, a varchar(32), b int);
@@ -50,3 +53,63 @@ select count(*) from prefix_idx_dml_alter_add where a = 'lmnopq-long';
 ➤ count(*)[-5,64,0]  𝄀
 0
 drop table prefix_idx_dml_alter_add;
+drop table if exists prefix_idx_covering_scan;
+create table prefix_idx_covering_scan(id int primary key, a varchar(32), b int, index idx_a(a(4)));
+insert into prefix_idx_covering_scan values
+(1, 'abc', 10),
+(2, 'abcd', 20),
+(3, 'abcdx', 30),
+(4, 'abcdy', 40),
+(5, '中中中中甲', 50),
+(6, '中中中中乙', 60);
+select count(*) from prefix_idx_covering_scan force index(idx_a) where a = 'abc';
+➤ count(*)[-5,64,0]  𝄀
+1
+select count(*) from prefix_idx_covering_scan ignore index(idx_a) where a = 'abc';
+➤ count(*)[-5,64,0]  𝄀
+1
+select count(*) from prefix_idx_covering_scan force index(idx_a) where a = 'abcd';
+➤ count(*)[-5,64,0]  𝄀
+1
+select count(*) from prefix_idx_covering_scan ignore index(idx_a) where a = 'abcd';
+➤ count(*)[-5,64,0]  𝄀
+1
+select count(*) from prefix_idx_covering_scan force index(idx_a) where a = 'abcdx';
+➤ count(*)[-5,64,0]  𝄀
+1
+select count(*) from prefix_idx_covering_scan ignore index(idx_a) where a = 'abcdx';
+➤ count(*)[-5,64,0]  𝄀
+1
+select a from prefix_idx_covering_scan force index(idx_a) where a = 'abcdx';
+➤ a[12,32,0]  𝄀
+abcdx
+select a from prefix_idx_covering_scan ignore index(idx_a) where a = 'abcdx';
+➤ a[12,32,0]  𝄀
+abcdx
+select a from prefix_idx_covering_scan force index(idx_a) where a = '中中中中甲';
+➤ a[12,32,0]  𝄀
+中中中中甲
+select a from prefix_idx_covering_scan ignore index(idx_a) where a = '中中中中甲';
+➤ a[12,32,0]  𝄀
+中中中中甲
+select id, a, b from prefix_idx_covering_scan force index(idx_a) where a = 'abcdx';
+➤ id[4,32,0]  ¦  a[12,32,0]  ¦  b[4,32,0]  𝄀
+3  ¦  abcdx  ¦  30
+select mo_ctl('dn', 'flush', 'prefix_index_dml.prefix_idx_covering_scan');
+➤ mo_ctl(dn, flush, prefix_index_dml.prefix_idx_covering_scan)[12,65535,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
+select a from prefix_idx_covering_scan force index(idx_a) where a = 'abcdx';
+➤ a[12,32,0]  𝄀
+abcdx
+select a from prefix_idx_covering_scan force index(idx_a) where a = '中中中中甲';
+➤ a[12,32,0]  𝄀
+中中中中甲
+drop table prefix_idx_covering_scan;

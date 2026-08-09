@@ -4078,6 +4078,61 @@ func TestReplaceEqualConditionKeepsSerialForUniqueCompositeIndex(t *testing.T) {
 	assert.Equal(t, "serial", wrappedSerialFuncName(t, expr.GetF().Args[1]))
 }
 
+func TestReplaceEqualConditionTruncatesPrefixIndexLookupPart(t *testing.T) {
+	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true), false, true)
+	prefixParams, err := catalog.IndexParamsMapToJsonString(map[string]string{
+		catalog.IndexAlgoParamPrefixLengths: "status:4",
+	})
+	require.NoError(t, err)
+	idxDef := &planpb.IndexDef{
+		Parts:           []string{"status", "id"},
+		Unique:          false,
+		IndexAlgoParams: prefixParams,
+	}
+	idxTableDef := makeTestIndexTableDef()
+	filters := []*planpb.Expr{makeStringEqFilterExpr(0, 1, "active")}
+
+	expr := builder.replaceEqualCondition(idxDef, filters, []int32{0}, 42, idxTableDef)
+
+	require.NotNil(t, expr.GetF())
+	require.Equal(t, "prefix_eq", expr.GetF().Func.ObjName)
+	require.True(t, exprContainsFuncName(expr, "substring"))
+	serialFn := expr.GetF().Args[1].GetF()
+	require.NotNil(t, serialFn)
+	require.Len(t, serialFn.Args, 1)
+	prefixArg := serialFn.Args[0].GetF()
+	require.NotNil(t, prefixArg)
+	if prefixArg.Func.ObjName == "cast" {
+		require.Len(t, prefixArg.Args, 1)
+		prefixArg = prefixArg.Args[0].GetF()
+		require.NotNil(t, prefixArg)
+	}
+	require.Equal(t, "substring", prefixArg.Func.ObjName)
+	require.Len(t, prefixArg.Args, 3)
+	require.Equal(t, int64(1), prefixArg.Args[1].GetLit().GetI64Val())
+	require.Equal(t, int64(4), prefixArg.Args[2].GetLit().GetI64Val())
+}
+
+func TestReplaceEqualConditionTruncatesSinglePartPrefixIndexLookup(t *testing.T) {
+	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true), false, true)
+	prefixParams, err := catalog.IndexParamsMapToJsonString(map[string]string{
+		catalog.IndexAlgoParamPrefixLengths: "status:4",
+	})
+	require.NoError(t, err)
+	idxDef := &planpb.IndexDef{
+		Parts:           []string{"status"},
+		Unique:          true,
+		IndexAlgoParams: prefixParams,
+	}
+	filters := []*planpb.Expr{makeStringEqFilterExpr(0, 1, "active")}
+
+	expr := builder.replaceEqualCondition(idxDef, filters, []int32{0}, 42, makeTestIndexTableDef())
+
+	require.NotNil(t, expr.GetF())
+	require.Equal(t, "=", expr.GetF().Func.ObjName)
+	require.True(t, exprContainsFuncName(expr.GetF().Args[1], "substring"))
+}
+
 func TestReplaceNonEqualConditionUsesSerialFullForNonUniqueCompositeIndexIn(t *testing.T) {
 	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true), false, true)
 	idxDef := &planpb.IndexDef{
@@ -4211,6 +4266,117 @@ func TestIndexOnlyResidualLeadingFilterPositionsAreMinimal(t *testing.T) {
 	require.Empty(t, indexOnlyResidualLeadingFilterPositions(
 		idxDef, tableDef, filters, []int32{0, 1}, lookup,
 	))
+}
+
+func TestTryIndexOnlyScanRejectsLossyPrefixIndex(t *testing.T) {
+	prefixParams, err := catalog.IndexParamsMapToJsonString(map[string]string{
+		catalog.IndexAlgoParamPrefixLengths: "status:4",
+	})
+	require.NoError(t, err)
+
+	tests := []struct {
+		name            string
+		indexAlgoParams string
+		wantIndexOnly   bool
+	}{
+		{name: "full value index", wantIndexOnly: true},
+		{name: "prefix index", indexAlgoParams: prefixParams, wantIndexOnly: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true), false, true)
+			ctx := NewBindContext(builder, nil)
+			bindTag := builder.genNewBindTag()
+			idxDef := &planpb.IndexDef{
+				IndexName:       "idx_status_id",
+				IndexAlgo:       catalog.MoIndexDefaultAlgo.ToString(),
+				IndexAlgoParams: tt.indexAlgoParams,
+				IndexTableName:  "__mo_idx_status_id",
+				Parts:           []string{"status", "id"},
+				Unique:          false,
+				TableExist:      true,
+			}
+			registerMockIndexTable(t, builder, idxDef.IndexTableName)
+			node := &planpb.Node{
+				NodeType:    planpb.Node_TABLE_SCAN,
+				ObjRef:      &planpb.ObjectRef{SchemaName: "test", ObjName: "t"},
+				BindingTags: []int32{bindTag},
+				TableDef: &planpb.TableDef{
+					Name: "t",
+					Cols: []*planpb.ColDef{
+						{Name: "id", Typ: planpb.Type{Id: int32(types.T_int64)}},
+						{Name: "status", Typ: planpb.Type{Id: int32(types.T_varchar), Width: 32}},
+					},
+					Name2ColIndex: map[string]int32{"id": 0, "status": 1},
+					Pkey:          &planpb.PrimaryKeyDef{PkeyColName: "id", Names: []string{"id"}},
+				},
+				Stats:      &planpb.Stats{TableCnt: 100, Outcnt: 1, Selectivity: 0.01, Cost: 100},
+				FilterList: []*planpb.Expr{makeStringEqFilterExpr(bindTag, 1, "active")},
+			}
+			scanID := builder.appendNode(node, ctx)
+
+			idxNodeID := builder.tryIndexOnlyScan(idxDef, builder.qry.Nodes[scanID], map[[2]int32]int{{bindTag, 1}: 1}, map[[2]int32]*planpb.Expr{}, &Snapshot{})
+			if tt.wantIndexOnly {
+				require.NotEqual(t, int32(-1), idxNodeID)
+			} else {
+				require.Equal(t, int32(-1), idxNodeID)
+			}
+		})
+	}
+}
+
+func TestApplyIndicesForFiltersUsesIndexJoinForPrefixIndex(t *testing.T) {
+	prefixParams, err := catalog.IndexParamsMapToJsonString(map[string]string{
+		catalog.IndexAlgoParamPrefixLengths: "status:4",
+	})
+	require.NoError(t, err)
+
+	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true), false, true)
+	ctx := NewBindContext(builder, nil)
+	bindTag := builder.genNewBindTag()
+	idxDef := &planpb.IndexDef{
+		IndexName:       "idx_status_id",
+		IndexAlgo:       catalog.MoIndexDefaultAlgo.ToString(),
+		IndexAlgoParams: prefixParams,
+		IndexTableName:  "__mo_idx_status_id",
+		Parts:           []string{"status", "id"},
+		Unique:          false,
+		TableExist:      true,
+	}
+	registerMockIndexTable(t, builder, idxDef.IndexTableName)
+	node := &planpb.Node{
+		NodeType:    planpb.Node_TABLE_SCAN,
+		ObjRef:      &planpb.ObjectRef{SchemaName: "test", ObjName: "t"},
+		BindingTags: []int32{bindTag},
+		TableDef: &planpb.TableDef{
+			Name: "t",
+			Cols: []*planpb.ColDef{
+				{Name: "id", Typ: planpb.Type{Id: int32(types.T_int64)}},
+				{Name: "status", Typ: planpb.Type{Id: int32(types.T_varchar), Width: 32}},
+			},
+			Name2ColIndex: map[string]int32{"id": 0, "status": 1},
+			Pkey:          &planpb.PrimaryKeyDef{PkeyColName: "id", Names: []string{"id"}},
+			Indexes:       []*planpb.IndexDef{idxDef},
+		},
+		Stats:      &planpb.Stats{TableCnt: 100, Outcnt: 1, Selectivity: 0.01, Cost: 100},
+		FilterList: []*planpb.Expr{makeStringEqFilterExpr(bindTag, 1, "active")},
+	}
+	scanID := builder.appendNode(node, ctx)
+
+	resultID := builder.applyIndicesForFiltersRegularIndex(scanID, builder.qry.Nodes[scanID], map[[2]int32]int{{bindTag, 1}: 1}, map[[2]int32]*planpb.Expr{})
+	require.NotEqual(t, scanID, resultID)
+
+	indexJoin := builder.qry.Nodes[resultID]
+	require.Equal(t, planpb.Node_JOIN, indexJoin.NodeType)
+	require.Equal(t, planpb.Node_INDEX, indexJoin.JoinType)
+	require.Equal(t, scanID, indexJoin.Children[0])
+	require.Len(t, builder.qry.Nodes[scanID].FilterList, 1)
+	require.Equal(t, "=", builder.qry.Nodes[scanID].FilterList[0].GetF().Func.ObjName)
+
+	indexScan := builder.qry.Nodes[indexJoin.Children[1]]
+	require.True(t, indexScan.IndexScanInfo.IsIndexScan)
+	require.Equal(t, idxDef.IndexName, indexScan.IndexScanInfo.IndexName)
 }
 
 func TestTryIndexOnlyScanKeepsResidualFilterForSerialFullNullSemantics(t *testing.T) {
