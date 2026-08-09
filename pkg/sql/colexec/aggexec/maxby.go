@@ -278,6 +278,12 @@ func (exec *maxByExec) copyWinner(
 			return err
 		}
 		dst[i].UnsetNull(uint64(dstRow))
+		if i == 0 {
+			if err := dst[i].SetPrepareParamKindAtWithMP(
+				dstRow, src[i].GetPrepareParamKindAt(srcRows[i]), exec.mp); err != nil {
+				return err
+			}
+		}
 	}
 	for i, vec := range dst {
 		if vec.GetType().IsVarlen() {

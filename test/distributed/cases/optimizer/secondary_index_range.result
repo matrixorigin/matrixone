@@ -103,7 +103,7 @@ Project  𝄀
               Filter Cond: (t1.val >= 900)  𝄀
               Runtime Filter Probe: t1.id  𝄀
         ->  Index Table Scan on t1.idx_val [ForceOneCN]  𝄀
-              Filter Cond: (__mo_index_idx_col >= ':�')
+              Filter Cond: (__mo_index_idx_col >= '<opaque>')
 select * from t1 where val >= 900 order by id;
 ➤ id[4,32,0]  ¦  val[4,32,0]  ¦  name[12,-1,0]  𝄀
 90  ¦  900  ¦  row90  𝄀
@@ -129,7 +129,7 @@ Project  𝄀
               Filter Cond: (t1.val < 30)  𝄀
               Runtime Filter Probe: t1.id  𝄀
         ->  Index Table Scan on t1.idx_val [ForceOneCN]  𝄀
-              Filter Cond: (__mo_index_idx_col < ':')
+              Filter Cond: (__mo_index_idx_col < '<opaque>')
 select * from t1 where val < 30 order by id;
 ➤ id[4,32,0]  ¦  val[4,32,0]  ¦  name[12,-1,0]  𝄀
 1  ¦  10  ¦  row1  𝄀
@@ -320,7 +320,7 @@ Project  𝄀
               Filter Cond: (t3.city >= 'Chicago')  𝄀
               Runtime Filter Probe: t3.id  𝄀
         ->  Index Table Scan on t3.idx_city [ForceOneCN]  𝄀
-              Filter Cond: (__mo_index_idx_col >= 'FChicago ')
+              Filter Cond: (__mo_index_idx_col >= '<opaque>')
 select * from t3 where city >= 'Chicago' order by id;
 ➤ id[12,-1,0]  ¦  city[12,-1,0]  ¦  score[4,32,0]  𝄀
 b  ¦  Chicago  ¦  92  𝄀
@@ -338,7 +338,7 @@ Project  𝄀
               Filter Cond: (t3.city < 'Chicago')  𝄀
               Runtime Filter Probe: t3.id  𝄀
         ->  Index Table Scan on t3.idx_city [ForceOneCN]  𝄀
-              Filter Cond: (__mo_index_idx_col < 'FChicago ')
+              Filter Cond: (__mo_index_idx_col < '<opaque>')
 select * from t3 where city < 'Chicago' order by id;
 ➤ id[12,-1,0]  ¦  city[12,-1,0]  ¦  score[4,32,0]  𝄀
 a  ¦  Boston  ¦  85  𝄀
@@ -449,7 +449,7 @@ Project  𝄀
               Filter Cond: ((t1.val >= 5) or (t1.val < 2))  𝄀
               Runtime Filter Probe: t1.id  𝄀
         ->  Index Table Scan on t1.idx_val [ForceOneCN]  𝄀
-              Filter Cond: ((__mo_index_idx_col >= ':') or (__mo_index_idx_col < ':'))
+              Filter Cond: ((__mo_index_idx_col >= '<opaque>') or (__mo_index_idx_col < '<opaque>'))
 select * from t1 where val >= 5 or val < 2 order by id;
 ➤ id[4,32,0]  ¦  val[4,32,0]  ¦  name[12,-1,0]  𝄀
 1  ¦  10  ¦  row1  𝄀
@@ -589,7 +589,7 @@ explain select * from t5 where val >= 100 and val <= 50;
 ➤ TP QUERY PLAN[12,0,0]  𝄀
 Project  𝄀
   ->  Index Table Scan on t5.idx_val  𝄀
-        Filter Cond: (__mo_index_idx_col >= ':d'), (serial_extract(__mo_index_idx_col, 0, INT)) <= 50)
+        Filter Cond: (__mo_index_idx_col >= '<opaque>'), (serial_extract(__mo_index_idx_col, 0, INT)) <= 50)
 select * from t5 where val >= 100 and val <= 50;
 ➤ id[4,32,0]  ¦  val[4,32,0]
 select * from t5 where val > 30 and val < 10;
@@ -694,7 +694,7 @@ explain select * from t7 where d >= '2024-03-01' and d <= '2024-09-30';
 ➤ TP QUERY PLAN[12,0,0]  𝄀
 Project  𝄀
   ->  Index Table Scan on t7.idx_d  𝄀
-        Filter Cond: (__mo_index_idx_col >= 'AF�'), (serial_extract(__mo_index_idx_col, 0, DATE)) <= 2024-09-30)
+        Filter Cond: (__mo_index_idx_col >= '<opaque>'), (serial_extract(__mo_index_idx_col, 0, DATE)) <= 2024-09-30)
 select * from t7 where d >= '2024-03-01' and d <= '2024-09-30' order by id;
 ➤ id[4,32,0]  ¦  d[91,64,0]  𝄀
 2  ¦  2024-03-15  𝄀
@@ -905,4 +905,155 @@ a1  ¦  done  ¦  10  𝄀
 a2  ¦  active  ¦  20  𝄀
 a3  ¦  closed  ¦  55  𝄀
 a5  ¦  null  ¦  50
+drop table if exists t11;
+create table t11 (
+id bigint primary key,
+k_bigint bigint null,
+k_decimal decimal(20,4) null,
+k_varchar varchar(16) null,
+payload varchar(16) not null,
+key idx_bigint(k_bigint),
+key idx_decimal(k_decimal),
+key idx_varchar(k_varchar)
+);
+insert into t11 values
+(1, NULL, NULL, NULL, 'null'),
+(2, 98, 98.0000, '098', 'above'),
+(3, 95, 95.0000, '095', 'below-95'),
+(4, 96, 96.0000, '096', 'below-96'),
+(5, 97, 97.0000, '097', 'boundary'),
+(6, 1000, 1000.0000, '1000', 'upper');
+explain select id from t11 where k_bigint < 97;
+-- @regex("Index Table Scan", true)
+➤ TP QUERY PLAN[12,0,0]  𝄀
+Project  𝄀
+  ->  Index Table Scan on t11.idx_bigint  𝄀
+        Filter Cond: (__mo_index_idx_col < '<opaque>'), (serial_extract(__mo_index_idx_col, 0, BIGINT)) < 97)
+select id as bigint_auto from t11 where k_bigint < 97 order by id;
+➤ bigint_auto[-5,64,0]  𝄀
+3  𝄀
+4
+select id as bigint_primary from t11 ignore index(idx_bigint) where k_bigint < 97 order by id;
+➤ bigint_primary[-5,64,0]  𝄀
+3  𝄀
+4
+select id as decimal_auto from t11 where k_decimal < 97.0000 order by id;
+➤ decimal_auto[-5,64,0]  𝄀
+3  𝄀
+4
+select id as decimal_primary from t11 ignore index(idx_decimal) where k_decimal < 97.0000 order by id;
+➤ decimal_primary[-5,64,0]  𝄀
+3  𝄀
+4
+select id as varchar_auto from t11 where k_varchar < '097' order by id;
+➤ varchar_auto[-5,64,0]  𝄀
+3  𝄀
+4
+select id as varchar_primary from t11 ignore index(idx_varchar) where k_varchar < '097' order by id;
+➤ varchar_primary[-5,64,0]  𝄀
+3  𝄀
+4
+select id, k_bigint from t11 force index(idx_bigint) where k_bigint < 97 limit 1;
+➤ id[-5,64,0]  ¦  k_bigint[-5,64,0]  𝄀
+3  ¦  95
+select id as constant_left from t11 where 97 > k_bigint order by id;
+➤ constant_left[-5,64,0]  𝄀
+3  𝄀
+4
+prepare stmt_t11_lt from 'select id as prepared_bound from t11 where k_bigint < ? order by id';
+set @t11_bound = 97;
+execute stmt_t11_lt using @t11_bound;
+➤ prepared_bound[-5,64,0]  𝄀
+3  𝄀
+4
+deallocate prepare stmt_t11_lt;
+explain select id, payload from t11 where k_bigint < 97;
+-- @regex("Join Type: INDEX", true)
+➤ TP QUERY PLAN[12,0,0]  𝄀
+Project  𝄀
+  ->  Join  𝄀
+        Join Type: INDEX  𝄀
+        Join Cond: (t11.id = __mo_index_pri_col)  𝄀
+        Runtime Filter Build: #[-1,0]  𝄀
+        ->  Table Scan on d1.t11 [ForceOneCN]  𝄀
+              Filter Cond: (t11.k_bigint < 97)  𝄀
+              Runtime Filter Probe: t11.id  𝄀
+        ->  Index Table Scan on t11.idx_bigint [ForceOneCN]  𝄀
+              Filter Cond: (__mo_index_idx_col < '<opaque>')
+select id, payload from t11 where k_bigint < 97 order by id;
+➤ id[-5,64,0]  ¦  payload[12,-1,0]  𝄀
+3  ¦  below-95  𝄀
+4  ¦  below-96
+explain select id from t11 where k_bigint >= 95 and k_bigint < 97;
+-- @regex("Index", true)
+➤ TP QUERY PLAN[12,0,0]  𝄀
+Project  𝄀
+  ->  Index Table Scan on t11.idx_bigint  𝄀
+        Filter Cond: (__mo_index_idx_col < '<opaque>'), (serial_extract(__mo_index_idx_col, 0, BIGINT)) >= 95)
+select id as paired_range from t11 where k_bigint >= 95 and k_bigint < 97 order by id;
+➤ paired_range[-5,64,0]  𝄀
+3  𝄀
+4
+select id as safe_or from t11 force index(idx_bigint) where k_bigint < 97 or k_bigint >= 1000 order by id;
+➤ safe_or[-5,64,0]  𝄀
+3  𝄀
+4  𝄀
+6
+explain select id from t11 where k_bigint <= 97;
+-- @regex("Index", false)
+➤ TP QUERY PLAN[12,0,0]  𝄀
+Project  𝄀
+  ->  Table Scan on d1.t11  𝄀
+        Filter Cond: (t11.k_bigint <= 97)
+select id as inclusive_upper from t11 where k_bigint <= 97 order by id;
+➤ inclusive_upper[-5,64,0]  𝄀
+3  𝄀
+4  𝄀
+5
+explain select id from t11 where k_bigint > 97;
+-- @regex("Index", false)
+➤ TP QUERY PLAN[12,0,0]  𝄀
+Project  𝄀
+  ->  Table Scan on d1.t11  𝄀
+        Filter Cond: (t11.k_bigint > 97)
+select id as strict_lower from t11 where k_bigint > 97 order by id;
+➤ strict_lower[-5,64,0]  𝄀
+2  𝄀
+6
+explain select id from t11 where k_bigint < 97 or k_bigint > 1000;
+-- @regex("Index", false)
+➤ TP QUERY PLAN[12,0,0]  𝄀
+Project  𝄀
+  ->  Table Scan on d1.t11  𝄀
+        Filter Cond: ((t11.k_bigint < 97) or (t11.k_bigint > 1000))
+select id as unsafe_or from t11 where k_bigint < 97 or k_bigint > 1000 order by id;
+➤ unsafe_or[-5,64,0]  𝄀
+3  𝄀
+4
+update t11
+set payload = concat(payload, '-matched'), k_bigint = k_bigint + 100
+where k_bigint < 97;
+select id, k_bigint, payload from t11 order by id;
+➤ id[-5,64,0]  ¦  k_bigint[-5,64,0]  ¦  payload[12,-1,0]  𝄀
+1  ¦  null  ¦  null  𝄀
+2  ¦  98  ¦  above  𝄀
+3  ¦  195  ¦  below-95-matched  𝄀
+4  ¦  196  ¦  below-96-matched  𝄀
+5  ¦  97  ¦  boundary  𝄀
+6  ¦  1000  ¦  upper
+set @t11_idx = (
+select index_table_name from mo_catalog.mo_indexes
+where name = 'idx_bigint'
+and table_id = (select rel_id from mo_catalog.mo_tables where reldatabase = 'd1' and relname = 't11')
+limit 1
+);
+set @t11_idx_sql = concat(
+'select count(*) as physical_rows, count(distinct __mo_index_pri_col) as primary_mappings from d1.`',
+@t11_idx, '`'
+);
+prepare stmt_t11_idx from @t11_idx_sql;
+execute stmt_t11_idx;
+➤ physical_rows[-5,64,0]  ¦  primary_mappings[-5,64,0]  𝄀
+6  ¦  6
+deallocate prepare stmt_t11_idx;
 drop database d1;

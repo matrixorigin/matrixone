@@ -25,6 +25,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/stretchr/testify/require"
@@ -73,6 +74,7 @@ func TestAppendCheckpointRollback(t *testing.T) {
 	vec.GetGrouping().Set(0)
 	vec.SetSorted(true)
 	checkpoint := vec.MakeAppendCheckpoint()
+	vec.SetPrepareParamKind(PrepareParamFloat)
 
 	require.NoError(t, AppendBytes(vec, []byte(strings.Repeat("b", 96)), false, mp))
 	vec.GetNulls().Set(1)
@@ -88,6 +90,8 @@ func TestAppendCheckpointRollback(t *testing.T) {
 	require.False(t, vec.GetNulls().Contains(1))
 	require.True(t, vec.GetGrouping().Contains(0))
 	require.False(t, vec.GetGrouping().Contains(1))
+	require.Equal(t, PrepareParamNone, vec.GetPrepareParamKind(),
+		"the checkpoint predates the explicit provenance assignment")
 	require.False(t, vec.GetGrouping().Contains(2))
 	require.True(t, vec.GetSorted())
 }
@@ -3905,4 +3909,1058 @@ func TestVarlenaAreaDisjointAppendFailureFailsClosed(t *testing.T) {
 
 	vec.Free(mp)
 	require.Zero(t, mp.CurrNB())
+}
+
+func TestPrepareParamKindValueLifecycle(t *testing.T) {
+	mp := mpool.MustNew(t.Name())
+	source, err := NewConstBytes(types.T_text.ToType(), []byte("5"), 2, mp)
+	require.NoError(t, err)
+	source.SetPrepareParamKind(PrepareParamFloat)
+	defer source.Free(mp)
+
+	duplicate, err := source.Dup(mp)
+	require.NoError(t, err)
+	require.Equal(t, PrepareParamFloat, duplicate.GetPrepareParamKind())
+	duplicate.Free(mp)
+
+	window, err := source.Window(0, 1)
+	require.NoError(t, err)
+	require.Equal(t, PrepareParamFloat, window.GetPrepareParamKind())
+	window.Free(mp)
+
+	clone, err := source.CloneWindow(0, 1, mp)
+	require.NoError(t, err)
+	require.Equal(t, PrepareParamFloat, clone.GetPrepareParamKind())
+	clone.ResetWithSameType()
+	require.Equal(t, PrepareParamNone, clone.GetPrepareParamKind())
+	clone.SetPrepareParamKind(PrepareParamDecimal)
+	clone.Reset(types.T_varchar.ToType())
+	require.Equal(t, PrepareParamNone, clone.GetPrepareParamKind())
+	clone.SetPrepareParamKind(PrepareParamInteger)
+	blobType := types.T_blob.ToType()
+	clone.ResetWithNewType(&blobType)
+	require.Equal(t, PrepareParamNone, clone.GetPrepareParamKind())
+	clone.SetPrepareParamKind(PrepareParamBoolean)
+	clone.CleanOnlyData()
+	require.Equal(t, PrepareParamNone, clone.GetPrepareParamKind())
+	clone.Free(mp)
+}
+
+func TestPrepareParamKindPropagationAcrossAppendAndClone(t *testing.T) {
+	mp := mpool.MustNewZero()
+	numeric := NewVec(types.T_text.ToType())
+	require.NoError(t, AppendBytes(numeric, []byte("5.5"), false, mp))
+	numeric.SetPrepareParamKind(PrepareParamFloat)
+	defer numeric.Free(mp)
+
+	for name, appendFn := range map[string]func(*Vector) error{
+		"one":       func(dst *Vector) error { return dst.UnionOne(numeric, 0, mp) },
+		"multi":     func(dst *Vector) error { return dst.UnionMulti(numeric, 0, 2, mp) },
+		"selection": func(dst *Vector) error { return dst.Union(numeric, []int64{0}, mp) },
+		"batch":     func(dst *Vector) error { return dst.UnionBatch(numeric, 0, 1, nil, mp) },
+	} {
+		t.Run(name, func(t *testing.T) {
+			dst := NewVec(types.T_text.ToType())
+			defer dst.Free(mp)
+			require.NoError(t, appendFn(dst))
+			require.Equal(t, PrepareParamFloat, dst.GetPrepareParamKind())
+		})
+	}
+
+	ordinary := NewVec(types.T_text.ToType())
+	require.NoError(t, AppendBytes(ordinary, []byte("text"), false, mp))
+	defer ordinary.Free(mp)
+	dst := NewVec(types.T_text.ToType())
+	require.NoError(t, dst.UnionBatch(numeric, 0, 1, nil, mp))
+	require.NoError(t, dst.UnionBatch(ordinary, 0, 1, nil, mp))
+	require.Equal(t, PrepareParamNone, dst.GetPrepareParamKind(),
+		"mixed prepared and ordinary sources must be conservative")
+	dst.Free(mp)
+
+	clone, err := numeric.CloneToFlatCompact(mp)
+	require.NoError(t, err)
+	require.Equal(t, PrepareParamFloat, clone.GetPrepareParamKind())
+	clone.Free(mp)
+	dup, err := numeric.Dup(mp)
+	require.NoError(t, err)
+	require.Equal(t, PrepareParamFloat, dup.GetPrepareParamKind())
+	dup.Free(mp)
+	window, err := numeric.Window(0, 1)
+	require.NoError(t, err)
+	require.Equal(t, PrepareParamFloat, window.GetPrepareParamKind())
+	window.Free(mp)
+}
+
+func TestPrepareParamKindEmptyReuseCopyAndRollback(t *testing.T) {
+	mp := mpool.MustNewZero()
+	decimal := NewVec(types.T_text.ToType())
+	require.NoError(t, AppendBytes(decimal, []byte("5.9"), false, mp))
+	decimal.SetPrepareParamKind(PrepareParamDecimal)
+	defer decimal.Free(mp)
+
+	for name, makeDestination := range map[string]func() *Vector{
+		"empty": func() *Vector { return NewVec(types.T_text.ToType()) },
+		"all-null": func() *Vector {
+			v := NewVec(types.T_text.ToType())
+			require.NoError(t, AppendBytes(v, nil, true, mp))
+			v.SetPrepareParamKind(PrepareParamFloat)
+			return v
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			dst := makeDestination()
+			defer dst.Free(mp)
+			require.NoError(t, dst.UnionOne(decimal, 0, mp))
+			require.Equal(t, PrepareParamDecimal, dst.GetPrepareParamKind())
+		})
+	}
+
+	ordinary := NewVec(types.T_text.ToType())
+	require.NoError(t, AppendBytes(ordinary, []byte("ordinary"), false, mp))
+	defer ordinary.Free(mp)
+	require.NoError(t, ordinary.Copy(decimal, 0, 0, mp))
+	require.Equal(t, PrepareParamNone, ordinary.GetPrepareParamKind())
+
+	union := NewVec(types.T_text.ToType())
+	require.NoError(t, GetUnionAllFunction(types.T_text.ToType(), mp)(union, decimal))
+	require.Equal(t, PrepareParamDecimal, union.GetPrepareParamKind())
+	union.Free(mp)
+
+	rollback := NewVec(types.T_text.ToType())
+	require.NoError(t, AppendBytes(rollback, []byte("5.5"), false, mp))
+	rollback.SetPrepareParamKind(PrepareParamFloat)
+	defer rollback.Free(mp)
+	checkpoint := rollback.MakeAppendCheckpoint()
+	require.NoError(t, rollback.UnionOne(decimal, 0, mp))
+	require.Equal(t, PrepareParamNone, rollback.GetPrepareParamKind())
+	rollback.RollbackAppend(checkpoint, 1)
+	require.Equal(t, PrepareParamFloat, rollback.GetPrepareParamKind(),
+		"rollback must restore the mixed-source provenance")
+}
+
+func TestCopyOrdinaryPrepareParamKindKeepsScalarMetadata(t *testing.T) {
+	mp := mpool.MustNewZero()
+	source := NewVec(types.T_int64.ToType())
+	destination := NewVec(types.T_int64.ToType())
+	t.Cleanup(func() {
+		destination.Free(mp)
+		source.Free(mp)
+		if got := mp.CurrNB(); got != 0 {
+			t.Errorf("mpool retains %d bytes after vector cleanup", got)
+		}
+	})
+
+	require.NoError(t, AppendFixed(source, int64(1), false, mp))
+	require.NoError(t, AppendFixedList(destination, make([]int64, 100), nil, mp))
+	require.False(t, source.HasPrepareParamKind())
+	require.False(t, destination.HasPrepareParamKind())
+
+	before := mp.CurrNB()
+	require.NoError(t, destination.Copy(source, 50, 0, mp))
+	require.Equal(t, int64(0), mp.CurrNB()-before,
+		"copying ordinary metadata must not materialize a row sidecar")
+	require.True(t, destination.HasPrepareParamKind())
+	require.Equal(t, PrepareParamNone, destination.GetPrepareParamKind())
+	require.Nil(t, destination.GetPrepareParamKinds())
+	require.Equal(t, PrepareParamNone, destination.GetPrepareParamKindAt(0))
+	require.Equal(t, PrepareParamNone, destination.GetPrepareParamKindAt(50))
+}
+
+func TestCopyPrepareParamKindMaterializesOnlyDivergence(t *testing.T) {
+	newVector := func(t *testing.T, mp *mpool.MPool, rows int) *Vector {
+		t.Helper()
+		vec := NewVec(types.T_int64.ToType())
+		require.NoError(t, AppendFixedList(vec, make([]int64, rows), nil, mp))
+		return vec
+	}
+
+	t.Run("scalar none and non-none", func(t *testing.T) {
+		mp := mpool.MustNewZero()
+		source := newVector(t, mp, 1)
+		destination := newVector(t, mp, 2)
+		t.Cleanup(func() {
+			destination.Free(mp)
+			source.Free(mp)
+		})
+		source.SetPrepareParamKind(PrepareParamFloat)
+		destination.SetPrepareParamKind(PrepareParamNone)
+
+		require.NoError(t, destination.Copy(source, 1, 0, mp))
+		require.Equal(t, []PrepareParamKind{
+			PrepareParamNone,
+			PrepareParamFloat,
+		}, destination.GetPrepareParamKinds())
+	})
+
+	t.Run("scalar non-none and none", func(t *testing.T) {
+		mp := mpool.MustNewZero()
+		source := newVector(t, mp, 1)
+		destination := newVector(t, mp, 2)
+		t.Cleanup(func() {
+			destination.Free(mp)
+			source.Free(mp)
+		})
+		destination.SetPrepareParamKind(PrepareParamFloat)
+
+		require.NoError(t, destination.Copy(source, 1, 0, mp))
+		require.Equal(t, []PrepareParamKind{
+			PrepareParamFloat,
+			PrepareParamNone,
+		}, destination.GetPrepareParamKinds())
+	})
+
+	t.Run("existing sidecar", func(t *testing.T) {
+		mp := mpool.MustNewZero()
+		source := newVector(t, mp, 1)
+		destination := newVector(t, mp, 3)
+		t.Cleanup(func() {
+			destination.Free(mp)
+			source.Free(mp)
+		})
+		source.SetPrepareParamKind(PrepareParamBoolean)
+		require.NoError(t, destination.SetPrepareParamKindsWithMP([]PrepareParamKind{
+			PrepareParamInteger,
+			PrepareParamFloat,
+			PrepareParamDecimal,
+		}, mp))
+		before := mp.CurrNB()
+
+		require.NoError(t, destination.Copy(source, 1, 0, mp))
+		require.Equal(t, before, mp.CurrNB())
+		require.Equal(t, []PrepareParamKind{
+			PrepareParamInteger,
+			PrepareParamBoolean,
+			PrepareParamDecimal,
+		}, destination.GetPrepareParamKinds())
+	})
+}
+
+func TestPrepareParamKindPerRowMaterialization(t *testing.T) {
+	mp := mpool.MustNewZero()
+	source := NewVec(types.T_text.ToType())
+	require.NoError(t, AppendBytes(source, []byte("5"), false, mp))
+	require.NoError(t, AppendBytes(source, []byte("5"), false, mp))
+	source.SetPrepareParamKinds([]PrepareParamKind{PrepareParamInteger, PrepareParamNone})
+	require.Equal(t, PrepareParamNone, source.GetPrepareParamKind())
+	require.Equal(t, PrepareParamInteger, source.GetPrepareParamKindAt(0))
+	require.Equal(t, PrepareParamNone, source.GetPrepareParamKindAt(1))
+
+	dst := NewVec(types.T_text.ToType())
+	require.NoError(t, dst.Union(source, []int64{1, 0}, mp))
+	require.Equal(t, PrepareParamNone, dst.GetPrepareParamKind())
+	require.Equal(t, PrepareParamNone, dst.GetPrepareParamKindAt(0))
+	require.Equal(t, PrepareParamInteger, dst.GetPrepareParamKindAt(1))
+
+	clone, err := dst.CloneToFlatCompact(mp)
+	require.NoError(t, err)
+	require.Equal(t, PrepareParamNone, clone.GetPrepareParamKind())
+	require.Equal(t, PrepareParamNone, clone.GetPrepareParamKindAt(0))
+	require.Equal(t, PrepareParamInteger, clone.GetPrepareParamKindAt(1))
+	clone.Free(mp)
+
+	resized := NewVec(types.T_text.ToType())
+	require.NoError(t, resized.PreExtend(3, mp))
+	resized.SetLength(3)
+	resized.SetAllNulls(3)
+	require.NoError(t, resized.Copy(source, 2, 0, mp))
+	require.NoError(t, resized.Copy(source, 0, 1, mp))
+	require.Equal(t, PrepareParamInteger, resized.GetPrepareParamKindAt(2))
+	require.Equal(t, PrepareParamNone, resized.GetPrepareParamKindAt(0))
+	resized.Free(mp)
+	dst.Free(mp)
+	source.Free(mp)
+}
+
+func makePrepareParamKindReaderVector(t *testing.T, mp *mpool.MPool, rows int) *Vector {
+	t.Helper()
+	vec := NewVec(types.T_int8.ToType())
+	values := make([]int8, rows)
+	for i := range values {
+		values[i] = int8(i + 1)
+	}
+	require.NoError(t, AppendFixedList(vec, values, nil, mp))
+	return vec
+}
+
+func kindsToBytes(kinds []PrepareParamKind) []byte {
+	data := make([]byte, len(kinds))
+	for i, kind := range kinds {
+		data[i] = byte(kind)
+	}
+	return data
+}
+
+// unexpectedEOFReader models a transport that has delivered a partial
+// payload and reports the truncation on the next read. bytes.Reader returns
+// io.EOF when that next read has no bytes, which is a distinct failure mode.
+type unexpectedEOFReader struct {
+	reader *bytes.Reader
+}
+
+func (r *unexpectedEOFReader) Read(p []byte) (int, error) {
+	if r.reader.Len() == 0 {
+		return 0, io.ErrUnexpectedEOF
+	}
+	return r.reader.Read(p)
+}
+
+func TestSetPrepareParamKindsFromReaderCollapsesUniformAndNullRows(t *testing.T) {
+	tests := []struct {
+		name        string
+		kinds       []PrepareParamKind
+		nullRows    []uint64
+		wantKind    PrepareParamKind
+		wantSeen    bool
+		wantSidecar bool
+	}{
+		{
+			name:        "mixed",
+			kinds:       []PrepareParamKind{PrepareParamInteger, PrepareParamFloat, PrepareParamNone},
+			wantKind:    PrepareParamNone,
+			wantSeen:    true,
+			wantSidecar: true,
+		},
+		{
+			name:     "uniform",
+			kinds:    []PrepareParamKind{PrepareParamDecimal, PrepareParamDecimal, PrepareParamDecimal},
+			wantKind: PrepareParamDecimal,
+			wantSeen: true,
+		},
+		{
+			name:     "all-null",
+			kinds:    []PrepareParamKind{PrepareParamBoolean, PrepareParamInteger, PrepareParamFloat},
+			nullRows: []uint64{0, 1, 2},
+			wantKind: PrepareParamNone,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			vec := makePrepareParamKindReaderVector(t, mp, len(tc.kinds))
+			defer vec.Free(mp)
+			for _, row := range tc.nullRows {
+				vec.GetNulls().Add(row)
+			}
+			before := mp.CurrNB()
+
+			err := vec.SetPrepareParamKindsFromReader(
+				bytes.NewReader(kindsToBytes(tc.kinds)), len(tc.kinds), mp)
+			require.NoError(t, err)
+			require.Equal(t, tc.wantKind, vec.GetPrepareParamKind())
+			require.Equal(t, tc.wantSeen, vec.prepareParamKindSeen)
+			if tc.wantSidecar {
+				require.Equal(t, tc.kinds, vec.GetPrepareParamKinds())
+				require.Greater(t, mp.CurrNB(), before)
+			} else {
+				require.Nil(t, vec.GetPrepareParamKinds())
+				require.Equal(t, before, mp.CurrNB(),
+					"uniform/all-null metadata must release its temporary sidecar")
+			}
+		})
+	}
+}
+
+func TestSetPrepareParamKindsFromReaderErrorsReleaseTemporarySidecar(t *testing.T) {
+	tests := []struct {
+		name       string
+		reader     io.Reader
+		rowCount   int
+		wantErr    error
+		wantString string
+	}{
+		{
+			name:     "nil reader",
+			rowCount: 2,
+			wantErr:  io.ErrClosedPipe,
+		},
+		{
+			name:       "row count mismatch",
+			reader:     bytes.NewReader([]byte{byte(PrepareParamFloat)}),
+			rowCount:   1,
+			wantString: "row count 1 does not match vector length 2",
+		},
+		{
+			name:     "no-byte EOF",
+			reader:   bytes.NewReader(nil),
+			rowCount: 2,
+			wantErr:  io.EOF,
+		},
+		{
+			name: "partial-read unexpected EOF",
+			reader: &unexpectedEOFReader{
+				reader: bytes.NewReader([]byte{byte(PrepareParamFloat)}),
+			},
+			rowCount: 2,
+			wantErr:  io.ErrUnexpectedEOF,
+		},
+		{
+			name:       "invalid kind",
+			reader:     bytes.NewReader([]byte{byte(PrepareParamFloat), 0xff}),
+			rowCount:   2,
+			wantString: "invalid prepared parameter row kind 255",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			vec := makePrepareParamKindReaderVector(t, mp, 2)
+			before := mp.CurrNB()
+			err := vec.SetPrepareParamKindsFromReader(tc.reader, tc.rowCount, mp)
+			if tc.wantErr != nil {
+				require.ErrorIs(t, err, tc.wantErr)
+			} else {
+				require.ErrorContains(t, err, tc.wantString)
+			}
+			require.Equal(t, before, mp.CurrNB(),
+				"failed metadata generation must release its temporary allocation")
+			require.Nil(t, vec.GetPrepareParamKinds())
+			require.Equal(t, PrepareParamNone, vec.GetPrepareParamKind())
+			vec.Free(mp)
+			require.Zero(t, mp.CurrNB())
+		})
+	}
+}
+
+func TestSetPrepareParamKindsFromReaderFailedGenerationCanReuse(t *testing.T) {
+	mp := mpool.MustNewZero()
+	vec := makePrepareParamKindReaderVector(t, mp, 2)
+	defer vec.Free(mp)
+	before := mp.CurrNB()
+
+	err := vec.SetPrepareParamKindsFromReader(
+		&unexpectedEOFReader{
+			reader: bytes.NewReader([]byte{byte(PrepareParamInteger)}),
+		}, 2, mp)
+	require.ErrorIs(t, err, io.ErrUnexpectedEOF)
+	require.Equal(t, before, mp.CurrNB())
+
+	require.NoError(t, vec.SetPrepareParamKindsFromReader(
+		bytes.NewReader(kindsToBytes([]PrepareParamKind{PrepareParamInteger, PrepareParamFloat})),
+		2, mp))
+	require.Equal(t, []PrepareParamKind{PrepareParamInteger, PrepareParamFloat}, vec.GetPrepareParamKinds())
+	require.True(t, vec.prepareParamKindSeen)
+
+	require.NoError(t, vec.SetPrepareParamKindsFromReader(
+		bytes.NewReader(kindsToBytes([]PrepareParamKind{PrepareParamDecimal, PrepareParamDecimal})),
+		2, mp))
+	require.Nil(t, vec.GetPrepareParamKinds())
+	require.Equal(t, PrepareParamDecimal, vec.GetPrepareParamKind())
+	require.Equal(t, before, mp.CurrNB(),
+		"reuse must release the failed generation and collapsed sidecar")
+}
+
+func TestPrepareParamKindReordersWithoutSidecarAllocation(t *testing.T) {
+	mp := mpool.MustNewZero()
+	makeVector := func() *Vector {
+		v := NewVec(types.T_text.ToType())
+		for _, value := range []string{"1", "2", "3", "4"} {
+			require.NoError(t, AppendBytes(v, []byte(value), false, mp))
+		}
+		require.NoError(t, v.SetPrepareParamKindsWithMP([]PrepareParamKind{
+			PrepareParamInteger,
+			PrepareParamFloat,
+			PrepareParamNone,
+			PrepareParamDecimal,
+		}, mp))
+		return v
+	}
+
+	vec := makeVector()
+	before := mp.CurrNB()
+	vec.Shrink([]int64{1, 3}, false)
+	require.Equal(t, before, mp.CurrNB(), "ordered shrink must reuse the sidecar")
+	require.Equal(t, PrepareParamFloat, vec.GetPrepareParamKindAt(0))
+	require.Equal(t, PrepareParamDecimal, vec.GetPrepareParamKindAt(1))
+	vec.Free(mp)
+
+	vec = makeVector()
+	before = mp.CurrNB()
+	var mask bitmap.Bitmap
+	mask.InitWithSize(2)
+	mask.AddMany([]uint64{0, 1})
+	vec.ShrinkByMask(&mask, false, 1)
+	require.Equal(t, before, mp.CurrNB(), "mask shrink must reuse the sidecar")
+	require.Equal(t, PrepareParamFloat, vec.GetPrepareParamKindAt(0))
+	require.Equal(t, PrepareParamNone, vec.GetPrepareParamKindAt(1))
+	vec.Free(mp)
+
+	vec = makeVector()
+	before = mp.CurrNB()
+	require.NoError(t, vec.Shuffle([]int64{3, 1, 3}, mp))
+	require.Equal(t, before, mp.CurrNB(), "shuffle must not allocate a replacement sidecar")
+	require.Equal(t, PrepareParamDecimal, vec.GetPrepareParamKindAt(0))
+	require.Equal(t, PrepareParamFloat, vec.GetPrepareParamKindAt(1))
+	require.Equal(t, PrepareParamDecimal, vec.GetPrepareParamKindAt(2))
+	var scratch []byte
+	require.NoError(t, vec.ShuffleWithBuf([]int64{1, 0, 1}, mp, &scratch))
+	require.Equal(t, []PrepareParamKind{
+		PrepareParamFloat,
+		PrepareParamDecimal,
+		PrepareParamFloat,
+	}, []PrepareParamKind{
+		vec.GetPrepareParamKindAt(0),
+		vec.GetPrepareParamKindAt(1),
+		vec.GetPrepareParamKindAt(2),
+	})
+	vec.Free(mp)
+
+	vec = makeVector()
+	require.NoError(t, vec.Shuffle([]int64{3, 1, 0, 3, 2}, mp))
+	require.Equal(t, []PrepareParamKind{
+		PrepareParamDecimal,
+		PrepareParamFloat,
+		PrepareParamInteger,
+		PrepareParamDecimal,
+		PrepareParamNone,
+	}, vec.GetPrepareParamKinds())
+	vec.Free(mp)
+	require.Zero(t, mp.CurrNB())
+}
+
+func TestConstSetFunctionCopiesSelectedPrepareParamKind(t *testing.T) {
+	mp := mpool.MustNewZero()
+	source := NewVec(types.T_text.ToType())
+	require.NoError(t, AppendBytes(source, []byte("5"), false, mp))
+	require.NoError(t, AppendBytes(source, []byte("5"), false, mp))
+	require.NoError(t, source.SetPrepareParamKindsWithMP(
+		[]PrepareParamKind{PrepareParamInteger, PrepareParamFloat}, mp))
+	destination := NewVec(types.T_text.ToType())
+	set := GetConstSetFunction(types.T_text.ToType(), mp)
+	require.NoError(t, set(destination, source, 1, 3))
+	require.Equal(t, PrepareParamFloat, destination.GetPrepareParamKindAt(0))
+	require.Equal(t, PrepareParamFloat, destination.GetPrepareParamKindAt(2))
+
+	nullSource := NewVec(types.T_text.ToType())
+	require.NoError(t, AppendBytes(nullSource, nil, true, mp))
+	require.NoError(t, set(destination, nullSource, 0, 2))
+	require.False(t, destination.HasPrepareParamKind())
+
+	destination.Free(mp)
+	nullSource.Free(mp)
+	source.Free(mp)
+	require.Zero(t, mp.CurrNB())
+}
+
+func TestPrepareParamKindCheckpointRollbackRetainsSidecarOwnership(t *testing.T) {
+	mp := mpool.MustNewZero()
+	vec := NewVec(types.T_text.ToType())
+	require.NoError(t, AppendBytes(vec, []byte("5"), false, mp))
+	require.NoError(t, AppendBytes(vec, []byte("text"), false, mp))
+	require.NoError(t, vec.SetPrepareParamKindsWithMP(
+		[]PrepareParamKind{PrepareParamInteger, PrepareParamNone}, mp))
+	before := mp.CurrNB()
+	checkpoint := vec.MakeAppendCheckpoint()
+	ordinary := NewVec(types.T_text.ToType())
+	require.NoError(t, AppendBytes(ordinary, []byte("later"), false, mp))
+	require.NoError(t, vec.UnionOne(ordinary, 0, mp))
+	afterAppend := mp.CurrNB()
+	vec.RollbackAppend(checkpoint, 1)
+	require.Equal(t, PrepareParamInteger, vec.GetPrepareParamKindAt(0))
+	require.Equal(t, PrepareParamNone, vec.GetPrepareParamKindAt(1))
+	require.GreaterOrEqual(t, afterAppend, before)
+	require.Equal(t, afterAppend, mp.CurrNB(),
+		"rollback should retain admitted sidecar capacity for reuse")
+	ordinary.Free(mp)
+	vec.Free(mp)
+	require.Equal(t, int64(0), mp.CurrNB())
+}
+
+func TestPrepareParamKindCheckpointDoesNotCopySidecar(t *testing.T) {
+	mp := mpool.MustNewZero()
+	vec := NewVec(types.T_text.ToType())
+	require.NoError(t, AppendBytesList(
+		vec, [][]byte{[]byte("5"), []byte("text")}, nil, mp))
+	require.NoError(t, vec.SetPrepareParamKindsWithMP(
+		[]PrepareParamKind{PrepareParamInteger, PrepareParamNone}, mp))
+
+	require.Zero(t, testing.AllocsPerRun(100, func() {
+		_ = vec.MakeAppendCheckpoint()
+	}))
+
+	vec.Free(mp)
+	require.Zero(t, mp.CurrNB())
+}
+
+func TestPrepareParamKindMetadataBoundaryLifecycle(t *testing.T) {
+	var nilVec *Vector
+	require.False(t, nilVec.HasPrepareParamKind())
+	require.Equal(t, PrepareParamNone, nilVec.GetPrepareParamKindAt(0))
+	require.NoError(t, nilVec.SetPrepareParamKindAtWithMP(0, PrepareParamInteger, nil))
+	require.NoError(t, nilVec.CopyPrepareParamMetadataToWithMP(nil, nil))
+
+	mp := mpool.MustNewZero()
+	vec := NewVec(types.T_int64.ToType())
+	defer func() {
+		vec.Free(mp)
+		require.Zero(t, mp.CurrNB())
+	}()
+	require.NoError(t, AppendFixedList(vec, []int64{1, 2, 3}, nil, mp))
+
+	// Invalid and empty inputs leave the existing scalar representation intact
+	// while a length mismatch is rejected before touching metadata.
+	vec.SetPrepareParamKind(PrepareParamFloat)
+	require.ErrorContains(t, vec.SetPrepareParamKindsWithMP([]PrepareParamKind{PrepareParamInteger}, mp), "row count")
+	require.NoError(t, vec.SetPrepareParamKindsWithMP(nil, mp))
+	require.False(t, vec.HasPrepareParamKind())
+
+	// Uniform and all-NULL rows stay on the scalar fast path; a real conflict
+	// promotes exactly once to the owned sidecar.
+	require.NoError(t, vec.SetPrepareParamKindsWithMP(
+		[]PrepareParamKind{PrepareParamInteger, PrepareParamInteger, PrepareParamInteger}, mp))
+	require.Equal(t, PrepareParamInteger, vec.GetPrepareParamKind())
+	require.Nil(t, vec.GetPrepareParamKinds())
+	for row := uint64(0); row < 3; row++ {
+		vec.GetNulls().Add(row)
+	}
+	require.NoError(t, vec.SetPrepareParamKindsWithMP(
+		[]PrepareParamKind{PrepareParamFloat, PrepareParamDecimal, PrepareParamBoolean}, mp))
+	require.False(t, vec.HasPrepareParamKind())
+	require.Nil(t, vec.GetPrepareParamKinds())
+	vec.GetNulls().Clear()
+	require.NoError(t, vec.SetPrepareParamKindsWithMP(
+		[]PrepareParamKind{PrepareParamInteger, PrepareParamFloat, PrepareParamDecimal}, mp))
+	require.Len(t, vec.GetPrepareParamKinds(), 3)
+
+	// Sidecar resize exercises both in-capacity clearing and owner-preserving
+	// growth. A NULL write clears one row and all-NULL resets the sidecar.
+	vec.SetLength(2)
+	require.Len(t, vec.GetPrepareParamKinds(), 2)
+	vec.SetLength(6)
+	require.Len(t, vec.GetPrepareParamKinds(), 6)
+	vec.SetPrepareParamKindAt(-1, PrepareParamBoolean)
+	vec.SetPrepareParamKindAt(99, PrepareParamBoolean)
+	vec.GetNulls().Add(0)
+	require.NoError(t, vec.SetPrepareParamKindAtWithMP(0, PrepareParamBoolean, mp))
+	vec.SetAllNulls(vec.Length())
+	require.False(t, vec.HasPrepareParamKind())
+	require.Nil(t, vec.GetPrepareParamKinds())
+
+	// Reader zero-row input and scalar row updates are no-op/reset boundaries.
+	zero := NewVec(types.T_int8.ToType())
+	require.NoError(t, zero.SetPrepareParamKindsFromReader(bytes.NewReader(nil), 0, mp))
+	zero.Free(mp)
+	vec.SetNulls(nil)
+	vec.SetLength(3)
+	vec.SetPrepareParamKindAt(0, PrepareParamDecimal)
+	require.Equal(t, PrepareParamDecimal, vec.GetPrepareParamKindAt(0))
+	require.Equal(t, PrepareParamNone, vec.GetPrepareParamKindAt(-1))
+	require.Equal(t, PrepareParamNone, vec.GetPrepareParamKindAt(vec.Length()))
+}
+
+func TestAppendPrepareParamKindsContinueAfterDivergence(t *testing.T) {
+	mp := mpool.MustNewZero()
+	source := NewVec(types.T_int64.ToType())
+	destination := NewVec(types.T_int64.ToType())
+	batchDestination := NewVec(types.T_int64.ToType())
+	allDestination := NewVec(types.T_int64.ToType())
+	defer func() {
+		source.Free(mp)
+		destination.Free(mp)
+		batchDestination.Free(mp)
+		allDestination.Free(mp)
+		require.Zero(t, mp.CurrNB())
+	}()
+
+	require.NoError(t, AppendFixedList(source, []int64{1, 2, 3, 4}, nil, mp))
+	want := []PrepareParamKind{
+		PrepareParamInteger,
+		PrepareParamFloat,
+		PrepareParamDecimal,
+		PrepareParamBoolean,
+	}
+	require.NoError(t, source.SetPrepareParamKindsWithMP(want, mp))
+
+	for row := range want {
+		require.NoError(t, destination.UnionOne(source, int64(row), mp))
+	}
+	require.Len(t, destination.GetPrepareParamKinds(), destination.Length())
+	for row, kind := range want {
+		require.Equal(t, kind, destination.GetPrepareParamKindAt(row))
+	}
+
+	// Once the exact representation exists, a raw ordinary append must extend
+	// the sidecar and initialize the new row to None.
+	require.NoError(t, AppendFixed(destination, int64(5), false, mp))
+	require.Len(t, destination.GetPrepareParamKinds(), destination.Length())
+	require.Equal(t, PrepareParamNone, destination.GetPrepareParamKindAt(4))
+
+	// Batch and whole-vector appends share the same row-parallel growth
+	// boundary. Split each operation after the first divergence so the second
+	// call must extend and populate an existing sidecar.
+	require.NoError(t, batchDestination.UnionBatch(source, 0, 2, nil, mp))
+	require.NoError(t, batchDestination.UnionBatch(source, 2, 2, nil, mp))
+	for row, kind := range want {
+		require.Equal(t, kind, batchDestination.GetPrepareParamKindAt(row))
+	}
+	require.Len(t, batchDestination.GetPrepareParamKinds(), batchDestination.Length())
+
+	first, err := source.Window(0, 2)
+	require.NoError(t, err)
+	defer first.Free(mp)
+	second, err := source.Window(2, 4)
+	require.NoError(t, err)
+	defer second.Free(mp)
+	unionAll := GetUnionAllFunction(types.T_int64.ToType(), mp)
+	require.NoError(t, unionAll(allDestination, first))
+	require.NoError(t, unionAll(allDestination, second))
+	for row, kind := range want {
+		require.Equal(t, kind, allDestination.GetPrepareParamKindAt(row))
+	}
+	require.Len(t, allDestination.GetPrepareParamKinds(), allDestination.Length())
+}
+
+func TestRawAppendOrdinaryRowsDivergeFromScalarPrepareParamKind(t *testing.T) {
+	jsonValue, err := bytejson.ParseFromString(`{"value":"ordinary"}`)
+	require.NoError(t, err)
+	tests := []struct {
+		name       string
+		typ        types.Type
+		seed       func(*Vector, *mpool.MPool) error
+		appendRows func(*Vector, *mpool.MPool) error
+		wantNull   map[int]bool
+	}{
+		{
+			name: "fixed one",
+			typ:  types.T_int64.ToType(),
+			seed: func(vec *Vector, mp *mpool.MPool) error {
+				return AppendFixed(vec, int64(1), false, mp)
+			},
+			appendRows: func(vec *Vector, mp *mpool.MPool) error {
+				return AppendFixed(vec, int64(2), false, mp)
+			},
+		},
+		{
+			name: "fixed multi",
+			typ:  types.T_int64.ToType(),
+			seed: func(vec *Vector, mp *mpool.MPool) error {
+				return AppendFixed(vec, int64(1), false, mp)
+			},
+			appendRows: func(vec *Vector, mp *mpool.MPool) error {
+				return AppendMultiFixed(vec, int64(2), false, 2, mp)
+			},
+		},
+		{
+			name: "fixed list with null",
+			typ:  types.T_int64.ToType(),
+			seed: func(vec *Vector, mp *mpool.MPool) error {
+				return AppendFixed(vec, int64(1), false, mp)
+			},
+			appendRows: func(vec *Vector, mp *mpool.MPool) error {
+				return AppendFixedList(vec, []int64{2, 3}, []bool{true, false}, mp)
+			},
+			wantNull: map[int]bool{1: true},
+		},
+		{
+			name: "bytes one",
+			typ:  types.T_varchar.ToType(),
+			seed: func(vec *Vector, mp *mpool.MPool) error {
+				return AppendBytes(vec, []byte("seed"), false, mp)
+			},
+			appendRows: func(vec *Vector, mp *mpool.MPool) error {
+				return AppendBytes(vec, []byte("ordinary"), false, mp)
+			},
+		},
+		{
+			name: "bytes multi",
+			typ:  types.T_varchar.ToType(),
+			seed: func(vec *Vector, mp *mpool.MPool) error {
+				return AppendBytes(vec, []byte("seed"), false, mp)
+			},
+			appendRows: func(vec *Vector, mp *mpool.MPool) error {
+				return AppendMultiBytes(vec, []byte("ordinary"), false, 2, mp)
+			},
+		},
+		{
+			name: "bytes list with null",
+			typ:  types.T_varchar.ToType(),
+			seed: func(vec *Vector, mp *mpool.MPool) error {
+				return AppendBytes(vec, []byte("seed"), false, mp)
+			},
+			appendRows: func(vec *Vector, mp *mpool.MPool) error {
+				return AppendBytesList(vec, [][]byte{nil, []byte("ordinary")}, []bool{true, false}, mp)
+			},
+			wantNull: map[int]bool{1: true},
+		},
+		{
+			name: "string list",
+			typ:  types.T_varchar.ToType(),
+			seed: func(vec *Vector, mp *mpool.MPool) error {
+				return AppendBytes(vec, []byte("seed"), false, mp)
+			},
+			appendRows: func(vec *Vector, mp *mpool.MPool) error {
+				return AppendStringList(vec, []string{"ordinary", "ordinary"}, nil, mp)
+			},
+		},
+		{
+			name: "bytejson one",
+			typ:  types.T_json.ToType(),
+			seed: func(vec *Vector, mp *mpool.MPool) error {
+				return AppendByteJson(vec, jsonValue, false, mp)
+			},
+			appendRows: func(vec *Vector, mp *mpool.MPool) error {
+				return AppendByteJson(vec, jsonValue, false, mp)
+			},
+		},
+		{
+			name: "bytejson encoded",
+			typ:  types.T_json.ToType(),
+			seed: func(vec *Vector, mp *mpool.MPool) error {
+				return AppendByteJson(vec, jsonValue, false, mp)
+			},
+			appendRows: func(vec *Vector, mp *mpool.MPool) error {
+				return AppendByteJsonEncoded(vec, testByteJsonEncoder{value: jsonValue}, mp)
+			},
+		},
+		{
+			name: "array one",
+			typ:  types.New(types.T_array_float32, 3, 0),
+			seed: func(vec *Vector, mp *mpool.MPool) error {
+				return AppendArray(vec, []float32{1, 2, 3}, false, mp)
+			},
+			appendRows: func(vec *Vector, mp *mpool.MPool) error {
+				return AppendArray(vec, []float32{4, 5, 6}, false, mp)
+			},
+		},
+		{
+			name: "array list",
+			typ:  types.New(types.T_array_float32, 3, 0),
+			seed: func(vec *Vector, mp *mpool.MPool) error {
+				return AppendArray(vec, []float32{1, 2, 3}, false, mp)
+			},
+			appendRows: func(vec *Vector, mp *mpool.MPool) error {
+				return AppendArrayList(vec, [][]float32{{4, 5, 6}, {7, 8, 9}}, nil, mp)
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			mp := mpool.MustNew(t.Name())
+			vec := NewVec(test.typ)
+			t.Cleanup(func() {
+				vec.Free(mp)
+				require.Zero(t, mp.CurrNB())
+			})
+			require.NoError(t, test.seed(vec, mp))
+			vec.SetPrepareParamKind(PrepareParamFloat)
+			require.NoError(t, test.appendRows(vec, mp))
+
+			require.Equal(t, PrepareParamFloat, vec.GetPrepareParamKindAt(0))
+			require.Len(t, vec.GetPrepareParamKinds(), vec.Length())
+			for row := 1; row < vec.Length(); row++ {
+				require.Equal(t, PrepareParamNone, vec.GetPrepareParamKindAt(row))
+				require.Equal(t, test.wantNull[row], vec.IsNull(uint64(row)))
+			}
+		})
+	}
+}
+
+func TestRawAppendPrepareParamKindFastPathsDoNotAllocate(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		kind      PrepareParamKind
+		isNull    bool
+		wantKind  PrepareParamKind
+		wantSeen  bool
+		wantNulls bool
+	}{
+		{name: "unobserved ordinary", wantKind: PrepareParamNone},
+		{name: "observed ordinary", kind: PrepareParamNone, wantKind: PrepareParamNone, wantSeen: true},
+		{name: "prepared null", kind: PrepareParamFloat, isNull: true, wantKind: PrepareParamFloat, wantSeen: true, wantNulls: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			mp := mpool.MustNew(t.Name())
+			vec := NewVec(types.T_int64.ToType())
+			t.Cleanup(func() {
+				vec.Free(mp)
+				require.Zero(t, mp.CurrNB())
+			})
+			require.NoError(t, vec.PreExtend(2, mp))
+			require.NoError(t, AppendFixed(vec, int64(1), false, mp))
+			if test.wantSeen {
+				vec.SetPrepareParamKind(test.kind)
+			}
+			before := mp.CurrNB()
+			require.NoError(t, AppendFixed(vec, int64(2), test.isNull, mp))
+			require.Equal(t, before, mp.CurrNB())
+			require.Nil(t, vec.GetPrepareParamKinds())
+			require.Equal(t, test.wantKind, vec.GetPrepareParamKindAt(0))
+			require.Equal(t, test.wantNulls, vec.IsNull(1))
+		})
+	}
+}
+
+func TestRawAppendPrepareParamKindOwnerlessPrefixStaysScalar(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		seed func(*Vector, *mpool.MPool) error
+	}{
+		{name: "empty"},
+		{
+			name: "all null",
+			seed: func(vec *Vector, mp *mpool.MPool) error {
+				return AppendFixed(vec, int64(0), true, mp)
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			mp := mpool.MustNew(t.Name())
+			vec := NewVec(types.T_int64.ToType())
+			t.Cleanup(func() {
+				vec.Free(mp)
+				require.Zero(t, mp.CurrNB())
+			})
+			require.NoError(t, vec.PreExtend(2, mp))
+			if test.seed != nil {
+				require.NoError(t, test.seed(vec, mp))
+			}
+			vec.SetPrepareParamKind(PrepareParamFloat)
+			before := mp.CurrNB()
+			require.NoError(t, AppendFixed(vec, int64(1), false, mp))
+
+			require.Equal(t, before, mp.CurrNB())
+			require.Nil(t, vec.GetPrepareParamKinds())
+			require.False(t, vec.HasPrepareParamKind())
+			require.Equal(t, PrepareParamNone, vec.GetPrepareParamKindAt(vec.Length()-1))
+		})
+	}
+}
+
+func TestRawAppendPrepareParamKindOOMDoesNotPublishRow(t *testing.T) {
+	const poolCap = int64(1 << 20)
+	mp, err := mpool.NewMPool(t.Name(), poolCap, mpool.NoLock)
+	require.NoError(t, err)
+	defer mpool.DeleteMPool(mp)
+
+	vec := NewVec(types.T_int64.ToType())
+	require.NoError(t, vec.PreExtend(2, mp))
+	require.NoError(t, AppendFixed(vec, int64(1), false, mp))
+	vec.SetPrepareParamKind(PrepareParamFloat)
+	fill, err := mp.Alloc(int(poolCap-mp.CurrNB()), true)
+	require.NoError(t, err)
+	defer func() {
+		mp.Free(fill)
+		vec.Free(mp)
+		require.Zero(t, mp.CurrNB())
+	}()
+
+	err = AppendFixed(vec, int64(2), false, mp)
+	require.Error(t, err)
+	require.Equal(t, 1, vec.Length())
+	require.Equal(t, PrepareParamFloat, vec.GetPrepareParamKindAt(0))
+	require.Nil(t, vec.GetPrepareParamKinds())
+
+	mp.Free(fill)
+	fill = nil
+	require.NoError(t, AppendFixed(vec, int64(2), false, mp))
+	require.Equal(t, 2, vec.Length())
+	require.Equal(t, PrepareParamFloat, vec.GetPrepareParamKindAt(0))
+	require.Equal(t, PrepareParamNone, vec.GetPrepareParamKindAt(1))
+}
+
+func TestRawAppendPrepareParamKindRollbackRestoresScalar(t *testing.T) {
+	mp := mpool.MustNew(t.Name())
+	vec := NewVec(types.T_int64.ToType())
+	defer func() {
+		vec.Free(mp)
+		require.Zero(t, mp.CurrNB())
+	}()
+	require.NoError(t, vec.PreExtend(2, mp))
+	require.NoError(t, AppendFixed(vec, int64(1), false, mp))
+	vec.SetPrepareParamKind(PrepareParamFloat)
+	before := mp.CurrNB()
+	checkpoint := vec.MakeAppendCheckpoint()
+
+	require.NoError(t, AppendFixed(vec, int64(2), false, mp))
+	require.NotNil(t, vec.GetPrepareParamKinds())
+	vec.RollbackAppend(checkpoint, 1)
+
+	require.Equal(t, 1, vec.Length())
+	require.Nil(t, vec.GetPrepareParamKinds())
+	require.Equal(t, PrepareParamFloat, vec.GetPrepareParamKindAt(0))
+	require.Equal(t, before, mp.CurrNB())
+}
+
+func TestPrepareParamKindWindowRetainsSidecarOnlyForDivergence(t *testing.T) {
+	mp := mpool.MustNewZero()
+	source := NewVec(types.T_int64.ToType())
+	require.NoError(t, AppendFixedList(source, []int64{1, 2, 3}, nil, mp))
+	source.GetNulls().Add(1)
+	require.NoError(t, source.SetPrepareParamKindsWithMP([]PrepareParamKind{
+		PrepareParamInteger,
+		PrepareParamFloat,
+		PrepareParamDecimal,
+	}, mp))
+	defer func() {
+		source.Free(mp)
+		require.Zero(t, mp.CurrNB())
+	}()
+
+	uniform, err := source.Window(0, 1)
+	require.NoError(t, err)
+	require.Nil(t, uniform.GetPrepareParamKinds())
+	require.Equal(t, PrepareParamInteger, uniform.GetPrepareParamKind())
+	uniform.Free(mp)
+
+	nullOnly, err := source.Window(1, 2)
+	require.NoError(t, err)
+	require.Nil(t, nullOnly.GetPrepareParamKinds())
+	require.False(t, nullOnly.HasPrepareParamKind())
+	nullOnly.Free(mp)
+
+	mixed, err := source.Window(0, 3)
+	require.NoError(t, err)
+	require.Len(t, mixed.GetPrepareParamKinds(), mixed.Length())
+	require.Equal(t, PrepareParamInteger, mixed.GetPrepareParamKindAt(0))
+	require.Equal(t, PrepareParamDecimal, mixed.GetPrepareParamKindAt(2))
+	mixed.Free(mp)
+}
+
+func BenchmarkUnionOnePrepareParamKindLateDivergence(b *testing.B) {
+	const rows = 16 * 1024
+	mp := mpool.MustNewZero()
+	source := NewVec(types.T_int64.ToType())
+	destination := NewVec(types.T_int64.ToType())
+	defer source.Free(mp)
+	defer destination.Free(mp)
+
+	values := make([]int64, rows)
+	require.NoError(b, AppendFixedList(source, values, nil, mp))
+	kinds := make([]PrepareParamKind, rows)
+	for row := range kinds {
+		kinds[row] = PrepareParamInteger
+	}
+	kinds[rows/2] = PrepareParamFloat
+	require.NoError(b, source.SetPrepareParamKindsWithMP(kinds, mp))
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for b.Loop() {
+		destination.ResetWithSameType()
+		for row := range rows {
+			if err := destination.UnionOne(source, int64(row), mp); err != nil {
+				b.Fatal(err)
+			}
+		}
+	}
+}
+
+func BenchmarkUnionBatchPrepareParamKind(b *testing.B) {
+	mp := mpool.MustNewZero()
+	source := NewVec(types.T_int64.ToType())
+	defer source.Free(mp)
+	for i := 0; i < 1024; i++ {
+		require.NoError(b, AppendFixed(source, int64(i), false, mp))
+	}
+	source.SetPrepareParamKind(PrepareParamFloat)
+	destination := NewVec(types.T_int64.ToType())
+	defer destination.Free(mp)
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		destination.ResetWithSameType()
+		if err := destination.UnionBatch(source, 0, source.Length(), nil, mp); err != nil {
+			b.Fatal(err)
+		}
+	}
 }
