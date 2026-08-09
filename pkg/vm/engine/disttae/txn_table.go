@@ -69,9 +69,10 @@ const (
 )
 
 // docfilter.MembershipFilter (producer view, with Share) must stay assignable to
-// engine.MembershipFilter (consumer view) so docfilter.New(...).Share() can be
-// stored in FilterHint.BF. This compile-time assertion locks that relationship
-// from a package that imports both, since docfilter cannot import engine.
+// engine.MembershipFilter (consumer view) so a reconstructed docfilter share
+// can be stored in FilterHint.BF. This compile-time assertion locks that
+// relationship from a package that imports both, since docfilter cannot import
+// engine.
 var _ engine.MembershipFilter = (docfilter.MembershipFilter)(nil)
 
 var traceFilterExprInterval atomic.Uint64
@@ -2404,49 +2405,30 @@ func (tbl *txnTable) BuildReaders(
 	def := tbl.GetTableDef(ctx)
 	shards := relData.Split(newNum)
 
-	// Reconstruct the doc_id filter from the tagged bytes. docfilter hides which
-	// structure (cbitmap / CRoaring / bloom) backs it; we just hand each reader
-	// a share and free the builder reference at the end.
-	var mainFilter docfilter.MembershipFilter
-	if len(filterHint.MembershipFilterBytes) > 0 {
-		f, ferr := docfilter.New(filterHint.MembershipFilterBytes)
-		if ferr != nil {
-			// A non-empty payload that fails to decode must NOT be silently
-			// dropped to a nil filter (which disables filtering and lets all rows
-			// through). Fail closed so the corruption surfaces instead of
-			// returning wrong results.
-			return nil, ferr
-		}
-		mainFilter = f
+	preparedHint, mainFilter, owned, err := prepareMembershipFilter(
+		filterHint,
+		docfilter.AdmissionForService(proc.GetService()),
+	)
+	if err != nil {
+		return nil, err
 	}
-
-	// On an error mid-loop we return nil (not rds), so the caller never gets the
-	// partially-built readers and can never Close them to drop their filter
-	// shares. Track every share we hand out and, on the error paths, free all of
-	// them plus the builder's own reference — otherwise the C filter's refcount
-	// never reaches 0 and it leaks for the process lifetime. On success the
-	// readers own their shares and drop them via reset(); we free only the
-	// builder reference.
-	var shares []docfilter.MembershipFilter
-	freeOnError := func() {
-		for _, s := range shares {
-			s.Free()
-		}
-		if mainFilter != nil {
-			mainFilter.Free()
-		}
+	if owned {
+		defer mainFilter.Free()
 	}
 
 	for i := 0; i < newNum; i++ {
-		hint := filterHint
+		hint := preparedHint
+		var readerFilter docfilter.MembershipFilter
 		if mainFilter != nil {
-			sh := mainFilter.Share()
-			shares = append(shares, sh)
-			hint.BF = sh
+			readerFilter = mainFilter.Share()
+			hint.BF = readerFilter
 		}
 		ds, err := tbl.buildLocalDataSource(ctx, txnOffset, shards[i], tombstonePolicy, engine.GeneralLocalDataSource)
 		if err != nil {
-			freeOnError()
+			if readerFilter != nil {
+				readerFilter.Free()
+			}
+			closeReaders(rds)
 			return nil, err
 		}
 		rd, err := readutil.NewReader(
@@ -2462,16 +2444,15 @@ func (tbl *txnTable) BuildReaders(
 			hint,
 		)
 		if err != nil {
-			freeOnError()
+			// NewReader consumes the current source and filter share on every
+			// return. Close only the readers that completed earlier iterations.
+			closeReaders(rds)
 			return nil, err
 		}
 
 		rds = append(rds, rd)
 	}
 
-	if mainFilter != nil {
-		mainFilter.Free()
-	}
 	return rds, nil
 }
 

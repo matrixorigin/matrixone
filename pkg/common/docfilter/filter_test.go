@@ -39,16 +39,16 @@ func TestBuildNewRoundTrip(t *testing.T) {
 	mp := mpool.MustNewZero()
 
 	t.Run("cbitmap-dense-int", func(t *testing.T) {
-		v := buildIntVec(t, mp, types.T_int64.ToType(), []int64{1, 2, 100, 4096}, nil)
+		v := buildIntVec(t, mp, types.T_int64.ToType(), []int64{1, 2, 3, 4}, nil)
 		defer v.Free(mp)
 		assertRoundTrip(t, v, TagCbitmap, true)
 	})
 
-	t.Run("croaring-sparse-int", func(t *testing.T) {
-		// max value exceeds MaxCbitmapBits -> cbitmap infeasible -> CRoaring.
+	t.Run("sorted64-sparse-int", func(t *testing.T) {
+		// The dense representation would cost more than 8 bytes per key.
 		v := buildIntVec(t, mp, types.T_int64.ToType(), []int64{1, int64(MaxCbitmapBits) + 5, 7}, nil)
 		defer v.Free(mp)
-		assertRoundTrip(t, v, TagCRoaring, true)
+		assertRoundTrip(t, v, TagSorted64, true)
 	})
 
 	t.Run("bloom-varchar", func(t *testing.T) {
@@ -56,6 +56,27 @@ func TestBuildNewRoundTrip(t *testing.T) {
 		defer v.Free(mp)
 		assertRoundTrip(t, v, TagBloom, false)
 	})
+}
+
+// TestTenMillionRangeUsesCostBoundedCbitmap covers the #26720 shape without
+// allocating the full 10M-key vector. At this cardinality the 10M-bit dense
+// representation is already cheaper than Sorted64, so the router must select
+// it and keep the payload near 1.25 MiB.
+func TestTenMillionRangeUsesCostBoundedCbitmap(t *testing.T) {
+	const cardinality = 160_000
+	values := make([]int64, cardinality)
+	for i := range values {
+		values[i] = int64(i) * 62
+	}
+	values[len(values)-1] = 9_999_999
+
+	mp := mpool.MustNewZero()
+	v := buildIntVec(t, mp, types.T_int64.ToType(), values, nil)
+	defer v.Free(mp)
+	payload, err := Build(v)
+	require.NoError(t, err)
+	require.Equal(t, TagCbitmap, payload[0])
+	require.LessOrEqual(t, len(payload), 2<<20)
 }
 
 // assertRoundTrip builds a filter from v, asserts the tag and exactness, and
@@ -106,10 +127,13 @@ func TestNewErrors(t *testing.T) {
 	require.Error(t, err)
 	_, err = New([]byte{TagCRoaring, 1, 2, 3})
 	require.Error(t, err)
+	_, err = New([]byte{TagSorted64, 1, 2, 3})
+	require.Error(t, err)
 }
 
 // TestCFilterBridge covers the cgo bridge methods (CHandle/CKind) on
-// MembershipFilter used by the usearch filtered search, for all three structures.
+// MembershipFilter used by the usearch filtered search, for every structure
+// produced by Build.
 func TestCFilterBridge(t *testing.T) {
 	mp := mpool.MustNewZero()
 
@@ -121,9 +145,9 @@ func TestCFilterBridge(t *testing.T) {
 		{"cbitmap", func() *vector.Vector {
 			return buildIntVec(t, mp, types.T_int64.ToType(), []int64{1, 2, 3}, nil)
 		}, TagCbitmap},
-		{"croaring", func() *vector.Vector {
+		{"sorted64", func() *vector.Vector {
 			return buildIntVec(t, mp, types.T_int64.ToType(), []int64{1, int64(MaxCbitmapBits) + 5}, nil)
-		}, TagCRoaring},
+		}, TagSorted64},
 		{"bloom", func() *vector.Vector {
 			return buildVarcharVec(t, mp, []string{"a", "b"})
 		}, TagBloom},
@@ -163,7 +187,7 @@ func TestConcreteFilterEdges(t *testing.T) {
 		vals []int64
 	}{
 		{"cbitmap", []int64{1, 2, 3}},
-		{"croaring", []int64{1, int64(MaxCbitmapBits) + 5}},
+		{"sorted64", []int64{1, int64(MaxCbitmapBits) + 5}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			v := buildIntVec(t, mp, types.T_int64.ToType(), tc.vals, nil)

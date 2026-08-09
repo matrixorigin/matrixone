@@ -1527,6 +1527,23 @@ func (s *Scope) buildReaders(c *Compile) (readers []engine.Reader, err error) {
 		if s.DataSource.AccountId != nil {
 			ctx = defines.AttachAccountId(ctx, uint32(s.DataSource.AccountId.GetTenantId()))
 		}
+		hint := engine.FilterHint{}
+		if tableDef := s.DataSource.TableDef; tableDef != nil {
+			switch {
+			case tableDef.TableType == catalog.SystemSI_IVFFLAT_TblType_Entries:
+				hint.MembershipFilterBytes = s.DataSource.MembershipFilterBytes
+				if len(hint.MembershipFilterBytes) == 0 {
+					hint.MembershipFilterBytes, _ = c.proc.Ctx.Value(
+						defines.IvfMembershipFilter{}).([]byte)
+				}
+			case catalog.IsFullTextIndexTableType(tableDef.TableType, tableDef.Name):
+				hint.MembershipFilterBytes = s.DataSource.MembershipFilterBytes
+				if len(hint.MembershipFilterBytes) == 0 {
+					hint.MembershipFilterBytes, _ = c.proc.Ctx.Value(
+						defines.FulltextMembershipFilter{}).([]byte)
+				}
+			}
+		}
 
 		readers, err = c.e.BuildBlockReaders(
 			ctx,
@@ -1535,7 +1552,8 @@ func (s *Scope) buildReaders(c *Compile) (readers []engine.Reader, err error) {
 			s.DataSource.FilterExpr,
 			s.DataSource.TableDef,
 			s.NodeInfo.Data,
-			s.NodeInfo.Mcpu)
+			s.NodeInfo.Mcpu,
+			hint)
 		if err != nil {
 			return
 		}
