@@ -308,21 +308,21 @@ func TestDupOperatorMultiUpdateCountDeleteAffectRows(t *testing.T) {
 	}
 }
 
-func TestDupOperatorPreInsertState(t *testing.T) {
+func TestDupOperatorPreInsertTargetSelector(t *testing.T) {
 	op := preinsert.NewArgument()
 	op.RejectZeroTemporal = true
 	op.HasTargetSelector = true
-	op.TargetRowNumberCol = 7
-	op.TargetActiveCol = 8
-	op.TargetRowIDCol = 9
+	op.TargetRowNumberCol = 21
+	op.TargetActiveCol = 22
+	op.TargetRowIDCol = 23
 	result := dupOperator(op, 0, 1)
 	require.NotNil(t, result)
-	cloned := result.(*preinsert.PreInsert)
-	require.True(t, cloned.RejectZeroTemporal)
-	require.True(t, cloned.HasTargetSelector)
-	require.Equal(t, int32(7), cloned.TargetRowNumberCol)
-	require.Equal(t, int32(8), cloned.TargetActiveCol)
-	require.Equal(t, int32(9), cloned.TargetRowIDCol)
+	dup := result.(*preinsert.PreInsert)
+	require.True(t, dup.RejectZeroTemporal)
+	require.True(t, dup.HasTargetSelector)
+	require.Equal(t, int32(21), dup.TargetRowNumberCol)
+	require.Equal(t, int32(22), dup.TargetActiveCol)
+	require.Equal(t, int32(23), dup.TargetRowIDCol)
 }
 
 func TestRefreshZeroTemporalWritePolicy(t *testing.T) {

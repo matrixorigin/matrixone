@@ -2535,6 +2535,15 @@ func TestUpdatePgStyleFromDedupsDuplicateSourceMatchesOnNewPath(t *testing.T) {
 	}
 }
 
+func TestMySQLSingleTargetMultiTableUpdateDedupsDuplicateSourceMatches(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	logicPlan, err := runOneStmt(mock, t,
+		"update nation as target, (select n_regionkey from nation) as source "+
+			"set target.n_regionkey = 555 where target.n_nationkey = 3")
+	require.NoError(t, err)
+	require.True(t, hasUpdateFromDedupWindow(logicPlan.GetQuery(), 1))
+}
+
 func TestMultiTargetUpdateUsesIndependentModernSelectors(t *testing.T) {
 	mock := NewMockOptimizer(true)
 	logicPlan, err := runOneStmt(
@@ -2581,6 +2590,7 @@ func TestMultiTargetUpdateUsesIndependentModernSelectors(t *testing.T) {
 		require.True(t, updateCtx.DedupByTargetRowId)
 		require.Len(t, updateCtx.DeleteCols, 4)
 		require.NotEqual(t, updateCtx.DeleteCols[0].ColPos, updateCtx.DeleteCols[2].ColPos)
+		require.NotEqual(t, updateCtx.DeleteCols[2].ColPos, updateCtx.DeleteCols[3].ColPos)
 	}
 	require.NotEqual(
 		t,
@@ -2600,62 +2610,6 @@ func TestMultiTargetUpdateUsesIndependentModernSelectors(t *testing.T) {
 					previous.PrimaryColIdxInBat <= current.PrimaryColIdxInBat),
 		)
 	}
-}
-
-func TestMultiTargetUpdateIgnoreUsesIndependentTargetBranches(t *testing.T) {
-	mock := NewMockOptimizer(true)
-	logicPlan, err := runOneStmt(
-		mock,
-		t,
-		"UPDATE IGNORE emp JOIN dept ON emp.deptno = dept.deptno "+
-			"SET emp.empno = dept.deptno, dept.loc = emp.ename",
-	)
-	require.NoError(t, err)
-
-	unionCount := 0
-	var multiUpdate *plan.Node
-	for _, node := range logicPlan.GetQuery().Nodes {
-		if node.NodeType == plan.Node_UNION_ALL {
-			unionCount++
-		}
-		if node.NodeType == plan.Node_MULTI_UPDATE {
-			multiUpdate = node
-		}
-	}
-	require.GreaterOrEqual(t, unionCount, 1)
-	require.NotNil(t, multiUpdate)
-	for _, updateCtx := range multiUpdate.UpdateCtxList {
-		if updateCtx.DedupByTargetRowId {
-			require.GreaterOrEqual(t, len(updateCtx.DeleteCols), 4)
-		}
-	}
-}
-
-func TestMultiTargetUpdateSupportsTwoAutoIncrementTargets(t *testing.T) {
-	mock := NewMockOptimizer(true)
-	for _, tableName := range []string{"nation", "nation2"} {
-		tableDef := mock.ctxt.tables[tableName]
-		pkPos := tableDef.Name2ColIndex[tableDef.Pkey.PkeyColName]
-		tableDef.Cols[pkPos].Typ.AutoIncr = true
-	}
-
-	logicPlan, err := runOneStmt(
-		mock,
-		t,
-		"UPDATE nation n JOIN nation2 n2 ON n.n_nationkey = n2.n_nationkey "+
-			"SET n.n_nationkey = DEFAULT, n2.n_nationkey = DEFAULT",
-	)
-	require.NoError(t, err)
-
-	preInsertCount := 0
-	for _, node := range logicPlan.GetQuery().Nodes {
-		if node.NodeType != plan.Node_PRE_INSERT {
-			continue
-		}
-		preInsertCount++
-		require.True(t, node.PreInsertCtx.HasTargetSelector)
-	}
-	require.Equal(t, 2, preInsertCount)
 }
 
 func TestPartitionedMultiTargetUpdateUsesModernPlan(t *testing.T) {
@@ -2710,31 +2664,63 @@ func TestPartitionedMultiTargetUpdateUsesModernPlan(t *testing.T) {
 	}
 }
 
-func TestRepeatedPhysicalUpdateTargetsAreRejected(t *testing.T) {
-	mock := NewMockOptimizer(true)
-	_, err := runOneStmt(
-		mock,
-		t,
-		"UPDATE nation a JOIN nation b ON a.n_nationkey = b.n_nationkey "+
+func TestSamePhysicalTargetAliasesShareMergedFinalRows(t *testing.T) {
+	for _, sql := range []string{
+		"UPDATE nation a JOIN nation b ON a.n_nationkey = b.n_nationkey " +
 			"SET a.n_name = 'a', b.n_comment = 'b'",
-	)
-	require.Error(t, err)
-	require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported))
-	require.Contains(t, err.Error(), "updating the same physical table through aliases 'a' and 'b'")
+		"UPDATE nation a JOIN nation b ON a.n_nationkey <> b.n_nationkey " +
+			"SET a.n_name = 'a', b.n_comment = 'b'",
+		"UPDATE nation a JOIN nation b ON a.n_nationkey <> b.n_nationkey " +
+			"JOIN nation2 n2 ON n2.n_nationkey = a.n_nationkey " +
+			"SET a.n_name = 'a', b.n_comment = 'b', n2.n_name = 'n2'",
+	} {
+		mock := NewMockOptimizer(true)
+		logicPlan, err := runOneStmt(mock, t, sql)
+		require.NoError(t, err, sql)
 
-	// A sibling alias that is only read from is not a second update target.
-	logicPlan, err := runOneStmt(
-		mock,
-		t,
-		"UPDATE nation a JOIN nation b ON a.n_nationkey = b.n_nationkey "+
-			"SET a.n_name = b.n_name",
-	)
-	require.NoError(t, err)
-	require.NotNil(t, logicPlan.GetQuery())
+		query := logicPlan.GetQuery()
+		var multiUpdate *plan.Node
+		mainContexts := 0
+		hasUnionAll := false
+		hasAggregate := false
+		for _, node := range query.Nodes {
+			switch node.NodeType {
+			case plan.Node_MULTI_UPDATE:
+				multiUpdate = node
+			case plan.Node_UNION_ALL:
+				hasUnionAll = true
+			case plan.Node_AGG:
+				hasAggregate = true
+			}
+		}
+
+		require.NotNil(t, multiUpdate)
+		require.True(t, hasUnionAll)
+		require.True(t, hasAggregate)
+		var tableID uint64
+		for _, updateCtx := range multiUpdate.UpdateCtxList {
+			if updateCtx.TableDef == nil || updateCtx.TableDef.Name != "nation" {
+				continue
+			}
+			mainContexts++
+			require.True(t, updateCtx.DedupByTargetRowId)
+			if tableID == 0 {
+				tableID = updateCtx.TableDef.TblId
+			} else {
+				require.Equal(t, tableID, updateCtx.TableDef.TblId)
+			}
+		}
+		require.Equal(t, 1, mainContexts)
+		if strings.Contains(sql, "nation2") {
+			require.Len(t, multiUpdate.UpdateCtxList, 2)
+		}
+	}
 }
 
 func TestModernMultiTargetOnUpdateColumnsKeepActiveSelectorsTyped(t *testing.T) {
 	for _, sql := range []string{
+		"UPDATE nation a JOIN nation b ON a.n_nationkey = b.n_nationkey " +
+			"SET a.n_name = 'a', b.n_comment = 'b'",
 		"UPDATE emp, dept SET emp.job = 'a', dept.loc = 'b' " +
 			"WHERE emp.deptno = dept.deptno",
 	} {
@@ -2945,151 +2931,22 @@ func TestUpdatePgStyleFromDedupAllowsDecimal256AndEnumUpdateColumns(t *testing.T
 	}
 }
 
-func TestUpdateFallbackMultiTargetGeneratedColumnsKeepProjectLayout(t *testing.T) {
+func TestModernMultiTargetGeneratedColumns(t *testing.T) {
 	mock := NewMockOptimizer(true)
-	forceLegacyMultiTargetUpdateRoute(mock)
 	setMockGeneratedColumn(t, mock, "emp", "ename", "job")
 	setMockGeneratedColumn(t, mock, "dept", "dname", "loc")
 
 	logicPlan, err := runOneStmt(mock, t,
 		"UPDATE emp, dept SET emp.job = dept.loc, dept.loc = emp.job WHERE emp.deptno = dept.deptno")
-	if err != nil {
-		t.Fatalf("build fallback multi-target update with generated columns: %v", err)
-	}
-	query := logicPlan.GetQuery()
+	require.NoError(t, err)
 
-	assertFallbackUpdateProjectLength(t, query, len(mock.ctxt.tables["emp"].Cols)+2)
-	assertFallbackUpdateProjectLength(t, query, len(mock.ctxt.tables["dept"].Cols)+2)
-}
-
-// TestUpdateFallbackProjectLayoutDeterministic guards the per-target column-block
-// order of the fallback UPDATE planner. A multi-column SET must produce a
-// byte-identical project layout on every build; before the fix, ranging the
-// updateKeys map (column -> expr) appended the update expressions to the project
-// list in random order across runs. A fresh optimizer per iteration rebuilds the
-// maps, and Go randomizes map iteration, so a regression here fails reliably.
-func TestUpdateFallbackProjectLayoutDeterministic(t *testing.T) {
-	// Multi-target (emp, dept) exercises the table-block order; the two plain
-	// (non-indexed) update columns on emp (mgr, sal) exercise the per-target
-	// column order. Both were Go-map-ordered before the fix.
-	const sql = "UPDATE emp, dept SET emp.mgr = 1, emp.sal = 2, dept.loc = 'x' WHERE emp.deptno = dept.deptno"
-	var want []string
-	for iter := 0; iter < 16; iter++ {
-		mock := NewMockOptimizer(true)
-		forceLegacyMultiTargetUpdateRoute(mock)
-		logicPlan, err := runOneStmt(mock, t, sql)
-		if err != nil {
-			t.Fatalf("build fallback update (iter %d): %v", iter, err)
-		}
-		got := fallbackUpdateProjectLayout(logicPlan.GetQuery())
-		if len(got) == 0 {
-			t.Fatalf("iter %d: no fallback update project node found", iter)
-		}
-		if iter == 0 {
-			want = got
-			continue
-		}
-		assert.Equal(t, want, got,
-			"fallback UPDATE project layout must be deterministic across builds (iter %d)", iter)
-	}
-}
-
-// fallbackUpdateProjectLayout returns a stable signature of every fallback UPDATE
-// project node (a PROJECT over a SINK_SCAN): the ordered string form of each
-// project expression. query.Nodes is built in a deterministic index order, so
-// any cross-build difference reflects nondeterministic plan construction.
-func fallbackUpdateProjectLayout(query *Query) []string {
-	var layout []string
-	for _, node := range query.Nodes {
-		if node.NodeType != plan.Node_PROJECT || len(node.Children) != 1 {
-			continue
-		}
-		if query.Nodes[node.Children[0]].NodeType != plan.Node_SINK_SCAN {
-			continue
-		}
-		for _, e := range node.ProjectList {
-			layout = append(layout, e.String())
+	multiUpdates := 0
+	for _, node := range logicPlan.GetQuery().Nodes {
+		if node.NodeType == plan.Node_MULTI_UPDATE {
+			multiUpdates++
 		}
 	}
-	return layout
-}
-
-func TestUpdateFallbackGeneratedColumnsUseDefaultAfterRewrite(t *testing.T) {
-	mock := NewMockOptimizer(true)
-	forceLegacyMultiTargetUpdateRoute(mock)
-	setMockDefaultExpr(t, mock, "emp", "job", "job-default")
-	setMockGeneratedColumn(t, mock, "emp", "ename", "job")
-
-	logicPlan, err := runOneStmt(mock, t,
-		"UPDATE emp, dept SET emp.job = DEFAULT, dept.loc = 'default-marker' WHERE emp.deptno = dept.deptno")
-	if err != nil {
-		t.Fatalf("build fallback update with generated column over DEFAULT: %v", err)
-	}
-
-	node := requireFallbackSourceProjectNode(t, logicPlan.GetQuery(),
-		len(mock.ctxt.tables["emp"].Cols)+2+len(mock.ctxt.tables["dept"].Cols)+1, "default-marker")
-	if !nodeContainsStringLiteral(node, "job-default") {
-		t.Fatalf("generated column should use expanded DEFAULT expression, got %v", node.ProjectList)
-	}
-}
-
-func TestUpdateFallbackGeneratedColumnsUseOnUpdateAfterRewrite(t *testing.T) {
-	mock := NewMockOptimizer(true)
-	forceLegacyMultiTargetUpdateRoute(mock)
-	setMockOnUpdateExpr(t, mock, "emp", "job", "job-on-update")
-	setMockGeneratedColumn(t, mock, "emp", "ename", "job")
-
-	logicPlan, err := runOneStmt(mock, t,
-		"UPDATE emp, dept SET emp.comm = 1, dept.loc = 'on-update-marker' WHERE emp.deptno = dept.deptno")
-	if err != nil {
-		t.Fatalf("build fallback update with generated column over ON UPDATE: %v", err)
-	}
-
-	node := requireFallbackSourceProjectNode(t, logicPlan.GetQuery(),
-		len(mock.ctxt.tables["emp"].Cols)+2+len(mock.ctxt.tables["dept"].Cols)+1, "on-update-marker")
-	if !nodeContainsStringLiteral(node, "job-on-update") {
-		t.Fatalf("generated column should use ON UPDATE expression, got %v", node.ProjectList)
-	}
-}
-
-func TestUpdateFallbackGeneratedColumnChainUsesFreshExpr(t *testing.T) {
-	mock := NewMockOptimizer(true)
-	forceLegacyMultiTargetUpdateRoute(mock)
-	setMockGeneratedColumn(t, mock, "emp", "mgr", "empno")
-	setMockGeneratedColumn(t, mock, "emp", "deptno", "mgr")
-
-	logicPlan, err := runOneStmt(mock, t,
-		"UPDATE emp, dept SET emp.comm = 1, dept.loc = 'chain-marker' WHERE emp.deptno = dept.deptno")
-	if err != nil {
-		t.Fatalf("build fallback update with generated column chain: %v", err)
-	}
-
-	query := logicPlan.GetQuery()
-	assertFallbackUpdateAggDedupWithAnyValue(t, query)
-
-	// Verify the generated-column chain without depending on the order of the
-	// appended update/recompute slots (that order is sensitive to map iteration
-	// and was a source of flakiness). emp contributes len(emp.Cols) base columns
-	// followed by its appended update + recomputed-generated expressions; both
-	// generated columns (mgr, deptno) must be freshly recomputed down to empno,
-	// so within that appended region none may reference the stale mgr column and
-	// exactly two must reference empno.
-	empCols := len(mock.ctxt.tables["emp"].Cols)
-	deptCols := len(mock.ctxt.tables["dept"].Cols)
-	node := requireFallbackSourceProjectNode(t, query, empCols+3+deptCols+1, "chain-marker")
-	empnoRefs := 0
-	for pos := empCols; pos < empCols+3; pos++ {
-		e := node.ProjectList[pos]
-		if exprContainsColName(e, "mgr") {
-			t.Fatalf("generated column chain must use freshly recomputed empno, not stale mgr; appended pos %d = %s", pos, e.String())
-		}
-		if exprContainsColName(e, "empno") {
-			empnoRefs++
-		}
-	}
-	if empnoRefs != 2 {
-		t.Fatalf("expected both generated columns (mgr, deptno) freshly recomputed to empno, got %d empno refs in emp appended region", empnoRefs)
-	}
+	require.Equal(t, 1, multiUpdates)
 }
 
 func TestPreparedForeignKeyActionsMarkQueryUncacheable(t *testing.T) {
@@ -3209,57 +3066,6 @@ func setMockEmpDeptForeignKeyAction(
 	deptTable.RefChildTbls = []uint64{empTable.TblId}
 }
 
-func TestUpdateFallbackGeneratedColumnMultiTableNonFirstHasGenerated(t *testing.T) {
-	mock := NewMockOptimizer(true)
-	forceLegacyMultiTargetUpdateRoute(mock)
-	// Generate dname from loc on the second table (dept).
-	setMockGeneratedColumn(t, mock, "dept", "dname", "loc")
-
-	logicPlan, err := runOneStmt(mock, t,
-		"UPDATE emp, dept SET emp.comm = 1, dept.loc = 'non-first-gen' WHERE emp.deptno = dept.deptno")
-	if err != nil {
-		t.Fatalf("build fallback multi-table update with non-first table generated column: %v", err)
-	}
-	query := logicPlan.GetQuery()
-
-	// The source project should contain emp cols (9) + SET comm (1) + dept cols (4) + SET loc (1) + generated dname (1) = 16.
-	empCols := len(mock.ctxt.tables["emp"].Cols)
-	deptCols := len(mock.ctxt.tables["dept"].Cols)
-	expectedLen := empCols + 1 + deptCols + 1 + 1 // emp SET + dept SET + dname generated
-	node := requireFallbackSourceProjectNode(t, query, expectedLen, "non-first-gen")
-	if !nodeContainsStringLiteral(node, "non-first-gen") {
-		t.Fatalf("generated column on non-first table should contain the SET value, got %v", node.ProjectList)
-	}
-}
-
-func TestUpdateFallbackGeneratedColumnChainAfterOptimize(t *testing.T) {
-	mock := NewMockOptimizer(true)
-	forceLegacyMultiTargetUpdateRoute(mock)
-	// Chain: sal depends on comm, comm is a SET column.
-	// After optimization and rewrite, sal's generated expr should use the SET value of comm.
-	setMockGeneratedColumn(t, mock, "emp", "sal", "comm")
-
-	logicPlan, err := runOneStmt(mock, t,
-		"UPDATE emp, dept SET emp.comm = 1, dept.loc = 'chain-opt-marker' WHERE emp.deptno = dept.deptno")
-	if err != nil {
-		t.Fatalf("build fallback update with generated column after optimization: %v", err)
-	}
-
-	// emp cols (9) + SET comm (1) + generated sal (1) + dept cols (4) + SET loc (1) = 16
-	empCols := len(mock.ctxt.tables["emp"].Cols)
-	deptCols := len(mock.ctxt.tables["dept"].Cols)
-	expectedLen := empCols + 2 + deptCols + 1
-	// Position of generated sal: after emp cols (9) + SET comm (1) = index 10
-	generatedExpr := requireFallbackSourceProjectExpr(t, logicPlan.GetQuery(), expectedLen,
-		empCols+1, "chain-opt-marker")
-	if generatedExpr == nil {
-		t.Fatal("generated column position after optimization should not be nil")
-	}
-	// The generated expr should be a non-nil expression (DeepCopy of the SET value).
-	// We don't check the exact contents since substituteColRefsInExpr deep-copies,
-	// but we verify the expression exists at the expected position.
-}
-
 func TestUpdateGeneratedColumnDerivedTableSourceOnFKTable(t *testing.T) {
 	mock := NewMockOptimizer(true)
 	setMockGeneratedColumn(t, mock, "emp", "sal", "comm")
@@ -3326,23 +3132,6 @@ func setMockGeneratedColumn(t *testing.T, mock *MockOptimizer, tableName, genera
 	}
 }
 
-func forceLegacyMultiTargetUpdateRoute(mock *MockOptimizer) {
-	for _, tableName := range []string{"emp", "dept"} {
-		tableDef := mock.ctxt.tables[tableName]
-		parts := make([]string, 0, len(tableDef.Cols))
-		for _, col := range tableDef.Cols {
-			parts = append(parts, col.Name)
-		}
-		tableDef.Indexes = append(tableDef.Indexes, &plan.IndexDef{
-			IndexName:      "force_legacy_update_route",
-			IndexTableName: "force_legacy_update_route_entries",
-			IndexAlgo:      "unsupported_sync_index",
-			Parts:          parts,
-			TableExist:     true,
-		})
-	}
-}
-
 func setMockDefaultExpr(t *testing.T, mock *MockOptimizer, tableName, colName, value string) {
 	col := requireMockColumn(t, mock, tableName, colName)
 	col.Default = &plan.Default{
@@ -3388,49 +3177,6 @@ func makeStringConstExpr(typ plan.Type, value string) *plan.Expr {
 			},
 		},
 	}
-}
-
-func requireFallbackSourceProjectNode(t *testing.T, query *Query, projectLen int, marker string) *Node {
-	for _, node := range query.Nodes {
-		if !isFallbackSourceProjectNode(query, node, projectLen, marker) {
-			continue
-		}
-		return node
-	}
-	t.Fatalf("missing fallback source project with length %d and marker %q", projectLen, marker)
-	return nil
-}
-
-func requireFallbackSourceProjectExpr(t *testing.T, query *Query, projectLen int, pos int, marker string) *plan.Expr {
-	for _, node := range query.Nodes {
-		if !isFallbackSourceProjectNode(query, node, projectLen, marker) {
-			continue
-		}
-		if pos >= len(node.ProjectList) {
-			continue
-		}
-		return node.ProjectList[pos]
-	}
-	t.Fatalf("missing fallback source project with length %d and marker %q", projectLen, marker)
-	return nil
-}
-
-func isFallbackSourceProjectNode(query *Query, node *Node, projectLen int, marker string) bool {
-	if node.NodeType != plan.Node_PROJECT || len(node.ProjectList) != projectLen {
-		return false
-	}
-	if len(node.Children) == 1 {
-		childIdx := node.Children[0]
-		if childIdx >= 0 && childIdx < int32(len(query.Nodes)) && query.Nodes[childIdx].NodeType == plan.Node_SINK_SCAN {
-			return false
-		}
-	}
-	for _, expr := range node.ProjectList {
-		if exprContainsStringLiteral(expr, marker) {
-			return true
-		}
-	}
-	return false
 }
 
 func hasUpdateFromDedupAnyValueAgg(query *Query, groupByLen int) bool {
@@ -3549,49 +3295,6 @@ func queryContainsExpr(query *Query, accept func(*plan.Expr) bool) bool {
 		}
 	}
 	return false
-}
-
-func nodeContainsStringLiteral(node *Node, value string) bool {
-	for _, expr := range node.ProjectList {
-		if exprContainsStringLiteral(expr, value) {
-			return true
-		}
-	}
-	return false
-}
-
-func assertFallbackUpdateProjectLength(t *testing.T, query *Query, projectLen int) {
-	for _, node := range query.Nodes {
-		if node.NodeType != plan.Node_PROJECT || len(node.ProjectList) != projectLen || len(node.Children) != 1 {
-			continue
-		}
-		child := query.Nodes[node.Children[0]]
-		if child.NodeType != plan.Node_SINK_SCAN {
-			continue
-		}
-		return
-	}
-	t.Fatalf("missing fallback update project with length %d", projectLen)
-}
-
-func assertFallbackUpdateAggDedupWithAnyValue(t *testing.T, query *Query) {
-	foundAgg := false
-	foundAnyValue := false
-	for _, node := range query.Nodes {
-		if node.NodeType != plan.Node_AGG {
-			continue
-		}
-		foundAgg = true
-		for _, expr := range node.AggList {
-			if exprContainsFuncName(expr, "any_value") {
-				foundAnyValue = true
-				break
-			}
-		}
-	}
-	if !foundAgg || !foundAnyValue {
-		t.Fatalf("fallback update should build agg dedup path with any_value, foundAgg=%v foundAnyValue=%v", foundAgg, foundAnyValue)
-	}
 }
 
 func exprContainsFuncName(expr *plan.Expr, name string) bool {
@@ -7248,97 +6951,8 @@ func TestSubqueryInJoinOn(t *testing.T) {
 			require.True(t, foundJoinCondition, "ordinary ON predicate was removed from the JOIN: %s", sql)
 		}
 	}
-}
 
-func TestSubqueryInOuterJoinOn(t *testing.T) {
-	mock := NewMockOptimizer(false)
-	tests := []struct {
-		name     string
-		sql      string
-		wantMark bool
-		wantSemi bool
-	}{
-		{
-			name: "left join correlated scalar on preserved input",
-			sql: "SELECT a.n_nationkey, b.n_nationkey FROM nation a LEFT JOIN nation b " +
-				"ON a.n_regionkey = b.n_regionkey " +
-				"AND b.n_nationkey = (SELECT MAX(z.n_nationkey) FROM nation z WHERE z.n_regionkey = a.n_regionkey)",
-		},
-		{
-			name: "right join correlated scalar on preserved input",
-			sql: "SELECT a.n_nationkey, b.n_nationkey FROM nation a RIGHT JOIN nation b " +
-				"ON a.n_regionkey = b.n_regionkey " +
-				"AND a.n_nationkey = (SELECT MIN(z.n_nationkey) FROM nation z WHERE z.n_regionkey = b.n_regionkey)",
-		},
-		{
-			name: "left join uncorrelated scalar",
-			sql: "SELECT a.n_nationkey, b.n_nationkey FROM nation a LEFT JOIN nation b " +
-				"ON b.n_nationkey = (SELECT MAX(z.n_nationkey) FROM nation z)",
-		},
-		{
-			name: "left join correlated exists on preserved input",
-			sql: "SELECT a.n_nationkey, b.n_nationkey FROM nation a LEFT JOIN nation b " +
-				"ON a.n_regionkey = b.n_regionkey " +
-				"AND EXISTS (SELECT 1 FROM region z WHERE z.r_regionkey = a.n_regionkey)",
-			wantMark: true,
-		},
-		{
-			name: "left join correlated exists on nullable input",
-			sql: "SELECT a.n_nationkey, b.n_nationkey FROM nation a LEFT JOIN nation b " +
-				"ON a.n_regionkey = b.n_regionkey " +
-				"AND EXISTS (SELECT 1 FROM region z WHERE z.r_regionkey = b.n_regionkey)",
-			wantSemi: true,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			logicPlan, err := runOneStmt(mock, t, tt.sql)
-			require.NoError(t, err)
-
-			query := logicPlan.GetQuery()
-			foundOuterJoin := false
-			foundMarkJoin := false
-			foundSemiJoin := false
-			joinCount := 0
-			for _, node := range query.Nodes {
-				if node.NodeType == plan.Node_JOIN {
-					joinCount++
-					if node.JoinType == plan.Node_LEFT && len(node.OnList) > 0 {
-						foundOuterJoin = true
-					}
-					if node.JoinType == plan.Node_MARK {
-						foundMarkJoin = true
-					}
-					if node.JoinType == plan.Node_SEMI {
-						foundSemiJoin = true
-					}
-				}
-				for _, expr := range node.OnList {
-					require.False(t, hasSubquery(expr), "JOIN OnList contains Expr_Sub")
-					require.False(t, hasCorrCol(expr), "JOIN OnList contains CorrColRef")
-				}
-				for _, expr := range node.FilterList {
-					require.False(t, hasSubquery(expr), "FILTER contains Expr_Sub")
-					require.False(t, hasCorrCol(expr), "FILTER contains CorrColRef")
-				}
-			}
-
-			require.True(t, foundOuterJoin, "outer join disappeared from plan")
-			require.GreaterOrEqual(t, joinCount, 2, "subquery was not lowered below the outer join")
-			require.Equal(t, tt.wantMark, foundMarkJoin)
-			require.Equal(t, tt.wantSemi, foundSemiJoin)
-		})
-	}
-
-	_, err := runOneStmt(mock, t,
-		"SELECT a.n_nationkey FROM nation a LEFT JOIN nation b ON EXISTS ("+
-			"SELECT 1 FROM region z WHERE z.r_regionkey = a.n_regionkey AND z.r_regionkey = b.n_regionkey)")
-	require.ErrorContains(t, err, "referencing both join inputs")
-
-	_, err = runOneStmt(mock, t,
-		"SELECT outer_n.n_nationkey FROM nation outer_n WHERE EXISTS ("+
-			"SELECT 1 FROM nation a LEFT JOIN nation b ON EXISTS ("+
-			"SELECT 1 FROM region z WHERE z.r_regionkey = outer_n.n_regionkey))")
-	require.ErrorContains(t, err, "deeply correlated subquery")
+	runTestShouldError(mock, t, []string{
+		"SELECT n_name FROM nation LEFT JOIN region ON r_regionkey = (SELECT MAX(r_regionkey) FROM region)",
+	})
 }

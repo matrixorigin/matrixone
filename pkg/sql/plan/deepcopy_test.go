@@ -57,6 +57,28 @@ func TestCloneTableDefForPlan(t *testing.T) {
 	require.Same(t, pkey, withoutCols.Pkey)
 }
 
+func TestDeepCopyPreInsertCtxPreservesTargetSelector(t *testing.T) {
+	source := &planpb.PreInsertCtx{
+		Ref:                &planpb.ObjectRef{ObjName: "t"},
+		TableDef:           &planpb.TableDef{Name: "t"},
+		HasAutoCol:         true,
+		IsNewUpdate:        true,
+		HasTargetSelector:  true,
+		TargetRowNumberCol: 31,
+		TargetActiveCol:    32,
+		TargetRowIdCol:     33,
+	}
+
+	cloned := DeepCopyPreInsertCtx(source)
+	require.NotSame(t, source, cloned)
+	require.NotSame(t, source.Ref, cloned.Ref)
+	require.NotSame(t, source.TableDef, cloned.TableDef)
+	require.True(t, cloned.HasTargetSelector)
+	require.Equal(t, int32(31), cloned.TargetRowNumberCol)
+	require.Equal(t, int32(32), cloned.TargetActiveCol)
+	require.Equal(t, int32(33), cloned.TargetRowIdCol)
+}
+
 func TestDeepCopyExprClonesAggregateConfig(t *testing.T) {
 	source := &planpb.Expr{
 		Expr: &planpb.Expr_F{F: &planpb.Function{

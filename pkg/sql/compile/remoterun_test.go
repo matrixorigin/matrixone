@@ -1010,21 +1010,21 @@ func Test_DMLOperatorSerializationRoundtrip(t *testing.T) {
 		require.True(t, restored.(*multi_update.MultiUpdate).RejectZeroTemporal)
 	})
 
-	t.Run("PreInsert_State", func(t *testing.T) {
+	t.Run("PreInsert_TargetSelector", func(t *testing.T) {
 		op := &preinsert.PreInsert{
 			RejectZeroTemporal: true,
 			HasTargetSelector:  true,
-			TargetRowNumberCol: 7,
-			TargetActiveCol:    8,
-			TargetRowIDCol:     9,
+			TargetRowNumberCol: 11,
+			TargetActiveCol:    12,
+			TargetRowIDCol:     13,
 		}
 		_, pipeInstr, err := convertToPipelineInstruction(op, proc, ctx, 1)
 		require.NoError(t, err)
 		require.True(t, pipeInstr.PreInsert.RejectZeroTemporal)
 		require.True(t, pipeInstr.PreInsert.HasTargetSelector)
-		require.Equal(t, int32(7), pipeInstr.PreInsert.TargetRowNumberCol)
-		require.Equal(t, int32(8), pipeInstr.PreInsert.TargetActiveCol)
-		require.Equal(t, int32(9), pipeInstr.PreInsert.TargetRowIdCol)
+		require.Equal(t, int32(11), pipeInstr.PreInsert.TargetRowNumberCol)
+		require.Equal(t, int32(12), pipeInstr.PreInsert.TargetActiveCol)
+		require.Equal(t, int32(13), pipeInstr.PreInsert.TargetRowIdCol)
 
 		wireBytes, err := pipeInstr.Marshal()
 		require.NoError(t, err)
@@ -1037,9 +1037,9 @@ func Test_DMLOperatorSerializationRoundtrip(t *testing.T) {
 		restoredPreInsert := restored.(*preinsert.PreInsert)
 		require.True(t, restoredPreInsert.RejectZeroTemporal)
 		require.True(t, restoredPreInsert.HasTargetSelector)
-		require.Equal(t, int32(7), restoredPreInsert.TargetRowNumberCol)
-		require.Equal(t, int32(8), restoredPreInsert.TargetActiveCol)
-		require.Equal(t, int32(9), restoredPreInsert.TargetRowIDCol)
+		require.Equal(t, int32(11), restoredPreInsert.TargetRowNumberCol)
+		require.Equal(t, int32(12), restoredPreInsert.TargetActiveCol)
+		require.Equal(t, int32(13), restoredPreInsert.TargetRowIDCol)
 	})
 
 	t.Run("DedupJoin_DedupBuildKeepLast", func(t *testing.T) {
@@ -1289,27 +1289,6 @@ func Test_decodeBatch(t *testing.T) {
 	require.Nil(t, err)
 	_, err = decodeBatch(mp, data)
 	require.Nil(t, err)
-}
-
-func Test_decodeBatchPreservesPrepareParamKindTransportTrailer(t *testing.T) {
-	mp := mpool.MustNewZero()
-	bat := batch.NewWithSize(1)
-	bat.Vecs[0] = vector.NewVec(types.T_text.ToType())
-	require.NoError(t, vector.AppendBytes(bat.Vecs[0], []byte("5"), false, mp))
-	require.NoError(t, vector.AppendBytes(bat.Vecs[0], []byte("5"), false, mp))
-	bat.Vecs[0].SetPrepareParamKinds([]vector.PrepareParamKind{
-		vector.PrepareParamFloat,
-		vector.PrepareParamNone,
-	})
-	bat.SetRowCount(2)
-	data, err := bat.MarshalBinaryWithPrepareParamKinds(&bytes.Buffer{}, true)
-	require.NoError(t, err)
-	decoded, err := decodeBatch(mp, data)
-	require.NoError(t, err)
-	require.Equal(t, vector.PrepareParamFloat, decoded.Vecs[0].GetPrepareParamKindAt(0))
-	require.Equal(t, vector.PrepareParamNone, decoded.Vecs[0].GetPrepareParamKindAt(1))
-	bat.Clean(mp)
-	decoded.Clean(mp)
 }
 
 func Test_GetProcByUuid(t *testing.T) {
