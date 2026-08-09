@@ -21,6 +21,7 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
@@ -253,4 +254,67 @@ func TestViewMetadataRecoveryExecutorSetsTransactionDeadline(t *testing.T) {
 		expectedError: expectedError,
 	}, "worker")
 	require.ErrorIs(t, err, expectedError)
+}
+
+func TestClassifyViewRefreshFailureUsesTypedDisposition(t *testing.T) {
+	ctx := context.Background()
+	identityCause := errors.New("identity changed")
+	dependencyCause := errors.New("dependency unavailable")
+	tests := []struct {
+		name        string
+		err         error
+		code        viewRefreshFailureCode
+		disposition viewRefreshDisposition
+	}{
+		{"none", nil, viewRefreshFailureNone, viewRefreshRollbackDDL},
+		{"identity", &viewRefreshIdentityChangedError{cause: identityCause}, viewRefreshFailureIdentityChanged, viewRefreshMarkInvalid},
+		{"dependency", &viewRefreshDependencyUnavailableError{cause: dependencyCause}, viewRefreshFailureDependencyUnavailable, viewRefreshRetry},
+		{"canceled", context.Canceled, viewRefreshFailureCanceled, viewRefreshRetry},
+		{"deadline", context.DeadlineExceeded, viewRefreshFailureCanceled, viewRefreshRetry},
+		{"transaction", moerr.NewTxnNeedRetryWithDefChangedNoCtx(), viewRefreshFailureTxnConflict, viewRefreshRetry},
+		{"missing table", moerr.NewNoSuchTable(ctx, "db", "t"), viewRefreshFailureDependencyUnavailable, viewRefreshRetry},
+		{"parser", moerr.NewParseError(ctx, "invalid"), viewRefreshFailurePlannerIncompatible, viewRefreshMarkInvalid},
+		{"invalid", moerr.NewInvalidInput(ctx, "invalid"), viewRefreshFailurePermanentlyInvalid, viewRefreshMarkInvalid},
+		{"backend", moerr.NewBackendClosedNoCtx(), viewRefreshFailureInfrastructure, viewRefreshRetry},
+		{"unknown", errors.New("unknown"), viewRefreshFailureInfrastructure, viewRefreshRetry},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			failure := classifyViewRefreshFailure(tc.err)
+			require.Equal(t, tc.code, failure.code)
+			require.Equal(t, tc.disposition, failure.disposition)
+			if tc.err != nil {
+				require.Equal(t, tc.err.Error(), failure.Error())
+				require.ErrorIs(t, failure, tc.err)
+			}
+		})
+	}
+	require.Equal(t, identityCause.Error(), (&viewRefreshIdentityChangedError{cause: identityCause}).Error())
+	require.ErrorIs(t, &viewRefreshIdentityChangedError{cause: identityCause}, identityCause)
+	require.Equal(t, dependencyCause.Error(), (&viewRefreshDependencyUnavailableError{cause: dependencyCause}).Error())
+	require.ErrorIs(t, &viewRefreshDependencyUnavailableError{cause: dependencyCause}, dependencyCause)
+}
+
+func TestViewMetadataRecoveryRejectsUnavailableRuntimeState(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	canceled, cancel := context.WithCancel(proc.Ctx)
+	cancel()
+	proc.Ctx = canceled
+	_, err := discoverLegacyViewMetadata(proc)
+	require.ErrorIs(t, err, context.Canceled)
+
+	proc = testutil.NewProcess(t)
+	refreshed, err := refreshPendingView(proc, &pendingViewRefresh{})
+	require.False(t, refreshed)
+	require.Error(t, err)
+
+	runtime := moruntime.ServiceRuntime(proc.GetService())
+	oldExecutor, hadOldExecutor := runtime.GetGlobalVariables(moruntime.InternalSQLExecutor)
+	if hadOldExecutor {
+		runtime.CompareAndDeleteGlobalVariables(moruntime.InternalSQLExecutor, oldExecutor)
+		t.Cleanup(func() {
+			runtime.SetGlobalVariables(moruntime.InternalSQLExecutor, oldExecutor)
+		})
+	}
+	require.Error(t, lockViewMetadataLifecycleGate(proc))
 }

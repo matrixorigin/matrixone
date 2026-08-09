@@ -17,6 +17,7 @@ package plan
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -209,4 +210,98 @@ func TestViewDependencyIdentityKeepsDistinctBindingEnvironments(t *testing.T) {
 	require.Equal(t, viewDependencyKey(base), viewDependencyKey(caseVariant))
 	caseVariant.LowerCaseTableNames = 0
 	require.NotEqual(t, viewDependencyKey(base), viewDependencyKey(caseVariant))
+}
+
+func TestViewDependencyCaptureScopeAndIdentityFallbacks(t *testing.T) {
+	ctx := NewMockCompilerContext(false)
+	ctx.GetAccountIdFunc = func() (uint32, error) { return 7, nil }
+	capture := newViewDependencyCaptureContext(ctx)
+
+	capture.enterNestedView()
+	_, _, err := capture.Resolve("tpch", "nation", nil)
+	require.NoError(t, err)
+	require.Empty(t, capture.dependencies())
+	capture.leaveNestedView()
+	require.Panics(t, capture.leaveNestedView)
+
+	obj := &planpb.ObjectRef{PubInfo: &planpb.PubInfo{TenantId: 11}}
+	tableDef := &planpb.TableDef{DbId: 2, TblId: 3, LogicalId: 4, DbName: "physical_db", Name: "physical_t"}
+	require.NoError(t, capture.record(obj, tableDef, nil, "", ""))
+	dependencies := capture.dependencies()
+	require.Len(t, dependencies, 1)
+	require.Equal(t, uint32(11), dependencies[0].AccountID)
+	require.Equal(t, "physical_db", dependencies[0].DatabaseName)
+	require.Equal(t, "physical_t", dependencies[0].RelationName)
+	require.Equal(t, uint32(11), dependencies[0].PublisherAccount)
+
+	snapshot := &Snapshot{
+		TS:     &timestamp.Timestamp{PhysicalTime: 456},
+		Tenant: &planpb.SnapshotTenant{TenantID: 13},
+	}
+	capture.snapshotNames[snapshot.String()] = "daily"
+	require.NoError(t, capture.record(
+		&planpb.ObjectRef{SchemaName: "snapshot_db", ObjName: "snapshot_t"},
+		tableDef, snapshot, "snapshot_db", "snapshot_t"))
+	dependencies = capture.dependencies()
+	require.Len(t, dependencies, 2)
+	require.Equal(t, uint32(13), dependencies[1].AccountID)
+	require.Equal(t, "daily", dependencies[1].SnapshotName)
+	require.NotSame(t, snapshot, dependencies[1].Snapshot)
+
+	expected := errors.New("account unavailable")
+	ctx.GetAccountIdFunc = func() (uint32, error) { return 0, expected }
+	require.ErrorIs(t, capture.record(&planpb.ObjectRef{}, tableDef, nil, "", ""), expected)
+}
+
+func TestViewDependencyCaptureResolveByID(t *testing.T) {
+	ctx := NewMockCompilerContext(false)
+	ctx.GetAccountIdFunc = func() (uint32, error) { return 7, nil }
+	capture := newViewDependencyCaptureContext(ctx)
+	tableID := ctx.tables["nation"].TblId
+	obj, tableDef, err := capture.ResolveById(tableID, nil)
+	require.NoError(t, err)
+	require.NotNil(t, obj)
+	require.NotNil(t, tableDef)
+	require.Len(t, capture.dependencies(), 1)
+}
+
+func TestRegenerateViewDefinitionRejectsInvalidPersistedDefinitions(t *testing.T) {
+	ctx := NewMockCompilerContext(false)
+
+	_, err := RegenerateViewDefinition(ctx, `{`)
+	require.Error(t, err)
+	_, err = RegenerateViewDefinition(ctx, `{"Stmt":"select ("}`)
+	require.Error(t, err)
+	_, err = RegenerateViewDefinition(ctx, `{"Stmt":"select 1; select 2"}`)
+	require.Error(t, err)
+	_, err = RegenerateViewDefinition(ctx, `{"Stmt":"select 1"}`)
+	require.Error(t, err)
+
+	for _, regenerated := range []*RegeneratedViewDefinition{
+		nil,
+		{},
+		{TableDef: &planpb.TableDef{}},
+	} {
+		require.Error(t, ReplaceRegeneratedViewDependencies(regenerated, nil))
+	}
+	require.Error(t, ReplaceRegeneratedViewDependencies(&RegeneratedViewDefinition{
+		TableDef: &planpb.TableDef{ViewSql: &planpb.ViewDef{View: `{`}},
+	}, nil))
+}
+
+func TestRegenerateAlterViewUsesPersistedParserEnvironment(t *testing.T) {
+	ctx := NewMockCompilerContext(false)
+	ctx.GetAccountIdFunc = func() (uint32, error) { return 42, nil }
+	mode := ""
+	lowerCaseTableNames := int64(0)
+	persisted, err := json.Marshal(ViewData{
+		Stmt:                "alter view v (renamed) as select n_name from nation",
+		DefaultDatabase:     "tpch",
+		SQLMode:             &mode,
+		LowerCaseTableNames: &lowerCaseTableNames,
+	})
+	require.NoError(t, err)
+	regenerated, err := RegenerateViewDefinition(ctx, string(persisted))
+	require.NoError(t, err)
+	require.Equal(t, "renamed", regenerated.TableDef.Cols[0].Name)
 }
