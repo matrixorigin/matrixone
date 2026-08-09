@@ -56,7 +56,7 @@ func generateTestVector(dimensions uint) []float32 {
 
 // buildMembership builds a docfilter.MembershipFilter from a set of int64 keys
 // (the doc_id PK type usearch keys map to). docfilter selects the structure:
-// a dense cbitmap for a bounded id range, else the compact CRoaring bitset.
+// a dense cbitmap when it is cheaper, else the exact Sorted64 set.
 func buildMembership(t *testing.T, mp *mpool.MPool, keys []int64) docfilter.MembershipFilter {
 	v := vector.NewVec(types.T_int64.ToType())
 	defer v.Free(mp)
@@ -112,7 +112,7 @@ func TestFilteredSearchMembership(t *testing.T) {
 	limit := uint(10)
 
 	// cbitmap (dense, bounded id range): filter includes the key.
-	f := buildMembership(t, mp, []int64{100})
+	f := buildMembership(t, mp, []int64{100, 101, 102})
 	require.True(t, f.Exact())
 	keys, distances, err := FilteredSearchUnsafeWithMembership(index, unsafe.Pointer(&vec[0]), limit, f)
 	require.NoError(t, err)
@@ -122,13 +122,13 @@ func TestFilteredSearchMembership(t *testing.T) {
 	f.Free()
 
 	// cbitmap: filter excludes the key.
-	f2 := buildMembership(t, mp, []int64{999})
+	f2 := buildMembership(t, mp, []int64{997, 998, 999})
 	keys2, _, err := FilteredSearchUnsafeWithMembership(index, unsafe.Pointer(&vec[0]), limit, f2)
 	require.NoError(t, err)
 	require.NotContains(t, keys2, foundkey)
 	f2.Free()
 
-	// CRoaring (sparse id range > MaxCbitmapBits): includes the key.
+	// Sorted64 (sparse id range): includes the key.
 	f3 := buildMembership(t, mp, []int64{100, int64(docfilter.MaxCbitmapBits) + 10})
 	keys3, _, err := FilteredSearchUnsafeWithMembership(index, unsafe.Pointer(&vec[0]), limit, f3)
 	require.NoError(t, err)

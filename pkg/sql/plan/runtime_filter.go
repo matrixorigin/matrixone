@@ -167,6 +167,19 @@ func localProtocolEnablesVersionedExactKeyContract(sid string) bool {
 	return ok && version >= defines.MORPCVersion8
 }
 
+func localProtocolEnablesSortedMembershipFilter(sid string) bool {
+	rt := runtime.ServiceRuntime(sid)
+	if rt == nil {
+		return false
+	}
+	value, ok := rt.GetGlobalVariables(runtime.MOProtocolVersion)
+	if !ok {
+		return false
+	}
+	version, ok := value.(int64)
+	return ok && version >= defines.MORPCVersion11
+}
+
 func (builder *QueryBuilder) exactRuntimeFilterPlanEncoding(
 	probeType, buildType types.Type,
 	matchPrefix bool,
