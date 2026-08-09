@@ -21,11 +21,28 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
+
+func TestGenVectorByVarValueTypedJSONAndUUID(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	jsonVec, err := GenVectorByVarValue(proc, types.T_json.ToType(), `{"a":1,"b":2}`)
+	require.NoError(t, err)
+	t.Cleanup(func() { jsonVec.Free(proc.Mp()) })
+	require.Equal(t, `{"a": 1, "b": 2}`, types.DecodeJson(jsonVec.GetBytesAt(0)).String())
+
+	wantUUID, err := types.ParseUuid("00000000-0000-0000-0000-000000000001")
+	require.NoError(t, err)
+	uuidVec, err := GenVectorByVarValue(proc, types.T_uuid.ToType(), wantUUID.String())
+	require.NoError(t, err)
+	t.Cleanup(func() { uuidVec.Free(proc.Mp()) })
+	require.Equal(t, wantUUID, vector.MustFixedColNoTypeCheck[types.Uuid](uuidVec)[0])
+}
 
 func TestHexToInt(t *testing.T) {
 	var val uint64

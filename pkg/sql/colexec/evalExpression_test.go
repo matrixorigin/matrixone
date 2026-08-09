@@ -462,6 +462,46 @@ func TestVarExpressionExecutor(t *testing.T) {
 	require.Equal(t, int64(67890), vector.MustFixedColNoTypeCheck[int64](vec)[0])
 }
 
+func TestVarExpressionExecutorTypedJSONAndUUID(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	var value any = `{"a":1}`
+	proc.SetResolveVariableFunc(func(string, bool, bool) (interface{}, error) {
+		return value, nil
+	})
+
+	jsonExpr := &plan.Expr{
+		Expr: &plan.Expr_V{V: &plan.VarRef{Name: "json_var"}},
+		Typ:  plan.Type{Id: int32(types.T_json)},
+	}
+	jsonExecutor, err := NewExpressionExecutor(proc, jsonExpr)
+	require.NoError(t, err)
+	t.Cleanup(jsonExecutor.Free)
+
+	vec, err := jsonExecutor.Eval(proc, nil, nil)
+	require.NoError(t, err)
+	require.Equal(t, `{"a": 1}`, types.DecodeJson(vec.GetBytesAt(0)).String())
+
+	value = `{"a":2}`
+	vec, err = jsonExecutor.Eval(proc, nil, nil)
+	require.NoError(t, err)
+	require.Equal(t, `{"a": 2}`, types.DecodeJson(vec.GetBytesAt(0)).String())
+
+	uuid, err := types.ParseUuid("ffffffff-ffff-ffff-ffff-ffffffffffff")
+	require.NoError(t, err)
+	value = uuid.String()
+	uuidExpr := &plan.Expr{
+		Expr: &plan.Expr_V{V: &plan.VarRef{Name: "uuid_var"}},
+		Typ:  plan.Type{Id: int32(types.T_uuid)},
+	}
+	uuidExecutor, err := NewExpressionExecutor(proc, uuidExpr)
+	require.NoError(t, err)
+	t.Cleanup(uuidExecutor.Free)
+
+	vec, err = uuidExecutor.Eval(proc, nil, nil)
+	require.NoError(t, err)
+	require.Equal(t, uuid, vector.MustFixedColNoTypeCheck[types.Uuid](vec)[0])
+}
+
 func TestVarExpressionExecutorPreservesBinaryFlagOnReuse(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	value := "AB\x00\x00"

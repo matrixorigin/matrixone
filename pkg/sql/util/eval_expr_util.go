@@ -127,7 +127,11 @@ func GenVectorByVarValueWithAllocation(
 		return vector.NewConstNullWithAllocation(typ, 1, selection)
 	}
 	strVal := getVal(val)
-	if !typ.IsVarlen() {
+	// JSON values are stored in the vector's binary JSON representation rather
+	// than as their display string.  Route them through the typed setter just
+	// like fixed-width values; otherwise DecodeJson sees the raw text as an
+	// invalid encoded value when a typed user variable is read back.
+	if !typ.IsVarlen() || typ.Oid == types.T_json {
 		var vec *vector.Vector
 		var err error
 		if selection == nil {
@@ -333,8 +337,14 @@ func SetBytesToAnyVector(ctx context.Context, val string, row int,
 			return moerr.NewOutOfRangef(ctx, "year", "value '%v'", val)
 		}
 		return vector.SetFixedAtNoTypeCheck(vec, row, types.MoYear(v))
+	case types.T_uuid:
+		v, err := types.ParseUuid(val)
+		if err != nil {
+			return err
+		}
+		return vector.SetFixedAtNoTypeCheck(vec, row, v)
 	default:
-		panic(fmt.Sprintf("unsupported type %v", vec.GetType().Oid))
+		return moerr.NewInternalErrorf(ctx, "unsupported type %v", vec.GetType().Oid)
 	}
 }
 
