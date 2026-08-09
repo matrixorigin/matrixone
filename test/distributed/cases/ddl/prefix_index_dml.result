@@ -3,7 +3,7 @@ create table prefix_idx_dml_sk(id int primary key, a varchar(32), b int, index i
 insert into prefix_idx_dml_sk values (1, 'abcdef-long', 10);
 update prefix_idx_dml_sk set a = 'uvwxyz-long' where id = 1;
 select id, a, b from prefix_idx_dml_sk where a = 'uvwxyz-long';
-➤ id[4,32,0]  ¦  a[12,-1,0]  ¦  b[4,32,0]  𝄀
+➤ id[4,32,0]  ¦  a[12,32,0]  ¦  b[4,32,0]  𝄀
 1  ¦  uvwxyz-long  ¦  10
 delete from prefix_idx_dml_sk where id = 1;
 select count(*) from prefix_idx_dml_sk where a = 'uvwxyz-long';
@@ -20,7 +20,7 @@ insert into prefix_idx_dml_uk values (2, 'abcdef-new', 20);
 delete from prefix_idx_dml_uk where id = 1;
 insert into prefix_idx_dml_uk values (3, 'uvwxyz-new', 30);
 select id, a, b from prefix_idx_dml_uk order by id;
-➤ id[4,32,0]  ¦  a[12,-1,0]  ¦  b[4,32,0]  𝄀
+➤ id[4,32,0]  ¦  a[12,32,0]  ¦  b[4,32,0]  𝄀
 2  ¦  abcdef-new  ¦  20  𝄀
 3  ¦  uvwxyz-new  ¦  30
 select a from prefix_idx_dml_uk force index(uq_a) where a = 'abcdef-new';
@@ -33,7 +33,7 @@ insert into prefix_idx_dml_create_backfill values (1, 'abcdef-long', 10), (2, 'l
 create index idx_a on prefix_idx_dml_create_backfill(a(4));
 update prefix_idx_dml_create_backfill set a = 'uvwxyz-long' where id = 1;
 select id, a, b from prefix_idx_dml_create_backfill where a = 'uvwxyz-long';
-➤ id[4,32,0]  ¦  a[12,-1,0]  ¦  b[4,32,0]  𝄀
+➤ id[4,32,0]  ¦  a[12,32,0]  ¦  b[4,32,0]  𝄀
 1  ¦  uvwxyz-long  ¦  10
 delete from prefix_idx_dml_create_backfill where id = 2;
 select count(*) from prefix_idx_dml_create_backfill where a = 'lmnopq-long';
@@ -46,7 +46,7 @@ insert into prefix_idx_dml_alter_add values (1, 'abcdef-long', 10), (2, 'lmnopq-
 alter table prefix_idx_dml_alter_add add index idx_a(a(4));
 update prefix_idx_dml_alter_add set a = 'uvwxyz-long' where id = 1;
 select id, a, b from prefix_idx_dml_alter_add where a = 'uvwxyz-long';
-➤ id[4,32,0]  ¦  a[12,-1,0]  ¦  b[4,32,0]  𝄀
+➤ id[4,32,0]  ¦  a[12,32,0]  ¦  b[4,32,0]  𝄀
 1  ¦  uvwxyz-long  ¦  10
 delete from prefix_idx_dml_alter_add where id = 2;
 select count(*) from prefix_idx_dml_alter_add where a = 'lmnopq-long';

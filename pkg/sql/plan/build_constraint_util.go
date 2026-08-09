@@ -17,6 +17,7 @@ package plan
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -184,6 +185,25 @@ func requireCheckConstraintProtocol(ctx context.Context, proc *process.Process) 
 		return moerr.NewNotSupported(
 			ctx,
 			"CHECK constraints require all CNs to support protocol version 7",
+		)
+	}
+	return nil
+}
+
+// requirePrefixIndexV2Protocol uses the deployment-managed common protocol
+// version. The orchestrator raises it only after every participating CN can
+// decode the lossless prefix_lengths_v2 catalog representation.
+func requirePrefixIndexV2Protocol(ctx context.Context, proc *process.Process, columnName string) error {
+	if !strings.ContainsAny(columnName, ":,") || proc == nil {
+		return nil
+	}
+	value, ok := moruntime.ServiceRuntime(proc.GetService()).
+		GetGlobalVariables(moruntime.MOProtocolVersion)
+	version, valid := value.(int64)
+	if !ok || !valid || version < defines.MORPCVersion12 {
+		return moerr.NewNotSupported(
+			ctx,
+			"prefix indexes on column names containing ':' or ',' require all CNs to support protocol version 12",
 		)
 	}
 	return nil

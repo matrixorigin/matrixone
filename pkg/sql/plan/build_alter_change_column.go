@@ -267,6 +267,11 @@ func buildColumnAndConstraint(
 	// If the column name of the table changes, it is necessary to check if it is associated
 	// with the index key. If it is an index key column, column name replacement is required.
 	if newColName != oldCol.Name {
+		if err := requirePrefixIndexesRenameProtocol(
+			ctx, targetTableDef.Indexes, oldCol.Name, newColName,
+		); err != nil {
+			return nil, err
+		}
 		for _, indexInfo := range targetTableDef.Indexes {
 			for j, partCol := range indexInfo.Parts {
 				partCol = catalog.ResolveAlias(partCol)

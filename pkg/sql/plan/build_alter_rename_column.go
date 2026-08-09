@@ -102,6 +102,11 @@ func updateRenameColumnInTableDef(
 		!strings.EqualFold(newColName, oldColName) {
 		return nil, moerr.NewErrDupFieldName(ctx.GetContext(), newColNameOrigin)
 	}
+	if err := requirePrefixIndexesRenameProtocol(
+		ctx, tableDef.Indexes, oldColName, newColName,
+	); err != nil {
+		return nil, err
+	}
 
 	// update index key
 	indexAffected := false
@@ -186,6 +191,40 @@ func updateRenameColumnInTableDef(
 	}
 
 	return
+}
+
+func requirePrefixIndexesRenameProtocol(ctx CompilerContext, indexes []*plan.IndexDef, oldColName, newColName string) error {
+	for _, indexInfo := range indexes {
+		if indexInfo == nil {
+			continue
+		}
+		for _, partCol := range indexInfo.Parts {
+			if catalog.ResolveAlias(partCol) != oldColName {
+				continue
+			}
+			if err := requirePrefixIndexRenameProtocol(ctx, indexInfo, oldColName, newColName); err != nil {
+				return err
+			}
+			break
+		}
+	}
+	return nil
+}
+
+func requirePrefixIndexRenameProtocol(ctx CompilerContext, indexInfo *plan.IndexDef, oldColName, newColName string) error {
+	if !catalog.IsRegularIndexAlgo(indexInfo.IndexAlgo) || indexInfo.IndexAlgoParams == "" {
+		return nil
+	}
+	prefixLengths, err := catalog.IndexPrefixLengthsFromParamsWithError(indexInfo.IndexAlgoParams)
+	if err != nil {
+		return err
+	}
+	for prefixPart := range prefixLengths {
+		if strings.EqualFold(prefixPart, oldColName) {
+			return requirePrefixIndexV2Protocol(ctx.GetContext(), ctx.GetProcess(), newColName)
+		}
+	}
+	return nil
 }
 
 // renameIndexPrefixLengthMetadata rewrites the column-name keys in regular

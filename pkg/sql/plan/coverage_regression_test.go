@@ -20,7 +20,9 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -513,6 +515,74 @@ func TestRenameIndexPrefixLengthMetadataBoundaryCases(t *testing.T) {
 		require.Error(t, err)
 		require.Equal(t, []string{"title"}, tableDef.Indexes[0].Parts)
 	})
+}
+
+func TestRenamePrefixIndexV2ProtocolGate(t *testing.T) {
+	prefixParams, err := catalog.IndexParamsMapToJsonString(map[string]string{
+		catalog.IndexAlgoParamPrefixLengths: "title:4",
+	})
+	require.NoError(t, err)
+	tableDef := &planpb.TableDef{
+		TblId: 1,
+		Cols: []*ColDef{
+			{Name: "id", OriginName: "id"},
+			{Name: "title", OriginName: "title"},
+		},
+		Pkey: &PrimaryKeyDef{PkeyColName: "id", Names: []string{"id"}},
+		Indexes: []*planpb.IndexDef{
+			{
+				IndexName: "idx_title_full",
+				IndexAlgo: catalog.MoIndexDefaultAlgo.ToString(),
+				Parts:     []string{"title", catalog.CreateAlias("id")},
+			},
+			{
+				IndexName:       "idx_title",
+				IndexAlgo:       catalog.MoIndexDefaultAlgo.ToString(),
+				IndexAlgoParams: prefixParams,
+				Parts:           []string{"title", catalog.CreateAlias("id")},
+			},
+		},
+	}
+	mock := NewMockOptimizer(false)
+	proc := mock.CurrentContext().GetProcess()
+	rt := moruntime.ServiceRuntime(proc.GetService())
+	original, hadOriginal := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	defer func() {
+		if hadOriginal {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, original)
+		} else {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+		}
+	}()
+
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion11)
+	_, err = updateRenameColumnInTableDef(
+		mock.CurrentContext(),
+		tableDef.Cols[1],
+		tableDef,
+		&tree.AlterTableRenameColumnClause{
+			OldColumnName: tree.NewUnresolvedColName("title"),
+			NewColumnName: tree.NewUnresolvedColName("head:line"),
+		},
+	)
+	require.ErrorContains(t, err, "protocol version 12")
+	require.Equal(t, []string{"title", catalog.CreateAlias("id")}, tableDef.Indexes[0].Parts)
+	require.Equal(t, []string{"title", catalog.CreateAlias("id")}, tableDef.Indexes[1].Parts)
+	require.Equal(t, prefixParams, tableDef.Indexes[1].IndexAlgoParams)
+
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion12)
+	_, err = updateRenameColumnInTableDef(
+		mock.CurrentContext(),
+		tableDef.Cols[1],
+		tableDef,
+		&tree.AlterTableRenameColumnClause{
+			OldColumnName: tree.NewUnresolvedColName("title"),
+			NewColumnName: tree.NewUnresolvedColName("head:line"),
+		},
+	)
+	require.NoError(t, err)
+	require.Equal(t, "head:line", tableDef.Indexes[0].Parts[0])
+	require.Equal(t, "head:line", tableDef.Indexes[1].Parts[0])
 }
 
 func TestUpdateRenameColumnInTableDefRejectsDuplicateTargetName(t *testing.T) {
