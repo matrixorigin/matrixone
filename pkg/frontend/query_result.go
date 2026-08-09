@@ -110,10 +110,7 @@ func initQueryResulConfig(ctx context.Context, ses *Session) error {
 }
 
 func saveBatch(ctx context.Context, ses *Session, bat *batch.Batch) error {
-	n := uint64(0)
-	if bat != nil && bat.Vecs[0] != nil {
-		n = uint64(bat.Vecs[0].Length())
-	}
+	n := uint64(bat.RowCount())
 	ses.queryRowCount += n
 
 	s := ses.curResultSize + float64(bat.Size())/(1024*1024)
@@ -129,7 +126,14 @@ func saveBatch(ctx context.Context, ses *Session, bat *batch.Batch) error {
 	if err != nil {
 		return err
 	}
-	_, err = writer.Write(bat)
+	writeBat, release, err := prepareQueryResultBatchForWrite(bat, ses.GetMemPool())
+	if err != nil {
+		return err
+	}
+	if release != nil {
+		defer release()
+	}
+	_, err = writer.Write(writeBat)
 	if err != nil {
 		return err
 	}
@@ -144,6 +148,48 @@ func saveBatch(ctx context.Context, ses *Session, bat *batch.Batch) error {
 	ses.curResultSize = s
 	ses.savedRowCount += n
 	return err
+}
+
+func prepareQueryResultBatchForWrite(
+	bat *batch.Batch,
+	mp *mpool.MPool,
+) (*batch.Batch, func(), error) {
+	var writeBat *batch.Batch
+	cloned := make([]*vector.Vector, 0)
+	release := func() {
+		for _, vec := range cloned {
+			vec.Free(mp)
+		}
+	}
+
+	for i, vec := range bat.Vecs {
+		if vec == nil || !vec.IsConst() || vec.Length() == bat.RowCount() {
+			continue
+		}
+		if writeBat == nil {
+			writeBat = batch.NewWithSize(len(bat.Vecs))
+			writeBat.Attrs = bat.Attrs
+			copy(writeBat.Vecs, bat.Vecs)
+			writeBat.SetRowCount(bat.RowCount())
+		}
+		dup, err := vec.Dup(mp)
+		if err != nil {
+			release()
+			return nil, nil, err
+		}
+		// Prepared-parameter provenance is execution-only and is not part of the
+		// stable vector encoding. Drop it before extending the persisted logical
+		// length so a heterogeneous sidecar cannot grow with the result batch.
+		dup.SetPrepareParamKinds(nil)
+		dup.SetLength(bat.RowCount())
+		writeBat.Vecs[i] = dup
+		cloned = append(cloned, dup)
+	}
+
+	if writeBat == nil {
+		return bat, nil, nil
+	}
+	return writeBat, release, nil
 }
 
 func saveBatches(ctx context.Context, ses *Session, data []*batch.Batch) error {

@@ -27,6 +27,7 @@ import (
 	"github.com/prashantv/gostub"
 	"github.com/smartystreets/goconvey/convey"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -259,6 +260,64 @@ func Test_saveQueryResultMeta(t *testing.T) {
 			//fmt.Println(string(content))
 		},
 	)
+}
+
+func TestSaveBatchPreservesBroadcastConstantRows(t *testing.T) {
+	ioutil.RunPipelineTest(func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		ses := newTestSession(t, ctrl)
+		defer ses.Close()
+		stmtID := uuid.New()
+		ses.SetStmtId(stmtID)
+		require.NoError(t, initQueryResulConfig(context.Background(), ses))
+
+		proc := testutil.NewProcess(t)
+		proc.Base.FileService = getPu("").FileService
+		proc.Base.SessionInfo = process.SessionInfo{Account: sysAccountName}
+		ses.GetTxnCompileCtx().execCtx = &ExecCtx{
+			reqCtx: context.Background(),
+			proc:   proc,
+		}
+
+		constant, err := vector.NewConstFixed(types.T_int64.ToType(), int64(7), 1, proc.Mp())
+		require.NoError(t, err)
+		totals := vector.NewVec(types.T_int64.ToType())
+		for _, value := range []int64{10, 20, 30} {
+			require.NoError(t, vector.AppendFixed(totals, value, false, proc.Mp()))
+		}
+		data := batch.NewWithSize(2)
+		data.SetVector(0, constant)
+		data.SetVector(1, totals)
+		data.SetRowCount(3)
+		defer data.Clean(proc.Mp())
+
+		ctx := context.Background()
+		require.NoError(t, saveBatch(ctx, ses, data))
+		assert.Equal(t, 1, constant.Length(), "saving must not mutate the executor-owned vector")
+		assert.Equal(t, uint64(3), ses.queryRowCount)
+		assert.Equal(t, uint64(3), ses.savedRowCount)
+
+		path := catalog.BuildQueryResultPath(sysAccountName, stmtID.String(), 1)
+		reader, err := ioutil.NewFileReader(getPu("").FileService, path)
+		require.NoError(t, err)
+		blocks, err := reader.LoadAllBlocks(ctx, proc.Mp())
+		require.NoError(t, err)
+		require.Len(t, blocks, 1)
+		assert.Equal(t, uint32(3), blocks[0].GetRows())
+
+		loaded, release, err := reader.LoadColumns(
+			ctx, []uint16{0}, nil, blocks[0].BlockHeader().BlockID().Sequence(), proc.Mp(),
+		)
+		require.NoError(t, err)
+		defer release()
+		assert.Equal(t, 3, loaded.RowCount())
+		require.True(t, loaded.Vecs[0].IsConst())
+		for row := range loaded.RowCount() {
+			assert.Equal(t, int64(7), vector.GetFixedAtWithTypeCheck[int64](loaded.Vecs[0], row))
+		}
+	})
 }
 
 func Test_getFileSize(t *testing.T) {
