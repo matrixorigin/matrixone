@@ -1867,6 +1867,65 @@ func TestHandleDelsOnLCA_SQLPaths(t *testing.T) {
 		require.ErrorIs(t, err, wantErr)
 	})
 
+	t.Run("fake pk sql builder uses the hidden key type", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		tblStuff := newTestBranchTableStuff(ctrl)
+		tblStuff.lcaRel = mock_frontend.NewMockRelation(ctrl)
+		tblStuff.def.pkKind = fakeKind
+		tblStuff.def.colNames = []string{"f", "note", catalog.FakePrimaryKeyColName}
+		tblStuff.def.colTypes = []types.Type{
+			types.T_float64.ToType(),
+			types.T_varchar.ToType(),
+			types.T_uint64.ToType(),
+		}
+		tblStuff.def.visibleIdxes = []int{0, 1}
+		tblStuff.def.writableIdxes = []int{0, 1}
+		tblStuff.def.pkColIdx = 2
+		tblStuff.def.pkColIdxes = []int{0, 1}
+
+		targetDef := tblStuff.tarRel.GetTableDef(context.Background())
+		targetDef.Cols = []*plan.ColDef{
+			{Name: "f", ColId: 1, Typ: plan.Type{Id: int32(types.T_float64)}},
+			{Name: "note", ColId: 2, Typ: plan.Type{Id: int32(types.T_varchar)}},
+			{Name: catalog.FakePrimaryKeyColName, ColId: 3, Hidden: true, Typ: plan.Type{Id: int32(types.T_uint64)}},
+		}
+		targetDef.Pkey = &plan.PrimaryKeyDef{
+			Names:       []string{catalog.FakePrimaryKeyColName},
+			PkeyColName: catalog.FakePrimaryKeyColName,
+		}
+		lcaDef := &plan.TableDef{
+			DbName: "db1",
+			Name:   "lca_tbl",
+			Cols:   targetDef.Cols,
+			Pkey:   targetDef.Pkey,
+		}
+		tblStuff.lcaRel.(*mock_frontend.MockRelation).EXPECT().GetTableDef(gomock.Any()).Return(lcaDef).AnyTimes()
+		tblStuff.lcaRel.(*mock_frontend.MockRelation).EXPECT().GetTableID(gomock.Any()).Return(uint64(81)).AnyTimes()
+
+		wantErr := moerr.NewInternalErrorNoCtx("stop after sql capture")
+		bh := mock_frontend.NewMockBackgroundExec(ctrl)
+		bh.EXPECT().Exec(gomock.Any(), gomock.Any()).DoAndReturn(func(_ context.Context, sql string) error {
+			require.Contains(t, sql,
+				"lca.`__mo_fake_pk_col` = cast(pks.`__mo_data_branch_pk_0` as BIGINT UNSIGNED)")
+			require.NotContains(t, sql, "serial(lca.`__mo_fake_pk_col`)")
+			return wantErr
+		}).Times(1)
+
+		tBat := batch.NewWithSize(1)
+		tBat.Vecs[0] = vector.NewVec(types.T_uint64.ToType())
+		require.NoError(t, vector.AppendFixed(tBat.Vecs[0], uint64(42), false, ses.proc.Mp()))
+		tBat.SetRowCount(1)
+		defer tBat.Clean(ses.proc.Mp())
+
+		_, err := handleDelsOnLCA(
+			context.Background(), ses, bh, tBat, tblStuff,
+			types.BuildTS(10, 0).ToTimestamp(),
+		)
+		require.ErrorIs(t, err, wantErr)
+	})
+
 	t.Run("composite pk sql builder propagates non recoverable error", func(t *testing.T) {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()

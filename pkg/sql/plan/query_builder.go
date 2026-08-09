@@ -9054,6 +9054,7 @@ func (builder *QueryBuilder) bindView(
 	if err != nil {
 		return
 	}
+	viewCtx.markViewCTASDefaultBoundary()
 	if len(viewStmt.ColNames) > 0 {
 		if len(viewStmt.ColNames) != len(viewCtx.headings) {
 			return 0, moerr.NewViewWrongList(builder.GetContext())
@@ -9974,8 +9975,8 @@ func (builder *QueryBuilder) addBinding(nodeID int32, alias tree.AliasClause, ct
 		binding.outputColumnProvenance = make([]OutputColumnProvenance, colLength)
 		for i, col := range node.TableDef.Cols {
 			binding.outputColumnProvenance[i] = OutputColumnProvenance{
-				State:                   ProvenanceSingleSource,
-				CanInheritSourceDefault: true,
+				State:             ProvenanceSingleSource,
+				CTASDefaultPolicy: CTASDefaultInheritSource,
 				Source: &SourceColumn{
 					RelPos:   tag,
 					ColPos:   int32(i),
@@ -10044,7 +10045,9 @@ func (builder *QueryBuilder) addBinding(nodeID int32, alias tree.AliasClause, ct
 				outputColumnProvenance = make([]OutputColumnProvenance, colLength)
 			}
 			outputColumnProvenance[i] = subCtx.outputColumnProvenanceForProject(int32(i))
-			outputColumnProvenance[i].CanInheritSourceDefault = false
+			if outputColumnProvenance[i].CTASDefaultPolicy == CTASDefaultInheritSource {
+				outputColumnProvenance[i].CTASDefaultPolicy = CTASDefaultNone
+			}
 			name := table + "." + cols[i]
 			builder.nameByColRef[[2]int32{tag, int32(i)}] = name
 		}
