@@ -4285,6 +4285,120 @@ func TestTryIndexOnlyScanSkipsResidualFilterForNonNullSerialFullLiterals(t *test
 	}
 }
 
+func TestTryIndexOnlyScanHandlesBinaryPrefixLookups(t *testing.T) {
+	tests := []struct {
+		name       string
+		typ        types.T
+		makeFilter func(relPos int32) *planpb.Expr
+		lookupFunc string
+		residual   string
+	}{
+		{
+			name: "varbinary equality",
+			typ:  types.T_varbinary,
+			makeFilter: func(relPos int32) *planpb.Expr {
+				return makeStringEqFilterExpr(relPos, 1, "\x00")
+			},
+			lookupFunc: "prefix_eq",
+			residual:   "=",
+		},
+		{
+			name: "varbinary in",
+			typ:  types.T_varbinary,
+			makeFilter: func(relPos int32) *planpb.Expr {
+				return makeStringInFilterExpr(relPos, 1, "", "\x00")
+			},
+			lookupFunc: "prefix_in",
+			residual:   "in",
+		},
+		{
+			name: "varbinary between",
+			typ:  types.T_varbinary,
+			makeFilter: func(relPos int32) *planpb.Expr {
+				return makeStringBetweenFilterExpr(relPos, 1, "\x00", "\x00\x01")
+			},
+			lookupFunc: "prefix_between",
+		},
+		{
+			name: "binary equality",
+			typ:  types.T_binary,
+			makeFilter: func(relPos int32) *planpb.Expr {
+				return makeStringEqFilterExpr(relPos, 1, "\x00")
+			},
+			lookupFunc: "prefix_eq",
+			residual:   "=",
+		},
+		{
+			name: "binary in",
+			typ:  types.T_binary,
+			makeFilter: func(relPos int32) *planpb.Expr {
+				return makeStringInFilterExpr(relPos, 1, "", "\x00")
+			},
+			lookupFunc: "prefix_in",
+			residual:   "in",
+		},
+		{
+			name: "binary between",
+			typ:  types.T_binary,
+			makeFilter: func(relPos int32) *planpb.Expr {
+				return makeStringBetweenFilterExpr(relPos, 1, "\x00", "\x00\x01")
+			},
+			lookupFunc: "prefix_between",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true), false, true)
+			ctx := NewBindContext(builder, nil)
+			bindTag := builder.genNewBindTag()
+			idxDef := &planpb.IndexDef{
+				IndexName:      "idx_b_id",
+				IndexAlgo:      catalog.MoIndexDefaultAlgo.ToString(),
+				IndexTableName: "__mo_idx_b_id",
+				Parts:          []string{"b", "id"},
+				Unique:         false,
+				TableExist:     true,
+			}
+			registerMockIndexTable(t, builder, idxDef.IndexTableName)
+			filter := tt.makeFilter(bindTag)
+			binaryType := planpb.Type{Id: int32(tt.typ), Width: 8}
+			setIndexFilterArgumentType(filter, binaryType)
+			node := &planpb.Node{
+				NodeType:    planpb.Node_TABLE_SCAN,
+				ObjRef:      &planpb.ObjectRef{SchemaName: "test", ObjName: "t"},
+				BindingTags: []int32{bindTag},
+				TableDef: &planpb.TableDef{
+					Name: "t",
+					Cols: []*planpb.ColDef{
+						{Name: "id", Typ: planpb.Type{Id: int32(types.T_int64)}},
+						{Name: "b", Typ: binaryType},
+					},
+					Name2ColIndex: map[string]int32{"id": 0, "b": 1},
+					Pkey:          &planpb.PrimaryKeyDef{PkeyColName: "id", Names: []string{"id"}},
+				},
+				Stats:      &planpb.Stats{TableCnt: 100, Outcnt: 1, Selectivity: 0.01, Cost: 100},
+				FilterList: []*planpb.Expr{filter},
+			}
+			scanID := builder.appendNode(node, ctx)
+
+			idxNodeID := builder.tryIndexOnlyScan(idxDef, builder.qry.Nodes[scanID], map[[2]int32]int{{bindTag, 1}: 1}, map[[2]int32]*planpb.Expr{}, &Snapshot{})
+			require.NotEqual(t, int32(-1), idxNodeID)
+
+			idxNode := builder.qry.Nodes[idxNodeID]
+			require.Equal(t, tt.lookupFunc, idxNode.FilterList[0].GetF().Func.ObjName)
+			if tt.residual == "" {
+				require.Len(t, idxNode.FilterList, 1)
+				return
+			}
+			require.Len(t, idxNode.FilterList, 2)
+			require.Equal(t, tt.residual, idxNode.FilterList[1].GetF().Func.ObjName)
+			require.Equal(t, "serial_extract", wrappedSerialFuncName(t, idxNode.FilterList[1].GetF().Args[0]))
+			require.Equal(t, int32(tt.typ), idxNode.FilterList[1].GetF().Args[0].Typ.Id)
+		})
+	}
+}
+
 func TestReplaceRangePairCondition_UsesPrefixBetweenForSecondaryIndex(t *testing.T) {
 	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true), false, true)
 	bindTag := builder.genNewBindTag()
@@ -4504,6 +4618,28 @@ func makeStringEqFilterExpr(relPos, colPos int32, val string) *planpb.Expr {
 				},
 			},
 		},
+	}
+}
+
+func setIndexFilterArgumentType(expr *planpb.Expr, typ planpb.Type) {
+	fn := expr.GetF()
+	if fn == nil {
+		return
+	}
+	for _, arg := range fn.Args {
+		setExprTypeRecursive(arg, typ)
+	}
+}
+
+func setExprTypeRecursive(expr *planpb.Expr, typ planpb.Type) {
+	if expr == nil {
+		return
+	}
+	expr.Typ = typ
+	if list := expr.GetList(); list != nil {
+		for _, item := range list.List {
+			setExprTypeRecursive(item, typ)
+		}
 	}
 }
 

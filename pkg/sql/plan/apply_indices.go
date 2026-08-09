@@ -1914,7 +1914,7 @@ func (builder *QueryBuilder) replaceLeadingFilter(idxDef *IndexDef, filterList [
 	return builder.replaceEqualCondition(idxDef, filterList, leadingPos, idxTag, idxTableDef)
 }
 
-func needsIndexOnlyResidualLeadingFilters(idxDef *IndexDef, filterList []*plan.Expr, leadingPos []int32) bool {
+func needsIndexOnlyResidualLeadingFilters(idxDef *IndexDef, tableDef *plan.TableDef, filterList []*plan.Expr, leadingPos []int32, lookupFilter *plan.Expr) bool {
 	if indexTableLookupSerialFunc(idxDef) != "serial_full" {
 		return false
 	}
@@ -1925,6 +1925,38 @@ func needsIndexOnlyResidualLeadingFilters(idxDef *IndexDef, filterList []*plan.E
 		if indexFilterMayCompareNullAtRuntime(filterList[pos]) {
 			return true
 		}
+	}
+
+	if lookupFilter == nil {
+		return false
+	}
+	lookupFn := lookupFilter.GetF()
+	if lookupFn == nil || lookupFn.Func == nil ||
+		(lookupFn.Func.ObjName != "prefix_eq" && lookupFn.Func.ObjName != "prefix_in") || len(leadingPos) == 0 {
+		return false
+	}
+	lastPos := leadingPos[len(leadingPos)-1]
+	if lastPos < 0 || int(lastPos) >= len(filterList) {
+		return false
+	}
+	return indexFilterComparesBinaryColumn(tableDef, filterList[lastPos])
+}
+
+func indexFilterComparesBinaryColumn(tableDef *plan.TableDef, expr *plan.Expr) bool {
+	if tableDef == nil || expr == nil {
+		return false
+	}
+	fn := expr.GetF()
+	if fn == nil || fn.Func == nil || (fn.Func.ObjName != "=" && fn.Func.ObjName != "in") {
+		return false
+	}
+	for _, arg := range fn.Args {
+		col := arg.GetCol()
+		if col == nil || col.ColPos < 0 || int(col.ColPos) >= len(tableDef.Cols) {
+			continue
+		}
+		oid := types.T(tableDef.Cols[col.ColPos].Typ.Id)
+		return oid == types.T_binary || oid == types.T_varbinary
 	}
 	return false
 }
@@ -2093,10 +2125,10 @@ func (builder *QueryBuilder) tryIndexOnlyScan(idxDef *IndexDef, node *plan.Node,
 	newLeadingFilter := builder.replaceLeadingFilter(idxDef, node.FilterList, leadingPos, leadingEqualCond, idxTag, idxTableDef)
 	newFilterList := make([]*plan.Expr, 0, len(node.FilterList))
 	newFilterList = append(newFilterList, newLeadingFilter)
-	if needsIndexOnlyResidualLeadingFilters(idxDef, node.FilterList, leadingPos) {
-		// serial_full preserves NULL as key bytes. Keep the original SQL
-		// predicate as a residual recheck so prepared NULL values still follow
-		// SQL three-valued logic on covering index-only scans.
+	if needsIndexOnlyResidualLeadingFilters(idxDef, node.TableDef, node.FilterList, leadingPos, newLeadingFilter) {
+		// Keep the original SQL predicate when serial_full lookup bytes are not
+		// an exact semantic oracle: NULL is encoded as key bytes, and a binary
+		// encoded terminator byte can also begin an escaped binary NUL.
 		for _, idx := range leadingPos {
 			newFilterList = append(newFilterList, replaceColumnsForExpr(DeepCopyExpr(node.FilterList[idx]), idxColMap))
 		}
