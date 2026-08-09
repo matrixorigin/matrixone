@@ -2341,6 +2341,90 @@ func TestUpdateIgnoreUsesIgnoreDedupAction(t *testing.T) {
 	require.True(t, found, "UPDATE IGNORE of a primary key should include a DEDUP join")
 }
 
+func TestUpdateIgnoreChecksRepeatedPhysicalAliasesBeforeFinalRowMerge(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	tests := []struct {
+		name string
+		sql  string
+	}{
+		{
+			name: "two aliases",
+			sql: "UPDATE IGNORE dept a JOIN dept b ON a.deptno = b.deptno " +
+				"SET a.dname = 'conflict', b.loc = 'safe'",
+		},
+		{
+			name: "conflict alias follows safe owner",
+			sql: "UPDATE IGNORE dept a JOIN dept b ON a.deptno = b.deptno " +
+				"SET a.loc = 'safe', b.dname = 'conflict'",
+		},
+		{
+			name: "three aliases",
+			sql: "UPDATE IGNORE dept a JOIN dept b ON a.deptno = b.deptno " +
+				"JOIN dept c ON b.deptno = c.deptno " +
+				"SET a.dname = 'conflict', b.loc = 'safe-b', c.loc = 'safe-c'",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			logicPlan, err := runOneStmt(mock, t, test.sql)
+			require.NoError(t, err)
+			query := logicPlan.GetQuery()
+
+			var ignoreDedupIDs []int32
+			for nodeID, node := range query.Nodes {
+				if node.NodeType == plan.Node_JOIN && node.JoinType == plan.Node_DEDUP &&
+					node.OnDuplicateAction == plan.Node_IGNORE {
+					ignoreDedupIDs = append(ignoreDedupIDs, int32(nodeID))
+				}
+			}
+			require.NotEmpty(t, ignoreDedupIDs)
+
+			finalMergeAfterIgnore := false
+			for nodeID, node := range query.Nodes {
+				if node.NodeType != plan.Node_AGG {
+					continue
+				}
+				for _, dedupID := range ignoreDedupIDs {
+					if planNodeDependsOn(query, int32(nodeID), dedupID, make(map[int32]struct{})) {
+						finalMergeAfterIgnore = true
+						break
+					}
+				}
+			}
+			require.True(t, finalMergeAfterIgnore,
+				"repeated physical aliases must pass alias-level IGNORE checks before RowID merge")
+		})
+	}
+}
+
+func planNodeDependsOn(query *plan.Query, nodeID, dependencyID int32, visited map[int32]struct{}) bool {
+	if nodeID == dependencyID {
+		return true
+	}
+	if nodeID < 0 || int(nodeID) >= len(query.Nodes) {
+		return false
+	}
+	if _, ok := visited[nodeID]; ok {
+		return false
+	}
+	visited[nodeID] = struct{}{}
+	for _, childID := range query.Nodes[nodeID].Children {
+		if planNodeDependsOn(query, childID, dependencyID, visited) {
+			return true
+		}
+	}
+	for _, sourceStep := range query.Nodes[nodeID].SourceStep {
+		if sourceStep < 0 || int(sourceStep) >= len(query.Steps) {
+			continue
+		}
+		if planNodeDependsOn(query, query.Steps[sourceStep], dependencyID, visited) {
+			return true
+		}
+	}
+	return false
+}
+
 func TestUpdateIgnoreUsesAssignmentIgnoreCast(t *testing.T) {
 	mock := NewMockOptimizer(true)
 	logicPlan, err := runOneStmt(mock, t,

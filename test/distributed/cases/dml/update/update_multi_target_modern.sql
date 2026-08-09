@@ -208,6 +208,55 @@ SELECT * FROM multi_update_ignore_b ORDER BY id;
 DROP TABLE multi_update_ignore_a;
 DROP TABLE multi_update_ignore_b;
 
+DROP TABLE IF EXISTS multi_update_ignore_alias;
+CREATE TABLE multi_update_ignore_alias (
+    id INT PRIMARY KEY,
+    u INT UNIQUE,
+    x INT,
+    y INT
+);
+INSERT INTO multi_update_ignore_alias VALUES (1, 1, 0, 0), (2, 2, 0, 0);
+UPDATE IGNORE multi_update_ignore_alias a
+JOIN multi_update_ignore_alias b ON a.id = b.id
+SET
+    a.u = a.u + 1,
+    b.x = 1;
+SELECT ROW_COUNT();
+SELECT * FROM multi_update_ignore_alias ORDER BY id;
+
+TRUNCATE TABLE multi_update_ignore_alias;
+INSERT INTO multi_update_ignore_alias VALUES (1, 1, 0, 0), (2, 2, 0, 0);
+UPDATE IGNORE multi_update_ignore_alias a
+JOIN multi_update_ignore_alias b ON a.id = b.id
+SET
+    a.x = 1,
+    b.u = b.u + 1;
+SELECT ROW_COUNT();
+SELECT * FROM multi_update_ignore_alias ORDER BY id;
+
+TRUNCATE TABLE multi_update_ignore_alias;
+INSERT INTO multi_update_ignore_alias VALUES (1, 1, 0, 0), (2, 2, 0, 0);
+UPDATE IGNORE multi_update_ignore_alias a
+JOIN multi_update_ignore_alias b ON a.id = b.id
+JOIN multi_update_ignore_alias c ON b.id = c.id
+SET
+    a.u = a.u + 1,
+    b.x = 1,
+    c.y = 1;
+SELECT ROW_COUNT();
+SELECT * FROM multi_update_ignore_alias ORDER BY id;
+
+TRUNCATE TABLE multi_update_ignore_alias;
+INSERT INTO multi_update_ignore_alias VALUES (1, 1, 0, 0), (2, 2, 0, 0);
+PREPARE multi_update_ignore_stmt FROM
+    'UPDATE IGNORE multi_update_ignore_alias a JOIN multi_update_ignore_alias b ON a.id = b.id SET a.u = a.u + 1, b.x = ?';
+SET @multi_update_ignore_x = 1;
+EXECUTE multi_update_ignore_stmt USING @multi_update_ignore_x;
+SELECT ROW_COUNT();
+SELECT * FROM multi_update_ignore_alias ORDER BY id;
+DEALLOCATE PREPARE multi_update_ignore_stmt;
+DROP TABLE multi_update_ignore_alias;
+
 DROP TABLE IF EXISTS multi_update_auto_a;
 DROP TABLE IF EXISTS multi_update_auto_b;
 CREATE TABLE multi_update_auto_a (
