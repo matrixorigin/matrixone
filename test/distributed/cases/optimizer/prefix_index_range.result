@@ -15,6 +15,29 @@ insert into prefix_range_nonunique values
 (6, 'abdA'),
 (7, 'abe'),
 (8, null);
+explain select id, s from prefix_range_nonunique force index for order by(idx_s)
+where s between 'abcX' and 'abdA' order by s, id;
+-- @regex("Index Table Scan", false)
+➤ TP QUERY PLAN[12,0,0]  𝄀
+Project  𝄀
+  ->  Sort  𝄀
+        Sort Key: prefix_range_nonunique.s INTERNAL, prefix_range_nonunique.id INTERNAL  𝄀
+        ->  Table Scan on prefix_index_range.prefix_range_nonunique  𝄀
+              Filter Cond: prefix_range_nonunique.s BETWEEN 'abcX' AND 'abdA'
+select id, s from prefix_range_nonunique force index for order by(idx_s)
+where s between 'abcX' and 'abdA' order by s, id;
+➤ id[4,32,0]  ¦  s[12,32,0]  𝄀
+3  ¦  abcX  𝄀
+4  ¦  abcY  𝄀
+5  ¦  abd  𝄀
+6  ¦  abdA
+select s, count(*) from prefix_range_nonunique force index for group by(idx_s)
+where s between 'abcX' and 'abdA' group by s order by s;
+➤ s[12,32,0]  ¦  count(*)[-5,64,0]  𝄀
+abcX  ¦  1  𝄀
+abcY  ¦  1  𝄀
+abd  ¦  1  𝄀
+abdA  ¦  1
 explain select id from prefix_range_nonunique force index(idx_s)
 where s between 'abcX' and 'abdA';
 -- @regex("Index Table Scan", false)
@@ -80,11 +103,11 @@ where s between 'abcX' and 'abdA' or s in ('abe') order by id;
 7
 explain select id from prefix_range_nonunique force index(idx_s)
 where s in ('abcX', 'abdA');
--- @regex("prefix_in", false)
+-- @regex("Index Table Scan", false)
 ➤ TP QUERY PLAN[12,0,0]  𝄀
 Project  𝄀
   ->  Table Scan on prefix_index_range.prefix_range_nonunique  𝄀
-        Filter Cond: prefix_range_nonunique.s IN ('abcX', 'abdA')
+        Filter Cond: prefix_range_nonunique.s in ([abcX abdA])
 select id from prefix_range_nonunique force index(idx_s)
 where s in ('abcX', 'abdA') order by id;
 ➤ id[4,32,0]  𝄀
@@ -182,4 +205,59 @@ where s between 'abcX' and 'abdA' order by id;
 4  𝄀
 5  𝄀
 6
+create table prefix_range_rename (
+id int primary key,
+s varchar(32),
+key idx_s(s(3))
+);
+insert into prefix_range_rename values
+(1, 'abcX'),
+(2, 'abcY'),
+(3, 'abd'),
+(4, 'abdA');
+alter table prefix_range_rename rename column s to renamed;
+explain select id from prefix_range_rename force index(idx_s)
+where renamed between 'abcX' and 'abdA';
+-- @regex("Index Table Scan", false)
+➤ TP QUERY PLAN[12,0,0]  𝄀
+Project  𝄀
+  ->  Table Scan on prefix_index_range.prefix_range_rename  𝄀
+        Filter Cond: prefix_range_rename.renamed BETWEEN 'abcX' AND 'abdA'
+select id from prefix_range_rename force index(idx_s)
+where renamed between 'abcX' and 'abdA' order by id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+2  𝄀
+3  𝄀
+4
+insert into prefix_range_rename values (9, 'abcZ');
+select id from prefix_range_rename force index(idx_s) where renamed = 'abcZ';
+➤ id[4,32,0]  𝄀
+9
+update prefix_range_rename set renamed = 'abdB' where id = 9;
+select id from prefix_range_rename force index(idx_s) where renamed = 'abdB';
+➤ id[4,32,0]  𝄀
+9
+delete from prefix_range_rename where id = 9;
+select count(*) from prefix_range_rename where id = 9;
+➤ count(*)[-5,64,0]  𝄀
+0
+select mo_ctl('dn', 'flush', 'prefix_index_range.prefix_range_rename');
+➤ mo_ctl(dn, flush, prefix_index_range.prefix_range_rename)[12,65535,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
+select id from prefix_range_rename force index(idx_s)
+where renamed between 'abcX' and 'abdA' order by id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+2  𝄀
+3  𝄀
+4
 drop database prefix_index_range;

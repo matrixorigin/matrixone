@@ -20,6 +20,16 @@ insert into prefix_range_nonunique values
     (7, 'abe'),
     (8, null);
 
+-- Scoped ORDER/GROUP hints run before ordinary filter index selection. A
+-- prefix key cannot reconstruct full values or order same-prefix neighbors.
+-- @regex("Index Table Scan",false)
+explain select id, s from prefix_range_nonunique force index for order by(idx_s)
+where s between 'abcX' and 'abdA' order by s, id;
+select id, s from prefix_range_nonunique force index for order by(idx_s)
+where s between 'abcX' and 'abdA' order by s, id;
+select s, count(*) from prefix_range_nonunique force index for group by(idx_s)
+where s between 'abcX' and 'abdA' group by s order by s;
+
 -- FORCE INDEX previously returned only ids 5 and 6. A prefix index is not a
 -- safe range candidate, so the forced query must fall back to a table scan.
 -- @regex("Index Table Scan",false)
@@ -46,9 +56,8 @@ where s between 'abcX' and 'abdA' or s in ('abe') order by id;
 select id from prefix_range_nonunique ignore index(idx_s)
 where s between 'abcX' and 'abdA' or s in ('abe') order by id;
 
--- Prefix metadata is lossy, so all non-equality predicates, including IN,
--- must fall back to the base-table predicate.
--- @regex("prefix_in",false)
+-- IN follows the same conservative fallback as other lossy non-equality paths.
+-- @regex("Index Table Scan",false)
 explain select id from prefix_range_nonunique force index(idx_s)
 where s in ('abcX', 'abdA');
 select id from prefix_range_nonunique force index(idx_s)
@@ -101,5 +110,34 @@ explain select id from prefix_range_nonunique force index(idx_s_complete)
 where s between 'abcX' and 'abdA';
 select id from prefix_range_nonunique force index(idx_s_complete)
 where s between 'abcX' and 'abdA' order by id;
+
+-- RENAME must update both logical parts and persisted prefix metadata. Verify
+-- range fallback before/after flush and all hidden-key DML maintenance forms.
+create table prefix_range_rename (
+    id int primary key,
+    s varchar(32),
+    key idx_s(s(3))
+);
+insert into prefix_range_rename values
+    (1, 'abcX'),
+    (2, 'abcY'),
+    (3, 'abd'),
+    (4, 'abdA');
+alter table prefix_range_rename rename column s to renamed;
+-- @regex("Index Table Scan",false)
+explain select id from prefix_range_rename force index(idx_s)
+where renamed between 'abcX' and 'abdA';
+select id from prefix_range_rename force index(idx_s)
+where renamed between 'abcX' and 'abdA' order by id;
+insert into prefix_range_rename values (9, 'abcZ');
+select id from prefix_range_rename force index(idx_s) where renamed = 'abcZ';
+update prefix_range_rename set renamed = 'abdB' where id = 9;
+select id from prefix_range_rename force index(idx_s) where renamed = 'abdB';
+delete from prefix_range_rename where id = 9;
+select count(*) from prefix_range_rename where id = 9;
+-- @separator:table
+select mo_ctl('dn', 'flush', 'prefix_index_range.prefix_range_rename');
+select id from prefix_range_rename force index(idx_s)
+where renamed between 'abcX' and 'abdA' order by id;
 
 drop database prefix_index_range;

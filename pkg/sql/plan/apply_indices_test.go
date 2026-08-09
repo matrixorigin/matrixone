@@ -4574,6 +4574,10 @@ func TestGetIndexForNonEquiCondUsesCompleteRangeIndexAlternative(t *testing.T) {
 						catalog.FakePrimaryKeyColName: 0,
 						"name":                        1,
 					},
+					Cols: []*planpb.ColDef{
+						{Name: catalog.FakePrimaryKeyColName, Typ: planpb.Type{Id: int32(types.T_uint64)}},
+						{Name: "name", Typ: planpb.Type{Id: int32(types.T_varchar)}},
+					},
 					Indexes: tt.indexes,
 				},
 				FilterList: []*planpb.Expr{
@@ -4588,6 +4592,35 @@ func TestGetIndexForNonEquiCondUsesCompleteRangeIndexAlternative(t *testing.T) {
 	}
 }
 
+func TestScopedForceHintsRejectLossyPrefixIndex(t *testing.T) {
+	tests := []struct {
+		name string
+		sql  string
+	}{
+		{
+			name: "order by",
+			sql:  "select id from index_hint_t force index for order by(idx_a) where a between 'abcX' and 'abdA' order by a",
+		},
+		{
+			name: "group by",
+			sql:  "select a, count(*) from index_hint_t force index for group by(idx_a) where a between 'abcX' and 'abdA' group by a",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			mock := NewMockOptimizer(true)
+			addIndexHintChoiceTableForTest(mock)
+			tableDef := mock.ctxt.tables["index_hint_t"]
+			tableDef.Cols[1].Typ = planpb.Type{Id: int32(types.T_varchar), Width: 32}
+			tableDef.Indexes[0].IndexAlgoParams = `{"prefix_lengths":"a:3"}`
+
+			queryPlan, err := runOneStmt(mock, t, test.sql)
+			require.NoError(t, err)
+			require.Empty(t, findFirstIndexScanName(queryPlan))
+		})
+	}
+}
 func TestGetIndexForNonEquiCond_SkipsLargePairedRangeByStats(t *testing.T) {
 	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true), false, true)
 	bindTag := builder.genNewBindTag()
