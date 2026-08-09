@@ -152,14 +152,18 @@ func DeepCopyPreInsertCtx(ctx *plan.PreInsertCtx) *plan.PreInsertCtx {
 		return nil
 	}
 	newCtx := &plan.PreInsertCtx{
-		Ref:           DeepCopyObjectRef(ctx.Ref),
-		TableDef:      DeepCopyTableDef(ctx.TableDef, true),
-		HasAutoCol:    ctx.HasAutoCol,
-		ColOffset:     ctx.ColOffset,
-		CompPkeyExpr:  DeepCopyExpr(ctx.CompPkeyExpr),
-		ClusterByExpr: DeepCopyExpr(ctx.ClusterByExpr),
-		IsOldUpdate:   ctx.IsOldUpdate,
-		IsNewUpdate:   ctx.IsNewUpdate,
+		Ref:                DeepCopyObjectRef(ctx.Ref),
+		TableDef:           DeepCopyTableDef(ctx.TableDef, true),
+		HasAutoCol:         ctx.HasAutoCol,
+		ColOffset:          ctx.ColOffset,
+		CompPkeyExpr:       DeepCopyExpr(ctx.CompPkeyExpr),
+		ClusterByExpr:      DeepCopyExpr(ctx.ClusterByExpr),
+		IsOldUpdate:        ctx.IsOldUpdate,
+		IsNewUpdate:        ctx.IsNewUpdate,
+		HasTargetSelector:  ctx.HasTargetSelector,
+		TargetRowNumberCol: ctx.TargetRowNumberCol,
+		TargetActiveCol:    ctx.TargetActiveCol,
+		TargetRowIdCol:     ctx.TargetRowIdCol,
 	}
 
 	return newCtx

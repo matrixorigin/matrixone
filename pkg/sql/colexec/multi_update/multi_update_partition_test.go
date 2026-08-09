@@ -75,9 +75,28 @@ func TestResetMultiUpdateCtxsClassifiesTemporaryIndexTables(t *testing.T) {
 
 	op.resetMultiUpdateCtxs()
 
-	require.Equal(t, UpdateMainTable, op.ctr.updateCtxInfos["main_table"].tableType)
-	require.Equal(t, UpdateUniqueIndexTable, op.ctr.updateCtxInfos[uniqueName].tableType)
-	require.Equal(t, UpdateSecondaryIndexTable, op.ctr.updateCtxInfos[secondaryName].tableType)
+	require.Equal(t, UpdateMainTable, lookupUpdateCtxInfo(op.ctr.updateCtxInfos, op.MultiUpdateCtx[0]).tableType)
+	require.Equal(t, UpdateUniqueIndexTable, lookupUpdateCtxInfo(op.ctr.updateCtxInfos, op.MultiUpdateCtx[1]).tableType)
+	require.Equal(t, UpdateSecondaryIndexTable, lookupUpdateCtxInfo(op.ctr.updateCtxInfos, op.MultiUpdateCtx[2]).tableType)
+}
+
+func TestUpdateCtxKeySeparatesSameNamedTablesAcrossDatabases(t *testing.T) {
+	left := &MultiUpdateCtx{
+		ObjRef:   &plan.ObjectRef{SchemaName: "db_a", ObjName: "t", Obj: 101},
+		TableDef: &plan.TableDef{TblId: 201, DbName: "db_a", Name: "t"},
+	}
+	right := &MultiUpdateCtx{
+		ObjRef:   &plan.ObjectRef{SchemaName: "db_b", ObjName: "t", Obj: 102},
+		TableDef: &plan.TableDef{TblId: 202, DbName: "db_b", Name: "t"},
+	}
+
+	require.NotEqual(t, updateCtxKey(left), updateCtxKey(right))
+	infos := map[string]*updateCtxInfo{
+		updateCtxKey(left):  {tableType: UpdateMainTable},
+		updateCtxKey(right): {tableType: UpdateSecondaryIndexTable},
+	}
+	require.Equal(t, UpdateMainTable, lookupUpdateCtxInfo(infos, left).tableType)
+	require.Equal(t, UpdateSecondaryIndexTable, lookupUpdateCtxInfo(infos, right).tableType)
 }
 
 func TestPartitionMultiUpdateString(t *testing.T) {
@@ -180,7 +199,8 @@ func TestPartitionMultiUpdateResetRebuildsRawContextMetadata(t *testing.T) {
 	op.Reset(proc, false, nil)
 
 	require.Same(t, original, raw.MultiUpdateCtx[0])
-	require.Contains(t, raw.ctr.updateCtxInfos, "logical")
+	require.Contains(t, raw.ctr.updateCtxInfos, updateCtxKey(original))
+	require.NotNil(t, lookupUpdateCtxInfo(raw.ctr.updateCtxInfos, original))
 	require.NotContains(t, raw.ctr.updateCtxInfos, "physical_partition")
 }
 

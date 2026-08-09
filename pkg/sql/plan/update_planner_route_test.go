@@ -1027,6 +1027,46 @@ func TestBindUpdateAutoIncrementRunsBeforeForeignKeys(t *testing.T) {
 	})
 }
 
+func TestBindUpdateSupportsMultipleAutoIncrementTargets(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	for tableName, colName := range map[string]string{"nation": "n_regionkey", "nation2": "r_regionkey"} {
+		for _, col := range mock.ctxt.tables[tableName].Cols {
+			if col.Name == colName {
+				col.Typ.AutoIncr = true
+				break
+			}
+		}
+	}
+	queryPlan, err := runOneStmt(
+		mock,
+		t,
+		"UPDATE nation n JOIN nation2 n2 ON n.n_nationkey = n2.n_nationkey "+
+			"SET n.n_regionkey = DEFAULT, n2.r_regionkey = DEFAULT",
+	)
+	require.NoError(t, err)
+	require.NotNil(t, queryPlan.GetQuery())
+	preInsertCount := 0
+	for _, node := range queryPlan.GetQuery().Nodes {
+		if node.NodeType == planpb.Node_PRE_INSERT {
+			preInsertCount++
+			require.True(t, node.PreInsertCtx.HasTargetSelector)
+		}
+	}
+	require.Equal(t, 2, preInsertCount)
+}
+
+func TestRepeatedPhysicalTargetPrimaryKeyUpdateIsRejected(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	_, err := runOneStmt(
+		mock,
+		t,
+		"UPDATE nation a JOIN nation b ON a.n_nationkey = b.n_nationkey "+
+			"SET a.n_nationkey = a.n_nationkey + 1, b.n_name = 'b'",
+	)
+	require.Error(t, err)
+	require.ErrorContains(t, err, "Primary key update is not allowed")
+}
+
 func TestLegacyInsertForeignKeyKeepsGenericAssert(t *testing.T) {
 	mock := NewMockOptimizer(true)
 	emp := mock.ctxt.tables["emp"]

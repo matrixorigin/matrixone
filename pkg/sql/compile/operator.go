@@ -531,6 +531,10 @@ func dupOperatorWithContext(sourceOp vm.Operator, index int, maxParallel int, du
 		op.ClusterByExpr = t.ClusterByExpr
 		op.ColOffset = t.ColOffset
 		op.RejectZeroTemporal = t.RejectZeroTemporal
+		op.HasTargetSelector = t.HasTargetSelector
+		op.TargetRowNumberCol = t.TargetRowNumberCol
+		op.TargetActiveCol = t.TargetActiveCol
+		op.TargetRowIDCol = t.TargetRowIDCol
 		op.SetInfo(&info)
 		return op
 	case vm.Deletion:

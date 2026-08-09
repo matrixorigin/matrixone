@@ -83,11 +83,11 @@ func (update *MultiUpdate) Prepare(proc *process.Process) error {
 			}
 			info.tableType = tableType
 			info.isContiguous = isContiguousMapping(updateCtx.InsertCols)
-			update.ctr.updateCtxInfos[updateCtx.TableDef.Name] = info
+			update.ctr.updateCtxInfos[updateCtxKey(updateCtx)] = info
 		}
 	}
 	for _, updateCtx := range update.MultiUpdateCtx {
-		info := update.ctr.updateCtxInfos[updateCtx.TableDef.Name]
+		info := lookupUpdateCtxInfo(update.ctr.updateCtxInfos, updateCtx)
 		if update.Action != UpdateWriteS3 {
 			if info.Source == nil {
 				rel, err := colexec.GetRelAndPartitionRelsByObjRef(proc.Ctx, proc, update.Engine, updateCtx.ObjRef)
@@ -434,7 +434,7 @@ func (update *MultiUpdate) updateOneBatch(proc *process.Process, analyzer proces
 		if len(updateCtx.InsertCols) == 0 {
 			continue
 		}
-		tableType := update.ctr.updateCtxInfos[updateCtx.TableDef.Name].tableType
+		tableType := lookupUpdateCtxInfo(update.ctr.updateCtxInfos, updateCtx).tableType
 		switch tableType {
 		case UpdateMainTable:
 			err = update.insert_main_table(proc, analyzer, i, contextBatch)
@@ -636,13 +636,13 @@ func (update *MultiUpdate) resetMultiUpdateCtxs() {
 			tableType = UpdateSecondaryIndexTable
 		}
 		info.tableType = tableType
-		update.ctr.updateCtxInfos[updateCtx.TableDef.Name] = info
+		update.ctr.updateCtxInfos[updateCtxKey(updateCtx)] = info
 	}
 }
 
 func (update *MultiUpdate) resetMultiSources(proc *process.Process) error {
 	for _, updateCtx := range update.MultiUpdateCtx {
-		info := update.ctr.updateCtxInfos[updateCtx.TableDef.Name]
+		info := lookupUpdateCtxInfo(update.ctr.updateCtxInfos, updateCtx)
 		info.Source = nil
 		if update.Action != UpdateWriteS3 {
 			rel, err := colexec.GetRelAndPartitionRelsByObjRef(proc.Ctx, proc, update.Engine, updateCtx.ObjRef)

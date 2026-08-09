@@ -70,9 +70,10 @@ DROP TABLE IF EXISTS multi_update_alias_target;
 CREATE TABLE multi_update_alias_target (
     id INT PRIMARY KEY,
     x INT,
-    y INT
+    y INT,
+    z INT
 );
-INSERT INTO multi_update_alias_target VALUES (1, 0, 0), (2, 0, 0);
+INSERT INTO multi_update_alias_target VALUES (1, 0, 0, 0), (2, 0, 0, 0);
 
 UPDATE multi_update_alias_target a
 JOIN multi_update_alias_target b ON a.id = b.id
@@ -119,7 +120,7 @@ JOIN multi_update_alias_source s ON s.target_id = a.id
 SET
     a.x = s.source_x,
     a.y = s.source_y,
-    b.id = b.id;
+    b.z = b.z;
 
 SELECT COUNT(*) AS mixed_source_rows
 FROM multi_update_alias_target
@@ -147,6 +148,87 @@ SELECT id, z FROM multi_update_third_target ORDER BY id;
 DROP TABLE multi_update_third_target;
 DROP TABLE multi_update_alias_source;
 DROP TABLE multi_update_alias_target;
+
+DROP TABLE IF EXISTS multi_update_three_alias;
+CREATE TABLE multi_update_three_alias (
+    id INT PRIMARY KEY,
+    x INT,
+    y INT
+);
+INSERT INTO multi_update_three_alias VALUES (1, 0, 0), (2, 0, 0), (3, 0, 0);
+UPDATE multi_update_three_alias a
+JOIN multi_update_three_alias b ON a.id = 1 AND b.id = 2
+JOIN multi_update_three_alias c ON c.id = 3
+SET
+    a.x = 1,
+    b.y = 2,
+    c.x = 3;
+SELECT ROW_COUNT();
+SELECT * FROM multi_update_three_alias ORDER BY id;
+DROP TABLE multi_update_three_alias;
+
+DROP DATABASE IF EXISTS multi_update_db_a;
+DROP DATABASE IF EXISTS multi_update_db_b;
+CREATE DATABASE multi_update_db_a;
+CREATE DATABASE multi_update_db_b;
+CREATE TABLE multi_update_db_a.t (id INT PRIMARY KEY, v INT);
+CREATE TABLE multi_update_db_b.t (id INT PRIMARY KEY, v INT);
+INSERT INTO multi_update_db_a.t VALUES (1, 10);
+INSERT INTO multi_update_db_b.t VALUES (1, 20);
+UPDATE multi_update_db_a.t a
+JOIN multi_update_db_b.t b ON a.id = b.id
+SET
+    a.v = 11,
+    b.v = 21;
+SELECT * FROM multi_update_db_a.t;
+SELECT * FROM multi_update_db_b.t;
+DROP DATABASE multi_update_db_a;
+DROP DATABASE multi_update_db_b;
+
+DROP TABLE IF EXISTS multi_update_ignore_a;
+DROP TABLE IF EXISTS multi_update_ignore_b;
+CREATE TABLE multi_update_ignore_a (
+    id INT PRIMARY KEY,
+    u INT UNIQUE
+);
+CREATE TABLE multi_update_ignore_b (
+    id INT PRIMARY KEY,
+    v INT
+);
+INSERT INTO multi_update_ignore_a VALUES (1, 1), (2, 2);
+INSERT INTO multi_update_ignore_b VALUES (1, 0);
+UPDATE IGNORE multi_update_ignore_a a
+JOIN multi_update_ignore_b b ON a.id = b.id
+SET
+    a.u = 2,
+    b.v = 9;
+SELECT ROW_COUNT();
+SELECT * FROM multi_update_ignore_a ORDER BY id;
+SELECT * FROM multi_update_ignore_b ORDER BY id;
+DROP TABLE multi_update_ignore_a;
+DROP TABLE multi_update_ignore_b;
+
+DROP TABLE IF EXISTS multi_update_auto_a;
+DROP TABLE IF EXISTS multi_update_auto_b;
+CREATE TABLE multi_update_auto_a (
+    id INT PRIMARY KEY,
+    seq INT AUTO_INCREMENT
+);
+CREATE TABLE multi_update_auto_b (
+    id INT PRIMARY KEY,
+    seq INT AUTO_INCREMENT
+);
+INSERT INTO multi_update_auto_a (id) VALUES (1);
+INSERT INTO multi_update_auto_b (id) VALUES (1);
+UPDATE multi_update_auto_a a
+JOIN multi_update_auto_b b ON a.id = b.id
+SET
+    a.seq = DEFAULT,
+    b.seq = DEFAULT;
+SELECT * FROM multi_update_auto_a;
+SELECT * FROM multi_update_auto_b;
+DROP TABLE multi_update_auto_a;
+DROP TABLE multi_update_auto_b;
 
 DROP TABLE IF EXISTS multi_update_partition_target;
 DROP TABLE IF EXISTS multi_update_plain_target;
@@ -231,23 +313,42 @@ DROP TABLE IF EXISTS multi_update_master_plain;
 CREATE TABLE multi_update_master_target (
     id VARCHAR(30) PRIMARY KEY,
     a VARCHAR(30),
-    b VARCHAR(30)
+    b VARCHAR(30),
+    c INT
 );
 CREATE INDEX idx_multi_update_master USING MASTER ON multi_update_master_target(a, b);
 CREATE TABLE multi_update_master_plain (
     id VARCHAR(30) PRIMARY KEY,
     v VARCHAR(30)
 );
-INSERT INTO multi_update_master_target VALUES ('1', 'old', 'value');
+INSERT INTO multi_update_master_target VALUES ('1', 'old', 'value', 0);
 INSERT INTO multi_update_master_plain VALUES ('1', 'old');
-UPDATE multi_update_master_target m
-JOIN multi_update_master_plain p ON m.id = p.id
+UPDATE multi_update_master_target m1
+JOIN multi_update_master_target m2 ON m1.id = m2.id
+JOIN multi_update_master_plain p ON m1.id = p.id
 SET
-    m.a = 'changed',
+    m1.a = 'changed',
+    m2.c = 1,
     p.v = 'z';
 SELECT * FROM multi_update_master_target WHERE a = 'changed' AND b = 'value';
 SELECT COUNT(*) FROM multi_update_master_target WHERE a = 'old' AND b = 'value';
 SELECT * FROM multi_update_master_plain ORDER BY id;
+SET @multi_update_master_table = (
+    SELECT index_table_name
+    FROM mo_catalog.mo_indexes
+    WHERE name = 'idx_multi_update_master'
+      AND table_id = (
+          SELECT rel_id FROM mo_catalog.mo_tables
+          WHERE relname = 'multi_update_master_target' AND reldatabase = DATABASE()
+      )
+    LIMIT 1
+);
+SET @multi_update_master_count_sql = CONCAT(
+    'SELECT COUNT(*) FROM `', @multi_update_master_table, '`'
+);
+PREPARE multi_update_master_count FROM @multi_update_master_count_sql;
+EXECUTE multi_update_master_count;
+DEALLOCATE PREPARE multi_update_master_count;
 UPDATE multi_update_master_target m
 JOIN multi_update_master_plain p ON m.id = p.id
 SET
@@ -338,23 +439,41 @@ DROP TABLE multi_update_cascade_source;
 DROP TABLE IF EXISTS multi_update_fulltext_target;
 DROP TABLE IF EXISTS multi_update_fulltext_source;
 DROP TABLE IF EXISTS multi_update_fulltext_plain;
-CREATE TABLE multi_update_fulltext_target (id INT PRIMARY KEY, body TEXT);
+CREATE TABLE multi_update_fulltext_target (id INT PRIMARY KEY, body TEXT, v INT);
 CREATE FULLTEXT INDEX idx_multi_update_fulltext ON multi_update_fulltext_target(body);
 CREATE TABLE multi_update_fulltext_source (id INT);
 CREATE TABLE multi_update_fulltext_plain (id INT PRIMARY KEY, v INT);
-INSERT INTO multi_update_fulltext_target VALUES (1, 'old token');
+INSERT INTO multi_update_fulltext_target VALUES (1, 'old token', 0);
 INSERT INTO multi_update_fulltext_source VALUES (1), (1);
 INSERT INTO multi_update_fulltext_plain VALUES (1, 0);
-UPDATE multi_update_fulltext_target f
-JOIN multi_update_fulltext_source s ON f.id = s.id
+UPDATE multi_update_fulltext_target f1
+JOIN multi_update_fulltext_target f2 ON f1.id = f2.id
+JOIN multi_update_fulltext_source s ON f1.id = s.id
 JOIN multi_update_fulltext_plain p ON p.id = s.id
 SET
-    f.body = 'new token',
+    f1.body = 'new token',
+    f2.v = 1,
     p.v = 7;
 SELECT COUNT(*) FROM multi_update_fulltext_target
 WHERE MATCH(body) AGAINST('new' IN NATURAL LANGUAGE MODE);
 SELECT COUNT(*) FROM multi_update_fulltext_target
 WHERE MATCH(body) AGAINST('old' IN NATURAL LANGUAGE MODE);
+SET @multi_update_fulltext_table = (
+    SELECT index_table_name
+    FROM mo_catalog.mo_indexes
+    WHERE name = 'idx_multi_update_fulltext'
+      AND table_id = (
+          SELECT rel_id FROM mo_catalog.mo_tables
+          WHERE relname = 'multi_update_fulltext_target' AND reldatabase = DATABASE()
+      )
+    LIMIT 1
+);
+SET @multi_update_fulltext_count_sql = CONCAT(
+    'SELECT COUNT(*) FROM `', @multi_update_fulltext_table, '`'
+);
+PREPARE multi_update_fulltext_count FROM @multi_update_fulltext_count_sql;
+EXECUTE multi_update_fulltext_count;
+DEALLOCATE PREPARE multi_update_fulltext_count;
 DROP TABLE multi_update_fulltext_target;
 DROP TABLE multi_update_fulltext_source;
 DROP TABLE multi_update_fulltext_plain;

@@ -1010,11 +1010,21 @@ func Test_DMLOperatorSerializationRoundtrip(t *testing.T) {
 		require.True(t, restored.(*multi_update.MultiUpdate).RejectZeroTemporal)
 	})
 
-	t.Run("PreInsert_RejectZeroTemporal", func(t *testing.T) {
-		op := &preinsert.PreInsert{RejectZeroTemporal: true}
+	t.Run("PreInsert_TargetSelector", func(t *testing.T) {
+		op := &preinsert.PreInsert{
+			RejectZeroTemporal: true,
+			HasTargetSelector:  true,
+			TargetRowNumberCol: 11,
+			TargetActiveCol:    12,
+			TargetRowIDCol:     13,
+		}
 		_, pipeInstr, err := convertToPipelineInstruction(op, proc, ctx, 1)
 		require.NoError(t, err)
 		require.True(t, pipeInstr.PreInsert.RejectZeroTemporal)
+		require.True(t, pipeInstr.PreInsert.HasTargetSelector)
+		require.Equal(t, int32(11), pipeInstr.PreInsert.TargetRowNumberCol)
+		require.Equal(t, int32(12), pipeInstr.PreInsert.TargetActiveCol)
+		require.Equal(t, int32(13), pipeInstr.PreInsert.TargetRowIdCol)
 
 		wireBytes, err := pipeInstr.Marshal()
 		require.NoError(t, err)
@@ -1024,7 +1034,12 @@ func Test_DMLOperatorSerializationRoundtrip(t *testing.T) {
 
 		restored, err := convertToVmOperator(wireInstr, ctx, nil)
 		require.NoError(t, err)
-		require.True(t, restored.(*preinsert.PreInsert).RejectZeroTemporal)
+		restoredPreInsert := restored.(*preinsert.PreInsert)
+		require.True(t, restoredPreInsert.RejectZeroTemporal)
+		require.True(t, restoredPreInsert.HasTargetSelector)
+		require.Equal(t, int32(11), restoredPreInsert.TargetRowNumberCol)
+		require.Equal(t, int32(12), restoredPreInsert.TargetActiveCol)
+		require.Equal(t, int32(13), restoredPreInsert.TargetRowIDCol)
 	})
 
 	t.Run("DedupJoin_DedupBuildKeepLast", func(t *testing.T) {

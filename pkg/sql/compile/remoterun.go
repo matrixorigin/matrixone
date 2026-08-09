@@ -545,6 +545,10 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			ClusterByExpr:      t.ClusterByExpr,
 			ColOffset:          t.ColOffset,
 			RejectZeroTemporal: t.RejectZeroTemporal,
+			HasTargetSelector:  t.HasTargetSelector,
+			TargetRowNumberCol: t.TargetRowNumberCol,
+			TargetActiveCol:    t.TargetActiveCol,
+			TargetRowIdCol:     t.TargetRowIDCol,
 		}
 	case *lockop.LockOp:
 		in.LockOp = &pipeline.LockOp{
@@ -1006,6 +1010,10 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.ClusterByExpr = t.ClusterByExpr
 		arg.ColOffset = t.ColOffset
 		arg.RejectZeroTemporal = t.GetRejectZeroTemporal()
+		arg.HasTargetSelector = t.GetHasTargetSelector()
+		arg.TargetRowNumberCol = t.GetTargetRowNumberCol()
+		arg.TargetActiveCol = t.GetTargetActiveCol()
+		arg.TargetRowIDCol = t.GetTargetRowIdCol()
 		op = arg
 	case vm.LockOp:
 		t := opr.GetLockOp()

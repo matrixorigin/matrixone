@@ -2710,9 +2710,9 @@ func TestSamePhysicalTargetAliasesShareMergedFinalRows(t *testing.T) {
 				require.Equal(t, tableID, updateCtx.TableDef.TblId)
 			}
 		}
-		require.Equal(t, 2, mainContexts)
+		require.Equal(t, 1, mainContexts)
 		if strings.Contains(sql, "nation2") {
-			require.Len(t, multiUpdate.UpdateCtxList, 3)
+			require.Len(t, multiUpdate.UpdateCtxList, 2)
 		}
 	}
 }
