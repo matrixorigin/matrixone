@@ -1642,6 +1642,57 @@ func TestS3FSSingleEntryFallbackCoalescesExactRange(t *testing.T) {
 	require.Len(t, rangeStorage.readRanges(), 1)
 }
 
+func TestS3FSSingleEntryRangeMergeKeyValidation(t *testing.T) {
+	fs := &S3FS{memCache: &MemCache{}}
+	cacheableEntry := func(offset int64) IOEntry {
+		return IOEntry{
+			Offset:      offset,
+			Size:        7,
+			ToCacheData: CacheOriginalData,
+		}
+	}
+
+	t.Run("skips completed entries", func(t *testing.T) {
+		completed := cacheableEntry(10)
+		completed.done = true
+		vector := &IOVector{
+			FilePath: "foo/bar",
+			Entries:  []IOEntry{completed, cacheableEntry(123)},
+		}
+
+		key, ok := fs.singleEntryRangeMergeKey(vector)
+		require.True(t, ok)
+		require.Equal(t, IOMergeKey{
+			Path:      "foo/bar",
+			Offset:    123,
+			End:       130,
+			CacheFill: true,
+		}, key)
+	})
+
+	t.Run("rejects an already completed vector", func(t *testing.T) {
+		completed := cacheableEntry(10)
+		completed.done = true
+
+		_, ok := fs.singleEntryRangeMergeKey(&IOVector{
+			FilePath: "foo/bar",
+			Entries:  []IOEntry{completed},
+		})
+		require.False(t, ok)
+	})
+
+	t.Run("rejects multiple unfinished entries", func(t *testing.T) {
+		_, ok := fs.singleEntryRangeMergeKey(&IOVector{
+			FilePath: "foo/bar",
+			Entries: []IOEntry{
+				cacheableEntry(10),
+				cacheableEntry(20),
+			},
+		})
+		require.False(t, ok)
+	})
+}
+
 func TestS3FSSingleEntryFallbackDoesNotMergeDifferentRanges(t *testing.T) {
 	ctx := context.Background()
 	originalShortWait := shortIOWaitDuration
