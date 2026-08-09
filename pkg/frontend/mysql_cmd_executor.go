@@ -929,24 +929,27 @@ func doSetVar(
 	var ok bool
 	var userVarIsBin bool
 	var userVarRuntimeType types.T
+	var userVarPrepareParamKind vector.PrepareParamKind
 	type evaluatedAssignment struct {
-		assign             *tree.VarAssignmentExpr
-		value              interface{}
-		userVarIsBin       bool
-		userVarRuntimeType types.T
+		assign                  *tree.VarAssignmentExpr
+		value                   interface{}
+		userVarIsBin            bool
+		userVarRuntimeType      types.T
+		userVarPrepareParamKind vector.PrepareParamKind
 	}
 	evaluateAssignment := func(assignmentIndex int, assign *tree.VarAssignmentExpr) (evaluatedAssignment, error) {
 		isBin := false
 		var value interface{}
 		var runtimeType types.T
+		prepareParamKind := vector.PrepareParamNone
 		var evalErr error
 		if preparedPlanExpr := preparedSetPlanExpr(execCtx, assignmentIndex); preparedExpression &&
 			preparedPlanExpr != nil && !planExprContainsSubquery(preparedPlanExpr) {
-			value, runtimeType, evalErr = getPreparedPlanExprValue(
+			value, runtimeType, prepareParamKind, evalErr = getPreparedPlanExprValue(
 				ses, execCtx, preparedPlanExpr, &isBin)
 		} else {
-			value, runtimeType, evalErr = getExprValueWithPrepareMode(
-				assign.Value, ses, execCtx, preparedExpression, &isBin)
+			value, runtimeType, evalErr = getExprValueWithPrepareMeta(
+				assign.Value, ses, execCtx, preparedExpression, &prepareParamKind, &isBin)
 		}
 		if evalErr != nil {
 			return evaluatedAssignment{}, evalErr
@@ -958,10 +961,11 @@ func doSetVar(
 			}
 		}
 		return evaluatedAssignment{
-			assign:             assign,
-			value:              value,
-			userVarIsBin:       isBin,
-			userVarRuntimeType: runtimeType,
+			assign:                  assign,
+			value:                   value,
+			userVarIsBin:            isBin,
+			userVarRuntimeType:      runtimeType,
+			userVarPrepareParamKind: prepareParamKind,
 		}, nil
 	}
 	setVarFunc := func(system, global bool, name string, value interface{}, sql string) error {
@@ -1000,7 +1004,9 @@ func doSetVar(
 				}
 			}
 		} else {
-			err = ses.setUserDefinedVarWithType(name, value, sql, userVarIsBin, userVarRuntimeType)
+			err = ses.setUserDefinedVarWithMetadata(
+				name, value, sql, userVarIsBin,
+				userVarRuntimeType, userVarPrepareParamKind)
 			if err != nil {
 				return err
 			}
@@ -1014,6 +1020,7 @@ func doSetVar(
 		value := item.value
 		userVarIsBin = item.userVarIsBin
 		userVarRuntimeType = item.userVarRuntimeType
+		userVarPrepareParamKind = item.userVarPrepareParamKind
 
 		//TODO : fix SET NAMES after parser is ready
 		if assign.SetNames {
@@ -1239,10 +1246,10 @@ func getPreparedPlanExprValue(
 	execCtx *ExecCtx,
 	expr *plan.Expr,
 	isBin *bool,
-) (any, types.T, error) {
+) (any, types.T, vector.PrepareParamKind, error) {
 	vec, free, err := colexec.GetReadonlyResultFromNoColumnExpression(execCtx.proc, expr)
 	if err != nil {
-		return nil, types.T_any, err
+		return nil, types.T_any, vector.PrepareParamNone, err
 	}
 	defer free()
 	if isBin != nil {
@@ -1250,9 +1257,13 @@ func getPreparedPlanExprValue(
 	}
 	value, err := getValueFromVector(execCtx.reqCtx, vec, ses, expr)
 	if err != nil {
-		return nil, types.T_any, err
+		return nil, types.T_any, vector.PrepareParamNone, err
 	}
-	return value, vec.GetType().Oid, nil
+	kind := vec.GetPrepareParamKind()
+	if kind == vector.PrepareParamNone {
+		kind = prepareParamKindFromType(vec.GetType().Oid)
+	}
+	return value, vec.GetType().Oid, kind, nil
 }
 
 func doShowErrors(ses *Session, execCtx *ExecCtx) error {
@@ -4689,6 +4700,7 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 	proc.SetAffectedRows(ses.GetLastAffectedRows())
 	proc.SetResolveVariableFunc(ses.txnCompileCtx.ResolveVariable)
 	proc.SetResolveVariableIsBinFunc(ses.txnCompileCtx.ResolveVariableIsBin)
+	proc.SetResolveVariablePrepareParamKindFunc(ses.txnCompileCtx.ResolveVariablePrepareParamKind)
 	refreshStatementScopedSessionInfo(ses, proc)
 	// Frontend client SQL — session-bound resolver. Procs constructed
 	// via pkg/sql/compile/sql_executor.go's NewTopProcess inherit

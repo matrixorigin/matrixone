@@ -3501,6 +3501,9 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 	if listExpr, ok, err := bindSerialFuncOverExprList(ctx, name, args); ok || err != nil {
 		return listExpr, err
 	}
+	if err := normalizeDecimalParamComparisonArgs(ctx, name, args); err != nil {
+		return nil, err
+	}
 	if err := normalizeTimeStringComparisonArgs(ctx, name, args); err != nil {
 		return nil, err
 	}
@@ -4627,6 +4630,34 @@ func integerMetadataWidth(oid types.T) int32 {
 	default:
 		return 0
 	}
+}
+
+// A direct prepared parameter in a binary comparison derives its type from
+// the other operand. Preserve that contract for DECIMAL before the generic
+// string/numeric cast rules see the parameter's transport type (TEXT). Real
+// string expressions continue through the ordinary MySQL coercion path.
+func normalizeDecimalParamComparisonArgs(ctx context.Context, name string, args []*Expr) error {
+	switch name {
+	case "=", "<=>", "!=", "<>", "<", "<=", ">", ">=":
+		if len(args) != 2 {
+			return nil
+		}
+	default:
+		return nil
+	}
+
+	for paramPos, peerPos := range []int{1, 0} {
+		if !isDirectDynamicParam(args[paramPos]) || !types.T(args[peerPos].Typ.Id).IsDecimal() {
+			continue
+		}
+		castExpr, err := appendCastBeforeExpr(ctx, args[paramPos], args[peerPos].Typ)
+		if err != nil {
+			return err
+		}
+		args[paramPos] = castExpr
+		return nil
+	}
+	return nil
 }
 
 // MySQL compares scalar TIME expressions to strings as text, but converts a

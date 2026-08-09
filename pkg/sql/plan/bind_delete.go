@@ -96,6 +96,11 @@ func (builder *QueryBuilder) bindDelete(ctx CompilerContext, stmt *tree.Delete, 
 			return 0, moerr.NewUnsupportedDML(builder.GetContext(), "rewrite to truncate table")
 		}
 	}
+	for _, tableDef := range dmlCtx.tableDefs {
+		if err := validateTableRegularIndexPrefixMetadata(tableDef); err != nil {
+			return 0, err
+		}
+	}
 
 	var selectList []tree.SelectExpr
 	colName2Idx := make([]map[string]int32, len(stmt.Tables))

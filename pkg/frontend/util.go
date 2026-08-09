@@ -198,6 +198,18 @@ func getExprValueWithPrepareMode(
 	preparedExpression bool,
 	isBin ...*bool,
 ) (interface{}, types.T, error) {
+	return getExprValueWithPrepareMeta(
+		e, ses, execCtx, preparedExpression, nil, isBin...)
+}
+
+func getExprValueWithPrepareMeta(
+	e tree.Expr,
+	ses *Session,
+	execCtx *ExecCtx,
+	preparedExpression bool,
+	prepareParamKind *vector.PrepareParamKind,
+	isBin ...*bool,
+) (interface{}, types.T, error) {
 	/*
 		CORNER CASE:
 			SET character_set_results = utf8; // e = tree.UnresolvedName{'utf8'}.
@@ -209,6 +221,9 @@ func getExprValueWithPrepareMode(
 		// set @a = on, type of a is bool.
 		if len(isBin) > 0 {
 			*isBin[0] = false
+		}
+		if prepareParamKind != nil {
+			*prepareParamKind = vector.PrepareParamNone
 		}
 		return v.ColName(), types.T_varchar, nil
 	}
@@ -299,6 +314,18 @@ func getExprValueWithPrepareMode(
 	if len(isBin) > 0 {
 		*isBin[0] = resultVec.GetIsBin()
 	}
+	if prepareParamKind != nil {
+		*prepareParamKind = resultVec.GetPrepareParamKind()
+		if *prepareParamKind == vector.PrepareParamNone {
+			*prepareParamKind, err = transparentPrepareParamKind(e, ses)
+			if err != nil {
+				return nil, types.T_any, err
+			}
+		}
+		if *prepareParamKind == vector.PrepareParamNone {
+			*prepareParamKind = prepareParamKindFromType(resultVec.GetType().Oid)
+		}
+	}
 	value, err := getValueFromVector(execCtx.reqCtx, resultVec, ses, planExpr)
 	if err != nil {
 		return nil, types.T_any, err
@@ -322,6 +349,33 @@ func normalizeUserVariableValue(value any, oid types.T) (any, types.T, error) {
 		return value, oid, nil
 	}
 	return fmt.Sprint(value), types.T_varchar, nil
+}
+
+// transparentPrepareParamKind closes the metadata boundary introduced by SET's
+// synthetic SELECT evaluation. A direct parameter or variable retains its
+// source conversion category even if projection materialization drops vector-
+// local metadata. Parentheses are transparent; casts and other expressions are
+// intentionally not, because their result type defines the conversion category.
+func transparentPrepareParamKind(e tree.Expr, ses *Session) (vector.PrepareParamKind, error) {
+	for {
+		switch expr := e.(type) {
+		case *tree.ParenExpr:
+			e = expr.Expr
+		case *tree.ParamExpr:
+			proc := ses.GetProc()
+			// Parser ordinals are one-based; the normalized plan/process positions
+			// are zero-based (see decrementParamOrdinalRule).
+			if proc == nil || expr.Offset <= 0 {
+				return vector.PrepareParamNone, nil
+			}
+			return proc.GetPrepareParamKind(expr.Offset - 1), nil
+		case *tree.VarExpr:
+			return ses.GetTxnCompileCtx().ResolveVariablePrepareParamKind(
+				expr.Name, expr.System, expr.Global)
+		default:
+			return vector.PrepareParamNone, nil
+		}
+	}
 }
 
 func bindSetVariableResultExpr(

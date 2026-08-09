@@ -38,6 +38,7 @@ import (
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -368,7 +369,9 @@ func (ses *Session) SetUserDefinedVar(name string, value interface{}, sql string
 }
 
 func (ses *Session) setUserDefinedVar(name string, value interface{}, sql string, isBin bool) error {
-	return ses.setUserDefinedVarWithType(name, value, sql, isBin, preparedTextParamRuntimeType(value))
+	return ses.setUserDefinedVarWithMetadata(
+		name, value, sql, isBin,
+		preparedTextParamRuntimeType(value), prepareParamKindFromValue(value))
 }
 
 func (ses *Session) setUserDefinedVarWithType(
@@ -378,10 +381,37 @@ func (ses *Session) setUserDefinedVarWithType(
 	isBin bool,
 	runtimeType types.T,
 ) error {
+	return ses.setUserDefinedVarWithMetadata(
+		name, value, sql, isBin, runtimeType, prepareParamKindFromType(runtimeType))
+}
+
+func (ses *Session) setUserDefinedVarWithKind(
+	name string,
+	value interface{},
+	sql string,
+	isBin bool,
+	kind vector.PrepareParamKind,
+) error {
+	return ses.setUserDefinedVarWithMetadata(
+		name, value, sql, isBin, preparedTextParamRuntimeType(value), kind)
+}
+
+func (ses *Session) setUserDefinedVarWithMetadata(
+	name string,
+	value interface{},
+	sql string,
+	isBin bool,
+	runtimeType types.T,
+	kind vector.PrepareParamKind,
+) error {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
 	ses.userDefinedVars[strings.ToLower(name)] = &UserDefinedVar{
-		Value: value, Sql: sql, IsBin: isBin, RuntimeType: runtimeType,
+		Value:            value,
+		Sql:              sql,
+		IsBin:            isBin,
+		RuntimeType:      runtimeType,
+		PrepareParamKind: kind,
 	}
 	return nil
 }

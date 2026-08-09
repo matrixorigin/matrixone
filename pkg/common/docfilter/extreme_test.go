@@ -28,8 +28,8 @@ import (
 // filter for negative / max integer PKs" bug class: a value that zero-extends to
 // a huge uint64 (negatives, math.MinInt64, math.MaxUint64) must NEVER produce a
 // cbitmap with nbits==0 (which would make existing keys false negatives). Each
-// case must either build a correct dense cbitmap (single value or bounded span)
-// or fall back to an exact CRoaring — and membership must stay exact either way.
+// case must either build a correct dense cbitmap or fall back to exact
+// Sorted64 — and membership must stay exact either way.
 // It also pins the MaxCbitmapBits feasibility boundary.
 func TestCbitmapExtremeValues(t *testing.T) {
 	mp := mpool.MustNewZero()
@@ -42,7 +42,7 @@ func TestCbitmapExtremeValues(t *testing.T) {
 	// check builds via the production docfilter.Build (tag + payload), rebuilds
 	// with New, and asserts the filter is exact: every present value matches
 	// (single + vector), every absent value does not, and the routing tag is as
-	// expected (an over-cap range must fall back to CRoaring, not build empty).
+	// expected (an infeasible range must fall back to Sorted64, not build empty).
 	check := func(name string, present, absent *vector.Vector, wantTag byte) {
 		t.Run(name, func(t *testing.T) {
 			defer present.Free(mp)
@@ -73,32 +73,33 @@ func TestCbitmapExtremeValues(t *testing.T) {
 	i64 := types.T_int64.ToType()
 	u64 := types.T_uint64.ToType()
 
-	// Negatives incl. MinInt64: zero-extend to a huge span -> CRoaring (exact).
+	// Negatives incl. MinInt64: zero-extend to a huge span -> Sorted64 (exact).
 	check("int64_negatives_minint64",
 		buildIntVec(t, mp, i64, []int64{math.MinInt64, -1000, -1}, nil),
 		buildIntVec(t, mp, i64, []int64{0, 1, -2, math.MinInt64 + 1}, nil),
-		TagCRoaring)
+		TagSorted64)
 
-	// MaxUint64 alone: span 0 with the base offset -> a 1-bit dense cbitmap.
+	// A singleton is smaller as Sorted64 than as cbitmap plus its two-word
+	// header, even though its span is zero.
 	check("uint64_maxuint64_single",
 		buildIntVec(t, mp, u64, []uint64{math.MaxUint64}, nil),
 		buildIntVec(t, mp, u64, []uint64{0, math.MaxUint64 - 1}, nil),
-		TagCbitmap)
+		TagSorted64)
 
-	// {0, MaxUint64}: full-width span -> infeasible -> CRoaring (exact).
+	// {0, MaxUint64}: full-width span -> infeasible -> Sorted64 (exact).
 	check("uint64_full_span",
 		buildIntVec(t, mp, u64, []uint64{0, math.MaxUint64}, nil),
 		buildIntVec(t, mp, u64, []uint64{1, math.MaxUint64 - 1}, nil),
-		TagCRoaring)
+		TagSorted64)
 
-	// Boundary: span == MaxCbitmapBits-1 is feasible (dense cbitmap)...
-	check("boundary_span_below_cap",
-		buildIntVec(t, mp, i64, []int64{0, int64(MaxCbitmapBits) - 1}, nil),
-		buildIntVec(t, mp, i64, []int64{1, int64(MaxCbitmapBits) - 2}, nil),
+	// Cost boundary for two values: one bitmap word is equal in serialized size
+	// to the two-value Sorted64 payload; a second word selects Sorted64.
+	check("boundary_span_below_cost_cap",
+		buildIntVec(t, mp, i64, []int64{0, 63}, nil),
+		buildIntVec(t, mp, i64, []int64{1, 62}, nil),
 		TagCbitmap)
-	// ...span == MaxCbitmapBits is not (falls back to CRoaring).
-	check("boundary_span_at_cap",
-		buildIntVec(t, mp, i64, []int64{0, int64(MaxCbitmapBits)}, nil),
-		buildIntVec(t, mp, i64, []int64{1, int64(MaxCbitmapBits) - 1}, nil),
-		TagCRoaring)
+	check("boundary_span_at_cost_cap",
+		buildIntVec(t, mp, i64, []int64{0, 64}, nil),
+		buildIntVec(t, mp, i64, []int64{1, 63}, nil),
+		TagSorted64)
 }
