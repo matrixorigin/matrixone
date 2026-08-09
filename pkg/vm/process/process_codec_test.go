@@ -302,6 +302,11 @@ func TestBuildProcessInfoGatesBinaryStringMetadataByProtocolVersion(t *testing.T
 
 	serviceRuntime.SetGlobalVariables(rt.MOProtocolVersion, defines.MORPCVersion11)
 	proc.SetPrepareParamsWithMetadata(proc.GetPrepareParams(), []bool{false, false}, []bool{false, true})
+	_, err = proc.BuildProcessInfo("select ?")
+	require.Error(t, err)
+
+	serviceRuntime.SetGlobalVariables(rt.MOProtocolVersion, defines.MORPCVersion12)
+	proc.SetPrepareParamsWithMetadata(proc.GetPrepareParams(), []bool{false, false}, []bool{false, true})
 	info, err = proc.BuildProcessInfo("select ?")
 	require.NoError(t, err)
 	require.Equal(t, []bool{false, true}, info.PrepareParams.IsBinaryString)

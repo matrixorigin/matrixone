@@ -90,11 +90,11 @@ func (proc *Process) BuildProcessInfo(
 			for _, binaryString := range proc.Base.prepareParamsBinaryString {
 				hasBinaryString = hasBinaryString || binaryString
 			}
-			if hasBinaryString && protocolVersion < defines.MORPCVersion11 {
+			if hasBinaryString && protocolVersion < defines.MORPCVersion12 {
 				return procInfo, moerr.NewNotSupportedf(
 					proc.Ctx,
 					"binary string prepared parameters require protocol version %d",
-					defines.MORPCVersion11,
+					defines.MORPCVersion12,
 				)
 			}
 			procInfo.PrepareParams.Length = int64(vec.Length())
@@ -107,7 +107,7 @@ func (proc *Process) BuildProcessInfo(
 				procInfo.PrepareParams.Nulls[i] = vec.GetNulls().Contains(uint64(i))
 			}
 			procInfo.PrepareParams.IsBin = append(procInfo.PrepareParams.IsBin, proc.Base.prepareParamsIsBin...)
-			if protocolVersion >= defines.MORPCVersion11 {
+			if protocolVersion >= defines.MORPCVersion12 {
 				procInfo.PrepareParams.IsBinaryString = append(
 					procInfo.PrepareParams.IsBinaryString,
 					proc.Base.prepareParamsBinaryString...,
