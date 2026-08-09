@@ -27,6 +27,7 @@ import (
 	indexplugin "github.com/matrixorigin/matrixone/pkg/indexplugin"
 	planplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
 )
 
@@ -757,7 +758,12 @@ func (builder *QueryBuilder) buildRegularIndexTopSortContext(projNode *plan.Node
 }
 
 func usableRegularHintIndex(idxDef *plan.IndexDef) bool {
-	return idxDef != nil && idxDef.TableExist && catalog.IsRegularIndexAlgo(idxDef.IndexAlgo) && !isSpatialIndexDef(idxDef)
+	return idxDef != nil &&
+		idxDef.TableExist &&
+		catalog.IsRegularIndexAlgo(idxDef.IndexAlgo) &&
+		!isSpatialIndexDef(idxDef) &&
+		regularIndexPrefixMetadataUsable(idxDef) &&
+		!regularIndexHasDeclaredPrefix(idxDef)
 }
 
 func indexLeadingColumnsMatch(idxDef *plan.IndexDef, tableDef *plan.TableDef, colPositions []int32) bool {
@@ -770,6 +776,104 @@ func indexLeadingColumnsMatch(idxDef *plan.IndexDef, tableDef *plan.TableDef, co
 		}
 	}
 	return true
+}
+
+func indexOrderColumnsMatch(idxDef *plan.IndexDef, scanNode *plan.Node, colPositions []int32) bool {
+	if idxDef == nil || scanNode == nil || scanNode.TableDef == nil || len(scanNode.BindingTags) == 0 || len(colPositions) == 0 {
+		return false
+	}
+
+	fixedPrefix := 0
+	for fixedPrefix < len(idxDef.Parts) && indexPartFixedByEquality(idxDef.Parts[fixedPrefix], scanNode) {
+		fixedPrefix++
+	}
+
+	nextPart := fixedPrefix
+	for _, colPos := range colPositions {
+		if colPos < 0 || int(colPos) >= len(scanNode.TableDef.Cols) {
+			return false
+		}
+		colName := scanNode.TableDef.Cols[colPos].Name
+		fixedOrderColumn := false
+		for i := 0; i < fixedPrefix; i++ {
+			if catalog.ResolveAlias(idxDef.Parts[i]) == colName {
+				fixedOrderColumn = true
+				break
+			}
+		}
+		if fixedOrderColumn {
+			continue
+		}
+		if nextPart >= len(idxDef.Parts) || catalog.ResolveAlias(idxDef.Parts[nextPart]) != colName {
+			return false
+		}
+		nextPart++
+	}
+	return true
+}
+
+func indexPartFixedByEquality(part string, scanNode *plan.Node) bool {
+	colPos, ok := scanNode.TableDef.Name2ColIndex[catalog.ResolveAlias(part)]
+	if !ok {
+		return false
+	}
+	tag := scanNode.BindingTags[0]
+	for _, filter := range scanNode.FilterList {
+		fn := filter.GetF()
+		if fn == nil || fn.Func == nil || fn.Func.ObjName != "=" || len(fn.Args) != 2 {
+			continue
+		}
+		leftCol := fn.Args[0].GetCol()
+		rightCol := fn.Args[1].GetCol()
+		if leftCol != nil && leftCol.RelPos == tag && leftCol.ColPos == colPos && isScanInvariantRuntimeConstExpr(fn.Args[1]) {
+			return true
+		}
+		if rightCol != nil && rightCol.RelPos == tag && rightCol.ColPos == colPos && isScanInvariantRuntimeConstExpr(fn.Args[0]) {
+			return true
+		}
+	}
+	return false
+}
+
+// isScanInvariantRuntimeConstExpr is stricter than isRuntimeConstExpr: an
+// expression can be independent of table columns while still producing a new
+// value for every row. Such volatile expressions cannot fix an index prefix to
+// one value for the duration of a scan.
+func isScanInvariantRuntimeConstExpr(expr *plan.Expr) bool {
+	return !containsVolatileFunction(expr) && isRuntimeConstExpr(expr)
+}
+
+func containsVolatileFunction(expr *plan.Expr) bool {
+	if expr == nil {
+		return true
+	}
+
+	switch exprImpl := expr.Expr.(type) {
+	case *plan.Expr_F:
+		if exprImpl.F == nil || exprImpl.F.Func == nil {
+			return true
+		}
+		overload, ok := function.GetFunctionByIdWithoutError(exprImpl.F.Func.Obj)
+		if !ok || overload.CannotFold() {
+			return true
+		}
+		for _, arg := range exprImpl.F.Args {
+			if containsVolatileFunction(arg) {
+				return true
+			}
+		}
+	case *plan.Expr_List:
+		if exprImpl.List == nil {
+			return true
+		}
+		for _, item := range exprImpl.List.List {
+			if containsVolatileFunction(item) {
+				return true
+			}
+		}
+	}
+
+	return false
 }
 
 type forceIndexScope int
@@ -962,8 +1066,14 @@ func (builder *QueryBuilder) applyForceIndexHintToScan(scanNode *plan.Node, requ
 		indexes := filterIndexesByHintScope(scanNode.TableDef.Indexes, scope)
 		for _, idxDef := range indexes {
 			if !usableRegularHintIndex(idxDef) ||
-				(hintSet.join.forceSpecified && !indexAllowedByHintScope(idxDef.IndexName, hintSet.join)) ||
-				!indexLeadingColumnsMatch(idxDef, scanNode.TableDef, colPositions) {
+				(hintSet.join.forceSpecified && !indexAllowedByHintScope(idxDef.IndexName, hintSet.join)) {
+				continue
+			}
+			columnsMatch := indexLeadingColumnsMatch(idxDef, scanNode.TableDef, colPositions)
+			if requirement.scope == forceIndexForOrder {
+				columnsMatch = indexOrderColumnsMatch(idxDef, scanNode, colPositions)
+			}
+			if !columnsMatch {
 				continue
 			}
 			accessNodeID, idxNodeID, covering, err := builder.tryHintedIndexAccess(idxDef, scanNode, colRefCnt, idxColMap)
@@ -987,7 +1097,14 @@ func (builder *QueryBuilder) applyForceIndexHintToScan(scanNode *plan.Node, requ
 			return accessNodeID, nil
 		}
 		if hintSet.join.forceSpecified {
-			return builder.applyForcedJoinHintToScan(scanNode, hintSet.join, colRefCnt, idxColMap)
+			return builder.applyForcedHintAccessToScan(scanNode, hintSet.join, colRefCnt, idxColMap)
+		}
+		if requirement.scope == forceIndexForOrder && hintSet.scan.forceSpecified {
+			// An unscoped FORCE INDEX constrains access as well as ordering. If the
+			// named index cannot provide this ORDER BY, retain the forced access and
+			// let the Sort enforce ordering. An explicit FORCE INDEX FOR ORDER BY has
+			// no scan-scope fallback and therefore leaves base access unchanged.
+			return builder.applyForcedHintAccessToScan(scanNode, hintSet.scan, colRefCnt, idxColMap)
 		}
 		// A FORCE hint that cannot provide the requested ordering/grouping still
 		// excludes other secondary indexes from replacing the base scan.
@@ -997,11 +1114,11 @@ func (builder *QueryBuilder) applyForceIndexHintToScan(scanNode *plan.Node, requ
 	return scanNode.NodeId, nil
 }
 
-// applyForcedJoinHintToScan resolves incompatible ORDER/GROUP and JOIN force
-// scopes before a covering access publishes hidden-column replacements to its
-// ancestors. JOIN access has the same precedence that applyIndicesForJoins
-// historically enforced, but choosing it here keeps the replacement atomic.
-func (builder *QueryBuilder) applyForcedJoinHintToScan(scanNode *plan.Node, scope indexHintScopeSet,
+// applyForcedHintAccessToScan resolves a forced access scope before a covering
+// access publishes hidden-column replacements to its ancestors. JOIN access
+// has the same precedence that applyIndicesForJoins historically enforced, but
+// choosing it here keeps the replacement atomic.
+func (builder *QueryBuilder) applyForcedHintAccessToScan(scanNode *plan.Node, scope indexHintScopeSet,
 	colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr) (int32, error) {
 	if indexAllowedByHintScope(PrimaryKeyName, scope) {
 		builder.protectedScans[scanNode.NodeId]++
@@ -1548,6 +1665,71 @@ func getVectorIndexIncludedColumns(multiTableIndex *MultiTableIndex) ([]string, 
 	return nil, nil
 }
 
+// regularIndexPrefixMetadataUsable validates the relationship between persisted
+// prefix metadata and the logical index parts. Optional index access must fail
+// closed when older DDL left a stale column-name key behind, or when the
+// metadata is malformed; probing with the complete value can otherwise miss a
+// physically truncated key.
+func regularIndexPrefixMetadataUsable(idxDef *IndexDef) bool {
+	if idxDef == nil || len(idxDef.Parts) == 0 {
+		return false
+	}
+	prefixLengths, err := catalog.IndexPrefixLengthsFromParamsWithError(idxDef.IndexAlgoParams)
+	if err != nil {
+		return false
+	}
+	for prefixPart := range prefixLengths {
+		matched := false
+		for _, part := range idxDef.Parts {
+			if prefixPart == catalog.ResolveAlias(part) {
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			return false
+		}
+	}
+	return true
+}
+
+func validateRegularIndexPrefixMetadata(idxDef *IndexDef) error {
+	if regularIndexPrefixMetadataUsable(idxDef) {
+		return nil
+	}
+	indexName := ""
+	if idxDef != nil {
+		indexName = idxDef.IndexName
+	}
+	return moerr.NewInvalidInputNoCtxf(
+		"invalid prefix metadata for index %q; rebuild the index before writing to the table",
+		indexName,
+	)
+}
+
+func validateTableRegularIndexPrefixMetadata(tableDef *TableDef) error {
+	if tableDef == nil {
+		return nil
+	}
+	for _, idxDef := range tableDef.Indexes {
+		if idxDef == nil || !idxDef.TableExist || !catalog.IsRegularIndexAlgo(idxDef.IndexAlgo) {
+			continue
+		}
+		if err := validateRegularIndexPrefixMetadata(idxDef); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func regularIndexHasDeclaredPrefix(idxDef *IndexDef) bool {
+	if idxDef == nil {
+		return true
+	}
+	prefixLengths, err := catalog.IndexPrefixLengthsFromParamsWithError(idxDef.IndexAlgoParams)
+	return err != nil || len(prefixLengths) > 0
+}
+
 func (builder *QueryBuilder) applyIndicesForFiltersRegularIndex(nodeID int32, node *plan.Node, colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr) int32 {
 	if len(node.FilterList) == 0 || len(node.TableDef.Indexes) == 0 {
 		return nodeID
@@ -1577,6 +1759,9 @@ func (builder *QueryBuilder) applyIndicesForFiltersRegularIndex(nodeID int32, no
 		}
 		if isSpatialIndexDef(node.TableDef.Indexes[i]) {
 			spatialIndexes = append(spatialIndexes, node.TableDef.Indexes[i])
+			continue
+		}
+		if !regularIndexPrefixMetadataUsable(node.TableDef.Indexes[i]) {
 			continue
 		}
 		indexes = append(indexes, node.TableDef.Indexes[i])
@@ -1624,8 +1809,10 @@ func (builder *QueryBuilder) applyIndicesForFiltersRegularIndex(nodeID int32, no
 	idxToChoose, filterIdx := builder.getMostSelectiveIndexForPointSelect(indexes, node, ignoreStats)
 	if idxToChoose != -1 {
 		retID, idxTableNodeID := builder.applyIndexJoin(indexes[idxToChoose], node, EqualIndexCondition, filterIdx, scanSnapshot)
-		builder.applyExtraFiltersOnIndex(indexes[idxToChoose], node, builder.qry.Nodes[idxTableNodeID], filterIdx)
-		return retID
+		if idxTableNodeID != -1 {
+			builder.applyExtraFiltersOnIndex(indexes[idxToChoose], node, builder.qry.Nodes[idxTableNodeID], filterIdx)
+			return retID
+		}
 	}
 
 	idxToChoose, filterIdx = builder.getIndexForNonEquiCond(indexes, node)
@@ -1650,6 +1837,13 @@ func (builder *QueryBuilder) applyIndicesForFiltersRegularIndex(nodeID int32, no
 }
 
 func (builder *QueryBuilder) applyExtraFiltersOnIndex(idxDef *IndexDef, node *plan.Node, idxTableNode *plan.Node, filterIdx []int32) {
+	prefixLengths, err := catalog.IndexPrefixLengthsFromParamsWithError(idxDef.IndexAlgoParams)
+	if err != nil {
+		// Invalid metadata must not make an optional filter pushdown affect query
+		// correctness. The original filters remain on the base-table scan.
+		return
+	}
+
 	for i := range node.FilterList {
 		// if already in filterIdx, continue
 		applied := false
@@ -1676,14 +1870,24 @@ func (builder *QueryBuilder) applyExtraFiltersOnIndex(idxDef *IndexDef, node *pl
 			continue
 		}
 		for k := range idxDef.Parts {
-			colIdx := node.TableDef.Name2ColIndex[catalog.ResolveAlias(idxDef.Parts[k])]
+			partName := catalog.ResolveAlias(idxDef.Parts[k])
+			colIdx := node.TableDef.Name2ColIndex[partName]
 			if colIdx != col.ColPos {
 				continue
 			}
+			if prefixLengths[partName] > 0 {
+				// A prefix index only stores a lossy substring. Applying a
+				// full-value predicate to it can reject valid candidates, so
+				// leave the predicate as a base-table residual.
+				continue
+			}
 			idxColExpr := GetColExpr(idxTableNode.TableDef.Cols[0].Typ, idxTableNode.BindingTags[0], 0)
-			deserialExpr, _ := MakeSerialExtractExpr(builder.GetContext(), idxColExpr, fn.Args[colArgIdx].Typ, int64(k))
+			idxPartExpr := idxColExpr
+			if indexTableStoresSerializedKey(idxDef) {
+				idxPartExpr, _ = MakeSerialExtractExpr(builder.GetContext(), idxColExpr, fn.Args[colArgIdx].Typ, int64(k))
+			}
 			newFilter := DeepCopyExpr(node.FilterList[i])
-			newFilter.GetF().Args[colArgIdx] = deserialExpr
+			newFilter.GetF().Args[colArgIdx] = idxPartExpr
 			idxTableNode.FilterList = append(idxTableNode.FilterList, newFilter)
 			applied = true
 		}
@@ -1823,14 +2027,32 @@ func findLeadingFilter(idxDef *IndexDef, node *plan.Node) ([]int32, bool) {
 	return nil, false
 }
 
-func (builder *QueryBuilder) replaceEqualCondition(idxDef *IndexDef, filterList []*plan.Expr, filterPos []int32, idxTag int32, idxTableDef *plan.TableDef) *plan.Expr {
+func (builder *QueryBuilder) makeIndexLookupPartExpr(idxDef *IndexDef, partPos int, inputExpr *plan.Expr) (*plan.Expr, error) {
+	prefixLengths, err := catalog.IndexPrefixLengthsFromParamsWithError(idxDef.IndexAlgoParams)
+	if err != nil {
+		return nil, err
+	}
+	if partPos < 0 || partPos >= len(idxDef.Parts) {
+		return nil, moerr.NewInvalidInputNoCtxf("invalid index part position %d", partPos)
+	}
+
+	partName := catalog.ResolveAlias(idxDef.Parts[partPos])
+	return builder.makeIndexPartExprFromInputExpr(inputExpr, partName, prefixLengths)
+}
+
+func (builder *QueryBuilder) replaceEqualCondition(idxDef *IndexDef, filterList []*plan.Expr, filterPos []int32, idxTag int32, idxTableDef *plan.TableDef) (*plan.Expr, error) {
 	numParts := len(idxDef.Parts)
 	if numParts == 1 { //directly equal
 		expr := DeepCopyExpr(filterList[filterPos[0]])
 		args := expr.GetF().Args
 		args[0].GetCol().RelPos = idxTag
 		args[0].GetCol().ColPos = 0
-		return expr
+		var err error
+		args[1], err = builder.makeIndexLookupPartExpr(idxDef, 0, args[1])
+		if err != nil {
+			return nil, err
+		}
+		return expr, nil
 	}
 
 	// a=1 and b=2, change to prefix_eq
@@ -1838,19 +2060,29 @@ func (builder *QueryBuilder) replaceEqualCondition(idxDef *IndexDef, filterList 
 	serialArgs := make([]*plan.Expr, len(filterPos))
 	for i := range filterPos {
 		filter := filterList[filterPos[i]]
-		serialArgs[i] = DeepCopyExpr(filter.GetF().Args[1])
+		var err error
+		serialArgs[i], err = builder.makeIndexLookupPartExpr(idxDef, i, filter.GetF().Args[1])
+		if err != nil {
+			return nil, err
+		}
 		compositeFilterSel = compositeFilterSel * filter.Selectivity
 	}
-	rightArg, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), indexTableLookupSerialFunc(idxDef), serialArgs)
+	rightArg, err := BindFuncExprImplByPlanExpr(builder.GetContext(), indexTableLookupSerialFunc(idxDef), serialArgs)
+	if err != nil {
+		return nil, err
+	}
 
 	funcName := "="
 	if len(filterPos) < numParts {
 		funcName = "prefix_eq"
 	}
 	leadingColExpr := GetColExpr(idxTableDef.Cols[0].Typ, idxTag, 0)
-	expr, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), funcName, []*plan.Expr{leadingColExpr, rightArg})
+	expr, err := BindFuncExprImplByPlanExpr(builder.GetContext(), funcName, []*plan.Expr{leadingColExpr, rightArg})
+	if err != nil {
+		return nil, err
+	}
 	expr.Selectivity = compositeFilterSel
-	return expr
+	return expr, nil
 }
 
 func (builder *QueryBuilder) replaceNonEqualCondition(idxDef *IndexDef, filter *plan.Expr, idxTag int32, idxTableDef *plan.TableDef) *plan.Expr {
@@ -1916,9 +2148,9 @@ func (builder *QueryBuilder) replaceNonEqualCondition(idxDef *IndexDef, filter *
 	return expr
 }
 
-func (builder *QueryBuilder) replaceLeadingFilter(idxDef *IndexDef, filterList []*plan.Expr, leadingPos []int32, leadingEqualCond bool, idxTag int32, idxTableDef *plan.TableDef) *plan.Expr {
+func (builder *QueryBuilder) replaceLeadingFilter(idxDef *IndexDef, filterList []*plan.Expr, leadingPos []int32, leadingEqualCond bool, idxTag int32, idxTableDef *plan.TableDef) (*plan.Expr, error) {
 	if !leadingEqualCond { // a IN (1, 2, 3), a BETWEEN 1 AND 2
-		return builder.replaceNonEqualCondition(idxDef, filterList[leadingPos[0]], idxTag, idxTableDef)
+		return builder.replaceNonEqualCondition(idxDef, filterList[leadingPos[0]], idxTag, idxTableDef), nil
 	}
 	return builder.replaceEqualCondition(idxDef, filterList, leadingPos, idxTag, idxTableDef)
 }
@@ -2050,7 +2282,19 @@ func indexFilterMayCompareNullAtRuntime(expr *plan.Expr) bool {
 	case "between":
 		return len(fn.Args) > 2 && (runtimeConstMayBeNull(fn.Args[1]) || runtimeConstMayBeNull(fn.Args[2]))
 	case ">", ">=", "<", "<=":
-		return len(fn.Args) > 1 && (runtimeConstMayBeNull(fn.Args[0]) || runtimeConstMayBeNull(fn.Args[1]))
+		if len(fn.Args) < 2 {
+			return false
+		}
+		if runtimeConstMayBeNull(fn.Args[0]) || runtimeConstMayBeNull(fn.Args[1]) {
+			return true
+		}
+		if canonicalRangeOp(fn) != "<" {
+			return false
+		}
+		if fn.Args[0].GetCol() != nil && isRuntimeConstExpr(fn.Args[1]) {
+			return !fn.Args[0].Typ.NotNullable
+		}
+		return isRuntimeConstExpr(fn.Args[0]) && fn.Args[1].GetCol() != nil && !fn.Args[1].Typ.NotNullable
 	case "in_range":
 		return len(fn.Args) > 2 && (runtimeConstMayBeNull(fn.Args[1]) || runtimeConstMayBeNull(fn.Args[2]))
 	case "or":
@@ -2095,6 +2339,14 @@ func runtimeConstMayBeNull(expr *plan.Expr) bool {
 }
 
 func (builder *QueryBuilder) tryIndexOnlyScan(idxDef *IndexDef, node *plan.Node, colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr, scanSnapshot *Snapshot) int32 {
+	prefixLengths, err := catalog.IndexPrefixLengthsFromParamsWithError(idxDef.IndexAlgoParams)
+	if err != nil || len(prefixLengths) > 0 {
+		// Prefix indexes store only a substring of each configured part. They are
+		// safe for locating candidates followed by a base-table lookup, but cannot
+		// reconstruct the full column value required by an index-only scan.
+		return -1
+	}
+
 	// check if this index contains all columns needed
 	for i := range node.TableDef.Cols {
 		if colRefCnt[[2]int32{node.BindingTags[0], int32(i)}] > 0 {
@@ -2175,8 +2427,12 @@ func (builder *QueryBuilder) tryIndexOnlyScan(idxDef *IndexDef, node *plan.Node,
 	if e != nil {
 		panic(e)
 	}
-	builder.addNameByColRef(idxTag, idxTableDef)
 	leadingColExpr := GetColExpr(idxTableDef.Cols[0].Typ, idxTag, 0)
+	newLeadingFilter, err := builder.replaceLeadingFilter(idxDef, node.FilterList, leadingPos, leadingEqualCond, idxTag, idxTableDef)
+	if err != nil {
+		return -1
+	}
+	builder.addNameByColRef(idxTag, idxTableDef)
 
 	if numParts == 1 {
 		colIdx := node.TableDef.Name2ColIndex[idxDef.Parts[0]]
@@ -2195,7 +2451,6 @@ func (builder *QueryBuilder) tryIndexOnlyScan(idxDef *IndexDef, node *plan.Node,
 		}
 	}
 
-	newLeadingFilter := builder.replaceLeadingFilter(idxDef, node.FilterList, leadingPos, leadingEqualCond, idxTag, idxTableDef)
 	residualLeadingPos := indexOnlyResidualLeadingFilterPositions(idxDef, node.TableDef, node.FilterList, leadingPos, newLeadingFilter)
 	filterCapacity := 1 + len(missFilterIdx) + len(residualLeadingPos)
 	newFilterList := make([]*plan.Expr, 0, filterCapacity)
@@ -2357,14 +2612,27 @@ func classifyRangeBound(fn *plan.Function) (col *plan.ColRef, isLower bool) {
 func (builder *QueryBuilder) getIndexForNonEquiCond(indexes []*IndexDef, node *plan.Node) (int, []int32) {
 	colPos2Idx := make(map[int32]int)
 	for i, idxDef := range indexes {
+		// Prefix keys are lossy. IN and range operators can use block-level
+		// pruning implementations that compare the untruncated probe with the
+		// persisted prefix and under-fetch after flush. Keep prefix indexes for
+		// equality candidate lookup only, where the probe is explicitly truncated.
+		if regularIndexHasDeclaredPrefix(idxDef) {
+			continue
+		}
 		numParts := len(idxDef.Parts)
 		if !idxDef.Unique {
 			numParts--
 		}
 		if idxDef.Unique && numParts == 1 {
-			colPos2Idx[node.TableDef.Name2ColIndex[idxDef.Parts[0]]] = i
+			colPos, ok := node.TableDef.Name2ColIndex[catalog.ResolveAlias(idxDef.Parts[0])]
+			if ok {
+				colPos2Idx[colPos] = i
+			}
 		} else if !idxDef.Unique && numParts >= 1 {
-			colPos2Idx[node.TableDef.Name2ColIndex[idxDef.Parts[0]]] = i
+			colPos, ok := node.TableDef.Name2ColIndex[catalog.ResolveAlias(idxDef.Parts[0])]
+			if ok {
+				colPos2Idx[colPos] = i
+			}
 		}
 	}
 
@@ -2562,11 +2830,13 @@ func (builder *QueryBuilder) applyIndexJoin(idxDef *IndexDef, node *plan.Node, f
 	if err != nil {
 		panic(err)
 	}
-	builder.addNameByColRef(idxTag, idxTableDef)
 
 	var idxFilter *plan.Expr
 	if filterType == EqualIndexCondition {
-		idxFilter = builder.replaceEqualCondition(idxDef, node.FilterList, filterIdx, idxTag, idxTableDef)
+		idxFilter, err = builder.replaceEqualCondition(idxDef, node.FilterList, filterIdx, idxTag, idxTableDef)
+		if err != nil {
+			return node.NodeId, -1
+		}
 	} else if filterType == SpatialIndexCondition {
 		spatialColMap := buildSpatialIndexColMap(idxDef, node, idxTag, idxTableDef)
 		idxFilter = replaceColumnsForExpr(DeepCopyExpr(node.FilterList[filterIdx[0]]), spatialColMap)
@@ -2575,6 +2845,7 @@ func (builder *QueryBuilder) applyIndexJoin(idxDef *IndexDef, node *plan.Node, f
 	} else {
 		idxFilter = builder.replaceNonEqualCondition(idxDef, node.FilterList[filterIdx[0]], idxTag, idxTableDef)
 	}
+	builder.addNameByColRef(idxTag, idxTableDef)
 
 	// recod index table scan info
 	idxScanInfo := plan.IndexScanInfo{
@@ -2803,7 +3074,11 @@ func (builder *QueryBuilder) applyIndicesForJoins(nodeID int32, node *plan.Node,
 	indexes := builder.filterRegularIndexesByJoinHints(leftChild, leftChild.TableDef.Indexes)
 	condIdx := make([]indexJoinCondition, 0, len(col2Cond))
 	for _, idxDef := range indexes {
-		if !idxDef.TableExist || !catalog.IsRegularIndexAlgo(idxDef.IndexAlgo) || isSpatialIndexDef(idxDef) {
+		if !idxDef.TableExist ||
+			!catalog.IsRegularIndexAlgo(idxDef.IndexAlgo) ||
+			isSpatialIndexDef(idxDef) ||
+			!regularIndexPrefixMetadataUsable(idxDef) ||
+			regularIndexHasDeclaredPrefix(idxDef) {
 			continue
 		}
 

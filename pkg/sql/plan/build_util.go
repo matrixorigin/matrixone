@@ -966,7 +966,8 @@ func getTablePriKeyName(priKeyDef *plan.PrimaryKeyDef) string {
 func checkTableColumnNameValid(name string) bool {
 	if name == catalog.Row_ID || name == catalog.CPrimaryKeyColName ||
 		name == catalog.TableTailAttrDeleteRowID || name == catalog.TableTailAttrAborted ||
-		name == catalog.TableTailAttrPKVal || name == catalog.TableTailAttrCommitTs {
+		name == catalog.TableTailAttrPKVal || name == catalog.TableTailAttrCommitTs ||
+		catalog.IsAlias(name) {
 		return false
 	}
 	return true
