@@ -261,6 +261,9 @@ func (bf *CBloomFilter) Unmarshal(data []byte) error {
 	// Allocate C memory and copy data to it, because bloomfilter_unmarshal
 	// just casts the pointer and we want a stable C allocation that we can free.
 	cData := C.malloc(C.size_t(len(data)))
+	if cData == nil {
+		return moerr.NewInternalErrorNoCtx("CBloomFilter:Unmarshal out of memory")
+	}
 	C.memcpy(cData, unsafe.Pointer(&data[0]), C.size_t(len(data)))
 	runtime.KeepAlive(data)
 

@@ -1516,12 +1516,20 @@ func (s *Scope) buildReaders(c *Compile) (readers []engine.Reader, err error) {
 		if s.DataSource.AccountId != nil {
 			ctx = defines.AttachAccountId(ctx, uint32(s.DataSource.AccountId.GetTenantId()))
 		}
-		hint := engine.FilterHint{MembershipFilterBytes: s.DataSource.MembershipFilterBytes}
-		if len(hint.MembershipFilterBytes) == 0 {
-			for _, key := range []any{defines.IvfMembershipFilter{}, defines.FulltextMembershipFilter{}} {
-				if bytes, ok := c.proc.Ctx.Value(key).([]byte); ok && len(bytes) > 0 {
-					hint.MembershipFilterBytes = bytes
-					break
+		hint := engine.FilterHint{}
+		if tableDef := s.DataSource.TableDef; tableDef != nil {
+			switch {
+			case tableDef.TableType == catalog.SystemSI_IVFFLAT_TblType_Entries:
+				hint.MembershipFilterBytes = s.DataSource.MembershipFilterBytes
+				if len(hint.MembershipFilterBytes) == 0 {
+					hint.MembershipFilterBytes, _ = c.proc.Ctx.Value(
+						defines.IvfMembershipFilter{}).([]byte)
+				}
+			case catalog.IsFullTextIndexTableType(tableDef.TableType, tableDef.Name):
+				hint.MembershipFilterBytes = s.DataSource.MembershipFilterBytes
+				if len(hint.MembershipFilterBytes) == 0 {
+					hint.MembershipFilterBytes, _ = c.proc.Ctx.Value(
+						defines.FulltextMembershipFilter{}).([]byte)
 				}
 			}
 		}

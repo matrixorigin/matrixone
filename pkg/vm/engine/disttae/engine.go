@@ -1167,20 +1167,14 @@ func (e *Engine) BuildBlockReaders(
 		hint = filterHint[0]
 	}
 
-	// Remote scopes transport only the tagged bytes. Reconstruct the filter on
-	// the consuming CN, then give every reader its own share; passing the bytes
-	// through to NewReader is insufficient because readers intentionally consume
-	// only FilterHint.BF. Keep the builder reference until all reader creation
-	// succeeds so every rollback path can deterministically reach the last Free.
-	var mainFilter docfilter.MembershipFilter
-	if len(hint.MembershipFilterBytes) > 0 {
-		mainFilter, err = docfilter.NewWithMemoryAdmission(
-			hint.MembershipFilterBytes,
-			docfilter.AdmissionForService(e.service),
-		)
-		if err != nil {
-			return nil, err
-		}
+	hint, mainFilter, owned, err := prepareMembershipFilter(
+		hint,
+		docfilter.AdmissionForService(e.service),
+	)
+	if err != nil {
+		return nil, err
+	}
+	if owned {
 		defer mainFilter.Free()
 	}
 
@@ -1206,10 +1200,8 @@ func (e *Engine) BuildBlockReaders(
 			readerHint,
 		)
 		if err != nil {
-			ds.Close()
-			if readerFilter != nil {
-				readerFilter.Free()
-			}
+			// NewReader owns the current source and filter share even when its
+			// construction fails.
 			closeReaders(rds)
 			return nil, err
 		}

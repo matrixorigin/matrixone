@@ -95,7 +95,14 @@ func NewMemPKFilter(
 
 	filter.TS = types.TimestampToTS(ts)
 
-	if !basePKFilter.Valid || tableDef == nil || tableDef.Pkey == nil || packerPool == nil {
+	if tableDef == nil {
+		return
+	}
+	// The membership filter selects a separate key column for IVF/fulltext and
+	// remains useful even when the SQL predicate cannot produce a PK fast path.
+	filter.setFilterHint(tableDef, filterHint)
+
+	if !basePKFilter.Valid || tableDef.Pkey == nil || packerPool == nil {
 		return
 	}
 

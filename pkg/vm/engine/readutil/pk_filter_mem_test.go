@@ -95,6 +95,36 @@ func TestNewMemPKFilter_WithBF_FulltextTable(t *testing.T) {
 	require.Equal(t, int16(0), filter.BFSeqNum)
 }
 
+func TestNewMemPKFilter_FulltextBFWithoutBasePKFilter(t *testing.T) {
+	tableDef := &plan.TableDef{
+		Name:      "__mo_index_secondary_fulltext",
+		TableType: catalog.FullTextIndex_TblType,
+		Pkey: &plan.PrimaryKeyDef{
+			Names: []string{catalog.FakePrimaryKeyColName},
+		},
+		Cols: []*plan.ColDef{
+			{Name: catalog.FullTextIndex_TabCol_Id, Seqnum: 7, Typ: plan.Type{Id: int32(types.T_int64)}},
+			{Name: "word", Seqnum: 8, Typ: plan.Type{Id: int32(types.T_varchar)}},
+			{Name: catalog.FakePrimaryKeyColName, Seqnum: 9, Typ: plan.Type{Id: int32(types.T_int64)}},
+		},
+	}
+	packerPool := fileservice.NewPool(8, func() *types.Packer { return types.NewPacker() }, func(p *types.Packer) { p.Reset() }, func(p *types.Packer) { p.Close() })
+	bf := bloomfilter.NewCBloomFilterWithProbability(100, 0.01)
+	defer bf.Free()
+
+	filter, err := NewMemPKFilter(
+		tableDef,
+		types.MaxTs().ToTimestamp(),
+		packerPool,
+		BasePKFilter{},
+		engine.FilterHint{BF: bf},
+	)
+	require.NoError(t, err)
+	require.False(t, filter.Valid(), "membership filtering is independent of PK predicate pruning")
+	require.True(t, filter.HasBF)
+	require.Equal(t, int16(7), filter.BFSeqNum)
+}
+
 func TestNewMemPKFilter(t *testing.T) {
 
 	lb, ub := 10, 20

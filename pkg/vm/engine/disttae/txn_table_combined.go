@@ -149,6 +149,18 @@ func (t *combinedTxnTable) BuildReaders(
 	policy engine.TombstoneApplyPolicy,
 	filterHint engine.FilterHint,
 ) ([]engine.Reader, error) {
+	preparedHint, mainFilter, owned, err := prepareMembershipFilter(
+		filterHint,
+		membershipFilterAdmissionForProcess(proc),
+	)
+	if err != nil {
+		return nil, err
+	}
+	if owned {
+		defer mainFilter.Free()
+	}
+	filterHint = preparedHint
+
 	var readers []engine.Reader
 	if relData == nil {
 		tables, err := t.tablesFunc()
