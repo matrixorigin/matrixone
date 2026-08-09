@@ -4133,6 +4133,89 @@ func TestReplaceEqualConditionTruncatesSinglePartPrefixIndexLookup(t *testing.T)
 	require.True(t, exprContainsFuncName(expr.GetF().Args[1], "substring"))
 }
 
+func TestApplyExtraFiltersOnIndexUsesPhysicalKeyShape(t *testing.T) {
+	prefixParams, err := catalog.IndexParamsMapToJsonString(map[string]string{
+		catalog.IndexAlgoParamPrefixLengths: "status:4",
+	})
+	require.NoError(t, err)
+
+	tests := []struct {
+		name              string
+		idxDef            *planpb.IndexDef
+		wantPushed        bool
+		wantSerialExtract bool
+	}{
+		{
+			name: "direct single-column unique key",
+			idxDef: &planpb.IndexDef{
+				Parts:  []string{"status"},
+				Unique: true,
+			},
+			wantPushed: true,
+		},
+		{
+			name: "serialized composite key",
+			idxDef: &planpb.IndexDef{
+				Parts:  []string{"status", "id"},
+				Unique: true,
+			},
+			wantPushed:        true,
+			wantSerialExtract: true,
+		},
+		{
+			name: "lossy prefix key",
+			idxDef: &planpb.IndexDef{
+				Parts:           []string{"status"},
+				Unique:          true,
+				IndexAlgoParams: prefixParams,
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true), false, true)
+			baseTag := builder.genNewBindTag()
+			indexTag := builder.genNewBindTag()
+			node := &planpb.Node{
+				BindingTags: []int32{baseTag},
+				TableDef: &planpb.TableDef{
+					Cols: []*planpb.ColDef{
+						{Name: "id", Typ: planpb.Type{Id: int32(types.T_int64)}},
+						{Name: "status", Typ: planpb.Type{Id: int32(types.T_varchar), Width: 32}},
+					},
+					Name2ColIndex: map[string]int32{"id": 0, "status": 1},
+					Pkey:          &planpb.PrimaryKeyDef{PkeyColName: "id", Names: []string{"id"}},
+				},
+				FilterList: []*planpb.Expr{
+					makeStringEqFilterExpr(baseTag, 1, "active"),
+					makeStringEqFilterExpr(baseTag, 1, "active"),
+				},
+			}
+			idxTableNode := &planpb.Node{
+				TableDef:    makeTestIndexTableDef(),
+				BindingTags: []int32{indexTag},
+			}
+
+			builder.applyExtraFiltersOnIndex(tt.idxDef, node, idxTableNode, []int32{0})
+
+			if !tt.wantPushed {
+				require.Empty(t, idxTableNode.FilterList)
+				return
+			}
+			require.Len(t, idxTableNode.FilterList, 1)
+			pushed := idxTableNode.FilterList[0]
+			require.Equal(t, tt.wantSerialExtract, exprContainsFuncName(pushed, "serial_extract"))
+			if !tt.wantSerialExtract {
+				idxCol := pushed.GetF().Args[0].GetCol()
+				require.NotNil(t, idxCol)
+				require.Equal(t, indexTag, idxCol.RelPos)
+				require.Equal(t, int32(0), idxCol.ColPos)
+			}
+		})
+	}
+}
+
 func TestReplaceNonEqualConditionUsesSerialFullForNonUniqueCompositeIndexIn(t *testing.T) {
 	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true), false, true)
 	idxDef := &planpb.IndexDef{

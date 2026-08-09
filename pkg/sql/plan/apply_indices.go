@@ -1650,6 +1650,13 @@ func (builder *QueryBuilder) applyIndicesForFiltersRegularIndex(nodeID int32, no
 }
 
 func (builder *QueryBuilder) applyExtraFiltersOnIndex(idxDef *IndexDef, node *plan.Node, idxTableNode *plan.Node, filterIdx []int32) {
+	prefixLengths, err := catalog.IndexPrefixLengthsFromParamsWithError(idxDef.IndexAlgoParams)
+	if err != nil {
+		// Invalid metadata must not make an optional filter pushdown affect query
+		// correctness. The original filters remain on the base-table scan.
+		return
+	}
+
 	for i := range node.FilterList {
 		// if already in filterIdx, continue
 		applied := false
@@ -1676,14 +1683,24 @@ func (builder *QueryBuilder) applyExtraFiltersOnIndex(idxDef *IndexDef, node *pl
 			continue
 		}
 		for k := range idxDef.Parts {
-			colIdx := node.TableDef.Name2ColIndex[catalog.ResolveAlias(idxDef.Parts[k])]
+			partName := catalog.ResolveAlias(idxDef.Parts[k])
+			colIdx := node.TableDef.Name2ColIndex[partName]
 			if colIdx != col.ColPos {
 				continue
 			}
+			if prefixLengths[partName] > 0 {
+				// A prefix index only stores a lossy substring. Applying a
+				// full-value predicate to it can reject valid candidates, so
+				// leave the predicate as a base-table residual.
+				continue
+			}
 			idxColExpr := GetColExpr(idxTableNode.TableDef.Cols[0].Typ, idxTableNode.BindingTags[0], 0)
-			deserialExpr, _ := MakeSerialExtractExpr(builder.GetContext(), idxColExpr, fn.Args[colArgIdx].Typ, int64(k))
+			idxPartExpr := idxColExpr
+			if indexTableStoresSerializedKey(idxDef) {
+				idxPartExpr, _ = MakeSerialExtractExpr(builder.GetContext(), idxColExpr, fn.Args[colArgIdx].Typ, int64(k))
+			}
 			newFilter := DeepCopyExpr(node.FilterList[i])
-			newFilter.GetF().Args[colArgIdx] = deserialExpr
+			newFilter.GetF().Args[colArgIdx] = idxPartExpr
 			idxTableNode.FilterList = append(idxTableNode.FilterList, newFilter)
 			applied = true
 		}
