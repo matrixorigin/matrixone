@@ -51,6 +51,7 @@ zero_from_int
 0.0.0.0
 SELECT INET_NTOA(NULL) AS null_input;
 null_input
+null
 SELECT INET_NTOA(167773449) AS uint64_test;
 uint64_test
 10.0.5.9

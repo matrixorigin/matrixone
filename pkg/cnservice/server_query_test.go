@@ -16,10 +16,12 @@ package cnservice
 
 import (
 	"context"
+	"errors"
 	"math"
 	goruntime "runtime"
 	"runtime/debug"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 	"unsafe"
@@ -28,6 +30,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -1084,6 +1087,168 @@ func Test_service_handleRunTask(t *testing.T) {
 				"handleRunTask(%v, %v, %v, %v)", tt.args.ctx, tt.args.req, tt.args.resp, nil)
 		})
 	}
+}
+
+func Test_queryWorkLifecycleReleasesCompletedTasks(t *testing.T) {
+	executorErr := errors.New("executor failed")
+	for _, tc := range []struct {
+		name string
+		err  error
+	}{
+		{name: "success"},
+		{name: "error", err: executorErr},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var lifecycle queryWorkLifecycle
+			completed := make(chan struct{})
+			relaunched := atomic.Bool{}
+
+			require.True(t, lifecycle.launch(
+				func(context.Context, task.Task) error {
+					close(completed)
+					return tc.err
+				},
+				&task.AsyncTask{},
+			))
+			<-completed
+
+			closeCalls := 0
+			closeIngress := func() error {
+				closeCalls++
+				return nil
+			}
+			require.NoError(t, lifecycle.close(closeIngress))
+			require.NoError(t, lifecycle.close(closeIngress))
+			require.Equal(t, 1, closeCalls)
+			require.False(t, lifecycle.launch(
+				func(context.Context, task.Task) error {
+					relaunched.Store(true)
+					return nil
+				},
+				&task.AsyncTask{},
+			))
+			require.False(t, relaunched.Load())
+		})
+	}
+}
+
+func Test_service_closeQueryServiceCancelsAndDrainsRunTask(t *testing.T) {
+	ctl := gomock.NewController(t)
+	runner := mock_task.NewMockTaskRunner(ctl)
+	queryService := &closeRecordingQueryService{
+		handlers: make(map[query.CmdMethod]func(context.Context, *query.Request, *query.Response, *morpc.Buffer) error),
+		closed:   make(chan struct{}),
+	}
+	executorStarted := make(chan struct{})
+	executorCanceled := make(chan struct{})
+	releaseExecutor := make(chan struct{})
+	var executorCalls atomic.Int32
+	runner.EXPECT().GetExecutor(task.TaskCode(1)).Return(
+		func(ctx context.Context, _ task.Task) error {
+			executorCalls.Add(1)
+			close(executorStarted)
+			<-ctx.Done()
+			close(executorCanceled)
+			<-releaseExecutor
+			return ctx.Err()
+		},
+	).Times(1)
+
+	s := &service{queryService: queryService}
+	s.task.runner = runner
+	s.initQueryCommandHandler()
+	runTask := queryService.handlers[query.CmdMethod_RunTask]
+	require.NotNil(t, runTask)
+	resp := &query.Response{}
+	require.NoError(t, runTask(
+		context.Background(),
+		&query.Request{RunTask: &query.RunTaskRequest{TaskCode: 1}},
+		resp,
+		nil,
+	))
+	require.Equal(t, "OK", resp.RunTask.Result)
+	<-executorStarted
+
+	closeDone := make(chan error, 1)
+	go func() {
+		closeDone <- s.closeQueryService()
+	}()
+	<-queryService.closed
+	<-executorCanceled
+	select {
+	case <-closeDone:
+		t.Fatal("query service closed before the RunTask executor exited")
+	default:
+	}
+
+	lateErr := runTask(
+		context.Background(),
+		&query.Request{RunTask: &query.RunTaskRequest{TaskCode: 1}},
+		&query.Response{},
+		nil,
+	)
+	require.True(t, moerr.IsMoErrCode(lateErr, moerr.ErrServiceUnavailable))
+	require.Equal(t, int32(1), executorCalls.Load())
+	repeatedCloseDone := make(chan error, 1)
+	go func() {
+		repeatedCloseDone <- s.closeQueryService()
+	}()
+	select {
+	case <-repeatedCloseDone:
+		t.Fatal("repeated query service close returned before the RunTask executor exited")
+	default:
+	}
+
+	close(releaseExecutor)
+	require.NoError(t, <-closeDone)
+	require.NoError(t, <-repeatedCloseDone)
+}
+
+func Test_service_handleRunTaskRejectsLaunchWhenShutdownStartsDuringHandler(t *testing.T) {
+	ctl := gomock.NewController(t)
+	runner := mock_task.NewMockTaskRunner(ctl)
+	queryService := &closeRecordingQueryService{
+		handlers: make(map[query.CmdMethod]func(context.Context, *query.Request, *query.Response, *morpc.Buffer) error),
+		closed:   make(chan struct{}),
+	}
+	executorLookupStarted := make(chan struct{})
+	releaseExecutorLookup := make(chan struct{})
+	var executorCalls atomic.Int32
+	runner.EXPECT().GetExecutor(task.TaskCode(1)).DoAndReturn(
+		func(task.TaskCode) taskservice.TaskExecutor {
+			close(executorLookupStarted)
+			<-releaseExecutorLookup
+			return func(context.Context, task.Task) error {
+				executorCalls.Add(1)
+				return nil
+			}
+		},
+	).Times(1)
+
+	s := &service{queryService: queryService}
+	s.task.runner = runner
+	s.initQueryCommandHandler()
+	runTask := queryService.handlers[query.CmdMethod_RunTask]
+	handlerDone := make(chan error, 1)
+	go func() {
+		handlerDone <- runTask(
+			context.Background(),
+			&query.Request{RunTask: &query.RunTaskRequest{TaskCode: 1}},
+			&query.Response{},
+			nil,
+		)
+	}()
+	<-executorLookupStarted
+
+	closeDone := make(chan error, 1)
+	go func() {
+		closeDone <- s.closeQueryService()
+	}()
+	<-queryService.closed
+	close(releaseExecutorLookup)
+	require.True(t, moerr.IsMoErrCode(<-handlerDone, moerr.ErrServiceUnavailable))
+	require.NoError(t, <-closeDone)
+	require.Equal(t, int32(0), executorCalls.Load())
 }
 
 func Test_service_handleMigrateConnFrom(t *testing.T) {
