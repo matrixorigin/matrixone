@@ -93,6 +93,16 @@ func TestMongoDBMappingsFollowExternalTableRestoreSkipPolicy(t *testing.T) {
 	require.Equal(t, systemCatalogRestoreSkip, systemCatalogRestorePolicies[sqlmongodb.TableMappings])
 }
 
+func TestViewMetadataTablesAreRebuiltDuringRestore(t *testing.T) {
+	for _, tableName := range []string{catalog.MO_VIEW_DEPENDENCIES, catalog.MO_VIEW_REFRESH} {
+		require.Equal(t, systemCatalogRestoreSkip, systemCatalogRestorePolicies[tableName])
+		require.True(t, needSkipTable(sysAccountID, moCatalog, tableName))
+		require.True(t, needSkipSystemTable(sysAccountID, &tableInfo{
+			dbName: moCatalog, tblName: tableName, typ: clusterTable,
+		}))
+	}
+}
+
 func TestMergeFkDepsDeduplicatesSources(t *testing.T) {
 	child := genKey("d", "child")
 	parent := genKey("d", "parent")

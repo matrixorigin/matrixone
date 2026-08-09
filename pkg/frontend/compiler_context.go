@@ -29,6 +29,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/pubsub"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
@@ -651,6 +652,9 @@ func (tcc *TxnCompilerContext) EnsureViewMetadataCurrent(
 	relationName string,
 	relationID uint64,
 ) error {
+	if !clusterservice.AllWorkingCNsSupportViewMetadataRefresh(tcc.GetSession().GetService()) {
+		return nil
+	}
 	stale, err := tcc.hasNonCurrentViewMetadata(relationID)
 	if err != nil {
 		return err
@@ -668,19 +672,19 @@ func (tcc *TxnCompilerContext) hasNonCurrentViewMetadata(relationID uint64) (boo
 		return false, moerr.NewInternalError(tcc.GetContext(), "internal SQL executor is unavailable")
 	}
 	result, err := v.(executor.SQLExecutor).Exec(tcc.GetContext(), fmt.Sprintf(
-		"select status from %s.%s where account_id=%d and target_relation_id=%d limit 1",
-		catalog.MO_CATALOG, catalog.MO_VIEW_REFRESH, tcc.GetSession().GetAccountId(), relationID),
+		"select r.status from %s.%s r where r.account_id=%d and r.target_relation_id=%d "+
+			"and r.status<>'%s' limit 1",
+		catalog.MO_CATALOG, catalog.MO_VIEW_REFRESH, tcc.GetSession().GetAccountId(), relationID,
+		catalog.ViewRefreshStatusCurrent),
 		executor.Options{}.WithDisableIncrStatement().WithTxn(tcc.GetTxnHandler().GetTxn()).
 			WithAccountID(catalog.System_Account))
 	if err != nil {
 		return false, err
 	}
 	defer result.Close()
-	stale := true
+	stale := false
 	result.ReadRows(func(rows int, columns []*vector.Vector) bool {
-		if rows > 0 {
-			stale = columns[0].GetStringAt(0) != catalog.ViewRefreshStatusCurrent
-		}
+		stale = rows > 0
 		return false
 	})
 	return stale, nil

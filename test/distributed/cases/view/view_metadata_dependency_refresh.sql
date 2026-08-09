@@ -78,4 +78,14 @@ FROM identity_before b JOIN mo_catalog.mo_tables t
 SHOW CREATE VIEW direct_view;
 SHOW CREATE VIEW chain_view;
 
+CREATE TABLE left_source (id INT NOT NULL);
+CREATE TABLE right_source (id INT NOT NULL);
+INSERT INTO left_source VALUES (1);
+INSERT INTO right_source VALUES (2);
+CREATE VIEW outer_join_view AS
+    SELECT l.id, r.id AS rid FROM left_source l LEFT JOIN right_source r ON l.id = r.id;
+ALTER TABLE right_source MODIFY id BIGINT NOT NULL;
+CREATE TABLE copied_outer_join AS SELECT * FROM outer_join_view;
+SELECT count(*) FROM copied_outer_join WHERE rid IS NULL;
+
 DROP DATABASE view_metadata_refresh;

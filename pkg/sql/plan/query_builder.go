@@ -9025,7 +9025,7 @@ func (builder *QueryBuilder) bindView(
 	if err != nil {
 		return
 	}
-	viewCtx.markViewCTASDefaultBoundary()
+	viewCtx.markViewCTASDefaultBoundary(tableDef.Cols)
 	if len(viewStmt.ColNames) > 0 {
 		if len(viewStmt.ColNames) != len(viewCtx.headings) {
 			return 0, moerr.NewViewWrongList(builder.GetContext())

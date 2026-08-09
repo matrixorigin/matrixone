@@ -57,6 +57,7 @@ message CNStore {
   int64 UpTime = 14;
   string          ShardServiceAddress = 15;
   string CommitID = 16;
+  bool ViewMetadataRefreshSupported = 17;
 }
 
 message TNStore {
@@ -149,6 +150,7 @@ message CNStoreHeartbeat {
   // service. It is meaningful only when CommandDeliveryAckSupported is true.
   uint64          AckedCommandBatchID = 16;
   bool            CommandDeliveryAckSupported = 17;
+  bool            ViewMetadataRefreshSupported = 18;
 }
 
 // CNAllocateID is the periodic message sent tp the HAKeeper by CN stores.
@@ -632,6 +634,7 @@ message CNStoreInfo {
   // non-destructive acknowledged schedule-command protocol. It is copied
   // from CNStoreHeartbeat so HAKeeper can gate activation and admission.
   bool CommandDeliveryAckSupported = 18;
+  bool ViewMetadataRefreshSupported = 19;
 }
 
 // CNState contains all CN details known to the HAKeeper.

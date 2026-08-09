@@ -20,7 +20,6 @@ const ViewRefreshStatusDiscovering = "DISCOVERING"
 const ViewRefreshStatusRunning = "RUNNING"
 const ViewRefreshStatusInvalid = "INVALID"
 const ViewRefreshStatusLegacyScan = "LEGACY_SCAN"
-const ViewRefreshStatusLegacyScanDone = "LEGACY_SCAN_DONE"
 
 const LegacyViewScanCursorDatabase = "__mo_legacy_view_scan__"
 const LegacyViewScanCursorRelation = "__mo_legacy_view_scan_cursor__"

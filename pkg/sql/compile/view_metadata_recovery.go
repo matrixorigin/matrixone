@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/pubsub"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
@@ -30,11 +31,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/pb/task"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/ctl"
-	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -44,61 +43,71 @@ const viewRefreshStatusRunning = catalog.ViewRefreshStatusRunning
 const viewRefreshStatusInvalid = catalog.ViewRefreshStatusInvalid
 const viewRefreshStatusDiscovering = catalog.ViewRefreshStatusDiscovering
 
-const viewMetadataRecoveryTaskID = "view_metadata_recovery"
-const viewMetadataRecoveryCronExpr = "*/10 * * * * *"
 const viewMetadataRecoveryPageSize = 32
 const viewMetadataRecoveryCallTimeout = 30 * time.Second
 
-// ViewMetadataRecoveryTaskMetadata describes one cluster-wide recovery scan.
-func ViewMetadataRecoveryTaskMetadata() task.TaskMetadata {
-	return task.TaskMetadata{
-		ID:       viewMetadataRecoveryTaskID,
-		Executor: task.TaskCode_ViewMetadataRecovery,
-		Options:  task.TaskOptions{Concurrency: 1},
-	}
+type viewMetadataRecoveryCommand struct {
+	WorkerID string `json:"worker_id"`
+	Discover bool   `json:"discover"`
 }
 
-// ViewMetadataRecoveryCronExpr is intentionally short: each invocation is
-// bounded to a small page and each row is committed by its own SQL transaction.
-func ViewMetadataRecoveryCronExpr() string { return viewMetadataRecoveryCronExpr }
-
-func ViewMetadataRecoveryExecutor(
+// RunViewMetadataRecovery performs one bounded local-CN recovery tick. It is
+// deliberately not a task-service executor: an older CN can never receive an
+// executor code that it does not implement during a rolling upgrade.
+func RunViewMetadataRecovery(
+	ctx context.Context,
 	sqlExecutor executor.SQLExecutor,
 	workerID string,
-) taskservice.TaskExecutor {
-	return func(ctx context.Context, _ task.Task) error {
-		return runViewMetadataRecoveryPage(ctx, func() (bool, error) {
-			callCtx, cancel := context.WithTimeout(ctx, viewMetadataRecoveryCallTimeout)
-			defer cancel()
-			result, err := sqlExecutor.Exec(callCtx,
-				fmt.Sprintf("select mo_ctl('CN','RefreshViewMetadata','%s')", workerID),
-				executor.Options{}.WithAccountID(catalog.System_Account))
-			if err != nil {
-				return false, err
-			}
-			processed := false
-			result.ReadRows(func(rows int, columns []*vector.Vector) bool {
-				if rows > 0 {
-					var response struct {
-						Result int `json:"result"`
-					}
-					if json.Unmarshal([]byte(columns[0].GetStringAt(0)), &response) == nil {
-						processed = response.Result > 0
-					}
-				}
-				return false
-			})
-			result.Close()
-			return processed, nil
+) error {
+	call := func(discover bool) (bool, error) {
+		command, err := json.Marshal(viewMetadataRecoveryCommand{
+			WorkerID: workerID,
+			Discover: discover,
 		})
+		if err != nil {
+			return false, err
+		}
+		callCtx, cancel := context.WithTimeout(ctx, viewMetadataRecoveryCallTimeout)
+		defer cancel()
+		result, err := sqlExecutor.Exec(callCtx, fmt.Sprintf(
+			"select mo_ctl('CN','RefreshViewMetadata','%s')",
+			sqlquote.EscapeString(string(command))),
+			executor.Options{}.WithAccountID(catalog.System_Account))
+		if err != nil {
+			return false, err
+		}
+		processed := false
+		result.ReadRows(func(rows int, columns []*vector.Vector) bool {
+			if rows > 0 {
+				var response struct {
+					Result int `json:"result"`
+				}
+				if json.Unmarshal([]byte(columns[0].GetStringAt(0)), &response) == nil {
+					processed = response.Result > 0
+				}
+			}
+			return false
+		})
+		result.Close()
+		return processed, nil
 	}
+	return runViewMetadataRecoveryPage(ctx,
+		func() (bool, error) { return call(true) },
+		func() (bool, error) { return call(false) })
 }
 
 func runViewMetadataRecoveryPage(
 	ctx context.Context,
+	discoverOne func() (bool, error),
 	recoverOne func() (bool, error),
 ) error {
-	for range viewMetadataRecoveryPageSize {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if _, err := discoverOne(); err != nil {
+		return err
+	}
+	for range viewMetadataRecoveryPageSize - 1 {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
@@ -114,7 +123,38 @@ func runViewMetadataRecoveryPage(
 }
 
 func init() {
-	ctl.RegisterRefreshViewMetadataHandler("", recoverOnePendingViewMetadata)
+	ctl.RegisterRefreshViewMetadataHandler("", recoverViewMetadataCommand)
+}
+
+func recoverViewMetadataCommand(proc *process.Process, parameter string) (int, error) {
+	if !clusterservice.AllWorkingCNsSupportViewMetadataRefresh(proc.GetService()) {
+		return 0, nil
+	}
+	var command viewMetadataRecoveryCommand
+	if err := json.Unmarshal([]byte(parameter), &command); err != nil {
+		// Preserve compatibility with manually issued control calls.
+		command.WorkerID = parameter
+	}
+	if command.Discover {
+		return discoverLegacyViewMetadata(proc)
+	}
+	return recoverOnePendingViewMetadata(proc, command.WorkerID)
+}
+
+func discoverLegacyViewMetadata(proc *process.Process) (int, error) {
+	if err := proc.Ctx.Err(); err != nil {
+		return 0, err
+	}
+	v, ok := moruntime.ServiceRuntime(proc.GetService()).GetGlobalVariables(moruntime.InternalSQLExecutor)
+	if !ok {
+		return 0, moerr.NewInternalError(proc.Ctx, "internal SQL executor is unavailable")
+	}
+	sqlExecutor := v.(executor.SQLExecutor)
+	opts := executor.Options{}.
+		WithDisableIncrStatement().
+		WithTxn(proc.GetTxnOperator()).
+		WithAccountID(catalog.System_Account)
+	return discoverLegacyViewPage(proc, sqlExecutor, opts)
 }
 
 type pendingViewRefresh struct {
@@ -176,7 +216,7 @@ func (c *recoveryCompilerContext) DatabaseExists(
 				bindingDatabase = dependency.SubscriptionName
 			}
 		}
-		if !strings.EqualFold(databaseName, bindingDatabase) {
+		if !viewBindingNameEqual(databaseName, bindingDatabase, dependency.LowerCaseTableNames) {
 			continue
 		}
 		physicalContext := defines.AttachAccountId(c.GetContext(), dependency.AccountID)
@@ -210,8 +250,8 @@ func (c *recoveryCompilerContext) Resolve(
 		if bindingRelation == "" {
 			bindingRelation = dependency.RelationName
 		}
-		if !strings.EqualFold(databaseName, bindingDatabase) ||
-			!strings.EqualFold(relationName, bindingRelation) {
+		if !viewBindingNameEqual(databaseName, bindingDatabase, dependency.LowerCaseTableNames) ||
+			!viewBindingNameEqual(relationName, bindingRelation, dependency.LowerCaseTableNames) {
 			continue
 		}
 		if dependency.SubscriptionName != "" {
@@ -220,10 +260,10 @@ func (c *recoveryCompilerContext) Resolve(
 				return nil, nil, subscriptionErr
 			}
 			if subscription == nil || uint32(subscription.AccountId) != dependency.AccountID ||
-				!strings.EqualFold(subscription.DbName, dependency.DatabaseName) ||
+				!viewBindingNameEqual(subscription.DbName, dependency.DatabaseName, dependency.LowerCaseTableNames) ||
 				!pubsub.InSubMetaTables(subscription, bindingRelation) {
-				return nil, nil, &viewRefreshDependencyUnavailableError{cause: fmt.Errorf(
-					"subscription binding %q is unavailable", bindingDatabase)}
+				return nil, nil, &viewRefreshDependencyUnavailableError{cause: moerr.NewInternalErrorf(
+					c.GetContext(), "subscription binding %q is unavailable", bindingDatabase)}
 			}
 		}
 		physicalContext := defines.AttachAccountId(c.GetContext(), dependency.AccountID)
@@ -279,7 +319,10 @@ func (c *recoveryCompilerContext) GetSubscriptionMeta(
 	databaseName string,
 	_ *plan2.Snapshot,
 ) (*planpb.SubscriptionMeta, error) {
-	key := strings.ToLower(databaseName)
+	key := databaseName
+	if c.compilerContext.lower != 0 {
+		key = strings.ToLower(databaseName)
+	}
 	if _, ok := c.legacySubscriptionLooked[key]; ok {
 		return c.legacySubscriptions[key], nil
 	}
@@ -388,8 +431,8 @@ func (c *recoveryCompilerContext) ResolveSnapshotWithSnapshotName(
 		return false
 	})
 	if snapshot == nil {
-		return nil, &viewRefreshDependencyUnavailableError{cause: fmt.Errorf(
-			"snapshot %q is unavailable", snapshotName)}
+		return nil, &viewRefreshDependencyUnavailableError{cause: moerr.NewInternalErrorf(
+			c.GetContext(), "snapshot %q is unavailable", snapshotName)}
 	}
 	if c.legacySnapshots == nil {
 		c.legacySnapshots = make(map[string]*plan2.Snapshot)
@@ -434,15 +477,17 @@ func (c *recoveryCompilerContext) ResolveViewDependencyAccount(
 	for _, dependency := range c.dependencies {
 		if dependency.RelationID == tableDef.TblId ||
 			(dependency.LogicalID != 0 && dependency.LogicalID == tableDef.LogicalId) ||
-			(object != nil && strings.EqualFold(dependency.DatabaseName, object.SchemaName) &&
-				strings.EqualFold(dependency.RelationName, object.ObjName)) {
+			(object != nil && viewBindingNameEqual(
+				dependency.DatabaseName, object.SchemaName, dependency.LowerCaseTableNames) &&
+				viewBindingNameEqual(
+					dependency.RelationName, object.ObjName, dependency.LowerCaseTableNames)) {
 			return dependency.AccountID, nil
 		}
 	}
 	return c.GetAccountId()
 }
 
-// recoverOnePendingViewMetadata processes at most one View. The cron executor
+// recoverOnePendingViewMetadata processes at most one View. The local CN worker
 // invokes the command repeatedly, so every invocation owns one bounded
 // transaction and one relation replacement.
 func recoverOnePendingViewMetadata(proc *process.Process, workerID string) (int, error) {
@@ -451,7 +496,7 @@ func recoverOnePendingViewMetadata(proc *process.Process, workerID string) (int,
 	}
 	v, ok := moruntime.ServiceRuntime(proc.GetService()).GetGlobalVariables(moruntime.InternalSQLExecutor)
 	if !ok {
-		return 0, fmt.Errorf("internal SQL executor is unavailable")
+		return 0, moerr.NewInternalError(proc.Ctx, "internal SQL executor is unavailable")
 	}
 	sqlExecutor := v.(executor.SQLExecutor)
 	opts := executor.Options{}.
@@ -493,12 +538,12 @@ func recoverOnePendingViewMetadata(proc *process.Process, workerID string) (int,
 		return false
 	})
 	if pending == nil {
-		return discoverLegacyViewPage(proc, sqlExecutor, opts)
+		return 0, nil
 	}
 
 	engineValue := proc.GetSessionInfo().StorageEngine
 	if engineValue == nil {
-		return 0, fmt.Errorf("storage engine is unavailable")
+		return 0, moerr.NewInternalError(proc.Ctx, "storage engine is unavailable")
 	}
 	runner := &Compile{proc: proc, e: engineValue, pn: &planpb.Plan{}}
 	if err = runner.lockViewRefreshTarget(pending.viewRefreshTarget); err != nil {
@@ -522,30 +567,8 @@ func recoverOnePendingViewMetadata(proc *process.Process, workerID string) (int,
 		return 0, nil
 	}
 
-	var wrote bool
-	var refreshErr error
-	if pending.legacyDiscovery {
-		wrote, refreshErr = discoverLegacyViewDependencies(proc, pending)
-	} else {
-		wrote, refreshErr = refreshPendingView(proc, pending)
-	}
+	wrote, refreshErr := refreshPendingView(proc, pending)
 	if refreshErr == nil {
-		if pending.legacyDiscovery {
-			released, releaseErr := sqlExecutor.Exec(proc.Ctx, fmt.Sprintf(
-				"update %s.%s set status='%s',lease_owner='',lease_expires_at=null "+
-					"where account_id=%d and target_relation_id=%d and target_generation=%d "+
-					"and lease_epoch=%d and status='%s'",
-				catalog.MO_CATALOG, catalog.MO_VIEW_REFRESH, viewRefreshStatusPending,
-				pending.accountID, pending.relationID, pending.generation,
-				pending.leaseEpoch, viewRefreshStatusRunning), opts)
-			if releaseErr != nil {
-				return 0, releaseErr
-			}
-			defer released.Close()
-			if released.AffectedRows != 1 {
-				return 0, moerr.NewTxnNeedRetryWithDefChanged(proc.Ctx)
-			}
-		}
 		return 1, nil
 	}
 	if wrote {
@@ -619,9 +642,6 @@ func discoverLegacyViewPage(
 		}
 		inserted.Close()
 		return 1, nil
-	}
-	if cursor.status == catalog.ViewRefreshStatusLegacyScanDone {
-		return 0, nil
 	}
 	if cursor.status != catalog.ViewRefreshStatusLegacyScan {
 		return 0, moerr.NewInternalErrorf(
@@ -715,7 +735,13 @@ func nextLegacyViewScanCursor(
 	}
 	cursor.generation = nextGeneration
 	if len(candidates) == 0 {
-		cursor.status = catalog.ViewRefreshStatusLegacyScanDone
+		// A completed pass wraps to the beginning. This makes discovery
+		// continuous, so Views created by an older CN after a prior pass are
+		// eventually captured without letting discovery monopolize one tick.
+		cursor.accountID = 0
+		cursor.databaseName = ""
+		cursor.relationName = ""
+		cursor.status = catalog.ViewRefreshStatusLegacyScan
 		return cursor, true
 	}
 	last := candidates[len(candidates)-1]
@@ -726,50 +752,10 @@ func nextLegacyViewScanCursor(
 	return cursor, true
 }
 
-func discoverLegacyViewDependencies(
-	proc *process.Process,
-	pending *pendingViewRefresh,
-) (bool, error) {
-	engineValue := proc.GetSessionInfo().StorageEngine
-	if engineValue == nil {
-		return false, fmt.Errorf("storage engine is unavailable")
-	}
-	originalTopContext := proc.GetTopContext()
-	targetContext := defines.AttachAccountId(originalTopContext, pending.accountID)
-	proc.ReplaceTopCtx(targetContext)
-	defer proc.ReplaceTopCtx(originalTopContext)
-
-	database, err := engineValue.Database(targetContext, pending.databaseName, proc.GetTxnOperator())
-	if err != nil {
-		return false, err
-	}
-	relation, err := database.Relation(targetContext, pending.relationName, nil)
-	if err != nil {
-		return false, err
-	}
-	if relation.GetTableID(targetContext) != pending.relationID {
-		return false, &viewRefreshIdentityChangedError{cause: fmt.Errorf("View relation identity changed")}
-	}
-	currentDef := relation.CopyTableDef(targetContext)
-	if currentDef == nil || currentDef.ViewSql == nil {
-		return false, fmt.Errorf("target relation is not a View")
-	}
-	regenerated, err := regenerateViewUsingPersistedEnvironment(
-		proc, engineValue, targetContext, currentDef)
-	if err != nil {
-		return false, err
-	}
-	regenerated.TableDef.Name = currentDef.Name
-	runner := &Compile{proc: proc, e: engineValue, pn: &planpb.Plan{}}
-	_, err = runner.persistViewDependencyEdgesWithContext(
-		targetContext, database, pending.databaseName, regenerated.TableDef, pending.generation)
-	return true, err
-}
-
 func refreshPendingView(proc *process.Process, pending *pendingViewRefresh) (bool, error) {
 	engineValue := proc.GetSessionInfo().StorageEngine
 	if engineValue == nil {
-		return false, fmt.Errorf("storage engine is unavailable")
+		return false, moerr.NewInternalError(proc.Ctx, "storage engine is unavailable")
 	}
 	originalTopContext := proc.GetTopContext()
 	targetContext := defines.AttachAccountId(originalTopContext, pending.accountID)
@@ -785,11 +771,13 @@ func refreshPendingView(proc *process.Process, pending *pendingViewRefresh) (boo
 		return false, err
 	}
 	if relation.GetTableID(targetContext) != pending.relationID {
-		return false, &viewRefreshIdentityChangedError{cause: fmt.Errorf("View relation identity changed")}
+		return false, &viewRefreshIdentityChangedError{
+			cause: moerr.NewInternalErrorNoCtx("View relation identity changed"),
+		}
 	}
 	currentDef := relation.CopyTableDef(targetContext)
 	if currentDef == nil || currentDef.ViewSql == nil {
-		return false, fmt.Errorf("target relation is not a View")
+		return false, moerr.NewInternalError(targetContext, "target relation is not a View")
 	}
 	runner := &Compile{proc: proc, e: engineValue, pn: &planpb.Plan{}}
 	ownership, err := runner.loadViewCatalogOwnership(pending.accountID, pending.relationID)

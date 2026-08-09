@@ -45,8 +45,9 @@ const (
 // query boundaries can share it without retaining or repeatedly copying a
 // complete catalog ColDef.
 type SourceColumnMetadata struct {
-	Typ     plan.Type
-	Default *plan.Default
+	Typ         plan.Type
+	Default     *plan.Default
+	NullAbility bool
 }
 
 type SourceColumn struct {
@@ -65,6 +66,7 @@ type OutputColumnProvenance struct {
 func snapshotSourceColumnMetadata(col *plan.ColDef) SourceColumnMetadata {
 	typ := col.Typ
 	metadata := SourceColumnMetadata{
+		NullAbility: col.Default == nil || col.Default.NullAbility,
 		Typ: plan.Type{
 			Id:          typ.Id,
 			NotNullable: typ.NotNullable,
@@ -74,6 +76,9 @@ func snapshotSourceColumnMetadata(col *plan.ColDef) SourceColumnMetadata {
 			Table:       typ.Table,
 			Enumvalues:  typ.Enumvalues,
 		},
+	}
+	if col.Default == nil {
+		metadata.NullAbility = !typ.NotNullable
 	}
 	if col.Default != nil && (col.Default.Expr != nil || col.Default.OriginString != "") {
 		metadata.Default = DeepCopyDefault(col.Default)
@@ -114,10 +119,18 @@ func ctasViewDefaultPolicy(metadata SourceColumnMetadata) CTASDefaultPolicy {
 	return CTASDefaultNone
 }
 
-func (bc *BindContext) markViewCTASDefaultBoundary() {
+func (bc *BindContext) markViewCTASDefaultBoundary(viewCols []*plan.ColDef) {
 	for i := 0; i < min(len(bc.headings), len(bc.projects)); i++ {
 		provenance := bc.outputColumnProvenanceForProject(int32(i))
 		if provenance.State == ProvenanceSingleSource && provenance.Source != nil {
+			// The authoritative View schema has already applied outer-join
+			// null-extension. Preserve source identity/default policy, but take
+			// nullability from that boundary instead of the pre-join base column.
+			if i < len(viewCols) {
+				source := *provenance.Source
+				source.Metadata.NullAbility = snapshotSourceColumnMetadata(viewCols[i]).NullAbility
+				provenance.Source = &source
+			}
 			provenance.CTASDefaultPolicy = ctasViewDefaultPolicy(provenance.Source.Metadata)
 		}
 		bc.outputColumnProvenance[int32(i)] = provenance

@@ -23,6 +23,7 @@ import (
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -74,6 +75,9 @@ func (c *Compile) persistViewDependencies(
 	databaseName string,
 	viewDef *planpb.TableDef,
 ) error {
+	if !clusterservice.AllWorkingCNsSupportViewMetadataRefresh(c.proc.GetService()) {
+		return nil
+	}
 	return c.persistViewDependenciesWithContext(
 		c.proc.Ctx,
 		database,
@@ -215,6 +219,9 @@ func (c *Compile) refreshViewsAfterRelationMutation(
 	oldRelationID uint64,
 	oldLogicalID uint64,
 ) error {
+	if !clusterservice.AllWorkingCNsSupportViewMetadataRefresh(c.proc.GetService()) {
+		return nil
+	}
 	if needSkipDbs[databaseName] {
 		return nil
 	}
@@ -261,7 +268,8 @@ func (c *Compile) refreshViewsAfterRelationMutation(
 		if loadErr != nil {
 			return loadErr
 		}
-		for index := 0; index < len(targets) && index < remainingSynchronous; index++ {
+		synchronousTargets := synchronousViewRefreshCount(len(targets), remainingSynchronous)
+		for index := 0; index < synchronousTargets; index++ {
 			if err = c.lockViewRefreshTarget(targets[index]); err != nil {
 				return err
 			}
@@ -289,12 +297,20 @@ func (c *Compile) refreshViewsAfterRelationMutation(
 			// and performs no additional relation replacement.
 			continue
 		}
-		for _, target := range targets {
+		for _, target := range targets[:synchronousTargets] {
 			key := [2]uint64{uint64(target.accountID), target.logicalID}
 			if target.logicalID == 0 {
 				key[1] = target.relationID
 			}
 			if err = c.refreshOneView(target, current); err != nil {
+				failure := classifyViewRefreshFailure(err)
+				if failure.code == viewRefreshFailureDependencyUnavailable &&
+					failure.disposition == viewRefreshRetry {
+					// enqueueDependentViews already made the target durable PENDING.
+					// A different unavailable dependency must not make source DDL
+					// success depend on target ordering or the synchronous budget.
+					continue
+				}
 				return err
 			}
 			processedGenerations[key] = target.generation
@@ -307,6 +323,13 @@ func (c *Compile) refreshViewsAfterRelationMutation(
 		}
 	}
 	return nil
+}
+
+func synchronousViewRefreshCount(targets, remaining int) int {
+	if targets <= 0 || remaining <= 0 {
+		return 0
+	}
+	return min(targets, remaining)
 }
 
 func (c *Compile) lockViewRefreshTarget(target viewRefreshTarget) error {
@@ -439,6 +462,13 @@ func viewDependencyNameKey(name string, lowerCaseTableNames int64) string {
 	return fmt.Sprintf("%x", sha256.Sum256([]byte(name)))
 }
 
+func viewBindingNameEqual(left, right string, lowerCaseTableNames int64) bool {
+	if lowerCaseTableNames == 0 {
+		return left == right
+	}
+	return strings.EqualFold(left, right)
+}
+
 func viewDependencyMutationPredicate(
 	mutation viewRelationMutation,
 	oldRelationID uint64,
@@ -474,11 +504,15 @@ func (c *Compile) refreshOneView(
 		return err
 	}
 	if relation.GetTableID(targetContext) != target.relationID {
-		return fmt.Errorf("View identity changed while refreshing %s.%s", target.databaseName, target.relationName)
+		return moerr.NewInternalErrorf(
+			targetContext, "View identity changed while refreshing %s.%s",
+			target.databaseName, target.relationName)
 	}
 	currentDef := relation.CopyTableDef(targetContext)
 	if currentDef == nil || currentDef.ViewSql == nil {
-		return fmt.Errorf("relation %s.%s is no longer a View", target.databaseName, target.relationName)
+		return moerr.NewInternalErrorf(
+			targetContext, "relation %s.%s is no longer a View",
+			target.databaseName, target.relationName)
 	}
 	ownership, err := c.loadViewCatalogOwnership(target.accountID, target.relationID)
 	if err != nil {
@@ -502,8 +536,10 @@ func (c *Compile) refreshOneView(
 			// when COPY has changed the physical relation ID in this transaction.
 			matchesPhysicalID := dependency.DatabaseID == source.databaseID &&
 				dependency.RelationID == source.relationID
-			matchesQualifiedName := strings.EqualFold(dependency.DatabaseName, source.databaseName) &&
-				strings.EqualFold(dependency.RelationName, source.relationName)
+			matchesQualifiedName := viewBindingNameEqual(
+				dependency.DatabaseName, source.databaseName, dependency.LowerCaseTableNames) &&
+				viewBindingNameEqual(
+					dependency.RelationName, source.relationName, dependency.LowerCaseTableNames)
 			if matchesPhysicalID || matchesQualifiedName {
 				dependency.LogicalID = source.logicalID
 				changed = true
@@ -553,7 +589,7 @@ func (c *Compile) loadViewCatalogOwnership(
 	})
 	if !found {
 		return viewCatalogOwnership{}, &viewRefreshIdentityChangedError{
-			cause: fmt.Errorf("View relation identity changed"),
+			cause: moerr.NewInternalErrorNoCtx("View relation identity changed"),
 		}
 	}
 	return ownership, nil

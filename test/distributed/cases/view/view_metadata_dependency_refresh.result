@@ -127,4 +127,15 @@ SHOW CREATE VIEW chain_view;
 View    Create View    character_set_client    collation_connection
 chain_view    CREATE VIEW chain_view (renamed_code, derived_amount) AS
     SELECT code_alias, doubled FROM direct_view    utf8mb4    utf8mb4_general_ci
+CREATE TABLE left_source (id INT NOT NULL);
+CREATE TABLE right_source (id INT NOT NULL);
+INSERT INTO left_source VALUES (1);
+INSERT INTO right_source VALUES (2);
+CREATE VIEW outer_join_view AS
+    SELECT l.id, r.id AS rid FROM left_source l LEFT JOIN right_source r ON l.id = r.id;
+ALTER TABLE right_source MODIFY id BIGINT NOT NULL;
+CREATE TABLE copied_outer_join AS SELECT * FROM outer_join_view;
+SELECT count(*) FROM copied_outer_join WHERE rid IS NULL;
+count(*)
+1
 DROP DATABASE view_metadata_refresh;

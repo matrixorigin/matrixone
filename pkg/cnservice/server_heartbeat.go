@@ -199,9 +199,10 @@ func (s *service) heartbeat(ctx context.Context) {
 			MemTotal:     system.MemoryTotal(),
 			MemAvailable: system.MemoryAvailable(),
 		},
-		CommitID:                    version.CommitID,
-		AckedCommandBatchID:         s.ackedCommandBatchID.Load(),
-		CommandDeliveryAckSupported: true,
+		CommitID:                     version.CommitID,
+		AckedCommandBatchID:          s.ackedCommandBatchID.Load(),
+		CommandDeliveryAckSupported:  true,
+		ViewMetadataRefreshSupported: true,
 	}
 	if s.gossipNode != nil {
 		hb.GossipAddress = s.gossipServiceAddr()

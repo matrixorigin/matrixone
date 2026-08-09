@@ -108,6 +108,8 @@ var (
 		catalog.MOUpgradeTable:       systemCatalogRestoreSkip,
 		catalog.MOUpgradeTenantTable: systemCatalogRestoreSkip,
 		catalog.MOAutoIncrTable:      systemCatalogRestoreSkip,
+		catalog.MO_VIEW_DEPENDENCIES: systemCatalogRestoreSkip,
+		catalog.MO_VIEW_REFRESH:      systemCatalogRestoreSkip,
 
 		"mo_user":                       systemCatalogRestoreCopy,
 		"mo_role":                       systemCatalogRestoreCopy,
@@ -1421,6 +1423,12 @@ func dropClusterTable(
 
 	for _, tblInfo := range tableInfos {
 		if toAccountId == 0 && tblInfo.typ == clusterTable {
+			if tblInfo.tblName == catalog.MO_VIEW_DEPENDENCIES || tblInfo.tblName == catalog.MO_VIEW_REFRESH {
+				if err = bh.Exec(ctx, fmt.Sprintf("delete from %s.%s", moCatalog, tblInfo.tblName)); err != nil {
+					return
+				}
+				continue
+			}
 			getLogger(sid).Debug(fmt.Sprintf("[%s] start to drop system table: %v.%v", snapshotName, moCatalog, tblInfo.tblName))
 			if err = bh.Exec(ctx, dropTableIfExistsSQL(moCatalog, tblInfo.tblName)); err != nil {
 				return

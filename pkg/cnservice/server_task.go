@@ -386,10 +386,6 @@ func (s *service) registerExecutorsLocked() {
 		task.TaskCode_DataBranchLineageGC,
 		compile.DataBranchLineageGCExecutor(s.sqlExecutor),
 	)
-	s.task.runner.RegisterExecutor(
-		task.TaskCode_ViewMetadataRecovery,
-		compile.ViewMetadataRecoveryExecutor(s.sqlExecutor, s.cfg.UUID),
-	)
 	ctx := defines.AttachAccount(
 		context.Background(), catalog.System_Account, catalog.System_User, catalog.System_Role,
 	)
@@ -399,12 +395,5 @@ func (s *service) registerExecutorsLocked() {
 		databranchutils.LineageGCTaskCronExpr,
 	); err != nil {
 		s.logger.Error("failed to create data branch lineage GC task", zap.Error(err))
-	}
-	if err := ts.CreateCronTask(
-		ctx,
-		compile.ViewMetadataRecoveryTaskMetadata(),
-		compile.ViewMetadataRecoveryCronExpr(),
-	); err != nil {
-		s.logger.Error("failed to create View metadata recovery task", zap.Error(err))
 	}
 }

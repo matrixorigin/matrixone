@@ -513,6 +513,18 @@ func TestBuildCreateViewDefaultProvenanceAcrossBoundaries(t *testing.T) {
 		require.Len(t, leftJoinDef.GetCols(), 1)
 		require.True(t, leftJoinDef.GetCols()[0].GetDefault().GetNullAbility())
 		require.Equal(t, "9", leftJoinDef.GetCols()[0].GetDefault().GetOriginString())
+		leftJoinDef.Name = "v_left_join"
+		leftJoinDef.DbName = "tpch"
+		leftJoinDef.TableType = catalog.SystemViewRel
+		ctx.tables[leftJoinDef.Name] = leftJoinDef
+		ctx.objects[leftJoinDef.Name] = &plan.ObjectRef{SchemaName: "tpch", ObjName: leftJoinDef.Name}
+		ctasStmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL,
+			"create table copied_left_join as select * from v_left_join", 1)
+		require.NoError(t, err)
+		defer ctasStmt.Free()
+		ctasPlan, err := BuildPlan(ctx, ctasStmt, false)
+		require.NoError(t, err)
+		require.True(t, ctasPlan.GetDdl().GetCreateTable().GetTableDef().GetCols()[0].GetDefault().GetNullAbility())
 
 		ambiguousSQL := "create view v_ambiguous as select n_nationkey from nation l join nation2 r " +
 			"on l.n_nationkey = r.n_nationkey"

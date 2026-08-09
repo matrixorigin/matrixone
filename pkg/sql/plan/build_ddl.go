@@ -297,6 +297,9 @@ func genAsSelectCols(ctx CompilerContext, stmt *tree.Select, isPrepareStmt bool)
 			}
 		}
 		nullAbility := ctasExprCanBeNull(expr)
+		if provenance.State == ProvenanceSingleSource && provenance.Source != nil {
+			nullAbility = nullAbility || provenance.Source.Metadata.NullAbility
+		}
 		defaultDef := &plan.Default{NullAbility: nullAbility}
 		if provenance.State == ProvenanceSingleSource && provenance.Source != nil {
 			switch provenance.CTASDefaultPolicy {

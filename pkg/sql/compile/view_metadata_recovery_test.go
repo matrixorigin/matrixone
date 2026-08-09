@@ -49,7 +49,11 @@ func (deadlineCheckingSQLExecutor) ExecTxn(
 
 func TestRunViewMetadataRecoveryPageIsBoundedAndFair(t *testing.T) {
 	remaining := viewMetadataRecoveryPageSize + 7
-	processed := 0
+	discovered, processed := 0, 0
+	discoverOne := func() (bool, error) {
+		discovered++
+		return true, nil
+	}
 	recoverOne := func() (bool, error) {
 		if remaining == 0 {
 			return false, nil
@@ -58,12 +62,13 @@ func TestRunViewMetadataRecoveryPageIsBoundedAndFair(t *testing.T) {
 		processed++
 		return true, nil
 	}
-	require.NoError(t, runViewMetadataRecoveryPage(context.Background(), recoverOne))
-	require.Equal(t, viewMetadataRecoveryPageSize, processed)
-	require.Equal(t, 7, remaining)
-	require.NoError(t, runViewMetadataRecoveryPage(context.Background(), recoverOne))
+	require.NoError(t, runViewMetadataRecoveryPage(context.Background(), discoverOne, recoverOne))
+	require.Equal(t, viewMetadataRecoveryPageSize-1, processed)
+	require.Equal(t, 8, remaining)
+	require.NoError(t, runViewMetadataRecoveryPage(context.Background(), discoverOne, recoverOne))
 	require.Equal(t, viewMetadataRecoveryPageSize+7, processed)
 	require.Zero(t, remaining)
+	require.Equal(t, 2, discovered)
 }
 
 func TestRecoveryCompilerContextRestoresValidatedSnapshot(t *testing.T) {
@@ -93,6 +98,19 @@ func TestViewDependencyNameKeyHonorsLowerCaseTableNames(t *testing.T) {
 		viewDependencyNameKey("quoted name", 1))
 }
 
+func TestViewBindingNameEqualHonorsLowerCaseTableNames(t *testing.T) {
+	require.False(t, viewBindingNameEqual("T", "t", 0))
+	require.True(t, viewBindingNameEqual("T", "t", 1))
+	require.True(t, viewBindingNameEqual("T", "t", 2))
+}
+
+func TestSynchronousViewRefreshCountNeverExceedsBudget(t *testing.T) {
+	require.Equal(t, 32, synchronousViewRefreshCount(33, 32))
+	require.Zero(t, synchronousViewRefreshCount(1, 0))
+	require.Zero(t, synchronousViewRefreshCount(1, -1))
+	require.Equal(t, 3, synchronousViewRefreshCount(3, 32))
+}
+
 func TestViewDependencyMutationPredicateNeverTreatsUnknownIDAsIdentity(t *testing.T) {
 	predicate := viewDependencyMutationPredicate(viewRelationMutation{
 		accountID: 7, databaseID: 11, relationID: 13, logicalID: 17,
@@ -115,7 +133,7 @@ func TestNextViewRefreshGenerationFencesOlderCatalogVisibility(t *testing.T) {
 	require.False(t, ok)
 }
 
-func TestNextLegacyViewScanCursorIsMonotonicAndTerminates(t *testing.T) {
+func TestNextLegacyViewScanCursorIsMonotonicAndWraps(t *testing.T) {
 	cursor := legacyViewScanCursor{
 		accountID: 1, databaseName: "old db", relationName: "old view",
 		generation: 7, status: catalog.ViewRefreshStatusLegacyScan,
@@ -133,7 +151,10 @@ func TestNextLegacyViewScanCursorIsMonotonicAndTerminates(t *testing.T) {
 	done, ok := nextLegacyViewScanCursor(next, nil)
 	require.True(t, ok)
 	require.Equal(t, uint64(9), done.generation)
-	require.Equal(t, catalog.ViewRefreshStatusLegacyScanDone, done.status)
+	require.Equal(t, uint32(0), done.accountID)
+	require.Empty(t, done.databaseName)
+	require.Empty(t, done.relationName)
+	require.Equal(t, catalog.ViewRefreshStatusLegacyScan, done.status)
 
 	cursor.generation = ^uint64(0)
 	_, ok = nextLegacyViewScanCursor(cursor, nil)
@@ -147,16 +168,16 @@ func TestRunViewMetadataRecoveryPageStopsOnCancellation(t *testing.T) {
 		calls++
 		cancel()
 		return true, nil
-	})
+	}, func() (bool, error) { return true, nil })
 	require.ErrorIs(t, err, context.Canceled)
 	require.Equal(t, 1, calls)
 }
 
 func TestViewMetadataRecoveryExecutorSetsTransactionDeadline(t *testing.T) {
 	expectedError := errors.New("stop after deadline check")
-	exec := ViewMetadataRecoveryExecutor(deadlineCheckingSQLExecutor{
+	err := RunViewMetadataRecovery(context.Background(), deadlineCheckingSQLExecutor{
 		t:             t,
 		expectedError: expectedError,
 	}, "worker")
-	require.ErrorIs(t, exec(context.Background(), nil), expectedError)
+	require.ErrorIs(t, err, expectedError)
 }

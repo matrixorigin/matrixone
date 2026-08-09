@@ -430,6 +430,9 @@ func (s *service) Start() (err error) {
 
 	s.task.runnerReady.Store(true)
 	s.startTaskRunner()
+	if err = s.startViewMetadataRecovery(); err != nil {
+		return err
+	}
 	return nil
 }
 
