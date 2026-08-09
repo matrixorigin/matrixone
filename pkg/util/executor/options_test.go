@@ -49,6 +49,21 @@ func TestOptionsLockWaitTimeout(t *testing.T) {
 	require.Len(t, opts.ExtraTxnOptions(), 2)
 }
 
+func TestOptionsPreserveVariableMetadataResolvers(t *testing.T) {
+	isBin := func(string, bool, bool) (bool, error) { return true, nil }
+	binaryString := func(string, bool, bool) (bool, error) { return true, nil }
+	opts := Options{}.
+		WithResolveVariableIsBinFunc(isBin).
+		WithResolveVariableBinaryStringFunc(binaryString)
+
+	gotIsBin, err := opts.ResolveVariableIsBinFunc()("v", false, false)
+	require.NoError(t, err)
+	require.True(t, gotIsBin)
+	gotBinaryString, err := opts.ResolveVariableBinaryStringFunc()("v", false, false)
+	require.NoError(t, err)
+	require.True(t, gotBinaryString)
+}
+
 func TestStatementOptionParamsPreserveNulls(t *testing.T) {
 	mp := mpool.MustNewZero()
 	vec := StatementOption{}.

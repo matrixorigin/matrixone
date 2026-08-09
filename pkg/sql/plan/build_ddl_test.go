@@ -956,17 +956,41 @@ func TestBuildCTASMaterializesDynamicBinaryStringTypes(t *testing.T) {
 		return name == "u" && !system && !global, nil
 	}
 	stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL,
-		`create table copied as select @u variable_value, replace(X'e4bda0', X'bd', X'78') replace_value`, 1)
+		`create table copied as select
+			@u variable_value,
+			replace(X'e4bda0', X'bd', X'78') replace_value,
+			left(@u, 1) left_value,
+			regexp_substr(@u, '.') regexp_value,
+			substring_index(@u, X'61', 1) substring_index_value`, 1)
 	require.NoError(t, err)
 	defer stmt.Free()
 
 	p, err := BuildPlan(ctx, stmt, false)
 	require.NoError(t, err)
 	cols := p.GetDdl().GetCreateTable().GetTableDef().GetCols()
-	require.GreaterOrEqual(t, len(cols), 2)
+	require.GreaterOrEqual(t, len(cols), 5)
 	require.Equal(t, int32(types.T_blob), cols[0].Typ.Id)
 	require.Equal(t, int32(types.T_varbinary), cols[1].Typ.Id)
 	require.Equal(t, int32(3), cols[1].Typ.Width)
+	for _, idx := range []int{2, 3, 4} {
+		require.Equal(t, int32(types.T_blob), cols[idx].Typ.Id, cols[idx].Name)
+	}
+}
+
+func TestBuildCTASUsesBinaryFunctionResultWidth(t *testing.T) {
+	stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL,
+		`create table copied as select lpad(X'61', 5, 'x') padded, +X'3132' unary_value`, 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+
+	p, err := BuildPlan(NewMockCompilerContext(false), stmt, false)
+	require.NoError(t, err)
+	cols := p.GetDdl().GetCreateTable().GetTableDef().GetCols()
+	require.GreaterOrEqual(t, len(cols), 2)
+	require.Equal(t, int32(types.T_varbinary), cols[0].Typ.Id)
+	require.Equal(t, int32(5), cols[0].Typ.Width)
+	require.Equal(t, int32(types.T_varbinary), cols[1].Typ.Id)
+	require.Equal(t, int32(2), cols[1].Typ.Width)
 }
 
 func TestBuildCTASEmptyBinaryLiteralCanBeReparsed(t *testing.T) {

@@ -735,6 +735,7 @@ func leastGreatestFnVarlen(
 	length int,
 	selectList *FunctionSelectList,
 	compareFn func(v1, v2 []byte) bool) error {
+	propagateBinaryStringResult(parameters, result)
 	rs := vector.MustFunctionResult[types.Varlena](result)
 	rsVec := rs.GetResultVector()
 	rsNull := rsVec.GetNulls()

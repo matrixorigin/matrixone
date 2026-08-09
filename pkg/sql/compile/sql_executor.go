@@ -393,10 +393,14 @@ func (exec *txnExecutor) Exec(
 	// without opening a statement, so its compile must not advance the
 	// workspace snapshot write offset (the statement boundary).
 	proc.SetIncrStatementDisabled(exec.opts.DisableIncrStatement())
-	proc.SetResolveVariableFunc(exec.opts.ResolveVariableFunc())
-
 	if exec.opts.ResolveVariableFunc() != nil {
 		proc.SetResolveVariableFunc(exec.opts.ResolveVariableFunc())
+	}
+	if exec.opts.ResolveVariableIsBinFunc() != nil {
+		proc.SetResolveVariableIsBinFunc(exec.opts.ResolveVariableIsBinFunc())
+	}
+	if exec.opts.ResolveVariableBinaryStringFunc() != nil {
+		proc.SetResolveVariableBinaryStringFunc(exec.opts.ResolveVariableBinaryStringFunc())
 	}
 
 	// Propagate the "is this frontend?" signal onto the proc — same

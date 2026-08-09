@@ -50,29 +50,31 @@ type TxnExecutor interface {
 
 // Options execute options.
 type Options struct {
-	disableIncrStatement    bool
-	txnOp                   client.TxnOperator
-	database                string
-	accountID               uint32
-	hasAccountID            bool
-	minCommittedTS          timestamp.Timestamp
-	innerTxn                bool
-	waitCommittedLogApplied bool
-	timeZone                *time.Location
-	statementOptions        StatementOption
-	txnOpts                 []client.TxnOption
-	enableTrace             bool
-	lower                   *int64
-	streaming               bool
-	stream_chan             chan Result
-	error_chan              chan error
-	sql                     string
-	forceRebuildPlan        bool
-	resolveVariableFunc     func(varName string, isSystemVar, isGlobalVar bool) (interface{}, error)
-	adjustTableExtraFunc    func(*api.SchemaExtra) error
-	keepTxnAlive            bool
-	lockWaitTimeout         time.Duration
-	lockWaitTimeoutSet      bool
+	disableIncrStatement            bool
+	txnOp                           client.TxnOperator
+	database                        string
+	accountID                       uint32
+	hasAccountID                    bool
+	minCommittedTS                  timestamp.Timestamp
+	innerTxn                        bool
+	waitCommittedLogApplied         bool
+	timeZone                        *time.Location
+	statementOptions                StatementOption
+	txnOpts                         []client.TxnOption
+	enableTrace                     bool
+	lower                           *int64
+	streaming                       bool
+	stream_chan                     chan Result
+	error_chan                      chan error
+	sql                             string
+	forceRebuildPlan                bool
+	resolveVariableFunc             func(varName string, isSystemVar, isGlobalVar bool) (interface{}, error)
+	resolveVariableIsBinFunc        func(varName string, isSystemVar, isGlobalVar bool) (bool, error)
+	resolveVariableBinaryStringFunc func(varName string, isSystemVar, isGlobalVar bool) (bool, error)
+	adjustTableExtraFunc            func(*api.SchemaExtra) error
+	keepTxnAlive                    bool
+	lockWaitTimeout                 time.Duration
+	lockWaitTimeoutSet              bool
 	// isFrontend records whether the caller is a frontend
 	// session-bound invocation. Go zero value (false) means
 	// background: every caller of the internal SQL executor is

@@ -525,6 +525,9 @@ func (ctr *container) processValueFunc(idx int, ap *Window, proc *process.Proces
 		var defaultVec *vector.Vector
 		if len(ctr.aggVecs[idx].Vec) >= 3 {
 			defaultVec = ctr.aggVecs[idx].Vec[2]
+			if isBinaryStringVector(defaultVec) {
+				localResult.SetIsBinaryString(true)
+			}
 		}
 		for j := 0; j < n; j++ {
 			if err = checkCanceled(proc, j); err != nil {
@@ -568,6 +571,9 @@ func (ctr *container) processValueFunc(idx int, ap *Window, proc *process.Proces
 		var defaultVec *vector.Vector
 		if len(ctr.aggVecs[idx].Vec) >= 3 {
 			defaultVec = ctr.aggVecs[idx].Vec[2]
+			if isBinaryStringVector(defaultVec) {
+				localResult.SetIsBinaryString(true)
+			}
 		}
 		for j := 0; j < n; j++ {
 			if err = checkCanceled(proc, j); err != nil {

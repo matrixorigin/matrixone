@@ -47,6 +47,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 )
 
@@ -361,39 +362,20 @@ func ctasBinaryStringType(ctx CompilerContext, expr *Expr) (types.Type, bool) {
 	}
 	name := strings.ToLower(fn.Func.ObjName)
 	if name == "cast" {
-		return types.Type{}, false
+		_, overload := function.DecodeOverloadID(fn.Func.Obj)
+		if overload != 0 || len(fn.Args) == 0 {
+			return types.Type{}, false
+		}
+		return ctasBinaryStringType(ctx, fn.Args[0])
 	}
 	if name == "char" {
 		return types.T_blob.ToType(), true
 	}
 
-	usesArgument := func(idx int) bool {
-		switch name {
-		case "concat", "concat_ws", "coalesce", "group_concat":
-			return true
-		case "elt":
-			return idx > 0
-		case "if", "iff":
-			return idx == 1 || idx == 2
-		case "case":
-			return idx%2 == 1 || len(fn.Args)%2 == 1 && idx == len(fn.Args)-1
-		case "lpad", "rpad":
-			return idx == 0 || idx == 2
-		case "replace", "trim":
-			return true
-		case "substring", "substr", "mid", "left", "right", "lower", "lcase", "upper", "ucase",
-			"repeat", "reverse", "ltrim", "rtrim", "regexp_substr", "min", "max", "any_value",
-			"first_value", "last_value", "nth_value", "lag", "lead":
-			return idx == 0
-		default:
-			return false
-		}
-	}
-
 	var resultType types.Type
 	found := false
 	for idx, arg := range fn.Args {
-		if !usesArgument(idx) {
+		if name != "group_concat" && !binaryStringResultUsesArgument(name, len(fn.Args), idx) {
 			continue
 		}
 		argType, ok := ctasBinaryStringType(ctx, arg)
@@ -414,7 +396,50 @@ func ctasBinaryStringType(ctx CompilerContext, expr *Expr) (types.Type, bool) {
 	if name == "group_concat" {
 		return types.T_blob.ToType(), true
 	}
-	return resultType, true
+	return ctasBinaryFunctionResultType(name, fn.Args, exprType, resultType), true
+}
+
+func ctasBinaryFunctionResultType(name string, args []*Expr, exprType, sourceType types.Type) types.Type {
+	if exprType.Oid == types.T_binary || exprType.Oid == types.T_varbinary || exprType.Oid == types.T_blob {
+		return exprType
+	}
+	result := sourceType
+	if result.Oid == types.T_binary {
+		result.Oid = types.T_varbinary
+	}
+	if result.Oid != types.T_varbinary {
+		result = types.New(types.T_varbinary, sourceType.Width, 0)
+	}
+	limitWidth := func(arg int) {
+		if arg >= len(args) {
+			return
+		}
+		if width, ok := literalNonNegativeInt64(args[arg]); ok {
+			if width > int64(types.MaxVarBinaryLen) {
+				width = int64(types.MaxVarBinaryLen)
+			}
+			result.Width = int32(width)
+		}
+	}
+	switch name {
+	case "left", "right":
+		previous := result.Width
+		limitWidth(1)
+		if previous >= 0 && result.Width > previous {
+			result.Width = previous
+		}
+	case "substring", "substr", "mid":
+		if len(args) >= 3 {
+			previous := result.Width
+			limitWidth(2)
+			if previous >= 0 && result.Width > previous {
+				result.Width = previous
+			}
+		}
+	case "lpad", "rpad":
+		limitWidth(1)
+	}
+	return result
 }
 
 func buildCTASDefaultForView(ctx CompilerContext, typ plan.Type, nullAbility bool) (*plan.Default, error) {

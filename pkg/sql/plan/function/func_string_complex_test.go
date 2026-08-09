@@ -257,6 +257,15 @@ func TestBinaryStringFunctionsUseByteSemantics(t *testing.T) {
 		[]*vector.Vector{binary, patterns}, likeResult, proc, binary.Length(), nil))
 	require.Equal(t, []bool{true, true}, vector.MustFixedColWithTypeCheck[bool](likeResult.GetResultVector()))
 
+	escape := testutil.MakeScalarVarchar("=", binary.Length(), mp)
+	defer escape.Free(mp)
+	likeEscapeResult := vector.NewFunctionResultWrapper(types.T_bool.ToType(), mp)
+	defer likeEscapeResult.Free()
+	require.NoError(t, likeEscapeResult.PreExtendAndReset(binary.Length()))
+	require.NoError(t, newOpBuiltInRegexp().likeFn(
+		[]*vector.Vector{binary, patterns, escape}, likeEscapeResult, proc, binary.Length(), nil))
+	require.Equal(t, []bool{true, true}, vector.MustFixedColWithTypeCheck[bool](likeEscapeResult.GetResultVector()))
+
 	dot := testutil.MakeVarlenaVector([][]byte{[]byte("."), []byte(".")}, nil, types.T_varchar.ToType(), mp)
 	defer dot.Free(mp)
 	regexpResult := vector.NewFunctionResultWrapper(types.T_varchar.ToType(), mp)
@@ -267,6 +276,61 @@ func TestBinaryStringFunctionsUseByteSemantics(t *testing.T) {
 	require.True(t, regexpResult.GetResultVector().GetIsBinaryString())
 	require.Equal(t, []string{string([]byte{0xe4}), string([]byte{0xff})},
 		vector.InefficientMustStrCol(regexpResult.GetResultVector()))
+
+	regPatterns := testutil.MakeVarlenaVector(
+		[][]byte{[]byte("^....$"), []byte("^..$")}, nil, types.T_varchar.ToType(), mp)
+	defer regPatterns.Free(mp)
+	regMatchResult := vector.NewFunctionResultWrapper(types.T_bool.ToType(), mp)
+	defer regMatchResult.Free()
+	require.NoError(t, regMatchResult.PreExtendAndReset(binary.Length()))
+	require.NoError(t, newOpBuiltInRegexp().builtInRegMatch(
+		[]*vector.Vector{binary, regPatterns}, regMatchResult, proc, binary.Length(), nil))
+	require.Equal(t, []bool{true, true}, vector.MustFixedColWithTypeCheck[bool](regMatchResult.GetResultVector()))
+
+	occurrences := testutil.MakeInt64Vector([]int64{2, 2}, nil, mp)
+	defer occurrences.Free(mp)
+	positions := testutil.MakeInt64Vector([]int64{1, 1}, nil, mp)
+	defer positions.Free(mp)
+	regexpInstrResult := vector.NewFunctionResultWrapper(types.T_int64.ToType(), mp)
+	defer regexpInstrResult.Free()
+	require.NoError(t, regexpInstrResult.PreExtendAndReset(binary.Length()))
+	require.NoError(t, newOpBuiltInRegexp().builtInRegexpInstr(
+		[]*vector.Vector{binary, dot, positions, occurrences}, regexpInstrResult, proc, binary.Length(), nil))
+	require.Equal(t, []int64{2, 2}, vector.MustFixedColWithTypeCheck[int64](regexpInstrResult.GetResultVector()))
+
+	replacements := testutil.MakeVarlenaVector(
+		[][]byte{[]byte("x"), []byte("x")}, nil, types.T_varchar.ToType(), mp)
+	defer replacements.Free(mp)
+	regexpReplaceResult := vector.NewFunctionResultWrapper(types.T_varchar.ToType(), mp)
+	defer regexpReplaceResult.Free()
+	require.NoError(t, regexpReplaceResult.PreExtendAndReset(binary.Length()))
+	require.NoError(t, newOpBuiltInRegexp().builtInRegexpReplace(
+		[]*vector.Vector{binary, dot, replacements}, regexpReplaceResult, proc, binary.Length(), nil))
+	require.True(t, regexpReplaceResult.GetResultVector().GetIsBinaryString())
+	require.Equal(t, []string{"xxxx", "xx"}, vector.InefficientMustStrCol(regexpReplaceResult.GetResultVector()))
+
+	delimiters := testutil.MakeVarlenaVector(
+		[][]byte{[]byte("a"), []byte("a")}, nil, types.T_varchar.ToType(), mp)
+	defer delimiters.Free(mp)
+	counts := testutil.MakeInt64Vector([]int64{1, 1}, nil, mp)
+	defer counts.Free(mp)
+	substrIndexResult := vector.NewFunctionResultWrapper(types.T_varchar.ToType(), mp)
+	defer substrIndexResult.Free()
+	require.NoError(t, substrIndexResult.PreExtendAndReset(binary.Length()))
+	require.NoError(t, SubStrIndex[int64](
+		[]*vector.Vector{binary, delimiters, counts}, substrIndexResult, proc, binary.Length(), nil))
+	require.True(t, substrIndexResult.GetResultVector().GetIsBinaryString())
+	require.Equal(t, []string{string([]byte{0xe4, 0xbd, 0xa0}), string([]byte{0xff})},
+		vector.InefficientMustStrCol(substrIndexResult.GetResultVector()))
+
+	insertResult := vector.NewFunctionResultWrapper(types.T_varchar.ToType(), mp)
+	defer insertResult.Free()
+	require.NoError(t, insertResult.PreExtendAndReset(binary.Length()))
+	require.NoError(t, Insert(
+		[]*vector.Vector{binary, occurrences, positions, replacements}, insertResult, proc, binary.Length(), nil))
+	require.True(t, insertResult.GetResultVector().GetIsBinaryString())
+	require.Equal(t, []string{string([]byte{0xe4, 'x', 0xa0, 0x61}), string([]byte{0xff, 'x'})},
+		vector.InefficientMustStrCol(insertResult.GetResultVector()))
 }
 
 func TestBinaryStringScalarResultsPropagateMetadata(t *testing.T) {
@@ -284,7 +348,19 @@ func TestBinaryStringScalarResultsPropagateMetadata(t *testing.T) {
 		fn     func([]*vector.Vector, vector.FunctionResultWrapper, *process.Process, int, *FunctionSelectList) error
 		params []*vector.Vector
 	}{
+		{name: "substring_index", fn: SubStrIndex[int64], params: []*vector.Vector{
+			binary, text, testutil.MakeInt64Vector([]int64{1}, nil, mp),
+		}},
 		{name: "replace", fn: Replace, params: []*vector.Vector{binary, text, text}},
+		{name: "insert", fn: Insert, params: []*vector.Vector{
+			binary, testutil.MakeInt64Vector([]int64{1}, nil, mp), testutil.MakeInt64Vector([]int64{1}, nil, mp), text,
+		}},
+		{name: "make_set", fn: MakeSet, params: []*vector.Vector{
+			testutil.MakeInt64Vector([]int64{1}, nil, mp), binary,
+		}},
+		{name: "export_set", fn: ExportSet, params: []*vector.Vector{
+			testutil.MakeInt64Vector([]int64{1}, nil, mp), binary, text, text, testutil.MakeInt64Vector([]int64{1}, nil, mp),
+		}},
 		{name: "ltrim", fn: Ltrim, params: []*vector.Vector{binary}},
 		{name: "rtrim", fn: Rtrim, params: []*vector.Vector{binary}},
 		{name: "elt", fn: Elt, params: []*vector.Vector{
@@ -295,8 +371,14 @@ func TestBinaryStringScalarResultsPropagateMetadata(t *testing.T) {
 			binary, text,
 		}},
 	}
+	defer tests[0].params[2].Free(mp)
+	defer tests[2].params[1].Free(mp)
+	defer tests[2].params[2].Free(mp)
 	defer tests[3].params[0].Free(mp)
 	defer tests[4].params[0].Free(mp)
+	defer tests[4].params[4].Free(mp)
+	defer tests[7].params[0].Free(mp)
+	defer tests[8].params[0].Free(mp)
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -308,6 +390,12 @@ func TestBinaryStringScalarResultsPropagateMetadata(t *testing.T) {
 		})
 	}
 
+	leastResult := vector.NewFunctionResultWrapper(types.T_varchar.ToType(), mp)
+	defer leastResult.Free()
+	require.NoError(t, leastResult.PreExtendAndReset(1))
+	require.NoError(t, leastFn([]*vector.Vector{binary, binary}, leastResult, proc, 1, nil))
+	require.True(t, leastResult.GetResultVector().GetIsBinaryString())
+
 	charInput := testutil.MakeInt64Vector([]int64{0xe4bda0}, nil, mp)
 	defer charInput.Free(mp)
 	charResult := vector.NewFunctionResultWrapper(types.T_varchar.ToType(), mp)
@@ -316,6 +404,17 @@ func TestBinaryStringScalarResultsPropagateMetadata(t *testing.T) {
 	require.NoError(t, builtInChar(
 		[]*vector.Vector{charInput}, charResult, proc, 1, nil))
 	require.True(t, charResult.GetResultVector().GetIsBinaryString())
+	require.Equal(t, []byte{0xe4, 0xbd, 0xa0}, charResult.GetResultVector().GetBytesAt(0))
+
+	charset := testutil.MakeScalarVarchar("utf8mb4", 1, mp)
+	defer charset.Free(mp)
+	convertResult := vector.NewFunctionResultWrapper(types.T_varchar.ToType(), mp)
+	defer convertResult.Free()
+	require.NoError(t, convertResult.PreExtendAndReset(1))
+	require.NoError(t, builtInConvertUsingCharset(
+		[]*vector.Vector{charResult.GetResultVector(), charset}, convertResult, proc, 1, nil))
+	require.False(t, convertResult.GetResultVector().GetIsBinaryString())
+	require.Equal(t, []byte{0xe4, 0xbd, 0xa0}, convertResult.GetResultVector().GetBytesAt(0))
 }
 
 // Test_ConcatWs tests CONCAT_WS function (concat with separator)

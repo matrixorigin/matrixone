@@ -1,0 +1,69 @@
+DROP DATABASE IF EXISTS binary_string_semantics;
+CREATE DATABASE binary_string_semantics;
+USE binary_string_semantics;
+SET @b = X'e4bda061';
+SELECT HEX(SUBSTRING_INDEX(@b, X'61', 1)), CHAR_LENGTH(SUBSTRING_INDEX(@b, X'61', 1));
+➤ HEX(SUBSTRING_INDEX(@b, 0x61, 1))[12,65535,0]  ¦  CHAR_LENGTH(SUBSTRING_INDEX(@b, 0x61, 1))[-5,64,0]  𝄀
+E4BDA0  ¦  3
+SELECT HEX(MAKE_SET(1, @b)), CHAR_LENGTH(MAKE_SET(1, @b));
+➤ HEX(MAKE_SET(1, @b))[12,65535,0]  ¦  CHAR_LENGTH(MAKE_SET(1, @b))[-5,64,0]  𝄀
+E4BDA061  ¦  4
+SELECT HEX(EXPORT_SET(1, @b, '', '', 1)), CHAR_LENGTH(EXPORT_SET(1, @b, '', '', 1));
+➤ HEX(EXPORT_SET(1, @b, , , 1))[12,65535,0]  ¦  CHAR_LENGTH(EXPORT_SET(1, @b, , , 1))[-5,64,0]  𝄀
+E4BDA061  ¦  4
+SELECT HEX(LEAST(@b, @b)), CHAR_LENGTH(LEAST(@b, @b)),
+HEX(GREATEST(@b, @b)), CHAR_LENGTH(GREATEST(@b, @b));
+➤ HEX(LEAST(@b, @b))[12,65535,0]  ¦  CHAR_LENGTH(LEAST(@b, @b))[-5,64,0]  ¦  HEX(GREATEST(@b, @b))[12,65535,0]  ¦  CHAR_LENGTH(GREATEST(@b, @b))[-5,64,0]  𝄀
+E4BDA061  ¦  4  ¦  E4BDA061  ¦  4
+SELECT HEX(INSERT(@b, 2, 1, X'78')), CHAR_LENGTH(INSERT(@b, 2, 1, X'78'));
+➤ HEX(INSERT(@b, 2, 1, 0x78))[12,65535,0]  ¦  CHAR_LENGTH(INSERT(@b, 2, 1, 0x78))[-5,64,0]  𝄀
+E478A061  ¦  4
+SELECT REGEXP_LIKE(@b, '^....$'), @b REGEXP '^....$', REGEXP_INSTR(@b, '.', 1, 2),
+HEX(REGEXP_REPLACE(@b, '.', 'x')), CHAR_LENGTH(REGEXP_REPLACE(@b, 'z', 'z'));
+➤ REGEXP_LIKE(@b, ^....$)[-7,1,0]  ¦  @b reg_match ^....$[-7,1,0]  ¦  REGEXP_INSTR(@b, ., 1, 2)[-5,64,0]  ¦  HEX(REGEXP_REPLACE(@b, ., x))[12,65535,0]  ¦  CHAR_LENGTH(REGEXP_REPLACE(@b, z, z))[-5,64,0]  𝄀
+1  ¦  1  ¦  2  ¦  78787878  ¦  4
+SELECT @b LIKE '____' ESCAPE '=';
+➤ @b like ____ escape =[-7,1,0]  𝄀
+1
+SELECT HEX(x), CHAR_LENGTH(x), OCTET_LENGTH(x)
+FROM (SELECT LAG(v, 1, @b) OVER (ORDER BY id) x FROM (SELECT 1 id, 'a' v) s) q;
+➤ HEX(x)[12,65535,0]  ¦  CHAR_LENGTH(x)[-5,64,0]  ¦  OCTET_LENGTH(x)[-5,64,0]  𝄀
+E4BDA0  ¦  3  ¦  3
+SELECT HEX(x), CHAR_LENGTH(x), OCTET_LENGTH(x)
+FROM (SELECT LEAD(v, 1, @b) OVER (ORDER BY id) x FROM (SELECT 1 id, 'a' v) s) q;
+➤ HEX(x)[12,65535,0]  ¦  CHAR_LENGTH(x)[-5,64,0]  ¦  OCTET_LENGTH(x)[-5,64,0]  𝄀
+E4BDA0  ¦  3  ¦  3
+SELECT HEX(CHAR(65 USING utf8mb4)), CHAR_LENGTH(CHAR(65 USING utf8mb4)),
+OCTET_LENGTH(CHAR(65 USING utf8mb4));
+➤ HEX(convert(CHAR(65), utf8mb4))[12,65535,0]  ¦  CHAR_LENGTH(convert(CHAR(65), utf8mb4))[-5,64,0]  ¦  OCTET_LENGTH(convert(CHAR(65), utf8mb4))[-5,64,0]  𝄀
+41  ¦  1  ¦  1
+SET @b = X'e4bda0';
+CREATE TABLE binary_left_ctas AS SELECT LEFT(@b, 1) c;
+CREATE TABLE binary_regexp_ctas AS SELECT REGEXP_SUBSTR(@b, '.') c;
+CREATE TABLE binary_lpad_ctas AS SELECT LPAD(X'61', 5, 'x') c;
+CREATE TABLE binary_unary_ctas AS SELECT +X'3132' c;
+SHOW COLUMNS FROM binary_left_ctas;
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+c  ¦  BLOB(0)  ¦  YES  ¦    ¦  null  ¦    ¦
+SHOW COLUMNS FROM binary_regexp_ctas;
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+c  ¦  BLOB(0)  ¦  YES  ¦    ¦  null  ¦    ¦
+SHOW COLUMNS FROM binary_lpad_ctas;
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+c  ¦  VARBINARY(5)  ¦  NO  ¦    ¦  null  ¦    ¦
+SHOW COLUMNS FROM binary_unary_ctas;
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+c  ¦  VARBINARY(2)  ¦  NO  ¦    ¦  null  ¦    ¦
+SELECT HEX(c), CHAR_LENGTH(c) FROM binary_left_ctas;
+➤ HEX(c)[12,65535,0]  ¦  CHAR_LENGTH(c)[-5,64,0]  𝄀
+E4  ¦  1
+SELECT HEX(c), CHAR_LENGTH(c) FROM binary_regexp_ctas;
+➤ HEX(c)[12,65535,0]  ¦  CHAR_LENGTH(c)[-5,64,0]  𝄀
+E4  ¦  1
+SELECT HEX(c), CHAR_LENGTH(c) FROM binary_lpad_ctas;
+➤ HEX(c)[12,65535,0]  ¦  CHAR_LENGTH(c)[-5,64,0]  𝄀
+7878787861  ¦  5
+SELECT HEX(c), CHAR_LENGTH(c), c + 0 FROM binary_unary_ctas;
+➤ HEX(c)[12,65535,0]  ¦  CHAR_LENGTH(c)[-5,64,0]  ¦  c + 0[-5,64,0]  𝄀
+3132  ¦  2  ¦  12
+DROP DATABASE binary_string_semantics;

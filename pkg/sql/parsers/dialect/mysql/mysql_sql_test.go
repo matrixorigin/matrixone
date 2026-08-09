@@ -416,6 +416,21 @@ func TestConvertToJSONBuildsCastExpr(t *testing.T) {
 	require.False(t, isCast)
 }
 
+func TestCharUsingCharsetBuildsConvertAroundChar(t *testing.T) {
+	stmt, err := ParseOne(context.Background(), "select char(65 using utf8mb4)", 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+
+	convertExpr, ok := firstSelectExpr(t, stmt).(*tree.FuncExpr)
+	require.True(t, ok)
+	require.Equal(t, "convert", convertExpr.FuncName.Compare())
+	require.Len(t, convertExpr.Exprs, 2)
+	charExpr, ok := convertExpr.Exprs[0].(*tree.FuncExpr)
+	require.True(t, ok)
+	require.Equal(t, "char", charExpr.FuncName.Compare())
+	require.Len(t, charExpr.Exprs, 1)
+}
+
 func TestParseFirstWithSQLMode(t *testing.T) {
 	ctx := context.Background()
 	parser := &MySQLParser{}

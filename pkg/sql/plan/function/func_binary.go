@@ -5067,6 +5067,7 @@ func makeSetCheck(overloads []overload, inputs []types.Type) checkResult {
 
 // MakeSet: MAKE_SET(bits, str1, str2, ...) - Returns a set value (a string containing substrings separated by ',' characters) consisting of the strings that have the corresponding bit in bits set.
 func MakeSet(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	propagateBinaryStringResult(ivecs[1:], result)
 	rs := vector.MustFunctionResult[types.Varlena](result)
 
 	// First argument: bits (numeric) - handle different numeric types
@@ -5311,6 +5312,7 @@ func exportSetCheck(overloads []overload, inputs []types.Type) checkResult {
 
 // ExportSet: EXPORT_SET(bits, on, off[, separator[, number_of_bits]]) - Returns a string such that for every bit set in the value bits, you get an on string and for every bit not set, you get an off string.
 func ExportSet(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	propagateBinaryStringResult(ivecs[1:], result)
 	rs := vector.MustFunctionResult[types.Varlena](result)
 
 	// First argument: bits (numeric) - handle different numeric types
@@ -6232,6 +6234,7 @@ func getCount[T number](typ types.Type, val T) int64 {
 }
 
 func SubStrIndex[T number](ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) (err error) {
+	propagateBinaryStringResult(ivecs[:2], result)
 	rs := vector.MustFunctionResult[types.Varlena](result)
 	vs := vector.GenerateFunctionStrParameter(ivecs[0])
 	delims := vector.GenerateFunctionStrParameter(ivecs[1])
@@ -8478,6 +8481,10 @@ func Replace(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *pro
 }
 
 func Insert(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) (err error) {
+	binaryInput := isBinaryStringVector(ivecs[0]) || isBinaryStringVector(ivecs[3])
+	if binaryInput {
+		result.GetResultVector().SetIsBinaryString(true)
+	}
 	p1 := vector.GenerateFunctionStrParameter(ivecs[0])              // str
 	p2 := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[1]) // pos
 	p3 := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[2]) // len
@@ -8495,6 +8502,30 @@ func Insert(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *proc
 				return err
 			}
 		} else {
+			if binaryInput {
+				strLen := int64(len(v1))
+				if v2 <= 0 || v2 > strLen {
+					if err = rs.AppendBytes(v1, false); err != nil {
+						return err
+					}
+					continue
+				}
+				start := v2 - 1
+				end := strLen
+				if v3 == 0 {
+					end = start
+				} else if v3 > 0 && v3 < strLen-start {
+					end = start + v3
+				}
+				value := make([]byte, 0, int(start)+len(v4)+int(strLen-end))
+				value = append(value, v1[:start]...)
+				value = append(value, v4...)
+				value = append(value, v1[end:]...)
+				if err = rs.AppendBytes(value, false); err != nil {
+					return err
+				}
+				continue
+			}
 			str := functionUtil.QuickBytesToStr(v1)
 			pos := v2
 			replaceLen := v3

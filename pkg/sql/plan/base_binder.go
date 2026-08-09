@@ -761,6 +761,9 @@ func (b *baseBinder) bindRangeCond(astExpr *tree.RangeCond, depth int32, isRoot 
 }
 
 func (b *baseBinder) bindUnaryExpr(astExpr *tree.UnaryExpr, depth int32, isRoot bool) (*Expr, error) {
+	if astExpr.Op == tree.UNARY_PLUS && isRoot && isRawBinaryLiteralAst(astExpr.Expr) {
+		return b.impl.BindExpr(astExpr.Expr, depth, true)
+	}
 	if (astExpr.Op == tree.UNARY_PLUS || astExpr.Op == tree.UNARY_MINUS || astExpr.Op == tree.UNARY_TILDE) &&
 		b.mysqlSpecialTypeInAst(astExpr.Expr) {
 		return b.bindWithRawMySQLSpecialTypes(func() (*Expr, error) {
@@ -771,6 +774,11 @@ func (b *baseBinder) bindUnaryExpr(astExpr *tree.UnaryExpr, depth int32, isRoot 
 		return b.bindNumericExprWithDefaultContext(astExpr, depth, b.defaultNumericOuterType())
 	}
 	return b.bindUnaryExprWithCurrentContext(astExpr, depth)
+}
+
+func isRawBinaryLiteralAst(expr tree.Expr) bool {
+	literal, ok := unwrapParenExpr(expr).(*tree.NumVal)
+	return ok && (literal.ValType == tree.P_hexnum || literal.ValType == tree.P_bit)
 }
 
 func (b *baseBinder) bindUnaryExprWithCurrentContext(astExpr *tree.UnaryExpr, depth int32) (*Expr, error) {
@@ -4202,25 +4210,10 @@ func binaryLiteralStringType(expr *Expr) (types.Type, bool) {
 }
 
 func binaryLiteralStringLookupTypes(name string, args []*Expr, argTypes []types.Type) []types.Type {
-	binaryValueIndex := func(idx int) bool {
-		switch name {
-		case "concat", "concat_ws", "coalesce":
-			return true
-		case "substring", "substr", "mid", "lower", "lcase", "upper", "ucase", "repeat":
-			return idx == 0
-		case "if", "iff":
-			return idx == 1 || idx == 2
-		case "case":
-			return idx%2 == 1 || len(args)%2 == 1 && idx == len(args)-1
-		default:
-			return false
-		}
-	}
-
 	lookupTypes := argTypes
 	cloned := false
 	for idx, arg := range args {
-		if !binaryValueIndex(idx) {
+		if !binaryLiteralLookupUsesArgument(name, len(args), idx) {
 			continue
 		}
 		binaryType, ok := binaryLiteralStringType(arg)
@@ -4234,6 +4227,50 @@ func binaryLiteralStringLookupTypes(name string, args []*Expr, argTypes []types.
 		lookupTypes[idx] = binaryType
 	}
 	return lookupTypes
+}
+
+func binaryLiteralLookupUsesArgument(name string, argCount, idx int) bool {
+	switch name {
+	case "concat", "concat_ws", "coalesce":
+		return true
+	case "substring", "substr", "mid", "lower", "lcase", "upper", "ucase", "repeat":
+		return idx == 0
+	case "if", "iff":
+		return idx == 1 || idx == 2
+	case "case":
+		return idx%2 == 1 || argCount%2 == 1 && idx == argCount-1
+	default:
+		return false
+	}
+}
+
+func binaryStringResultUsesArgument(name string, argCount, idx int) bool {
+	switch name {
+	case "concat", "concat_ws", "coalesce", "least", "greatest", "trim":
+		return true
+	case "elt", "make_set":
+		return idx > 0
+	case "export_set":
+		return idx > 0 && idx < 4
+	case "if", "iff":
+		return idx == 1 || idx == 2
+	case "case":
+		return idx%2 == 1 || argCount%2 == 1 && idx == argCount-1
+	case "lpad", "rpad":
+		return idx == 0 || idx == 2
+	case "replace", "regexp_replace":
+		return idx < 3
+	case "insert":
+		return idx == 0 || idx == 3
+	case "substring_index", "regexp_substr":
+		return idx < 2
+	case "substring", "substr", "mid", "left", "right", "lower", "lcase", "upper", "ucase",
+		"repeat", "reverse", "ltrim", "rtrim", "min", "max", "any_value", "first_value", "last_value",
+		"nth_value", "lag", "lead":
+		return idx == 0
+	default:
+		return false
+	}
 }
 
 func literalNonNegativeInt64(expr *Expr) (int64, bool) {

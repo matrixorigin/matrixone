@@ -13168,14 +13168,18 @@ function_call_keyword:
     }
 |   CHAR '(' expression_list USING charset_name ')'
     {
-        cn := tree.NewNumVal($5, $5, false, tree.P_char)
-        es := $3
-        es = append(es, cn)
-        name := tree.NewUnresolvedColName($1)
+		charName := tree.NewUnresolvedColName($1)
+		charExpr := &tree.FuncExpr{
+			Func: tree.FuncName2ResolvableFunctionReference(charName),
+			FuncName: tree.NewCStr($1, 1),
+			Exprs: $3,
+		}
+		charset := tree.NewNumVal($5, $5, false, tree.P_char)
+		name := tree.NewUnresolvedColName("convert")
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
-            FuncName: tree.NewCStr($1, 1),
-            Exprs: es,
+			FuncName: tree.NewCStr("convert", 1),
+			Exprs: tree.Exprs{charExpr, charset},
         }
     }
 |   DATE STRING
