@@ -1503,11 +1503,16 @@ func (node *CaseExpr) Accept(v Visitor) (Expr, bool) {
 	}
 	node = newNode.(*CaseExpr)
 
-	tmpNode, ok := node.Expr.Accept(v)
-	if !ok {
-		return node, false
+	var tmpNode Expr
+	var ok bool
+	// Expr is absent for a searched CASE expression.
+	if node.Expr != nil {
+		tmpNode, ok = node.Expr.Accept(v)
+		if !ok {
+			return node, false
+		}
+		node.Expr = tmpNode
 	}
-	node.Expr = tmpNode
 
 	for _, when := range node.Whens {
 		tmpNode, ok = when.Cond.Accept(v)
@@ -1523,11 +1528,14 @@ func (node *CaseExpr) Accept(v Visitor) (Expr, bool) {
 		when.Val = tmpNode
 	}
 
-	tmpNode, ok = node.Else.Accept(v)
-	if !ok {
-		return node, false
+	// ELSE is optional; omitting it is equivalent to ELSE NULL during binding.
+	if node.Else != nil {
+		tmpNode, ok = node.Else.Accept(v)
+		if !ok {
+			return node, false
+		}
+		node.Else = tmpNode
 	}
-	node.Else = tmpNode
 
 	return v.Exit(node)
 }

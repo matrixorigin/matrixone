@@ -51,6 +51,20 @@ insert into check_rename values (2,1,'ok');
 insert into check_rename values (1,2,'ok');
 select x, b, note from check_rename;
 
+-- CASE has two optional AST operands: searched CASE omits its input expression,
+-- and CASE without ELSE omits its fallback expression. CHECK rewriting must
+-- traverse both valid forms without panicking.
+create table check_case_rename (
+    a int,
+    constraint ck_case_search check (case when a > 0 then 1 else 0 end = 1),
+    constraint ck_case_no_else check (case a when 1 then 1 end = 1)
+);
+alter table check_case_rename rename column a to x;
+show create table check_case_rename;
+insert into check_case_rename values (0);
+insert into check_case_rename values (1);
+select x from check_case_rename;
+
 -- CHANGE COLUMN uses COPY but must preserve the same CHECK rename invariant.
 create table check_change (
     a int,

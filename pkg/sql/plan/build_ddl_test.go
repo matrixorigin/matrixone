@@ -386,6 +386,48 @@ func TestBuildAlterRenameColumnCarriesRewrittenChecks(t *testing.T) {
 	require.Equal(t, "`nation_id` >= 0", alter.GetCopyTableDef().GetChecks()[0].GetOriginSql())
 }
 
+func TestBuildAlterRenameColumnRewritesCaseChecks(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		check string
+		want  string
+	}{
+		{
+			name:  "searched case",
+			check: "case when `n_nationkey` > 0 then 1 else 0 end = 1",
+			want:  "case when `nation_id` > 0 then 1 else 0 end = 1",
+		},
+		{
+			name:  "case without else",
+			check: "case `n_nationkey` when 1 then 1 end = 1",
+			want:  "case `nation_id` when 1 then 1 end = 1",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			stmt, err := parsers.ParseOne(
+				t.Context(),
+				dialect.MYSQL,
+				"alter table nation rename column n_nationkey to nation_id",
+				1,
+			)
+			require.NoError(t, err)
+			defer stmt.Free()
+
+			ctx := NewMockCompilerContext(false)
+			ctx.tables["nation"].Checks = []*plan.CheckDef{{
+				Name:      "ck_case",
+				OriginSql: tc.check,
+			}}
+
+			p, err := BuildPlan(ctx, stmt, false)
+			require.NoError(t, err)
+			checks := p.GetDdl().GetAlterTable().GetCopyTableDef().GetChecks()
+			require.Len(t, checks, 1)
+			require.Equal(t, tc.want, checks[0].GetOriginSql())
+		})
+	}
+}
+
 func TestBuildAlterRenameColumnRecoversLegacyChecks(t *testing.T) {
 	parseRename := func(t *testing.T) tree.Statement {
 		t.Helper()
