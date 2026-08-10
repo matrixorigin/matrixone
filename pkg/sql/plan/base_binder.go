@@ -362,10 +362,32 @@ func (b *baseBinder) baseBindParam(astExpr *tree.ParamExpr, depth int32, isRoot 
 			},
 		},
 	}
+	if bindingType, found := b.preparedParamBindingType(int32(astExpr.Offset)); found {
+		if bindingType.Oid.IsMySQLString() {
+			param.Typ = makePlan2Type(&bindingType)
+			return param, nil
+		}
+		return appendCastBeforeExpr(b.GetContext(), param, makePlan2Type(&bindingType))
+	}
 	if b.numericParamType != nil {
 		return appendCastBeforeExpr(b.GetContext(), param, *b.numericParamType)
 	}
 	return param, nil
+}
+
+func (b *baseBinder) preparedParamBindingType(pos int32) (types.Type, bool) {
+	if b.builder == nil {
+		return types.Type{}, false
+	}
+	resolver, ok := b.builder.compCtx.(interface {
+		ResolvePreparedParamBindingType(int32) (types.Type, bool)
+	})
+	if !ok {
+		return types.Type{}, false
+	}
+	// Parser offsets are one-based until NormalizePrepareParamRefs rewrites the
+	// finished plan to the zero-based protocol parameter positions.
+	return resolver.ResolvePreparedParamBindingType(pos - 1)
 }
 
 func (b *baseBinder) baseBindVar(astExpr *tree.VarExpr, depth int32, isRoot bool) (expr *plan.Expr, err error) {
@@ -1042,7 +1064,13 @@ func (b *baseBinder) numericAstTypesInternalWithHint(
 ) (numericAstTypeScan, error) {
 	switch expr := astExpr.(type) {
 	case *tree.ParamExpr:
-		return numericAstTypeScan{hasParam: true}, nil
+		scan := numericAstTypeScan{hasParam: true}
+		if bindingType, found := b.preparedParamBindingType(int32(expr.Offset)); found {
+			typed := numericAstTypedOperand(makePlan2Type(&bindingType))
+			typed.hasParam = true
+			return typed, nil
+		}
+		return scan, nil
 	case *tree.Subquery:
 		if expr.Exists {
 			return numericAstTypeScan{}, nil
@@ -4595,7 +4623,7 @@ func decimalParamCommonTypeResolutionTypes(name string, args []*Expr, argsType [
 	hasParam := false
 	hasDecimal := false
 	for i, typ := range argsType {
-		if isDirectDynamicParam(args[i]) {
+		if isUnresolvedPreparedNumericParam(args[i], typ) {
 			hasParam = true
 			continue
 		}
@@ -4619,10 +4647,11 @@ func decimalParamCommonTypeResolutionTypes(name string, args []*Expr, argsType [
 	}
 
 	resolutionTypes := append([]types.Type(nil), argsType...)
+	dynamicParamType := dynamicParamDecimalCommonType(argsType)
 	for i, typ := range argsType {
 		switch {
-		case isDirectDynamicParam(args[i]):
-			resolutionTypes[i] = dynamicParamDecimalCommonType()
+		case isUnresolvedPreparedNumericParam(args[i], typ):
+			resolutionTypes[i] = dynamicParamType
 		case typ.Oid == types.T_bool:
 			// BOOL is MySQL's TINYINT(1) alias, but is not classified as
 			// numeric internally. Use its supported integer cast bridge.
@@ -4640,8 +4669,39 @@ func decimalParamCommonTypeResolutionTypes(name string, args []*Expr, argsType [
 	return resolutionTypes
 }
 
-func dynamicParamDecimalCommonType() types.Type {
-	return types.New(types.T_decimal256, 65, 30)
+func dynamicParamDecimalCommonType(peerTypes []types.Type) types.Type {
+	const (
+		maxDecimal256Width = int32(76)
+		paramIntegralWidth = int32(35)
+		paramScale         = int32(30)
+	)
+
+	maxPeerIntegralWidth := int32(0)
+	maxPeerScale := int32(0)
+	for _, typ := range peerTypes {
+		if !typ.Oid.IsDecimal() {
+			continue
+		}
+		if integralWidth := typ.Width - typ.Scale; integralWidth > maxPeerIntegralWidth {
+			maxPeerIntegralWidth = integralWidth
+		}
+		if typ.Scale > maxPeerScale {
+			maxPeerScale = typ.Scale
+		}
+	}
+
+	integralWidth := min(paramIntegralWidth, maxDecimal256Width-maxPeerScale)
+	scale := min(paramScale, maxDecimal256Width-maxPeerIntegralWidth)
+	if integralWidth < 0 {
+		integralWidth = 0
+	}
+	if scale < 0 {
+		scale = 0
+	}
+	if integralWidth+scale == 0 {
+		integralWidth = 1
+	}
+	return types.New(types.T_decimal256, integralWidth+scale, scale)
 }
 
 func normalizeDecimalParamCommonTypeCastSources(
@@ -4687,9 +4747,9 @@ func applyDecimalParamCommonTypeCasts(
 		return argsCastType
 	}
 
-	dynamicParamType := dynamicParamDecimalCommonType()
+	dynamicParamType := dynamicParamDecimalCommonType(argsType)
 	for i := range args {
-		if !isDirectDynamicParam(args[i]) || !resolutionTypes[i].Eq(dynamicParamType) {
+		if !isUnresolvedPreparedNumericParam(args[i], argsType[i]) || !resolutionTypes[i].Eq(dynamicParamType) {
 			continue
 		}
 		if len(argsCastType) == 0 {
@@ -4698,6 +4758,10 @@ func applyDecimalParamCommonTypeCasts(
 		argsCastType[i] = returnType
 	}
 	return argsCastType
+}
+
+func isUnresolvedPreparedNumericParam(expr *Expr, typ types.Type) bool {
+	return typ.Oid == types.T_text && isDirectDynamicParam(expr)
 }
 
 // MySQL compares scalar TIME expressions to strings as text, but converts a

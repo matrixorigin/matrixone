@@ -18,6 +18,9 @@ import (
 	"bytes"
 	"context"
 	"maps"
+	"math"
+	"strconv"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -720,6 +723,164 @@ func binaryProtocolPrepareParamKind(
 	}
 }
 
+func preparedParamBindingType(kind vector.PrepareParamKind, value []byte) types.Type {
+	switch kind {
+	case vector.PrepareParamFloat:
+		return types.T_float64.ToType()
+	case vector.PrepareParamNone:
+		if value != nil && !isPreparedNumericText(value) {
+			return types.T_varchar.ToType()
+		}
+	}
+	return types.Type{}
+}
+
+func isPreparedNumericText(value []byte) bool {
+	text := strings.TrimSpace(string(value))
+	if text == "" {
+		return false
+	}
+	parsed, err := strconv.ParseFloat(text, 64)
+	if err == nil {
+		return !math.IsNaN(parsed) && !math.IsInf(parsed, 0)
+	}
+	numErr, ok := err.(*strconv.NumError)
+	return ok && numErr.Err == strconv.ErrRange
+}
+
+func preparedParamBindingTypes(
+	params *vector.Vector,
+	kinds []vector.PrepareParamKind,
+	count int,
+) []types.Type {
+	var bindingTypes []types.Type
+	for i := 0; i < count; i++ {
+		var value []byte
+		if !params.IsNull(uint64(i)) {
+			value = params.GetRawBytesAt(i)
+		}
+		var kind vector.PrepareParamKind
+		if i < len(kinds) {
+			kind = kinds[i]
+		}
+		bindingType := preparedParamBindingType(kind, value)
+		if bindingType.Oid == types.T_any {
+			continue
+		}
+		if bindingTypes == nil {
+			bindingTypes = make([]types.Type, count)
+		}
+		bindingTypes[i] = bindingType
+	}
+	return bindingTypes
+}
+
+func preparedParamBindingTypesEqual(left, right []types.Type, count int) bool {
+	for i := 0; i < count; i++ {
+		var leftType, rightType types.Type
+		if i < len(left) {
+			leftType = left[i]
+		}
+		if i < len(right) {
+			rightType = right[i]
+		}
+		if !leftType.Eq(rightType) {
+			return false
+		}
+	}
+	return true
+}
+
+func clonePreparedParamBindingTypes(bindingTypes []types.Type) []types.Type {
+	if len(bindingTypes) == 0 {
+		return nil
+	}
+	return append([]types.Type(nil), bindingTypes...)
+}
+
+type preparedExecuteParamState struct {
+	params       *vector.Vector
+	paramVals    []any
+	paramIsBin   []bool
+	paramKinds   []vector.PrepareParamKind
+	bindingTypes []types.Type
+	owned        bool
+}
+
+func (state *preparedExecuteParamState) apply(proc *process.Process) {
+	if state == nil || state.params == nil {
+		return
+	}
+	if state.owned {
+		proc.SetOwnedPrepareParamsWithMeta(state.params, state.paramIsBin, state.paramKinds)
+		state.owned = false
+		return
+	}
+	proc.SetPrepareParamsWithMeta(state.params, state.paramIsBin, state.paramKinds)
+}
+
+func (state *preparedExecuteParamState) release(proc *process.Process) {
+	if state == nil || !state.owned || state.params == nil {
+		return
+	}
+	state.params.Free(proc.Mp())
+	state.params = nil
+	state.owned = false
+}
+
+func initPreparedExecuteParams(
+	reqCtx context.Context,
+	prepareStmt *PrepareStmt,
+	execPlan *plan.Execute,
+	cwft *TxnComputationWrapper,
+	numParams int,
+) (*preparedExecuteParamState, error) {
+	if prepareStmt.params != nil && prepareStmt.params.Length() > 0 { // binary protocol
+		if prepareStmt.params.Length() != numParams {
+			return nil, moerr.NewInvalidInput(reqCtx, "Incorrect arguments to EXECUTE")
+		}
+		paramCount := prepareStmt.params.Length()
+		var kinds []vector.PrepareParamKind
+		for i := 0; i < paramCount && i*2+1 < len(prepareStmt.ParamTypes); i++ {
+			mysqlType := defines.MysqlType(prepareStmt.ParamTypes[i*2])
+			isUnsigned := prepareStmt.ParamTypes[i*2+1]&0x80 != 0
+			kind := binaryProtocolPrepareParamKind(
+				mysqlType, isUnsigned, prepareStmt.params.GetRawBytesAt(i))
+			if kind != vector.PrepareParamNone {
+				if kinds == nil {
+					kinds = make([]vector.PrepareParamKind, paramCount)
+				}
+				kinds[i] = kind
+			}
+		}
+		return &preparedExecuteParamState{
+			params:       prepareStmt.params,
+			paramVals:    preparedParamValues(prepareStmt.params, nil),
+			paramKinds:   kinds,
+			bindingTypes: preparedParamBindingTypes(prepareStmt.params, kinds, numParams),
+		}, nil
+	} else if execPlan != nil && len(execPlan.Args) > 0 {
+		if len(execPlan.Args) != numParams {
+			return nil, moerr.NewInvalidInput(reqCtx, "Incorrect arguments to EXECUTE")
+		}
+		params, paramVals, paramIsBin, paramKinds, err := buildExecuteUserParams(cwft.proc, execPlan.Args)
+		if err != nil {
+			return nil, err
+		}
+		return &preparedExecuteParamState{
+			params:       params,
+			paramVals:    paramVals,
+			paramIsBin:   paramIsBin,
+			paramKinds:   paramKinds,
+			bindingTypes: preparedParamBindingTypes(params, paramKinds, numParams),
+			owned:        true,
+		}, nil
+	} else if numParams > 0 {
+		return nil, moerr.NewInvalidInput(reqCtx, "Incorrect arguments to EXECUTE")
+	}
+	return &preparedExecuteParamState{}, nil
+}
+
 func initExecuteStmtParamWithResolverInSession(
 	execCtx *ExecCtx,
 	owner *Session,
@@ -739,6 +900,13 @@ func initExecuteStmtParamWithResolverInSession(
 	}
 	originSQL := prepareStmt.Sql
 	preparePlan := prepareStmt.PreparePlan.GetDcl().GetPrepare()
+	paramState, err := initPreparedExecuteParams(
+		reqCtx, prepareStmt, execPlan, cwft, len(preparePlan.ParamTypes))
+	if err != nil {
+		return nil, nil, nil, originSQL, false, err
+	}
+	defer paramState.release(cwft.proc)
+	paramBindingTypes := paramState.bindingTypes
 	currentNativeMode := owner.sqlModeHasMatrixOneNative()
 	currentOnlyFullGroupBy := owner.sqlModeHasOnlyFullGroupBy()
 
@@ -816,12 +984,21 @@ func initExecuteStmtParamWithResolverInSession(
 	protocolVersion := currentProtocolVersion(cwft.proc)
 	protocolMismatch := prepareStmt.protocolVersion != 0 &&
 		prepareStmt.protocolVersion != protocolVersion
-	needRebuild := preparePlanNeedsRebuild(change, modeMismatch, protocolMismatch) || fkSensitive
+	paramBindingMismatch := !preparedParamBindingTypesEqual(
+		prepareStmt.paramBindingTypes, paramBindingTypes, len(preparePlan.ParamTypes))
+	needRebuild := preparePlanNeedsRebuild(change, modeMismatch, protocolMismatch) ||
+		fkSensitive || paramBindingMismatch
 
 	// Rebuild the plan when catalog schema, session temporary-table name
-	// resolution, FK-check state, protocol, or compatibility mode changed.
+	// resolution, FK-check state, protocol, compatibility mode, or runtime
+	// parameter category changed.
 	if needRebuild {
-		newPlan, err := rebuildPreparePlan(execCtx, executionSes, prepareStmt, buildPlan)
+		compilerCtx := executionSes.GetTxnCompileCtx()
+		compilerCtx.setPreparedParamBindingTypes(paramBindingTypes)
+		newPlan, err := func() (*plan.Plan, error) {
+			defer compilerCtx.setPreparedParamBindingTypes(nil)
+			return rebuildPreparePlan(execCtx, executionSes, prepareStmt, buildPlan)
+		}()
 		if err != nil {
 			return nil, nil, nil, "", false, err
 		}
@@ -859,6 +1036,7 @@ func initExecuteStmtParamWithResolverInSession(
 		// high-watermark. A later logtail event will advance it again.
 		prepareStmt.preparedMetadataCheckTS = preparedMetadataTS
 		prepareStmt.protocolVersion = protocolVersion
+		prepareStmt.paramBindingTypes = clonePreparedParamBindingTypes(paramBindingTypes)
 	}
 
 	// Recreate the cached compile only when a plan dependency changed.
@@ -899,50 +1077,11 @@ func initExecuteStmtParamWithResolverInSession(
 			}
 		}
 	}
-	numParams := len(preparePlan.ParamTypes)
-	cwft.paramVals = nil
-	if prepareStmt.params != nil && prepareStmt.params.Length() > 0 { // use binary protocol
-		if prepareStmt.params.Length() != numParams {
-			return nil, nil, nil, originSQL, false, moerr.NewInvalidInput(reqCtx, "Incorrect arguments to EXECUTE")
-		}
-		paramCount := prepareStmt.params.Length()
-		var kinds []vector.PrepareParamKind
-		for i := 0; i < paramCount && i*2+1 < len(prepareStmt.ParamTypes); i++ {
-			mysqlType := defines.MysqlType(prepareStmt.ParamTypes[i*2])
-			isUnsigned := prepareStmt.ParamTypes[i*2+1]&0x80 != 0
-			kind := binaryProtocolPrepareParamKind(
-				mysqlType, isUnsigned, prepareStmt.params.GetRawBytesAt(i))
-			if kind != vector.PrepareParamNone {
-				if kinds == nil {
-					kinds = make([]vector.PrepareParamKind, paramCount)
-				}
-				kinds[i] = kind
-			}
-		}
-		if kinds == nil {
-			cwft.proc.SetPrepareParams(prepareStmt.params)
-		} else {
-			cwft.proc.SetPrepareParamsWithMeta(prepareStmt.params, nil, kinds)
-		}
-		cwft.paramVals, err = preparedParamValues(cwft.proc)
-		if err != nil {
-			return nil, nil, nil, originSQL, false, err
-		}
-	} else if execPlan != nil && len(execPlan.Args) > 0 {
-		if len(execPlan.Args) != numParams {
-			return nil, nil, nil, originSQL, false, moerr.NewInvalidInput(reqCtx, "Incorrect arguments to EXECUTE")
-		}
-		params, paramVals, paramIsBin, paramKinds, err := buildExecuteUserParams(cwft.proc, execPlan.Args)
-		if err != nil {
-			return nil, nil, nil, originSQL, false, err
-		}
-		cwft.proc.SetOwnedPrepareParamsWithMeta(params, paramIsBin, paramKinds)
-		cwft.paramVals = paramVals
-	} else {
-		if numParams > 0 {
-			return nil, nil, nil, originSQL, false, moerr.NewInvalidInput(reqCtx, "Incorrect arguments to EXECUTE")
-		}
-	}
+	// Replanning uses the same process and may run internal SQL that replaces
+	// its parameter slot. Install this execution's parameters only after the
+	// new plan and cached compile generation are complete.
+	paramState.apply(cwft.proc)
+	cwft.paramVals = paramState.paramVals
 	// A cached prepared Compile already owns a materialized worker topology.
 	// Explicit scheduling intent must be evaluated for this execution, so it
 	// cannot reuse a topology compiled under the prepare-time defaults. Keep a
@@ -1076,23 +1215,22 @@ func preparedDDLNeedsCatalogRefresh(stmt tree.Statement) bool {
 	}
 }
 
-func preparedParamValues(proc *process.Process) ([]any, error) {
-	params := proc.GetPrepareParams()
+func preparedParamValues(params *vector.Vector, paramIsBin []bool) []any {
 	if params == nil || params.Length() == 0 {
-		return nil, nil
+		return nil
 	}
 	values := make([]any, params.Length())
 	for i := range values {
 		if params.IsNull(uint64(i)) {
 			continue
 		}
-		raw, err := proc.GetPrepareParamsAt(i)
-		if err != nil {
-			return nil, err
+		isBin := false
+		if i < len(paramIsBin) {
+			isBin = paramIsBin[i]
 		}
-		values[i] = plan2.ParamValue{Value: string(raw), IsBin: proc.GetPrepareParamIsBin(i)}
+		values[i] = plan2.ParamValue{Value: string(params.GetRawBytesAt(i)), IsBin: isBin}
 	}
-	return values, nil
+	return values
 }
 
 func buildExecuteUserParams(

@@ -303,11 +303,15 @@ type PrepareStmt struct {
 	// minimal in-memory fixtures that predate this plan dependency.
 	onlyFullGroupBySet bool
 	ParamTypes         []byte
-	ColDefData         [][]byte
-	IsCloudNonuser     bool
-	proc               *process.Process
-	remapDb            map[string]string
-	defaultDatabase    string
+	// paramBindingTypes records the runtime parameter categories used to build
+	// PreparePlan. A category transition invalidates both plan metadata and the
+	// cached compile.
+	paramBindingTypes []types.Type
+	ColDefData        [][]byte
+	IsCloudNonuser    bool
+	proc              *process.Process
+	remapDb           map[string]string
+	defaultDatabase   string
 
 	params              *vector.Vector
 	getFromSendLongData map[int]struct{}
@@ -690,6 +694,7 @@ func (prepareStmt *PrepareStmt) Close() {
 	if prepareStmt.ParamTypes != nil {
 		prepareStmt.ParamTypes = nil
 	}
+	prepareStmt.paramBindingTypes = nil
 	if prepareStmt.ColDefData != nil {
 		prepareStmt.ColDefData = nil
 	}

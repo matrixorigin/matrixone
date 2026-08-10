@@ -322,6 +322,159 @@ func TestBinaryProtocolPrepareParamKind(t *testing.T) {
 	}
 }
 
+func TestPreparedParamBindingType(t *testing.T) {
+	tests := []struct {
+		name  string
+		kind  vector.PrepareParamKind
+		value []byte
+		want  types.T
+	}{
+		{name: "native float large", kind: vector.PrepareParamFloat, value: []byte("1e100"), want: types.T_float64},
+		{name: "native float small", kind: vector.PrepareParamFloat, value: []byte("1e-40"), want: types.T_float64},
+		{name: "numeric text", value: []byte("1.234567"), want: types.T_any},
+		{name: "numeric text range", value: []byte("1e1000"), want: types.T_any},
+		{name: "integer", kind: vector.PrepareParamInteger, value: []byte("42"), want: types.T_any},
+		{name: "decimal", kind: vector.PrepareParamDecimal, value: []byte("1.2"), want: types.T_any},
+		{name: "boolean", kind: vector.PrepareParamBoolean, value: []byte("1"), want: types.T_any},
+		{name: "time value", value: []byte("2026-08-10 12:34:56"), want: types.T_varchar},
+		{name: "ordinary string", value: []byte("matrixone"), want: types.T_varchar},
+		{name: "nan string", value: []byte("NaN"), want: types.T_varchar},
+		{name: "infinity string", value: []byte("+Inf"), want: types.T_varchar},
+		{name: "empty string", value: []byte(""), want: types.T_varchar},
+		{name: "null", value: nil, want: types.T_any},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			require.Equal(t, test.want, preparedParamBindingType(test.kind, test.value).Oid)
+		})
+	}
+}
+
+func TestPreparedExecuteParamStateOwnership(t *testing.T) {
+	_, prepareStmt, cw, _ := newPreparedExecuteEnv(t, 112)
+	defer prepareStmt.Close()
+	proc := cw.proc
+
+	params := vector.NewVec(types.T_text.ToType())
+	require.NoError(t, vector.AppendBytes(params, []byte("owned"), false, proc.Mp()))
+	state := &preparedExecuteParamState{params: params, owned: true}
+	state.release(proc)
+	require.False(t, state.owned)
+	require.Nil(t, state.params)
+	require.Zero(t, params.Length())
+	require.Nil(t, params.GetData())
+	state.release(proc)
+
+	transferred := vector.NewVec(types.T_text.ToType())
+	require.NoError(t, vector.AppendBytes(transferred, []byte("transferred"), false, proc.Mp()))
+	state = &preparedExecuteParamState{params: transferred, owned: true}
+	state.apply(proc)
+	require.False(t, state.owned)
+	require.Same(t, transferred, proc.GetPrepareParams())
+	state.release(proc)
+	require.Equal(t, 1, transferred.Length(), "release after transfer must not free the process-owned vector")
+	proc.SetPrepareParams(nil)
+	require.Zero(t, transferred.Length())
+	require.Nil(t, transferred.GetData())
+}
+
+func TestInitExecuteStmtParamRebuildsForRuntimeBindingCategory(t *testing.T) {
+	ses, prepareStmt, cw, execCtx := newPreparedExecuteEnvForSQL(
+		t, 110, "select coalesce(?, cast(2 as decimal(10,2)))")
+	defer func() {
+		cw.proc.SetPrepareParams(nil)
+		prepareStmt.Close()
+	}()
+
+	prepareStmt.params = vector.NewVec(types.T_text.ToType())
+	setParam := func(value string, mysqlType defines.MysqlType) {
+		prepareStmt.params.CleanOnlyData()
+		require.NoError(t, vector.AppendBytes(prepareStmt.params, []byte(value), false, cw.proc.Mp()))
+		prepareStmt.ParamTypes = []byte{byte(mysqlType), 0}
+	}
+	execute := func() (*plan.Plan, plan.Type) {
+		_, queryPlan, _, _, _, err := initExecuteStmtParam(execCtx, ses, cw, nil, prepareStmt.Name)
+		require.NoError(t, err)
+		columns := plan2.GetResultColumnsFromPlan(queryPlan)
+		require.Len(t, columns, 1)
+		return prepareStmt.PreparePlan, columns[0].Typ
+	}
+
+	setParam("1e100", defines.MYSQL_TYPE_DOUBLE)
+	floatPlan, resultType := execute()
+	require.Equal(t, int32(types.T_float64), resultType.Id)
+	require.Equal(t, []types.Type{types.T_float64.ToType()}, prepareStmt.paramBindingTypes)
+	_, found := ses.GetTxnCompileCtx().ResolvePreparedParamBindingType(0)
+	require.False(t, found, "temporary binding hints must not escape the rebuild generation")
+
+	setParam("1e-40", defines.MYSQL_TYPE_DOUBLE)
+	sameFloatPlan, resultType := execute()
+	require.Same(t, floatPlan, sameFloatPlan, "the same runtime category must reuse its plan")
+	require.Equal(t, int32(types.T_float64), resultType.Id)
+
+	setParam("2026-08-10 12:34:56", defines.MYSQL_TYPE_STRING)
+	stringPlan, resultType := execute()
+	require.NotSame(t, floatPlan, stringPlan)
+	require.Equal(t, int32(types.T_varchar), resultType.Id)
+
+	setParam("1.234567", defines.MYSQL_TYPE_VAR_STRING)
+	decimalPlan, resultType := execute()
+	require.NotSame(t, stringPlan, decimalPlan)
+	require.Equal(t, int32(types.T_decimal256), resultType.Id)
+	require.Equal(t, int32(65), resultType.Width)
+	require.Equal(t, int32(30), resultType.Scale)
+	require.Nil(t, prepareStmt.paramBindingTypes)
+
+	setParam("1e100", defines.MYSQL_TYPE_DOUBLE)
+	secondFloatPlan, resultType := execute()
+	require.NotSame(t, decimalPlan, secondFloatPlan)
+	require.Equal(t, int32(types.T_float64), resultType.Id)
+
+	w := execCtx.resper.MysqlRrWr().(*testMysqlWriter)
+	w.makeColumnDefDataFunc = func(context.Context, []*plan.ColDef) ([][]byte, error) {
+		return nil, errors.New("column metadata refresh failed")
+	}
+	setParam("2026-08-10 12:34:56", defines.MYSQL_TYPE_STRING)
+	_, _, _, _, _, err := initExecuteStmtParam(execCtx, ses, cw, nil, prepareStmt.Name)
+	require.EqualError(t, err, "column metadata refresh failed")
+	require.Same(t, secondFloatPlan, prepareStmt.PreparePlan)
+	require.Equal(t, []types.Type{types.T_float64.ToType()}, prepareStmt.paramBindingTypes)
+	_, found = ses.GetTxnCompileCtx().ResolvePreparedParamBindingType(0)
+	require.False(t, found, "failed rebuild must clear temporary binding hints")
+}
+
+func TestInitExecuteStmtParamMapsRuntimeBindingCategoriesByPosition(t *testing.T) {
+	ses, prepareStmt, cw, execCtx := newPreparedExecuteEnvForSQL(t, 111,
+		"select coalesce(?, cast(2 as decimal(10,2))), coalesce(?, cast(2 as decimal(10,2)))")
+	defer func() {
+		cw.proc.SetPrepareParams(nil)
+		prepareStmt.Close()
+	}()
+
+	prepareStmt.params = vector.NewVec(types.T_text.ToType())
+	setParams := func(first string, firstType defines.MysqlType, second string, secondType defines.MysqlType) {
+		prepareStmt.params.CleanOnlyData()
+		require.NoError(t, vector.AppendBytes(prepareStmt.params, []byte(first), false, cw.proc.Mp()))
+		require.NoError(t, vector.AppendBytes(prepareStmt.params, []byte(second), false, cw.proc.Mp()))
+		prepareStmt.ParamTypes = []byte{byte(firstType), 0, byte(secondType), 0}
+	}
+	executeTypes := func() []types.T {
+		_, queryPlan, _, _, _, err := initExecuteStmtParam(execCtx, ses, cw, nil, prepareStmt.Name)
+		require.NoError(t, err)
+		columns := plan2.GetResultColumnsFromPlan(queryPlan)
+		require.Len(t, columns, 2)
+		return []types.T{types.T(columns[0].Typ.Id), types.T(columns[1].Typ.Id)}
+	}
+
+	setParams("1.25", defines.MYSQL_TYPE_VAR_STRING, "1e100", defines.MYSQL_TYPE_DOUBLE)
+	require.Equal(t, []types.T{types.T_decimal256, types.T_float64}, executeTypes())
+	require.Equal(t, []types.Type{{}, types.T_float64.ToType()}, prepareStmt.paramBindingTypes)
+
+	setParams("1e-40", defines.MYSQL_TYPE_DOUBLE, "1.25", defines.MYSQL_TYPE_VAR_STRING)
+	require.Equal(t, []types.T{types.T_float64, types.T_decimal256}, executeTypes())
+	require.Equal(t, []types.Type{types.T_float64.ToType(), {}}, prepareStmt.paramBindingTypes)
+}
+
 func TestSQLVariablePrepareParamKind(t *testing.T) {
 	for _, test := range []struct {
 		oid  types.T

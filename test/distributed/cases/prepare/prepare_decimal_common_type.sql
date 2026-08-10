@@ -19,12 +19,20 @@ CREATE TABLE common_peers (
   bitv BIT(8),
   e ENUM('x','z')
 );
+CREATE TABLE decimal_limits (
+  d65i DECIMAL(65,0),
+  d65f DECIMAL(65,65)
+);
 INSERT INTO t VALUES
   (1,9007199254740992.01,9007199254740992.0000000001),
   (2,9007199254740992.02,9007199254740992.0000000002),
   (3,9007199254740992.03,9007199254740992.0000000003),
   (4,9007199254740993.01,9007199254740993.0000000001);
 INSERT INTO common_peers VALUES (2.00,1.5,TRUE,2024,b'00000011','z');
+INSERT INTO decimal_limits VALUES (
+  99999999999999999999999999999999999999999999999999999999999999999,
+  0.00000000000000000000000000000000000000000000000000000000000000001
+);
 
 -- DECIMAL128 precision and value/NULL reuse.
 PREPARE pc FROM 'SELECT id FROM t WHERE COALESCE(?,d128)=d128 ORDER BY id';
@@ -73,6 +81,20 @@ EXECUTE p_param_precision USING @p,@p,@p;
 SET @p='12345678901.23';
 EXECUTE p_param_precision USING @p,@p,@p;
 DEALLOCATE PREPARE p_param_precision;
+
+-- A dynamic parameter adapts its precision contribution to the remaining
+-- DECIMAL256 budget instead of making a legal extreme DECIMAL peer unbindable.
+PREPARE p_limit_integer FROM
+  'SELECT COALESCE(?,d65i),GREATEST(?,d65i),LEAST(?,d65i) FROM decimal_limits';
+SET @p='1.234567';
+EXECUTE p_limit_integer USING @p,@p,@p;
+DEALLOCATE PREPARE p_limit_integer;
+
+PREPARE p_limit_fraction FROM
+  'SELECT COALESCE(?,d65f),GREATEST(?,d65f),LEAST(?,d65f) FROM decimal_limits';
+SET @p='0.1';
+EXECUTE p_limit_fraction USING @p,@p,@p;
+DEALLOCATE PREPARE p_limit_fraction;
 
 -- FLOAT participates in numeric aggregation and promotes the result to DOUBLE.
 PREPARE p_float FROM

@@ -313,6 +313,70 @@ func TestPreparedDecimalCommonTypeFunctionsUseAllNumericPeers(t *testing.T) {
 	}
 }
 
+func TestPreparedDecimalCommonTypeFunctionsRespectDecimal256PeerBudget(t *testing.T) {
+	ctx := context.Background()
+	tests := []struct {
+		name           string
+		peer           types.Type
+		wantParamWidth int32
+		wantParamScale int32
+		wantWidth      int32
+		wantScale      int32
+	}{
+		{
+			name:           "65_integral_digits",
+			peer:           types.New(types.T_decimal256, 65, 0),
+			wantParamWidth: 46,
+			wantParamScale: 11,
+			wantWidth:      76,
+			wantScale:      11,
+		},
+		{
+			name:           "65_fractional_digits",
+			peer:           types.New(types.T_decimal256, 65, 65),
+			wantParamWidth: 41,
+			wantParamScale: 30,
+			wantWidth:      76,
+			wantScale:      65,
+		},
+	}
+
+	for _, name := range []string{"coalesce", "greatest", "least"} {
+		for _, test := range tests {
+			t.Run(name+"/"+test.name, func(t *testing.T) {
+				args := []*planpb.Expr{
+					makePreparedDecimalComparisonParam(0),
+					makePreparedDecimalComparisonColumn(test.peer),
+				}
+				resolutionTypes := decimalParamCommonTypeResolutionTypes(name, args, []types.Type{
+					types.T_text.ToType(), test.peer,
+				})
+				require.Equal(t, int32(types.T_decimal256), int32(resolutionTypes[0].Oid))
+				require.Equal(t, test.wantParamWidth, resolutionTypes[0].Width)
+				require.Equal(t, test.wantParamScale, resolutionTypes[0].Scale)
+				expr, err := BindFuncExprImplByPlanExpr(ctx, name, args)
+				require.NoError(t, err)
+				require.Equal(t, int32(types.T_decimal256), expr.Typ.Id)
+				require.Equal(t, test.wantWidth, expr.Typ.Width)
+				require.Equal(t, test.wantScale, expr.Typ.Scale)
+				paramArg := expr.GetF().Args[0]
+				require.Equal(t, int32(types.T_decimal256), paramArg.Typ.Id)
+				require.Equal(t, test.wantWidth, paramArg.Typ.Width)
+				require.Equal(t, test.wantScale, paramArg.Typ.Scale)
+				peerArg := expr.GetF().Args[1]
+				require.Equal(t, int32(types.T_decimal256), peerArg.Typ.Id)
+				if test.peer.Scale == test.wantScale {
+					require.Equal(t, test.peer.Width, peerArg.Typ.Width)
+					require.Equal(t, test.peer.Scale, peerArg.Typ.Scale)
+				} else {
+					require.Equal(t, test.wantWidth, peerArg.Typ.Width)
+					require.Equal(t, test.wantScale, peerArg.Typ.Scale)
+				}
+			})
+		}
+	}
+}
+
 func TestPreparedDecimalCommonTypeFunctionsUseMySQLNumericPeers(t *testing.T) {
 	ctx := context.Background()
 	decimalType := types.New(types.T_decimal128, 20, 4)
