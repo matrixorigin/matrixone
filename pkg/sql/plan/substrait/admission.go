@@ -44,7 +44,7 @@ const (
 	maxResolveInFlightBytes = 2 * (MaxManifestBytes + maxCanonicalSchemaSize + maxTaeReadSize + 64)
 )
 
-var errStopReplayJournalScan = errors.New("substrait: stop replay journal scan")
+var errStopReplayJournalScan = moerr.NewInternalErrorNoCtx("substrait: stop replay journal scan")
 
 type replayTerminal struct {
 	readRef  []byte

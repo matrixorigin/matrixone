@@ -202,6 +202,30 @@ func TestBoundNullOnEmptyAggregateUsesNullableOutput(t *testing.T) {
 	}
 }
 
+func TestBoundNullOnEmptyAggregateProjectionIsNullable(t *testing.T) {
+	query := boundSQLQuery(t, "select min(a) + 1 from select_test.bind_select where false")
+	aggregateNode := boundNode(t, query, planpb.Node_AGG)
+	require.Len(t, aggregateNode.AggList, 1)
+	require.True(t, aggregateNode.AggList[0].Typ.NotNullable, "the aggregate node carries the stale binder annotation corrected by export")
+	projectNode := boundNode(t, query, planpb.Node_PROJECT)
+	require.Len(t, projectNode.ProjectList, 1)
+	addExpr := projectNode.ProjectList[0]
+	require.False(t, addExpr.Typ.NotNullable)
+	require.Len(t, addExpr.GetF().Args, 2)
+	require.False(t, addExpr.GetF().Args[0].Typ.NotNullable, "the real bound aggregate ColRef is already nullable")
+
+	plan := buildSubstraitPlan(t, query)
+	aggregate := findSubstraitAggregate(plan.Relations[0].GetRoot().Input)
+	require.NotNil(t, aggregate)
+	require.Equal(t, spb.Type_NULLABILITY_NULLABLE, aggregate.Measures[0].Measure.OutputType.GetI64().GetNullability())
+	project := plan.Relations[0].GetRoot().Input.GetProject()
+	require.NotNil(t, project)
+	require.Len(t, project.Expressions, 1)
+	add := project.Expressions[0].GetScalarFunction()
+	require.NotNil(t, add)
+	require.Equal(t, spb.Type_NULLABILITY_NULLABLE, add.OutputType.GetI64().GetNullability())
+}
+
 func TestBoundInt64SumIsNotAdvertised(t *testing.T) {
 	query := boundSQLQuery(t, "select sum(a) from select_test.bind_select")
 	aggregateNode := boundNode(t, query, planpb.Node_AGG)
