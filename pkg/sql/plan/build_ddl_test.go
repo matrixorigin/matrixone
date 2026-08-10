@@ -1079,6 +1079,11 @@ func TestGroupingExtensionsExposeNullableKeysInViewAndCTAS(t *testing.T) {
 			groupBy:  "grouping sets ((n_nationkey, n_regionkey), (n_nationkey), ())",
 			nullable: []bool{true, true},
 		},
+		{
+			name:     "grouping sets preserve keys active in every branch",
+			groupBy:  "grouping sets ((n_nationkey, n_regionkey), (n_nationkey))",
+			nullable: []bool{false, true},
+		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			rootSQL := "create view grouping_extension_view as select n_nationkey, n_regionkey, count(*) as cnt from nation group by " + test.groupBy
@@ -1096,39 +1101,69 @@ func TestGroupingExtensionsExposeNullableKeysInViewAndCTAS(t *testing.T) {
 		})
 	}
 
-	const ctasSQL = "create table grouping_extension_ctas as select n_nationkey, n_regionkey, count(*) as cnt from nation group by n_nationkey, n_regionkey with rollup"
-	stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, ctasSQL, 1)
-	require.NoError(t, err)
-	defer stmt.Free()
+	for _, test := range []struct {
+		name     string
+		groupBy  string
+		nullable []bool
+	}{
+		{
+			name:     "rollup",
+			groupBy:  "n_nationkey, n_regionkey with rollup",
+			nullable: []bool{true, true},
+		},
+		{
+			name:     "grouping sets preserve keys active in every branch",
+			groupBy:  "grouping sets ((n_nationkey, n_regionkey), (n_nationkey))",
+			nullable: []bool{false, true},
+		},
+	} {
+		t.Run("CTAS "+test.name, func(t *testing.T) {
+			ctasSQL := "create table grouping_extension_ctas as select n_nationkey, n_regionkey, count(*) as cnt from nation group by " + test.groupBy
+			stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, ctasSQL, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
 
-	ctasPlan, err := BuildPlan(newContext(ctasSQL), stmt, false)
-	require.NoError(t, err)
-	ctasCols := ctasPlan.GetDdl().GetCreateTable().GetTableDef().GetCols()
-	require.GreaterOrEqual(t, len(ctasCols), 3)
-	require.True(t, ctasCols[0].GetDefault().GetNullAbility(), ctasCols[0].GetName())
-	require.True(t, ctasCols[1].GetDefault().GetNullAbility(), ctasCols[1].GetName())
+			ctasPlan, err := BuildPlan(newContext(ctasSQL), stmt, false)
+			require.NoError(t, err)
+			ctasCols := ctasPlan.GetDdl().GetCreateTable().GetTableDef().GetCols()
+			require.GreaterOrEqual(t, len(ctasCols), 3)
+			for i, wantNullable := range test.nullable {
+				require.Equal(t, wantNullable, ctasCols[i].GetDefault().GetNullAbility(), ctasCols[i].GetName())
+			}
+		})
+	}
 }
 
 func TestGroupingExtensionQueryOutputKeysAreNullable(t *testing.T) {
 	for _, test := range []struct {
-		name    string
-		groupBy string
+		name        string
+		groupBy     string
+		notNullable []bool
 	}{
 		{
-			name:    "ordinary group by preserves source nullability",
-			groupBy: "n_nationkey, n_regionkey",
+			name:        "ordinary group by preserves source nullability",
+			groupBy:     "n_nationkey, n_regionkey",
+			notNullable: []bool{true, true},
 		},
 		{
-			name:    "rollup",
-			groupBy: "n_nationkey, n_regionkey with rollup",
+			name:        "rollup",
+			groupBy:     "n_nationkey, n_regionkey with rollup",
+			notNullable: []bool{false, false},
 		},
 		{
-			name:    "cube",
-			groupBy: "cube(n_nationkey, n_regionkey)",
+			name:        "cube",
+			groupBy:     "cube(n_nationkey, n_regionkey)",
+			notNullable: []bool{false, false},
 		},
 		{
-			name:    "grouping sets",
-			groupBy: "grouping sets ((n_nationkey, n_regionkey), (n_nationkey), ())",
+			name:        "grouping sets",
+			groupBy:     "grouping sets ((n_nationkey, n_regionkey), (n_nationkey), ())",
+			notNullable: []bool{false, false},
+		},
+		{
+			name:        "grouping sets preserve keys active in every branch",
+			groupBy:     "grouping sets ((n_nationkey, n_regionkey), (n_nationkey))",
+			notNullable: []bool{true, false},
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -1142,8 +1177,7 @@ func TestGroupingExtensionQueryOutputKeysAreNullable(t *testing.T) {
 			require.NoError(t, err)
 			query := queryPlan.GetQuery()
 			rootNode := query.Nodes[query.Steps[0]]
-			for i := 0; i < 2; i++ {
-				wantNotNullable := test.name == "ordinary group by preserves source nullability"
+			for i, wantNotNullable := range test.notNullable {
 				require.Equal(t, wantNotNullable, rootNode.ProjectList[i].Typ.NotNullable)
 			}
 		})

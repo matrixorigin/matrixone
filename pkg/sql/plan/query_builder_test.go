@@ -1896,6 +1896,45 @@ func TestQueryBuilder_bindHaving(t *testing.T) {
 	require.Equal(t, ">", funcExpr0.F.Func.ObjName)
 }
 
+func TestGroupingExtensionBindersUseGroupOutputNullability(t *testing.T) {
+	builder, bindCtx := genBuilderAndCtx()
+	for _, typ := range bindCtx.bindings[0].types {
+		typ.NotNullable = true
+	}
+
+	stmts, err := parsers.Parse(context.TODO(), dialect.MYSQL, "select a, b from select_test.bind_select group by grouping sets ((a, b), (a))", 1)
+	require.NoError(t, err)
+	selectClause := stmts[0].(*tree.Select).Select.(*tree.SelectClause)
+
+	_, err = builder.bindGroupBy(bindCtx, selectClause.GroupBy, nil, nil, nil)
+	require.NoError(t, err)
+	require.Len(t, bindCtx.groupingFlag, 2)
+	bindCtx.groupingFlag[1] = false
+
+	for _, test := range []struct {
+		name            string
+		col             string
+		wantNotNullable bool
+	}{
+		{name: "active key", col: "a", wantNotNullable: true},
+		{name: "inactive key", col: "b", wantNotNullable: false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			colName := tree.NewUnresolvedName(tree.NewCStr("bind_select", 0), tree.NewCStr(test.col, 0))
+
+			havingExpr, err := NewHavingBinder(builder, bindCtx).BindExpr(colName, 0, false)
+			require.NoError(t, err)
+			require.Equal(t, test.wantNotNullable, havingExpr.Typ.NotNullable)
+
+			projectionBinder := NewProjectionBinder(builder, bindCtx, NewHavingBinder(builder, bindCtx))
+			correlatedExpr, err := projectionBinder.baseBindColRef(colName, 1, false)
+			require.NoError(t, err)
+			require.NotNil(t, correlatedExpr.GetCorr())
+			require.Equal(t, test.wantNotNullable, correlatedExpr.Typ.NotNullable)
+		})
+	}
+}
+
 func TestQueryBuilder_bindProjection(t *testing.T) {
 	builder, bindCtx := genBuilderAndCtx()
 

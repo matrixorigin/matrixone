@@ -1401,6 +1401,17 @@ b	YES
 select count(*) from grouping_extension_sets_v where a is null or b is null;
 count(*)
 3
+create view grouping_extension_partial_sets_v as select a, b, sum(v) as s from grouping_extension_metadata_src group by grouping sets ((a, b), (a));
+select column_name, is_nullable from information_schema.columns where table_schema = database() and table_name = 'grouping_extension_partial_sets_v' and column_name in ('a', 'b') order by ordinal_position;
+column_name	is_nullable
+a	NO
+b	YES
+select count(*) from grouping_extension_partial_sets_v where a is null;
+count(*)
+0
+select count(*) from grouping_extension_partial_sets_v where b is null;
+count(*)
+2
 create table grouping_extension_rollup_ctas as select a, b, sum(v) as s from grouping_extension_metadata_src group by a, b with rollup;
 select column_name, is_nullable from information_schema.columns where table_schema = database() and table_name = 'grouping_extension_rollup_ctas' and column_name in ('a', 'b') order by ordinal_position;
 column_name	is_nullable
@@ -1412,10 +1423,23 @@ count(*)
 select count(*) from grouping_extension_rollup_ctas where a is null or b is null;
 count(*)
 3
+create table grouping_extension_partial_sets_ctas as select a, b, sum(v) as s from grouping_extension_metadata_src group by grouping sets ((a, b), (a));
+select column_name, is_nullable from information_schema.columns where table_schema = database() and table_name = 'grouping_extension_partial_sets_ctas' and column_name in ('a', 'b') order by ordinal_position;
+column_name	is_nullable
+a	NO
+b	YES
+select count(*) from grouping_extension_partial_sets_ctas where a is null;
+count(*)
+0
+select count(*) from grouping_extension_partial_sets_ctas where b is null;
+count(*)
+2
 drop view grouping_extension_plain_v;
 drop view grouping_extension_rollup_v;
 drop view grouping_extension_cube_v;
 drop view grouping_extension_sets_v;
+drop view grouping_extension_partial_sets_v;
 drop table grouping_extension_rollup_ctas;
+drop table grouping_extension_partial_sets_ctas;
 drop table grouping_extension_metadata_src;
 drop database rollup_test;
