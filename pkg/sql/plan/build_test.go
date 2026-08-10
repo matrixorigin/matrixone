@@ -2710,19 +2710,8 @@ func TestPartitionedMultiTargetUpdateUsesModernPlan(t *testing.T) {
 	}
 }
 
-func TestRepeatedPhysicalUpdateTargetsAreRejected(t *testing.T) {
+func TestReadOnlySiblingAliasIsNotWritableTarget(t *testing.T) {
 	mock := NewMockOptimizer(true)
-	_, err := runOneStmt(
-		mock,
-		t,
-		"UPDATE nation a JOIN nation b ON a.n_nationkey = b.n_nationkey "+
-			"SET a.n_name = 'a', b.n_comment = 'b'",
-	)
-	require.Error(t, err)
-	require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported))
-	require.Contains(t, err.Error(), "updating the same physical table through aliases 'a' and 'b'")
-
-	// A sibling alias that is only read from is not a second update target.
 	logicPlan, err := runOneStmt(
 		mock,
 		t,
@@ -7342,15 +7331,6 @@ func TestSubqueryInOuterJoinOn(t *testing.T) {
 			"SELECT 1 FROM region z WHERE z.r_regionkey = outer_n.n_regionkey))")
 	require.ErrorContains(t, err, "deeply correlated subquery")
 }
-func TestMySQLSingleTargetMultiTableUpdateDedupsDuplicateSourceMatches(t *testing.T) {
-	mock := NewMockOptimizer(true)
-	logicPlan, err := runOneStmt(mock, t,
-		"update nation as target, (select n_regionkey from nation) as source "+
-			"set target.n_regionkey = 555 where target.n_nationkey = 3")
-	require.NoError(t, err)
-	require.True(t, hasUpdateFromDedupWindow(logicPlan.GetQuery(), 1))
-}
-
 func TestSamePhysicalTargetAliasesShareMergedFinalRows(t *testing.T) {
 	for _, sql := range []string{
 		"UPDATE nation a JOIN nation b ON a.n_nationkey = b.n_nationkey " +

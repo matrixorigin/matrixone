@@ -99,16 +99,21 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 		return 0, err
 	}
 	updatedTargetCount := 0
+	physicalTargetCounts := make(map[uint64]int)
+	hasRepeatedPhysicalTarget := false
 	for i := range dmlCtx.aliases {
 		if len(dmlCtx.updateCol2Expr[i]) > 0 {
 			updatedTargetCount++
+			tableID := dmlCtx.tableDefs[i].TblId
+			physicalTargetCounts[tableID]++
+			hasRepeatedPhysicalTarget = hasRepeatedPhysicalTarget || physicalTargetCounts[tableID] > 1
 		}
 	}
 	if err = validateRepeatedPhysicalTargetPrimaryKeyUpdate(builder.GetContext(), dmlCtx); err != nil {
 		return 0, err
 	}
 	routeUnsupported := func(reason updatePlannerRouteReason, routeErr error) error {
-		if updatedTargetCount > 1 {
+		if hasRepeatedPhysicalTarget {
 			return newUpdatePlannerRouteError(updatePlannerRejected, reason, routeErr)
 		}
 		return newLegacyUpdatePlannerRouteError(reason, routeErr)
@@ -140,6 +145,9 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 		}
 
 		tableDef := dmlCtx.tableDefs[i]
+		if err := validateTableRegularIndexPrefixMetadata(tableDef); err != nil {
+			return 0, err
+		}
 		colOffsets[i] = int32(len(selectList))
 		useColInPartExpr := make(map[string]bool)
 

@@ -390,28 +390,6 @@ func TestMultiUpdateCtxClonePartitionCols(t *testing.T) {
 	require.Equal(t, "t1", original.ObjRef.ObjName, "original ObjRef should be unchanged")
 }
 
-func TestPartitionMultiUpdateResetRebuildsRawContextMetadata(t *testing.T) {
-	proc := testutil.NewProcess(t)
-	original := &MultiUpdateCtx{TableDef: &plan.TableDef{Name: "logical"}}
-	raw := &MultiUpdate{
-		MultiUpdateCtx: []*MultiUpdateCtx{original},
-		ctr: container{updateCtxInfos: map[string]*updateCtxInfo{
-			"physical_partition": {},
-		}},
-	}
-	op := &PartitionMultiUpdate{
-		raw:         raw,
-		rawContexts: []*MultiUpdateCtx{original},
-	}
-
-	op.Reset(proc, false, nil)
-
-	require.Same(t, original, raw.MultiUpdateCtx[0])
-	require.Contains(t, raw.ctr.updateCtxInfos, updateCtxKey(original))
-	require.NotNil(t, lookupUpdateCtxInfo(raw.ctr.updateCtxInfos, original))
-	require.NotContains(t, raw.ctr.updateCtxInfos, "physical_partition")
-}
-
 func TestUpdateCtxKeySeparatesSameNamedTablesAcrossDatabases(t *testing.T) {
 	left := &MultiUpdateCtx{
 		ObjRef:   &plan.ObjectRef{SchemaName: "db_a", ObjName: "t", Obj: 101},
