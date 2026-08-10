@@ -1472,6 +1472,7 @@ func (tbl *txnTable) GetTableDef(ctx context.Context) *plan.TableDef {
 						Table:       tbl.tableName,
 						NotNullable: attr.Attr.Default != nil && !attr.Attr.Default.NullAbility,
 						Enumvalues:  attr.Attr.EnumVlaues,
+						Charset:     uint32(attr.Attr.Type.Charset),
 					},
 					Primary:      attr.Attr.Primary,
 					Default:      attr.Attr.Default,
@@ -1602,6 +1603,7 @@ func (tbl *txnTable) GetTableDef(ctx context.Context) *plan.TableDef {
 			tbl.tableDef.AutoIncrOffset = tbl.extraInfo.AutoIncrOffset
 			tbl.tableDef.AutoIncrEpoch = tbl.extraInfo.AutoIncrEpoch
 			tbl.tableDef.Checks = tbl.extraInfo.Checks
+			tbl.tableDef.DefaultCharset = tbl.extraInfo.DefaultCharset
 		}
 	}
 	return tbl.tableDef
@@ -1812,11 +1814,15 @@ func (tbl *txnTable) AlterTable(ctx context.Context, c *engine.ConstraintDef, re
 	tbl.defs = append(baseDefs, appendDef...)
 	tbl.RefeshTableDef(ctx)
 
-	ctx = context.WithValue(ctx, defines.LogicalIdKey{}, tbl.logicalId)
-
 	//------------------------------------------------------------------------------------------------------------------
 	// 2. insert new table metadata
-	if err := tbl.db.createWithID(ctx, tbl.tableName, tbl.tableId, tbl.defs, !createdInTxn, tbl.extraInfo); err != nil {
+	// deleteTable(forAlter=true) deliberately leaves the logical-ID index row for
+	// the recreation to replace. Pass that intent explicitly: inferring it from
+	// the hidden-table name would leave the old row and insert a duplicate.
+	if err := tbl.db.createWithID(
+		ctx, tbl.tableName, tbl.tableId, tbl.logicalId, true,
+		tbl.defs, !createdInTxn, tbl.extraInfo,
+	); err != nil {
 		return err
 	}
 	if createdInTxn {

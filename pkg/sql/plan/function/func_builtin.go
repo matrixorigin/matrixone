@@ -3812,7 +3812,9 @@ func builtInConvertUsingCharset(parameters []*vector.Vector, result vector.Funct
 }
 
 func isUTF8Charset(charset []byte) bool {
-	return strings.EqualFold(string(charset), "utf8") || strings.EqualFold(string(charset), "utf8mb4")
+	return strings.EqualFold(string(charset), "utf8") ||
+		strings.EqualFold(string(charset), "utf8mb3") ||
+		strings.EqualFold(string(charset), "utf8mb4")
 }
 
 func builtInToUpper(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {

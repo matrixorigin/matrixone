@@ -4794,6 +4794,109 @@ func TestGroupConcatDeparseRoundTrip(t *testing.T) {
 	}
 }
 
+func TestGroupingExtensionsDeparseRoundTrip(t *testing.T) {
+	tests := []struct {
+		name             string
+		input            string
+		want             string
+		wantCube         bool
+		wantGroupingSets bool
+		wantRollup       bool
+		wantSetWidths    []int
+	}{
+		{
+			name:          "single-column cube",
+			input:         "select count(*) from src group by cube(g)",
+			want:          "select count(*) from src group by cube(g)",
+			wantCube:      true,
+			wantSetWidths: []int{1},
+		},
+		{
+			name:          "multi-column cube",
+			input:         "select count(*) from src group by cube(g, h)",
+			want:          "select count(*) from src group by cube(g, h)",
+			wantCube:      true,
+			wantSetWidths: []int{2},
+		},
+		{
+			name:             "single grouping set",
+			input:            "select count(*) from src group by grouping sets ((g))",
+			want:             "select count(*) from src group by grouping sets ((g))",
+			wantGroupingSets: true,
+			wantSetWidths:    []int{1},
+		},
+		{
+			name:             "multiple grouping sets including empty set",
+			input:            "select count(*) from src group by grouping sets ((g, h), (g), ())",
+			want:             "select count(*) from src group by grouping sets ((g, h), (g), ())",
+			wantGroupingSets: true,
+			wantSetWidths:    []int{2, 1, 0},
+		},
+		{
+			name:          "rollup control",
+			input:         "select count(*) from src group by rollup(g, h)",
+			want:          "select count(*) from src group by g, h with rollup",
+			wantRollup:    true,
+			wantSetWidths: []int{2},
+		},
+	}
+
+	groupByOf := func(t *testing.T, stmt tree.Statement) *tree.GroupByClause {
+		t.Helper()
+		selectStmt, ok := stmt.(*tree.Select)
+		require.True(t, ok, "expected *tree.Select, got %T", stmt)
+		selectClause, ok := selectStmt.Select.(*tree.SelectClause)
+		require.True(t, ok, "expected *tree.SelectClause, got %T", selectStmt.Select)
+		require.NotNil(t, selectClause.GroupBy)
+		return selectClause.GroupBy
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			stmt, err := ParseOne(context.Background(), test.input, 1)
+			require.NoError(t, err)
+			t.Cleanup(stmt.Free)
+
+			formatted := tree.String(stmt, dialect.MYSQL)
+			require.Equal(t, test.want, formatted)
+
+			roundTripped, err := ParseOne(context.Background(), formatted, 1)
+			require.NoError(t, err, formatted)
+			t.Cleanup(roundTripped.Free)
+
+			groupBy := groupByOf(t, roundTripped)
+			require.Equal(t, test.wantCube, groupBy.Cube)
+			require.Equal(t, test.wantGroupingSets, groupBy.GroupingSets)
+			require.Equal(t, test.wantRollup, groupBy.Rollup)
+			require.Len(t, groupBy.GroupByExprsList, len(test.wantSetWidths))
+			for i, width := range test.wantSetWidths {
+				require.Len(t, groupBy.GroupByExprsList[i], width)
+			}
+		})
+	}
+}
+
+func TestApartGroupingSetDeparse(t *testing.T) {
+	stmt, err := ParseOne(context.Background(), "select count(*) from src group by grouping sets ((g), ())", 1)
+	require.NoError(t, err)
+	t.Cleanup(stmt.Free)
+
+	selectStmt, ok := stmt.(*tree.Select)
+	require.True(t, ok, "expected *tree.Select, got %T", stmt)
+	selectClause, ok := selectStmt.Select.(*tree.SelectClause)
+	require.True(t, ok, "expected *tree.SelectClause, got %T", selectStmt.Select)
+	groupBy := selectClause.GroupBy
+	require.NotNil(t, groupBy)
+
+	groupBy.Apart = true
+	groupBy.GroupingSets = false
+	groupBy.GroupingSet = groupBy.GroupByExprsList[0]
+	require.Equal(t, "group by g", tree.String(groupBy, dialect.MYSQL))
+
+	groupBy.GroupingSet = groupBy.GroupByExprsList[1]
+	require.Empty(t, tree.String(groupBy, dialect.MYSQL))
+}
+
 // TestFullTextMatchDeparseRoundTrip is the #24823 regression on the DEFAULT tree.String path
 // (not only the WithSingleQuoteString path): MATCH(...) AGAINST('...') must deparse to a
 // quoted, re-parseable string literal so re-serialized statements (CREATE TABLE AS SELECT,
