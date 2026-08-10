@@ -1,0 +1,99 @@
+drop database if exists prepared_string_null_reset;
+create database prepared_string_null_reset;
+use prepared_string_null_reset;
+create table string_values (
+id int primary key,
+c char(20),
+v varchar(20),
+t tinytext,
+plain text
+);
+prepare insert_values from 'insert into string_values values (?, ?, ?, ?, ?)';
+set @id = 1, @c = 'before-c', @v = 'before-v', @t = 'before-t', @plain = 'before-text';
+execute insert_values using @id, @c, @v, @t, @plain;
+set @id = 2, @c = null, @v = null, @t = null, @plain = null;
+execute insert_values using @id, @c, @v, @t, @plain;
+set @id = 3, @c = 'after-c', @v = 'after-v', @t = 'after-t', @plain = 'after-text';
+execute insert_values using @id, @c, @v, @t, @plain;
+set @id = 4, @c = 7, @v = 8.5, @t = true, @plain = 'control-text';
+execute insert_values using @id, @c, @v, @t, @plain;
+deallocate prepare insert_values;
+select id, ifnull(c, 'NULL'), ifnull(v, 'NULL'), ifnull(t, 'NULL'), ifnull(plain, 'NULL')
+from string_values order by id;
+➤ id[4,32,0]  ¦  ifnull(c, NULL)[12,20,0]  ¦  ifnull(v, NULL)[12,20,0]  ¦  ifnull(t, NULL)[12,0,0]  ¦  ifnull(plain, NULL)[12,0,0]  𝄀
+1  ¦  before-c  ¦  before-v  ¦  before-t  ¦  before-text  𝄀
+2  ¦  NULL  ¦  NULL  ¦  NULL  ¦  NULL  𝄀
+3  ¦  after-c  ¦  after-v  ¦  after-t  ¦  after-text  𝄀
+4  ¦  7  ¦  8.5  ¦  true  ¦  control-text
+insert into string_values values (10, 'seed', 'seed', 'seed', 'seed');
+prepare update_values from 'update string_values set c=?, v=?, t=?, plain=? where id=10';
+set @c = 'first-c', @v = 'first-v', @t = 'first-t', @plain = 'first-text';
+execute update_values using @c, @v, @t, @plain;
+set @c = null, @v = null, @t = null, @plain = null;
+execute update_values using @c, @v, @t, @plain;
+set @c = 'last-c', @v = 'last-v', @t = 'last-t', @plain = 'last-text';
+execute update_values using @c, @v, @t, @plain;
+deallocate prepare update_values;
+select id, c, v, t, plain from string_values where id = 10;
+➤ id[4,32,0]  ¦  c[1,20,0]  ¦  v[12,20,0]  ¦  t[-1,255,0]  ¦  plain[12,0,0]  𝄀
+10  ¦  last-c  ¦  last-v  ¦  last-t  ¦  last-text
+prepare replace_values from 'replace into string_values values (?, null, ?, null, ?)';
+set @id = 20, @v = 'replace-before', @plain = 'text-before';
+execute replace_values using @id, @v, @plain;
+set @id = 21, @v = null, @plain = null;
+execute replace_values using @id, @v, @plain;
+set @id = 22, @v = 'replace-after', @plain = 'text-after';
+execute replace_values using @id, @v, @plain;
+deallocate prepare replace_values;
+select id, ifnull(v, 'NULL'), ifnull(plain, 'NULL') from string_values where id between 20 and 22 order by id;
+➤ id[4,32,0]  ¦  ifnull(v, NULL)[12,20,0]  ¦  ifnull(plain, NULL)[12,0,0]  𝄀
+20  ¦  replace-before  ¦  text-before  𝄀
+21  ¦  NULL  ¦  NULL  𝄀
+22  ¦  replace-after  ¦  text-after
+prepare insert_select_values from 'insert into string_values(id, v, plain) select ?, ?, ?';
+set @id = 30, @v = 'select-before', @plain = 'text-before';
+execute insert_select_values using @id, @v, @plain;
+set @id = 31, @v = null, @plain = null;
+execute insert_select_values using @id, @v, @plain;
+set @id = 32, @v = 'select-after', @plain = 'text-after';
+execute insert_select_values using @id, @v, @plain;
+deallocate prepare insert_select_values;
+select id, ifnull(v, 'NULL'), ifnull(plain, 'NULL') from string_values where id between 30 and 32 order by id;
+➤ id[4,32,0]  ¦  ifnull(v, NULL)[12,20,0]  ¦  ifnull(plain, NULL)[12,0,0]  𝄀
+30  ¦  select-before  ¦  text-before  𝄀
+31  ¦  NULL  ¦  NULL  𝄀
+32  ¦  select-after  ¦  text-after
+insert into string_values(id, v, plain) values (40, 'seed', 'seed');
+prepare upsert_value from
+'insert into string_values(id, v, plain) values (40, ?, ?) on duplicate key update v=values(v), plain=values(plain)';
+set @v = 'upsert-before', @plain = 'text-before';
+execute upsert_value using @v, @plain;
+set @v = null, @plain = null;
+execute upsert_value using @v, @plain;
+set @v = 'upsert-after', @plain = 'text-after';
+execute upsert_value using @v, @plain;
+deallocate prepare upsert_value;
+select id, v, plain from string_values where id = 40;
+➤ id[4,32,0]  ¦  v[12,20,0]  ¦  plain[12,0,0]  𝄀
+40  ¦  upsert-after  ¦  text-after
+create table required_value (id int primary key, v varchar(4) not null);
+insert into required_value values (1, 'seed');
+prepare update_required from 'update required_value set v=? where id=1';
+set @v = null;
+execute update_required using @v;
+constraint violation: Column 'v' cannot be null
+set @v = 'okay';
+execute update_required using @v;
+select * from required_value;
+➤ id[4,32,0]  ¦  v[12,4,0]  𝄀
+1  ¦  okay
+set @v = 'toolong';
+execute update_required using @v;
+Data truncation: Can't cast 'toolong' to VARCHAR type. Src length 7 is larger than Dest length 4
+set @v = 'done';
+execute update_required using @v;
+select * from required_value;
+➤ id[4,32,0]  ¦  v[12,4,0]  𝄀
+1  ¦  done
+deallocate prepare update_required;
+drop database prepared_string_null_reset;

@@ -137,8 +137,9 @@ func (Hooks) BuildSecondaryIndexDefs(
 			Name: catalog.SystemSI_IVFFLAT_TblCol_Metadata_key,
 			Alg:  plan.CompressType_Lz4,
 			Typ: plan.Type{
-				Id:    int32(types.T_varchar),
-				Width: types.MaxVarcharLen,
+				Id:      int32(types.T_varchar),
+				Width:   types.MaxVarcharLen,
+				Charset: uint32(types.CharsetBinary),
 			},
 			Primary: true,
 			Default: &plan.Default{NullAbility: false, Expr: nil, OriginString: ""},
@@ -147,8 +148,9 @@ func (Hooks) BuildSecondaryIndexDefs(
 			Name: catalog.SystemSI_IVFFLAT_TblCol_Metadata_val,
 			Alg:  plan.CompressType_Lz4,
 			Typ: plan.Type{
-				Id:    int32(types.T_varchar),
-				Width: types.MaxVarcharLen,
+				Id:      int32(types.T_varchar),
+				Width:   types.MaxVarcharLen,
+				Charset: uint32(types.CharsetBinary),
 			},
 			Default: &plan.Default{NullAbility: false, Expr: nil, OriginString: ""},
 		}
