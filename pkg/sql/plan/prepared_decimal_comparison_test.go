@@ -41,6 +41,10 @@ func makePreparedDecimalComparisonParam(pos int32) *planpb.Expr {
 	}
 }
 
+func preparedDecimalCommonType() types.Type {
+	return types.New(types.T_decimal256, 65, 30)
+}
+
 func requirePreparedDecimalComparisonArgs(
 	t *testing.T,
 	expr *planpb.Expr,
@@ -246,6 +250,7 @@ func TestPreparedDecimalComparisonPlannerReplacementAndReuse(t *testing.T) {
 
 func TestPreparedDecimalCommonTypeFunctionsDeriveParamType(t *testing.T) {
 	ctx := context.Background()
+	wantType := preparedDecimalCommonType()
 	decimalTypes := []types.Type{
 		types.New(types.T_decimal64, 18, 2),
 		types.New(types.T_decimal128, 20, 4),
@@ -265,14 +270,14 @@ func TestPreparedDecimalCommonTypeFunctionsDeriveParamType(t *testing.T) {
 
 					expr, err := BindFuncExprImplByPlanExpr(ctx, name, args)
 					require.NoError(t, err)
-					require.Equal(t, int32(decimalType.Oid), expr.Typ.Id)
-					require.Equal(t, decimalType.Width, expr.Typ.Width)
-					require.Equal(t, decimalType.Scale, expr.Typ.Scale)
+					require.Equal(t, int32(wantType.Oid), expr.Typ.Id)
+					require.Equal(t, wantType.Width, expr.Typ.Width)
+					require.Equal(t, wantType.Scale, expr.Typ.Scale)
 					require.Len(t, expr.GetF().Args, 2)
 					for _, arg := range expr.GetF().Args {
-						require.Equal(t, int32(decimalType.Oid), arg.Typ.Id)
-						require.Equal(t, decimalType.Width, arg.Typ.Width)
-						require.Equal(t, decimalType.Scale, arg.Typ.Scale)
+						require.Equal(t, int32(wantType.Oid), arg.Typ.Id)
+						require.Equal(t, wantType.Width, arg.Typ.Width)
+						require.Equal(t, wantType.Scale, arg.Typ.Scale)
 					}
 					require.NotNil(t, expr.GetF().Args[paramPos].GetF())
 					require.NotNil(t, expr.GetF().Args[paramPos].GetF().Args[0].GetP())
@@ -311,6 +316,7 @@ func TestPreparedDecimalCommonTypeFunctionsUseAllNumericPeers(t *testing.T) {
 func TestPreparedDecimalCommonTypeFunctionsUseMySQLNumericPeers(t *testing.T) {
 	ctx := context.Background()
 	decimalType := types.New(types.T_decimal128, 20, 4)
+	decimalCommonType := preparedDecimalCommonType()
 
 	peers := []struct {
 		name     string
@@ -319,8 +325,11 @@ func TestPreparedDecimalCommonTypeFunctionsUseMySQLNumericPeers(t *testing.T) {
 	}{
 		{name: "float32", typ: types.T_float32.ToType(), wantType: types.T_float64},
 		{name: "float64", typ: types.T_float64.ToType(), wantType: types.T_float64},
-		{name: "bool", typ: types.T_bool.ToType(), wantType: types.T_decimal128},
-		{name: "year", typ: types.T_year.ToType(), wantType: types.T_decimal128},
+		{name: "int64", typ: types.T_int64.ToType(), wantType: types.T_decimal256},
+		{name: "uint64", typ: types.T_uint64.ToType(), wantType: types.T_decimal256},
+		{name: "bit", typ: types.New(types.T_bit, 8, 0), wantType: types.T_decimal256},
+		{name: "bool", typ: types.T_bool.ToType(), wantType: types.T_decimal256},
+		{name: "year", typ: types.T_year.ToType(), wantType: types.T_decimal256},
 	}
 
 	for _, name := range []string{"coalesce", "greatest", "least"} {
@@ -336,21 +345,34 @@ func TestPreparedDecimalCommonTypeFunctionsUseMySQLNumericPeers(t *testing.T) {
 				for _, arg := range expr.GetF().Args {
 					require.Equal(t, int32(peer.wantType), arg.Typ.Id)
 					if peer.wantType.IsDecimal() {
-						require.Equal(t, expr.Typ.Width, arg.Typ.Width)
-						require.Equal(t, expr.Typ.Scale, arg.Typ.Scale)
+						require.Equal(t, decimalCommonType.Width, expr.Typ.Width)
+						require.Equal(t, decimalCommonType.Scale, expr.Typ.Scale)
+						require.Equal(t, decimalCommonType.Width, arg.Typ.Width)
+						require.Equal(t, decimalCommonType.Scale, arg.Typ.Scale)
 					}
 				}
-				if peer.typ.Oid == types.T_bool {
-					boolCast := expr.GetF().Args[2].GetF()
-					require.NotNil(t, boolCast)
-					require.Equal(t, "cast", boolCast.Func.GetObjName())
-					require.Len(t, boolCast.Args, 2)
-					require.Equal(t, int32(types.T_uint8), boolCast.Args[0].Typ.Id)
-					integerCast := boolCast.Args[0].GetF()
-					require.NotNil(t, integerCast)
-					require.Equal(t, "cast", integerCast.Func.GetObjName())
-					require.Len(t, integerCast.Args, 2)
-					require.Equal(t, int32(types.T_bool), integerCast.Args[0].Typ.Id)
+				var bridgeType types.Type
+				switch peer.typ.Oid {
+				case types.T_bool:
+					bridgeType = types.T_uint8.ToType()
+				case types.T_bit:
+					bridgeType = types.New(types.T_decimal128, 20, 0)
+				case types.T_year:
+					bridgeType = types.New(types.T_decimal64, 4, 0)
+				}
+				if bridgeType.Oid != types.T_any {
+					finalCast := expr.GetF().Args[2].GetF()
+					require.NotNil(t, finalCast)
+					require.Equal(t, "cast", finalCast.Func.GetObjName())
+					require.Len(t, finalCast.Args, 2)
+					require.Equal(t, int32(bridgeType.Oid), finalCast.Args[0].Typ.Id)
+					require.Equal(t, bridgeType.Width, finalCast.Args[0].Typ.Width)
+					require.Equal(t, bridgeType.Scale, finalCast.Args[0].Typ.Scale)
+					bridgeCast := finalCast.Args[0].GetF()
+					require.NotNil(t, bridgeCast)
+					require.Equal(t, "cast", bridgeCast.Func.GetObjName())
+					require.Len(t, bridgeCast.Args, 2)
+					require.Equal(t, int32(peer.typ.Oid), bridgeCast.Args[0].Typ.Id)
 				}
 			})
 		}
@@ -386,6 +408,7 @@ func TestPreparedDecimalCommonTypeFunctionsKeepStringBoundaries(t *testing.T) {
 func TestPreparedDecimalCommonTypePlannerReplacementAndReuse(t *testing.T) {
 	mock := NewMockOptimizer(false)
 	decimalType := types.New(types.T_decimal128, 20, 4)
+	commonType := preparedDecimalCommonType()
 	mock.ctxt.tables["part"].Cols[7].Typ = makePlan2Type(&decimalType)
 
 	logicPlan, err := runOneStmt(
@@ -398,7 +421,7 @@ func TestPreparedDecimalCommonTypePlannerReplacementAndReuse(t *testing.T) {
 	require.NotNil(t, prepare)
 	original := findPreparedDecimalComparisonInPlan(prepare.Plan, "coalesce")
 	require.NotNil(t, original)
-	requirePreparedDecimalComparisonArgs(t, original, decimalType, 0)
+	requirePreparedDecimalComparisonArgs(t, original, commonType, 0)
 
 	for _, value := range []any{
 		nil,
@@ -413,9 +436,9 @@ func TestPreparedDecimalCommonTypePlannerReplacementAndReuse(t *testing.T) {
 		coalesce := findPreparedDecimalComparisonInPlan(filled, "coalesce")
 		require.NotNil(t, coalesce)
 		for _, arg := range coalesce.GetF().Args {
-			require.Equal(t, int32(decimalType.Oid), arg.Typ.Id)
-			require.Equal(t, decimalType.Width, arg.Typ.Width)
-			require.Equal(t, decimalType.Scale, arg.Typ.Scale)
+			require.Equal(t, int32(commonType.Oid), arg.Typ.Id)
+			require.Equal(t, commonType.Width, arg.Typ.Width)
+			require.Equal(t, commonType.Scale, arg.Typ.Scale)
 		}
 		require.False(t, planExprContainsPreparedDecimalParam(coalesce))
 		require.True(t, planExprContainsPreparedDecimalParam(original))

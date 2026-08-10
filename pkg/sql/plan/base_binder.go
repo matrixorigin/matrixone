@@ -4578,11 +4578,10 @@ func normalizeDecimalParamComparisonArgs(ctx context.Context, name string, args 
 	return nil
 }
 
-// A direct prepared parameter is represented as TEXT for transport, but it is
-// still untyped while a common type is being selected.  Let DECIMAL-aware
-// common-type functions resolve such parameters from their concrete numeric
-// peers, then keep argsType unchanged so the normal cast insertion converts
-// the TEXT parameter to the selected numeric type.
+// A direct prepared parameter is represented as TEXT for transport, but MySQL
+// contributes DECIMAL(65,30) for it while aggregating DECIMAL-aware common
+// types. Keep argsType unchanged so cast insertion still converts the runtime
+// TEXT value to the selected numeric type.
 func decimalParamCommonTypeResolutionTypes(name string, args []*Expr, argsType []types.Type) []types.Type {
 	switch name {
 	case "coalesce", "greatest", "least":
@@ -4623,11 +4622,15 @@ func decimalParamCommonTypeResolutionTypes(name string, args []*Expr, argsType [
 	for i, typ := range argsType {
 		switch {
 		case isDirectDynamicParam(args[i]):
-			resolutionTypes[i] = types.T_any.ToType()
+			resolutionTypes[i] = dynamicParamDecimalCommonType()
 		case typ.Oid == types.T_bool:
 			// BOOL is MySQL's TINYINT(1) alias, but is not classified as
 			// numeric internally. Use its supported integer cast bridge.
 			resolutionTypes[i] = types.T_uint8.ToType()
+		case typ.Oid == types.T_bit:
+			// BIT can hold the full uint64 domain. Represent that contribution
+			// as DECIMAL(20,0) so it cannot win as an integer common type.
+			resolutionTypes[i] = types.New(types.T_decimal128, 20, 0)
 		case typ.Oid == types.T_year:
 			// YEAR contributes its four-digit numeric value. Normalizing only
 			// the resolution input avoids the temporal/string mixed-type path.
@@ -4635,6 +4638,10 @@ func decimalParamCommonTypeResolutionTypes(name string, args []*Expr, argsType [
 		}
 	}
 	return resolutionTypes
+}
+
+func dynamicParamDecimalCommonType() types.Type {
+	return types.New(types.T_decimal256, 65, 30)
 }
 
 func normalizeDecimalParamCommonTypeCastSources(
@@ -4647,7 +4654,16 @@ func normalizeDecimalParamCommonTypeCastSources(
 		return nil
 	}
 	for i := range args {
-		if argsType[i].Oid != types.T_bool || resolutionTypes[i].Oid != types.T_uint8 {
+		needsBridge := false
+		switch argsType[i].Oid {
+		case types.T_bool:
+			needsBridge = resolutionTypes[i].Oid == types.T_uint8
+		case types.T_bit:
+			needsBridge = resolutionTypes[i].Oid == types.T_decimal128
+		case types.T_year:
+			needsBridge = resolutionTypes[i].Oid == types.T_decimal64
+		}
+		if !needsBridge {
 			continue
 		}
 		castExpr, err := appendCastBeforeExpr(ctx, args[i], makePlan2Type(&resolutionTypes[i]))
@@ -4671,8 +4687,9 @@ func applyDecimalParamCommonTypeCasts(
 		return argsCastType
 	}
 
+	dynamicParamType := dynamicParamDecimalCommonType()
 	for i := range args {
-		if resolutionTypes[i].Oid != types.T_any || !isDirectDynamicParam(args[i]) {
+		if !isDirectDynamicParam(args[i]) || !resolutionTypes[i].Eq(dynamicParamType) {
 			continue
 		}
 		if len(argsCastType) == 0 {

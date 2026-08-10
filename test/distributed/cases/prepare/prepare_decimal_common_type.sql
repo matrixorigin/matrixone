@@ -16,6 +16,7 @@ CREATE TABLE common_peers (
   f DOUBLE,
   b BOOL,
   y YEAR,
+  bitv BIT(8),
   e ENUM('x','z')
 );
 INSERT INTO t VALUES
@@ -23,7 +24,7 @@ INSERT INTO t VALUES
   (2,9007199254740992.02,9007199254740992.0000000002),
   (3,9007199254740992.03,9007199254740992.0000000003),
   (4,9007199254740993.01,9007199254740993.0000000001);
-INSERT INTO common_peers VALUES (2.00,1.5,TRUE,2024,'z');
+INSERT INTO common_peers VALUES (2.00,1.5,TRUE,2024,b'00000011','z');
 
 -- DECIMAL128 precision and value/NULL reuse.
 PREPARE pc FROM 'SELECT id FROM t WHERE COALESCE(?,d128)=d128 ORDER BY id';
@@ -63,6 +64,16 @@ SET @p=NULL;
 EXECUTE pc64 USING @p;
 DEALLOCATE PREPARE pc64;
 
+-- A direct parameter contributes DECIMAL(65,30), preserving its own scale and
+-- integral width instead of being narrowed to the DECIMAL column definition.
+PREPARE p_param_precision FROM
+  'SELECT COALESCE(?,d),GREATEST(?,d),LEAST(?,d) FROM common_peers';
+SET @p='1.234567';
+EXECUTE p_param_precision USING @p,@p,@p;
+SET @p='12345678901.23';
+EXECUTE p_param_precision USING @p,@p,@p;
+DEALLOCATE PREPARE p_param_precision;
+
 -- FLOAT participates in numeric aggregation and promotes the result to DOUBLE.
 PREPARE p_float FROM
   'SELECT COALESCE(?,d,f),GREATEST(?,d,f),LEAST(?,d,f) FROM common_peers';
@@ -82,6 +93,14 @@ PREPARE p_year FROM
 SET @p='300';
 EXECUTE p_year USING @p,@p,@p;
 DEALLOCATE PREPARE p_year;
+
+-- BIT is an exact numeric peer and converges with DECIMAL without coercing a
+-- fractional parameter to UNSIGNED BIGINT.
+PREPARE p_bit FROM
+  'SELECT COALESCE(?,d,bitv),GREATEST(?,d,bitv),LEAST(?,d,bitv) FROM common_peers';
+SET @p='1.234567';
+EXECUTE p_bit USING @p,@p,@p;
+DEALLOCATE PREPARE p_bit;
 
 -- ENUM remains a string aggregation boundary.
 PREPARE p_enum FROM
