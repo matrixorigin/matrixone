@@ -1958,6 +1958,14 @@ func (p *PartitionState) countTombstoneStatsWithMerge(
 	stats TombstoneStats,
 ) (TombstoneStats, error) {
 	iterators := make([]*tombstoneBlockIterator, 0, len(objects))
+	releaseIterators := func() {
+		for _, it := range iterators {
+			if it.release != nil {
+				it.release()
+				it.release = nil
+			}
+		}
+	}
 
 	for _, obj := range objects {
 		cnCreated := obj.GetCNCreated()
@@ -1996,9 +2004,18 @@ func (p *PartitionState) countTombstoneStatsWithMerge(
 			p:            p,
 		}
 
-		if it.next() {
-			iterators = append(iterators, it)
+		if !it.next() {
+			if it.release != nil {
+				it.release()
+				it.release = nil
+			}
+			if it.err != nil {
+				releaseIterators()
+				return stats, it.err
+			}
+			continue
 		}
+		iterators = append(iterators, it)
 	}
 
 	// Add in-memory tombstones as an iterator
@@ -2039,10 +2056,8 @@ func (p *PartitionState) countTombstoneStatsWithMerge(
 		}
 	}
 
+	releaseIterators()
 	for _, it := range iterators {
-		if it.release != nil {
-			it.release()
-		}
 		if it.err != nil {
 			return stats, it.err
 		}
