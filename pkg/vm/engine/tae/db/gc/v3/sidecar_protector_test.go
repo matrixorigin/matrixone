@@ -49,6 +49,9 @@ func TestSidecarReadProtectorLifecycle(t *testing.T) {
 	require.Error(t, protector.Register(ctx, ref, []string{"obj-a", "obj-b"}, expires.Add(time.Second)))
 
 	require.NoError(t, protector.Unregister(ctx, ref))
+	require.False(t, manager.IsProtected("obj-a"))
+	require.False(t, manager.IsProtected("obj-b"))
+	require.False(t, manager.HasProtection(jobID))
 	require.NoError(t, protector.Unregister(ctx, ref))
 }
 

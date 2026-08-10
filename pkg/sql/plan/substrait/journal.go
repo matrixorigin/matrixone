@@ -23,7 +23,6 @@ import (
 	"errors"
 	"io"
 	"path"
-	"sort"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -35,13 +34,15 @@ import (
 const maxJournalRecordSize = 160 << 20
 
 const (
-	journalHeaderMagic = "MO-SUBSTRAIT-LEASE\x01"
-	journalHeaderSize  = len(journalHeaderMagic) + sha256.Size
+	journalHeaderMagic      = "MO-SUBSTRAIT-LEASE\x01"
+	journalHeaderSize       = len(journalHeaderMagic) + sha256.Size
+	journalCleanupBatchSize = 128
 )
 
-// FileServiceLeaseJournal persists leases in the shared file service. Active
-// records and release markers are write-once objects, so a crash cannot expose
-// a partially overwritten authority record.
+// FileServiceLeaseJournal persists leases in the shared file service. The
+// immutable record contains the payload while a separate write-once authority
+// object is the lease's single active state. Terminal release atomically
+// deletes that authority before GC protection is removed.
 type FileServiceLeaseJournal struct {
 	fs     fileservice.FileService
 	prefix string
@@ -72,11 +73,6 @@ func (j *FileServiceLeaseJournal) Store(ctx context.Context, lease *Lease) error
 	if lease == nil || lease.Read == nil || len(lease.Read.ReadRef) != 32 {
 		return moerr.NewInternalErrorNoCtx("substrait: invalid lease journal record")
 	}
-	if _, err := j.fs.StatFile(ctx, j.releasedPath(lease.Read.ReadRef)); err == nil {
-		return moerr.NewInternalErrorNoCtx("substrait: released read reference already exists")
-	} else if !moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
-		return err
-	}
 	record := journalRecord{Wire: lease.Wire, Manifest: lease.Manifest, CanonicalSchema: lease.CanonicalSchema, AuthorizedClientSPKIHash: lease.AuthorizedClientSPKIHash, ObjectNames: lease.ObjectNames}
 	recordBytes, err := json.Marshal(record)
 	if err != nil {
@@ -95,20 +91,31 @@ func (j *FileServiceLeaseJournal) Store(ctx context.Context, lease *Lease) error
 	b = append(b, journalHeaderMagic...)
 	b = append(b, authority[:]...)
 	b = append(b, payload...)
-	return j.writeOnce(ctx, j.activePath(lease.Read.ReadRef), b)
+	// Publish the authority first, then the immutable record. A concurrent
+	// replay cannot treat a partially written record as released, and the final
+	// read detects orphan cleanup or revocation that raced publication.
+	if err := j.writeOnce(ctx, j.authorityPath(lease.Read.ReadRef), authority[:]); err != nil {
+		return err
+	}
+	if err := j.writeOnce(ctx, j.activePath(lease.Read.ReadRef), b); err != nil {
+		return err
+	}
+	activeAuthority, err := j.readAuthority(ctx, lease.Read.ReadRef)
+	if err != nil {
+		return err
+	}
+	if !equalBytes(activeAuthority, authority[:]) {
+		return moerr.NewInternalErrorNoCtx("substrait: lease journal authority changed during store")
+	}
+	return nil
 }
 
-// Active checks the release marker first and the matching record header
-// second. That ordering gives Resolve a durable linearization point against
-// MarkReleased even when multiple managers replay the same journal.
+// Active validates the immutable record before reading the single authority
+// object. The final authority read is the durable linearization point against
+// MarkReleased: it either precedes the atomic delete or observes revocation.
 func (j *FileServiceLeaseJournal) Active(ctx context.Context, lease *Lease) (bool, error) {
 	if lease == nil || lease.Read == nil || len(lease.Read.ReadRef) != 32 {
 		return false, moerr.NewInternalErrorNoCtx("substrait: invalid active read lease")
-	}
-	if _, err := j.fs.StatFile(ctx, j.releasedPath(lease.Read.ReadRef)); err == nil {
-		return false, nil
-	} else if !moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
-		return false, err
 	}
 	header, err := j.readHeader(ctx, j.activePath(lease.Read.ReadRef))
 	if moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
@@ -121,15 +128,25 @@ func (j *FileServiceLeaseJournal) Active(ctx context.Context, lease *Lease) (boo
 		return false, moerr.NewInternalErrorNoCtx("substrait: invalid lease journal header")
 	}
 	want := leaseAuthorityDigest(lease)
-	return equalBytes(header[len(journalHeaderMagic):], want[:]), nil
+	if !equalBytes(header[len(journalHeaderMagic):], want[:]) {
+		return false, nil
+	}
+	authority, err := j.readAuthority(ctx, lease.Read.ReadRef)
+	if moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return equalBytes(authority, want[:]), nil
 }
 
 func (j *FileServiceLeaseJournal) MarkReleased(ctx context.Context, readRef []byte) error {
 	if len(readRef) != 32 {
 		return moerr.NewInternalErrorNoCtx("substrait: invalid released read reference")
 	}
-	err := j.writeOnce(ctx, j.releasedPath(readRef), []byte{1})
-	if moerr.IsMoErrCode(err, moerr.ErrFileAlreadyExists) {
+	err := j.fs.Delete(ctx, j.authorityPath(readRef))
+	if moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
 		return nil
 	}
 	return err
@@ -139,7 +156,7 @@ func (j *FileServiceLeaseJournal) Delete(ctx context.Context, readRef []byte) er
 	if len(readRef) != 32 {
 		return moerr.NewInternalErrorNoCtx("substrait: invalid deleted read reference")
 	}
-	for _, name := range []string{j.activePath(readRef), j.releasedPath(readRef)} {
+	for _, name := range []string{j.authorityPath(readRef), j.activePath(readRef)} {
 		if err := j.fs.Delete(ctx, name); err != nil && !moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
 			return err
 		}
@@ -152,7 +169,6 @@ func (j *FileServiceLeaseJournal) Load(ctx context.Context, visit func(*Lease) e
 		return moerr.NewInternalErrorNoCtx("substrait: missing lease journal visitor")
 	}
 	dir := path.Join(j.prefix, "active")
-	active := make(map[string]struct{})
 	for entry, err := range j.fs.List(ctx, dir) {
 		if err != nil {
 			return err
@@ -163,15 +179,8 @@ func (j *FileServiceLeaseJournal) Load(ctx context.Context, visit func(*Lease) e
 		if entry.Size <= 0 || entry.Size > maxJournalRecordSize {
 			return moerr.NewInternalErrorNoCtxf("substrait: invalid lease journal record %q", entry.Name)
 		}
-		active[strings.TrimSuffix(entry.Name, ".json")] = struct{}{}
-	}
-	names := make([]string, 0, len(active))
-	for name := range active {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-	for _, encoded := range names {
-		name := encoded + ".json"
+		name := entry.Name
+		encoded := strings.TrimSuffix(name, ".json")
 		readRef, err := hex.DecodeString(encoded)
 		if err != nil || len(readRef) != 32 || hex.EncodeToString(readRef) != encoded {
 			return moerr.NewInternalErrorNoCtxf("substrait: invalid lease journal name %q", name)
@@ -211,35 +220,70 @@ func (j *FileServiceLeaseJournal) Load(ctx context.Context, visit func(*Lease) e
 		if !equalBytes(authority, wantAuthority[:]) {
 			return moerr.NewInternalErrorNoCtxf("substrait: lease journal authority mismatch %q", name)
 		}
-		_, statErr := j.fs.StatFile(ctx, j.releasedPath(readRef))
-		released := statErr == nil
-		if statErr != nil && !moerr.IsMoErrCode(statErr, moerr.ErrFileNotFound) {
-			return statErr
+		activeAuthority, authorityErr := j.readAuthority(ctx, readRef)
+		if authorityErr != nil && !moerr.IsMoErrCode(authorityErr, moerr.ErrFileNotFound) {
+			return authorityErr
 		}
-		lease.Released = released
+		lease.Released = moerr.IsMoErrCode(authorityErr, moerr.ErrFileNotFound)
+		if authorityErr == nil && !equalBytes(activeAuthority, wantAuthority[:]) {
+			return moerr.NewInternalErrorNoCtxf("substrait: lease journal authority state mismatch %q", name)
+		}
 		if err := visit(lease); err != nil {
 			return err
 		}
 	}
-	releasedDir := path.Join(j.prefix, "released")
-	orphans := make(map[string]struct{})
-	for entry, err := range j.fs.List(ctx, releasedDir) {
-		if err != nil {
-			return err
+	return j.cleanOrphanAuthorities(ctx)
+}
+
+// cleanOrphanAuthorities never retains the journal namespace. A fixed-size
+// batch also keeps deletion outside FileService.List callbacks, which may hold
+// an implementation read lock while yielding entries.
+func (j *FileServiceLeaseJournal) cleanOrphanAuthorities(ctx context.Context) error {
+	dir := path.Join(j.prefix, "authority")
+	for {
+		orphans := make([]string, 0, journalCleanupBatchSize)
+		for entry, err := range j.fs.List(ctx, dir) {
+			if err != nil {
+				return err
+			}
+			if entry == nil || entry.IsDir {
+				continue
+			}
+			readRef, decodeErr := hex.DecodeString(entry.Name)
+			if decodeErr != nil || len(readRef) != 32 || hex.EncodeToString(readRef) != entry.Name {
+				return moerr.NewInternalErrorNoCtxf("substrait: invalid lease journal authority name %q", entry.Name)
+			}
+			if _, statErr := j.fs.StatFile(ctx, j.activePath(readRef)); statErr == nil {
+				continue
+			} else if !moerr.IsMoErrCode(statErr, moerr.ErrFileNotFound) {
+				return statErr
+			}
+			orphans = append(orphans, j.authorityPath(readRef))
+			if len(orphans) == journalCleanupBatchSize {
+				break
+			}
 		}
-		if entry == nil || entry.IsDir {
-			continue
+		if len(orphans) == 0 {
+			return nil
 		}
-		if _, ok := active[entry.Name]; !ok {
-			orphans[entry.Name] = struct{}{}
+		for _, name := range orphans {
+			encoded := path.Base(name)
+			readRef, err := hex.DecodeString(encoded)
+			if err != nil {
+				return err
+			}
+			// Store writes authority before the record. Recheck outside List so
+			// a record that completed in the meantime keeps its authority.
+			if _, statErr := j.fs.StatFile(ctx, j.activePath(readRef)); statErr == nil {
+				continue
+			} else if !moerr.IsMoErrCode(statErr, moerr.ErrFileNotFound) {
+				return statErr
+			}
+			if err := j.fs.Delete(ctx, name); err != nil && !moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
+				return err
+			}
 		}
 	}
-	for name := range orphans {
-		if err := j.fs.Delete(ctx, path.Join(releasedDir, name)); err != nil && !moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
-			return err
-		}
-	}
-	return nil
 }
 
 func leaseAuthorityDigest(lease *Lease) [sha256.Size]byte {
@@ -280,12 +324,24 @@ func (j *FileServiceLeaseJournal) readHeader(ctx context.Context, name string) (
 	return append([]byte(nil), vector.Entries[0].Data...), nil
 }
 
+func (j *FileServiceLeaseJournal) readAuthority(ctx context.Context, readRef []byte) ([]byte, error) {
+	vector := fileservice.IOVector{FilePath: j.authorityPath(readRef), Entries: []fileservice.IOEntry{{Offset: 0, Size: sha256.Size}}}
+	if err := j.fs.Read(ctx, &vector); err != nil {
+		return nil, err
+	}
+	defer vector.Release()
+	if len(vector.Entries) != 1 || len(vector.Entries[0].Data) != sha256.Size {
+		return nil, moerr.NewInternalErrorNoCtx("substrait: invalid lease journal authority size")
+	}
+	return append([]byte(nil), vector.Entries[0].Data...), nil
+}
+
 func (j *FileServiceLeaseJournal) activePath(readRef []byte) string {
 	return path.Join(j.prefix, "active", hex.EncodeToString(readRef)+".json")
 }
 
-func (j *FileServiceLeaseJournal) releasedPath(readRef []byte) string {
-	return path.Join(j.prefix, "released", hex.EncodeToString(readRef))
+func (j *FileServiceLeaseJournal) authorityPath(readRef []byte) string {
+	return path.Join(j.prefix, "authority", hex.EncodeToString(readRef))
 }
 
 func ensureJSONEOF(decoder *json.Decoder) error {

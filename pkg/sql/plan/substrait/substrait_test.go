@@ -391,6 +391,9 @@ func TestProtocolRejectsMalformedWireShapes(t *testing.T) {
 	require.ErrorContains(t, err, "invalid resolve response")
 	response, err := MarshalResolveResponse(ResolveTaeReadResponse{TaeRead: []byte("read"), Manifest: []byte("manifest"), CanonicalSchema: []byte("schema")})
 	require.NoError(t, err)
+	var streamed bytes.Buffer
+	require.NoError(t, writeResolveResponse(&streamed, ResolveTaeReadResponse{TaeRead: []byte("read"), Manifest: []byte("manifest"), CanonicalSchema: []byte("schema")}))
+	require.Equal(t, response, streamed.Bytes())
 	fields, err := consumeStrictBytes(response, 3, len(response))
 	require.NoError(t, err)
 	require.Equal(t, []byte("manifest"), fields[1])
@@ -492,6 +495,25 @@ type gatedProtector struct {
 	unregisterAllow                chan struct{}
 }
 
+type gatedJournalHeaderFS struct {
+	fileservice.FileService
+	path           string
+	started, allow chan struct{}
+	once           sync.Once
+}
+
+func (f *gatedJournalHeaderFS) Read(ctx context.Context, vector *fileservice.IOVector) error {
+	if vector.FilePath == f.path && len(vector.Entries) == 1 && vector.Entries[0].Size == int64(journalHeaderSize) {
+		f.once.Do(func() { close(f.started) })
+		select {
+		case <-f.allow:
+		case <-ctx.Done():
+			return context.Cause(ctx)
+		}
+	}
+	return f.FileService.Read(ctx, vector)
+}
+
 func (p *gatedProtector) Begin(context.Context) (func(context.Context, []byte, []string, time.Time) error, func(context.Context, []byte) error, func(), error) {
 	return func(context.Context, []byte, []string, time.Time) error {
 		p.registerCount++
@@ -575,6 +597,11 @@ func collectJournalLeases(ctx context.Context, journal LeaseJournal) ([]*Lease, 
 	return result, err
 }
 
+func resolveLease(manager *LeaseManager, readRef []byte) (*Lease, bool) {
+	lease, ok, _ := manager.resolve(context.Background(), readRef)
+	return lease, ok
+}
+
 func testDurableLease(t *testing.T, seed byte, expiresAt uint64) *Lease {
 	manifest := []byte{'m', seed}
 	schema := []byte{'s', seed}
@@ -623,10 +650,10 @@ func TestReplayCleansTerminalRecordsBeforeLiveCapacity(t *testing.T) {
 
 			require.NoError(t, manager.Replay(context.Background()))
 			require.True(t, manager.Ready())
-			_, ok := manager.Resolve(live.Read.ReadRef)
+			_, ok := resolveLease(manager, live.Read.ReadRef)
 			require.True(t, ok)
 			require.Len(t, journal.leases, 1)
-			require.Equal(t, 4, journal.loaded)
+			require.Equal(t, 5, journal.loaded)
 			require.Equal(t, 1, protector.registered)
 			require.Equal(t, 3, protector.unregistered)
 		})
@@ -704,7 +731,7 @@ func TestAdmissionPublishesOnlyProtectedSnapshot(t *testing.T) {
 	require.Equal(t, 1, protector.registered)
 	tr, err := UnmarshalTaeRead(wires[0], uint64(now.UnixMilli()))
 	require.NoError(t, err)
-	_, ok := leases.Resolve(tr.ReadRef)
+	_, ok := resolveLease(leases, tr.ReadRef)
 	require.True(t, ok)
 }
 
@@ -786,12 +813,34 @@ func TestReleaseFailureRevokesLeaseAndRetainsRetryState(t *testing.T) {
 	tr, err := UnmarshalTaeRead(wires[0], uint64(now.UnixMilli()))
 	require.NoError(t, err)
 	require.Error(t, leases.Release(context.Background(), tr.ReadRef))
-	_, ok := leases.Resolve(tr.ReadRef)
+	_, ok := resolveLease(leases, tr.ReadRef)
 	require.False(t, ok)
 	protector.failUnregister = false
 	require.NoError(t, leases.Release(context.Background(), tr.ReadRef))
-	_, ok = leases.Resolve(tr.ReadRef)
+	_, ok = resolveLease(leases, tr.ReadRef)
 	require.False(t, ok)
+}
+
+func TestReleaseMarkFailureKeepsAmbiguousRevocationRetryable(t *testing.T) {
+	now := time.Now()
+	lease := testDurableLease(t, 11, uint64(now.Add(time.Minute).UnixMilli()))
+	journal := new(fakeLeaseJournal)
+	protector := new(fakeProtector)
+	manager := NewPersistentLeaseManager(1, protector, journal)
+	manager.ready = true
+	require.NoError(t, manager.Acquire(context.Background(), []*Lease{lease}))
+
+	journal.markErr = errors.New("ambiguous authority delete")
+	require.ErrorContains(t, manager.Release(context.Background(), lease.Read.ReadRef), "ambiguous authority delete")
+	_, ok := resolveLease(manager, lease.Read.ReadRef)
+	require.False(t, ok)
+	require.Equal(t, releaseRevoking, manager.releases[string(lease.Read.ReadRef)])
+	require.Zero(t, protector.unregistered)
+
+	journal.markErr = nil
+	require.NoError(t, manager.Release(context.Background(), lease.Read.ReadRef))
+	require.Equal(t, 1, protector.unregistered)
+	require.Empty(t, manager.leases)
 }
 
 func TestResolveDoesNotWaitForLeaseMutationIO(t *testing.T) {
@@ -842,7 +891,7 @@ func assertResolvePromptly(t *testing.T, manager *LeaseManager, readRef []byte) 
 	t.Helper()
 	resolved := make(chan bool, 1)
 	go func() {
-		_, ok := manager.Resolve(readRef)
+		_, ok := resolveLease(manager, readRef)
 		resolved <- ok
 	}()
 	select {
@@ -893,7 +942,7 @@ func TestPersistentLeaseReplayAndReleasedCrashRecovery(t *testing.T) {
 	protector := new(fakeProtector)
 	leases := NewPersistentLeaseManager(1, protector, journal)
 	now := time.Now()
-	_, ok := leases.Resolve(bytes.Repeat([]byte{7}, 32))
+	_, ok := resolveLease(leases, bytes.Repeat([]byte{7}, 32))
 	require.False(t, ok)
 	require.ErrorContains(t, leases.Acquire(ctx, []*Lease{{}}), "not been replayed")
 	require.NoError(t, leases.Replay(ctx))
@@ -905,23 +954,26 @@ func TestPersistentLeaseReplayAndReleasedCrashRecovery(t *testing.T) {
 	replayed := NewPersistentLeaseManager(1, protector, journal)
 	replayed.now = func() time.Time { return now }
 	require.NoError(t, replayed.Replay(ctx))
-	replayedLease, ok := replayed.Resolve(tr.ReadRef)
+	replayedLease, ok := resolveLease(replayed, tr.ReadRef)
 	require.True(t, ok)
 	require.Equal(t, testClientSPKIHash(), replayedLease.AuthorizedClientSPKIHash)
 
 	protector.failUnregister = true
 	require.Error(t, replayed.Release(ctx, tr.ReadRef))
-	_, ok = replayed.Resolve(tr.ReadRef)
+	_, ok = resolveLease(replayed, tr.ReadRef)
 	require.False(t, ok)
-	_, ok = leases.Resolve(tr.ReadRef)
+	_, ok = resolveLease(leases, tr.ReadRef)
 	require.False(t, ok, "a manager with stale replay state must observe durable revocation")
-	require.Empty(t, leases.leases, "durably revoked stale state must not retain local capacity")
+	require.NotEmpty(t, leases.leases, "failed GC cleanup must retain a hidden retry owner")
+	require.Equal(t, releaseMarked, leases.releases[string(tr.ReadRef)])
 
 	protector.failUnregister = false
+	require.NoError(t, leases.Release(ctx, tr.ReadRef))
+	require.Empty(t, leases.leases)
 	afterCrash := NewPersistentLeaseManager(1, protector, journal)
 	afterCrash.now = func() time.Time { return now }
 	require.NoError(t, afterCrash.Replay(ctx))
-	_, ok = afterCrash.Resolve(tr.ReadRef)
+	_, ok = resolveLease(afterCrash, tr.ReadRef)
 	require.False(t, ok)
 	loaded, err := collectJournalLeases(ctx, journal)
 	require.NoError(t, err)
@@ -949,7 +1001,7 @@ func TestPersistentLeaseReplayExpiresWithoutResurrection(t *testing.T) {
 	replayed := NewPersistentLeaseManager(1, new(fakeProtector), journal)
 	replayed.now = func() time.Time { return now.Add(2 * time.Second) }
 	require.NoError(t, replayed.Replay(ctx))
-	_, ok := replayed.Resolve(tr.ReadRef)
+	_, ok := resolveLease(replayed, tr.ReadRef)
 	require.False(t, ok)
 	loaded, err := collectJournalLeases(ctx, journal)
 	require.NoError(t, err)
@@ -973,7 +1025,7 @@ func TestLeaseResolveReleaseRace(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			for j := 0; j < 100; j++ {
-				leases.Resolve(tr.ReadRef)
+				resolveLease(leases, tr.ReadRef)
 			}
 		}()
 	}
@@ -1199,7 +1251,7 @@ func TestResolverServerLifecycle(t *testing.T) {
 	require.ErrorContains(t, server.Start(), "closed")
 }
 
-func TestFileServiceLeaseJournalValidationAndReleaseMarker(t *testing.T) {
+func TestFileServiceLeaseJournalValidationAndAuthority(t *testing.T) {
 	_, err := NewFileServiceLeaseJournal(nil, "leases")
 	require.Error(t, err)
 	fs, err := fileservice.NewMemoryFS("journal-validation", fileservice.CacheConfig{}, nil)
@@ -1215,14 +1267,13 @@ func TestFileServiceLeaseJournalValidationAndReleaseMarker(t *testing.T) {
 	ref := bytes.Repeat([]byte{4}, 32)
 	require.NoError(t, journal.MarkReleased(context.Background(), ref))
 	require.NoError(t, journal.MarkReleased(context.Background(), ref))
-	require.ErrorContains(t, journal.Store(context.Background(), &Lease{Read: &TaeRead{ReadRef: ref}}), "released read reference")
 	require.NoError(t, journal.Delete(context.Background(), ref))
 	require.NoError(t, journal.Delete(context.Background(), ref))
 
 	orphanRef := bytes.Repeat([]byte{5}, 32)
-	require.NoError(t, journal.MarkReleased(context.Background(), orphanRef))
+	require.NoError(t, fs.Write(context.Background(), fileservice.IOVector{FilePath: journal.authorityPath(orphanRef), Entries: []fileservice.IOEntry{{Offset: 0, Size: sha256.Size, Data: make([]byte, sha256.Size)}}}))
 	require.NoError(t, journal.Load(context.Background(), func(*Lease) error { return nil }))
-	_, err = fs.StatFile(context.Background(), journal.releasedPath(orphanRef))
+	_, err = fs.StatFile(context.Background(), journal.authorityPath(orphanRef))
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrFileNotFound))
 
 	lease := testDurableLease(t, 6, uint64(time.Now().Add(time.Minute).UnixMilli()))
@@ -1240,6 +1291,86 @@ func TestFileServiceLeaseJournalValidationAndReleaseMarker(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, active)
 	require.NoError(t, journal.Delete(context.Background(), lease.Read.ReadRef))
+}
+
+func TestFileServiceLeaseJournalAuthorityLinearizesRelease(t *testing.T) {
+	ctx := context.Background()
+	fs, err := fileservice.NewMemoryFS("journal-authority-race", fileservice.CacheConfig{}, nil)
+	require.NoError(t, err)
+	journal, err := NewFileServiceLeaseJournal(fs, "sirius/read-leases")
+	require.NoError(t, err)
+	lease := testDurableLease(t, 9, uint64(time.Now().Add(time.Minute).UnixMilli()))
+	require.NoError(t, journal.Store(ctx, lease))
+	gated := &gatedJournalHeaderFS{
+		FileService: fs,
+		path:        journal.activePath(lease.Read.ReadRef),
+		started:     make(chan struct{}),
+		allow:       make(chan struct{}),
+	}
+	defer closeChannelIfOpen(gated.allow)
+	journal.fs = gated
+	result := make(chan bool, 1)
+	errs := make(chan error, 1)
+	go func() {
+		active, err := journal.Active(ctx, lease)
+		result <- active
+		errs <- err
+	}()
+	select {
+	case <-gated.started:
+	case <-time.After(time.Second):
+		t.Fatal("authority validation did not reach the immutable record read")
+	}
+	require.NoError(t, journal.MarkReleased(ctx, lease.Read.ReadRef))
+	close(gated.allow)
+	require.NoError(t, <-errs)
+	require.False(t, <-result)
+}
+
+func TestFileServiceLeaseJournalCleansOrphanAuthoritiesInBoundedBatches(t *testing.T) {
+	ctx := context.Background()
+	fs, err := fileservice.NewMemoryFS("journal-orphan-batches", fileservice.CacheConfig{}, nil)
+	require.NoError(t, err)
+	journal, err := NewFileServiceLeaseJournal(fs, "sirius/read-leases")
+	require.NoError(t, err)
+	refs := make([][]byte, 0, journalCleanupBatchSize+1)
+	for i := 0; i <= journalCleanupBatchSize; i++ {
+		ref := make([]byte, 32)
+		ref[0], ref[1] = byte(i), byte(i>>8)
+		refs = append(refs, ref)
+		require.NoError(t, fs.Write(ctx, fileservice.IOVector{FilePath: journal.authorityPath(ref), Entries: []fileservice.IOEntry{{Offset: 0, Size: sha256.Size, Data: make([]byte, sha256.Size)}}}))
+	}
+	require.NoError(t, journal.Load(ctx, func(*Lease) error { return nil }))
+	for _, ref := range refs {
+		_, err = fs.StatFile(ctx, journal.authorityPath(ref))
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrFileNotFound))
+	}
+}
+
+func TestResolveByteBudgetIsBoundedAndCancellationAware(t *testing.T) {
+	budget := newResolveByteBudget(10)
+	release, err := budget.acquire(context.Background(), 10)
+	require.NoError(t, err)
+	_, err = budget.acquire(context.Background(), 11)
+	require.ErrorContains(t, err, "exceeds byte budget")
+	canceled, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err = budget.acquire(canceled, 1)
+	require.ErrorIs(t, err, context.Canceled)
+	release()
+	release()
+	release, err = budget.acquire(context.Background(), 1)
+	require.NoError(t, err)
+	release()
+}
+
+func TestLeaseMutationLockHonorsContext(t *testing.T) {
+	manager := NewLeaseManager(1, new(fakeProtector))
+	require.NoError(t, manager.mutation.lock(context.Background()))
+	defer manager.mutation.unlock()
+	canceled, cancel := context.WithCancel(context.Background())
+	cancel()
+	require.ErrorIs(t, manager.mutation.lock(canceled), context.Canceled)
 }
 
 func TestJournalBoundIncludesJSONBase64Expansion(t *testing.T) {

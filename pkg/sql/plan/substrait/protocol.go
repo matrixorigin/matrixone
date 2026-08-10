@@ -16,6 +16,7 @@ package substrait
 
 import (
 	"crypto/sha256"
+	"io"
 	"math"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -174,14 +175,68 @@ func UnmarshalResolveRequest(b []byte) (ResolveTaeReadRequest, error) {
 }
 
 func MarshalResolveResponse(r ResolveTaeReadResponse) ([]byte, error) {
-	if len(r.TaeRead) == 0 || len(r.TaeRead) > maxTaeReadSize || len(r.Manifest) == 0 || len(r.CanonicalSchema) == 0 || len(r.Manifest) > maxManifestSize || len(r.CanonicalSchema) > maxCanonicalSchemaSize {
-		return nil, moerr.NewInternalErrorNoCtx("invalid resolve response")
+	size, err := resolveResponseSize(r)
+	if err != nil {
+		return nil, err
 	}
-	var b []byte
+	b := make([]byte, 0, size)
 	b = appendBytes(b, 1, r.TaeRead)
 	b = appendBytes(b, 2, r.Manifest)
 	b = appendBytes(b, 3, r.CanonicalSchema)
 	return b, nil
+}
+
+func resolveResponseSize(r ResolveTaeReadResponse) (int, error) {
+	if len(r.TaeRead) == 0 || len(r.TaeRead) > maxTaeReadSize || len(r.Manifest) == 0 || len(r.CanonicalSchema) == 0 || len(r.Manifest) > maxManifestSize || len(r.CanonicalSchema) > maxCanonicalSchemaSize {
+		return 0, moerr.NewInternalErrorNoCtx("invalid resolve response")
+	}
+	return protowire.SizeTag(1) + protowire.SizeBytes(len(r.TaeRead)) +
+		protowire.SizeTag(2) + protowire.SizeBytes(len(r.Manifest)) +
+		protowire.SizeTag(3) + protowire.SizeBytes(len(r.CanonicalSchema)), nil
+}
+
+// writeResolveResponse emits field framing and immutable payload slices
+// directly, avoiding a second manifest-sized allocation in the HTTP path.
+func writeResolveResponse(w io.Writer, r ResolveTaeReadResponse) error {
+	if w == nil {
+		return moerr.NewInternalErrorNoCtx("invalid resolve response writer")
+	}
+	if _, err := resolveResponseSize(r); err != nil {
+		return err
+	}
+	for _, field := range []struct {
+		number protowire.Number
+		data   []byte
+	}{{1, r.TaeRead}, {2, r.Manifest}, {3, r.CanonicalSchema}} {
+		header := protowire.AppendTag(nil, field.number, protowire.BytesType)
+		header = protowire.AppendVarint(header, uint64(len(field.data)))
+		if err := writeFull(w, header); err != nil {
+			return err
+		}
+		if err := writeFull(w, field.data); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func writeFull(w io.Writer, b []byte) error {
+	for len(b) != 0 {
+		n, err := w.Write(b)
+		if n < 0 || n > len(b) {
+			return io.ErrShortWrite
+		}
+		if n > 0 {
+			b = b[n:]
+		}
+		if err != nil {
+			return err
+		}
+		if n == 0 {
+			return io.ErrShortWrite
+		}
+	}
+	return nil
 }
 
 func consumeStrictBytes(b []byte, count protowire.Number, maximum int) ([][]byte, error) {

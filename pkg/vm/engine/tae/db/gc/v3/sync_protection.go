@@ -391,18 +391,19 @@ func (m *SyncProtectionManager) UnregisterSyncProtection(jobID string) error {
 }
 
 // ReleaseSyncProtection is the idempotent terminal form used by durable read
-// leases. A replay may repeat release after the protection was already soft
-// deleted or cleaned.
+// leases. Durable revocation has already made the read reference unresolvable,
+// so the object pin and its capacity must be removed immediately rather than
+// inheriting sync-job soft-delete/checkpoint semantics.
 func (m *SyncProtectionManager) ReleaseSyncProtection(jobID string) error {
 	m.Lock()
 	defer m.Unlock()
 	p := m.protections[jobID]
-	if p == nil || p.SoftDelete {
+	if p == nil {
 		return nil
 	}
-	p.SoftDelete = true
+	delete(m.protections, jobID)
 	logutil.Info(
-		"GC-Sync-Protection-Soft-Deleted",
+		"GC-Sync-Protection-Released",
 		zap.String("job-id", jobID),
 		zap.Int64("valid-ts", p.ValidTS),
 	)
