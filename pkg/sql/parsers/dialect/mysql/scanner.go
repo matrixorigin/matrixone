@@ -846,15 +846,7 @@ func (s *Scanner) scanIdentifier(isVariable bool) (int, string) {
 	lower := strings.ToLower(keywordName)
 	if keywordID, found := keywords[lower]; found {
 		if lower == "within" {
-			cur := s.Pos
-			s.skipBlank()
-			if !isLetter(s.cur()) {
-				s.Pos = cur
-				return ID, keywordName
-			}
-			typ, _ := s.scanIdentifier(false)
-			s.Pos = cur
-			if typ == GROUP {
+			if s.withinGroupPhraseAhead(s.Pos) {
 				return keywordID, keywordName
 			}
 			return ID, keywordName
@@ -883,6 +875,80 @@ func (s *Scanner) scanIdentifier(isVariable bool) (int, string) {
 		return ID, keywordName
 	}
 	return ID, keywordName
+}
+
+func (s *Scanner) withinGroupPhraseAhead(pos int) bool {
+	pos = s.skipBlankAndCommentsFrom(pos)
+	if !hasKeywordAt(s.buf, pos, "group") {
+		return false
+	}
+	pos += len("group")
+	pos = s.skipBlankAndCommentsFrom(pos)
+	return pos < len(s.buf) && s.buf[pos] == '('
+}
+
+func (s *Scanner) skipBlankAndCommentsFrom(pos int) int {
+	for {
+		for pos < len(s.buf) {
+			switch s.buf[pos] {
+			case ' ', '\n', '\r', '\t':
+				pos++
+				continue
+			}
+			break
+		}
+		if pos >= len(s.buf) {
+			return pos
+		}
+		switch {
+		case strings.HasPrefix(s.buf[pos:], "/*"):
+			end := strings.Index(s.buf[pos+2:], "*/")
+			if end < 0 {
+				return pos
+			}
+			pos += 2 + end + 2
+			continue
+		case strings.HasPrefix(s.buf[pos:], "//"):
+			pos = skipLineCommentFrom(s.buf, pos+2)
+			continue
+		case s.buf[pos] == '#':
+			pos = skipLineCommentFrom(s.buf, pos+1)
+			continue
+		case strings.HasPrefix(s.buf[pos:], "--") &&
+			(pos+2 == len(s.buf) || isMySQLDashCommentBlank(s.buf[pos+2])):
+			pos = skipLineCommentFrom(s.buf, pos+2)
+			continue
+		}
+		return pos
+	}
+}
+
+func hasKeywordAt(sql string, pos int, keyword string) bool {
+	if pos+len(keyword) > len(sql) {
+		return false
+	}
+	if !strings.EqualFold(sql[pos:pos+len(keyword)], keyword) {
+		return false
+	}
+	if pos+len(keyword) == len(sql) {
+		return true
+	}
+	next := uint16(sql[pos+len(keyword)])
+	return !isLetter(next) && !isDigit(next) && next != '@'
+}
+
+func skipLineCommentFrom(sql string, pos int) int {
+	for pos < len(sql) {
+		if sql[pos] == '\n' {
+			return pos + 1
+		}
+		pos++
+	}
+	return pos
+}
+
+func isMySQLDashCommentBlank(ch byte) bool {
+	return ch == ' ' || ch == '\n' || ch == '\r' || ch == '\t'
 }
 
 func (s *Scanner) scanBitLiteral() (int, string) {

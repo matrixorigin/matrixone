@@ -33,6 +33,13 @@ percentile_disc(0.25) within group (order by v) as p25_disc
 from t_ordered_set_bvt;
 ➤ p25_cont[8,53,31]  ¦  p25_disc[4,32,0]  𝄀
 6.0  ¦  4
+select percentile_disc(0.5) within group (order by cast(v as decimal(38,0))) as p50_disc_dec38
+from t_ordered_set_bvt;
+➤ p50_disc_dec38[3,38,0]  𝄀
+10
+select percentile_cont(0.5) within group (order by cast(v as decimal(38,0))) as p50_cont_dec38
+from t_ordered_set_bvt;
+invalid argument aggregate function percentile_cont, bad value [DECIMAL128 DECIMAL64]
 select g,
 percentile_cont(0.5) within group (order by v) as p50_cont,
 percentile_disc(0.5) within group (order by v) as p50_disc
@@ -65,7 +72,7 @@ select within from t_within_identifier_bvt order by id;
 10  𝄀
 20
 select word, reserved from information_schema.KEYWORDS where word = 'WITHIN';
-➤ WORD[12,-1,0]  ¦  RESERVED[4,32,0]  𝄀
+➤ word[12,64,0]  ¦  reserved[4,32,0]  𝄀
 WITHIN  ¦  0
 drop table t_within_identifier_bvt;
 drop table t_ordered_set_bvt;

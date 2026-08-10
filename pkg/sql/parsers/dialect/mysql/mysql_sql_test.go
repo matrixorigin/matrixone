@@ -4797,7 +4797,9 @@ func TestGroupConcatDeparseRoundTrip(t *testing.T) {
 func TestOrderedSetAggregateDeparseRoundTrip(t *testing.T) {
 	for _, sql := range []string{
 		"select group_concat(v) within group (order by k desc) from t",
+		"select group_concat(v) within /* ordered-set */ group (order by k desc) from t",
 		"select percentile_cont(0.95) within group (order by v) from t",
+		"select percentile_cont(0.95) within /* ordered-set */ group (order by v) from t",
 		"select percentile_disc(1) within group (order by v desc) from t",
 	} {
 		ast, err := ParseOne(context.Background(), sql, 1)
@@ -4824,6 +4826,7 @@ func TestGroupConcatRejectsDoubleOrderBy(t *testing.T) {
 func TestWithinRemainsIdentifierCompatible(t *testing.T) {
 	for _, sql := range []string{
 		"select within from t",
+		"select 1 as within group by 1",
 		"create table t (within int)",
 	} {
 		_, err := ParseOne(context.Background(), sql, 1)

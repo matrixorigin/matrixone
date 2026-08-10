@@ -60,15 +60,35 @@ func TestOrderedSetPercentileCheck(t *testing.T) {
 	for _, oid := range []types.T{
 		types.T_bit, types.T_int8, types.T_int16, types.T_int32, types.T_int64,
 		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
-		types.T_float32, types.T_float64, types.T_decimal64, types.T_decimal128,
+		types.T_float32, types.T_float64, types.T_decimal64,
 	} {
 		result = check(nil, []types.Type{oid.ToType(), types.T_float64.ToType()})
 		require.Equal(t, succeedMatched, result.status, "oid=%s", oid)
 	}
+	result = check(nil, []types.Type{types.New(types.T_decimal128, 37, 2), types.T_float64.ToType()})
+	require.Equal(t, succeedMatched, result.status)
 
-	// Both percentile functions share the same type checker.
+	result = allSupportedFunctions[PERCENTILE_CONT].checkFn(nil, []types.Type{
+		types.New(types.T_decimal128, 38, 0), types.T_float64.ToType(),
+	})
+	require.Equal(t, failedAggParametersWrong, result.status)
+
+	result = allSupportedFunctions[PERCENTILE_CONT].checkFn(nil, []types.Type{
+		types.New(types.T_decimal128, 38, 38), types.T_float64.ToType(),
+	})
+	require.Equal(t, failedAggParametersWrong, result.status)
+
+	result = allSupportedFunctions[PERCENTILE_CONT].checkFn(nil, []types.Type{
+		types.New(types.T_decimal128, 37, 0), types.T_float64.ToType(),
+	})
+	require.Equal(t, succeedMatched, result.status)
+
 	require.Equal(t, succeedMatched,
 		allSupportedFunctions[PERCENTILE_DISC].checkFn(nil, []types.Type{
 			types.T_int64.ToType(), types.T_float64.ToType(),
+		}).status)
+	require.Equal(t, succeedMatched,
+		allSupportedFunctions[PERCENTILE_DISC].checkFn(nil, []types.Type{
+			types.New(types.T_decimal128, 38, 0), types.T_float64.ToType(),
 		}).status)
 }

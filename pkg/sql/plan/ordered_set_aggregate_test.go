@@ -108,6 +108,11 @@ func TestBuildOrderedSetPercentileRejectsInvalidWithinGroupShape(t *testing.T) {
 			sql:  "select percentile_cont(0.5) within group (order by n_name) from nation",
 			want: "",
 		},
+		{
+			name: "maximum width decimal continuous interpolation",
+			sql:  "select percentile_cont(0.5) within group (order by cast(a as decimal(38,0))) from select_test.bind_select",
+			want: "",
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, tc.sql, 1)

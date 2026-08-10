@@ -893,6 +893,9 @@ func makeOrderedPercentileExec(mp *mpool.MPool, aggID int64, isDistinct bool, pa
 	if isDistinct {
 		return nil, moerr.NewNotSupportedNoCtx("ordered percentile in distinct mode")
 	}
+	if mode == orderedPercentileContinuous && param.IsDecimal() && param.Width >= 38 {
+		return nil, moerr.NewNotSupportedNoCtx("percentile_cont on maximum-width decimal order expressions")
+	}
 	info := singleAggInfo{
 		aggID:     aggID,
 		argType:   param,

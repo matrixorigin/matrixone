@@ -25,6 +25,14 @@ import (
 // resolution so the executor receives one data vector after compile-time
 // configuration extraction.
 func orderedSetPercentileCheck(_ []overload, inputs []types.Type) checkResult {
+	return orderedSetPercentileCheckWithMode(inputs, false)
+}
+
+func orderedSetPercentileContCheck(_ []overload, inputs []types.Type) checkResult {
+	return orderedSetPercentileCheckWithMode(inputs, true)
+}
+
+func orderedSetPercentileCheckWithMode(inputs []types.Type, continuous bool) checkResult {
 	if len(inputs) != 2 {
 		return newCheckResultWithFailure(failedAggParametersWrong)
 	}
@@ -45,6 +53,9 @@ func orderedSetPercentileCheck(_ []overload, inputs []types.Type) checkResult {
 	// The executor currently has exact implementations for the same numeric
 	// family as MEDIAN (decimal256 is intentionally excluded).
 	if finalTypes[0].Oid == types.T_decimal256 || finalTypes[1].Oid == types.T_decimal256 {
+		return newCheckResultWithFailure(failedAggParametersWrong)
+	}
+	if continuous && finalTypes[0].IsDecimal() && finalTypes[0].Width >= 38 {
 		return newCheckResultWithFailure(failedAggParametersWrong)
 	}
 	if needCast {

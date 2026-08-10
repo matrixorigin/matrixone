@@ -565,7 +565,7 @@ var supportedAggInNewFramework = []FuncNew{
 		functionId: PERCENTILE_CONT,
 		class:      plan.Function_AGG,
 		layout:     STANDARD_FUNCTION,
-		checkFn:    orderedSetPercentileCheck,
+		checkFn:    orderedSetPercentileContCheck,
 		Overloads: []overload{
 			{
 				overloadId: 0,

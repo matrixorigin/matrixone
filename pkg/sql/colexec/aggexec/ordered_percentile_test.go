@@ -280,7 +280,7 @@ func TestOrderedPercentileTypeDispatchAndMath(t *testing.T) {
 	for _, oid := range []types.T{
 		types.T_bit, types.T_int8, types.T_int16, types.T_int32, types.T_int64,
 		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
-		types.T_float32, types.T_float64, types.T_decimal64, types.T_decimal128,
+		types.T_float32, types.T_float64, types.T_decimal64,
 	} {
 		for _, mode := range []orderedPercentileMode{orderedPercentileContinuous, orderedPercentileDiscrete} {
 			exec, err := makeOrderedPercentileExec(mp, AggIdOfPercentileCont, false,
@@ -288,6 +288,12 @@ func TestOrderedPercentileTypeDispatchAndMath(t *testing.T) {
 			require.NoError(t, err, "oid=%s mode=%d", oid, mode)
 			exec.Free()
 		}
+	}
+	for _, mode := range []orderedPercentileMode{orderedPercentileContinuous, orderedPercentileDiscrete} {
+		exec, err := makeOrderedPercentileExec(mp, AggIdOfPercentileCont, false,
+			types.New(types.T_decimal128, 37, 2), mode)
+		require.NoError(t, err, "mode=%d", mode)
+		exec.Free()
 	}
 	_, err := makeOrderedPercentileExec(mp, AggIdOfPercentileCont, true,
 		types.T_int64.ToType(), orderedPercentileContinuous)
@@ -303,8 +309,8 @@ func TestOrderedPercentileTypeDispatchAndMath(t *testing.T) {
 		[]types.Type{types.New(types.T_decimal64, 10, 2)}).Scale)
 	require.Equal(t, int32(38), PercentileContReturnType(
 		[]types.Type{types.New(types.T_decimal128, 38, 38)}).Scale)
-	require.Equal(t, int32(0), PercentileContReturnType(
-		[]types.Type{types.New(types.T_decimal128, 38, 0)}).Scale)
+	require.Equal(t, int32(1), PercentileContReturnType(
+		[]types.Type{types.New(types.T_decimal128, 37, 0)}).Scale)
 	require.Equal(t, types.T_int64,
 		PercentileDiscReturnType([]types.Type{types.T_int64.ToType()}).Oid)
 
@@ -392,7 +398,7 @@ func TestOrderedPercentileDecimalExecution(t *testing.T) {
 	})
 
 	t.Run("decimal128 continuous", func(t *testing.T) {
-		typ := types.New(types.T_decimal128, 38, 2)
+		typ := types.New(types.T_decimal128, 37, 2)
 		one, err := types.ParseDecimal128("1.00", typ.Width, typ.Scale)
 		require.NoError(t, err)
 		three, err := types.ParseDecimal128("3.00", typ.Width, typ.Scale)
@@ -406,34 +412,62 @@ func TestOrderedPercentileDecimalExecution(t *testing.T) {
 		require.NoError(t, exec.BulkFill(0, []*vector.Vector{vec}))
 		result, err := exec.Flush()
 		require.NoError(t, err)
-		require.Equal(t, "2.00", vector.GetFixedAtNoTypeCheck[types.Decimal128](result[0], 0).Format(result[0].GetType().Scale))
+		require.Equal(t, "2.000", vector.GetFixedAtNoTypeCheck[types.Decimal128](result[0], 0).Format(result[0].GetType().Scale))
 		result[0].Free(mp)
 		exec.Free()
 	})
 
-	t.Run("decimal128 max integral p0", func(t *testing.T) {
+	t.Run("decimal128 max width continuous rejected", func(t *testing.T) {
 		typ := types.New(types.T_decimal128, 38, 0)
-		maxValue, err := types.ParseDecimal128("99999999999999999999999999999999999999", typ.Width, typ.Scale)
+		_, err := makeOrderedPercentileExec(mp, AggIdOfPercentileCont, false, typ, orderedPercentileContinuous)
+		require.ErrorContains(t, err, "maximum-width decimal")
+	})
+
+	t.Run("decimal128 max width discrete remains supported", func(t *testing.T) {
+		typ := types.New(types.T_decimal128, 38, 0)
+		zero, err := types.ParseDecimal128("0", typ.Width, typ.Scale)
 		require.NoError(t, err)
-		vec := buildFixedVec(t, mp, typ, []types.Decimal128{maxValue})
+		one, err := types.ParseDecimal128("1", typ.Width, typ.Scale)
+		require.NoError(t, err)
+		vec := buildFixedVec(t, mp, typ, []types.Decimal128{zero, one})
+		defer vec.Free(mp)
+		exec, err := makeOrderedPercentileExec(mp, AggIdOfPercentileDisc, false, typ, orderedPercentileDiscrete)
+		require.NoError(t, err)
+		require.NoError(t, exec.GroupGrow(1))
+		require.NoError(t, exec.SetExtraInformation(EncodeOrderedPercentileConfig([]byte("0.5"), false), 0))
+		require.NoError(t, exec.BulkFill(0, []*vector.Vector{vec}))
+		result, err := exec.Flush()
+		require.NoError(t, err)
+		require.Equal(t, "0", vector.GetFixedAtNoTypeCheck[types.Decimal128](result[0], 0).Format(result[0].GetType().Scale))
+		result[0].Free(mp)
+		exec.Free()
+	})
+
+	t.Run("decimal128 width37 continuous interpolates fractional", func(t *testing.T) {
+		typ := types.New(types.T_decimal128, 37, 0)
+		zero, err := types.ParseDecimal128("0", typ.Width, typ.Scale)
+		require.NoError(t, err)
+		one, err := types.ParseDecimal128("1", typ.Width, typ.Scale)
+		require.NoError(t, err)
+		vec := buildFixedVec(t, mp, typ, []types.Decimal128{zero, one})
 		defer vec.Free(mp)
 		exec, err := makeOrderedPercentileExec(mp, AggIdOfPercentileCont, false, typ, orderedPercentileContinuous)
 		require.NoError(t, err)
 		require.NoError(t, exec.GroupGrow(1))
-		require.NoError(t, exec.SetExtraInformation(EncodeOrderedPercentileConfig([]byte("0"), false), 0))
+		require.NoError(t, exec.SetExtraInformation(EncodeOrderedPercentileConfig([]byte("0.5"), false), 0))
 		require.NoError(t, exec.BulkFill(0, []*vector.Vector{vec}))
 		result, err := exec.Flush()
 		require.NoError(t, err)
-		require.Equal(t, maxValue.Format(0), vector.GetFixedAtNoTypeCheck[types.Decimal128](result[0], 0).Format(result[0].GetType().Scale))
+		require.Equal(t, "0.5", vector.GetFixedAtNoTypeCheck[types.Decimal128](result[0], 0).Format(result[0].GetType().Scale))
 		result[0].Free(mp)
 		exec.Free()
 	})
 
-	t.Run("decimal128 max scale", func(t *testing.T) {
-		typ := types.New(types.T_decimal128, 38, 38)
-		one, err := types.ParseDecimal128("0.10000000000000000000000000000000000000", typ.Width, typ.Scale)
+	t.Run("decimal128 max supported scale", func(t *testing.T) {
+		typ := types.New(types.T_decimal128, 37, 37)
+		one, err := types.ParseDecimal128("0.1000000000000000000000000000000000000", typ.Width, typ.Scale)
 		require.NoError(t, err)
-		two, err := types.ParseDecimal128("0.20000000000000000000000000000000000000", typ.Width, typ.Scale)
+		two, err := types.ParseDecimal128("0.2000000000000000000000000000000000000", typ.Width, typ.Scale)
 		require.NoError(t, err)
 		vec := buildFixedVec(t, mp, typ, []types.Decimal128{one, two})
 		defer vec.Free(mp)
