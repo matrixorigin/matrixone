@@ -127,7 +127,13 @@ const (
 	IndexAlgoParamMaxIndexCapacity    = "max_index_capacity"
 	IndexAlgoParamQuantizerTrainLimit = "quantizer_train_limit"
 
+	// IndexAlgoParamPrefixLengths is the legacy, delimiter-separated encoding.
+	// It remains readable for metadata written by older versions.
 	IndexAlgoParamPrefixLengths = "prefix_lengths"
+	// IndexAlgoParamPrefixLengthsV2 stores a JSON object in a string value.
+	// Unlike the legacy colon/comma-separated value, it can represent every
+	// legal quoted column name without ambiguity.
+	IndexAlgoParamPrefixLengthsV2 = "prefix_lengths_v2"
 )
 
 func ParseIncludeColumnsValue(raw string) ([]string, error) {
@@ -298,8 +304,8 @@ func IndexParamsMapToJsonString(res map[string]string) (string, error) {
 }
 
 func AddIndexPrefixLengthsToParams(indexParams string, keyParts []*tree.KeyPart) (string, error) {
-	prefixLengths := IndexPrefixLengthsToString(keyParts)
-	if prefixLengths == "" {
+	prefixLengths := indexPrefixLengthsFromKeyParts(keyParts)
+	if len(prefixLengths) == 0 {
 		return indexParams, nil
 	}
 
@@ -311,15 +317,17 @@ func AddIndexPrefixLengthsToParams(indexParams string, keyParts []*tree.KeyPart)
 		}
 		params = existing
 	}
-	params[IndexAlgoParamPrefixLengths] = prefixLengths
+	if err := SetIndexPrefixLengthsInParamMap(params, prefixLengths); err != nil {
+		return "", err
+	}
 	return IndexParamsMapToJsonString(params)
 }
 
+// IndexPrefixLengthsToString returns the legacy delimiter-separated encoding.
+// New catalog metadata must be written through AddIndexPrefixLengthsToParams
+// or SetIndexPrefixLengthsInParamMap so delimiter-bearing identifiers select
+// the lossless v2 representation.
 func IndexPrefixLengthsToString(keyParts []*tree.KeyPart) string {
-	if len(keyParts) == 0 {
-		return ""
-	}
-
 	prefixLengths := make(map[string]int, len(keyParts))
 	for _, keyPart := range keyParts {
 		if keyPart == nil || keyPart.ColName == nil || keyPart.Length <= 0 {
@@ -327,6 +335,21 @@ func IndexPrefixLengthsToString(keyParts []*tree.KeyPart) string {
 		}
 		prefixLengths[keyPart.ColName.ColName()] = keyPart.Length
 	}
+	return indexPrefixLengthsMapToLegacyString(prefixLengths)
+}
+
+func indexPrefixLengthsFromKeyParts(keyParts []*tree.KeyPart) map[string]int {
+	prefixLengths := make(map[string]int, len(keyParts))
+	for _, keyPart := range keyParts {
+		if keyPart == nil || keyPart.ColName == nil || keyPart.Length <= 0 {
+			continue
+		}
+		prefixLengths[keyPart.ColName.ColName()] = keyPart.Length
+	}
+	return prefixLengths
+}
+
+func indexPrefixLengthsMapToLegacyString(prefixLengths map[string]int) string {
 	if len(prefixLengths) == 0 {
 		return ""
 	}
@@ -342,6 +365,34 @@ func IndexPrefixLengthsToString(keyParts []*tree.KeyPart) string {
 		encoded = append(encoded, fmt.Sprintf("%s:%d", part, prefixLengths[part]))
 	}
 	return strings.Join(encoded, ",")
+}
+
+// SetIndexPrefixLengthsInParamMap writes prefix-length metadata to params.
+// Ordinary names keep the legacy representation for stable catalog output;
+// names containing a legacy delimiter use the lossless v2 representation.
+func SetIndexPrefixLengthsInParamMap(params map[string]string, prefixLengths map[string]int) error {
+	if params == nil {
+		return moerr.NewInvalidInputNoCtx("nil index params map")
+	}
+	delete(params, IndexAlgoParamPrefixLengths)
+	delete(params, IndexAlgoParamPrefixLengthsV2)
+	if len(prefixLengths) == 0 {
+		return nil
+	}
+
+	for part := range prefixLengths {
+		if strings.ContainsAny(part, ":,") {
+			encoded, err := json.Marshal(prefixLengths)
+			if err != nil {
+				return err
+			}
+			params[IndexAlgoParamPrefixLengthsV2] = string(encoded)
+			return nil
+		}
+	}
+
+	params[IndexAlgoParamPrefixLengths] = indexPrefixLengthsMapToLegacyString(prefixLengths)
+	return nil
 }
 
 func IndexPrefixLengthsFromParams(indexParams string) map[string]int {
@@ -361,11 +412,26 @@ func IndexPrefixLengthsFromParamsWithError(indexParams string) (map[string]int, 
 		return nil, err
 	}
 
+	if encoded, ok := params[IndexAlgoParamPrefixLengthsV2]; ok {
+		if encoded == "" {
+			return nil, nil
+		}
+		prefixLengths := make(map[string]int)
+		if err := json.Unmarshal([]byte(encoded), &prefixLengths); err != nil {
+			return nil, moerr.NewInvalidInputNoCtxf("invalid v2 index prefix lengths %q", encoded)
+		}
+		for part, length := range prefixLengths {
+			if part == "" || length <= 0 {
+				return nil, moerr.NewInvalidInputNoCtxf("invalid v2 index prefix length %q", encoded)
+			}
+		}
+		return prefixLengths, nil
+	}
+
 	encoded := params[IndexAlgoParamPrefixLengths]
 	if encoded == "" {
 		return nil, nil
 	}
-
 	prefixLengths := make(map[string]int)
 	for _, item := range strings.Split(encoded, ",") {
 		part, lengthText, ok := strings.Cut(item, ":")

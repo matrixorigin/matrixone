@@ -32,9 +32,9 @@ func TestBuildCheckConstraintsProtocolGate(t *testing.T) {
 
 	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion11)
 	_, err := builder.buildCheckConstraints(&tree.TableFunction{Func: &tree.FuncExpr{}}, ctx, nil, nil)
-	require.ErrorContains(t, err, "protocol version 13")
+	require.ErrorContains(t, err, "protocol version 14")
 
-	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion13)
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion14)
 	nodeID, err := builder.buildCheckConstraints(&tree.TableFunction{Func: &tree.FuncExpr{}}, ctx, nil, nil)
 	require.NoError(t, err)
 	require.Equal(t, planpb.Node_FUNCTION_SCAN, builder.qry.Nodes[nodeID].NodeType)

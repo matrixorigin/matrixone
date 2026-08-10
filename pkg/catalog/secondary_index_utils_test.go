@@ -109,6 +109,14 @@ func TestIndexPrefixLengthsFromParamsWithError(t *testing.T) {
 			},
 		},
 		{
+			name:   "valid delimiter-bearing v2 prefix lengths",
+			params: `{"prefix_lengths_v2":"{\"a:b\":2,\"c,d\":3}"}`,
+			want: map[string]int{
+				"a:b": 2,
+				"c,d": 3,
+			},
+		},
+		{
 			name:      "invalid json",
 			params:    "{bad json",
 			wantError: true,
@@ -126,6 +134,11 @@ func TestIndexPrefixLengthsFromParamsWithError(t *testing.T) {
 		{
 			name:      "non positive length",
 			params:    `{"prefix_lengths":"t:0"}`,
+			wantError: true,
+		},
+		{
+			name:      "invalid v2 payload",
+			params:    `{"prefix_lengths_v2":"not-json"}`,
 			wantError: true,
 		},
 	}
@@ -241,6 +254,25 @@ func TestAddIndexPrefixLengthsToParams(t *testing.T) {
 		got, err := AddIndexPrefixLengthsToParams("", keyParts)
 		require.NoError(t, err)
 		require.Equal(t, map[string]int{"a": 10, "b": 20}, IndexPrefixLengthsFromParams(got))
+	})
+
+	t.Run("delimiter-bearing names use v2 metadata", func(t *testing.T) {
+		got, err := AddIndexPrefixLengthsToParams("", []*tree.KeyPart{
+			newPrefixKeyPart("a:b", 2),
+			newPrefixKeyPart("c,d", 3),
+		})
+		require.NoError(t, err)
+
+		params, err := IndexParamsStringToMap(got)
+		require.NoError(t, err)
+		require.NotContains(t, params, IndexAlgoParamPrefixLengths)
+		require.JSONEq(t, `{"a:b":2,"c,d":3}`, params[IndexAlgoParamPrefixLengthsV2])
+		require.Equal(t, map[string]int{"a:b": 2, "c,d": 3}, IndexPrefixLengthsFromParams(got))
+	})
+
+	t.Run("nil params map is rejected", func(t *testing.T) {
+		err := SetIndexPrefixLengthsInParamMap(nil, map[string]int{"a": 1})
+		require.Error(t, err)
 	})
 }
 

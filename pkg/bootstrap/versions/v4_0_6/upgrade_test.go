@@ -63,14 +63,14 @@ func TestUpgradeEntries(t *testing.T) {
 	require.Equal(t, "CHECK_CONSTRAINTS", checkConstraints.TableName)
 	require.Equal(t, versions.CREATE_VIEW, checkConstraints.UpgType)
 	require.Equal(t, sysview.InformationSchemaCheckConstraintsDDL, checkConstraints.UpgSql)
-	require.Equal(t, int64(defines.MORPCVersion13), checkConstraints.RequiredProtocolVersion)
+	require.Equal(t, int64(defines.MORPCVersion14), checkConstraints.RequiredProtocolVersion)
 	require.Contains(t, strings.ToLower(checkConstraints.PreSql), "drop view if exists information_schema.check_constraints")
 	tableConstraints := tenantUpgEntries[10]
 	require.Equal(t, sysview.InformationDBConst, tableConstraints.Schema)
 	require.Equal(t, "TABLE_CONSTRAINTS", tableConstraints.TableName)
 	require.Equal(t, versions.MODIFY_VIEW, tableConstraints.UpgType)
 	require.Equal(t, sysview.InformationSchemaTableConstraintsDDL, tableConstraints.UpgSql)
-	require.Equal(t, int64(defines.MORPCVersion13), tableConstraints.RequiredProtocolVersion)
+	require.Equal(t, int64(defines.MORPCVersion14), tableConstraints.RequiredProtocolVersion)
 	require.Contains(t, strings.ToLower(tableConstraints.PreSql), "drop view if exists information_schema.table_constraints")
 }
 
@@ -301,7 +301,71 @@ func TestVersionHandleMetadata(t *testing.T) {
 	require.Equal(t, "4.0.5", meta.MinUpgradeVersion)
 	require.Equal(t, versions.Yes, meta.UpgradeTenant)
 	require.Equal(t, versions.Yes, meta.UpgradeCluster)
-	require.Equal(t, uint32(len(tenantUpgEntries)+len(clusterUpgEntries)), meta.VersionOffset)
+	require.Equal(t, uint32(len(tenantUpgEntries)+len(clusterUpgEntries))+legacyInvisibleIndexUpgradeOffset, meta.VersionOffset)
+}
+
+func TestLegacyInvisibleIndexMetadataUpgrade(t *testing.T) {
+	query := legacyInvisibleIndexDefinitionsQuery(9)
+	require.Contains(t, query, "tbl.account_id = 9")
+	require.Contains(t, query, "idx.is_visible = 0")
+	require.Contains(t, query, "idx.hidden = 0")
+	require.Contains(t, query, "idx.type <> 'PRIMARY'")
+	definitions := newLegacyInvisibleIndexResult(t, [][]string{
+		{"db", "tbl", "idx_a"},
+		{"db", "tbl", "idx_a"}, // Defensive duplicate across index metadata rows.
+		{"db`name", "tbl`name", "idx`name"},
+	})
+	var executed []string
+	txnExecutor := newVersionTxnExecutor(t, func(sql string) (executor.Result, error) {
+		if sql == query {
+			return definitions, nil
+		}
+		executed = append(executed, sql)
+		return executor.Result{}, nil
+	})
+
+	require.NoError(t, upgradeLegacyInvisibleIndexMetadata(9, txnExecutor))
+	require.Equal(t, []string{
+		"ALTER TABLE `db`.`tbl` ALTER INDEX `idx_a` INVISIBLE",
+		"ALTER TABLE `db``name`.`tbl``name` ALTER INDEX `idx``name` INVISIBLE",
+	}, executed)
+}
+
+func TestLegacyInvisibleIndexMetadataUpgradeRejectsInvalidCatalogRows(t *testing.T) {
+	txnExecutor := newVersionTxnExecutor(t, func(sql string) (executor.Result, error) {
+		require.Equal(t, legacyInvisibleIndexDefinitionsQuery(9), sql)
+		return newLegacyInvisibleIndexResult(t, [][]string{{"db", "tbl", ""}}), nil
+	})
+
+	err := upgradeLegacyInvisibleIndexMetadata(9, txnExecutor)
+	require.ErrorContains(t, err, "invalid legacy invisible-index catalog result")
+}
+
+func TestLegacyInvisibleIndexMetadataUpgradeReturnsAlterError(t *testing.T) {
+	alterErr := errors.New("alter invisible index failed")
+	query := legacyInvisibleIndexDefinitionsQuery(9)
+	txnExecutor := newVersionTxnExecutor(t, func(sql string) (executor.Result, error) {
+		if sql == query {
+			return newLegacyInvisibleIndexResult(t, [][]string{{"db", "tbl", "idx_a"}}), nil
+		}
+		return executor.Result{}, alterErr
+	})
+
+	err := upgradeLegacyInvisibleIndexMetadata(9, txnExecutor)
+	require.ErrorIs(t, err, alterErr)
+	require.ErrorContains(t, err, "migrate invisible index idx_a on db.tbl")
+}
+
+func TestLegacyInvisibleIndexMetadataUpgradeReturnsQueryError(t *testing.T) {
+	queryErr := errors.New("list invisible indexes failed")
+	txnExecutor := newVersionTxnExecutor(t, func(sql string) (executor.Result, error) {
+		require.Equal(t, legacyInvisibleIndexDefinitionsQuery(9), sql)
+		return executor.Result{}, queryErr
+	})
+
+	err := upgradeLegacyInvisibleIndexMetadata(9, txnExecutor)
+	require.ErrorIs(t, err, queryErr)
+	require.ErrorContains(t, err, "list legacy invisible indexes for tenant 9")
 }
 
 func TestTenantViewDefinitionChecks(t *testing.T) {
@@ -391,7 +455,7 @@ func TestVersionHandleLifecycleWithNoLegacyDefinitions(t *testing.T) {
 		if err := Handler.HandleTenantUpgrade(context.Background(), 9, txnExecutor); err != nil {
 			t.Fatalf("tenant upgrade: %v", err)
 		}
-		if len(executed) == 0 || executed[len(executed)-1] != legacyForeignKeyReferencedIndexDefinitionsSQL {
+		if len(executed) == 0 || executed[len(executed)-1] != legacyInvisibleIndexDefinitionsQuery(9) {
 			t.Fatalf("unexpected SQL: %v", executed)
 		}
 		if err := Handler.HandleClusterUpgrade(context.Background(), txnExecutor); err != nil {
@@ -887,6 +951,28 @@ func newLegacyForeignKeyIndexResult(t *testing.T, rows [][]string) executor.Resu
 		}
 		if err := executor.AppendStringRows(result, column, values); err != nil {
 			t.Fatalf("append legacy index column %d: %v", column, err)
+		}
+	}
+	return result.GetResult()
+}
+
+func newLegacyInvisibleIndexResult(t *testing.T, rows [][]string) executor.Result {
+	t.Helper()
+	mp := mpool.MustNewZeroNoFixed()
+	t.Cleanup(func() { mpool.DeleteMPool(mp) })
+	result := executor.NewMemResult([]types.Type{
+		types.T_varchar.ToType(),
+		types.T_varchar.ToType(),
+		types.T_varchar.ToType(),
+	}, mp)
+	result.NewBatchWithRowCount(len(rows))
+	for column := 0; column < 3; column++ {
+		values := make([]string, len(rows))
+		for row := range rows {
+			values[row] = rows[row][column]
+		}
+		if err := executor.AppendStringRows(result, column, values); err != nil {
+			t.Fatalf("append legacy invisible-index column %d: %v", column, err)
 		}
 	}
 	return result.GetResult()

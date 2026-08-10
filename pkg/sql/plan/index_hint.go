@@ -119,7 +119,7 @@ func validateIndexHintNames(ctx context.Context, tableDef *plan.TableDef, names 
 		existing[strings.ToLower(PrimaryKeyName)] = strings.ToLower(PrimaryKeyName)
 	}
 	for _, idx := range tableDef.Indexes {
-		if idx == nil || !idx.TableExist {
+		if idx == nil || !idx.TableExist || !catalog.IsIndexOptimizerEligible(idx) {
 			continue
 		}
 		lowerName := strings.ToLower(idx.IndexName)
@@ -209,6 +209,7 @@ func (builder *QueryBuilder) filterRegularIndexesByJoinHints(node *plan.Node, in
 }
 
 func (builder *QueryBuilder) filterRegularIndexesByHints(node *plan.Node, indexes []*plan.IndexDef, getScope func(*indexHintSet) indexHintScopeSet) []*plan.IndexDef {
+	indexes = filterOptimizerEligibleIndexes(indexes)
 	if builder == nil || node == nil || len(indexes) == 0 {
 		return indexes
 	}
@@ -223,6 +224,28 @@ func (builder *QueryBuilder) filterRegularIndexesByHints(node *plan.Node, indexe
 	return filterIndexesByHintScope(indexes, scope)
 }
 
+func filterOptimizerEligibleIndexes(indexes []*plan.IndexDef) []*plan.IndexDef {
+	firstInvisible := -1
+	for i, indexDef := range indexes {
+		if !catalog.IsIndexOptimizerEligible(indexDef) {
+			firstInvisible = i
+			break
+		}
+	}
+	if firstInvisible == -1 {
+		return indexes
+	}
+
+	visible := make([]*plan.IndexDef, 0, len(indexes)-1)
+	visible = append(visible, indexes[:firstInvisible]...)
+	for _, indexDef := range indexes[firstInvisible+1:] {
+		if catalog.IsIndexOptimizerEligible(indexDef) {
+			visible = append(visible, indexDef)
+		}
+	}
+	return visible
+}
+
 func filterIndexesByHintScope(indexes []*plan.IndexDef, scope indexHintScopeSet) []*plan.IndexDef {
 	if scope.empty() {
 		return indexes
@@ -232,22 +255,28 @@ func filterIndexesByHintScope(indexes []*plan.IndexDef, scope indexHintScopeSet)
 		if idx == nil {
 			continue
 		}
-		name := strings.ToLower(idx.IndexName)
-		if _, ignored := scope.ignore[name]; ignored {
+		if !indexAllowedByHintScope(idx.IndexName, scope) {
 			continue
-		}
-		if scope.forceSpecified {
-			if _, ok := scope.force[name]; !ok {
-				continue
-			}
-		} else if scope.useSpecified {
-			if _, ok := scope.use[name]; !ok {
-				continue
-			}
 		}
 		filtered = append(filtered, idx)
 	}
 	return filtered
+}
+
+func indexAllowedByHintScope(indexName string, scope indexHintScopeSet) bool {
+	name := strings.ToLower(indexName)
+	if _, ignored := scope.ignore[name]; ignored {
+		return false
+	}
+	if scope.forceSpecified {
+		_, ok := scope.force[name]
+		return ok
+	}
+	if scope.useSpecified {
+		_, ok := scope.use[name]
+		return ok
+	}
+	return true
 }
 
 func (builder *QueryBuilder) regularIndexScanAllowedByOrderHints(node *plan.Node) bool {
@@ -258,19 +287,7 @@ func (builder *QueryBuilder) regularIndexScanAllowedByOrderHints(node *plan.Node
 	if hintSet == nil || hintSet.order.empty() {
 		return true
 	}
-	name := strings.ToLower(node.IndexScanInfo.IndexName)
-	if _, ignored := hintSet.order.ignore[name]; ignored {
-		return false
-	}
-	if hintSet.order.forceSpecified {
-		_, ok := hintSet.order.force[name]
-		return ok
-	}
-	if hintSet.order.useSpecified {
-		_, ok := hintSet.order.use[name]
-		return ok
-	}
-	return true
+	return indexAllowedByHintScope(node.IndexScanInfo.IndexName, hintSet.order)
 }
 
 func (builder *QueryBuilder) inheritIndexHints(dstNodeID, srcNodeID int32) {

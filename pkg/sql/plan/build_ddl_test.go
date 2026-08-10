@@ -2219,6 +2219,83 @@ func TestBuildRegularSecondaryIndexPersistsPrefixLengths(t *testing.T) {
 	}
 }
 
+func TestBuildIndexPersistsExplicitVisibility(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	tests := []struct {
+		name    string
+		sql     string
+		visible bool
+	}{
+		{
+			name:    "default regular index is visible",
+			sql:     "CREATE TABLE idx_visibility_default (id INT PRIMARY KEY, a INT, KEY idx_a(a))",
+			visible: true,
+		},
+		{
+			name:    "explicit visible regular index",
+			sql:     "CREATE TABLE idx_visibility_visible (id INT PRIMARY KEY, a INT, KEY idx_a(a) VISIBLE)",
+			visible: true,
+		},
+		{
+			name:    "invisible regular index",
+			sql:     "CREATE TABLE idx_visibility_invisible (id INT PRIMARY KEY, a INT, KEY idx_a(a) INVISIBLE)",
+			visible: false,
+		},
+		{
+			name:    "invisible unique index",
+			sql:     "CREATE TABLE idx_visibility_unique (id INT PRIMARY KEY, a INT, UNIQUE KEY idx_a(a) INVISIBLE)",
+			visible: false,
+		},
+		{
+			name:    "invisible fulltext index",
+			sql:     "CREATE TABLE idx_visibility_fulltext (id INT PRIMARY KEY, body TEXT, FULLTEXT KEY idx_body(body) INVISIBLE)",
+			visible: false,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			logicPlan, err := runOneStmt(mock, t, tc.sql)
+			require.NoError(t, err)
+			indexes := logicPlan.GetDdl().GetCreateTable().GetTableDef().GetIndexes()
+			require.NotEmpty(t, indexes)
+			for _, indexDef := range indexes {
+				require.True(t, indexDef.VisibilitySet)
+				require.Equal(t, tc.visible, indexDef.Visible)
+			}
+		})
+	}
+}
+
+func TestBuildPrefixIndexV2ProtocolGate(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	proc := mock.CurrentContext().GetProcess()
+	rt := moruntime.ServiceRuntime(proc.GetService())
+	original, hadOriginal := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	defer func() {
+		if hadOriginal {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, original)
+		} else {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+		}
+	}()
+
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion12)
+	_, err := runOneStmt(mock, t,
+		"CREATE TABLE prefix_v1_ok (id INT PRIMARY KEY, name VARCHAR(32), INDEX idx_name(name(4)))")
+	require.NoError(t, err)
+	_, err = runOneStmt(mock, t,
+		"CREATE TABLE prefix_v2_blocked (id INT PRIMARY KEY, `head:line` VARCHAR(32), INDEX idx_name(`head:line`(4)))")
+	require.ErrorContains(t, err, "protocol version 13")
+
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion13)
+	logicPlan, err := runOneStmt(mock, t,
+		"CREATE TABLE prefix_v2_ok (id INT PRIMARY KEY, `head:line` VARCHAR(32), INDEX idx_name(`head:line`(4)))")
+	require.NoError(t, err)
+	indexDef := logicPlan.GetDdl().GetCreateTable().GetTableDef().GetIndexes()[0]
+	require.Equal(t, map[string]int{"head:line": 4}, catalog.IndexPrefixLengthsFromParams(indexDef.IndexAlgoParams))
+}
+
 func TestBuildVectorIndexAllowsIvfFlatOnly(t *testing.T) {
 	mock := NewMockOptimizer(false)
 	sqls := []string{
