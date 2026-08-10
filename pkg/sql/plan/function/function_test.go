@@ -115,6 +115,57 @@ func Test_fixedTypeCastRule1(t *testing.T) {
 	}
 }
 
+func TestComparisonTypeCastRulePreservesTextCharset(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		left     types.Type
+		right    types.Type
+		leftOut  uint8
+		rightOut uint8
+		hasCast  bool
+	}{
+		{
+			name:     "legacy column and default parameter",
+			left:     types.NewWithCharset(types.T_varchar, 12, 0, types.CharsetLegacy),
+			right:    types.T_varchar.ToType(),
+			leftOut:  types.CharsetLegacy,
+			rightOut: types.CharsetLegacy,
+			hasCast:  true,
+		},
+		{
+			name:     "utf8mb4 bin column and default literal",
+			left:     types.NewWithCharset(types.T_varchar, 12, 0, types.CharsetUTF8MB4Bin),
+			right:    types.T_varchar.ToType(),
+			leftOut:  types.CharsetUTF8MB4Bin,
+			rightOut: types.CharsetUTF8MB4Bin,
+			hasCast:  true,
+		},
+		{
+			name:     "legacy column and opaque binary value share byte domain",
+			left:     types.NewWithCharset(types.T_varchar, 12, 0, types.CharsetLegacy),
+			right:    types.NewWithCharset(types.T_varchar, 12, 0, types.CharsetBinary),
+			leftOut:  types.CharsetLegacy,
+			rightOut: types.CharsetBinary,
+			hasCast:  false,
+		},
+		{
+			name:     "ordinary general ci operands",
+			left:     types.T_varchar.ToType(),
+			right:    types.T_text.ToType(),
+			leftOut:  types.CharsetUTF8,
+			rightOut: types.CharsetUTF8,
+			hasCast:  true,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			hasCast, left, right := comparisonTypeCastRule(test.left, test.right)
+			require.Equal(t, test.hasCast, hasCast)
+			require.Equal(t, test.leftOut, left.Charset)
+			require.Equal(t, test.rightOut, right.Charset)
+		})
+	}
+}
+
 func Test_fixedTypeCastRule2(t *testing.T) {
 	inputs := []struct {
 		shouldCast bool
