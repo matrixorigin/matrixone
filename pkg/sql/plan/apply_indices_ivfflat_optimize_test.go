@@ -552,7 +552,7 @@ func TestApplyIndicesForSortUsingIvfflat_OuterScanIndexOnlyUsesOptimizedPk(t *te
 		Name: tableName,
 		Cols: []*plan.ColDef{
 			{Name: "id", Typ: plan.Type{Id: int32(types.T_int64)}},
-			{Name: "file_id", Typ: plan.Type{Id: int32(types.T_varchar)}},
+			{Name: "file_id", Typ: plan.Type{Id: int32(types.T_int64)}},
 			{Name: "v", Typ: plan.Type{Id: int32(types.T_array_float32)}},
 		},
 		Pkey: &plan.PrimaryKeyDef{
@@ -607,13 +607,10 @@ func TestApplyIndicesForSortUsingIvfflat_OuterScanIndexOnlyUsesOptimizedPk(t *te
 						Func: &plan.ObjectRef{ObjName: "="},
 						Args: []*plan.Expr{
 							{
-								Typ:  plan.Type{Id: int32(types.T_varchar)},
+								Typ:  plan.Type{Id: int32(types.T_int64)},
 								Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 1, Name: "file_id"}},
 							},
-							{
-								Typ:  plan.Type{Id: int32(types.T_varchar)},
-								Expr: makePlan2StringConstExprWithType("file01").Expr,
-							},
+							makePlan2Int64ConstExprWithType(1),
 						},
 					},
 				},
