@@ -2036,6 +2036,45 @@ func TestParamExpressionExecutorDoesNotCacheLookupFailure(t *testing.T) {
 	require.Equal(t, "recovered", result.GetStringAt(0))
 }
 
+func TestParamExpressionExecutorReevaluatesAfterResultTransfer(t *testing.T) {
+	tests := []struct {
+		name  string
+		null  bool
+		value string
+	}{
+		{name: "non-null", value: "repeated"},
+		{name: "null", null: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			defer proc.Free()
+
+			params := vector.NewVec(types.T_varchar.ToType())
+			require.NoError(t, vector.AppendBytes(params, []byte(test.value), test.null, proc.Mp()))
+			proc.SetPrepareParams(params)
+			defer func() {
+				proc.SetPrepareParams(nil)
+				params.Free(proc.Mp())
+			}()
+
+			executor := NewParamExpressionExecutor(proc.Mp(), 0, types.T_varchar.ToType())
+			defer executor.Free()
+
+			for i := 0; i < 2; i++ {
+				result, err := executor.EvalWithoutResultReusing(proc, nil, nil)
+				require.NoError(t, err)
+				require.NotNil(t, result)
+				require.Equal(t, test.null, result.IsNull(0))
+				if !test.null {
+					require.Equal(t, test.value, result.GetStringAt(0))
+				}
+				result.Free(proc.Mp())
+			}
+		})
+	}
+}
+
 func TestJsonOrderingWithTextPrepareParamExact(t *testing.T) {
 	tests := []struct {
 		name       string

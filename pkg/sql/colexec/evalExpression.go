@@ -450,9 +450,11 @@ func (expr *ParamExpressionExecutor) EvalWithoutResultReusing(proc *process.Proc
 	}
 	if vec == expr.null {
 		expr.null = nil
-		return vec, nil
+	} else {
+		expr.vec = nil
 	}
-	expr.vec = nil
+	expr.folded = false
+	expr.foldedNull = false
 	return vec, nil
 }
 
