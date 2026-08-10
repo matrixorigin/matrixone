@@ -295,11 +295,12 @@ func genAsSelectCols(ctx CompilerContext, stmt *tree.Select, isPrepareStmt bool)
 
 	cols := make([]*plan.ColDef, len(rootNode.ProjectList))
 	for i, expr := range rootNode.ProjectList {
-		typ := &expr.Typ
+		typ := expr.Typ
 		provenance := outputColumnProvenance[i]
 		if provenance.State == ProvenanceSingleSource && provenance.Source != nil {
 			if isEnumOrSetPlanType(&provenance.Source.Metadata.Typ) {
-				typ = &provenance.Source.Metadata.Typ
+				typ = provenance.Source.Metadata.Typ
+				typ.NotNullable = expr.Typ.NotNullable
 			}
 		}
 		nullAbility := ctasExprCanBeNull(expr)
@@ -312,14 +313,14 @@ func genAsSelectCols(ctx CompilerContext, stmt *tree.Select, isPrepareStmt bool)
 					defaultDef.NullAbility = nullAbility
 					if defaultDef.Expr == nil && defaultDef.OriginString != "" {
 						defaultDef, err = buildCTASDefaultFromOrigin(
-							ctx, *typ, nullAbility, defaultDef.OriginString)
+							ctx, typ, nullAbility, defaultDef.OriginString)
 						if err != nil {
 							return nil, nil, err
 						}
 					}
 				}
 			case CTASDefaultUseTypeDefault:
-				defaultDef, err = buildCTASDefaultForView(ctx, *typ, nullAbility)
+				defaultDef, err = buildCTASDefaultForView(ctx, typ, nullAbility)
 				if err != nil {
 					return nil, nil, err
 				}
@@ -329,7 +330,7 @@ func genAsSelectCols(ctx CompilerContext, stmt *tree.Select, isPrepareStmt bool)
 		cols[i] = &plan.ColDef{
 			Name:    strings.ToLower(bindCtx.headings[i]),
 			Alg:     plan.CompressType_Lz4,
-			Typ:     *typ,
+			Typ:     typ,
 			Default: defaultDef,
 		}
 	}

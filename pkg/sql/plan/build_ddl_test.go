@@ -920,6 +920,8 @@ func TestBuildCTASPreservesMySQLSpecialColumnTypes(t *testing.T) {
 	require.GreaterOrEqual(t, len(cols), 3)
 	require.True(t, isEnumPlanType(&cols[0].Typ))
 	require.Equal(t, "low,medium,high", cols[0].Typ.GetEnumvalues())
+	require.True(t, cols[0].Typ.GetNotNullable())
+	require.False(t, cols[0].GetDefault().GetNullAbility())
 	require.True(t, isSetPlanType(&cols[1].Typ))
 	require.Equal(t, "red,green,blue", cols[1].Typ.GetEnumvalues())
 	require.Equal(t, int32(types.T_varchar), cols[2].Typ.GetId())
@@ -2436,6 +2438,23 @@ func TestCreateTableAsSelectPropagatesNullExtension(t *testing.T) {
 	}
 }
 
+func TestCreateTableAsSelectPreservesSpecialTypeNullability(t *testing.T) {
+	ctx := NewMockCompilerContext(false)
+	addMySQLSpecialTypeColumns(ctx)
+	stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL,
+		"create table copied as select n.priority from nation n right join region r on n.n_regionkey = r.r_regionkey", 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+
+	p, err := BuildPlan(ctx, stmt, false)
+	require.NoError(t, err)
+	col := p.GetDdl().GetCreateTable().GetTableDef().GetCols()[0]
+	require.True(t, isEnumPlanType(&col.Typ))
+	require.Equal(t, "low,medium,high", col.Typ.GetEnumvalues())
+	require.False(t, col.Typ.GetNotNullable())
+	require.True(t, col.GetDefault().GetNullAbility())
+}
+
 func TestCreateTableAsSelectWithTemporalFractionalSeconds(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -2530,6 +2549,15 @@ func TestPrepareCreateTableAsSelectWithParams(t *testing.T) {
 	prepare = prepared.GetDcl().GetPrepare()
 	require.Len(t, prepare.GetParamTypes(), 1)
 	require.NotEmpty(t, prepare.GetSchemas())
+	require.False(t, prepare.GetPlan().GetDdl().GetCreateTable().GetTableDef().GetCols()[0].GetDefault().GetNullAbility())
+
+	prepared, err = runOneStmt(mock, t, "prepare stmt_ctas_join from 'create table ctas_join as select n.N_NATIONKEY, r.R_REGIONKEY from NATION n left join REGION r on n.N_REGIONKEY = r.R_REGIONKEY where n.N_NATIONKEY = ?'")
+	require.NoError(t, err)
+	prepare = prepared.GetDcl().GetPrepare()
+	createTable := prepare.GetPlan().GetDdl().GetCreateTable()
+	require.NotNil(t, prepare.GetPlan().GetDdl().GetQuery())
+	require.False(t, createTable.GetTableDef().GetCols()[0].GetDefault().GetNullAbility())
+	require.True(t, createTable.GetTableDef().GetCols()[1].GetDefault().GetNullAbility())
 
 	_, err = runOneStmt(mock, t, "create table ctas_unprepared as select ? as a")
 	require.ErrorContains(t, err, "only prepare statement can use ? expr")
