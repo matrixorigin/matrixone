@@ -917,7 +917,7 @@ create table grouping_extension_rollup_ctas as select a, b, sum(v) as s from gro
 select column_name, is_nullable from information_schema.columns where table_schema = database() and table_name = 'grouping_extension_rollup_ctas' and column_name in ('a', 'b') order by ordinal_position;
 select count(*) from grouping_extension_rollup_ctas;
 select count(*) from grouping_extension_rollup_ctas where a is null or b is null;
-create table grouping_extension_partial_sets_ctas as select a, b, sum(v) as s from grouping_extension_metadata_src group by grouping sets ((a, b), (a));
+create table grouping_extension_partial_sets_ctas as select a, b, count(*) as c from grouping_extension_metadata_src group by grouping sets ((a, b), (a));
 select column_name, is_nullable from information_schema.columns where table_schema = database() and table_name = 'grouping_extension_partial_sets_ctas' and column_name in ('a', 'b') order by ordinal_position;
 select count(*) from grouping_extension_partial_sets_ctas where a is null;
 select count(*) from grouping_extension_partial_sets_ctas where b is null;

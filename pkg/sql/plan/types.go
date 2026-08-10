@@ -544,9 +544,9 @@ type BindContext struct {
 // groupOutputType describes a group key after aggregation. A grouping-set
 // branch emits a synthetic NULL for every inactive key, independent of the
 // source expression's nullability.
-func (ctx *BindContext) groupOutputType(groupPos int32) Type {
-	typ := ctx.groups[groupPos].Typ
-	if groupPos >= 0 && int(groupPos) < len(ctx.groupingFlag) && !ctx.groupingFlag[groupPos] {
+func (bc *BindContext) groupOutputType(groupPos int32) Type {
+	typ := bc.groups[groupPos].Typ
+	if groupPos >= 0 && int(groupPos) < len(bc.groupingFlag) && !bc.groupingFlag[groupPos] {
 		typ.NotNullable = false
 	}
 	return typ
