@@ -482,14 +482,15 @@ type BindContext struct {
 	windows    []*plan.Expr
 	times      []*plan.Expr
 
-	groupByAst      map[string]int32
-	groupByParamAst map[string]int32
-	aggregateByAst  map[string]int32
-	sampleByAst     map[string]int32
-	windowByAst     map[string]int32
-	projectByExpr   map[string]int32
-	timeByAst       map[string]int32
-	whereFilters    []*plan.Expr
+	groupByAst          map[string]int32
+	groupByCanonicalAst map[string]int32
+	groupByParamAst     map[string]int32
+	aggregateByAst      map[string]int32
+	sampleByAst         map[string]int32
+	windowByAst         map[string]int32
+	projectByExpr       map[string]int32
+	timeByAst           map[string]int32
+	whereFilters        []*plan.Expr
 
 	projectColByAst map[string]int32
 

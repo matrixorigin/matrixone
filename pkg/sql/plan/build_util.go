@@ -336,6 +336,10 @@ func applyDefaultAndColumnAttributesToType(
 	var columnCollation string
 	for _, attr := range attrs {
 		switch attribute := attr.(type) {
+		case *tree.AttributeVisable:
+			if !attribute.Is {
+				return moerr.NewNotSupported(ctx, "invisible columns")
+			}
 		case *tree.AttributeCharset:
 			columnCharset = attribute.Charset
 		case *tree.AttributeCollate:
