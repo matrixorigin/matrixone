@@ -369,6 +369,10 @@ message IndexDef {
   string index_algo_params = 12;
   // Logical INCLUDE columns of the index, letter case: lower.
   repeated string included_columns = 13;
+  // True when visible contains an initialized visibility value. Legacy
+  // IndexDefs predate optimizer visibility enforcement and omit this marker;
+  // they remain visible for backward compatibility.
+  bool visibility_set = 14;
 }
 
 message ForeignKeyDef {
