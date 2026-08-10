@@ -16,8 +16,10 @@ package table_function
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -29,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/features"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
@@ -427,4 +430,45 @@ func TestCheckConstraintsLimitIsHonoredBeforeStreaming(t *testing.T) {
 func TestCheckConstraintCatalogQueryIsNotSourceLimited(t *testing.T) {
 	require.NotContains(t, checkConstraintCatalogQuery, " LIMIT ")
 	require.NotContains(t, checkConstraintCatalogQuery, " limit ")
+}
+
+func TestCheckConstraintsResetDoesNotBlockAfterExecutorError(t *testing.T) {
+	proc := testutil.NewProc(t)
+	state := &checkConstraintsState{}
+
+	originalRunStreamingSQL := checkConstraintRunStreamingSQL
+	defer func() {
+		checkConstraintRunStreamingSQL = originalRunStreamingSQL
+	}()
+
+	started := make(chan struct{})
+	executorErr := errors.New("executor stream failed")
+	checkConstraintRunStreamingSQL = func(
+		ctx context.Context,
+		_ *sqlexec.SqlProcess,
+		_ string,
+		_ chan executor.Result,
+		errCh chan error,
+	) (executor.Result, error) {
+		close(started)
+		errCh <- executorErr
+		<-ctx.Done()
+		return executor.Result{}, executorErr
+	}
+
+	require.NoError(t, state.startStreaming(proc))
+	<-started
+
+	done := make(chan struct{})
+	go func() {
+		state.reset(nil, proc)
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("reset blocked while stopping failed check constraints stream")
+	}
+	require.False(t, state.streaming)
 }

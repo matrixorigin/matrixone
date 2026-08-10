@@ -50,6 +50,8 @@ var checkConstraintCatalogQuery = "SELECT tbl.reldatabase, tbl.relname, tbl.rel_
 	catalog.NonTemporaryTableSQLPredicate("tbl") +
 	" AND tbl.relkind = '" + catalog.SystemOrdinaryRel + "'"
 
+var checkConstraintRunStreamingSQL = sqlexec.RunStreamingSql
+
 type checkConstraintRow struct {
 	schema         string
 	table          string
@@ -217,24 +219,55 @@ func (s *checkConstraintsState) startStreaming(proc *process.Process) error {
 	s.streamDone = make(chan struct{})
 	s.streaming = true
 
+	streamCh := s.streamCh
+	errCh := s.errCh
+	streamDone := s.streamDone
 	go func() {
-		defer close(s.streamCh)
-		defer close(s.streamDone)
-		_, err := sqlexec.RunStreamingSql(
+		defer close(streamCh)
+		defer close(streamDone)
+
+		executorErrCh := make(chan error, 1)
+		_, err := checkConstraintRunStreamingSQL(
 			ctx,
 			sqlexec.NewSqlProcess(proc),
 			checkConstraintCatalogQuery,
-			s.streamCh,
-			s.errCh,
+			streamCh,
+			executorErrCh,
 		)
+		if executorErr := drainCheckConstraintExecutorError(executorErrCh); executorErr != nil {
+			err = executorErr
+		}
 		if err != nil {
-			select {
-			case s.errCh <- err:
-			case <-ctx.Done():
-			}
+			publishCheckConstraintStreamError(errCh, err)
 		}
 	}()
 	return nil
+}
+
+func drainCheckConstraintExecutorError(errCh <-chan error) error {
+	select {
+	case err := <-errCh:
+		return err
+	default:
+		return nil
+	}
+}
+
+func publishCheckConstraintStreamError(errCh chan<- error, err error) {
+	select {
+	case errCh <- err:
+	default:
+	}
+}
+
+func drainCheckConstraintPublicErrors(errCh <-chan error) {
+	for {
+		select {
+		case <-errCh:
+		default:
+			return
+		}
+	}
 }
 
 func (s *checkConstraintsState) stopStreaming(_ *process.Process) {
@@ -244,11 +277,17 @@ func (s *checkConstraintsState) stopStreaming(_ *process.Process) {
 	if s.streamClose != nil {
 		s.streamClose()
 	}
+	if s.errCh != nil {
+		drainCheckConstraintPublicErrors(s.errCh)
+	}
 	for result := range s.streamCh {
 		result.Close()
 	}
 	if s.streamDone != nil {
 		<-s.streamDone
+	}
+	if s.errCh != nil {
+		drainCheckConstraintPublicErrors(s.errCh)
 	}
 	s.streaming = false
 	s.streamCh = nil
