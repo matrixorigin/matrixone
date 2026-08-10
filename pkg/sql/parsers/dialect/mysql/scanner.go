@@ -845,6 +845,20 @@ func (s *Scanner) scanIdentifier(isVariable bool) (int, string) {
 	keywordName := s.buf[start:s.Pos]
 	lower := strings.ToLower(keywordName)
 	if keywordID, found := keywords[lower]; found {
+		if lower == "within" {
+			cur := s.Pos
+			s.skipBlank()
+			if !isLetter(s.cur()) {
+				s.Pos = cur
+				return ID, keywordName
+			}
+			typ, _ := s.scanIdentifier(false)
+			s.Pos = cur
+			if typ == GROUP {
+				return keywordID, keywordName
+			}
+			return ID, keywordName
+		}
 		// make transaction statements coexist with plsql
 		if lower == "begin" {
 			cur := s.Pos

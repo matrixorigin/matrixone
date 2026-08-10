@@ -15,7 +15,14 @@
 package aggexec
 
 import (
+	"bufio"
+	"bytes"
+	"cmp"
+	"container/heap"
+	"context"
+	"io"
 	"math/big"
+	"os"
 	"strconv"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -26,6 +33,10 @@ import (
 )
 
 const orderedPercentileConfigVersion byte = 1
+const (
+	orderedPercentileMaxRunSize = int64(8 << 20)
+	orderedPercentileMinRunSize = int64(64 << 10)
+)
 
 // EncodeOrderedPercentileConfig stores the direction and validated percentile
 // text in the aggregate extra configuration. The value argument itself stays
@@ -41,12 +52,96 @@ func EncodeOrderedPercentileConfig(percentile []byte, descending bool) []byte {
 	return config
 }
 
+func ConfigureOrderedPercentileSpill(
+	agg AggFuncExec,
+	limit int64,
+	ctx context.Context,
+	createFile func() (*os.File, error),
+	report func(int64, int64, int64),
+) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if limit > orderedPercentileMaxRunSize {
+		limit = orderedPercentileMaxRunSize
+	}
+	if limit < orderedPercentileMinRunSize {
+		limit = orderedPercentileMinRunSize
+	}
+	switch exec := agg.(type) {
+	case *orderedPercentileExec[int8, float64]:
+		configureOrderedPercentileExecSpill(exec, limit, ctx, createFile, report)
+	case *orderedPercentileExec[int16, float64]:
+		configureOrderedPercentileExecSpill(exec, limit, ctx, createFile, report)
+	case *orderedPercentileExec[int32, float64]:
+		configureOrderedPercentileExecSpill(exec, limit, ctx, createFile, report)
+	case *orderedPercentileExec[int64, float64]:
+		configureOrderedPercentileExecSpill(exec, limit, ctx, createFile, report)
+	case *orderedPercentileExec[uint8, float64]:
+		configureOrderedPercentileExecSpill(exec, limit, ctx, createFile, report)
+	case *orderedPercentileExec[uint16, float64]:
+		configureOrderedPercentileExecSpill(exec, limit, ctx, createFile, report)
+	case *orderedPercentileExec[uint32, float64]:
+		configureOrderedPercentileExecSpill(exec, limit, ctx, createFile, report)
+	case *orderedPercentileExec[uint64, float64]:
+		configureOrderedPercentileExecSpill(exec, limit, ctx, createFile, report)
+	case *orderedPercentileExec[float32, float64]:
+		configureOrderedPercentileExecSpill(exec, limit, ctx, createFile, report)
+	case *orderedPercentileExec[float64, float64]:
+		configureOrderedPercentileExecSpill(exec, limit, ctx, createFile, report)
+	case *orderedPercentileExec[types.Decimal64, types.Decimal128]:
+		configureOrderedPercentileExecSpill(exec, limit, ctx, createFile, report)
+	case *orderedPercentileExec[types.Decimal128, types.Decimal128]:
+		configureOrderedPercentileExecSpill(exec, limit, ctx, createFile, report)
+	case *orderedPercentileExec[int8, int8]:
+		configureOrderedPercentileExecSpill(exec, limit, ctx, createFile, report)
+	case *orderedPercentileExec[int16, int16]:
+		configureOrderedPercentileExecSpill(exec, limit, ctx, createFile, report)
+	case *orderedPercentileExec[int32, int32]:
+		configureOrderedPercentileExecSpill(exec, limit, ctx, createFile, report)
+	case *orderedPercentileExec[int64, int64]:
+		configureOrderedPercentileExecSpill(exec, limit, ctx, createFile, report)
+	case *orderedPercentileExec[uint8, uint8]:
+		configureOrderedPercentileExecSpill(exec, limit, ctx, createFile, report)
+	case *orderedPercentileExec[uint16, uint16]:
+		configureOrderedPercentileExecSpill(exec, limit, ctx, createFile, report)
+	case *orderedPercentileExec[uint32, uint32]:
+		configureOrderedPercentileExecSpill(exec, limit, ctx, createFile, report)
+	case *orderedPercentileExec[uint64, uint64]:
+		configureOrderedPercentileExecSpill(exec, limit, ctx, createFile, report)
+	case *orderedPercentileExec[float32, float32]:
+		configureOrderedPercentileExecSpill(exec, limit, ctx, createFile, report)
+	case *orderedPercentileExec[types.Decimal64, types.Decimal64]:
+		configureOrderedPercentileExecSpill(exec, limit, ctx, createFile, report)
+	}
+}
+
+func configureOrderedPercentileExecSpill[T numeric | types.Decimal64 | types.Decimal128, R types.FixedSizeTExceptStrType](
+	exec *orderedPercentileExec[T, R],
+	limit int64,
+	ctx context.Context,
+	createFile func() (*os.File, error),
+	report func(int64, int64, int64),
+) {
+	exec.spillLimit = limit
+	exec.spillContext = ctx
+	exec.spillFile = createFile
+	exec.spillReport = report
+}
+
 func PercentileContReturnType(args []types.Type) types.Type {
 	if len(args) == 0 {
 		return types.T_float64.ToType()
 	}
 	if args[0].IsDecimal() {
-		return types.New(types.T_decimal128, 38, args[0].Scale+1)
+		scale := args[0].Scale
+		if args[0].Width < 38 {
+			scale++
+		}
+		if scale > 38 {
+			scale = 38
+		}
+		return types.New(types.T_decimal128, 38, scale)
 	}
 	return types.T_float64.ToType()
 }
@@ -70,6 +165,20 @@ type orderedPercentileExec[T numeric | types.Decimal64 | types.Decimal128, R typ
 	mode       orderedPercentileMode
 	percentile *big.Rat
 	descending bool
+
+	spillLimit   int64
+	spillContext context.Context
+	spillFile    func() (*os.File, error)
+	spillReport  func(int64, int64, int64)
+	spillData    *os.File
+	spillRuns    [][]orderedPercentileRun
+}
+
+type orderedPercentileRun struct {
+	start int64
+	end   int64
+	pos   int64
+	rows  uint64
 }
 
 func newOrderedPercentileExec[T numeric | types.Decimal64 | types.Decimal128, R types.FixedSizeTExceptStrType](
@@ -120,7 +229,13 @@ func (exec *orderedPercentileExec[T, R]) Merge(next AggFuncExec, groupIdx1, grou
 	if exec.descending != other.descending {
 		return moerr.NewInvalidInputNoCtx("ordered percentile: cannot merge different sort directions")
 	}
-	return exec.medianColumnExecSelf.Merge(&other.medianColumnExecSelf, groupIdx1, groupIdx2)
+	if other.hasSpillRuns() {
+		return moerr.NewInternalErrorNoCtx("spilled ordered percentile cannot be merged as a partial result")
+	}
+	if err := exec.medianColumnExecSelf.Merge(&other.medianColumnExecSelf, groupIdx1, groupIdx2); err != nil {
+		return err
+	}
+	return exec.maybeSpillOrdered()
 }
 
 func (exec *orderedPercentileExec[T, R]) BatchMerge(next AggFuncExec, offset int, groups []uint64) error {
@@ -131,12 +246,27 @@ func (exec *orderedPercentileExec[T, R]) BatchMerge(next AggFuncExec, offset int
 	if exec.descending != other.descending {
 		return moerr.NewInvalidInputNoCtx("ordered percentile: cannot merge different sort directions")
 	}
-	return exec.medianColumnExecSelf.BatchMerge(&other.medianColumnExecSelf, offset, groups)
+	if other.hasSpillRuns() {
+		return moerr.NewInternalErrorNoCtx("spilled ordered percentile cannot be merged as a partial result")
+	}
+	if err := exec.medianColumnExecSelf.BatchMerge(&other.medianColumnExecSelf, offset, groups); err != nil {
+		return err
+	}
+	return exec.maybeSpillOrdered()
 }
 
 func (exec *orderedPercentileExec[T, R]) Flush() ([]*vector.Vector, error) {
+	return exec.FlushWithContext(context.Background())
+}
+
+func (exec *orderedPercentileExec[T, R]) FlushWithContext(ctx context.Context) ([]*vector.Vector, error) {
 	if exec.percentile == nil {
 		return nil, moerr.NewInternalErrorNoCtx("ordered percentile: percentile configuration is not set")
+	}
+	if exec.hasSpillRuns() {
+		if err := exec.spillOrderedState(ctx); err != nil {
+			return nil, err
+		}
 	}
 	groups := len(exec.groups)
 	lim := exec.ret.getChunkSize()
@@ -146,12 +276,13 @@ func (exec *orderedPercentileExec[T, R]) Flush() ([]*vector.Vector, error) {
 			n = lim
 		}
 		for j := 0; j < n; j++ {
-			group := exec.groups[i+j]
-			if group.Length() == 0 {
+			groupIndex := i + j
+			group := exec.groups[groupIndex]
+			if group.Length() == 0 && !exec.groupHasSpillRuns(groupIndex) {
 				continue
 			}
 			markMedianGroupNotEmpty(&exec.ret, x, j)
-			if err := exec.flushGroup(group, x, j); err != nil {
+			if err := exec.flushGroup(ctx, groupIndex, group, x, j); err != nil {
 				return nil, err
 			}
 		}
@@ -160,7 +291,18 @@ func (exec *orderedPercentileExec[T, R]) Flush() ([]*vector.Vector, error) {
 	return exec.ret.flushAll(), nil
 }
 
-func (exec *orderedPercentileExec[T, R]) flushGroup(group *Vectors[T], x, y int) error {
+func (exec *orderedPercentileExec[T, R]) flushGroup(ctx context.Context, groupIndex int, group *Vectors[T], x, y int) error {
+	if exec.groupHasSpillRuns(groupIndex) {
+		lo, hi, frac := orderedPercentileRanks(exec.spilledGroupRows(groupIndex), exec.percentile, exec.mode)
+		loValue, hiValue, err := exec.selectSpilledValues(ctx, groupIndex, lo, hi)
+		if err != nil {
+			return err
+		}
+		if exec.mode == orderedPercentileDiscrete {
+			return exec.setDiscreteResult(loValue, x, y)
+		}
+		return exec.setContinuousResult(loValue, hiValue, frac, x, y)
+	}
 	values := collectMedianValues(group)
 	selectors, err := sortOrderedPercentileValues(exec.mp, exec.argType, values, exec.descending)
 	if err != nil {
@@ -172,6 +314,27 @@ func (exec *orderedPercentileExec[T, R]) flushGroup(group *Vectors[T], x, y int)
 		return exec.setDiscreteResult(values[int(selectors[lo])], x, y)
 	}
 	return exec.setContinuousResult(values[int(selectors[lo])], values[int(selectors[hi])], frac, x, y)
+}
+
+func (exec *orderedPercentileExec[T, R]) Fill(groupIndex int, row int, vectors []*vector.Vector) error {
+	if err := exec.medianColumnExecSelf.Fill(groupIndex, row, vectors); err != nil {
+		return err
+	}
+	return exec.maybeSpillOrdered()
+}
+
+func (exec *orderedPercentileExec[T, R]) BulkFill(groupIndex int, vectors []*vector.Vector) error {
+	if err := exec.medianColumnExecSelf.BulkFill(groupIndex, vectors); err != nil {
+		return err
+	}
+	return exec.maybeSpillOrdered()
+}
+
+func (exec *orderedPercentileExec[T, R]) BatchFill(offset int, groups []uint64, vectors []*vector.Vector) error {
+	if err := exec.medianColumnExecSelf.BatchFill(offset, groups, vectors); err != nil {
+		return err
+	}
+	return exec.maybeSpillOrdered()
 }
 
 // sortOrderedPercentileValues uses the same selector/vector sorter as the
@@ -234,6 +397,298 @@ func (exec *orderedPercentileExec[T, R]) setContinuousResult(lo, hi T, frac *big
 	}
 	exec.ret.values[x][y] = value
 	return nil
+}
+
+func (exec *orderedPercentileExec[T, R]) SaveIntermediateResult(cnt int64, flags [][]uint8, buf *bytes.Buffer) error {
+	if exec.hasSpillRuns() {
+		return moerr.NewInternalErrorNoCtx("spilled ordered percentile cannot be serialized as a partial result")
+	}
+	return exec.medianColumnExecSelf.SaveIntermediateResult(cnt, flags, buf)
+}
+
+func (exec *orderedPercentileExec[T, R]) SaveIntermediateResultOfChunk(chunk int, buf *bytes.Buffer) error {
+	if exec.hasSpillRuns() {
+		return moerr.NewInternalErrorNoCtx("spilled ordered percentile cannot be serialized as a partial result")
+	}
+	return exec.medianColumnExecSelf.SaveIntermediateResultOfChunk(chunk, buf)
+}
+
+func (exec *orderedPercentileExec[T, R]) UnmarshalFromReader(reader io.Reader, mp *mpool.MPool) error {
+	return exec.medianColumnExecSelf.UnmarshalFromReader(reader, mp)
+}
+
+func (exec *orderedPercentileExec[T, R]) Size() int64 {
+	return exec.medianColumnExecSelf.Size() + exec.fixedAndSpilledMemorySize()
+}
+
+func (exec *orderedPercentileExec[T, R]) AdditionalMemorySize() int64 {
+	return exec.fixedAndSpilledMemorySize()
+}
+
+func (exec *orderedPercentileExec[T, R]) Free() {
+	if exec.spillData != nil {
+		_ = exec.spillData.Close()
+	}
+	exec.spillData = nil
+	exec.spillRuns = nil
+	exec.spillLimit = 0
+	exec.spillContext = nil
+	exec.spillFile = nil
+	exec.spillReport = nil
+	exec.medianColumnExecSelf.Free()
+}
+
+func (exec *orderedPercentileExec[T, R]) fixedAndSpilledMemorySize() int64 {
+	var size int64
+	for _, runs := range exec.spillRuns {
+		size += int64(cap(runs)) * int64(4*8)
+	}
+	return size
+}
+
+func (exec *orderedPercentileExec[T, R]) activeOrderedMemorySize() int64 {
+	var size int64
+	for _, group := range exec.groups {
+		if group != nil {
+			size += group.Size()
+		}
+	}
+	return size
+}
+
+func (exec *orderedPercentileExec[T, R]) maybeSpillOrdered() error {
+	if exec.spillLimit > 0 && exec.activeOrderedMemorySize() >= exec.spillLimit {
+		return exec.spillOrderedState(exec.spillContext)
+	}
+	return nil
+}
+
+func (exec *orderedPercentileExec[T, R]) spillOrderedState(ctx context.Context) error {
+	if exec.spillFile == nil {
+		return nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := context.Cause(ctx); err != nil {
+		return err
+	}
+	groupCount := len(exec.groups)
+	for len(exec.spillRuns) < groupCount {
+		exec.spillRuns = append(exec.spillRuns, nil)
+	}
+	for groupIndex, group := range exec.groups {
+		if group == nil || group.Length() == 0 {
+			continue
+		}
+		values := collectMedianValues(group)
+		if err := exec.writeOrderedRun(ctx, groupIndex, values); err != nil {
+			return err
+		}
+	}
+	for _, group := range exec.groups {
+		if group != nil {
+			group.Free(exec.mp)
+		}
+	}
+	exec.groups = nil
+	if groupCount > 0 {
+		exec.groups = make([]*Vectors[T], groupCount)
+		for i := range exec.groups {
+			exec.groups[i] = NewVectors[T](exec.argType)
+		}
+	}
+	return nil
+}
+
+func (exec *orderedPercentileExec[T, R]) writeOrderedRun(ctx context.Context, groupIndex int, values []T) error {
+	selectors, err := sortOrderedPercentileValues(exec.mp, exec.argType, values, exec.descending)
+	if err != nil {
+		return err
+	}
+	if exec.spillData == nil {
+		exec.spillData, err = exec.spillFile()
+		if err != nil {
+			return err
+		}
+	}
+	start, err := exec.spillData.Seek(0, io.SeekEnd)
+	if err != nil {
+		return err
+	}
+	writer := bufio.NewWriterSize(exec.spillData, 64*1024)
+	var rows int64
+	for _, selector := range selectors {
+		if err := context.Cause(ctx); err != nil {
+			return err
+		}
+		if _, err = writer.Write(types.EncodeFixed(values[selector])); err != nil {
+			return err
+		}
+		rows++
+	}
+	if err = writer.Flush(); err != nil {
+		return err
+	}
+	end, err := exec.spillData.Seek(0, io.SeekCurrent)
+	if err != nil {
+		return err
+	}
+	exec.spillRuns[groupIndex] = append(exec.spillRuns[groupIndex], orderedPercentileRun{
+		start: start,
+		end:   end,
+		pos:   start,
+		rows:  uint64(rows),
+	})
+	if exec.spillReport != nil {
+		exec.spillReport(end-start, rows, exec.Size())
+	}
+	return nil
+}
+
+func (exec *orderedPercentileExec[T, R]) hasSpillRuns() bool {
+	for _, runs := range exec.spillRuns {
+		if len(runs) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+func (exec *orderedPercentileExec[T, R]) groupHasSpillRuns(groupIndex int) bool {
+	return groupIndex < len(exec.spillRuns) && len(exec.spillRuns[groupIndex]) > 0
+}
+
+func (exec *orderedPercentileExec[T, R]) spilledGroupRows(groupIndex int) uint64 {
+	var rows uint64
+	for _, run := range exec.spillRuns[groupIndex] {
+		rows += run.rows
+	}
+	return rows
+}
+
+func (exec *orderedPercentileExec[T, R]) selectSpilledValues(ctx context.Context, groupIndex int, lo, hi uint64) (T, T, error) {
+	runs := append([]orderedPercentileRun(nil), exec.spillRuns[groupIndex]...)
+	heads := make([]T, len(runs))
+	runHeap := &orderedPercentileRunHeap[T]{
+		runs:       make([]int, 0, len(runs)),
+		values:     heads,
+		descending: exec.descending,
+	}
+	for i := range runs {
+		runs[i].pos = runs[i].start
+		value, ok, err := exec.readRunValue(&runs[i])
+		if err != nil {
+			var zero T
+			return zero, zero, err
+		}
+		if ok {
+			heads[i] = value
+			runHeap.runs = append(runHeap.runs, i)
+		}
+	}
+	heap.Init(runHeap)
+	var loValue, hiValue T
+	for rank := uint64(0); runHeap.Len() > 0; rank++ {
+		if err := context.Cause(ctx); err != nil {
+			var zero T
+			return zero, zero, err
+		}
+		run := heap.Pop(runHeap).(int)
+		value := heads[run]
+		if rank == lo {
+			loValue = value
+		}
+		if rank == hi {
+			hiValue = value
+			return loValue, hiValue, nil
+		}
+		next, ok, err := exec.readRunValue(&runs[run])
+		if err != nil {
+			var zero T
+			return zero, zero, err
+		}
+		if ok {
+			heads[run] = next
+			heap.Push(runHeap, run)
+		}
+	}
+	var zero T
+	return zero, zero, moerr.NewInternalErrorNoCtx("ordered percentile: spilled run ended before requested rank")
+}
+
+func (exec *orderedPercentileExec[T, R]) readRunValue(run *orderedPercentileRun) (T, bool, error) {
+	var zero T
+	if run.pos >= run.end {
+		return zero, false, nil
+	}
+	size := exec.argType.TypeSize()
+	buf := make([]byte, size)
+	if _, err := exec.spillData.ReadAt(buf, run.pos); err != nil {
+		return zero, false, err
+	}
+	run.pos += int64(size)
+	return types.DecodeFixed[T](buf), true, nil
+}
+
+type orderedPercentileRunHeap[T numeric | types.Decimal64 | types.Decimal128] struct {
+	runs       []int
+	values     []T
+	descending bool
+}
+
+func (h orderedPercentileRunHeap[T]) Len() int { return len(h.runs) }
+func (h orderedPercentileRunHeap[T]) Less(i, j int) bool {
+	left, right := h.runs[i], h.runs[j]
+	cmp := compareOrderedPercentileValue(h.values[left], h.values[right])
+	if h.descending {
+		cmp = -cmp
+	}
+	if cmp == 0 {
+		return left < right
+	}
+	return cmp < 0
+}
+func (h orderedPercentileRunHeap[T]) Swap(i, j int) { h.runs[i], h.runs[j] = h.runs[j], h.runs[i] }
+func (h *orderedPercentileRunHeap[T]) Push(value any) {
+	h.runs = append(h.runs, value.(int))
+}
+func (h *orderedPercentileRunHeap[T]) Pop() any {
+	last := len(h.runs) - 1
+	value := h.runs[last]
+	h.runs = h.runs[:last]
+	return value
+}
+
+func compareOrderedPercentileValue[T numeric | types.Decimal64 | types.Decimal128](left, right T) int {
+	switch l := any(left).(type) {
+	case int8:
+		return cmp.Compare(l, any(right).(int8))
+	case int16:
+		return cmp.Compare(l, any(right).(int16))
+	case int32:
+		return cmp.Compare(l, any(right).(int32))
+	case int64:
+		return cmp.Compare(l, any(right).(int64))
+	case uint8:
+		return cmp.Compare(l, any(right).(uint8))
+	case uint16:
+		return cmp.Compare(l, any(right).(uint16))
+	case uint32:
+		return cmp.Compare(l, any(right).(uint32))
+	case uint64:
+		return cmp.Compare(l, any(right).(uint64))
+	case float32:
+		return cmp.Compare(l, any(right).(float32))
+	case float64:
+		return cmp.Compare(l, any(right).(float64))
+	case types.Decimal64:
+		return l.Compare(any(right).(types.Decimal64))
+	case types.Decimal128:
+		return l.Compare(any(right).(types.Decimal128))
+	default:
+		panic("unsupported ordered percentile type")
+	}
 }
 
 func interpolateOrderedNumericValue[T numeric | types.Decimal64 | types.Decimal128](lo, hi T, frac *big.Rat) float64 {

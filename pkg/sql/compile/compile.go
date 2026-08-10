@@ -5090,8 +5090,24 @@ func hasOrderedGroupConcat(node *plan.Node) bool {
 	return false
 }
 
+func hasOrderedSetPercentile(node *plan.Node) bool {
+	for _, agg := range node.AggList {
+		if fn := agg.GetF(); fn != nil {
+			switch fn.Func.ObjName {
+			case plan2.NamePercentileCont, plan2.NamePercentileDisc:
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func (c *Compile) supportsRemoteOrderedAggregates() bool {
 	return supportsRemoteOrderedAggregates(c.proc.GetService())
+}
+
+func (c *Compile) supportsRemoteOrderedSetAggregates() bool {
+	return supportsRemoteOrderedSetAggregates(c.proc.GetService())
 }
 
 func supportsRemoteOrderedAggregates(service string) bool {
@@ -5107,10 +5123,21 @@ func supportsRemoteOrderedAggregates(service string) bool {
 	return ok && protocolVersion >= defines.MORPCVersion6
 }
 
+func supportsRemoteOrderedSetAggregates(service string) bool {
+	version, ok := moruntime.ServiceRuntime(service).
+		GetGlobalVariables(moruntime.MOProtocolVersion)
+	if !ok {
+		return false
+	}
+	protocolVersion, ok := version.(int64)
+	return ok && protocolVersion >= defines.MORPCVersion11
+}
+
 func (c *Compile) canCompileShuffleGroup(node *plan.Node) bool {
 	return node.Stats.HashmapStats != nil &&
 		node.Stats.HashmapStats.Shuffle &&
-		(!hasOrderedGroupConcat(node) || c.supportsRemoteOrderedAggregates())
+		(!hasOrderedGroupConcat(node) || c.supportsRemoteOrderedAggregates()) &&
+		(!hasOrderedSetPercentile(node) || c.supportsRemoteOrderedSetAggregates())
 }
 
 func (c *Compile) compileLocalShuffleGroup(node *plan.Node, inputSS []*Scope, nodes []*plan.Node) []*Scope {

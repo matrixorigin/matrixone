@@ -57,4 +57,15 @@ where g = 3
 group by g;
 ➤ g[4,32,0]  ¦  null_cont[8,53,31]  ¦  null_disc[4,32,0]  𝄀
 3  ¦  null  ¦  null
+drop table if exists t_within_identifier_bvt;
+create table t_within_identifier_bvt (id int, within int);
+insert into t_within_identifier_bvt values (1, 10), (2, 20);
+select within from t_within_identifier_bvt order by id;
+➤ within[4,32,0]  𝄀
+10  𝄀
+20
+select word, reserved from information_schema.KEYWORDS where word = 'WITHIN';
+➤ WORD[12,-1,0]  ¦  RESERVED[4,32,0]  𝄀
+WITHIN  ¦  0
+drop table t_within_identifier_bvt;
 drop table t_ordered_set_bvt;

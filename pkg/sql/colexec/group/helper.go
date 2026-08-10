@@ -82,6 +82,27 @@ func (ctr *container) configureOrderedAggSpill(
 				opAnalyzer.SetMemUsed(max(ctr.memUsed(), retainedMemory))
 			},
 		)
+		aggexec.ConfigureOrderedPercentileSpill(
+			agg,
+			ctr.spillMem,
+			proc.Ctx,
+			func() (*os.File, error) {
+				spillFS, err := proc.GetSpillFileService()
+				if err != nil {
+					return nil, err
+				}
+				id, _ := uuid.NewV7()
+				return spillFS.CreateAndRemoveFile(
+					proc.Ctx,
+					fmt.Sprintf("ordered_percentile_run_%s", id.String()),
+				)
+			},
+			func(bytes, rows, retainedMemory int64) {
+				opAnalyzer.Spill(bytes)
+				opAnalyzer.SpillRows(rows)
+				opAnalyzer.SetMemUsed(max(ctr.memUsed(), retainedMemory))
+			},
+		)
 	}
 }
 

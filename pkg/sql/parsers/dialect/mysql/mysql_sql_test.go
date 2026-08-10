@@ -4815,6 +4815,16 @@ func TestOrderedSetAggregateDeparseRoundTrip(t *testing.T) {
 	}
 }
 
+func TestWithinRemainsIdentifierCompatible(t *testing.T) {
+	for _, sql := range []string{
+		"select within from t",
+		"create table t (within int)",
+	} {
+		_, err := ParseOne(context.Background(), sql, 1)
+		require.NoError(t, err, sql)
+	}
+}
+
 func TestOrderedSetPercentileWithoutWithinGroupParses(t *testing.T) {
 	for _, sql := range []string{
 		"select percentile_cont(0.95) from t",

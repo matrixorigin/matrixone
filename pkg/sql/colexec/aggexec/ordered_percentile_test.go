@@ -15,7 +15,9 @@
 package aggexec
 
 import (
+	"context"
 	"math/big"
+	"os"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -128,6 +130,46 @@ func TestOrderedPercentileExecGroupsNullsAndMerge(t *testing.T) {
 	right.Free()
 }
 
+func TestOrderedPercentileExecSpillsRuns(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer func() { require.Equal(t, int64(0), mp.CurrNB()) }()
+
+	const rows = 20001
+	values := make([]int64, rows)
+	for i := range values {
+		values[i] = int64(rows - i - 1)
+	}
+	valueVec := buildFixedVec(t, mp, types.T_int64.ToType(), values)
+	defer valueVec.Free(mp)
+
+	exec, err := makeOrderedPercentileExec(mp, AggIdOfPercentileCont, false,
+		types.T_int64.ToType(), orderedPercentileContinuous)
+	require.NoError(t, err)
+	require.NoError(t, exec.GroupGrow(1))
+	require.NoError(t, exec.SetExtraInformation(EncodeOrderedPercentileConfig([]byte("0.5"), false), 0))
+
+	var spillRows int64
+	ConfigureOrderedPercentileSpill(
+		exec,
+		1,
+		context.Background(),
+		func() (*os.File, error) { return os.CreateTemp(t.TempDir(), "ordered-percentile-*") },
+		func(_, rows, _ int64) { spillRows += rows },
+	)
+	for i := range values {
+		require.NoError(t, exec.Fill(0, i, []*vector.Vector{valueVec}))
+	}
+	typed := exec.(*orderedPercentileExec[int64, float64])
+	require.True(t, typed.hasSpillRuns())
+	require.Positive(t, spillRows)
+
+	result, err := exec.Flush()
+	require.NoError(t, err)
+	require.Equal(t, 10000.0, vector.GetFixedAtNoTypeCheck[float64](result[0], 0))
+	result[0].Free(mp)
+	exec.Free()
+}
+
 func TestOrderedPercentileConfigValidationAndMerge(t *testing.T) {
 	mp := mpool.MustNewZero()
 	defer func() { require.Equal(t, int64(0), mp.CurrNB()) }()
@@ -231,6 +273,10 @@ func TestOrderedPercentileTypeDispatchAndMath(t *testing.T) {
 		PercentileContReturnType([]types.Type{types.New(types.T_decimal64, 10, 2)}).Oid)
 	require.Equal(t, int32(3), PercentileContReturnType(
 		[]types.Type{types.New(types.T_decimal64, 10, 2)}).Scale)
+	require.Equal(t, int32(38), PercentileContReturnType(
+		[]types.Type{types.New(types.T_decimal128, 38, 38)}).Scale)
+	require.Equal(t, int32(0), PercentileContReturnType(
+		[]types.Type{types.New(types.T_decimal128, 38, 0)}).Scale)
 	require.Equal(t, types.T_int64,
 		PercentileDiscReturnType([]types.Type{types.T_int64.ToType()}).Oid)
 
@@ -332,7 +378,46 @@ func TestOrderedPercentileDecimalExecution(t *testing.T) {
 		require.NoError(t, exec.BulkFill(0, []*vector.Vector{vec}))
 		result, err := exec.Flush()
 		require.NoError(t, err)
-		require.Equal(t, "2.000", vector.GetFixedAtNoTypeCheck[types.Decimal128](result[0], 0).Format(3))
+		require.Equal(t, "2.00", vector.GetFixedAtNoTypeCheck[types.Decimal128](result[0], 0).Format(result[0].GetType().Scale))
+		result[0].Free(mp)
+		exec.Free()
+	})
+
+	t.Run("decimal128 max integral p0", func(t *testing.T) {
+		typ := types.New(types.T_decimal128, 38, 0)
+		maxValue, err := types.ParseDecimal128("99999999999999999999999999999999999999", typ.Width, typ.Scale)
+		require.NoError(t, err)
+		vec := buildFixedVec(t, mp, typ, []types.Decimal128{maxValue})
+		defer vec.Free(mp)
+		exec, err := makeOrderedPercentileExec(mp, AggIdOfPercentileCont, false, typ, orderedPercentileContinuous)
+		require.NoError(t, err)
+		require.NoError(t, exec.GroupGrow(1))
+		require.NoError(t, exec.SetExtraInformation(EncodeOrderedPercentileConfig([]byte("0"), false), 0))
+		require.NoError(t, exec.BulkFill(0, []*vector.Vector{vec}))
+		result, err := exec.Flush()
+		require.NoError(t, err)
+		require.Equal(t, maxValue.Format(0), vector.GetFixedAtNoTypeCheck[types.Decimal128](result[0], 0).Format(result[0].GetType().Scale))
+		result[0].Free(mp)
+		exec.Free()
+	})
+
+	t.Run("decimal128 max scale", func(t *testing.T) {
+		typ := types.New(types.T_decimal128, 38, 38)
+		one, err := types.ParseDecimal128("0.10000000000000000000000000000000000000", typ.Width, typ.Scale)
+		require.NoError(t, err)
+		two, err := types.ParseDecimal128("0.20000000000000000000000000000000000000", typ.Width, typ.Scale)
+		require.NoError(t, err)
+		vec := buildFixedVec(t, mp, typ, []types.Decimal128{one, two})
+		defer vec.Free(mp)
+		exec, err := makeOrderedPercentileExec(mp, AggIdOfPercentileCont, false, typ, orderedPercentileContinuous)
+		require.NoError(t, err)
+		require.NoError(t, exec.GroupGrow(1))
+		require.NoError(t, exec.SetExtraInformation(EncodeOrderedPercentileConfig([]byte("0.5"), false), 0))
+		require.NoError(t, exec.BulkFill(0, []*vector.Vector{vec}))
+		result, err := exec.Flush()
+		require.NoError(t, err)
+		require.Equal(t, "0.15000000000000000000000000000000000000",
+			vector.GetFixedAtNoTypeCheck[types.Decimal128](result[0], 0).Format(result[0].GetType().Scale))
 		result[0].Free(mp)
 		exec.Free()
 	})

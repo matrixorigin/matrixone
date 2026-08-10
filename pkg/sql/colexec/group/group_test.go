@@ -720,6 +720,77 @@ func TestH0OrderedGroupConcatSpillsIndependently(t *testing.T) {
 	require.Zero(t, g.OpAnalyzer.GetOpStats().ExtraStats["GroupSpillWriteCalls"])
 }
 
+func TestH0OrderedPercentileSpillsIndependently(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	const rows = 20001
+	values := make([]int64, rows)
+	for i := range values {
+		values[i] = int64(rows - i - 1)
+	}
+	input := batch.NewWithSize(1)
+	input.Vecs[0] = testutil.MakeInt64Vector(values, nil, proc.Mp())
+	input.SetRowCount(rows)
+	child := colexec.NewMockOperator().WithBatchs([]*batch.Batch{input})
+	g := newGroupOp(proc, nil, []aggexec.AggFuncExecExpression{
+		orderedPercentileAgg(aggexec.AggIdOfPercentileCont, 0, []byte("0.5"), false),
+	})
+	g.SpillMem = 1
+	g.AppendChild(child)
+	t.Cleanup(func() {
+		g.Free(proc, false, nil)
+		child.Free(proc, false, nil)
+		proc.Free()
+		require.Zero(t, proc.Mp().CurrNB())
+	})
+
+	require.NoError(t, g.Prepare(proc))
+	outputs := collectBatches(t, g, proc)
+	require.Len(t, outputs, 1)
+	require.Equal(t, 10000.0, vector.GetFixedAtNoTypeCheck[float64](outputs[0].Vecs[0], 0))
+	require.Positive(t, g.OpAnalyzer.GetOpStats().SpillRows)
+	require.Zero(t, g.OpAnalyzer.GetOpStats().ExtraStats["GroupSpillWriteCalls"])
+}
+
+func TestSingleHotGroupOrderedPercentileSpillsAfterHashSpillLimit(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	const rows = 20001
+	keys := make([]int32, rows)
+	values := make([]int64, rows)
+	for i := range values {
+		values[i] = int64(rows - i - 1)
+	}
+	input := batch.NewWithSize(2)
+	input.Vecs[0] = testutil.MakeInt32Vector(keys, nil, proc.Mp())
+	input.Vecs[1] = testutil.MakeInt64Vector(values, nil, proc.Mp())
+	input.SetRowCount(rows)
+	child := colexec.NewMockOperator().WithBatchs([]*batch.Batch{input})
+	g := newGroupOp(
+		proc,
+		[]*plan.Expr{colExpr(0, types.T_int32)},
+		[]aggexec.AggFuncExecExpression{
+			orderedPercentileAgg(aggexec.AggIdOfPercentileCont, 1, []byte("0.5"), false),
+		},
+	)
+	g.SpillMem = 1
+	g.AppendChild(child)
+	t.Cleanup(func() {
+		g.Free(proc, false, nil)
+		child.Free(proc, false, nil)
+		proc.Free()
+		require.Zero(t, proc.Mp().CurrNB())
+	})
+
+	require.NoError(t, g.Prepare(proc))
+	outputs := collectBatches(t, g, proc)
+	require.Len(t, outputs, 1)
+	require.Equal(t, int32(0), vector.GetFixedAtNoTypeCheck[int32](outputs[0].Vecs[0], 0))
+	require.Equal(t, 10000.0, vector.GetFixedAtNoTypeCheck[float64](outputs[0].Vecs[1], 0))
+	require.Positive(t, g.OpAnalyzer.GetOpStats().ExtraStats["GroupSpillMaxLevel"])
+	require.Positive(t, g.OpAnalyzer.GetOpStats().SpillRows)
+}
+
 func TestGroupSpillReloadKeepsPreallocationBounded(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	defer proc.Free()

@@ -1484,15 +1484,23 @@ func validateRemoteAggregateProtocol(
 	aggs []aggexec.AggFuncExecExpression,
 ) error {
 	for _, agg := range aggs {
-		if agg.GetConfigType() != plan.AggregateConfigType_AGG_CONFIG_GROUP_CONCAT_ORDER {
-			continue
+		switch {
+		case agg.GetAggID() == aggexec.AggIdOfPercentileCont ||
+			agg.GetAggID() == aggexec.AggIdOfPercentileDisc:
+			if proc != nil && supportsRemoteOrderedSetAggregates(proc.GetService()) {
+				continue
+			}
+			return moerr.NewNotSupportedNoCtx(
+				"ordered-set percentile remote execution requires MORPC protocol version 11",
+			)
+		case agg.GetConfigType() == plan.AggregateConfigType_AGG_CONFIG_GROUP_CONCAT_ORDER:
+			if proc != nil && supportsRemoteOrderedAggregates(proc.GetService()) {
+				continue
+			}
+			return moerr.NewNotSupportedNoCtx(
+				"ordered aggregate remote execution requires MORPC protocol version 6",
+			)
 		}
-		if proc != nil && supportsRemoteOrderedAggregates(proc.GetService()) {
-			return nil
-		}
-		return moerr.NewNotSupportedNoCtx(
-			"ordered aggregate remote execution requires MORPC protocol version 6",
-		)
 	}
 	return nil
 }

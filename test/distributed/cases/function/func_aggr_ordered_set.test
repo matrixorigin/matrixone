@@ -43,4 +43,11 @@ from t_ordered_set_bvt
 where g = 3
 group by g;
 
+drop table if exists t_within_identifier_bvt;
+create table t_within_identifier_bvt (id int, within int);
+insert into t_within_identifier_bvt values (1, 10), (2, 20);
+select within from t_within_identifier_bvt order by id;
+select word, reserved from information_schema.KEYWORDS where word = 'WITHIN';
+drop table t_within_identifier_bvt;
+
 drop table t_ordered_set_bvt;
