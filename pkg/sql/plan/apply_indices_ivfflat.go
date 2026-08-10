@@ -1430,9 +1430,10 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfflat(nodeID int32, vecCt
 	// candidate stream flowing to the JOIN, and lets a multi-CN merge see every
 	// shard's candidates rather than a per-shard-truncated subset.
 	tableFuncNode.IndexReaderParam = &plan.IndexReaderParam{
-		Limit:        DeepCopyExpr(outerResultNeedExpr),
-		OrigFuncName: ivfCtx.origFuncName,
-		DistRange:    distRange,
+		Limit:          DeepCopyExpr(outerResultNeedExpr),
+		OrigFuncName:   ivfCtx.origFuncName,
+		DistRange:      distRange,
+		OverFetchLimit: overFetchDisplayLimit(outerResultNeedExpr, postFilterOverFetch, true),
 	}
 	tableFuncNode.Limit = nil
 

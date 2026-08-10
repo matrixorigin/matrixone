@@ -60,6 +60,8 @@ func TestApplyIndicesForSortUsingIvfflat_PostModeOffsetCompensationUsesCompensat
 	require.NotNil(t, tableFuncNode)
 	require.Nil(t, tableFuncNode.Limit)
 	require.Equal(t, uint64(3), tableFuncNode.IndexReaderParam.GetLimit().GetLit().GetU64Val())
+	// residual filter present → over-fetch display: FilteredPostModeLimit(3) = 15.
+	require.Equal(t, uint64(15), tableFuncNode.IndexReaderParam.GetOverFetchLimit())
 }
 
 func TestApplyIndicesForSortUsingIvfflat_DistRangeOnlyFilterCompensatesOffset(t *testing.T) {

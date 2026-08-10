@@ -6838,15 +6838,20 @@ func (m *DistRange) GetUpperBound() *Expr {
 }
 
 type IndexReaderParam struct {
-	OrderBy              []*OrderBySpec `protobuf:"bytes,1,rep,name=order_by,json=orderBy,proto3" json:"order_by,omitempty"`
-	Limit                *Expr          `protobuf:"bytes,2,opt,name=limit,proto3" json:"limit,omitempty"`
-	OrigFuncName         string         `protobuf:"bytes,3,opt,name=orig_func_name,json=origFuncName,proto3" json:"orig_func_name,omitempty"`
-	DistRange            *DistRange     `protobuf:"bytes,4,opt,name=dist_range,json=distRange,proto3" json:"dist_range,omitempty"`
-	PartitionCnCnt       int32          `protobuf:"varint,5,opt,name=partition_cn_cnt,json=partitionCnCnt,proto3" json:"partition_cn_cnt,omitempty"`
-	PartitionCnIdx       int32          `protobuf:"varint,6,opt,name=partition_cn_idx,json=partitionCnIdx,proto3" json:"partition_cn_idx,omitempty"`
-	XXX_NoUnkeyedLiteral struct{}       `json:"-"`
-	XXX_unrecognized     []byte         `json:"-"`
-	XXX_sizecache        int32          `json:"-"`
+	OrderBy        []*OrderBySpec `protobuf:"bytes,1,rep,name=order_by,json=orderBy,proto3" json:"order_by,omitempty"`
+	Limit          *Expr          `protobuf:"bytes,2,opt,name=limit,proto3" json:"limit,omitempty"`
+	OrigFuncName   string         `protobuf:"bytes,3,opt,name=orig_func_name,json=origFuncName,proto3" json:"orig_func_name,omitempty"`
+	DistRange      *DistRange     `protobuf:"bytes,4,opt,name=dist_range,json=distRange,proto3" json:"dist_range,omitempty"`
+	PartitionCnCnt int32          `protobuf:"varint,5,opt,name=partition_cn_cnt,json=partitionCnCnt,proto3" json:"partition_cn_cnt,omitempty"`
+	PartitionCnIdx int32          `protobuf:"varint,6,opt,name=partition_cn_idx,json=partitionCnIdx,proto3" json:"partition_cn_idx,omitempty"`
+	// OverFetchLimit is a display-only annotation for EXPLAIN: the plan-time
+	// over-fetched candidate budget for a literal LIMIT (0 when unknown, e.g. a
+	// prepared LIMIT ?). Execution never reads it; the TVF derives its budget from
+	// Limit at EXECUTE. Populated at plan build, read by the EXPLAIN renderer.
+	OverFetchLimit       uint64   `protobuf:"varint,7,opt,name=over_fetch_limit,json=overFetchLimit,proto3" json:"over_fetch_limit,omitempty"`
+	XXX_NoUnkeyedLiteral struct{} `json:"-"`
+	XXX_unrecognized     []byte   `json:"-"`
+	XXX_sizecache        int32    `json:"-"`
 }
 
 func (m *IndexReaderParam) Reset()         { *m = IndexReaderParam{} }
@@ -6920,6 +6925,13 @@ func (m *IndexReaderParam) GetPartitionCnCnt() int32 {
 func (m *IndexReaderParam) GetPartitionCnIdx() int32 {
 	if m != nil {
 		return m.PartitionCnIdx
+	}
+	return 0
+}
+
+func (m *IndexReaderParam) GetOverFetchLimit() uint64 {
+	if m != nil {
+		return m.OverFetchLimit
 	}
 	return 0
 }

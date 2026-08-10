@@ -196,8 +196,9 @@ func (builder *QueryBuilder) applyIndicesForSortUsingHnsw(nodeID int32, vecCtx *
 	// candidate stream flowing to the JOIN and lets a multi-CN merge see every
 	// shard's candidates.
 	tableFuncNode.IndexReaderParam = &plan.IndexReaderParam{
-		Limit:        DeepCopyExpr(limit),
-		OrigFuncName: hnswCtx.origFuncName,
+		Limit:          DeepCopyExpr(limit),
+		OrigFuncName:   hnswCtx.origFuncName,
+		OverFetchLimit: overFetchDisplayLimit(limit, postFilterOverFetch, false),
 	}
 	tableFuncNode.Limit = nil
 

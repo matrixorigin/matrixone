@@ -266,8 +266,9 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfpq(nodeID int32, vecCtx 
 	// over-fetches k -> k' at EXECUTE (post_filter_overfetch flag). Leaving
 	// node.Limit unset keeps the full candidate stream flowing to the JOIN.
 	tableFuncNode.IndexReaderParam = &plan.IndexReaderParam{
-		Limit:        DeepCopyExpr(limit),
-		OrigFuncName: ivfpqCtx.origFuncName,
+		Limit:          DeepCopyExpr(limit),
+		OrigFuncName:   ivfpqCtx.origFuncName,
+		OverFetchLimit: overFetchDisplayLimit(limit, postFilterOverFetch, false),
 	}
 	tableFuncNode.Limit = nil
 

@@ -28,6 +28,7 @@ import (
 	planplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/overfetch"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
 )
 
@@ -83,6 +84,26 @@ type regularIndexTopSortContext struct {
 	sortProjectNode  *plan.Node
 	scanNode         *plan.Node
 	pushOrderedLimit bool
+}
+
+// overFetchDisplayLimit returns the plan-time over-fetched candidate budget for a
+// LITERAL limit, for EXPLAIN display only (IndexReaderParam.OverFetchLimit) — 0
+// for a prepared LIMIT ? (unknown at plan time) or when no over-fetch applies.
+// It calls the same overfetch functions the TVF uses at EXECUTE, so the displayed
+// value equals the runtime budget. filteredPostMode selects ivfflat's factor.
+func overFetchDisplayLimit(limit *plan.Expr, overFetch bool, filteredPostMode bool) uint64 {
+	if !overFetch || limit == nil {
+		return 0
+	}
+	lit := limit.GetLit()
+	if lit == nil {
+		return 0
+	}
+	k := lit.GetU64Val()
+	if filteredPostMode {
+		return overfetch.FilteredPostModeLimit(k)
+	}
+	return overfetch.PostFilterLimit(k)
 }
 
 func containsDynamicParam(expr *plan.Expr) bool {

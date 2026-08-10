@@ -360,6 +360,7 @@ func DeepCopyIndexReaderParam(oldParam *plan.IndexReaderParam) *plan.IndexReader
 		OrigFuncName:   oldParam.OrigFuncName,
 		PartitionCnCnt: oldParam.PartitionCnCnt,
 		PartitionCnIdx: oldParam.PartitionCnIdx,
+		OverFetchLimit: oldParam.OverFetchLimit,
 	}
 
 	if oldParam.DistRange != nil {

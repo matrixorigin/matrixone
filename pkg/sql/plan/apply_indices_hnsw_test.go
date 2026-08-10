@@ -781,6 +781,7 @@ func TestApplyIndicesForSortUsingHnswFlagsPreparedLimitOverFetch(t *testing.T) {
 	require.Nil(t, tf.Limit, "node.Limit must be dropped for the prepared over-fetch case")
 	require.NotNil(t, tf.IndexReaderParam.GetLimit(), "raw k must be carried on IndexReaderParam.Limit")
 	require.Nil(t, tf.IndexReaderParam.GetLimit().GetLit(), "IndexReaderParam.Limit is the raw parameter, not a literal")
+	require.Equal(t, uint64(0), tf.IndexReaderParam.GetOverFetchLimit(), "prepared ? has no plan-time over-fetch to display")
 }
 
 // A literal LIMIT with a filter takes the SAME single path as a prepared one:
@@ -793,6 +794,8 @@ func TestApplyIndicesForSortUsingHnswLiteralLimitOverFetch(t *testing.T) {
 	require.Nil(t, tf.Limit, "node.Limit must be dropped so no plan-level top truncates candidates")
 	require.NotNil(t, tf.IndexReaderParam.GetLimit(), "raw k carried on IndexReaderParam.Limit")
 	require.Equal(t, uint64(2), tf.IndexReaderParam.GetLimit().GetLit().GetU64Val(), "raw literal k, not over-fetched at plan time")
+	// EXPLAIN-only annotation: the over-fetched budget for a literal k (2 -> 12).
+	require.Equal(t, uint64(12), tf.IndexReaderParam.GetOverFetchLimit(), "literal 2 -> PostFilterLimit 12 for display")
 }
 
 func findHnswTableFunctionNode(builder *QueryBuilder, nodeID int32) *plan.Node {

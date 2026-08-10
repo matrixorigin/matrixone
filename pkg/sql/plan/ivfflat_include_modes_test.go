@@ -241,6 +241,7 @@ func TestApplyIndicesForSortUsingIvfflat_PostModeDoesNotAutoUseIncludeOptimizati
 	require.Len(t, tableFuncNode.TableDef.Cols, 2)
 	require.Nil(t, tableFuncNode.Limit)
 	require.Equal(t, uint64(2), tableFuncNode.IndexReaderParam.GetLimit().GetLit().GetU64Val())
+	require.Equal(t, uint64(12), tableFuncNode.IndexReaderParam.GetOverFetchLimit())
 	require.Len(t, tableFuncNode.TblFuncExprList, 2)
 
 	require.Len(t, scanNode.FilterList, 2)
