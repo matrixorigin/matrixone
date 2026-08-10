@@ -96,23 +96,50 @@ func TestWasmVarlenaProducerMatrix(t *testing.T) {
 		}
 	}
 
-	t.Run("try load error", func(t *testing.T) {
+	t.Run("setup errors propagate", func(t *testing.T) {
+		for _, tc := range []struct {
+			name  string
+			isTry bool
+		}{
+			{name: "wasm"},
+			{name: "try_wasm", isTry: true},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				evalFn := op.wasm
+				if tc.isTry {
+					evalFn = op.tryWasm
+				}
+				testCase := NewFunctionTestCase(
+					proc,
+					[]FunctionTestInput{
+						NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"file:///missing.wasm"}, nil),
+						NewFunctionTestInput(types.T_varchar.ToType(), []string{"cat"}, nil),
+						NewFunctionTestInput(types.T_varchar.ToType(), []string{"a"}, nil),
+					},
+					NewFunctionTestResult(types.T_varchar.ToType(), false, nil, nil),
+					evalFn,
+				)
+				require.NoError(t, testCase.result.PreExtendAndReset(1))
+				require.Error(t, evalFn(testCase.parameters, testCase.result, proc, 1, nil))
+				require.Zero(t, testCase.GetResultVectorDirectly().Length())
+			})
+		}
+	})
+
+	t.Run("strict call error propagates", func(t *testing.T) {
 		testCase := NewFunctionTestCase(
 			proc,
 			[]FunctionTestInput{
-				NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"file:///missing.wasm", "file:///missing.wasm"}, nil),
-				NewFunctionTestInput(types.T_varchar.ToType(), []string{"cat", "cat"}, nil),
-				NewFunctionTestInput(types.T_varchar.ToType(), []string{"a", "b"}, nil),
+				NewFunctionTestConstInput(types.T_varchar.ToType(), []string{wasmURL}, nil),
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{"missing"}, nil),
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{"a"}, nil),
 			},
 			NewFunctionTestResult(types.T_varchar.ToType(), false, nil, nil),
-			op.tryWasm,
+			op.wasm,
 		)
-		require.NoError(t, testCase.result.PreExtendAndReset(2))
-		require.NoError(t, op.tryWasm(testCase.parameters, testCase.result, proc, 2, nil))
-		result := testCase.GetResultVectorDirectly()
-		require.Equal(t, 2, result.Length())
-		require.True(t, result.IsNull(0))
-		require.True(t, result.IsNull(1))
+		require.NoError(t, testCase.result.PreExtendAndReset(1))
+		require.Error(t, op.wasm(testCase.parameters, testCase.result, proc, 1, nil))
+		require.Zero(t, testCase.GetResultVectorDirectly().Length())
 	})
 
 	t.Run("invalid image closes prior plugin", func(t *testing.T) {
@@ -130,8 +157,8 @@ func TestWasmVarlenaProducerMatrix(t *testing.T) {
 			op.tryWasm,
 		)
 		require.NoError(t, testCase.result.PreExtendAndReset(1))
-		require.NoError(t, op.tryWasm(testCase.parameters, testCase.result, proc, 1, nil))
-		require.True(t, testCase.GetResultVectorDirectly().IsNull(0))
+		require.Error(t, op.tryWasm(testCase.parameters, testCase.result, proc, 1, nil))
+		require.Zero(t, testCase.GetResultVectorDirectly().Length())
 		require.Nil(t, op.plugin)
 	})
 }

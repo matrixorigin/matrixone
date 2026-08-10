@@ -34,8 +34,9 @@ import (
 // the result is also returned as string.  For other types (and multiple args),
 // user must econde the args into string -- usually using json.
 //
-// try_wasm is the same as startlark, but it will error if there is error
-// when running wasm.  Instead, it will just return NULL.
+// try_wasm has the same setup contract as wasm: URL parsing, image loading,
+// and plugin construction errors are returned. Once the plugin is ready,
+// per-row call errors are returned as NULL instead.
 
 type opBuiltInWasm struct {
 	plugin *extism.Plugin
@@ -152,10 +153,6 @@ func (op *opBuiltInWasm) tryWasmImpl(params []*vector.Vector, result vector.Func
 		return moerr.NewInvalidInput(proc.Ctx, "wasm url cannot be null.")
 	}
 	if err := op.buildWasm(proc, string(url)); err != nil {
-		if isTry {
-			rs.SetNullResult(uint64(length))
-			return nil
-		}
 		return err
 	}
 
