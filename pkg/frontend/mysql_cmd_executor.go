@@ -2076,9 +2076,17 @@ func createPrepareStmtInSession(
 		owner, originSQL, schedulingSQLMode)
 	var comp *compile.Compile
 	prepareControl := preparePlan.GetDcl().GetPrepare()
+	exactDecimalComparisonParams, err := plan2.PlanHasExactDecimalComparisonParam(
+		execCtx.reqCtx,
+		prepareControl.Plan,
+	)
+	if err != nil {
+		return nil, err
+	}
 	_, isQueryPlan := prepareControl.Plan.Plan.(*plan.Plan_Query)
 	if !executionSes.IsBackgroundSession() &&
 		isQueryPlan &&
+		!exactDecimalComparisonParams &&
 		shouldCachePrepareCompile(prepareControl.Plan) &&
 		(!prepareSchedulingIntent.Explicit ||
 			schedule.ValidateSchedulingIntent(prepareSchedulingIntent) != "") {
@@ -2098,22 +2106,24 @@ func createPrepareStmtInSession(
 	}
 
 	prepareStmt := &PrepareStmt{
-		Name:                preparePlan.GetDcl().GetPrepare().GetName(),
-		Sql:                 originSQL,
-		compile:             comp,
-		PreparePlan:         preparePlan,
-		PrepareStmt:         saveStmt,
-		NativeMode:          owner.sqlModeHasMatrixOneNative(),
-		OnlyFullGroupBy:     owner.sqlModeHasOnlyFullGroupBy(),
-		onlyFullGroupBySet:  true,
-		remapDb:             maps.Clone(execCtx.remapDb),
-		defaultDatabase:     executionSes.GetTxnCompileCtx().GetDatabase(),
-		tempTableVersion:    owner.GetTempTableVersion(),
-		ddlVersion:          owner.getDDLVersion(),
-		cloneSQL:            cloneSQL,
-		protocolVersion:     protocolVersion,
-		getFromSendLongData: make(map[int]struct{}),
-		schedulingSQLMode:   schedulingSQLMode,
+		Name:                            preparePlan.GetDcl().GetPrepare().GetName(),
+		Sql:                             originSQL,
+		compile:                         comp,
+		PreparePlan:                     preparePlan,
+		PrepareStmt:                     saveStmt,
+		NativeMode:                      owner.sqlModeHasMatrixOneNative(),
+		OnlyFullGroupBy:                 owner.sqlModeHasOnlyFullGroupBy(),
+		onlyFullGroupBySet:              true,
+		remapDb:                         maps.Clone(execCtx.remapDb),
+		defaultDatabase:                 executionSes.GetTxnCompileCtx().GetDatabase(),
+		exactDecimalComparisonParams:    exactDecimalComparisonParams,
+		exactDecimalComparisonParamsSet: true,
+		tempTableVersion:                owner.GetTempTableVersion(),
+		ddlVersion:                      owner.getDDLVersion(),
+		cloneSQL:                        cloneSQL,
+		protocolVersion:                 protocolVersion,
+		getFromSendLongData:             make(map[int]struct{}),
+		schedulingSQLMode:               schedulingSQLMode,
 	}
 
 	_, ok := preparePlan.GetDcl().Control.(*plan.DataControl_Prepare)

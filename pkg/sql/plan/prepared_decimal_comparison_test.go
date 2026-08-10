@@ -216,8 +216,7 @@ func TestPreparedDecimalComparisonPlannerReplacementAndReuse(t *testing.T) {
 		comparison := findPreparedDecimalComparisonInPlan(filled, "<=>")
 		require.NotNil(t, comparison)
 		for _, arg := range comparison.GetF().Args {
-			require.Equal(t, int32(decimalType.Oid), arg.Typ.Id)
-			require.Equal(t, decimalType.Width, arg.Typ.Width)
+			require.True(t, types.T(arg.Typ.Id).IsDecimal())
 			require.Equal(t, decimalType.Scale, arg.Typ.Scale)
 		}
 		require.False(t, planExprContainsPreparedDecimalParam(comparison))
@@ -232,5 +231,51 @@ func TestPreparedDecimalComparisonPlannerReplacementAndReuse(t *testing.T) {
 		}
 
 		require.True(t, planExprContainsPreparedDecimalParam(original))
+	}
+}
+
+func TestPreparedDecimalComparisonUsesActualStringValueDomain(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	decimalType := types.New(types.T_decimal128, 20, 4)
+	mock.ctxt.tables["part"].Cols[7].Typ = makePlan2Type(&decimalType)
+
+	logicPlan, err := runOneStmt(
+		mock,
+		t,
+		"prepare decimal_cmp_value from 'select p_partkey from part where p_retailprice = ?'",
+	)
+	require.NoError(t, err)
+	prepare := logicPlan.GetDcl().GetPrepare()
+	require.NotNil(t, prepare)
+
+	for _, tc := range []struct {
+		value     string
+		wantValue string
+		wantScale int32
+	}{
+		{value: "0x10", wantValue: "0", wantScale: 0},
+		{value: "1+2", wantValue: "1", wantScale: 0},
+		{value: "1 2", wantValue: "1", wantScale: 0},
+		{value: "9007199254740992.00014", wantValue: "9007199254740992.00014", wantScale: 5},
+	} {
+		t.Run(tc.value, func(t *testing.T) {
+			changed, err := PlanHasExactDecimalComparisonParam(context.Background(), prepare.Plan)
+			require.NoError(t, err)
+			require.True(t, changed)
+			filled, err := FillValuesOfParamsInPlan(context.Background(), prepare.Plan, []any{tc.value})
+			require.NoError(t, err)
+			comparison := findPreparedDecimalComparisonInPlan(filled, "=")
+			if tc.wantScale > decimalType.Scale {
+				require.Nil(t, comparison)
+				return
+			}
+			require.NotNil(t, comparison)
+			value, ok := decimalCastSourceString(comparison.GetF().Args[1])
+			require.True(t, ok)
+			require.Equal(t, tc.wantValue, value)
+			for _, arg := range comparison.GetF().Args {
+				require.True(t, types.T(arg.Typ.Id).IsDecimal())
+			}
+		})
 	}
 }

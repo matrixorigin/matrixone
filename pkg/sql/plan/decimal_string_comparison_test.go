@@ -17,6 +17,7 @@ package plan
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -164,7 +165,7 @@ func TestDecimalStringLiteralUsesMySQLNumericPrefix(t *testing.T) {
 		{name: "hex-looking text", input: "0x10", want: "0"},
 		{name: "embedded plus", input: "1+2", want: "1"},
 		{name: "embedded space", input: "1 2", want: "1"},
-		{name: "scientific suffix", input: "1e2suffix", want: "1e2"},
+		{name: "scientific suffix", input: "1e2suffix", want: "100"},
 		{name: "incomplete exponent", input: "1e+suffix", want: "1"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -192,8 +193,8 @@ func TestDecimalLiteralNaturalTypeUsesMathematicalValue(t *testing.T) {
 		{name: "positive exponent", value: "1e2", oid: types.T_decimal64, width: 3, scale: 0},
 		{name: "uppercase exponent", value: "1E2", oid: types.T_decimal64, width: 3, scale: 0},
 		{name: "negative exponent", value: "1e-2", oid: types.T_decimal64, width: 2, scale: 2},
-		{name: "leading zeros", value: "0001.20", oid: types.T_decimal64, width: 3, scale: 2},
-		{name: "fractional zero", value: "0.000", oid: types.T_decimal64, width: 3, scale: 3},
+		{name: "leading zeros", value: "0001.20", oid: types.T_decimal64, width: 2, scale: 1},
+		{name: "fractional zero", value: "0.000", oid: types.T_decimal64, width: 1, scale: 0},
 		{name: "decimal128 boundary", value: "99999999999999999999999999999999999999", oid: types.T_decimal128, width: 38, scale: 0},
 		{
 			name:  "decimal256 promotion",
@@ -204,8 +205,9 @@ func TestDecimalLiteralNaturalTypeUsesMathematicalValue(t *testing.T) {
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			expr, err := makePlan2DecimalExprWithType(context.Background(), test.value)
+			expr, exact, err := makePlan2ExactDecimalStringExprWithType(context.Background(), test.value)
 			require.NoError(t, err)
+			require.True(t, exact)
 			require.Equal(t, int32(test.oid), expr.Typ.Id)
 			require.Equal(t, test.width, expr.Typ.Width)
 			require.Equal(t, test.scale, expr.Typ.Scale)
@@ -290,4 +292,74 @@ func TestDecimalStringLiteralNormalizationSupportsDecimal256(t *testing.T) {
 	require.NotSame(t, literal, args[1])
 	require.Equal(t, int32(types.T_decimal256), args[1].Typ.Id)
 	require.Equal(t, int32(4), args[1].Typ.Scale)
+}
+
+func TestDecimalStringLiteralOutOfExactDomainFallsBack(t *testing.T) {
+	ctx := context.Background()
+	decimalType := types.New(types.T_decimal128, 20, 4)
+	for _, value := range []string{
+		"1e10000",
+		"1e-10000",
+		"0." + strings.Repeat("0", 79) + "1",
+	} {
+		t.Run(value, func(t *testing.T) {
+			expr, err := BindFuncExprImplByPlanExpr(ctx, "=", []*planpb.Expr{
+				makePreparedDecimalComparisonColumn(decimalType),
+				makePlan2StringConstExprWithType(value),
+			})
+			require.NoError(t, err)
+			for _, arg := range expr.GetF().Args {
+				require.Equal(t, int32(types.T_float64), arg.Typ.Id)
+			}
+		})
+	}
+}
+
+func TestDecimalStringLiteralCanonicalizesRedundantZeros(t *testing.T) {
+	ctx := context.Background()
+	decimalType := types.New(types.T_decimal128, 20, 4)
+	for _, value := range []string{
+		"0e10000",
+		"0e-10000",
+		strings.Repeat("0", 80) + "1",
+		"1.",
+		"0." + strings.Repeat("0", 80),
+	} {
+		t.Run(value, func(t *testing.T) {
+			expr, err := BindFuncExprImplByPlanExpr(ctx, "=", []*planpb.Expr{
+				makePreparedDecimalComparisonColumn(decimalType),
+				makePlan2StringConstExprWithType(value),
+			})
+			require.NoError(t, err)
+			for _, arg := range expr.GetF().Args {
+				require.True(t, types.T(arg.Typ.Id).IsDecimal(), "type id %d", arg.Typ.Id)
+			}
+		})
+	}
+}
+
+func TestFoldableDecimalStringExpressionUsesExactComparison(t *testing.T) {
+	compilerCtx := NewMockCompilerContext(true)
+	lower, err := bindFuncExprAndConstFold(
+		compilerCtx.GetContext(),
+		compilerCtx.GetProcess(),
+		"lower",
+		[]*planpb.Expr{makePlan2StringConstExprWithType("9007199254740992.0001")},
+	)
+	require.NoError(t, err)
+	require.Nil(t, lower.GetLit(), "control: LOWER is not folded by the generic binder path")
+
+	expr, err := bindFuncExprAndConstFold(
+		compilerCtx.GetContext(),
+		compilerCtx.GetProcess(),
+		"=",
+		[]*planpb.Expr{
+			makePreparedDecimalComparisonColumn(types.New(types.T_decimal128, 20, 4)),
+			lower,
+		},
+	)
+	require.NoError(t, err)
+	for _, arg := range expr.GetF().Args {
+		require.True(t, types.T(arg.Typ.Id).IsDecimal(), "type id %d", arg.Typ.Id)
+	}
 }

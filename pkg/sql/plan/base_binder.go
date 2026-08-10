@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	mysqlparser "github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
@@ -3098,6 +3099,7 @@ func (b *baseBinder) bindPythonUdf(udf *function.Udf, astArgs []tree.Expr, depth
 }
 
 func bindFuncExprAndConstFold(ctx context.Context, proc *process.Process, name string, args []*Expr) (*plan.Expr, error) {
+	foldDecimalComparisonStringConstants(proc, name, args)
 	retExpr, err := BindFuncExprImplByPlanExpr(ctx, name, args)
 	if err != nil {
 		return nil, err
@@ -3343,15 +3345,22 @@ func validateApproxPercentileArgs(ctx context.Context, args []*Expr) error {
 // string left operand and a numeric IN-list value. It is deliberately limited
 // to IN/NOT IN fallback comparisons: applying it to every comparison would
 // lose precision for numeric columns compared with string constants.
-func bindMixedInListComparison(ctx context.Context, operator string, left, right *Expr) (*plan.Expr, error) {
+func bindMixedInListComparison(ctx context.Context, operator string, left, right *Expr, exact bool) (*plan.Expr, error) {
 	operands := []*Expr{left, right}
-	if err := normalizeDecimalStringLiteralComparisonArgs(ctx, operator, operands); err != nil {
-		return nil, err
+	if exact {
+		if err := normalizeDecimalStringLiteralComparisonArgs(ctx, operator, operands); err != nil {
+			return nil, err
+		}
+		if err := normalizeDecimalParamComparisonArgs(ctx, operator, operands); err != nil {
+			return nil, err
+		}
 	}
 	left, right = operands[0], operands[1]
 	leftType := makeTypeByPlan2Expr(left)
 	rightType := makeTypeByPlan2Expr(right)
-	if leftType.Oid.IsMySQLString() && (rightType.IsNumeric() || rightType.Oid == types.T_bool) {
+	stringLeftNumericRight := leftType.Oid.IsMySQLString() && (rightType.IsNumeric() || rightType.Oid == types.T_bool)
+	numericLeftStringRight := rightType.Oid.IsMySQLString() && (leftType.IsNumeric() || leftType.Oid == types.T_bool)
+	if stringLeftNumericRight || !exact && numericLeftStringRight {
 		targetType := types.T_float64.ToType()
 		operands = []*Expr{left, right}
 		for i := range operands {
@@ -3721,6 +3730,7 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 
 		//if all the expr in the in list can safely cast to left type, we call it safe
 		if rightList := args[1].GetList(); rightList != nil {
+			exactSingleComparison := len(rightList.List) == 1
 			typLeft := makeTypeByPlan2Expr(args[0])
 			leftIsConstNull := typLeft.Oid == types.T_any && args[0].GetLit() != nil && args[0].GetLit().Isnull
 			var inExprList, orExprList []*plan.Expr
@@ -3781,7 +3791,7 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 			}
 			if name == "in" {
 				for _, expr := range orExprList {
-					tmpExpr, err := bindMixedInListComparison(ctx, "=", DeepCopyExpr(args[0]), expr)
+					tmpExpr, err := bindMixedInListComparison(ctx, "=", DeepCopyExpr(args[0]), expr, exactSingleComparison)
 					if err != nil {
 						return nil, err
 					}
@@ -3790,7 +3800,7 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 				return combinePlanExprsBalanced(ctx, "or", expanded)
 			} else {
 				for _, expr := range orExprList {
-					tmpExpr, err := bindMixedInListComparison(ctx, "!=", DeepCopyExpr(args[0]), expr)
+					tmpExpr, err := bindMixedInListComparison(ctx, "!=", DeepCopyExpr(args[0]), expr, exactSingleComparison)
 					if err != nil {
 						return nil, err
 					}
@@ -4551,6 +4561,82 @@ func integerMetadataWidth(oid types.T) int32 {
 	}
 }
 
+func isDecimalComparisonOperator(name string) bool {
+	switch name {
+	case "=", "<=>", "!=", "<>", "<", "<=", ">", ">=":
+		return true
+	default:
+		return false
+	}
+}
+
+// foldDecimalComparisonStringConstants evaluates only query-invariant string
+// expressions before overload resolution. Runtime strings (columns, variables,
+// and prepared parameters) stay on MySQL's generic REAL coercion path.
+func foldDecimalComparisonStringConstants(proc *process.Process, name string, args []*Expr) {
+	if proc == nil || !isDecimalComparisonOperator(name) || len(args) != 2 {
+		return
+	}
+	for stringPos, decimalPos := range []int{1, 0} {
+		if !types.T(args[decimalPos].Typ.Id).IsDecimal() ||
+			!isCharacterStringType(args[stringPos].Typ.Id) ||
+			args[stringPos].GetLit() != nil ||
+			!isFoldableDecimalComparisonConstant(args[stringPos]) {
+			continue
+		}
+		vec, free, err := colexec.GetReadonlyResultFromExpression(
+			proc,
+			DeepCopyExpr(args[stringPos]),
+			[]*batch.Batch{batch.EmptyForConstFoldBatch},
+		)
+		if err != nil {
+			continue
+		}
+		literal := rule.GetConstantValue(vec, false, 0)
+		free()
+		if literal == nil || literal.Isnull || literal.IsBin {
+			continue
+		}
+		if _, ok := literal.Value.(*plan.Literal_Sval); !ok {
+			continue
+		}
+		args[stringPos] = &Expr{Typ: args[stringPos].Typ, Expr: &plan.Expr_Lit{Lit: literal}}
+	}
+}
+
+func isFoldableDecimalComparisonConstant(expr *Expr) bool {
+	if expr == nil {
+		return false
+	}
+	switch impl := expr.Expr.(type) {
+	case *plan.Expr_Lit, *plan.Expr_T, *plan.Expr_Vec:
+		return true
+	case *plan.Expr_F:
+		if impl.F == nil || impl.F.Func == nil {
+			return false
+		}
+		fn, ok := function.GetFunctionByIdWithoutError(impl.F.Func.GetObj())
+		if !ok || fn.CannotFold() || fn.IsRealTimeRelated() || fn.IsAgg() || fn.IsWin() {
+			return false
+		}
+		for _, arg := range impl.F.Args {
+			if !isFoldableDecimalComparisonConstant(arg) {
+				return false
+			}
+		}
+		return true
+	case *plan.Expr_List:
+		for _, arg := range impl.List.List {
+			if !isFoldableDecimalComparisonConstant(arg) {
+				return false
+			}
+		}
+		return true
+	default:
+		return false
+	}
+}
+
 // A numeric string literal paired with DECIMAL has an exact numeric domain.
 // Resolve that domain before the generic string/numeric cast matrix selects
 // FLOAT64, which cannot distinguish adjacent DECIMAL values above 2^53. Keep
@@ -4558,12 +4644,7 @@ func integerMetadataWidth(oid types.T) int32 {
 // its result to the literal's natural DECIMAL type so the explicit cast still
 // executes and a peer with a narrower scale cannot truncate the boundary.
 func normalizeDecimalStringLiteralComparisonArgs(ctx context.Context, name string, args []*Expr) error {
-	switch name {
-	case "=", "<=>", "!=", "<>", "<", "<=", ">", ">=":
-		if len(args) != 2 {
-			return nil
-		}
-	default:
+	if !isDecimalComparisonOperator(name) || len(args) != 2 {
 		return nil
 	}
 
@@ -4584,9 +4665,12 @@ func normalizeDecimalStringLiteralComparisonArgs(ctx context.Context, name strin
 			continue
 		}
 
-		decimalExpr, err := makePlan2DecimalExprWithType(ctx, numericValue)
+		decimalExpr, exact, err := makePlan2ExactDecimalStringExprWithType(ctx, numericValue)
 		if err != nil {
 			return err
+		}
+		if !exact {
+			continue
 		}
 		if args[stringPos].GetLit() != nil {
 			args[stringPos] = decimalExpr

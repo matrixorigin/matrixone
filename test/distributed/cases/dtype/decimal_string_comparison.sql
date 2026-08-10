@@ -77,6 +77,76 @@ FROM numeric_prefix_values WHERE d = '1 2';
 SELECT GROUP_CONCAT(id ORDER BY id) AS scientific_notation_ids
 FROM numeric_prefix_values WHERE d = '1e2';
 
+SELECT GROUP_CONCAT(id ORDER BY id) AS zero_large_exponent_ids
+FROM numeric_prefix_values WHERE d = '0e10000';
+SELECT GROUP_CONCAT(id ORDER BY id) AS zero_small_exponent_ids
+FROM numeric_prefix_values WHERE d = '0e-10000';
+SELECT GROUP_CONCAT(id ORDER BY id) AS large_exponent_lt_ids
+FROM numeric_prefix_values WHERE d < '1e10000';
+SELECT GROUP_CONCAT(id ORDER BY id) AS tiny_exponent_eq_ids
+FROM numeric_prefix_values WHERE d = '1e-10000';
+SELECT GROUP_CONCAT(id ORDER BY id) AS redundant_leading_zero_ids
+FROM numeric_prefix_values
+WHERE d = '000000000000000000000000000000000000000000000000000000000000000000000000000000001';
+SELECT GROUP_CONCAT(id ORDER BY id) AS trailing_point_ids
+FROM numeric_prefix_values WHERE d = '1.';
+SELECT GROUP_CONCAT(id ORDER BY id) AS redundant_fraction_zero_ids
+FROM numeric_prefix_values
+WHERE d = '0.00000000000000000000000000000000000000000000000000000000000000000000000000000000';
+SELECT GROUP_CONCAT(id ORDER BY id) AS out_of_domain_scale_ids
+FROM numeric_prefix_values
+WHERE d = '0.00000000000000000000000000000000000000000000000000000000000000000000000000000001';
+
+SELECT GROUP_CONCAT(id ORDER BY id) AS lower_constant_ids
+FROM boundary_values WHERE d128 = LOWER('9007199254740992.0001');
+SELECT GROUP_CONCAT(id ORDER BY id) AS concat_constant_ids
+FROM boundary_values WHERE d128 = CONCAT('9007199254740992.000', '1');
+SELECT GROUP_CONCAT(id ORDER BY id) AS case_constant_ids
+FROM boundary_values
+WHERE d128 = CASE WHEN 1 = 1 THEN '9007199254740992.0001' ELSE '0' END;
+
+SET @runtime_decimal_string = '9007199254740992.0001';
+SELECT GROUP_CONCAT(id ORDER BY id) AS variable_real_fallback_ids
+FROM boundary_values WHERE d128 = @runtime_decimal_string;
+CREATE TABLE runtime_strings (s VARCHAR(64));
+INSERT INTO runtime_strings VALUES ('9007199254740992.0001');
+SELECT GROUP_CONCAT(b.id ORDER BY b.id) AS concat_runtime_real_fallback_ids
+FROM boundary_values b JOIN runtime_strings r ON b.d128 = CONCAT(r.s, '');
+
+SELECT GROUP_CONCAT(id ORDER BY id) AS multi_in_real_fallback_ids
+FROM boundary_values
+WHERE d128 IN ('9007199254740992.0001', '9007199254740992.9999');
+SELECT GROUP_CONCAT(id ORDER BY id) AS multi_not_in_real_fallback_ids
+FROM boundary_values
+WHERE d128 NOT IN ('9007199254740992.0001', '9007199254740992.9999');
+
+CREATE TABLE multi_in_update LIKE boundary_values;
+ALTER TABLE multi_in_update ADD COLUMN matched INT DEFAULT 0;
+INSERT INTO multi_in_update (id, d64, d128) SELECT id, d64, d128 FROM boundary_values;
+UPDATE multi_in_update SET matched = 1
+WHERE d128 IN ('9007199254740992.0001', '9007199254740992.9999');
+SELECT GROUP_CONCAT(id ORDER BY id) AS multi_in_update_ids
+FROM multi_in_update WHERE matched = 1;
+DELETE FROM multi_in_update
+WHERE d128 NOT IN ('9007199254740992.0001', '9007199254740992.9999');
+SELECT GROUP_CONCAT(id ORDER BY id) AS multi_not_in_delete_remaining_ids
+FROM multi_in_update;
+
+CREATE TABLE negative_values (
+  id INT PRIMARY KEY,
+  d DECIMAL(10,2),
+  KEY idx_d (d)
+);
+INSERT INTO negative_values VALUES (1, -1.20), (2, 0.00), (3, 1.20);
+SELECT GROUP_CONCAT(id ORDER BY id) AS negative_eq_ids
+FROM negative_values WHERE d = '-1.200';
+SELECT GROUP_CONCAT(id ORDER BY id) AS negative_null_safe_eq_ids
+FROM negative_values WHERE d <=> '-1.200';
+SELECT GROUP_CONCAT(id ORDER BY id) AS negative_ne_ids
+FROM negative_values WHERE d <> '-1.200';
+SELECT GROUP_CONCAT(id ORDER BY id) AS negative_index_eq_ids
+FROM negative_values FORCE INDEX (idx_d) WHERE d = '-1.200';
+
 CREATE TABLE decimal256_boundary (
   id INT PRIMARY KEY,
   d DECIMAL(38,30),

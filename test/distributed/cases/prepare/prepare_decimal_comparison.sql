@@ -75,4 +75,29 @@ PREPARE p_reverse_not_in FROM
 EXECUTE p_reverse_not_in;
 DEALLOCATE PREPARE p_reverse_not_in;
 
+CREATE TABLE prefix_values (id INT PRIMARY KEY, d DECIMAL(10,0));
+INSERT INTO prefix_values VALUES (1, 0), (2, 1), (3, 16), (4, 100);
+PREPARE p_prefix FROM 'SELECT id FROM prefix_values WHERE d = ? ORDER BY id';
+SET @p = '0x10';
+EXECUTE p_prefix USING @p;
+SET @p = '1+2';
+EXECUTE p_prefix USING @p;
+SET @p = '1 2';
+EXECUTE p_prefix USING @p;
+DEALLOCATE PREPARE p_prefix;
+
+PREPARE p_extra_scale FROM 'SELECT id FROM t WHERE d128 = ? ORDER BY id';
+SET @p = '9007199254740992.00014';
+EXECUTE p_extra_scale USING @p;
+DEALLOCATE PREPARE p_extra_scale;
+
+PREPARE p_dynamic_reverse_in FROM 'SELECT id FROM t WHERE ? IN (d128) ORDER BY id';
+SET @p = '9007199254740992.0001';
+EXECUTE p_dynamic_reverse_in USING @p;
+DEALLOCATE PREPARE p_dynamic_reverse_in;
+PREPARE p_dynamic_reverse_not_in FROM 'SELECT id FROM t WHERE ? NOT IN (d128) ORDER BY id';
+SET @p = '9007199254740992.0001';
+EXECUTE p_dynamic_reverse_not_in USING @p;
+DEALLOCATE PREPARE p_dynamic_reverse_not_in;
+
 DROP DATABASE prepare_decimal_comparison;

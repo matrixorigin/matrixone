@@ -38,7 +38,7 @@ func mixedStringNumericInList(t *testing.T, ctx context.Context) *planpb.Expr {
 	}
 }
 
-func TestMixedStringNumericInKeepsDecimalComparisonExact(t *testing.T) {
+func TestMixedStringNumericMultiInKeepsRealFallback(t *testing.T) {
 	ctx := context.Background()
 	expr, err := BindFuncExprImplByPlanExpr(ctx, "in", []*planpb.Expr{
 		makePlan2StringConstExprWithType("9.50"), mixedStringNumericInList(t, ctx),
@@ -69,7 +69,7 @@ func TestMixedStringNumericInKeepsDecimalComparisonExact(t *testing.T) {
 			float64Comparisons++
 		}
 	}
-	require.Equal(t, 1, float64Comparisons)
+	require.Equal(t, 2, float64Comparisons)
 }
 
 func TestMixedStringNumericInConstantFoldsToTrue(t *testing.T) {
@@ -117,7 +117,7 @@ func TestMixedStringNumericNotInBindsAndFoldsToFalse(t *testing.T) {
 			float64Comparisons++
 		}
 	}
-	require.Equal(t, 1, float64Comparisons)
+	require.Equal(t, 2, float64Comparisons)
 
 	folded, err := ConstantFold(batch.EmptyForConstFoldBatch, expr, ctx.GetProcess(), false, true)
 	require.NoError(t, err)
@@ -155,6 +155,38 @@ func TestDecimalStringLiteralLeftInKeepsExactComparison(t *testing.T) {
 			for _, arg := range comparison.Args {
 				require.True(t, types.T(arg.Typ.Id).IsDecimal(), "type id %d", arg.Typ.Id)
 			}
+		})
+	}
+}
+
+func TestDecimalTextParameterLeftInDefersExactDomainToExecution(t *testing.T) {
+	decimalType := types.New(types.T_decimal128, 20, 4)
+	for _, operator := range []struct {
+		name       string
+		comparison string
+	}{
+		{name: "in", comparison: "="},
+		{name: "not_in", comparison: "!="},
+	} {
+		t.Run(operator.name, func(t *testing.T) {
+			column := makePreparedDecimalComparisonColumn(decimalType)
+			list := &planpb.Expr{
+				Expr: &planpb.Expr_List{List: &planpb.ExprList{List: []*planpb.Expr{column}}},
+			}
+			expr, err := BindFuncExprImplByPlanExpr(context.Background(), operator.name, []*planpb.Expr{
+				makePreparedDecimalComparisonParam(0),
+				list,
+			})
+			require.NoError(t, err)
+			comparison := expr.GetF()
+			require.NotNil(t, comparison)
+			require.Equal(t, operator.comparison, comparison.Func.GetObjName())
+			require.Len(t, comparison.Args, 2)
+			for _, arg := range comparison.Args {
+				require.True(t, types.T(arg.Typ.Id).IsDecimal(), "type id %d", arg.Typ.Id)
+			}
+			_, ok := preparedDecimalComparisonCast(comparison.Args[0])
+			require.True(t, ok)
 		})
 	}
 }
@@ -206,4 +238,35 @@ func TestNumericInStringLiteralKeepsExactNumericComparison(t *testing.T) {
 			require.Equal(t, int32(tc.expected), comparison.Args[1].Typ.Id)
 		})
 	}
+}
+
+func TestDecimalMultiElementInKeepsRealFallback(t *testing.T) {
+	decimalType := types.New(types.T_decimal128, 20, 4)
+	left := makePreparedDecimalComparisonColumn(decimalType)
+	right := &planpb.Expr{Expr: &planpb.Expr_List{List: &planpb.ExprList{List: []*planpb.Expr{
+		makePlan2StringConstExprWithType("9007199254740992.0001"),
+		makePlan2StringConstExprWithType("9007199254740992.9999"),
+	}}}}
+
+	expr, err := BindFuncExprImplByPlanExpr(context.Background(), "in", []*planpb.Expr{left, right})
+	require.NoError(t, err)
+
+	comparisons := 0
+	var visit func(*planpb.Expr)
+	visit = func(current *planpb.Expr) {
+		if fn := current.GetF(); fn != nil {
+			if fn.Func.GetObjName() == "=" {
+				comparisons++
+				require.Len(t, fn.Args, 2)
+				for _, arg := range fn.Args {
+					require.Equal(t, int32(types.T_float64), arg.Typ.Id)
+				}
+			}
+			for _, arg := range fn.Args {
+				visit(arg)
+			}
+		}
+	}
+	visit(expr)
+	require.Equal(t, 2, comparisons)
 }

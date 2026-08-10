@@ -1669,6 +1669,9 @@ func decimal256HasTrailingZeros(value types.Decimal256, trailingDigits int32) bo
 	if trailingDigits <= 0 || trailingDigits > 18 {
 		return false
 	}
+	if value.Sign() {
+		value = value.Minus()
+	}
 	divisor := types.Decimal256{B0_63: uint64(types.Pow10[trailingDigits])}
 	remainder, err := value.Mod256(divisor)
 	if err != nil {
@@ -1696,6 +1699,9 @@ func decimal128HasTrailingZeros(low, high int64, trailingDigits int32) bool {
 	// For values with non-zero high part, we need 128-bit modulo
 	// Use types.Decimal128 for proper 128-bit arithmetic
 	d128 := types.Decimal128{B0_63: uint64(low), B64_127: uint64(high)}
+	if d128.Sign() {
+		d128 = d128.Minus()
+	}
 	divisorDec := types.Decimal128{B0_63: uint64(divisor), B64_127: 0}
 
 	// Compute d128 % divisorDec
@@ -3167,6 +3173,20 @@ func FillValuesOfParamsInPlan(ctx context.Context, preparePlan *Plan, paramVals 
 		}
 	}
 	return copied, nil
+}
+
+// PlanHasExactDecimalComparisonParam reports whether a prepared plan's
+// DECIMAL comparison domain depends on the actual text parameter.
+func PlanHasExactDecimalComparisonParam(ctx context.Context, preparePlan *Plan) (bool, error) {
+	if preparePlan == nil || preparePlan.GetQuery() == nil {
+		return false, nil
+	}
+	rule := &findDecimalComparisonParamRule{}
+	visitor := NewVisitPlan(preparePlan, []VisitPlanRule{rule})
+	if err := visitor.Visit(ctx); err != nil {
+		return false, err
+	}
+	return rule.found, nil
 }
 
 type ParamValue struct {

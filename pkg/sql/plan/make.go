@@ -16,6 +16,7 @@ package plan
 
 import (
 	"context"
+	"math"
 	"strconv"
 	"strings"
 	"unicode/utf8"
@@ -67,110 +68,198 @@ func MakePlan2Decimal128ExprWithType(v types.Decimal128, typ *Type) *plan.Expr {
 }
 
 func makePlan2DecimalExprWithType(ctx context.Context, v string, isBin ...bool) (*plan.Expr, error) {
-	width, scale, err := decimalLiteralWidthAndScale(v)
-	if err != nil {
-		return nil, moerr.NewInvalidInputf(ctx, "invalid decimal literal %q", v)
+	var typ plan.Type
+	width := decimalLiteralPrecision(v)
+	_, scale, err := types.Parse128(v)
+	if err == nil && scale < 18 && len(v) < 18 {
+		typ = plan.Type{
+			Id:          int32(types.T_decimal64),
+			Width:       width,
+			Scale:       scale,
+			NotNullable: true,
+		}
+	} else if err == nil {
+		typ = plan.Type{
+			Id:          int32(types.T_decimal128),
+			Width:       width,
+			Scale:       scale,
+			NotNullable: true,
+		}
+	} else {
+		_, scale, err = types.Parse256(v)
+		if err != nil {
+			return nil, err
+		}
+		typ = plan.Type{
+			Id:          int32(types.T_decimal256),
+			Width:       width,
+			Scale:       scale,
+			NotNullable: true,
+		}
+	}
+	return appendCastBeforeExpr(ctx, makePlan2StringConstExprWithType(v, isBin...), typ)
+}
+
+func decimalLiteralPrecision(v string) int32 {
+	var width int32
+	for i := 0; i < len(v); i++ {
+		if v[i] >= '0' && v[i] <= '9' {
+			width++
+		}
+	}
+	if width == 0 {
+		return 1
+	}
+	return width
+}
+
+// makePlan2ExactDecimalStringExprWithType constructs the narrowest DECIMAL
+// that exactly represents a character string's numeric prefix. It is kept
+// separate from makePlan2DecimalExprWithType because ordinary unquoted numeric
+// literals have longstanding arithmetic type and overflow semantics.
+func makePlan2ExactDecimalStringExprWithType(ctx context.Context, v string) (*plan.Expr, bool, error) {
+	canonical, width, scale, ok := canonicalExactDecimalString(v)
+	if !ok {
+		return nil, false, nil
 	}
 
-	parseValue := v
-	if strings.ContainsRune(parseValue, 'E') {
-		parseValue = strings.Replace(parseValue, "E", "e", 1)
-	}
 	var oid types.T
+	var err error
 	switch {
-	case width < types.T_decimal64.ToType().Width && scale < types.T_decimal64.ToType().Width:
+	case width <= types.T_decimal64.ToType().Width:
 		oid = types.T_decimal64
-		_, _, err = types.Parse128(parseValue)
+		_, _, err = types.Parse128(canonical)
 	case width <= types.T_decimal128.ToType().Width:
 		oid = types.T_decimal128
-		_, _, err = types.Parse128(parseValue)
-	case width <= types.T_decimal256.ToType().Width:
-		oid = types.T_decimal256
-		_, _, err = types.Parse256(parseValue)
+		_, _, err = types.Parse128(canonical)
 	default:
-		err = moerr.NewInvalidInputf(ctx, "decimal literal %q exceeds maximum precision", v)
+		oid = types.T_decimal256
+		_, _, err = types.Parse256(canonical)
 	}
 	if err != nil {
-		return nil, err
+		return nil, false, nil
 	}
+
 	typ := plan.Type{
 		Id:          int32(oid),
 		Width:       width,
 		Scale:       scale,
 		NotNullable: true,
 	}
-	return appendCastBeforeExpr(ctx, makePlan2StringConstExprWithType(parseValue, isBin...), typ)
+	expr, err := appendCastBeforeExpr(ctx, makePlan2StringConstExprWithType(canonical), typ)
+	return expr, err == nil, err
 }
 
-func decimalLiteralWidthAndScale(v string) (int32, int32, error) {
+func canonicalExactDecimalString(v string) (string, int32, int32, bool) {
 	if v == "" {
-		return 0, 0, strconv.ErrSyntax
+		return "", 0, 0, false
 	}
 	i := 0
+	negative := false
 	if v[i] == '+' || v[i] == '-' {
+		negative = v[i] == '-'
 		i++
 	}
 	if i == len(v) {
-		return 0, 0, strconv.ErrSyntax
+		return "", 0, 0, false
 	}
 
-	var digits, leadingZeros, fractionDigits int64
-	seenNonZero := false
-	seenDigit := false
+	var digits strings.Builder
+	integerDigits := int64(0)
 	seenDot := false
+	seenDigit := false
+	nonZero := false
 	for i < len(v) && v[i] != 'e' && v[i] != 'E' {
 		switch {
 		case v[i] >= '0' && v[i] <= '9':
+			digits.WriteByte(v[i])
 			seenDigit = true
-			digits++
-			if seenDot {
-				fractionDigits++
-			}
-			if !seenNonZero && v[i] == '0' {
-				leadingZeros++
-			} else {
-				seenNonZero = true
+			nonZero = nonZero || v[i] != '0'
+			if !seenDot {
+				integerDigits++
 			}
 		case v[i] == '.' && !seenDot:
 			seenDot = true
 		default:
-			return 0, 0, strconv.ErrSyntax
+			return "", 0, 0, false
 		}
 		i++
 	}
 	if !seenDigit {
-		return 0, 0, strconv.ErrSyntax
+		return "", 0, 0, false
+	}
+	if !nonZero {
+		return "0", 1, 0, true
 	}
 
 	var exponent int64
 	if i < len(v) {
 		i++
-		if i == len(v) {
-			return 0, 0, strconv.ErrSyntax
-		}
-		parsedExponent, err := strconv.ParseInt(v[i:], 10, 32)
+		parsed, err := strconv.ParseInt(v[i:], 10, 64)
 		if err != nil {
-			return 0, 0, err
+			return "", 0, 0, false
 		}
-		exponent = parsedExponent
+		exponent = parsed
 	}
 
-	precision := digits - leadingZeros
-	if precision == 0 {
-		precision = 1
+	coefficient := digits.String()
+	leading := 0
+	for leading < len(coefficient) && coefficient[leading] == '0' {
+		leading++
 	}
-	scale := fractionDigits - exponent
-	width := precision
-	if scale < 0 {
-		width -= scale
-		scale = 0
-	} else if scale > width {
+	coefficient = coefficient[leading:]
+	point, overflow := safeAddInt64(integerDigits-int64(leading), exponent)
+	if overflow {
+		return "", 0, 0, false
+	}
+	for len(coefficient) > 0 && int64(len(coefficient)) > point && coefficient[len(coefficient)-1] == '0' {
+		coefficient = coefficient[:len(coefficient)-1]
+	}
+
+	maxWidth := int64(types.T_decimal256.ToType().Width)
+	if point < -maxWidth || point > maxWidth || int64(len(coefficient)) > maxWidth {
+		return "", 0, 0, false
+	}
+	var width, scale int64
+	switch {
+	case point <= 0:
+		scale, overflow = safeAddInt64(-point, int64(len(coefficient)))
 		width = scale
+	case point >= int64(len(coefficient)):
+		width = point
+	default:
+		width = int64(len(coefficient))
+		scale = int64(len(coefficient)) - point
 	}
-	if width > int64(types.T_decimal256.ToType().Width) || scale > int64(types.T_decimal256.ToType().Width) {
-		return 0, 0, strconv.ErrRange
+	if overflow || width <= 0 || width > maxWidth || scale > maxWidth {
+		return "", 0, 0, false
 	}
-	return int32(width), int32(scale), nil
+
+	var result strings.Builder
+	if negative {
+		result.WriteByte('-')
+	}
+	switch {
+	case point <= 0:
+		result.WriteString("0.")
+		result.WriteString(strings.Repeat("0", int(-point)))
+		result.WriteString(coefficient)
+	case point >= int64(len(coefficient)):
+		result.WriteString(coefficient)
+		result.WriteString(strings.Repeat("0", int(point)-len(coefficient)))
+	default:
+		result.WriteString(coefficient[:point])
+		result.WriteByte('.')
+		result.WriteString(coefficient[point:])
+	}
+	return result.String(), int32(width), int32(scale), true
+}
+
+func safeAddInt64(left, right int64) (int64, bool) {
+	if right > 0 && left > math.MaxInt64-right || right < 0 && left < math.MinInt64-right {
+		return 0, true
+	}
+	return left + right, false
 }
 
 func makePlan2DateConstNullExpr(t types.T) *plan.Expr {

@@ -20,8 +20,10 @@ import (
 	"sort"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	indexplugin "github.com/matrixorigin/matrixone/pkg/indexplugin"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 )
 
 var (
@@ -437,6 +439,18 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 	switch exprImpl := e.Expr.(type) {
 	case *plan.Expr_F:
 		needResetFunction := false
+		if isDecimalComparisonOperator(exprImpl.F.Func.GetObjName()) {
+			for i, arg := range exprImpl.F.Args {
+				replacement, ok, err := rule.preparedDecimalComparisonValue(arg)
+				if err != nil {
+					return nil, err
+				}
+				if ok {
+					exprImpl.F.Args[i] = replacement
+					needResetFunction = true
+				}
+			}
+		}
 		for i, arg := range exprImpl.F.Args {
 			if _, ok := arg.Expr.(*plan.Expr_P); ok {
 				needResetFunction = true
@@ -486,6 +500,85 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 	default:
 		return e, nil
 	}
+}
+
+func (rule *ResetParamRefRule) preparedDecimalComparisonValue(expr *plan.Expr) (*plan.Expr, bool, error) {
+	cast, ok := preparedDecimalComparisonCast(expr)
+	if !ok {
+		return nil, false, nil
+	}
+
+	paramRef := cast.Args[0].GetP()
+	if int(paramRef.Pos) >= len(rule.params) {
+		return nil, false, moerr.NewInternalErrorf(
+			context.TODO(),
+			"get prepare params error, index %d not exists",
+			int(paramRef.Pos),
+		)
+	}
+	raw := &plan.Expr{Typ: cast.Args[0].Typ, Expr: rule.params[int(paramRef.Pos)].Expr}
+	literal := raw.GetLit()
+	if literal == nil || literal.Isnull || literal.IsBin {
+		return nil, false, nil
+	}
+	stringValue, ok := literal.Value.(*plan.Literal_Sval)
+	if !ok {
+		return nil, false, nil
+	}
+	numericValue, ok := function.GetNumericStringPrefix(stringValue.Sval)
+	if !ok {
+		return raw, true, nil
+	}
+	exact, ok, err := makePlan2ExactDecimalStringExprWithType(rule.ctx, numericValue)
+	if err != nil {
+		return nil, false, err
+	}
+	if !ok {
+		return raw, true, nil
+	}
+	return exact, true, nil
+}
+
+func preparedDecimalComparisonCast(expr *plan.Expr) (*plan.Function, bool) {
+	if expr == nil || !types.T(expr.Typ.Id).IsDecimal() {
+		return nil, false
+	}
+	cast := expr.GetF()
+	if cast == nil || cast.Func == nil || cast.Func.GetObjName() != "cast" || len(cast.Args) != 2 {
+		return nil, false
+	}
+	_, overload := function.DecodeOverloadID(cast.Func.GetObj())
+	if overload != 0 || !isDirectDynamicParam(cast.Args[0]) || !isCharacterStringType(cast.Args[0].Typ.Id) {
+		return nil, false
+	}
+	return cast, true
+}
+
+type findDecimalComparisonParamRule struct {
+	found bool
+}
+
+func (rule *findDecimalComparisonParamRule) MatchNode(_ *Node) bool { return false }
+func (rule *findDecimalComparisonParamRule) IsApplyExpr() bool      { return true }
+func (rule *findDecimalComparisonParamRule) ApplyNode(_ *Node) error {
+	return nil
+}
+
+func (rule *findDecimalComparisonParamRule) ApplyExpr(expr *plan.Expr) (*plan.Expr, error) {
+	if rule.found || expr == nil {
+		return expr, nil
+	}
+	fn := expr.GetF()
+	if fn == nil || fn.Func == nil || !isDecimalComparisonOperator(fn.Func.GetObjName()) {
+		return expr, nil
+	}
+	for _, arg := range fn.Args {
+		if _, ok := preparedDecimalComparisonCast(arg); ok {
+			rule.found = true
+			break
+		}
+	}
+	return expr, nil
 }
 
 func applyWindowExpr(e *plan.Expr, apply func(*plan.Expr) (*plan.Expr, error)) (*plan.Expr, error) {

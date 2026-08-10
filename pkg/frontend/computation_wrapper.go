@@ -832,6 +832,14 @@ func initExecuteStmtParamWithResolverInSession(
 
 		preparePlan = newPreparePlan
 		prepareStmt.PreparePlan = newPlan
+		prepareStmt.exactDecimalComparisonParams, err = plan2.PlanHasExactDecimalComparisonParam(
+			reqCtx,
+			preparePlan.Plan,
+		)
+		if err != nil {
+			return nil, nil, nil, "", false, err
+		}
+		prepareStmt.exactDecimalComparisonParamsSet = true
 		prepareStmt.ColDefData = newColDefData
 		if execCtx.input != nil && execCtx.input.isBinaryProtExecute {
 			execCtx.prepareColDef = newColDefData
@@ -867,6 +875,7 @@ func initExecuteStmtParamWithResolverInSession(
 			owner, originSQL, prepareStmt.schedulingSQLMode)
 		if !executionSes.IsBackgroundSession() {
 			if _, ok := preparePlan.Plan.Plan.(*plan.Plan_Query); ok &&
+				!prepareStmt.exactDecimalComparisonParams &&
 				shouldCachePrepareCompile(preparePlan.Plan) && !executionIntent.Explicit {
 				// Prepare-time compiles are cached and must not retain a statement-owned trace.
 				// The execution path attaches the current wrapper trace after cache retrieval.
@@ -928,6 +937,23 @@ func initExecuteStmtParamWithResolverInSession(
 			return nil, nil, nil, originSQL, false, moerr.NewInvalidInput(reqCtx, "Incorrect arguments to EXECUTE")
 		}
 	}
+	executionPlan := preparePlan.Plan
+	if !prepareStmt.exactDecimalComparisonParamsSet {
+		prepareStmt.exactDecimalComparisonParams, err = plan2.PlanHasExactDecimalComparisonParam(
+			reqCtx,
+			executionPlan,
+		)
+		if err != nil {
+			return nil, nil, nil, originSQL, false, err
+		}
+		prepareStmt.exactDecimalComparisonParamsSet = true
+	}
+	if prepareStmt.exactDecimalComparisonParams {
+		executionPlan, err = plan2.FillValuesOfParamsInPlan(reqCtx, executionPlan, cwft.paramVals)
+		if err != nil {
+			return nil, nil, nil, originSQL, false, err
+		}
+	}
 	// A cached prepared Compile already owns a materialized worker topology.
 	// Explicit scheduling intent must be evaluated for this execution, so it
 	// cannot reuse a topology compiled under the prepare-time defaults. Keep a
@@ -938,6 +964,9 @@ func initExecuteStmtParamWithResolverInSession(
 	cwft.hasPreparedSchedulingSQLMode = true
 	cwft.preparedSchedulingSQL = originSQL
 	retComp := prepareStmt.compile
+	if prepareStmt.exactDecimalComparisonParams {
+		retComp = nil
+	}
 	if executionSes.IsBackgroundSession() {
 		// A cached compile owns pipelines tied to the client process used at
 		// PREPARE time. A procedure executes with a distinct background process.
@@ -951,7 +980,7 @@ func initExecuteStmtParamWithResolverInSession(
 	if err != nil {
 		return nil, nil, nil, "", false, err
 	}
-	return retComp, preparePlan.Plan, executionStmt, originSQL, owned, nil
+	return retComp, executionPlan, executionStmt, originSQL, owned, nil
 }
 
 func prepareSchemaAccountID(currentAccountID uint32, obj *plan.ObjectRef) uint32 {
