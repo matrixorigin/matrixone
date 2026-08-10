@@ -25,7 +25,9 @@ import (
 
 type siriusJournalStub struct{}
 
-func (siriusJournalStub) Store(context.Context, *substrait.Lease) error            { return nil }
+func (siriusJournalStub) StoreIfCapacity(context.Context, []*substrait.Lease, int) (int, error) {
+	return 0, nil
+}
 func (siriusJournalStub) Active(context.Context, *substrait.Lease) (bool, error)   { return false, nil }
 func (siriusJournalStub) MarkReleased(context.Context, []byte) error               { return nil }
 func (siriusJournalStub) Delete(context.Context, []byte) error                     { return nil }
@@ -53,4 +55,14 @@ func TestCompileSiriusReadRejectsMissingPlan(t *testing.T) {
 	invalid := &planpb.Plan{Plan: &planpb.Plan_Query{Query: &planpb.Query{StmtType: planpb.Query_SELECT}}}
 	_, err = c.CompileSiriusRead(ctx, invalid, 0, nil, nil, "", 0, nil)
 	require.Error(t, err)
+	require.True(t, substrait.IsNotEligible(err))
+
+	unsupported := &planpb.Plan{Plan: &planpb.Plan_Query{Query: &planpb.Query{
+		StmtType: planpb.Query_SELECT,
+		Steps:    []int32{0},
+		Nodes:    []*planpb.Node{{NodeId: 0, NodeType: planpb.Node_JOIN}},
+	}}}
+	_, err = c.CompileSiriusRead(ctx, unsupported, 0, nil, nil, "", 0, nil)
+	require.Error(t, err)
+	require.True(t, substrait.IsNotEligible(err), "normal plan ineligibility must reach the compile caller")
 }

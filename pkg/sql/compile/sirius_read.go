@@ -67,7 +67,7 @@ func (c *Compile) CompileSiriusRead(ctx context.Context, queryPlan *planpb.Plan,
 	readOnly := ws.Readonly()
 	priorWrites := ws.WriteOffset() != 0 || ws.GetSnapshotWriteOffset() != 0
 	if !readOnly || priorWrites {
-		return nil, moerr.NewInternalError(ctx, "substrait: transaction is not an admissible read-only snapshot")
+		return nil, substrait.NotEligible(substrait.EligibilityTransaction, "transaction is not an admissible read-only snapshot")
 	}
 	if leases == nil || !leases.Ready() || !leases.Protected() || accountID == 0 || len(queryID) == 0 || ttl <= 0 || ttl > substrait.MaxLeaseTTL {
 		return nil, moerr.NewInternalError(ctx, "substrait: invalid Sirius admission configuration")
@@ -107,7 +107,11 @@ func (c *Compile) CompileSiriusRead(ctx context.Context, queryPlan *planpb.Plan,
 	result.Plan, err = candidate.Build(wires)
 	if err != nil {
 		releaseErr := result.Release(ctx, leases)
-		return nil, errors.Join(err, releaseErr)
+		// Export already proved eligibility before any storage work. A Build
+		// failure after admission is operational and must never trigger fallback
+		// after durable leases have been published.
+		buildErr := moerr.NewInternalErrorf(ctx, "substrait: build admitted plan: %v", err)
+		return nil, errors.Join(buildErr, releaseErr)
 	}
 	return result, nil
 }

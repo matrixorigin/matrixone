@@ -290,16 +290,24 @@ func TestSemanticRegistryRejectsForgedNullability(t *testing.T) {
 	ref := &planpb.ObjectRef{ObjName: "mod", Obj: resolved.GetEncodedOverloadID()}
 	args := []*planpb.Expr{{Typ: i64Type()}, {Typ: i64Type()}}
 
-	require.True(t, hasSemanticCapability(semanticScalar, "modulus", ref, args, ptrType(i64Type())))
+	supported, err := hasSemanticCapability(semanticScalar, "modulus", ref, args, ptrType(i64Type()))
+	require.NoError(t, err)
+	require.True(t, supported)
 	forgedResult := i64Type()
 	forgedResult.NotNullable = true
-	require.False(t, hasSemanticCapability(semanticScalar, "modulus", ref, args, &forgedResult))
+	supported, err = hasSemanticCapability(semanticScalar, "modulus", ref, args, &forgedResult)
+	require.NoError(t, err)
+	require.False(t, supported)
 
 	for i := range args {
 		args[i].Typ.NotNullable = true
 	}
-	require.True(t, hasSemanticCapability(semanticScalar, "modulus", ref, args, &forgedResult))
-	require.False(t, hasSemanticCapability(semanticScalar, "modulus", ref, args, ptrType(i64Type())))
+	supported, err = hasSemanticCapability(semanticScalar, "modulus", ref, args, &forgedResult)
+	require.NoError(t, err)
+	require.True(t, supported)
+	supported, err = hasSemanticCapability(semanticScalar, "modulus", ref, args, ptrType(i64Type()))
+	require.NoError(t, err)
+	require.False(t, supported)
 }
 
 func TestExportRequiresCompleteBoundOutputHeadings(t *testing.T) {
@@ -504,6 +512,7 @@ func (f *fakeProtector) Rollback(ctx context.Context, _ []byte) error {
 }
 
 type fakeLeaseJournal struct {
+	admission                        sync.Mutex
 	events                           []string
 	leases                           []*Lease
 	loaded                           int
@@ -525,6 +534,32 @@ type gatedJournalHeaderFS struct {
 	started, allow chan struct{}
 	once           sync.Once
 }
+
+type blockingResolveBody struct {
+	reader  *bytes.Reader
+	entered chan struct{}
+	allow   chan struct{}
+	once    sync.Once
+}
+
+func (b *blockingResolveBody) Read(p []byte) (int, error) {
+	b.once.Do(func() {
+		close(b.entered)
+		<-b.allow
+	})
+	return b.reader.Read(p)
+}
+
+func (*blockingResolveBody) Close() error { return nil }
+
+type observedResolveBody struct{ read bool }
+
+func (b *observedResolveBody) Read([]byte) (int, error) {
+	b.read = true
+	return 0, errors.New("unexpected request body read")
+}
+
+func (*observedResolveBody) Close() error { return nil }
 
 // staleAuthorityCacheFS models one CN's private read cache. Delete through a
 // different instance reaches the shared backing store but cannot invalidate
@@ -590,10 +625,34 @@ func (p *gatedProtector) Unregister(context.Context, []byte) error {
 	return nil
 }
 
-func (f *fakeLeaseJournal) Store(_ context.Context, lease *Lease) error {
+func (f *fakeLeaseJournal) store(lease *Lease) error {
 	f.events = append(f.events, "store")
 	f.leases = append(f.leases, cloneLease(lease))
 	return f.storeErr
+}
+
+func (f *fakeLeaseJournal) StoreIfCapacity(_ context.Context, leases []*Lease, maximum int) (int, error) {
+	f.admission.Lock()
+	defer f.admission.Unlock()
+	if len(leases) == 0 || maximum <= 0 || len(leases) > maximum {
+		return 0, moerr.NewInternalErrorNoCtx("substrait: invalid lease journal admission")
+	}
+	live := 0
+	now := uint64(time.Now().UnixMilli())
+	for _, lease := range f.leases {
+		if !lease.Released && lease.Read.ExpiresAtUnixMS > now {
+			live++
+		}
+	}
+	if live > maximum-len(leases) {
+		return 0, moerr.NewInternalErrorNoCtx("substrait: read lease capacity reached")
+	}
+	for i, lease := range leases {
+		if err := f.store(lease); err != nil {
+			return i + 1, err
+		}
+	}
+	return len(leases), nil
 }
 
 func (f *fakeLeaseJournal) Active(_ context.Context, lease *Lease) (bool, error) {
@@ -680,6 +739,13 @@ func testDurableLease(t *testing.T, seed byte, expiresAt uint64) *Lease {
 	wire, err := MarshalTaeRead(read)
 	require.NoError(t, err)
 	return &Lease{Read: read, Wire: wire, Manifest: manifest, CanonicalSchema: schema, AuthorizedClientSPKIHash: testClientSPKIHash()}
+}
+
+func storeJournalLease(t *testing.T, journal *FileServiceLeaseJournal, lease *Lease) {
+	t.Helper()
+	stored, err := journal.StoreIfCapacity(context.Background(), []*Lease{lease}, 1)
+	require.NoError(t, err)
+	require.Equal(t, 1, stored)
 }
 
 func TestReplayCleansTerminalRecordsBeforeLiveCapacity(t *testing.T) {
@@ -1065,6 +1131,57 @@ func TestPersistentLeaseReplayExpiresWithoutResurrection(t *testing.T) {
 	require.Empty(t, loaded)
 }
 
+func TestJournalCapacityIsAtomicAcrossManagersAndReplay(t *testing.T) {
+	ctx := context.Background()
+	fs, err := fileservice.NewMemoryFS("journal-capacity-race", fileservice.CacheConfig{}, nil)
+	require.NoError(t, err)
+	journal, err := NewFileServiceLeaseJournal(fs, "sirius/read-leases")
+	require.NoError(t, err)
+	managerA := NewPersistentLeaseManager(1, new(fakeProtector), journal)
+	managerB := NewPersistentLeaseManager(1, new(fakeProtector), journal)
+	require.NoError(t, managerA.Replay(ctx))
+	require.NoError(t, managerB.Replay(ctx))
+
+	expires := uint64(time.Now().Add(time.Minute).UnixMilli())
+	start := make(chan struct{})
+	results := make(chan error, 2)
+	for _, acquisition := range []struct {
+		manager *LeaseManager
+		lease   *Lease
+	}{
+		{manager: managerA, lease: testDurableLease(t, 1, expires)},
+		{manager: managerB, lease: testDurableLease(t, 2, expires)},
+	} {
+		go func(acquisition struct {
+			manager *LeaseManager
+			lease   *Lease
+		}) {
+			<-start
+			results <- acquisition.manager.Acquire(ctx, []*Lease{acquisition.lease})
+		}(acquisition)
+	}
+	close(start)
+	errA, errB := <-results, <-results
+	require.Equal(t, 1, boolInt(errA == nil)+boolInt(errB == nil))
+	if errA != nil {
+		require.ErrorContains(t, errA, "capacity reached")
+	}
+	if errB != nil {
+		require.ErrorContains(t, errB, "capacity reached")
+	}
+
+	afterWriters := NewPersistentLeaseManager(1, new(fakeProtector), journal)
+	require.NoError(t, afterWriters.Replay(ctx))
+	require.Len(t, afterWriters.leases, 1)
+}
+
+func boolInt(value bool) int {
+	if value {
+		return 1
+	}
+	return 0
+}
+
 func TestAdmissionReconcilesRemoteRevocationBeforeCapacity(t *testing.T) {
 	now := time.Now()
 	journal := new(fakeLeaseJournal)
@@ -1196,9 +1313,9 @@ func TestAdmissionRejectsInvalidInputsBeforePublishing(t *testing.T) {
 		mutate func(*AdmissionRequest)
 		want   string
 	}{
-		{name: "missing candidate", mutate: func(r *AdmissionRequest) { r.Candidate = nil }, want: "read-only snapshot"},
-		{name: "missing provider", mutate: func(r *AdmissionRequest) { r.Provider = nil }, want: "read-only snapshot"},
-		{name: "missing leases", mutate: func(r *AdmissionRequest) { r.Leases = nil }, want: "read-only snapshot"},
+		{name: "missing candidate", mutate: func(r *AdmissionRequest) { r.Candidate = nil }, want: "incomplete admission"},
+		{name: "missing provider", mutate: func(r *AdmissionRequest) { r.Provider = nil }, want: "incomplete admission"},
+		{name: "missing leases", mutate: func(r *AdmissionRequest) { r.Leases = nil }, want: "incomplete admission"},
 		{name: "not read only", mutate: func(r *AdmissionRequest) { r.ReadOnly = false }, want: "read-only snapshot"},
 		{name: "prior writes", mutate: func(r *AdmissionRequest) { r.PriorWrites = true }, want: "read-only snapshot"},
 		{name: "missing account", mutate: func(r *AdmissionRequest) { r.AccountID = 0 }, want: "identity"},
@@ -1220,6 +1337,7 @@ func TestAdmissionRejectsInvalidInputsBeforePublishing(t *testing.T) {
 	r.Provider = &fakeProvider{err: context.Canceled}
 	_, err = Admit(context.Background(), r)
 	require.ErrorContains(t, err, "prepare table")
+	require.False(t, IsNotEligible(err))
 
 	for _, facts := range []SnapshotFacts{
 		{Manifest: []byte("m"), CanonicalSchema: read.Schema, CommittedInMemory: true},
@@ -1231,6 +1349,7 @@ func TestAdmissionRejectsInvalidInputsBeforePublishing(t *testing.T) {
 		r.Provider = &fakeProvider{facts: facts}
 		_, err = Admit(context.Background(), r)
 		require.ErrorContains(t, err, "unsupported")
+		require.True(t, IsNotEligible(err))
 	}
 
 	for _, facts := range []SnapshotFacts{
@@ -1347,7 +1466,8 @@ func TestFileServiceLeaseJournalValidationAndAuthority(t *testing.T) {
 	require.Error(t, err)
 	journal, err := NewFileServiceLeaseJournal(fs, "/sirius/read-leases/")
 	require.NoError(t, err)
-	require.Error(t, journal.Store(context.Background(), nil))
+	_, err = journal.StoreIfCapacity(context.Background(), []*Lease{nil}, 1)
+	require.Error(t, err)
 	require.Error(t, journal.MarkReleased(context.Background(), []byte("short")))
 	require.Error(t, journal.Delete(context.Background(), []byte("short")))
 
@@ -1364,7 +1484,7 @@ func TestFileServiceLeaseJournalValidationAndAuthority(t *testing.T) {
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrFileNotFound))
 
 	lease := testDurableLease(t, 6, uint64(time.Now().Add(time.Minute).UnixMilli()))
-	require.NoError(t, journal.Store(context.Background(), lease))
+	storeJournalLease(t, journal, lease)
 	active, err := journal.Active(context.Background(), lease)
 	require.NoError(t, err)
 	require.True(t, active)
@@ -1395,7 +1515,7 @@ func TestFileServiceLeaseJournalAuthorityLinearizesRelease(t *testing.T) {
 	journal, err := NewFileServiceLeaseJournal(fs, "sirius/read-leases")
 	require.NoError(t, err)
 	lease := testDurableLease(t, 9, uint64(time.Now().Add(time.Minute).UnixMilli()))
-	require.NoError(t, journal.Store(ctx, lease))
+	storeJournalLease(t, journal, lease)
 	gated := &gatedJournalHeaderFS{
 		FileService: fs,
 		path:        journal.activePath(lease.Read.ReadRef),
@@ -1433,7 +1553,7 @@ func TestFileServiceLeaseJournalAuthorityIgnoresAnotherClientStaleCache(t *testi
 	journalB, err := NewFileServiceLeaseJournal(clientB, "sirius/read-leases")
 	require.NoError(t, err)
 	lease := testDurableLease(t, 10, uint64(time.Now().Add(time.Minute).UnixMilli()))
-	require.NoError(t, journalA.Store(ctx, lease))
+	storeJournalLease(t, journalA, lease)
 
 	// Warm client A's private authority cache, then revoke through client B.
 	authority := fileservice.IOVector{
@@ -1497,6 +1617,63 @@ func TestResolveByteBudgetIsBoundedAndCancellationAware(t *testing.T) {
 	release()
 }
 
+func TestResolveBudgetPrecedesRequestBodyAllocation(t *testing.T) {
+	candidate, err := Export(scanQuery())
+	require.NoError(t, err)
+	read := candidate.Reads()[0]
+	manager := NewLeaseManager(1, new(fakeProtector))
+	manager.resolveBytes = newResolveByteBudget(maxResolveHandlerBytes)
+	now := time.Now()
+	wires, err := Admit(context.Background(), AdmissionRequest{
+		Candidate: candidate, Provider: &fakeProvider{facts: SnapshotFacts{Manifest: []byte("m"), CanonicalSchema: read.Schema}},
+		Leases: manager, AccountID: 1, QueryID: []byte("q"), SnapshotTS: make([]byte, 12), AuthorizedClientSPKIHash: testClientSPKIHash(), TTL: time.Minute,
+		ReadOnly: true, Random: bytes.NewReader(bytes.Repeat([]byte{8}, 32)), Now: now,
+	})
+	require.NoError(t, err)
+	body := appendBytes(nil, 1, wires[0])
+	body = appendBytes(body, 2, read.Schema)
+	handler := ResolveHandler(manager, func() time.Time { return now }, acceptResolveAudit())
+
+	firstBody := &blockingResolveBody{reader: bytes.NewReader(body), entered: make(chan struct{}), allow: make(chan struct{})}
+	defer closeChannelIfOpen(firstBody.allow)
+	firstRequest := httptest.NewRequest(http.MethodPost, ResolvePath, nil)
+	firstRequest.Header.Set("Content-Type", "application/x-protobuf")
+	firstRequest.TLS = testVerifiedTLS(testClientSPKI)
+	firstRequest.Body = firstBody
+	firstResponse := httptest.NewRecorder()
+	firstDone := make(chan struct{})
+	go func() {
+		defer close(firstDone)
+		handler.ServeHTTP(firstResponse, firstRequest)
+	}()
+	select {
+	case <-firstBody.entered:
+	case <-time.After(time.Second):
+		t.Fatal("first resolver did not begin reading its admitted body")
+	}
+
+	secondBody := new(observedResolveBody)
+	secondRequest := httptest.NewRequest(http.MethodPost, ResolvePath, nil)
+	secondRequest.Header.Set("Content-Type", "application/x-protobuf")
+	secondRequest.TLS = testVerifiedTLS(testClientSPKI)
+	secondRequest.Body = secondBody
+	canceled, cancel := context.WithCancel(secondRequest.Context())
+	cancel()
+	secondRequest = secondRequest.WithContext(canceled)
+	secondResponse := httptest.NewRecorder()
+	handler.ServeHTTP(secondResponse, secondRequest)
+	require.Equal(t, http.StatusServiceUnavailable, secondResponse.Code)
+	require.False(t, secondBody.read, "a request without byte admission must not materialize its body")
+
+	closeChannelIfOpen(firstBody.allow)
+	select {
+	case <-firstDone:
+	case <-time.After(time.Second):
+		t.Fatal("first resolver did not finish")
+	}
+	require.Equal(t, http.StatusOK, firstResponse.Code)
+}
+
 func TestLeaseMutationLockHonorsContext(t *testing.T) {
 	manager := NewLeaseManager(1, new(fakeProtector))
 	require.NoError(t, manager.mutation.lock(context.Background()))
@@ -1504,6 +1681,15 @@ func TestLeaseMutationLockHonorsContext(t *testing.T) {
 	canceled, cancel := context.WithCancel(context.Background())
 	cancel()
 	require.ErrorIs(t, manager.mutation.lock(canceled), context.Canceled)
+
+	fs, err := fileservice.NewMemoryFS("journal-context-lock", fileservice.CacheConfig{}, nil)
+	require.NoError(t, err)
+	journal, err := NewFileServiceLeaseJournal(fs, "sirius/read-leases")
+	require.NoError(t, err)
+	require.NoError(t, journal.admission.lock(context.Background()))
+	defer journal.admission.unlock()
+	_, err = journal.StoreIfCapacity(canceled, []*Lease{testDurableLease(t, 1, uint64(time.Now().Add(time.Minute).UnixMilli()))}, 1)
+	require.ErrorContains(t, err, "context canceled")
 }
 
 func TestJournalBoundIncludesJSONBase64Expansion(t *testing.T) {
@@ -1546,7 +1732,7 @@ func TestFileServiceLeaseJournalRejectsNonCanonicalName(t *testing.T) {
 	journal, err := NewFileServiceLeaseJournal(fs, "sirius/read-leases")
 	require.NoError(t, err)
 	lease := testDurableLease(t, 0xab, uint64(time.Now().Add(time.Minute).UnixMilli()))
-	require.NoError(t, journal.Store(ctx, lease))
+	storeJournalLease(t, journal, lease)
 	data, err := journal.read(ctx, journal.activePath(lease.Read.ReadRef))
 	require.NoError(t, err)
 	require.NoError(t, journal.Delete(ctx, lease.Read.ReadRef))
@@ -1570,10 +1756,10 @@ func TestSubstraitTypeAndLiteralMappings(t *testing.T) {
 		{typ: planpb.Type{Id: int32(types.T_int64)}, lit: &planpb.Literal{Value: &planpb.Literal_I64Val{I64Val: 4}}},
 		{typ: planpb.Type{Id: int32(types.T_float32)}, lit: &planpb.Literal{Value: &planpb.Literal_Fval{Fval: 1.5}}},
 		{typ: planpb.Type{Id: int32(types.T_float64)}, lit: &planpb.Literal{Value: &planpb.Literal_Dval{Dval: 2.5}}},
-		{typ: planpb.Type{Id: int32(types.T_char)}, lit: &planpb.Literal{Value: &planpb.Literal_Sval{Sval: "c"}}},
+		{typ: planpb.Type{Id: int32(types.T_char), Width: 1}, lit: &planpb.Literal{Value: &planpb.Literal_Sval{Sval: "c"}}},
 		{typ: planpb.Type{Id: int32(types.T_varchar), Width: 12}, lit: &planpb.Literal{Value: &planpb.Literal_Sval{Sval: "varchar"}}},
 		{typ: planpb.Type{Id: int32(types.T_date)}, lit: &planpb.Literal{Value: &planpb.Literal_Dateval{Dateval: 10}}},
-		{typ: planpb.Type{Id: int32(types.T_timestamp)}, lit: &planpb.Literal{Value: &planpb.Literal_Timestampval{Timestampval: 20}}},
+		{typ: planpb.Type{Id: int32(types.T_timestamp), Scale: 6}, lit: &planpb.Literal{Value: &planpb.Literal_Timestampval{Timestampval: 20}}},
 	}
 	for _, tc := range typesAndLiterals {
 		_, err := substraitType(&tc.typ)
@@ -1597,6 +1783,53 @@ func TestSubstraitTypeAndLiteralMappings(t *testing.T) {
 	require.ErrorContains(t, err, "negative varchar")
 	_, err = substraitType(&planpb.Type{Id: int32(types.T_decimal64)})
 	require.ErrorContains(t, err, "unsupported type")
+
+	charType := planpb.Type{Id: int32(types.T_char), Width: 5}
+	charSubstrait, err := substraitType(&charType)
+	require.NoError(t, err)
+	require.Equal(t, int32(5), charSubstrait.GetFixedChar().GetLength())
+	charLiteral, err := literal(&planpb.Literal{Value: &planpb.Literal_Sval{Sval: "fixed"}}, &charType)
+	require.NoError(t, err)
+	require.Equal(t, "fixed", charLiteral.GetLiteral().GetFixedChar())
+	_, err = literal(&planpb.Literal{Value: &planpb.Literal_Sval{Sval: "short"}}, &planpb.Type{Id: int32(types.T_char), Width: 8})
+	require.True(t, IsNotEligible(err))
+
+	timestampType := planpb.Type{Id: int32(types.T_timestamp), Scale: 6}
+	timestampSubstrait, err := substraitType(&timestampType)
+	require.NoError(t, err)
+	require.Equal(t, int32(6), timestampSubstrait.GetPrecisionTimestamp().GetPrecision())
+	timestampLiteral, err := literal(&planpb.Literal{Value: &planpb.Literal_Timestampval{Timestampval: 20}}, &timestampType)
+	require.NoError(t, err)
+	require.Equal(t, int32(6), timestampLiteral.GetLiteral().GetPrecisionTimestamp().GetPrecision())
+	_, err = substraitType(&planpb.Type{Id: int32(types.T_timestamp), Scale: 3})
+	require.True(t, IsNotEligible(err))
+	_, err = literal(&planpb.Literal{Value: &planpb.Literal_Timestampval{Timestampval: 20}}, &planpb.Type{Id: int32(types.T_timestamp), Scale: 3})
+	require.True(t, IsNotEligible(err))
+	_, err = substraitType(&planpb.Type{Id: int32(types.T_char)})
+	require.True(t, IsNotEligible(err))
+}
+
+func TestEligibilityDeclinesAreDistinctFromMalformedAndOperationalErrors(t *testing.T) {
+	unsupported := scanQuery()
+	unsupported.Nodes = append(unsupported.Nodes, &planpb.Node{NodeId: 1, NodeType: planpb.Node_JOIN})
+	unsupported.Steps[0] = 1
+	_, err := Export(unsupported)
+	require.True(t, IsNotEligible(err))
+	reason, ok := NotEligibleReason(err)
+	require.True(t, ok)
+	require.Equal(t, EligibilityOperator, reason)
+
+	malformed := scanQuery()
+	malformed.Nodes[0].ObjRef = nil
+	_, err = Export(malformed)
+	require.Error(t, err)
+	require.False(t, IsNotEligible(err))
+
+	candidate, err := Export(scanQuery())
+	require.NoError(t, err)
+	_, err = candidate.Build(nil)
+	require.Error(t, err)
+	require.False(t, IsNotEligible(err), "post-export build failures are operational")
 }
 
 func TestCanonicalSchemaAndScalarSignatureContracts(t *testing.T) {

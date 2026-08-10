@@ -38,10 +38,13 @@ const (
 	resolveBudgetTimeout    = 5 * time.Second
 	maxManifestSize         = MaxManifestBytes
 	maxCanonicalSchemaSize  = 1 << 20
-	minResolveReservation   = 1 << 20
-	// Two maximum-size responses may stream concurrently. Smaller responses
-	// share the same byte budget rather than consuming a fixed request slot.
-	maxResolveInFlightBytes = 2 * (MaxManifestBytes + maxCanonicalSchemaSize + maxTaeReadSize + 64)
+	maxResolveResponseSize  = MaxManifestBytes + maxCanonicalSchemaSize + maxTaeReadSize + 64
+	// The bounded body, decoded request fields, and decoded TaeRead coexist until
+	// validation completes. Reserve all of them before the first request read.
+	maxResolveRequestRetainedBytes = 2*(maxResolveRequestSize+1) + maxTaeReadSize
+	// Two maximum-size resolutions may run concurrently.
+	maxResolveHandlerBytes  = maxResolveRequestRetainedBytes + maxResolveResponseSize
+	maxResolveInFlightBytes = 2 * maxResolveHandlerBytes
 )
 
 var errStopReplayJournalScan = moerr.NewInternalErrorNoCtx("substrait: stop replay journal scan")
@@ -76,14 +79,17 @@ type Protector interface {
 	Unregister(context.Context, []byte) error
 }
 
-// LeaseJournal is the durable boundary for resolver authority. Store must
-// make a complete lease durable before returning. Active's final operation
-// must read the single durable authority state, so a concurrent resolve either
-// precedes MarkReleased's atomic revocation or observes it. MarkReleased must
-// prevent resolution and replay before GC protection is removed. Load must
-// visit records one at a time and must not retain a record after visit returns.
+// LeaseJournal is the durable boundary for resolver authority.
+// StoreIfCapacity must atomically check the namespace-wide live count and
+// publish the complete batch with respect to every other StoreIfCapacity call
+// on the same journal. It returns the prefix that may have become durable when
+// publication fails. Active's final operation must read the single durable
+// authority state, so a concurrent resolve either precedes MarkReleased's
+// atomic revocation or observes it. MarkReleased must prevent resolution and
+// replay before GC protection is removed. Load must visit records one at a
+// time and must not retain a record after visit returns.
 type LeaseJournal interface {
-	Store(context.Context, *Lease) error
+	StoreIfCapacity(context.Context, []*Lease, int) (int, error)
 	Active(context.Context, *Lease) (bool, error)
 	MarkReleased(context.Context, []byte) error
 	Delete(context.Context, []byte) error
@@ -306,18 +312,22 @@ func (m *LeaseManager) acquireProtected(
 		seen[key] = struct{}{}
 	}
 	m.mu.RUnlock()
-	stored := make([]*Lease, 0, len(leases))
-	for _, l := range leases {
-		if m.journal != nil {
-			if err := m.journal.Store(ctx, l); err != nil {
-				// Store can fail after the write became visible. Include the
-				// ambiguous record in the durable revocation set.
-				stored = append(stored, l)
-				rollbackErr := m.rollbackAcquisition(ctx, rollback, stored, nil)
-				return errors.Join(moerr.NewInternalErrorNoCtxf("substrait: persist read lease: %v", err), rollbackErr)
-			}
+	stored := leases
+	if m.journal != nil {
+		storedCount, err := m.journal.StoreIfCapacity(ctx, leases, m.maximum)
+		if storedCount < 0 || storedCount > len(leases) {
+			rollbackErr := m.rollbackAcquisition(ctx, rollback, leases, nil)
+			return errors.Join(moerr.NewInternalErrorNoCtx("substrait: lease journal returned an invalid durable prefix"), rollbackErr)
 		}
-		stored = append(stored, l)
+		stored = leases[:storedCount]
+		if err != nil {
+			rollbackErr := m.rollbackAcquisition(ctx, rollback, stored, nil)
+			return errors.Join(moerr.NewInternalErrorNoCtxf("substrait: persist read lease: %v", err), rollbackErr)
+		}
+		if storedCount != len(leases) {
+			rollbackErr := m.rollbackAcquisition(ctx, rollback, stored, nil)
+			return errors.Join(moerr.NewInternalErrorNoCtx("substrait: lease journal stored an incomplete batch"), rollbackErr)
+		}
 	}
 	registered := make([]*Lease, 0, len(leases))
 	for _, l := range leases {
@@ -827,8 +837,11 @@ type AdmissionRequest struct {
 // Admit performs storage work only after Export has accepted the complete
 // logical plan. It publishes all table leases atomically or none of them.
 func Admit(ctx context.Context, r AdmissionRequest) (map[int32][]byte, error) {
-	if r.Candidate == nil || r.Provider == nil || r.Leases == nil || !r.ReadOnly || r.PriorWrites {
-		return nil, moerr.NewInternalErrorNoCtx("substrait: transaction is not an admissible read-only snapshot")
+	if r.Candidate == nil || r.Provider == nil || r.Leases == nil {
+		return nil, moerr.NewInternalErrorNoCtx("substrait: incomplete admission request")
+	}
+	if !r.ReadOnly || r.PriorWrites {
+		return nil, NotEligible(EligibilityTransaction, "transaction is not an admissible read-only snapshot")
 	}
 	if r.AccountID == 0 || len(r.QueryID) == 0 || len(r.SnapshotTS) != 12 || len(r.AuthorizedClientSPKIHash) != sha256.Size {
 		return nil, moerr.NewInternalErrorNoCtx("substrait: invalid admission identity")
@@ -858,7 +871,7 @@ func Admit(ctx context.Context, r AdmissionRequest) (map[int32][]byte, error) {
 				return nil, moerr.NewInternalErrorNoCtxf("substrait: prepare table %d: %v", read.TableID, err)
 			}
 			if facts.CommittedInMemory || facts.Uncommitted || facts.VisibleTombstones || facts.NonTAE {
-				return nil, moerr.NewInternalErrorNoCtxf("substrait: table %d has snapshot state unsupported by Sirius v1", read.TableID)
+				return nil, notEligiblef(EligibilitySnapshot, "table %d has snapshot state unsupported by Sirius v1", read.TableID)
 			}
 			if len(facts.Manifest) == 0 || len(facts.Manifest) > maxManifestSize || len(facts.CanonicalSchema) > maxCanonicalSchemaSize || !equalBytes(facts.CanonicalSchema, read.Schema) {
 				return nil, moerr.NewInternalErrorNoCtxf("substrait: table %d schema or manifest mismatch", read.TableID)
@@ -934,7 +947,23 @@ func ResolveHandler(leases *LeaseManager, now func() time.Time, auditor ResolveA
 			return
 		}
 		principalHash := sha256.Sum256(r.TLS.VerifiedChains[0][0].RawSubjectPublicKeyInfo)
-		body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxResolveRequestSize))
+		if leases == nil || auditor == nil {
+			http.Error(w, "resolver unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		budgetCtx, cancelBudget := context.WithTimeoutCause(
+			r.Context(),
+			resolveBudgetTimeout,
+			moerr.NewInternalErrorNoCtx("substrait: resolve byte admission timed out"),
+		)
+		releaseBytes, err := leases.resolveBytes.acquire(budgetCtx, int64(maxResolveHandlerBytes))
+		cancelBudget()
+		if err != nil {
+			http.Error(w, "resolver busy", http.StatusServiceUnavailable)
+			return
+		}
+		defer releaseBytes()
+		body, err := readResolveRequestBody(w, r)
 		if err != nil {
 			http.Error(w, "invalid request", http.StatusBadRequest)
 			return
@@ -947,10 +976,6 @@ func ResolveHandler(leases *LeaseManager, now func() time.Time, auditor ResolveA
 		tr, err := UnmarshalTaeRead(req.TaeRead, uint64(now().UnixMilli()))
 		if err != nil {
 			http.Error(w, "invalid TaeRead", http.StatusUnauthorized)
-			return
-		}
-		if leases == nil || auditor == nil {
-			http.Error(w, "resolver unavailable", http.StatusServiceUnavailable)
 			return
 		}
 		lease, ok, resolveErr := leases.resolve(r.Context(), tr.ReadRef)
@@ -966,27 +991,11 @@ func ResolveHandler(leases *LeaseManager, now func() time.Time, auditor ResolveA
 			return
 		}
 		response := ResolveTaeReadResponse{TaeRead: lease.Wire, Manifest: lease.Manifest, CanonicalSchema: lease.CanonicalSchema}
-		responseSize, err := resolveResponseSize(response)
+		_, err = resolveResponseSize(response)
 		if err != nil {
 			http.Error(w, "invalid lease", http.StatusInternalServerError)
 			return
 		}
-		budgetCtx, cancelBudget := context.WithTimeoutCause(
-			r.Context(),
-			resolveBudgetTimeout,
-			moerr.NewInternalErrorNoCtx("substrait: resolve byte admission timed out"),
-		)
-		reservation := responseSize
-		if reservation < minResolveReservation {
-			reservation = minResolveReservation
-		}
-		releaseBytes, err := leases.resolveBytes.acquire(budgetCtx, int64(reservation))
-		cancelBudget()
-		if err != nil {
-			http.Error(w, "resolver busy", http.StatusServiceUnavailable)
-			return
-		}
-		defer releaseBytes()
 		readRefHash := sha256.Sum256(tr.ReadRef)
 		audit := ResolveAuditEvent{
 			AccountID:      tr.AccountID,
@@ -1011,4 +1020,17 @@ func ResolveHandler(leases *LeaseManager, now func() time.Time, auditor ResolveA
 		w.WriteHeader(http.StatusOK)
 		_ = writeResolveResponse(w, response)
 	})
+}
+
+func readResolveRequestBody(w http.ResponseWriter, r *http.Request) ([]byte, error) {
+	limited := http.MaxBytesReader(w, r.Body, maxResolveRequestSize)
+	body := make([]byte, maxResolveRequestSize+1)
+	n, err := io.ReadFull(limited, body)
+	if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+		return body[:n], nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return nil, moerr.NewInternalErrorNoCtx("substrait: resolve request exceeds size limit")
 }

@@ -24,6 +24,7 @@ import (
 	"io"
 	"path"
 	"strings"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
@@ -44,8 +45,9 @@ const (
 // object is the lease's single active state. Terminal release atomically
 // deletes that authority before GC protection is removed.
 type FileServiceLeaseJournal struct {
-	fs     fileservice.FileService
-	prefix string
+	fs        fileservice.FileService
+	prefix    string
+	admission contextMutex
 }
 
 type journalRecord struct {
@@ -66,10 +68,44 @@ func NewFileServiceLeaseJournal(fs fileservice.FileService, prefix string) (*Fil
 	if fs == nil || prefix == "" || prefix == "." || strings.HasPrefix(prefix, "..") {
 		return nil, moerr.NewInternalErrorNoCtx("substrait: invalid lease journal configuration")
 	}
-	return &FileServiceLeaseJournal{fs: fs, prefix: prefix}, nil
+	return &FileServiceLeaseJournal{fs: fs, prefix: prefix, admission: newContextMutex()}, nil
 }
 
-func (j *FileServiceLeaseJournal) Store(ctx context.Context, lease *Lease) error {
+// StoreIfCapacity is the journal-level admission linearization point. The
+// mutex belongs to the journal rather than a LeaseManager, so managers sharing
+// this durable namespace cannot independently admit past the configured cap.
+func (j *FileServiceLeaseJournal) StoreIfCapacity(ctx context.Context, leases []*Lease, maximum int) (int, error) {
+	if err := j.admission.lock(ctx); err != nil {
+		return 0, moerr.NewInternalErrorNoCtxf("substrait: acquire journal admission: %v", err)
+	}
+	defer j.admission.unlock()
+	if len(leases) == 0 || maximum <= 0 || len(leases) > maximum {
+		return 0, moerr.NewInternalErrorNoCtx("substrait: invalid lease journal admission")
+	}
+	now := uint64(time.Now().UnixMilli())
+	live := 0
+	if err := j.load(ctx, func(lease *Lease) error {
+		if !lease.Released && lease.Read.ExpiresAtUnixMS > now {
+			live++
+		}
+		return nil
+	}); err != nil {
+		return 0, err
+	}
+	if live > maximum-len(leases) {
+		return 0, moerr.NewInternalErrorNoCtx("substrait: read lease capacity reached")
+	}
+	for i, lease := range leases {
+		if err := j.store(ctx, lease); err != nil {
+			// A failed write is treated as ambiguous even though the FileService
+			// contract is atomic. The caller durably revokes this whole prefix.
+			return i + 1, err
+		}
+	}
+	return len(leases), nil
+}
+
+func (j *FileServiceLeaseJournal) store(ctx context.Context, lease *Lease) error {
 	if lease == nil || lease.Read == nil || len(lease.Read.ReadRef) != 32 {
 		return moerr.NewInternalErrorNoCtx("substrait: invalid lease journal record")
 	}
@@ -182,6 +218,14 @@ func (j *FileServiceLeaseJournal) Delete(ctx context.Context, readRef []byte) er
 }
 
 func (j *FileServiceLeaseJournal) Load(ctx context.Context, visit func(*Lease) error) error {
+	if err := j.admission.lock(ctx); err != nil {
+		return moerr.NewInternalErrorNoCtxf("substrait: acquire journal replay: %v", err)
+	}
+	defer j.admission.unlock()
+	return j.load(ctx, visit)
+}
+
+func (j *FileServiceLeaseJournal) load(ctx context.Context, visit func(*Lease) error) error {
 	if visit == nil {
 		return moerr.NewInternalErrorNoCtx("substrait: missing lease journal visitor")
 	}

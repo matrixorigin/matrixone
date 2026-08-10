@@ -22,6 +22,7 @@ import (
 	"math"
 	"strings"
 	"sync"
+	"unicode/utf8"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -79,8 +80,11 @@ func (c *Candidate) Reads() []Read {
 
 // Export validates q without performing I/O.
 func Export(q *planpb.Query) (*Candidate, error) {
-	if q == nil || q.StmtType != planpb.Query_SELECT || len(q.Steps) != 1 || len(q.BackgroundQueries) != 0 {
-		return nil, moerr.NewInternalErrorNoCtxf("substrait: exactly one query root is required")
+	if q == nil {
+		return nil, moerr.NewInternalErrorNoCtx("substrait: missing query")
+	}
+	if q.StmtType != planpb.Query_SELECT || len(q.Steps) != 1 || len(q.BackgroundQueries) != 0 {
+		return nil, notEligiblef(EligibilityPlanShape, "exactly one SELECT query root is required")
 	}
 	c := &Candidate{query: q}
 	e := exporter{query: q, readValues: make(map[int32][]byte), validateOnly: true}
@@ -201,7 +205,7 @@ func (e *exporter) node(id int32) (*spb.Rel, error) {
 	case planpb.Node_SORT:
 		rel, err = e.sort(n)
 	default:
-		return nil, moerr.NewInternalErrorNoCtxf("substrait: node %d uses unsupported operator %s", id, n.NodeType.String())
+		return nil, notEligiblef(EligibilityOperator, "node %d uses unsupported operator %s", id, n.NodeType.String())
 	}
 	if err != nil {
 		return nil, err
@@ -239,7 +243,7 @@ func (e *exporter) nodeWidth(id int32) (int, error) {
 		}
 		return e.nodeWidth(n.Children[0])
 	default:
-		return 0, moerr.NewInternalErrorNoCtxf("substrait: unsupported width for %s", n.NodeType.String())
+		return 0, notEligiblef(EligibilityOperator, "unsupported width for %s", n.NodeType.String())
 	}
 }
 
@@ -251,8 +255,11 @@ func (e *exporter) unary(n *planpb.Node) (*spb.Rel, error) {
 }
 
 func (e *exporter) read(n *planpb.Node) (*spb.Rel, error) {
-	if len(n.Children) != 0 || n.TableDef == nil || n.ObjRef == nil || n.ObjRef.Db <= 0 || n.TableDef.TblId == 0 || uint64(n.ObjRef.Obj) != n.TableDef.TblId || n.TableDef.IsTemporary || n.ScanSnapshot != nil || n.ObjRef.Snapshot != nil || n.ObjRef.PubInfo != nil || (n.TableDef.TableType != "" && n.TableDef.TableType != "r") {
-		return nil, moerr.NewInternalErrorNoCtxf("substrait: node %d is not a persistent TAE table scan", n.NodeId)
+	if len(n.Children) != 0 || n.TableDef == nil || n.ObjRef == nil || n.ObjRef.Db <= 0 || n.TableDef.TblId == 0 || uint64(n.ObjRef.Obj) != n.TableDef.TblId {
+		return nil, moerr.NewInternalErrorNoCtxf("substrait: node %d has a malformed table scan", n.NodeId)
+	}
+	if n.TableDef.IsTemporary || n.ScanSnapshot != nil || n.ObjRef.Snapshot != nil || n.ObjRef.PubInfo != nil || (n.TableDef.TableType != "" && n.TableDef.TableType != "r") {
+		return nil, notEligiblef(EligibilityPlanShape, "node %d is not a persistent TAE table scan", n.NodeId)
 	}
 	schema, err := namedStruct(n.TableDef)
 	if err != nil {
@@ -314,11 +321,11 @@ func (e *exporter) read(n *planpb.Node) (*spb.Rel, error) {
 func (e *exporter) aggregate(n *planpb.Node) (*spb.Rel, error) {
 	if len(n.GroupingFlag) != 0 {
 		if len(n.GroupingFlag) != len(n.GroupBy) {
-			return nil, moerr.NewInternalErrorNoCtxf("substrait: grouping sets are unsupported")
+			return nil, notEligiblef(EligibilityOperator, "grouping sets are unsupported")
 		}
 		for _, flag := range n.GroupingFlag {
 			if !flag {
-				return nil, moerr.NewInternalErrorNoCtxf("substrait: grouping sets are unsupported")
+				return nil, notEligiblef(EligibilityOperator, "grouping sets are unsupported")
 			}
 		}
 	}
@@ -349,14 +356,14 @@ func (e *exporter) aggregate(n *planpb.Node) (*spb.Rel, error) {
 			return nil, moerr.NewInternalErrorNoCtxf("substrait: aggregate %d is not a function", i)
 		}
 		if uint64(f.Func.Obj)&function.Distinct != 0 || len(f.AggConfig) != 0 {
-			return nil, moerr.NewInternalErrorNoCtxf("substrait: unsupported aggregate form %q", f.Func.ObjName)
+			return nil, notEligiblef(EligibilityOperator, "unsupported aggregate form %q", f.Func.ObjName)
 		}
 		name, ok := aggregateName(f.Func.ObjName)
 		if !ok {
-			return nil, moerr.NewInternalErrorNoCtxf("substrait: unsupported aggregate %q", f.Func.ObjName)
+			return nil, notEligiblef(EligibilityOperator, "unsupported aggregate %q", f.Func.ObjName)
 		}
 		if len(f.Args) != 1 {
-			return nil, moerr.NewInternalErrorNoCtxf("substrait: unsupported aggregate form %q", f.Func.ObjName)
+			return nil, notEligiblef(EligibilityExpression, "unsupported aggregate form %q", f.Func.ObjName)
 		}
 		functionID, _ := function.DecodeOverloadID(f.Func.Obj)
 		if functionID == function.STARCOUNT {
@@ -369,8 +376,12 @@ func (e *exporter) aggregate(n *planpb.Node) (*spb.Rel, error) {
 		if len(n.GroupBy) == 0 && aggregateCanReturnNullOnEmpty(functionID) {
 			outputType.NotNullable = false
 		}
-		if !hasSemanticCapability(semanticAggregate, name, f.Func, f.Args, &outputType) {
-			return nil, moerr.NewInternalErrorNoCtxf("substrait: aggregate overload %q has no declared Sirius semantic equivalence", f.Func.ObjName)
+		supported, capabilityErr := hasSemanticCapability(semanticAggregate, name, f.Func, f.Args, &outputType)
+		if capabilityErr != nil {
+			return nil, capabilityErr
+		}
+		if !supported {
+			return nil, notEligiblef(EligibilityExpression, "aggregate overload %q has no declared Sirius semantic equivalence", f.Func.ObjName)
 		}
 		if err := validateExprFields(f.Args, inputWidth); err != nil {
 			return nil, err
@@ -403,8 +414,11 @@ func (e *exporter) sort(n *planpb.Node) (*spb.Rel, error) {
 	}
 	sorts := make([]*spb.SortField, len(n.OrderBy))
 	for i, order := range n.OrderBy {
-		if order == nil || order.Collation != "" || int32(order.Flag)&int32(planpb.OrderBySpec_UNIQUE) != 0 {
-			return nil, moerr.NewInternalErrorNoCtxf("substrait: unsupported sort at %d", i)
+		if order == nil {
+			return nil, moerr.NewInternalErrorNoCtxf("substrait: malformed sort at %d", i)
+		}
+		if order.Collation != "" || int32(order.Flag)&int32(planpb.OrderBySpec_UNIQUE) != 0 {
+			return nil, notEligiblef(EligibilityOperator, "unsupported sort at %d", i)
 		}
 		if err := validateExprFields([]*planpb.Expr{order.Expr}, inputWidth); err != nil {
 			return nil, err
@@ -420,7 +434,7 @@ func (e *exporter) sort(n *planpb.Node) (*spb.Rel, error) {
 		invalidDirection := directionBits != 0 && directionBits != int32(planpb.OrderBySpec_ASC) && directionBits != int32(planpb.OrderBySpec_DESC)
 		conflictingNulls := nullBits == int32(planpb.OrderBySpec_NULLS_FIRST)|int32(planpb.OrderBySpec_NULLS_LAST)
 		if invalidDirection || conflictingNulls || flag != known {
-			return nil, moerr.NewInternalErrorNoCtxf("substrait: unsupported sort flags %d", flag)
+			return nil, notEligiblef(EligibilityOperator, "unsupported sort flags %d", flag)
 		}
 		desc := directionBits == int32(planpb.OrderBySpec_DESC)
 		nullsFirst := flag&int32(planpb.OrderBySpec_NULLS_FIRST) != 0
@@ -511,16 +525,20 @@ func (e *exporter) expr(x *planpb.Expr) (*spb.Expression, error) {
 		}
 		name, ok := scalarName(v.F.Func.ObjName)
 		if !ok {
-			return nil, moerr.NewInternalErrorNoCtxf("substrait: unsupported scalar function %q", v.F.Func.ObjName)
+			return nil, notEligiblef(EligibilityExpression, "unsupported scalar function %q", v.F.Func.ObjName)
 		}
 		if want := scalarArity(name); len(v.F.Args) != want {
-			return nil, moerr.NewInternalErrorNoCtxf("substrait: %s requires %d arguments", name, want)
+			return nil, notEligiblef(EligibilityExpression, "%s requires %d arguments", name, want)
 		}
 		if err := validateScalarSignature(name, &x.Typ, v.F.Args); err != nil {
 			return nil, err
 		}
-		if !hasSemanticCapability(semanticScalar, name, v.F.Func, v.F.Args, &x.Typ) {
-			return nil, moerr.NewInternalErrorNoCtxf("substrait: scalar overload %q has no declared Sirius semantic equivalence", v.F.Func.ObjName)
+		supported, capabilityErr := hasSemanticCapability(semanticScalar, name, v.F.Func, v.F.Args, &x.Typ)
+		if capabilityErr != nil {
+			return nil, capabilityErr
+		}
+		if !supported {
+			return nil, notEligiblef(EligibilityExpression, "scalar overload %q has no declared Sirius semantic equivalence", v.F.Func.ObjName)
 		}
 		if _, err := substraitType(&x.Typ); err != nil {
 			return nil, err
@@ -535,7 +553,7 @@ func (e *exporter) expr(x *planpb.Expr) (*spb.Expression, error) {
 		}
 		return e.scalar(name, &x.Typ, args...), nil
 	default:
-		return nil, moerr.NewInternalErrorNoCtxf("substrait: unsupported expression %T", x.Expr)
+		return nil, notEligiblef(EligibilityExpression, "unsupported expression %T", x.Expr)
 	}
 }
 
@@ -589,6 +607,9 @@ func namedStruct(t *planpb.TableDef) (*spb.NamedStruct, error) {
 		}
 		typ, err := substraitType(&c.Typ)
 		if err != nil {
+			if IsNotEligible(err) {
+				return nil, err
+			}
 			return nil, moerr.NewInternalErrorNoCtxf("substrait: column %q: %v", c.Name, err)
 		}
 		names = append(names, c.Name)
@@ -644,7 +665,7 @@ func validateExprFields(exprs []*planpb.Expr, width int) error {
 			}
 		case *planpb.Expr_Lit:
 		default:
-			return moerr.NewInternalErrorNoCtxf("substrait: unsupported expression %T", expr.Expr)
+			return notEligiblef(EligibilityExpression, "unsupported expression %T", expr.Expr)
 		}
 	}
 	return nil
@@ -688,18 +709,24 @@ func substraitType(t *planpb.Type) (*spb.Type, error) {
 	case types.T_float64:
 		return &spb.Type{Kind: &spb.Type_Fp64{Fp64: &spb.Type_FP64{Nullability: n}}}, nil
 	case types.T_char:
-		return &spb.Type{Kind: &spb.Type_String_{String_: &spb.Type_String{Nullability: n}}}, nil
+		if t.Width <= 0 {
+			return nil, notEligiblef(EligibilityType, "char width %d is outside the supported bound", t.Width)
+		}
+		return &spb.Type{Kind: &spb.Type_FixedChar_{FixedChar: &spb.Type_FixedChar{Length: t.Width, Nullability: n}}}, nil
 	case types.T_varchar:
 		if t.Width < 0 {
-			return nil, moerr.NewInternalErrorNoCtxf("unsupported negative varchar width")
+			return nil, notEligiblef(EligibilityType, "negative varchar width %d", t.Width)
 		}
 		return &spb.Type{Kind: &spb.Type_Varchar{Varchar: &spb.Type_VarChar{Length: t.Width, Nullability: n}}}, nil
 	case types.T_date:
 		return &spb.Type{Kind: &spb.Type_Date_{Date: &spb.Type_Date{Nullability: n}}}, nil
 	case types.T_timestamp:
+		if t.Scale != 6 {
+			return nil, notEligiblef(EligibilityType, "timestamp precision %d is not microsecond precision", t.Scale)
+		}
 		return &spb.Type{Kind: &spb.Type_PrecisionTimestamp_{PrecisionTimestamp: &spb.Type_PrecisionTimestamp{Precision: 6, Nullability: n}}}, nil
 	default:
-		return nil, moerr.NewInternalErrorNoCtxf("unsupported type %s", types.T(t.Id).String())
+		return nil, notEligiblef(EligibilityType, "unsupported type %s", types.T(t.Id).String())
 	}
 }
 
@@ -708,18 +735,18 @@ func field(pos int32) *spb.Expression {
 }
 
 func literal(l *planpb.Literal, typ *planpb.Type) (*spb.Expression, error) {
-	if l == nil {
+	if l == nil || typ == nil {
 		return nil, moerr.NewInternalErrorNoCtxf("substrait: nil literal")
+	}
+	declaredType, err := substraitType(typ)
+	if err != nil {
+		return nil, err
 	}
 	wrap := func(lit *spb.Expression_Literal) *spb.Expression {
 		return &spb.Expression{RexType: &spb.Expression_Literal_{Literal: lit}}
 	}
 	if l.Isnull {
-		t, err := substraitType(typ)
-		if err != nil {
-			return nil, err
-		}
-		return wrap(&spb.Expression_Literal{LiteralType: &spb.Expression_Literal_Null{Null: t}}), nil
+		return wrap(&spb.Expression_Literal{LiteralType: &spb.Expression_Literal_Null{Null: declaredType}}), nil
 	}
 	oid := types.T(typ.Id)
 	mismatch := func() (*spb.Expression, error) {
@@ -768,7 +795,10 @@ func literal(l *planpb.Literal, typ *planpb.Type) (*spb.Expression, error) {
 		if oid == types.T_varchar {
 			return wrap(&spb.Expression_Literal{LiteralType: &spb.Expression_Literal_VarChar_{VarChar: &spb.Expression_Literal_VarChar{Value: v.Sval, Length: uint32(typ.Width)}}}), nil
 		}
-		return wrap(&spb.Expression_Literal{LiteralType: &spb.Expression_Literal_String_{String_: v.Sval}}), nil
+		if utf8.RuneCountInString(v.Sval) != int(typ.Width) {
+			return nil, notEligiblef(EligibilityType, "char literal length does not match width %d", typ.Width)
+		}
+		return wrap(&spb.Expression_Literal{LiteralType: &spb.Expression_Literal_FixedChar{FixedChar: v.Sval}}), nil
 	case *planpb.Literal_Dateval:
 		if oid != types.T_date {
 			return mismatch()
@@ -955,23 +985,23 @@ func addSemanticCapability(result map[semanticCapabilityKey]semanticCapability, 
 	return nil
 }
 
-func hasSemanticCapability(kind semanticCapabilityKind, name string, ref *planpb.ObjectRef, args []*planpb.Expr, out *planpb.Type) bool {
+func hasSemanticCapability(kind semanticCapabilityKind, name string, ref *planpb.ObjectRef, args []*planpb.Expr, out *planpb.Type) (bool, error) {
 	if ref == nil || out == nil || len(args) > 3 {
-		return false
+		return false, nil
 	}
 	key := semanticCapabilityKey{kind: kind, overloadID: ref.Obj, argumentN: uint8(len(args)), result: semanticTypeFromPlan(out)}
 	for i, argument := range args {
 		if argument == nil {
-			return false
+			return false, nil
 		}
 		key.arguments[i] = semanticTypeFromPlan(&argument.Typ)
 	}
 	registry, err := loadSemanticRegistry()
 	if err != nil {
-		return false
+		return false, err
 	}
 	capability, ok := registry[key]
-	return ok && capability.name == name && capability.equivalence != ""
+	return ok && capability.name == name && capability.equivalence != "", nil
 }
 
 func semanticTypeFromPlan(value *planpb.Type) semanticTypeKey {
@@ -1007,24 +1037,24 @@ func validateScalarSignature(name string, out *planpb.Type, args []*planpb.Expr)
 	switch name {
 	case "and", "or", "not":
 		if !isBool(out) {
-			return moerr.NewInternalErrorNoCtxf("substrait: %s has non-boolean result", name)
+			return notEligiblef(EligibilityExpression, "%s has non-boolean result", name)
 		}
 		for _, a := range args {
 			if a == nil || !isBool(&a.Typ) {
-				return moerr.NewInternalErrorNoCtxf("substrait: %s has non-boolean argument", name)
+				return notEligiblef(EligibilityExpression, "%s has non-boolean argument", name)
 			}
 		}
 	case "equal", "not_equal", "lt", "lte", "gt", "gte", "is_not_distinct_from", "between":
 		if !isBool(out) || !same() {
-			return moerr.NewInternalErrorNoCtxf("substrait: unsupported %s signature", name)
+			return notEligiblef(EligibilityExpression, "unsupported %s signature", name)
 		}
 	case "is_null", "is_not_null":
 		if !isBool(out) {
-			return moerr.NewInternalErrorNoCtxf("substrait: unsupported %s signature", name)
+			return notEligiblef(EligibilityExpression, "unsupported %s signature", name)
 		}
 	case "add", "subtract", "multiply", "divide", "modulus":
 		if !numeric(out) || !same() || args[0].Typ.Id != out.Id {
-			return moerr.NewInternalErrorNoCtxf("substrait: unsupported %s signature", name)
+			return notEligiblef(EligibilityExpression, "unsupported %s signature", name)
 		}
 	}
 	return nil
