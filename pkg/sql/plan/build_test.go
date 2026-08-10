@@ -5131,7 +5131,12 @@ func TestReplaceParentSideFKIndexedChild(t *testing.T) {
 			require.True(t, queryUpdatesTable(query, "replace_fk_sc"))
 			require.True(t, queryDeletesTable(query, indexTableName))
 			assertDeleteInputIndexesValid(t, query, indexTableName)
-			assertInsertInputColumnsValid(t, query, indexTableName)
+			if unique {
+				require.False(t, queryInsertsTable(query, indexTableName),
+					"SET NULL must not insert a NULL key into the hidden unique-index table")
+			} else {
+				assertInsertInputColumnsValid(t, query, indexTableName)
+			}
 		})
 	}
 }
