@@ -7055,6 +7055,7 @@ group_by_opt:
             GroupByExprsList: $6,
             Apart:      false,
             Cube :      false,
+            GroupingSets: true,
             Rollup:     false,
         }
     }
