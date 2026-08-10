@@ -157,14 +157,16 @@ func TestReadDeletesSupportsLegacyTombstoneWithoutAbortColumn(t *testing.T) {
 	mp := mpool.MustNewZero()
 	defer mpool.DeleteMPool(mp)
 
-	input := batch.NewWithSize(2)
+	input := batch.NewWithSize(3)
 	input.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
-	input.Vecs[1] = vector.NewVec(types.T_TS.ToType())
+	input.Vecs[1] = vector.NewVec(types.T_int32.ToType())
+	input.Vecs[2] = vector.NewVec(types.T_TS.ToType())
 	defer input.Clean(mp)
 	blockID := types.Blockid{}
 	for offset := uint32(1); offset <= 2; offset++ {
 		require.NoError(t, vector.AppendFixed(input.Vecs[0], types.NewRowid(&blockID, offset), false, mp))
-		require.NoError(t, vector.AppendFixed(input.Vecs[1], types.BuildTS(1, 0), false, mp))
+		require.NoError(t, vector.AppendFixed(input.Vecs[1], int32(offset), false, mp))
+		require.NoError(t, vector.AppendFixed(input.Vecs[2], types.BuildTS(1, 0), false, mp))
 	}
 	input.SetRowCount(2)
 
@@ -187,7 +189,8 @@ func TestReadDeletesSupportsLegacyTombstoneWithoutAbortColumn(t *testing.T) {
 	defer release()
 	require.Equal(t, 2, cacheVectors[0].Length())
 	require.Equal(t, 2, cacheVectors[1].Length())
-	require.Equal(t, 0, cacheVectors[2].Length())
+	require.Equal(t, 2, cacheVectors[2].Length())
+	require.True(t, cacheVectors[2].IsConstNull())
 	abortColumn, err := ValidateTombstoneAbortColumn(2, &cacheVectors[2])
 	require.NoError(t, err)
 	require.False(t, abortColumn.IsPresent())

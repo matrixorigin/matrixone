@@ -40,7 +40,7 @@ func TestEvalDeleteMaskFromDNCreatedTombstonesAbortColumnCompatibility(t *testin
 	defer commitTS.Free(mp)
 
 	t.Run("legacy checkpoint without abort column", func(t *testing.T) {
-		abortColumn := vector.NewVec(types.T_bool.ToType())
+		abortColumn := vector.NewConstNull(types.T_bool.ToType(), 3, mp)
 		defer abortColumn.Free(mp)
 
 		rows, err := EvalDeleteMaskFromDNCreatedTombstones(
@@ -77,7 +77,7 @@ func TestValidateTombstoneAbortColumn(t *testing.T) {
 	mp := mpool.MustNewZero()
 	defer mpool.DeleteMPool(mp)
 
-	legacy := vector.NewVec(types.T_bool.ToType())
+	legacy := vector.NewConstNull(types.T_bool.ToType(), 3, mp)
 	column, err := ValidateTombstoneAbortColumn(3, legacy)
 	require.NoError(t, err)
 	require.False(t, column.IsPresent())
@@ -110,7 +110,13 @@ func TestValidateTombstoneAbortColumn(t *testing.T) {
 	constAbort.Free(mp)
 
 	constNull := vector.NewConstNull(types.T_bool.ToType(), 3, mp)
-	_, err = ValidateTombstoneAbortColumn(3, constNull)
-	require.Error(t, err)
+	column, err = ValidateTombstoneAbortColumn(3, constNull)
+	require.NoError(t, err)
+	require.False(t, column.IsPresent())
 	constNull.Free(mp)
+
+	empty := vector.NewVec(types.T_bool.ToType())
+	_, err = ValidateTombstoneAbortColumn(3, empty)
+	require.Error(t, err)
+	empty.Free(mp)
 }

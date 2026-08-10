@@ -473,8 +473,10 @@ func ReadDeletes(
 }
 
 // TombstoneAbortColumn is the validated abort metadata for a tombstone block.
-// A column with length zero is the explicitly supported legacy representation
-// for an object written before abort metadata was persisted.
+// A const-null bool column with the block row count is the explicitly supported
+// legacy representation for an object written before abort metadata was
+// persisted. The object reader synthesizes this marker when the physical
+// column is absent.
 type TombstoneAbortColumn struct {
 	vec *vector.Vector
 }
@@ -488,9 +490,10 @@ func (c TombstoneAbortColumn) IsAborted(row int) bool {
 }
 
 // ValidateTombstoneAbortColumn validates the abort column against the row
-// count shared by all tombstone consumers. Only a zero-length column is
-// treated as the legacy no-abort representation. All other malformed layouts
-// are returned as errors instead of being silently treated as live rows.
+// count shared by all tombstone consumers. Only the reader's const-null
+// sentinel is treated as the legacy no-abort representation. All other
+// malformed layouts are returned as errors instead of being silently treated
+// as live rows.
 func ValidateTombstoneAbortColumn(
 	expectedRows int,
 	abortVec *vector.Vector,
@@ -504,17 +507,23 @@ func ValidateTombstoneAbortColumn(
 			abortVec.GetType().String(),
 		)
 	}
+	if abortVec.IsConstNull() {
+		if abortVec.Length() == expectedRows {
+			return TombstoneAbortColumn{}, nil
+		}
+		return TombstoneAbortColumn{}, moerr.NewInvalidInputNoCtxf(
+			"tombstone abort const-null column has %d rows, expected %d",
+			abortVec.Length(), expectedRows,
+		)
+	}
 	if abortVec.Length() == 0 {
-		return TombstoneAbortColumn{}, nil
+		return TombstoneAbortColumn{}, moerr.NewInvalidInputNoCtx("tombstone abort column is empty")
 	}
 	if abortVec.Length() != expectedRows {
 		return TombstoneAbortColumn{}, moerr.NewInvalidInputNoCtxf(
 			"tombstone abort column has %d rows, expected %d",
 			abortVec.Length(), expectedRows,
 		)
-	}
-	if abortVec.IsConstNull() {
-		return TombstoneAbortColumn{}, moerr.NewInvalidInputNoCtx("tombstone abort column contains null values")
 	}
 	for i := 0; i < expectedRows; i++ {
 		if abortVec.IsNull(uint64(i)) {
@@ -538,7 +547,7 @@ func EvalDeleteMaskFromDNCreatedTombstones(
 	rowids := vector.MustFixedColWithTypeCheck[types.Rowid](deletedRows)
 	aborts, err := ValidateTombstoneAbortColumn(len(rowids), abortVec)
 	if err != nil {
-		return nil, err
+		return objectio.NullBitmap, err
 	}
 	start, end := FindStartEndOfBlockFromSortedRowids(rowids, blockid)
 	if start >= end {
