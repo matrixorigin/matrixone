@@ -620,9 +620,9 @@ func (ls *LocalDisttaeDataSource) filterInMemUnCommittedInserts(
 	}()
 
 	rows := 0
-	writes := ls.table.getTxn().writes
+	workspace := &ls.table.getTxn().workspace
 	//maxRows := objectio.BlockMaxRows
-	if len(writes) == 0 {
+	if workspace.len() == 0 {
 		return nil
 	}
 
@@ -682,7 +682,15 @@ func (ls *LocalDisttaeDataSource) filterInMemUnCommittedInserts(
 			break
 		}
 
-		entry := writes[ls.wsCursor]
+		indexes := workspace.view(ls.wsCursor, ls.txnOffset).tableEntryIndexes(
+			ls.table.db.databaseId,
+			ls.table.tableId)
+		if len(indexes) == 0 {
+			ls.wsCursor = ls.txnOffset
+			break
+		}
+		ls.wsCursor = indexes[0]
+		entry := workspace.entries[ls.wsCursor]
 
 		if ok := checkWorkspaceEntryType(ls.table, entry, true); !ok {
 			ls.wsCursor++
@@ -1165,14 +1173,18 @@ func (ls *LocalDisttaeDataSource) workspaceDeleteEntriesLocked() []workspaceDele
 	}
 
 	entries := ls.workspaceDeletes.entries[:0]
-	writes := ls.table.getTxn().writes[:ls.txnOffset]
-	for idx := range writes {
-		if ok := checkWorkspaceEntryType(ls.table, writes[idx], false); !ok {
+	workspace := &ls.table.getTxn().workspace
+	indexes := workspace.visiblePrefix(ls.txnOffset).tableEntryIndexes(
+		ls.table.db.databaseId,
+		ls.table.tableId)
+	for _, idx := range indexes {
+		entry := workspace.entries[idx]
+		if ok := checkWorkspaceEntryType(ls.table, entry, false); !ok {
 			continue
 		}
 
-		entryRowIds := vector.MustFixedColNoTypeCheck[objectio.Rowid](writes[idx].bat.Vecs[0])
-		sorted := writes[idx].bat.Vecs[0].GetSorted()
+		entryRowIds := vector.MustFixedColNoTypeCheck[objectio.Rowid](entry.bat.Vecs[0])
+		sorted := entry.bat.Vecs[0].GetSorted()
 		if !sorted {
 			if len(entryRowIds) <= 1 {
 				sorted = true

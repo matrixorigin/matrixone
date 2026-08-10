@@ -147,7 +147,7 @@ func newTableMetaReader(
 	// A clone source may itself be created by an earlier ALTER in the same
 	// transaction. Keep the visible write boundary so metadata and row scans
 	// include those txn-local objects without seeing later writes.
-	txnOffset = len(table.getTxn().writes)
+	txnOffset = len(table.getTxn().workspace.entries)
 	if table.db.op.IsSnapOp() {
 		txnOffset = table.getTxn().GetSnapshotWriteOffset()
 	}

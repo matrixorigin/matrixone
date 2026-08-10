@@ -16,7 +16,6 @@ package test
 
 import (
 	"context"
-	"reflect"
 	"testing"
 	"time"
 
@@ -745,7 +744,11 @@ func TestStarCountMixedInMemoryAndPersisted(t *testing.T) {
 	require.Equal(t, uint64(210), count, "Should count all rows including mixed in-memory and persisted")
 
 	// Verify workspace state: should have both in-memory and persisted writes
-	inMemory, persisted := countWorkspaceWrites(txn)
+	inMemory, persisted := countWorkspaceWrites(
+		txn,
+		rel.GetDBID(ctx),
+		rel.GetTableID(ctx),
+	)
 	t.Logf("Workspace state: in-memory writes=%d, persisted writes=%d", inMemory, persisted)
 	require.Greater(t, inMemory, 0, "Should have in-memory writes")
 	require.Greater(t, persisted, 0, "Should have persisted writes")
@@ -766,13 +769,9 @@ func assertWorkspaceHasPersistedInsertWithMultipleObjectStats(
 ) {
 	dtxn, ok := txn.GetWorkspace().(*disttae.Transaction)
 	require.True(t, ok, "workspace must be *disttae.Transaction")
-	txnValue := reflect.ValueOf(dtxn).Elem()
-	writesField := txnValue.FieldByName("writes")
-	require.True(t, writesField.IsValid(), "writes field must exist")
-	writesLen := writesField.Len()
 
 	var found bool
-	dtxn.ForEachTableWrites(dbID, tableID, writesLen, func(entry disttae.Entry) {
+	dtxn.ForEachCurrentTableWrites(dbID, tableID, func(entry disttae.Entry) {
 		if entry.Type() != disttae.INSERT || entry.FileName() == "" || entry.Bat() == nil {
 			return
 		}
@@ -800,13 +799,9 @@ func assertWorkspaceHasPersistedTombstones(
 ) {
 	dtxn, ok := txn.GetWorkspace().(*disttae.Transaction)
 	require.True(t, ok, "workspace must be *disttae.Transaction")
-	txnValue := reflect.ValueOf(dtxn).Elem()
-	writesField := txnValue.FieldByName("writes")
-	require.True(t, writesField.IsValid(), "writes field must exist")
-	writesLen := writesField.Len()
 
 	var found bool
-	dtxn.ForEachTableWrites(dbID, tableID, writesLen, func(entry disttae.Entry) {
+	dtxn.ForEachCurrentTableWrites(dbID, tableID, func(entry disttae.Entry) {
 		if entry.Type() != disttae.DELETE || entry.FileName() == "" || entry.Bat() == nil {
 			return
 		}
@@ -822,51 +817,26 @@ func assertWorkspaceHasPersistedTombstones(
 		"workspace must contain at least one persisted DELETE entry (typ=DELETE, fileName!=empty, bat with ObjectStats in column 0); this guarantees countUncommittedPersistedTombstones path is exercised")
 }
 
-// countWorkspaceWrites counts in-memory and persisted writes in the transaction workspace
-func countWorkspaceWrites(txn client.TxnOperator) (inMemory, persisted int) {
-	// Access the internal transaction workspace
-	workspace := txn.GetWorkspace()
-	dtxn, ok := workspace.(*disttae.Transaction)
+// countWorkspaceWrites counts current in-memory and persisted writes for one table.
+func countWorkspaceWrites(
+	txn client.TxnOperator,
+	dbID, tableID uint64,
+) (inMemory, persisted int) {
+	dtxn, ok := txn.GetWorkspace().(*disttae.Transaction)
 	if !ok {
 		return 0, 0
 	}
 
-	// Use reflection to access the writes slice since there's no public API
-	// to iterate all writes across all tables
-	txnValue := reflect.ValueOf(dtxn).Elem()
-	writesField := txnValue.FieldByName("writes")
-	if !writesField.IsValid() {
-		return 0, 0
-	}
-
-	// Count all INSERT writes
-	for i := 0; i < writesField.Len(); i++ {
-		entry := writesField.Index(i)
-
-		// Get typ field
-		typField := entry.FieldByName("typ")
-		if !typField.IsValid() || typField.Int() != int64(disttae.INSERT) {
-			continue
+	dtxn.ForEachCurrentTableWrites(dbID, tableID, func(entry disttae.Entry) {
+		if entry.Type() != disttae.INSERT {
+			return
 		}
-
-		// Get fileName field
-		fileNameField := entry.FieldByName("fileName")
-		if !fileNameField.IsValid() {
-			continue
-		}
-
-		// Get bat field
-		batField := entry.FieldByName("bat")
-		if !batField.IsValid() {
-			continue
-		}
-
-		if fileNameField.String() != "" {
+		if entry.FileName() != "" {
 			persisted++
-		} else if !batField.IsNil() {
+		} else if entry.Bat() != nil {
 			inMemory++
 		}
-	}
+	})
 
 	return inMemory, persisted
 }

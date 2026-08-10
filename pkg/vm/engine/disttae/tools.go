@@ -39,7 +39,7 @@ func genWriteReqs(
 	ctx context.Context,
 	txnCommit *Transaction,
 ) ([]txn.TxnRequest, error) {
-	writes, tablesInVain, op := txnCommit.writes, txnCommit.tablesInVain, txnCommit.op
+	writes, tablesInVain, op := txnCommit.workspace.entries, txnCommit.tablesInVain, txnCommit.op
 	var pkChkByTN int8
 	if v := ctx.Value(defines.PkCheckByTN{}); v != nil {
 		pkChkByTN = v.(int8)

@@ -261,7 +261,7 @@ func TestBigS3WorkspaceIterMissingData(t *testing.T) {
 		cn_flushed_s3_tombstone_object_stats_list: new(sync.Map),
 		op:            txnOp,
 		deletedBlocks: &deletedBlocks{},
-		writes: []Entry{
+		workspace: txnWorkspace{entries: []Entry{
 			{
 				typ:        INSERT,
 				databaseId: 11,
@@ -269,7 +269,7 @@ func TestBigS3WorkspaceIterMissingData(t *testing.T) {
 				fileName:   "a-s3-file-name",
 				bat:        s3Bat,
 			},
-		},
+		}},
 	}
 
 	// This batch can be obtained by 'insert into db.t2 values (1);'
@@ -285,7 +285,7 @@ func TestBigS3WorkspaceIterMissingData(t *testing.T) {
 	// query t2 table
 	ls := &LocalDisttaeDataSource{
 		ctx:       ctx,
-		txnOffset: len(txn.writes),
+		txnOffset: len(txn.workspace.entries),
 		table: &txnTable{
 			db: &txnDatabase{
 				databaseId: 11,
@@ -346,7 +346,7 @@ func TestLocalDatasourceWorkspaceDeleteEntriesSortsWithoutMutatingBatch(t *testi
 
 	txn := &Transaction{
 		op: txnOp,
-		writes: []Entry{
+		workspace: txnWorkspace{entries: []Entry{
 			{
 				typ:        DELETE,
 				databaseId: 11,
@@ -359,13 +359,13 @@ func TestLocalDatasourceWorkspaceDeleteEntriesSortsWithoutMutatingBatch(t *testi
 				tableId:    22,
 				bat:        delBat2,
 			},
-		},
+		}},
 	}
 	txnOp.AddWorkspace(txn)
 
 	ls := &LocalDisttaeDataSource{
 		ctx:       ctx,
-		txnOffset: len(txn.writes),
+		txnOffset: len(txn.workspace.entries),
 		table: &txnTable{
 			db: &txnDatabase{
 				databaseId: 11,
@@ -427,12 +427,12 @@ func TestLocalDatasourceWorkspaceDeleteEntriesMergesLargeDeleteSet(t *testing.T)
 		})
 	}
 
-	txn := &Transaction{op: txnOp, writes: writes}
+	txn := &Transaction{op: txnOp, workspace: txnWorkspace{entries: writes}}
 	txnOp.AddWorkspace(txn)
 
 	ls := &LocalDisttaeDataSource{
 		ctx:       ctx,
-		txnOffset: len(txn.writes),
+		txnOffset: len(txn.workspace.entries),
 		table: &txnTable{
 			db: &txnDatabase{
 				databaseId: 11,
@@ -478,7 +478,7 @@ func TestLocalDatasourceWorkspaceDeleteEntriesInvalidatesCacheWhenTxnOffsetChang
 
 	txn := &Transaction{
 		op: txnOp,
-		writes: []Entry{
+		workspace: txnWorkspace{entries: []Entry{
 			{
 				typ:        DELETE,
 				databaseId: 11,
@@ -491,7 +491,7 @@ func TestLocalDatasourceWorkspaceDeleteEntriesInvalidatesCacheWhenTxnOffsetChang
 				tableId:    22,
 				bat:        newWorkspaceDeleteBatch(t, []types.Rowid{row2}),
 			},
-		},
+		}},
 	}
 	txnOp.AddWorkspace(txn)
 

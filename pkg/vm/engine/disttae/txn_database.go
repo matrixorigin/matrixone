@@ -719,7 +719,7 @@ func (db *txnDatabase) syncLogicalIdIndexInsert(
 	if err != nil {
 		return err
 	}
-	// Note: Do NOT clean bat here. WriteBatch stores the batch reference in txn.writes,
+	// Note: Do NOT clean bat here. WriteBatch stores the batch reference in txn.workspace.entries,
 	// and the batch lifecycle is managed by the transaction (cleaned on commit/rollback).
 
 	note := fmt.Sprintf("sync logical_id index insert %d", logicalId)

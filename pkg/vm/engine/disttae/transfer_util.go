@@ -79,7 +79,7 @@ func ConstructCNTombstoneObjectsTransferFlow(
 
 	tombstoneObjects := make([]objectio.ObjectStats, 0)
 
-	for _, e := range txn.writes {
+	for _, e := range txn.workspace.entries {
 		if e.tableId != table.tableId || e.databaseId != table.db.databaseId {
 			continue
 		}

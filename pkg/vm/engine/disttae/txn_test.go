@@ -167,7 +167,7 @@ func TestAutoIncrEpochWritePathsRejectBeforeWorkspaceMutation(t *testing.T) {
 			INSERT, "", 1, 2, 3, "db", "tbl", nil, DNStore{}, 1, true,
 		)
 		require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported), err)
-		require.Empty(t, txn.writes)
+		require.Empty(t, txn.workspace.entries)
 		require.Zero(t, txn.workspaceSize)
 	})
 
@@ -177,7 +177,7 @@ func TestAutoIncrEpochWritePathsRejectBeforeWorkspaceMutation(t *testing.T) {
 			INSERT, 1, 2, 3, "db", "tbl", "file", nil, DNStore{}, 1, true,
 		)
 		require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported), err)
-		require.Empty(t, txn.writes)
+		require.Empty(t, txn.workspace.entries)
 		require.False(t, txn.hasS3Op.Load())
 		require.Zero(t, txn.workspaceSize)
 	})
@@ -188,7 +188,7 @@ func TestAutoIncrEpochWritePathsRejectBeforeWorkspaceMutation(t *testing.T) {
 			INSERT, 1, 2, 3, "db", "tbl", "file", nil, DNStore{}, 1, true,
 		)
 		require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported), err)
-		require.Empty(t, txn.writes)
+		require.Empty(t, txn.workspace.entries)
 		require.False(t, txn.hasS3Op.Load())
 		require.Zero(t, txn.workspaceSize)
 	})
@@ -337,10 +337,10 @@ func TestWriteBatchRecordsPKCheckState(t *testing.T) {
 
 		_, err := txn.WriteBatch(INSERT, "", 0, 1, 42, "db", "tbl", bat, DNStore{})
 		require.NoError(t, err)
-		require.Len(t, txn.writes, 1)
-		require.False(t, txn.writes[0].pkCheckReady)
-		require.Equal(t, -1, txn.writes[0].pkCheckPos)
-		require.False(t, txn.writes[0].autoIncrEpochKnown)
+		require.Len(t, txn.workspace.entries, 1)
+		require.False(t, txn.workspace.entries[0].pkCheckReady)
+		require.Equal(t, -1, txn.workspace.entries[0].pkCheckPos)
+		require.False(t, txn.workspace.entries[0].autoIncrEpochKnown)
 
 		bat.Clean(proc.Mp())
 	})
@@ -351,9 +351,9 @@ func TestWriteBatchRecordsPKCheckState(t *testing.T) {
 
 		_, err := txn.WriteBatch(DELETE, "", 0, 1, 42, "db", "tbl", bat, DNStore{})
 		require.NoError(t, err)
-		require.Len(t, txn.writes, 1)
-		require.False(t, txn.writes[0].pkCheckReady)
-		require.Equal(t, -1, txn.writes[0].pkCheckPos)
+		require.Len(t, txn.workspace.entries, 1)
+		require.False(t, txn.workspace.entries[0].pkCheckReady)
+		require.Equal(t, -1, txn.workspace.entries[0].pkCheckPos)
 
 		bat.Clean(proc.Mp())
 	})
@@ -364,9 +364,9 @@ func TestWriteBatchRecordsPKCheckState(t *testing.T) {
 
 		_, err := txn.WriteBatch(INSERT, "", 1, 7, 42, "db", "tbl", bat, DNStore{})
 		require.NoError(t, err)
-		require.Len(t, txn.writes, 1)
-		require.True(t, txn.writes[0].pkCheckReady)
-		require.Equal(t, 1, txn.writes[0].pkCheckPos)
+		require.Len(t, txn.workspace.entries, 1)
+		require.True(t, txn.workspace.entries[0].pkCheckReady)
+		require.Equal(t, 1, txn.workspace.entries[0].pkCheckPos)
 
 		bat.Clean(txn.proc.Mp())
 	})
@@ -377,9 +377,9 @@ func TestWriteBatchRecordsPKCheckState(t *testing.T) {
 
 		_, err := txn.writeBatchWithAutoIncrEpoch(context.Background(), INSERT, "", 1, 7, 42, "db", "tbl", bat, DNStore{}, 7)
 		require.NoError(t, err)
-		require.Len(t, txn.writes, 1)
-		require.Equal(t, uint32(7), txn.writes[0].autoIncrEpoch)
-		require.True(t, txn.writes[0].autoIncrEpochKnown)
+		require.Len(t, txn.workspace.entries, 1)
+		require.Equal(t, uint32(7), txn.workspace.entries[0].autoIncrEpoch)
+		require.True(t, txn.workspace.entries[0].autoIncrEpochKnown)
 
 		bat.Clean(txn.proc.Mp())
 	})
@@ -390,9 +390,9 @@ func TestWriteBatchRecordsPKCheckState(t *testing.T) {
 
 		_, err := txn.WriteBatch(INSERT, "", 1, 7, 42, "db", "tbl", bat, DNStore{})
 		require.NoError(t, err)
-		require.Len(t, txn.writes, 1)
-		require.False(t, txn.writes[0].pkCheckReady)
-		require.Equal(t, -1, txn.writes[0].pkCheckPos)
+		require.Len(t, txn.workspace.entries, 1)
+		require.False(t, txn.workspace.entries[0].pkCheckReady)
+		require.Equal(t, -1, txn.workspace.entries[0].pkCheckPos)
 
 		bat.Clean(txn.proc.Mp())
 	})
@@ -404,7 +404,7 @@ func TestTransactionCheckDupUsesWriteEntryPKMetadata(t *testing.T) {
 			op:          newTxnOperatorForTest(t),
 			tableOps:    newTableOps(),
 			databaseOps: newDbOps(),
-			writes: []Entry{
+			workspace: txnWorkspace{entries: []Entry{
 				{
 					typ:          INSERT,
 					tableId:      42,
@@ -415,7 +415,7 @@ func TestTransactionCheckDupUsesWriteEntryPKMetadata(t *testing.T) {
 					pkCheckPos:   0,
 					pkCheckReady: true,
 				},
-			},
+			}},
 		}
 
 		err := txn.checkDup(context.Background())
@@ -429,7 +429,7 @@ func TestTransactionCheckDupUsesWriteEntryPKMetadata(t *testing.T) {
 			op:          newTxnOperatorForTest(t),
 			tableOps:    newTableOps(),
 			databaseOps: newDbOps(),
-			writes: []Entry{
+			workspace: txnWorkspace{entries: []Entry{
 				{
 					typ:          DELETE,
 					tableId:      42,
@@ -440,7 +440,7 @@ func TestTransactionCheckDupUsesWriteEntryPKMetadata(t *testing.T) {
 					pkCheckPos:   1,
 					pkCheckReady: true,
 				},
-			},
+			}},
 		}
 
 		err := txn.checkDup(context.Background())
@@ -454,7 +454,7 @@ func TestTransactionCheckDupUsesWriteEntryPKMetadata(t *testing.T) {
 			op:          newTxnOperatorForTest(t),
 			tableOps:    newTableOps(),
 			databaseOps: newDbOps(),
-			writes: []Entry{
+			workspace: txnWorkspace{entries: []Entry{
 				{
 					typ:          INSERT,
 					tableId:      42,
@@ -475,7 +475,7 @@ func TestTransactionCheckDupUsesWriteEntryPKMetadata(t *testing.T) {
 					pkCheckPos:   1,
 					pkCheckReady: true,
 				},
-			},
+			}},
 		}
 
 		require.NoError(t, txn.checkDup(context.Background()))
@@ -483,7 +483,7 @@ func TestTransactionCheckDupUsesWriteEntryPKMetadata(t *testing.T) {
 
 	t.Run("out of range falls back to legacy", func(t *testing.T) {
 		txn := newTransactionWithActivePKTableForTest(t, "pk")
-		txn.writes = []Entry{
+		txn.workspace.replace([]Entry{
 			{
 				typ:          INSERT,
 				accountId:    1,
@@ -495,7 +495,7 @@ func TestTransactionCheckDupUsesWriteEntryPKMetadata(t *testing.T) {
 				pkCheckPos:   3,
 				pkCheckReady: true,
 			},
-		}
+		})
 
 		err := txn.checkDup(context.Background())
 		require.Error(t, err)
@@ -504,7 +504,7 @@ func TestTransactionCheckDupUsesWriteEntryPKMetadata(t *testing.T) {
 
 	t.Run("legacy insert with rowid duplicate", func(t *testing.T) {
 		txn := newTransactionWithActivePKTableForTest(t, "pk")
-		txn.writes = []Entry{
+		txn.workspace.replace([]Entry{
 			{
 				typ:          INSERT,
 				accountId:    1,
@@ -515,7 +515,7 @@ func TestTransactionCheckDupUsesWriteEntryPKMetadata(t *testing.T) {
 				bat:          newInsertBatchWithRowIDForTest(t, txn.proc, []int64{8, 8}),
 				pkCheckReady: false,
 			},
-		}
+		})
 
 		err := txn.checkDup(context.Background())
 		require.Error(t, err)
@@ -524,7 +524,7 @@ func TestTransactionCheckDupUsesWriteEntryPKMetadata(t *testing.T) {
 
 	t.Run("legacy delete duplicate", func(t *testing.T) {
 		txn := newTransactionWithActivePKTableForTest(t, "pk")
-		txn.writes = []Entry{
+		txn.workspace.replace([]Entry{
 			{
 				typ:          DELETE,
 				accountId:    1,
@@ -535,7 +535,7 @@ func TestTransactionCheckDupUsesWriteEntryPKMetadata(t *testing.T) {
 				bat:          newDeleteBatchForTest(t, txn.proc, []int64{6, 6}),
 				pkCheckReady: false,
 			},
-		}
+		})
 
 		err := txn.checkDup(context.Background())
 		require.Error(t, err)
@@ -544,7 +544,7 @@ func TestTransactionCheckDupUsesWriteEntryPKMetadata(t *testing.T) {
 
 	t.Run("legacy delete without pk vector", func(t *testing.T) {
 		txn := newTransactionWithActivePKTableForTest(t, "pk")
-		txn.writes = []Entry{
+		txn.workspace.replace([]Entry{
 			{
 				typ:          DELETE,
 				accountId:    1,
@@ -555,7 +555,7 @@ func TestTransactionCheckDupUsesWriteEntryPKMetadata(t *testing.T) {
 				bat:          newInt64BatchForTest(t, txn.proc, []string{"pk"}, []int64{1}),
 				pkCheckReady: false,
 			},
-		}
+		})
 
 		require.NoError(t, txn.checkDup(context.Background()))
 	})
@@ -566,46 +566,46 @@ func TestAdjustUpdateOrderLockedUsesAdjustedWriteOffset(t *testing.T) {
 		txn := &Transaction{
 			statementID:       1,
 			adjustWriteOffset: 1,
-			writes: []Entry{
+			workspace: txnWorkspace{entries: []Entry{
 				{typ: INSERT, tableId: 99},
 				{typ: INSERT, tableId: 1},
 				{typ: DELETE, tableId: 1},
 				{typ: INSERT, tableId: 2, fileName: "flushed"},
-			},
+			}},
 		}
 
 		require.NotPanics(t, func() {
 			require.NoError(t, txn.adjustUpdateOrderLocked(2))
 		})
 
-		require.Len(t, txn.writes, 4)
-		require.Equal(t, INSERT, txn.writes[0].typ)
-		require.Equal(t, uint64(99), txn.writes[0].tableId)
-		require.Equal(t, DELETE, txn.writes[1].typ)
-		require.Equal(t, INSERT, txn.writes[2].typ)
-		require.Equal(t, INSERT, txn.writes[3].typ)
+		require.Len(t, txn.workspace.entries, 4)
+		require.Equal(t, INSERT, txn.workspace.entries[0].typ)
+		require.Equal(t, uint64(99), txn.workspace.entries[0].tableId)
+		require.Equal(t, DELETE, txn.workspace.entries[1].typ)
+		require.Equal(t, INSERT, txn.workspace.entries[2].typ)
+		require.Equal(t, INSERT, txn.workspace.entries[3].typ)
 	})
 
 	t.Run("out of range stale offset", func(t *testing.T) {
 		txn := &Transaction{
 			statementID:       1,
 			adjustWriteOffset: 1,
-			writes: []Entry{
+			workspace: txnWorkspace{entries: []Entry{
 				{typ: INSERT, tableId: 99},
 				{typ: INSERT, tableId: 1},
 				{typ: DELETE, tableId: 1},
-			},
+			}},
 		}
 
 		require.NotPanics(t, func() {
 			require.NoError(t, txn.adjustUpdateOrderLocked(4))
 		})
 
-		require.Len(t, txn.writes, 3)
-		require.Equal(t, INSERT, txn.writes[0].typ)
-		require.Equal(t, uint64(99), txn.writes[0].tableId)
-		require.Equal(t, DELETE, txn.writes[1].typ)
-		require.Equal(t, INSERT, txn.writes[2].typ)
+		require.Len(t, txn.workspace.entries, 3)
+		require.Equal(t, INSERT, txn.workspace.entries[0].typ)
+		require.Equal(t, uint64(99), txn.workspace.entries[0].tableId)
+		require.Equal(t, DELETE, txn.workspace.entries[1].typ)
+		require.Equal(t, INSERT, txn.workspace.entries[2].typ)
 	})
 }
 
@@ -639,7 +639,7 @@ func TestTxnTableWriteTnPartitionHonorsCanceledContext(t *testing.T) {
 	cancel()
 	err := tbl.writeTnPartition(ctx, bat)
 	require.ErrorIs(t, err, context.Canceled)
-	require.Empty(t, txn.writes)
+	require.Empty(t, txn.workspace.entries)
 }
 
 func TestTxnTableDeleteHonorsCanceledContext(t *testing.T) {
@@ -656,7 +656,7 @@ func TestTxnTableDeleteHonorsCanceledContext(t *testing.T) {
 	cancel()
 	err := tbl.Delete(ctx, bat, "")
 	require.ErrorIs(t, err, context.Canceled)
-	require.Empty(t, txn.writes)
+	require.Empty(t, txn.workspace.entries)
 }
 
 func TestResolvePKCheckPosForWriteEarlyExit(t *testing.T) {
@@ -701,8 +701,8 @@ func TestMergeTxnWorkspaceKeepsCatalogBeforeDependentData(t *testing.T) {
 	)
 
 	defer func() {
-		for i := range txn.writes {
-			if txn.writes[i].bat != nil {
+		for i := range txn.workspace.entries {
+			if txn.workspace.entries[i].bat != nil {
 				txn.releaseWorkspaceEntryBatchLocked(i)
 			}
 		}
@@ -747,7 +747,7 @@ func TestMergeTxnWorkspaceKeepsCatalogBeforeDependentData(t *testing.T) {
 	require.NoError(t, txn.mergeTxnWorkspaceLocked(context.Background()))
 
 	createIdx, dataIdx := -1, -1
-	for i, e := range txn.writes {
+	for i, e := range txn.workspace.entries {
 		if e.tableId == catalog.MO_TABLES_ID && e.note == noteForCreate(criticalTableID, "critical") {
 			createIdx = i
 		}
@@ -815,8 +815,8 @@ func TestIssue25589RollbackLastStatementRestoresWorkspaceAccounting(t *testing.T
 	txn.offsets = []int{1}
 
 	require.NoError(t, txn.RollbackLastStatement(context.Background()))
-	require.Len(t, txn.writes, 1)
-	require.Same(t, committed, txn.writes[0].bat)
+	require.Len(t, txn.workspace.entries, 1)
+	require.Same(t, committed, txn.workspace.entries[0].bat)
 	require.Equal(t, uint64(committed.Size()), txn.workspaceSize)
 	require.Equal(t, uint64(committed.Size()), txn.approximateInMemInsertSize)
 	require.Equal(t, committed.RowCount(), txn.approximateInMemInsertCnt)
@@ -838,7 +838,7 @@ func TestIssue25589MergeTxnWorkspaceRestoresAccountingForTablesInVain(t *testing
 	txn.appendWorkspaceEntryLocked(Entry{typ: INSERT, databaseId: 7, tableId: 42, bat: bat})
 
 	require.NoError(t, txn.mergeTxnWorkspaceLocked(context.Background()))
-	require.Nil(t, txn.writes[0].bat)
+	require.Nil(t, txn.workspace.entries[0].bat)
 	require.Zero(t, txn.workspaceSize)
 	require.Zero(t, txn.approximateInMemInsertSize)
 	require.Zero(t, txn.approximateInMemInsertCnt)
@@ -886,10 +886,10 @@ func TestIssue25589MergeTxnWorkspacePreservesAccountingWhenCombiningBatches(t *t
 	}
 
 	require.NoError(t, txn.mergeTxnWorkspaceLocked(context.Background()))
-	require.Len(t, txn.writes, 1)
-	require.Equal(t, 30, txn.writes[0].bat.RowCount())
-	require.Equal(t, uint64(txn.writes[0].bat.Size()), txn.workspaceSize)
-	require.Equal(t, uint64(txn.writes[0].bat.Size()), txn.approximateInMemInsertSize)
+	require.Len(t, txn.workspace.entries, 1)
+	require.Equal(t, 30, txn.workspace.entries[0].bat.RowCount())
+	require.Equal(t, uint64(txn.workspace.entries[0].bat.Size()), txn.workspaceSize)
+	require.Equal(t, uint64(txn.workspace.entries[0].bat.Size()), txn.approximateInMemInsertSize)
 	require.Equal(t, 30, txn.approximateInMemInsertCnt)
 	require.NoError(t, txn.checkWorkspaceAccountingLocked())
 
@@ -930,7 +930,7 @@ func TestIssue25589DumpInsertRestoresWorkspaceAccounting(t *testing.T) {
 	require.Zero(t, txn.approximateInMemInsertCnt)
 	require.NoError(t, txn.checkWorkspaceAccountingLocked())
 
-	for i := range txn.writes {
+	for i := range txn.workspace.entries {
 		txn.releaseWorkspaceEntryBatchLocked(i)
 	}
 }
@@ -963,9 +963,9 @@ func TestIssue25589SoftDeleteObjectUsesWorkspaceAccounting(t *testing.T) {
 		rowID.BorrowObjectID(),
 		false,
 	))
-	require.Len(t, txn.writes, 1)
-	require.Equal(t, SOFT_DELETE_OBJECT, txn.writes[0].typ)
-	require.Equal(t, uint64(txn.writes[0].bat.Size()), txn.workspaceSize)
+	require.Len(t, txn.workspace.entries, 1)
+	require.Equal(t, SOFT_DELETE_OBJECT, txn.workspace.entries[0].typ)
+	require.Equal(t, uint64(txn.workspace.entries[0].bat.Size()), txn.workspaceSize)
 	require.Zero(t, txn.approximateInMemInsertSize)
 	require.Zero(t, txn.approximateInMemInsertCnt)
 	require.Zero(t, txn.approximateInMemDeleteCnt)
@@ -1037,12 +1037,12 @@ func TestWriteFileLockedMarksPKCheckReady(t *testing.T) {
 
 	err := txn.WriteFileLocked(ALTER, 0, 1, 2, "db", "tbl", "file", bat, DNStore{})
 	require.NoError(t, err)
-	require.Len(t, txn.writes, 1)
-	require.True(t, txn.writes[0].pkCheckReady)
-	require.Equal(t, -1, txn.writes[0].pkCheckPos)
+	require.Len(t, txn.workspace.entries, 1)
+	require.True(t, txn.workspace.entries[0].pkCheckReady)
+	require.Equal(t, -1, txn.workspace.entries[0].pkCheckPos)
 
 	bat.Clean(proc.Mp())
-	txn.writes[0].bat.Clean(proc.Mp())
+	txn.workspace.entries[0].bat.Clean(proc.Mp())
 }
 
 func newTxnOperatorForTest(t *testing.T) *mock_frontend.MockTxnOperator {
@@ -1867,7 +1867,7 @@ func TestDupVectorWithoutNulls_ConcurrentSafety(t *testing.T) {
 func TestSnapshotWriteOffset_NormalPath(t *testing.T) {
 	t.Run("Update", func(t *testing.T) {
 		txn := &Transaction{
-			writes: []Entry{{}, {}, {}, {}},
+			workspace: txnWorkspace{entries: []Entry{{}, {}, {}, {}}},
 		}
 		txn.UpdateSnapshotWriteOffset()
 		require.Equal(t, 4, txn.GetSnapshotWriteOffset())
@@ -1886,7 +1886,7 @@ func TestSnapshotWriteOffset_NormalPath(t *testing.T) {
 // -race.
 func TestSnapshotWriteOffset_BlocksWhenAnotherGoroutineHoldsLock(t *testing.T) {
 	txn := &Transaction{
-		writes: make([]Entry, 3),
+		workspace: txnWorkspace{entries: make([]Entry, 3)},
 	}
 
 	locked := make(chan struct{})
@@ -1902,7 +1902,7 @@ func TestSnapshotWriteOffset_BlocksWhenAnotherGoroutineHoldsLock(t *testing.T) {
 		// UpdateSnapshotWriteOffset returns the correct final offset).
 		close(blocking)
 		time.Sleep(200 * time.Millisecond)
-		txn.writes = txn.writes[:1]
+		txn.workspace.truncate(1)
 		close(holderFinished)
 		txn.Unlock()
 	}()
@@ -1920,7 +1920,7 @@ func TestSnapshotWriteOffset_BlocksWhenAnotherGoroutineHoldsLock(t *testing.T) {
 // calls from many goroutines are race-free. Run with -race.
 func TestSnapshotWriteOffset_ConcurrentAccess(t *testing.T) {
 	txn := &Transaction{
-		writes: make([]Entry, 10),
+		workspace: txnWorkspace{entries: make([]Entry, 10)},
 	}
 	txn.snapshotWriteOffset.Store(5)
 
@@ -1984,7 +1984,7 @@ func newDumpableTxnForTest(t *testing.T) *Transaction {
 	txn := &Transaction{
 		proc:   proc,
 		engine: &Engine{},
-		writes: []Entry{
+		workspace: txnWorkspace{entries: []Entry{
 			{
 				typ:          INSERT,
 				accountId:    0,
@@ -1994,14 +1994,14 @@ func newDumpableTxnForTest(t *testing.T) *Transaction {
 				databaseName: "db",
 				bat:          newInt64BatchForTest(t, proc, []string{"pk"}, []int64{1, 2}),
 			},
-		},
+		}},
 	}
 	t.Cleanup(func() {
 		// If the dump aborts before consuming the entries, their batches
 		// are still owned by the workspace; release them here.
-		for i := range txn.writes {
-			if txn.writes[i].bat != nil {
-				txn.writes[i].bat.Clean(proc.Mp())
+		for i := range txn.workspace.entries {
+			if txn.workspace.entries[i].bat != nil {
+				txn.workspace.entries[i].bat.Clean(proc.Mp())
 			}
 		}
 	})
@@ -2031,7 +2031,7 @@ func requireBoundaryUntouched(t *testing.T, txn *Transaction) {
 func TestIssue25557_DumpBatchReentrantGetTableDoesNotDeadlock(t *testing.T) {
 	enableReenterSnapshotOffsetFault(t)
 	txn := newDumpableTxnForTest(t)
-	preDumpLen := len(txn.writes)
+	preDumpLen := len(txn.workspace.entries)
 
 	errCh := make(chan error, 1)
 	go func() {
@@ -2044,7 +2044,7 @@ func TestIssue25557_DumpBatchReentrantGetTableDoesNotDeadlock(t *testing.T) {
 		// internal SQL locked the workspace instead of deadlocking.
 		require.ErrorContains(t, err, "reenter snapshot write offset")
 		requireBoundaryUntouched(t, txn)
-		require.Len(t, txn.writes, preDumpLen,
+		require.Len(t, txn.workspace.entries, preDumpLen,
 			"an aborted dump must leave the workspace untouched")
 	case <-time.After(10 * time.Second):
 		t.Fatal("dumpBatch deadlocked when getTable ran the internal-SQL " +
@@ -2065,7 +2065,7 @@ func TestIssue25557_DumpBatchReentrantGetTableDoesNotDeadlock(t *testing.T) {
 func TestIssue25557_LockedDumpInsertBatchReentrantGetTableDoesNotDeadlock(t *testing.T) {
 	enableReenterSnapshotOffsetFault(t)
 	txn := newDumpableTxnForTest(t)
-	preDumpLen := len(txn.writes)
+	preDumpLen := len(txn.workspace.entries)
 
 	fs, err := colexec.GetSharedFSFromProc(txn.proc)
 	require.NoError(t, err)
@@ -2083,7 +2083,7 @@ func TestIssue25557_LockedDumpInsertBatchReentrantGetTableDoesNotDeadlock(t *tes
 	case err := <-errCh:
 		require.ErrorContains(t, err, "reenter snapshot write offset")
 		requireBoundaryUntouched(t, txn)
-		require.Len(t, txn.writes, preDumpLen,
+		require.Len(t, txn.workspace.entries, preDumpLen,
 			"an aborted dump must leave the workspace untouched")
 	case <-time.After(10 * time.Second):
 		t.Fatal("dumpInsertBatchLocked deadlocked when getTable ran the " +
@@ -2101,7 +2101,7 @@ func TestIssue25557_DumpDeleteBatchReentrantGetTableDoesNotDeadlock(t *testing.T
 	txn := &Transaction{
 		proc:   proc,
 		engine: &Engine{},
-		writes: []Entry{
+		workspace: txnWorkspace{entries: []Entry{
 			{
 				typ:          DELETE,
 				accountId:    0,
@@ -2111,16 +2111,16 @@ func TestIssue25557_DumpDeleteBatchReentrantGetTableDoesNotDeadlock(t *testing.T
 				databaseName: "db",
 				bat:          newDeleteBatchForTest(t, proc, []int64{1, 2}),
 			},
-		},
+		}},
 	}
 	t.Cleanup(func() {
-		for i := range txn.writes {
-			if txn.writes[i].bat != nil {
-				txn.writes[i].bat.Clean(proc.Mp())
+		for i := range txn.workspace.entries {
+			if txn.workspace.entries[i].bat != nil {
+				txn.workspace.entries[i].bat.Clean(proc.Mp())
 			}
 		}
 	})
-	preDumpLen := len(txn.writes)
+	preDumpLen := len(txn.workspace.entries)
 
 	fs, err := colexec.GetSharedFSFromProc(txn.proc)
 	require.NoError(t, err)
@@ -2136,7 +2136,7 @@ func TestIssue25557_DumpDeleteBatchReentrantGetTableDoesNotDeadlock(t *testing.T
 	case err := <-errCh:
 		require.ErrorContains(t, err, "reenter snapshot write offset")
 		requireBoundaryUntouched(t, txn)
-		require.Len(t, txn.writes, preDumpLen,
+		require.Len(t, txn.workspace.entries, preDumpLen,
 			"an aborted dump must leave the workspace untouched")
 	case <-time.After(10 * time.Second):
 		t.Fatal("dumpDeleteBatchLocked deadlocked when getTable ran the " +
@@ -2149,11 +2149,11 @@ func TestIssue25557_DumpDeleteBatchReentrantGetTableDoesNotDeadlock(t *testing.T
 // advance the statement boundary inside the window (which the fixed internal
 // SQL never does — simulated here by the iarg=2 fault variant), it can only
 // capture a consistent pre-compaction workspace, because the dump does not
-// mutate txn.writes before the window closes.
+// mutate txn.workspace.entries before the window closes.
 func TestIssue25557_RogueBoundaryAdvanceCapturesConsistentState(t *testing.T) {
 	enableRogueUpdateOnGetTableFault(t)
 	txn := newDumpableTxnForTest(t)
-	preDumpLen := len(txn.writes)
+	preDumpLen := len(txn.workspace.entries)
 
 	errCh := make(chan error, 1)
 	go func() {
@@ -2166,7 +2166,7 @@ func TestIssue25557_RogueBoundaryAdvanceCapturesConsistentState(t *testing.T) {
 		require.Equal(t, preDumpLen, txn.GetSnapshotWriteOffset(),
 			"a boundary advanced inside the window must cover the complete "+
 				"pre-dump workspace")
-		require.Len(t, txn.writes, preDumpLen)
+		require.Len(t, txn.workspace.entries, preDumpLen)
 		// the captured boundary must be safe for every reader
 		seen := 0
 		txn.ForEachTableWrites(7, 42, txn.GetSnapshotWriteOffset(), func(Entry) {
@@ -2180,12 +2180,12 @@ func TestIssue25557_RogueBoundaryAdvanceCapturesConsistentState(t *testing.T) {
 
 // TestForEachTableWrites_StaleOffsetBeyondLengthIsSafe verifies the
 // defensive bounds check: an offset captured before a workspace compaction
-// may exceed the current length of txn.writes and must not panic.
+// may exceed the current length of txn.workspace.entries and must not panic.
 func TestForEachTableWrites_StaleOffsetBeyondLengthIsSafe(t *testing.T) {
 	txn := &Transaction{
-		writes: []Entry{
+		workspace: txnWorkspace{entries: []Entry{
 			{databaseId: 7, tableId: 42},
-		},
+		}},
 	}
 
 	seen := 0

@@ -347,7 +347,7 @@ func (e *Engine) GetCCPRTxnCache() *CCPRTxnCache {
 }
 
 func (txn *Transaction) String() string {
-	return fmt.Sprintf("writes %v", txn.writes)
+	return fmt.Sprintf("writes %v", txn.workspace.entries)
 }
 
 // Transaction represents a transaction
@@ -364,8 +364,8 @@ type Transaction struct {
 	op       client.TxnOperator
 	sqlCount atomic.Uint64
 
-	// writes cache stores any writes done by txn
-	writes []Entry
+	// workspace owns the ordered write log and all of its access paths.
+	workspace txnWorkspace
 	// txn workspace size, includes in memory entries and persisted entries.
 	workspaceSize uint64
 	// the approximation of total size for insert entries
@@ -374,7 +374,7 @@ type Transaction struct {
 	approximateInMemInsertCnt int
 	// the approximation of total row count for delete entries
 	approximateInMemDeleteCnt int
-	// snapshotWriteOffset is the statement boundary of txn.writes: readers of
+	// snapshotWriteOffset is the statement boundary of txn.workspace.entries: readers of
 	// this transaction iterate the [0, snapshotWriteOffset) prefix. It is
 	// advanced under txn.Lock at statement boundaries only (a new compile of
 	// a user statement), never by internal SQL, and mid-statement dumps only
@@ -416,13 +416,13 @@ type Transaction struct {
 	//	sync.RWMutex
 	//	data []objectio.ObjectStats
 	//}
-	//select list for raw batch comes from txn.writes.batch.
+	//select list for raw batch comes from txn.workspace.entries.batch.
 	batchSelectList map[*batch.Batch][]int64
 
 	rollbackCount int
 	//current statement id
 	statementID int
-	//offsets of the txn.writes for statements in a txn.
+	//offsets of the txn.workspace.entries for statements in a txn.
 	offsets []int
 	//for RC isolation, the txn's snapshot TS for each statement.
 
@@ -473,7 +473,7 @@ func (txn *Transaction) ProtectCloneFiles(names ...string) {
 	defer txn.Unlock()
 	txnID := txn.op.Txn().ID
 	liveNames := make(map[string]struct{}, len(names))
-	for _, entry := range txn.writes {
+	for _, entry := range txn.workspace.entries {
 		for _, stats := range collectObjectStatsFromEntry(entry) {
 			liveNames[stats.ObjectName().String()] = struct{}{}
 		}
@@ -752,7 +752,7 @@ func (txn *Transaction) Readonly() bool {
 
 func (txn *Transaction) PPString() string {
 
-	writesString := stringifySlice(txn.writes, func(a any) string {
+	writesString := stringifySlice(txn.workspace.entries, func(a any) string {
 		ent := a.(Entry)
 		return ent.String()
 	})
@@ -834,7 +834,7 @@ func (txn *Transaction) IncrStatementID(ctx context.Context, commit bool) error 
 	if err := txn.dumpBatchLocked(ctx, 0); err != nil {
 		return err
 	}
-	txn.offsets = append(txn.offsets, len(txn.writes))
+	txn.offsets = append(txn.offsets, len(txn.workspace.entries))
 
 	txn.statementID++
 
@@ -886,7 +886,7 @@ func (txn *Transaction) AdvanceSnapshot(ctx context.Context, ts timestamp.Timest
 func (txn *Transaction) WriteOffset() uint64 {
 	txn.Lock()
 	defer txn.Unlock()
-	return uint64(len(txn.writes))
+	return uint64(len(txn.workspace.entries))
 }
 
 // Adjust adjust writes order after the current statement finished.
@@ -936,10 +936,10 @@ func (txn *Transaction) traceWorkspaceLocked(commit bool) {
 		txn.op,
 		index,
 		func() (tableID uint64, typ string, bat *batch.Batch, more bool) {
-			if idx == len(txn.writes) {
+			if idx == len(txn.workspace.entries) {
 				return 0, "", nil, false
 			}
-			e := txn.writes[idx]
+			e := txn.workspace.entries[idx]
 			idx++
 			return e.tableId, typesNames[e.typ], e.bat, true
 		})
@@ -954,10 +954,10 @@ func (txn *Transaction) adjustUpdateOrderLocked(writeOffset uint64) error {
 		if txn.adjustWriteOffset < int(writeOffset) {
 			writeOffset = uint64(txn.adjustWriteOffset)
 		}
-		if writeOffset > uint64(len(txn.writes)) {
-			writeOffset = uint64(len(txn.writes))
+		if writeOffset > uint64(len(txn.workspace.entries)) {
+			writeOffset = uint64(len(txn.workspace.entries))
 		}
-		slices.SortStableFunc(txn.writes[writeOffset:], func(a, b Entry) int {
+		txn.workspace.stableSortFrom(int(writeOffset), func(a, b Entry) int {
 			// expected in descending order
 
 			aIsCatalog := a.isCatalog()
@@ -988,18 +988,18 @@ func (txn *Transaction) adjustUpdateOrderLocked(writeOffset uint64) error {
 
 	//	// old logic
 	//	if txn.statementID > 0 {
-	//		writes := make([]Entry, 0, len(txn.writes[writeOffset:]))
-	//		for i := writeOffset; i < uint64(len(txn.writes)); i++ {
-	//			if !txn.writes[i].isCatalog() && txn.writes[i].typ == DELETE {
-	//				writes = append(writes, txn.writes[i])
+	//		writes := make([]Entry, 0, len(txn.workspace.entries[writeOffset:]))
+	//		for i := writeOffset; i < uint64(len(txn.workspace.entries)); i++ {
+	//			if !txn.workspace.entries[i].isCatalog() && txn.workspace.entries[i].typ == DELETE {
+	//				writes = append(writes, txn.workspace.entries[i])
 	//			}
 	//		}
-	//		for i := writeOffset; i < uint64(len(txn.writes)); i++ {
-	//			if txn.writes[i].isCatalog() || txn.writes[i].typ != DELETE {
-	//				writes = append(writes, txn.writes[i])
+	//		for i := writeOffset; i < uint64(len(txn.workspace.entries)); i++ {
+	//			if txn.workspace.entries[i].isCatalog() || txn.workspace.entries[i].typ != DELETE {
+	//				writes = append(writes, txn.workspace.entries[i])
 	//			}
 	//		}
-	//		txn.writes = append(txn.writes[:writeOffset], writes...)
+	//		txn.workspace.entries = append(txn.workspace.entries[:writeOffset], writes...)
 	//	}
 	//
 	//	return nil
@@ -1132,26 +1132,26 @@ func (txn *Transaction) gcObjsByIdxRange(start, end int, scope cloneGCScope) (er
 	}()
 
 	for i := start; i <= end; i++ {
-		if txn.writes[i].bat == nil ||
-			txn.writes[i].bat.RowCount() == 0 {
+		if txn.workspace.entries[i].bat == nil ||
+			txn.workspace.entries[i].bat.RowCount() == 0 {
 			continue
 		}
 		//1. Remove blocks from txn.cnObjsSummary lazily till txn commits or rollback.
 		//2. Remove the segments generated by this statement lazily till txn commits or rollback.
 		//3. Now, GC the s3 objects(data objects and tombstone objects) asynchronously.
-		if txn.writes[i].fileName != "" && txn.writes[i].typ != SOFT_DELETE_OBJECT {
+		if txn.workspace.entries[i].fileName != "" && txn.workspace.entries[i].typ != SOFT_DELETE_OBJECT {
 			var vec *vector.Vector
 			//  [object_stats, pk]
-			if txn.writes[i].typ == DELETE {
-				vec = txn.writes[i].bat.Vecs[0]
+			if txn.workspace.entries[i].typ == DELETE {
+				vec = txn.workspace.entries[i].bat.Vecs[0]
 			} else {
 				// [%!%mo__meta_loc, object_stats]
-				vec = txn.writes[i].bat.Vecs[1]
+				vec = txn.workspace.entries[i].bat.Vecs[1]
 			}
 
 			for j := range vec.Length() {
 				ss := objectio.ObjectStats(vec.GetBytesAt(j))
-				if txn.writes[i].typ == DELETE {
+				if txn.workspace.entries[i].typ == DELETE {
 					txn.cn_flushed_s3_tombstone_object_stats_list.Delete(ss)
 				}
 				objsName = append(objsName, ss.ObjectName().String())
@@ -1185,7 +1185,7 @@ func (txn *Transaction) RollbackLastStatement(ctx context.Context) error {
 	txn.Lock()
 	defer txn.Unlock()
 
-	beforeEntries = len(txn.writes)
+	beforeEntries = len(txn.workspace.entries)
 
 	txn.rollbackCount++
 	if txn.statementID > 0 {
@@ -1196,17 +1196,17 @@ func (txn *Transaction) RollbackLastStatement(ctx context.Context) error {
 		end := txn.offsets[txn.statementID]
 		// Skip GC for CCPR transactions - CCPRTxnCache handles GC to avoid deleting shared objects
 		if !txn.isCCPRTxn {
-			if err := txn.GCObjsByIdxRange(end, len(txn.writes)-1); err != nil {
+			if err := txn.GCObjsByIdxRange(end, len(txn.workspace.entries)-1); err != nil {
 				panic("to gc objects generated by CN failed")
 			}
 		}
-		for i := end; i < len(txn.writes); i++ {
-			if txn.writes[i].bat == nil {
+		for i := end; i < len(txn.workspace.entries); i++ {
+			if txn.workspace.entries[i].bat == nil {
 				continue
 			}
 			txn.releaseWorkspaceEntryBatchLocked(i)
 		}
-		txn.writes = txn.writes[:end]
+		txn.workspace.truncate(end)
 		txn.offsets = txn.offsets[:txn.statementID]
 
 		// transfer stuff
@@ -1227,7 +1227,7 @@ func (txn *Transaction) RollbackLastStatement(ctx context.Context) error {
 		delete(txn.batchSelectList, b)
 	}
 
-	afterEntries = len(txn.writes)
+	afterEntries = len(txn.workspace.entries)
 
 	for i := len(txn.restoreTxnTableFunc) - 1; i >= 0; i-- {
 		txn.restoreTxnTableFunc[i]()

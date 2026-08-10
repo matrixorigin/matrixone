@@ -58,7 +58,6 @@ func TestTransaction(t *testing.T) {
 		meta:     newTxnMeta(rand.Int63()),
 		fileMap:  make(map[string]uint64),
 	}
-	txn.writes = append(txn.writes, make([]Entry, 0, 1))
 	ro := txn.ReadOnly()
 	require.Equal(t, false, ro)
 	err := txn.WriteBatch(INSERT, 0, 0, "test", "test", batch.NewOffHeapEmpty())

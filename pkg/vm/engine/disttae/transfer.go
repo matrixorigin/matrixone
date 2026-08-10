@@ -222,7 +222,7 @@ func transferTombstones(
 		}
 	}
 
-	txnWrites := table.getTxn().writes
+	txnWrites := table.getTxn().workspace.entries
 
 	var (
 		transferIntents *vector.Vector

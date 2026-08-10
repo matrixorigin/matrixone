@@ -730,7 +730,7 @@ func (tbl *txnTable) StarCount(ctx context.Context) (uint64, error) {
 	// Determine the range of workspace entries to scan.
 	// For snapshot operations, only scan entries before the snapshot offset.
 	// For normal operations, scan all entries.
-	txnOffset := len(tbl.getTxn().writes)
+	txnOffset := len(tbl.getTxn().workspace.entries)
 	if tbl.db.op.IsSnapOp() {
 		txnOffset = tbl.getTxn().GetSnapshotWriteOffset()
 	}
@@ -1142,11 +1142,11 @@ func (tbl *txnTable) doRanges(ctx context.Context, rangesParam engine.RangesPara
 //      deletes(rowids) for committed block exist in the following four places:
 //      1. in delta location formed by TN writing S3. read by blockReader.
 //      2. in CN's partition state, read by partitionReader.
-//  	3. in txn's workspace(txn.writes) being deleted by txn, read by partitionReader.
+//  	3. in txn's workspace(txn.workspace.entries) being deleted by txn, read by partitionReader.
 //  	4. in delta location being deleted through CN writing S3, read by blockMergeReader.
 
 //  2. data in txn's workspace:
-//     1>.Raw batch data resides in txn.writes,read by partitionReader.
+//     1>.Raw batch data resides in txn.workspace.entries,read by partitionReader.
 //     2>.CN blocks resides in S3, read by blockReader.
 
 var slowPathCounter atomic.Int64
@@ -1823,8 +1823,8 @@ func (tbl *txnTable) AlterTable(ctx context.Context, c *engine.ConstraintDef, re
 		// 3. adjust writes for the table
 		txn.Lock()
 		defer txn.Unlock()
-		for i, n := 0, len(txn.writes); i < n; i++ {
-			if cur := txn.writes[i]; cur.tableId == tbl.tableId && cur.bat != nil && cur.bat.RowCount() > 0 {
+		for i, n := 0, len(txn.workspace.entries); i < n; i++ {
+			if cur := txn.workspace.entries[i]; cur.tableId == tbl.tableId && cur.bat != nil && cur.bat.RowCount() > 0 {
 				if sels, exist := txn.batchSelectList[cur.bat]; exist && len(sels) == cur.bat.RowCount() {
 					continue
 				}
