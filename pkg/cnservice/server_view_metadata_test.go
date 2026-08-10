@@ -25,8 +25,7 @@ import (
 
 func TestRunViewMetadataRecoveryLoopContinuesAfterFailureAndCancels(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
-	ticks := make(chan time.Time, 2)
-	ticks <- time.Now()
+	ticks := make(chan time.Time, 1)
 	ticks <- time.Now()
 	calls, failures := 0, 0
 	runViewMetadataRecoveryLoop(ctx, ticks, func(context.Context) error {

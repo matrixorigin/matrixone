@@ -508,25 +508,26 @@ func (ServiceType) EnumDescriptor() ([]byte, []int) {
 }
 
 type CNStore struct {
-	UUID                         string                        `protobuf:"bytes,1,opt,name=UUID,proto3" json:"UUID,omitempty"`
-	ServiceAddress               string                        `protobuf:"bytes,2,opt,name=ServiceAddress,proto3" json:"ServiceAddress,omitempty"`
-	SQLAddress                   string                        `protobuf:"bytes,3,opt,name=SQLAddress,proto3" json:"SQLAddress,omitempty"`
-	LockServiceAddress           string                        `protobuf:"bytes,4,opt,name=LockServiceAddress,proto3" json:"LockServiceAddress,omitempty"`
-	Role                         metadata.CNRole               `protobuf:"varint,6,opt,name=Role,proto3,enum=metadata.CNRole" json:"Role,omitempty"`
-	Tick                         uint64                        `protobuf:"varint,7,opt,name=Tick,proto3" json:"Tick,omitempty"`
-	State                        NodeState                     `protobuf:"varint,8,opt,name=State,proto3,enum=logservice.NodeState" json:"State,omitempty"`
-	Labels                       map[string]metadata.LabelList `protobuf:"bytes,9,rep,name=Labels,proto3" json:"Labels" protobuf_key:"bytes,1,opt,name=key,proto3" protobuf_val:"bytes,2,opt,name=value,proto3"`
-	WorkState                    metadata.WorkState            `protobuf:"varint,10,opt,name=WorkState,proto3,enum=metadata.WorkState" json:"WorkState,omitempty"`
-	QueryAddress                 string                        `protobuf:"bytes,11,opt,name=QueryAddress,proto3" json:"QueryAddress,omitempty"`
-	ConfigData                   *ConfigData                   `protobuf:"bytes,12,opt,name=ConfigData,proto3" json:"ConfigData,omitempty"`
-	Resource                     Resource                      `protobuf:"bytes,13,opt,name=Resource,proto3" json:"Resource"`
-	UpTime                       int64                         `protobuf:"varint,14,opt,name=UpTime,proto3" json:"UpTime,omitempty"`
-	ShardServiceAddress          string                        `protobuf:"bytes,15,opt,name=ShardServiceAddress,proto3" json:"ShardServiceAddress,omitempty"`
-	CommitID                     string                        `protobuf:"bytes,16,opt,name=CommitID,proto3" json:"CommitID,omitempty"`
-	ViewMetadataRefreshSupported bool                          `protobuf:"varint,17,opt,name=ViewMetadataRefreshSupported,proto3" json:"ViewMetadataRefreshSupported,omitempty"`
-	XXX_NoUnkeyedLiteral         struct{}                      `json:"-"`
-	XXX_unrecognized             []byte                        `json:"-"`
-	XXX_sizecache                int32                         `json:"-"`
+	UUID                string                        `protobuf:"bytes,1,opt,name=UUID,proto3" json:"UUID,omitempty"`
+	ServiceAddress      string                        `protobuf:"bytes,2,opt,name=ServiceAddress,proto3" json:"ServiceAddress,omitempty"`
+	SQLAddress          string                        `protobuf:"bytes,3,opt,name=SQLAddress,proto3" json:"SQLAddress,omitempty"`
+	LockServiceAddress  string                        `protobuf:"bytes,4,opt,name=LockServiceAddress,proto3" json:"LockServiceAddress,omitempty"`
+	Role                metadata.CNRole               `protobuf:"varint,6,opt,name=Role,proto3,enum=metadata.CNRole" json:"Role,omitempty"`
+	Tick                uint64                        `protobuf:"varint,7,opt,name=Tick,proto3" json:"Tick,omitempty"`
+	State               NodeState                     `protobuf:"varint,8,opt,name=State,proto3,enum=logservice.NodeState" json:"State,omitempty"`
+	Labels              map[string]metadata.LabelList `protobuf:"bytes,9,rep,name=Labels,proto3" json:"Labels" protobuf_key:"bytes,1,opt,name=key,proto3" protobuf_val:"bytes,2,opt,name=value,proto3"`
+	WorkState           metadata.WorkState            `protobuf:"varint,10,opt,name=WorkState,proto3,enum=metadata.WorkState" json:"WorkState,omitempty"`
+	QueryAddress        string                        `protobuf:"bytes,11,opt,name=QueryAddress,proto3" json:"QueryAddress,omitempty"`
+	ConfigData          *ConfigData                   `protobuf:"bytes,12,opt,name=ConfigData,proto3" json:"ConfigData,omitempty"`
+	Resource            Resource                      `protobuf:"bytes,13,opt,name=Resource,proto3" json:"Resource"`
+	UpTime              int64                         `protobuf:"varint,14,opt,name=UpTime,proto3" json:"UpTime,omitempty"`
+	ShardServiceAddress string                        `protobuf:"bytes,15,opt,name=ShardServiceAddress,proto3" json:"ShardServiceAddress,omitempty"`
+	CommitID            string                        `protobuf:"bytes,16,opt,name=CommitID,proto3" json:"CommitID,omitempty"`
+	// Requires binary support and final catalog readiness.
+	ViewMetadataRefreshSupported bool     `protobuf:"varint,17,opt,name=ViewMetadataRefreshSupported,proto3" json:"ViewMetadataRefreshSupported,omitempty"`
+	XXX_NoUnkeyedLiteral         struct{} `json:"-"`
+	XXX_unrecognized             []byte   `json:"-"`
+	XXX_sizecache                int32    `json:"-"`
 }
 
 func (m *CNStore) Reset()         { *m = CNStore{} }
@@ -1145,8 +1146,9 @@ type CNStoreHeartbeat struct {
 	CommitID            string          `protobuf:"bytes,15,opt,name=CommitID,proto3" json:"CommitID,omitempty"`
 	// AckedCommandBatchID is the last schedule-command batch accepted by this
 	// service. It is meaningful only when CommandDeliveryAckSupported is true.
-	AckedCommandBatchID          uint64   `protobuf:"varint,16,opt,name=AckedCommandBatchID,proto3" json:"AckedCommandBatchID,omitempty"`
-	CommandDeliveryAckSupported  bool     `protobuf:"varint,17,opt,name=CommandDeliveryAckSupported,proto3" json:"CommandDeliveryAckSupported,omitempty"`
+	AckedCommandBatchID         uint64 `protobuf:"varint,16,opt,name=AckedCommandBatchID,proto3" json:"AckedCommandBatchID,omitempty"`
+	CommandDeliveryAckSupported bool   `protobuf:"varint,17,opt,name=CommandDeliveryAckSupported,proto3" json:"CommandDeliveryAckSupported,omitempty"`
+	// Requires binary support and final catalog readiness.
 	ViewMetadataRefreshSupported bool     `protobuf:"varint,18,opt,name=ViewMetadataRefreshSupported,proto3" json:"ViewMetadataRefreshSupported,omitempty"`
 	XXX_NoUnkeyedLiteral         struct{} `json:"-"`
 	XXX_unrecognized             []byte   `json:"-"`
@@ -3741,7 +3743,8 @@ type CNStoreInfo struct {
 	// CommandDeliveryAckSupported reports whether this CN can use the
 	// non-destructive acknowledged schedule-command protocol. It is copied
 	// from CNStoreHeartbeat so HAKeeper can gate activation and admission.
-	CommandDeliveryAckSupported  bool     `protobuf:"varint,18,opt,name=CommandDeliveryAckSupported,proto3" json:"CommandDeliveryAckSupported,omitempty"`
+	CommandDeliveryAckSupported bool `protobuf:"varint,18,opt,name=CommandDeliveryAckSupported,proto3" json:"CommandDeliveryAckSupported,omitempty"`
+	// Requires binary support and final catalog readiness.
 	ViewMetadataRefreshSupported bool     `protobuf:"varint,19,opt,name=ViewMetadataRefreshSupported,proto3" json:"ViewMetadataRefreshSupported,omitempty"`
 	XXX_NoUnkeyedLiteral         struct{} `json:"-"`
 	XXX_unrecognized             []byte   `json:"-"`

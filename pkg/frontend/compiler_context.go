@@ -652,6 +652,9 @@ func (tcc *TxnCompilerContext) EnsureViewMetadataCurrent(
 	relationName string,
 	relationID uint64,
 ) error {
+	if slices.Contains(catalog.SystemDatabases, strings.ToLower(databaseName)) {
+		return nil
+	}
 	if !clusterservice.AllKnownCNsSupportViewMetadataRefresh(tcc.GetSession().GetService()) {
 		return nil
 	}
@@ -672,22 +675,28 @@ func (tcc *TxnCompilerContext) hasNonCurrentViewMetadata(relationID uint64) (boo
 		return false, moerr.NewInternalError(tcc.GetContext(), "internal SQL executor is unavailable")
 	}
 	result, err := v.(executor.SQLExecutor).Exec(tcc.GetContext(), fmt.Sprintf(
-		"select r.status from %s.%s r where r.account_id=%d and r.target_relation_id=%d "+
-			"and r.status<>'%s' limit 1",
+		"select r.status from %s.%s r where r.account_id=%d and r.target_relation_id=%d limit 1",
 		catalog.MO_CATALOG, catalog.MO_VIEW_REFRESH, tcc.GetSession().GetAccountId(), relationID,
-		catalog.ViewRefreshStatusCurrent),
+	),
 		executor.Options{}.WithDisableIncrStatement().WithTxn(tcc.GetTxnHandler().GetTxn()).
 			WithAccountID(catalog.System_Account))
 	if err != nil {
 		return false, err
 	}
 	defer result.Close()
-	stale := false
+	found, status := false, ""
 	result.ReadRows(func(rows int, columns []*vector.Vector) bool {
-		stale = rows > 0
+		if rows > 0 {
+			found = true
+			status = columns[0].GetStringAt(0)
+		}
 		return false
 	})
-	return stale, nil
+	return !viewMetadataStatusIsCurrent(found, status), nil
+}
+
+func viewMetadataStatusIsCurrent(found bool, status string) bool {
+	return found && status == catalog.ViewRefreshStatusCurrent
 }
 
 func (tcc *TxnCompilerContext) ResolveIndexTableByRef(

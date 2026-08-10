@@ -66,6 +66,14 @@ func TestInformationSchemaColumnsDDL_UsesConnectorCompatibleDataType(t *testing.
 	assert.Contains(t, InformationSchemaColumnsDDL, "else split_part(mo_show_visible_bin(mc.atttyp,2), ' ', 1) end) end) as DATA_TYPE")
 }
 
+func TestInformationSchemaColumnsDDLRequiresCurrentViewMetadata(t *testing.T) {
+	assert.Contains(t, InformationSchemaColumnsDDL, "vr.status='CURRENT'")
+	assert.Contains(t, InformationSchemaColumnsDDL,
+		"mt.reldatabase in ('information_schema','mo_catalog','mo_debug','mo_task','mysql','system','system_metrics')")
+	assert.NotContains(t, InformationSchemaColumnsDDL,
+		"mt.relkind<>'v' or not exists (select 1 from mo_catalog.mo_view_refresh")
+}
+
 func TestInformationSchemaKeyColumnUsageDDL_ProjectsForeignKeyMappings(t *testing.T) {
 	assert.True(t, strings.HasPrefix(InformationSchemaKeyColumnUsageDDL, "CREATE VIEW information_schema.KEY_COLUMN_USAGE AS"))
 	for _, column := range []string{

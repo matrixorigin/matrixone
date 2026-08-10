@@ -22,9 +22,11 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -38,6 +40,20 @@ type viewMetadataCleanupRecordingExecutor struct {
 	sqls     []string
 	results  []executor.Result
 	failures map[int]error
+}
+
+type readyViewMetadataCluster struct {
+	clusterservice.MOCluster
+}
+
+func (readyViewMetadataCluster) GetCNService(
+	_ clusterservice.Selector,
+	apply func(metadata.CNService) bool,
+) {
+	apply(metadata.CNService{
+		ServiceID: "ready-cn", WorkState: metadata.WorkState_Working,
+		ViewMetadataRefreshSupported: true,
+	})
 }
 
 func (e *viewMetadataCleanupRecordingExecutor) Exec(
@@ -67,6 +83,82 @@ func (*viewMetadataCleanupRecordingExecutor) ExecTxn(
 type deadlineCheckingSQLExecutor struct {
 	t             *testing.T
 	expectedError error
+}
+
+func makeDependentViewIdentityResult(
+	t *testing.T,
+	proc *process.Process,
+	targets ...viewRefreshTarget,
+) executor.Result {
+	t.Helper()
+	result := executor.NewMemResult([]types.Type{
+		types.T_uint32.ToType(), types.T_uint64.ToType(), types.T_uint64.ToType(),
+		types.T_uint64.ToType(), types.T_varchar.ToType(), types.T_varchar.ToType(),
+	}, proc.Mp())
+	result.NewBatchWithRowCount(len(targets))
+	accounts := make([]uint32, len(targets))
+	databaseIDs := make([]uint64, len(targets))
+	relationIDs := make([]uint64, len(targets))
+	logicalIDs := make([]uint64, len(targets))
+	databaseNames := make([]string, len(targets))
+	relationNames := make([]string, len(targets))
+	for index, target := range targets {
+		accounts[index] = target.accountID
+		databaseIDs[index] = target.databaseID
+		relationIDs[index] = target.relationID
+		logicalIDs[index] = target.logicalID
+		databaseNames[index] = target.databaseName
+		relationNames[index] = target.relationName
+	}
+	require.NoError(t, executor.AppendFixedRows(result, 0, accounts))
+	require.NoError(t, executor.AppendFixedRows(result, 1, databaseIDs))
+	require.NoError(t, executor.AppendFixedRows(result, 2, relationIDs))
+	require.NoError(t, executor.AppendFixedRows(result, 3, logicalIDs))
+	require.NoError(t, executor.AppendStringRows(result, 4, databaseNames))
+	require.NoError(t, executor.AppendStringRows(result, 5, relationNames))
+	return result.GetResult()
+}
+
+func TestRelationRemovalInvalidatesCompleteDependencyClosureOnce(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	target := func(id uint64, name string) viewRefreshTarget {
+		return viewRefreshTarget{
+			accountID: 1, databaseID: 2, relationID: id, logicalID: id + 100,
+			databaseName: "db", relationName: name,
+		}
+	}
+	v1, v2, v3, v4 := target(11, "v1"), target(12, "v2"), target(13, "v3"), target(14, "v4")
+	exec := &viewMetadataCleanupRecordingExecutor{results: []executor.Result{
+		makeDependentViewIdentityResult(t, proc, v1),
+		makeDependentViewIdentityResult(t, proc, v2, v3),
+		makeDependentViewIdentityResult(t, proc, v4),
+		makeDependentViewIdentityResult(t, proc, v4),
+		makeDependentViewIdentityResult(t, proc, v1),
+	}}
+	installViewMetadataTestExecutor(t, proc, exec)
+	c := &Compile{proc: proc, pn: &planpb.Plan{}}
+	root := viewRefreshIdentityKey{accountID: 1, databaseID: 2, logicalID: 999}
+	require.NoError(t, c.enqueueDependentViewClosure("root predicate", 77, root))
+	require.Len(t, exec.sqls, 6)
+	enqueueSQL := exec.sqls[5]
+	for _, id := range []uint64{11, 12, 13, 14} {
+		require.Equal(t, 1, strings.Count(enqueueSQL,
+			fmt.Sprintf("d.target_relation_id=%d", id)))
+	}
+}
+
+func TestRecoveryPropagationOnlyInvalidatesCurrentDependents(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	exec := &viewMetadataCleanupRecordingExecutor{}
+	installViewMetadataTestExecutor(t, proc, exec)
+	c := &Compile{proc: proc, pn: &planpb.Plan{}}
+	require.NoError(t, c.enqueueCurrentDependentViews(viewRelationMutation{
+		accountID: 1, databaseID: 2, relationID: 3, logicalID: 4,
+		databaseName: "db", relationName: "v",
+	}))
+	require.Len(t, exec.sqls, 1)
+	require.Contains(t, exec.sqls[0], "coalesce(r.target_generation+1,d.dependency_generation)")
+	require.Contains(t, exec.sqls[0], "r.target_relation_id is null or r.status='CURRENT'")
 }
 
 func (e deadlineCheckingSQLExecutor) Exec(ctx context.Context, _ string, _ executor.Options) (executor.Result, error) {
@@ -158,6 +250,17 @@ func TestViewMetadataLifecycleSkipsRestoreCatalogDDL(t *testing.T) {
 	require.NoError(t, c.deleteDroppedDatabaseViewMetadata(0, 1, "db"))
 }
 
+func TestViewMetadataLifecycleSkipsCatalogDDLBeforeCapabilityActivation(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	c := &Compile{proc: proc}
+	require.NoError(t, c.persistViewDependencies(nil, "db", nil))
+	require.NoError(t, c.refreshViewsAfterRelationMutation("db", "t", 0, 0))
+	require.NoError(t, c.enqueueViewsAfterRelationRemoval("db", "t", 0, 0, 0))
+	require.NoError(t, c.deleteDroppedViewMetadata(1))
+	require.NoError(t, c.deleteDroppedDatabaseViewMetadata(0, 1, "db"))
+	require.NoError(t, c.enqueueViewsAfterDatabaseRemoval(0, 1, 1))
+}
+
 func TestViewMetadataCleanupLocksLifecycleGateBeforeRows(t *testing.T) {
 	tests := []struct {
 		name string
@@ -178,16 +281,7 @@ func TestViewMetadataCleanupLocksLifecycleGateBeforeRows(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			proc := testutil.NewProcess(t)
 			exec := &viewMetadataCleanupRecordingExecutor{}
-			runtime := moruntime.ServiceRuntime(proc.GetService())
-			oldExecutor, hadOldExecutor := runtime.GetGlobalVariables(moruntime.InternalSQLExecutor)
-			runtime.SetGlobalVariables(moruntime.InternalSQLExecutor, exec)
-			t.Cleanup(func() {
-				if hadOldExecutor {
-					runtime.SetGlobalVariables(moruntime.InternalSQLExecutor, oldExecutor)
-				} else {
-					runtime.CompareAndDeleteGlobalVariables(moruntime.InternalSQLExecutor, exec)
-				}
-			})
+			installViewMetadataTestExecutor(t, proc, exec)
 			require.NoError(t, tc.run(&Compile{proc: proc, pn: &planpb.Plan{}}))
 			require.Len(t, exec.sqls, 3)
 			require.Equal(t, catalog.ViewMetadataLifecycleGateSQL, exec.sqls[0])
@@ -316,6 +410,7 @@ func TestViewMetadataRecoveryRejectsUnavailableRuntimeState(t *testing.T) {
 	require.ErrorIs(t, err, context.Canceled)
 
 	proc = testutil.NewProcess(t)
+	installReadyViewMetadataTestCluster(t, proc)
 	refreshed, err := refreshPendingView(proc, &pendingViewRefresh{})
 	require.False(t, refreshed)
 	require.Error(t, err)
@@ -342,6 +437,7 @@ func installViewMetadataTestExecutor(
 ) {
 	t.Helper()
 	runtime := moruntime.ServiceRuntime(proc.GetService())
+	installReadyViewMetadataTestCluster(t, proc)
 	oldExecutor, hadOldExecutor := runtime.GetGlobalVariables(moruntime.InternalSQLExecutor)
 	runtime.SetGlobalVariables(moruntime.InternalSQLExecutor, exec)
 	t.Cleanup(func() {
@@ -349,6 +445,21 @@ func installViewMetadataTestExecutor(
 			runtime.SetGlobalVariables(moruntime.InternalSQLExecutor, oldExecutor)
 		} else {
 			runtime.CompareAndDeleteGlobalVariables(moruntime.InternalSQLExecutor, exec)
+		}
+	})
+}
+
+func installReadyViewMetadataTestCluster(t *testing.T, proc *process.Process) {
+	t.Helper()
+	runtime := moruntime.ServiceRuntime(proc.GetService())
+	oldCluster, hadOldCluster := runtime.GetGlobalVariables(moruntime.ClusterService)
+	runtime.SetGlobalVariables(moruntime.ClusterService, readyViewMetadataCluster{})
+	t.Cleanup(func() {
+		if hadOldCluster {
+			runtime.SetGlobalVariables(moruntime.ClusterService, oldCluster)
+		} else {
+			runtime.CompareAndDeleteGlobalVariables(
+				moruntime.ClusterService, readyViewMetadataCluster{})
 		}
 	})
 }
@@ -454,6 +565,9 @@ func TestLegacyDiscoveryCursorFailurePaths(t *testing.T) {
 		}
 		_, err := discoverLegacyViewPage(proc, exec, executor.Options{})
 		require.ErrorIs(t, err, expected)
+		require.Contains(t, exec.sqls[1], "where t.relkind='v'")
+		require.Contains(t, exec.sqls[1],
+			"t.reldatabase not in ('information_schema','mo_catalog','mo_debug','mo_task','mysql','system','system_metrics')")
 	})
 }
 

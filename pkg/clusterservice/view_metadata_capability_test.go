@@ -50,3 +50,7 @@ func TestAllKnownCNsSupportViewMetadataRefresh(t *testing.T) {
 			ViewMetadataRefreshSupported: true},
 	)))
 }
+
+func TestViewMetadataRefreshBarrierIsClosedBeforeClusterSnapshotExists(t *testing.T) {
+	require.False(t, AllKnownCNsSupportViewMetadataRefresh(t.Name()))
+}

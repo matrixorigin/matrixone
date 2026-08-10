@@ -693,6 +693,9 @@ type service struct {
 	udfService       udf.Service
 	bootstrapMu      sync.RWMutex
 	bootstrapService bootstrap.Service
+	// viewMetadataBootstrap lets heartbeat observe the bootstrap service's
+	// atomic readiness without waiting for the long-running lifecycle lock.
+	viewMetadataBootstrap atomic.Pointer[bootstrapReadiness]
 	// beforeBootstrapClose is a deterministic test barrier.
 	beforeBootstrapClose func()
 	incrservice          incrservice.AutoIncrementService
@@ -747,6 +750,10 @@ type service struct {
 	}
 
 	CNMemoryThrottler rscthrottler.RSCThrottler
+}
+
+type bootstrapReadiness struct {
+	service bootstrap.Service
 }
 
 func dumpCnConfig(cfg Config) (map[string]*logservicepb.ConfigItem, error) {

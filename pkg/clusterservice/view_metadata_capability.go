@@ -17,11 +17,12 @@ package clusterservice
 import "github.com/matrixorigin/matrixone/pkg/pb/metadata"
 
 // AllKnownCNsSupportViewMetadataRefresh is the rolling-upgrade activation
-// barrier. An empty cluster snapshot is not ready, and one old CN, including a
-// draining CN that may still finish in-flight DDL, keeps the feature in legacy
-// mode until that CN leaves the snapshot or advertises support.
+// barrier. The heartbeat bit means both binary support and that the CN has
+// observed its exact final catalog version/offset in READY state. An absent
+// snapshot and any old, upgrading, or draining-unready CN keep legacy mode.
 func AllKnownCNsSupportViewMetadataRefresh(serviceID string) bool {
-	return allKnownCNsSupportViewMetadataRefresh(GetMOCluster(serviceID))
+	cluster, ready, err := lookupMOCluster(serviceID)
+	return err == nil && ready && allKnownCNsSupportViewMetadataRefresh(cluster)
 }
 
 func allKnownCNsSupportViewMetadataRefresh(cluster MOCluster) bool {

@@ -22,7 +22,6 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
-	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/pubsub"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
@@ -127,7 +126,7 @@ func init() {
 }
 
 func recoverViewMetadataCommand(proc *process.Process, parameter string) (int, error) {
-	if !clusterservice.AllKnownCNsSupportViewMetadataRefresh(proc.GetService()) {
+	if !viewMetadataRefreshEnabled(proc.GetService()) {
 		return 0, nil
 	}
 	if err := lockViewMetadataLifecycleGate(proc); err != nil {
@@ -145,6 +144,9 @@ func recoverViewMetadataCommand(proc *process.Process, parameter string) (int, e
 }
 
 func lockViewMetadataLifecycleGate(proc *process.Process) error {
+	if !viewMetadataRefreshEnabled(proc.GetService()) {
+		return nil
+	}
 	v, ok := moruntime.ServiceRuntime(proc.GetService()).GetGlobalVariables(moruntime.InternalSQLExecutor)
 	if !ok {
 		return moerr.NewInternalError(proc.Ctx, "internal SQL executor is unavailable")
@@ -672,11 +674,13 @@ func discoverLegacyViewPage(
 	page, err := sqlExecutor.Exec(proc.Ctx, fmt.Sprintf(
 		"select t.account_id,t.reldatabase_id,t.rel_id,t.rel_logical_id,t.reldatabase,t.relname,"+
 			"t.relkind,r.target_relation_id from %s.%s t left join %s.%s r "+
-			"on t.account_id=r.account_id and t.rel_id=r.target_relation_id where "+
+			"on t.account_id=r.account_id and t.rel_id=r.target_relation_id where t.relkind='%s' "+
+			"and t.reldatabase not in ('%s') and "+
 			"(t.account_id>%d or (t.account_id=%d and t.reldatabase>'%s') or "+
 			"(t.account_id=%d and t.reldatabase='%s' and t.relname>'%s')) "+
 			"order by t.account_id,t.reldatabase,t.relname limit %d",
 		catalog.MO_CATALOG, catalog.MO_TABLES, catalog.MO_CATALOG, catalog.MO_VIEW_REFRESH,
+		catalog.SystemViewRel, strings.Join(catalog.SystemDatabases, "','"),
 		cursor.accountID, cursor.accountID, escape(cursor.databaseName),
 		cursor.accountID, escape(cursor.databaseName), escape(cursor.relationName),
 		viewMetadataRecoveryPageSize), opts)
@@ -777,6 +781,14 @@ func refreshPendingView(proc *process.Process, pending *pendingViewRefresh) (boo
 	if engineValue == nil {
 		return false, moerr.NewInternalError(proc.Ctx, "storage engine is unavailable")
 	}
+	runner := &Compile{proc: proc, e: engineValue, pn: &planpb.Plan{}}
+	if err := runner.enqueueCurrentDependentViews(viewRelationMutation{
+		accountID: pending.accountID, databaseID: pending.databaseID,
+		relationID: pending.relationID, logicalID: pending.logicalID,
+		databaseName: pending.databaseName, relationName: pending.relationName,
+	}); err != nil {
+		return false, err
+	}
 	originalTopContext := proc.GetTopContext()
 	targetContext := defines.AttachAccountId(originalTopContext, pending.accountID)
 	proc.ReplaceTopCtx(targetContext)
@@ -799,7 +811,6 @@ func refreshPendingView(proc *process.Process, pending *pendingViewRefresh) (boo
 	if currentDef == nil || currentDef.ViewSql == nil {
 		return false, moerr.NewInternalError(targetContext, "target relation is not a View")
 	}
-	runner := &Compile{proc: proc, e: engineValue, pn: &planpb.Plan{}}
 	ownership, err := runner.loadViewCatalogOwnership(pending.accountID, pending.relationID)
 	if err != nil {
 		return false, err
@@ -824,12 +835,7 @@ func refreshPendingView(proc *process.Process, pending *pendingViewRefresh) (boo
 		targetContext, database, pending.databaseName, replacement, pending.generation, false); err != nil {
 		return true, err
 	}
-	err = runner.enqueueDependentViews(viewRelationMutation{
-		accountID: pending.accountID, databaseID: pending.databaseID,
-		relationID: pending.relationID, logicalID: pending.logicalID,
-		databaseName: pending.databaseName, relationName: pending.relationName,
-	}, pending.generation, 0, 0)
-	return true, err
+	return true, nil
 }
 
 func regenerateViewUsingPersistedEnvironment(
@@ -880,24 +886,32 @@ func (c *Compile) enqueueDependentViews(
 	))
 }
 
+func (c *Compile) enqueueCurrentDependentViews(mutation viewRelationMutation) error {
+	return c.runSqlWithSystemTenant(fmt.Sprintf(
+		"replace into %s.%s (%s) select distinct d.account_id,d.target_database_id,d.target_relation_id,"+
+			"d.target_logical_id,d.target_database_name,d.target_relation_name,"+
+			"coalesce(r.target_generation+1,d.dependency_generation),"+
+			"coalesce(r.completed_generation,0),'%s',0,null,'',coalesce(r.lease_epoch,0)+1,null,"+
+			"coalesce(r.attempts,0) from %s.%s d left join %s.%s r on d.account_id=r.account_id "+
+			"and d.target_relation_id=r.target_relation_id where %s and "+
+			"(r.target_relation_id is null or r.status='%s')",
+		catalog.MO_CATALOG, catalog.MO_VIEW_REFRESH, catalog.MoViewRefreshColumns,
+		viewRefreshStatusPending,
+		catalog.MO_CATALOG, catalog.MO_VIEW_DEPENDENCIES,
+		catalog.MO_CATALOG, catalog.MO_VIEW_REFRESH,
+		viewDependencyMutationPredicate(mutation, 0, 0), viewRefreshStatusCurrent))
+}
+
 func (c *Compile) enqueueViewsAfterDatabaseRemoval(
 	accountID uint32,
 	databaseID uint64,
 	generation uint64,
 ) error {
-	return c.runSqlWithSystemTenant(fmt.Sprintf(
-		"replace into %s.%s (%s) select distinct d.account_id,d.target_database_id,d.target_relation_id,"+
-			"d.target_logical_id,d.target_database_name,d.target_relation_name,"+
-			"coalesce(r.target_generation+1,%d),coalesce(r.completed_generation,0),'%s',"+
-			"0,null,'',coalesce(r.lease_epoch,0)+1,null,coalesce(r.attempts,0) "+
-			"from %s.%s d left join %s.%s r on d.account_id=r.account_id "+
-			"and d.target_relation_id=r.target_relation_id where d.source_account_id=%d "+
-			"and d.source_database_id=%d",
-		catalog.MO_CATALOG, catalog.MO_VIEW_REFRESH, catalog.MoViewRefreshColumns,
-		generation, viewRefreshStatusPending,
-		catalog.MO_CATALOG, catalog.MO_VIEW_DEPENDENCIES,
-		catalog.MO_CATALOG, catalog.MO_VIEW_REFRESH, accountID, databaseID,
-	))
+	if c.proc.GetSessionInfo().IsRestore || !viewMetadataRefreshEnabled(c.proc.GetService()) {
+		return nil
+	}
+	return c.enqueueDependentViewClosure(fmt.Sprintf(
+		"d.source_account_id=%d and d.source_database_id=%d", accountID, databaseID), generation)
 }
 
 func updateViewRefreshFailure(

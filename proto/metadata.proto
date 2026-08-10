@@ -136,7 +136,7 @@ message CNService {
   uint64 CPUTotal = 11;
   // MemTotal is mem quota from logservicepb.CNStore
   uint64 MemTotal = 12;
-  // ViewMetadataRefreshSupported gates persisted View metadata lifecycle support.
+  // ViewMetadataRefreshSupported requires binary support and final catalog readiness.
   bool ViewMetadataRefreshSupported = 13;
 }
 

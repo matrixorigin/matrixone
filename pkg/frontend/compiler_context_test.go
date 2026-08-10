@@ -18,8 +18,29 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/stretchr/testify/require"
 )
+
+func TestViewMetadataStatusRequiresPersistedCurrentRow(t *testing.T) {
+	require.False(t, viewMetadataStatusIsCurrent(false, ""))
+	for _, status := range []string{
+		catalog.ViewRefreshStatusPending,
+		catalog.ViewRefreshStatusDiscovering,
+		catalog.ViewRefreshStatusRunning,
+		catalog.ViewRefreshStatusInvalid,
+	} {
+		require.False(t, viewMetadataStatusIsCurrent(true, status), status)
+	}
+	require.True(t, viewMetadataStatusIsCurrent(true, catalog.ViewRefreshStatusCurrent))
+}
+
+func TestSystemViewsDoNotRequireRefreshState(t *testing.T) {
+	tcc := &TxnCompilerContext{}
+	for _, databaseName := range catalog.SystemDatabases {
+		require.NoError(t, tcc.EnsureViewMetadataCurrent(databaseName, "system view", 1))
+	}
+}
 
 func TestExecCtxWithRootSQLRestoresScopedValues(t *testing.T) {
 	ses := &Session{}

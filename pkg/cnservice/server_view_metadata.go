@@ -47,6 +47,9 @@ func runViewMetadataRecoveryLoop(
 	recoverOne func(context.Context) error,
 	onError func(error),
 ) {
+	if err := recoverOne(ctx); err != nil && ctx.Err() == nil {
+		onError(err)
+	}
 	for {
 		select {
 		case <-ctx.Done():

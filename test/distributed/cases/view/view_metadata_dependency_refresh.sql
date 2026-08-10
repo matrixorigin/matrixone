@@ -103,4 +103,14 @@ DROP TABLE invalid_left;
 CREATE TABLE invalid_left (c1 INT, c2 INT);
 SHOW CREATE TABLE invalid_left;
 
+CREATE TABLE removed_source (a INT);
+CREATE VIEW removed_direct AS SELECT a FROM removed_source;
+CREATE VIEW removed_downstream AS SELECT a FROM removed_direct;
+DROP TABLE removed_source;
+SELECT count(*) = 2 AS removal_closure_invalidated
+FROM mo_catalog.mo_view_refresh
+WHERE target_database_name = 'view_metadata_refresh'
+AND target_relation_name IN ('removed_direct','removed_downstream')
+AND status <> 'CURRENT';
+
 DROP DATABASE view_metadata_refresh;

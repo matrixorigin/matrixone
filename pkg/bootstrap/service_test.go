@@ -789,6 +789,39 @@ func newBootstrapStringResult(values ...string) executor.Result {
 	return memRes.GetResult()
 }
 
+func newBootstrapStateResult(states ...int32) executor.Result {
+	memRes := executor.NewMemResult(
+		[]types.Type{types.T_int32.ToType()}, mpool.MustNewZero())
+	memRes.NewBatchWithRowCount(len(states))
+	executor.AppendFixedRows(memRes, 0, states)
+	return memRes.GetResult()
+}
+
+func TestFinalVersionReadinessRequiresExactReadyCatalogRow(t *testing.T) {
+	tests := []struct {
+		name   string
+		states []int32
+		ready  bool
+	}{
+		{name: "missing"},
+		{name: "created", states: []int32{versions.StateCreated}},
+		{name: "upgrading tenants", states: []int32{versions.StateUpgradingTenant}},
+		{name: "ready", states: []int32{versions.StateReady}, ready: true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			exec := executor.NewMemExecutor(func(sql string) (executor.Result, error) {
+				require.Contains(t, sql, "where version = '4.0.6'")
+				return newBootstrapStateResult(tc.states...), nil
+			})
+			svc := NewService("", &memLocker{},
+				clock.NewHLCClock(func() int64 { return 0 }, 0), nil, exec)
+			require.NoError(t, svc.(*service).refreshFinalVersionReadiness(context.Background()))
+			require.Equal(t, tc.ready, svc.IsFinalVersionReady())
+		})
+	}
+}
+
 func newBootstrapTestContext(timeout time.Duration) (context.Context, context.CancelFunc) {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	frontendParameters := &config.FrontendParameters{}

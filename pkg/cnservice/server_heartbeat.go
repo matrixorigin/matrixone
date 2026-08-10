@@ -202,7 +202,7 @@ func (s *service) heartbeat(ctx context.Context) {
 		CommitID:                     version.CommitID,
 		AckedCommandBatchID:          s.ackedCommandBatchID.Load(),
 		CommandDeliveryAckSupported:  true,
-		ViewMetadataRefreshSupported: true,
+		ViewMetadataRefreshSupported: s.viewMetadataRefreshReady(),
 	}
 	if s.gossipNode != nil {
 		hb.GossipAddress = s.gossipServiceAddr()
@@ -237,6 +237,11 @@ func (s *service) heartbeat(ctx context.Context) {
 	}
 	s.config.DecrCount()
 	s.handleHeartbeatResponse(hb.AckedCommandBatchID, cb)
+}
+
+func (s *service) viewMetadataRefreshReady() bool {
+	readiness := s.viewMetadataBootstrap.Load()
+	return readiness != nil && readiness.service.IsFinalVersionReady()
 }
 
 func (s *service) handleCommandBatch(batch logservicepb.CommandBatch) {

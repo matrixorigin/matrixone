@@ -57,6 +57,7 @@ message CNStore {
   int64 UpTime = 14;
   string          ShardServiceAddress = 15;
   string CommitID = 16;
+  // Requires binary support and final catalog readiness.
   bool ViewMetadataRefreshSupported = 17;
 }
 
@@ -150,6 +151,7 @@ message CNStoreHeartbeat {
   // service. It is meaningful only when CommandDeliveryAckSupported is true.
   uint64          AckedCommandBatchID = 16;
   bool            CommandDeliveryAckSupported = 17;
+  // Requires binary support and final catalog readiness.
   bool            ViewMetadataRefreshSupported = 18;
 }
 
@@ -634,6 +636,7 @@ message CNStoreInfo {
   // non-destructive acknowledged schedule-command protocol. It is copied
   // from CNStoreHeartbeat so HAKeeper can gate activation and admission.
   bool CommandDeliveryAckSupported = 18;
+  // Requires binary support and final catalog readiness.
   bool ViewMetadataRefreshSupported = 19;
 }
 

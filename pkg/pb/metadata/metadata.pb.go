@@ -563,7 +563,7 @@ type CNService struct {
 	CPUTotal uint64 `protobuf:"varint,11,opt,name=CPUTotal,proto3" json:"CPUTotal,omitempty"`
 	// MemTotal is mem quota from logservicepb.CNStore
 	MemTotal uint64 `protobuf:"varint,12,opt,name=MemTotal,proto3" json:"MemTotal,omitempty"`
-	// ViewMetadataRefreshSupported gates persisted View metadata lifecycle support.
+	// ViewMetadataRefreshSupported requires binary support and final catalog readiness.
 	ViewMetadataRefreshSupported bool     `protobuf:"varint,13,opt,name=ViewMetadataRefreshSupported,proto3" json:"ViewMetadataRefreshSupported,omitempty"`
 	XXX_NoUnkeyedLiteral         struct{} `json:"-"`
 	XXX_unrecognized             []byte   `json:"-"`

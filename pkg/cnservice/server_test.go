@@ -520,6 +520,10 @@ func (boot *testBootService) GetFinalVersionOffset() int32 {
 	panic("implement me")
 }
 
+func (boot *testBootService) IsFinalVersionReady() bool {
+	return boot.choice != 2
+}
+
 func (boot *testBootService) Close() error {
 	boot.closeCount++
 	return boot.closeErr
