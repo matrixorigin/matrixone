@@ -1,6 +1,9 @@
 drop database if exists check_constraints_metadata;
 create database check_constraints_metadata;
 use check_constraints_metadata;
+create table no_check_values (
+id int primary key
+);
 create table check_values (
 id int primary key,
 amount int constraint chk_amount_nonnegative check (amount >= 0),

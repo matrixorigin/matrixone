@@ -423,3 +423,8 @@ func TestCheckConstraintsLimitIsHonoredBeforeStreaming(t *testing.T) {
 	require.Equal(t, "a", state.batch.Vecs[2].GetStringAt(0))
 	tf.Free(proc, false, nil)
 }
+
+func TestCheckConstraintCatalogQueryIsNotSourceLimited(t *testing.T) {
+	require.NotContains(t, checkConstraintCatalogQuery, " LIMIT ")
+	require.NotContains(t, checkConstraintCatalogQuery, " limit ")
+}

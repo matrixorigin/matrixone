@@ -16,7 +16,6 @@ package table_function
 
 import (
 	"context"
-	"fmt"
 	"sort"
 	"strings"
 
@@ -224,7 +223,7 @@ func (s *checkConstraintsState) startStreaming(proc *process.Process) error {
 		_, err := sqlexec.RunStreamingSql(
 			ctx,
 			sqlexec.NewSqlProcess(proc),
-			checkConstraintCatalogQueryWithLimit(s.limit, s.limited),
+			checkConstraintCatalogQuery,
 			s.streamCh,
 			s.errCh,
 		)
@@ -236,13 +235,6 @@ func (s *checkConstraintsState) startStreaming(proc *process.Process) error {
 		}
 	}()
 	return nil
-}
-
-func checkConstraintCatalogQueryWithLimit(limit uint64, limited bool) string {
-	if !limited {
-		return checkConstraintCatalogQuery
-	}
-	return fmt.Sprintf("%s LIMIT %d", checkConstraintCatalogQuery, limit)
 }
 
 func (s *checkConstraintsState) stopStreaming(_ *process.Process) {
