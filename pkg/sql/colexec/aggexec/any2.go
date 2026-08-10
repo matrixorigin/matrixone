@@ -51,6 +51,10 @@ func (exec *anyExec) BatchFill(offset int, groups []uint64, vectors []*vector.Ve
 				if err := exec.state[x].vecs[0].SetRawBytesAt(int(y), bs, exec.mp); err != nil {
 					return err
 				}
+				if err := exec.state[x].vecs[0].SetPrepareParamKindAtWithMP(
+					int(y), vectors[0].GetPrepareParamKindAt(int(idx)), exec.mp); err != nil {
+					return err
+				}
 			}
 		}
 	}
@@ -77,6 +81,10 @@ func (exec *anyExec) BatchMerge(next AggFuncExec, offset int, groups []uint64) e
 			exec.state[x1].vecs[0].UnsetNull(uint64(y1))
 			bs := other.state[x2].vecs[0].GetRawBytesAt(int(y2))
 			if err := exec.state[x1].vecs[0].SetRawBytesAt(int(y1), bs, exec.mp); err != nil {
+				return err
+			}
+			if err := exec.state[x1].vecs[0].SetPrepareParamKindAtWithMP(
+				int(y1), other.state[x2].vecs[0].GetPrepareParamKindAt(int(y2)), exec.mp); err != nil {
 				return err
 			}
 		}

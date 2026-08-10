@@ -15,11 +15,15 @@
 package plan
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -175,6 +179,93 @@ func TestChangeColumnRenamesClusterByAndTracksIvfIncludeMetadata(t *testing.T) {
 	require.NotContains(t, copyTable.Indexes[0].IndexAlgoParams, "include_columns")
 }
 
+func TestChangeColumnRenamesPrefixLengthMetadata(t *testing.T) {
+	prefixParams, err := catalog.IndexParamsMapToJsonString(map[string]string{
+		catalog.IndexAlgoParamPrefixLengths: "title:4",
+	})
+	require.NoError(t, err)
+
+	mock := NewMockOptimizer(false)
+	origin := makeAlterCoverageTableDef()
+	origin.Indexes = append(origin.Indexes, &planpb.IndexDef{
+		IndexName:       "uq_title",
+		IndexAlgo:       catalog.MoIndexDefaultAlgo.ToString(),
+		IndexAlgoParams: prefixParams,
+		Parts:           []string{"title"},
+		Unique:          true,
+	})
+	copyTable := DeepCopyTableDef(origin, true)
+	alterCtx := initAlterTableContext(origin, copyTable, origin.DbName)
+	alterPlan := &planpb.AlterTable{
+		Database:     origin.DbName,
+		TableDef:     origin,
+		CopyTableDef: copyTable,
+	}
+	spec := mustParseAlterTableChangeColumnClause(
+		t,
+		mock.CurrentContext(),
+		"alter table t1 change column title headline varchar(64)",
+	)
+
+	_, err = ChangeColumn(mock.CurrentContext(), alterPlan, spec, alterCtx)
+	require.NoError(t, err)
+	idxDef := copyTable.Indexes[len(copyTable.Indexes)-1]
+	require.Equal(t, []string{"headline"}, idxDef.Parts)
+	prefixLengths, err := catalog.IndexPrefixLengthsFromParamsWithError(idxDef.IndexAlgoParams)
+	require.NoError(t, err)
+	require.Equal(t, map[string]int{"headline": 4}, prefixLengths)
+}
+
+func TestChangeColumnEncodesDelimiterBearingPrefixLengthMetadata(t *testing.T) {
+	prefixParams, err := catalog.IndexParamsMapToJsonString(map[string]string{
+		catalog.IndexAlgoParamPrefixLengths: "title:4",
+	})
+	require.NoError(t, err)
+
+	mock := NewMockOptimizer(false)
+	origin := makeAlterCoverageTableDef()
+	origin.Indexes = append(origin.Indexes, &planpb.IndexDef{
+		IndexName:       "uq_title",
+		IndexAlgo:       catalog.MoIndexDefaultAlgo.ToString(),
+		IndexAlgoParams: prefixParams,
+		Parts:           []string{"title"},
+		Unique:          true,
+	})
+	copyTable := DeepCopyTableDef(origin, true)
+	alterCtx := initAlterTableContext(origin, copyTable, origin.DbName)
+	alterPlan := &planpb.AlterTable{
+		Database:     origin.DbName,
+		TableDef:     origin,
+		CopyTableDef: copyTable,
+	}
+	spec := mustParseAlterTableChangeColumnClause(
+		t,
+		mock.CurrentContext(),
+		"alter table t1 change column title `head:line` varchar(64)",
+	)
+
+	_, err = ChangeColumn(mock.CurrentContext(), alterPlan, spec, alterCtx)
+	require.NoError(t, err)
+	idxDef := copyTable.Indexes[len(copyTable.Indexes)-1]
+	require.Equal(t, []string{"head:line"}, idxDef.Parts)
+	require.Equal(t, map[string]int{"head:line": 4}, catalog.IndexPrefixLengthsFromParams(idxDef.IndexAlgoParams))
+
+	params, err := catalog.IndexParamsStringToMap(idxDef.IndexAlgoParams)
+	require.NoError(t, err)
+	require.NotContains(t, params, catalog.IndexAlgoParamPrefixLengths)
+	require.JSONEq(t, `{"head:line":4}`, params[catalog.IndexAlgoParamPrefixLengthsV2])
+}
+
+func TestInternalAliasPrefixIsRejectedForUserColumns(t *testing.T) {
+	aliasName := catalog.CreateAlias("payload")
+	require.False(t, checkTableColumnNameValid(aliasName))
+	require.True(t, checkTableColumnNameValid("payload"))
+
+	mock := NewMockOptimizer(false)
+	require.Error(t, checkColumnNameValid(mock.CurrentContext().GetContext(), aliasName))
+	require.NoError(t, checkColumnNameValid(mock.CurrentContext().GetContext(), "payload"))
+}
+
 func TestAppendAffectedAlterColumnNamesKeepsOldNameForChangeColumn(t *testing.T) {
 	affectedCols := appendAffectedAlterColumnNames(nil, "title", "headline")
 	require.Equal(t, []string{"title", "headline"}, affectedCols)
@@ -247,6 +338,254 @@ func TestUpdateRenameColumnInTableDefEscapesMoIndexesColumnNameUpdate(t *testing
 	require.Contains(t, sqls[0], "column_name = 'ti''tle'")
 }
 
+func TestUpdateRenameColumnInTableDefRenamesPrefixLengthMetadata(t *testing.T) {
+	singleParams, err := catalog.IndexParamsMapToJsonString(map[string]string{
+		catalog.IndexAlgoParamPrefixLengths: "title:4",
+	})
+	require.NoError(t, err)
+	compositeParams, err := catalog.IndexParamsMapToJsonString(map[string]string{
+		"comment":                           "keep",
+		catalog.IndexAlgoParamPrefixLengths: "note:2,title:4",
+	})
+	require.NoError(t, err)
+
+	mock := NewMockOptimizer(false)
+	tableDef := &planpb.TableDef{
+		TblId: 42,
+		Cols: []*ColDef{
+			{Name: "id", OriginName: "id", Typ: planpb.Type{Id: int32(types.T_int64)}},
+			{Name: "title", OriginName: "title", Typ: planpb.Type{Id: int32(types.T_varchar), Width: 32}},
+			{Name: "note", OriginName: "note", Typ: planpb.Type{Id: int32(types.T_varchar), Width: 32}},
+		},
+		Pkey: &PrimaryKeyDef{Names: []string{"id"}, PkeyColName: "id"},
+		Indexes: []*planpb.IndexDef{
+			{
+				IndexName:       "uq_title",
+				IndexAlgo:       catalog.MoIndexDefaultAlgo.ToString(),
+				IndexAlgoParams: singleParams,
+				Parts:           []string{"title"},
+				Unique:          true,
+			},
+			{
+				IndexName:       "idx_title_note",
+				IndexAlgo:       catalog.MoIndexDefaultAlgo.ToString(),
+				IndexAlgoParams: compositeParams,
+				Parts:           []string{"title", "note", "id"},
+			},
+			{
+				IndexName: "idx_note",
+				IndexAlgo: catalog.MoIndexDefaultAlgo.ToString(),
+				Parts:     []string{"note", "id"},
+			},
+		},
+	}
+
+	sqls, err := updateRenameColumnInTableDef(
+		mock.CurrentContext(),
+		tableDef.Cols[1],
+		tableDef,
+		&tree.AlterTableRenameColumnClause{
+			OldColumnName: tree.NewUnresolvedColName("title"),
+			NewColumnName: tree.NewUnresolvedColName("headline"),
+		},
+	)
+	require.NoError(t, err)
+	require.Equal(t, "headline", tableDef.Cols[1].Name)
+	require.Equal(t, []string{"headline"}, tableDef.Indexes[0].Parts)
+	require.Equal(t, []string{"headline", "note", "id"}, tableDef.Indexes[1].Parts)
+
+	singlePrefixLengths, err := catalog.IndexPrefixLengthsFromParamsWithError(tableDef.Indexes[0].IndexAlgoParams)
+	require.NoError(t, err)
+	require.Equal(t, map[string]int{"headline": 4}, singlePrefixLengths)
+	compositePrefixLengths, err := catalog.IndexPrefixLengthsFromParamsWithError(tableDef.Indexes[1].IndexAlgoParams)
+	require.NoError(t, err)
+	require.Equal(t, map[string]int{"headline": 4, "note": 2}, compositePrefixLengths)
+	compositeMetadata, err := catalog.IndexParamsStringToMap(tableDef.Indexes[1].IndexAlgoParams)
+	require.NoError(t, err)
+	require.Equal(t, "keep", compositeMetadata["comment"])
+	require.Equal(t, "headline:4,note:2", compositeMetadata[catalog.IndexAlgoParamPrefixLengths])
+
+	allSQL := strings.Join(sqls, "\n")
+	require.Len(t, sqls, 3)
+	require.Contains(t, allSQL, "set column_name = 'headline'")
+	require.Contains(t, allSQL, "set algo_params = '{\"prefix_lengths\":\"headline:4\"}' where table_id = 42 and name = 'uq_title'")
+	require.Contains(t, allSQL, "set algo_params = '{\"comment\":\"keep\",\"prefix_lengths\":\"headline:4,note:2\"}' where table_id = 42 and name = 'idx_title_note'")
+	require.NotContains(t, allSQL, "name = 'idx_note'")
+}
+
+func TestUpdateRenameColumnInTableDefEncodesDelimiterBearingPrefixName(t *testing.T) {
+	prefixParams, err := catalog.IndexParamsMapToJsonString(map[string]string{
+		catalog.IndexAlgoParamPrefixLengths: "title:4",
+	})
+	require.NoError(t, err)
+
+	mock := NewMockOptimizer(false)
+	tableDef := &planpb.TableDef{
+		TblId: 7,
+		Cols: []*ColDef{
+			{Name: "id", OriginName: "id", Typ: planpb.Type{Id: int32(types.T_int64)}},
+			{Name: "title", OriginName: "title", Typ: planpb.Type{Id: int32(types.T_varchar), Width: 32}},
+		},
+		Pkey: &PrimaryKeyDef{Names: []string{"id"}, PkeyColName: "id"},
+		Indexes: []*planpb.IndexDef{{
+			IndexName:       "idx_title",
+			IndexAlgo:       catalog.MoIndexDefaultAlgo.ToString(),
+			IndexAlgoParams: prefixParams,
+			Parts:           []string{"title"},
+		}},
+	}
+
+	_, err = updateRenameColumnInTableDef(
+		mock.CurrentContext(),
+		tableDef.Cols[1],
+		tableDef,
+		&tree.AlterTableRenameColumnClause{
+			OldColumnName: tree.NewUnresolvedColName("title"),
+			NewColumnName: tree.NewUnresolvedColName("head:line"),
+		},
+	)
+	require.NoError(t, err)
+	require.Equal(t, []string{"head:line"}, tableDef.Indexes[0].Parts)
+	require.Equal(t, map[string]int{"head:line": 4}, catalog.IndexPrefixLengthsFromParams(tableDef.Indexes[0].IndexAlgoParams))
+
+	params, err := catalog.IndexParamsStringToMap(tableDef.Indexes[0].IndexAlgoParams)
+	require.NoError(t, err)
+	require.NotContains(t, params, catalog.IndexAlgoParamPrefixLengths)
+	require.JSONEq(t, `{"head:line":4}`, params[catalog.IndexAlgoParamPrefixLengthsV2])
+}
+
+func TestRenameIndexPrefixLengthMetadataBoundaryCases(t *testing.T) {
+	t.Run("case-insensitive legacy key keeps nested session vars", func(t *testing.T) {
+		params, err := catalog.IndexParamsMapToJsonStringWithSessionVars(
+			map[string]string{catalog.IndexAlgoParamPrefixLengths: "Title:4"},
+			json.RawMessage(`{"cfg":{}}`),
+		)
+		require.NoError(t, err)
+		indexDef := &planpb.IndexDef{
+			IndexAlgo:       catalog.MoIndexDefaultAlgo.ToString(),
+			IndexAlgoParams: params,
+		}
+
+		affected, err := renameIndexPrefixLengthMetadata(indexDef, "title", "headline")
+		require.NoError(t, err)
+		require.True(t, affected)
+		require.Equal(t, map[string]int{"headline": 4}, catalog.IndexPrefixLengthsFromParams(indexDef.IndexAlgoParams))
+		sessionVars, err := catalog.IndexParamsSessionVars(indexDef.IndexAlgoParams)
+		require.NoError(t, err)
+		require.JSONEq(t, `{"cfg":{}}`, string(sessionVars))
+	})
+
+	t.Run("unprefixed renamed part does not rewrite params", func(t *testing.T) {
+		params, err := catalog.IndexParamsMapToJsonString(map[string]string{
+			catalog.IndexAlgoParamPrefixLengths: "note:2",
+		})
+		require.NoError(t, err)
+		indexDef := &planpb.IndexDef{
+			IndexAlgo:       catalog.MoIndexDefaultAlgo.ToString(),
+			IndexAlgoParams: params,
+		}
+
+		affected, err := renameIndexPrefixLengthMetadata(indexDef, "title", "headline")
+		require.NoError(t, err)
+		require.False(t, affected)
+		require.Equal(t, params, indexDef.IndexAlgoParams)
+	})
+
+	t.Run("invalid persisted metadata aborts rename before mutation", func(t *testing.T) {
+		tableDef := &planpb.TableDef{
+			Cols: []*ColDef{{Name: "title", OriginName: "title"}},
+			Pkey: &PrimaryKeyDef{},
+			Indexes: []*planpb.IndexDef{{
+				IndexName:       "idx_title",
+				IndexAlgo:       catalog.MoIndexDefaultAlgo.ToString(),
+				IndexAlgoParams: `{"prefix_lengths":"title:0"}`,
+				Parts:           []string{"title"},
+			}},
+		}
+		mock := NewMockOptimizer(false)
+
+		_, err := updateRenameColumnInTableDef(
+			mock.CurrentContext(),
+			tableDef.Cols[0],
+			tableDef,
+			&tree.AlterTableRenameColumnClause{
+				OldColumnName: tree.NewUnresolvedColName("title"),
+				NewColumnName: tree.NewUnresolvedColName("headline"),
+			},
+		)
+		require.Error(t, err)
+		require.Equal(t, []string{"title"}, tableDef.Indexes[0].Parts)
+	})
+}
+
+func TestRenamePrefixIndexV2ProtocolGate(t *testing.T) {
+	prefixParams, err := catalog.IndexParamsMapToJsonString(map[string]string{
+		catalog.IndexAlgoParamPrefixLengths: "title:4",
+	})
+	require.NoError(t, err)
+	tableDef := &planpb.TableDef{
+		TblId: 1,
+		Cols: []*ColDef{
+			{Name: "id", OriginName: "id"},
+			{Name: "title", OriginName: "title"},
+		},
+		Pkey: &PrimaryKeyDef{PkeyColName: "id", Names: []string{"id"}},
+		Indexes: []*planpb.IndexDef{
+			{
+				IndexName: "idx_title_full",
+				IndexAlgo: catalog.MoIndexDefaultAlgo.ToString(),
+				Parts:     []string{"title", catalog.CreateAlias("id")},
+			},
+			{
+				IndexName:       "idx_title",
+				IndexAlgo:       catalog.MoIndexDefaultAlgo.ToString(),
+				IndexAlgoParams: prefixParams,
+				Parts:           []string{"title", catalog.CreateAlias("id")},
+			},
+		},
+	}
+	mock := NewMockOptimizer(false)
+	proc := mock.CurrentContext().GetProcess()
+	rt := moruntime.ServiceRuntime(proc.GetService())
+	original, hadOriginal := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	defer func() {
+		if hadOriginal {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, original)
+		} else {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+		}
+	}()
+
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion12)
+	_, err = updateRenameColumnInTableDef(
+		mock.CurrentContext(),
+		tableDef.Cols[1],
+		tableDef,
+		&tree.AlterTableRenameColumnClause{
+			OldColumnName: tree.NewUnresolvedColName("title"),
+			NewColumnName: tree.NewUnresolvedColName("head:line"),
+		},
+	)
+	require.ErrorContains(t, err, "protocol version 13")
+	require.Equal(t, []string{"title", catalog.CreateAlias("id")}, tableDef.Indexes[0].Parts)
+	require.Equal(t, []string{"title", catalog.CreateAlias("id")}, tableDef.Indexes[1].Parts)
+	require.Equal(t, prefixParams, tableDef.Indexes[1].IndexAlgoParams)
+
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion13)
+	_, err = updateRenameColumnInTableDef(
+		mock.CurrentContext(),
+		tableDef.Cols[1],
+		tableDef,
+		&tree.AlterTableRenameColumnClause{
+			OldColumnName: tree.NewUnresolvedColName("title"),
+			NewColumnName: tree.NewUnresolvedColName("head:line"),
+		},
+	)
+	require.NoError(t, err)
+	require.Equal(t, "head:line", tableDef.Indexes[0].Parts[0])
+	require.Equal(t, "head:line", tableDef.Indexes[1].Parts[0])
+}
+
 func TestUpdateRenameColumnInTableDefRejectsDuplicateTargetName(t *testing.T) {
 	mock := NewMockOptimizer(false)
 	tableDef := makeAlterCoverageTableDef()
@@ -284,6 +623,66 @@ func TestAlterColumnSetDefaultUpdatesCopiedColumn(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, pkAffected)
 	require.Contains(t, copyTable.Cols[3].Default.OriginString, "memo")
+}
+
+func TestAlterColumnSetDefaultRejectsUnsupportedColumns(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		configure func(*ColDef)
+		checkErr  func(*testing.T, error)
+	}{
+		{
+			name: "auto increment",
+			configure: func(col *ColDef) {
+				col.Typ.AutoIncr = true
+			},
+			checkErr: func(t *testing.T, err error) {
+				require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidDefault))
+			},
+		},
+		{
+			name: "stored generated",
+			configure: func(col *ColDef) {
+				col.GeneratedCol = &planpb.GeneratedCol{IsStored: true}
+			},
+			checkErr: func(t *testing.T, err error) {
+				require.ErrorContains(t, err, "generated column 'note' cannot have a default value")
+			},
+		},
+		{
+			name: "virtual generated",
+			configure: func(col *ColDef) {
+				col.GeneratedCol = &planpb.GeneratedCol{IsStored: false}
+			},
+			checkErr: func(t *testing.T, err error) {
+				require.ErrorContains(t, err, "generated column 'note' cannot have a default value")
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mock := NewMockOptimizer(false)
+			origin := makeAlterCoverageTableDef()
+			tc.configure(origin.Cols[3])
+			copyTable := DeepCopyTableDef(origin, true)
+			before := DeepCopyColDef(copyTable.Cols[3])
+			alterCtx := initAlterTableContext(origin, copyTable, origin.DbName)
+			alterPlan := &planpb.AlterTable{
+				Database:     origin.DbName,
+				TableDef:     origin,
+				CopyTableDef: copyTable,
+			}
+			spec := mustParseAlterColumnClause(
+				t,
+				mock.CurrentContext(),
+				"alter table t1 alter column note set default 'memo'",
+			)
+
+			_, err := AlterColumn(mock.CurrentContext(), alterPlan, spec, alterCtx)
+			require.Error(t, err)
+			tc.checkErr(t, err)
+			require.Equal(t, before, copyTable.Cols[3])
+		})
+	}
 }
 
 func TestOrderByColumnRejectsUnknownColumn(t *testing.T) {

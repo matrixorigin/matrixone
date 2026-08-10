@@ -1942,12 +1942,14 @@ var supportedStringBuiltIns = []FuncNew{
 		Overloads: []overload{
 			{
 				overloadId: 0,
+				volatile:   true,
 				args:       []types.T{types.T_varchar, types.T_varchar, types.T_varchar},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_varchar.ToType()
 				},
-				newOp: func() executeLogicOfOverload {
-					return newOpBuiltInWasm().wasm
+				newOpWithFree: func() (executeLogicOfOverload, executeResetOfOverload, executeFreeOfOverload, executeRetainedBytesOfOverload) {
+					op := newOpBuiltInWasm()
+					return op.wasm, op.Reset, op.Close, nil
 				},
 			},
 		},
@@ -1962,12 +1964,14 @@ var supportedStringBuiltIns = []FuncNew{
 		Overloads: []overload{
 			{
 				overloadId: 0,
+				volatile:   true,
 				args:       []types.T{types.T_varchar, types.T_varchar, types.T_varchar},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_varchar.ToType()
 				},
-				newOp: func() executeLogicOfOverload {
-					return newOpBuiltInWasm().tryWasm
+				newOpWithFree: func() (executeLogicOfOverload, executeResetOfOverload, executeFreeOfOverload, executeRetainedBytesOfOverload) {
+					op := newOpBuiltInWasm()
+					return op.tryWasm, op.Reset, op.Close, nil
 				},
 			},
 		},

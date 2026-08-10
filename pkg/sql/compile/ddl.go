@@ -933,8 +933,8 @@ func (s *Scope) alterTableInplace(c *Compile, cleanup *alterAutoIncrementResetCl
 			for i, indexdef := range oTableDef.Indexes {
 				if indexdef.IndexName == constraintName {
 					alterIndex = indexdef
-					alterIndex.Visible = tableAlterIndex.Visible
-					oTableDef.Indexes[i].Visible = tableAlterIndex.Visible
+					catalog.SetIndexVisibility(alterIndex, tableAlterIndex.Visible)
+					catalog.SetIndexVisibility(oTableDef.Indexes[i], tableAlterIndex.Visible)
 					// update the index visibility in mo_catalog.mo_indexes.
 					// Escape the index name the same as the AUTO_UPDATE / REINDEX
 					// branches: it is user-supplied and a backticked identifier may
@@ -1214,7 +1214,7 @@ func (s *Scope) alterTableInplace(c *Compile, cleanup *alterAutoIncrementResetCl
 			if alterIndex != nil {
 				for i, idx := range t.Indexes {
 					if alterIndex.IndexName == idx.IndexName {
-						t.Indexes[i].Visible = alterIndex.Visible
+						catalog.SetIndexVisibility(t.Indexes[i], alterIndex.Visible)
 						// NOTE: algo param is same for all the indexDefs of the same indexName.
 						// ie for IVFFLAT: meta, centroids, entries all have same algo params.
 						// so we don't need multiple `alterIndex`.
@@ -1628,7 +1628,13 @@ func (s *Scope) CreateTable(c *Compile) error {
 			return err
 		}
 
-		//2. need to append TableId to parent's TableDef.RefChildTbls
+		//2. append the child table ID to each distinct parent's RefChildTbls.
+		// A table can define several foreign keys to one parent. Updating that
+		// parent once per foreign key repeatedly rewrites its whole constraint
+		// definition, while one child-table ID is sufficient for the relation.
+		parentRelations := make([]engine.Relation, 0, len(fkTables))
+		hasSelfReference := false
+		ignoreForeignKey, _ := c.proc.Ctx.Value(defines.IgnoreForeignKey{}).(bool)
 		for i, fkTableName := range fkTables {
 			fkDbName := fkDbs[i]
 			if session != nil {
@@ -1638,17 +1644,11 @@ func (s *Scope) CreateTable(c *Compile) error {
 			}
 			fkey := qry.GetTableDef().Fkeys[i]
 			if fkey.ForeignTbl == 0 {
-				//fk self refer
-				//add current table to parent's children table
-				err = AddChildTblIdToParentTable(c.proc.Ctx, newRelation, 0)
-				if err != nil {
-					c.proc.Info(c.proc.Ctx, "createTable",
-						zap.String("databaseName", c.db),
-						zap.String("tableName", qry.GetTableDef().GetName()),
-						zap.Error(err),
-					)
-					return err
-				}
+				// A self-reference is represented by the sentinel table ID 0.
+				hasSelfReference = true
+				continue
+			}
+			if ignoreForeignKey {
 				continue
 			}
 			fkDbSource, err := c.e.Database(c.proc.Ctx, fkDbName, c.proc.GetTxnOperator())
@@ -1669,8 +1669,11 @@ func (s *Scope) CreateTable(c *Compile) error {
 				)
 				return err
 			}
-			//add current table to parent's children table
-			err = AddChildTblIdToParentTable(c.proc.Ctx, fkRelation, tblId)
+			parentRelations = append(parentRelations, fkRelation)
+		}
+
+		if hasSelfReference {
+			err = AddChildTblIdToParentTable(c.proc.Ctx, newRelation, 0)
 			if err != nil {
 				c.proc.Info(c.proc.Ctx, "createTable",
 					zap.String("databaseName", c.db),
@@ -1679,6 +1682,15 @@ func (s *Scope) CreateTable(c *Compile) error {
 				)
 				return err
 			}
+		}
+
+		if err = addChildTableIDToDistinctParents(c.proc.Ctx, parentRelations, tblId); err != nil {
+			c.proc.Info(c.proc.Ctx, "createTable",
+				zap.String("databaseName", c.db),
+				zap.String("tableName", qry.GetTableDef().GetName()),
+				zap.Error(err),
+			)
+			return err
 		}
 	}
 
@@ -3069,6 +3081,25 @@ func AddChildTblIdToParentTable(ctx context.Context, fkRelation engine.Relation,
 	}
 	addRefChildTableIDs(oldCt, []uint64{tblId})
 	return fkRelation.UpdateConstraint(ctx, oldCt)
+}
+
+func addChildTableIDToDistinctParents(
+	ctx context.Context,
+	parentRelations []engine.Relation,
+	childTableID uint64,
+) error {
+	updatedParents := make(map[uint64]struct{}, len(parentRelations))
+	for _, parentRelation := range parentRelations {
+		parentTableID := parentRelation.GetTableID(ctx)
+		if _, alreadyUpdated := updatedParents[parentTableID]; alreadyUpdated {
+			continue
+		}
+		if err := AddChildTblIdToParentTable(ctx, parentRelation, childTableID); err != nil {
+			return err
+		}
+		updatedParents[parentTableID] = struct{}{}
+	}
+	return nil
 }
 
 func canonicalRefChildTableIDs(constraintDef *engine.ConstraintDef) []uint64 {
@@ -6148,7 +6179,6 @@ func (opts *CDCCreateTaskOptions) handleLevel(
 	if patterTupples, err = CDCParsePitrGranularity(
 		ctx, level, tables,
 	); err != nil {
-		err = moerr.NewInternalErrorf(ctx, "invalid level: %s", level)
 		return
 	}
 
@@ -6368,7 +6398,6 @@ func (opts *CDCCreateTaskOptions) handleFrequency(
 	if patterTupples, err = CDCParsePitrGranularity(
 		ctx, level, tables,
 	); err != nil {
-		err = moerr.NewInternalErrorf(ctx, "invalid level: %s", level)
 		return
 	}
 

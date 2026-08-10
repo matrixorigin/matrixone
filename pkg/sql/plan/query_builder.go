@@ -3283,6 +3283,11 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		}
 		// after determine shuffle, be careful when calling ReCalcNodeStats again.
 		// needResetHashMapStats should always be false from here
+		// Projection and join rewrites above may duplicate or eliminate aliases.
+		// Index-only costing must see the expressions that will actually consume
+		// scan columns, not the pre-rewrite reference counts.
+		clear(colRefCnt)
+		builder.countColRefs(rootID, colRefCnt)
 		builder.prepareSpecialIndexGuards(rootID)
 		idxColMap := make(map[[2]int32]*plan.Expr)
 		rootID, err = builder.applyForceIndexHints(rootID, nil, colRefCnt, idxColMap)
@@ -9016,6 +9021,7 @@ func (builder *QueryBuilder) bindView(
 	if err != nil {
 		return
 	}
+	viewCtx.markViewCTASDefaultBoundary()
 	if len(viewStmt.ColNames) > 0 {
 		if len(viewStmt.ColNames) != len(viewCtx.headings) {
 			return 0, moerr.NewViewWrongList(builder.GetContext())
@@ -9936,8 +9942,8 @@ func (builder *QueryBuilder) addBinding(nodeID int32, alias tree.AliasClause, ct
 		binding.outputColumnProvenance = make([]OutputColumnProvenance, colLength)
 		for i, col := range node.TableDef.Cols {
 			binding.outputColumnProvenance[i] = OutputColumnProvenance{
-				State:                   ProvenanceSingleSource,
-				CanInheritSourceDefault: true,
+				State:             ProvenanceSingleSource,
+				CTASDefaultPolicy: CTASDefaultInheritSource,
 				Source: &SourceColumn{
 					RelPos:   tag,
 					ColPos:   int32(i),
@@ -10006,7 +10012,9 @@ func (builder *QueryBuilder) addBinding(nodeID int32, alias tree.AliasClause, ct
 				outputColumnProvenance = make([]OutputColumnProvenance, colLength)
 			}
 			outputColumnProvenance[i] = subCtx.outputColumnProvenanceForProject(int32(i))
-			outputColumnProvenance[i].CanInheritSourceDefault = false
+			if outputColumnProvenance[i].CTASDefaultPolicy == CTASDefaultInheritSource {
+				outputColumnProvenance[i].CTASDefaultPolicy = CTASDefaultNone
+			}
 			name := table + "." + cols[i]
 			builder.nameByColRef[[2]int32{tag, int32(i)}] = name
 		}
@@ -10104,9 +10112,15 @@ func (builder *QueryBuilder) buildJoinTable(tbl *tree.JoinTableExpr, ctx *BindCo
 		ExtraOptions: tbl.Option,
 		SpillMem:     builder.joinSpillMem,
 	}
-	nodeID := builder.appendNode(node, ctx)
+	// INNER JOIN subqueries are flattened above the join, so that node must
+	// already exist. LEFT/RIGHT JOIN subqueries decorate one child first; delay
+	// appending those nodes to keep the plan in child-before-parent order.
+	nodeID := int32(-1)
+	if joinType != plan.Node_LEFT && joinType != plan.Node_RIGHT {
+		nodeID = builder.appendNode(node, ctx)
+	}
 
-	if joinType == plan.Node_INNER {
+	if joinType == plan.Node_INNER || joinType == plan.Node_LEFT || joinType == plan.Node_RIGHT {
 		ctx.binder = NewJoinOnBinder(builder, ctx)
 	} else {
 		ctx.binder = NewTableBinder(builder, ctx)
@@ -10144,6 +10158,24 @@ func (builder *QueryBuilder) buildJoinTable(tbl *tree.JoinTableExpr, ctx *BindCo
 					FilterList: filterConds,
 				}, ctx)
 			}
+		} else if joinType == plan.Node_LEFT || joinType == plan.Node_RIGHT {
+			leftTags := builder.collectBindingTags(builder.qry.Nodes[leftChildID])
+			rightTags := builder.collectBindingTags(builder.qry.Nodes[rightChildID])
+			defaultSide := int8(JoinSideLeft)
+			if joinType == plan.Node_RIGHT {
+				defaultSide = JoinSideRight
+			}
+			for i, cond := range joinConds {
+				leftChildID, rightChildID, joinConds[i], err = builder.flattenOuterJoinConditionSubqueries(
+					leftChildID, rightChildID, cond,
+					leftCtx, rightCtx, leftTags, rightTags, defaultSide, true,
+				)
+				if err != nil {
+					return 0, err
+				}
+			}
+			node.Children[0] = leftChildID
+			node.Children[1] = rightChildID
 		}
 		node.OnList = joinConds
 
@@ -10195,6 +10227,10 @@ func (builder *QueryBuilder) buildJoinTable(tbl *tree.JoinTableExpr, ctx *BindCo
 				node.OnList = append(node.OnList, expr)
 			}
 		}
+	}
+
+	if nodeID < 0 {
+		nodeID = builder.appendNode(node, ctx)
 	}
 
 	return nodeID, nil

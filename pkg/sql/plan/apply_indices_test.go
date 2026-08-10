@@ -16,6 +16,7 @@ package plan
 
 import (
 	"context"
+	"fmt"
 	"math"
 	"reflect"
 	"slices"
@@ -31,6 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	statspb "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -87,10 +89,383 @@ func TestIndexHintMissingIndexReturnsMysqlKeyDoesNotExist(t *testing.T) {
 	require.Contains(t, moErr.Error(), "Key 'idx_missing' doesn't exist in table 'single_idx_t'")
 }
 
+func TestSingleColumnUniqueDecimalRangeUsesIndex(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	addIndexHintChoiceTableForTest(mock)
+	decimalType := planpb.Type{Id: int32(types.T_decimal64), Width: 10, Scale: 2}
+	mainTable := mock.ctxt.tables["index_hint_t"]
+	mainTable.Cols[1].Typ = decimalType
+	mainTable.Indexes = []*planpb.IndexDef{
+		{
+			IndexName:      "uk_a",
+			Parts:          []string{"a"},
+			IndexTableName: "uk_hint_a",
+			TableExist:     true,
+			Unique:         true,
+		},
+	}
+	addIndexHintIndexTableForTest(mock, "uk_hint_a", 25365)
+	mock.ctxt.tables["uk_hint_a"].Cols[0].Typ = decimalType
+
+	queryPlan, err := runOneStmt(mock, t, `
+		select b
+		from index_hint_t force index(uk_a)
+		where a > 10.255000`)
+	require.NoError(t, err)
+	require.True(t, planHasIndexJoin(queryPlan))
+	require.Equal(t, "uk_a", findFirstIndexScanName(queryPlan))
+}
+
+func TestDirectUniqueDecimalRangeResidualFilterUsesDirectKey(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	addIndexHintChoiceTableForTest(mock)
+	decimalType := planpb.Type{Id: int32(types.T_decimal64), Width: 10, Scale: 2}
+	mainTable := mock.ctxt.tables["index_hint_t"]
+	mainTable.Cols[1].Typ = decimalType
+	mainTable.Indexes = []*planpb.IndexDef{
+		{
+			IndexName:      "uk_a",
+			Parts:          []string{"a"},
+			IndexTableName: "uk_hint_a",
+			TableExist:     true,
+			Unique:         true,
+		},
+		{
+			IndexName:      "idx_a",
+			Parts:          []string{"a", catalog.CreateAlias("id")},
+			IndexTableName: "idx_hint_a",
+			TableExist:     true,
+		},
+	}
+	addIndexHintIndexTableForTest(mock, "uk_hint_a", 25365)
+	mock.ctxt.tables["uk_hint_a"].Cols[0].Typ = decimalType
+	addIndexHintIndexTableForTest(mock, "idx_hint_a", 25366)
+
+	queryPlan, err := runOneStmt(mock, t, `
+		select b
+		from index_hint_t force index(uk_a, idx_a)
+		where a >= 10.255000 and a >= 20.255000`)
+	require.NoError(t, err)
+	require.True(t, planHasIndexJoin(queryPlan))
+	indexScan := findFirstIndexScanNode(queryPlan)
+	require.NotNil(t, indexScan)
+	require.Equal(t, "uk_a", indexScan.IndexScanInfo.IndexName)
+	require.Len(t, indexScan.FilterList, 2)
+
+	residualFn := indexScan.FilterList[1].GetF()
+	require.NotNil(t, residualFn)
+	require.Len(t, residualFn.Args, 2)
+	for _, arg := range residualFn.Args {
+		require.NotNil(t, arg)
+	}
+	residualColExpr := residualFn.Args[0]
+	if residualColExpr.GetCol() == nil {
+		residualColExpr = residualFn.Args[1]
+	}
+	residualCol := residualColExpr.GetCol()
+	require.NotNil(t, residualCol)
+	require.Equal(t, int32(0), residualCol.ColPos)
+	require.Nil(t, residualColExpr.GetF())
+	require.Equal(t, decimalType, residualColExpr.Typ)
+}
+
+func TestEncodedRegularIndexCostRejectsRoundingDecimalRange(t *testing.T) {
+	makeOptimizer := func() *MockOptimizer {
+		mock := NewMockOptimizer(true)
+		addIndexHintChoiceTableForTest(mock)
+		mock.ctxt.tables["index_hint_t"].Cols[1].Typ = planpb.Type{
+			Id: int32(types.T_decimal64), Width: 10, Scale: 2,
+		}
+		return mock
+	}
+
+	t.Run("rounding bounds fall back to the base scan", func(t *testing.T) {
+		queryPlan, err := runOneStmt(makeOptimizer(), t, `
+			select b
+			from index_hint_t force index(idx_a)
+			where a > 10.255000 and a <= 15.755000`)
+		require.NoError(t, err)
+		require.Empty(t, findFirstIndexScanName(queryPlan))
+		require.False(t, planHasIndexJoin(queryPlan))
+	})
+
+	t.Run("lossless bounds retain the forced serialized index", func(t *testing.T) {
+		queryPlan, err := runOneStmt(makeOptimizer(), t, `
+			select b
+			from index_hint_t force index(idx_a)
+			where a > 10.250000 and a <= 15.750000`)
+		require.NoError(t, err)
+		require.Equal(t, "idx_a", findFirstIndexScanName(queryPlan))
+		require.True(t, planHasIndexJoin(queryPlan))
+	})
+}
+
+func TestApplyExtraFiltersOnIndexUsesPhysicalKeyEncoding(t *testing.T) {
+	intType := planpb.Type{Id: int32(types.T_int64)}
+	varcharType := planpb.Type{Id: int32(types.T_varchar)}
+	makeIndexNode := func(bindingTag int32, keyType, primaryType planpb.Type) *planpb.Node {
+		return &planpb.Node{
+			BindingTags: []int32{bindingTag},
+			TableDef: &planpb.TableDef{Cols: []*planpb.ColDef{
+				{Name: catalog.IndexTableIndexColName, Typ: keyType},
+				{Name: catalog.IndexTablePrimaryColName, Typ: primaryType},
+			}},
+		}
+	}
+
+	t.Run("serialized index part", func(t *testing.T) {
+		builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true), false, true)
+		baseTag := builder.genNewBindTag()
+		indexTag := builder.genNewBindTag()
+		filter := makeTypedInt64RangeFilterExpr(baseTag, 1, ">=", 10, intType)
+		node := &planpb.Node{
+			TableDef: &planpb.TableDef{
+				Cols: []*planpb.ColDef{
+					{Name: "id", Typ: intType},
+					{Name: "a", Typ: intType},
+				},
+				Name2ColIndex: map[string]int32{"id": 0, "a": 1},
+				Pkey:          &planpb.PrimaryKeyDef{PkeyColName: "id", Names: []string{"id"}},
+			},
+			BindingTags: []int32{baseTag},
+			FilterList:  []*planpb.Expr{filter},
+		}
+		idxDef := &planpb.IndexDef{Parts: []string{"a", catalog.CreateAlias("id")}}
+		indexNode := makeIndexNode(indexTag, varcharType, intType)
+
+		builder.applyExtraFiltersOnIndex(idxDef, node, indexNode, nil)
+
+		require.Len(t, indexNode.FilterList, 1)
+		mapped := indexNode.FilterList[0].GetF().Args[0]
+		require.Equal(t, "serial_extract", wrappedSerialFuncName(t, mapped))
+		require.Equal(t, int32(0), mapped.GetF().Args[0].GetCol().ColPos)
+	})
+
+	t.Run("all serialized residuals", func(t *testing.T) {
+		builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true), false, true)
+		baseTag := builder.genNewBindTag()
+		indexTag := builder.genNewBindTag()
+		node := &planpb.Node{
+			TableDef: &planpb.TableDef{
+				Cols: []*planpb.ColDef{
+					{Name: "id", Typ: intType},
+					{Name: "a", Typ: intType},
+				},
+				Name2ColIndex: map[string]int32{"id": 0, "a": 1},
+				Pkey:          &planpb.PrimaryKeyDef{PkeyColName: "id", Names: []string{"id"}},
+			},
+			BindingTags: []int32{baseTag},
+			FilterList: []*planpb.Expr{
+				makeTypedInt64RangeFilterExpr(baseTag, 1, ">=", 10, intType),
+				makeTypedInt64RangeFilterExpr(baseTag, 1, "<", 20, intType),
+			},
+		}
+		idxDef := &planpb.IndexDef{Parts: []string{"a", catalog.CreateAlias("id")}}
+		indexNode := makeIndexNode(indexTag, varcharType, intType)
+
+		builder.applyExtraFiltersOnIndex(idxDef, node, indexNode, nil)
+
+		require.Len(t, indexNode.FilterList, 2)
+		for _, filter := range indexNode.FilterList {
+			require.Equal(t, "serial_extract", wrappedSerialFuncName(t, filter.GetF().Args[0]))
+		}
+	})
+
+	t.Run("composite primary key part", func(t *testing.T) {
+		builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true), false, true)
+		baseTag := builder.genNewBindTag()
+		indexTag := builder.genNewBindTag()
+		filter := makeTypedInt64RangeFilterExpr(baseTag, 0, ">=", 10, intType)
+		filter.GetF().Args[0].GetCol().Name = "tenant_id"
+		node := &planpb.Node{
+			TableDef: &planpb.TableDef{
+				Cols: []*planpb.ColDef{
+					{Name: "tenant_id", Typ: intType},
+					{Name: "id", Typ: intType},
+					{Name: "a", Typ: intType},
+					{Name: catalog.CPrimaryKeyColName, Typ: varcharType},
+				},
+				Name2ColIndex: map[string]int32{
+					"tenant_id":                0,
+					"id":                       1,
+					"a":                        2,
+					catalog.CPrimaryKeyColName: 3,
+				},
+				Pkey: &planpb.PrimaryKeyDef{
+					PkeyColName: catalog.CPrimaryKeyColName,
+					Names:       []string{"tenant_id", "id"},
+				},
+			},
+			BindingTags: []int32{baseTag},
+			FilterList:  []*planpb.Expr{filter},
+		}
+		idxDef := &planpb.IndexDef{Parts: []string{"a", catalog.CreateAlias(catalog.CPrimaryKeyColName)}}
+		indexNode := makeIndexNode(indexTag, varcharType, varcharType)
+
+		builder.applyExtraFiltersOnIndex(idxDef, node, indexNode, nil)
+
+		require.Len(t, indexNode.FilterList, 1)
+		mapped := indexNode.FilterList[0].GetF().Args[0]
+		require.Equal(t, "serial_extract", wrappedSerialFuncName(t, mapped))
+		require.Equal(t, int32(1), mapped.GetF().Args[0].GetCol().ColPos)
+
+		invalidPrimaryNode := makeIndexNode(builder.genNewBindTag(), varcharType, intType)
+		builder.applyExtraFiltersOnIndex(idxDef, node, invalidPrimaryNode, nil)
+		require.Empty(t, invalidPrimaryNode.FilterList)
+	})
+
+	t.Run("invalid serialized key metadata skips optional pushdown", func(t *testing.T) {
+		builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true), false, true)
+		baseTag := builder.genNewBindTag()
+		indexTag := builder.genNewBindTag()
+		node := &planpb.Node{
+			TableDef: &planpb.TableDef{
+				Cols:          []*planpb.ColDef{{Name: "id", Typ: intType}, {Name: "a", Typ: intType}},
+				Name2ColIndex: map[string]int32{"id": 0, "a": 1},
+				Pkey:          &planpb.PrimaryKeyDef{PkeyColName: "id", Names: []string{"id"}},
+			},
+			BindingTags: []int32{baseTag},
+			FilterList:  []*planpb.Expr{makeTypedInt64RangeFilterExpr(baseTag, 1, ">=", 10, intType)},
+		}
+		idxDef := &planpb.IndexDef{Parts: []string{"a", catalog.CreateAlias("id")}}
+		indexNode := makeIndexNode(indexTag, intType, intType)
+
+		builder.applyExtraFiltersOnIndex(idxDef, node, indexNode, nil)
+
+		require.Empty(t, indexNode.FilterList)
+	})
+}
+
+func TestResolveRegularIndexBackfillResidualAccess(t *testing.T) {
+	simpleTable := &planpb.TableDef{
+		Name2ColIndex: map[string]int32{"id": 0, "status": 1, "note": 2},
+		Pkey:          &planpb.PrimaryKeyDef{PkeyColName: "id", Names: []string{"id"}},
+	}
+	compoundTable := &planpb.TableDef{
+		Name2ColIndex: map[string]int32{
+			"tenant_id": 0,
+			"event_id":  1,
+			"status":    2,
+		},
+		Pkey: &planpb.PrimaryKeyDef{
+			PkeyColName: catalog.CPrimaryKeyColName,
+			Names:       []string{"tenant_id", "event_id"},
+		},
+	}
+
+	tests := []struct {
+		name          string
+		idxDef        *planpb.IndexDef
+		tableDef      *planpb.TableDef
+		colPos        int32
+		prefixLengths map[string]int
+		wantSource    regularIndexBackfillResidualSource
+		wantPosition  int
+	}{
+		{
+			name:       "direct unique index key",
+			idxDef:     &planpb.IndexDef{Parts: []string{"status"}, Unique: true},
+			tableDef:   simpleTable,
+			colPos:     1,
+			wantSource: regularIndexResidualIndexKey,
+		},
+		{
+			name:          "lossy prefix index key",
+			idxDef:        &planpb.IndexDef{Parts: []string{"status"}, Unique: true},
+			tableDef:      simpleTable,
+			colPos:        1,
+			prefixLengths: map[string]int{"status": 4},
+			wantSource:    regularIndexResidualUnavailable,
+		},
+		{
+			name:         "separately stored simple primary key",
+			idxDef:       &planpb.IndexDef{Parts: []string{"status"}, Unique: true},
+			tableDef:     simpleTable,
+			colPos:       0,
+			wantSource:   regularIndexResidualPhysicalPK,
+			wantPosition: 0,
+		},
+		{
+			name:         "simple primary key appended to serialized index key",
+			idxDef:       &planpb.IndexDef{Parts: []string{"status", catalog.CreateAlias("id")}},
+			tableDef:     simpleTable,
+			colPos:       0,
+			wantSource:   regularIndexResidualIndexKey,
+			wantPosition: 1,
+		},
+		{
+			name:         "compound primary key component",
+			idxDef:       &planpb.IndexDef{Parts: []string{"status"}, Unique: true},
+			tableDef:     compoundTable,
+			colPos:       1,
+			wantSource:   regularIndexResidualCompoundPK,
+			wantPosition: 1,
+		},
+		{
+			name:       "unavailable non-key column",
+			idxDef:     &planpb.IndexDef{Parts: []string{"status"}, Unique: true},
+			tableDef:   simpleTable,
+			colPos:     2,
+			wantSource: regularIndexResidualUnavailable,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := resolveRegularIndexBackfillResidualAccess(
+				tt.idxDef, tt.tableDef, tt.colPos, tt.prefixLengths, nil,
+			)
+			require.Equal(t, tt.wantSource, got.source)
+			require.Equal(t, tt.wantPosition, got.position)
+
+			knownPartPositions := []int{-1, -1, -1}
+			for partPos, part := range tt.idxDef.Parts {
+				if colPos, ok := tt.tableDef.Name2ColIndex[catalog.ResolveAlias(part)]; ok {
+					knownPartPositions[colPos] = partPos
+				}
+			}
+			fastPath := resolveRegularIndexBackfillResidualAccess(
+				tt.idxDef, tt.tableDef, tt.colPos, tt.prefixLengths, knownPartPositions,
+			)
+			require.Equal(t, got, fastPath,
+				"the scorer's precomputed part map must preserve materializer resolution")
+		})
+	}
+}
+
+func TestInvisibleIndexHintIsRejected(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		visible   bool
+		wantError bool
+	}{
+		{name: "visible control", visible: true},
+		{name: "invisible index", visible: false, wantError: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mock := NewMockOptimizer(true)
+			indexDef := mock.ctxt.tables["single_idx_t"].Indexes[0]
+			indexDef.Visible = tc.visible
+			indexDef.VisibilitySet = true
+
+			_, err := runOneStmt(mock, t, "select val from single_idx_t force index(idx_val) where val = 1")
+			if tc.wantError {
+				require.Error(t, err)
+				var moErr *moerr.Error
+				require.ErrorAs(t, err, &moErr)
+				require.Equal(t, moerr.ER_KEY_DOES_NOT_EXIST, moErr.MySQLCode())
+				return
+			}
+			require.NoError(t, err)
+		})
+	}
+}
+
 func TestFilterRegularIndexesByScanHints(t *testing.T) {
 	idxA := &planpb.IndexDef{IndexName: "idx_a"}
 	idxB := &planpb.IndexDef{IndexName: "idx_b"}
-	indexes := []*planpb.IndexDef{idxA, idxB}
+	invisible := &planpb.IndexDef{IndexName: "idx_invisible", VisibilitySet: true}
+	indexes := []*planpb.IndexDef{idxA, invisible, idxB}
 	node := &planpb.Node{NodeId: 7}
 
 	testCases := []struct {
@@ -293,6 +668,209 @@ func TestIndexHintOrderScopePreservesCoveringIndexFilters(t *testing.T) {
 	require.Nil(t, indexScan.IndexReaderParam)
 }
 
+func TestForceIndexOrderAcceptsEqualityFixedLeadingPrefix(t *testing.T) {
+	tests := []struct {
+		name       string
+		sql        string
+		descending bool
+		backfill   bool
+	}{
+		{
+			name: "ascending covering without limit",
+			sql: `select id, a, b from index_hint_t force index for order by(idx_ab)
+				where a = 1 and b between 10 and 20 order by b, id`,
+		},
+		{
+			name: "descending noncovering with limit",
+			sql: `select payload from index_hint_t force index for order by(idx_ab)
+				where a = 1 and b between 10 and 20 order by b desc, id desc limit 10`,
+			descending: true,
+			backfill:   true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mock := NewMockOptimizer(true)
+			addIndexHintChoiceTableForTest(mock)
+			addIndexHintPayloadColumnForTest(mock)
+
+			queryPlan, err := runOneStmt(mock, t, tt.sql)
+			require.NoError(t, err)
+			indexScan := findFirstIndexScanNode(queryPlan)
+			require.NotNil(t, indexScan)
+			require.Equal(t, "idx_ab", indexScan.IndexScanInfo.IndexName)
+			require.NotEmpty(t, indexScan.OrderBy)
+			require.Equal(t, tt.descending, indexScan.OrderBy[0].Flag&planpb.OrderBySpec_DESC != 0)
+			require.Equal(t, tt.backfill, planHasIndexJoin(queryPlan))
+			require.True(t, planHasSort(queryPlan))
+		})
+	}
+}
+
+func TestIndexOrderColumnsMatchEqualityFixedPrefix(t *testing.T) {
+	const scanTag int32 = 41
+	intType := planpb.Type{Id: int32(types.T_int32)}
+	tableDef := &planpb.TableDef{
+		Cols: []*planpb.ColDef{
+			{Name: "id", Typ: intType},
+			{Name: "a", Typ: intType},
+			{Name: "b", Typ: intType},
+		},
+		Name2ColIndex: map[string]int32{"id": 0, "a": 1, "b": 2},
+	}
+
+	literalEquality := func(commuted bool, relPos int32) *planpb.Expr {
+		expr := makeEqFilterExpr(1)
+		expr.GetF().Args[0].GetCol().RelPos = relPos
+		if commuted {
+			expr.GetF().Args[0], expr.GetF().Args[1] = expr.GetF().Args[1], expr.GetF().Args[0]
+		}
+		return expr
+	}
+	parameterEquality := makeEqFilterExpr(1)
+	parameterEquality.GetF().Args[0].GetCol().RelPos = scanTag
+	parameterEquality.GetF().Args[1] = &planpb.Expr{
+		Typ:  intType,
+		Expr: &planpb.Expr_P{P: &planpb.ParamRef{Pos: 0}},
+	}
+	columnEquality := makeEqFilterExpr(1)
+	columnEquality.GetF().Args[0].GetCol().RelPos = scanTag
+	columnEquality.GetF().Args[1] = GetColExpr(intType, scanTag, 2)
+	nonEquality := makeEqFilterExpr(1)
+	nonEquality.GetF().Func.ObjName = ">"
+	nonEquality.GetF().Args[0].GetCol().RelPos = scanTag
+
+	tests := []struct {
+		name       string
+		parts      []string
+		filters    []*planpb.Expr
+		orderCols  []int32
+		compatible bool
+	}{
+		{name: "literal fixes leading part", parts: []string{"a", "b", "id"}, filters: []*planpb.Expr{literalEquality(false, scanTag)}, orderCols: []int32{2, 0}, compatible: true},
+		{name: "commuted literal fixes leading part", parts: []string{"a", "b", "id"}, filters: []*planpb.Expr{literalEquality(true, scanTag)}, orderCols: []int32{2, 0}, compatible: true},
+		{name: "parameter fixes leading part", parts: []string{"a", "b", "id"}, filters: []*planpb.Expr{parameterEquality}, orderCols: []int32{2, 0}, compatible: true},
+		{name: "fixed part is order neutral", parts: []string{"a", "b", "id"}, filters: []*planpb.Expr{literalEquality(false, scanTag)}, orderCols: []int32{1, 2, 0}, compatible: true},
+		{name: "order by fixed part only", parts: []string{"a", "b", "id"}, filters: []*planpb.Expr{literalEquality(false, scanTag)}, orderCols: []int32{1}, compatible: true},
+		{name: "column equality does not fix a value", parts: []string{"a", "b", "id"}, filters: []*planpb.Expr{columnEquality}, orderCols: []int32{2, 0}},
+		{name: "foreign binding does not fix scan column", parts: []string{"a", "b", "id"}, filters: []*planpb.Expr{literalEquality(false, scanTag+1)}, orderCols: []int32{2, 0}},
+		{name: "non equality does not fix a value", parts: []string{"a", "b", "id"}, filters: []*planpb.Expr{nonEquality}, orderCols: []int32{2, 0}},
+		{name: "unconstrained suffix cannot be skipped", parts: []string{"a", "b", "id"}, filters: []*planpb.Expr{literalEquality(false, scanTag)}, orderCols: []int32{0}},
+		{name: "order cannot extend past index suffix", parts: []string{"a"}, filters: []*planpb.Expr{literalEquality(false, scanTag)}, orderCols: []int32{2}},
+		{name: "missing index part metadata is not fixed", parts: []string{"missing", "b"}, filters: []*planpb.Expr{literalEquality(false, scanTag)}, orderCols: []int32{2}},
+		{name: "invalid order column is rejected", parts: []string{"a", "b", "id"}, filters: []*planpb.Expr{literalEquality(false, scanTag)}, orderCols: []int32{3}},
+		{name: "empty order is rejected", parts: []string{"a", "b", "id"}, filters: []*planpb.Expr{literalEquality(false, scanTag)}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			scanNode := &planpb.Node{
+				BindingTags: []int32{scanTag},
+				TableDef:    tableDef,
+				FilterList:  tt.filters,
+			}
+			idxDef := &planpb.IndexDef{Parts: tt.parts}
+			require.Equal(t, tt.compatible, indexOrderColumnsMatch(idxDef, scanNode, tt.orderCols))
+		})
+	}
+}
+
+func TestPlainForceIndexRetainsAccessWhenOrderIsIncompatible(t *testing.T) {
+	tests := []struct {
+		name     string
+		sql      string
+		backfill bool
+	}{
+		{
+			name: "in predicate fixes multiple leading values",
+			sql:  "select id, a, b from index_hint_t force index(idx_ab) where a in (1, 2) order by b, id",
+		},
+		{
+			name: "range predicate leaves leading part varying with limit",
+			sql:  "select id, a, b from index_hint_t force index(idx_ab) where a between 1 and 2 order by b desc, id desc limit 10",
+		},
+		{
+			name:     "unconstrained middle part noncovering",
+			sql:      "select payload from index_hint_t force index(idx_ab) where a = 1 order by id",
+			backfill: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mock := NewMockOptimizer(true)
+			addIndexHintChoiceTableForTest(mock)
+			addIndexHintPayloadColumnForTest(mock)
+
+			queryPlan, err := runOneStmt(mock, t, tt.sql)
+			require.NoError(t, err)
+			indexScan := findFirstIndexScanNode(queryPlan)
+			require.NotNil(t, indexScan)
+			require.Equal(t, "idx_ab", indexScan.IndexScanInfo.IndexName)
+			require.Empty(t, indexScan.OrderBy)
+			require.Equal(t, tt.backfill, planHasIndexJoin(queryPlan))
+			require.True(t, planHasSort(queryPlan))
+		})
+	}
+}
+
+func TestForceIndexOrderIncompatibleControls(t *testing.T) {
+	for _, tt := range []struct {
+		name      string
+		predicate string
+	}{
+		{name: "volatile right operand", predicate: "a = floor(rand() * 2)"},
+		{name: "volatile left operand", predicate: "floor(rand() * 2) = a"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			mock := NewMockOptimizer(true)
+			addIndexHintChoiceTableForTest(mock)
+			mock.ctxt.tables["index_hint_t"].Cols[1].Typ = planpb.Type{Id: int32(types.T_float64)}
+
+			queryPlan, err := runOneStmt(mock, t,
+				"select id, a, b from index_hint_t force index for order by(idx_ab) where "+tt.predicate+" order by b, id")
+			require.NoError(t, err)
+			require.Empty(t, findFirstIndexScanName(queryPlan))
+			require.True(t, planHasSort(queryPlan))
+		})
+	}
+
+	t.Run("order-scoped force does not become scan force", func(t *testing.T) {
+		mock := NewMockOptimizer(true)
+		addIndexHintChoiceTableForTest(mock)
+
+		queryPlan, err := runOneStmt(mock, t,
+			"select id from index_hint_t force index for order by(idx_ab) where a = 1 order by id")
+		require.NoError(t, err)
+		require.Empty(t, findFirstIndexScanName(queryPlan))
+		require.True(t, planHasSort(queryPlan))
+	})
+
+	t.Run("ordinary optimizer remains unforced", func(t *testing.T) {
+		mock := NewMockOptimizer(true)
+		addIndexHintChoiceTableForTest(mock)
+
+		queryPlan, err := runOneStmt(mock, t,
+			"select id from index_hint_t where b = 1 order by b, id")
+		require.NoError(t, err)
+		require.Empty(t, findFirstIndexScanName(queryPlan))
+		require.True(t, planHasSort(queryPlan))
+	})
+
+	t.Run("invalid plain force still errors", func(t *testing.T) {
+		mock := NewMockOptimizer(true)
+		addIndexHintChoiceTableForTest(mock)
+
+		_, err := runOneStmt(mock, t,
+			"select id from index_hint_t force index(idx_missing) where a = 1 order by b, id")
+		require.Error(t, err)
+		var moErr *moerr.Error
+		require.ErrorAs(t, err, &moErr)
+		require.Equal(t, moerr.ER_KEY_DOES_NOT_EXIST, moErr.MySQLCode())
+	})
+}
+
 func TestIgnoreIndexForOrderByBlocksCoveringIndexOrderedRead(t *testing.T) {
 	mock := NewMockOptimizer(true)
 	addIndexHintChoiceTableForTest(mock)
@@ -419,6 +997,212 @@ func TestIndexHintGroupScopeSelectsAndIgnoresCoveringIndex(t *testing.T) {
 	require.Equal(t, "uk_ab", findFirstIndexScanName(queryPlan))
 }
 
+func TestSecondaryIndexHiddenDependenciesSurviveGroupedJoinRemap(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	addGroupedJoinIndexTablesForTest(mock)
+
+	tests := []struct {
+		name      string
+		sql       string
+		wantIndex bool
+	}{
+		{
+			name: "indexed left grouped",
+			sql: `
+				select p.tenant_id, p.state, count(*), sum(c.weight)
+				from grouped_join_parent p force index(idx_tenant_state_id)
+				join grouped_join_child c
+					on c.tenant_id = p.tenant_id and c.id = p.id
+				where p.tenant_id between 3 and 9
+					and p.state in ('READY', 'HOLD')
+					and c.tag_id = 1
+				group by p.tenant_id, p.state`,
+			wantIndex: true,
+		},
+		{
+			name: "indexed left grouped with having and order",
+			sql: `
+				select p.tenant_id, p.state, count(*), sum(c.weight)
+				from grouped_join_parent p force index(idx_tenant_state_id)
+				join grouped_join_child c
+					on c.tenant_id = p.tenant_id and c.id = p.id
+				where p.tenant_id between 3 and 9
+					and p.state in ('READY', 'HOLD')
+					and c.tag_id = 1
+				group by p.tenant_id, p.state
+				having sum(c.weight) > 0
+				order by p.tenant_id, p.state`,
+			wantIndex: true,
+		},
+		{
+			name: "indexed right grouped",
+			sql: `
+				select p.tenant_id, p.state, count(*), sum(c.weight)
+				from grouped_join_child c
+				join grouped_join_parent p force index(idx_tenant_state_id)
+					on p.tenant_id = c.tenant_id and p.id = c.id
+				where p.tenant_id between 3 and 9
+					and p.state in ('READY', 'HOLD')
+					and c.tag_id = 1
+				group by p.tenant_id, p.state`,
+			wantIndex: true,
+		},
+		{
+			name: "indexed left scalar aggregate control",
+			sql: `
+				select count(*), sum(c.weight)
+				from grouped_join_parent p force index(idx_tenant_state_id)
+				join grouped_join_child c
+					on c.tenant_id = p.tenant_id and c.id = p.id
+				where p.tenant_id between 3 and 9
+					and p.state in ('READY', 'HOLD')
+					and c.tag_id = 1`,
+			wantIndex: true,
+		},
+		{
+			name: "indexed left raw rows control",
+			sql: `
+				select p.tenant_id, p.state, c.weight
+				from grouped_join_parent p force index(idx_tenant_state_id)
+				join grouped_join_child c
+					on c.tenant_id = p.tenant_id and c.id = p.id
+				where p.tenant_id between 3 and 9
+					and p.state in ('READY', 'HOLD')
+					and c.tag_id = 1`,
+			wantIndex: true,
+		},
+		{
+			name: "ignored index grouped control",
+			sql: `
+				select p.tenant_id, p.state, count(*), sum(c.weight)
+				from grouped_join_parent p ignore index(idx_tenant_state_id)
+				join grouped_join_child c
+					on c.tenant_id = p.tenant_id and c.id = p.id
+				where p.tenant_id between 3 and 9
+					and p.state in ('READY', 'HOLD')
+					and c.tag_id = 1
+				group by p.tenant_id, p.state`,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			queryPlan, err := runOneStmt(mock, t, test.sql)
+			require.NoError(t, err)
+			indexNames := reachableIndexScanNames(queryPlan.GetQuery())
+			if test.wantIndex {
+				require.Contains(t, indexNames, "idx_tenant_state_id")
+			} else {
+				require.NotContains(t, indexNames, "idx_tenant_state_id")
+			}
+		})
+	}
+}
+
+func TestGroupedJoinForceIndexCandidateClosure(t *testing.T) {
+	tests := []struct {
+		name        string
+		hints       string
+		selectList  string
+		tail        string
+		wantIndexes []string
+		notIndexes  []string
+	}{
+		{
+			name:        "group access matches later forced candidate",
+			hints:       "force index(idx_state, idx_tenant_state_id)",
+			selectList:  "p.tenant_id, p.state, count(*), sum(c.weight)",
+			tail:        "group by p.tenant_id, p.state",
+			wantIndexes: []string{"idx_tenant_state_id"},
+			notIndexes:  []string{"idx_state"},
+		},
+		{
+			name: "join force wins over incompatible group force",
+			hints: `force index for group by(idx_tenant_state_id)
+				force index for join(idx_state)`,
+			selectList:  "p.tenant_id, p.state, count(*), sum(c.weight)",
+			tail:        "group by p.tenant_id, p.state",
+			wantIndexes: []string{"idx_state"},
+			notIndexes:  []string{"idx_tenant_state_id"},
+		},
+		{
+			name: "forced primary join wins over secondary group access",
+			hints: `force index for group by(idx_tenant_state_id)
+				force index for join(primary)`,
+			selectList: "p.tenant_id, p.state, count(*), sum(c.weight)",
+			tail:       "group by p.tenant_id, p.state",
+			notIndexes: []string{"idx_state", "idx_tenant_state_id"},
+		},
+		{
+			name: "forced secondary join wins over primary group access",
+			hints: `force index for group by(primary)
+				force index for join(idx_state)`,
+			selectList:  "p.tenant_id, p.state, count(*), sum(c.weight)",
+			tail:        "group by p.tenant_id, p.state",
+			wantIndexes: []string{"idx_state"},
+			notIndexes:  []string{"idx_tenant_state_id"},
+		},
+		{
+			name: "primary group access matches allowed join candidate",
+			hints: `force index for group by(primary)
+				force index for join(primary, idx_state)`,
+			selectList: "p.tenant_id, p.id, count(*), sum(c.weight)",
+			tail:       "group by p.tenant_id, p.id",
+			notIndexes: []string{"idx_state", "idx_tenant_state_id"},
+		},
+		{
+			name:        "order access matches later forced candidate",
+			hints:       "force index(idx_state, idx_tenant_state_id)",
+			selectList:  "p.tenant_id, p.state, c.weight",
+			tail:        "order by p.tenant_id, p.state",
+			wantIndexes: []string{"idx_tenant_state_id"},
+			notIndexes:  []string{"idx_state"},
+		},
+		{
+			name: "join force wins over incompatible order force",
+			hints: `force index for order by(idx_tenant_state_id)
+				force index for join(idx_state)`,
+			selectList:  "p.tenant_id, p.state, c.weight",
+			tail:        "order by p.tenant_id, p.state",
+			wantIndexes: []string{"idx_state"},
+			notIndexes:  []string{"idx_tenant_state_id"},
+		},
+		{
+			name: "primary order access matches allowed join candidate",
+			hints: `force index for order by(primary)
+				force index for join(primary, idx_state)`,
+			selectList: "p.tenant_id, p.id, c.weight",
+			tail:       "order by p.tenant_id, p.id",
+			notIndexes: []string{"idx_state", "idx_tenant_state_id"},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			mock := NewMockOptimizer(true)
+			addGroupedJoinIndexTablesForTest(mock)
+			addGroupedJoinAlternativeIndexForTest(mock)
+			queryPlan, err := runOneStmt(mock, t, fmt.Sprintf(`
+				select %s
+				from grouped_join_parent p %s
+				join grouped_join_child c
+					on c.tenant_id = p.tenant_id and c.id = p.id
+				where p.tenant_id between 3 and 9
+					and p.state in ('READY', 'HOLD')
+					and c.tag_id = 1
+				%s`, test.selectList, test.hints, test.tail))
+			require.NoError(t, err)
+			indexNames := reachableIndexScanNames(queryPlan.GetQuery())
+			for _, indexName := range test.wantIndexes {
+				require.Contains(t, indexNames, indexName)
+			}
+			for _, indexName := range test.notIndexes {
+				require.NotContains(t, indexNames, indexName)
+			}
+		})
+	}
+}
+
 func TestIndexHintRejectsInvalidCombinations(t *testing.T) {
 	mock := NewMockOptimizer(true)
 	addIndexHintChoiceTableForTest(mock)
@@ -531,6 +1315,19 @@ func TestIndexHintJoinScopeFiltersCandidates(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestIndexJoinSkipsLossyPrefixIndex(t *testing.T) {
+	builder, joinID, leftScanID, leftDef := makeIndexHintJoinBuilder(t)
+	leftDef.Indexes[0].IndexAlgoParams = `{"prefix_lengths":"a:1"}`
+	join := builder.qry.Nodes[joinID]
+
+	newID, err := builder.applyIndicesForJoins(
+		joinID, join, map[[2]int32]int{}, map[[2]int32]*planpb.Expr{})
+	require.NoError(t, err)
+	require.Equal(t, joinID, newID)
+	require.Equal(t, leftScanID, join.Children[0])
+	require.Empty(t, join.RuntimeFilterBuildList)
 }
 
 func TestIndexJoinBuildsVersionedSerializedRuntimeFilter(t *testing.T) {
@@ -1029,6 +1826,100 @@ func TestForceIndexForJoinReplacesFilterIndexWrapper(t *testing.T) {
 	require.Equal(t, "idx_join", forcedIndexScan.IndexScanInfo.IndexName)
 }
 
+func TestForcePrimaryForJoinReplacesSecondaryAccess(t *testing.T) {
+	builder, joinID, _, _ := makeIndexHintJoinBuilder(t)
+	joinNode := builder.qry.Nodes[joinID]
+	rightScanID := joinNode.Children[1]
+	rightScan := builder.qry.Nodes[rightScanID]
+	rightScan.TableDef.Pkey = &planpb.PrimaryKeyDef{PkeyColName: "a", Names: []string{"a"}}
+	rightScan.TableDef.Indexes = []*planpb.IndexDef{{
+		IndexName: "idx_filter", IndexTableName: "idx_join_a_table",
+		Parts: []string{"a", catalog.CreateAlias("a")}, TableExist: true,
+	}}
+	require.NoError(t, builder.recordIndexHints(rightScanID, rightScan.TableDef, []*tree.IndexHint{{
+		HintType: tree.HintForce, HintScope: tree.HintForJoin, IndexNames: []string{PrimaryKeyName},
+	}}))
+
+	secondaryScanID := builder.appendNode(&planpb.Node{
+		NodeType: planpb.Node_TABLE_SCAN,
+		Stats:    DefaultStats(),
+		IndexScanInfo: planpb.IndexScanInfo{
+			IsIndexScan: true,
+			IndexName:   "idx_filter",
+		},
+	}, builder.ctxByNode[joinID])
+	secondaryAccessID := builder.appendNode(&planpb.Node{
+		NodeType: planpb.Node_JOIN,
+		JoinType: planpb.Node_INDEX,
+		Children: []int32{rightScanID, secondaryScanID},
+	}, builder.ctxByNode[joinID])
+	joinNode.Children[1] = secondaryAccessID
+
+	newID, err := builder.applyIndicesForJoins(joinID, joinNode, map[[2]int32]int{}, map[[2]int32]*planpb.Expr{})
+	require.NoError(t, err)
+	require.Equal(t, joinID, newID)
+	require.Equal(t, rightScanID, joinNode.Children[1])
+}
+
+func TestForceIndexForJoinPreservesMatchingIndexAccess(t *testing.T) {
+	builder, joinID, _, _ := makeIndexHintJoinBuilder(t)
+	joinNode := builder.qry.Nodes[joinID]
+	rightScanID := joinNode.Children[1]
+	rightScan := builder.qry.Nodes[rightScanID]
+	rightScan.TableDef.Indexes = []*planpb.IndexDef{
+		{
+			IndexName:      "idx_a",
+			IndexTableName: "idx_join_a_table",
+			Parts:          []string{"a", catalog.CreateAlias("a")},
+			TableExist:     true,
+		},
+		{
+			IndexName:      "idx_b",
+			IndexTableName: "idx_join_b_table",
+			Parts:          []string{"b", catalog.CreateAlias("a")},
+			TableExist:     true,
+		},
+	}
+	rightScan.TableDef.Pkey = &planpb.PrimaryKeyDef{PkeyColName: "a", Names: []string{"a"}}
+	rightScan.ObjRef = &planpb.ObjectRef{ObjName: "right_t"}
+	require.NoError(t, builder.recordIndexHints(rightScanID, rightScan.TableDef, []*tree.IndexHint{{
+		HintType: tree.HintForce, HintScope: tree.HintForJoin, IndexNames: []string{PrimaryKeyName, "idx_a", "idx_b"},
+	}}))
+
+	newID, err := builder.applyIndicesForJoins(joinID, joinNode, map[[2]int32]int{}, map[[2]int32]*planpb.Expr{})
+	require.NoError(t, err)
+	require.Equal(t, joinID, newID)
+	require.Equal(t, rightScanID, joinNode.Children[1])
+
+	matchingAccessID := builder.appendNode(&planpb.Node{
+		NodeType: planpb.Node_TABLE_SCAN,
+		Stats:    DefaultStats(),
+		IndexScanInfo: planpb.IndexScanInfo{
+			IsIndexScan: true,
+			IndexName:   "idx_b",
+		},
+	}, builder.ctxByNode[joinID])
+	builder.inheritIndexHints(matchingAccessID, rightScanID)
+	joinNode.Children[1] = matchingAccessID
+
+	newID, err = builder.applyIndicesForJoins(joinID, joinNode, map[[2]int32]int{}, map[[2]int32]*planpb.Expr{})
+	require.NoError(t, err)
+	require.Equal(t, joinID, newID)
+	require.Equal(t, matchingAccessID, joinNode.Children[1])
+
+	matchingWrapperID := builder.appendNode(&planpb.Node{
+		NodeType: planpb.Node_JOIN,
+		JoinType: planpb.Node_INDEX,
+		Children: []int32{rightScanID, matchingAccessID},
+	}, builder.ctxByNode[joinID])
+	joinNode.Children[1] = matchingWrapperID
+
+	newID, err = builder.applyIndicesForJoins(joinID, joinNode, map[[2]int32]int{}, map[[2]int32]*planpb.Expr{})
+	require.NoError(t, err)
+	require.Equal(t, joinID, newID)
+	require.Equal(t, matchingWrapperID, joinNode.Children[1])
+}
+
 func TestForceIndexForJoinReplacesRealCoveringFilterScan(t *testing.T) {
 	mock := NewMockOptimizer(true)
 	addIndexHintChoiceTableForTest(mock)
@@ -1458,6 +2349,135 @@ func addIndexHintChoiceTableForTest(mock *MockOptimizer) {
 	addIndexHintIndexTableForTest(mock, "idx_hint_id", 25360)
 }
 
+func addGroupedJoinIndexTablesForTest(mock *MockOptimizer) {
+	intType := planpb.Type{Id: int32(types.T_int32), NotNullable: true}
+	bigintType := planpb.Type{Id: int32(types.T_int64), NotNullable: true}
+	stateType := planpb.Type{Id: int32(types.T_varchar), Width: 12, NotNullable: true}
+	smallintType := planpb.Type{Id: int32(types.T_int16), NotNullable: true}
+	decimalType := planpb.Type{Id: int32(types.T_decimal64), Width: 12, Scale: 3, NotNullable: true}
+	compositeType := planpb.Type{Id: int32(types.T_varchar), Width: types.MaxVarcharLen, NotNullable: true}
+	rowIDType := planpb.Type{Id: int32(types.T_Rowid), Width: 16, NotNullable: true}
+
+	parent := &planpb.TableDef{
+		TableType: catalog.SystemOrdinaryRel,
+		TblId:     2680201,
+		Name:      "grouped_join_parent",
+		Cols: []*planpb.ColDef{
+			{ColId: 0, Name: "tenant_id", OriginName: "tenant_id", Typ: intType, Primary: true, Pkidx: 1, Default: &planpb.Default{}},
+			{ColId: 1, Name: "id", OriginName: "id", Typ: bigintType, Primary: true, Pkidx: 2, Default: &planpb.Default{}},
+			{ColId: 2, Name: "state", OriginName: "state", Typ: stateType, Default: &planpb.Default{}},
+			{ColId: 3, Name: catalog.CPrimaryKeyColName, OriginName: catalog.CPrimaryKeyColName, Typ: compositeType, Hidden: true, Default: &planpb.Default{}},
+			{ColId: 4, Name: catalog.Row_ID, OriginName: catalog.Row_ID, Typ: rowIDType, Hidden: true, Default: &planpb.Default{}},
+		},
+		Pkey: &planpb.PrimaryKeyDef{
+			PkeyColName: catalog.CPrimaryKeyColName,
+			Cols:        []uint64{0, 1},
+			Names:       []string{"tenant_id", "id"},
+			CompPkeyCol: &planpb.ColDef{Name: catalog.CPrimaryKeyColName, Typ: compositeType, Hidden: true},
+		},
+		Indexes: []*planpb.IndexDef{{
+			IndexName:      "idx_tenant_state_id",
+			Parts:          []string{"tenant_id", "state", "id", catalog.CreateAlias(catalog.CPrimaryKeyColName)},
+			IndexTableName: "grouped_join_parent_idx",
+			TableExist:     true,
+		}},
+		Name2ColIndex: map[string]int32{
+			"tenant_id":                0,
+			"id":                       1,
+			"state":                    2,
+			catalog.CPrimaryKeyColName: 3,
+			catalog.Row_ID:             4,
+		},
+	}
+	child := &planpb.TableDef{
+		TableType: catalog.SystemOrdinaryRel,
+		TblId:     2680202,
+		Name:      "grouped_join_child",
+		Cols: []*planpb.ColDef{
+			{ColId: 0, Name: "tenant_id", OriginName: "tenant_id", Typ: intType, Primary: true, Pkidx: 1, Default: &planpb.Default{}},
+			{ColId: 1, Name: "id", OriginName: "id", Typ: bigintType, Primary: true, Pkidx: 2, Default: &planpb.Default{}},
+			{ColId: 2, Name: "tag_id", OriginName: "tag_id", Typ: smallintType, Primary: true, Pkidx: 3, Default: &planpb.Default{}},
+			{ColId: 3, Name: "weight", OriginName: "weight", Typ: decimalType, Default: &planpb.Default{}},
+			{ColId: 4, Name: catalog.CPrimaryKeyColName, OriginName: catalog.CPrimaryKeyColName, Typ: compositeType, Hidden: true, Default: &planpb.Default{}},
+			{ColId: 5, Name: catalog.Row_ID, OriginName: catalog.Row_ID, Typ: rowIDType, Hidden: true, Default: &planpb.Default{}},
+		},
+		Pkey: &planpb.PrimaryKeyDef{
+			PkeyColName: catalog.CPrimaryKeyColName,
+			Cols:        []uint64{0, 1, 2},
+			Names:       []string{"tenant_id", "id", "tag_id"},
+			CompPkeyCol: &planpb.ColDef{Name: catalog.CPrimaryKeyColName, Typ: compositeType, Hidden: true},
+		},
+		Name2ColIndex: map[string]int32{
+			"tenant_id":                0,
+			"id":                       1,
+			"tag_id":                   2,
+			"weight":                   3,
+			catalog.CPrimaryKeyColName: 4,
+			catalog.Row_ID:             5,
+		},
+	}
+	indexTable := &planpb.TableDef{
+		TableType: catalog.SystemIndexRel,
+		TblId:     2680203,
+		Name:      "grouped_join_parent_idx",
+		Cols: []*planpb.ColDef{
+			{ColId: 0, Name: catalog.IndexTableIndexColName, OriginName: catalog.IndexTableIndexColName, Typ: compositeType, Primary: true, Default: &planpb.Default{}},
+			{ColId: 1, Name: catalog.IndexTablePrimaryColName, OriginName: catalog.IndexTablePrimaryColName, Typ: compositeType, Default: &planpb.Default{}},
+			{ColId: 2, Name: catalog.Row_ID, OriginName: catalog.Row_ID, Typ: rowIDType, Hidden: true, Default: &planpb.Default{}},
+		},
+		Pkey: &planpb.PrimaryKeyDef{
+			PkeyColName: catalog.IndexTableIndexColName,
+			Cols:        []uint64{0},
+			Names:       []string{catalog.IndexTableIndexColName},
+		},
+		Name2ColIndex: map[string]int32{
+			catalog.IndexTableIndexColName:   0,
+			catalog.IndexTablePrimaryColName: 1,
+			catalog.Row_ID:                   2,
+		},
+	}
+
+	for _, tableDef := range []*planpb.TableDef{parent, child, indexTable} {
+		mock.ctxt.objects[tableDef.Name] = &ObjectRef{SchemaName: "tpch", ObjName: tableDef.Name, Obj: int64(tableDef.TblId)}
+		mock.ctxt.tables[tableDef.Name] = tableDef
+		mock.ctxt.id2name[tableDef.TblId] = tableDef.Name
+	}
+	mock.ctxt.pks[parent.Name] = []int{0, 1}
+	mock.ctxt.pks[child.Name] = []int{0, 1, 2}
+	mock.ctxt.pks[indexTable.Name] = []int{0}
+}
+
+func addGroupedJoinAlternativeIndexForTest(mock *MockOptimizer) {
+	parent := mock.ctxt.tables["grouped_join_parent"]
+	parent.Indexes = append([]*planpb.IndexDef{{
+		IndexName:      "idx_state",
+		Parts:          []string{"state", catalog.CreateAlias(catalog.CPrimaryKeyColName)},
+		IndexTableName: "grouped_join_parent_idx_state",
+		TableExist:     true,
+	}}, parent.Indexes...)
+
+	indexTable := DeepCopyTableDef(mock.ctxt.tables["grouped_join_parent_idx"], true)
+	indexTable.TblId = 2680204
+	indexTable.Name = "grouped_join_parent_idx_state"
+	mock.ctxt.objects[indexTable.Name] = &ObjectRef{
+		SchemaName: "tpch", ObjName: indexTable.Name, Obj: int64(indexTable.TblId),
+	}
+	mock.ctxt.tables[indexTable.Name] = indexTable
+	mock.ctxt.id2name[indexTable.TblId] = indexTable.Name
+	mock.ctxt.pks[indexTable.Name] = []int{0}
+}
+
+func addIndexHintPayloadColumnForTest(mock *MockOptimizer) {
+	tableDef := mock.ctxt.tables["index_hint_t"]
+	payloadPos := int32(len(tableDef.Cols))
+	tableDef.Cols = append(tableDef.Cols, &planpb.ColDef{
+		ColId: 4, Name: "payload", OriginName: "payload",
+		Typ:     planpb.Type{Id: int32(types.T_varchar), Width: types.MaxVarcharLen},
+		Default: &planpb.Default{NullAbility: true},
+	})
+	tableDef.Name2ColIndex["payload"] = payloadPos
+}
+
 func addIndexHintIndexTableForTest(mock *MockOptimizer, name string, tableID uint64) {
 	keyType := planpb.Type{Id: int32(types.T_varchar), Width: types.MaxVarcharLen}
 	pkType := planpb.Type{Id: int32(types.T_int32), NotNullable: true}
@@ -1519,15 +2539,21 @@ func planHasIndexJoin(p *Plan) bool {
 	return false
 }
 
+func planHasSort(p *Plan) bool {
+	if p == nil || p.GetQuery() == nil {
+		return false
+	}
+	for _, node := range p.GetQuery().Nodes {
+		if node.NodeType == planpb.Node_SORT {
+			return true
+		}
+	}
+	return false
+}
+
 func TestTryIndexOnlyScan_RandomRangesNotRejected(t *testing.T) {
-	// End-to-end test: call tryIndexOnlyScan with a node that simulates
-	// sysbench random_ranges (10M rows, outcnt=10000, selectivity=0.001).
-	// Verify the guard does NOT reject the index-only scan.
-	//
-	// Strategy: if the guard rejects, tryIndexOnlyScan returns -1 cleanly.
-	// If the guard passes, execution continues to ResolveIndexTableByRef which
-	// returns nil (mock has no index table), causing a nil-pointer panic downstream.
-	// We use recover() to detect this: panic = guard passed, no panic = guard rejected.
+	// Exercise the pure candidate matcher with a node that simulates sysbench
+	// random_ranges (10M rows, outcnt=10000, selectivity=0.001).
 	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true), false, true)
 
 	idxDef := &IndexDef{
@@ -1585,36 +2611,27 @@ func TestTryIndexOnlyScan_RandomRangesNotRejected(t *testing.T) {
 		{bindTag, kColPos}: 1,
 	}
 
-	// Helper: returns true if guard passed (panic from nil deref after guard),
-	// false if guard rejected (clean -1 return).
-	guardPassed := func(node *planpb.Node) bool {
-		passed := false
-		func() {
-			defer func() {
-				if r := recover(); r != nil {
-					passed = true
-				}
-			}()
-			builder.tryIndexOnlyScan(idxDef, node, colRefCnt, nil, &Snapshot{})
-		}()
-		return passed
+	candidateMatches := func(node *planpb.Node) bool {
+		costCtx := builder.newEncodedRegularIndexCostContext(node, colRefCnt)
+		_, ok := builder.matchRegularIndexOnlyScan(idxDef, node, costCtx)
+		return ok
 	}
 
 	// random_ranges scenario: 10M rows, outcnt=10000, selectivity=0.001
 	// With the fix (PK card limit = 1M), guard should PASS.
-	assert.True(t, guardPassed(makeNode(10_000_000, 10_000, 0.001)),
+	assert.True(t, candidateMatches(makeNode(10_000_000, 10_000, 0.001)),
 		"random_ranges (10M rows, outcnt=10000) should pass the guard")
 
 	// Same but with outcnt=50000 (still well below 1M threshold)
-	assert.True(t, guardPassed(makeNode(10_000_000, 50_000, 0.005)),
+	assert.True(t, candidateMatches(makeNode(10_000_000, 50_000, 0.005)),
 		"moderate outcnt (50000) on 10M table should pass the guard")
 
 	// High outcnt (2M on 10M table) → guard should REJECT
-	assert.False(t, guardPassed(makeNode(10_000_000, 2_000_000, 0.2)),
+	assert.False(t, candidateMatches(makeNode(10_000_000, 2_000_000, 0.2)),
 		"high outcnt (2M) should be rejected by guard")
 
 	// High selectivity (0.5) → guard should REJECT
-	assert.False(t, guardPassed(makeNode(10_000_000, 5_000_000, 0.5)),
+	assert.False(t, candidateMatches(makeNode(10_000_000, 5_000_000, 0.5)),
 		"high selectivity (0.5) should be rejected by guard")
 
 	// Verify threshold arithmetic
@@ -1622,6 +2639,1930 @@ func TestTryIndexOnlyScan_RandomRangesNotRejected(t *testing.T) {
 		"random_ranges outcnt (10000) >= old threshold (10000) → old code would reject")
 	assert.True(t, float64(10_000) < float64(GetInFilterCardLimitOnPK("", 10_000_000)),
 		"random_ranges outcnt (10000) < new threshold (1M) → new code allows")
+}
+
+func TestTryIndexOnlyScanRejectsBroadEncodedEquality(t *testing.T) {
+	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true), false, true)
+	ctx := NewBindContext(builder, nil)
+	bindTag := builder.genNewBindTag()
+	idxDef := &planpb.IndexDef{
+		IndexName:      "idx_category_tenant_time_id",
+		IndexAlgo:      catalog.MoIndexDefaultAlgo.ToString(),
+		IndexTableName: "__mo_idx_category_tenant_time_id",
+		Parts: []string{
+			"category",
+			"tenant_id",
+			"event_time",
+			"event_id",
+			catalog.CreateAlias(catalog.CPrimaryKeyColName),
+		},
+		TableExist: true,
+	}
+	registerMockIndexTable(t, builder, idxDef.IndexTableName)
+	node := &planpb.Node{
+		NodeType:    planpb.Node_TABLE_SCAN,
+		ObjRef:      &planpb.ObjectRef{SchemaName: "test", ObjName: "events"},
+		BindingTags: []int32{bindTag},
+		TableDef: &planpb.TableDef{
+			Name: "events",
+			Cols: []*planpb.ColDef{
+				{Name: "tenant_id", Typ: planpb.Type{Id: int32(types.T_int32)}},
+				{Name: "event_id", Typ: planpb.Type{Id: int32(types.T_int64)}},
+				{Name: "category", Typ: planpb.Type{Id: int32(types.T_varchar), Width: 12}},
+				{Name: "event_time", Typ: planpb.Type{Id: int32(types.T_datetime)}},
+				{Name: catalog.CPrimaryKeyColName, Typ: planpb.Type{Id: int32(types.T_varchar), Width: types.MaxVarcharLen}, Hidden: true},
+			},
+			Name2ColIndex: map[string]int32{
+				"tenant_id":                0,
+				"event_id":                 1,
+				"category":                 2,
+				"event_time":               3,
+				catalog.CPrimaryKeyColName: 4,
+			},
+			Pkey: &planpb.PrimaryKeyDef{
+				PkeyColName: catalog.CPrimaryKeyColName,
+				Names:       []string{"tenant_id", "event_id"},
+			},
+		},
+		Stats: &planpb.Stats{
+			TableCnt:    800_000,
+			Outcnt:      720_000,
+			Selectivity: 0.9,
+			Cost:        800_000,
+		},
+		FilterList: []*planpb.Expr{makeStringEqFilterExpr(bindTag, 2, "HOT")},
+	}
+	node.FilterList[0].Selectivity = 0.9
+	scanID := builder.appendNode(node, ctx)
+	builder.qry.Nodes[scanID].Stats = &planpb.Stats{TableCnt: 800_000, Outcnt: 720_000, Selectivity: 0.9, Cost: 800_000}
+	builder.qry.Nodes[scanID].FilterList[0].Selectivity = 0.9
+	leadingPos, _ := findLeadingFilter(idxDef, builder.qry.Nodes[scanID])
+	require.True(t, builder.shouldSkipEncodedIndexOnlyScan(idxDef, builder.qry.Nodes[scanID], map[[2]int32]int{{bindTag, 1}: 1, {bindTag, 2}: 1}, leadingPos, false))
+
+	idxNodeID := builder.tryIndexOnlyScan(
+		idxDef,
+		builder.qry.Nodes[scanID],
+		map[[2]int32]int{{bindTag, 1}: 1, {bindTag, 2}: 1},
+		map[[2]int32]*planpb.Expr{},
+		&Snapshot{},
+	)
+
+	require.Equal(t, int32(-1), idxNodeID)
+}
+
+type encodedIndexCostTestContext struct {
+	*MockCompilerContext
+	statsCache *StatsCache
+}
+
+type encodedIndexPlanTestContext struct {
+	*MockCompilerContext
+	statsCache *StatsCache
+	statsByID  map[uint64]*statspb.StatsInfo
+}
+
+func (ctx *encodedIndexPlanTestContext) GetStatsCache() *StatsCache {
+	return ctx.statsCache
+}
+
+func (ctx *encodedIndexPlanTestContext) Stats(obj *planpb.ObjectRef, _ *Snapshot) (*statspb.StatsInfo, error) {
+	if obj == nil {
+		return nil, nil
+	}
+	return ctx.statsByID[uint64(obj.Obj)], nil
+}
+
+type encodedIndexPlanTestOptimizer struct {
+	ctx *encodedIndexPlanTestContext
+}
+
+const encodedIndexCostUnitTableID uint64 = 10_001
+
+func (optimizer *encodedIndexPlanTestOptimizer) CurrentContext() CompilerContext {
+	return optimizer.ctx
+}
+
+func (optimizer *encodedIndexPlanTestOptimizer) Optimize(stmt tree.Statement) (*Query, error) {
+	queryPlan, err := BuildPlan(optimizer.ctx, stmt, false)
+	if err != nil {
+		return nil, err
+	}
+	return queryPlan.GetQuery(), nil
+}
+
+func (ctx *encodedIndexCostTestContext) GetStatsCache() *StatsCache {
+	return ctx.statsCache
+}
+
+func newEncodedIndexCostTestCase(
+	t testing.TB,
+	parts []string,
+	filters []*planpb.Expr,
+	stats *planpb.Stats,
+	colRefs map[int32]int,
+	force bool,
+) (*QueryBuilder, int32, *planpb.IndexDef, map[[2]int32]int) {
+	t.Helper()
+
+	baseCtx := NewMockCompilerContext(true)
+	statsCache := NewStatsCache()
+	statsInfo := NewStatsInfo()
+	statsInfo.TableCnt = 800_000
+	statsInfo.SizeMap = map[string]uint64{
+		"tenant_id":                800_000 * 4,
+		"event_id":                 800_000 * 8,
+		"category":                 800_000 * 4,
+		"event_time":               800_000 * 8,
+		catalog.CPrimaryKeyColName: 800_000 * 14,
+	}
+	statsCache.Set(encodedIndexCostUnitTableID, statsInfo)
+	testCtx := &encodedIndexCostTestContext{MockCompilerContext: baseCtx, statsCache: statsCache}
+	builder := NewQueryBuilder(planpb.Query_SELECT, testCtx, false, true)
+	ctx := NewBindContext(builder, nil)
+	bindTag := builder.genNewBindTag()
+	idxDef := &planpb.IndexDef{
+		IndexName:      "idx_cost_test",
+		IndexAlgo:      catalog.MoIndexDefaultAlgo.ToString(),
+		IndexTableName: "__mo_idx_cost_test",
+		Parts:          parts,
+		TableExist:     true,
+	}
+	indexTableDef := makeTestIndexTableDef()
+	indexTableDef.Name = idxDef.IndexTableName
+	key := strings.ToLower(idxDef.IndexTableName)
+	testCtx.objects[key] = &planpb.ObjectRef{SchemaName: "test", ObjName: idxDef.IndexTableName}
+	testCtx.tables[key] = indexTableDef
+
+	node := &planpb.Node{
+		NodeType:    planpb.Node_TABLE_SCAN,
+		ObjRef:      &planpb.ObjectRef{SchemaName: "test", ObjName: "events", Obj: int64(encodedIndexCostUnitTableID)},
+		BindingTags: []int32{bindTag},
+		TableDef: &planpb.TableDef{
+			TblId: encodedIndexCostUnitTableID,
+			Name:  "events",
+			Cols: []*planpb.ColDef{
+				{Name: "tenant_id", Typ: planpb.Type{Id: int32(types.T_int32)}},
+				{Name: "event_id", Typ: planpb.Type{Id: int32(types.T_int64)}},
+				{Name: "category", Typ: planpb.Type{Id: int32(types.T_varchar), Width: 12}},
+				{Name: "event_time", Typ: planpb.Type{Id: int32(types.T_datetime)}},
+				{Name: catalog.CPrimaryKeyColName, Typ: planpb.Type{Id: int32(types.T_varchar), Width: types.MaxVarcharLen}, Hidden: true},
+			},
+			Name2ColIndex: map[string]int32{
+				"tenant_id":                0,
+				"event_id":                 1,
+				"category":                 2,
+				"event_time":               3,
+				catalog.CPrimaryKeyColName: 4,
+			},
+			Pkey: &planpb.PrimaryKeyDef{
+				PkeyColName: catalog.CPrimaryKeyColName,
+				Names:       []string{"tenant_id", "event_id"},
+			},
+		},
+		FilterList: filters,
+	}
+	scanID := builder.appendNode(node, ctx)
+	builder.qry.Nodes[scanID].Stats = stats
+
+	refCnt := make(map[[2]int32]int, len(colRefs))
+	for colPos, count := range colRefs {
+		refCnt[[2]int32{bindTag, colPos}] = count
+	}
+	if force {
+		if builder.indexHintsByScan == nil {
+			builder.indexHintsByScan = make(map[int32]*indexHintSet)
+		}
+		builder.indexHintsByScan[scanID] = &indexHintSet{scan: indexHintScopeSet{
+			forceSpecified: true,
+			force:          map[string]struct{}{idxDef.IndexName: {}},
+		}}
+	}
+	return builder, scanID, idxDef, refCnt
+}
+
+func TestTryIndexOnlyScanEncodedCostControls(t *testing.T) {
+	wideParts := []string{
+		"category",
+		"tenant_id",
+		"event_time",
+		"event_id",
+		catalog.CreateAlias(catalog.CPrimaryKeyColName),
+	}
+	narrowParts := []string{"category", catalog.CreateAlias(catalog.CPrimaryKeyColName)}
+	tests := []struct {
+		name       string
+		parts      []string
+		leadingSel float64
+		outcnt     float64
+		cost       float64
+		colRefs    map[int32]int
+		force      bool
+		wantIndex  bool
+	}{
+		{
+			name:  "selective encoded projection wins",
+			parts: wideParts, leadingSel: 0.001, outcnt: 800, cost: 800_000,
+			colRefs: map[int32]int{1: 1, 2: 1}, wantIndex: true,
+		},
+		{
+			name:  "broad encoded projection loses",
+			parts: wideParts, leadingSel: 0.9, outcnt: 720_000, cost: 800_000,
+			colRefs: map[int32]int{1: 1, 2: 1},
+		},
+		{
+			name:  "narrow key stays below crossover",
+			parts: narrowParts, leadingSel: 0.10, outcnt: 80_000, cost: 800_000,
+			colRefs: map[int32]int{2: 1}, wantIndex: true,
+		},
+		{
+			name:  "wide key crosses at same selectivity",
+			parts: wideParts, leadingSel: 0.10, outcnt: 80_000, cost: 800_000,
+			colRefs: map[int32]int{2: 1},
+		},
+		{
+			name:  "one extraction consumer stays below crossover",
+			parts: wideParts, leadingSel: 0.05, outcnt: 40_000, cost: 800_000,
+			colRefs: map[int32]int{1: 1, 2: 1}, wantIndex: true,
+		},
+		{
+			name:  "repeated extraction consumers cross",
+			parts: wideParts, leadingSel: 0.05, outcnt: 40_000, cost: 800_000,
+			colRefs: map[int32]int{1: 5, 2: 1},
+		},
+		{
+			name:  "small output limits downstream extraction",
+			parts: wideParts, leadingSel: 0.1, outcnt: 800, cost: 800_000,
+			colRefs: map[int32]int{1: 1, 2: 1}, wantIndex: true,
+		},
+		{
+			name:  "large output charges downstream extraction",
+			parts: wideParts, leadingSel: 0.1, outcnt: 120_000, cost: 800_000,
+			colRefs: map[int32]int{1: 1, 2: 1},
+		},
+		{
+			name:  "force index preserves compatibility escape",
+			parts: wideParts, leadingSel: 0.9, outcnt: 720_000, cost: 800_000,
+			colRefs: map[int32]int{1: 1, 2: 1}, force: true, wantIndex: true,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			filter := makeStringEqFilterExpr(0, 2, "category")
+			filter.Selectivity = test.leadingSel
+			builder, scanID, idxDef, colRefCnt := newEncodedIndexCostTestCase(
+				t,
+				test.parts,
+				[]*planpb.Expr{filter},
+				&planpb.Stats{TableCnt: 800_000, Outcnt: test.outcnt, Selectivity: test.outcnt / 800_000, Cost: test.cost},
+				test.colRefs,
+				test.force,
+			)
+			// The fixture allocates the first binding tag.
+			builder.qry.Nodes[scanID].FilterList[0].GetF().Args[0].GetCol().RelPos = builder.qry.Nodes[scanID].BindingTags[0]
+
+			idxNodeID := builder.tryIndexOnlyScan(idxDef, builder.qry.Nodes[scanID], colRefCnt, map[[2]int32]*planpb.Expr{}, &Snapshot{})
+			if test.wantIndex {
+				require.NotEqual(t, int32(-1), idxNodeID)
+			} else {
+				require.Equal(t, int32(-1), idxNodeID)
+			}
+		})
+	}
+}
+
+func TestTryIndexOnlyScanChargesNullableLeadingResiduals(t *testing.T) {
+	parts := []string{"tenant_id", catalog.CreateAlias(catalog.CPrimaryKeyColName)}
+	tests := []struct {
+		name        string
+		makeLiteral func(int32) *planpb.Expr
+		makeRuntime func(int32) *planpb.Expr
+	}{
+		{
+			name: "equality",
+			makeLiteral: func(relPos int32) *planpb.Expr {
+				return makeRangeFilterExpr(relPos, 0, "=", 7)
+			},
+			makeRuntime: func(relPos int32) *planpb.Expr {
+				return makeParamEqFilterExpr(relPos, 0, 0)
+			},
+		},
+		{
+			name: "in",
+			makeLiteral: func(relPos int32) *planpb.Expr {
+				return makeIntInFilterExpr(relPos, 0, 7, 8)
+			},
+			makeRuntime: func(relPos int32) *planpb.Expr {
+				return makeParamInFilterExpr(relPos, 0, 2)
+			},
+		},
+		{
+			name: "between",
+			makeLiteral: func(relPos int32) *planpb.Expr {
+				return makeIntBetweenFilterExpr(relPos, 0, 7, 8)
+			},
+			makeRuntime: func(relPos int32) *planpb.Expr {
+				return makeParamBetweenFilterExpr(relPos, 0, 0, 1)
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			for _, variant := range []struct {
+				name         string
+				makeFilter   func(int32) *planpb.Expr
+				wantResidual bool
+				wantIndex    bool
+			}{
+				{name: "non-null literal stays below crossover", makeFilter: test.makeLiteral, wantIndex: true},
+				{name: "nullable runtime value crosses", makeFilter: test.makeRuntime, wantResidual: true},
+			} {
+				t.Run(variant.name, func(t *testing.T) {
+					filter := variant.makeFilter(0)
+					filter.Selectivity = 0.13
+					builder, scanID, idxDef, colRefCnt := newEncodedIndexCostTestCase(
+						t,
+						parts,
+						[]*planpb.Expr{filter},
+						&planpb.Stats{TableCnt: 800_000, Outcnt: 104_000, Selectivity: 0.13, Cost: 800_000},
+						map[int32]int{0: 1},
+						false,
+					)
+					node := builder.qry.Nodes[scanID]
+					node.FilterList[0].GetF().Args[0].GetCol().RelPos = node.BindingTags[0]
+					costCtx := builder.newEncodedRegularIndexCostContext(node, colRefCnt)
+					match, ok := builder.matchRegularIndexOnlyScan(idxDef, node, costCtx)
+					require.True(t, ok)
+					require.Equal(t, variant.wantResidual, len(match.residualLeadingPos) > 0)
+
+					idxNodeID := builder.tryIndexOnlyScan(idxDef, node, colRefCnt, map[[2]int32]*planpb.Expr{}, &Snapshot{})
+					if variant.wantIndex {
+						require.NotEqual(t, int32(-1), idxNodeID)
+					} else {
+						require.Equal(t, int32(-1), idxNodeID)
+					}
+				})
+			}
+		})
+	}
+}
+
+func TestEncodedIndexCostChargesOnlyMaterializedLeadingResiduals(t *testing.T) {
+	tenant := makeRangeFilterExpr(0, 0, "=", 7)
+	tenant.Selectivity = 0.1
+	category := makeStringEqFilterExpr(0, 2, "READY")
+	category.Selectivity = 0.2
+	builder, scanID, idxDef, colRefCnt := newEncodedIndexCostTestCase(
+		t,
+		[]string{"tenant_id", "category", catalog.CreateAlias(catalog.CPrimaryKeyColName)},
+		[]*planpb.Expr{tenant, category},
+		&planpb.Stats{TableCnt: 800_000, Outcnt: 16_000, Selectivity: 0.02, Cost: 800_000},
+		map[int32]int{0: 1, 2: 1},
+		false,
+	)
+	node := builder.qry.Nodes[scanID]
+	for _, filter := range node.FilterList {
+		filter.GetF().Args[0].GetCol().RelPos = node.BindingTags[0]
+	}
+
+	costCtx := builder.newEncodedRegularIndexCostContext(node, colRefCnt)
+	match, ok := builder.matchRegularIndexOnlyScan(idxDef, node, costCtx)
+	require.True(t, ok)
+	require.Equal(t, []int32{1}, match.residualLeadingPos,
+		"only the trailing byte-string prefix component needs an exact recheck")
+
+	minimalWork, _, minimalValid := costCtx.score(
+		idxDef, match.filterIdx, match.residualLeadingPos, encodedRegularIndexCostIndexOnly,
+	)
+	allLeadingWork, _, allLeadingValid := costCtx.score(
+		idxDef, match.filterIdx, match.filterIdx, encodedRegularIndexCostIndexOnly,
+	)
+	require.True(t, minimalValid)
+	require.True(t, allLeadingValid)
+	require.Less(t, minimalWork, allLeadingWork,
+		"candidate costing must not charge residual extraction that the plan does not materialize")
+}
+
+func TestRegularIndexCandidateRejectsEmptyParts(t *testing.T) {
+	filter := makeStringEqFilterExpr(0, 2, "READY")
+	filter.Selectivity = 0.01
+	builder, scanID, idxDef, colRefCnt := newEncodedIndexCostTestCase(
+		t,
+		nil,
+		[]*planpb.Expr{filter},
+		&planpb.Stats{TableCnt: 800_000, Outcnt: 8_000, Selectivity: 0.01, Cost: 800_000},
+		map[int32]int{2: 1},
+		false,
+	)
+	node := builder.qry.Nodes[scanID]
+	node.FilterList[0].GetF().Args[0].GetCol().RelPos = node.BindingTags[0]
+	node.TableDef.Indexes = []*planpb.IndexDef{idxDef}
+
+	require.NotPanics(t, func() {
+		resultID := builder.applyIndicesForFiltersRegularIndex(
+			scanID, node, colRefCnt, map[[2]int32]*planpb.Expr{},
+		)
+		require.Equal(t, scanID, resultID)
+	})
+}
+
+func TestEncodedIndexCostBoundaryControls(t *testing.T) {
+	wideParts := []string{
+		"category", "tenant_id", "event_time", "event_id",
+		catalog.CreateAlias(catalog.CPrimaryKeyColName),
+	}
+	newBroadCase := func(t testing.TB, tableCnt float64) (*QueryBuilder, int32, *planpb.IndexDef, map[[2]int32]int) {
+		filter := makeStringEqFilterExpr(0, 2, "HOT")
+		filter.Selectivity = 0.9
+		builder, scanID, idxDef, colRefCnt := newEncodedIndexCostTestCase(
+			t, wideParts, []*planpb.Expr{filter},
+			&planpb.Stats{TableCnt: tableCnt, Outcnt: tableCnt * 0.9, Selectivity: 0.9, Cost: tableCnt},
+			map[int32]int{1: 1, 2: 1}, false,
+		)
+		node := builder.qry.Nodes[scanID]
+		node.FilterList[0].GetF().Args[0].GetCol().RelPos = node.BindingTags[0]
+		if builder.indexHintsByScan == nil {
+			builder.indexHintsByScan = make(map[int32]*indexHintSet)
+		}
+		return builder, scanID, idxDef, colRefCnt
+	}
+
+	t.Run("missing SizeMap uses type fallback", func(t *testing.T) {
+		builder, scanID, idxDef, colRefCnt := newBroadCase(t, 800_000)
+		ctx := builder.compCtx.(*encodedIndexCostTestContext)
+		stats := NewStatsInfo()
+		stats.TableCnt = 800_000
+		ctx.statsCache.Set(encodedIndexCostUnitTableID, stats)
+		require.Equal(t, int32(-1), builder.tryIndexOnlyScan(idxDef, builder.qry.Nodes[scanID], colRefCnt, map[[2]int32]*planpb.Expr{}, &Snapshot{}))
+	})
+
+	t.Run("table threshold", func(t *testing.T) {
+		for _, test := range []struct {
+			name      string
+			tableCnt  float64
+			wantIndex bool
+		}{
+			{name: "49999 bypasses", tableCnt: 49_999, wantIndex: true},
+			{name: "50000 costs", tableCnt: 50_000},
+		} {
+			t.Run(test.name, func(t *testing.T) {
+				builder, scanID, idxDef, colRefCnt := newBroadCase(t, test.tableCnt)
+				idxNodeID := builder.tryIndexOnlyScan(idxDef, builder.qry.Nodes[scanID], colRefCnt, map[[2]int32]*planpb.Expr{}, &Snapshot{})
+				if test.wantIndex {
+					require.NotEqual(t, int32(-1), idxNodeID)
+				} else {
+					require.Equal(t, int32(-1), idxNodeID)
+				}
+			})
+		}
+	})
+
+	t.Run("invalid and extreme statistics fail open", func(t *testing.T) {
+		for _, test := range []struct {
+			name   string
+			mutate func(*planpb.Node)
+		}{
+			{name: "NaN table count", mutate: func(node *planpb.Node) { node.Stats.TableCnt = math.NaN() }},
+			{name: "positive infinity output", mutate: func(node *planpb.Node) { node.Stats.Outcnt = math.Inf(1) }},
+			{name: "negative infinity cost", mutate: func(node *planpb.Node) { node.Stats.Cost = math.Inf(-1) }},
+			{name: "NaN leading selectivity", mutate: func(node *planpb.Node) { node.FilterList[0].Selectivity = math.NaN() }},
+			{name: "infinite leading selectivity", mutate: func(node *planpb.Node) { node.FilterList[0].Selectivity = math.Inf(1) }},
+			{name: "extreme finite overflow", mutate: func(node *planpb.Node) {
+				node.Stats.TableCnt, node.Stats.Outcnt, node.Stats.Cost = math.MaxFloat64, math.MaxFloat64, math.MaxFloat64
+			}},
+		} {
+			t.Run(test.name, func(t *testing.T) {
+				builder, scanID, idxDef, colRefCnt := newBroadCase(t, 800_000)
+				node := builder.qry.Nodes[scanID]
+				test.mutate(node)
+				leadingPos, _ := findLeadingFilter(idxDef, node)
+				require.False(t, builder.shouldSkipEncodedIndexOnlyScan(idxDef, node, colRefCnt, leadingPos, false))
+			})
+		}
+	})
+
+	t.Run("extreme SizeMap remains finite and rejects broad index", func(t *testing.T) {
+		builder, scanID, idxDef, colRefCnt := newBroadCase(t, 800_000)
+		ctx := builder.compCtx.(*encodedIndexCostTestContext)
+		stats := NewStatsInfo()
+		stats.TableCnt = 800_000
+		stats.SizeMap = map[string]uint64{
+			"tenant_id": math.MaxUint64, "event_id": math.MaxUint64,
+			"category": math.MaxUint64, "event_time": math.MaxUint64,
+			catalog.CPrimaryKeyColName: math.MaxUint64,
+		}
+		ctx.statsCache.Set(encodedIndexCostUnitTableID, stats)
+		require.Equal(t, int32(-1), builder.tryIndexOnlyScan(idxDef, builder.qry.Nodes[scanID], colRefCnt, map[[2]int32]*planpb.Expr{}, &Snapshot{}))
+	})
+
+	t.Run("equal work rejects automatic index", func(t *testing.T) {
+		parts := []string{"tenant_id", catalog.CreateAlias(catalog.CPrimaryKeyColName)}
+		const tableCnt = 50_000.0
+		// The base scan reads tenant_id and evaluates one predicate. The hidden
+		// scan reads the 23-byte encoded key, emits tenant_id, and evaluates its
+		// lookup predicate. Construct the exact equality boundary from those
+		// independently known physical stages.
+		const baseRowWork = 4.0 + regularIndexPredicateRowWork
+		const candidateRowWork = 23.0 + 4.0 + regularIndexPredicateRowWork
+		candidateRows := tableCnt * baseRowWork / candidateRowWork
+		filter := makeRangeFilterExpr(0, 0, "=", 7)
+		filter.Selectivity = candidateRows / tableCnt
+		builder, scanID, idxDef, colRefCnt := newEncodedIndexCostTestCase(
+			t, parts, []*planpb.Expr{filter},
+			&planpb.Stats{TableCnt: tableCnt, Outcnt: candidateRows, Selectivity: filter.Selectivity, Cost: tableCnt},
+			map[int32]int{0: 1}, false,
+		)
+		node := builder.qry.Nodes[scanID]
+		node.FilterList[0].GetF().Args[0].GetCol().RelPos = node.BindingTags[0]
+		leadingPos := []int32{0}
+		costCtx := builder.newEncodedRegularIndexCostContext(node, colRefCnt)
+		work, skip, valid := costCtx.score(idxDef, leadingPos, nil, encodedRegularIndexCostIndexOnly)
+		require.True(t, valid)
+		require.InDelta(t, costCtx.baseWork, work, 1e-9)
+		require.True(t, skip)
+	})
+
+	t.Run("nullable PK leading residual charges physical column", func(t *testing.T) {
+		filter := makeParamEqFilterExpr(0, 4, 0)
+		filter.Selectivity = 0.3
+		builder, scanID, idxDef, colRefCnt := newEncodedIndexCostTestCase(
+			t,
+			[]string{catalog.CreateAlias(catalog.CPrimaryKeyColName), "tenant_id"},
+			[]*planpb.Expr{filter},
+			&planpb.Stats{TableCnt: 800_000, Outcnt: 240_000, Selectivity: 0.3, Cost: 800_000},
+			map[int32]int{4: 1},
+			false,
+		)
+		node := builder.qry.Nodes[scanID]
+		node.FilterList[0].GetF().Args[0].GetCol().RelPos = node.BindingTags[0]
+		leadingPos := []int32{0}
+		require.False(t, builder.shouldSkipEncodedIndexOnlyScan(idxDef, node, colRefCnt, leadingPos, false))
+		require.True(t, builder.shouldSkipEncodedIndexOnlyScan(idxDef, node, colRefCnt, leadingPos, true))
+	})
+
+	t.Run("scan hints", func(t *testing.T) {
+		t.Run("USE remains costed", func(t *testing.T) {
+			builder, scanID, idxDef, colRefCnt := newBroadCase(t, 800_000)
+			builder.indexHintsByScan[scanID] = &indexHintSet{scan: indexHintScopeSet{
+				useSpecified: true, use: map[string]struct{}{idxDef.IndexName: {}},
+			}}
+			require.Equal(t, int32(-1), builder.tryIndexOnlyScan(idxDef, builder.qry.Nodes[scanID], colRefCnt, map[[2]int32]*planpb.Expr{}, &Snapshot{}))
+		})
+		t.Run("IGNORE removes candidate", func(t *testing.T) {
+			builder, scanID, idxDef, _ := newBroadCase(t, 800_000)
+			builder.indexHintsByScan[scanID] = &indexHintSet{scan: indexHintScopeSet{
+				ignore: map[string]struct{}{idxDef.IndexName: {}},
+			}}
+			require.Empty(t, builder.filterRegularIndexesByScanHints(builder.qry.Nodes[scanID], []*planpb.IndexDef{idxDef}))
+		})
+		t.Run("FORCE bypasses cost", func(t *testing.T) {
+			builder, scanID, idxDef, colRefCnt := newBroadCase(t, 800_000)
+			builder.indexHintsByScan[scanID] = &indexHintSet{scan: indexHintScopeSet{
+				forceSpecified: true, force: map[string]struct{}{idxDef.IndexName: {}},
+			}}
+			require.NotEqual(t, int32(-1), builder.tryIndexOnlyScan(idxDef, builder.qry.Nodes[scanID], colRefCnt, map[[2]int32]*planpb.Expr{}, &Snapshot{}))
+		})
+	})
+
+	t.Run("index shape controls", func(t *testing.T) {
+		t.Run("non-covering index is rejected before costing", func(t *testing.T) {
+			filter := makeRangeFilterExpr(0, 0, "=", 7)
+			filter.Selectivity = 0.001
+			builder, scanID, idxDef, colRefCnt := newEncodedIndexCostTestCase(
+				t, []string{"tenant_id", catalog.CreateAlias(catalog.CPrimaryKeyColName)}, []*planpb.Expr{filter},
+				&planpb.Stats{TableCnt: 800_000, Outcnt: 800, Selectivity: 0.001, Cost: 800_000},
+				map[int32]int{0: 1, 1: 1}, false,
+			)
+			node := builder.qry.Nodes[scanID]
+			node.FilterList[0].GetF().Args[0].GetCol().RelPos = node.BindingTags[0]
+			require.Equal(t, int32(-1), builder.tryIndexOnlyScan(idxDef, node, colRefCnt, map[[2]int32]*planpb.Expr{}, &Snapshot{}))
+		})
+		t.Run("single-column unique index remains direct", func(t *testing.T) {
+			filter := makeRangeFilterExpr(0, 0, "=", 7)
+			filter.Selectivity = 0.9
+			builder, scanID, idxDef, colRefCnt := newEncodedIndexCostTestCase(
+				t, []string{"tenant_id"}, []*planpb.Expr{filter},
+				&planpb.Stats{TableCnt: 800_000, Outcnt: 720_000, Selectivity: 0.9, Cost: 800_000},
+				map[int32]int{0: 1}, false,
+			)
+			idxDef.Unique = true
+			node := builder.qry.Nodes[scanID]
+			node.FilterList[0].GetF().Args[0].GetCol().RelPos = node.BindingTags[0]
+			require.NotEqual(t, int32(-1), builder.tryIndexOnlyScan(idxDef, node, colRefCnt, map[[2]int32]*planpb.Expr{}, &Snapshot{}))
+		})
+		t.Run("single-user-column non-unique index keeps selective win", func(t *testing.T) {
+			filter := makeRangeFilterExpr(0, 0, "=", 7)
+			filter.Selectivity = 0.001
+			builder, scanID, idxDef, colRefCnt := newEncodedIndexCostTestCase(
+				t, []string{"tenant_id", catalog.CreateAlias(catalog.CPrimaryKeyColName)}, []*planpb.Expr{filter},
+				&planpb.Stats{TableCnt: 800_000, Outcnt: 800, Selectivity: 0.001, Cost: 800_000},
+				map[int32]int{0: 1}, false,
+			)
+			node := builder.qry.Nodes[scanID]
+			node.FilterList[0].GetF().Args[0].GetCol().RelPos = node.BindingTags[0]
+			require.NotEqual(t, int32(-1), builder.tryIndexOnlyScan(idxDef, node, colRefCnt, map[[2]int32]*planpb.Expr{}, &Snapshot{}))
+		})
+	})
+}
+
+func TestEncodedRegularIndexCostShapeAndPaginationControls(t *testing.T) {
+	wideParts := []string{
+		"category", "tenant_id", "event_time", "event_id",
+		catalog.CreateAlias(catalog.CPrimaryKeyColName),
+	}
+	newCase := func(t testing.TB, selectivity, outcnt, cost float64, force bool) (*QueryBuilder, *planpb.Node, *planpb.IndexDef, map[[2]int32]int) {
+		filter := makeStringEqFilterExpr(0, 2, "READY")
+		filter.Selectivity = selectivity
+		builder, scanID, idxDef, colRefCnt := newEncodedIndexCostTestCase(
+			t, wideParts, []*planpb.Expr{filter},
+			&planpb.Stats{TableCnt: 1_000_000, Outcnt: outcnt, Selectivity: selectivity, Cost: cost},
+			map[int32]int{1: 1, 2: 1}, force,
+		)
+		node := builder.qry.Nodes[scanID]
+		node.FilterList[0].GetF().Args[0].GetCol().RelPos = node.BindingTags[0]
+		return builder, node, idxDef, colRefCnt
+	}
+
+	t.Run("backfill sibling uses common decision", func(t *testing.T) {
+		for _, test := range []struct {
+			name        string
+			selectivity float64
+			outcnt      float64
+			force       bool
+			wantSkip    bool
+		}{
+			{name: "broad rejects", selectivity: 0.20, outcnt: 120_000, wantSkip: true},
+			{name: "selective wins", selectivity: 0.001, outcnt: 1_000},
+			{name: "force preserves broad", selectivity: 0.20, outcnt: 120_000, force: true},
+		} {
+			t.Run(test.name, func(t *testing.T) {
+				builder, node, idxDef, colRefCnt := newCase(t, test.selectivity, test.outcnt, 1_000_000, test.force)
+				require.Equal(t, test.wantSkip, builder.shouldSkipEncodedRegularIndex(
+					idxDef, node, colRefCnt, []int32{0}, false, encodedRegularIndexCostBackfill,
+				))
+			})
+		}
+	})
+
+	t.Run("exact leading pagination caps hidden candidates", func(t *testing.T) {
+		for _, test := range []struct {
+			name   string
+			limit  *planpb.Expr
+			offset *planpb.Expr
+			skip   bool
+		}{
+			{name: "without limit rejects", skip: true},
+			{name: "limit", limit: makePlan2Uint64ConstExprWithType(1_000)},
+			{name: "limit and offset", limit: makePlan2Uint64ConstExprWithType(1_000), offset: makePlan2Uint64ConstExprWithType(500)},
+		} {
+			t.Run(test.name, func(t *testing.T) {
+				builder, node, idxDef, colRefCnt := newCase(t, 0.05, 1_000, 24_576, false)
+				node.Limit, node.Offset = test.limit, test.offset
+				require.Equal(t, test.skip, builder.shouldSkipEncodedIndexOnlyScan(idxDef, node, colRefCnt, []int32{0}, false))
+			})
+		}
+	})
+
+	t.Run("unsafe pagination estimates use full candidate rows", func(t *testing.T) {
+		builder, node, idxDef, colRefCnt := newCase(t, 0.05, 1_000, 24_576, false)
+		node.Limit = &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_uint64)}, Expr: &planpb.Expr_P{P: &planpb.ParamRef{Pos: 0}}}
+		require.True(t, builder.shouldSkipEncodedIndexOnlyScan(idxDef, node, colRefCnt, []int32{0}, false))
+
+		residual := makeRangeFilterExpr(node.BindingTags[0], 0, ">=", 1)
+		residual.Selectivity = 0.5
+		node.FilterList = append(node.FilterList, residual)
+		node.Limit = makePlan2Uint64ConstExprWithType(1_000)
+		require.True(t, builder.shouldSkipEncodedIndexOnlyScan(idxDef, node, colRefCnt, []int32{0}, false))
+	})
+}
+
+func BenchmarkEncodedIndexCostWideTableMultiIndex(b *testing.B) {
+	filter := makeStringEqFilterExpr(0, 2, "HOT")
+	filter.Selectivity = 0.2
+	builder, scanID, _, colRefCnt := newEncodedIndexCostTestCase(
+		b,
+		[]string{"category", catalog.CreateAlias(catalog.CPrimaryKeyColName)},
+		[]*planpb.Expr{filter},
+		&planpb.Stats{TableCnt: 1_000_000, Outcnt: 200_000, Selectivity: 0.2, Cost: 1_000_000},
+		map[int32]int{1: 2, 2: 1},
+		false,
+	)
+	node := builder.qry.Nodes[scanID]
+	relPos := node.BindingTags[0]
+	node.FilterList[0].GetF().Args[0].GetCol().RelPos = relPos
+
+	ctx := builder.compCtx.(*encodedIndexCostTestContext)
+	statsWrapper := ctx.statsCache.Get(encodedIndexCostUnitTableID)
+	stats := statsWrapper.GetStats()
+	for colPos := len(node.TableDef.Cols); colPos < 128; colPos++ {
+		name := fmt.Sprintf("cost_col_%03d", colPos)
+		node.TableDef.Name2ColIndex[name] = int32(colPos)
+		node.TableDef.Cols = append(node.TableDef.Cols, &planpb.ColDef{
+			Name: name,
+			Typ:  planpb.Type{Id: int32(types.T_int64)},
+		})
+		stats.SizeMap[name] = 8_000_000
+	}
+
+	parts := []string{"category"}
+	for colPos := int32(5); colPos < 13; colPos++ {
+		name := node.TableDef.Cols[colPos].Name
+		parts = append(parts, name)
+		colRefCnt[[2]int32{relPos, colPos}] = 1
+		residual := makeRangeFilterExpr(relPos, colPos, ">=", 1)
+		residual.Selectivity = 0.5
+		node.FilterList = append(node.FilterList, residual)
+	}
+	parts = append(parts, catalog.CreateAlias(catalog.CPrimaryKeyColName))
+	indexes := make([]*planpb.IndexDef, 16)
+	for i := range indexes {
+		indexes[i] = &planpb.IndexDef{
+			IndexName: fmt.Sprintf("idx_cost_%02d", i),
+			Parts:     slices.Clone(parts),
+		}
+	}
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	rejected := false
+	for i := 0; i < b.N; i++ {
+		costCtx := builder.newEncodedRegularIndexCostContext(node, colRefCnt)
+		for _, idxDef := range indexes {
+			if _, skip, _ := costCtx.score(idxDef, []int32{0}, nil, encodedRegularIndexCostIndexOnly); skip {
+				rejected = true
+			}
+			if _, skip, _ := costCtx.score(idxDef, []int32{0}, nil, encodedRegularIndexCostBackfill); skip {
+				rejected = true
+			}
+		}
+	}
+	if !rejected {
+		b.Fatal("benchmark did not exercise the rejection path")
+	}
+}
+
+func newEncodedExistsPlanTestContext(stateNDV float64) *encodedIndexPlanTestContext {
+	const (
+		activityTableID uint64 = 20_001
+		tagsTableID     uint64 = 20_002
+		indexTableID    uint64 = 20_003
+	)
+	baseCtx := NewMockCompilerContext(true)
+	intType := planpb.Type{Id: int32(types.T_int32), NotNullable: true}
+	bigintType := planpb.Type{Id: int32(types.T_int64), NotNullable: true}
+	stateType := planpb.Type{Id: int32(types.T_varchar), Width: 12, NotNullable: true}
+	datetimeType := planpb.Type{Id: int32(types.T_datetime), NotNullable: true}
+	smallintType := planpb.Type{Id: int32(types.T_int16), NotNullable: true}
+	decimalType := planpb.Type{Id: int32(types.T_decimal64), Width: 12, Scale: 3, NotNullable: true}
+	amountType := planpb.Type{Id: int32(types.T_int64), NotNullable: true}
+	compoundType := planpb.Type{Id: int32(types.T_varchar), Width: types.MaxVarcharLen, NotNullable: true}
+	rowIDType := planpb.Type{Id: int32(types.T_Rowid), Width: 16, NotNullable: true}
+
+	activity := &planpb.TableDef{
+		TableType: catalog.SystemOrdinaryRel,
+		TblId:     activityTableID,
+		Name:      "cost_activity",
+		Cols: []*planpb.ColDef{
+			{ColId: 0, Name: "tenant_id", Typ: intType, Primary: true, Pkidx: 1, Default: &planpb.Default{}},
+			{ColId: 1, Name: "activity_id", Typ: bigintType, Primary: true, Pkidx: 2, Default: &planpb.Default{}},
+			{ColId: 2, Name: "state", Typ: stateType, Default: &planpb.Default{}},
+			{ColId: 3, Name: "created_at", Typ: datetimeType, Default: &planpb.Default{}},
+			{ColId: 4, Name: "amount", Typ: amountType, Default: &planpb.Default{}},
+			{ColId: 5, Name: catalog.CPrimaryKeyColName, Typ: compoundType, Hidden: true, Default: &planpb.Default{}},
+			{ColId: 6, Name: catalog.Row_ID, Typ: rowIDType, Hidden: true, Default: &planpb.Default{}},
+		},
+		Name2ColIndex: map[string]int32{
+			"tenant_id": 0, "activity_id": 1, "state": 2, "created_at": 3, "amount": 4,
+			catalog.CPrimaryKeyColName: 5, catalog.Row_ID: 6,
+		},
+		Pkey: &planpb.PrimaryKeyDef{
+			PkeyColName: catalog.CPrimaryKeyColName,
+			Cols:        []uint64{0, 1},
+			Names:       []string{"tenant_id", "activity_id"},
+			CompPkeyCol: &planpb.ColDef{Name: catalog.CPrimaryKeyColName, Typ: compoundType, Hidden: true},
+		},
+		Indexes: []*planpb.IndexDef{{
+			IndexName:      "idx_state_tenant_time_id",
+			IndexAlgo:      catalog.MoIndexDefaultAlgo.ToString(),
+			IndexTableName: "__mo_idx_state_tenant_time_id",
+			Parts: []string{
+				"state", "tenant_id", "created_at", "activity_id",
+				catalog.CreateAlias(catalog.CPrimaryKeyColName),
+			},
+			TableExist: true,
+		}},
+	}
+	tags := &planpb.TableDef{
+		TableType: catalog.SystemOrdinaryRel,
+		TblId:     tagsTableID,
+		Name:      "cost_tags",
+		Cols: []*planpb.ColDef{
+			{ColId: 0, Name: "tenant_id", Typ: intType, Primary: true, Pkidx: 1, Default: &planpb.Default{}},
+			{ColId: 1, Name: "activity_id", Typ: bigintType, Primary: true, Pkidx: 2, Default: &planpb.Default{}},
+			{ColId: 2, Name: "tag_id", Typ: smallintType, Primary: true, Pkidx: 3, Default: &planpb.Default{}},
+			{ColId: 3, Name: "weight", Typ: decimalType, Default: &planpb.Default{}},
+			{ColId: 4, Name: catalog.CPrimaryKeyColName, Typ: compoundType, Hidden: true, Default: &planpb.Default{}},
+			{ColId: 5, Name: catalog.Row_ID, Typ: rowIDType, Hidden: true, Default: &planpb.Default{}},
+		},
+		Name2ColIndex: map[string]int32{
+			"tenant_id": 0, "activity_id": 1, "tag_id": 2, "weight": 3,
+			catalog.CPrimaryKeyColName: 4, catalog.Row_ID: 5,
+		},
+		Pkey: &planpb.PrimaryKeyDef{
+			PkeyColName: catalog.CPrimaryKeyColName,
+			Cols:        []uint64{0, 1, 2},
+			Names:       []string{"tenant_id", "activity_id", "tag_id"},
+			CompPkeyCol: &planpb.ColDef{Name: catalog.CPrimaryKeyColName, Typ: compoundType, Hidden: true},
+		},
+	}
+	indexTable := makeTestIndexTableDef()
+	indexTable.TableType = catalog.SystemIndexRel
+	indexTable.TblId = indexTableID
+	indexTable.Name = activity.Indexes[0].IndexTableName
+	indexTable.Pkey = &planpb.PrimaryKeyDef{
+		PkeyColName: catalog.IndexTableIndexColName,
+		Cols:        []uint64{0},
+		Names:       []string{catalog.IndexTableIndexColName},
+	}
+
+	for _, tableDef := range []*planpb.TableDef{activity, tags, indexTable} {
+		baseCtx.objects[tableDef.Name] = &planpb.ObjectRef{SchemaName: "tpch", ObjName: tableDef.Name, Obj: int64(tableDef.TblId)}
+		baseCtx.tables[tableDef.Name] = tableDef
+		baseCtx.id2name[tableDef.TblId] = tableDef.Name
+	}
+	baseCtx.pks[activity.Name] = []int{0, 1}
+	baseCtx.pks[tags.Name] = []int{0, 1, 2}
+	baseCtx.pks[indexTable.Name] = []int{0}
+
+	activityStats := NewStatsInfo()
+	activityStats.TableCnt = 600_000
+	activityStats.BlockNumber = 120
+	activityStats.AccurateObjectNumber = 1
+	activityStats.NdvMap = map[string]float64{
+		"tenant_id": 64, "activity_id": 600_000, "state": stateNDV,
+		"created_at": 600_000, "amount": 100_000, catalog.CPrimaryKeyColName: 600_000,
+	}
+	activityStats.MinValMap = map[string]float64{"tenant_id": 1, "activity_id": 1}
+	activityStats.MaxValMap = map[string]float64{"tenant_id": 64, "activity_id": 600_000}
+	activityStats.SizeMap = map[string]uint64{
+		"tenant_id": 600_000 * 4, "activity_id": 600_000 * 8,
+		"state": 600_000 * 5, "created_at": 600_000 * 8, "amount": 600_000 * 8,
+		catalog.CPrimaryKeyColName: 600_000 * 14,
+	}
+	tagsStats := NewStatsInfo()
+	tagsStats.TableCnt = 1_200_000
+	tagsStats.BlockNumber = 240
+	tagsStats.AccurateObjectNumber = 1
+	tagsStats.NdvMap = map[string]float64{
+		"tenant_id": 64, "activity_id": 600_000, "tag_id": 2, "weight": 10_000,
+		catalog.CPrimaryKeyColName: 1_200_000,
+	}
+	tagsStats.MinValMap = map[string]float64{"tenant_id": 1, "activity_id": 1, "tag_id": 1, "weight": 0}
+	tagsStats.MaxValMap = map[string]float64{"tenant_id": 64, "activity_id": 600_000, "tag_id": 2, "weight": 100}
+	tagsStats.SizeMap = map[string]uint64{
+		"tenant_id": 1_200_000 * 4, "activity_id": 1_200_000 * 8,
+		"tag_id": 1_200_000 * 2, "weight": 1_200_000 * 8,
+		catalog.CPrimaryKeyColName: 1_200_000 * 17,
+	}
+	indexStats := NewStatsInfo()
+	indexStats.TableCnt = 600_000
+	indexStats.BlockNumber = 120
+	indexStats.AccurateObjectNumber = 1
+	indexStats.NdvMap = map[string]float64{catalog.IndexTableIndexColName: 600_000, catalog.IndexTablePrimaryColName: 600_000}
+	indexStats.SizeMap = map[string]uint64{catalog.IndexTableIndexColName: 600_000 * 52, catalog.IndexTablePrimaryColName: 600_000 * 14}
+
+	statsCache := NewStatsCache()
+	statsByID := map[uint64]*statspb.StatsInfo{
+		activityTableID: activityStats,
+		tagsTableID:     tagsStats,
+		indexTableID:    indexStats,
+	}
+	for tableID, stats := range statsByID {
+		statsCache.Set(tableID, stats)
+	}
+	return &encodedIndexPlanTestContext{MockCompilerContext: baseCtx, statsCache: statsCache, statsByID: statsByID}
+}
+
+func addCostActivityRegularIndex(t testing.TB, ctx *encodedIndexPlanTestContext, name string, parts []string, first bool) {
+	t.Helper()
+	activity := ctx.tables["cost_activity"]
+	require.NotNil(t, activity)
+	idxDef := &planpb.IndexDef{
+		IndexName: name, IndexAlgo: catalog.MoIndexDefaultAlgo.ToString(),
+		IndexTableName: "__mo_" + name, Parts: slices.Clone(parts), TableExist: true,
+	}
+	if first {
+		activity.Indexes = append([]*planpb.IndexDef{idxDef}, activity.Indexes...)
+	} else {
+		activity.Indexes = append(activity.Indexes, idxDef)
+	}
+
+	indexTable := makeTestIndexTableDef()
+	indexTable.TableType = catalog.SystemIndexRel
+	indexTable.TblId = uint64(21_000 + len(ctx.statsByID))
+	indexTable.Name = idxDef.IndexTableName
+	indexTable.Pkey = &planpb.PrimaryKeyDef{
+		PkeyColName: catalog.IndexTableIndexColName,
+		Cols:        []uint64{0},
+		Names:       []string{catalog.IndexTableIndexColName},
+	}
+	ctx.objects[indexTable.Name] = &planpb.ObjectRef{SchemaName: "tpch", ObjName: indexTable.Name, Obj: int64(indexTable.TblId)}
+	ctx.tables[indexTable.Name] = indexTable
+	ctx.id2name[indexTable.TblId] = indexTable.Name
+	ctx.pks[indexTable.Name] = []int{0}
+	stats := NewStatsInfo()
+	stats.TableCnt = 600_000
+	stats.BlockNumber = 120
+	stats.AccurateObjectNumber = 1
+	stats.NdvMap = map[string]float64{catalog.IndexTableIndexColName: 600_000, catalog.IndexTablePrimaryColName: 600_000}
+	stats.SizeMap = map[string]uint64{catalog.IndexTableIndexColName: 600_000 * 24, catalog.IndexTablePrimaryColName: 600_000 * 14}
+	ctx.statsByID[indexTable.TblId] = stats
+	ctx.statsCache.Set(indexTable.TblId, stats)
+}
+
+func TestEncodedIndexCostChoosesProfitableSiblingIndependentOfDDLOrder(t *testing.T) {
+	narrowParts := []string{"state", catalog.CreateAlias(catalog.CPrimaryKeyColName)}
+	for _, query := range []struct {
+		name string
+		sql  string
+	}{
+		{name: "point backfill", sql: "select amount from cost_activity where state = 'READY'"},
+		{name: "range backfill", sql: "select amount from cost_activity where state between 'HOLD' and 'READY'"},
+	} {
+		for _, narrowFirst := range []bool{true, false} {
+			order := "wide first"
+			if narrowFirst {
+				order = "narrow first"
+			}
+			t.Run(query.name+"/"+order, func(t *testing.T) {
+				ctx := newEncodedExistsPlanTestContext(6)
+				addCostActivityRegularIndex(t, ctx, "idx_state_narrow", narrowParts, narrowFirst)
+				optimizer := &encodedIndexPlanTestOptimizer{ctx: ctx}
+				queryPlan, err := runOneStmt(optimizer, t, query.sql)
+				require.NoError(t, err)
+				require.Equal(t, "idx_state_narrow", findFirstIndexScanName(queryPlan))
+				require.True(t, planHasIndexJoin(queryPlan))
+			})
+		}
+	}
+}
+
+func TestEncodedIndexCostChoosesNarrowCoveringSiblingIndependentOfDDLOrder(t *testing.T) {
+	wideParts := []string{
+		"state", "tenant_id", "created_at", "activity_id",
+		catalog.CreateAlias(catalog.CPrimaryKeyColName),
+	}
+	narrowParts := []string{"state", catalog.CreateAlias(catalog.CPrimaryKeyColName)}
+	for _, narrowFirst := range []bool{true, false} {
+		order := "wide first"
+		if narrowFirst {
+			order = "narrow first"
+		}
+		t.Run(order, func(t *testing.T) {
+			ctx := newEncodedExistsPlanTestContext(100)
+			ctx.tables["cost_activity"].Indexes = nil
+			addCostActivityRegularIndex(t, ctx, "idx_state_narrow_covering", narrowParts, narrowFirst)
+			addCostActivityRegularIndex(t, ctx, "idx_state_wide_covering", wideParts, !narrowFirst)
+
+			queryPlan, err := runOneStmt(&encodedIndexPlanTestOptimizer{ctx: ctx}, t,
+				"select state from cost_activity where state = 'READY'")
+			require.NoError(t, err)
+			require.Equal(t, "idx_state_narrow_covering", findFirstIndexScanName(queryPlan))
+			require.False(t, planHasIndexJoin(queryPlan))
+		})
+	}
+}
+
+func TestEncodedIndexCostChoosesAcrossCoveringAndBackfill(t *testing.T) {
+	ctx := newEncodedExistsPlanTestContext(50)
+	ctx.tables["cost_activity"].Indexes = nil
+	addCostActivityRegularIndex(t, ctx, "idx_state_wide_covering", []string{
+		"state", "tenant_id", "created_at", "activity_id", "amount",
+		catalog.CreateAlias(catalog.CPrimaryKeyColName),
+	}, false)
+	addCostActivityRegularIndex(t, ctx, "idx_state_narrow_backfill", []string{
+		"state", catalog.CreateAlias(catalog.CPrimaryKeyColName),
+	}, false)
+
+	queryPlan, err := runOneStmt(&encodedIndexPlanTestOptimizer{ctx: ctx}, t,
+		"select amount from cost_activity where state = 'READY'")
+	require.NoError(t, err)
+	require.Equal(t, "idx_state_narrow_backfill", findFirstIndexScanName(queryPlan))
+	require.True(t, planHasIndexJoin(queryPlan))
+}
+
+func TestEncodedIndexCostChoosesAcrossPointAndRange(t *testing.T) {
+	ctx := newEncodedExistsPlanTestContext(6)
+	activity := ctx.tables["cost_activity"]
+	activity.Indexes = nil
+	stats := ctx.statsByID[activity.TblId]
+	stats.NdvMap["amount"] = stats.TableCnt
+	stats.MinValMap["amount"] = 0
+	stats.MaxValMap["amount"] = stats.TableCnt
+	addCostActivityRegularIndex(t, ctx, "idx_state_point", []string{
+		"state", "tenant_id", catalog.CreateAlias(catalog.CPrimaryKeyColName),
+	}, false)
+	addCostActivityRegularIndex(t, ctx, "idx_amount_range", []string{
+		"amount", catalog.CreateAlias(catalog.CPrimaryKeyColName),
+	}, false)
+
+	queryPlan, err := runOneStmt(&encodedIndexPlanTestOptimizer{ctx: ctx}, t, `
+		select state, amount
+		from cost_activity
+		where state = 'READY' and amount between 1 and 1000`)
+	require.NoError(t, err)
+	require.Equal(t, "idx_amount_range", findFirstIndexScanName(queryPlan))
+	require.True(t, planHasIndexJoin(queryPlan))
+}
+
+func TestEncodedIndexCostPreparedRangeDoesNotOutrankEqualityByHeuristic(t *testing.T) {
+	const tableCnt = 300_000
+	for _, equalityFirst := range []bool{true, false} {
+		order := "range index first"
+		if equalityFirst {
+			order = "equality index first"
+		}
+		t.Run(order, func(t *testing.T) {
+			ctx := newEncodedExistsPlanTestContext(10)
+			activity := ctx.tables["cost_activity"]
+			activity.Indexes = nil
+			stats := ctx.statsByID[activity.TblId]
+			stats.TableCnt = tableCnt
+			stats.BlockNumber = 60
+			stats.NdvMap["state"] = 5_000
+			stats.NdvMap["amount"] = tableCnt
+			stats.MinValMap["amount"] = 0
+			stats.MaxValMap["amount"] = tableCnt
+			stats.SizeMap = map[string]uint64{
+				"tenant_id": tableCnt * 4, "activity_id": tableCnt * 8,
+				"state": tableCnt * 5, "created_at": tableCnt * 8, "amount": tableCnt * 8,
+				catalog.CPrimaryKeyColName: tableCnt * 14,
+			}
+
+			equalityParts := []string{
+				"state", "amount", catalog.CreateAlias(catalog.CPrimaryKeyColName),
+			}
+			rangeParts := []string{
+				"amount", "state", catalog.CreateAlias(catalog.CPrimaryKeyColName),
+			}
+			if equalityFirst {
+				addCostActivityRegularIndex(t, ctx, "idx_state_amount_pk", equalityParts, false)
+				addCostActivityRegularIndex(t, ctx, "idx_amount_state_pk", rangeParts, false)
+			} else {
+				addCostActivityRegularIndex(t, ctx, "idx_amount_state_pk", rangeParts, false)
+				addCostActivityRegularIndex(t, ctx, "idx_state_amount_pk", equalityParts, false)
+			}
+
+			optimizer := &encodedIndexPlanTestOptimizer{ctx: ctx}
+			literalPlan, err := runOneStmt(optimizer, t, `
+				select state from cost_activity
+				where state = 'READY' and amount between 1000 and 5000`)
+			require.NoError(t, err)
+			require.Equal(t, "idx_state_amount_pk", findFirstIndexScanName(literalPlan))
+
+			preparePlan, err := runOneStmt(optimizer, t,
+				"prepare cost_parameter_range from 'select state from cost_activity where state = ? and amount between ? and ?'")
+			require.NoError(t, err)
+			preparedPlan := resolveQueryPlan(preparePlan)
+			preparedIndex := findFirstIndexScanNode(preparedPlan)
+			require.NotNil(t, preparedIndex)
+			require.Equal(t, "idx_state_amount_pk", preparedIndex.IndexScanInfo.IndexName)
+			hasParamRef := false
+			for _, filter := range preparedIndex.FilterList {
+				hasParamRef = hasParamRef || containsDynamicParam(filter)
+			}
+			require.True(t, hasParamRef, "the prepared public plan must retain ParamRefs")
+		})
+	}
+}
+
+func TestEncodedIndexCostKeepsCatalogOrderOnEqualScore(t *testing.T) {
+	for _, first := range []string{"idx_state_a", "idx_state_b"} {
+		t.Run(first, func(t *testing.T) {
+			ctx := newEncodedExistsPlanTestContext(100)
+			ctx.tables["cost_activity"].Indexes = nil
+			second := "idx_state_b"
+			if first == second {
+				second = "idx_state_a"
+			}
+			parts := []string{"state", catalog.CreateAlias(catalog.CPrimaryKeyColName)}
+			addCostActivityRegularIndex(t, ctx, first, parts, false)
+			addCostActivityRegularIndex(t, ctx, second, parts, false)
+
+			queryPlan, err := runOneStmt(&encodedIndexPlanTestOptimizer{ctx: ctx}, t,
+				"select state from cost_activity where state = 'READY'")
+			require.NoError(t, err)
+			require.Equal(t, first, findFirstIndexScanName(queryPlan))
+		})
+	}
+}
+
+func TestEncodedIndexCostPrefersValidCandidateOverUnscorable(t *testing.T) {
+	invalidParts := []string{
+		"state", "missing_catalog_column", catalog.CreateAlias(catalog.CPrimaryKeyColName),
+	}
+	validParts := []string{"amount", catalog.CreateAlias(catalog.CPrimaryKeyColName)}
+	for _, invalidFirst := range []bool{true, false} {
+		order := "valid first"
+		if invalidFirst {
+			order = "invalid first"
+		}
+		t.Run(order, func(t *testing.T) {
+			ctx := newEncodedExistsPlanTestContext(600_000)
+			ctx.tables["cost_activity"].Indexes = nil
+			stats := ctx.statsByID[ctx.tables["cost_activity"].TblId]
+			stats.NdvMap["amount"] = 600_000
+			if invalidFirst {
+				addCostActivityRegularIndex(t, ctx, "idx_state_unscorable", invalidParts, false)
+				addCostActivityRegularIndex(t, ctx, "idx_amount_valid", validParts, false)
+			} else {
+				addCostActivityRegularIndex(t, ctx, "idx_amount_valid", validParts, false)
+				addCostActivityRegularIndex(t, ctx, "idx_state_unscorable", invalidParts, false)
+			}
+
+			queryPlan, err := runOneStmt(&encodedIndexPlanTestOptimizer{ctx: ctx}, t, `
+				select created_at
+				from cost_activity
+				where state = 'READY' and amount = 1`)
+			require.NoError(t, err)
+			require.Equal(t, "idx_amount_valid", findFirstIndexScanName(queryPlan))
+			require.True(t, planHasIndexJoin(queryPlan))
+		})
+	}
+}
+
+func TestEncodedIndexCostDoesNotFallbackToUnscorableWhenValidCandidateRejects(t *testing.T) {
+	invalidParts := []string{
+		"state", "missing_catalog_column", catalog.CreateAlias(catalog.CPrimaryKeyColName),
+	}
+	validParts := []string{"amount", catalog.CreateAlias(catalog.CPrimaryKeyColName)}
+	for _, invalidFirst := range []bool{true, false} {
+		order := "valid first"
+		if invalidFirst {
+			order = "invalid first"
+		}
+		t.Run(order, func(t *testing.T) {
+			ctx := newEncodedExistsPlanTestContext(1_000)
+			ctx.tables["cost_activity"].Indexes = nil
+			stats := ctx.statsByID[ctx.tables["cost_activity"].TblId]
+			stats.NdvMap["amount"] = 10
+			if invalidFirst {
+				addCostActivityRegularIndex(t, ctx, "idx_state_unscorable", invalidParts, false)
+				addCostActivityRegularIndex(t, ctx, "idx_amount_valid_broad", validParts, false)
+			} else {
+				addCostActivityRegularIndex(t, ctx, "idx_amount_valid_broad", validParts, false)
+				addCostActivityRegularIndex(t, ctx, "idx_state_unscorable", invalidParts, false)
+			}
+
+			queryPlan, err := runOneStmt(&encodedIndexPlanTestOptimizer{ctx: ctx}, t, `
+				select activity_id
+				from cost_activity
+				where state = 'READY'
+				  and amount = 1
+				  and created_at = '2026-08-09 00:00:00'`)
+			require.NoError(t, err)
+			require.Empty(t, findFirstIndexScanName(queryPlan),
+				"an unscorable fallback is allowed only when every matching candidate is unscorable")
+			require.False(t, planHasIndexJoin(queryPlan))
+		})
+	}
+}
+
+func TestEncodedIndexCostKeepsCatalogFallbackWhenAllCandidatesUnscorable(t *testing.T) {
+	ctx := newEncodedExistsPlanTestContext(600_000)
+	ctx.tables["cost_activity"].Indexes = nil
+	stats := ctx.statsByID[ctx.tables["cost_activity"].TblId]
+	stats.NdvMap["amount"] = 600_000
+	addCostActivityRegularIndex(t, ctx, "idx_state_unscorable", []string{
+		"state", "missing_state_suffix", catalog.CreateAlias(catalog.CPrimaryKeyColName),
+	}, false)
+	addCostActivityRegularIndex(t, ctx, "idx_amount_unscorable", []string{
+		"amount", "missing_amount_suffix", catalog.CreateAlias(catalog.CPrimaryKeyColName),
+	}, false)
+
+	queryPlan, err := runOneStmt(&encodedIndexPlanTestOptimizer{ctx: ctx}, t, `
+		select created_at
+		from cost_activity
+		where state = 'READY' and amount = 1`)
+	require.NoError(t, err)
+	require.Equal(t, "idx_state_unscorable", findFirstIndexScanName(queryPlan))
+	require.True(t, planHasIndexJoin(queryPlan))
+}
+
+func TestEncodedIndexCostChargesBaseRecheckedPushablePredicates(t *testing.T) {
+	ctx := newEncodedExistsPlanTestContext(3.5)
+	activity := ctx.tables["cost_activity"]
+	activity.Indexes = nil
+	stats := ctx.statsByID[activity.TblId]
+	stats.NdvMap["amount"] = 10
+	stats.MinValMap["amount"] = 0
+	stats.MaxValMap["amount"] = 10
+	addCostActivityRegularIndex(t, ctx, "idx_state_amount", []string{
+		"state", "amount", catalog.CreateAlias(catalog.CPrimaryKeyColName),
+	}, false)
+
+	queryPlan, err := runOneStmt(&encodedIndexPlanTestOptimizer{ctx: ctx}, t, `
+		select activity_id
+		from cost_activity
+		where state = 'READY' and amount >= 1`)
+	require.NoError(t, err)
+	require.Empty(t, findFirstIndexScanName(queryPlan),
+		"a hidden residual copy does not remove the predicate from the base child")
+	require.False(t, planHasIndexJoin(queryPlan))
+}
+
+func TestEncodedIndexDuplicatePartsUseCanonicalFilterMapping(t *testing.T) {
+	ctx := newEncodedExistsPlanTestContext(1_000)
+	ctx.tables["cost_activity"].Indexes = nil
+	addCostActivityRegularIndex(t, ctx, "idx_state_repeated", []string{
+		"state", "state", "activity_id", catalog.CreateAlias(catalog.CPrimaryKeyColName),
+	}, false)
+
+	preparePlan, err := runOneStmt(&encodedIndexPlanTestOptimizer{ctx: ctx}, t,
+		"prepare cost_repeat from 'select 1 from cost_activity where state = ?'")
+	require.NoError(t, err)
+	queryPlan := resolveQueryPlan(preparePlan)
+	idxNode := findFirstIndexScanNode(queryPlan)
+	require.NotNil(t, idxNode)
+	require.Equal(t, "idx_state_repeated", idxNode.IndexScanInfo.IndexName)
+	require.Len(t, idxNode.FilterList, 2, "lookup plus one canonical nullable residual")
+	assert.InDelta(t, 0.001, idxNode.FilterList[0].Selectivity, 1e-12)
+	assert.InDelta(t, 1.0, idxNode.FilterList[1].Selectivity, 1e-12,
+		"a semantic recheck must not reduce candidate cardinality a second time")
+	assert.InDelta(t, 600.0, idxNode.Stats.Outcnt, 1e-9)
+	assert.Equal(t, 1, countExprFunctionCalls(idxNode.FilterList, "serial_extract"))
+	assert.Equal(t, 2, firstIndexLookupSerialArgCount(queryPlan),
+		"duplicate physical parts still require duplicate encoded lookup arguments")
+}
+
+func countExprFunctionCalls(exprs []*planpb.Expr, name string) int {
+	count := 0
+	var visit func(*planpb.Expr)
+	visit = func(expr *planpb.Expr) {
+		if expr == nil {
+			return
+		}
+		switch impl := expr.Expr.(type) {
+		case *planpb.Expr_F:
+			if impl.F.Func != nil && impl.F.Func.ObjName == name {
+				count++
+			}
+			for _, arg := range impl.F.Args {
+				visit(arg)
+			}
+		case *planpb.Expr_List:
+			for _, arg := range impl.List.List {
+				visit(arg)
+			}
+		case *planpb.Expr_W:
+			visit(impl.W.WindowFunc)
+			for _, arg := range impl.W.PartitionBy {
+				visit(arg)
+			}
+			for _, orderBy := range impl.W.OrderBy {
+				visit(orderBy.Expr)
+			}
+		}
+	}
+	for _, expr := range exprs {
+		visit(expr)
+	}
+	return count
+}
+
+func newEncodedPaginationPlanTestContext(t testing.TB, stateNDV float64) *encodedIndexPlanTestContext {
+	t.Helper()
+	ctx := newEncodedExistsPlanTestContext(stateNDV)
+	activity := ctx.tables["cost_activity"]
+	activity.Indexes = nil
+	stats := ctx.statsByID[activity.TblId]
+	stats.NdvMap["amount"] = 100
+	stats.MinValMap["amount"] = 0
+	stats.MaxValMap["amount"] = 100
+	addCostActivityRegularIndex(t, ctx, "idx_state_amount_activity", []string{
+		"state", "amount", "activity_id", catalog.CreateAlias(catalog.CPrimaryKeyColName),
+	}, false)
+	return ctx
+}
+
+func TestEncodedIndexCostDoesNotCapResidualLimit(t *testing.T) {
+	ctx := newEncodedPaginationPlanTestContext(t, 3)
+	queryPlan, err := runOneStmt(&encodedIndexPlanTestOptimizer{ctx: ctx}, t, `
+		select amount, activity_id
+		from cost_activity
+		where state = 'READY' and amount between 1 and 90
+		order by amount, activity_id
+		limit 1000`)
+	require.NoError(t, err)
+	assert.Empty(t, findFirstIndexScanName(queryPlan))
+	assert.False(t, planHasIndexJoin(queryPlan))
+}
+
+func TestEncodedIndexCostDoesNotCapPreparedLimit(t *testing.T) {
+	ctx := newEncodedPaginationPlanTestContext(t, 2)
+	preparePlan, err := runOneStmt(&encodedIndexPlanTestOptimizer{ctx: ctx}, t,
+		"prepare cost_limit from 'select state from cost_activity where state = ''READY'' limit ?'")
+	require.NoError(t, err)
+	queryPlan := resolveQueryPlan(preparePlan)
+	require.Empty(t, findFirstIndexScanName(queryPlan))
+	assert.False(t, planHasIndexJoin(queryPlan))
+}
+
+func TestEncodedIndexCostDoesNotCapOverflowingOffset(t *testing.T) {
+	ctx := newEncodedPaginationPlanTestContext(t, 2)
+	queryPlan, err := runOneStmt(&encodedIndexPlanTestOptimizer{ctx: ctx}, t, `
+		select state
+		from cost_activity
+		where state = 'READY'
+		limit 18446744073709551615 offset 1`)
+	require.NoError(t, err)
+	require.Empty(t, findFirstIndexScanName(queryPlan))
+	assert.False(t, planHasIndexJoin(queryPlan))
+}
+
+func TestEncodedIndexCostForceBypassesUnsafePaginationGuard(t *testing.T) {
+	ctx := newEncodedPaginationPlanTestContext(t, 2)
+	queryPlan, err := runOneStmt(&encodedIndexPlanTestOptimizer{ctx: ctx}, t, `
+		select amount, activity_id
+		from cost_activity force index (idx_state_amount_activity)
+		where state = 'READY' and amount between 1 and 90
+		limit 1000`)
+	require.NoError(t, err)
+	require.Equal(t, "idx_state_amount_activity", findFirstIndexScanName(queryPlan))
+}
+
+func TestForceIndexPreservesCoveringShapeOverCheaperBackfill(t *testing.T) {
+	filter := makeParamEqFilterExpr(0, 2, 0)
+	filter.Selectivity = 0.1
+	builder, scanID, idxDef, colRefCnt := newEncodedIndexCostTestCase(
+		t,
+		[]string{"category", catalog.CreateAlias(catalog.CPrimaryKeyColName)},
+		[]*planpb.Expr{filter},
+		&planpb.Stats{TableCnt: 800_000, Outcnt: 80_000, Selectivity: 0.1, Cost: 800_000},
+		map[int32]int{2: 10}, true,
+	)
+	node := builder.qry.Nodes[scanID]
+	node.TableDef.Indexes = []*planpb.IndexDef{idxDef}
+	node.FilterList[0].GetF().Args[0].GetCol().RelPos = node.BindingTags[0]
+
+	costCtx := builder.newEncodedRegularIndexCostContext(node, colRefCnt)
+	covering, ok := builder.matchRegularIndexOnlyScan(idxDef, node, costCtx)
+	require.True(t, ok)
+	backfillFilters := costCtx.matchPointBackfill(idxDef, true)
+	require.NotEmpty(t, backfillFilters)
+	coveringWork, _, coveringValid := costCtx.score(
+		idxDef, covering.filterIdx, covering.residualLeadingPos, encodedRegularIndexCostIndexOnly,
+	)
+	backfillWork, _, backfillValid := costCtx.score(
+		idxDef, backfillFilters, nil, encodedRegularIndexCostBackfill,
+	)
+	require.True(t, coveringValid)
+	require.True(t, backfillValid)
+	require.Less(t, backfillWork, coveringWork)
+
+	resultID := builder.applyIndicesForFiltersRegularIndex(
+		scanID, node, colRefCnt, map[[2]int32]*planpb.Expr{},
+	)
+	result := builder.qry.Nodes[resultID]
+	require.Equal(t, planpb.Node_TABLE_SCAN, result.NodeType)
+	require.True(t, result.IndexScanInfo.IsIndexScan)
+	require.Equal(t, idxDef.IndexName, result.IndexScanInfo.IndexName)
+}
+
+func TestSmallTablePreservesCoveringShapeOverCheaperBackfill(t *testing.T) {
+	filter := makeStringEqFilterExpr(0, 2, "joce")
+	filter.Selectivity = 0.1
+	builder, scanID, idxDef, colRefCnt := newEncodedIndexCostTestCase(
+		t,
+		[]string{"category", "event_id"},
+		[]*planpb.Expr{filter},
+		&planpb.Stats{TableCnt: 1_000, Outcnt: 100, Selectivity: 0.1, Cost: 1_000},
+		map[int32]int{1: 1}, false,
+	)
+	node := builder.qry.Nodes[scanID]
+	node.TableDef.Pkey = &planpb.PrimaryKeyDef{PkeyColName: "event_id", Names: []string{"event_id"}}
+	node.TableDef.Cols[2].Typ = planpb.Type{Id: int32(types.T_char), Width: 35}
+	statsWrapper := builder.compCtx.(*encodedIndexCostTestContext).
+		statsCache.Get(encodedIndexCostUnitTableID)
+	stats := statsWrapper.GetStats()
+	stats.SizeMap["category"] = uint64(stats.TableCnt) * 35
+	node.TableDef.Indexes = []*planpb.IndexDef{idxDef}
+	node.FilterList[0].GetF().Args[0].GetCol().RelPos = node.BindingTags[0]
+
+	costCtx := builder.newEncodedRegularIndexCostContext(node, colRefCnt)
+	covering, ok := builder.matchRegularIndexOnlyScan(idxDef, node, costCtx)
+	require.True(t, ok)
+	require.Equal(t, []int32{0}, covering.residualLeadingPos)
+	backfillFilters := costCtx.matchPointBackfill(idxDef, true)
+	require.NotEmpty(t, backfillFilters)
+	coveringWork, _, coveringValid := costCtx.score(
+		idxDef, covering.filterIdx, covering.residualLeadingPos, encodedRegularIndexCostIndexOnly,
+	)
+	backfillWork, _, backfillValid := costCtx.score(
+		idxDef, backfillFilters, nil, encodedRegularIndexCostBackfill,
+	)
+	require.True(t, coveringValid)
+	require.True(t, backfillValid)
+	require.Less(t, backfillWork, coveringWork,
+		"the regression requires cross-shape scoring to prefer backfill")
+
+	resultID := builder.applyIndicesForFiltersRegularIndex(
+		scanID, node, colRefCnt, map[[2]int32]*planpb.Expr{},
+	)
+	result := builder.qry.Nodes[resultID]
+	require.Equal(t, planpb.Node_TABLE_SCAN, result.NodeType)
+	require.True(t, result.IndexScanInfo.IsIndexScan)
+	require.Equal(t, idxDef.IndexName, result.IndexScanInfo.IndexName)
+}
+
+func TestEncodedIndexCostChargesUnpushableResidualOnBackfillCandidates(t *testing.T) {
+	leading := makeStringEqFilterExpr(0, 2, "READY")
+	leading.Selectivity = 0.25
+	residual := makeRangeFilterExpr(0, 3, "=", 7)
+	residual.Selectivity = 0.0005
+	builder, scanID, idxDef, colRefCnt := newEncodedIndexCostTestCase(
+		t,
+		[]string{"category", catalog.CreateAlias(catalog.CPrimaryKeyColName)},
+		[]*planpb.Expr{leading, residual},
+		&planpb.Stats{TableCnt: 800_000, Outcnt: 100, Selectivity: 0.000125, Cost: 400_000},
+		map[int32]int{1: 1}, false,
+	)
+	node := builder.qry.Nodes[scanID]
+	for _, filter := range node.FilterList {
+		filter.GetF().Args[0].GetCol().RelPos = node.BindingTags[0]
+	}
+	require.True(t, builder.shouldSkipEncodedRegularIndex(
+		idxDef, node, colRefCnt, []int32{0}, false, encodedRegularIndexCostBackfill,
+	))
+}
+
+func TestEncodedIndexCostDoesNotCreditLossyPrefixResidualPushdown(t *testing.T) {
+	leading := makeStringEqFilterExpr(0, 2, "READY")
+	leading.Selectivity = 0.25
+	residual := makeStringEqFilterExpr(0, 3, "2026-08-10T12:00:00")
+	residual.Selectivity = 0.0001
+	builder, scanID, idxDef, colRefCnt := newEncodedIndexCostTestCase(
+		t,
+		[]string{"category", "event_time", catalog.CreateAlias(catalog.CPrimaryKeyColName)},
+		[]*planpb.Expr{leading, residual},
+		&planpb.Stats{TableCnt: 800_000, Outcnt: 20, Selectivity: 0.000025, Cost: 760_000},
+		map[int32]int{1: 1}, false,
+	)
+	prefixParams, err := catalog.IndexParamsMapToJsonString(map[string]string{
+		catalog.IndexAlgoParamPrefixLengths: "event_time:4",
+	})
+	require.NoError(t, err)
+	idxDef.IndexAlgoParams = prefixParams
+	node := builder.qry.Nodes[scanID]
+	node.TableDef.Cols[3].Typ = planpb.Type{Id: int32(types.T_varchar), Width: 64}
+	for _, filter := range node.FilterList {
+		filter.GetF().Args[0].GetCol().RelPos = node.BindingTags[0]
+	}
+
+	costCtx := builder.newEncodedRegularIndexCostContext(node, colRefCnt)
+	work, reject, valid := costCtx.score(
+		idxDef, []int32{0}, nil, encodedRegularIndexCostBackfill,
+	)
+	require.True(t, valid)
+	require.True(t, reject,
+		"a lossy prefix residual must not make an otherwise expensive backfill look selective: work=%v base=%v", work, costCtx.baseWork)
+
+	residual.Selectivity = 1
+	controlWork, controlReject, controlValid := costCtx.score(
+		idxDef, []int32{0}, nil, encodedRegularIndexCostBackfill,
+	)
+	require.True(t, controlValid)
+	require.True(t, controlReject)
+	require.Equal(t, controlWork, work,
+		"cost must be invariant to the selectivity of a residual the index table cannot evaluate")
+
+	idxTableNode := &planpb.Node{
+		TableDef:    makeTestIndexTableDef(),
+		BindingTags: []int32{builder.genNewBindTag()},
+	}
+	builder.applyExtraFiltersOnIndex(idxDef, node, idxTableNode, []int32{0})
+	require.Empty(t, idxTableNode.FilterList,
+		"the physical plan must agree with the cost model and leave the lossy predicate on the base scan")
+}
+
+func TestEncodedIndexCostChargesSerializedSimplePKResidual(t *testing.T) {
+	leading := makeStringEqFilterExpr(0, 2, "READY")
+	leading.Selectivity = 0.5
+	residual := makeRangeFilterExpr(0, 1, "=", 7)
+	residual.Selectivity = 0.0001
+	builder, scanID, idxDef, colRefCnt := newEncodedIndexCostTestCase(
+		t,
+		[]string{"category", catalog.CreateAlias("event_id")},
+		[]*planpb.Expr{leading, residual},
+		&planpb.Stats{TableCnt: 800_000, Outcnt: 40, Selectivity: 0.00005, Cost: 800_000},
+		map[int32]int{0: 1}, false,
+	)
+	node := builder.qry.Nodes[scanID]
+	node.TableDef.Pkey = &planpb.PrimaryKeyDef{PkeyColName: "event_id", Names: []string{"event_id"}}
+	for _, filter := range node.FilterList {
+		filter.GetF().Args[0].GetCol().RelPos = node.BindingTags[0]
+	}
+
+	idxTableNode := &planpb.Node{
+		TableDef:    makeTestIndexTableDef(),
+		BindingTags: []int32{builder.genNewBindTag()},
+	}
+	builder.applyExtraFiltersOnIndex(idxDef, node, idxTableNode, []int32{0})
+	require.Len(t, idxTableNode.FilterList, 1)
+	mapped := idxTableNode.FilterList[0].GetF().Args[0]
+	require.Equal(t, "serial_extract", wrappedSerialFuncName(t, mapped))
+	require.Equal(t, int32(0), mapped.GetF().Args[0].GetCol().ColPos,
+		"the appended simple PK is encoded in index-table column 0")
+
+	_, reject, valid := builder.newEncodedRegularIndexCostContext(node, colRefCnt).score(
+		idxDef, []int32{0}, nil, encodedRegularIndexCostBackfill,
+	)
+	require.True(t, valid)
+	require.True(t, reject,
+		"cost must include the serial_extract that the physical plan materializes")
+}
+
+func TestEncodedIndexCostCountsConsumersAfterProjectionElimination(t *testing.T) {
+	optimizer := &encodedIndexPlanTestOptimizer{ctx: newEncodedExistsPlanTestContext(20)}
+	queryPlan, err := runOneStmt(optimizer, t, `
+		select activity_alias, activity_alias, activity_alias, activity_alias, activity_alias
+		from (
+			select activity_id as activity_alias, state
+			from cost_activity
+		) derived
+		where state = 'READY'`)
+	require.NoError(t, err)
+	require.Equal(t, "idx_state_tenant_time_id", findFirstIndexScanName(queryPlan))
+	require.True(t, planHasIndexJoin(queryPlan))
+	require.Zero(t, countPlanFunctionCalls(queryPlan, "serial_extract"))
+}
+
+func TestEncodedIndexCostChargesCompoundPKResidualExtraction(t *testing.T) {
+	leading := makeStringEqFilterExpr(0, 2, "READY")
+	leading.Selectivity = 0.25
+	residual := makeIntInFilterExpr(0, 0, 7, 8)
+	residual.Selectivity = 0.0005
+	builder, scanID, idxDef, colRefCnt := newEncodedIndexCostTestCase(
+		t,
+		[]string{"category", catalog.CreateAlias(catalog.CPrimaryKeyColName)},
+		[]*planpb.Expr{leading, residual},
+		&planpb.Stats{TableCnt: 800_000, Outcnt: 100, Selectivity: 0.000125, Cost: 500_000},
+		map[int32]int{1: 1}, false,
+	)
+	node := builder.qry.Nodes[scanID]
+	for _, filter := range node.FilterList {
+		filter.GetF().Args[0].GetCol().RelPos = node.BindingTags[0]
+	}
+	require.True(t, builder.shouldSkipEncodedRegularIndex(
+		idxDef, node, colRefCnt, []int32{0}, false, encodedRegularIndexCostBackfill,
+	))
+}
+
+func TestEncodedIndexCostDeduplicatesRepeatedLeadingFilterSelectivity(t *testing.T) {
+	filter := makeStringEqFilterExpr(0, 2, "READY")
+	filter.Selectivity = 0.1
+	builder, scanID, idxDef, colRefCnt := newEncodedIndexCostTestCase(
+		t,
+		[]string{"category", "category", "tenant_id", "event_time", "event_id", catalog.CreateAlias(catalog.CPrimaryKeyColName)},
+		[]*planpb.Expr{filter},
+		&planpb.Stats{TableCnt: 800_000, Outcnt: 1_000, Selectivity: 0.00125, Cost: 350_000},
+		map[int32]int{1: 1, 2: 1}, false,
+	)
+	node := builder.qry.Nodes[scanID]
+	node.FilterList[0].GetF().Args[0].GetCol().RelPos = node.BindingTags[0]
+	require.True(t, builder.shouldSkipEncodedIndexOnlyScan(idxDef, node, colRefCnt, []int32{0, 0}, false))
+}
+
+func countPlanFunctionCalls(queryPlan *Plan, name string) int {
+	var countExpr func(*planpb.Expr) int
+	countExpr = func(expr *planpb.Expr) int {
+		if expr == nil {
+			return 0
+		}
+		count := 0
+		switch impl := expr.Expr.(type) {
+		case *planpb.Expr_F:
+			if impl.F.Func != nil && impl.F.Func.ObjName == name {
+				count++
+			}
+			for _, arg := range impl.F.Args {
+				count += countExpr(arg)
+			}
+		case *planpb.Expr_List:
+			for _, arg := range impl.List.List {
+				count += countExpr(arg)
+			}
+		case *planpb.Expr_W:
+			count += countExpr(impl.W.WindowFunc)
+			for _, arg := range impl.W.PartitionBy {
+				count += countExpr(arg)
+			}
+			for _, orderBy := range impl.W.OrderBy {
+				count += countExpr(orderBy.Expr)
+			}
+		}
+		return count
+	}
+
+	count := 0
+	for _, node := range queryPlan.GetQuery().Nodes {
+		for _, exprs := range [][]*planpb.Expr{
+			node.ProjectList, node.OnList, node.FilterList, node.GroupBy,
+			node.AggList, node.WinSpecList,
+		} {
+			for _, expr := range exprs {
+				count += countExpr(expr)
+			}
+		}
+		for _, orderBy := range node.OrderBy {
+			count += countExpr(orderBy.Expr)
+		}
+	}
+	return count
+}
+
+func countIndexFilterSerialExtractsFromPhysicalPK(queryPlan *Plan) int {
+	count := 0
+	var visit func(*planpb.Expr)
+	visit = func(expr *planpb.Expr) {
+		if expr == nil {
+			return
+		}
+		fn := expr.GetF()
+		if fn == nil {
+			return
+		}
+		if fn.Func != nil && fn.Func.ObjName == "serial_extract" && len(fn.Args) > 0 {
+			if col := fn.Args[0].GetCol(); col != nil && col.ColPos == 1 {
+				count++
+			}
+		}
+		for _, arg := range fn.Args {
+			visit(arg)
+		}
+	}
+	for _, node := range queryPlan.GetQuery().Nodes {
+		if node.IndexScanInfo.GetIsIndexScan() {
+			for _, filter := range node.FilterList {
+				visit(filter)
+			}
+		}
+	}
+	return count
+}
+
+func firstIndexLookupSerialArgCount(queryPlan *Plan) int {
+	for _, node := range queryPlan.GetQuery().Nodes {
+		if !node.IndexScanInfo.GetIsIndexScan() || len(node.FilterList) == 0 {
+			continue
+		}
+		lookup := node.FilterList[0].GetF()
+		if lookup == nil || len(lookup.Args) < 2 {
+			continue
+		}
+		serial := lookup.Args[1].GetF()
+		if serial != nil && serial.Func != nil && (serial.Func.ObjName == "serial" || serial.Func.ObjName == "serial_full") {
+			return len(serial.Args)
+		}
+	}
+	return 0
+}
+
+func TestEncodedIndexCostChargesUnpushableResidualFromPublicPlan(t *testing.T) {
+	ctx := newEncodedExistsPlanTestContext(5)
+	activity := ctx.tables["cost_activity"]
+	activity.Indexes = nil
+	stats := ctx.statsByID[activity.TblId]
+	stats.NdvMap["amount"] = 6_000
+	stats.SizeMap["amount"] = uint64(stats.TableCnt) * 16
+	stats.SizeMap["state"] = uint64(stats.TableCnt)
+	stats.SizeMap[catalog.CPrimaryKeyColName] = uint64(stats.TableCnt)
+	addCostActivityRegularIndex(t, ctx, "idx_state_narrow",
+		[]string{"state", catalog.CreateAlias(catalog.CPrimaryKeyColName)}, true)
+
+	optimizer := &encodedIndexPlanTestOptimizer{ctx: ctx}
+	queryPlan, err := runOneStmt(optimizer, t,
+		"select activity_id from cost_activity where state = 'READY' and amount = 7")
+	require.NoError(t, err)
+	require.Empty(t, findFirstIndexScanName(queryPlan))
+	require.False(t, planHasIndexJoin(queryPlan))
+}
+
+func TestEncodedIndexCostChargesCompoundPKExtractionFromPublicPlan(t *testing.T) {
+	ctx := newEncodedExistsPlanTestContext(1_000)
+	activity := ctx.tables["cost_activity"]
+	activity.Indexes = nil
+	stats := ctx.statsByID[activity.TblId]
+	stats.NdvMap["tenant_id"] = 1_000
+	stats.SizeMap["tenant_id"] = uint64(stats.TableCnt) * 16
+	stats.SizeMap["state"] = uint64(stats.TableCnt)
+	stats.SizeMap[catalog.CPrimaryKeyColName] = uint64(stats.TableCnt)
+	addCostActivityRegularIndex(t, ctx, "idx_state_narrow",
+		[]string{"state", catalog.CreateAlias(catalog.CPrimaryKeyColName)}, true)
+
+	optimizer := &encodedIndexPlanTestOptimizer{ctx: ctx}
+	queryPlan, err := runOneStmt(optimizer, t,
+		"select amount from cost_activity where state = 'READY' and tenant_id != 7")
+	require.NoError(t, err)
+	require.Equal(t, "idx_state_narrow", findFirstIndexScanName(queryPlan))
+	require.True(t, planHasIndexJoin(queryPlan))
+	require.Greater(t, countIndexFilterSerialExtractsFromPhysicalPK(queryPlan), 0,
+		"the public witness must reach applyExtraFiltersOnIndex's compound-PK extraction")
+}
+
+func TestEncodedIndexCostDeduplicatesRepeatedLeadingPartFromPublicPlan(t *testing.T) {
+	ctx := newEncodedExistsPlanTestContext(10)
+	activity := ctx.tables["cost_activity"]
+	activity.Indexes = nil
+	ctx.statsByID[activity.TblId].NdvMap["amount"] = 100
+	addCostActivityRegularIndex(t, ctx, "idx_state_repeated",
+		[]string{
+			"state", "state",
+			"created_at", "tenant_id", "activity_id",
+			catalog.CreateAlias(catalog.CPrimaryKeyColName),
+		}, true)
+
+	optimizer := &encodedIndexPlanTestOptimizer{ctx: ctx}
+	queryPlan, err := runOneStmt(optimizer, t,
+		"select activity_id from cost_activity where state = 'READY' and amount = 7")
+	require.NoError(t, err)
+	require.Equal(t, "idx_state_repeated", findFirstIndexScanName(queryPlan))
+	require.True(t, planHasIndexJoin(queryPlan))
+	require.Equal(t, 2, firstIndexLookupSerialArgCount(queryPlan),
+		"the public matcher must expose the duplicate leading filter identity")
+}
+
+func TestEncodedIndexCostIsReachableFromExistsPlan(t *testing.T) {
+	const query = `
+		select count(*), coalesce(sum(a.activity_id), 0)
+		from cost_activity a
+		where a.tenant_id between 7 and 23
+		  and a.state = 'READY'
+		  and exists (
+			select 1 from cost_tags t
+			where t.tenant_id = a.tenant_id
+			  and t.activity_id = a.activity_id
+			  and t.tag_id = 2
+			  and t.weight >= 50.000
+		  )`
+
+	tests := []struct {
+		name      string
+		stateNDV  float64
+		wantIndex bool
+	}{
+		{name: "broad state rejects encoded index", stateNDV: 2},
+		{name: "selective state keeps encoded index", stateNDV: 1000, wantIndex: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			optimizer := &encodedIndexPlanTestOptimizer{ctx: newEncodedExistsPlanTestContext(test.stateNDV)}
+			queryPlan, err := runOneStmt(optimizer, t, query)
+			require.NoError(t, err)
+			if test.wantIndex {
+				require.Equal(t, "idx_state_tenant_time_id", findFirstIndexScanName(queryPlan))
+				require.GreaterOrEqual(t, countPlanFunctionCalls(queryPlan, "serial_extract"), 1)
+			} else {
+				require.Empty(t, findFirstIndexScanName(queryPlan))
+				require.Zero(t, countPlanFunctionCalls(queryPlan, "serial_extract"))
+			}
+		})
+	}
+}
+
+func TestEncodedIndexCostRejectsBroadBackfillSiblingFromPublicPlan(t *testing.T) {
+	const query = `
+		select a.state, count(*), coalesce(sum(a.amount), 0)
+		from cost_activity a
+		where a.tenant_id between 7 and 23
+		  and a.state in ('READY', 'HOLD')
+		  and exists (
+			select 1 from cost_tags t
+			where t.tenant_id = a.tenant_id
+			  and t.activity_id = a.activity_id
+			  and t.tag_id = 2
+			  and t.weight >= 50.000
+		  )
+		group by a.state
+		order by sum(a.amount) desc
+		limit 20`
+
+	for _, test := range []struct {
+		name      string
+		stateNDV  float64
+		wantIndex bool
+	}{
+		{name: "broad predicate rejects covering and backfill siblings", stateNDV: 2},
+		{name: "selective predicate keeps backfill index join", stateNDV: 1000, wantIndex: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			optimizer := &encodedIndexPlanTestOptimizer{ctx: newEncodedExistsPlanTestContext(test.stateNDV)}
+			queryPlan, err := runOneStmt(optimizer, t, query)
+			require.NoError(t, err)
+			if test.wantIndex {
+				require.Equal(t, "idx_state_tenant_time_id", findFirstIndexScanName(queryPlan))
+				require.True(t, planHasIndexJoin(queryPlan))
+			} else {
+				require.Empty(t, findFirstIndexScanName(queryPlan))
+				require.False(t, planHasIndexJoin(queryPlan))
+				require.Zero(t, countPlanFunctionCalls(queryPlan, "serial_extract"))
+			}
+		})
+	}
+}
+
+func TestEncodedIndexCostKeepsExactLeadingPaginationFromPublicPlan(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		pagination string
+		wantOffset uint64
+	}{
+		{name: "limit", pagination: "limit 1000"},
+		{name: "limit with offset", pagination: "limit 1000 offset 500", wantOffset: 500},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			ctx := newEncodedExistsPlanTestContext(20)
+			ctx.tables["cost_activity"].Indexes = nil
+			addCostActivityRegularIndex(t, ctx, "idx_amount_activity", []string{
+				"amount", "activity_id", catalog.CreateAlias(catalog.CPrimaryKeyColName),
+			}, false)
+			optimizer := &encodedIndexPlanTestOptimizer{ctx: ctx}
+			queryPlan, err := runOneStmt(optimizer, t,
+				"select activity_id from cost_activity where amount = 7 "+test.pagination)
+			require.NoError(t, err)
+			idxNode := findFirstIndexScanNode(queryPlan)
+			require.NotNil(t, idxNode)
+			require.Equal(t, "idx_amount_activity", idxNode.IndexScanInfo.IndexName)
+			limit, ok := getLiteralUint64(idxNode.Limit)
+			require.True(t, ok)
+			require.Equal(t, uint64(1000), limit)
+			if test.wantOffset == 0 {
+				require.Nil(t, idxNode.Offset)
+			} else {
+				offset, ok := getLiteralUint64(idxNode.Offset)
+				require.True(t, ok)
+				require.Equal(t, test.wantOffset, offset)
+			}
+		})
+	}
+}
+
+func TestEncodedIndexCostDoesNotCapByteStringPrefixResidualFromPublicPlan(t *testing.T) {
+	optimizer := &encodedIndexPlanTestOptimizer{ctx: newEncodedExistsPlanTestContext(20)}
+	queryPlan, err := runOneStmt(optimizer, t,
+		"select activity_id from cost_activity where state = 'READY' limit 1000 offset 500")
+	require.NoError(t, err)
+	require.Empty(t, findFirstIndexScanName(queryPlan),
+		"a byte-string prefix candidate needs an exact residual before pagination")
+	require.False(t, planHasIndexJoin(queryPlan))
+}
+
+func TestTryIndexOnlyScanChargesResidualExtractionOnLeadingCandidates(t *testing.T) {
+	parts := []string{
+		"category",
+		"tenant_id",
+		"event_time",
+		"event_id",
+		catalog.CreateAlias(catalog.CPrimaryKeyColName),
+	}
+	tests := []struct {
+		name       string
+		leadingSel float64
+		outcnt     float64
+		wantIndex  bool
+	}{
+		{name: "narrow disjoint prefix wins", leadingSel: 0.01, outcnt: 0, wantIndex: true},
+		{name: "broad correlated prefix loses despite small output", leadingSel: 0.2, outcnt: 800},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			categoryFilter := makeStringEqFilterExpr(0, 2, "category")
+			categoryFilter.Selectivity = test.leadingSel
+			eventFilter := makeRangeFilterExpr(0, 1, ">=", 1)
+			eventFilter.Selectivity = 0.01
+			builder, scanID, idxDef, colRefCnt := newEncodedIndexCostTestCase(
+				t,
+				parts,
+				[]*planpb.Expr{categoryFilter, eventFilter},
+				&planpb.Stats{TableCnt: 800_000, Outcnt: test.outcnt, Selectivity: test.outcnt / 800_000, Cost: 800_000},
+				map[int32]int{0: 1, 2: 1},
+				false,
+			)
+			bindTag := builder.qry.Nodes[scanID].BindingTags[0]
+			for _, filter := range builder.qry.Nodes[scanID].FilterList {
+				filter.GetF().Args[0].GetCol().RelPos = bindTag
+			}
+
+			idxNodeID := builder.tryIndexOnlyScan(idxDef, builder.qry.Nodes[scanID], colRefCnt, map[[2]int32]*planpb.Expr{}, &Snapshot{})
+			if test.wantIndex {
+				require.NotEqual(t, int32(-1), idxNodeID)
+			} else {
+				require.Equal(t, int32(-1), idxNodeID)
+			}
+		})
+	}
 }
 
 func TestSuspendScanProtection_RestoresExactCount(t *testing.T) {
@@ -2052,6 +4993,9 @@ func TestFindMatchFullTextIndexRequiresScanBindingAndConstantMode(t *testing.T) 
 
 	matched := builder.findMatchFullTextIndex(makeFullTextMatchExpr("hello", 0, ftDef, ftTag, []int32{2, 3}).GetF(), scan)
 	require.NotNil(t, matched)
+	catalog.SetIndexVisibility(ftDef.Indexes[0], false)
+	require.Nil(t, builder.findMatchFullTextIndex(makeFullTextMatchExpr("hello", 0, ftDef, ftTag, []int32{2, 3}).GetF(), scan))
+	catalog.SetIndexVisibility(ftDef.Indexes[0], true)
 
 	crossTableExpr := makeFullTextMatchExpr("hello", 0, ftDef, ftTag, []int32{2})
 	crossTableExpr.GetF().Args = append(crossTableExpr.GetF().Args, &planpb.Expr{
@@ -3569,6 +6513,214 @@ func TestGetIndexForNonEquiCond_DetectsPairedRangeOnIndexColumn(t *testing.T) {
 	require.ElementsMatch(t, []int32{0, 1}, filterIdx)
 }
 
+func TestGetIndexForNonEquiCondSkipsNonEqualityOnDeclaredPrefix(t *testing.T) {
+	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true), false, true)
+	bindTag := builder.genNewBindTag()
+	prefixParams := `{"prefix_lengths":"name:3"}`
+	makeIndex := func(unique bool, parts []string, params string) *planpb.IndexDef {
+		return &planpb.IndexDef{
+			IndexName:       "idx_name",
+			Parts:           parts,
+			Unique:          unique,
+			IndexTableName:  "__mo_index_secondary_idx_name",
+			IndexAlgoParams: params,
+		}
+	}
+	makeOr := func(args ...*planpb.Expr) *planpb.Expr {
+		return &planpb.Expr{
+			Expr: &planpb.Expr_F{F: &planpb.Function{
+				Func: &planpb.ObjectRef{ObjName: "or"},
+				Args: args,
+			}},
+		}
+	}
+	makeInRange := func() *planpb.Expr {
+		expr := makeStringBetweenFilterExpr(bindTag, 1, "abcX", "abdA")
+		expr.GetF().Func.ObjName = "in_range"
+		return expr
+	}
+
+	tests := []struct {
+		name        string
+		idxDef      *planpb.IndexDef
+		filters     []*planpb.Expr
+		wantIdx     int
+		wantFilters []int32
+	}{
+		{
+			name:    "non-unique prefix between",
+			idxDef:  makeIndex(false, []string{"name", catalog.FakePrimaryKeyColName}, prefixParams),
+			filters: []*planpb.Expr{makeStringBetweenFilterExpr(bindTag, 1, "abcX", "abdA")},
+			wantIdx: -1,
+		},
+		{
+			name:    "unique prefix between",
+			idxDef:  makeIndex(true, []string{"name"}, prefixParams),
+			filters: []*planpb.Expr{makeStringBetweenFilterExpr(bindTag, 1, "abcX", "abdA")},
+			wantIdx: -1,
+		},
+		{
+			name:    "prefix single lower bound",
+			idxDef:  makeIndex(false, []string{"name", catalog.FakePrimaryKeyColName}, prefixParams),
+			filters: []*planpb.Expr{makeRangeFilterExpr(bindTag, 1, ">=", 99)},
+			wantIdx: -1,
+		},
+		{
+			name:   "prefix paired range",
+			idxDef: makeIndex(false, []string{"name", catalog.FakePrimaryKeyColName}, prefixParams),
+			filters: []*planpb.Expr{
+				makeRangeFilterExpr(bindTag, 1, ">=", 99),
+				makeRangeFilterExpr(bindTag, 1, "<=", 299),
+			},
+			wantIdx: -1,
+		},
+		{
+			name:    "prefix in range",
+			idxDef:  makeIndex(false, []string{"name", catalog.FakePrimaryKeyColName}, prefixParams),
+			filters: []*planpb.Expr{makeInRange()},
+			wantIdx: -1,
+		},
+		{
+			name:   "prefix or containing range",
+			idxDef: makeIndex(false, []string{"name", catalog.FakePrimaryKeyColName}, prefixParams),
+			filters: []*planpb.Expr{makeOr(
+				makeStringBetweenFilterExpr(bindTag, 1, "abcX", "abdA"),
+				makeStringInFilterExpr(bindTag, 1, "abe"),
+			)},
+			wantIdx: -1,
+		},
+		{
+			name:    "prefix in is rejected with other non equality predicates",
+			idxDef:  makeIndex(false, []string{"name", catalog.FakePrimaryKeyColName}, prefixParams),
+			filters: []*planpb.Expr{makeStringInFilterExpr(bindTag, 1, "abcX", "abdA")},
+			wantIdx: -1,
+		},
+		{
+			name:        "complete index between remains eligible",
+			idxDef:      makeIndex(false, []string{"name", catalog.FakePrimaryKeyColName}, ""),
+			filters:     []*planpb.Expr{makeStringBetweenFilterExpr(bindTag, 1, "abcX", "abdA")},
+			wantIdx:     0,
+			wantFilters: []int32{0},
+		},
+		{
+			name:    "non-leading declared prefix also rejects range",
+			idxDef:  makeIndex(false, []string{"name", "suffix", catalog.FakePrimaryKeyColName}, `{"prefix_lengths":"suffix:3"}`),
+			filters: []*planpb.Expr{makeStringBetweenFilterExpr(bindTag, 1, "abcX", "abdA")},
+			wantIdx: -1,
+		},
+		{
+			name:    "invalid prefix metadata fails closed for range",
+			idxDef:  makeIndex(false, []string{"name", catalog.FakePrimaryKeyColName}, "{bad json"),
+			filters: []*planpb.Expr{makeStringBetweenFilterExpr(bindTag, 1, "abcX", "abdA")},
+			wantIdx: -1,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			node := &planpb.Node{
+				BindingTags: []int32{bindTag},
+				TableDef: &planpb.TableDef{
+					Name2ColIndex: map[string]int32{
+						catalog.FakePrimaryKeyColName: 0,
+						"name":                        1,
+						"suffix":                      2,
+					},
+					Cols: []*planpb.ColDef{
+						{Name: catalog.FakePrimaryKeyColName, Typ: planpb.Type{Id: int32(types.T_uint64)}},
+						{Name: "name", Typ: planpb.Type{Id: int32(types.T_varchar)}},
+						{Name: "suffix", Typ: planpb.Type{Id: int32(types.T_varchar)}},
+					},
+					Pkey:    &planpb.PrimaryKeyDef{PkeyColName: catalog.FakePrimaryKeyColName},
+					Indexes: []*planpb.IndexDef{tt.idxDef},
+				},
+				FilterList: tt.filters,
+			}
+
+			idxPos, filterIdx := builder.getIndexForNonEquiCond([]*planpb.IndexDef{tt.idxDef}, node)
+			require.Equal(t, tt.wantIdx, idxPos)
+			require.ElementsMatch(t, tt.wantFilters, filterIdx)
+		})
+	}
+}
+
+func TestGetIndexForNonEquiCondUsesCompleteRangeIndexAlternative(t *testing.T) {
+	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true), false, true)
+	bindTag := builder.genNewBindTag()
+	prefixIdx := &planpb.IndexDef{
+		IndexName:       "idx_name_prefix",
+		Parts:           []string{"name", catalog.FakePrimaryKeyColName},
+		IndexTableName:  "__mo_index_secondary_idx_name_prefix",
+		IndexAlgoParams: `{"prefix_lengths":"name:3"}`,
+	}
+	completeIdx := &planpb.IndexDef{
+		IndexName:      "idx_name_complete",
+		Parts:          []string{"name", catalog.FakePrimaryKeyColName},
+		IndexTableName: "__mo_index_secondary_idx_name_complete",
+	}
+
+	for _, tt := range []struct {
+		name    string
+		indexes []*planpb.IndexDef
+		wantIdx int
+	}{
+		{name: "prefix then complete", indexes: []*planpb.IndexDef{prefixIdx, completeIdx}, wantIdx: 1},
+		{name: "complete then prefix", indexes: []*planpb.IndexDef{completeIdx, prefixIdx}, wantIdx: 0},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			node := &planpb.Node{
+				TableDef: &planpb.TableDef{
+					Name2ColIndex: map[string]int32{
+						catalog.FakePrimaryKeyColName: 0,
+						"name":                        1,
+					},
+					Cols: []*planpb.ColDef{
+						{Name: catalog.FakePrimaryKeyColName, Typ: planpb.Type{Id: int32(types.T_uint64)}},
+						{Name: "name", Typ: planpb.Type{Id: int32(types.T_varchar)}},
+					},
+					Indexes: tt.indexes,
+				},
+				FilterList: []*planpb.Expr{
+					makeStringBetweenFilterExpr(bindTag, 1, "abcX", "abdA"),
+				},
+			}
+
+			idxPos, filterIdx := builder.getIndexForNonEquiCond(tt.indexes, node)
+			require.Equal(t, tt.wantIdx, idxPos)
+			require.Equal(t, []int32{0}, filterIdx)
+		})
+	}
+}
+
+func TestScopedForceHintsRejectLossyPrefixIndex(t *testing.T) {
+	tests := []struct {
+		name string
+		sql  string
+	}{
+		{
+			name: "order by",
+			sql:  "select id from index_hint_t force index for order by(idx_a) where a between 'abcX' and 'abdA' order by a",
+		},
+		{
+			name: "group by",
+			sql:  "select a, count(*) from index_hint_t force index for group by(idx_a) where a between 'abcX' and 'abdA' group by a",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			mock := NewMockOptimizer(true)
+			addIndexHintChoiceTableForTest(mock)
+			tableDef := mock.ctxt.tables["index_hint_t"]
+			tableDef.Cols[1].Typ = planpb.Type{Id: int32(types.T_varchar), Width: 32}
+			tableDef.Indexes[0].IndexAlgoParams = `{"prefix_lengths":"a:3"}`
+
+			queryPlan, err := runOneStmt(mock, t, test.sql)
+			require.NoError(t, err)
+			require.Empty(t, findFirstIndexScanName(queryPlan))
+		})
+	}
+}
 func TestGetIndexForNonEquiCond_SkipsLargePairedRangeByStats(t *testing.T) {
 	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true), false, true)
 	bindTag := builder.genNewBindTag()
@@ -3624,6 +6776,111 @@ func TestIndexTableLookupSerialFunc(t *testing.T) {
 	}))
 }
 
+func TestRegularIndexPrefixMetadataUsable(t *testing.T) {
+	tests := []struct {
+		name   string
+		parts  []string
+		params string
+		want   bool
+	}{
+		{name: "no prefix metadata", parts: []string{"name"}, want: true},
+		{name: "matching legacy metadata", parts: []string{"name"}, params: `{"prefix_lengths":"name:4"}`, want: true},
+		{name: "matching v2 metadata", parts: []string{"head:line"}, params: `{"prefix_lengths_v2":"{\"head:line\":4}"}`, want: true},
+		{name: "non-canonical case fails closed", parts: []string{"name"}, params: `{"prefix_lengths":"Name:4"}`, want: false},
+		{name: "stale renamed part", parts: []string{"renamed"}, params: `{"prefix_lengths":"name:4"}`, want: false},
+		{name: "malformed metadata", parts: []string{"name"}, params: `{"prefix_lengths":"name:0"}`, want: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			require.Equal(t, tt.want, regularIndexPrefixMetadataUsable(&planpb.IndexDef{
+				Parts:           tt.parts,
+				IndexAlgoParams: tt.params,
+			}))
+		})
+	}
+
+	fullIndex := &planpb.IndexDef{TableExist: true, Parts: []string{"name"}}
+	prefixIndex := &planpb.IndexDef{TableExist: true, Parts: []string{"name"}, IndexAlgoParams: `{"prefix_lengths":"name:4"}`}
+	staleIndex := &planpb.IndexDef{TableExist: true, Parts: []string{"renamed"}, IndexAlgoParams: `{"prefix_lengths":"name:4"}`}
+	require.True(t, usableRegularHintIndex(fullIndex))
+	require.False(t, usableRegularHintIndex(prefixIndex))
+	require.False(t, usableRegularHintIndex(staleIndex))
+	require.NoError(t, validateRegularIndexPrefixMetadata(prefixIndex))
+	require.ErrorContains(t, validateRegularIndexPrefixMetadata(staleIndex), "rebuild the index")
+	require.ErrorContains(t, validateTableRegularIndexPrefixMetadata(&planpb.TableDef{
+		Indexes: []*planpb.IndexDef{staleIndex},
+	}), "rebuild the index")
+	catalog.SetIndexVisibility(staleIndex, false)
+	require.ErrorContains(t, validateTableRegularIndexPrefixMetadata(&planpb.TableDef{
+		Indexes: []*planpb.IndexDef{staleIndex},
+	}), "rebuild the index", "optimizer visibility must not bypass index-maintenance validation")
+}
+
+func TestGetIndexForNonEquiCondSkipsDeclaredPrefixIndexes(t *testing.T) {
+	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true), false, true)
+	bindTag := builder.genNewBindTag()
+	node := &planpb.Node{
+		BindingTags: []int32{bindTag},
+		TableDef: &planpb.TableDef{
+			Name2ColIndex: map[string]int32{"id": 0, "name": 1},
+			Cols: []*planpb.ColDef{
+				{Name: "id", Typ: planpb.Type{Id: int32(types.T_int64)}},
+				{Name: "name", Typ: planpb.Type{Id: int32(types.T_varchar)}},
+			},
+			Pkey: &planpb.PrimaryKeyDef{PkeyColName: "id", Names: []string{"id"}},
+		},
+	}
+	prefixNonUnique := &planpb.IndexDef{
+		IndexName:       "idx_name_prefix",
+		Parts:           []string{"name", catalog.CreateAlias("id")},
+		IndexAlgoParams: `{"prefix_lengths":"name:4"}`,
+	}
+	prefixUnique := &planpb.IndexDef{
+		IndexName:       "uq_name_prefix",
+		Parts:           []string{"name"},
+		Unique:          true,
+		IndexAlgoParams: `{"prefix_lengths":"name:4"}`,
+	}
+
+	filters := []struct {
+		name string
+		expr *planpb.Expr
+	}{
+		{name: "in", expr: makeStringInFilterExpr(bindTag, 1, "abcdx", "abcex")},
+		{name: "between", expr: makeStringBetweenFilterExpr(bindTag, 1, "abcdx", "abcex")},
+		{name: "range", expr: makeRangeFilterExpr(bindTag, 1, ">=", 99)},
+	}
+	for _, idxDef := range []*planpb.IndexDef{prefixNonUnique, prefixUnique} {
+		for _, filter := range filters {
+			t.Run(idxDef.IndexName+"/"+filter.name, func(t *testing.T) {
+				node.FilterList = []*planpb.Expr{filter.expr}
+				idxPos, filterIdx := builder.getIndexForNonEquiCond([]*planpb.IndexDef{idxDef}, node)
+				require.Equal(t, -1, idxPos)
+				require.Nil(t, filterIdx)
+			})
+		}
+	}
+
+	complete := &planpb.IndexDef{IndexName: "idx_name_full", Parts: []string{"name", catalog.CreateAlias("id")}}
+	node.FilterList = []*planpb.Expr{makeStringInFilterExpr(bindTag, 1, "abcdx", "abcex")}
+	idxPos, filterIdx := builder.getIndexForNonEquiCond([]*planpb.IndexDef{prefixNonUnique, complete}, node)
+	require.Equal(t, 1, idxPos)
+	require.Equal(t, []int32{0}, filterIdx)
+}
+
+func TestMakeIndexLookupPartExprDoesNotFailOpen(t *testing.T) {
+	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true), false, true)
+	idxDef := &planpb.IndexDef{
+		Parts:           []string{"name"},
+		IndexAlgoParams: `{"prefix_lengths":"name:0"}`,
+	}
+
+	expr, err := builder.makeIndexLookupPartExpr(idxDef, 0, makePlan2StringConstExprWithType("abcdx"))
+	require.Error(t, err)
+	require.Nil(t, expr)
+}
+
 func TestReplaceEqualConditionUsesSerialFullForNonUniqueCompositeIndex(t *testing.T) {
 	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true), false, true)
 	idxDef := &planpb.IndexDef{
@@ -3633,7 +6890,8 @@ func TestReplaceEqualConditionUsesSerialFullForNonUniqueCompositeIndex(t *testin
 	idxTableDef := makeTestIndexTableDef()
 	filters := []*planpb.Expr{makeStringEqFilterExpr(0, 3, "active")}
 
-	expr := builder.replaceEqualCondition(idxDef, filters, []int32{0}, 42, idxTableDef)
+	expr, err := builder.replaceEqualCondition(idxDef, filters, []int32{0}, 42, idxTableDef)
+	require.NoError(t, err)
 
 	require.NotNil(t, expr.GetF())
 	require.Equal(t, "prefix_eq", expr.GetF().Func.ObjName)
@@ -3652,11 +6910,152 @@ func TestReplaceEqualConditionKeepsSerialForUniqueCompositeIndex(t *testing.T) {
 		makeStringEqFilterExpr(0, 4, "2026-07-02 00:00:00"),
 	}
 
-	expr := builder.replaceEqualCondition(idxDef, filters, []int32{0, 1}, 42, idxTableDef)
+	expr, err := builder.replaceEqualCondition(idxDef, filters, []int32{0, 1}, 42, idxTableDef)
+	require.NoError(t, err)
 
 	require.NotNil(t, expr.GetF())
 	require.Equal(t, "=", expr.GetF().Func.ObjName)
 	assert.Equal(t, "serial", wrappedSerialFuncName(t, expr.GetF().Args[1]))
+}
+
+func TestReplaceEqualConditionTruncatesPrefixIndexLookupPart(t *testing.T) {
+	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true), false, true)
+	prefixParams, err := catalog.IndexParamsMapToJsonString(map[string]string{
+		catalog.IndexAlgoParamPrefixLengths: "status:4",
+	})
+	require.NoError(t, err)
+	idxDef := &planpb.IndexDef{
+		Parts:           []string{"status", "id"},
+		Unique:          false,
+		IndexAlgoParams: prefixParams,
+	}
+	idxTableDef := makeTestIndexTableDef()
+	filters := []*planpb.Expr{makeStringEqFilterExpr(0, 1, "active")}
+
+	expr, err := builder.replaceEqualCondition(idxDef, filters, []int32{0}, 42, idxTableDef)
+	require.NoError(t, err)
+
+	require.NotNil(t, expr.GetF())
+	require.Equal(t, "prefix_eq", expr.GetF().Func.ObjName)
+	require.True(t, exprContainsFuncName(expr, "substring"))
+	serialFn := expr.GetF().Args[1].GetF()
+	require.NotNil(t, serialFn)
+	require.Len(t, serialFn.Args, 1)
+	prefixArg := serialFn.Args[0].GetF()
+	require.NotNil(t, prefixArg)
+	if prefixArg.Func.ObjName == "cast" {
+		require.Len(t, prefixArg.Args, 1)
+		prefixArg = prefixArg.Args[0].GetF()
+		require.NotNil(t, prefixArg)
+	}
+	require.Equal(t, "substring", prefixArg.Func.ObjName)
+	require.Len(t, prefixArg.Args, 3)
+	require.Equal(t, int64(1), prefixArg.Args[1].GetLit().GetI64Val())
+	require.Equal(t, int64(4), prefixArg.Args[2].GetLit().GetI64Val())
+}
+
+func TestReplaceEqualConditionTruncatesSinglePartPrefixIndexLookup(t *testing.T) {
+	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true), false, true)
+	prefixParams, err := catalog.IndexParamsMapToJsonString(map[string]string{
+		catalog.IndexAlgoParamPrefixLengths: "status:4",
+	})
+	require.NoError(t, err)
+	idxDef := &planpb.IndexDef{
+		Parts:           []string{"status"},
+		Unique:          true,
+		IndexAlgoParams: prefixParams,
+	}
+	filters := []*planpb.Expr{makeStringEqFilterExpr(0, 1, "active")}
+
+	expr, err := builder.replaceEqualCondition(idxDef, filters, []int32{0}, 42, makeTestIndexTableDef())
+	require.NoError(t, err)
+
+	require.NotNil(t, expr.GetF())
+	require.Equal(t, "=", expr.GetF().Func.ObjName)
+	require.True(t, exprContainsFuncName(expr.GetF().Args[1], "substring"))
+}
+
+func TestApplyExtraFiltersOnIndexUsesPhysicalKeyShape(t *testing.T) {
+	prefixParams, err := catalog.IndexParamsMapToJsonString(map[string]string{
+		catalog.IndexAlgoParamPrefixLengths: "status:4",
+	})
+	require.NoError(t, err)
+
+	tests := []struct {
+		name              string
+		idxDef            *planpb.IndexDef
+		wantPushed        bool
+		wantSerialExtract bool
+	}{
+		{
+			name: "direct single-column unique key",
+			idxDef: &planpb.IndexDef{
+				Parts:  []string{"status"},
+				Unique: true,
+			},
+			wantPushed: true,
+		},
+		{
+			name: "serialized composite key",
+			idxDef: &planpb.IndexDef{
+				Parts:  []string{"status", "id"},
+				Unique: true,
+			},
+			wantPushed:        true,
+			wantSerialExtract: true,
+		},
+		{
+			name: "lossy prefix key",
+			idxDef: &planpb.IndexDef{
+				Parts:           []string{"status"},
+				Unique:          true,
+				IndexAlgoParams: prefixParams,
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true), false, true)
+			baseTag := builder.genNewBindTag()
+			indexTag := builder.genNewBindTag()
+			node := &planpb.Node{
+				BindingTags: []int32{baseTag},
+				TableDef: &planpb.TableDef{
+					Cols: []*planpb.ColDef{
+						{Name: "id", Typ: planpb.Type{Id: int32(types.T_int64)}},
+						{Name: "status", Typ: planpb.Type{Id: int32(types.T_varchar), Width: 32}},
+					},
+					Name2ColIndex: map[string]int32{"id": 0, "status": 1},
+					Pkey:          &planpb.PrimaryKeyDef{PkeyColName: "id", Names: []string{"id"}},
+				},
+				FilterList: []*planpb.Expr{
+					makeStringEqFilterExpr(baseTag, 1, "active"),
+					makeStringEqFilterExpr(baseTag, 1, "active"),
+				},
+			}
+			idxTableNode := &planpb.Node{
+				TableDef:    makeTestIndexTableDef(),
+				BindingTags: []int32{indexTag},
+			}
+
+			builder.applyExtraFiltersOnIndex(tt.idxDef, node, idxTableNode, []int32{0})
+
+			if !tt.wantPushed {
+				require.Empty(t, idxTableNode.FilterList)
+				return
+			}
+			require.Len(t, idxTableNode.FilterList, 1)
+			pushed := idxTableNode.FilterList[0]
+			require.Equal(t, tt.wantSerialExtract, exprContainsFuncName(pushed, "serial_extract"))
+			if !tt.wantSerialExtract {
+				idxCol := pushed.GetF().Args[0].GetCol()
+				require.NotNil(t, idxCol)
+				require.Equal(t, indexTag, idxCol.RelPos)
+				require.Equal(t, int32(0), idxCol.ColPos)
+			}
+		})
+	}
 }
 
 func TestReplaceNonEqualConditionUsesSerialFullForNonUniqueCompositeIndexIn(t *testing.T) {
@@ -3691,6 +7090,258 @@ func TestReplaceNonEqualConditionWrapsEachPreparedInListItemWithSerialFull(t *te
 		require.NotNil(t, args[0].GetP())
 		assert.Equal(t, int32(i), args[0].GetP().Pos)
 	}
+}
+
+func TestReplaceNonEqualConditionWidensByteStringOpenLowerBound(t *testing.T) {
+	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true), false, true)
+	idxDef := &planpb.IndexDef{
+		Parts:  []string{"b", catalog.CreateAlias(catalog.CPrimaryKeyColName)},
+		Unique: false,
+	}
+	tableDef := &planpb.TableDef{
+		Cols: []*planpb.ColDef{
+			{Name: catalog.CPrimaryKeyColName, Typ: planpb.Type{Id: int32(types.T_int64)}},
+			{Name: "b", Typ: planpb.Type{Id: int32(types.T_varbinary), Width: 8}},
+		},
+	}
+	original := makeStringInRangeFilterExpr(0, 1, "a", "b", 3)
+	setIndexRangeArgumentType(original, tableDef.Cols[1].Typ)
+	lookup := builder.replaceNonEqualCondition(idxDef, original, 42, makeTestIndexTableDef())
+
+	require.Equal(t, uint32(3), original.GetF().Args[3].GetLit().GetU8Val())
+	require.Equal(t, "prefix_in_range", lookup.GetF().Func.ObjName)
+	require.Equal(t, uint32(2), lookup.GetF().Args[3].GetLit().GetU8Val())
+	require.Equal(t, []int32{0}, indexOnlyResidualLeadingFilterPositions(
+		idxDef, tableDef, []*planpb.Expr{original}, []int32{0}, lookup,
+	))
+
+	fixedWidth := makeIntInRangeFilterExpr(0, 1, 1, 2, 3)
+	fixedLookup := builder.replaceNonEqualCondition(idxDef, fixedWidth, 42, makeTestIndexTableDef())
+	require.Equal(t, "prefix_in_range", fixedLookup.GetF().Func.ObjName)
+	require.Equal(t, uint32(3), fixedLookup.GetF().Args[3].GetLit().GetU8Val())
+}
+
+func TestIndexOnlyResidualDetectsNestedByteStringPrefixLookup(t *testing.T) {
+	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true), false, true)
+	idxDef := &planpb.IndexDef{
+		Parts:  []string{"b", catalog.CreateAlias(catalog.CPrimaryKeyColName)},
+		Unique: false,
+	}
+	tableDef := &planpb.TableDef{
+		Cols: []*planpb.ColDef{
+			{Name: catalog.CPrimaryKeyColName, Typ: planpb.Type{Id: int32(types.T_int64)}},
+			{Name: "b", Typ: planpb.Type{Id: int32(types.T_varbinary), Width: 8}},
+		},
+	}
+	original := makeOrFilterExpr(
+		makeStringBetweenFilterExpr(0, 1, "\x01", "\x01"),
+		makeStringInFilterExpr(0, 1, "", "\x00"),
+	)
+	setIndexFilterArgumentType(original.GetF().Args[0], tableDef.Cols[1].Typ)
+	setIndexFilterArgumentType(original.GetF().Args[1], tableDef.Cols[1].Typ)
+	lookup := builder.replaceNonEqualCondition(idxDef, original, 42, makeTestIndexTableDef())
+
+	require.Equal(t, "or", lookup.GetF().Func.ObjName)
+	require.Equal(t, "prefix_between", lookup.GetF().Args[0].GetF().Func.ObjName)
+	require.Equal(t, "prefix_in", lookup.GetF().Args[1].GetF().Func.ObjName)
+	require.Equal(t, []int32{0}, indexOnlyResidualLeadingFilterPositions(
+		idxDef, tableDef, []*planpb.Expr{original}, []int32{0}, lookup,
+	))
+}
+
+func TestIndexOnlyResidualLeadingFilterPositionsAreMinimal(t *testing.T) {
+	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true), false, true)
+	idxDef := &planpb.IndexDef{
+		Parts:  []string{"first", "last", catalog.CreateAlias(catalog.CPrimaryKeyColName)},
+		Unique: false,
+	}
+	tableDef := &planpb.TableDef{
+		Cols: []*planpb.ColDef{
+			{Name: catalog.CPrimaryKeyColName, Typ: planpb.Type{Id: int32(types.T_int64)}},
+			{Name: "first", Typ: planpb.Type{Id: int32(types.T_int64)}},
+			{Name: "last", Typ: planpb.Type{Id: int32(types.T_varbinary), Width: 8}},
+		},
+	}
+	firstLiteral := makeEqFilterExpr(1)
+	firstLiteral.GetF().Args[0].GetCol().RelPos = 0
+	lastLiteral := makeStringEqFilterExpr(0, 2, "\x00")
+	setIndexFilterArgumentType(lastLiteral, tableDef.Cols[2].Typ)
+	filters := []*planpb.Expr{firstLiteral, lastLiteral}
+	lookup, err := builder.replaceEqualCondition(idxDef, filters, []int32{0, 1}, 42, makeTestIndexTableDef())
+	require.NoError(t, err)
+
+	require.Equal(t, []int32{1}, indexOnlyResidualLeadingFilterPositions(
+		idxDef, tableDef, filters, []int32{0, 1}, lookup,
+	))
+
+	firstPrepared := makeParamEqFilterExpr(0, 1, 0)
+	filters[0] = firstPrepared
+	lookup, err = builder.replaceEqualCondition(idxDef, filters, []int32{0, 1}, 42, makeTestIndexTableDef())
+	require.NoError(t, err)
+	require.Equal(t, []int32{0, 1}, indexOnlyResidualLeadingFilterPositions(
+		idxDef, tableDef, filters, []int32{0, 1}, lookup,
+	))
+
+	tableDef.Cols[1].Typ = planpb.Type{Id: int32(types.T_varbinary), Width: 8}
+	tableDef.Cols[2].Typ = planpb.Type{Id: int32(types.T_int64)}
+	firstByteString := makeStringEqFilterExpr(0, 1, "\x00")
+	setIndexFilterArgumentType(firstByteString, tableDef.Cols[1].Typ)
+	lastFixedWidth := makeEqFilterExpr(2)
+	lastFixedWidth.GetF().Args[0].GetCol().RelPos = 0
+	filters = []*planpb.Expr{firstByteString, lastFixedWidth}
+	lookup, err = builder.replaceEqualCondition(idxDef, filters, []int32{0, 1}, 42, makeTestIndexTableDef())
+	require.NoError(t, err)
+	require.Empty(t, indexOnlyResidualLeadingFilterPositions(
+		idxDef, tableDef, filters, []int32{0, 1}, lookup,
+	))
+}
+
+func TestTryIndexOnlyScanRejectsLossyPrefixIndex(t *testing.T) {
+	prefixParams, err := catalog.IndexParamsMapToJsonString(map[string]string{
+		catalog.IndexAlgoParamPrefixLengths: "status:4",
+	})
+	require.NoError(t, err)
+
+	tests := []struct {
+		name            string
+		indexAlgoParams string
+		wantIndexOnly   bool
+	}{
+		{name: "full value index", wantIndexOnly: true},
+		{name: "prefix index", indexAlgoParams: prefixParams, wantIndexOnly: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true), false, true)
+			ctx := NewBindContext(builder, nil)
+			bindTag := builder.genNewBindTag()
+			idxDef := &planpb.IndexDef{
+				IndexName:       "idx_status_id",
+				IndexAlgo:       catalog.MoIndexDefaultAlgo.ToString(),
+				IndexAlgoParams: tt.indexAlgoParams,
+				IndexTableName:  "__mo_idx_status_id",
+				Parts:           []string{"status", "id"},
+				Unique:          false,
+				TableExist:      true,
+			}
+			registerMockIndexTable(t, builder, idxDef.IndexTableName)
+			node := &planpb.Node{
+				NodeType:    planpb.Node_TABLE_SCAN,
+				ObjRef:      &planpb.ObjectRef{SchemaName: "test", ObjName: "t"},
+				BindingTags: []int32{bindTag},
+				TableDef: &planpb.TableDef{
+					Name: "t",
+					Cols: []*planpb.ColDef{
+						{Name: "id", Typ: planpb.Type{Id: int32(types.T_int64)}},
+						{Name: "status", Typ: planpb.Type{Id: int32(types.T_varchar), Width: 32}},
+					},
+					Name2ColIndex: map[string]int32{"id": 0, "status": 1},
+					Pkey:          &planpb.PrimaryKeyDef{PkeyColName: "id", Names: []string{"id"}},
+				},
+				Stats:      &planpb.Stats{TableCnt: 100, Outcnt: 1, Selectivity: 0.01, Cost: 100},
+				FilterList: []*planpb.Expr{makeStringEqFilterExpr(bindTag, 1, "active")},
+			}
+			scanID := builder.appendNode(node, ctx)
+
+			idxNodeID := builder.tryIndexOnlyScan(idxDef, builder.qry.Nodes[scanID], map[[2]int32]int{{bindTag, 1}: 1}, map[[2]int32]*planpb.Expr{}, &Snapshot{})
+			if tt.wantIndexOnly {
+				require.NotEqual(t, int32(-1), idxNodeID)
+			} else {
+				require.Equal(t, int32(-1), idxNodeID)
+			}
+		})
+	}
+}
+
+func TestApplyIndicesForFiltersUsesIndexJoinForPrefixIndex(t *testing.T) {
+	prefixParams, err := catalog.IndexParamsMapToJsonString(map[string]string{
+		catalog.IndexAlgoParamPrefixLengths: "status:4",
+	})
+	require.NoError(t, err)
+
+	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true), false, true)
+	ctx := NewBindContext(builder, nil)
+	bindTag := builder.genNewBindTag()
+	idxDef := &planpb.IndexDef{
+		IndexName:       "idx_status_id",
+		IndexAlgo:       catalog.MoIndexDefaultAlgo.ToString(),
+		IndexAlgoParams: prefixParams,
+		IndexTableName:  "__mo_idx_status_id",
+		Parts:           []string{"status", "id"},
+		Unique:          false,
+		TableExist:      true,
+	}
+	registerMockIndexTable(t, builder, idxDef.IndexTableName)
+	node := &planpb.Node{
+		NodeType:    planpb.Node_TABLE_SCAN,
+		ObjRef:      &planpb.ObjectRef{SchemaName: "test", ObjName: "t"},
+		BindingTags: []int32{bindTag},
+		TableDef: &planpb.TableDef{
+			Name: "t",
+			Cols: []*planpb.ColDef{
+				{Name: "id", Typ: planpb.Type{Id: int32(types.T_int64)}},
+				{Name: "status", Typ: planpb.Type{Id: int32(types.T_varchar), Width: 32}},
+			},
+			Name2ColIndex: map[string]int32{"id": 0, "status": 1},
+			Pkey:          &planpb.PrimaryKeyDef{PkeyColName: "id", Names: []string{"id"}},
+			Indexes:       []*planpb.IndexDef{idxDef},
+		},
+		Stats:      &planpb.Stats{TableCnt: 100, Outcnt: 1, Selectivity: 0.01, Cost: 100},
+		FilterList: []*planpb.Expr{makeStringEqFilterExpr(bindTag, 1, "active")},
+	}
+	scanID := builder.appendNode(node, ctx)
+
+	resultID := builder.applyIndicesForFiltersRegularIndex(scanID, builder.qry.Nodes[scanID], map[[2]int32]int{{bindTag, 1}: 1}, map[[2]int32]*planpb.Expr{})
+	require.NotEqual(t, scanID, resultID)
+
+	indexJoin := builder.qry.Nodes[resultID]
+	require.Equal(t, planpb.Node_JOIN, indexJoin.NodeType)
+	require.Equal(t, planpb.Node_INDEX, indexJoin.JoinType)
+	require.Equal(t, scanID, indexJoin.Children[0])
+	require.Len(t, builder.qry.Nodes[scanID].FilterList, 1)
+	require.Equal(t, "=", builder.qry.Nodes[scanID].FilterList[0].GetF().Func.ObjName)
+
+	indexScan := builder.qry.Nodes[indexJoin.Children[1]]
+	require.True(t, indexScan.IndexScanInfo.IsIndexScan)
+	require.Equal(t, idxDef.IndexName, indexScan.IndexScanInfo.IndexName)
+}
+
+func TestApplyIndicesForFiltersSkipsInvisibleIndex(t *testing.T) {
+	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true), false, true)
+	ctx := NewBindContext(builder, nil)
+	bindTag := builder.genNewBindTag()
+	idxDef := &planpb.IndexDef{
+		IndexName:      "idx_status_id",
+		IndexTableName: "__mo_idx_status_id",
+		Parts:          []string{"status", "id"},
+		TableExist:     true,
+		Visible:        false,
+		VisibilitySet:  true,
+	}
+	registerMockIndexTable(t, builder, idxDef.IndexTableName)
+	node := &planpb.Node{
+		NodeType:    planpb.Node_TABLE_SCAN,
+		ObjRef:      &planpb.ObjectRef{SchemaName: "test", ObjName: "t"},
+		BindingTags: []int32{bindTag},
+		TableDef: &planpb.TableDef{
+			Name: "t",
+			Cols: []*planpb.ColDef{
+				{Name: "id", Typ: planpb.Type{Id: int32(types.T_int64)}},
+				{Name: "status", Typ: planpb.Type{Id: int32(types.T_varchar), Width: 32}},
+			},
+			Name2ColIndex: map[string]int32{"id": 0, "status": 1},
+			Pkey:          &planpb.PrimaryKeyDef{PkeyColName: "id", Names: []string{"id"}},
+			Indexes:       []*planpb.IndexDef{idxDef},
+		},
+		Stats:      &planpb.Stats{TableCnt: 100, Outcnt: 1, Selectivity: 0.01, Cost: 100},
+		FilterList: []*planpb.Expr{makeStringEqFilterExpr(bindTag, 1, "active")},
+	}
+	scanID := builder.appendNode(node, ctx)
+
+	resultID := builder.applyIndicesForFiltersRegularIndex(scanID, builder.qry.Nodes[scanID],
+		map[[2]int32]int{{bindTag, 1}: 1}, map[[2]int32]*planpb.Expr{})
+	require.Equal(t, scanID, resultID)
 }
 
 func TestTryIndexOnlyScanKeepsResidualFilterForSerialFullNullSemantics(t *testing.T) {
@@ -3739,6 +7390,26 @@ func TestTryIndexOnlyScanKeepsResidualFilterForSerialFullNullSemantics(t *testin
 			},
 			lookupFunc:   "prefix_between",
 			residualFunc: "between",
+		},
+		{
+			name: "nullable strict upper bound literal",
+			makeFilter: func(relPos int32) *planpb.Expr {
+				filter := makeRangeFilterExpr(relPos, 1, "<", 10)
+				filter.Typ = planpb.Type{Id: int32(types.T_bool)}
+				filter.GetF().Args[0].Typ = planpb.Type{Id: int32(types.T_int32)}
+				filter.GetF().Args[1].Typ = planpb.Type{Id: int32(types.T_int32)}
+				return filter
+			},
+			lookupFunc:   "<",
+			residualFunc: "<",
+		},
+		{
+			name: "nullable strict upper bound prepared",
+			makeFilter: func(relPos int32) *planpb.Expr {
+				return makeParamRangeFilterExpr(relPos, 1, "<", 0)
+			},
+			lookupFunc:   "<",
+			residualFunc: "<",
 		},
 	}
 
@@ -3792,11 +7463,161 @@ func TestTryIndexOnlyScanKeepsResidualFilterForSerialFullNullSemantics(t *testin
 	}
 }
 
-func TestTryIndexOnlyScanSkipsResidualFilterForNonNullSerialFullLiterals(t *testing.T) {
+func TestIndexFilterMayCompareNullAtRuntimeForStrictUpperBounds(t *testing.T) {
+	makeLiteralRange := func(op string, constOnLeft, notNullable bool) *planpb.Expr {
+		filter := makeRangeFilterExpr(7, 1, op, 10)
+		filter.Typ = planpb.Type{Id: int32(types.T_bool)}
+		filter.GetF().Args[0].Typ = planpb.Type{Id: int32(types.T_int64), NotNullable: notNullable}
+		filter.GetF().Args[1].Typ = planpb.Type{Id: int32(types.T_int64), NotNullable: true}
+		if constOnLeft {
+			filter.GetF().Args[0], filter.GetF().Args[1] = filter.GetF().Args[1], filter.GetF().Args[0]
+		}
+		return filter
+	}
+	makeOr := func(args ...*planpb.Expr) *planpb.Expr {
+		return &planpb.Expr{
+			Typ: planpb.Type{Id: int32(types.T_bool)},
+			Expr: &planpb.Expr_F{F: &planpb.Function{
+				Func: &planpb.ObjectRef{ObjName: "or"},
+				Args: args,
+			}},
+		}
+	}
+
+	tests := []struct {
+		name string
+		expr *planpb.Expr
+		want bool
+	}{
+		{name: "nullable column strict upper bound", expr: makeLiteralRange("<", false, false), want: true},
+		{name: "constant-left strict upper bound", expr: makeLiteralRange(">", true, false), want: true},
+		{name: "non-null column strict upper bound", expr: makeLiteralRange("<", false, true)},
+		{name: "nullable column inclusive lower bound", expr: makeLiteralRange(">=", false, false)},
+		{name: "prepared bound", expr: makeParamRangeFilterExpr(7, 1, "<", 0), want: true},
+		{
+			name: "or with strict upper arm",
+			expr: makeOr(
+				makeLiteralRange("<", false, false),
+				makeLiteralRange(">=", false, false),
+			),
+			want: true,
+		},
+		{
+			name: "or with lower-bound arms",
+			expr: makeOr(
+				makeLiteralRange(">=", false, false),
+				makeLiteralRange("<=", true, false),
+			),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, indexFilterMayCompareNullAtRuntime(tt.expr))
+		})
+	}
+}
+
+func TestNullableStrictUpperBoundRegularIndexPlans(t *testing.T) {
+	t.Run("one-part covering limit scan keeps decoded residual", func(t *testing.T) {
+		mock := NewMockOptimizer(true)
+		addIndexHintChoiceTableForTest(mock)
+
+		queryPlan, err := runOneStmt(mock, t, "select id, a from index_hint_t force index(idx_a) where a < 10 limit 1")
+		require.NoError(t, err)
+		indexScan := findFirstIndexScanNode(queryPlan)
+		require.NotNil(t, indexScan)
+		require.Equal(t, "idx_a", indexScan.IndexScanInfo.IndexName)
+		require.Len(t, indexScan.IndexScanInfo.Parts, 2)
+		require.Equal(t, "a", indexScan.IndexScanInfo.Parts[0])
+		require.True(t, catalog.IsAlias(indexScan.IndexScanInfo.Parts[1]))
+		require.Len(t, indexScan.FilterList, 2)
+		require.Equal(t, "<", indexScan.FilterList[0].GetF().Func.ObjName)
+		require.Equal(t, "<", indexScan.FilterList[1].GetF().Func.ObjName)
+		require.Equal(t, "serial_extract", wrappedSerialFuncName(t, indexScan.FilterList[1].GetF().Args[0]))
+		require.NotNil(t, indexScan.Limit)
+	})
+
+	t.Run("safe or keeps decoded residual", func(t *testing.T) {
+		mock := NewMockOptimizer(true)
+		addIndexHintChoiceTableForTest(mock)
+
+		queryPlan, err := runOneStmt(mock, t, "select id from index_hint_t force index(idx_a) where a < 10 or a >= 100")
+		require.NoError(t, err)
+		indexScan := findFirstIndexScanNode(queryPlan)
+		require.NotNil(t, indexScan)
+		require.Len(t, indexScan.FilterList, 2)
+		require.Equal(t, "or", indexScan.FilterList[0].GetF().Func.ObjName)
+
+		residual := indexScan.FilterList[1].GetF()
+		require.Equal(t, "or", residual.Func.ObjName)
+		require.Len(t, residual.Args, 2)
+		for _, arm := range residual.Args {
+			require.Equal(t, "serial_extract", wrappedSerialFuncName(t, arm.GetF().Args[0]))
+		}
+	})
+
+	t.Run("non-nullable strict upper bound skips residual", func(t *testing.T) {
+		mock := NewMockOptimizer(true)
+		addIndexHintChoiceTableForTest(mock)
+		mock.ctxt.tables["index_hint_t"].Cols[1].Typ.NotNullable = true
+
+		queryPlan, err := runOneStmt(mock, t, "select id from index_hint_t force index(idx_a) where a < 10")
+		require.NoError(t, err)
+		indexScan := findFirstIndexScanNode(queryPlan)
+		require.NotNil(t, indexScan)
+		require.Len(t, indexScan.FilterList, 1)
+	})
+
+	t.Run("backfill join keeps base residual", func(t *testing.T) {
+		mock := NewMockOptimizer(true)
+		addIndexHintChoiceTableForTest(mock)
+		tableDef := mock.ctxt.tables["index_hint_t"]
+		payloadPos := int32(len(tableDef.Cols))
+		tableDef.Cols = append(tableDef.Cols, &planpb.ColDef{
+			ColId: 4, Name: "payload", OriginName: "payload",
+			Typ:     planpb.Type{Id: int32(types.T_varchar), Width: types.MaxVarcharLen},
+			Default: &planpb.Default{NullAbility: true},
+		})
+		tableDef.Name2ColIndex["payload"] = payloadPos
+
+		queryPlan, err := runOneStmt(mock, t, "select payload from index_hint_t where a < 10")
+		require.NoError(t, err)
+		require.NotEmpty(t, findFirstIndexScanName(queryPlan))
+		require.True(t, planHasIndexJoin(queryPlan))
+		var baseScan *planpb.Node
+		for _, node := range queryPlan.GetQuery().Nodes {
+			if node.NodeType == planpb.Node_TABLE_SCAN && !node.IndexScanInfo.IsIndexScan && node.TableDef != nil && node.TableDef.Name == "index_hint_t" {
+				baseScan = node
+				break
+			}
+		}
+		require.NotNil(t, baseScan)
+		require.Len(t, baseScan.FilterList, 1)
+		require.Equal(t, "<", baseScan.FilterList[0].GetF().Func.ObjName)
+	})
+
+	for _, sql := range []string{
+		"select id from index_hint_t where a <= 10",
+		"select id from index_hint_t where a > 10",
+	} {
+		t.Run("unsafe prefix comparison stays on base scan "+sql, func(t *testing.T) {
+			mock := NewMockOptimizer(true)
+			addIndexHintChoiceTableForTest(mock)
+
+			queryPlan, err := runOneStmt(mock, t, sql)
+			require.NoError(t, err)
+			require.Empty(t, findFirstIndexScanName(queryPlan))
+		})
+	}
+}
+
+func TestTryIndexOnlyScanPreservesVarcharResidualForPrefixPredicates(t *testing.T) {
 	tests := []struct {
 		name       string
 		makeFilter func(relPos int32) *planpb.Expr
 		lookupFunc string
+		residual   string
 	}{
 		{
 			name: "literal equality",
@@ -3804,6 +7625,7 @@ func TestTryIndexOnlyScanSkipsResidualFilterForNonNullSerialFullLiterals(t *test
 				return makeStringEqFilterExpr(relPos, 1, "active")
 			},
 			lookupFunc: "prefix_eq",
+			residual:   "=",
 		},
 		{
 			name: "literal in list",
@@ -3811,6 +7633,7 @@ func TestTryIndexOnlyScanSkipsResidualFilterForNonNullSerialFullLiterals(t *test
 				return makeStringInFilterExpr(relPos, 1, "active", "expired")
 			},
 			lookupFunc: "prefix_in",
+			residual:   "in",
 		},
 		{
 			name: "literal between",
@@ -3818,6 +7641,7 @@ func TestTryIndexOnlyScanSkipsResidualFilterForNonNullSerialFullLiterals(t *test
 				return makeStringBetweenFilterExpr(relPos, 1, "active", "expired")
 			},
 			lookupFunc: "prefix_between",
+			residual:   "between",
 		},
 	}
 
@@ -3860,10 +7684,209 @@ func TestTryIndexOnlyScanSkipsResidualFilterForNonNullSerialFullLiterals(t *test
 			require.NotEqual(t, int32(-1), idxNodeID)
 
 			idxNode := builder.qry.Nodes[idxNodeID]
-			require.Len(t, idxNode.FilterList, 1)
 			require.Equal(t, tt.lookupFunc, idxNode.FilterList[0].GetF().Func.ObjName)
+			if tt.residual == "" {
+				require.Len(t, idxNode.FilterList, 1)
+				return
+			}
+			require.Len(t, idxNode.FilterList, 2)
+			require.Equal(t, tt.residual, idxNode.FilterList[1].GetF().Func.ObjName)
 		})
 	}
+}
+
+func TestTryIndexOnlyScanHandlesByteStringPrefixLookups(t *testing.T) {
+	tests := []struct {
+		name       string
+		typ        types.T
+		makeFilter func(relPos int32) *planpb.Expr
+		lookupFunc string
+		residual   string
+	}{
+		{
+			name: "varbinary equality",
+			typ:  types.T_varbinary,
+			makeFilter: func(relPos int32) *planpb.Expr {
+				return makeStringEqFilterExpr(relPos, 1, "\x00")
+			},
+			lookupFunc: "prefix_eq",
+			residual:   "=",
+		},
+		{
+			name: "varbinary in",
+			typ:  types.T_varbinary,
+			makeFilter: func(relPos int32) *planpb.Expr {
+				return makeStringInFilterExpr(relPos, 1, "", "\x00")
+			},
+			lookupFunc: "prefix_in",
+			residual:   "in",
+		},
+		{
+			name: "varbinary between",
+			typ:  types.T_varbinary,
+			makeFilter: func(relPos int32) *planpb.Expr {
+				return makeStringBetweenFilterExpr(relPos, 1, "\x00", "\x00\x01")
+			},
+			lookupFunc: "prefix_between",
+			residual:   "between",
+		},
+		{
+			name: "binary equality",
+			typ:  types.T_binary,
+			makeFilter: func(relPos int32) *planpb.Expr {
+				return makeStringEqFilterExpr(relPos, 1, "\x00")
+			},
+			lookupFunc: "prefix_eq",
+			residual:   "=",
+		},
+		{
+			name: "binary in",
+			typ:  types.T_binary,
+			makeFilter: func(relPos int32) *planpb.Expr {
+				return makeStringInFilterExpr(relPos, 1, "", "\x00")
+			},
+			lookupFunc: "prefix_in",
+			residual:   "in",
+		},
+		{
+			name: "binary between",
+			typ:  types.T_binary,
+			makeFilter: func(relPos int32) *planpb.Expr {
+				return makeStringBetweenFilterExpr(relPos, 1, "\x00", "\x00\x01")
+			},
+			lookupFunc: "prefix_between",
+			residual:   "between",
+		},
+		{
+			name: "varchar equality with encoded terminator collision",
+			typ:  types.T_varchar,
+			makeFilter: func(relPos int32) *planpb.Expr {
+				return makeStringEqFilterExpr(relPos, 1, "a")
+			},
+			lookupFunc: "prefix_eq",
+			residual:   "=",
+		},
+		{
+			name: "char in with encoded terminator collision",
+			typ:  types.T_char,
+			makeFilter: func(relPos int32) *planpb.Expr {
+				return makeStringInFilterExpr(relPos, 1, "a", "b")
+			},
+			lookupFunc: "prefix_in",
+			residual:   "in",
+		},
+		{
+			name: "int64 equality fixed-width control",
+			typ:  types.T_int64,
+			makeFilter: func(relPos int32) *planpb.Expr {
+				expr := makeEqFilterExpr(1)
+				expr.GetF().Args[0].GetCol().RelPos = relPos
+				return expr
+			},
+			lookupFunc: "prefix_eq",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true), false, true)
+			ctx := NewBindContext(builder, nil)
+			bindTag := builder.genNewBindTag()
+			idxDef := &planpb.IndexDef{
+				IndexName:      "idx_b_id",
+				IndexAlgo:      catalog.MoIndexDefaultAlgo.ToString(),
+				IndexTableName: "__mo_idx_b_id",
+				Parts:          []string{"b", "id"},
+				Unique:         false,
+				TableExist:     true,
+			}
+			registerMockIndexTable(t, builder, idxDef.IndexTableName)
+			filter := tt.makeFilter(bindTag)
+			binaryType := planpb.Type{Id: int32(tt.typ), Width: 8}
+			setIndexFilterArgumentType(filter, binaryType)
+			node := &planpb.Node{
+				NodeType:    planpb.Node_TABLE_SCAN,
+				ObjRef:      &planpb.ObjectRef{SchemaName: "test", ObjName: "t"},
+				BindingTags: []int32{bindTag},
+				TableDef: &planpb.TableDef{
+					Name: "t",
+					Cols: []*planpb.ColDef{
+						{Name: "id", Typ: planpb.Type{Id: int32(types.T_int64)}},
+						{Name: "b", Typ: binaryType},
+					},
+					Name2ColIndex: map[string]int32{"id": 0, "b": 1},
+					Pkey:          &planpb.PrimaryKeyDef{PkeyColName: "id", Names: []string{"id"}},
+				},
+				Stats:      &planpb.Stats{TableCnt: 100, Outcnt: 1, Selectivity: 0.01, Cost: 100},
+				FilterList: []*planpb.Expr{filter},
+			}
+			scanID := builder.appendNode(node, ctx)
+
+			idxNodeID := builder.tryIndexOnlyScan(idxDef, builder.qry.Nodes[scanID], map[[2]int32]int{{bindTag, 1}: 1}, map[[2]int32]*planpb.Expr{}, &Snapshot{})
+			require.NotEqual(t, int32(-1), idxNodeID)
+
+			idxNode := builder.qry.Nodes[idxNodeID]
+			require.Equal(t, tt.lookupFunc, idxNode.FilterList[0].GetF().Func.ObjName)
+			if tt.residual == "" {
+				require.Len(t, idxNode.FilterList, 1)
+				return
+			}
+			require.Len(t, idxNode.FilterList, 2)
+			require.Equal(t, tt.residual, idxNode.FilterList[1].GetF().Func.ObjName)
+			require.Equal(t, "serial_extract", wrappedSerialFuncName(t, idxNode.FilterList[1].GetF().Args[0]))
+			require.Equal(t, int32(tt.typ), idxNode.FilterList[1].GetF().Args[0].Typ.Id)
+		})
+	}
+}
+
+func TestIndexOnlyResidualLeadingFilterPositionsUsesTrailingPrefixPart(t *testing.T) {
+	idxDef := &planpb.IndexDef{
+		Parts:  []string{"v", "n", "id"},
+		Unique: false,
+	}
+	tableDef := &planpb.TableDef{Cols: []*planpb.ColDef{
+		{Name: "id", Typ: planpb.Type{Id: int32(types.T_int64)}},
+		{Name: "v", Typ: planpb.Type{Id: int32(types.T_varchar), Width: 16}},
+		{Name: "n", Typ: planpb.Type{Id: int32(types.T_int64)}},
+	}}
+	filters := []*planpb.Expr{
+		makeStringEqFilterExpr(0, 1, "a"),
+		makeEqFilterExpr(2),
+	}
+	lookupFilter := &planpb.Expr{Expr: &planpb.Expr_F{F: &planpb.Function{
+		Func: &planpb.ObjectRef{ObjName: "prefix_eq"},
+	}}}
+
+	// A byte-string component before another encoded component is delimited by
+	// that component's type byte. Only the trailing component can collide with
+	// the appended primary-key suffix, so a fixed-width trailing part needs no
+	// residual recheck.
+	require.Empty(t, indexOnlyResidualLeadingFilterPositions(
+		idxDef, tableDef, filters, []int32{0, 1}, lookupFilter,
+	))
+	require.Equal(t, []int32{0}, indexOnlyResidualLeadingFilterPositions(
+		idxDef, tableDef, filters, []int32{1, 0}, lookupFilter,
+	))
+}
+
+func TestIndexOnlyResidualLeadingFilterPositionsRecognizesNestedPrefixRange(t *testing.T) {
+	idxDef := &planpb.IndexDef{Parts: []string{"v", "id"}, Unique: false}
+	tableDef := &planpb.TableDef{Cols: []*planpb.ColDef{
+		{Name: "id", Typ: planpb.Type{Id: int32(types.T_int64)}},
+		{Name: "v", Typ: planpb.Type{Id: int32(types.T_varbinary), Width: 16}},
+	}}
+	filter := makeStringBetweenFilterExpr(0, 1, "\x00", "\x00")
+	prefixRange := &planpb.Expr{Expr: &planpb.Expr_F{F: &planpb.Function{
+		Func: &planpb.ObjectRef{ObjName: "prefix_in_range"},
+	}}}
+	lookupFilter := &planpb.Expr{Expr: &planpb.Expr_F{F: &planpb.Function{
+		Func: &planpb.ObjectRef{ObjName: "or"},
+		Args: []*planpb.Expr{prefixRange},
+	}}}
+
+	require.Equal(t, []int32{0}, indexOnlyResidualLeadingFilterPositions(
+		idxDef, tableDef, []*planpb.Expr{filter}, []int32{0}, lookupFilter,
+	))
 }
 
 func TestReplaceRangePairCondition_UsesPrefixBetweenForSecondaryIndex(t *testing.T) {
@@ -3899,6 +7922,234 @@ func TestReplaceRangePairCondition_UsesPrefixBetweenForSecondaryIndex(t *testing
 	assert.Equal(t, "serial_full", wrappedSerialFuncName(t, expr.GetF().Args[1]))
 	assert.Equal(t, "serial_full", wrappedSerialFuncName(t, expr.GetF().Args[2]))
 	require.InDelta(t, 0.12, expr.Selectivity, 1e-9)
+}
+
+func TestReplaceRangePairConditionWidensByteStringOpenLowerBound(t *testing.T) {
+	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true), false, true)
+	idxDef := &planpb.IndexDef{
+		Parts:  []string{"b", catalog.CreateAlias(catalog.CPrimaryKeyColName)},
+		Unique: false,
+	}
+	idxTableDef := makeTestIndexTableDef()
+	byteStringFilters := []*planpb.Expr{
+		makeStringRangeFilterExpr(0, 1, ">", "a"),
+		makeStringRangeFilterExpr(0, 1, "<=", "b"),
+	}
+	setIndexRangeArgumentType(byteStringFilters[0], planpb.Type{Id: int32(types.T_varbinary), Width: 8})
+	setIndexRangeArgumentType(byteStringFilters[1], planpb.Type{Id: int32(types.T_varbinary), Width: 8})
+
+	byteStringLookup := builder.replaceRangePairCondition(idxDef, byteStringFilters, []int32{0, 1}, 42, idxTableDef)
+	require.Equal(t, "prefix_in_range", byteStringLookup.GetF().Func.ObjName)
+	require.Equal(t, uint32(0), byteStringLookup.GetF().Args[3].GetLit().GetU8Val())
+
+	fixedWidthFilters := []*planpb.Expr{
+		makeRangeFilterExpr(0, 1, ">", 1),
+		makeRangeFilterExpr(0, 1, "<=", 2),
+	}
+	fixedWidthLookup := builder.replaceRangePairCondition(idxDef, fixedWidthFilters, []int32{0, 1}, 42, idxTableDef)
+	require.Equal(t, "prefix_in_range", fixedWidthLookup.GetF().Func.ObjName)
+	require.Equal(t, uint32(1), fixedWidthLookup.GetF().Args[3].GetLit().GetU8Val())
+}
+
+func TestIndexRangeSerializationNormalizesDecimalBounds(t *testing.T) {
+	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true), false, true)
+	bindTag := builder.genNewBindTag()
+	idxDef := &planpb.IndexDef{
+		Parts:  []string{"price", catalog.CreateAlias(catalog.CPrimaryKeyColName)},
+		Unique: false,
+	}
+	idxTableDef := makeTestIndexTableDef()
+	columnType := planpb.Type{Id: int32(types.T_decimal64), Width: 10, Scale: 2}
+	higherScaleType := planpb.Type{Id: int32(types.T_decimal64), Width: 10, Scale: 6}
+
+	t.Run("closed pair", func(t *testing.T) {
+		filters := []*planpb.Expr{
+			makeDecimalRangeFilterExpr(t, bindTag, 1, ">=", "10.250000", columnType, higherScaleType),
+			makeDecimalRangeFilterExpr(t, bindTag, 1, "<=", "15.750000", columnType, higherScaleType),
+		}
+
+		expr := builder.replaceRangePairCondition(idxDef, filters, []int32{0, 1}, 42, idxTableDef)
+
+		require.Equal(t, "prefix_between", expr.GetF().Func.ObjName)
+		requireSerializedRangeBoundType(t, expr.GetF().Args[1], columnType, true)
+		requireSerializedRangeBoundType(t, expr.GetF().Args[2], columnType, true)
+	})
+
+	t.Run("open pair", func(t *testing.T) {
+		filters := []*planpb.Expr{
+			makeDecimalRangeFilterExpr(t, bindTag, 1, ">", "10.250000", columnType, higherScaleType),
+			makeDecimalRangeFilterExpr(t, bindTag, 1, "<", "15.750000", columnType, higherScaleType),
+		}
+
+		expr := builder.replaceRangePairCondition(idxDef, filters, []int32{0, 1}, 42, idxTableDef)
+
+		require.Equal(t, "prefix_in_range", expr.GetF().Func.ObjName)
+		requireSerializedRangeBoundType(t, expr.GetF().Args[1], columnType, true)
+		requireSerializedRangeBoundType(t, expr.GetF().Args[2], columnType, true)
+	})
+
+	for _, tc := range []struct {
+		name string
+		op   string
+	}{
+		{name: "lower only", op: ">="},
+		{name: "upper only", op: "<"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			filter := makeDecimalRangeFilterExpr(t, bindTag, 1, tc.op, "10.250000", columnType, higherScaleType)
+
+			expr := builder.replaceNonEqualCondition(idxDef, filter, 42, idxTableDef)
+
+			require.Equal(t, tc.op, expr.GetF().Func.ObjName)
+			requireSerializedRangeBoundType(t, expr.GetF().Args[1], columnType, true)
+		})
+	}
+
+	t.Run("in range", func(t *testing.T) {
+		lower := makeDecimalRangeFilterExpr(t, bindTag, 1, ">", "10.250000", columnType, higherScaleType)
+		upper := makeDecimalRangeFilterExpr(t, bindTag, 1, "<", "15.750000", columnType, higherScaleType)
+		filter := &planpb.Expr{
+			Typ: planpb.Type{Id: int32(types.T_bool)},
+			Expr: &planpb.Expr_F{F: &planpb.Function{
+				Func: &planpb.ObjectRef{ObjName: "in_range"},
+				Args: []*planpb.Expr{
+					DeepCopyExpr(lower.GetF().Args[0]),
+					DeepCopyExpr(lower.GetF().Args[1]),
+					DeepCopyExpr(upper.GetF().Args[1]),
+					MakePlan2Uint8ConstExprWithType(3),
+				},
+			}},
+		}
+
+		expr := builder.replaceNonEqualCondition(idxDef, filter, 42, idxTableDef)
+
+		require.Equal(t, "prefix_in_range", expr.GetF().Func.ObjName)
+		requireSerializedRangeBoundType(t, expr.GetF().Args[1], columnType, true)
+		requireSerializedRangeBoundType(t, expr.GetF().Args[2], columnType, true)
+	})
+
+	t.Run("equal scale decimal remains direct", func(t *testing.T) {
+		filters := []*planpb.Expr{
+			makeDecimalRangeFilterExpr(t, bindTag, 1, ">=", "10.25", columnType, columnType),
+			makeDecimalRangeFilterExpr(t, bindTag, 1, "<=", "15.75", columnType, columnType),
+		}
+
+		expr := builder.replaceRangePairCondition(idxDef, filters, []int32{0, 1}, 42, idxTableDef)
+
+		requireSerializedRangeBoundType(t, expr.GetF().Args[1], columnType, false)
+		requireSerializedRangeBoundType(t, expr.GetF().Args[2], columnType, false)
+	})
+
+	t.Run("non decimal remains direct", func(t *testing.T) {
+		intType := planpb.Type{Id: int32(types.T_int64)}
+		filters := []*planpb.Expr{
+			makeTypedInt64RangeFilterExpr(bindTag, 1, ">=", 10, intType),
+			makeTypedInt64RangeFilterExpr(bindTag, 1, "<=", 15, intType),
+		}
+
+		expr := builder.replaceRangePairCondition(idxDef, filters, []int32{0, 1}, 42, idxTableDef)
+
+		requireSerializedRangeBoundType(t, expr.GetF().Args[1], intType, false)
+		requireSerializedRangeBoundType(t, expr.GetF().Args[2], intType, false)
+	})
+
+	t.Run("non representable decimal follows index key encoding", func(t *testing.T) {
+		filters := []*planpb.Expr{
+			makeDecimalRangeFilterExpr(t, bindTag, 1, ">", "10.255000", columnType, higherScaleType),
+			makeDecimalRangeFilterExpr(t, bindTag, 1, "<=", "15.755000", columnType, higherScaleType),
+		}
+		makeNode := func(filterList []*planpb.Expr) *planpb.Node {
+			return &planpb.Node{
+				TableDef: &planpb.TableDef{
+					Name2ColIndex: map[string]int32{
+						catalog.FakePrimaryKeyColName: 0,
+						"price":                       1,
+					},
+					Cols: []*planpb.ColDef{
+						{Name: catalog.FakePrimaryKeyColName, Typ: planpb.Type{Id: int32(types.T_uint64)}},
+						{Name: "price", Typ: columnType},
+					},
+				},
+				FilterList: filterList,
+			}
+		}
+
+		t.Run("serialized composite falls back", func(t *testing.T) {
+			idxPos, filterIdx := builder.getIndexForNonEquiCond(
+				[]*planpb.IndexDef{idxDef}, makeNode(filters))
+
+			require.Equal(t, -1, idxPos)
+			require.Nil(t, filterIdx)
+		})
+
+		directUniqueIdxDef := &planpb.IndexDef{
+			Parts:  []string{"price"},
+			Unique: true,
+		}
+
+		t.Run("direct unique single bound remains eligible", func(t *testing.T) {
+			idxPos, filterIdx := builder.getIndexForNonEquiCond(
+				[]*planpb.IndexDef{directUniqueIdxDef}, makeNode(filters[:1]))
+
+			require.Equal(t, 0, idxPos)
+			require.Equal(t, []int32{0}, filterIdx)
+		})
+
+		t.Run("direct unique paired bounds remain eligible", func(t *testing.T) {
+			idxPos, filterIdx := builder.getIndexForNonEquiCond(
+				[]*planpb.IndexDef{directUniqueIdxDef}, makeNode(filters))
+
+			require.Equal(t, 0, idxPos)
+			require.Equal(t, []int32{0, 1}, filterIdx)
+		})
+
+		for _, tc := range []struct {
+			name    string
+			indexes []*planpb.IndexDef
+			wantIdx int
+		}{
+			{
+				name:    "direct unique before serialized composite",
+				indexes: []*planpb.IndexDef{directUniqueIdxDef, idxDef},
+				wantIdx: 0,
+			},
+			{
+				name:    "direct unique after serialized composite",
+				indexes: []*planpb.IndexDef{idxDef, directUniqueIdxDef},
+				wantIdx: 1,
+			},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				idxPos, filterIdx := builder.getIndexForNonEquiCond(tc.indexes, makeNode(filters))
+
+				require.Equal(t, tc.wantIdx, idxPos)
+				require.Equal(t, []int32{0, 1}, filterIdx)
+			})
+		}
+
+		t.Run("direct unique paired fallback checks both bounds", func(t *testing.T) {
+			mixedBounds := []*planpb.Expr{
+				makeDecimalRangeFilterExpr(t, bindTag, 1, ">=", "10.250000", columnType, higherScaleType),
+				filters[1],
+			}
+
+			idxPos, filterIdx := builder.getIndexForNonEquiCond(
+				[]*planpb.IndexDef{directUniqueIdxDef, idxDef}, makeNode(mixedBounds))
+
+			require.Equal(t, 0, idxPos)
+			require.Equal(t, []int32{0, 1}, filterIdx)
+		})
+
+		t.Run("direct unique bypasses serialized operator restriction", func(t *testing.T) {
+			filter := makeDecimalRangeFilterExpr(t, bindTag, 1, ">", "10.25", columnType, columnType)
+
+			idxPos, filterIdx := builder.getIndexForNonEquiCond(
+				[]*planpb.IndexDef{directUniqueIdxDef, idxDef}, makeNode([]*planpb.Expr{filter}))
+
+			require.Equal(t, 0, idxPos)
+			require.Equal(t, []int32{0}, filterIdx)
+		})
+	})
 }
 
 func TestGetIndexForNonEquiCond_PrefersFirstPairedRangeByFilterOrder(t *testing.T) {
@@ -4088,6 +8339,38 @@ func makeStringEqFilterExpr(relPos, colPos int32, val string) *planpb.Expr {
 	}
 }
 
+func setIndexFilterArgumentType(expr *planpb.Expr, typ planpb.Type) {
+	fn := expr.GetF()
+	if fn == nil {
+		return
+	}
+	for _, arg := range fn.Args {
+		setExprTypeRecursive(arg, typ)
+	}
+}
+
+func setIndexRangeArgumentType(expr *planpb.Expr, typ planpb.Type) {
+	fn := expr.GetF()
+	if fn == nil {
+		return
+	}
+	for i := 0; i < len(fn.Args) && i < 3; i++ {
+		setExprTypeRecursive(fn.Args[i], typ)
+	}
+}
+
+func setExprTypeRecursive(expr *planpb.Expr, typ planpb.Type) {
+	if expr == nil {
+		return
+	}
+	expr.Typ = typ
+	if list := expr.GetList(); list != nil {
+		for _, item := range list.List {
+			setExprTypeRecursive(item, typ)
+		}
+	}
+}
+
 func makeParamEqFilterExpr(relPos, colPos, paramPos int32) *planpb.Expr {
 	typ := planpb.Type{Id: int32(types.T_int32)}
 	return &planpb.Expr{
@@ -4230,6 +8513,32 @@ func makeIntInFilterExprWithNull(relPos, colPos int32) *planpb.Expr {
 	}
 }
 
+func makeIntInFilterExpr(relPos, colPos int32, vals ...int32) *planpb.Expr {
+	expr := makeIntInFilterExprWithNull(relPos, colPos)
+	list := expr.GetF().Args[1].GetList().List[:0]
+	for _, val := range vals {
+		list = append(list, &planpb.Expr{
+			Typ:  planpb.Type{Id: int32(types.T_int32)},
+			Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{Value: &planpb.Literal_I32Val{I32Val: val}}},
+		})
+	}
+	expr.GetF().Args[1].GetList().List = list
+	return expr
+}
+
+func makeIntBetweenFilterExpr(relPos, colPos, lower, upper int32) *planpb.Expr {
+	expr := makeParamBetweenFilterExpr(relPos, colPos, 0, 1)
+	expr.GetF().Args[1] = &planpb.Expr{
+		Typ:  planpb.Type{Id: int32(types.T_int32)},
+		Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{Value: &planpb.Literal_I32Val{I32Val: lower}}},
+	}
+	expr.GetF().Args[2] = &planpb.Expr{
+		Typ:  planpb.Type{Id: int32(types.T_int32)},
+		Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{Value: &planpb.Literal_I32Val{I32Val: upper}}},
+	}
+	return expr
+}
+
 func makeStringBetweenFilterExpr(relPos, colPos int32, lower, upper string) *planpb.Expr {
 	typ := planpb.Type{Id: int32(types.T_varchar), Width: types.MaxVarcharLen}
 	return &planpb.Expr{
@@ -4264,6 +8573,59 @@ func makeStringBetweenFilterExpr(relPos, colPos int32, lower, upper string) *pla
 						},
 					},
 				},
+			},
+		},
+	}
+}
+
+func makeStringInRangeFilterExpr(relPos, colPos int32, lower, upper string, flag uint8) *planpb.Expr {
+	expr := makeStringBetweenFilterExpr(relPos, colPos, lower, upper)
+	expr.GetF().Func.ObjName = "in_range"
+	expr.GetF().Args = append(expr.GetF().Args, MakePlan2Uint8ConstExprWithType(flag))
+	return expr
+}
+
+func makeIntInRangeFilterExpr(relPos, colPos int32, lower, upper int64, flag uint8) *planpb.Expr {
+	typ := planpb.Type{Id: int32(types.T_int64)}
+	return &planpb.Expr{
+		Typ: planpb.Type{Id: int32(types.T_bool)},
+		Expr: &planpb.Expr_F{
+			F: &planpb.Function{
+				Func: &planpb.ObjectRef{ObjName: "in_range"},
+				Args: []*planpb.Expr{
+					GetColExpr(typ, relPos, colPos),
+					{Typ: typ, Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{Value: &planpb.Literal_I64Val{I64Val: lower}}}},
+					{Typ: typ, Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{Value: &planpb.Literal_I64Val{I64Val: upper}}}},
+					MakePlan2Uint8ConstExprWithType(flag),
+				},
+			},
+		},
+	}
+}
+
+func makeStringRangeFilterExpr(relPos, colPos int32, op, value string) *planpb.Expr {
+	typ := planpb.Type{Id: int32(types.T_varchar), Width: types.MaxVarcharLen}
+	return &planpb.Expr{
+		Typ: planpb.Type{Id: int32(types.T_bool)},
+		Expr: &planpb.Expr_F{
+			F: &planpb.Function{
+				Func: &planpb.ObjectRef{ObjName: op},
+				Args: []*planpb.Expr{
+					GetColExpr(typ, relPos, colPos),
+					{Typ: typ, Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{Value: &planpb.Literal_Sval{Sval: value}}}},
+				},
+			},
+		},
+	}
+}
+
+func makeOrFilterExpr(args ...*planpb.Expr) *planpb.Expr {
+	return &planpb.Expr{
+		Typ: planpb.Type{Id: int32(types.T_bool)},
+		Expr: &planpb.Expr_F{
+			F: &planpb.Function{
+				Func: &planpb.ObjectRef{ObjName: "or"},
+				Args: args,
 			},
 		},
 	}
@@ -4361,6 +8723,32 @@ func makeParamBetweenFilterExpr(relPos, colPos, lowerParamPos, upperParamPos int
 	}
 }
 
+func makeParamRangeFilterExpr(relPos, colPos int32, op string, paramPos int32) *planpb.Expr {
+	typ := planpb.Type{Id: int32(types.T_int32)}
+	return &planpb.Expr{
+		Typ: planpb.Type{Id: int32(types.T_bool)},
+		Expr: &planpb.Expr_F{
+			F: &planpb.Function{
+				Func: &planpb.ObjectRef{ObjName: op},
+				Args: []*planpb.Expr{
+					{
+						Typ: typ,
+						Expr: &planpb.Expr_Col{
+							Col: &planpb.ColRef{RelPos: relPos, ColPos: colPos},
+						},
+					},
+					{
+						Typ: typ,
+						Expr: &planpb.Expr_P{
+							P: &planpb.ParamRef{Pos: paramPos},
+						},
+					},
+				},
+			},
+		},
+	}
+}
+
 func makeRangeFilterExpr(relPos, colPos int32, op string, val int64) *planpb.Expr {
 	return &planpb.Expr{
 		Expr: &planpb.Expr_F{
@@ -4385,6 +8773,69 @@ func makeRangeFilterExpr(relPos, colPos int32, op string, val int64) *planpb.Exp
 				},
 			},
 		},
+	}
+}
+
+func makeDecimalRangeFilterExpr(
+	t *testing.T,
+	relPos, colPos int32,
+	op, val string,
+	columnType, boundType planpb.Type,
+) *planpb.Expr {
+	t.Helper()
+	decimal, err := types.ParseDecimal64(val, boundType.Width, boundType.Scale)
+	require.NoError(t, err)
+	return &planpb.Expr{
+		Typ: planpb.Type{Id: int32(types.T_bool)},
+		Expr: &planpb.Expr_F{
+			F: &planpb.Function{
+				Func: &planpb.ObjectRef{ObjName: op},
+				Args: []*planpb.Expr{
+					{
+						Typ: columnType,
+						Expr: &planpb.Expr_Col{
+							Col: &planpb.ColRef{RelPos: relPos, ColPos: colPos},
+						},
+					},
+					{
+						Typ: boundType,
+						Expr: &planpb.Expr_Lit{
+							Lit: &planpb.Literal{
+								Value: &planpb.Literal_Decimal64Val{
+									Decimal64Val: &planpb.Decimal64{A: int64(decimal)},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+}
+
+func makeTypedInt64RangeFilterExpr(relPos, colPos int32, op string, val int64, typ planpb.Type) *planpb.Expr {
+	expr := makeRangeFilterExpr(relPos, colPos, op, val)
+	expr.Typ = planpb.Type{Id: int32(types.T_bool)}
+	expr.GetF().Args[0].Typ = typ
+	expr.GetF().Args[1].Typ = typ
+	return expr
+}
+
+func requireSerializedRangeBoundType(t *testing.T, expr *planpb.Expr, want planpb.Type, wantCast bool) {
+	t.Helper()
+	serial := expr.GetF()
+	require.NotNil(t, serial)
+	require.Equal(t, "serial_full", serial.Func.ObjName)
+	require.Len(t, serial.Args, 1)
+	bound := serial.Args[0]
+	require.Equal(t, want.Id, bound.Typ.Id)
+	require.Equal(t, want.Width, bound.Typ.Width)
+	require.Equal(t, want.Scale, bound.Typ.Scale)
+	if wantCast {
+		require.NotNil(t, bound.GetF())
+		require.Equal(t, "cast", bound.GetF().Func.ObjName)
+	} else {
+		require.Nil(t, bound.GetF())
 	}
 }
 
