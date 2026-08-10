@@ -3524,18 +3524,6 @@ func appendPreInsertPlan(
 	lastNodeId = builder.appendNode(preInsert, bindCtx)
 
 	if isUK {
-		indexKey := &plan.Expr{Typ: preinsertUkProjection[0].Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{
-			ColPos: 0, Name: catalog.IndexTableIndexColName,
-		}}}
-		notNull, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "isnotnull", []*plan.Expr{indexKey})
-		if err != nil {
-			return 0, err
-		}
-		lastNodeId = builder.appendNode(&plan.Node{
-			NodeType:   plan.Node_FILTER,
-			Children:   []int32{lastNodeId},
-			FilterList: []*plan.Expr{notNull},
-		}, bindCtx)
 		if lockNodeId, ok := appendLockNode(
 			builder,
 			bindCtx,
