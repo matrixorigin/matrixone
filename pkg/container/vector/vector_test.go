@@ -1890,6 +1890,22 @@ func TestBinaryStringMetadataUnionMultiAndLifecycle(t *testing.T) {
 	require.NoError(t, AppendBytes(reused, []byte("text"), false, mp))
 	require.False(t, reused.GetIsBinaryString())
 	reused.Free(mp)
+
+	bulkNull := NewVec(types.T_text.ToType())
+	for _, value := range []string{"binary", "text"} {
+		require.NoError(t, AppendBytes(bulkNull, []byte(value), false, mp))
+	}
+	require.NoError(t, bulkNull.SetIsBinaryStringAt(0, true))
+	nsp := nulls.NewWithSize(2)
+	nsp.Add(0)
+	bulkNull.SetNulls(nsp)
+	require.False(t, bulkNull.GetIsBinaryString())
+	require.False(t, bulkNull.GetIsBinaryStringAt(1))
+	bulkNull.SetIsBinaryString(true)
+	bulkNull.SetAllNulls(2)
+	require.False(t, bulkNull.GetIsBinaryString())
+	require.False(t, bulkNull.HasBinaryStringRows())
+	bulkNull.Free(mp)
 }
 
 func TestBinaryStringMetadataStableDecodeAndInplaceSort(t *testing.T) {
@@ -1942,6 +1958,26 @@ func TestBinaryStringMetadataStableDecodeAndInplaceSort(t *testing.T) {
 	require.True(t, compact.GetIsBinaryStringAt(2))
 	require.Equal(t, PrepareParamInteger, compact.GetPrepareParamKindAt(2))
 	compact.Free(mp)
+
+	for _, compact := range []bool{false, true} {
+		prepareOnly := NewVec(types.T_text.ToType())
+		for _, value := range []string{"z", "a"} {
+			require.NoError(t, AppendBytes(prepareOnly, []byte(value), false, mp))
+		}
+		require.NoError(t, prepareOnly.SetPrepareParamKindsWithMP([]PrepareParamKind{
+			PrepareParamInteger, PrepareParamFloat,
+		}, mp))
+		if compact {
+			prepareOnly.InplaceSortAndCompact()
+		} else {
+			prepareOnly.InplaceSort()
+		}
+		require.Equal(t, "a", string(prepareOnly.GetBytesAt(0)))
+		require.Equal(t, "z", string(prepareOnly.GetBytesAt(1)))
+		require.Equal(t, PrepareParamFloat, prepareOnly.GetPrepareParamKindAt(0))
+		require.Equal(t, PrepareParamInteger, prepareOnly.GetPrepareParamKindAt(1))
+		prepareOnly.Free(mp)
+	}
 	require.Zero(t, mp.CurrNB())
 }
 

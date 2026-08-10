@@ -938,7 +938,11 @@ func (receiver *messageReceiverOnServer) newCompile() (*Compile, error) {
 				prepareParams.GetNulls().Add(uint64(i))
 			}
 		}
-		proc.SetOwnedPrepareParamsWithIsBin(prepareParams, prepareParamMetadata)
+		proc.SetOwnedPrepareParamsWithMetadata(
+			prepareParams,
+			prepareParamMetadata,
+			pHelper.prepareParams.IsBinaryString,
+		)
 	}
 	// Carry ROW_COUNT() state so row_count() pushed down to this remote CN reads
 	// the previous statement's affected rows instead of the default 0.

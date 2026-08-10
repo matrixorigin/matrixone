@@ -598,17 +598,28 @@ func spillBatchSize(bat *batch.Batch) (serialized, scratch uint64, err error) {
 			return 0, 0, err
 		}
 	}
-	serialized, err = checkedAdd(serialized, uint64(len(bat.ExtraBuf)))
 	metadataBytes, metadataErr := bat.PrepareParamKindMetadataSize()
 	if metadataErr != nil {
 		return 0, 0, metadataErr
 	}
-	serialized, err = checkedAdd(serialized, uint64(metadataBytes))
+	serialized, err = addSpillBatchTail(
+		serialized,
+		uint64(len(bat.ExtraBuf)),
+		uint64(metadataBytes),
+	)
 	if err != nil || serialized > maxSpillBatchBytes || serialized > uint64(math.MaxInt) {
 		return 0, 0, moerr.NewInternalErrorNoCtx("materialized sink spill batch exceeds runtime limit")
 	}
 	scratch, err = checkedAdd(scratch, serialized)
 	return serialized, scratch, err
+}
+
+func addSpillBatchTail(serialized, extraBytes, metadataBytes uint64) (uint64, error) {
+	withExtra, err := checkedAdd(serialized, extraBytes)
+	if err != nil {
+		return 0, err
+	}
+	return checkedAdd(withExtra, metadataBytes)
 }
 
 func checkedAdd(values ...uint64) (uint64, error) {

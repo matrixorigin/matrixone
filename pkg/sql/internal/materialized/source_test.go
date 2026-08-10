@@ -631,6 +631,11 @@ func TestSpillBatchSizeMatchesEncoding(t *testing.T) {
 	require.GreaterOrEqual(t, scratch, serialized)
 }
 
+func TestAddSpillBatchTailPreservesFirstOverflow(t *testing.T) {
+	_, err := addSpillBatchTail(math.MaxUint64, 1, 0)
+	require.ErrorContains(t, err, "spill batch size overflow")
+}
+
 func TestReadSpilledBatchRejectsRuntimeOversizeBeforeAllocation(t *testing.T) {
 	file, err := os.CreateTemp(t.TempDir(), "oversize-spill")
 	require.NoError(t, err)
