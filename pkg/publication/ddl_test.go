@@ -359,6 +359,7 @@ func Test_generateAddIndexStatement_GoodPath(t *testing.T) {
 			name:    "idx_name",
 			unique:  false,
 			columns: []string{"name"},
+			visible: true,
 		}
 
 		stmt := generateAddIndexStatement("`db`.`test`", "idx_name", idx)
@@ -373,6 +374,7 @@ func Test_generateAddIndexStatement_GoodPath(t *testing.T) {
 			name:    "idx_email",
 			unique:  true,
 			columns: []string{"email"},
+			visible: true,
 		}
 
 		stmt := generateAddIndexStatement("`db`.`test`", "idx_email", idx)
@@ -385,6 +387,7 @@ func Test_generateAddIndexStatement_GoodPath(t *testing.T) {
 			name:      "idx_content",
 			indexType: "FULLTEXT",
 			columns:   []string{"content"},
+			visible:   true,
 		}
 
 		stmt := generateAddIndexStatement("`db`.`test`", "idx_content", idx)
@@ -397,6 +400,7 @@ func Test_generateAddIndexStatement_GoodPath(t *testing.T) {
 			name:    "idx_composite",
 			unique:  false,
 			columns: []string{"col1", "col2", "col3"},
+			visible: true,
 		}
 
 		stmt := generateAddIndexStatement("`db`.`test`", "idx_composite", idx)

@@ -130,7 +130,10 @@ type container struct {
 	hashKeyVecs    []*vector.Vector
 
 	// aggs, which holds the intermediate state of agg functions.
-	aggList []aggexec.AggFuncExec
+	aggList                []aggexec.AggFuncExec
+	aggExprs               []aggexec.AggFuncExecExpression
+	prepareParamKind       aggexec.PrepareParamKindStates
+	prepareParamKindWireV1 bool
 
 	// spill, agglist to load spilled data.
 	spillMem        int64
@@ -145,6 +148,7 @@ type container struct {
 	spillReader          *bufio.Reader // reused across loadSpilledData calls
 	spillGbBatch         *batch.Batch  // reused staging batch across spillDataToDisk calls
 	spillBuf             *bytes.Buffer // reused write buffer across spillDataToDisk calls
+	spillGbPayload       *bytes.Buffer // transient group-key provenance payload
 	spillNonEmptyBuckets []int         // reused list of non-empty bucket indices
 	spillBucketRowIds    [][]int32     // per-bucket row index lists, reused across batches
 
@@ -250,6 +254,9 @@ func (ctr *container) free() {
 
 	ctr.freeGroupByBatches()
 	ctr.freeAggList()
+	ctr.prepareParamKind.Reset(nil)
+	ctr.aggExprs = nil
+	ctr.prepareParamKindWireV1 = false
 	ctr.freeSpillAggList()
 	ctr.freeSpillBkts()
 	if ctr.spillGbBatch != nil {
@@ -257,6 +264,7 @@ func (ctr *container) free() {
 		ctr.spillGbBatch = nil
 	}
 	ctr.spillBuf = nil
+	ctr.spillGbPayload = nil
 	ctr.spillReader = nil
 	ctr.spillHashCodes = nil
 	ctr.spillChunkFlags = nil

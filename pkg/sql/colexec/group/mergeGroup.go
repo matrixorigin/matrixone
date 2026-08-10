@@ -22,6 +22,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -31,6 +33,10 @@ func (mergeGroup *MergeGroup) Prepare(proc *process.Process) error {
 	if mergeGroup.ctr.mp != nil {
 		mergeGroup.ctr.free()
 	}
+	mergeGroup.ctr.prepareParamKind.Reset(mergeGroup.Aggs)
+	mergeGroup.ctr.aggExprs = mergeGroup.Aggs
+	mergeGroup.ctr.prepareParamKindWireV1 = prepareParamKindWireV1Enabled(proc) &&
+		hasPrepareParamKindPreservingAgg(mergeGroup.Aggs)
 	mergeGroup.ctr.mp = mpool.MustNew("merge_group_mpool")
 	mergeGroup.ctr.groupByTypes = nil
 	mergeGroup.ctr.keyNullable = false
@@ -193,11 +199,62 @@ func (mergeGroup *MergeGroup) buildOneBatch(proc *process.Process, bat *batch.Ba
 		if int(nAggs) != len(mergeGroup.ctr.spillAggList) {
 			return false, moerr.NewInternalError(proc.Ctx, "nAggs != len(mergeGroup.ctr.spillAggList)")
 		}
-
 		for i := int32(0); i < nAggs; i++ {
 			ag := mergeGroup.ctr.spillAggList[i]
 			if err := ag.UnmarshalFromReader(reader, mergeGroup.ctr.mp); err != nil {
 				return false, err
+			}
+		}
+		if !mergeGroup.ctr.prepareParamKindWireV1 && reader.Len() > 0 {
+			return false, moerr.NewInvalidStateNoCtx(
+				"prepared parameter aggregate trailer requires MORPCVersion12")
+		}
+		if mergeGroup.ctr.prepareParamKindWireV1 && reader.Len() > 0 {
+			expectedRows := make([]int, len(mergeGroup.ctr.spillAggList))
+			for i, ag := range mergeGroup.ctr.spillAggList {
+				expectedRows[i] = -1
+				if accessor, ok := ag.(interface {
+					PrepareParamKindRowCountForChunk(int) int
+				}); ok {
+					expectedRows[i] = accessor.PrepareParamKindRowCountForChunk(0)
+				}
+			}
+			prepareParamKinds, prepareParamKindSummaries, err := readPrepareParamKindTrailer(proc.Ctx, reader, nAggs,
+				&mergeGroup.ctr.prepareParamKind, expectedRows)
+			if err != nil {
+				return false, err
+			}
+			if reader.Len() != 0 {
+				return false, moerr.NewInternalErrorNoCtx(
+					"unexpected aggregate prepared parameter trailer bytes")
+			}
+			// Restore exact winner rows before the merge. BatchMerge copies
+			// provenance only when the incoming value actually wins, preserving
+			// the incumbent on equal values.
+			for i, agg := range mergeGroup.ctr.spillAggList {
+				if i >= len(mergeGroup.Aggs) ||
+					!mergeGroup.Aggs[i].PreservesFirstArgPrepareParamKind() {
+					continue
+				}
+				if i < len(prepareParamKinds) && len(prepareParamKinds[i]) != 0 {
+					accessor, ok := agg.(aggexec.PrepareParamKindStateAccessor)
+					if !ok {
+						return false, moerr.NewInternalErrorNoCtx(
+							"aggregate state cannot restore prepared parameter rows")
+					}
+					if err := accessor.RestorePrepareParamKindsForChunk(
+						0, prepareParamKinds[i], mergeGroup.ctr.mp); err != nil {
+						return false, err
+					}
+				} else if setter, ok := agg.(interface {
+					SetPrepareParamKind(kind vector.PrepareParamKind)
+				}); ok {
+					// Legacy v1 partials carry only the incoming aggregate
+					// summary. Never overwrite the incumbent before comparison.
+					if i < len(prepareParamKindSummaries) && prepareParamKindSummaries[i].seen {
+						setter.SetPrepareParamKind(prepareParamKindSummaries[i].kind)
+					}
+				}
 			}
 		}
 	}

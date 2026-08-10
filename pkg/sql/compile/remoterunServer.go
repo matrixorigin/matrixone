@@ -910,6 +910,16 @@ func (receiver *messageReceiverOnServer) newCompile() (*Compile, error) {
 	if pHelper.hasPlanSnapshotTS {
 		proc.SetPlanSnapshotTS(pHelper.planSnapshotTS)
 	}
+	prepareParamMetadata, err := process.PrepareParamMetadataForRemote(
+		proc.GetService(),
+		int(pHelper.prepareParams.Length),
+		pHelper.prepareParams.IsBin,
+	)
+	if err != nil {
+		proc.Free()
+		mpool.DeleteMPool(mp)
+		return nil, err
+	}
 	if pHelper.prepareParams.Length > 0 {
 		prepareParams, err := vector.NewVecWithDataCopy(
 			types.T_text.ToType(),
@@ -928,7 +938,7 @@ func (receiver *messageReceiverOnServer) newCompile() (*Compile, error) {
 				prepareParams.GetNulls().Add(uint64(i))
 			}
 		}
-		proc.SetOwnedPrepareParamsWithIsBin(prepareParams, append([]bool(nil), pHelper.prepareParams.IsBin...))
+		proc.SetOwnedPrepareParamsWithIsBin(prepareParams, prepareParamMetadata)
 	}
 	// Carry ROW_COUNT() state so row_count() pushed down to this remote CN reads
 	// the previous statement's affected rows instead of the default 0.

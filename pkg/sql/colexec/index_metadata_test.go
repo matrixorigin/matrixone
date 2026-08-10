@@ -224,6 +224,7 @@ func TestBuildInsertIndexMetaBatchUsesExistingMoIndexesLayout(t *testing.T) {
 						IndexTableName:     "__mo_index_entries_idx_vec",
 						TableExist:         true,
 						IncludedColumns:    []string{"title", "category"},
+						VisibilitySet:      true,
 					},
 				},
 			},
@@ -254,6 +255,7 @@ func TestBuildInsertIndexMetaBatchUsesExistingMoIndexesLayout(t *testing.T) {
 	}, bat.Attrs)
 	require.Equal(t, 1, bat.RowCount())
 	require.Equal(t, [][]byte{[]byte(`{"included_columns":"title,category","lists":"2","op_type":"vector_l2_ops"}`)}, vector.InefficientMustBytesCol(bat.Vecs[7]))
+	require.Equal(t, []int8{0}, vector.MustFixedColWithTypeCheck[int8](bat.Vecs[8]))
 	require.NotNil(t, bat.Vecs[15])
 }
 

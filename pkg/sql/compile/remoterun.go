@@ -1494,7 +1494,7 @@ func validateRemoteAggregateProtocol(
 				continue
 			}
 			return moerr.NewNotSupportedNoCtx(
-				"ordered-set percentile remote execution requires MORPC protocol version 11",
+				"ordered-set percentile remote execution requires MORPC protocol version 14",
 			)
 		case agg.GetConfigType() == plan.AggregateConfigType_AGG_CONFIG_GROUP_CONCAT_ORDER:
 			if proc != nil && supportsRemoteOrderedAggregates(proc.GetService()) {
@@ -1554,7 +1554,7 @@ func convertToResultPos(relList, colList []int32) []colexec.ResultPos {
 // func decodeBatch(proc *process.Process, data []byte) (*batch.Batch, error) {
 func decodeBatch(mp *mpool.MPool, data []byte) (*batch.Batch, error) {
 	bat := batch.NewOffHeapEmpty()
-	if err := bat.UnmarshalBinaryWithAnyMp(data, mp); err != nil {
+	if err := bat.UnmarshalBinaryWithPrepareParamKinds(data, mp); err != nil {
 		bat.Clean(mp)
 		return nil, err
 	}

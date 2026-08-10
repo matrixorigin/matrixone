@@ -940,12 +940,12 @@ func TestCompileShuffleGroupGatesOrderedSetPercentileByProtocolVersion(t *testin
 	rt := runtime.ServiceRuntime(c.proc.GetService())
 	defer rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCLatestVersion)
 
-	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion10)
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion13)
 	require.False(t, c.supportsRemoteOrderedSetAggregates())
 	require.False(t, c.canCompileShuffleGroup(aggNode),
 		"mixed-version clusters must keep ordered-set percentile aggregates local")
 
-	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion11)
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion14)
 	require.True(t, c.supportsRemoteOrderedSetAggregates())
 	require.True(t, c.canCompileShuffleGroup(aggNode))
 }

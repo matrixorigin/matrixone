@@ -88,7 +88,15 @@ func (proc *Process) BuildProcessInfo(
 			for i := range procInfo.PrepareParams.Nulls {
 				procInfo.PrepareParams.Nulls[i] = vec.GetNulls().Contains(uint64(i))
 			}
-			procInfo.PrepareParams.IsBin = append(procInfo.PrepareParams.IsBin, proc.Base.prepareParamsIsBin...)
+			metadata, err := PrepareParamMetadataForRemote(
+				proc.GetService(),
+				vec.Length(),
+				proc.Base.prepareParamsIsBin,
+			)
+			if err != nil {
+				return procInfo, err
+			}
+			procInfo.PrepareParams.IsBin = metadata
 		}
 	}
 	{ // session info
@@ -208,6 +216,18 @@ func (c *codecService) Decode(
 	ctx context.Context,
 	value pipeline.ProcessInfo,
 ) (*Process, error) {
+	service := ""
+	if c.lockService != nil {
+		service = c.lockService.GetConfig().ServiceID
+	}
+	prepareParamMetadata, err := PrepareParamMetadataForRemote(
+		service,
+		int(value.PrepareParams.Length),
+		value.PrepareParams.IsBin,
+	)
+	if err != nil {
+		return nil, err
+	}
 	txnOp, err := c.txnClient.NewWithSnapshot(ctx, value.Snapshot)
 	if err != nil {
 		return nil, err
@@ -262,7 +282,7 @@ func (c *codecService) Decode(
 				prepareParams.GetNulls().Add(uint64(i))
 			}
 		}
-		proc.SetOwnedPrepareParamsWithIsBin(prepareParams, append([]bool(nil), value.PrepareParams.IsBin...))
+		proc.SetOwnedPrepareParamsWithIsBin(prepareParams, prepareParamMetadata)
 	}
 	return proc, nil
 }

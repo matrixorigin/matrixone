@@ -17,6 +17,7 @@ package readutil
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -358,7 +359,15 @@ func (r *mergeReader) SetIndexParam(param *plan.IndexReaderParam) {
 }
 
 func (r *mergeReader) Close() error {
-	return nil
+	readers := r.rds
+	r.rds = nil
+	var firstErr error
+	for _, rd := range readers {
+		if err := rd.Close(); err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	return firstErr
 }
 
 func (r *mergeReader) Read(
@@ -379,13 +388,14 @@ func (r *mergeReader) Read(
 	for len(r.rds) > 0 {
 		isEnd, err := r.rds[0].Read(ctx, cols, expr, mp, outBatch)
 		if err != nil {
-			for _, rd := range r.rds {
-				rd.Close()
-			}
-			return false, err
+			return false, errors.Join(err, r.Close())
 		}
 		if isEnd {
+			child := r.rds[0]
 			r.rds = r.rds[1:]
+			if closeErr := child.Close(); closeErr != nil {
+				return false, errors.Join(closeErr, r.Close())
+			}
 		} else {
 			if logutil.GetSkip1Logger().Core().Enabled(zap.DebugLevel) {
 				logutil.Debug("merge reader catch batch")
@@ -397,6 +407,8 @@ func (r *mergeReader) Read(
 }
 
 // -----------------------------------------------------------------
+// NewReader consumes source and filterHint.BF on entry. On success the reader
+// releases them from Close; on construction failure NewReader releases them.
 func NewReader(
 	ctx context.Context,
 	mp *mpool.MPool,
@@ -409,7 +421,18 @@ func NewReader(
 	source engine.DataSource,
 	threshHold uint64,
 	filterHint engine.FilterHint,
-) (*reader, error) {
+) (r *reader, err error) {
+	defer func() {
+		if r != nil {
+			return
+		}
+		if source != nil {
+			source.Close()
+		}
+		if filterHint.BF != nil {
+			filterHint.BF.Free()
+		}
+	}()
 
 	baseFilter, err := ConstructBasePKFilter(
 		expr,
@@ -441,7 +464,7 @@ func NewReader(
 		return nil, err
 	}
 
-	r := &reader{
+	r = &reader{
 		withFilterMixin: withFilterMixin{
 			fs:         fs,
 			ts:         ts,
