@@ -36,6 +36,7 @@ const orderedPercentileConfigVersion byte = 1
 const (
 	orderedPercentileMaxRunSize = int64(8 << 20)
 	orderedPercentileMinRunSize = int64(64 << 10)
+	orderedPercentileRunFanIn   = 64
 )
 
 // EncodeOrderedPercentileConfig stores the direction and validated percentile
@@ -179,6 +180,7 @@ type orderedPercentileRun struct {
 	end   int64
 	pos   int64
 	rows  uint64
+	level uint8
 }
 
 func newOrderedPercentileExec[T numeric | types.Decimal64 | types.Decimal128, R types.FixedSizeTExceptStrType](
@@ -265,6 +267,9 @@ func (exec *orderedPercentileExec[T, R]) FlushWithContext(ctx context.Context) (
 	}
 	if exec.hasSpillRuns() {
 		if err := exec.spillOrderedState(ctx); err != nil {
+			return nil, err
+		}
+		if err := exec.compactAllSpilledRuns(ctx); err != nil {
 			return nil, err
 		}
 	}
@@ -441,7 +446,7 @@ func (exec *orderedPercentileExec[T, R]) Free() {
 func (exec *orderedPercentileExec[T, R]) fixedAndSpilledMemorySize() int64 {
 	var size int64
 	for _, runs := range exec.spillRuns {
-		size += int64(cap(runs)) * int64(4*8)
+		size += int64(cap(runs)) * int64(5*8)
 	}
 	return size
 }
@@ -543,7 +548,157 @@ func (exec *orderedPercentileExec[T, R]) writeOrderedRun(ctx context.Context, gr
 	if exec.spillReport != nil {
 		exec.spillReport(end-start, rows, exec.Size())
 	}
+	return exec.compactOrderedRuns(ctx, groupIndex)
+}
+
+func (exec *orderedPercentileExec[T, R]) compactAllSpilledRuns(ctx context.Context) error {
+	for groupIndex := range exec.spillRuns {
+		if err := exec.compactOrderedRuns(ctx, groupIndex); err != nil {
+			return err
+		}
+	}
 	return nil
+}
+
+func (exec *orderedPercentileExec[T, R]) compactOrderedRuns(ctx context.Context, groupIndex int) error {
+	for {
+		runs := exec.spillRuns[groupIndex]
+		if len(runs) <= orderedPercentileRunFanIn {
+			return nil
+		}
+		level, ok := firstCompactableRunLevel(runs)
+		if !ok {
+			return exec.compactFirstRuns(ctx, groupIndex)
+		}
+		if err := exec.compactRunsAtLevel(ctx, groupIndex, level); err != nil {
+			return err
+		}
+	}
+}
+
+func firstCompactableRunLevel(runs []orderedPercentileRun) (uint8, bool) {
+	for level := uint16(0); level <= 255; level++ {
+		count := 0
+		for _, run := range runs {
+			if uint16(run.level) == level {
+				count++
+				if count >= orderedPercentileRunFanIn {
+					return uint8(level), true
+				}
+			}
+		}
+	}
+	return 0, false
+}
+
+func (exec *orderedPercentileExec[T, R]) compactRunsAtLevel(ctx context.Context, groupIndex int, level uint8) error {
+	runs := exec.spillRuns[groupIndex]
+	source := make([]orderedPercentileRun, 0, orderedPercentileRunFanIn)
+	remaining := runs[:0]
+	for _, run := range runs {
+		if run.level == level && len(source) < orderedPercentileRunFanIn {
+			source = append(source, run)
+			continue
+		}
+		remaining = append(remaining, run)
+	}
+	nextLevel := level
+	if nextLevel < 255 {
+		nextLevel++
+	}
+	merged, err := exec.mergeOrderedRuns(ctx, source, nextLevel)
+	if err != nil {
+		return err
+	}
+	compacted := append([]orderedPercentileRun(nil), remaining...)
+	compacted = append(compacted, merged)
+	exec.spillRuns[groupIndex] = compacted
+	return nil
+}
+
+func (exec *orderedPercentileExec[T, R]) compactFirstRuns(ctx context.Context, groupIndex int) error {
+	runs := exec.spillRuns[groupIndex]
+	source := append([]orderedPercentileRun(nil), runs[:orderedPercentileRunFanIn]...)
+	remaining := append([]orderedPercentileRun(nil), runs[orderedPercentileRunFanIn:]...)
+	merged, err := exec.mergeOrderedRuns(ctx, source, runs[0].level)
+	if err != nil {
+		return err
+	}
+	exec.spillRuns[groupIndex] = append(remaining, merged)
+	return nil
+}
+
+func (exec *orderedPercentileExec[T, R]) mergeOrderedRuns(
+	ctx context.Context,
+	source []orderedPercentileRun,
+	level uint8,
+) (orderedPercentileRun, error) {
+	var zero orderedPercentileRun
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if exec.spillData == nil {
+		return zero, moerr.NewInternalErrorNoCtx("ordered percentile: missing spill data for run compaction")
+	}
+	runs := append([]orderedPercentileRun(nil), source...)
+	heads := make([]T, len(runs))
+	runHeap := &orderedPercentileRunHeap[T]{
+		runs:       make([]int, 0, len(runs)),
+		values:     heads,
+		descending: exec.descending,
+	}
+	for i := range runs {
+		runs[i].pos = runs[i].start
+		value, ok, err := exec.readRunValue(&runs[i])
+		if err != nil {
+			return zero, err
+		}
+		if ok {
+			heads[i] = value
+			runHeap.runs = append(runHeap.runs, i)
+		}
+	}
+	heap.Init(runHeap)
+
+	start, err := exec.spillData.Seek(0, io.SeekEnd)
+	if err != nil {
+		return zero, err
+	}
+	writer := bufio.NewWriterSize(exec.spillData, 64*1024)
+	var rows int64
+	for runHeap.Len() > 0 {
+		if err := context.Cause(ctx); err != nil {
+			return zero, err
+		}
+		run := heap.Pop(runHeap).(int)
+		value := heads[run]
+		if _, err = writer.Write(types.EncodeFixed(value)); err != nil {
+			return zero, err
+		}
+		rows++
+		next, ok, err := exec.readRunValue(&runs[run])
+		if err != nil {
+			return zero, err
+		}
+		if ok {
+			heads[run] = next
+			heap.Push(runHeap, run)
+		}
+	}
+	if err = writer.Flush(); err != nil {
+		return zero, err
+	}
+	end, err := exec.spillData.Seek(0, io.SeekCurrent)
+	if err != nil {
+		return zero, err
+	}
+	return orderedPercentileRun{
+		start: start,
+		end:   end,
+		pos:   start,
+		rows:  uint64(rows),
+		level: level,
+	}, nil
 }
 
 func (exec *orderedPercentileExec[T, R]) hasSpillRuns() bool {

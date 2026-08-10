@@ -627,7 +627,9 @@ func (group *Group) getNextIntermediateResult(proc *process.Process) (vm.CallRes
 	nAggs := int32(len(group.ctr.aggList))
 	buf.Write(types.EncodeInt32(&nAggs))
 	for _, ag := range group.ctr.aggList {
-		ag.SaveIntermediateResultOfChunk(curr, &buf)
+		if err := ag.SaveIntermediateResultOfChunk(curr, &buf); err != nil {
+			return vm.CancelResult, false, err
+		}
 	}
 	batch.ExtraBuf = buf.Bytes()
 

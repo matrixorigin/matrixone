@@ -125,6 +125,29 @@ func TestOrderedSetPercentileRemoteProtocolValidation(t *testing.T) {
 	require.NoError(t, validateRemoteAggregateProtocol(proc, percentile))
 }
 
+func TestOrderedSetPercentileMergeGroupRemoteProtocolValidation(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	rt := runtime.ServiceRuntime(proc.GetService())
+	defer rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCLatestVersion)
+
+	merge := group.NewArgumentMergeGroup()
+	merge.Aggs = []aggexec.AggFuncExecExpression{aggexec.MakeAggFunctionExpression(
+		aggexec.AggIdOfPercentileDisc,
+		false,
+		[]*plan.Expr{makeTestVarExpr("value")},
+		aggexec.EncodeOrderedPercentileConfig([]byte("0.5"), false),
+		plan.AggregateConfigType_AGG_CONFIG_NONE,
+	)}
+
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion10)
+	_, _, err := convertToPipelineInstruction(merge, proc, &scopeContext{}, 1)
+	require.ErrorContains(t, err, "requires MORPC protocol version 11")
+
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion11)
+	_, _, err = convertToPipelineInstruction(merge, proc, &scopeContext{}, 1)
+	require.NoError(t, err)
+}
+
 func TestScopeContainsVarExprInAggArguments(t *testing.T) {
 	scope := newScope(Normal)
 	op := group.NewArgument()

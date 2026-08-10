@@ -1321,12 +1321,13 @@ func (c *Compile) compilePlanScope(step int32, curNodeIdx int32, nodes []*plan.N
 		c.setAnalyzeCurrent(ss, int(curNodeIdx))
 		ss = c.ensureUserLevelLockSideEffectsOnCoordinator(node, ss)
 		orderedGroupConcat := hasOrderedGroupConcat(node)
+		orderedSetPercentile := hasOrderedSetPercentile(node)
 		if c.canCompileShuffleGroup(node) {
 			ss = c.compileSort(node, c.compileProjection(node, c.compileRestrict(node, c.compileShuffleGroup(node, ss, nodes))))
 			return ss, nil
 		}
-		if orderedGroupConcat {
-			ss = c.compileOrderedGroupConcat(node, ss, nodes)
+		if orderedGroupConcat || orderedSetPercentile {
+			ss = c.compileOrderedAggregateSingleStage(node, ss, nodes)
 			ss = c.compileSort(node, c.compileProjection(node, c.compileRestrict(node, ss)))
 			return ss, nil
 		}
@@ -5064,7 +5065,7 @@ func (c *Compile) compileMergeGroup(node *plan.Node, ss []*Scope, ns []*plan.Nod
 	}
 }
 
-func (c *Compile) compileOrderedGroupConcat(
+func (c *Compile) compileOrderedAggregateSingleStage(
 	node *plan.Node,
 	ss []*Scope,
 	ns []*plan.Node,

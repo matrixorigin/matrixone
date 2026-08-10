@@ -170,6 +170,34 @@ func TestOrderedPercentileExecSpillsRuns(t *testing.T) {
 	exec.Free()
 }
 
+func TestOrderedPercentileCompactsSpillRuns(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer func() { require.Equal(t, int64(0), mp.CurrNB()) }()
+
+	exec, err := makeOrderedPercentileExec(mp, AggIdOfPercentileCont, false,
+		types.T_int64.ToType(), orderedPercentileContinuous)
+	require.NoError(t, err)
+	require.NoError(t, exec.GroupGrow(1))
+	require.NoError(t, exec.SetExtraInformation(EncodeOrderedPercentileConfig([]byte("0.5"), false), 0))
+
+	typed := exec.(*orderedPercentileExec[int64, float64])
+	typed.spillFile = func() (*os.File, error) {
+		return os.CreateTemp(t.TempDir(), "ordered-percentile-compact-*")
+	}
+	typed.spillRuns = make([][]orderedPercentileRun, 1)
+	for i := 0; i < orderedPercentileRunFanIn+1; i++ {
+		require.NoError(t, typed.writeOrderedRun(context.Background(), 0, []int64{int64(i)}))
+	}
+	require.LessOrEqual(t, len(typed.spillRuns[0]), orderedPercentileRunFanIn)
+	require.LessOrEqual(t, cap(typed.spillRuns[0]), orderedPercentileRunFanIn)
+
+	result, err := exec.Flush()
+	require.NoError(t, err)
+	require.Equal(t, float64(orderedPercentileRunFanIn)/2, vector.GetFixedAtNoTypeCheck[float64](result[0], 0))
+	result[0].Free(mp)
+	exec.Free()
+}
+
 func TestOrderedPercentileConfigValidationAndMerge(t *testing.T) {
 	mp := mpool.MustNewZero()
 	defer func() { require.Equal(t, int64(0), mp.CurrNB()) }()

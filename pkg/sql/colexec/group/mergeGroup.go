@@ -187,6 +187,7 @@ func (mergeGroup *MergeGroup) buildOneBatch(proc *process.Process, bat *batch.Ba
 			if err != nil {
 				return false, err
 			}
+			mergeGroup.ctr.configureOrderedAggSpill(proc, mergeGroup.OpAnalyzer, mergeGroup.ctr.aggList)
 		}
 
 		if int(nAggs) != len(mergeGroup.ctr.spillAggList) {

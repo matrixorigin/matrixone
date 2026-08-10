@@ -695,6 +695,9 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 		}
 	case *mergerecursive.MergeRecursive:
 	case *group.MergeGroup:
+		if err := validateRemoteAggregateProtocol(proc, t.Aggs); err != nil {
+			return ctxId, nil, err
+		}
 		in.Agg = &pipeline.Group{
 			SpillMem:       t.SpillMem,
 			Aggs:           convertToPipelineAggregates(t.Aggs),
