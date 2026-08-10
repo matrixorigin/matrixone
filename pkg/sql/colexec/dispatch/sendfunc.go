@@ -76,19 +76,6 @@ func remoteBatchWireVersion(proc *process.Process) int64 {
 	return version
 }
 
-func binaryStringRemoteWireEnabled(proc *process.Process) bool {
-	if proc == nil {
-		return false
-	}
-	rt := moruntime.ServiceRuntime(proc.GetService())
-	if rt == nil {
-		return false
-	}
-	value, _ := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
-	version, ok := value.(int64)
-	return ok && version >= defines.MORPCVersion14
-}
-
 // marshalRemoteBatch keeps the stable Batch prefix unchanged and appends the
 // optional transient provenance trailer only after the shared protocol gate is
 // enabled. Older protocol sessions fail before writing rather than silently
