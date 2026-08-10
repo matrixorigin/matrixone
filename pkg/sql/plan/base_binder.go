@@ -3815,7 +3815,8 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 	var argsCastType []types.Type
 
 	// get function definition
-	fGet, err := function.GetFunctionByName(ctx, name, argsType)
+	resolutionTypes := decimalParamCommonTypeResolutionTypes(name, args, argsType)
+	fGet, err := function.GetFunctionByName(ctx, name, resolutionTypes)
 	if err != nil {
 		if name == "between" {
 			leftFn, err := BindFuncExprImplByPlanExpr(ctx, ">=", []*plan.Expr{DeepCopyExpr(args[0]), args[1]})
@@ -3838,6 +3839,9 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 	returnType = fGet.GetReturnType()
 	argsCastType, _ = fGet.ShouldDoImplicitTypeCast()
 	adjustControlFlowMetadata(name, args, argsType, &returnType, argsCastType)
+	argsCastType = applyDecimalParamCommonTypeCasts(
+		args, argsType, resolutionTypes, returnType, argsCastType,
+	)
 
 	// Optimization: avoid casting columns in comparisons to preserve index usage
 	switch name {
@@ -4536,6 +4540,75 @@ func normalizeDecimalParamComparisonArgs(ctx context.Context, name string, args 
 		return nil
 	}
 	return nil
+}
+
+// A direct prepared parameter is represented as TEXT for transport, but it is
+// still untyped while a common type is being selected.  Let DECIMAL-aware
+// common-type functions resolve such parameters from their concrete numeric
+// peers, then keep argsType unchanged so the normal cast insertion converts
+// the TEXT parameter to the selected DECIMAL type.
+func decimalParamCommonTypeResolutionTypes(name string, args []*Expr, argsType []types.Type) []types.Type {
+	switch name {
+	case "coalesce", "greatest", "least":
+	default:
+		return argsType
+	}
+	if len(args) != len(argsType) {
+		return argsType
+	}
+
+	hasParam := false
+	hasDecimal := false
+	for i, typ := range argsType {
+		if isDirectDynamicParam(args[i]) {
+			hasParam = true
+			continue
+		}
+		switch {
+		case typ.Oid == types.T_any:
+			continue
+		case typ.Oid.IsDecimal():
+			hasDecimal = true
+		case typ.IsIntOrUint(), typ.Oid == types.T_bit:
+			continue
+		default:
+			return argsType
+		}
+	}
+	if !hasParam || !hasDecimal {
+		return argsType
+	}
+
+	resolutionTypes := append([]types.Type(nil), argsType...)
+	for i := range args {
+		if isDirectDynamicParam(args[i]) {
+			resolutionTypes[i] = types.T_any.ToType()
+		}
+	}
+	return resolutionTypes
+}
+
+func applyDecimalParamCommonTypeCasts(
+	args []*Expr,
+	argsType []types.Type,
+	resolutionTypes []types.Type,
+	returnType types.Type,
+	argsCastType []types.Type,
+) []types.Type {
+	if !returnType.Oid.IsDecimal() || len(args) != len(argsType) || len(args) != len(resolutionTypes) {
+		return argsCastType
+	}
+
+	for i := range args {
+		if resolutionTypes[i].Oid != types.T_any || !isDirectDynamicParam(args[i]) {
+			continue
+		}
+		if len(argsCastType) == 0 {
+			argsCastType = append([]types.Type(nil), argsType...)
+		}
+		argsCastType[i] = returnType
+	}
+	return argsCastType
 }
 
 // MySQL compares scalar TIME expressions to strings as text, but converts a

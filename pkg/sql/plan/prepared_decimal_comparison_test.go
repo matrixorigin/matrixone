@@ -243,3 +243,132 @@ func TestPreparedDecimalComparisonPlannerReplacementAndReuse(t *testing.T) {
 		require.True(t, planExprContainsPreparedDecimalParam(original))
 	}
 }
+
+func TestPreparedDecimalCommonTypeFunctionsDeriveParamType(t *testing.T) {
+	ctx := context.Background()
+	decimalTypes := []types.Type{
+		types.New(types.T_decimal64, 18, 2),
+		types.New(types.T_decimal128, 20, 4),
+	}
+
+	for _, decimalType := range decimalTypes {
+		for _, name := range []string{"coalesce", "greatest", "least"} {
+			for _, paramPos := range []int{0, 1} {
+				t.Run(fmt.Sprintf("%s/%s/param_pos=%d", name, decimalType.Oid, paramPos), func(t *testing.T) {
+					args := []*planpb.Expr{
+						makePreparedDecimalComparisonParam(0),
+						makePreparedDecimalComparisonColumn(decimalType),
+					}
+					if paramPos == 1 {
+						args[0], args[1] = args[1], args[0]
+					}
+
+					expr, err := BindFuncExprImplByPlanExpr(ctx, name, args)
+					require.NoError(t, err)
+					require.Equal(t, int32(decimalType.Oid), expr.Typ.Id)
+					require.Equal(t, decimalType.Width, expr.Typ.Width)
+					require.Equal(t, decimalType.Scale, expr.Typ.Scale)
+					require.Len(t, expr.GetF().Args, 2)
+					for _, arg := range expr.GetF().Args {
+						require.Equal(t, int32(decimalType.Oid), arg.Typ.Id)
+						require.Equal(t, decimalType.Width, arg.Typ.Width)
+						require.Equal(t, decimalType.Scale, arg.Typ.Scale)
+					}
+					require.NotNil(t, expr.GetF().Args[paramPos].GetF())
+					require.NotNil(t, expr.GetF().Args[paramPos].GetF().Args[0].GetP())
+				})
+			}
+		}
+	}
+}
+
+func TestPreparedDecimalCommonTypeFunctionsUseAllNumericPeers(t *testing.T) {
+	ctx := context.Background()
+	decimalIntegral := types.New(types.T_decimal128, 38, 0)
+	decimalFractional := types.New(types.T_decimal128, 38, 38)
+
+	for _, name := range []string{"coalesce", "greatest", "least"} {
+		t.Run(name, func(t *testing.T) {
+			expr, err := BindFuncExprImplByPlanExpr(ctx, name, []*planpb.Expr{
+				makePreparedDecimalComparisonParam(0),
+				makePreparedDecimalComparisonColumn(decimalIntegral),
+				makePreparedDecimalComparisonColumn(decimalFractional),
+				makePlan2Int64ConstExprWithType(1),
+			})
+			require.NoError(t, err)
+			require.Equal(t, int32(types.T_decimal256), expr.Typ.Id)
+			require.Equal(t, int32(76), expr.Typ.Width)
+			require.Equal(t, int32(38), expr.Typ.Scale)
+			for _, arg := range expr.GetF().Args {
+				require.Equal(t, int32(types.T_decimal256), arg.Typ.Id)
+				require.Equal(t, int32(76), arg.Typ.Width)
+				require.Equal(t, int32(38), arg.Typ.Scale)
+			}
+		})
+	}
+}
+
+func TestPreparedDecimalCommonTypeFunctionsKeepStringAndFloatCoercion(t *testing.T) {
+	ctx := context.Background()
+	decimalType := types.New(types.T_decimal128, 20, 4)
+
+	for _, name := range []string{"coalesce", "greatest", "least"} {
+		t.Run(name+"/real_string", func(t *testing.T) {
+			expr, err := BindFuncExprImplByPlanExpr(ctx, name, []*planpb.Expr{
+				makePlan2StringConstExprWithType("9007199254740992.0001"),
+				makePreparedDecimalComparisonColumn(decimalType),
+			})
+			require.NoError(t, err)
+			require.True(t, types.T(expr.Typ.Id).IsMySQLString())
+		})
+
+		t.Run(name+"/prepared_with_float_peer", func(t *testing.T) {
+			expr, err := BindFuncExprImplByPlanExpr(ctx, name, []*planpb.Expr{
+				makePreparedDecimalComparisonParam(0),
+				makePreparedDecimalComparisonColumn(decimalType),
+				makePlan2Float64ConstExprWithType(1.5),
+			})
+			require.NoError(t, err)
+			require.True(t, types.T(expr.Typ.Id).IsMySQLString())
+		})
+	}
+}
+
+func TestPreparedDecimalCommonTypePlannerReplacementAndReuse(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	decimalType := types.New(types.T_decimal128, 20, 4)
+	mock.ctxt.tables["part"].Cols[7].Typ = makePlan2Type(&decimalType)
+
+	logicPlan, err := runOneStmt(
+		mock,
+		t,
+		"prepare decimal_common from 'select p_partkey from part where coalesce(?, p_retailprice) = p_retailprice'",
+	)
+	require.NoError(t, err)
+	prepare := logicPlan.GetDcl().GetPrepare()
+	require.NotNil(t, prepare)
+	original := findPreparedDecimalComparisonInPlan(prepare.Plan, "coalesce")
+	require.NotNil(t, original)
+	requirePreparedDecimalComparisonArgs(t, original, decimalType, 0)
+
+	for _, value := range []any{
+		nil,
+		"9007199254740992.0001",
+		nil,
+		"9007199254740993.0001",
+	} {
+		filled, err := FillValuesOfParamsInPlan(context.Background(), prepare.Plan, []any{value})
+		require.NoError(t, err)
+		require.NotSame(t, prepare.Plan, filled)
+
+		coalesce := findPreparedDecimalComparisonInPlan(filled, "coalesce")
+		require.NotNil(t, coalesce)
+		for _, arg := range coalesce.GetF().Args {
+			require.Equal(t, int32(decimalType.Oid), arg.Typ.Id)
+			require.Equal(t, decimalType.Width, arg.Typ.Width)
+			require.Equal(t, decimalType.Scale, arg.Typ.Scale)
+		}
+		require.False(t, planExprContainsPreparedDecimalParam(coalesce))
+		require.True(t, planExprContainsPreparedDecimalParam(original))
+	}
+}
