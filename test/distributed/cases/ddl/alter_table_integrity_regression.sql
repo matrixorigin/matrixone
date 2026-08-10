@@ -65,6 +65,16 @@ insert into check_case_rename values (0);
 insert into check_case_rename values (1);
 select x from check_case_rename;
 
+-- LIKE's ESCAPE clause is a separate AST child. Renaming a column referenced
+-- there must update the persisted CHECK text as well as its bound expression.
+create table check_escape_rename (
+    s varchar(20),
+    escape_char varchar(1),
+    constraint ck_escape check (s like 'a!%' escape escape_char)
+);
+alter table check_escape_rename rename column escape_char to marker;
+show create table check_escape_rename;
+
 -- CHANGE COLUMN uses COPY but must preserve the same CHECK rename invariant.
 create table check_change (
     a int,

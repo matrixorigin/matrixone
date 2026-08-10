@@ -71,6 +71,15 @@ insert into check_case_rename values (1);
 select x from check_case_rename;
 x
 1
+create table check_escape_rename (
+s varchar(20),
+escape_char varchar(1),
+constraint ck_escape check (s like 'a!%' escape escape_char)
+);
+alter table check_escape_rename rename column escape_char to marker;
+show create table check_escape_rename;
+Table    Create Table
+check_escape_rename    CREATE TABLE `check_escape_rename` (\n  `s` varchar(20) DEFAULT NULL,\n  `marker` varchar(1) DEFAULT NULL,\n  CONSTRAINT `ck_escape` CHECK (`s` like 'a!%' escape `marker`)\n)
 create table check_change (
 a int,
 b int,

@@ -386,7 +386,7 @@ func TestBuildAlterRenameColumnCarriesRewrittenChecks(t *testing.T) {
 	require.Equal(t, "`nation_id` >= 0", alter.GetCopyTableDef().GetChecks()[0].GetOriginSql())
 }
 
-func TestBuildAlterRenameColumnRewritesCaseChecks(t *testing.T) {
+func TestBuildAlterRenameColumnRewritesComplexChecks(t *testing.T) {
 	for _, tc := range []struct {
 		name  string
 		check string
@@ -401,6 +401,16 @@ func TestBuildAlterRenameColumnRewritesCaseChecks(t *testing.T) {
 			name:  "case without else",
 			check: "case `n_nationkey` when 1 then 1 end = 1",
 			want:  "case `nation_id` when 1 then 1 end = 1",
+		},
+		{
+			name:  "fulltext match",
+			check: "match (`n_nationkey`) against ('1')",
+			want:  "MATCH (`nation_id`) AGAINST ('1')",
+		},
+		{
+			name:  "like escape expression",
+			check: "`n_name` like 'a!%' escape `n_nationkey`",
+			want:  "`n_name` like 'a!%' escape `nation_id`",
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
