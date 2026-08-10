@@ -1165,7 +1165,7 @@ func (tbl *txnTable) rangesOnePart(
 ) (err error) {
 	var done bool
 
-	if done, err = readutil.TryFastFilterBlocks(
+	if done, err = readutil.TryFastFilterBlocksWithZone(
 		ctx,
 		tbl.db.op.SnapshotTS(),
 		tbl.tableDef,
@@ -1176,6 +1176,7 @@ func (tbl *txnTable) rangesOnePart(
 		outBlocks,
 		tbl.PrefetchAllMeta,
 		tbl.getTxn().engine.fs,
+		proc.GetSessionInfo().TimeZone,
 	); err != nil {
 		return err
 	} else if done {

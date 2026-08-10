@@ -1173,6 +1173,35 @@ func TestBindFuncExprImplByPlanExpr_DatetimeTimestampComparisonRemainsCrossTyped
 	require.Equal(t, int32(types.T_timestamp), comparison.GetF().Args[1].Typ.Id)
 }
 
+func TestBindFuncExprImplByPlanExpr_NonConstantTemporalComparisonUsesCommonKeyType(t *testing.T) {
+	datetimeColumn := &plan.Expr{
+		Typ: plan.Type{Id: int32(types.T_datetime), Scale: 6},
+		Expr: &plan.Expr_Col{
+			Col: &plan.ColRef{RelPos: 0, ColPos: 0, Name: "d"},
+		},
+	}
+	timestampColumn := &plan.Expr{
+		Typ: plan.Type{Id: int32(types.T_timestamp), Scale: 3},
+		Expr: &plan.Expr_Col{
+			Col: &plan.ColRef{RelPos: 1, ColPos: 0, Name: "t"},
+		},
+	}
+
+	comparison, err := BindFuncExprImplByPlanExpr(context.Background(), "=", []*plan.Expr{
+		datetimeColumn,
+		timestampColumn,
+	})
+	require.NoError(t, err)
+	require.Len(t, comparison.GetF().Args, 2)
+	cast := comparison.GetF().Args[0].GetF()
+	require.NotNil(t, cast)
+	require.Equal(t, "cast", cast.Func.ObjName)
+	require.Equal(t, int32(types.T_timestamp), comparison.GetF().Args[0].Typ.Id)
+	require.Equal(t, int32(3), comparison.GetF().Args[0].Typ.Scale)
+	require.NotNil(t, comparison.GetF().Args[1].GetCol())
+	require.Equal(t, int32(types.T_timestamp), comparison.GetF().Args[1].Typ.Id)
+}
+
 func TestBuildPlan_DatetimeTimestampComparisonIsZonemappable(t *testing.T) {
 	compilerCtx := NewMockCompilerContext(true)
 	compilerCtx.dbs["system"] = true

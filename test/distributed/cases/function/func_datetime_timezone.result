@@ -1,4 +1,30 @@
 set time_zone = '+00:00';
+drop database if exists temporal_cross_type_regression;
+create database temporal_cross_type_regression;
+set time_zone = '+08:00';
+set optimizer_hints = 'blockFilter=1';
+create table temporal_cross_type_regression.d(v datetime(6));
+create table temporal_cross_type_regression.t(v timestamp(6));
+insert into temporal_cross_type_regression.d values ('2026-08-10 10:00:00');
+insert into temporal_cross_type_regression.t values ('2026-08-10 10:00:00');
+select count(*) as join_count
+from temporal_cross_type_regression.d
+join temporal_cross_type_regression.t on d.v = t.v;
+join_count
+1
+create table temporal_cross_type_regression.f(v datetime(6));
+insert into temporal_cross_type_regression.f values ('2026-08-10 10:30:00');
+select mo_ctl('dn', 'flush', 'temporal_cross_type_regression.f');
+mo_ctl(dn, flush, temporal_cross_type_regression.f)
+{\n  "method": "Flush",\n  "result": [\n    {\n      "returnStr": "OK"\n    }\n  ]\n}\n
+select count(*) as filter_count
+from temporal_cross_type_regression.f
+where v < cast('2026-08-10 12:00:00' as timestamp);
+filter_count
+1
+set optimizer_hints = '';
+set time_zone = '+00:00';
+drop database temporal_cross_type_regression;
 select now(), @@session.time_zone;
 now()    @@time_zone
 2025-11-22 10:07:17.141386000    +00:00

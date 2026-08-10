@@ -110,41 +110,62 @@ func opBetweenDatetimeTimestamp(
 	proc *process.Process,
 	length int,
 ) error {
-	timestampScale := int32(6)
-	for _, parameter := range parameters {
-		if parameter.GetType().Oid == types.T_timestamp {
-			timestampScale = parameter.GetType().Scale
-			break
-		}
-	}
-	toDatetimeTimestamp := func(value types.Datetime) types.Timestamp {
-		return value.ToTimestamp(proc.GetSessionInfo().TimeZone).TruncateToScale(timestampScale)
-	}
-	identityTimestamp := func(value types.Timestamp) types.Timestamp { return value }
+	zone := proc.GetSessionInfo().TimeZone
+	valueScale := parameters[0].GetType().Scale
+	lowerScale := parameters[1].GetType().Scale
+	upperScale := parameters[2].GetType().Scale
 
 	switch {
 	case parameters[0].GetType().Oid == types.T_datetime &&
 		parameters[1].GetType().Oid == types.T_datetime:
 		return opBetweenTemporal[types.Datetime, types.Datetime, types.Timestamp](
-			parameters, result, length, toDatetimeTimestamp, toDatetimeTimestamp, identityTimestamp)
+			parameters, result, length,
+			func(value, lower types.Datetime) bool { return value >= lower },
+			func(value types.Datetime, upper types.Timestamp) bool {
+				return value.ToTimestamp(zone).TruncateToScale(upperScale) <= upper
+			})
 	case parameters[0].GetType().Oid == types.T_datetime &&
 		parameters[2].GetType().Oid == types.T_datetime:
 		return opBetweenTemporal[types.Datetime, types.Timestamp, types.Datetime](
-			parameters, result, length, toDatetimeTimestamp, identityTimestamp, toDatetimeTimestamp)
+			parameters, result, length,
+			func(value types.Datetime, lower types.Timestamp) bool {
+				return value.ToTimestamp(zone).TruncateToScale(lowerScale) >= lower
+			},
+			func(value, upper types.Datetime) bool { return value <= upper })
 	case parameters[0].GetType().Oid == types.T_datetime:
 		return opBetweenTemporal[types.Datetime, types.Timestamp, types.Timestamp](
-			parameters, result, length, toDatetimeTimestamp, identityTimestamp, identityTimestamp)
+			parameters, result, length,
+			func(value types.Datetime, lower types.Timestamp) bool {
+				return value.ToTimestamp(zone).TruncateToScale(lowerScale) >= lower
+			},
+			func(value types.Datetime, upper types.Timestamp) bool {
+				return value.ToTimestamp(zone).TruncateToScale(upperScale) <= upper
+			})
 	case parameters[0].GetType().Oid == types.T_timestamp &&
 		parameters[1].GetType().Oid == types.T_timestamp:
 		return opBetweenTemporal[types.Timestamp, types.Timestamp, types.Datetime](
-			parameters, result, length, identityTimestamp, identityTimestamp, toDatetimeTimestamp)
+			parameters, result, length,
+			func(value, lower types.Timestamp) bool { return value >= lower },
+			func(value types.Timestamp, upper types.Datetime) bool {
+				return value <= upper.ToTimestamp(zone).TruncateToScale(valueScale)
+			})
 	case parameters[0].GetType().Oid == types.T_timestamp &&
 		parameters[2].GetType().Oid == types.T_timestamp:
 		return opBetweenTemporal[types.Timestamp, types.Datetime, types.Timestamp](
-			parameters, result, length, identityTimestamp, toDatetimeTimestamp, identityTimestamp)
+			parameters, result, length,
+			func(value types.Timestamp, lower types.Datetime) bool {
+				return value >= lower.ToTimestamp(zone).TruncateToScale(valueScale)
+			},
+			func(value, upper types.Timestamp) bool { return value <= upper })
 	default:
 		return opBetweenTemporal[types.Timestamp, types.Datetime, types.Datetime](
-			parameters, result, length, identityTimestamp, toDatetimeTimestamp, toDatetimeTimestamp)
+			parameters, result, length,
+			func(value types.Timestamp, lower types.Datetime) bool {
+				return value >= lower.ToTimestamp(zone).TruncateToScale(valueScale)
+			},
+			func(value types.Timestamp, upper types.Datetime) bool {
+				return value <= upper.ToTimestamp(zone).TruncateToScale(valueScale)
+			})
 	}
 }
 
@@ -156,9 +177,8 @@ func opBetweenTemporal[
 	parameters []*vector.Vector,
 	result *vector.FunctionResult[bool],
 	length int,
-	valueToTimestamp func(V) types.Timestamp,
-	lowerToTimestamp func(L) types.Timestamp,
-	upperToTimestamp func(U) types.Timestamp,
+	matchesLower func(V, L) bool,
+	matchesUpper func(V, U) bool,
 ) error {
 	valueParam := vector.GenerateFunctionFixedTypeParameter[V](parameters[0])
 	lowerParam := vector.GenerateFunctionFixedTypeParameter[L](parameters[1])
@@ -175,8 +195,7 @@ func opBetweenTemporal[
 			resultNulls.Add(i)
 			continue
 		}
-		instant := valueToTimestamp(value)
-		values[i] = instant >= lowerToTimestamp(lower) && instant <= upperToTimestamp(upper)
+		values[i] = matchesLower(value, lower) && matchesUpper(value, upper)
 	}
 	return nil
 }

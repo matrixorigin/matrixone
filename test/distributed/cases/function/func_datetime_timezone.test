@@ -2,6 +2,32 @@
 -- @setup
 -- Test timezone setting and querying
 set time_zone = '+00:00';
+
+-- @case
+-- @desc:mixed DATETIME/TIMESTAMP comparison keeps join keys and block pruning semantically aligned
+drop database if exists temporal_cross_type_regression;
+create database temporal_cross_type_regression;
+set time_zone = '+08:00';
+set optimizer_hints = 'blockFilter=1';
+create table temporal_cross_type_regression.d(v datetime(6));
+create table temporal_cross_type_regression.t(v timestamp(6));
+insert into temporal_cross_type_regression.d values ('2026-08-10 10:00:00');
+insert into temporal_cross_type_regression.t values ('2026-08-10 10:00:00');
+select count(*) as join_count
+from temporal_cross_type_regression.d
+join temporal_cross_type_regression.t on d.v = t.v;
+
+create table temporal_cross_type_regression.f(v datetime(6));
+insert into temporal_cross_type_regression.f values ('2026-08-10 10:30:00');
+-- @ignore:0
+select mo_ctl('dn', 'flush', 'temporal_cross_type_regression.f');
+select count(*) as filter_count
+from temporal_cross_type_regression.f
+where v < cast('2026-08-10 12:00:00' as timestamp);
+
+set optimizer_hints = '';
+set time_zone = '+00:00';
+drop database temporal_cross_type_regression;
 -- @ignore:0
 select now(), @@session.time_zone;
 
@@ -190,4 +216,3 @@ from (
 ) as t;
 
 set time_zone = '+00:00';
-

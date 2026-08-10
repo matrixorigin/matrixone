@@ -51,6 +51,30 @@ func TestBetweenDatetimeTimestampPreservesInstantSemantics(t *testing.T) {
 	require.True(t, ok, info)
 }
 
+func TestBetweenDatetimeTimestampUsesEachBoundScale(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	proc.GetSessionInfo().TimeZone = time.UTC
+
+	value, err := types.ParseDatetime("2026-08-10 12:00:00.123456", 6)
+	require.NoError(t, err)
+	lower := value.ToTimestamp(time.UTC).TruncateToScale(3)
+	upper, err := types.ParseTimestamp(time.UTC, "2026-08-10 12:00:00.123100", 6)
+	require.NoError(t, err)
+
+	testCase := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_datetime.ToTypeWithScale(6), []types.Datetime{value}, nil),
+			NewFunctionTestConstInput(types.T_timestamp.ToTypeWithScale(3), []types.Timestamp{lower}, nil),
+			NewFunctionTestConstInput(types.T_timestamp.ToTypeWithScale(6), []types.Timestamp{upper}, nil),
+		},
+		NewFunctionTestResult(types.T_bool.ToType(), false, []bool{false}, nil),
+		betweenImpl,
+	)
+	ok, info := testCase.Run()
+	require.True(t, ok, info)
+}
+
 func TestOpBetweenBool(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	boolType := types.T_bool.ToType()

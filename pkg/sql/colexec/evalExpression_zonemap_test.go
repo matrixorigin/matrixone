@@ -149,6 +149,33 @@ func TestEvaluateFilterByZoneMapDatetimeTimestampComparison(t *testing.T) {
 		selected := colexec.EvaluateFilterByZoneMap(proc.Ctx, proc, expr, meta, map[int]int{0: 0}, zms, vecs)
 		require.False(t, selected, plan2.FormatExpr(expr, plan2.FormatOption{}))
 	})
+
+	t.Run("between applies each timestamp bound scale", func(t *testing.T) {
+		proc := testutil.NewProcess(t)
+		defer proc.Free()
+		proc.GetSessionInfo().TimeZone = time.UTC
+		value := parseDatetime(t, "2026-08-10 12:00:00.123456")
+		column := &plan.Expr{
+			Typ: plan.Type{Id: int32(types.T_datetime), Scale: 6},
+			Expr: &plan.Expr_Col{
+				Col: &plan.ColRef{RelPos: 0, ColPos: 0, Name: "request_at"},
+			},
+		}
+		lower := plan2.MakePlan2TimestampConstExprWithType(int64(value.ToTimestamp(time.UTC).TruncateToScale(3)))
+		lower.Typ.Scale = 3
+		upperValue, err := types.ParseTimestamp(time.UTC, "2026-08-10 12:00:00.123100", 6)
+		require.NoError(t, err)
+		upper := plan2.MakePlan2TimestampConstExprWithType(int64(upperValue))
+		upper.Typ.Scale = 6
+		expr, err := plan2.BindFuncExprImplByPlanExpr(proc.Ctx, "between", []*plan.Expr{column, lower, upper})
+		require.NoError(t, err)
+		zms, vecs := makeZoneMapEvalScratch(expr)
+
+		selected := colexec.EvaluateFilterByZoneMap(
+			proc.Ctx, proc, expr, makeDatetimeBlockMeta(value), map[int]int{0: 0}, zms, vecs,
+		)
+		require.False(t, selected, plan2.FormatExpr(expr, plan2.FormatOption{}))
+	})
 }
 
 func TestEvaluateFilterByZoneMapNullableInListIsConservative(t *testing.T) {

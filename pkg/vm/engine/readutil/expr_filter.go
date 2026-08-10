@@ -17,6 +17,7 @@ package readutil
 import (
 	"context"
 	"sort"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -394,10 +395,310 @@ func zoneMapMetadataComparable(
 	return bound == nil || (bound.IsInited() && bound.GetType() == columnType)
 }
 
+type temporalFilterRange struct {
+	min types.Timestamp
+	max types.Timestamp
+}
+
+func temporalFilterRangeFromZoneMap(
+	zm objectio.ZoneMap,
+	timestampScale int32,
+	zone *time.Location,
+) (temporalFilterRange, bool) {
+	switch zm.GetType() {
+	case types.T_timestamp:
+		minValue, minOK := zm.GetMin().(types.Timestamp)
+		maxValue, maxOK := zm.GetMax().(types.Timestamp)
+		return temporalFilterRange{min: minValue, max: maxValue}, minOK && maxOK
+	case types.T_datetime:
+		minValue, minOK := zm.GetMin().(types.Datetime)
+		maxValue, maxOK := zm.GetMax().(types.Datetime)
+		if !minOK || !maxOK {
+			return temporalFilterRange{}, false
+		}
+		if minValue == maxValue {
+			value := minValue.ToTimestamp(zone).TruncateToScale(timestampScale)
+			return temporalFilterRange{min: value, max: value}, true
+		}
+		minTimestamp, maxTimestamp, ok := types.DatetimeRangeToTimestampRange(minValue, maxValue, zone)
+		if !ok {
+			return temporalFilterRange{}, false
+		}
+		return temporalFilterRange{
+			min: minTimestamp.TruncateToScale(timestampScale),
+			max: maxTimestamp.TruncateToScale(timestampScale),
+		}, true
+	default:
+		return temporalFilterRange{}, false
+	}
+}
+
+func temporalFilterRangeFromValue(
+	value []byte,
+	valueType types.T,
+	timestampScale int32,
+	zone *time.Location,
+) (temporalFilterRange, bool) {
+	if len(value) != 8 {
+		return temporalFilterRange{}, false
+	}
+	var timestamp types.Timestamp
+	switch valueType {
+	case types.T_timestamp:
+		timestamp = types.DecodeTimestamp(value)
+	case types.T_datetime:
+		timestamp = types.DecodeDatetime(value).ToTimestamp(zone).TruncateToScale(timestampScale)
+	default:
+		return temporalFilterRange{}, false
+	}
+	return temporalFilterRange{min: timestamp, max: timestamp}, true
+}
+
+func temporalFilterMatch(op string, value, bound temporalFilterRange) zoneMapMatch {
+	var matches bool
+	switch op {
+	case "=":
+		matches = value.max >= bound.min && value.min <= bound.max
+	case "<":
+		matches = value.min < bound.max
+	case "<=":
+		matches = value.min <= bound.max
+	case ">":
+		matches = value.max > bound.min
+	case ">=":
+		matches = value.max >= bound.min
+	default:
+		return zoneMapMatch{}
+	}
+	return zoneMapMatch{matches: matches, comparable: true}
+}
+
+func makeTemporalFilterMatcher(
+	columnType types.T,
+	columnScale int32,
+	value []byte,
+	valueType types.T,
+	valueScale int32,
+	zone *time.Location,
+	op string,
+) (func(objectio.ZoneMap) zoneMapMatch, bool) {
+	if columnType == valueType {
+		return func(zm objectio.ZoneMap) zoneMapMatch {
+			switch op {
+			case "=":
+				return intersectsBound(zm, value, nil, columnType)
+			case "<":
+				return anyLTByBound(zm, value, nil, columnType)
+			case "<=":
+				return anyLEByBound(zm, value, nil, columnType)
+			case ">":
+				return anyGTByBound(zm, value, nil, columnType)
+			case ">=":
+				return anyGEByBound(zm, value, nil, columnType)
+			default:
+				return zoneMapMatch{}
+			}
+		}, true
+	}
+	if !isMixedTemporalFilterTypes(columnType, valueType) {
+		return nil, false
+	}
+
+	timestampScale := valueScale
+	if columnType == types.T_timestamp {
+		timestampScale = columnScale
+	}
+	bound, ok := temporalFilterRangeFromValue(value, valueType, timestampScale, zone)
+	if !ok {
+		return nil, false
+	}
+	return func(zm objectio.ZoneMap) zoneMapMatch {
+		valueRange, ok := temporalFilterRangeFromZoneMap(zm, timestampScale, zone)
+		if !ok {
+			return zoneMapMatch{}
+		}
+		return temporalFilterMatch(op, valueRange, bound)
+	}, true
+}
+
+func reverseTemporalFilterOperator(op string) string {
+	switch op {
+	case "<":
+		return ">"
+	case "<=":
+		return ">="
+	case ">":
+		return "<"
+	case ">=":
+		return "<="
+	default:
+		return op
+	}
+}
+
+func isMixedTemporalFilterTypes(typesToCheck ...types.T) bool {
+	hasDatetime, hasTimestamp := false, false
+	for _, typ := range typesToCheck {
+		switch typ {
+		case types.T_datetime:
+			hasDatetime = true
+		case types.T_timestamp:
+			hasTimestamp = true
+		default:
+			return false
+		}
+	}
+	return hasDatetime && hasTimestamp
+}
+
+func compileTemporalFilterExpr(
+	expr *plan.Expr,
+	exprImpl *plan.Expr_F,
+	tableDef *plan.TableDef,
+	fs fileservice.FileService,
+	zone *time.Location,
+) (
+	fastFilterOp FastFilterOp,
+	loadOp LoadOp,
+	objectFilterOp ObjectFilterOp,
+	blockFilterOp BlockFilterOp,
+	seekOp SeekFirstBlockOp,
+	canCompile bool,
+	highSelectivityHint bool,
+	handled bool,
+) {
+	op := exprImpl.F.Func.ObjName
+	if op != "=" && op != "<" && op != "<=" && op != ">" && op != ">=" && op != "between" {
+		return
+	}
+
+	args := exprImpl.F.Args
+	var colExpr *plan.Expr_Col
+	var columnPlanExpr *plan.Expr
+	var valueExprs []*plan.Expr
+	columnOnLeft := true
+	if op == "between" {
+		if len(args) != 3 {
+			return
+		}
+		var ok bool
+		if colExpr, ok = args[0].Expr.(*plan.Expr_Col); !ok {
+			return
+		}
+		columnPlanExpr = args[0]
+		valueExprs = args[1:]
+	} else {
+		if len(args) != 2 {
+			return
+		}
+		if col, ok := args[0].Expr.(*plan.Expr_Col); ok {
+			colExpr = col
+			columnPlanExpr = args[0]
+			valueExprs = args[1:]
+		} else if col, ok := args[1].Expr.(*plan.Expr_Col); ok {
+			colExpr = col
+			columnPlanExpr = args[1]
+			valueExprs = args[:1]
+			columnOnLeft = false
+		} else {
+			return
+		}
+	}
+
+	temporalTypes := make([]types.T, 0, len(valueExprs)+1)
+	temporalTypes = append(temporalTypes, types.T(columnPlanExpr.Typ.Id))
+	for _, valueExpr := range valueExprs {
+		temporalTypes = append(temporalTypes, types.T(valueExpr.Typ.Id))
+	}
+	if !isMixedTemporalFilterTypes(temporalTypes...) {
+		return
+	}
+	handled = true
+	if zone == nil {
+		return nil, nil, nil, nil, nil, false, false, true
+	}
+
+	values, ok := getConstBytesFromExpr(valueExprs)
+	if !ok {
+		return nil, nil, nil, nil, nil, false, false, true
+	}
+	colDef := getColDefByName(expr, colExpr.Col.Name, colExpr.Col.ColPos, tableDef)
+	if !columnOnLeft {
+		op = reverseTemporalFilterOperator(op)
+	}
+
+	matchers := make([]func(objectio.ZoneMap) zoneMapMatch, len(values))
+	for i := range values {
+		comparisonOp := op
+		if op == "between" {
+			if i == 0 {
+				comparisonOp = ">="
+			} else {
+				comparisonOp = "<="
+			}
+		}
+		matchers[i], ok = makeTemporalFilterMatcher(
+			types.T(colDef.Typ.Id), colDef.Typ.Scale,
+			values[i], types.T(valueExprs[i].Typ.Id), valueExprs[i].Typ.Scale,
+			zone, comparisonOp,
+		)
+		if !ok {
+			return nil, nil, nil, nil, nil, false, false, true
+		}
+	}
+	match := func(zm objectio.ZoneMap) zoneMapMatch {
+		if op == "between" {
+			return matchers[0](zm).and(matchers[1](zm))
+		}
+		return matchers[0](zm)
+	}
+
+	isPK, isSorted := isSortedKey(colDef)
+	if isSorted {
+		fastFilterOp = func(obj *objectio.ObjectStats) (bool, error) {
+			if obj.ZMIsEmpty() {
+				return true, nil
+			}
+			return match(obj.SortKeyZoneMap()).mayMatch(), nil
+		}
+	}
+	loadOp = loadMetadataOnlyOpFactory(fs)
+	seqNum := colDef.Seqnum
+	objectFilterOp = func(meta objectio.ObjectMeta, _ objectio.BloomFilter) (bool, error) {
+		if isSorted {
+			return true, nil
+		}
+		return match(meta.MustDataMeta().MustGetColumn(uint16(seqNum)).ZoneMap()).mayMatch(), nil
+	}
+	blockFilterOp = func(
+		_ int, blkMeta objectio.BlockObject, _ objectio.BloomFilter,
+	) (bool, bool, error) {
+		return false, match(blkMeta.MustGetColumn(uint16(seqNum)).ZoneMap()).mayMatch(), nil
+	}
+	return fastFilterOp, loadOp, objectFilterOp, blockFilterOp, nil, true, isPK, true
+}
+
 func CompileFilterExprs(
 	exprs []*plan.Expr,
 	tableDef *plan.TableDef,
 	fs fileservice.FileService,
+) (
+	fastFilterOp FastFilterOp,
+	loadOp LoadOp,
+	objectFilterOp ObjectFilterOp,
+	blockFilterOp BlockFilterOp,
+	seekOp SeekFirstBlockOp,
+	canCompile bool,
+	highSelectivityHint bool,
+) {
+	return compileFilterExprs(exprs, tableDef, fs, nil)
+}
+
+func compileFilterExprs(
+	exprs []*plan.Expr,
+	tableDef *plan.TableDef,
+	fs fileservice.FileService,
+	zone *time.Location,
 ) (
 	fastFilterOp FastFilterOp,
 	loadOp LoadOp,
@@ -412,7 +713,7 @@ func CompileFilterExprs(
 		return
 	}
 	if len(exprs) == 1 {
-		return CompileFilterExpr(exprs[0], tableDef, fs)
+		return compileFilterExpr(exprs[0], tableDef, fs, zone)
 	}
 	ops1 := make([]FastFilterOp, 0, len(exprs))
 	ops2 := make([]LoadOp, 0, len(exprs))
@@ -422,7 +723,7 @@ func CompileFilterExprs(
 	compiled := 0
 
 	for _, expr := range exprs {
-		expr_op1, expr_op2, expr_op3, expr_op4, expr_op5, can, hsh := CompileFilterExpr(expr, tableDef, fs)
+		expr_op1, expr_op2, expr_op3, expr_op4, expr_op5, can, hsh := compileFilterExpr(expr, tableDef, fs, zone)
 		if !can {
 			continue
 		}
@@ -525,6 +826,23 @@ func CompileFilterExpr(
 	canCompile bool,
 	highSelectivityHint bool,
 ) {
+	return compileFilterExpr(expr, tableDef, fs, nil)
+}
+
+func compileFilterExpr(
+	expr *plan.Expr,
+	tableDef *plan.TableDef,
+	fs fileservice.FileService,
+	zone *time.Location,
+) (
+	fastFilterOp FastFilterOp,
+	loadOp LoadOp,
+	objectFilterOp ObjectFilterOp,
+	blockFilterOp BlockFilterOp,
+	seekOp SeekFirstBlockOp,
+	canCompile bool,
+	highSelectivityHint bool,
+) {
 	canCompile = true
 	if expr == nil {
 		return
@@ -533,6 +851,12 @@ func CompileFilterExpr(
 	// case *plan.Expr_Lit:
 	// case *plan.Expr_Col:
 	case *plan.Expr_F:
+		if op1, op2, op3, op4, op5, can, hsh, handled := compileTemporalFilterExpr(
+			expr, exprImpl, tableDef, fs, zone,
+		); handled {
+			return op1, op2, op3, op4, op5, can, hsh
+		}
+
 		switch exprImpl.F.Func.ObjName {
 		case "or":
 			highSelectivityHint = true
@@ -543,7 +867,7 @@ func CompileFilterExpr(
 			seekOps := make([]SeekFirstBlockOp, 0, len(exprImpl.F.Args))
 
 			for idx := range exprImpl.F.Args {
-				op1, op2, op3, op4, op5, can, hsh := CompileFilterExpr(exprImpl.F.Args[idx], tableDef, fs)
+				op1, op2, op3, op4, op5, can, hsh := compileFilterExpr(exprImpl.F.Args[idx], tableDef, fs, zone)
 				if !can {
 					return nil, nil, nil, nil, nil, false, false
 				}
@@ -637,7 +961,7 @@ func CompileFilterExpr(
 			compiled := 0
 
 			for idx := range exprImpl.F.Args {
-				op1, op2, op3, op4, op5, can, hsh := CompileFilterExpr(exprImpl.F.Args[idx], tableDef, fs)
+				op1, op2, op3, op4, op5, can, hsh := compileFilterExpr(exprImpl.F.Args[idx], tableDef, fs, zone)
 				if !can {
 					continue
 				}
