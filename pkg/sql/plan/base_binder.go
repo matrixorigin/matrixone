@@ -3815,6 +3815,9 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 	for idx, expr := range args {
 		argsType[idx] = makeTypeByPlan2Expr(expr)
 	}
+	if err := normalizeNonConstantTemporalComparisonArgs(ctx, name, args, argsType); err != nil {
+		return nil, err
+	}
 
 	var funcID int64
 	var returnType types.Type
@@ -4194,6 +4197,45 @@ func bindConvertUsingCharset(ctx context.Context, args []*plan.Expr) error {
 	// selected charset on that argument so the overload's return-type callback
 	// can carry it into the bound result without inspecting expression values.
 	args[1].Typ.Charset = charset
+	return nil
+}
+
+// normalizeNonConstantTemporalComparisonArgs keeps both sides of equality and
+// ordering keys in one physical domain when neither side is a runtime
+// constant. Hash joins, shuffle keys, and runtime filters consume comparison
+// operands as keys instead of invoking the scalar comparison function, so raw
+// DATETIME and TIMESTAMP encodings cannot safely remain cross-typed there.
+// Column-versus-runtime-constant predicates stay cross-typed so storage can
+// see the raw column and apply the timezone-aware pruning path.
+func normalizeNonConstantTemporalComparisonArgs(
+	ctx context.Context,
+	name string,
+	args []*Expr,
+	argsType []types.Type,
+) error {
+	switch name {
+	case "=", "<", "<=", ">", ">=", "<>":
+	default:
+		return nil
+	}
+	if len(args) != 2 || len(argsType) != 2 ||
+		!((argsType[0].Oid == types.T_datetime && argsType[1].Oid == types.T_timestamp) ||
+			(argsType[0].Oid == types.T_timestamp && argsType[1].Oid == types.T_datetime)) ||
+		isRuntimeConstExpr(args[0]) || isRuntimeConstExpr(args[1]) {
+		return nil
+	}
+
+	datetimeIndex, timestampIndex := 0, 1
+	if argsType[0].Oid == types.T_timestamp {
+		datetimeIndex, timestampIndex = 1, 0
+	}
+	targetType := argsType[timestampIndex]
+	casted, err := appendCastBeforeExpr(ctx, args[datetimeIndex], makePlan2Type(&targetType))
+	if err != nil {
+		return err
+	}
+	args[datetimeIndex] = casted
+	argsType[datetimeIndex] = targetType
 	return nil
 }
 

@@ -114,6 +114,7 @@ type dmlPlanCtx struct {
 	// Recursive child actions still build their normal delete/update branches.
 	skipTargetDelete               bool
 	preserveUpdateSourceProjection bool
+	ignoreCheckConstraint          bool
 }
 
 // information of deleteNode, which is about the deleted table
@@ -4255,6 +4256,32 @@ func makePreUpdateDeletePlan(
 			ProjectList: getProjectionByLastNode(builder, lastNodeId),
 		}
 		lastNodeId = builder.appendNode(filterNode, bindCtx)
+	}
+
+	if delCtx.updateColLength > 0 {
+		checkedLastNodeID, err := appendCheckConstraintPlanWithColLookup(
+			builder,
+			bindCtx,
+			delCtx.tableDef,
+			lastNodeId,
+			0,
+			func(colName string) (int32, bool) {
+				if colPos, updated := delCtx.updateColPosMap[colName]; updated {
+					return int32(colPos), true
+				}
+				for colPos, col := range delCtx.tableDef.Cols {
+					if col.Name == colName {
+						return int32(colPos), true
+					}
+				}
+				return 0, false
+			},
+			delCtx.ignoreCheckConstraint,
+		)
+		if err != nil {
+			return -1, err
+		}
+		lastNodeId = checkedLastNodeID
 	}
 
 	// lastNodeId = appendSinkNode(builder, bindCtx, lastNodeId)
