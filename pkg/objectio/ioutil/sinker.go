@@ -471,7 +471,7 @@ func DeleteUnpublishedObjects(
 		)
 		err := fs.Delete(deleteCtx, unique[start:end]...)
 		cancel()
-		if err != nil {
+		if err != nil && !moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
 			return len(unique), errors.Join(
 				moerr.NewInternalErrorf(
 					ctx, "delete unpublished objects [%d:%d]", start, end),

@@ -119,10 +119,12 @@ type txnTable struct {
 
 	// Before publication, a sink retains exact object references until delete
 	// succeeds. After publication, the table retains exact object names until
-	// commit succeeds. Both owners are retried by rollback and final Close.
-	pendingTransferredTombstoneSinks []*transferredTombstoneSink
-	transferredTombstoneObjects      []string
-	transferredTombstoneDeadline     time.Time
+	// commit succeeds. A confirmed rollback retries both owners through Close;
+	// a generic Close must not delete files after an uncertain commit result.
+	pendingTransferredTombstoneSinks  []*transferredTombstoneSink
+	transferredTombstoneObjects       []string
+	transferredTombstoneRollback      bool
+	transferredTombstoneCleanupLogged bool
 
 	dedupTS types.TS
 
@@ -372,10 +374,7 @@ func (tbl *txnTable) TransferDeletes(
 			if transferSink != nil {
 				err = transferSink.close(ctx, err)
 				if transferSink.cleanupPending {
-					tbl.pendingTransferredTombstoneSinks = append(
-						tbl.pendingTransferredTombstoneSinks,
-						transferSink,
-					)
+					tbl.registerPendingTransferredTombstoneSink(transferSink)
 				}
 			}
 		}()
@@ -994,7 +993,9 @@ func (tbl *txnTable) GetID() uint64 {
 
 func (tbl *txnTable) Close() error {
 	var err error
-	err = combineTxnLifecycleErrors(err, tbl.rollbackTransferredTombstones())
+	if tbl.transferredTombstoneRollback {
+		err = combineTxnLifecycleErrors(err, tbl.rollbackTransferredTombstones())
+	}
 	err = combineTxnLifecycleErrors(err, tbl.dataTable.Close())
 	if tbl.tombstoneTable != nil {
 		err = combineTxnLifecycleErrors(err, tbl.tombstoneTable.Close())
@@ -1014,11 +1015,36 @@ func (tbl *txnTable) registerTransferredTombstones(statsList ...objectio.ObjectS
 	tbl.tombstoneTable.tableSpace.registerStats(statsList...)
 }
 
-func (tbl *txnTable) rollbackTransferredTombstones() error {
-	var cleanupErr error
+func (tbl *txnTable) registerPendingTransferredTombstoneSink(sink *transferredTombstoneSink) {
+	sink.cleanupDeadline = tbl.store.adoptTransferredTombstoneCleanupDeadline(sink.cleanupDeadline)
+	tbl.pendingTransferredTombstoneSinks = append(
+		tbl.pendingTransferredTombstoneSinks,
+		sink,
+	)
+}
+
+func (tbl *txnTable) rollbackTransferredTombstones() (cleanupErr error) {
+	if len(tbl.pendingTransferredTombstoneSinks) == 0 &&
+		len(tbl.transferredTombstoneObjects) == 0 {
+		return nil
+	}
+	defer func() {
+		if cleanupErr != nil && !tbl.transferredTombstoneCleanupLogged {
+			tbl.transferredTombstoneCleanupLogged = true
+			logutil.Error(
+				"ROLLBACK-TRANSFERRED-TOMBSTONES",
+				zap.Uint64("table-id", tbl.GetID()),
+				zap.Int("pending-sinks", len(tbl.pendingTransferredTombstoneSinks)),
+				zap.Int("published-objects", len(tbl.transferredTombstoneObjects)),
+				zap.Error(cleanupErr),
+			)
+		}
+	}()
+	deadline := tbl.store.adoptTransferredTombstoneCleanupDeadline(time.Time{})
 	if len(tbl.pendingTransferredTombstoneSinks) != 0 {
 		pending := tbl.pendingTransferredTombstoneSinks[:0]
 		for _, sink := range tbl.pendingTransferredTombstoneSinks {
+			sink.cleanupDeadline = deadline
 			if err := sink.retryCleanup(tbl.store.ctx); err != nil {
 				pending = append(pending, sink)
 				cleanupErr = combineTxnLifecycleErrors(cleanupErr, err)
@@ -1050,12 +1076,6 @@ func (tbl *txnTable) rollbackTransferredTombstones() error {
 			),
 			err,
 		)
-		logutil.Error(
-			"ROLLBACK-TRANSFERRED-TOMBSTONE-OBJECTS",
-			zap.Uint64("table-id", tbl.GetID()),
-			zap.Int("objects", len(tbl.transferredTombstoneObjects)),
-			zap.Error(err),
-		)
 		return combineTxnLifecycleErrors(cleanupErr, err)
 	}
 
@@ -1064,12 +1084,10 @@ func (tbl *txnTable) rollbackTransferredTombstones() error {
 }
 
 func (tbl *txnTable) newTransferredTombstoneCleanupContext() (context.Context, context.CancelFunc) {
-	if tbl.transferredTombstoneDeadline.IsZero() {
-		tbl.transferredTombstoneDeadline = time.Now().Add(transferredTombstoneCleanupTimeout)
-	}
+	deadline := tbl.store.adoptTransferredTombstoneCleanupDeadline(time.Time{})
 	return context.WithDeadlineCause(
 		context.WithoutCancel(tbl.store.ctx),
-		tbl.transferredTombstoneDeadline,
+		deadline,
 		moerr.CauseCleanUpUselessFiles,
 	)
 }
@@ -1601,6 +1619,7 @@ func (tbl *txnTable) BatchDedupLocal(bat *containers.Batch) (err error) {
 }
 
 func (tbl *txnTable) PrepareRollback() (err error) {
+	tbl.transferredTombstoneRollback = true
 	for idx, txnEntry := range tbl.txnEntries.entries {
 		if tbl.txnEntries.IsDeleted(idx) {
 			continue
@@ -1764,6 +1783,7 @@ func isAppendableObjectCreateEntry(entry txnif.TxnEntry) bool {
 }
 
 func (tbl *txnTable) ApplyRollback() (err error) {
+	tbl.transferredTombstoneRollback = true
 	csn := tbl.csnStart
 	for idx, node := range tbl.txnEntries.entries {
 		if tbl.txnEntries.IsDeleted(idx) {

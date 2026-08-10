@@ -148,12 +148,27 @@ type txnStore struct {
 	writeOps   atomic.Uint32
 	tracer     *txnTracer
 
+	transferredTombstoneCleanupDeadline time.Time
+
 	isOffline bool
 
 	wait struct {
 		tailCollect sync.WaitGroup
 		cmdMarshal  sync.WaitGroup
 	}
+}
+
+func (store *txnStore) adoptTransferredTombstoneCleanupDeadline(deadline time.Time) time.Time {
+	if deadline.IsZero() {
+		deadline = time.Now().Add(transferredTombstoneCleanupTimeout)
+	}
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	if store.transferredTombstoneCleanupDeadline.IsZero() ||
+		deadline.Before(store.transferredTombstoneCleanupDeadline) {
+		store.transferredTombstoneCleanupDeadline = deadline
+	}
+	return store.transferredTombstoneCleanupDeadline
 }
 
 var TxnStoreFactory = func(

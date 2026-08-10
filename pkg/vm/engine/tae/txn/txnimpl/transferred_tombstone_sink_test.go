@@ -32,6 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/dbutils"
 	"github.com/stretchr/testify/require"
 )
 
@@ -68,11 +69,12 @@ func listTransferredTombstoneTestFiles(
 }
 
 type stubTransferredTombstoneSinker struct {
-	writeErr error
-	syncErr  error
-	closeErr error
-	stats    []objectio.ObjectStats
-	tail     []*batch.Batch
+	writeErr  error
+	syncErr   error
+	deleteErr error
+	closeErr  error
+	stats     []objectio.ObjectStats
+	tail      []*batch.Batch
 
 	writes          int
 	syncs           int
@@ -102,7 +104,7 @@ func (s *stubTransferredTombstoneSinker) DeletePersisted(ctx context.Context) (i
 	s.deletes++
 	s.deleteCtxErr = ctx.Err()
 	s.deleteDeadline, s.deleteHasBound = ctx.Deadline()
-	return s.deleteObjectCnt, nil
+	return s.deleteObjectCnt, s.deleteErr
 }
 
 func (s *stubTransferredTombstoneSinker) Close() error {
@@ -295,6 +297,91 @@ func TestTransferredTombstoneSinkRetriesRealPersistedObject(t *testing.T) {
 	require.Empty(t, tbl.pendingTransferredTombstoneSinks)
 	require.Equal(t, filesBeforeSpill, listTransferredTombstoneTestFiles(t, baseFS),
 		"the retry must delete the real unpublished object before Close")
+}
+
+type deadlineTrackingDeleteFileService struct {
+	fileservice.FileService
+	deletes     int
+	deadline    time.Time
+	hasDeadline bool
+}
+
+func (fs *deadlineTrackingDeleteFileService) Delete(
+	ctx context.Context,
+	_ ...string,
+) error {
+	fs.deletes++
+	fs.deadline, fs.hasDeadline = ctx.Deadline()
+	return nil
+}
+
+func TestTxnTableCloseDoesNotDeleteWithoutConfirmedRollback(t *testing.T) {
+	newTable := func(fs fileservice.FileService) *txnTable {
+		return &txnTable{
+			store: &txnStore{
+				ctx: context.Background(),
+				rt:  dbutils.NewRuntime(dbutils.WithRuntimeObjectFS(fs)),
+			},
+			dataTable:                   &baseTable{},
+			transferredTombstoneObjects: []string{"transferred-tombstone"},
+		}
+	}
+
+	t.Run("uncertain commit", func(t *testing.T) {
+		fs := &deadlineTrackingDeleteFileService{}
+		tbl := newTable(fs)
+		require.NoError(t, tbl.Close())
+		require.Zero(t, fs.deletes,
+			"generic Close must not delete an object that commit recovery may reference")
+	})
+
+	t.Run("confirmed rollback", func(t *testing.T) {
+		fs := &deadlineTrackingDeleteFileService{}
+		tbl := newTable(fs)
+		tbl.transferredTombstoneRollback = true
+		require.NoError(t, tbl.Close())
+		require.Equal(t, 1, fs.deletes,
+			"confirmed rollback must delete its unpublished object")
+	})
+}
+
+func TestTransferredTombstoneCleanupSharesOneTransactionDeadline(t *testing.T) {
+	deleteErr := errors.New("injected initial delete failure")
+	stub := &stubTransferredTombstoneSinker{
+		deleteErr:       deleteErr,
+		deleteObjectCnt: 1,
+	}
+	sink := &transferredTombstoneSink{sinker: stub}
+	operationErr := moerr.NewTxnWWConflictNoCtx(0, "")
+	require.Same(t, operationErr, sink.close(context.Background(), operationErr))
+	require.True(t, sink.cleanupPending)
+
+	fs := &deadlineTrackingDeleteFileService{}
+	tbl := &txnTable{
+		store: &txnStore{
+			ctx: context.Background(),
+			rt:  dbutils.NewRuntime(dbutils.WithRuntimeObjectFS(fs)),
+		},
+		transferredTombstoneObjects: []string{"published-before-rollback"},
+	}
+	tbl.registerPendingTransferredTombstoneSink(sink)
+	stub.deleteErr = nil
+
+	require.NoError(t, tbl.rollbackTransferredTombstones())
+	require.True(t, stub.deleteHasBound)
+	require.True(t, fs.hasDeadline)
+	require.Equal(t, tbl.store.transferredTombstoneCleanupDeadline, stub.deleteDeadline)
+	require.Equal(t, tbl.store.transferredTombstoneCleanupDeadline, fs.deadline)
+	require.Equal(t, 2, stub.deletes)
+	require.Equal(t, 1, fs.deletes)
+
+	otherTable := &txnTable{store: tbl.store}
+	otherCleanupCtx, cancel := otherTable.newTransferredTombstoneCleanupContext()
+	defer cancel()
+	otherDeadline, ok := otherCleanupCtx.Deadline()
+	require.True(t, ok)
+	require.Equal(t, tbl.store.transferredTombstoneCleanupDeadline, otherDeadline,
+		"all tables in one transaction must share the earliest cleanup deadline")
 }
 
 func TestTransferredTombstoneSinkPreservesMoErrClassification(t *testing.T) {

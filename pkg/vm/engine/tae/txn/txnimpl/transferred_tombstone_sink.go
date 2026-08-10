@@ -109,11 +109,6 @@ func (s *transferredTombstoneSink) close(ctx context.Context, priorErr error) er
 			// failure. Do not destroy that retry owner in Close. TransferDeletes
 			// hands this sink to txnTable, whose rollback and final Close retry it.
 			s.cleanupPending = true
-			logutil.Error(
-				"failed to delete unpublished transferred tombstone objects",
-				zap.NamedError("operation-error", priorErr),
-				zap.NamedError("cleanup-error", cleanupErr),
-			)
 			return priorErr
 		}
 	}
@@ -140,10 +135,6 @@ func (s *transferredTombstoneSink) retryCleanup(ctx context.Context) error {
 		return nil
 	}
 	if err := s.deletePersisted(ctx); err != nil {
-		logutil.Error(
-			"failed to retry unpublished transferred tombstone cleanup",
-			zap.Error(err),
-		)
 		return err
 	}
 	s.cleanupPending = false
