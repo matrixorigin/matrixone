@@ -294,7 +294,7 @@ create table fk_c(id int primary key, pid int, foreign key(pid) references fk_p(
 insert into fk_p values (1,'p1');
 insert into fk_c values (10,1);
 replace into fk_p values (1,'p1_new');
-internal error: Cannot delete or update a parent row: a foreign key constraint fails
+Cannot delete or update a parent row: a foreign key constraint fails
 select * from fk_p order by id;
 id    v
 1    p1
@@ -362,7 +362,7 @@ foreign key(pid) references fk_dp(id) on delete set default);
 insert into fk_dp values (1,'p1'),(2,'p2');
 insert into fk_dc values (10,1);
 replace into fk_dp values (1,'p1_new');
-internal error: Cannot delete or update a parent row: a foreign key constraint fails
+Cannot delete or update a parent row: a foreign key constraint fails
 select * from fk_dp order by id;
 id    v
 1    p1
@@ -538,7 +538,7 @@ insert into fk_param_c values (1, 1);
 prepare fk_review_stmt from 'replace into fk_param_p values (1, ?)';
 set @fk_v = 300;
 execute fk_review_stmt using @fk_v;
-internal error: Cannot delete or update a parent row: a foreign key constraint fails
+Cannot delete or update a parent row: a foreign key constraint fails
 select * from fk_param_p;
 id    v
 1    300

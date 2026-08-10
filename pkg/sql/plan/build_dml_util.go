@@ -290,6 +290,13 @@ func buildUpdatePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 		}
 		newCols = append(newCols, col)
 	}
+	if updatePlanCtx.isFkRecursionCall {
+		// Recursive FK actions share catalog TableDef pointers with sibling
+		// actions. Keep hidden-column trimming local so a SET NULL update cannot
+		// remove __mo_rowid from an already-built CASCADE scan. Ordinary UPDATE
+		// keeps its existing positional table definition.
+		updatePlanCtx.tableDef = CloneTableDefForPlan(updatePlanCtx.tableDef, false)
+	}
 	updatePlanCtx.tableDef.Cols = newCols
 	insertColLength := len(updatePlanCtx.insertColPos) + 1
 	projectList := make([]*Expr, insertColLength)
@@ -1639,24 +1646,14 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 						}
 
 					case plan.ForeignKeyDef_CASCADE:
-						cascadeChildScanProject := childScanProject
-						if delCtx.skipTargetDelete || delCtx.sourceTag != 0 {
-							cascadeChildScanProject = childProjectList
-						}
 						rightId := builder.appendNode(&plan.Node{
 							NodeType:    plan.Node_TABLE_SCAN,
 							Stats:       &plan.Stats{},
 							ObjRef:      childObjRef,
 							TableDef:    childTableDef,
-							ProjectList: cascadeChildScanProject,
+							ProjectList: childScanProject,
 							BindingTags: childBindingTags,
 						}, bindCtx)
-						if delCtx.skipTargetDelete || delCtx.sourceTag != 0 {
-							if builder.preserveScanProjection == nil {
-								builder.preserveScanProjection = make(map[int32]struct{})
-							}
-							builder.preserveScanProjection[rightId] = struct{}{}
-						}
 
 						// Legacy DELETE keeps the existing self-reference guard. Modern
 						// REPLACE owns the target-row delete in MULTI_UPDATE, so its old-row
