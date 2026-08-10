@@ -156,16 +156,11 @@ func prepareQueryResultBatchForWrite(
 ) (*batch.Batch, func(), error) {
 	rowCount := bat.RowCount()
 	var writeBat *batch.Batch
-	cloned := make([]*vector.Vector, 0)
-	release := func() {
-		for _, vec := range cloned {
-			vec.Free(mp)
-		}
-	}
+	var cloned []*vector.Vector
 
 	for i, vec := range bat.Vecs {
 		if vec == nil {
-			release()
+			freeQueryResultVectors(cloned, mp)
 			return nil, nil, moerr.NewInternalErrorNoCtxf(
 				"query result column %d is nil", i,
 			)
@@ -174,7 +169,7 @@ func prepareQueryResultBatchForWrite(
 			continue
 		}
 		if !vec.IsConst() && vec.Length() > rowCount {
-			release()
+			freeQueryResultVectors(cloned, mp)
 			return nil, nil, moerr.NewInternalErrorNoCtxf(
 				"query result column %d has %d rows, batch has %d",
 				i, vec.Length(), rowCount,
@@ -183,7 +178,7 @@ func prepareQueryResultBatchForWrite(
 		if !vec.IsConst() {
 			for row := vec.Length(); row < rowCount; row++ {
 				if !vec.GetNulls().Contains(uint64(row)) {
-					release()
+					freeQueryResultVectors(cloned, mp)
 					return nil, nil, moerr.NewInternalErrorNoCtxf(
 						"query result column %d is missing non-null row %d",
 						i, row,
@@ -199,7 +194,7 @@ func prepareQueryResultBatchForWrite(
 		}
 		dup, err := vec.Dup(mp)
 		if err != nil {
-			release()
+			freeQueryResultVectors(cloned, mp)
 			return nil, nil, err
 		}
 		cloned = append(cloned, dup)
@@ -212,7 +207,7 @@ func prepareQueryResultBatchForWrite(
 		} else {
 			for dup.Length() < rowCount {
 				if err := dup.UnionNull(mp); err != nil {
-					release()
+					freeQueryResultVectors(cloned, mp)
 					return nil, nil, err
 				}
 			}
@@ -223,7 +218,15 @@ func prepareQueryResultBatchForWrite(
 	if writeBat == nil {
 		return bat, nil, nil
 	}
-	return writeBat, release, nil
+	return writeBat, func() {
+		freeQueryResultVectors(cloned, mp)
+	}, nil
+}
+
+func freeQueryResultVectors(vecs []*vector.Vector, mp *mpool.MPool) {
+	for _, vec := range vecs {
+		vec.Free(mp)
+	}
 }
 
 func saveBatches(ctx context.Context, ses *Session, data []*batch.Batch) error {
