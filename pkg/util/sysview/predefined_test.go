@@ -22,6 +22,7 @@ import (
 	"github.com/stretchr/testify/assert"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 )
 
@@ -63,6 +64,30 @@ func TestInformationSchemaTableConstraintsDDL_ContainsCheckConstraints(t *testin
 	for _, statement := range statements {
 		statement.Free()
 	}
+}
+
+func TestInformationSchemaTableConstraintsLegacyDDL_DoesNotUseCheckConstraints(t *testing.T) {
+	assert.NotContains(t, InformationSchemaTableConstraintsLegacyDDL, "UNION ALL")
+	assert.NotContains(t, InformationSchemaTableConstraintsLegacyDDL, "mo_check_constraints()")
+	assert.Contains(t, InformationSchemaTableConstraintsLegacyDDL, catalog.NonTemporaryTableSQLPredicate("tbl"))
+	statements, err := mysql.Parse(context.Background(), InformationSchemaTableConstraintsLegacyDDL, 1)
+	assert.NoError(t, err)
+	for _, statement := range statements {
+		statement.Free()
+	}
+}
+
+func TestInitInformationSchemaSysTablesForProtocol(t *testing.T) {
+	legacy := InitInformationSchemaSysTablesForProtocol(defines.MORPCVersion13)
+	assert.NotContains(t, legacy, InformationSchemaCheckConstraintsDDL)
+	assert.NotContains(t, legacy, InformationSchemaTableConstraintsDDL)
+	assert.Contains(t, legacy, InformationSchemaTableConstraintsLegacyDDL)
+	for _, sql := range legacy {
+		assert.NotContains(t, sql, "mo_check_constraints()")
+	}
+
+	latest := InitInformationSchemaSysTablesForProtocol(defines.MORPCVersion14)
+	assert.Equal(t, InitInformationSchemaSysTables, latest)
 }
 
 func TestInformationSchemaStatisticsDDL_RestrictsCatalogJoins(t *testing.T) {

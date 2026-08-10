@@ -415,6 +415,46 @@ func TestTenantViewDefinitionChecks(t *testing.T) {
 	}
 }
 
+func TestCheckConstraintViewsUpgradeMixedProtocolInitializedTenant(t *testing.T) {
+	tests := []struct {
+		name     string
+		entry    versions.UpgradeEntry
+		exists   bool
+		viewName string
+		viewDef  string
+	}{
+		{
+			name:     "missing check constraints view",
+			entry:    upgradeInformationSchemaCheckConstraints(),
+			exists:   false,
+			viewName: "CHECK_CONSTRAINTS",
+		},
+		{
+			name:     "legacy table constraints view",
+			entry:    upgradeInformationSchemaTableConstraints(),
+			exists:   true,
+			viewName: "TABLE_CONSTRAINTS",
+			viewDef:  sysview.InformationSchemaTableConstraintsLegacyDDL,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			stub := gostub.Stub(&versions.CheckViewDefinition, func(_ executor.TxnExecutor, accountID uint32, schema, viewName string) (bool, string, error) {
+				require.Equal(t, uint32(42), accountID)
+				require.Equal(t, sysview.InformationDBConst, schema)
+				require.Equal(t, test.viewName, viewName)
+				return test.exists, test.viewDef, nil
+			})
+			defer stub.Reset()
+
+			matched, err := test.entry.CheckFunc(nil, 42)
+			require.NoError(t, err)
+			require.False(t, matched)
+		})
+	}
+}
+
 func TestVersionHandleLifecycleWithNoLegacyDefinitions(t *testing.T) {
 	runtime.RunTest("", func(runtime.Runtime) {
 		tableStub := gostub.Stub(&versions.CheckTableDefinition, func(executor.TxnExecutor, uint32, string, string) (bool, error) {

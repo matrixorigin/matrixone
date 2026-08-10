@@ -39,6 +39,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
@@ -57,6 +58,7 @@ import (
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/stage"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/util/sysview"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -444,9 +446,86 @@ func Test_createTablesInMoCatalogOfGeneralTenant(t *testing.T) {
 		_, _, err := createTablesInMoCatalogOfGeneralTenant(ctx, bh, finalVersion, ca)
 		convey.So(err, convey.ShouldBeNil)
 
-		err = createTablesInInformationSchemaOfGeneralTenant(ctx, bh)
+		err = createTablesInInformationSchemaOfGeneralTenant(ctx, bh, "")
 		convey.So(err, convey.ShouldBeNil)
 	})
+}
+
+func Test_createTablesInInformationSchemaOfGeneralTenant_UsesProtocolAwareViews(t *testing.T) {
+	tests := []struct {
+		name              string
+		protocol          int64
+		wantCheckView     bool
+		wantLatestTable   bool
+		wantLegacyTable   bool
+		wantCheckFunction bool
+	}{
+		{
+			name:            "mixed version protocol uses legacy table constraints",
+			protocol:        defines.MORPCVersion13,
+			wantLegacyTable: true,
+		},
+		{
+			name:              "latest protocol uses check constraints views",
+			protocol:          defines.MORPCVersion14,
+			wantCheckView:     true,
+			wantLatestTable:   true,
+			wantCheckFunction: true,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			moruntime.RunTest("", func(rt moruntime.Runtime) {
+				oldProtocol, oldProtocolExists := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+				defer func() {
+					if oldProtocolExists {
+						rt.SetGlobalVariables(moruntime.MOProtocolVersion, oldProtocol)
+					} else {
+						rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+					}
+				}()
+				rt.SetGlobalVariables(moruntime.MOProtocolVersion, test.protocol)
+
+				ctrl := gomock.NewController(t)
+				defer ctrl.Finish()
+
+				var executed []string
+				bh := mock_frontend.NewMockBackgroundExec(ctrl)
+				bh.EXPECT().ClearExecResultSet().AnyTimes()
+				bh.EXPECT().Exec(gomock.Any(), gomock.Any()).DoAndReturn(
+					func(_ context.Context, sql string) error {
+						executed = append(executed, sql)
+						return nil
+					}).AnyTimes()
+
+				require.NoError(t, createTablesInInformationSchemaOfGeneralTenant(context.Background(), bh, ""))
+
+				require.Equal(t, test.wantCheckView, containsSQL(executed, sysview.InformationSchemaCheckConstraintsDDL))
+				require.Equal(t, test.wantLatestTable, containsSQL(executed, sysview.InformationSchemaTableConstraintsDDL))
+				require.Equal(t, test.wantLegacyTable, containsSQL(executed, sysview.InformationSchemaTableConstraintsLegacyDDL))
+				require.Equal(t, test.wantCheckFunction, containsSQLFragment(executed, "mo_check_constraints()"))
+			})
+		})
+	}
+}
+
+func containsSQL(sqls []string, expected string) bool {
+	for _, sql := range sqls {
+		if sql == expected {
+			return true
+		}
+	}
+	return false
+}
+
+func containsSQLFragment(sqls []string, fragment string) bool {
+	for _, sql := range sqls {
+		if strings.Contains(sql, fragment) {
+			return true
+		}
+	}
+	return false
 }
 
 func Test_initFunction(t *testing.T) {

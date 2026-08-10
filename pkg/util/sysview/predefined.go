@@ -563,6 +563,18 @@ var (
 		"cc.enforced AS ENFORCED "+
 		"FROM mo_check_constraints() cc", catalog.NonTemporaryTableSQLPredicate("tbl"))
 
+	InformationSchemaTableConstraintsLegacyDDL = fmt.Sprintf("CREATE VIEW information_schema.TABLE_CONSTRAINTS AS SELECT "+
+		"'def' AS CONSTRAINT_CATALOG, "+
+		"tbl.reldatabase AS CONSTRAINT_SCHEMA, "+
+		"idx.name AS CONSTRAINT_NAME, "+
+		"tbl.reldatabase AS TABLE_SCHEMA, "+
+		"tbl.relname AS TABLE_NAME, "+
+		"idx.type AS CONSTRAINT_TYPE, "+
+		"'YES' AS ENFORCED "+
+		"FROM mo_catalog.mo_indexes idx "+
+		"join mo_catalog.mo_tables tbl on idx.table_id = tbl.rel_id "+
+		"where %s", catalog.NonTemporaryTableSQLPredicate("tbl"))
+
 	InformationSchemaEventsDDL = "CREATE TABLE information_schema.EVENTS (" +
 		"EVENT_CATALOG varchar(64)," +
 		"EVENT_SCHEMA varchar(64)," +
