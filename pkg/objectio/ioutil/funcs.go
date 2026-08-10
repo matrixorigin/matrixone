@@ -20,6 +20,7 @@ import (
 	"sort"
 
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
@@ -422,7 +423,7 @@ func ReadDeletes(
 	isPersistedByCN bool,
 	cacheVectors containers.Vectors,
 	pkType *types.Type,
-) (objectio.ObjectDataMeta, func(), error) {
+) (meta objectio.ObjectDataMeta, release func(), err error) {
 
 	var cols []uint16
 	var typs []types.Type
