@@ -817,6 +817,31 @@ func TestConstSetPreservesSelectedGrouping(t *testing.T) {
 	require.Zero(t, mp.CurrNB())
 }
 
+func TestConstSetPreservesSelectedBinaryString(t *testing.T) {
+	mp := mpool.MustNewZero()
+	source := NewVec(types.T_text.ToType())
+	require.NoError(t, AppendBytesList(
+		source, [][]byte{[]byte("binary"), []byte("text"), nil}, []bool{false, false, true}, mp))
+	require.NoError(t, source.SetBinaryStringRows([]bool{true, false, false}))
+	destination := NewVec(types.T_text.ToType())
+	set := GetConstSetFunction(types.T_text.ToType(), mp)
+
+	require.NoError(t, set(destination, source, 0, 4))
+	require.True(t, destination.GetIsBinaryString())
+	for row := range 4 {
+		require.True(t, destination.GetIsBinaryStringAt(row))
+	}
+	require.NoError(t, set(destination, source, 1, 4))
+	require.False(t, destination.GetIsBinaryString())
+	require.NoError(t, set(destination, source, 2, 4))
+	require.True(t, destination.IsConstNull())
+	require.False(t, destination.GetIsBinaryString())
+
+	destination.Free(mp)
+	source.Free(mp)
+	require.Zero(t, mp.CurrNB())
+}
+
 func TestVectorAllocationAccountCopyRollback(t *testing.T) {
 	state := newTestVectorAllocationAccount(t, 1<<20, 1)
 	mp := mpool.MustNewZero()
@@ -1420,6 +1445,138 @@ func TestBinaryStringBitmapAllocationFailureIsAtomic(t *testing.T) {
 
 	vec.Free(mp)
 	finalizeTestVectorAllocationAccount(t, state)
+}
+
+func TestBinaryStringConstantMarkerStaysScalar(t *testing.T) {
+	state := newTestVectorAllocationAccount(t, types.VarlenaSize, 4)
+	mp := mpool.MustNewZero()
+	vec := newAccountedTestVector(t, types.T_text.ToType(), state.selection)
+	require.NoError(t, AppendBytes(vec, []byte("value"), false, mp))
+	vec.SetClass(CONSTANT)
+	vec.SetLength(4096)
+
+	require.NoError(t, vec.SetIsBinaryStringAt(4095, true, mp))
+	require.True(t, vec.GetIsBinaryString())
+	require.True(t, vec.GetIsBinaryStringAt(0))
+	require.True(t, vec.GetIsBinaryStringAt(4095))
+	require.False(t, vec.HasBinaryStringRows())
+	require.Equal(t, uint64(types.VarlenaSize), state.account.Snapshot().Used)
+
+	vec.Free(mp)
+	finalizeTestVectorAllocationAccount(t, state)
+	require.Zero(t, mp.CurrNB())
+}
+
+func TestRetainedBinaryStringBitmapPreventsAccountReplacement(t *testing.T) {
+	first := newTestVectorAllocationAccount(t, 1<<20, 8)
+	second := newTestVectorAllocationAccount(t, 1<<20, 8)
+	mp := mpool.MustNewZero()
+	vec := newAccountedTestVector(t, types.T_text.ToType(), first.selection)
+	vec.SetLength(2)
+	require.NoError(t, vec.SetIsBinaryStringAt(0, true, mp))
+	require.Positive(t, first.account.Snapshot().Used)
+	vec.SetIsBinaryString(false)
+	require.False(t, vec.HasBinaryStringRows())
+
+	require.ErrorIs(t, vec.CanSetAllocationAccount(second.selection), mpool.ErrAllocationAccountInvalid)
+	require.ErrorIs(t, vec.SetAllocationAccount(second.selection), mpool.ErrAllocationAccountInvalid)
+	require.Same(t, first.selection, vec.AllocationAccountSelection())
+	require.Zero(t, second.account.Snapshot().Used)
+
+	vec.Free(mp)
+	finalizeTestVectorAllocationAccount(t, first)
+	finalizeTestVectorAllocationAccount(t, second)
+	require.Zero(t, mp.CurrNB())
+}
+
+func TestBinaryStringShuffleAllocationFailureIsAtomic(t *testing.T) {
+	tests := []struct {
+		name string
+		run  func(*Vector, []int64, *mpool.MPool) error
+	}{
+		{name: "shuffle", run: func(vec *Vector, sels []int64, mp *mpool.MPool) error {
+			return vec.Shuffle(sels, mp)
+		}},
+		{name: "shuffle with buffer fallback", run: func(vec *Vector, sels []int64, mp *mpool.MPool) error {
+			var buf []byte
+			return vec.ShuffleWithBuf(sels, mp, &buf)
+		}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			const (
+				oldRows = 2
+				newRows = 1024
+			)
+			limit := uint64((oldRows+newRows)*types.VarlenaSize + 8)
+			state := newTestVectorAllocationAccount(t, limit, 16)
+			mp := mpool.MustNewZero()
+			vec := newAccountedTestVector(t, types.T_text.ToType(), state.selection)
+			require.NoError(t, vec.PreExtend(oldRows, mp))
+			require.NoError(t, AppendBytesList(
+				vec, [][]byte{[]byte("z"), []byte("a")}, nil, mp))
+			require.NoError(t, vec.SetIsBinaryStringAt(0, true, mp))
+			sels := make([]int64, newRows)
+			for row := range sels {
+				sels[row] = int64(row % oldRows)
+			}
+
+			err := test.run(vec, sels, mp)
+			require.ErrorIs(t, err, mpool.ErrAllocationAccountCapacity)
+			require.Equal(t, oldRows, vec.Length())
+			require.Equal(t, []byte("z"), vec.GetBytesAt(0))
+			require.Equal(t, []byte("a"), vec.GetBytesAt(1))
+			require.True(t, vec.GetIsBinaryStringAt(0))
+			require.False(t, vec.GetIsBinaryStringAt(1))
+
+			vec.Free(mp)
+			finalizeTestVectorAllocationAccount(t, state)
+			require.Zero(t, mp.CurrNB())
+		})
+	}
+}
+
+func TestBinaryStringRawAppendAllocationFailureIsAtomic(t *testing.T) {
+	tests := []struct {
+		name string
+		run  func(*Vector, *mpool.MPool) error
+	}{
+		{name: "bytes", run: func(vec *Vector, mp *mpool.MPool) error {
+			return AppendBytes(vec, []byte("ordinary"), false, mp)
+		}},
+		{name: "multi bytes", run: func(vec *Vector, mp *mpool.MPool) error {
+			return AppendMultiBytes(vec, []byte("ordinary"), false, 1, mp)
+		}},
+		{name: "bytes list", run: func(vec *Vector, mp *mpool.MPool) error {
+			return AppendBytesList(vec, [][]byte{[]byte("ordinary")}, nil, mp)
+		}},
+		{name: "string list", run: func(vec *Vector, mp *mpool.MPool) error {
+			return AppendStringList(vec, []string{"ordinary"}, nil, mp)
+		}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			const twoVarlenaRowsBytes = 2 * types.VarlenaSize
+			state := newTestVectorAllocationAccount(t, twoVarlenaRowsBytes, 16)
+			mp := mpool.MustNewZero()
+			vec := newAccountedTestVector(t, types.T_text.ToType(), state.selection)
+			require.NoError(t, vec.PreExtend(2, mp))
+			require.NoError(t, AppendBytes(vec, []byte("binary"), false, mp))
+			vec.SetIsBinaryString(true)
+
+			err := test.run(vec, mp)
+			require.ErrorIs(t, err, mpool.ErrAllocationAccountCapacity)
+			require.Equal(t, 1, vec.Length())
+			require.Equal(t, []byte("binary"), vec.GetBytesAt(0))
+			require.True(t, vec.GetIsBinaryString())
+			require.True(t, vec.GetIsBinaryStringAt(0))
+			require.False(t, vec.HasBinaryStringRows())
+
+			vec.Free(mp)
+			finalizeTestVectorAllocationAccount(t, state)
+			require.Zero(t, mp.CurrNB())
+		})
+	}
 }
 
 func TestBinaryStringUnionAllocationFailureDoesNotPublishRows(t *testing.T) {

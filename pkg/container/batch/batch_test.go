@@ -694,6 +694,30 @@ func TestPrepareParamKindTransportRoundTripAndReuse(t *testing.T) {
 	decoded.Clean(mp)
 }
 
+func TestPrepareParamKindTransportMixedBinaryKeepsUniformKind(t *testing.T) {
+	mp := mpool.MustNewZero()
+	source := NewWithSize(1)
+	source.Vecs[0] = vector.NewVec(types.T_text.ToType())
+	require.NoError(t, vector.AppendBytesList(
+		source.Vecs[0], [][]byte{[]byte("binary"), []byte("text")}, nil, mp))
+	source.Vecs[0].SetPrepareParamKind(vector.PrepareParamInteger)
+	require.NoError(t, source.Vecs[0].SetBinaryStringRows([]bool{true, false}))
+	source.SetRowCount(2)
+	defer source.Clean(mp)
+
+	var wire bytes.Buffer
+	encoded, err := source.MarshalBinaryWithPrepareParamKinds(&wire, true)
+	require.NoError(t, err)
+	decoded := NewOffHeapEmpty()
+	defer decoded.Clean(mp)
+	require.NoError(t, decoded.UnmarshalBinaryWithPrepareParamKinds(encoded, mp))
+	for row := range 2 {
+		require.Equal(t, vector.PrepareParamInteger, decoded.Vecs[0].GetPrepareParamKindAt(row))
+	}
+	require.True(t, decoded.Vecs[0].GetIsBinaryStringAt(0))
+	require.False(t, decoded.Vecs[0].GetIsBinaryStringAt(1))
+}
+
 func TestPrepareParamKindMetadataSizeMatchesTrailer(t *testing.T) {
 	mp := mpool.MustNewZero()
 	var nilBatch *Batch
