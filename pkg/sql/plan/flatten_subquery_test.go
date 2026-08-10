@@ -382,6 +382,165 @@ func TestOnlyRootCorrelatedExistenceLimitIsRemoved(t *testing.T) {
 	})
 }
 
+func TestCorrelatedPaginationValidatesUnsafeBoundaries(t *testing.T) {
+	const (
+		innerTag int32 = 10
+		outerTag int32 = 20
+	)
+	intType := plan.Type{Id: int32(types.T_int32)}
+	newCorr := func(typ plan.Type, depth int32) *plan.Expr {
+		return &plan.Expr{
+			Typ: typ,
+			Expr: &plan.Expr_Corr{Corr: &plan.CorrColRef{
+				RelPos: outerTag,
+				ColPos: 0,
+				Depth:  depth,
+			}},
+		}
+	}
+	equalityPredicate := func(inner, outer *plan.Expr) *plan.Expr {
+		return &plan.Expr{Expr: &plan.Expr_F{F: &plan.Function{
+			Func: &plan.ObjectRef{ObjName: "="},
+			Args: []*plan.Expr{inner, outer},
+		}}}
+	}
+
+	tests := []struct {
+		name          string
+		subqueryType  plan.SubqueryRef_Type
+		configureNode func(*plan.Node)
+		predicates    func() []*plan.Expr
+		wantError     string
+	}{
+		{
+			name: "dynamic limit",
+			configureNode: func(node *plan.Node) {
+				node.Limit = &plan.Expr{Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: 0}}}
+			},
+			wantError: "dynamic LIMIT in correlated subquery",
+		},
+		{
+			name: "dynamic offset",
+			configureNode: func(node *plan.Node) {
+				node.Offset = &plan.Expr{Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: 0}}}
+			},
+			wantError: "dynamic OFFSET in correlated subquery",
+		},
+		{
+			name: "overflowing interval",
+			configureNode: func(node *plan.Node) {
+				node.Limit = makePlan2Uint64ConstExprWithType(math.MaxInt64)
+				node.Offset = makePlan2Uint64ConstExprWithType(1)
+			},
+			wantError: "correlated LIMIT or OFFSET larger than INT64_MAX",
+		},
+		{
+			name: "rank limit",
+			configureNode: func(node *plan.Node) {
+				node.RankOption = &plan.RankOption{Mode: "force"}
+			},
+			wantError: "correlated LIMIT with BY RANK",
+		},
+		{
+			name: "correlated ordering",
+			configureNode: func(node *plan.Node) {
+				node.OrderBy = []*plan.OrderBySpec{{Expr: newCorr(intType, 1)}}
+			},
+			wantError: "correlated columns in ORDER BY with LIMIT",
+		},
+		{
+			name:         "deep correlation",
+			subqueryType: plan.SubqueryRef_EXISTS,
+			predicates: func() []*plan.Expr {
+				return []*plan.Expr{equalityPredicate(
+					GetColExpr(intType, innerTag, 0), newCorr(intType, 2))}
+			},
+			wantError: "deeply correlated LIMIT",
+		},
+		{
+			name: "unsupported partition type",
+			predicates: func() []*plan.Expr {
+				geometryType := plan.Type{Id: int32(types.T_geometry32)}
+				return []*plan.Expr{equalityPredicate(
+					GetColExpr(geometryType, innerTag, 0), newCorr(geometryType, 1))}
+			},
+			wantError: "correlated LIMIT partition key type",
+		},
+		{
+			name: "malformed sort",
+			configureNode: func(node *plan.Node) {
+				node.NodeType = plan.Node_SORT
+				node.Children = []int32{0, 0}
+			},
+			wantError: "correlated LIMIT sort must have one child",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			node := &plan.Node{
+				NodeId:   0,
+				NodeType: plan.Node_PROJECT,
+				Limit:    makePlan2Uint64ConstExprWithType(1),
+			}
+			if test.configureNode != nil {
+				test.configureNode(node)
+			}
+			predicates := []*plan.Expr{equalityPredicate(
+				GetColExpr(intType, innerTag, 0), newCorr(intType, 1))}
+			if test.predicates != nil {
+				predicates = test.predicates()
+			}
+
+			builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+			builder.qry.Nodes = []*plan.Node{node}
+			builder.ctxByNode = []*BindContext{nil}
+			_, err := builder.rewriteCorrelatedPagination(
+				0, node, predicates, &BindContext{}, test.subqueryType, false)
+			require.ErrorContains(t, err, test.wantError)
+		})
+	}
+}
+
+func TestCorrelatedPaginationKeepsSafeGlobalLimits(t *testing.T) {
+	const outerTag int32 = 20
+	intType := plan.Type{Id: int32(types.T_int32)}
+	outerPredicate := &plan.Expr{
+		Typ: intType,
+		Expr: &plan.Expr_Corr{Corr: &plan.CorrColRef{
+			RelPos: outerTag,
+			ColPos: 0,
+			Depth:  1,
+		}},
+	}
+
+	for _, test := range []struct {
+		name  string
+		limit uint64
+	}{
+		{name: "empty input", limit: 0},
+		{name: "outer-only predicate", limit: 1},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			node := &plan.Node{
+				NodeId:   0,
+				NodeType: plan.Node_PROJECT,
+				Limit:    makePlan2Uint64ConstExprWithType(test.limit),
+			}
+			builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+			builder.qry.Nodes = []*plan.Node{node}
+			builder.ctxByNode = []*BindContext{nil}
+
+			nodeID, err := builder.rewriteCorrelatedPagination(
+				0, node, []*plan.Expr{outerPredicate}, &BindContext{}, plan.SubqueryRef_SCALAR, true)
+			require.NoError(t, err)
+			require.Equal(t, int32(0), nodeID)
+			require.Len(t, builder.qry.Nodes, 1)
+			require.NotNil(t, node.Limit)
+		})
+	}
+}
+
 func TestCorrelatedLimitOffsetUsesPartitionedInterval(t *testing.T) {
 	logicPlan, err := runOneStmt(NewMockOptimizer(true), t, `
 		SELECT n1.N_NATIONKEY,
