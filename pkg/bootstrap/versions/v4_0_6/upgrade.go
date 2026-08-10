@@ -15,6 +15,7 @@ package v4_0_6
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -116,7 +117,10 @@ func upgradeLegacyInvisibleIndexMetadata(tenantID int32, txn executor.TxnExecuto
 		)
 		res, err := txn.Exec(statement, versions.UpgradeStatementOption(uint32(tenantID)))
 		if err != nil {
-			return fmt.Errorf("migrate invisible index %s on %s.%s: %w", definition.index, definition.database, definition.table, err)
+			return errors.Join(
+				moerr.NewInternalErrorNoCtxf("migrate invisible index %s on %s.%s", definition.index, definition.database, definition.table),
+				err,
+			)
 		}
 		res.Close()
 	}
@@ -129,7 +133,10 @@ func getLegacyInvisibleIndexDefinitions(tenantID int32, txn executor.TxnExecutor
 		executor.StatementOption{}.WithAccountID(uint32(tenantID)),
 	)
 	if err != nil {
-		return nil, fmt.Errorf("list legacy invisible indexes for tenant %d: %w", tenantID, err)
+		return nil, errors.Join(
+			moerr.NewInternalErrorNoCtxf("list legacy invisible indexes for tenant %d", tenantID),
+			err,
+		)
 	}
 	defer res.Close()
 
