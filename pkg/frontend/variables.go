@@ -1275,7 +1275,8 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Dynamic:           true,
 		SetVarHintApplies: false,
 		Type:              InitSystemVariableStringType("collation_server"),
-		Default:           "utf8mb4_bin",
+		// This is also the fallback inherited by an unqualified CREATE TABLE.
+		Default: "utf8mb4_general_ci",
 	},
 	"license": {
 		Name:              "license",

@@ -7134,6 +7134,7 @@ group_by_opt:
             GroupByExprsList: $6,
             Apart:      false,
             Cube :      false,
+            GroupingSets: true,
             Rollup:     false,
         }
     }
@@ -11500,9 +11501,9 @@ column_attribute_elem:
     {
         $$ = tree.NewAttributeVisable(false)
     }
-|   default_opt CHARACTER SET equal_opt ident
+|   default_opt CHARACTER SET equal_opt charset_name
     {
-        $$ = nil
+		$$ = tree.NewAttributeCharset($5)
     }
 |   GENERATED ALWAYS AS '(' expression ')' generated_column_type_opt
     {

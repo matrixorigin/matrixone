@@ -166,6 +166,36 @@ func TestConvertCharBinaryTypeResolution(t *testing.T) {
 	}
 }
 
+func TestGetTypeFromAstAssignsExplicitStringCharset(t *testing.T) {
+	testCases := []struct {
+		definition  string
+		wantOID     types.T
+		wantCharset uint32
+	}{
+		{definition: "char(10)", wantOID: types.T_char, wantCharset: uint32(types.CharsetUTF8)},
+		{definition: "varchar(10)", wantOID: types.T_varchar, wantCharset: uint32(types.CharsetUTF8)},
+		{definition: "text", wantOID: types.T_text, wantCharset: uint32(types.CharsetUTF8)},
+		{definition: "binary(10)", wantOID: types.T_binary, wantCharset: uint32(types.CharsetBinary)},
+		{definition: "varbinary(10)", wantOID: types.T_varbinary, wantCharset: uint32(types.CharsetBinary)},
+		{definition: "blob", wantOID: types.T_blob, wantCharset: uint32(types.CharsetBinary)},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.definition, func(t *testing.T) {
+			stmt, err := mysql.ParseOne(context.Background(),
+				"create table t (v "+testCase.definition+")", 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+
+			column := stmt.(*tree.CreateTable).Defs[0].(*tree.ColumnTableDef)
+			typ, err := getTypeFromAst(context.Background(), column.Type)
+			require.NoError(t, err)
+			require.Equal(t, int32(testCase.wantOID), typ.Id)
+			require.Equal(t, testCase.wantCharset, typ.Charset)
+		})
+	}
+}
+
 func TestGetTypeFromAstGeometrySubtype(t *testing.T) {
 	stmt, err := mysql.ParseOne(context.Background(), "create table t (g point)", 1)
 	require.NoError(t, err)

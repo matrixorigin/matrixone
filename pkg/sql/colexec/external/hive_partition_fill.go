@@ -103,7 +103,7 @@ func validatePartitionValue(strVal, colName string, colType tree.HivePartColType
 	if typ == types.T_any {
 		return nil
 	}
-	vec := vector.NewVec(types.New(typ, colType.Width, colType.Scale))
+	vec := vector.NewVec(types.NewWithCharset(typ, colType.Width, colType.Scale, uint8(colType.Charset)))
 	col := &plan.ColDef{
 		Name: colName,
 		Typ: plan.Type{
@@ -111,6 +111,7 @@ func validatePartitionValue(strVal, colName string, colType tree.HivePartColType
 			Width:       colType.Width,
 			Scale:       colType.Scale,
 			Enumvalues:  colType.Enumvalues,
+			Charset:     colType.Charset,
 			NotNullable: !colType.NullAbility,
 		},
 		Default: &plan.Default{NullAbility: colType.NullAbility},
