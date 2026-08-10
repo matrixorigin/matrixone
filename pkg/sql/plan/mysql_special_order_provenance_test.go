@@ -72,6 +72,22 @@ func newMySQLSpecialOrderMock() *MockOptimizer {
 	return mock
 }
 
+func TestGreatestLeastKeepEnumDisplaySemantics(t *testing.T) {
+	for _, sql := range []string{
+		"select greatest(e, e) from enum_order_t",
+		"select least(e, 'mid') from enum_order_t",
+		"select greatest(e, cast('2026-08-10' as date)) from enum_order_t",
+	} {
+		t.Run(sql, func(t *testing.T) {
+			logicPlan, err := runOneStmt(newMySQLSpecialOrderMock(), t, sql)
+			require.NoError(t, err)
+			root := logicPlan.GetQuery().Nodes[logicPlan.GetQuery().Steps[0]]
+			require.Len(t, root.ProjectList, 1)
+			require.Equal(t, int32(types.T_varchar), root.ProjectList[0].Typ.Id)
+		})
+	}
+}
+
 func singleSortSpec(t *testing.T, logicPlan *planpb.Plan) *planpb.OrderBySpec {
 	t.Helper()
 	var found []*planpb.OrderBySpec

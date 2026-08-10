@@ -15,6 +15,7 @@
 package plan
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
@@ -98,6 +99,15 @@ func (b *ProjectionBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool)
 		target := b.numericTargetType
 		b.numericTargetType = nil
 		defer func() { b.numericTargetType = target }()
+		if _, isBareParam := unwrapParenExpr(astExpr).(*tree.ParamExpr); isBareParam &&
+			types.T(target.Id) == types.T_bit {
+			// A bare assignment parameter must reach the assignment cast as the
+			// original text vector. Its PrepareParamKind distinguishes numeric,
+			// boolean, BIT and ordinary string sources at execution time. Eager
+			// numeric specialization would erase that provenance (notably turning
+			// the string "5" for BIT(64) from ASCII 53 into numeric 5).
+			return b.baseBindExpr(astExpr, depth, isRoot)
+		}
 		_, isBareColumn := unwrapParenExpr(astExpr).(*tree.UnresolvedName)
 		if isBareColumn && isEnumOrSetPlanType(target) {
 			previousTarget := b.mysqlSpecialTargetType

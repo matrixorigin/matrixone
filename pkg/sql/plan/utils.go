@@ -3285,7 +3285,7 @@ func containsPreparedDynamicNumericParam(expr *Expr) bool {
 		return true
 	}
 	if fn := expr.GetF(); fn != nil {
-		if fn.Func.GetObjName() == "cast" && isPreparedDynamicNumericType(expr.Typ) &&
+		if isPreparedDynamicNumericCast(expr) &&
 			len(fn.Args) > 0 && fn.Args[0].GetP() != nil {
 			return true
 		}
@@ -3484,8 +3484,9 @@ func refreshPreparedTypeLineage(ctx context.Context, plan0 *Plan, paramRule *Res
 	if query == nil {
 		return nil
 	}
-	rule := &preparedTypeLineageRule{ctx: ctx, types: make(map[[2]int32]plan.Type)}
+	rule := &preparedTypeLineageRule{ctx: ctx, query: query, types: make(map[[2]int32]plan.Type)}
 	visitor := NewVisitPlan(plan0, nil)
+	subqueryRoots := newSubqueryRootRule()
 	visited := make(map[int32]struct{})
 	var visit func(int32) error
 	visit = func(id int32) error {
@@ -3502,6 +3503,16 @@ func refreshPreparedTypeLineage(ctx context.Context, plan0 *Plan, paramRule *Res
 				return err
 			}
 		}
+		subqueryRoots.pending = subqueryRoots.pending[:0]
+		if err := visitor.exploreNode(ctx, subqueryRoots, node, id); err != nil {
+			return err
+		}
+		pendingSubqueries := append([]int32(nil), subqueryRoots.pending...)
+		for _, root := range pendingSubqueries {
+			if err := visit(root); err != nil {
+				return err
+			}
+		}
 		if err := visitor.exploreNode(ctx, rule, node, id); err != nil {
 			return err
 		}
@@ -3513,7 +3524,7 @@ func refreshPreparedTypeLineage(ctx context.Context, plan0 *Plan, paramRule *Res
 		}
 		localTypes := preparedLocalInputTypes(query, node)
 		if len(localTypes) > 0 {
-			localRule := &preparedTypeLineageRule{ctx: ctx, types: localTypes}
+			localRule := &preparedTypeLineageRule{ctx: ctx, query: query, types: localTypes}
 			if err := visitor.exploreNode(ctx, localRule, node, id); err != nil {
 				return err
 			}

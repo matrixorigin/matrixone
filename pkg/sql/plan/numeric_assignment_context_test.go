@@ -1335,6 +1335,35 @@ func TestPreparedNonNumericAssignmentKeepsTargetType(t *testing.T) {
 	}
 }
 
+func TestPreparedBareBitAssignmentKeepsParameterProvenance(t *testing.T) {
+	optimizer := NewMockOptimizer(false)
+	optimizer.ctxt.objects["prepared_bit_target"] = &planpb.ObjectRef{Obj: 9901, ObjName: "prepared_bit_target"}
+	optimizer.ctxt.tables["prepared_bit_target"] = &planpb.TableDef{
+		TblId: 9901,
+		Name:  "prepared_bit_target",
+		Pkey:  &planpb.PrimaryKeyDef{PkeyColName: "id", Names: []string{"id"}},
+		Cols: []*planpb.ColDef{
+			{Name: "id", Typ: planpb.Type{Id: int32(types.T_int64)}},
+			{Name: "b", Typ: planpb.Type{Id: int32(types.T_bit), Width: 64}},
+		},
+	}
+	stmts, err := mysql.Parse(optimizer.CurrentContext().GetContext(),
+		"insert into prepared_bit_target(id, b) values (1, ?)", 1)
+	require.NoError(t, err)
+	queryPlan, err := BuildPlan(optimizer.CurrentContext(), stmts[0], true)
+	require.NoError(t, err)
+	valueScan := queryPlan.GetQuery().Nodes[0]
+	require.NotNil(t, valueScan.RowsetData)
+	require.Len(t, valueScan.RowsetData.Cols, 2)
+	require.Len(t, valueScan.RowsetData.Cols[1].Data, 1)
+	assignmentCast := valueScan.RowsetData.Cols[1].Data[0].Expr.GetF()
+	require.NotNil(t, assignmentCast)
+	require.Equal(t, "cast", assignmentCast.Func.ObjName)
+	require.NotEmpty(t, assignmentCast.Args)
+	require.NotNil(t, assignmentCast.Args[0].GetP())
+	require.Equal(t, int32(types.T_text), assignmentCast.Args[0].Typ.Id)
+}
+
 func TestNumericAssignmentTargetKeepsGroupedProjection(t *testing.T) {
 	// a numeric assignment target must not re-bind a projection that is itself a
 	// GROUP BY key against the raw scan columns; it should resolve to the grouped

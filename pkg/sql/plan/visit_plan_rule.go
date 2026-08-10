@@ -402,6 +402,7 @@ type ResetParamRefRule struct {
 
 type preparedTypeLineageRule struct {
 	ctx   context.Context
+	query *plan.Query
 	types map[[2]int32]plan.Type
 }
 
@@ -416,6 +417,16 @@ func (rule *preparedTypeLineageRule) ApplyExpr(e *plan.Expr) (*plan.Expr, error)
 	case *plan.Expr_Col:
 		if typ, ok := rule.types[[2]int32{impl.Col.RelPos, impl.Col.ColPos}]; ok {
 			e.Typ = typ
+		}
+		return e, nil
+	case *plan.Expr_Sub:
+		if rule.query == nil || impl.Sub == nil || impl.Sub.Typ != plan.SubqueryRef_SCALAR ||
+			impl.Sub.NodeId < 0 || int(impl.Sub.NodeId) >= len(rule.query.Nodes) {
+			return e, nil
+		}
+		root := rule.query.Nodes[impl.Sub.NodeId]
+		if root != nil && impl.Sub.RowSize == 1 && len(root.ProjectList) == 1 {
+			e.Typ = root.ProjectList[0].Typ
 		}
 		return e, nil
 	case *plan.Expr_F:
@@ -513,7 +524,7 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 		dynamicParamPos := int32(-1)
 		var dynamicParamExpr *plan.Expr
 		dynamicNumericArgs := make([]bool, len(exprImpl.F.Args))
-		if exprImpl.F.Func.GetObjName() == "cast" && isPreparedDynamicNumericType(e.Typ) &&
+		if isPreparedDynamicNumericCast(e) &&
 			len(exprImpl.F.Args) > 0 && exprImpl.F.Args[0].GetP() != nil {
 			dynamicParamPos = exprImpl.F.Args[0].GetP().Pos
 			dynamicParamExpr = exprImpl.F.Args[0]
@@ -538,9 +549,10 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 				}
 			}
 		}
-		if exprImpl.F.Func.GetObjName() == "cast" && isPreparedDynamicNumericType(e.Typ) {
+		if isPreparedDynamicNumericCast(e) {
 			if dynamicParamPos >= 0 && int(dynamicParamPos) < len(rule.params) {
 				param := rule.params[dynamicParamPos]
+				dynamicParamExpr.Typ.Table = ""
 				dynamicParamExpr.Typ.NotNullable = param.Typ.NotNullable
 				value := param.GetLit().GetSval()
 				runtimeType := types.T(param.Typ.Id)
@@ -659,8 +671,25 @@ func restorePreparedNumericLiteralType(expr *plan.Expr) *plan.Expr {
 	if expr == nil {
 		return expr
 	}
+	if fn := expr.GetF(); fn != nil && len(fn.Args) == 1 &&
+		(fn.Func.GetObjName() == "unary_plus" || fn.Func.GetObjName() == "unary_minus") &&
+		!containsPreparedDynamicNumericParam(expr) {
+		restored := restorePreparedNumericLiteralType(fn.Args[0])
+		fn.Args[0] = restored
+		if !samePreparedNumericShape(expr.Typ, restored.Typ) || isPreparedDynamicNumericType(expr.Typ) ||
+			(types.T(expr.Typ.Id).IsDecimal() && expr.Typ.Width > 65) {
+			// Negative literals are represented as unary_minus(cast(literal)).
+			// Once the prepare-time dynamic cast is removed, the unary function
+			// itself must be rebound too; retaining its DECIMAL256 overload makes
+			// the executor reinterpret an 8-byte integer vector as 32-byte decimal.
+			if rebound, err := BindFuncExprImplByPlanExpr(
+				context.TODO(), fn.Func.GetObjName(), []*plan.Expr{restored}); err == nil {
+				return rebound
+			}
+		}
+	}
 	if fn := expr.GetF(); fn != nil && fn.Func.GetObjName() == "cast" && len(fn.Args) > 0 &&
-		(isPreparedDynamicNumericType(expr.Typ) ||
+		(isPreparedDynamicNumericCast(expr) ||
 			(types.T(expr.Typ.Id).IsDecimal() && expr.Typ.Width > 65)) {
 		_, overload := planfunction.DecodeOverloadID(fn.Func.GetObj())
 		if overload == 0 {

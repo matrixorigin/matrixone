@@ -22,6 +22,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
@@ -289,6 +290,14 @@ func TestInterpreterOutputDecimalPreservesDeclaredRuntimeType(t *testing.T) {
 	require.NoError(t, interpreter.setOutputUserVariable("out_flag", "flag", true))
 	flag, err := ses.GetUserDefinedVar("out_flag")
 	require.NoError(t, err)
-	require.Equal(t, types.T_int64, flag.RuntimeType)
-	require.Equal(t, int64(1), flag.Value)
+	require.Equal(t, types.T_bool, flag.RuntimeType)
+	require.Equal(t, true, flag.Value)
+
+	interpreter.argsType["bits"] = plan.Type{Id: int32(types.T_bit), Width: 64}
+	require.NoError(t, interpreter.setOutputUserVariable("out_bits", "bits", "5"))
+	bits, err := ses.GetUserDefinedVar("out_bits")
+	require.NoError(t, err)
+	require.Equal(t, types.T_bit, bits.RuntimeType)
+	require.Equal(t, "5", bits.Value)
+	require.Equal(t, vector.PrepareParamInteger, bits.PrepareParamKind)
 }

@@ -3684,7 +3684,7 @@ func (builder *QueryBuilder) buildValueScan(
 							if err != nil {
 								return 0, err
 							}
-							if scan.hasParam {
+							if scan.hasParam && !isBarePreparedAssignmentParam(r[i]) {
 								switch numericBinder := funcBinder.(type) {
 								case *DefaultBinder:
 									defExpr, err = numericBinder.bindNumericExprWithContext(r[i], 0, &col.Typ)
@@ -3780,4 +3780,9 @@ func (builder *QueryBuilder) buildValueScan(
 	}, bindCtx)
 
 	return nodeID, nil
+}
+
+func isBarePreparedAssignmentParam(expr tree.Expr) bool {
+	_, ok := unwrapParenExpr(expr).(*tree.ParamExpr)
+	return ok
 }

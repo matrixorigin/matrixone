@@ -7971,7 +7971,8 @@ func (builder *QueryBuilder) bindValues(
 		for j := 0; j < rowCount; j++ {
 			var planExpr *plan.Expr
 			if i < len(ctx.numericProjectionTypes) &&
-				isNumericAssignmentTarget(ctx.numericProjectionTypes[i]) {
+				isNumericAssignmentTarget(ctx.numericProjectionTypes[i]) &&
+				!isBarePreparedAssignmentParam(valuesClause.Rows[j][i]) {
 				target := ctx.numericProjectionTypes[i]
 				planExpr, err = valuesBinder.bindNumericExprWithContext(valuesClause.Rows[j][i], 0, &target)
 			} else {

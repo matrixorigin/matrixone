@@ -221,10 +221,12 @@ func (interpreter *Interpreter) FlushParam() error {
 func (interpreter *Interpreter) setOutputUserVariable(name, argName string, value any) error {
 	if declared, ok := interpreter.argsType[argName]; ok && types.T(declared.Id) != types.T_any {
 		typ := types.T(declared.Id)
-		var err error
-		value, typ, err = normalizeUserVariableValue(value, typ)
-		if err != nil {
-			return err
+		if typ != types.T_bool && typ != types.T_bit {
+			var err error
+			value, typ, err = normalizeUserVariableValue(value, typ)
+			if err != nil {
+				return err
+			}
 		}
 		if ses, ok := interpreter.ses.(interface {
 			setUserDefinedVarWithType(string, interface{}, string, bool, types.T) error

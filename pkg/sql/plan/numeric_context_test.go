@@ -946,6 +946,69 @@ func TestPreparedDynamicNumericRebindsTypeSensitiveParents(t *testing.T) {
 	}
 }
 
+func TestPreparedStringComparisonsDoNotEnterDynamicNumericDomain(t *testing.T) {
+	for _, sql := range []string{
+		"select concat(''abc'', '''') = ?",
+		"select date_format(cast(''2026-08-10'' as date), ''%Y-%m-%d'') = ?",
+	} {
+		t.Run(sql, func(t *testing.T) {
+			prepare := buildPreparedAggregatePlan(t, sql)
+			require.False(t, HasPreparedDynamicNumericParams(prepare.Plan))
+			paramTypes := collectPlanParamTypes(prepare.Plan)
+			require.Equal(t, []types.T{types.T_varchar}, paramTypes)
+		})
+	}
+}
+
+func TestPreparedDynamicNumericRebindsNegativeLiterals(t *testing.T) {
+	for _, sql := range []string{
+		"select ? + -1",
+		"select -1 + ?",
+		"select ? - -1",
+		"select ? * -1",
+		"select ? / -1",
+		"select mod(?, -1)",
+		"select ? + -1.5",
+		"select (? + -1) > 0",
+	} {
+		t.Run(sql, func(t *testing.T) {
+			prepare := buildPreparedAggregatePlan(t, sql)
+			specialized, err := SpecializePreparedNumericPlan(context.Background(), prepare.Plan, []any{
+				ParamValue{Value: "3", RuntimeType: types.T_int64},
+			})
+			require.NoError(t, err)
+			require.False(t, HasPreparedDynamicNumericParams(specialized))
+
+			var assertUnaryTypeClosure func(*planpb.Expr)
+			assertUnaryTypeClosure = func(expr *planpb.Expr) {
+				fn := expr.GetF()
+				if fn == nil {
+					return
+				}
+				name := fn.GetFunc().GetObjName()
+				if (name == "unary_plus" || name == "unary_minus") && len(fn.Args) == 1 {
+					require.Equal(t, fn.Args[0].Typ, expr.Typ)
+				}
+				for _, arg := range fn.Args {
+					assertUnaryTypeClosure(arg)
+				}
+			}
+			root := specialized.GetQuery().Nodes[specialized.GetQuery().Steps[0]]
+			for _, expr := range root.ProjectList {
+				assertUnaryTypeClosure(expr)
+			}
+		})
+	}
+
+	logicPlan, err := runOneStmt(NewMockOptimizer(false), t,
+		"prepare stmt1 from 'create table prepared_negative_ctas as select ? + -1 as v'")
+	require.NoError(t, err)
+	_, err = SpecializePreparedNumericPlan(context.Background(), logicPlan.GetDcl().GetPrepare().Plan, []any{
+		ParamValue{Value: "3", RuntimeType: types.T_int64},
+	})
+	require.NoError(t, err)
+}
+
 func TestPreparedDynamicNumericCoversEquivalentExactContexts(t *testing.T) {
 	for _, sql := range []string{
 		"select ? + abs(1)",
@@ -986,6 +1049,29 @@ func TestPreparedScalarSubqueryParameterDetection(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestPreparedScalarSubqueryTracksSpecializedRuntimeType(t *testing.T) {
+	prepare := buildPreparedAggregatePlan(t, "select (select ? + 1) + 1")
+	require.True(t, HasPreparedDynamicNumericParams(prepare.Plan))
+	specialized, err := SpecializePreparedNumericPlan(context.Background(), prepare.Plan, []any{
+		ParamValue{Value: "2", RuntimeType: types.T_int64},
+	})
+	require.NoError(t, err)
+	root := specialized.GetQuery().Nodes[specialized.GetQuery().Steps[0]]
+	require.Len(t, root.ProjectList, 1)
+	require.Equal(t, int32(types.T_int64), root.ProjectList[0].Typ.Id)
+
+	logicPlan, err := runOneStmt(NewMockOptimizer(false), t,
+		"prepare stmt1 from 'create table prepared_scalar_ctas as select (select ? + 1) + 1 as v'")
+	require.NoError(t, err)
+	ctas, err := SpecializePreparedNumericPlan(context.Background(), logicPlan.GetDcl().GetPrepare().Plan, []any{
+		ParamValue{Value: "2", RuntimeType: types.T_int64},
+	})
+	require.NoError(t, err)
+	cols := ctas.GetDdl().GetCreateTable().GetTableDef().GetCols()
+	require.NotEmpty(t, cols)
+	require.Equal(t, int32(types.T_int64), cols[0].Typ.Id)
 }
 
 func TestPreparedNarrowUnsignedArithmeticWidens(t *testing.T) {
