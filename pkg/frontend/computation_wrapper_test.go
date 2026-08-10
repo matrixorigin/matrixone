@@ -483,6 +483,16 @@ func TestResolveVariableIsBinHonorsStoredProcedureScope(t *testing.T) {
 	kind, err = ses.txnCompileCtx.ResolveVariablePrepareParamKind("session_only", false, false)
 	require.NoError(t, err)
 	require.Equal(t, vector.PrepareParamNone, kind)
+
+	value, err = ses.txnCompileCtx.ResolveVariable("missing_user_var", false, false)
+	require.NoError(t, err)
+	require.Nil(t, value)
+	isBin, err = ses.txnCompileCtx.ResolveVariableIsBin("missing_user_var", false, false)
+	require.NoError(t, err)
+	require.False(t, isBin)
+	kind, err = ses.txnCompileCtx.ResolveVariablePrepareParamKind("missing_user_var", false, false)
+	require.NoError(t, err)
+	require.Equal(t, vector.PrepareParamNone, kind)
 }
 
 func TestBuildExecuteUserParamsHonorsStoredProcedureScope(t *testing.T) {

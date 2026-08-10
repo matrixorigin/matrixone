@@ -925,7 +925,9 @@ func (tcc *TxnCompilerContext) ResolveVariablePrepareParamKind(
 	}
 	udVar, err := tcc.GetSession().GetUserDefinedVar(varName)
 	if err != nil {
-		return vector.PrepareParamNone, err
+		// See ResolveVariable: an unassigned user variable is NULL and has no
+		// prepared-parameter conversion category.
+		return vector.PrepareParamNone, nil
 	}
 	return udVar.PrepareParamKind, nil
 }
