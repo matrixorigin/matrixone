@@ -304,3 +304,15 @@ id    try_jq(data, jq)
 208    [null,1]
 209    [null,". is not an object",1]
 drop table jqt;
+drop table if exists jq_const_order_probe;
+create table jq_const_order_probe(id int);
+insert into jq_const_order_probe values (1), (2);
+select try_jq(null, '.') as null_result from jq_const_order_probe order by id;
+null_result
+null
+null
+select try_jq('{"foo":128}', '.foo') as const_result from jq_const_order_probe order by id;
+const_result
+128
+128
+drop table jq_const_order_probe;
