@@ -694,6 +694,61 @@ func TestPrepareParamKindTransportRoundTripAndReuse(t *testing.T) {
 	decoded.Clean(mp)
 }
 
+func TestPrepareParamKindMetadataSizeMatchesTrailer(t *testing.T) {
+	mp := mpool.MustNewZero()
+	var nilBatch *Batch
+	size, err := nilBatch.PrepareParamKindMetadataSize()
+	require.NoError(t, err)
+	require.Zero(t, size)
+	require.False(t, nilBatch.HasBinaryStringMetadata())
+
+	bat := NewWithSize(4)
+	defer bat.Clean(mp)
+	for i, typ := range []types.Type{
+		types.T_text.ToType(),
+		types.T_text.ToType(),
+		types.T_text.ToType(),
+		types.T_varbinary.ToType(),
+	} {
+		bat.Vecs[i] = vector.NewVec(typ)
+		for range 2 {
+			require.NoError(t, vector.AppendBytes(bat.Vecs[i], []byte("v"), false, mp))
+		}
+	}
+	require.NoError(t, bat.Vecs[0].SetIsBinaryStringAt(0, true))
+	bat.Vecs[1].SetPrepareParamKind(vector.PrepareParamDecimal)
+	bat.Vecs[2].SetIsBinaryString(true)
+	require.NoError(t, bat.Vecs[3].SetPrepareParamKindsWithMP(
+		[]vector.PrepareParamKind{vector.PrepareParamInteger, vector.PrepareParamNone}, mp))
+	bat.SetRowCount(2)
+
+	require.True(t, bat.HasBinaryStringMetadata())
+	size, err = bat.PrepareParamKindMetadataSize()
+	require.NoError(t, err)
+	stable, err := bat.MarshalBinary()
+	require.NoError(t, err)
+	var wire bytes.Buffer
+	encoded, err := bat.MarshalBinaryWithPrepareParamKinds(&wire, true)
+	require.NoError(t, err)
+	require.Equal(t, size, len(encoded)-len(stable))
+
+	invalid := NewWithSize(2)
+	invalid.Vecs[0] = vector.NewVec(types.T_text.ToType())
+	require.NoError(t, vector.AppendBytes(invalid.Vecs[0], []byte("v"), false, mp))
+	invalid.Vecs[0].SetIsBinaryString(true)
+	invalid.SetRowCount(1)
+	_, err = invalid.PrepareParamKindMetadataSize()
+	require.ErrorContains(t, err, "nil vector")
+	invalid.Clean(mp)
+
+	plainStatic := NewWithSize(1)
+	plainStatic.Vecs[0] = vector.NewVec(types.T_varbinary.ToType())
+	require.NoError(t, vector.AppendBytes(plainStatic.Vecs[0], []byte("v"), false, mp))
+	plainStatic.SetRowCount(1)
+	require.False(t, plainStatic.HasBinaryStringMetadata())
+	plainStatic.Clean(mp)
+}
+
 func TestPrepareParamKindTransportRejectsMalformedTrailer(t *testing.T) {
 	mp := mpool.MustNewZero()
 	bat := NewWithSize(1)

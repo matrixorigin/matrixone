@@ -53,6 +53,12 @@ func appendTopSpillPrepareParamMetadata(data []byte, bat *batch.Batch) ([]byte, 
 	if bat == nil {
 		return data, nil
 	}
+	transport := bytes.NewBuffer(make([]byte, 0, len(data)))
+	transport.Write(data)
+	if err := bat.AppendPrepareParamKindMetadata(transport); err != nil {
+		return nil, err
+	}
+	data = transport.Bytes()
 	const maxUint32 = uint64(^uint32(0))
 	if uint64(bat.RowCount()) > maxUint32 || uint64(len(bat.Vecs)) > maxUint32 {
 		return nil, moerr.NewInvalidInputNoCtx("top spill provenance dimensions exceed format")
@@ -737,7 +743,7 @@ func (ctr *container) evalSpill(limit uint64, n int, proc *process.Process, resu
 		if err != nil {
 			return false, err
 		}
-		if err := reuseBat.UnmarshalBinaryWithAnyMp(baseData, proc.Mp()); err != nil {
+		if err := reuseBat.UnmarshalBinaryWithPrepareParamKinds(baseData, proc.Mp()); err != nil {
 			return false, err
 		}
 		if err := restoreTopSpillPrepareParamMetadata(reuseBat, metadata, metadataRows, proc.Mp()); err != nil {

@@ -165,7 +165,6 @@ func (cb *cachedBatch) GetCopiedBatch(
 			dst.Vecs[i].SetGrouping(vec.GetGrouping())
 		}
 		dst.Vecs[i].SetIsBin(vec.GetIsBin())
-		dst.Vecs[i].SetIsBinaryString(vec.GetIsBinaryString())
 		if vec.IsConst() {
 			// GetUnionAllFunction already propagates row provenance for the
 			// non-constant path. Constants still need their scalar metadata
@@ -174,6 +173,7 @@ func (cb *cachedBatch) GetCopiedBatch(
 				cb.CacheBatch(true, cacheID, dst)
 				return nil, false, 0, err
 			}
+			dst.Vecs[i].SetIsBinaryString(vec.GetIsBinaryString())
 		}
 
 		// range src and found the same vector.
