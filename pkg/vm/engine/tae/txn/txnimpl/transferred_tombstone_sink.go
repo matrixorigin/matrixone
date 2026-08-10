@@ -16,6 +16,7 @@ package txnimpl
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -48,9 +49,12 @@ type transferredTombstoneSinker interface {
 // boundary, every exit path must delete the unpublished objects. Afterwards,
 // transaction commit/rollback owns their lifecycle.
 type transferredTombstoneSink struct {
-	sinker    transferredTombstoneSinker
-	wrote     bool
-	published bool
+	sinker          transferredTombstoneSinker
+	wrote           bool
+	published       bool
+	cleanupPending  bool
+	closed          bool
+	cleanupDeadline time.Time
 }
 
 func (s *transferredTombstoneSink) write(ctx context.Context, bat *batch.Batch) error {
@@ -99,28 +103,22 @@ func (s *transferredTombstoneSink) close(ctx context.Context, priorErr error) er
 			priorErr = moerr.NewInternalError(ctx, "transferred tombstones closed before publication")
 		}
 
-		// The operation context is commonly cancelled on the error paths for
-		// which cleanup is required. Preserve its values but give cleanup an
-		// independent total bound. DeletePersisted's per-request timeout is
-		// consequently capped by this earlier deadline too.
-		cleanupCtx, cancel := context.WithTimeoutCause(
-			context.WithoutCancel(ctx),
-			transferredTombstoneCleanupTimeout,
-			moerr.CauseCleanUpUselessFiles,
-		)
-		count, cleanupErr := s.sinker.DeletePersisted(cleanupCtx)
-		cancel()
+		cleanupErr := s.deletePersisted(ctx)
 		if cleanupErr != nil {
+			// DeletePersisted deliberately retains the exact object references on
+			// failure. Do not destroy that retry owner in Close. TransferDeletes
+			// hands this sink to txnTable, whose rollback and final Close retry it.
+			s.cleanupPending = true
 			logutil.Error(
 				"failed to delete unpublished transferred tombstone objects",
-				zap.Int("object-count", count),
 				zap.NamedError("operation-error", priorErr),
 				zap.NamedError("cleanup-error", cleanupErr),
 			)
+			return priorErr
 		}
 	}
 
-	closeErr := s.sinker.Close()
+	closeErr := s.closeSinker()
 	if priorErr != nil {
 		// The transaction error is the primary outcome. Returning a joined or
 		// wrapped error here would hide its concrete *moerr.Error from the TN
@@ -135,4 +133,68 @@ func (s *transferredTombstoneSink) close(ctx context.Context, priorErr error) er
 		return priorErr
 	}
 	return closeErr
+}
+
+func (s *transferredTombstoneSink) retryCleanup(ctx context.Context) error {
+	if !s.cleanupPending {
+		return nil
+	}
+	if err := s.deletePersisted(ctx); err != nil {
+		logutil.Error(
+			"failed to retry unpublished transferred tombstone cleanup",
+			zap.Error(err),
+		)
+		return err
+	}
+	s.cleanupPending = false
+	return s.closeSinker()
+}
+
+func (s *transferredTombstoneSink) deletePersisted(ctx context.Context) error {
+	// The operation context is commonly cancelled on the error paths for which
+	// cleanup is required. Preserve its values but give the sink's complete
+	// cleanup lifecycle one total bound, shared by rollback retries.
+	cleanupCtx, cancel := s.newCleanupContext(ctx)
+	defer cancel()
+	count, err := s.sinker.DeletePersisted(cleanupCtx)
+	if err == nil {
+		return nil
+	}
+	return errors.Join(
+		moerr.NewInternalErrorf(
+			cleanupCtx,
+			"delete %d unpublished transferred tombstone objects",
+			count,
+		),
+		err,
+	)
+}
+
+func (s *transferredTombstoneSink) newCleanupContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	if s.cleanupDeadline.IsZero() {
+		s.cleanupDeadline = time.Now().Add(transferredTombstoneCleanupTimeout)
+	}
+	return context.WithDeadlineCause(
+		context.WithoutCancel(ctx),
+		s.cleanupDeadline,
+		moerr.CauseCleanUpUselessFiles,
+	)
+}
+
+func (s *transferredTombstoneSink) closeSinker() error {
+	if s.closed {
+		return nil
+	}
+	s.closed = true
+	return s.sinker.Close()
+}
+
+func combineTxnLifecycleErrors(primary, secondary error) error {
+	if primary == nil {
+		return secondary
+	}
+	if secondary == nil {
+		return primary
+	}
+	return errors.Join(primary, secondary)
 }

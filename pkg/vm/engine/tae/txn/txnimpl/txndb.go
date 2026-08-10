@@ -86,14 +86,19 @@ func (db *txnDB) LogTxnEntry(tableId uint64, entry txnif.TxnEntry, readedObjects
 
 func (db *txnDB) Close() error {
 	var err error
-	for _, table := range db.tables {
-		if err = table.Close(); err != nil {
-			break
+	for id, table := range db.tables {
+		closeErr := table.Close()
+		err = combineTxnLifecycleErrors(err, closeErr)
+		if closeErr == nil {
+			delete(db.tables, id)
 		}
 	}
-	db.tables = nil
 	db.createEntry = nil
 	db.dropEntry = nil
+	if len(db.tables) != 0 {
+		return err
+	}
+	db.tables = nil
 	return err
 }
 

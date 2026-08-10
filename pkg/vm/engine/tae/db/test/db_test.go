@@ -4154,6 +4154,65 @@ func TestTransferredTombstonesSyncFailureRollsBack(t *testing.T) {
 	tae.CheckRowsByScan(rows-1, true)
 }
 
+func TestTransferredTombstonesPublishedBeforeConflictRollBack(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	ctx := context.Background()
+
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
+	defer tae.Close()
+
+	schema := catalog.MockSchemaAll(2, 1)
+	schema.Extra.BlockMaxRows = 10
+	tae.BindSchema(schema)
+	base := containers.MockBatchWithAttrsAndOffset(schema.Types(), schema.Attrs(), 100, 0)
+	defer base.Close()
+	candidate := containers.MockBatchWithAttrsAndOffset(schema.Types(), schema.Attrs(), 1, 100)
+	defer candidate.Close()
+	tae.CreateRelAndAppend(base, true)
+	tae.CompactBlocks(true)
+
+	// This transaction must transfer a persisted tombstone after the source
+	// object is merged. Its appended row is made duplicate by a later commit,
+	// so the transfer publishes first and incremental dedup then aborts it.
+	txn, rel := tae.GetRelation()
+	txn.SetDedupType(txnif.DedupPolicy_CheckIncremental)
+	require.NoError(t, rel.Append(ctx, candidate))
+
+	pk := base.Vecs[schema.GetSingleSortKeyIdx()].Get(1)
+	id, offset, err := rel.GetByFilter(ctx, handle.NewEQFilter(pk))
+	require.NoError(t, err)
+	rowID := types.NewRowIDWithObjectIDBlkNumAndRowID(
+		*id.ObjectID(), id.BlockID.Sequence(), offset,
+	)
+	pkVec := containers.MakeVector(schema.GetPrimaryKey().Type, common.DebugAllocator)
+	pkVec.Append(pk, false)
+	rowIDVec := containers.MakeVector(types.T_Rowid.ToType(), common.DebugAllocator)
+	rowIDVec.Append(rowID, false)
+	stats, err := testutil.MockCNDeleteInS3(tae.Runtime.Fs, rowIDVec, pkVec, schema, txn)
+	require.NoError(t, err)
+	pkVec.Close()
+	rowIDVec.Close()
+	require.False(t, stats.IsZero())
+
+	tae.MergeBlocks(true)
+	ok, err := rel.AddPersistedTombstoneFile(id, stats)
+	require.NoError(t, err)
+	require.True(t, ok)
+	tae.DoAppend(candidate)
+	filesBeforeFailedCommit := snapshotFileService(t, tae.Runtime.Fs)
+
+	err = txn.Commit(ctx)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnWWConflict), err)
+	require.Equal(t, filesBeforeFailedCommit, snapshotFileService(t, tae.Runtime.Fs),
+		"rollback must remove the transferred TN tombstone object")
+	require.Zero(t, common.DebugAllocator.CurrNB())
+	tae.CheckRowsByScan(101, true)
+
+	tae.Restart(ctx)
+	tae.CheckRowsByScan(101, true)
+}
+
 func TestV9FlushPreservesRowIDAcrossAbortHole(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	ctx := context.Background()

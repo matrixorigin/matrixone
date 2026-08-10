@@ -17,23 +17,62 @@ package txnimpl
 import (
 	"context"
 	"errors"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	txnpb "github.com/matrixorigin/matrixone/pkg/pb/txn"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/stretchr/testify/require"
 )
 
+type failFirstDeleteFileService struct {
+	fileservice.FileService
+	err     error
+	deletes atomic.Int64
+}
+
+func (fs *failFirstDeleteFileService) Delete(
+	ctx context.Context,
+	paths ...string,
+) error {
+	if fs.deletes.Add(1) == 1 {
+		return fs.err
+	}
+	return fs.FileService.Delete(ctx, paths...)
+}
+
+func listTransferredTombstoneTestFiles(
+	t *testing.T,
+	fs fileservice.FileService,
+) []string {
+	t.Helper()
+	entries, err := fileservice.SortedList(fs.List(context.Background(), ""))
+	require.NoError(t, err)
+	files := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		if !entry.IsDir {
+			files = append(files, entry.Name)
+		}
+	}
+	return files
+}
+
 type stubTransferredTombstoneSinker struct {
-	writeErr  error
-	syncErr   error
-	deleteErr error
-	closeErr  error
-	stats     []objectio.ObjectStats
-	tail      []*batch.Batch
+	writeErr error
+	syncErr  error
+	closeErr error
+	stats    []objectio.ObjectStats
+	tail     []*batch.Batch
 
 	writes          int
 	syncs           int
@@ -63,7 +102,7 @@ func (s *stubTransferredTombstoneSinker) DeletePersisted(ctx context.Context) (i
 	s.deletes++
 	s.deleteCtxErr = ctx.Err()
 	s.deleteDeadline, s.deleteHasBound = ctx.Deadline()
-	return s.deleteObjectCnt, s.deleteErr
+	return s.deleteObjectCnt, nil
 }
 
 func (s *stubTransferredTombstoneSinker) Close() error {
@@ -205,23 +244,57 @@ func TestTransferredTombstoneSinkFailsClosedBeforePublication(t *testing.T) {
 	}
 }
 
-func TestTransferredTombstoneSinkPreservesPrimaryError(t *testing.T) {
-	operationErr := errors.New("transfer failed")
-	deleteErr := errors.New("delete unpublished objects")
-	closeErr := errors.New("close sinker")
-	stub := &stubTransferredTombstoneSinker{
-		deleteErr:       deleteErr,
-		closeErr:        closeErr,
-		deleteObjectCnt: 3,
+func TestTransferredTombstoneSinkRetriesRealPersistedObject(t *testing.T) {
+	ctx := context.Background()
+	proc := testutil.NewProc(t)
+	baseFS, err := fileservice.Get[fileservice.FileService](
+		proc.GetFileService(),
+		defines.SharedFileServiceName,
+	)
+	require.NoError(t, err)
+	filesBeforeSpill := listTransferredTombstoneTestFiles(t, baseFS)
+
+	deleteErr := errors.New("injected first object delete failure")
+	fs := &failFirstDeleteFileService{FileService: baseFS, err: deleteErr}
+	pkType := types.T_int32.ToType()
+	raw := ioutil.NewTombstoneSinker(
+		objectio.HiddenColumnSelection_None,
+		pkType,
+		proc.Mp(),
+		fs,
+		ioutil.WithMemorySizeThreshold(1),
+	)
+	sink := &transferredTombstoneSink{sinker: raw}
+	bat := catalog.NewCNTombstoneBatchByPKType(pkType, proc.Mp())
+	defer bat.Close()
+	objectID := objectio.NewObjectid()
+	rowID := types.NewRowIDWithObjectIDBlkNumAndRowID(objectID, 0, 0)
+	bat.GetVectorByName(objectio.TombstoneAttr_Rowid_Attr).Append(rowID, false)
+	bat.GetVectorByName(objectio.TombstoneAttr_PK_Attr).Append(int32(1), false)
+
+	require.NoError(t, sink.write(ctx, containers.ToCNBatch(bat)))
+	require.NoError(t, raw.Sync(ctx))
+	stats, tail := raw.GetResult()
+	require.NotEmpty(t, stats, "the test must create a persisted spill")
+	require.Empty(t, tail)
+	require.NotEqual(t, filesBeforeSpill, listTransferredTombstoneTestFiles(t, baseFS))
+
+	operationErr := moerr.NewTxnWWConflictNoCtx(0, "")
+	require.Same(t, operationErr, sink.close(ctx, operationErr))
+	require.True(t, sink.cleanupPending)
+	require.False(t, sink.closed)
+	require.Equal(t, int64(1), fs.deletes.Load())
+
+	tbl := &txnTable{
+		store:                            &txnStore{ctx: ctx},
+		pendingTransferredTombstoneSinks: []*transferredTombstoneSink{sink},
 	}
-	sink := &transferredTombstoneSink{sinker: stub}
-
-	err := sink.close(context.Background(), operationErr)
-
-	require.Same(t, operationErr, err,
-		"cleanup failures must not replace or wrap the transaction outcome")
-	require.Equal(t, 1, stub.deletes)
-	require.Equal(t, 1, stub.closes)
+	require.NoError(t, tbl.rollbackTransferredTombstones())
+	require.Equal(t, int64(2), fs.deletes.Load())
+	require.True(t, sink.closed)
+	require.Empty(t, tbl.pendingTransferredTombstoneSinks)
+	require.Equal(t, filesBeforeSpill, listTransferredTombstoneTestFiles(t, baseFS),
+		"the retry must delete the real unpublished object before Close")
 }
 
 func TestTransferredTombstoneSinkPreservesMoErrClassification(t *testing.T) {

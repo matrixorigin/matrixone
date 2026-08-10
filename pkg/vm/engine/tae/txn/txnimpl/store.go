@@ -248,15 +248,20 @@ func (store *txnStore) LogTxnEntry(dbId uint64, tableId uint64, entry txnif.TxnE
 
 func (store *txnStore) Close() error {
 	var err error
-	for _, db := range store.dbs {
-		if err = db.Close(); err != nil {
-			break
+	for id, db := range store.dbs {
+		closeErr := db.Close()
+		err = combineTxnLifecycleErrors(err, closeErr)
+		if closeErr == nil {
+			delete(store.dbs, id)
 		}
 	}
-	store.dbs = nil
 	store.cmdMgr = nil
 	store.logs = nil
 	store.warChecker = nil
+	if len(store.dbs) != 0 {
+		return err
+	}
+	store.dbs = nil
 	return err
 }
 
