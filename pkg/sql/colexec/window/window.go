@@ -25,6 +25,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/partition"
@@ -267,7 +268,9 @@ func (window *Window) Call(proc *process.Process) (vm.CallResult, error) {
 				argExprs := ag.GetArgExpressions()
 				argTypes := make([]types.Type, len(argExprs))
 				for j, arg := range argExprs {
-					argTypes[j] = types.New(types.T(arg.Typ.Id), arg.Typ.Width, arg.Typ.Scale)
+					argTypes[j] = types.NewWithCharset(
+						types.T(arg.Typ.Id), arg.Typ.Width, arg.Typ.Scale, uint8(arg.Typ.Charset),
+					)
 				}
 				ctr.batAggs[i], err = aggexec.MakeAgg(proc.Mp(), ag.GetAggID(), ag.IsDistinct(), argTypes...)
 				if err != nil {
@@ -494,6 +497,9 @@ func (ctr *container) processFunc(idx int, ap *Window, proc *process.Process, an
 	if err != nil {
 		return err
 	}
+	// Aggregate state initializes its physical capacity as NULL. Keep only
+	// logical-row nulls so downstream HasNull checks do not see an unused tail.
+	nulls.RemoveRange(ctr.vec.GetNulls(), uint64(ctr.vec.Length()), math.MaxUint64)
 	if !ctr.vec.HasPrepareParamKind() {
 		ctr.vec.SetPrepareParamKind(ctr.prepareParamKind.Get(idx))
 	}
@@ -517,7 +523,10 @@ func (ctr *container) processValueFunc(idx int, ap *Window, proc *process.Proces
 
 	// aggVecs already evaluated by caller (eval case in Call)
 	srcVec := ctr.aggVecs[idx].Vec[0] // the expression column
-	retType := types.New(types.T(w.WindowFunc.Typ.Id), w.WindowFunc.Typ.Width, w.WindowFunc.Typ.Scale)
+	retType := types.NewWithCharset(
+		types.T(w.WindowFunc.Typ.Id), w.WindowFunc.Typ.Width, w.WindowFunc.Typ.Scale,
+		uint8(w.WindowFunc.Typ.Charset),
+	)
 	localResult := vector.NewVec(retType)
 	defer func() {
 		if err != nil && localResult != nil {

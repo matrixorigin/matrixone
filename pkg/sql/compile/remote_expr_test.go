@@ -129,6 +129,59 @@ func TestOrderedAggregateRemoteProtocolValidation(t *testing.T) {
 	}))
 }
 
+func TestTextMinMaxRemoteProtocolValidation(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	rt := runtime.ServiceRuntime(proc.GetService())
+	defer rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCLatestVersion)
+	textMinForCharset := func(charset uint32) []aggexec.AggFuncExecExpression {
+		expr := makeTestVarExpr("value")
+		expr.Typ.Charset = charset
+		return []aggexec.AggFuncExecExpression{aggexec.MakeAggFunctionExpression(
+			aggexec.AggIdOfMin,
+			false,
+			[]*plan.Expr{expr},
+			nil,
+		)}
+	}
+	generalCIMin := textMinForCharset(uint32(types.CharsetUTF8))
+	binMin := textMinForCharset(uint32(types.CharsetUTF8MB4Bin))
+
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion13)
+	for _, collationAwareMin := range [][]aggexec.AggFuncExecExpression{generalCIMin, binMin} {
+		require.ErrorContains(t, validateRemoteAggregateProtocol(proc, collationAwareMin),
+			"requires MORPC protocol version 14")
+	}
+
+	ordered := aggexec.MakeAggFunctionExpression(
+		aggexec.AggIdOfGroupConcat,
+		false,
+		[]*plan.Expr{makeTestVarExpr("value")},
+		[]byte{1, 2, 3},
+		plan.AggregateConfigType_AGG_CONFIG_GROUP_CONCAT_ORDER,
+	)
+	require.ErrorContains(t,
+		validateRemoteAggregateProtocol(proc,
+			append([]aggexec.AggFuncExecExpression{ordered}, generalCIMin...)),
+		"requires MORPC protocol version 14",
+	)
+
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion14)
+	require.NoError(t, validateRemoteAggregateProtocol(proc, generalCIMin))
+	require.NoError(t, validateRemoteAggregateProtocol(proc, binMin))
+
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion9)
+	for _, charset := range []uint32{
+		uint32(types.CharsetLegacy),
+		uint32(types.CharsetBinary),
+	} {
+		binaryText := makeTestVarExpr("packed")
+		binaryText.Typ.Charset = charset
+		require.NoError(t, validateRemoteAggregateProtocol(proc,
+			[]aggexec.AggFuncExecExpression{aggexec.MakeAggFunctionExpression(
+				aggexec.AggIdOfMax, false, []*plan.Expr{binaryText}, nil)}))
+	}
+}
+
 func TestScopeContainsVarExprInAggArguments(t *testing.T) {
 	scope := newScope(Normal)
 	op := group.NewArgument()
