@@ -85,64 +85,6 @@ type regularIndexTopSortContext struct {
 	pushOrderedLimit bool
 }
 
-// calculatePostFilterOverFetchFactor returns the over-fetch multiplier based on limit size
-// for vector index queries with post-filtering (filters applied after index search).
-// Smaller limits need more over-fetching due to higher variance in filtering results.
-func calculatePostFilterOverFetchFactor(originalLimit uint64) float64 {
-	if originalLimit < 10 {
-		return 5.0 // Small limits: 5x
-	} else if originalLimit < 50 {
-		return 2.0 // Medium limits: 2x
-	} else if originalLimit < 100 {
-		return 1.5 // Large limits: 1.5x
-	} else if originalLimit < 200 {
-		return 1.3 // Very large limits: 1.3x
-	} else {
-		return 1.2 // Huge limits: 1.2x
-	}
-}
-
-// calculateFilteredPostModeOverFetchFactor returns a fixed, more conservative
-// multiplier for filtered post mode. It intentionally avoids statistics-based
-// heuristics so the behavior is predictable across plans.
-func calculateFilteredPostModeOverFetchFactor(originalLimit uint64) float64 {
-	if originalLimit < 50 {
-		return 5.0
-	} else if originalLimit < 100 {
-		return 2.0
-	} else if originalLimit < 200 {
-		return 1.5
-	} else {
-		return 1.3
-	}
-}
-
-func calculateOverFetchLimit(originalLimit uint64, factor float64) uint64 {
-	if originalLimit == 0 {
-		return 0
-	}
-	if factor < 1 {
-		factor = 1
-	}
-	multiplied := originalLimit
-	if factor > 1 {
-		product := float64(originalLimit) * factor
-		if product >= float64(math.MaxUint64) {
-			multiplied = math.MaxUint64
-		} else {
-			multiplied = uint64(product)
-		}
-	}
-
-	withFloor := originalLimit
-	if originalLimit > math.MaxUint64-10 {
-		withFloor = math.MaxUint64
-	} else {
-		withFloor += 10
-	}
-	return max(multiplied, withFloor)
-}
-
 func containsDynamicParam(expr *plan.Expr) bool {
 	switch exprImpl := expr.Expr.(type) {
 	case *plan.Expr_P, *plan.Expr_V:

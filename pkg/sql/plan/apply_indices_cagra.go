@@ -143,7 +143,14 @@ func (builder *QueryBuilder) applyIndicesForSortUsingCagra(nodeID int32, vecCtx 
 		return nodeID, err
 	}
 
-	tblCfgStr := fmt.Sprintf(`{"db": "%s", "src": "%s", "metadata":"%s", "index":"%s", "threads_search": %d, "orig_func_name": "%s", "batch_window": %d, "gpu_multi_simulation": %d, "parttype": %d}`,
+	// Filters that prune candidates after the search require the search to
+	// over-fetch (fetch k' > k) so k rows still survive. The over-fetch is done
+	// once at EXECUTE by the TVF (flag below), for literal AND parameterized
+	// limits alike. Any filter here is a conservative trigger — pushed-down
+	// filters merely over-fetch a little, while residual/peeled ones need it.
+	postFilterOverFetch := len(scanNode.FilterList) > 0
+
+	tblCfgStr := fmt.Sprintf(`{"db": "%s", "src": "%s", "metadata":"%s", "index":"%s", "threads_search": %d, "orig_func_name": "%s", "batch_window": %d, "gpu_multi_simulation": %d, "parttype": %d, "post_filter_overfetch": %t}`,
 		scanNode.ObjRef.SchemaName,
 		scanNode.TableDef.Name,
 		cagraCtx.metaDef.IndexTableName,
@@ -152,7 +159,8 @@ func (builder *QueryBuilder) applyIndicesForSortUsingCagra(nodeID int32, vecCtx 
 		cagraCtx.origFuncName,
 		cagraCtx.batchWindow,
 		cagraCtx.gpuMultiSim,
-		cagraCtx.partType.Id)
+		cagraCtx.partType.Id,
+		postFilterOverFetch)
 
 	// Predicate pushdown on INCLUDE columns and the primary key: peel
 	// filters that reference only INCLUDE columns (or the PK, routed to
@@ -245,38 +253,17 @@ func (builder *QueryBuilder) applyIndicesForSortUsingCagra(nodeID int32, vecCtx 
 		}
 	}
 
-	// pushdown limit to Table Function
-	// When there are filters or a peeled distance-range bound, over-fetch to
-	// get more candidates so the downstream post-filter still has enough rows.
-	if len(scanNode.FilterList) > 0 || len(peeledDistFilters) > 0 {
-		// Over-fetch strategy: dynamically adjust factor based on limit size
-		// Smaller limits need more over-fetching due to higher variance
-		if limitConst := limit.GetLit(); limitConst != nil {
-			originalLimit := limitConst.GetU64Val()
-
-			// Use shared function to calculate over-fetch factor
-			overFetchFactor := calculatePostFilterOverFetchFactor(originalLimit)
-
-			newLimit := calculateOverFetchLimit(originalLimit, overFetchFactor)
-			tableFuncNode.Limit = &Expr{
-				Typ: limit.Typ,
-				Expr: &plan.Expr_Lit{
-					Lit: &plan.Literal{
-						Isnull: false,
-						Value: &plan.Literal_U64Val{
-							U64Val: newLimit,
-						},
-					},
-				},
-			}
-		} else {
-			// If limit is not a constant, just copy it
-			tableFuncNode.Limit = DeepCopyExpr(limit)
-		}
-	} else {
-		// No filters, use original limit
-		tableFuncNode.Limit = DeepCopyExpr(limit)
+	// The raw candidate limit (k) is always carried on IndexReaderParam.Limit — a
+	// TVF-only channel with no plan-level top — and node.Limit is always dropped,
+	// so the TVF is the single authority on the candidate budget. When residual
+	// filters or a peeled distance-range bound will prune candidates the TVF
+	// over-fetches k -> k' at EXECUTE (post_filter_overfetch flag). Leaving
+	// node.Limit unset keeps the full candidate stream flowing to the JOIN.
+	tableFuncNode.IndexReaderParam = &plan.IndexReaderParam{
+		Limit:        DeepCopyExpr(limit),
+		OrigFuncName: cagraCtx.origFuncName,
 	}
+	tableFuncNode.Limit = nil
 
 	// oncond
 	wherePkEqPk, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*Expr{

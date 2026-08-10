@@ -148,13 +148,20 @@ func (builder *QueryBuilder) applyIndicesForSortUsingHnsw(nodeID int32, vecCtx *
 		return nodeID, err
 	}
 
-	tblCfgStr := fmt.Sprintf(`{"db": "%s", "src": "%s", "metadata":"%s", "index":"%s", "threads_search": %d, "orig_func_name": "%s"}`,
+	// With a residual filter the hnsw search is JOIN-ed against the scan and the
+	// filter drops index candidates, so the search must over-fetch (fetch k' > k)
+	// to still return k rows. The over-fetch is done once at EXECUTE by the TVF
+	// (flag below), for literal AND parameterized limits alike (#26869).
+	postFilterOverFetch := len(scanNode.FilterList) > 0
+
+	tblCfgStr := fmt.Sprintf(`{"db": "%s", "src": "%s", "metadata":"%s", "index":"%s", "threads_search": %d, "orig_func_name": "%s", "post_filter_overfetch": %t}`,
 		scanNode.ObjRef.SchemaName,
 		scanNode.TableDef.Name,
 		hnswCtx.metaDef.IndexTableName,
 		hnswCtx.idxDef.IndexTableName,
 		hnswCtx.nThread,
-		hnswCtx.origFuncName)
+		hnswCtx.origFuncName,
+		postFilterOverFetch)
 
 	// JOIN between source table and hnsw_search table function
 	tableFuncTag := builder.genNewBindTag()
@@ -181,38 +188,18 @@ func (builder *QueryBuilder) applyIndicesForSortUsingHnsw(nodeID int32, vecCtx *
 		return 0, err
 	}
 
-	// pushdown limit to Table Function
-	// When there are filters, over-fetch to get more candidates
-	// This ensures we have enough candidates after filtering
-	if len(scanNode.FilterList) > 0 {
-		// Over-fetch strategy: dynamically adjust factor based on limit size
-		// Smaller limits need more over-fetching due to higher variance
-		if limitConst := limit.GetLit(); limitConst != nil {
-			originalLimit := limitConst.GetU64Val()
-
-			// Use shared function to calculate over-fetch factor
-			overFetchFactor := calculatePostFilterOverFetchFactor(originalLimit)
-
-			newLimit := calculateOverFetchLimit(originalLimit, overFetchFactor)
-			tableFuncNode.Limit = &Expr{
-				Typ: limit.Typ,
-				Expr: &plan.Expr_Lit{
-					Lit: &plan.Literal{
-						Isnull: false,
-						Value: &plan.Literal_U64Val{
-							U64Val: newLimit,
-						},
-					},
-				},
-			}
-		} else {
-			// If limit is not a constant, just copy it
-			tableFuncNode.Limit = DeepCopyExpr(limit)
-		}
-	} else {
-		// No filters, use original limit
-		tableFuncNode.Limit = DeepCopyExpr(limit)
+	// The raw candidate limit (k) is always carried on IndexReaderParam.Limit — a
+	// TVF-only channel with no plan-level top — and node.Limit is always dropped,
+	// so the TVF is the single authority on the candidate budget. When a residual
+	// filter drops candidates the TVF over-fetches k -> k' at EXECUTE
+	// (post_filter_overfetch flag). Leaving node.Limit unset keeps the full
+	// candidate stream flowing to the JOIN and lets a multi-CN merge see every
+	// shard's candidates.
+	tableFuncNode.IndexReaderParam = &plan.IndexReaderParam{
+		Limit:        DeepCopyExpr(limit),
+		OrigFuncName: hnswCtx.origFuncName,
 	}
+	tableFuncNode.Limit = nil
 
 	// oncond
 	wherePkEqPk, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*Expr{
