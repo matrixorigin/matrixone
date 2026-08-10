@@ -181,6 +181,36 @@ func TestAccountedSpillAdaptsAndPreservesRows(t *testing.T) {
 	require.Equal(t, int64(len(values)), spillFileRows(t, h.files))
 }
 
+func TestAccountedSpillBroadcastsPreparedParamKey(t *testing.T) {
+	h := newSpillTestHarness(t, 8<<20)
+	defer h.close(t)
+	params := vector.NewVec(types.T_text.ToType())
+	require.NoError(t, vector.AppendBytes(params, []byte("prepared"), false, h.proc.Mp()))
+	defer func() {
+		h.op.ctr.freeSpillExprExecs()
+		params.Free(h.proc.Mp())
+	}()
+	h.proc.SetPrepareParams(params)
+
+	values := []int64{1, 2, 3, 4}
+	input := batch.NewWithSize(1)
+	input.Vecs[0] = testutil.MakeInt64Vector(values, nil, h.proc.Mp())
+	input.SetRowCount(len(values))
+	defer input.Clean(h.proc.Mp())
+	paramExpr := &plan.Expr{
+		Typ:  plan.Type{Id: int32(types.T_text)},
+		Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: 0}},
+	}
+	executors, err := h.op.ctr.initSpillExprExecs(h.proc, []*plan.Expr{paramExpr})
+	require.NoError(t, err)
+	analyzer := process.NewAnalyzer(0, false, false, "test")
+	require.NoError(t, h.op.ctr.spillBatchWithPressure(
+		h.proc, input, h.files, executors, analyzer, false,
+	))
+	require.NoError(t, h.op.ctr.flushSpillBuffers(h.proc, h.files, analyzer))
+	require.Equal(t, int64(len(values)), spillFileRows(t, h.files))
+}
+
 func TestAccountedSpillCoalescesWithoutDuplicateOwnership(t *testing.T) {
 	h := newSpillTestHarness(t, 8<<20)
 	defer h.close(t)

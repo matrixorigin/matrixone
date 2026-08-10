@@ -32,9 +32,10 @@ func TestRecoveryProjectionPreservesLogicalVarlenaMultiplicity(t *testing.T) {
 	const rows = 4
 	payload := strings.Repeat("x", 64)
 	constant, err := vector.NewConstBytes(
-		types.T_varchar.ToType(), []byte(payload), rows, mp)
+		types.T_varchar.ToType(), []byte(payload), 1, mp)
 	require.NoError(t, err)
 	defer constant.Free(mp)
+	require.Equal(t, 1, constant.Length(), "the value is physically stored once")
 	bat := batch.NewWithSize(1)
 	bat.Vecs[0] = constant
 	bat.SetRowCount(rows)
@@ -42,6 +43,10 @@ func TestRecoveryProjectionPreservesLogicalVarlenaMultiplicity(t *testing.T) {
 	selected, err := projectedSelectedRange(bat, 0, rows)
 	require.NoError(t, err)
 	require.Equal(t, uint64(rows*(types.VarlenaSize+len(payload))), selected)
+
+	selected, err = projectedSelectedRange(bat, 2, 2)
+	require.NoError(t, err)
+	require.Equal(t, uint64(2*(types.VarlenaSize+len(payload))), selected)
 }
 
 func TestRecoveryProjectionUsesIncrementalPartialTail(t *testing.T) {
