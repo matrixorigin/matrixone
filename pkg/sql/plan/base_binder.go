@@ -2470,6 +2470,9 @@ func (b *baseBinder) bindFuncExpr(astExpr *tree.FuncExpr, depth int32, isRoot bo
 		return nil, moerr.NewNYIf(b.GetContext(), "function expr '%v'", astExpr)
 	}
 	funcName := funcRef.ColName()
+	if strings.EqualFold(funcName, "grouping") {
+		return b.bindGroupingFuncExpr(astExpr)
+	}
 	if strings.EqualFold(funcName, "mod") && b.numericParamType == nil {
 		return b.bindNumericExprWithDefaultContext(astExpr, depth, b.defaultNumericOuterType())
 	}
@@ -2495,6 +2498,37 @@ func (b *baseBinder) bindFuncExpr(astExpr *tree.FuncExpr, depth int32, isRoot bo
 	}
 
 	return b.bindFuncExprImplByAstExpr(funcName, astExpr.Exprs, depth)
+}
+
+// bindGroupingFuncExpr binds GROUPING arguments directly to their registered
+// GROUP BY columns. A GROUPING argument must identify one complete GROUP BY
+// item; recursively binding a miss would incorrectly accept derived
+// expressions such as GROUPING(a+b) for GROUP BY a, b.
+func (b *baseBinder) bindGroupingFuncExpr(astExpr *tree.FuncExpr) (*plan.Expr, error) {
+	if b.ctx == nil {
+		return nil, moerr.NewSyntaxErrorf(b.GetContext(),
+			"Argument #1 of GROUPING function is not in GROUP BY")
+	}
+
+	args := make([]*plan.Expr, len(astExpr.Exprs))
+	for i, rawArg := range astExpr.Exprs {
+		qualifiedArg, err := b.ctx.qualifyColumnNames(cloneTreeExpr(rawArg), NoAlias)
+		if err != nil {
+			return nil, err
+		}
+		colPos, ok := lookupGroupByAst(b.ctx, qualifiedArg, windowExprAstKey(qualifiedArg))
+		if !ok {
+			return nil, moerr.NewSyntaxErrorf(b.GetContext(),
+				"Argument #%d of GROUPING function is not in GROUP BY", i+1)
+		}
+		if colPos < 0 || int(colPos) >= len(b.ctx.groups) {
+			return nil, moerr.NewInternalErrorf(b.GetContext(),
+				"GROUPING argument position out of range: %d", colPos)
+		}
+		args[i] = GetColExpr(b.ctx.groups[colPos].Typ, b.ctx.groupTag, colPos)
+	}
+
+	return BindFuncExprImplByPlanExpr(b.GetContext(), "grouping", args)
 }
 
 func isPreparedNumericAggregate(name string, argCount int) bool {
