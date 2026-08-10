@@ -1681,10 +1681,12 @@ func (c *checkpointCleaner) DoCheck(ctx context.Context) error {
 func (c *checkpointCleaner) Process(
 	inputCtx context.Context,
 	checker func(*checkpoint.CheckpointEntry) bool) (err error) {
-	if c.unpublishedCleanupProcessed.Load() != c.unpublishedCleanupGeneration.Load() {
-		if err = c.replayUnpublishedObjectCleanup(inputCtx); err != nil {
-			return
-		}
+	// CN publication failures can create shared cleanup markers without access
+	// to this TN process's in-memory generation. Scan the bounded marker prefix
+	// on every already-scheduled cleaner cycle so those external handoffs do not
+	// require a TN restart to become visible.
+	if err = c.replayUnpublishedObjectCleanup(inputCtx); err != nil {
+		return
 	}
 	if !c.GCEnabled() {
 		return

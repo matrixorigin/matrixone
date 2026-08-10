@@ -16,7 +16,9 @@ package publication
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -25,7 +27,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -371,6 +375,106 @@ func TestRewriteNonAppendableTombstoneWithSinker_ContentTooSmall(t *testing.T) {
 	)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "object content too small")
+}
+
+type publicationPersistThenErrorFS struct {
+	fileservice.FileService
+	persisted         string
+	failObjectDeletes bool
+	objectDeletes     int
+}
+
+func (fs *publicationPersistThenErrorFS) Write(
+	ctx context.Context,
+	vector fileservice.IOVector,
+) error {
+	if err := fs.FileService.Write(ctx, vector); err != nil {
+		return err
+	}
+	if strings.HasPrefix(vector.FilePath, "gc/unpublished/") {
+		return nil
+	}
+	fs.persisted = vector.FilePath
+	return errors.New("injected publication post-persist sync failure")
+}
+
+func (fs *publicationPersistThenErrorFS) Delete(
+	ctx context.Context,
+	paths ...string,
+) error {
+	if fs.failObjectDeletes {
+		for _, path := range paths {
+			if !strings.HasPrefix(path, "gc/unpublished/") {
+				fs.objectDeletes++
+				return errors.New("injected publication object delete failure")
+			}
+		}
+	}
+	for _, path := range paths {
+		if !strings.HasPrefix(path, "gc/unpublished/") {
+			fs.objectDeletes++
+		}
+	}
+	return fs.FileService.Delete(ctx, paths...)
+}
+
+func TestRewriteNonAppendableTombstoneSyncErrorHandsOffCleanup(t *testing.T) {
+	ctx := context.Background()
+	mp, err := mpool.NewMPool("test", 0, mpool.NoFixed)
+	require.NoError(t, err)
+	defer mp.Free(nil)
+
+	sourceFS, err := fileservice.NewMemoryFS(
+		"source", fileservice.DisabledCacheConfig, nil)
+	require.NoError(t, err)
+	writer := ioutil.ConstructTombstoneWriter(
+		objectio.HiddenColumnSelection_None, sourceFS)
+	bat := batch.NewWithSize(2)
+	bat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
+	bat.Vecs[1] = vector.NewVec(types.T_int32.ToType())
+	dataObjectID := objectio.NewObjectid()
+	row := types.NewRowIDWithObjectIDBlkNumAndRowID(dataObjectID, 0, 0)
+	require.NoError(t, vector.AppendFixed(bat.Vecs[0], row, false, mp))
+	require.NoError(t, vector.AppendFixed(bat.Vecs[1], int32(1), false, mp))
+	bat.SetRowCount(1)
+	defer bat.Clean(mp)
+	_, err = writer.WriteBatch(bat)
+	require.NoError(t, err)
+	_, _, err = writer.Sync(ctx)
+	require.NoError(t, err)
+	stats := writer.GetObjectStats()
+
+	read := &fileservice.IOVector{
+		FilePath: stats.ObjectName().String(),
+		Entries:  []fileservice.IOEntry{{Offset: 0, Size: -1}},
+	}
+	require.NoError(t, sourceFS.Read(ctx, read))
+	objectContent := append([]byte(nil), read.Entries[0].Data...)
+	read.Release()
+
+	targetBase, err := fileservice.NewMemoryFS(
+		"target", fileservice.DisabledCacheConfig, nil)
+	require.NoError(t, err)
+	targetFS := &publicationPersistThenErrorFS{
+		FileService:       targetBase,
+		failObjectDeletes: true,
+	}
+	_, err = rewriteNonAppendableTombstoneWithSinker(
+		ctx, objectContent, &stats, targetFS, mp, NewAObjectMap())
+	require.ErrorContains(t, err, "injected publication post-persist sync failure")
+	require.NotEmpty(t, targetFS.persisted)
+	require.Equal(t, 1, targetFS.objectDeletes,
+		"the caller must attempt exact-name cleanup before handing it off")
+	_, err = targetBase.StatFile(ctx, targetFS.persisted)
+	require.NoError(t, err, "Sync failed after the object reached storage")
+
+	targetFS.failObjectDeletes = false
+	replayed, remaining, err := ioutil.ReplayUnpublishedObjectCleanup(ctx, targetFS)
+	require.NoError(t, err)
+	require.Equal(t, 1, replayed, "the caller must hand cleanup to a durable owner")
+	require.False(t, remaining)
+	_, err = targetBase.StatFile(ctx, targetFS.persisted)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrFileNotFound))
 }
 
 // ---- FilterObject dispatches to appendable vs non-appendable ----

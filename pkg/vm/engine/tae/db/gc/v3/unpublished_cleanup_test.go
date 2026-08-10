@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/stretchr/testify/require"
 )
 
@@ -140,8 +141,37 @@ func TestCheckpointCleanerReplaysUnpublishedCleanupAfterRestart(t *testing.T) {
 	require.Equal(t,
 		secondProcess.unpublishedCleanupProcessed.Load(),
 		secondProcess.unpublishedCleanupGeneration.Load(),
-		"successful startup replay must leave the steady state scan-free",
+		"successful startup replay must consume the current generation",
 	)
+}
+
+func TestCheckpointCleanerDiscoversExternalSharedCleanupMarker(t *testing.T) {
+	ctx := context.Background()
+	sharedFS, err := fileservice.NewMemoryFS(
+		"shared", fileservice.DisabledCacheConfig, nil)
+	require.NoError(t, err)
+	localFS, err := fileservice.NewMemoryFS(
+		"local", fileservice.DisabledCacheConfig, nil)
+	require.NoError(t, err)
+	object := objectio.MockObjectName().String()
+	writeCheckpointCleanerCleanupTestObject(t, sharedFS, object)
+	_, err = ioutil.RecordUnpublishedObjectCleanup(ctx, sharedFS, object)
+	require.NoError(t, err)
+
+	cleaner := &checkpointCleaner{
+		ctx:                  ctx,
+		fs:                   sharedFS,
+		unpublishedCleanupFS: localFS,
+	}
+	require.Equal(t,
+		cleaner.unpublishedCleanupProcessed.Load(),
+		cleaner.unpublishedCleanupGeneration.Load(),
+		"an external producer cannot increment this process's generation",
+	)
+	require.NoError(t, cleaner.Process(ctx, nil))
+	_, err = sharedFS.StatFile(ctx, object)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrFileNotFound),
+		"a running TN must discover cleanup markers created externally by CNs")
 }
 
 func TestCheckpointCleanerDoesNotLoseConcurrentHandoff(t *testing.T) {

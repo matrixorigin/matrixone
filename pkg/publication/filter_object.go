@@ -17,6 +17,7 @@ package publication
 import (
 	"context"
 	"sync"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/malloc"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -38,6 +39,11 @@ import (
 
 // ErrSyncProtectionTTLExpired is returned when sync protection TTL has expired
 var ErrSyncProtectionTTLExpired = moerr.NewInternalErrorNoCtx("sync protection TTL expired")
+
+const (
+	publicationTombstoneCleanupTimeout = time.Minute
+	publicationTombstoneHandoffTimeout = 10 * time.Second
+)
 
 // CCPRTxnCacheWriter is an interface for writing objects to CCPR transaction cache
 // This interface is implemented by disttae.CCPRTxnCache
@@ -697,7 +703,13 @@ func rewriteNonAppendableTombstoneWithSinker(
 		localFS,
 		ioutil.WithTailSizeCap(0), // Force all data to be written to object
 	)
-	defer sinker.Close()
+	published := false
+	defer func() {
+		if !published {
+			cleanupPublicationTombstoneSinker(ctx, localFS, sinker)
+		}
+		_ = sinker.Close()
+	}()
 
 	// Step 4: Read blocks one by one and write to sinker
 	allocator := fileservice.DefaultCacheDataAllocator()
@@ -735,7 +747,46 @@ func rewriteNonAppendableTombstoneWithSinker(
 	}
 
 	// Return the first (and only) object stats
+	published = true
 	return persisted[0], nil
+}
+
+func cleanupPublicationTombstoneSinker(
+	ctx context.Context,
+	fs fileservice.FileService,
+	sinker *ioutil.Sinker,
+) {
+	cleanupCtx, cancel := context.WithTimeoutCause(
+		context.WithoutCancel(ctx),
+		publicationTombstoneCleanupTimeout,
+		moerr.CauseCleanUpUselessFiles,
+	)
+	files, cleanupErr := sinker.DeletePersisted(cleanupCtx)
+	cancel()
+	if cleanupErr == nil {
+		return
+	}
+
+	// DeletePersisted retains the exact names when deletion fails. Transfer
+	// those names to the existing durable cleanup protocol before Close clears
+	// the sinker's local ownership. TN checkpoint cleaners replay these shared
+	// markers, including after process restart.
+	handoffCtx, handoffCancel := context.WithTimeoutCause(
+		context.WithoutCancel(ctx),
+		publicationTombstoneHandoffTimeout,
+		moerr.CauseCleanUpUselessFiles,
+	)
+	_, handoffErr := ioutil.RecordUnpublishedObjectCleanup(
+		handoffCtx, fs, files...)
+	handoffCancel()
+	if handoffErr != nil {
+		logutil.Error(
+			"failed to hand off unpublished publication tombstone cleanup",
+			zap.Int("objects", len(files)),
+			zap.NamedError("delete-error", cleanupErr),
+			zap.NamedError("handoff-error", handoffErr),
+		)
+	}
 }
 
 // newTombstoneFSinkerFactoryWithName creates a FileSinkerFactory for tombstone
