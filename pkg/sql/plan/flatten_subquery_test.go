@@ -264,6 +264,225 @@ func TestScalarAggregatePlanSupportsDeepCorrelation(t *testing.T) {
 	}
 }
 
+func TestCorrelatedLimitIsPartitionedByCorrelationKey(t *testing.T) {
+	logicPlan, err := runOneStmt(NewMockOptimizer(true), t, `
+		SELECT n1.N_NATIONKEY,
+		       (SELECT n2.N_NATIONKEY
+		          FROM NATION n2
+		         WHERE n2.N_REGIONKEY = n1.N_REGIONKEY
+		         ORDER BY n2.N_NATIONKEY DESC
+		         LIMIT 1)
+		  FROM NATION n1`)
+	require.NoError(t, err)
+
+	query := logicPlan.GetQuery()
+	require.NotNil(t, query)
+	require.NotEmpty(t, query.Steps)
+
+	var correlatedTop *plan.WindowSpec
+	for _, node := range reachableFlattenSubqueryNodes(query) {
+		require.Nil(t, node.Limit, "reachable correlated subquery plan retains a global limit")
+		require.Nil(t, node.Offset, "reachable correlated subquery plan retains a global offset")
+		for _, expr := range node.WinSpecList {
+			window := expr.GetW()
+			if window != nil && window.Name == "row_number" && len(window.PartitionBy) > 0 {
+				correlatedTop = window
+			}
+		}
+	}
+
+	require.NotNil(t, correlatedTop)
+	require.Len(t, correlatedTop.PartitionBy, 1)
+	require.Len(t, correlatedTop.OrderBy, 1)
+	require.NotZero(t, correlatedTop.OrderBy[0].Flag&plan.OrderBySpec_DESC)
+	assertReachablePlanHasNoCorrelatedExpr(t, query)
+}
+
+func TestCorrelatedLimitRejectsNonPartitionablePredicate(t *testing.T) {
+	_, err := runOneStmt(NewMockOptimizer(true), t, `
+		SELECT n1.N_NATIONKEY,
+		       (SELECT n2.N_NATIONKEY
+		          FROM NATION n2
+		         WHERE n2.N_REGIONKEY < n1.N_REGIONKEY
+		         ORDER BY n2.N_NATIONKEY DESC
+		         LIMIT 1)
+		  FROM NATION n1`)
+	require.ErrorContains(t, err, "correlated LIMIT with non-equality predicates")
+}
+
+func TestCorrelatedExistenceLimitIsRemoved(t *testing.T) {
+	for _, quantifier := range []string{"EXISTS", "NOT EXISTS"} {
+		t.Run(quantifier, func(t *testing.T) {
+			logicPlan, err := runOneStmt(NewMockOptimizer(true), t, `
+				SELECT n1.N_NATIONKEY
+				  FROM NATION n1
+				 WHERE `+quantifier+` (
+				       SELECT 1
+				         FROM NATION n2
+				        WHERE n2.N_REGIONKEY < n1.N_REGIONKEY
+				        LIMIT 1)`)
+			require.NoError(t, err)
+
+			for _, node := range reachableFlattenSubqueryNodes(logicPlan.GetQuery()) {
+				require.Nil(t, node.Limit)
+				require.NotEqual(t, plan.Node_WINDOW, node.NodeType)
+			}
+		})
+	}
+}
+
+func TestOnlyRootCorrelatedExistenceLimitIsRemoved(t *testing.T) {
+	newBuilder := func() (*QueryBuilder, *BindContext, []*plan.Expr) {
+		const (
+			innerTag int32 = 10
+			outerTag int32 = 20
+		)
+		builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+		innerKey := GetColExpr(plan.Type{Id: int32(types.T_int32)}, innerTag, 0)
+		builder.qry.Nodes = []*plan.Node{
+			{NodeId: 0, NodeType: plan.Node_TABLE_SCAN, BindingTags: []int32{innerTag}},
+			{
+				NodeId:   1,
+				NodeType: plan.Node_SORT,
+				Children: []int32{0},
+				OrderBy:  []*plan.OrderBySpec{{Expr: DeepCopyExpr(innerKey)}},
+				Limit:    makePlan2Uint64ConstExprWithType(1),
+			},
+		}
+		builder.ctxByNode = []*BindContext{nil, nil}
+		predicate := &plan.Expr{Expr: &plan.Expr_F{F: &plan.Function{
+			Func: &plan.ObjectRef{ObjName: "="},
+			Args: []*plan.Expr{
+				innerKey,
+				{Typ: plan.Type{Id: int32(types.T_int32)}, Expr: &plan.Expr_Corr{
+					Corr: &plan.CorrColRef{RelPos: outerTag, ColPos: 0, Depth: 1},
+				}},
+			},
+		}}}
+		return builder, &BindContext{}, []*plan.Expr{predicate}
+	}
+
+	t.Run("root", func(t *testing.T) {
+		builder, ctx, predicates := newBuilder()
+		nodeID, err := builder.rewriteCorrelatedPagination(
+			1, builder.qry.Nodes[1], predicates, ctx, plan.SubqueryRef_EXISTS, true)
+		require.NoError(t, err)
+		require.Equal(t, int32(1), nodeID)
+		require.Nil(t, builder.qry.Nodes[1].Limit)
+		require.Len(t, builder.qry.Nodes, 2)
+	})
+
+	t.Run("nested", func(t *testing.T) {
+		builder, ctx, predicates := newBuilder()
+		nodeID, err := builder.rewriteCorrelatedPagination(
+			1, builder.qry.Nodes[1], predicates, ctx, plan.SubqueryRef_EXISTS, false)
+		require.NoError(t, err)
+		require.Equal(t, plan.Node_WINDOW, builder.qry.Nodes[nodeID].NodeType)
+		require.Len(t, builder.qry.Nodes, 4)
+	})
+}
+
+func TestCorrelatedLimitOffsetUsesPartitionedInterval(t *testing.T) {
+	logicPlan, err := runOneStmt(NewMockOptimizer(true), t, `
+		SELECT n1.N_NATIONKEY,
+		       (SELECT n2.N_NATIONKEY
+		          FROM NATION n2
+		         WHERE n2.N_REGIONKEY <=> n1.N_REGIONKEY
+		         ORDER BY n2.N_NATIONKEY
+		         LIMIT 2 OFFSET 1)
+		  FROM NATION n1`)
+	require.NoError(t, err)
+
+	var topWindow *plan.Node
+	for _, node := range reachableFlattenSubqueryNodes(logicPlan.GetQuery()) {
+		require.Nil(t, node.Limit)
+		require.Nil(t, node.Offset)
+		if node.NodeType == plan.Node_WINDOW && len(node.WinSpecList) == 1 &&
+			node.WinSpecList[0].GetW().Name == "row_number" {
+			topWindow = node
+		}
+	}
+	require.NotNil(t, topWindow)
+	require.Len(t, topWindow.WinSpecList[0].GetW().PartitionBy, 1)
+	require.Equal(t, "and", topWindow.FilterList[0].GetF().Func.ObjName)
+}
+
+func TestCorrelatedLimitUsesEveryEqualityKey(t *testing.T) {
+	logicPlan, err := runOneStmt(NewMockOptimizer(true), t, `
+		SELECT n1.N_NATIONKEY,
+		       (SELECT n2.N_NATIONKEY
+		          FROM NATION n2
+		         WHERE n2.N_REGIONKEY = n1.N_REGIONKEY
+		           AND n2.N_NATIONKEY = n1.N_NATIONKEY
+		         LIMIT 1)
+		  FROM NATION n1`)
+	require.NoError(t, err)
+
+	var topWindow *plan.WindowSpec
+	for _, node := range reachableFlattenSubqueryNodes(logicPlan.GetQuery()) {
+		for _, expr := range node.WinSpecList {
+			if window := expr.GetW(); window != nil && window.Name == "row_number" {
+				topWindow = window
+			}
+		}
+	}
+	require.NotNil(t, topWindow)
+	require.Len(t, topWindow.PartitionBy, 2)
+	require.Empty(t, topWindow.OrderBy)
+}
+
+func TestCorrelatedPaginationPartitionTypeSupported(t *testing.T) {
+	require.True(t, correlatedPaginationPartitionTypeSupported(types.T_int32))
+	require.True(t, correlatedPaginationPartitionTypeSupported(types.T_varchar))
+	require.False(t, correlatedPaginationPartitionTypeSupported(types.T_geometry32))
+	require.False(t, correlatedPaginationPartitionTypeSupported(types.T_any))
+}
+
+func TestCorrelatedScalarAggregateLimitIsPartitioned(t *testing.T) {
+	logicPlan, err := runOneStmt(NewMockOptimizer(true), t, `
+		SELECT n1.N_NATIONKEY,
+		       (SELECT COALESCE(MAX(n2.N_NATIONKEY), 0)
+		          FROM NATION n2
+		         WHERE n2.N_REGIONKEY = n1.N_REGIONKEY
+		         LIMIT 1)
+		  FROM NATION n1`)
+	require.NoError(t, err)
+
+	var hasWindow bool
+	for _, node := range reachableFlattenSubqueryNodes(logicPlan.GetQuery()) {
+		require.Nil(t, node.Limit)
+		if node.NodeType == plan.Node_WINDOW {
+			hasWindow = true
+		}
+	}
+	require.True(t, hasWindow)
+}
+
+func reachableFlattenSubqueryNodes(query *plan.Query) []*plan.Node {
+	if query == nil {
+		return nil
+	}
+
+	visited := make(map[int32]bool)
+	nodes := make([]*plan.Node, 0, len(query.Nodes))
+	var visit func(int32)
+	visit = func(nodeID int32) {
+		if nodeID < 0 || int(nodeID) >= len(query.Nodes) || visited[nodeID] {
+			return
+		}
+		visited[nodeID] = true
+		node := query.Nodes[nodeID]
+		nodes = append(nodes, node)
+		for _, childID := range node.Children {
+			visit(childID)
+		}
+	}
+	for _, rootID := range query.Steps {
+		visit(rootID)
+	}
+	return nodes
+}
+
 func TestNestedCorrelatedScalarAggregatePullsUpGroupingKey(t *testing.T) {
 	logicPlan, err := runOneStmt(NewMockOptimizer(true), t, `
 		SELECT n1.N_NATIONKEY,
