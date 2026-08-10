@@ -2147,12 +2147,7 @@ create table explicit_not_null_reject (r_id int not null) as select r.id from l 
 constraint violation: Column 'r_id' cannot be null
 show tables like 'explicit_not_null_reject';
 ➤ Tables_in_ctas_null_extension_26828[12,-1,0]
-select table_name, column_name, is_nullable
-from information_schema.columns
-where table_schema = 'ctas_null_extension_26828'
-  and table_name in ('coalesce_left', 'derived_right', 'direct_left', 'scalar_direct', 'scalar_view_ctas', 'view_full')
-  and column_name <> '__mo_fake_pk_col'
-order by table_name, ordinal_position;
+select table_name, column_name, is_nullable from information_schema.columns where table_schema = 'ctas_null_extension_26828' and table_name in ('coalesce_left', 'derived_right', 'direct_left', 'scalar_direct', 'scalar_view_ctas', 'view_full') and column_name <> '__mo_fake_pk_col' order by table_name, ordinal_position;
 ➤ table_name[12,-1,0]  ¦  column_name[12,-1,0]  ¦  is_nullable[12,-1,0]  𝄀
 coalesce_left  ¦  l_id  ¦  NO  𝄀
 coalesce_left  ¦  rv_or_default  ¦  NO  𝄀

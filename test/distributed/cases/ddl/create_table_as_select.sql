@@ -1487,10 +1487,5 @@ select * from coalesce_left order by l_id;
 create table explicit_not_null_reject (r_id int not null) as select r.id from l left join r on l.id = r.id;
 show tables like 'explicit_not_null_reject';
 
-select table_name, column_name, is_nullable
-from information_schema.columns
-where table_schema = 'ctas_null_extension_26828'
-  and table_name in ('coalesce_left', 'derived_right', 'direct_left', 'scalar_direct', 'scalar_view_ctas', 'view_full')
-  and column_name <> '__mo_fake_pk_col'
-order by table_name, ordinal_position;
+select table_name, column_name, is_nullable from information_schema.columns where table_schema = 'ctas_null_extension_26828' and table_name in ('coalesce_left', 'derived_right', 'direct_left', 'scalar_direct', 'scalar_view_ctas', 'view_full') and column_name <> '__mo_fake_pk_col' order by table_name, ordinal_position;
 drop database ctas_null_extension_26828;
