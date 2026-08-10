@@ -17,6 +17,7 @@ package plan
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strconv"
 	"strings"
 	"testing"
@@ -320,6 +321,23 @@ func TestBuildDropTemporaryTableIfExistsDoesNotTargetPermanentTable(t *testing.T
 	p, err := BuildPlan(NewMockCompilerContext(false), stmt, false)
 	require.NoError(t, err)
 	require.Nil(t, p.GetDdl().GetDropTable().GetTableDef())
+}
+
+func TestBuildTruncateTemporaryTableDoesNotTargetPermanentTable(t *testing.T) {
+	for _, prepare := range []bool{false, true} {
+		t.Run(fmt.Sprintf("prepare=%t", prepare), func(t *testing.T) {
+			stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, "truncate table nation", 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+
+			ctx := NewMockCompilerContext(false)
+			ctx.tables["nation"].IsTemporary = true
+
+			_, err = BuildPlan(ctx, stmt, prepare)
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrNoSuchTable))
+			require.Equal(t, "no such table tpch.nation", err.Error())
+		})
+	}
 }
 
 func (c *rootSQLCompilerContext) GetRootSql() string {
