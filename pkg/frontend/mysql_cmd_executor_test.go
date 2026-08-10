@@ -484,6 +484,11 @@ func TestSetTransactionDoesNotFinishExistingTransaction(t *testing.T) {
 		err := execute(setSQL)
 		if wantErr == "" {
 			require.NoError(t, err)
+			if strings.Contains(setSQL, "@probe") {
+				probe, getErr := ses.GetUserDefinedVar("probe")
+				require.NoError(t, getErr)
+				require.EqualValues(t, 1, probe.Value)
+			}
 		} else {
 			require.ErrorContains(t, err, wantErr)
 			if strings.Contains(wantErr, "Transaction characteristics can't be changed") {
@@ -523,6 +528,18 @@ func TestSetTransactionDoesNotFinishExistingTransaction(t *testing.T) {
 		run(t,
 			"set @@transaction_isolation = 'READ-COMMITTED'",
 			"Transaction characteristics can't be changed while a transaction is in progress",
+		)
+	})
+	t.Run("rejected mixed next scope preserves prior work", func(t *testing.T) {
+		run(t,
+			"set @@transaction_isolation = 'READ-COMMITTED', @probe = 1",
+			"Transaction characteristics can't be changed while a transaction is in progress",
+		)
+	})
+	t.Run("mixed session scope preserves prior work", func(t *testing.T) {
+		run(t,
+			"set session transaction_isolation = 'READ-COMMITTED', @probe = 1",
+			"",
 		)
 	})
 	t.Run("unsupported access mode preserves prior work", func(t *testing.T) {
@@ -3678,6 +3695,22 @@ func Test_statement_type(t *testing.T) {
 		}), convey.ShouldBeTrue)
 		convey.So(needToFinishTransactionAtStatementEnd(&ExecCtx{
 			stmt: &tree.SetTransaction{},
+			txnOpt: FeTxnOption{
+				activeTxnAtStartKnown: true,
+				activeTxnAtStart:      true,
+			},
+		}), convey.ShouldBeFalse)
+		mixedSet := &tree.SetVar{Assignments: []*tree.VarAssignmentExpr{
+			{
+				System:   true,
+				Name:     transactionIsolationSystemVariable,
+				TxnScope: tree.TransactionScopeSession,
+			},
+			{Name: "probe"},
+		}}
+		convey.So(statementContainsTransactionCharacteristic(mixedSet), convey.ShouldBeTrue)
+		convey.So(needToFinishTransactionAtStatementEnd(&ExecCtx{
+			stmt: mixedSet,
 			txnOpt: FeTxnOption{
 				activeTxnAtStartKnown: true,
 				activeTxnAtStart:      true,

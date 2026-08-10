@@ -871,7 +871,7 @@ func needToFinishTransactionAtStatementEnd(execCtx *ExecCtx) bool {
 	if execCtx == nil {
 		return false
 	}
-	if isTransactionCharacteristicStatement(execCtx.stmt) {
+	if statementContainsTransactionCharacteristic(execCtx.stmt) {
 		return execCtx.txnOpt.activeTxnAtStartKnown && !execCtx.txnOpt.activeTxnAtStart
 	}
 	if NeedToBeCommittedInActiveTransaction(execCtx.stmt) {
@@ -895,24 +895,23 @@ func transactionIsolationAssignmentScope(
 	return assign.TxnScope, true
 }
 
-// isTransactionCharacteristicStatement identifies statements whose only
-// semantic effect is changing transaction characteristics. They may use a
-// frontend-owned temporary transaction internally, but must not finish an
-// already active user transaction.
-func isTransactionCharacteristicStatement(stmt tree.Statement) bool {
+// statementContainsTransactionCharacteristic identifies statements with any
+// transaction-characteristic assignment. Treat the whole SET statement as
+// preserving an already active user transaction even when it also contains
+// unrelated assignments; otherwise the generic SET lifecycle can commit or
+// roll back prior work when the transaction-characteristic assignment
+// succeeds or fails.
+func statementContainsTransactionCharacteristic(stmt tree.Statement) bool {
 	switch st := stmt.(type) {
 	case *tree.SetTransaction:
 		return true
 	case *tree.SetVar:
-		if len(st.Assignments) == 0 {
-			return false
-		}
 		for _, assign := range st.Assignments {
-			if _, ok := transactionIsolationAssignmentScope(assign); !ok {
-				return false
+			if _, ok := transactionIsolationAssignmentScope(assign); ok {
+				return true
 			}
 		}
-		return true
+		return false
 	default:
 		return false
 	}
