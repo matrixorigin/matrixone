@@ -436,7 +436,7 @@ func TestBuildAlterRenameColumnRecoversLegacyChecks(t *testing.T) {
 		})
 	}
 
-	t.Run("legacy check is rejected before protocol version 14", func(t *testing.T) {
+	t.Run("legacy check inplace is rejected before protocol version 14", func(t *testing.T) {
 		stmt := parseRename(t)
 		defer stmt.Free()
 
@@ -459,6 +459,41 @@ func TestBuildAlterRenameColumnRecoversLegacyChecks(t *testing.T) {
 
 		_, err := BuildPlan(ctx, stmt, false)
 		require.ErrorContains(t, err, "protocol version 14")
+		require.Empty(t, ctx.tables["nation"].Checks, "catalog-owned source must remain unchanged")
+	})
+
+	t.Run("legacy check copy remains compatible at protocol version 13", func(t *testing.T) {
+		stmt, err := parsers.ParseOne(
+			t.Context(),
+			dialect.MYSQL,
+			"alter table nation rename column n_nationkey to nation_id, algorithm=copy",
+			1,
+		)
+		require.NoError(t, err)
+		defer stmt.Free()
+
+		ctx := NewMockCompilerContext(false)
+		ctx.tables["nation"].Checks = nil
+		ctx.tables["nation"].Createsql = "create table nation(" +
+			"n_nationkey int, constraint ck_nationkey check (n_nationkey >= 0))"
+
+		proc := ctx.GetProcess()
+		rt := moruntime.ServiceRuntime(proc.GetService())
+		original, hadOriginal := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+		defer func() {
+			if hadOriginal {
+				rt.SetGlobalVariables(moruntime.MOProtocolVersion, original)
+			} else {
+				rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+			}
+		}()
+		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion13)
+
+		p, err := BuildPlan(ctx, stmt, false)
+		require.NoError(t, err)
+		alter := p.GetDdl().GetAlterTable()
+		require.Equal(t, plan.AlterTable_COPY, alter.GetAlgorithmType())
+		require.Equal(t, "`nation_id` >= 0", alter.GetCopyTableDef().GetChecks()[0].GetOriginSql())
 		require.Empty(t, ctx.tables["nation"].Checks, "catalog-owned source must remain unchanged")
 	})
 

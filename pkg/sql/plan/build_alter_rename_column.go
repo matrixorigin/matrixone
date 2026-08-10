@@ -118,9 +118,6 @@ func updateRenameColumnInTableDef(
 	if err := recoverLegacyChecks(ctx, tableDef); err != nil {
 		return nil, err
 	}
-	if err := requireCheckRenameProtocol(ctx, tableDef.Checks); err != nil {
-		return nil, err
-	}
 
 	if err := renameColumnInCheckConstraints(
 		ctx.GetContext(), tableDef.Checks, oldColName, newColNameOrigin,
