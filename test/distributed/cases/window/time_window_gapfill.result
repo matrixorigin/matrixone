@@ -90,4 +90,33 @@ p1  ¦  2026-01-01 10:02:00  ¦  3  𝄀
 p2  ¦  2026-01-01 11:00:00  ¦  7  𝄀
 p3  ¦  2026-01-01 23:59:00  ¦  10  𝄀
 p3  ¦  2026-01-02 00:01:00  ¦  30
+create table boundary_readings(pump varchar(8), ts datetime, value int);
+insert into boundary_readings values
+('p8193', '2026-01-01 00:00:00', 1),
+('p8193', '2026-01-06 16:33:00', 2),
+('p8194', '2026-02-01 00:00:00', 3),
+('p8194', '2026-02-06 16:34:00', 4);
+select pump, count(*) as row_count, count(distinct _wstart) as distinct_windows
+from (
+select pump, _wstart, sum(value) as value_sum
+from boundary_readings
+group by pump interval(ts, 1, minute) gapfill(partition)
+) as windows
+group by pump
+order by pump;
+➤ pump[12,-1,0]  ¦  row_count[-5,64,0]  ¦  distinct_windows[-5,64,0]  𝄀
+p8193  ¦  8194  ¦  8194  𝄀
+p8194  ¦  8195  ¦  8195
+select pump, count(*) as row_count, count(distinct _wstart) as distinct_windows
+from (
+select pump, _wstart, sum(value) as value_sum
+from boundary_readings
+group by pump interval(ts, 1, minute) gapfill(partition) fill(next)
+) as windows
+group by pump
+order by pump;
+➤ pump[12,-1,0]  ¦  row_count[-5,64,0]  ¦  distinct_windows[-5,64,0]  𝄀
+p8193  ¦  8194  ¦  8194  𝄀
+p8194  ¦  8195  ¦  8195
+drop table boundary_readings;
 drop database time_window_gapfill_bvt;
