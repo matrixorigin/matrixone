@@ -1453,3 +1453,44 @@ union all
 select cast('2025-05-07 08:09:10.654321' as datetime(6));
 select dt_lit from t_union order by dt_lit;
 drop database repro_ctas_datetime6;
+
+-- @bvt:issue#26828
+-- CTAS metadata must include NULLs synthesized by joins and scalar subqueries.
+drop database if exists ctas_null_extension_26828;
+create database ctas_null_extension_26828;
+use ctas_null_extension_26828;
+create table l (id int primary key, lv int not null);
+create table r (id int primary key, rv int not null);
+insert into l values (1, 10), (2, 20);
+insert into r values (1, 100), (3, 300);
+
+create table direct_left as select l.id as l_id, l.lv, r.id as r_id, r.rv from l left join r on l.id = r.id;
+select * from direct_left order by l_id;
+
+create table derived_right as select * from (select l.id as l_id, l.lv, r.id as r_id, r.rv from l right join r on l.id = r.id) as src;
+select * from derived_right order by r_id;
+
+create view full_view as select l.id as l_id, l.lv, r.id as r_id, r.rv from l full join r on l.id = r.id;
+create table view_full as select * from full_view;
+select * from view_full order by coalesce(l_id, r_id);
+
+create table scalar_direct as select l.id as l_id, (select r.rv from r where r.id = l.id) as scalar_rv from l;
+select * from scalar_direct order by l_id;
+
+create view scalar_view as select l.id as l_id, (select r.rv from r where r.id = l.id) as scalar_rv from l;
+create table scalar_view_ctas as select * from scalar_view;
+select * from scalar_view_ctas order by l_id;
+
+create table coalesce_left as select l.id as l_id, coalesce(r.rv, -1) as rv_or_default from l left join r on l.id = r.id;
+select * from coalesce_left order by l_id;
+
+create table explicit_not_null_reject (r_id int not null) as select r.id from l left join r on l.id = r.id;
+show tables like 'explicit_not_null_reject';
+
+select table_name, column_name, is_nullable
+from information_schema.columns
+where table_schema = 'ctas_null_extension_26828'
+  and table_name in ('coalesce_left', 'derived_right', 'direct_left', 'scalar_direct', 'scalar_view_ctas', 'view_full')
+  and column_name <> '__mo_fake_pk_col'
+order by table_name, ordinal_position;
+drop database ctas_null_extension_26828;
