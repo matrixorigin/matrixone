@@ -347,9 +347,12 @@ type FunctionExpressionExecutor struct {
 
 	resultVector vector.FunctionResultWrapper
 	// parameters related
-	parameterResults  []*vector.Vector
-	parameterExecutor []ExpressionExecutor
-	iffNullResults    [2]*vector.Vector
+	parameterResults    []*vector.Vector
+	parameterExecutor   []ExpressionExecutor
+	flowControlKind     vector.PrepareParamKind
+	flowControlKindSeen bool
+	flowControlKinds    []vector.PrepareParamKind
+	iffNullResults      [2]*vector.Vector
 }
 
 type ColumnExpressionExecutor struct {
@@ -433,6 +436,7 @@ func (expr *ParamExpressionExecutor) Eval(proc *process.Process, batches []*batc
 	}
 	if err == nil {
 		expr.vec.SetIsBin(proc.GetPrepareParamIsBin(expr.pos))
+		expr.vec.SetPrepareParamKind(proc.GetPrepareParamKind(expr.pos))
 	}
 	return expr.vec, err
 }
@@ -515,6 +519,13 @@ func (expr *VarExpressionExecutor) Eval(proc *process.Process, batches []*batch.
 			return nil, err
 		}
 	}
+	prepareParamKind := vector.PrepareParamNone
+	if resolveKind := proc.GetResolveVariablePrepareParamKindFunc(); resolveKind != nil {
+		prepareParamKind, err = resolveKind(expr.name, expr.system, expr.global)
+		if err != nil {
+			return nil, err
+		}
+	}
 
 	if val == nil {
 		if expr.null == nil {
@@ -524,6 +535,7 @@ func (expr *VarExpressionExecutor) Eval(proc *process.Process, batches []*batch.
 		}
 		if err == nil {
 			expr.null.SetIsBin(isBin)
+			expr.null.SetPrepareParamKind(prepareParamKind)
 		}
 		return expr.null, err
 	}
@@ -544,6 +556,7 @@ func (expr *VarExpressionExecutor) Eval(proc *process.Process, batches []*batch.
 	}
 	if err == nil {
 		expr.vec.SetIsBin(isBin)
+		expr.vec.SetPrepareParamKind(prepareParamKind)
 	}
 	return expr.vec, err
 }
@@ -726,6 +739,7 @@ func expressionRowCount(batches []*batch.Batch) int {
 }
 
 func (expr *FunctionExpressionExecutor) EvalIff(proc *process.Process, batches []*batch.Batch, selectList []bool) (err error) {
+	expr.resetFlowControlPrepareParamKind()
 	expr.parameterResults[0], err = expr.parameterExecutor[0].Eval(proc, batches, selectList)
 	if err != nil {
 		return err
@@ -767,6 +781,7 @@ func (expr *FunctionExpressionExecutor) EvalIff(proc *process.Process, batches [
 		if err != nil {
 			return err
 		}
+		expr.observeFlowControlPrepareParamKind(expr.parameterResults[1], trueBranch)
 	} else {
 		expr.parameterResults[1], err = expr.iffNullResult(0, rowCount)
 		if err != nil {
@@ -775,7 +790,11 @@ func (expr *FunctionExpressionExecutor) EvalIff(proc *process.Process, batches [
 	}
 	if hasSelectedRows(falseBranch) {
 		expr.parameterResults[2], err = expr.parameterExecutor[2].Eval(proc, batches, falseBranch)
-		return err
+		if err != nil {
+			return err
+		}
+		expr.observeFlowControlPrepareParamKind(expr.parameterResults[2], falseBranch)
+		return nil
 	}
 	expr.parameterResults[2], err = expr.iffNullResult(1, rowCount)
 	return err
@@ -788,6 +807,87 @@ func hasSelectedRows(selectList []bool) bool {
 		}
 	}
 	return false
+}
+
+func (expr *FunctionExpressionExecutor) resetFlowControlPrepareParamKind() {
+	expr.flowControlKind = vector.PrepareParamNone
+	expr.flowControlKindSeen = false
+	if expr.flowControlKinds != nil {
+		expr.flowControlKinds = expr.flowControlKinds[:0]
+	}
+}
+
+func (expr *FunctionExpressionExecutor) ensureFlowControlPrepareParamRows(rows int) {
+	if rows <= len(expr.flowControlKinds) {
+		return
+	}
+	old := len(expr.flowControlKinds)
+	if rows <= cap(expr.flowControlKinds) {
+		expr.flowControlKinds = expr.flowControlKinds[:rows]
+		clear(expr.flowControlKinds[old:])
+		return
+	}
+	expr.flowControlKinds = append(expr.flowControlKinds, make([]vector.PrepareParamKind, rows-old)...)
+}
+
+// observeFlowControlPrepareParamKind inspects only rows that can reach one
+// IF/CASE/COALESCE arm. Column executors intentionally return their full input
+// vector even under a row mask, so checking value.AllNull() would incorrectly
+// observe non-NULL values from inactive rows.
+func (expr *FunctionExpressionExecutor) observeFlowControlPrepareParamKind(
+	value *vector.Vector,
+	selection []bool,
+) {
+	if value == nil || value.Length() == 0 {
+		return
+	}
+	for row, selected := range selection {
+		if selected && (value.IsConst() || row < value.Length()) &&
+			!value.IsNull(uint64(row)) {
+			kind := value.GetPrepareParamKindAt(row)
+			if !expr.flowControlKindSeen {
+				expr.flowControlKind = kind
+				expr.flowControlKindSeen = true
+			} else if len(expr.flowControlKinds) == 0 && expr.flowControlKind != kind {
+				expr.ensureFlowControlPrepareParamRows(len(selection))
+				for i := range expr.flowControlKinds {
+					expr.flowControlKinds[i] = expr.flowControlKind
+				}
+				expr.flowControlKind = vector.PrepareParamNone
+			}
+			if len(expr.flowControlKinds) > 0 {
+				expr.flowControlKinds[row] = kind
+			}
+		}
+	}
+}
+
+func (expr *FunctionExpressionExecutor) applyFlowControlPrepareParamKinds(
+	result *vector.Vector,
+	rows int,
+	mp *mpool.MPool,
+) error {
+	if result == nil || rows <= 0 {
+		return nil
+	}
+	if len(expr.flowControlKinds) == 0 {
+		if expr.flowControlKindSeen {
+			result.SetPrepareParamKind(expr.flowControlKind)
+		}
+		return nil
+	}
+	expr.ensureFlowControlPrepareParamRows(rows)
+	if err := result.SetPrepareParamKindsWithMP(expr.flowControlKinds[:rows], mp); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (expr *FunctionExpressionExecutor) getFlowControlPrepareParamKind() vector.PrepareParamKind {
+	if !expr.flowControlKindSeen {
+		return vector.PrepareParamNone
+	}
+	return expr.flowControlKind
 }
 
 func (expr *FunctionExpressionExecutor) iffNullResult(index, length int) (*vector.Vector, error) {
@@ -811,6 +911,7 @@ func (expr *FunctionExpressionExecutor) iffNullResult(index, length int) (*vecto
 }
 
 func (expr *FunctionExpressionExecutor) EvalCase(proc *process.Process, batches []*batch.Batch, selectList []bool) (err error) {
+	expr.resetFlowControlPrepareParamKind()
 	rowCount := expressionRowCount(batches)
 	if len(expr.selectList1) < rowCount {
 		expr.selectList1 = make([]bool, rowCount)
@@ -846,12 +947,16 @@ func (expr *FunctionExpressionExecutor) EvalCase(proc *process.Process, batches 
 			if err != nil {
 				return err
 			}
+			expr.observeFlowControlPrepareParamKind(expr.parameterResults[i+1], selectedBranch)
+		} else {
+			expr.observeFlowControlPrepareParamKind(expr.parameterResults[i], remaining)
 		}
 	}
 	return err
 }
 
 func (expr *FunctionExpressionExecutor) EvalCoalesce(proc *process.Process, batches []*batch.Batch, selectList []bool) (err error) {
+	expr.resetFlowControlPrepareParamKind()
 	rowCount := expressionRowCount(batches)
 	if len(expr.selectList1) < rowCount {
 		expr.selectList1 = make([]bool, rowCount)
@@ -872,6 +977,7 @@ func (expr *FunctionExpressionExecutor) EvalCoalesce(proc *process.Process, batc
 		if err != nil {
 			return err
 		}
+		expr.observeFlowControlPrepareParamKind(expr.parameterResults[i], remaining)
 		for row := range remaining {
 			if remaining[row] && !expr.parameterResults[i].IsNull(uint64(row)) {
 				remaining[row] = false
@@ -984,6 +1090,10 @@ func (expr *FunctionExpressionExecutor) evalSelectedRows(
 	selectedResult := expr.selectedResult.GetResultVector()
 	runtimeType := *selectedResult.GetType()
 	runtimeIsBin := selectedResult.GetIsBin()
+	runtimePrepareParamKind := selectedResult.GetPrepareParamKind()
+	if expr.fid == function.IFF || expr.fid == function.CASE || expr.fid == function.COALESCE {
+		runtimePrepareParamKind = expr.getFlowControlPrepareParamKind()
+	}
 
 	result := expr.resultVector.GetResultVector()
 	result.SetType(runtimeType)
@@ -1011,6 +1121,18 @@ func (expr *FunctionExpressionExecutor) evalSelectedRows(
 			selectedRow++
 		} else if err := result.UnionOne(expr.selectedNullResult, 0, proc.Mp()); err != nil {
 			return nil, err
+		}
+	}
+	if expr.fid == function.IFF || expr.fid == function.CASE || expr.fid == function.COALESCE {
+		if err := expr.applyFlowControlPrepareParamKinds(result, rowCount, proc.Mp()); err != nil {
+			return nil, err
+		}
+	} else {
+		// A selected function result may already carry exact row provenance
+		// from a type-preserving materialization. Keep that sidecar; the scalar
+		// summary is only the compatibility fallback for uniform results.
+		if len(result.GetPrepareParamKinds()) == 0 {
+			result.SetPrepareParamKind(runtimePrepareParamKind)
 		}
 	}
 	return result, nil
@@ -1102,6 +1224,12 @@ func (expr *FunctionExpressionExecutor) Eval(proc *process.Process, batches []*b
 	if err = expr.evalFn(
 		expr.parameterResults, expr.resultVector, proc, rowCount, &expr.selectList); err != nil {
 		return nil, err
+	}
+	if expr.fid == function.IFF || expr.fid == function.CASE || expr.fid == function.COALESCE {
+		if err := expr.applyFlowControlPrepareParamKinds(
+			expr.resultVector.GetResultVector(), rowCount, proc.Mp()); err != nil {
+			return nil, err
+		}
 	}
 
 	return expr.resultVector.GetResultVector(), nil

@@ -96,6 +96,9 @@ type releaseCountingCacheData struct {
 
 func (r *releaseCountingCacheData) Bytes() []byte { return r.data }
 func (r *releaseCountingCacheData) Size() int64   { return int64(len(r.data)) }
+func (r *releaseCountingCacheData) Capacity() int64 {
+	return int64(cap(r.data))
+}
 func (r *releaseCountingCacheData) Slice(length int) fscache.Data {
 	r.data = r.data[:length]
 	return r

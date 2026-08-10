@@ -2933,6 +2933,18 @@ func TestParseExecuteDataPreservesExactJsonOrderingParams(t *testing.T) {
 	}
 }
 
+func TestParseExecuteDataPreservesYearWireType(t *testing.T) {
+	data := make([]byte, 11)
+	copy(data, []byte{0, 0, 0, 0, 0, 0, 1, byte(defines.MYSQL_TYPE_YEAR), 0})
+	binary.LittleEndian.PutUint16(data[9:], 2024)
+
+	ctx := context.TODO()
+	proto, proc, prepareStmt := newBinaryPrepareProtocolTestCase(t, "select ?")
+	require.NoError(t, proto.ParseExecuteData(ctx, proc, prepareStmt, data, 0))
+	require.Equal(t, "2024", prepareStmt.params.GetStringAt(0))
+	require.Equal(t, []byte{byte(defines.MYSQL_TYPE_YEAR), 0}, prepareStmt.ParamTypes)
+}
+
 func buildStringExecutePacket(proto *MysqlProtocolImpl, tp defines.MysqlType, payload string) []byte {
 	data := make([]byte, 8+2+9+len(payload))
 	copy(data, []byte{0, 0, 0, 0, 0, 0, 1, byte(tp), 0})
@@ -3186,6 +3198,39 @@ func Test_resultset(t *testing.T) {
 		err = proto.WriteResultSetRow(res, 0)
 		convey.So(err, convey.ShouldBeNil)
 	})
+}
+
+func TestSendResultSetPropagatesRowEncodingErrors(t *testing.T) {
+	sv, err := getSystemVariables("test/system_vars_config.toml")
+	require.NoError(t, err)
+	pu := config.NewParameterUnit(sv, nil, nil, nil)
+	pu.SV.SkipCheckUser = true
+	pu.SV.KillRountinesInterval = 0
+	setSessionAlloc("", NewLeakCheckAllocator())
+	setPu("", pu)
+
+	for _, cmd := range []CommandType{COM_QUERY, COM_STMT_EXECUTE} {
+		t.Run(cmd.String(), func(t *testing.T) {
+			conn := &prepareResponseCaptureConn{}
+			ioses, err := NewIOSession(conn, pu, "")
+			require.NoError(t, err)
+			proto := NewMysqlClientProtocol("", 0, ioses, 1024, sv)
+			proto.SetSession(&Session{feSessionImpl: feSessionImpl{txnHandler: &TxnHandler{}}})
+
+			mrs := &MysqlResultSet{}
+			column := new(MysqlColumn)
+			column.SetName("unsupported")
+			column.SetColumnType(defines.MYSQL_TYPE_INVALID)
+			mrs.AddColumn(column)
+			mrs.AddRow([]any{"value"})
+
+			err = proto.sendResultSet(context.Background(), mrs, int(cmd), 0, 0)
+			require.Error(t, err)
+			packets := splitProtocolPackets(t, conn.writes)
+			require.NotEmpty(t, packets)
+			require.Equal(t, byte(defines.ErrHeader), packets[len(packets)-1][0])
+		})
+	}
 }
 
 func Test_send_packet(t *testing.T) {

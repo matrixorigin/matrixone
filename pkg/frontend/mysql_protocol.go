@@ -3794,6 +3794,16 @@ func (mp *MysqlProtocolImpl) sendResultSetTextRow(mrs *MysqlResultSet, r uint64)
 	return nil
 }
 
+func (mp *MysqlProtocolImpl) sendResultSetBinaryRow(mrs *MysqlResultSet, r uint64) error {
+	if err := mp.appendResultSetBinaryRow(mrs, r); err != nil {
+		if err1 := mp.sendErrPacket(moerr.ER_UNKNOWN_ERROR, DefaultMySQLState, err.Error()); err1 != nil {
+			return err1
+		}
+		return err
+	}
+	return nil
+}
+
 // the server send the result set of execution the client
 // the routine follows the article: https://dev.mysql.com/doc/internals/en/com-query-response.html
 func (mp *MysqlProtocolImpl) sendResultSet(ctx context.Context, set ResultSet, cmd int, warnings, status uint16) error {
@@ -3812,10 +3822,19 @@ func (mp *MysqlProtocolImpl) sendResultSet(ctx context.Context, set ResultSet, c
 		return err
 	}
 
-	//One or more ProtocolText::ResultsetRow packets, each containing column_count values
-	for i := uint64(0); i < mysqlRS.GetRowCount(); i++ {
-		if err = mp.sendResultSetTextRow(mysqlRS, i); err != nil {
-			return err
+	// COM_QUERY returns text rows, while COM_STMT_EXECUTE returns binary rows.
+	// Metadata and row encoding must describe the same command response.
+	if CommandType(cmd) == COM_STMT_EXECUTE {
+		for i := uint64(0); i < mysqlRS.GetRowCount(); i++ {
+			if err = mp.sendResultSetBinaryRow(mysqlRS, i); err != nil {
+				return err
+			}
+		}
+	} else {
+		for i := uint64(0); i < mysqlRS.GetRowCount(); i++ {
+			if err = mp.sendResultSetTextRow(mysqlRS, i); err != nil {
+				return err
+			}
 		}
 	}
 
