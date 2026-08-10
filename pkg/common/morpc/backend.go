@@ -122,9 +122,10 @@ func WithBackendReadTimeout(value time.Duration) BackendOption {
 	}
 }
 
-// WithBackendLivenessProbe verifies peer liveness over a transport independent
-// from this backend. A successful probe turns a read inactivity timeout into a
-// request-level wait instead of resetting the shared data connection.
+// WithBackendLivenessProbe observes peer liveness over a transport independent
+// from this backend. When unary data traffic stalls, the current data generation
+// is drained without discarding pending requests; probe failures remain
+// inconclusive because the data connection can still make progress.
 func WithBackendLivenessProbe(value func(context.Context, string) error) BackendOption {
 	return func(rb *remoteBackend) {
 		rb.options.livenessProbe = value
@@ -234,9 +235,8 @@ type remoteBackend struct {
 		id             uint64
 		lastActiveTime atomic.Value //time.Time
 		unavailable    atomic.Bool
-		// draining seals new pool admission after data transport inactivity was
-		// confirmed against a healthy independent control connection. Existing
-		// Futures remain owned by this backend and may still complete.
+		// draining seals new pool admission after data transport inactivity.
+		// Existing Futures remain owned by this backend and may still complete.
 		draining atomic.Bool
 	}
 
@@ -1329,16 +1329,6 @@ func (rb *remoteBackend) keepDataConnectionAfterProbe(
 		return true
 	}
 
-	timeout := rb.options.readTimeout / 5
-	if timeout <= 0 || timeout > internalTimeout {
-		timeout = internalTimeout
-	}
-	probeCtx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
-	if err := rb.options.livenessProbe(probeCtx, rb.remote); err != nil {
-		rb.metrics.observeBackendError(rb.remote, "liveness-probe", err)
-		return false
-	}
 	rb.stateMu.Lock()
 	if rb.stateMu.state != stateRunning {
 		rb.stateMu.Unlock()
@@ -1348,16 +1338,31 @@ func (rb *remoteBackend) keepDataConnectionAfterProbe(
 		rb.atomic.draining.CompareAndSwap(false, true)
 	rb.stateMu.Unlock()
 	if startedDraining {
-		// A pong proves that the peer is alive, not that this data TCP can make
-		// progress. Seal it from new pool admission, preserve existing requests,
-		// and let the client publish a fresh data generation on next demand.
+		// Response inactivity is enough to stop admitting new work to this data
+		// generation, but not enough to fail requests that can still complete.
+		// Preserve them while the client publishes a fresh generation on demand.
 		rb.logger.Debug(
-			"data backend draining after independent liveness probe",
+			"data backend draining after response inactivity",
 			rb.logFields()...,
 		)
 		rb.mu.Lock()
 		rb.finishDrainingLocked()
 		rb.mu.Unlock()
+	}
+
+	timeout := rb.options.readTimeout / 5
+	if timeout <= 0 || timeout > internalTimeout {
+		timeout = internalTimeout
+	}
+	probeCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	if err := rb.options.livenessProbe(probeCtx, rb.remote); err != nil {
+		rb.metrics.observeBackendError(rb.remote, "liveness-probe", err)
+		// The control transport is independent from this data connection. Its
+		// failure is therefore inconclusive: the peer may still return a valid
+		// slow response on the data connection. Leave reset and Future failure to
+		// a terminal data error or the client's bounded generation lifecycle.
+		return true
 	}
 	return true
 }
