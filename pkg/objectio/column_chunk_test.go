@@ -147,6 +147,12 @@ func TestChunkedColumnRejectsMalformedMetadata(t *testing.T) {
 		prefix, columnChunkHeaderSize+2*columnChunkEntrySize,
 	)
 	require.ErrorContains(t, err, "invalid chunked object column size")
+	binary.LittleEndian.PutUint32(prefix[8:12], BlockMaxRows+1)
+	binary.LittleEndian.PutUint32(prefix[12:16], 1)
+	_, err = chunkedColumnHeaderReadSize(
+		prefix, columnChunkHeaderSize+columnChunkEntrySize,
+	)
+	require.ErrorContains(t, err, "invalid chunked object column size")
 
 	header := make([]byte, columnChunkHeaderSize+columnChunkEntrySize)
 	copy(header, columnChunkMagic[:])
