@@ -165,8 +165,28 @@ infile{"filepath"='$resources/external_table_file/cpk_table_1.csv'}
 fields terminated by ',';
 select * from table_changes('table_changes_db', 'external_table', '', '1-0') c;
 not supported: table_changes does not support table type "e"
+select * from table_changes('table_changes_missing_db', 'ordinary_single_pk', '', '1-0') c;
+invalid input: table_changes source table does not exist
+select * from table_changes('table_changes_db', 'missing_table', '', '1-0') c;
+invalid input: table_changes source table does not exist
+select * from table_changes('', 'ordinary_single_pk', '', '1-0') c;
+invalid input: table_changes database name must be a non-empty string literal
+select * from table_changes('table_changes_db', '', '', '1-0') c;
+invalid input: table_changes table name must be a non-empty string literal
+select * from table_changes(NULL, 'ordinary_single_pk', '', '1-0') c;
+invalid input: table_changes database name must be a non-empty string literal
+select * from table_changes('table_changes_db', NULL, '', '1-0') c;
+invalid input: table_changes table name must be a non-empty string literal
 select * from table_changes('table_changes_db', 'ordinary_single_pk', '2-0', '1-0') c;
 invalid input: table_changes until must be greater than after
+select * from table_changes('table_changes_db', 'ordinary_single_pk', 'not-a-watermark', '1-0') c;
+invalid input: invalid table_changes after: timestamp must use physical-logical format
+select * from table_changes('table_changes_db', 'ordinary_single_pk', '', 'not-a-watermark') c;
+invalid input: invalid table_changes until: timestamp must use physical-logical format
+select * from table_changes('table_changes_db', 'ordinary_single_pk', NULL, '1-0') c;
+invalid input: table_changes after cannot be NULL
+select * from table_changes('table_changes_db', 'ordinary_single_pk', '', NULL) c;
+invalid input: table_changes until cannot be NULL
 select * from table_changes(
 'table_changes_db', 'ordinary_single_pk', @ordinary_after,
 '9223372036854775807-4294967295'

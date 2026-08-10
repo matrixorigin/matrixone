@@ -168,7 +168,17 @@ fields terminated by ',';
 select * from table_changes('table_changes_db', 'external_table', '', '1-0') c;
 
 -- Invalid intervals and non-literal relation names are rejected.
+select * from table_changes('table_changes_missing_db', 'ordinary_single_pk', '', '1-0') c;
+select * from table_changes('table_changes_db', 'missing_table', '', '1-0') c;
+select * from table_changes('', 'ordinary_single_pk', '', '1-0') c;
+select * from table_changes('table_changes_db', '', '', '1-0') c;
+select * from table_changes(NULL, 'ordinary_single_pk', '', '1-0') c;
+select * from table_changes('table_changes_db', NULL, '', '1-0') c;
 select * from table_changes('table_changes_db', 'ordinary_single_pk', '2-0', '1-0') c;
+select * from table_changes('table_changes_db', 'ordinary_single_pk', 'not-a-watermark', '1-0') c;
+select * from table_changes('table_changes_db', 'ordinary_single_pk', '', 'not-a-watermark') c;
+select * from table_changes('table_changes_db', 'ordinary_single_pk', NULL, '1-0') c;
+select * from table_changes('table_changes_db', 'ordinary_single_pk', '', NULL) c;
 select * from table_changes(
     'table_changes_db', 'ordinary_single_pk', @ordinary_after,
     '9223372036854775807-4294967295'
