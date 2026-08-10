@@ -75,6 +75,93 @@ func TestBetweenDatetimeTimestampPreservesCommonValueScale(t *testing.T) {
 	require.True(t, ok, info)
 }
 
+func TestBetweenDatetimeTimestampTypeArrangements(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	proc.GetSessionInfo().TimeZone = time.UTC
+
+	valueDatetime, err := types.ParseDatetime("2026-08-10 12:00:00", 6)
+	require.NoError(t, err)
+	lowerDatetime, err := types.ParseDatetime("2026-08-10 11:00:00", 6)
+	require.NoError(t, err)
+	upperDatetime, err := types.ParseDatetime("2026-08-10 13:00:00", 6)
+	require.NoError(t, err)
+	valueTimestamp := valueDatetime.ToTimestamp(time.UTC)
+	lowerTimestamp := lowerDatetime.ToTimestamp(time.UTC)
+	upperTimestamp := upperDatetime.ToTimestamp(time.UTC)
+
+	datetimeType := types.T_datetime.ToTypeWithScale(6)
+	timestampType := types.T_timestamp.ToTypeWithScale(6)
+	datetimeInput := func(value types.Datetime, nulls []bool) FunctionTestInput {
+		return NewFunctionTestInput(datetimeType, []types.Datetime{value, value}, nulls)
+	}
+	timestampInput := func(value types.Timestamp, nulls []bool) FunctionTestInput {
+		return NewFunctionTestInput(timestampType, []types.Timestamp{value, value}, nulls)
+	}
+
+	tests := []struct {
+		name   string
+		inputs []FunctionTestInput
+	}{
+		{
+			name: "datetime value datetime lower timestamp upper",
+			inputs: []FunctionTestInput{
+				datetimeInput(valueDatetime, []bool{false, true}),
+				datetimeInput(lowerDatetime, nil),
+				timestampInput(upperTimestamp, nil),
+			},
+		},
+		{
+			name: "datetime value timestamp lower datetime upper",
+			inputs: []FunctionTestInput{
+				datetimeInput(valueDatetime, []bool{false, true}),
+				timestampInput(lowerTimestamp, nil),
+				datetimeInput(upperDatetime, nil),
+			},
+		},
+		{
+			name: "timestamp value timestamp lower datetime upper",
+			inputs: []FunctionTestInput{
+				timestampInput(valueTimestamp, []bool{false, true}),
+				timestampInput(lowerTimestamp, nil),
+				datetimeInput(upperDatetime, nil),
+			},
+		},
+		{
+			name: "timestamp value datetime lower timestamp upper",
+			inputs: []FunctionTestInput{
+				timestampInput(valueTimestamp, []bool{false, true}),
+				datetimeInput(lowerDatetime, nil),
+				timestampInput(upperTimestamp, nil),
+			},
+		},
+		{
+			name: "timestamp value datetime bounds",
+			inputs: []FunctionTestInput{
+				timestampInput(valueTimestamp, []bool{false, true}),
+				datetimeInput(lowerDatetime, nil),
+				datetimeInput(upperDatetime, nil),
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			testCase := NewFunctionTestCase(
+				proc,
+				test.inputs,
+				NewFunctionTestResult(
+					types.T_bool.ToType(), false,
+					[]bool{true, false}, []bool{false, true},
+				),
+				betweenImpl,
+			)
+			ok, info := testCase.Run()
+			require.True(t, ok, info)
+		})
+	}
+}
+
 func TestOpBetweenBool(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	boolType := types.T_bool.ToType()

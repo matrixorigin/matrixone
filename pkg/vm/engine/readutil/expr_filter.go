@@ -608,7 +608,6 @@ func compileTemporalFilterExpr(
 	if !isMixedTemporalFilterTypes(temporalTypes...) {
 		return
 	}
-	handled = true
 	if zone == nil {
 		return nil, nil, nil, nil, nil, false, false, true
 	}
