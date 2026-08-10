@@ -83,16 +83,16 @@ type container struct {
 	probeState probeState
 
 	// Pre-computed per-query flags — avoid method calls in per-row probe loop.
-	probeHashOnPK      bool // HashOnPK || mp.HashOnUnique()
-	probeEmitUnmatched bool // EmitUnmatchedProbe()
-	probeRightSemiAnti bool // !IsRightSemi() && !IsAnti()
-	probeRightJoin     bool
-	probeSingle        bool
-	probeLeftSingle    bool
-	probeLeftSemi      bool
-	probeLeftAnti      bool
-	probeMark          bool
-	buildHasNullKey    bool
+	probeHashOnPK          bool // HashOnPK || mp.HashOnUnique()
+	probeEmitUnmatched     bool // EmitUnmatchedProbe()
+	probeRightSemiAnti     bool // !IsRightSemi() && !IsAnti()
+	probeTrackBuildMatches bool // EmitUnmatchedBuild()
+	probeSingle            bool
+	probeLeftSingle        bool
+	probeLeftSemi          bool
+	probeLeftAnti          bool
+	probeMark              bool
+	buildHasNullKey        bool
 
 	nonEqCondExec colexec.ExpressionExecutor
 
