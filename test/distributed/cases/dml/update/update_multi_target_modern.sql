@@ -287,6 +287,20 @@ SELECT ROW_COUNT();
 SELECT * FROM multi_update_ignore_composite ORDER BY id;
 
 TRUNCATE TABLE multi_update_ignore_composite;
+INSERT INTO multi_update_ignore_composite VALUES
+    (1, 1, 1, 1),
+    (2, 2, 1, 1),
+    (3, 2, 2, 1);
+UPDATE IGNORE multi_update_ignore_composite a
+JOIN multi_update_ignore_composite b ON a.id = b.id
+SET
+    a.u = 2,
+    b.v = 2
+WHERE a.id = 1;
+SELECT ROW_COUNT();
+SELECT * FROM multi_update_ignore_composite ORDER BY id;
+
+TRUNCATE TABLE multi_update_ignore_composite;
 INSERT INTO multi_update_ignore_composite VALUES (1, 1, 1, 1), (2, 2, 2, 2);
 UPDATE IGNORE multi_update_ignore_composite a
 JOIN multi_update_ignore_composite b ON a.id = b.id
@@ -317,7 +331,8 @@ CREATE TABLE multi_update_ignore_generated (
     u INT,
     v INT,
     x INT,
-    gv INT GENERATED ALWAYS AS (u + v) STORED
+    gv INT GENERATED ALWAYS AS (u + v) STORED,
+    UNIQUE KEY uk_gv (gv)
 );
 INSERT INTO multi_update_ignore_generated (id, u, v, x) VALUES
     (1, 1, 1, 0),
@@ -340,6 +355,19 @@ JOIN multi_update_ignore_generated b ON a.id = b.id
 SET
     b.v = 20,
     a.u = 10
+WHERE a.id = 1;
+SELECT ROW_COUNT();
+SELECT id, u, v, x, gv FROM multi_update_ignore_generated ORDER BY id;
+
+TRUNCATE TABLE multi_update_ignore_generated;
+INSERT INTO multi_update_ignore_generated (id, u, v, x) VALUES
+    (1, 1, 1, 0),
+    (2, 2, 2, 0);
+UPDATE IGNORE multi_update_ignore_generated a
+JOIN multi_update_ignore_generated b ON a.id = b.id
+SET
+    a.u = 2,
+    b.v = 2
 WHERE a.id = 1;
 SELECT ROW_COUNT();
 SELECT id, u, v, x, gv FROM multi_update_ignore_generated ORDER BY id;
