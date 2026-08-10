@@ -75,9 +75,16 @@ count(*)
 explain select * from t1 where c2 like '123';
 TP QUERY PLAN
 Project
-  ->  Index Table Scan on t1.c2
-        Filter Cond: prefix_eq(__mo_index_idx_col), (serial_extract(__mo_index_idx_col, 0, VARCHAR)) = '123')
-        Block Filter Cond: prefix_eq(__mo_index_idx_col)
+  ->  Join
+        Join Type: INDEX
+        Join Cond: (t1.c1 = __mo_index_pri_col)
+        Runtime Filter Build: #[-1,0]
+        ->  Table Scan on d1.t1 [ForceOneCN]
+              Filter Cond: (t1.c2 = '123')
+              Runtime Filter Probe: t1.c1
+        ->  Index Table Scan on t1.c2 [ForceOneCN]
+              Filter Cond: prefix_eq(__mo_index_idx_col)
+              Block Filter Cond: prefix_eq(__mo_index_idx_col)
 select * from t1 where c2 like '123';
 c1    c2    c3
 123    123    123
