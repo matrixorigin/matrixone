@@ -119,9 +119,9 @@ func TestIssue25526PreparedUpdateJoinSecondExecute(t *testing.T) {
 			cascadeStmt, err := conn.PrepareContext(ctx,
 				"replace into self_cascade values(?,?),(?,?)")
 			require.NoError(t, err)
+			defer cascadeStmt.Close()
 			_, err = cascadeStmt.ExecContext(ctx, 1, nil, 2, 1)
 			require.NoError(t, err)
-			require.NoError(t, cascadeStmt.Close())
 			var cascadeRows int
 			require.NoError(t, conn.QueryRowContext(ctx, "select count(*) from self_cascade").Scan(&cascadeRows))
 			require.Equal(t, 2, cascadeRows)
@@ -135,9 +135,9 @@ func TestIssue25526PreparedUpdateJoinSecondExecute(t *testing.T) {
 			setNullStmt, err := conn.PrepareContext(ctx,
 				"replace into self_setnull values(?,?),(?,?)")
 			require.NoError(t, err)
+			defer setNullStmt.Close()
 			_, err = setNullStmt.ExecContext(ctx, 2, 1, 1, nil)
 			require.NoError(t, err)
-			require.NoError(t, setNullStmt.Close())
 			var id2Rows, id2NullRows int
 			require.NoError(t, conn.QueryRowContext(ctx,
 				"select count(*), count(*) - count(pid) from self_setnull where id=2").Scan(&id2Rows, &id2NullRows))
