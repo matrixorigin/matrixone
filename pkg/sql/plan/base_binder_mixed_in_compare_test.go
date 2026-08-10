@@ -38,7 +38,7 @@ func mixedStringNumericInList(t *testing.T, ctx context.Context) *planpb.Expr {
 	}
 }
 
-func TestMixedStringNumericInBindsNumericComparisonsAsFloat64(t *testing.T) {
+func TestMixedStringNumericInKeepsDecimalComparisonExact(t *testing.T) {
 	ctx := context.Background()
 	expr, err := BindFuncExprImplByPlanExpr(ctx, "in", []*planpb.Expr{
 		makePlan2StringConstExprWithType("9.50"), mixedStringNumericInList(t, ctx),
@@ -69,7 +69,7 @@ func TestMixedStringNumericInBindsNumericComparisonsAsFloat64(t *testing.T) {
 			float64Comparisons++
 		}
 	}
-	require.Equal(t, 2, float64Comparisons)
+	require.Equal(t, 1, float64Comparisons)
 }
 
 func TestMixedStringNumericInConstantFoldsToTrue(t *testing.T) {
@@ -117,13 +117,46 @@ func TestMixedStringNumericNotInBindsAndFoldsToFalse(t *testing.T) {
 			float64Comparisons++
 		}
 	}
-	require.Equal(t, 2, float64Comparisons)
+	require.Equal(t, 1, float64Comparisons)
 
 	folded, err := ConstantFold(batch.EmptyForConstFoldBatch, expr, ctx.GetProcess(), false, true)
 	require.NoError(t, err)
 	result, ok := folded.GetLit().Value.(*planpb.Literal_Bval)
 	require.True(t, ok)
 	require.False(t, result.Bval)
+}
+
+func TestDecimalStringLiteralLeftInKeepsExactComparison(t *testing.T) {
+	decimalType := types.New(types.T_decimal128, 20, 4)
+	for _, operator := range []struct {
+		name       string
+		comparison string
+	}{
+		{name: "in", comparison: "="},
+		{name: "not_in", comparison: "!="},
+	} {
+		t.Run(operator.name, func(t *testing.T) {
+			column := &planpb.Expr{
+				Typ:  makePlan2Type(&decimalType),
+				Expr: &planpb.Expr_Col{Col: &planpb.ColRef{RelPos: 0, ColPos: 0}},
+			}
+			list := &planpb.Expr{
+				Expr: &planpb.Expr_List{List: &planpb.ExprList{List: []*planpb.Expr{column}}},
+			}
+
+			expr, err := BindFuncExprImplByPlanExpr(context.Background(), operator.name, []*planpb.Expr{
+				makePlan2StringConstExprWithType("9007199254740992.0001"),
+				list,
+			})
+			require.NoError(t, err)
+			comparison := expr.GetF()
+			require.NotNil(t, comparison)
+			require.Equal(t, operator.comparison, comparison.Func.GetObjName())
+			for _, arg := range comparison.Args {
+				require.True(t, types.T(arg.Typ.Id).IsDecimal(), "type id %d", arg.Typ.Id)
+			}
+		})
+	}
 }
 
 func TestNumericInStringLiteralKeepsExactNumericComparison(t *testing.T) {

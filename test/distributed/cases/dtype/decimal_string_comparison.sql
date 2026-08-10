@@ -48,6 +48,10 @@ SELECT GROUP_CONCAT(id ORDER BY id) AS in_ids
 FROM boundary_values WHERE d128 IN ('9007199254740992.0001');
 SELECT GROUP_CONCAT(id ORDER BY id) AS not_in_ids
 FROM boundary_values WHERE d128 NOT IN ('9007199254740992.0001');
+SELECT GROUP_CONCAT(id ORDER BY id) AS reversed_in_ids
+FROM boundary_values WHERE '9007199254740992.0001' IN (d128);
+SELECT GROUP_CONCAT(id ORDER BY id) AS reversed_not_in_ids
+FROM boundary_values WHERE '9007199254740992.0001' NOT IN (d128);
 
 CREATE TABLE scale_values (
   id INT PRIMARY KEY,
@@ -58,5 +62,36 @@ SELECT GROUP_CONCAT(id ORDER BY id) AS higher_scale_lt_ids
 FROM scale_values WHERE d < '1.23456';
 SELECT GROUP_CONCAT(id ORDER BY id) AS higher_scale_decimal_cast_lt_ids
 FROM scale_values WHERE d < CAST('1.23456' AS DECIMAL(10,5));
+
+CREATE TABLE numeric_prefix_values (
+  id INT PRIMARY KEY,
+  d DECIMAL(10,0)
+);
+INSERT INTO numeric_prefix_values VALUES (1, 0), (2, 1), (3, 16), (4, 100);
+SELECT GROUP_CONCAT(id ORDER BY id) AS hex_looking_prefix_ids
+FROM numeric_prefix_values WHERE d = '0x10';
+SELECT GROUP_CONCAT(id ORDER BY id) AS embedded_plus_prefix_ids
+FROM numeric_prefix_values WHERE d = '1+2';
+SELECT GROUP_CONCAT(id ORDER BY id) AS embedded_space_prefix_ids
+FROM numeric_prefix_values WHERE d = '1 2';
+SELECT GROUP_CONCAT(id ORDER BY id) AS scientific_notation_ids
+FROM numeric_prefix_values WHERE d = '1e2';
+
+CREATE TABLE decimal256_boundary (
+  id INT PRIMARY KEY,
+  d DECIMAL(38,30),
+  KEY idx_d (d)
+);
+INSERT INTO decimal256_boundary VALUES
+  (1, 12345678.000000000000000000000000000000);
+SELECT COUNT(*) AS decimal256_lt_count
+FROM decimal256_boundary
+WHERE d < '12345678.0000000000000000000000000000001';
+SELECT COUNT(*) AS decimal256_eq_count
+FROM decimal256_boundary
+WHERE d = '12345678.0000000000000000000000000000001';
+SELECT COUNT(*) AS decimal256_index_lt_count
+FROM decimal256_boundary FORCE INDEX (idx_d)
+WHERE d < '12345678.0000000000000000000000000000001';
 
 DROP DATABASE decimal_string_comparison;

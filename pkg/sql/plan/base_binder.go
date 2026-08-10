@@ -3344,11 +3344,16 @@ func validateApproxPercentileArgs(ctx context.Context, args []*Expr) error {
 // to IN/NOT IN fallback comparisons: applying it to every comparison would
 // lose precision for numeric columns compared with string constants.
 func bindMixedInListComparison(ctx context.Context, operator string, left, right *Expr) (*plan.Expr, error) {
+	operands := []*Expr{left, right}
+	if err := normalizeDecimalStringLiteralComparisonArgs(ctx, operator, operands); err != nil {
+		return nil, err
+	}
+	left, right = operands[0], operands[1]
 	leftType := makeTypeByPlan2Expr(left)
 	rightType := makeTypeByPlan2Expr(right)
 	if leftType.Oid.IsMySQLString() && (rightType.IsNumeric() || rightType.Oid == types.T_bool) {
 		targetType := types.T_float64.ToType()
-		operands := []*Expr{left, right}
+		operands = []*Expr{left, right}
 		for i := range operands {
 			var err error
 			operands[i], err = appendCastBeforeExpr(ctx, operands[i], makePlan2Type(&targetType))
@@ -4513,7 +4518,7 @@ func integerMetadataWidth(oid types.T) int32 {
 	}
 }
 
-// A numeric string literal paired with DECIMAL64/128 has an exact numeric domain.
+// A numeric string literal paired with DECIMAL has an exact numeric domain.
 // Resolve that domain before the generic string/numeric cast matrix selects
 // FLOAT64, which cannot distinguish adjacent DECIMAL values above 2^53. Keep
 // the original expression when it contains an explicit string cast, then cast
@@ -4531,20 +4536,22 @@ func normalizeDecimalStringLiteralComparisonArgs(ctx context.Context, name strin
 
 	for stringPos, decimalPos := range []int{1, 0} {
 		decimalType := types.T(args[decimalPos].Typ.Id)
-		if decimalType != types.T_decimal64 && decimalType != types.T_decimal128 {
+		if !decimalType.IsDecimal() {
 			continue
 		}
 		value, ok := decimalStringLiteralValue(args[stringPos])
 		if !ok {
 			continue
 		}
-		if _, _, err := types.Parse128(value); err != nil {
-			if _, _, err = types.Parse256(value); err != nil {
-				continue
-			}
+		numericValue, ok := function.GetNumericStringPrefix(value)
+		if !ok {
+			continue
+		}
+		if args[stringPos].GetLit() == nil && numericValue != value {
+			continue
 		}
 
-		decimalExpr, err := makePlan2DecimalExprWithType(ctx, value)
+		decimalExpr, err := makePlan2DecimalExprWithType(ctx, numericValue)
 		if err != nil {
 			return err
 		}

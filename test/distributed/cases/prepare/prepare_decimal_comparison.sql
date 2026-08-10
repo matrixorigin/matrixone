@@ -65,4 +65,14 @@ DEALLOCATE PREPARE p_le;
 DEALLOCATE PREPARE p_gt;
 DEALLOCATE PREPARE p_ge;
 
+-- A prepared statement must normalize the reversed IN-list direction too.
+PREPARE p_reverse_in FROM
+  'SELECT id FROM t WHERE ''9007199254740992.0001'' IN (d128) ORDER BY id';
+EXECUTE p_reverse_in;
+DEALLOCATE PREPARE p_reverse_in;
+PREPARE p_reverse_not_in FROM
+  'SELECT id FROM t WHERE ''9007199254740992.0001'' NOT IN (d128) ORDER BY id';
+EXECUTE p_reverse_not_in;
+DEALLOCATE PREPARE p_reverse_not_in;
+
 DROP DATABASE prepare_decimal_comparison;

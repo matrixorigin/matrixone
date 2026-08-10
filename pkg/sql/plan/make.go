@@ -16,6 +16,8 @@ package plan
 
 import (
 	"context"
+	"strconv"
+	"strings"
 	"unicode/utf8"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -65,49 +67,110 @@ func MakePlan2Decimal128ExprWithType(v types.Decimal128, typ *Type) *plan.Expr {
 }
 
 func makePlan2DecimalExprWithType(ctx context.Context, v string, isBin ...bool) (*plan.Expr, error) {
-	var typ plan.Type
-	width := decimalLiteralPrecision(v)
-	_, scale, err := types.Parse128(v)
-	if err == nil && scale < 18 && len(v) < 18 {
-		typ = plan.Type{
-			Id:          int32(types.T_decimal64),
-			Width:       width,
-			Scale:       scale,
-			NotNullable: true,
-		}
-	} else if err == nil {
-		typ = plan.Type{
-			Id:          int32(types.T_decimal128),
-			Width:       width,
-			Scale:       scale,
-			NotNullable: true,
-		}
-	} else {
-		_, scale, err = types.Parse256(v)
-		if err != nil {
-			return nil, err
-		}
-		typ = plan.Type{
-			Id:          int32(types.T_decimal256),
-			Width:       width,
-			Scale:       scale,
-			NotNullable: true,
-		}
+	width, scale, err := decimalLiteralWidthAndScale(v)
+	if err != nil {
+		return nil, moerr.NewInvalidInputf(ctx, "invalid decimal literal %q", v)
 	}
-	return appendCastBeforeExpr(ctx, makePlan2StringConstExprWithType(v, isBin...), typ)
+
+	parseValue := v
+	if strings.ContainsRune(parseValue, 'E') {
+		parseValue = strings.Replace(parseValue, "E", "e", 1)
+	}
+	var oid types.T
+	switch {
+	case width < types.T_decimal64.ToType().Width && scale < types.T_decimal64.ToType().Width:
+		oid = types.T_decimal64
+		_, _, err = types.Parse128(parseValue)
+	case width <= types.T_decimal128.ToType().Width:
+		oid = types.T_decimal128
+		_, _, err = types.Parse128(parseValue)
+	case width <= types.T_decimal256.ToType().Width:
+		oid = types.T_decimal256
+		_, _, err = types.Parse256(parseValue)
+	default:
+		err = moerr.NewInvalidInputf(ctx, "decimal literal %q exceeds maximum precision", v)
+	}
+	if err != nil {
+		return nil, err
+	}
+	typ := plan.Type{
+		Id:          int32(oid),
+		Width:       width,
+		Scale:       scale,
+		NotNullable: true,
+	}
+	return appendCastBeforeExpr(ctx, makePlan2StringConstExprWithType(parseValue, isBin...), typ)
 }
 
-func decimalLiteralPrecision(v string) int32 {
-	var width int32
-	for i := 0; i < len(v); i++ {
-		if v[i] >= '0' && v[i] <= '9' {
-			width++
+func decimalLiteralWidthAndScale(v string) (int32, int32, error) {
+	if v == "" {
+		return 0, 0, strconv.ErrSyntax
+	}
+	i := 0
+	if v[i] == '+' || v[i] == '-' {
+		i++
+	}
+	if i == len(v) {
+		return 0, 0, strconv.ErrSyntax
+	}
+
+	var digits, leadingZeros, fractionDigits int64
+	seenNonZero := false
+	seenDigit := false
+	seenDot := false
+	for i < len(v) && v[i] != 'e' && v[i] != 'E' {
+		switch {
+		case v[i] >= '0' && v[i] <= '9':
+			seenDigit = true
+			digits++
+			if seenDot {
+				fractionDigits++
+			}
+			if !seenNonZero && v[i] == '0' {
+				leadingZeros++
+			} else {
+				seenNonZero = true
+			}
+		case v[i] == '.' && !seenDot:
+			seenDot = true
+		default:
+			return 0, 0, strconv.ErrSyntax
 		}
+		i++
 	}
-	if width == 0 {
-		return 1
+	if !seenDigit {
+		return 0, 0, strconv.ErrSyntax
 	}
-	return width
+
+	var exponent int64
+	if i < len(v) {
+		i++
+		if i == len(v) {
+			return 0, 0, strconv.ErrSyntax
+		}
+		parsedExponent, err := strconv.ParseInt(v[i:], 10, 32)
+		if err != nil {
+			return 0, 0, err
+		}
+		exponent = parsedExponent
+	}
+
+	precision := digits - leadingZeros
+	if precision == 0 {
+		precision = 1
+	}
+	scale := fractionDigits - exponent
+	width := precision
+	if scale < 0 {
+		width -= scale
+		scale = 0
+	} else if scale > width {
+		width = scale
+	}
+	if width > int64(types.T_decimal256.ToType().Width) || scale > int64(types.T_decimal256.ToType().Width) {
+		return 0, 0, strconv.ErrRange
+	}
+	return int32(width), int32(scale), nil
 }
 
 func makePlan2DateConstNullExpr(t types.T) *plan.Expr {

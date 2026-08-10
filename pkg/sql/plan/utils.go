@@ -1643,6 +1643,13 @@ func hasTrailingZeros(constExpr *plan.Expr, constT types.Type, columnScale int32
 		return decimal128HasTrailingZeros(val.Decimal128Val.A, val.Decimal128Val.B, trailingDigits)
 	} else if sval, ok := lit.Value.(*plan.Literal_Sval); ok {
 		// The literal is a string, parse it as decimal
+		if constT.Oid == types.T_decimal256 {
+			dec, _, err := types.Parse256(sval.Sval)
+			if err != nil {
+				return false
+			}
+			return decimal256HasTrailingZeros(dec, trailingDigits)
+		}
 		dec, _, err := types.Parse128(sval.Sval)
 		if err != nil {
 			return false
@@ -1651,6 +1658,19 @@ func hasTrailingZeros(constExpr *plan.Expr, constT types.Type, columnScale int32
 	}
 
 	return false
+}
+
+func decimal256HasTrailingZeros(value types.Decimal256, trailingDigits int32) bool {
+	if trailingDigits <= 0 || trailingDigits > 18 {
+		return false
+	}
+	divisor := types.Decimal256{B0_63: uint64(types.Pow10[trailingDigits])}
+	remainder, err := value.Mod256(divisor)
+	if err != nil {
+		return false
+	}
+	return remainder.B0_63 == 0 && remainder.B64_127 == 0 &&
+		remainder.B128_191 == 0 && remainder.B192_255 == 0
 }
 
 // decimal128HasTrailingZeros checks if a 128-bit decimal value has trailing zeros

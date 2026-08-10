@@ -6405,6 +6405,13 @@ func scanDecimalFloatPrefix(s string) (prefix string, negative bool, ok bool) {
 	return s[prefixStart:prefixEnd], negative, true
 }
 
+// GetNumericStringPrefix returns the numeric prefix that MySQL uses when a
+// character string participates in a numeric comparison.
+func GetNumericStringPrefix(s string) (string, bool) {
+	prefix, _, ok := scanDecimalFloatPrefix(s)
+	return prefix, ok
+}
+
 func skipASCIISpace(s string, i int) int {
 	for i < len(s) {
 		switch s[i] {

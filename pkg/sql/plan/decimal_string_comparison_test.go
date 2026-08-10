@@ -64,6 +64,29 @@ func containsVarcharLiteralCast(expr *planpb.Expr) bool {
 	return false
 }
 
+func decimalCastSourceString(expr *planpb.Expr) (string, bool) {
+	if expr == nil {
+		return "", false
+	}
+	if literal := expr.GetLit(); literal != nil {
+		value, ok := literal.Value.(*planpb.Literal_Sval)
+		if ok {
+			return value.Sval, true
+		}
+		return "", false
+	}
+	fn := expr.GetF()
+	if fn == nil {
+		return "", false
+	}
+	for _, arg := range fn.Args {
+		if value, ok := decimalCastSourceString(arg); ok {
+			return value, true
+		}
+	}
+	return "", false
+}
+
 func TestDecimalStringLiteralComparisonsUseExactDecimalTypes(t *testing.T) {
 	ctx := context.Background()
 	decimalTypes := []struct {
@@ -72,6 +95,7 @@ func TestDecimalStringLiteralComparisonsUseExactDecimalTypes(t *testing.T) {
 	}{
 		{typ: types.New(types.T_decimal64, 18, 2), value: "9007199254740992.01"},
 		{typ: types.New(types.T_decimal128, 20, 4), value: "9007199254740992.0001"},
+		{typ: types.New(types.T_decimal256, 40, 4), value: "9007199254740992.0001"},
 	}
 	operators := []string{"=", "<=>", "!=", "<>", "<", "<=", ">", ">="}
 
@@ -129,6 +153,99 @@ func TestDecimalStringLiteralComparisonPreservesHigherScale(t *testing.T) {
 	require.Equal(t, int32(5), fn.Args[1].Typ.Scale)
 }
 
+func TestDecimalStringLiteralUsesMySQLNumericPrefix(t *testing.T) {
+	ctx := context.Background()
+	decimalType := types.New(types.T_decimal128, 20, 4)
+	for _, test := range []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{name: "hex-looking text", input: "0x10", want: "0"},
+		{name: "embedded plus", input: "1+2", want: "1"},
+		{name: "embedded space", input: "1 2", want: "1"},
+		{name: "scientific suffix", input: "1e2suffix", want: "1e2"},
+		{name: "incomplete exponent", input: "1e+suffix", want: "1"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			expr, err := BindFuncExprImplByPlanExpr(ctx, "=", []*planpb.Expr{
+				makePreparedDecimalComparisonColumn(decimalType),
+				makePlan2StringConstExprWithType(test.input),
+			})
+			require.NoError(t, err)
+			requireExactDecimalComparisonArgs(t, expr, expr.GetF().Args[0].Typ.Scale)
+			value, ok := decimalCastSourceString(expr.GetF().Args[1])
+			require.True(t, ok)
+			require.Equal(t, test.want, value)
+		})
+	}
+}
+
+func TestDecimalLiteralNaturalTypeUsesMathematicalValue(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		value string
+		oid   types.T
+		width int32
+		scale int32
+	}{
+		{name: "positive exponent", value: "1e2", oid: types.T_decimal64, width: 3, scale: 0},
+		{name: "uppercase exponent", value: "1E2", oid: types.T_decimal64, width: 3, scale: 0},
+		{name: "negative exponent", value: "1e-2", oid: types.T_decimal64, width: 2, scale: 2},
+		{name: "leading zeros", value: "0001.20", oid: types.T_decimal64, width: 3, scale: 2},
+		{name: "fractional zero", value: "0.000", oid: types.T_decimal64, width: 3, scale: 3},
+		{name: "decimal128 boundary", value: "99999999999999999999999999999999999999", oid: types.T_decimal128, width: 38, scale: 0},
+		{
+			name:  "decimal256 promotion",
+			value: "12345678.0000000000000000000000000000001",
+			oid:   types.T_decimal256,
+			width: 39,
+			scale: 31,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			expr, err := makePlan2DecimalExprWithType(context.Background(), test.value)
+			require.NoError(t, err)
+			require.Equal(t, int32(test.oid), expr.Typ.Id)
+			require.Equal(t, test.width, expr.Typ.Width)
+			require.Equal(t, test.scale, expr.Typ.Scale)
+		})
+	}
+}
+
+func TestDecimalStringLiteralBeyond128KeepsExactComparison(t *testing.T) {
+	ctx := context.Background()
+	value := "12345678.0000000000000000000000000000001"
+	columnType := types.New(types.T_decimal128, 38, 30)
+	for _, operator := range []string{"=", "<"} {
+		for _, literalLeft := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/literal_left=%t", operator, literalLeft), func(t *testing.T) {
+				args := []*planpb.Expr{
+					makePreparedDecimalComparisonColumn(columnType),
+					makePlan2StringConstExprWithType(value),
+				}
+				if literalLeft {
+					args[0], args[1] = args[1], args[0]
+				}
+
+				expr, err := BindFuncExprImplByPlanExpr(ctx, operator, args)
+				require.NoError(t, err)
+				if operator == "=" {
+					require.NotNil(t, expr.GetLit())
+					require.False(t, expr.GetLit().GetBval())
+					return
+				}
+				require.Len(t, expr.GetF().Args, 2)
+				require.Equal(t, int32(types.T_decimal256), expr.GetF().Args[0].Typ.Id, "%+v", expr)
+				require.Equal(t, int32(types.T_decimal256), expr.GetF().Args[1].Typ.Id, "%+v", expr)
+				castValue, ok := decimalCastSourceString(expr)
+				require.True(t, ok)
+				require.Equal(t, value, castValue)
+			})
+		}
+	}
+}
+
 func TestDecimalNonExactStringExpressionsKeepGenericCoercion(t *testing.T) {
 	ctx := context.Background()
 	decimalType := types.New(types.T_decimal128, 20, 4)
@@ -159,7 +276,7 @@ func TestDecimalNonExactStringExpressionsKeepGenericCoercion(t *testing.T) {
 	}
 }
 
-func TestDecimalStringLiteralNormalizationSkipsDecimal256(t *testing.T) {
+func TestDecimalStringLiteralNormalizationSupportsDecimal256(t *testing.T) {
 	ctx := context.Background()
 	decimalType := types.New(types.T_decimal256, 40, 4)
 	literal := makePlan2StringConstExprWithType("999999999999999999999999999999999999.0001")
@@ -170,5 +287,7 @@ func TestDecimalStringLiteralNormalizationSkipsDecimal256(t *testing.T) {
 
 	err := normalizeDecimalStringLiteralComparisonArgs(ctx, "<", args)
 	require.NoError(t, err)
-	require.Same(t, literal, args[1])
+	require.NotSame(t, literal, args[1])
+	require.Equal(t, int32(types.T_decimal256), args[1].Typ.Id)
+	require.Equal(t, int32(4), args[1].Typ.Scale)
 }
