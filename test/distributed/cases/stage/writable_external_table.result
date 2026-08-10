@@ -14,7 +14,7 @@ show create table ext_csv;
 ➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
 ext_csv  ¦  CREATE EXTERNAL TABLE `ext_csv` (
   `a` int DEFAULT NULL,
-  `b` varchar(20) DEFAULT NULL,
+  `b` varchar(20) COLLATE utf8mb4_general_ci DEFAULT NULL,
   `c` double DEFAULT NULL
 ) INFILE{'FILEPATH'='stage://wstage/wext_csv_*.csv','FORMAT'='csv','WRITE_FILE_PATTERN'='stage://wstage/wext_csv_%U.csv'} FIELDS TERMINATED BY ',' ENCLOSED BY ''
 insert into ext_csv select * from src;
@@ -112,7 +112,7 @@ show create table ext_jl;
 ➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
 ext_jl  ¦  CREATE EXTERNAL TABLE `ext_jl` (
   `a` int DEFAULT NULL,
-  `b` varchar(20) DEFAULT NULL,
+  `b` varchar(20) COLLATE utf8mb4_general_ci DEFAULT NULL,
   `c` double DEFAULT NULL
 ) INFILE{'FILEPATH'='stage://wstage/wext_jl_*.jl','FORMAT'='jsonline','JSONDATA'='object','WRITE_FILE_PATTERN'='stage://wstage/wext_jl_%U.jl'} FIELDS TERMINATED BY ',' ENCLOSED BY ''
 drop table ext_jl;

@@ -5310,6 +5310,7 @@ func unionT[T int32 | int64](v, w *Vector, sels []T, mp *mpool.MPool) error {
 }
 
 func (v *Vector) UnionBatch(w *Vector, offset int64, cnt int, flags []uint8, mp *mpool.MPool) error {
+	areaWasDisjoint := v.areaDisjoint
 	if v.typ.IsVarlen() {
 		v.areaDisjoint = false
 	}
@@ -5443,6 +5444,11 @@ func (v *Vector) UnionBatch(w *Vector, offset int64, cnt int, flags []uint8, mp 
 			if err := v.propagatePrepareParamKindsBatch(w, oldLen, offset, cnt, flags, mp); err != nil {
 				return err
 			}
+			// The fast path copies the source area once into a non-overlapping
+			// destination range and only rebases descriptors. Therefore it
+			// preserves the proof exactly when both existing destination and
+			// source were already proven disjoint.
+			v.areaDisjoint = areaWasDisjoint && w.VarlenaAreaIsDisjoint()
 			return nil
 		}
 

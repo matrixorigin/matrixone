@@ -542,7 +542,7 @@ func (s *tableChangesState) appendDeleteRows(
 func (s *tableChangesState) deleteKeyValues(keyVec *vector.Vector, row int) (map[string]any, error) {
 	values := make(map[string]any, len(s.tableDef.Pkey.Names))
 	if len(s.tableDef.Pkey.Names) == 1 {
-		values[s.tableDef.Pkey.Names[0]] = vector.GetAny(keyVec, row, false)
+		values[strings.ToLower(s.tableDef.Pkey.Names[0])] = vector.GetAny(keyVec, row, false)
 		return values, nil
 	}
 	tuple, err := types.Unpack(keyVec.GetBytesAt(row))
@@ -557,7 +557,7 @@ func (s *tableChangesState) deleteKeyValues(keyVec *vector.Vector, row int) (map
 		)
 	}
 	for i, name := range s.tableDef.Pkey.Names {
-		values[name] = tuple[i]
+		values[strings.ToLower(name)] = tuple[i]
 	}
 	return values, nil
 }

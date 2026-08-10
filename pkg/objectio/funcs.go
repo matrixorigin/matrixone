@@ -361,9 +361,14 @@ func ReadOneBlockAllColumnsWindow(
 		return nil, moerr.NewInvalidInputNoCtx("object block window must contain rows")
 	}
 	bat = batch.NewWithSize(len(cols))
+	ownedBat := bat
 	defer func() {
 		if err != nil {
-			bat.Clean(mp)
+			// An explicit `return nil, err` assigns nil to the named result
+			// before deferred functions run. Keep the owned allocation in a
+			// separate variable so partially materialized vectors are still
+			// released on every error path.
+			ownedBat.Clean(mp)
 			bat = nil
 		}
 	}()
@@ -446,7 +451,7 @@ func readChunkedColumnWindow(
 	if err != nil {
 		return nil, err
 	}
-	headerSize, err := chunkedColumnHeaderReadSize(prefix.Bytes())
+	headerSize, err := chunkedColumnHeaderReadSize(prefix.Bytes(), ext.Length())
 	prefix.Release()
 	if err != nil {
 		return nil, err

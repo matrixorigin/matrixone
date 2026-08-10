@@ -3868,6 +3868,12 @@ func TestVarlenaAreaDisjointLifecycle(t *testing.T) {
 	for range 2 {
 		require.NoError(t, AppendBytes(flat, payload, false, mp))
 	}
+	copied := NewVec(typ)
+	require.NoError(t, copied.UnionBatch(flat, 0, flat.Length(), nil, mp))
+	require.True(t, copied.VarlenaAreaIsDisjoint(),
+		"full in-order copy preserves independent payload ranges")
+	copied.Free(mp)
+
 	flat.Shrink([]int64{0, 0}, false)
 	require.False(t, flat.VarlenaAreaIsDisjoint(),
 		"selection can duplicate a descriptor")

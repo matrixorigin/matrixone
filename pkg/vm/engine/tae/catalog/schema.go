@@ -235,6 +235,9 @@ func (s *Schema) ApplyAlterTable(req *apipb.AlterTableReq) error {
 		}
 		targetCol.Name = rename.NewName
 		s.NameMap[targetCol.Name] = targetCol.Idx
+		if rename.Checks != nil {
+			s.Extra.Checks = apipb.CloneExtra(&apipb.SchemaExtra{Checks: rename.Checks}).Checks
+		}
 		s.Extra.ColumnChanged = true
 		logutil.Infof("[Alter] rename column %s -> %s %d", rename.OldName, rename.NewName, targetCol.SeqNum)
 	case apipb.AlterKind_AddColumn:

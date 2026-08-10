@@ -650,6 +650,7 @@ func TestLockRemoteWithContextTimeoutTracksLockForUnlock(t *testing.T) {
 			holder := txn.getHoldLocksLocked(l.bind.Group)
 			require.Contains(t, holder.tableKeys, l.bind.Table)
 			require.Contains(t, holder.tableBinds, l.bind.Table)
+			require.Contains(t, holder.uncertainLockKeys[l.bind.Table], string([]byte{1}))
 
 			require.NoError(t, txn.close(txnID, timestamp.Timestamp{}, func(uint32, uint64) (lockTable, error) {
 				return l, nil

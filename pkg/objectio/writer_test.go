@@ -218,13 +218,40 @@ func TestNewObjectWriter(t *testing.T) {
 	assert.Equal(t, uint8(0xa), buf[63])
 }
 
-func TestChunkedColumnRolloutGate(t *testing.T) {
-	original := chunkedColumnEnabled.Load()
-	defer chunkedColumnEnabled.Store(original)
-	SetChunkedColumnEnabled(false)
-	assert.False(t, chunkedColumnEnabled.Load())
-	SetChunkedColumnEnabled(true)
-	assert.True(t, chunkedColumnEnabled.Load())
+func TestChunkedColumnRolloutPolicyIsPerWriterAndLive(t *testing.T) {
+	first := &objectWriterV1{}
+	second := &objectWriterV1{}
+	enabled := false
+	first.SetChunkedColumnPolicy(func() bool { return enabled })
+
+	require.False(t, first.chunkedColumnPolicy())
+	require.Nil(t, second.chunkedColumnPolicy)
+	enabled = true
+	require.True(t, first.chunkedColumnPolicy())
+}
+
+func TestObjectWriterPropagatesMarshalError(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	fs, err := fileservice.NewMemoryFS(
+		defines.SharedFileServiceName, fileservice.DisabledCacheConfig, nil,
+	)
+	require.NoError(t, err)
+	objectID := NewObjectid()
+	writer, err := NewObjectWriter(
+		BuildObjectNameWithObjectID(&objectID), fs, 0, []uint16{0}, nil,
+	)
+	require.NoError(t, err)
+
+	invalid := vector.NewVec(types.T_text.ToType())
+	invalid.SetLength(1) // Deliberately omit the required varlena descriptor.
+	bat := batch.NewWithSize(1)
+	bat.SetVector(0, invalid)
+	bat.SetRowCount(1)
+	defer bat.Clean(mp)
+
+	_, err = writer.Write(bat)
+	require.ErrorContains(t, err, "vector data is shorter than its marshal length")
 }
 
 func getObjectMeta(ctx context.Context, t *testing.B) ObjectDataMeta {
