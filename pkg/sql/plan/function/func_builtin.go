@@ -801,7 +801,7 @@ func builtInConcatCheck(_ []overload, inputs []types.Type) checkResult {
 }
 
 func builtInConcat(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
-	propagateBinaryStringResult(parameters, result)
+	defer propagateBinaryStringResult(parameters, result)
 	rs := vector.MustFunctionResult[types.Varlena](result)
 	ps := make([]vector.FunctionParameterWrapper[types.Varlena], len(parameters))
 	for i := range ps {
@@ -1143,7 +1143,7 @@ func builtInCharCheck(_ []overload, inputs []types.Type) checkResult {
 }
 
 func builtInChar(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
-	result.GetResultVector().SetIsBinaryString(true)
+	defer result.GetResultVector().SetIsBinaryString(true)
 	rs := vector.MustFunctionResult[types.Varlena](result)
 
 	// After builtInCharCheck, parameters are either integer or string types.
