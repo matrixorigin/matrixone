@@ -25,6 +25,71 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestDatetimeTimestampComparisonPreservesInstantSemantics(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	zone, err := time.LoadLocation("America/New_York")
+	require.NoError(t, err)
+	proc.GetSessionInfo().TimeZone = zone
+
+	datetime, err := types.ParseDatetime("2024-11-03 01:30:00", 6)
+	require.NoError(t, err)
+	secondFoldTimestamp, err := types.ParseTimestamp(time.UTC, "2024-11-03 06:15:00", 6)
+	require.NoError(t, err)
+	datetimeAsTimestamp := datetime.ToTimestamp(zone)
+
+	tests := []struct {
+		name string
+		fn   fEvalFn
+		want bool
+	}{
+		{name: "equal", fn: equalFn, want: datetimeAsTimestamp == secondFoldTimestamp},
+		{name: "not equal", fn: notEqualFn, want: datetimeAsTimestamp != secondFoldTimestamp},
+		{name: "greater", fn: greatThanFn, want: datetimeAsTimestamp > secondFoldTimestamp},
+		{name: "greater equal", fn: greatEqualFn, want: datetimeAsTimestamp >= secondFoldTimestamp},
+		{name: "less", fn: lessThanFn, want: datetimeAsTimestamp < secondFoldTimestamp},
+		{name: "less equal", fn: lessEqualFn, want: datetimeAsTimestamp <= secondFoldTimestamp},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			inputs := []FunctionTestInput{
+				NewFunctionTestInput(types.T_datetime.ToTypeWithScale(6), []types.Datetime{datetime, datetime}, []bool{false, true}),
+				NewFunctionTestInput(types.T_timestamp.ToTypeWithScale(6), []types.Timestamp{secondFoldTimestamp, secondFoldTimestamp}, nil),
+			}
+			expect := NewFunctionTestResult(types.T_bool.ToType(), false, []bool{test.want, false}, []bool{false, true})
+			testCase := NewFunctionTestCase(proc, inputs, expect, test.fn)
+			ok, info := testCase.Run()
+			require.True(t, ok, info)
+		})
+	}
+
+	t.Run("reversed operands", func(t *testing.T) {
+		inputs := []FunctionTestInput{
+			NewFunctionTestInput(types.T_timestamp.ToTypeWithScale(6), []types.Timestamp{secondFoldTimestamp}, []bool{false}),
+			NewFunctionTestInput(types.T_datetime.ToTypeWithScale(6), []types.Datetime{datetime}, []bool{false}),
+		}
+		expect := NewFunctionTestResult(types.T_bool.ToType(), false,
+			[]bool{secondFoldTimestamp > datetimeAsTimestamp}, []bool{false})
+		testCase := NewFunctionTestCase(proc, inputs, expect, greatThanFn)
+		ok, info := testCase.Run()
+		require.True(t, ok, info)
+	})
+
+	t.Run("timestamp scale remains the comparison precision", func(t *testing.T) {
+		preciseDatetime, err := types.ParseDatetime("2024-01-10 12:00:00.123456", 6)
+		require.NoError(t, err)
+		millisecondTimestamp := preciseDatetime.ToTimestamp(zone).TruncateToScale(3)
+		inputs := []FunctionTestInput{
+			NewFunctionTestInput(types.T_datetime.ToTypeWithScale(6), []types.Datetime{preciseDatetime}, nil),
+			NewFunctionTestInput(types.T_timestamp.ToTypeWithScale(3), []types.Timestamp{millisecondTimestamp}, nil),
+		}
+		expect := NewFunctionTestResult(types.T_bool.ToType(), false, []bool{true}, nil)
+		testCase := NewFunctionTestCase(proc, inputs, expect, equalFn)
+		ok, info := testCase.Run()
+		require.True(t, ok, info)
+	})
+}
+
 func TestJsonOrderingOperatorsUseExactComparison(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	defer proc.Free()
