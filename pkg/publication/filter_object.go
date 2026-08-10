@@ -802,6 +802,13 @@ func (s *tombstoneFSinkerWithName) Reset() {
 	}
 }
 
+func (s *tombstoneFSinkerWithName) ActiveObjectName() string {
+	if s.writer == nil {
+		return ""
+	}
+	return s.objectName.String()
+}
+
 func (s *tombstoneFSinkerWithName) Close() error {
 	s.writer = nil
 	return nil

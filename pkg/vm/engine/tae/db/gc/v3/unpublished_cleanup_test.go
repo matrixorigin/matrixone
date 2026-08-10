@@ -20,6 +20,7 @@ import (
 	"iter"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -40,6 +41,36 @@ func (fs *rejectSharedCleanupMarkerWriteFS) Write(
 		return errors.New("injected shared marker write failure")
 	}
 	return fs.FileService.Write(ctx, vector)
+}
+
+type controllableUnpublishedCleanupFS struct {
+	fileservice.FileService
+	rejectMarkerWrites  atomic.Bool
+	rejectDeletes       atomic.Bool
+	markerWriteAttempts atomic.Int64
+}
+
+func (fs *controllableUnpublishedCleanupFS) Write(
+	ctx context.Context,
+	vector fileservice.IOVector,
+) error {
+	if strings.HasPrefix(vector.FilePath, "gc/unpublished/") {
+		fs.markerWriteAttempts.Add(1)
+		if fs.rejectMarkerWrites.Load() {
+			return errors.New("injected cleanup marker write failure")
+		}
+	}
+	return fs.FileService.Write(ctx, vector)
+}
+
+func (fs *controllableUnpublishedCleanupFS) Delete(
+	ctx context.Context,
+	filePaths ...string,
+) error {
+	if fs.rejectDeletes.Load() {
+		return errors.New("injected cleanup object delete failure")
+	}
+	return fs.FileService.Delete(ctx, filePaths...)
 }
 
 type blockingUnpublishedCleanupListFS struct {
@@ -145,6 +176,60 @@ func TestCheckpointCleanerDoesNotLoseConcurrentHandoff(t *testing.T) {
 		"a handoff concurrent with replay must leave a visible next generation",
 	)
 	require.NoError(t, cleaner.replayUnpublishedObjectCleanup(ctx))
+	require.Equal(t,
+		cleaner.unpublishedCleanupProcessed.Load(),
+		cleaner.unpublishedCleanupGeneration.Load(),
+	)
+}
+
+func TestCheckpointCleanerRetainsOwnerWhenAllMarkersFail(t *testing.T) {
+	ctx := context.Background()
+	sharedBase, err := fileservice.NewMemoryFS(
+		"shared", fileservice.DisabledCacheConfig, nil)
+	require.NoError(t, err)
+	localBase, err := fileservice.NewMemoryFS(
+		"local", fileservice.DisabledCacheConfig, nil)
+	require.NoError(t, err)
+	sharedFS := &controllableUnpublishedCleanupFS{FileService: sharedBase}
+	localFS := &controllableUnpublishedCleanupFS{FileService: localBase}
+	sharedFS.rejectMarkerWrites.Store(true)
+	sharedFS.rejectDeletes.Store(true)
+	localFS.rejectMarkerWrites.Store(true)
+
+	object := objectio.MockObjectName().String()
+	writeCheckpointCleanerCleanupTestObject(t, sharedBase, object)
+	cleaner := &checkpointCleaner{
+		fs:                   sharedFS,
+		unpublishedCleanupFS: localFS,
+	}
+
+	// Neither durable destination can accept the intent, but the cleaner itself
+	// becomes the retry owner before the transaction is allowed to disappear.
+	require.NoError(t, cleaner.HandoffUnpublishedObjects(ctx, object))
+	require.NoError(t, cleaner.HandoffUnpublishedObjects(ctx, object),
+		"repeated handoff of the same owned object must be idempotent")
+	require.Equal(t, int64(2), sharedFS.markerWriteAttempts.Load())
+	require.Equal(t, int64(2), localFS.markerWriteAttempts.Load())
+	pending, more := cleaner.snapshotUnpublishedObjectCleanup()
+	require.ElementsMatch(t, []string{object}, pending)
+	require.False(t, more)
+
+	// A failed replay must retain ownership. Once storage recovers, the same
+	// process-level owner removes the object without any transaction state.
+	require.Error(t, cleaner.replayUnpublishedObjectCleanup(ctx))
+	_, err = sharedBase.StatFile(ctx, object)
+	require.NoError(t, err)
+	pending, more = cleaner.snapshotUnpublishedObjectCleanup()
+	require.ElementsMatch(t, []string{object}, pending)
+	require.False(t, more)
+
+	sharedFS.rejectDeletes.Store(false)
+	require.NoError(t, cleaner.replayUnpublishedObjectCleanup(ctx))
+	_, err = sharedBase.StatFile(ctx, object)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrFileNotFound))
+	pending, more = cleaner.snapshotUnpublishedObjectCleanup()
+	require.Empty(t, pending)
+	require.False(t, more)
 	require.Equal(t,
 		cleaner.unpublishedCleanupProcessed.Load(),
 		cleaner.unpublishedCleanupGeneration.Load(),

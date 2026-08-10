@@ -32,8 +32,8 @@ import (
 // storage. DeletePersisted passes this bound through to every delete batch.
 const transferredTombstoneCleanupTimeout = time.Minute
 
-// A terminal handoff writes only a small metadata marker. Keep its failure
-// budget independent from the already exhausted object-delete deadline.
+// A terminal handoff writes only a small metadata marker. Keep one transaction-
+// level budget independent from the already exhausted object-delete deadline.
 const transferredTombstoneHandoffTimeout = 10 * time.Second
 
 // transferredTombstoneSinker is the part of ioutil.Sinker used while a TN

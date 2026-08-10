@@ -236,7 +236,8 @@ func (cleaner *DiskCleaner) GetCleaner() Cleaner {
 
 // HandoffUnpublishedObjects transfers a transaction's exact cleanup set to
 // the checkpoint cleaner without widening the general Cleaner contract used
-// by tests and alternative cleaner implementations.
+// by tests and alternative cleaner implementations. The checkpoint cleaner
+// accepts an in-process retry copy before attempting durable marker storage.
 func (cleaner *DiskCleaner) HandoffUnpublishedObjects(
 	ctx context.Context,
 	files ...string,

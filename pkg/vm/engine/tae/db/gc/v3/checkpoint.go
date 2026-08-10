@@ -146,9 +146,16 @@ type checkpointCleaner struct {
 
 	unpublishedCleanupGeneration atomic.Uint64
 	unpublishedCleanupProcessed  atomic.Uint64
+	unpublishedCleanupPending    struct {
+		sync.Mutex
+		files map[string]struct{}
+	}
 }
 
-const unpublishedCleanupReplayTimeout = 10 * time.Minute
+const (
+	unpublishedCleanupReplayTimeout = 10 * time.Minute
+	unpublishedCleanupReplayBatch   = 1000
+)
 
 func (c *checkpointCleaner) deleteFilesWithPolicy(
 	ctx context.Context,
@@ -1796,12 +1803,18 @@ func (c *checkpointCleaner) Process(
 	return
 }
 
-// HandoffUnpublishedObjects persists exact cleanup ownership before the
-// transaction is allowed to release its sink and table state.
+// HandoffUnpublishedObjects accepts exact cleanup ownership before the
+// transaction releases its sink and table state. It prefers a durable marker;
+// when both marker stores fail, this cleaner retains an in-process retry copy.
 func (c *checkpointCleaner) HandoffUnpublishedObjects(
 	ctx context.Context,
 	files ...string,
 ) error {
+	files = c.retainUnpublishedObjectCleanup(files)
+	if len(files) == 0 {
+		return moerr.NewInternalErrorNoCtx(
+			"cannot hand off an empty unpublished object cleanup intent")
+	}
 	markerFS := c.unpublishedCleanupFS
 	if markerFS == nil {
 		markerFS = c.fs
@@ -1814,12 +1827,13 @@ func (c *checkpointCleaner) HandoffUnpublishedObjects(
 		sharedMarker, sharedErr = ioutil.RecordUnpublishedObjectCleanup(
 			ctx, c.fs, files...)
 	}
-	if localMarker == "" && sharedMarker == "" {
-		if err := errors.Join(localErr, sharedErr); err != nil {
-			return err
-		}
+	if localMarker != "" || sharedMarker != "" {
+		// Durable ownership is established. The process-level owner can release
+		// its copy; replay discovers the marker after restart as well.
+		c.releaseUnpublishedObjectCleanup(files)
+	} else if errors.Join(localErr, sharedErr) == nil {
 		return moerr.NewInternalErrorNoCtx(
-			"cannot persist an empty unpublished object cleanup intent")
+			"cannot persist an unpublished object cleanup intent")
 	}
 	c.unpublishedCleanupGeneration.Add(1)
 	return nil
@@ -1834,14 +1848,24 @@ func (c *checkpointCleaner) replayUnpublishedObjectCleanup(ctx context.Context) 
 	if markerFS == nil {
 		markerFS = c.fs
 	}
+	pending, pendingRemaining := c.snapshotUnpublishedObjectCleanup()
+	var pendingErr error
+	if len(pending) != 0 {
+		if _, pendingErr = ioutil.DeleteUnpublishedObjects(
+			cleanupCtx, c.fs, pending...); pendingErr == nil {
+			c.releaseUnpublishedObjectCleanup(pending)
+		}
+	}
 	_, remaining, replayErr := ioutil.ReplayUnpublishedObjectCleanupFrom(
 		cleanupCtx, markerFS, c.fs)
+	remaining = remaining || pendingRemaining
 	if markerFS.Name() != c.fs.Name() {
 		_, sharedRemaining, sharedErr := ioutil.ReplayUnpublishedObjectCleanup(
 			cleanupCtx, c.fs)
 		remaining = remaining || sharedRemaining
 		replayErr = errors.Join(replayErr, sharedErr)
 	}
+	replayErr = errors.Join(pendingErr, replayErr)
 	if replayErr != nil {
 		// Replay may be the startup discovery of a marker written by the previous
 		// process, so force Process to retry even when no local handoff incremented
@@ -1855,6 +1879,53 @@ func (c *checkpointCleaner) replayUnpublishedObjectCleanup(ctx context.Context) 
 	}
 	c.unpublishedCleanupProcessed.Store(generation)
 	return nil
+}
+
+func (c *checkpointCleaner) retainUnpublishedObjectCleanup(files []string) []string {
+	c.unpublishedCleanupPending.Lock()
+	defer c.unpublishedCleanupPending.Unlock()
+	if c.unpublishedCleanupPending.files == nil {
+		c.unpublishedCleanupPending.files = make(map[string]struct{}, len(files))
+	}
+	retained := make([]string, 0, len(files))
+	seen := make(map[string]struct{}, len(files))
+	for _, file := range files {
+		if file == "" {
+			continue
+		}
+		if _, ok := seen[file]; ok {
+			continue
+		}
+		seen[file] = struct{}{}
+		c.unpublishedCleanupPending.files[file] = struct{}{}
+		retained = append(retained, file)
+	}
+	return retained
+}
+
+func (c *checkpointCleaner) snapshotUnpublishedObjectCleanup() ([]string, bool) {
+	c.unpublishedCleanupPending.Lock()
+	defer c.unpublishedCleanupPending.Unlock()
+	files := make([]string, 0, min(
+		len(c.unpublishedCleanupPending.files), unpublishedCleanupReplayBatch))
+	for file := range c.unpublishedCleanupPending.files {
+		if len(files) == unpublishedCleanupReplayBatch {
+			return files, true
+		}
+		files = append(files, file)
+	}
+	return files, false
+}
+
+func (c *checkpointCleaner) releaseUnpublishedObjectCleanup(files []string) {
+	c.unpublishedCleanupPending.Lock()
+	defer c.unpublishedCleanupPending.Unlock()
+	for _, file := range files {
+		delete(c.unpublishedCleanupPending.files, file)
+	}
+	if len(c.unpublishedCleanupPending.files) == 0 {
+		c.unpublishedCleanupPending.files = nil
+	}
 }
 
 // tryScanLocked scans the incremental checkpoints and tries to create a new GC window

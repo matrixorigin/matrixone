@@ -175,8 +175,9 @@ type Runtime struct {
 	// Returns nil if validation succeeds, or an error if the protection is invalid/expired.
 	SyncProtectionValidator func(jobID string, prepareTS int64) error
 
-	// HandoffUnpublishedObjects durably transfers exact object names to the
-	// process-level cleaner after transaction-scoped deletion is exhausted.
+	// HandoffUnpublishedObjects transfers exact object names to the process-level
+	// cleaner after transaction-scoped deletion is exhausted. The cleaner owns
+	// retry and durable-marker admission before this call returns successfully.
 	HandoffUnpublishedObjects func(context.Context, ...string) error
 }
 

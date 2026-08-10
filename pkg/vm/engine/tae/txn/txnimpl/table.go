@@ -1026,11 +1026,7 @@ func (tbl *txnTable) handoffTransferredTombstoneCleanup() error {
 		return moerr.NewInternalErrorNoCtx(
 			"unpublished object cleanup handoff is not configured")
 	}
-	handoffCtx, cancel := context.WithTimeoutCause(
-		context.WithoutCancel(tbl.store.ctx),
-		transferredTombstoneHandoffTimeout,
-		moerr.CauseCleanUpUselessFiles,
-	)
+	handoffCtx, cancel := tbl.store.newTransferredTombstoneHandoffContext()
 	defer cancel()
 	if err := tbl.store.rt.HandoffUnpublishedObjects(handoffCtx, files...); err != nil {
 		return errors.Join(
