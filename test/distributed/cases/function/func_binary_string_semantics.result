@@ -42,18 +42,17 @@ CREATE TABLE binary_left_ctas AS SELECT LEFT(@b, 1) c;
 CREATE TABLE binary_regexp_ctas AS SELECT REGEXP_SUBSTR(@b, '.') c;
 CREATE TABLE binary_lpad_ctas AS SELECT LPAD(X'61', 5, 'x') c;
 CREATE TABLE binary_unary_ctas AS SELECT +X'3132' c;
-SHOW COLUMNS FROM binary_left_ctas;
-➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
-c  ¦  BLOB(0)  ¦  YES  ¦    ¦  null  ¦    ¦
-SHOW COLUMNS FROM binary_regexp_ctas;
-➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
-c  ¦  BLOB(0)  ¦  YES  ¦    ¦  null  ¦    ¦
-SHOW COLUMNS FROM binary_lpad_ctas;
-➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
-c  ¦  VARBINARY(5)  ¦  NO  ¦    ¦  null  ¦    ¦
-SHOW COLUMNS FROM binary_unary_ctas;
-➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
-c  ¦  VARBINARY(2)  ¦  NO  ¦    ¦  null  ¦    ¦
+SELECT table_name, column_name, column_type, is_nullable
+FROM information_schema.columns
+WHERE table_schema = 'binary_string_semantics'
+AND table_name IN ('binary_left_ctas', 'binary_regexp_ctas', 'binary_lpad_ctas', 'binary_unary_ctas')
+AND column_name NOT LIKE '__mo%'
+ORDER BY table_name, ordinal_position;
+➤ table_name[12,-1,0]  ¦  column_name[12,-1,0]  ¦  column_type[12,-1,0]  ¦  is_nullable[12,-1,0]  𝄀
+binary_left_ctas  ¦  c  ¦  BLOB(0)  ¦  YES  𝄀
+binary_lpad_ctas  ¦  c  ¦  VARBINARY(5)  ¦  NO  𝄀
+binary_regexp_ctas  ¦  c  ¦  BLOB(0)  ¦  YES  𝄀
+binary_unary_ctas  ¦  c  ¦  VARBINARY(2)  ¦  NO
 SELECT HEX(c), CHAR_LENGTH(c) FROM binary_left_ctas;
 ➤ HEX(c)[12,65535,0]  ¦  CHAR_LENGTH(c)[-5,64,0]  𝄀
 E4  ¦  1

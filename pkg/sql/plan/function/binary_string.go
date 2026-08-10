@@ -39,7 +39,9 @@ func ExpressionContainsRuntimeBinaryString(expr *plan.Expr) bool {
 	}
 	if fn.Func != nil && strings.EqualFold(fn.Func.ObjName, "cast") {
 		_, overload := DecodeOverloadID(fn.Func.Obj)
-		if overload == 1 || !types.T(expr.Typ.Id).IsMySQLString() {
+		resultType := types.T(expr.Typ.Id)
+		if overload == 1 || !resultType.IsMySQLString() ||
+			resultType == types.T_binary || resultType == types.T_varbinary || resultType == types.T_blob {
 			return false
 		}
 	}

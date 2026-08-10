@@ -4252,8 +4252,8 @@ func binaryStringResultUsesArgument(name string, argCount, idx int) bool {
 	case "concat", "concat_ws", "coalesce", "least", "greatest":
 		return true
 	case "trim":
-		// The executor receives direction, subject, trim-string.
-		return idx == 1
+		// The executor receives direction, trim-string, subject.
+		return idx == 2
 	case "elt", "make_set":
 		return idx > 0
 	case "export_set":

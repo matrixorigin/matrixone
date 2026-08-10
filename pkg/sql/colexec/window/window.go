@@ -731,15 +731,6 @@ func (ctr *container) processValueFunc(idx int, ap *Window, proc *process.Proces
 	return localResult, nil
 }
 
-func isBinaryStringVector(vec *vector.Vector) bool {
-	switch vec.GetType().Oid {
-	case types.T_binary, types.T_varbinary, types.T_blob:
-		return true
-	default:
-		return vec.GetIsBinaryString()
-	}
-}
-
 // getInt64FromVec extracts an int64 value from a vector at the given row.
 // Returns (value, false) if the value is NULL, out of range, or the type is unsupported.
 func getInt64FromVec(vec *vector.Vector, row int) (int64, bool) {

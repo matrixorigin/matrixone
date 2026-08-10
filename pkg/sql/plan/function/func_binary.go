@@ -8630,7 +8630,7 @@ func Trim(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *pro
 			if err = rs.AppendBytes([]byte(res), false); err != nil {
 				return err
 			}
-			result.GetResultVector().SetIsBinaryStringAt(int(i), ivecs[1].GetIsBinaryStringAt(int(i)))
+			result.GetResultVector().SetIsBinaryStringAt(int(i), ivecs[2].GetIsBinaryStringAt(int(i)))
 		}
 
 	}

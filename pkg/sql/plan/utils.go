@@ -1534,11 +1534,13 @@ func ConstantFold(bat *batch.Batch, expr *plan.Expr, proc *process.Process, varA
 		return nil, err
 	}
 	defer free()
-	// binaryString is runtime string metadata and is deliberately distinct from
-	// Literal.IsBin, which also controls numeric interpretation of a raw hex/bit
-	// literal. A folded plan literal cannot represent binaryString without
-	// changing those semantics, so keep the function expression for execution.
-	if vec.GetIsBinaryString() {
+	// A static binary result type already preserves byte-string semantics in the
+	// plan, so it is safe to fold. Dynamic binaryString metadata on a textual
+	// result still cannot be represented by Literal.IsBin without also changing
+	// raw hex/bit numeric semantics.
+	resultType := types.T(expr.Typ.Id)
+	staticBinaryResult := resultType == types.T_binary || resultType == types.T_varbinary || resultType == types.T_blob
+	if vec.GetIsBinaryString() && !staticBinaryResult {
 		return expr, nil
 	}
 

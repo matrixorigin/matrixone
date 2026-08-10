@@ -368,7 +368,7 @@ func TestBinaryStringScalarResultsPropagateMetadata(t *testing.T) {
 		}},
 		{name: "trim", fn: Trim, params: []*vector.Vector{
 			testutil.MakeVarlenaVector([][]byte{[]byte("both")}, nil, types.T_varchar.ToType(), mp),
-			binary, text,
+			text, binary,
 		}},
 	}
 	defer tests[0].params[2].Free(mp)
