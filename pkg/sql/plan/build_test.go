@@ -4582,6 +4582,34 @@ func TestDeleteSelfReferSetNull(t *testing.T) {
 	requireQueryStepDependenciesAcyclic(t, query)
 }
 
+func TestDeleteSelfReferCascade(t *testing.T) {
+	mock := NewMockOptimizer(true)
+
+	logicPlan, err := runOneStmt(mock, t, "DELETE FROM self_ref_cascade WHERE id = 1")
+	require.NoError(t, err)
+	query := logicPlan.GetQuery()
+	require.NotNil(t, query)
+	assert.True(t, query.GetHasForeignKeyAction())
+	assert.True(t, queryHasNodeType(query, plan.Node_RECURSIVE_CTE),
+		"self-referencing DELETE CASCADE must recursively collect all descendants")
+	requireRecursiveCTESources(t, query)
+}
+
+func TestUpdateSelfReferCascade(t *testing.T) {
+	mock := NewMockOptimizer(true)
+
+	logicPlan, err := runOneStmt(mock, t, "UPDATE self_ref_cascade SET id = 10 WHERE id = 1")
+	require.NoError(t, err)
+	query := logicPlan.GetQuery()
+	require.NotNil(t, query)
+	assert.True(t, query.GetHasForeignKeyAction(),
+		"self-referencing UPDATE CASCADE must build the child-key update")
+	assert.True(t, slices.ContainsFunc(query.Nodes, func(node *plan.Node) bool {
+		return node.NodeType == plan.Node_JOIN && node.JoinType == plan.Node_INNER && len(node.OnList) > 1
+	}), "the separate cascade update must exclude a root row that references itself")
+	requireQueryStepDependenciesAcyclic(t, query)
+}
+
 func requireQueryStepDependenciesAcyclic(t *testing.T, query *plan.Query) {
 	t.Helper()
 	state := make([]uint8, len(query.Steps))
@@ -4619,6 +4647,29 @@ func requireQueryStepDependenciesAcyclic(t *testing.T, query *plan.Query) {
 	for step := range query.Steps {
 		visitStep(step)
 	}
+}
+
+func requireRecursiveCTESources(t *testing.T, query *plan.Query) {
+	t.Helper()
+	for _, node := range query.Nodes {
+		if node.NodeType != plan.Node_RECURSIVE_CTE {
+			continue
+		}
+		require.GreaterOrEqual(t, len(node.SourceStep), 2)
+		for sourceIdx, sourceStep := range node.SourceStep {
+			require.GreaterOrEqual(t, sourceStep, int32(0))
+			require.Less(t, int(sourceStep), len(query.Steps))
+			sink := query.Nodes[query.Steps[sourceStep]]
+			require.Equal(t, plan.Node_SINK, sink.NodeType)
+			if sourceIdx == 0 {
+				assert.False(t, sink.RecursiveCte, "recursive CTE anchor must use a non-recursive sink")
+			} else {
+				assert.True(t, sink.RecursiveCte, "recursive CTE member must use a recursive sink")
+			}
+		}
+		return
+	}
+	t.Fatal("recursive CTE node not found")
 }
 
 func TestReplaceSelfRefCascade(t *testing.T) {
