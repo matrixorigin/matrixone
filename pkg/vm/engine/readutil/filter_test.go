@@ -41,6 +41,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
 
@@ -145,7 +146,7 @@ func TestCompileTemporalFilterExprUsesSessionTimezone(t *testing.T) {
 		require.True(t, selected)
 	})
 
-	t.Run("between applies each timestamp bound scale", func(t *testing.T) {
+	t.Run("between preserves common value scale", func(t *testing.T) {
 		value := parseDatetime("2026-08-10 12:00:00.123456")
 		lower := makeTimestampExpr("2026-08-10 12:00:00.123456")
 		lower.Typ.Scale = 3
@@ -157,7 +158,7 @@ func TestCompileTemporalFilterExprUsesSessionTimezone(t *testing.T) {
 
 		_, selected, err := blockFilter(0, makeDatetimeMeta(value), nil)
 		require.NoError(t, err)
-		require.False(t, selected)
+		require.True(t, selected)
 	})
 
 	t.Run("timestamp column with datetime bound", func(t *testing.T) {
@@ -213,6 +214,94 @@ func TestCompileTemporalFilterExprUsesSessionTimezone(t *testing.T) {
 		require.NoError(t, err)
 		require.True(t, selected)
 	})
+}
+
+func TestConstructBasePKFilterRejectsMixedTemporalEncoding(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	proc.GetSessionInfo().TimeZone = time.FixedZone("UTC+08", 8*3600)
+	datetime, err := types.ParseDatetime("2026-08-10 10:00:00", 6)
+	require.NoError(t, err)
+	timestamp := datetime.ToTimestamp(proc.GetSessionInfo().TimeZone)
+
+	makeTable := func(oid types.T) *plan.TableDef {
+		return &plan.TableDef{
+			Name:          "temporal_pk",
+			Name2ColIndex: map[string]int32{"v": 0},
+			Cols: []*plan.ColDef{{
+				Name: "v", Typ: plan.Type{Id: int32(oid), Scale: 6}, Primary: true,
+			}},
+			Pkey: &plan.PrimaryKeyDef{Names: []string{"v"}, PkeyColName: "v"},
+		}
+	}
+	column := func(oid types.T) *plan.Expr {
+		expr := MakeColExprForTest(0, oid, "v")
+		expr.Typ.Scale = 6
+		return expr
+	}
+	datetimeValue := func() *plan.Expr {
+		return &plan.Expr{
+			Typ: plan.Type{Id: int32(types.T_datetime), Scale: 6},
+			Expr: &plan.Expr_Lit{Lit: &plan.Literal{
+				Value: &plan.Literal_Datetimeval{Datetimeval: int64(datetime)},
+			}},
+		}
+	}
+	timestampValue := func() *plan.Expr {
+		expr := plan2.MakePlan2TimestampConstExprWithType(int64(timestamp))
+		expr.Typ.Scale = 6
+		return expr
+	}
+	assertInvalid := func(t *testing.T, tableDef *plan.TableDef, name string, args []*plan.Expr) {
+		t.Helper()
+		expr, err := plan2.BindFuncExprImplByPlanExpr(proc.Ctx, name, args)
+		require.NoError(t, err)
+		foldExpressionForTest(t, proc, expr)
+		filter, err := ConstructBasePKFilter(expr, tableDef, proc.Mp())
+		require.NoError(t, err)
+		require.False(t, filter.Valid)
+	}
+
+	datetimeTable := makeTable(types.T_datetime)
+	for _, op := range []string{"=", "<", "<=", ">", ">="} {
+		t.Run("datetime column "+op+" timestamp", func(t *testing.T) {
+			assertInvalid(t, datetimeTable, op, []*plan.Expr{column(types.T_datetime), timestampValue()})
+		})
+	}
+	t.Run("reversed operands", func(t *testing.T) {
+		assertInvalid(t, datetimeTable, "=", []*plan.Expr{timestampValue(), column(types.T_datetime)})
+	})
+	t.Run("between", func(t *testing.T) {
+		assertInvalid(t, datetimeTable, "between", []*plan.Expr{
+			column(types.T_datetime), timestampValue(), timestampValue(),
+		})
+	})
+	t.Run("timestamp column", func(t *testing.T) {
+		assertInvalid(t, makeTable(types.T_timestamp), "=", []*plan.Expr{
+			column(types.T_timestamp), datetimeValue(),
+		})
+	})
+	t.Run("same physical type remains valid", func(t *testing.T) {
+		expr, err := plan2.BindFuncExprImplByPlanExpr(proc.Ctx, "=", []*plan.Expr{
+			column(types.T_datetime), datetimeValue(),
+		})
+		require.NoError(t, err)
+		foldExpressionForTest(t, proc, expr)
+		filter, err := ConstructBasePKFilter(expr, datetimeTable, proc.Mp())
+		require.NoError(t, err)
+		require.True(t, filter.Valid)
+	})
+}
+
+func foldExpressionForTest(t *testing.T, proc *process.Process, expr *plan.Expr) {
+	t.Helper()
+	var executors []colexec.ExpressionExecutor
+	_, err := plan2.ReplaceFoldExpr(proc, expr, &executors)
+	require.NoError(t, err)
+	require.NoError(t, plan2.EvalFoldExpr(proc, expr, &executors))
+	for _, executor := range executors {
+		t.Cleanup(executor.Free)
+	}
 }
 
 func Test_ConstructBasePKFilter(t *testing.T) {

@@ -17,6 +17,7 @@ package function
 import (
 	"bytes"
 	"sort"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -133,14 +134,9 @@ func opBetweenDatetimeTimestamp(
 			},
 			func(value, upper types.Datetime) bool { return value <= upper })
 	case parameters[0].GetType().Oid == types.T_datetime:
-		return opBetweenTemporal[types.Datetime, types.Timestamp, types.Timestamp](
-			parameters, result, length,
-			func(value types.Datetime, lower types.Timestamp) bool {
-				return value.ToTimestamp(zone).TruncateToScale(lowerScale) >= lower
-			},
-			func(value types.Datetime, upper types.Timestamp) bool {
-				return value.ToTimestamp(zone).TruncateToScale(upperScale) <= upper
-			})
+		return opBetweenDatetimeAndTimestampBounds(
+			parameters, result, zone, lowerScale, length,
+		)
 	case parameters[0].GetType().Oid == types.T_timestamp &&
 		parameters[1].GetType().Oid == types.T_timestamp:
 		return opBetweenTemporal[types.Timestamp, types.Timestamp, types.Datetime](
@@ -167,6 +163,38 @@ func opBetweenDatetimeTimestamp(
 				return value <= upper.ToTimestamp(zone).TruncateToScale(valueScale)
 			})
 	}
+}
+
+// The pre-existing BETWEEN cast rule converted the value using the lower
+// comparison's target type, then reused that value for the upper comparison.
+// Preserve that observable precision contract while keeping the plan operands
+// cross-typed so storage can still see an unwrapped DATETIME column.
+func opBetweenDatetimeAndTimestampBounds(
+	parameters []*vector.Vector,
+	result *vector.FunctionResult[bool],
+	zone *time.Location,
+	timestampScale int32,
+	length int,
+) error {
+	valueParam := vector.GenerateFunctionFixedTypeParameter[types.Datetime](parameters[0])
+	lowerParam := vector.GenerateFunctionFixedTypeParameter[types.Timestamp](parameters[1])
+	upperParam := vector.GenerateFunctionFixedTypeParameter[types.Timestamp](parameters[2])
+	resultVector := result.GetResultVector()
+	values := vector.MustFixedColNoTypeCheck[bool](resultVector)
+	resultNulls := resultVector.GetNulls()
+
+	for i := uint64(0); i < uint64(length); i++ {
+		value, valueNull := valueParam.GetValue(i)
+		lower, lowerNull := lowerParam.GetValue(i)
+		upper, upperNull := upperParam.GetValue(i)
+		if valueNull || lowerNull || upperNull {
+			resultNulls.Add(i)
+			continue
+		}
+		instant := value.ToTimestamp(zone).TruncateToScale(timestampScale)
+		values[i] = instant >= lower && instant <= upper
+	}
+	return nil
 }
 
 func opBetweenTemporal[

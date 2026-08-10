@@ -2425,11 +2425,30 @@ func foldTemporalBetweenZoneMap(
 	}
 
 	zone := proc.GetSessionInfo().TimeZone
+	valueZM := zms[args[0].AuxId]
+	lowerZM := zms[args[1].AuxId]
+	upperZM := zms[args[2].AuxId]
+	if valueZM.GetType() == types.T_datetime &&
+		lowerZM.GetType() == types.T_timestamp &&
+		upperZM.GetType() == types.T_timestamp {
+		timestampScale := lowerZM.GetScale()
+		valueRange, valueOK := temporalZoneMapAsTimestampRange(valueZM, zone, timestampScale)
+		lowerRange, lowerOK := temporalZoneMapAsTimestampRange(lowerZM, zone, timestampScale)
+		upperRange, upperOK := temporalZoneMapAsTimestampRange(upperZM, zone, timestampScale)
+		if !valueOK || !lowerOK || !upperOK {
+			zms[auxID].Reset()
+		} else {
+			result := valueRange.max >= lowerRange.min && valueRange.min <= upperRange.max
+			zms[auxID] = index.SetBool(zms[auxID], result)
+		}
+		return true
+	}
+
 	lowerResult, lowerOK := temporalZoneMapComparison(
-		zms[args[0].AuxId], zms[args[1].AuxId], zone, ">=",
+		valueZM, lowerZM, zone, ">=",
 	)
 	upperResult, upperOK := temporalZoneMapComparison(
-		zms[args[0].AuxId], zms[args[2].AuxId], zone, "<=",
+		valueZM, upperZM, zone, "<=",
 	)
 	if lowerOK && !lowerResult || upperOK && !upperResult {
 		zms[auxID] = index.SetBool(zms[auxID], false)

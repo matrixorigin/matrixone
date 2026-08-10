@@ -150,7 +150,7 @@ func TestEvaluateFilterByZoneMapDatetimeTimestampComparison(t *testing.T) {
 		require.False(t, selected, plan2.FormatExpr(expr, plan2.FormatOption{}))
 	})
 
-	t.Run("between applies each timestamp bound scale", func(t *testing.T) {
+	t.Run("between preserves common value scale", func(t *testing.T) {
 		proc := testutil.NewProcess(t)
 		defer proc.Free()
 		proc.GetSessionInfo().TimeZone = time.UTC
@@ -174,7 +174,7 @@ func TestEvaluateFilterByZoneMapDatetimeTimestampComparison(t *testing.T) {
 		selected := colexec.EvaluateFilterByZoneMap(
 			proc.Ctx, proc, expr, makeDatetimeBlockMeta(value), map[int]int{0: 0}, zms, vecs,
 		)
-		require.False(t, selected, plan2.FormatExpr(expr, plan2.FormatOption{}))
+		require.True(t, selected, plan2.FormatExpr(expr, plan2.FormatOption{}))
 	})
 }
 

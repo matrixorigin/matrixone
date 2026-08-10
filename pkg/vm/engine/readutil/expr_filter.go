@@ -475,10 +475,9 @@ func temporalFilterMatch(op string, value, bound temporalFilterRange) zoneMapMat
 
 func makeTemporalFilterMatcher(
 	columnType types.T,
-	columnScale int32,
 	value []byte,
 	valueType types.T,
-	valueScale int32,
+	timestampScale int32,
 	zone *time.Location,
 	op string,
 ) (func(objectio.ZoneMap) zoneMapMatch, bool) {
@@ -504,10 +503,6 @@ func makeTemporalFilterMatcher(
 		return nil, false
 	}
 
-	timestampScale := valueScale
-	if columnType == types.T_timestamp {
-		timestampScale = columnScale
-	}
 	bound, ok := temporalFilterRangeFromValue(value, valueType, timestampScale, zone)
 	if !ok {
 		return nil, false
@@ -628,6 +623,13 @@ func compileTemporalFilterExpr(
 	}
 
 	matchers := make([]func(objectio.ZoneMap) zoneMapMatch, len(values))
+	columnType := types.T(colDef.Typ.Id)
+	commonBetweenScale := int32(-1)
+	if op == "between" && columnType == types.T_datetime &&
+		types.T(valueExprs[0].Typ.Id) == types.T_timestamp &&
+		types.T(valueExprs[1].Typ.Id) == types.T_timestamp {
+		commonBetweenScale = valueExprs[0].Typ.Scale
+	}
 	for i := range values {
 		comparisonOp := op
 		if op == "between" {
@@ -637,9 +639,15 @@ func compileTemporalFilterExpr(
 				comparisonOp = "<="
 			}
 		}
+		timestampScale := valueExprs[i].Typ.Scale
+		if columnType == types.T_timestamp {
+			timestampScale = colDef.Typ.Scale
+		} else if commonBetweenScale >= 0 {
+			timestampScale = commonBetweenScale
+		}
 		matchers[i], ok = makeTemporalFilterMatcher(
-			types.T(colDef.Typ.Id), colDef.Typ.Scale,
-			values[i], types.T(valueExprs[i].Typ.Id), valueExprs[i].Typ.Scale,
+			columnType,
+			values[i], types.T(valueExprs[i].Typ.Id), timestampScale,
 			zone, comparisonOp,
 		)
 		if !ok {

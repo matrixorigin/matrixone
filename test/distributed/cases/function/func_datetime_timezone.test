@@ -25,6 +25,25 @@ select count(*) as filter_count
 from temporal_cross_type_regression.f
 where v < cast('2026-08-10 12:00:00' as timestamp);
 
+create table temporal_cross_type_regression.p(v datetime(6) primary key);
+insert into temporal_cross_type_regression.p values ('2026-08-10 10:00:00');
+select count(*) as workspace_pk_count
+from temporal_cross_type_regression.p
+where v = cast('2026-08-10 10:00:00' as timestamp);
+-- @ignore:0
+select mo_ctl('dn', 'flush', 'temporal_cross_type_regression.p');
+select count(*) as persisted_pk_count
+from temporal_cross_type_regression.p
+where v = cast('2026-08-10 10:00:00' as timestamp);
+select count(*) as persisted_pk_between_count
+from temporal_cross_type_regression.p
+where v between cast('2026-08-10 09:00:00' as timestamp)
+    and cast('2026-08-10 11:00:00' as timestamp);
+
+select cast('2026-08-10 12:00:00.123456' as datetime(6))
+    between cast('2026-08-10 12:00:00.123456' as timestamp(3))
+    and cast('2026-08-10 12:00:00.123100' as timestamp(6)) as between_scale_result;
+
 set optimizer_hints = '';
 set time_zone = '+00:00';
 drop database temporal_cross_type_regression;
