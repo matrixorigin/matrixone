@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
 
@@ -47,6 +48,101 @@ func TestRecoveryProjectionPreservesLogicalVarlenaMultiplicity(t *testing.T) {
 	selected, err = projectedSelectedRange(bat, 2, 2)
 	require.NoError(t, err)
 	require.Equal(t, uint64(2*(types.VarlenaSize+len(payload))), selected)
+}
+
+func TestRecoveryProjectionTreatsBroadcastConstNullAsZeroPayload(t *testing.T) {
+	mp := mpool.MustNewZero()
+	constant, err := vector.NewConstBytes(
+		types.T_varchar.ToType(), []byte(strings.Repeat("x", 64)), 1, mp,
+	)
+	require.NoError(t, err)
+	constant.SetNull(0)
+	source := batch.NewWithSize(1)
+	source.Vecs[0] = constant
+	source.SetRowCount(4)
+
+	window, err := source.Window(2, 4)
+	require.NoError(t, err)
+	require.True(t, window.Vecs[0].IsConstNull())
+	require.Equal(t, 2, window.RowCount())
+
+	projection, err := (&HashmapBuilder{}).projectRetainedRecovery(window)
+	require.NoError(t, err)
+	require.Equal(t, 2, projection.maxRows)
+	require.Equal(t, uint64(2*types.VarlenaSize), projection.maxSelected)
+	require.Equal(t, projection.maxSelected, projection.nextTailSelected)
+
+	window.Clean(nil)
+	source.Clean(mp)
+	require.Zero(t, mp.CurrNB())
+}
+
+func TestRecoveryProjectionIgnoresReusableConstNullArea(t *testing.T) {
+	mp := mpool.MustNewZero()
+	constant, err := vector.NewConstBytes(
+		types.T_varchar.ToType(), []byte(strings.Repeat("x", 64)), 1, mp,
+	)
+	require.NoError(t, err)
+	require.NotEmpty(t, constant.GetArea())
+	require.NoError(t, vector.SetConstNull(constant, 4, mp))
+	require.True(t, constant.IsConstNull())
+	require.NotEmpty(t, constant.GetArea(), "SetConstNull retains reusable area")
+	source := batch.NewWithSize(1)
+	source.Vecs[0] = constant
+	source.SetRowCount(4)
+
+	physical, selected, err := unionBatchAreaProjection(constant, 0, 4)
+	require.NoError(t, err)
+	require.Zero(t, physical)
+	require.Zero(t, selected)
+
+	projection, err := (&HashmapBuilder{}).projectRetainedRecovery(source)
+	require.NoError(t, err)
+	require.Equal(t, 4, projection.maxRows)
+	require.Equal(t, uint64(4*types.VarlenaSize), projection.maxSelected)
+	require.Equal(t, projection.maxSelected, projection.nextTailSelected)
+
+	source.Clean(mp)
+	require.Zero(t, mp.CurrNB())
+}
+
+func TestRecoveryProjectionRejectsMissingPhysicalRows(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		rows int
+		vec  func(*testing.T, *mpool.MPool) *vector.Vector
+	}{
+		{
+			name: "empty constant",
+			rows: 1,
+			vec: func(_ *testing.T, mp *mpool.MPool) *vector.Vector {
+				return vector.NewConstNull(types.T_varchar.ToType(), 0, mp)
+			},
+		},
+		{
+			name: "short flat vector",
+			rows: 2,
+			vec: func(t *testing.T, mp *mpool.MPool) *vector.Vector {
+				t.Helper()
+				vec := vector.NewVec(types.T_varchar.ToType())
+				require.NoError(t, vector.AppendBytes(vec, []byte("value"), false, mp))
+				return vec
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			source := batch.NewWithSize(1)
+			source.Vecs[0] = test.vec(t, mp)
+			source.SetRowCount(test.rows)
+
+			_, err := projectedSelectedRange(source, 0, test.rows)
+			require.ErrorIs(t, err, process.ErrHashBuildBudgetInvalid)
+
+			source.Clean(mp)
+			require.Zero(t, mp.CurrNB())
+		})
+	}
 }
 
 func TestRecoveryProjectionUsesIncrementalPartialTail(t *testing.T) {
