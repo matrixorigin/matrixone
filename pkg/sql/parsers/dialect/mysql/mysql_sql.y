@@ -12519,12 +12519,16 @@ window_spec:
 
 function_call_aggregate:
     GROUP_CONCAT '(' func_type_opt expression_list order_by_opt separator_opt ')' within_group_opt window_spec_opt
-    {
-        name := tree.NewUnresolvedColName($1)
-        orderBy := $5
-        if $8 != nil {
-            orderBy = $8
-        }
+	    {
+	        name := tree.NewUnresolvedColName($1)
+	        if $5 != nil && $8 != nil {
+	            yylex.Error("group_concat cannot use both ORDER BY and WITHIN GROUP ORDER BY")
+	            return 1
+	        }
+	        orderBy := $5
+	        if $8 != nil {
+	            orderBy = $8
+	        }
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
             FuncName: tree.NewCStr($1, 1),

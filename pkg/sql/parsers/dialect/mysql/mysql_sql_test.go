@@ -4815,6 +4815,12 @@ func TestOrderedSetAggregateDeparseRoundTrip(t *testing.T) {
 	}
 }
 
+func TestGroupConcatRejectsDoubleOrderBy(t *testing.T) {
+	_, err := ParseOne(context.Background(),
+		"select group_concat(v order by v) within group (order by k) from t", 1)
+	require.ErrorContains(t, err, "group_concat cannot use both ORDER BY and WITHIN GROUP ORDER BY")
+}
+
 func TestWithinRemainsIdentifierCompatible(t *testing.T) {
 	for _, sql := range []string{
 		"select within from t",
