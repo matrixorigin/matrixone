@@ -330,6 +330,18 @@ func (c *Config) Validate() error {
 	if c.HAKeeper.HeatbeatTimeout.Duration == 0 {
 		c.HAKeeper.HeatbeatTimeout.Duration = time.Second * 3
 	}
+	if c.HAKeeper.HeatbeatInterval.Duration < 0 {
+		return moerr.NewBadConfigNoCtx("hakeeper heartbeat interval must be positive")
+	}
+	if c.HAKeeper.HeatbeatInterval.Duration > logservice.ScheduleCommandPollInterval {
+		return moerr.NewBadConfigNoCtxf(
+			"hakeeper heartbeat interval %s exceeds schedule-command progress budget %s",
+			c.HAKeeper.HeatbeatInterval.Duration,
+			logservice.ScheduleCommandPollInterval)
+	}
+	if c.HAKeeper.HeatbeatTimeout.Duration < 0 {
+		return moerr.NewBadConfigNoCtx("hakeeper heartbeat timeout must be positive")
+	}
 	if c.TaskRunner.Parallelism == 0 {
 		c.TaskRunner.Parallelism = runtime.NumCPU() / 16
 		if c.TaskRunner.Parallelism <= ReservedTasks {
@@ -676,6 +688,7 @@ type service struct {
 	queryService queryservice.QueryService
 	// queryClient is used to send query request to other CN services.
 	queryClient qclient.QueryClient
+	queryWork   queryWorkLifecycle
 	// udfService is used to handle non-sql udf
 	udfService       udf.Service
 	bootstrapMu      sync.RWMutex
@@ -685,12 +698,21 @@ type service struct {
 	incrservice          incrservice.AutoIncrementService
 	txnTraceService      trace.Service
 
-	stopper     *stopper.Stopper
-	aicm        *defines.AutoIncrCacheManager
-	lifecycleMu sync.Mutex
-	lifecycle   serviceLifecycleState
-	closeOnce   sync.Once
-	closeErr    error
+	stopper             *stopper.Stopper
+	heartbeatInFlight   atomic.Bool
+	commandPollNeeded   atomic.Bool
+	commandPollWakeup   chan struct{}
+	commandMu           sync.Mutex
+	lastCommandBatchID  uint64
+	ackedCommandBatchID atomic.Uint64
+	appliedCommandIDs   map[logservice.ScheduleCommandIdentity]struct{}
+	lastCommandHash     [32]byte
+	legacyDedupeArmed   bool
+	aicm                *defines.AutoIncrCacheManager
+	lifecycleMu         sync.Mutex
+	lifecycle           serviceLifecycleState
+	closeOnce           sync.Once
+	closeErr            error
 
 	task struct {
 		sync.RWMutex

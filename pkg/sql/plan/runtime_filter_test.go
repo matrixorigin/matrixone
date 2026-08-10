@@ -783,6 +783,31 @@ func TestSerializedExactRuntimeFilterPairContract(t *testing.T) {
 	})
 }
 
+func TestSortedMembershipFilterProtocolGate(t *testing.T) {
+	builder := newRuntimeFilterSingleTestBuilder(true)
+	sid := builder.compCtx.GetProcess().GetService()
+	rt := moruntime.ServiceRuntime(sid)
+	original, hadOriginal := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	t.Cleanup(func() {
+		if hadOriginal {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, original)
+		} else {
+			rt.SetGlobalVariables(
+				moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+		}
+	})
+
+	rt.SetGlobalVariables(
+		moruntime.MOProtocolVersion, defines.MORPCVersion10)
+	require.False(t, localProtocolEnablesSortedMembershipFilter(sid))
+	rt.SetGlobalVariables(
+		moruntime.MOProtocolVersion, defines.MORPCVersion11)
+	require.True(t, localProtocolEnablesSortedMembershipFilter(sid))
+	rt.SetGlobalVariables(
+		moruntime.MOProtocolVersion, defines.MORPCVersion10)
+	require.False(t, localProtocolEnablesSortedMembershipFilter(sid))
+}
+
 func TestFinalizeFuzzyRuntimeFilterKeepsDecisionAtomic(t *testing.T) {
 	protocolProbe := newRuntimeFilterSingleTestBuilder(true)
 	rt := moruntime.ServiceRuntime(

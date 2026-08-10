@@ -94,6 +94,115 @@ func newPartArg(t *testing.T, proc *process.Process, sliding types.Datetime, wit
 	return arg
 }
 
+func newPreparedTextPartArg(t *testing.T, sliding types.Datetime) *TimeWin {
+	t.Helper()
+	partExpr := newExpression(2)
+	partExpr.Typ = plan.Type{Id: int32(types.T_text)}
+	return &TimeWin{
+		WStart: true,
+		Types:  []types.Type{types.T_int32.ToType()},
+		Aggs: []aggexec.AggFuncExecExpression{
+			aggexec.MakeAggFunctionExpression(
+				function.AggSumOverloadID, false, []*plan.Expr{newExpression(1)}, nil),
+		},
+		TsType:      plan.Type{Id: int32(types.T_datetime)},
+		Ts:          newExpression(0),
+		Interval:    makeInterval(),
+		Sliding:     sliding,
+		PartitionBy: []*plan.Expr{partExpr},
+	}
+}
+
+func makePreparedTextPartInput(
+	t *testing.T,
+	mp *mpool.MPool,
+	key string,
+	kinds []vector.PrepareParamKind,
+) *batch.Batch {
+	t.Helper()
+	rows := len(kinds)
+	timestamps := make([]string, rows)
+	values := make([]int32, rows)
+	keys := make([][]byte, rows)
+	for row := range kinds {
+		timestamps[row] = "2023-08-01 00:00:00"
+		if row > 0 {
+			timestamps[row] = "2023-08-01 00:00:12"
+		}
+		values[row] = int32(row + 1)
+		keys[row] = []byte(key)
+	}
+	bat := batch.NewWithSize(3)
+	bat.Vecs[0] = testutil.NewVector(rows, types.T_datetime.ToType(), mp, false, timestamps)
+	bat.Vecs[1] = testutil.NewVector(rows, types.T_int32.ToType(), mp, false, values)
+	bat.Vecs[2] = vector.NewVec(types.T_text.ToType())
+	for _, value := range keys {
+		require.NoError(t, vector.AppendBytes(bat.Vecs[2], value, false, mp))
+	}
+	require.NoError(t, bat.Vecs[2].SetPrepareParamKindsWithMP(kinds, mp))
+	bat.SetRowCount(rows)
+	return bat
+}
+
+func TestTimeWinBroadcastsPreparedPartitionKind(t *testing.T) {
+	sliding, err := calcDatetime(5, 2)
+	require.NoError(t, err)
+	for _, gapFill := range []bool{false, true} {
+		t.Run(map[bool]string{false: "sliding", true: "gapfill"}[gapFill], func(t *testing.T) {
+			proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+			var first, second *batch.Batch
+			var arg *TimeWin
+			t.Cleanup(func() {
+				if arg != nil {
+					arg.Free(proc, false, nil)
+				}
+				if first != nil {
+					first.Clean(proc.Mp())
+				}
+				if second != nil {
+					second.Clean(proc.Mp())
+				}
+				proc.Free()
+				require.Zero(t, proc.Mp().CurrNB())
+			})
+			first = makePreparedTextPartInput(t, proc.Mp(), "5", []vector.PrepareParamKind{
+				vector.PrepareParamFloat,
+				vector.PrepareParamInteger,
+			})
+			second = makePreparedTextPartInput(t, proc.Mp(), "6", []vector.PrepareParamKind{
+				vector.PrepareParamDecimal,
+				vector.PrepareParamBoolean,
+			})
+			arg = newPreparedTextPartArg(t, sliding)
+			arg.GapFill = gapFill
+			arg.AppendChild(colexec.NewMockOperator().WithBatchs([]*batch.Batch{first, second}))
+			require.NoError(t, arg.Prepare(proc))
+			want := map[string]vector.PrepareParamKind{
+				"5": vector.PrepareParamFloat,
+				"6": vector.PrepareParamDecimal,
+			}
+			seen := make(map[string]vector.PrepareParamKind)
+			rows := 0
+			for {
+				result, callErr := vm.Exec(arg, proc)
+				require.NoError(t, callErr)
+				if result.Batch == nil || result.Status == vm.ExecStop {
+					break
+				}
+				part := result.Batch.Vecs[2]
+				for row := 0; row < part.Length(); row++ {
+					key := string(part.GetBytesAt(row))
+					require.Contains(t, want, key)
+					seen[key] = part.GetPrepareParamKindAt(row)
+				}
+				rows += part.Length()
+			}
+			require.Positive(t, rows)
+			require.Equal(t, want, seen)
+		})
+	}
+}
+
 // runPartArg drives the operator to exhaustion and returns (wstart, max, part)
 // per output row.
 func runPartArg(t *testing.T, arg *TimeWin, proc *process.Process, in *batch.Batch) (starts []types.Datetime, sums []int64, parts []int64) {

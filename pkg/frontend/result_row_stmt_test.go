@@ -22,12 +22,60 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/compile"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 )
+
+func TestPrebuiltResultRowsFollowRequestProtocol(t *testing.T) {
+	sv, err := getSystemVariables("test/system_vars_config.toml")
+	require.NoError(t, err)
+	pu := config.NewParameterUnit(sv, nil, nil, nil)
+	pu.SV.SkipCheckUser = true
+	pu.SV.KillRountinesInterval = 0
+	setPu("", pu)
+	setSessionAlloc("", NewLeakCheckAllocator())
+
+	for _, tc := range []struct {
+		name    string
+		cmd     CommandType
+		wantRow []byte
+	}{
+		{name: "text query", cmd: COM_QUERY, wantRow: []byte{4, 'p', 'l', 'a', 'n'}},
+		{name: "binary execute", cmd: COM_STMT_EXECUTE, wantRow: []byte{0, 0, 4, 'p', 'l', 'a', 'n'}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			conn := &prepareResponseCaptureConn{}
+			ioses, err := NewIOSession(conn, pu, "")
+			require.NoError(t, err)
+			proto := NewMysqlClientProtocol("", 0, ioses, 1024, sv)
+			proto.capability &^= CLIENT_DEPRECATE_EOF
+
+			ses := &Session{feSessionImpl: feSessionImpl{txnHandler: &TxnHandler{}}}
+			ses.SetCmd(tc.cmd)
+			proto.SetSession(ses)
+
+			mrs := &MysqlResultSet{}
+			column := new(MysqlColumn)
+			column.SetName("QUERY PLAN")
+			column.SetColumnType(defines.MYSQL_TYPE_VAR_STRING)
+			mrs.AddColumn(column)
+			mrs.AddRow([]any{"plan"})
+			ses.SetMysqlResultSet(mrs)
+
+			execCtx := &ExecCtx{reqCtx: context.Background(), isLastStmt: true}
+			require.NoError(t, NewMysqlResp(proto).respPrebuildResultRow(ses, execCtx))
+
+			packets := splitProtocolPackets(t, conn.writes)
+			require.Len(t, packets, 5)
+			require.Equal(t, tc.wantRow, packets[3])
+		})
+	}
+}
 
 var (
 	benchmarkMysqlColumns  []interface{}

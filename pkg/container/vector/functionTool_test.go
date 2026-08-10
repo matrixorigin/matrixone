@@ -54,6 +54,28 @@ func TestFunctionResultAllocationSurvivesVectorTransfer(t *testing.T) {
 	require.Zero(t, account.Snapshot().Used)
 }
 
+func TestFunctionResultAppendMultiBytesSharesPayload(t *testing.T) {
+	mp := mpool.MustNewZeroNoFixed()
+	wrapper := NewFunctionResultWrapper(types.T_varchar.ToType(), mp)
+	require.NoError(t, wrapper.PreExtendAndReset(3))
+	result := MustFunctionResult[types.Varlena](wrapper)
+	payload := []byte("non-inline-payload-shared-by-every-row")
+
+	require.NoError(t, result.AppendMultiBytes(payload, false, 3))
+	result.AddNullAt(1)
+
+	vec := result.GetResultVector()
+	require.Equal(t, 3, vec.Length())
+	require.Len(t, vec.GetArea(), len(payload))
+	require.False(t, vec.VarlenaAreaIsDisjoint())
+	require.Equal(t, payload, vec.GetBytesAt(0))
+	require.True(t, vec.IsNull(1))
+	require.Equal(t, payload, vec.GetBytesAt(2))
+
+	wrapper.Free()
+	require.Zero(t, mp.CurrNB())
+}
+
 func TestAppendByteJsonUsesStorageCompatibleTypeCodes(t *testing.T) {
 	mp := mpool.MustNewZeroNoFixed()
 	wrapper := NewFunctionResultWrapper(types.T_json.ToType(), mp)

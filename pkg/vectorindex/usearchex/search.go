@@ -31,9 +31,9 @@ import (
 
 // FilteredSearchUnsafeWithMembership runs a usearch search that keeps only the
 // candidate keys present in the doc_id membership filter f. f may be any
-// docfilter.MembershipFilter (an exact cbitmap / CRoaring bitset, or a bloom
-// filter); the C predicate tests each candidate key against f's underlying
-// structure via its CHandle/CKind cgo bridge. A nil filter passes all keys.
+// docfilter.MembershipFilter (an exact cbitmap / Sorted64 / legacy CRoaring
+// set, or a bloom filter); the C predicate tests each candidate key through
+// its CHandle/CKind bridge. A nil filter passes all keys.
 func FilteredSearchUnsafeWithMembership(
 	index *usearch.Index,
 	query unsafe.Pointer,
@@ -73,7 +73,7 @@ func FilteredSearchUnsafeWithMembership(
 			return nil, nil, moerr.NewInternalErrorNoCtx("usearchex: membership filter does not support the C search bridge")
 		}
 		switch cf.CKind() {
-		case docfilter.TagBloom, docfilter.TagCRoaring, docfilter.TagCbitmap:
+		case docfilter.TagBloom, docfilter.TagCRoaring, docfilter.TagCbitmap, docfilter.TagSorted64:
 		default:
 			return nil, nil, moerr.NewInternalErrorNoCtx("usearchex: unknown membership filter kind")
 		}
