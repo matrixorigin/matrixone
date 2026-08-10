@@ -49,6 +49,19 @@ id    sum_v    min_v    max_v
 1    5    5    5
 2    6    1    5
 3    15    1    9
+create table t_win_control_ctas as select id, cast(avg(v) over (order by id rows between unbounded preceding and current row) as decimal(10,4)) as avg_v, count(*) over (order by id rows between unbounded preceding and current row) as count_v, first_value(v) over (order by id rows between unbounded preceding and current row) as first_v from t_win_not_null_src order by id;
+select * from t_win_control_ctas order by id;
+id    avg_v    count_v    first_v
+1    5.0000    1    5
+2    3.0000    2    5
+3    5.0000    3    5
+create table t_win_nullable_dst (id int not null, sum_v bigint null);
+insert into t_win_nullable_dst select id, sum(v) over (order by id rows between unbounded preceding and current row) from t_win_not_null_src order by id;
+select * from t_win_nullable_dst order by id;
+id    sum_v
+1    5
+2    6
+3    15
 create table t_win_not_null_true_null (sum_v bigint not null);
 insert into t_win_not_null_true_null select sum(v) over (order by id rows between 1 preceding and 1 preceding) from t_win_not_null_src order by id;
 constraint violation: Column 'sum_v' cannot be null

@@ -808,9 +808,14 @@ func TestWindowAggResultAcrossChunks(t *testing.T) {
 // look nullable to downstream operators.
 func TestWindowAggregateResultDropsTailNulls(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	rows := aggexec.AggBatchSize - 12
+	values := make([]int32, rows)
+	for i := range values {
+		values[i] = int32(i + 1)
+	}
 	bat := batch.NewWithSize(1)
-	bat.Vecs[0] = testutil.MakeInt32Vector([]int32{1, 2, 3}, nil, proc.Mp())
-	bat.SetRowCount(3)
+	bat.Vecs[0] = testutil.MakeInt32Vector(values, nil, proc.Mp())
+	bat.SetRowCount(rows)
 
 	spec := makeWindowSpec()
 	spec.Expr.(*plan.Expr_W).W.Frame = makeCurrentRowFrame()
@@ -829,7 +834,11 @@ func TestWindowAggregateResultDropsTailNulls(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, result.Batch)
 	resultVec := result.Batch.Vecs[1]
-	require.Equal(t, []int64{1, 2, 3}, vector.MustFixedColWithTypeCheck[int64](resultVec))
+	resultValues := vector.MustFixedColWithTypeCheck[int64](resultVec)
+	require.Len(t, resultValues, rows)
+	for _, idx := range []int{0, rows - 1} {
+		require.Equal(t, int64(values[idx]), resultValues[idx], "row %d", idx)
+	}
 	require.False(t, resultVec.HasNull(), "tail capacity must not make a non-null window result nullable")
 
 	arg.Free(proc, false, nil)

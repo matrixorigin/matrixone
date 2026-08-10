@@ -44,6 +44,11 @@ insert into t_win_not_null_dst select id, sum(v) over (order by id rows between 
 select * from t_win_not_null_dst order by id;
 create table t_win_not_null_ctas as select id, sum(v) over (order by id rows between unbounded preceding and current row) as sum_v, min(v) over (order by id rows between unbounded preceding and current row) as min_v, max(v) over (order by id rows between unbounded preceding and current row) as max_v from t_win_not_null_src order by id;
 select * from t_win_not_null_ctas order by id;
+create table t_win_control_ctas as select id, cast(avg(v) over (order by id rows between unbounded preceding and current row) as decimal(10,4)) as avg_v, count(*) over (order by id rows between unbounded preceding and current row) as count_v, first_value(v) over (order by id rows between unbounded preceding and current row) as first_v from t_win_not_null_src order by id;
+select * from t_win_control_ctas order by id;
+create table t_win_nullable_dst (id int not null, sum_v bigint null);
+insert into t_win_nullable_dst select id, sum(v) over (order by id rows between unbounded preceding and current row) from t_win_not_null_src order by id;
+select * from t_win_nullable_dst order by id;
 create table t_win_not_null_true_null (sum_v bigint not null);
 insert into t_win_not_null_true_null select sum(v) over (order by id rows between 1 preceding and 1 preceding) from t_win_not_null_src order by id;
 select count(*) as row_count from t_win_not_null_true_null;
