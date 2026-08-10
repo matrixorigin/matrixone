@@ -1299,7 +1299,7 @@ func (c *Compile) compilePlanScope(step int32, curNodeIdx int32, nodes []*plan.N
 			ss = c.compileLimit(node, ss)
 		}
 		return ss, nil
-	case plan.Node_FILTER, plan.Node_PROJECT:
+	case plan.Node_FILTER, plan.Node_ASSERT, plan.Node_PROJECT:
 		ss, err = c.compilePlanScope(step, node.Children[0], nodes)
 		if err != nil {
 			return nil, err
@@ -1307,7 +1307,13 @@ func (c *Compile) compilePlanScope(step int32, curNodeIdx int32, nodes []*plan.N
 		ss = c.ensureUserLevelLockSideEffectsOnCoordinator(node, ss)
 
 		c.setAnalyzeCurrent(ss, int(curNodeIdx))
-		ss = c.compileSort(node, c.compileProjection(node, c.compileRestrict(node, ss)))
+		ss = c.compileRestrict(node, ss)
+		semanticBoundary := node.NodeType == plan.Node_ASSERT || node.FilterIsBarrier
+		if !semanticBoundary ||
+			!isIdentityProjectionOfChild(node.ProjectList, nodes[node.Children[0]].ProjectList) {
+			ss = c.compileProjection(node, ss)
+		}
+		ss = c.compileSort(node, ss)
 		return ss, nil
 	case plan.Node_AGG:
 		ss, err = c.compilePlanScope(step, node.Children[0], nodes)
@@ -1646,6 +1652,19 @@ func (c *Compile) compilePlanScope(step int32, curNodeIdx int32, nodes []*plan.N
 	default:
 		return nil, moerr.NewNYI(c.proc.Ctx, fmt.Sprintf("query '%s'", node))
 	}
+}
+
+func isIdentityProjectionOfChild(projectList, childProjectList []*plan.Expr) bool {
+	if len(projectList) == 0 || len(projectList) != len(childProjectList) {
+		return false
+	}
+	for i, expr := range projectList {
+		col := expr.GetCol()
+		if col == nil || col.RelPos != 0 || col.ColPos != int32(i) {
+			return false
+		}
+	}
+	return true
 }
 
 func (c *Compile) appendStepRegs(step, nodeId int32, reg *process.WaitRegister) {

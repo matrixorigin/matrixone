@@ -21,6 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/filter"
@@ -44,6 +45,32 @@ func TestScopeContainsVarExpr(t *testing.T) {
 	scope.setRootOperator(f)
 
 	require.True(t, scopeContainsVarExpr(scope))
+}
+
+func TestAssertFilterRemoteRoundTrip(t *testing.T) {
+	ctx := &scopeContext{
+		id:     1,
+		root:   &scopeContext{},
+		parent: &scopeContext{},
+	}
+	proc := testutil.NewProcess(t)
+	original := filter.NewArgument()
+	original.FilterExprs = []*plan.Expr{makeTestConstBoolExpr(true)}
+	original.IsAssert = true
+
+	_, wire, err := convertToPipelineInstruction(original, proc, ctx, 1)
+	require.NoError(t, err)
+	require.True(t, wire.FilterIsAssert)
+
+	payload, err := wire.Marshal()
+	require.NoError(t, err)
+	wireRoundTrip := new(pipeline.Instruction)
+	require.NoError(t, wireRoundTrip.Unmarshal(payload))
+	require.True(t, wireRoundTrip.FilterIsAssert)
+
+	restored, err := convertToVmOperator(wireRoundTrip, ctx, nil)
+	require.NoError(t, err)
+	require.True(t, restored.(*filter.Filter).IsAssert)
 }
 
 func TestAggregateConfigTypeRemoteRoundTrip(t *testing.T) {

@@ -674,6 +674,7 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 	case *filter.Filter:
 		in.Filters = t.FilterExprs
 		in.RuntimeFilters = t.RuntimeFilterExprs
+		in.FilterIsAssert = t.IsAssert
 
 	case *indexjoin.IndexJoin:
 		in.IndexJoin = &pipeline.IndexJoin{
@@ -1171,6 +1172,7 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg := filter.NewArgument()
 		arg.FilterExprs = opr.Filters
 		arg.RuntimeFilterExprs = opr.RuntimeFilters
+		arg.IsAssert = opr.FilterIsAssert
 		op = arg
 	case vm.Top:
 		op = top.NewArgument().

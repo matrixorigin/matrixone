@@ -2844,6 +2844,20 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 			Children:    []int32{lastNodeID},
 			BindingTags: []int32{selectTag},
 		}, bindCtx)
+		if onDupAction == plan.Node_UPDATE {
+			lastNodeID, err = appendCheckConstraintPlan(
+				builder,
+				bindCtx,
+				tableDef,
+				lastNodeID,
+				selectTag,
+				colName2Idx,
+				false,
+			)
+			if err != nil {
+				return 0, err
+			}
+		}
 
 		// ON DUPLICATE KEY UPDATE: materialize the final merged image (this PROJECT)
 		// so the main plan, the irregular-index maintenance, and the row-scoped
@@ -3040,7 +3054,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 		dmlNode.UpdateCtxList = append(dmlNode.UpdateCtxList, updateCtx)
 	}
 
-	if onDupAction != plan.Node_IGNORE {
+	if onDupAction != plan.Node_IGNORE && onDupAction != plan.Node_UPDATE {
 		lastNodeID, err = appendCheckConstraintPlan(
 			builder,
 			bindCtx,
