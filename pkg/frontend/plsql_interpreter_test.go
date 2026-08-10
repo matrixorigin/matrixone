@@ -30,6 +30,94 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 )
 
+type loopControlBackgroundExec struct {
+	evalCondBackgroundExec
+	condValues []int64
+	condCalls  int
+}
+
+func (e *loopControlBackgroundExec) Exec(context.Context, string) error {
+	value := int64(0)
+	if e.condCalls < len(e.condValues) {
+		value = e.condValues[e.condCalls]
+	}
+	e.condCalls++
+	e.result = []interface{}{&evalCondResult{value: value}}
+	return nil
+}
+
+func TestInterpreterLoopControl(t *testing.T) {
+	tests := []struct {
+		name       string
+		sql        string
+		condValues []int64
+		condCalls  int
+	}{
+		{
+			name:       "leave repeat before condition",
+			sql:        "begin label1: repeat leave label1; until 1 end repeat label1; end",
+			condValues: []int64{1},
+			condCalls:  0,
+		},
+		{
+			name:       "iterate repeat evaluates condition",
+			sql:        "begin label1: repeat iterate label1; set missing = 1; until 1 end repeat label1; end",
+			condValues: []int64{1},
+			condCalls:  1,
+		},
+		{
+			name:       "leave while",
+			sql:        "begin label1: while 1 do leave label1; end while label1; end",
+			condValues: []int64{1, 0},
+			condCalls:  1,
+		},
+		{
+			name:       "iterate while reevaluates condition",
+			sql:        "begin label1: while 1 do iterate label1; set missing = 1; end while label1; end",
+			condValues: []int64{1, 0},
+			condCalls:  2,
+		},
+		{
+			name:       "inner while propagates leave for outer repeat",
+			sql:        "begin outer_label: repeat inner_label: while 1 do leave outer_label; end while inner_label; set missing = 1; until 1 end repeat outer_label; end",
+			condValues: []int64{1},
+			condCalls:  1,
+		},
+		{
+			name:       "inner while propagates iterate for outer repeat",
+			sql:        "begin outer_label: repeat inner_label: while 1 do iterate outer_label; end while inner_label; set missing = 1; until 1 end repeat outer_label; end",
+			condValues: []int64{1, 1},
+			condCalls:  2,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			ctx := context.Background()
+			stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, test.sql, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+
+			back := &loopControlBackgroundExec{condValues: test.condValues}
+			valueScopes := []map[string]interface{}{{}}
+			typeScopes := []map[string]plan.Type{{}}
+			interpreter := &Interpreter{
+				ctx:          ctx,
+				bh:           back,
+				varScope:     &valueScopes,
+				varTypeScope: &typeScopes,
+				fmtctx:       tree.NewFmtCtx(dialect.MYSQL, tree.WithQuoteString(true)),
+			}
+
+			loopStmt := stmt.(*tree.CompoundStmt).Stmts[0]
+			status, err := interpreter.interpret(loopStmt)
+			require.NoError(t, err)
+			require.Equal(t, SpOk, status)
+			require.Equal(t, test.condCalls, back.condCalls)
+		})
+	}
+}
+
 func TestStoredProcedureDecimalVariableEvaluation(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()

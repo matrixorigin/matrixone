@@ -52,6 +52,19 @@ type Interpreter struct {
 
 	lastAffectedRows    int64
 	initialAffectedRows int64
+	loopControlLabel    tree.Identifier
+}
+
+func isLoopControlStatus(status SpStatus) bool {
+	return status == SpLeaveLoop || status == SpIterLoop
+}
+
+func (interpreter *Interpreter) consumeLoopControl(label tree.Identifier) bool {
+	if !strings.EqualFold(string(interpreter.loopControlLabel), string(label)) {
+		return false
+	}
+	interpreter.loopControlLabel = ""
+	return true
 }
 
 func (interpreter *Interpreter) ensureVariableScopes() {
@@ -445,9 +458,18 @@ func (interpreter *Interpreter) interpret(stmt tree.Statement) (SpStatus, error)
 		for {
 			// first execute body
 			for _, stmt := range st.Body {
-				_, err := interpreter.interpret(stmt)
+				status, err := interpreter.interpret(stmt)
 				if err != nil {
 					return SpNotOk, err
+				}
+				if isLoopControlStatus(status) && !interpreter.consumeLoopControl(st.Name) {
+					return status, nil
+				}
+				if status == SpLeaveLoop {
+					return SpOk, nil
+				}
+				if status == SpIterLoop {
+					break
 				}
 			}
 			// then evaluate condition
@@ -461,6 +483,7 @@ func (interpreter *Interpreter) interpret(stmt tree.Statement) (SpStatus, error)
 			}
 		}
 	case *tree.WhileStmt:
+	whileLoop:
 		for {
 			// first evaluate
 			condStr := interpreter.GetExprString(st.Cond)
@@ -473,9 +496,18 @@ func (interpreter *Interpreter) interpret(stmt tree.Statement) (SpStatus, error)
 			}
 			// then execute body
 			for _, stmt := range st.Body {
-				_, err := interpreter.interpret(stmt)
+				status, err := interpreter.interpret(stmt)
 				if err != nil {
 					return SpNotOk, err
+				}
+				if isLoopControlStatus(status) && !interpreter.consumeLoopControl(st.Name) {
+					return status, nil
+				}
+				if status == SpLeaveLoop {
+					return SpOk, nil
+				}
+				if status == SpIterLoop {
+					continue whileLoop
 				}
 			}
 		}
@@ -487,12 +519,13 @@ func (interpreter *Interpreter) interpret(stmt tree.Statement) (SpStatus, error)
 				if err != nil {
 					return SpNotOk, err
 				}
+				if isLoopControlStatus(status) && !interpreter.consumeLoopControl(st.Name) {
+					return status, nil
+				}
 				if status == SpLeaveLoop {
-					// check label here using stmt
 					goto exit
 				}
 				if status == SpIterLoop {
-					// check label here using stmt
 					goto start
 				}
 			}
@@ -500,8 +533,10 @@ func (interpreter *Interpreter) interpret(stmt tree.Statement) (SpStatus, error)
 	exit:
 		return SpOk, nil
 	case *tree.IterateStmt:
+		interpreter.loopControlLabel = st.Name
 		return SpIterLoop, nil
 	case *tree.LeaveStmt:
+		interpreter.loopControlLabel = st.Name
 		return SpLeaveLoop, nil
 	case *tree.ElseIfStmt:
 		// evaluate condition

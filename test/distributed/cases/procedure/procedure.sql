@@ -74,6 +74,26 @@ call test_loop();
 drop procedure test_loop;
 
 -- @case
+-- @desc:test leave and iterate in labeled repeat/while loops (issue #26904)
+-- @label:bvt
+drop procedure if exists test_leave_repeat;
+create procedure test_leave_repeat() 'begin declare v1 int default 0; label1: repeat set v1 = v1 + 1; if v1 >= 3 THEN leave label1; end if; until v1 > 100 end repeat label1; select v1 as leave_repeat_v1; end';
+call test_leave_repeat();
+drop procedure test_leave_repeat;
+drop procedure if exists test_iterate_repeat;
+create procedure test_iterate_repeat() 'begin declare v1 int default 0; declare s int default 0; label1: repeat set v1 = v1 + 1; if v1 % 2 = 0 THEN iterate label1; end if; set s = s + v1; until v1 >= 6 end repeat label1; select v1 as repeat_v1, s as repeat_sum; end';
+call test_iterate_repeat();
+drop procedure test_iterate_repeat;
+drop procedure if exists test_leave_while;
+create procedure test_leave_while() 'begin declare v1 int default 0; label1: while v1 < 100 do set v1 = v1 + 1; if v1 >= 3 THEN leave label1; end if; end while label1; select v1 as leave_while_v1; end';
+call test_leave_while();
+drop procedure test_leave_while;
+drop procedure if exists test_iterate_while;
+create procedure test_iterate_while() 'begin declare v1 int default 0; declare s int default 0; label1: while v1 < 6 do set v1 = v1 + 1; if v1 % 2 = 0 THEN iterate label1; end if; set s = s + v1; end while label1; select v1 as while_v1, s as while_sum; end';
+call test_iterate_while();
+drop procedure test_iterate_while;
+
+-- @case
 -- @desc:test inner scope variable access
 -- @label:bvt
 drop procedure if exists test_var_access;
