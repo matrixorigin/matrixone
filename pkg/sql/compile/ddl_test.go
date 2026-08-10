@@ -92,6 +92,28 @@ func newMongoDBMappingTestCompile(
 		mock_frontend.NewMockDatabase(ctrl), mock_frontend.NewMockRelation(ctrl)
 }
 
+func TestRequireCheckRenameProtocol(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	c := &Compile{proc: proc}
+	rt := moruntime.ServiceRuntime(proc.GetService())
+	original, hadOriginal := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	defer func() {
+		if hadOriginal {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, original)
+		} else {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+		}
+	}()
+
+	checks := []*plan2.CheckDef{{OriginSql: "`renamed_col` > 0"}}
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion14)
+	require.ErrorContains(t, c.requireCheckRenameProtocol(checks), "protocol version 15")
+	require.NoError(t, c.requireCheckRenameProtocol(nil))
+
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion15)
+	require.NoError(t, c.requireCheckRenameProtocol(checks))
+}
+
 func mongoDBConnectionResult(t *testing.T, proc *process.Process, connectionID, disabled uint64) executor.Result {
 	t.Helper()
 	columnTypes := make([]types.Type, 18)
