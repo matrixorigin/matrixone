@@ -47,5 +47,28 @@ select id from src_upd where match(body) against('fox') and status = 'archived' 
 -- id10's updated prio wins.
 select id, prio from src_upd where match(body) against('fox') and prio > 500 order by id;
 
+-- src_phantom: the covered-path CDC last-writer-wins regression. An UPSERT (UPDATE) followed
+-- by a DELETE of the SAME pk in ONE transaction (so both mutations flow through CDC together)
+-- must resolve to the DELETE. The classic 2-JOIN path masked a resurrected row via the source
+-- join; the covered 0-JOIN path has no such join, so a phantom would surface a deleted row with
+-- stale INCLUDE values. Ordered by score (never ORDER BY id) so the covered fast path is used.
+create table src_phantom (id bigint primary key, body varchar(200), status varchar(20), prio int,
+  FULLTEXT2 ftidx (body) INCLUDE (status, prio));
+insert into src_phantom values
+(20, 'silver fox alpha', 'active', 500),
+(21, 'golden fox beta',  'active', 600);
+-- upsert then delete the SAME pk in one txn: the exact upsert->delete phantom case.
+begin;
+update src_phantom set body = 'silver fox gamma', status = 'updated', prio = 999 where id = 20;
+delete from src_phantom where id = 20;
+commit;
+select sleep(30);
+
+-- covered fast path (0-JOIN: Project -> Sort(score) -> Table Function, no base Table Scan/Join).
+explain select id, status, prio from src_phantom where match(body) against('fox');
+-- pk 20 must be GONE (no phantom, no stale 'updated'/999); only pk 21 remains.
+select id, status, prio from src_phantom where match(body) against('fox') order by match(body) against('fox') desc, id;
+
 drop table src_ins;
 drop table src_upd;
+drop table src_phantom;

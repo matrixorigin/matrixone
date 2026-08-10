@@ -85,8 +85,18 @@ func (t *TailBuilder) AddBatch(cdc *Cdc) error {
 		t.includeTypes = cdc.IncludeTypes
 		t.opts = append(append([]BuildOpt(nil), t.opts...), WithIncludeTypes(t.includeTypes))
 	}
-	for i := range cdc.Events {
-		e := &cdc.Events[i]
+	// Per-pk last-writer-wins collapse WITHIN this flush before routing events. An UPSERT
+	// followed by a later DELETE of the same pk in one CDC batch must resolve to the DELETE;
+	// without collapsing, the upsert lands in an insert segment and the delete in a delete
+	// frame, and delete-first framing then gives the insert the higher recency — resurrecting
+	// the deleted row. That engine-level phantom was masked by the source-table join, but the
+	// covered 0-JOIN path (tryApplyCoveredFulltext2) has no such join, so a covered query could
+	// return the deleted row with stale INCLUDE values. Collapsing keeps UPDATE correct too:
+	// DELETE-then-INSERT resolves to the INSERT, which supersedes the base copy by recency — so
+	// the delete-first framing itself is unchanged (no pk is ever both an insert and a delete).
+	events := collapseCdcLWW(cdc.Events)
+	for i := range events {
+		e := &events[i]
 		switch e.Op {
 		case cdcInsert, cdcUpsert:
 			words := t.tokenize(e.Text)
@@ -118,6 +128,31 @@ func (t *TailBuilder) AddBatch(cdc *Cdc) error {
 		}
 	}
 	return nil
+}
+
+// collapseCdcLWW reduces a flush's events to the LAST op per pk (last-writer-wins), preserving
+// each pk's first-seen position for deterministic output. After it, no pk carries both an
+// insert/upsert and a delete, so the delete-first framing can never resurrect a deleted row.
+// (Scope: within one CDC blob — the reported same-iteration case. A pk upserted in one blob and
+// deleted in a LATER blob of the same TailBuilder session, across a segment seal, is not
+// collapsible here since the earlier insert is already spilled; that residual is masked by the
+// same pk-reuse self-heal + eventual MERGE that governs the tail's cross-batch consistency.)
+func collapseCdcLWW(events []CdcEvent) []CdcEvent {
+	if len(events) < 2 {
+		return events
+	}
+	pos := make(map[any]int, len(events))
+	out := make([]CdcEvent, 0, len(events))
+	for _, e := range events {
+		key := builderKey(e.Pk)
+		if j, ok := pos[key]; ok {
+			out[j] = e // last op wins; keep the pk's original slot for deterministic framing
+		} else {
+			pos[key] = len(out)
+			out = append(out, e)
+		}
+	}
+	return out
 }
 
 // seal finalizes the open segment, frames it, and spills the framed bytes to a

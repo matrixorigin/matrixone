@@ -153,6 +153,17 @@ func orderTailChunks(chunks []TailChunk) ([]TailChunk, error) {
 // consecutive chunks whose bytes sum to that length, and its ordering key is the
 // first chunk's chunk_id. Chunks MUST be pre-sorted by chunk_id ascending.
 func reassembleFrames(chunks []TailChunk) ([]TailFrame, error) {
+	// Running count of bytes still available from the current chunk onward. A frame's bytes
+	// come from CONSECUTIVE chunks, so its self-declared length (CdcFrameLen, read from two
+	// untrusted uint32s in the first chunk) can never exceed this. Validate against it BEFORE
+	// make() so a corrupt chunk — start magic intact but garbage length fields declaring a
+	// near-4GiB frame — is rejected instead of OOM-killing the CN on the allocation.
+	// checkTailLoadBudget can't catch this: it measures the REAL stored bytes, not the length
+	// a corrupt header claims.
+	remaining := 0
+	for _, c := range chunks {
+		remaining += len(c.Data)
+	}
 	var frames []TailFrame
 	i := 0
 	for i < len(chunks) {
@@ -160,9 +171,15 @@ func reassembleFrames(chunks []TailChunk) ([]TailFrame, error) {
 		if err != nil {
 			return nil, err
 		}
+		if total <= 0 || total > remaining {
+			return nil, moerr.NewInternalErrorNoCtx(fmt.Sprintf(
+				"fulltext2 tail: frame at chunk %d declares %d bytes but only %d remain across %d chunks (corrupt frame header)",
+				chunks[i].ChunkId, total, remaining, len(chunks)-i))
+		}
 		firstChunkId := chunks[i].ChunkId
 		buf := make([]byte, 0, total)
 		for len(buf) < total && i < len(chunks) {
+			remaining -= len(chunks[i].Data)
 			buf = append(buf, chunks[i].Data...)
 			i++
 		}

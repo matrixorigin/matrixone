@@ -474,10 +474,23 @@ func (s *Segment) matchPhraseCursor(slots []phraseSlot) []docTf {
 }
 
 // idfSquared is MatrixOne's squared inverse document frequency: (log10(N/df))².
-// df is clamped to >= 1.
+// df is clamped to the range [1, n].
+//
+// The upper clamp matters: df is summed over PHYSICAL postings (dead + live copies both
+// counted, matching bm25's gdf), while n is the LIVE doc count, so heavy update churn on a
+// small corpus can push df past n before a MERGE reclaims the dead copies. Without the clamp,
+// df==n collapses idf to 0 and df>n squares a NEGATIVE log10(n/df) back into a POSITIVE impact
+// — a non-monotonic idf that can rank a dirty base+tail differently from the identical corpus
+// after compaction. Clamping keeps idf>=0 and monotonically non-increasing in df; a term that
+// appears in (at least) every live doc correctly gets idf 0. n>=1 in every scoring path
+// (globalN==0 / empty-segment queries short-circuit before this), so the clamp never divides
+// by zero.
 func idfSquared(n int64, df int) float64 {
 	if df < 1 {
 		df = 1
+	}
+	if n >= 1 && int64(df) > n {
+		df = int(n)
 	}
 	idf := math.Log10(float64(n) / float64(df))
 	return idf * idf

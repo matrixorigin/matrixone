@@ -267,8 +267,13 @@ func (w *Fulltext2SqlWriter) Insert(ctx context.Context, row []any) error {
 	if err != nil {
 		return err
 	}
-	w.cdc.Insert(ftCopyPk(row[w.pkPos]), text, w.rowInclude(row))
-	w.ndata += len(text) + 16
+	pk := ftCopyPk(row[w.pkPos])
+	inc := w.rowInclude(row)
+	w.cdc.Insert(pk, text, inc)
+	// Count the ACTUAL retained bytes (text + varlena pk + INCLUDE values), not a flat +16, so
+	// Full() bounds the real serialized batch size — a batch of wide-VARCHAR pk/INCLUDE rows
+	// used to blow far past MAX_CDC_DATA_SIZE before flushing.
+	w.ndata += len(text) + ftRowDataBytes(pk, inc) + 16
 	return nil
 }
 
@@ -278,17 +283,45 @@ func (w *Fulltext2SqlWriter) Upsert(ctx context.Context, row []any) error {
 	if err != nil {
 		return err
 	}
-	w.cdc.Upsert(ftCopyPk(row[w.pkPos]), text, w.rowInclude(row))
-	w.ndata += len(text) + 16
+	pk := ftCopyPk(row[w.pkPos])
+	inc := w.rowInclude(row)
+	w.cdc.Upsert(pk, text, inc)
+	w.ndata += len(text) + ftRowDataBytes(pk, inc) + 16
 	return nil
 }
 
 func (w *Fulltext2SqlWriter) Delete(ctx context.Context, row []any) error {
 	// a delete row carries only the pk in position 0 (mirrors HnswSqlWriter).
 	w.last = vectorindex.CDC_DELETE
-	w.cdc.Delete(ftCopyPk(row[0]))
-	w.ndata += 16
+	pk := ftCopyPk(row[0])
+	w.cdc.Delete(pk)
+	w.ndata += ftAnyBytes(pk) + 16
 	return nil
+}
+
+// ftAnyBytes is the retained byte size of a boxed pk / INCLUDE value: content length for a
+// varlena value, a small fixed estimate for a scalar, 0 for SQL NULL. ftRowDataBytes sums a
+// row's pk + INCLUDE payload. Both feed w.ndata so Full() bounds the true batch data size
+// (matching the build-side Builder.dataBytes accounting).
+func ftAnyBytes(v any) int {
+	switch x := v.(type) {
+	case nil:
+		return 0
+	case string:
+		return len(x)
+	case []byte:
+		return len(x)
+	default:
+		return 8
+	}
+}
+
+func ftRowDataBytes(pk any, include []any) int {
+	n := ftAnyBytes(pk)
+	for _, v := range include {
+		n += ftAnyBytes(v)
+	}
+	return n
 }
 
 // rowText joins the indexed columns with '\n' (matching fulltext2_create's build

@@ -354,17 +354,25 @@ func (gs *globalStats) phraseHits(seg *Segment, slots []phraseSlot) []docTf {
 	return seg.matchPhrase(slots)
 }
 
-// df returns term's corpus-global document frequency (summed over segments). Dead
-// copies are counted — df is an idf input where a small over-count is immaterial and
-// this matches bm25's gdf.
+// df returns term's corpus-global LIVE document frequency: only ords not superseded by a
+// newer copy (recency) or a tombstone are counted. df feeds idf against the LIVE globalN, so
+// counting dead PHYSICAL copies (an UPDATE leaves the old copy in a lower-recency segment
+// until MERGE reclaims it) would inflate df past N and make a dirty base+tail rank a query
+// DIFFERENTLY from the identical corpus after compaction. Enumerating the term's ords and
+// testing isLive costs O(df) per query term, memoized so it is paid once — and WAND walks the
+// same posting list anyway.
 func (gs *globalStats) df(term string) int {
 	if d, ok := gs.dfCache[term]; ok {
 		return d
 	}
 	d := 0
-	for _, seg := range gs.idx.segments {
+	for si, seg := range gs.idx.segments {
 		if pl, ok := seg.lookup(term); ok {
-			d += pl.df()
+			for _, ord := range pl.materializeDocIDs() {
+				if gs.idx.isLive(si, ord) {
+					d++
+				}
+			}
 		}
 	}
 	gs.dfCache[term] = d
@@ -380,19 +388,24 @@ func (gs *globalStats) idfFor(seg *Segment, term string, pl *termPostings) float
 	return idfSquared(gs.n, gs.df(term))
 }
 
-// phraseDf returns the corpus-global document frequency of a phrase (the number of
-// docs matching the contiguous phrase, summed over segments), memoizing only the COUNT.
-// Each segment's matchPhrase slice is counted and immediately discarded (count-and-
-// discard), so the df scan holds at most one segment's hits at a time — never the whole
-// corpus. Dead copies are counted, matching the term df above.
+// phraseDf returns the corpus-global LIVE document frequency of a phrase (the number of LIVE
+// docs matching the contiguous phrase, summed over segments), memoizing only the COUNT. Each
+// segment's matchPhrase slice is counted and immediately discarded (count-and-discard), so the
+// df scan holds at most one segment's hits at a time — never the whole corpus. Only live ords
+// are counted (mirrors the live term df above and streamPhrase's pass 1), so a dirty tail does
+// not inflate the phrase idf relative to the compacted corpus.
 func (gs *globalStats) phraseDf(slots []phraseSlot) int {
 	key := slotsKey(slots)
 	if d, ok := gs.phraseDfCache[key]; ok {
 		return d
 	}
 	d := 0
-	for _, seg := range gs.idx.segments {
-		d += len(seg.matchPhrase(slots)) // counted, then the slice is released this iteration
+	for si, seg := range gs.idx.segments {
+		for _, h := range seg.matchPhrase(slots) { // counted, then the slice is released this iteration
+			if gs.idx.isLive(si, h.ord) {
+				d++
+			}
+		}
 	}
 	gs.phraseDfCache[key] = d
 	return d

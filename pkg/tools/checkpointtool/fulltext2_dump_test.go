@@ -59,3 +59,30 @@ func TestRenderCreateIndexStatementFulltext2(t *testing.T) {
 	require.Contains(t, ddl2, "FULLTEXT ")
 	require.NotContains(t, ddl2, "FULLTEXT2")
 }
+
+// TestRenderCreateIndexStatementFulltext2Include pins the checkpoint round-trip for INCLUDE
+// columns: a covered fulltext2 index must restore its INCLUDE(...) clause (in persisted order),
+// not silently drop it — dropping it would change the covering/prefilter contract on restore.
+func TestRenderCreateIndexStatementFulltext2Include(t *testing.T) {
+	params, err := catalog.IndexParamsMapToJsonString(map[string]string{
+		"parser":                "json",
+		catalog.IncludedColumns: "status,prio",
+	})
+	require.NoError(t, err)
+
+	info := &indexDDLInfo{
+		name:       "ft",
+		indexType:  "FULLTEXT",
+		algo:       catalog.MoIndexFullText2Algo.ToString(),
+		algoParams: params,
+		columns:    map[string]indexDDLColumn{"body": {name: "body", ordinal: 0}},
+	}
+
+	ddl, err := renderCreateIndexStatement("t", info)
+	require.NoError(t, err)
+	require.Contains(t, ddl, "FULLTEXT2 ")
+	require.Contains(t, ddl, "WITH PARSER json")
+	require.Containsf(t, ddl,
+		"INCLUDE ("+quoteDDLIdent("status")+", "+quoteDDLIdent("prio")+")",
+		"INCLUDE columns must round-trip in persisted order; ddl=%s", ddl)
+}

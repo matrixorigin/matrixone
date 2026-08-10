@@ -15,12 +15,32 @@
 package fulltext2
 
 import (
+	"math"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/monlp/tokenizer"
 	"github.com/stretchr/testify/require"
 )
+
+// TestIdfSquaredClamp pins the df-in-[1,n] clamp: df is summed over physical (dead+live)
+// postings while n is live-only, so churn can push df past n. The clamp keeps idf>=0 and
+// monotonic instead of squaring a negative log10(n/df) into a positive impact.
+func TestIdfSquaredClamp(t *testing.T) {
+	// df < 1 clamps up to 1: idf = (log10(n))^2.
+	require.InDelta(t, math.Log10(10)*math.Log10(10), idfSquared(10, 0), 1e-9)
+	// df == n: term in every live doc -> idf 0.
+	require.Equal(t, 0.0, idfSquared(10, 10))
+	// df > n (dirty base+tail churn): clamped to n -> idf 0, NOT a positive squared-neg-log.
+	require.Equal(t, 0.0, idfSquared(10, 25))
+	// monotonically non-increasing in df across [1, n].
+	prev := math.Inf(1)
+	for df := 1; df <= 10; df++ {
+		v := idfSquared(10, df)
+		require.LessOrEqualf(t, v, prev, "idfSquared not monotonic at df=%d", df)
+		prev = v
+	}
+}
 
 func buildSeg(t *testing.T, id string, rec int64, docs []Doc) *Segment {
 	t.Helper()

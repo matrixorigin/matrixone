@@ -15,6 +15,7 @@
 package fulltext2
 
 import (
+	"encoding/binary"
 	"fmt"
 	"testing"
 
@@ -23,6 +24,22 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/stretchr/testify/require"
 )
+
+// TestReassembleFramesRejectsCorruptLength pins the OOM guard: a chunk whose START MAGIC is
+// intact but whose length fields are garbage (declaring a ~8GiB frame) must be rejected up
+// front by the remaining-bytes check, NOT passed to make([]byte, 0, total) which would
+// OOM-kill the CN. checkTailLoadBudget cannot catch this — it measures the real stored bytes,
+// not the length a corrupt header claims.
+func TestReassembleFramesRejectsCorruptLength(t *testing.T) {
+	const cdcChunkMagic uint32 = 0xCDC51A11 // must match pkg/vectorindex/cuvs cdcChunkMagic
+	data := make([]byte, 28)                // cdcHeaderSize
+	binary.LittleEndian.PutUint32(data[0:4], cdcChunkMagic)
+	binary.LittleEndian.PutUint32(data[20:24], 0xFFFFFFF0) // plen: absurd
+	binary.LittleEndian.PutUint32(data[24:28], 0xFFFFFFF0) // hlen: absurd
+	_, err := reassembleFrames([]TailChunk{{ChunkId: 7, Data: data}})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "corrupt frame header")
+}
 
 // bigSegment builds an n-doc segment plus one doc with a unique needle token, so
 // its serialization is large enough to span multiple storage chunks.

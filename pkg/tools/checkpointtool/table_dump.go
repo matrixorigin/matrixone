@@ -4927,10 +4927,12 @@ func appendIndexAlgorithmDDL(sb *strings.Builder, algo string) {
 
 func appendIndexTrailingOptionsDDL(sb *strings.Builder, fullText bool, algoParams, comment string) error {
 	if strings.TrimSpace(algoParams) != "" {
+		paramMap, err := catalog.IndexParamsStringToMap(algoParams)
+		if err != nil {
+			return err
+		}
 		if fullText {
-			if params, err := catalog.IndexParamsStringToMap(algoParams); err != nil {
-				return err
-			} else if parser := strings.TrimSpace(params["parser"]); parser != "" {
+			if parser := strings.TrimSpace(paramMap["parser"]); parser != "" {
 				sb.WriteString(" WITH PARSER ")
 				sb.WriteString(parser)
 			}
@@ -4941,6 +4943,30 @@ func appendIndexTrailingOptionsDDL(sb *strings.Builder, fullText bool, algoParam
 		}
 		if strings.TrimSpace(params) != "" {
 			sb.WriteString(params)
+		}
+		// INCLUDE columns are a first-class index option that IndexParamsToStringList
+		// deliberately omits (they belong to the DDL / SHOW CREATE surface). Render them here —
+		// the same appendIndexTrailingOptionsDDL feeds both DDL sources (mo_tables constraint and
+		// mo_indexes rows) — so a checkpoint-restore rebuild preserves the covering/prefilter
+		// contract. Without this a `FULLTEXT2 ft(body) INCLUDE(status)` was restored as
+		// `FULLTEXT2 ft(body)`, silently dropping the covered fast path. Uses the same
+		// comma-joined encoding + parser the rest of the system reads (catalog.IncludedColumns /
+		// ParseIncludeColumnsValue), in persisted order.
+		if joined := strings.TrimSpace(paramMap[catalog.IncludedColumns]); joined != "" {
+			cols, err := catalog.ParseIncludeColumnsValue(joined)
+			if err != nil {
+				return err
+			}
+			if len(cols) > 0 {
+				sb.WriteString(" INCLUDE (")
+				for i, c := range cols {
+					if i > 0 {
+						sb.WriteString(", ")
+					}
+					sb.WriteString(quoteDDLIdent(c))
+				}
+				sb.WriteString(")")
+			}
 		}
 	}
 	if comment != "" {

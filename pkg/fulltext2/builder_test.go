@@ -128,6 +128,32 @@ func TestReachedSegmentCap(t *testing.T) {
 	require.Less(t, int64(b2.NumPostings()), DefaultPostingCapacity)
 }
 
+// TestReachedSegmentCapDataBytes: one-token rows with wide varlena pk/INCLUDE reach neither
+// the doc nor posting cap, so the payload-bytes cap must bound them. Also checks the byte
+// accounting (varlena pk + INCLUDE, NULL = 0, replace-on-upsert delta).
+func TestReachedSegmentCapDataBytes(t *testing.T) {
+	// varchar pk (10 B) + one INCLUDE value (5 B) on a single-token doc.
+	b := NewBuilder("d", int32(types.T_varchar))
+	require.NoError(t, b.Add("tok", 0, "PPPPPPPPPP")) // pk = 10 bytes
+	b.SetInclude("PPPPPPPPPP", []any{"IIIII"})        // +5 include bytes
+	require.EqualValues(t, 15, b.NumDataBytes())
+
+	// upsert replace supersedes the INCLUDE bytes in lock-step (5 -> 2), pk unchanged.
+	b.SetDoc("PPPPPPPPPP", []WordPos{{Word: "tok2", Pos: 0}}, []any{"XX"})
+	require.EqualValues(t, 12, b.NumDataBytes()) // 10 pk + 2 include
+
+	// 1 doc / 1 posting: doc & posting caps idle, but the byte cap seals when dataBytes hits it.
+	require.False(t, ReachedSegmentCap(b, 0, 0))
+	b.dataBytes = DefaultDataBytesCapacity
+	require.True(t, ReachedSegmentCap(b, 0, 0))
+
+	// fixed pk (8 B est.) + INCLUDE with a NULL (0) and a 2-byte value.
+	b2 := NewBuilder("n", int32(types.T_int64))
+	require.NoError(t, b2.Add("t", 0, int64(1)))
+	b2.SetInclude(int64(1), []any{nil, "ab"})
+	require.EqualValues(t, 10, b2.NumDataBytes()) // 8 pk + 0 + 2
+}
+
 // TestBuilderPostingSplitStreaming: the streaming seal pattern the build paths use —
 // ReachedSegmentCap on a posting cap seals a long-document corpus into multiple
 // segments even though the doc cap is never reached; the merged Index finds every doc.

@@ -236,12 +236,27 @@ const DefaultBuildCapacity int64 = 1000000
 // doc shape. See ReachedSegmentCap.
 const DefaultPostingCapacity int64 = 8_000_000
 
-// ReachedSegmentCap reports whether an open streaming Builder has hit either the
-// doc cap (max_index_capacity, bounds the docmap/liveOrd heap for a many-tiny-docs
-// index) or the posting cap (max_postings_capacity, bounds the positional posting
-// heap for a few-long-docs index). Non-positive caps fall back to their defaults.
-// Every streaming build path (CREATE TVF, CDC TailBuilder, MERGE/REBUILD compaction)
-// seals on this single predicate so peak build memory is one bounded segment.
+// DefaultDataBytesCapacity bounds the retained variable-width PAYLOAD heap — the copied
+// varlena primary-key and INCLUDE-column bytes held in Builder.docs — which neither the doc
+// cap nor the posting cap covers. A corpus of one-token rows (postings ≈ docs) with wide
+// VARCHAR/BLOB pk or INCLUDE values reaches neither of those caps yet can retain up to
+// DefaultBuildCapacity docs' worth of near-max varlena data (tens of GiB) before sealing.
+// 512 MiB keeps that payload heap in the same ~512 MB per-segment envelope as the posting
+// cap, so total build peak stays bounded regardless of doc shape. See ReachedSegmentCap.
+const DefaultDataBytesCapacity int64 = 512 << 20 // 512 MiB
+
+// ReachedSegmentCap reports whether an open streaming Builder has hit any of its three
+// per-segment build-memory bounds: the doc cap (max_index_capacity, bounds the docmap/liveOrd
+// heap for a many-tiny-docs index), the posting cap (max_postings_capacity, bounds the
+// positional posting heap for a few-long-docs index), or the payload-bytes cap (bounds the
+// retained varlena pk + INCLUDE heap for a wide-varlena corpus). Non-positive doc/posting caps
+// fall back to their defaults. Every streaming build path (CREATE TVF, CDC TailBuilder,
+// MERGE/REBUILD compaction) seals on this single predicate so peak build memory is one bounded
+// segment.
+//
+// The cap is checked AFTER a row is added, so a SINGLE row larger than a cap seals into its own
+// segment (peak bounded to that one oversized row) rather than being rejected — a covering CREATE
+// must still ingest a legitimately huge row.
 func ReachedSegmentCap(b *Builder, docCap, postingCap int64) bool {
 	if docCap <= 0 {
 		docCap = DefaultBuildCapacity
@@ -249,9 +264,9 @@ func ReachedSegmentCap(b *Builder, docCap, postingCap int64) bool {
 	if postingCap <= 0 {
 		postingCap = DefaultPostingCapacity
 	}
-	// Compare the int64 posting counter directly (not via NumPostings()'s int) so a
-	// max_postings_capacity above 2^31 can never wrap on a 32-bit build.
-	return int64(b.NumDocs()) >= docCap || b.postings >= postingCap
+	// Compare the int64 counters directly (not via the int-returning getters) so a cap above
+	// 2^31 can never wrap on a 32-bit build.
+	return int64(b.NumDocs()) >= docCap || b.postings >= postingCap || b.dataBytes >= DefaultDataBytesCapacity
 }
 
 // Builder accumulates a token stream fed in (word, pk) order — the positional
@@ -264,8 +279,39 @@ type Builder struct {
 	pkType   int32
 	ordMap   map[any]int64 // normalized pk -> ord
 	docs     []TokenizedDoc
-	postings int64      // total term occurrences Add'd (one Add == one posting)
-	opts     []BuildOpt // carried into FinishSegments (e.g. WithPositionFree)
+	postings int64 // total term occurrences Add'd (one Add == one posting)
+	// dataBytes is the retained variable-width payload heap: the copied varlena pk bytes plus
+	// the retained INCLUDE value bytes across all open docs. It is the memory dimension the doc
+	// and posting caps miss (a one-token row with a huge VARCHAR pk/INCLUDE), so ReachedSegmentCap
+	// also seals on it. Kept in lock-step: docOrd adds a new doc's pk bytes; SetDoc/SetInclude
+	// add the new INCLUDE bytes and subtract the superseded ones on replace.
+	dataBytes int64
+	opts      []BuildOpt // carried into FinishSegments (e.g. WithPositionFree)
+}
+
+// anyDataBytes is the retained-heap size of one boxed pk / INCLUDE value: the content length
+// for a varlena value (the dimension that blows up), a small fixed estimate for a scalar, 0 for
+// SQL NULL. Used to keep Builder.dataBytes tracking the varlena payload the caps must bound.
+func anyDataBytes(v any) int64 {
+	switch x := v.(type) {
+	case nil:
+		return 0
+	case string:
+		return int64(len(x))
+	case []byte:
+		return int64(len(x))
+	default:
+		return 8 // fixed-width scalar (int/uint/temporal/decimal) — bounded, small
+	}
+}
+
+// includeDataBytes sums the retained payload of a doc's INCLUDE value slice.
+func includeDataBytes(include []any) int64 {
+	var n int64
+	for _, v := range include {
+		n += anyDataBytes(v)
+	}
+	return n
 }
 
 // NewBuilder creates a Builder for an index id and source pk type (types.T). Pass
@@ -284,6 +330,7 @@ func (b *Builder) docOrd(pk any) int64 {
 	o := int64(len(b.docs))
 	b.ordMap[key] = o
 	b.docs = append(b.docs, TokenizedDoc{Pk: builderCopyPk(pk)})
+	b.dataBytes += anyDataBytes(pk) // retained copied pk bytes (varlena payload the caps must bound)
 	return o
 }
 
@@ -325,7 +372,9 @@ func (b *Builder) SetDoc(pk any, words []WordPos, include []any) {
 		d.Positions = append(d.Positions, w.Pos)
 	}
 	b.postings += int64(len(d.Terms))
-	// An upsert supersedes the prior version's INCLUDE values in lock-step with its terms.
+	// An upsert supersedes the prior version's INCLUDE values in lock-step with its terms;
+	// track the payload-byte delta so dataBytes reflects only the live version.
+	b.dataBytes += includeDataBytes(include) - includeDataBytes(d.Include)
 	d.Include = include
 }
 
@@ -335,11 +384,16 @@ func (b *Builder) SetDoc(pk any, words []WordPos, include []any) {
 // retained as-is (column order; a nil element = SQL NULL).
 func (b *Builder) SetInclude(pk any, include []any) {
 	ord := b.docOrd(pk)
+	b.dataBytes += includeDataBytes(include) - includeDataBytes(b.docs[ord].Include)
 	b.docs[ord].Include = include
 }
 
 // NumDocs returns the number of distinct documents added so far.
 func (b *Builder) NumDocs() int { return len(b.docs) }
+
+// NumDataBytes returns the retained variable-width payload heap (copied varlena pk + INCLUDE
+// bytes) — the dimension DefaultDataBytesCapacity bounds in ReachedSegmentCap.
+func (b *Builder) NumDataBytes() int64 { return b.dataBytes }
 
 // NumPostings returns the number of term occurrences Add'd so far (one Add == one
 // posting). It is the memory-correlated dimension the streaming build paths seal
