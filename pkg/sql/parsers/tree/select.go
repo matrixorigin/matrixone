@@ -517,10 +517,41 @@ type GroupByClause struct {
 	GroupingSet      Exprs
 	Apart            bool
 	Cube             bool
+	GroupingSets     bool
 	Rollup           bool
 }
 
 func (node *GroupByClause) Format(ctx *FmtCtx) {
+	if node.Apart {
+		if len(node.GroupingSet) == 0 {
+			return
+		}
+		ctx.WriteString("group by ")
+		node.GroupingSet.Format(ctx)
+		return
+	}
+	if node.Cube {
+		ctx.WriteString("group by cube(")
+		if len(node.GroupByExprsList) > 0 {
+			node.GroupByExprsList[0].Format(ctx)
+		}
+		ctx.WriteByte(')')
+		return
+	}
+	if node.GroupingSets {
+		ctx.WriteString("group by grouping sets (")
+		for i, list := range node.GroupByExprsList {
+			if i > 0 {
+				ctx.WriteString(", ")
+			}
+			ctx.WriteByte('(')
+			list.Format(ctx)
+			ctx.WriteByte(')')
+		}
+		ctx.WriteByte(')')
+		return
+	}
+
 	prefix := "group by "
 	for _, list := range node.GroupByExprsList {
 		for _, n := range list {
@@ -528,9 +559,6 @@ func (node *GroupByClause) Format(ctx *FmtCtx) {
 			n.Format(ctx)
 			prefix = ", "
 		}
-	}
-	if node.Cube {
-		ctx.WriteString("with cube")
 	}
 	if node.Rollup {
 		ctx.WriteString(" with rollup")

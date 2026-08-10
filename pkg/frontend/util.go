@@ -1700,8 +1700,23 @@ func setMysqlColumnTypeInfo(ctx context.Context, typ types.Type, col *MysqlColum
 	}
 	setMysqlColumnTypeMetadata(col, typ)
 	setCharacter(col)
-	if typ.Oid == types.T_binary || typ.Oid == types.T_varbinary {
+	switch typ.Charset {
+	case types.CharsetUTF8:
+		// CharsetUTF8 is MatrixOne's explicit utf8mb4_general_ci identity.
+		// setCharacter uses the older utf8_general_ci protocol default, so
+		// override it with the exact utf8mb4 collation ID.
+		col.SetCharset(uint16(Utf8mb4CollationID))
+	case types.CharsetUTF8MB4Bin:
+		// A _bin collation still describes nonbinary UTF-8 text. Protocol
+		// collation 63 is reserved for the binary character set.
+		col.SetCharset(uint16(utf8mb4BinCollationID))
+	case types.CharsetBinary:
+		// Some internal functions intentionally return packed bytes in a VARCHAR
+		// container. Keep those values binary even though their physical OID is a
+		// text OID; clients must not attempt UTF-8 conversion on the payload.
 		col.SetCharset(charsetBinary)
+	}
+	if typ.Oid == types.T_binary || typ.Oid == types.T_varbinary {
 		col.SetFlag(col.Flag() | uint16(defines.BINARY_FLAG))
 	}
 	return nil
@@ -2190,7 +2205,9 @@ func colDef2MysqlColumn(ctx context.Context, col *plan.ColDef) (*MysqlColumn, er
 	c.SetOrgTable(col.TblName)
 	c.SetAutoIncr(col.Typ.AutoIncr)
 	c.SetSchema(col.DbName)
-	typ := types.New(types.T(col.Typ.Id), col.Typ.Width, col.Typ.Scale)
+	typ := types.NewWithCharset(
+		types.T(col.Typ.Id), col.Typ.Width, col.Typ.Scale, uint8(col.Typ.Charset),
+	)
 	if err = setMysqlColumnTypeInfo(ctx, typ, c); err != nil {
 		return nil, err
 	}
@@ -2422,6 +2439,7 @@ func extractTableDefColumns(erArray []ExecResult, ctx context.Context, dbName, t
 					Id:          int32(typ.Oid),
 					Width:       typ.Width,
 					Scale:       typ.Scale,
+					Charset:     uint32(typ.Charset),
 					Table:       table,
 					NotNullable: !def.NullAbility,
 				},

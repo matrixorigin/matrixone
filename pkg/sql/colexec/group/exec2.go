@@ -67,6 +67,7 @@ func (group *Group) Prepare(proc *process.Process) (err error) {
 	group.ctr.prepareParamKindWireV1 = prepareParamKindWireV1Enabled(proc) &&
 		hasPrepareParamKindPreservingAgg(group.Aggs)
 	group.ctr.mp = mpool.MustNewNoLock("group_mpool")
+	group.ctr.legacyTextMinMax = useLegacyTextMinMaxForRemote(proc)
 
 	// debug,
 	// group.ctr.mp.EnableDetailRecording()

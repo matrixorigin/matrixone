@@ -302,23 +302,31 @@ func TestInitExecuteStmtParamPreservesNumericProtocolProvenance(t *testing.T) {
 
 func TestBinaryProtocolPrepareParamKind(t *testing.T) {
 	for _, test := range []struct {
-		mysqlType defines.MysqlType
-		want      vector.PrepareParamKind
+		mysqlType  defines.MysqlType
+		isUnsigned bool
+		value      string
+		want       vector.PrepareParamKind
 	}{
-		{defines.MYSQL_TYPE_TINY, vector.PrepareParamInteger},
-		{defines.MYSQL_TYPE_SHORT, vector.PrepareParamInteger},
-		{defines.MYSQL_TYPE_INT24, vector.PrepareParamInteger},
-		{defines.MYSQL_TYPE_LONG, vector.PrepareParamInteger},
-		{defines.MYSQL_TYPE_LONGLONG, vector.PrepareParamInteger},
-		{defines.MYSQL_TYPE_YEAR, vector.PrepareParamInteger},
-		{defines.MYSQL_TYPE_FLOAT, vector.PrepareParamFloat},
-		{defines.MYSQL_TYPE_DOUBLE, vector.PrepareParamFloat},
-		{defines.MYSQL_TYPE_DECIMAL, vector.PrepareParamDecimal},
-		{defines.MYSQL_TYPE_NEWDECIMAL, vector.PrepareParamDecimal},
-		{defines.MYSQL_TYPE_BIT, vector.PrepareParamInteger},
-		{defines.MYSQL_TYPE_VAR_STRING, vector.PrepareParamNone},
+		{defines.MYSQL_TYPE_TINY, false, "0", vector.PrepareParamBoolean},
+		{defines.MYSQL_TYPE_TINY, false, "1", vector.PrepareParamBoolean},
+		{defines.MYSQL_TYPE_TINY, true, "1", vector.PrepareParamInteger},
+		{defines.MYSQL_TYPE_TINY, false, "2", vector.PrepareParamInteger},
+		{defines.MYSQL_TYPE_TINY, false, "-1", vector.PrepareParamInteger},
+		{defines.MYSQL_TYPE_SHORT, false, "1", vector.PrepareParamInteger},
+		{defines.MYSQL_TYPE_INT24, false, "1", vector.PrepareParamInteger},
+		{defines.MYSQL_TYPE_LONG, false, "1", vector.PrepareParamInteger},
+		{defines.MYSQL_TYPE_LONGLONG, false, "1", vector.PrepareParamInteger},
+		{defines.MYSQL_TYPE_YEAR, false, "2024", vector.PrepareParamInteger},
+		{defines.MYSQL_TYPE_FLOAT, false, "1.5", vector.PrepareParamFloat},
+		{defines.MYSQL_TYPE_DOUBLE, false, "1.5", vector.PrepareParamFloat},
+		{defines.MYSQL_TYPE_DECIMAL, false, "1.5", vector.PrepareParamDecimal},
+		{defines.MYSQL_TYPE_NEWDECIMAL, false, "1.5", vector.PrepareParamDecimal},
+		{defines.MYSQL_TYPE_BIT, false, "1", vector.PrepareParamInteger},
+		{defines.MYSQL_TYPE_VAR_STRING, false, "1", vector.PrepareParamNone},
 	} {
-		require.Equal(t, test.want, binaryProtocolPrepareParamKind(test.mysqlType), "type %v", test.mysqlType)
+		require.Equal(t, test.want,
+			binaryProtocolPrepareParamKind(test.mysqlType, test.isUnsigned, []byte(test.value)),
+			"type %v unsigned %t value %q", test.mysqlType, test.isUnsigned, test.value)
 	}
 }
 

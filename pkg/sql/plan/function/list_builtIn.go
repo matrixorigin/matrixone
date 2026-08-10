@@ -61,7 +61,9 @@ func concatReturnType(parameters []types.Type) types.Type {
 		}
 	}
 	if !hasBinary {
-		return types.T_varchar.ToType()
+		result := types.T_varchar.ToType()
+		result.Charset = types.MergeStringCharset(parameters, result.Charset)
+		return result
 	}
 	if unbounded {
 		return types.T_blob.ToType()
@@ -99,6 +101,125 @@ func uuidSwapFlagTypeSupported(typ types.Type) bool {
 		typ.IsFloat() ||
 		typ.IsDecimal() ||
 		typ.Oid.IsMySQLString()
+}
+
+func serializedTupleReturnType(_ []types.Type) types.Type {
+	typ := types.T_varchar.ToType()
+	typ.Charset = types.CharsetBinary
+	return typ
+}
+
+// commonConditionalStringType keeps the common physical text type selected by
+// CASE/IF/COALESCE while deriving width and collation from every value branch.
+// Their checkers may rebuild CHAR/VARCHAR/TEXT with ToType while aligning
+// branches, so this helper is used both for cast targets and return callbacks.
+func commonConditionalStringType(result types.Type, source []types.Type) types.Type {
+	switch result.Oid {
+	case types.T_char, types.T_varchar, types.T_text:
+		result.Charset = types.MergeStringCharset(source, result.Charset)
+	default:
+		return result
+	}
+
+	allText := true
+	hasText := false
+	hasUnboundedText := false
+	maxWidth := int32(-1)
+	for _, typ := range source {
+		switch typ.Oid {
+		case types.T_any:
+			// An untyped NULL has no width or collation of its own.
+		case types.T_char, types.T_varchar:
+			hasText = true
+			if typ.Width > maxWidth {
+				maxWidth = typ.Width
+			}
+		case types.T_text:
+			hasText = true
+			// T_text/Width=0 is unbounded TEXT, while Width=255 is the
+			// persisted TINYTEXT subtype marker. Numeric max-width merging
+			// must not turn TEXT + VARCHAR(255) into TINYTEXT and truncate
+			// the TEXT branch before CASE/IF/COALESCE selects it.
+			if typ.Width != types.MaxTinyTextLen {
+				hasUnboundedText = true
+			}
+			if typ.Width > maxWidth {
+				maxWidth = typ.Width
+			}
+		default:
+			allText = false
+		}
+	}
+	if hasText && allText {
+		if result.Oid == types.T_text &&
+			(hasUnboundedText || maxWidth > types.MaxTinyTextLen) {
+			result.Width = 0
+		} else {
+			result.Width = maxWidth
+		}
+	}
+	return result
+}
+
+func caseReturnType(parameters []types.Type) types.Type {
+	if len(parameters) < 2 {
+		return types.T_varchar.ToType()
+	}
+	values := make([]types.Type, 0, (len(parameters)+1)/2)
+	for i := 1; i < len(parameters); i += 2 {
+		values = append(values, parameters[i])
+	}
+	if len(parameters)%2 == 1 {
+		values = append(values, parameters[len(parameters)-1])
+	}
+	return commonConditionalStringType(parameters[1], values)
+}
+
+func iffReturnType(parameters []types.Type) types.Type {
+	if len(parameters) < 3 {
+		return types.T_varchar.ToType()
+	}
+	return commonConditionalStringType(parameters[1], parameters[1:3])
+}
+
+func coalesceStringReturnType(resultOID types.T, parameters []types.Type) types.Type {
+	return commonConditionalStringType(resultOID.ToType(), parameters)
+}
+
+func mergedDerivedStringReturnType(parameters []types.Type, start int) types.Type {
+	result := types.T_varchar.ToType()
+	if start < 0 || start > len(parameters) {
+		return result
+	}
+	for _, parameter := range parameters[start:] {
+		if !parameter.Oid.IsMySQLString() {
+			continue
+		}
+		if parameter.Oid == types.T_binary || parameter.Oid == types.T_varbinary ||
+			parameter.Oid == types.T_blob {
+			return types.T_blob.ToType()
+		}
+	}
+	result.Charset = types.MergeStringCharset(parameters[start:], result.Charset)
+	return result
+}
+
+func derivedStringReturnType(parameters []types.Type, sourceIndex int, resultOID types.T) types.Type {
+	result := resultOID.ToType()
+	if sourceIndex >= 0 && sourceIndex < len(parameters) {
+		// These functions copy or transform bytes from one designated source
+		// string. Keep that source's collation identity so a surrounding string
+		// comparison or MIN/MAX does not silently switch ordering semantics.
+		result.Charset = parameters[sourceIndex].Charset
+	}
+	return result
+}
+
+func convertReturnType(parameters []types.Type) types.Type {
+	// The binder records the constant USING charset on the synthetic charset
+	// argument. Keeping the derivation here also covers callers that resolve the
+	// overload directly with a charset-aware second argument type.
+	return derivedStringReturnType(parameters, 1, types.T_varchar)
 }
 
 // wkbConstructor builds a typed WKB geometry constructor function definition
@@ -378,14 +499,7 @@ var supportedStringBuiltIns = []FuncNew{
 			{
 				overloadId: 0,
 				args:       []types.T{},
-				retType: func(parameters []types.Type) types.Type {
-					for _, p := range parameters {
-						if p.Oid == types.T_binary || p.Oid == types.T_varbinary || p.Oid == types.T_blob {
-							return types.T_blob.ToType()
-						}
-					}
-					return types.T_varchar.ToType()
-				},
+				retType:    concatReturnType,
 				newOp: func() executeLogicOfOverload {
 					return ConcatWs
 				},
@@ -406,9 +520,7 @@ var supportedStringBuiltIns = []FuncNew{
 				args:            []types.T{types.T_varchar, types.T_varchar},
 				volatile:        true,
 				realTimeRelated: true,
-				retType: func(parameters []types.Type) types.Type {
-					return types.T_varchar.ToType()
-				},
+				retType:         convertReturnType,
 				newOp: func() executeLogicOfOverload {
 					return builtInConvertUsingCharset
 				},
@@ -530,13 +642,7 @@ var supportedStringBuiltIns = []FuncNew{
 			{
 				overloadId: 0,
 				retType: func(parameters []types.Type) types.Type {
-					// Return type is varchar (or the widest string type)
-					for _, p := range parameters[1:] {
-						if p.Oid == types.T_binary || p.Oid == types.T_varbinary || p.Oid == types.T_blob {
-							return types.T_blob.ToType()
-						}
-					}
-					return types.T_varchar.ToType()
+					return mergedDerivedStringReturnType(parameters, 1)
 				},
 				newOp: func() executeLogicOfOverload {
 					return Elt
@@ -556,13 +662,7 @@ var supportedStringBuiltIns = []FuncNew{
 			{
 				overloadId: 0,
 				retType: func(parameters []types.Type) types.Type {
-					// Return type is varchar (or the widest string type)
-					for _, p := range parameters[1:] {
-						if p.Oid == types.T_binary || p.Oid == types.T_varbinary || p.Oid == types.T_blob {
-							return types.T_blob.ToType()
-						}
-					}
-					return types.T_varchar.ToType()
+					return mergedDerivedStringReturnType(parameters, 1)
 				},
 				newOp: func() executeLogicOfOverload {
 					return MakeSet
@@ -582,7 +682,7 @@ var supportedStringBuiltIns = []FuncNew{
 			{
 				overloadId: 0,
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_varchar.ToType()
+					return mergedDerivedStringReturnType(parameters, 1)
 				},
 				newOp: func() executeLogicOfOverload {
 					return ExportSet
@@ -2334,7 +2434,7 @@ var supportedStringBuiltIns = []FuncNew{
 				overloadId: 0,
 				args:       []types.T{types.T_varchar, types.T_int64},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_varchar.ToType()
+					return derivedStringReturnType(parameters, 0, types.T_varchar)
 				},
 				newOp: func() executeLogicOfOverload {
 					return Left
@@ -2344,7 +2444,7 @@ var supportedStringBuiltIns = []FuncNew{
 				overloadId: 1,
 				args:       []types.T{types.T_char, types.T_int64},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_char.ToType()
+					return derivedStringReturnType(parameters, 0, types.T_char)
 				},
 				newOp: func() executeLogicOfOverload {
 					return Left
@@ -2365,7 +2465,7 @@ var supportedStringBuiltIns = []FuncNew{
 				overloadId: 0,
 				args:       []types.T{types.T_varchar, types.T_int64},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_varchar.ToType()
+					return derivedStringReturnType(parameters, 0, types.T_varchar)
 				},
 				newOp: func() executeLogicOfOverload {
 					return Right
@@ -2375,7 +2475,7 @@ var supportedStringBuiltIns = []FuncNew{
 				overloadId: 1,
 				args:       []types.T{types.T_char, types.T_int64},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_char.ToType()
+					return derivedStringReturnType(parameters, 0, types.T_char)
 				},
 				newOp: func() executeLogicOfOverload {
 					return Right
@@ -2518,7 +2618,7 @@ var supportedStringBuiltIns = []FuncNew{
 				overloadId: 0,
 				args:       []types.T{types.T_varchar, types.T_int64, types.T_varchar},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_varchar.ToType()
+					return derivedStringReturnType(parameters, 0, types.T_varchar)
 				},
 				newOp: func() executeLogicOfOverload {
 					return builtInLpad
@@ -2559,7 +2659,7 @@ var supportedStringBuiltIns = []FuncNew{
 				overloadId: 0,
 				args:       []types.T{types.T_char},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_varchar.ToType()
+					return derivedStringReturnType(parameters, 0, types.T_varchar)
 				},
 				newOp: func() executeLogicOfOverload {
 					return Ltrim
@@ -2611,7 +2711,7 @@ var supportedStringBuiltIns = []FuncNew{
 				overloadId: 0,
 				args:       []types.T{types.T_varchar, types.T_varchar, types.T_varchar},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_varchar.ToType()
+					return derivedStringReturnType(parameters, 0, types.T_varchar)
 				},
 				newOp: func() executeLogicOfOverload {
 					return Replace
@@ -2632,7 +2732,7 @@ var supportedStringBuiltIns = []FuncNew{
 				overloadId: 0,
 				args:       []types.T{types.T_varchar, types.T_int64, types.T_int64, types.T_varchar},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_varchar.ToType()
+					return derivedStringReturnType(parameters, 0, types.T_varchar)
 				},
 				newOp: func() executeLogicOfOverload {
 					return Insert
@@ -2642,7 +2742,7 @@ var supportedStringBuiltIns = []FuncNew{
 				overloadId: 1,
 				args:       []types.T{types.T_char, types.T_int64, types.T_int64, types.T_char},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_varchar.ToType()
+					return derivedStringReturnType(parameters, 0, types.T_varchar)
 				},
 				newOp: func() executeLogicOfOverload {
 					return Insert
@@ -2766,7 +2866,7 @@ var supportedStringBuiltIns = []FuncNew{
 				overloadId: 0,
 				args:       []types.T{types.T_varchar, types.T_varchar, types.T_varchar},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_varchar.ToType()
+					return derivedStringReturnType(parameters, 0, types.T_varchar)
 				},
 				newOp: func() executeLogicOfOverload {
 					return newOpBuiltInRegexp().builtInRegexpReplace
@@ -2776,7 +2876,7 @@ var supportedStringBuiltIns = []FuncNew{
 				overloadId: 1,
 				args:       []types.T{types.T_varchar, types.T_varchar, types.T_varchar, types.T_int64},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_varchar.ToType()
+					return derivedStringReturnType(parameters, 0, types.T_varchar)
 				},
 				newOp: func() executeLogicOfOverload {
 					return newOpBuiltInRegexp().builtInRegexpReplace
@@ -2786,7 +2886,7 @@ var supportedStringBuiltIns = []FuncNew{
 				overloadId: 2,
 				args:       []types.T{types.T_varchar, types.T_varchar, types.T_varchar, types.T_int64, types.T_int64},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_varchar.ToType()
+					return derivedStringReturnType(parameters, 0, types.T_varchar)
 				},
 				newOp: func() executeLogicOfOverload {
 					return newOpBuiltInRegexp().builtInRegexpReplace
@@ -2807,7 +2907,7 @@ var supportedStringBuiltIns = []FuncNew{
 				overloadId: 0,
 				args:       []types.T{types.T_varchar, types.T_varchar},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_varchar.ToType()
+					return derivedStringReturnType(parameters, 0, types.T_varchar)
 				},
 				newOp: func() executeLogicOfOverload {
 					return newOpBuiltInRegexp().builtInRegexpSubstr
@@ -2818,7 +2918,7 @@ var supportedStringBuiltIns = []FuncNew{
 				overloadId: 1,
 				args:       []types.T{types.T_varchar, types.T_varchar, types.T_int64},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_varchar.ToType()
+					return derivedStringReturnType(parameters, 0, types.T_varchar)
 				},
 				newOp: func() executeLogicOfOverload {
 					return newOpBuiltInRegexp().builtInRegexpSubstr
@@ -2829,7 +2929,7 @@ var supportedStringBuiltIns = []FuncNew{
 				overloadId: 2,
 				args:       []types.T{types.T_varchar, types.T_varchar, types.T_int64, types.T_int64},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_varchar.ToType()
+					return derivedStringReturnType(parameters, 0, types.T_varchar)
 				},
 				newOp: func() executeLogicOfOverload {
 					return newOpBuiltInRegexp().builtInRegexpSubstr
@@ -2850,7 +2950,7 @@ var supportedStringBuiltIns = []FuncNew{
 				overloadId: 0,
 				args:       []types.T{types.T_varchar, types.T_int64},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_varchar.ToType()
+					return derivedStringReturnType(parameters, 0, types.T_varchar)
 				},
 				newOp: func() executeLogicOfOverload {
 					return builtInRepeat
@@ -2891,7 +2991,7 @@ var supportedStringBuiltIns = []FuncNew{
 				overloadId: 0,
 				args:       []types.T{types.T_char},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_varchar.ToType()
+					return derivedStringReturnType(parameters, 0, types.T_varchar)
 				},
 				newOp: func() executeLogicOfOverload {
 					return Reverse
@@ -2901,7 +3001,7 @@ var supportedStringBuiltIns = []FuncNew{
 				overloadId: 1,
 				args:       []types.T{types.T_varchar},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_varchar.ToType()
+					return derivedStringReturnType(parameters, 0, types.T_varchar)
 				},
 				newOp: func() executeLogicOfOverload {
 					return Reverse
@@ -2932,7 +3032,7 @@ var supportedStringBuiltIns = []FuncNew{
 				overloadId: 0,
 				args:       []types.T{types.T_varchar, types.T_int64, types.T_varchar},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_varchar.ToType()
+					return derivedStringReturnType(parameters, 0, types.T_varchar)
 				},
 				newOp: func() executeLogicOfOverload {
 					return builtInRpad
@@ -2973,7 +3073,7 @@ var supportedStringBuiltIns = []FuncNew{
 				overloadId: 0,
 				args:       []types.T{types.T_char},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_varchar.ToType()
+					return derivedStringReturnType(parameters, 0, types.T_varchar)
 				},
 				newOp: func() executeLogicOfOverload {
 					return Rtrim
@@ -3007,9 +3107,7 @@ var supportedStringBuiltIns = []FuncNew{
 		Overloads: []overload{
 			{
 				overloadId: 0,
-				retType: func(parameters []types.Type) types.Type {
-					return types.T_varchar.ToType()
-				},
+				retType:    serializedTupleReturnType,
 				newOpWithFree: func() (executeLogicOfOverload, executeResetOfOverload, executeFreeOfOverload, executeRetainedBytesOfOverload) {
 					opSerial := newOpSerial()
 					return opSerial.BuiltInSerial, opSerial.Reset, opSerial.Close, opSerial.RetainedBytes
@@ -3033,9 +3131,7 @@ var supportedStringBuiltIns = []FuncNew{
 		Overloads: []overload{
 			{
 				overloadId: 0,
-				retType: func(parameters []types.Type) types.Type {
-					return types.T_varchar.ToType()
-				},
+				retType:    serializedTupleReturnType,
 				newOpWithFree: func() (executeLogicOfOverload, executeResetOfOverload, executeFreeOfOverload, executeRetainedBytesOfOverload) {
 					opSerial := newOpSerial()
 					return opSerial.BuiltInSerialFull, opSerial.Reset, opSerial.Close, opSerial.RetainedBytes
@@ -3114,7 +3210,7 @@ var supportedStringBuiltIns = []FuncNew{
 				overloadId: 0,
 				args:       []types.T{types.T_varchar, types.T_varchar, types.T_uint32},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_varchar.ToType()
+					return derivedStringReturnType(parameters, 0, types.T_varchar)
 				},
 				newOp: func() executeLogicOfOverload {
 					return SplitPart
@@ -3736,7 +3832,7 @@ var supportedStringBuiltIns = []FuncNew{
 				overloadId: 0,
 				args:       []types.T{types.T_varchar, types.T_int64},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_varchar.ToType()
+					return derivedStringReturnType(parameters, 0, types.T_varchar)
 				},
 				newOp: func() executeLogicOfOverload {
 					return SubStringWith2Args
@@ -3746,7 +3842,7 @@ var supportedStringBuiltIns = []FuncNew{
 				overloadId: 1,
 				args:       []types.T{types.T_char, types.T_int64},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_char.ToType()
+					return derivedStringReturnType(parameters, 0, types.T_char)
 				},
 				newOp: func() executeLogicOfOverload {
 					return SubStringWith2Args
@@ -3756,7 +3852,7 @@ var supportedStringBuiltIns = []FuncNew{
 				overloadId: 2,
 				args:       []types.T{types.T_varchar, types.T_int64, types.T_int64},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_varchar.ToType()
+					return derivedStringReturnType(parameters, 0, types.T_varchar)
 				},
 				newOp: func() executeLogicOfOverload {
 					return SubStringWith3Args
@@ -3766,7 +3862,7 @@ var supportedStringBuiltIns = []FuncNew{
 				overloadId: 3,
 				args:       []types.T{types.T_char, types.T_int64, types.T_int64},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_char.ToType()
+					return derivedStringReturnType(parameters, 0, types.T_char)
 				},
 				newOp: func() executeLogicOfOverload {
 					return SubStringWith3Args
@@ -3786,7 +3882,7 @@ var supportedStringBuiltIns = []FuncNew{
 				overloadId: 5,
 				args:       []types.T{types.T_text, types.T_int64, types.T_int64},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_text.ToType()
+					return derivedStringReturnType(parameters, 0, types.T_text)
 				},
 				newOp: func() executeLogicOfOverload {
 					return SubStringWith3Args
@@ -3857,7 +3953,7 @@ var supportedStringBuiltIns = []FuncNew{
 				overloadId: 0,
 				args:       []types.T{types.T_varchar, types.T_varchar, types.T_float64},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_varchar.ToType()
+					return derivedStringReturnType(parameters, 0, types.T_varchar)
 				},
 				newOp: func() executeLogicOfOverload {
 					return SubStrIndex[float64]
@@ -3867,7 +3963,7 @@ var supportedStringBuiltIns = []FuncNew{
 				overloadId: 1,
 				args:       []types.T{types.T_varchar, types.T_varchar, types.T_uint64},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_varchar.ToType()
+					return derivedStringReturnType(parameters, 0, types.T_varchar)
 				},
 				newOp: func() executeLogicOfOverload {
 					return SubStrIndex[uint64]
@@ -3877,7 +3973,7 @@ var supportedStringBuiltIns = []FuncNew{
 				overloadId: 1,
 				args:       []types.T{types.T_varchar, types.T_varchar, types.T_int64},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_varchar.ToType()
+					return derivedStringReturnType(parameters, 0, types.T_varchar)
 				},
 				newOp: func() executeLogicOfOverload {
 					return SubStrIndex[int64]
@@ -4122,7 +4218,7 @@ var supportedStringBuiltIns = []FuncNew{
 				overloadId: 0,
 				args:       []types.T{types.T_varchar, types.T_varchar, types.T_varchar},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_varchar.ToType()
+					return derivedStringReturnType(parameters, 2, types.T_varchar)
 				},
 				newOp: func() executeLogicOfOverload {
 					return Trim
@@ -4304,7 +4400,7 @@ var supportedStringBuiltIns = []FuncNew{
 				overloadId: 0,
 				args:       []types.T{types.T_varchar},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_varchar.ToType()
+					return derivedStringReturnType(parameters, 0, types.T_varchar)
 				},
 				newOp: func() executeLogicOfOverload {
 					return Quote
@@ -4314,7 +4410,7 @@ var supportedStringBuiltIns = []FuncNew{
 				overloadId: 1,
 				args:       []types.T{types.T_char},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_varchar.ToType()
+					return derivedStringReturnType(parameters, 0, types.T_varchar)
 				},
 				newOp: func() executeLogicOfOverload {
 					return Quote
@@ -4324,7 +4420,7 @@ var supportedStringBuiltIns = []FuncNew{
 				overloadId: 2,
 				args:       []types.T{types.T_text},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_varchar.ToType()
+					return derivedStringReturnType(parameters, 0, types.T_varchar)
 				},
 				newOp: func() executeLogicOfOverload {
 					return Quote
@@ -13180,9 +13276,7 @@ var supportedOthersBuiltIns = []FuncNew{
 		Overloads: []overload{
 			{
 				overloadId: 0,
-				retType: func(parameters []types.Type) types.Type {
-					return parameters[1]
-				},
+				retType:    iffReturnType,
 				newOp: func() executeLogicOfOverload {
 					return iffFn
 				},

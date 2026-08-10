@@ -468,6 +468,22 @@ func TestIffCheck_PreservesSupportedConditionTypes(t *testing.T) {
 	}
 }
 
+func TestIffCheckPreservesMatchingTextCollation(t *testing.T) {
+	for _, charset := range []uint8{
+		types.CharsetLegacy,
+		types.CharsetUTF8MB4Bin,
+		types.CharsetUTF8,
+	} {
+		textType := types.NewWithCharset(types.T_varchar, 32, 0, charset)
+		result := iffCheck(nil, []types.Type{
+			types.T_bool.ToType(),
+			textType,
+			textType,
+		})
+		require.Equal(t, succeedMatched, result.status)
+	}
+}
+
 func TestIffCheck_PreservesVectorResultTypes(t *testing.T) {
 	for _, typ := range []types.Type{
 		types.New(types.T_array_float32, 3, 0),
@@ -1325,6 +1341,8 @@ func Test_CaseCheck_TextStringBranchesStayText(t *testing.T) {
 	require.Equal(t, types.T_bool, result.finalType[0].Oid)
 	require.Equal(t, types.T_text, result.finalType[1].Oid)
 	require.Equal(t, types.T_text, result.finalType[2].Oid)
+	require.Zero(t, result.finalType[1].Width)
+	require.Zero(t, result.finalType[2].Width)
 }
 
 func Test_IffCheck_TextStringBranchesStayText(t *testing.T) {
@@ -1339,6 +1357,8 @@ func Test_IffCheck_TextStringBranchesStayText(t *testing.T) {
 	require.Equal(t, types.T_bool, result.finalType[0].Oid)
 	require.Equal(t, types.T_text, result.finalType[1].Oid)
 	require.Equal(t, types.T_text, result.finalType[2].Oid)
+	require.Zero(t, result.finalType[1].Width)
+	require.Zero(t, result.finalType[2].Width)
 }
 
 func Test_CoalesceCheck_MixedStringNumeric(t *testing.T) {
@@ -1379,6 +1399,7 @@ func Test_CoalesceCheck_TextStringBranchesStayText(t *testing.T) {
 	require.Len(t, result.finalType, len(inputs))
 	for _, typ := range result.finalType {
 		require.Equal(t, types.T_text, typ.Oid)
+		require.Zero(t, typ.Width)
 	}
 }
 

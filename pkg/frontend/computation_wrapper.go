@@ -692,9 +692,22 @@ func initExecuteStmtParamWithResolver(
 	return initExecuteStmtParamWithResolverInSession(execCtx, ses, ses, cwft, execPlan, stmtName, resolve)
 }
 
-func binaryProtocolPrepareParamKind(mysqlType defines.MysqlType) vector.PrepareParamKind {
+func binaryProtocolPrepareParamKind(
+	mysqlType defines.MysqlType,
+	isUnsigned bool,
+	value []byte,
+) vector.PrepareParamKind {
 	switch mysqlType {
-	case defines.MYSQL_TYPE_TINY, defines.MYSQL_TYPE_SHORT, defines.MYSQL_TYPE_INT24,
+	case defines.MYSQL_TYPE_TINY:
+		// The binary protocol has no usable Boolean parameter type. Go's
+		// database/sql MySQL driver sends bool values as signed TINY 0/1, while
+		// other clients can use TINY for integers. Preserve unsigned and other
+		// TINY values as integers and restore the driver's bool values.
+		if !isUnsigned && (bytes.Equal(value, []byte("0")) || bytes.Equal(value, []byte("1"))) {
+			return vector.PrepareParamBoolean
+		}
+		return vector.PrepareParamInteger
+	case defines.MYSQL_TYPE_SHORT, defines.MYSQL_TYPE_INT24,
 		defines.MYSQL_TYPE_LONG, defines.MYSQL_TYPE_LONGLONG, defines.MYSQL_TYPE_BIT,
 		defines.MYSQL_TYPE_YEAR:
 		return vector.PrepareParamInteger
@@ -896,7 +909,9 @@ func initExecuteStmtParamWithResolverInSession(
 		var kinds []vector.PrepareParamKind
 		for i := 0; i < paramCount && i*2+1 < len(prepareStmt.ParamTypes); i++ {
 			mysqlType := defines.MysqlType(prepareStmt.ParamTypes[i*2])
-			kind := binaryProtocolPrepareParamKind(mysqlType)
+			isUnsigned := prepareStmt.ParamTypes[i*2+1]&0x80 != 0
+			kind := binaryProtocolPrepareParamKind(
+				mysqlType, isUnsigned, prepareStmt.params.GetRawBytesAt(i))
 			if kind != vector.PrepareParamNone {
 				if kinds == nil {
 					kinds = make([]vector.PrepareParamKind, paramCount)

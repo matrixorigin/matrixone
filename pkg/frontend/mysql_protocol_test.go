@@ -3236,6 +3236,113 @@ func Test_resultset(t *testing.T) {
 	})
 }
 
+func TestMysqlProtocolWriteUsesLogicalBatchRowCount(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		cmd  CommandType
+	}{
+		{name: "text protocol", cmd: COM_QUERY},
+		{name: "binary protocol", cmd: COM_STMT_EXECUTE},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			sv, err := getSystemVariables("test/system_vars_config.toml")
+			require.NoError(t, err)
+			pu := config.NewParameterUnit(sv, nil, nil, nil)
+			pu.SV.SkipCheckUser = true
+			pu.SV.KillRountinesInterval = 0
+			setSessionAlloc("", NewLeakCheckAllocator())
+			setPu("", pu)
+
+			ioses, err := NewIOSession(&testConn{}, pu, "")
+			require.NoError(t, err)
+			proto := NewMysqlClientProtocol("", 0, ioses, 1024, sv)
+			t.Cleanup(proto.Close)
+
+			ses := NewSession(context.Background(), "", proto, nil)
+			ses.SetCmd(test.cmd)
+			proto.ses = ses
+			mrs := &MysqlResultSet{}
+			for _, name := range []string{"projection_value", "total"} {
+				column := &MysqlColumn{}
+				column.SetName(name)
+				column.SetColumnType(defines.MYSQL_TYPE_LONGLONG)
+				mrs.AddColumn(column)
+			}
+			ses.SetMysqlResultSet(mrs)
+
+			mp := mpool.MustNewZero()
+			constant, err := vector.NewConstFixed(
+				types.T_int64.ToType(), int64(7), 1, mp,
+			)
+			require.NoError(t, err)
+			totals := vector.NewVec(types.T_int64.ToType())
+			for _, value := range []int64{10, 20, 30} {
+				require.NoError(t, vector.AppendFixed(totals, value, false, mp))
+			}
+			bat := batch.NewWithSize(2)
+			bat.SetVector(0, constant)
+			bat.SetVector(1, totals)
+			bat.SetRowCount(3)
+			t.Cleanup(func() {
+				bat.Clean(mp)
+				require.Zero(t, mp.CurrNB())
+			})
+
+			execCtx := &ExecCtx{
+				reqCtx: context.Background(),
+				ses:    ses,
+			}
+			err = getDataFromPipeline(ses, execCtx, bat, nil)
+			require.NoError(t, err)
+			require.Equal(t, bat.RowCount(), proto.tcpConn.packetInBuf)
+			require.Equal(t, int64(bat.RowCount()), ses.sentRows.Load())
+		})
+	}
+}
+
+func TestMysqlProtocolWriteSendsLogicalConstNullRow(t *testing.T) {
+	sv, err := getSystemVariables("test/system_vars_config.toml")
+	require.NoError(t, err)
+	pu := config.NewParameterUnit(sv, nil, nil, nil)
+	pu.SV.SkipCheckUser = true
+	pu.SV.KillRountinesInterval = 0
+	setSessionAlloc("", NewLeakCheckAllocator())
+	setPu("", pu)
+
+	ioses, err := NewIOSession(&testConn{}, pu, "")
+	require.NoError(t, err)
+	proto := NewMysqlClientProtocol("", 0, ioses, 1024, sv)
+	t.Cleanup(proto.Close)
+
+	ses := NewSession(context.Background(), "", proto, nil)
+	ses.SetCmd(COM_QUERY)
+	proto.ses = ses
+	mrs := &MysqlResultSet{}
+	column := &MysqlColumn{}
+	column.SetName("null_input")
+	column.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+	mrs.AddColumn(column)
+	ses.SetMysqlResultSet(mrs)
+
+	mp := mpool.MustNewZero()
+	bat := batch.NewWithSize(1)
+	bat.SetVector(0, vector.NewConstNull(types.T_varchar.ToType(), 0, mp))
+	bat.SetRowCount(1)
+	t.Cleanup(func() {
+		bat.Clean(mp)
+		require.Zero(t, mp.CurrNB())
+	})
+
+	execCtx := &ExecCtx{
+		reqCtx: context.Background(),
+		ses:    ses,
+	}
+	err = getDataFromPipeline(ses, execCtx, bat, nil)
+	require.NoError(t, err)
+	require.Equal(t, 1, proto.tcpConn.packetInBuf)
+	require.Equal(t, int64(1), ses.sentRows.Load())
+}
+
 func TestSendResultSetPropagatesRowEncodingErrors(t *testing.T) {
 	sv, err := getSystemVariables("test/system_vars_config.toml")
 	require.NoError(t, err)

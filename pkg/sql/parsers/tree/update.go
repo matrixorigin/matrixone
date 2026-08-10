@@ -263,6 +263,7 @@ type HivePartColType struct {
 	Width       int32
 	Scale       int32
 	Enumvalues  string
+	Charset     uint32
 	NullAbility bool
 }
 

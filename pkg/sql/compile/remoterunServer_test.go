@@ -248,11 +248,12 @@ func TestNewCompile_CreatesCorrectStructure(t *testing.T) {
 			txnClient:              txnClient,
 			txnOperator:            txnOperator,
 			prepareParams: pipeline.PrepareParamInfo{
-				Length: 2,
-				Data:   append([]byte(nil), params.GetData()...),
-				Area:   append([]byte(nil), params.GetArea()...),
-				Nulls:  []bool{false, false},
-				IsBin:  []bool{true, false, false, false, false, true, false, false},
+				Length:         2,
+				Data:           append([]byte(nil), params.GetData()...),
+				Area:           append([]byte(nil), params.GetArea()...),
+				Nulls:          []bool{false, false},
+				IsBin:          []bool{true, false, false, false, false, true, false, false},
+				IsBinaryString: []bool{true, false},
 			},
 		},
 		messageAcquirer: func() morpc.Message {
@@ -272,6 +273,8 @@ func TestNewCompile_CreatesCorrectStructure(t *testing.T) {
 	require.False(t, compile.proc.GetPrepareParamIsBin(1))
 	require.Equal(t, vector.PrepareParamNone, compile.proc.GetPrepareParamKind(0))
 	require.Equal(t, vector.PrepareParamFloat, compile.proc.GetPrepareParamKind(1))
+	require.True(t, compile.proc.GetPrepareParamIsBinaryString(0))
+	require.False(t, compile.proc.GetPrepareParamIsBinaryString(1))
 	require.Equal(t, int64(42), compile.proc.GetAffectedRows())
 	require.True(t, compile.proc.GetStmtProfile().GetStatementIgnore())
 	planSnapshot, ok := compile.proc.GetPlanSnapshotTS()
