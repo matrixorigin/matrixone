@@ -6513,6 +6513,214 @@ func TestGetIndexForNonEquiCond_DetectsPairedRangeOnIndexColumn(t *testing.T) {
 	require.ElementsMatch(t, []int32{0, 1}, filterIdx)
 }
 
+func TestGetIndexForNonEquiCondSkipsNonEqualityOnDeclaredPrefix(t *testing.T) {
+	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true), false, true)
+	bindTag := builder.genNewBindTag()
+	prefixParams := `{"prefix_lengths":"name:3"}`
+	makeIndex := func(unique bool, parts []string, params string) *planpb.IndexDef {
+		return &planpb.IndexDef{
+			IndexName:       "idx_name",
+			Parts:           parts,
+			Unique:          unique,
+			IndexTableName:  "__mo_index_secondary_idx_name",
+			IndexAlgoParams: params,
+		}
+	}
+	makeOr := func(args ...*planpb.Expr) *planpb.Expr {
+		return &planpb.Expr{
+			Expr: &planpb.Expr_F{F: &planpb.Function{
+				Func: &planpb.ObjectRef{ObjName: "or"},
+				Args: args,
+			}},
+		}
+	}
+	makeInRange := func() *planpb.Expr {
+		expr := makeStringBetweenFilterExpr(bindTag, 1, "abcX", "abdA")
+		expr.GetF().Func.ObjName = "in_range"
+		return expr
+	}
+
+	tests := []struct {
+		name        string
+		idxDef      *planpb.IndexDef
+		filters     []*planpb.Expr
+		wantIdx     int
+		wantFilters []int32
+	}{
+		{
+			name:    "non-unique prefix between",
+			idxDef:  makeIndex(false, []string{"name", catalog.FakePrimaryKeyColName}, prefixParams),
+			filters: []*planpb.Expr{makeStringBetweenFilterExpr(bindTag, 1, "abcX", "abdA")},
+			wantIdx: -1,
+		},
+		{
+			name:    "unique prefix between",
+			idxDef:  makeIndex(true, []string{"name"}, prefixParams),
+			filters: []*planpb.Expr{makeStringBetweenFilterExpr(bindTag, 1, "abcX", "abdA")},
+			wantIdx: -1,
+		},
+		{
+			name:    "prefix single lower bound",
+			idxDef:  makeIndex(false, []string{"name", catalog.FakePrimaryKeyColName}, prefixParams),
+			filters: []*planpb.Expr{makeRangeFilterExpr(bindTag, 1, ">=", 99)},
+			wantIdx: -1,
+		},
+		{
+			name:   "prefix paired range",
+			idxDef: makeIndex(false, []string{"name", catalog.FakePrimaryKeyColName}, prefixParams),
+			filters: []*planpb.Expr{
+				makeRangeFilterExpr(bindTag, 1, ">=", 99),
+				makeRangeFilterExpr(bindTag, 1, "<=", 299),
+			},
+			wantIdx: -1,
+		},
+		{
+			name:    "prefix in range",
+			idxDef:  makeIndex(false, []string{"name", catalog.FakePrimaryKeyColName}, prefixParams),
+			filters: []*planpb.Expr{makeInRange()},
+			wantIdx: -1,
+		},
+		{
+			name:   "prefix or containing range",
+			idxDef: makeIndex(false, []string{"name", catalog.FakePrimaryKeyColName}, prefixParams),
+			filters: []*planpb.Expr{makeOr(
+				makeStringBetweenFilterExpr(bindTag, 1, "abcX", "abdA"),
+				makeStringInFilterExpr(bindTag, 1, "abe"),
+			)},
+			wantIdx: -1,
+		},
+		{
+			name:    "prefix in is rejected with other non equality predicates",
+			idxDef:  makeIndex(false, []string{"name", catalog.FakePrimaryKeyColName}, prefixParams),
+			filters: []*planpb.Expr{makeStringInFilterExpr(bindTag, 1, "abcX", "abdA")},
+			wantIdx: -1,
+		},
+		{
+			name:        "complete index between remains eligible",
+			idxDef:      makeIndex(false, []string{"name", catalog.FakePrimaryKeyColName}, ""),
+			filters:     []*planpb.Expr{makeStringBetweenFilterExpr(bindTag, 1, "abcX", "abdA")},
+			wantIdx:     0,
+			wantFilters: []int32{0},
+		},
+		{
+			name:    "non-leading declared prefix also rejects range",
+			idxDef:  makeIndex(false, []string{"name", "suffix", catalog.FakePrimaryKeyColName}, `{"prefix_lengths":"suffix:3"}`),
+			filters: []*planpb.Expr{makeStringBetweenFilterExpr(bindTag, 1, "abcX", "abdA")},
+			wantIdx: -1,
+		},
+		{
+			name:    "invalid prefix metadata fails closed for range",
+			idxDef:  makeIndex(false, []string{"name", catalog.FakePrimaryKeyColName}, "{bad json"),
+			filters: []*planpb.Expr{makeStringBetweenFilterExpr(bindTag, 1, "abcX", "abdA")},
+			wantIdx: -1,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			node := &planpb.Node{
+				BindingTags: []int32{bindTag},
+				TableDef: &planpb.TableDef{
+					Name2ColIndex: map[string]int32{
+						catalog.FakePrimaryKeyColName: 0,
+						"name":                        1,
+						"suffix":                      2,
+					},
+					Cols: []*planpb.ColDef{
+						{Name: catalog.FakePrimaryKeyColName, Typ: planpb.Type{Id: int32(types.T_uint64)}},
+						{Name: "name", Typ: planpb.Type{Id: int32(types.T_varchar)}},
+						{Name: "suffix", Typ: planpb.Type{Id: int32(types.T_varchar)}},
+					},
+					Pkey:    &planpb.PrimaryKeyDef{PkeyColName: catalog.FakePrimaryKeyColName},
+					Indexes: []*planpb.IndexDef{tt.idxDef},
+				},
+				FilterList: tt.filters,
+			}
+
+			idxPos, filterIdx := builder.getIndexForNonEquiCond([]*planpb.IndexDef{tt.idxDef}, node)
+			require.Equal(t, tt.wantIdx, idxPos)
+			require.ElementsMatch(t, tt.wantFilters, filterIdx)
+		})
+	}
+}
+
+func TestGetIndexForNonEquiCondUsesCompleteRangeIndexAlternative(t *testing.T) {
+	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true), false, true)
+	bindTag := builder.genNewBindTag()
+	prefixIdx := &planpb.IndexDef{
+		IndexName:       "idx_name_prefix",
+		Parts:           []string{"name", catalog.FakePrimaryKeyColName},
+		IndexTableName:  "__mo_index_secondary_idx_name_prefix",
+		IndexAlgoParams: `{"prefix_lengths":"name:3"}`,
+	}
+	completeIdx := &planpb.IndexDef{
+		IndexName:      "idx_name_complete",
+		Parts:          []string{"name", catalog.FakePrimaryKeyColName},
+		IndexTableName: "__mo_index_secondary_idx_name_complete",
+	}
+
+	for _, tt := range []struct {
+		name    string
+		indexes []*planpb.IndexDef
+		wantIdx int
+	}{
+		{name: "prefix then complete", indexes: []*planpb.IndexDef{prefixIdx, completeIdx}, wantIdx: 1},
+		{name: "complete then prefix", indexes: []*planpb.IndexDef{completeIdx, prefixIdx}, wantIdx: 0},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			node := &planpb.Node{
+				TableDef: &planpb.TableDef{
+					Name2ColIndex: map[string]int32{
+						catalog.FakePrimaryKeyColName: 0,
+						"name":                        1,
+					},
+					Cols: []*planpb.ColDef{
+						{Name: catalog.FakePrimaryKeyColName, Typ: planpb.Type{Id: int32(types.T_uint64)}},
+						{Name: "name", Typ: planpb.Type{Id: int32(types.T_varchar)}},
+					},
+					Indexes: tt.indexes,
+				},
+				FilterList: []*planpb.Expr{
+					makeStringBetweenFilterExpr(bindTag, 1, "abcX", "abdA"),
+				},
+			}
+
+			idxPos, filterIdx := builder.getIndexForNonEquiCond(tt.indexes, node)
+			require.Equal(t, tt.wantIdx, idxPos)
+			require.Equal(t, []int32{0}, filterIdx)
+		})
+	}
+}
+
+func TestScopedForceHintsRejectLossyPrefixIndex(t *testing.T) {
+	tests := []struct {
+		name string
+		sql  string
+	}{
+		{
+			name: "order by",
+			sql:  "select id from index_hint_t force index for order by(idx_a) where a between 'abcX' and 'abdA' order by a",
+		},
+		{
+			name: "group by",
+			sql:  "select a, count(*) from index_hint_t force index for group by(idx_a) where a between 'abcX' and 'abdA' group by a",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			mock := NewMockOptimizer(true)
+			addIndexHintChoiceTableForTest(mock)
+			tableDef := mock.ctxt.tables["index_hint_t"]
+			tableDef.Cols[1].Typ = planpb.Type{Id: int32(types.T_varchar), Width: 32}
+			tableDef.Indexes[0].IndexAlgoParams = `{"prefix_lengths":"a:3"}`
+
+			queryPlan, err := runOneStmt(mock, t, test.sql)
+			require.NoError(t, err)
+			require.Empty(t, findFirstIndexScanName(queryPlan))
+		})
+	}
+}
 func TestGetIndexForNonEquiCond_SkipsLargePairedRangeByStats(t *testing.T) {
 	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true), false, true)
 	bindTag := builder.genNewBindTag()
