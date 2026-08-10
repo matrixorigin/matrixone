@@ -44,6 +44,104 @@ func TestGenVectorByVarValueTypedJSONAndUUID(t *testing.T) {
 	require.Equal(t, wantUUID, vector.MustFixedColNoTypeCheck[types.Uuid](uuidVec)[0])
 }
 
+func TestGenVectorByVarValueTypedArrays(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	testCases := []struct {
+		name          string
+		typ           types.Type
+		value         any
+		wantRowString string
+		check         func(t *testing.T, vec *vector.Vector)
+	}{
+		{
+			name:          "vecf32",
+			typ:           types.New(types.T_array_float32, 3, 0),
+			value:         []float32{1, 2, 3},
+			wantRowString: "[1, 2, 3]",
+			check: func(t *testing.T, vec *vector.Vector) {
+				require.Equal(t, []float32{1, 2, 3}, vector.GetArrayAt[float32](vec, 0))
+			},
+		},
+		{
+			name:          "vecf64",
+			typ:           types.New(types.T_array_float64, 3, 0),
+			value:         []float64{1, 2, 3},
+			wantRowString: "[1, 2, 3]",
+			check: func(t *testing.T, vec *vector.Vector) {
+				require.Equal(t, []float64{1, 2, 3}, vector.GetArrayAt[float64](vec, 0))
+			},
+		},
+		{
+			name:          "vecbf16",
+			typ:           types.New(types.T_array_bf16, 3, 0),
+			value:         types.Float32ToBF16Slice([]float32{1, 2, 3}),
+			wantRowString: "[1, 2, 3]",
+			check: func(t *testing.T, vec *vector.Vector) {
+				require.Equal(t, []float32{1, 2, 3}, types.BF16ToFloat32Slice(vector.GetArrayAt[types.BF16](vec, 0)))
+			},
+		},
+		{
+			name:          "vecf16",
+			typ:           types.New(types.T_array_float16, 3, 0),
+			value:         types.Float32ToFloat16Slice([]float32{1, 2, 3}),
+			wantRowString: "[1, 2, 3]",
+			check: func(t *testing.T, vec *vector.Vector) {
+				require.Equal(t, []float32{1, 2, 3}, types.Float16ToFloat32Slice(vector.GetArrayAt[types.Float16](vec, 0)))
+			},
+		},
+		{
+			name:          "vecint8",
+			typ:           types.New(types.T_array_int8, 3, 0),
+			value:         []int8{1, 2, 3},
+			wantRowString: "[1, 2, 3]",
+			check: func(t *testing.T, vec *vector.Vector) {
+				require.Equal(t, []int8{1, 2, 3}, vector.GetArrayAt[int8](vec, 0))
+			},
+		},
+		{
+			name:          "vecuint8",
+			typ:           types.New(types.T_array_uint8, 3, 0),
+			value:         []uint8{1, 128, 255},
+			wantRowString: "[1, 128, 255]",
+			check: func(t *testing.T, vec *vector.Vector) {
+				require.Equal(t, []uint8{1, 128, 255}, vector.GetArrayAt[uint8](vec, 0))
+			},
+		},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			vec, err := GenVectorByVarValue(proc, testCase.typ, testCase.value)
+			require.NoError(t, err)
+			t.Cleanup(func() { vec.Free(proc.Mp()) })
+			testCase.check(t, vec)
+			require.Equal(t, testCase.wantRowString, vec.RowToString(0))
+		})
+	}
+}
+
+func TestGenVectorByVarValueTimestampUsesSessionTimeZone(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	sessionTZ := time.FixedZone("UTC+8", 8*60*60)
+	proc.Base.SessionInfo.TimeZone = sessionTZ
+
+	typ := types.T_timestamp.ToType()
+	vec, err := GenVectorByVarValue(proc, typ, "2026-01-01 00:00:00")
+	require.NoError(t, err)
+	t.Cleanup(func() { vec.Free(proc.Mp()) })
+
+	got := vector.MustFixedColNoTypeCheck[types.Timestamp](vec)[0]
+	require.Equal(t, "2026-01-01 00:00:00", got.String2(sessionTZ, typ.Scale))
+	require.Equal(t, "2025-12-31 16:00:00", got.String2(time.UTC, typ.Scale))
+
+	proc.Base.SessionInfo.TimeZone = time.UTC
+	utcVec, err := GenVectorByVarValue(proc, typ, "2026-01-01 00:00:00")
+	require.NoError(t, err)
+	t.Cleanup(func() { utcVec.Free(proc.Mp()) })
+	utcGot := vector.MustFixedColNoTypeCheck[types.Timestamp](utcVec)[0]
+	require.Equal(t, "2026-01-01 00:00:00", utcGot.String2(time.UTC, typ.Scale))
+}
+
 func TestHexToInt(t *testing.T) {
 	var val uint64
 	var err error

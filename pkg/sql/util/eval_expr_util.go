@@ -126,6 +126,16 @@ func GenVectorByVarValueWithAllocation(
 		}
 		return vector.NewConstNullWithAllocation(typ, 1, selection)
 	}
+	if typ.Oid.IsArrayRelate() {
+		value, err := arrayUserVariableValueToBytes(typ, val)
+		if err != nil {
+			return nil, err
+		}
+		if selection == nil {
+			return vector.NewConstBytes(typ, value, 1, proc.Mp())
+		}
+		return vector.NewConstBytesWithAllocation(typ, value, 1, proc.Mp(), selection)
+	}
 	strVal := getVal(val)
 	// JSON values are stored in the vector's binary JSON representation rather
 	// than as their display string.  Route them through the typed setter just
@@ -160,6 +170,53 @@ func GenVectorByVarValueWithAllocation(
 	return vector.NewConstBytesWithAllocation(
 		typ, []byte(strVal), 1, proc.Mp(), selection,
 	)
+}
+
+func arrayUserVariableValueToBytes(typ types.Type, val any) ([]byte, error) {
+	switch typ.Oid {
+	case types.T_array_float32:
+		return arrayUserVariableTypedValueToBytes[float32](typ, val)
+	case types.T_array_float64:
+		return arrayUserVariableTypedValueToBytes[float64](typ, val)
+	case types.T_array_bf16:
+		return arrayUserVariableTypedValueToBytes[types.BF16](typ, val)
+	case types.T_array_float16:
+		return arrayUserVariableTypedValueToBytes[types.Float16](typ, val)
+	case types.T_array_int8:
+		return arrayUserVariableTypedValueToBytes[int8](typ, val)
+	case types.T_array_uint8:
+		return arrayUserVariableTypedValueToBytes[uint8](typ, val)
+	default:
+		return nil, moerr.NewInternalErrorNoCtxf("unsupported array type %s", typ.Oid.String())
+	}
+}
+
+func arrayUserVariableTypedValueToBytes[T types.ArrayElement](typ types.Type, val any) ([]byte, error) {
+	var value []byte
+	switch v := val.(type) {
+	case []T:
+		value = types.ArrayToBytes[T](v)
+	case []byte:
+		value = v
+	case string:
+		var err error
+		value, err = types.StringToArrayToBytes[T](v)
+		if err != nil {
+			return nil, err
+		}
+	default:
+		return nil, moerr.NewInvalidArgNoCtx("array user variable value", fmt.Sprintf("%T", val))
+	}
+	if typ.Width > 0 {
+		size := typ.GetArrayElementSize()
+		if size <= 0 || len(value)%size != 0 {
+			return nil, moerr.NewArrayDefMismatchNoCtx(int(typ.Width), len(value))
+		}
+		if got := len(value) / size; got != int(typ.Width) {
+			return nil, moerr.NewArrayDefMismatchNoCtx(int(typ.Width), got)
+		}
+	}
+	return value, nil
 }
 
 func AppendAnyToStringVector(proc *process.Process, val any, vec *vector.Vector) error {
@@ -295,6 +352,30 @@ func SetBytesToAnyVector(ctx context.Context, val string, row int,
 			return err
 		}
 		return vector.SetBytesAt(vec, row, v, proc.Mp())
+	case types.T_array_bf16:
+		v, err := types.StringToArrayToBytes[types.BF16](val)
+		if err != nil {
+			return err
+		}
+		return vector.SetBytesAt(vec, row, v, proc.Mp())
+	case types.T_array_float16:
+		v, err := types.StringToArrayToBytes[types.Float16](val)
+		if err != nil {
+			return err
+		}
+		return vector.SetBytesAt(vec, row, v, proc.Mp())
+	case types.T_array_int8:
+		v, err := types.StringToArrayToBytes[int8](val)
+		if err != nil {
+			return err
+		}
+		return vector.SetBytesAt(vec, row, v, proc.Mp())
+	case types.T_array_uint8:
+		v, err := types.StringToArrayToBytes[uint8](val)
+		if err != nil {
+			return err
+		}
+		return vector.SetBytesAt(vec, row, v, proc.Mp())
 	case types.T_json:
 		val, err := function.ConvertJsonBytes([]byte(val))
 		if err != nil {
@@ -314,7 +395,7 @@ func SetBytesToAnyVector(ctx context.Context, val string, row int,
 		}
 		return vector.SetFixedAtNoTypeCheck(vec, row, v)
 	case types.T_timestamp:
-		v, err := types.ParseTimestamp(time.Local, val, vec.GetType().Scale)
+		v, err := types.ParseTimestamp(sessionTimeZone(proc), val, vec.GetType().Scale)
 		if err != nil {
 			return err
 		}
@@ -346,6 +427,13 @@ func SetBytesToAnyVector(ctx context.Context, val string, row int,
 	default:
 		return moerr.NewInternalErrorf(ctx, "unsupported type %v", vec.GetType().Oid)
 	}
+}
+
+func sessionTimeZone(proc *process.Process) *time.Location {
+	if proc != nil && proc.GetSessionInfo() != nil && proc.GetSessionInfo().TimeZone != nil {
+		return proc.GetSessionInfo().TimeZone
+	}
+	return time.Local
 }
 
 func SetInsertValueTimeStamp(proc *process.Process, numVal *tree.NumVal, typ *types.Type) (canInsert bool, isnull bool, res types.Timestamp, err error) {

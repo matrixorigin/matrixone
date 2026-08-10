@@ -44,6 +44,7 @@ type Select struct {
 	With           *With
 	Ep             *ExportParam
 	IntoVars       []*VarExpr
+	DeprecatedInto bool
 	SelectLockInfo *SelectLockInfo
 }
 
@@ -497,10 +498,61 @@ func (node *SelectClause) Format(ctx *FmtCtx) {
 // needs the original placement while the enclosing Select uses the same list
 // for execution.
 func SelectIntoVariables(stmt SelectStatement) []*VarExpr {
-	if clause, ok := stmt.(*SelectClause); ok {
-		return clause.IntoVars
+	vars, _, _ := SelectIntoVariablesForTopLevel(stmt)
+	return vars
+}
+
+const MisplacedIntoClauseMessage = "Misplaced INTO clause, INTO is not allowed inside subqueries, and must be placed at end of UNION clauses."
+
+func SelectIntoVariablesForTopLevel(stmt SelectStatement) (vars []*VarExpr, deprecated bool, err string) {
+	return selectIntoVariablesForTopLevel(stmt, false)
+}
+
+func selectIntoVariablesForTopLevel(stmt SelectStatement, insideUnion bool) (vars []*VarExpr, deprecated bool, err string) {
+	switch node := stmt.(type) {
+	case *Select:
+		if len(node.IntoVars) > 0 {
+			return node.IntoVars, insideUnion || node.DeprecatedInto, ""
+		}
+		vars, deprecated, err = selectIntoVariablesForTopLevel(node.Select, insideUnion)
+		if err != "" {
+			return nil, false, err
+		}
+		return vars, deprecated || node.DeprecatedInto, ""
+	case *SelectClause:
+		return node.IntoVars, insideUnion && len(node.IntoVars) > 0, ""
+	case *ParenSelect:
+		return selectIntoVariablesForTopLevel(node.Select, insideUnion)
+	case *UnionClause:
+		if selectTreeHasInto(node.Left) {
+			return nil, false, MisplacedIntoClauseMessage
+		}
+		vars, deprecated, err = selectIntoVariablesForTopLevel(node.Right, true)
+		if err != "" {
+			return nil, false, err
+		}
+		if len(vars) > 0 {
+			deprecated = true
+		}
+		return vars, deprecated, ""
+	default:
+		return nil, false, ""
 	}
-	return nil
+}
+
+func selectTreeHasInto(stmt SelectStatement) bool {
+	switch node := stmt.(type) {
+	case *Select:
+		return len(node.IntoVars) > 0 || selectTreeHasInto(node.Select)
+	case *SelectClause:
+		return len(node.IntoVars) > 0
+	case *ParenSelect:
+		return selectTreeHasInto(node.Select)
+	case *UnionClause:
+		return selectTreeHasInto(node.Left) || selectTreeHasInto(node.Right)
+	default:
+		return false
+	}
 }
 
 func SelectIntoExport(stmt SelectStatement) *ExportParam {

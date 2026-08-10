@@ -53,6 +53,9 @@ func executeStatusStmtInBack(backSes *backSession,
 		if err = execCtx.selectInto.apply(execCtx.reqCtx, backSes, execCtx.sqlOfStmt); err != nil {
 			return
 		}
+		if st, ok := execCtx.stmt.(*tree.Select); ok {
+			appendSelectIntoDeprecatedWarning(backSes, st.DeprecatedInto)
+		}
 	}
 	if isPerformStatement(execCtx.stmt) && execCtx.runResult != nil {
 		execCtx.runResult.AffectRows = 0

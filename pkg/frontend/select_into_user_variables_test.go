@@ -201,3 +201,13 @@ func TestSelectIntoUserVariablesZeroRowsAddsNoDataDiagnostic(t *testing.T) {
 	require.Contains(t, info.codes, moerr.ER_SP_FETCH_NO_DATA)
 	require.Contains(t, info.msgs, "No data - zero rows fetched, selected, or processed")
 }
+
+func TestSelectIntoDeprecatedWarning(t *testing.T) {
+	ses := &Session{errInfo: &errInfo{maxCnt: MoDefaultErrorCount}}
+	appendSelectIntoDeprecatedWarning(ses, true)
+
+	info := ses.diagnosticsSnapshot()
+	require.Contains(t, info.codes, moerr.ER_WARN_DEPRECATED_INNER_INTO)
+	require.NotEmpty(t, info.msgs)
+	require.Contains(t, info.msgs[0], "The INTO clause is deprecated inside query blocks of query expressions")
+}

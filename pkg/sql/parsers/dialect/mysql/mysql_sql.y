@@ -6375,33 +6375,92 @@ select_stmt:
     select_no_parens
 |   select_with_parens
     {
-        $$ = &tree.Select{Select: $1}
+        intoVars, deprecatedInto, intoErr := tree.SelectIntoVariablesForTopLevel($1)
+        if intoErr != "" {
+            yylex.Error(intoErr)
+            return 1
+        }
+        $$ = &tree.Select{Select: $1, IntoVars: intoVars, DeprecatedInto: deprecatedInto}
     }
 
 select_no_parens:
     simple_select time_window_opt order_by_opt limit_opt rank_opt select_into_param_opt select_lock_opt
     {
-        $$ = &tree.Select{Select: $1, TimeWindow: $2, OrderBy: $3, Limit: $4, RankOption: $5, Ep: tree.SelectIntoExportOr($1, $6.Export), IntoVars: append(tree.SelectIntoVariables($1), $6.UserVars...), SelectLockInfo: $7}
+        intoVars, deprecatedInto, intoErr := tree.SelectIntoVariablesForTopLevel($1)
+        if intoErr != "" {
+            yylex.Error(intoErr)
+            return 1
+        }
+        if len(intoVars) > 0 && len($6.UserVars) > 0 {
+            yylex.Error(tree.MisplacedIntoClauseMessage)
+            return 1
+        }
+        $$ = &tree.Select{Select: $1, TimeWindow: $2, OrderBy: $3, Limit: $4, RankOption: $5, Ep: tree.SelectIntoExportOr($1, $6.Export), IntoVars: append(intoVars, $6.UserVars...), DeprecatedInto: deprecatedInto, SelectLockInfo: $7}
     }
 |   select_with_parens time_window_opt order_by_clause select_into_param_opt
     {
-        $$ = &tree.Select{Select: $1, TimeWindow: $2, OrderBy: $3, Ep: tree.SelectIntoExportOr($1, $4.Export), IntoVars: append(tree.SelectIntoVariables($1), $4.UserVars...)}
+        intoVars, deprecatedInto, intoErr := tree.SelectIntoVariablesForTopLevel($1)
+        if intoErr != "" {
+            yylex.Error(intoErr)
+            return 1
+        }
+        if len(intoVars) > 0 && len($4.UserVars) > 0 {
+            yylex.Error(tree.MisplacedIntoClauseMessage)
+            return 1
+        }
+        $$ = &tree.Select{Select: $1, TimeWindow: $2, OrderBy: $3, Ep: tree.SelectIntoExportOr($1, $4.Export), IntoVars: append(intoVars, $4.UserVars...), DeprecatedInto: deprecatedInto}
     }
 |   select_with_parens time_window_opt order_by_opt limit_clause rank_opt select_into_param_opt
     {
-        $$ = &tree.Select{Select: $1, TimeWindow: $2, OrderBy: $3, Limit: $4, RankOption: $5, Ep: tree.SelectIntoExportOr($1, $6.Export), IntoVars: append(tree.SelectIntoVariables($1), $6.UserVars...)}
+        intoVars, deprecatedInto, intoErr := tree.SelectIntoVariablesForTopLevel($1)
+        if intoErr != "" {
+            yylex.Error(intoErr)
+            return 1
+        }
+        if len(intoVars) > 0 && len($6.UserVars) > 0 {
+            yylex.Error(tree.MisplacedIntoClauseMessage)
+            return 1
+        }
+        $$ = &tree.Select{Select: $1, TimeWindow: $2, OrderBy: $3, Limit: $4, RankOption: $5, Ep: tree.SelectIntoExportOr($1, $6.Export), IntoVars: append(intoVars, $6.UserVars...), DeprecatedInto: deprecatedInto}
     }
 |   with_clause simple_select time_window_opt order_by_opt limit_opt rank_opt select_into_param_opt select_lock_opt
     {
-        $$ = &tree.Select{Select: $2, TimeWindow: $3, OrderBy: $4, Limit: $5, RankOption: $6, Ep: tree.SelectIntoExportOr($2, $7.Export), IntoVars: append(tree.SelectIntoVariables($2), $7.UserVars...), SelectLockInfo:$8, With: $1}
+        intoVars, deprecatedInto, intoErr := tree.SelectIntoVariablesForTopLevel($2)
+        if intoErr != "" {
+            yylex.Error(intoErr)
+            return 1
+        }
+        if len(intoVars) > 0 && len($7.UserVars) > 0 {
+            yylex.Error(tree.MisplacedIntoClauseMessage)
+            return 1
+        }
+        $$ = &tree.Select{Select: $2, TimeWindow: $3, OrderBy: $4, Limit: $5, RankOption: $6, Ep: tree.SelectIntoExportOr($2, $7.Export), IntoVars: append(intoVars, $7.UserVars...), DeprecatedInto: deprecatedInto, SelectLockInfo:$8, With: $1}
     }
 |   with_clause select_with_parens order_by_clause select_into_param_opt
     {
-        $$ = &tree.Select{Select: $2, OrderBy: $3, Ep: tree.SelectIntoExportOr($2, $4.Export), IntoVars: append(tree.SelectIntoVariables($2), $4.UserVars...), With: $1}
+        intoVars, deprecatedInto, intoErr := tree.SelectIntoVariablesForTopLevel($2)
+        if intoErr != "" {
+            yylex.Error(intoErr)
+            return 1
+        }
+        if len(intoVars) > 0 && len($4.UserVars) > 0 {
+            yylex.Error(tree.MisplacedIntoClauseMessage)
+            return 1
+        }
+        $$ = &tree.Select{Select: $2, OrderBy: $3, Ep: tree.SelectIntoExportOr($2, $4.Export), IntoVars: append(intoVars, $4.UserVars...), DeprecatedInto: deprecatedInto, With: $1}
     }
 |   with_clause select_with_parens order_by_opt limit_clause rank_opt select_into_param_opt
     {
-        $$ = &tree.Select{Select: $2, OrderBy: $3, Limit: $4, RankOption: $5, Ep: tree.SelectIntoExportOr($2, $6.Export), IntoVars: append(tree.SelectIntoVariables($2), $6.UserVars...), With: $1}
+        intoVars, deprecatedInto, intoErr := tree.SelectIntoVariablesForTopLevel($2)
+        if intoErr != "" {
+            yylex.Error(intoErr)
+            return 1
+        }
+        if len(intoVars) > 0 && len($6.UserVars) > 0 {
+            yylex.Error(tree.MisplacedIntoClauseMessage)
+            return 1
+        }
+        $$ = &tree.Select{Select: $2, OrderBy: $3, Limit: $4, RankOption: $5, Ep: tree.SelectIntoExportOr($2, $6.Export), IntoVars: append(intoVars, $6.UserVars...), DeprecatedInto: deprecatedInto, With: $1}
     }
 
 time_window_opt:
@@ -14559,11 +14618,29 @@ perform_stmt:
 perform_select:
     simple_select time_window_opt order_by_opt limit_opt rank_opt select_into_param_opt select_lock_opt
     {
-        $$ = &tree.Select{Select: $1, TimeWindow: $2, OrderBy: $3, Limit: $4, RankOption: $5, Ep: tree.SelectIntoExportOr($1, $6.Export), IntoVars: append(tree.SelectIntoVariables($1), $6.UserVars...), SelectLockInfo: $7}
+        intoVars, deprecatedInto, intoErr := tree.SelectIntoVariablesForTopLevel($1)
+        if intoErr != "" {
+            yylex.Error(intoErr)
+            return 1
+        }
+        if len(intoVars) > 0 && len($6.UserVars) > 0 {
+            yylex.Error(tree.MisplacedIntoClauseMessage)
+            return 1
+        }
+        $$ = &tree.Select{Select: $1, TimeWindow: $2, OrderBy: $3, Limit: $4, RankOption: $5, Ep: tree.SelectIntoExportOr($1, $6.Export), IntoVars: append(intoVars, $6.UserVars...), DeprecatedInto: deprecatedInto, SelectLockInfo: $7}
     }
 |   with_clause simple_select time_window_opt order_by_opt limit_opt rank_opt select_into_param_opt select_lock_opt
     {
-        $$ = &tree.Select{Select: $2, TimeWindow: $3, OrderBy: $4, Limit: $5, RankOption: $6, Ep: tree.SelectIntoExportOr($2, $7.Export), IntoVars: append(tree.SelectIntoVariables($2), $7.UserVars...), SelectLockInfo: $8, With: $1}
+        intoVars, deprecatedInto, intoErr := tree.SelectIntoVariablesForTopLevel($2)
+        if intoErr != "" {
+            yylex.Error(intoErr)
+            return 1
+        }
+        if len(intoVars) > 0 && len($7.UserVars) > 0 {
+            yylex.Error(tree.MisplacedIntoClauseMessage)
+            return 1
+        }
+        $$ = &tree.Select{Select: $2, TimeWindow: $3, OrderBy: $4, Limit: $5, RankOption: $6, Ep: tree.SelectIntoExportOr($2, $7.Export), IntoVars: append(intoVars, $7.UserVars...), DeprecatedInto: deprecatedInto, SelectLockInfo: $8, With: $1}
     }
 
 declare_stmt:

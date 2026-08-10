@@ -81,6 +81,7 @@ func executeStatusStmt(ses *Session, execCtx *ExecCtx) (err error) {
 			if err = execCtx.selectInto.apply(execCtx.reqCtx, ses, execCtx.sqlOfStmt); err != nil {
 				return
 			}
+			appendSelectIntoDeprecatedWarning(ses, st.DeprecatedInto)
 			if time.Since(runBegin) > time.Second {
 				ses.Infof(execCtx.reqCtx, "time of Exec.Run : %s", time.Since(runBegin).String())
 			}

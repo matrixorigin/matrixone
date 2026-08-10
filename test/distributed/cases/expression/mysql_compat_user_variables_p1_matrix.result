@@ -1,0 +1,109 @@
+drop database if exists mysql_compat_user_variables_p1_matrix;
+create database mysql_compat_user_variables_p1_matrix;
+use mysql_compat_user_variables_p1_matrix;
+set @uv_p1_json_text = '[1,2,3]';
+select @uv_p1_json_text, json_extract(@uv_p1_json_text, '$[0]');
+➤ @uv_p1_json_text[12,65535,0]  ¦  json_extract(@uv_p1_json_text, $[0])[-1,2147483647,0]  𝄀
+[1,2,3]  ¦  1
+set @uv_p1_binary = cast('abc' as binary);
+select @uv_p1_binary, hex(@uv_p1_binary);
+➤ @uv_p1_binary[-3,3,0]  ¦  hex(@uv_p1_binary)[12,65535,0]  𝄀
+abc  ¦  616263
+set @uv_p1_v32 = cast('[1,2,3]' as vecf32(3));
+select @uv_p1_v32;
+➤ @uv_p1_v32[12,3,0]  𝄀
+[1, 2, 3]
+set @uv_p1_v64 = cast('[1,2,3]' as vecf64(3));
+select @uv_p1_v64;
+➤ @uv_p1_v64[12,3,0]  𝄀
+[1, 2, 3]
+set @uv_p1_i8 = cast('[1,2,3]' as vecint8(3));
+select @uv_p1_i8;
+➤ @uv_p1_i8[12,3,0]  𝄀
+[1, 2, 3]
+set @uv_p1_u8 = cast('[1,128,255]' as vecuint8(3));
+select @uv_p1_u8;
+➤ @uv_p1_u8[12,3,0]  𝄀
+[1, 128, 255]
+set @uv_p1_bf16 = cast('[1,2,3]' as vecbf16(3));
+select @uv_p1_bf16;
+➤ @uv_p1_bf16[12,3,0]  𝄀
+[1, 2, 3]
+set @uv_p1_f16 = cast('[1,2,3]' as vecf16(3));
+select @uv_p1_f16;
+➤ @uv_p1_f16[12,3,0]  𝄀
+[1, 2, 3]
+set @uv_p1_old_time_zone = @@time_zone;
+set time_zone = '+08:00';
+set @uv_p1_ts_p8 = cast('2026-01-01 00:00:00' as timestamp);
+select date_format(@uv_p1_ts_p8, '%Y-%m-%d %H:%i:%s') as ts_p8_same_zone;
+➤ ts_p8_same_zone[12,65535,0]  𝄀
+2026-01-01 00:00:00
+set time_zone = '+00:00';
+select date_format(@uv_p1_ts_p8, '%Y-%m-%d %H:%i:%s') as ts_p8_after_tz_change;
+➤ ts_p8_after_tz_change[12,65535,0]  𝄀
+2026-01-01 00:00:00
+set time_zone = '-05:00';
+set @uv_p1_ts_m5 = cast('2026-01-01 00:00:00' as timestamp);
+select date_format(@uv_p1_ts_m5, '%Y-%m-%d %H:%i:%s') as ts_m5_same_zone;
+➤ ts_m5_same_zone[12,65535,0]  𝄀
+2026-01-01 00:00:00
+set time_zone = '+08:00';
+set @uv_p1_dt_p8 = cast('2026-01-01 00:00:00' as datetime);
+select date_format(@uv_p1_dt_p8, '%Y-%m-%d %H:%i:%s') as dt_p8_control;
+➤ dt_p8_control[12,65535,0]  𝄀
+2026-01-01 00:00:00
+set time_zone = @uv_p1_old_time_zone;
+set @uv_p1_paren = 0;
+(select 3 into @uv_p1_paren);
+select @uv_p1_paren;
+➤ @uv_p1_paren[-5,64,0]  𝄀
+3
+set @uv_p1_nested_paren = 0;
+((select 4 into @uv_p1_nested_paren));
+select @uv_p1_nested_paren;
+➤ @uv_p1_nested_paren[-5,64,0]  𝄀
+4
+set @uv_p1_empty = 9;
+(select 1 from dual where false into @uv_p1_empty);
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1329  ¦  No data - zero rows fetched, selected, or processed
+select @uv_p1_empty;
+➤ @uv_p1_empty[-5,64,0]  𝄀
+9
+set @uv_p1_union_nested = 0;
+select 1 union (select 1 into @uv_p1_union_nested);
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  3962  ¦  The INTO clause is deprecated inside query blocks of query expressions and will be removed in a future release. Please move the INTO clause to the end of statement instead.
+select @uv_p1_union_nested;
+➤ @uv_p1_union_nested[-5,64,0]  𝄀
+1
+set @uv_p1_union_terminal = 0;
+select 1 union select 1 into @uv_p1_union_terminal;
+select @uv_p1_union_terminal;
+➤ @uv_p1_union_terminal[-5,64,0]  𝄀
+1
+set @uv_p1_union_too_many = 0;
+select 1 union (select 2 into @uv_p1_union_too_many);
+-- @regex("Result consisted of more than one row", true)
+Result consisted of more than one row
+select @uv_p1_union_too_many;
+➤ @uv_p1_union_too_many[-5,64,0]  𝄀
+0
+set @uv_p1_bad_non_last = 0;
+select 1 into @uv_p1_bad_non_last union select 1;
+-- @regex("Misplaced INTO clause|INTO is not allowed|syntax error", true)
+Misplaced INTO clause
+select @uv_p1_bad_non_last;
+➤ @uv_p1_bad_non_last[-5,64,0]  𝄀
+0
+set @uv_p1_bad_middle = 0;
+select 1 union (select 1 into @uv_p1_bad_middle) union select 1;
+-- @regex("Misplaced INTO clause|INTO is not allowed|syntax error", true)
+Misplaced INTO clause
+select @uv_p1_bad_middle;
+➤ @uv_p1_bad_middle[-5,64,0]  𝄀
+0
+drop database mysql_compat_user_variables_p1_matrix;

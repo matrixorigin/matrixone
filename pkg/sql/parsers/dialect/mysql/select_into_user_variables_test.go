@@ -25,9 +25,10 @@ import (
 
 func TestSelectIntoUserVariablesParse(t *testing.T) {
 	testCases := []struct {
-		sql     string
-		wantSQL string
-		vars    []string
+		sql            string
+		wantSQL        string
+		vars           []string
+		deprecatedInto bool
 	}{
 		{
 			sql:     "select abs(-5), 'ok' into @out, @label",
@@ -49,6 +50,28 @@ func TestSelectIntoUserVariablesParse(t *testing.T) {
 			wantSQL: "select v from uv_src order by id desc limit 1 into @last_v",
 			vars:    []string{"last_v"},
 		},
+		{
+			sql:     "(select 3 into @paren_out)",
+			wantSQL: "(select 3 into @paren_out)",
+			vars:    []string{"paren_out"},
+		},
+		{
+			sql:     "((select 4 into @nested_paren_out))",
+			wantSQL: "((select 4 into @nested_paren_out))",
+			vars:    []string{"nested_paren_out"},
+		},
+		{
+			sql:            "select 1 union (select 1 into @union_out)",
+			wantSQL:        "select 1 union (select 1 into @union_out)",
+			vars:           []string{"union_out"},
+			deprecatedInto: true,
+		},
+		{
+			sql:            "select 1 union select 1 into @union_terminal",
+			wantSQL:        "select 1 union select 1 into @union_terminal",
+			vars:           []string{"union_terminal"},
+			deprecatedInto: true,
+		},
 	}
 
 	for _, testCase := range testCases {
@@ -62,8 +85,25 @@ func TestSelectIntoUserVariablesParse(t *testing.T) {
 			for i, name := range testCase.vars {
 				require.Equal(t, name, selectStatement.IntoVars[i].Name)
 			}
+			require.Equal(t, testCase.deprecatedInto, selectStatement.DeprecatedInto)
 			require.Equal(t, tree.OUTPUT_STATUS, selectStatement.StmtKind().OutputType())
 			require.Equal(t, testCase.wantSQL, tree.String(statement, dialect.MYSQL))
+		})
+	}
+}
+
+func TestSelectIntoUserVariablesRejectsMisplacedUnionInto(t *testing.T) {
+	testCases := []string{
+		"select 1 into @bad_non_last union select 1",
+		"select 1 union (select 1 into @bad_middle) union select 1",
+		"select 1 union (select 1 into @bad_middle) into @bad_terminal",
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase, func(t *testing.T) {
+			_, err := ParseOne(context.Background(), testCase, 1)
+			require.Error(t, err)
+			require.Contains(t, err.Error(), tree.MisplacedIntoClauseMessage)
 		})
 	}
 }

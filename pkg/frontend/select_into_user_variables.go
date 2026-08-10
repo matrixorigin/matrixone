@@ -166,3 +166,18 @@ func appendSelectIntoNoDataWarning(ses FeSession) {
 		}
 	}
 }
+
+func appendSelectIntoDeprecatedWarning(ses FeSession, deprecated bool) {
+	if !deprecated {
+		return
+	}
+	const msg = "The INTO clause is deprecated inside query blocks of query expressions and will be removed in a future release. Please move the INTO clause to the end of statement instead."
+	switch session := ses.(type) {
+	case *Session:
+		session.appendWarningDiagnostic(moerr.ER_WARN_DEPRECATED_INNER_INTO, msg)
+	case *backSession:
+		if session.upstream != nil {
+			appendSelectIntoDeprecatedWarning(session.upstream, deprecated)
+		}
+	}
+}
