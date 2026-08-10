@@ -744,6 +744,7 @@ func (c *Controller) AssembleDB(ctx context.Context) (err error) {
 		gc2.WithEstimateRows(db.Opts.GCCfg.GCestimateRows),
 		gc2.WithGCProbility(db.Opts.GCCfg.GCProbility),
 		gc2.WithCheckOption(db.Opts.GCCfg.CheckGC),
+		gc2.WithUnpublishedCleanupFS(db.Runtime.LocalFs),
 		gc2.WithGCCheckpointOption(!db.Opts.CheckpointCfg.DisableGCCheckpoint))
 	cleaner.AddChecker(
 		func(item any) bool {
@@ -754,6 +755,7 @@ func (c *Controller) AssembleDB(ctx context.Context) (err error) {
 		}, cmd_util.CheckerKeyTTL)
 
 	db.DiskCleaner = gc2.NewDiskCleaner(cleaner, db.IsWriteMode())
+	db.Runtime.HandoffUnpublishedObjects = db.DiskCleaner.HandoffUnpublishedObjects
 
 	// Set sync protection validator for TN commit validation (CCPR transactions)
 	db.Runtime.SyncProtectionValidator = func(jobID string, prepareTS int64) error {

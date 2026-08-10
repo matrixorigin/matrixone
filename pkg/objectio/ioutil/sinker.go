@@ -483,10 +483,11 @@ func DeleteUnpublishedObjects(
 }
 
 // DeletePersisted deletes every object that this sinker has successfully
-// persisted but has not transferred out of its lifecycle yet. Callers use it
-// when a larger operation aborts after one or more spills. The tracked object
-// references are retained when deletion fails so the caller may retry.
-func (sinker *Sinker) DeletePersisted(ctx context.Context) (int, error) {
+// persisted but has not transferred out of its lifecycle yet. It returns the
+// exact ownership snapshot on both success and failure. The tracked references
+// are retained when deletion fails so the caller may retry or durably hand them
+// off before closing the sinker.
+func (sinker *Sinker) DeletePersisted(ctx context.Context) ([]string, error) {
 	if sinker.pipe.enabled && sinker.pipe.result != nil {
 		// A failed pipeline may still have successful sibling writes. Wait for
 		// all of them before taking the ownership snapshot.
@@ -507,9 +508,10 @@ func (sinker *Sinker) DeletePersisted(ctx context.Context) (int, error) {
 		appendStats(sinker.pipe.result.persisted)
 		sinker.pipe.result.mu.RUnlock()
 	}
-	count, err := DeleteUnpublishedObjects(ctx, sinker.fs, files...)
+	files = normalizeUnpublishedObjectNames(files)
+	_, err := DeleteUnpublishedObjects(ctx, sinker.fs, files...)
 	if err != nil {
-		return count, err
+		return files, err
 	}
 
 	sinker.staged.persisted = sinker.staged.persisted[:0]
@@ -519,7 +521,7 @@ func (sinker *Sinker) DeletePersisted(ctx context.Context) (int, error) {
 		sinker.pipe.result.persisted = sinker.pipe.result.persisted[:0]
 		sinker.pipe.result.mu.Unlock()
 	}
-	return count, nil
+	return files, nil
 }
 
 func (sinker *Sinker) fetchBuffer() (*batch.Batch, error) {

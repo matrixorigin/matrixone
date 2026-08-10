@@ -16,6 +16,7 @@ package dbutils
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"sync"
 	"time"
@@ -173,6 +174,10 @@ type Runtime struct {
 	// This is set by the DB when DiskCleaner is initialized.
 	// Returns nil if validation succeeds, or an error if the protection is invalid/expired.
 	SyncProtectionValidator func(jobID string, prepareTS int64) error
+
+	// HandoffUnpublishedObjects durably transfers exact object names to the
+	// process-level cleaner after transaction-scoped deletion is exhausted.
+	HandoffUnpublishedObjects func(context.Context, ...string) error
 }
 
 func NewRuntime(opts ...RuntimeOption) *Runtime {

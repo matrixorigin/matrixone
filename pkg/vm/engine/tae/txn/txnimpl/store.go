@@ -940,9 +940,7 @@ func (store *txnStore) AddTxnEntry(entry txnif.TxnEntry) {
 func (store *txnStore) PrepareRollback() error {
 	var err error
 	for _, db := range store.dbs {
-		if err = db.PrepareRollback(); err != nil {
-			break
-		}
+		err = combineTxnLifecycleErrors(err, db.PrepareRollback())
 	}
 
 	return err

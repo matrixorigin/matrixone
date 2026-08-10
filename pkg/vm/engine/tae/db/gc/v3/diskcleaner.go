@@ -234,6 +234,23 @@ func (cleaner *DiskCleaner) GetCleaner() Cleaner {
 	return cleaner.cleaner
 }
 
+// HandoffUnpublishedObjects transfers a transaction's exact cleanup set to
+// the checkpoint cleaner without widening the general Cleaner contract used
+// by tests and alternative cleaner implementations.
+func (cleaner *DiskCleaner) HandoffUnpublishedObjects(
+	ctx context.Context,
+	files ...string,
+) error {
+	handoff, ok := cleaner.cleaner.(interface {
+		HandoffUnpublishedObjects(context.Context, ...string) error
+	})
+	if !ok {
+		return moerr.NewInternalErrorNoCtx(
+			"disk cleaner does not support unpublished object cleanup handoff")
+	}
+	return handoff.HandoffUnpublishedObjects(ctx, files...)
+}
+
 // should only be called during the startup
 // no check for the current state
 func (cleaner *DiskCleaner) forceScheduleJob(jt tasks.JobType) (err error) {

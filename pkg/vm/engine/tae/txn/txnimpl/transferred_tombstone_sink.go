@@ -32,6 +32,10 @@ import (
 // storage. DeletePersisted passes this bound through to every delete batch.
 const transferredTombstoneCleanupTimeout = time.Minute
 
+// A terminal handoff writes only a small metadata marker. Keep its failure
+// budget independent from the already exhausted object-delete deadline.
+const transferredTombstoneHandoffTimeout = 10 * time.Second
+
 // transferredTombstoneSinker is the part of ioutil.Sinker used while a TN
 // transaction rewrites tombstones to the current data-object generation.
 // Keeping this boundary explicit makes the publication and cleanup contract
@@ -40,7 +44,7 @@ type transferredTombstoneSinker interface {
 	Write(context.Context, *batch.Batch) error
 	Sync(context.Context) error
 	GetResult() ([]objectio.ObjectStats, []*batch.Batch)
-	DeletePersisted(context.Context) (int, error)
+	DeletePersisted(context.Context) ([]string, error)
 	Close() error
 }
 
@@ -53,6 +57,7 @@ type transferredTombstoneSink struct {
 	wrote           bool
 	published       bool
 	cleanupPending  bool
+	cleanupFiles    []string
 	closed          bool
 	cleanupDeadline time.Time
 }
@@ -147,15 +152,17 @@ func (s *transferredTombstoneSink) deletePersisted(ctx context.Context) error {
 	// cleanup lifecycle one total bound, shared by rollback retries.
 	cleanupCtx, cancel := s.newCleanupContext(ctx)
 	defer cancel()
-	count, err := s.sinker.DeletePersisted(cleanupCtx)
+	files, err := s.sinker.DeletePersisted(cleanupCtx)
 	if err == nil {
+		s.cleanupFiles = nil
 		return nil
 	}
+	s.cleanupFiles = append(s.cleanupFiles[:0], files...)
 	return errors.Join(
 		moerr.NewInternalErrorf(
 			cleanupCtx,
 			"delete %d unpublished transferred tombstone objects",
-			count,
+			len(files),
 		),
 		err,
 	)

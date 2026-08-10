@@ -994,7 +994,15 @@ func (tbl *txnTable) GetID() uint64 {
 func (tbl *txnTable) Close() error {
 	var err error
 	if tbl.transferredTombstoneRollback {
-		err = combineTxnLifecycleErrors(err, tbl.rollbackTransferredTombstones())
+		cleanupErr := tbl.rollbackTransferredTombstones()
+		if cleanupErr != nil {
+			if handoffErr := tbl.handoffTransferredTombstoneCleanup(); handoffErr != nil {
+				cleanupErr = combineTxnLifecycleErrors(cleanupErr, handoffErr)
+			} else {
+				cleanupErr = nil
+			}
+		}
+		err = combineTxnLifecycleErrors(err, cleanupErr)
 	}
 	err = combineTxnLifecycleErrors(err, tbl.dataTable.Close())
 	if tbl.tombstoneTable != nil {
@@ -1003,6 +1011,47 @@ func (tbl *txnTable) Close() error {
 	tbl.logs = nil
 	tbl.txnEntries = nil
 	return err
+}
+
+func (tbl *txnTable) handoffTransferredTombstoneCleanup() error {
+	files := append([]string(nil), tbl.transferredTombstoneObjects...)
+	for _, sink := range tbl.pendingTransferredTombstoneSinks {
+		files = append(files, sink.cleanupFiles...)
+	}
+	if len(files) == 0 {
+		return moerr.NewInternalErrorNoCtx(
+			"cannot hand off transferred tombstone cleanup without object names")
+	}
+	if tbl.store.rt.HandoffUnpublishedObjects == nil {
+		return moerr.NewInternalErrorNoCtx(
+			"unpublished object cleanup handoff is not configured")
+	}
+	handoffCtx, cancel := context.WithTimeoutCause(
+		context.WithoutCancel(tbl.store.ctx),
+		transferredTombstoneHandoffTimeout,
+		moerr.CauseCleanUpUselessFiles,
+	)
+	defer cancel()
+	if err := tbl.store.rt.HandoffUnpublishedObjects(handoffCtx, files...); err != nil {
+		return errors.Join(
+			moerr.NewInternalErrorf(
+				handoffCtx,
+				"hand off %d unpublished transferred tombstone objects",
+				len(files),
+			),
+			err,
+		)
+	}
+
+	var closeErr error
+	for _, sink := range tbl.pendingTransferredTombstoneSinks {
+		sink.cleanupPending = false
+		sink.cleanupFiles = nil
+		closeErr = combineTxnLifecycleErrors(closeErr, sink.closeSinker())
+	}
+	tbl.pendingTransferredTombstoneSinks = nil
+	tbl.transferredTombstoneObjects = nil
+	return closeErr
 }
 
 func (tbl *txnTable) registerTransferredTombstones(statsList ...objectio.ObjectStats) {

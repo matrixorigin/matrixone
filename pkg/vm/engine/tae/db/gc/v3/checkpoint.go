@@ -17,6 +17,7 @@ package gc
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"sync/atomic"
@@ -49,9 +50,10 @@ type checkpointCleaner struct {
 	mp *mpool.MPool
 	fs fileservice.FileService
 
-	logDriver     wal.Store
-	checkpointCli checkpoint.Runner
-	deleter       *Deleter
+	logDriver            wal.Store
+	checkpointCli        checkpoint.Runner
+	deleter              *Deleter
+	unpublishedCleanupFS fileservice.FileService
 
 	watermarks struct {
 		// scanWaterMark is the watermark of the incremental checkpoint which has been
@@ -141,7 +143,12 @@ type checkpointCleaner struct {
 
 	// iscpTablesFunc is an optional function to provide the ISCP tables for testing.
 	iscpTablesFunc func() (map[uint64]types.TS, error)
+
+	unpublishedCleanupGeneration atomic.Uint64
+	unpublishedCleanupProcessed  atomic.Uint64
 }
+
+const unpublishedCleanupReplayTimeout = 10 * time.Minute
 
 func (c *checkpointCleaner) deleteFilesWithPolicy(
 	ctx context.Context,
@@ -200,6 +207,14 @@ func WithEstimateRows(
 	}
 }
 
+// WithUnpublishedCleanupFS stores transaction-terminal cleanup intents on a
+// durable file service independent from the object service being repaired.
+func WithUnpublishedCleanupFS(fs fileservice.FileService) CheckpointCleanerOption {
+	return func(e *checkpointCleaner) {
+		e.unpublishedCleanupFS = fs
+	}
+}
+
 // for ut
 func WithGCCheckpointOption(enable bool) CheckpointCleanerOption {
 	return func(e *checkpointCleaner) {
@@ -232,6 +247,9 @@ func NewCheckpointCleaner(
 	}
 	for _, opt := range opts {
 		opt(cleaner)
+	}
+	if cleaner.unpublishedCleanupFS == nil {
+		cleaner.unpublishedCleanupFS = fs
 	}
 	cleaner.deleter = NewDeleter(fs)
 	cleaner.options.gcEnabled.Store(true)
@@ -335,6 +353,9 @@ func (c *checkpointCleaner) Replay(inputCtx context.Context) (err error) {
 		err = context.Cause(ctx)
 		return
 	default:
+	}
+	if err = c.replayUnpublishedObjectCleanup(ctx); err != nil {
+		return
 	}
 
 	c.StartMutationTask("gc-replay")
@@ -1653,6 +1674,11 @@ func (c *checkpointCleaner) DoCheck(ctx context.Context) error {
 func (c *checkpointCleaner) Process(
 	inputCtx context.Context,
 	checker func(*checkpoint.CheckpointEntry) bool) (err error) {
+	if c.unpublishedCleanupProcessed.Load() != c.unpublishedCleanupGeneration.Load() {
+		if err = c.replayUnpublishedObjectCleanup(inputCtx); err != nil {
+			return
+		}
+	}
 	if !c.GCEnabled() {
 		return
 	}
@@ -1768,6 +1794,67 @@ func (c *checkpointCleaner) Process(
 	}
 	err = c.tryGCLocked(ctx, memoryBuffer)
 	return
+}
+
+// HandoffUnpublishedObjects persists exact cleanup ownership before the
+// transaction is allowed to release its sink and table state.
+func (c *checkpointCleaner) HandoffUnpublishedObjects(
+	ctx context.Context,
+	files ...string,
+) error {
+	markerFS := c.unpublishedCleanupFS
+	if markerFS == nil {
+		markerFS = c.fs
+	}
+	localMarker, localErr := ioutil.RecordUnpublishedObjectCleanup(
+		ctx, markerFS, files...)
+	sharedMarker := ""
+	var sharedErr error
+	if markerFS.Name() != c.fs.Name() {
+		sharedMarker, sharedErr = ioutil.RecordUnpublishedObjectCleanup(
+			ctx, c.fs, files...)
+	}
+	if localMarker == "" && sharedMarker == "" {
+		if err := errors.Join(localErr, sharedErr); err != nil {
+			return err
+		}
+		return moerr.NewInternalErrorNoCtx(
+			"cannot persist an empty unpublished object cleanup intent")
+	}
+	c.unpublishedCleanupGeneration.Add(1)
+	return nil
+}
+
+func (c *checkpointCleaner) replayUnpublishedObjectCleanup(ctx context.Context) error {
+	generation := c.unpublishedCleanupGeneration.Load()
+	cleanupCtx, cancel := context.WithTimeoutCause(
+		ctx, unpublishedCleanupReplayTimeout, moerr.CauseCleanUpUselessFiles)
+	defer cancel()
+	markerFS := c.unpublishedCleanupFS
+	if markerFS == nil {
+		markerFS = c.fs
+	}
+	_, remaining, replayErr := ioutil.ReplayUnpublishedObjectCleanupFrom(
+		cleanupCtx, markerFS, c.fs)
+	if markerFS.Name() != c.fs.Name() {
+		_, sharedRemaining, sharedErr := ioutil.ReplayUnpublishedObjectCleanup(
+			cleanupCtx, c.fs)
+		remaining = remaining || sharedRemaining
+		replayErr = errors.Join(replayErr, sharedErr)
+	}
+	if replayErr != nil {
+		// Replay may be the startup discovery of a marker written by the previous
+		// process, so force Process to retry even when no local handoff incremented
+		// this generation yet.
+		c.unpublishedCleanupGeneration.Add(1)
+		return replayErr
+	}
+	if remaining {
+		c.unpublishedCleanupGeneration.Add(1)
+		return nil
+	}
+	c.unpublishedCleanupProcessed.Store(generation)
+	return nil
 }
 
 // tryScanLocked scans the incremental checkpoints and tries to create a new GC window
