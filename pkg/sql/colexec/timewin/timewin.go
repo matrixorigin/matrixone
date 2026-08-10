@@ -80,7 +80,9 @@ func (timeWin *TimeWin) Prepare(proc *process.Process) (err error) {
 				return err
 			}
 			ctr.partSet[i] = getPartitionSetFunction(
-				types.New(types.T(expr.Typ.Id), expr.Typ.Width, expr.Typ.Scale), proc.Mp())
+				types.NewWithCharset(
+					types.T(expr.Typ.Id), expr.Typ.Width, expr.Typ.Scale, uint8(expr.Typ.Charset),
+				), proc.Mp())
 		}
 	}
 
@@ -382,7 +384,9 @@ func makeAggExecutors(timeWin *TimeWin, proc *process.Process, growFirstGroup bo
 	for i, expression := range timeWin.Aggs {
 		params := make([]types.Type, len(expression.GetArgExpressions()))
 		for j, argument := range expression.GetArgExpressions() {
-			params[j] = types.New(types.T(argument.Typ.Id), argument.Typ.Width, argument.Typ.Scale)
+			params[j] = types.NewWithCharset(
+				types.T(argument.Typ.Id), argument.Typ.Width, argument.Typ.Scale, uint8(argument.Typ.Charset),
+			)
 			if j == 0 && params[j].Oid == types.T_any && i < len(timeWin.Types) {
 				// Older manually-constructed plans/tests keep the physical first
 				// argument type in TimeWin.Types rather than the expression.
@@ -420,8 +424,8 @@ func newTsExpr(typ plan.Type, ctx context.Context) (*plan.Expr, error) {
 
 	typ.NotNullable = col.Typ.NotNullable
 	argsType := []types.Type{
-		types.New(types.T(col.Typ.Id), col.Typ.Width, col.Typ.Scale),
-		types.New(types.T(typ.Id), typ.Width, typ.Scale),
+		types.NewWithCharset(types.T(col.Typ.Id), col.Typ.Width, col.Typ.Scale, uint8(col.Typ.Charset)),
+		types.NewWithCharset(types.T(typ.Id), typ.Width, typ.Scale, uint8(typ.Charset)),
 	}
 	fGet, err := function.GetFunctionByName(ctx, "cast", argsType)
 	if err != nil {

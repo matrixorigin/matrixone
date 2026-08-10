@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -144,6 +145,38 @@ func TestMergeTopMaxUint64LimitReturnsAllRows(t *testing.T) {
 	tc.arg.GetChildren(0).Free(tc.proc, false, nil)
 	tc.proc.Free()
 	require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
+}
+
+func TestMergeTopReevaluatesPreparedOrderExpressionForEachBatch(t *testing.T) {
+	paramExpr := &plan.Expr{
+		Typ:  plan.Type{Id: int32(types.T_varchar)},
+		Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: 0}},
+	}
+	tc := newTestCase(t, []bool{false}, []types.Type{types.T_int64.ToType()}, 4,
+		[]*plan.OrderBySpec{{Expr: paramExpr}})
+
+	params := vector.NewVec(types.T_varchar.ToType())
+	require.NoError(t, vector.AppendBytes(params, []byte("same-key"), false, tc.proc.Mp()))
+	tc.proc.SetPrepareParams(params)
+	defer func() {
+		tc.proc.SetPrepareParams(nil)
+		params.Free(tc.proc.Mp())
+		tc.proc.Free()
+		require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
+	}()
+
+	require.NoError(t, tc.arg.Prepare(tc.proc))
+	resetChildren(tc.arg, []*batch.Batch{
+		newBatch(tc.types, tc.proc, 2),
+		newBatch(tc.types, tc.proc, 2),
+	})
+	defer tc.arg.GetChildren(0).Free(tc.proc, false, nil)
+	defer tc.arg.Free(tc.proc, false, nil)
+
+	result, err := vm.Exec(tc.arg, tc.proc)
+	require.NoError(t, err)
+	require.NotNil(t, result.Batch)
+	require.Equal(t, 4, result.Batch.RowCount())
 }
 
 func BenchmarkTop(b *testing.B) {
