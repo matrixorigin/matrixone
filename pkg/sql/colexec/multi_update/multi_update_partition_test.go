@@ -166,6 +166,28 @@ func TestPartitionMultiUpdateResetReleasesWriters(t *testing.T) {
 	require.Zero(t, op.nextWriterID)
 }
 
+func TestPartitionMultiUpdateResetRebuildsRawContextMetadata(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	original := &MultiUpdateCtx{TableDef: &plan.TableDef{Name: "logical"}}
+	raw := &MultiUpdate{
+		MultiUpdateCtx: []*MultiUpdateCtx{original},
+		ctr: container{updateCtxInfos: map[string]*updateCtxInfo{
+			"physical_partition": {},
+		}},
+	}
+	op := &PartitionMultiUpdate{
+		raw:         raw,
+		rawContexts: []*MultiUpdateCtx{original},
+	}
+
+	op.Reset(proc, false, nil)
+
+	require.Same(t, original, raw.MultiUpdateCtx[0])
+	require.Contains(t, raw.ctr.updateCtxInfos, updateCtxKey(original))
+	require.NotNil(t, lookupUpdateCtxInfo(raw.ctr.updateCtxInfos, original))
+	require.NotContains(t, raw.ctr.updateCtxInfos, "physical_partition")
+}
+
 func TestAddInsertAffectRows(t *testing.T) {
 	tests := []struct {
 		name       string

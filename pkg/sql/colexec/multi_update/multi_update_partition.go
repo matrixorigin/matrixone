@@ -465,6 +465,7 @@ func (op *PartitionMultiUpdate) Reset(
 ) {
 	op.raw.MultiUpdateCtx = op.rawContexts
 	op.raw.Reset(proc, pipelineFailed, err)
+	op.raw.resetMultiUpdateCtxs()
 	op.freePartitionWriters(proc)
 	for _, target := range op.targets {
 		clear(target.writerIDs)
