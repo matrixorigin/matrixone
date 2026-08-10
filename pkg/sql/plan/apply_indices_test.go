@@ -433,10 +433,39 @@ func TestResolveRegularIndexBackfillResidualAccess(t *testing.T) {
 	}
 }
 
+func TestInvisibleIndexHintIsRejected(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		visible   bool
+		wantError bool
+	}{
+		{name: "visible control", visible: true},
+		{name: "invisible index", visible: false, wantError: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mock := NewMockOptimizer(true)
+			indexDef := mock.ctxt.tables["single_idx_t"].Indexes[0]
+			indexDef.Visible = tc.visible
+			indexDef.VisibilitySet = true
+
+			_, err := runOneStmt(mock, t, "select val from single_idx_t force index(idx_val) where val = 1")
+			if tc.wantError {
+				require.Error(t, err)
+				var moErr *moerr.Error
+				require.ErrorAs(t, err, &moErr)
+				require.Equal(t, moerr.ER_KEY_DOES_NOT_EXIST, moErr.MySQLCode())
+				return
+			}
+			require.NoError(t, err)
+		})
+	}
+}
+
 func TestFilterRegularIndexesByScanHints(t *testing.T) {
 	idxA := &planpb.IndexDef{IndexName: "idx_a"}
 	idxB := &planpb.IndexDef{IndexName: "idx_b"}
-	indexes := []*planpb.IndexDef{idxA, idxB}
+	invisible := &planpb.IndexDef{IndexName: "idx_invisible", VisibilitySet: true}
+	indexes := []*planpb.IndexDef{idxA, invisible, idxB}
 	node := &planpb.Node{NodeId: 7}
 
 	testCases := []struct {
@@ -4964,6 +4993,9 @@ func TestFindMatchFullTextIndexRequiresScanBindingAndConstantMode(t *testing.T) 
 
 	matched := builder.findMatchFullTextIndex(makeFullTextMatchExpr("hello", 0, ftDef, ftTag, []int32{2, 3}).GetF(), scan)
 	require.NotNil(t, matched)
+	catalog.SetIndexVisibility(ftDef.Indexes[0], false)
+	require.Nil(t, builder.findMatchFullTextIndex(makeFullTextMatchExpr("hello", 0, ftDef, ftTag, []int32{2, 3}).GetF(), scan))
+	catalog.SetIndexVisibility(ftDef.Indexes[0], true)
 
 	crossTableExpr := makeFullTextMatchExpr("hello", 0, ftDef, ftTag, []int32{2})
 	crossTableExpr.GetF().Args = append(crossTableExpr.GetF().Args, &planpb.Expr{
@@ -6779,6 +6811,10 @@ func TestRegularIndexPrefixMetadataUsable(t *testing.T) {
 	require.ErrorContains(t, validateTableRegularIndexPrefixMetadata(&planpb.TableDef{
 		Indexes: []*planpb.IndexDef{staleIndex},
 	}), "rebuild the index")
+	catalog.SetIndexVisibility(staleIndex, false)
+	require.ErrorContains(t, validateTableRegularIndexPrefixMetadata(&planpb.TableDef{
+		Indexes: []*planpb.IndexDef{staleIndex},
+	}), "rebuild the index", "optimizer visibility must not bypass index-maintenance validation")
 }
 
 func TestGetIndexForNonEquiCondSkipsDeclaredPrefixIndexes(t *testing.T) {
@@ -7269,6 +7305,43 @@ func TestApplyIndicesForFiltersUsesIndexJoinForPrefixIndex(t *testing.T) {
 	indexScan := builder.qry.Nodes[indexJoin.Children[1]]
 	require.True(t, indexScan.IndexScanInfo.IsIndexScan)
 	require.Equal(t, idxDef.IndexName, indexScan.IndexScanInfo.IndexName)
+}
+
+func TestApplyIndicesForFiltersSkipsInvisibleIndex(t *testing.T) {
+	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true), false, true)
+	ctx := NewBindContext(builder, nil)
+	bindTag := builder.genNewBindTag()
+	idxDef := &planpb.IndexDef{
+		IndexName:      "idx_status_id",
+		IndexTableName: "__mo_idx_status_id",
+		Parts:          []string{"status", "id"},
+		TableExist:     true,
+		Visible:        false,
+		VisibilitySet:  true,
+	}
+	registerMockIndexTable(t, builder, idxDef.IndexTableName)
+	node := &planpb.Node{
+		NodeType:    planpb.Node_TABLE_SCAN,
+		ObjRef:      &planpb.ObjectRef{SchemaName: "test", ObjName: "t"},
+		BindingTags: []int32{bindTag},
+		TableDef: &planpb.TableDef{
+			Name: "t",
+			Cols: []*planpb.ColDef{
+				{Name: "id", Typ: planpb.Type{Id: int32(types.T_int64)}},
+				{Name: "status", Typ: planpb.Type{Id: int32(types.T_varchar), Width: 32}},
+			},
+			Name2ColIndex: map[string]int32{"id": 0, "status": 1},
+			Pkey:          &planpb.PrimaryKeyDef{PkeyColName: "id", Names: []string{"id"}},
+			Indexes:       []*planpb.IndexDef{idxDef},
+		},
+		Stats:      &planpb.Stats{TableCnt: 100, Outcnt: 1, Selectivity: 0.01, Cost: 100},
+		FilterList: []*planpb.Expr{makeStringEqFilterExpr(bindTag, 1, "active")},
+	}
+	scanID := builder.appendNode(node, ctx)
+
+	resultID := builder.applyIndicesForFiltersRegularIndex(scanID, builder.qry.Nodes[scanID],
+		map[[2]int32]int{{bindTag, 1}: 1}, map[[2]int32]*planpb.Expr{})
+	require.Equal(t, scanID, resultID)
 }
 
 func TestTryIndexOnlyScanKeepsResidualFilterForSerialFullNullSemantics(t *testing.T) {
