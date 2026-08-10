@@ -1155,6 +1155,9 @@ func (s *Scope) alterTableInplace(c *Compile, cleanup *alterAutoIncrementResetCl
 			))
 		case *plan.AlterTable_Action_AlterRenameColumn:
 			hasDefReplace = true
+			if err := c.requireCheckRenameProtocol(qry.GetCopyTableDef().GetChecks()); err != nil {
+				return err
+			}
 			reqs = append(reqs, api.NewRenameColumnReqWithChecks(
 				did, tid,
 				act.AlterRenameColumn.OldName, // origin name
@@ -4870,6 +4873,26 @@ func maybeResetAutoIncrement(
 		}
 	}
 
+	return nil
+}
+
+// requireCheckRenameProtocol is the sender-side safety boundary for the v14
+// AlterTableRenameCol.checks field. Planner checks provide an earlier error,
+// while this check prevents a synthesized or cached plan from sending required
+// CHECK metadata to a receiver whose alter handler cannot apply it.
+func (c *Compile) requireCheckRenameProtocol(checks []*plan.CheckDef) error {
+	if len(checks) == 0 {
+		return nil
+	}
+	value, ok := moruntime.ServiceRuntime(c.proc.GetService()).
+		GetGlobalVariables(moruntime.MOProtocolVersion)
+	version, valid := value.(int64)
+	if !ok || !valid || version < defines.MORPCVersion14 {
+		return moerr.NewNotSupported(
+			c.proc.Ctx,
+			"renaming a column in a table with CHECK constraints requires all services to support protocol version 14",
+		)
+	}
 	return nil
 }
 

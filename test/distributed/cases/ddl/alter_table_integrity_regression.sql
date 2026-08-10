@@ -31,6 +31,18 @@ insert into check_rename values (2,1,'ok');
 insert into check_rename values (1,2,'ok');
 select x, b, note from check_rename;
 
+-- CHANGE COLUMN uses COPY but must preserve the same CHECK rename invariant.
+create table check_change (
+    a int,
+    b int,
+    constraint ck_change check (a < b)
+);
+alter table check_change change column a x int;
+show create table check_change;
+insert into check_change values (2,1);
+insert into check_change values (1,2);
+select x, b from check_change;
+
 -- #26838: table ID 0 is a self-reference marker, not a parent table ID.
 create table self_cascade (
     id int primary key,

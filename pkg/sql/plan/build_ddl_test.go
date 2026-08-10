@@ -436,6 +436,32 @@ func TestBuildAlterRenameColumnRecoversLegacyChecks(t *testing.T) {
 		})
 	}
 
+	t.Run("legacy check is rejected before protocol version 14", func(t *testing.T) {
+		stmt := parseRename(t)
+		defer stmt.Free()
+
+		ctx := NewMockCompilerContext(false)
+		ctx.tables["nation"].Checks = nil
+		ctx.tables["nation"].Createsql = "create table nation(" +
+			"n_nationkey int, constraint ck_nationkey check (n_nationkey >= 0))"
+
+		proc := ctx.GetProcess()
+		rt := moruntime.ServiceRuntime(proc.GetService())
+		original, hadOriginal := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+		defer func() {
+			if hadOriginal {
+				rt.SetGlobalVariables(moruntime.MOProtocolVersion, original)
+			} else {
+				rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+			}
+		}()
+		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion13)
+
+		_, err := BuildPlan(ctx, stmt, false)
+		require.ErrorContains(t, err, "protocol version 14")
+		require.Empty(t, ctx.tables["nation"].Checks, "catalog-owned source must remain unchanged")
+	})
+
 	t.Run("ambiguous legacy SQL mode is rejected", func(t *testing.T) {
 		stmt := parseRename(t)
 		defer stmt.Free()

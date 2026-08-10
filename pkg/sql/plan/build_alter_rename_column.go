@@ -21,7 +21,9 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
@@ -114,6 +116,9 @@ func updateRenameColumnInTableDef(
 	// them on the planner-owned table copy before rewriting the renamed column,
 	// so both COPY and INPLACE ALTER persist the structured definitions.
 	if err := recoverLegacyChecks(ctx, tableDef); err != nil {
+		return nil, err
+	}
+	if err := requireCheckRenameProtocol(ctx, tableDef.Checks); err != nil {
 		return nil, err
 	}
 
@@ -222,6 +227,27 @@ func requirePrefixIndexesRenameProtocol(ctx CompilerContext, indexes []*plan.Ind
 			}
 			break
 		}
+	}
+	return nil
+}
+
+// requireCheckRenameProtocol prevents a new CN from sending CHECK metadata in
+// AlterTableRenameCol to an old TN whose generated request type cannot expose
+// the unknown protobuf field to its alter handler. During a rolling upgrade,
+// the deployment protocol version stays at the oldest live service, so v14
+// proves every receiver can persist the rewritten CHECK definitions.
+func requireCheckRenameProtocol(ctx CompilerContext, checks []*plan.CheckDef) error {
+	if len(checks) == 0 || ctx.GetProcess() == nil {
+		return nil
+	}
+	value, ok := moruntime.ServiceRuntime(ctx.GetProcess().GetService()).
+		GetGlobalVariables(moruntime.MOProtocolVersion)
+	version, valid := value.(int64)
+	if !ok || !valid || version < defines.MORPCVersion14 {
+		return moerr.NewNotSupported(
+			ctx.GetContext(),
+			"renaming a column in a table with CHECK constraints requires all services to support protocol version 14",
+		)
 	}
 	return nil
 }

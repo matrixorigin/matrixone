@@ -179,6 +179,40 @@ func TestChangeColumnRenamesClusterByAndTracksIvfIncludeMetadata(t *testing.T) {
 	require.NotContains(t, copyTable.Indexes[0].IndexAlgoParams, "include_columns")
 }
 
+func TestChangeColumnRewritesCheckOriginSQL(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	origin := makeAlterCoverageTableDef()
+	origin.Checks = []*planpb.CheckDef{
+		{
+			Name:      "chk_title",
+			OriginSql: "`title` <> 'title' AND `note` <> 'title'",
+		},
+	}
+	copyTable := DeepCopyTableDef(origin, true)
+	alterCtx := initAlterTableContext(origin, copyTable, origin.DbName)
+	alterPlan := &planpb.AlterTable{
+		Database:     origin.DbName,
+		TableDef:     origin,
+		CopyTableDef: copyTable,
+	}
+	spec := mustParseAlterTableChangeColumnClause(
+		t,
+		mock.CurrentContext(),
+		"alter table t1 change column title headline varchar(128)",
+	)
+
+	_, err := ChangeColumn(mock.CurrentContext(), alterPlan, spec, alterCtx)
+	require.NoError(t, err)
+	require.Equal(t,
+		"`headline` != 'title' and `note` != 'title'",
+		copyTable.Checks[0].OriginSql,
+	)
+	require.Equal(t,
+		"`title` <> 'title' AND `note` <> 'title'",
+		origin.Checks[0].OriginSql,
+	)
+}
+
 func TestChangeColumnRenamesPrefixLengthMetadata(t *testing.T) {
 	prefixParams, err := catalog.IndexParamsMapToJsonString(map[string]string{
 		catalog.IndexAlgoParamPrefixLengths: "title:4",
@@ -627,6 +661,75 @@ func TestUpdateRenameColumnInTableDefRewritesCheckOriginSQL(t *testing.T) {
 		"`headline` != 'title' and `note` != 'title'",
 		tableDef.Checks[0].OriginSql,
 	)
+}
+
+func TestUpdateRenameColumnInTableDefRequiresCheckRenameProtocol(t *testing.T) {
+	newTableDef := func() *planpb.TableDef {
+		tableDef := makeAlterCoverageTableDef()
+		tableDef.Checks = []*planpb.CheckDef{
+			{
+				Name:      "chk_title",
+				OriginSql: "`title` <> ''",
+			},
+		}
+		return tableDef
+	}
+
+	mock := NewMockOptimizer(false)
+	proc := mock.CurrentContext().GetProcess()
+	rt := moruntime.ServiceRuntime(proc.GetService())
+	original, hadOriginal := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	defer func() {
+		if hadOriginal {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, original)
+		} else {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+		}
+	}()
+
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion13)
+	v13TableDef := newTableDef()
+	_, err := updateRenameColumnInTableDef(
+		mock.CurrentContext(),
+		v13TableDef.Cols[2],
+		v13TableDef,
+		&tree.AlterTableRenameColumnClause{
+			OldColumnName: tree.NewUnresolvedColName("title"),
+			NewColumnName: tree.NewUnresolvedColName("headline"),
+		},
+	)
+	require.ErrorContains(t, err, "protocol version 14")
+	require.Equal(t, "`title` <> ''", v13TableDef.Checks[0].OriginSql)
+	require.NotNil(t, FindColumn(v13TableDef.Cols, "title"))
+
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion14)
+	v14TableDef := newTableDef()
+	_, err = updateRenameColumnInTableDef(
+		mock.CurrentContext(),
+		v14TableDef.Cols[2],
+		v14TableDef,
+		&tree.AlterTableRenameColumnClause{
+			OldColumnName: tree.NewUnresolvedColName("title"),
+			NewColumnName: tree.NewUnresolvedColName("headline"),
+		},
+	)
+	require.NoError(t, err)
+	require.Equal(t, "`headline` != ''", v14TableDef.Checks[0].OriginSql)
+	require.NotNil(t, FindColumn(v14TableDef.Cols, "headline"))
+
+	// A rename that carries no CHECK metadata adds no new wire requirement.
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion13)
+	noCheckTableDef := makeAlterCoverageTableDef()
+	_, err = updateRenameColumnInTableDef(
+		mock.CurrentContext(),
+		noCheckTableDef.Cols[2],
+		noCheckTableDef,
+		&tree.AlterTableRenameColumnClause{
+			OldColumnName: tree.NewUnresolvedColName("title"),
+			NewColumnName: tree.NewUnresolvedColName("headline"),
+		},
+	)
+	require.NoError(t, err)
 }
 
 func TestAlterColumnSetDefaultUpdatesCopiedColumn(t *testing.T) {
