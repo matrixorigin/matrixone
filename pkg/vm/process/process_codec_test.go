@@ -104,7 +104,7 @@ func newCodecTestProcess(t *testing.T) (*Process, client.TxnOperator) {
 	vec := vector.NewVec(types.T_text.ToType())
 	require.NoError(t, vector.AppendBytes(vec, []byte("a"), false, proc.Mp()))
 	require.NoError(t, vector.AppendBytes(vec, []byte("b"), true, proc.Mp()))
-	proc.SetPrepareParamsWithIsBin(vec, []bool{true, false})
+	proc.SetPrepareParamsWithMetadata(vec, []bool{true, false}, []bool{false, true})
 	proc.SetAffectedRows(42)
 	proc.SetPlanSnapshotTS(timestamp.Timestamp{PhysicalTime: 123, LogicalTime: 4})
 	return proc, txnOp
@@ -319,6 +319,7 @@ func TestBuildProcessInfoAndMockProcessInfoWithPro(t *testing.T) {
 	require.Equal(t, int64(2), info.PrepareParams.Length)
 	require.Equal(t, []bool{false, true}, info.PrepareParams.Nulls)
 	require.Equal(t, []bool{true, false}, info.PrepareParams.IsBin)
+	require.Equal(t, []bool{false, true}, info.PrepareParams.IsBinaryString)
 	require.Equal(t, int64(42), info.AffectedRows)
 	require.True(t, info.StatementRuntimeIgnore)
 	require.Equal(t, &timestamp.Timestamp{PhysicalTime: 123, LogicalTime: 4}, info.PlanSnapshotTs)
@@ -349,6 +350,48 @@ func TestBuildProcessInfoAndMockProcessInfoWithPro(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "select 2", mockInfo.Sql)
 	require.Equal(t, "UTC", proc.Base.SessionInfo.TimeZone.String())
+}
+
+func TestBuildProcessInfoGatesBinaryStringMetadataByProtocolVersion(t *testing.T) {
+	proc, _ := newCodecTestProcess(t)
+	serviceRuntime := rt.ServiceRuntime(proc.GetService())
+	original, hadOriginal := serviceRuntime.GetGlobalVariables(rt.MOProtocolVersion)
+	defer func() {
+		if hadOriginal {
+			serviceRuntime.SetGlobalVariables(rt.MOProtocolVersion, original)
+		} else {
+			serviceRuntime.SetGlobalVariables(rt.MOProtocolVersion, defines.MORPCLatestVersion)
+		}
+		proc.Free()
+	}()
+
+	serviceRuntime.SetGlobalVariables(rt.MOProtocolVersion, defines.MORPCVersion10)
+	_, err := proc.BuildProcessInfo("select ?")
+	require.Error(t, err)
+
+	proc.SetPrepareParamsWithMetadata(proc.GetPrepareParams(), []bool{false, false}, []bool{false, false})
+	info, err := proc.BuildProcessInfo("select ?")
+	require.NoError(t, err)
+	require.Empty(t, info.PrepareParams.IsBinaryString)
+
+	serviceRuntime.SetGlobalVariables(rt.MOProtocolVersion, defines.MORPCVersion11)
+	proc.SetPrepareParamsWithMetadata(proc.GetPrepareParams(), []bool{false, false}, []bool{false, true})
+	_, err = proc.BuildProcessInfo("select ?")
+	require.Error(t, err)
+
+	serviceRuntime.SetGlobalVariables(rt.MOProtocolVersion, defines.MORPCVersion12)
+	_, err = proc.BuildProcessInfo("select ?")
+	require.Error(t, err)
+
+	serviceRuntime.SetGlobalVariables(rt.MOProtocolVersion, defines.MORPCVersion13)
+	_, err = proc.BuildProcessInfo("select ?")
+	require.Error(t, err)
+
+	serviceRuntime.SetGlobalVariables(rt.MOProtocolVersion, defines.MORPCVersion14)
+	proc.SetPrepareParamsWithMetadata(proc.GetPrepareParams(), []bool{false, false}, []bool{false, true})
+	info, err = proc.BuildProcessInfo("select ?")
+	require.NoError(t, err)
+	require.Equal(t, []bool{false, true}, info.PrepareParams.IsBinaryString)
 }
 
 func TestCodecServiceEncodeDecodeAndLookup(t *testing.T) {
@@ -487,6 +530,7 @@ func TestCodecServiceDecodesLegacyPrepareParamsWithoutBinaryFlags(t *testing.T) 
 	info, err := proc.BuildProcessInfo("select ?")
 	require.NoError(t, err)
 	info.PrepareParams.IsBin = nil
+	info.PrepareParams.IsBinaryString = nil
 	// An old coordinator does not send the new field. Protobuf decodes that
 	// absence as false, preserving the prior strict-mode behavior remotely.
 	info.StatementRuntimeIgnore = false
@@ -496,6 +540,7 @@ func TestCodecServiceDecodesLegacyPrepareParamsWithoutBinaryFlags(t *testing.T) 
 	legacyInfo := pipeline.ProcessInfo{}
 	require.NoError(t, legacyInfo.Unmarshal(payload))
 	require.Empty(t, legacyInfo.PrepareParams.IsBin)
+	require.Empty(t, legacyInfo.PrepareParams.IsBinaryString)
 
 	svc := NewCodecService(fakeCodecTxnClient{op: fakeCodecTxnOperator{}}, nil, nil, nil, nil, nil, nil, nil)
 	decodedProc, err := svc.Decode(context.Background(), legacyInfo)

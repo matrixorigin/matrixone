@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -79,6 +80,23 @@ func (proc *Process) BuildProcessInfo(
 
 		vec := proc.GetPrepareParams()
 		if vec != nil {
+			protocolVersion := int64(0)
+			if rt := runtime.ServiceRuntime(proc.GetService()); rt != nil {
+				if value, ok := rt.GetGlobalVariables(runtime.MOProtocolVersion); ok {
+					protocolVersion, _ = value.(int64)
+				}
+			}
+			hasBinaryString := false
+			for _, binaryString := range proc.Base.prepareParamsBinaryString {
+				hasBinaryString = hasBinaryString || binaryString
+			}
+			if hasBinaryString && protocolVersion < defines.MORPCVersion14 {
+				return procInfo, moerr.NewNotSupportedf(
+					proc.Ctx,
+					"binary string prepared parameters require protocol version %d",
+					defines.MORPCVersion14,
+				)
+			}
 			procInfo.PrepareParams.Length = int64(vec.Length())
 			procInfo.PrepareParams.Data = make([]byte, 0, len(vec.GetData()))
 			procInfo.PrepareParams.Data = append(procInfo.PrepareParams.Data, vec.GetData()...)
@@ -97,6 +115,10 @@ func (proc *Process) BuildProcessInfo(
 				return procInfo, err
 			}
 			procInfo.PrepareParams.IsBin = metadata
+			if hasBinaryString {
+				procInfo.PrepareParams.IsBinaryString = append(
+					[]bool(nil), proc.Base.prepareParamsBinaryString...)
+			}
 		}
 	}
 	{ // session info
@@ -282,7 +304,11 @@ func (c *codecService) Decode(
 				prepareParams.GetNulls().Add(uint64(i))
 			}
 		}
-		proc.SetOwnedPrepareParamsWithIsBin(prepareParams, prepareParamMetadata)
+		proc.SetOwnedPrepareParamsWithMetadata(
+			prepareParams,
+			prepareParamMetadata,
+			value.PrepareParams.IsBinaryString,
+		)
 	}
 	return proc, nil
 }

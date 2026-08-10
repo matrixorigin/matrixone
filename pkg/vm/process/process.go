@@ -153,12 +153,21 @@ func (proc *Process) GetPrepareParams() *vector.Vector {
 
 // SetPrepareParams borrows prepareParams. The caller remains responsible for releasing it.
 func (proc *Process) SetPrepareParams(prepareParams *vector.Vector) {
-	proc.setPrepareParams(prepareParams, nil, false)
+	proc.setPrepareParams(prepareParams, nil, nil, false)
 }
 
 // SetPrepareParamsWithIsBin borrows prepareParams. The caller remains responsible for releasing it.
 func (proc *Process) SetPrepareParamsWithIsBin(prepareParams *vector.Vector, isBin []bool) {
-	proc.setPrepareParams(prepareParams, isBin, false)
+	proc.setPrepareParams(prepareParams, isBin, nil, false)
+}
+
+// SetPrepareParamsWithMetadata borrows prepareParams and keeps literal numeric
+// metadata separate from binary-string metadata.
+func (proc *Process) SetPrepareParamsWithMetadata(
+	prepareParams *vector.Vector,
+	isBin, binaryString []bool,
+) {
+	proc.setPrepareParams(prepareParams, isBin, binaryString, false)
 }
 
 // SetPrepareParamsWithMeta borrows prepareParams and carries per-parameter
@@ -169,13 +178,27 @@ func (proc *Process) SetPrepareParamsWithMeta(
 	prepareParams *vector.Vector,
 	isBin []bool,
 	kinds []vector.PrepareParamKind,
+	binaryString ...[]bool,
 ) {
-	proc.setPrepareParams(prepareParams, prepareParamMetadata(prepareParams, isBin, kinds), false)
+	var binary []bool
+	if len(binaryString) > 0 {
+		binary = binaryString[0]
+	}
+	proc.setPrepareParams(prepareParams, prepareParamMetadata(prepareParams, isBin, kinds), binary, false)
 }
 
 // SetOwnedPrepareParamsWithIsBin transfers prepareParams to proc. Replacing or freeing proc releases it.
 func (proc *Process) SetOwnedPrepareParamsWithIsBin(prepareParams *vector.Vector, isBin []bool) {
-	proc.setPrepareParams(prepareParams, isBin, true)
+	proc.setPrepareParams(prepareParams, isBin, nil, true)
+}
+
+// SetOwnedPrepareParamsWithMetadata transfers prepareParams to proc and keeps
+// literal numeric metadata separate from binary-string metadata.
+func (proc *Process) SetOwnedPrepareParamsWithMetadata(
+	prepareParams *vector.Vector,
+	isBin, binaryString []bool,
+) {
+	proc.setPrepareParams(prepareParams, isBin, binaryString, true)
 }
 
 // SetOwnedPrepareParamsWithMeta transfers prepareParams to proc and preserves
@@ -184,8 +207,13 @@ func (proc *Process) SetOwnedPrepareParamsWithMeta(
 	prepareParams *vector.Vector,
 	isBin []bool,
 	kinds []vector.PrepareParamKind,
+	binaryString ...[]bool,
 ) {
-	proc.setPrepareParams(prepareParams, prepareParamMetadata(prepareParams, isBin, kinds), true)
+	var binary []bool
+	if len(binaryString) > 0 {
+		binary = binaryString[0]
+	}
+	proc.setPrepareParams(prepareParams, prepareParamMetadata(prepareParams, isBin, kinds), binary, true)
 }
 
 func prepareParamMetadata(
@@ -302,7 +330,11 @@ func prepareParamProtocolVersion(service string) int64 {
 	}
 }
 
-func (proc *Process) setPrepareParams(prepareParams *vector.Vector, isBin []bool, owned bool) {
+func (proc *Process) setPrepareParams(
+	prepareParams *vector.Vector,
+	isBin, binaryString []bool,
+	owned bool,
+) {
 	if proc.Base.prepareParams == prepareParams && proc.Base.prepareParamsOwned {
 		owned = true
 	}
@@ -311,6 +343,7 @@ func (proc *Process) setPrepareParams(prepareParams *vector.Vector, isBin []bool
 	}
 	proc.Base.prepareParams = prepareParams
 	proc.Base.prepareParamsIsBin = isBin
+	proc.Base.prepareParamsBinaryString = binaryString
 	proc.Base.prepareParamsOwned = owned && prepareParams != nil
 }
 
@@ -319,6 +352,7 @@ func (proc *Process) setPrepareParams(prepareParams *vector.Vector, isBin []bool
 type PrepareParamsState struct {
 	prepareParams *vector.Vector
 	isBin         []bool
+	binaryString  []bool
 	owned         bool
 }
 
@@ -329,10 +363,12 @@ func (proc *Process) DetachPrepareParams() PrepareParamsState {
 	state := PrepareParamsState{
 		prepareParams: proc.Base.prepareParams,
 		isBin:         proc.Base.prepareParamsIsBin,
+		binaryString:  proc.Base.prepareParamsBinaryString,
 		owned:         proc.Base.prepareParamsOwned,
 	}
 	proc.Base.prepareParams = nil
 	proc.Base.prepareParamsIsBin = nil
+	proc.Base.prepareParamsBinaryString = nil
 	proc.Base.prepareParamsOwned = false
 	return state
 }
@@ -341,13 +377,13 @@ func (proc *Process) DetachPrepareParams() PrepareParamsState {
 // their ownership back to proc. It lets nested work use the parameters while
 // Process.Free releases only resources owned by that nested work.
 func (proc *Process) BorrowPrepareParams(state PrepareParamsState) {
-	proc.setPrepareParams(state.prepareParams, state.isBin, false)
+	proc.setPrepareParams(state.prepareParams, state.isBin, state.binaryString, false)
 }
 
 // RestorePrepareParams restores state previously returned by
 // DetachPrepareParams.
 func (proc *Process) RestorePrepareParams(state PrepareParamsState) {
-	proc.setPrepareParams(state.prepareParams, state.isBin, state.owned)
+	proc.setPrepareParams(state.prepareParams, state.isBin, state.binaryString, state.owned)
 }
 
 func (proc *Process) OperatorOutofMemory(size int64) bool {

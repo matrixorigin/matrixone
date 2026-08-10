@@ -37,13 +37,15 @@ const (
 	prepareParamKindBatchModeNone    = byte(0)
 	prepareParamKindBatchModeUniform = byte(1)
 	prepareParamKindBatchModeRows    = byte(2)
+	prepareParamKindBatchBinaryFlag  = byte(0x80)
 	prepareParamKindBatchMaxRows     = int32(1 << 24)
 )
 
 type prepareParamKindBatchRecord struct {
-	mode byte
-	kind vector.PrepareParamKind
-	rows []vector.PrepareParamKind
+	mode         byte
+	kind         vector.PrepareParamKind
+	encodedRows  []byte
+	binaryString bool
 }
 
 func New(attrs []string) *Batch {
@@ -152,10 +154,33 @@ func (bat *Batch) HasPrepareParamKindMetadata() bool {
 		if vec == nil {
 			continue
 		}
+		if vec.GetIsBinaryString() {
+			return true
+		}
 		if len(vec.GetPrepareParamKinds()) != 0 {
 			return true
 		}
 		if vec.HasPrepareParamKind() && vec.GetPrepareParamKind() != vector.PrepareParamNone {
+			return true
+		}
+	}
+	return false
+}
+
+func (bat *Batch) HasBinaryStringMetadata() bool {
+	if bat == nil {
+		return false
+	}
+	for _, vec := range bat.Vecs {
+		if vec == nil {
+			continue
+		}
+		switch vec.GetType().Oid {
+		case types.T_binary, types.T_varbinary, types.T_blob:
+			// Static binary types need no dynamic trailer.
+			continue
+		}
+		if vec.GetIsBinaryString() {
 			return true
 		}
 	}
@@ -183,25 +208,39 @@ func (bat *Batch) AppendPrepareParamKindMetadata(w *bytes.Buffer) error {
 			return moerr.NewInvalidInputNoCtx("cannot encode prepared parameter metadata for nil vector")
 		}
 		kinds := vec.GetPrepareParamKinds()
+		mixedBinaryString := vec.HasBinaryStringRows()
+		binaryFlag := byte(0)
+		if vec.GetIsBinaryString() && !mixedBinaryString {
+			binaryFlag = prepareParamKindBatchBinaryFlag
+		}
 		switch {
-		case len(kinds) != 0:
-			if len(kinds) != vec.Length() || int64(len(kinds)) > int64(prepareParamKindBatchMaxRows) {
+		case len(kinds) != 0 || mixedBinaryString:
+			if (len(kinds) != 0 && len(kinds) != vec.Length()) ||
+				int64(vec.Length()) > int64(prepareParamKindBatchMaxRows) {
 				return moerr.NewInvalidInputNoCtx("invalid prepared parameter metadata row count")
 			}
 			ext.WriteByte(prepareParamKindBatchModeRows)
-			rowLen := int32(len(kinds))
+			rowLen := int32(vec.Length())
 			ext.Write(types.EncodeInt32(&rowLen))
-			for _, kind := range kinds {
+			for row := 0; row < vec.Length(); row++ {
+				kind := vector.PrepareParamNone
+				if len(kinds) != 0 {
+					kind = kinds[row]
+				}
 				if kind > vector.PrepareParamBoolean {
 					return moerr.NewInvalidInputNoCtx("invalid prepared parameter metadata kind")
 				}
-				ext.WriteByte(byte(kind))
+				encoded := byte(kind)
+				if vec.GetIsBinaryStringAt(row) {
+					encoded |= prepareParamKindBatchBinaryFlag
+				}
+				ext.WriteByte(encoded)
 			}
 		case vec.HasPrepareParamKind() && vec.GetPrepareParamKind() != vector.PrepareParamNone:
-			ext.WriteByte(prepareParamKindBatchModeUniform)
+			ext.WriteByte(prepareParamKindBatchModeUniform | binaryFlag)
 			ext.WriteByte(byte(vec.GetPrepareParamKind()))
 		default:
-			ext.WriteByte(prepareParamKindBatchModeNone)
+			ext.WriteByte(prepareParamKindBatchModeNone | binaryFlag)
 		}
 	}
 	if uint64(ext.Len()) > uint64(^uint32(0))-4 {
@@ -438,7 +477,6 @@ func (bat *Batch) UnmarshalBinaryWithPrepareParamKinds(data []byte, mp *mpool.MP
 	if rowCount != int64(bat.RowCount()) {
 		return moerr.NewInvalidInputNoCtx("prepared parameter metadata batch row count mismatch")
 	}
-	cleared := 0
 	for i, record := range records {
 		if i >= len(bat.Vecs) {
 			return moerr.NewInvalidInputNoCtx("prepared parameter metadata vector count mismatch")
@@ -447,29 +485,35 @@ func (bat *Batch) UnmarshalBinaryWithPrepareParamKinds(data []byte, mp *mpool.MP
 		var applyErr error
 		switch record.mode {
 		case prepareParamKindBatchModeNone:
-			// The stable decoder reset any metadata from an earlier reuse.
+			vec.SetIsBinaryString(record.binaryString)
 		case prepareParamKindBatchModeUniform:
 			if record.kind == vector.PrepareParamNone {
 				applyErr = moerr.NewInvalidInputNoCtx("uniform prepared parameter metadata cannot be None")
 			} else {
 				vec.SetPrepareParamKind(record.kind)
 			}
+			vec.SetIsBinaryString(record.binaryString)
 		case prepareParamKindBatchModeRows:
-			if len(record.rows) != vec.Length() {
+			if len(record.encodedRows) != vec.Length() {
 				applyErr = moerr.NewInvalidInputNoCtx("prepared parameter metadata row count mismatch")
 			} else {
-				applyErr = vec.SetPrepareParamKindsWithMP(record.rows, mp)
+				applyErr = vec.SetPrepareParamKindsAndBinaryStringFromReader(
+					bytes.NewReader(record.encodedRows), len(record.encodedRows), mp,
+					prepareParamKindBatchBinaryFlag,
+				)
 			}
 		default:
 			applyErr = moerr.NewInvalidInputNoCtx("invalid prepared parameter metadata mode")
 		}
 		if applyErr != nil {
-			for j := 0; j < cleared; j++ {
-				_ = bat.Vecs[j].SetPrepareParamKindsWithMP(nil, mp)
+			for _, resetVec := range bat.Vecs {
+				if resetVec != nil {
+					_ = resetVec.SetPrepareParamKindsWithMP(nil, mp)
+					resetVec.SetIsBinaryString(false)
+				}
 			}
 			return applyErr
 		}
-		cleared = i + 1
 	}
 	return nil
 }
@@ -506,6 +550,7 @@ func (bat *Batch) UnmarshalFromReaderWithPrepareParamKinds(
 		for _, vec := range bat.Vecs {
 			if vec != nil {
 				_ = vec.SetPrepareParamKindsWithMP(nil, mp)
+				vec.SetIsBinaryString(false)
 			}
 		}
 	}
@@ -563,9 +608,11 @@ func (bat *Batch) UnmarshalFromReaderWithPrepareParamKinds(
 		if err != nil {
 			return fail(err)
 		}
+		binaryString := mode&prepareParamKindBatchBinaryFlag != 0
+		mode &^= prepareParamKindBatchBinaryFlag
 		switch mode {
 		case prepareParamKindBatchModeNone:
-			// The stable decoder reset any metadata from an earlier reuse.
+			bat.Vecs[i].SetIsBinaryString(binaryString)
 		case prepareParamKindBatchModeUniform:
 			kind, err := readByte()
 			if err != nil {
@@ -576,6 +623,7 @@ func (bat *Batch) UnmarshalFromReaderWithPrepareParamKinds(
 				return fail(moerr.NewInvalidInputNoCtx("invalid uniform prepared parameter metadata kind"))
 			}
 			bat.Vecs[i].SetPrepareParamKind(vector.PrepareParamKind(kind))
+			bat.Vecs[i].SetIsBinaryString(binaryString)
 		case prepareParamKindBatchModeRows:
 			count, err := types.ReadInt32(limited)
 			if err != nil {
@@ -592,7 +640,9 @@ func (bat *Batch) UnmarshalFromReaderWithPrepareParamKinds(
 			if limited.N < minimumRemaining || int64(count) > limited.N-minimumRemaining {
 				return fail(io.ErrUnexpectedEOF)
 			}
-			if err := bat.Vecs[i].SetPrepareParamKindsFromReader(limited, int(count), mp); err != nil {
+			if err := bat.Vecs[i].SetPrepareParamKindsAndBinaryStringFromReader(
+				limited, int(count), mp, prepareParamKindBatchBinaryFlag,
+			); err != nil {
 				return fail(err)
 			}
 		default:
@@ -719,6 +769,8 @@ func parsePrepareParamKindBatchTrailer(
 		if err != nil {
 			return nil, 0, err
 		}
+		records[i].binaryString = mode&prepareParamKindBatchBinaryFlag != 0
+		mode &^= prepareParamKindBatchBinaryFlag
 		records[i].mode = mode
 		switch mode {
 		case prepareParamKindBatchModeNone:
@@ -743,13 +795,14 @@ func parsePrepareParamKindBatchTrailer(
 			if reader.Len() < 4 || int64(count) > int64(reader.Len()-4) {
 				return nil, 0, io.ErrUnexpectedEOF
 			}
-			records[i].rows = make([]vector.PrepareParamKind, int(count))
-			for row := range records[i].rows {
-				kind, err := types.ReadByte(reader)
+			records[i].encodedRows = make([]byte, int(count))
+			for row := range records[i].encodedRows {
+				encoded, err := types.ReadByte(reader)
+				kind := encoded &^ prepareParamKindBatchBinaryFlag
 				if err != nil || vector.PrepareParamKind(kind) > vector.PrepareParamBoolean {
 					return nil, 0, moerr.NewInvalidInputNoCtx("invalid prepared parameter metadata kind")
 				}
-				records[i].rows[row] = vector.PrepareParamKind(kind)
+				records[i].encodedRows[row] = encoded
 			}
 		default:
 			return nil, 0, moerr.NewInvalidInputNoCtx("invalid prepared parameter metadata mode")
@@ -1615,6 +1668,7 @@ func (bat *Batch) CloneTo(toBat *Batch, mp *mpool.MPool) (err error) {
 				toBat.Clean(mp)
 				return
 			}
+			toVec.SetIsBinaryString(srcVec.GetIsBinaryString())
 		}
 	}
 	toBat.rowCount = bat.rowCount
