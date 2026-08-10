@@ -178,7 +178,7 @@ show TRIGGERS like '*%';
 Trigger    Event    Table    Statement    Timing    Created    sql_mode    Definer    character_set_client    collation_connection    Database Collation
 show collation like 'utf8mb4_general_ci%';
 Collation    Charset    Id    Default    Compiled    Sortlen    Pad_attribute
-utf8mb4_general_ci    utf8mb4    45        Yes    1    PAD SPACE
+utf8mb4_general_ci    utf8mb4    45    YES    Yes    1    PAD SPACE
 show full tables;
 Tables_in_res_test    Table_type
 r_test    BASE TABLE
@@ -291,7 +291,7 @@ show TRIGGERS like '*%';
 Trigger    Event    Table    Statement    Timing    Created    sql_mode    Definer    character_set_client    collation_connection    Database Collation
 show collation like 'utf8mb4_general_ci%';
 Collation    Charset    Id    Default    Compiled    Sortlen    Pad_attribute
-utf8mb4_general_ci    utf8mb4    45        Yes    1    PAD SPACE
+utf8mb4_general_ci    utf8mb4    45    YES    Yes    1    PAD SPACE
 show full tables;
 Tables_in_res_test    Table_type
 r_test    BASE TABLE

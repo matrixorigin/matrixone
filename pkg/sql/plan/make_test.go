@@ -43,6 +43,54 @@ func Test_rewriteDecimalTypeIfNecessary(t *testing.T) {
 	require.Equal(t, []int32{t4.Scale, t4.Width}, []int32{0, 18})
 }
 
+func TestPlanTypeCharsetRoundTrip(t *testing.T) {
+	for _, charset := range []uint8{
+		types.CharsetLegacy,
+		types.CharsetBinary,
+		types.CharsetUTF8MB4Bin,
+		types.CharsetUTF8,
+	} {
+		original := types.NewWithCharset(types.T_varchar, 32, 0, charset)
+		planType := makePlan2Type(&original)
+		require.Equal(t, uint32(charset), planType.Charset)
+		require.Equal(t, original, makeTypeByPlan2Type(planType))
+		encoded, err := planType.Marshal()
+		require.NoError(t, err)
+		var decoded plan.Type
+		require.NoError(t, decoded.Unmarshal(encoded))
+		require.Equal(t, planType, decoded)
+	}
+
+	// Charset was absent from older plans. Keep the OID-derived binary default.
+	legacyBinary := makeTypeByPlan2Type(plan.Type{Id: int32(types.T_binary), Width: 8})
+	require.Equal(t, types.CharsetBinary, legacyBinary.Charset)
+	legacyText := makeTypeByPlan2Type(plan.Type{Id: int32(types.T_varchar), Width: 8})
+	require.Equal(t, types.CharsetLegacy, legacyText.Charset)
+}
+
+func TestNewStringExpressionsAndSerializedColumnsHaveExplicitCharsets(t *testing.T) {
+	require.Equal(t, uint32(types.CharsetUTF8),
+		makePlan2StringConstExprWithType("value").Typ.Charset)
+	require.Equal(t, uint32(types.CharsetBinary),
+		makePlan2StringConstExprWithType("\xff", true).Typ.Charset)
+	require.Equal(t, uint32(types.CharsetBinary),
+		MakeHiddenColDefByName("__mo_serialized").Typ.Charset)
+}
+
+func TestMakeGeneratedPlan2TypeUsesExplicitTextCharset(t *testing.T) {
+	varchar := makeGeneratedPlan2Type(types.T_varchar, 128, 0, true)
+	require.Equal(t, int32(types.T_varchar), varchar.Id)
+	require.Equal(t, int32(128), varchar.Width)
+	require.True(t, varchar.NotNullable)
+	require.Equal(t, uint32(types.CharsetUTF8), varchar.Charset)
+
+	text := makeGeneratedPlan2Type(types.T_text, types.MaxVarcharLen, 0, false)
+	require.Equal(t, uint32(types.CharsetUTF8), text.Charset)
+
+	integer := makeGeneratedPlan2Type(types.T_int64, 0, 0, false)
+	require.Equal(t, uint32(types.CharsetLegacy), integer.Charset)
+}
+
 func Test_MakePlan2Vecf32ConstExprWithType(t *testing.T) {
 	t1 := MakePlan2Vecf32ConstExprWithType("[1,2,3]", 3)
 	actual := t1.Expr.(*plan.Expr_Lit).Lit.GetValue().(*plan.Literal_Sval).Sval
@@ -97,6 +145,11 @@ func Test_isSameColumnType(t *testing.T) {
 	require.False(t, isSameColumnType(
 		plan.Type{Id: int32(types.T_uint64), Enumvalues: "a,b"},
 		plan.Type{Id: int32(types.T_uint64), Enumvalues: "a,c"},
+	))
+
+	require.False(t, isSameColumnType(
+		plan.Type{Id: int32(types.T_varchar), Width: 32, Charset: uint32(types.CharsetUTF8)},
+		plan.Type{Id: int32(types.T_varchar), Width: 32, Charset: uint32(types.CharsetBinary)},
 	))
 
 	require.False(t, isSameColumnType(

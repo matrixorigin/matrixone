@@ -759,7 +759,7 @@ func isInplaceColumnDefinition(
 		return
 	}
 
-	ok, err = storageAgnosticType(ctx, column, oCol)
+	ok, err = storageAgnosticType(ctx, column, oCol, tableDef.DefaultCharset)
 	if err != nil {
 		return
 	}
@@ -804,13 +804,15 @@ func storageAgnosticType(
 	ctx context.Context,
 	nCol *tree.ColumnTableDef,
 	oCol *ColDef,
+	defaultCharset uint32,
 ) (ok bool, err error) {
 
 	nTy, err := getTypeFromAst(ctx, nCol.Type)
 	if err != nil {
 		return
 	}
-	if err = applyColumnAttributesToType(ctx, &nTy, nCol.Attributes); err != nil {
+	nTy.Charset = uint32(types.CharsetType(types.T(nTy.Id)))
+	if err = applyDefaultAndColumnAttributesToType(ctx, &nTy, defaultCharset, nCol.Attributes); err != nil {
 		return
 	}
 
@@ -819,7 +821,8 @@ func storageAgnosticType(
 	if oTy.Id != nTy.Id ||
 		oTy.Scale != nTy.Scale ||
 		oTy.Enumvalues != nTy.Enumvalues ||
-		oTy.AutoIncr != nTy.AutoIncr {
+		oTy.AutoIncr != nTy.AutoIncr ||
+		oTy.Charset != nTy.Charset {
 		return
 	}
 

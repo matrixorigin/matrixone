@@ -407,7 +407,11 @@ func icebergMOTypeToPlanType(ctx context.Context, moType api.MOType) (*plan.Type
 	case "TIMESTAMP", "TIMESTAMP(6)":
 		return &plan.Type{Id: int32(types.T_timestamp), Scale: 6}, nil
 	case "TEXT":
-		return &plan.Type{Id: int32(types.T_text), Width: types.MaxVarcharLen}, nil
+		return &plan.Type{
+			Id:      int32(types.T_text),
+			Width:   types.MaxVarcharLen,
+			Charset: uint32(types.CharsetUTF8),
+		}, nil
 	case "VARBINARY":
 		width := int32(moType.Width)
 		if width <= 0 {

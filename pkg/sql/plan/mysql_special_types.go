@@ -689,3 +689,10 @@ func isNullLiteralExpr(expr *Expr) bool {
 	lit, ok := expr.Expr.(*plan.Expr_Lit)
 	return ok && lit.Lit != nil && lit.Lit.Isnull
 }
+
+// A bare NULL is represented by the binder's legacy T_text placeholder.
+// Explicitly typed NULL expressions must keep participating in type merging.
+func isPureNullLiteralExpr(expr *Expr) bool {
+	return isNullLiteralExpr(expr) &&
+		types.T(expr.Typ.Id) == types.T_text && expr.Typ.Charset == uint32(types.CharsetLegacy)
+}
