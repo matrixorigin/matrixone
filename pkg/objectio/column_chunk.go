@@ -170,7 +170,8 @@ func parseColumnChunkHeader(data []byte, extentLength uint32) (uint32, []columnC
 	if headerSize > uint64(len(data)) {
 		return 0, nil, io.ErrUnexpectedEOF
 	}
-	if totalRows == 0 || count == 0 || headerSize > uint64(extentLength) {
+	if totalRows == 0 || totalRows > BlockMaxRows || count == 0 || count > totalRows ||
+		headerSize > uint64(extentLength) {
 		return 0, nil, moerr.NewInvalidInputNoCtx("invalid chunked object column size")
 	}
 	metas := make([]columnChunkMeta, count)
@@ -189,6 +190,9 @@ func parseColumnChunkHeader(data []byte, extentLength uint32) (uint32, []columnC
 		if uint64(meta.rowStart) != expectedRow || meta.rowCount == 0 ||
 			uint64(meta.offset) != expectedOffset ||
 			uint64(meta.offset)+uint64(meta.length) > uint64(extentLength) ||
+			meta.length == 0 || meta.originSize == 0 ||
+			meta.originSize > uint32(columnChunkTargetBytes) || meta.length > meta.originSize ||
+			(meta.algorithm == uint8(compress.None) && meta.length != meta.originSize) ||
 			(meta.algorithm != uint8(compress.None) && meta.algorithm != uint8(compress.Lz4)) {
 			return 0, nil, moerr.NewInvalidInputNoCtx("invalid chunked object column entry")
 		}
@@ -273,6 +277,10 @@ func chunkedColumnHeaderReadSize(prefix []byte, extentLength uint32) (int, error
 	size := uint64(columnChunkHeaderSize) + uint64(count)*columnChunkEntrySize
 	if size > uint64(extentLength) || size > uint64(^uint(0)>>1) {
 		return 0, moerr.NewInvalidInputNoCtx("chunked object column header is too large")
+	}
+	totalRows := binary.LittleEndian.Uint32(prefix[8:12])
+	if totalRows == 0 || totalRows > BlockMaxRows || count == 0 || count > totalRows {
+		return 0, moerr.NewInvalidInputNoCtx("invalid chunked object column size")
 	}
 	return int(size), nil
 }

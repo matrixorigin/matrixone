@@ -140,6 +140,14 @@ func TestChunkedColumnRejectsMalformedMetadata(t *testing.T) {
 	_, err = chunkedColumnHeaderReadSize(prefix, columnChunkHeaderSize)
 	require.ErrorContains(t, err, "header is too large")
 
+	// Reject impossible chunk counts before using them to size the header read.
+	binary.LittleEndian.PutUint32(prefix[8:12], 1)
+	binary.LittleEndian.PutUint32(prefix[12:16], 2)
+	_, err = chunkedColumnHeaderReadSize(
+		prefix, columnChunkHeaderSize+2*columnChunkEntrySize,
+	)
+	require.ErrorContains(t, err, "invalid chunked object column size")
+
 	header := make([]byte, columnChunkHeaderSize+columnChunkEntrySize)
 	copy(header, columnChunkMagic[:])
 	binary.LittleEndian.PutUint32(header[8:12], 1)
@@ -150,6 +158,17 @@ func TestChunkedColumnRejectsMalformedMetadata(t *testing.T) {
 	})
 	_, _, err = parseColumnChunkHeader(header, uint32(len(header)+1))
 	require.Error(t, err)
+
+	// The writer never emits a chunk whose decoded representation exceeds the
+	// target. Validate that bound before a corrupt originSize reaches an
+	// allocation in the decompressor.
+	header = append(header[:columnChunkHeaderSize+columnChunkEntrySize], 0)
+	encodeColumnChunkMeta(header[columnChunkHeaderSize:], columnChunkMeta{
+		rowCount: 1, offset: uint32(len(header) - 1), length: 1,
+		originSize: columnChunkTargetBytes + 1, algorithm: compress.Lz4,
+	})
+	_, _, err = parseColumnChunkHeader(header, uint32(len(header)))
+	require.ErrorContains(t, err, "invalid chunked object column entry")
 
 	// Row counts must not wrap around uint32 and accidentally match totalRows.
 	header = make([]byte, columnChunkHeaderSize+2*columnChunkEntrySize)

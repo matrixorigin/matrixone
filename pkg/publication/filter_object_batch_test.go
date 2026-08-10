@@ -49,6 +49,7 @@ func TestConvertObjectToBatchSupportsChunkedColumnExtents(t *testing.T) {
 		[]uint16{0, objectio.SEQNUM_ROWID, objectio.SEQNUM_COMMITTS, objectio.SEQNUM_ABORT},
 		-1, false, false, fs,
 	)
+	writer.SetChunkedColumnPolicy(func() bool { return true })
 	writer.SetAppendable()
 	source := batch.NewWithSize(4)
 	source.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
