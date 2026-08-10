@@ -447,9 +447,16 @@ type BindContext struct {
 	explicitSliding              bool
 	isDistinct                   bool
 	normalizeGroupingSetDistinct bool
-	isCorrelated                 bool
-	hasSingleRow                 bool
-	isGroupingSet                bool
+	// groupingSetOrderHiddenCount marks the generated ORDER BY projections at
+	// the tail of a grouping-set branch select list. They are qualified after
+	// FROM binding with source-column-first ORDER BY semantics.
+	groupingSetOrderHiddenCount int
+	// preserveOrderSemanticKeys retains source-scope projection identities for
+	// a grouping-set branch whose UNION output otherwise loses that identity.
+	preserveOrderSemanticKeys bool
+	isCorrelated              bool
+	hasSingleRow              bool
+	isGroupingSet             bool
 
 	//cteName denotes the alias of this BindContext.
 	//it may be from view name, cte name or subquery name
@@ -487,6 +494,9 @@ type BindContext struct {
 	projectColByAst map[string]int32
 
 	projectByAst []SelectField
+	// projectSemanticKeys is populated only when preserveOrderSemanticKeys is
+	// set, keeping the ordinary-query projection path allocation-free.
+	projectSemanticKeys []string
 
 	numericProjectionTypes          []Type
 	numericTableProjectionTypes     map[string][]Type

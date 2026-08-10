@@ -115,7 +115,8 @@ drop table if exists emp;
 
 -- ORDER BY output-name resolution: a top-level name prefers an explicit
 -- expression alias, while qualified and nested names keep source-column
--- semantics. Bare-column/duplicate aliases remain ambiguous.
+-- semantics. Duplicate direct-column aliases are ambiguous only when they
+-- denote different sources; repeated/expression aliases use the first item.
 drop table if exists order_alias_shadow;
 create table order_alias_shadow(id int primary key, k int);
 insert into order_alias_shadow values (1, 30), (2, 10), (3, 20);
@@ -127,9 +128,21 @@ select id, -id as neg_id from order_alias_shadow order by neg_id;
 select id, -id as id from order_alias_shadow order by order_alias_shadow.id;
 select id, -id as id from order_alias_shadow order by id + 0 desc;
 select id as x, k as x from order_alias_shadow order by x;
+select id, id as id from order_alias_shadow order by id;
+select id as x, k + 0 as x from order_alias_shadow order by x;
+select -id as x, k + 0 as x from order_alias_shadow order by x;
+select -id as x, k + 0 as x from order_alias_shadow order by x + 0;
 
 select distinct id, -id as id from order_alias_shadow order by id;
 select distinct id, 20 as id from order_alias_shadow order by id desc, order_alias_shadow.id;
 select distinct id, -id as id from order_alias_shadow order by id + 0 desc;
+
+-- ROLLUP/CUBE are rewritten as grouping-set UNIONs. Resolve nested names in
+-- each source branch before that boundary, otherwise the output alias id=k
+-- silently changes ORDER BY id+0 from the source id to k.
+select k as id, id as source_id, count(*) as row_count
+from order_alias_shadow
+group by id, k with rollup
+order by id + 0, grouping(k), source_id + 0;
 
 drop table order_alias_shadow;

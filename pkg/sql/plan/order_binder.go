@@ -15,9 +15,10 @@
 package plan
 
 import (
+	"context"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
@@ -52,17 +53,15 @@ func (b *distinctOrderBinder) BindColRef(astExpr *tree.UnresolvedName, depth int
 	if astExpr.NumParts == 1 {
 		name := astExpr.ColName()
 		if isRoot {
-			if b.ctx.aliasFrequency[name] > 1 {
-				return nil, moerr.NewInvalidInputf(b.GetContext(), "Column '%s' in order clause is ambiguous", name)
-			}
-			if selectItem, ok := b.ctx.aliasMap[name]; ok {
-				return makeProjectColRef(b.ctx, selectItem.idx), nil
+			if pos, found, err := resolveOrderOutputName(b.GetContext(), b.ctx, name); err != nil {
+				return nil, err
+			} else if found {
+				return makeProjectColRef(b.ctx, pos), nil
 			}
 		} else if _, found := b.ctx.bindingByCol[name]; !found {
-			if b.ctx.aliasFrequency[name] > 1 {
-				return nil, moerr.NewInvalidInputf(b.GetContext(), "Column '%s' in order clause is ambiguous", name)
-			}
-			if selectItem, ok := b.ctx.aliasMap[name]; ok {
+			if selectItem, found, err := resolveOrderAlias(b.GetContext(), b.ctx, name); err != nil {
+				return nil, err
+			} else if found {
 				return makeProjectColRef(b.ctx, selectItem.idx), nil
 			}
 		}
@@ -98,6 +97,251 @@ func makeProjectColRef(ctx *BindContext, pos int32) *plan.Expr {
 	return GetColExpr(ctx.projects[pos].Typ, ctx.projectTag, pos)
 }
 
+// resolveOrderAlias applies MySQL's duplicate-output-name reduction. Direct
+// column aliases remain candidates until they disagree (ambiguous) or an
+// expression alias appears; the first expression alias then wins. Repeated
+// references to the same source column are equivalent.
+func resolveOrderAlias(sysCtx context.Context, ctx *BindContext, name string) (*aliasItem, bool, error) {
+	item, found, ambiguous, err := inspectOrderAlias(sysCtx, ctx, name)
+	if err != nil {
+		return nil, false, err
+	}
+	if ambiguous {
+		return nil, false, ambiguousOrderColumn(sysCtx, name)
+	}
+	return item, found, nil
+}
+
+func inspectOrderAlias(sysCtx context.Context, ctx *BindContext, name string) (*aliasItem, bool, bool, error) {
+	var selected *SelectField
+	for i := range ctx.projectByAst {
+		field := &ctx.projectByAst[i]
+		if field.aliasName != name {
+			continue
+		}
+		if selected == nil {
+			selected = field
+			continue
+		}
+		if !isDirectOrderColumn(selected.ast) {
+			continue
+		}
+		if !isDirectOrderColumn(field.ast) {
+			selected = field
+			continue
+		}
+		same, err := sameOrderProject(sysCtx, ctx, selected.pos, field.pos)
+		if err != nil {
+			return nil, false, false, err
+		}
+		if !same {
+			return nil, true, true, nil
+		}
+	}
+	if selected == nil {
+		if len(ctx.projectByAst) > 0 {
+			return nil, false, false, nil
+		}
+		// Set-operation contexts have output headings but no source select-list
+		// AST. Preserve their existing positional lookup and ambiguity rule.
+		item, found := ctx.aliasMap[name]
+		if !found {
+			return nil, false, false, nil
+		}
+		if ctx.aliasFrequency[name] > 1 {
+			return nil, true, true, nil
+		}
+		return item, true, false, nil
+	}
+
+	return &aliasItem{idx: selected.pos, astExpr: selected.ast}, true, false, nil
+}
+
+// resolveOrderOutputName applies the top-level ORDER BY name rule. Explicit
+// aliases take precedence over natural output names. If the winning explicit
+// alias is a direct column, other direct-column outputs with the same name must
+// denote the same bound expression; expression aliases remain first-match.
+func resolveOrderOutputName(sysCtx context.Context, ctx *BindContext, name string) (int32, bool, error) {
+	alias, found, err := resolveOrderAlias(sysCtx, ctx, name)
+	if err != nil {
+		return 0, false, err
+	}
+	if found {
+		if isDirectOrderColumn(alias.astExpr) {
+			for i := range ctx.projectByAst {
+				field := &ctx.projectByAst[i]
+				if field.aliasName != "" || !isNaturalOrderOutput(field.ast, name) {
+					continue
+				}
+				same, keyErr := sameOrderProject(sysCtx, ctx, alias.idx, field.pos)
+				if keyErr != nil {
+					return 0, false, keyErr
+				}
+				if !same {
+					return 0, false, ambiguousOrderColumn(sysCtx, name)
+				}
+			}
+		}
+		return alias.idx, true, nil
+	}
+
+	var first *SelectField
+	for i := range ctx.projectByAst {
+		field := &ctx.projectByAst[i]
+		if field.aliasName != "" || !isNaturalOrderOutput(field.ast, name) {
+			continue
+		}
+		if first == nil {
+			first = field
+			continue
+		}
+		same, keyErr := sameOrderProject(sysCtx, ctx, first.pos, field.pos)
+		if keyErr != nil {
+			return 0, false, keyErr
+		}
+		if !same {
+			return 0, false, ambiguousOrderColumn(sysCtx, name)
+		}
+	}
+	if first != nil {
+		return first.pos, true, nil
+	}
+	return 0, false, nil
+}
+
+func isDirectOrderColumn(astExpr tree.Expr) bool {
+	name, ok := unwrapParenExpr(astExpr).(*tree.UnresolvedName)
+	return ok && !name.Star
+}
+
+func isNaturalOrderOutput(astExpr tree.Expr, name string) bool {
+	column, ok := unwrapParenExpr(astExpr).(*tree.UnresolvedName)
+	return ok && !column.Star && column.ColName() == name
+}
+
+func sameOrderProject(sysCtx context.Context, ctx *BindContext, left, right int32) (bool, error) {
+	if left >= 0 && right >= 0 && int(left) < len(ctx.projectSemanticKeys) && int(right) < len(ctx.projectSemanticKeys) {
+		return ctx.projectSemanticKeys[left] == ctx.projectSemanticKeys[right], nil
+	}
+	if left < 0 || right < 0 || int(left) >= len(ctx.projects) || int(right) >= len(ctx.projects) {
+		return false, moerr.NewInternalError(sysCtx, "ORDER BY select item is outside projection")
+	}
+	leftKey, err := projectExprKey(ctx.projects[left])
+	if err != nil {
+		return false, err
+	}
+	rightKey, err := projectExprKey(ctx.projects[right])
+	if err != nil {
+		return false, err
+	}
+	return leftKey == rightKey, nil
+}
+
+func ambiguousOrderColumn(sysCtx context.Context, name string) error {
+	return moerr.NewInvalidInputf(sysCtx, "Column '%s' in order clause is ambiguous", name)
+}
+
+// qualifyOrderExpression applies the source-column-first rule used inside a
+// compound ORDER BY expression. When preserveAliases is true, fallback aliases
+// remain names and selectedAliases records the precise projected item to use;
+// the grouping-set DISTINCT path needs that form to stay inside the visible
+// projection. Otherwise aliases expand to their source AST for regular binding.
+func qualifyOrderExpression(
+	sysCtx context.Context,
+	ctx *BindContext,
+	astExpr tree.Expr,
+	protectGroupingArgs bool,
+	preserveAliases bool,
+) (tree.Expr, map[string]*aliasItem, error) {
+	if !protectGroupingArgs && !preserveAliases {
+		hasDuplicateAlias := false
+		for _, frequency := range ctx.aliasFrequency {
+			if frequency > 1 {
+				hasDuplicateAlias = true
+				break
+			}
+		}
+		if !hasDuplicateAlias {
+			qualified, err := ctx.qualifyColumnNames(astExpr, AliasAfterColumn)
+			return qualified, nil, err
+		}
+	}
+
+	qualified := astExpr
+	if protectGroupingArgs || preserveAliases {
+		qualified = cloneTreeExpr(astExpr)
+	}
+	if protectGroupingArgs {
+		var bindErr error
+		walkGroupingSetOrderByExpr(qualified, func(expr tree.Expr) bool {
+			function, ok := expr.(*tree.FuncExpr)
+			if !ok || function.FuncName == nil || function.FuncName.Compare() != "grouping" {
+				return true
+			}
+			for i := range function.Exprs {
+				function.Exprs[i], bindErr = ctx.qualifyColumnNames(function.Exprs[i], NoAlias)
+				if bindErr != nil {
+					return false
+				}
+			}
+			return false
+		})
+		if bindErr != nil {
+			return nil, nil, bindErr
+		}
+	}
+
+	fallbackNames := make(map[string]struct{})
+	walkGroupingSetOrderByExpr(qualified, func(expr tree.Expr) bool {
+		if _, subquery := expr.(*tree.Subquery); subquery {
+			return false
+		}
+		if protectGroupingArgs {
+			if function, ok := expr.(*tree.FuncExpr); ok && function.FuncName != nil && function.FuncName.Compare() == "grouping" {
+				return false
+			}
+		}
+		name, ok := expr.(*tree.UnresolvedName)
+		if !ok || name.Star || name.NumParts != 1 {
+			return true
+		}
+		if _, sourceExists := ctx.bindingByCol[name.ColName()]; sourceExists {
+			return true
+		}
+		fallbackNames[name.ColName()] = struct{}{}
+		return true
+	})
+
+	orderAliasMap := make(map[string]*aliasItem, len(fallbackNames))
+	for name := range fallbackNames {
+		item, found, ambiguous, err := inspectOrderAlias(sysCtx, ctx, name)
+		if err != nil {
+			return nil, nil, err
+		}
+		if ambiguous {
+			return nil, nil, ambiguousOrderColumn(sysCtx, name)
+		}
+		if found {
+			orderAliasMap[name] = &aliasItem{
+				idx:     item.idx,
+				astExpr: item.astExpr,
+			}
+		}
+	}
+
+	if preserveAliases {
+		qualified, err := ctx.qualifyColumnNames(qualified, NoAlias)
+		return qualified, orderAliasMap, err
+	}
+	for _, item := range orderAliasMap {
+		item.astExpr = cloneTreeExpr(item.astExpr)
+	}
+	orderCtx := *ctx
+	orderCtx.aliasMap = orderAliasMap
+	qualified, err := orderCtx.qualifyColumnNames(qualified, AliasAfterColumn)
+	return qualified, nil, err
+}
+
 func NewOrderBinder(projectionBinder *ProjectionBinder, selectList tree.SelectExprs) *OrderBinder {
 	return &OrderBinder{
 		ProjectionBinder: projectionBinder,
@@ -111,63 +355,10 @@ func (b *OrderBinder) BindExpr(astExpr tree.Expr) (*plan.Expr, error) {
 	// `ORDER BY (name)`.
 	rootExpr := unwrapParenExpr(astExpr)
 	if colRef, ok := rootExpr.(*tree.UnresolvedName); ok && colRef.NumParts == 1 {
-		if frequency, ok := b.ctx.aliasFrequency[colRef.ColName()]; ok && frequency > 1 {
-			return nil, moerr.NewInvalidInputf(b.GetContext(), "Column '%s' in order clause is ambiguous", colRef.ColName())
-		}
-
-		if selectItem, ok := b.ctx.aliasMap[colRef.ColName()]; ok {
-			// MySQL gives a top-level name to an explicit expression alias
-			// before an unaliased selected source column. A bare column renamed
-			// to an existing output name is different: both outputs are column
-			// names at the same level and remain genuinely ambiguous.
-			if _, columnAlias := unwrapParenExpr(selectItem.astExpr).(*tree.UnresolvedName); columnAlias {
-				for _, selectField := range b.ctx.projectByAst {
-					if selectField.aliasName != "" {
-						continue
-					}
-					if projectField, ok1 := selectField.ast.(*tree.UnresolvedName); ok1 && projectField.ColName() == colRef.ColName() {
-						return nil, moerr.NewInvalidInputf(b.GetContext(), "Column '%s' in order clause is ambiguous", colRef.ColName())
-					}
-				}
-			}
-
-			return makeProjectColRef(b.ctx, selectItem.idx), nil
-		} else {
-			// SelectField index used to record matches
-			matchedFields := make(map[string]int)
-			var matchedExpr *plan.Expr // Used to save matched expr
-
-			for _, selectField := range b.ctx.projectByAst {
-				// alias has already been matched earlier, no further processing is needed
-				if selectField.aliasName != "" {
-					continue
-				} else if projectField, ok1 := selectField.ast.(*tree.UnresolvedName); ok1 && projectField.ColName() == colRef.ColName() {
-					// Record the selectField index that matches
-					field := tree.String(selectField.ast, dialect.MYSQL)
-					matchedFields[field] += 1
-					// Save matching expr
-					matchedExpr = &plan.Expr{
-						Typ: b.ctx.projects[selectField.pos].Typ,
-						Expr: &plan.Expr_Col{
-							Col: &plan.ColRef{
-								RelPos: b.ctx.projectTag,
-								ColPos: selectField.pos,
-							},
-						},
-					}
-					continue
-				}
-			}
-
-			// If multiple selectFields are matched, an error occurs
-			if len(matchedFields) > 1 {
-				return nil, moerr.NewInvalidInputf(b.GetContext(), "Column '%s' in order clause is ambiguous", colRef.ColName())
-			}
-
-			// If there is only one matching expr, return that expr
-			if matchedExpr != nil {
-				return matchedExpr, nil
-			}
+		if pos, found, err := resolveOrderOutputName(b.GetContext(), b.ctx, colRef.ColName()); err != nil {
+			return nil, err
+		} else if found {
+			return makeProjectColRef(b.ctx, pos), nil
 		}
 	}
 
@@ -215,7 +406,7 @@ func (b *OrderBinder) BindExpr(astExpr tree.Expr) (*plan.Expr, error) {
 	// aliases. An alias remains available as a fallback when no input column has
 	// that name. This is intentionally different from the top-level-name rule
 	// above and matches the DISTINCT binder's existing resolution contract.
-	astExpr, err := b.ctx.qualifyColumnNames(astExpr, AliasAfterColumn)
+	astExpr, _, err := qualifyOrderExpression(b.GetContext(), b.ctx, astExpr, false, false)
 	if err != nil {
 		return nil, err
 	}

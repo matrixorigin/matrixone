@@ -1179,8 +1179,14 @@ func TestQueryBuilderBuildRollupOrderByLiteralCaseDifference(t *testing.T) {
 	}
 	require.NotNil(t, sortNode)
 	require.Len(t, sortNode.OrderBy, 1)
-	require.Equal(t, int32(3), sortNode.OrderBy[0].Expr.GetCol().ColPos)
-	require.Len(t, queryPlan.GetQuery().Nodes[sortNode.Children[0]].ProjectList, 4)
+	orderFunc := sortNode.OrderBy[0].Expr.GetF()
+	require.NotNil(t, orderFunc)
+	require.Equal(t, "concat", orderFunc.Func.ObjName)
+	require.Len(t, orderFunc.Args, 2)
+	literal := orderFunc.Args[1].GetLit()
+	require.NotNil(t, literal)
+	require.Equal(t, "x", literal.GetSval())
+	require.Len(t, queryPlan.GetQuery().Nodes[sortNode.Children[0]].ProjectList, 3)
 }
 
 func TestQueryBuilderBuildGroupingSetOrderByIdentifierCaseDifference(t *testing.T) {
@@ -1328,7 +1334,7 @@ func TestQueryBuilderBuildRollupOrderByGroupingExpressionWithStar(t *testing.T) 
 	}
 }
 
-func TestQueryBuilderBuildRollupOrderByGroupingExpressionUsesSelectAlias(t *testing.T) {
+func TestQueryBuilderBuildRollupOrderByGroupingExpressionUsesSourceColumn(t *testing.T) {
 	stmts, err := parsers.Parse(
 		context.TODO(),
 		dialect.MYSQL,
@@ -1354,9 +1360,165 @@ func TestQueryBuilderBuildRollupOrderByGroupingExpressionUsesSelectAlias(t *test
 		}
 		foundHiddenProject = true
 		require.Len(t, hiddenFunc.Args, 2)
-		require.True(t, planExprContainsInt64Literal(hiddenFunc.Args[1], 100))
+		require.False(t, planExprContainsInt64Literal(hiddenFunc.Args[1], 100),
+			"a source column inside ORDER BY must win over the select alias")
 	}
 	require.True(t, foundHiddenProject)
+}
+
+func TestQueryBuilderBuildGroupingSetNestedOrderUsesSourcePrecedence(t *testing.T) {
+	for _, groupBy := range []string{"a, b with rollup", "cube(a, b)"} {
+		t.Run(groupBy, func(t *testing.T) {
+			stmts, err := parsers.Parse(
+				context.TODO(),
+				dialect.MYSQL,
+				fmt.Sprintf(`select b as a, a as source_a, count(*)
+					from select_test.bind_select
+					group by %s
+					order by a + 0`, groupBy),
+				1,
+			)
+			require.NoError(t, err)
+
+			queryPlan, err := BuildPlan(NewMockCompilerContext(true), stmts[0], false)
+			require.NoError(t, err)
+
+			matchedBranches := 0
+			for _, node := range queryPlan.GetQuery().Nodes {
+				if node.NodeType != plan.Node_PROJECT || len(node.ProjectList) != 4 {
+					continue
+				}
+				hidden := node.ProjectList[3].GetF()
+				if hidden == nil || hidden.Func == nil || hidden.Func.ObjName != "+" {
+					continue
+				}
+				require.Len(t, hidden.Args, 2)
+				hiddenSourceKey, keyErr := projectExprKey(hidden.Args[0])
+				require.NoError(t, keyErr)
+				selectedSourceKey, keyErr := projectExprKey(node.ProjectList[1])
+				require.NoError(t, keyErr)
+				aliasSourceKey, keyErr := projectExprKey(node.ProjectList[0])
+				require.NoError(t, keyErr)
+				require.Equal(t, selectedSourceKey, hiddenSourceKey,
+					"nested ORDER BY a must use source a")
+				require.NotEqual(t, aliasSourceKey, hiddenSourceKey,
+					"nested ORDER BY a must not expand output alias a=b")
+				matchedBranches++
+			}
+			require.Positive(t, matchedBranches)
+		})
+	}
+}
+
+func TestQueryBuilderBuildGroupingSetNestedOrderFallsBackToAlias(t *testing.T) {
+	stmts, err := parsers.Parse(
+		context.TODO(),
+		dialect.MYSQL,
+		`select -a as x, count(*)
+		from select_test.bind_select
+		group by a with rollup
+		order by x + 0`,
+		1,
+	)
+	require.NoError(t, err)
+
+	queryPlan, err := BuildPlan(NewMockCompilerContext(true), stmts[0], false)
+	require.NoError(t, err)
+
+	matchedBranches := 0
+	for _, node := range queryPlan.GetQuery().Nodes {
+		if node.NodeType != plan.Node_PROJECT || len(node.ProjectList) != 3 {
+			continue
+		}
+		hidden := node.ProjectList[2].GetF()
+		if hidden == nil || hidden.Func == nil || hidden.Func.ObjName != "+" {
+			continue
+		}
+		hiddenAliasKey, keyErr := projectExprKey(hidden.Args[0])
+		require.NoError(t, keyErr)
+		selectedAliasKey, keyErr := projectExprKey(node.ProjectList[0])
+		require.NoError(t, keyErr)
+		require.Equal(t, selectedAliasKey, hiddenAliasKey)
+		matchedBranches++
+	}
+	require.Positive(t, matchedBranches)
+}
+
+func TestQueryBuilderBuildDistinctGroupingSetNestedOrderUsesProjectedSource(t *testing.T) {
+	for _, testCase := range []struct {
+		name      string
+		selectSQL string
+		wantError bool
+	}{
+		{
+			name:      "selected source is available",
+			selectSQL: "select distinct b as a, a as source_a, count(*)",
+		},
+		{
+			name:      "unselected source does not fall back to alias",
+			selectSQL: "select distinct b as a, count(*)",
+			wantError: true,
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			stmts, err := parsers.Parse(
+				context.TODO(),
+				dialect.MYSQL,
+				fmt.Sprintf(`%s from select_test.bind_select
+					group by a, b with rollup order by a + 0`, testCase.selectSQL),
+				1,
+			)
+			require.NoError(t, err)
+
+			_, err = BuildPlan(NewMockCompilerContext(true), stmts[0], false)
+			if testCase.wantError {
+				require.ErrorContains(t, err, "for SELECT DISTINCT, ORDER BY expressions must appear in select list")
+			} else {
+				require.NoError(t, err)
+			}
+		})
+	}
+}
+
+func TestQueryBuilderBuildGroupingSetDuplicateOrderAliases(t *testing.T) {
+	for _, sql := range []string{
+		`select -a as x, b + 0 as x, count(*) from select_test.bind_select
+		group by a, b with rollup order by x`,
+		`select a as x, b + 0 as x, count(*) from select_test.bind_select
+		group by a, b with rollup order by x`,
+		`select a as x, a as x, count(*) from select_test.bind_select
+		group by a with rollup order by x`,
+		`select a as x, select_test.bind_select.a as x, count(*) from select_test.bind_select
+		group by a with rollup order by x + 0`,
+		`select a, a, count(*) from select_test.bind_select
+		group by a with rollup order by a`,
+		`select distinct a as x, a as x, count(*) from select_test.bind_select
+		group by a with rollup order by x`,
+	} {
+		stmts, err := parsers.Parse(context.TODO(), dialect.MYSQL, sql, 1)
+		require.NoError(t, err)
+		_, err = BuildPlan(NewMockCompilerContext(true), stmts[0], false)
+		require.NoError(t, err)
+	}
+
+	stmts, err := parsers.Parse(
+		context.TODO(), dialect.MYSQL,
+		`select a as x, b as x, count(*) from select_test.bind_select
+		group by a, b with rollup order by x`, 1,
+	)
+	require.NoError(t, err)
+	_, err = BuildPlan(NewMockCompilerContext(true), stmts[0], false)
+	require.ErrorContains(t, err, "Column 'x' in order clause is ambiguous")
+
+	stmts, err = parsers.Parse(
+		context.TODO(), dialect.MYSQL,
+		`select t1.a, t2.a, count(*)
+		from select_test.bind_select as t1, select_test.bind_select as t2
+		group by t1.a, t2.a with rollup order by a`, 1,
+	)
+	require.NoError(t, err)
+	_, err = BuildPlan(NewMockCompilerContext(true), stmts[0], false)
+	require.ErrorContains(t, err, "Column 'a' in order clause is ambiguous")
 }
 
 func planExprContainsInt64Literal(expr *plan.Expr, expected int64) bool {
@@ -1828,7 +1990,7 @@ func TestAppendGroupingSetOrderByNestedProjects(t *testing.T) {
 	}
 }
 
-func TestAppendGroupingSetOrderByVisibleMatchUsesOrderAliasPrecedence(t *testing.T) {
+func TestAppendGroupingSetOrderByVisibleMatchUsesSourcePrecedence(t *testing.T) {
 	stmts, err := parsers.Parse(
 		context.TODO(),
 		dialect.MYSQL,
@@ -1849,8 +2011,33 @@ func TestAppendGroupingSetOrderByVisibleMatchUsesOrderAliasPrecedence(t *testing
 		false,
 	)
 	require.NoError(t, err)
-	require.False(t, orderResolve.bindVisible[0],
-		"ORDER BY a must resolve to the select alias b, not the source expression a")
+	require.True(t, orderResolve.bindVisible[0],
+		"a nested ORDER BY name must resolve to the source expression a")
+}
+
+func TestAppendGroupingSetOrderByKeepsSafeExpressionAboveUnion(t *testing.T) {
+	stmts, err := parsers.Parse(
+		context.TODO(),
+		dialect.MYSQL,
+		`select a, count(*)
+		from select_test.bind_select
+		group by a with rollup
+		order by a + 0`,
+		1,
+	)
+	require.NoError(t, err)
+
+	selectStmt := stmts[0].(*tree.Select)
+	selectClause := selectStmt.Select.(*tree.SelectClause)
+	branchExprs, _, orderResolve, err := prepareGroupingSetOrderByProjects(
+		nil,
+		selectStmt.OrderBy,
+		selectClause.Exprs,
+		false,
+	)
+	require.NoError(t, err)
+	require.Len(t, branchExprs, len(selectClause.Exprs))
+	require.Equal(t, []int{-1}, orderResolve.hiddenIdx)
 }
 
 func TestAppendGroupingSetOrderByNestedQualifiedProject(t *testing.T) {
@@ -2556,10 +2743,6 @@ func TestQueryBuilder_bindOrderByExpressionAliasPrecedence(t *testing.T) {
 			name: "bare column alias collides with selected column",
 			sql:  "select a, b as a from select_test.bind_select order by a",
 		},
-		{
-			name: "duplicate explicit aliases",
-			sql:  "select -a as x, b + 0 as x from select_test.bind_select order by x",
-		},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			_, _, _, _, err := bindOrderByForTest(testCase.sql, false)
@@ -2567,6 +2750,79 @@ func TestQueryBuilder_bindOrderByExpressionAliasPrecedence(t *testing.T) {
 			require.Contains(t, err.Error(), "in order clause is ambiguous")
 		})
 	}
+
+	for _, testCase := range []struct {
+		name      string
+		sql       string
+		expectPos int32
+	}{
+		{
+			name:      "same source column repeated under output name",
+			sql:       "select a, a as a from select_test.bind_select order by a",
+			expectPos: 1,
+		},
+		{
+			name:      "same direct alias repeated",
+			sql:       "select a as x, a as x from select_test.bind_select order by x",
+			expectPos: 0,
+		},
+		{
+			name:      "duplicate expression aliases use first item",
+			sql:       "select -a as x, b + 0 as x from select_test.bind_select order by x",
+			expectPos: 0,
+		},
+		{
+			name:      "expression alias supersedes preceding direct candidate",
+			sql:       "select a as x, -b as x from select_test.bind_select order by x",
+			expectPos: 1,
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			_, bindCtx, boundOrderBys, _, err := bindOrderByForTest(testCase.sql, false)
+			require.NoError(t, err)
+			require.Len(t, boundOrderBys, 1)
+			col := boundOrderBys[0].Expr.GetCol()
+			require.NotNil(t, col)
+			require.Equal(t, bindCtx.projectTag, col.RelPos)
+			require.Equal(t, testCase.expectPos, col.ColPos)
+		})
+	}
+
+	t.Run("nested duplicate expression aliases use first item", func(t *testing.T) {
+		_, _, boundOrderBys, _, err := bindOrderByForTest(
+			"select -a as x, b + 0 as x from select_test.bind_select order by x + 1",
+			false,
+		)
+		require.NoError(t, err)
+		require.Len(t, boundOrderBys, 1)
+	})
+
+	t.Run("nested different direct aliases remain ambiguous", func(t *testing.T) {
+		_, _, _, _, err := bindOrderByForTest(
+			"select a as x, b as x from select_test.bind_select order by x + 1",
+			false,
+		)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "in order clause is ambiguous")
+	})
+
+	t.Run("different direct aliases become ambiguous before a later expression", func(t *testing.T) {
+		_, _, _, _, err := bindOrderByForTest(
+			"select a as x, b as x, -a as x from select_test.bind_select order by x",
+			false,
+		)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "in order clause is ambiguous")
+	})
+
+	t.Run("function name is not an alias reference", func(t *testing.T) {
+		_, _, boundOrderBys, _, err := bindOrderByForTest(
+			"select a as abs, b as abs from select_test.bind_select order by abs(a)",
+			false,
+		)
+		require.NoError(t, err)
+		require.Len(t, boundOrderBys, 1)
+	})
 }
 
 func TestQueryBuilder_bindOrderByDistinctExpressionAliasPrecedence(t *testing.T) {
@@ -2604,6 +2860,24 @@ func TestQueryBuilder_bindOrderByDistinctExpressionAliasPrecedence(t *testing.T)
 	)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "in order clause is ambiguous")
+
+	_, bindCtx, boundOrderBys, _, err = bindOrderByForTest(
+		"select distinct -a as x, b + 0 as x from select_test.bind_select order by x",
+		true,
+	)
+	require.NoError(t, err)
+	require.Len(t, boundOrderBys, 1)
+	require.Equal(t, bindCtx.projectTag, boundOrderBys[0].Expr.GetCol().RelPos)
+	require.Equal(t, int32(0), boundOrderBys[0].Expr.GetCol().ColPos)
+
+	_, bindCtx, boundOrderBys, _, err = bindOrderByForTest(
+		"select distinct a as x, -b as x from select_test.bind_select order by x",
+		true,
+	)
+	require.NoError(t, err)
+	require.Len(t, boundOrderBys, 1)
+	require.Equal(t, bindCtx.projectTag, boundOrderBys[0].Expr.GetCol().RelPos)
+	require.Equal(t, int32(1), boundOrderBys[0].Expr.GetCol().ColPos)
 }
 
 func TestQueryBuilder_bindOrderByDistinctDerivedSelectedColumns(t *testing.T) {
@@ -5419,11 +5693,11 @@ func TestGroupingSetDistinctOrderAliasResolutionParity(t *testing.T) {
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "for SELECT DISTINCT, ORDER BY expressions must appear in select list")
 
-	_, err = runOneStmt(mock, t,
+	p, err := runOneStmt(mock, t,
 		"select distinct grouping(a), abs(b) as x, -abs(b) as x from select_test.bind_select "+
 			"group by a, b with rollup order by grouping(a) + x")
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "Column 'x' in order clause is ambiguous")
+	require.NoError(t, err)
+	require.True(t, hasAggAboveUnionAll(p))
 }
 
 // TestGroupingSetDistinctOrderByBetweenStars verifies that a DISTINCT ORDER BY
@@ -5480,9 +5754,9 @@ func TestQualifyBoundGroupingOrderExprPreservesRelationIdentity(t *testing.T) {
 		return funcExpr
 	}
 
-	t1Expr, err := qualifyBoundGroupingOrderExpr(bindCtx, makeGrouping("t1"))
+	t1Expr, err := qualifyBoundGroupingOrderExpr(context.TODO(), bindCtx, makeGrouping("t1"))
 	require.NoError(t, err)
-	t2Expr, err := qualifyBoundGroupingOrderExpr(bindCtx, makeGrouping("t2"))
+	t2Expr, err := qualifyBoundGroupingOrderExpr(context.TODO(), bindCtx, makeGrouping("t2"))
 	require.NoError(t, err)
 	require.NotEqual(t, tree.String(t1Expr, dialect.MYSQL), tree.String(t2Expr, dialect.MYSQL))
 	require.Equal(t, "grouping(t1.a)", tree.String(t1Expr, dialect.MYSQL))
