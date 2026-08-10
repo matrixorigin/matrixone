@@ -24,6 +24,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/matrixorigin/matrixone/pkg/defines"
+
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 )
@@ -115,6 +117,7 @@ func TestStartReplicas(t *testing.T) {
 	done := false
 	for i := 0; i < 1000; i++ {
 		hb := store.getHeartbeatMessage()
+		require.Equal(t, defines.MORPCLatestVersion, hb.ProtocolVersion)
 		if len(hb.Replicas) != 2 {
 			time.Sleep(10 * time.Millisecond)
 			continue

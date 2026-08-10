@@ -328,6 +328,13 @@ func (c *Config) FillDefault() {
 // Validate validates the configuration of proxy server.
 func (c *Config) Validate() error {
 	noReport := errutil.ContextWithNoReport(context.Background(), true)
+	if c.HAKeeper.HeartbeatInterval.Duration+c.HAKeeper.HeartbeatTimeout.Duration >
+		logservice.GlobalSysVarHeartbeatProgressBudget {
+		return moerr.NewInternalErrorf(noReport,
+			"proxy hakeeper heartbeat cycle %s exceeds global-system-variable progress budget %s",
+			c.HAKeeper.HeartbeatInterval.Duration+c.HAKeeper.HeartbeatTimeout.Duration,
+			logservice.GlobalSysVarHeartbeatProgressBudget)
+	}
 	if c.MaxConnections < 0 {
 		return moerr.NewInternalError(noReport, "proxy max-connections must be positive")
 	}

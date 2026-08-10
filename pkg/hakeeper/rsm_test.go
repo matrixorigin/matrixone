@@ -227,6 +227,7 @@ func TestGlobalSysVarCommitWatermarkIsDurableAndMonotonic(t *testing.T) {
 		SQLAddress:                  "sql-1",
 		CommandDeliveryAckSupported: true,
 		GlobalSysVarCommitTS:        older,
+		ProtocolVersion:             14,
 	}
 	data, err := hb.Marshal()
 	require.NoError(t, err)
@@ -246,6 +247,7 @@ func TestGlobalSysVarCommitWatermarkIsDurableAndMonotonic(t *testing.T) {
 	require.Equal(t, latest, details.GlobalSysVarCommitTS)
 	require.Len(t, details.CNStores, 1)
 	require.Equal(t, latest, details.CNStores[0].GlobalSysVarCommitTS)
+	require.Equal(t, int64(14), details.CNStores[0].ProtocolVersion)
 
 	hb.GlobalSysVarGeneration = "generation-a"
 	data, err = hb.Marshal()
@@ -542,8 +544,9 @@ func TestClusterDetailsQuery(t *testing.T) {
 	}
 
 	tsm.state.LogState.Stores["store-1"] = pb.LogStoreInfo{
-		Tick:           100,
-		ServiceAddress: "addr-log-1",
+		Tick:            100,
+		ServiceAddress:  "addr-log-1",
+		ProtocolVersion: 14,
 		Replicas: []pb.LogReplicaInfo{{
 			LogShardInfo: pb.LogShardInfo{
 				ShardID:  1,
@@ -614,10 +617,11 @@ func TestClusterDetailsQuery(t *testing.T) {
 		},
 		LogStores: []pb.LogStore{
 			{
-				UUID:           "store-1",
-				ServiceAddress: "addr-log-1",
-				Tick:           100,
-				State:          0,
+				UUID:            "store-1",
+				ServiceAddress:  "addr-log-1",
+				Tick:            100,
+				State:           0,
+				ProtocolVersion: 14,
 				Replicas: []pb.LogReplicaInfo{{
 					LogShardInfo: pb.LogShardInfo{
 						ShardID:  1,

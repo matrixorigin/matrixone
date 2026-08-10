@@ -966,6 +966,56 @@ func (sv SystemVariable) GetDefault() interface{} {
 type GlobalSysVarsMgr struct {
 	sync.Mutex
 	accountsGlobalSysVarsMap map[uint32]*SystemVariables
+	accountLocks             map[uint32]*sync.Mutex
+	reconciledEpochs         map[uint32]uint64
+}
+
+func (m *GlobalSysVarsMgr) lockAccount(accountID uint32) func() {
+	m.Lock()
+	if m.accountLocks == nil {
+		m.accountLocks = make(map[uint32]*sync.Mutex)
+	}
+	lock := m.accountLocks[accountID]
+	if lock == nil {
+		lock = &sync.Mutex{}
+		m.accountLocks[accountID] = lock
+	}
+	m.Unlock()
+	lock.Lock()
+	return lock.Unlock
+}
+
+func (m *GlobalSysVarsMgr) reconcileCatalogEpoch(
+	accountID uint32,
+	epoch uint64,
+	ctx context.Context,
+	ses *Session,
+) error {
+	if epoch == 0 {
+		return nil
+	}
+	m.Lock()
+	alreadyReconciled := m.reconciledEpochs != nil && m.reconciledEpochs[accountID] >= epoch
+	m.Unlock()
+	if alreadyReconciled {
+		return nil
+	}
+	if err := syncGlobalSysVarCommit(ctx, ses); err != nil {
+		return err
+	}
+	m.markCatalogEpochReconciled(accountID, epoch)
+	return nil
+}
+
+func (m *GlobalSysVarsMgr) markCatalogEpochReconciled(accountID uint32, epoch uint64) {
+	m.Lock()
+	defer m.Unlock()
+	if m.reconciledEpochs == nil {
+		m.reconciledEpochs = make(map[uint32]uint64)
+	}
+	if m.reconciledEpochs[accountID] < epoch {
+		m.reconciledEpochs[accountID] = epoch
+	}
 }
 
 func useTomlConfigOverOtherConfigs(CNServiceConfig *config.FrontendParameters, sysVarsMp map[string]interface{}) {
@@ -990,6 +1040,9 @@ func resolveServerID(ses *Session) string {
 
 // Get return sys vars of accountId
 func (m *GlobalSysVarsMgr) Get(accountId uint32, ses *Session, ctx context.Context, bh BackgroundExec) (*SystemVariables, error) {
+	unlock := m.lockAccount(accountId)
+	defer unlock()
+
 	m.Lock()
 	sysVars, ok := m.accountsGlobalSysVarsMap[accountId]
 	var mutationGeneration uint64
@@ -998,8 +1051,11 @@ func (m *GlobalSysVarsMgr) Get(accountId uint32, ses *Session, ctx context.Conte
 	}
 	m.Unlock()
 
-	sysVarsMp, err := ses.getGlobalSysVars(ctx, bh)
+	sysVarsMp, catalogEpoch, err := ses.getGlobalSysVars(ctx, bh)
 	if err != nil {
+		return nil, err
+	}
+	if err = m.reconcileCatalogEpoch(accountId, catalogEpoch, ctx, ses); err != nil {
 		return nil, err
 	}
 
@@ -1011,7 +1067,7 @@ func (m *GlobalSysVarsMgr) Get(accountId uint32, ses *Session, ctx context.Conte
 	defer m.Unlock()
 	current, exists := m.accountsGlobalSysVarsMap[accountId]
 	if !exists {
-		current = &SystemVariables{mp: sysVarsMp}
+		current = &SystemVariables{mp: sysVarsMp, catalogEpoch: catalogEpoch}
 		m.accountsGlobalSysVarsMap[accountId] = current
 		return current, nil
 	}
@@ -1021,7 +1077,7 @@ func (m *GlobalSysVarsMgr) Get(accountId uint32, ses *Session, ctx context.Conte
 	if !ok || current != sysVars {
 		return current, nil
 	}
-	current.replaceIfMutationGeneration(mutationGeneration, sysVarsMp)
+	current.replaceIfCatalogEpoch(catalogEpoch, mutationGeneration, sysVarsMp)
 	return current, nil
 }
 
@@ -1033,6 +1089,8 @@ func (m *GlobalSysVarsMgr) Put(accountId uint32, vars *SystemVariables) {
 
 var GSysVarsMgr = &GlobalSysVarsMgr{
 	accountsGlobalSysVarsMap: make(map[uint32]*SystemVariables),
+	accountLocks:             make(map[uint32]*sync.Mutex),
+	reconciledEpochs:         make(map[uint32]uint64),
 }
 
 // SystemVariables is account level
@@ -1044,6 +1102,10 @@ type SystemVariables struct {
 	// refresh is derived from the catalog and must not invalidate another
 	// refresh that observed the same local generation.
 	mutationGeneration uint64
+	// catalogEpoch is advanced atomically with a SET GLOBAL catalog mutation.
+	// Cache publication is monotonic in this value, so older refreshes and
+	// reversed local completions cannot roll back a newer account snapshot.
+	catalogEpoch uint64
 }
 
 func (sv *SystemVariables) getMutationGeneration() uint64 {
@@ -1055,12 +1117,22 @@ func (sv *SystemVariables) getMutationGeneration() uint64 {
 // replaceIfMutationGeneration publishes a refreshed snapshot only when no
 // local mutation has been applied since the refresh started.
 func (sv *SystemVariables) replaceIfMutationGeneration(generation uint64, mp map[string]interface{}) {
+	sv.replaceIfCatalogEpoch(sv.catalogEpoch, generation, mp)
+}
+
+func (sv *SystemVariables) replaceIfCatalogEpoch(
+	epoch uint64,
+	generation uint64,
+	mp map[string]interface{},
+) {
 	sv.mu.Lock()
 	defer sv.mu.Unlock()
-	if sv.mutationGeneration != generation {
+	if epoch < sv.catalogEpoch ||
+		(epoch == sv.catalogEpoch && sv.mutationGeneration != generation) {
 		return
 	}
 	sv.mp = mp
+	sv.catalogEpoch = epoch
 }
 
 // Clone returns a copy of sv
@@ -1071,7 +1143,7 @@ func (sv *SystemVariables) Clone() *SystemVariables {
 	for name, value := range sv.mp {
 		mp[name] = value
 	}
-	return &SystemVariables{mp: mp}
+	return &SystemVariables{mp: mp, catalogEpoch: sv.catalogEpoch}
 }
 
 func (sv *SystemVariables) Get(name string) interface{} {
@@ -1087,6 +1159,23 @@ func (sv *SystemVariables) Set(name string, value interface{}) {
 	name = strings.ToLower(name)
 	sv.mp[name] = value
 	sv.mutationGeneration++
+}
+
+func (sv *SystemVariables) setAtCatalogEpoch(
+	name string,
+	value interface{},
+	epoch uint64,
+) bool {
+	sv.mu.Lock()
+	defer sv.mu.Unlock()
+	if epoch < sv.catalogEpoch {
+		return false
+	}
+	name = strings.ToLower(name)
+	sv.mp[name] = value
+	sv.catalogEpoch = epoch
+	sv.mutationGeneration++
+	return true
 }
 
 // definitions of system variables

@@ -28,7 +28,7 @@ import (
 )
 
 const (
-	globalSysVarCommitSyncTimeout = 10 * time.Second
+	globalSysVarCommitSyncTimeout = logservice.GlobalSysVarFenceTimeout
 	globalSysVarFencePollInterval = 20 * time.Millisecond
 )
 
@@ -52,6 +52,44 @@ func validateGlobalSysVarSyncProtocol(ctx context.Context, ses *Session) error {
 	if _, ok := pu.HAKeeperClient.(logservice.GlobalSysVarHAKeeperClient); !ok {
 		return moerr.NewInternalError(ctx,
 			"HAKeeper client does not support global system variable fencing")
+	}
+	details, err := pu.HAKeeperClient.GetClusterDetails(ctx)
+	if err != nil {
+		return err
+	}
+	hasServingCN := false
+	for _, cn := range details.CNStores {
+		if cn.SQLAddress == "" {
+			continue
+		}
+		hasServingCN = true
+		if cn.ProtocolVersion < defines.MORPCVersion14 {
+			return moerr.NewInternalErrorf(ctx,
+				"CN %s protocol version %d does not support global system variable fencing",
+				cn.UUID, cn.ProtocolVersion)
+		}
+	}
+	if !hasServingCN {
+		return moerr.NewInternalError(ctx,
+			"HAKeeper has no protocol-capable SQL CN")
+	}
+	if len(details.LogStores) == 0 {
+		return moerr.NewInternalError(ctx,
+			"HAKeeper has no protocol-capable LogStore")
+	}
+	for _, store := range details.LogStores {
+		if store.ProtocolVersion < defines.MORPCVersion14 {
+			return moerr.NewInternalErrorf(ctx,
+				"LogStore %s protocol version %d does not support global system variable fencing",
+				store.UUID, store.ProtocolVersion)
+		}
+	}
+	for _, proxy := range details.ProxyStores {
+		if proxy.ProtocolVersion < defines.MORPCVersion14 {
+			return moerr.NewInternalErrorf(ctx,
+				"Proxy %s protocol version %d does not support global system variable fencing",
+				proxy.UUID, proxy.ProtocolVersion)
+		}
 	}
 	return nil
 }

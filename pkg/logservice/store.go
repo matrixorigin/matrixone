@@ -36,6 +36,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper/bootstrap"
@@ -1446,6 +1447,7 @@ func (l *store) getHeartbeatMessage() pb.LogStoreHeartbeat {
 		Replicas:                 make([]pb.LogReplicaInfo, 0),
 		Locality:                 l.cfg.getLocality(),
 		CommandDeliverySupported: true,
+		ProtocolVersion:          defines.MORPCLatestVersion,
 	}
 	opts := dragonboat.NodeHostInfoOption{
 		SkipLogInfo: true,

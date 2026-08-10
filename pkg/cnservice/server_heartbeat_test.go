@@ -24,6 +24,7 @@ import (
 	"github.com/golang/mock/gomock"
 	"github.com/stretchr/testify/require"
 
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
@@ -171,6 +172,7 @@ type canceledCNResponseClient struct {
 	*testHAKClient
 	heartbeatEntered chan struct{}
 	pollEntered      chan struct{}
+	heartbeat        pb.CNStoreHeartbeat
 }
 
 type lateCNCommandClient struct {
@@ -222,8 +224,9 @@ func (h *observingTaskHolder) Create(pb.CreateTaskService) error {
 
 func (c *canceledCNResponseClient) SendCNHeartbeat(
 	ctx context.Context,
-	_ pb.CNStoreHeartbeat,
+	hb pb.CNStoreHeartbeat,
 ) (pb.CommandBatch, error) {
+	c.heartbeat = hb
 	select {
 	case <-c.heartbeatEntered:
 	default:
@@ -608,6 +611,8 @@ func TestCNHeartbeatDropsResponseAfterRequestDeadline(t *testing.T) {
 	// A nil hakeeperConnected channel would panic if the successful-looking
 	// late response escaped the per-request deadline guard.
 	service.heartbeat(context.Background())
+	require.Equal(t, defines.MORPCLatestVersion,
+		service._hakeeperClient.(*canceledCNResponseClient).heartbeat.ProtocolVersion)
 }
 
 func TestCNCommandGenerationRolloverDoesNotReplayInheritedCommands(t *testing.T) {

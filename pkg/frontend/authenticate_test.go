@@ -530,7 +530,6 @@ func Test_initUser(t *testing.T) {
 		bh.sql2result["begin;"] = nil
 		bh.sql2result["commit;"] = nil
 		bh.sql2result["rollback;"] = nil
-
 		ses := newSes(nil, ctrl)
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
@@ -10015,6 +10014,11 @@ func TestSetGlobalSysVar(t *testing.T) {
 		bh.sql2result["begin;"] = nil
 		bh.sql2result["commit;"] = nil
 		bh.sql2result["rollback;"] = nil
+		bh.sql2result[getSqlForLockGlobalSystemVariableAccount(sysAccountID)] = nil
+		bh.sql2result[getSqlForGlobalSystemVariableEpoch(sysAccountID)] =
+			newMrsForSystemVariableNameOfAccount([][]interface{}{})
+		bh.sql2result[getSqlForInsertSysVarWithAccount(
+			sysAccountID, sysAccountName, globalSystemVariableEpochName, "1")] = nil
 		sql := getSqlForGetSysVarWithAccount(sysAccountID, "autocommit")
 		mrs := newMrsForSystemVariableNameOfAccount([][]interface{}{})
 		bh.sql2result[sql] = mrs

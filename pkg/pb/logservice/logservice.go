@@ -157,6 +157,7 @@ func (s *CNState) Update(hb CNStoreHeartbeat, tick uint64) {
 	storeInfo.Resource = hb.Resource
 	storeInfo.CommitID = hb.CommitID
 	storeInfo.CommandDeliveryAckSupported = hb.CommandDeliveryAckSupported
+	storeInfo.ProtocolVersion = hb.ProtocolVersion
 	if storeInfo.GlobalSysVarGeneration != hb.GlobalSysVarGeneration {
 		storeInfo.GlobalSysVarGeneration = hb.GlobalSysVarGeneration
 		storeInfo.GlobalSysVarCommitTS = hb.GlobalSysVarCommitTS
@@ -280,6 +281,7 @@ func (s *LogState) updateStores(hb LogStoreHeartbeat, tick uint64) {
 	}
 	storeInfo.Locality = hb.Locality
 	storeInfo.CommandDeliverySupported = hb.CommandDeliverySupported
+	storeInfo.ProtocolVersion = hb.ProtocolVersion
 	s.Stores[hb.UUID] = storeInfo
 }
 
@@ -397,6 +399,7 @@ func (s *ProxyState) Update(hb ProxyHeartbeat, tick uint64) {
 	if hb.ConfigData != nil {
 		storeInfo.ConfigData = hb.ConfigData
 	}
+	storeInfo.ProtocolVersion = hb.ProtocolVersion
 	if storeInfo.GlobalSysVarGeneration != hb.GlobalSysVarGeneration {
 		storeInfo.GlobalSysVarGeneration = hb.GlobalSysVarGeneration
 		storeInfo.GlobalSysVarCommitTS = hb.GlobalSysVarCommitTS

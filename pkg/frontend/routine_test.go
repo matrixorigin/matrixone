@@ -50,6 +50,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
+func stubCachedSessionSystemVariables(t *testing.T) {
+	t.Helper()
+	stub := gostub.Stub(&initializeCachedSessionSystemVariables,
+		func(context.Context, *Session) error { return nil })
+	t.Cleanup(stub.Reset)
+}
+
 type routineTraceIDGenerator struct{}
 
 func (routineTraceIDGenerator) NewIDs() (trace.TraceID, trace.SpanID) {
@@ -343,6 +350,7 @@ func TestCanceledResetAdmissionDoesNotTouchSession(t *testing.T) {
 }
 
 func TestRoutineCloseCancelsResetRollback(t *testing.T) {
+	stubCachedSessionSystemVariables(t)
 	ctrl := gomock.NewController(t)
 	oldSession := newTestSession(t, ctrl)
 	oldSession.GetTxnHandler().Close()
@@ -463,6 +471,17 @@ func TestMigrateConnectionFromPreservesLastAffectedRows(t *testing.T) {
 }
 
 func TestRoutineResetSessionKeepsReplacementRegistered(t *testing.T) {
+	initialized := 0
+	stub := gostub.Stub(&initializeCachedSessionSystemVariables,
+		func(_ context.Context, ses *Session) error {
+			initialized++
+			ses.gSysVars = &SystemVariables{mp: map[string]interface{}{
+				PasswordHistory: int64(5),
+			}}
+			ses.sesSysVars = ses.gSysVars.Clone()
+			return nil
+		})
+	t.Cleanup(stub.Reset)
 	ctrl := gomock.NewController(t)
 	oldSession := newTestSession(t, ctrl)
 	timeZone := time.FixedZone("reset-session-test", 8*60*60)
@@ -491,6 +510,11 @@ func TestRoutineResetSessionKeepsReplacementRegistered(t *testing.T) {
 	require.NotSame(t, oldSession, newSession)
 	require.Equal(t, oldSession.GetUUIDString(), newSession.GetUUIDString())
 	require.Same(t, timeZone, newSession.GetTimeZone())
+	require.Equal(t, 1, initialized)
+	value, err := newSession.GetSessionSysVar(PasswordHistory)
+	require.NoError(t, err)
+	require.Equal(t, int64(5), value,
+		"a cached backend must initialize the new login from the current account snapshot")
 
 	registered := rm.sessionManager.GetAllSessions()
 	require.Len(t, registered, 1, "successful reset must keep the replacement session registered")
@@ -498,6 +522,7 @@ func TestRoutineResetSessionKeepsReplacementRegistered(t *testing.T) {
 }
 
 func TestRoutineResetSessionFailureRestoresProtocolState(t *testing.T) {
+	stubCachedSessionSystemVariables(t)
 	ctrl := gomock.NewController(t)
 	oldSession := newTestSession(t, ctrl)
 	rm, err := NewRoutineManager(context.Background(), "")

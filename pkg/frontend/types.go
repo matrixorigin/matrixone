@@ -1457,13 +1457,24 @@ func (ses *Session) SetGlobalSysVar(ctx context.Context, name string, val interf
 	if err = validateGlobalSysVarSyncProtocol(ctx, ses); err != nil {
 		return err
 	}
+	accountID := ses.GetTenantInfo().TenantID
+	unlock := GSysVarsMgr.lockAccount(accountID)
+	defer unlock()
 
 	// save to table first
-	if err = doSetGlobalSystemVariable(ctx, ses, name, val); err != nil {
+	var catalogEpoch uint64
+	if catalogEpoch, err = doSetGlobalSystemVariable(ctx, ses, name, val); err != nil {
 		return
 	}
-	ses.gSysVars.Set(name, val)
-	return syncGlobalSysVarCommit(ctx, ses)
+	ses.gSysVars.setAtCatalogEpoch(name, val, catalogEpoch)
+	if err = syncGlobalSysVarCommit(ctx, ses); err != nil {
+		// The catalog epoch row remains as a durable reconciliation intent.
+		// A subsequent session on any CN will replay the fence before publishing
+		// that epoch into its local cache.
+		return err
+	}
+	GSysVarsMgr.markCatalogEpochReconciled(accountID, catalogEpoch)
+	return nil
 }
 
 func (ses *feSessionImpl) GetSessionSysVars() *SystemVariables {

@@ -72,6 +72,19 @@ func (r *mockRouter) Route(ctx context.Context, sid string, ci clientInfo, f fun
 	return nil, nil
 }
 
+func (r *mockRouter) resolveRouteCandidate(
+	_ string,
+	_ clientInfo,
+	filter func(string) bool,
+	serviceID string,
+	address string,
+) (*CNServer, bool) {
+	if filter != nil && filter(address) {
+		return nil, false
+	}
+	return &CNServer{uuid: serviceID, addr: address}, true
+}
+
 func (r *mockRouter) SelectByConnID(connID uint32) (*CNServer, error) {
 	return nil, nil
 }
@@ -394,6 +407,41 @@ func TestPluginRouter_SelectCooldownFallsBackToDelegatedRoute(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, cn)
 	require.Equal(t, "cn1", cn.uuid)
+}
+
+func TestPluginRouterRejectsCandidateOutsideAuthoritativeSnapshot(t *testing.T) {
+	defer leaktest.AfterTest(t)()
+
+	rt := runtime.DefaultRuntime()
+	runtime.SetupServiceBasedRuntime("", rt)
+	st := stopper.NewStopper("test-proxy", stopper.WithLogger(rt.Logger().RawLogger()))
+	defer st.Stop()
+	hc := &mockHAKeeperClient{}
+	hc.updateCN("fresh-cn", "8.8.8.8:6002", map[string]metadata.LabelList{
+		tenantLabelKey: {Labels: []string{"t1"}},
+	})
+	mc := clusterservice.NewMOCluster("", hc, time.Hour)
+	defer mc.Close()
+	rt.SetGlobalVariables(runtime.ClusterService, mc)
+	mc.ForceRefresh(true)
+
+	base := newRouter(
+		mc, testRebalancer(t, st, rt.Logger(), mc), newMockSQLWorker(), true,
+	).(*router)
+	p := &mockPlugin{mockRecommendCNFn: func(context.Context, clientInfo) (*plugin.Recommendation, error) {
+		return &plugin.Recommendation{
+			Action: plugin.Select,
+			CN: &metadata.CNService{
+				ServiceID:  "stale-cn",
+				SQLAddress: "8.8.8.8:6001",
+			},
+		}, nil
+	}}
+
+	cn, err := newPluginRouter("", base, p).Route(
+		context.Background(), "", clientInfo{labelInfo: labelInfo{Tenant: "t1"}}, nil)
+	require.NoError(t, err)
+	require.Equal(t, "fresh-cn", cn.uuid)
 }
 
 func TestRPCPlugin(t *testing.T) {

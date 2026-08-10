@@ -96,20 +96,23 @@ func (r *pluginRouter) RouteForTransfer(
 		if re.CN == nil {
 			return nil, moerr.NewInternalErrorNoCtx("no CN server selected")
 		}
-		if filter != nil && filter(re.CN.SQLAddress) {
+		resolver, ok := r.Router.(authoritativeRouteCandidateResolver)
+		if !ok {
+			if rr, ok := r.Router.(transferRouter); ok {
+				return rr.RouteForTransfer(ctx, sid, ci, filter)
+			}
+			return r.Router.Route(ctx, sid, ci, filter)
+		}
+		cn, eligible := resolver.resolveRouteCandidate(
+			sid, ci, filter, re.CN.ServiceID, re.CN.SQLAddress)
+		if !eligible {
 			if rr, ok := r.Router.(transferRouter); ok {
 				return rr.RouteForTransfer(ctx, sid, ci, filter)
 			}
 			return r.Router.Route(ctx, sid, ci, filter)
 		}
 		v2.ProxyConnectSelectCounter.Inc()
-		return &CNServer{
-			reqLabel: ci.labelInfo,
-			cnLabel:  re.CN.Labels,
-			uuid:     re.CN.ServiceID,
-			addr:     re.CN.SQLAddress,
-			hash:     ci.hash,
-		}, nil
+		return cn, nil
 	case plugin.Reject:
 		v2.ProxyConnectRejectCounter.Inc()
 		return nil, withCode(moerr.NewInfoNoCtx(re.Message), codeAuthFailed)
@@ -149,18 +152,16 @@ func (r *pluginRouter) Route(
 		if re.CN == nil {
 			return nil, moerr.NewInternalErrorNoCtx("no CN server selected")
 		}
-		// selected CN should be filtered out, fall back to the delegated router
-		if filter != nil && filter(re.CN.SQLAddress) {
+		resolver, ok := r.Router.(authoritativeRouteCandidateResolver)
+		if !ok {
+			return r.Router.Route(ctx, sid, ci, filter)
+		}
+		cn, eligible := resolver.resolveRouteCandidate(
+			sid, ci, filter, re.CN.ServiceID, re.CN.SQLAddress)
+		if !eligible {
 			return r.Router.Route(ctx, sid, ci, filter)
 		}
 		v2.ProxyConnectSelectCounter.Inc()
-		cn := &CNServer{
-			reqLabel: ci.labelInfo,
-			cnLabel:  re.CN.Labels,
-			uuid:     re.CN.ServiceID,
-			addr:     re.CN.SQLAddress,
-			hash:     ci.hash,
-		}
 		// In plugin mode, a plugin-selected CN must still honor the same
 		// breaker/probe gate as normal routing: a CN in active cooldown should
 		// be skipped, an expired breaker should get at most one half-open

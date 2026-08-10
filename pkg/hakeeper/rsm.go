@@ -1720,6 +1720,7 @@ func (s *stateMachine) handleClusterDetailsQuery(cfg Config) *pb.ClusterDetails 
 			CommitID:               info.CommitID,
 			GlobalSysVarCommitTS:   info.GlobalSysVarCommitTS,
 			GlobalSysVarGeneration: info.GlobalSysVarGeneration,
+			ProtocolVersion:        info.ProtocolVersion,
 		}
 		cd.CNStores = append(cd.CNStores, n)
 	}
@@ -1749,13 +1750,14 @@ func (s *stateMachine) handleClusterDetailsQuery(cfg Config) *pb.ClusterDetails 
 			state = pb.TimeoutState
 		}
 		n := pb.LogStore{
-			UUID:           uuid,
-			Tick:           info.Tick,
-			State:          state,
-			ServiceAddress: info.ServiceAddress,
-			Replicas:       info.Replicas,
-			ConfigData:     info.ConfigData,
-			Locality:       info.Locality,
+			UUID:            uuid,
+			Tick:            info.Tick,
+			State:           state,
+			ServiceAddress:  info.ServiceAddress,
+			Replicas:        info.Replicas,
+			ConfigData:      info.ConfigData,
+			Locality:        info.Locality,
+			ProtocolVersion: info.ProtocolVersion,
 		}
 		cd.LogStores = append(cd.LogStores, n)
 	}
@@ -1772,6 +1774,7 @@ func (s *stateMachine) handleClusterDetailsQuery(cfg Config) *pb.ClusterDetails 
 			GlobalSysVarCommitTS:   info.GlobalSysVarCommitTS,
 			GlobalSysVarGeneration: info.GlobalSysVarGeneration,
 			State:                  state,
+			ProtocolVersion:        info.ProtocolVersion,
 		})
 	}
 	for _, store := range s.state.DeletedStores {

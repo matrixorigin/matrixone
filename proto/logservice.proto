@@ -60,6 +60,7 @@ message CNStore {
   string CommitID = 16;
   timestamp.Timestamp GlobalSysVarCommitTS = 17 [(gogoproto.nullable) = false];
   string GlobalSysVarGeneration = 18;
+  int64 ProtocolVersion = 19;
 }
 
 message TNStore {
@@ -91,6 +92,7 @@ message LogStore {
   repeated LogReplicaInfo Replicas = 5 [(gogoproto.nullable) = false];
   ConfigData ConfigData = 6;
   Locality Locality = 7 [(gogoproto.nullable) = false];
+  int64 ProtocolVersion = 8;
 }
 
 // LogShardInfo contains information a log shard.
@@ -156,6 +158,7 @@ message CNStoreHeartbeat {
   // logtail has been applied locally.
   timestamp.Timestamp GlobalSysVarCommitTS = 18 [(gogoproto.nullable) = false];
   string GlobalSysVarGeneration = 19;
+  int64 ProtocolVersion = 20;
 }
 
 // CNAllocateID is the periodic message sent tp the HAKeeper by CN stores.
@@ -190,6 +193,7 @@ message LogStoreHeartbeat {
   // acknowledged delivery protocol only after every HAKeeper replica has
   // upgraded.
   bool CommandDeliverySupported = 9;
+  int64 ProtocolVersion = 10;
 };
 
 // TNShardInfo contains information of a launched TN shard.
@@ -646,6 +650,7 @@ message CNStoreInfo {
   bool CommandDeliveryAckSupported = 18;
   timestamp.Timestamp GlobalSysVarCommitTS = 19 [(gogoproto.nullable) = false];
   string GlobalSysVarGeneration = 20;
+  int64 ProtocolVersion = 21;
 }
 
 // CNState contains all CN details known to the HAKeeper.
@@ -696,6 +701,7 @@ message ProxyStore {
   timestamp.Timestamp GlobalSysVarCommitTS = 5 [(gogoproto.nullable) = false];
   string GlobalSysVarGeneration = 6;
   NodeState State = 7;
+  int64 ProtocolVersion = 8;
 }
 
 message ProxyState {
@@ -708,6 +714,7 @@ message ProxyHeartbeat {
   ConfigData ConfigData = 3;
   timestamp.Timestamp GlobalSysVarCommitTS = 4 [(gogoproto.nullable) = false];
   string GlobalSysVarGeneration = 5;
+  int64 ProtocolVersion = 6;
 };
 
 message ClusterDetails {
@@ -755,6 +762,7 @@ message LogStoreInfo {
   ConfigData ConfigData = 7;
   Locality Locality = 8 [(gogoproto.nullable) = false];
   bool CommandDeliverySupported = 9;
+  int64 ProtocolVersion = 10;
 }
 
 message LogState {

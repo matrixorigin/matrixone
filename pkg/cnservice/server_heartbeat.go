@@ -22,6 +22,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/system"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
@@ -344,6 +345,7 @@ func (s *service) heartbeat(ctx context.Context) {
 		AckedCommandBatchID:         s.ackedCommandBatchID.Load(),
 		CommandDeliveryAckSupported: true,
 		GlobalSysVarGeneration:      s.globalSysVarGeneration,
+		ProtocolVersion:             defines.MORPCLatestVersion,
 	}
 	if applied := s.globalSysVarApplied.Load(); applied != nil {
 		hb.GlobalSysVarCommitTS = *applied

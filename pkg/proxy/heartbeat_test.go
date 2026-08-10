@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
@@ -165,6 +166,7 @@ func TestServerInitialRouteBarrierAcknowledgesPublishedWatermark(t *testing.T) {
 	client.Unlock()
 	require.Equal(t, commitTS, hb.GlobalSysVarCommitTS)
 	require.Equal(t, "proxy-generation", hb.GlobalSysVarGeneration)
+	require.Equal(t, defines.MORPCLatestVersion, hb.ProtocolVersion)
 }
 
 func TestProxyServingLeaseExpiresAndHeartbeatFailureRevokesIt(t *testing.T) {

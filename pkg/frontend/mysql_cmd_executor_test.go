@@ -24,6 +24,7 @@ import (
 	"math"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -1213,8 +1214,12 @@ func TestShowGlobalVariablesRefreshesGlobalSysVarCache(t *testing.T) {
 	bh := &backgroundExecTest{}
 	bh.init()
 	sql := getSqlForGetSystemVariablesWithAccount(sysAccountID)
+	ses.gSysVars.mu.Lock()
+	catalogEpoch := ses.gSysVars.catalogEpoch
+	ses.gSysVars.mu.Unlock()
 	bh.sql2result[sql] = newMrsForGlobalSystemVariables([][]interface{}{
 		{"long_query_time", "1.1"},
+		{globalSystemVariableEpochName, strconv.FormatUint(catalogEpoch, 10)},
 	})
 
 	bhStub := gostub.StubFunc(&NewBackgroundExec, bh)

@@ -22,6 +22,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 )
 
@@ -77,6 +78,7 @@ func (s *Server) sendHeartbeat(ctx context.Context) error {
 		ListenAddress:          s.config.ListenAddress,
 		ConfigData:             s.configData.GetData(),
 		GlobalSysVarGeneration: s.globalSysVarGeneration,
+		ProtocolVersion:        defines.MORPCLatestVersion,
 	}
 	if s.handler != nil {
 		hb.GlobalSysVarCommitTS = clusterservice.GlobalSysVarCommitTS(s.handler.moCluster)

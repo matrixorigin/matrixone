@@ -46,4 +46,10 @@ func TestValidateHeartbeatDurations(t *testing.T) {
 	cfg := Config{UUID: "cn1"}
 	cfg.HAKeeper.HeatbeatTimeout.Duration = -time.Nanosecond
 	require.ErrorContains(t, cfg.Validate(), "hakeeper heartbeat timeout")
+
+	cfg = Config{UUID: "cn1"}
+	cfg.HAKeeper.HeatbeatInterval.Duration = time.Second
+	cfg.HAKeeper.HeatbeatTimeout.Duration =
+		logservice.GlobalSysVarHeartbeatProgressBudget
+	require.ErrorContains(t, cfg.Validate(), "global-system-variable progress budget")
 }

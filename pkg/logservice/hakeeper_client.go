@@ -42,7 +42,12 @@ const (
 	// ScheduleCommandPollInterval bounds the start-to-start delay between
 	// degraded-path command reads. ScheduleCommandPollTimeout bounds each read.
 	// Neither value inherits the heartbeat RPC timeout.
-	ScheduleCommandPollInterval           = time.Second
+	ScheduleCommandPollInterval = time.Second
+	// GlobalSysVarHeartbeatProgressBudget is the maximum supported interval
+	// from one successful service heartbeat attempt to the next. The SQL fence
+	// timeout covers two such cycles plus control-plane RPC slack.
+	GlobalSysVarHeartbeatProgressBudget   = 10 * time.Second
+	GlobalSysVarFenceTimeout              = 3 * GlobalSysVarHeartbeatProgressBudget
 	ScheduleCommandPollTimeout            = 3 * time.Second
 	scheduleCommandInitialPollJitterRange = 250 * time.Millisecond
 )
