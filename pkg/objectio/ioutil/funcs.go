@@ -351,7 +351,7 @@ func IsRowDeletedByLocation(
 		tss := vector.MustFixedColNoTypeCheck[types.TS](&data[1])
 		abortVec := &data[2]
 		var aborts []bool
-		if !abortVec.IsConstNull() {
+		if !abortVec.IsConstNull() && abortVec.Length() == len(rowids) {
 			aborts = vector.MustFixedColNoTypeCheck[bool](abortVec)
 		}
 		for i := idx; i < len(rowids); i++ {
@@ -469,7 +469,7 @@ func EvalDeleteMaskFromDNCreatedTombstones(
 
 	noTSCheck := false
 	var aborts []bool
-	if abortVec != nil && !abortVec.IsConstNull() {
+	if abortVec != nil && !abortVec.IsConstNull() && abortVec.Length() == len(rowids) {
 		aborts = vector.MustFixedColWithTypeCheck[bool](abortVec)
 	}
 	if end-start > 10 && aborts == nil {
