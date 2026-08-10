@@ -201,16 +201,6 @@ func getExprValueWithPrepareMode(
 	return value, err
 }
 
-func getExprValueWithPrepareModeAndType(
-	e tree.Expr,
-	ses *Session,
-	execCtx *ExecCtx,
-	preparedExpression bool,
-	isBin ...*bool,
-) (interface{}, plan.Type, error) {
-	return getExprValueWithPrepareMeta(e, ses, execCtx, preparedExpression, nil, isBin...)
-}
-
 func getExprValueWithPrepareMeta(
 	e tree.Expr,
 	ses *Session,
