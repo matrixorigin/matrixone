@@ -193,13 +193,13 @@ select * from t1;
 1  ¦  1
 show collation like 'utf8mb4_general_ci';
 ➤ Collation[12,0,0]  ¦  Charset[12,0,0]  ¦  Id[-5,0,0]  ¦  Default[12,0,0]  ¦  Compiled[12,0,0]  ¦  Sortlen[4,0,0]  ¦  Pad_attribute[12,0,0]  𝄀
-utf8mb4_general_ci  ¦  utf8mb4  ¦  45  ¦    ¦  Yes  ¦  1  ¦  PAD SPACE
+utf8mb4_general_ci  ¦  utf8mb4  ¦  45  ¦  YES  ¦  Yes  ¦  1  ¦  PAD SPACE
 show collation like 'utf8mb4_general_ci%';
 ➤ Collation[12,0,0]  ¦  Charset[12,0,0]  ¦  Id[-5,0,0]  ¦  Default[12,0,0]  ¦  Compiled[12,0,0]  ¦  Sortlen[4,0,0]  ¦  Pad_attribute[12,0,0]  𝄀
-utf8mb4_general_ci  ¦  utf8mb4  ¦  45  ¦    ¦  Yes  ¦  1  ¦  PAD SPACE
+utf8mb4_general_ci  ¦  utf8mb4  ¦  45  ¦  YES  ¦  Yes  ¦  1  ¦  PAD SPACE
 show collation where Charset='utf8mb4'and Collation ='utf8mb4_general_ci';
 ➤ Collation[12,0,0]  ¦  Charset[12,0,0]  ¦  Id[-5,0,0]  ¦  Default[12,0,0]  ¦  Compiled[12,0,0]  ¦  Sortlen[4,0,0]  ¦  Pad_attribute[12,0,0]  𝄀
-utf8mb4_general_ci  ¦  utf8mb4  ¦  45  ¦    ¦  Yes  ¦  1  ¦  PAD SPACE
+utf8mb4_general_ci  ¦  utf8mb4  ¦  45  ¦  YES  ¦  Yes  ¦  1  ¦  PAD SPACE
 show variables like 'sql_safe_updates';
 ➤ Variable_name[12,0,0]  ¦  Value[12,0,0]  𝄀
 sql_safe_updates  ¦  0
@@ -390,10 +390,10 @@ show create view va;
 va  ¦  create view va as select a from a;  ¦  utf8mb4  ¦  utf8mb4_general_ci
 show collation like 'utf8mb4_general_ci';
 ➤ Collation[12,0,0]  ¦  Charset[12,0,0]  ¦  Id[-5,0,0]  ¦  Default[12,0,0]  ¦  Compiled[12,0,0]  ¦  Sortlen[4,0,0]  ¦  Pad_attribute[12,0,0]  𝄀
-utf8mb4_general_ci  ¦  utf8mb4  ¦  45  ¦    ¦  Yes  ¦  1  ¦  PAD SPACE
+utf8mb4_general_ci  ¦  utf8mb4  ¦  45  ¦  YES  ¦  Yes  ¦  1  ¦  PAD SPACE
 show collation like 'utf8mb4_general_ci%';
 ➤ Collation[12,0,0]  ¦  Charset[12,0,0]  ¦  Id[-5,0,0]  ¦  Default[12,0,0]  ¦  Compiled[12,0,0]  ¦  Sortlen[4,0,0]  ¦  Pad_attribute[12,0,0]  𝄀
-utf8mb4_general_ci  ¦  utf8mb4  ¦  45  ¦    ¦  Yes  ¦  1  ¦  PAD SPACE
+utf8mb4_general_ci  ¦  utf8mb4  ¦  45  ¦  YES  ¦  Yes  ¦  1  ¦  PAD SPACE
 rollback;
 drop database if exists showDb;
 DROP DATABASE IF EXISTS test;

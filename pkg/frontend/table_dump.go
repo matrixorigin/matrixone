@@ -291,6 +291,13 @@ func tableSchemaHashWithResolver(
 	if err := sqlplan.RecoverLegacyTinyText(ctx, def, resolve); err != nil {
 		return "", moerr.NewInternalErrorNoCtxf("cannot normalize table schema: %v", err)
 	}
+	// LOAD recreates legacy bytewise text through the public utf8mb4_bin
+	// compatibility spelling. Normalize that identity before hashing so a dump
+	// from an old catalog compares equal to the schema produced by replaying the
+	// manifest DDL, without changing the engine-owned catalog definition.
+	if tableDumpHasLegacyTextMetadata(def) {
+		normalizeTableDumpLegacyTextMetadata(def)
+	}
 	// For ordinary tables, reconstruct the DDL from the expanded TableDef. This
 	// makes CREATE TABLE ... LIKE ... compare equal to an equivalent explicit
 	// CREATE TABLE statement stored by another cluster.
@@ -369,18 +376,63 @@ func tableDumpManifestCreateSQL(
 	if def == nil {
 		return "", moerr.NewInternalErrorNoCtx("table definition is unavailable")
 	}
-	if !sqlplan.LegacyTinyTextCreateSQLNeedsRebuild(def) || !canReconstructTableSchema(def) {
+	needsLegacyCollationRebuild := tableDumpHasLegacyTextMetadata(def)
+	if (!sqlplan.LegacyTinyTextCreateSQLNeedsRebuild(def) && !needsLegacyCollationRebuild) ||
+		!canReconstructTableSchema(def) {
 		return def.Createsql, nil
 	}
 	clone := sqlplan.CloneTableDefForPlan(def, true)
 	if err := sqlplan.RecoverLegacyTinyText(ctx, clone, resolve); err != nil {
 		return "", moerr.NewInternalErrorNoCtxf("cannot normalize table schema: %v", err)
 	}
+	if needsLegacyCollationRebuild {
+		// CharsetLegacy was persisted before the charset field had semantics, but
+		// its text ordering was bytewise. A bare historical CREATE statement is
+		// no longer replay-safe now that newly authored text defaults to
+		// general_ci. Use the same public compatibility identity as SHOW CREATE
+		// and CREATE LIKE so dump/load preserves both the table default and any
+		// partially migrated column overrides.
+		normalizeTableDumpLegacyTextMetadata(clone)
+	}
 	canonical, _, err := sqlplan.ConstructCreateTableSQL(nil, clone, nil, false, nil)
 	if err != nil {
 		return "", moerr.NewInternalErrorNoCtxf("cannot reconstruct table schema: %v", err)
 	}
 	return canonical, nil
+}
+
+func tableDumpHasLegacyTextMetadata(def *plan.TableDef) bool {
+	hasText := false
+	for _, col := range def.Cols {
+		if col == nil {
+			continue
+		}
+		switch types.T(col.Typ.Id) {
+		case types.T_char, types.T_varchar, types.T_text:
+			hasText = true
+			if col.Typ.Charset == uint32(types.CharsetLegacy) {
+				return true
+			}
+		}
+	}
+	return hasText && def.DefaultCharset == uint32(types.CharsetLegacy)
+}
+
+func normalizeTableDumpLegacyTextMetadata(def *plan.TableDef) {
+	if def.DefaultCharset == uint32(types.CharsetLegacy) {
+		def.DefaultCharset = uint32(types.CharsetUTF8MB4Bin)
+	}
+	for _, col := range def.Cols {
+		if col == nil {
+			continue
+		}
+		switch types.T(col.Typ.Id) {
+		case types.T_char, types.T_varchar, types.T_text:
+			if col.Typ.Charset == uint32(types.CharsetLegacy) {
+				col.Typ.Charset = uint32(types.CharsetUTF8MB4Bin)
+			}
+		}
+	}
 }
 
 func validateTableDumpSchema(def *plan.TableDef) error {

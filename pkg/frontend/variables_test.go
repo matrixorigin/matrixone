@@ -79,6 +79,12 @@ func TestCTEMaxMemoryBytesDefinition(t *testing.T) {
 	assert.Error(t, err)
 }
 
+func TestCollationServerMatchesImplicitTableDefault(t *testing.T) {
+	sv, ok := gSysVarsDefs["collation_server"]
+	assert.True(t, ok)
+	assert.Equal(t, "utf8mb4_general_ci", sv.Default)
+}
+
 func TestScope(t *testing.T) {
 	convey.Convey("test scope", t, func() {
 		wanted := make(map[Scope]string)
