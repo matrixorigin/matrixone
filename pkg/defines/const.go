@@ -48,7 +48,8 @@ const (
 	MORPCVersion10     int64 = 10 // persisted appendable-object abort metadata
 	MORPCVersion11     int64 = 11 // bounded Sorted64 membership-filter wire format
 	MORPCVersion12     int64 = 12 // prepared-parameter provenance in remote process metadata and aggregate trailers
-	MORPCLatestVersion       = MORPCVersion12
+	MORPCVersion13     int64 = 13 // lossless v2 prefix-index metadata
+	MORPCLatestVersion       = MORPCVersion13
 )
 
 // DefaultLockWaitTimeoutSeconds is shared by the frontend default and by

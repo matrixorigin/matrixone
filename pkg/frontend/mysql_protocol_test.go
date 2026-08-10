@@ -3200,6 +3200,39 @@ func Test_resultset(t *testing.T) {
 	})
 }
 
+func TestSendResultSetPropagatesRowEncodingErrors(t *testing.T) {
+	sv, err := getSystemVariables("test/system_vars_config.toml")
+	require.NoError(t, err)
+	pu := config.NewParameterUnit(sv, nil, nil, nil)
+	pu.SV.SkipCheckUser = true
+	pu.SV.KillRountinesInterval = 0
+	setSessionAlloc("", NewLeakCheckAllocator())
+	setPu("", pu)
+
+	for _, cmd := range []CommandType{COM_QUERY, COM_STMT_EXECUTE} {
+		t.Run(cmd.String(), func(t *testing.T) {
+			conn := &prepareResponseCaptureConn{}
+			ioses, err := NewIOSession(conn, pu, "")
+			require.NoError(t, err)
+			proto := NewMysqlClientProtocol("", 0, ioses, 1024, sv)
+			proto.SetSession(&Session{feSessionImpl: feSessionImpl{txnHandler: &TxnHandler{}}})
+
+			mrs := &MysqlResultSet{}
+			column := new(MysqlColumn)
+			column.SetName("unsupported")
+			column.SetColumnType(defines.MYSQL_TYPE_INVALID)
+			mrs.AddColumn(column)
+			mrs.AddRow([]any{"value"})
+
+			err = proto.sendResultSet(context.Background(), mrs, int(cmd), 0, 0)
+			require.Error(t, err)
+			packets := splitProtocolPackets(t, conn.writes)
+			require.NotEmpty(t, packets)
+			require.Equal(t, byte(defines.ErrHeader), packets[len(packets)-1][0])
+		})
+	}
+}
+
 func Test_send_packet(t *testing.T) {
 	convey.Convey("send err packet", t, func() {
 		sv, err := getSystemVariables("test/system_vars_config.toml")

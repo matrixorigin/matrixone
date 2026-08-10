@@ -905,4 +905,230 @@ a1  ¦  done  ¦  10  𝄀
 a2  ¦  active  ¦  20  𝄀
 a3  ¦  closed  ¦  55  𝄀
 a5  ¦  null  ¦  50
+drop table if exists t11;
+create table t11 (
+id bigint primary key,
+k_bigint bigint null,
+k_decimal decimal(20,4) null,
+k_varchar varchar(16) null,
+payload varchar(16) not null,
+key idx_bigint(k_bigint),
+key idx_decimal(k_decimal),
+key idx_varchar(k_varchar)
+);
+insert into t11 values
+(1, NULL, NULL, NULL, 'null'),
+(2, 98, 98.0000, '098', 'above'),
+(3, 95, 95.0000, '095', 'below-95'),
+(4, 96, 96.0000, '096', 'below-96'),
+(5, 97, 97.0000, '097', 'boundary'),
+(6, 1000, 1000.0000, '1000', 'upper');
+explain select id from t11 where k_bigint < 97;
+-- @regex("Index Table Scan", true)
+➤ TP QUERY PLAN[12,0,0]  𝄀
+Project  𝄀
+  ->  Index Table Scan on t11.idx_bigint  𝄀
+        Filter Cond: (__mo_index_idx_col < '<opaque>'), (serial_extract(__mo_index_idx_col, 0, BIGINT)) < 97)
+select id as bigint_auto from t11 where k_bigint < 97 order by id;
+➤ bigint_auto[-5,64,0]  𝄀
+3  𝄀
+4
+select id as bigint_primary from t11 ignore index(idx_bigint) where k_bigint < 97 order by id;
+➤ bigint_primary[-5,64,0]  𝄀
+3  𝄀
+4
+select id as decimal_auto from t11 where k_decimal < 97.0000 order by id;
+➤ decimal_auto[-5,64,0]  𝄀
+3  𝄀
+4
+select id as decimal_primary from t11 ignore index(idx_decimal) where k_decimal < 97.0000 order by id;
+➤ decimal_primary[-5,64,0]  𝄀
+3  𝄀
+4
+select id as varchar_auto from t11 where k_varchar < '097' order by id;
+➤ varchar_auto[-5,64,0]  𝄀
+3  𝄀
+4
+select id as varchar_primary from t11 ignore index(idx_varchar) where k_varchar < '097' order by id;
+➤ varchar_primary[-5,64,0]  𝄀
+3  𝄀
+4
+select id, k_bigint from t11 force index(idx_bigint) where k_bigint < 97 limit 1;
+➤ id[-5,64,0]  ¦  k_bigint[-5,64,0]  𝄀
+3  ¦  95
+select id as constant_left from t11 where 97 > k_bigint order by id;
+➤ constant_left[-5,64,0]  𝄀
+3  𝄀
+4
+prepare stmt_t11_lt from 'select id as prepared_bound from t11 where k_bigint < ? order by id';
+set @t11_bound = 97;
+execute stmt_t11_lt using @t11_bound;
+➤ prepared_bound[-5,64,0]  𝄀
+3  𝄀
+4
+deallocate prepare stmt_t11_lt;
+explain select id, payload from t11 where k_bigint < 97;
+-- @regex("Join Type: INDEX", true)
+➤ TP QUERY PLAN[12,0,0]  𝄀
+Project  𝄀
+  ->  Join  𝄀
+        Join Type: INDEX  𝄀
+        Join Cond: (t11.id = __mo_index_pri_col)  𝄀
+        Runtime Filter Build: #[-1,0]  𝄀
+        ->  Table Scan on d1.t11 [ForceOneCN]  𝄀
+              Filter Cond: (t11.k_bigint < 97)  𝄀
+              Runtime Filter Probe: t11.id  𝄀
+        ->  Index Table Scan on t11.idx_bigint [ForceOneCN]  𝄀
+              Filter Cond: (__mo_index_idx_col < '<opaque>')
+select id, payload from t11 where k_bigint < 97 order by id;
+➤ id[-5,64,0]  ¦  payload[12,-1,0]  𝄀
+3  ¦  below-95  𝄀
+4  ¦  below-96
+explain select id from t11 where k_bigint >= 95 and k_bigint < 97;
+-- @regex("Index", true)
+➤ TP QUERY PLAN[12,0,0]  𝄀
+Project  𝄀
+  ->  Index Table Scan on t11.idx_bigint  𝄀
+        Filter Cond: (__mo_index_idx_col < '<opaque>'), (serial_extract(__mo_index_idx_col, 0, BIGINT)) >= 95)
+select id as paired_range from t11 where k_bigint >= 95 and k_bigint < 97 order by id;
+➤ paired_range[-5,64,0]  𝄀
+3  𝄀
+4
+select id as safe_or from t11 force index(idx_bigint) where k_bigint < 97 or k_bigint >= 1000 order by id;
+➤ safe_or[-5,64,0]  𝄀
+3  𝄀
+4  𝄀
+6
+explain select id from t11 where k_bigint <= 97;
+-- @regex("Index", false)
+➤ TP QUERY PLAN[12,0,0]  𝄀
+Project  𝄀
+  ->  Table Scan on d1.t11  𝄀
+        Filter Cond: (t11.k_bigint <= 97)
+select id as inclusive_upper from t11 where k_bigint <= 97 order by id;
+➤ inclusive_upper[-5,64,0]  𝄀
+3  𝄀
+4  𝄀
+5
+explain select id from t11 where k_bigint > 97;
+-- @regex("Index", false)
+➤ TP QUERY PLAN[12,0,0]  𝄀
+Project  𝄀
+  ->  Table Scan on d1.t11  𝄀
+        Filter Cond: (t11.k_bigint > 97)
+select id as strict_lower from t11 where k_bigint > 97 order by id;
+➤ strict_lower[-5,64,0]  𝄀
+2  𝄀
+6
+explain select id from t11 where k_bigint < 97 or k_bigint > 1000;
+-- @regex("Index", false)
+➤ TP QUERY PLAN[12,0,0]  𝄀
+Project  𝄀
+  ->  Table Scan on d1.t11  𝄀
+        Filter Cond: ((t11.k_bigint < 97) or (t11.k_bigint > 1000))
+select id as unsafe_or from t11 where k_bigint < 97 or k_bigint > 1000 order by id;
+➤ unsafe_or[-5,64,0]  𝄀
+3  𝄀
+4
+update t11
+set payload = concat(payload, '-matched'), k_bigint = k_bigint + 100
+where k_bigint < 97;
+select id, k_bigint, payload from t11 order by id;
+➤ id[-5,64,0]  ¦  k_bigint[-5,64,0]  ¦  payload[12,-1,0]  𝄀
+1  ¦  null  ¦  null  𝄀
+2  ¦  98  ¦  above  𝄀
+3  ¦  195  ¦  below-95-matched  𝄀
+4  ¦  196  ¦  below-96-matched  𝄀
+5  ¦  97  ¦  boundary  𝄀
+6  ¦  1000  ¦  upper
+set @t11_idx = (
+select index_table_name from mo_catalog.mo_indexes
+where name = 'idx_bigint'
+and table_id = (select rel_id from mo_catalog.mo_tables where reldatabase = 'd1' and relname = 't11')
+limit 1
+);
+set @t11_idx_sql = concat(
+'select count(*) as physical_rows, count(distinct __mo_index_pri_col) as primary_mappings from d1.`',
+@t11_idx, '`'
+);
+prepare stmt_t11_idx from @t11_idx_sql;
+execute stmt_t11_idx;
+➤ physical_rows[-5,64,0]  ¦  primary_mappings[-5,64,0]  𝄀
+6  ¦  6
+deallocate prepare stmt_t11_idx;
+drop table if exists t10;
+create table t10 (
+tenant_id int not null,
+id bigint not null,
+price decimal(10,2) not null,
+primary key (tenant_id, id),
+key idx_price_owner (price, tenant_id, id)
+);
+insert into t10
+select 1 + result % 8, result, cast(result / 100.0 as decimal(10,2))
+from generate_series(1, 10000) g;
+set @t10_idx = (select distinct index_table_name from mo_catalog.mo_indexes where name = 'idx_price_owner' limit 1);
+set @t10_idx_sql = concat(
+'select count(*) as physical_rows, count(distinct __mo_index_idx_col) as physical_keys, ',
+'count(distinct __mo_index_pri_col) as primary_mappings from d1.`', @t10_idx, '`'
+);
+prepare stmt_t10_idx from @t10_idx_sql;
+execute stmt_t10_idx;
+➤ physical_rows[-5,64,0]  ¦  physical_keys[-5,64,0]  ¦  primary_mappings[-5,64,0]  𝄀
+10000  ¦  10000  ¦  10000
+deallocate prepare stmt_t10_idx;
+select count(*) as closed_default from t10 where price between 10.250000 and 15.750000;
+➤ closed_default[-5,64,0]  𝄀
+551
+select count(*) as closed_force from t10 force index(idx_price_owner) where price between 10.250000 and 15.750000;
+➤ closed_force[-5,64,0]  𝄀
+551
+select count(*) as closed_ignore from t10 ignore index(idx_price_owner) where price between 10.250000 and 15.750000;
+➤ closed_ignore[-5,64,0]  𝄀
+551
+select count(*) as open_default from t10 where price > 10.250000 and price < 15.750000;
+➤ open_default[-5,64,0]  𝄀
+549
+select count(*) as open_force from t10 force index(idx_price_owner) where price > 10.250000 and price < 15.750000;
+➤ open_force[-5,64,0]  𝄀
+549
+select count(*) as open_ignore from t10 ignore index(idx_price_owner) where price > 10.250000 and price < 15.750000;
+➤ open_ignore[-5,64,0]  𝄀
+549
+select count(*) as lower_force from t10 force index(idx_price_owner) where price >= 10.250000;
+➤ lower_force[-5,64,0]  𝄀
+8976
+select count(*) as lower_ignore from t10 ignore index(idx_price_owner) where price >= 10.250000;
+➤ lower_ignore[-5,64,0]  𝄀
+8976
+select count(*) as upper_force from t10 force index(idx_price_owner) where price < 15.750000;
+➤ upper_force[-5,64,0]  𝄀
+1574
+select count(*) as upper_ignore from t10 ignore index(idx_price_owner) where price < 15.750000;
+➤ upper_ignore[-5,64,0]  𝄀
+1574
+select count(*) as equality_force from t10 force index(idx_price_owner) where price = 10.250000;
+➤ equality_force[-5,64,0]  𝄀
+1
+select count(*) as equality_ignore from t10 ignore index(idx_price_owner) where price = 10.250000;
+➤ equality_ignore[-5,64,0]  𝄀
+1
+select count(*) as equal_scale_force from t10 force index(idx_price_owner) where price between 10.25 and 15.75;
+➤ equal_scale_force[-5,64,0]  𝄀
+551
+select count(*) as equal_scale_ignore from t10 ignore index(idx_price_owner) where price between 10.25 and 15.75;
+➤ equal_scale_ignore[-5,64,0]  𝄀
+551
+select count(*) as rounding_force from t10 force index(idx_price_owner) where price > 10.255000 and price <= 15.755000;
+➤ rounding_force[-5,64,0]  𝄀
+550
+select count(*) as rounding_ignore from t10 ignore index(idx_price_owner) where price > 10.255000 and price <= 15.755000;
+➤ rounding_ignore[-5,64,0]  𝄀
+550
+select count(*) as rounding_between_force from t10 force index(idx_price_owner) where price between 10.255000 and 15.755000;
+➤ rounding_between_force[-5,64,0]  𝄀
+550
+select count(*) as rounding_between_ignore from t10 ignore index(idx_price_owner) where price between 10.255000 and 15.755000;
+➤ rounding_between_ignore[-5,64,0]  𝄀
+550
 drop database d1;
