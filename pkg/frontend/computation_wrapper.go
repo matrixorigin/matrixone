@@ -18,9 +18,6 @@ import (
 	"bytes"
 	"context"
 	"maps"
-	"math"
-	"strconv"
-	"strings"
 	"sync/atomic"
 	"time"
 
@@ -723,29 +720,12 @@ func binaryProtocolPrepareParamKind(
 	}
 }
 
-func preparedParamBindingType(kind vector.PrepareParamKind, value []byte) types.Type {
+func preparedParamBindingType(kind vector.PrepareParamKind, _ []byte) types.Type {
 	switch kind {
 	case vector.PrepareParamFloat:
 		return types.T_float64.ToType()
-	case vector.PrepareParamNone:
-		if value != nil && !isPreparedNumericText(value) {
-			return types.T_varchar.ToType()
-		}
 	}
 	return types.Type{}
-}
-
-func isPreparedNumericText(value []byte) bool {
-	text := strings.TrimSpace(string(value))
-	if text == "" {
-		return false
-	}
-	parsed, err := strconv.ParseFloat(text, 64)
-	if err == nil {
-		return !math.IsNaN(parsed) && !math.IsInf(parsed, 0)
-	}
-	numErr, ok := err.(*strconv.NumError)
-	return ok && numErr.Err == strconv.ErrRange
 }
 
 func preparedParamBindingTypes(

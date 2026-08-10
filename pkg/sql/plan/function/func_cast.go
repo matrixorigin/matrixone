@@ -893,6 +893,7 @@ const (
 	castModeExplicit
 	castModeAssignment
 	castModeAssignmentIgnore
+	castModeMySQLNumeric
 )
 
 func (m castMode) strictStringWidth() bool {
@@ -961,6 +962,15 @@ func sqlModeIsStrict(mode string) bool {
 
 func NewExplicitCast(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	return newCast(parameters, result, proc, length, selectList, castModeExplicit, false)
+}
+
+// NewMySQLNumericCast is reserved for direct prepared parameters whose
+// surrounding common-type function has already selected DECIMAL. MySQL uses
+// numeric-prefix conversion in that context; keeping it as a separate cast
+// overload prevents the permissive rule from leaking into arithmetic,
+// aggregate, assignment, or explicit CAST expressions.
+func NewMySQLNumericCast(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return newCast(parameters, result, proc, length, selectList, castModeMySQLNumeric, false)
 }
 
 func newCast(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList, mode castMode, allowTrailingSpaceTrim bool) error {
@@ -1192,7 +1202,7 @@ func castToDecimal256(proc *process.Process, from *vector.Vector, toType types.T
 		return decimal256ToDecimal256(s, rs, length, selectList)
 	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_blob, types.T_text, types.T_datalink:
 		s := vector.GenerateFunctionStrParameter(from)
-		return strToDecimal256(s, rs, length, selectList, mode == castModeExplicit)
+		return strToDecimal256(s, rs, length, selectList, mode)
 	default:
 		return moerr.NewInternalError(proc.Ctx, fmt.Sprintf("unsupported cast from %s to %s", from.GetType(), toType))
 	}
@@ -2641,10 +2651,10 @@ func strTypeToOthers(proc *process.Process,
 		return strToFloat(ctx, CompatibilityModeFromProcess(proc), source, rs, 64, length, selectList)
 	case types.T_decimal64:
 		rs := vector.MustFunctionResult[types.Decimal64](result)
-		return strToDecimal64(source, rs, length, selectList, explicit)
+		return strToDecimal64(source, rs, length, selectList, mode)
 	case types.T_decimal128:
 		rs := vector.MustFunctionResult[types.Decimal128](result)
-		return strToDecimal128(source, rs, length, selectList, explicit)
+		return strToDecimal128(source, rs, length, selectList, mode)
 	case types.T_bool:
 		rs := vector.MustFunctionResult[bool](result)
 		return strToBool(source, rs, length, selectList)
@@ -6662,7 +6672,7 @@ func strToFloat[T constraints.Float](
 func strToDecimal64(
 	from vector.FunctionParameterWrapper[types.Varlena],
 	to *vector.FunctionResult[types.Decimal64], length int, selectList *FunctionSelectList,
-	explicit ...bool,
+	mode castMode,
 ) error {
 	var i uint64
 	var l = uint64(length)
@@ -6678,7 +6688,10 @@ func strToDecimal64(
 		} else {
 			s := convertByteSliceToString(v)
 			if !isb {
-				isExplicit := len(explicit) > 0 && explicit[0]
+				isExplicit := mode == castModeExplicit
+				if mode == castModeMySQLNumeric {
+					s = mysqlNumericDecimalPrefix(s)
+				}
 				var result types.Decimal64
 				var err error
 				if isExplicit {
@@ -6857,7 +6870,7 @@ func parseExplicitDecimal256CastString(s string, width, scale int32) (types.Deci
 func strToDecimal128(
 	from vector.FunctionParameterWrapper[types.Varlena],
 	to *vector.FunctionResult[types.Decimal128], length int, selectList *FunctionSelectList,
-	explicit ...bool,
+	mode castMode,
 ) error {
 	var i uint64
 	var l = uint64(length)
@@ -6873,7 +6886,10 @@ func strToDecimal128(
 		} else {
 			s := convertByteSliceToString(v)
 			if !isb {
-				isExplicit := len(explicit) > 0 && explicit[0]
+				isExplicit := mode == castModeExplicit
+				if mode == castModeMySQLNumeric {
+					s = mysqlNumericDecimalPrefix(s)
+				}
 				var result types.Decimal128
 				var err error
 				if isExplicit {
@@ -6940,7 +6956,7 @@ func clampDecimal128CastString(s string, width, scale int32) (types.Decimal128, 
 func strToDecimal256(
 	from vector.FunctionParameterWrapper[types.Varlena],
 	to *vector.FunctionResult[types.Decimal256], length int, selectList *FunctionSelectList,
-	explicit ...bool,
+	mode castMode,
 ) error {
 	var i uint64
 	var l = uint64(length)
@@ -6956,7 +6972,10 @@ func strToDecimal256(
 		} else {
 			s := convertByteSliceToString(v)
 			if !isb {
-				isExplicit := len(explicit) > 0 && explicit[0]
+				isExplicit := mode == castModeExplicit
+				if mode == castModeMySQLNumeric {
+					s = mysqlNumericDecimalPrefix(s)
+				}
 				var result types.Decimal256
 				var err error
 				if isExplicit {
@@ -6987,6 +7006,14 @@ func strToDecimal256(
 		}
 	}
 	return nil
+}
+
+func mysqlNumericDecimalPrefix(s string) string {
+	prefix, _, ok := scanDecimalFloatPrefix(s)
+	if !ok {
+		return "0"
+	}
+	return prefix
 }
 
 func clampDecimal256Value(negative bool, width, scale int32) (types.Decimal256, error) {

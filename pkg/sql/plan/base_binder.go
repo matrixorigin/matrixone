@@ -3850,7 +3850,14 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 
 	// get function definition
 	resolutionTypes := decimalParamCommonTypeResolutionTypes(name, args, argsType)
-	fGet, err := function.GetFunctionByName(ctx, name, resolutionTypes)
+	var fGet function.FuncGetResult
+	if decimalParamCommonTypeNeedsNumericTextFallback(name, args, argsType) && (name == "greatest" || name == "least") {
+		fGet, err = function.GetFunctionByNameWithOverload(
+			ctx, name, resolutionTypes, function.LeastGreatestMySQLNumericTextOverloadID,
+		)
+	} else {
+		fGet, err = function.GetFunctionByName(ctx, name, resolutionTypes)
+	}
 	if err != nil {
 		if name == "between" {
 			leftFn, err := BindFuncExprImplByPlanExpr(ctx, ">=", []*plan.Expr{DeepCopyExpr(args[0]), args[1]})
@@ -3876,7 +3883,7 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 	argsCastType = applyDecimalParamCommonTypeCasts(
 		args, argsType, resolutionTypes, returnType, argsCastType,
 	)
-	if err := normalizeDecimalParamCommonTypeCastSources(ctx, args, argsType, resolutionTypes); err != nil {
+	if err := normalizeDecimalParamCommonTypeCastSources(ctx, args, argsType, resolutionTypes, returnType); err != nil {
 		return nil, err
 	}
 
@@ -4646,8 +4653,21 @@ func decimalParamCommonTypeResolutionTypes(name string, args []*Expr, argsType [
 		return argsType
 	}
 
+	dynamicParamType, ok := dynamicParamDecimalCommonType(argsType)
+	if decimalParamCommonTypeHasFloatingPeer(args, argsType) {
+		// FLOAT/DOUBLE determines the final common type, so its DOUBLE cast can
+		// preserve the native floating parameter domain without first forcing
+		// every DECIMAL contribution into one fixed representation.
+		dynamicParamType = types.New(types.T_decimal256, 65, 30)
+		ok = true
+	}
+	if !ok {
+		// MatrixOne has no fixed DECIMAL representation that can preserve both
+		// domains. Keep the pre-existing TEXT aggregation path instead of
+		// narrowing either operand or falling back to DOUBLE.
+		return argsType
+	}
 	resolutionTypes := append([]types.Type(nil), argsType...)
-	dynamicParamType := dynamicParamDecimalCommonType(argsType)
 	for i, typ := range argsType {
 		switch {
 		case isUnresolvedPreparedNumericParam(args[i], typ):
@@ -4669,7 +4689,58 @@ func decimalParamCommonTypeResolutionTypes(name string, args []*Expr, argsType [
 	return resolutionTypes
 }
 
-func dynamicParamDecimalCommonType(peerTypes []types.Type) types.Type {
+// MatrixOne's widest fixed DECIMAL has 76 digits. When the full prepared
+// parameter domain and a legal DECIMAL peer exceed that limit, preserve both
+// values as text. GREATEST/LEAST select a dedicated exact numeric-text
+// comparator so the representation fallback does not change ordering.
+func decimalParamCommonTypeNeedsNumericTextFallback(name string, args []*Expr, argsType []types.Type) bool {
+	switch name {
+	case "coalesce", "greatest", "least":
+	default:
+		return false
+	}
+	if len(args) != len(argsType) {
+		return false
+	}
+
+	hasParam := false
+	hasDecimal := false
+	for i, typ := range argsType {
+		if isUnresolvedPreparedNumericParam(args[i], typ) {
+			hasParam = true
+			continue
+		}
+		switch {
+		case typ.Oid == types.T_any:
+			continue
+		case typ.Oid.IsDecimal():
+			hasDecimal = true
+		case typ.IsNumeric(), typ.Oid == types.T_bool, typ.Oid == types.T_year:
+			continue
+		default:
+			return false
+		}
+	}
+	if !hasParam || !hasDecimal {
+		return false
+	}
+	if decimalParamCommonTypeHasFloatingPeer(args, argsType) {
+		return false
+	}
+	_, ok := dynamicParamDecimalCommonType(argsType)
+	return !ok
+}
+
+func decimalParamCommonTypeHasFloatingPeer(args []*Expr, argsType []types.Type) bool {
+	for i, typ := range argsType {
+		if !isUnresolvedPreparedNumericParam(args[i], typ) && typ.Oid.IsFloat() {
+			return true
+		}
+	}
+	return false
+}
+
+func dynamicParamDecimalCommonType(peerTypes []types.Type) (types.Type, bool) {
 	const (
 		maxDecimal256Width = int32(76)
 		paramIntegralWidth = int32(35)
@@ -4690,18 +4761,12 @@ func dynamicParamDecimalCommonType(peerTypes []types.Type) types.Type {
 		}
 	}
 
-	integralWidth := min(paramIntegralWidth, maxDecimal256Width-maxPeerScale)
-	scale := min(paramScale, maxDecimal256Width-maxPeerIntegralWidth)
-	if integralWidth < 0 {
-		integralWidth = 0
+	integralWidth := max(paramIntegralWidth, maxPeerIntegralWidth)
+	scale := max(paramScale, maxPeerScale)
+	if integralWidth+scale > maxDecimal256Width {
+		return types.Type{}, false
 	}
-	if scale < 0 {
-		scale = 0
-	}
-	if integralWidth+scale == 0 {
-		integralWidth = 1
-	}
-	return types.New(types.T_decimal256, integralWidth+scale, scale)
+	return types.New(types.T_decimal256, integralWidth+scale, scale), true
 }
 
 func normalizeDecimalParamCommonTypeCastSources(
@@ -4709,11 +4774,21 @@ func normalizeDecimalParamCommonTypeCastSources(
 	args []*Expr,
 	argsType []types.Type,
 	resolutionTypes []types.Type,
+	returnType types.Type,
 ) error {
 	if len(args) != len(argsType) || len(args) != len(resolutionTypes) {
 		return nil
 	}
 	for i := range args {
+		if returnType.Oid.IsDecimal() && isUnresolvedPreparedNumericParam(args[i], argsType[i]) {
+			castExpr, err := appendMySQLNumericCastBeforeExpr(ctx, args[i], makePlan2Type(&returnType))
+			if err != nil {
+				return err
+			}
+			args[i] = castExpr
+			argsType[i] = returnType
+			continue
+		}
 		needsBridge := false
 		switch argsType[i].Oid {
 		case types.T_bool:
@@ -4747,7 +4822,10 @@ func applyDecimalParamCommonTypeCasts(
 		return argsCastType
 	}
 
-	dynamicParamType := dynamicParamDecimalCommonType(argsType)
+	dynamicParamType, ok := dynamicParamDecimalCommonType(argsType)
+	if !ok {
+		return argsCastType
+	}
 	for i := range args {
 		if !isUnresolvedPreparedNumericParam(args[i], argsType[i]) || !resolutionTypes[i].Eq(dynamicParamType) {
 			continue
@@ -5079,6 +5157,10 @@ func appendCastBeforeExpr(ctx context.Context, expr *Expr, toType Type, isBin ..
 
 func appendExplicitCastBeforeExpr(ctx context.Context, expr *Expr, toType Type) (*Expr, error) {
 	return appendCastBeforeExprWithOverload(ctx, expr, toType, 1)
+}
+
+func appendMySQLNumericCastBeforeExpr(ctx context.Context, expr *Expr, toType Type) (*Expr, error) {
+	return appendCastBeforeExprWithOverload(ctx, expr, toType, 2)
 }
 
 func appendCastBeforeExprWithOverload(

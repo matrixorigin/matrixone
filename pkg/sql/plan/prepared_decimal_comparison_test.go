@@ -21,6 +21,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/stretchr/testify/require"
 )
 
@@ -281,6 +282,9 @@ func TestPreparedDecimalCommonTypeFunctionsDeriveParamType(t *testing.T) {
 					}
 					require.NotNil(t, expr.GetF().Args[paramPos].GetF())
 					require.NotNil(t, expr.GetF().Args[paramPos].GetF().Args[0].GetP())
+					_, overloadID := function.DecodeOverloadID(expr.GetF().Args[paramPos].GetF().Func.Obj)
+					require.Equal(t, int32(2), overloadID,
+						"only prepared DECIMAL common-type parameters use MySQL numeric-prefix conversion")
 				})
 			}
 		}
@@ -313,31 +317,19 @@ func TestPreparedDecimalCommonTypeFunctionsUseAllNumericPeers(t *testing.T) {
 	}
 }
 
-func TestPreparedDecimalCommonTypeFunctionsRespectDecimal256PeerBudget(t *testing.T) {
+func TestPreparedDecimalCommonTypeFunctionsDoNotNarrowUnrepresentableDomains(t *testing.T) {
 	ctx := context.Background()
 	tests := []struct {
-		name           string
-		peer           types.Type
-		wantParamWidth int32
-		wantParamScale int32
-		wantWidth      int32
-		wantScale      int32
+		name string
+		peer types.Type
 	}{
 		{
-			name:           "65_integral_digits",
-			peer:           types.New(types.T_decimal256, 65, 0),
-			wantParamWidth: 46,
-			wantParamScale: 11,
-			wantWidth:      76,
-			wantScale:      11,
+			name: "65_integral_digits_cannot_keep_parameter_scale",
+			peer: types.New(types.T_decimal256, 65, 0),
 		},
 		{
-			name:           "65_fractional_digits",
-			peer:           types.New(types.T_decimal256, 65, 65),
-			wantParamWidth: 41,
-			wantParamScale: 30,
-			wantWidth:      76,
-			wantScale:      65,
+			name: "65_fractional_digits_cannot_keep_parameter_integral_width",
+			peer: types.New(types.T_decimal256, 65, 65),
 		},
 	}
 
@@ -351,27 +343,91 @@ func TestPreparedDecimalCommonTypeFunctionsRespectDecimal256PeerBudget(t *testin
 				resolutionTypes := decimalParamCommonTypeResolutionTypes(name, args, []types.Type{
 					types.T_text.ToType(), test.peer,
 				})
-				require.Equal(t, int32(types.T_decimal256), int32(resolutionTypes[0].Oid))
-				require.Equal(t, test.wantParamWidth, resolutionTypes[0].Width)
-				require.Equal(t, test.wantParamScale, resolutionTypes[0].Scale)
+				require.Equal(t, types.T_text, resolutionTypes[0].Oid)
+				require.True(t, resolutionTypes[1].Eq(test.peer))
 				expr, err := BindFuncExprImplByPlanExpr(ctx, name, args)
 				require.NoError(t, err)
-				require.Equal(t, int32(types.T_decimal256), expr.Typ.Id)
-				require.Equal(t, test.wantWidth, expr.Typ.Width)
-				require.Equal(t, test.wantScale, expr.Typ.Scale)
-				paramArg := expr.GetF().Args[0]
-				require.Equal(t, int32(types.T_decimal256), paramArg.Typ.Id)
-				require.Equal(t, test.wantWidth, paramArg.Typ.Width)
-				require.Equal(t, test.wantScale, paramArg.Typ.Scale)
-				peerArg := expr.GetF().Args[1]
-				require.Equal(t, int32(types.T_decimal256), peerArg.Typ.Id)
-				if test.peer.Scale == test.wantScale {
-					require.Equal(t, test.peer.Width, peerArg.Typ.Width)
-					require.Equal(t, test.peer.Scale, peerArg.Typ.Scale)
+				require.True(t, types.T(expr.Typ.Id).IsMySQLString())
+				_, overloadID := function.DecodeOverloadID(expr.GetF().Func.Obj)
+				if name == "greatest" || name == "least" {
+					require.Equal(t, function.LeastGreatestMySQLNumericTextOverloadID, overloadID)
 				} else {
-					require.Equal(t, test.wantWidth, peerArg.Typ.Width)
-					require.Equal(t, test.wantScale, peerArg.Typ.Scale)
+					require.NotEqual(t, function.LeastGreatestMySQLNumericTextOverloadID, overloadID)
 				}
+				paramArg := expr.GetF().Args[0]
+				require.True(t, types.T(paramArg.Typ.Id).IsMySQLString())
+				require.True(t, planExprContainsPreparedDecimalParam(paramArg))
+				peerArg := expr.GetF().Args[1]
+				require.True(t, types.T(peerArg.Typ.Id).IsMySQLString())
+			})
+		}
+	}
+}
+
+func TestDynamicParamDecimalCommonTypeRequiresFullParameterDomain(t *testing.T) {
+	tests := []struct {
+		name      string
+		peer      types.Type
+		wantOK    bool
+		wantWidth int32
+		wantScale int32
+	}{
+		{
+			name:      "integral boundary fits",
+			peer:      types.New(types.T_decimal256, 46, 0),
+			wantOK:    true,
+			wantWidth: 76,
+			wantScale: 30,
+		},
+		{
+			name:   "one more integral digit cannot fit",
+			peer:   types.New(types.T_decimal256, 47, 0),
+			wantOK: false,
+		},
+		{
+			name:      "scale boundary fits",
+			peer:      types.New(types.T_decimal256, 41, 41),
+			wantOK:    true,
+			wantWidth: 76,
+			wantScale: 41,
+		},
+		{
+			name:   "one more scale digit cannot fit",
+			peer:   types.New(types.T_decimal256, 42, 42),
+			wantOK: false,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			typ, ok := dynamicParamDecimalCommonType([]types.Type{types.T_text.ToType(), test.peer})
+			require.Equal(t, test.wantOK, ok)
+			if ok {
+				require.Equal(t, types.T_decimal256, typ.Oid)
+				require.Equal(t, test.wantWidth, typ.Width)
+				require.Equal(t, test.wantScale, typ.Scale)
+			}
+		})
+	}
+}
+
+func TestPreparedDecimalCommonTypeExtremeDecimalWithFloatUsesDouble(t *testing.T) {
+	ctx := context.Background()
+	for _, name := range []string{"coalesce", "greatest", "least"} {
+		for _, decimalType := range []types.Type{
+			types.New(types.T_decimal256, 65, 0),
+			types.New(types.T_decimal256, 65, 65),
+		} {
+			t.Run(fmt.Sprintf("%s/%d", name, decimalType.Scale), func(t *testing.T) {
+				expr, err := BindFuncExprImplByPlanExpr(ctx, name, []*planpb.Expr{
+					makePreparedDecimalComparisonParam(0),
+					makePreparedDecimalComparisonColumn(decimalType),
+					makePreparedDecimalComparisonColumn(types.T_float64.ToType()),
+				})
+				require.NoError(t, err)
+				require.Equal(t, int32(types.T_float64), expr.Typ.Id)
+				_, overloadID := function.DecodeOverloadID(expr.GetF().Func.Obj)
+				require.NotEqual(t, function.LeastGreatestMySQLNumericTextOverloadID, overloadID)
 			})
 		}
 	}

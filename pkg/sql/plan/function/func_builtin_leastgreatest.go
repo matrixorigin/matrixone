@@ -17,7 +17,9 @@ package function
 import (
 	"bytes"
 	"fmt"
+	"math/big"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -53,7 +55,13 @@ const (
 	leastGreatestTemporalOverload
 	leastGreatestJSONTemporalOverload
 	leastGreatestYearNumericOverload
+	leastGreatestMySQLNumericTextOverload
 )
+
+// LeastGreatestMySQLNumericTextOverloadID identifies the planner-only exact
+// numeric comparator used when a prepared parameter and DECIMAL peer cannot
+// share MatrixOne's widest fixed DECIMAL representation.
+const LeastGreatestMySQLNumericTextOverloadID = int32(leastGreatestMySQLNumericTextOverload)
 
 // check input types for least and greatest function.
 // It requires at least 1 input. NULL arguments (T_any) are allowed and produce
@@ -1657,6 +1665,117 @@ func leastYearNumericFn(parameters []*vector.Vector,
 	selectList *FunctionSelectList) error {
 	return leastGreatestYearNumericFn(parameters, result, proc, length, selectList, func(comparison int) bool {
 		return comparison < 0
+	})
+}
+
+type mysqlNumericTextValue struct {
+	negative  bool
+	digits    string
+	magnitude big.Int
+}
+
+func parseMySQLNumericText(value []byte) mysqlNumericTextValue {
+	prefix := mysqlNumericDecimalPrefix(string(value))
+	parsed := mysqlNumericTextValue{}
+	if prefix[0] == '+' || prefix[0] == '-' {
+		parsed.negative = prefix[0] == '-'
+		prefix = prefix[1:]
+	}
+
+	mantissa := prefix
+	if exponentAt := strings.IndexAny(prefix, "eE"); exponentAt >= 0 {
+		mantissa = prefix[:exponentAt]
+		if _, ok := parsed.magnitude.SetString(prefix[exponentAt+1:], 10); !ok {
+			parsed.magnitude.SetInt64(0)
+		}
+	}
+	fractionalDigits := 0
+	if decimalAt := strings.IndexByte(mantissa, '.'); decimalAt >= 0 {
+		fractionalDigits = len(mantissa) - decimalAt - 1
+		mantissa = mantissa[:decimalAt] + mantissa[decimalAt+1:]
+	}
+	parsed.digits = strings.TrimLeft(mantissa, "0")
+	if parsed.digits == "" {
+		parsed.negative = false
+		return parsed
+	}
+
+	var offset big.Int
+	offset.SetInt64(int64(len(parsed.digits) - fractionalDigits))
+	parsed.magnitude.Add(&parsed.magnitude, &offset)
+	return parsed
+}
+
+func compareMySQLNumericText(left, right []byte) int {
+	leftValue := parseMySQLNumericText(left)
+	rightValue := parseMySQLNumericText(right)
+	if leftValue.digits == "" || rightValue.digits == "" {
+		switch {
+		case leftValue.digits == "" && rightValue.digits == "":
+			return 0
+		case leftValue.digits == "":
+			if rightValue.negative {
+				return 1
+			}
+			return -1
+		default:
+			if leftValue.negative {
+				return -1
+			}
+			return 1
+		}
+	}
+	if leftValue.negative != rightValue.negative {
+		if leftValue.negative {
+			return -1
+		}
+		return 1
+	}
+
+	comparison := leftValue.magnitude.Cmp(&rightValue.magnitude)
+	if comparison == 0 {
+		width := max(len(leftValue.digits), len(rightValue.digits))
+		for i := 0; i < width; i++ {
+			leftDigit, rightDigit := byte('0'), byte('0')
+			if i < len(leftValue.digits) {
+				leftDigit = leftValue.digits[i]
+			}
+			if i < len(rightValue.digits) {
+				rightDigit = rightValue.digits[i]
+			}
+			if leftDigit < rightDigit {
+				comparison = -1
+				break
+			}
+			if leftDigit > rightDigit {
+				comparison = 1
+				break
+			}
+		}
+	}
+	if leftValue.negative {
+		return -comparison
+	}
+	return comparison
+}
+
+func leastMySQLNumericTextFn(parameters []*vector.Vector,
+	result vector.FunctionResultWrapper,
+	proc *process.Process,
+	length int,
+	selectList *FunctionSelectList) error {
+	return leastGreatestFnVarlen(parameters, result, proc, length, selectList, func(left, right []byte) bool {
+		return compareMySQLNumericText(left, right) < 0
+	})
+}
+
+func greatestMySQLNumericTextFn(parameters []*vector.Vector,
+	result vector.FunctionResultWrapper,
+	proc *process.Process,
+	length int,
+	selectList *FunctionSelectList) error {
+	return leastGreatestFnVarlen(parameters, result, proc, length, selectList, func(left, right []byte) bool {
+		return compareMySQLNumericText(left, right) > 0
 	})
 }
 

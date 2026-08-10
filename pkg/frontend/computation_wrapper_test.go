@@ -336,11 +336,11 @@ func TestPreparedParamBindingType(t *testing.T) {
 		{name: "integer", kind: vector.PrepareParamInteger, value: []byte("42"), want: types.T_any},
 		{name: "decimal", kind: vector.PrepareParamDecimal, value: []byte("1.2"), want: types.T_any},
 		{name: "boolean", kind: vector.PrepareParamBoolean, value: []byte("1"), want: types.T_any},
-		{name: "time value", value: []byte("2026-08-10 12:34:56"), want: types.T_varchar},
-		{name: "ordinary string", value: []byte("matrixone"), want: types.T_varchar},
-		{name: "nan string", value: []byte("NaN"), want: types.T_varchar},
-		{name: "infinity string", value: []byte("+Inf"), want: types.T_varchar},
-		{name: "empty string", value: []byte(""), want: types.T_varchar},
+		{name: "time value", value: []byte("2026-08-10 12:34:56"), want: types.T_any},
+		{name: "ordinary string", value: []byte("matrixone"), want: types.T_any},
+		{name: "nan string", value: []byte("NaN"), want: types.T_any},
+		{name: "infinity string", value: []byte("+Inf"), want: types.T_any},
+		{name: "empty string", value: []byte(""), want: types.T_any},
 		{name: "null", value: nil, want: types.T_any},
 	}
 	for _, test := range tests {
@@ -413,13 +413,15 @@ func TestInitExecuteStmtParamRebuildsForRuntimeBindingCategory(t *testing.T) {
 	require.Equal(t, int32(types.T_float64), resultType.Id)
 
 	setParam("2026-08-10 12:34:56", defines.MYSQL_TYPE_STRING)
-	stringPlan, resultType := execute()
-	require.NotSame(t, floatPlan, stringPlan)
-	require.Equal(t, int32(types.T_varchar), resultType.Id)
+	decimalPlan, resultType := execute()
+	require.NotSame(t, floatPlan, decimalPlan)
+	require.Equal(t, int32(types.T_decimal256), resultType.Id)
+	require.Nil(t, prepareStmt.paramBindingTypes)
 
 	setParam("1.234567", defines.MYSQL_TYPE_VAR_STRING)
-	decimalPlan, resultType := execute()
-	require.NotSame(t, stringPlan, decimalPlan)
+	sameDecimalPlan, resultType := execute()
+	require.Same(t, decimalPlan, sameDecimalPlan,
+		"parameter bytes must not create a new binding category")
 	require.Equal(t, int32(types.T_decimal256), resultType.Id)
 	require.Equal(t, int32(65), resultType.Width)
 	require.Equal(t, int32(30), resultType.Scale)

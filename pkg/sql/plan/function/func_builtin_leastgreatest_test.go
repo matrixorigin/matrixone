@@ -1242,6 +1242,33 @@ func TestLeastGreatestVarlenMaterializesNullRows(t *testing.T) {
 	})
 }
 
+func TestCompareMySQLNumericText(t *testing.T) {
+	tests := []struct {
+		name       string
+		left       string
+		right      string
+		comparison int
+	}{
+		{name: "numeric not lexical", left: "10", right: "2", comparison: 1},
+		{name: "full fraction", left: "0.123456789012", right: "0.123456789011", comparison: 1},
+		{name: "large integral", left: "99999999999999999999999999999999999999999999999999999999999999999", right: "10", comparison: 1},
+		{name: "negative", left: "-10.5", right: "-2", comparison: -1},
+		{name: "numeric prefix", left: "12.5suffix", right: "12.4", comparison: 1},
+		{name: "non numeric is zero", left: "abc", right: "0", comparison: 0},
+		{name: "datetime numeric prefix", left: "2026-08-10 12:34:56", right: "2025", comparison: 1},
+		{name: "exponent", left: "1e100", right: "99999999999999999999999999999999999999999999999999999999999999999", comparison: 1},
+		{name: "large exponent is bounded", left: "1e100000000", right: "9e99999999", comparison: 1},
+		{name: "equivalent forms", left: "001.200e2", right: "120", comparison: 0},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			actual := compareMySQLNumericText([]byte(test.left), []byte(test.right))
+			require.Equal(t, test.comparison, actual)
+		})
+	}
+}
+
 func TestLeastGreatestYearNumericExecutor(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	decimalType := types.New(types.T_decimal128, 10, 1)
