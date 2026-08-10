@@ -3119,6 +3119,22 @@ func MakeInExpr(ctx context.Context, left *Expr, length int32, data []byte, matc
 
 // FillValuesOfParamsInPlan replaces the params by their values
 func FillValuesOfParamsInPlan(ctx context.Context, preparePlan *Plan, paramVals []any) (*Plan, error) {
+	return fillOrSpecializeParamsInPlan(ctx, preparePlan, paramVals, false)
+}
+
+// SpecializePreparedNumericPlan resolves the runtime numeric types while
+// preserving ParamRef expressions. The returned plan is safe to cache and
+// reuse for later executions with the same parameter type signature.
+func SpecializePreparedNumericPlan(ctx context.Context, preparePlan *Plan, paramVals []any) (*Plan, error) {
+	return fillOrSpecializeParamsInPlan(ctx, preparePlan, paramVals, true)
+}
+
+func fillOrSpecializeParamsInPlan(
+	ctx context.Context,
+	preparePlan *Plan,
+	paramVals []any,
+	preserveParamRefs bool,
+) (*Plan, error) {
 	switch pp := preparePlan.Plan.(type) {
 	case *plan.Plan_Tcl:
 		return nil, moerr.NewInvalidInput(ctx, "cannot prepare TCL statement")
@@ -3136,19 +3152,20 @@ func FillValuesOfParamsInPlan(ctx context.Context, preparePlan *Plan, paramVals 
 
 	case *plan.Plan_Ddl:
 		if pp.Ddl.Query != nil {
-			err := replaceParamVals(ctx, copied, paramVals)
+			err := replaceParamVals(ctx, copied, paramVals, preserveParamRefs)
 			if err != nil {
 				return nil, err
 			}
+			refreshPreparedCTASSchema(preparePlan, copied)
 		}
 
 	case *plan.Plan_Query:
-		err := replaceParamVals(ctx, copied, paramVals)
+		err := replaceParamVals(ctx, copied, paramVals, preserveParamRefs)
 		if err != nil {
 			return nil, err
 		}
 	case *plan.Plan_Dcl:
-		if err := replaceParamVals(ctx, copied, paramVals); err != nil {
+		if err := replaceParamVals(ctx, copied, paramVals, preserveParamRefs); err != nil {
 			return nil, err
 		}
 	}
@@ -3377,7 +3394,7 @@ func paginationValueSign(value any) (bool, bool) {
 	}
 }
 
-func replaceParamVals(ctx context.Context, plan0 *Plan, paramVals []any) error {
+func replaceParamVals(ctx context.Context, plan0 *Plan, paramVals []any, preserveParamRefs bool) error {
 	params := make([]*Expr, len(paramVals))
 	for i, val := range paramVals {
 		isBin := false
@@ -3410,12 +3427,53 @@ func replaceParamVals(ctx context.Context, plan0 *Plan, paramVals []any) error {
 			typ := runtimeType.ToType()
 			params[i].Typ = makePlan2Type(&typ)
 		}
+		params[i].Typ.NotNullable = val != nil
 	}
 	paramRule := NewResetParamRefRule(ctx, params)
+	if preserveParamRefs {
+		paramRule = NewSpecializeParamRefRule(ctx, params)
+	}
 	if plan0.GetQuery() != nil || (plan0.GetDdl() != nil && plan0.GetDdl().GetQuery() != nil) {
 		return refreshPreparedTypeLineage(ctx, plan0, paramRule)
 	}
 	return NewVisitPlan(plan0, []VisitPlanRule{paramRule}).Visit(ctx)
+}
+
+func refreshPreparedCTASSchema(canonical, specialized *Plan) {
+	originalDDL := canonical.GetDdl()
+	specializedDDL := specialized.GetDdl()
+	if originalDDL == nil || specializedDDL == nil || originalDDL.GetQuery() == nil || specializedDDL.GetQuery() == nil {
+		return
+	}
+	originalCreate := originalDDL.GetCreateTable()
+	specializedCreate := specializedDDL.GetCreateTable()
+	if originalCreate == nil || specializedCreate == nil || originalCreate.TableDef == nil || specializedCreate.TableDef == nil ||
+		originalCreate.GetCreateAsSelectSql() == "" {
+		return
+	}
+	originalQuery := originalDDL.GetQuery()
+	newQuery := specializedDDL.GetQuery()
+	if len(originalQuery.Steps) == 0 || len(newQuery.Steps) == 0 {
+		return
+	}
+	originalRoot := originalQuery.Nodes[originalQuery.Steps[len(originalQuery.Steps)-1]]
+	newRoot := newQuery.Nodes[newQuery.Steps[len(newQuery.Steps)-1]]
+	limit := min(len(originalQuery.Headings), len(originalRoot.ProjectList), len(newRoot.ProjectList))
+	for idx := 0; idx < limit; idx++ {
+		heading := originalQuery.Headings[idx]
+		colIdx := slices.IndexFunc(originalCreate.TableDef.Cols, func(col *ColDef) bool {
+			return col != nil && strings.EqualFold(col.Name, heading)
+		})
+		if colIdx < 0 || colIdx >= len(specializedCreate.TableDef.Cols) ||
+			!samePreparedNumericShape(originalCreate.TableDef.Cols[colIdx].Typ, originalRoot.ProjectList[idx].Typ) {
+			continue
+		}
+		col := specializedCreate.TableDef.Cols[colIdx]
+		col.Typ = newRoot.ProjectList[idx].Typ
+		if col.Default != nil {
+			col.Default.NullAbility = !col.Typ.NotNullable
+		}
+	}
 }
 
 func refreshPreparedTypeLineage(ctx context.Context, plan0 *Plan, paramRule *ResetParamRefRule) error {
@@ -3450,12 +3508,17 @@ func refreshPreparedTypeLineage(ctx context.Context, plan0 *Plan, paramRule *Res
 		if err := visitor.exploreNode(ctx, paramRule, node, id); err != nil {
 			return err
 		}
-		if len(node.BindingTags) == 1 {
-			tag := node.BindingTags[0]
-			for col, expr := range node.ProjectList {
-				rule.types[[2]int32{tag, int32(col)}] = expr.Typ
+		if err := reconcilePreparedSetOperationTypes(ctx, query, node); err != nil {
+			return err
+		}
+		localTypes := preparedLocalInputTypes(query, node)
+		if len(localTypes) > 0 {
+			localRule := &preparedTypeLineageRule{ctx: ctx, types: localTypes}
+			if err := visitor.exploreNode(ctx, localRule, node, id); err != nil {
+				return err
 			}
 		}
+		recordPreparedNodeOutputTypes(rule.types, node)
 		return nil
 	}
 	for _, root := range query.Steps {
@@ -3464,6 +3527,153 @@ func refreshPreparedTypeLineage(ctx context.Context, plan0 *Plan, paramRule *Res
 		}
 	}
 	return nil
+}
+
+func reconcilePreparedSetOperationTypes(ctx context.Context, query *Query, node *Node) error {
+	switch node.NodeType {
+	case plan.Node_UNION, plan.Node_UNION_ALL, plan.Node_INTERSECT, plan.Node_INTERSECT_ALL,
+		plan.Node_MINUS, plan.Node_MINUS_ALL:
+	default:
+		return nil
+	}
+	if len(node.Children) != 2 {
+		return nil
+	}
+	left := query.Nodes[node.Children[0]]
+	right := query.Nodes[node.Children[1]]
+	if left == nil || right == nil || len(left.ProjectList) != len(right.ProjectList) {
+		return nil
+	}
+	for col := range left.ProjectList {
+		leftExpr := unwrapPreparedImplicitCast(left.ProjectList[col])
+		rightExpr := unwrapPreparedImplicitCast(right.ProjectList[col])
+		leftType := makeTypeByPlan2Expr(leftExpr)
+		rightType := makeTypeByPlan2Expr(rightExpr)
+		if !leftType.IsNumeric() || !rightType.IsNumeric() {
+			continue
+		}
+		common, ok := function.InferNumericParameterType([]types.Type{leftType, rightType}, nil)
+		if !ok {
+			continue
+		}
+		target := makePlan2Type(&common)
+		var err error
+		if !leftType.Eq(common) {
+			leftExpr, err = makePlan2CastExpr(ctx, leftExpr, target)
+			if err != nil {
+				return err
+			}
+		}
+		if !rightType.Eq(common) {
+			rightExpr, err = makePlan2CastExpr(ctx, rightExpr, target)
+			if err != nil {
+				return err
+			}
+		}
+		left.ProjectList[col] = leftExpr
+		right.ProjectList[col] = rightExpr
+		if col < len(node.ProjectList) {
+			node.ProjectList[col].Typ = setOperationOutputType(node.NodeType, leftExpr.Typ, rightExpr.Typ)
+		}
+	}
+	return nil
+}
+
+func unwrapPreparedImplicitCast(expr *Expr) *Expr {
+	for expr != nil {
+		fn := expr.GetF()
+		if fn == nil || fn.Func.GetObjName() != "cast" || len(fn.Args) == 0 {
+			return expr
+		}
+		_, overload := function.DecodeOverloadID(fn.Func.GetObj())
+		if overload != 0 {
+			return expr
+		}
+		expr = fn.Args[0]
+	}
+	return expr
+}
+
+// preparedLocalInputTypes describes the post-optimizer physical column
+// coordinates. Logical binding tags have already been rewritten to local
+// relations at this stage: 0 addresses a child projection, while aggregate
+// and window materializations use -1/-2. These types must move together with
+// runtime-specialized producers or vector wrappers will read the wrong layout.
+func preparedLocalInputTypes(query *Query, node *Node) map[[2]int32]plan.Type {
+	result := make(map[[2]int32]plan.Type)
+	if len(node.Children) > 0 {
+		childID := node.Children[0]
+		if childID >= 0 && int(childID) < len(query.Nodes) && query.Nodes[childID] != nil {
+			for col, expr := range query.Nodes[childID].ProjectList {
+				result[[2]int32{0, int32(col)}] = expr.Typ
+			}
+		}
+	}
+
+	switch node.NodeType {
+	case plan.Node_AGG, plan.Node_SAMPLE:
+		for col, expr := range node.GroupBy {
+			result[[2]int32{-1, int32(col)}] = expr.Typ
+		}
+		groupCount := int32(len(node.GroupBy))
+		for col, expr := range node.AggList {
+			result[[2]int32{-2, groupCount + int32(col)}] = expr.Typ
+		}
+	case plan.Node_WINDOW:
+		childWidth := int32(0)
+		if len(node.Children) > 0 {
+			childID := node.Children[0]
+			if childID >= 0 && int(childID) < len(query.Nodes) && query.Nodes[childID] != nil {
+				childWidth = int32(len(query.Nodes[childID].ProjectList))
+			}
+		}
+		if len(node.WinSpecList) > 0 {
+			result[[2]int32{-1, childWidth}] = node.WinSpecList[0].Typ
+		}
+	}
+	return result
+}
+
+// recordPreparedNodeOutputTypes mirrors the logical binding contracts created
+// by QueryBuilder. Project/set nodes expose ProjectList through one tag, while
+// aggregate and window nodes expose dedicated non-project result domains.
+// Keeping all of them in the lineage map is required before a parent function
+// can be rebound to the producer's specialized physical type.
+func recordPreparedNodeOutputTypes(lineage map[[2]int32]plan.Type, node *Node) {
+	if len(node.BindingTags) == 1 {
+		tag := node.BindingTags[0]
+		for col, expr := range node.ProjectList {
+			lineage[[2]int32{tag, int32(col)}] = expr.Typ
+		}
+	}
+
+	switch node.NodeType {
+	case plan.Node_AGG, plan.Node_SAMPLE:
+		if len(node.BindingTags) < 2 {
+			return
+		}
+		for col, expr := range node.GroupBy {
+			lineage[[2]int32{node.BindingTags[0], int32(col)}] = expr.Typ
+		}
+		for col, expr := range node.AggList {
+			lineage[[2]int32{node.BindingTags[1], int32(col)}] = expr.Typ
+		}
+	case plan.Node_WINDOW:
+		if len(node.BindingTags) == 0 || len(node.WinSpecList) == 0 {
+			return
+		}
+		lineage[[2]int32{node.BindingTags[0], node.GetWindowIdx()}] = node.WinSpecList[0].Typ
+	case plan.Node_TIME_WINDOW:
+		if len(node.BindingTags) < 2 {
+			return
+		}
+		for col, expr := range node.AggList {
+			lineage[[2]int32{node.BindingTags[0], int32(col)}] = expr.Typ
+		}
+		for col, expr := range node.GroupBy {
+			lineage[[2]int32{node.BindingTags[1], int32(col)}] = expr.Typ
+		}
+	}
 }
 
 // XXX: Any code relying on Name in ColRef, except for "explain", is bad design and practically buggy.

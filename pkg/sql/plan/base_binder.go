@@ -1063,7 +1063,9 @@ func (b *baseBinder) numericAstTypesInternalWithHint(
 ) (numericAstTypeScan, error) {
 	switch expr := astExpr.(type) {
 	case *tree.ParamExpr:
-		return numericAstTypeScan{hasParam: true}, nil
+		// An untyped marker in a numeric domain must remain runtime-specialized.
+		// A prepare-time DOUBLE default would lose exact UINT64/DECIMAL semantics.
+		return numericAstTypeScan{hasParam: true, dynamicCandidate: true}, nil
 	case *tree.Subquery:
 		if expr.Exists {
 			return numericAstTypeScan{}, nil
@@ -1155,6 +1157,9 @@ func (b *baseBinder) numericAstTypesInternalWithHint(
 					return numericAstTypeScan{}, scanErr
 				}
 				scan.hasParam = scan.hasParam || argScan.hasParam
+			}
+			if supportsGenericNumericFunctionContext(name) && scan.hasParam {
+				scan.dynamicCandidate = true
 			}
 			return scan, nil
 		}
@@ -1300,7 +1305,8 @@ func numericTypeFromAstScan(scan numericAstTypeScan, outer *Type) (Type, bool) {
 		typ := makeTypeByPlan2Type(*outer)
 		outerType = &typ
 	}
-	if scan.dynamicCandidate && outerType == nil && !numericScanHasApproximateOperand(scan) {
+	if scan.dynamicCandidate && !numericScanHasApproximateOperand(scan) &&
+		(outerType == nil || outerType.Oid.IsInteger() || outerType.Oid == types.T_bit) {
 		// MySQL resolves a parameter marker in exact arithmetic from the value
 		// supplied by each EXECUTE. MatrixOne plans one static computation type,
 		// so use a tagged maximum DECIMAL domain until runtime specialization.
@@ -1335,8 +1341,7 @@ func numericScanHasApproximateOperand(scan numericAstTypeScan) bool {
 }
 
 func isPreparedDynamicNumericType(typ Type) bool {
-	return types.T(typ.Id) == types.T_decimal256 && typ.Width == 65 && typ.Scale == 30 &&
-		typ.Table == preparedDynamicNumericTypeMarker
+	return typ.Table == preparedDynamicNumericTypeMarker
 }
 
 const preparedDynamicNumericTypeMarker = "__mo_prepared_dynamic_numeric"
@@ -1767,8 +1772,8 @@ func supportsGenericNumericFunctionContext(name string) bool {
 	// result. A numeric return type alone is insufficient: FIELD, LENGTH and
 	// similar functions return numbers while their arguments belong to another
 	// domain.
-	case "abs", "ceil", "ceiling", "floor", "round", "truncate",
-		"sqrt", "power", "pow", "exp", "ln", "log", "log2", "log10":
+	case "abs", "ceil", "ceiling", "floor", "round", "truncate", "sign",
+		"greatest", "least", "sqrt", "power", "pow", "exp", "ln", "log", "log2", "log10":
 		return true
 	default:
 		return false
@@ -1776,6 +1781,9 @@ func supportsGenericNumericFunctionContext(name string) bool {
 }
 
 func isNumericContextFunction(name string) bool {
+	if supportsGenericNumericFunctionContext(name) {
+		return true
+	}
 	switch name {
 	case "+", "-", "*", "/", "%", "div", "^", "unary_plus", "unary_minus",
 		"mod", "if", "coalesce", "ifnull", "nullif":
@@ -2365,21 +2373,37 @@ func (b *baseBinder) bindPreparedDynamicComparison(
 		}
 		return nil, true, rightErr
 	}
-	leftDynamic := leftScan.hasParam && isNumericArithmeticRoot(leftAst)
-	rightDynamic := rightScan.hasParam && isNumericArithmeticRoot(rightAst)
-	if leftDynamic == rightDynamic {
+	leftDynamic := leftScan.hasParam && isNumericContextNode(leftAst)
+	rightDynamic := rightScan.hasParam && isNumericContextNode(rightAst)
+	if !leftDynamic && !rightDynamic {
 		return nil, false, nil
 	}
+	if leftDynamic && rightDynamic {
+		leftExpr, err := b.bindNumericExprWithDefaultContext(leftAst, depth, nil)
+		if err != nil {
+			return nil, true, err
+		}
+		rightExpr, err := b.bindNumericExprWithDefaultContext(rightAst, depth, nil)
+		if err != nil {
+			return nil, true, err
+		}
+		expr, err := BindFuncExprImplByPlanExpr(b.GetContext(), op, []*Expr{leftExpr, rightExpr})
+		return expr, true, err
+	}
 	otherScan := rightScan
+	dynamicAst, otherAst := leftAst, rightAst
 	if rightDynamic {
 		otherScan = leftScan
+		dynamicAst, otherAst = rightAst, leftAst
+	}
+	if _, bareParam := unwrapParenExpr(dynamicAst).(*tree.ParamExpr); bareParam && len(otherScan.strong) > 0 {
+		// A typed column/expression already supplies a stable comparison domain.
+		// Keep the existing binder path (notably DECIMAL column comparisons)
+		// instead of turning a bare marker into an independent runtime domain.
+		return nil, false, nil
 	}
 	if otherScan.incompatible || otherScan.hasUnknown {
 		return nil, false, nil
-	}
-	dynamicAst, otherAst := leftAst, rightAst
-	if rightDynamic {
-		dynamicAst, otherAst = rightAst, leftAst
 	}
 	dynamicExpr, err := b.bindNumericExprWithDefaultContext(dynamicAst, depth, nil)
 	if err != nil {
@@ -2393,6 +2417,10 @@ func (b *baseBinder) bindPreparedDynamicComparison(
 	if err != nil {
 		return nil, true, err
 	}
+	// appendCastBeforeExpr rebuilds the protobuf type and drops planner-only
+	// metadata. Retain the marker so runtime specialization can distinguish this
+	// generated comparison coercion from an explicit DECIMAL(65,30) cast.
+	otherExpr.Typ.Table = preparedDynamicNumericTypeMarker
 	args := []*Expr{dynamicExpr, otherExpr}
 	if rightDynamic {
 		args[0], args[1] = args[1], args[0]
@@ -2581,6 +2609,23 @@ func (b *baseBinder) bindFuncExpr(astExpr *tree.FuncExpr, depth int32, isRoot bo
 	funcName := funcRef.ColName()
 	if strings.EqualFold(funcName, "mod") && b.numericParamType == nil {
 		return b.bindNumericExprWithDefaultContext(astExpr, depth, b.defaultNumericOuterType())
+	}
+	if b.numericParamType == nil && supportsGenericNumericFunctionContext(strings.ToLower(funcName)) &&
+		b.builder != nil && b.builder.isPrepareStatement {
+		scan, err := b.numericAstTypesWithHint(astExpr, depth, nil)
+		if err != nil {
+			return nil, err
+		}
+		if scan.hasParam && !scan.incompatible {
+			if planType, ok := numericTypeFromAstScan(scan, nil); ok {
+				b.numericParamType = &planType
+				defer func() { b.numericParamType = nil }()
+				previousFunctionTarget := b.numericFunctionTarget
+				b.numericFunctionTarget = true
+				defer func() { b.numericFunctionTarget = previousFunctionTarget }()
+				return b.bindFuncExprImplByAstExpr(funcName, astExpr.Exprs, depth)
+			}
+		}
 	}
 	if supportsGenericNumericFunctionContext(strings.ToLower(funcName)) &&
 		mysqlSpecialTypeInExprs(b, astExpr.Exprs) {
@@ -2803,6 +2848,9 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 				if functionContext.dynamic[idx] &&
 					makeTypeByPlan2Type(functionContext.argTypes[idx]).IsNumeric() {
 					argTarget := functionContext.argTypes[idx]
+					if isPreparedDynamicNumericType(*paramType) {
+						argTarget.Table = preparedDynamicNumericTypeMarker
+					}
 					b.numericParamType = &argTarget
 					b.numericSubqueryTarget = &argTarget
 				} else {
@@ -2870,6 +2918,7 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 	if b.builder != nil {
 		e, err := bindFuncExprAndConstFold(b.GetContext(), b.builder.compCtx.GetProcess(), name, args)
 		if err == nil {
+			markPreparedDynamicResultCoercions(name, astArgs, e, b.numericParamType)
 			if isIfNull {
 				e.Typ.NotNullable = args[1].Typ.NotNullable || args[2].Typ.NotNullable
 			}
@@ -2883,6 +2932,7 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 		// first look for builtin func
 		builtinExpr, err := BindFuncExprImplByPlanExpr(b.GetContext(), name, args)
 		if err == nil {
+			markPreparedDynamicResultCoercions(name, astArgs, builtinExpr, b.numericParamType)
 			if isIfNull {
 				builtinExpr.Typ.NotNullable = args[1].Typ.NotNullable || args[2].Typ.NotNullable
 			}
@@ -2950,6 +3000,62 @@ func (b *baseBinder) resolvePreparedNumericArgs(name string, args []*Expr) ([]*E
 		args[i] = cast
 	}
 	return args, nil
+}
+
+func markPreparedDynamicResultCoercions(
+	name string,
+	astArgs []tree.Expr,
+	expr *Expr,
+	numericParamType *Type,
+) {
+	if !numericFunctionHasSelectiveContext(name) || expr == nil || expr.GetF() == nil {
+		return
+	}
+	dynamicType := Type{}
+	if numericParamType != nil && isPreparedDynamicNumericType(*numericParamType) {
+		dynamicType = *numericParamType
+	} else if typ, ok := preparedDynamicTypeInExpr(expr); ok {
+		dynamicType = typ
+	} else {
+		return
+	}
+	for idx, arg := range expr.GetF().Args {
+		if idx >= len(astArgs) || !numericFunctionArgKeepsContext(name, idx, len(astArgs)) {
+			continue
+		}
+		if _, explicit := unwrapParenExpr(astArgs[idx]).(*tree.CastExpr); explicit {
+			continue
+		}
+		fn := arg.GetF()
+		if fn == nil || fn.Func.GetObjName() != "cast" || !samePreparedNumericShape(arg.Typ, dynamicType) {
+			continue
+		}
+		arg.Typ.Table = preparedDynamicNumericTypeMarker
+		if len(fn.Args) > 1 {
+			fn.Args[1].Typ.Table = preparedDynamicNumericTypeMarker
+		}
+	}
+}
+
+func preparedDynamicTypeInExpr(expr *Expr) (Type, bool) {
+	if expr == nil {
+		return Type{}, false
+	}
+	if isPreparedDynamicNumericType(expr.Typ) {
+		return expr.Typ, true
+	}
+	if fn := expr.GetF(); fn != nil {
+		for _, arg := range fn.Args {
+			if typ, ok := preparedDynamicTypeInExpr(arg); ok {
+				return typ, true
+			}
+		}
+	}
+	return Type{}, false
+}
+
+func samePreparedNumericShape(left, right Type) bool {
+	return left.Id == right.Id && left.Width == right.Width && left.Scale == right.Scale
 }
 
 func bindFuncExprImplUdf(

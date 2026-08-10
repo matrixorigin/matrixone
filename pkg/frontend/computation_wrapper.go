@@ -183,6 +183,13 @@ func (cwft *TxnComputationWrapper) freeStmt() {
 }
 
 func (cwft *TxnComputationWrapper) Clear() {
+	// Prepared parameters are statement-scoped. Cached compiles temporarily
+	// preserve them while pipelines are released, but the EXECUTE wrapper is
+	// the final owner of that lifetime and must not leak them into a later
+	// ordinary statement (or its distributed process codec).
+	if cwft.ifIsExeccute && cwft.proc != nil {
+		cwft.proc.SetPrepareParams(nil)
+	}
 	cwft.plan = nil
 	cwft.proc = nil
 	cwft.ses = nil
@@ -1034,7 +1041,7 @@ func specializePreparedNumericPlan(
 		releaseCompilePreservingPrepareParams(prepareStmt.compile, proc, true)
 		prepareStmt.compile = nil
 	}
-	specialized, err := plan2.FillValuesOfParamsInPlan(ctx, preparePlan, paramVals)
+	specialized, err := plan2.SpecializePreparedNumericPlan(ctx, preparePlan, paramVals)
 	if err != nil {
 		return nil, err
 	}

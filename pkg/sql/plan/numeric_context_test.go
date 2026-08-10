@@ -35,9 +35,9 @@ func TestPreparedNumericContextParameterTypes(t *testing.T) {
 		want types.T
 	}{
 		{
-			name: "no context defaults to double",
+			name: "no context remains runtime specialized",
 			sql:  "select ? + ?",
-			want: types.T_float64,
+			want: types.T_decimal256,
 		},
 		{
 			name: "cast supplies exact context through integer sibling",
@@ -55,9 +55,9 @@ func TestPreparedNumericContextParameterTypes(t *testing.T) {
 			want: types.T_float64,
 		},
 		{
-			name: "integer cast context overrides narrower integer sibling",
+			name: "integer result cast does not narrow runtime operands",
 			sql:  "select cast((? + ?) + N_REGIONKEY as signed) from nation",
-			want: types.T_int64,
+			want: types.T_decimal256,
 		},
 	}
 
@@ -117,8 +117,8 @@ func TestNumericContextDoesNotCrossFunctionBoundary(t *testing.T) {
 
 	paramTypes := collectPlanParamTypes(queryPlan)
 	require.Len(t, paramTypes, 2)
-	require.Equal(t, types.T_float64, paramTypes[0])
-	require.Equal(t, types.T_int64, paramTypes[1])
+	require.Equal(t, types.T_decimal256, paramTypes[0])
+	require.Equal(t, types.T_decimal256, paramTypes[1])
 }
 
 func TestPreparedNumericContextUsesColumnSiblingType(t *testing.T) {
@@ -235,9 +235,9 @@ func TestPreparedNumericContextCoversUnaryAndModFunction(t *testing.T) {
 		want types.T
 	}{
 		{
-			name: "context-free mod defaults to double",
+			name: "context-free mod remains runtime specialized",
 			sql:  "select mod(?, ?)",
-			want: types.T_float64,
+			want: types.T_decimal256,
 		},
 		{
 			name: "cast context reaches mod",
@@ -250,14 +250,14 @@ func TestPreparedNumericContextCoversUnaryAndModFunction(t *testing.T) {
 			want: types.T_decimal256,
 		},
 		{
-			name: "context-free unary defaults to double",
+			name: "context-free unary remains runtime specialized",
 			sql:  "select -?",
-			want: types.T_float64,
+			want: types.T_decimal256,
 		},
 		{
-			name: "context-free unary plus defaults to double",
+			name: "context-free unary plus remains runtime specialized",
 			sql:  "select +?",
-			want: types.T_float64,
+			want: types.T_decimal256,
 		},
 		{
 			name: "cast context reaches unary and nested arithmetic",
@@ -320,12 +320,12 @@ func TestNumericContextDoesNotCrossComparisonOrTemporalBoundary(t *testing.T) {
 		{
 			name: "comparison",
 			sql:  "select ? + cast((? = 1) as signed)",
-			want: []types.T{types.T_decimal256, types.T_int64},
+			want: []types.T{types.T_decimal256, types.T_decimal256},
 		},
 		{
 			name: "temporal function",
 			sql:  "select ? + year(?)",
-			want: []types.T{types.T_float64, types.T_date},
+			want: []types.T{types.T_decimal256, types.T_date},
 		},
 	}
 
@@ -615,11 +615,11 @@ func TestPreparedNumericLiteralStrength(t *testing.T) {
 			wantScale: 30,
 		},
 		{
-			name:      "weak decimal beats integer outer context",
+			name:      "integer result cast does not narrow weak decimal arithmetic",
 			sql:       "select cast(? + 0.5 as signed)",
-			want:      types.T_decimal128,
-			wantWidth: 20,
-			wantScale: 1,
+			want:      types.T_decimal256,
+			wantWidth: 65,
+			wantScale: 30,
 		},
 		{
 			name: "approximate outer context beats weak decimal",
@@ -651,6 +651,10 @@ func TestPreparedNumericLiteralStrength(t *testing.T) {
 			queryPlan, err := BuildPlan(optimizer.CurrentContext(), stmts[0], true)
 			require.NoError(t, err)
 			paramTypes := collectPlanParamPlanTypes(queryPlan)
+			if test.name == "null literal remains unknown" {
+				require.Empty(t, paramTypes, "NULL arithmetic is folded and does not consume the runtime value")
+				return
+			}
 			require.Len(t, paramTypes, 1)
 			require.Equal(t, int32(test.want), paramTypes[0].Id)
 			if test.wantWidth != 0 {
@@ -741,7 +745,11 @@ func TestPreparedDynamicNumericPlanSpecializesPerExecutionValue(t *testing.T) {
 			require.NoError(t, err)
 			root := specialized.GetQuery().Nodes[specialized.GetQuery().Steps[0]]
 			resultType := types.T(root.ProjectList[0].Typ.Id)
-			require.True(t, resultType.IsInteger(), resultType.String())
+			if test.runtimeType == types.T_uint64 {
+				require.True(t, resultType.IsDecimal(), resultType.String())
+			} else {
+				require.True(t, resultType.IsInteger(), resultType.String())
+			}
 		})
 	}
 	for _, test := range []struct {
@@ -770,6 +778,64 @@ func TestPreparedDynamicNumericPlanSpecializesPerExecutionValue(t *testing.T) {
 	explicitCast := buildPreparedAggregatePlan(t, "select cast(? as decimal(65, 30)) + 1")
 	require.False(t, HasPreparedDynamicNumericParams(explicitCast.Plan),
 		"an explicit DECIMAL(65,30) cast is a user contract, not a dynamic marker")
+}
+
+func TestPreparedDynamicNumericSpecializationPreservesParamRefs(t *testing.T) {
+	prepare := buildPreparedAggregatePlan(t, "select ? + 1, concat(?, 1)")
+	specialized, err := SpecializePreparedNumericPlan(context.Background(), prepare.Plan, []any{
+		ParamValue{Value: "2", RuntimeType: types.T_int64},
+		ParamValue{Value: "first", RuntimeType: types.T_varchar},
+	})
+	require.NoError(t, err)
+	require.Len(t, collectPlanParamTypes(specialized), 2)
+	require.False(t, HasPreparedDynamicNumericParams(specialized))
+}
+
+func TestPreparedGenericNumericFunctionsSpecializeRuntimeDomain(t *testing.T) {
+	for _, sql := range []string{
+		"select abs(?)",
+		"select sign(?)",
+		"select round(?)",
+		"select ceil(?)",
+		"select floor(?)",
+		"select greatest(?, 10)",
+		"select least(?, 10)",
+		"select ? > 1",
+	} {
+		t.Run(sql, func(t *testing.T) {
+			prepare := buildPreparedAggregatePlan(t, sql)
+			require.True(t, HasPreparedDynamicNumericParams(prepare.Plan))
+			for _, runtimeType := range []types.T{types.T_int64, types.T_decimal128, types.T_float64} {
+				value := "2.5"
+				if runtimeType == types.T_int64 {
+					value = "2"
+				}
+				specialized, err := SpecializePreparedNumericPlan(context.Background(), prepare.Plan, []any{
+					ParamValue{Value: value, RuntimeType: runtimeType},
+				})
+				require.NoError(t, err, runtimeType.String())
+				paramTypes := collectPlanParamTypes(specialized)
+				require.NotEmpty(t, paramTypes)
+				if runtimeType == types.T_decimal128 {
+					require.True(t, paramTypes[0].IsDecimal(), paramTypes[0].String())
+				}
+				if runtimeType == types.T_float64 {
+					require.True(t, paramTypes[0].IsFloat(), paramTypes[0].String())
+				}
+			}
+		})
+	}
+}
+
+func TestPreparedCaseSpecializesConditionAndResultIndependently(t *testing.T) {
+	prepare := buildPreparedAggregatePlan(t, "select case when ? > 0 then ? + 1 else 0 end")
+	specialized, err := SpecializePreparedNumericPlan(context.Background(), prepare.Plan, []any{
+		ParamValue{Value: "1", RuntimeType: types.T_int64},
+		ParamValue{Value: "2", RuntimeType: types.T_int64},
+	})
+	require.NoError(t, err)
+	root := specialized.GetQuery().Nodes[specialized.GetQuery().Steps[0]]
+	require.Equal(t, int32(types.T_int64), root.ProjectList[0].Typ.Id)
 }
 
 func TestPreparedDynamicNumericDiscoveryCoversWindowDCLAndDDL(t *testing.T) {
@@ -813,6 +879,22 @@ func TestDeepCopyPreparedCTASPreservesExecutionMetadata(t *testing.T) {
 	require.Equal(t, "db", create.FksReferToMe[0].Db)
 	require.Equal(t, "create table cnorm as select ? + 1", create.RawSQL)
 	require.NotSame(t, original.GetDdl().GetCreateTable(), create)
+}
+
+func TestPreparedCTASSchemaTracksSpecializedResultType(t *testing.T) {
+	logicPlan, err := runOneStmt(NewMockOptimizer(false), t,
+		"prepare stmt1 from 'create table prepared_ctas_shape as select ? + 1 as v'")
+	require.NoError(t, err)
+	prepare := logicPlan.GetDcl().GetPrepare()
+	require.NotNil(t, prepare)
+	specialized, err := SpecializePreparedNumericPlan(context.Background(), prepare.Plan, []any{
+		ParamValue{Value: "2", RuntimeType: types.T_int64},
+	})
+	require.NoError(t, err)
+	cols := specialized.GetDdl().GetCreateTable().GetTableDef().GetCols()
+	require.NotEmpty(t, cols)
+	require.Equal(t, int32(types.T_int64), cols[0].Typ.Id)
+	require.True(t, cols[0].Typ.NotNullable)
 }
 
 func TestDeepCopyPreparedQueryPreservesExecutionMetadata(t *testing.T) {
@@ -950,10 +1032,22 @@ func TestPreparedUint64MixedNumericDomains(t *testing.T) {
 			if test.wantDecimal {
 				require.True(t, resultType.IsDecimal(), resultType.String())
 			} else {
-				require.True(t, resultType.IsUnsignedInt(), resultType.String())
+				require.True(t, resultType.IsDecimal(), resultType.String())
 			}
 		})
 	}
+}
+
+func TestPreparedTwoUnknownParametersKeepExactMixedIntegerDomain(t *testing.T) {
+	prepare := buildPreparedAggregatePlan(t, "select ? + ?")
+	specialized, err := SpecializePreparedNumericPlan(context.Background(), prepare.Plan, []any{
+		ParamValue{Value: strconv.FormatUint(math.MaxUint64, 10), RuntimeType: types.T_uint64},
+		ParamValue{Value: "-1", RuntimeType: types.T_int64},
+	})
+	require.NoError(t, err)
+	root := specialized.GetQuery().Nodes[specialized.GetQuery().Steps[0]]
+	resultType := types.T(root.ProjectList[0].Typ.Id)
+	require.True(t, resultType.IsDecimal(), resultType.String())
 }
 
 func TestPreparedDynamicNumericRefreshesCrossNodeTypeLineage(t *testing.T) {
@@ -961,24 +1055,22 @@ func TestPreparedDynamicNumericRefreshesCrossNodeTypeLineage(t *testing.T) {
 		"select x + 1 from (select ? + 1 as x) d",
 		"with c as (select ? + 1 as x) select x + 1 from c",
 		"select ? + 1 as x union all select 2",
+		"select distinct ? + 1 as x",
 		"select ? + 1 as x order by x",
 		"select ? + 1 as x group by x",
+		"select sum(? + 1) + 1 from nation",
+		"select sum(? + 1) over () + 1 from nation",
 	} {
 		t.Run(sql, func(t *testing.T) {
 			prepare := buildPreparedAggregatePlan(t, sql)
-			specialized, err := FillValuesOfParamsInPlan(context.Background(), prepare.Plan, []any{ParamValue{
+			specialized, err := SpecializePreparedNumericPlan(context.Background(), prepare.Plan, []any{ParamValue{
 				Value: "2", RuntimeType: types.T_int64,
 			}})
 			require.NoError(t, err)
 
 			producerTypes := make(map[[2]int32]planpb.Type)
 			for _, node := range specialized.GetQuery().Nodes {
-				if len(node.BindingTags) == 1 {
-					tag := node.BindingTags[0]
-					for col, expr := range node.ProjectList {
-						producerTypes[[2]int32{tag, int32(col)}] = expr.Typ
-					}
-				}
+				recordPreparedNodeOutputTypes(producerTypes, node)
 			}
 			var checkExpr func(*planpb.Expr)
 			checkExpr = func(expr *planpb.Expr) {
@@ -999,10 +1091,30 @@ func TestPreparedDynamicNumericRefreshesCrossNodeTypeLineage(t *testing.T) {
 				}
 			}
 			for _, node := range specialized.GetQuery().Nodes {
+				if node.NodeType == planpb.Node_UNION_ALL {
+					require.Len(t, node.Children, 2)
+					left := specialized.GetQuery().Nodes[node.Children[0]]
+					right := specialized.GetQuery().Nodes[node.Children[1]]
+					for idx := range node.ProjectList {
+						require.Equal(t, node.ProjectList[idx].Typ.Id, left.ProjectList[idx].Typ.Id)
+						require.Equal(t, node.ProjectList[idx].Typ.Id, right.ProjectList[idx].Typ.Id)
+					}
+				}
+				if node.NodeType == planpb.Node_WINDOW {
+					for _, expr := range node.WinSpecList {
+						require.Equal(t, expr.GetW().WindowFunc.Typ.Id, expr.Typ.Id)
+					}
+				}
 				for _, expr := range node.ProjectList {
 					checkExpr(expr)
 				}
 				for _, expr := range node.GroupBy {
+					checkExpr(expr)
+				}
+				for _, expr := range node.AggList {
+					checkExpr(expr)
+				}
+				for _, expr := range node.WinSpecList {
 					checkExpr(expr)
 				}
 				for _, order := range node.OrderBy {

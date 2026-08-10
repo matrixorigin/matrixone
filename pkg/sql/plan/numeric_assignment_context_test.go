@@ -15,6 +15,7 @@
 package plan
 
 import (
+	"context"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -25,6 +26,26 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"github.com/stretchr/testify/require"
 )
+
+func TestPreparedIntegerAssignmentKeepsRuntimeNumericDomain(t *testing.T) {
+	for _, sql := range []string{
+		"update constraint_test.emp set empno = ? + 1 where empno = 1",
+		"insert into constraint_test.emp (empno) select ? + 1",
+	} {
+		t.Run(sql, func(t *testing.T) {
+			prepared := buildPreparedAggregatePlan(t, sql).Plan
+			require.True(t, HasPreparedDynamicNumericParams(prepared))
+
+			specialized, err := SpecializePreparedNumericPlan(context.Background(), prepared, []any{
+				ParamValue{Value: "2.5", RuntimeType: types.T_decimal128},
+			})
+			require.NoError(t, err)
+			paths := collectPlanParamCastPaths(specialized)
+			require.NotEmpty(t, paths)
+			require.Contains(t, paths[0], types.T_decimal64)
+		})
+	}
+}
 
 func TestPreparedNumericContextUsesInsertValuesTarget(t *testing.T) {
 	tests := []struct {
@@ -708,28 +729,28 @@ func TestPreparedNumericContextUsesInsertSelectTarget(t *testing.T) {
 			name: "derived conflicting targets fall back",
 			sql: "insert into constraint_test.emp (sal, empno) " +
 				"select d.x, d.x from (select ? + ? as x) d",
-			want:       types.T_float64,
+			want:       types.T_decimal256,
 			paramCount: 2,
 		},
 		{
 			name: "derived values conflicting targets fall back",
 			sql: "insert into constraint_test.emp (sal, empno) " +
 				"select d.x, d.x from (values row(? + ?)) as d(x)",
-			want:       types.T_float64,
+			want:       types.T_decimal256,
 			paramCount: 2,
 		},
 		{
 			name: "derived conflicting targets reverse order fall back",
 			sql: "insert into constraint_test.emp (empno, sal) " +
 				"select d.x, d.x from (select ? + ? as x) d",
-			want:       types.T_float64,
+			want:       types.T_decimal256,
 			paramCount: 2,
 		},
 		{
 			name: "cte conflicting targets fall back",
 			sql: "insert into constraint_test.emp (sal, empno) " +
 				"with c as (select ? + ? as x) select c.x, c.x from c",
-			want:       types.T_float64,
+			want:       types.T_decimal256,
 			paramCount: 2,
 		},
 		{
@@ -737,7 +758,7 @@ func TestPreparedNumericContextUsesInsertSelectTarget(t *testing.T) {
 			sql: "insert into constraint_test.emp (sal, empno, mgr) " +
 				"with c as (select ? + ? as x) select a.x, b.x, d.x " +
 				"from c a cross join c b cross join c d",
-			want:       types.T_float64,
+			want:       types.T_decimal256,
 			paramCount: 2,
 		},
 		{
@@ -975,7 +996,7 @@ func TestPreparedNumericContextDoesNotPropagateThroughExistsSubquery(t *testing.
 		require.Equal(t, planpb.Type{Id: int32(types.T_decimal64), Width: 7, Scale: 2}, paramTypes[pos])
 	}
 	for _, pos := range []int32{3, 4} {
-		require.Equal(t, int32(types.T_float64), paramTypes[pos].Id)
+		require.Equal(t, int32(types.T_decimal256), paramTypes[pos].Id)
 	}
 }
 
@@ -997,7 +1018,7 @@ func TestPreparedNumericContextKeepsIndependentGroupByParameters(t *testing.T) {
 		require.Equal(t, planpb.Type{Id: int32(types.T_decimal64), Width: 7, Scale: 2}, paramTypes[pos])
 	}
 	for _, pos := range []int32{3, 4} {
-		require.Equal(t, int32(types.T_float64), paramTypes[pos].Id)
+		require.Equal(t, int32(types.T_decimal256), paramTypes[pos].Id)
 	}
 }
 
@@ -1384,7 +1405,7 @@ func TestNumericConditionalContextSkipsPredicateParams(t *testing.T) {
 			require.NoError(t, err)
 			paramTypes := collectUniquePlanParamTypes(t, queryPlan)
 			require.Equal(t, int32(types.T_float64), paramTypes[1].Id)
-			require.Equal(t, int32(types.T_int64), paramTypes[2].Id)
+			require.Equal(t, int32(types.T_decimal256), paramTypes[2].Id)
 		})
 	}
 }

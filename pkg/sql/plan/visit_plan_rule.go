@@ -394,9 +394,10 @@ func (rule *decrementParamOrdinalRule) ApplyExpr(e *plan.Expr) (*plan.Expr, erro
 // ---------------------------
 
 type ResetParamRefRule struct {
-	ctx      context.Context
-	params   []*Expr
-	exprMemo map[*plan.Expr]*plan.Expr
+	ctx               context.Context
+	params            []*Expr
+	preserveParamRefs bool
+	exprMemo          map[*plan.Expr]*plan.Expr
 }
 
 type preparedTypeLineageRule struct {
@@ -462,6 +463,18 @@ func NewResetParamRefRule(ctx context.Context, params []*Expr) *ResetParamRefRul
 	}
 }
 
+// NewSpecializeParamRefRule uses the current parameter values only to resolve
+// runtime types. It deliberately keeps ParamRef expressions in the resulting
+// plan so a type-specialized compile can be reused with later values of the
+// same shape.
+func NewSpecializeParamRefRule(ctx context.Context, params []*Expr) *ResetParamRefRule {
+	return &ResetParamRefRule{
+		ctx:               ctx,
+		params:            params,
+		preserveParamRefs: true,
+	}
+}
+
 func (rule *ResetParamRefRule) MatchNode(_ *Node) bool {
 	return false
 }
@@ -500,14 +513,12 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 		dynamicParamPos := int32(-1)
 		var dynamicParamExpr *plan.Expr
 		dynamicNumericArgs := make([]bool, len(exprImpl.F.Args))
-		originalArgTypes := make([]plan.Type, len(exprImpl.F.Args))
 		if exprImpl.F.Func.GetObjName() == "cast" && isPreparedDynamicNumericType(e.Typ) &&
 			len(exprImpl.F.Args) > 0 && exprImpl.F.Args[0].GetP() != nil {
 			dynamicParamPos = exprImpl.F.Args[0].GetP().Pos
 			dynamicParamExpr = exprImpl.F.Args[0]
 		}
 		for i, arg := range exprImpl.F.Args {
-			originalArgTypes[i] = arg.Typ
 			_, directParam := arg.Expr.(*plan.Expr_P)
 			dynamicNumericParam := containsPreparedDynamicNumericParam(arg)
 			dynamicNumericArgs[i] = dynamicNumericParam
@@ -520,19 +531,6 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 			}
 			exprImpl.F.Args[i] = rewrittenArg
 		}
-		if needResetFunction && types.T(e.Typ.Id) == types.T_bool {
-			for i, arg := range exprImpl.F.Args {
-				if !dynamicNumericArgs[i] || (arg.Typ.Id == originalArgTypes[i].Id &&
-					arg.Typ.Width == originalArgTypes[i].Width && arg.Typ.Scale == originalArgTypes[i].Scale) {
-					continue
-				}
-				exprImpl.F.Args[i], err = makePlan2CastExpr(rule.ctx, arg, originalArgTypes[i])
-				if err != nil {
-					return nil, err
-				}
-			}
-			return e, nil
-		}
 		if needResetFunction {
 			for i, arg := range exprImpl.F.Args {
 				if !dynamicNumericArgs[i] {
@@ -540,49 +538,10 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 				}
 			}
 		}
-		for i, arg := range exprImpl.F.Args {
-			if !dynamicNumericArgs[i] || !types.T(arg.Typ.Id).IsUnsignedInt() {
-				continue
-			}
-			for j, sibling := range exprImpl.F.Args {
-				if i == j || !types.T(sibling.Typ.Id).IsSignedInt() {
-					continue
-				}
-				target := types.T_uint64.ToType()
-				exprImpl.F.Args[j], err = makePlan2CastExpr(
-					rule.ctx, sibling, makePlan2Type(&target))
-				if err != nil {
-					return nil, err
-				}
-			}
-		}
-		for i, arg := range exprImpl.F.Args {
-			if !types.T(arg.Typ.Id).IsDecimal() {
-				continue
-			}
-			for j, sibling := range exprImpl.F.Args {
-				siblingType := types.T(sibling.Typ.Id)
-				if i == j || (!siblingType.IsUnsignedInt() && siblingType != types.T_bit) {
-					continue
-				}
-				targetOid := types.T_decimal128
-				if arg.Typ.Scale > 18 {
-					targetOid = types.T_decimal256
-				}
-				target := types.New(targetOid, 38, arg.Typ.Scale)
-				if targetOid == types.T_decimal256 {
-					target.Width = 65
-				}
-				exprImpl.F.Args[j], err = makePlan2CastExpr(
-					rule.ctx, sibling, makePlan2Type(&target))
-				if err != nil {
-					return nil, err
-				}
-			}
-		}
 		if exprImpl.F.Func.GetObjName() == "cast" && isPreparedDynamicNumericType(e.Typ) {
 			if dynamicParamPos >= 0 && int(dynamicParamPos) < len(rule.params) {
 				param := rule.params[dynamicParamPos]
+				dynamicParamExpr.Typ.NotNullable = param.Typ.NotNullable
 				value := param.GetLit().GetSval()
 				runtimeType := types.T(param.Typ.Id)
 				switch runtimeType {
@@ -611,6 +570,13 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 				}
 				if runtimeType.IsInteger() || runtimeType == types.T_bit {
 					typed, makeErr := makePreparedIntegerExpr(value, runtimeType)
+					if makeErr != nil {
+						return nil, makeErr
+					}
+					return makePlan2CastExpr(rule.ctx, dynamicParamExpr, typed.Typ)
+				}
+				if runtimeType.IsDecimal() {
+					typed, makeErr := makePlan2DecimalExprWithType(rule.ctx, value, param.GetLit().GetIsBin())
 					if makeErr != nil {
 						return nil, makeErr
 					}
@@ -668,6 +634,9 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 	case *plan.Expr_P:
 		if int(exprImpl.P.Pos) >= len(rule.params) {
 			return nil, moerr.NewInternalErrorf(context.TODO(), "get prepare params error, index %d not exists", int(exprImpl.P.Pos))
+		}
+		if rule.preserveParamRefs {
+			return e, nil
 		}
 		return &plan.Expr{
 			Typ:  e.Typ,
@@ -775,6 +744,7 @@ func applyWindowExpr(e *plan.Expr, apply func(*plan.Expr) (*plan.Expr, error)) (
 		if err != nil {
 			return nil, err
 		}
+		e.Typ = w.WindowFunc.Typ
 	}
 	for i := range w.PartitionBy {
 		w.PartitionBy[i], err = apply(w.PartitionBy[i])

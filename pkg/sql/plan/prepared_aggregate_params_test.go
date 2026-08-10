@@ -221,20 +221,23 @@ func TestPreparedNumericAggregateParameters(t *testing.T) {
 	tests := []struct {
 		name string
 		sql  string
+		want types.T
 	}{
-		{name: "direct sum", sql: "select sum(?) from nation"},
-		{name: "direct avg", sql: "select avg(?) from nation"},
-		{name: "window sum", sql: "select sum(?) over () from nation"},
-		{name: "window avg", sql: "select avg(?) over () from nation"},
-		{name: "derived parameter", sql: "select sum(n) from (select ? as n) d"},
-		{name: "nonrecursive cte parameter", sql: "with c(n) as (select ?) select avg(n) from c"},
+		{name: "direct sum", sql: "select sum(?) from nation", want: types.T_decimal256},
+		{name: "direct avg", sql: "select avg(?) from nation", want: types.T_decimal256},
+		{name: "window sum", sql: "select sum(?) over () from nation", want: types.T_decimal256},
+		{name: "window avg", sql: "select avg(?) over () from nation", want: types.T_decimal256},
+		{name: "derived parameter", sql: "select sum(n) from (select ? as n) d", want: types.T_float64},
+		{name: "nonrecursive cte parameter", sql: "with c(n) as (select ?) select avg(n) from c", want: types.T_float64},
 		{
 			name: "recursive cte sum",
 			sql:  "with recursive r(n) as (select ? union all select n + 1 from r where n < 2) select sum(n) from r",
+			want: types.T_float64,
 		},
 		{
 			name: "recursive cte avg",
 			sql:  "with recursive r(n) as (select ? union all select n + 1 from r where n < 2) select avg(n) from r",
+			want: types.T_float64,
 		},
 		{
 			name: "recursive cte window",
@@ -283,7 +286,11 @@ func TestPreparedNumericAggregateParameters(t *testing.T) {
 			prepare := buildPreparedAggregatePlan(t, test.sql)
 			require.Equal(t, []int32{int32(types.T_any)}, prepare.ParamTypes)
 			originalTypes := preparedEffectiveParamTypes(t, prepare)
-			require.Equal(t, int32(types.T_float64), originalTypes[0].Id)
+			want := test.want
+			if want == 0 {
+				want = types.T_float64
+			}
+			require.Equal(t, int32(want), originalTypes[0].Id)
 
 			first, err := FillValuesOfParamsInPlan(context.Background(), prepare.Plan, []any{int64(1)})
 			require.NoError(t, err)
@@ -301,8 +308,8 @@ func TestPreparedNumericAggregateParameterIdentity(t *testing.T) {
 	require.Equal(t, []int32{int32(types.T_any), int32(types.T_any)}, prepare.ParamTypes)
 	require.Equal(t, []int32{0, 1}, preparedParamPositions(prepare))
 	paramTypes := preparedEffectiveParamTypes(t, prepare)
-	require.Equal(t, int32(types.T_float64), paramTypes[0].Id)
-	require.Equal(t, int32(types.T_float64), paramTypes[1].Id)
+	require.Equal(t, int32(types.T_decimal256), paramTypes[0].Id)
+	require.Equal(t, int32(types.T_decimal256), paramTypes[1].Id)
 
 	_, err := FillValuesOfParamsInPlan(context.Background(), prepare.Plan, []any{int64(1), "2.5"})
 	require.NoError(t, err)

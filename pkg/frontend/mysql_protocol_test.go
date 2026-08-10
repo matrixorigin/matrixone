@@ -2620,8 +2620,8 @@ func TestPreparedNumericAggregateBinaryProtocolMetadata(t *testing.T) {
 
 			result := parsePrepareColumnDefinition(t, packets[3])
 			require.Equal(t, "result", result.name)
-			require.Equal(t, defines.MYSQL_TYPE_DOUBLE, result.typ)
-			require.Equal(t, uint8(mysqlDecimalNotSpecified), result.decimals)
+			require.Equal(t, defines.MYSQL_TYPE_DECIMAL, result.typ)
+			require.Equal(t, uint8(30), result.decimals)
 			require.Equal(t, byte(defines.EOFHeader), packets[4][0])
 		})
 	}

@@ -462,7 +462,7 @@ func TestPreparedDynamicNumericPlanUsesCurrentTextAndBinaryValue(t *testing.T) {
 		wantType types.T
 	}{
 		{value: strconv.FormatInt(math.MaxInt64, 10), wantType: types.T_int64},
-		{value: strconv.FormatUint(math.MaxUint64, 10), unsigned: true, wantType: types.T_uint64},
+		{value: strconv.FormatUint(math.MaxUint64, 10), unsigned: true, wantType: types.T_decimal128},
 	} {
 		params := vector.NewVec(types.T_text.ToType())
 		require.NoError(t, vector.AppendBytes(params, []byte(test.value), false, cw.proc.Mp()))
@@ -1594,4 +1594,96 @@ func TestPreparedDecimalSameShapeReusesPlanAndCompile(t *testing.T) {
 	require.NoError(t, err)
 	require.Same(t, firstPlan, secondPlan)
 	require.Same(t, firstCompile, secondCompile)
+	require.Equal(t, "2.3", cw.proc.GetPrepareParams().GetStringAt(0))
+	require.Positive(t, countPreparedParamRefs(secondPlan),
+		"a cached type-specialized plan must still read the current execution vector")
+}
+
+func TestPreparedSameTypeReuseKeepsEveryRuntimeParamLive(t *testing.T) {
+	ses, prepareStmt, cw, execCtx := newPreparedExecuteEnvForSQL(t, 115, "select ? + 1, concat(?, '-x')")
+	defer prepareStmt.Close()
+	execPlan := &plan.Execute{
+		Name: prepareStmt.Name,
+		Args: []*plan.Expr{
+			{Expr: &plan.Expr_V{V: &plan.VarRef{Name: "number_param"}}},
+			{Expr: &plan.Expr_V{V: &plan.VarRef{Name: "text_param"}}},
+		},
+	}
+	require.NoError(t, ses.setUserDefinedVarWithType("number_param", int64(2), "", false, types.T_int64))
+	require.NoError(t, ses.setUserDefinedVarWithType("text_param", "first", "", false, types.T_varchar))
+	firstCompile, firstPlan, _, _, _, err := initExecuteStmtParam(execCtx, ses, cw, execPlan, "")
+	require.NoError(t, err)
+
+	require.NoError(t, ses.setUserDefinedVarWithType("number_param", int64(3), "", false, types.T_int64))
+	require.NoError(t, ses.setUserDefinedVarWithType("text_param", "second", "", false, types.T_varchar))
+	secondCompile, secondPlan, _, _, _, err := initExecuteStmtParam(execCtx, ses, cw, execPlan, "")
+	require.NoError(t, err)
+
+	require.Same(t, firstPlan, secondPlan)
+	require.Same(t, firstCompile, secondCompile)
+	require.Equal(t, 2, countPreparedParamRefs(secondPlan))
+	require.Equal(t, "3", cw.proc.GetPrepareParams().GetStringAt(0))
+	require.Equal(t, "second", cw.proc.GetPrepareParams().GetStringAt(1))
+}
+
+func TestExecuteWrapperClearsStatementScopedPrepareParams(t *testing.T) {
+	_, prepareStmt, cw, _ := newPreparedExecuteEnv(t, 114)
+	defer prepareStmt.Close()
+	params := vector.NewVec(types.T_text.ToType())
+	require.NoError(t, vector.AppendBytes(params, []byte("last-execute"), false, cw.proc.Mp()))
+	cw.proc.SetOwnedPrepareParamsWithIsBin(params, []bool{false})
+	cw.ifIsExeccute = true
+	proc := cw.proc
+
+	cw.Clear()
+
+	require.Nil(t, proc.GetPrepareParams(),
+		"a following ordinary statement must not serialize stale prepared parameters")
+}
+
+func countPreparedParamRefs(queryPlan *plan.Plan) int {
+	count := 0
+	var visitExpr func(*plan.Expr)
+	visitExpr = func(expr *plan.Expr) {
+		if expr == nil {
+			return
+		}
+		if expr.GetP() != nil {
+			count++
+			return
+		}
+		if fn := expr.GetF(); fn != nil {
+			for _, arg := range fn.Args {
+				visitExpr(arg)
+			}
+		}
+		if list := expr.GetList(); list != nil {
+			for _, item := range list.List {
+				visitExpr(item)
+			}
+		}
+		if window := expr.GetW(); window != nil {
+			visitExpr(window.WindowFunc)
+			for _, item := range window.PartitionBy {
+				visitExpr(item)
+			}
+			for _, item := range window.OrderBy {
+				visitExpr(item.Expr)
+			}
+		}
+	}
+	query := queryPlan.GetQuery()
+	if query == nil {
+		return 0
+	}
+	for _, node := range query.Nodes {
+		for _, exprs := range [][]*plan.Expr{
+			node.ProjectList, node.FilterList, node.OnList, node.GroupBy, node.AggList, node.WinSpecList,
+		} {
+			for _, expr := range exprs {
+				visitExpr(expr)
+			}
+		}
+	}
+	return count
 }
