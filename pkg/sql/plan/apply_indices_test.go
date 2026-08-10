@@ -32,6 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	statspb "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -168,6 +169,37 @@ func TestDirectUniqueDecimalRangeResidualFilterUsesDirectKey(t *testing.T) {
 	require.Equal(t, decimalType, residualColExpr.Typ)
 }
 
+func TestEncodedRegularIndexCostRejectsRoundingDecimalRange(t *testing.T) {
+	makeOptimizer := func() *MockOptimizer {
+		mock := NewMockOptimizer(true)
+		addIndexHintChoiceTableForTest(mock)
+		mock.ctxt.tables["index_hint_t"].Cols[1].Typ = planpb.Type{
+			Id: int32(types.T_decimal64), Width: 10, Scale: 2,
+		}
+		return mock
+	}
+
+	t.Run("rounding bounds fall back to the base scan", func(t *testing.T) {
+		queryPlan, err := runOneStmt(makeOptimizer(), t, `
+			select b
+			from index_hint_t force index(idx_a)
+			where a > 10.255000 and a <= 15.755000`)
+		require.NoError(t, err)
+		require.Empty(t, findFirstIndexScanName(queryPlan))
+		require.False(t, planHasIndexJoin(queryPlan))
+	})
+
+	t.Run("lossless bounds retain the forced serialized index", func(t *testing.T) {
+		queryPlan, err := runOneStmt(makeOptimizer(), t, `
+			select b
+			from index_hint_t force index(idx_a)
+			where a > 10.250000 and a <= 15.750000`)
+		require.NoError(t, err)
+		require.Equal(t, "idx_a", findFirstIndexScanName(queryPlan))
+		require.True(t, planHasIndexJoin(queryPlan))
+	})
+}
+
 func TestApplyExtraFiltersOnIndexUsesPhysicalKeyEncoding(t *testing.T) {
 	intType := planpb.Type{Id: int32(types.T_int64)}
 	varcharType := planpb.Type{Id: int32(types.T_varchar)}
@@ -207,6 +239,36 @@ func TestApplyExtraFiltersOnIndexUsesPhysicalKeyEncoding(t *testing.T) {
 		mapped := indexNode.FilterList[0].GetF().Args[0]
 		require.Equal(t, "serial_extract", wrappedSerialFuncName(t, mapped))
 		require.Equal(t, int32(0), mapped.GetF().Args[0].GetCol().ColPos)
+	})
+
+	t.Run("all serialized residuals", func(t *testing.T) {
+		builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true), false, true)
+		baseTag := builder.genNewBindTag()
+		indexTag := builder.genNewBindTag()
+		node := &planpb.Node{
+			TableDef: &planpb.TableDef{
+				Cols: []*planpb.ColDef{
+					{Name: "id", Typ: intType},
+					{Name: "a", Typ: intType},
+				},
+				Name2ColIndex: map[string]int32{"id": 0, "a": 1},
+				Pkey:          &planpb.PrimaryKeyDef{PkeyColName: "id", Names: []string{"id"}},
+			},
+			BindingTags: []int32{baseTag},
+			FilterList: []*planpb.Expr{
+				makeTypedInt64RangeFilterExpr(baseTag, 1, ">=", 10, intType),
+				makeTypedInt64RangeFilterExpr(baseTag, 1, "<", 20, intType),
+			},
+		}
+		idxDef := &planpb.IndexDef{Parts: []string{"a", catalog.CreateAlias("id")}}
+		indexNode := makeIndexNode(indexTag, varcharType, intType)
+
+		builder.applyExtraFiltersOnIndex(idxDef, node, indexNode, nil)
+
+		require.Len(t, indexNode.FilterList, 2)
+		for _, filter := range indexNode.FilterList {
+			require.Equal(t, "serial_extract", wrappedSerialFuncName(t, filter.GetF().Args[0]))
+		}
 	})
 
 	t.Run("composite primary key part", func(t *testing.T) {
@@ -272,6 +334,103 @@ func TestApplyExtraFiltersOnIndexUsesPhysicalKeyEncoding(t *testing.T) {
 
 		require.Empty(t, indexNode.FilterList)
 	})
+}
+
+func TestResolveRegularIndexBackfillResidualAccess(t *testing.T) {
+	simpleTable := &planpb.TableDef{
+		Name2ColIndex: map[string]int32{"id": 0, "status": 1, "note": 2},
+		Pkey:          &planpb.PrimaryKeyDef{PkeyColName: "id", Names: []string{"id"}},
+	}
+	compoundTable := &planpb.TableDef{
+		Name2ColIndex: map[string]int32{
+			"tenant_id": 0,
+			"event_id":  1,
+			"status":    2,
+		},
+		Pkey: &planpb.PrimaryKeyDef{
+			PkeyColName: catalog.CPrimaryKeyColName,
+			Names:       []string{"tenant_id", "event_id"},
+		},
+	}
+
+	tests := []struct {
+		name          string
+		idxDef        *planpb.IndexDef
+		tableDef      *planpb.TableDef
+		colPos        int32
+		prefixLengths map[string]int
+		wantSource    regularIndexBackfillResidualSource
+		wantPosition  int
+	}{
+		{
+			name:       "direct unique index key",
+			idxDef:     &planpb.IndexDef{Parts: []string{"status"}, Unique: true},
+			tableDef:   simpleTable,
+			colPos:     1,
+			wantSource: regularIndexResidualIndexKey,
+		},
+		{
+			name:          "lossy prefix index key",
+			idxDef:        &planpb.IndexDef{Parts: []string{"status"}, Unique: true},
+			tableDef:      simpleTable,
+			colPos:        1,
+			prefixLengths: map[string]int{"status": 4},
+			wantSource:    regularIndexResidualUnavailable,
+		},
+		{
+			name:         "separately stored simple primary key",
+			idxDef:       &planpb.IndexDef{Parts: []string{"status"}, Unique: true},
+			tableDef:     simpleTable,
+			colPos:       0,
+			wantSource:   regularIndexResidualPhysicalPK,
+			wantPosition: 0,
+		},
+		{
+			name:         "simple primary key appended to serialized index key",
+			idxDef:       &planpb.IndexDef{Parts: []string{"status", catalog.CreateAlias("id")}},
+			tableDef:     simpleTable,
+			colPos:       0,
+			wantSource:   regularIndexResidualIndexKey,
+			wantPosition: 1,
+		},
+		{
+			name:         "compound primary key component",
+			idxDef:       &planpb.IndexDef{Parts: []string{"status"}, Unique: true},
+			tableDef:     compoundTable,
+			colPos:       1,
+			wantSource:   regularIndexResidualCompoundPK,
+			wantPosition: 1,
+		},
+		{
+			name:       "unavailable non-key column",
+			idxDef:     &planpb.IndexDef{Parts: []string{"status"}, Unique: true},
+			tableDef:   simpleTable,
+			colPos:     2,
+			wantSource: regularIndexResidualUnavailable,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := resolveRegularIndexBackfillResidualAccess(
+				tt.idxDef, tt.tableDef, tt.colPos, tt.prefixLengths, nil,
+			)
+			require.Equal(t, tt.wantSource, got.source)
+			require.Equal(t, tt.wantPosition, got.position)
+
+			knownPartPositions := []int{-1, -1, -1}
+			for partPos, part := range tt.idxDef.Parts {
+				if colPos, ok := tt.tableDef.Name2ColIndex[catalog.ResolveAlias(part)]; ok {
+					knownPartPositions[colPos] = partPos
+				}
+			}
+			fastPath := resolveRegularIndexBackfillResidualAccess(
+				tt.idxDef, tt.tableDef, tt.colPos, tt.prefixLengths, knownPartPositions,
+			)
+			require.Equal(t, got, fastPath,
+				"the scorer's precomputed part map must preserve materializer resolution")
+		})
+	}
 }
 
 func TestFilterRegularIndexesByScanHints(t *testing.T) {
@@ -2364,14 +2523,8 @@ func planHasSort(p *Plan) bool {
 }
 
 func TestTryIndexOnlyScan_RandomRangesNotRejected(t *testing.T) {
-	// End-to-end test: call tryIndexOnlyScan with a node that simulates
-	// sysbench random_ranges (10M rows, outcnt=10000, selectivity=0.001).
-	// Verify the guard does NOT reject the index-only scan.
-	//
-	// Strategy: if the guard rejects, tryIndexOnlyScan returns -1 cleanly.
-	// If the guard passes, execution continues to ResolveIndexTableByRef which
-	// returns nil (mock has no index table), causing a nil-pointer panic downstream.
-	// We use recover() to detect this: panic = guard passed, no panic = guard rejected.
+	// Exercise the pure candidate matcher with a node that simulates sysbench
+	// random_ranges (10M rows, outcnt=10000, selectivity=0.001).
 	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true), false, true)
 
 	idxDef := &IndexDef{
@@ -2429,36 +2582,27 @@ func TestTryIndexOnlyScan_RandomRangesNotRejected(t *testing.T) {
 		{bindTag, kColPos}: 1,
 	}
 
-	// Helper: returns true if guard passed (panic from nil deref after guard),
-	// false if guard rejected (clean -1 return).
-	guardPassed := func(node *planpb.Node) bool {
-		passed := false
-		func() {
-			defer func() {
-				if r := recover(); r != nil {
-					passed = true
-				}
-			}()
-			builder.tryIndexOnlyScan(idxDef, node, colRefCnt, nil, &Snapshot{})
-		}()
-		return passed
+	candidateMatches := func(node *planpb.Node) bool {
+		costCtx := builder.newEncodedRegularIndexCostContext(node, colRefCnt)
+		_, ok := builder.matchRegularIndexOnlyScan(idxDef, node, costCtx)
+		return ok
 	}
 
 	// random_ranges scenario: 10M rows, outcnt=10000, selectivity=0.001
 	// With the fix (PK card limit = 1M), guard should PASS.
-	assert.True(t, guardPassed(makeNode(10_000_000, 10_000, 0.001)),
+	assert.True(t, candidateMatches(makeNode(10_000_000, 10_000, 0.001)),
 		"random_ranges (10M rows, outcnt=10000) should pass the guard")
 
 	// Same but with outcnt=50000 (still well below 1M threshold)
-	assert.True(t, guardPassed(makeNode(10_000_000, 50_000, 0.005)),
+	assert.True(t, candidateMatches(makeNode(10_000_000, 50_000, 0.005)),
 		"moderate outcnt (50000) on 10M table should pass the guard")
 
 	// High outcnt (2M on 10M table) → guard should REJECT
-	assert.False(t, guardPassed(makeNode(10_000_000, 2_000_000, 0.2)),
+	assert.False(t, candidateMatches(makeNode(10_000_000, 2_000_000, 0.2)),
 		"high outcnt (2M) should be rejected by guard")
 
 	// High selectivity (0.5) → guard should REJECT
-	assert.False(t, guardPassed(makeNode(10_000_000, 5_000_000, 0.5)),
+	assert.False(t, candidateMatches(makeNode(10_000_000, 5_000_000, 0.5)),
 		"high selectivity (0.5) should be rejected by guard")
 
 	// Verify threshold arithmetic
@@ -2466,6 +2610,1930 @@ func TestTryIndexOnlyScan_RandomRangesNotRejected(t *testing.T) {
 		"random_ranges outcnt (10000) >= old threshold (10000) → old code would reject")
 	assert.True(t, float64(10_000) < float64(GetInFilterCardLimitOnPK("", 10_000_000)),
 		"random_ranges outcnt (10000) < new threshold (1M) → new code allows")
+}
+
+func TestTryIndexOnlyScanRejectsBroadEncodedEquality(t *testing.T) {
+	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true), false, true)
+	ctx := NewBindContext(builder, nil)
+	bindTag := builder.genNewBindTag()
+	idxDef := &planpb.IndexDef{
+		IndexName:      "idx_category_tenant_time_id",
+		IndexAlgo:      catalog.MoIndexDefaultAlgo.ToString(),
+		IndexTableName: "__mo_idx_category_tenant_time_id",
+		Parts: []string{
+			"category",
+			"tenant_id",
+			"event_time",
+			"event_id",
+			catalog.CreateAlias(catalog.CPrimaryKeyColName),
+		},
+		TableExist: true,
+	}
+	registerMockIndexTable(t, builder, idxDef.IndexTableName)
+	node := &planpb.Node{
+		NodeType:    planpb.Node_TABLE_SCAN,
+		ObjRef:      &planpb.ObjectRef{SchemaName: "test", ObjName: "events"},
+		BindingTags: []int32{bindTag},
+		TableDef: &planpb.TableDef{
+			Name: "events",
+			Cols: []*planpb.ColDef{
+				{Name: "tenant_id", Typ: planpb.Type{Id: int32(types.T_int32)}},
+				{Name: "event_id", Typ: planpb.Type{Id: int32(types.T_int64)}},
+				{Name: "category", Typ: planpb.Type{Id: int32(types.T_varchar), Width: 12}},
+				{Name: "event_time", Typ: planpb.Type{Id: int32(types.T_datetime)}},
+				{Name: catalog.CPrimaryKeyColName, Typ: planpb.Type{Id: int32(types.T_varchar), Width: types.MaxVarcharLen}, Hidden: true},
+			},
+			Name2ColIndex: map[string]int32{
+				"tenant_id":                0,
+				"event_id":                 1,
+				"category":                 2,
+				"event_time":               3,
+				catalog.CPrimaryKeyColName: 4,
+			},
+			Pkey: &planpb.PrimaryKeyDef{
+				PkeyColName: catalog.CPrimaryKeyColName,
+				Names:       []string{"tenant_id", "event_id"},
+			},
+		},
+		Stats: &planpb.Stats{
+			TableCnt:    800_000,
+			Outcnt:      720_000,
+			Selectivity: 0.9,
+			Cost:        800_000,
+		},
+		FilterList: []*planpb.Expr{makeStringEqFilterExpr(bindTag, 2, "HOT")},
+	}
+	node.FilterList[0].Selectivity = 0.9
+	scanID := builder.appendNode(node, ctx)
+	builder.qry.Nodes[scanID].Stats = &planpb.Stats{TableCnt: 800_000, Outcnt: 720_000, Selectivity: 0.9, Cost: 800_000}
+	builder.qry.Nodes[scanID].FilterList[0].Selectivity = 0.9
+	leadingPos, _ := findLeadingFilter(idxDef, builder.qry.Nodes[scanID])
+	require.True(t, builder.shouldSkipEncodedIndexOnlyScan(idxDef, builder.qry.Nodes[scanID], map[[2]int32]int{{bindTag, 1}: 1, {bindTag, 2}: 1}, leadingPos, false))
+
+	idxNodeID := builder.tryIndexOnlyScan(
+		idxDef,
+		builder.qry.Nodes[scanID],
+		map[[2]int32]int{{bindTag, 1}: 1, {bindTag, 2}: 1},
+		map[[2]int32]*planpb.Expr{},
+		&Snapshot{},
+	)
+
+	require.Equal(t, int32(-1), idxNodeID)
+}
+
+type encodedIndexCostTestContext struct {
+	*MockCompilerContext
+	statsCache *StatsCache
+}
+
+type encodedIndexPlanTestContext struct {
+	*MockCompilerContext
+	statsCache *StatsCache
+	statsByID  map[uint64]*statspb.StatsInfo
+}
+
+func (ctx *encodedIndexPlanTestContext) GetStatsCache() *StatsCache {
+	return ctx.statsCache
+}
+
+func (ctx *encodedIndexPlanTestContext) Stats(obj *planpb.ObjectRef, _ *Snapshot) (*statspb.StatsInfo, error) {
+	if obj == nil {
+		return nil, nil
+	}
+	return ctx.statsByID[uint64(obj.Obj)], nil
+}
+
+type encodedIndexPlanTestOptimizer struct {
+	ctx *encodedIndexPlanTestContext
+}
+
+const encodedIndexCostUnitTableID uint64 = 10_001
+
+func (optimizer *encodedIndexPlanTestOptimizer) CurrentContext() CompilerContext {
+	return optimizer.ctx
+}
+
+func (optimizer *encodedIndexPlanTestOptimizer) Optimize(stmt tree.Statement) (*Query, error) {
+	queryPlan, err := BuildPlan(optimizer.ctx, stmt, false)
+	if err != nil {
+		return nil, err
+	}
+	return queryPlan.GetQuery(), nil
+}
+
+func (ctx *encodedIndexCostTestContext) GetStatsCache() *StatsCache {
+	return ctx.statsCache
+}
+
+func newEncodedIndexCostTestCase(
+	t testing.TB,
+	parts []string,
+	filters []*planpb.Expr,
+	stats *planpb.Stats,
+	colRefs map[int32]int,
+	force bool,
+) (*QueryBuilder, int32, *planpb.IndexDef, map[[2]int32]int) {
+	t.Helper()
+
+	baseCtx := NewMockCompilerContext(true)
+	statsCache := NewStatsCache()
+	statsInfo := NewStatsInfo()
+	statsInfo.TableCnt = 800_000
+	statsInfo.SizeMap = map[string]uint64{
+		"tenant_id":                800_000 * 4,
+		"event_id":                 800_000 * 8,
+		"category":                 800_000 * 4,
+		"event_time":               800_000 * 8,
+		catalog.CPrimaryKeyColName: 800_000 * 14,
+	}
+	statsCache.Set(encodedIndexCostUnitTableID, statsInfo)
+	testCtx := &encodedIndexCostTestContext{MockCompilerContext: baseCtx, statsCache: statsCache}
+	builder := NewQueryBuilder(planpb.Query_SELECT, testCtx, false, true)
+	ctx := NewBindContext(builder, nil)
+	bindTag := builder.genNewBindTag()
+	idxDef := &planpb.IndexDef{
+		IndexName:      "idx_cost_test",
+		IndexAlgo:      catalog.MoIndexDefaultAlgo.ToString(),
+		IndexTableName: "__mo_idx_cost_test",
+		Parts:          parts,
+		TableExist:     true,
+	}
+	indexTableDef := makeTestIndexTableDef()
+	indexTableDef.Name = idxDef.IndexTableName
+	key := strings.ToLower(idxDef.IndexTableName)
+	testCtx.objects[key] = &planpb.ObjectRef{SchemaName: "test", ObjName: idxDef.IndexTableName}
+	testCtx.tables[key] = indexTableDef
+
+	node := &planpb.Node{
+		NodeType:    planpb.Node_TABLE_SCAN,
+		ObjRef:      &planpb.ObjectRef{SchemaName: "test", ObjName: "events", Obj: int64(encodedIndexCostUnitTableID)},
+		BindingTags: []int32{bindTag},
+		TableDef: &planpb.TableDef{
+			TblId: encodedIndexCostUnitTableID,
+			Name:  "events",
+			Cols: []*planpb.ColDef{
+				{Name: "tenant_id", Typ: planpb.Type{Id: int32(types.T_int32)}},
+				{Name: "event_id", Typ: planpb.Type{Id: int32(types.T_int64)}},
+				{Name: "category", Typ: planpb.Type{Id: int32(types.T_varchar), Width: 12}},
+				{Name: "event_time", Typ: planpb.Type{Id: int32(types.T_datetime)}},
+				{Name: catalog.CPrimaryKeyColName, Typ: planpb.Type{Id: int32(types.T_varchar), Width: types.MaxVarcharLen}, Hidden: true},
+			},
+			Name2ColIndex: map[string]int32{
+				"tenant_id":                0,
+				"event_id":                 1,
+				"category":                 2,
+				"event_time":               3,
+				catalog.CPrimaryKeyColName: 4,
+			},
+			Pkey: &planpb.PrimaryKeyDef{
+				PkeyColName: catalog.CPrimaryKeyColName,
+				Names:       []string{"tenant_id", "event_id"},
+			},
+		},
+		FilterList: filters,
+	}
+	scanID := builder.appendNode(node, ctx)
+	builder.qry.Nodes[scanID].Stats = stats
+
+	refCnt := make(map[[2]int32]int, len(colRefs))
+	for colPos, count := range colRefs {
+		refCnt[[2]int32{bindTag, colPos}] = count
+	}
+	if force {
+		if builder.indexHintsByScan == nil {
+			builder.indexHintsByScan = make(map[int32]*indexHintSet)
+		}
+		builder.indexHintsByScan[scanID] = &indexHintSet{scan: indexHintScopeSet{
+			forceSpecified: true,
+			force:          map[string]struct{}{idxDef.IndexName: {}},
+		}}
+	}
+	return builder, scanID, idxDef, refCnt
+}
+
+func TestTryIndexOnlyScanEncodedCostControls(t *testing.T) {
+	wideParts := []string{
+		"category",
+		"tenant_id",
+		"event_time",
+		"event_id",
+		catalog.CreateAlias(catalog.CPrimaryKeyColName),
+	}
+	narrowParts := []string{"category", catalog.CreateAlias(catalog.CPrimaryKeyColName)}
+	tests := []struct {
+		name       string
+		parts      []string
+		leadingSel float64
+		outcnt     float64
+		cost       float64
+		colRefs    map[int32]int
+		force      bool
+		wantIndex  bool
+	}{
+		{
+			name:  "selective encoded projection wins",
+			parts: wideParts, leadingSel: 0.001, outcnt: 800, cost: 800_000,
+			colRefs: map[int32]int{1: 1, 2: 1}, wantIndex: true,
+		},
+		{
+			name:  "broad encoded projection loses",
+			parts: wideParts, leadingSel: 0.9, outcnt: 720_000, cost: 800_000,
+			colRefs: map[int32]int{1: 1, 2: 1},
+		},
+		{
+			name:  "narrow key stays below crossover",
+			parts: narrowParts, leadingSel: 0.10, outcnt: 80_000, cost: 800_000,
+			colRefs: map[int32]int{2: 1}, wantIndex: true,
+		},
+		{
+			name:  "wide key crosses at same selectivity",
+			parts: wideParts, leadingSel: 0.10, outcnt: 80_000, cost: 800_000,
+			colRefs: map[int32]int{2: 1},
+		},
+		{
+			name:  "one extraction consumer stays below crossover",
+			parts: wideParts, leadingSel: 0.05, outcnt: 40_000, cost: 800_000,
+			colRefs: map[int32]int{1: 1, 2: 1}, wantIndex: true,
+		},
+		{
+			name:  "repeated extraction consumers cross",
+			parts: wideParts, leadingSel: 0.05, outcnt: 40_000, cost: 800_000,
+			colRefs: map[int32]int{1: 5, 2: 1},
+		},
+		{
+			name:  "small output limits downstream extraction",
+			parts: wideParts, leadingSel: 0.1, outcnt: 800, cost: 800_000,
+			colRefs: map[int32]int{1: 1, 2: 1}, wantIndex: true,
+		},
+		{
+			name:  "large output charges downstream extraction",
+			parts: wideParts, leadingSel: 0.1, outcnt: 120_000, cost: 800_000,
+			colRefs: map[int32]int{1: 1, 2: 1},
+		},
+		{
+			name:  "force index preserves compatibility escape",
+			parts: wideParts, leadingSel: 0.9, outcnt: 720_000, cost: 800_000,
+			colRefs: map[int32]int{1: 1, 2: 1}, force: true, wantIndex: true,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			filter := makeStringEqFilterExpr(0, 2, "category")
+			filter.Selectivity = test.leadingSel
+			builder, scanID, idxDef, colRefCnt := newEncodedIndexCostTestCase(
+				t,
+				test.parts,
+				[]*planpb.Expr{filter},
+				&planpb.Stats{TableCnt: 800_000, Outcnt: test.outcnt, Selectivity: test.outcnt / 800_000, Cost: test.cost},
+				test.colRefs,
+				test.force,
+			)
+			// The fixture allocates the first binding tag.
+			builder.qry.Nodes[scanID].FilterList[0].GetF().Args[0].GetCol().RelPos = builder.qry.Nodes[scanID].BindingTags[0]
+
+			idxNodeID := builder.tryIndexOnlyScan(idxDef, builder.qry.Nodes[scanID], colRefCnt, map[[2]int32]*planpb.Expr{}, &Snapshot{})
+			if test.wantIndex {
+				require.NotEqual(t, int32(-1), idxNodeID)
+			} else {
+				require.Equal(t, int32(-1), idxNodeID)
+			}
+		})
+	}
+}
+
+func TestTryIndexOnlyScanChargesNullableLeadingResiduals(t *testing.T) {
+	parts := []string{"tenant_id", catalog.CreateAlias(catalog.CPrimaryKeyColName)}
+	tests := []struct {
+		name        string
+		makeLiteral func(int32) *planpb.Expr
+		makeRuntime func(int32) *planpb.Expr
+	}{
+		{
+			name: "equality",
+			makeLiteral: func(relPos int32) *planpb.Expr {
+				return makeRangeFilterExpr(relPos, 0, "=", 7)
+			},
+			makeRuntime: func(relPos int32) *planpb.Expr {
+				return makeParamEqFilterExpr(relPos, 0, 0)
+			},
+		},
+		{
+			name: "in",
+			makeLiteral: func(relPos int32) *planpb.Expr {
+				return makeIntInFilterExpr(relPos, 0, 7, 8)
+			},
+			makeRuntime: func(relPos int32) *planpb.Expr {
+				return makeParamInFilterExpr(relPos, 0, 2)
+			},
+		},
+		{
+			name: "between",
+			makeLiteral: func(relPos int32) *planpb.Expr {
+				return makeIntBetweenFilterExpr(relPos, 0, 7, 8)
+			},
+			makeRuntime: func(relPos int32) *planpb.Expr {
+				return makeParamBetweenFilterExpr(relPos, 0, 0, 1)
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			for _, variant := range []struct {
+				name         string
+				makeFilter   func(int32) *planpb.Expr
+				wantResidual bool
+				wantIndex    bool
+			}{
+				{name: "non-null literal stays below crossover", makeFilter: test.makeLiteral, wantIndex: true},
+				{name: "nullable runtime value crosses", makeFilter: test.makeRuntime, wantResidual: true},
+			} {
+				t.Run(variant.name, func(t *testing.T) {
+					filter := variant.makeFilter(0)
+					filter.Selectivity = 0.13
+					builder, scanID, idxDef, colRefCnt := newEncodedIndexCostTestCase(
+						t,
+						parts,
+						[]*planpb.Expr{filter},
+						&planpb.Stats{TableCnt: 800_000, Outcnt: 104_000, Selectivity: 0.13, Cost: 800_000},
+						map[int32]int{0: 1},
+						false,
+					)
+					node := builder.qry.Nodes[scanID]
+					node.FilterList[0].GetF().Args[0].GetCol().RelPos = node.BindingTags[0]
+					costCtx := builder.newEncodedRegularIndexCostContext(node, colRefCnt)
+					match, ok := builder.matchRegularIndexOnlyScan(idxDef, node, costCtx)
+					require.True(t, ok)
+					require.Equal(t, variant.wantResidual, len(match.residualLeadingPos) > 0)
+
+					idxNodeID := builder.tryIndexOnlyScan(idxDef, node, colRefCnt, map[[2]int32]*planpb.Expr{}, &Snapshot{})
+					if variant.wantIndex {
+						require.NotEqual(t, int32(-1), idxNodeID)
+					} else {
+						require.Equal(t, int32(-1), idxNodeID)
+					}
+				})
+			}
+		})
+	}
+}
+
+func TestEncodedIndexCostChargesOnlyMaterializedLeadingResiduals(t *testing.T) {
+	tenant := makeRangeFilterExpr(0, 0, "=", 7)
+	tenant.Selectivity = 0.1
+	category := makeStringEqFilterExpr(0, 2, "READY")
+	category.Selectivity = 0.2
+	builder, scanID, idxDef, colRefCnt := newEncodedIndexCostTestCase(
+		t,
+		[]string{"tenant_id", "category", catalog.CreateAlias(catalog.CPrimaryKeyColName)},
+		[]*planpb.Expr{tenant, category},
+		&planpb.Stats{TableCnt: 800_000, Outcnt: 16_000, Selectivity: 0.02, Cost: 800_000},
+		map[int32]int{0: 1, 2: 1},
+		false,
+	)
+	node := builder.qry.Nodes[scanID]
+	for _, filter := range node.FilterList {
+		filter.GetF().Args[0].GetCol().RelPos = node.BindingTags[0]
+	}
+
+	costCtx := builder.newEncodedRegularIndexCostContext(node, colRefCnt)
+	match, ok := builder.matchRegularIndexOnlyScan(idxDef, node, costCtx)
+	require.True(t, ok)
+	require.Equal(t, []int32{1}, match.residualLeadingPos,
+		"only the trailing byte-string prefix component needs an exact recheck")
+
+	minimalWork, _, minimalValid := costCtx.score(
+		idxDef, match.filterIdx, match.residualLeadingPos, encodedRegularIndexCostIndexOnly,
+	)
+	allLeadingWork, _, allLeadingValid := costCtx.score(
+		idxDef, match.filterIdx, match.filterIdx, encodedRegularIndexCostIndexOnly,
+	)
+	require.True(t, minimalValid)
+	require.True(t, allLeadingValid)
+	require.Less(t, minimalWork, allLeadingWork,
+		"candidate costing must not charge residual extraction that the plan does not materialize")
+}
+
+func TestRegularIndexCandidateRejectsEmptyParts(t *testing.T) {
+	filter := makeStringEqFilterExpr(0, 2, "READY")
+	filter.Selectivity = 0.01
+	builder, scanID, idxDef, colRefCnt := newEncodedIndexCostTestCase(
+		t,
+		nil,
+		[]*planpb.Expr{filter},
+		&planpb.Stats{TableCnt: 800_000, Outcnt: 8_000, Selectivity: 0.01, Cost: 800_000},
+		map[int32]int{2: 1},
+		false,
+	)
+	node := builder.qry.Nodes[scanID]
+	node.FilterList[0].GetF().Args[0].GetCol().RelPos = node.BindingTags[0]
+	node.TableDef.Indexes = []*planpb.IndexDef{idxDef}
+
+	require.NotPanics(t, func() {
+		resultID := builder.applyIndicesForFiltersRegularIndex(
+			scanID, node, colRefCnt, map[[2]int32]*planpb.Expr{},
+		)
+		require.Equal(t, scanID, resultID)
+	})
+}
+
+func TestEncodedIndexCostBoundaryControls(t *testing.T) {
+	wideParts := []string{
+		"category", "tenant_id", "event_time", "event_id",
+		catalog.CreateAlias(catalog.CPrimaryKeyColName),
+	}
+	newBroadCase := func(t testing.TB, tableCnt float64) (*QueryBuilder, int32, *planpb.IndexDef, map[[2]int32]int) {
+		filter := makeStringEqFilterExpr(0, 2, "HOT")
+		filter.Selectivity = 0.9
+		builder, scanID, idxDef, colRefCnt := newEncodedIndexCostTestCase(
+			t, wideParts, []*planpb.Expr{filter},
+			&planpb.Stats{TableCnt: tableCnt, Outcnt: tableCnt * 0.9, Selectivity: 0.9, Cost: tableCnt},
+			map[int32]int{1: 1, 2: 1}, false,
+		)
+		node := builder.qry.Nodes[scanID]
+		node.FilterList[0].GetF().Args[0].GetCol().RelPos = node.BindingTags[0]
+		if builder.indexHintsByScan == nil {
+			builder.indexHintsByScan = make(map[int32]*indexHintSet)
+		}
+		return builder, scanID, idxDef, colRefCnt
+	}
+
+	t.Run("missing SizeMap uses type fallback", func(t *testing.T) {
+		builder, scanID, idxDef, colRefCnt := newBroadCase(t, 800_000)
+		ctx := builder.compCtx.(*encodedIndexCostTestContext)
+		stats := NewStatsInfo()
+		stats.TableCnt = 800_000
+		ctx.statsCache.Set(encodedIndexCostUnitTableID, stats)
+		require.Equal(t, int32(-1), builder.tryIndexOnlyScan(idxDef, builder.qry.Nodes[scanID], colRefCnt, map[[2]int32]*planpb.Expr{}, &Snapshot{}))
+	})
+
+	t.Run("table threshold", func(t *testing.T) {
+		for _, test := range []struct {
+			name      string
+			tableCnt  float64
+			wantIndex bool
+		}{
+			{name: "49999 bypasses", tableCnt: 49_999, wantIndex: true},
+			{name: "50000 costs", tableCnt: 50_000},
+		} {
+			t.Run(test.name, func(t *testing.T) {
+				builder, scanID, idxDef, colRefCnt := newBroadCase(t, test.tableCnt)
+				idxNodeID := builder.tryIndexOnlyScan(idxDef, builder.qry.Nodes[scanID], colRefCnt, map[[2]int32]*planpb.Expr{}, &Snapshot{})
+				if test.wantIndex {
+					require.NotEqual(t, int32(-1), idxNodeID)
+				} else {
+					require.Equal(t, int32(-1), idxNodeID)
+				}
+			})
+		}
+	})
+
+	t.Run("invalid and extreme statistics fail open", func(t *testing.T) {
+		for _, test := range []struct {
+			name   string
+			mutate func(*planpb.Node)
+		}{
+			{name: "NaN table count", mutate: func(node *planpb.Node) { node.Stats.TableCnt = math.NaN() }},
+			{name: "positive infinity output", mutate: func(node *planpb.Node) { node.Stats.Outcnt = math.Inf(1) }},
+			{name: "negative infinity cost", mutate: func(node *planpb.Node) { node.Stats.Cost = math.Inf(-1) }},
+			{name: "NaN leading selectivity", mutate: func(node *planpb.Node) { node.FilterList[0].Selectivity = math.NaN() }},
+			{name: "infinite leading selectivity", mutate: func(node *planpb.Node) { node.FilterList[0].Selectivity = math.Inf(1) }},
+			{name: "extreme finite overflow", mutate: func(node *planpb.Node) {
+				node.Stats.TableCnt, node.Stats.Outcnt, node.Stats.Cost = math.MaxFloat64, math.MaxFloat64, math.MaxFloat64
+			}},
+		} {
+			t.Run(test.name, func(t *testing.T) {
+				builder, scanID, idxDef, colRefCnt := newBroadCase(t, 800_000)
+				node := builder.qry.Nodes[scanID]
+				test.mutate(node)
+				leadingPos, _ := findLeadingFilter(idxDef, node)
+				require.False(t, builder.shouldSkipEncodedIndexOnlyScan(idxDef, node, colRefCnt, leadingPos, false))
+			})
+		}
+	})
+
+	t.Run("extreme SizeMap remains finite and rejects broad index", func(t *testing.T) {
+		builder, scanID, idxDef, colRefCnt := newBroadCase(t, 800_000)
+		ctx := builder.compCtx.(*encodedIndexCostTestContext)
+		stats := NewStatsInfo()
+		stats.TableCnt = 800_000
+		stats.SizeMap = map[string]uint64{
+			"tenant_id": math.MaxUint64, "event_id": math.MaxUint64,
+			"category": math.MaxUint64, "event_time": math.MaxUint64,
+			catalog.CPrimaryKeyColName: math.MaxUint64,
+		}
+		ctx.statsCache.Set(encodedIndexCostUnitTableID, stats)
+		require.Equal(t, int32(-1), builder.tryIndexOnlyScan(idxDef, builder.qry.Nodes[scanID], colRefCnt, map[[2]int32]*planpb.Expr{}, &Snapshot{}))
+	})
+
+	t.Run("equal work rejects automatic index", func(t *testing.T) {
+		parts := []string{"tenant_id", catalog.CreateAlias(catalog.CPrimaryKeyColName)}
+		const tableCnt = 50_000.0
+		// The base scan reads tenant_id and evaluates one predicate. The hidden
+		// scan reads the 23-byte encoded key, emits tenant_id, and evaluates its
+		// lookup predicate. Construct the exact equality boundary from those
+		// independently known physical stages.
+		const baseRowWork = 4.0 + regularIndexPredicateRowWork
+		const candidateRowWork = 23.0 + 4.0 + regularIndexPredicateRowWork
+		candidateRows := tableCnt * baseRowWork / candidateRowWork
+		filter := makeRangeFilterExpr(0, 0, "=", 7)
+		filter.Selectivity = candidateRows / tableCnt
+		builder, scanID, idxDef, colRefCnt := newEncodedIndexCostTestCase(
+			t, parts, []*planpb.Expr{filter},
+			&planpb.Stats{TableCnt: tableCnt, Outcnt: candidateRows, Selectivity: filter.Selectivity, Cost: tableCnt},
+			map[int32]int{0: 1}, false,
+		)
+		node := builder.qry.Nodes[scanID]
+		node.FilterList[0].GetF().Args[0].GetCol().RelPos = node.BindingTags[0]
+		leadingPos := []int32{0}
+		costCtx := builder.newEncodedRegularIndexCostContext(node, colRefCnt)
+		work, skip, valid := costCtx.score(idxDef, leadingPos, nil, encodedRegularIndexCostIndexOnly)
+		require.True(t, valid)
+		require.InDelta(t, costCtx.baseWork, work, 1e-9)
+		require.True(t, skip)
+	})
+
+	t.Run("nullable PK leading residual charges physical column", func(t *testing.T) {
+		filter := makeParamEqFilterExpr(0, 4, 0)
+		filter.Selectivity = 0.3
+		builder, scanID, idxDef, colRefCnt := newEncodedIndexCostTestCase(
+			t,
+			[]string{catalog.CreateAlias(catalog.CPrimaryKeyColName), "tenant_id"},
+			[]*planpb.Expr{filter},
+			&planpb.Stats{TableCnt: 800_000, Outcnt: 240_000, Selectivity: 0.3, Cost: 800_000},
+			map[int32]int{4: 1},
+			false,
+		)
+		node := builder.qry.Nodes[scanID]
+		node.FilterList[0].GetF().Args[0].GetCol().RelPos = node.BindingTags[0]
+		leadingPos := []int32{0}
+		require.False(t, builder.shouldSkipEncodedIndexOnlyScan(idxDef, node, colRefCnt, leadingPos, false))
+		require.True(t, builder.shouldSkipEncodedIndexOnlyScan(idxDef, node, colRefCnt, leadingPos, true))
+	})
+
+	t.Run("scan hints", func(t *testing.T) {
+		t.Run("USE remains costed", func(t *testing.T) {
+			builder, scanID, idxDef, colRefCnt := newBroadCase(t, 800_000)
+			builder.indexHintsByScan[scanID] = &indexHintSet{scan: indexHintScopeSet{
+				useSpecified: true, use: map[string]struct{}{idxDef.IndexName: {}},
+			}}
+			require.Equal(t, int32(-1), builder.tryIndexOnlyScan(idxDef, builder.qry.Nodes[scanID], colRefCnt, map[[2]int32]*planpb.Expr{}, &Snapshot{}))
+		})
+		t.Run("IGNORE removes candidate", func(t *testing.T) {
+			builder, scanID, idxDef, _ := newBroadCase(t, 800_000)
+			builder.indexHintsByScan[scanID] = &indexHintSet{scan: indexHintScopeSet{
+				ignore: map[string]struct{}{idxDef.IndexName: {}},
+			}}
+			require.Empty(t, builder.filterRegularIndexesByScanHints(builder.qry.Nodes[scanID], []*planpb.IndexDef{idxDef}))
+		})
+		t.Run("FORCE bypasses cost", func(t *testing.T) {
+			builder, scanID, idxDef, colRefCnt := newBroadCase(t, 800_000)
+			builder.indexHintsByScan[scanID] = &indexHintSet{scan: indexHintScopeSet{
+				forceSpecified: true, force: map[string]struct{}{idxDef.IndexName: {}},
+			}}
+			require.NotEqual(t, int32(-1), builder.tryIndexOnlyScan(idxDef, builder.qry.Nodes[scanID], colRefCnt, map[[2]int32]*planpb.Expr{}, &Snapshot{}))
+		})
+	})
+
+	t.Run("index shape controls", func(t *testing.T) {
+		t.Run("non-covering index is rejected before costing", func(t *testing.T) {
+			filter := makeRangeFilterExpr(0, 0, "=", 7)
+			filter.Selectivity = 0.001
+			builder, scanID, idxDef, colRefCnt := newEncodedIndexCostTestCase(
+				t, []string{"tenant_id", catalog.CreateAlias(catalog.CPrimaryKeyColName)}, []*planpb.Expr{filter},
+				&planpb.Stats{TableCnt: 800_000, Outcnt: 800, Selectivity: 0.001, Cost: 800_000},
+				map[int32]int{0: 1, 1: 1}, false,
+			)
+			node := builder.qry.Nodes[scanID]
+			node.FilterList[0].GetF().Args[0].GetCol().RelPos = node.BindingTags[0]
+			require.Equal(t, int32(-1), builder.tryIndexOnlyScan(idxDef, node, colRefCnt, map[[2]int32]*planpb.Expr{}, &Snapshot{}))
+		})
+		t.Run("single-column unique index remains direct", func(t *testing.T) {
+			filter := makeRangeFilterExpr(0, 0, "=", 7)
+			filter.Selectivity = 0.9
+			builder, scanID, idxDef, colRefCnt := newEncodedIndexCostTestCase(
+				t, []string{"tenant_id"}, []*planpb.Expr{filter},
+				&planpb.Stats{TableCnt: 800_000, Outcnt: 720_000, Selectivity: 0.9, Cost: 800_000},
+				map[int32]int{0: 1}, false,
+			)
+			idxDef.Unique = true
+			node := builder.qry.Nodes[scanID]
+			node.FilterList[0].GetF().Args[0].GetCol().RelPos = node.BindingTags[0]
+			require.NotEqual(t, int32(-1), builder.tryIndexOnlyScan(idxDef, node, colRefCnt, map[[2]int32]*planpb.Expr{}, &Snapshot{}))
+		})
+		t.Run("single-user-column non-unique index keeps selective win", func(t *testing.T) {
+			filter := makeRangeFilterExpr(0, 0, "=", 7)
+			filter.Selectivity = 0.001
+			builder, scanID, idxDef, colRefCnt := newEncodedIndexCostTestCase(
+				t, []string{"tenant_id", catalog.CreateAlias(catalog.CPrimaryKeyColName)}, []*planpb.Expr{filter},
+				&planpb.Stats{TableCnt: 800_000, Outcnt: 800, Selectivity: 0.001, Cost: 800_000},
+				map[int32]int{0: 1}, false,
+			)
+			node := builder.qry.Nodes[scanID]
+			node.FilterList[0].GetF().Args[0].GetCol().RelPos = node.BindingTags[0]
+			require.NotEqual(t, int32(-1), builder.tryIndexOnlyScan(idxDef, node, colRefCnt, map[[2]int32]*planpb.Expr{}, &Snapshot{}))
+		})
+	})
+}
+
+func TestEncodedRegularIndexCostShapeAndPaginationControls(t *testing.T) {
+	wideParts := []string{
+		"category", "tenant_id", "event_time", "event_id",
+		catalog.CreateAlias(catalog.CPrimaryKeyColName),
+	}
+	newCase := func(t testing.TB, selectivity, outcnt, cost float64, force bool) (*QueryBuilder, *planpb.Node, *planpb.IndexDef, map[[2]int32]int) {
+		filter := makeStringEqFilterExpr(0, 2, "READY")
+		filter.Selectivity = selectivity
+		builder, scanID, idxDef, colRefCnt := newEncodedIndexCostTestCase(
+			t, wideParts, []*planpb.Expr{filter},
+			&planpb.Stats{TableCnt: 1_000_000, Outcnt: outcnt, Selectivity: selectivity, Cost: cost},
+			map[int32]int{1: 1, 2: 1}, force,
+		)
+		node := builder.qry.Nodes[scanID]
+		node.FilterList[0].GetF().Args[0].GetCol().RelPos = node.BindingTags[0]
+		return builder, node, idxDef, colRefCnt
+	}
+
+	t.Run("backfill sibling uses common decision", func(t *testing.T) {
+		for _, test := range []struct {
+			name        string
+			selectivity float64
+			outcnt      float64
+			force       bool
+			wantSkip    bool
+		}{
+			{name: "broad rejects", selectivity: 0.20, outcnt: 120_000, wantSkip: true},
+			{name: "selective wins", selectivity: 0.001, outcnt: 1_000},
+			{name: "force preserves broad", selectivity: 0.20, outcnt: 120_000, force: true},
+		} {
+			t.Run(test.name, func(t *testing.T) {
+				builder, node, idxDef, colRefCnt := newCase(t, test.selectivity, test.outcnt, 1_000_000, test.force)
+				require.Equal(t, test.wantSkip, builder.shouldSkipEncodedRegularIndex(
+					idxDef, node, colRefCnt, []int32{0}, false, encodedRegularIndexCostBackfill,
+				))
+			})
+		}
+	})
+
+	t.Run("exact leading pagination caps hidden candidates", func(t *testing.T) {
+		for _, test := range []struct {
+			name   string
+			limit  *planpb.Expr
+			offset *planpb.Expr
+			skip   bool
+		}{
+			{name: "without limit rejects", skip: true},
+			{name: "limit", limit: makePlan2Uint64ConstExprWithType(1_000)},
+			{name: "limit and offset", limit: makePlan2Uint64ConstExprWithType(1_000), offset: makePlan2Uint64ConstExprWithType(500)},
+		} {
+			t.Run(test.name, func(t *testing.T) {
+				builder, node, idxDef, colRefCnt := newCase(t, 0.05, 1_000, 24_576, false)
+				node.Limit, node.Offset = test.limit, test.offset
+				require.Equal(t, test.skip, builder.shouldSkipEncodedIndexOnlyScan(idxDef, node, colRefCnt, []int32{0}, false))
+			})
+		}
+	})
+
+	t.Run("unsafe pagination estimates use full candidate rows", func(t *testing.T) {
+		builder, node, idxDef, colRefCnt := newCase(t, 0.05, 1_000, 24_576, false)
+		node.Limit = &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_uint64)}, Expr: &planpb.Expr_P{P: &planpb.ParamRef{Pos: 0}}}
+		require.True(t, builder.shouldSkipEncodedIndexOnlyScan(idxDef, node, colRefCnt, []int32{0}, false))
+
+		residual := makeRangeFilterExpr(node.BindingTags[0], 0, ">=", 1)
+		residual.Selectivity = 0.5
+		node.FilterList = append(node.FilterList, residual)
+		node.Limit = makePlan2Uint64ConstExprWithType(1_000)
+		require.True(t, builder.shouldSkipEncodedIndexOnlyScan(idxDef, node, colRefCnt, []int32{0}, false))
+	})
+}
+
+func BenchmarkEncodedIndexCostWideTableMultiIndex(b *testing.B) {
+	filter := makeStringEqFilterExpr(0, 2, "HOT")
+	filter.Selectivity = 0.2
+	builder, scanID, _, colRefCnt := newEncodedIndexCostTestCase(
+		b,
+		[]string{"category", catalog.CreateAlias(catalog.CPrimaryKeyColName)},
+		[]*planpb.Expr{filter},
+		&planpb.Stats{TableCnt: 1_000_000, Outcnt: 200_000, Selectivity: 0.2, Cost: 1_000_000},
+		map[int32]int{1: 2, 2: 1},
+		false,
+	)
+	node := builder.qry.Nodes[scanID]
+	relPos := node.BindingTags[0]
+	node.FilterList[0].GetF().Args[0].GetCol().RelPos = relPos
+
+	ctx := builder.compCtx.(*encodedIndexCostTestContext)
+	statsWrapper := ctx.statsCache.Get(encodedIndexCostUnitTableID)
+	stats := statsWrapper.GetStats()
+	for colPos := len(node.TableDef.Cols); colPos < 128; colPos++ {
+		name := fmt.Sprintf("cost_col_%03d", colPos)
+		node.TableDef.Name2ColIndex[name] = int32(colPos)
+		node.TableDef.Cols = append(node.TableDef.Cols, &planpb.ColDef{
+			Name: name,
+			Typ:  planpb.Type{Id: int32(types.T_int64)},
+		})
+		stats.SizeMap[name] = 8_000_000
+	}
+
+	parts := []string{"category"}
+	for colPos := int32(5); colPos < 13; colPos++ {
+		name := node.TableDef.Cols[colPos].Name
+		parts = append(parts, name)
+		colRefCnt[[2]int32{relPos, colPos}] = 1
+		residual := makeRangeFilterExpr(relPos, colPos, ">=", 1)
+		residual.Selectivity = 0.5
+		node.FilterList = append(node.FilterList, residual)
+	}
+	parts = append(parts, catalog.CreateAlias(catalog.CPrimaryKeyColName))
+	indexes := make([]*planpb.IndexDef, 16)
+	for i := range indexes {
+		indexes[i] = &planpb.IndexDef{
+			IndexName: fmt.Sprintf("idx_cost_%02d", i),
+			Parts:     slices.Clone(parts),
+		}
+	}
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	rejected := false
+	for i := 0; i < b.N; i++ {
+		costCtx := builder.newEncodedRegularIndexCostContext(node, colRefCnt)
+		for _, idxDef := range indexes {
+			if _, skip, _ := costCtx.score(idxDef, []int32{0}, nil, encodedRegularIndexCostIndexOnly); skip {
+				rejected = true
+			}
+			if _, skip, _ := costCtx.score(idxDef, []int32{0}, nil, encodedRegularIndexCostBackfill); skip {
+				rejected = true
+			}
+		}
+	}
+	if !rejected {
+		b.Fatal("benchmark did not exercise the rejection path")
+	}
+}
+
+func newEncodedExistsPlanTestContext(stateNDV float64) *encodedIndexPlanTestContext {
+	const (
+		activityTableID uint64 = 20_001
+		tagsTableID     uint64 = 20_002
+		indexTableID    uint64 = 20_003
+	)
+	baseCtx := NewMockCompilerContext(true)
+	intType := planpb.Type{Id: int32(types.T_int32), NotNullable: true}
+	bigintType := planpb.Type{Id: int32(types.T_int64), NotNullable: true}
+	stateType := planpb.Type{Id: int32(types.T_varchar), Width: 12, NotNullable: true}
+	datetimeType := planpb.Type{Id: int32(types.T_datetime), NotNullable: true}
+	smallintType := planpb.Type{Id: int32(types.T_int16), NotNullable: true}
+	decimalType := planpb.Type{Id: int32(types.T_decimal64), Width: 12, Scale: 3, NotNullable: true}
+	amountType := planpb.Type{Id: int32(types.T_int64), NotNullable: true}
+	compoundType := planpb.Type{Id: int32(types.T_varchar), Width: types.MaxVarcharLen, NotNullable: true}
+	rowIDType := planpb.Type{Id: int32(types.T_Rowid), Width: 16, NotNullable: true}
+
+	activity := &planpb.TableDef{
+		TableType: catalog.SystemOrdinaryRel,
+		TblId:     activityTableID,
+		Name:      "cost_activity",
+		Cols: []*planpb.ColDef{
+			{ColId: 0, Name: "tenant_id", Typ: intType, Primary: true, Pkidx: 1, Default: &planpb.Default{}},
+			{ColId: 1, Name: "activity_id", Typ: bigintType, Primary: true, Pkidx: 2, Default: &planpb.Default{}},
+			{ColId: 2, Name: "state", Typ: stateType, Default: &planpb.Default{}},
+			{ColId: 3, Name: "created_at", Typ: datetimeType, Default: &planpb.Default{}},
+			{ColId: 4, Name: "amount", Typ: amountType, Default: &planpb.Default{}},
+			{ColId: 5, Name: catalog.CPrimaryKeyColName, Typ: compoundType, Hidden: true, Default: &planpb.Default{}},
+			{ColId: 6, Name: catalog.Row_ID, Typ: rowIDType, Hidden: true, Default: &planpb.Default{}},
+		},
+		Name2ColIndex: map[string]int32{
+			"tenant_id": 0, "activity_id": 1, "state": 2, "created_at": 3, "amount": 4,
+			catalog.CPrimaryKeyColName: 5, catalog.Row_ID: 6,
+		},
+		Pkey: &planpb.PrimaryKeyDef{
+			PkeyColName: catalog.CPrimaryKeyColName,
+			Cols:        []uint64{0, 1},
+			Names:       []string{"tenant_id", "activity_id"},
+			CompPkeyCol: &planpb.ColDef{Name: catalog.CPrimaryKeyColName, Typ: compoundType, Hidden: true},
+		},
+		Indexes: []*planpb.IndexDef{{
+			IndexName:      "idx_state_tenant_time_id",
+			IndexAlgo:      catalog.MoIndexDefaultAlgo.ToString(),
+			IndexTableName: "__mo_idx_state_tenant_time_id",
+			Parts: []string{
+				"state", "tenant_id", "created_at", "activity_id",
+				catalog.CreateAlias(catalog.CPrimaryKeyColName),
+			},
+			TableExist: true,
+		}},
+	}
+	tags := &planpb.TableDef{
+		TableType: catalog.SystemOrdinaryRel,
+		TblId:     tagsTableID,
+		Name:      "cost_tags",
+		Cols: []*planpb.ColDef{
+			{ColId: 0, Name: "tenant_id", Typ: intType, Primary: true, Pkidx: 1, Default: &planpb.Default{}},
+			{ColId: 1, Name: "activity_id", Typ: bigintType, Primary: true, Pkidx: 2, Default: &planpb.Default{}},
+			{ColId: 2, Name: "tag_id", Typ: smallintType, Primary: true, Pkidx: 3, Default: &planpb.Default{}},
+			{ColId: 3, Name: "weight", Typ: decimalType, Default: &planpb.Default{}},
+			{ColId: 4, Name: catalog.CPrimaryKeyColName, Typ: compoundType, Hidden: true, Default: &planpb.Default{}},
+			{ColId: 5, Name: catalog.Row_ID, Typ: rowIDType, Hidden: true, Default: &planpb.Default{}},
+		},
+		Name2ColIndex: map[string]int32{
+			"tenant_id": 0, "activity_id": 1, "tag_id": 2, "weight": 3,
+			catalog.CPrimaryKeyColName: 4, catalog.Row_ID: 5,
+		},
+		Pkey: &planpb.PrimaryKeyDef{
+			PkeyColName: catalog.CPrimaryKeyColName,
+			Cols:        []uint64{0, 1, 2},
+			Names:       []string{"tenant_id", "activity_id", "tag_id"},
+			CompPkeyCol: &planpb.ColDef{Name: catalog.CPrimaryKeyColName, Typ: compoundType, Hidden: true},
+		},
+	}
+	indexTable := makeTestIndexTableDef()
+	indexTable.TableType = catalog.SystemIndexRel
+	indexTable.TblId = indexTableID
+	indexTable.Name = activity.Indexes[0].IndexTableName
+	indexTable.Pkey = &planpb.PrimaryKeyDef{
+		PkeyColName: catalog.IndexTableIndexColName,
+		Cols:        []uint64{0},
+		Names:       []string{catalog.IndexTableIndexColName},
+	}
+
+	for _, tableDef := range []*planpb.TableDef{activity, tags, indexTable} {
+		baseCtx.objects[tableDef.Name] = &planpb.ObjectRef{SchemaName: "tpch", ObjName: tableDef.Name, Obj: int64(tableDef.TblId)}
+		baseCtx.tables[tableDef.Name] = tableDef
+		baseCtx.id2name[tableDef.TblId] = tableDef.Name
+	}
+	baseCtx.pks[activity.Name] = []int{0, 1}
+	baseCtx.pks[tags.Name] = []int{0, 1, 2}
+	baseCtx.pks[indexTable.Name] = []int{0}
+
+	activityStats := NewStatsInfo()
+	activityStats.TableCnt = 600_000
+	activityStats.BlockNumber = 120
+	activityStats.AccurateObjectNumber = 1
+	activityStats.NdvMap = map[string]float64{
+		"tenant_id": 64, "activity_id": 600_000, "state": stateNDV,
+		"created_at": 600_000, "amount": 100_000, catalog.CPrimaryKeyColName: 600_000,
+	}
+	activityStats.MinValMap = map[string]float64{"tenant_id": 1, "activity_id": 1}
+	activityStats.MaxValMap = map[string]float64{"tenant_id": 64, "activity_id": 600_000}
+	activityStats.SizeMap = map[string]uint64{
+		"tenant_id": 600_000 * 4, "activity_id": 600_000 * 8,
+		"state": 600_000 * 5, "created_at": 600_000 * 8, "amount": 600_000 * 8,
+		catalog.CPrimaryKeyColName: 600_000 * 14,
+	}
+	tagsStats := NewStatsInfo()
+	tagsStats.TableCnt = 1_200_000
+	tagsStats.BlockNumber = 240
+	tagsStats.AccurateObjectNumber = 1
+	tagsStats.NdvMap = map[string]float64{
+		"tenant_id": 64, "activity_id": 600_000, "tag_id": 2, "weight": 10_000,
+		catalog.CPrimaryKeyColName: 1_200_000,
+	}
+	tagsStats.MinValMap = map[string]float64{"tenant_id": 1, "activity_id": 1, "tag_id": 1, "weight": 0}
+	tagsStats.MaxValMap = map[string]float64{"tenant_id": 64, "activity_id": 600_000, "tag_id": 2, "weight": 100}
+	tagsStats.SizeMap = map[string]uint64{
+		"tenant_id": 1_200_000 * 4, "activity_id": 1_200_000 * 8,
+		"tag_id": 1_200_000 * 2, "weight": 1_200_000 * 8,
+		catalog.CPrimaryKeyColName: 1_200_000 * 17,
+	}
+	indexStats := NewStatsInfo()
+	indexStats.TableCnt = 600_000
+	indexStats.BlockNumber = 120
+	indexStats.AccurateObjectNumber = 1
+	indexStats.NdvMap = map[string]float64{catalog.IndexTableIndexColName: 600_000, catalog.IndexTablePrimaryColName: 600_000}
+	indexStats.SizeMap = map[string]uint64{catalog.IndexTableIndexColName: 600_000 * 52, catalog.IndexTablePrimaryColName: 600_000 * 14}
+
+	statsCache := NewStatsCache()
+	statsByID := map[uint64]*statspb.StatsInfo{
+		activityTableID: activityStats,
+		tagsTableID:     tagsStats,
+		indexTableID:    indexStats,
+	}
+	for tableID, stats := range statsByID {
+		statsCache.Set(tableID, stats)
+	}
+	return &encodedIndexPlanTestContext{MockCompilerContext: baseCtx, statsCache: statsCache, statsByID: statsByID}
+}
+
+func addCostActivityRegularIndex(t testing.TB, ctx *encodedIndexPlanTestContext, name string, parts []string, first bool) {
+	t.Helper()
+	activity := ctx.tables["cost_activity"]
+	require.NotNil(t, activity)
+	idxDef := &planpb.IndexDef{
+		IndexName: name, IndexAlgo: catalog.MoIndexDefaultAlgo.ToString(),
+		IndexTableName: "__mo_" + name, Parts: slices.Clone(parts), TableExist: true,
+	}
+	if first {
+		activity.Indexes = append([]*planpb.IndexDef{idxDef}, activity.Indexes...)
+	} else {
+		activity.Indexes = append(activity.Indexes, idxDef)
+	}
+
+	indexTable := makeTestIndexTableDef()
+	indexTable.TableType = catalog.SystemIndexRel
+	indexTable.TblId = uint64(21_000 + len(ctx.statsByID))
+	indexTable.Name = idxDef.IndexTableName
+	indexTable.Pkey = &planpb.PrimaryKeyDef{
+		PkeyColName: catalog.IndexTableIndexColName,
+		Cols:        []uint64{0},
+		Names:       []string{catalog.IndexTableIndexColName},
+	}
+	ctx.objects[indexTable.Name] = &planpb.ObjectRef{SchemaName: "tpch", ObjName: indexTable.Name, Obj: int64(indexTable.TblId)}
+	ctx.tables[indexTable.Name] = indexTable
+	ctx.id2name[indexTable.TblId] = indexTable.Name
+	ctx.pks[indexTable.Name] = []int{0}
+	stats := NewStatsInfo()
+	stats.TableCnt = 600_000
+	stats.BlockNumber = 120
+	stats.AccurateObjectNumber = 1
+	stats.NdvMap = map[string]float64{catalog.IndexTableIndexColName: 600_000, catalog.IndexTablePrimaryColName: 600_000}
+	stats.SizeMap = map[string]uint64{catalog.IndexTableIndexColName: 600_000 * 24, catalog.IndexTablePrimaryColName: 600_000 * 14}
+	ctx.statsByID[indexTable.TblId] = stats
+	ctx.statsCache.Set(indexTable.TblId, stats)
+}
+
+func TestEncodedIndexCostChoosesProfitableSiblingIndependentOfDDLOrder(t *testing.T) {
+	narrowParts := []string{"state", catalog.CreateAlias(catalog.CPrimaryKeyColName)}
+	for _, query := range []struct {
+		name string
+		sql  string
+	}{
+		{name: "point backfill", sql: "select amount from cost_activity where state = 'READY'"},
+		{name: "range backfill", sql: "select amount from cost_activity where state between 'HOLD' and 'READY'"},
+	} {
+		for _, narrowFirst := range []bool{true, false} {
+			order := "wide first"
+			if narrowFirst {
+				order = "narrow first"
+			}
+			t.Run(query.name+"/"+order, func(t *testing.T) {
+				ctx := newEncodedExistsPlanTestContext(6)
+				addCostActivityRegularIndex(t, ctx, "idx_state_narrow", narrowParts, narrowFirst)
+				optimizer := &encodedIndexPlanTestOptimizer{ctx: ctx}
+				queryPlan, err := runOneStmt(optimizer, t, query.sql)
+				require.NoError(t, err)
+				require.Equal(t, "idx_state_narrow", findFirstIndexScanName(queryPlan))
+				require.True(t, planHasIndexJoin(queryPlan))
+			})
+		}
+	}
+}
+
+func TestEncodedIndexCostChoosesNarrowCoveringSiblingIndependentOfDDLOrder(t *testing.T) {
+	wideParts := []string{
+		"state", "tenant_id", "created_at", "activity_id",
+		catalog.CreateAlias(catalog.CPrimaryKeyColName),
+	}
+	narrowParts := []string{"state", catalog.CreateAlias(catalog.CPrimaryKeyColName)}
+	for _, narrowFirst := range []bool{true, false} {
+		order := "wide first"
+		if narrowFirst {
+			order = "narrow first"
+		}
+		t.Run(order, func(t *testing.T) {
+			ctx := newEncodedExistsPlanTestContext(100)
+			ctx.tables["cost_activity"].Indexes = nil
+			addCostActivityRegularIndex(t, ctx, "idx_state_narrow_covering", narrowParts, narrowFirst)
+			addCostActivityRegularIndex(t, ctx, "idx_state_wide_covering", wideParts, !narrowFirst)
+
+			queryPlan, err := runOneStmt(&encodedIndexPlanTestOptimizer{ctx: ctx}, t,
+				"select state from cost_activity where state = 'READY'")
+			require.NoError(t, err)
+			require.Equal(t, "idx_state_narrow_covering", findFirstIndexScanName(queryPlan))
+			require.False(t, planHasIndexJoin(queryPlan))
+		})
+	}
+}
+
+func TestEncodedIndexCostChoosesAcrossCoveringAndBackfill(t *testing.T) {
+	ctx := newEncodedExistsPlanTestContext(50)
+	ctx.tables["cost_activity"].Indexes = nil
+	addCostActivityRegularIndex(t, ctx, "idx_state_wide_covering", []string{
+		"state", "tenant_id", "created_at", "activity_id", "amount",
+		catalog.CreateAlias(catalog.CPrimaryKeyColName),
+	}, false)
+	addCostActivityRegularIndex(t, ctx, "idx_state_narrow_backfill", []string{
+		"state", catalog.CreateAlias(catalog.CPrimaryKeyColName),
+	}, false)
+
+	queryPlan, err := runOneStmt(&encodedIndexPlanTestOptimizer{ctx: ctx}, t,
+		"select amount from cost_activity where state = 'READY'")
+	require.NoError(t, err)
+	require.Equal(t, "idx_state_narrow_backfill", findFirstIndexScanName(queryPlan))
+	require.True(t, planHasIndexJoin(queryPlan))
+}
+
+func TestEncodedIndexCostChoosesAcrossPointAndRange(t *testing.T) {
+	ctx := newEncodedExistsPlanTestContext(6)
+	activity := ctx.tables["cost_activity"]
+	activity.Indexes = nil
+	stats := ctx.statsByID[activity.TblId]
+	stats.NdvMap["amount"] = stats.TableCnt
+	stats.MinValMap["amount"] = 0
+	stats.MaxValMap["amount"] = stats.TableCnt
+	addCostActivityRegularIndex(t, ctx, "idx_state_point", []string{
+		"state", "tenant_id", catalog.CreateAlias(catalog.CPrimaryKeyColName),
+	}, false)
+	addCostActivityRegularIndex(t, ctx, "idx_amount_range", []string{
+		"amount", catalog.CreateAlias(catalog.CPrimaryKeyColName),
+	}, false)
+
+	queryPlan, err := runOneStmt(&encodedIndexPlanTestOptimizer{ctx: ctx}, t, `
+		select state, amount
+		from cost_activity
+		where state = 'READY' and amount between 1 and 1000`)
+	require.NoError(t, err)
+	require.Equal(t, "idx_amount_range", findFirstIndexScanName(queryPlan))
+	require.True(t, planHasIndexJoin(queryPlan))
+}
+
+func TestEncodedIndexCostPreparedRangeDoesNotOutrankEqualityByHeuristic(t *testing.T) {
+	const tableCnt = 300_000
+	for _, equalityFirst := range []bool{true, false} {
+		order := "range index first"
+		if equalityFirst {
+			order = "equality index first"
+		}
+		t.Run(order, func(t *testing.T) {
+			ctx := newEncodedExistsPlanTestContext(10)
+			activity := ctx.tables["cost_activity"]
+			activity.Indexes = nil
+			stats := ctx.statsByID[activity.TblId]
+			stats.TableCnt = tableCnt
+			stats.BlockNumber = 60
+			stats.NdvMap["state"] = 5_000
+			stats.NdvMap["amount"] = tableCnt
+			stats.MinValMap["amount"] = 0
+			stats.MaxValMap["amount"] = tableCnt
+			stats.SizeMap = map[string]uint64{
+				"tenant_id": tableCnt * 4, "activity_id": tableCnt * 8,
+				"state": tableCnt * 5, "created_at": tableCnt * 8, "amount": tableCnt * 8,
+				catalog.CPrimaryKeyColName: tableCnt * 14,
+			}
+
+			equalityParts := []string{
+				"state", "amount", catalog.CreateAlias(catalog.CPrimaryKeyColName),
+			}
+			rangeParts := []string{
+				"amount", "state", catalog.CreateAlias(catalog.CPrimaryKeyColName),
+			}
+			if equalityFirst {
+				addCostActivityRegularIndex(t, ctx, "idx_state_amount_pk", equalityParts, false)
+				addCostActivityRegularIndex(t, ctx, "idx_amount_state_pk", rangeParts, false)
+			} else {
+				addCostActivityRegularIndex(t, ctx, "idx_amount_state_pk", rangeParts, false)
+				addCostActivityRegularIndex(t, ctx, "idx_state_amount_pk", equalityParts, false)
+			}
+
+			optimizer := &encodedIndexPlanTestOptimizer{ctx: ctx}
+			literalPlan, err := runOneStmt(optimizer, t, `
+				select state from cost_activity
+				where state = 'READY' and amount between 1000 and 5000`)
+			require.NoError(t, err)
+			require.Equal(t, "idx_state_amount_pk", findFirstIndexScanName(literalPlan))
+
+			preparePlan, err := runOneStmt(optimizer, t,
+				"prepare cost_parameter_range from 'select state from cost_activity where state = ? and amount between ? and ?'")
+			require.NoError(t, err)
+			preparedPlan := resolveQueryPlan(preparePlan)
+			preparedIndex := findFirstIndexScanNode(preparedPlan)
+			require.NotNil(t, preparedIndex)
+			require.Equal(t, "idx_state_amount_pk", preparedIndex.IndexScanInfo.IndexName)
+			hasParamRef := false
+			for _, filter := range preparedIndex.FilterList {
+				hasParamRef = hasParamRef || containsDynamicParam(filter)
+			}
+			require.True(t, hasParamRef, "the prepared public plan must retain ParamRefs")
+		})
+	}
+}
+
+func TestEncodedIndexCostKeepsCatalogOrderOnEqualScore(t *testing.T) {
+	for _, first := range []string{"idx_state_a", "idx_state_b"} {
+		t.Run(first, func(t *testing.T) {
+			ctx := newEncodedExistsPlanTestContext(100)
+			ctx.tables["cost_activity"].Indexes = nil
+			second := "idx_state_b"
+			if first == second {
+				second = "idx_state_a"
+			}
+			parts := []string{"state", catalog.CreateAlias(catalog.CPrimaryKeyColName)}
+			addCostActivityRegularIndex(t, ctx, first, parts, false)
+			addCostActivityRegularIndex(t, ctx, second, parts, false)
+
+			queryPlan, err := runOneStmt(&encodedIndexPlanTestOptimizer{ctx: ctx}, t,
+				"select state from cost_activity where state = 'READY'")
+			require.NoError(t, err)
+			require.Equal(t, first, findFirstIndexScanName(queryPlan))
+		})
+	}
+}
+
+func TestEncodedIndexCostPrefersValidCandidateOverUnscorable(t *testing.T) {
+	invalidParts := []string{
+		"state", "missing_catalog_column", catalog.CreateAlias(catalog.CPrimaryKeyColName),
+	}
+	validParts := []string{"amount", catalog.CreateAlias(catalog.CPrimaryKeyColName)}
+	for _, invalidFirst := range []bool{true, false} {
+		order := "valid first"
+		if invalidFirst {
+			order = "invalid first"
+		}
+		t.Run(order, func(t *testing.T) {
+			ctx := newEncodedExistsPlanTestContext(600_000)
+			ctx.tables["cost_activity"].Indexes = nil
+			stats := ctx.statsByID[ctx.tables["cost_activity"].TblId]
+			stats.NdvMap["amount"] = 600_000
+			if invalidFirst {
+				addCostActivityRegularIndex(t, ctx, "idx_state_unscorable", invalidParts, false)
+				addCostActivityRegularIndex(t, ctx, "idx_amount_valid", validParts, false)
+			} else {
+				addCostActivityRegularIndex(t, ctx, "idx_amount_valid", validParts, false)
+				addCostActivityRegularIndex(t, ctx, "idx_state_unscorable", invalidParts, false)
+			}
+
+			queryPlan, err := runOneStmt(&encodedIndexPlanTestOptimizer{ctx: ctx}, t, `
+				select created_at
+				from cost_activity
+				where state = 'READY' and amount = 1`)
+			require.NoError(t, err)
+			require.Equal(t, "idx_amount_valid", findFirstIndexScanName(queryPlan))
+			require.True(t, planHasIndexJoin(queryPlan))
+		})
+	}
+}
+
+func TestEncodedIndexCostDoesNotFallbackToUnscorableWhenValidCandidateRejects(t *testing.T) {
+	invalidParts := []string{
+		"state", "missing_catalog_column", catalog.CreateAlias(catalog.CPrimaryKeyColName),
+	}
+	validParts := []string{"amount", catalog.CreateAlias(catalog.CPrimaryKeyColName)}
+	for _, invalidFirst := range []bool{true, false} {
+		order := "valid first"
+		if invalidFirst {
+			order = "invalid first"
+		}
+		t.Run(order, func(t *testing.T) {
+			ctx := newEncodedExistsPlanTestContext(1_000)
+			ctx.tables["cost_activity"].Indexes = nil
+			stats := ctx.statsByID[ctx.tables["cost_activity"].TblId]
+			stats.NdvMap["amount"] = 10
+			if invalidFirst {
+				addCostActivityRegularIndex(t, ctx, "idx_state_unscorable", invalidParts, false)
+				addCostActivityRegularIndex(t, ctx, "idx_amount_valid_broad", validParts, false)
+			} else {
+				addCostActivityRegularIndex(t, ctx, "idx_amount_valid_broad", validParts, false)
+				addCostActivityRegularIndex(t, ctx, "idx_state_unscorable", invalidParts, false)
+			}
+
+			queryPlan, err := runOneStmt(&encodedIndexPlanTestOptimizer{ctx: ctx}, t, `
+				select activity_id
+				from cost_activity
+				where state = 'READY'
+				  and amount = 1
+				  and created_at = '2026-08-09 00:00:00'`)
+			require.NoError(t, err)
+			require.Empty(t, findFirstIndexScanName(queryPlan),
+				"an unscorable fallback is allowed only when every matching candidate is unscorable")
+			require.False(t, planHasIndexJoin(queryPlan))
+		})
+	}
+}
+
+func TestEncodedIndexCostKeepsCatalogFallbackWhenAllCandidatesUnscorable(t *testing.T) {
+	ctx := newEncodedExistsPlanTestContext(600_000)
+	ctx.tables["cost_activity"].Indexes = nil
+	stats := ctx.statsByID[ctx.tables["cost_activity"].TblId]
+	stats.NdvMap["amount"] = 600_000
+	addCostActivityRegularIndex(t, ctx, "idx_state_unscorable", []string{
+		"state", "missing_state_suffix", catalog.CreateAlias(catalog.CPrimaryKeyColName),
+	}, false)
+	addCostActivityRegularIndex(t, ctx, "idx_amount_unscorable", []string{
+		"amount", "missing_amount_suffix", catalog.CreateAlias(catalog.CPrimaryKeyColName),
+	}, false)
+
+	queryPlan, err := runOneStmt(&encodedIndexPlanTestOptimizer{ctx: ctx}, t, `
+		select created_at
+		from cost_activity
+		where state = 'READY' and amount = 1`)
+	require.NoError(t, err)
+	require.Equal(t, "idx_state_unscorable", findFirstIndexScanName(queryPlan))
+	require.True(t, planHasIndexJoin(queryPlan))
+}
+
+func TestEncodedIndexCostChargesBaseRecheckedPushablePredicates(t *testing.T) {
+	ctx := newEncodedExistsPlanTestContext(3.5)
+	activity := ctx.tables["cost_activity"]
+	activity.Indexes = nil
+	stats := ctx.statsByID[activity.TblId]
+	stats.NdvMap["amount"] = 10
+	stats.MinValMap["amount"] = 0
+	stats.MaxValMap["amount"] = 10
+	addCostActivityRegularIndex(t, ctx, "idx_state_amount", []string{
+		"state", "amount", catalog.CreateAlias(catalog.CPrimaryKeyColName),
+	}, false)
+
+	queryPlan, err := runOneStmt(&encodedIndexPlanTestOptimizer{ctx: ctx}, t, `
+		select activity_id
+		from cost_activity
+		where state = 'READY' and amount >= 1`)
+	require.NoError(t, err)
+	require.Empty(t, findFirstIndexScanName(queryPlan),
+		"a hidden residual copy does not remove the predicate from the base child")
+	require.False(t, planHasIndexJoin(queryPlan))
+}
+
+func TestEncodedIndexDuplicatePartsUseCanonicalFilterMapping(t *testing.T) {
+	ctx := newEncodedExistsPlanTestContext(1_000)
+	ctx.tables["cost_activity"].Indexes = nil
+	addCostActivityRegularIndex(t, ctx, "idx_state_repeated", []string{
+		"state", "state", "activity_id", catalog.CreateAlias(catalog.CPrimaryKeyColName),
+	}, false)
+
+	preparePlan, err := runOneStmt(&encodedIndexPlanTestOptimizer{ctx: ctx}, t,
+		"prepare cost_repeat from 'select 1 from cost_activity where state = ?'")
+	require.NoError(t, err)
+	queryPlan := resolveQueryPlan(preparePlan)
+	idxNode := findFirstIndexScanNode(queryPlan)
+	require.NotNil(t, idxNode)
+	require.Equal(t, "idx_state_repeated", idxNode.IndexScanInfo.IndexName)
+	require.Len(t, idxNode.FilterList, 2, "lookup plus one canonical nullable residual")
+	assert.InDelta(t, 0.001, idxNode.FilterList[0].Selectivity, 1e-12)
+	assert.InDelta(t, 1.0, idxNode.FilterList[1].Selectivity, 1e-12,
+		"a semantic recheck must not reduce candidate cardinality a second time")
+	assert.InDelta(t, 600.0, idxNode.Stats.Outcnt, 1e-9)
+	assert.Equal(t, 1, countExprFunctionCalls(idxNode.FilterList, "serial_extract"))
+	assert.Equal(t, 2, firstIndexLookupSerialArgCount(queryPlan),
+		"duplicate physical parts still require duplicate encoded lookup arguments")
+}
+
+func countExprFunctionCalls(exprs []*planpb.Expr, name string) int {
+	count := 0
+	var visit func(*planpb.Expr)
+	visit = func(expr *planpb.Expr) {
+		if expr == nil {
+			return
+		}
+		switch impl := expr.Expr.(type) {
+		case *planpb.Expr_F:
+			if impl.F.Func != nil && impl.F.Func.ObjName == name {
+				count++
+			}
+			for _, arg := range impl.F.Args {
+				visit(arg)
+			}
+		case *planpb.Expr_List:
+			for _, arg := range impl.List.List {
+				visit(arg)
+			}
+		case *planpb.Expr_W:
+			visit(impl.W.WindowFunc)
+			for _, arg := range impl.W.PartitionBy {
+				visit(arg)
+			}
+			for _, orderBy := range impl.W.OrderBy {
+				visit(orderBy.Expr)
+			}
+		}
+	}
+	for _, expr := range exprs {
+		visit(expr)
+	}
+	return count
+}
+
+func newEncodedPaginationPlanTestContext(t testing.TB, stateNDV float64) *encodedIndexPlanTestContext {
+	t.Helper()
+	ctx := newEncodedExistsPlanTestContext(stateNDV)
+	activity := ctx.tables["cost_activity"]
+	activity.Indexes = nil
+	stats := ctx.statsByID[activity.TblId]
+	stats.NdvMap["amount"] = 100
+	stats.MinValMap["amount"] = 0
+	stats.MaxValMap["amount"] = 100
+	addCostActivityRegularIndex(t, ctx, "idx_state_amount_activity", []string{
+		"state", "amount", "activity_id", catalog.CreateAlias(catalog.CPrimaryKeyColName),
+	}, false)
+	return ctx
+}
+
+func TestEncodedIndexCostDoesNotCapResidualLimit(t *testing.T) {
+	ctx := newEncodedPaginationPlanTestContext(t, 3)
+	queryPlan, err := runOneStmt(&encodedIndexPlanTestOptimizer{ctx: ctx}, t, `
+		select amount, activity_id
+		from cost_activity
+		where state = 'READY' and amount between 1 and 90
+		order by amount, activity_id
+		limit 1000`)
+	require.NoError(t, err)
+	assert.Empty(t, findFirstIndexScanName(queryPlan))
+	assert.False(t, planHasIndexJoin(queryPlan))
+}
+
+func TestEncodedIndexCostDoesNotCapPreparedLimit(t *testing.T) {
+	ctx := newEncodedPaginationPlanTestContext(t, 2)
+	preparePlan, err := runOneStmt(&encodedIndexPlanTestOptimizer{ctx: ctx}, t,
+		"prepare cost_limit from 'select state from cost_activity where state = ''READY'' limit ?'")
+	require.NoError(t, err)
+	queryPlan := resolveQueryPlan(preparePlan)
+	require.Empty(t, findFirstIndexScanName(queryPlan))
+	assert.False(t, planHasIndexJoin(queryPlan))
+}
+
+func TestEncodedIndexCostDoesNotCapOverflowingOffset(t *testing.T) {
+	ctx := newEncodedPaginationPlanTestContext(t, 2)
+	queryPlan, err := runOneStmt(&encodedIndexPlanTestOptimizer{ctx: ctx}, t, `
+		select state
+		from cost_activity
+		where state = 'READY'
+		limit 18446744073709551615 offset 1`)
+	require.NoError(t, err)
+	require.Empty(t, findFirstIndexScanName(queryPlan))
+	assert.False(t, planHasIndexJoin(queryPlan))
+}
+
+func TestEncodedIndexCostForceBypassesUnsafePaginationGuard(t *testing.T) {
+	ctx := newEncodedPaginationPlanTestContext(t, 2)
+	queryPlan, err := runOneStmt(&encodedIndexPlanTestOptimizer{ctx: ctx}, t, `
+		select amount, activity_id
+		from cost_activity force index (idx_state_amount_activity)
+		where state = 'READY' and amount between 1 and 90
+		limit 1000`)
+	require.NoError(t, err)
+	require.Equal(t, "idx_state_amount_activity", findFirstIndexScanName(queryPlan))
+}
+
+func TestForceIndexPreservesCoveringShapeOverCheaperBackfill(t *testing.T) {
+	filter := makeParamEqFilterExpr(0, 2, 0)
+	filter.Selectivity = 0.1
+	builder, scanID, idxDef, colRefCnt := newEncodedIndexCostTestCase(
+		t,
+		[]string{"category", catalog.CreateAlias(catalog.CPrimaryKeyColName)},
+		[]*planpb.Expr{filter},
+		&planpb.Stats{TableCnt: 800_000, Outcnt: 80_000, Selectivity: 0.1, Cost: 800_000},
+		map[int32]int{2: 10}, true,
+	)
+	node := builder.qry.Nodes[scanID]
+	node.TableDef.Indexes = []*planpb.IndexDef{idxDef}
+	node.FilterList[0].GetF().Args[0].GetCol().RelPos = node.BindingTags[0]
+
+	costCtx := builder.newEncodedRegularIndexCostContext(node, colRefCnt)
+	covering, ok := builder.matchRegularIndexOnlyScan(idxDef, node, costCtx)
+	require.True(t, ok)
+	backfillFilters := costCtx.matchPointBackfill(idxDef, true)
+	require.NotEmpty(t, backfillFilters)
+	coveringWork, _, coveringValid := costCtx.score(
+		idxDef, covering.filterIdx, covering.residualLeadingPos, encodedRegularIndexCostIndexOnly,
+	)
+	backfillWork, _, backfillValid := costCtx.score(
+		idxDef, backfillFilters, nil, encodedRegularIndexCostBackfill,
+	)
+	require.True(t, coveringValid)
+	require.True(t, backfillValid)
+	require.Less(t, backfillWork, coveringWork)
+
+	resultID := builder.applyIndicesForFiltersRegularIndex(
+		scanID, node, colRefCnt, map[[2]int32]*planpb.Expr{},
+	)
+	result := builder.qry.Nodes[resultID]
+	require.Equal(t, planpb.Node_TABLE_SCAN, result.NodeType)
+	require.True(t, result.IndexScanInfo.IsIndexScan)
+	require.Equal(t, idxDef.IndexName, result.IndexScanInfo.IndexName)
+}
+
+func TestSmallTablePreservesCoveringShapeOverCheaperBackfill(t *testing.T) {
+	filter := makeStringEqFilterExpr(0, 2, "joce")
+	filter.Selectivity = 0.1
+	builder, scanID, idxDef, colRefCnt := newEncodedIndexCostTestCase(
+		t,
+		[]string{"category", "event_id"},
+		[]*planpb.Expr{filter},
+		&planpb.Stats{TableCnt: 1_000, Outcnt: 100, Selectivity: 0.1, Cost: 1_000},
+		map[int32]int{1: 1}, false,
+	)
+	node := builder.qry.Nodes[scanID]
+	node.TableDef.Pkey = &planpb.PrimaryKeyDef{PkeyColName: "event_id", Names: []string{"event_id"}}
+	node.TableDef.Cols[2].Typ = planpb.Type{Id: int32(types.T_char), Width: 35}
+	statsWrapper := builder.compCtx.(*encodedIndexCostTestContext).
+		statsCache.Get(encodedIndexCostUnitTableID)
+	stats := statsWrapper.GetStats()
+	stats.SizeMap["category"] = uint64(stats.TableCnt) * 35
+	node.TableDef.Indexes = []*planpb.IndexDef{idxDef}
+	node.FilterList[0].GetF().Args[0].GetCol().RelPos = node.BindingTags[0]
+
+	costCtx := builder.newEncodedRegularIndexCostContext(node, colRefCnt)
+	covering, ok := builder.matchRegularIndexOnlyScan(idxDef, node, costCtx)
+	require.True(t, ok)
+	require.Equal(t, []int32{0}, covering.residualLeadingPos)
+	backfillFilters := costCtx.matchPointBackfill(idxDef, true)
+	require.NotEmpty(t, backfillFilters)
+	coveringWork, _, coveringValid := costCtx.score(
+		idxDef, covering.filterIdx, covering.residualLeadingPos, encodedRegularIndexCostIndexOnly,
+	)
+	backfillWork, _, backfillValid := costCtx.score(
+		idxDef, backfillFilters, nil, encodedRegularIndexCostBackfill,
+	)
+	require.True(t, coveringValid)
+	require.True(t, backfillValid)
+	require.Less(t, backfillWork, coveringWork,
+		"the regression requires cross-shape scoring to prefer backfill")
+
+	resultID := builder.applyIndicesForFiltersRegularIndex(
+		scanID, node, colRefCnt, map[[2]int32]*planpb.Expr{},
+	)
+	result := builder.qry.Nodes[resultID]
+	require.Equal(t, planpb.Node_TABLE_SCAN, result.NodeType)
+	require.True(t, result.IndexScanInfo.IsIndexScan)
+	require.Equal(t, idxDef.IndexName, result.IndexScanInfo.IndexName)
+}
+
+func TestEncodedIndexCostChargesUnpushableResidualOnBackfillCandidates(t *testing.T) {
+	leading := makeStringEqFilterExpr(0, 2, "READY")
+	leading.Selectivity = 0.25
+	residual := makeRangeFilterExpr(0, 3, "=", 7)
+	residual.Selectivity = 0.0005
+	builder, scanID, idxDef, colRefCnt := newEncodedIndexCostTestCase(
+		t,
+		[]string{"category", catalog.CreateAlias(catalog.CPrimaryKeyColName)},
+		[]*planpb.Expr{leading, residual},
+		&planpb.Stats{TableCnt: 800_000, Outcnt: 100, Selectivity: 0.000125, Cost: 400_000},
+		map[int32]int{1: 1}, false,
+	)
+	node := builder.qry.Nodes[scanID]
+	for _, filter := range node.FilterList {
+		filter.GetF().Args[0].GetCol().RelPos = node.BindingTags[0]
+	}
+	require.True(t, builder.shouldSkipEncodedRegularIndex(
+		idxDef, node, colRefCnt, []int32{0}, false, encodedRegularIndexCostBackfill,
+	))
+}
+
+func TestEncodedIndexCostDoesNotCreditLossyPrefixResidualPushdown(t *testing.T) {
+	leading := makeStringEqFilterExpr(0, 2, "READY")
+	leading.Selectivity = 0.25
+	residual := makeStringEqFilterExpr(0, 3, "2026-08-10T12:00:00")
+	residual.Selectivity = 0.0001
+	builder, scanID, idxDef, colRefCnt := newEncodedIndexCostTestCase(
+		t,
+		[]string{"category", "event_time", catalog.CreateAlias(catalog.CPrimaryKeyColName)},
+		[]*planpb.Expr{leading, residual},
+		&planpb.Stats{TableCnt: 800_000, Outcnt: 20, Selectivity: 0.000025, Cost: 760_000},
+		map[int32]int{1: 1}, false,
+	)
+	prefixParams, err := catalog.IndexParamsMapToJsonString(map[string]string{
+		catalog.IndexAlgoParamPrefixLengths: "event_time:4",
+	})
+	require.NoError(t, err)
+	idxDef.IndexAlgoParams = prefixParams
+	node := builder.qry.Nodes[scanID]
+	node.TableDef.Cols[3].Typ = planpb.Type{Id: int32(types.T_varchar), Width: 64}
+	for _, filter := range node.FilterList {
+		filter.GetF().Args[0].GetCol().RelPos = node.BindingTags[0]
+	}
+
+	costCtx := builder.newEncodedRegularIndexCostContext(node, colRefCnt)
+	work, reject, valid := costCtx.score(
+		idxDef, []int32{0}, nil, encodedRegularIndexCostBackfill,
+	)
+	require.True(t, valid)
+	require.True(t, reject,
+		"a lossy prefix residual must not make an otherwise expensive backfill look selective: work=%v base=%v", work, costCtx.baseWork)
+
+	residual.Selectivity = 1
+	controlWork, controlReject, controlValid := costCtx.score(
+		idxDef, []int32{0}, nil, encodedRegularIndexCostBackfill,
+	)
+	require.True(t, controlValid)
+	require.True(t, controlReject)
+	require.Equal(t, controlWork, work,
+		"cost must be invariant to the selectivity of a residual the index table cannot evaluate")
+
+	idxTableNode := &planpb.Node{
+		TableDef:    makeTestIndexTableDef(),
+		BindingTags: []int32{builder.genNewBindTag()},
+	}
+	builder.applyExtraFiltersOnIndex(idxDef, node, idxTableNode, []int32{0})
+	require.Empty(t, idxTableNode.FilterList,
+		"the physical plan must agree with the cost model and leave the lossy predicate on the base scan")
+}
+
+func TestEncodedIndexCostChargesSerializedSimplePKResidual(t *testing.T) {
+	leading := makeStringEqFilterExpr(0, 2, "READY")
+	leading.Selectivity = 0.5
+	residual := makeRangeFilterExpr(0, 1, "=", 7)
+	residual.Selectivity = 0.0001
+	builder, scanID, idxDef, colRefCnt := newEncodedIndexCostTestCase(
+		t,
+		[]string{"category", catalog.CreateAlias("event_id")},
+		[]*planpb.Expr{leading, residual},
+		&planpb.Stats{TableCnt: 800_000, Outcnt: 40, Selectivity: 0.00005, Cost: 800_000},
+		map[int32]int{0: 1}, false,
+	)
+	node := builder.qry.Nodes[scanID]
+	node.TableDef.Pkey = &planpb.PrimaryKeyDef{PkeyColName: "event_id", Names: []string{"event_id"}}
+	for _, filter := range node.FilterList {
+		filter.GetF().Args[0].GetCol().RelPos = node.BindingTags[0]
+	}
+
+	idxTableNode := &planpb.Node{
+		TableDef:    makeTestIndexTableDef(),
+		BindingTags: []int32{builder.genNewBindTag()},
+	}
+	builder.applyExtraFiltersOnIndex(idxDef, node, idxTableNode, []int32{0})
+	require.Len(t, idxTableNode.FilterList, 1)
+	mapped := idxTableNode.FilterList[0].GetF().Args[0]
+	require.Equal(t, "serial_extract", wrappedSerialFuncName(t, mapped))
+	require.Equal(t, int32(0), mapped.GetF().Args[0].GetCol().ColPos,
+		"the appended simple PK is encoded in index-table column 0")
+
+	_, reject, valid := builder.newEncodedRegularIndexCostContext(node, colRefCnt).score(
+		idxDef, []int32{0}, nil, encodedRegularIndexCostBackfill,
+	)
+	require.True(t, valid)
+	require.True(t, reject,
+		"cost must include the serial_extract that the physical plan materializes")
+}
+
+func TestEncodedIndexCostCountsConsumersAfterProjectionElimination(t *testing.T) {
+	optimizer := &encodedIndexPlanTestOptimizer{ctx: newEncodedExistsPlanTestContext(20)}
+	queryPlan, err := runOneStmt(optimizer, t, `
+		select activity_alias, activity_alias, activity_alias, activity_alias, activity_alias
+		from (
+			select activity_id as activity_alias, state
+			from cost_activity
+		) derived
+		where state = 'READY'`)
+	require.NoError(t, err)
+	require.Equal(t, "idx_state_tenant_time_id", findFirstIndexScanName(queryPlan))
+	require.True(t, planHasIndexJoin(queryPlan))
+	require.Zero(t, countPlanFunctionCalls(queryPlan, "serial_extract"))
+}
+
+func TestEncodedIndexCostChargesCompoundPKResidualExtraction(t *testing.T) {
+	leading := makeStringEqFilterExpr(0, 2, "READY")
+	leading.Selectivity = 0.25
+	residual := makeIntInFilterExpr(0, 0, 7, 8)
+	residual.Selectivity = 0.0005
+	builder, scanID, idxDef, colRefCnt := newEncodedIndexCostTestCase(
+		t,
+		[]string{"category", catalog.CreateAlias(catalog.CPrimaryKeyColName)},
+		[]*planpb.Expr{leading, residual},
+		&planpb.Stats{TableCnt: 800_000, Outcnt: 100, Selectivity: 0.000125, Cost: 500_000},
+		map[int32]int{1: 1}, false,
+	)
+	node := builder.qry.Nodes[scanID]
+	for _, filter := range node.FilterList {
+		filter.GetF().Args[0].GetCol().RelPos = node.BindingTags[0]
+	}
+	require.True(t, builder.shouldSkipEncodedRegularIndex(
+		idxDef, node, colRefCnt, []int32{0}, false, encodedRegularIndexCostBackfill,
+	))
+}
+
+func TestEncodedIndexCostDeduplicatesRepeatedLeadingFilterSelectivity(t *testing.T) {
+	filter := makeStringEqFilterExpr(0, 2, "READY")
+	filter.Selectivity = 0.1
+	builder, scanID, idxDef, colRefCnt := newEncodedIndexCostTestCase(
+		t,
+		[]string{"category", "category", "tenant_id", "event_time", "event_id", catalog.CreateAlias(catalog.CPrimaryKeyColName)},
+		[]*planpb.Expr{filter},
+		&planpb.Stats{TableCnt: 800_000, Outcnt: 1_000, Selectivity: 0.00125, Cost: 350_000},
+		map[int32]int{1: 1, 2: 1}, false,
+	)
+	node := builder.qry.Nodes[scanID]
+	node.FilterList[0].GetF().Args[0].GetCol().RelPos = node.BindingTags[0]
+	require.True(t, builder.shouldSkipEncodedIndexOnlyScan(idxDef, node, colRefCnt, []int32{0, 0}, false))
+}
+
+func countPlanFunctionCalls(queryPlan *Plan, name string) int {
+	var countExpr func(*planpb.Expr) int
+	countExpr = func(expr *planpb.Expr) int {
+		if expr == nil {
+			return 0
+		}
+		count := 0
+		switch impl := expr.Expr.(type) {
+		case *planpb.Expr_F:
+			if impl.F.Func != nil && impl.F.Func.ObjName == name {
+				count++
+			}
+			for _, arg := range impl.F.Args {
+				count += countExpr(arg)
+			}
+		case *planpb.Expr_List:
+			for _, arg := range impl.List.List {
+				count += countExpr(arg)
+			}
+		case *planpb.Expr_W:
+			count += countExpr(impl.W.WindowFunc)
+			for _, arg := range impl.W.PartitionBy {
+				count += countExpr(arg)
+			}
+			for _, orderBy := range impl.W.OrderBy {
+				count += countExpr(orderBy.Expr)
+			}
+		}
+		return count
+	}
+
+	count := 0
+	for _, node := range queryPlan.GetQuery().Nodes {
+		for _, exprs := range [][]*planpb.Expr{
+			node.ProjectList, node.OnList, node.FilterList, node.GroupBy,
+			node.AggList, node.WinSpecList,
+		} {
+			for _, expr := range exprs {
+				count += countExpr(expr)
+			}
+		}
+		for _, orderBy := range node.OrderBy {
+			count += countExpr(orderBy.Expr)
+		}
+	}
+	return count
+}
+
+func countIndexFilterSerialExtractsFromPhysicalPK(queryPlan *Plan) int {
+	count := 0
+	var visit func(*planpb.Expr)
+	visit = func(expr *planpb.Expr) {
+		if expr == nil {
+			return
+		}
+		fn := expr.GetF()
+		if fn == nil {
+			return
+		}
+		if fn.Func != nil && fn.Func.ObjName == "serial_extract" && len(fn.Args) > 0 {
+			if col := fn.Args[0].GetCol(); col != nil && col.ColPos == 1 {
+				count++
+			}
+		}
+		for _, arg := range fn.Args {
+			visit(arg)
+		}
+	}
+	for _, node := range queryPlan.GetQuery().Nodes {
+		if node.IndexScanInfo.GetIsIndexScan() {
+			for _, filter := range node.FilterList {
+				visit(filter)
+			}
+		}
+	}
+	return count
+}
+
+func firstIndexLookupSerialArgCount(queryPlan *Plan) int {
+	for _, node := range queryPlan.GetQuery().Nodes {
+		if !node.IndexScanInfo.GetIsIndexScan() || len(node.FilterList) == 0 {
+			continue
+		}
+		lookup := node.FilterList[0].GetF()
+		if lookup == nil || len(lookup.Args) < 2 {
+			continue
+		}
+		serial := lookup.Args[1].GetF()
+		if serial != nil && serial.Func != nil && (serial.Func.ObjName == "serial" || serial.Func.ObjName == "serial_full") {
+			return len(serial.Args)
+		}
+	}
+	return 0
+}
+
+func TestEncodedIndexCostChargesUnpushableResidualFromPublicPlan(t *testing.T) {
+	ctx := newEncodedExistsPlanTestContext(5)
+	activity := ctx.tables["cost_activity"]
+	activity.Indexes = nil
+	stats := ctx.statsByID[activity.TblId]
+	stats.NdvMap["amount"] = 6_000
+	stats.SizeMap["amount"] = uint64(stats.TableCnt) * 16
+	stats.SizeMap["state"] = uint64(stats.TableCnt)
+	stats.SizeMap[catalog.CPrimaryKeyColName] = uint64(stats.TableCnt)
+	addCostActivityRegularIndex(t, ctx, "idx_state_narrow",
+		[]string{"state", catalog.CreateAlias(catalog.CPrimaryKeyColName)}, true)
+
+	optimizer := &encodedIndexPlanTestOptimizer{ctx: ctx}
+	queryPlan, err := runOneStmt(optimizer, t,
+		"select activity_id from cost_activity where state = 'READY' and amount = 7")
+	require.NoError(t, err)
+	require.Empty(t, findFirstIndexScanName(queryPlan))
+	require.False(t, planHasIndexJoin(queryPlan))
+}
+
+func TestEncodedIndexCostChargesCompoundPKExtractionFromPublicPlan(t *testing.T) {
+	ctx := newEncodedExistsPlanTestContext(1_000)
+	activity := ctx.tables["cost_activity"]
+	activity.Indexes = nil
+	stats := ctx.statsByID[activity.TblId]
+	stats.NdvMap["tenant_id"] = 1_000
+	stats.SizeMap["tenant_id"] = uint64(stats.TableCnt) * 16
+	stats.SizeMap["state"] = uint64(stats.TableCnt)
+	stats.SizeMap[catalog.CPrimaryKeyColName] = uint64(stats.TableCnt)
+	addCostActivityRegularIndex(t, ctx, "idx_state_narrow",
+		[]string{"state", catalog.CreateAlias(catalog.CPrimaryKeyColName)}, true)
+
+	optimizer := &encodedIndexPlanTestOptimizer{ctx: ctx}
+	queryPlan, err := runOneStmt(optimizer, t,
+		"select amount from cost_activity where state = 'READY' and tenant_id != 7")
+	require.NoError(t, err)
+	require.Equal(t, "idx_state_narrow", findFirstIndexScanName(queryPlan))
+	require.True(t, planHasIndexJoin(queryPlan))
+	require.Greater(t, countIndexFilterSerialExtractsFromPhysicalPK(queryPlan), 0,
+		"the public witness must reach applyExtraFiltersOnIndex's compound-PK extraction")
+}
+
+func TestEncodedIndexCostDeduplicatesRepeatedLeadingPartFromPublicPlan(t *testing.T) {
+	ctx := newEncodedExistsPlanTestContext(10)
+	activity := ctx.tables["cost_activity"]
+	activity.Indexes = nil
+	ctx.statsByID[activity.TblId].NdvMap["amount"] = 100
+	addCostActivityRegularIndex(t, ctx, "idx_state_repeated",
+		[]string{
+			"state", "state",
+			"created_at", "tenant_id", "activity_id",
+			catalog.CreateAlias(catalog.CPrimaryKeyColName),
+		}, true)
+
+	optimizer := &encodedIndexPlanTestOptimizer{ctx: ctx}
+	queryPlan, err := runOneStmt(optimizer, t,
+		"select activity_id from cost_activity where state = 'READY' and amount = 7")
+	require.NoError(t, err)
+	require.Equal(t, "idx_state_repeated", findFirstIndexScanName(queryPlan))
+	require.True(t, planHasIndexJoin(queryPlan))
+	require.Equal(t, 2, firstIndexLookupSerialArgCount(queryPlan),
+		"the public matcher must expose the duplicate leading filter identity")
+}
+
+func TestEncodedIndexCostIsReachableFromExistsPlan(t *testing.T) {
+	const query = `
+		select count(*), coalesce(sum(a.activity_id), 0)
+		from cost_activity a
+		where a.tenant_id between 7 and 23
+		  and a.state = 'READY'
+		  and exists (
+			select 1 from cost_tags t
+			where t.tenant_id = a.tenant_id
+			  and t.activity_id = a.activity_id
+			  and t.tag_id = 2
+			  and t.weight >= 50.000
+		  )`
+
+	tests := []struct {
+		name      string
+		stateNDV  float64
+		wantIndex bool
+	}{
+		{name: "broad state rejects encoded index", stateNDV: 2},
+		{name: "selective state keeps encoded index", stateNDV: 1000, wantIndex: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			optimizer := &encodedIndexPlanTestOptimizer{ctx: newEncodedExistsPlanTestContext(test.stateNDV)}
+			queryPlan, err := runOneStmt(optimizer, t, query)
+			require.NoError(t, err)
+			if test.wantIndex {
+				require.Equal(t, "idx_state_tenant_time_id", findFirstIndexScanName(queryPlan))
+				require.GreaterOrEqual(t, countPlanFunctionCalls(queryPlan, "serial_extract"), 1)
+			} else {
+				require.Empty(t, findFirstIndexScanName(queryPlan))
+				require.Zero(t, countPlanFunctionCalls(queryPlan, "serial_extract"))
+			}
+		})
+	}
+}
+
+func TestEncodedIndexCostRejectsBroadBackfillSiblingFromPublicPlan(t *testing.T) {
+	const query = `
+		select a.state, count(*), coalesce(sum(a.amount), 0)
+		from cost_activity a
+		where a.tenant_id between 7 and 23
+		  and a.state in ('READY', 'HOLD')
+		  and exists (
+			select 1 from cost_tags t
+			where t.tenant_id = a.tenant_id
+			  and t.activity_id = a.activity_id
+			  and t.tag_id = 2
+			  and t.weight >= 50.000
+		  )
+		group by a.state
+		order by sum(a.amount) desc
+		limit 20`
+
+	for _, test := range []struct {
+		name      string
+		stateNDV  float64
+		wantIndex bool
+	}{
+		{name: "broad predicate rejects covering and backfill siblings", stateNDV: 2},
+		{name: "selective predicate keeps backfill index join", stateNDV: 1000, wantIndex: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			optimizer := &encodedIndexPlanTestOptimizer{ctx: newEncodedExistsPlanTestContext(test.stateNDV)}
+			queryPlan, err := runOneStmt(optimizer, t, query)
+			require.NoError(t, err)
+			if test.wantIndex {
+				require.Equal(t, "idx_state_tenant_time_id", findFirstIndexScanName(queryPlan))
+				require.True(t, planHasIndexJoin(queryPlan))
+			} else {
+				require.Empty(t, findFirstIndexScanName(queryPlan))
+				require.False(t, planHasIndexJoin(queryPlan))
+				require.Zero(t, countPlanFunctionCalls(queryPlan, "serial_extract"))
+			}
+		})
+	}
+}
+
+func TestEncodedIndexCostKeepsExactLeadingPaginationFromPublicPlan(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		pagination string
+		wantOffset uint64
+	}{
+		{name: "limit", pagination: "limit 1000"},
+		{name: "limit with offset", pagination: "limit 1000 offset 500", wantOffset: 500},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			ctx := newEncodedExistsPlanTestContext(20)
+			ctx.tables["cost_activity"].Indexes = nil
+			addCostActivityRegularIndex(t, ctx, "idx_amount_activity", []string{
+				"amount", "activity_id", catalog.CreateAlias(catalog.CPrimaryKeyColName),
+			}, false)
+			optimizer := &encodedIndexPlanTestOptimizer{ctx: ctx}
+			queryPlan, err := runOneStmt(optimizer, t,
+				"select activity_id from cost_activity where amount = 7 "+test.pagination)
+			require.NoError(t, err)
+			idxNode := findFirstIndexScanNode(queryPlan)
+			require.NotNil(t, idxNode)
+			require.Equal(t, "idx_amount_activity", idxNode.IndexScanInfo.IndexName)
+			limit, ok := getLiteralUint64(idxNode.Limit)
+			require.True(t, ok)
+			require.Equal(t, uint64(1000), limit)
+			if test.wantOffset == 0 {
+				require.Nil(t, idxNode.Offset)
+			} else {
+				offset, ok := getLiteralUint64(idxNode.Offset)
+				require.True(t, ok)
+				require.Equal(t, test.wantOffset, offset)
+			}
+		})
+	}
+}
+
+func TestEncodedIndexCostDoesNotCapByteStringPrefixResidualFromPublicPlan(t *testing.T) {
+	optimizer := &encodedIndexPlanTestOptimizer{ctx: newEncodedExistsPlanTestContext(20)}
+	queryPlan, err := runOneStmt(optimizer, t,
+		"select activity_id from cost_activity where state = 'READY' limit 1000 offset 500")
+	require.NoError(t, err)
+	require.Empty(t, findFirstIndexScanName(queryPlan),
+		"a byte-string prefix candidate needs an exact residual before pagination")
+	require.False(t, planHasIndexJoin(queryPlan))
+}
+
+func TestTryIndexOnlyScanChargesResidualExtractionOnLeadingCandidates(t *testing.T) {
+	parts := []string{
+		"category",
+		"tenant_id",
+		"event_time",
+		"event_id",
+		catalog.CreateAlias(catalog.CPrimaryKeyColName),
+	}
+	tests := []struct {
+		name       string
+		leadingSel float64
+		outcnt     float64
+		wantIndex  bool
+	}{
+		{name: "narrow disjoint prefix wins", leadingSel: 0.01, outcnt: 0, wantIndex: true},
+		{name: "broad correlated prefix loses despite small output", leadingSel: 0.2, outcnt: 800},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			categoryFilter := makeStringEqFilterExpr(0, 2, "category")
+			categoryFilter.Selectivity = test.leadingSel
+			eventFilter := makeRangeFilterExpr(0, 1, ">=", 1)
+			eventFilter.Selectivity = 0.01
+			builder, scanID, idxDef, colRefCnt := newEncodedIndexCostTestCase(
+				t,
+				parts,
+				[]*planpb.Expr{categoryFilter, eventFilter},
+				&planpb.Stats{TableCnt: 800_000, Outcnt: test.outcnt, Selectivity: test.outcnt / 800_000, Cost: 800_000},
+				map[int32]int{0: 1, 2: 1},
+				false,
+			)
+			bindTag := builder.qry.Nodes[scanID].BindingTags[0]
+			for _, filter := range builder.qry.Nodes[scanID].FilterList {
+				filter.GetF().Args[0].GetCol().RelPos = bindTag
+			}
+
+			idxNodeID := builder.tryIndexOnlyScan(idxDef, builder.qry.Nodes[scanID], colRefCnt, map[[2]int32]*planpb.Expr{}, &Snapshot{})
+			if test.wantIndex {
+				require.NotEqual(t, int32(-1), idxNodeID)
+			} else {
+				require.Equal(t, int32(-1), idxNodeID)
+			}
+		})
+	}
 }
 
 func TestSuspendScanProtection_RestoresExactCount(t *testing.T) {
@@ -6370,6 +8438,32 @@ func makeIntInFilterExprWithNull(relPos, colPos int32) *planpb.Expr {
 			},
 		},
 	}
+}
+
+func makeIntInFilterExpr(relPos, colPos int32, vals ...int32) *planpb.Expr {
+	expr := makeIntInFilterExprWithNull(relPos, colPos)
+	list := expr.GetF().Args[1].GetList().List[:0]
+	for _, val := range vals {
+		list = append(list, &planpb.Expr{
+			Typ:  planpb.Type{Id: int32(types.T_int32)},
+			Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{Value: &planpb.Literal_I32Val{I32Val: val}}},
+		})
+	}
+	expr.GetF().Args[1].GetList().List = list
+	return expr
+}
+
+func makeIntBetweenFilterExpr(relPos, colPos, lower, upper int32) *planpb.Expr {
+	expr := makeParamBetweenFilterExpr(relPos, colPos, 0, 1)
+	expr.GetF().Args[1] = &planpb.Expr{
+		Typ:  planpb.Type{Id: int32(types.T_int32)},
+		Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{Value: &planpb.Literal_I32Val{I32Val: lower}}},
+	}
+	expr.GetF().Args[2] = &planpb.Expr{
+		Typ:  planpb.Type{Id: int32(types.T_int32)},
+		Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{Value: &planpb.Literal_I32Val{I32Val: upper}}},
+	}
+	return expr
 }
 
 func makeStringBetweenFilterExpr(relPos, colPos int32, lower, upper string) *planpb.Expr {
