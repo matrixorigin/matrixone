@@ -277,11 +277,9 @@ func GetAggFunctionNameByID(overloadID int64) string {
 	return f.aggName
 }
 
-// DeduceNotNullable helps optimization sometimes.
-// deduce notNullable for function
-// for example, create table t1(c1 int not null, c2 int, c3 int not null ,c4 int);
-// sql select c1+1, abs(c2), cast(c3 as varchar(10)) from t1 where c1=c3;
-// we can deduce that c1+1, cast c3 and c1=c3 is notNullable, abs(c2) is nullable.
+// DeduceNotNullable reports whether a function result is guaranteed to be
+// non-NULL. STRICT only guarantees NULL-input propagation; it cannot prove
+// that a function will not synthesize NULL from non-NULL argument values.
 func DeduceNotNullable(overloadID int64, args []*plan.Expr) bool {
 	fid, _ := DecodeOverloadID(overloadID)
 	switch fid {
@@ -289,6 +287,12 @@ func DeduceNotNullable(overloadID int64, args []*plan.Expr) bool {
 		if caseHasTemporalPromotion(args) {
 			return false
 		}
+		for _, arg := range args {
+			if !arg.Typ.NotNullable {
+				return false
+			}
+		}
+		return true
 	case COALESCE:
 		for _, arg := range args {
 			if arg.Typ.NotNullable {
@@ -309,17 +313,17 @@ func DeduceNotNullable(overloadID int64, args []*plan.Expr) bool {
 		if len(args) != 3 {
 			return false
 		}
-	}
-	if allSupportedFunctions[fid].testFlag(plan.Function_PRODUCE_NO_NULL) {
+		for _, arg := range args {
+			if !arg.Typ.NotNullable {
+				return false
+			}
+		}
+		return true
+	case ROW_NUMBER:
+		// Every output row receives an ordinal.
 		return true
 	}
-
-	for _, arg := range args {
-		if !arg.Typ.NotNullable {
-			return false
-		}
-	}
-	return true
+	return ProducesNoNull(overloadID)
 }
 
 func caseHasTemporalPromotion(args []*plan.Expr) bool {

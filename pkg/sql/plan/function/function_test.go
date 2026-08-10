@@ -661,6 +661,43 @@ func TestProducesNoNullUsesFunctionContract(t *testing.T) {
 	require.False(t, ProducesNoNull(-1))
 }
 
+func TestDeduceNotNullableDoesNotTreatStrictAsNoNull(t *testing.T) {
+	notNull := &plan.Expr{Typ: plan.Type{NotNullable: true}}
+
+	for _, tt := range []struct {
+		name     string
+		fid      int32
+		argCount int
+	}{
+		{name: "division by zero", fid: DIV, argCount: 2},
+		{name: "integer division by zero", fid: INTEGER_DIV, argCount: 2},
+		{name: "modulo by zero", fid: MOD, argCount: 2},
+		{name: "missing JSON path", fid: JSON_EXTRACT, argCount: 2},
+		{name: "regexp without a match", fid: REGEXP_SUBSTR, argCount: 2},
+		{name: "invalid IPv6 address", fid: INET6_ATON, argCount: 1},
+		{name: "out of range elt index", fid: ELT, argCount: 3},
+		{name: "invalid hex input", fid: UNHEX, argCount: 1},
+		{name: "invalid day of year", fid: MAKEDATE, argCount: 2},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			args := make([]*plan.Expr, tt.argCount)
+			for i := range args {
+				args[i] = notNull
+			}
+			require.False(t, DeduceNotNullable(EncodeOverloadID(tt.fid, 0), args))
+		})
+	}
+}
+
+func TestDeduceNotNullablePreservesExplicitContracts(t *testing.T) {
+	notNull := &plan.Expr{Typ: plan.Type{NotNullable: true}}
+	nullable := &plan.Expr{Typ: plan.Type{NotNullable: false}}
+
+	require.True(t, DeduceNotNullable(EncodeOverloadID(CASE, 0), []*plan.Expr{notNull, notNull, notNull}))
+	require.True(t, DeduceNotNullable(EncodeOverloadID(COALESCE, 0), []*plan.Expr{nullable, notNull}))
+	require.True(t, DeduceNotNullable(EncodeOverloadID(ISNULL, 0), []*plan.Expr{nullable}))
+}
+
 func TestDeduceNotNullableForValueWindowFunctions(t *testing.T) {
 	notNull := &plan.Expr{Typ: plan.Type{NotNullable: true}}
 	nullable := &plan.Expr{Typ: plan.Type{NotNullable: false}}
