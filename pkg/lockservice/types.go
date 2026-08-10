@@ -139,7 +139,13 @@ type LockService interface {
 // whose final response was not received by CN. It must not release the txn's
 // locks until the allocator proves that the txn cannot still be committing.
 // The optional completion callback is invoked exactly once after terminal
-// lock cleanup.
+// lock cleanup. The callback may re-enter LockService.Close, but it must not
+// perform unbounded blocking work. Lockservice bounds callbacks that have been
+// accepted but have not returned; saturation is reported before callback
+// ownership transfers to lockservice. A nil return transfers callback
+// ownership; on error the caller retains it even when lock cleanup was safely
+// scheduled without a callback. Immediately before invocation, execution
+// transfers back to external code; Close does not join the callback body.
 //
 // This is deliberately separate from LockService: callers that only perform
 // regular lock operations do not need to implement the exceptional protocol.

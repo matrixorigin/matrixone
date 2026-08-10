@@ -44,6 +44,12 @@ var (
 	backendClosed   = moerr.NewBackendClosedNoCtx()
 	backendDraining = moerr.NewInvalidStateNoCtx("backend is draining")
 	messageSkipped  = moerr.NewInvalidStateNoCtx("request is skipped")
+
+	// Cancellation releases a shared manager worker before goetty's legacy,
+	// timeout-bounded Connect necessarily returns. Retain the same process-wide
+	// bound for those lower-level attempts so rapid invalidation cannot turn
+	// prompt worker cancellation into unbounded dial goroutines.
+	goettyContextCreateSlots = make(chan struct{}, backendCreateWorkerCount)
 )
 
 // WithBackendLogger set the backend logger
@@ -1470,6 +1476,8 @@ type goettyBasedBackendFactory struct {
 	options []BackendOption
 }
 
+var _ ContextBackendFactory = (*goettyBasedBackendFactory)(nil)
+
 func NewGoettyBasedBackendFactory(codec Codec, options ...BackendOption) BackendFactory {
 	return &goettyBasedBackendFactory{
 		codec:   codec,
@@ -1484,6 +1492,62 @@ func (bf *goettyBasedBackendFactory) Create(
 	opts = append(opts, bf.options...)
 	opts = append(opts, extraOptions...)
 	return NewRemoteBackend(remote, bf.codec, opts...)
+}
+
+// CreateWithContext adapts goetty's timeout-bounded legacy Connect API to the
+// contextual factory contract. Cancellation returns the shared factory worker
+// immediately. The bounded connect attempt retains ownership of its result and
+// closes a late Backend before it can escape into a replacement generation.
+func (bf *goettyBasedBackendFactory) CreateWithContext(
+	ctx context.Context,
+	remote string,
+	extraOptions ...BackendOption,
+) (Backend, error) {
+	return boundedBackendCreate(ctx, goettyContextCreateSlots, func() (Backend, error) {
+		return bf.Create(remote, extraOptions...)
+	})
+}
+
+func boundedBackendCreate(
+	ctx context.Context,
+	slots chan struct{},
+	create func() (Backend, error),
+) (Backend, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	select {
+	case slots <- struct{}{}:
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+	type createResult struct {
+		backend Backend
+		err     error
+	}
+	resultC := make(chan createResult, 1)
+	go func() {
+		defer func() { <-slots }()
+		backend, err := create()
+		if ctx.Err() != nil && backend != nil {
+			backend.Close()
+			backend = nil
+		}
+		resultC <- createResult{backend: backend, err: err}
+	}()
+
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case result := <-resultC:
+		if err := ctx.Err(); err != nil {
+			if result.backend != nil {
+				result.backend.Close()
+			}
+			return nil, err
+		}
+		return result.backend, result.err
+	}
 }
 
 type stream struct {
