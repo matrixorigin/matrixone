@@ -3803,6 +3803,12 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 		name = "power"
 	}
 
+	if name == "convert" {
+		if err := bindConvertUsingCharset(ctx, args); err != nil {
+			return nil, err
+		}
+	}
+
 	// get args(exprs) & types
 	argsLength := len(args)
 	argsType := make([]types.Type, argsLength)
@@ -4169,6 +4175,33 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 		},
 		Typ: Typ,
 	}, nil
+}
+
+func bindConvertUsingCharset(ctx context.Context, args []*plan.Expr) error {
+	if len(args) != 2 {
+		return moerr.NewInvalidArg(ctx, "convert function needs two args", len(args))
+	}
+
+	charsetLiteral := args[1].GetLit()
+	if charsetLiteral == nil || charsetLiteral.Isnull {
+		return moerr.NewInvalidInput(ctx, "CONVERT USING requires a constant character set")
+	}
+
+	var charset uint32
+	switch strings.ToLower(charsetLiteral.GetSval()) {
+	case "binary":
+		charset = uint32(types.CharsetBinary)
+	case "utf8", "utf8mb3", "utf8mb4":
+		charset = uint32(types.CharsetUTF8)
+	default:
+		return moerr.NewInvalidInputf(ctx, "unsupported character set '%s' for CONVERT USING", charsetLiteral.GetSval())
+	}
+
+	// The parser lowers the USING name to a synthetic string literal. Record the
+	// selected charset on that argument so the overload's return-type callback
+	// can carry it into the bound result without inspecting expression values.
+	args[1].Typ.Charset = charset
+	return nil
 }
 
 func invalidUTCFunctionFSPError(ctx context.Context, name string) error {
@@ -5453,9 +5486,7 @@ func resetDateFunction(ctx context.Context, dateExpr *Expr, intervalExpr *Expr) 
 		List: make([]*Expr, 2),
 	}
 	list.List[0] = intervalExpr
-	strType := &plan.Type{
-		Id: int32(types.T_char),
-	}
+	strType := makeGeneratedPlan2Type(types.T_char, 0, 0, false)
 	strExpr := &Expr{
 		Expr: &plan.Expr_Lit{
 			Lit: &Const{
@@ -5464,7 +5495,7 @@ func resetDateFunction(ctx context.Context, dateExpr *Expr, intervalExpr *Expr) 
 				},
 			},
 		},
-		Typ: *strType,
+		Typ: strType,
 	}
 	list.List[1] = strExpr
 	expr := &plan.Expr_List{

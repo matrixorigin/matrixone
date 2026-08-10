@@ -618,10 +618,17 @@ func makePlan2StringConstExprWithType(v string, isBin ...bool) *plan.Expr {
 	if width == 0 {
 		id = int32(types.T_char)
 	}
+	charset := uint32(types.CharsetUTF8)
+	if len(isBin) > 0 && isBin[0] {
+		// Hex and bit literals use a VARCHAR-shaped container for their raw
+		// payload, but remain binary strings for comparison and protocol metadata.
+		charset = uint32(types.CharsetBinary)
+	}
 	return &plan.Expr{
 		Expr: makePlan2StringConstExpr(v, isBin...),
 		Typ: plan.Type{
 			Id:          id,
+			Charset:     charset,
 			NotNullable: true,
 			Width:       width,
 		},
@@ -871,24 +878,39 @@ var MakePlan2Type = makePlan2Type
 
 func makeSimplePlan2Type(typT types.T) plan.Type {
 	return plan.Type{
-		Id:    int32(typT),
-		Width: 0,
-		Scale: 0,
+		Id:      int32(typT),
+		Width:   0,
+		Scale:   0,
+		Charset: uint32(types.CharsetType(typT)),
 	}
+}
+
+// makeGeneratedPlan2Type constructs types for schemas authored by the current
+// planner. In particular, new CHAR/VARCHAR/TEXT values must carry an explicit
+// charset: zero is reserved for plans and catalog metadata written before
+// charset became meaningful. Text-shaped opaque bytes should instead be built
+// with makePlan2Type and types.NewWithCharset(..., types.CharsetBinary).
+func makeGeneratedPlan2Type(oid types.T, width, scale int32, notNullable bool) plan.Type {
+	typ := types.New(oid, width, scale)
+	result := makePlan2Type(&typ)
+	result.NotNullable = notNullable
+	return result
 }
 
 func makePlan2Type(typ *types.Type) plan.Type {
 	return plan.Type{
-		Id:    int32(typ.Oid),
-		Width: typ.Width,
-		Scale: typ.Scale,
+		Id:      int32(typ.Oid),
+		Width:   typ.Width,
+		Scale:   typ.Scale,
+		Charset: uint32(typ.Charset),
 	}
 }
 func makePlan2TypeValue(typ *types.Type) plan.Type {
 	return plan.Type{
-		Id:    int32(typ.Oid),
-		Width: typ.Width,
-		Scale: typ.Scale,
+		Id:      int32(typ.Oid),
+		Width:   typ.Width,
+		Scale:   typ.Scale,
+		Charset: uint32(typ.Charset),
 	}
 }
 
@@ -897,20 +919,21 @@ var MakePlan2TypeValue = makePlan2TypeValue
 
 func makeTypeByPlan2Type(typ plan.Type) types.Type {
 	oid := types.T(typ.Id)
-	return types.New(oid, typ.Width, typ.Scale)
+	return types.NewWithCharset(oid, typ.Width, typ.Scale, uint8(typ.Charset))
 }
 
 var MakeTypeByPlan2Expr = makeTypeByPlan2Expr
 
 func makeTypeByPlan2Expr(expr *plan.Expr) types.Type {
 	oid := types.T(expr.Typ.Id)
-	return types.New(oid, expr.Typ.Width, expr.Typ.Scale)
+	return types.NewWithCharset(oid, expr.Typ.Width, expr.Typ.Scale, uint8(expr.Typ.Charset))
 }
 
 func makeHiddenColTyp() Type {
 	return Type{
-		Id:    int32(types.T_varchar),
-		Width: types.MaxVarcharLen,
+		Id:      int32(types.T_varchar),
+		Width:   types.MaxVarcharLen,
+		Charset: uint32(types.CharsetBinary),
 	}
 }
 
@@ -944,7 +967,7 @@ func MakeRowIdColDef() *ColDef {
 }
 
 func isSameColumnType(t1 Type, t2 Type) bool {
-	if t1.Id != t2.Id {
+	if t1.Id != t2.Id || t1.Charset != t2.Charset {
 		return false
 	}
 	if t1.Enumvalues != t2.Enumvalues {

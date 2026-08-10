@@ -850,9 +850,7 @@ func getCompressType(param *tree.ExternParam, filepath string) string {
 // a prepared LOAD statement is EXECUTEd under a different sql_mode.
 func makeCastExpr(stmt *tree.Load, fileName string, tableDef *TableDef, node *plan.Node) []*plan.Expr {
 	ret := make([]*plan.Expr, 0)
-	stringTyp := &plan.Type{
-		Id: int32(types.T_varchar),
-	}
+	stringTyp := makeGeneratedPlan2Type(types.T_varchar, 0, 0, false)
 	for i := 0; i < len(tableDef.Cols); i++ {
 		typ := node.ProjectList[i].Typ
 		expr := node.ProjectList[i].Expr
@@ -865,7 +863,7 @@ func makeCastExpr(stmt *tree.Load, fileName string, tableDef *TableDef, node *pl
 			continue
 		}
 		planExpr := &plan.Expr{
-			Typ:  *stringTyp,
+			Typ:  stringTyp,
 			Expr: expr,
 		}
 
