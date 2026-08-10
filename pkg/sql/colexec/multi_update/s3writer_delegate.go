@@ -329,10 +329,10 @@ func (writer *s3WriterDelegate) append(
 		if contextBatch.RowCount() == 0 {
 			continue
 		}
-		insertAttrs := writer.updateCtxInfos[updateCtx.TableDef.Name].insertAttrs
+		insertAttrs := lookupUpdateCtxInfo(writer.updateCtxInfos, updateCtx).insertAttrs
 		projBat := contextBatch.SelectColumns(updateCtx.InsertCols, insertAttrs)
 
-		tableType := writer.updateCtxInfos[updateCtx.TableDef.Name].tableType
+		tableType := lookupUpdateCtxInfo(writer.updateCtxInfos, updateCtx).tableType
 
 		mainTablePkProjectIdx := -1
 		mainTableNullPkFilter := false

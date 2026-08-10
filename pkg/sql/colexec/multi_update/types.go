@@ -15,6 +15,8 @@
 package multi_update
 
 import (
+	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/common/rscthrottler"
@@ -24,6 +26,41 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
+
+func updateCtxKey(ctx *MultiUpdateCtx) string {
+	if ctx == nil {
+		return ""
+	}
+	tableID := uint64(0)
+	if ctx.TableDef != nil {
+		tableID = ctx.TableDef.TblId
+	}
+	if ctx.ObjRef != nil {
+		return fmt.Sprintf(
+			"%d/%d/%d/%s/%s/%d",
+			ctx.ObjRef.Db,
+			ctx.ObjRef.Schema,
+			ctx.ObjRef.Obj,
+			ctx.ObjRef.SchemaName,
+			ctx.ObjRef.ObjName,
+			tableID,
+		)
+	}
+	if ctx.TableDef != nil {
+		return fmt.Sprintf("%s/%s/%d", ctx.TableDef.DbName, ctx.TableDef.Name, tableID)
+	}
+	return ""
+}
+
+func lookupUpdateCtxInfo(infos map[string]*updateCtxInfo, ctx *MultiUpdateCtx) *updateCtxInfo {
+	if info := infos[updateCtxKey(ctx)]; info != nil {
+		return info
+	}
+	if ctx != nil && ctx.TableDef != nil {
+		return infos[ctx.TableDef.Name]
+	}
+	return nil
+}
 
 var _ vm.Operator = new(MultiUpdate)
 

@@ -17,7 +17,6 @@ package multi_update
 import (
 	"bytes"
 
-	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/partitionprune"
 	"github.com/matrixorigin/matrixone/pkg/pb/partition"
@@ -80,18 +79,6 @@ func (op *PartitionMultiUpdate) String(buf *bytes.Buffer) {
 
 func (op *PartitionMultiUpdate) OpType() vm.OpType {
 	return vm.PartitionMultiUpdate
-}
-
-func (op *PartitionMultiUpdate) SetAllocationAccount(account *mpool.AllocationAccount) error {
-	return op.raw.SetAllocationAccount(account)
-}
-
-func (op *PartitionMultiUpdate) ClearAllocationAccount(account *mpool.AllocationAccount) error {
-	return op.raw.ClearAllocationAccount(account)
-}
-
-func (op *PartitionMultiUpdate) ActivatesAllocationAccountLifecycle() bool {
-	return op.raw.ActivatesAllocationAccountLifecycle()
 }
 
 func (op *PartitionMultiUpdate) Prepare(
@@ -464,13 +451,7 @@ func (op *PartitionMultiUpdate) Free(
 	err error,
 ) {
 	op.raw.Free(proc, pipelineFailed, err)
-
-	for _, w := range op.writers {
-		_ = w.free(proc)
-	}
-	for _, w := range op.freeWriters {
-		_ = w.free(proc)
-	}
+	op.freePartitionWriters(proc)
 }
 
 func (op *PartitionMultiUpdate) Release() {
@@ -484,14 +465,22 @@ func (op *PartitionMultiUpdate) Reset(
 ) {
 	op.raw.MultiUpdateCtx = op.rawContexts
 	op.raw.Reset(proc, pipelineFailed, err)
-	for _, writer := range op.freeWriters {
-		_ = writer.reset(proc)
+	op.freePartitionWriters(proc)
+	for _, target := range op.targets {
+		clear(target.writerIDs)
 	}
+	op.nextWriterID = 0
+}
+
+func (op *PartitionMultiUpdate) freePartitionWriters(proc *process.Process) {
 	for id, writer := range op.writers {
-		_ = writer.reset(proc)
-		op.freeWriters = append(op.freeWriters, writer)
+		_ = writer.free(proc)
 		delete(op.writers, id)
 	}
+	for _, writer := range op.freeWriters {
+		_ = writer.free(proc)
+	}
+	op.freeWriters = nil
 }
 
 func (op *PartitionMultiUpdate) GetOperatorBase() *vm.OperatorBase {

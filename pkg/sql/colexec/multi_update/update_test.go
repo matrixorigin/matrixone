@@ -69,7 +69,7 @@ func TestFilterTargetRowsKeepsIndependentWholeRows(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	mp := proc.Mp()
 
-	bat := batch.NewWithSize(5)
+	bat := batch.NewWithSize(7)
 	bat.Vecs[0] = testutil.MakeRowIdVector(
 		[]types.Rowid{
 			types.BuildTestRowid(1, 1),
@@ -114,13 +114,19 @@ func TestFilterTargetRowsKeepsIndependentWholeRows(t *testing.T) {
 		nil,
 		[]int32{10, 20, 30, 40},
 	)
+	bat.Vecs[5] = testutil.NewBoolVector(
+		4, types.T_bool.ToType(), mp, false, nil, []bool{true, true, true, true},
+	)
+	bat.Vecs[6] = testutil.NewBoolVector(
+		4, types.T_bool.ToType(), mp, false, nil, []bool{true, false, true, true},
+	)
 	bat.SetRowCount(4)
 	defer bat.Clean(mp)
 
 	first, clean, duplicateRows, err := filterTargetRows(proc, &MultiUpdateCtx{
 		TableDef:           &plan.TableDef{TblId: 1},
 		DedupByTargetRowID: true,
-		DeleteCols:         []int{0, 4, 1},
+		DeleteCols:         []int{0, 4, 1, 5},
 	}, bat, nil)
 	require.NoError(t, err)
 	require.True(t, clean)
@@ -131,13 +137,56 @@ func TestFilterTargetRowsKeepsIndependentWholeRows(t *testing.T) {
 	second, clean, duplicateRows, err := filterTargetRows(proc, &MultiUpdateCtx{
 		TableDef:           &plan.TableDef{TblId: 2},
 		DedupByTargetRowID: true,
-		DeleteCols:         []int{2, 4, 3},
+		DeleteCols:         []int{2, 4, 3, 6},
 	}, bat, nil)
 	require.NoError(t, err)
 	require.True(t, clean)
 	require.Zero(t, duplicateRows)
 	defer second.Clean(mp)
-	require.Equal(t, []int32{10, 20, 40}, vector.MustFixedColWithTypeCheck[int32](second.Vecs[4]))
+	require.Equal(t, []int32{10, 40}, vector.MustFixedColWithTypeCheck[int32](second.Vecs[4]))
+}
+
+func TestFilterTargetRowsCrossesAllocationAccountBoundary(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	mp := proc.Mp()
+	registry, err := mpool.NewAllocationAccountRegistry(1, 1<<20)
+	require.NoError(t, err)
+	account, err := registry.Open(1 << 20)
+	require.NoError(t, err)
+	selection, err := vector.NewAllocationAccountSelection(account, 1, 1, 2, 3, 4)
+	require.NoError(t, err)
+
+	bat := batch.NewOffHeapWithSize(4)
+	for idx, typ := range []types.Type{
+		types.T_Rowid.ToType(), types.T_int64.ToType(),
+		types.T_int32.ToType(), types.T_bool.ToType(),
+	} {
+		bat.Vecs[idx], err = vector.NewOffHeapVecWithTypeAndAllocation(typ, selection)
+		require.NoError(t, err)
+	}
+	require.NoError(t, vector.AppendFixedList(
+		bat.Vecs[0], []types.Rowid{types.BuildTestRowid(1, 1)}, nil, mp))
+	require.NoError(t, vector.AppendFixedList(bat.Vecs[1], []int64{1}, nil, mp))
+	require.NoError(t, vector.AppendFixedList(bat.Vecs[2], []int32{10}, nil, mp))
+	require.NoError(t, vector.AppendFixedList(bat.Vecs[3], []bool{true}, nil, mp))
+	bat.SetRowCount(1)
+
+	filtered, clean, _, err := filterTargetRows(proc, &MultiUpdateCtx{
+		TableDef:           &plan.TableDef{TblId: 1},
+		DedupByTargetRowID: true,
+		DeleteCols:         []int{0, 2, 1, 3},
+	}, bat, nil)
+	require.NoError(t, err)
+	require.True(t, clean)
+	require.Nil(t, filtered.AllocationAccountSelection())
+	for _, vec := range filtered.Vecs {
+		require.Nil(t, vec.AllocationAccountSelection())
+	}
+	filtered.Clean(mp)
+	bat.Clean(mp)
+	require.Zero(t, account.Snapshot().Used)
+	_, _, err = registry.CompleteTerminal(account)
+	require.NoError(t, err)
 }
 
 func TestFilterTargetRowsDedupsAliasesAcrossBatchesWithAccountedHashMap(t *testing.T) {
@@ -146,7 +195,7 @@ func TestFilterTargetRowsDedupsAliasesAcrossBatchesWithAccountedHashMap(t *testi
 	rowID1 := types.BuildTestRowid(1, 1)
 	rowID2 := types.BuildTestRowid(1, 2)
 	makeBatch := func() *batch.Batch {
-		bat := batch.NewWithSize(3)
+		bat := batch.NewWithSize(4)
 		bat.Vecs[0] = testutil.MakeRowIdVector([]types.Rowid{rowID1, rowID2}, nil, mp)
 		bat.Vecs[1] = testutil.NewInt64Vector(
 			2,
@@ -164,13 +213,16 @@ func TestFilterTargetRowsDedupsAliasesAcrossBatchesWithAccountedHashMap(t *testi
 			nil,
 			[]int32{10, 20},
 		)
+		bat.Vecs[3] = testutil.NewBoolVector(
+			2, types.T_bool.ToType(), mp, false, nil, []bool{true, true},
+		)
 		bat.SetRowCount(2)
 		return bat
 	}
 	updateCtx := &MultiUpdateCtx{
 		TableDef:           &plan.TableDef{TblId: 42},
 		DedupByTargetRowID: true,
-		DeleteCols:         []int{0, 2, 1},
+		DeleteCols:         []int{0, 2, 1, 3},
 	}
 	seen, err := hashmap.NewStrHashMap(false, mp)
 	require.NoError(t, err)
@@ -194,6 +246,27 @@ func TestFilterTargetRowsDedupsAliasesAcrossBatchesWithAccountedHashMap(t *testi
 	require.Zero(t, second.RowCount())
 	require.Equal(t, uint64(2), duplicateRows)
 	require.Positive(t, seen.Size())
+}
+
+func TestUpdateCtxKeySeparatesCrossDatabaseSameNameTables(t *testing.T) {
+	left := &MultiUpdateCtx{
+		ObjRef:   &plan.ObjectRef{Db: 1, Obj: 10, SchemaName: "db_a", ObjName: "t"},
+		TableDef: &plan.TableDef{TblId: 100, DbName: "db_a", Name: "t"},
+	}
+	right := &MultiUpdateCtx{
+		ObjRef:   &plan.ObjectRef{Db: 2, Obj: 20, SchemaName: "db_b", ObjName: "t"},
+		TableDef: &plan.TableDef{TblId: 200, DbName: "db_b", Name: "t"},
+	}
+	require.NotEqual(t, updateCtxKey(left), updateCtxKey(right))
+
+	leftInfo := &updateCtxInfo{}
+	rightInfo := &updateCtxInfo{}
+	infos := map[string]*updateCtxInfo{
+		updateCtxKey(left):  leftInfo,
+		updateCtxKey(right): rightInfo,
+	}
+	require.Same(t, leftInfo, lookupUpdateCtxInfo(infos, left))
+	require.Same(t, rightInfo, lookupUpdateCtxInfo(infos, right))
 }
 
 type testSeenRowsThrottler struct {

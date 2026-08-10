@@ -66,6 +66,22 @@ SELECT id, x, y FROM multi_update_target_b ORDER BY id;
 DROP TABLE multi_update_target_a;
 DROP TABLE multi_update_target_b;
 
+DROP TABLE IF EXISTS multi_update_ignore_a;
+DROP TABLE IF EXISTS multi_update_ignore_b;
+CREATE TABLE multi_update_ignore_a (id INT PRIMARY KEY, u INT UNIQUE);
+CREATE TABLE multi_update_ignore_b (id INT PRIMARY KEY, v INT);
+INSERT INTO multi_update_ignore_a VALUES (1, 1), (2, 2);
+INSERT INTO multi_update_ignore_b VALUES (1, 0), (2, 0);
+UPDATE IGNORE multi_update_ignore_a a
+JOIN multi_update_ignore_b b ON a.id = b.id
+SET a.u = 2, b.v = 9
+WHERE a.id = 1;
+SELECT ROW_COUNT();
+SELECT * FROM multi_update_ignore_a ORDER BY id;
+SELECT * FROM multi_update_ignore_b ORDER BY id;
+DROP TABLE multi_update_ignore_a;
+DROP TABLE multi_update_ignore_b;
+
 DROP TABLE IF EXISTS multi_update_alias_target;
 CREATE TABLE multi_update_alias_target (
     id INT PRIMARY KEY,
@@ -74,20 +90,12 @@ CREATE TABLE multi_update_alias_target (
 );
 INSERT INTO multi_update_alias_target VALUES (1, 0, 0), (2, 0, 0);
 
+-- @pattern
 UPDATE multi_update_alias_target a
 JOIN multi_update_alias_target b ON a.id = b.id
 SET
     a.x = 1,
     b.y = 2;
-
-SELECT ROW_COUNT();
-SELECT id, x, y FROM multi_update_alias_target ORDER BY id;
-
-UPDATE multi_update_alias_target a
-JOIN multi_update_alias_target b ON a.id = 1 AND b.id = 1
-SET
-    a.x = 3,
-    b.y = 4;
 
 SELECT id, x, y FROM multi_update_alias_target ORDER BY id;
 DROP TABLE multi_update_alias_target;
@@ -138,37 +146,8 @@ SELECT ROW_COUNT();
 SELECT id, x FROM multi_update_partition_target ORDER BY id;
 SELECT id, x FROM multi_update_plain_target ORDER BY id;
 
-UPDATE multi_update_partition_target a
-JOIN multi_update_partition_target b ON a.id = b.id
-SET
-    a.x = 7,
-    b.y = 8;
-
-SELECT ROW_COUNT();
-SELECT id, x, y FROM multi_update_partition_target ORDER BY id;
-
 DROP TABLE multi_update_partition_target;
 DROP TABLE multi_update_plain_target;
-
-DROP TABLE IF EXISTS multi_update_on_update;
-CREATE TABLE multi_update_on_update (
-    id INT PRIMARY KEY,
-    x INT,
-    y INT,
-    updated_at TIMESTAMP DEFAULT '2000-01-01 00:00:00' ON UPDATE CURRENT_TIMESTAMP,
-    KEY idx_updated_at (updated_at)
-);
-INSERT INTO multi_update_on_update (id, x, y) VALUES (1, 0, 0), (2, 0, 0);
-UPDATE multi_update_on_update a
-JOIN multi_update_on_update b ON a.id = b.id
-SET
-    a.x = 1,
-    b.y = 2;
-SELECT id, x, y FROM multi_update_on_update ORDER BY id;
-SELECT COUNT(*) FROM multi_update_on_update WHERE updated_at = '2000-01-01 00:00:00';
-SELECT COUNT(*) FROM multi_update_on_update WHERE updated_at IS NULL;
-SELECT COUNT(*) FROM multi_update_on_update FORCE INDEX (idx_updated_at) WHERE updated_at IS NULL;
-DROP TABLE multi_update_on_update;
 
 DROP TABLE IF EXISTS multi_update_master_target;
 DROP TABLE IF EXISTS multi_update_master_plain;
@@ -302,3 +281,38 @@ WHERE MATCH(body) AGAINST('old' IN NATURAL LANGUAGE MODE);
 DROP TABLE multi_update_fulltext_target;
 DROP TABLE multi_update_fulltext_source;
 DROP TABLE multi_update_fulltext_plain;
+
+DROP TABLE IF EXISTS multi_update_auto_a;
+DROP TABLE IF EXISTS multi_update_auto_b;
+CREATE TABLE multi_update_auto_a (id INT AUTO_INCREMENT PRIMARY KEY, v INT);
+CREATE TABLE multi_update_auto_b (id INT AUTO_INCREMENT PRIMARY KEY, v INT);
+INSERT INTO multi_update_auto_a(v) VALUES (0);
+INSERT INTO multi_update_auto_b(v) VALUES (0);
+UPDATE multi_update_auto_a a
+JOIN multi_update_auto_b b ON a.id = b.id
+SET a.id = DEFAULT, b.id = DEFAULT;
+SELECT ROW_COUNT();
+SELECT * FROM multi_update_auto_a;
+SELECT * FROM multi_update_auto_b;
+INSERT INTO multi_update_auto_a(v) VALUES (1);
+INSERT INTO multi_update_auto_b(v) VALUES (1);
+SELECT * FROM multi_update_auto_a ORDER BY id;
+SELECT * FROM multi_update_auto_b ORDER BY id;
+DROP TABLE multi_update_auto_a;
+DROP TABLE multi_update_auto_b;
+
+DROP DATABASE IF EXISTS multi_update_db_a;
+DROP DATABASE IF EXISTS multi_update_db_b;
+CREATE DATABASE multi_update_db_a;
+CREATE DATABASE multi_update_db_b;
+CREATE TABLE multi_update_db_a.t (id INT PRIMARY KEY, v INT);
+CREATE TABLE multi_update_db_b.t (id INT PRIMARY KEY, v INT);
+INSERT INTO multi_update_db_a.t VALUES (1, 0);
+INSERT INTO multi_update_db_b.t VALUES (1, 0);
+UPDATE multi_update_db_a.t a
+JOIN multi_update_db_b.t b ON a.id = b.id
+SET a.v = 11, b.v = 21;
+SELECT * FROM multi_update_db_a.t;
+SELECT * FROM multi_update_db_b.t;
+DROP DATABASE multi_update_db_a;
+DROP DATABASE multi_update_db_b;

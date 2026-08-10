@@ -282,22 +282,22 @@ func (dmlCtx *DMLContext) resolveSingleTable(
 	}
 
 	if joinTbl, ok := tbl.(*tree.JoinTableExpr); ok {
-		if err := dmlCtx.ResolveSingleTable(
+		if err := dmlCtx.resolveSingleTable(
 			ctx,
 			joinTbl.Left,
 			aliasMap,
 			withMap,
-			respectFKCheck,
+			foreignKeyPolicy,
 		); err != nil {
 			return err
 		}
 		if joinTbl.Right != nil {
-			return dmlCtx.ResolveSingleTable(
+			return dmlCtx.resolveSingleTable(
 				ctx,
 				joinTbl.Right,
 				aliasMap,
 				withMap,
-				respectFKCheck,
+				foreignKeyPolicy,
 			)
 		}
 		return nil

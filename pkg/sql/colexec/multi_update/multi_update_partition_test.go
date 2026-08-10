@@ -19,26 +19,11 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
-	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/features"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/require"
 )
-
-func TestPartitionMultiUpdateForwardsAllocationAccountLifecycle(t *testing.T) {
-	registry, err := mpool.NewAllocationAccountRegistry(1, 16)
-	require.NoError(t, err)
-	account, err := registry.Open(1 << 20)
-	require.NoError(t, err)
-
-	raw := &MultiUpdate{}
-	op := &PartitionMultiUpdate{raw: raw}
-	require.False(t, op.ActivatesAllocationAccountLifecycle())
-	require.NoError(t, op.SetAllocationAccount(account))
-	require.Same(t, account, raw.allocationAccount)
-	require.NoError(t, op.ClearAllocationAccount(account))
-	require.Nil(t, raw.allocationAccount)
-}
 
 func TestClonePartitionPhaseContextsSeparatesDeleteAndInsert(t *testing.T) {
 	contexts := []*MultiUpdateCtx{{
@@ -74,9 +59,9 @@ func TestResetMultiUpdateCtxsClassifiesTemporaryIndexTables(t *testing.T) {
 
 	op.resetMultiUpdateCtxs()
 
-	require.Equal(t, UpdateMainTable, op.ctr.updateCtxInfos["main_table"].tableType)
-	require.Equal(t, UpdateUniqueIndexTable, op.ctr.updateCtxInfos[uniqueName].tableType)
-	require.Equal(t, UpdateSecondaryIndexTable, op.ctr.updateCtxInfos[secondaryName].tableType)
+	require.Equal(t, UpdateMainTable, lookupUpdateCtxInfo(op.ctr.updateCtxInfos, op.MultiUpdateCtx[0]).tableType)
+	require.Equal(t, UpdateUniqueIndexTable, lookupUpdateCtxInfo(op.ctr.updateCtxInfos, op.MultiUpdateCtx[1]).tableType)
+	require.Equal(t, UpdateSecondaryIndexTable, lookupUpdateCtxInfo(op.ctr.updateCtxInfos, op.MultiUpdateCtx[2]).tableType)
 }
 
 func TestPartitionMultiUpdateString(t *testing.T) {
@@ -160,6 +145,25 @@ func TestPartitionMultiUpdateSetRejectZeroTemporalUpdatesWriters(t *testing.T) {
 	require.True(t, op.raw.RejectZeroTemporal)
 	require.True(t, active.rejectZeroTemporal)
 	require.True(t, free.rejectZeroTemporal)
+}
+
+func TestPartitionMultiUpdateResetReleasesWriters(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	target := &partitionUpdateTarget{writerIDs: map[uint64]uint64{10: 1}}
+	op := &PartitionMultiUpdate{
+		raw:          &MultiUpdate{},
+		targets:      []*partitionUpdateTarget{target},
+		writers:      map[uint64]*s3WriterDelegate{1: {}},
+		freeWriters:  []*s3WriterDelegate{{}},
+		nextWriterID: 1,
+	}
+
+	op.Reset(proc, false, nil)
+
+	require.Empty(t, op.writers)
+	require.Nil(t, op.freeWriters)
+	require.Empty(t, target.writerIDs)
+	require.Zero(t, op.nextWriterID)
 }
 
 func TestAddInsertAffectRows(t *testing.T) {

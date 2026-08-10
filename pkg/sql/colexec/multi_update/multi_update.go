@@ -82,11 +82,11 @@ func (update *MultiUpdate) Prepare(proc *process.Process) error {
 			}
 			info.tableType = tableType
 			info.isContiguous = isContiguousMapping(updateCtx.InsertCols)
-			update.ctr.updateCtxInfos[updateCtx.TableDef.Name] = info
+			update.ctr.updateCtxInfos[updateCtxKey(updateCtx)] = info
 		}
 	}
 	for _, updateCtx := range update.MultiUpdateCtx {
-		info := update.ctr.updateCtxInfos[updateCtx.TableDef.Name]
+		info := lookupUpdateCtxInfo(update.ctr.updateCtxInfos, updateCtx)
 		if update.Action != UpdateWriteS3 {
 			if info.Source == nil {
 				rel, err := colexec.GetRelAndPartitionRelsByObjRef(proc.Ctx, proc, update.Engine, updateCtx.ObjRef)
@@ -433,7 +433,7 @@ func (update *MultiUpdate) updateOneBatch(proc *process.Process, analyzer proces
 		if len(updateCtx.InsertCols) == 0 {
 			continue
 		}
-		tableType := update.ctr.updateCtxInfos[updateCtx.TableDef.Name].tableType
+		tableType := lookupUpdateCtxInfo(update.ctr.updateCtxInfos, updateCtx).tableType
 		switch tableType {
 		case UpdateMainTable:
 			err = update.insert_main_table(proc, analyzer, i, contextBatch)
@@ -459,34 +459,46 @@ func filterTargetRows(
 	if !updateCtx.DedupByTargetRowID {
 		return input, false, 0, nil
 	}
-	if len(updateCtx.DeleteCols) < 3 ||
+	if len(updateCtx.DeleteCols) < 4 ||
 		updateCtx.DeleteCols[0] < 0 ||
 		updateCtx.DeleteCols[0] >= len(input.Vecs) ||
 		updateCtx.DeleteCols[2] < 0 ||
-		updateCtx.DeleteCols[2] >= len(input.Vecs) {
+		updateCtx.DeleteCols[2] >= len(input.Vecs) ||
+		updateCtx.DeleteCols[3] < 0 ||
+		updateCtx.DeleteCols[3] >= len(input.Vecs) {
 		return nil, false, 0, moerr.NewInternalError(proc.Ctx, "invalid multi-target update selector columns")
 	}
 
 	rowIDVec := input.Vecs[updateCtx.DeleteCols[0]]
 	rowNumberVec := input.Vecs[updateCtx.DeleteCols[2]]
-	if rowIDVec.GetType().Oid != types.T_Rowid || rowNumberVec.GetType().Oid != types.T_int64 {
+	activeVec := input.Vecs[updateCtx.DeleteCols[3]]
+	if rowIDVec.GetType().Oid != types.T_Rowid ||
+		rowNumberVec.GetType().Oid != types.T_int64 ||
+		activeVec.GetType().Oid != types.T_bool {
 		return nil, false, 0, moerr.NewInternalError(proc.Ctx, "invalid multi-target update selector types")
 	}
 
 	rowNumbers := vector.MustFixedColWithTypeCheck[int64](rowNumberVec)
+	active := vector.MustFixedColWithTypeCheck[bool](activeVec)
 	rowIDNulls := rowIDVec.GetNulls()
 	rowNumberNulls := rowNumberVec.GetNulls()
+	activeNulls := activeVec.GetNulls()
 	selections := make([]int64, 0, input.RowCount())
 	for i := 0; i < input.RowCount(); i++ {
 		if rowIDNulls.Contains(uint64(i)) ||
 			rowNumberNulls.Contains(uint64(i)) ||
-			rowNumbers[i] != 1 {
+			activeNulls.Contains(uint64(i)) ||
+			rowNumbers[i] != 1 ||
+			!active[i] {
 			continue
 		}
 		selections = append(selections, int64(i))
 	}
 
-	filtered, err := input.Clone(proc.Mp(), false)
+	// The input can carry a build-side allocation account whose lifetime ends
+	// at the operator boundary. The filtered batch is independently owned by
+	// MULTI_UPDATE, so do not inherit that execution-local account.
+	filtered, err := input.CloneWithoutAllocationAccount(proc.Mp(), true)
 	if err != nil {
 		return nil, false, 0, err
 	}
@@ -611,13 +623,13 @@ func (update *MultiUpdate) resetMultiUpdateCtxs() {
 			tableType = UpdateSecondaryIndexTable
 		}
 		info.tableType = tableType
-		update.ctr.updateCtxInfos[updateCtx.TableDef.Name] = info
+		update.ctr.updateCtxInfos[updateCtxKey(updateCtx)] = info
 	}
 }
 
 func (update *MultiUpdate) resetMultiSources(proc *process.Process) error {
 	for _, updateCtx := range update.MultiUpdateCtx {
-		info := update.ctr.updateCtxInfos[updateCtx.TableDef.Name]
+		info := lookupUpdateCtxInfo(update.ctr.updateCtxInfos, updateCtx)
 		info.Source = nil
 		if update.Action != UpdateWriteS3 {
 			rel, err := colexec.GetRelAndPartitionRelsByObjRef(proc.Ctx, proc, update.Engine, updateCtx.ObjRef)

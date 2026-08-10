@@ -34,8 +34,8 @@ const (
 
 func (builder *QueryBuilder) updateInputProjectNode(nodeID int32) *plan.Node {
 	node := builder.qry.Nodes[nodeID]
-	if node.NodeType == plan.Node_PRE_INSERT && len(node.Children) == 1 {
-		return builder.qry.Nodes[node.Children[0]]
+	for node.NodeType == plan.Node_PRE_INSERT && len(node.ProjectList) == 0 && len(node.Children) == 1 {
+		node = builder.qry.Nodes[node.Children[0]]
 	}
 	return node
 }

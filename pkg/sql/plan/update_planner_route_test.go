@@ -181,8 +181,8 @@ func TestBindUpdateProducesTypedPlannerRoutes(t *testing.T) {
 			prepare: func(mock *MockOptimizer) {
 				mock.ctxt.tables["nation"].Fkeys = []*planpb.ForeignKeyDef{{Name: "fk"}}
 			},
-			wantRoute:  updatePlannerLegacy,
-			wantReason: updateRouteReasonForeignKey,
+			wantRoute:  updatePlannerModern,
+			wantReason: updateRouteReasonNone,
 		},
 		{
 			name: "irregular index column",
