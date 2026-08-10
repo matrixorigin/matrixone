@@ -1395,6 +1395,8 @@ func TestBinaryStringBitmapUsesVectorAllocationAccount(t *testing.T) {
 	require.Equal(t,
 		vec.GetNulls().GetBitmap().ExternalStorageCapacity(),
 		vec.binaryStringRows.ExternalStorageCapacity())
+	vec.SetIsBinaryString(false)
+	require.Equal(t, int(state.account.Snapshot().Used), vec.Allocated())
 	vec.Free(mp)
 	finalizeTestVectorAllocationAccount(t, state)
 }
@@ -1418,6 +1420,87 @@ func TestBinaryStringBitmapAllocationFailureIsAtomic(t *testing.T) {
 
 	vec.Free(mp)
 	finalizeTestVectorAllocationAccount(t, state)
+}
+
+func TestBinaryStringUnionAllocationFailureDoesNotPublishRows(t *testing.T) {
+	tests := []struct {
+		name string
+		run  func(destination, source *Vector, mp *mpool.MPool) error
+	}{
+		{name: "union-one", run: func(destination, source *Vector, mp *mpool.MPool) error {
+			return destination.UnionOne(source, 0, mp)
+		}},
+		{name: "union-multi", run: func(destination, source *Vector, mp *mpool.MPool) error {
+			return destination.UnionMulti(source, 0, 1, mp)
+		}},
+		{name: "union-int64", run: func(destination, source *Vector, mp *mpool.MPool) error {
+			return destination.Union(source, []int64{0}, mp)
+		}},
+		{name: "union-int32", run: func(destination, source *Vector, mp *mpool.MPool) error {
+			return destination.UnionInt32(source, []int32{0}, mp)
+		}},
+		{name: "union-batch", run: func(destination, source *Vector, mp *mpool.MPool) error {
+			return destination.UnionBatch(source, 0, 1, nil, mp)
+		}},
+		{name: "union-all", run: func(destination, source *Vector, mp *mpool.MPool) error {
+			return GetUnionAllFunction(types.T_varchar.ToType(), mp)(destination, source)
+		}},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			const twoVarlenaRowsBytes = 2 * types.VarlenaSize
+			state := newTestVectorAllocationAccount(t, twoVarlenaRowsBytes, 16)
+			mp := mpool.MustNewZero()
+			destination := newAccountedTestVector(t, types.T_varchar.ToType(), state.selection)
+			require.NoError(t, destination.PreExtend(2, mp))
+			require.NoError(t, AppendBytes(destination, []byte("old"), false, mp))
+
+			source := NewOffHeapVecWithType(types.T_varchar.ToType())
+			require.NoError(t, AppendBytes(source, []byte("new"), false, mp))
+			source.SetIsBinaryString(true)
+			before := state.account.Snapshot().Used
+
+			err := test.run(destination, source, mp)
+			require.ErrorIs(t, err, mpool.ErrAllocationAccountCapacity)
+			require.Equal(t, 1, destination.Length())
+			require.Equal(t, []byte("old"), destination.GetBytesAt(0))
+			require.False(t, destination.GetIsBinaryStringAt(0))
+			require.Equal(t, before, state.account.Snapshot().Used)
+
+			source.Free(mp)
+			destination.Free(mp)
+			finalizeTestVectorAllocationAccount(t, state)
+			require.Zero(t, mp.CurrNB())
+		})
+	}
+}
+
+func TestBinaryStringCopyAllocationFailureDoesNotOverwriteRow(t *testing.T) {
+	const twoVarlenaRowsBytes = 2 * types.VarlenaSize
+	state := newTestVectorAllocationAccount(t, twoVarlenaRowsBytes, 16)
+	mp := mpool.MustNewZero()
+	destination := newAccountedTestVector(t, types.T_varchar.ToType(), state.selection)
+	require.NoError(t, destination.PreExtend(2, mp))
+	require.NoError(t, AppendBytes(destination, []byte("old"), false, mp))
+	require.NoError(t, AppendBytes(destination, []byte("text"), false, mp))
+
+	source := NewOffHeapVecWithType(types.T_varchar.ToType())
+	require.NoError(t, AppendBytes(source, []byte("new"), false, mp))
+	source.SetIsBinaryString(true)
+	before := state.account.Snapshot().Used
+
+	err := destination.Copy(source, 0, 0, mp)
+	require.ErrorIs(t, err, mpool.ErrAllocationAccountCapacity)
+	require.Equal(t, []byte("old"), destination.GetBytesAt(0))
+	require.Equal(t, []byte("text"), destination.GetBytesAt(1))
+	require.False(t, destination.GetIsBinaryStringAt(0))
+	require.Equal(t, before, state.account.Snapshot().Used)
+
+	source.Free(mp)
+	destination.Free(mp)
+	finalizeTestVectorAllocationAccount(t, state)
+	require.Zero(t, mp.CurrNB())
 }
 
 func TestDetachedUnaccountedBufferAndTypeChange(t *testing.T) {

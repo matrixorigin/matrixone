@@ -1775,6 +1775,9 @@ func (bat *Batch) Union(bat2 *Batch, sels []int64, m *mpool.MPool) error {
 		if err := vec.PreflightUnionPrepareParamKinds(bat2.Vecs[i], sels, m); err != nil {
 			return err
 		}
+		if err := vec.PreflightUnionBinaryString(bat2.Vecs[i], sels, m); err != nil {
+			return err
+		}
 	}
 	for i, vec := range bat.Vecs {
 		if err := vec.Union(bat2.Vecs[i], sels, m); err != nil {
@@ -1793,6 +1796,10 @@ func (bat *Batch) UnionWindow(bat2 *Batch, offset, cnt int, m *mpool.MPool) erro
 			bat2.Vecs[i], int64(offset), cnt, nil, m); err != nil {
 			return err
 		}
+		if err := vec.PreflightUnionBatchBinaryString(
+			bat2.Vecs[i], int64(offset), cnt, nil, m); err != nil {
+			return err
+		}
 	}
 	for i, vec := range bat.Vecs {
 		if err := vec.UnionBatch(bat2.Vecs[i], int64(offset), cnt, nil, m); err != nil {
@@ -1806,6 +1813,9 @@ func (bat *Batch) UnionWindow(bat2 *Batch, offset, cnt int, m *mpool.MPool) erro
 func (bat *Batch) UnionOne(bat2 *Batch, pos int64, m *mpool.MPool) error {
 	for i, vec := range bat.Vecs {
 		if err := vec.PreflightUnionOnePrepareParamKinds(bat2.Vecs[i], pos, m); err != nil {
+			return err
+		}
+		if err := vec.PreflightUnionOneBinaryString(bat2.Vecs[i], pos, m); err != nil {
 			return err
 		}
 	}
@@ -1846,6 +1856,10 @@ func (bat *Batch) AppendWithCopy(ctx context.Context, mp *mpool.MPool, b *Batch)
 			b.Vecs[i], 0, b.Vecs[i].Length(), nil, mp); err != nil {
 			return bat, err
 		}
+		if err := bat.Vecs[i].PreflightUnionBatchBinaryString(
+			b.Vecs[i], 0, b.Vecs[i].Length(), nil, mp); err != nil {
+			return bat, err
+		}
 	}
 	for i := range bat.Vecs {
 		if err := bat.Vecs[i].UnionBatch(b.Vecs[i], 0, b.Vecs[i].Length(), nil, mp); err != nil {
@@ -1870,6 +1884,10 @@ func (bat *Batch) Append(ctx context.Context, mp *mpool.MPool, b *Batch) (*Batch
 
 	for i := range bat.Vecs {
 		if err := bat.Vecs[i].PreflightUnionBatchPrepareParamKinds(
+			b.Vecs[i], 0, b.Vecs[i].Length(), nil, mp); err != nil {
+			return bat, err
+		}
+		if err := bat.Vecs[i].PreflightUnionBatchBinaryString(
 			b.Vecs[i], 0, b.Vecs[i].Length(), nil, mp); err != nil {
 			return bat, err
 		}

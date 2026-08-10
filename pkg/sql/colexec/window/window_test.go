@@ -802,6 +802,85 @@ func TestWindowAggResultAcrossChunks(t *testing.T) {
 	require.Equal(t, int64(0), proc.Mp().CurrNB())
 }
 
+// TestWindowAggregateResultDropsTailNulls verifies that the window output
+// exposes null bits only for logical result rows. Aggregate state may retain
+// null bits in unused capacity, which must not make a fully populated output
+// look nullable to downstream operators.
+func TestWindowAggregateResultDropsTailNulls(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	rows := aggexec.AggBatchSize - 12
+	values := make([]int32, rows)
+	for i := range values {
+		values[i] = int32(i + 1)
+	}
+	bat := batch.NewWithSize(1)
+	bat.Vecs[0] = testutil.MakeInt32Vector(values, nil, proc.Mp())
+	bat.SetRowCount(rows)
+
+	spec := makeWindowSpec()
+	spec.Expr.(*plan.Expr_W).W.Frame = makeCurrentRowFrame()
+	arg := &Window{
+		WinSpecList: []*plan.Expr{spec},
+		Aggs:        []aggexec.AggFuncExecExpression{newAggExpr()},
+		OperatorBase: vm.OperatorBase{
+			OperatorInfo: vm.OperatorInfo{Idx: 0},
+		},
+	}
+	op := colexec.NewMockOperator().WithBatchs([]*batch.Batch{bat})
+	arg.AppendChild(op)
+
+	require.NoError(t, arg.Prepare(proc))
+	result, err := vm.Exec(arg, proc)
+	require.NoError(t, err)
+	require.NotNil(t, result.Batch)
+	resultVec := result.Batch.Vecs[1]
+	resultValues := vector.MustFixedColWithTypeCheck[int64](resultVec)
+	require.Len(t, resultValues, rows)
+	for _, idx := range []int{0, rows - 1} {
+		require.Equal(t, int64(values[idx]), resultValues[idx], "row %d", idx)
+	}
+	require.False(t, resultVec.HasNull(), "tail capacity must not make a non-null window result nullable")
+
+	arg.Free(proc, false, nil)
+	op.Free(proc, false, nil)
+	proc.Free()
+	require.Equal(t, int64(0), proc.Mp().CurrNB())
+}
+
+func TestWindowAggregateResultKeepsLogicalNulls(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	bat := batch.NewWithSize(1)
+	bat.Vecs[0] = testutil.MakeInt32Vector([]int32{1, 0, 3}, []uint64{1}, proc.Mp())
+	bat.SetRowCount(3)
+
+	spec := makeWindowSpec()
+	spec.Expr.(*plan.Expr_W).W.Frame = makeCurrentRowFrame()
+	arg := &Window{
+		WinSpecList: []*plan.Expr{spec},
+		Aggs:        []aggexec.AggFuncExecExpression{newAggExpr()},
+		OperatorBase: vm.OperatorBase{
+			OperatorInfo: vm.OperatorInfo{Idx: 0},
+		},
+	}
+	op := colexec.NewMockOperator().WithBatchs([]*batch.Batch{bat})
+	arg.AppendChild(op)
+
+	require.NoError(t, arg.Prepare(proc))
+	result, err := vm.Exec(arg, proc)
+	require.NoError(t, err)
+	require.NotNil(t, result.Batch)
+	resultVec := result.Batch.Vecs[1]
+	require.True(t, resultVec.HasNull())
+	require.False(t, resultVec.IsNull(0))
+	require.True(t, resultVec.IsNull(1))
+	require.False(t, resultVec.IsNull(2))
+
+	arg.Free(proc, false, nil)
+	op.Free(proc, false, nil)
+	proc.Free()
+	require.Equal(t, int64(0), proc.Mp().CurrNB())
+}
+
 // TestWindowPartitionedAggResultAcrossChunks covers the receive-per-partition
 // path. The upstream Partition operator guarantees one logical partition per
 // input batch; the constant first column models that contract here.
