@@ -541,13 +541,56 @@ func planHasTextToVarcharCastWithNameAndWidth(p *Plan, funcName string, width in
 	return false
 }
 
+func planHasUnboundedTextToTinyTextCast(p *Plan) bool {
+	p = resolveQueryPlan(p)
+	if p == nil || p.GetQuery() == nil {
+		return false
+	}
+	var visit func(expr *plan.Expr) bool
+	visit = func(expr *plan.Expr) bool {
+		if expr == nil {
+			return false
+		}
+		if f := expr.GetF(); f != nil {
+			name := f.Func.GetObjName()
+			if (name == "cast" || name == "cast_strict" || name == "cast_assign") && len(f.Args) > 0 &&
+				f.Args[0].Typ.Id == int32(types.T_text) && f.Args[0].Typ.Width == 0 &&
+				expr.Typ.Id == int32(types.T_text) && expr.Typ.Width == types.MaxTinyTextLen {
+				return true
+			}
+			for _, arg := range f.Args {
+				if visit(arg) {
+					return true
+				}
+			}
+		}
+		if list := expr.GetList(); list != nil {
+			for _, item := range list.List {
+				if visit(item) {
+					return true
+				}
+			}
+		}
+		return false
+	}
+	for _, node := range p.GetQuery().Nodes {
+		for _, expr := range node.ProjectList {
+			if visit(expr) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func TestUpdateTextConcatCoalesceKeepsTextAssignmentCast(t *testing.T) {
 	mock := NewMockOptimizer(true)
 	addTextCastTableForTest(mock)
 
-	logicPlan, err := runOneStmt(mock, t, "update text_cast_t set txt = concat(coalesce(txt, ''), ' suffix') where id = 1")
+	logicPlan, err := runOneStmt(mock, t, "update text_cast_t set txt = concat(coalesce(vc, txt, ''), ' suffix') where id = 1")
 	assert.NoError(t, err)
 	assert.False(t, planHasTextToCharOrVarcharCast(logicPlan))
+	assert.False(t, planHasUnboundedTextToTinyTextCast(logicPlan))
 }
 
 func TestPrepareUpdateTextConcatCoalesceKeepsTextAssignmentCast(t *testing.T) {
@@ -7003,8 +7046,97 @@ func TestSubqueryInJoinOn(t *testing.T) {
 			require.True(t, foundJoinCondition, "ordinary ON predicate was removed from the JOIN: %s", sql)
 		}
 	}
+}
 
-	runTestShouldError(mock, t, []string{
-		"SELECT n_name FROM nation LEFT JOIN region ON r_regionkey = (SELECT MAX(r_regionkey) FROM region)",
-	})
+func TestSubqueryInOuterJoinOn(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	tests := []struct {
+		name     string
+		sql      string
+		wantMark bool
+		wantSemi bool
+	}{
+		{
+			name: "left join correlated scalar on preserved input",
+			sql: "SELECT a.n_nationkey, b.n_nationkey FROM nation a LEFT JOIN nation b " +
+				"ON a.n_regionkey = b.n_regionkey " +
+				"AND b.n_nationkey = (SELECT MAX(z.n_nationkey) FROM nation z WHERE z.n_regionkey = a.n_regionkey)",
+		},
+		{
+			name: "right join correlated scalar on preserved input",
+			sql: "SELECT a.n_nationkey, b.n_nationkey FROM nation a RIGHT JOIN nation b " +
+				"ON a.n_regionkey = b.n_regionkey " +
+				"AND a.n_nationkey = (SELECT MIN(z.n_nationkey) FROM nation z WHERE z.n_regionkey = b.n_regionkey)",
+		},
+		{
+			name: "left join uncorrelated scalar",
+			sql: "SELECT a.n_nationkey, b.n_nationkey FROM nation a LEFT JOIN nation b " +
+				"ON b.n_nationkey = (SELECT MAX(z.n_nationkey) FROM nation z)",
+		},
+		{
+			name: "left join correlated exists on preserved input",
+			sql: "SELECT a.n_nationkey, b.n_nationkey FROM nation a LEFT JOIN nation b " +
+				"ON a.n_regionkey = b.n_regionkey " +
+				"AND EXISTS (SELECT 1 FROM region z WHERE z.r_regionkey = a.n_regionkey)",
+			wantMark: true,
+		},
+		{
+			name: "left join correlated exists on nullable input",
+			sql: "SELECT a.n_nationkey, b.n_nationkey FROM nation a LEFT JOIN nation b " +
+				"ON a.n_regionkey = b.n_regionkey " +
+				"AND EXISTS (SELECT 1 FROM region z WHERE z.r_regionkey = b.n_regionkey)",
+			wantSemi: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			logicPlan, err := runOneStmt(mock, t, tt.sql)
+			require.NoError(t, err)
+
+			query := logicPlan.GetQuery()
+			foundOuterJoin := false
+			foundMarkJoin := false
+			foundSemiJoin := false
+			joinCount := 0
+			for _, node := range query.Nodes {
+				if node.NodeType == plan.Node_JOIN {
+					joinCount++
+					if node.JoinType == plan.Node_LEFT && len(node.OnList) > 0 {
+						foundOuterJoin = true
+					}
+					if node.JoinType == plan.Node_MARK {
+						foundMarkJoin = true
+					}
+					if node.JoinType == plan.Node_SEMI {
+						foundSemiJoin = true
+					}
+				}
+				for _, expr := range node.OnList {
+					require.False(t, hasSubquery(expr), "JOIN OnList contains Expr_Sub")
+					require.False(t, hasCorrCol(expr), "JOIN OnList contains CorrColRef")
+				}
+				for _, expr := range node.FilterList {
+					require.False(t, hasSubquery(expr), "FILTER contains Expr_Sub")
+					require.False(t, hasCorrCol(expr), "FILTER contains CorrColRef")
+				}
+			}
+
+			require.True(t, foundOuterJoin, "outer join disappeared from plan")
+			require.GreaterOrEqual(t, joinCount, 2, "subquery was not lowered below the outer join")
+			require.Equal(t, tt.wantMark, foundMarkJoin)
+			require.Equal(t, tt.wantSemi, foundSemiJoin)
+		})
+	}
+
+	_, err := runOneStmt(mock, t,
+		"SELECT a.n_nationkey FROM nation a LEFT JOIN nation b ON EXISTS ("+
+			"SELECT 1 FROM region z WHERE z.r_regionkey = a.n_regionkey AND z.r_regionkey = b.n_regionkey)")
+	require.ErrorContains(t, err, "referencing both join inputs")
+
+	_, err = runOneStmt(mock, t,
+		"SELECT outer_n.n_nationkey FROM nation outer_n WHERE EXISTS ("+
+			"SELECT 1 FROM nation a LEFT JOIN nation b ON EXISTS ("+
+			"SELECT 1 FROM region z WHERE z.r_regionkey = outer_n.n_regionkey))")
+	require.ErrorContains(t, err, "deeply correlated subquery")
 }
