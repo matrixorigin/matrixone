@@ -1151,6 +1151,96 @@ func TestBindFuncExprImplByPlanExpr_JsonValid(t *testing.T) {
 	})
 }
 
+func TestBindFuncExprImplByPlanExpr_DatetimeTimestampComparisonRemainsCrossTyped(t *testing.T) {
+	datetimeColumn := &plan.Expr{
+		Typ: plan.Type{Id: int32(types.T_datetime), Scale: 6},
+		Expr: &plan.Expr_Col{
+			Col: &plan.ColRef{ColPos: 0, Name: "request_at"},
+		},
+	}
+	timestampValue, err := BindFuncExprImplByPlanExpr(context.Background(), "now", nil)
+	require.NoError(t, err)
+
+	comparison, err := BindFuncExprImplByPlanExpr(context.Background(), ">", []*plan.Expr{
+		datetimeColumn,
+		timestampValue,
+	})
+	require.NoError(t, err)
+	require.Equal(t, int32(types.T_bool), comparison.Typ.Id)
+	require.Len(t, comparison.GetF().Args, 2)
+	require.NotNil(t, comparison.GetF().Args[0].GetCol())
+	require.Equal(t, int32(types.T_datetime), comparison.GetF().Args[0].Typ.Id)
+	require.Equal(t, int32(types.T_timestamp), comparison.GetF().Args[1].Typ.Id)
+}
+
+func TestBindFuncExprImplByPlanExpr_NonConstantTemporalComparisonUsesCommonKeyType(t *testing.T) {
+	datetimeColumn := &plan.Expr{
+		Typ: plan.Type{Id: int32(types.T_datetime), Scale: 6},
+		Expr: &plan.Expr_Col{
+			Col: &plan.ColRef{RelPos: 0, ColPos: 0, Name: "d"},
+		},
+	}
+	timestampColumn := &plan.Expr{
+		Typ: plan.Type{Id: int32(types.T_timestamp), Scale: 3},
+		Expr: &plan.Expr_Col{
+			Col: &plan.ColRef{RelPos: 1, ColPos: 0, Name: "t"},
+		},
+	}
+
+	comparison, err := BindFuncExprImplByPlanExpr(context.Background(), "=", []*plan.Expr{
+		datetimeColumn,
+		timestampColumn,
+	})
+	require.NoError(t, err)
+	require.Len(t, comparison.GetF().Args, 2)
+	cast := comparison.GetF().Args[0].GetF()
+	require.NotNil(t, cast)
+	require.Equal(t, "cast", cast.Func.ObjName)
+	require.Equal(t, int32(types.T_timestamp), comparison.GetF().Args[0].Typ.Id)
+	require.Equal(t, int32(3), comparison.GetF().Args[0].Typ.Scale)
+	require.NotNil(t, comparison.GetF().Args[1].GetCol())
+	require.Equal(t, int32(types.T_timestamp), comparison.GetF().Args[1].Typ.Id)
+}
+
+func TestBuildPlan_DatetimeTimestampComparisonIsZonemappable(t *testing.T) {
+	compilerCtx := NewMockCompilerContext(true)
+	compilerCtx.dbs["system"] = true
+	compilerCtx.objects["statement_info"] = &plan.ObjectRef{
+		SchemaName: "system",
+		ObjName:    "statement_info",
+	}
+	compilerCtx.tables["statement_info"] = &plan.TableDef{
+		Name: "statement_info",
+		Cols: []*plan.ColDef{{
+			Name: "request_at",
+			Typ:  plan.Type{Id: int32(types.T_datetime), Scale: 6},
+		}},
+	}
+
+	stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL,
+		"select request_at from system.statement_info where request_at > date_sub(now(), interval 1 hour)", 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+	queryPlan, err := BuildPlan(compilerCtx, stmt, false)
+	require.NoError(t, err)
+
+	var scan *plan.Node
+	for _, node := range queryPlan.GetQuery().GetNodes() {
+		if node.GetNodeType() == plan.Node_TABLE_SCAN && node.GetTableDef().GetName() == "statement_info" {
+			scan = node
+			break
+		}
+	}
+	require.NotNil(t, scan)
+	require.Len(t, scan.FilterList, 1)
+	filterArgs := scan.FilterList[0].GetF().GetArgs()
+	require.Len(t, filterArgs, 2)
+	require.NotNil(t, filterArgs[0].GetCol())
+	require.Equal(t, int32(types.T_datetime), filterArgs[0].Typ.Id)
+	require.Equal(t, int32(types.T_timestamp), filterArgs[1].Typ.Id)
+	require.True(t, ExprIsZonemappable(compilerCtx.GetContext(), scan.FilterList[0]))
+}
+
 func TestBindFuncExprImplByPlanExpr_JsonOrderingWithDynamicParam(t *testing.T) {
 	ctx := context.Background()
 

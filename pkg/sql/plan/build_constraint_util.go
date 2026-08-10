@@ -104,6 +104,29 @@ func appendCheckConstraintPlan(
 	colName2Idx map[string]int32,
 	ignoreMode bool,
 ) (int32, error) {
+	return appendCheckConstraintPlanWithColLookup(
+		builder,
+		bindCtx,
+		tableDef,
+		lastNodeID,
+		inputTag,
+		func(colName string) (int32, bool) {
+			colPos, ok := colName2Idx[tableDef.Name+"."+colName]
+			return colPos, ok
+		},
+		ignoreMode,
+	)
+}
+
+func appendCheckConstraintPlanWithColLookup(
+	builder *QueryBuilder,
+	bindCtx *BindContext,
+	tableDef *TableDef,
+	lastNodeID int32,
+	inputTag int32,
+	lookupColPos func(string) (int32, bool),
+	ignoreMode bool,
+) (int32, error) {
 	if len(tableDef.Checks) == 0 {
 		return lastNodeID, nil
 	}
@@ -116,7 +139,7 @@ func appendCheckConstraintPlan(
 		if col.Name == catalog.Row_ID {
 			continue
 		}
-		colPos, ok := colName2Idx[tableDef.Name+"."+col.Name]
+		colPos, ok := lookupColPos(col.Name)
 		if !ok {
 			return 0, moerr.NewInternalErrorf(
 				builder.GetContext(),
@@ -166,11 +189,16 @@ func appendCheckConstraintPlan(
 		filterList = append(filterList, assertExpr)
 	}
 
+	nodeType := plan.Node_ASSERT
+	if ignoreMode {
+		nodeType = plan.Node_FILTER
+	}
 	return builder.appendNode(&plan.Node{
-		NodeType:    plan.Node_FILTER,
-		Children:    []int32{lastNodeID},
-		FilterList:  filterList,
-		ProjectList: getProjectionByLastNodeIfAvailable(builder, lastNodeID),
+		NodeType:        nodeType,
+		Children:        []int32{lastNodeID},
+		FilterList:      filterList,
+		ProjectList:     getProjectionByLastNodeIfAvailable(builder, lastNodeID),
+		FilterIsBarrier: ignoreMode,
 	}, bindCtx), nil
 }
 

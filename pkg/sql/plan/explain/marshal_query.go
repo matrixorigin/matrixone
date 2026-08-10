@@ -155,7 +155,7 @@ func (m MarshalNodeImpl) GetNodeTitle(ctx context.Context, options *ExplainOptio
 		if err != nil {
 			return "", err
 		}
-	case plan.Node_FILTER:
+	case plan.Node_FILTER, plan.Node_ASSERT:
 		//"title" : "(D_0.D_MONTH_SEQ >= 1189) AND (D_0.D_MONTH_SEQ <= 1200)",
 		exprs := NewExprListDescribeImpl(m.node.FilterList)
 		err = exprs.GetDescription(ctx, options, buf)
@@ -192,8 +192,6 @@ func (m MarshalNodeImpl) GetNodeTitle(ctx context.Context, options *ExplainOptio
 		return "cte_scan", nil
 	case plan.Node_LOCK_OP:
 		return "lock_op", nil
-	case plan.Node_ASSERT:
-		return "assert", nil
 	case plan.Node_BROADCAST:
 		return "broadcast", nil
 	case plan.Node_SPLIT:
@@ -586,9 +584,13 @@ func (m MarshalNodeImpl) GetNodeLabels(ctx context.Context, options *ExplainOpti
 			Value: []string{},
 		})
 	case plan.Node_ASSERT:
+		value, err := GetExprsLabelValue(ctx, m.node.FilterList, options)
+		if err != nil {
+			return nil, err
+		}
 		labels = append(labels, models.Label{
 			Name:  Label_Assert,
-			Value: []string{},
+			Value: value,
 		})
 	case plan.Node_FUZZY_FILTER:
 		labels = append(labels, models.Label{
@@ -665,7 +667,7 @@ func (m MarshalNodeImpl) GetNodeLabels(ctx context.Context, options *ExplainOpti
 	}
 
 	// 2. handle shared label information for all nodes, such as filter conditions
-	if len(m.node.FilterList) > 0 && m.node.NodeType != plan.Node_FILTER {
+	if len(m.node.FilterList) > 0 && m.node.NodeType != plan.Node_FILTER && m.node.NodeType != plan.Node_ASSERT {
 		value, err := GetExprsLabelValue(ctx, m.node.FilterList, options)
 		if err != nil {
 			return nil, err
