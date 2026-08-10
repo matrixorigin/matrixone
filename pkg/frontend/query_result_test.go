@@ -371,6 +371,30 @@ func TestSaveBatchPreservesTrailingFlatNullRows(t *testing.T) {
 	})
 }
 
+func TestPrepareQueryResultBatchForWriteMaterializesTrailingNulls(t *testing.T) {
+	mp := mpool.MustNewZero()
+	vec := vector.NewVec(types.T_varchar.ToType())
+	require.NoError(t, vector.AppendBytes(vec, []byte("value"), false, mp))
+	vec.GetNulls().Add(1)
+	bat := batch.NewWithSize(1)
+	bat.SetVector(0, vec)
+	bat.SetRowCount(2)
+
+	writeBat, release, err := prepareQueryResultBatchForWrite(bat, mp)
+	require.NoError(t, err)
+	require.NotNil(t, release)
+	require.NotSame(t, bat, writeBat)
+	assert.Equal(t, 1, vec.Length(), "normalization must not mutate the source vector")
+	require.Len(t, writeBat.Vecs, 1)
+	assert.Equal(t, 2, writeBat.Vecs[0].Length())
+	assert.Equal(t, "value", string(writeBat.Vecs[0].GetBytesAt(0)))
+	assert.True(t, writeBat.Vecs[0].GetNulls().Contains(1))
+
+	release()
+	bat.Clean(mp)
+	require.Zero(t, mp.CurrNB())
+}
+
 func TestPrepareQueryResultBatchForWriteRejectsInvalidFlatCardinality(t *testing.T) {
 	for _, test := range []struct {
 		name      string
