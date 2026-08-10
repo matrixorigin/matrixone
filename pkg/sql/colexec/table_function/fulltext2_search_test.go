@@ -66,12 +66,10 @@ func TestFulltext2SearchPrepareLimit(t *testing.T) {
 
 	// no LIMIT → 0 (streaming path).
 	require.Equal(t, uint64(0), mk(nil).limit)
-	// U64 literal LIMIT.
+	// U64 literal LIMIT (the shape the planner emits — makePlan2Uint64ConstExprWithType). A
+	// prepared `LIMIT ?` parameter (a non-literal expr resolved at EXECUTE via evalLimitExpression)
+	// is covered end-to-end by the fulltext2_prepare BVT.
 	require.Equal(t, uint64(12), mk(&plan.Expr{Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_U64Val{U64Val: 12}}}}).limit)
-	// positive I64 literal LIMIT.
-	require.Equal(t, uint64(9), mk(&plan.Expr{Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_I64Val{I64Val: 9}}}}).limit)
-	// non-positive I64 → stays 0.
-	require.Equal(t, uint64(0), mk(&plan.Expr{Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_I64Val{I64Val: -1}}}}).limit)
 }
 
 func TestFulltext2ScoreAlgo(t *testing.T) {

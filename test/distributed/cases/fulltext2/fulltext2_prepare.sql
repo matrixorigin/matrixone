@@ -67,4 +67,30 @@ set @q = 'quick fox';
 execute ft_bm25 using @q;
 deallocate prepare ft_bm25;
 
+-- ============ prepared LIMIT ? : the '?' LIMIT is a bound parameter, not a literal, so it
+-- must be resolved at EXECUTE and drive the fulltext2_search top-k. Before the fix a
+-- non-literal LIMIT was ignored (st.limit stayed 0 -> unbounded stream). Distinct per-doc term
+-- frequencies (same doc length) give distinct BM25 scores so the top-k order is deterministic.
+drop table if exists lim;
+create table lim(id bigint primary key, body text);
+insert into lim values
+ (1,'fox zeta zeta'),
+ (2,'fox fox zeta'),
+ (3,'fox fox fox'),
+ (4,'alpha alpha alpha'),
+ (5,'beta beta beta');
+create fulltext2 index ft on lim(body);
+prepare ft_lim from 'select id from lim where match(body) against(? in bm25 mode) limit ?';
+set @q = 'fox';
+set @k = 1;
+execute ft_lim using @q, @k;
+set @k = 2;
+execute ft_lim using @q, @k;
+set @k = 3;
+execute ft_lim using @q, @k;
+-- reuse with a different bound LIMIT proves the '?' is re-evaluated per EXECUTE.
+set @k = 10;
+execute ft_lim using @q, @k;
+deallocate prepare ft_lim;
+
 drop database test_fulltext2_prepare;

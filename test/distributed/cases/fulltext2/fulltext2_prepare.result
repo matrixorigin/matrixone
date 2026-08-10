@@ -14,41 +14,41 @@ create fulltext2 index ft on docs(body);
 prepare ft_bool from 'select id from docs where match(body) against(? in boolean mode) order by id';
 set @q = '+quick +fox';
 execute ft_bool using @q;
-id
-0
+➤ id[-5,64,0]  𝄀
+0  𝄀
 4
 set @q = '';
 execute ft_bool using @q;
-id
+➤ id[-5,64,0]
 set @q = '+lazy';
 execute ft_bool using @q;
-id
-2
+➤ id[-5,64,0]  𝄀
+2  𝄀
 3
 set @q = null;
 execute ft_bool using @q;
-id
+➤ id[-5,64,0]
 set @q = '+quick +fox';
 execute ft_bool using @q;
-id
-0
+➤ id[-5,64,0]  𝄀
+0  𝄀
 4
 deallocate prepare ft_bool;
 prepare ft_nl from 'select id from docs where match(body) against(? in natural language mode) order by id';
 set @q = 'quick brown fox';
 execute ft_nl using @q;
-id
+➤ id[-5,64,0]  𝄀
 0
 set @q = 'brown fox';
 execute ft_nl using @q;
-id
+➤ id[-5,64,0]  𝄀
 0
 set @q = '';
 execute ft_nl using @q;
-id
+➤ id[-5,64,0]
 set @q = 'quick brown fox';
 execute ft_nl using @q;
-id
+➤ id[-5,64,0]  𝄀
 0
 deallocate prepare ft_nl;
 drop table if exists bw;
@@ -63,22 +63,55 @@ create fulltext2 index ft on bw(body) with parser gojieba position_free = true;
 prepare ft_bm25 from 'select id from bw where match(body) against(? in bm25 mode) order by id';
 set @q = 'quick fox';
 execute ft_bm25 using @q;
-id
-0
-1
-2
+➤ id[-5,64,0]  𝄀
+0  𝄀
+1  𝄀
+2  𝄀
 4
 set @q = 'lazy';
 execute ft_bm25 using @q;
-id
-2
+➤ id[-5,64,0]  𝄀
+2  𝄀
 3
 set @q = 'quick fox';
 execute ft_bm25 using @q;
-id
-0
-1
-2
+➤ id[-5,64,0]  𝄀
+0  𝄀
+1  𝄀
+2  𝄀
 4
 deallocate prepare ft_bm25;
+drop table if exists lim;
+create table lim(id bigint primary key, body text);
+insert into lim values
+(1,'fox zeta zeta'),
+(2,'fox fox zeta'),
+(3,'fox fox fox'),
+(4,'alpha alpha alpha'),
+(5,'beta beta beta');
+create fulltext2 index ft on lim(body);
+prepare ft_lim from 'select id from lim where match(body) against(? in bm25 mode) limit ?';
+set @q = 'fox';
+set @k = 1;
+execute ft_lim using @q, @k;
+➤ id[-5,64,0]  𝄀
+3
+set @k = 2;
+execute ft_lim using @q, @k;
+➤ id[-5,64,0]  𝄀
+3  𝄀
+2
+set @k = 3;
+execute ft_lim using @q, @k;
+➤ id[-5,64,0]  𝄀
+3  𝄀
+2  𝄀
+1
+set @k = 10;
+execute ft_lim using @q, @k;
+➤ id[-5,64,0]  𝄀
+3  𝄀
+2  𝄀
+1
+deallocate prepare ft_lim;
 drop database test_fulltext2_prepare;

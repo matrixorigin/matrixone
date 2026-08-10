@@ -27,7 +27,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fulltext2"
-	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
@@ -249,20 +248,19 @@ func fulltext2SearchPrepare(proc *process.Process, arg *TableFunction) (tvfState
 	var err error
 	st := &fulltext2SearchState{}
 	arg.ctr.executorsForArgs, err = colexec.NewExpressionExecutorsFromPlanExpressions(proc, arg.Args)
-	arg.ctr.argVecs = make([]*vector.Vector, len(arg.Args))
-	if arg.Limit != nil {
-		if cExpr, ok := arg.Limit.Expr.(*plan.Expr_Lit); ok {
-			switch v := cExpr.Lit.Value.(type) {
-			case *plan.Literal_U64Val:
-				st.limit = v.U64Val
-			case *plan.Literal_I64Val:
-				if v.I64Val > 0 {
-					st.limit = uint64(v.I64Val)
-				}
-			}
-		}
+	if err != nil {
+		return nil, err
 	}
-	return st, err
+	arg.ctr.argVecs = make([]*vector.Vector, len(arg.Args))
+	// Resolve the pushed-down LIMIT. Prepare runs at EXECUTE time (after '?' parameters are
+	// bound), so evalLimitExpression evaluates a literal OR a prepared `LIMIT ?` parameter —
+	// unlike the old literal-only path, which left st.limit==0 for a parameter and silently
+	// fell back to the unbounded stream (losing the pushed top-k bound). Mirrors classic
+	// fulltext (fulltextIndexScanPrepare); default 0 = no pushed limit.
+	if st.limit, err = evalLimitExpression(proc, arg.Limit, 0); err != nil {
+		return nil, err
+	}
+	return st, nil
 }
 
 // start runs one query. argVecs: [0]=cfg(json const), [1]=pattern(varchar).
