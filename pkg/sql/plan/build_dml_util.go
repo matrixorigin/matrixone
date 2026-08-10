@@ -1639,12 +1639,16 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 						}
 
 					case plan.ForeignKeyDef_CASCADE:
+						cascadeChildScanProject := childScanProject
+						if delCtx.skipTargetDelete || delCtx.sourceTag != 0 {
+							cascadeChildScanProject = childProjectList
+						}
 						rightId := builder.appendNode(&plan.Node{
 							NodeType:    plan.Node_TABLE_SCAN,
 							Stats:       &plan.Stats{},
 							ObjRef:      childObjRef,
 							TableDef:    childTableDef,
-							ProjectList: childScanProject,
+							ProjectList: cascadeChildScanProject,
 							BindingTags: childBindingTags,
 						}, bindCtx)
 						if delCtx.skipTargetDelete || delCtx.sourceTag != 0 {
