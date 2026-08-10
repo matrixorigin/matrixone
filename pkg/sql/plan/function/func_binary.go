@@ -1134,7 +1134,7 @@ func concatWsCheck(overloads []overload, inputs []types.Type) checkResult {
 }
 
 func ConcatWs(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) (err error) {
-	propagateBinaryStringResult(ivecs, result)
+	defer propagateBinaryStringResult(ivecs, result)
 	rs := vector.MustFunctionResult[types.Varlena](result)
 	vecs := make([]vector.FunctionParameterWrapper[types.Varlena], len(ivecs))
 	for i := range ivecs {
@@ -4944,7 +4944,7 @@ func eltCheck(overloads []overload, inputs []types.Type) checkResult {
 // Elt: ELT(N, str1, str2, str3, ...) - Returns str1 if N = 1, str2 if N = 2, and so on.
 // Returns NULL if N is less than 1, greater than the number of strings, or NULL.
 func Elt(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
-	propagateBinaryStringResult(ivecs[1:], result)
+	defer propagateBinaryStringResult(ivecs[1:], result)
 	rs := vector.MustFunctionResult[types.Varlena](result)
 
 	// Rest arguments are strings
@@ -5067,7 +5067,7 @@ func makeSetCheck(overloads []overload, inputs []types.Type) checkResult {
 
 // MakeSet: MAKE_SET(bits, str1, str2, ...) - Returns a set value (a string containing substrings separated by ',' characters) consisting of the strings that have the corresponding bit in bits set.
 func MakeSet(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	propagateBinaryStringResult(ivecs[1:], result)
+	defer propagateBinaryStringResult(ivecs[1:], result)
 	rs := vector.MustFunctionResult[types.Varlena](result)
 
 	// First argument: bits (numeric) - handle different numeric types
@@ -5312,7 +5312,7 @@ func exportSetCheck(overloads []overload, inputs []types.Type) checkResult {
 
 // ExportSet: EXPORT_SET(bits, on, off[, separator[, number_of_bits]]) - Returns a string such that for every bit set in the value bits, you get an on string and for every bit not set, you get an off string.
 func ExportSet(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	propagateBinaryStringResult(ivecs[1:], result)
+	defer propagateBinaryStringResult(ivecs[1:], result)
 	rs := vector.MustFunctionResult[types.Varlena](result)
 
 	// First argument: bits (numeric) - handle different numeric types

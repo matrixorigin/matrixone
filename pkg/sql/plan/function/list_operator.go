@@ -20,6 +20,9 @@ import (
 )
 
 func comparisonTypeCastRule(left, right types.Type) (bool, types.Type, types.Type) {
+	if isDatetimeTimestampComparison(left, right) {
+		return false, left, right
+	}
 	hasCast, castLeft, castRight := fixedTypeCastRule1(left, right)
 	if !isCollatedTextType(castLeft.Oid) || !isCollatedTextType(castRight.Oid) {
 		return hasCast, castLeft, castRight
@@ -49,6 +52,11 @@ func comparisonTypeCastRule(left, right types.Type) (bool, types.Type, types.Typ
 	castLeft.Charset = charset
 	castRight.Charset = charset
 	return hasCast || left.Charset != charset || right.Charset != charset, castLeft, castRight
+}
+
+func isDatetimeTimestampComparison(left, right types.Type) bool {
+	return left.Oid == types.T_datetime && right.Oid == types.T_timestamp ||
+		left.Oid == types.T_timestamp && right.Oid == types.T_datetime
 }
 
 var supportedOperators = []FuncNew{
@@ -111,7 +119,7 @@ var supportedOperators = []FuncNew{
 		layout:     COMPARISON_OPERATOR,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
 			if len(inputs) == 2 {
-				has, t1, t2 := comparisonTypeCastRule(inputs[0], inputs[1])
+				has, t1, t2 := fixedTypeCastRule1(inputs[0], inputs[1])
 				if has {
 					if equalAndNotEqualOperatorSupports(t1, t2) {
 						if t1.Oid == t2.Oid && t1.Oid.IsDecimal() {

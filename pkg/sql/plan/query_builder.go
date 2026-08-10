@@ -227,7 +227,7 @@ func (builder *QueryBuilder) buildRemapErrorMessage(
 		if remapInfo.node != nil {
 			var expr *plan.Expr
 			switch remapInfo.node.NodeType {
-			case plan.Node_FILTER:
+			case plan.Node_FILTER, plan.Node_ASSERT:
 				if remapInfo.srcExprIdx >= 0 && remapInfo.srcExprIdx < len(remapInfo.node.FilterList) {
 					expr = remapInfo.node.FilterList[remapInfo.srcExprIdx]
 				}
@@ -818,7 +818,7 @@ func (builder *QueryBuilder) retainInputOrder(nodeID int32, colRefCnt map[[2]int
 		}
 		return refs
 
-	case plan.Node_PROJECT, plan.Node_FILTER, plan.Node_MATERIAL, plan.Node_PARTITION:
+	case plan.Node_PROJECT, plan.Node_FILTER, plan.Node_ASSERT, plan.Node_MATERIAL, plan.Node_PARTITION:
 		if len(node.Children) == 1 {
 			return builder.retainInputOrder(node.Children[0], colRefCnt, refs)
 		}
@@ -2411,7 +2411,13 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 			})
 		}
 
-	case plan.Node_FILTER:
+	case plan.Node_FILTER, plan.Node_ASSERT:
+		if node.NodeType == plan.Node_ASSERT || node.FilterIsBarrier {
+			// Semantic-boundary filters have identity output. Rebuild their
+			// projections from the parent reference counts so stale pre-pruning
+			// child positions cannot survive into compileProjection.
+			node.ProjectList = nil
+		}
 		for _, expr := range node.FilterList {
 			increaseRefCnt(expr, 1, colRefCnt)
 		}

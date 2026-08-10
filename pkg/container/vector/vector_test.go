@@ -1908,6 +1908,52 @@ func TestBinaryStringMetadataUnionMultiAndLifecycle(t *testing.T) {
 	bulkNull.Free(mp)
 }
 
+func TestRawAppendIntroducesOrdinaryBinaryStringRows(t *testing.T) {
+	mp := mpool.MustNewZero()
+	tests := []struct {
+		name string
+		run  func(*Vector) error
+	}{
+		{name: "bytes", run: func(vec *Vector) error {
+			return AppendBytes(vec, []byte("ordinary"), false, mp)
+		}},
+		{name: "multi bytes", run: func(vec *Vector) error {
+			return AppendMultiBytes(vec, []byte("ordinary"), false, 2, mp)
+		}},
+		{name: "bytes list", run: func(vec *Vector) error {
+			return AppendBytesList(vec, [][]byte{[]byte("ordinary")}, nil, mp)
+		}},
+		{name: "string list", run: func(vec *Vector) error {
+			return AppendStringList(vec, []string{"ordinary"}, nil, mp)
+		}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			vec := NewVec(types.T_text.ToType())
+			require.NoError(t, AppendBytes(vec, []byte("binary"), false, mp))
+			vec.SetIsBinaryString(true)
+			require.NoError(t, test.run(vec))
+			require.True(t, vec.GetIsBinaryStringAt(0))
+			for row := 1; row < vec.Length(); row++ {
+				require.False(t, vec.GetIsBinaryStringAt(row))
+			}
+			vec.Free(mp)
+		})
+	}
+
+	source := NewVec(types.T_text.ToType())
+	require.NoError(t, AppendBytes(source, []byte("binary"), false, mp))
+	source.SetIsBinaryString(true)
+	empty, err := source.Window(0, 0)
+	require.NoError(t, err)
+	require.True(t, empty.GetIsBinaryString())
+	require.NoError(t, AppendBytes(empty, []byte("ordinary"), false, mp))
+	require.False(t, empty.GetIsBinaryStringAt(0))
+	empty.Free(mp)
+	source.Free(mp)
+	require.Zero(t, mp.CurrNB())
+}
+
 func TestBinaryStringMetadataStableDecodeAndInplaceSort(t *testing.T) {
 	mp := mpool.MustNewZero()
 	plain := NewVec(types.T_text.ToType())

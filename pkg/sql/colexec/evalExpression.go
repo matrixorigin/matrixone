@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -1996,6 +1997,9 @@ func GetExprZoneMap(
 				if f() {
 					return zms[expr.AuxId]
 				}
+				if foldTemporalComparisonZoneMap(proc, args, zms, expr.AuxId, ">") {
+					return zms[expr.AuxId]
+				}
 				if res, ok = zms[args[0].AuxId].AnyGT(zms[args[1].AuxId]); !ok {
 					zms[expr.AuxId].Reset()
 				} else {
@@ -2008,6 +2012,9 @@ func GetExprZoneMap(
 					return zms[expr.AuxId]
 				}
 				if f() {
+					return zms[expr.AuxId]
+				}
+				if foldTemporalComparisonZoneMap(proc, args, zms, expr.AuxId, "<") {
 					return zms[expr.AuxId]
 				}
 				if res, ok = zms[args[0].AuxId].AnyLT(zms[args[1].AuxId]); !ok {
@@ -2024,6 +2031,9 @@ func GetExprZoneMap(
 				if f() {
 					return zms[expr.AuxId]
 				}
+				if foldTemporalComparisonZoneMap(proc, args, zms, expr.AuxId, ">=") {
+					return zms[expr.AuxId]
+				}
 				if res, ok = zms[args[0].AuxId].AnyGE(zms[args[1].AuxId]); !ok {
 					zms[expr.AuxId].Reset()
 				} else {
@@ -2036,6 +2046,9 @@ func GetExprZoneMap(
 					return zms[expr.AuxId]
 				}
 				if f() {
+					return zms[expr.AuxId]
+				}
+				if foldTemporalComparisonZoneMap(proc, args, zms, expr.AuxId, "<=") {
 					return zms[expr.AuxId]
 				}
 				if res, ok = zms[args[0].AuxId].AnyLE(zms[args[1].AuxId]); !ok {
@@ -2052,6 +2065,9 @@ func GetExprZoneMap(
 				if f() {
 					return zms[expr.AuxId]
 				}
+				if foldTemporalComparisonZoneMap(proc, args, zms, expr.AuxId, "=") {
+					return zms[expr.AuxId]
+				}
 				if res, ok = zms[args[0].AuxId].Intersect(zms[args[1].AuxId]); !ok {
 					zms[expr.AuxId].Reset()
 				} else {
@@ -2066,6 +2082,9 @@ func GetExprZoneMap(
 				if f() {
 					return zms[expr.AuxId]
 				}
+				if foldTemporalComparisonZoneMap(proc, args, zms, expr.AuxId, "!=") {
+					return zms[expr.AuxId]
+				}
 				if res, ok = anyNotEqualZoneMap(zms[args[0].AuxId], zms[args[1].AuxId]); !ok {
 					zms[expr.AuxId].Reset()
 				} else {
@@ -2078,6 +2097,9 @@ func GetExprZoneMap(
 					return zms[expr.AuxId]
 				}
 				if f() {
+					return zms[expr.AuxId]
+				}
+				if foldTemporalBetweenZoneMap(proc, args, zms, expr.AuxId) {
 					return zms[expr.AuxId]
 				}
 				if res, ok = zms[args[0].AuxId].AnyBetween(zms[args[1].AuxId], zms[args[2].AuxId]); !ok {
@@ -2307,6 +2329,204 @@ func anyNotEqualZoneMap(lhs, rhs objectio.ZoneMap) (bool, bool) {
 		return false, true
 	}
 	return true, true
+}
+
+// foldTemporalComparisonZoneMap evaluates a mixed DATETIME/TIMESTAMP
+// comparison against min/max metadata without changing the logical predicate.
+// DATETIME is interpreted in the session time zone, exactly like the execution
+// comparator.  If that conversion is not order-preserving over a zonemap range
+// (for example, the range intersects a DST fold or gap), the result is reset to
+// unknown so the block is conservatively retained for residual evaluation.
+func foldTemporalComparisonZoneMap(
+	proc *process.Process,
+	args []*plan.Expr,
+	zms []objectio.ZoneMap,
+	auxID int32,
+	op string,
+) bool {
+	lhs := zms[args[0].AuxId]
+	rhs := zms[args[1].AuxId]
+	if !lhs.IsInited() || !rhs.IsInited() ||
+		!isDatetimeTimestampZoneMapPair(lhs, rhs) {
+		return false
+	}
+
+	result, ok := temporalZoneMapComparison(lhs, rhs, proc.GetSessionInfo().TimeZone, op)
+	if !ok {
+		zms[auxID].Reset()
+		return true
+	}
+	zms[auxID] = index.SetBool(zms[auxID], result)
+	return true
+}
+
+func temporalZoneMapComparison(
+	lhs, rhs objectio.ZoneMap,
+	zone *time.Location,
+	op string,
+) (bool, bool) {
+	if !lhs.IsInited() || !rhs.IsInited() {
+		return false, false
+	}
+	if lhs.GetType() == rhs.GetType() {
+		switch op {
+		case ">":
+			return lhs.AnyGT(rhs)
+		case ">=":
+			return lhs.AnyGE(rhs)
+		case "<":
+			return lhs.AnyLT(rhs)
+		case "<=":
+			return lhs.AnyLE(rhs)
+		case "=":
+			return lhs.Intersect(rhs)
+		case "!=":
+			return anyNotEqualZoneMap(lhs, rhs)
+		default:
+			return false, false
+		}
+	}
+	if !isDatetimeTimestampZoneMapPair(lhs, rhs) {
+		return false, false
+	}
+
+	timestampScale := lhs.GetScale()
+	if rhs.GetType() == types.T_timestamp {
+		timestampScale = rhs.GetScale()
+	}
+	lhsTimestamp, lhsOK := temporalZoneMapAsTimestampRange(lhs, zone, timestampScale)
+	rhsTimestamp, rhsOK := temporalZoneMapAsTimestampRange(rhs, zone, timestampScale)
+	if !lhsOK || !rhsOK {
+		return false, false
+	}
+	switch op {
+	case ">":
+		return lhsTimestamp.max > rhsTimestamp.min, true
+	case ">=":
+		return lhsTimestamp.max >= rhsTimestamp.min, true
+	case "<":
+		return lhsTimestamp.min < rhsTimestamp.max, true
+	case "<=":
+		return lhsTimestamp.min <= rhsTimestamp.max, true
+	case "=":
+		return lhsTimestamp.max >= rhsTimestamp.min && lhsTimestamp.min <= rhsTimestamp.max, true
+	case "!=":
+		return lhsTimestamp.min != lhsTimestamp.max ||
+			rhsTimestamp.min != rhsTimestamp.max ||
+			lhsTimestamp.min != rhsTimestamp.min, true
+	default:
+		return false, false
+	}
+}
+
+func foldTemporalBetweenZoneMap(
+	proc *process.Process,
+	args []*plan.Expr,
+	zms []objectio.ZoneMap,
+	auxID int32,
+) bool {
+	if len(args) != 3 {
+		return false
+	}
+	hasDatetime, hasTimestamp := false, false
+	for _, arg := range args {
+		zm := zms[arg.AuxId]
+		if !zm.IsInited() {
+			return false
+		}
+		switch zm.GetType() {
+		case types.T_datetime:
+			hasDatetime = true
+		case types.T_timestamp:
+			hasTimestamp = true
+		default:
+			return false
+		}
+	}
+	if !hasDatetime || !hasTimestamp {
+		return false
+	}
+
+	zone := proc.GetSessionInfo().TimeZone
+	valueZM := zms[args[0].AuxId]
+	lowerZM := zms[args[1].AuxId]
+	upperZM := zms[args[2].AuxId]
+	if valueZM.GetType() == types.T_datetime &&
+		lowerZM.GetType() == types.T_timestamp &&
+		upperZM.GetType() == types.T_timestamp {
+		timestampScale := lowerZM.GetScale()
+		valueRange, valueOK := temporalZoneMapAsTimestampRange(valueZM, zone, timestampScale)
+		lowerRange, lowerOK := temporalZoneMapAsTimestampRange(lowerZM, zone, timestampScale)
+		upperRange, upperOK := temporalZoneMapAsTimestampRange(upperZM, zone, timestampScale)
+		if !valueOK || !lowerOK || !upperOK {
+			zms[auxID].Reset()
+		} else {
+			result := valueRange.max >= lowerRange.min && valueRange.min <= upperRange.max
+			zms[auxID] = index.SetBool(zms[auxID], result)
+		}
+		return true
+	}
+
+	lowerResult, lowerOK := temporalZoneMapComparison(
+		valueZM, lowerZM, zone, ">=",
+	)
+	upperResult, upperOK := temporalZoneMapComparison(
+		valueZM, upperZM, zone, "<=",
+	)
+	if lowerOK && !lowerResult || upperOK && !upperResult {
+		zms[auxID] = index.SetBool(zms[auxID], false)
+	} else if lowerOK && upperOK {
+		zms[auxID] = index.SetBool(zms[auxID], true)
+	} else {
+		zms[auxID].Reset()
+	}
+	return true
+}
+
+func isDatetimeTimestampZoneMapPair(lhs, rhs objectio.ZoneMap) bool {
+	return lhs.GetType() == types.T_datetime && rhs.GetType() == types.T_timestamp ||
+		lhs.GetType() == types.T_timestamp && rhs.GetType() == types.T_datetime
+}
+
+type temporalTimestampRange struct {
+	min types.Timestamp
+	max types.Timestamp
+}
+
+func temporalZoneMapAsTimestampRange(
+	zm objectio.ZoneMap,
+	zone *time.Location,
+	timestampScale int32,
+) (temporalTimestampRange, bool) {
+	if zm.GetType() == types.T_timestamp {
+		minValue, minOK := zm.GetMin().(types.Timestamp)
+		maxValue, maxOK := zm.GetMax().(types.Timestamp)
+		return temporalTimestampRange{min: minValue, max: maxValue}, minOK && maxOK
+	}
+	if zm.GetType() != types.T_datetime {
+		return temporalTimestampRange{}, false
+	}
+
+	minValue, minOK := zm.GetMin().(types.Datetime)
+	maxValue, maxOK := zm.GetMax().(types.Datetime)
+	if !minOK || !maxOK {
+		return temporalTimestampRange{}, false
+	}
+
+	var minTimestamp, maxTimestamp types.Timestamp
+	if isSingleValueZoneMap(zm) {
+		minTimestamp = minValue.ToTimestamp(zone).TruncateToScale(timestampScale)
+		maxTimestamp = minTimestamp
+	} else {
+		var ok bool
+		minTimestamp, maxTimestamp, ok = types.DatetimeRangeToTimestampRange(minValue, maxValue, zone)
+		if !ok {
+			return temporalTimestampRange{}, false
+		}
+		minTimestamp = minTimestamp.TruncateToScale(timestampScale)
+		maxTimestamp = maxTimestamp.TruncateToScale(timestampScale)
+	}
+	return temporalTimestampRange{min: minTimestamp, max: maxTimestamp}, true
 }
 
 func isSingleValueZoneMap(zm objectio.ZoneMap) bool {
