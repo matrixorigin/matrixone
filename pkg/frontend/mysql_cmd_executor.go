@@ -947,7 +947,15 @@ func doSetVar(
 
 		if systemVar, exists := gSysVarsDefs[assign.Name]; exists {
 			if isDefault, isBool := value.(bool); isBool && isDefault {
-				value = systemVar.Default
+				if scope, isTxnIsolation := transactionIsolationAssignmentScope(assign); isTxnIsolation {
+					value, evalErr = transactionIsolationDefaultValue(
+						execCtx.reqCtx, ses, scope)
+					if evalErr != nil {
+						return evaluatedAssignment{}, evalErr
+					}
+				} else {
+					value = systemVar.Default
+				}
 			}
 		}
 		return evaluatedAssignment{
@@ -1021,6 +1029,34 @@ func doSetVar(
 				if err != nil {
 					return err
 				}
+			}
+		} else if scope, isTxnIsolation := transactionIsolationAssignmentScope(assign); isTxnIsolation {
+			switch scope {
+			case tree.TransactionScopeNext:
+				def := gSysVarsDefs[canonicalSystemVariableName(name)]
+				converted, convertErr := def.GetType().Convert(value)
+				if convertErr != nil {
+					return convertErr
+				}
+				isolation, isolationErr := txnIsolationFromSystemValue(execCtx.reqCtx, converted)
+				if isolationErr != nil {
+					return isolationErr
+				}
+				txnHandler := ses.GetTxnHandler()
+				if txnHandler == nil {
+					return moerr.NewInternalError(execCtx.reqCtx, "transaction handler is not initialized")
+				}
+				allowCurrentStatementTxn := execCtx.txnOpt.activeTxnAtStartKnown &&
+					!execCtx.txnOpt.activeTxnAtStart
+				return txnHandler.setNextTxnIsolation(
+					execCtx.reqCtx, isolation, allowCurrentStatementTxn)
+			case tree.TransactionScopeSession:
+				return setVarFunc(true, false, name, value, sql)
+			case tree.TransactionScopeGlobal:
+				return setVarFunc(true, true, name, value, sql)
+			default:
+				return moerr.NewInvalidInputf(execCtx.reqCtx,
+					"unsupported transaction scope %d", scope)
 			}
 		} else if assign.System && name == "clear_privilege_cache" {
 			//if it is global variable, it does nothing.

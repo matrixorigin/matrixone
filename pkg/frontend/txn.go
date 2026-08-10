@@ -294,6 +294,66 @@ func serviceTxnIsolationSystemValue(service string) (string, bool) {
 	return txnIsolationToSystemValue(isolation)
 }
 
+// normalizeTxnIsolationSystemValue is the upgrade read boundary. Older
+// releases accepted READ-UNCOMMITTED and SERIALIZABLE in the compatibility
+// catalog even though the txn client can execute only RC and SI. Keep new
+// writes strict, but normalize those two legacy values to the service default
+// so account sessions remain available and report the isolation they execute.
+func normalizeTxnIsolationSystemValue(
+	ctx context.Context,
+	service string,
+	value interface{},
+) (string, pbtxn.TxnIsolation, error) {
+	if isolation, err := txnIsolationFromSystemValue(ctx, value); err == nil {
+		normalized, _ := txnIsolationToSystemValue(isolation)
+		return normalized, isolation, nil
+	}
+
+	text, ok := value.(string)
+	if !ok {
+		return "", 0, moerr.NewInvalidInputf(ctx, "invalid transaction isolation level %v", value)
+	}
+	switch strings.ToUpper(text) {
+	case "READ-UNCOMMITTED", "SERIALIZABLE":
+		if normalized, ok := serviceTxnIsolationSystemValue(service); ok {
+			isolation, _ := txnIsolationFromSystemValue(ctx, normalized)
+			return normalized, isolation, nil
+		}
+		return "REPEATABLE-READ", pbtxn.TxnIsolation_SI, nil
+	default:
+		return "", 0, moerr.NewNotSupportedf(ctx,
+			"transaction isolation level %s is not supported", text)
+	}
+}
+
+func transactionIsolationDefaultValue(
+	ctx context.Context,
+	ses *Session,
+	scope tree.TransactionScope,
+) (string, error) {
+	var value interface{}
+	var err error
+	switch scope {
+	case tree.TransactionScopeNext:
+		value, err = ses.GetSessionSysVar(transactionIsolationSystemVariable)
+	case tree.TransactionScopeSession:
+		value, err = ses.GetGlobalSysVar(transactionIsolationSystemVariable)
+	case tree.TransactionScopeGlobal:
+		if serviceValue, ok := serviceTxnIsolationSystemValue(ses.service); ok {
+			value = serviceValue
+		} else {
+			value = "REPEATABLE-READ"
+		}
+	default:
+		return "", moerr.NewInvalidInputf(ctx, "unsupported transaction scope %d", scope)
+	}
+	if err != nil {
+		return "", err
+	}
+	normalized, _, err := normalizeTxnIsolationSystemValue(ctx, ses.service, value)
+	return normalized, err
+}
+
 func (th *TxnHandler) setSessionTxnIsolation(isolation pbtxn.TxnIsolation) {
 	th.mu.Lock()
 	defer th.mu.Unlock()
@@ -309,8 +369,7 @@ func (th *TxnHandler) setNextTxnIsolation(
 	th.mu.Lock()
 	defer th.mu.Unlock()
 	if th.inActiveTxnUnsafe() && !allowCurrentStatementTxn {
-		return moerr.NewInvalidInput(ctx,
-			"Transaction characteristics can't be changed while a transaction is in progress")
+		return moerr.NewCantChangeTxCharacteristics(ctx)
 	}
 	th.nextTxnIsolation = isolation
 	th.hasNextTxnIsolation = true
@@ -320,8 +379,8 @@ func (th *TxnHandler) setNextTxnIsolation(
 // txnIsolationUnsafe returns the isolation override for the transaction being
 // created and whether a next-transaction override must be consumed after New
 // successfully publishes an owned operator. The caller must hold th.mu.
-func (th *TxnHandler) txnIsolationUnsafe() (pbtxn.TxnIsolation, bool, bool) {
-	if th.hasNextTxnIsolation {
+func (th *TxnHandler) txnIsolationUnsafe(allowNext bool) (pbtxn.TxnIsolation, bool, bool) {
+	if allowNext && th.hasNextTxnIsolation {
 		return th.nextTxnIsolation, true, true
 	}
 	if th.hasSessionTxnIsolation {
@@ -550,7 +609,9 @@ func (th *TxnHandler) createTxnOpUnsafe(execCtx *ExecCtx) error {
 		opts = append(opts,
 			txnclient.WithTxnMode(pbtxn.TxnMode_Pessimistic),
 			txnclient.WithTxnIsolation(pbtxn.TxnIsolation_RC))
-	} else if isolation, ok, consumeNext := th.txnIsolationUnsafe(); ok {
+	} else if isolation, ok, consumeNext := th.txnIsolationUnsafe(
+		statementConsumesNextTxnIsolation(execCtx.stmt),
+	); ok {
 		opts = append(opts, txnclient.WithTxnIsolation(isolation))
 		consumeNextTxnIsolation = consumeNext
 	}
@@ -808,13 +869,64 @@ func needToFinishTransactionAtStatementEnd(execCtx *ExecCtx) bool {
 	if execCtx == nil {
 		return false
 	}
+	if isTransactionCharacteristicStatement(execCtx.stmt) {
+		return execCtx.txnOpt.activeTxnAtStartKnown && !execCtx.txnOpt.activeTxnAtStart
+	}
 	if NeedToBeCommittedInActiveTransaction(execCtx.stmt) {
 		return true
 	}
-	if _, ok := execCtx.stmt.(*tree.SetTransaction); !ok {
+	return false
+}
+
+// transactionIsolationAssignmentScope returns the transaction-characteristic
+// scope carried by a system-variable assignment. The legacy Global flag wins
+// for programmatically constructed ASTs that predate VarAssignmentExpr.TxnScope.
+func transactionIsolationAssignmentScope(
+	assign *tree.VarAssignmentExpr,
+) (tree.TransactionScope, bool) {
+	if assign == nil || !assign.System || !isTransactionIsolationSystemVariable(assign.Name) {
+		return 0, false
+	}
+	if assign.Global {
+		return tree.TransactionScopeGlobal, true
+	}
+	return assign.TxnScope, true
+}
+
+// isTransactionCharacteristicStatement identifies statements whose only
+// semantic effect is changing transaction characteristics. They may use a
+// frontend-owned temporary transaction internally, but must not finish an
+// already active user transaction.
+func isTransactionCharacteristicStatement(stmt tree.Statement) bool {
+	switch st := stmt.(type) {
+	case *tree.SetTransaction:
+		return true
+	case *tree.SetVar:
+		if len(st.Assignments) == 0 {
+			return false
+		}
+		for _, assign := range st.Assignments {
+			if _, ok := transactionIsolationAssignmentScope(assign); !ok {
+				return false
+			}
+		}
+		return true
+	default:
 		return false
 	}
-	return execCtx.txnOpt.activeTxnAtStartKnown && !execCtx.txnOpt.activeTxnAtStart
+}
+
+// statementConsumesNextTxnIsolation marks semantic transaction admission.
+// SET statements can create an implementation-only frontend transaction for
+// expression evaluation or catalog writes; that temporary owner must never
+// consume a NEXT override intended for the next application transaction.
+func statementConsumesNextTxnIsolation(stmt tree.Statement) bool {
+	switch stmt.(type) {
+	case *tree.SetVar, *tree.SetTransaction:
+		return false
+	default:
+		return true
+	}
 }
 
 func (th *TxnHandler) rollbackUnsafe(

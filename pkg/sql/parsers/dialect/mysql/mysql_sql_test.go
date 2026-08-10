@@ -119,6 +119,32 @@ func TestSetTransactionScope(t *testing.T) {
 	}
 }
 
+func TestSetTransactionIsolationVariableScope(t *testing.T) {
+	tests := []struct {
+		sql   string
+		scope tree.TransactionScope
+	}{
+		{sql: "set transaction_isolation = 'READ-COMMITTED'", scope: tree.TransactionScopeSession},
+		{sql: "set session transaction_isolation = 'READ-COMMITTED'", scope: tree.TransactionScopeSession},
+		{sql: "set local transaction_isolation = 'READ-COMMITTED'", scope: tree.TransactionScopeSession},
+		{sql: "set global transaction_isolation = 'READ-COMMITTED'", scope: tree.TransactionScopeGlobal},
+		{sql: "set @@transaction_isolation = 'READ-COMMITTED'", scope: tree.TransactionScopeNext},
+		{sql: "set @@session.transaction_isolation = 'READ-COMMITTED'", scope: tree.TransactionScopeSession},
+		{sql: "set @@global.transaction_isolation = 'READ-COMMITTED'", scope: tree.TransactionScopeGlobal},
+	}
+
+	for _, test := range tests {
+		t.Run(test.sql, func(t *testing.T) {
+			stmt, err := ParseOne(context.Background(), test.sql, 1)
+			require.NoError(t, err)
+			setVar, ok := stmt.(*tree.SetVar)
+			require.True(t, ok)
+			require.Len(t, setVar.Assignments, 1)
+			require.Equal(t, test.scope, setVar.Assignments[0].TxnScope)
+		})
+	}
+}
+
 func TestDropFunctionIfExists(t *testing.T) {
 	tests := []struct {
 		sql      string

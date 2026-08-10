@@ -2907,6 +2907,7 @@ var_assignment:
     {
         $$ = &tree.VarAssignmentExpr{
             System: true,
+            TxnScope: tree.TransactionScopeSession,
             Name: $1,
             Value: $3,
         }
@@ -2916,6 +2917,7 @@ var_assignment:
         $$ = &tree.VarAssignmentExpr{
             System: true,
             Global: true,
+            TxnScope: tree.TransactionScopeGlobal,
             Name: $2,
             Value: $4,
         }
@@ -2925,6 +2927,7 @@ var_assignment:
         $$ = &tree.VarAssignmentExpr{
             System: true,
             Global: true,
+            TxnScope: tree.TransactionScopeGlobal,
             Name: $2,
             Value: $4,
         }
@@ -2933,6 +2936,7 @@ var_assignment:
     {
         $$ = &tree.VarAssignmentExpr{
             System: true,
+            TxnScope: tree.TransactionScopeSession,
             Name: $2,
             Value: $4,
         }
@@ -2941,6 +2945,7 @@ var_assignment:
     {
         $$ = &tree.VarAssignmentExpr{
             System: true,
+            TxnScope: tree.TransactionScopeSession,
             Name: $2,
             Value: $4,
         }
@@ -2972,17 +2977,22 @@ var_assignment:
     {
         v := strings.ToLower($1)
 		var isGlobal bool
+		txnScope := tree.TransactionScopeNext
 		if strings.HasPrefix(v, "global.") {
 			isGlobal = true
+			txnScope = tree.TransactionScopeGlobal
 			v = strings.TrimPrefix(v, "global.")
 		} else if strings.HasPrefix(v, "session.") {
+			txnScope = tree.TransactionScopeSession
 			v = strings.TrimPrefix(v, "session.")
 		} else if strings.HasPrefix(v, "local.") {
+			txnScope = tree.TransactionScopeSession
 			v = strings.TrimPrefix(v, "local.")
 		} 
         $$ = &tree.VarAssignmentExpr{
             System: true,
             Global: isGlobal,
+			TxnScope: txnScope,
             Name: v,
             Value: $3,
         }

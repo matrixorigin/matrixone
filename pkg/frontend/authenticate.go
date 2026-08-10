@@ -11847,9 +11847,21 @@ func doRevokePrivilegeImplicitly(
 }
 
 func doSetGlobalSystemVariable(ctx context.Context, ses *Session, varName string, varValue interface{}) (err error) {
+	return doSetGlobalSystemVariables(ctx, ses, []string{varName}, varValue)
+}
+
+// doSetGlobalSystemVariables persists equivalent compatibility names in one
+// catalog transaction. transaction_isolation uses this to update both the
+// canonical name and tx_isolation so old and new CNs agree during a rolling
+// upgrade.
+func doSetGlobalSystemVariables(
+	ctx context.Context,
+	ses *Session,
+	varNames []string,
+	varValue interface{},
+) (err error) {
 	accountId := uint64(ses.GetTenantInfo().TenantID)
 	accountName := ses.GetTenantName()
-	varName = strings.ToLower(varName)
 	bh := ses.GetBackgroundExec(ctx)
 	defer bh.Close()
 
@@ -11860,24 +11872,29 @@ func doSetGlobalSystemVariable(ctx context.Context, ses *Session, varName string
 		err = finishTxn(ctx, bh, err)
 	}()
 
-	// check if var exists
-	sql := getSqlForGetSysVarWithAccount(accountId, varName)
-	bh.ClearExecResultSet()
-	if err = bh.Exec(ctx, sql); err != nil {
-		return
-	}
+	for _, varName := range varNames {
+		varName = strings.ToLower(varName)
+		// check if var exists
+		sql := getSqlForGetSysVarWithAccount(accountId, varName)
+		bh.ClearExecResultSet()
+		if err = bh.Exec(ctx, sql); err != nil {
+			return
+		}
 
-	var erArray []ExecResult
-	if erArray, err = getResultSet(ctx, bh); err != nil {
-		return
-	}
+		var erArray []ExecResult
+		if erArray, err = getResultSet(ctx, bh); err != nil {
+			return
+		}
 
-	if execResultArrayHasData(erArray) {
-		sql = getSqlForUpdateSysVarValue(getVariableValue(varValue), accountId, varName)
-	} else {
-		sql = getSqlForInsertSysVarWithAccount(accountId, accountName, varName, getVariableValue(varValue))
+		if execResultArrayHasData(erArray) {
+			sql = getSqlForUpdateSysVarValue(getVariableValue(varValue), accountId, varName)
+		} else {
+			sql = getSqlForInsertSysVarWithAccount(accountId, accountName, varName, getVariableValue(varValue))
+		}
+		if err = bh.Exec(ctx, sql); err != nil {
+			return
+		}
 	}
-	err = bh.Exec(ctx, sql)
 	return
 }
 

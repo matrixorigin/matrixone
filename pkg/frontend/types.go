@@ -1393,9 +1393,23 @@ func (ses *feSessionImpl) GetGlobalSysVar(name string) (interface{}, error) {
 
 	// If global vars have not been initialized, fall back to default.
 	if ses.gSysVars == nil {
+		if isTransactionIsolationSystemVariable(name) {
+			if value, ok := serviceTxnIsolationSystemValue(ses.service); ok {
+				return value, nil
+			}
+		}
 		return gSysVarsDefs[canonicalSystemVariableName(name)].Default, nil
 	}
-	return ses.gSysVars.Get(name), nil
+	value := ses.gSysVars.Get(name)
+	if isTransactionIsolationSystemVariable(name) {
+		normalized, _, err := normalizeTxnIsolationSystemValue(
+			context.Background(), ses.service, value)
+		if err != nil {
+			return nil, err
+		}
+		return normalized, nil
+	}
+	return value, nil
 }
 
 func (ses *Session) SetGlobalSysVar(ctx context.Context, name string, val interface{}) (err error) {
@@ -1459,7 +1473,11 @@ func (ses *Session) SetGlobalSysVar(ctx context.Context, name string, val interf
 
 	// save to table first
 	canonicalName := canonicalSystemVariableName(name)
-	if err = doSetGlobalSystemVariable(ctx, ses, canonicalName, val); err != nil {
+	persistNames := []string{canonicalName}
+	if isTransactionIsolationSystemVariable(name) {
+		persistNames = append(persistNames, transactionIsolationSystemVariableAlias)
+	}
+	if err = doSetGlobalSystemVariables(ctx, ses, persistNames, val); err != nil {
 		return
 	}
 	ses.gSysVars.Set(canonicalName, val)
@@ -1480,6 +1498,11 @@ func (ses *Session) GetSessionSysVar(name string) (interface{}, error) {
 	// when ses.sesSysVars is nil
 	// in this scenario, use Default value in gSysVarsDefs
 	if ses.sesSysVars == nil {
+		if isTransactionIsolationSystemVariable(name) {
+			if value, ok := serviceTxnIsolationSystemValue(ses.service); ok {
+				return value, nil
+			}
+		}
 		return gSysVarsDefs[canonicalSystemVariableName(name)].Default, nil
 	}
 	// sesSysVars is a clone of gSysVars (the per-account catalog
@@ -1494,6 +1517,14 @@ func (ses *Session) GetSessionSysVar(name string) (interface{}, error) {
 	// vector-index sysvars (ivf_threads_build, kmeans_train_percent,
 	// …) and trip BuildIdxcronMetadata or similar nil-rejecting paths.
 	if v := ses.sesSysVars.Get(name); v != nil {
+		if isTransactionIsolationSystemVariable(name) {
+			normalized, _, err := normalizeTxnIsolationSystemValue(
+				context.Background(), ses.service, v)
+			if err != nil {
+				return nil, err
+			}
+			return normalized, nil
+		}
 		return v, nil
 	}
 	return gSysVarsDefs[canonicalSystemVariableName(name)].Default, nil

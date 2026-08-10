@@ -51,8 +51,13 @@ func NewSetVar(a []*VarAssignmentExpr) *SetVar {
 // for variable = expr
 type VarAssignmentExpr struct {
 	NodeFormatter
-	System   bool
-	Global   bool
+	System bool
+	Global bool
+	// TxnScope preserves the semantic scope of transaction characteristic
+	// system variables. Global is retained for the generic SET execution and
+	// plan boundaries, while TxnScope distinguishes an unqualified @@var
+	// (NEXT for transaction_isolation) from SESSION/LOCAL and GLOBAL.
+	TxnScope TransactionScope
 	SetNames bool
 	Name     string
 	Value    Expr
@@ -76,9 +81,14 @@ func (node *VarAssignmentExpr) Format(ctx *FmtCtx) {
 }
 
 func NewVarAssignmentExpr(s bool, g bool, n string, v Expr, r Expr) *VarAssignmentExpr {
+	txnScope := TransactionScopeSession
+	if g {
+		txnScope = TransactionScopeGlobal
+	}
 	return &VarAssignmentExpr{
 		System:   s,
 		Global:   g,
+		TxnScope: txnScope,
 		Name:     n,
 		Value:    v,
 		Reserved: r,

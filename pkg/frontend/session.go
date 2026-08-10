@@ -319,10 +319,12 @@ func (ses *Session) InitSystemVariables(ctx context.Context, bh BackgroundExec) 
 	if transactionIsolationValue == nil {
 		transactionIsolationValue = gSysVarsDefs[transactionIsolationSystemVariable].Default
 	}
-	transactionIsolation, err := txnIsolationFromSystemValue(ctx, transactionIsolationValue)
+	normalizedTransactionIsolation, transactionIsolation, err :=
+		normalizeTxnIsolationSystemValue(ctx, ses.service, transactionIsolationValue)
 	if err != nil {
 		return err
 	}
+	sessionVars.Set(transactionIsolationSystemVariable, normalizedTransactionIsolation)
 
 	ses.mu.Lock()
 	ses.gSysVars = sv
@@ -1997,12 +1999,20 @@ func (ses *Session) getGlobalSysVars(ctx context.Context, bh BackgroundExec) (gS
 	// New writes are canonical. Preserve compatibility with old catalogs that
 	// contain only tx_isolation, while making a canonical row authoritative if
 	// both forms happen to exist.
+	var catalogIsolationValue interface{}
 	if hasCanonicalIsolation {
-		gSysVars[transactionIsolationSystemVariable] = canonicalIsolationValue
-		gSysVars[transactionIsolationSystemVariableAlias] = canonicalIsolationValue
+		catalogIsolationValue = canonicalIsolationValue
 	} else if hasAliasIsolation {
-		gSysVars[transactionIsolationSystemVariable] = aliasIsolationValue
-		gSysVars[transactionIsolationSystemVariableAlias] = aliasIsolationValue
+		catalogIsolationValue = aliasIsolationValue
+	}
+	if catalogIsolationValue != nil {
+		normalized, _, normalizeErr := normalizeTxnIsolationSystemValue(
+			tenantCtx, ses.service, catalogIsolationValue)
+		if normalizeErr != nil {
+			return nil, normalizeErr
+		}
+		gSysVars[transactionIsolationSystemVariable] = normalized
+		gSysVars[transactionIsolationSystemVariableAlias] = normalized
 	}
 
 	return
