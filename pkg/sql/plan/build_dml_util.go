@@ -290,6 +290,13 @@ func buildUpdatePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 		}
 		newCols = append(newCols, col)
 	}
+	if updatePlanCtx.isFkRecursionCall {
+		// Recursive actions share catalog TableDefs with sibling scans. Keep the
+		// hidden-column trimming below local to this update branch; otherwise the
+		// later primary-key check can make an already-built wide-table scan project
+		// the removed __mo_rowid ordinal.
+		updatePlanCtx.tableDef = CloneTableDefForPlan(updatePlanCtx.tableDef, false)
+	}
 	updatePlanCtx.tableDef.Cols = newCols
 	insertColLength := len(updatePlanCtx.insertColPos) + 1
 	projectList := make([]*Expr, insertColLength)
