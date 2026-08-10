@@ -107,6 +107,42 @@ func TestIssue25526PreparedUpdateJoinSecondExecute(t *testing.T) {
 			}
 			require.NoError(t, rows.Err())
 			require.Equal(t, []string{"closed:13.83", "closed:35.19"}, got)
+
+			// Keep the same real COM_STMT path for the multi-row self-referencing
+			// REPLACE cases that exercise recursive FK action remapping.
+			mustExec(t, ctx, conn, `create table self_cascade(
+				id int primary key,
+				pid int,
+				key idx_pid(pid),
+				foreign key(pid) references self_cascade(id) on delete cascade)`)
+			mustExec(t, ctx, conn, "insert into self_cascade values(1,null),(2,1),(3,2)")
+			cascadeStmt, err := conn.PrepareContext(ctx,
+				"replace into self_cascade values(?,?),(?,?)")
+			require.NoError(t, err)
+			_, err = cascadeStmt.ExecContext(ctx, 1, nil, 2, 1)
+			require.NoError(t, err)
+			require.NoError(t, cascadeStmt.Close())
+			var cascadeRows int
+			require.NoError(t, conn.QueryRowContext(ctx, "select count(*) from self_cascade").Scan(&cascadeRows))
+			require.Equal(t, 2, cascadeRows)
+
+			mustExec(t, ctx, conn, `create table self_setnull(
+				id int primary key,
+				pid int,
+				unique key uk_pid(pid),
+				foreign key(pid) references self_setnull(id) on delete set null)`)
+			mustExec(t, ctx, conn, "insert into self_setnull values(1,null),(2,1),(3,2)")
+			setNullStmt, err := conn.PrepareContext(ctx,
+				"replace into self_setnull values(?,?),(?,?)")
+			require.NoError(t, err)
+			_, err = setNullStmt.ExecContext(ctx, 2, 1, 1, nil)
+			require.NoError(t, err)
+			require.NoError(t, setNullStmt.Close())
+			var id2Rows, id2NullRows int
+			require.NoError(t, conn.QueryRowContext(ctx,
+				"select count(*), count(*) - count(pid) from self_setnull where id=2").Scan(&id2Rows, &id2NullRows))
+			require.Equal(t, 1, id2Rows)
+			require.Equal(t, 1, id2NullRows)
 		},
 	)
 }

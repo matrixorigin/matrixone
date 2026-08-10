@@ -56,8 +56,130 @@ func (builder *QueryBuilder) bindReplace(stmt *tree.Replace, bindCtx *BindContex
 	if err != nil {
 		return 0, err
 	}
+	if values, ok := stmt.Rows.Select.(*tree.ValuesClause); ok && len(values.Rows) > 1 && hasSelfReferentialSetNull(tableDef) {
+		if err = builder.applyOrderedSelfSetNullToValues(lastNodeID, tableDef, colName2Idx); err != nil {
+			return 0, err
+		}
+	}
 
-	return builder.appendDedupAndMultiUpdateNodesForBindReplace(bindCtx, dmlCtx, lastNodeID, colName2Idx, skipUniqueIdx, irregularIndexes)
+	return builder.appendDedupAndMultiUpdateNodesForBindReplace(
+		bindCtx, dmlCtx, lastNodeID, colName2Idx, skipUniqueIdx, irregularIndexes)
+}
+
+func hasSelfReferentialSetNull(tableDef *plan.TableDef) bool {
+	for _, fk := range tableDef.Fkeys {
+		if fk.ForeignTbl == 0 && fk.OnDelete == plan.ForeignKeyDef_SET_NULL {
+			return true
+		}
+	}
+	return false
+}
+
+func (builder *QueryBuilder) applyOrderedSelfSetNullToValues(
+	lastNodeID int32, tableDef *plan.TableDef, colName2Idx map[string]int32,
+) error {
+	valueScanID := lastNodeID
+	for builder.qry.Nodes[valueScanID].NodeType != plan.Node_VALUE_SCAN {
+		node := builder.qry.Nodes[valueScanID]
+		if len(node.Children) != 1 {
+			return moerr.NewInternalError(
+				builder.GetContext(), "multi-row REPLACE VALUES source is unavailable")
+		}
+		valueScanID = node.Children[0]
+	}
+	rowset := builder.qry.Nodes[valueScanID].RowsetData
+	if rowset == nil || rowset.RowCount < 2 {
+		return nil
+	}
+
+	original := make([][]*plan.Expr, len(rowset.Cols))
+	for colPos, col := range rowset.Cols {
+		original[colPos] = make([]*plan.Expr, len(col.Data))
+		for rowPos, value := range col.Data {
+			original[colPos][rowPos] = DeepCopyExpr(value.Expr)
+		}
+	}
+	colIDToName := make(map[uint64]string, len(tableDef.Cols))
+	for _, col := range tableDef.Cols {
+		colIDToName[col.ColId] = col.Name
+	}
+
+	for _, fk := range tableDef.Fkeys {
+		if fk.ForeignTbl != 0 || fk.OnDelete != plan.ForeignKeyDef_SET_NULL {
+			continue
+		}
+		childPositions := make([]int32, len(fk.Cols))
+		parentPositions := make([]int32, len(fk.ForeignCols))
+		for i := range fk.Cols {
+			var ok bool
+			childName := colIDToName[fk.Cols[i]]
+			parentName := colIDToName[fk.ForeignCols[i]]
+			childPositions[i], ok = colName2Idx[tableDef.Name+"."+childName]
+			if !ok {
+				return moerr.NewInternalErrorf(builder.GetContext(),
+					"self-referencing SET NULL column %s is unavailable", childName)
+			}
+			parentPositions[i], ok = colName2Idx[tableDef.Name+"."+parentName]
+			if !ok {
+				return moerr.NewInternalErrorf(builder.GetContext(),
+					"self-referencing SET NULL parent column %s is unavailable", parentName)
+			}
+		}
+
+		for childRow := int32(0); childRow < rowset.RowCount-1; childRow++ {
+			var laterParentMatch *plan.Expr
+			for parentRow := childRow + 1; parentRow < rowset.RowCount; parentRow++ {
+				var rowMatch *plan.Expr
+				for i := range childPositions {
+					childPos := childPositions[i]
+					parentPos := parentPositions[i]
+					if childPos < 0 || parentPos < 0 || int(childPos) >= len(original) ||
+						int(parentPos) >= len(original) || int(childRow) >= len(original[childPos]) ||
+						int(parentRow) >= len(original[parentPos]) {
+						return moerr.NewInternalError(
+							builder.GetContext(), "self-referencing SET NULL VALUES mapping is incomplete")
+					}
+					equal, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*plan.Expr{
+						DeepCopyExpr(original[childPos][childRow]),
+						DeepCopyExpr(original[parentPos][parentRow]),
+					})
+					if err != nil {
+						return err
+					}
+					if rowMatch == nil {
+						rowMatch = equal
+					} else {
+						rowMatch, err = BindFuncExprImplByPlanExpr(
+							builder.GetContext(), "and", []*plan.Expr{rowMatch, equal})
+						if err != nil {
+							return err
+						}
+					}
+				}
+				var err error
+				if laterParentMatch == nil {
+					laterParentMatch = rowMatch
+				} else {
+					laterParentMatch, err = BindFuncExprImplByPlanExpr(
+						builder.GetContext(), "or", []*plan.Expr{laterParentMatch, rowMatch})
+					if err != nil {
+						return err
+					}
+				}
+			}
+			for _, childPos := range childPositions {
+				current := rowset.Cols[childPos].Data[childRow].Expr
+				nullExpr := &plan.Expr{Typ: current.Typ, Expr: &plan.Expr_Lit{Lit: &plan.Literal{Isnull: true}}}
+				updated, err := BindFuncExprImplByPlanExpr(
+					builder.GetContext(), "if", []*plan.Expr{DeepCopyExpr(laterParentMatch), nullExpr, current})
+				if err != nil {
+					return err
+				}
+				rowset.Cols[childPos].Data[childRow].Expr = updated
+			}
+		}
+	}
+	return nil
 }
 
 func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
@@ -1076,7 +1198,6 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 			})
 		}
 	}
-
 	lastNodeID = builder.appendNode(&plan.Node{
 		NodeType:    plan.Node_PROJECT,
 		Children:    []int32{lastNodeID},
@@ -1168,6 +1289,9 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 		delCtx.rowIdPos = int(tableDef.Name2ColIndex[catalog.Row_ID])
 		delCtx.allDelTableIDs = map[uint64]struct{}{tableDef.TblId: {}}
 		delCtx.skipTargetDelete = true
+		delCtx.replaceOldRowsStep = actionStep
+		delCtx.replaceTargetTableID = tableDef.TblId
+		delCtx.replaceOldRowIDPos = int32(tableDef.Name2ColIndex[catalog.Row_ID])
 		err := buildDeletePlans(builder.compCtx, builder, bindCtx, delCtx)
 		putDmlPlanCtx(delCtx)
 		if err != nil {

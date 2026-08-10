@@ -266,6 +266,39 @@ func bindAndOptimizeReplaceQuery(ctx CompilerContext, stmt *tree.Replace, isPrep
 		}
 		query.DetectSqls = append(query.DetectSqls, sqls...)
 
+		// A direct FK cycle can delete the parent that satisfied the new REPLACE
+		// image during the pre-action child check. Revalidate that edge after all
+		// action steps and the main MULTI_UPDATE have run so the statement fails
+		// atomically with the child-side FK error instead of committing an orphan.
+		refChildren := make(map[uint64]struct{}, len(tblInfo.tableDefs[0].RefChildTbls))
+		for _, tableID := range tblInfo.tableDefs[0].RefChildTbls {
+			refChildren[tableID] = struct{}{}
+		}
+		for _, fk := range tblInfo.tableDefs[0].Fkeys {
+			if fk.ForeignTbl == 0 {
+				continue
+			}
+			if _, closesCycle := refChildren[fk.ForeignTbl]; !closesCycle {
+				continue
+			}
+			parentObjRef, parentTableDef, resolveErr := ctx.ResolveById(fk.ForeignTbl, nil)
+			if resolveErr != nil {
+				return nil, resolveErr
+			}
+			if parentObjRef == nil || parentTableDef == nil {
+				return nil, moerr.NewInternalErrorf(ctx.GetContext(),
+					"foreign-key parent table %d is unavailable", fk.ForeignTbl)
+			}
+			postCheckSQL, checkErr := genSqlForCheckFKConstraints(
+				ctx.GetContext(), fk,
+				tblInfo.objRef[0].SchemaName, tblInfo.tableDefs[0].Name, tblInfo.tableDefs[0].Cols,
+				parentObjRef.SchemaName, parentTableDef.Name, parentTableDef.Cols)
+			if checkErr != nil {
+				return nil, checkErr
+			}
+			query.DetectSqls = append(query.DetectSqls, postCheckSQL)
+		}
+
 		// Generate pre-check SQLs for parent→child safety (RESTRICT).
 		preCheckSqls, err := genPreCheckSqlsForReplaceFKSelfRefer(
 			ctx.GetContext(),

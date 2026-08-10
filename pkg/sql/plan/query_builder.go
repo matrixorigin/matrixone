@@ -3410,14 +3410,7 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		}
 		reCalcNodeStatsAfterSwap(rootID, builder, true, false, false)
 
-		// Foreign-key actions form a multi-step DAG with shared sink sources. A
-		// runtime-filter producer in one action step can otherwise wait on a scan
-		// in another step that is itself waiting for that filter.
-		if !builder.qry.HasForeignKeyAction {
-			builder.generateRuntimeFilters(rootID)
-		} else {
-			builder.clearRuntimeFilters(rootID)
-		}
+		builder.generateRuntimeFilters(rootID)
 		builder.pushdownVectorIndexTopToTableScan(rootID)
 		builder.removeSimpleProjections(rootID, plan.Node_UNKNOWN, false, colRefCnt)
 		reCalcNodeStatsAfterSwap(rootID, builder, true, false, false)

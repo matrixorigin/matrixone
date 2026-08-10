@@ -972,3 +972,91 @@ id    pid
 1    null
 drop table t_replace_scope_setnull_c;
 drop table t_replace_scope_setnull_p;
+drop table if exists t_replace_scope_fk_update;
+drop table if exists t_replace_scope_fk_parent;
+drop table if exists t_replace_scope_fk_join;
+create table t_replace_scope_fk_parent(id int primary key);
+create table t_replace_scope_fk_update(
+id int primary key,
+pid int,
+v int,
+foreign key(pid) references t_replace_scope_fk_parent(id)
+);
+create table t_replace_scope_fk_join(id int primary key);
+insert into t_replace_scope_fk_parent values (1);
+insert into t_replace_scope_fk_update values (1, 1, 10);
+insert into t_replace_scope_fk_join values (1);
+update t_replace_scope_fk_update u join t_replace_scope_fk_join j on u.id = j.id set u.v = 11;
+prepare replace_scope_fk_update_stmt from
+'update t_replace_scope_fk_update u join t_replace_scope_fk_join j on u.id = j.id set u.v = ?';
+set @replace_scope_fk_v = 12;
+execute replace_scope_fk_update_stmt using @replace_scope_fk_v;
+set @replace_scope_fk_v = 13;
+execute replace_scope_fk_update_stmt using @replace_scope_fk_v;
+select * from t_replace_scope_fk_update order by id;
+id    pid    v
+1    1    13
+deallocate prepare replace_scope_fk_update_stmt;
+drop table t_replace_scope_fk_update;
+drop table t_replace_scope_fk_parent;
+drop table t_replace_scope_fk_join;
+drop table if exists t_replace_self_cascade_multi;
+create table t_replace_self_cascade_multi(
+id int primary key,
+pid int,
+key idx_pid(pid),
+foreign key(pid) references t_replace_self_cascade_multi(id) on delete cascade
+);
+insert into t_replace_self_cascade_multi values (1, null), (2, 1), (3, 2);
+replace into t_replace_self_cascade_multi values (1, null), (2, 1);
+select * from t_replace_self_cascade_multi order by id;
+id    pid
+1    null
+2    1
+drop table t_replace_self_cascade_multi;
+drop table if exists t_replace_self_setnull_multi;
+create table t_replace_self_setnull_multi(
+id int primary key,
+pid int,
+unique key uk_pid(pid),
+foreign key(pid) references t_replace_self_setnull_multi(id) on delete set null
+);
+insert into t_replace_self_setnull_multi values (1, null), (2, 1), (3, 2);
+replace into t_replace_self_setnull_multi values (1, null), (2, 1);
+select * from t_replace_self_setnull_multi order by id;
+id    pid
+1    null
+2    1
+3    null
+select count(*) from t_replace_self_setnull_multi where id = 2;
+count(*)
+1
+drop table t_replace_self_setnull_multi;
+create table t_replace_self_setnull_multi(
+id int primary key,
+pid int,
+unique key uk_pid(pid),
+foreign key(pid) references t_replace_self_setnull_multi(id) on delete set null
+);
+insert into t_replace_self_setnull_multi values (1, null), (2, 1), (3, 2);
+prepare replace_self_setnull_multi_stmt from
+'replace into t_replace_self_setnull_multi values (?, ?), (?, ?)';
+set @replace_self_id1 = 2;
+set @replace_self_pid1 = 1;
+set @replace_self_id2 = 1;
+set @replace_self_pid2 = null;
+execute replace_self_setnull_multi_stmt using
+@replace_self_id1, @replace_self_pid1, @replace_self_id2, @replace_self_pid2;
+select * from t_replace_self_setnull_multi order by id;
+id    pid
+1    null
+2    null
+3    null
+select count(*) from t_replace_self_setnull_multi where id = 2;
+count(*)
+1
+select count(*) from t_replace_self_setnull_multi force index(uk_pid) where pid in (1, 2);
+count(*)
+0
+deallocate prepare replace_self_setnull_multi_stmt;
+drop table t_replace_self_setnull_multi;

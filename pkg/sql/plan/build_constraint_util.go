@@ -2018,6 +2018,7 @@ func appendPrimaryConstraintPlan(
 	updatePkCol bool,
 	ifInsertFromUnique bool,
 	fuzzymessage *OriginTableMessageForFuzzy,
+	isFkRecursionCall bool,
 ) error {
 	sid := builder.compCtx.GetProcess().GetService()
 
@@ -2309,16 +2310,18 @@ func appendPrimaryConstraintPlan(
 				}
 				rightId := builder.appendNode(scanNode, bindCtx)
 				inputRelPos := int32(1)
-				if inputNode := builder.qry.Nodes[lastNodeId]; len(inputNode.BindingTags) == 1 {
-					inputRelPos = inputNode.BindingTags[0]
-				} else if builder.qry.HasForeignKeyAction {
-					inputRelPos = builder.genNewBindTag()
-					lastNodeId = builder.appendNode(&plan.Node{
-						NodeType:    plan.Node_PROJECT,
-						Children:    []int32{lastNodeId},
-						ProjectList: getProjectionByLastNode(builder, lastNodeId),
-						BindingTags: []int32{inputRelPos},
-					}, bindCtx)
+				if isFkRecursionCall {
+					if inputNode := builder.qry.Nodes[lastNodeId]; len(inputNode.BindingTags) == 1 {
+						inputRelPos = inputNode.BindingTags[0]
+					} else {
+						inputRelPos = builder.genNewBindTag()
+						lastNodeId = builder.appendNode(&plan.Node{
+							NodeType:    plan.Node_PROJECT,
+							Children:    []int32{lastNodeId},
+							ProjectList: getProjectionByLastNode(builder, lastNodeId),
+							BindingTags: []int32{inputRelPos},
+						}, bindCtx)
+					}
 				}
 
 				pkColExpr := &Expr{
@@ -2380,6 +2383,12 @@ func appendPrimaryConstraintPlan(
 					buildExpr,
 					false,
 				)
+				// Recursive FK actions consume a shared multi-step sink. Building a
+				// runtime filter from that same action stream creates a producer ->
+				// consumer wait cycle; isolate this internal RIGHT JOIN only.
+				if isFkRecursionCall {
+					hasRuntimeFilter = false
+				}
 				if hasRuntimeFilter {
 					scanNode.RuntimeFilterProbeList = []*plan.RuntimeFilterSpec{probeSpec}
 				}

@@ -4853,12 +4853,14 @@ func queryUpdatesTable(query *plan.Query, table string) bool {
 	return false
 }
 
-func assertNoRuntimeFilters(t *testing.T, query *plan.Query) {
-	t.Helper()
+func queryInsertsTable(query *plan.Query, table string) bool {
 	for _, node := range query.Nodes {
-		require.Empty(t, node.RuntimeFilterProbeList, "node %d has a runtime-filter probe", node.NodeId)
-		require.Empty(t, node.RuntimeFilterBuildList, "node %d has a runtime-filter build", node.NodeId)
+		if node.NodeType == plan.Node_INSERT && node.InsertCtx != nil &&
+			node.InsertCtx.TableDef != nil && node.InsertCtx.TableDef.Name == table {
+			return true
+		}
 	}
+	return false
 }
 
 func addReplaceChildIndex(
@@ -4984,7 +4986,6 @@ func TestReplaceParentSideFKIndexedChild(t *testing.T) {
 			require.True(t, queryDeletesTable(query, "replace_fk_cc"))
 			require.True(t, queryDeletesTable(query, indexTableName))
 			assertDeleteInputIndexesValid(t, query, indexTableName)
-			assertNoRuntimeFilters(t, query)
 		})
 
 		t.Run("set null prepared/"+name, func(t *testing.T) {
@@ -5004,7 +5005,6 @@ func TestReplaceParentSideFKIndexedChild(t *testing.T) {
 			require.True(t, queryDeletesTable(query, indexTableName))
 			assertDeleteInputIndexesValid(t, query, indexTableName)
 			assertInsertInputColumnsValid(t, query, indexTableName)
-			assertNoRuntimeFilters(t, query)
 		})
 	}
 }
@@ -5030,7 +5030,12 @@ func TestReplaceSelfReferSetNullIndexed(t *testing.T) {
 			require.True(t, queryUpdatesTable(query, "self_ref_cascade"))
 			require.True(t, queryDeletesTable(query, indexTableName))
 			assertDeleteInputIndexesValid(t, query, indexTableName)
-			assertInsertInputColumnsValid(t, query, indexTableName)
+			if tc.unique {
+				require.False(t, queryInsertsTable(query, indexTableName),
+					"a UNIQUE key made NULL by the FK action must not create a hidden-index row")
+			} else {
+				assertInsertInputColumnsValid(t, query, indexTableName)
+			}
 		})
 	}
 }
@@ -5141,11 +5146,11 @@ func TestReplaceSelfReferSetNullExcludesMainOldRow(t *testing.T) {
 	require.NoError(t, err)
 	query := logicPlan.GetQuery()
 	assert.True(t, queryUpdatesTable(query, "self_ref_cascade"))
-	assertNoRuntimeFilters(t, query)
 	assert.True(t, slices.ContainsFunc(query.Nodes, func(node *plan.Node) bool {
-		return node.NodeType == plan.Node_JOIN && node.JoinType == plan.Node_INNER && len(node.OnList) > 1
+		return node.NodeType == plan.Node_JOIN &&
+			(node.JoinType == plan.Node_MARK || node.JoinType == plan.Node_ANTI) && len(node.OnList) > 0
 	}),
-		"self-referencing SET NULL must exclude the old row owned by the main REPLACE")
+		"self-referencing SET NULL must anti-filter every old row owned by the main REPLACE")
 }
 
 func TestReplaceCascadeWinsOverSetNullForSameChildRow(t *testing.T) {
@@ -5175,7 +5180,6 @@ func TestReplaceCascadeWinsOverSetNullForSameChildRow(t *testing.T) {
 	logicPlan, err := runOneStmt(mock, t, "REPLACE INTO replace_fk_sp VALUES (1, 'p1_new')")
 	require.NoError(t, err)
 	query := logicPlan.GetQuery()
-	assertNoRuntimeFilters(t, query)
 	assert.True(t, queryUpdatesTable(query, "replace_fk_sc"))
 	assert.True(t, queryDeletesTable(query, "replace_fk_sc"))
 	assert.True(t, slices.ContainsFunc(query.Nodes, func(node *plan.Node) bool {

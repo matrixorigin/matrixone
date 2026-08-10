@@ -114,6 +114,15 @@ type dmlPlanCtx struct {
 	// Recursive child actions still build their normal delete/update branches.
 	skipTargetDelete               bool
 	preserveUpdateSourceProjection bool
+	// replaceOldRowsStep identifies the complete old-row ownership set of the
+	// outer REPLACE. Recursive CASCADE actions use it to avoid revisiting a row
+	// whose delete and rebuild are owned by the main MULTI_UPDATE.
+	replaceOldRowsStep   int32
+	replaceTargetTableID uint64
+	replaceOldRowIDPos   int32
+	// fkSetNullColumns records columns that are unconditionally NULL for every
+	// row in this recursive FK update source.
+	fkSetNullColumns map[string]struct{}
 }
 
 // information of deleteNode, which is about the deleted table
@@ -280,7 +289,6 @@ func buildUpdatePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 		}
 		newCols = append(newCols, col)
 	}
-	updatePlanCtx.tableDef = CloneTableDefForPlan(updatePlanCtx.tableDef, false)
 	updatePlanCtx.tableDef.Cols = newCols
 	insertColLength := len(updatePlanCtx.insertColPos) + 1
 	projectList := make([]*Expr, insertColLength)
@@ -813,7 +821,7 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 			childRelPos := int32(1)
 			childScanTag := int32(1)
 			childBindingTags := []int32{childScanTag}
-			if delCtx.skipTargetDelete {
+			if delCtx.skipTargetDelete || delCtx.sourceTag != 0 {
 				childScanTag = builder.genNewBindTag()
 				childBindingTags = []int32{childScanTag}
 				childRelPos = childScanTag
@@ -850,10 +858,12 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 				}
 			}
 			childScanProject := childProjectList
-			if delCtx.skipTargetDelete {
+			if delCtx.skipTargetDelete || delCtx.sourceTag != 0 {
 				// Column pruning reconstructs the physical scan projection from
 				// referenced child columns.  Starting with the full logical list
 				// would leave stale original ordinals ahead of that compact list.
+				// Recursive FK actions also carry a source tag even when the
+				// target delete itself is not skipped.
 				childScanProject = nil
 			}
 
@@ -1459,13 +1469,17 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 						if delCtx.skipTargetDelete {
 							joinProjection = []*Expr{oneLeftCond}
 						}
-						lastNodeId = builder.appendNode(&plan.Node{
-							NodeType:    plan.Node_JOIN,
-							Children:    []int32{lastNodeId, rightId},
-							JoinType:    joinType,
-							OnList:      joinConds,
-							ProjectList: joinProjection,
-						}, bindCtx)
+						taggedActionInput := delCtx.sourceTag != 0 || delCtx.skipTargetDelete
+						joinNode := &plan.Node{
+							NodeType: plan.Node_JOIN,
+							Children: []int32{lastNodeId, rightId},
+							JoinType: joinType,
+							OnList:   joinConds,
+						}
+						if !taggedActionInput {
+							joinNode.ProjectList = joinProjection
+						}
+						lastNodeId = builder.appendNode(joinNode, bindCtx)
 
 						colExpr := &Expr{
 							Typ: oneLeftCond.Typ,
@@ -1475,12 +1489,9 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 								},
 							},
 						}
-						if delCtx.skipTargetDelete {
-							colExpr = DeepCopyExpr(oneLeftCond)
-						}
 						errExpr := makePlan2StringConstExprWithType("Cannot delete or update a parent row: a foreign key constraint fails")
 						var isEmptyExpr *Expr
-						if delCtx.skipTargetDelete {
+						if taggedActionInput {
 							isEmptyExpr = makePlan2BoolConstExprWithType(false)
 						} else {
 							isEmptyExpr, err = BindFuncExprImplByPlanExpr(builder.GetContext(), "isempty", []*Expr{colExpr})
@@ -1488,11 +1499,13 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 						if err != nil {
 							return err
 						}
-						assertExpr, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "assert", []*Expr{isEmptyExpr, errExpr})
+						assertExpr, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "assert", []*Expr{
+							isEmptyExpr, errExpr, makePlan2StringConstExprWithType(foreignKeyRowIsReferencedAssert),
+						})
 						if err != nil {
 							return err
 						}
-						if delCtx.skipTargetDelete {
+						if taggedActionInput {
 							lastNodeId = builder.appendNode(&Node{
 								NodeType:    plan.Node_PROJECT,
 								Children:    []int32{lastNodeId},
@@ -1522,18 +1535,6 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 								return moerr.NewInternalErrorf(
 									builder.GetContext(), "self-referencing SET NULL rowid is unavailable")
 							}
-							childRowID := &Expr{Typ: childTableDef.Cols[childRowIdPos].Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{
-								RelPos: childRelPos, ColPos: int32(childRowIdPos), Name: catalog.Row_ID,
-							}}}
-							parentRowID := &Expr{Typ: parentActionProjection[len(fk.Cols)].Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{
-								RelPos: parentActionTag, ColPos: int32(len(fk.Cols)), Name: catalog.Row_ID,
-							}}}
-							notOwnedByReplace, bindErr := BindFuncExprImplByPlanExpr(
-								builder.GetContext(), "!=", []*Expr{childRowID, parentRowID})
-							if bindErr != nil {
-								return bindErr
-							}
-							joinConds = append(joinConds, notOwnedByReplace)
 						}
 						// plan : sink_scan -> join[f1 inner join c1 on f1.id = c1.fid, get c1.* & null] -> project -> sink   then + updatePlans
 						rightId := builder.appendNode(&plan.Node{
@@ -1566,6 +1567,15 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 						lastNodeId, childScanTag, err = appendExcludeCascadeOwnedRows(lastNodeId, childScanTag)
 						if err != nil {
 							return err
+						}
+						if fkSelfReferCond && delCtx.skipTargetDelete {
+							lastNodeId, err = appendExcludeReplaceOldRows(
+								builder, bindCtx, lastNodeId,
+								childScanTag, int32(childRowIdPos),
+								parentActionStep, parentActionTag, int32(len(fk.Cols)))
+							if err != nil {
+								return err
+							}
 						}
 						// inner join cannot dealwith null expr in projectList. so we append a project node
 						projectProjection := getProjectionByLastNode(builder, lastNodeId)
@@ -1616,6 +1626,10 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 						upPlanCtx.isFkRecursionCall = true
 						upPlanCtx.updatePkCol = updatePk
 						upPlanCtx.preserveUpdateSourceProjection = delCtx.skipTargetDelete
+						upPlanCtx.fkSetNullColumns = make(map[string]struct{}, len(fk.Cols))
+						for _, childColID := range fk.Cols {
+							upPlanCtx.fkSetNullColumns[childId2name[childColID]] = struct{}{}
+						}
 
 						err = buildUpdatePlans(ctx, builder, bindCtx, upPlanCtx, false)
 						putDmlPlanCtx(upPlanCtx)
@@ -1693,14 +1707,19 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 										return []int32{childActionTag}
 									}(),
 								}, bindCtx)
-								if fkSelfReferCond && delCtx.skipTargetDelete {
+								if childTableDef.TblId == delCtx.replaceTargetTableID {
 									lastNodeId, err = appendExcludeReplaceOldRows(
 										builder, bindCtx, lastNodeId,
 										childScanTag, int32(childRowIdPos),
-										parentActionStep, parentActionTag, int32(len(fk.Cols)))
+										delCtx.replaceOldRowsStep, 0, delCtx.replaceOldRowIDPos)
 									if err != nil {
 										return err
 									}
+									if tags := builder.qry.Nodes[lastNodeId].BindingTags; len(tags) == 1 {
+										childActionTag = tags[0]
+									}
+								}
+								if fkSelfReferCond && delCtx.skipTargetDelete {
 									lastNodeId, err = appendSelfReferCascadeSource(
 										builder, bindCtx, lastNodeId,
 										childObjRef, childTableDef, fk, childPosMap,
@@ -1708,7 +1727,9 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 									if err != nil {
 										return err
 									}
-									childActionTag = 0
+									if tags := builder.qry.Nodes[lastNodeId].BindingTags; len(tags) == 1 {
+										childActionTag = tags[0]
+									}
 								} else if childActionTag != 0 {
 									lastNodeId = appendSinkNodeWithTag(builder, bindCtx, lastNodeId, childActionTag)
 									if builder.preserveSinkProjection == nil {
@@ -1734,6 +1755,9 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 								upPlanCtx.beginIdx = 0
 								upPlanCtx.allDelTableIDs = allDelTableIDs
 								upPlanCtx.isFkRecursionCall = true
+								upPlanCtx.replaceOldRowsStep = delCtx.replaceOldRowsStep
+								upPlanCtx.replaceTargetTableID = delCtx.replaceTargetTableID
+								upPlanCtx.replaceOldRowIDPos = delCtx.replaceOldRowIDPos
 
 								err := buildDeletePlans(ctx, builder, bindCtx, upPlanCtx)
 								putDmlPlanCtx(upPlanCtx)
@@ -1834,6 +1858,7 @@ func appendExcludeReplaceOldRows(
 // update f set a = 10 where b=1;    we need update c only once for 2 rows. not three times for 6 rows.
 func appendAggNodeForFkJoin(builder *QueryBuilder, bindCtx *BindContext, lastNodeId int32) int32 {
 	lastNode := builder.qry.Nodes[lastNodeId]
+	preserveOutputTag := len(lastNode.BindingTags) == 1
 	groupByList := getProjectionByLastNode(builder, lastNodeId)
 	if len(lastNode.BindingTags) > 0 {
 		groupByList = getProjectionByLastNodeWithTag(builder, lastNodeId, lastNode.BindingTags[0])
@@ -1858,6 +1883,17 @@ func appendAggNodeForFkJoin(builder *QueryBuilder, bindCtx *BindContext, lastNod
 		BindingTags: []int32{builder.genNewBindTag(), builder.genNewBindTag()},
 		SpillMem:    builder.aggSpillMem,
 	}, bindCtx)
+	if preserveOutputTag {
+		outputTag := builder.genNewBindTag()
+		lastNodeId = builder.appendNode(&Node{
+			NodeType: plan.Node_PROJECT,
+			Children: []int32{lastNodeId},
+			ProjectList: getProjectionByLastNodeWithTag(
+				builder, lastNodeId, builder.qry.Nodes[lastNodeId].BindingTags[0]),
+			BindingTags: []int32{outputTag},
+		}, bindCtx)
+		return appendSinkNodeWithTag(builder, bindCtx, lastNodeId, outputTag)
+	}
 	lastNodeId = appendSinkNode(builder, bindCtx, lastNodeId)
 
 	return lastNodeId
@@ -2018,6 +2054,7 @@ func appendSelfReferCascadeSource(
 		NodeType:    plan.Node_PROJECT,
 		Children:    []int32{lastNodeID},
 		ProjectList: DeepCopyExprList(builder.qry.Nodes[lastNodeID].ProjectList[:len(childTableDef.Cols)]),
+		BindingTags: []int32{cteTag},
 	}, bindCtx)
 	return appendAggNodeForFkJoin(builder, bindCtx, lastNodeID), nil
 }
@@ -2157,7 +2194,8 @@ func makeOneInsertPlan(
 
 	if ifCheckPkDup {
 		if err = appendPrimaryConstraintPlan(builder, bindCtx, tableDef, objRef, partitionExpr, pkFilterExprs,
-			indexSourceColTypes, sourceStep, updateColLength > 0, updatePkCol, ifInsertFromUnique, fuzzymessage); err != nil {
+			indexSourceColTypes, sourceStep, updateColLength > 0, updatePkCol, ifInsertFromUnique, fuzzymessage,
+			isFkRecursionCall); err != nil {
 			return err
 		}
 	}
@@ -2715,14 +2753,6 @@ func appendJoinNodeForParentFkCheck(builder *QueryBuilder, bindCtx *BindContext,
 	//for stmt:  update c1 set ref_col = null where col > 0;
 	//we will skip foreign key constraint check when set null
 
-	leftTag := builder.genNewBindTag()
-	baseNodeId = builder.appendNode(&Node{
-		NodeType:    plan.Node_PROJECT,
-		Children:    []int32{baseNodeId},
-		ProjectList: getProjectionByLastNode(builder, baseNodeId),
-		BindingTags: []int32{leftTag},
-	}, bindCtx)
-
 	var filterConds []*Expr
 	for _, fk := range tableDef.Fkeys {
 		for _, colId := range fk.Cols {
@@ -2732,7 +2762,6 @@ func appendJoinNodeForParentFkCheck(builder *QueryBuilder, bindCtx *BindContext,
 						Typ: col.Typ,
 						Expr: &plan.Expr_Col{
 							Col: &plan.ColRef{
-								RelPos: leftTag,
 								ColPos: int32(fIdx),
 								Name:   col.Name,
 							},
@@ -2748,9 +2777,10 @@ func appendJoinNodeForParentFkCheck(builder *QueryBuilder, bindCtx *BindContext,
 		}
 	}
 	baseNodeId = builder.appendNode(&Node{
-		NodeType:   plan.Node_FILTER,
-		Children:   []int32{baseNodeId},
-		FilterList: filterConds,
+		NodeType:    plan.Node_FILTER,
+		Children:    []int32{baseNodeId},
+		FilterList:  filterConds,
+		ProjectList: getProjectionByLastNode(builder, baseNodeId),
 	}, bindCtx)
 
 	lastNodeId := baseNodeId
@@ -2773,7 +2803,6 @@ func appendJoinNodeForParentFkCheck(builder *QueryBuilder, bindCtx *BindContext,
 			return -1, moerr.NewInternalErrorf(builder.GetContext(), "parent table %d not found", fk.ForeignTbl)
 		}
 		newTableDef := CloneTableDefForPlan(parentTableDef, false)
-		parentTag := builder.genNewBindTag()
 		joinConds := make([]*plan.Expr, 0)
 		for _, col := range parentTableDef.Cols {
 			if fkIdx, ok := fkeyId2Idx[col.ColId]; ok {
@@ -2787,7 +2816,7 @@ func appendJoinNodeForParentFkCheck(builder *QueryBuilder, bindCtx *BindContext,
 					Typ: typMap[childColumnName],
 					Expr: &plan.Expr_Col{
 						Col: &plan.ColRef{
-							RelPos: leftTag,
+							RelPos: 0,
 							ColPos: int32(name2pos[childColumnName]),
 							Name:   childColumnName,
 						},
@@ -2797,7 +2826,7 @@ func appendJoinNodeForParentFkCheck(builder *QueryBuilder, bindCtx *BindContext,
 					Typ: col.Typ,
 					Expr: &plan.Expr_Col{
 						Col: &plan.ColRef{
-							RelPos: parentTag,
+							RelPos: 1,
 							ColPos: int32(rightPos),
 							Name:   parentColumnName,
 						},
@@ -2832,17 +2861,16 @@ func appendJoinNodeForParentFkCheck(builder *QueryBuilder, bindCtx *BindContext,
 			ObjRef:      parentObjRef,
 			TableDef:    parentTableDef,
 			ProjectList: scanNodeProject,
-			BindingTags: []int32{parentTag},
 		}, bindCtx)
 
-		projectList := getProjectionByLastNodeWithTag(builder, lastNodeId, leftTag)
+		projectList := getProjectionByLastNode(builder, lastNodeId)
 
 		// append project
 		projectList = append(projectList, &Expr{
 			Typ: parentTableDef.Cols[0].Typ,
 			Expr: &plan.Expr_Col{
 				Col: &plan.ColRef{
-					RelPos: parentTag,
+					RelPos: 1,
 					ColPos: 0,
 					Name:   parentTableDef.Cols[0].Name,
 				},
@@ -2851,17 +2879,11 @@ func appendJoinNodeForParentFkCheck(builder *QueryBuilder, bindCtx *BindContext,
 
 		// append join node
 		lastNodeId = builder.appendNode(&plan.Node{
-			NodeType: plan.Node_JOIN,
-			Children: []int32{lastNodeId, rightId},
-			JoinType: plan.Node_LEFT,
-			OnList:   joinConds,
-		}, bindCtx)
-		leftTag = builder.genNewBindTag()
-		lastNodeId = builder.appendNode(&plan.Node{
-			NodeType:    plan.Node_PROJECT,
-			Children:    []int32{lastNodeId},
+			NodeType:    plan.Node_JOIN,
+			Children:    []int32{lastNodeId, rightId},
+			JoinType:    plan.Node_LEFT,
+			OnList:      joinConds,
 			ProjectList: projectList,
-			BindingTags: []int32{leftTag},
 		}, bindCtx)
 	}
 
@@ -3501,6 +3523,18 @@ func appendPreInsertPlan(
 	lastNodeId = builder.appendNode(preInsert, bindCtx)
 
 	if isUK {
+		indexKey := &plan.Expr{Typ: preinsertUkProjection[0].Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{
+			ColPos: 0, Name: catalog.IndexTableIndexColName,
+		}}}
+		notNull, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "isnotnull", []*plan.Expr{indexKey})
+		if err != nil {
+			return 0, err
+		}
+		lastNodeId = builder.appendNode(&plan.Node{
+			NodeType:   plan.Node_FILTER,
+			Children:   []int32{lastNodeId},
+			FilterList: []*plan.Expr{notNull},
+		}, bindCtx)
 		if lockNodeId, ok := appendLockNode(
 			builder,
 			bindCtx,
@@ -3537,6 +3571,7 @@ func appendLegacyDeleteIndexTablePlan(
 	posMap map[string]int,
 	baseNodeId int32,
 	isUK bool,
+	disableRuntimeFilter bool,
 ) (int32, error) {
 	lastNodeId := baseNodeId
 	projectList := getProjectionByLastNodeForRightJoin(builder, lastNodeId)
@@ -3609,7 +3644,7 @@ func appendLegacyDeleteIndexTablePlan(
 		GetInFilterCardLimitOnPK(builder.compCtx.GetProcess().GetService(), leftScan.Stats.TableCnt),
 		probeExpr, buildExpr, false,
 	)
-	if builder.qry.HasForeignKeyAction {
+	if disableRuntimeFilter {
 		hasRuntimeFilter = false
 	}
 	if hasRuntimeFilter {
@@ -5601,6 +5636,7 @@ func buildDeleteRegularIndex(ctx CompilerContext, builder *QueryBuilder, bindCtx
 		} else {
 			lastNodeId, err = appendLegacyDeleteIndexTablePlan(
 				builder, bindCtx, uniqueObjRef, uniqueTableDef, indexdef, typMap, posMap, lastNodeId, isUk,
+				delCtx.isFkRecursionCall,
 			)
 		}
 		projectionLen := len(builder.qry.Nodes[lastNodeId].ProjectList)
@@ -5622,6 +5658,15 @@ func buildDeleteRegularIndex(ctx CompilerContext, builder *QueryBuilder, bindCtx
 		return err
 	}
 	if isUpdate {
+		skipIndexInsert := false
+		if isUk && len(delCtx.fkSetNullColumns) > 0 {
+			for _, part := range indexdef.Parts {
+				if _, becomesNull := delCtx.fkSetNullColumns[catalog.ResolveAlias(part)]; becomesNull {
+					skipIndexInsert = true
+					break
+				}
+			}
+		}
 		// do it like simple update
 		indexDeleteTag := int32(0)
 		if input := builder.qry.Nodes[lastNodeId]; len(input.BindingTags) == 1 {
@@ -5647,8 +5692,10 @@ func buildDeleteRegularIndex(ctx CompilerContext, builder *QueryBuilder, bindCtx
 			}
 			builder.appendStep(lastNodeId)
 		}
-		// insert uk plan
-		{
+		// A UNIQUE key containing an unconditionally SET NULL column has no
+		// replacement hidden-index row.  Omitting the empty insert/check fanout
+		// also avoids creating a sink step with no physical consumer.
+		if !skipIndexInsert {
 			lastNodeId = appendSinkScanNode(builder, bindCtx, newSourceStep)
 			lastProject := builder.qry.Nodes[lastNodeId].ProjectList
 			projectProjection := make([]*Expr, len(delCtx.tableDef.Cols))
@@ -5684,7 +5731,7 @@ func buildDeleteRegularIndex(ctx CompilerContext, builder *QueryBuilder, bindCtx
 			_checkPKDupForHiddenIndexTable := indexdef.Unique // only check PK uniqueness for UK. SK will not check PK uniqueness.
 			updateColLength := 1
 			addAffectedRows := false
-			isFkRecursionCall := false
+			isFkRecursionCall := delCtx.isFkRecursionCall
 			updatePkCol := true
 			ifExistAutoPkCol := false
 			ifInsertFromUnique := false
