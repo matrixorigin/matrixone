@@ -21,11 +21,13 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
@@ -428,6 +430,78 @@ func TestViewMetadataRecoveryRejectsUnavailableRuntimeState(t *testing.T) {
 	_, err = discoverLegacyViewMetadata(proc)
 	require.Error(t, err)
 	require.Error(t, lockViewMetadataLifecycleGate(proc))
+}
+
+func TestRefreshPendingViewFailsClosedBeforeRegeneration(t *testing.T) {
+	lookupErr := moerr.NewInternalErrorNoCtx("catalog lookup failed")
+	for _, tc := range []struct {
+		name  string
+		setup func(*gomock.Controller, *mock_frontend.MockEngine)
+		check func(*testing.T, error)
+	}{
+		{
+			name: "database lookup",
+			setup: func(_ *gomock.Controller, engine *mock_frontend.MockEngine) {
+				engine.EXPECT().Database(gomock.Any(), "db", gomock.Any()).Return(nil, lookupErr)
+			},
+			check: func(t *testing.T, err error) { require.ErrorIs(t, err, lookupErr) },
+		},
+		{
+			name: "relation lookup",
+			setup: func(ctrl *gomock.Controller, engine *mock_frontend.MockEngine) {
+				database := mock_frontend.NewMockDatabase(ctrl)
+				engine.EXPECT().Database(gomock.Any(), "db", gomock.Any()).Return(database, nil)
+				database.EXPECT().Relation(gomock.Any(), "v", gomock.Any()).Return(nil, lookupErr)
+			},
+			check: func(t *testing.T, err error) { require.ErrorIs(t, err, lookupErr) },
+		},
+		{
+			name: "relation identity changed",
+			setup: func(ctrl *gomock.Controller, engine *mock_frontend.MockEngine) {
+				database := mock_frontend.NewMockDatabase(ctrl)
+				relation := mock_frontend.NewMockRelation(ctrl)
+				engine.EXPECT().Database(gomock.Any(), "db", gomock.Any()).Return(database, nil)
+				database.EXPECT().Relation(gomock.Any(), "v", gomock.Any()).Return(relation, nil)
+				relation.EXPECT().GetTableID(gomock.Any()).Return(uint64(99))
+			},
+			check: func(t *testing.T, err error) {
+				var identityErr *viewRefreshIdentityChangedError
+				require.ErrorAs(t, err, &identityErr)
+			},
+		},
+		{
+			name: "target is not a View",
+			setup: func(ctrl *gomock.Controller, engine *mock_frontend.MockEngine) {
+				database := mock_frontend.NewMockDatabase(ctrl)
+				relation := mock_frontend.NewMockRelation(ctrl)
+				engine.EXPECT().Database(gomock.Any(), "db", gomock.Any()).Return(database, nil)
+				database.EXPECT().Relation(gomock.Any(), "v", gomock.Any()).Return(relation, nil)
+				relation.EXPECT().GetTableID(gomock.Any()).Return(uint64(3))
+				relation.EXPECT().CopyTableDef(gomock.Any()).Return(nil)
+			},
+			check: func(t *testing.T, err error) { require.Error(t, err) },
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			installViewMetadataTestExecutor(t, proc, &viewMetadataCleanupRecordingExecutor{})
+			ctrl := gomock.NewController(t)
+			engine := mock_frontend.NewMockEngine(ctrl)
+			proc.GetSessionInfo().StorageEngine = engine
+			tc.setup(ctrl, engine)
+
+			originalTopContext := proc.GetTopContext()
+			refreshed, err := refreshPendingView(proc, &pendingViewRefresh{
+				viewRefreshTarget: viewRefreshTarget{
+					accountID: 1, databaseID: 2, relationID: 3, logicalID: 4,
+					databaseName: "db", relationName: "v",
+				},
+			})
+			require.False(t, refreshed)
+			tc.check(t, err)
+			require.Equal(t, originalTopContext, proc.GetTopContext())
+		})
+	}
 }
 
 func installViewMetadataTestExecutor(
