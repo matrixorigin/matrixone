@@ -154,3 +154,29 @@ func TestGetResultColumnsFromPlanPreservesReorderedConstraintMetadata(t *testing
 	require.True(t, got[1].NotNull)
 	require.True(t, got[1].Typ.AutoIncr)
 }
+
+func TestGetResultColumnsFromPlanCarriesJoinedColumnMetadata(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	logicalPlan, err := runOneStmt(mock, t,
+		"select n.n_nationkey from nation n join region r on n.n_regionkey = r.r_regionkey")
+	require.NoError(t, err)
+
+	columns := GetResultColumnsFromPlan(logicalPlan)
+	require.Len(t, columns, 1)
+	require.True(t, columns[0].Primary)
+	require.True(t, columns[0].NotNull)
+	require.True(t, columns[0].Typ.NotNullable)
+}
+
+func TestGetResultColumnsFromPlanClearsNotNullForOuterJoinedColumn(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	logicalPlan, err := runOneStmt(mock, t,
+		"select r.r_regionkey from nation n left join region r on n.n_regionkey = r.r_regionkey")
+	require.NoError(t, err)
+
+	columns := GetResultColumnsFromPlan(logicalPlan)
+	require.Len(t, columns, 1)
+	require.True(t, columns[0].Primary)
+	require.False(t, columns[0].NotNull)
+	require.False(t, columns[0].Typ.NotNullable)
+}

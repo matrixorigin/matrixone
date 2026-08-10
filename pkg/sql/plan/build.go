@@ -781,7 +781,11 @@ func GetResultColumnsFromPlan(p *Plan) []*ColDef {
 				columns[idx].Primary = source.primary
 				columns[idx].Unique = source.unique
 				columns[idx].NotNull = source.notNull
-				columns[idx].Typ.NotNullable = columns[idx].Typ.NotNullable || source.notNull
+				if source.nullExtended {
+					columns[idx].Typ.NotNullable = false
+				} else {
+					columns[idx].Typ.NotNullable = columns[idx].Typ.NotNullable || source.notNull
+				}
 				columns[idx].Typ.AutoIncr = columns[idx].Typ.AutoIncr || source.autoIncr
 			}
 
@@ -832,17 +836,18 @@ func GetResultColumnsFromPlan(p *Plan) []*ColDef {
 }
 
 type resultColumnSource struct {
-	primary  bool
-	unique   bool
-	notNull  bool
-	autoIncr bool
+	primary      bool
+	unique       bool
+	notNull      bool
+	autoIncr     bool
+	nullExtended bool
 }
 
-// findResultColumnSource follows a result projection through the transparent
-// plan nodes until it reaches the table column that produced it. Expressions
-// such as arithmetic, aggregation, and DISTINCT intentionally do not produce
-// source metadata: marking those outputs as key columns would be less
-// compatible than leaving the flags unset.
+// findResultColumnSource follows a result projection through transparent plan
+// nodes and JOIN remappings until it reaches the table column that produced
+// it. Expressions such as arithmetic, aggregation, and DISTINCT intentionally
+// do not produce source metadata: marking those outputs as key columns would
+// be less compatible than leaving the flags unset.
 func findResultColumnSource(query *plan.Query, nodeID int32, expr *plan.Expr) *resultColumnSource {
 	if query == nil || expr == nil || expr.GetCol() == nil {
 		return nil
@@ -879,6 +884,10 @@ func findResultColumnSourceAtNode(
 		}
 	}
 
+	if node.NodeType == plan.Node_JOIN {
+		return findResultColumnSourceAtJoin(query, node, ref, visited)
+	}
+
 	if !isResultColumnTransparentNode(node.NodeType) || len(node.Children) == 0 {
 		return nil
 	}
@@ -906,6 +915,139 @@ func findResultColumnSourceAtNode(
 		found = candidate
 	}
 	return found
+}
+
+func findResultColumnSourceAtJoin(
+	query *plan.Query,
+	node *plan.Node,
+	ref *plan.ColRef,
+	visited map[int32]bool,
+) *resultColumnSource {
+	if query == nil || node == nil || ref == nil || len(node.Children) == 0 {
+		return nil
+	}
+
+	projectedRef := ref
+	childIdx := -1
+	if projected := resultColumnProjectionAtNode(node, ref); projected != nil {
+		if col := projected.GetCol(); col != nil {
+			projectedRef = col
+			// JOIN ProjectList entries use RelPos 0/1 to identify the
+			// corresponding child and ColPos to identify that child's output
+			// slot. This is a local remapping, not a source-table position.
+			if projectedRef.RelPos >= 0 && int(projectedRef.RelPos) < len(node.Children) {
+				childIdx = int(projectedRef.RelPos)
+				if childRef := resultColumnJoinChildProjectionRef(query, node, childIdx, projectedRef.ColPos); childRef != nil {
+					projectedRef = childRef
+				}
+			}
+		}
+	}
+
+	if childIdx < 0 {
+		childIdx = resultColumnJoinChildByBinding(query, node, projectedRef)
+	}
+	if childIdx >= 0 && childIdx < len(node.Children) {
+		candidate := findResultColumnSourceAtNode(
+			query,
+			node.Children[childIdx],
+			projectedRef,
+			cloneVisitedResultColumnNodes(visited),
+		)
+		return resultColumnSourceAfterJoin(candidate, node, childIdx)
+	}
+
+	// Plans from earlier optimization stages may not yet have the local JOIN
+	// projection. Fall back to tracing each child by the source identity, but
+	// reject an ambiguous match rather than assigning metadata from one side.
+	var found *resultColumnSource
+	foundChild := -1
+	for childIdx, childID := range node.Children {
+		candidate := findResultColumnSourceAtNode(
+			query,
+			childID,
+			projectedRef,
+			cloneVisitedResultColumnNodes(visited),
+		)
+		if candidate == nil {
+			continue
+		}
+		if found != nil {
+			return nil
+		}
+		found = candidate
+		foundChild = childIdx
+	}
+	return resultColumnSourceAfterJoin(found, node, foundChild)
+}
+
+func resultColumnJoinChildProjectionRef(
+	query *plan.Query,
+	node *plan.Node,
+	childIdx int,
+	colPos int32,
+) *plan.ColRef {
+	if query == nil || node == nil || childIdx < 0 || childIdx >= len(node.Children) || colPos < 0 {
+		return nil
+	}
+	childID := node.Children[childIdx]
+	if childID < 0 || int(childID) >= len(query.Nodes) || query.Nodes[childID] == nil {
+		return nil
+	}
+	child := query.Nodes[childID]
+	if int(colPos) >= len(child.ProjectList) {
+		return nil
+	}
+	return child.ProjectList[colPos].GetCol()
+}
+
+func resultColumnJoinChildByBinding(query *plan.Query, node *plan.Node, ref *plan.ColRef) int {
+	if query == nil || node == nil || ref == nil || len(node.Children) == 0 {
+		return -1
+	}
+	childIdx := -1
+	for i, childID := range node.Children {
+		if !resultColumnNodeHasBindingTag(query, childID, ref.RelPos, make(map[int32]bool)) {
+			continue
+		}
+		if childIdx >= 0 {
+			return -1
+		}
+		childIdx = i
+	}
+	return childIdx
+}
+
+func resultColumnNodeHasBindingTag(query *plan.Query, nodeID, tag int32, visited map[int32]bool) bool {
+	if query == nil || nodeID < 0 || int(nodeID) >= len(query.Nodes) || visited[nodeID] {
+		return false
+	}
+	visited[nodeID] = true
+	node := query.Nodes[nodeID]
+	if node == nil {
+		return false
+	}
+	for _, bindingTag := range node.BindingTags {
+		if bindingTag == tag {
+			return true
+		}
+	}
+	for _, childID := range node.Children {
+		if resultColumnNodeHasBindingTag(query, childID, tag, visited) {
+			return true
+		}
+	}
+	return false
+}
+
+func resultColumnSourceAfterJoin(source *resultColumnSource, node *plan.Node, childIdx int) *resultColumnSource {
+	if source == nil || !nodeNullExtendsChild(node, childIdx) {
+		return source
+	}
+	result := *source
+	result.notNull = false
+	result.nullExtended = true
+	return &result
 }
 
 func cloneVisitedResultColumnNodes(visited map[int32]bool) map[int32]bool {
