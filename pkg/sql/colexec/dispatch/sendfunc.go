@@ -53,16 +53,27 @@ var (
 )
 
 func prepareParamKindRemoteWireEnabled(proc *process.Process) bool {
+	return remoteBatchWireVersion(proc) >= defines.MORPCVersion12
+}
+
+func binaryStringRemoteWireEnabled(proc *process.Process) bool {
+	return remoteBatchWireVersion(proc) >= defines.MORPCVersion14
+}
+
+func remoteBatchWireVersion(proc *process.Process) int64 {
 	if proc == nil {
-		return false
+		return 0
 	}
 	rt := moruntime.ServiceRuntime(proc.GetService())
 	if rt == nil {
-		return false
+		return 0
 	}
 	value, _ := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
 	version, ok := value.(int64)
-	return ok && version >= defines.MORPCVersion12
+	if !ok {
+		return 0
+	}
+	return version
 }
 
 func binaryStringRemoteWireEnabled(proc *process.Process) bool {

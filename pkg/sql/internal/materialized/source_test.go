@@ -371,6 +371,38 @@ func TestSharedMaterializedSourceBoundsTinyBatchMetadataWithSpill(t *testing.T) 
 	bat.Clean(mp)
 }
 
+func TestSharedMaterializedSourceSpillPreservesBinaryStringRows(t *testing.T) {
+	mp := mpool.MustNewZeroNoFixed()
+	t.Cleanup(func() { mpool.DeleteMPool(mp) })
+
+	bat := batch.NewWithSize(1)
+	bat.Vecs[0] = vector.NewVec(types.T_text.ToType())
+	require.NoError(t, vector.AppendBytes(bat.Vecs[0], []byte("raw"), false, mp))
+	require.NoError(t, vector.AppendBytes(bat.Vecs[0], []byte("text"), false, mp))
+	require.NoError(t, bat.Vecs[0].SetIsBinaryStringAt(0, true))
+	bat.SetRowCount(2)
+
+	source := newSource(1, 0)
+	budget := newTestSpillBudget(math.MaxUint64, math.MaxUint64, 1)
+	require.NoError(t, source.Begin(mp, budget.config(testSpillFactory(t.TempDir()))))
+	require.NoError(t, source.Append(bat))
+	require.Equal(t, 1, source.spillBatchCount)
+	bat.Clean(mp)
+	source.Finish(nil)
+
+	got, end, err := source.Next(context.Background(), 0, 0)
+	require.NoError(t, err)
+	require.False(t, end)
+	require.True(t, got.Vecs[0].GetIsBinaryStringAt(0))
+	require.False(t, got.Vecs[0].GetIsBinaryStringAt(1))
+	got.Clean(mp)
+	_, end, err = source.Next(context.Background(), 0, 1)
+	require.NoError(t, err)
+	require.True(t, end)
+	source.ReleaseReader(0)
+	require.Zero(t, mp.CurrNB())
+}
+
 func TestSharedMaterializedSourceSpillBudgetExactBoundaryAndCleanup(t *testing.T) {
 	mp := mpool.MustNewZeroNoFixed()
 	t.Cleanup(func() { mpool.DeleteMPool(mp) })

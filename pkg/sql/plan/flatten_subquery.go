@@ -64,6 +64,223 @@ func (builder *QueryBuilder) flattenFilterSubqueries(nodeID int32, expr *plan.Ex
 	return builder.flattenSubqueriesWithContext(nodeID, expr, ctx, true)
 }
 
+// flattenOuterJoinConditionSubqueries decorrelates each subquery against the
+// one JOIN input it references, then leaves the rewritten boolean expression
+// in the outer join's OnList.  Decorating an input with SINGLE/LEFT/MARK joins
+// is row preserving; applying a FILTER above the outer join is not, because it
+// would discard the NULL-extended row when every candidate fails the original
+// ON predicate.
+//
+// A subquery that references both inputs cannot be placed below either input
+// without first assigning a stable identity to every candidate pair.  Keep
+// rejecting that shape instead of silently changing outer-join semantics.
+func (builder *QueryBuilder) flattenOuterJoinConditionSubqueries(
+	leftID, rightID int32,
+	expr *plan.Expr,
+	leftCtx, rightCtx *BindContext,
+	leftTags, rightTags map[int32]bool,
+	defaultSide int8,
+	nullResultRejected bool,
+) (int32, int32, *plan.Expr, error) {
+	var err error
+
+	switch exprImpl := expr.Expr.(type) {
+	case *plan.Expr_F:
+		childNullResultRejected := nullResultRejected && nullPropagatesThroughDeepScalarConsumer(exprImpl.F.Func)
+		for i, arg := range exprImpl.F.Args {
+			leftID, rightID, exprImpl.F.Args[i], err = builder.flattenOuterJoinConditionSubqueries(
+				leftID, rightID, arg, leftCtx, rightCtx, leftTags, rightTags, defaultSide, childNullResultRejected)
+			if err != nil {
+				return 0, 0, nil, err
+			}
+		}
+
+	case *plan.Expr_List:
+		for i, item := range exprImpl.List.List {
+			leftID, rightID, exprImpl.List.List[i], err = builder.flattenOuterJoinConditionSubqueries(
+				leftID, rightID, item, leftCtx, rightCtx, leftTags, rightTags, defaultSide, nullResultRejected)
+			if err != nil {
+				return 0, 0, nil, err
+			}
+		}
+
+	case *plan.Expr_Sub:
+		side := builder.outerJoinSubqueryInputSide(exprImpl.Sub, leftTags, rightTags)
+		if side&JoinSideOuter != 0 {
+			return 0, 0, nil, moerr.NewNYI(
+				builder.GetContext(),
+				"deeply correlated subquery in outer JOIN condition",
+			)
+		}
+		switch side & JoinSideBoth {
+		case JoinSideNone:
+			side = defaultSide
+		case JoinSideBoth:
+			return 0, 0, nil, moerr.NewNYI(
+				builder.GetContext(),
+				"subquery in outer JOIN condition referencing both join inputs",
+			)
+		}
+
+		if side&JoinSideLeft != 0 {
+			leftID, expr, err = builder.flattenSubquery(leftID, exprImpl.Sub, leftCtx, nullResultRejected)
+		} else {
+			rightID, expr, err = builder.flattenSubquery(rightID, exprImpl.Sub, rightCtx, nullResultRejected)
+		}
+	}
+
+	return leftID, rightID, expr, err
+}
+
+// outerJoinSubqueryInputSide reports which immediate JOIN input supplies the
+// values consumed while flattenSubquery executes.  Correlated references live
+// in the subquery plan; quantified subqueries also keep their left operand in
+// SubqueryRef.Child, where the outer references are ordinary ColRefs.
+func (builder *QueryBuilder) outerJoinSubqueryInputSide(
+	subquery *plan.SubqueryRef,
+	leftTags, rightTags map[int32]bool,
+) int8 {
+	if subquery == nil {
+		return JoinSideBoth
+	}
+
+	side := outerJoinExprInputSide(subquery.Child, leftTags, rightTags, true)
+	visited := make(map[int32]struct{})
+
+	var visitNode func(int32)
+	visitNode = func(nodeID int32) {
+		if nodeID < 0 || int(nodeID) >= len(builder.qry.Nodes) {
+			side |= JoinSideBoth
+			return
+		}
+		if _, ok := visited[nodeID]; ok {
+			return
+		}
+		visited[nodeID] = struct{}{}
+
+		node := builder.qry.Nodes[nodeID]
+		for _, childID := range node.Children {
+			visitNode(childID)
+		}
+
+		visitExpr := func(expr *plan.Expr) {
+			side |= outerJoinExprInputSide(expr, leftTags, rightTags, false)
+		}
+		visitExprList := func(exprs []*plan.Expr) {
+			for _, expr := range exprs {
+				visitExpr(expr)
+			}
+		}
+
+		visitExpr(node.Limit)
+		visitExpr(node.Offset)
+		visitExpr(node.Interval)
+		visitExpr(node.Sliding)
+		visitExpr(node.Timestamp)
+		visitExpr(node.WEnd)
+		visitExprList(node.OnList)
+		visitExprList(node.FilterList)
+		visitExprList(node.ProjectList)
+		visitExprList(node.GroupBy)
+		visitExprList(node.AggList)
+		visitExprList(node.WinSpecList)
+		visitExprList(node.TblFuncExprList)
+		visitExprList(node.BlockFilterList)
+		visitExprList(node.FillVal)
+		visitExprList(node.OnUpdateExprs)
+		visitExprList(node.TimeWindowPartitionBy)
+		for _, orderBy := range node.OrderBy {
+			visitExpr(orderBy.Expr)
+		}
+		if param := node.IndexReaderParam; param != nil {
+			visitExpr(param.Limit)
+			for _, orderBy := range param.OrderBy {
+				visitExpr(orderBy.Expr)
+			}
+			if param.DistRange != nil {
+				visitExpr(param.DistRange.LowerBound)
+				visitExpr(param.DistRange.UpperBound)
+			}
+		}
+	}
+
+	visitNode(subquery.NodeId)
+	return side
+}
+
+func outerJoinExprInputSide(
+	expr *plan.Expr,
+	leftTags, rightTags map[int32]bool,
+	includeCols bool,
+) int8 {
+	if expr == nil {
+		return JoinSideNone
+	}
+
+	var side int8
+	switch exprImpl := expr.Expr.(type) {
+	case *plan.Expr_Col:
+		if includeCols {
+			side |= outerJoinTagInputSide(exprImpl.Col.RelPos, leftTags, rightTags)
+		}
+	case *plan.Expr_Corr:
+		if exprImpl.Corr.Depth == 1 {
+			side |= outerJoinTagInputSide(exprImpl.Corr.RelPos, leftTags, rightTags)
+		} else {
+			// The correlation belongs to an enclosing query block, so neither
+			// immediate JOIN input can host the decorrelation safely.
+			side |= JoinSideOuter
+		}
+	case *plan.Expr_F:
+		for _, arg := range exprImpl.F.Args {
+			side |= outerJoinExprInputSide(arg, leftTags, rightTags, includeCols)
+		}
+	case *plan.Expr_Lit:
+		side |= outerJoinExprInputSide(exprImpl.Lit.Src, leftTags, rightTags, includeCols)
+	case *plan.Expr_List:
+		for _, item := range exprImpl.List.List {
+			side |= outerJoinExprInputSide(item, leftTags, rightTags, includeCols)
+		}
+	case *plan.Expr_Sub:
+		if exprImpl.Sub != nil {
+			side |= outerJoinExprInputSide(exprImpl.Sub.Child, leftTags, rightTags, includeCols)
+		}
+	case *plan.Expr_W:
+		side |= outerJoinExprInputSide(exprImpl.W.WindowFunc, leftTags, rightTags, includeCols)
+		for _, item := range exprImpl.W.PartitionBy {
+			side |= outerJoinExprInputSide(item, leftTags, rightTags, includeCols)
+		}
+		for _, orderBy := range exprImpl.W.OrderBy {
+			side |= outerJoinExprInputSide(orderBy.Expr, leftTags, rightTags, includeCols)
+		}
+		if exprImpl.W.Frame != nil {
+			if exprImpl.W.Frame.Start != nil {
+				side |= outerJoinExprInputSide(exprImpl.W.Frame.Start.Val, leftTags, rightTags, includeCols)
+			}
+			if exprImpl.W.Frame.End != nil {
+				side |= outerJoinExprInputSide(exprImpl.W.Frame.End.Val, leftTags, rightTags, includeCols)
+			}
+		}
+	}
+	return side
+}
+
+func outerJoinTagInputSide(tag int32, leftTags, rightTags map[int32]bool) int8 {
+	var side int8
+	if leftTags[tag] {
+		side |= JoinSideLeft
+	}
+	if rightTags[tag] {
+		side |= JoinSideRight
+	}
+	if side == JoinSideNone {
+		// An immediate correlation must resolve to one of the two inputs.
+		// Treat an unknown tag conservatively as unplaceable.
+		side = JoinSideBoth
+	}
+	return side
+}
+
 func (builder *QueryBuilder) flattenSubqueriesWithContext(
 	nodeID int32,
 	expr *plan.Expr,

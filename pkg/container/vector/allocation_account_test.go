@@ -1380,6 +1380,46 @@ func TestSetTypeAndFixDataAllocationFailureIsAtomic(t *testing.T) {
 	finalizeTestVectorAllocationAccount(t, state)
 }
 
+func TestBinaryStringBitmapUsesVectorAllocationAccount(t *testing.T) {
+	state := newTestVectorAllocationAccount(t, 1<<20, 16)
+	mp := mpool.MustNewZero()
+	vec := newAccountedTestVector(t, types.T_varchar.ToType(), state.selection)
+	require.NoError(t, vec.PreExtend(2, mp))
+	vec.SetLength(2)
+	before := state.account.Snapshot().Used
+	require.NoError(t, vec.SetIsBinaryStringAt(0, true, mp))
+	require.Greater(t, state.account.Snapshot().Used, before)
+	require.True(t, vec.GetIsBinaryStringAt(0))
+	require.False(t, vec.GetIsBinaryStringAt(1))
+	require.NoError(t, vec.PreExtendBitmap(63, mp))
+	require.Equal(t,
+		vec.GetNulls().GetBitmap().ExternalStorageCapacity(),
+		vec.binaryStringRows.ExternalStorageCapacity())
+	vec.Free(mp)
+	finalizeTestVectorAllocationAccount(t, state)
+}
+
+func TestBinaryStringBitmapAllocationFailureIsAtomic(t *testing.T) {
+	const twoVarlenaRowsBytes = 2 * types.VarlenaSize
+	state := newTestVectorAllocationAccount(t, twoVarlenaRowsBytes, 16)
+	mp := mpool.MustNewZero()
+	vec := newAccountedTestVector(t, types.T_varchar.ToType(), state.selection)
+	require.NoError(t, vec.PreExtend(2, mp))
+	vec.SetLength(2)
+	before := state.account.Snapshot().Used
+	require.Equal(t, uint64(twoVarlenaRowsBytes), before)
+
+	err := vec.SetIsBinaryStringAt(0, true, mp)
+	require.ErrorIs(t, err, mpool.ErrAllocationAccountCapacity)
+	require.Equal(t, before, state.account.Snapshot().Used)
+	require.False(t, vec.GetIsBinaryString())
+	require.False(t, vec.HasBinaryStringRows())
+	require.False(t, vec.GetIsBinaryStringAt(0))
+
+	vec.Free(mp)
+	finalizeTestVectorAllocationAccount(t, state)
+}
+
 func TestDetachedUnaccountedBufferAndTypeChange(t *testing.T) {
 	mp := mpool.MustNewZero()
 	source := NewOffHeapVecWithType(types.T_varchar.ToType())
