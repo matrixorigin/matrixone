@@ -153,6 +153,7 @@ func buildTableUpdate(stmt *tree.Update, ctx CompilerContext, isPrepareStmt bool
 		upPlanCtx := updatePlanCtxs[i]
 		upPlanCtx.beginIdx = beginIdx
 		upPlanCtx.sourceStep = sourceStep
+		upPlanCtx.ignoreCheckConstraint = stmt.Ignore
 
 		updateBindCtx := NewBindContext(builder, nil)
 		beginIdx = beginIdx + upPlanCtx.updateColLength + len(tableDef.Cols)

@@ -314,6 +314,7 @@ func dupOperatorWithContext(sourceOp vm.Operator, index int, maxParallel int, du
 		op := filter.NewArgument()
 		op.FilterExprs = t.FilterExprs
 		op.RuntimeFilterExprs = t.RuntimeFilterExprs
+		op.IsAssert = t.IsAssert
 		op.SetInfo(&info)
 		return op
 	case vm.Top:
@@ -684,7 +685,21 @@ func constructRestrict(node *plan.Node, filterExprs []*plan.Expr) *filter.Filter
 	op := filter.NewArgument()
 	op.FilterExprs = filterExprs
 	op.IsEnd = node.IsEnd
+	op.IsAssert = node.NodeType == plan.Node_ASSERT && isAssertExpressionList(filterExprs)
 	return op
+}
+
+func isAssertExpressionList(exprs []*plan.Expr) bool {
+	if len(exprs) == 0 {
+		return false
+	}
+	for _, expr := range exprs {
+		function := expr.GetF()
+		if function == nil || function.GetFunc().GetObjName() != "_check_constraint_assert" {
+			return false
+		}
+	}
+	return true
 }
 
 func constructDeletion(
@@ -1606,7 +1621,9 @@ func constructTimeWindow(_ context.Context, node *plan.Node, proc *process.Proce
 		aggregationExpressions = append(
 			aggregationExpressions,
 			aggexec.MakeAggFunctionExpression(functionID, isDistinct, args, cfg))
-		typs = append(typs, types.New(types.T(e.Typ.Id), e.Typ.Width, e.Typ.Scale))
+		typs = append(typs, types.NewWithCharset(
+			types.T(e.Typ.Id), e.Typ.Width, e.Typ.Scale, uint8(e.Typ.Charset),
+		))
 	}
 	wStart := layout.WStartSlot != plan2.TimeWindowSlotNone
 	wEnd := layout.WEndSlot != plan2.TimeWindowSlotNone
@@ -1721,7 +1738,9 @@ func constructGroup(_ context.Context, node, childNode *plan.Node, needEval bool
 
 	typs := make([]types.Type, len(childNode.ProjectList))
 	for i, e := range childNode.ProjectList {
-		typs[i] = types.New(types.T(e.Typ.Id), e.Typ.Width, e.Typ.Scale)
+		typs[i] = types.NewWithCharset(
+			types.T(e.Typ.Id), e.Typ.Width, e.Typ.Scale, uint8(e.Typ.Charset),
+		)
 	}
 
 	arg := group.NewArgument()

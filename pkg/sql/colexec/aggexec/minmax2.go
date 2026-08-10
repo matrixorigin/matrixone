@@ -469,6 +469,16 @@ func (exec *minMaxExecBytes) Flush() ([]*vector.Vector, error) {
 }
 
 func makeMinMaxExec(mp *mpool.MPool, aggID int64, isMin bool, param types.Type) AggFuncExec {
+	return makeMinMaxExecWithLegacyText(mp, aggID, isMin, param, false)
+}
+
+func makeMinMaxExecWithLegacyText(
+	mp *mpool.MPool,
+	aggID int64,
+	isMin bool,
+	param types.Type,
+	legacyTextComparator bool,
+) AggFuncExec {
 	switch param.Oid {
 	case types.T_bool:
 		return newBoolMinMaxExec(mp, aggID, isMin, param)
@@ -514,8 +524,16 @@ func makeMinMaxExec(mp *mpool.MPool, aggID int64, isMin bool, param types.Type) 
 		return newUuidMinMaxExec(mp, aggID, isMin, param)
 	case types.T_enum:
 		return newGenericMinMaxExec[types.Enum](mp, aggID, isMin, param)
-	case types.T_char, types.T_varchar, types.T_blob,
-		types.T_binary, types.T_varbinary, types.T_json, types.T_text, types.T_datalink:
+	case types.T_char, types.T_varchar, types.T_text:
+		if legacyTextComparator || param.Charset == types.CharsetBinary ||
+			param.Charset == types.CharsetLegacy {
+			return newStrMinMaxExec(mp, aggID, isMin, param)
+		}
+		if param.Charset == types.CharsetUTF8MB4Bin {
+			return newUTF8mb4BinMinMaxExec(mp, aggID, isMin, param)
+		}
+		return newTextMinMaxExec(mp, aggID, isMin, param)
+	case types.T_blob, types.T_binary, types.T_varbinary, types.T_json, types.T_datalink:
 		return newStrMinMaxExec(mp, aggID, isMin, param)
 	case types.T_array_float32, types.T_array_float64:
 		return newArrayMinMaxExec(mp, aggID, isMin, param)
@@ -614,6 +632,30 @@ func newStrMinMaxExec(mp *mpool.MPool, aggID int64, isMin bool, param types.Type
 		exec.comp = bytes.Compare
 	} else {
 		exec.comp = func(x, y []byte) int { return -bytes.Compare(x, y) }
+	}
+	setupAggInfo(&exec.aggInfo, aggID, param)
+	return &exec
+}
+
+func newTextMinMaxExec(mp *mpool.MPool, aggID int64, isMin bool, param types.Type) AggFuncExec {
+	var exec minMaxExecBytes
+	exec.mp = mp
+	if isMin {
+		exec.comp = compareUTF8mb4GeneralCI
+	} else {
+		exec.comp = func(x, y []byte) int { return -compareUTF8mb4GeneralCI(x, y) }
+	}
+	setupAggInfo(&exec.aggInfo, aggID, param)
+	return &exec
+}
+
+func newUTF8mb4BinMinMaxExec(mp *mpool.MPool, aggID int64, isMin bool, param types.Type) AggFuncExec {
+	var exec minMaxExecBytes
+	exec.mp = mp
+	if isMin {
+		exec.comp = compareUTF8mb4Bin
+	} else {
+		exec.comp = func(x, y []byte) int { return -compareUTF8mb4Bin(x, y) }
 	}
 	setupAggInfo(&exec.aggInfo, aggID, param)
 	return &exec

@@ -542,13 +542,56 @@ func planHasTextToVarcharCastWithNameAndWidth(p *Plan, funcName string, width in
 	return false
 }
 
+func planHasUnboundedTextToTinyTextCast(p *Plan) bool {
+	p = resolveQueryPlan(p)
+	if p == nil || p.GetQuery() == nil {
+		return false
+	}
+	var visit func(expr *plan.Expr) bool
+	visit = func(expr *plan.Expr) bool {
+		if expr == nil {
+			return false
+		}
+		if f := expr.GetF(); f != nil {
+			name := f.Func.GetObjName()
+			if (name == "cast" || name == "cast_strict" || name == "cast_assign") && len(f.Args) > 0 &&
+				f.Args[0].Typ.Id == int32(types.T_text) && f.Args[0].Typ.Width == 0 &&
+				expr.Typ.Id == int32(types.T_text) && expr.Typ.Width == types.MaxTinyTextLen {
+				return true
+			}
+			for _, arg := range f.Args {
+				if visit(arg) {
+					return true
+				}
+			}
+		}
+		if list := expr.GetList(); list != nil {
+			for _, item := range list.List {
+				if visit(item) {
+					return true
+				}
+			}
+		}
+		return false
+	}
+	for _, node := range p.GetQuery().Nodes {
+		for _, expr := range node.ProjectList {
+			if visit(expr) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func TestUpdateTextConcatCoalesceKeepsTextAssignmentCast(t *testing.T) {
 	mock := NewMockOptimizer(true)
 	addTextCastTableForTest(mock)
 
-	logicPlan, err := runOneStmt(mock, t, "update text_cast_t set txt = concat(coalesce(txt, ''), ' suffix') where id = 1")
+	logicPlan, err := runOneStmt(mock, t, "update text_cast_t set txt = concat(coalesce(vc, txt, ''), ' suffix') where id = 1")
 	assert.NoError(t, err)
 	assert.False(t, planHasTextToCharOrVarcharCast(logicPlan))
+	assert.False(t, planHasUnboundedTextToTinyTextCast(logicPlan))
 }
 
 func TestPrepareUpdateTextConcatCoalesceKeepsTextAssignmentCast(t *testing.T) {
@@ -3866,7 +3909,7 @@ func TestInsertAddsCheckConstraintFilter(t *testing.T) {
 		query := build("insert into dept values (1, 'Sales', 'NY')")
 		found := false
 		for _, node := range query.Nodes {
-			if node.NodeType != plan.Node_FILTER {
+			if node.NodeType != plan.Node_ASSERT {
 				continue
 			}
 			for _, expr := range node.FilterList {
@@ -3922,7 +3965,7 @@ func TestInsertAddsCheckConstraintFilter(t *testing.T) {
 			query := build(sql)
 			found := false
 			for _, node := range query.Nodes {
-				if node.NodeType != plan.Node_FILTER {
+				if node.NodeType != plan.Node_ASSERT {
 					continue
 				}
 				for _, expr := range node.FilterList {
@@ -3969,7 +4012,7 @@ func TestInsertAddsCheckConstraintFilter(t *testing.T) {
 
 		found := false
 		for _, node := range query.Nodes {
-			if node.NodeType != plan.Node_FILTER {
+			if node.NodeType != plan.Node_ASSERT {
 				continue
 			}
 			for _, expr := range node.FilterList {
@@ -4310,7 +4353,7 @@ func TestCheckConstraintWithChildForeignKey(t *testing.T) {
 	build := func(sql string) *plan.Query {
 		mock := NewMockOptimizer(true)
 		tableDef := mock.ctxt.tables["emp"]
-		colPos := tableDef.Name2ColIndex["empno"]
+		colPos := tableDef.Name2ColIndex["deptno"]
 		colExpr := &plan.Expr{
 			Typ: tableDef.Cols[colPos].Typ,
 			Expr: &plan.Expr_Col{
@@ -4324,7 +4367,7 @@ func TestCheckConstraintWithChildForeignKey(t *testing.T) {
 		)
 		require.NoError(t, err)
 		tableDef.Checks = []*plan.CheckDef{{
-			Name:  "positive_empno",
+			Name:  "positive_deptno",
 			Check: checkExpr,
 		}}
 
@@ -4335,14 +4378,25 @@ func TestCheckConstraintWithChildForeignKey(t *testing.T) {
 		return query
 	}
 
-	assertPlanShape := func(t *testing.T, query *plan.Query, checkFunc string) {
+	assertPlanShape := func(t *testing.T, query *plan.Query, nodeType plan.Node_NodeType, checkFunc string) int32 {
 		t.Helper()
 		hasCheck, hasParentJoin, hasMultiUpdate := false, false, false
-		for _, node := range query.Nodes {
-			if node.NodeType == plan.Node_FILTER {
+		checkNodeID := int32(-1)
+		for nodeID, node := range query.Nodes {
+			if node.NodeType == nodeType {
 				for _, expr := range node.FilterList {
 					if expr.GetF() != nil && expr.GetF().GetFunc().GetObjName() == checkFunc {
 						hasCheck = true
+						checkNodeID = int32(nodeID)
+						if nodeType == plan.Node_FILTER && checkFunc == "coalesce" {
+							require.True(t, node.FilterIsBarrier,
+								"IGNORE CHECK must remain above the final-row producer")
+						}
+						if nodeType == plan.Node_ASSERT {
+							require.Len(t, node.Children, 1)
+							require.LessOrEqual(t, len(node.ProjectList), len(query.Nodes[node.Children[0]].ProjectList),
+								"ASSERT output projection must not retain stale pre-pruning child positions")
+						}
 					}
 				}
 			}
@@ -4356,17 +4410,133 @@ func TestCheckConstraintWithChildForeignKey(t *testing.T) {
 		require.True(t, hasCheck)
 		require.True(t, hasParentJoin)
 		require.True(t, hasMultiUpdate)
+		return checkNodeID
 	}
 
 	t.Run("replace", func(t *testing.T) {
 		query := build("REPLACE INTO emp (empno, deptno) VALUES (1, 10)")
-		assertPlanShape(t, query, "_check_constraint_assert")
+		assertPlanShape(t, query, plan.Node_ASSERT, "_check_constraint_assert")
 	})
 
 	t.Run("insert ignore", func(t *testing.T) {
 		query := build("INSERT IGNORE INTO emp (empno, deptno) VALUES (1, 10)")
-		assertPlanShape(t, query, "coalesce")
+		assertPlanShape(t, query, plan.Node_FILTER, "coalesce")
 	})
+
+	t.Run("update", func(t *testing.T) {
+		query := build("UPDATE emp SET deptno = deptno + 1")
+		assertPlanShape(t, query, plan.Node_ASSERT, "_check_constraint_assert")
+	})
+
+	t.Run("update ignore", func(t *testing.T) {
+		query := build("UPDATE IGNORE emp SET deptno = 0")
+		assertPlanShape(t, query, plan.Node_FILTER, "coalesce")
+	})
+
+	t.Run("joined update fallback", func(t *testing.T) {
+		query := build("UPDATE emp e JOIN dept d ON e.deptno = d.deptno SET e.deptno = e.deptno + 1")
+		hasCheckAssert := false
+		for _, node := range query.Nodes {
+			if node.NodeType != plan.Node_ASSERT {
+				continue
+			}
+			for _, expr := range node.FilterList {
+				if expr.GetF() != nil && expr.GetF().GetFunc().GetObjName() == "_check_constraint_assert" {
+					hasCheckAssert = true
+				}
+			}
+		}
+		require.True(t, hasCheckAssert,
+			"legacy joined-UPDATE route must validate each target's final row image")
+	})
+
+	t.Run("joined update does not validate read-only source", func(t *testing.T) {
+		mock := NewMockOptimizer(true)
+		addCheck := func(tableName, checkName, colName string) {
+			tableDef := mock.ctxt.tables[tableName]
+			colPos := tableDef.Name2ColIndex[colName]
+			colExpr := &plan.Expr{
+				Typ:  tableDef.Cols[colPos].Typ,
+				Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 0, ColPos: colPos}},
+			}
+			checkExpr, err := BindFuncExprImplByPlanExpr(
+				t.Context(), ">", []*plan.Expr{colExpr, MakePlan2Int64ConstExprWithType(0)})
+			require.NoError(t, err)
+			tableDef.Checks = []*plan.CheckDef{{Name: checkName, Check: checkExpr}}
+		}
+		addCheck("emp", "target_check", "deptno")
+		addCheck("dept", "source_check", "deptno")
+
+		logicPlan, err := runOneStmt(mock, t,
+			"UPDATE emp e JOIN dept d ON e.deptno = d.deptno SET e.deptno = e.deptno + 1")
+		require.NoError(t, err)
+		assertNames := make([]string, 0, 2)
+		for _, node := range logicPlan.GetQuery().Nodes {
+			if node.NodeType != plan.Node_ASSERT {
+				continue
+			}
+			for _, expr := range node.FilterList {
+				if expr.GetF() == nil || expr.GetF().GetFunc().GetObjName() != "_check_constraint_assert" {
+					continue
+				}
+				args := expr.GetF().Args
+				if len(args) == 2 && args[1].GetLit() != nil {
+					assertNames = append(assertNames, args[1].GetLit().GetSval())
+				}
+			}
+		}
+		require.Len(t, assertNames, 1)
+		require.Contains(t, assertNames[0], "target_check")
+		require.NotContains(t, assertNames[0], "source_check")
+	})
+
+	t.Run("on duplicate key update", func(t *testing.T) {
+		query := build("INSERT INTO emp (empno, deptno) VALUES (1, 10) ON DUPLICATE KEY UPDATE deptno = 0")
+		assertNodeID := assertPlanShape(t, query, plan.Node_ASSERT, "_check_constraint_assert")
+
+		var containsNode func(int32, int32) bool
+		containsNode = func(rootID, wantedID int32) bool {
+			if rootID == wantedID {
+				return true
+			}
+			node := query.Nodes[rootID]
+			for _, childID := range node.Children {
+				if containsNode(childID, wantedID) {
+					return true
+				}
+			}
+			for _, sourceStep := range node.SourceStep {
+				if containsNode(query.Steps[sourceStep], wantedID) {
+					return true
+				}
+			}
+			return false
+		}
+		require.Len(t, query.Nodes[assertNodeID].Children, 1)
+		require.Equal(t, plan.Node_PROJECT, query.Nodes[query.Nodes[assertNodeID].Children[0]].NodeType,
+			"ODKU CHECK must be attached directly to the final merged projection")
+		hasDedupUpdateBelowAssert := false
+		for nodeID, node := range query.Nodes {
+			if node.NodeType == plan.Node_JOIN && node.JoinType == plan.Node_DEDUP &&
+				node.OnDuplicateAction == plan.Node_UPDATE &&
+				containsNode(query.Nodes[assertNodeID].Children[0], int32(nodeID)) {
+				hasDedupUpdateBelowAssert = true
+				break
+			}
+		}
+		require.True(t, hasDedupUpdateBelowAssert,
+			"CHECK assertion must remain above the DEDUP UPDATE final-row mutation")
+	})
+}
+
+func TestUpdateWithoutCheckConstraintAddsNoAssert(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	logicPlan, err := runOneStmt(mock, t, "UPDATE emp SET deptno = deptno + 1")
+	require.NoError(t, err)
+	for _, node := range logicPlan.GetQuery().Nodes {
+		require.NotEqual(t, plan.Node_ASSERT, node.NodeType,
+			"tables without CHECK constraints must not pay for an ASSERT operator")
+	}
 }
 
 func TestInsertOnDupSelfReferFKUsesModernPath(t *testing.T) {

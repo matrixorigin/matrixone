@@ -1993,6 +1993,23 @@ func (tc *txnOperator) unlock(ctx context.Context) error {
 			tc.reset.commitSequence,
 			tc.reset.unknownCommitResolved,
 		); err != nil {
+			if done, scheduled := lockservice.UnknownCommitResolutionDone(err); scheduled {
+				// Lockservice owns cleanup but deliberately retained no external
+				// callback capacity. Keep this transaction's existing admission as
+				// the bound and invoke the still caller-owned callback only after the
+				// terminal signal. Close also closes the signal, so the waiter has a
+				// lifecycle owner and cannot outlive both components.
+				tc.reset.unknownCommitResolutionTransferred = true
+				tc.reset.internalUnknownCommitAdmissionHeld = false
+				onResolved := tc.reset.unknownCommitResolved
+				go func() {
+					<-done
+					if onResolved != nil {
+						onResolved()
+					}
+				}()
+				return nil
+			}
 			tc.logger.Error("failed to schedule unknown commit resolution",
 				util.TxnField(tc.mu.txn),
 				zap.Error(err))

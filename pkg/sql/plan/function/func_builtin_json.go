@@ -1974,7 +1974,12 @@ func (op *opBuiltInJsonArray) convertToAny(proc *process.Process, v *vector.Vect
 		if v.IsNull(uint64(row)) {
 			return nil, nil
 		}
-		return string(v.GetBytesAt(row)), nil
+		value := string(v.GetBytesAt(row))
+		kind := v.GetPrepareParamKindAt(row)
+		if kind == vector.PrepareParamNone {
+			return value, nil
+		}
+		return preparedTextToJSONValue(ctx, value, kind)
 	case types.T_json:
 		if v.IsNull(uint64(row)) {
 			return nil, nil
@@ -2125,6 +2130,43 @@ func (op *opBuiltInJsonArray) convertToAny(proc *process.Process, v *vector.Vect
 			return nil, nil
 		}
 		return nil, moerr.NewInvalidInputf(ctx, "unsupported type for json_array: %v", fromType.String())
+	}
+}
+
+func preparedTextToJSONValue(
+	ctx context.Context,
+	value string,
+	kind vector.PrepareParamKind,
+) (any, error) {
+	switch kind {
+	case vector.PrepareParamInteger:
+		if signed, err := strconv.ParseInt(value, 10, 64); err == nil {
+			return signed, nil
+		}
+		if unsigned, err := strconv.ParseUint(value, 10, 64); err == nil {
+			return unsigned, nil
+		}
+		return nil, moerr.NewInvalidInputf(ctx, "invalid prepared integer JSON value %q", value)
+	case vector.PrepareParamFloat:
+		floating, err := strconv.ParseFloat(value, 64)
+		if err != nil {
+			return nil, moerr.NewInvalidInputf(ctx, "invalid prepared floating-point JSON value %q", value)
+		}
+		return finiteFloatToJSON(floating, ctx)
+	case vector.PrepareParamDecimal:
+		if len(value) == 0 || !json.Valid([]byte(value)) ||
+			(value[0] != '-' && (value[0] < '0' || value[0] > '9')) {
+			return nil, moerr.NewInvalidInputf(ctx, "invalid prepared decimal JSON value %q", value)
+		}
+		return newTypedByteJson(bytejson.TpCodeDecimal, value), nil
+	case vector.PrepareParamBoolean:
+		boolean, err := strconv.ParseBool(value)
+		if err != nil {
+			return nil, moerr.NewInvalidInputf(ctx, "invalid prepared boolean JSON value %q", value)
+		}
+		return boolean, nil
+	default:
+		return nil, moerr.NewInternalErrorf(ctx, "unsupported prepared parameter kind %d", kind)
 	}
 }
 

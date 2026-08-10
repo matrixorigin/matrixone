@@ -30,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dedupjoin"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/deletion"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/filter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashjoin"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/insert"
@@ -68,6 +69,48 @@ func TestDupOperator(t *testing.T) {
 		0,
 		0,
 	)
+
+	assertFilter := filter.NewArgument()
+	defer assertFilter.Release()
+	assertFilter.IsAssert = true
+	duplicatedFilter := dupOperator(assertFilter, 0, 1).(*filter.Filter)
+	defer duplicatedFilter.Release()
+	require.True(t, duplicatedFilter.IsAssert)
+}
+
+func TestConstructRestrictForCheckConstraintNodes(t *testing.T) {
+	assertExpr := &plan.Expr{Expr: &plan.Expr_F{F: &plan.Function{
+		Func: &plan.ObjectRef{ObjName: "_check_constraint_assert"},
+	}}}
+	boolExpr := plan2.MakePlan2BoolConstExprWithType(true)
+	for _, testCase := range []struct {
+		node         *plan.Node
+		wantFastPath bool
+	}{
+		{node: &plan.Node{NodeType: plan.Node_ASSERT, FilterList: []*plan.Expr{assertExpr}}, wantFastPath: true},
+		{node: &plan.Node{NodeType: plan.Node_ASSERT, FilterList: []*plan.Expr{boolExpr}}},
+		{node: &plan.Node{NodeType: plan.Node_FILTER, FilterList: []*plan.Expr{boolExpr}, FilterIsBarrier: true}},
+	} {
+		node := testCase.node
+		op := constructRestrict(node, plan2.DeepCopyExprList(node.FilterList))
+		require.Len(t, op.FilterExprs, len(node.FilterList))
+		require.False(t, op.IsEnd,
+			"CHECK operators must return their surviving batch to downstream DML")
+		require.Equal(t, testCase.wantFastPath, op.IsAssert)
+	}
+}
+
+func TestIdentityProjectionOfChild(t *testing.T) {
+	identity := []*plan.Expr{
+		{Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 0, ColPos: 0}}},
+		{Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 0, ColPos: 1}}},
+	}
+	child := []*plan.Expr{{}, {}}
+	require.True(t, isIdentityProjectionOfChild(identity, child))
+	require.False(t, isIdentityProjectionOfChild(identity[:1], child))
+	nonIdentity := plan2.DeepCopyExprList(identity)
+	nonIdentity[1].GetCol().ColPos = 0
+	require.False(t, isIdentityProjectionOfChild(nonIdentity, child))
 }
 
 func TestJoinHashBuildTopologyPinsSpillToSingleConsumer(t *testing.T) {
