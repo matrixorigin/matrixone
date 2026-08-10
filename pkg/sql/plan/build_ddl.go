@@ -886,21 +886,27 @@ func bindLegacyChecks(
 				return nil, true, err
 			}
 		case *tree.ColumnTableDef:
-			columnPos := slices.IndexFunc(
-				tableDef.Cols,
-				func(col *plan.ColDef) bool { return col.Name == typedDef.Name.ColName() },
-			)
-			if columnPos == -1 {
-				return nil, true, moerr.NewInvalidInputf(
-					ctx.GetContext(),
-					"legacy CHECK column '%s' does not exist",
-					typedDef.Name.ColNameOrigin(),
-				)
-			}
+			columnPos := -1
 			for _, attr := range typedDef.Attributes {
 				check, ok := attr.(*tree.AttributeCheckConstraint)
 				if !ok {
 					continue
+				}
+				// CREATE SQL can be stale after an earlier ALTER, but columns
+				// without a column-level CHECK are irrelevant to recovery. Resolve
+				// the catalog position only when this column owns a CHECK.
+				if columnPos == -1 {
+					columnPos = slices.IndexFunc(
+						tableDef.Cols,
+						func(col *plan.ColDef) bool { return col.Name == typedDef.Name.ColName() },
+					)
+					if columnPos == -1 {
+						return nil, true, moerr.NewInvalidInputf(
+							ctx.GetContext(),
+							"legacy CHECK column '%s' does not exist",
+							typedDef.Name.ColNameOrigin(),
+						)
+					}
 				}
 				if !check.Enforced {
 					return nil, true, moerr.NewNotSupported(

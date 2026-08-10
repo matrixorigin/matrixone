@@ -448,6 +448,31 @@ func TestBuildAlterRenameColumnRecoversLegacyChecks(t *testing.T) {
 		_, err := BuildPlan(ctx, stmt, false)
 		require.ErrorContains(t, err, "ambiguous SQL mode")
 	})
+
+	t.Run("multiple renames ignore CHECK text outside constraints", func(t *testing.T) {
+		stmt, err := parsers.ParseOne(
+			t.Context(),
+			dialect.MYSQL,
+			"alter table nation rename column n_nationkey to nation_id, "+
+				"rename column n_name to nation_name",
+			1,
+		)
+		require.NoError(t, err)
+		defer stmt.Free()
+
+		ctx := NewMockCompilerContext(false)
+		ctx.tables["nation"].Checks = nil
+		ctx.tables["nation"].Createsql = "create table fk_foreign_key_checks4.nation(" +
+			"n_nationkey int primary key, n_name varchar(25), " +
+			"n_regionkey int, n_comment varchar(152))"
+
+		p, err := BuildPlan(ctx, stmt, false)
+		require.NoError(t, err)
+		copyDef := p.GetDdl().GetAlterTable().GetCopyTableDef()
+		require.NotNil(t, FindColumn(copyDef.Cols, "nation_id"))
+		require.NotNil(t, FindColumn(copyDef.Cols, "nation_name"))
+		require.Empty(t, copyDef.Checks)
+	})
 }
 
 func (c *rootSQLCompilerContext) GetRootSql() string {
