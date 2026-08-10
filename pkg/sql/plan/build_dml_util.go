@@ -1559,7 +1559,7 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 							OnList:      joinConds,
 							ProjectList: childForJoinProject,
 							BindingTags: func() []int32 {
-								if !fkSelfReferCond || !delCtx.skipTargetDelete {
+								if !delCtx.skipTargetDelete {
 									return nil
 								}
 								return []int32{childScanTag}
