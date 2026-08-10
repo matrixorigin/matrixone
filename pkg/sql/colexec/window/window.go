@@ -25,6 +25,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/partition"
@@ -496,6 +497,9 @@ func (ctr *container) processFunc(idx int, ap *Window, proc *process.Process, an
 	if err != nil {
 		return err
 	}
+	// Aggregate state initializes its physical capacity as NULL. Keep only
+	// logical-row nulls so downstream HasNull checks do not see an unused tail.
+	nulls.RemoveRange(ctr.vec.GetNulls(), uint64(ctr.vec.Length()), math.MaxUint64)
 	if !ctr.vec.HasPrepareParamKind() {
 		ctr.vec.SetPrepareParamKind(ctr.prepareParamKind.Get(idx))
 	}
