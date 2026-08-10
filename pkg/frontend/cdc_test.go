@@ -5273,7 +5273,9 @@ func TestCDCCreateTaskOptions_handleLevel(t *testing.T) {
 	}
 	level := cdc.CDCPitrGranularity_Table
 	err = opts.handleLevel(context.Background(), nil, req, level)
-	assert.Error(t, err)
+	require.EqualError(t, err,
+		"internal error: one db/table: db1.t1 can't be used as multi sources in a cdc task")
+	require.NotContains(t, err.Error(), "invalid level")
 }
 
 func TestCDCCreateTaskOptions_handleFrequency(t *testing.T) {
@@ -5288,7 +5290,9 @@ func TestCDCCreateTaskOptions_handleFrequency(t *testing.T) {
 	err = opts.handleFrequency(context.Background(), nil, req, level, "abc")
 	assert.Error(t, err)
 	err = opts.handleFrequency(context.Background(), nil, req, level, "1h")
-	assert.Error(t, err)
+	require.EqualError(t, err,
+		"internal error: one db/table: db1.t1 can't be used as multi sources in a cdc task")
+	require.NotContains(t, err.Error(), "invalid level")
 }
 
 func TestIsValidFrequency(t *testing.T) {

@@ -76,7 +76,7 @@ explain select * from t1 where c2 like '123';
 TP QUERY PLAN
 Project
   ->  Index Table Scan on t1.c2
-        Filter Cond: prefix_eq(__mo_index_idx_col)
+        Filter Cond: prefix_eq(__mo_index_idx_col), (serial_extract(__mo_index_idx_col, 0, VARCHAR)) = '123')
         Block Filter Cond: prefix_eq(__mo_index_idx_col)
 select * from t1 where c2 like '123';
 c1    c2    c3

@@ -149,6 +149,18 @@ func (t *combinedTxnTable) BuildReaders(
 	policy engine.TombstoneApplyPolicy,
 	filterHint engine.FilterHint,
 ) ([]engine.Reader, error) {
+	preparedHint, mainFilter, owned, err := prepareMembershipFilter(
+		filterHint,
+		membershipFilterAdmissionForProcess(proc),
+	)
+	if err != nil {
+		return nil, err
+	}
+	if owned {
+		defer mainFilter.Free()
+	}
+	filterHint = preparedHint
+
 	var readers []engine.Reader
 	if relData == nil {
 		tables, err := t.tablesFunc()
@@ -168,6 +180,7 @@ func (t *combinedTxnTable) BuildReaders(
 				filterHint,
 			)
 			if err != nil {
+				closeReaders(readers)
 				return nil, err
 			}
 			readers = append(readers, r...)
@@ -190,11 +203,18 @@ func (t *combinedTxnTable) BuildReaders(
 			filterHint,
 		)
 		if err != nil {
+			closeReaders(readers)
 			return nil, err
 		}
 		readers = append(readers, r...)
 	}
 	return ensureReaders(readers, num), nil
+}
+
+func closeReaders(readers []engine.Reader) {
+	for _, rd := range readers {
+		rd.Close()
+	}
 }
 
 func ensureReaders(readers []engine.Reader, num int) []engine.Reader {

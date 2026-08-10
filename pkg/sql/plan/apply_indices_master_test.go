@@ -18,6 +18,7 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/stretchr/testify/require"
@@ -51,9 +52,10 @@ func TestMasterIndexPaginationIsAppliedOnce(t *testing.T) {
 		Name2ColIndex: map[string]int32{"id": 0, "a": 1},
 		Pkey:          &planpb.PrimaryKeyDef{PkeyColName: "id", Names: []string{"id"}},
 	}
-	filter, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*planpb.Expr{
+	mp := mpool.MustNew(t.Name())
+	filter, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "in", []*planpb.Expr{
 		GetColExpr(baseDef.Cols[1].Typ, baseTag, 1),
-		makePlan2StringConstExprWithType("same", false),
+		MakePlan2StringVecExprWithType(mp, "same", "other"),
 	})
 	require.NoError(t, err)
 
@@ -83,6 +85,10 @@ func TestMasterIndexPaginationIsAppliedOnce(t *testing.T) {
 	inner := builder.qry.Nodes[outer.Children[1]]
 	require.Equal(t, uint64(15), inner.Limit.GetLit().GetU64Val(), "inner index path must fetch LIMIT+OFFSET candidates")
 	require.Nil(t, inner.Offset, "the user-visible OFFSET must only be consumed by the outer result")
+	require.Equal(t, "prefix_in", inner.FilterList[0].GetF().Func.ObjName)
+	prefixValues := inner.FilterList[0].GetF().Args[1].GetVec()
+	require.Equal(t, int32(2), prefixValues.GetLen(), "LiteralVec.Len must be the logical element count")
+	require.True(t, prefixValues.GetIsSerialized())
 	require.Nil(t, builder.qry.Nodes[scanID].Limit)
 	require.Nil(t, builder.qry.Nodes[scanID].Offset)
 }

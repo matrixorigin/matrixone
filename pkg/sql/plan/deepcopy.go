@@ -813,6 +813,14 @@ func DeepCopyDataDefinition(old *plan.DataDefinition) *plan.DataDefinition {
 				AlterTable.Actions[i] = &plan.AlterTable_Action{
 					Action: AddFk,
 				}
+			case *plan.AlterTable_Action_AlterAutoIncrement:
+				AlterTable.Actions[i] = &plan.AlterTable_Action{
+					Action: &plan.AlterTable_Action_AlterAutoIncrement{
+						AlterAutoIncrement: &plan.AlterTableAutoIncrement{
+							NewOffset: act.AlterAutoIncrement.NewOffset,
+						},
+					},
+				}
 			}
 		}
 
@@ -909,12 +917,15 @@ func DeepCopyDataDefinition(old *plan.DataDefinition) *plan.DataDefinition {
 
 func DeepCopyFkey(fkey *ForeignKeyDef) *ForeignKeyDef {
 	def := &ForeignKeyDef{
-		Name:        fkey.Name,
-		Cols:        slices.Clone(fkey.Cols),
-		ForeignTbl:  fkey.ForeignTbl,
-		ForeignCols: slices.Clone(fkey.ForeignCols),
-		OnDelete:    fkey.OnDelete,
-		OnUpdate:    fkey.OnUpdate,
+		Name:                fkey.Name,
+		Cols:                slices.Clone(fkey.Cols),
+		ForeignTbl:          fkey.ForeignTbl,
+		ForeignCols:         slices.Clone(fkey.ForeignCols),
+		OnDelete:            fkey.OnDelete,
+		OnUpdate:            fkey.OnUpdate,
+		ReferencedIndexName: fkey.ReferencedIndexName,
+		OnDeleteOrigin:      fkey.OnDeleteOrigin,
+		OnUpdateOrigin:      fkey.OnUpdateOrigin,
 	}
 	return def
 }
@@ -965,9 +976,10 @@ func DeepCopyExpr(expr *Expr) *Expr {
 	switch item := expr.Expr.(type) {
 	case *plan.Expr_Lit:
 		pc := &plan.Literal{
-			Isnull: item.Lit.GetIsnull(),
-			IsBin:  item.Lit.GetIsBin(),
-			Src:    DeepCopyExpr(item.Lit.Src),
+			Isnull:       item.Lit.GetIsnull(),
+			IsBin:        item.Lit.GetIsBin(),
+			Src:          DeepCopyExpr(item.Lit.Src),
+			IsSerialized: item.Lit.GetIsSerialized(),
 		}
 
 		switch c := item.Lit.Value.(type) {
@@ -1128,8 +1140,9 @@ func DeepCopyExpr(expr *Expr) *Expr {
 	case *plan.Expr_Vec:
 		newExpr.Expr = &plan.Expr_Vec{
 			Vec: &plan.LiteralVec{
-				Len:  item.Vec.Len,
-				Data: bytes.Clone(item.Vec.Data),
+				Len:          item.Vec.Len,
+				Data:         bytes.Clone(item.Vec.Data),
+				IsSerialized: item.Vec.IsSerialized,
 			},
 		}
 

@@ -1537,13 +1537,6 @@ const (
 					and rp.privilege_id in (%s)
 					and rp.privilege_level = "%s";`
 
-	getUserRolesExpectPublicRoleFormat = `select role.role_id, role.role_name 
-				from mo_catalog.mo_role role, mo_catalog.mo_user_grant mg 
-				where role.role_id = mg.role_id 
-					and role.role_id != %d  
-					and mg.user_id = %d 
-					order by role.created_time asc limit 1;`
-
 	checkUdfArgs = `select args,function_id,body from mo_catalog.mo_user_defined_function where name = "%s" and db = "%s" order by function_id;`
 
 	checkUdfWithDb = `select function_id,body from mo_catalog.mo_user_defined_function where db = "%s" order by function_id;`
@@ -2095,10 +2088,6 @@ func privilegeTypeListSQL(objTyp objectType, privId PrivilegeType, includeSysSco
 		parts = append(parts, fmt.Sprintf("%d", p))
 	}
 	return strings.Join(parts, ",")
-}
-
-func getSqlForgetUserRolesExpectPublicRole(pRoleId int, userId uint32) string {
-	return fmt.Sprintf(getUserRolesExpectPublicRoleFormat, pRoleId, userId)
 }
 
 func getTableColumnDefSql(accountId uint64, dbName, tableName string) (string, error) {
@@ -3566,61 +3555,21 @@ func doAlterAccount(ctx context.Context, ses *Session, aa *alterAccount) (err er
 	return err
 }
 
-// doSetSecondaryRoleAll validates user role metadata before enabling all secondary roles.
-// The current primary role must not change; SET SECONDARY ROLE ALL only affects secondary roles.
-func doSetSecondaryRoleAll(ctx context.Context, ses *Session) (err error) {
-	var sql string
-	var userId uint32
-
-	account := ses.GetTenantInfo()
-	// get current user_id
-	userId = account.GetUserID()
-
-	// step1:get all roles expect public
-	bh := ses.GetBackgroundExec(ctx)
-	defer bh.Close()
-
-	err = bh.Exec(ctx, "begin;")
-	defer func() {
-		err = finishTxn(ctx, bh, err)
-	}()
-	if err != nil {
-		return err
-	}
-
-	sql = getSqlForgetUserRolesExpectPublicRole(publicRoleID, userId)
-	bh.ClearExecResultSet()
-	err = bh.Exec(ctx, sql)
-	if err != nil {
-		return err
-	}
-
-	_, err = getResultSet(ctx, bh)
-	return err
-}
-
-// doSwitchRole accomplishes the Use Role and Use Secondary Role statement
+// doSwitchRole changes the session's sole active role.
 func doSwitchRole(ctx context.Context, ses *Session, sr *tree.SetRole) (err error) {
 	var sql string
 	var erArray []ExecResult
 	var roleId int64
 
+	if sr.SecondaryRole {
+		// Keep MySQL-compatible syntax accepted, but secondary roles are not
+		// active in MatrixOne. A session always has exactly one active role.
+		return nil
+	}
+
 	account := ses.GetTenantInfo()
 
-	if sr.SecondaryRole {
-		// use secondary role all or none
-		switch sr.SecondaryRoleType {
-		case tree.SecondaryRoleTypeAll:
-			if err = doSetSecondaryRoleAll(ctx, ses); err != nil {
-				return err
-			}
-			account.SetUseSecondaryRole(true)
-			ses.InvalidatePrivilegeCache()
-		case tree.SecondaryRoleTypeNone:
-			account.SetUseSecondaryRole(false)
-			ses.InvalidatePrivilegeCache()
-		}
-	} else if sr.Role != nil {
+	if sr.Role != nil {
 		err = normalizeNameOfRole(ctx, sr.Role)
 		if err != nil {
 			return err

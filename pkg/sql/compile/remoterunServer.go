@@ -38,6 +38,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	qclient "github.com/matrixorigin/matrixone/pkg/queryservice/client"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
@@ -142,6 +143,7 @@ func CnServerMessageHandler(
 			return err
 		}
 		receiver.streamLifecycle = lifecycle
+		receiver.abortBatchFlowForPendingStop()
 		receiver.acceptedTeardownMode = pipeline.StreamTeardownMode_FinishAck
 	}
 
@@ -210,6 +212,23 @@ func (receiver *messageReceiverOnServer) waitUntilDisconnectedOrCancelled() {
 	select {
 	case <-receiver.connectionCtx.Done():
 	case <-receiver.messageCtx.Done():
+	}
+}
+
+// abortBatchFlowForPendingStop closes the registration race with StopSending.
+// StopSending first publishes a colexec cancellation tombstone and then looks
+// up the lifecycle; registration publishes the lifecycle and then checks that
+// tombstone. Whichever message wins, one side observes the other side's state.
+func (receiver *messageReceiverOnServer) abortBatchFlowForPendingStop() {
+	if receiver.streamLifecycle == nil || receiver.colexecServer == nil {
+		return
+	}
+	if receiver.colexecServer.HasPendingPipelineCancellation(
+		receiver.clientSession, receiver.messageId,
+	) {
+		receiver.streamLifecycle.batchFlow.abort(
+			moerr.NewQueryInterrupted(receiver.messageCtx),
+		)
 	}
 }
 
@@ -514,6 +533,11 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) (err error) {
 
 	case pipeline.Method_StopSending:
 		receiver.colexecServer.CancelPipelineSending(receiver.clientSession, receiver.messageId)
+		abortPipelineBatchFlow(
+			receiver.clientSession,
+			receiver.messageId,
+			moerr.NewQueryInterrupted(receiver.messageCtx),
+		)
 
 	default:
 		panic(fmt.Sprintf("unknown pipeline message type %d.", receiver.messageTyp))
@@ -713,6 +737,8 @@ type processHelper struct {
 	//analysisNodeList []int32
 	StmtId                 uuid.UUID
 	statementRuntimeIgnore bool
+	planSnapshotTS         timestamp.Timestamp
+	hasPlanSnapshotTS      bool
 	prepareParams          pipeline.PrepareParamInfo
 	affectedRows           int64
 	remoteFragmentCounts   map[string]uint32
@@ -881,6 +907,19 @@ func (receiver *messageReceiverOnServer) newCompile() (*Compile, error) {
 	proc.Base.Lim = pHelper.lim
 	proc.Base.SessionInfo = pHelper.sessionInfo
 	proc.Base.SessionInfo.StorageEngine = cnInfo.storeEngine
+	if pHelper.hasPlanSnapshotTS {
+		proc.SetPlanSnapshotTS(pHelper.planSnapshotTS)
+	}
+	prepareParamMetadata, err := process.PrepareParamMetadataForRemote(
+		proc.GetService(),
+		int(pHelper.prepareParams.Length),
+		pHelper.prepareParams.IsBin,
+	)
+	if err != nil {
+		proc.Free()
+		mpool.DeleteMPool(mp)
+		return nil, err
+	}
 	if pHelper.prepareParams.Length > 0 {
 		prepareParams, err := vector.NewVecWithDataCopy(
 			types.T_text.ToType(),
@@ -899,7 +938,7 @@ func (receiver *messageReceiverOnServer) newCompile() (*Compile, error) {
 				prepareParams.GetNulls().Add(uint64(i))
 			}
 		}
-		proc.SetOwnedPrepareParamsWithIsBin(prepareParams, append([]bool(nil), pHelper.prepareParams.IsBin...))
+		proc.SetOwnedPrepareParamsWithIsBin(prepareParams, prepareParamMetadata)
 	}
 	// Carry ROW_COUNT() state so row_count() pushed down to this remote CN reads
 	// the previous statement's affected rows instead of the default 0.
@@ -1128,6 +1167,10 @@ func generateProcessHelper(ctx context.Context, data []byte, cli client.TxnClien
 		affectedRows:           procInfo.AffectedRows,
 		statementRuntimeIgnore: procInfo.StatementRuntimeIgnore,
 		remoteFragmentCounts:   maps.Clone(procInfo.RemoteFragmentCounts),
+	}
+	if procInfo.PlanSnapshotTs != nil {
+		result.planSnapshotTS = *procInfo.PlanSnapshotTs
+		result.hasPlanSnapshotTS = true
 	}
 	if len(procInfo.RemoteExecutionId) > 0 {
 		result.remoteExecutionID, err = uuid.FromBytes(procInfo.RemoteExecutionId)

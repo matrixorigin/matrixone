@@ -17,11 +17,13 @@ package top
 import (
 	"bytes"
 	"container/heap"
+	"encoding/binary"
 	"fmt"
 	"io"
 	"os"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/compare"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -36,6 +38,174 @@ import (
 )
 
 const opName = "top"
+
+var topSpillPrepareParamMagic = [4]byte{'T', 'P', 'K', '1'}
+
+const (
+	topSpillPrepareParamUniform = byte(1)
+	topSpillPrepareParamRows    = byte(2)
+)
+
+// appendTopSpillPrepareParamMetadata adds a local, versioned trailer to a
+// TOP spill record. The stable Vector/Batch wire remains byte-for-byte
+// unchanged when no prepared-parameter provenance is present.
+func appendTopSpillPrepareParamMetadata(data []byte, bat *batch.Batch) ([]byte, error) {
+	if bat == nil {
+		return data, nil
+	}
+	const maxUint32 = uint64(^uint32(0))
+	if uint64(bat.RowCount()) > maxUint32 || uint64(len(bat.Vecs)) > maxUint32 {
+		return nil, moerr.NewInvalidInputNoCtx("top spill provenance dimensions exceed format")
+	}
+	hasMetadata := false
+	for _, vec := range bat.Vecs {
+		if vec != nil && (vec.GetPrepareParamKind() != vector.PrepareParamNone ||
+			len(vec.GetPrepareParamKinds()) > 0) {
+			hasMetadata = true
+			break
+		}
+	}
+	if !hasMetadata {
+		return data, nil
+	}
+	var payload bytes.Buffer
+	var header [8]byte
+	binary.LittleEndian.PutUint32(header[:4], uint32(bat.RowCount()))
+	binary.LittleEndian.PutUint32(header[4:], uint32(len(bat.Vecs)))
+	payload.Write(header[:])
+	for _, vec := range bat.Vecs {
+		if vec == nil || (vec.GetPrepareParamKind() == vector.PrepareParamNone && len(vec.GetPrepareParamKinds()) == 0) {
+			payload.WriteByte(0)
+			continue
+		}
+		if kinds := vec.GetPrepareParamKinds(); len(kinds) > 0 {
+			if uint64(len(kinds)) > maxUint32 {
+				return nil, moerr.NewInvalidInputNoCtx("top spill provenance row count exceeds format")
+			}
+			payload.WriteByte(topSpillPrepareParamRows)
+			var length [4]byte
+			binary.LittleEndian.PutUint32(length[:], uint32(len(kinds)))
+			payload.Write(length[:])
+			for _, kind := range kinds {
+				if kind > vector.PrepareParamBoolean {
+					return nil, moerr.NewInvalidInputNoCtx("invalid top spill provenance kind")
+				}
+				payload.WriteByte(byte(kind))
+			}
+			continue
+		}
+		if vec.GetPrepareParamKind() > vector.PrepareParamBoolean {
+			return nil, moerr.NewInvalidInputNoCtx("invalid top spill provenance kind")
+		}
+		payload.WriteByte(topSpillPrepareParamUniform)
+		payload.WriteByte(byte(vec.GetPrepareParamKind()))
+	}
+	if uint64(payload.Len()) > maxUint32 {
+		return nil, moerr.NewInvalidInputNoCtx("top spill provenance payload exceeds format")
+	}
+	data = append(data, payload.Bytes()...)
+	data = append(data, topSpillPrepareParamMagic[:]...)
+	var length [4]byte
+	binary.LittleEndian.PutUint32(length[:], uint32(payload.Len()))
+	return append(data, length[:]...), nil
+}
+
+func splitTopSpillPrepareParamMetadata(data []byte) ([]byte, [][]vector.PrepareParamKind, int, error) {
+	if len(data) < len(topSpillPrepareParamMagic)+4 ||
+		!bytes.Equal(data[len(data)-8:len(data)-4], topSpillPrepareParamMagic[:]) {
+		return data, nil, -1, nil
+	}
+	payloadLength := binary.LittleEndian.Uint32(data[len(data)-4:])
+	footerLength := len(topSpillPrepareParamMagic) + 4
+	if uint64(payloadLength) > uint64(len(data)-footerLength) {
+		return nil, nil, 0, moerr.NewInvalidInputNoCtx("invalid top spill provenance trailer length")
+	}
+	payloadStart := len(data) - footerLength - int(payloadLength)
+	payload := data[payloadStart : len(data)-footerLength]
+	if len(payload) < 8 {
+		return nil, nil, 0, moerr.NewInvalidInputNoCtx("invalid top spill provenance trailer")
+	}
+	rowCount := binary.LittleEndian.Uint32(payload[:4])
+	vectorCount := binary.LittleEndian.Uint32(payload[4:8])
+	if uint64(vectorCount) > uint64(len(payload)-8) || uint64(rowCount) > uint64(^uint(0)>>1) {
+		return nil, nil, 0, moerr.NewInvalidInputNoCtx("invalid top spill provenance dimensions")
+	}
+	metadata := make([][]vector.PrepareParamKind, vectorCount)
+	pos := 8
+	for i := uint32(0); i < vectorCount; i++ {
+		if pos >= len(payload) {
+			return nil, nil, 0, moerr.NewInvalidInputNoCtx("truncated top spill provenance trailer")
+		}
+		mode := payload[pos]
+		pos++
+		switch mode {
+		case 0:
+		case topSpillPrepareParamUniform:
+			if pos >= len(payload) || payload[pos] > byte(vector.PrepareParamBoolean) {
+				return nil, nil, 0, moerr.NewInvalidInputNoCtx("invalid top spill provenance kind")
+			}
+			metadata[i] = []vector.PrepareParamKind{vector.PrepareParamKind(payload[pos])}
+			pos++
+		case topSpillPrepareParamRows:
+			if len(payload)-pos < 4 {
+				return nil, nil, 0, moerr.NewInvalidInputNoCtx("truncated top spill provenance rows")
+			}
+			count := binary.LittleEndian.Uint32(payload[pos : pos+4])
+			pos += 4
+			if count != rowCount || uint64(count) > uint64(len(payload)-pos) {
+				return nil, nil, 0, moerr.NewInvalidInputNoCtx("invalid top spill provenance row count")
+			}
+			kinds := make([]vector.PrepareParamKind, count)
+			for row := range kinds {
+				if payload[pos+row] > byte(vector.PrepareParamBoolean) {
+					return nil, nil, 0, moerr.NewInvalidInputNoCtx("invalid top spill provenance kind")
+				}
+				kinds[row] = vector.PrepareParamKind(payload[pos+row])
+			}
+			metadata[i] = kinds
+			pos += int(count)
+		default:
+			return nil, nil, 0, moerr.NewInvalidInputNoCtx("unsupported top spill provenance mode")
+		}
+	}
+	if pos != len(payload) {
+		return nil, nil, 0, moerr.NewInvalidInputNoCtx("trailing top spill provenance data")
+	}
+	return data[:payloadStart], metadata, int(rowCount), nil
+}
+
+func restoreTopSpillPrepareParamMetadata(
+	bat *batch.Batch,
+	metadata [][]vector.PrepareParamKind,
+	rowCount int,
+	mp *mpool.MPool,
+) error {
+	if bat == nil || metadata == nil {
+		return nil
+	}
+	if rowCount < 0 || rowCount != bat.RowCount() {
+		return moerr.NewInvalidInputNoCtx("top spill provenance batch row count mismatch")
+	}
+	if len(metadata) != len(bat.Vecs) {
+		return moerr.NewInvalidInputNoCtx("top spill provenance vector count mismatch")
+	}
+	for i, kinds := range metadata {
+		if len(kinds) == 0 {
+			continue
+		}
+		if len(kinds) == 1 {
+			bat.Vecs[i].SetPrepareParamKind(kinds[0])
+		} else {
+			if len(kinds) != bat.Vecs[i].Length() {
+				return moerr.NewInvalidInputNoCtx("top spill provenance row count mismatch")
+			}
+			if err := bat.Vecs[i].SetPrepareParamKindsWithMP(kinds, mp); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
 
 func (top *Top) String(buf *bytes.Buffer) {
 	buf.WriteString(opName)
@@ -356,6 +526,10 @@ func (ctr *container) spillBatch(bat *batch.Batch, proc *process.Process, analyz
 	if err != nil {
 		return err
 	}
+	data, err = appendTopSpillPrepareParamMetadata(data, origBat)
+	if err != nil {
+		return err
+	}
 	if err, canceled := vm.CancelCheck(proc); canceled {
 		return err
 	}
@@ -559,7 +733,14 @@ func (ctr *container) evalSpill(limit uint64, n int, proc *process.Process, resu
 		}
 
 		reuseBat.CleanOnlyData()
-		if err := reuseBat.UnmarshalBinaryWithAnyMp(data, proc.Mp()); err != nil {
+		baseData, metadata, metadataRows, err := splitTopSpillPrepareParamMetadata(data)
+		if err != nil {
+			return false, err
+		}
+		if err := reuseBat.UnmarshalBinaryWithAnyMp(baseData, proc.Mp()); err != nil {
+			return false, err
+		}
+		if err := restoreTopSpillPrepareParamMetadata(reuseBat, metadata, metadataRows, proc.Mp()); err != nil {
 			return false, err
 		}
 
@@ -570,6 +751,10 @@ func (ctr *container) evalSpill(limit uint64, n int, proc *process.Process, resu
 					return false, err
 				}
 				outputBat.Vecs[i].SetLength(chunkSize)
+				// The output is capacity-reserved but no logical row has been
+				// written yet. Marking the slots null makes Copy's row-level
+				// provenance decision independent of the reserved length.
+				outputBat.Vecs[i].SetAllNulls(chunkSize)
 			}
 			if len(reuseBat.Attrs) > 0 {
 				outputBat.Attrs = make([]string, n)

@@ -15,14 +15,159 @@
 package readutil
 
 import (
+	"context"
+	"errors"
+	"sync/atomic"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/stretchr/testify/require"
 )
+
+type readerOwnershipDataSource struct {
+	closeCount int32
+}
+
+func (*readerOwnershipDataSource) Next(
+	context.Context,
+	[]string,
+	[]types.Type,
+	[]uint16,
+	int32,
+	any,
+	*mpool.MPool,
+	*batch.Batch,
+) (*objectio.BlockInfo, engine.DataState, error) {
+	return nil, engine.End, nil
+}
+
+func (*readerOwnershipDataSource) ApplyTombstones(
+	context.Context,
+	*objectio.Blockid,
+	[]int64,
+	engine.TombstoneApplyPolicy,
+) ([]int64, error) {
+	return nil, nil
+}
+
+func (*readerOwnershipDataSource) GetTombstones(
+	context.Context,
+	*objectio.Blockid,
+) (objectio.Bitmap, error) {
+	return objectio.Bitmap{}, nil
+}
+
+func (*readerOwnershipDataSource) SetOrderBy([]*plan.OrderBySpec)  {}
+func (*readerOwnershipDataSource) GetOrderBy() []*plan.OrderBySpec { return nil }
+func (*readerOwnershipDataSource) SetFilterZM(objectio.ZoneMap)    {}
+func (s *readerOwnershipDataSource) Close() {
+	atomic.AddInt32(&s.closeCount, 1)
+}
+func (*readerOwnershipDataSource) String() string { return "readerOwnershipDataSource" }
+
+type readerOwnershipFilter struct {
+	freeCount int32
+}
+
+func (*readerOwnershipFilter) Test([]byte) bool { return true }
+func (*readerOwnershipFilter) TestVector(
+	*vector.Vector,
+	func(bool, bool, int),
+) []uint8 {
+	return nil
+}
+func (*readerOwnershipFilter) Valid() bool { return true }
+func (*readerOwnershipFilter) Exact() bool { return true }
+func (f *readerOwnershipFilter) Free() {
+	atomic.AddInt32(&f.freeCount, 1)
+}
+
+func TestNewReaderConsumesSourceAndFilterOnConstructionError(t *testing.T) {
+	setupMP := mpool.MustNew(t.Name() + "-setup")
+	column := func() *plan.Expr { return MakeColExprForTest(0, types.T_int64, "id") }
+	expr := MakeFunctionExprForTest("and", []*plan.Expr{
+		MakeInExprForTest(column(), []int64{1, 2, 3}, types.T_int64, setupMP),
+		MakeInExprForTest(column(), []int64{2, 3, 4}, types.T_int64, setupMP),
+	})
+	require.Zero(t, setupMP.CurrNB())
+
+	tableDef := &plan.TableDef{
+		Name:          "t",
+		Name2ColIndex: map[string]int32{"id": 0},
+		Pkey:          &plan.PrimaryKeyDef{Names: []string{"id"}, PkeyColName: "id"},
+		Cols: []*plan.ColDef{{
+			Name:    "id",
+			Seqnum:  0,
+			Primary: true,
+			Typ:     plan.Type{Id: int32(types.T_int64)},
+		}},
+	}
+	source := new(readerOwnershipDataSource)
+	filter := new(readerOwnershipFilter)
+
+	reader, err := NewReader(
+		context.Background(),
+		nil,
+		nil,
+		nil,
+		tableDef,
+		timestamp.Timestamp{},
+		expr,
+		source,
+		0,
+		engine.FilterHint{BF: filter},
+	)
+	require.Error(t, err)
+	require.Nil(t, reader)
+	require.Equal(t, int32(1), atomic.LoadInt32(&source.closeCount))
+	require.Equal(t, int32(1), atomic.LoadInt32(&filter.freeCount))
+}
+
+func TestNewReaderTransfersSourceAndFilterToReader(t *testing.T) {
+	tableDef := &plan.TableDef{
+		Name: "t",
+		Pkey: &plan.PrimaryKeyDef{
+			Names:       []string{"id"},
+			PkeyColName: "id",
+		},
+		Cols: []*plan.ColDef{{
+			Name:    "id",
+			Seqnum:  0,
+			Primary: true,
+			Typ:     plan.Type{Id: int32(types.T_int64)},
+		}},
+	}
+	source := new(readerOwnershipDataSource)
+	filter := new(readerOwnershipFilter)
+
+	reader, err := NewReader(
+		context.Background(),
+		nil,
+		nil,
+		nil,
+		tableDef,
+		timestamp.Timestamp{},
+		nil,
+		source,
+		0,
+		engine.FilterHint{BF: filter},
+	)
+	require.NoError(t, err)
+	require.Zero(t, atomic.LoadInt32(&source.closeCount))
+	require.Zero(t, atomic.LoadInt32(&filter.freeCount))
+	require.NoError(t, reader.Close())
+	require.Equal(t, int32(1), atomic.LoadInt32(&source.closeCount))
+	require.Equal(t, int32(1), atomic.LoadInt32(&filter.freeCount))
+}
 
 func TestReaderSetIndexParamDoesNotPreallocateDistHeap(t *testing.T) {
 	r := &reader{}
@@ -158,4 +303,95 @@ func TestReaderSetIndexParamIgnoresUnevaluatedLimit(t *testing.T) {
 		require.NotPanics(t, func() { r.SetIndexParam(param) })
 		require.Nil(t, r.orderByLimit)
 	}
+}
+
+type countingReader struct {
+	rows         int
+	emit         int32
+	closeCount   *int32
+	readErrAfter int
+	readErr      error
+	closeErr     error
+}
+
+func (r *countingReader) Read(_ context.Context, _ []string, _ *plan.Expr, _ *mpool.MPool, _ *batch.Batch) (bool, error) {
+	if r.readErr != nil && int(atomic.LoadInt32(&r.emit)) >= r.readErrAfter {
+		return false, r.readErr
+	}
+	atomic.AddInt32(&r.emit, 1)
+	return int(atomic.LoadInt32(&r.emit)) > r.rows, nil
+}
+
+func (r *countingReader) Close() error {
+	atomic.AddInt32(r.closeCount, 1)
+	return r.closeErr
+}
+
+func (r *countingReader) SetOrderBy([]*plan.OrderBySpec)       {}
+func (r *countingReader) GetOrderBy() []*plan.OrderBySpec      { return nil }
+func (r *countingReader) SetIndexParam(*plan.IndexReaderParam) {}
+func (r *countingReader) SetFilterZM(objectio.ZoneMap)         {}
+
+var _ engine.Reader = (*countingReader)(nil)
+
+func TestMergeReaderClosesEachChildOnExhaustion(t *testing.T) {
+	var closed int32
+	c0 := &countingReader{rows: 1, closeCount: &closed}
+	c1 := &countingReader{rows: 2, closeCount: &closed}
+	mr := NewMergeReader([]engine.Reader{c0, c1})
+
+	for i := 0; i < 2; i++ {
+		_, err := mr.Read(context.Background(), nil, nil, nil, nil)
+		require.NoError(t, err)
+	}
+	_, err := mr.Read(context.Background(), nil, nil, nil, nil)
+	require.NoError(t, err)
+	require.Equal(t, int32(1), atomic.LoadInt32(&closed))
+	_, err = mr.Read(context.Background(), nil, nil, nil, nil)
+	require.NoError(t, err)
+	require.Equal(t, int32(2), atomic.LoadInt32(&closed))
+
+	require.NoError(t, mr.Close())
+	require.Equal(t, int32(2), atomic.LoadInt32(&closed))
+}
+
+func TestMergeReaderCloseIsIdempotent(t *testing.T) {
+	var closed int32
+	mr := NewMergeReader([]engine.Reader{
+		&countingReader{rows: 5, closeCount: &closed},
+		&countingReader{rows: 5, closeCount: &closed},
+	})
+
+	require.NoError(t, mr.Close())
+	require.NoError(t, mr.Close())
+	require.Equal(t, int32(2), atomic.LoadInt32(&closed))
+}
+
+func TestMergeReaderReadErrorClosesRemainingChildren(t *testing.T) {
+	var closed int32
+	readErr := errors.New("read failure")
+	c0 := &countingReader{rows: 1, closeCount: &closed}
+	c1 := &countingReader{readErr: readErr, closeCount: &closed}
+	mr := NewMergeReader([]engine.Reader{c0, c1})
+
+	_, err := mr.Read(context.Background(), nil, nil, nil, nil)
+	require.NoError(t, err)
+	_, err = mr.Read(context.Background(), nil, nil, nil, nil)
+	require.ErrorIs(t, err, readErr)
+	require.Equal(t, int32(2), atomic.LoadInt32(&closed))
+	require.NoError(t, mr.Close())
+	require.Equal(t, int32(2), atomic.LoadInt32(&closed))
+}
+
+func TestMergeReaderReturnsCloseErrorAndDoesNotRetry(t *testing.T) {
+	var closed int32
+	closeErr := errors.New("close failure")
+	mr := NewMergeReader([]engine.Reader{
+		&countingReader{rows: 5, closeCount: &closed, closeErr: closeErr},
+	})
+
+	err := mr.Close()
+	require.ErrorIs(t, err, closeErr)
+	require.NoError(t, mr.Close())
+	require.Equal(t, int32(1), atomic.LoadInt32(&closed))
 }

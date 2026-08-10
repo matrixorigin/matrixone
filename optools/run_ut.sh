@@ -237,6 +237,8 @@ function run_tests(){
         local serial_test_scope
         local heavy_test_scope
         local light_test_scope
+        local package
+        local package_status=0
         local light_status=0
         local serial_status=0
         local heavy_status=0
@@ -256,13 +258,14 @@ function run_tests(){
         fi
 
         # These packages need exclusive runner access. NewTestService callers
-        # bind fixed ports, while the issues package intentionally keeps a
-        # shared embedded cluster alive for most of its test process.
+        # bind fixed ports, while the issues packages intentionally keep embedded
+        # clusters alive for most of their test processes.
         if ! serial_test_scope=$(go list ${GO_MODULE_MODE} \
             ./pkg/logservice \
             ./pkg/vm/engine/tae/logstore \
             ./pkg/vm/engine/tae/logstore/driver/logservicedriver \
-            ./pkg/tests/issues); then
+            ./pkg/tests/issues \
+            ./pkg/tests/issues/isolated); then
             logger "ERR" "Failed to resolve serial race-test packages"
             UT_TEST_STATUS=1
             return 0
@@ -294,8 +297,15 @@ function run_tests(){
         fi
 
         logger "INF" "Run exclusive race-test packages serially"
-        LD_LIBRARY_PATH="${LD_LIBRARY_PATH}" CGO_CFLAGS="${CGO_CFLAGS}" CGO_LDFLAGS="${CGO_LDFLAGS}" go test ${GO_MODULE_MODE} -short -v -json -tags "${TAGS}" -p 1 -timeout "${UT_TIMEOUT}m" -race $serial_test_scope >> $UT_REPORT
-        serial_status=$?
+        for package in ${serial_test_scope}; do
+            logger "INF" "Run exclusive race-test package ${package}"
+            LD_LIBRARY_PATH="${LD_LIBRARY_PATH}" CGO_CFLAGS="${CGO_CFLAGS}" CGO_LDFLAGS="${CGO_LDFLAGS}" go test ${GO_MODULE_MODE} -short -v -json -tags "${TAGS}" -p 1 -timeout "${UT_TIMEOUT}m" -race "${package}" >> $UT_REPORT
+            package_status=$?
+            if (( package_status != 0 )); then
+                serial_status=1
+                logger "ERR" "Exclusive race-test package ${package} failed with status ${package_status}"
+            fi
+        done
 
         logger "INF" "Run heavy race-test packages with parallelism ${HEAVY_RACE_PARALLEL}"
         LD_LIBRARY_PATH="${LD_LIBRARY_PATH}" CGO_CFLAGS="${CGO_CFLAGS}" CGO_LDFLAGS="${CGO_LDFLAGS}" go test ${GO_MODULE_MODE} -short -v -json -tags "${TAGS}" -p ${HEAVY_RACE_PARALLEL} -timeout "${UT_TIMEOUT}m" -race $heavy_test_scope >> $UT_REPORT

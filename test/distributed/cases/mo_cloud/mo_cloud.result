@@ -49,18 +49,18 @@ XA  ¦  VARCHAR(3)  ¦  null  ¦  null  𝄀
 SAVEPOINTS  ¦  VARCHAR(3)  ¦  null  ¦  null
 SELECT attname AS name, mo_show_visible_bin(atttyp,3) AS data_type, replace(mo_table_col_max(att_database,att_relname,attname),'\\0', '') AS `maximum`,  mo_table_col_min(att_database,att_relname,attname) as minimum from mo_catalog.mo_columns where att_database='information_schema' and att_relname='key_column_usage' and attname NOT IN  ('__mo_rowid', '__mo_cpkey_col', '__mo_fake_pk_col') ORDER BY attnum;
 ➤ name[12,-1,0]  ¦  data_type[12,-1,0]  ¦  maximum[12,-1,0]  ¦  minimum[12,-1,0]  𝄀
-CONSTRAINT_CATALOG  ¦  VARCHAR(64)  ¦  null  ¦  null  𝄀
-CONSTRAINT_SCHEMA  ¦  VARCHAR(64)  ¦  null  ¦  null  𝄀
-CONSTRAINT_NAME  ¦  VARCHAR(64)  ¦  null  ¦  null  𝄀
-TABLE_CATALOG  ¦  VARCHAR(64)  ¦  null  ¦  null  𝄀
-TABLE_SCHEMA  ¦  VARCHAR(64)  ¦  null  ¦  null  𝄀
-TABLE_NAME  ¦  VARCHAR(64)  ¦  null  ¦  null  𝄀
-COLUMN_NAME  ¦  VARCHAR(64)  ¦  null  ¦  null  𝄀
-ORDINAL_POSITION  ¦  INT UNSIGNED(32)  ¦  null  ¦  null  𝄀
-POSITION_IN_UNIQUE_CONSTRAINT  ¦  INT UNSIGNED(32)  ¦  null  ¦  null  𝄀
-REFERENCED_TABLE_SCHEMA  ¦  VARCHAR(64)  ¦  null  ¦  null  𝄀
-REFERENCED_TABLE_NAME  ¦  VARCHAR(64)  ¦  null  ¦  null  𝄀
-REFERENCED_COLUMN_NAME  ¦  VARCHAR(64)  ¦  null  ¦  null
+constraint_catalog  ¦  VARCHAR(64)  ¦  null  ¦  null  𝄀
+constraint_schema  ¦  VARCHAR(64)  ¦  null  ¦  null  𝄀
+constraint_name  ¦  VARCHAR(64)  ¦  null  ¦  null  𝄀
+table_catalog  ¦  VARCHAR(64)  ¦  null  ¦  null  𝄀
+table_schema  ¦  VARCHAR(64)  ¦  null  ¦  null  𝄀
+table_name  ¦  VARCHAR(64)  ¦  null  ¦  null  𝄀
+column_name  ¦  VARCHAR(64)  ¦  null  ¦  null  𝄀
+ordinal_position  ¦  INT UNSIGNED(32)  ¦  null  ¦  null  𝄀
+position_in_unique_constraint  ¦  INT UNSIGNED(32)  ¦  null  ¦  null  𝄀
+referenced_table_schema  ¦  VARCHAR(64)  ¦  null  ¦  null  𝄀
+referenced_table_name  ¦  VARCHAR(64)  ¦  null  ¦  null  𝄀
+referenced_column_name  ¦  VARCHAR(64)  ¦  null  ¦  null
 SELECT attname AS name, mo_show_visible_bin(atttyp,3) AS data_type, replace(mo_table_col_max(att_database,att_relname,attname),'\\0', '') AS `maximum`,  mo_table_col_min(att_database,att_relname,attname) as minimum from mo_catalog.mo_columns where att_database='information_schema' and att_relname='keywords' and attname NOT IN  ('__mo_rowid', '__mo_cpkey_col', '__mo_fake_pk_col') ORDER BY attnum;
 ➤ name[12,-1,0]  ¦  data_type[12,-1,0]  ¦  maximum[12,-1,0]  ¦  minimum[12,-1,0]  𝄀
 WORD  ¦  VARCHAR(64)  ¦  null  ¦  null  𝄀
@@ -207,7 +207,7 @@ account_id  ¦  INT UNSIGNED(32)  ¦  null  ¦  null  𝄀
 type  ¦  VARCHAR(1024)  ¦  null  ¦  null  𝄀
 __mo_cbkey_011collecttime010account_id011metric_name  ¦  VARCHAR(65535)  ¦  null  ¦  null
 SELECT concat(DATE_FORMAT(date_add(`request_at`,Interval 1 MINUTE),'%Y-%m-%d %H'),':',LPAD(CAST(1 * floor(minute(date_add(`request_at`,Interval 1 MINUTE)) / 1) as int),2,0),':00') AS stat_ts, AVG(duration) AS value, `query_type` AS type FROM `system`.`statement_info` WHERE request_at >= '2023-07-28 04:20:43' AND request_at <= '2023-07-28 04:50:43' AND `query_type` in ('DQL','DDL','DML','DCL','TCL','Other') GROUP BY `query_type`, concat(DATE_FORMAT(date_add(`request_at`,Interval 1 MINUTE),'%Y-%m-%d %H'),':',LPAD(CAST(1 * floor(minute(date_add(`request_at`,Interval 1 MINUTE)) / 1) as int),2,0),':00') ORDER BY concat(DATE_FORMAT(date_add(`request_at`,Interval 1 MINUTE),'%Y-%m-%d %H'),':',LPAD(CAST(1 * floor(minute(date_add(`request_at`,Interval 1 MINUTE)) / 1) as int),2,0),':00')LIMIT 100;
-➤ stat_ts[12,-1,0]  ¦  value[8,54,0]  ¦  type[12,-1,0]
+➤ stat_ts[12,-1,0]  ¦  value[3,38,4]  ¦  type[12,-1,0]
 SELECT count(*) FROM (select `statement`,system.statement_info.statement_id,IF(`status`='Running', TIMESTAMPDIFF(MICROSECOND,`request_at`,now())*1000, `duration`) AS `duration`,`status`,`query_type`,`request_at`,system.statement_info.response_at,`user`,`database`,`transaction_id`,`session_id`,`rows_read`,`bytes_scan`,`result_count` from system.statement_info left join mo_catalog.statement_mo ON system.statement_info.statement_id = mo_catalog.statement_mo.statement_id where 1=1 AND `request_at` >= '2023-07-28 04:09:33' AND system.statement_info.statement_id LIKE '%cd%' AND system.statement_info.account = 'c3daefe4_2197_4192_a10e_d0acc5d9da30' AND `user` IN ('ab') AND `session_id` LIKE '%ef%' AND `duration` > 1000000000 AND `statement` LIKE '%show%' ESCAPE '\\\\' )t;
 SQL parser error: table "statement_mo" does not exist
 SELECT count(*) FROM `mo_catalog`.`mo_database`;
@@ -227,21 +227,8 @@ engines  ¦  CREATE TABLE `engines` (
   `SAVEPOINTS` varchar(3) DEFAULT NULL
 )
 SHOW CREATE TABLE information_schema.key_column_usage;
-➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
-key_column_usage  ¦  CREATE TABLE `key_column_usage` (
-  `CONSTRAINT_CATALOG` varchar(64) DEFAULT NULL,
-  `CONSTRAINT_SCHEMA` varchar(64) DEFAULT NULL,
-  `CONSTRAINT_NAME` varchar(64) DEFAULT NULL,
-  `TABLE_CATALOG` varchar(64) DEFAULT NULL,
-  `TABLE_SCHEMA` varchar(64) DEFAULT NULL,
-  `TABLE_NAME` varchar(64) DEFAULT NULL,
-  `COLUMN_NAME` varchar(64) DEFAULT NULL,
-  `ORDINAL_POSITION` int unsigned DEFAULT NULL,
-  `POSITION_IN_UNIQUE_CONSTRAINT` int unsigned DEFAULT NULL,
-  `REFERENCED_TABLE_SCHEMA` varchar(64) DEFAULT NULL,
-  `REFERENCED_TABLE_NAME` varchar(64) DEFAULT NULL,
-  `REFERENCED_COLUMN_NAME` varchar(64) DEFAULT NULL
-)
+➤ View[12,-1,0]  ¦  Create View[12,-1,0]  ¦  character_set_client[12,-1,0]  ¦  collation_connection[12,-1,0]  𝄀
+key_column_usage  ¦  CREATE VIEW information_schema.KEY_COLUMN_USAGE AS SELECT CAST('def' AS varchar(64)) AS CONSTRAINT_CATALOG, CAST(fk.db_name AS varchar(64)) AS CONSTRAINT_SCHEMA, CAST(fk.constraint_name AS varchar(64)) AS CONSTRAINT_NAME, CAST('def' AS varchar(64)) AS TABLE_CATALOG, CAST(fk.db_name AS varchar(64)) AS TABLE_SCHEMA, CAST(fk.table_name AS varchar(64)) AS TABLE_NAME, CAST(fk.column_name AS varchar(64)) AS COLUMN_NAME, CAST(fk.constraint_id AS int unsigned) AS ORDINAL_POSITION, CAST(fk.constraint_id AS int unsigned) AS POSITION_IN_UNIQUE_CONSTRAINT, CAST(fk.refer_db_name AS varchar(64)) AS REFERENCED_TABLE_SCHEMA, CAST(fk.refer_table_name AS varchar(64)) AS REFERENCED_TABLE_NAME, CAST(fk.refer_column_name AS varchar(64)) AS REFERENCED_COLUMN_NAME FROM mo_catalog.mo_foreign_keys fk  ¦  utf8mb4  ¦  utf8mb4_general_ci
 SHOW CREATE TABLE information_schema.keywords;
 ➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
 keywords  ¦  CREATE TABLE `keywords` (
@@ -512,18 +499,18 @@ XA  ¦  VARCHAR(3)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 SAVEPOINTS  ¦  VARCHAR(3)  ¦  YES  ¦    ¦  null  ¦    ¦  
 DESC `information_schema`.`key_column_usage` ;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
-CONSTRAINT_CATALOG  ¦  VARCHAR(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-CONSTRAINT_SCHEMA  ¦  VARCHAR(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-CONSTRAINT_NAME  ¦  VARCHAR(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-TABLE_CATALOG  ¦  VARCHAR(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-TABLE_SCHEMA  ¦  VARCHAR(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-TABLE_NAME  ¦  VARCHAR(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-COLUMN_NAME  ¦  VARCHAR(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-ORDINAL_POSITION  ¦  INT UNSIGNED(32)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-POSITION_IN_UNIQUE_CONSTRAINT  ¦  INT UNSIGNED(32)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-REFERENCED_TABLE_SCHEMA  ¦  VARCHAR(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-REFERENCED_TABLE_NAME  ¦  VARCHAR(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-REFERENCED_COLUMN_NAME  ¦  VARCHAR(64)  ¦  YES  ¦    ¦  null  ¦    ¦  
+constraint_catalog  ¦  VARCHAR(64)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+constraint_schema  ¦  VARCHAR(64)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+constraint_name  ¦  VARCHAR(64)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+table_catalog  ¦  VARCHAR(64)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+table_schema  ¦  VARCHAR(64)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+table_name  ¦  VARCHAR(64)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+column_name  ¦  VARCHAR(64)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+ordinal_position  ¦  INT UNSIGNED(32)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+position_in_unique_constraint  ¦  INT UNSIGNED(32)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+referenced_table_schema  ¦  VARCHAR(64)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+referenced_table_name  ¦  VARCHAR(64)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+referenced_column_name  ¦  VARCHAR(64)  ¦  NO  ¦    ¦  null  ¦    ¦  
 DESC `information_schema`.`keywords` ;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 WORD  ¦  VARCHAR(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
@@ -705,36 +692,36 @@ type  ¦  VARCHAR(1024)  ¦  NO  ¦    ¦  null  ¦    ¦  sql type, like: inser
 DESC `system_metrics`.`server_connections` ;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 collecttime  ¦  DATETIME(6)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
-value  ¦  DOUBLE(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-node  ¦  VARCHAR(1024)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-role  ¦  VARCHAR(1024)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-account  ¦  VARCHAR(1024)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-account_id  ¦  INT UNSIGNED(32)  ¦  YES  ¦    ¦  null  ¦    ¦  
+value  ¦  DOUBLE(0)  ¦  YES  ¦    ¦  0.0  ¦    ¦    𝄀
+node  ¦  VARCHAR(1024)  ¦  YES  ¦    ¦  monolithic  ¦    ¦    𝄀
+role  ¦  VARCHAR(1024)  ¦  YES  ¦    ¦  monolithic  ¦    ¦    𝄀
+account  ¦  VARCHAR(1024)  ¦  YES  ¦    ¦  sys  ¦    ¦    𝄀
+account_id  ¦  INT UNSIGNED(32)  ¦  YES  ¦    ¦  0  ¦    ¦  
 DESC `system_metrics`.`server_storage_usage` ;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 collecttime  ¦  DATETIME(6)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
-value  ¦  DOUBLE(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-node  ¦  VARCHAR(1024)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-role  ¦  VARCHAR(1024)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-account  ¦  VARCHAR(1024)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-account_id  ¦  INT UNSIGNED(32)  ¦  YES  ¦    ¦  null  ¦    ¦  
+value  ¦  DOUBLE(0)  ¦  YES  ¦    ¦  0.0  ¦    ¦    𝄀
+node  ¦  VARCHAR(1024)  ¦  YES  ¦    ¦  monolithic  ¦    ¦    𝄀
+role  ¦  VARCHAR(1024)  ¦  YES  ¦    ¦  monolithic  ¦    ¦    𝄀
+account  ¦  VARCHAR(1024)  ¦  YES  ¦    ¦  sys  ¦    ¦    𝄀
+account_id  ¦  INT UNSIGNED(32)  ¦  YES  ¦    ¦  0  ¦    ¦  
 DESC `system_metrics`.`sql_statement_errors` ;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 collecttime  ¦  DATETIME(6)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
-value  ¦  DOUBLE(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-node  ¦  VARCHAR(1024)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-role  ¦  VARCHAR(1024)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-account  ¦  VARCHAR(1024)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-account_id  ¦  INT UNSIGNED(32)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+value  ¦  DOUBLE(0)  ¦  YES  ¦    ¦  0.0  ¦    ¦    𝄀
+node  ¦  VARCHAR(1024)  ¦  YES  ¦    ¦  monolithic  ¦    ¦    𝄀
+role  ¦  VARCHAR(1024)  ¦  YES  ¦    ¦  monolithic  ¦    ¦    𝄀
+account  ¦  VARCHAR(1024)  ¦  YES  ¦    ¦  sys  ¦    ¦    𝄀
+account_id  ¦  INT UNSIGNED(32)  ¦  YES  ¦    ¦  0  ¦    ¦    𝄀
 type  ¦  VARCHAR(1024)  ¦  NO  ¦    ¦  null  ¦    ¦  
 DESC `system_metrics`.`sql_transaction_total` ;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 collecttime  ¦  DATETIME(6)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
-value  ¦  DOUBLE(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-node  ¦  VARCHAR(1024)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-role  ¦  VARCHAR(1024)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-account  ¦  VARCHAR(1024)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-account_id  ¦  INT UNSIGNED(32)  ¦  YES  ¦    ¦  null  ¦    ¦  
+value  ¦  DOUBLE(0)  ¦  YES  ¦    ¦  0.0  ¦    ¦    𝄀
+node  ¦  VARCHAR(1024)  ¦  YES  ¦    ¦  monolithic  ¦    ¦    𝄀
+role  ¦  VARCHAR(1024)  ¦  YES  ¦    ¦  monolithic  ¦    ¦    𝄀
+account  ¦  VARCHAR(1024)  ¦  YES  ¦    ¦  sys  ¦    ¦    𝄀
+account_id  ¦  INT UNSIGNED(32)  ¦  YES  ¦    ¦  0  ¦    ¦  
 INSERT INTO `mo_catalog`.`statement_mo` (`statement_id`,`account`,`response_at`,`stu`,`account_id`) VALUES ('057247c5-2d0c-11ee-9e81-96ce077ba0f3','91731e77_49ea_4a8a_b1c7_d5512c7ae96e','2023-07-28 06:00:20','0.0003963262009632',2);
 no such table mo_catalog.statement_mo
 INSERT INTO `mo_mo`.`statement_time` (`cluster`,`last_time`) VALUES ('ab','2023-07-28 04:50:00');
@@ -784,7 +771,7 @@ SELECT count(*) FROM information_schema.tables WHERE table_schema = '' AND table
 SELECT datname AS name, IF (table_cnt IS NULL, 0, table_cnt) AS tables, role_name AS owner FROM (SELECT dat_id, datname, mo_database.created_time, IF(role_name IS NULL, '-', role_name) AS role_name FROM mo_catalog.mo_database LEFT JOIN mo_catalog.mo_role ON mo_database.owner = role_id) AS x LEFT JOIN(SELECT count(*) AS table_cnt, reldatabase_id FROM mo_catalog.mo_tables WHERE relkind IN ('r','v','e','cluster') GROUP BY reldatabase_id) AS y ON x.dat_id = y.reldatabase_id order by name;
 ➤ name[12,-1,0]  ¦  tables[-5,64,0]  ¦  owner[12,-1,0]  𝄀
 information_schema  ¦  24  ¦  accountadmin  𝄀
-mo_catalog  ¦  25  ¦  -  𝄀
+mo_catalog  ¦  35  ¦  -  𝄀
 mo_mo  ¦  0  ¦  accountadmin  𝄀
 mysql  ¦  6  ¦  accountadmin  𝄀
 system  ¦  1  ¦  accountadmin  𝄀
@@ -799,7 +786,7 @@ information_schema  ¦  columns  ¦  v  ¦  accountadmin  𝄀
 information_schema  ¦  engines  ¦  r  ¦  accountadmin  𝄀
 information_schema  ¦  events  ¦  r  ¦  accountadmin  𝄀
 information_schema  ¦  files  ¦  r  ¦  accountadmin  𝄀
-information_schema  ¦  key_column_usage  ¦  r  ¦  accountadmin  𝄀
+information_schema  ¦  key_column_usage  ¦  v  ¦  accountadmin  𝄀
 information_schema  ¦  keywords  ¦  r  ¦  accountadmin  𝄀
 information_schema  ¦  parameters  ¦  r  ¦  accountadmin  𝄀
 information_schema  ¦  partitions  ¦  v  ¦  accountadmin  𝄀
@@ -873,14 +860,15 @@ system_metrics  ¦  sql_transaction_total  ¦  v  ¦  accountadmin
 SELECT relname AS `name`, IF (role_name IS NULL, '-', role_name) AS `owner` FROM mo_catalog.mo_tables LEFT JOIN mo_catalog.mo_role ON mo_catalog.mo_tables.owner=role_id WHERE relkind IN ('v') AND reldatabase='information_schema';
 ➤ name[12,-1,0]  ¦  owner[12,-1,0]  𝄀
 columns  ¦  accountadmin  𝄀
-processlist  ¦  accountadmin  𝄀
-schemata  ¦  accountadmin  𝄀
-tables  ¦  accountadmin  𝄀
+key_column_usage  ¦  accountadmin  𝄀
 partitions  ¦  accountadmin  𝄀
-views  ¦  accountadmin  𝄀
-statistics  ¦  accountadmin  𝄀
+processlist  ¦  accountadmin  𝄀
 referential_constraints  ¦  accountadmin  𝄀
-table_constraints  ¦  accountadmin
+schemata  ¦  accountadmin  𝄀
+statistics  ¦  accountadmin  𝄀
+table_constraints  ¦  accountadmin  𝄀
+tables  ¦  accountadmin  𝄀
+views  ¦  accountadmin
 SELECT relname AS `name`, IF (role_name IS NULL, '-', role_name) AS `owner` FROM mo_catalog.mo_tables LEFT JOIN mo_catalog.mo_role ON mo_catalog.mo_tables.owner=role_id WHERE relkind IN ('v') AND reldatabase='mo_sample_data_tpch_sf1';
 ➤ name[12,-1,0]  ¦  owner[12,-1,0]
 SELECT relname AS `name`, IF (role_name IS NULL, '-', role_name) AS `owner` FROM mo_catalog.mo_tables LEFT JOIN mo_catalog.mo_role ON mo_catalog.mo_tables.owner=role_id WHERE relkind IN ('v') AND reldatabase='mysql';
@@ -889,43 +877,42 @@ SELECT relname AS `name`, IF (role_name IS NULL, '-', role_name) AS `owner` FROM
 ➤ name[12,-1,0]  ¦  owner[12,-1,0]
 SELECT relname AS `name`, IF (role_name IS NULL, '-', role_name) AS `owner` FROM mo_catalog.mo_tables LEFT JOIN mo_catalog.mo_role ON mo_catalog.mo_tables.owner=role_id WHERE relkind IN ('v') AND reldatabase='system_metrics';
 ➤ name[12,-1,0]  ¦  owner[12,-1,0]  𝄀
-sql_statement_total  ¦  accountadmin  𝄀
-sql_statement_errors  ¦  accountadmin  𝄀
-sql_transaction_total  ¦  accountadmin  𝄀
-sql_transaction_errors  ¦  accountadmin  𝄀
-sql_statement_duration_total  ¦  accountadmin  𝄀
 server_connections  ¦  accountadmin  𝄀
-server_storage_usage  ¦  accountadmin  𝄀
 server_object_count  ¦  accountadmin  𝄀
-server_snapshot_usage  ¦  accountadmin
+server_snapshot_usage  ¦  accountadmin  𝄀
+server_storage_usage  ¦  accountadmin  𝄀
+sql_statement_duration_total  ¦  accountadmin  𝄀
+sql_statement_errors  ¦  accountadmin  𝄀
+sql_statement_total  ¦  accountadmin  𝄀
+sql_transaction_errors  ¦  accountadmin  𝄀
+sql_transaction_total  ¦  accountadmin
 set mo_table_stats.use_old_impl = yes;
 SELECT relname AS `name`, mo_table_rows(reldatabase, relname) AS `rows`, mo_table_size(reldatabase, relname) AS `size`, if (role_name IS NULL, '-', role_name) AS `owner` FROM mo_catalog.mo_tables LEFT JOIN mo_catalog.mo_role ON mo_catalog.mo_tables.owner=role_id WHERE relkind IN ('r','e','cluster') AND reldatabase='information_schema';
 ➤ name[12,-1,0]  ¦  rows[-5,64,0]  ¦  size[-5,64,0]  ¦  owner[12,-1,0]  𝄀
-key_column_usage  ¦  0  ¦  0  ¦  accountadmin  𝄀
-profiling  ¦  0  ¦  0  ¦  accountadmin  𝄀
-user_privileges  ¦  0  ¦  0  ¦  accountadmin  𝄀
 character_sets  ¦  3  ¦  96  ¦  accountadmin  𝄀
-triggers  ¦  0  ¦  0  ¦  accountadmin  𝄀
+collations  ¦  0  ¦  0  ¦  accountadmin  𝄀
+column_privileges  ¦  0  ¦  0  ¦  accountadmin  𝄀
 engines  ¦  0  ¦  0  ¦  accountadmin  𝄀
-routines  ¦  0  ¦  0  ¦  accountadmin  𝄀
-parameters  ¦  0  ¦  0  ¦  accountadmin  𝄀
+events  ¦  0  ¦  0  ¦  accountadmin  𝄀
+files  ¦  0  ¦  0  ¦  accountadmin  𝄀
 keywords  ¦  747  ¦  23904  ¦  accountadmin  𝄀
+parameters  ¦  0  ¦  0  ¦  accountadmin  𝄀
+profiling  ¦  0  ¦  0  ¦  accountadmin  𝄀
+routines  ¦  0  ¦  0  ¦  accountadmin  𝄀
 schema_privileges  ¦  0  ¦  0  ¦  accountadmin  𝄀
 table_privileges  ¦  0  ¦  0  ¦  accountadmin  𝄀
-column_privileges  ¦  0  ¦  0  ¦  accountadmin  𝄀
-collations  ¦  0  ¦  0  ¦  accountadmin  𝄀
-events  ¦  0  ¦  0  ¦  accountadmin  𝄀
-files  ¦  0  ¦  0  ¦  accountadmin
+triggers  ¦  0  ¦  0  ¦  accountadmin  𝄀
+user_privileges  ¦  0  ¦  0  ¦  accountadmin
 SELECT relname AS `name`, mo_table_rows(reldatabase, relname) AS `rows`, mo_table_size(reldatabase, relname) AS `size`, if (role_name IS NULL, '-', role_name) AS `owner` FROM mo_catalog.mo_tables LEFT JOIN mo_catalog.mo_role ON mo_catalog.mo_tables.owner=role_id WHERE relkind IN ('r','e','cluster') AND reldatabase='mo_sample_data_tpch_sf1';
 ➤ name[12,-1,0]  ¦  rows[-5,64,0]  ¦  size[-5,64,0]  ¦  owner[12,-1,0]
 SELECT relname AS `name`, mo_table_rows(reldatabase, relname) AS `rows`, mo_table_size(reldatabase, relname) AS `size`, if (role_name IS NULL, '-', role_name) AS `owner` FROM mo_catalog.mo_tables LEFT JOIN mo_catalog.mo_role ON mo_catalog.mo_tables.owner=role_id WHERE relkind IN ('r','e','cluster') AND reldatabase='mysql';
 ➤ name[12,-1,0]  ¦  rows[-5,64,0]  ¦  size[-5,64,0]  ¦  owner[12,-1,0]  𝄀
-user  ¦  0  ¦  0  ¦  accountadmin  𝄀
+columns_priv  ¦  0  ¦  0  ¦  accountadmin  𝄀
 db  ¦  0  ¦  0  ¦  accountadmin  𝄀
 procs_priv  ¦  0  ¦  0  ¦  accountadmin  𝄀
-columns_priv  ¦  0  ¦  0  ¦  accountadmin  𝄀
+role_edges  ¦  0  ¦  0  ¦  accountadmin  𝄀
 tables_priv  ¦  0  ¦  0  ¦  accountadmin  𝄀
-role_edges  ¦  0  ¦  0  ¦  accountadmin
+user  ¦  0  ¦  0  ¦  accountadmin
 SELECT relname AS `name`, mo_table_rows(reldatabase, relname) AS `rows`, mo_table_size(reldatabase, relname) AS `size`, if (role_name IS NULL, '-', role_name) AS `owner` FROM mo_catalog.mo_tables LEFT JOIN mo_catalog.mo_role ON mo_catalog.mo_tables.owner=role_id WHERE relkind IN ('r','e','cluster') AND reldatabase='system';
 ➤ name[12,-1,0]  ¦  rows[-5,64,0]  ¦  size[-5,64,0]  ¦  owner[12,-1,0]  𝄀
 statement_info  ¦  0  ¦  0  ¦  accountadmin
@@ -964,9 +951,11 @@ alter account `2ef38bf3_b821_4cab_879e_3b788f1e922f` admin_name 'admin' identifi
 internal error: do not have privilege to execute the statement
 delete from mo_mo.operation where created_at <= '2023-07-21 13:42:02';
 no such table mo_mo.operation
+set mo_table_stats.force_update = yes;
 select distinct IF(relkind = 'v', 0, mo_table_rows('information_schema','character_sets')) as `rows` from mo_catalog.mo_tables where reldatabase='information_schema' and relname='character_sets';
 ➤ rows[-5,64,0]  𝄀
-0
+3
+set mo_table_stats.force_update = no;
 select distinct IF(relkind = 'v', 0, mo_table_rows('mo_sample_data_tpch_sf1','customer')) as `rows` from mo_catalog.mo_tables where reldatabase='mo_sample_data_tpch_sf1' and relname='customer';
 ➤ rows[-5,64,0]
 select distinct IF(relkind = 'v', 0, mo_table_rows('mo_sample_data_tpch_sf1','lineitem')) as `rows` from mo_catalog.mo_tables where reldatabase='mo_sample_data_tpch_sf1' and relname='lineitem';

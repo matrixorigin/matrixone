@@ -46,6 +46,10 @@ func (r *releaseTrackingData) Size() int64 {
 	return int64(len(r.bytes))
 }
 
+func (r *releaseTrackingData) Capacity() int64 {
+	return int64(cap(r.bytes))
+}
+
 func (r *releaseTrackingData) Bytes() []byte {
 	return r.bytes
 }
@@ -72,6 +76,7 @@ func (d *validatedVectorBytesProbe) Bytes() []byte {
 }
 
 func (d *validatedVectorBytesProbe) Size() int64            { return int64(len(d.backing)) }
+func (d *validatedVectorBytesProbe) Capacity() int64        { return int64(cap(d.backing)) }
 func (d *validatedVectorBytesProbe) Slice(int) fscache.Data { return d }
 func (d *validatedVectorBytesProbe) Retain()                {}
 func (d *validatedVectorBytesProbe) Release()               {}
@@ -105,6 +110,10 @@ func (p *partialReadErrorFS) ReadCache(context.Context, *fileservice.IOVector) e
 
 type trackingCacheDataAllocator struct {
 	data fscache.Data
+}
+
+func (t *trackingCacheDataAllocator) BackingSize(size int) int {
+	return size
 }
 
 type objectioRemoteCacheClient struct {

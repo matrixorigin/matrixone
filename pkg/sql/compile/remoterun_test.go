@@ -1272,6 +1272,27 @@ func Test_decodeBatch(t *testing.T) {
 	require.Nil(t, err)
 }
 
+func Test_decodeBatchPreservesPrepareParamKindTransportTrailer(t *testing.T) {
+	mp := mpool.MustNewZero()
+	bat := batch.NewWithSize(1)
+	bat.Vecs[0] = vector.NewVec(types.T_text.ToType())
+	require.NoError(t, vector.AppendBytes(bat.Vecs[0], []byte("5"), false, mp))
+	require.NoError(t, vector.AppendBytes(bat.Vecs[0], []byte("5"), false, mp))
+	bat.Vecs[0].SetPrepareParamKinds([]vector.PrepareParamKind{
+		vector.PrepareParamFloat,
+		vector.PrepareParamNone,
+	})
+	bat.SetRowCount(2)
+	data, err := bat.MarshalBinaryWithPrepareParamKinds(&bytes.Buffer{}, true)
+	require.NoError(t, err)
+	decoded, err := decodeBatch(mp, data)
+	require.NoError(t, err)
+	require.Equal(t, vector.PrepareParamFloat, decoded.Vecs[0].GetPrepareParamKindAt(0))
+	require.Equal(t, vector.PrepareParamNone, decoded.Vecs[0].GetPrepareParamKindAt(1))
+	bat.Clean(mp)
+	decoded.Clean(mp)
+}
+
 func Test_GetProcByUuid(t *testing.T) {
 	_ = colexec.NewServer("")
 
@@ -3196,16 +3217,20 @@ func TestReceiveMsgAndForward_ReturnsOnBlockedReceiverCancel(t *testing.T) {
 	}
 }
 
-func TestReceiveMsgAndForward_ReturnsOnReceiverTerminal(t *testing.T) {
+func TestReceiveMsgAndForward_AcknowledgesBatchOnReceiverTerminal(t *testing.T) {
 	forwardReg := process.NewPipelineEdge(1, 0)
 	require.True(t, forwardReg.Abort(moerr.NewInternalErrorNoCtx("receiver terminal")))
 
+	stream := &fakeStreamSender{}
 	sender := &messageSenderOnClient{
-		ctx:       context.Background(),
-		mp:        mpool.MustNewZero(),
-		receiveCh: make(chan morpc.Message, 1),
+		ctx:          context.Background(),
+		mp:           mpool.MustNewZero(),
+		streamSender: stream,
+		receiveCh:    make(chan morpc.Message, 1),
 	}
-	sender.receiveCh <- makeRemoteBatchMessage(t, batch.NewWithSize(0))
+	message := makeRemoteBatchMessage(t, batch.NewWithSize(0)).(*pipeline.Message)
+	message.BatchSequence = 5
+	sender.receiveCh <- message
 
 	done := make(chan error, 1)
 	go func() {
@@ -3215,12 +3240,17 @@ func TestReceiveMsgAndForward_ReturnsOnReceiverTerminal(t *testing.T) {
 	select {
 	case err := <-done:
 		require.NoError(t, err)
+		require.Zero(t, sender.pendingBatchAck)
+		require.Len(t, stream.sent, 1)
+		ack := stream.sent[0].(*pipeline.Message)
+		require.Equal(t, pipeline.Method_PipelineBatchAck, ack.GetCmd())
+		require.Equal(t, uint64(5), ack.GetBatchAckSequence())
 	case <-time.After(time.Second):
 		require.Fail(t, "receiveMsgAndForward did not unblock after receiver terminal")
 	}
 }
 
-func TestReceiveMessageFromCnServerIfConnector_ReturnsOnReceiverTerminal(t *testing.T) {
+func TestReceiveMessageFromCnServerIfConnector_AcknowledgesBatchOnReceiverTerminal(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	proc.BuildPipelineContext(context.Background())
 
@@ -3231,12 +3261,16 @@ func TestReceiveMessageFromCnServerIfConnector_ReturnsOnReceiverTerminal(t *test
 		RootOp: connector.NewArgument().WithReg(reg),
 	}
 
+	stream := &fakeStreamSender{}
 	sender := &messageSenderOnClient{
-		ctx:       context.Background(),
-		mp:        proc.Mp(),
-		receiveCh: make(chan morpc.Message, 1),
+		ctx:          context.Background(),
+		mp:           proc.Mp(),
+		streamSender: stream,
+		receiveCh:    make(chan morpc.Message, 1),
 	}
-	sender.receiveCh <- makeRemoteBatchMessage(t, batch.NewWithSize(0))
+	message := makeRemoteBatchMessage(t, batch.NewWithSize(0)).(*pipeline.Message)
+	message.BatchSequence = 7
+	sender.receiveCh <- message
 
 	done := make(chan error, 1)
 	go func() {
@@ -3246,9 +3280,45 @@ func TestReceiveMessageFromCnServerIfConnector_ReturnsOnReceiverTerminal(t *test
 	select {
 	case err := <-done:
 		require.NoError(t, err)
+		require.Zero(t, sender.pendingBatchAck)
+		require.Len(t, stream.sent, 1)
+		ack := stream.sent[0].(*pipeline.Message)
+		require.Equal(t, pipeline.Method_PipelineBatchAck, ack.GetCmd())
+		require.Equal(t, uint64(7), ack.GetBatchAckSequence())
 	case <-time.After(time.Second):
 		require.Fail(t, "receiveMessageFromCnServerIfConnector did not unblock after receiver terminal")
 	}
+}
+
+func TestReceiveMessageFromCnServerIfDispatch_AcknowledgesBatchOnReceiverTerminal(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	reg := process.NewPipelineEdge(1, 0)
+	require.True(t, reg.Abort(moerr.NewInternalErrorNoCtx("receiver terminal")))
+
+	d := dispatch.NewArgument()
+	d.LocalRegs = []*process.WaitRegister{reg}
+	d.FuncId = dispatch.SendToAllLocalFunc
+	s := &Scope{Proc: proc, RootOp: d}
+
+	stream := &fakeStreamSender{}
+	sender := &messageSenderOnClient{
+		ctx:          context.Background(),
+		mp:           proc.Mp(),
+		streamSender: stream,
+		receiveCh:    make(chan morpc.Message, 1),
+	}
+	dataBat := batch.NewWithSize(0)
+	dataBat.SetRowCount(1)
+	message := makeRemoteBatchMessage(t, dataBat).(*pipeline.Message)
+	message.BatchSequence = 11
+	sender.receiveCh <- message
+
+	require.NoError(t, receiveMessageFromCnServerIfDispatch(s, sender))
+	require.Zero(t, sender.pendingBatchAck)
+	require.Len(t, stream.sent, 1)
+	ack := stream.sent[0].(*pipeline.Message)
+	require.Equal(t, pipeline.Method_PipelineBatchAck, ack.GetCmd())
+	require.Equal(t, uint64(11), ack.GetBatchAckSequence())
 }
 
 func TestReceiveMsgAndForward_NilReceiverReturnsError(t *testing.T) {

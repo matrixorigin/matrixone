@@ -68,6 +68,10 @@ func (d *validatedVectorCacheData) Size() int64 {
 	return int64(len(d.data.Bytes()))
 }
 
+func (d *validatedVectorCacheData) Capacity() int64 {
+	return d.data.Capacity()
+}
+
 func (d *validatedVectorCacheData) Slice(length int) fscache.Data {
 	buf := d.data.Bytes()
 	if length == len(buf) {

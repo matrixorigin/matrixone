@@ -27,7 +27,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
@@ -49,12 +48,16 @@ func TestDeleteWhenAccountNotExists(t *testing.T) {
 
 	mockSqlExecutor := mock_executor.NewMockSQLExecutor(ctrl)
 	mockSqlExecutor.EXPECT().ExecTxn(gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(func(ctx context.Context, execFunc func(txn executor.TxnExecutor) error, opts executor.Options) error {
+		require.False(t, opts.WaitCommittedLogApplied(),
+			"lazy metadata deletion must remain cancelable during service shutdown")
 		return execFunc(nil)
 	}).AnyTimes()
 
 	// account not exists
 	var executedSQLs []string
 	mockSqlExecutor.EXPECT().Exec(gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(func(ctx context.Context, sql string, opts executor.Options) (executor.Result, error) {
+		require.False(t, opts.WaitCommittedLogApplied(),
+			"lazy metadata deletion statements must remain cancelable during service shutdown")
 		executedSQLs = append(executedSQLs, sql)
 		res := executor.Result{}
 		return res, nil
@@ -78,17 +81,28 @@ func TestDeleteWhenAccountExists(t *testing.T) {
 
 	mockSqlExecutor := mock_executor.NewMockSQLExecutor(ctrl)
 	mockSqlExecutor.EXPECT().ExecTxn(gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(func(ctx context.Context, execFunc func(txn executor.TxnExecutor) error, opts executor.Options) error {
+		require.False(t, opts.WaitCommittedLogApplied(),
+			"lazy metadata deletion must remain cancelable during service shutdown")
 		return execFunc(nil)
 	}).AnyTimes()
+	mp := mpool.MustNewZero()
+	accountResult := executor.NewMemResult([]types.Type{types.T_varchar.ToType()}, mp)
+	accountResult.NewBatchWithRowCount(1)
+	require.NoError(t, executor.AppendStringRows(accountResult, 0, []string{"account"}))
+	accountLookupResult := accountResult.GetResult()
+	t.Cleanup(func() {
+		accountLookupResult.Close()
+		mpool.DeleteMPool(mp)
+	})
 	var executedSQLs []string
 	mockSqlExecutor.EXPECT().Exec(gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(func(ctx context.Context, sql string, opts executor.Options) (executor.Result, error) {
+		require.False(t, opts.WaitCommittedLogApplied(),
+			"lazy metadata deletion statements must remain cancelable during service shutdown")
 		executedSQLs = append(executedSQLs, sql)
-		bat := &batch.Batch{}
-		bat.SetRowCount(1)
-		res := executor.Result{
-			Batches: []*batch.Batch{bat},
+		if strings.HasPrefix(sql, "select account_name") {
+			return accountLookupResult, nil
 		}
-		return res, nil
+		return executor.Result{}, nil
 	}).AnyTimes()
 
 	s := &sqlStore{
@@ -98,6 +112,7 @@ func TestDeleteWhenAccountExists(t *testing.T) {
 	err := s.Delete(ctx, 0)
 	require.NoError(t, err)
 	require.Equal(t, 2, len(executedSQLs))
+	require.Zero(t, mp.CurrNB(), "account lookup result must be closed")
 }
 
 var _ lockservice.LockService = new(testLockService)
@@ -663,6 +678,17 @@ func Test_Allocate_Retry_When_AffectedRows_Invalid(t *testing.T) {
 	require.Equal(t, int32(2), updateCnt.Load())
 }
 
+func newForceSetOffsetResult(colName string, offset uint64) executor.Result {
+	memRes := executor.NewMemResult(
+		[]types.Type{types.New(types.T_varchar, 64, 0), types.New(types.T_uint64, 64, 0)},
+		mpool.MustNewZero(),
+	)
+	memRes.NewBatchWithRowCount(1)
+	executor.AppendStringRows(memRes, 0, []string{colName})
+	executor.AppendFixedRows(memRes, 1, []uint64{offset})
+	return memRes.GetResult()
+}
+
 func TestSQLStoreSetOffset(t *testing.T) {
 	ctx := context.TODO()
 	ctx = defines.AttachAccountId(ctx, 12)
@@ -672,7 +698,10 @@ func TestSQLStoreSetOffset(t *testing.T) {
 	sqlExecutor := executor.NewMemExecutor2(
 		func(sql string) (executor.Result, error) {
 			executedSQLs = append(executedSQLs, sql)
-			return executor.Result{}, nil
+			if strings.HasPrefix(sql, "select col_name, offset from mo_increment_columns") {
+				return newForceSetOffsetResult("old_col", math.MaxUint64), nil
+			}
+			return executor.Result{AffectedRows: 1}, nil
 		},
 		txnOp,
 	)
@@ -683,13 +712,17 @@ func TestSQLStoreSetOffset(t *testing.T) {
 
 	require.NoError(t, s.SetOffset(ctx, 10, "auto_col", 99, nil))
 	require.NoError(t, s.SetOffset(ctx, 10, "auto_col", 100, txnOp))
-	require.NoError(t, s.ForceSetOffset(ctx, 10, "auto_col", math.MaxUint64, txnOp))
-	require.Len(t, executedSQLs, 3)
+	require.NoError(t, s.ForceSetOffset(ctx, 10, 3, "renamed_col", math.MaxUint64, txnOp))
+	require.Len(t, executedSQLs, 4)
 	require.Contains(t, executedSQLs[0], "update mo_increment_columns set offset = 99")
 	require.Contains(t, executedSQLs[0], "table_id = 10")
 	require.Contains(t, executedSQLs[0], "col_name = 'auto_col'")
 	require.Contains(t, executedSQLs[1], "update mo_increment_columns set offset = 100")
-	require.Contains(t, executedSQLs[2], "update mo_increment_columns set offset = 18446744073709551615")
+	require.Contains(t, executedSQLs[2], "select col_name, offset from mo_increment_columns")
+	require.Contains(t, executedSQLs[2], "col_index = 3")
+	require.Contains(t, executedSQLs[3], "update mo_increment_columns set col_name = 'renamed_col', offset = 18446744073709551615")
+	require.Contains(t, executedSQLs[3], "table_id = 10")
+	require.Contains(t, executedSQLs[3], "col_index = 3")
 }
 
 func TestSQLStoreSetOffsetEscapesColumnNameLiteral(t *testing.T) {
@@ -700,7 +733,10 @@ func TestSQLStoreSetOffsetEscapesColumnNameLiteral(t *testing.T) {
 	sqlExecutor := executor.NewMemExecutor2(
 		func(sql string) (executor.Result, error) {
 			executedSQLs = append(executedSQLs, sql)
-			return executor.Result{}, nil
+			if strings.HasPrefix(sql, "select col_name, offset from mo_increment_columns") {
+				return newForceSetOffsetResult("old_col", 100), nil
+			}
+			return executor.Result{AffectedRows: 1}, nil
 		},
 		nil,
 	)
@@ -711,11 +747,61 @@ func TestSQLStoreSetOffsetEscapesColumnNameLiteral(t *testing.T) {
 
 	require.NoError(t, s.SetOffset(ctx, 10, "1id", 99, nil))
 	require.NoError(t, s.SetOffset(ctx, 10, "auto'col\\x", 100, nil))
-	require.NoError(t, s.ForceSetOffset(ctx, 10, "auto'col\\x", 101, nil))
-	require.Len(t, executedSQLs, 3)
+	require.NoError(t, s.ForceSetOffset(ctx, 10, 7, "new'col\\x", 101, nil))
+	require.Len(t, executedSQLs, 4)
 	require.Contains(t, executedSQLs[0], "col_name = '1id'")
 	require.Contains(t, executedSQLs[1], `col_name = 'auto''col\\x'`)
-	require.Contains(t, executedSQLs[2], `col_name = 'auto''col\\x'`)
+	require.Contains(t, executedSQLs[2], "col_index = 7")
+	require.Contains(t, executedSQLs[3], "col_index = 7")
+	require.Contains(t, executedSQLs[3], `col_name = 'new''col\\x'`)
+}
+
+func TestSQLStoreForceSetOffsetRejectsMissingColumn(t *testing.T) {
+	ctx := defines.AttachAccountId(context.Background(), 12)
+	sqlExecutor := executor.NewMemExecutor2(
+		func(string) (executor.Result, error) {
+			return executor.Result{AffectedRows: 0}, nil
+		},
+		nil,
+	)
+
+	s := &sqlStore{exec: sqlExecutor}
+	err := s.ForceSetOffset(ctx, 10, 3, "auto_col", 101, nil)
+	require.ErrorContains(t, err, "expected one auto-increment column at index 3 for table 10, found 0 rows")
+}
+
+func TestSQLStoreForceSetOffsetValidatesZeroAffectedRows(t *testing.T) {
+	ctx := defines.AttachAccountId(context.Background(), 12)
+	for _, tc := range []struct {
+		name          string
+		currentName   string
+		currentOffset uint64
+		wantErr       bool
+	}{
+		{name: "unchanged row", currentName: "auto_col", currentOffset: 101},
+		{name: "stale name", currentName: "old_col", currentOffset: 101, wantErr: true},
+		{name: "lost update", currentName: "auto_col", currentOffset: 100, wantErr: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			sqlExecutor := executor.NewMemExecutor2(
+				func(sql string) (executor.Result, error) {
+					if strings.HasPrefix(sql, "select col_name, offset from mo_increment_columns") {
+						return newForceSetOffsetResult(tc.currentName, tc.currentOffset), nil
+					}
+					return executor.Result{AffectedRows: 0}, nil
+				},
+				nil,
+			)
+
+			s := &sqlStore{exec: sqlExecutor}
+			err := s.ForceSetOffset(ctx, 10, 3, "auto_col", 101, nil)
+			if tc.wantErr {
+				require.ErrorContains(t, err, "updated 0 rows")
+			} else {
+				require.NoError(t, err)
+			}
+		})
+	}
 }
 
 func TestSQLStoreSetOffsetReturnsExecError(t *testing.T) {
