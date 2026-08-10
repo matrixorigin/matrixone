@@ -310,24 +310,48 @@ func TestCorrelatedLimitRejectsNonPartitionablePredicate(t *testing.T) {
 	require.ErrorContains(t, err, "correlated LIMIT with non-equality predicates")
 }
 
+func TestCorrelatedLimitRejectsProjectedCorrelatedOrdering(t *testing.T) {
+	_, err := runOneStmt(NewMockOptimizer(true), t, `
+		SELECT n1.N_NATIONKEY,
+		       (SELECT n2.N_NATIONKEY
+		          FROM NATION n2
+		         WHERE n2.N_REGIONKEY = n1.N_REGIONKEY
+		         ORDER BY n1.N_NATIONKEY
+		         LIMIT 1)
+		  FROM NATION n1`)
+	require.ErrorContains(t, err, "correlated columns in ORDER BY with LIMIT")
+}
+
 func TestCorrelatedExistenceLimitIsRemoved(t *testing.T) {
-	for _, quantifier := range []string{"EXISTS", "NOT EXISTS"} {
-		t.Run(quantifier, func(t *testing.T) {
-			logicPlan, err := runOneStmt(NewMockOptimizer(true), t, `
+	for _, test := range []struct {
+		name    string
+		orderBy string
+	}{
+		{name: "unordered"},
+		{name: "inner ordering", orderBy: "ORDER BY n2.N_NATIONKEY DESC"},
+		{name: "outer ordering", orderBy: "ORDER BY n1.N_NATIONKEY"},
+	} {
+		for _, quantifier := range []string{"EXISTS", "NOT EXISTS"} {
+			t.Run(test.name+"/"+quantifier, func(t *testing.T) {
+				logicPlan, err := runOneStmt(NewMockOptimizer(true), t, `
 				SELECT n1.N_NATIONKEY
 				  FROM NATION n1
 				 WHERE `+quantifier+` (
 				       SELECT 1
 				         FROM NATION n2
 				        WHERE n2.N_REGIONKEY < n1.N_REGIONKEY
+				        `+test.orderBy+`
 				        LIMIT 1)`)
-			require.NoError(t, err)
+				require.NoError(t, err)
 
-			for _, node := range reachableFlattenSubqueryNodes(logicPlan.GetQuery()) {
-				require.Nil(t, node.Limit)
-				require.NotEqual(t, plan.Node_WINDOW, node.NodeType)
-			}
-		})
+				for _, node := range reachableFlattenSubqueryNodes(logicPlan.GetQuery()) {
+					require.Nil(t, node.Limit)
+					require.NotEqual(t, plan.Node_WINDOW, node.NodeType)
+					require.NotEqual(t, plan.Node_PARTITION, node.NodeType)
+				}
+				assertReachablePlanHasNoCorrelatedExpr(t, logicPlan.GetQuery())
+			})
+		}
 	}
 }
 
@@ -367,7 +391,7 @@ func TestOnlyRootCorrelatedExistenceLimitIsRemoved(t *testing.T) {
 		nodeID, err := builder.rewriteCorrelatedPagination(
 			1, builder.qry.Nodes[1], predicates, ctx, plan.SubqueryRef_EXISTS, true)
 		require.NoError(t, err)
-		require.Equal(t, int32(1), nodeID)
+		require.Equal(t, int32(0), nodeID)
 		require.Nil(t, builder.qry.Nodes[1].Limit)
 		require.Len(t, builder.qry.Nodes, 2)
 	})
@@ -1456,7 +1480,17 @@ func assertReachablePlanHasNoCorrelatedExpr(t *testing.T, query *plan.Query) {
 		exprs = append(exprs, node.OnList...)
 		exprs = append(exprs, node.GroupBy...)
 		exprs = append(exprs, node.AggList...)
-		exprs = append(exprs, node.WinSpecList...)
+		for _, windowExpr := range node.WinSpecList {
+			window := windowExpr.GetW()
+			require.NotNil(t, window, "reachable WINDOW node %d has a non-window expression", nodeID)
+			exprs = append(exprs, window.WindowFunc)
+			exprs = append(exprs, window.PartitionBy...)
+			for _, order := range window.OrderBy {
+				if order != nil {
+					exprs = append(exprs, order.Expr)
+				}
+			}
+		}
 		for _, order := range node.OrderBy {
 			if order != nil {
 				exprs = append(exprs, order.Expr)

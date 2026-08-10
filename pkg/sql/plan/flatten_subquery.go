@@ -1518,7 +1518,11 @@ func (builder *QueryBuilder) pullupCorrelatedPredicates(
 
 	var subPreds []*plan.Expr
 	for i, childID := range node.Children {
-		node.Children[i], subPreds, err = builder.pullupCorrelatedPredicates(childID, ctx, subqueryType, false)
+		childIsSubqueryRoot := isSubqueryRoot && len(node.Children) == 1 &&
+			node.Limit == nil && node.Offset == nil &&
+			(node.NodeType == plan.Node_PROJECT || node.NodeType == plan.Node_SORT)
+		node.Children[i], subPreds, err = builder.pullupCorrelatedPredicates(
+			childID, ctx, subqueryType, childIsSubqueryRoot)
 		if err != nil {
 			return 0, nil, err
 		}
@@ -1614,19 +1618,28 @@ func (builder *QueryBuilder) rewriteCorrelatedPagination(
 	if node.RankOption != nil {
 		return 0, moerr.NewNYI(builder.GetContext(), "correlated LIMIT with BY RANK")
 	}
-	for _, orderBy := range node.OrderBy {
-		if orderBy != nil && hasCorrCol(orderBy.Expr) {
-			return 0, moerr.NewNYI(builder.GetContext(), "correlated columns in ORDER BY with LIMIT")
-		}
-	}
 	if offset == 0 && isSubqueryRoot {
 		switch subqueryType {
 		case plan.SubqueryRef_EXISTS, plan.SubqueryRef_NOT_EXISTS:
-			// A positive LIMIT on the complete existential input cannot change
-			// whether that input is empty. Do not apply this shortcut to a
-			// nested LIMIT: nodes above it may inspect which row it selected.
+			// A positive LIMIT and its ordering cannot change whether the
+			// complete existential input is empty.  The semantic root can be
+			// below transparent PROJECT/SORT wrappers, so remove the complete
+			// pagination boundary before validating or copying its ORDER BY.
 			node.Limit = nil
+			node.Offset = nil
+			if node.NodeType == plan.Node_SORT {
+				if len(node.Children) != 1 {
+					return 0, moerr.NewInternalError(builder.GetContext(), "correlated LIMIT sort must have one child")
+				}
+				return node.Children[0], nil
+			}
+			node.OrderBy = nil
 			return nodeID, nil
+		}
+	}
+	for _, orderBy := range node.OrderBy {
+		if orderBy != nil && builder.hasCorrColThroughProjection(orderBy.Expr, node.Children) {
+			return 0, moerr.NewNYI(builder.GetContext(), "correlated columns in ORDER BY with LIMIT")
 		}
 	}
 	for _, pred := range preds {
@@ -1741,6 +1754,105 @@ func (builder *QueryBuilder) rewriteCorrelatedPagination(
 		BindingTags: []int32{windowTag},
 		FilterList:  []*plan.Expr{rowFilter},
 	}, ctx), nil
+}
+
+func (builder *QueryBuilder) hasCorrColThroughProjection(expr *plan.Expr, inputIDs []int32) bool {
+	return builder.hasCorrColThroughProjectionImpl(expr, inputIDs, make(map[[2]int32]bool))
+}
+
+func (builder *QueryBuilder) hasCorrColThroughProjectionImpl(
+	expr *plan.Expr,
+	inputIDs []int32,
+	resolving map[[2]int32]bool,
+) bool {
+	if expr == nil {
+		return false
+	}
+
+	switch item := expr.Expr.(type) {
+	case *plan.Expr_Corr:
+		return true
+	case *plan.Expr_Col:
+		if item.Col == nil {
+			return false
+		}
+		key := [2]int32{item.Col.RelPos, item.Col.ColPos}
+		if resolving[key] {
+			return false
+		}
+		projected, children, ok := builder.findProjectedExpr(inputIDs, item.Col)
+		if !ok {
+			return false
+		}
+		resolving[key] = true
+		hasCorr := builder.hasCorrColThroughProjectionImpl(projected, children, resolving)
+		delete(resolving, key)
+		return hasCorr
+	case *plan.Expr_F:
+		for _, arg := range item.F.Args {
+			if builder.hasCorrColThroughProjectionImpl(arg, inputIDs, resolving) {
+				return true
+			}
+		}
+	case *plan.Expr_List:
+		for _, arg := range item.List.List {
+			if builder.hasCorrColThroughProjectionImpl(arg, inputIDs, resolving) {
+				return true
+			}
+		}
+	case *plan.Expr_W:
+		if item.W == nil {
+			return false
+		}
+		if builder.hasCorrColThroughProjectionImpl(item.W.WindowFunc, inputIDs, resolving) {
+			return true
+		}
+		for _, partitionBy := range item.W.PartitionBy {
+			if builder.hasCorrColThroughProjectionImpl(partitionBy, inputIDs, resolving) {
+				return true
+			}
+		}
+		for _, orderBy := range item.W.OrderBy {
+			if orderBy != nil && builder.hasCorrColThroughProjectionImpl(orderBy.Expr, inputIDs, resolving) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func (builder *QueryBuilder) findProjectedExpr(
+	inputIDs []int32,
+	col *plan.ColRef,
+) (*plan.Expr, []int32, bool) {
+	visited := make(map[int32]bool)
+	var find func(int32) (*plan.Expr, []int32, bool)
+	find = func(nodeID int32) (*plan.Expr, []int32, bool) {
+		if nodeID < 0 || int(nodeID) >= len(builder.qry.Nodes) || visited[nodeID] {
+			return nil, nil, false
+		}
+		visited[nodeID] = true
+		node := builder.qry.Nodes[nodeID]
+		if node.NodeType == plan.Node_PROJECT && len(node.BindingTags) > 0 &&
+			node.BindingTags[0] == col.RelPos {
+			if col.ColPos < 0 || int(col.ColPos) >= len(node.ProjectList) {
+				return nil, nil, false
+			}
+			return node.ProjectList[col.ColPos], node.Children, true
+		}
+		for _, childID := range node.Children {
+			if expr, children, ok := find(childID); ok {
+				return expr, children, true
+			}
+		}
+		return nil, nil, false
+	}
+	for _, inputID := range inputIDs {
+		if expr, children, ok := find(inputID); ok {
+			return expr, children, true
+		}
+	}
+	return nil, nil, false
 }
 
 func correlatedPaginationPartitionKeys(preds []*plan.Expr) ([]*plan.Expr, bool) {
