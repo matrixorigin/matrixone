@@ -128,7 +128,9 @@ func GroupConcatReturnType(args []types.Type) types.Type {
 			return types.T_blob.ToType()
 		}
 	}
-	return types.T_text.ToType()
+	result := types.T_text.ToType()
+	result.Charset = types.MergeStringCharset(args, result.Charset)
+	return result
 }
 
 func newGroupConcatExec(mg *mpool.MPool, info multiAggInfo, separator string) AggFuncExec {

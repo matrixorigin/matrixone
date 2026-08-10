@@ -1465,9 +1465,10 @@ func convertToPlanTypes(ts []types.Type) []plan.Type {
 	result := make([]plan.Type, len(ts))
 	for i, t := range ts {
 		result[i] = plan.Type{
-			Id:    int32(t.Oid),
-			Width: t.Width,
-			Scale: t.Scale,
+			Id:      int32(t.Oid),
+			Width:   t.Width,
+			Scale:   t.Scale,
+			Charset: uint32(t.Charset),
 		}
 	}
 	return result
@@ -1477,7 +1478,7 @@ func convertToPlanTypes(ts []types.Type) []plan.Type {
 func convertToTypes(ts []plan.Type) []types.Type {
 	result := make([]types.Type, len(ts))
 	for i, t := range ts {
-		result[i] = types.New(types.T(t.Id), t.Width, t.Scale)
+		result[i] = types.NewWithCharset(types.T(t.Id), t.Width, t.Scale, uint8(t.Charset))
 	}
 	return result
 }
@@ -1487,25 +1488,47 @@ func validateRemoteAggregateProtocol(
 	aggs []aggexec.AggFuncExecExpression,
 ) error {
 	for _, agg := range aggs {
-		switch {
-		case agg.GetAggID() == aggexec.AggIdOfPercentileCont ||
-			agg.GetAggID() == aggexec.AggIdOfPercentileDisc:
-			if proc != nil && supportsRemoteOrderedSetAggregates(proc.GetService()) {
-				continue
+		if agg.GetAggID() == aggexec.AggIdOfPercentileCont ||
+			agg.GetAggID() == aggexec.AggIdOfPercentileDisc {
+			if proc == nil || !supportsRemoteOrderedSetAggregates(proc.GetService()) {
+				return moerr.NewNotSupportedNoCtx(
+					"ordered-set percentile remote execution requires MORPC protocol version 15",
+				)
 			}
-			return moerr.NewNotSupportedNoCtx(
-				"ordered-set percentile remote execution requires MORPC protocol version 14",
-			)
-		case agg.GetConfigType() == plan.AggregateConfigType_AGG_CONFIG_GROUP_CONCAT_ORDER:
-			if proc != nil && supportsRemoteOrderedAggregates(proc.GetService()) {
-				continue
+		}
+		if agg.GetConfigType() == plan.AggregateConfigType_AGG_CONFIG_GROUP_CONCAT_ORDER {
+			if proc == nil || !supportsRemoteOrderedAggregates(proc.GetService()) {
+				return moerr.NewNotSupportedNoCtx(
+					"ordered aggregate remote execution requires MORPC protocol version 6",
+				)
 			}
+		}
+		if aggregateUsesCollationAwareTextMinMax(agg) &&
+			(proc == nil || !supportsRemoteTextCollationAggregates(proc.GetService())) {
 			return moerr.NewNotSupportedNoCtx(
-				"ordered aggregate remote execution requires MORPC protocol version 6",
+				"collation-aware text MIN/MAX remote execution requires MORPC protocol version 14",
 			)
 		}
 	}
 	return nil
+}
+
+func aggregateUsesCollationAwareTextMinMax(agg aggexec.AggFuncExecExpression) bool {
+	if agg.GetAggID() != aggexec.AggIdOfMin && agg.GetAggID() != aggexec.AggIdOfMax {
+		return false
+	}
+	args := agg.GetArgExpressions()
+	if len(args) == 0 || args[0] == nil ||
+		(args[0].Typ.Charset != uint32(types.CharsetUTF8) &&
+			args[0].Typ.Charset != uint32(types.CharsetUTF8MB4Bin)) {
+		return false
+	}
+	switch types.T(args[0].Typ.Id) {
+	case types.T_char, types.T_varchar, types.T_text:
+		return true
+	default:
+		return false
+	}
 }
 
 // convert []aggexec.AggFuncExecExpression to []*pipeline.Aggregate

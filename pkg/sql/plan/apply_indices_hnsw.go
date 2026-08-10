@@ -43,18 +43,7 @@ type hnswIndexContext struct {
 
 func buildHnswTableFuncArgs(tblCfgStr string, vecLitArg *plan.Expr) []*plan.Expr {
 	return []*plan.Expr{
-		{
-			Typ: plan.Type{
-				Id: int32(types.T_varchar),
-			},
-			Expr: &plan.Expr_Lit{
-				Lit: &plan.Literal{
-					Value: &plan.Literal_Sval{
-						Sval: tblCfgStr,
-					},
-				},
-			},
-		},
+		makePlan2StringConstExprWithType(tblCfgStr),
 		DeepCopyExpr(vecLitArg),
 	}
 }

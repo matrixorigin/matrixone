@@ -506,6 +506,53 @@ func TestGroupConcatDistinctAndHelpers(t *testing.T) {
 	exec.Free()
 }
 
+func TestGroupConcatPreservesTextCharsetForNestedMin(t *testing.T) {
+	tests := []struct {
+		name        string
+		charset     uint8
+		expectedMin string
+	}{
+		{name: "opaque binary", charset: types.CharsetBinary, expectedMin: "B"},
+		{name: "utf8mb4 bin", charset: types.CharsetUTF8MB4Bin, expectedMin: "B"},
+		{name: "legacy", charset: types.CharsetLegacy, expectedMin: "B"},
+		{name: "general ci", charset: types.CharsetUTF8, expectedMin: "a"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			inputType := types.NewWithCharset(types.T_varchar, 10, 0, test.charset)
+			input := vector.NewVec(inputType)
+			defer input.Free(mp)
+			require.NoError(t, vector.AppendBytes(input, []byte("a"), false, mp))
+			require.NoError(t, vector.AppendBytes(input, []byte("B"), false, mp))
+
+			concat, err := MakeAgg(mp, AggIdOfGroupConcat, false, inputType)
+			require.NoError(t, err)
+			defer concat.Free()
+			require.NoError(t, concat.GroupGrow(2))
+			require.NoError(t, concat.BatchFill(0, []uint64{1, 2}, []*vector.Vector{input}))
+			concatenated, err := concat.Flush()
+			require.NoError(t, err)
+			require.Len(t, concatenated, 1)
+			defer concatenated[0].Free(mp)
+			require.Equal(t, types.T_text, concatenated[0].GetType().Oid)
+			require.Equal(t, test.charset, concatenated[0].GetType().Charset)
+
+			minExec, err := MakeAgg(mp, AggIdOfMin, false, *concatenated[0].GetType())
+			require.NoError(t, err)
+			defer minExec.Free()
+			require.NoError(t, minExec.GroupGrow(1))
+			require.NoError(t, minExec.BulkFill(0, concatenated))
+			minimum, err := minExec.Flush()
+			require.NoError(t, err)
+			require.Len(t, minimum, 1)
+			defer minimum[0].Free(mp)
+			require.Equal(t, test.expectedMin, string(minimum[0].GetBytesAt(0)))
+		})
+	}
+}
+
 func TestGroupConcatDistinctMergeError(t *testing.T) {
 	mp := mpool.MustNewZero()
 	info := multiAggInfo{
