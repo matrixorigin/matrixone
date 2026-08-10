@@ -336,6 +336,9 @@ func AlterColumn(
 	if originalCol == nil || originalCol.Hidden {
 		return false, moerr.NewBadFieldError(ctx.GetContext(), spec.ColumnName.ColNameOrigin(), alterPlan.TableDef.Name)
 	}
+	if spec.OptionType == tree.AlterColumnOptionSetVisibility && spec.Visibility == tree.VISIBLE_TYPE_INVISIBLE {
+		return false, moerr.NewNotSupported(ctx.GetContext(), "invisible columns")
+	}
 
 	for i, col := range tableDef.Cols {
 		if strings.EqualFold(col.Name, originalCol.Name) {
