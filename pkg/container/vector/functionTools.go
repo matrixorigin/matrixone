@@ -679,6 +679,18 @@ func (fr *FunctionResult[T]) AppendBytes(val []byte, isnull bool) error {
 	return nil
 }
 
+// AppendMultiBytes appends cnt logical rows backed by one materialized varlena
+// payload. Non-inline descriptors intentionally share the same area range.
+func (fr *FunctionResult[T]) AppendMultiBytes(val []byte, isnull bool, cnt int) error {
+	if !fr.vec.IsConst() {
+		return AppendMultiBytes(fr.vec, val, isnull, cnt, fr.mp)
+	}
+	if isnull {
+		return SetConstNull(fr.vec, cnt, fr.mp)
+	}
+	return SetConstBytes(fr.vec, val, cnt, fr.mp)
+}
+
 func (fr *FunctionResult[T]) AppendByteJson(bj bytejson.ByteJson, isnull bool) error {
 	if !fr.vec.IsConst() {
 		return AppendByteJson(fr.vec, bj, isnull, fr.mp)

@@ -4345,18 +4345,11 @@ func LoadFile(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc 
 		if err != nil {
 			return err
 		}
-		isNull = len(contents) == 0
-		for i := uint64(0); i < uint64(length); i++ {
-			if isNull || selectList.Contains(i) {
-				err = rs.AppendBytes(nil, true)
-			} else {
-				err = rs.AppendBytes(contents, false)
-			}
-			if err != nil {
-				return err
-			}
+		if len(contents) == 0 {
+			rs.SetNullResult(uint64(length))
+			return nil
 		}
-		return nil
+		return appendRepeatedBytesResultWithSelection(rs, contents, length, selectList)
 	}
 
 	for i := uint64(0); i < uint64(length); i++ {
@@ -4452,18 +4445,11 @@ func LoadFileDatalink(ivecs []*vector.Vector, result vector.FunctionResultWrappe
 		if err != nil {
 			return err
 		}
-		isNull = len(contents) == 0
-		for i := uint64(0); i < uint64(length); i++ {
-			if isNull || selectList.Contains(i) {
-				err = rs.AppendBytes(nil, true)
-			} else {
-				err = rs.AppendBytes(contents, false)
-			}
-			if err != nil {
-				return err
-			}
+		if len(contents) == 0 {
+			rs.SetNullResult(uint64(length))
+			return nil
 		}
-		return nil
+		return appendRepeatedBytesResultWithSelection(rs, contents, length, selectList)
 	}
 
 	for i := uint64(0); i < uint64(length); i++ {

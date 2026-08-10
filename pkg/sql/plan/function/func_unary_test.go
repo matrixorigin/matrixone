@@ -3627,8 +3627,10 @@ func TestLoadFileCardinalityAndSelection(t *testing.T) {
 	proc := testutil.NewProc(t)
 	ctx := context.Background()
 	valuePath := filepath.Join(dir, "value")
+	largeValuePath := filepath.Join(dir, "large-value")
 	emptyPath := filepath.Join(dir, "empty")
 	missingPath := filepath.Join(dir, "missing")
+	largeValue := strings.Repeat("v", types.VarlenaInlineSize+17)
 	writeFile := func(filePath string, data []byte) {
 		t.Helper()
 		fs, readPath, err := fileservice.GetForETL(ctx, proc.Base.FileService, filePath)
@@ -3643,6 +3645,7 @@ func TestLoadFileCardinalityAndSelection(t *testing.T) {
 		}))
 	}
 	writeFile(valuePath, []byte("value"))
+	writeFile(largeValuePath, []byte(largeValue))
 	writeFile(emptyPath, nil)
 
 	t.Run("zero rows", func(t *testing.T) {
@@ -3666,6 +3669,17 @@ func TestLoadFileCardinalityAndSelection(t *testing.T) {
 				[]string{emptyPath, emptyPath}, nil),
 			LoadFile, nil)
 		requireLoadFileResult(t, result, []string{"", ""}, []bool{true, true})
+	})
+
+	t.Run("constant non-inline value shares payload", func(t *testing.T) {
+		result := evalLoadFileForTest(t, proc,
+			NewFunctionTestConstInput(types.T_varchar.ToType(),
+				[]string{largeValuePath, largeValuePath, largeValuePath}, nil),
+			LoadFile,
+			&FunctionSelectList{AnyNull: true, SelectList: []bool{true, false, true}})
+		requireLoadFileResult(t, result,
+			[]string{largeValue, "", largeValue}, []bool{false, true, false})
+		require.Len(t, result.GetArea(), len(largeValue))
 	})
 
 	t.Run("row null empty and value", func(t *testing.T) {
@@ -3732,9 +3746,12 @@ func TestLoadFileDatalinkCardinalityAndSelection(t *testing.T) {
 	proc := testutil.NewProc(t)
 	emptyPath := filepath.Join(dir, "empty")
 	valuePath := filepath.Join(dir, "value")
+	largeValuePath := filepath.Join(dir, "large-value")
 	missingPath := filepath.Join(dir, "missing")
+	largeValue := strings.Repeat("d", types.VarlenaInlineSize+17)
 	require.NoError(t, os.WriteFile(emptyPath, nil, 0o600))
 	require.NoError(t, os.WriteFile(valuePath, []byte("value"), 0o600))
+	require.NoError(t, os.WriteFile(largeValuePath, []byte(largeValue), 0o600))
 
 	t.Run("zero rows", func(t *testing.T) {
 		result := evalLoadFileForTest(t, proc,
@@ -3770,6 +3787,18 @@ func TestLoadFileDatalinkCardinalityAndSelection(t *testing.T) {
 				[]string{"file://" + valuePath, "file://" + valuePath}, nil),
 			LoadFileDatalink, nil)
 		requireLoadFileResult(t, result, []string{"value", "value"}, []bool{false, false})
+	})
+
+	t.Run("constant non-inline value shares payload", func(t *testing.T) {
+		datalink := "file://" + largeValuePath
+		result := evalLoadFileForTest(t, proc,
+			NewFunctionTestConstInput(types.T_datalink.ToType(),
+				[]string{datalink, datalink, datalink}, nil),
+			LoadFileDatalink,
+			&FunctionSelectList{AnyNull: true, SelectList: []bool{true, false, true}})
+		requireLoadFileResult(t, result,
+			[]string{largeValue, "", largeValue}, []bool{false, true, false})
+		require.Len(t, result.GetArea(), len(largeValue))
 	})
 
 	t.Run("constant null skips IO", func(t *testing.T) {

@@ -16,6 +16,7 @@ package function
 
 import (
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -124,6 +125,149 @@ func TestBinaryStrFixedToStrMixedNullPreservesRowPositions(t *testing.T) {
 
 			succeed, info := testCase.Run()
 			require.True(t, succeed, info)
+		})
+	}
+}
+
+func TestVarlenaConstResultsShareNonInlinePayload(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	payload := strings.Repeat("x", types.VarlenaInlineSize+17)
+	constString := NewFunctionTestConstInput(
+		types.T_varchar.ToType(), []string{"input", "input", "input"}, nil)
+	constFixed := NewFunctionTestConstInput(
+		types.T_int64.ToType(), []int64{1, 1, 1}, nil)
+
+	tests := []struct {
+		name   string
+		inputs []FunctionTestInput
+		fn     fEvalFn
+	}{
+		{
+			name:   "binary string fixed to string",
+			inputs: []FunctionTestInput{constString, constFixed},
+			fn: func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+				return opBinaryStrFixedToStrWithErrorCheck[int64](parameters, result, proc, length,
+					func(string, int64) (string, error) { return payload, nil }, selectList)
+			},
+		},
+		{
+			name:   "binary bytes to bytes",
+			inputs: []FunctionTestInput{constString, constString},
+			fn: func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+				return opBinaryBytesBytesToBytesWithErrorCheck(parameters, result, proc, length,
+					func([]byte, []byte) ([]byte, error) { return []byte(payload), nil }, selectList)
+			},
+		},
+		{
+			name:   "unary bytes to bytes",
+			inputs: []FunctionTestInput{constString},
+			fn: func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+				return opUnaryBytesToBytes(parameters, result, proc, length,
+					func([]byte) []byte { return []byte(payload) }, selectList)
+			},
+		},
+		{
+			name:   "unary bytes to string",
+			inputs: []FunctionTestInput{constString},
+			fn: func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+				return opUnaryBytesToStr(parameters, result, proc, length,
+					func([]byte) string { return payload }, selectList)
+			},
+		},
+		{
+			name:   "unary string to string",
+			inputs: []FunctionTestInput{constString},
+			fn: func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+				return opUnaryStrToStr(parameters, result, proc, length,
+					func(string) string { return payload }, selectList)
+			},
+		},
+		{
+			name:   "unary fixed to string",
+			inputs: []FunctionTestInput{constFixed},
+			fn: func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+				return opUnaryFixedToStr[int64](parameters, result, proc, length,
+					func(int64) string { return payload }, selectList)
+			},
+		},
+		{
+			name:   "unary fixed to string with null on error",
+			inputs: []FunctionTestInput{constFixed},
+			fn: func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+				return opUnaryFixedToStrWithNullOnError[int64](parameters, result, proc, length,
+					func(int64) (string, error) { return payload, nil }, selectList)
+			},
+		},
+		{
+			name:   "unary fixed to string with error",
+			inputs: []FunctionTestInput{constFixed},
+			fn: func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+				return opUnaryFixedToStrWithErrorCheck[int64](parameters, result, proc, length,
+					func(int64) (string, error) { return payload, nil }, selectList)
+			},
+		},
+		{
+			name:   "unary string to bytes with error",
+			inputs: []FunctionTestInput{constString},
+			fn: func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+				return opUnaryStrToBytesWithErrorCheck(parameters, result, proc, length,
+					func(string) ([]byte, error) { return []byte(payload), nil }, selectList)
+			},
+		},
+		{
+			name:   "unary bytes to bytes with error",
+			inputs: []FunctionTestInput{constString},
+			fn: func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+				return opUnaryBytesToBytesWithErrorCheck(parameters, result, proc, length,
+					func([]byte) ([]byte, error) { return []byte(payload), nil }, selectList)
+			},
+		},
+		{
+			name:   "unary bytes to bytes with null on error",
+			inputs: []FunctionTestInput{constString},
+			fn: func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+				return opUnaryBytesToBytesWithNullOnError(parameters, result, proc, length,
+					func([]byte) ([]byte, error) { return []byte(payload), nil }, selectList)
+			},
+		},
+		{
+			name:   "unary bytes to string with error",
+			inputs: []FunctionTestInput{constString},
+			fn: func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+				return opUnaryBytesToStrWithErrorCheck(parameters, result, proc, length,
+					func([]byte) (string, error) { return payload, nil }, selectList)
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			testCase := NewFunctionTestCase(
+				proc,
+				test.inputs,
+				NewFunctionTestResult(types.T_varchar.ToType(), false, nil, nil),
+				test.fn,
+			)
+			require.NoError(t, testCase.result.PreExtendAndReset(testCase.fnLength))
+			require.NoError(t, test.fn(
+				testCase.parameters,
+				testCase.result,
+				testCase.proc,
+				testCase.fnLength,
+				&FunctionSelectList{AnyNull: true, SelectList: []bool{true, false, true}},
+			))
+
+			result := testCase.result.GetResultVector()
+			require.Equal(t, 3, result.Length())
+			require.Len(t, result.GetArea(), len(payload))
+			parameter := vector.GenerateFunctionStrParameter(result)
+			for row, wantNull := range []bool{false, true, false} {
+				value, isNull := parameter.GetStrValue(uint64(row))
+				require.Equalf(t, wantNull, isNull, "row %d null state", row)
+				if !wantNull {
+					require.Equal(t, payload, string(value))
+				}
+			}
 		})
 	}
 }
@@ -547,6 +691,42 @@ func TestMoTupleExprMixedNullPreservesRowPositions(t *testing.T) {
 		require.Equalf(t, wantNull, isNull, "row %d null state", row)
 		if !isNull {
 			require.Equal(t, "()", string(value))
+		}
+	}
+}
+
+func TestMoTupleExprConstNonInlineResultSharesPayload(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	payload := strings.Repeat("t", types.VarlenaInlineSize+17)
+	packer := types.NewPacker()
+	defer packer.Close()
+	packer.EncodeStringType([]byte(payload))
+	encoded := string(packer.GetBuf())
+	testCase := NewFunctionTestCase(
+		proc,
+		[]FunctionTestInput{NewFunctionTestConstInput(
+			types.T_varchar.ToType(), []string{encoded, encoded, encoded}, nil)},
+		NewFunctionTestResult(types.T_varchar.ToType(), false, nil, nil),
+		MoTupleExpr,
+	)
+	require.NoError(t, testCase.result.PreExtendAndReset(testCase.fnLength))
+	require.NoError(t, MoTupleExpr(
+		testCase.parameters,
+		testCase.result,
+		proc,
+		testCase.fnLength,
+		&FunctionSelectList{AnyNull: true, SelectList: []bool{true, false, true}},
+	))
+
+	result := testCase.GetResultVectorDirectly()
+	require.Equal(t, 3, result.Length())
+	require.Len(t, result.GetArea(), len(payload))
+	parameter := vector.GenerateFunctionStrParameter(result)
+	for row, wantNull := range []bool{false, true, false} {
+		value, isNull := parameter.GetStrValue(uint64(row))
+		require.Equalf(t, wantNull, isNull, "row %d null state", row)
+		if !wantNull {
+			require.Equal(t, payload, string(value))
 		}
 	}
 }

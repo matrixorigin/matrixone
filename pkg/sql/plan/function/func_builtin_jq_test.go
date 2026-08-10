@@ -15,6 +15,8 @@
 package function
 
 import (
+	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -83,6 +85,23 @@ func TestJqConstResultPreservesCardinalityMaskAndReuse(t *testing.T) {
 	resultBatch.SetRowCount(3)
 	require.NoError(t, resultBatch.Shuffle([]int64{2, 1, 0}, proc.Mp()))
 	require.Equal(t, 3, resultBatch.RowCount())
+}
+
+func TestJqConstNonInlineResultSharesPayload(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	op := newOpBuiltInJq()
+	payload := strings.Repeat("j", types.VarlenaInlineSize+17)
+	jsonPayload := strconv.Quote(payload)
+	result, err := evalJqForTest(t, proc, op, []FunctionTestInput{
+		NewFunctionTestConstInput(
+			types.T_varchar.ToType(), []string{jsonPayload, jsonPayload, jsonPayload}, nil),
+		NewFunctionTestConstInput(
+			types.T_varchar.ToType(), []string{".", ".", "."}, nil),
+	}, &FunctionSelectList{AnyNull: true, SelectList: []bool{true, false, true}}, false)
+	require.NoError(t, err)
+	requireJqResult(t, result,
+		[]string{jsonPayload, "", jsonPayload}, []bool{false, true, false})
+	require.Len(t, result.GetArea(), len(jsonPayload))
 }
 
 func evalJqForTest(

@@ -40,6 +40,40 @@ var _ = opBinaryFixedStrToFixedWithErrorCheck[bool, bool]
 var _ = opNoneParamToBytesWithErrorCheck
 var _ = opBinaryStrFixedToStrWithErrorCheck[bool]
 
+func appendRepeatedBytesResult(
+	rs *vector.FunctionResult[types.Varlena],
+	value []byte,
+	length int,
+) error {
+	if length == 0 {
+		return nil
+	}
+	return rs.AppendMultiBytes(value, false, length)
+}
+
+func appendRepeatedBytesResultWithSelection(
+	rs *vector.FunctionResult[types.Varlena],
+	value []byte,
+	length int,
+	selectList *FunctionSelectList,
+) error {
+	if selectList.IgnoreAllRow() {
+		rs.SetNullResult(uint64(length))
+		return nil
+	}
+	if err := appendRepeatedBytesResult(rs, value, length); err != nil {
+		return err
+	}
+	if !selectList.ShouldEvalAllRow() {
+		for row := uint64(0); row < uint64(length); row++ {
+			if selectList.Contains(row) {
+				rs.AddNullAt(row)
+			}
+		}
+	}
+	return nil
+}
+
 // I hope it can generate all functions according to some easy parameters.
 // not yet ok. and may change soon. plz use it carefully if you really need it.
 func generalFunctionTemplateFactor[T1 templateTp1, T2 templateTr1](
@@ -1079,11 +1113,9 @@ func opBinaryStrFixedToStrWithErrorCheck[
 			if err != nil {
 				return err
 			}
-			rowCount := uint64(length)
-			for i := uint64(0); i < rowCount; i++ {
-				if err = rs.AppendMustBytesValue(functionUtil.QuickStrToBytes(r)); err != nil {
-					return err
-				}
+			if err = appendRepeatedBytesResult(
+				rs, functionUtil.QuickStrToBytes(r), length); err != nil {
+				return err
 			}
 		}
 		return nil
@@ -2139,11 +2171,8 @@ func opBinaryBytesBytesToBytesWithErrorCheck(
 			if err != nil {
 				return err
 			}
-			rowCount := uint64(length)
-			for i := uint64(0); i < rowCount; i++ {
-				if err = rs.AppendMustBytesValue(r); err != nil {
-					return err
-				}
+			if err = appendRepeatedBytesResult(rs, r, length); err != nil {
+				return err
 			}
 		}
 		return nil
@@ -2811,12 +2840,8 @@ func opUnaryBytesToBytes(
 			rs.SetNullResult(uint64(length))
 		} else {
 			r := resultFn(v1)
-
-			rowCount := uint64(length)
-			for i := uint64(0); i < rowCount; i++ {
-				if err := rs.AppendMustBytesValue(r); err != nil {
-					return err
-				}
+			if err := appendRepeatedBytesResult(rs, r, length); err != nil {
+				return err
 			}
 		}
 		return nil
@@ -2885,12 +2910,9 @@ func opUnaryBytesToStr(
 			rs.SetNullResult(uint64(length))
 		} else {
 			r := resultFn(v1)
-
-			rowCount := uint64(length)
-			for i := uint64(0); i < rowCount; i++ {
-				if err := rs.AppendMustBytesValue(functionUtil.QuickStrToBytes(r)); err != nil {
-					return err
-				}
+			if err := appendRepeatedBytesResult(
+				rs, functionUtil.QuickStrToBytes(r), length); err != nil {
+				return err
 			}
 		}
 		return nil
@@ -2959,12 +2981,9 @@ func opUnaryStrToStr(
 			rs.SetNullResult(uint64(length))
 		} else {
 			r := resultFn(functionUtil.QuickBytesToStr(v1))
-
-			rowCount := uint64(length)
-			for i := uint64(0); i < rowCount; i++ {
-				if err := rs.AppendMustBytesValue(functionUtil.QuickStrToBytes(r)); err != nil {
-					return err
-				}
+			if err := appendRepeatedBytesResult(
+				rs, functionUtil.QuickStrToBytes(r), length); err != nil {
+				return err
 			}
 		}
 		return nil
@@ -3034,12 +3053,8 @@ func opUnaryFixedToStr[
 		} else {
 			rb := resultFn(v1)
 			r := functionUtil.QuickStrToBytes(rb)
-
-			rowCount := uint64(length)
-			for i := uint64(0); i < rowCount; i++ {
-				if err := rs.AppendMustBytesValue(r); err != nil {
-					return err
-				}
+			if err := appendRepeatedBytesResult(rs, r, length); err != nil {
+				return err
 			}
 		}
 		return nil
@@ -3085,36 +3100,31 @@ func opUnaryFixedToStrWithNullOnError[
 	rs := vector.MustFunctionResult[types.Varlena](result)
 	p1 := vector.OptGetParamFromWrapper[T](rs, 0, parameters[0])
 
-	var constValue []byte
-	constNull := false
 	if parameters[0].IsConst() {
+		if length == 0 {
+			return nil
+		}
+		if selectList.IgnoreAllRow() {
+			rs.SetNullResult(uint64(length))
+			return nil
+		}
 		v, null := p1.GetValue(0)
 		if null {
-			constNull = true
-		} else {
-			r, err := resultFn(v)
-			if err != nil {
-				constNull = true
-			} else {
-				constValue = functionUtil.QuickStrToBytes(r)
-			}
+			rs.SetNullResult(uint64(length))
+			return nil
 		}
+		r, err := resultFn(v)
+		if err != nil {
+			rs.SetNullResult(uint64(length))
+			return nil
+		}
+		return appendRepeatedBytesResultWithSelection(
+			rs, functionUtil.QuickStrToBytes(r), length, selectList)
 	}
 
 	for i := uint64(0); i < uint64(length); i++ {
 		if selectList != nil && (selectList.IgnoreAllRow() || selectList.Contains(i)) {
 			if err := rs.AppendMustNullForBytesResult(); err != nil {
-				return err
-			}
-			continue
-		}
-
-		if parameters[0].IsConst() {
-			if constNull {
-				if err := rs.AppendMustNullForBytesResult(); err != nil {
-					return err
-				}
-			} else if err := rs.AppendMustBytesValue(constValue); err != nil {
 				return err
 			}
 			continue
@@ -3177,12 +3187,8 @@ func opUnaryFixedToStrWithErrorCheck[
 				return err
 			}
 			r := functionUtil.QuickStrToBytes(rb)
-
-			rowCount := uint64(length)
-			for i := uint64(0); i < rowCount; i++ {
-				if err = rs.AppendMustBytesValue(r); err != nil {
-					return err
-				}
+			if err = appendRepeatedBytesResult(rs, r, length); err != nil {
+				return err
 			}
 		}
 		return nil
@@ -3263,11 +3269,8 @@ func opUnaryStrToBytesWithErrorCheck(
 				return err
 			}
 
-			rowCount := uint64(length)
-			for i := uint64(0); i < rowCount; i++ {
-				if err = rs.AppendMustBytesValue(r); err != nil {
-					return err
-				}
+			if err = appendRepeatedBytesResult(rs, r, length); err != nil {
+				return err
 			}
 		}
 		return nil
@@ -3346,11 +3349,8 @@ func opUnaryBytesToBytesWithErrorCheck(
 				return err
 			}
 
-			rowCount := uint64(length)
-			for i := uint64(0); i < rowCount; i++ {
-				if err = rs.AppendMustBytesValue(r); err != nil {
-					return err
-				}
+			if err = appendRepeatedBytesResult(rs, r, length); err != nil {
+				return err
 			}
 		}
 		return nil
@@ -3428,11 +3428,8 @@ func opUnaryBytesToBytesWithNullOnError(
 			if err != nil {
 				rs.SetNullResult(uint64(length))
 			} else {
-				rowCount := uint64(length)
-				for i := uint64(0); i < rowCount; i++ {
-					if err = rs.AppendMustBytesValue(r); err != nil {
-						return err
-					}
+				if err = appendRepeatedBytesResult(rs, r, length); err != nil {
+					return err
 				}
 			}
 		}
@@ -3518,11 +3515,8 @@ func opUnaryBytesToStrWithErrorCheck(
 				return err
 			}
 			r := functionUtil.QuickStrToBytes(rb)
-			rowCount := uint64(length)
-			for i := uint64(0); i < rowCount; i++ {
-				if err = rs.AppendMustBytesValue(r); err != nil {
-					return err
-				}
+			if err = appendRepeatedBytesResult(rs, r, length); err != nil {
+				return err
 			}
 		}
 		return nil

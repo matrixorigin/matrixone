@@ -229,18 +229,7 @@ func (op *opBuiltInJq) appendJqConstResult(
 	selectList *FunctionSelectList,
 ) (err error) {
 	defer op.enc.done()
-	value := op.enc.bytes()
-	for i := uint64(0); i < uint64(length); i++ {
-		if selectList.Contains(i) {
-			err = rs.AppendBytes(nil, true)
-		} else {
-			err = rs.AppendBytes(value, false)
-		}
-		if err != nil {
-			return err
-		}
-	}
-	return nil
+	return appendRepeatedBytesResultWithSelection(rs, op.enc.bytes(), length, selectList)
 }
 
 // run jq.  The result is stored in the encoder bytes().  If succeeded, caller
