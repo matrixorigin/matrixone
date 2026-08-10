@@ -878,6 +878,20 @@ func (builder *QueryBuilder) tryApplyCoveredFulltext2(nodeID int32, projNode, so
 
 	// Keep the score-DESC SORT above the TVF (heap tie order is unspecified, so the Sort
 	// stays). No JOIN: the SORT/PROJECT reads directly from the TVF.
+	//
+	// On an EXPLICIT ORDER BY (sortNode != nil) we simply repoint its child at the TVF and do
+	// NOT remap sortNode.OrderBy here — that is correct, not a bug. A review flagged that the
+	// sort's OrderBy would dangle on the removed base scan; it does not, because:
+	//   - EVERY ORDER BY sort-key rides in projNode.ProjectList — the binder projects each as a
+	//     hidden INTERNAL column (that is how the SORT gets its key) EVEN when it is not in the
+	//     user's SELECT — so guard (d) above already vets sort-keys identically to selected cols:
+	//     an uncovered ORDER BY column/expr (incl. one not in SELECT, e.g. `ORDER BY b` / `b+1`)
+	//     is a non-pk/non-include base ref that makes the whole rewrite decline to the 2-JOIN
+	//     path (verified live: such an ORDER BY produces the JOIN plan, not this one);
+	//   - a COVERED ORDER BY column (score / pk / include) is remapped to its TVF output by the
+	//     projection remap below, and the final remapAllColRefs pass binds the SORT's OrderBy to
+	//     those TVF outputs. Verified live: ORDER BY <include col> — even unprojected, even with
+	//     base/TVF ordinals differing — returns correct rows on this 0-JOIN plan.
 	scoreOrderBy := []*OrderBySpec{{
 		Expr: &Expr{
 			Typ:  ftnode.TableDef.Cols[1].Typ,

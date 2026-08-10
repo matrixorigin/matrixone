@@ -18,95 +18,133 @@ insert into docs values
 (6, 'a clever silver fox',  null,       60, 'tech'),
 (7, 'the lazy brown dog',   'archived', null, 'home');
 create fulltext2 index ftidx on docs (body) include (status, prio);
-select id, prio from docs where match(body) against('fox') and prio > 5 order by id;
+explain select id, status, prio from docs where match(body) against('fox');
+➤ TP QUERY PLAN[12,0,0]  𝄀
+Project  𝄀
+  ->  Sort  𝄀
+        Sort Key: mo_fulltext_alias_0.__mo_ft_score DESC  𝄀
+        ->  Table Function on fulltext2_search
+select id, status, prio from docs where match(body) against('silver');
+➤ id[-5,64,0]  ¦  status[12,20,0]  ¦  prio[4,32,0]  𝄀
+6  ¦  null  ¦  60
+select id, prio from docs where match(body) against('fox') and prio > 5 order by match(body) against('fox') desc, id;
 ➤ id[-5,64,0]  ¦  prio[4,32,0]  𝄀
+4  ¦  40  𝄀
 1  ¦  10  𝄀
 2  ¦  20  𝄀
 3  ¦  30  𝄀
-4  ¦  40  𝄀
 6  ¦  60
-select id, status from docs where match(body) against('fox') and prio > 5 order by id;
+select id, status from docs where match(body) against('fox') and prio > 5 order by match(body) against('fox') desc, id;
 ➤ id[-5,64,0]  ¦  status[12,20,0]  𝄀
+4  ¦  active  𝄀
 1  ¦  active  𝄀
 2  ¦  archived  𝄀
 3  ¦  active  𝄀
-4  ¦  active  𝄀
 6  ¦  null
-select id, status, prio from docs where match(body) against('fox') order by id;
+select id, status, prio from docs where match(body) against('fox') order by match(body) against('fox') desc, id;
 ➤ id[-5,64,0]  ¦  status[12,20,0]  ¦  prio[4,32,0]  𝄀
+4  ¦  active  ¦  40  𝄀
 1  ¦  active  ¦  10  𝄀
 2  ¦  archived  ¦  20  𝄀
 3  ¦  active  ¦  30  𝄀
-4  ¦  active  ¦  40  𝄀
 6  ¦  null  ¦  60
-select id, prio, status from docs where match(body) against('fox') order by id;
+select id, prio, status from docs where match(body) against('fox') order by match(body) against('fox') desc, id;
 ➤ id[-5,64,0]  ¦  prio[4,32,0]  ¦  status[12,20,0]  𝄀
+4  ¦  40  ¦  active  𝄀
 1  ¦  10  ¦  active  𝄀
 2  ¦  20  ¦  archived  𝄀
 3  ¦  30  ¦  active  𝄀
-4  ¦  40  ¦  active  𝄀
 6  ¦  60  ¦  null
-select id from docs where match(body) against('fox') order by id;
+select id from docs where match(body) against('fox') order by match(body) against('fox') desc, id;
 ➤ id[-5,64,0]  𝄀
+4  𝄀
 1  𝄀
 2  𝄀
 3  𝄀
-4  𝄀
 6
-select id, prio from docs where match(body) against('fox') and prio > 5 order by id limit 3;
+select id, prio from docs where match(body) against('fox') and prio > 5 order by match(body) against('fox') desc, id limit 3;
 ➤ id[-5,64,0]  ¦  prio[4,32,0]  𝄀
-1  ¦  10  𝄀
-2  ¦  20  𝄀
-3  ¦  30
-select id, prio from docs where match(body) against('fox') and prio = 30 order by id;
-➤ id[-5,64,0]  ¦  prio[4,32,0]  𝄀
-3  ¦  30
-select id, prio from docs where match(body) against('fox') and prio between 15 and 45 order by id;
-➤ id[-5,64,0]  ¦  prio[4,32,0]  𝄀
-2  ¦  20  𝄀
-3  ¦  30  𝄀
-4  ¦  40
-select id, prio from docs where match(body) against('fox') and prio in (10, 40, 60) order by id;
-➤ id[-5,64,0]  ¦  prio[4,32,0]  𝄀
-1  ¦  10  𝄀
 4  ¦  40  𝄀
+1  ¦  10  𝄀
+2  ¦  20
+select id, prio from docs where match(body) against('fox') and prio = 30 order by match(body) against('fox') desc, id;
+➤ id[-5,64,0]  ¦  prio[4,32,0]  𝄀
+3  ¦  30
+select id, prio from docs where match(body) against('fox') and prio between 15 and 45 order by match(body) against('fox') desc, id;
+➤ id[-5,64,0]  ¦  prio[4,32,0]  𝄀
+4  ¦  40  𝄀
+2  ¦  20  𝄀
+3  ¦  30
+select id, prio from docs where match(body) against('fox') and prio in (10, 40, 60) order by match(body) against('fox') desc, id;
+➤ id[-5,64,0]  ¦  prio[4,32,0]  𝄀
+4  ¦  40  𝄀
+1  ¦  10  𝄀
 6  ¦  60
-select id, status from docs where match(body) against('fox') and id in (1, 4, 6) order by id;
+select id, status from docs where match(body) against('fox') and id in (1, 4, 6) order by match(body) against('fox') desc, id;
 ➤ id[-5,64,0]  ¦  status[12,20,0]  𝄀
-1  ¦  active  𝄀
 4  ¦  active  𝄀
+1  ¦  active  𝄀
 6  ¦  null
-select id, status, prio from docs where match(body) against('fox') and (status is null or prio is null) order by id;
+select id, status, prio from docs where match(body) against('fox') and (status is null or prio is null) order by match(body) against('fox') desc, id;
 ➤ id[-5,64,0]  ¦  status[12,20,0]  ¦  prio[4,32,0]  𝄀
 6  ¦  null  ¦  60
 select count(*) from docs where match(body) against('fox') and prio > 25;
 ➤ count(*)[-5,64,0]  𝄀
 3
-select id, status from docs where match(body) against('fox') and status = 'active' order by id;
+select id, status from docs where match(body) against('fox') and status = 'active' order by match(body) against('fox') desc, id;
 ➤ id[-5,64,0]  ¦  status[12,20,0]  𝄀
+4  ¦  active  𝄀
 1  ¦  active  𝄀
-3  ¦  active  𝄀
-4  ¦  active
-select id, status from docs where match(body) against('fox') and status in ('active', 'archived') order by id;
+3  ¦  active
+select id, status from docs where match(body) against('fox') and status in ('active', 'archived') order by match(body) against('fox') desc, id;
 ➤ id[-5,64,0]  ¦  status[12,20,0]  𝄀
+4  ¦  active  𝄀
 1  ¦  active  𝄀
 2  ¦  archived  𝄀
-3  ¦  active  𝄀
-4  ¦  active
-select id, status from docs where match(body) against('fox') and status like 'ar%' order by id;
+3  ¦  active
+select id, status from docs where match(body) against('fox') and status like 'ar%' order by match(body) against('fox') desc, id;
 ➤ id[-5,64,0]  ¦  status[12,20,0]  𝄀
 2  ¦  archived
-select id, status, prio from docs where match(body) against('fox') and status = 'active' and prio > 15 order by id;
+select id, status, prio from docs where match(body) against('fox') and status = 'active' and prio > 15 order by match(body) against('fox') desc, id;
 ➤ id[-5,64,0]  ¦  status[12,20,0]  ¦  prio[4,32,0]  𝄀
-3  ¦  active  ¦  30  𝄀
-4  ¦  active  ¦  40
+4  ¦  active  ¦  40  𝄀
+3  ¦  active  ¦  30
+explain select id from docs where match(body) against('fox') order by status;
+➤ TP QUERY PLAN[12,0,0]  𝄀
+Project  𝄀
+  ->  Sort  𝄀
+        Sort Key: mo_fulltext_alias_0.status INTERNAL  𝄀
+        ->  Sort  𝄀
+              Sort Key: mo_fulltext_alias_0.__mo_ft_score DESC  𝄀
+              ->  Table Function on fulltext2_search
+explain select id, status from docs where match(body) against('fox') order by category;
+➤ TP QUERY PLAN[12,0,0]  𝄀
+Project  𝄀
+  ->  Sort  𝄀
+        Sort Key: docs.category INTERNAL  𝄀
+        ->  Sort  𝄀
+              Sort Key: mo_fulltext_alias_0.__mo_ft_score DESC  𝄀
+              ->  Join  𝄀
+                    Join Type: INNER  𝄀
+                    Join Cond: (docs.id = mo_fulltext_alias_0.__mo_ft_doc_id)  𝄀
+                    Runtime Filter Build: #[-1,0]  𝄀
+                    ->  Table Scan on fulltext2_covered.docs  𝄀
+                          Runtime Filter Probe: docs.id  𝄀
+                    ->  Table Function on fulltext2_search
+select id, status, category from docs where match(body) against('fox') order by category, id;
+➤ id[-5,64,0]  ¦  status[12,20,0]  ¦  category[12,20,0]  𝄀
+2  ¦  archived  ¦  food  𝄀
+1  ¦  active  ¦  tech  𝄀
+3  ¦  active  ¦  tech  𝄀
+4  ¦  active  ¦  tech  𝄀
+6  ¦  null  ¦  tech
 create table cs (id bigint primary key, body text not null, tag varchar(10));
 insert into cs values (1, 'red fox', 'Active'), (2, 'blue fox', 'active'), (3, 'grey fox', 'ACTIVE');
 create fulltext2 index csidx on cs (body) include (tag);
-select id, tag from cs where match(body) against('fox') and tag = 'active' order by id;  -- only id 2
+select id, tag from cs where match(body) against('fox') and tag = 'active' order by match(body) against('fox') desc, id;  -- only id 2
 ➤ id[-5,64,0]  ¦  tag[12,10,0]  𝄀
 2  ¦  active
-select id, tag from cs where match(body) against('fox') and tag like 'Act%' order by id; -- only id 1
+select id, tag from cs where match(body) against('fox') and tag like 'Act%' order by match(body) against('fox') desc, id; -- only id 1
 ➤ id[-5,64,0]  ¦  tag[12,10,0]  𝄀
 1  ¦  Active
 drop table cs;
