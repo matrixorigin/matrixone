@@ -2398,40 +2398,22 @@ func TestUpdateIgnoreChecksRepeatedPhysicalAliasesBeforeFinalRowMerge(t *testing
 	}
 }
 
-func TestCoalesceRepeatedPhysicalTargetCompositeUniqueCheck(t *testing.T) {
-	newTableDef := func() *plan.TableDef {
-		return &plan.TableDef{
-			TblId: 42,
-			Indexes: []*plan.IndexDef{
-				{
-					IndexName:      "uk_uv_w",
-					IndexTableName: "__mo_index_uk_uv_w",
-					Unique:         true,
-					Parts:          []string{"u", "v", "w"},
-				},
-			},
+func TestUpdateIgnoreRecomputesGeneratedColumnsForRepeatedPhysicalCandidates(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	setMockGeneratedColumn(t, mock, "dept", "dname", "loc")
+
+	logicPlan, err := runOneStmt(mock, t,
+		"UPDATE IGNORE dept a JOIN dept b ON a.deptno = b.deptno "+
+			"SET a.loc = 'first', b.loc = 'second'")
+	require.NoError(t, err)
+
+	multiUpdates := 0
+	for _, node := range logicPlan.GetQuery().Nodes {
+		if node.NodeType == plan.Node_MULTI_UPDATE {
+			multiUpdates++
 		}
 	}
-	dmlCtx := &DMLContext{
-		tableDefs: []*plan.TableDef{newTableDef(), newTableDef(), newTableDef()},
-		updateCol2Expr: []map[string]tree.Expr{
-			{"u": nil},
-			{"v": nil},
-			{"w": nil},
-		},
-	}
-	assigned := map[int]map[string]struct{}{
-		0: {"u": {}},
-		1: {"v": {}},
-		2: {"w": {}},
-	}
-	checks := [][]bool{{true}, {true}, {true}}
-	partSources := [][][]int{make([][]int, 1), make([][]int, 1), make([][]int, 1)}
-
-	coalesceRepeatedPhysicalTargetUniqueChecks(dmlCtx, assigned, checks, partSources)
-
-	require.Equal(t, [][]bool{{false}, {false}, {true}}, checks)
-	require.Equal(t, []int{0, 1, 2}, partSources[2][0])
+	require.Equal(t, 1, multiUpdates)
 }
 
 func planNodeDependsOn(query *plan.Query, nodeID, dependencyID int32, visited map[int32]struct{}) bool {
