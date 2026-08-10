@@ -141,3 +141,11 @@ max_uint32
 SELECT INET_NTOA(18446744073709551615) AS max_uint64;  -- Should still be '255.255.255.255' (only lower 32 bits used)
 max_uint64
 255.255.255.255
+DROP TABLE IF EXISTS const_null_order_probe;
+CREATE TABLE const_null_order_probe(a INT);
+INSERT INTO const_null_order_probe VALUES (1), (2);
+SELECT INET_NTOA(NULL) AS empty_const_null FROM const_null_order_probe ORDER BY a;
+empty_const_null
+null
+null
+DROP TABLE const_null_order_probe;
