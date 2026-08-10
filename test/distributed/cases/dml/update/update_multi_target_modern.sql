@@ -82,24 +82,6 @@ SELECT * FROM multi_update_ignore_b ORDER BY id;
 DROP TABLE multi_update_ignore_a;
 DROP TABLE multi_update_ignore_b;
 
-DROP TABLE IF EXISTS multi_update_alias_target;
-CREATE TABLE multi_update_alias_target (
-    id INT PRIMARY KEY,
-    x INT,
-    y INT
-);
-INSERT INTO multi_update_alias_target VALUES (1, 0, 0), (2, 0, 0);
-
--- @pattern
-UPDATE multi_update_alias_target a
-JOIN multi_update_alias_target b ON a.id = b.id
-SET
-    a.x = 1,
-    b.y = 2;
-
-SELECT id, x, y FROM multi_update_alias_target ORDER BY id;
-DROP TABLE multi_update_alias_target;
-
 DROP TABLE IF EXISTS multi_update_partition_target;
 DROP TABLE IF EXISTS multi_update_plain_target;
 CREATE TABLE multi_update_partition_target (
@@ -257,6 +239,49 @@ DROP TABLE multi_update_cascade_child;
 DROP TABLE multi_update_cascade_parent;
 DROP TABLE multi_update_cascade_plain;
 DROP TABLE multi_update_cascade_source;
+
+DROP TABLE IF EXISTS multi_update_fk_overlap_child;
+DROP TABLE IF EXISTS multi_update_fk_overlap_parent_a;
+DROP TABLE IF EXISTS multi_update_fk_overlap_parent_b;
+CREATE TABLE multi_update_fk_overlap_parent_a (id INT PRIMARY KEY);
+CREATE TABLE multi_update_fk_overlap_parent_b (id INT PRIMARY KEY);
+CREATE TABLE multi_update_fk_overlap_child (
+    id INT PRIMARY KEY,
+    parent_a_id INT,
+    parent_b_id INT,
+    v INT,
+    FOREIGN KEY (parent_a_id) REFERENCES multi_update_fk_overlap_parent_a(id) ON UPDATE CASCADE,
+    FOREIGN KEY (parent_b_id) REFERENCES multi_update_fk_overlap_parent_b(id) ON UPDATE SET NULL
+);
+INSERT INTO multi_update_fk_overlap_parent_a VALUES (1);
+INSERT INTO multi_update_fk_overlap_parent_b VALUES (1);
+INSERT INTO multi_update_fk_overlap_child VALUES (10, 1, 1, 0);
+
+--error
+UPDATE multi_update_fk_overlap_parent_a p
+JOIN multi_update_fk_overlap_child c ON c.parent_a_id = p.id
+SET p.id = 2, c.v = 5;
+SELECT * FROM multi_update_fk_overlap_parent_a;
+SELECT * FROM multi_update_fk_overlap_child;
+
+--error
+UPDATE multi_update_fk_overlap_parent_b p
+JOIN multi_update_fk_overlap_child c ON c.parent_b_id = p.id
+SET p.id = 2, c.v = 5;
+SELECT * FROM multi_update_fk_overlap_parent_b;
+SELECT * FROM multi_update_fk_overlap_child;
+
+--error
+UPDATE multi_update_fk_overlap_parent_a a
+JOIN multi_update_fk_overlap_parent_b b ON a.id = b.id
+SET a.id = 2, b.id = 2;
+SELECT * FROM multi_update_fk_overlap_parent_a;
+SELECT * FROM multi_update_fk_overlap_parent_b;
+SELECT * FROM multi_update_fk_overlap_child;
+
+DROP TABLE multi_update_fk_overlap_child;
+DROP TABLE multi_update_fk_overlap_parent_a;
+DROP TABLE multi_update_fk_overlap_parent_b;
 
 DROP TABLE IF EXISTS multi_update_fulltext_target;
 DROP TABLE IF EXISTS multi_update_fulltext_source;

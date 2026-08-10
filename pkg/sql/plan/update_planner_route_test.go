@@ -200,6 +200,13 @@ func TestBindUpdateProducesTypedPlannerRoutes(t *testing.T) {
 			wantRoute:  updatePlannerModern,
 			wantReason: updateRouteReasonNone,
 		},
+		{
+			name: "repeated writable aliases preserve legacy route",
+			sql: "UPDATE nation a JOIN nation b ON a.n_nationkey = b.n_nationkey " +
+				"SET a.n_name = 'a', b.n_comment = 'b'",
+			wantRoute:  updatePlannerLegacy,
+			wantReason: updateRouteReasonMultiTarget,
+		},
 	}
 
 	for _, test := range tests {
@@ -232,6 +239,71 @@ func TestBindUpdateProducesTypedPlannerRoutes(t *testing.T) {
 			require.Equal(t, test.wantReason, reason, "bind error: %v", err)
 		})
 	}
+}
+
+func TestBindUpdateRejectsOverlappingForeignKeyMutationTargets(t *testing.T) {
+	bindDirect := func(t *testing.T, mock *MockOptimizer, sql string) error {
+		t.Helper()
+		stmt, err := parsers.ParseOne(
+			mock.CurrentContext().GetContext(), dialect.MYSQL, sql, 1)
+		require.NoError(t, err)
+		defer stmt.Free()
+		builder := NewQueryBuilder(planpb.Query_UPDATE, mock.CurrentContext(), false, true)
+		_, err = builder.bindUpdate(stmt.(*tree.Update), NewBindContext(builder, nil))
+		return err
+	}
+	assertRejected := func(t *testing.T, err error) {
+		t.Helper()
+		require.ErrorContains(t, err, "overlapping update paths for table 'emp'")
+		route, reason, _ := classifyUpdatePlannerError(err)
+		require.Equal(t, updatePlannerRejected, route)
+		require.Equal(t, updateRouteReasonForeignKey, reason)
+	}
+
+	for _, action := range []planpb.ForeignKeyDef_RefAction{
+		planpb.ForeignKeyDef_CASCADE,
+		planpb.ForeignKeyDef_SET_NULL,
+	} {
+		t.Run(action.String()+" overlaps explicit child target", func(t *testing.T) {
+			mock := NewMockOptimizer(true)
+			setMockEmpDeptForeignKeyAction(
+				t, mock, planpb.ForeignKeyDef_RESTRICT, action)
+			err := bindDirect(
+				t,
+				mock,
+				"UPDATE dept d JOIN emp e ON d.deptno = e.deptno "+
+					"SET d.deptno = 2, e.sal = 5",
+			)
+			assertRejected(t, err)
+		})
+	}
+
+	t.Run("two parent targets cascade to one child", func(t *testing.T) {
+		mock := NewMockOptimizer(true)
+		setMockEmpDeptForeignKeyAction(
+			t, mock, planpb.ForeignKeyDef_RESTRICT, planpb.ForeignKeyDef_CASCADE)
+
+		emp := mock.ctxt.tables["emp"]
+		nation := mock.ctxt.tables["nation"]
+		require.NotNil(t, emp)
+		require.NotNil(t, nation)
+		emp.Fkeys = append(emp.Fkeys, &planpb.ForeignKeyDef{
+			Name:        "fk_emp_nation",
+			Cols:        []uint64{emp.Cols[5].ColId},
+			ForeignTbl:  nation.TblId,
+			ForeignCols: []uint64{nation.Cols[0].ColId},
+			OnUpdate:    planpb.ForeignKeyDef_CASCADE,
+		})
+		nation.RefChildTbls = []uint64{emp.TblId}
+
+		err := bindDirect(
+			t,
+			mock,
+			"UPDATE dept d JOIN nation n ON d.deptno = n.n_nationkey "+
+				"SET d.deptno = 2, n.n_nationkey = 3",
+		)
+		assertRejected(t, err)
+	})
 }
 
 func TestBindUpdateForeignKeyRoutingByAffectedColumns(t *testing.T) {

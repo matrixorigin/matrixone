@@ -86,7 +86,10 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 	if err != nil {
 		return 0, err
 	}
-	if err = rejectRepeatedPhysicalUpdateTargets(builder.GetContext(), dmlCtx); err != nil {
+	if err = routeRepeatedPhysicalUpdateTargetsToLegacy(builder.GetContext(), dmlCtx); err != nil {
+		return 0, err
+	}
+	if err = builder.validateDistinctUpdateForeignKeyMutationTargets(bindCtx, dmlCtx); err != nil {
 		return 0, err
 	}
 	targetAliases := make([]string, len(dmlCtx.tableDefs))
@@ -1539,10 +1542,12 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 	return lastNodeID, err
 }
 
-// rejectRepeatedPhysicalUpdateTargets keeps the first-stage multi-target
-// implementation limited to distinct physical tables. Read-only aliases do not
-// count: only aliases with SET assignments are writable targets.
-func rejectRepeatedPhysicalUpdateTargets(ctx context.Context, dmlCtx *DMLContext) error {
+// routeRepeatedPhysicalUpdateTargetsToLegacy keeps the first-stage multi-target
+// implementation limited to distinct physical tables without changing the
+// compatibility behavior of statements that the legacy planner already owns.
+// Read-only aliases do not count: only aliases with SET assignments are
+// writable targets.
+func routeRepeatedPhysicalUpdateTargetsToLegacy(ctx context.Context, dmlCtx *DMLContext) error {
 	seen := make(map[uint64]string)
 	for i, updateCols := range dmlCtx.updateCol2Expr {
 		if len(updateCols) == 0 {
@@ -1550,10 +1555,9 @@ func rejectRepeatedPhysicalUpdateTargets(ctx context.Context, dmlCtx *DMLContext
 		}
 		tableID := dmlCtx.tableDefs[i].TblId
 		if previousAlias, ok := seen[tableID]; ok {
-			return newUpdatePlannerRouteError(
-				updatePlannerRejected,
+			return newLegacyUpdatePlannerRouteError(
 				updateRouteReasonMultiTarget,
-				moerr.NewNotSupportedf(
+				moerr.NewUnsupportedDML(
 					ctx,
 					"updating the same physical table through aliases '%s' and '%s'",
 					previousAlias,
@@ -1583,8 +1587,8 @@ func (builder *QueryBuilder) splitDistinctUpdateTargetBranches(
 	builder.preserveSinkProjection[sourceSinkID] = struct{}{}
 	sourceStep := builder.appendStep(sourceSinkID)
 
-	var branchIDs []int32
-	var branchNodes []*plan.Node
+	branchIDs := make([]int32, 0, len(targetActivePos))
+	branchNodes := make([]*plan.Node, 0, len(targetActivePos))
 	for targetIdx, updateCols := range dmlCtx.updateCol2Expr {
 		if len(updateCols) == 0 {
 			continue

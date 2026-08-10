@@ -2753,20 +2753,19 @@ func TestPartitionedMultiTargetUpdateUsesModernPlan(t *testing.T) {
 	}
 }
 
-func TestRepeatedPhysicalUpdateTargetsAreRejected(t *testing.T) {
+func TestRepeatedPhysicalUpdateTargetsUseLegacyPlanner(t *testing.T) {
 	mock := NewMockOptimizer(true)
-	_, err := runOneStmt(
+	logicPlan, err := runOneStmt(
 		mock,
 		t,
 		"UPDATE nation a JOIN nation b ON a.n_nationkey = b.n_nationkey "+
 			"SET a.n_name = 'a', b.n_comment = 'b'",
 	)
-	require.Error(t, err)
-	require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported))
-	require.Contains(t, err.Error(), "updating the same physical table through aliases 'a' and 'b'")
+	require.NoError(t, err)
+	require.NotNil(t, logicPlan.GetQuery())
 
 	// A sibling alias that is only read from is not a second update target.
-	logicPlan, err := runOneStmt(
+	logicPlan, err = runOneStmt(
 		mock,
 		t,
 		"UPDATE nation a JOIN nation b ON a.n_nationkey = b.n_nationkey "+
