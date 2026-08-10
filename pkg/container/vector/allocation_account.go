@@ -266,7 +266,9 @@ func (v *Vector) hasBackingStorage() bool {
 	return cap(v.data) != 0 ||
 		cap(v.area) != 0 ||
 		cap(v.prepareParamKinds) != 0 ||
-		(v.binaryStringRows != nil && v.binaryStringRows.Size() != 0) ||
+		(v.binaryStringRows != nil &&
+			(v.binaryStringRows.Size() != 0 ||
+				v.binaryStringRows.ExternalStorageCapacity() != 0)) ||
 		v.nsp.GetBitmap().Size() != 0 ||
 		v.gsp.GetBitmap().Size() != 0 ||
 		v.nsp.GetBitmap().ExternalStorageCapacity() != 0 ||

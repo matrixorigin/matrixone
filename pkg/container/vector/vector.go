@@ -943,6 +943,44 @@ func (v *Vector) prepareOrdinaryAppend(rows int, mp *mpool.MPool) error {
 	return nil
 }
 
+func (v *Vector) prepareOrdinaryBinaryStringAppend(rows int, mp *mpool.MPool) error {
+	if rows <= 0 || v.binaryStringRowsActive || !v.binaryString {
+		return nil
+	}
+	switch v.typ.Oid {
+	case types.T_binary, types.T_varbinary, types.T_blob:
+		// Static binary types remain byte strings regardless of append origin.
+		return nil
+	}
+	if v.length == 0 || v.AllNull() {
+		v.resetBinaryString()
+		return nil
+	}
+	if err := v.ensureBinaryStringCapacity(v.length+rows, mp); err != nil {
+		return err
+	}
+	v.binaryStringRows.InitWithSize(int64(v.length + rows))
+	v.binaryStringRows.AddRange(0, uint64(v.length))
+	if !v.nsp.EmptyByFlag() {
+		iterator := v.nsp.GetBitmap().Iterator()
+		for iterator.HasNext() {
+			row := iterator.Next()
+			if row < uint64(v.length) {
+				v.binaryStringRows.Remove(row)
+			}
+		}
+	}
+	v.binaryStringRowsActive = true
+	return nil
+}
+
+func (v *Vector) prepareOrdinaryAppendMetadata(rows int, mp *mpool.MPool) error {
+	if err := v.prepareOrdinaryAppend(rows, mp); err != nil {
+		return err
+	}
+	return v.prepareOrdinaryBinaryStringAppend(rows, mp)
+}
+
 // setLengthAfterExtend publishes a length whose row-parallel capacities were
 // already reserved. It cannot allocate and initializes newly visible ordinary
 // rows with PrepareParamNone.
@@ -1783,6 +1821,11 @@ func (v *Vector) SetIsBinaryStringAt(row int, binaryString bool, pools ...*mpool
 	}
 	if v.IsConst() {
 		row = 0
+		if v.IsNull(0) {
+			return nil
+		}
+		v.setBinaryStringScalar(binaryString)
+		return nil
 	}
 	if row >= v.length || v.IsNull(uint64(row)) {
 		return nil
@@ -4051,11 +4094,13 @@ func (v *Vector) remapPrepareParamKindsAfterShuffle(
 
 // Shuffle use to shrink vectors, sels can be disordered
 func (v *Vector) Shuffle(sels []int64, mp *mpool.MPool) (err error) {
-	if v.typ.IsVarlen() {
-		v.areaDisjoint = false
-	}
 	if v.IsConst() {
 		return nil
+	}
+	if v.binaryStringRowsActive {
+		if err = v.ensureBinaryStringCapacity(len(sels), mp); err != nil {
+			return err
+		}
 	}
 	oldKinds := v.prepareParamKinds
 	var preparedKinds []PrepareParamKind
@@ -4134,6 +4179,9 @@ func (v *Vector) Shuffle(sels []int64, mp *mpool.MPool) (err error) {
 	v.remapPrepareParamKindsAfterShuffle(oldKinds, sels, preparedKinds, preparedOwner)
 	if err = v.remapBinaryStringRows(sels, mp); err != nil {
 		return err
+	}
+	if v.typ.IsVarlen() {
+		v.areaDisjoint = false
 	}
 	return err
 }
@@ -5538,8 +5586,10 @@ func GetConstSetFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector, sel
 		// sidecar's whole row layout.  NULL has no observed source category.
 		if length == 0 || w.IsConstNull() || w.IsNull(uint64(sel)) {
 			v.resetPrepareParamKind()
+			v.resetBinaryString()
 		} else {
 			v.SetPrepareParamKind(w.GetPrepareParamKindAt(int(sel)))
+			v.SetIsBinaryString(w.GetIsBinaryStringAt(int(sel)))
 		}
 		v.gsp.Reset()
 		if grouping && length > 0 {
@@ -6825,10 +6875,8 @@ func AppendByteJsonEncoded(
 	if err := extend(vec, 1, mp); err != nil {
 		return err
 	}
-	if vec.needsPrepareOrdinaryAppend() {
-		if err := vec.prepareOrdinaryAppend(1, mp); err != nil {
-			return err
-		}
+	if err := vec.prepareOrdinaryAppendMetadata(1, mp); err != nil {
+		return err
 	}
 	index := vec.length
 	values := toSliceOfLengthNoTypeCheck[types.Varlena](vec, index+1)
@@ -6946,8 +6994,8 @@ func appendOneFixed[T any](vec *Vector, val T, isNull bool, mp *mpool.MPool) err
 	if err := extendWithBitmaps(vec, 1, mp, isNull, false); err != nil {
 		return err
 	}
-	if !isNull && vec.needsPrepareOrdinaryAppend() {
-		if err := vec.prepareOrdinaryAppend(1, mp); err != nil {
+	if !isNull {
+		if err := vec.prepareOrdinaryAppendMetadata(1, mp); err != nil {
 			return err
 		}
 	}
@@ -6982,10 +7030,8 @@ func appendOneBytes(vec *Vector, val []byte, isNull bool, mp *mpool.MPool) error
 		// treating every null as a varlena descriptor.
 		return appendOneFixed(vec, va, true, mp)
 	} else {
-		if vec.needsPrepareOrdinaryAppend() {
-			if err = vec.prepareOrdinaryAppend(1, mp); err != nil {
-				return err
-			}
+		if err = vec.prepareOrdinaryAppendMetadata(1, mp); err != nil {
+			return err
 		}
 		err = BuildVarlenaFromByteSlice(vec, &va, &val, mp)
 		if err != nil {
@@ -7005,10 +7051,8 @@ func appendOneByteJson(vec *Vector, bj bytejson.ByteJson, isNull bool, mp *mpool
 	if isNull {
 		return appendOneFixed(vec, va, true, mp)
 	} else {
-		if vec.needsPrepareOrdinaryAppend() {
-			if err = vec.prepareOrdinaryAppend(1, mp); err != nil {
-				return err
-			}
+		if err = vec.prepareOrdinaryAppendMetadata(1, mp); err != nil {
+			return err
 		}
 		err = BuildVarlenaFromByteJson(vec, &va, bj, mp)
 		if err != nil {
@@ -7029,10 +7073,8 @@ func appendOneArray[T types.ArrayElement](vec *Vector, val []T, isNull bool, mp 
 	if isNull {
 		return appendOneFixed(vec, va, true, mp)
 	} else {
-		if vec.needsPrepareOrdinaryAppend() {
-			if err = vec.prepareOrdinaryAppend(1, mp); err != nil {
-				return err
-			}
+		if err = vec.prepareOrdinaryAppendMetadata(1, mp); err != nil {
+			return err
 		}
 		err = BuildVarlenaFromArray[T](vec, &va, &val, mp)
 		if err != nil {
@@ -7066,8 +7108,8 @@ func appendMultiFixed[T any](vec *Vector, val T, isNull bool, cnt int, mp *mpool
 	if err := extendWithBitmaps(vec, cnt, mp, isNull, false); err != nil {
 		return err
 	}
-	if !isNull && vec.needsPrepareOrdinaryAppend() {
-		if err := vec.prepareOrdinaryAppend(cnt, mp); err != nil {
+	if !isNull {
+		if err := vec.prepareOrdinaryAppendMetadata(cnt, mp); err != nil {
 			return err
 		}
 	}
@@ -7095,8 +7137,8 @@ func appendMultiBytes(vec *Vector, val []byte, isNull bool, cnt int, mp *mpool.M
 	if err = extendWithBitmaps(vec, cnt, mp, isNull, false); err != nil {
 		return err
 	}
-	if !isNull && vec.needsPrepareOrdinaryAppend() {
-		if err = vec.prepareOrdinaryAppend(cnt, mp); err != nil {
+	if !isNull {
+		if err = vec.prepareOrdinaryAppendMetadata(cnt, mp); err != nil {
 			return err
 		}
 	}
@@ -7131,9 +7173,8 @@ func appendList[T any](vec *Vector, vals []T, isNulls []bool, mp *mpool.MPool) e
 	); err != nil {
 		return err
 	}
-	if vec.needsPrepareOrdinaryAppend() &&
-		(len(isNulls) == 0 || slices.Contains(isNulls, false)) {
-		if err := vec.prepareOrdinaryAppend(len(vals), mp); err != nil {
+	if len(isNulls) == 0 || slices.Contains(isNulls, false) {
+		if err := vec.prepareOrdinaryAppendMetadata(len(vals), mp); err != nil {
 			return err
 		}
 	}
@@ -7163,9 +7204,8 @@ func appendBytesList(vec *Vector, vals [][]byte, isNulls []bool, mp *mpool.MPool
 	); err != nil {
 		return err
 	}
-	if vec.needsPrepareOrdinaryAppend() &&
-		(len(isNulls) == 0 || slices.Contains(isNulls, false)) {
-		if err = vec.prepareOrdinaryAppend(len(vals), mp); err != nil {
+	if len(isNulls) == 0 || slices.Contains(isNulls, false) {
+		if err = vec.prepareOrdinaryAppendMetadata(len(vals), mp); err != nil {
 			return err
 		}
 	}
@@ -7203,9 +7243,8 @@ func appendStringList(vec *Vector, vals []string, isNulls []bool, mp *mpool.MPoo
 	); err != nil {
 		return err
 	}
-	if vec.needsPrepareOrdinaryAppend() &&
-		(len(isNulls) == 0 || slices.Contains(isNulls, false)) {
-		if err = vec.prepareOrdinaryAppend(len(vals), mp); err != nil {
+	if len(isNulls) == 0 || slices.Contains(isNulls, false) {
+		if err = vec.prepareOrdinaryAppendMetadata(len(vals), mp); err != nil {
 			return err
 		}
 	}
@@ -7245,9 +7284,8 @@ func appendArrayList[T types.ArrayElement](vec *Vector, vals [][]T, isNulls []bo
 	); err != nil {
 		return err
 	}
-	if vec.needsPrepareOrdinaryAppend() &&
-		(len(isNulls) == 0 || slices.Contains(isNulls, false)) {
-		if err = vec.prepareOrdinaryAppend(len(vals), mp); err != nil {
+	if len(isNulls) == 0 || slices.Contains(isNulls, false) {
+		if err = vec.prepareOrdinaryAppendMetadata(len(vals), mp); err != nil {
 			return err
 		}
 	}

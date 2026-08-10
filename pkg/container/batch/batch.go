@@ -227,10 +227,7 @@ func (bat *Batch) AppendPrepareParamKindMetadata(w *bytes.Buffer) error {
 			rowLen := int32(vec.Length())
 			ext.Write(types.EncodeInt32(&rowLen))
 			for row := 0; row < vec.Length(); row++ {
-				kind := vector.PrepareParamNone
-				if len(kinds) != 0 {
-					kind = kinds[row]
-				}
+				kind := vec.GetPrepareParamKindAt(row)
 				if kind > vector.PrepareParamBoolean {
 					return moerr.NewInvalidInputNoCtx("invalid prepared parameter metadata kind")
 				}

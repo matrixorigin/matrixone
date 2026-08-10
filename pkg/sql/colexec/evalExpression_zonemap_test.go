@@ -17,6 +17,7 @@ package colexec_test
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -31,6 +32,151 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
+
+func TestEvaluateFilterByZoneMapDatetimeTimestampComparison(t *testing.T) {
+	parseDatetime := func(t *testing.T, value string) types.Datetime {
+		t.Helper()
+		datetime, err := types.ParseDatetime(value, 6)
+		require.NoError(t, err)
+		return datetime
+	}
+	makeExpr := func(t *testing.T, timestamp types.Timestamp, scale int32) *plan.Expr {
+		t.Helper()
+		column := &plan.Expr{
+			Typ: plan.Type{Id: int32(types.T_datetime), Scale: 6},
+			Expr: &plan.Expr_Col{
+				Col: &plan.ColRef{RelPos: 0, ColPos: 0, Name: "request_at"},
+			},
+		}
+		constant := plan2.MakePlan2TimestampConstExprWithType(int64(timestamp))
+		constant.Typ.Scale = scale
+		expr, err := plan2.BindFuncExprImplByPlanExpr(context.Background(), ">", []*plan.Expr{column, constant})
+		require.NoError(t, err)
+		require.Equal(t, int32(types.T_datetime), expr.GetF().Args[0].Typ.Id)
+		require.Equal(t, int32(types.T_timestamp), expr.GetF().Args[1].Typ.Id)
+		return expr
+	}
+
+	t.Run("fixed offset prunes", func(t *testing.T) {
+		proc := testutil.NewProcess(t)
+		defer proc.Free()
+		zone := time.FixedZone("UTC+08", 8*3600)
+		proc.GetSessionInfo().TimeZone = zone
+		threshold := parseDatetime(t, "2026-08-10 12:00:00").ToTimestamp(zone)
+		expr := makeExpr(t, threshold, 6)
+		meta := makeDatetimeBlockMeta(
+			parseDatetime(t, "2026-08-10 10:00:00"),
+			parseDatetime(t, "2026-08-10 11:00:00"),
+		)
+		zms, vecs := makeZoneMapEvalScratch(expr)
+
+		selected := colexec.EvaluateFilterByZoneMap(proc.Ctx, proc, expr, meta, map[int]int{0: 0}, zms, vecs)
+		require.False(t, selected, plan2.FormatExpr(expr, plan2.FormatOption{}))
+	})
+
+	t.Run("ordinary named-zone range prunes", func(t *testing.T) {
+		proc := testutil.NewProcess(t)
+		defer proc.Free()
+		zone, err := time.LoadLocation("America/New_York")
+		require.NoError(t, err)
+		proc.GetSessionInfo().TimeZone = zone
+		threshold := parseDatetime(t, "2024-01-10 12:00:00").ToTimestamp(zone)
+		expr := makeExpr(t, threshold, 6)
+		meta := makeDatetimeBlockMeta(
+			parseDatetime(t, "2024-01-10 10:00:00"),
+			parseDatetime(t, "2024-01-10 11:00:00"),
+		)
+		zms, vecs := makeZoneMapEvalScratch(expr)
+
+		selected := colexec.EvaluateFilterByZoneMap(proc.Ctx, proc, expr, meta, map[int]int{0: 0}, zms, vecs)
+		require.False(t, selected, plan2.FormatExpr(expr, plan2.FormatOption{}))
+	})
+
+	t.Run("DST fold is conservative", func(t *testing.T) {
+		proc := testutil.NewProcess(t)
+		defer proc.Free()
+		zone, err := time.LoadLocation("America/New_York")
+		require.NoError(t, err)
+		proc.GetSessionInfo().TimeZone = zone
+		threshold, err := types.ParseTimestamp(time.UTC, "2024-11-03 06:15:00", 6)
+		require.NoError(t, err)
+		expr := makeExpr(t, threshold, 6)
+		meta := makeDatetimeBlockMeta(
+			parseDatetime(t, "2024-11-03 01:00:00"),
+			parseDatetime(t, "2024-11-03 01:59:59"),
+		)
+		zms, vecs := makeZoneMapEvalScratch(expr)
+
+		selected := colexec.EvaluateFilterByZoneMap(proc.Ctx, proc, expr, meta, map[int]int{0: 0}, zms, vecs)
+		require.True(t, selected, "ambiguous local-time ranges must remain for residual evaluation")
+	})
+
+	t.Run("timestamp scale is applied before pruning", func(t *testing.T) {
+		proc := testutil.NewProcess(t)
+		defer proc.Free()
+		proc.GetSessionInfo().TimeZone = time.UTC
+		value := parseDatetime(t, "2026-08-10 12:00:00.123456")
+		threshold := value.ToTimestamp(time.UTC).TruncateToScale(3)
+		expr := makeExpr(t, threshold, 3)
+		meta := makeDatetimeBlockMeta(value, value)
+		zms, vecs := makeZoneMapEvalScratch(expr)
+
+		selected := colexec.EvaluateFilterByZoneMap(proc.Ctx, proc, expr, meta, map[int]int{0: 0}, zms, vecs)
+		require.False(t, selected, "comparison must retain the prior TIMESTAMP(3) cast precision")
+	})
+
+	t.Run("between prunes", func(t *testing.T) {
+		proc := testutil.NewProcess(t)
+		defer proc.Free()
+		zone := time.FixedZone("UTC+08", 8*3600)
+		proc.GetSessionInfo().TimeZone = zone
+		column := &plan.Expr{
+			Typ: plan.Type{Id: int32(types.T_datetime), Scale: 6},
+			Expr: &plan.Expr_Col{
+				Col: &plan.ColRef{RelPos: 0, ColPos: 0, Name: "request_at"},
+			},
+		}
+		lower := plan2.MakePlan2TimestampConstExprWithType(int64(parseDatetime(t, "2026-08-10 12:00:00").ToTimestamp(zone)))
+		upper := plan2.MakePlan2TimestampConstExprWithType(int64(parseDatetime(t, "2026-08-10 13:00:00").ToTimestamp(zone)))
+		expr, err := plan2.BindFuncExprImplByPlanExpr(proc.Ctx, "between", []*plan.Expr{column, lower, upper})
+		require.NoError(t, err)
+		meta := makeDatetimeBlockMeta(
+			parseDatetime(t, "2026-08-10 10:00:00"),
+			parseDatetime(t, "2026-08-10 11:00:00"),
+		)
+		zms, vecs := makeZoneMapEvalScratch(expr)
+
+		selected := colexec.EvaluateFilterByZoneMap(proc.Ctx, proc, expr, meta, map[int]int{0: 0}, zms, vecs)
+		require.False(t, selected, plan2.FormatExpr(expr, plan2.FormatOption{}))
+	})
+
+	t.Run("between preserves common value scale", func(t *testing.T) {
+		proc := testutil.NewProcess(t)
+		defer proc.Free()
+		proc.GetSessionInfo().TimeZone = time.UTC
+		value := parseDatetime(t, "2026-08-10 12:00:00.123456")
+		column := &plan.Expr{
+			Typ: plan.Type{Id: int32(types.T_datetime), Scale: 6},
+			Expr: &plan.Expr_Col{
+				Col: &plan.ColRef{RelPos: 0, ColPos: 0, Name: "request_at"},
+			},
+		}
+		lower := plan2.MakePlan2TimestampConstExprWithType(int64(value.ToTimestamp(time.UTC).TruncateToScale(3)))
+		lower.Typ.Scale = 3
+		upperValue, err := types.ParseTimestamp(time.UTC, "2026-08-10 12:00:00.123100", 6)
+		require.NoError(t, err)
+		upper := plan2.MakePlan2TimestampConstExprWithType(int64(upperValue))
+		upper.Typ.Scale = 6
+		expr, err := plan2.BindFuncExprImplByPlanExpr(proc.Ctx, "between", []*plan.Expr{column, lower, upper})
+		require.NoError(t, err)
+		zms, vecs := makeZoneMapEvalScratch(expr)
+
+		selected := colexec.EvaluateFilterByZoneMap(
+			proc.Ctx, proc, expr, makeDatetimeBlockMeta(value), map[int]int{0: 0}, zms, vecs,
+		)
+		require.True(t, selected, plan2.FormatExpr(expr, plan2.FormatOption{}))
+	})
+}
 
 func TestEvaluateFilterByZoneMapNullableInListIsConservative(t *testing.T) {
 	proc := testutil.NewProcess(t)
@@ -478,6 +624,19 @@ func makeVarcharBlockMeta(values ...string) objectio.BlockObject {
 	zm := index.NewZM(types.T_varchar, 0)
 	for _, value := range values {
 		index.UpdateZM(zm, []byte(value))
+	}
+	meta.MustGetColumn(0).SetZoneMap(zm)
+	return meta
+}
+
+func makeDatetimeBlockMeta(values ...types.Datetime) objectio.BlockObject {
+	dataMeta := objectio.BuildMetaData(1, 1)
+	meta := dataMeta.GetBlockMeta(0)
+
+	zm := index.NewZM(types.T_datetime, 6)
+	for _, value := range values {
+		encoded := int64(value)
+		index.UpdateZM(zm, types.EncodeInt64(&encoded))
 	}
 	meta.MustGetColumn(0).SetZoneMap(zm)
 	return meta
