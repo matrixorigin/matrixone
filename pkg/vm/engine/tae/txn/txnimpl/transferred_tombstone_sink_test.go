@@ -18,9 +18,12 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	txnpb "github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/stretchr/testify/require"
 )
 
@@ -37,6 +40,8 @@ type stubTransferredTombstoneSinker struct {
 	deletes         int
 	closes          int
 	deleteCtxErr    error
+	deleteDeadline  time.Time
+	deleteHasBound  bool
 	deleteObjectCnt int
 }
 
@@ -57,6 +62,7 @@ func (s *stubTransferredTombstoneSinker) GetResult() ([]objectio.ObjectStats, []
 func (s *stubTransferredTombstoneSinker) DeletePersisted(ctx context.Context) (int, error) {
 	s.deletes++
 	s.deleteCtxErr = ctx.Err()
+	s.deleteDeadline, s.deleteHasBound = ctx.Deadline()
 	return s.deleteObjectCnt, s.deleteErr
 }
 
@@ -84,6 +90,26 @@ func TestTransferredTombstoneSinkPublishesOwnership(t *testing.T) {
 	require.Equal(t, 1, stub.writes)
 	require.Equal(t, 1, stub.syncs)
 	require.Zero(t, stub.deletes, "published objects belong to the transaction")
+	require.Equal(t, 1, stub.closes)
+}
+
+func TestTransferredTombstoneSinkPublishedCloseFailureUsesTxnRollback(t *testing.T) {
+	objectID := objectio.NewObjectid()
+	stats := objectio.NewObjectStatsWithObjectID(&objectID, false, false, true)
+	closeErr := errors.New("close published sink")
+	stub := &stubTransferredTombstoneSinker{
+		stats:    []objectio.ObjectStats{*stats},
+		closeErr: closeErr,
+	}
+	sink := &transferredTombstoneSink{sinker: stub}
+
+	require.NoError(t, sink.write(context.Background(), nil))
+	require.NoError(t, sink.publish(context.Background(), func(...objectio.ObjectStats) {}))
+	err := sink.close(context.Background(), nil)
+
+	require.Same(t, closeErr, err)
+	require.Zero(t, stub.deletes,
+		"published objects must remain owned by transaction rollback")
 	require.Equal(t, 1, stub.closes)
 }
 
@@ -167,12 +193,19 @@ func TestTransferredTombstoneSinkFailsClosedBeforePublication(t *testing.T) {
 			require.Equal(t, 1, testCase.stub.deletes)
 			require.NoError(t, testCase.stub.deleteCtxErr,
 				"cleanup must not inherit operation cancellation")
+			require.True(t, testCase.stub.deleteHasBound,
+				"detached cleanup must have an operation-level deadline")
+			require.WithinDuration(t,
+				time.Now().Add(transferredTombstoneCleanupTimeout),
+				testCase.stub.deleteDeadline,
+				time.Second,
+			)
 			require.Equal(t, 1, testCase.stub.closes)
 		})
 	}
 }
 
-func TestTransferredTombstoneSinkReportsCleanupAndCloseFailures(t *testing.T) {
+func TestTransferredTombstoneSinkPreservesPrimaryError(t *testing.T) {
 	operationErr := errors.New("transfer failed")
 	deleteErr := errors.New("delete unpublished objects")
 	closeErr := errors.New("close sinker")
@@ -185,12 +218,27 @@ func TestTransferredTombstoneSinkReportsCleanupAndCloseFailures(t *testing.T) {
 
 	err := sink.close(context.Background(), operationErr)
 
-	require.ErrorIs(t, err, operationErr)
-	require.ErrorIs(t, err, deleteErr)
-	require.ErrorIs(t, err, closeErr)
-	require.ErrorContains(t, err, "delete 3 unpublished transferred tombstone objects")
+	require.Same(t, operationErr, err,
+		"cleanup failures must not replace or wrap the transaction outcome")
 	require.Equal(t, 1, stub.deletes)
 	require.Equal(t, 1, stub.closes)
+}
+
+func TestTransferredTombstoneSinkPreservesMoErrClassification(t *testing.T) {
+	operationErr := moerr.NewTxnRWConflictNoCtx()
+	stub := &stubTransferredTombstoneSinker{}
+	sink := &transferredTombstoneSink{sinker: stub}
+
+	err := sink.close(context.Background(), operationErr)
+
+	require.Same(t, operationErr, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnRWConflict))
+	encoded := txnpb.WrapError(err, 0)
+	require.Equal(t, uint32(moerr.ErrTxnRWConflict), encoded.Code)
+	require.True(t,
+		moerr.IsMoErrCode(encoded.UnwrapError(), moerr.ErrTxnRWConflict),
+		"TN RPC serialization must retain the retryable conflict class",
+	)
 }
 
 func TestTransferredTombstoneSinkRejectsCloseWithoutPublication(t *testing.T) {
@@ -202,6 +250,7 @@ func TestTransferredTombstoneSinkRejectsCloseWithoutPublication(t *testing.T) {
 
 		require.ErrorContains(t, err, "closed before publication")
 		require.Equal(t, 1, stub.deletes)
+		require.True(t, stub.deleteHasBound)
 		require.Equal(t, 1, stub.closes)
 	})
 

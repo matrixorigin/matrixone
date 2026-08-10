@@ -16,12 +16,20 @@ package txnimpl
 
 import (
 	"context"
-	"errors"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"go.uber.org/zap"
 )
+
+// Transferred tombstones have not crossed the transaction publication
+// boundary yet, so cleanup must outlive request cancellation. It must not,
+// however, make a failed commit worker wait indefinitely for degraded object
+// storage. DeletePersisted passes this bound through to every delete batch.
+const transferredTombstoneCleanupTimeout = time.Minute
 
 // transferredTombstoneSinker is the part of ioutil.Sinker used while a TN
 // transaction rewrites tombstones to the current data-object generation.
@@ -92,21 +100,39 @@ func (s *transferredTombstoneSink) close(ctx context.Context, priorErr error) er
 		}
 
 		// The operation context is commonly cancelled on the error paths for
-		// which cleanup is required. Detach cancellation, while retaining its
-		// values, and let DeletePersisted apply its own bounded delete timeout.
-		cleanupCtx := context.WithoutCancel(ctx)
+		// which cleanup is required. Preserve its values but give cleanup an
+		// independent total bound. DeletePersisted's per-request timeout is
+		// consequently capped by this earlier deadline too.
+		cleanupCtx, cancel := context.WithTimeoutCause(
+			context.WithoutCancel(ctx),
+			transferredTombstoneCleanupTimeout,
+			moerr.CauseCleanUpUselessFiles,
+		)
 		count, cleanupErr := s.sinker.DeletePersisted(cleanupCtx)
+		cancel()
 		if cleanupErr != nil {
-			priorErr = errors.Join(
-				priorErr,
-				moerr.NewInternalErrorf(
-					cleanupCtx,
-					"delete %d unpublished transferred tombstone objects",
-					count,
-				),
-				cleanupErr,
+			logutil.Error(
+				"failed to delete unpublished transferred tombstone objects",
+				zap.Int("object-count", count),
+				zap.NamedError("operation-error", priorErr),
+				zap.NamedError("cleanup-error", cleanupErr),
 			)
 		}
 	}
-	return errors.Join(priorErr, s.sinker.Close())
+
+	closeErr := s.sinker.Close()
+	if priorErr != nil {
+		// The transaction error is the primary outcome. Returning a joined or
+		// wrapped error here would hide its concrete *moerr.Error from the TN
+		// RPC encoder and change retryable conflicts into internal errors.
+		if closeErr != nil {
+			logutil.Error(
+				"failed to close transferred tombstone sink",
+				zap.NamedError("operation-error", priorErr),
+				zap.NamedError("close-error", closeErr),
+			)
+		}
+		return priorErr
+	}
+	return closeErr
 }

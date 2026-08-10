@@ -444,7 +444,7 @@ func (tbl *txnTable) TransferDeletes(
 					tReadTombstone := time.Now()
 					loc := stats.BlockLocation(uint16(i), tbl.tombstoneTable.schema.Extra.BlockMaxRows)
 					vectors, closeFunc, err := ioutil.LoadColumns2(
-						tbl.store.ctx,
+						ctx,
 						[]uint16{0, 1},
 						nil,
 						tbl.store.rt.Fs,
@@ -455,7 +455,6 @@ func (tbl *txnTable) TransferDeletes(
 					)
 					readTombstoneDuration += time.Since(tReadTombstone)
 					if err != nil {
-						closeFunc()
 						return err
 					}
 					err = transferFn(vectors[1], vectors[0])
