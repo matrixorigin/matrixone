@@ -1665,6 +1665,9 @@ func generateAddIndexStatement(fullTableName string, idxName string, idx *indexI
 				strings.Join(cols, ", "))
 		}
 	}
+	if !idx.visible {
+		stmt += " INVISIBLE"
+	}
 	return stmt
 }
 
