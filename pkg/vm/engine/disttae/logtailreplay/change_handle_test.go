@@ -117,6 +117,10 @@ func (a *peakTrackingAllocator) CopyToCacheData(ctx context.Context, data []byte
 	return a.track(a.base.CopyToCacheData(ctx, data), int64(len(data)))
 }
 
+func (a *peakTrackingAllocator) BackingSize(size int) int {
+	return a.base.BackingSize(size)
+}
+
 func (d *peakTrackingAllocation) Slice(length int) fscache.Data {
 	return &peakTrackingAllocation{
 		Data: d.Data.Slice(length), tracker: d.tracker, size: d.size, refs: d.refs,
