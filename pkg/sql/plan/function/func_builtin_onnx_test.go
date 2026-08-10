@@ -282,6 +282,14 @@ func TestOnnxRunSelectList(t *testing.T) {
 	}
 }
 
+func TestOnnxRunZeroRows(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	result := vector.NewFunctionResultWrapper(types.T_json.ToType(), proc.Mp())
+	require.NoError(t, result.PreExtendAndReset(0))
+	require.NoError(t, newOpOnnxRun().onnxRun(nil, result, proc, 0, nil))
+	require.Zero(t, result.GetResultVector().Length())
+}
+
 // TestOnnxRunRegistration covers the list_builtIn.go registration: overload
 // lookup, return type, and the newOpWithFree lifecycle closures.
 func TestOnnxRunRegistration(t *testing.T) {
