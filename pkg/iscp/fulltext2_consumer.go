@@ -105,7 +105,10 @@ func RunFulltext2(c *IndexConsumer, ctx context.Context, errch chan error, r Dat
 							}
 							chunkID += fulltext2.FrameChunkCount(seg.FrameLen)
 						}
-						logutil.Infof("[ftv2-sink] db=%s index=%s type=%d events=%d frames=%d chunk_id=%d..%d",
+						// Per-flush-cycle sink summary: Debug, not Info — a continuously-ingesting index
+						// flushes often, so this would flood production logs at Info (see the 46 GB
+						// stdout incident). Available at Debug when diagnosing CDC ingest.
+						logutil.Debugf("[ftv2-sink] db=%s index=%s type=%d events=%d frames=%d chunk_id=%d..%d",
 							w.cfg.DbName, w.cfg.IndexTable, datatype, nevents, len(segs), startChunk, chunkID)
 						if datatype == ISCPDataType_Tail {
 							sqlctx := sqlproc.SqlCtx
@@ -125,7 +128,7 @@ func RunFulltext2(c *IndexConsumer, ctx context.Context, errch chan error, r Dat
 				// block on veccache.VectorIndexCache.Remove).
 				if len(segs) > 0 {
 					veccache.Cache.Remove(w.cfg.IndexTable)
-					logutil.Infof("[ftv2-sink] evicted search cache for index=%s", w.cfg.IndexTable)
+					logutil.Debugf("[ftv2-sink] evicted search cache for index=%s", w.cfg.IndexTable) // per-flush: Debug, not Info
 				}
 				return
 			}

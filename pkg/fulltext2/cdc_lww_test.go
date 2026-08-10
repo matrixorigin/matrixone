@@ -41,15 +41,26 @@ func mkBase(t *testing.T, pkTexts map[int64]string) *Segment {
 	return seg
 }
 
-// buildTailIndexLWW runs c through a TailBuilder at capacity, decodes the spilled
-// frames in Finish order (delete frames first, then inserts — recencies above the
-// base) exactly like LoadTailSegments, and assembles the queryable Index.
+// buildTailIndexLWW runs c through a TailBuilder at capacity, decodes the spilled frames in
+// Finish order (recency = position, above the base) exactly like LoadTailSegments, and assembles
+// the queryable Index. Single-blob convenience over buildTailIndexLWWMulti.
 func buildTailIndexLWW(t *testing.T, base *Segment, c *Cdc, capacity int64) *Index {
+	t.Helper()
+	return buildTailIndexLWWMulti(t, base, capacity, c)
+}
+
+// buildTailIndexLWWMulti runs SEVERAL CDC blobs through ONE TailBuilder — mimicking the real
+// producer, which flushes a new blob on every op change, so an INSERT and a later DELETE of the
+// same pk arrive as SEPARATE AddBatch calls. It then assembles the Index from the Finish-order
+// frames (recency = position), exercising cross-blob last-writer-wins.
+func buildTailIndexLWWMulti(t *testing.T, base *Segment, capacity int64, cdcs ...*Cdc) *Index {
 	t.Helper()
 	tb, err := NewTailBuilder(int32(types.T_int64), capacity, 0, "", wsTokenize)
 	require.NoError(t, err)
 	defer tb.Cleanup()
-	require.NoError(t, tb.AddBatch(c))
+	for _, c := range cdcs {
+		require.NoError(t, tb.AddBatch(c))
+	}
 	segs, err := tb.Finish()
 	require.NoError(t, err)
 
@@ -73,6 +84,44 @@ func buildTailIndexLWW(t *testing.T, base *Segment, c *Cdc, capacity int64) *Ind
 		}
 	}
 	return NewIndex(tails, deletes)
+}
+
+// TestCdcInsertThenDeleteAcrossCdcBlobs is the cross-blob regression: the producer flushes a new
+// CDC blob on each op change, so INSERT(pk) then a later DELETE(pk) reach ONE TailBuilder as TWO
+// AddBatch calls. The later DELETE must win — the covered 0-JOIN path has no source join to mask a
+// resurrected row. (Before the session-wide fix, delete-first framing gave the older insert the
+// higher recency and returned the deleted doc.)
+func TestCdcInsertThenDeleteAcrossCdcBlobs(t *testing.T) {
+	ins := NewCdc(int32(types.T_int64))
+	ins.Insert(int64(1), "ghost", nil)
+	del := NewCdc(int32(types.T_int64))
+	del.Delete(int64(1))
+	idx := buildTailIndexLWWMulti(t, nil, 1000, ins, del) // two blobs, one builder
+	require.Empty(t, queryIDs(t, idx, "ghost"), "the later DELETE must win across CDC blobs")
+}
+
+// TestCdcDeleteThenReinsertAcrossCdcBlobs: DELETE(pk) then a later INSERT(pk) across blobs — the
+// re-insert wins (it removes the pending tombstone), no phantom delete.
+func TestCdcDeleteThenReinsertAcrossCdcBlobs(t *testing.T) {
+	del := NewCdc(int32(types.T_int64))
+	del.Delete(int64(1))
+	ins := NewCdc(int32(types.T_int64))
+	ins.Insert(int64(1), "reborn", nil)
+	idx := buildTailIndexLWWMulti(t, nil, 1000, del, ins)
+	require.Equal(t, []any{int64(1)}, queryIDs(t, idx, "reborn"), "re-insert after delete must be live")
+}
+
+// TestCdcUpdateAcrossCdcBlobs: an UPDATE split across blobs (DELETE(base pk) then INSERT(pk,new))
+// keeps the new version live and the old gone — no lingering tombstone resurrects the delete.
+func TestCdcUpdateAcrossCdcBlobs(t *testing.T) {
+	base := mkBase(t, map[int64]string{1: "oldterm"})
+	del := NewCdc(int32(types.T_int64))
+	del.Delete(int64(1))
+	ins := NewCdc(int32(types.T_int64))
+	ins.Insert(int64(1), "newterm", nil)
+	idx := buildTailIndexLWWMulti(t, base, 1000, del, ins)
+	require.Empty(t, queryIDs(t, idx, "oldterm"), "old version superseded by the update")
+	require.Equal(t, []any{int64(1)}, queryIDs(t, idx, "newterm"), "updated version is live")
 }
 
 func queryIDs(t *testing.T, idx *Index, word string) []any {

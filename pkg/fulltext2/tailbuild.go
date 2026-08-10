@@ -32,25 +32,32 @@ type TailSegment struct {
 	FrameLen int
 }
 
-// TailBuilder streams CDC insert/upsert rows into capacity-capped positional
-// segments, spilling each sealed segment's framed bytes to a temp file the moment
-// it fills — so the sinker's peak memory is ONE open segment's postings, not the
-// whole CDC stream. Deletes are likewise spilled in capacity-capped (pk-only) frames
-// so a long catch-up's tombstones don't accumulate in the heap. It mirrors bm25's
-// TailBuilder (positional Builder here). NOT safe for concurrent use; Cleanup() must
-// be deferred to remove the temp files.
+// TailBuilder streams CDC insert/upsert rows into capacity-capped positional segments and DELETEs
+// into capacity-capped pk-only frames, spilling each sealed frame's bytes to a temp file the moment
+// it fills — so the sinker's peak memory is ONE open segment's postings plus one open delete run,
+// never the whole CDC stream.
+//
+// Frames are sealed, and returned by Finish, in CHRONOLOGICAL order (the order op-runs arrive), so
+// chunk_id — assigned sequentially at persist and used as the segment recency — reflects operation
+// order. This gives last-writer-wins across CDC blobs WITHOUT any unbounded per-session set: a
+// later DELETE frame outranks an earlier INSERT segment of the same pk (delete wins), and a
+// re-INSERT after a DELETE outranks it (re-insert wins). Switching op type seals the currently-open
+// structure first (see AddBatch), which is what preserves that order; the producer flushes a new
+// blob per op change, so this seals at blob granularity, not per event. Mirrors bm25's TailBuilder
+// (positional Builder here). NOT safe for concurrent use; Cleanup() must be deferred to remove the
+// temp files.
 type TailBuilder struct {
-	pkType       int32
-	capacity     int64 // doc cap (max_index_capacity)
-	postingCap   int64 // posting cap (max_postings_capacity); seal on whichever is hit first
-	tokenize     func(string) []WordPos
-	dir          string
-	seq          int
-	cur          *Builder // current open segment (nil until the first insert row)
-	segs         []TailSegment
-	deletes      []DeleteRecord // OPEN delete batch (spilled once it reaches capacity)
-	deleteSegs   []TailSegment  // sealed delete frames, spilled to temp files
-	delSeq       int
+	pkType     int32
+	capacity   int64 // doc cap (max_index_capacity)
+	postingCap int64 // posting cap (max_postings_capacity); seal on whichever is hit first
+	tokenize   func(string) []WordPos
+	dir        string
+	seq        int
+	delSeq     int
+	cur        *Builder       // open INSERT segment (nil between insert runs)
+	delBatch   []DeleteRecord // open DELETE run (sealed on an op switch to insert, at capacity, or at Finish)
+	frames     []TailSegment  // sealed frames (insert segs + delete frames) in chronological (recency) order
+
 	opts         []BuildOpt // carried into each per-segment Builder (e.g. WithPositionFree)
 	includeTypes []int32    // INCLUDE column schema, adopted from the first CDC batch
 }
@@ -85,33 +92,35 @@ func (t *TailBuilder) AddBatch(cdc *Cdc) error {
 		t.includeTypes = cdc.IncludeTypes
 		t.opts = append(append([]BuildOpt(nil), t.opts...), WithIncludeTypes(t.includeTypes))
 	}
-	// Per-pk last-writer-wins collapse WITHIN this flush before routing events. An UPSERT
-	// followed by a later DELETE of the same pk in one CDC batch must resolve to the DELETE;
-	// without collapsing, the upsert lands in an insert segment and the delete in a delete
-	// frame, and delete-first framing then gives the insert the higher recency — resurrecting
-	// the deleted row. That engine-level phantom was masked by the source-table join, but the
-	// covered 0-JOIN path (tryApplyCoveredFulltext2) has no such join, so a covered query could
-	// return the deleted row with stale INCLUDE values. Collapsing keeps UPDATE correct too:
-	// DELETE-then-INSERT resolves to the INSERT, which supersedes the base copy by recency — so
-	// the delete-first framing itself is unchanged (no pk is ever both an insert and a delete).
-	events := collapseCdcLWW(cdc.Events)
-	for i := range events {
-		e := &events[i]
+	// Process events IN ORDER, sealing at each op-type SWITCH so frames are produced — and later
+	// returned by Finish — in chronological order. Recency (chunk_id) then follows operation order
+	// across CDC blobs, giving last-writer-wins: switching to an insert seals the open delete run
+	// first (so a re-insert outranks the prior delete of that pk); switching to a delete seals the
+	// open insert segment first (so the delete outranks the prior insert). The producer flushes a
+	// new blob per op change, so this seals at blob granularity, not per event, and both open
+	// structures stay bounded to one capacity.
+	for i := range cdc.Events {
+		e := &cdc.Events[i]
 		switch e.Op {
 		case cdcInsert, cdcUpsert:
 			words := t.tokenize(e.Text)
-			// An INSERT of empty / zero-token text has nothing to index and no prior
-			// version to shadow, so skip it (matches the base build, which drops empty
-			// docs). An UPSERT of empty / NULL text MUST still emit a doc so it shadows
-			// the old indexed version — SetDoc writes a live 0-term doc for that.
+			// An INSERT of empty / zero-token text has nothing to index and no prior version to
+			// shadow, so skip it (matches the base build, which drops empty docs). An UPSERT of
+			// empty / NULL text MUST still emit a doc so it shadows the old indexed version —
+			// SetDoc writes a live 0-term doc for that.
 			if len(words) == 0 && e.Op == cdcInsert {
 				continue
+			}
+			if len(t.delBatch) > 0 { // op switch delete->insert: seal the delete run first (lower recency)
+				if err := t.sealDeletes(); err != nil {
+					return err
+				}
 			}
 			if t.cur == nil {
 				t.cur = NewBuilder(fmt.Sprintf("cdctail-%d", t.seq), t.pkType, t.opts...)
 			}
-			// REPLACE, not append: a repeated upsert of one pk within this open segment
-			// supersedes its earlier terms AND its INCLUDE values (Add would merge).
+			// REPLACE, not append: a repeated upsert of one pk within this open segment supersedes
+			// its earlier terms AND INCLUDE values (Add would merge).
 			t.cur.SetDoc(e.Pk, words, e.Include)
 			if ReachedSegmentCap(t.cur, t.capacity, t.postingCap) {
 				if err := t.seal(); err != nil {
@@ -119,8 +128,13 @@ func (t *TailBuilder) AddBatch(cdc *Cdc) error {
 				}
 			}
 		case cdcDelete:
-			t.deletes = append(t.deletes, DeleteRecord{Pk: e.Pk})
-			if int64(len(t.deletes)) >= t.capacity {
+			if t.cur != nil { // op switch insert->delete: seal the insert segment first (lower recency)
+				if err := t.seal(); err != nil {
+					return err
+				}
+			}
+			t.delBatch = append(t.delBatch, DeleteRecord{Pk: e.Pk})
+			if int64(len(t.delBatch)) >= t.capacity {
 				if err := t.sealDeletes(); err != nil {
 					return err
 				}
@@ -128,31 +142,6 @@ func (t *TailBuilder) AddBatch(cdc *Cdc) error {
 		}
 	}
 	return nil
-}
-
-// collapseCdcLWW reduces a flush's events to the LAST op per pk (last-writer-wins), preserving
-// each pk's first-seen position for deterministic output. After it, no pk carries both an
-// insert/upsert and a delete, so the delete-first framing can never resurrect a deleted row.
-// (Scope: within one CDC blob — the reported same-iteration case. A pk upserted in one blob and
-// deleted in a LATER blob of the same TailBuilder session, across a segment seal, is not
-// collapsible here since the earlier insert is already spilled; that residual is masked by the
-// same pk-reuse self-heal + eventual MERGE that governs the tail's cross-batch consistency.)
-func collapseCdcLWW(events []CdcEvent) []CdcEvent {
-	if len(events) < 2 {
-		return events
-	}
-	pos := make(map[any]int, len(events))
-	out := make([]CdcEvent, 0, len(events))
-	for _, e := range events {
-		key := builderKey(e.Pk)
-		if j, ok := pos[key]; ok {
-			out[j] = e // last op wins; keep the pk's original slot for deterministic framing
-		} else {
-			pos[key] = len(out)
-			out = append(out, e)
-		}
-	}
-	return out
 }
 
 // seal finalizes the open segment, frames it, and spills the framed bytes to a
@@ -178,39 +167,37 @@ func (t *TailBuilder) seal() error {
 	if err := os.WriteFile(path, framed, 0o600); err != nil {
 		return err
 	}
-	t.segs = append(t.segs, TailSegment{Path: path, FrameLen: len(framed)})
+	t.frames = append(t.frames, TailSegment{Path: path, FrameLen: len(framed)})
 	return nil
 }
 
-// sealDeletes frames the OPEN delete batch and spills it to a temp file the same way
-// seal() spills insert segments, so the in-memory tombstone slice stays bounded to
-// one capacity's worth of pks even over a long CDC catch-up (which appends every
-// delete before Finish). No-op with no pending deletes.
+// sealDeletes frames the OPEN delete run and spills it to a temp file, appending it to the
+// chronological frame list. Called on an op switch to insert, when the run reaches capacity, and
+// at Finish — so tombstones stay bounded to one capacity's worth in the heap (never accumulate
+// for the whole session). No-op when the run is empty.
 func (t *TailBuilder) sealDeletes() error {
-	if len(t.deletes) == 0 {
+	if len(t.delBatch) == 0 {
 		return nil
 	}
-	framed, err := FrameDeletes(t.pkType, t.deletes)
+	framed, err := FrameDeletes(t.pkType, t.delBatch)
 	if err != nil {
 		return err
 	}
-	t.deletes = nil // free the batch; the next delete re-grows a fresh slice
+	t.delBatch = nil // free the run; the next delete re-grows a fresh slice
 	path := filepath.Join(t.dir, fmt.Sprintf("delete-%d.frame", t.delSeq))
 	t.delSeq++
 	if err := os.WriteFile(path, framed, 0o600); err != nil {
 		return err
 	}
-	t.deleteSegs = append(t.deleteSegs, TailSegment{Path: path, FrameLen: len(framed)})
+	t.frames = append(t.frames, TailSegment{Path: path, FrameLen: len(framed)})
 	return nil
 }
 
-// Finish seals the final open insert segment and the final delete batch, then returns
-// ALL spilled frame files in chunk_id order: EVERY delete frame FIRST (lowest
-// chunk_ids), then the insert segments — so a same-batch UPDATE's new insert (a higher
-// chunk_id) supersedes the deleted base copy under Index liveness. Spilling deletes
-// into several frames instead of one is order-equivalent: every tombstone still sorts
-// below every insert. Each is a temp file the caller persists via load_file; chunk_id
-// is assigned at persist. Cleanup must be called afterwards.
+// Finish seals the final open insert segment and delete run (in that order — at most one is open,
+// since an op switch already sealed the other), then returns ALL frames in chronological (recency)
+// order. chunk_id is assigned sequentially at persist, so recency = operation order and the last
+// writer wins across CDC blobs (see AddBatch / the type doc). Each frame is a temp file the caller
+// persists via load_file. Cleanup must be called afterwards.
 func (t *TailBuilder) Finish() ([]TailSegment, error) {
 	if err := t.seal(); err != nil {
 		return nil, err
@@ -218,13 +205,7 @@ func (t *TailBuilder) Finish() ([]TailSegment, error) {
 	if err := t.sealDeletes(); err != nil {
 		return nil, err
 	}
-	if len(t.deleteSegs) == 0 {
-		return t.segs, nil
-	}
-	out := make([]TailSegment, 0, len(t.deleteSegs)+len(t.segs))
-	out = append(out, t.deleteSegs...) // all delete frames first (lowest chunk_ids)
-	out = append(out, t.segs...)
-	return out, nil
+	return t.frames, nil
 }
 
 // Cleanup removes the temp dir and all spilled segment files. Idempotent.
