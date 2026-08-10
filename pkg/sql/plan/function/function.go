@@ -278,8 +278,8 @@ func GetAggFunctionNameByID(overloadID int64) string {
 }
 
 // DeduceNotNullable reports whether a function result is guaranteed to be
-// non-NULL. STRICT only guarantees NULL-input propagation; it cannot prove
-// that a function will not synthesize NULL from non-NULL argument values.
+// non-NULL. STRICT functions normally preserve an all-non-NULL argument
+// guarantee, except for functions that can synthesize NULL from valid values.
 func DeduceNotNullable(overloadID int64, args []*plan.Expr) bool {
 	fid, _ := DecodeOverloadID(overloadID)
 	switch fid {
@@ -319,11 +319,20 @@ func DeduceNotNullable(overloadID int64, args []*plan.Expr) bool {
 			}
 		}
 		return true
-	case ROW_NUMBER:
-		// Every output row receives an ordinal.
+	// These STRICT functions can synthesize NULL from non-NULL arguments.
+	case DIV, INTEGER_DIV, MOD, JSON_EXTRACT, REGEXP_SUBSTR,
+		INET6_ATON, ELT, UNHEX, MAKEDATE:
+		return false
+	}
+	if ProducesNoNull(overloadID) {
 		return true
 	}
-	return ProducesNoNull(overloadID)
+	for _, arg := range args {
+		if !arg.Typ.NotNullable {
+			return false
+		}
+	}
+	return true
 }
 
 func caseHasTemporalPromotion(args []*plan.Expr) bool {

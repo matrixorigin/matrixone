@@ -661,7 +661,7 @@ func TestProducesNoNullUsesFunctionContract(t *testing.T) {
 	require.False(t, ProducesNoNull(-1))
 }
 
-func TestDeduceNotNullableDoesNotTreatStrictAsNoNull(t *testing.T) {
+func TestDeduceNotNullableKeepsNullSynthesizingFunctionsNullable(t *testing.T) {
 	notNull := &plan.Expr{Typ: plan.Type{NotNullable: true}}
 
 	for _, tt := range []struct {
@@ -689,6 +689,31 @@ func TestDeduceNotNullableDoesNotTreatStrictAsNoNull(t *testing.T) {
 	}
 }
 
+func TestDeduceNotNullablePreservesArgumentDependentContracts(t *testing.T) {
+	notNull := &plan.Expr{Typ: plan.Type{NotNullable: true}}
+	nullable := &plan.Expr{Typ: plan.Type{NotNullable: false}}
+
+	for _, tt := range []struct {
+		name     string
+		fid      int32
+		argCount int
+	}{
+		{name: "equality", fid: EQUAL, argCount: 2},
+		{name: "addition", fid: PLUS, argCount: 2},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			args := make([]*plan.Expr, tt.argCount)
+			for i := range args {
+				args[i] = notNull
+			}
+			require.True(t, DeduceNotNullable(EncodeOverloadID(tt.fid, 0), args))
+
+			args[0] = nullable
+			require.False(t, DeduceNotNullable(EncodeOverloadID(tt.fid, 0), args))
+		})
+	}
+}
+
 func TestDeduceNotNullablePreservesExplicitContracts(t *testing.T) {
 	notNull := &plan.Expr{Typ: plan.Type{NotNullable: true}}
 	nullable := &plan.Expr{Typ: plan.Type{NotNullable: false}}
@@ -698,7 +723,7 @@ func TestDeduceNotNullablePreservesExplicitContracts(t *testing.T) {
 	require.True(t, DeduceNotNullable(EncodeOverloadID(ISNULL, 0), []*plan.Expr{nullable}))
 }
 
-func TestDeduceNotNullableForValueWindowFunctions(t *testing.T) {
+func TestDeduceNotNullableForWindowFunctions(t *testing.T) {
 	notNull := &plan.Expr{Typ: plan.Type{NotNullable: true}}
 	nullable := &plan.Expr{Typ: plan.Type{NotNullable: false}}
 
@@ -717,7 +742,13 @@ func TestDeduceNotNullableForValueWindowFunctions(t *testing.T) {
 		{name: "first value can see empty frame", fid: FIRST_VALUE, args: []*plan.Expr{notNull}},
 		{name: "last value can see empty frame", fid: LAST_VALUE, args: []*plan.Expr{notNull}},
 		{name: "nth value can miss requested row", fid: NTH_VALUE, args: []*plan.Expr{notNull, notNull}},
-		{name: "row number remains non-null", fid: ROW_NUMBER, want: true},
+		{name: "row number is non-null", fid: ROW_NUMBER, want: true},
+		{name: "rank is non-null", fid: RANK, want: true},
+		{name: "dense rank is non-null", fid: DENSE_RANK, want: true},
+		{name: "percent rank is non-null", fid: PERCENT_RANK, want: true},
+		{name: "ntile with non-null bucket count", fid: NTILE, args: []*plan.Expr{notNull}, want: true},
+		{name: "ntile with nullable bucket count", fid: NTILE, args: []*plan.Expr{nullable}},
+		{name: "cume dist is non-null", fid: CUME_DIST, want: true},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			require.Equal(t, tt.want, DeduceNotNullable(EncodeOverloadID(tt.fid, 0), tt.args))

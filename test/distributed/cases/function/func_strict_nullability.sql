@@ -22,4 +22,7 @@ create table coalesced as select id, coalesce(v / (id - 1), -1) as x from src;
 select column_name, is_nullable from information_schema.columns where table_schema = 'issue26830_strict_nullability' and table_name = 'coalesced' and column_name = 'x';
 select id, x from coalesced order by id;
 
+create table preserved_not_null as select id, v + 1 as plus_value, v = 10 as equals_value, row_number() over (order by id) as row_number_value, rank() over (order by id) as rank_value, dense_rank() over (order by id) as dense_rank_value, percent_rank() over (order by id) as percent_rank_value, ntile(2) over (order by id) as ntile_value, cume_dist() over (order by id) as cume_dist_value from src;
+select column_name, is_nullable from information_schema.columns where table_schema = 'issue26830_strict_nullability' and table_name = 'preserved_not_null' and column_name <> 'id' order by ordinal_position;
+
 drop database issue26830_strict_nullability;
