@@ -874,6 +874,20 @@ func (tcc *TxnCompilerContext) ResolveVariableIsBin(varName string, isSystemVar,
 	return udVar.IsBin, nil
 }
 
+func (tcc *TxnCompilerContext) ResolveVariableBinaryString(varName string, isSystemVar, _ bool) (bool, error) {
+	if _, ok := resolveStoredProcedureVariable(tcc.execCtx.reqCtx, varName); ok {
+		return false, nil
+	}
+	if isSystemVar {
+		return false, nil
+	}
+	udVar, err := tcc.GetSession().GetUserDefinedVar(varName)
+	if err != nil {
+		return false, err
+	}
+	return udVar.BinaryString, nil
+}
+
 func (tcc *TxnCompilerContext) ResolveVariablePrepareParamKind(
 	varName string,
 	isSystemVar, isGlobalVar bool,

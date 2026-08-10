@@ -24,6 +24,12 @@ import (
 
 type anyExec struct {
 	aggExec
+	binaryString bool
+}
+
+func (exec *anyExec) BinaryStringState() bool { return exec.binaryString }
+func (exec *anyExec) SetBinaryStringState(value bool) {
+	exec.binaryString = value
 }
 
 func (exec *anyExec) Fill(groupIndex int, row int, vectors []*vector.Vector) error {
@@ -35,6 +41,7 @@ func (exec *anyExec) BulkFill(groupIndex int, vectors []*vector.Vector) error {
 }
 
 func (exec *anyExec) BatchFill(offset int, groups []uint64, vectors []*vector.Vector) error {
+	exec.binaryString = exec.binaryString || isBinaryStringVector(vectors[0])
 	for i, grp := range groups {
 		if grp == GroupNotMatched {
 			continue
@@ -67,6 +74,7 @@ func (exec *anyExec) Merge(next AggFuncExec, groupIdx1, groupIdx2 int) error {
 
 func (exec *anyExec) BatchMerge(next AggFuncExec, offset int, groups []uint64) error {
 	other := next.(*anyExec)
+	exec.binaryString = exec.binaryString || other.binaryString
 	for i, grp := range groups {
 		if grp == GroupNotMatched {
 			continue
@@ -100,6 +108,7 @@ func (exec *anyExec) Flush() ([]*vector.Vector, error) {
 	vecs := make([]*vector.Vector, len(exec.state))
 	for i := range vecs {
 		vecs[i] = exec.state[i].vecs[0]
+		vecs[i].SetIsBinaryString(exec.binaryString)
 		exec.state[i].vecs[0] = nil
 		exec.state[i].length = 0
 		exec.state[i].capacity = 0

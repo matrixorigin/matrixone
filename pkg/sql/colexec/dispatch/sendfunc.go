@@ -65,6 +65,19 @@ func prepareParamKindRemoteWireEnabled(proc *process.Process) bool {
 	return ok && version >= defines.MORPCVersion12
 }
 
+func binaryStringRemoteWireEnabled(proc *process.Process) bool {
+	if proc == nil {
+		return false
+	}
+	rt := moruntime.ServiceRuntime(proc.GetService())
+	if rt == nil {
+		return false
+	}
+	value, _ := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	version, ok := value.(int64)
+	return ok && version >= defines.MORPCVersion14
+}
+
 // marshalRemoteBatch keeps the stable Batch prefix unchanged and appends the
 // optional transient provenance trailer only after the shared protocol gate is
 // enabled. Older protocol sessions fail before writing rather than silently
@@ -74,6 +87,10 @@ func marshalRemoteBatch(proc *process.Process, bat *batch.Batch, buf *bytes.Buff
 		return nil, moerr.NewInvalidInputNoCtx("cannot marshal a nil remote batch")
 	}
 	wireEnabled := prepareParamKindRemoteWireEnabled(proc)
+	if bat.HasBinaryStringMetadata() && !binaryStringRemoteWireEnabled(proc) {
+		return nil, moerr.NewInvalidStateNoCtx(
+			"binary-string provenance requires MORPCVersion14 for remote dispatch")
+	}
 	if bat.HasPrepareParamKindMetadata() && !wireEnabled {
 		return nil, moerr.NewInvalidStateNoCtx(
 			"prepared parameter provenance requires MORPCVersion12 for remote dispatch")

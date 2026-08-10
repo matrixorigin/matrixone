@@ -2952,6 +2952,42 @@ func buildStringExecutePacket(proto *MysqlProtocolImpl, tp defines.MysqlType, pa
 	return data[:pos]
 }
 
+func TestBinaryProtocolBlobParametersSetBinaryStringMetadata(t *testing.T) {
+	ctx := context.TODO()
+	for _, test := range []struct {
+		name string
+		tp   defines.MysqlType
+	}{
+		{name: "string", tp: defines.MYSQL_TYPE_STRING},
+		{name: "blob", tp: defines.MYSQL_TYPE_BLOB},
+		{name: "long_blob", tp: defines.MYSQL_TYPE_LONG_BLOB},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			proto, proc, prepareStmt := newBinaryPrepareProtocolTestCase(t, "select char_length(?)")
+			defer prepareStmt.clearBinaryParamState(proc)
+
+			require.NoError(t, proto.ParseExecuteData(
+				ctx, proc, prepareStmt,
+				buildStringExecutePacket(proto, test.tp, string([]byte{0xe4, 0xbd, 0xa0})), 0))
+			require.Equal(t, test.tp != defines.MYSQL_TYPE_STRING, prepareStmt.paramsBinaryString[0])
+		})
+	}
+}
+
+func TestBinaryProtocolLongDataBlobSetsBinaryStringMetadata(t *testing.T) {
+	ctx := context.TODO()
+	proto, proc, prepareStmt := newBinaryPrepareProtocolTestCase(t, "select char_length(?)")
+	defer prepareStmt.clearBinaryParamState(proc)
+
+	require.NoError(t, proto.ParseSendLongData(
+		ctx, proc, prepareStmt, []byte{0, 0, 0xe4, 0xbd, 0xa0}, 0))
+	require.NoError(t, proto.ParseExecuteData(
+		ctx, proc, prepareStmt,
+		[]byte{0, 0, 0, 0, 0, 0, 1, byte(defines.MYSQL_TYPE_BLOB), 0}, 0))
+	require.True(t, prepareStmt.paramsBinaryString[0])
+	require.Equal(t, []byte{0xe4, 0xbd, 0xa0}, prepareStmt.params.GetBytesAt(0))
+}
+
 func buildLongLongExecutePacket(value uint64, unsigned bool) []byte {
 	data := make([]byte, 17)
 	copy(data, []byte{0, 0, 0, 0, 0, 0, 1, byte(defines.MYSQL_TYPE_LONGLONG), 0})

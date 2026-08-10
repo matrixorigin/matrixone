@@ -928,18 +928,21 @@ func doSetVar(
 	var err error = nil
 	var ok bool
 	var userVarIsBin bool
+	var userVarBinaryString bool
 	var userVarPrepareParamKind vector.PrepareParamKind
 	type evaluatedAssignment struct {
 		assign                  *tree.VarAssignmentExpr
 		value                   interface{}
 		userVarIsBin            bool
+		userVarBinaryString     bool
 		userVarPrepareParamKind vector.PrepareParamKind
 	}
 	evaluateAssignment := func(assign *tree.VarAssignmentExpr) (evaluatedAssignment, error) {
 		isBin := false
+		binaryString := false
 		prepareParamKind := vector.PrepareParamNone
 		value, evalErr := getExprValueWithPrepareMeta(
-			assign.Value, ses, execCtx, preparedExpression, &prepareParamKind, &isBin)
+			assign.Value, ses, execCtx, preparedExpression, &prepareParamKind, &isBin, &binaryString)
 		if evalErr != nil {
 			return evaluatedAssignment{}, evalErr
 		}
@@ -952,7 +955,8 @@ func doSetVar(
 		return evaluatedAssignment{
 			assign:                  assign,
 			value:                   value,
-			userVarIsBin:            isBin,
+			userVarIsBin:            false,
+			userVarBinaryString:     binaryString,
 			userVarPrepareParamKind: prepareParamKind,
 		}, nil
 	}
@@ -993,7 +997,7 @@ func doSetVar(
 			}
 		} else {
 			err = ses.setUserDefinedVarWithKind(
-				name, value, sql, userVarIsBin, userVarPrepareParamKind)
+				name, value, sql, userVarIsBin, userVarPrepareParamKind, userVarBinaryString)
 			if err != nil {
 				return err
 			}
@@ -1006,6 +1010,7 @@ func doSetVar(
 		name := assign.Name
 		value := item.value
 		userVarIsBin = item.userVarIsBin
+		userVarBinaryString = item.userVarBinaryString
 		userVarPrepareParamKind = item.userVarPrepareParamKind
 
 		//TODO : fix SET NAMES after parser is ready
@@ -4606,6 +4611,7 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 	proc.SetAffectedRows(ses.GetLastAffectedRows())
 	proc.SetResolveVariableFunc(ses.txnCompileCtx.ResolveVariable)
 	proc.SetResolveVariableIsBinFunc(ses.txnCompileCtx.ResolveVariableIsBin)
+	proc.SetResolveVariableBinaryStringFunc(ses.txnCompileCtx.ResolveVariableBinaryString)
 	proc.SetResolveVariablePrepareParamKindFunc(ses.txnCompileCtx.ResolveVariablePrepareParamKind)
 	refreshStatementScopedSessionInfo(ses, proc)
 	// Frontend client SQL — session-bound resolver. Procs constructed

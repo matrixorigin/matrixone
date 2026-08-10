@@ -769,6 +769,9 @@ func (mp *MysqlProtocolImpl) ParseSendLongData(ctx context.Context, proc *proces
 			}
 		}
 	}
+	if len(stmt.paramsBinaryString) != numParams {
+		stmt.paramsBinaryString = make([]bool, numParams)
+	}
 
 	length := len(data) - pos
 	val, _, ok := mp.readCountOfBytes(data, pos, length)
@@ -805,6 +808,9 @@ func (mp *MysqlProtocolImpl) ParseExecuteData(ctx context.Context, proc *process
 				return err
 			}
 		}
+	}
+	if len(stmt.paramsBinaryString) != numParams {
+		stmt.paramsBinaryString = make([]bool, numParams)
 	}
 
 	var flag uint8
@@ -848,6 +854,12 @@ func (mp *MysqlProtocolImpl) ParseExecuteData(ctx context.Context, proc *process
 
 		// get paramters and set value to session variables
 		for i := 0; i < numParams; i++ {
+			if (i<<1)+1 >= len(stmt.ParamTypes) {
+				return moerr.NewInvalidInput(ctx, "mysql protocol error, malformed packet")
+			}
+			tp := stmt.ParamTypes[i<<1]
+			stmt.paramsBinaryString[i] = isBinaryStringParameterType(defines.MysqlType(tp))
+
 			// if params had received via COM_STMT_SEND_LONG_DATA, use them directly(we set the params when deal with COM_STMT_SEND_LONG_DATA).
 			// ref https://dev.mysql.com/doc/internals/en/com-stmt-send-long-data.html
 			if _, ok := stmt.getFromSendLongData[i]; ok {
@@ -862,11 +874,6 @@ func (mp *MysqlProtocolImpl) ParseExecuteData(ctx context.Context, proc *process
 				continue
 			}
 
-			if (i<<1)+1 >= len(stmt.ParamTypes) {
-				return moerr.NewInvalidInput(ctx, "mysql protocol error, malformed packet")
-
-			}
-			tp := stmt.ParamTypes[i<<1]
 			isUnsigned := (stmt.ParamTypes[(i<<1)+1] & 0x80) > 0
 
 			switch defines.MysqlType(tp) {
@@ -1054,6 +1061,18 @@ func (mp *MysqlProtocolImpl) ParseExecuteData(ctx context.Context, proc *process
 	}
 
 	return nil
+}
+
+func isBinaryStringParameterType(tp defines.MysqlType) bool {
+	switch tp {
+	case defines.MYSQL_TYPE_BLOB,
+		defines.MYSQL_TYPE_TINY_BLOB,
+		defines.MYSQL_TYPE_MEDIUM_BLOB,
+		defines.MYSQL_TYPE_LONG_BLOB:
+		return true
+	default:
+		return false
+	}
 }
 
 func (mp *MysqlProtocolImpl) readDate(data []byte, pos int) (int, string) {

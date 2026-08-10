@@ -257,10 +257,11 @@ func buildPartialH0Batch(t *testing.T, proc *process.Process, values []int32) *b
 }
 
 type preparedPartialSpec struct {
-	rows    int
-	kind    vector.PrepareParamKind
-	allNull bool
-	value   string
+	rows         int
+	kind         vector.PrepareParamKind
+	allNull      bool
+	value        string
+	binaryString bool
 }
 
 func buildPreparedMinPartial(
@@ -287,7 +288,9 @@ func buildPreparedPartial(
 		value = "5"
 	}
 	require.NoError(t, vector.AppendBytes(params, []byte(value), spec.allNull, proc.Mp()))
-	proc.SetPrepareParamsWithMeta(params, nil, []vector.PrepareParamKind{spec.kind})
+	params.SetIsBinaryString(spec.binaryString)
+	proc.SetPrepareParamsWithMeta(
+		params, nil, []vector.PrepareParamKind{spec.kind}, []bool{spec.binaryString})
 	defer proc.SetPrepareParams(nil)
 
 	input := batch.NewWithSize(1)
@@ -305,6 +308,32 @@ func buildPreparedPartial(
 	partials := collectBatches(t, partial, proc)
 	require.Len(t, partials, 1)
 	return cloneBatch(t, proc, partials[0])
+}
+
+func TestMergeGroupPartialCarriesBinaryStringState(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	setPrepareParamKindProtocolVersion(t, proc, defines.MORPCVersion14)
+	t.Cleanup(func() {
+		require.Zero(t, proc.Mp().CurrNB())
+		proc.Free()
+	})
+
+	partial := buildPreparedMinPartial(t, proc, preparedPartialSpec{
+		rows: 1, value: "你", binaryString: true,
+	})
+	child := colexec.NewMockOperator().WithBatchs([]*batch.Batch{partial})
+	merge := newMergeGroupOp([]aggexec.AggFuncExecExpression{minPreparedParamAgg()})
+	merge.AppendChild(child)
+	require.NoError(t, merge.Prepare(proc))
+	outputs := collectBatches(t, merge, proc)
+	require.Len(t, outputs, 1)
+	require.True(t, outputs[0].Vecs[0].GetIsBinaryString())
+
+	merge.Free(proc, false, nil)
+	child.Free(proc, false, nil)
+	for _, output := range outputs {
+		output.Clean(proc.Mp())
+	}
 }
 
 func setPrepareParamKindProtocolVersion(t *testing.T, proc *process.Process, version int64) {
@@ -748,10 +777,10 @@ func TestMergeGroupRejectsInvalidPrepareParamKindTrailer(t *testing.T) {
 		{
 			name: "unsupported version",
 			mutate: func(extra []byte, trailerOffset int) []byte {
-				extra[trailerOffset+3] = 3
+				extra[trailerOffset+3] = 4
 				return extra
 			},
-			wantErr: "unsupported aggregate prepared parameter trailer version 3",
+			wantErr: "unsupported aggregate prepared parameter trailer version 4",
 		},
 		{
 			name: "aggregate count mismatch",

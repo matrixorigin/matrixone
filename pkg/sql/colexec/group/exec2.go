@@ -649,6 +649,9 @@ func (group *Group) getNextIntermediateResult(proc *process.Process) (vm.CallRes
 			prepareParamKindSummaries[i].kind, prepareParamKindSummaries[i].seen =
 				accessor.PrepareParamKindSummaryForChunk(curr)
 		}
+		if accessor, ok := ag.(aggexec.BinaryStringStateAccessor); ok && binaryStringWireEnabled(proc) {
+			prepareParamKindSummaries[i].binaryString = accessor.BinaryStringState()
+		}
 	}
 	if group.ctr.prepareParamKindWireV1 {
 		if err := writePrepareParamKindTrailer(proc.Ctx, &buf, group.Aggs,

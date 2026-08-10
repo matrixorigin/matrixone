@@ -494,6 +494,10 @@ func (ctr *container) spillDataToDisk(proc *process.Process, opAnalyzer process.
 						accessor.PrepareParamKindSummaryForSelection(fullFlags)
 					hasPrepareParamKinds = hasPrepareParamKinds || prepareParamKindSummaries[j].seen
 				}
+				if accessor, ok := ag.(aggexec.BinaryStringStateAccessor); ok {
+					prepareParamKindSummaries[j].binaryString = accessor.BinaryStringState()
+					hasPrepareParamKinds = hasPrepareParamKinds || prepareParamKindSummaries[j].binaryString
+				}
 			}
 			if hasPrepareParamKinds {
 				if err := writePrepareParamKindTrailer(proc.Ctx, buf, ctr.aggExprs,
@@ -768,6 +772,7 @@ func (ctr *container) loadSpilledData(proc *process.Process, opAnalyzer process.
 					}
 				}
 			}
+			restoreAggregateBinaryStringStates(ctr.spillAggList, prepareParamKindSummaries)
 		}
 
 		checkMagic, err = types.ReadUint64(bufferedFile)

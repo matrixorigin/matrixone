@@ -1,0 +1,41 @@
+DROP DATABASE IF EXISTS binary_string_semantics;
+CREATE DATABASE binary_string_semantics;
+USE binary_string_semantics;
+
+SET @b = X'e4bda061';
+SELECT HEX(SUBSTRING_INDEX(@b, X'61', 1)), CHAR_LENGTH(SUBSTRING_INDEX(@b, X'61', 1));
+SELECT HEX(MAKE_SET(1, @b)), CHAR_LENGTH(MAKE_SET(1, @b));
+SELECT HEX(EXPORT_SET(1, @b, '', '', 1)), CHAR_LENGTH(EXPORT_SET(1, @b, '', '', 1));
+SELECT HEX(LEAST(@b, @b)), CHAR_LENGTH(LEAST(@b, @b)),
+       HEX(GREATEST(@b, @b)), CHAR_LENGTH(GREATEST(@b, @b));
+SELECT HEX(INSERT(@b, 2, 1, X'78')), CHAR_LENGTH(INSERT(@b, 2, 1, X'78'));
+
+SELECT REGEXP_LIKE(@b, '^....$'), @b REGEXP '^....$', REGEXP_INSTR(@b, '.', 1, 2),
+       HEX(REGEXP_REPLACE(@b, '.', 'x')), CHAR_LENGTH(REGEXP_REPLACE(@b, 'z', 'z'));
+SELECT @b LIKE '____' ESCAPE '=';
+
+SELECT HEX(x), CHAR_LENGTH(x), OCTET_LENGTH(x)
+FROM (SELECT LAG(v, 1, @b) OVER (ORDER BY id) x FROM (SELECT 1 id, 'a' v) s) q;
+SELECT HEX(x), CHAR_LENGTH(x), OCTET_LENGTH(x)
+FROM (SELECT LEAD(v, 1, @b) OVER (ORDER BY id) x FROM (SELECT 1 id, 'a' v) s) q;
+
+SELECT HEX(CHAR(65 USING utf8mb4)), CHAR_LENGTH(CHAR(65 USING utf8mb4)),
+       OCTET_LENGTH(CHAR(65 USING utf8mb4));
+
+SET @b = X'e4bda0';
+CREATE TABLE binary_left_ctas AS SELECT LEFT(@b, 1) c;
+CREATE TABLE binary_regexp_ctas AS SELECT REGEXP_SUBSTR(@b, '.') c;
+CREATE TABLE binary_lpad_ctas AS SELECT LPAD(X'61', 5, 'x') c;
+CREATE TABLE binary_unary_ctas AS SELECT +X'3132' c;
+SELECT table_name, column_name, column_type, is_nullable
+FROM information_schema.columns
+WHERE table_schema = 'binary_string_semantics'
+  AND table_name IN ('binary_left_ctas', 'binary_regexp_ctas', 'binary_lpad_ctas', 'binary_unary_ctas')
+  AND column_name NOT LIKE '__mo%'
+ORDER BY table_name, ordinal_position;
+SELECT HEX(c), CHAR_LENGTH(c) FROM binary_left_ctas;
+SELECT HEX(c), CHAR_LENGTH(c) FROM binary_regexp_ctas;
+SELECT HEX(c), CHAR_LENGTH(c) FROM binary_lpad_ctas;
+SELECT HEX(c), CHAR_LENGTH(c), c + 0 FROM binary_unary_ctas;
+
+DROP DATABASE binary_string_semantics;

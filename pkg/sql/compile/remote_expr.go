@@ -18,6 +18,7 @@ import (
 	"reflect"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -280,6 +281,14 @@ func foldVarExprsInExprInPlace(expr *plan.Expr, proc *process.Process) (bool, er
 			return false, nil
 		}
 		expr.Expr = &plan.Expr_Lit{Lit: lit}
+		if vec.GetIsBinaryString() {
+			width := int32(0)
+			if vec.Length() > 0 && !vec.IsNull(0) {
+				width = int32(len(vec.GetBytesAt(0)))
+			}
+			binaryType := types.New(types.T_varbinary, width, 0)
+			expr.Typ = plan2.MakePlan2Type(&binaryType)
+		}
 		return true, nil
 	}
 	return foldVarExprsInValue(reflect.ValueOf(expr.Expr), nil, proc)

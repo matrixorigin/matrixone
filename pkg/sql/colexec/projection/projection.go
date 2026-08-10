@@ -18,6 +18,8 @@ import (
 	"bytes"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -77,6 +79,11 @@ func (projection *Projection) Call(proc *process.Process) (vm.CallResult, error)
 		if err != nil {
 			return vm.CancelResult, err
 		}
+		// A projection materializes its expression value for a relational
+		// consumer. IsBin only describes how a raw hex/bit literal is converted
+		// while evaluating that expression; carrying it into a derived table or
+		// INSERT ... SELECT would reinterpret the materialized bytes as an integer.
+		materializeBinaryStringVector(vec)
 		// for projection operator, all Vectors of projectBat come from executor.Eval
 		// and will not be modified within projection operator. so we can used the result of executor.Eval directly.
 		// (if operator will modify vector/agg of batch, you should make a copy)
@@ -89,4 +96,32 @@ func (projection *Projection) Call(proc *process.Process) (vm.CallResult, error)
 
 	result.Batch = projection.ctr.buf
 	return result, nil
+}
+
+func materializeBinaryStringVector(vec *vector.Vector) {
+	if !vec.GetIsBin() && !vec.GetIsBinaryString() {
+		return
+	}
+	vec.SetIsBin(false)
+	vec.SetIsBinaryString(false)
+
+	switch vec.GetType().Oid {
+	case types.T_binary, types.T_varbinary, types.T_blob:
+		return
+	case types.T_char, types.T_varchar, types.T_text:
+	default:
+		return
+	}
+
+	width := 0
+	for i := 0; i < vec.Length(); i++ {
+		if !vec.IsNull(uint64(i)) {
+			width = max(width, len(vec.GetBytesAt(i)))
+		}
+	}
+	if width > int(types.MaxVarBinaryLen) {
+		vec.SetType(types.T_blob.ToType())
+	} else {
+		vec.SetType(types.New(types.T_varbinary, int32(width), 0))
+	}
 }

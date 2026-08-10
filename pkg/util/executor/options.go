@@ -329,6 +329,24 @@ func (opts Options) ResolveVariableFunc() func(varName string, isSystemVar, isGl
 	return opts.resolveVariableFunc
 }
 
+func (opts Options) WithResolveVariableIsBinFunc(fn func(varName string, isSystemVar, isGlobalVar bool) (bool, error)) Options {
+	opts.resolveVariableIsBinFunc = fn
+	return opts
+}
+
+func (opts Options) ResolveVariableIsBinFunc() func(varName string, isSystemVar, isGlobalVar bool) (bool, error) {
+	return opts.resolveVariableIsBinFunc
+}
+
+func (opts Options) WithResolveVariableBinaryStringFunc(fn func(varName string, isSystemVar, isGlobalVar bool) (bool, error)) Options {
+	opts.resolveVariableBinaryStringFunc = fn
+	return opts
+}
+
+func (opts Options) ResolveVariableBinaryStringFunc() func(varName string, isSystemVar, isGlobalVar bool) (bool, error) {
+	return opts.resolveVariableBinaryStringFunc
+}
+
 // WithFrontend marks the SQL execution as a frontend session-bound
 // invocation (b=true) versus a background / internal one (b=false).
 // Consumed by pkg/sql/compile/sql_executor.go's NewTopProcess which

@@ -255,6 +255,8 @@ func (mergeGroup *MergeGroup) buildOneBatch(proc *process.Process, bat *batch.Ba
 					}
 				}
 			}
+			restoreAggregateBinaryStringStates(
+				mergeGroup.ctr.spillAggList, prepareParamKindSummaries)
 		}
 	}
 

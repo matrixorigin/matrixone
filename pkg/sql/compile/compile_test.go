@@ -83,7 +83,7 @@ func TestHasOrderedGroupConcat(t *testing.T) {
 	require.False(t, hasOrderedGroupConcat(ordered))
 }
 
-func TestCompileRunPreservesBinaryPrepareParamAcrossRetries(t *testing.T) {
+func TestCompileRunPreservesBinaryStringPrepareParamAcrossRetries(t *testing.T) {
 	ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
 	proc := testutil.NewProcess(t)
 	proc.GetSessionInfo().Buf = buffer.New()
@@ -110,7 +110,7 @@ func TestCompileRunPreservesBinaryPrepareParamAcrossRetries(t *testing.T) {
 	want := []byte{'A', 'B', 0, 0}
 	params := vector.NewVec(types.T_text.ToType())
 	require.NoError(t, vector.AppendBytes(params, want, false, proc.Mp()))
-	proc.SetOwnedPrepareParamsWithIsBin(params, []bool{true})
+	proc.SetOwnedPrepareParamsWithMetadata(params, []bool{false}, []bool{true})
 
 	evaluations := 0
 	fill := func(bat *batch.Batch, _ *perfcounter.CounterSet) error {
@@ -118,7 +118,10 @@ func TestCompileRunPreservesBinaryPrepareParamAcrossRetries(t *testing.T) {
 			return nil
 		}
 		require.Len(t, bat.Vecs, 1)
-		require.True(t, bat.Vecs[0].GetIsBin(), "binary semantics were lost on evaluation %d", evaluations+1)
+		require.False(t, bat.Vecs[0].GetIsBin(), "literal numeric metadata leaked on evaluation %d", evaluations+1)
+		require.False(t, bat.Vecs[0].GetIsBinaryString(), "materialized metadata leaked on evaluation %d", evaluations+1)
+		require.Equal(t, types.T_varbinary, bat.Vecs[0].GetType().Oid,
+			"binary string type was lost on evaluation %d", evaluations+1)
 		require.Equal(t, want, bat.Vecs[0].GetBytesAt(0))
 		evaluations++
 		if evaluations <= 2 {

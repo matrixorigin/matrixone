@@ -21,6 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
@@ -103,6 +104,46 @@ func TestProjection(t *testing.T) {
 		nb1 := tc.proc.Mp().CurrNB()
 		require.Equal(t, nb0, nb1)
 	}
+}
+
+func TestProjectionMaterializesRawBinaryLiteralMetadata(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	arg := &Projection{ProjectList: []*plan.Expr{{
+		Typ: plan.Type{Id: int32(types.T_varbinary), Width: 1},
+		Expr: &plan.Expr_Lit{Lit: &plan.Literal{
+			IsBin: true,
+			Value: &plan.Literal_Sval{Sval: "1"},
+		}},
+	}}}
+	child := resetChildren(arg, proc.Mp())
+	require.NoError(t, arg.Prepare(proc))
+
+	result, err := arg.Call(proc)
+	require.NoError(t, err)
+	require.NotNil(t, result.Batch)
+	require.Len(t, result.Batch.Vecs, 1)
+	require.False(t, result.Batch.Vecs[0].GetIsBin())
+	require.False(t, result.Batch.Vecs[0].GetIsBinaryString())
+	require.Equal(t, types.T_varbinary, result.Batch.Vecs[0].GetType().Oid)
+
+	arg.Free(proc, false, nil)
+	child.Free(proc, false, nil)
+	proc.Free()
+}
+
+func TestMaterializeBinaryStringVectorUsesStaticBinaryType(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	vec, err := vector.NewConstBytes(types.T_text.ToType(), []byte("你好"), 1, proc.Mp())
+	require.NoError(t, err)
+	defer vec.Free(proc.Mp())
+	vec.SetIsBinaryString(true)
+
+	materializeBinaryStringVector(vec)
+
+	require.Equal(t, types.T_varbinary, vec.GetType().Oid)
+	require.Equal(t, int32(len("你好")), vec.GetType().Width)
+	require.False(t, vec.GetIsBin())
+	require.False(t, vec.GetIsBinaryString())
 }
 
 func resetChildren(arg *Projection, m *mpool.MPool) *colexec.MockOperator {

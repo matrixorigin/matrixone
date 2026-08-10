@@ -769,7 +769,8 @@ type valueWindowExec struct {
 	currentRowPosition []int
 
 	// Result vector
-	resultVec *vector.Vector
+	resultVec    *vector.Vector
+	binaryString bool
 }
 
 // valueEntry stores a single value from the window frame
@@ -805,6 +806,7 @@ func (exec *valueWindowExec) Fill(groupIndex int, row int, vectors []*vector.Vec
 	}
 
 	vec := vectors[0]
+	exec.binaryString = exec.binaryString || isBinaryStringVector(vec)
 	entry := &valueEntry{
 		isNull: vec.IsNull(uint64(row)),
 	}
@@ -869,19 +871,31 @@ func (exec *valueWindowExec) SetExtraInformation(partialResult any, groupIndex i
 }
 
 func (exec *valueWindowExec) Flush() ([]*vector.Vector, error) {
+	var (
+		vecs []*vector.Vector
+		err  error
+	)
 	switch exec.singleAggInfo.aggID {
 	case WinIdOfLag:
-		return exec.flushLag()
+		vecs, err = exec.flushLag()
 	case WinIdOfLead:
-		return exec.flushLead()
+		vecs, err = exec.flushLead()
 	case WinIdOfFirstValue:
-		return exec.flushFirstValue()
+		vecs, err = exec.flushFirstValue()
 	case WinIdOfLastValue:
-		return exec.flushLastValue()
+		vecs, err = exec.flushLastValue()
 	case WinIdOfNthValue:
-		return exec.flushNthValue()
+		vecs, err = exec.flushNthValue()
+	default:
+		return nil, moerr.NewInternalErrorNoCtx("invalid value window function")
 	}
-	return nil, moerr.NewInternalErrorNoCtx("invalid value window function")
+	if err != nil {
+		return nil, err
+	}
+	for _, vec := range vecs {
+		vec.SetIsBinaryString(exec.binaryString)
+	}
+	return vecs, nil
 }
 
 func (exec *valueWindowExec) Free() {

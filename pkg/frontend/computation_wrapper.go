@@ -905,9 +905,11 @@ func initExecuteStmtParamWithResolverInSession(
 			}
 		}
 		if kinds == nil {
-			cwft.proc.SetPrepareParams(prepareStmt.params)
+			cwft.proc.SetPrepareParamsWithMetadata(
+				prepareStmt.params, nil, prepareStmt.paramsBinaryString)
 		} else {
-			cwft.proc.SetPrepareParamsWithMeta(prepareStmt.params, nil, kinds)
+			cwft.proc.SetPrepareParamsWithMeta(
+				prepareStmt.params, nil, kinds, prepareStmt.paramsBinaryString)
 		}
 		cwft.paramVals, err = preparedParamValues(cwft.proc)
 		if err != nil {
@@ -917,11 +919,11 @@ func initExecuteStmtParamWithResolverInSession(
 		if len(execPlan.Args) != numParams {
 			return nil, nil, nil, originSQL, false, moerr.NewInvalidInput(reqCtx, "Incorrect arguments to EXECUTE")
 		}
-		params, paramVals, paramIsBin, paramKinds, err := buildExecuteUserParams(cwft.proc, execPlan.Args)
+		params, paramVals, paramIsBin, paramKinds, paramBinaryString, err := buildExecuteUserParams(cwft.proc, execPlan.Args)
 		if err != nil {
 			return nil, nil, nil, originSQL, false, err
 		}
-		cwft.proc.SetOwnedPrepareParamsWithMeta(params, paramIsBin, paramKinds)
+		cwft.proc.SetOwnedPrepareParamsWithMeta(params, paramIsBin, paramKinds, paramBinaryString)
 		cwft.paramVals = paramVals
 	} else {
 		if numParams > 0 {
@@ -1075,7 +1077,11 @@ func preparedParamValues(proc *process.Process) ([]any, error) {
 		if err != nil {
 			return nil, err
 		}
-		values[i] = plan2.ParamValue{Value: string(raw), IsBin: proc.GetPrepareParamIsBin(i)}
+		values[i] = plan2.ParamValue{
+			Value:        string(raw),
+			IsBin:        proc.GetPrepareParamIsBin(i),
+			BinaryString: proc.GetPrepareParamIsBinaryString(i),
+		}
 	}
 	return values, nil
 }
@@ -1088,6 +1094,7 @@ func buildExecuteUserParams(
 	paramVals []any,
 	paramIsBin []bool,
 	paramKinds []vector.PrepareParamKind,
+	paramBinaryString []bool,
 	err error,
 ) {
 	params = vector.NewVec(types.T_text.ToType())
@@ -1099,6 +1106,7 @@ func buildExecuteUserParams(
 	paramVals = make([]any, len(args))
 	paramIsBin = make([]bool, len(args))
 	paramKinds = make([]vector.PrepareParamKind, len(args))
+	paramBinaryString = make([]bool, len(args))
 	for i, arg := range args {
 		exprImpl := arg.Expr.(*plan.Expr_V)
 		var param any
@@ -1122,11 +1130,20 @@ func buildExecuteUserParams(
 		} else {
 			paramKinds[i] = prepareParamKindFromValue(param)
 		}
+		resolveBinaryString := proc.GetResolveVariableBinaryStringFunc()
+		if resolveBinaryString != nil {
+			paramBinaryString[i], err = resolveBinaryString(exprImpl.V.Name, exprImpl.V.System, exprImpl.V.Global)
+			if err != nil {
+				return
+			}
+		}
 		err = util.AppendAnyToStringVector(proc, param, params)
 		if err != nil {
 			return
 		}
-		paramVals[i] = plan2.ParamValue{Value: param, IsBin: paramIsBin[i]}
+		paramVals[i] = plan2.ParamValue{
+			Value: param, IsBin: paramIsBin[i], BinaryString: paramBinaryString[i],
+		}
 	}
 	return
 }

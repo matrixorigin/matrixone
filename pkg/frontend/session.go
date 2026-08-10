@@ -364,11 +364,11 @@ func (ses *Session) getNextProcessId() string {
 
 // SetUserDefinedVar sets the user defined variable to the value in session
 func (ses *Session) SetUserDefinedVar(name string, value interface{}, sql string) error {
-	return ses.setUserDefinedVar(name, value, sql, false)
+	return ses.setUserDefinedVar(name, value, sql, false, false)
 }
 
-func (ses *Session) setUserDefinedVar(name string, value interface{}, sql string, isBin bool) error {
-	return ses.setUserDefinedVarWithKind(name, value, sql, isBin, prepareParamKindFromValue(value))
+func (ses *Session) setUserDefinedVar(name string, value interface{}, sql string, isBin, binaryString bool) error {
+	return ses.setUserDefinedVarWithKind(name, value, sql, isBin, prepareParamKindFromValue(value), binaryString)
 }
 
 func (ses *Session) setUserDefinedVarWithKind(
@@ -377,13 +377,19 @@ func (ses *Session) setUserDefinedVarWithKind(
 	sql string,
 	isBin bool,
 	kind vector.PrepareParamKind,
+	binaryString ...bool,
 ) error {
+	var binary bool
+	if len(binaryString) > 0 {
+		binary = binaryString[0]
+	}
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
 	ses.userDefinedVars[strings.ToLower(name)] = &UserDefinedVar{
 		Value:            value,
 		Sql:              sql,
 		IsBin:            isBin,
+		BinaryString:     binary,
 		PrepareParamKind: kind,
 	}
 	return nil

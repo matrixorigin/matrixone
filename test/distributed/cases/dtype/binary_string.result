@@ -1,0 +1,62 @@
+set @binary_string = X'e4bda0';
+select hex(left(X'e4bda061', 1)), hex(reverse(X'e4bda061')),
+hex(lpad(X'e4bda061', 5, X'78')), hex(rpad(X'e4bda061', 5, X'78')),
+ord(X'e4bda061'), instr(X'e4bda061', X'bd'), locate(X'bd', X'e4bda061'),
+X'e4bda061' like '____', hex(regexp_substr(X'e4bda061', '.')),
+hex(left(X'ff61', 1));
+➤ hex(left(0xe4bda061, 1))[12,65535,0]  ¦  hex(reverse(0xe4bda061))[12,65535,0]  ¦  hex(lpad(0xe4bda061, 5, 0x78))[12,65535,0]  ¦  hex(rpad(0xe4bda061, 5, 0x78))[12,65535,0]  ¦  ord(0xe4bda061)[-5,64,0]  ¦  instr(0xe4bda061, 0xbd)[-5,64,0]  ¦  locate(0xbd, 0xe4bda061)[-5,64,0]  ¦  0xe4bda061 like ____[-7,1,0]  ¦  hex(regexp_substr(0xe4bda061, .))[12,65535,0]  ¦  hex(left(0xff61, 1))[12,65535,0]  𝄀
+E4  ¦  61A0BDE4  ¦  78E4BDA061  ¦  E4BDA06178  ¦  228  ¦  2  ¦  2  ¦  1  ¦  E4  ¦  FF
+select char_length(replace(@binary_string, X'bd', X'78')),
+char_length(trim(@binary_string)), char_length(ltrim(@binary_string)),
+char_length(rtrim(@binary_string)), char_length(elt(1, @binary_string)),
+char_length(char(228, 189, 160));
+➤ char_length(replace(@binary_string, 0xbd, 0x78))[-5,64,0]  ¦  char_length(trim(@binary_string))[-5,64,0]  ¦  char_length(ltrim(@binary_string))[-5,64,0]  ¦  char_length(rtrim(@binary_string))[-5,64,0]  ¦  char_length(elt(1, @binary_string))[-5,64,0]  ¦  char_length(char(228, 189, 160))[-5,64,0]  𝄀
+3  ¦  3  ¦  3  ¦  3  ¦  3  ¦  3
+select char_length(min(v)), char_length(max(v)), char_length(any_value(v))
+from (select @binary_string v) s;
+➤ char_length(min(v))[-5,64,0]  ¦  char_length(max(v))[-5,64,0]  ¦  char_length(any_value(v))[-5,64,0]  𝄀
+3  ¦  3  ¦  3
+select char_length(group_concat(v separator ''))
+from (select @binary_string v union all select @binary_string) s;
+➤ char_length(group_concat(v separator ))[-5,64,0]  𝄀
+6
+select char_length(first_value(v) over ()), char_length(last_value(v) over ()),
+char_length(nth_value(v, 1) over ()), char_length(lag(v, 0) over ()),
+char_length(lead(v, 0) over ())
+from (select @binary_string v) s;
+➤ char_length(first_value(v) over ())[-5,64,0]  ¦  char_length(last_value(v) over ())[-5,64,0]  ¦  char_length(nth_value(v, 1) over ())[-5,64,0]  ¦  char_length(lag(v, 0) over ())[-5,64,0]  ¦  char_length(lead(v, 0) over ())[-5,64,0]  𝄀
+3  ¦  3  ¦  3  ¦  3  ¦  3
+select char_length(cast(@binary_string as char)),
+char_length(cast(@binary_string as char(10))),
+char_length(convert(@binary_string, char)),
+char_length(convert(@binary_string using utf8mb4));
+➤ char_length(cast(@binary_string as varchar))[-5,64,0]  ¦  char_length(cast(@binary_string as char(10)))[-5,64,0]  ¦  char_length(cast(@binary_string as varchar))[-5,64,0]  ¦  char_length(convert(@binary_string, utf8mb4))[-5,64,0]  𝄀
+1  ¦  1  ¦  1  ¦  1
+drop table if exists binary_string_ctas_var;
+drop table if exists binary_string_ctas_expr;
+drop table if exists binary_string_ctas_empty;
+create table binary_string_ctas_var as select @binary_string c;
+create table binary_string_ctas_expr as select replace(X'e4bda0', X'bd', X'78') c;
+create table binary_string_ctas_empty as select X'' c;
+select table_name, data_type, character_maximum_length
+from information_schema.columns
+where table_schema = database()
+and table_name in ('binary_string_ctas_var', 'binary_string_ctas_expr', 'binary_string_ctas_empty')
+and column_name = 'c'
+order by table_name;
+➤ table_name[12,256,0]  ¦  data_type[12,65535,0]  ¦  character_maximum_length[-5,64,0]  𝄀
+binary_string_ctas_empty  ¦  varbinary  ¦  0  𝄀
+binary_string_ctas_expr  ¦  varbinary  ¦  3  𝄀
+binary_string_ctas_var  ¦  blob  ¦  0
+select char_length(c), hex(c) from binary_string_ctas_var;
+➤ char_length(c)[-5,64,0]  ¦  hex(c)[12,65535,0]  𝄀
+3  ¦  E4BDA0
+select char_length(c), hex(c) from binary_string_ctas_expr;
+➤ char_length(c)[-5,64,0]  ¦  hex(c)[12,65535,0]  𝄀
+3  ¦  E478A0
+select char_length(c) from binary_string_ctas_empty;
+➤ char_length(c)[-5,64,0]  𝄀
+0
+drop table binary_string_ctas_var;
+drop table binary_string_ctas_expr;
+drop table binary_string_ctas_empty;

@@ -7047,6 +7047,8 @@ func (c *Compile) runSqlWithResultAndOptions(
 		WithLowerCaseTableNames(&lower).
 		WithStatementOption(options).
 		WithResolveVariableFunc(c.proc.GetResolveVariableFunc()).
+		WithResolveVariableIsBinFunc(c.proc.GetResolveVariableIsBinFunc()).
+		WithResolveVariableBinaryStringFunc(c.proc.GetResolveVariableBinaryStringFunc()).
 		WithFrontend(c.proc.Base.IsFrontend)
 
 	ctx := c.proc.Ctx

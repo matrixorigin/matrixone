@@ -33,6 +33,15 @@ const (
 	GroupNotMatched = 0
 )
 
+func isBinaryStringVector(vec *vector.Vector) bool {
+	switch vec.GetType().Oid {
+	case types.T_binary, types.T_varbinary, types.T_blob:
+		return true
+	default:
+		return vec.GetIsBinaryString()
+	}
+}
+
 // AggFuncExecExpression is the exporting structure for the aggregation information.
 // it is used to indicate the information of the aggregation function for the operators like 'group' or 'merge group'.
 type AggFuncExecExpression struct {
@@ -212,6 +221,14 @@ type PrepareParamKindStateAccessor interface {
 	PrepareParamKindSummaryForSelection(flags [][]uint8) (vector.PrepareParamKind, bool)
 	RestorePrepareParamKindsForChunk(chunk int, kinds []vector.PrepareParamKind, mp *mpool.MPool) error
 	RestorePrepareParamKindsFlat(kinds []vector.PrepareParamKind, mp *mpool.MPool) error
+}
+
+// BinaryStringStateAccessor carries the dynamic byte-string result summary
+// alongside aggregate partial state. It is optional because numeric and other
+// non-string executors have no such metadata.
+type BinaryStringStateAccessor interface {
+	BinaryStringState() bool
+	SetBinaryStringState(bool)
 }
 
 // indicate who implements the AggFuncExec interface.

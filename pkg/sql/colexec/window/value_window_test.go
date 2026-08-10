@@ -214,6 +214,22 @@ func TestProcessValueFunc_NthValue(t *testing.T) {
 	}
 }
 
+func TestProcessValueFuncPropagatesBinaryStringMetadata(t *testing.T) {
+	tests := []string{"lag", "lead", "first_value", "last_value", "nth_value"}
+	for _, name := range tests {
+		t.Run(name, func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			bat := makeVarcharBatch(mp, []string{"你", "好"})
+			bat.Vecs[0].SetIsBinaryString(true)
+			result := runValueWindowTest(t,
+				makeValueWindowSpecWithName(name, int32(types.T_varchar)), bat, mp)
+			defer result.Free(mp)
+
+			require.True(t, result.GetIsBinaryString())
+		})
+	}
+}
+
 func TestProcessValueFuncHonorsCancellation(t *testing.T) {
 	testCases := []struct {
 		name string
@@ -915,6 +931,36 @@ func TestProcessValueFunc_LagWithDefault(t *testing.T) {
 	bat.Clean(mp)
 	proc.Free()
 	require.Equal(t, int64(0), mp.CurrNB())
+}
+
+func TestProcessValueFuncBinaryDefaultPropagatesMarker(t *testing.T) {
+	for _, name := range []string{"lag", "lead"} {
+		t.Run(name, func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			proc := testutil.NewProcessWithMPool(t, "", mp)
+			bat := makeVarcharBatch(mp, []string{"a"})
+			spec := makeValueWindowSpecWithName(name, int32(types.T_varchar))
+			offsetVec, err := vector.NewConstFixed(types.T_int64.ToType(), int64(1), 1, mp)
+			require.NoError(t, err)
+			defaultVec, err := vector.NewConstBytes(types.T_varchar.ToType(), []byte{0xe4, 0xbd, 0xa0}, 1, mp)
+			require.NoError(t, err)
+			defaultVec.SetIsBinaryString(true)
+
+			ctr := &container{bat: bat, aggVecs: make([]colexec.ExprEvalVector, 1)}
+			ctr.aggVecs[0].Vec = []*vector.Vector{bat.Vecs[0], offsetVec, defaultVec}
+			result, err := ctr.processValueFunc(0, &Window{WinSpecList: []*plan.Expr{spec}}, proc)
+			require.NoError(t, err)
+			require.True(t, result.GetIsBinaryString())
+			require.Equal(t, []byte{0xe4, 0xbd, 0xa0}, result.GetBytesAt(0))
+
+			result.Free(mp)
+			offsetVec.Free(mp)
+			defaultVec.Free(mp)
+			bat.Clean(mp)
+			proc.Free()
+			require.Equal(t, int64(0), mp.CurrNB())
+		})
+	}
 }
 
 // TestProcessValueFunc_FirstValueWithFrame tests first_value with ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING.

@@ -312,6 +312,10 @@ func getExprValueWithPrepareMeta(
 	if len(isBin) > 0 {
 		*isBin[0] = resultVec.GetIsBin()
 	}
+	if len(isBin) > 1 {
+		*isBin[1] = resultVec.GetIsBinaryString() || resultVec.GetType().Oid == types.T_binary ||
+			resultVec.GetType().Oid == types.T_varbinary || resultVec.GetType().Oid == types.T_blob
+	}
 	if prepareParamKind != nil {
 		*prepareParamKind = resultVec.GetPrepareParamKind()
 		if *prepareParamKind == vector.PrepareParamNone {
