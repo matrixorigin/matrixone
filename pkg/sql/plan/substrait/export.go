@@ -718,13 +718,12 @@ func substraitType(t *planpb.Type) (*spb.Type, error) {
 			return nil, notEligiblef(EligibilityType, "negative varchar width %d", t.Width)
 		}
 		return &spb.Type{Kind: &spb.Type_Varchar{Varchar: &spb.Type_VarChar{Length: t.Width, Nullability: n}}}, nil
-	case types.T_date:
-		return &spb.Type{Kind: &spb.Type_Date_{Date: &spb.Type_Date{Nullability: n}}}, nil
-	case types.T_timestamp:
-		if t.Scale != 6 {
-			return nil, notEligiblef(EligibilityType, "timestamp precision %d is not microsecond precision", t.Scale)
-		}
-		return &spb.Type{Kind: &spb.Type_PrecisionTimestamp_{PrecisionTimestamp: &spb.Type_PrecisionTimestamp{Precision: 6, Nullability: n}}}, nil
+	case types.T_date, types.T_timestamp:
+		// MatrixOne stores both values relative to year 1, while Substrait uses
+		// Unix-epoch units. Timestamp also has session-timezone rendering
+		// semantics that do not match timezone-naive PrecisionTimestamp. Reject
+		// these types until reads and literals share one proven conversion.
+		return nil, notEligiblef(EligibilityType, "unsupported temporal type %s", types.T(t.Id).String())
 	default:
 		return nil, notEligiblef(EligibilityType, "unsupported type %s", types.T(t.Id).String())
 	}
@@ -799,16 +798,6 @@ func literal(l *planpb.Literal, typ *planpb.Type) (*spb.Expression, error) {
 			return nil, notEligiblef(EligibilityType, "char literal length does not match width %d", typ.Width)
 		}
 		return wrap(&spb.Expression_Literal{LiteralType: &spb.Expression_Literal_FixedChar{FixedChar: v.Sval}}), nil
-	case *planpb.Literal_Dateval:
-		if oid != types.T_date {
-			return mismatch()
-		}
-		return wrap(&spb.Expression_Literal{LiteralType: &spb.Expression_Literal_Date{Date: v.Dateval}}), nil
-	case *planpb.Literal_Timestampval:
-		if oid != types.T_timestamp {
-			return mismatch()
-		}
-		return wrap(&spb.Expression_Literal{LiteralType: &spb.Expression_Literal_PrecisionTimestamp_{PrecisionTimestamp: &spb.Expression_Literal_PrecisionTimestamp{Precision: 6, Value: v.Timestampval}}}), nil
 	default:
 		return nil, moerr.NewInternalErrorNoCtxf("substrait: unsupported literal %T", l.Value)
 	}

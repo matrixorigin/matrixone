@@ -606,6 +606,84 @@ func (f *gatedJournalHeaderFS) Read(ctx context.Context, vector *fileservice.IOV
 	return f.FileService.Read(ctx, vector)
 }
 
+type testJournalAdmission struct {
+	lock          contextMutex
+	mu            sync.Mutex
+	key           string
+	open          int
+	max           int
+	gate          bool
+	gateCalls     int
+	firstEntered  chan struct{}
+	secondWaiting chan struct{}
+	allowFirst    chan struct{}
+}
+
+func newTestJournalAdmission() *testJournalAdmission {
+	return &testJournalAdmission{lock: newContextMutex()}
+}
+
+func (a *testJournalAdmission) RunExclusive(ctx context.Context, key string, fn func(context.Context) error) error {
+	a.mu.Lock()
+	gateCall := 0
+	if a.gate {
+		a.gateCalls++
+		gateCall = a.gateCalls
+		if gateCall == 2 {
+			close(a.secondWaiting)
+		}
+	}
+	a.mu.Unlock()
+	if err := a.lock.lock(ctx); err != nil {
+		return err
+	}
+	defer a.lock.unlock()
+	if gateCall == 1 {
+		close(a.firstEntered)
+		select {
+		case <-a.allowFirst:
+		case <-ctx.Done():
+			return context.Cause(ctx)
+		}
+	}
+	a.mu.Lock()
+	if a.key == "" {
+		a.key = key
+	}
+	if a.key != key {
+		a.mu.Unlock()
+		return moerr.NewInternalErrorNoCtx("substrait: test admission key mismatch")
+	}
+	a.open++
+	if a.open > a.max {
+		a.max = a.open
+	}
+	a.mu.Unlock()
+	defer func() {
+		a.mu.Lock()
+		a.open--
+		a.mu.Unlock()
+	}()
+	return fn(ctx)
+}
+
+func (a *testJournalAdmission) gateNextPair() (<-chan struct{}, <-chan struct{}, chan<- struct{}) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.gate = true
+	a.gateCalls = 0
+	a.firstEntered = make(chan struct{})
+	a.secondWaiting = make(chan struct{})
+	a.allowFirst = make(chan struct{})
+	return a.firstEntered, a.secondWaiting, a.allowFirst
+}
+
+func (a *testJournalAdmission) maxConcurrent() int {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.max
+}
+
 func (p *gatedProtector) Begin(context.Context) (func(context.Context, []byte, []string, time.Time) error, func(context.Context, []byte) error, func(), error) {
 	return func(context.Context, []byte, []string, time.Time) error {
 		p.registerCount++
@@ -1056,7 +1134,7 @@ func TestPersistentLeaseReplayAndReleasedCrashRecovery(t *testing.T) {
 	ctx := context.Background()
 	fs, err := fileservice.NewMemoryFS("lease-test", fileservice.CacheConfig{}, nil)
 	require.NoError(t, err)
-	journal, err := NewFileServiceLeaseJournal(fs, "sirius/read-leases")
+	journal, err := NewFileServiceLeaseJournal(fs, "sirius/read-leases", newTestJournalAdmission())
 	require.NoError(t, err)
 	c, err := Export(scanQuery())
 	require.NoError(t, err)
@@ -1107,7 +1185,7 @@ func TestPersistentLeaseReplayExpiresWithoutResurrection(t *testing.T) {
 	ctx := context.Background()
 	fs, err := fileservice.NewMemoryFS("expiry-test", fileservice.CacheConfig{}, nil)
 	require.NoError(t, err)
-	journal, err := NewFileServiceLeaseJournal(fs, "sirius/read-leases")
+	journal, err := NewFileServiceLeaseJournal(fs, "sirius/read-leases", newTestJournalAdmission())
 	require.NoError(t, err)
 	c, err := Export(scanQuery())
 	require.NoError(t, err)
@@ -1135,51 +1213,49 @@ func TestJournalCapacityIsAtomicAcrossManagersAndReplay(t *testing.T) {
 	ctx := context.Background()
 	fs, err := fileservice.NewMemoryFS("journal-capacity-race", fileservice.CacheConfig{}, nil)
 	require.NoError(t, err)
-	journal, err := NewFileServiceLeaseJournal(fs, "sirius/read-leases")
+	admission := newTestJournalAdmission()
+	journalA, err := NewFileServiceLeaseJournal(fs, "sirius/read-leases", admission)
 	require.NoError(t, err)
-	managerA := NewPersistentLeaseManager(1, new(fakeProtector), journal)
-	managerB := NewPersistentLeaseManager(1, new(fakeProtector), journal)
+	journalB, err := NewFileServiceLeaseJournal(fs, "sirius/read-leases", admission)
+	require.NoError(t, err)
+	managerA := NewPersistentLeaseManager(1, new(fakeProtector), journalA)
+	managerB := NewPersistentLeaseManager(1, new(fakeProtector), journalB)
 	require.NoError(t, managerA.Replay(ctx))
 	require.NoError(t, managerB.Replay(ctx))
 
 	expires := uint64(time.Now().Add(time.Minute).UnixMilli())
-	start := make(chan struct{})
-	results := make(chan error, 2)
-	for _, acquisition := range []struct {
-		manager *LeaseManager
-		lease   *Lease
-	}{
-		{manager: managerA, lease: testDurableLease(t, 1, expires)},
-		{manager: managerB, lease: testDurableLease(t, 2, expires)},
-	} {
-		go func(acquisition struct {
-			manager *LeaseManager
-			lease   *Lease
-		}) {
-			<-start
-			results <- acquisition.manager.Acquire(ctx, []*Lease{acquisition.lease})
-		}(acquisition)
+	firstEntered, secondWaiting, allowFirst := admission.gateNextPair()
+	resultA := make(chan error, 1)
+	resultB := make(chan error, 1)
+	go func() {
+		resultA <- managerA.Acquire(ctx, []*Lease{testDurableLease(t, 1, expires)})
+	}()
+	select {
+	case <-firstEntered:
+	case <-time.After(time.Second):
+		t.Fatal("first journal admission did not enter the shared critical section")
 	}
-	close(start)
-	errA, errB := <-results, <-results
-	require.Equal(t, 1, boolInt(errA == nil)+boolInt(errB == nil))
-	if errA != nil {
-		require.ErrorContains(t, errA, "capacity reached")
+	go func() {
+		resultB <- managerB.Acquire(ctx, []*Lease{testDurableLease(t, 2, expires)})
+	}()
+	select {
+	case <-secondWaiting:
+	case <-time.After(time.Second):
+		t.Fatal("second journal admission did not wait on the shared coordinator")
 	}
-	if errB != nil {
-		require.ErrorContains(t, errB, "capacity reached")
+	close(allowFirst)
+	require.NoError(t, <-resultA)
+	err = <-resultB
+	require.ErrorContains(t, err, "capacity reached")
+	if got := admission.maxConcurrent(); got != 1 {
+		t.Fatalf("journal critical section concurrency = %d, want 1", got)
 	}
 
-	afterWriters := NewPersistentLeaseManager(1, new(fakeProtector), journal)
+	journalC, err := NewFileServiceLeaseJournal(fs, "sirius/read-leases", admission)
+	require.NoError(t, err)
+	afterWriters := NewPersistentLeaseManager(1, new(fakeProtector), journalC)
 	require.NoError(t, afterWriters.Replay(ctx))
 	require.Len(t, afterWriters.leases, 1)
-}
-
-func boolInt(value bool) int {
-	if value {
-		return 1
-	}
-	return 0
 }
 
 func TestAdmissionReconcilesRemoteRevocationBeforeCapacity(t *testing.T) {
@@ -1458,13 +1534,15 @@ func TestResolverServerLifecycle(t *testing.T) {
 }
 
 func TestFileServiceLeaseJournalValidationAndAuthority(t *testing.T) {
-	_, err := NewFileServiceLeaseJournal(nil, "leases")
+	_, err := NewFileServiceLeaseJournal(nil, "leases", newTestJournalAdmission())
 	require.Error(t, err)
 	fs, err := fileservice.NewMemoryFS("journal-validation", fileservice.CacheConfig{}, nil)
 	require.NoError(t, err)
-	_, err = NewFileServiceLeaseJournal(fs, "../leases")
+	_, err = NewFileServiceLeaseJournal(fs, "leases", nil)
 	require.Error(t, err)
-	journal, err := NewFileServiceLeaseJournal(fs, "/sirius/read-leases/")
+	_, err = NewFileServiceLeaseJournal(fs, "../leases", newTestJournalAdmission())
+	require.Error(t, err)
+	journal, err := NewFileServiceLeaseJournal(fs, "/sirius/read-leases/", newTestJournalAdmission())
 	require.NoError(t, err)
 	_, err = journal.StoreIfCapacity(context.Background(), []*Lease{nil}, 1)
 	require.Error(t, err)
@@ -1512,7 +1590,7 @@ func TestFileServiceLeaseJournalAuthorityLinearizesRelease(t *testing.T) {
 	ctx := context.Background()
 	fs, err := fileservice.NewMemoryFS("journal-authority-race", fileservice.CacheConfig{}, nil)
 	require.NoError(t, err)
-	journal, err := NewFileServiceLeaseJournal(fs, "sirius/read-leases")
+	journal, err := NewFileServiceLeaseJournal(fs, "sirius/read-leases", newTestJournalAdmission())
 	require.NoError(t, err)
 	lease := testDurableLease(t, 9, uint64(time.Now().Add(time.Minute).UnixMilli()))
 	storeJournalLease(t, journal, lease)
@@ -1548,9 +1626,10 @@ func TestFileServiceLeaseJournalAuthorityIgnoresAnotherClientStaleCache(t *testi
 	require.NoError(t, err)
 	clientA := newStaleAuthorityCacheFS(shared)
 	clientB := newStaleAuthorityCacheFS(shared)
-	journalA, err := NewFileServiceLeaseJournal(clientA, "sirius/read-leases")
+	admission := newTestJournalAdmission()
+	journalA, err := NewFileServiceLeaseJournal(clientA, "sirius/read-leases", admission)
 	require.NoError(t, err)
-	journalB, err := NewFileServiceLeaseJournal(clientB, "sirius/read-leases")
+	journalB, err := NewFileServiceLeaseJournal(clientB, "sirius/read-leases", admission)
 	require.NoError(t, err)
 	lease := testDurableLease(t, 10, uint64(time.Now().Add(time.Minute).UnixMilli()))
 	storeJournalLease(t, journalA, lease)
@@ -1584,7 +1663,7 @@ func TestFileServiceLeaseJournalCleansOrphanAuthoritiesInBoundedBatches(t *testi
 	ctx := context.Background()
 	fs, err := fileservice.NewMemoryFS("journal-orphan-batches", fileservice.CacheConfig{}, nil)
 	require.NoError(t, err)
-	journal, err := NewFileServiceLeaseJournal(fs, "sirius/read-leases")
+	journal, err := NewFileServiceLeaseJournal(fs, "sirius/read-leases", newTestJournalAdmission())
 	require.NoError(t, err)
 	refs := make([][]byte, 0, journalCleanupBatchSize+1)
 	for i := 0; i <= journalCleanupBatchSize; i++ {
@@ -1684,10 +1763,11 @@ func TestLeaseMutationLockHonorsContext(t *testing.T) {
 
 	fs, err := fileservice.NewMemoryFS("journal-context-lock", fileservice.CacheConfig{}, nil)
 	require.NoError(t, err)
-	journal, err := NewFileServiceLeaseJournal(fs, "sirius/read-leases")
+	admission := newTestJournalAdmission()
+	journal, err := NewFileServiceLeaseJournal(fs, "sirius/read-leases", admission)
 	require.NoError(t, err)
-	require.NoError(t, journal.admission.lock(context.Background()))
-	defer journal.admission.unlock()
+	require.NoError(t, admission.lock.lock(context.Background()))
+	defer admission.lock.unlock()
 	_, err = journal.StoreIfCapacity(canceled, []*Lease{testDurableLease(t, 1, uint64(time.Now().Add(time.Minute).UnixMilli()))}, 1)
 	require.ErrorContains(t, err, "context canceled")
 }
@@ -1711,7 +1791,7 @@ func TestFileServiceLeaseJournalRejectsCorruption(t *testing.T) {
 			ctx := context.Background()
 			fs, err := fileservice.NewMemoryFS("journal-corrupt-"+tc.name, fileservice.CacheConfig{}, nil)
 			require.NoError(t, err)
-			journal, err := NewFileServiceLeaseJournal(fs, "sirius/read-leases")
+			journal, err := NewFileServiceLeaseJournal(fs, "sirius/read-leases", newTestJournalAdmission())
 			require.NoError(t, err)
 			name := journal.activePath(bytes.Repeat([]byte{5}, 32))
 			data := make([]byte, 0, journalHeaderSize+len(tc.data))
@@ -1729,7 +1809,7 @@ func TestFileServiceLeaseJournalRejectsNonCanonicalName(t *testing.T) {
 	ctx := context.Background()
 	fs, err := fileservice.NewMemoryFS("journal-name", fileservice.CacheConfig{}, nil)
 	require.NoError(t, err)
-	journal, err := NewFileServiceLeaseJournal(fs, "sirius/read-leases")
+	journal, err := NewFileServiceLeaseJournal(fs, "sirius/read-leases", newTestJournalAdmission())
 	require.NoError(t, err)
 	lease := testDurableLease(t, 0xab, uint64(time.Now().Add(time.Minute).UnixMilli()))
 	storeJournalLease(t, journal, lease)
@@ -1758,8 +1838,6 @@ func TestSubstraitTypeAndLiteralMappings(t *testing.T) {
 		{typ: planpb.Type{Id: int32(types.T_float64)}, lit: &planpb.Literal{Value: &planpb.Literal_Dval{Dval: 2.5}}},
 		{typ: planpb.Type{Id: int32(types.T_char), Width: 1}, lit: &planpb.Literal{Value: &planpb.Literal_Sval{Sval: "c"}}},
 		{typ: planpb.Type{Id: int32(types.T_varchar), Width: 12}, lit: &planpb.Literal{Value: &planpb.Literal_Sval{Sval: "varchar"}}},
-		{typ: planpb.Type{Id: int32(types.T_date)}, lit: &planpb.Literal{Value: &planpb.Literal_Dateval{Dateval: 10}}},
-		{typ: planpb.Type{Id: int32(types.T_timestamp), Scale: 6}, lit: &planpb.Literal{Value: &planpb.Literal_Timestampval{Timestampval: 20}}},
 	}
 	for _, tc := range typesAndLiterals {
 		_, err := substraitType(&tc.typ)
@@ -1794,19 +1872,48 @@ func TestSubstraitTypeAndLiteralMappings(t *testing.T) {
 	_, err = literal(&planpb.Literal{Value: &planpb.Literal_Sval{Sval: "short"}}, &planpb.Type{Id: int32(types.T_char), Width: 8})
 	require.True(t, IsNotEligible(err))
 
-	timestampType := planpb.Type{Id: int32(types.T_timestamp), Scale: 6}
-	timestampSubstrait, err := substraitType(&timestampType)
-	require.NoError(t, err)
-	require.Equal(t, int32(6), timestampSubstrait.GetPrecisionTimestamp().GetPrecision())
-	timestampLiteral, err := literal(&planpb.Literal{Value: &planpb.Literal_Timestampval{Timestampval: 20}}, &timestampType)
-	require.NoError(t, err)
-	require.Equal(t, int32(6), timestampLiteral.GetLiteral().GetPrecisionTimestamp().GetPrecision())
-	_, err = substraitType(&planpb.Type{Id: int32(types.T_timestamp), Scale: 3})
-	require.True(t, IsNotEligible(err))
-	_, err = literal(&planpb.Literal{Value: &planpb.Literal_Timestampval{Timestampval: 20}}, &planpb.Type{Id: int32(types.T_timestamp), Scale: 3})
-	require.True(t, IsNotEligible(err))
 	_, err = substraitType(&planpb.Type{Id: int32(types.T_char)})
 	require.True(t, IsNotEligible(err))
+}
+
+func TestExportRejectsTemporalScansAndLiteralsUntilRepresentationIsDefined(t *testing.T) {
+	// Integer remains the nearest admitted control.
+	_, err := Export(scanQuery())
+	require.NoError(t, err)
+
+	for _, tc := range []struct {
+		name string
+		typ  planpb.Type
+		lit  *planpb.Literal
+	}{
+		{name: "date", typ: planpb.Type{Id: int32(types.T_date)}, lit: &planpb.Literal{Value: &planpb.Literal_Dateval{Dateval: int32(types.DateFromCalendar(1970, 1, 1))}}},
+		{name: "timestamp", typ: planpb.Type{Id: int32(types.T_timestamp), Scale: 6}, lit: &planpb.Literal{Value: &planpb.Literal_Timestampval{Timestampval: int64(types.FromClockUTC(1970, 1, 1, 0, 0, 0, 0))}}},
+	} {
+		t.Run(tc.name+" scan", func(t *testing.T) {
+			q := scanQuery()
+			q.Nodes[0].TableDef.Cols[0].Typ = tc.typ
+			_, err := Export(q)
+			require.True(t, IsNotEligible(err))
+			reason, ok := NotEligibleReason(err)
+			require.True(t, ok)
+			require.Equal(t, EligibilityType, reason)
+		})
+		t.Run(tc.name+" literal", func(t *testing.T) {
+			q := scanQuery()
+			q.Nodes = append(q.Nodes, &planpb.Node{
+				NodeId:      1,
+				NodeType:    planpb.Node_PROJECT,
+				Children:    []int32{0},
+				ProjectList: []*planpb.Expr{{Typ: tc.typ, Expr: &planpb.Expr_Lit{Lit: tc.lit}}},
+			})
+			q.Steps[0] = 1
+			_, err := Export(q)
+			require.True(t, IsNotEligible(err))
+			reason, ok := NotEligibleReason(err)
+			require.True(t, ok)
+			require.Equal(t, EligibilityType, reason)
+		})
+	}
 }
 
 func TestEligibilityDeclinesAreDistinctFromMalformedAndOperationalErrors(t *testing.T) {

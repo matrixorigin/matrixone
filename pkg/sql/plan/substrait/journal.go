@@ -45,9 +45,25 @@ const (
 // object is the lease's single active state. Terminal release atomically
 // deletes that authority before GC protection is removed.
 type FileServiceLeaseJournal struct {
-	fs        fileservice.FileService
-	prefix    string
-	admission contextMutex
+	fs           fileservice.FileService
+	prefix       string
+	admissionKey string
+	admission    JournalAdmissionCoordinator
+}
+
+// JournalAdmissionCoordinator serializes admission and replay critical
+// sections across every CN that can access one durable namespace.
+// Implementations must keep the named
+// exclusion held until fn returns and must not run two callbacks with the same
+// key concurrently, even when they originate in different processes. Waiting
+// must honor ctx. The callback context must remain valid only while ownership
+// is held and be canceled if that ownership is lost; RunExclusive must then
+// wait for the callback to stop before returning the ownership or unlock error.
+//
+// FileService is deliberately write-once and has no compare-and-swap primitive,
+// so a process-local mutex cannot implement namespace-wide capacity admission.
+type JournalAdmissionCoordinator interface {
+	RunExclusive(context.Context, string, func(context.Context) error) error
 }
 
 type journalRecord struct {
@@ -63,44 +79,53 @@ type journalEnvelope struct {
 	SHA256 []byte        `json:"sha256"`
 }
 
-func NewFileServiceLeaseJournal(fs fileservice.FileService, prefix string) (*FileServiceLeaseJournal, error) {
+func NewFileServiceLeaseJournal(fs fileservice.FileService, prefix string, admission JournalAdmissionCoordinator) (*FileServiceLeaseJournal, error) {
 	prefix = strings.Trim(path.Clean(prefix), "/")
-	if fs == nil || prefix == "" || prefix == "." || strings.HasPrefix(prefix, "..") {
+	if fs == nil || prefix == "" || prefix == "." || strings.HasPrefix(prefix, "..") || admission == nil {
 		return nil, moerr.NewInternalErrorNoCtx("substrait: invalid lease journal configuration")
 	}
-	return &FileServiceLeaseJournal{fs: fs, prefix: prefix, admission: newContextMutex()}, nil
+	return &FileServiceLeaseJournal{
+		fs:           fs,
+		prefix:       prefix,
+		admissionKey: strings.ToLower(fs.Name()) + ":" + prefix,
+		admission:    admission,
+	}, nil
 }
 
 // StoreIfCapacity is the journal-level admission linearization point. The
-// mutex belongs to the journal rather than a LeaseManager, so managers sharing
-// this durable namespace cannot independently admit past the configured cap.
+// coordinator owns namespace-wide exclusion rather than a LeaseManager or one
+// journal object, so independent CNs cannot admit past the configured cap.
 func (j *FileServiceLeaseJournal) StoreIfCapacity(ctx context.Context, leases []*Lease, maximum int) (int, error) {
-	if err := j.admission.lock(ctx); err != nil {
-		return 0, moerr.NewInternalErrorNoCtxf("substrait: acquire journal admission: %v", err)
-	}
-	defer j.admission.unlock()
 	if len(leases) == 0 || maximum <= 0 || len(leases) > maximum {
 		return 0, moerr.NewInternalErrorNoCtx("substrait: invalid lease journal admission")
 	}
-	now := uint64(time.Now().UnixMilli())
-	live := 0
-	if err := j.load(ctx, func(lease *Lease) error {
-		if !lease.Released && lease.Read.ExpiresAtUnixMS > now {
-			live++
+	possiblyStored := 0
+	err := j.admission.RunExclusive(ctx, j.admissionKey, func(exclusiveCtx context.Context) error {
+		now := uint64(time.Now().UnixMilli())
+		live := 0
+		if err := j.load(exclusiveCtx, func(lease *Lease) error {
+			if !lease.Released && lease.Read.ExpiresAtUnixMS > now {
+				live++
+			}
+			return nil
+		}); err != nil {
+			return err
+		}
+		if live > maximum-len(leases) {
+			return moerr.NewInternalErrorNoCtx("substrait: read lease capacity reached")
+		}
+		for i, lease := range leases {
+			possiblyStored = i + 1
+			if err := j.store(exclusiveCtx, lease); err != nil {
+				// A failed write is treated as ambiguous even though the FileService
+				// contract is atomic. The caller durably revokes this whole prefix.
+				return err
+			}
 		}
 		return nil
-	}); err != nil {
-		return 0, err
-	}
-	if live > maximum-len(leases) {
-		return 0, moerr.NewInternalErrorNoCtx("substrait: read lease capacity reached")
-	}
-	for i, lease := range leases {
-		if err := j.store(ctx, lease); err != nil {
-			// A failed write is treated as ambiguous even though the FileService
-			// contract is atomic. The caller durably revokes this whole prefix.
-			return i + 1, err
-		}
+	})
+	if err != nil {
+		return possiblyStored, err
 	}
 	return len(leases), nil
 }
@@ -218,11 +243,9 @@ func (j *FileServiceLeaseJournal) Delete(ctx context.Context, readRef []byte) er
 }
 
 func (j *FileServiceLeaseJournal) Load(ctx context.Context, visit func(*Lease) error) error {
-	if err := j.admission.lock(ctx); err != nil {
-		return moerr.NewInternalErrorNoCtxf("substrait: acquire journal replay: %v", err)
-	}
-	defer j.admission.unlock()
-	return j.load(ctx, visit)
+	return j.admission.RunExclusive(ctx, j.admissionKey, func(exclusiveCtx context.Context) error {
+		return j.load(exclusiveCtx, visit)
+	})
 }
 
 func (j *FileServiceLeaseJournal) load(ctx context.Context, visit func(*Lease) error) error {
