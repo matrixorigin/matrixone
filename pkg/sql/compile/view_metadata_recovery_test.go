@@ -17,22 +17,27 @@ package compile
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
 
 type viewMetadataCleanupRecordingExecutor struct {
-	sqls []string
+	sqls     []string
+	results  []executor.Result
+	failures map[int]error
 }
 
 func (e *viewMetadataCleanupRecordingExecutor) Exec(
@@ -41,6 +46,13 @@ func (e *viewMetadataCleanupRecordingExecutor) Exec(
 	_ executor.Options,
 ) (executor.Result, error) {
 	e.sqls = append(e.sqls, sql)
+	call := len(e.sqls)
+	if err := e.failures[call]; err != nil {
+		return executor.Result{}, err
+	}
+	if call <= len(e.results) {
+		return e.results[call-1], nil
+	}
 	return executor.Result{}, nil
 }
 
@@ -316,5 +328,223 @@ func TestViewMetadataRecoveryRejectsUnavailableRuntimeState(t *testing.T) {
 			runtime.SetGlobalVariables(moruntime.InternalSQLExecutor, oldExecutor)
 		})
 	}
+	_, err = recoverOnePendingViewMetadata(proc, "worker")
+	require.Error(t, err)
+	_, err = discoverLegacyViewMetadata(proc)
+	require.Error(t, err)
 	require.Error(t, lockViewMetadataLifecycleGate(proc))
+}
+
+func installViewMetadataTestExecutor(
+	t *testing.T,
+	proc *process.Process,
+	exec executor.SQLExecutor,
+) {
+	t.Helper()
+	runtime := moruntime.ServiceRuntime(proc.GetService())
+	oldExecutor, hadOldExecutor := runtime.GetGlobalVariables(moruntime.InternalSQLExecutor)
+	runtime.SetGlobalVariables(moruntime.InternalSQLExecutor, exec)
+	t.Cleanup(func() {
+		if hadOldExecutor {
+			runtime.SetGlobalVariables(moruntime.InternalSQLExecutor, oldExecutor)
+		} else {
+			runtime.CompareAndDeleteGlobalVariables(moruntime.InternalSQLExecutor, exec)
+		}
+	})
+}
+
+func TestViewMetadataRecoveryErrorAndEmptyWorkPaths(t *testing.T) {
+	t.Run("initial cancellation", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		err := runViewMetadataRecoveryPage(ctx,
+			func() (bool, error) { panic("unexpected discovery") },
+			func() (bool, error) { panic("unexpected recovery") })
+		require.ErrorIs(t, err, context.Canceled)
+	})
+
+	t.Run("recovery error", func(t *testing.T) {
+		expected := errors.New("recover failed")
+		err := runViewMetadataRecoveryPage(context.Background(),
+			func() (bool, error) { return false, nil },
+			func() (bool, error) { return false, expected })
+		require.ErrorIs(t, err, expected)
+	})
+
+	t.Run("catalog query error", func(t *testing.T) {
+		proc := testutil.NewProcess(t)
+		expected := errors.New("catalog unavailable")
+		exec := &viewMetadataCleanupRecordingExecutor{failures: map[int]error{1: expected}}
+		installViewMetadataTestExecutor(t, proc, exec)
+		_, err := recoverOnePendingViewMetadata(proc, "worker")
+		require.ErrorIs(t, err, expected)
+	})
+
+	t.Run("no pending work", func(t *testing.T) {
+		proc := testutil.NewProcess(t)
+		exec := &viewMetadataCleanupRecordingExecutor{}
+		installViewMetadataTestExecutor(t, proc, exec)
+		count, err := recoverOnePendingViewMetadata(proc, "worker")
+		require.NoError(t, err)
+		require.Zero(t, count)
+	})
+
+	t.Run("pending work without engine", func(t *testing.T) {
+		proc := testutil.NewProcess(t)
+		result := executor.NewMemResult([]types.Type{
+			types.T_uint32.ToType(), types.T_uint64.ToType(), types.T_uint64.ToType(),
+			types.T_uint64.ToType(), types.T_varchar.ToType(), types.T_varchar.ToType(),
+			types.T_uint64.ToType(), types.T_uint64.ToType(), types.T_varchar.ToType(),
+		}, proc.Mp())
+		result.NewBatchWithRowCount(1)
+		require.NoError(t, executor.AppendFixedRows(result, 0, []uint32{1}))
+		require.NoError(t, executor.AppendFixedRows(result, 1, []uint64{2}))
+		require.NoError(t, executor.AppendFixedRows(result, 2, []uint64{3}))
+		require.NoError(t, executor.AppendFixedRows(result, 3, []uint64{4}))
+		require.NoError(t, executor.AppendStringRows(result, 4, []string{"db"}))
+		require.NoError(t, executor.AppendStringRows(result, 5, []string{"view"}))
+		require.NoError(t, executor.AppendFixedRows(result, 6, []uint64{5}))
+		require.NoError(t, executor.AppendFixedRows(result, 7, []uint64{6}))
+		require.NoError(t, executor.AppendStringRows(result, 8, []string{viewRefreshStatusPending}))
+		exec := &viewMetadataCleanupRecordingExecutor{results: []executor.Result{result.GetResult()}}
+		installViewMetadataTestExecutor(t, proc, exec)
+		_, err := recoverOnePendingViewMetadata(proc, "worker")
+		require.Error(t, err)
+	})
+}
+
+func TestLegacyDiscoveryCursorFailurePaths(t *testing.T) {
+	t.Run("initialize cursor", func(t *testing.T) {
+		proc := testutil.NewProcess(t)
+		exec := &viewMetadataCleanupRecordingExecutor{}
+		count, err := discoverLegacyViewPage(proc, exec, executor.Options{})
+		require.NoError(t, err)
+		require.Equal(t, 1, count)
+		require.Len(t, exec.sqls, 2)
+	})
+
+	makeCursor := func(t *testing.T, proc *process.Process, status string) executor.Result {
+		t.Helper()
+		result := executor.NewMemResult([]types.Type{
+			types.T_uint32.ToType(), types.T_varchar.ToType(), types.T_varchar.ToType(),
+			types.T_uint64.ToType(), types.T_varchar.ToType(),
+		}, proc.Mp())
+		result.NewBatchWithRowCount(1)
+		require.NoError(t, executor.AppendFixedRows(result, 0, []uint32{1}))
+		require.NoError(t, executor.AppendStringRows(result, 1, []string{"db"}))
+		require.NoError(t, executor.AppendStringRows(result, 2, []string{"view"}))
+		require.NoError(t, executor.AppendFixedRows(result, 3, []uint64{1}))
+		require.NoError(t, executor.AppendStringRows(result, 4, []string{status}))
+		return result.GetResult()
+	}
+
+	t.Run("invalid cursor state", func(t *testing.T) {
+		proc := testutil.NewProcess(t)
+		exec := &viewMetadataCleanupRecordingExecutor{results: []executor.Result{makeCursor(t, proc, "invalid")}}
+		_, err := discoverLegacyViewPage(proc, exec, executor.Options{})
+		require.Error(t, err)
+	})
+
+	t.Run("page query error", func(t *testing.T) {
+		proc := testutil.NewProcess(t)
+		expected := errors.New("page unavailable")
+		exec := &viewMetadataCleanupRecordingExecutor{
+			results:  []executor.Result{makeCursor(t, proc, catalog.ViewRefreshStatusLegacyScan)},
+			failures: map[int]error{2: expected},
+		}
+		_, err := discoverLegacyViewPage(proc, exec, executor.Options{})
+		require.ErrorIs(t, err, expected)
+	})
+}
+
+func TestRecoveryContextMissingSnapshotAndDependencyIdentity(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	exec := &viewMetadataCleanupRecordingExecutor{}
+	installViewMetadataTestExecutor(t, proc, exec)
+	ctx := &recoveryCompilerContext{
+		compilerContext: &compilerContext{ctx: proc.Ctx, proc: proc},
+		legacySnapshots: make(map[string]*plan2.Snapshot),
+		dependencies: []plan2.ViewDependency{{
+			AccountID: 9, RelationID: 11, LogicalID: 13,
+			DatabaseName: "Quoted DB", RelationName: "Quoted Table", LowerCaseTableNames: 1,
+		}},
+	}
+
+	_, err := ctx.ResolveSnapshotWithSnapshotName("missing")
+	require.Error(t, err)
+
+	accountID, err := ctx.ResolveViewDependencyAccount(nil, &planpb.TableDef{TblId: 11}, nil)
+	require.NoError(t, err)
+	require.Equal(t, uint32(9), accountID)
+	accountID, err = ctx.ResolveViewDependencyAccount(
+		&planpb.ObjectRef{SchemaName: "quoted db", ObjName: "quoted table"},
+		&planpb.TableDef{}, nil)
+	require.NoError(t, err)
+	require.Equal(t, uint32(9), accountID)
+	accountID, err = ctx.ResolveViewDependencyAccount(nil, &planpb.TableDef{}, nil)
+	require.NoError(t, err)
+	require.Equal(t, uint32(0), accountID)
+
+	ctx.dependencies = nil
+	ctx.legacySnapshots["daily"] = &plan2.Snapshot{TS: &timestamp.Timestamp{PhysicalTime: 789}}
+	valid, err := ctx.CheckTimeStampValid(789)
+	require.NoError(t, err)
+	require.True(t, valid)
+}
+
+func TestRecoveryContextRestoresCatalogSnapshot(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	result := executor.NewMemResult([]types.Type{
+		types.T_int64.ToType(), types.T_varchar.ToType(),
+		types.T_varchar.ToType(), types.T_uint64.ToType(),
+	}, proc.Mp())
+	result.NewBatchWithRowCount(1)
+	require.NoError(t, executor.AppendFixedRows(result, 0, []int64{123456}))
+	require.NoError(t, executor.AppendStringRows(result, 1, []string{"account"}))
+	require.NoError(t, executor.AppendStringRows(result, 2, []string{"tenant-a"}))
+	require.NoError(t, executor.AppendFixedRows(result, 3, []uint64{17}))
+	exec := &viewMetadataCleanupRecordingExecutor{results: []executor.Result{result.GetResult()}}
+	installViewMetadataTestExecutor(t, proc, exec)
+	ctx := &recoveryCompilerContext{
+		compilerContext: &compilerContext{ctx: proc.Ctx, proc: proc},
+	}
+
+	snapshot, err := ctx.ResolveSnapshotWithSnapshotName("daily")
+	require.NoError(t, err)
+	require.Equal(t, int64(123456), snapshot.TS.PhysicalTime)
+	require.Equal(t, "account", snapshot.ExtraInfo.Level)
+	require.Equal(t, uint64(17), snapshot.ExtraInfo.ObjId)
+	require.Equal(t, "daily", snapshot.ExtraInfo.Name)
+	require.Equal(t, "tenant-a", snapshot.Tenant.TenantName)
+	require.Equal(t, uint32(17), snapshot.Tenant.TenantID)
+	require.Len(t, exec.sqls, 1)
+
+	cached, err := ctx.ResolveSnapshotWithSnapshotName("daily")
+	require.NoError(t, err)
+	require.Equal(t, snapshot, cached)
+	require.NotSame(t, snapshot, cached)
+	require.Len(t, exec.sqls, 1)
+}
+
+func TestViewMetadataCleanupPropagatesLifecycleAndRowErrors(t *testing.T) {
+	tests := []struct {
+		name string
+		run  func(*Compile) error
+	}{
+		{"view", func(c *Compile) error { return c.deleteDroppedViewMetadata(11) }},
+		{"database", func(c *Compile) error { return c.deleteDroppedDatabaseViewMetadata(0, 7, "db") }},
+	}
+	for _, tc := range tests {
+		for _, failAt := range []int{1, 2} {
+			t.Run(fmt.Sprintf("%s call %d", tc.name, failAt), func(t *testing.T) {
+				proc := testutil.NewProcess(t)
+				expected := errors.New("catalog failure")
+				exec := &viewMetadataCleanupRecordingExecutor{failures: map[int]error{failAt: expected}}
+				installViewMetadataTestExecutor(t, proc, exec)
+				err := tc.run(&Compile{proc: proc, pn: &planpb.Plan{}})
+				require.ErrorIs(t, err, expected)
+				require.Len(t, exec.sqls, failAt)
+			})
+		}
+	}
 }
