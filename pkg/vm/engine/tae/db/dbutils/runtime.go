@@ -220,6 +220,18 @@ func (r *Runtime) PersistedAObjectAbortSupported() bool {
 	return ok && version >= defines.MORPCVersion10
 }
 
+// PersistedColumnChunkSupported reports whether all readers in the current
+// rollout understand chunked persisted column extents.
+func (r *Runtime) PersistedColumnChunkSupported() bool {
+	serviceRuntime := runtime.ServiceRuntime(r.SID())
+	if serviceRuntime == nil {
+		return false
+	}
+	value, ok := serviceRuntime.GetGlobalVariables(runtime.MOProtocolVersion)
+	version, valid := value.(int64)
+	return ok && valid && version >= defines.MORPCVersion14
+}
+
 func (r *Runtime) PoolUsageReport() {
 	var w bytes.Buffer
 	w.WriteString(r.VectorPool.Transient.String())

@@ -419,6 +419,24 @@ func TestPersistedLegacyWideObjectWindowsBoundAAndCNOutput(t *testing.T) {
 	spillTracker.requireReleased(t, true)
 }
 
+func TestPersistedZeroRowWindowReleased(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	obj, fs := writeTestWideObjectWithCommitTS(t, mp, 32, 1024)
+	scheduler := tasks.NewParallelJobScheduler(1)
+	defer scheduler.Stop()
+	changes := &ChangeHandler{scheduler: scheduler, maxInMemoryRows: 8}
+	base := &baseHandle{changesHandle: changes}
+	aobj := NewAObjectHandle(context.Background(), base, false,
+		types.BuildTS(1000, 0), types.BuildTS(2000, 0), []*objectio.ObjectEntry{obj}, fs, mp)
+	baseline := mp.CurrNB()
+	require.NoError(t, aobj.getNextAObject(context.Background()))
+	require.Nil(t, aobj.currentBatch)
+	require.Zero(t, aobj.batchLength)
+	require.Equal(t, baseline, mp.CurrNB())
+	aobj.Close()
+}
+
 func TestEmptyStartPersistedLegacyWideRangeStaysBounded(t *testing.T) {
 	mp := mpool.MustNewZero()
 	defer mpool.DeleteMPool(mp)

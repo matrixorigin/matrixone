@@ -1934,6 +1934,13 @@ func (h *AObjectHandle) getNextAObject(ctx context.Context) (err error) {
 		if h.batchLength > 0 {
 			return
 		}
+		// The window was fully filtered by its timestamp/abort predicates. It is
+		// no longer needed and must be released before fetching the next window;
+		// otherwise a bounded replay retains every empty window it visits.
+		h.currentBatch.Clean(h.mp)
+		h.currentBatch = nil
+		h.batchLength = 0
+		h.rowOffsetCursor = 0
 	}
 }
 func (h *AObjectHandle) isEnd() bool {

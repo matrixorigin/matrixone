@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"math"
 	"sync"
+	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -31,6 +32,18 @@ import (
 	"github.com/pierrec/lz4/v4"
 	"go.uber.org/zap"
 )
+
+// chunkedColumnEnabled is a rollout gate. It defaults to enabled for
+// standalone tools and tests; service startup sets it to the oldest protocol
+// supported by the deployment before any objects are written.
+var chunkedColumnEnabled atomic.Bool
+
+func init() { chunkedColumnEnabled.Store(true) }
+
+// SetChunkedColumnEnabled controls emission of the chunked column format.
+// Old readers cannot decode newly emitted chunked extents, so deployment must
+// keep this disabled until every reader is upgraded.
+func SetChunkedColumnEnabled(enabled bool) { chunkedColumnEnabled.Store(enabled) }
 
 // arenaMaxSize caps WriteArena backing-array growth to bound memory use
 // for unusually large block write cycles.
@@ -810,7 +823,7 @@ func (w *objectWriterV1) addBlock(blocks *[]blockData, blockMeta BlockObject, ba
 		}
 		var ext Extent
 		var err error
-		if sbuf.Len() > columnChunkTargetBytes && vec.Length() > 1 {
+		if chunkedColumnEnabled.Load() && sbuf.Len() > columnChunkTargetBytes && vec.Length() > 1 {
 			if data, err = encodeChunkedColumn(vec); err != nil {
 				return 0, err
 			}

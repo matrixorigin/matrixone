@@ -218,6 +218,15 @@ func TestNewObjectWriter(t *testing.T) {
 	assert.Equal(t, uint8(0xa), buf[63])
 }
 
+func TestChunkedColumnRolloutGate(t *testing.T) {
+	original := chunkedColumnEnabled.Load()
+	defer chunkedColumnEnabled.Store(original)
+	SetChunkedColumnEnabled(false)
+	assert.False(t, chunkedColumnEnabled.Load())
+	SetChunkedColumnEnabled(true)
+	assert.True(t, chunkedColumnEnabled.Load())
+}
+
 func getObjectMeta(ctx context.Context, t *testing.B) ObjectDataMeta {
 	dir := InitTestEnv(ModuleName, t.Name())
 	dir = path.Join(dir, "/local")
