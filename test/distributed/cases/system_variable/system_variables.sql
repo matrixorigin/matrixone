@@ -203,10 +203,13 @@ show variables like 'character_set_server';
 -- @ignore:1
 show variables like 'transaction_isolation';
 set transaction_isolation = default;
+-- @ignore:1
 show variables like 'transaction_isolation';
 
+-- @ignore:1
 show variables like 'tx_isolation';
 set tx_isolation = default;
+-- @ignore:1
 show variables like 'tx_isolation';
 
 select @@sql_mode;

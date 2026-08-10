@@ -164,6 +164,7 @@ select * from result_scan(last_query_id()) as u;
 -- transaction isolation follows the service configuration
 -- @ignore:1
 /* save_result */show variables like 'tx_isolation';
+-- @ignore:1
 select * from result_scan(last_query_id()) as u;
 /* save_result */show columns from tt;
 select * from result_scan(last_query_id()) as u;

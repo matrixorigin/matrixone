@@ -155,6 +155,7 @@ select * from result_scan(last_query_id()) as u;
 -- transaction isolation follows the service configuration
 -- @ignore:1
 /* cloud_user */show variables like 'tx_isolation';
+-- @ignore:1
 select * from result_scan(last_query_id()) as u;
 /* cloud_user */show columns from tt;
 select * from result_scan(last_query_id()) as u;

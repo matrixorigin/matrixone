@@ -150,6 +150,8 @@ SELECT @@net_write_timeout;
 SELECT @@wait_timeout;
 SELECT @@sql_select_limit;
 SELECT @@max_allowed_packet;
+-- transaction isolation follows the service configuration
+-- @ignore:0
 SELECT @@tx_isolation;
 select @@SESSION.SQL_LOG_BIN;
 SELECT @@session.autocommit;

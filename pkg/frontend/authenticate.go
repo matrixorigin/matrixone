@@ -11846,10 +11846,6 @@ func doRevokePrivilegeImplicitly(
 	return nil
 }
 
-func doSetGlobalSystemVariable(ctx context.Context, ses *Session, varName string, varValue interface{}) (err error) {
-	return doSetGlobalSystemVariables(ctx, ses, []string{varName}, varValue)
-}
-
 // doSetGlobalSystemVariables persists equivalent compatibility names in one
 // catalog transaction. transaction_isolation uses this to update both the
 // canonical name and tx_isolation so old and new CNs agree during a rolling
