@@ -16,11 +16,40 @@ package function
 
 import (
 	"testing"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/require"
 )
+
+func TestBetweenDatetimeTimestampPreservesInstantSemantics(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	zone, err := time.LoadLocation("America/New_York")
+	require.NoError(t, err)
+	proc.GetSessionInfo().TimeZone = zone
+
+	datetime, err := types.ParseDatetime("2024-11-03 01:30:00", 6)
+	require.NoError(t, err)
+	lower, err := types.ParseTimestamp(time.UTC, "2024-11-03 05:00:00", 6)
+	require.NoError(t, err)
+	upper, err := types.ParseTimestamp(time.UTC, "2024-11-03 06:15:00", 6)
+	require.NoError(t, err)
+	want := datetime.ToTimestamp(zone) >= lower && datetime.ToTimestamp(zone) <= upper
+
+	testCase := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_datetime.ToTypeWithScale(6), []types.Datetime{datetime, datetime}, []bool{false, true}),
+			NewFunctionTestConstInput(types.T_timestamp.ToTypeWithScale(6), []types.Timestamp{lower}, nil),
+			NewFunctionTestConstInput(types.T_timestamp.ToTypeWithScale(6), []types.Timestamp{upper}, nil),
+		},
+		NewFunctionTestResult(types.T_bool.ToType(), false, []bool{want, false}, []bool{false, true}),
+		betweenImpl,
+	)
+	ok, info := testCase.Run()
+	require.True(t, ok, info)
+}
 
 func TestOpBetweenBool(t *testing.T) {
 	proc := testutil.NewProcess(t)

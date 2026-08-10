@@ -28,6 +28,9 @@ import (
 func betweenImpl(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	paramType := parameters[0].GetType()
 	rs := vector.MustFunctionResult[bool](result)
+	if isMixedDatetimeTimestampTypes(parameters) {
+		return opBetweenDatetimeTimestamp(parameters, rs, proc, length)
+	}
 	switch paramType.Oid {
 	case types.T_bool:
 		return opBetweenBool(parameters, rs, proc, length)
@@ -81,6 +84,101 @@ func betweenImpl(parameters []*vector.Vector, result vector.FunctionResultWrappe
 	}
 
 	panic("unreached code")
+}
+
+func isMixedDatetimeTimestampTypes(parameters []*vector.Vector) bool {
+	if len(parameters) != 3 {
+		return false
+	}
+	hasDatetime, hasTimestamp := false, false
+	for _, parameter := range parameters {
+		switch parameter.GetType().Oid {
+		case types.T_datetime:
+			hasDatetime = true
+		case types.T_timestamp:
+			hasTimestamp = true
+		default:
+			return false
+		}
+	}
+	return hasDatetime && hasTimestamp
+}
+
+func opBetweenDatetimeTimestamp(
+	parameters []*vector.Vector,
+	result *vector.FunctionResult[bool],
+	proc *process.Process,
+	length int,
+) error {
+	timestampScale := int32(6)
+	for _, parameter := range parameters {
+		if parameter.GetType().Oid == types.T_timestamp {
+			timestampScale = parameter.GetType().Scale
+			break
+		}
+	}
+	toDatetimeTimestamp := func(value types.Datetime) types.Timestamp {
+		return value.ToTimestamp(proc.GetSessionInfo().TimeZone).TruncateToScale(timestampScale)
+	}
+	identityTimestamp := func(value types.Timestamp) types.Timestamp { return value }
+
+	switch {
+	case parameters[0].GetType().Oid == types.T_datetime &&
+		parameters[1].GetType().Oid == types.T_datetime:
+		return opBetweenTemporal[types.Datetime, types.Datetime, types.Timestamp](
+			parameters, result, length, toDatetimeTimestamp, toDatetimeTimestamp, identityTimestamp)
+	case parameters[0].GetType().Oid == types.T_datetime &&
+		parameters[2].GetType().Oid == types.T_datetime:
+		return opBetweenTemporal[types.Datetime, types.Timestamp, types.Datetime](
+			parameters, result, length, toDatetimeTimestamp, identityTimestamp, toDatetimeTimestamp)
+	case parameters[0].GetType().Oid == types.T_datetime:
+		return opBetweenTemporal[types.Datetime, types.Timestamp, types.Timestamp](
+			parameters, result, length, toDatetimeTimestamp, identityTimestamp, identityTimestamp)
+	case parameters[0].GetType().Oid == types.T_timestamp &&
+		parameters[1].GetType().Oid == types.T_timestamp:
+		return opBetweenTemporal[types.Timestamp, types.Timestamp, types.Datetime](
+			parameters, result, length, identityTimestamp, identityTimestamp, toDatetimeTimestamp)
+	case parameters[0].GetType().Oid == types.T_timestamp &&
+		parameters[2].GetType().Oid == types.T_timestamp:
+		return opBetweenTemporal[types.Timestamp, types.Datetime, types.Timestamp](
+			parameters, result, length, identityTimestamp, toDatetimeTimestamp, identityTimestamp)
+	default:
+		return opBetweenTemporal[types.Timestamp, types.Datetime, types.Datetime](
+			parameters, result, length, identityTimestamp, toDatetimeTimestamp, toDatetimeTimestamp)
+	}
+}
+
+func opBetweenTemporal[
+	V types.Datetime | types.Timestamp,
+	L types.Datetime | types.Timestamp,
+	U types.Datetime | types.Timestamp,
+](
+	parameters []*vector.Vector,
+	result *vector.FunctionResult[bool],
+	length int,
+	valueToTimestamp func(V) types.Timestamp,
+	lowerToTimestamp func(L) types.Timestamp,
+	upperToTimestamp func(U) types.Timestamp,
+) error {
+	valueParam := vector.GenerateFunctionFixedTypeParameter[V](parameters[0])
+	lowerParam := vector.GenerateFunctionFixedTypeParameter[L](parameters[1])
+	upperParam := vector.GenerateFunctionFixedTypeParameter[U](parameters[2])
+	resultVector := result.GetResultVector()
+	values := vector.MustFixedColNoTypeCheck[bool](resultVector)
+	resultNulls := resultVector.GetNulls()
+
+	for i := uint64(0); i < uint64(length); i++ {
+		value, valueNull := valueParam.GetValue(i)
+		lower, lowerNull := lowerParam.GetValue(i)
+		upper, upperNull := upperParam.GetValue(i)
+		if valueNull || lowerNull || upperNull {
+			resultNulls.Add(i)
+			continue
+		}
+		instant := valueToTimestamp(value)
+		values[i] = instant >= lowerToTimestamp(lower) && instant <= upperToTimestamp(upper)
+	}
+	return nil
 }
 
 func opBetweenBool(
