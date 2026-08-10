@@ -498,8 +498,9 @@ func TestLocalFSWithIOVectorCache(t *testing.T) {
 	assert.Nil(t, err)
 	vec.Release()
 
-	assert.Equal(t, int64(8), memCache1.cache.Used())
-	assert.Equal(t, int64(8), memCache2.cache.Used())
+	backingSize := int64(DefaultCacheDataAllocator().BackingSize(8))
+	assert.Equal(t, backingSize, memCache1.cache.Used())
+	assert.Equal(t, backingSize, memCache2.cache.Used())
 	memCache1.cache.Flush(ctx)
 	memCache2.cache.Flush(ctx)
 	fs.FlushCache(ctx)

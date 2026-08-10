@@ -208,10 +208,11 @@ func TestBytesSliceKeepsBackingCapacity(t *testing.T) {
 	require.Equal(t, int64(1024), data.Capacity())
 }
 
-func TestDefaultCacheDataAllocatorReportsClassBackingSize(t *testing.T) {
+func TestDefaultCacheDataAllocatorReportsPageBackingSize(t *testing.T) {
 	const request = 700 * 1024
-	const want = 1 << 20
-	require.Equal(t, want, DefaultCacheDataAllocator().BackingSize(request))
+	want, ok := malloc.HybridMmapAllocationSize(request)
+	require.True(t, ok)
+	require.Equal(t, int(want), DefaultCacheDataAllocator().BackingSize(request))
 }
 
 type recordingDataCache struct {

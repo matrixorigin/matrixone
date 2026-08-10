@@ -38,7 +38,8 @@ func decorateAllocator(allocator malloc.Allocator) malloc.Allocator {
 }
 
 var memoryCacheAllocator = sync.OnceValue(func() malloc.Allocator {
-	allocator := malloc.GetDefault(nil)
+	allocator := malloc.Allocator(malloc.NewHybridMmapAllocator())
+	allocator = malloc.DecorateWithDefaultConfig(allocator)
 	// with metrics
 	allocator = malloc.NewMetricsAllocator(
 		allocator,

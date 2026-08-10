@@ -50,7 +50,7 @@ func TestMemCacheLeak(t *testing.T) {
 	})
 	assert.Nil(t, err)
 
-	size := int64(128)
+	size := int64(DefaultCacheDataAllocator().BackingSize(1))
 	m := NewMemCache(fscache.ConstCapacity(size), nil, nil, "")
 	defer m.Close(ctx)
 
@@ -82,9 +82,9 @@ func TestMemCacheLeak(t *testing.T) {
 	assert.Nil(t, err)
 	vec.Release()
 
-	assert.Equal(t, int64(1), m.cache.Used())
-	assert.Equal(t, int64(1), m.cache.Capacity()-m.cache.Available())
-	assert.Equal(t, int64(size-1), m.cache.Available())
+	assert.Equal(t, size, m.cache.Used())
+	assert.Equal(t, size, m.cache.Capacity()-m.cache.Available())
+	assert.Equal(t, int64(0), m.cache.Available())
 
 	// read from cache
 	newReadVec = func() *IOVector {
@@ -114,9 +114,9 @@ func TestMemCacheLeak(t *testing.T) {
 	assert.Nil(t, err)
 	vec.Release()
 
-	assert.Equal(t, int64(1), m.cache.Capacity()-m.cache.Available())
-	assert.Equal(t, int64(size)-1, m.cache.Available())
-	assert.Equal(t, int64(1), m.cache.Used())
+	assert.Equal(t, size, m.cache.Capacity()-m.cache.Available())
+	assert.Equal(t, int64(0), m.cache.Available())
+	assert.Equal(t, size, m.cache.Used())
 
 }
 
@@ -337,7 +337,8 @@ func TestMemCacheCanonicalizesDeletePaths(t *testing.T) {
 	ctx := context.Background()
 	for _, filePath := range []string{"shared:/foo", "/foo"} {
 		t.Run(filePath, func(t *testing.T) {
-			cache := NewMemCache(fscache.ConstCapacity(1024), nil, nil, "")
+			capacity := int64(DefaultCacheDataAllocator().BackingSize(3))
+			cache := NewMemCache(fscache.ConstCapacity(capacity), nil, nil, "")
 			defer cache.Close(ctx)
 
 			vector := &IOVector{
@@ -364,7 +365,8 @@ func TestMemCacheCanonicalizesDeletePaths(t *testing.T) {
 
 func TestMemCacheDeletePathsRejectsInvalidListAtomically(t *testing.T) {
 	ctx := context.Background()
-	cache := NewMemCache(fscache.ConstCapacity(1024), nil, nil, "")
+	capacity := int64(DefaultCacheDataAllocator().BackingSize(3))
+	cache := NewMemCache(fscache.ConstCapacity(capacity), nil, nil, "")
 	defer cache.Close(ctx)
 
 	vector := &IOVector{

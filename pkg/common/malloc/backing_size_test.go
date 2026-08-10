@@ -15,6 +15,7 @@
 package malloc
 
 import (
+	"os"
 	"sync/atomic"
 	"testing"
 
@@ -102,6 +103,8 @@ func TestBackingSizePropagatesThroughDecorators(t *testing.T) {
 		contract  BackingSizeContract
 	}{
 		{"class", upstream, want, BackingSizeContractClass},
+		{"hybrid-mmap", NewHybridMmapAllocator(), uint64(os.Getpagesize()), BackingSizeContractPage},
+		{"default-decorated-hybrid-mmap", DecorateWithDefaultConfig(NewHybridMmapAllocator()), uint64(os.Getpagesize()), BackingSizeContractPage},
 		{"c", NewCAllocator(), request, BackingSizeContractExact},
 		{"sharded", NewShardedAllocator(1, newClassAllocator), want, BackingSizeContractClass},
 		{"metrics", NewMetricsAllocator(upstream, nil, nil, nil, nil, nil), want, BackingSizeContractClass},
