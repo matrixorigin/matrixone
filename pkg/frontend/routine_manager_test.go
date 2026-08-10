@@ -1121,15 +1121,21 @@ func TestSessionCloseReleasesUserLevelLocksWhenNotMigrated(t *testing.T) {
 	var legacyTxnIDs int
 	for _, txnID := range lockService.unlockedTxnIDs {
 		txnIDText := string(txnID)
-		require.NotContains(t, txnIDText, "1010")
 		parts := strings.Split(txnIDText, "\x00")
 		switch len(parts) {
 		case 4:
+			require.Equal(t, "mo-user-level-lock", parts[0])
+			require.Equal(t, "disconnect_cleanup", parts[2])
 			connID, err := strconv.ParseUint(parts[3], 10, 64)
 			require.NoError(t, err)
 			require.Equal(t, uint64(1009), connID)
 			currentTxnIDs++
 		case 3:
+			// Legacy IDs have no connection-ID field. Do not search the full
+			// string for "1010": the owner includes a random UUID that may
+			// legitimately contain those digits.
+			require.Equal(t, "mo-user-level-lock", parts[0])
+			require.Equal(t, "disconnect_cleanup", parts[2])
 			legacyTxnIDs++
 		default:
 			require.Failf(t, "unexpected user lock txnID format", "txnID=%q", txnIDText)

@@ -204,6 +204,11 @@ func TestIssue26087ConcurrentDataBranchQuota(t *testing.T) {
 					rt.SetGlobalVariables(moruntime.TxnIsolation, pbtxn.TxnIsolation_RC)
 				}
 			}()
+			// conn1 and conn2 were initialized before the service default changed.
+			// Set their session defaults explicitly so the transactions below test
+			// the intended SI behavior rather than their original RC defaults.
+			require.NoError(t, execConn(conn1, "set session transaction isolation level repeatable read"))
+			require.NoError(t, execConn(conn2, "set session transaction isolation level repeatable read"))
 
 			require.NoError(t, execConn(conn1, "begin"))
 			explicitErr := execConn(conn1,
