@@ -522,7 +522,6 @@ func (exec *groupConcatExec) FlushWithContext(ctx context.Context) (_ []*vector.
 	}()
 	for i, st := range exec.state {
 		vecs[i] = vector.NewOffHeapVecWithType(exec.retType)
-		vecs[i].SetIsBinaryString(exec.binaryString)
 		if err := vecs[i].PreExtend(int(st.length), exec.mp); err != nil {
 			return nil, err
 		}
@@ -559,6 +558,7 @@ func (exec *groupConcatExec) FlushWithContext(ctx context.Context) (_ []*vector.
 				return nil, err
 			}
 		}
+		vecs[i].SetIsBinaryString(exec.binaryString)
 	}
 	return vecs, nil
 }
