@@ -219,18 +219,7 @@ func buildIvfSearchColDefs(includeColumns []string, originalTableDef *plan.Table
 
 func buildIvfTableFuncArgs(tblCfgStr string, vecLitArg *plan.Expr, pushdownFilterSQL string, searchRoundLimit uint64, bucketExpandStep uint64) []*plan.Expr {
 	args := []*plan.Expr{
-		{
-			Typ: plan.Type{
-				Id: int32(types.T_varchar),
-			},
-			Expr: &plan.Expr_Lit{
-				Lit: &plan.Literal{
-					Value: &plan.Literal_Sval{
-						Sval: tblCfgStr,
-					},
-				},
-			},
-		},
+		makePlan2StringConstExprWithType(tblCfgStr),
 		DeepCopyExpr(vecLitArg),
 	}
 
