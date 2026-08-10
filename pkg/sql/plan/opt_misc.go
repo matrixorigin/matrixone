@@ -709,7 +709,7 @@ func determineHashOnPK(nodeID int32, builder *QueryBuilder) map[uint64][]uint64 
 	node := builder.qry.Nodes[nodeID]
 
 	if node.NodeType == plan.Node_TABLE_SCAN {
-		if node.TableDef.Pkey == nil {
+		if node.TableDef == nil || node.TableDef.Pkey == nil || len(node.BindingTags) == 0 {
 			return nil
 		}
 		tag := uint64(node.BindingTags[0]) << 32

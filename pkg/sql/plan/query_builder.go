@@ -856,7 +856,7 @@ func (builder *QueryBuilder) remapRegularIndexPreInsert(
 		return nil, moerr.NewInternalError(builder.GetContext(), "invalid regular index pre-insert input")
 	}
 	if len(node.BindingTags) == 0 {
-		node.BindingTags = []int32{0}
+		node.BindingTags = []int32{builder.genNewBindTag()}
 	}
 
 	childTag := child.BindingTags[0]
@@ -2908,17 +2908,67 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 			}
 		}
 
-	case plan.Node_INSERT, plan.Node_DELETE:
+	case plan.Node_DELETE:
+		deleteRefs, remapDeletePositions := builder.positionalDeleteInputRefs[nodeID]
+		rowIDRef := deleteRefs.rowID
+		primaryKeyRef := deleteRefs.primaryKey
+		if remapDeletePositions {
+			colRefCnt[rowIDRef]++
+			colRefCnt[primaryKeyRef]++
+			if deleteRefs.sourceRowID != [2]int32{} {
+				colRefCnt[deleteRefs.sourceRowID]++
+				colRefCnt[deleteRefs.sourcePrimaryKey]++
+			}
+		}
+		childRemapping, err := builder.remapAllColRefs(node.Children[0], step, colRefCnt, colRefBool, sinkColRef)
+		if err != nil {
+			return nil, err
+		}
+		if remapDeletePositions {
+			colRefCnt[rowIDRef]--
+			colRefCnt[primaryKeyRef]--
+			rowIDPos, ok := childRemapping.globalToLocal[rowIDRef]
+			if !ok && deleteRefs.sourceRowID != [2]int32{} {
+				rowIDPos, ok = childRemapping.globalToLocal[deleteRefs.sourceRowID]
+			}
+			if !ok {
+				return nil, moerr.NewInternalError(builder.GetContext(), "missing hidden-index DELETE rowid column")
+			}
+			primaryKeyPos, ok := childRemapping.globalToLocal[primaryKeyRef]
+			if !ok && deleteRefs.sourcePrimaryKey != [2]int32{} {
+				primaryKeyPos, ok = childRemapping.globalToLocal[deleteRefs.sourcePrimaryKey]
+			}
+			if !ok {
+				return nil, moerr.NewInternalError(builder.GetContext(), "missing hidden-index DELETE primary key column")
+			}
+			if deleteRefs.sourceRowID != [2]int32{} {
+				colRefCnt[deleteRefs.sourceRowID]--
+				colRefCnt[deleteRefs.sourcePrimaryKey]--
+			}
+			node.DeleteCtx.RowIdIdx = rowIDPos[1]
+			node.DeleteCtx.PrimaryKeyIdx = primaryKeyPos[1]
+		}
+
+		childProjList := builder.qry.Nodes[node.Children[0]].ProjectList
+		for i, globalRef := range childRemapping.localToGlobal {
+			if colRefCnt[globalRef] == 0 && globalRef != rowIDRef && globalRef != primaryKeyRef &&
+				globalRef != deleteRefs.sourceRowID && globalRef != deleteRefs.sourcePrimaryKey {
+				continue
+			}
+
+			remapping.addColRef(globalRef)
+			node.ProjectList = append(node.ProjectList, &plan.Expr{
+				Typ: childProjList[i].Typ,
+				Expr: &plan.Expr_Col{Col: &plan.ColRef{
+					RelPos: 0, ColPos: int32(i), Name: builder.nameByColRef[globalRef],
+				}},
+			})
+		}
+
+	case plan.Node_INSERT:
 		if _, preserve := builder.preserveInsertProjection[nodeID]; preserve {
-			child := builder.qry.Nodes[node.Children[0]]
-			if len(child.BindingTags) == 1 {
-				for i := range child.ProjectList {
-					colRefCnt[[2]int32{child.BindingTags[0], int32(i)}]++
-				}
-			} else {
-				for _, expr := range child.ProjectList {
-					increaseRefCnt(expr, 1, colRefCnt)
-				}
+			for _, expr := range builder.qry.Nodes[node.Children[0]].ProjectList {
+				increaseRefCnt(expr, 1, colRefCnt)
 			}
 		}
 		childRemapping, err := builder.remapAllColRefs(node.Children[0], step, colRefCnt, colRefBool, sinkColRef)
@@ -3106,8 +3156,13 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 		}
 
 	case plan.Node_PRE_INSERT_UK:
-		if node.PreInsertUkCtx == nil || !node.PreInsertUkCtx.InsertIgnoreMultiDedup {
-			return nil, moerr.NewInternalError(builder.GetContext(), "unsupported PRE_INSERT_UK node in query plan")
+		if node.PreInsertUkCtx == nil {
+			return nil, moerr.NewInternalError(builder.GetContext(), "invalid PRE_INSERT_UK node in query plan")
+		}
+		if !node.PreInsertUkCtx.InsertIgnoreMultiDedup {
+			return builder.remapRegularIndexPreInsert(
+				nodeID, step, colRefCnt, colRefBool, sinkColRef, node.PreInsertUkCtx,
+			)
 		}
 
 		child := builder.qry.Nodes[node.Children[0]]
@@ -3381,7 +3436,14 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		}
 		reCalcNodeStatsAfterSwap(rootID, builder, true, false, false)
 
-		builder.generateRuntimeFilters(rootID)
+		// Foreign-key actions form a multi-step DAG with shared sink sources. A
+		// runtime-filter producer in one action step can otherwise wait on a scan
+		// in another step that is itself waiting for that filter.
+		if !builder.qry.HasForeignKeyAction {
+			builder.generateRuntimeFilters(rootID)
+		} else {
+			builder.clearRuntimeFilters(rootID)
+		}
 		builder.pushdownVectorIndexTopToTableScan(rootID)
 		builder.removeSimpleProjections(rootID, plan.Node_UNKNOWN, false, colRefCnt)
 		reCalcNodeStatsAfterSwap(rootID, builder, true, false, false)

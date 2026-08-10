@@ -609,6 +609,15 @@ func (builder *QueryBuilder) generateRuntimeFilters(nodeID int32) {
 	}
 }
 
+func (builder *QueryBuilder) clearRuntimeFilters(nodeID int32) {
+	node := builder.qry.Nodes[nodeID]
+	node.RuntimeFilterProbeList = nil
+	node.RuntimeFilterBuildList = nil
+	for _, childID := range node.Children {
+		builder.clearRuntimeFilters(childID)
+	}
+}
+
 // finalizeFuzzyRuntimeFilter makes build-side selection, delivery, and
 // selectivity one planner decision. The candidate is constructed with the
 // fuzzy node, but no stats or placement are changed until final costs are

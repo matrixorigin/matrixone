@@ -2308,12 +2308,24 @@ func appendPrimaryConstraintPlan(
 					ProjectList: []*Expr{scanPkExpr, scanRowIdExpr},
 				}
 				rightId := builder.appendNode(scanNode, bindCtx)
+				inputRelPos := int32(1)
+				if inputNode := builder.qry.Nodes[lastNodeId]; len(inputNode.BindingTags) == 1 {
+					inputRelPos = inputNode.BindingTags[0]
+				} else if builder.qry.HasForeignKeyAction {
+					inputRelPos = builder.genNewBindTag()
+					lastNodeId = builder.appendNode(&plan.Node{
+						NodeType:    plan.Node_PROJECT,
+						Children:    []int32{lastNodeId},
+						ProjectList: getProjectionByLastNode(builder, lastNodeId),
+						BindingTags: []int32{inputRelPos},
+					}, bindCtx)
+				}
 
 				pkColExpr := &Expr{
 					Typ: pkTyp,
 					Expr: &plan.Expr_Col{
 						Col: &ColRef{
-							RelPos: 1,
+							RelPos: inputRelPos,
 							ColPos: int32(pkPos),
 							Name:   tableDef.Pkey.PkeyColName,
 						},
@@ -2344,7 +2356,7 @@ func appendPrimaryConstraintPlan(
 					Typ: rowIdDef.Typ,
 					Expr: &plan.Expr_Col{
 						Col: &ColRef{
-							RelPos: 1,
+							RelPos: inputRelPos,
 							ColPos: int32(rowIdIdx),
 							Name:   rowIdDef.Name,
 						},

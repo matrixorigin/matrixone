@@ -145,6 +145,14 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 		}
 	}
 	needsOldIndexMaintenance := !isFakePK || hasUniqueIdx
+	buildParentFKActions := len(tableDef.RefChildTbls) > 0
+	if buildParentFKActions {
+		enabled, err := IsForeignKeyChecksEnabled(builder.compCtx)
+		if err != nil {
+			return 0, err
+		}
+		buildParentFKActions = enabled
+	}
 
 	// get old columns from existing main table
 	//
@@ -247,7 +255,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 
 		oldScanNodeID := builder.appendNode(&plan.Node{
 			NodeType:     plan.Node_TABLE_SCAN,
-			TableDef:     tableDef,
+			TableDef:     CloneTableDefForPlan(tableDef, true),
 			ObjRef:       objRef,
 			BindingTags:  []int32{oldScanTag},
 			ScanSnapshot: bindCtx.snapshot,
@@ -511,14 +519,6 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 
 	oldMainRowIDPos := oldColName2Idx[tableDef.Name+"."+catalog.Row_ID]
 	oldMainPKPos := oldColName2Idx[tableDef.Name+"."+tableDef.Pkey.PkeyColName]
-	buildParentFKActions := len(tableDef.RefChildTbls) > 0
-	if buildParentFKActions {
-		enabled, err := IsForeignKeyChecksEnabled(builder.compCtx)
-		if err != nil {
-			return 0, err
-		}
-		buildParentFKActions = enabled
-	}
 	replaceDedupOldColList := func(first [2]int32) []plan.ColRef {
 		oldCols := make([]plan.ColRef, 0, 3+len(tableDef.Indexes))
 		seen := make(map[[2]int32]struct{}, 3+len(tableDef.Indexes))

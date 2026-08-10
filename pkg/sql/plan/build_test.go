@@ -4810,42 +4810,57 @@ func queryUpdatesTable(query *plan.Query, table string) bool {
 	return false
 }
 
-func addReplaceChildSecondaryIndex(t *testing.T, mock *MockOptimizer, childName string) string {
+func assertNoRuntimeFilters(t *testing.T, query *plan.Query) {
+	t.Helper()
+	for _, node := range query.Nodes {
+		require.Empty(t, node.RuntimeFilterProbeList, "node %d has a runtime-filter probe", node.NodeId)
+		require.Empty(t, node.RuntimeFilterBuildList, "node %d has a runtime-filter build", node.NodeId)
+	}
+}
+
+func addReplaceChildIndex(
+	t *testing.T,
+	mock *MockOptimizer,
+	childName string,
+	partName string,
+	unique bool,
+) string {
 	t.Helper()
 
 	child := DeepCopyTableDef(mock.ctxt.tables[childName], true)
 	require.NotNil(t, child)
-	indexTableName := catalog.SecondaryIndexTableNamePrefix + childName + "_pid"
+	indexTableName := catalog.SecondaryIndexTableNamePrefix + childName + "_" + partName
 	child.Indexes = append(child.Indexes, &plan.IndexDef{
-		IndexName:      "idx_pid",
+		IndexName:      "idx_" + partName,
 		IndexTableName: indexTableName,
-		Parts:          []string{"pid"},
+		Parts:          []string{partName},
+		Unique:         unique,
 		TableExist:     true,
 		IndexAlgo:      catalog.MoIndexDefaultAlgo.ToString(),
 	})
 	mock.ctxt.tables[childName] = child
 
 	indexTableID := child.TblId + 1000
+	indexCols := []*plan.ColDef{
+		{Name: catalog.IndexTableIndexColName, ColId: 0,
+			Typ: plan.Type{Id: int32(types.T_int32), Width: 32}},
+		{Name: catalog.IndexTablePrimaryColName, ColId: 1,
+			Typ: plan.Type{Id: int32(types.T_int32), Width: 32}},
+	}
+	indexCols = append(indexCols, &plan.ColDef{Name: catalog.Row_ID, ColId: uint64(len(indexCols)), Hidden: true,
+		Typ: plan.Type{Id: int32(types.T_Rowid), Width: 16}})
 	indexTable := &plan.TableDef{
 		TblId: indexTableID,
 		Name:  indexTableName,
-		Cols: []*plan.ColDef{
-			{Name: catalog.IndexTableIndexColName, ColId: 0,
-				Typ: plan.Type{Id: int32(types.T_int32), Width: 32}},
-			{Name: catalog.IndexTablePrimaryColName, ColId: 1,
-				Typ: plan.Type{Id: int32(types.T_int32), Width: 32}},
-			{Name: catalog.Row_ID, ColId: 2, Hidden: true,
-				Typ: plan.Type{Id: int32(types.T_Rowid), Width: 16}},
-		},
+		Cols:  indexCols,
 		Pkey: &plan.PrimaryKeyDef{
 			Names:       []string{catalog.IndexTableIndexColName},
 			PkeyColName: catalog.IndexTableIndexColName,
 		},
-		Name2ColIndex: map[string]int32{
-			catalog.IndexTableIndexColName:   0,
-			catalog.IndexTablePrimaryColName: 1,
-			catalog.Row_ID:                   2,
-		},
+		Name2ColIndex: map[string]int32{catalog.IndexTableIndexColName: 0},
+	}
+	for i, col := range indexCols {
+		indexTable.Name2ColIndex[col.Name] = int32(i)
 	}
 	mock.ctxt.tables[indexTableName] = indexTable
 	mock.ctxt.objects[indexTableName] = &plan.ObjectRef{
@@ -4856,6 +4871,11 @@ func addReplaceChildSecondaryIndex(t *testing.T, mock *MockOptimizer, childName 
 	mock.ctxt.id2name[indexTableID] = indexTableName
 
 	return indexTableName
+}
+
+func addReplaceChildSecondaryIndex(t *testing.T, mock *MockOptimizer, childName string) string {
+	t.Helper()
+	return addReplaceChildIndex(t, mock, childName, "pid", false)
 }
 
 func assertLockTargetTypesMatchInput(t *testing.T, query *plan.Query) {
@@ -4911,36 +4931,70 @@ func TestReplaceParentSideFKCascade(t *testing.T) {
 }
 
 func TestReplaceParentSideFKIndexedChild(t *testing.T) {
-	t.Run("cascade literal", func(t *testing.T) {
-		mock := NewMockOptimizer(true)
-		indexTableName := addReplaceChildSecondaryIndex(t, mock, "replace_fk_cc")
+	for _, unique := range []bool{false, true} {
+		name := "secondary"
+		if unique {
+			name = "unique"
+		}
+		t.Run("cascade literal/"+name, func(t *testing.T) {
+			mock := NewMockOptimizer(true)
+			indexTableName := addReplaceChildIndex(t, mock, "replace_fk_cc", "pid", unique)
 
-		logicPlan, err := runOneStmt(mock, t, "REPLACE INTO replace_fk_cp VALUES (1, 'p1_new')")
-		require.NoError(t, err)
-		query := logicPlan.GetQuery()
-		require.True(t, queryDeletesTable(query, "replace_fk_cc"))
-		require.True(t, queryDeletesTable(query, indexTableName))
-		assertDeleteInputIndexesValid(t, query, indexTableName)
-	})
+			logicPlan, err := runOneStmt(mock, t, "REPLACE INTO replace_fk_cp VALUES (1, 'p1_new')")
+			require.NoError(t, err)
+			query := logicPlan.GetQuery()
+			require.True(t, queryDeletesTable(query, "replace_fk_cc"))
+			require.True(t, queryDeletesTable(query, indexTableName))
+			assertDeleteInputIndexesValid(t, query, indexTableName)
+			assertNoRuntimeFilters(t, query)
+		})
 
-	t.Run("set null prepared", func(t *testing.T) {
-		mock := NewMockOptimizer(true)
-		indexTableName := addReplaceChildSecondaryIndex(t, mock, "replace_fk_sc")
-		stmts, err := mysql.Parse(
-			mock.CurrentContext().GetContext(),
-			"REPLACE INTO replace_fk_sp VALUES (?, ?)",
-			1,
-		)
-		require.NoError(t, err)
+		t.Run("set null prepared/"+name, func(t *testing.T) {
+			mock := NewMockOptimizer(true)
+			indexTableName := addReplaceChildIndex(t, mock, "replace_fk_sc", "pid", unique)
+			stmts, err := mysql.Parse(
+				mock.CurrentContext().GetContext(),
+				"REPLACE INTO replace_fk_sp VALUES (?, ?)",
+				1,
+			)
+			require.NoError(t, err)
 
-		logicPlan, err := BuildPlan(mock.CurrentContext(), stmts[0], true)
-		require.NoError(t, err)
-		query := logicPlan.GetQuery()
-		require.True(t, queryUpdatesTable(query, "replace_fk_sc"))
-		require.True(t, queryDeletesTable(query, indexTableName))
-		assertDeleteInputIndexesValid(t, query, indexTableName)
-		assertInsertInputColumnsValid(t, query, indexTableName)
-	})
+			logicPlan, err := BuildPlan(mock.CurrentContext(), stmts[0], true)
+			require.NoError(t, err)
+			query := logicPlan.GetQuery()
+			require.True(t, queryUpdatesTable(query, "replace_fk_sc"))
+			require.True(t, queryDeletesTable(query, indexTableName))
+			assertDeleteInputIndexesValid(t, query, indexTableName)
+			assertInsertInputColumnsValid(t, query, indexTableName)
+			assertNoRuntimeFilters(t, query)
+		})
+	}
+}
+
+func TestReplaceSelfReferSetNullIndexed(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		unique bool
+	}{
+		{name: "secondary"},
+		{name: "unique", unique: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mock := NewMockOptimizer(true)
+			tableDef := mock.ctxt.tables["self_ref_cascade"]
+			tableDef.Fkeys[0].OnDelete = plan.ForeignKeyDef_SET_NULL
+			tableDef.Fkeys[0].OnUpdate = plan.ForeignKeyDef_SET_NULL
+			indexTableName := addReplaceChildIndex(t, mock, "self_ref_cascade", "parent_id", tc.unique)
+
+			logicPlan, err := runOneStmt(mock, t, "REPLACE INTO self_ref_cascade VALUES (1, 1)")
+			require.NoError(t, err)
+			query := logicPlan.GetQuery()
+			require.True(t, queryUpdatesTable(query, "self_ref_cascade"))
+			require.True(t, queryDeletesTable(query, indexTableName))
+			assertDeleteInputIndexesValid(t, query, indexTableName)
+			assertInsertInputColumnsValid(t, query, indexTableName)
+		})
+	}
 }
 
 func TestReplaceParentSideFKExplicitColumns(t *testing.T) {
@@ -5049,6 +5103,7 @@ func TestReplaceSelfReferSetNullExcludesMainOldRow(t *testing.T) {
 	require.NoError(t, err)
 	query := logicPlan.GetQuery()
 	assert.True(t, queryUpdatesTable(query, "self_ref_cascade"))
+	assertNoRuntimeFilters(t, query)
 	assert.True(t, slices.ContainsFunc(query.Nodes, func(node *plan.Node) bool {
 		return node.NodeType == plan.Node_JOIN && node.JoinType == plan.Node_INNER && len(node.OnList) > 1
 	}),
@@ -5082,6 +5137,7 @@ func TestReplaceCascadeWinsOverSetNullForSameChildRow(t *testing.T) {
 	logicPlan, err := runOneStmt(mock, t, "REPLACE INTO replace_fk_sp VALUES (1, 'p1_new')")
 	require.NoError(t, err)
 	query := logicPlan.GetQuery()
+	assertNoRuntimeFilters(t, query)
 	assert.True(t, queryUpdatesTable(query, "replace_fk_sc"))
 	assert.True(t, queryDeletesTable(query, "replace_fk_sc"))
 	assert.True(t, slices.ContainsFunc(query.Nodes, func(node *plan.Node) bool {

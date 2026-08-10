@@ -661,10 +661,139 @@ set @replace_idx_note = 'first';
 execute replace_idx_setnull_stmt using @replace_idx_id, @replace_idx_note;
 insert into t_replace_idx_setnull_c values (10, 1);
 select * from t_replace_idx_setnull_c force index(idx_pid) where pid = 1 order by id;
-replace into t_replace_idx_setnull_p values (1, 'replaced');
+set @replace_idx_note = 'replaced';
+execute replace_idx_setnull_stmt using @replace_idx_id, @replace_idx_note;
 select * from t_replace_idx_setnull_p order by id;
 select * from t_replace_idx_setnull_c order by id;
 select * from t_replace_idx_setnull_c force index(idx_pid) where pid = 1 order by id;
 deallocate prepare replace_idx_setnull_stmt;
 drop table t_replace_idx_setnull_c;
 drop table t_replace_idx_setnull_p;
+
+drop table if exists t_replace_uk_cascade_c;
+drop table if exists t_replace_uk_cascade_p;
+create table t_replace_uk_cascade_p(id int primary key);
+create table t_replace_uk_cascade_c(
+  id int primary key,
+  pid int,
+  unique key uk_pid(pid),
+  foreign key(pid) references t_replace_uk_cascade_p(id) on delete cascade
+);
+insert into t_replace_uk_cascade_p values (1);
+insert into t_replace_uk_cascade_c values (10, 1);
+prepare replace_uk_cascade_stmt from 'replace into t_replace_uk_cascade_p values (?)';
+set @replace_uk_id = 1;
+execute replace_uk_cascade_stmt using @replace_uk_id;
+select * from t_replace_uk_cascade_c order by id;
+deallocate prepare replace_uk_cascade_stmt;
+drop table t_replace_uk_cascade_c;
+drop table t_replace_uk_cascade_p;
+
+drop table if exists t_replace_uk_setnull_c;
+drop table if exists t_replace_uk_setnull_p;
+create table t_replace_uk_setnull_p(id int primary key);
+create table t_replace_uk_setnull_c(
+  id int primary key,
+  pid int,
+  unique key uk_pid(pid),
+  foreign key(pid) references t_replace_uk_setnull_p(id) on delete set null
+);
+insert into t_replace_uk_setnull_p values (1);
+insert into t_replace_uk_setnull_c values (10, 1);
+prepare replace_uk_setnull_stmt from 'replace into t_replace_uk_setnull_p values (?)';
+set @replace_uk_id = 1;
+execute replace_uk_setnull_stmt using @replace_uk_id;
+select * from t_replace_uk_setnull_c order by id;
+deallocate prepare replace_uk_setnull_stmt;
+drop table t_replace_uk_setnull_c;
+drop table t_replace_uk_setnull_p;
+
+drop table if exists t_replace_self_setnull;
+create table t_replace_self_setnull(
+  id int primary key,
+  pid int,
+  unique key uk_pid(pid),
+  foreign key(pid) references t_replace_self_setnull(id) on delete set null
+);
+insert into t_replace_self_setnull values (1, null), (2, 1);
+prepare replace_self_setnull_stmt from 'replace into t_replace_self_setnull values (?, null)';
+set @replace_self_id = 1;
+execute replace_self_setnull_stmt using @replace_self_id;
+select * from t_replace_self_setnull order by id;
+deallocate prepare replace_self_setnull_stmt;
+drop table t_replace_self_setnull;
+
+drop table if exists t_replace_mixed_action_c;
+drop table if exists t_replace_mixed_action_p;
+create table t_replace_mixed_action_p(id int primary key);
+create table t_replace_mixed_action_c(
+  id int primary key,
+  cascade_pid int,
+  setnull_pid int,
+  key idx_cascade_pid(cascade_pid),
+  key idx_setnull_pid(setnull_pid),
+  foreign key(cascade_pid) references t_replace_mixed_action_p(id) on delete cascade,
+  foreign key(setnull_pid) references t_replace_mixed_action_p(id) on delete set null
+);
+insert into t_replace_mixed_action_p values (1);
+insert into t_replace_mixed_action_c values (10, 1, 1);
+replace into t_replace_mixed_action_p values (1);
+select * from t_replace_mixed_action_c order by id;
+drop table t_replace_mixed_action_c;
+drop table t_replace_mixed_action_p;
+
+-- The tagged REPLACE action layout must not change ordinary multi-table DML
+-- hidden-index maintenance or prepared-plan reuse.
+drop table if exists t_replace_scope_delete_join;
+drop table if exists t_replace_scope_delete;
+create table t_replace_scope_delete(id int primary key, u int unique);
+create table t_replace_scope_delete_join(id int primary key);
+insert into t_replace_scope_delete values (1, 1);
+insert into t_replace_scope_delete_join values (1);
+delete t_replace_scope_delete from t_replace_scope_delete
+  join t_replace_scope_delete_join on t_replace_scope_delete.id = t_replace_scope_delete_join.id;
+insert into t_replace_scope_delete values (2, 1);
+select * from t_replace_scope_delete order by id;
+drop table t_replace_scope_delete_join;
+drop table t_replace_scope_delete;
+
+drop table if exists t_replace_scope_update_join;
+drop table if exists t_replace_scope_update;
+create table t_replace_scope_update(id int primary key, u int unique);
+create table t_replace_scope_update_join(id int primary key);
+insert into t_replace_scope_update values (1, 1);
+insert into t_replace_scope_update_join values (1);
+update t_replace_scope_update join t_replace_scope_update_join
+  on t_replace_scope_update.id = t_replace_scope_update_join.id
+  set t_replace_scope_update.u = 6;
+insert into t_replace_scope_update values (2, 1);
+insert ignore into t_replace_scope_update values (3, 6);
+select * from t_replace_scope_update order by id;
+prepare replace_scope_update_stmt from
+  'update t_replace_scope_update join t_replace_scope_update_join on t_replace_scope_update.id = t_replace_scope_update_join.id set t_replace_scope_update.u = ? where t_replace_scope_update_join.id = ?';
+set @replace_scope_u = 7;
+set @replace_scope_id = 1;
+execute replace_scope_update_stmt using @replace_scope_u, @replace_scope_id;
+set @replace_scope_u = 8;
+execute replace_scope_update_stmt using @replace_scope_u, @replace_scope_id;
+select * from t_replace_scope_update order by id;
+deallocate prepare replace_scope_update_stmt;
+drop table t_replace_scope_update_join;
+drop table t_replace_scope_update;
+
+drop table if exists t_replace_scope_setnull_c;
+drop table if exists t_replace_scope_setnull_p;
+create table t_replace_scope_setnull_p(id int primary key, u int unique);
+create table t_replace_scope_setnull_c(
+  id int primary key,
+  pid int,
+  foreign key(pid) references t_replace_scope_setnull_p(id) on delete set null
+);
+insert into t_replace_scope_setnull_p values (1, 10);
+insert into t_replace_scope_setnull_c values (1, 1);
+delete from t_replace_scope_setnull_p where id = 1;
+insert into t_replace_scope_setnull_p values (2, 10);
+select * from t_replace_scope_setnull_p order by id;
+select * from t_replace_scope_setnull_c order by id;
+drop table t_replace_scope_setnull_c;
+drop table t_replace_scope_setnull_p;

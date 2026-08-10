@@ -38,7 +38,7 @@ func (builder *QueryBuilder) mergeFiltersOnCompositeKey(nodeID int32) {
 		return
 	}
 
-	if node.TableDef.Pkey == nil {
+	if node.TableDef == nil || node.TableDef.Pkey == nil || len(node.BindingTags) == 0 {
 		return
 	}
 

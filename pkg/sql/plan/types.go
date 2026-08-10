@@ -250,6 +250,7 @@ type QueryBuilder struct {
 	preserveInsertProjection    map[int32]struct{}
 	preserveScanProjection      map[int32]struct{}
 	positionalSinkScans         map[int32]struct{}
+	positionalDeleteInputRefs   map[int32]deleteInputRefs
 
 	tag2Table  map[int32]*TableDef
 	tag2NodeID map[int32]int32
@@ -332,6 +333,13 @@ type QueryBuilder struct {
 	// populated lazily so unused CTE bodies retain their existing lazy-binding
 	// semantics.
 	cteRefs []*CTERef
+}
+
+type deleteInputRefs struct {
+	rowID            [2]int32
+	primaryKey       [2]int32
+	sourceRowID      [2]int32
+	sourcePrimaryKey [2]int32
 }
 
 type OptimizerHints struct {
