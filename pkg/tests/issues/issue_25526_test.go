@@ -143,6 +143,46 @@ func TestIssue25526PreparedUpdateJoinSecondExecute(t *testing.T) {
 				"select count(*), count(*) - count(pid) from self_setnull where id=2").Scan(&id2Rows, &id2NullRows))
 			require.Equal(t, 1, id2Rows)
 			require.Equal(t, 1, id2NullRows)
+
+			// Recursive action graphs must report the FK violation and roll the
+			// statement back instead of failing during remapping or execution.
+			mustExec(t, ctx, conn, "create table nested_parent(id int primary key)")
+			mustExec(t, ctx, conn, `create table nested_child(
+				id int primary key,
+				pid int,
+				foreign key(pid) references nested_parent(id) on delete cascade)`)
+			mustExec(t, ctx, conn, `create table nested_guard(
+				id int primary key,
+				cid int,
+				foreign key(cid) references nested_child(id) on delete restrict)`)
+			mustExec(t, ctx, conn, "insert into nested_parent values(1)")
+			mustExec(t, ctx, conn, "insert into nested_child values(1,1)")
+			mustExec(t, ctx, conn, "insert into nested_guard values(1,1)")
+			_, err = conn.ExecContext(ctx, "replace into nested_parent values(1)")
+			require.Error(t, err)
+			for _, table := range []string{"nested_parent", "nested_child", "nested_guard"} {
+				var rows int
+				require.NoError(t, conn.QueryRowContext(ctx, "select count(*) from "+table).Scan(&rows))
+				require.Equal(t, 1, rows, "failed nested action must preserve %s", table)
+			}
+
+			mustExec(t, ctx, conn, "create table cycle_a(id int primary key, bid int)")
+			mustExec(t, ctx, conn, `create table cycle_b(
+				id int primary key,
+				aid int,
+				foreign key(aid) references cycle_a(id) on delete cascade)`)
+			mustExec(t, ctx, conn, `alter table cycle_a add constraint fk_cycle_a_b
+				foreign key(bid) references cycle_b(id) on delete cascade`)
+			mustExec(t, ctx, conn, "insert into cycle_a values(1,null)")
+			mustExec(t, ctx, conn, "insert into cycle_b values(1,1)")
+			mustExec(t, ctx, conn, "update cycle_a set bid=1 where id=1")
+			_, err = conn.ExecContext(ctx, "replace into cycle_a values(1,1)")
+			require.Error(t, err)
+			for _, table := range []string{"cycle_a", "cycle_b"} {
+				var rows int
+				require.NoError(t, conn.QueryRowContext(ctx, "select count(*) from "+table).Scan(&rows))
+				require.Equal(t, 1, rows, "failed cycle action must preserve %s", table)
+			}
 		},
 	)
 }
