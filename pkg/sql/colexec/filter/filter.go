@@ -84,6 +84,11 @@ func (filter *Filter) Call(proc *process.Process) (vm.CallResult, error) {
 
 	filterBat := inputResult.Batch
 	var sels []int64
+	defer func() {
+		if sels != nil {
+			vector.PutSels(sels)
+		}
+	}()
 	for i := range filter.ctr.allExecutors {
 		if filterBat.IsEmpty() {
 			break
@@ -102,6 +107,13 @@ func (filter *Filter) Call(proc *process.Process) (vm.CallResult, error) {
 
 		if !vec.GetType().IsBoolean() {
 			return vm.CancelResult, moerr.NewInvalidInput(proc.Ctx, "filter condition is not boolean")
+		}
+		if filter.IsAssert && i >= len(filter.ctr.runtimeExecutors) {
+			// ASSERT expressions report violations as executor errors. Successful
+			// evaluation is row preserving, so scanning a TRUE vector and building
+			// a selection vector would only add per-row work. Runtime filters, if
+			// attached, remain cardinality-changing and still use the normal path.
+			continue
 		}
 
 		if filter.ctr.bs == nil {
@@ -150,10 +162,6 @@ func (filter *Filter) Call(proc *process.Process) (vm.CallResult, error) {
 				}
 			}
 		}
-	}
-
-	if sels != nil {
-		vector.PutSels(sels)
 	}
 
 	// bad design here. should compile a pipeline like `-> restrict -> output (just do clean work or memory reuse) -> `
