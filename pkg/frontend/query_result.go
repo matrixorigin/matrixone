@@ -154,6 +154,7 @@ func prepareQueryResultBatchForWrite(
 	bat *batch.Batch,
 	mp *mpool.MPool,
 ) (*batch.Batch, func(), error) {
+	rowCount := bat.RowCount()
 	var writeBat *batch.Batch
 	cloned := make([]*vector.Vector, 0)
 	release := func() {
@@ -163,27 +164,60 @@ func prepareQueryResultBatchForWrite(
 	}
 
 	for i, vec := range bat.Vecs {
-		if vec == nil || !vec.IsConst() || vec.Length() == bat.RowCount() {
+		if vec == nil {
+			release()
+			return nil, nil, moerr.NewInternalErrorNoCtxf(
+				"query result column %d is nil", i,
+			)
+		}
+		if vec.Length() == rowCount {
 			continue
+		}
+		if !vec.IsConst() && vec.Length() > rowCount {
+			release()
+			return nil, nil, moerr.NewInternalErrorNoCtxf(
+				"query result column %d has %d rows, batch has %d",
+				i, vec.Length(), rowCount,
+			)
+		}
+		if !vec.IsConst() {
+			for row := vec.Length(); row < rowCount; row++ {
+				if !vec.GetNulls().Contains(uint64(row)) {
+					release()
+					return nil, nil, moerr.NewInternalErrorNoCtxf(
+						"query result column %d is missing non-null row %d",
+						i, row,
+					)
+				}
+			}
 		}
 		if writeBat == nil {
 			writeBat = batch.NewWithSize(len(bat.Vecs))
 			writeBat.Attrs = bat.Attrs
 			copy(writeBat.Vecs, bat.Vecs)
-			writeBat.SetRowCount(bat.RowCount())
+			writeBat.SetRowCount(rowCount)
 		}
 		dup, err := vec.Dup(mp)
 		if err != nil {
 			release()
 			return nil, nil, err
 		}
+		cloned = append(cloned, dup)
 		// Prepared-parameter provenance is execution-only and is not part of the
 		// stable vector encoding. Drop it before extending the persisted logical
 		// length so a heterogeneous sidecar cannot grow with the result batch.
 		dup.SetPrepareParamKinds(nil)
-		dup.SetLength(bat.RowCount())
+		if vec.IsConst() {
+			dup.SetLength(rowCount)
+		} else {
+			for dup.Length() < rowCount {
+				if err := dup.UnionNull(mp); err != nil {
+					release()
+					return nil, nil, err
+				}
+			}
+		}
 		writeBat.Vecs[i] = dup
-		cloned = append(cloned, dup)
 	}
 
 	if writeBat == nil {
