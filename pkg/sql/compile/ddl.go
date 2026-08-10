@@ -4876,7 +4876,7 @@ func maybeResetAutoIncrement(
 	return nil
 }
 
-// requireCheckRenameProtocol is the sender-side safety boundary for the v14
+// requireCheckRenameProtocol is the sender-side safety boundary for the v15
 // AlterTableRenameCol.checks field. Planner checks provide an earlier error,
 // while this check prevents a synthesized or cached plan from sending required
 // CHECK metadata to a receiver whose alter handler cannot apply it.
@@ -4887,10 +4887,10 @@ func (c *Compile) requireCheckRenameProtocol(checks []*plan.CheckDef) error {
 	value, ok := moruntime.ServiceRuntime(c.proc.GetService()).
 		GetGlobalVariables(moruntime.MOProtocolVersion)
 	version, valid := value.(int64)
-	if !ok || !valid || version < defines.MORPCVersion14 {
+	if !ok || !valid || version < defines.MORPCVersion15 {
 		return moerr.NewNotSupported(
 			c.proc.Ctx,
-			"renaming a column in a table with CHECK constraints requires all services to support protocol version 14",
+			"renaming a column in a table with CHECK constraints requires all services to support protocol version 15",
 		)
 	}
 	return nil

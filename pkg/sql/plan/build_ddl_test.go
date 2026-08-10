@@ -436,7 +436,7 @@ func TestBuildAlterRenameColumnRecoversLegacyChecks(t *testing.T) {
 		})
 	}
 
-	t.Run("legacy check inplace is rejected before protocol version 14", func(t *testing.T) {
+	t.Run("legacy check inplace is rejected before protocol version 15", func(t *testing.T) {
 		stmt := parseRename(t)
 		defer stmt.Free()
 
@@ -455,14 +455,14 @@ func TestBuildAlterRenameColumnRecoversLegacyChecks(t *testing.T) {
 				rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
 			}
 		}()
-		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion13)
+		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion14)
 
 		_, err := BuildPlan(ctx, stmt, false)
-		require.ErrorContains(t, err, "protocol version 14")
+		require.ErrorContains(t, err, "protocol version 15")
 		require.Empty(t, ctx.tables["nation"].Checks, "catalog-owned source must remain unchanged")
 	})
 
-	t.Run("legacy check copy remains compatible at protocol version 13", func(t *testing.T) {
+	t.Run("legacy check copy remains compatible at protocol version 14", func(t *testing.T) {
 		stmt, err := parsers.ParseOne(
 			t.Context(),
 			dialect.MYSQL,
@@ -487,7 +487,7 @@ func TestBuildAlterRenameColumnRecoversLegacyChecks(t *testing.T) {
 				rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
 			}
 		}()
-		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion13)
+		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion14)
 
 		p, err := BuildPlan(ctx, stmt, false)
 		require.NoError(t, err)

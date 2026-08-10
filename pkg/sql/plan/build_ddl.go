@@ -4782,7 +4782,7 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 			}
 			// Only INPLACE sends AlterTableRenameCol.checks to TN. COPY persists
 			// the rewritten CHECK definitions through its temporary-table schema
-			// and therefore remains compatible with protocol versions before v14.
+			// and therefore remains compatible with protocol versions before v15.
 			if err := requireCheckRenameProtocol(ctx, alterTable.CopyTableDef.Checks); err != nil {
 				return nil, err
 			}

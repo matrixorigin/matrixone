@@ -231,7 +231,7 @@ func requirePrefixIndexesRenameProtocol(ctx CompilerContext, indexes []*plan.Ind
 // requireCheckRenameProtocol prevents a new CN from sending CHECK metadata in
 // AlterTableRenameCol to an old TN whose generated request type cannot expose
 // the unknown protobuf field to its alter handler. During a rolling upgrade,
-// the deployment protocol version stays at the oldest live service, so v14
+// the deployment protocol version stays at the oldest live service, so v15
 // proves every receiver can persist the rewritten CHECK definitions.
 func requireCheckRenameProtocol(ctx CompilerContext, checks []*plan.CheckDef) error {
 	if len(checks) == 0 || ctx.GetProcess() == nil {
@@ -240,10 +240,10 @@ func requireCheckRenameProtocol(ctx CompilerContext, checks []*plan.CheckDef) er
 	value, ok := moruntime.ServiceRuntime(ctx.GetProcess().GetService()).
 		GetGlobalVariables(moruntime.MOProtocolVersion)
 	version, valid := value.(int64)
-	if !ok || !valid || version < defines.MORPCVersion14 {
+	if !ok || !valid || version < defines.MORPCVersion15 {
 		return moerr.NewNotSupported(
 			ctx.GetContext(),
-			"renaming a column in a table with CHECK constraints requires all services to support protocol version 14",
+			"renaming a column in a table with CHECK constraints requires all services to support protocol version 15",
 		)
 	}
 	return nil

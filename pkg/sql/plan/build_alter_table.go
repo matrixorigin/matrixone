@@ -35,7 +35,7 @@ import (
 	"go.uber.org/zap"
 )
 
-func skipPkDedup(old, new *TableDef) bool {
+func skipPkDedup(old, new *TableDef, sourceColumns map[string]selectExpr) bool {
 	oldPk := old.Pkey
 	newPk := new.Pkey
 
@@ -59,10 +59,10 @@ func skipPkDedup(old, new *TableDef) bool {
 	if len(parts) == 0 {
 		parts = []string{newPk.PkeyColName}
 	}
-	return alterCopyKeyPartsValueUnchanged(old, new, parts)
+	return alterCopyKeyPartsValueUnchanged(old, new, parts, sourceColumns)
 }
 
-func skipUniqueIdxDedup(old, new *TableDef) map[string]bool {
+func skipUniqueIdxDedup(old, new *TableDef, sourceColumns map[string]selectExpr) map[string]bool {
 	var skip map[string]bool
 	// In spite of the O(n^2) complexity,
 	// it's rare for a table to have enough indexes to cause
@@ -79,7 +79,7 @@ func skipUniqueIdxDedup(old, new *TableDef) map[string]bool {
 				slices.Equal(idx.Parts, oldidx.Parts) &&
 				oldidx.IndexAlgo == idx.IndexAlgo &&
 				oldidx.IndexAlgoParams == idx.IndexAlgoParams &&
-				alterCopyKeyPartsValueUnchanged(old, new, idx.Parts) {
+				alterCopyKeyPartsValueUnchanged(old, new, idx.Parts, sourceColumns) {
 				if skip == nil {
 					skip = make(map[string]bool)
 				}
@@ -91,9 +91,22 @@ func skipUniqueIdxDedup(old, new *TableDef) map[string]bool {
 	return skip
 }
 
-func alterCopyKeyPartsValueUnchanged(old, new *TableDef, parts []string) bool {
+func alterCopyKeyPartsValueUnchanged(
+	old, new *TableDef,
+	parts []string,
+	sourceColumns map[string]selectExpr,
+) bool {
 	for _, part := range parts {
 		name := catalog.ResolveAlias(part)
+		source, ok := sourceColumns[name]
+		// A same-name DROP/ADD creates a new target column, even when its type is
+		// identical to the removed column. The copy INSERT then supplies a default
+		// (or generated) value instead of reading the old column. Dedup can only be
+		// skipped when the planner's source mapping proves this exact target key is
+		// copied from the corresponding old key column.
+		if !ok || source.sexprType != exprColumnName || !strings.EqualFold(source.sexprStr, name) {
+			return false
+		}
 		oldCol := FindColumn(old.Cols, name)
 		newCol := FindColumn(new.Cols, name)
 		if !alterCopyKeyColumnValueUnchanged(oldCol, newCol) {
@@ -317,9 +330,9 @@ func buildAlterTableCopy(stmt *tree.AlterTable, cctx CompilerContext) (*Plan, er
 	alterTablePlan.AffectedCols = affectedCols
 
 	opt := &plan.AlterCopyOpt{
-		SkipPkDedup:        skipPkDedup(tableDef, copyTableDef),
+		SkipPkDedup:        skipPkDedup(tableDef, copyTableDef, alterTableCtx.alterColMap),
 		TargetTableName:    copyTableDef.Name,
-		SkipUniqueIdxDedup: skipUniqueIdxDedup(tableDef, copyTableDef),
+		SkipUniqueIdxDedup: skipUniqueIdxDedup(tableDef, copyTableDef, alterTableCtx.alterColMap),
 	}
 
 	opt.SkipIndexesCopy = make(map[string]bool)

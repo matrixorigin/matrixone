@@ -22,11 +22,11 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// alterTableRenameColV13 models the receiver before the checks field was added.
+// alterTableRenameColV14 models the receiver before the checks field was added.
 // Protobuf compatibility permits that receiver to decode the request while its
 // generated type cannot expose the new field to the alter handler, which is why
 // the sender needs a rollout gate.
-type alterTableRenameColV13 struct {
+type alterTableRenameColV14 struct {
 	OldName              string   `protobuf:"bytes,1,opt,name=old_name,json=oldName,proto3" json:"old_name,omitempty"`
 	NewName              string   `protobuf:"bytes,2,opt,name=new_name,json=newName,proto3" json:"new_name,omitempty"`
 	SequenceNum          uint32   `protobuf:"varint,3,opt,name=sequence_num,json=sequenceNum,proto3" json:"sequence_num,omitempty"`
@@ -35,9 +35,9 @@ type alterTableRenameColV13 struct {
 	XXX_sizecache        int32    `json:"-"`
 }
 
-func (m *alterTableRenameColV13) Reset()         { *m = alterTableRenameColV13{} }
-func (m *alterTableRenameColV13) String() string { return proto.CompactTextString(m) }
-func (*alterTableRenameColV13) ProtoMessage()    {}
+func (m *alterTableRenameColV14) Reset()         { *m = alterTableRenameColV14{} }
+func (m *alterTableRenameColV14) String() string { return proto.CompactTextString(m) }
+func (*alterTableRenameColV14) ProtoMessage()    {}
 
 func TestNewRenameColumnReqWithChecks(t *testing.T) {
 	checks := []*plan.CheckDef{{OriginSql: "CHECK (`new_col` > 0)"}}
@@ -57,7 +57,7 @@ func TestNewRenameColumnReqWithChecks(t *testing.T) {
 	require.Equal(t, "CHECK (`new_col` > 0)", decoded.GetRenameCol().GetChecks()[0].GetOriginSql())
 }
 
-func TestV13RenameColumnDecoderAcceptsUnknownChecks(t *testing.T) {
+func TestV14RenameColumnDecoderAcceptsUnknownChecks(t *testing.T) {
 	rename := &AlterTableRenameCol{
 		OldName:     "old_col",
 		NewName:     "new_col",
@@ -71,11 +71,11 @@ func TestV13RenameColumnDecoderAcceptsUnknownChecks(t *testing.T) {
 	data, err := rename.Marshal()
 	require.NoError(t, err)
 
-	var legacy alterTableRenameColV13
+	var legacy alterTableRenameColV14
 	require.NoError(t, proto.Unmarshal(data, &legacy))
 	require.Equal(t, "old_col", legacy.OldName)
 	require.Equal(t, "new_col", legacy.NewName)
 	require.Equal(t, uint32(3), legacy.SequenceNum)
 	require.NotEmpty(t, legacy.XXX_unrecognized,
-		"v13 accepts the request but exposes no CHECK field for the TN alter handler to apply")
+		"v14 accepts the request but exposes no CHECK field for the TN alter handler to apply")
 }

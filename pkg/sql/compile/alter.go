@@ -840,6 +840,14 @@ func getAlterCopyPkPrecheck(qry *plan.AlterTable) (pkCols []string, checkNotNull
 		if !alterCopyPkColumnValueUnchanged(oldCol, newCol) {
 			return nil, false
 		}
+		// ChangeTblColIdMap is the compiler-side ownership proof that the target
+		// key is populated from this old column. Without it, a same-name DROP/ADD
+		// may populate every target row from one default value; checking the old
+		// column for duplicates would then say nothing about the copied key.
+		mappedCol, ok := qry.ChangeTblColIdMap[oldCol.ColId]
+		if !ok || mappedCol == nil || !strings.EqualFold(mappedCol.Name, newCol.Name) {
+			return nil, false
+		}
 		if !oldCol.GetNotNull() && !oldCol.GetTyp().NotNullable {
 			checkNotNull = true
 		}

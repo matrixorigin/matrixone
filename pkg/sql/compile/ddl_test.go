@@ -106,11 +106,11 @@ func TestRequireCheckRenameProtocol(t *testing.T) {
 	}()
 
 	checks := []*plan2.CheckDef{{OriginSql: "`renamed_col` > 0"}}
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion13)
-	require.ErrorContains(t, c.requireCheckRenameProtocol(checks), "protocol version 14")
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion14)
+	require.ErrorContains(t, c.requireCheckRenameProtocol(checks), "protocol version 15")
 	require.NoError(t, c.requireCheckRenameProtocol(nil))
 
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion14)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion15)
 	require.NoError(t, c.requireCheckRenameProtocol(checks))
 }
 

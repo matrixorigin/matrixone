@@ -785,15 +785,26 @@ func TestSkipUniqueIdxDedupMatchesSameUniqueDefinition(t *testing.T) {
 		},
 	}
 
-	skip := skipUniqueIdxDedup(oldTable, newTable)
+	identitySources := map[string]selectExpr{
+		"title": {sexprType: exprColumnName, sexprStr: "title"},
+		"note":  {sexprType: exprColumnName, sexprStr: "note"},
+	}
+	skip := skipUniqueIdxDedup(oldTable, newTable, identitySources)
 	require.Equal(t, map[string]bool{"uk_title": true}, skip)
 
+	// Reusing a unique-index name and column name after DROP/ADD does not
+	// preserve the source value: the target column is populated by its default.
+	replacedSources := map[string]selectExpr{
+		"note": {sexprType: exprColumnName, sexprStr: "note"},
+	}
+	require.Empty(t, skipUniqueIdxDedup(oldTable, newTable, replacedSources))
+
 	newTable.Cols[0].Typ.Width = 8
-	require.Empty(t, skipUniqueIdxDedup(oldTable, newTable))
+	require.Empty(t, skipUniqueIdxDedup(oldTable, newTable, identitySources))
 
 	newTable.Cols[0] = DeepCopyColDef(oldTable.Cols[0])
 	newTable.Cols[0].GeneratedCol = &planpb.GeneratedCol{IsStored: true}
-	require.Empty(t, skipUniqueIdxDedup(oldTable, newTable))
+	require.Empty(t, skipUniqueIdxDedup(oldTable, newTable, identitySources))
 }
 
 func TestSkipPkDedupRequiresValuePreservingKeyColumns(t *testing.T) {
@@ -804,14 +815,18 @@ func TestSkipPkDedupRequiresValuePreservingKeyColumns(t *testing.T) {
 		Pkey: &planpb.PrimaryKeyDef{PkeyColName: "v", Names: []string{"v"}},
 	}
 	newTable := DeepCopyTableDef(oldTable, true)
-	require.True(t, skipPkDedup(oldTable, newTable))
+	identitySources := map[string]selectExpr{
+		"v": {sexprType: exprColumnName, sexprStr: "v"},
+	}
+	require.True(t, skipPkDedup(oldTable, newTable, identitySources))
+	require.False(t, skipPkDedup(oldTable, newTable, nil))
 
 	newTable.Cols[0].Typ.Scale = 1
-	require.False(t, skipPkDedup(oldTable, newTable))
+	require.False(t, skipPkDedup(oldTable, newTable, identitySources))
 
 	newTable = DeepCopyTableDef(oldTable, true)
 	newTable.Cols[0].GeneratedCol = &planpb.GeneratedCol{IsStored: true}
-	require.False(t, skipPkDedup(oldTable, newTable))
+	require.False(t, skipPkDedup(oldTable, newTable, identitySources))
 }
 
 func makeAlterCoverageTableDef() *TableDef {

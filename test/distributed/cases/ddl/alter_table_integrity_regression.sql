@@ -18,6 +18,26 @@ insert into uk_scale values (1,1.21), (2,1.24);
 alter table uk_scale modify column v decimal(6,1);
 select id, v from uk_scale order by id;
 
+-- Same-name DROP/ADD does not preserve the key's source-column identity.
+-- Every replacement key receives DEFAULT 0, so COPY must reject the duplicate
+-- and leave the original table unchanged.
+create table pk_same_name_replace (a bigint primary key, payload int);
+insert into pk_same_name_replace values (1,10), (2,20);
+alter table pk_same_name_replace
+    drop column a,
+    add column a bigint not null default 0 primary key;
+select a, payload from pk_same_name_replace order by a;
+
+create table uk_same_name_replace (
+    id int primary key,
+    u bigint not null unique
+);
+insert into uk_same_name_replace values (1,1), (2,2);
+alter table uk_same_name_replace
+    drop column u,
+    add column u bigint not null default 0 unique;
+select id, u from uk_same_name_replace order by id;
+
 -- #26839: rename only column references in persisted CHECK SQL.
 create table check_rename (
     a int,
