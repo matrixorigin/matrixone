@@ -603,6 +603,32 @@ func TestUpdateRenameColumnInTableDefRejectsDuplicateTargetName(t *testing.T) {
 	require.Contains(t, err.Error(), "Duplicate column name")
 }
 
+func TestUpdateRenameColumnInTableDefRewritesCheckOriginSQL(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	tableDef := makeAlterCoverageTableDef()
+	tableDef.Checks = []*planpb.CheckDef{
+		{
+			Name:      "chk_title",
+			OriginSql: "`title` <> 'title' AND `note` <> 'title'",
+		},
+	}
+
+	_, err := updateRenameColumnInTableDef(
+		mock.CurrentContext(),
+		tableDef.Cols[2],
+		tableDef,
+		&tree.AlterTableRenameColumnClause{
+			OldColumnName: tree.NewUnresolvedColName("title"),
+			NewColumnName: tree.NewUnresolvedColName("headline"),
+		},
+	)
+	require.NoError(t, err)
+	require.Equal(t,
+		"`headline` != 'title' and `note` != 'title'",
+		tableDef.Checks[0].OriginSql,
+	)
+}
+
 func TestAlterColumnSetDefaultUpdatesCopiedColumn(t *testing.T) {
 	mock := NewMockOptimizer(false)
 	origin := makeAlterCoverageTableDef()
@@ -708,12 +734,17 @@ func TestOrderByColumnRejectsUnknownColumn(t *testing.T) {
 
 func TestSkipUniqueIdxDedupMatchesSameUniqueDefinition(t *testing.T) {
 	oldTable := &TableDef{
+		Cols: []*ColDef{
+			{Name: "title", Typ: planpb.Type{Id: int32(types.T_varchar), Width: 64}},
+			{Name: "note", Typ: planpb.Type{Id: int32(types.T_varchar), Width: 64}},
+		},
 		Indexes: []*planpb.IndexDef{
 			{IndexName: "uk_title", Unique: true, Parts: []string{"title"}},
 			{IndexName: "idx_note", Unique: false, Parts: []string{"note"}},
 		},
 	}
 	newTable := &TableDef{
+		Cols: DeepCopyColDefList(oldTable.Cols),
 		Indexes: []*planpb.IndexDef{
 			{IndexName: "uk_title", Unique: true, Parts: []string{"title"}},
 			{IndexName: "uk_note", Unique: true, Parts: []string{"note"}},
@@ -722,6 +753,31 @@ func TestSkipUniqueIdxDedupMatchesSameUniqueDefinition(t *testing.T) {
 
 	skip := skipUniqueIdxDedup(oldTable, newTable)
 	require.Equal(t, map[string]bool{"uk_title": true}, skip)
+
+	newTable.Cols[0].Typ.Width = 8
+	require.Empty(t, skipUniqueIdxDedup(oldTable, newTable))
+
+	newTable.Cols[0] = DeepCopyColDef(oldTable.Cols[0])
+	newTable.Cols[0].GeneratedCol = &planpb.GeneratedCol{IsStored: true}
+	require.Empty(t, skipUniqueIdxDedup(oldTable, newTable))
+}
+
+func TestSkipPkDedupRequiresValuePreservingKeyColumns(t *testing.T) {
+	oldTable := &TableDef{
+		Cols: []*ColDef{
+			{Name: "v", Typ: planpb.Type{Id: int32(types.T_decimal64), Width: 6, Scale: 2}},
+		},
+		Pkey: &planpb.PrimaryKeyDef{PkeyColName: "v", Names: []string{"v"}},
+	}
+	newTable := DeepCopyTableDef(oldTable, true)
+	require.True(t, skipPkDedup(oldTable, newTable))
+
+	newTable.Cols[0].Typ.Scale = 1
+	require.False(t, skipPkDedup(oldTable, newTable))
+
+	newTable = DeepCopyTableDef(oldTable, true)
+	newTable.Cols[0].GeneratedCol = &planpb.GeneratedCol{IsStored: true}
+	require.False(t, skipPkDedup(oldTable, newTable))
 }
 
 func makeAlterCoverageTableDef() *TableDef {

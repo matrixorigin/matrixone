@@ -49,8 +49,17 @@ func skipPkDedup(old, new *TableDef) bool {
 		return false
 	}
 
-	// oldPk and newPk are not nil, check if the primary key is the same
-	return slices.Equal(oldPk.Names, newPk.Names)
+	// The copy INSERT can skip PK dedup only when every target key value is
+	// guaranteed to be identical to its source value. Matching column names are
+	// not enough: a type conversion can collapse distinct values during copy.
+	if !slices.Equal(oldPk.Names, newPk.Names) {
+		return false
+	}
+	parts := newPk.Names
+	if len(parts) == 0 {
+		parts = []string{newPk.PkeyColName}
+	}
+	return alterCopyKeyPartsValueUnchanged(old, new, parts)
 }
 
 func skipUniqueIdxDedup(old, new *TableDef) map[string]bool {
@@ -67,7 +76,10 @@ func skipUniqueIdxDedup(old, new *TableDef) map[string]bool {
 				continue
 			}
 			if oldidx.IndexName == idx.IndexName &&
-				slices.Equal(idx.Parts, oldidx.Parts) {
+				slices.Equal(idx.Parts, oldidx.Parts) &&
+				oldidx.IndexAlgo == idx.IndexAlgo &&
+				oldidx.IndexAlgoParams == idx.IndexAlgoParams &&
+				alterCopyKeyPartsValueUnchanged(old, new, idx.Parts) {
 				if skip == nil {
 					skip = make(map[string]bool)
 				}
@@ -77,6 +89,38 @@ func skipUniqueIdxDedup(old, new *TableDef) map[string]bool {
 		}
 	}
 	return skip
+}
+
+func alterCopyKeyPartsValueUnchanged(old, new *TableDef, parts []string) bool {
+	for _, part := range parts {
+		name := catalog.ResolveAlias(part)
+		oldCol := FindColumn(old.Cols, name)
+		newCol := FindColumn(new.Cols, name)
+		if !alterCopyKeyColumnValueUnchanged(oldCol, newCol) {
+			return false
+		}
+	}
+	return true
+}
+
+func alterCopyKeyColumnValueUnchanged(oldCol, newCol *ColDef) bool {
+	if oldCol == nil || newCol == nil {
+		return false
+	}
+	// Generated columns are recomputed for the copy INSERT. Even an unchanged
+	// generated expression can produce different key values when one of its
+	// input columns is altered, so keep target-side dedup enabled.
+	if oldCol.GeneratedCol != nil || newCol.GeneratedCol != nil {
+		return false
+	}
+	oldTyp, newTyp := oldCol.Typ, newCol.Typ
+	return oldTyp.Id == newTyp.Id &&
+		oldTyp.NotNullable == newTyp.NotNullable &&
+		oldTyp.AutoIncr == newTyp.AutoIncr &&
+		oldTyp.Width == newTyp.Width &&
+		oldTyp.Scale == newTyp.Scale &&
+		oldTyp.Table == newTyp.Table &&
+		oldTyp.Enumvalues == newTyp.Enumvalues
 }
 
 func tableHasAutoIncrementColumn(tableDef *TableDef) bool {

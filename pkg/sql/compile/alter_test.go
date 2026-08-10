@@ -1681,6 +1681,29 @@ func TestGetAlterCopyPkPrecheck(t *testing.T) {
 				Pkey: &plan.PrimaryKeyDef{PkeyColName: "col4", Names: []string{"col4"}},
 			},
 		},
+		{
+			name: "generated pk is recomputed during copy",
+			tableDef: &plan.TableDef{
+				Cols: []*plan.ColDef{{
+					Name: "col4",
+					Typ:  plan.Type{Id: int32(types.T_int32)},
+					GeneratedCol: &plan2.GeneratedCol{
+						IsStored: true,
+					},
+				}},
+				Pkey: &plan.PrimaryKeyDef{PkeyColName: "col4", Names: []string{"col4"}},
+			},
+			copyTableDef: &plan.TableDef{
+				Cols: []*plan.ColDef{{
+					Name: "col4",
+					Typ:  plan.Type{Id: int32(types.T_int32)},
+					GeneratedCol: &plan2.GeneratedCol{
+						IsStored: true,
+					},
+				}},
+				Pkey: &plan.PrimaryKeyDef{PkeyColName: "col4", Names: []string{"col4"}},
+			},
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			qry := &plan2.AlterTable{

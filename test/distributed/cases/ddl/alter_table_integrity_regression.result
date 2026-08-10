@@ -1,0 +1,72 @@
+drop database if exists alter_table_integrity_regression;
+create database alter_table_integrity_regression;
+use alter_table_integrity_regression;
+create table pk_scale (v decimal(6,2) primary key);
+insert into pk_scale values (1.21), (1.24);
+alter table pk_scale modify column v decimal(6,1);
+Duplicate entry '1.2' for key 'v'
+select v from pk_scale order by v;
+v
+1.21
+1.24
+create table uk_scale (id int primary key, v decimal(6,2), unique key uk_v(v));
+insert into uk_scale values (1,1.21), (2,1.24);
+alter table uk_scale modify column v decimal(6,1);
+Duplicate entry '1.2' for key 'v'
+select id, v from uk_scale order by id;
+id    v
+1    1.21
+2    1.24
+create table check_rename (
+a int,
+b int,
+note varchar(20),
+constraint ck_ab check (a < b and note <> 'a')
+);
+alter table check_rename rename column a to x;
+show create table check_rename;
+Table    Create Table
+check_rename    CREATE TABLE `check_rename` (\n  `x` int DEFAULT NULL,\n  `b` int DEFAULT NULL,\n  `note` varchar(20) DEFAULT NULL,\n  CONSTRAINT `ck_ab` CHECK (`x` < `b` and `note` != 'a')\n)
+insert into check_rename values (2,1,'ok');
+constraint violation: Check constraint 'ck_ab' is violated
+insert into check_rename values (1,2,'ok');
+select x, b, note from check_rename;
+x    b    note
+1    2    ok
+create table self_cascade (
+id int primary key,
+parent_id int,
+constraint fk_self_cascade foreign key (parent_id)
+references self_cascade(id) on delete cascade
+);
+insert into self_cascade values (1,null), (2,1);
+truncate table self_cascade;
+select count(*) from self_cascade;
+count(*)
+0
+insert into self_cascade values (3,null), (4,3);
+create table self_set_null (
+id int primary key,
+parent_id int,
+constraint fk_self_set_null foreign key (parent_id)
+references self_set_null(id) on delete set null
+);
+insert into self_set_null values (1,null), (2,1);
+truncate table self_set_null;
+select count(*) from self_set_null;
+count(*)
+0
+insert into self_set_null values (3,null), (4,3);
+create table self_restrict (
+id int primary key,
+parent_id int,
+constraint fk_self_restrict foreign key (parent_id)
+references self_restrict(id) on delete restrict
+);
+insert into self_restrict values (1,null), (2,1);
+truncate table self_restrict;
+select count(*) from self_restrict;
+count(*)
+0
+insert into self_restrict values (3,null), (4,3);
+drop database alter_table_integrity_regression;

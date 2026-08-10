@@ -928,8 +928,14 @@ func TestSkipPkDedupCoverage(t *testing.T) {
 		},
 		{
 			name: "same primary key names skip dedup",
-			old:  &TableDef{Pkey: &PrimaryKeyDef{PkeyColName: "id", Names: []string{"id"}}},
-			new:  &TableDef{Pkey: &PrimaryKeyDef{PkeyColName: "id", Names: []string{"id"}}},
+			old: &TableDef{
+				Cols: []*ColDef{{Name: "id", Typ: planpb.Type{Id: int32(types.T_int64)}}},
+				Pkey: &PrimaryKeyDef{PkeyColName: "id", Names: []string{"id"}},
+			},
+			new: &TableDef{
+				Cols: []*ColDef{{Name: "id", Typ: planpb.Type{Id: int32(types.T_int64)}}},
+				Pkey: &PrimaryKeyDef{PkeyColName: "id", Names: []string{"id"}},
+			},
 			want: true,
 		},
 		{

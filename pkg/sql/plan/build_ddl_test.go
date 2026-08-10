@@ -340,6 +340,116 @@ func TestBuildTruncateTemporaryTableDoesNotTargetPermanentTable(t *testing.T) {
 	}
 }
 
+func TestBuildTruncateTableSkipsSelfReferenceMarker(t *testing.T) {
+	stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, "truncate table tree", 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+
+	ctx := NewMockCompilerContext(false)
+	ctx.tables["tree"] = &TableDef{
+		Name:         "tree",
+		TblId:        42,
+		TableType:    catalog.SystemOrdinaryRel,
+		RefChildTbls: []uint64{0},
+		Fkeys: []*plan.ForeignKeyDef{
+			{Name: "fk_self", ForeignTbl: 0},
+			{Name: "fk_parent", ForeignTbl: 99},
+		},
+	}
+	ctx.objects["tree"] = &ObjectRef{SchemaName: "tpch", ObjName: "tree"}
+
+	p, err := BuildPlan(ctx, stmt, false)
+	require.NoError(t, err)
+	require.Equal(t, []uint64{99}, p.GetDdl().GetTruncateTable().GetForeignTbl())
+}
+
+func TestBuildAlterRenameColumnCarriesRewrittenChecks(t *testing.T) {
+	stmt, err := parsers.ParseOne(
+		t.Context(),
+		dialect.MYSQL,
+		"alter table nation rename column n_nationkey to nation_id",
+		1,
+	)
+	require.NoError(t, err)
+	defer stmt.Free()
+
+	ctx := NewMockCompilerContext(false)
+	ctx.tables["nation"].Checks = []*plan.CheckDef{{
+		Name:      "ck_nationkey",
+		OriginSql: "`n_nationkey` >= 0",
+	}}
+
+	p, err := BuildPlan(ctx, stmt, false)
+	require.NoError(t, err)
+	alter := p.GetDdl().GetAlterTable()
+	require.Equal(t, plan.AlterTable_INPLACE, alter.GetAlgorithmType())
+	require.Equal(t, "`nation_id` >= 0", alter.GetCopyTableDef().GetChecks()[0].GetOriginSql())
+}
+
+func TestBuildAlterRenameColumnRecoversLegacyChecks(t *testing.T) {
+	parseRename := func(t *testing.T) tree.Statement {
+		t.Helper()
+		stmt, err := parsers.ParseOne(
+			t.Context(),
+			dialect.MYSQL,
+			"alter table nation rename column n_nationkey to nation_id",
+			1,
+		)
+		require.NoError(t, err)
+		return stmt
+	}
+
+	for _, tc := range []struct {
+		name      string
+		sql       string
+		algorithm plan.AlterTable_AlgorithmType
+	}{
+		{
+			name:      "inplace",
+			sql:       "alter table nation rename column n_nationkey to nation_id",
+			algorithm: plan.AlterTable_INPLACE,
+		},
+		{
+			name:      "copy",
+			sql:       "alter table nation rename column n_nationkey to nation_id, algorithm=copy",
+			algorithm: plan.AlterTable_COPY,
+		},
+	} {
+		t.Run("unambiguous legacy check is recovered and rewritten "+tc.name, func(t *testing.T) {
+			stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, tc.sql, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+
+			ctx := NewMockCompilerContext(false)
+			ctx.tables["nation"].Checks = nil
+			ctx.tables["nation"].Createsql = "create table nation(" +
+				"n_nationkey int, constraint ck_nationkey check (n_nationkey >= 0))"
+
+			p, err := BuildPlan(ctx, stmt, false)
+			require.NoError(t, err)
+			alter := p.GetDdl().GetAlterTable()
+			require.Equal(t, tc.algorithm, alter.GetAlgorithmType())
+			require.Len(t, alter.GetCopyTableDef().GetChecks(), 1)
+			require.Equal(t, "ck_nationkey", alter.GetCopyTableDef().GetChecks()[0].GetName())
+			require.Equal(t, "`nation_id` >= 0", alter.GetCopyTableDef().GetChecks()[0].GetOriginSql())
+			require.Empty(t, ctx.tables["nation"].Checks, "catalog-owned source must remain unchanged")
+		})
+	}
+
+	t.Run("ambiguous legacy SQL mode is rejected", func(t *testing.T) {
+		stmt := parseRename(t)
+		defer stmt.Free()
+
+		ctx := NewMockCompilerContext(false)
+		ctx.tables["nation"].Checks = nil
+		ctx.tables["nation"].Createsql = `create table nation(
+			n_nationkey int, n_name varchar(25), check (n_name = 'a\nb'))`
+
+		_, err := BuildPlan(ctx, stmt, false)
+		require.ErrorContains(t, err, "ambiguous SQL mode")
+	})
+}
+
 func (c *rootSQLCompilerContext) GetRootSql() string {
 	c.calls++
 	return c.rootSQL

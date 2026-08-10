@@ -806,6 +806,12 @@ func alterCopyPkColumnValueUnchanged(oldCol, newCol *plan.ColDef) bool {
 	if oldCol == nil || newCol == nil {
 		return false
 	}
+	// Generated keys are recomputed by the copy INSERT and can change when a
+	// dependency changes even if the generated column's own type is unchanged.
+	// Source-side prechecks therefore cannot prove target-key uniqueness.
+	if oldCol.GetGeneratedCol() != nil || newCol.GetGeneratedCol() != nil {
+		return false
+	}
 	oldTyp := oldCol.GetTyp()
 	newTyp := newCol.GetTyp()
 	return oldTyp.GetId() == newTyp.GetId() &&

@@ -1155,11 +1155,12 @@ func (s *Scope) alterTableInplace(c *Compile, cleanup *alterAutoIncrementResetCl
 			))
 		case *plan.AlterTable_Action_AlterRenameColumn:
 			hasDefReplace = true
-			reqs = append(reqs, api.NewRenameColumnReq(
+			reqs = append(reqs, api.NewRenameColumnReqWithChecks(
 				did, tid,
 				act.AlterRenameColumn.OldName, // origin name
 				act.AlterRenameColumn.NewName, // origin name
 				uint32(act.AlterRenameColumn.SequenceNum),
+				qry.GetCopyTableDef().GetChecks(),
 			))
 
 		case *plan.AlterTable_Action_AlterReplaceDef:
