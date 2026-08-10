@@ -3099,6 +3099,7 @@ func (b *baseBinder) bindPythonUdf(udf *function.Udf, astArgs []tree.Expr, depth
 }
 
 func bindFuncExprAndConstFold(ctx context.Context, proc *process.Process, name string, args []*Expr) (*plan.Expr, error) {
+	foldSingleInDecimalComparisonStringConstants(proc, name, args)
 	foldDecimalComparisonStringConstants(proc, name, args)
 	retExpr, err := BindFuncExprImplByPlanExpr(ctx, name, args)
 	if err != nil {
@@ -3252,6 +3253,19 @@ between_fallback:
 	}
 
 	return retExpr, nil
+}
+
+func foldSingleInDecimalComparisonStringConstants(proc *process.Process, name string, args []*Expr) {
+	if proc == nil || (name != "in" && name != "not_in") || len(args) != 2 {
+		return
+	}
+	right := args[1].GetList()
+	if right == nil || len(right.List) != 1 {
+		return
+	}
+	comparisonArgs := []*Expr{args[0], right.List[0]}
+	foldDecimalComparisonStringConstants(proc, "=", comparisonArgs)
+	args[0], right.List[0] = comparisonArgs[0], comparisonArgs[1]
 }
 
 // validateNthValueArgs enforces MySQL's bind-time contract for NTH_VALUE:

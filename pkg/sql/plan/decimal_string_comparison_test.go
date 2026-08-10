@@ -363,3 +363,29 @@ func TestFoldableDecimalStringExpressionUsesExactComparison(t *testing.T) {
 		require.True(t, types.T(arg.Typ.Id).IsDecimal(), "type id %d", arg.Typ.Id)
 	}
 }
+
+func TestSingleInFoldableDecimalStringExpressionUsesExactComparison(t *testing.T) {
+	compilerCtx := NewMockCompilerContext(true)
+	decimalType := types.New(types.T_decimal128, 20, 4)
+	for _, stringLeft := range []bool{false, true} {
+		for _, name := range []string{"in", "not_in"} {
+			t.Run(fmt.Sprintf("%s/string_left=%t", name, stringLeft), func(t *testing.T) {
+				lower, err := bindFuncExprAndConstFold(compilerCtx.GetContext(), compilerCtx.GetProcess(), "lower",
+					[]*planpb.Expr{makePlan2StringConstExprWithType("9007199254740992.0001")})
+				require.NoError(t, err)
+				decimal := makePreparedDecimalComparisonColumn(decimalType)
+				left, right := decimal, lower
+				if stringLeft {
+					left, right = lower, decimal
+				}
+				expr, err := bindFuncExprAndConstFold(compilerCtx.GetContext(), compilerCtx.GetProcess(), name,
+					[]*planpb.Expr{left, {Expr: &planpb.Expr_List{List: &planpb.ExprList{List: []*planpb.Expr{right}}}}})
+				require.NoError(t, err)
+				require.NotNil(t, expr.GetF())
+				for _, arg := range expr.GetF().Args {
+					require.True(t, types.T(arg.Typ.Id).IsDecimal(), "type id %d", arg.Typ.Id)
+				}
+			})
+		}
+	}
+}

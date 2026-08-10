@@ -568,14 +568,40 @@ func (rule *findDecimalComparisonParamRule) ApplyExpr(expr *plan.Expr) (*plan.Ex
 	if rule.found || expr == nil {
 		return expr, nil
 	}
-	fn := expr.GetF()
-	if fn == nil || fn.Func == nil || !isDecimalComparisonOperator(fn.Func.GetObjName()) {
-		return expr, nil
-	}
-	for _, arg := range fn.Args {
-		if _, ok := preparedDecimalComparisonCast(arg); ok {
-			rule.found = true
-			break
+	switch impl := expr.Expr.(type) {
+	case *plan.Expr_F:
+		fn := impl.F
+		if fn == nil {
+			return expr, nil
+		}
+		if fn.Func != nil && isDecimalComparisonOperator(fn.Func.GetObjName()) {
+			for _, arg := range fn.Args {
+				if _, ok := preparedDecimalComparisonCast(arg); ok {
+					rule.found = true
+					return expr, nil
+				}
+			}
+		}
+		for _, arg := range fn.Args {
+			if _, err := rule.ApplyExpr(arg); err != nil {
+				return nil, err
+			}
+			if rule.found {
+				break
+			}
+		}
+	case *plan.Expr_W:
+		if _, err := applyWindowExpr(expr, rule.ApplyExpr); err != nil {
+			return nil, err
+		}
+	case *plan.Expr_List:
+		for _, item := range impl.List.List {
+			if _, err := rule.ApplyExpr(item); err != nil {
+				return nil, err
+			}
+			if rule.found {
+				break
+			}
 		}
 	}
 	return expr, nil

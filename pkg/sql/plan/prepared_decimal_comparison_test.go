@@ -279,3 +279,65 @@ func TestPreparedDecimalComparisonUsesActualStringValueDomain(t *testing.T) {
 		})
 	}
 }
+
+func TestPreparedDecimalComparisonDetectionTraversesNestedExpressions(t *testing.T) {
+	ctx := context.Background()
+	decimalType := types.New(types.T_decimal128, 20, 4)
+	comparison, err := BindFuncExprImplByPlanExpr(ctx, "=", []*planpb.Expr{
+		makePreparedDecimalComparisonColumn(decimalType), makePreparedDecimalComparisonParam(0),
+	})
+	require.NoError(t, err)
+	nested, err := BindFuncExprImplByPlanExpr(ctx, "or", []*planpb.Expr{
+		comparison, makePlan2BoolConstExprWithType(false),
+	})
+	require.NoError(t, err)
+	query := &planpb.Query{Steps: []int32{0}, Nodes: []*planpb.Node{{
+		NodeType: planpb.Node_FILTER, FilterList: []*planpb.Expr{nested},
+	}}}
+
+	for _, tc := range []struct {
+		name string
+		plan *planpb.Plan
+	}{
+		{name: "query", plan: &planpb.Plan{Plan: &planpb.Plan_Query{Query: DeepCopyQuery(query)}}},
+		{name: "ctas", plan: &planpb.Plan{Plan: &planpb.Plan_Ddl{Ddl: &planpb.DataDefinition{Query: DeepCopyQuery(query)}}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			found, err := PlanHasExactDecimalComparisonParam(ctx, tc.plan)
+			require.NoError(t, err)
+			require.True(t, found)
+			filled, err := FillValuesOfParamsInPlan(ctx, tc.plan, []any{"9007199254740992.00014"})
+			require.NoError(t, err)
+			if ddl := filled.GetDdl(); ddl != nil {
+				filled = &planpb.Plan{Plan: &planpb.Plan_Query{Query: ddl.Query}}
+			}
+			require.False(t, planExprContainsPreparedDecimalParam(
+				findPreparedDecimalComparisonInPlan(filled, "=")))
+		})
+	}
+}
+
+func TestFillPreparedDecimalComparisonPreservesPlanMessages(t *testing.T) {
+	ctx := context.Background()
+	decimalType := types.New(types.T_decimal128, 20, 4)
+	comparison, err := BindFuncExprImplByPlanExpr(ctx, "=", []*planpb.Expr{
+		makePreparedDecimalComparisonColumn(decimalType), makePreparedDecimalComparisonParam(0),
+	})
+	require.NoError(t, err)
+	wantSend := []planpb.MsgHeader{{MsgTag: 17, MsgType: 3}}
+	wantRecv := []planpb.MsgHeader{{MsgTag: 23, MsgType: 4}}
+	prepared := &planpb.Plan{Plan: &planpb.Plan_Query{Query: &planpb.Query{
+		Steps: []int32{0},
+		Nodes: []*planpb.Node{{
+			NodeType:    planpb.Node_FILTER,
+			FilterList:  []*planpb.Expr{comparison},
+			SendMsgList: wantSend,
+			RecvMsgList: wantRecv,
+		}},
+	}}}
+
+	filled, err := FillValuesOfParamsInPlan(ctx, prepared, []any{"9007199254740992.00014"})
+	require.NoError(t, err)
+	require.Equal(t, wantSend, filled.GetQuery().Nodes[0].SendMsgList)
+	require.Equal(t, wantRecv, filled.GetQuery().Nodes[0].RecvMsgList)
+}

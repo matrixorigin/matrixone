@@ -100,4 +100,46 @@ SET @p = '9007199254740992.0001';
 EXECUTE p_dynamic_reverse_not_in USING @p;
 DEALLOCATE PREPARE p_dynamic_reverse_not_in;
 
+PREPARE p_nested_or FROM
+  'SELECT GROUP_CONCAT(id ORDER BY id) FROM t WHERE d128 = ? OR id = -1';
+SET @p = '9007199254740992.00014';
+EXECUTE p_nested_or USING @p;
+SET @p = '9007199254740992.0001';
+EXECUTE p_nested_or USING @p;
+SET @p = '9007199254740992.00014';
+EXECUTE p_nested_or USING @p;
+DEALLOCATE PREPARE p_nested_or;
+
+PREPARE p_nested_not FROM
+  'SELECT GROUP_CONCAT(id ORDER BY id) FROM t WHERE NOT(d128 <> ?)';
+SET @p = '9007199254740992.00014';
+EXECUTE p_nested_not USING @p;
+DEALLOCATE PREPARE p_nested_not;
+
+PREPARE p_projection_case FROM
+  'SELECT GROUP_CONCAT(CASE WHEN d128 = ? THEN id END ORDER BY id) FROM t';
+SET @p = '9007199254740992.00014';
+EXECUTE p_projection_case USING @p;
+DEALLOCATE PREPARE p_projection_case;
+
+PREPARE p_join_or FROM
+  'SELECT GROUP_CONCAT(a.id ORDER BY a.id) FROM t a JOIN t b ON a.id=b.id AND (a.d128=? OR a.id=-1)';
+SET @p = '9007199254740992.00014';
+EXECUTE p_join_or USING @p;
+DEALLOCATE PREPARE p_join_or;
+
+PREPARE p_having FROM
+  'SELECT GROUP_CONCAT(id ORDER BY id) FROM t GROUP BY id,d128 HAVING d128=? ORDER BY id';
+SET @p = '9007199254740992.00014';
+EXECUTE p_having USING @p;
+DEALLOCATE PREPARE p_having;
+
+DROP TABLE IF EXISTS ctas_decimal_param;
+PREPARE p_ctas FROM
+  'CREATE TABLE ctas_decimal_param AS SELECT id,d128 FROM t WHERE d128=?';
+SET @p = '9007199254740992.00014';
+EXECUTE p_ctas USING @p;
+SELECT COUNT(*) FROM ctas_decimal_param;
+DEALLOCATE PREPARE p_ctas;
+
 DROP DATABASE prepare_decimal_comparison;

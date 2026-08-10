@@ -245,25 +245,23 @@ func (vq *VisitPlan) exploreNode(ctx context.Context, rule VisitPlanRule, node *
 func (vq *VisitPlan) Visit(ctx context.Context) error {
 	switch pl := vq.plan.Plan.(type) {
 	case *Plan_Query:
-		qry := pl.Query
-		vq.isUpdatePlan = (pl.Query.StmtType == plan.Query_UPDATE)
-
-		if len(qry.Steps) == 0 {
-			return nil
-		}
-
-		for _, step := range qry.Steps {
-			err := vq.visitNode(ctx, qry, qry.Nodes[step], step)
-			if err != nil {
-				return err
-			}
-		}
-
-	default:
-		// do nothing
-
+		return vq.visitQuery(ctx, pl.Query)
+	case *plan.Plan_Ddl:
+		return vq.visitQuery(ctx, pl.Ddl.GetQuery())
 	}
+	return nil
+}
 
+func (vq *VisitPlan) visitQuery(ctx context.Context, qry *Query) error {
+	if qry == nil {
+		return nil
+	}
+	vq.isUpdatePlan = qry.StmtType == plan.Query_UPDATE
+	for _, step := range qry.Steps {
+		if err := vq.visitNode(ctx, qry, qry.Nodes[step], step); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 

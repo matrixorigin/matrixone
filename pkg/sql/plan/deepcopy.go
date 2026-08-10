@@ -280,6 +280,8 @@ func DeepCopyNode(node *plan.Node) *plan.Node {
 		DedupJoinCtx:           DeepCopyDedupJoinCtx(node.DedupJoinCtx),
 		IndexReaderParam:       DeepCopyIndexReaderParam(node.IndexReaderParam),
 		OriginViews:            slices.Clone(node.OriginViews),
+		SendMsgList:            slices.Clone(node.SendMsgList),
+		RecvMsgList:            slices.Clone(node.RecvMsgList),
 		DirectView:             node.DirectView,
 		RankOption:             DeepCopyRankOption(node.RankOption),
 		RecursiveUnionDistinct: node.RecursiveUnionDistinct,

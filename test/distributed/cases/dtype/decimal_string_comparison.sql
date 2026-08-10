@@ -164,4 +164,24 @@ SELECT COUNT(*) AS decimal256_index_lt_count
 FROM decimal256_boundary FORCE INDEX (idx_d)
 WHERE d < '12345678.0000000000000000000000000000001';
 
+SELECT GROUP_CONCAT(id ORDER BY id) AS lower_single_in_ids
+FROM boundary_values WHERE d128 IN (LOWER('9007199254740992.0001'));
+SELECT GROUP_CONCAT(id ORDER BY id) AS lower_single_not_in_ids
+FROM boundary_values WHERE d128 NOT IN (LOWER('9007199254740992.0001'));
+SELECT GROUP_CONCAT(id ORDER BY id) AS lower_reversed_single_in_ids
+FROM boundary_values WHERE LOWER('9007199254740992.0001') IN (d128);
+SELECT GROUP_CONCAT(id ORDER BY id) AS concat_single_in_ids
+FROM boundary_values WHERE d128 IN (CONCAT('9007199254740992.000', '1'));
+SELECT GROUP_CONCAT(id ORDER BY id) AS case_single_in_ids
+FROM boundary_values
+WHERE d128 IN (CASE WHEN 1 = 1 THEN '9007199254740992.0001' ELSE '0' END);
+
+CREATE TABLE foldable_in_update LIKE boundary_values;
+ALTER TABLE foldable_in_update ADD COLUMN matched INT DEFAULT 0;
+INSERT INTO foldable_in_update (id, d64, d128) SELECT id, d64, d128 FROM boundary_values;
+UPDATE foldable_in_update SET matched = 1
+WHERE d128 IN (LOWER('9007199254740992.0001'));
+SELECT GROUP_CONCAT(id ORDER BY id) AS lower_single_in_update_ids
+FROM foldable_in_update WHERE matched = 1;
+
 DROP DATABASE decimal_string_comparison;

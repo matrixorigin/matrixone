@@ -3178,7 +3178,7 @@ func FillValuesOfParamsInPlan(ctx context.Context, preparePlan *Plan, paramVals 
 // PlanHasExactDecimalComparisonParam reports whether a prepared plan's
 // DECIMAL comparison domain depends on the actual text parameter.
 func PlanHasExactDecimalComparisonParam(ctx context.Context, preparePlan *Plan) (bool, error) {
-	if preparePlan == nil || preparePlan.GetQuery() == nil {
+	if preparePlan == nil {
 		return false, nil
 	}
 	rule := &findDecimalComparisonParamRule{}
