@@ -264,7 +264,7 @@ func TestTimeWinSplitDistinctResultAndReplace(t *testing.T) {
 		require.Equal(t, int64(values[idx]), resultValues[idx], "row %d", idx)
 	}
 
-	require.Equal(t, int32(nextWindow), arg.ctr.status)
+	require.Equal(t, int32(resumeAfterFlush), arg.ctr.status)
 	require.Len(t, arg.ctr.aggs, 1)
 	require.NotSame(t, agg, arg.ctr.aggs[0])
 

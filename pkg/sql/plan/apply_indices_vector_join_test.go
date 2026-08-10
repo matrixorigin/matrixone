@@ -783,6 +783,15 @@ func TestVectorJoinGuardHelperBranches(t *testing.T) {
 		TableDef:    newVectorJoinTableDef(false, false),
 		BindingTags: []int32{1},
 	}))
+	invisibleVectorDef := newVectorJoinTableDef(true, false)
+	for _, indexDef := range invisibleVectorDef.Indexes {
+		catalog.SetIndexVisibility(indexDef, false)
+	}
+	require.Nil(t, builder.directScanWithVectorIndex(&plan.Node{
+		NodeType:    plan.Node_TABLE_SCAN,
+		TableDef:    invisibleVectorDef,
+		BindingTags: []int32{1},
+	}))
 
 	require.Nil(t, vectorSearchProviderChildren(nil))
 	require.Nil(t, vectorSearchProviderChildren(&vectorSortContext{providerNodeID: 1}))
