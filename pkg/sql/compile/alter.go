@@ -806,6 +806,12 @@ func alterCopyPkColumnValueUnchanged(oldCol, newCol *plan.ColDef) bool {
 	if oldCol == nil || newCol == nil {
 		return false
 	}
+	// Generated keys are recomputed by the copy INSERT and can change when a
+	// dependency changes even if the generated column's own type is unchanged.
+	// Source-side prechecks therefore cannot prove target-key uniqueness.
+	if oldCol.GetGeneratedCol() != nil || newCol.GetGeneratedCol() != nil {
+		return false
+	}
 	oldTyp := oldCol.GetTyp()
 	newTyp := newCol.GetTyp()
 	return oldTyp.GetId() == newTyp.GetId() &&
@@ -832,6 +838,14 @@ func getAlterCopyPkPrecheck(qry *plan.AlterTable) (pkCols []string, checkNotNull
 		oldCol := plan2.FindColumn(qry.GetTableDef().GetCols(), colName)
 		newCol := plan2.FindColumn(qry.CopyTableDef.GetCols(), colName)
 		if !alterCopyPkColumnValueUnchanged(oldCol, newCol) {
+			return nil, false
+		}
+		// ChangeTblColIdMap is the compiler-side ownership proof that the target
+		// key is populated from this old column. Without it, a same-name DROP/ADD
+		// may populate every target row from one default value; checking the old
+		// column for duplicates would then say nothing about the copied key.
+		mappedCol, ok := qry.ChangeTblColIdMap[oldCol.ColId]
+		if !ok || mappedCol == nil || !strings.EqualFold(mappedCol.Name, newCol.Name) {
 			return nil, false
 		}
 		if !oldCol.GetNotNull() && !oldCol.GetTyp().NotNullable {

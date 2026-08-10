@@ -44,7 +44,7 @@ func (b *HavingBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool) (*p
 	astStr := windowExprAstKey(astExpr)
 
 	if !b.insideAgg {
-		if colPos, ok := b.ctx.groupByAst[astStr]; ok {
+		if colPos, ok := lookupGroupByAst(b.ctx, astExpr, astStr); ok {
 			return &plan.Expr{
 				Typ: b.ctx.groups[colPos].Typ,
 				Expr: &plan.Expr_Col{
