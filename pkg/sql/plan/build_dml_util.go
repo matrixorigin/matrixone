@@ -1647,6 +1647,12 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 							ProjectList: childScanProject,
 							BindingTags: childBindingTags,
 						}, bindCtx)
+						if delCtx.skipTargetDelete || delCtx.sourceTag != 0 {
+							if builder.preserveScanProjection == nil {
+								builder.preserveScanProjection = make(map[int32]struct{})
+							}
+							builder.preserveScanProjection[rightId] = struct{}{}
+						}
 
 						// Legacy DELETE keeps the existing self-reference guard. Modern
 						// REPLACE owns the target-row delete in MULTI_UPDATE, so its old-row
