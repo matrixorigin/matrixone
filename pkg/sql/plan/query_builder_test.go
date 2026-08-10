@@ -4824,6 +4824,23 @@ func TestBaseBinder_bindRangeCond(t *testing.T) {
 	}
 }
 
+func TestBaseBinderBindVarbinaryUnhexRange(t *testing.T) {
+	builder, bindCtx := genBuilderAndCtxWithColumnType(types.T_varbinary, "b")
+	whereBinder := NewWhereBinder(builder, bindCtx)
+	stmts, err := parsers.Parse(context.TODO(), dialect.MYSQL,
+		"select * from bind_select where b between unhex('41') and unhex('41')", 1)
+	require.NoError(t, err)
+	rangeCond := stmts[0].(*tree.Select).Select.(*tree.SelectClause).Where.Expr.(*tree.RangeCond)
+	expr, err := whereBinder.bindRangeCond(rangeCond, 0, false)
+	require.NoError(t, err)
+	require.Equal(t, "between", expr.GetF().Func.ObjName)
+	for _, bound := range expr.GetF().Args[1:] {
+		require.Equal(t, int32(types.T_varbinary), bound.Typ.Id)
+		require.NotNil(t, bound.GetLit())
+		require.False(t, bound.GetLit().IsBin)
+	}
+}
+
 // TestBaseBinder_baseBindExpr tests baseBindExpr with various expression types
 func TestBaseBinder_baseBindExpr(t *testing.T) {
 	builder, bindCtx := genBuilderAndCtx()

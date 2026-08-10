@@ -39,7 +39,16 @@ func buildInLocate2Args(parameters []*vector.Vector, result vector.FunctionResul
 				return err
 			}
 		} else {
-			pos := Locate2Args(functionUtil.QuickBytesToStr(bytes.ToUpper(str)), functionUtil.QuickBytesToStr(bytes.ToUpper(substr)))
+			binaryInput := parameters[1].GetIsBinaryStringAt(int(i))
+			var pos int64
+			if binaryInput {
+				idx := bytes.Index(str, substr)
+				if idx >= 0 {
+					pos = int64(idx + 1)
+				}
+			} else {
+				pos = Locate2Args(functionUtil.QuickBytesToStr(bytes.ToUpper(str)), functionUtil.QuickBytesToStr(bytes.ToUpper(substr)))
+			}
 			rs.AppendMustValue(pos)
 		}
 	}
@@ -63,7 +72,18 @@ func buildInLocate3Args(parameters []*vector.Vector, result vector.FunctionResul
 				return err
 			}
 		} else {
-			pos := Locate3Args(functionUtil.QuickBytesToStr(bytes.ToUpper(str)), functionUtil.QuickBytesToStr(bytes.ToUpper(substr)), position)
+			binaryInput := parameters[1].GetIsBinaryStringAt(int(i))
+			var pos int64
+			if binaryInput {
+				if position > 0 && position <= int64(len(str))+1 {
+					idx := bytes.Index(str[position-1:], substr)
+					if idx >= 0 {
+						pos = position + int64(idx)
+					}
+				}
+			} else {
+				pos = Locate3Args(functionUtil.QuickBytesToStr(bytes.ToUpper(str)), functionUtil.QuickBytesToStr(bytes.ToUpper(substr)), position)
+			}
 			rs.AppendMustValue(pos)
 		}
 	}

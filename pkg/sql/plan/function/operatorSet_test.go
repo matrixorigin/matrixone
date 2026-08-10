@@ -1019,6 +1019,25 @@ func TestBinaryStringCommonTypePreservesSameFixedBinary(t *testing.T) {
 			wantWidth: 4,
 		},
 		{
+			name: "blob dominates character string",
+			source: []types.Type{
+				types.T_blob.ToType(),
+				types.New(types.T_varchar, 4, 0),
+			},
+			wantOK:  true,
+			wantOid: types.T_blob,
+		},
+		{
+			name: "text uses maximum varbinary width",
+			source: []types.Type{
+				types.New(types.T_varbinary, 3, 0),
+				types.T_text.ToType(),
+			},
+			wantOK:    true,
+			wantOid:   types.T_varbinary,
+			wantWidth: int32(types.MaxVarBinaryLen),
+		},
+		{
 			name:   "only null is not binary",
 			source: []types.Type{types.T_any.ToType()},
 			wantOK: false,
@@ -1363,6 +1382,43 @@ func Test_CoalesceCheck_TextStringBranchesStayText(t *testing.T) {
 	}
 }
 
+func Test_CoalesceCheck_BinaryStringDominatesCharacterString(t *testing.T) {
+	overloads := []overload{
+		{args: []types.T{types.T_varchar}},
+		{args: []types.T{types.T_varbinary}},
+	}
+	inputs := []types.Type{
+		types.New(types.T_varbinary, 3, 0),
+		types.New(types.T_varchar, 2, 0),
+	}
+	result := coalesceCheck(overloads, inputs)
+	require.Equal(t, succeedWithCast, result.status)
+	require.Equal(t, 1, result.idx)
+	require.Len(t, result.finalType, len(inputs))
+	for _, typ := range result.finalType {
+		require.Equal(t, types.T_varbinary, typ.Oid)
+		require.Equal(t, int32(8), typ.Width)
+	}
+}
+
+func Test_CoalesceCheck_BlobDominatesCharacterString(t *testing.T) {
+	overloads := []overload{
+		{args: []types.T{types.T_varchar}},
+		{args: []types.T{types.T_blob}},
+	}
+	inputs := []types.Type{
+		types.T_blob.ToType(),
+		types.New(types.T_varchar, 2, 0),
+	}
+	result := coalesceCheck(overloads, inputs)
+	require.Equal(t, succeedWithCast, result.status)
+	require.Equal(t, 1, result.idx)
+	require.Len(t, result.finalType, len(inputs))
+	for _, typ := range result.finalType {
+		require.Equal(t, types.T_blob, typ.Oid)
+	}
+}
+
 // issue #24565: COALESCE over decimal branches with different scales must align
 // scale/width across all branches, otherwise the result inherits the first
 // branch's scale while carrying another branch's raw value (magnified result).
@@ -1492,6 +1548,29 @@ func Test_CaseFn_VarBinaryExecution(t *testing.T) {
 	tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, caseFn)
 	succeed, info := tcc.Run()
 	require.True(t, succeed, tc.info, info)
+}
+
+func TestStrCaseFnPreservesDynamicBinarySemantics(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	mp := proc.Mp()
+	condition := newVectorByType(mp, types.T_bool.ToType(), []bool{true, false}, nil)
+	binaryBranch := newVectorByType(mp, types.T_varchar.ToType(), []string{"a", "a"}, nil)
+	binaryBranch.SetIsBinaryString(true)
+	textBranch := newVectorByType(mp, types.T_varchar.ToType(), []string{"bc", "bc"}, nil)
+	defer condition.Free(mp)
+	defer binaryBranch.Free(mp)
+	defer textBranch.Free(mp)
+
+	result := vector.NewFunctionResultWrapper(types.T_varchar.ToType(), mp)
+	defer result.Free()
+	require.NoError(t, result.PreExtendAndReset(2))
+	require.NoError(t, strCaseFn(
+		[]*vector.Vector{condition, binaryBranch, textBranch}, result, proc, 2, nil))
+	require.False(t, result.GetResultVector().GetIsBin())
+	require.True(t, result.GetResultVector().GetIsBinaryString())
+	require.True(t, result.GetResultVector().GetIsBinaryStringAt(0))
+	require.False(t, result.GetResultVector().GetIsBinaryStringAt(1))
+	require.Equal(t, []string{"a", "bc"}, vector.InefficientMustStrCol(result.GetResultVector()))
 }
 
 func Test_IffFn_Decimal256Execution(t *testing.T) {

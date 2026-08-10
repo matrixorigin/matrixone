@@ -94,6 +94,7 @@ func signedUnsignedIntegerCommonType(source []types.Type) (types.Type, bool) {
 
 func binaryStringCommonType(source []types.Type) (types.Type, bool) {
 	hasBinary := false
+	hasBlob := false
 	sameFixedBinary := true
 	hasFixedBinary := false
 	fixedBinaryWidth := int32(0)
@@ -122,6 +123,10 @@ func binaryStringCommonType(source []types.Type) (types.Type, bool) {
 			if typ.Width > width {
 				width = typ.Width
 			}
+		case types.T_blob:
+			hasBinary = true
+			hasBlob = true
+			sameFixedBinary = false
 		case types.T_char, types.T_varchar:
 			sameFixedBinary = false
 			// Character widths count runes, while VARBINARY widths count bytes.
@@ -134,12 +139,22 @@ func binaryStringCommonType(source []types.Type) (types.Type, bool) {
 			if byteWidth > width {
 				width = byteWidth
 			}
+		case types.T_text:
+			sameFixedBinary = false
+			// TEXT has no useful bounded Width. Keep the binary result wide
+			// enough for any value that a VARBINARY result can represent.
+			if int32(types.MaxVarBinaryLen) > width {
+				width = int32(types.MaxVarBinaryLen)
+			}
 		default:
 			return types.Type{}, false
 		}
 	}
 	if !hasBinary {
 		return types.Type{}, false
+	}
+	if hasBlob {
+		return types.T_blob.ToType(), true
 	}
 	if sameFixedBinary {
 		return types.New(types.T_binary, fixedBinaryWidth, 0), true
@@ -506,6 +521,7 @@ func strCaseFn(vecs []*vector.Vector, result vector.FunctionResultWrapper, _ *pr
 					if err := rs.AppendBytes(ys[j].GetStrValue(i)); err != nil {
 						return err
 					}
+					result.GetResultVector().SetIsBinaryStringAt(int(i), vecs[2*j+1].GetIsBinaryStringAt(int(i)))
 					matchElse = false
 					break
 				}
@@ -514,6 +530,7 @@ func strCaseFn(vecs []*vector.Vector, result vector.FunctionResultWrapper, _ *pr
 				if err := rs.AppendBytes(z.GetStrValue(i)); err != nil {
 					return err
 				}
+				result.GetResultVector().SetIsBinaryStringAt(int(i), vecs[len(vecs)-1].GetIsBinaryStringAt(int(i)))
 			}
 		}
 	} else {
@@ -524,6 +541,7 @@ func strCaseFn(vecs []*vector.Vector, result vector.FunctionResultWrapper, _ *pr
 					if err := rs.AppendBytes(ys[j].GetStrValue(i)); err != nil {
 						return err
 					}
+					result.GetResultVector().SetIsBinaryStringAt(int(i), vecs[2*j+1].GetIsBinaryStringAt(int(i)))
 					matchElse = false
 					break
 				}
@@ -837,10 +855,12 @@ func strIffFn(vecs []*vector.Vector, result vector.FunctionResultWrapper, proc *
 			if err := rs.AppendBytes(p2.GetStrValue(i)); err != nil {
 				return err
 			}
+			result.GetResultVector().SetIsBinaryStringAt(int(i), vecs[1].GetIsBinaryStringAt(int(i)))
 		} else {
 			if err := rs.AppendBytes(p3.GetStrValue(i)); err != nil {
 				return err
 			}
+			result.GetResultVector().SetIsBinaryStringAt(int(i), vecs[2].GetIsBinaryStringAt(int(i)))
 		}
 	}
 	return nil

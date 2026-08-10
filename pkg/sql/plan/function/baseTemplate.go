@@ -2956,6 +2956,7 @@ func opUnaryStrToStr(
 	rs := vector.MustFunctionResult[types.Varlena](result)
 	p1 := vector.OptGetBytesParamFromWrapper(rs, 0, parameters[0])
 	rsVec := rs.GetResultVector()
+	defer propagateBinaryStringResultRows(parameters, rsVec, length)
 
 	c1 := parameters[0].IsConst()
 	rsNull := rsVec.GetNulls()

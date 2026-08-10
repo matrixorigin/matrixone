@@ -47,6 +47,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 )
 
@@ -286,6 +287,10 @@ func genAsSelectCols(ctx CompilerContext, stmt *tree.Select, isPrepareStmt bool)
 	cols := make([]*plan.ColDef, len(rootNode.ProjectList))
 	for i, expr := range rootNode.ProjectList {
 		typ := &expr.Typ
+		if binaryType, ok := ctasBinaryStringTypeInQuery(ctx, builder.qry, expr, nil); ok {
+			planType := makePlan2Type(&binaryType)
+			typ = &planType
+		}
 		provenance := bindCtx.outputColumnProvenanceForProject(int32(i))
 		if provenance.State == ProvenanceSingleSource && provenance.Source != nil {
 			if isEnumOrSetPlanType(&provenance.Source.Metadata.Typ) {
@@ -324,6 +329,194 @@ func genAsSelectCols(ctx CompilerContext, stmt *tree.Select, isPrepareStmt bool)
 		}
 	}
 	return cols, builder.qry, nil
+}
+
+func ctasBinaryStringTypeInQuery(
+	ctx CompilerContext,
+	qry *Query,
+	expr *Expr,
+	visited map[[2]int32]bool,
+) (types.Type, bool) {
+	if binaryType, ok := ctasBinaryStringType(ctx, expr); ok {
+		return binaryType, true
+	}
+	col := expr.GetCol()
+	if col == nil || qry == nil {
+		return types.Type{}, false
+	}
+	key := [2]int32{col.RelPos, col.ColPos}
+	if visited == nil {
+		visited = make(map[[2]int32]bool)
+	}
+	if visited[key] {
+		return types.Type{}, false
+	}
+	visited[key] = true
+	defer delete(visited, key)
+
+	for _, node := range qry.Nodes {
+		matched := false
+		for _, tag := range node.BindingTags {
+			if tag == col.RelPos {
+				matched = true
+				break
+			}
+		}
+		if !matched || col.ColPos < 0 {
+			continue
+		}
+		position := int(col.ColPos)
+		for _, expressions := range [][]*Expr{node.ProjectList, node.WinSpecList} {
+			if position >= len(expressions) {
+				continue
+			}
+			if binaryType, ok := ctasBinaryStringTypeInQuery(
+				ctx, qry, expressions[position], visited); ok {
+				return binaryType, true
+			}
+		}
+	}
+	return types.Type{}, false
+}
+
+type binaryStringVariableResolver interface {
+	ResolveVariableBinaryString(varName string, isSystemVar, isGlobalVar bool) (bool, error)
+}
+
+func ctasBinaryStringType(ctx CompilerContext, expr *Expr) (types.Type, bool) {
+	if binaryType, ok := binaryLiteralStringType(expr); ok {
+		return binaryType, true
+	}
+	exprType := makeTypeByPlan2Expr(expr)
+	if exprType.Oid == types.T_binary || exprType.Oid == types.T_varbinary || exprType.Oid == types.T_blob {
+		return exprType, true
+	}
+	if variable := expr.GetV(); variable != nil {
+		resolver, ok := ctx.(binaryStringVariableResolver)
+		if !ok {
+			return types.Type{}, false
+		}
+		binaryString, err := resolver.ResolveVariableBinaryString(
+			variable.Name, variable.System, variable.Global)
+		if err != nil || !binaryString {
+			return types.Type{}, false
+		}
+		return types.T_blob.ToType(), true
+	}
+	if window := expr.GetW(); window != nil && window.WindowFunc != nil {
+		windowFunc := window.WindowFunc.GetF()
+		if windowFunc == nil || windowFunc.Func == nil {
+			return types.Type{}, false
+		}
+		name := strings.ToLower(windowFunc.Func.ObjName)
+		var resultType types.Type
+		found := false
+		for idx, arg := range windowFunc.Args {
+			if !binaryStringResultUsesArgument(name, len(windowFunc.Args), idx) {
+				continue
+			}
+			argType, ok := ctasBinaryStringType(ctx, arg)
+			if !ok {
+				continue
+			}
+			found = true
+			if argType.Oid == types.T_blob {
+				return argType, true
+			}
+			if resultType.Oid == 0 {
+				resultType = argType
+			}
+		}
+		if found {
+			return ctasBinaryFunctionResultType(name, windowFunc.Args, makeTypeByPlan2Expr(expr), resultType), true
+		}
+		return types.Type{}, false
+	}
+
+	fn := expr.GetF()
+	if fn == nil || fn.Func == nil {
+		return types.Type{}, false
+	}
+	name := strings.ToLower(fn.Func.ObjName)
+	if name == "cast" {
+		_, overload := function.DecodeOverloadID(fn.Func.Obj)
+		if overload != 0 || len(fn.Args) == 0 {
+			return types.Type{}, false
+		}
+		return ctasBinaryStringType(ctx, fn.Args[0])
+	}
+	if name == "char" {
+		return types.T_blob.ToType(), true
+	}
+
+	var resultType types.Type
+	found := false
+	for idx, arg := range fn.Args {
+		if name != "group_concat" && !binaryStringResultUsesArgument(name, len(fn.Args), idx) {
+			continue
+		}
+		argType, ok := ctasBinaryStringType(ctx, arg)
+		if !ok {
+			continue
+		}
+		found = true
+		if argType.Oid == types.T_blob {
+			return argType, true
+		}
+		if resultType.Oid == types.T_any || resultType.Oid == 0 {
+			resultType = argType
+		}
+	}
+	if !found {
+		return types.Type{}, false
+	}
+	if name == "group_concat" {
+		return types.T_blob.ToType(), true
+	}
+	return ctasBinaryFunctionResultType(name, fn.Args, exprType, resultType), true
+}
+
+func ctasBinaryFunctionResultType(name string, args []*Expr, exprType, sourceType types.Type) types.Type {
+	if exprType.Oid == types.T_binary || exprType.Oid == types.T_varbinary || exprType.Oid == types.T_blob {
+		return exprType
+	}
+	result := sourceType
+	if result.Oid == types.T_binary {
+		result.Oid = types.T_varbinary
+	}
+	if result.Oid != types.T_varbinary {
+		result = types.New(types.T_varbinary, sourceType.Width, 0)
+	}
+	limitWidth := func(arg int) {
+		if arg >= len(args) {
+			return
+		}
+		if width, ok := literalNonNegativeInt64(args[arg]); ok {
+			if width > int64(types.MaxVarBinaryLen) {
+				width = int64(types.MaxVarBinaryLen)
+			}
+			result.Width = int32(width)
+		}
+	}
+	switch name {
+	case "left", "right":
+		previous := result.Width
+		limitWidth(1)
+		if previous >= 0 && result.Width > previous {
+			result.Width = previous
+		}
+	case "substring", "substr", "mid":
+		if len(args) >= 3 {
+			previous := result.Width
+			limitWidth(2)
+			if previous >= 0 && result.Width > previous {
+				result.Width = previous
+			}
+		}
+	case "lpad", "rpad":
+		limitWidth(1)
+	}
+	return result
 }
 
 func buildCTASDefaultForView(ctx CompilerContext, typ plan.Type, nullAbility bool) (*plan.Default, error) {

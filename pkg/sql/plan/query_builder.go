@@ -3506,7 +3506,11 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 		}
 
 		for i, expr := range subCtx.results {
-			projectTypList[i][idx] = makeTypeByPlan2Expr(expr)
+			if binaryType, ok := ctasBinaryStringType(builder.compCtx, expr); ok {
+				projectTypList[i][idx] = binaryType
+			} else {
+				projectTypList[i][idx] = makeTypeByPlan2Expr(expr)
+			}
 		}
 		subCtxList[idx] = subCtx
 		nodes[idx] = nodeID
@@ -3540,6 +3544,17 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 		}
 
 		if len(tmpArgsType) > 0 {
+			setBinaryString := false
+			setBinaryType := types.Type{}
+			for _, typ := range argsType {
+				switch typ.Oid {
+				case types.T_binary, types.T_varbinary, types.T_blob:
+					setBinaryString = true
+					if typ.Oid == types.T_blob || setBinaryType.Oid == 0 {
+						setBinaryType = typ
+					}
+				}
+			}
 			fGet, err := function.GetFunctionByName(builder.GetContext(), "coalesce", tmpArgsType)
 			if err != nil {
 				return 0, moerr.NewParseErrorf(builder.GetContext(), "the %d column cann't cast to a same type", columnIdx)
@@ -3566,6 +3581,15 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 			} else {
 				targetArgType = argsCastType[0]
 			}
+			if setBinaryString {
+				// Preserve the common expression width chosen above. A binary
+				// branch changes the set column's string category, not the width
+				// required to hold values from every branch.
+				targetArgType.Oid = setBinaryType.Oid
+				if setBinaryType.Oid == types.T_binary {
+					targetArgType.Oid = types.T_varbinary
+				}
+			}
 
 			preserveGroupingBinary := distinct && groupingOrderResolve != nil &&
 				(tmpArgsType[0].Oid == types.T_binary || tmpArgsType[0].Oid == types.T_varbinary)
@@ -3582,8 +3606,6 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 						targetArgType.Width = typ.Width
 					}
 				}
-			} else if targetArgType.Oid == types.T_binary || targetArgType.Oid == types.T_varbinary {
-				targetArgType = types.T_blob.ToType()
 			}
 			targetType = makePlan2Type(&targetArgType)
 
@@ -8294,6 +8316,9 @@ func (builder *QueryBuilder) appendProjectionNode(
 		}
 		ctx.projects[i] = proj
 	}
+	if err = materializeBinaryLiteralProjects(builder.GetContext(), ctx.projects); err != nil {
+		return
+	}
 
 	nodeID = builder.appendNode(&plan.Node{
 		NodeType:     plan.Node_PROJECT,
@@ -8318,6 +8343,9 @@ func (builder *QueryBuilder) appendGroupingSetDistinctProjectionNode(
 			return
 		}
 		ctx.projects[i] = proj
+	}
+	if err = materializeBinaryLiteralProjects(builder.GetContext(), ctx.projects); err != nil {
+		return
 	}
 
 	originalProjects := ctx.projects
@@ -8354,6 +8382,19 @@ func (builder *QueryBuilder) appendGroupingSetDistinctProjectionNode(
 	}, ctx)
 	newNodeID = nodeID
 	return
+}
+
+func materializeBinaryLiteralProjects(ctx context.Context, projects []*plan.Expr) error {
+	for i, project := range projects {
+		if binaryType, ok := binaryLiteralStringType(project); ok {
+			cast, err := appendCastBeforeExpr(ctx, project, makePlan2Type(&binaryType))
+			if err != nil {
+				return err
+			}
+			projects[i] = cast
+		}
+	}
+	return nil
 }
 
 func (builder *QueryBuilder) appendDistinctNode(ctx *BindContext, nodeID int32) int32 {

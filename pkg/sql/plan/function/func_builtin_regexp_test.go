@@ -525,3 +525,267 @@ func Test_BuiltIn_RegularSubstr(t *testing.T) {
 		require.Equal(t, c.expected, val, i)
 	}
 }
+
+func runBinaryStringRegexpCase(
+	t *testing.T,
+	proc *process.Process,
+	inputs []FunctionTestInput,
+	expected FunctionTestResult,
+	fn fEvalFn,
+	checkResultMarker bool,
+) {
+	t.Helper()
+	tcc := NewFunctionTestCase(proc, inputs, expected, fn)
+	tcc.parameters[0].SetIsBinaryStringAt(0, true)
+	succeed, errInfo := tcc.Run()
+	require.True(t, succeed, errInfo)
+
+	if checkResultMarker {
+		result := tcc.GetResultVectorDirectly()
+		require.True(t, result.GetIsBinaryStringAt(0))
+		require.False(t, result.GetIsBinaryStringAt(1))
+		require.False(t, result.GetIsBinaryStringAt(2))
+	}
+}
+
+func Test_BuiltIn_BinaryStringRegexpPredicatesUseSubjectRows(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	subjects := []string{"你a", "你a", "你a"}
+	nulls := []bool{false, false, true}
+
+	tests := []struct {
+		name     string
+		inputs   []FunctionTestInput
+		expected []bool
+		fn       fEvalFn
+	}{
+		{
+			name: "like",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), subjects, nulls),
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{"____", "____", "____"}, nil),
+			},
+			expected: []bool{true, false, false},
+			fn:       newOpBuiltInRegexp().likeFn,
+		},
+		{
+			name: "like with escape",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), subjects, nulls),
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{"____", "____", "____"}, nil),
+				NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"=", "=", "="}, nil),
+			},
+			expected: []bool{true, false, false},
+			fn:       newOpBuiltInRegexp().likeFn,
+		},
+		{
+			name: "regexp operator",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), subjects, nulls),
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{"^....$", "^....$", "^....$"}, nil),
+			},
+			expected: []bool{true, false, false},
+			fn:       newOpBuiltInRegexp().builtInRegMatch,
+		},
+		{
+			name: "not regexp operator",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), subjects, nulls),
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{"^....$", "^....$", "^....$"}, nil),
+			},
+			expected: []bool{false, true, false},
+			fn:       newOpBuiltInRegexp().builtInNotRegMatch,
+		},
+		{
+			name: "regexp like",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), subjects, nulls),
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{"^....$", "^....$", "^....$"}, nil),
+			},
+			expected: []bool{true, false, false},
+			fn:       newOpBuiltInRegexp().builtInRegexpLike,
+		},
+		{
+			name: "regexp like with match type",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), subjects, nulls),
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{"^....$", "^....$", "^....$"}, nil),
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{"c", "c", "c"}, nil),
+			},
+			expected: []bool{true, false, false},
+			fn:       newOpBuiltInRegexp().builtInRegexpLike,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			runBinaryStringRegexpCase(t, proc, test.inputs,
+				NewFunctionTestResult(types.T_bool.ToType(), false, test.expected, nulls), test.fn, false)
+		})
+	}
+}
+
+func Test_BuiltIn_BinaryStringRegexpSubstrArities(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	subjects := []string{"你a", "你a", "你a"}
+	patterns := []string{".", ".", "."}
+	nulls := []bool{false, false, true}
+
+	tests := []struct {
+		name     string
+		inputs   []FunctionTestInput
+		expected []string
+	}{
+		{
+			name: "two arguments",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), subjects, nulls),
+				NewFunctionTestInput(types.T_varchar.ToType(), patterns, nil),
+			},
+			expected: []string{string([]byte{0xe4}), "你", ""},
+		},
+		{
+			name: "three arguments",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), subjects, nulls),
+				NewFunctionTestInput(types.T_varchar.ToType(), patterns, nil),
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{2, 2, 2}, nil),
+			},
+			expected: []string{string([]byte{0xbd}), string([]byte{0xbd}), ""},
+		},
+		{
+			name: "four arguments",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), subjects, nulls),
+				NewFunctionTestInput(types.T_varchar.ToType(), patterns, nil),
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{1, 1, 1}, nil),
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{2, 2, 2}, nil),
+			},
+			expected: []string{string([]byte{0xbd}), "a", ""},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			runBinaryStringRegexpCase(t, proc, test.inputs,
+				NewFunctionTestResult(types.T_varchar.ToType(), false, test.expected, nulls),
+				newOpBuiltInRegexp().builtInRegexpSubstr, true)
+		})
+	}
+}
+
+func Test_BuiltIn_BinaryStringRegexpInstrArities(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	subjects := []string{"你a", "你a", "你a"}
+	patterns := []string{".", ".", "."}
+	nulls := []bool{false, false, true}
+
+	tests := []struct {
+		name     string
+		inputs   []FunctionTestInput
+		expected []int64
+	}{
+		{
+			name: "two arguments",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), subjects, nulls),
+				NewFunctionTestInput(types.T_varchar.ToType(), patterns, nil),
+			},
+			expected: []int64{1, 1, 0},
+		},
+		{
+			name: "three arguments",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), subjects, nulls),
+				NewFunctionTestInput(types.T_varchar.ToType(), patterns, nil),
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{2, 2, 2}, nil),
+			},
+			expected: []int64{2, 2, 0},
+		},
+		{
+			name: "four arguments",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), subjects, nulls),
+				NewFunctionTestInput(types.T_varchar.ToType(), patterns, nil),
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{1, 1, 1}, nil),
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{2, 2, 2}, nil),
+			},
+			expected: []int64{2, 4, 0},
+		},
+		{
+			name: "five arguments",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), subjects, nulls),
+				NewFunctionTestInput(types.T_varchar.ToType(), patterns, nil),
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{1, 1, 1}, nil),
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{2, 2, 2}, nil),
+				NewFunctionTestInput(types.T_int8.ToType(), []int8{1, 1, 1}, nil),
+			},
+			expected: []int64{3, 5, 0},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			tcc := NewFunctionTestCase(proc, test.inputs,
+				NewFunctionTestResult(types.T_int64.ToType(), false, test.expected, nulls),
+				newOpBuiltInRegexp().builtInRegexpInstr)
+			tcc.parameters[0].SetIsBinaryStringAt(0, true)
+			succeed, errInfo := tcc.Run()
+			require.True(t, succeed, errInfo)
+		})
+	}
+}
+
+func Test_BuiltIn_BinaryStringRegexpReplaceArities(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	subjects := []string{"你a", "你a", "你a"}
+	patterns := []string{".", ".", "."}
+	replacements := []string{"x", "x", "x"}
+	nulls := []bool{false, false, true}
+
+	tests := []struct {
+		name     string
+		inputs   []FunctionTestInput
+		expected []string
+	}{
+		{
+			name: "three arguments",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), subjects, nulls),
+				NewFunctionTestInput(types.T_varchar.ToType(), patterns, nil),
+				NewFunctionTestInput(types.T_varchar.ToType(), replacements, nil),
+			},
+			expected: []string{"xxxx", "xx", ""},
+		},
+		{
+			name: "four arguments",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), subjects, nulls),
+				NewFunctionTestInput(types.T_varchar.ToType(), patterns, nil),
+				NewFunctionTestInput(types.T_varchar.ToType(), replacements, nil),
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{2, 2, 2}, nil),
+			},
+			expected: []string{string([]byte{0xe4}) + "xxx", "xx", ""},
+		},
+		{
+			name: "five arguments",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), subjects, nulls),
+				NewFunctionTestInput(types.T_varchar.ToType(), patterns, nil),
+				NewFunctionTestInput(types.T_varchar.ToType(), replacements, nil),
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{1, 1, 1}, nil),
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{2, 2, 2}, nil),
+			},
+			expected: []string{string([]byte{0xe4, 'x', 0xa0, 'a'}), "你x", ""},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			runBinaryStringRegexpCase(t, proc, test.inputs,
+				NewFunctionTestResult(types.T_varchar.ToType(), false, test.expected, nulls),
+				newOpBuiltInRegexp().builtInRegexpReplace, true)
+		})
+	}
+}

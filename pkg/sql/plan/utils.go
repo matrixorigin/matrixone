@@ -1525,12 +1525,24 @@ func ConstantFold(bat *batch.Batch, expr *plan.Expr, proc *process.Process, varA
 	if rule.IsDivisionByZeroConstant(fn) {
 		return expr, nil
 	}
+	if function.ExpressionContainsRuntimeBinaryString(expr) {
+		return expr, nil
+	}
 
 	vec, free, err := colexec.GetReadonlyResultFromExpression(proc, expr, []*batch.Batch{bat})
 	if err != nil {
 		return nil, err
 	}
 	defer free()
+	// A static binary result type already preserves byte-string semantics in the
+	// plan, so it is safe to fold. Dynamic binaryString metadata on a textual
+	// result still cannot be represented by Literal.IsBin without also changing
+	// raw hex/bit numeric semantics.
+	resultType := types.T(expr.Typ.Id)
+	staticBinaryResult := resultType == types.T_binary || resultType == types.T_varbinary || resultType == types.T_blob
+	if vec.GetIsBinaryString() && !staticBinaryResult {
+		return expr, nil
+	}
 
 	if isVec {
 		data, err := vec.MarshalBinary()
@@ -3145,17 +3157,20 @@ func FillValuesOfParamsInPlan(ctx context.Context, preparePlan *Plan, paramVals 
 }
 
 type ParamValue struct {
-	Value any
-	IsBin bool
+	Value        any
+	IsBin        bool
+	BinaryString bool
 }
 
 func replaceParamVals(ctx context.Context, plan0 *Plan, paramVals []any) error {
 	params := make([]*Expr, len(paramVals))
 	for i, val := range paramVals {
 		isBin := false
+		binaryString := false
 		if param, ok := val.(ParamValue); ok {
 			val = param.Value
 			isBin = param.IsBin
+			binaryString = param.BinaryString
 		}
 		if val == nil {
 			pc := &plan.Literal{
@@ -3174,6 +3189,14 @@ func replaceParamVals(ctx context.Context, plan0 *Plan, paramVals []any) error {
 				Expr: &plan.Expr_Lit{
 					Lit: pc,
 				},
+			}
+			if binaryString {
+				binaryType := types.New(
+					types.T_varbinary,
+					int32(len(fmt.Sprintf("%v", val))),
+					0,
+				)
+				params[i].Typ = makePlan2Type(&binaryType)
 			}
 		}
 	}

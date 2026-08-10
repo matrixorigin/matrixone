@@ -16,6 +16,7 @@ package function
 
 import (
 	"fmt"
+	"unicode/utf8"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -26,6 +27,50 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/functionUtil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
+
+func binaryStringTransformReturnType(parameters []types.Type) types.Type {
+	if len(parameters) == 0 {
+		return types.T_varbinary.ToType()
+	}
+	ret := parameters[0]
+	switch ret.Oid {
+	case types.T_binary:
+		ret.Oid = types.T_varbinary
+	case types.T_blob:
+		return types.T_blob.ToType()
+	}
+	return ret
+}
+
+func concatReturnType(parameters []types.Type) types.Type {
+	hasBinary := false
+	unbounded := false
+	width := int64(0)
+	for _, parameter := range parameters {
+		switch parameter.Oid {
+		case types.T_binary, types.T_varbinary:
+			hasBinary = true
+			width += int64(parameter.Width)
+		case types.T_blob:
+			hasBinary = true
+			unbounded = true
+		case types.T_text:
+			unbounded = true
+		case types.T_char, types.T_varchar:
+			width += int64(parameter.Width) * utf8.UTFMax
+		}
+	}
+	if !hasBinary {
+		return types.T_varchar.ToType()
+	}
+	if unbounded {
+		return types.T_blob.ToType()
+	}
+	if width > int64(types.MaxVarBinaryLen) {
+		width = int64(types.MaxVarBinaryLen)
+	}
+	return types.New(types.T_varbinary, int32(width), 0)
+}
 
 func jsonConstructorSupportsType(oid types.T) bool {
 	switch oid {
@@ -295,14 +340,7 @@ var supportedStringBuiltIns = []FuncNew{
 		Overloads: []overload{
 			{
 				overloadId: 0,
-				retType: func(parameters []types.Type) types.Type {
-					for _, p := range parameters {
-						if p.Oid == types.T_binary || p.Oid == types.T_varbinary || p.Oid == types.T_blob {
-							return types.T_blob.ToType()
-						}
-					}
-					return types.T_varchar.ToType()
-				},
+				retType:    concatReturnType,
 				newOp: func() executeLogicOfOverload {
 					return builtInConcat
 				},
@@ -2818,6 +2856,26 @@ var supportedStringBuiltIns = []FuncNew{
 					return builtInRepeat
 				},
 			},
+			{
+				overloadId: 1,
+				args:       []types.T{types.T_binary, types.T_int64},
+				retType:    binaryStringTransformReturnType,
+				newOp:      func() executeLogicOfOverload { return builtInRepeat },
+			},
+			{
+				overloadId: 2,
+				args:       []types.T{types.T_varbinary, types.T_int64},
+				retType:    binaryStringTransformReturnType,
+				newOp:      func() executeLogicOfOverload { return builtInRepeat },
+			},
+			{
+				overloadId: 3,
+				args:       []types.T{types.T_blob, types.T_int64},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_blob.ToType()
+				},
+				newOp: func() executeLogicOfOverload { return builtInRepeat },
+			},
 		},
 	},
 
@@ -3744,6 +3802,46 @@ var supportedStringBuiltIns = []FuncNew{
 					return SubStringWith2Args
 				},
 			},
+			{
+				overloadId: 7,
+				args:       []types.T{types.T_binary, types.T_int64},
+				retType:    binaryStringTransformReturnType,
+				newOp:      func() executeLogicOfOverload { return SubStringWith2Args },
+			},
+			{
+				overloadId: 8,
+				args:       []types.T{types.T_varbinary, types.T_int64},
+				retType:    binaryStringTransformReturnType,
+				newOp:      func() executeLogicOfOverload { return SubStringWith2Args },
+			},
+			{
+				overloadId: 9,
+				args:       []types.T{types.T_binary, types.T_int64, types.T_int64},
+				retType:    binaryStringTransformReturnType,
+				newOp:      func() executeLogicOfOverload { return SubStringWith3Args },
+			},
+			{
+				overloadId: 10,
+				args:       []types.T{types.T_varbinary, types.T_int64, types.T_int64},
+				retType:    binaryStringTransformReturnType,
+				newOp:      func() executeLogicOfOverload { return SubStringWith3Args },
+			},
+			{
+				overloadId: 11,
+				args:       []types.T{types.T_blob, types.T_int64},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_blob.ToType()
+				},
+				newOp: func() executeLogicOfOverload { return SubStringWith2Args },
+			},
+			{
+				overloadId: 12,
+				args:       []types.T{types.T_blob, types.T_int64, types.T_int64},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_blob.ToType()
+				},
+				newOp: func() executeLogicOfOverload { return SubStringWith3Args },
+			},
 		},
 	},
 
@@ -4051,6 +4149,24 @@ var supportedStringBuiltIns = []FuncNew{
 					return builtInToLower
 				},
 			},
+			{
+				overloadId: 1,
+				args:       []types.T{types.T_binary},
+				retType:    binaryStringTransformReturnType,
+				newOp:      func() executeLogicOfOverload { return builtInToLower },
+			},
+			{
+				overloadId: 2,
+				args:       []types.T{types.T_varbinary},
+				retType:    binaryStringTransformReturnType,
+				newOp:      func() executeLogicOfOverload { return builtInToLower },
+			},
+			{
+				overloadId: 3,
+				args:       []types.T{types.T_blob},
+				retType:    func(parameters []types.Type) types.Type { return parameters[0] },
+				newOp:      func() executeLogicOfOverload { return builtInToLower },
+			},
 		},
 	},
 
@@ -4071,6 +4187,24 @@ var supportedStringBuiltIns = []FuncNew{
 				newOp: func() executeLogicOfOverload {
 					return builtInToUpper
 				},
+			},
+			{
+				overloadId: 1,
+				args:       []types.T{types.T_binary},
+				retType:    binaryStringTransformReturnType,
+				newOp:      func() executeLogicOfOverload { return builtInToUpper },
+			},
+			{
+				overloadId: 2,
+				args:       []types.T{types.T_varbinary},
+				retType:    binaryStringTransformReturnType,
+				newOp:      func() executeLogicOfOverload { return builtInToUpper },
+			},
+			{
+				overloadId: 3,
+				args:       []types.T{types.T_blob},
+				retType:    func(parameters []types.Type) types.Type { return parameters[0] },
+				newOp:      func() executeLogicOfOverload { return builtInToUpper },
 			},
 		},
 	},
@@ -11253,8 +11387,6 @@ func makeTimeReturnType(parameters []types.Type) types.Type {
 }
 
 func isMakeTimeTextType(oid types.T) bool {
-	// Binary inputs must take the numeric cast path so hex/bit literal byte
-	// semantics are consumed before function-expression evaluation clears IsBin.
 	switch oid {
 	case types.T_binary, types.T_varbinary, types.T_blob:
 		return false

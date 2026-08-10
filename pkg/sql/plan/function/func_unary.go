@@ -466,6 +466,38 @@ func OrdString(val []byte) int64 {
 }
 
 func Ord(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
+	if ivecs[0].HasBinaryStringRows() {
+		p := vector.GenerateFunctionStrParameter(ivecs[0])
+		rs := vector.MustFunctionResult[int64](result)
+		for row := 0; row < length; row++ {
+			value, isNull := p.GetStrValue(uint64(row))
+			if isNull || selectList != nil && selectList.Contains(uint64(row)) {
+				if err := rs.Append(0, true); err != nil {
+					return err
+				}
+				continue
+			}
+			ord := OrdString(value)
+			if ivecs[0].GetIsBinaryStringAt(row) {
+				ord = 0
+				if len(value) > 0 {
+					ord = int64(value[0])
+				}
+			}
+			if err := rs.Append(ord, false); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	if isBinaryStringVector(ivecs[0]) {
+		return opUnaryBytesToFixed[int64](ivecs, result, proc, length, func(v []byte) int64 {
+			if len(v) == 0 {
+				return 0
+			}
+			return int64(v[0])
+		}, selectList)
+	}
 	return opUnaryBytesToFixed[int64](ivecs, result, proc, length, func(v []byte) int64 {
 		return OrdString(v)
 	}, selectList)
@@ -6142,6 +6174,27 @@ func strLength(xs string) int64 {
 }
 
 func LengthUTF8(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	if isBinaryStringVector(ivecs[0]) {
+		p := vector.GenerateFunctionStrParameter(ivecs[0])
+		rs := vector.MustFunctionResult[uint64](result)
+		for row := 0; row < length; row++ {
+			value, isNull := p.GetStrValue(uint64(row))
+			if isNull || selectList != nil && selectList.Contains(uint64(row)) {
+				if err := rs.Append(0, true); err != nil {
+					return err
+				}
+				continue
+			}
+			valueLength := strLengthUTF8(value)
+			if ivecs[0].GetIsBinaryStringAt(row) {
+				valueLength = strLengthBinary(value)
+			}
+			if err := rs.Append(valueLength, false); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
 	return opUnaryBytesToFixed[uint64](ivecs, result, proc, length, strLengthUTF8, selectList)
 }
 
@@ -6180,6 +6233,32 @@ func rtrim(xs string) string {
 }
 
 func Reverse(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	if ivecs[0].HasBinaryStringRows() {
+		return opUnaryBytesToBytesByBinaryRow(ivecs, result, length,
+			func(v []byte) []byte {
+				out := bytes.Clone(v)
+				for i, j := 0, len(out)-1; i < j; i, j = i+1, j-1 {
+					out[i], out[j] = out[j], out[i]
+				}
+				return out
+			},
+			func(v []byte) []byte { return []byte(reverse(functionUtil.QuickBytesToStr(v))) },
+			selectList,
+		)
+	}
+	if isBinaryStringVector(ivecs[0]) {
+		err := opUnaryBytesToBytes(ivecs, result, proc, length, func(v []byte) []byte {
+			out := bytes.Clone(v)
+			for i, j := 0, len(out)-1; i < j; i, j = i+1, j-1 {
+				out[i], out[j] = out[j], out[i]
+			}
+			return out
+		}, selectList)
+		if err == nil {
+			result.GetResultVector().SetIsBinaryString(true)
+		}
+		return err
+	}
 	return opUnaryStrToStr(ivecs, result, proc, length, reverse, selectList)
 }
 

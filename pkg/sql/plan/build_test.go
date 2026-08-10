@@ -6521,6 +6521,19 @@ func TestResultColumns(t *testing.T) {
 	}
 }
 
+func TestUnionMaterializesBinaryLiteralAsVarbinary(t *testing.T) {
+	logicPlan, err := runOneStmt(
+		NewMockOptimizer(false),
+		t,
+		"select X'e4bda0' x union all select '你好' x",
+	)
+	require.NoError(t, err)
+	columns := GetResultColumnsFromPlan(logicPlan)
+	require.Len(t, columns, 1)
+	require.Equal(t, int32(types.T_varbinary), columns[0].GetTyp().Id)
+	require.Equal(t, int32(8), columns[0].GetTyp().Width)
+}
+
 func TestResultColumns2(t *testing.T) {
 	mock := NewMockOptimizer(true)
 	getColumns := func(sql string) []*ColDef {

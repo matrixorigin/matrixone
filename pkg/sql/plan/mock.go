@@ -51,14 +51,15 @@ type MockCompilerContext struct {
 	ctx context.Context
 
 	// Add function fields for test overrides
-	GetAccountNameFunc    func() string
-	GetAccountIdFunc      func() (uint32, error)
-	DatabaseExistsFunc    func(string, *Snapshot) bool
-	GetDatabaseIdFunc     func(string, *Snapshot) (uint64, error)
-	ResolveAccountIdsFunc func([]string) ([]uint32, error)
-	ResolveFunc           func(string, string, *Snapshot) (*ObjectRef, *TableDef)
-	ResolveVariableFunc   func(string, bool, bool) (interface{}, error)
-	GetProcessFunc        func() *process.Process
+	GetAccountNameFunc              func() string
+	GetAccountIdFunc                func() (uint32, error)
+	DatabaseExistsFunc              func(string, *Snapshot) bool
+	GetDatabaseIdFunc               func(string, *Snapshot) (uint64, error)
+	ResolveAccountIdsFunc           func([]string) ([]uint32, error)
+	ResolveFunc                     func(string, string, *Snapshot) (*ObjectRef, *TableDef)
+	ResolveVariableFunc             func(string, bool, bool) (interface{}, error)
+	ResolveVariableBinaryStringFunc func(string, bool, bool) (bool, error)
+	GetProcessFunc                  func() *process.Process
 }
 
 func (m *MockCompilerContext) GetLowerCaseTableNames() int64 {
@@ -143,6 +144,13 @@ func (m *MockCompilerContext) ResolveVariable(varName string, isSystemVar, isGlo
 	}
 
 	return nil, moerr.NewInternalError(m.ctx, "var not found")
+}
+
+func (m *MockCompilerContext) ResolveVariableBinaryString(varName string, isSystemVar, isGlobalVar bool) (bool, error) {
+	if m.ResolveVariableBinaryStringFunc != nil {
+		return m.ResolveVariableBinaryStringFunc(varName, isSystemVar, isGlobalVar)
+	}
+	return false, nil
 }
 
 type col struct {

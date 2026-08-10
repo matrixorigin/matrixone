@@ -801,6 +801,7 @@ func builtInConcatCheck(_ []overload, inputs []types.Type) checkResult {
 }
 
 func builtInConcat(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
+	propagateBinaryStringResult(parameters, result)
 	rs := vector.MustFunctionResult[types.Varlena](result)
 	ps := make([]vector.FunctionParameterWrapper[types.Varlena], len(parameters))
 	for i := range ps {
@@ -1109,9 +1110,10 @@ func builtInCharCheck(_ []overload, inputs []types.Type) checkResult {
 	//   - numeric types (float/decimal/bool/bit/...) : rounded to nearest integer
 	//   - string types   : the leading numeric prefix is truncated to an integer
 	//     (e.g. '65.9' -> 65, not 66)
-	// To preserve this distinction we keep integers, cast string types to varchar
-	// (parsed & truncated in builtInChar), and cast every other numeric type to
-	// int64 (the numeric->int64 cast rounds, matching MySQL).
+	// To preserve this distinction we keep integers and string vectors as-is,
+	// and cast every other numeric type to int64 (the numeric->int64 cast rounds,
+	// matching MySQL). Keeping string metadata is required for hex/bit literals:
+	// their IsBin flag selects big-endian byte interpretation below.
 	if len(inputs) < 1 {
 		return newCheckResultWithFailure(failedFunctionParametersWrong)
 	}
@@ -1122,12 +1124,8 @@ func builtInCharCheck(_ []overload, inputs []types.Type) checkResult {
 		switch {
 		case source.Oid.IsInteger():
 			ret[i] = source
-		case source.Oid == types.T_varchar:
-			ret[i] = source
 		case source.Oid.IsMySQLString():
-			// char/text/blob/binary/varbinary -> varchar (truncated in builtInChar)
-			shouldCast = true
-			ret[i] = types.T_varchar.ToType()
+			ret[i] = source
 		default:
 			// float/decimal/bool/bit/... -> int64 (rounded by the cast, like MySQL)
 			c, _ := tryToMatch([]types.Type{source}, []types.T{types.T_int64})
@@ -1145,10 +1143,11 @@ func builtInCharCheck(_ []overload, inputs []types.Type) checkResult {
 }
 
 func builtInChar(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
+	result.GetResultVector().SetIsBinaryString(true)
 	rs := vector.MustFunctionResult[types.Varlena](result)
 
-	// After builtInCharCheck, parameters are either integer types or varchar.
-	// (numeric types were cast to int64, string types to varchar).
+	// After builtInCharCheck, parameters are either integer or string types.
+	// Numeric types were cast to int64; string metadata remains intact.
 	// Each getter returns an int64 value and a null flag.
 	type intGetter func(uint64) (int64, bool)
 	getters := make([]intGetter, len(parameters))
@@ -1569,6 +1568,42 @@ func doRpad(src string, tgtLen int64, pad string) (string, bool) {
 	}
 }
 
+func doLpadBytes(src []byte, tgtLen int64, pad []byte) ([]byte, bool) {
+	if tgtLen < 0 || tgtLen > types.MaxVarcharLen {
+		return nil, true
+	}
+	if tgtLen <= int64(len(src)) {
+		return src[:tgtLen], false
+	}
+	if len(pad) == 0 {
+		return nil, false
+	}
+	missing := int(tgtLen) - len(src)
+	out := make([]byte, 0, int(tgtLen))
+	out = append(out, bytes.Repeat(pad, missing/len(pad))...)
+	out = append(out, pad[:missing%len(pad)]...)
+	out = append(out, src...)
+	return out, false
+}
+
+func doRpadBytes(src []byte, tgtLen int64, pad []byte) ([]byte, bool) {
+	if tgtLen < 0 || tgtLen > types.MaxVarcharLen {
+		return nil, true
+	}
+	if tgtLen <= int64(len(src)) {
+		return src[:tgtLen], false
+	}
+	if len(pad) == 0 {
+		return nil, false
+	}
+	missing := int(tgtLen) - len(src)
+	out := make([]byte, 0, int(tgtLen))
+	out = append(out, src...)
+	out = append(out, bytes.Repeat(pad, missing/len(pad))...)
+	out = append(out, pad[:missing%len(pad)]...)
+	return out, false
+}
+
 func builtInRepeat(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	// repeat the string n times.
 	repeatNTimes := func(base string, n int64) (r string, null bool) {
@@ -1608,6 +1643,9 @@ func builtInRepeat(parameters []*vector.Vector, result vector.FunctionResultWrap
 		if err != nil {
 			return err
 		}
+		if !(null1 || null2) {
+			result.GetResultVector().SetIsBinaryStringAt(int(i), parameters[0].GetIsBinaryStringAt(int(i)))
+		}
 	}
 	return nil
 }
@@ -1623,11 +1661,21 @@ func builtInLpad(parameters []*vector.Vector, result vector.FunctionResultWrappe
 		v2, null2 := p2.GetValue(i)
 		v3, null3 := p3.GetStrValue(i)
 		if !(null1 || null2 || null3) {
-			rval, shouldNull := doLpad(string(v1), v2, string(v3))
+			binaryInput := parameters[0].GetIsBinaryStringAt(int(i))
+			var rvalue []byte
+			var shouldNull bool
+			if binaryInput {
+				rvalue, shouldNull = doLpadBytes(v1, v2, v3)
+			} else {
+				var value string
+				value, shouldNull = doLpad(string(v1), v2, string(v3))
+				rvalue = []byte(value)
+			}
 			if !shouldNull {
-				if err := rs.AppendBytes([]byte(rval), false); err != nil {
+				if err := rs.AppendBytes(rvalue, false); err != nil {
 					return err
 				}
+				result.GetResultVector().SetIsBinaryStringAt(int(i), binaryInput)
 				continue
 			}
 		}
@@ -1649,11 +1697,21 @@ func builtInRpad(parameters []*vector.Vector, result vector.FunctionResultWrappe
 		v2, null2 := p2.GetValue(i)
 		v3, null3 := p3.GetStrValue(i)
 		if !(null1 || null2 || null3) {
-			rval, shouldNull := doRpad(string(v1), v2, string(v3))
+			binaryInput := parameters[0].GetIsBinaryStringAt(int(i))
+			var rvalue []byte
+			var shouldNull bool
+			if binaryInput {
+				rvalue, shouldNull = doRpadBytes(v1, v2, v3)
+			} else {
+				var value string
+				value, shouldNull = doRpad(string(v1), v2, string(v3))
+				rvalue = []byte(value)
+			}
 			if !shouldNull {
-				if err := rs.AppendBytes([]byte(rval), false); err != nil {
+				if err := rs.AppendBytes(rvalue, false); err != nil {
 					return err
 				}
+				result.GetResultVector().SetIsBinaryStringAt(int(i), binaryInput)
 				continue
 			}
 		}
@@ -3816,15 +3874,143 @@ func isUTF8Charset(charset []byte) bool {
 }
 
 func builtInToUpper(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	if parameters[0].HasBinaryStringRows() {
+		return opUnaryBytesToBytesByBinaryRow(parameters, result, length,
+			func(v []byte) []byte { return v }, bytes.ToUpper, selectList)
+	}
+	if isBinaryStringVector(parameters[0]) {
+		err := opUnaryBytesToBytes(parameters, result, proc, length, func(v []byte) []byte {
+			return v
+		}, selectList)
+		if err == nil {
+			result.GetResultVector().SetIsBinaryString(true)
+		}
+		return err
+	}
 	return opUnaryBytesToBytes(parameters, result, proc, length, func(v []byte) []byte {
 		return bytes.ToUpper(v)
 	}, selectList)
 }
 
 func builtInToLower(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	if parameters[0].HasBinaryStringRows() {
+		return opUnaryBytesToBytesByBinaryRow(parameters, result, length,
+			func(v []byte) []byte { return v }, bytes.ToLower, selectList)
+	}
+	if isBinaryStringVector(parameters[0]) {
+		err := opUnaryBytesToBytes(parameters, result, proc, length, func(v []byte) []byte {
+			return v
+		}, selectList)
+		if err == nil {
+			result.GetResultVector().SetIsBinaryString(true)
+		}
+		return err
+	}
 	return opUnaryBytesToBytes(parameters, result, proc, length, func(v []byte) []byte {
 		return bytes.ToLower(v)
 	}, selectList)
+}
+
+func isBinaryStringVector(vec *vector.Vector) bool {
+	switch vec.GetType().Oid {
+	case types.T_binary, types.T_varbinary, types.T_blob:
+		return true
+	default:
+		return vec.GetIsBinaryString()
+	}
+}
+
+func opUnaryBytesToBytesByBinaryRow(
+	parameters []*vector.Vector,
+	result vector.FunctionResultWrapper,
+	length int,
+	binaryFn func([]byte) []byte,
+	textFn func([]byte) []byte,
+	selectList *FunctionSelectList,
+) error {
+	p := vector.GenerateFunctionStrParameter(parameters[0])
+	rs := vector.MustFunctionResult[types.Varlena](result)
+	for row := 0; row < length; row++ {
+		if selectList != nil && selectList.Contains(uint64(row)) {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+		value, isNull := p.GetStrValue(uint64(row))
+		if isNull {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+		binaryString := parameters[0].GetIsBinaryStringAt(row)
+		output := textFn(value)
+		if binaryString {
+			output = binaryFn(value)
+		}
+		if err := rs.AppendBytes(output, false); err != nil {
+			return err
+		}
+		result.GetResultVector().SetIsBinaryStringAt(row, binaryString)
+	}
+	return nil
+}
+
+func opBinaryBytesBytesToFixedByBinaryRow[Tr types.FixedSizeTExceptStrType](
+	parameters []*vector.Vector,
+	result vector.FunctionResultWrapper,
+	length int,
+	fn func([]byte, []byte, bool) (Tr, error),
+	selectList *FunctionSelectList,
+) error {
+	p1 := vector.GenerateFunctionStrParameter(parameters[0])
+	p2 := vector.GenerateFunctionStrParameter(parameters[1])
+	rs := vector.MustFunctionResult[Tr](result)
+	var zero Tr
+	for row := 0; row < length; row++ {
+		v1, null1 := p1.GetStrValue(uint64(row))
+		v2, null2 := p2.GetStrValue(uint64(row))
+		if null1 || null2 || selectList != nil && selectList.Contains(uint64(row)) {
+			if err := rs.Append(zero, true); err != nil {
+				return err
+			}
+			continue
+		}
+		value, err := fn(v1, v2, parameters[0].GetIsBinaryStringAt(row))
+		if err != nil {
+			return err
+		}
+		if err = rs.Append(value, false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func propagateBinaryStringResult(parameters []*vector.Vector, result vector.FunctionResultWrapper) {
+	for _, parameter := range parameters {
+		if isBinaryStringVector(parameter) {
+			result.GetResultVector().SetIsBinaryString(true)
+			return
+		}
+	}
+}
+
+func propagateBinaryStringResultRows(parameters []*vector.Vector, result *vector.Vector, length int) {
+	for row := 0; row < length && row < result.Length(); row++ {
+		if result.IsNull(uint64(row)) {
+			continue
+		}
+		binaryString := false
+		for _, parameter := range parameters {
+			if parameter.GetIsBinaryStringAt(row) {
+				binaryString = true
+				break
+			}
+		}
+		result.SetIsBinaryStringAt(row, binaryString)
+	}
 }
 
 // buildInMOCU extract cu or calculate cu from parameters
