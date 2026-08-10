@@ -28,8 +28,9 @@ import (
 )
 
 // ValidVectors verifies that each vector covers the requested logical rows.
-// Const vectors physically store one value and broadcast it across those rows;
-// ordinary short or nil vectors must never leave a hash suffix at its seed.
+// Scalar const vectors physically store one value and broadcast it across
+// those rows; ordinary short or nil vectors must never leave a hash suffix at
+// its seed.
 func ValidVectors(vecs []*vector.Vector, rows int) bool {
 	if rows < 0 || len(vecs) == 0 {
 		return false
@@ -39,7 +40,7 @@ func ValidVectors(vecs []*vector.Vector, rows int) bool {
 			return false
 		}
 		if vec.IsConst() {
-			if rows > 0 && vec.Length() == 0 {
+			if !vec.CoversLogicalRows(0, rows) {
 				return false
 			}
 			continue

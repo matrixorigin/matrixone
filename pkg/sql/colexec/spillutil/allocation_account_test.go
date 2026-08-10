@@ -546,6 +546,63 @@ func TestSpillAllocationAccountScatterBroadcastsConstKey(t *testing.T) {
 	require.Equal(t, int64(len(values)), writtenRows)
 }
 
+func TestSpillAllocationAccountScatterReducesBroadcastConstKey(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(
+		t, "", mpool.MustNew("spill-allocation-scatter-const-reduce"),
+	)
+	defer proc.Free()
+	state := newTestSpillAllocationAccount(t, 80<<10, 128)
+	engine, err := newSpillEngine(
+		SpillEngineConfig{Budget: state.generation},
+		state.allocation,
+	)
+	require.NoError(t, err)
+	values := make([]int64, 8_192)
+	for i := range values {
+		values[i] = int64(i)
+	}
+	constant, err := vector.NewConstFixed(
+		types.T_int64.ToType(), int64(7), 1, proc.Mp(),
+	)
+	require.NoError(t, err)
+	defer constant.Free(proc.Mp())
+	constant.SetPrepareParamKind(vector.PrepareParamInteger)
+	source := testutil.NewBatchWithVectors([]*vector.Vector{
+		testutil.MakeInt64Vector(values, nil, proc.Mp()),
+	}, nil)
+	defer source.Clean(proc.Mp())
+	writers := engine.makeBucketWriters("spill_allocation_scatter_const_reduce")
+	defer func() {
+		for i := range writers {
+			writers[i].Close()
+		}
+	}()
+	analyzer := process.NewAnalyzer(0, false, false, "test")
+	require.NoError(t, engine.scatterBatchWithPressure(
+		proc,
+		source,
+		[]*vector.Vector{constant, source.Vecs[0]},
+		writers,
+		0,
+		false,
+		analyzer,
+	))
+	require.Positive(t,
+		analyzer.GetOpStats().ExtraStats["JoinSpillInputReductions"])
+	require.NoError(t, engine.flushScatterBuffers(proc, writers, analyzer))
+	var rows int64
+	for i := range writers {
+		rows += writers[i].Rows
+	}
+	require.Equal(t, int64(len(values)), rows,
+		"pressure windows must preserve every broadcast row across offsets")
+
+	engine.releaseScatterScratch()
+	engine.Cleanup(proc)
+	require.Zero(t, state.account.Snapshot().Used)
+	finalizeTestSpillAllocationAccount(t, state)
+}
+
 func TestSpillAllocationAccountMarshalBufferLifecycle(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(
 		t,
