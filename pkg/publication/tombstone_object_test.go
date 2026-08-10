@@ -84,30 +84,26 @@ func (m *mockCCPRTxnCacheWriterCB2) WriteObject(ctx context.Context, objectName 
 	return false, nil
 }
 
+func (m *mockCCPRTxnCacheWriterCB2) WriteNewObject(
+	ctx context.Context,
+	objectName string,
+	txnID []byte,
+) error {
+	isNew, err := m.WriteObject(ctx, objectName, txnID)
+	if err != nil {
+		return err
+	}
+	if !isNew {
+		return moerr.NewInternalErrorNoCtxf(
+			"attempt-unique CCPR object %s already exists", objectName)
+	}
+	return nil
+}
+
 func (m *mockCCPRTxnCacheWriterCB2) OnFileWritten(objectName string) {
 	if m.onFileWrittenFn != nil {
 		m.onFileWrittenFn(objectName)
 	}
-}
-
-// ---------------------------------------------------------------------------
-// filter_object.go — tombstoneFSinkerWithName.Close error path
-// ---------------------------------------------------------------------------
-
-func TestCoverageBoost2_TombstoneFSinkerClose_WithWriter(t *testing.T) {
-	// Close() when writer is non-nil should set it to nil and return nil
-	s := &tombstoneFSinkerWithName{}
-	// Simulate having a writer (non-nil)
-	// We can't easily create a real writer, but Close just sets it to nil
-	err := s.Close()
-	assert.NoError(t, err)
-	assert.Nil(t, s.writer)
-}
-
-func TestCoverageBoost2_TombstoneFSinkerReset_WithWriter(t *testing.T) {
-	s := &tombstoneFSinkerWithName{}
-	s.Reset()
-	assert.Nil(t, s.writer)
 }
 
 // ---------------------------------------------------------------------------

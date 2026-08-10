@@ -99,6 +99,33 @@ func snapshotFileService(t testing.TB, fs fileservice.FileService) []string {
 	return files
 }
 
+func snapshotObjectFiles(t testing.TB, fs fileservice.FileService) []string {
+	t.Helper()
+	entries, err := fileservice.SortedList(fs.List(context.Background(), ""))
+	require.NoError(t, err)
+	files := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		if !entry.IsDir {
+			files = append(files, fmt.Sprintf("%s:%d", entry.Name, entry.Size))
+		}
+	}
+	return files
+}
+
+func requireNoUnpublishedCleanupMarkers(
+	t testing.TB,
+	fs fileservice.FileService,
+) {
+	t.Helper()
+	entries, err := fileservice.SortedList(fs.List(
+		context.Background(), "gc/unpublished/"))
+	require.NoError(t, err)
+	for _, entry := range entries {
+		require.Truef(t, entry.IsDir,
+			"unreleased cleanup marker %s", entry.Name)
+	}
+}
+
 func TestCancelableJob(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
@@ -4116,7 +4143,7 @@ func TestTransferredTombstonesSyncFailureRollsBack(t *testing.T) {
 	require.True(t, ok)
 
 	baseFS := tae.Runtime.Fs
-	filesBeforeCommit := snapshotFileService(t, baseFS)
+	filesBeforeCommit := snapshotObjectFiles(t, baseFS)
 	injectedErr := moerr.NewFileNotFoundNoCtx("injected transferred tombstone object")
 	rejectingFS := &rejectingWriteFileService{
 		FileService: baseFS,
@@ -4137,8 +4164,9 @@ func TestTransferredTombstonesSyncFailureRollsBack(t *testing.T) {
 		"cleanup must preserve the object-store error class")
 	require.Positive(t, rejectingFS.writes.Load(),
 		"the test must reach the transferred tombstone object write")
-	require.Equal(t, filesBeforeCommit, snapshotFileService(t, baseFS),
+	require.Equal(t, filesBeforeCommit, snapshotObjectFiles(t, baseFS),
 		"a failed Sync must not leave an unreachable object")
+	requireNoUnpublishedCleanupMarkers(t, tae.Runtime.LocalFs)
 	require.Empty(t, collectNewTombstones(t, ctx, tae, nil),
 		"failed transferred tombstones must not enter the transaction workspace")
 	tae.CheckRowsByScan(rows, true)
@@ -4200,12 +4228,13 @@ func TestTransferredTombstonesPublishedBeforeConflictRollBack(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, ok)
 	tae.DoAppend(candidate)
-	filesBeforeFailedCommit := snapshotFileService(t, tae.Runtime.Fs)
+	filesBeforeFailedCommit := snapshotObjectFiles(t, tae.Runtime.Fs)
 
 	err = txn.Commit(ctx)
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnWWConflict), err)
-	require.Equal(t, filesBeforeFailedCommit, snapshotFileService(t, tae.Runtime.Fs),
+	require.Equal(t, filesBeforeFailedCommit, snapshotObjectFiles(t, tae.Runtime.Fs),
 		"rollback must remove the transferred TN tombstone object")
+	requireNoUnpublishedCleanupMarkers(t, tae.Runtime.LocalFs)
 	require.Zero(t, common.DebugAllocator.CurrNB())
 	tae.CheckRowsByScan(101, true)
 

@@ -18,7 +18,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -35,7 +34,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/dbutils"
-	gc3 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/gc/v3"
 	"github.com/stretchr/testify/require"
 )
 
@@ -60,42 +58,6 @@ func (fs *persistThenErrorFileService) Write(
 	}
 	fs.persisted = vector.FilePath
 	return fs.err
-}
-
-type rejectObjectDeleteFileService struct {
-	fileservice.FileService
-	reject             atomic.Bool
-	rejectMarkerWrites atomic.Bool
-	objectDeletes      atomic.Int64
-	markerWrites       atomic.Int64
-}
-
-func (fs *rejectObjectDeleteFileService) Write(
-	ctx context.Context,
-	vector fileservice.IOVector,
-) error {
-	if strings.HasPrefix(vector.FilePath, "gc/unpublished/") {
-		fs.markerWrites.Add(1)
-		if fs.rejectMarkerWrites.Load() {
-			return errors.New("injected cleanup marker write failure")
-		}
-	}
-	return fs.FileService.Write(ctx, vector)
-}
-
-func (fs *rejectObjectDeleteFileService) Delete(
-	ctx context.Context,
-	paths ...string,
-) error {
-	if fs.reject.Load() {
-		for _, path := range paths {
-			if !strings.HasPrefix(path, "gc/unpublished/") {
-				fs.objectDeletes.Add(1)
-				return errors.New("injected persistent object delete failure")
-			}
-		}
-	}
-	return fs.FileService.Delete(ctx, paths...)
 }
 
 func (fs *failFirstDeleteFileService) Delete(
@@ -403,168 +365,12 @@ func TestTransferredTombstoneSinkCleansAmbiguousSyncObject(t *testing.T) {
 		"pre-publication cleanup must delete the commit-ambiguous object")
 }
 
-func TestTransferredTombstoneTerminalCleanupHandoff(t *testing.T) {
-	ctx := context.Background()
-	proc := testutil.NewProc(t)
-	baseFS, err := fileservice.Get[fileservice.FileService](
-		proc.GetFileService(),
-		defines.SharedFileServiceName,
-	)
-	require.NoError(t, err)
-	filesBeforeSpill := listTransferredTombstoneTestFiles(t, baseFS)
-	fs := &rejectObjectDeleteFileService{FileService: baseFS}
-	fs.reject.Store(true)
-	fs.rejectMarkerWrites.Store(true)
-	localBaseFS, err := fileservice.NewMemoryFS(
-		"local", fileservice.DisabledCacheConfig, nil)
-	require.NoError(t, err)
-	localFS := &rejectObjectDeleteFileService{FileService: localBaseFS}
-	localFS.rejectMarkerWrites.Store(true)
-	checkpointCleaner := gc3.NewCheckpointCleaner(
-		ctx,
-		"",
-		fs,
-		nil,
-		nil,
-		gc3.WithUnpublishedCleanupFS(localFS),
-	)
-	checkpointCleaner.DisableGC()
-	t.Cleanup(checkpointCleaner.Stop)
-	diskCleaner := gc3.NewDiskCleaner(checkpointCleaner, true)
-
-	pkType := types.T_int32.ToType()
-	raw := ioutil.NewTombstoneSinker(
-		objectio.HiddenColumnSelection_None,
-		pkType,
-		proc.Mp(),
-		fs,
-		ioutil.WithMemorySizeThreshold(1),
-	)
-	sink := &transferredTombstoneSink{sinker: raw}
-	bat := catalog.NewCNTombstoneBatchByPKType(pkType, proc.Mp())
-	defer bat.Close()
-	objectID := objectio.NewObjectid()
-	rowID := types.NewRowIDWithObjectIDBlkNumAndRowID(objectID, 0, 0)
-	bat.GetVectorByName(objectio.TombstoneAttr_Rowid_Attr).Append(rowID, false)
-	bat.GetVectorByName(objectio.TombstoneAttr_PK_Attr).Append(int32(1), false)
-
-	require.NoError(t, sink.write(ctx, containers.ToCNBatch(bat)))
-	require.NoError(t, raw.Sync(ctx))
-	stats, tail := raw.GetResult()
-	require.NotEmpty(t, stats, "the test must create a persisted spill")
-	require.Empty(t, tail)
-
-	operationErr := moerr.NewTxnWWConflictNoCtx(0, "")
-	require.Same(t, operationErr, sink.close(ctx, operationErr),
-		"cleanup handling must not replace the primary transaction error")
-	require.True(t, sink.cleanupPending)
-
-	rt := dbutils.NewRuntime(dbutils.WithRuntimeObjectFS(fs))
-	rt.HandoffUnpublishedObjects = diskCleaner.HandoffUnpublishedObjects
-	store := &txnStore{ctx: ctx, rt: rt}
-	tbl := &txnTable{
-		store:                             store,
-		dataTable:                         &baseTable{},
-		txnEntries:                        newTxnEntries(),
-		pendingTransferredTombstoneSinks:  []*transferredTombstoneSink{sink},
-		transferredTombstoneCleanupLogged: true,
-	}
-	db := &txnDB{store: store, tables: map[uint64]*txnTable{1: tbl}}
-	store.dbs = map[uint64]*txnDB{1: db}
-
-	require.Error(t, tbl.PrepareRollback(),
-		"PrepareRollback must retain ownership when object deletion still fails")
-	require.NoError(t, store.Close(),
-		"the process-level cleaner must accept ownership before transaction removal")
-	require.Equal(t, int64(3), fs.objectDeletes.Load(),
-		"initial cleanup, PrepareRollback, and final Store.Close must all be exercised")
-	require.Equal(t, int64(1), fs.markerWrites.Load())
-	require.Equal(t, int64(1), localFS.markerWrites.Load())
-	require.True(t, sink.closed)
-	require.Empty(t, tbl.pendingTransferredTombstoneSinks)
-	require.Nil(t, store.dbs,
-		"successful terminal handoff must allow transaction state to be released")
-	require.Nil(t, db.tables)
-	require.NotEqual(t, filesBeforeSpill, listTransferredTombstoneTestFiles(t, baseFS),
-		"the failed transaction-scoped delete leaves the object for its new owner")
-
-	err = checkpointCleaner.Process(ctx, nil)
-	require.ErrorContains(t, err, "injected persistent object delete failure")
-	fs.reject.Store(false)
-	require.NoError(t, checkpointCleaner.Process(ctx, nil))
-	require.Equal(t, filesBeforeSpill, listTransferredTombstoneTestFiles(t, baseFS),
-		"the post-transaction owner must eventually remove the physical orphan")
-}
-
-func TestPrepareRollbackVisitsEveryTransferredTombstoneOwner(t *testing.T) {
-	ctx := context.Background()
-	baseFS, err := fileservice.NewMemoryFS(
-		"shared", fileservice.DisabledCacheConfig, nil)
-	require.NoError(t, err)
-	fs := &rejectObjectDeleteFileService{FileService: baseFS}
-	fs.reject.Store(true)
-
-	rt := dbutils.NewRuntime(dbutils.WithRuntimeObjectFS(fs))
-	rt.HandoffUnpublishedObjects = func(ctx context.Context, files ...string) error {
-		_, err := ioutil.RecordUnpublishedObjectCleanup(ctx, fs, files...)
-		return err
-	}
-	store := &txnStore{ctx: ctx, rt: rt, dbs: make(map[uint64]*txnDB)}
-	var tables []*txnTable
-	var objects []string
-	for dbID := uint64(1); dbID <= 2; dbID++ {
-		db := &txnDB{store: store, tables: make(map[uint64]*txnTable)}
-		store.dbs[dbID] = db
-		for tableID := uint64(1); tableID <= 2; tableID++ {
-			object := fmt.Sprintf("unpublished-%d-%d", dbID, tableID)
-			require.NoError(t, baseFS.Write(ctx, fileservice.IOVector{
-				FilePath: object,
-				Entries: []fileservice.IOEntry{{
-					Offset: 0,
-					Size:   1,
-					Data:   []byte{1},
-				}},
-			}))
-			tbl := &txnTable{
-				store:                             store,
-				dataTable:                         &baseTable{},
-				txnEntries:                        newTxnEntries(),
-				transferredTombstoneObjects:       []string{object},
-				transferredTombstoneCleanupLogged: true,
-			}
-			db.tables[tableID] = tbl
-			tables = append(tables, tbl)
-			objects = append(objects, object)
-		}
-	}
-
-	require.Error(t, store.PrepareRollback())
-	require.Equal(t, int64(len(tables)), fs.objectDeletes.Load(),
-		"one failed owner must not prevent later tables or databases from preparing rollback")
-	for _, tbl := range tables {
-		require.True(t, tbl.transferredTombstoneRollback)
-	}
-
-	require.NoError(t, store.Close())
-	require.Nil(t, store.dbs)
-	require.Equal(t, int64(2*len(tables)), fs.objectDeletes.Load())
-
-	fs.reject.Store(false)
-	replayed, remaining, err := ioutil.ReplayUnpublishedObjectCleanup(ctx, fs)
-	require.NoError(t, err)
-	require.Equal(t, len(tables), replayed)
-	require.False(t, remaining)
-	for _, object := range objects {
-		_, err = baseFS.StatFile(ctx, object)
-		require.True(t, moerr.IsMoErrCode(err, moerr.ErrFileNotFound))
-	}
-}
-
 type deadlineTrackingDeleteFileService struct {
 	fileservice.FileService
 	deletes     int
 	deadline    time.Time
 	hasDeadline bool
+	err         error
 }
 
 func (fs *deadlineTrackingDeleteFileService) Delete(
@@ -573,7 +379,7 @@ func (fs *deadlineTrackingDeleteFileService) Delete(
 ) error {
 	fs.deletes++
 	fs.deadline, fs.hasDeadline = ctx.Deadline()
-	return nil
+	return fs.err
 }
 
 func TestTxnTableCloseDoesNotDeleteWithoutConfirmedRollback(t *testing.T) {
@@ -603,6 +409,19 @@ func TestTxnTableCloseDoesNotDeleteWithoutConfirmedRollback(t *testing.T) {
 		require.NoError(t, tbl.Close())
 		require.Equal(t, 1, fs.deletes,
 			"confirmed rollback must delete its unpublished object")
+	})
+
+	t.Run("failed rollback without durable owner", func(t *testing.T) {
+		deleteErr := errors.New("injected persistent delete failure")
+		fs := &deadlineTrackingDeleteFileService{err: deleteErr}
+		tbl := newTable(fs)
+		tbl.transferredTombstoneRollback = true
+		tbl.transferredTombstoneCleanupLogged = true
+		err := tbl.Close()
+		require.ErrorIs(t, err, deleteErr)
+		require.Equal(t, []string{"transferred-tombstone"},
+			tbl.transferredTombstoneObjects,
+			"Close must retain its only retry owner when no durable handoff exists")
 	})
 }
 
@@ -643,51 +462,6 @@ func TestTransferredTombstoneCleanupSharesOneTransactionDeadline(t *testing.T) {
 	require.True(t, ok)
 	require.Equal(t, tbl.store.transferredTombstoneCleanupDeadline, otherDeadline,
 		"all tables in one transaction must share the earliest cleanup deadline")
-}
-
-func TestTransferredTombstoneHandoffSharesOneTransactionDeadline(t *testing.T) {
-	ctx := context.Background()
-	baseFS, err := fileservice.NewMemoryFS(
-		"shared", fileservice.DisabledCacheConfig, nil)
-	require.NoError(t, err)
-	fs := &rejectObjectDeleteFileService{FileService: baseFS}
-	fs.reject.Store(true)
-
-	var deadlines []time.Time
-	var expiredOnEntry []bool
-	rt := dbutils.NewRuntime(dbutils.WithRuntimeObjectFS(fs))
-	rt.HandoffUnpublishedObjects = func(ctx context.Context, _ ...string) error {
-		deadline, ok := ctx.Deadline()
-		require.True(t, ok)
-		deadlines = append(deadlines, deadline)
-		expiredOnEntry = append(expiredOnEntry, ctx.Err() != nil)
-		<-ctx.Done()
-		return context.Cause(ctx)
-	}
-	store := &txnStore{
-		ctx: ctx,
-		rt:  rt,
-		dbs: make(map[uint64]*txnDB),
-	}
-	db := &txnDB{store: store, tables: make(map[uint64]*txnTable)}
-	store.dbs[1] = db
-	for tableID := uint64(1); tableID <= 2; tableID++ {
-		db.tables[tableID] = &txnTable{
-			store:                             store,
-			dataTable:                         &baseTable{},
-			transferredTombstoneObjects:       []string{fmt.Sprintf("unpublished-%d", tableID)},
-			transferredTombstoneRollback:      true,
-			transferredTombstoneCleanupLogged: true,
-		}
-	}
-	store.transferredTombstoneHandoffDeadline = time.Now().Add(100 * time.Millisecond)
-
-	require.Error(t, store.Close())
-	require.Len(t, deadlines, 2)
-	require.Equal(t, deadlines[0], deadlines[1],
-		"every table must consume the same transaction-level handoff budget")
-	require.Equal(t, []bool{false, true}, expiredOnEntry,
-		"after one table consumes the budget, later tables must not restart it")
 }
 
 func TestTransferredTombstoneSinkPreservesMoErrClassification(t *testing.T) {

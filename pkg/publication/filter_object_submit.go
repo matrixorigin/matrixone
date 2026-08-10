@@ -657,9 +657,12 @@ func ApplyObjects(
 				})
 			} else {
 				filterResult := tombstoneResults[info]
-				if !filterResult.DownstreamStats.IsZero() {
+				for _, stats := range filterResult.DownstreamStatsList {
+					if stats.IsZero() {
+						continue
+					}
 					collectedTombstoneInsertStats = append(collectedTombstoneInsertStats, &ObjectWithTableInfo{
-						Stats:       filterResult.DownstreamStats,
+						Stats:       stats,
 						DBName:      info.DBName,
 						TableName:   info.TableName,
 						IsTombstone: true,

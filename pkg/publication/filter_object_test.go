@@ -34,46 +34,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// ---- tombstoneFSinkerWithName ----
-
-func TestTombstoneFSinkerWithName_SyncNilWriter(t *testing.T) {
-	s := &tombstoneFSinkerWithName{}
-	stats, err := s.Sync(context.Background())
-	assert.NoError(t, err)
-	assert.Nil(t, stats)
-}
-
-func TestTombstoneFSinkerWithName_ResetNilWriter(t *testing.T) {
-	s := &tombstoneFSinkerWithName{}
-	s.Reset() // should not panic
-}
-
-func TestTombstoneFSinkerWithName_Close(t *testing.T) {
-	s := &tombstoneFSinkerWithName{}
-	err := s.Close()
-	assert.NoError(t, err)
-}
-
-// ---- newTombstoneFSinkerFactoryWithName ----
-
-func TestNewTombstoneFSinkerFactoryWithName(t *testing.T) {
-	mp, err := mpool.NewMPool("test", 0, mpool.NoFixed)
-	require.NoError(t, err)
-	defer mp.Free(nil)
-
-	segid := objectio.NewSegmentid()
-	objName := objectio.BuildObjectName(segid, 0)
-	factory := newTombstoneFSinkerFactoryWithName(objName, objectio.HiddenColumnSelection_None)
-	assert.NotNil(t, factory)
-
-	sinker := factory(mp, nil)
-	assert.NotNil(t, sinker)
-
-	ts, ok := sinker.(*tombstoneFSinkerWithName)
-	assert.True(t, ok)
-	assert.Equal(t, objName, ts.objectName)
-}
-
 // ---- FilterObject TTL checker ----
 
 func TestFilterObject_TTLExpired(t *testing.T) {
@@ -371,7 +331,7 @@ func TestRewriteNonAppendableTombstoneWithSinker_ContentTooSmall(t *testing.T) {
 
 	amap := NewAObjectMap()
 	_, err = rewriteNonAppendableTombstoneWithSinker(
-		context.Background(), []byte("short"), &stats, nil, mp, amap,
+		context.Background(), []byte("short"), &stats, nil, mp, amap, nil, nil,
 	)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "object content too small")
@@ -459,22 +419,87 @@ func TestRewriteNonAppendableTombstoneSyncErrorHandsOffCleanup(t *testing.T) {
 		FileService:       targetBase,
 		failObjectDeletes: true,
 	}
+	var registered string
+	cache := &mockCCPRTxnCacheWriterCB2{
+		writeObjectFn: func(_ context.Context, objectName string, _ []byte) (bool, error) {
+			registered = objectName
+			return true, nil
+		},
+	}
 	_, err = rewriteNonAppendableTombstoneWithSinker(
-		ctx, objectContent, &stats, targetFS, mp, NewAObjectMap())
+		ctx, objectContent, &stats, targetFS, mp, NewAObjectMap(), cache, []byte("txn"))
 	require.ErrorContains(t, err, "injected publication post-persist sync failure")
 	require.NotEmpty(t, targetFS.persisted)
 	require.Equal(t, 1, targetFS.objectDeletes,
 		"the caller must attempt exact-name cleanup before handing it off")
 	_, err = targetBase.StatFile(ctx, targetFS.persisted)
 	require.NoError(t, err, "Sync failed after the object reached storage")
+	require.Equal(t, targetFS.persisted, registered,
+		"the transaction owner must be registered before the ambiguous write")
+	require.NotEqual(t, stats.ObjectName().String(), registered,
+		"each rewrite attempt must use a generation-unique object name")
+}
 
-	targetFS.failObjectDeletes = false
-	replayed, remaining, err := ioutil.ReplayUnpublishedObjectCleanup(ctx, targetFS)
+func TestCCPRTombstoneSinkerOwnsEveryUniqueSpill(t *testing.T) {
+	ctx := context.Background()
+	mp, err := mpool.NewMPool("ccpr-multi-spill", 0, mpool.NoFixed)
 	require.NoError(t, err)
-	require.Equal(t, 1, replayed, "the caller must hand cleanup to a durable owner")
-	require.False(t, remaining)
-	_, err = targetBase.StatFile(ctx, targetFS.persisted)
-	require.True(t, moerr.IsMoErrCode(err, moerr.ErrFileNotFound))
+	fs, err := fileservice.NewMemoryFS(
+		"target", fileservice.DisabledCacheConfig, nil)
+	require.NoError(t, err)
+	var registered, written []string
+	cache := &mockCCPRTxnCacheWriterCB2{
+		writeObjectFn: func(
+			_ context.Context, name string, _ []byte,
+		) (bool, error) {
+			registered = append(registered, name)
+			return true, nil
+		},
+		onFileWrittenFn: func(name string) {
+			written = append(written, name)
+		},
+	}
+	pkType := types.T_int32.ToType()
+	attrs, attrTypes := objectio.GetTombstoneSchema(
+		pkType, objectio.HiddenColumnSelection_None)
+	sinker := ioutil.NewSinker(
+		objectio.TombstonePrimaryKeyIdx,
+		attrs,
+		attrTypes,
+		newCCPRTombstoneFileSinkerFactory(
+			cache, []byte("txn"), objectio.HiddenColumnSelection_None),
+		mp,
+		fs,
+		ioutil.WithMemorySizeThreshold(1),
+		ioutil.WithTailSizeCap(0),
+	)
+	t.Cleanup(func() {
+		require.NoError(t, sinker.Close())
+		mp.Free(nil)
+	})
+
+	for i := 0; i < 2; i++ {
+		bat := batch.NewWithSize(2)
+		bat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
+		bat.Vecs[1] = vector.NewVec(pkType)
+		objectID := objectio.NewObjectid()
+		rowID := types.NewRowIDWithObjectIDBlkNumAndRowID(objectID, 0, 0)
+		require.NoError(t, vector.AppendFixed(bat.Vecs[0], rowID, false, mp))
+		require.NoError(t, vector.AppendFixed(bat.Vecs[1], int32(i), false, mp))
+		bat.SetRowCount(1)
+		require.NoError(t, sinker.Write(ctx, bat))
+		bat.Clean(mp)
+	}
+	require.NoError(t, sinker.Sync(ctx))
+	persisted, tail := sinker.GetResult()
+	require.Len(t, persisted, 2)
+	require.Empty(t, tail)
+	require.Equal(t, registered, written)
+	require.Len(t, registered, 2)
+	require.NotEqual(t, registered[0], registered[1],
+		"each spill must have a generation-unique cleanup identity")
+	require.Equal(t, persisted[0].ObjectName().String(), registered[0])
+	require.Equal(t, persisted[1].ObjectName().String(), registered[1])
 }
 
 // ---- FilterObject dispatches to appendable vs non-appendable ----

@@ -123,6 +123,7 @@ type txnTable struct {
 	// a generic Close must not delete files after an uncertain commit result.
 	pendingTransferredTombstoneSinks  []*transferredTombstoneSink
 	transferredTombstoneObjects       []string
+	transferredTombstoneOwnership     *transferredTombstoneOwnership
 	transferredTombstoneRollback      bool
 	transferredTombstoneCleanupLogged bool
 
@@ -480,13 +481,19 @@ func (tbl *txnTable) TransferDeletes(
 			tbl.store.warChecker.Delete(id)
 			if currentTransferBatch != nil {
 				if transferSink == nil {
+					ownership := &transferredTombstoneOwnership{
+						cleaner: tbl.store.rt.UnpublishedObjectCleaner,
+						dbID:    tbl.entry.GetDB().ID,
+						tableID: tbl.GetID(),
+					}
 					transferSink = &transferredTombstoneSink{
-						sinker: ioutil.NewTombstoneSinker(
-							objectio.HiddenColumnSelection_None,
+						ownership: ownership,
+						sinker: newOwnedTransferredTombstoneSinker(
 							*pkType,
 							common.WorkspaceAllocator,
 							tbl.store.rt.Fs,
-							ioutil.WithMemorySizeThreshold(TransferSinkerMemorySizeThreshold)),
+							ownership,
+						),
 					}
 				}
 				if err := transferSink.write(ctx, containers.ToCNBatch(currentTransferBatch)); err != nil {
@@ -507,6 +514,14 @@ func (tbl *txnTable) TransferDeletes(
 			); err != nil {
 				return err
 			}
+			if tbl.transferredTombstoneOwnership == nil {
+				tbl.transferredTombstoneOwnership = &transferredTombstoneOwnership{
+					cleaner: tbl.store.rt.UnpublishedObjectCleaner,
+					dbID:    tbl.entry.GetDB().ID,
+					tableID: tbl.GetID(),
+				}
+			}
+			transferSink.ownership.transferTo(tbl.transferredTombstoneOwnership)
 			logutil.Info(
 				"TN-TRANSFER-TOMBSTONE-FILES",
 				zap.String("table", tbl.GetLocalSchema(false).Name),
@@ -996,9 +1011,7 @@ func (tbl *txnTable) Close() error {
 	if tbl.transferredTombstoneRollback {
 		cleanupErr := tbl.rollbackTransferredTombstones()
 		if cleanupErr != nil {
-			if handoffErr := tbl.handoffTransferredTombstoneCleanup(); handoffErr != nil {
-				cleanupErr = combineTxnLifecycleErrors(cleanupErr, handoffErr)
-			} else {
+			if tbl.abandonTransferredTombstoneCleanup() {
 				cleanupErr = nil
 			}
 		}
@@ -1013,41 +1026,36 @@ func (tbl *txnTable) Close() error {
 	return err
 }
 
-func (tbl *txnTable) handoffTransferredTombstoneCleanup() error {
-	files := append([]string(nil), tbl.transferredTombstoneObjects...)
+func (tbl *txnTable) abandonTransferredTombstoneCleanup() bool {
+	// Prove complete durable ownership before destroying any in-memory retry
+	// owner. Partial handoff would make a subsequent Close unable to retry.
 	for _, sink := range tbl.pendingTransferredTombstoneSinks {
-		files = append(files, sink.cleanupFiles...)
+		if !sink.ownership.owns(sink.cleanupFiles) {
+			return false
+		}
 	}
-	if len(files) == 0 {
-		return moerr.NewInternalErrorNoCtx(
-			"cannot hand off transferred tombstone cleanup without object names")
+	if len(tbl.transferredTombstoneObjects) != 0 &&
+		!tbl.transferredTombstoneOwnership.owns(
+			tbl.transferredTombstoneObjects) {
+		return false
 	}
-	if tbl.store.rt.HandoffUnpublishedObjects == nil {
-		return moerr.NewInternalErrorNoCtx(
-			"unpublished object cleanup handoff is not configured")
-	}
-	handoffCtx, cancel := tbl.store.newTransferredTombstoneHandoffContext()
-	defer cancel()
-	if err := tbl.store.rt.HandoffUnpublishedObjects(handoffCtx, files...); err != nil {
-		return errors.Join(
-			moerr.NewInternalErrorf(
-				handoffCtx,
-				"hand off %d unpublished transferred tombstone objects",
-				len(files),
-			),
-			err,
-		)
-	}
-
-	var closeErr error
 	for _, sink := range tbl.pendingTransferredTombstoneSinks {
+		sink.ownership.abandon()
 		sink.cleanupPending = false
 		sink.cleanupFiles = nil
-		closeErr = combineTxnLifecycleErrors(closeErr, sink.closeSinker())
+		if closeErr := sink.closeSinker(); closeErr != nil {
+			logutil.Error(
+				"failed to close abandoned transferred tombstone sink",
+				zap.Error(closeErr),
+			)
+		}
+	}
+	if len(tbl.transferredTombstoneObjects) != 0 {
+		tbl.transferredTombstoneOwnership.abandon()
 	}
 	tbl.pendingTransferredTombstoneSinks = nil
 	tbl.transferredTombstoneObjects = nil
-	return closeErr
+	return true
 }
 
 func (tbl *txnTable) registerTransferredTombstones(statsList ...objectio.ObjectStats) {
@@ -1125,6 +1133,14 @@ func (tbl *txnTable) rollbackTransferredTombstones() (cleanupErr error) {
 	}
 
 	tbl.transferredTombstoneObjects = nil
+	markerErr := tbl.transferredTombstoneOwnership.finish(cleanupCtx)
+	if markerErr != nil {
+		logutil.Warn(
+			"failed to release transferred tombstone cleanup markers",
+			zap.Uint64("table-id", tbl.GetID()),
+			zap.Error(markerErr),
+		)
+	}
 	return cleanupErr
 }
 
@@ -1772,6 +1788,16 @@ func (tbl *txnTable) ApplyCommit() (err error) {
 	defer func() {
 		if err == nil {
 			tbl.transferredTombstoneObjects = nil
+			cleanupCtx, cancel := tbl.newTransferredTombstoneCleanupContext()
+			defer cancel()
+			if markerErr := tbl.transferredTombstoneOwnership.finish(
+				cleanupCtx); markerErr != nil {
+				logutil.Warn(
+					"failed to release committed transferred tombstone cleanup markers",
+					zap.Uint64("table-id", tbl.GetID()),
+					zap.Error(markerErr),
+				)
+			}
 		}
 	}()
 	csn := tbl.csnStart

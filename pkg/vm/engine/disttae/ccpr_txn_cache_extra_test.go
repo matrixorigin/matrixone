@@ -16,6 +16,7 @@ package disttae
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -23,9 +24,63 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 )
+
+type rejectingStatFileService struct {
+	fileservice.FileService
+	stats int
+}
+
+type deadlineDeleteFileService struct {
+	fileservice.FileService
+	hasDeadline bool
+}
+
+func (fs *deadlineDeleteFileService) Delete(
+	ctx context.Context,
+	paths ...string,
+) error {
+	_, fs.hasDeadline = ctx.Deadline()
+	return fs.FileService.Delete(ctx, paths...)
+}
+
+func (fs *rejectingStatFileService) StatFile(
+	context.Context,
+	string,
+) (*fileservice.DirEntry, error) {
+	fs.stats++
+	return nil, errors.New("unexpected StatFile")
+}
+
+func TestCCPRTxnCacheWriteNewObjectSkipsRemoteStat(t *testing.T) {
+	ctx := context.Background()
+	fs := &rejectingStatFileService{FileService: newCleanFS(t)}
+	gcPool, err := ants.NewPool(2)
+	require.NoError(t, err)
+	defer gcPool.Release()
+	cache := NewCCPRTxnCache(gcPool, fs)
+
+	require.NoError(t, cache.WriteNewObject(ctx, "unique", []byte("txn")))
+	require.Zero(t, fs.stats)
+	require.Error(t, cache.WriteNewObject(ctx, "unique", []byte("other")))
+	require.Zero(t, fs.stats)
+}
+
+func TestCCPRTxnCacheRollbackCleanupIsBounded(t *testing.T) {
+	ctx := context.Background()
+	fs := &deadlineDeleteFileService{FileService: newCleanFS(t)}
+	gcPool, err := ants.NewPool(2)
+	require.NoError(t, err)
+	defer gcPool.Release()
+	cache := NewCCPRTxnCache(gcPool, fs)
+
+	require.NoError(t, cache.WriteNewObject(ctx, "unique", []byte("txn")))
+	cache.OnTxnRollback([]byte("txn"))
+	require.True(t, fs.hasDeadline)
+}
 
 // TestCCPRTxnCache_WriteObject_DuplicateTxnID tests that calling WriteObject
 // with the same txnID for the same object returns isNew=false

@@ -33,17 +33,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/sort"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
-
 	"go.uber.org/zap"
 )
 
 // ErrSyncProtectionTTLExpired is returned when sync protection TTL has expired
 var ErrSyncProtectionTTLExpired = moerr.NewInternalErrorNoCtx("sync protection TTL expired")
 
-const (
-	publicationTombstoneCleanupTimeout = time.Minute
-	publicationTombstoneHandoffTimeout = 10 * time.Second
-)
+const publicationTombstoneCleanupTimeout = time.Minute
 
 // CCPRTxnCacheWriter is an interface for writing objects to CCPR transaction cache
 // This interface is implemented by disttae.CCPRTxnCache
@@ -52,6 +48,9 @@ type CCPRTxnCacheWriter interface {
 	// Does NOT write the file - caller should write the file when isNewFile=true.
 	// Returns isNewFile (true if file needs to be written) and any error.
 	WriteObject(ctx context.Context, objectName string, txnID []byte) (isNewFile bool, err error)
+	// WriteNewObject registers a caller-generated unique object without a
+	// remote existence probe. It fails if the name is already in flight.
+	WriteNewObject(ctx context.Context, objectName string, txnID []byte) error
 	// OnFileWritten is called after the file has been successfully written to fileservice.
 	OnFileWritten(objectName string)
 }
@@ -64,6 +63,9 @@ type FilterObjectResult struct {
 	CurrentStats     objectio.ObjectStats
 	// DownstreamStats holds the stats for non-appendable objects that were written to fileservice
 	DownstreamStats objectio.ObjectStats
+	// DownstreamStatsList contains every output of a bounded multi-spill
+	// non-appendable rewrite. Data-object copies still contain exactly one item.
+	DownstreamStatsList []objectio.ObjectStats
 	// RowOffsetMap maps original rowoffset to new rowoffset after sorting
 	// Key: original rowoffset, Value: new rowoffset
 	RowOffsetMap map[uint32]uint32
@@ -74,8 +76,9 @@ type FilterObjectResult struct {
 // For aobj: gets object file, converts to batch, filters by snapshot TS, creates new object
 // The mapping between new UUID and upstream aobj is stored in ccprCache.aobjectMap
 // For nobj: writes directly to fileservice with new UUID
-// ccprCache: optional CCPR transaction cache for atomic write and registration (can be nil)
-// txnID: transaction ID for CCPR cache registration (can be nil)
+// ccprCache and txnID are required for non-appendable tombstone rewrites,
+// because they install rollback ownership before each output object write.
+// Other filter paths do not use them.
 // aobjectMap: mapping from upstream aobj to downstream object stats (used for tombstone rowid rewriting)
 // ttlChecker: optional function to check if sync protection TTL has expired (can be nil)
 func FilterObject(
@@ -120,10 +123,11 @@ func FilterObject(
 		if err != nil {
 			return nil, err
 		}
-		// Return the new downstream stats with new object name
-		return &FilterObjectResult{
-			DownstreamStats: newStats,
-		}, nil
+		result := &FilterObjectResult{DownstreamStatsList: newStats}
+		if len(newStats) != 0 {
+			result.DownstreamStats = newStats[0]
+		}
+		return result, nil
 	}
 }
 
@@ -364,10 +368,10 @@ func filterNonAppendableObject(
 	txnID []byte,
 	aobjectMap *AObjectMap,
 	ttlChecker TTLChecker,
-) (objectio.ObjectStats, error) {
+) ([]objectio.ObjectStats, error) {
 	// Check TTL before processing
 	if ttlChecker != nil && !ttlChecker() {
-		return objectio.ObjectStats{}, ErrSyncProtectionTTLExpired
+		return nil, ErrSyncProtectionTTLExpired
 	}
 
 	// Get upstream object name from stats
@@ -376,21 +380,22 @@ func filterNonAppendableObject(
 	// Get object file from upstream
 	objectContent, err := GetObjectFromUpstreamWithWorker(ctx, upstreamExecutor, upstreamObjectName, getChunkWorker, subscriptionAccountName, pubName)
 	if err != nil {
-		return objectio.ObjectStats{}, moerr.NewInternalErrorf(ctx, "failed to get object from upstream: %v", err)
+		return nil, moerr.NewInternalErrorf(ctx, "failed to get object from upstream: %v", err)
 	}
 
 	// Check TTL after getting object
 	if ttlChecker != nil && !ttlChecker() {
-		return objectio.ObjectStats{}, ErrSyncProtectionTTLExpired
+		return nil, ErrSyncProtectionTTLExpired
 	}
 
 	// For tombstone objects, read blocks one by one and rewrite rowids using aobjectMap
 	if isTombstone && aobjectMap != nil {
 		objStats, err := rewriteNonAppendableTombstoneWithSinker(
 			ctx, objectContent, stats, localFS, mp, aobjectMap,
+			ccprCache, txnID,
 		)
 		if err != nil {
-			return objectio.ObjectStats{}, err
+			return nil, err
 		}
 		return objStats, nil
 	}
@@ -399,18 +404,18 @@ func filterNonAppendableObject(
 	writeJob := NewWriteObjectJob(ctx, localFS, upstreamObjectName, objectContent, ccprCache, txnID)
 	if writeObjectWorker != nil {
 		if err := writeObjectWorker.SubmitWriteObject(writeJob); err != nil {
-			return objectio.ObjectStats{}, err
+			return nil, err
 		}
 	} else {
 		writeJob.Execute()
 	}
 	writeResult := writeJob.WaitDone().(*WriteObjectJobResult)
 	if writeResult.Err != nil {
-		return objectio.ObjectStats{}, writeResult.Err
+		return nil, writeResult.Err
 	}
 
 	// Return original stats (no need to create new stats since we use the same object name)
-	return *stats, nil
+	return []objectio.ObjectStats{*stats}, nil
 }
 
 // GetObjectFromUpstreamWithWorker gets object file from upstream using GETOBJECT SQL with worker pool
@@ -618,7 +623,7 @@ func extractSortKeyFromObject(
 }
 
 // rewriteNonAppendableTombstoneWithSinker reads tombstone blocks one by one,
-// rewrites rowids using aobjectMap, and writes to a sorted sinker with the original object name.
+// rewrites rowids using aobjectMap, and writes to a sorted sinker with unique output names.
 // This avoids loading the entire object into memory at once.
 func rewriteNonAppendableTombstoneWithSinker(
 	ctx context.Context,
@@ -627,11 +632,13 @@ func rewriteNonAppendableTombstoneWithSinker(
 	localFS fileservice.FileService,
 	mp *mpool.MPool,
 	aobjectMap *AObjectMap,
-) (objectio.ObjectStats, error) {
+	ccprCache CCPRTxnCacheWriter,
+	txnID []byte,
+) ([]objectio.ObjectStats, error) {
 	// Step 1: Parse object metadata
 	metaExtent := stats.Extent()
 	if int(metaExtent.Offset()+metaExtent.Length()) > len(objectContent) {
-		return objectio.ObjectStats{}, moerr.NewInternalErrorf(ctx, "object content too small for meta extent")
+		return nil, moerr.NewInternalErrorf(ctx, "object content too small for meta extent")
 	}
 	metaBytes := objectContent[metaExtent.Offset() : metaExtent.Offset()+metaExtent.Length()]
 
@@ -648,7 +655,7 @@ func rewriteNonAppendableTombstoneWithSinker(
 			if decompressedMetaBuf != nil {
 				decompressedMetaBuf.Release()
 			}
-			return objectio.ObjectStats{}, moerr.NewInternalErrorf(ctx, "failed to decompress meta data: %v", err)
+			return nil, moerr.NewInternalErrorf(ctx, "failed to decompress meta data: %v", err)
 		}
 		decompressedMetaBytes = decompressedMetaBuf.Bytes()[:len(bs)]
 		decompressedMetaBytes = append([]byte(nil), decompressedMetaBytes...)
@@ -661,7 +668,7 @@ func rewriteNonAppendableTombstoneWithSinker(
 	dataMeta := meta.MustGetMeta(objectio.SchemaData)
 	blkCnt := dataMeta.BlockCount()
 	if blkCnt == 0 {
-		return objectio.ObjectStats{}, nil
+		return nil, nil
 	}
 
 	// Step 2: Get column information from first block meta
@@ -681,17 +688,19 @@ func rewriteNonAppendableTombstoneWithSinker(
 		typs = append(typs, typ)
 	}
 
-	// Step 3: Create sinker factory with specified object name
-	// Use the original object name (segmentID + num)
-	segid := stats.ObjectName().SegmentId()
-	num := stats.ObjectName().Num()
-	objectName := objectio.BuildObjectName(&segid, num)
-
 	// Get PK type from second column (TombstoneAttr_PK_Idx = 1)
 	pkType := typs[objectio.TombstoneAttr_PK_Idx]
 
-	// Create tombstone sinker with the specified object name
-	sinkerFactory := newTombstoneFSinkerFactoryWithName(objectName, objectio.HiddenColumnSelection_None)
+	// Every spill gets an attempt-unique name and is registered with the CCPR
+	// transaction before Sync can persist it. This is both the generation fence
+	// and the rollback owner; reusing the upstream name lets a stale cleanup
+	// delete a later successful retry.
+	if ccprCache == nil || len(txnID) == 0 {
+		return nil, moerr.NewInternalErrorNoCtx(
+			"CCPR transaction cleanup owner is required for tombstone rewrite")
+	}
+	sinkerFactory := newCCPRTombstoneFileSinkerFactory(
+		ccprCache, txnID, objectio.HiddenColumnSelection_None)
 	attrs, attrTypes := objectio.GetTombstoneSchema(pkType, objectio.HiddenColumnSelection_None)
 
 	sinker := ioutil.NewSinker(
@@ -706,7 +715,7 @@ func rewriteNonAppendableTombstoneWithSinker(
 	published := false
 	defer func() {
 		if !published {
-			cleanupPublicationTombstoneSinker(ctx, localFS, sinker)
+			cleanupPublicationTombstoneSinker(ctx, sinker)
 		}
 		_ = sinker.Close()
 	}()
@@ -718,19 +727,19 @@ func rewriteNonAppendableTombstoneWithSinker(
 		// Read single block
 		blkBat, err := readSingleBlockToBatch(ctx, objectContent, dataMeta, blkIdx, cols, typs, maxSeqnum, allocator, mp)
 		if err != nil {
-			return objectio.ObjectStats{}, moerr.NewInternalErrorf(ctx, "failed to read block %d: %v", blkIdx, err)
+			return nil, moerr.NewInternalErrorf(ctx, "failed to read block %d: %v", blkIdx, err)
 		}
 
 		// Rewrite tombstone rowids using aobjectMap
 		if err := rewriteTombstoneRowidsBatch(ctx, blkBat, aobjectMap, mp); err != nil {
 			blkBat.Clean(mp)
-			return objectio.ObjectStats{}, moerr.NewInternalErrorf(ctx, "failed to rewrite tombstone rowids for block %d: %v", blkIdx, err)
+			return nil, moerr.NewInternalErrorf(ctx, "failed to rewrite tombstone rowids for block %d: %v", blkIdx, err)
 		}
 
 		// Write to sinker
 		if err := sinker.Write(ctx, blkBat); err != nil {
 			blkBat.Clean(mp)
-			return objectio.ObjectStats{}, moerr.NewInternalErrorf(ctx, "failed to write block %d to sinker: %v", blkIdx, err)
+			return nil, moerr.NewInternalErrorf(ctx, "failed to write block %d to sinker: %v", blkIdx, err)
 		}
 
 		blkBat.Clean(mp)
@@ -738,129 +747,91 @@ func rewriteNonAppendableTombstoneWithSinker(
 
 	// Step 5: Sync sinker and get result
 	if err := sinker.Sync(ctx); err != nil {
-		return objectio.ObjectStats{}, moerr.NewInternalErrorf(ctx, "failed to sync sinker: %v", err)
+		return nil, moerr.NewInternalErrorf(ctx, "failed to sync sinker: %v", err)
 	}
 
 	persisted, _ := sinker.GetResult()
 	if len(persisted) == 0 {
-		return objectio.ObjectStats{}, moerr.NewInternalErrorf(ctx, "no object was created by sinker")
+		return nil, moerr.NewInternalErrorf(ctx, "no object was created by sinker")
 	}
 
-	// Return the first (and only) object stats
 	published = true
-	return persisted[0], nil
+	return persisted, nil
 }
 
 func cleanupPublicationTombstoneSinker(
 	ctx context.Context,
-	fs fileservice.FileService,
 	sinker *ioutil.Sinker,
 ) {
+	// CCPRTxnCache registered every unique name before its write. A best-effort
+	// direct delete shortens retention; transaction rollback remains the owner
+	// if the delete fails or Sync returned an ambiguous result.
 	cleanupCtx, cancel := context.WithTimeoutCause(
 		context.WithoutCancel(ctx),
 		publicationTombstoneCleanupTimeout,
 		moerr.CauseCleanUpUselessFiles,
 	)
-	files, cleanupErr := sinker.DeletePersisted(cleanupCtx)
-	cancel()
-	if cleanupErr == nil {
-		return
-	}
-
-	// DeletePersisted retains the exact names when deletion fails. Transfer
-	// those names to the existing durable cleanup protocol before Close clears
-	// the sinker's local ownership. TN checkpoint cleaners replay these shared
-	// markers, including after process restart.
-	handoffCtx, handoffCancel := context.WithTimeoutCause(
-		context.WithoutCancel(ctx),
-		publicationTombstoneHandoffTimeout,
-		moerr.CauseCleanUpUselessFiles,
-	)
-	_, handoffErr := ioutil.RecordUnpublishedObjectCleanup(
-		handoffCtx, fs, files...)
-	handoffCancel()
-	if handoffErr != nil {
-		logutil.Error(
-			"failed to hand off unpublished publication tombstone cleanup",
-			zap.Int("objects", len(files)),
-			zap.NamedError("delete-error", cleanupErr),
-			zap.NamedError("handoff-error", handoffErr),
-		)
-	}
+	defer cancel()
+	_, _ = sinker.DeletePersisted(cleanupCtx)
 }
 
-// newTombstoneFSinkerFactoryWithName creates a FileSinkerFactory for tombstone
-// that uses a specified object name instead of generating a new one
-func newTombstoneFSinkerFactoryWithName(
-	objectName objectio.ObjectName,
+func newCCPRTombstoneFileSinkerFactory(
+	cache CCPRTxnCacheWriter,
+	txnID []byte,
 	hidden objectio.HiddenColumnSelection,
 ) ioutil.FileSinkerFactory {
 	return func(mp *mpool.MPool, fs fileservice.FileService) ioutil.FileSinker {
-		return &tombstoneFSinkerWithName{
-			objectName:      objectName,
-			hiddenSelection: hidden,
-			mp:              mp,
-			fs:              fs,
+		return &ccprTombstoneFileSinker{
+			inner: ioutil.NewTombstoneFSinkerImpl(hidden, mp, fs),
+			cache: cache,
+			txnID: append([]byte(nil), txnID...),
 		}
 	}
 }
 
-// tombstoneFSinkerWithName is a FileSinker for tombstone that uses a specified object name
-type tombstoneFSinkerWithName struct {
-	writer          *ioutil.BlockWriter
-	objectName      objectio.ObjectName
-	hiddenSelection objectio.HiddenColumnSelection
-	mp              *mpool.MPool
-	fs              fileservice.FileService
+type ccprTombstoneFileSinker struct {
+	inner *ioutil.FSinkerImpl
+	cache CCPRTxnCacheWriter
+	txnID []byte
 }
 
-func (s *tombstoneFSinkerWithName) Sink(ctx context.Context, b *batch.Batch) error {
-	if s.writer == nil {
-		// Create tombstone writer with specified object name
-		seqnums := objectio.GetTombstoneSeqnums(s.hiddenSelection)
-		segid := s.objectName.SegmentId()
-		s.writer = ioutil.ConstructWriterWithSegmentID(
-			&segid,
-			s.objectName.Num(),
-			0, // version
-			seqnums,
-			objectio.TombstonePrimaryKeyIdx, // sortkeyPos
-			true,                            // sortkeyIsPK
-			true,                            // isTombstone
-			s.fs,
-			nil, // arena
-		)
-	}
-	_, err := s.writer.WriteBatch(b)
-	return err
+func (s *ccprTombstoneFileSinker) Sink(
+	ctx context.Context,
+	bat *batch.Batch,
+) error {
+	return s.inner.Sink(ctx, bat)
 }
 
-func (s *tombstoneFSinkerWithName) Sync(ctx context.Context) (*objectio.ObjectStats, error) {
-	if s.writer == nil {
-		return nil, nil
+func (s *ccprTombstoneFileSinker) Sync(
+	ctx context.Context,
+) (*objectio.ObjectStats, error) {
+	if s.cache == nil {
+		return nil, moerr.NewInternalErrorNoCtx(
+			"CCPR tombstone cleanup owner is not configured")
 	}
-	if _, _, err := s.writer.Sync(ctx); err != nil {
+	name := s.inner.ActiveObjectName()
+	if name == "" {
+		return nil, moerr.NewInternalErrorNoCtx(
+			"CCPR tombstone sinker has no active object")
+	}
+	if err := s.cache.WriteNewObject(ctx, name, s.txnID); err != nil {
 		return nil, err
 	}
-	ss := s.writer.GetObjectStats(objectio.WithSorted(), objectio.WithCNCreated())
-	s.writer = nil
-	return &ss, nil
-}
-
-func (s *tombstoneFSinkerWithName) Reset() {
-	if s.writer != nil {
-		s.writer = nil
+	stats, err := s.inner.Sync(ctx)
+	if err == nil {
+		s.cache.OnFileWritten(name)
 	}
+	return stats, err
 }
 
-func (s *tombstoneFSinkerWithName) ActiveObjectName() string {
-	if s.writer == nil {
-		return ""
-	}
-	return s.objectName.String()
+func (s *ccprTombstoneFileSinker) Reset() {
+	s.inner.Reset()
 }
 
-func (s *tombstoneFSinkerWithName) Close() error {
-	s.writer = nil
-	return nil
+func (s *ccprTombstoneFileSinker) ActiveObjectName() string {
+	return s.inner.ActiveObjectName()
+}
+
+func (s *ccprTombstoneFileSinker) Close() error {
+	return s.inner.Close()
 }

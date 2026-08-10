@@ -28,30 +28,56 @@ import (
 
 const (
 	unpublishedObjectCleanupDir     = "gc/unpublished/"
-	unpublishedObjectCleanupVersion = 1
+	unpublishedObjectCleanupVersion = 2
 	unpublishedCleanupReplayBatch   = 1000
 )
 
-type unpublishedObjectCleanupIntent struct {
-	Version uint8    `json:"version"`
-	Files   []string `json:"files"`
+// UnpublishedObject identifies one object and the catalog owner that will
+// make it reachable after transaction commit. Cleanup intents are written
+// before the object itself, so a persisted object always has a restart-safe
+// owner even when the object write returns an ambiguous error.
+type UnpublishedObject struct {
+	File        string `json:"file"`
+	DBID        uint64 `json:"db_id"`
+	TableID     uint64 `json:"table_id"`
+	IsTombstone bool   `json:"is_tombstone"`
 }
 
-// RecordUnpublishedObjectCleanup durably transfers cleanup ownership for
-// exact, unpublished object names. The content-derived path makes retries
-// idempotent, including an ambiguous write that actually reached storage.
+type unpublishedObjectCleanupIntent struct {
+	Version uint8             `json:"version"`
+	Object  UnpublishedObject `json:"object"`
+}
+
+// UnpublishedObjectCleanupDecision tells replay how ownership moved since the
+// write-ahead intent was created.
+type UnpublishedObjectCleanupDecision uint8
+
+const (
+	// RetryUnpublishedObjectCleanup leaves both object and marker untouched.
+	// It is used while the creating transaction is still active.
+	RetryUnpublishedObjectCleanup UnpublishedObjectCleanupDecision = iota
+	// DeleteUnpublishedObject removes the object and then its marker.
+	DeleteUnpublishedObject
+	// ReleaseUnpublishedObjectCleanup removes only the marker because the
+	// catalog (and therefore ordinary GC) now owns the object.
+	ReleaseUnpublishedObjectCleanup
+)
+
+// RecordUnpublishedObjectCleanup durably records cleanup ownership before the
+// corresponding object is written. The content-derived path makes an
+// ambiguous marker write idempotent.
 func RecordUnpublishedObjectCleanup(
 	ctx context.Context,
 	fs fileservice.FileService,
-	files ...string,
+	object UnpublishedObject,
 ) (string, error) {
-	files = normalizeUnpublishedObjectNames(files)
-	if len(files) == 0 {
-		return "", nil
+	if object.File == "" {
+		return "", moerr.NewInternalErrorNoCtx(
+			"cannot record cleanup for an empty unpublished object")
 	}
 	payload, err := json.Marshal(unpublishedObjectCleanupIntent{
 		Version: unpublishedObjectCleanupVersion,
-		Files:   files,
+		Object:  object,
 	})
 	if err != nil {
 		return "", err
@@ -68,42 +94,80 @@ func RecordUnpublishedObjectCleanup(
 		Policy: fileservice.SkipAllCache,
 	})
 	if err != nil && !moerr.IsMoErrCode(err, moerr.ErrFileAlreadyExists) {
-		return "", err
+		return path, err
 	}
 	return path, nil
 }
 
-// ReplayUnpublishedObjectCleanup deletes objects before their marker. A
-// failed object or marker delete leaves durable evidence for the next replay.
-// It is safe for multiple cleaners to replay the same marker concurrently.
-func ReplayUnpublishedObjectCleanup(
+// DeleteUnpublishedObjectCleanup releases a durable cleanup intent after the
+// object either became catalog-owned or was physically deleted.
+func DeleteUnpublishedObjectCleanup(
 	ctx context.Context,
 	fs fileservice.FileService,
-) (replayed int, remaining bool, err error) {
-	return ReplayUnpublishedObjectCleanupFrom(ctx, fs, fs)
+	marker string,
+) error {
+	if marker == "" {
+		return nil
+	}
+	err := fs.Delete(ctx, marker)
+	if moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
+		return nil
+	}
+	if err != nil {
+		// Delete may report an error after removing the marker. Absence is a
+		// sufficient release proof and prevents a phantom admission slot from
+		// surviving forever.
+		if _, statErr := fs.StatFile(ctx, marker); moerr.IsMoErrCode(
+			statErr, moerr.ErrFileNotFound) {
+			return nil
+		} else if statErr != nil {
+			return errors.Join(err, statErr)
+		}
+	}
+	return err
 }
 
-// ReplayUnpublishedObjectCleanupFrom reads durable intents from markerFS and
-// applies them to objectFS. Keeping the marker on local durable storage lets a
-// TN retain cleanup ownership while shared object storage is unavailable.
-func ReplayUnpublishedObjectCleanupFrom(
+// ListUnpublishedObjectCleanup lists durable intents up to limit. remaining
+// reports that more entries exist, allowing callers to reconstruct bounded
+// admission state without materializing an unbounded directory listing.
+func ListUnpublishedObjectCleanup(
 	ctx context.Context,
-	markerFS fileservice.FileService,
-	objectFS fileservice.FileService,
-) (replayed int, remaining bool, err error) {
-	markers := make([]string, 0, unpublishedCleanupReplayBatch)
-	for entry, listErr := range markerFS.List(ctx, unpublishedObjectCleanupDir) {
+	fs fileservice.FileService,
+	limit int,
+) (markers []string, remaining bool, err error) {
+	if limit <= 0 {
+		return nil, false, nil
+	}
+	markers = make([]string, 0, limit)
+	for entry, listErr := range fs.List(ctx, unpublishedObjectCleanupDir) {
 		if listErr != nil {
-			return 0, true, listErr
+			return markers, true, listErr
 		}
 		if entry.IsDir {
 			continue
 		}
-		if len(markers) == unpublishedCleanupReplayBatch {
-			remaining = true
-			break
+		if len(markers) == limit {
+			return markers, true, nil
 		}
 		markers = append(markers, unpublishedObjectCleanupDir+entry.Name)
+	}
+	return markers, false, nil
+}
+
+// ReplayUnpublishedObjectCleanupFrom replays at most one bounded marker batch.
+// decide must fence active writers and catalog-owned objects; replay never
+// infers ownership from a bare file name.
+func ReplayUnpublishedObjectCleanupFrom(
+	ctx context.Context,
+	markerFS fileservice.FileService,
+	objectFS fileservice.FileService,
+	decide func(UnpublishedObject) (UnpublishedObjectCleanupDecision, error),
+	onReplayed func(marker string),
+) (replayed int, remaining bool, err error) {
+	markers, remaining, err := ListUnpublishedObjectCleanup(
+		ctx, markerFS, unpublishedCleanupReplayBatch)
+	if err != nil {
+		return 0, true, err
 	}
 
 	failed := 0
@@ -124,18 +188,37 @@ func ReplayUnpublishedObjectCleanupFrom(
 			recordFailure(readErr)
 			continue
 		}
-		if _, deleteErr := DeleteUnpublishedObjects(ctx, objectFS, intent.Files...); deleteErr != nil {
+		decision := DeleteUnpublishedObject
+		if decide != nil {
+			decision, readErr = decide(intent.Object)
+			if readErr != nil {
+				remaining = true
+				recordFailure(readErr)
+				continue
+			}
+		}
+		if decision == RetryUnpublishedObjectCleanup {
 			remaining = true
-			recordFailure(deleteErr)
 			continue
 		}
-		if deleteErr := markerFS.Delete(ctx, marker); deleteErr != nil &&
-			!moerr.IsMoErrCode(deleteErr, moerr.ErrFileNotFound) {
+		if decision == DeleteUnpublishedObject {
+			if _, deleteErr := DeleteUnpublishedObjects(
+				ctx, objectFS, intent.Object.File); deleteErr != nil {
+				remaining = true
+				recordFailure(deleteErr)
+				continue
+			}
+		}
+		if deleteErr := DeleteUnpublishedObjectCleanup(
+			ctx, markerFS, marker); deleteErr != nil {
 			remaining = true
 			recordFailure(deleteErr)
 			continue
 		}
 		replayed++
+		if onReplayed != nil {
+			onReplayed(marker)
+		}
 	}
 	if failed != 0 {
 		return replayed, remaining, errors.Join(
@@ -168,13 +251,12 @@ func readUnpublishedObjectCleanup(
 	if err := json.Unmarshal(vector.Entries[0].Data, &intent); err != nil {
 		return unpublishedObjectCleanupIntent{}, err
 	}
-	if intent.Version != unpublishedObjectCleanupVersion || len(intent.Files) == 0 {
+	if intent.Version != unpublishedObjectCleanupVersion || intent.Object.File == "" {
 		return unpublishedObjectCleanupIntent{}, moerr.NewInternalErrorf(
 			ctx,
-			"invalid unpublished object cleanup intent %s version %d with %d files",
+			"invalid unpublished object cleanup intent %s version %d",
 			path,
 			intent.Version,
-			len(intent.Files),
 		)
 	}
 	return intent, nil

@@ -234,22 +234,62 @@ func (cleaner *DiskCleaner) GetCleaner() Cleaner {
 	return cleaner.cleaner
 }
 
-// HandoffUnpublishedObjects transfers a transaction's exact cleanup set to
-// the checkpoint cleaner without widening the general Cleaner contract used
-// by tests and alternative cleaner implementations. The checkpoint cleaner
-// accepts an in-process retry copy before attempting durable marker storage.
-func (cleaner *DiskCleaner) HandoffUnpublishedObjects(
-	ctx context.Context,
-	files ...string,
-) error {
-	handoff, ok := cleaner.cleaner.(interface {
-		HandoffUnpublishedObjects(context.Context, ...string) error
-	})
+type unpublishedObjectCleaner interface {
+	PrepareUnpublishedObject(
+		context.Context, uint64, uint64, bool, string,
+	) (string, error)
+	FinishUnpublishedObject(context.Context, string, string) error
+	AbandonUnpublishedObject(string)
+}
+
+func (cleaner *DiskCleaner) unpublishedObjectCleaner() (
+	unpublishedObjectCleaner,
+	error,
+) {
+	owner, ok := cleaner.cleaner.(unpublishedObjectCleaner)
 	if !ok {
-		return moerr.NewInternalErrorNoCtx(
-			"disk cleaner does not support unpublished object cleanup handoff")
+		return nil, moerr.NewInternalErrorNoCtx(
+			"disk cleaner does not support unpublished object ownership")
 	}
-	return handoff.HandoffUnpublishedObjects(ctx, files...)
+	return owner, nil
+}
+
+func (cleaner *DiskCleaner) Prepare(
+	ctx context.Context,
+	dbID uint64,
+	tableID uint64,
+	isTombstone bool,
+	file string,
+) (string, error) {
+	owner, err := cleaner.unpublishedObjectCleaner()
+	if err != nil {
+		return "", err
+	}
+	return owner.PrepareUnpublishedObject(
+		ctx, dbID, tableID, isTombstone, file)
+}
+
+func (cleaner *DiskCleaner) Finish(
+	ctx context.Context,
+	marker string,
+	file string,
+) error {
+	owner, err := cleaner.unpublishedObjectCleaner()
+	if err != nil {
+		return err
+	}
+	return owner.FinishUnpublishedObject(ctx, marker, file)
+}
+
+func (cleaner *DiskCleaner) Abandon(file string) {
+	owner, err := cleaner.unpublishedObjectCleaner()
+	if err != nil {
+		// Prepare validates the complete capability before any object write, so
+		// this can only happen if the cleaner implementation is replaced in
+		// place, which DiskCleaner does not support.
+		panic(err)
+	}
+	owner.AbandonUnpublishedObject(file)
 }
 
 // should only be called during the startup

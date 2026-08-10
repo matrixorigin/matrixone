@@ -491,6 +491,7 @@ func ReleaseFilterObjectJobResult(res *FilterObjectJobResult) {
 	res.PreviousStats = objectio.ObjectStats{}
 	res.CurrentStats = objectio.ObjectStats{}
 	res.DownstreamStats = objectio.ObjectStats{}
+	res.DownstreamStatsList = nil
 	res.RowOffsetMap = nil
 	filterObjectJobResultPool.Put(res)
 }

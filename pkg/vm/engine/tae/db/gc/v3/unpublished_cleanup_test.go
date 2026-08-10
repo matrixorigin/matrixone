@@ -17,9 +17,8 @@ package gc
 import (
 	"context"
 	"errors"
-	"iter"
+	"fmt"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"testing"
 
@@ -30,254 +29,279 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-type rejectSharedCleanupMarkerWriteFS struct {
-	fileservice.FileService
-}
-
-func (fs *rejectSharedCleanupMarkerWriteFS) Write(
-	ctx context.Context,
-	vector fileservice.IOVector,
-) error {
-	if strings.HasPrefix(vector.FilePath, "gc/unpublished/") {
-		return errors.New("injected shared marker write failure")
-	}
-	return fs.FileService.Write(ctx, vector)
-}
-
 type controllableUnpublishedCleanupFS struct {
 	fileservice.FileService
-	rejectMarkerWrites  atomic.Bool
-	rejectDeletes       atomic.Bool
-	markerWriteAttempts atomic.Int64
+	rejectMarkerWrites    atomic.Bool
+	ambiguousMarkerWrites atomic.Bool
+	rejectObjectDelete    atomic.Bool
 }
 
 func (fs *controllableUnpublishedCleanupFS) Write(
 	ctx context.Context,
 	vector fileservice.IOVector,
 ) error {
-	if strings.HasPrefix(vector.FilePath, "gc/unpublished/") {
-		fs.markerWriteAttempts.Add(1)
-		if fs.rejectMarkerWrites.Load() {
-			return errors.New("injected cleanup marker write failure")
-		}
+	if strings.HasPrefix(vector.FilePath, "gc/unpublished/") &&
+		fs.rejectMarkerWrites.Load() {
+		return errors.New("injected marker write failure")
 	}
-	return fs.FileService.Write(ctx, vector)
+	err := fs.FileService.Write(ctx, vector)
+	if err == nil && strings.HasPrefix(vector.FilePath, "gc/unpublished/") &&
+		fs.ambiguousMarkerWrites.Load() {
+		return errors.New("injected post-persist marker write failure")
+	}
+	return err
 }
 
 func (fs *controllableUnpublishedCleanupFS) Delete(
 	ctx context.Context,
-	filePaths ...string,
+	paths ...string,
 ) error {
-	if fs.rejectDeletes.Load() {
-		return errors.New("injected cleanup object delete failure")
-	}
-	return fs.FileService.Delete(ctx, filePaths...)
-}
-
-type blockingUnpublishedCleanupListFS struct {
-	fileservice.FileService
-	listed  chan struct{}
-	release chan struct{}
-	once    sync.Once
-}
-
-func (fs *blockingUnpublishedCleanupListFS) List(
-	ctx context.Context,
-	dir string,
-) iter.Seq2[*fileservice.DirEntry, error] {
-	if dir != "gc/unpublished/" {
-		return fs.FileService.List(ctx, dir)
-	}
-	return func(yield func(*fileservice.DirEntry, error) bool) {
-		fs.once.Do(func() { close(fs.listed) })
-		select {
-		case <-ctx.Done():
-			yield(nil, context.Cause(ctx))
-			return
-		case <-fs.release:
-		}
-		for entry, err := range fs.FileService.List(ctx, dir) {
-			if !yield(entry, err) {
-				return
+	if fs.rejectObjectDelete.Load() {
+		for _, path := range paths {
+			if !strings.HasPrefix(path, "gc/unpublished/") {
+				return errors.New("injected object delete failure")
 			}
 		}
 	}
+	return fs.FileService.Delete(ctx, paths...)
 }
 
-func TestCheckpointCleanerReplaysUnpublishedCleanupAfterRestart(t *testing.T) {
+func TestCheckpointCleanerWriteAheadOwnership(t *testing.T) {
+	ctx := context.Background()
+	objectBase, err := fileservice.NewMemoryFS(
+		"shared", fileservice.DisabledCacheConfig, nil)
+	require.NoError(t, err)
+	markerBase, err := fileservice.NewMemoryFS(
+		"local", fileservice.DisabledCacheConfig, nil)
+	require.NoError(t, err)
+	objectFS := &controllableUnpublishedCleanupFS{FileService: objectBase}
+	markerFS := &controllableUnpublishedCleanupFS{FileService: markerBase}
+	cleaner := NewCheckpointCleaner(
+		ctx, "", objectFS, nil, nil, WithUnpublishedCleanupFS(markerFS),
+	).(*checkpointCleaner)
+	cleaner.DisableGC()
+
+	name := objectio.BuildObjectNameWithObjectID(
+		func() *objectio.ObjectId { id := objectio.NewObjectid(); return &id }()).String()
+	marker, err := cleaner.PrepareUnpublishedObject(ctx, 1, 2, true, name)
+	require.NoError(t, err)
+	require.NotEmpty(t, marker)
+	require.NoError(t, objectBase.Write(ctx, fileservice.IOVector{
+		FilePath: name,
+		Entries:  []fileservice.IOEntry{{Offset: 0, Size: 1, Data: []byte{1}}},
+	}))
+
+	// Active writers are fenced from a scheduled cleaner cycle.
+	cleaner.unpublishedCleanupGeneration.Add(1)
+	require.NoError(t, cleaner.Process(ctx, nil))
+	_, err = objectBase.StatFile(ctx, name)
+	require.NoError(t, err)
+
+	cleaner.AbandonUnpublishedObject(name)
+	require.NoError(t, cleaner.Process(ctx, nil))
+	_, err = objectBase.StatFile(ctx, name)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrFileNotFound))
+	_, err = markerBase.StatFile(ctx, marker)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrFileNotFound))
+}
+
+func TestCheckpointCleanerRejectsBeforeObjectWriteWhenMarkerAdmissionFails(t *testing.T) {
+	ctx := context.Background()
+	objectFS, err := fileservice.NewMemoryFS(
+		"shared", fileservice.DisabledCacheConfig, nil)
+	require.NoError(t, err)
+	markerBase, err := fileservice.NewMemoryFS(
+		"local", fileservice.DisabledCacheConfig, nil)
+	require.NoError(t, err)
+	markerFS := &controllableUnpublishedCleanupFS{FileService: markerBase}
+	markerFS.rejectMarkerWrites.Store(true)
+	cleaner := NewCheckpointCleaner(
+		ctx, "", objectFS, nil, nil, WithUnpublishedCleanupFS(markerFS),
+	).(*checkpointCleaner)
+
+	_, err = cleaner.PrepareUnpublishedObject(
+		ctx, 1, 2, true, objectio.MockObjectName().String())
+	require.ErrorContains(t, err, "injected marker write failure")
+	cleaner.unpublishedCleanupOwnership.Lock()
+	require.Zero(t, cleaner.unpublishedCleanupOwnership.pending)
+	require.Empty(t, cleaner.unpublishedCleanupOwnership.active)
+	cleaner.unpublishedCleanupOwnership.Unlock()
+}
+
+func TestCheckpointCleanerAcceptsMarkerOnlyAfterAmbiguousWriteIsVisible(t *testing.T) {
+	ctx := context.Background()
+	objectFS, err := fileservice.NewMemoryFS(
+		"shared", fileservice.DisabledCacheConfig, nil)
+	require.NoError(t, err)
+	markerBase, err := fileservice.NewMemoryFS(
+		"local", fileservice.DisabledCacheConfig, nil)
+	require.NoError(t, err)
+	markerFS := &controllableUnpublishedCleanupFS{FileService: markerBase}
+	markerFS.ambiguousMarkerWrites.Store(true)
+	cleaner := NewCheckpointCleaner(
+		ctx, "", objectFS, nil, nil, WithUnpublishedCleanupFS(markerFS),
+	).(*checkpointCleaner)
+
+	marker, err := cleaner.PrepareUnpublishedObject(
+		ctx, 1, 2, true, objectio.MockObjectName().String())
+	require.NoError(t, err)
+	_, err = markerBase.StatFile(ctx, marker)
+	require.NoError(t, err)
+	cleaner.unpublishedCleanupOwnership.Lock()
+	require.Equal(t, 1, cleaner.unpublishedCleanupOwnership.pending)
+	require.Len(t, cleaner.unpublishedCleanupOwnership.active, 1)
+	require.Contains(t, cleaner.unpublishedCleanupOwnership.markers, marker)
+	cleaner.unpublishedCleanupOwnership.Unlock()
+}
+
+func TestCheckpointCleanerCleanupSurvivesRestart(t *testing.T) {
+	ctx := context.Background()
+	objectFS, err := fileservice.NewMemoryFS(
+		"shared", fileservice.DisabledCacheConfig, nil)
+	require.NoError(t, err)
+	markerFS, err := fileservice.NewMemoryFS(
+		"local", fileservice.DisabledCacheConfig, nil)
+	require.NoError(t, err)
+	first := NewCheckpointCleaner(
+		ctx, "", objectFS, nil, nil, WithUnpublishedCleanupFS(markerFS),
+	).(*checkpointCleaner)
+	name := objectio.MockObjectName().String()
+	_, err = first.PrepareUnpublishedObject(ctx, 1, 2, true, name)
+	require.NoError(t, err)
+	require.NoError(t, objectFS.Write(ctx, fileservice.IOVector{
+		FilePath: name,
+		Entries:  []fileservice.IOEntry{{Offset: 0, Size: 1, Data: []byte{1}}},
+	}))
+
+	second := NewCheckpointCleaner(
+		ctx, "", objectFS, nil, nil, WithUnpublishedCleanupFS(markerFS),
+	).(*checkpointCleaner)
+	second.unpublishedCleanupGeneration.Add(1)
+	require.NoError(t, second.replayUnpublishedObjectCleanup(ctx))
+	_, err = objectFS.StatFile(ctx, name)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrFileNotFound))
+}
+
+func TestCheckpointCleanerCleanupFailureDoesNotFailStopProcess(t *testing.T) {
+	ctx := context.Background()
+	objectBase, err := fileservice.NewMemoryFS(
+		"shared", fileservice.DisabledCacheConfig, nil)
+	require.NoError(t, err)
+	objectFS := &controllableUnpublishedCleanupFS{FileService: objectBase}
+	markerFS, err := fileservice.NewMemoryFS(
+		"local", fileservice.DisabledCacheConfig, nil)
+	require.NoError(t, err)
+	cleaner := NewCheckpointCleaner(
+		ctx, "", objectFS, nil, nil, WithUnpublishedCleanupFS(markerFS),
+	).(*checkpointCleaner)
+	cleaner.DisableGC()
+	name := objectio.MockObjectName().String()
+	_, err = cleaner.PrepareUnpublishedObject(ctx, 1, 2, true, name)
+	require.NoError(t, err)
+	require.NoError(t, objectBase.Write(ctx, fileservice.IOVector{
+		FilePath: name,
+		Entries:  []fileservice.IOEntry{{Offset: 0, Size: 1, Data: []byte{1}}},
+	}))
+	cleaner.AbandonUnpublishedObject(name)
+	objectFS.rejectObjectDelete.Store(true)
+
+	// The cleanup error is logged and retained, but Process returns the ordinary
+	// GC result instead of failing before the GCEnabled gate.
+	require.NoError(t, cleaner.Process(ctx, nil))
+	_, err = objectBase.StatFile(ctx, name)
+	require.NoError(t, err)
+}
+
+func TestCheckpointCleanerCleanupAdmissionIsBounded(t *testing.T) {
 	ctx := context.Background()
 	fs, err := fileservice.NewMemoryFS(
 		"shared", fileservice.DisabledCacheConfig, nil)
 	require.NoError(t, err)
-	sharedFS := &rejectSharedCleanupMarkerWriteFS{FileService: fs}
-	localDir := t.TempDir()
-	firstLocalFS, err := fileservice.NewLocalFS(
-		ctx, "local", localDir, fileservice.DisabledCacheConfig, nil)
-	require.NoError(t, err)
-	object := objectio.MockObjectName().String()
-	writeCheckpointCleanerCleanupTestObject(t, fs, object)
+	cleaner := NewCheckpointCleaner(ctx, "", fs, nil, nil).(*checkpointCleaner)
+	cleaner.unpublishedCleanupOwnership.pending = unpublishedCleanupMaxPending
 
-	firstProcess := &checkpointCleaner{
-		fs:                   sharedFS,
-		unpublishedCleanupFS: firstLocalFS,
-	}
-	require.NoError(t, firstProcess.HandoffUnpublishedObjects(ctx, object))
-	require.NotEqual(t,
-		firstProcess.unpublishedCleanupProcessed.Load(),
-		firstProcess.unpublishedCleanupGeneration.Load(),
-		"a runtime handoff must wake the next cleaner cycle",
-	)
-
-	secondLocalFS, err := fileservice.NewLocalFS(
-		ctx, "local", localDir, fileservice.DisabledCacheConfig, nil)
-	require.NoError(t, err)
-	secondProcess := &checkpointCleaner{
-		fs:                   sharedFS,
-		unpublishedCleanupFS: secondLocalFS,
-	}
-	require.NoError(t, secondProcess.replayUnpublishedObjectCleanup(ctx))
-	_, err = fs.StatFile(ctx, object)
-	require.True(t, moerr.IsMoErrCode(err, moerr.ErrFileNotFound))
-	require.Equal(t,
-		secondProcess.unpublishedCleanupProcessed.Load(),
-		secondProcess.unpublishedCleanupGeneration.Load(),
-		"successful startup replay must consume the current generation",
-	)
+	_, err = cleaner.PrepareUnpublishedObject(
+		ctx, 1, 2, true, objectio.MockObjectName().String())
+	require.ErrorContains(t, err, "capacity")
 }
 
-func TestCheckpointCleanerDiscoversExternalSharedCleanupMarker(t *testing.T) {
+func TestCheckpointCleanerMarkerAccountingIsIdentityBased(t *testing.T) {
 	ctx := context.Background()
-	sharedFS, err := fileservice.NewMemoryFS(
+	fs, err := fileservice.NewMemoryFS(
 		"shared", fileservice.DisabledCacheConfig, nil)
 	require.NoError(t, err)
-	localFS, err := fileservice.NewMemoryFS(
+	cleaner := NewCheckpointCleaner(ctx, "", fs, nil, nil).(*checkpointCleaner)
+	nameA := objectio.MockObjectName().String()
+	markerA, err := cleaner.PrepareUnpublishedObject(
+		ctx, 1, 2, true, nameA)
+	require.NoError(t, err)
+	_, err = cleaner.PrepareUnpublishedObject(
+		ctx, 1, 2, true, objectio.MockObjectName().String())
+	require.NoError(t, err)
+	require.NoError(t, cleaner.FinishUnpublishedObject(ctx, markerA, nameA))
+
+	// A replay may have listed markerA before Finish removed it. Its later
+	// completion must not decrement the independent marker's admission slot.
+	cleaner.releaseUnpublishedObjectMarker(markerA)
+	cleaner.unpublishedCleanupOwnership.Lock()
+	require.Equal(t, 1, cleaner.unpublishedCleanupOwnership.pending)
+	require.Len(t, cleaner.unpublishedCleanupOwnership.markers, 1)
+	cleaner.unpublishedCleanupOwnership.Unlock()
+}
+
+func TestCheckpointCleanerOverflowStaysClosedUntilCompleteReplay(t *testing.T) {
+	ctx := context.Background()
+	fs, err := fileservice.NewMemoryFS(
+		"shared", fileservice.DisabledCacheConfig, nil)
+	require.NoError(t, err)
+	cleaner := NewCheckpointCleaner(ctx, "", fs, nil, nil).(*checkpointCleaner)
+	cleaner.unpublishedCleanupOwnership.initialized = true
+	cleaner.unpublishedCleanupOwnership.pending = unpublishedCleanupMaxPending + 1
+	cleaner.unpublishedCleanupOwnership.overflow = true
+
+	_, err = cleaner.PrepareUnpublishedObject(
+		ctx, 1, 2, true, objectio.MockObjectName().String())
+	require.ErrorContains(t, err, "capacity")
+	cleaner.unpublishedCleanupGeneration.Add(1)
+	require.NoError(t, cleaner.replayUnpublishedObjectCleanup(ctx))
+	cleaner.unpublishedCleanupOwnership.Lock()
+	require.False(t, cleaner.unpublishedCleanupOwnership.overflow)
+	require.Zero(t, cleaner.unpublishedCleanupOwnership.pending)
+	cleaner.unpublishedCleanupOwnership.Unlock()
+}
+
+func TestCheckpointCleanerReconstructsPendingBeyondOneReplayBatch(t *testing.T) {
+	ctx := context.Background()
+	objectFS, err := fileservice.NewMemoryFS(
+		"shared", fileservice.DisabledCacheConfig, nil)
+	require.NoError(t, err)
+	markerFS, err := fileservice.NewMemoryFS(
 		"local", fileservice.DisabledCacheConfig, nil)
 	require.NoError(t, err)
-	object := objectio.MockObjectName().String()
-	writeCheckpointCleanerCleanupTestObject(t, sharedFS, object)
-	_, err = ioutil.RecordUnpublishedObjectCleanup(ctx, sharedFS, object)
-	require.NoError(t, err)
-
-	cleaner := &checkpointCleaner{
-		ctx:                  ctx,
-		fs:                   sharedFS,
-		unpublishedCleanupFS: localFS,
+	for i := 0; i < 1001; i++ {
+		_, err = ioutil.RecordUnpublishedObjectCleanup(
+			ctx,
+			markerFS,
+			ioutil.UnpublishedObject{File: fmt.Sprintf("object-%04d", i)},
+		)
+		require.NoError(t, err)
 	}
-	require.Equal(t,
-		cleaner.unpublishedCleanupProcessed.Load(),
-		cleaner.unpublishedCleanupGeneration.Load(),
-		"an external producer cannot increment this process's generation",
-	)
-	require.NoError(t, cleaner.Process(ctx, nil))
-	_, err = sharedFS.StatFile(ctx, object)
-	require.True(t, moerr.IsMoErrCode(err, moerr.ErrFileNotFound),
-		"a running TN must discover cleanup markers created externally by CNs")
-}
 
-func TestCheckpointCleanerDoesNotLoseConcurrentHandoff(t *testing.T) {
-	ctx := context.Background()
-	baseFS, err := fileservice.NewMemoryFS(
-		"shared", fileservice.DisabledCacheConfig, nil)
-	require.NoError(t, err)
-	fs := &blockingUnpublishedCleanupListFS{
-		FileService: baseFS,
-		listed:      make(chan struct{}),
-		release:     make(chan struct{}),
-	}
-	cleaner := &checkpointCleaner{fs: fs}
+	cleaner := NewCheckpointCleaner(
+		ctx, "", objectFS, nil, nil, WithUnpublishedCleanupFS(markerFS),
+	).(*checkpointCleaner)
+	require.NoError(t, cleaner.initializeUnpublishedObjectOwnership(ctx))
+	cleaner.unpublishedCleanupOwnership.Lock()
+	require.Equal(t, 1001, cleaner.unpublishedCleanupOwnership.pending)
+	cleaner.unpublishedCleanupOwnership.Unlock()
 
-	first := objectio.MockObjectName().String()
-	second := objectio.MockObjectName().String()
-	writeCheckpointCleanerCleanupTestObject(t, baseFS, first)
-	writeCheckpointCleanerCleanupTestObject(t, baseFS, second)
-	require.NoError(t, cleaner.HandoffUnpublishedObjects(ctx, first))
-
-	replayDone := make(chan error, 1)
-	go func() {
-		replayDone <- cleaner.replayUnpublishedObjectCleanup(ctx)
-	}()
-	<-fs.listed
-	require.NoError(t, cleaner.HandoffUnpublishedObjects(ctx, second))
-	close(fs.release)
-	require.NoError(t, <-replayDone)
-	require.NotEqual(t,
-		cleaner.unpublishedCleanupProcessed.Load(),
-		cleaner.unpublishedCleanupGeneration.Load(),
-		"a handoff concurrent with replay must leave a visible next generation",
-	)
+	cleaner.unpublishedCleanupGeneration.Add(1)
 	require.NoError(t, cleaner.replayUnpublishedObjectCleanup(ctx))
-	require.Equal(t,
-		cleaner.unpublishedCleanupProcessed.Load(),
-		cleaner.unpublishedCleanupGeneration.Load(),
-	)
-}
-
-func TestCheckpointCleanerRetainsOwnerWhenAllMarkersFail(t *testing.T) {
-	ctx := context.Background()
-	sharedBase, err := fileservice.NewMemoryFS(
-		"shared", fileservice.DisabledCacheConfig, nil)
-	require.NoError(t, err)
-	localBase, err := fileservice.NewMemoryFS(
-		"local", fileservice.DisabledCacheConfig, nil)
-	require.NoError(t, err)
-	sharedFS := &controllableUnpublishedCleanupFS{FileService: sharedBase}
-	localFS := &controllableUnpublishedCleanupFS{FileService: localBase}
-	sharedFS.rejectMarkerWrites.Store(true)
-	sharedFS.rejectDeletes.Store(true)
-	localFS.rejectMarkerWrites.Store(true)
-
-	object := objectio.MockObjectName().String()
-	writeCheckpointCleanerCleanupTestObject(t, sharedBase, object)
-	cleaner := &checkpointCleaner{
-		fs:                   sharedFS,
-		unpublishedCleanupFS: localFS,
-	}
-
-	// Neither durable destination can accept the intent, but the cleaner itself
-	// becomes the retry owner before the transaction is allowed to disappear.
-	require.NoError(t, cleaner.HandoffUnpublishedObjects(ctx, object))
-	require.NoError(t, cleaner.HandoffUnpublishedObjects(ctx, object),
-		"repeated handoff of the same owned object must be idempotent")
-	require.Equal(t, int64(2), sharedFS.markerWriteAttempts.Load())
-	require.Equal(t, int64(2), localFS.markerWriteAttempts.Load())
-	pending, more := cleaner.snapshotUnpublishedObjectCleanup()
-	require.ElementsMatch(t, []string{object}, pending)
-	require.False(t, more)
-
-	// A failed replay must retain ownership. Once storage recovers, the same
-	// process-level owner removes the object without any transaction state.
-	require.Error(t, cleaner.replayUnpublishedObjectCleanup(ctx))
-	_, err = sharedBase.StatFile(ctx, object)
-	require.NoError(t, err)
-	pending, more = cleaner.snapshotUnpublishedObjectCleanup()
-	require.ElementsMatch(t, []string{object}, pending)
-	require.False(t, more)
-
-	sharedFS.rejectDeletes.Store(false)
+	cleaner.unpublishedCleanupOwnership.Lock()
+	require.Equal(t, 1, cleaner.unpublishedCleanupOwnership.pending)
+	cleaner.unpublishedCleanupOwnership.Unlock()
 	require.NoError(t, cleaner.replayUnpublishedObjectCleanup(ctx))
-	_, err = sharedBase.StatFile(ctx, object)
-	require.True(t, moerr.IsMoErrCode(err, moerr.ErrFileNotFound))
-	pending, more = cleaner.snapshotUnpublishedObjectCleanup()
-	require.Empty(t, pending)
-	require.False(t, more)
-	require.Equal(t,
-		cleaner.unpublishedCleanupProcessed.Load(),
-		cleaner.unpublishedCleanupGeneration.Load(),
-	)
-}
-
-func writeCheckpointCleanerCleanupTestObject(
-	t *testing.T,
-	fs fileservice.FileService,
-	path string,
-) {
-	t.Helper()
-	require.NoError(t, fs.Write(context.Background(), fileservice.IOVector{
-		FilePath: path,
-		Entries: []fileservice.IOEntry{{
-			Offset: 0,
-			Size:   1,
-			Data:   []byte{1},
-		}},
-	}))
+	cleaner.unpublishedCleanupOwnership.Lock()
+	require.Zero(t, cleaner.unpublishedCleanupOwnership.pending)
+	cleaner.unpublishedCleanupOwnership.Unlock()
 }

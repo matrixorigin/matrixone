@@ -522,7 +522,8 @@ type FilterObjectJobResult struct {
 	PreviousStats    objectio.ObjectStats
 	CurrentStats     objectio.ObjectStats
 	// DownstreamStats holds the stats for non-appendable objects that were written to fileservice
-	DownstreamStats objectio.ObjectStats
+	DownstreamStats     objectio.ObjectStats
+	DownstreamStatsList []objectio.ObjectStats
 	// RowOffsetMap maps original rowoffset to new rowoffset after sorting
 	// Key: original rowoffset, Value: new rowoffset
 	RowOffsetMap map[uint32]uint32
@@ -626,6 +627,7 @@ func (j *FilterObjectJob) Execute() {
 		res.PreviousStats = filterResult.PreviousStats
 		res.CurrentStats = filterResult.CurrentStats
 		res.DownstreamStats = filterResult.DownstreamStats
+		res.DownstreamStatsList = filterResult.DownstreamStatsList
 		res.RowOffsetMap = filterResult.RowOffsetMap
 	}
 	j.complete(res)

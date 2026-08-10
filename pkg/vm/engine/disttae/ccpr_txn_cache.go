@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"sync"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
@@ -26,6 +27,8 @@ import (
 	"github.com/tidwall/btree"
 	"go.uber.org/zap"
 )
+
+const ccprObjectCleanupTimeout = time.Minute
 
 // ItemEntry represents an entry in the items BTree, sorted by objectName
 type ItemEntry struct {
@@ -138,6 +141,33 @@ func (c *CCPRTxnCache) WriteObject(ctx context.Context, objectName string, txnID
 	c.addObjectToTxnIndex(txnIDCopy, objectName)
 
 	return true, nil
+}
+
+// WriteNewObject admits a caller-generated unique object without StatFile.
+// Callers must not use this for stable/reused names: an existing in-memory
+// entry is an invariant violation rather than a reusable file.
+func (c *CCPRTxnCache) WriteNewObject(
+	ctx context.Context,
+	objectName string,
+	txnID []byte,
+) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.fs == nil {
+		return moerr.NewInternalError(ctx, "fileservice is nil in CCPRTxnCache")
+	}
+	if _, exists := c.items.Get(ItemEntry{objectName: objectName}); exists {
+		return moerr.NewInternalErrorf(
+			ctx, "new CCPR object %s is already registered", objectName)
+	}
+	txnIDCopy := append([]byte(nil), txnID...)
+	c.items.Set(ItemEntry{
+		objectName: objectName,
+		txnIDs:     [][]byte{txnIDCopy},
+		isWriting:  true,
+	})
+	c.addObjectToTxnIndex(txnIDCopy, objectName)
+	return nil
 }
 
 // addObjectToTxnIndex adds an objectName to the txnIndex for the given txnID
@@ -323,7 +353,14 @@ func (c *CCPRTxnCache) gcObjects(objectNames []string) {
 	names := make([]string, len(objectNames))
 	copy(names, objectNames)
 
-	if err := c.fs.Delete(context.Background(), names...); err != nil {
+	ctx, cancel := context.WithTimeoutCause(
+		context.Background(),
+		ccprObjectCleanupTimeout,
+		moerr.CauseCleanUpUselessFiles,
+	)
+	defer cancel()
+	if err := c.fs.Delete(ctx, names...); err != nil &&
+		!moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
 		logutil.Warn("failed to delete CCPR objects",
 			zap.Strings("objects", names),
 			zap.Error(err),

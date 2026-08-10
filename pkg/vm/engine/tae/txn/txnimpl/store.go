@@ -149,7 +149,6 @@ type txnStore struct {
 	tracer     *txnTracer
 
 	transferredTombstoneCleanupDeadline time.Time
-	transferredTombstoneHandoffDeadline time.Time
 
 	isOffline bool
 
@@ -170,24 +169,6 @@ func (store *txnStore) adoptTransferredTombstoneCleanupDeadline(deadline time.Ti
 		store.transferredTombstoneCleanupDeadline = deadline
 	}
 	return store.transferredTombstoneCleanupDeadline
-}
-
-func (store *txnStore) newTransferredTombstoneHandoffContext() (
-	context.Context,
-	context.CancelFunc,
-) {
-	store.mu.Lock()
-	if store.transferredTombstoneHandoffDeadline.IsZero() {
-		store.transferredTombstoneHandoffDeadline = time.Now().Add(
-			transferredTombstoneHandoffTimeout)
-	}
-	deadline := store.transferredTombstoneHandoffDeadline
-	store.mu.Unlock()
-	return context.WithDeadlineCause(
-		context.WithoutCancel(store.ctx),
-		deadline,
-		moerr.CauseCleanUpUselessFiles,
-	)
 }
 
 var TxnStoreFactory = func(

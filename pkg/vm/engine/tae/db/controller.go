@@ -755,7 +755,7 @@ func (c *Controller) AssembleDB(ctx context.Context) (err error) {
 		}, cmd_util.CheckerKeyTTL)
 
 	db.DiskCleaner = gc2.NewDiskCleaner(cleaner, db.IsWriteMode())
-	db.Runtime.HandoffUnpublishedObjects = db.DiskCleaner.HandoffUnpublishedObjects
+	db.Runtime.UnpublishedObjectCleaner = db.DiskCleaner
 
 	// Set sync protection validator for TN commit validation (CCPR transactions)
 	db.Runtime.SyncProtectionValidator = func(jobID string, prepareTS int64) error {

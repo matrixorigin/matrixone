@@ -20,9 +20,14 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/dbutils"
 	"go.uber.org/zap"
 )
 
@@ -31,10 +36,6 @@ import (
 // however, make a failed commit worker wait indefinitely for degraded object
 // storage. DeletePersisted passes this bound through to every delete batch.
 const transferredTombstoneCleanupTimeout = time.Minute
-
-// A terminal handoff writes only a small metadata marker. Keep one transaction-
-// level budget independent from the already exhausted object-delete deadline.
-const transferredTombstoneHandoffTimeout = 10 * time.Second
 
 // transferredTombstoneSinker is the part of ioutil.Sinker used while a TN
 // transaction rewrites tombstones to the current data-object generation.
@@ -54,12 +55,163 @@ type transferredTombstoneSinker interface {
 // transaction commit/rollback owns their lifecycle.
 type transferredTombstoneSink struct {
 	sinker          transferredTombstoneSinker
+	ownership       *transferredTombstoneOwnership
 	wrote           bool
 	published       bool
 	cleanupPending  bool
 	cleanupFiles    []string
 	closed          bool
 	cleanupDeadline time.Time
+}
+
+type transferredTombstoneObject struct {
+	file   string
+	marker string
+}
+
+// transferredTombstoneOwnership writes cleanup intent before object data. The
+// marker is retained through transaction outcome, while the active bit fences
+// cleaner replay from an in-flight writer.
+type transferredTombstoneOwnership struct {
+	cleaner dbutils.UnpublishedObjectCleaner
+	dbID    uint64
+	tableID uint64
+	objects []transferredTombstoneObject
+}
+
+func (o *transferredTombstoneOwnership) prepare(
+	ctx context.Context,
+	file string,
+) error {
+	if o == nil || o.cleaner == nil {
+		return moerr.NewInternalErrorNoCtx(
+			"unpublished object cleanup owner is not configured")
+	}
+	marker, err := o.cleaner.Prepare(
+		ctx, o.dbID, o.tableID, true, file)
+	if err != nil {
+		return err
+	}
+	o.objects = append(o.objects, transferredTombstoneObject{
+		file: file, marker: marker,
+	})
+	return nil
+}
+
+func (o *transferredTombstoneOwnership) finish(ctx context.Context) error {
+	if o == nil || len(o.objects) == 0 {
+		return nil
+	}
+	if o.cleaner == nil {
+		return moerr.NewInternalErrorNoCtx(
+			"unpublished object cleanup owner is not configured")
+	}
+	var err error
+	for _, object := range o.objects {
+		err = combineTxnLifecycleErrors(
+			err,
+			o.cleaner.Finish(ctx, object.marker, object.file),
+		)
+	}
+	o.objects = nil
+	return err
+}
+
+func (o *transferredTombstoneOwnership) abandon() bool {
+	if o == nil || o.cleaner == nil || len(o.objects) == 0 {
+		return false
+	}
+	for _, object := range o.objects {
+		o.cleaner.Abandon(object.file)
+	}
+	o.objects = nil
+	return true
+}
+
+func (o *transferredTombstoneOwnership) owns(files []string) bool {
+	if len(files) == 0 || o == nil || o.cleaner == nil ||
+		len(o.objects) != len(files) {
+		return false
+	}
+	owned := make(map[string]struct{}, len(o.objects))
+	for _, object := range o.objects {
+		owned[object.file] = struct{}{}
+	}
+	for _, file := range files {
+		if _, ok := owned[file]; !ok {
+			return false
+		}
+		delete(owned, file)
+	}
+	return len(owned) == 0
+}
+
+func (o *transferredTombstoneOwnership) transferTo(
+	dst *transferredTombstoneOwnership,
+) {
+	if o == nil || dst == nil || len(o.objects) == 0 {
+		return
+	}
+	dst.objects = append(dst.objects, o.objects...)
+	o.objects = nil
+}
+
+type ownedTombstoneFileSinker struct {
+	inner     *ioutil.FSinkerImpl
+	ownership *transferredTombstoneOwnership
+}
+
+func (s *ownedTombstoneFileSinker) Sink(
+	ctx context.Context,
+	bat *batch.Batch,
+) error {
+	return s.inner.Sink(ctx, bat)
+}
+
+func (s *ownedTombstoneFileSinker) Sync(
+	ctx context.Context,
+) (*objectio.ObjectStats, error) {
+	name := s.inner.ActiveObjectName()
+	if name == "" {
+		return nil, moerr.NewInternalErrorNoCtx(
+			"tombstone file sinker has no active object")
+	}
+	if err := s.ownership.prepare(ctx, name); err != nil {
+		return nil, err
+	}
+	return s.inner.Sync(ctx)
+}
+
+func (s *ownedTombstoneFileSinker) Reset()       { s.inner.Reset() }
+func (s *ownedTombstoneFileSinker) Close() error { return s.inner.Close() }
+func (s *ownedTombstoneFileSinker) ActiveObjectName() string {
+	return s.inner.ActiveObjectName()
+}
+
+func newOwnedTransferredTombstoneSinker(
+	pkType types.Type,
+	mp *mpool.MPool,
+	fs fileservice.FileService,
+	ownership *transferredTombstoneOwnership,
+) *ioutil.Sinker {
+	factory := func(mp *mpool.MPool, fs fileservice.FileService) ioutil.FileSinker {
+		return &ownedTombstoneFileSinker{
+			inner: ioutil.NewTombstoneFSinkerImpl(
+				objectio.HiddenColumnSelection_None, mp, fs),
+			ownership: ownership,
+		}
+	}
+	attrs, attrTypes := objectio.GetTombstoneSchema(
+		pkType, objectio.HiddenColumnSelection_None)
+	return ioutil.NewSinker(
+		objectio.TombstonePrimaryKeyIdx,
+		attrs,
+		attrTypes,
+		factory,
+		mp,
+		fs,
+		ioutil.WithMemorySizeThreshold(TransferSinkerMemorySizeThreshold),
+	)
 }
 
 func (s *transferredTombstoneSink) write(ctx context.Context, bat *batch.Batch) error {
@@ -155,6 +307,15 @@ func (s *transferredTombstoneSink) deletePersisted(ctx context.Context) error {
 	files, err := s.sinker.DeletePersisted(cleanupCtx)
 	if err == nil {
 		s.cleanupFiles = nil
+		if markerErr := s.ownership.finish(cleanupCtx); markerErr != nil {
+			// The object is already absent; the cleaner retains any marker it
+			// could not release. Do not turn metadata cleanup into another
+			// object-delete retry or replace the transaction's primary error.
+			logutil.Warn(
+				"failed to release deleted transferred tombstone markers",
+				zap.Error(markerErr),
+			)
+		}
 		return nil
 	}
 	s.cleanupFiles = append(s.cleanupFiles[:0], files...)
