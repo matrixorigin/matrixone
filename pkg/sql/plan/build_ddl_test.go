@@ -1043,6 +1043,113 @@ func TestBuildCreateViewPreservesDefaultKinds(t *testing.T) {
 	require.Equal(t, "uuid", cols[2].GetDefault().GetExpr().GetF().GetFunc().GetObjName())
 }
 
+func TestGroupingExtensionsExposeNullableKeysInViewAndCTAS(t *testing.T) {
+	newContext := func(rootSQL string) *rootSQLCompilerContext {
+		ctx := NewMockCompilerContext(false)
+		for _, name := range []string{"n_nationkey", "n_regionkey"} {
+			col := ctx.tables["nation"].Cols[ctx.tables["nation"].Name2ColIndex[name]]
+			col.Typ.NotNullable = true
+			col.Default = &plan.Default{NullAbility: false}
+		}
+		return &rootSQLCompilerContext{MockCompilerContext: ctx, rootSQL: rootSQL}
+	}
+
+	for _, test := range []struct {
+		name     string
+		groupBy  string
+		nullable []bool
+	}{
+		{
+			name:     "ordinary group by preserves source nullability",
+			groupBy:  "n_nationkey, n_regionkey",
+			nullable: []bool{false, false},
+		},
+		{
+			name:     "rollup",
+			groupBy:  "n_nationkey, n_regionkey with rollup",
+			nullable: []bool{true, true},
+		},
+		{
+			name:     "cube",
+			groupBy:  "cube(n_nationkey, n_regionkey)",
+			nullable: []bool{true, true},
+		},
+		{
+			name:     "grouping sets",
+			groupBy:  "grouping sets ((n_nationkey, n_regionkey), (n_nationkey), ())",
+			nullable: []bool{true, true},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			rootSQL := "create view grouping_extension_view as select n_nationkey, n_regionkey, count(*) as cnt from nation group by " + test.groupBy
+			stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, rootSQL, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+
+			viewPlan, err := BuildPlan(newContext(rootSQL), stmt, false)
+			require.NoError(t, err)
+			viewCols := viewPlan.GetDdl().GetCreateView().GetTableDef().GetCols()
+			require.Len(t, viewCols, 3)
+			for i, wantNullable := range test.nullable {
+				require.Equal(t, wantNullable, viewCols[i].GetDefault().GetNullAbility(), viewCols[i].GetName())
+			}
+		})
+	}
+
+	const ctasSQL = "create table grouping_extension_ctas as select n_nationkey, n_regionkey, count(*) as cnt from nation group by n_nationkey, n_regionkey with rollup"
+	stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, ctasSQL, 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+
+	ctasPlan, err := BuildPlan(newContext(ctasSQL), stmt, false)
+	require.NoError(t, err)
+	ctasCols := ctasPlan.GetDdl().GetCreateTable().GetTableDef().GetCols()
+	require.GreaterOrEqual(t, len(ctasCols), 3)
+	require.True(t, ctasCols[0].GetDefault().GetNullAbility(), ctasCols[0].GetName())
+	require.True(t, ctasCols[1].GetDefault().GetNullAbility(), ctasCols[1].GetName())
+}
+
+func TestGroupingExtensionQueryOutputKeysAreNullable(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		groupBy string
+	}{
+		{
+			name:    "ordinary group by preserves source nullability",
+			groupBy: "n_nationkey, n_regionkey",
+		},
+		{
+			name:    "rollup",
+			groupBy: "n_nationkey, n_regionkey with rollup",
+		},
+		{
+			name:    "cube",
+			groupBy: "cube(n_nationkey, n_regionkey)",
+		},
+		{
+			name:    "grouping sets",
+			groupBy: "grouping sets ((n_nationkey, n_regionkey), (n_nationkey), ())",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			opt := NewMockOptimizer(false)
+			ctx := opt.CurrentContext().(*MockCompilerContext)
+			for _, name := range []string{"n_nationkey", "n_regionkey"} {
+				ctx.tables["nation"].Cols[ctx.tables["nation"].Name2ColIndex[name]].Typ.NotNullable = true
+			}
+
+			queryPlan, err := runOneStmt(opt, t, "select n_nationkey, n_regionkey, count(*) as cnt from nation group by "+test.groupBy)
+			require.NoError(t, err)
+			query := queryPlan.GetQuery()
+			rootNode := query.Nodes[query.Steps[0]]
+			for i := 0; i < 2; i++ {
+				wantNotNullable := test.name == "ordinary group by preserves source nullability"
+				require.Equal(t, wantNotNullable, rootNode.ProjectList[i].Typ.NotNullable)
+			}
+		})
+	}
+}
+
 func TestBuildCTASFromViewUsesIndependentExecutableDefault(t *testing.T) {
 	ctx := NewMockCompilerContext(false)
 	sourceCol := ctx.tables["nation"].Cols[0]
