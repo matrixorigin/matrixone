@@ -183,6 +183,120 @@ func TestIssue25526PreparedUpdateJoinSecondExecute(t *testing.T) {
 				require.NoError(t, conn.QueryRowContext(ctx, "select count(*) from "+table).Scan(&rows))
 				require.Equal(t, 1, rows, "failed cycle action must preserve %s", table)
 			}
+
+			// Existing ON UPDATE CASCADE plans keep their positional table layout.
+			mustExec(t, ctx, conn, "create table update_parent(id int primary key)")
+			mustExec(t, ctx, conn, `create table update_child(
+				id int primary key,
+				foreign key(id) references update_parent(id) on update cascade)`)
+			mustExec(t, ctx, conn, `create table update_grandchild(
+				id int primary key,
+				foreign key(id) references update_child(id) on update cascade)`)
+			mustExec(t, ctx, conn, "insert into update_parent values(1)")
+			mustExec(t, ctx, conn, "insert into update_child values(1)")
+			mustExec(t, ctx, conn, "insert into update_grandchild values(1)")
+			mustExec(t, ctx, conn, "update update_parent set id=2 where id=1")
+			for _, table := range []string{"update_parent", "update_child", "update_grandchild"} {
+				var id int
+				require.NoError(t, conn.QueryRowContext(ctx, "select id from "+table).Scan(&id))
+				require.Equal(t, 2, id, "ON UPDATE CASCADE must update %s", table)
+			}
+
+			// A transitive three-table cycle must be detected after the actions,
+			// before an orphan replacement image can commit.
+			mustExec(t, ctx, conn, "create table transitive_a(id int primary key, cid int)")
+			mustExec(t, ctx, conn, "create table transitive_b(id int primary key, aid int)")
+			mustExec(t, ctx, conn, "create table transitive_c(id int primary key, bid int)")
+			mustExec(t, ctx, conn, `alter table transitive_b add foreign key(aid)
+				references transitive_a(id) on delete cascade`)
+			mustExec(t, ctx, conn, `alter table transitive_c add foreign key(bid)
+				references transitive_b(id) on delete cascade`)
+			mustExec(t, ctx, conn, `alter table transitive_a add foreign key(cid)
+				references transitive_c(id) on delete cascade`)
+			mustExec(t, ctx, conn, "insert into transitive_a values(1,null)")
+			mustExec(t, ctx, conn, "insert into transitive_b values(1,1)")
+			mustExec(t, ctx, conn, "insert into transitive_c values(1,1)")
+			mustExec(t, ctx, conn, "update transitive_a set cid=1 where id=1")
+			_, err = conn.ExecContext(ctx, "replace into transitive_a values(1,1)")
+			require.Error(t, err)
+			for _, table := range []string{"transitive_a", "transitive_b", "transitive_c"} {
+				var rows int
+				require.NoError(t, conn.QueryRowContext(ctx, "select count(*) from "+table).Scan(&rows))
+				require.Equal(t, 1, rows, "failed transitive cycle must preserve %s", table)
+			}
+
+			// Post-action validation is row-scoped: an unrelated historical orphan
+			// created while checks were disabled must not reject a legal REPLACE.
+			mustExec(t, ctx, conn, "create table scoped_a(id int primary key, bid int)")
+			mustExec(t, ctx, conn, "create table scoped_b(id int primary key, aid int)")
+			mustExec(t, ctx, conn, `alter table scoped_b add foreign key(aid)
+				references scoped_a(id) on delete cascade`)
+			mustExec(t, ctx, conn, `alter table scoped_a add foreign key(bid)
+				references scoped_b(id) on delete cascade`)
+			mustExec(t, ctx, conn, "set foreign_key_checks=0")
+			mustExec(t, ctx, conn, "insert into scoped_a values(99,999)")
+			mustExec(t, ctx, conn, "set foreign_key_checks=1")
+			mustExec(t, ctx, conn, "replace into scoped_a values(2,null)")
+			var scopedRows int
+			require.NoError(t, conn.QueryRowContext(ctx,
+				"select count(*) from scoped_a where id=2 and bid is null").Scan(&scopedRows))
+			require.Equal(t, 1, scopedRows)
+
+			// FK actions are completely disabled before any ordered-source rewrite.
+			mustExec(t, ctx, conn, `create table checks_off(
+				id int primary key, pid int,
+				foreign key(pid) references checks_off(id) on delete set null)`)
+			mustExec(t, ctx, conn, "insert into checks_off values(1,null),(2,1),(3,2)")
+			mustExec(t, ctx, conn, "set foreign_key_checks=0")
+			mustExec(t, ctx, conn, "replace into checks_off values(2,1),(1,null)")
+			mustExec(t, ctx, conn, "set foreign_key_checks=1")
+			var pid2, pid3 int
+			require.NoError(t, conn.QueryRowContext(ctx, "select pid from checks_off where id=2").Scan(&pid2))
+			require.NoError(t, conn.QueryRowContext(ctx, "select pid from checks_off where id=3").Scan(&pid3))
+			require.Equal(t, 1, pid2)
+			require.Equal(t, 2, pid3)
+
+			// Ordered transformations consume the materialized row image. Volatile
+			// expressions therefore execute once, and SELECT uses the same path.
+			mustExec(t, ctx, conn, "create sequence replace_seq start with 100")
+			mustExec(t, ctx, conn, `create table volatile_replace(
+				id bigint primary key, pid bigint,
+				foreign key(pid) references volatile_replace(id) on delete set null)`)
+			mustExec(t, ctx, conn, `replace into volatile_replace values
+				(nextval('replace_seq'),null),(nextval('replace_seq'),null)`)
+			var sequenceValue int64
+			require.NoError(t, conn.QueryRowContext(ctx, "select currval('replace_seq')").Scan(&sequenceValue))
+			require.Equal(t, int64(101), sequenceValue)
+
+			mustExec(t, ctx, conn, `create table select_setnull(
+				id int primary key, pid int,
+				foreign key(pid) references select_setnull(id) on delete set null)`)
+			mustExec(t, ctx, conn, "insert into select_setnull values(1,null),(2,1),(3,2)")
+			mustExec(t, ctx, conn, "create table replace_source(ord int, id int, pid int)")
+			mustExec(t, ctx, conn, "insert into replace_source values(1,2,1),(2,1,null)")
+			mustExec(t, ctx, conn, `replace into select_setnull
+				select id,pid from replace_source order by ord`)
+			var selectID2Null, selectID3Null int
+			require.NoError(t, conn.QueryRowContext(ctx,
+				"select count(*) from select_setnull where id=2 and pid is null").Scan(&selectID2Null))
+			require.NoError(t, conn.QueryRowContext(ctx,
+				"select count(*) from select_setnull where id=3 and pid is null").Scan(&selectID3Null))
+			require.Equal(t, 1, selectID2Null)
+			require.Equal(t, 1, selectID3Null)
+
+			mustExec(t, ctx, conn, `create table select_cascade(
+				id int primary key, pid int,
+				foreign key(pid) references select_cascade(id) on delete cascade)`)
+			mustExec(t, ctx, conn, "insert into select_cascade values(1,null),(2,1),(3,2)")
+			mustExec(t, ctx, conn, `replace into select_cascade
+				select id,pid from replace_source order by ord`)
+			var cascadeID1, cascadeOthers int
+			require.NoError(t, conn.QueryRowContext(ctx,
+				"select count(*) from select_cascade where id=1").Scan(&cascadeID1))
+			require.NoError(t, conn.QueryRowContext(ctx,
+				"select count(*) from select_cascade where id<>1").Scan(&cascadeOthers))
+			require.Equal(t, 1, cascadeID1)
+			require.Equal(t, 0, cascadeOthers)
 		},
 	)
 }

@@ -18,6 +18,7 @@ import (
 	"context"
 	"reflect"
 	gotrace "runtime/trace"
+	"slices"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -266,19 +267,37 @@ func bindAndOptimizeReplaceQuery(ctx CompilerContext, stmt *tree.Replace, isPrep
 		}
 		query.DetectSqls = append(query.DetectSqls, sqls...)
 
-		// A direct FK cycle can delete the parent that satisfied the new REPLACE
-		// image during the pre-action child check. Revalidate that edge after all
-		// action steps and the main MULTI_UPDATE have run so the statement fails
-		// atomically with the child-side FK error instead of committing an orphan.
-		refChildren := make(map[uint64]struct{}, len(tblInfo.tableDefs[0].RefChildTbls))
-		for _, tableID := range tblInfo.tableDefs[0].RefChildTbls {
-			refChildren[tableID] = struct{}{}
+		// A direct or transitive FK action cycle can delete the parent that
+		// satisfied the new REPLACE image during the pre-action child check.
+		// Traverse the complete parent->child action graph and revalidate only
+		// the replacement row image after all action steps have run.
+		actionDescendants := make(map[uint64]struct{})
+		pending := slices.Clone(tblInfo.tableDefs[0].RefChildTbls)
+		for len(pending) > 0 {
+			tableID := pending[len(pending)-1]
+			pending = pending[:len(pending)-1]
+			// Self-referencing FKs use 0 as the current-table sentinel. They are
+			// validated by genSqlsForCheckFKSelfRefer above and are not catalog IDs.
+			if tableID == 0 {
+				continue
+			}
+			if _, seen := actionDescendants[tableID]; seen {
+				continue
+			}
+			actionDescendants[tableID] = struct{}{}
+			_, descendantDef, resolveErr := ctx.ResolveById(tableID, nil)
+			if resolveErr != nil {
+				return nil, resolveErr
+			}
+			if descendantDef != nil {
+				pending = append(pending, descendantDef.RefChildTbls...)
+			}
 		}
 		for _, fk := range tblInfo.tableDefs[0].Fkeys {
 			if fk.ForeignTbl == 0 {
 				continue
 			}
-			if _, closesCycle := refChildren[fk.ForeignTbl]; !closesCycle {
+			if _, closesCycle := actionDescendants[fk.ForeignTbl]; !closesCycle {
 				continue
 			}
 			parentObjRef, parentTableDef, resolveErr := ctx.ResolveById(fk.ForeignTbl, nil)
@@ -289,12 +308,21 @@ func bindAndOptimizeReplaceQuery(ctx CompilerContext, stmt *tree.Replace, isPrep
 				return nil, moerr.NewInternalErrorf(ctx.GetContext(),
 					"foreign-key parent table %d is unavailable", fk.ForeignTbl)
 			}
-			postCheckSQL, checkErr := genSqlForCheckFKConstraints(
+			postCheckSQL, scoped, checkErr := genSqlForCheckFKConstraintsOnReplaceRows(
 				ctx.GetContext(), fk,
-				tblInfo.objRef[0].SchemaName, tblInfo.tableDefs[0].Name, tblInfo.tableDefs[0].Cols,
-				parentObjRef.SchemaName, parentTableDef.Name, parentTableDef.Cols)
+				tblInfo.objRef[0].SchemaName, tblInfo.tableDefs[0].Name, tblInfo.tableDefs[0],
+				parentObjRef.SchemaName, parentTableDef.Name, parentTableDef.Cols, stmt)
 			if checkErr != nil {
 				return nil, checkErr
+			}
+			if !scoped {
+				postCheckSQL, checkErr = genSqlForCheckFKConstraints(
+					ctx.GetContext(), fk,
+					tblInfo.objRef[0].SchemaName, tblInfo.tableDefs[0].Name, tblInfo.tableDefs[0].Cols,
+					parentObjRef.SchemaName, parentTableDef.Name, parentTableDef.Cols)
+				if checkErr != nil {
+					return nil, checkErr
+				}
 			}
 			query.DetectSqls = append(query.DetectSqls, postCheckSQL)
 		}

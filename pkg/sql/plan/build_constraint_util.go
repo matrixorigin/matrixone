@@ -2338,17 +2338,12 @@ func appendPrimaryConstraintPlan(
 				}
 				rightId := builder.appendNode(scanNode, bindCtx)
 				inputRelPos := int32(1)
+				taggedFkAction := false
 				if isFkRecursionCall {
-					if inputNode := builder.qry.Nodes[lastNodeId]; len(inputNode.BindingTags) == 1 {
+					inputNode := builder.qry.Nodes[lastNodeId]
+					taggedFkAction = len(inputNode.BindingTags) == 1
+					if taggedFkAction {
 						inputRelPos = inputNode.BindingTags[0]
-					} else {
-						inputRelPos = builder.genNewBindTag()
-						lastNodeId = builder.appendNode(&plan.Node{
-							NodeType:    plan.Node_PROJECT,
-							Children:    []int32{lastNodeId},
-							ProjectList: getProjectionByLastNode(builder, lastNodeId),
-							BindingTags: []int32{inputRelPos},
-						}, bindCtx)
 					}
 				}
 
@@ -2414,7 +2409,7 @@ func appendPrimaryConstraintPlan(
 				// Recursive FK actions consume a shared multi-step sink. Building a
 				// runtime filter from that same action stream creates a producer ->
 				// consumer wait cycle; isolate this internal RIGHT JOIN only.
-				if isFkRecursionCall {
+				if taggedFkAction {
 					hasRuntimeFilter = false
 				}
 				if hasRuntimeFilter {

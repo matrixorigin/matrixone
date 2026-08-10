@@ -851,6 +851,76 @@ replace into t_replace_self_setnull_multi values (1, null), (2, 1);
 select * from t_replace_self_setnull_multi order by id;
 select count(*) from t_replace_self_setnull_multi where id = 2;
 drop table t_replace_self_setnull_multi;
+
+-- Recursive ON UPDATE keeps the legacy positional layout.
+drop table if exists t_replace_update_gc;
+drop table if exists t_replace_update_c;
+drop table if exists t_replace_update_p;
+create table t_replace_update_p(id int primary key);
+create table t_replace_update_c(
+  id int primary key,
+  foreign key(id) references t_replace_update_p(id) on update cascade
+);
+create table t_replace_update_gc(
+  id int primary key,
+  foreign key(id) references t_replace_update_c(id) on update cascade
+);
+insert into t_replace_update_p values (1);
+insert into t_replace_update_c values (1);
+insert into t_replace_update_gc values (1);
+update t_replace_update_p set id = 2 where id = 1;
+select (select id from t_replace_update_p) p,
+       (select id from t_replace_update_c) c,
+       (select id from t_replace_update_gc) gc;
+drop table t_replace_update_gc;
+drop table t_replace_update_c;
+drop table t_replace_update_p;
+
+-- FK-off REPLACE does not run ordered self actions.
+drop table if exists t_replace_checks_off;
+create table t_replace_checks_off(
+  id int primary key,
+  pid int,
+  foreign key(pid) references t_replace_checks_off(id) on delete set null
+);
+insert into t_replace_checks_off values (1, null), (2, 1), (3, 2);
+set foreign_key_checks = 0;
+replace into t_replace_checks_off values (2, 1), (1, null);
+set foreign_key_checks = 1;
+select * from t_replace_checks_off order by id;
+drop table t_replace_checks_off;
+
+-- The ordered source is materialized once and works for REPLACE SELECT.
+drop sequence if exists t_replace_ordered_seq;
+create sequence t_replace_ordered_seq start with 100;
+drop table if exists t_replace_volatile;
+create table t_replace_volatile(
+  id bigint primary key,
+  pid bigint,
+  foreign key(pid) references t_replace_volatile(id) on delete set null
+);
+replace into t_replace_volatile values
+  (nextval('t_replace_ordered_seq'), null),
+  (nextval('t_replace_ordered_seq'), null);
+select currval('t_replace_ordered_seq');
+drop table t_replace_volatile;
+drop sequence t_replace_ordered_seq;
+
+drop table if exists t_replace_select_source;
+drop table if exists t_replace_select_setnull;
+create table t_replace_select_setnull(
+  id int primary key,
+  pid int,
+  foreign key(pid) references t_replace_select_setnull(id) on delete set null
+);
+create table t_replace_select_source(ord int, id int, pid int);
+insert into t_replace_select_setnull values (1, null), (2, 1), (3, 2);
+insert into t_replace_select_source values (1, 2, 1), (2, 1, null);
+replace into t_replace_select_setnull
+  select id, pid from t_replace_select_source order by ord;
+select * from t_replace_select_setnull order by id;
+drop table t_replace_select_source;
+drop table t_replace_select_setnull;
 create table t_replace_self_setnull_multi(
   id int primary key,
   pid int,

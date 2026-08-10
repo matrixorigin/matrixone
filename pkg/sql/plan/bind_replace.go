@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/internal/materialized"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 )
@@ -56,130 +57,203 @@ func (builder *QueryBuilder) bindReplace(stmt *tree.Replace, bindCtx *BindContex
 	if err != nil {
 		return 0, err
 	}
-	if values, ok := stmt.Rows.Select.(*tree.ValuesClause); ok && len(values.Rows) > 1 && hasSelfReferentialSetNull(tableDef) {
-		if err = builder.applyOrderedSelfSetNullToValues(lastNodeID, tableDef, colName2Idx); err != nil {
+	fkChecksEnabled, err := IsForeignKeyChecksEnabled(builder.compCtx)
+	if err != nil {
+		return 0, err
+	}
+	if fkChecksEnabled {
+		lastNodeID, err = builder.applyOrderedSelfReferentialReplaceActions(
+			bindCtx, lastNodeID, tableDef, colName2Idx)
+		if err != nil {
 			return 0, err
 		}
 	}
-
 	return builder.appendDedupAndMultiUpdateNodesForBindReplace(
 		bindCtx, dmlCtx, lastNodeID, colName2Idx, skipUniqueIdx, irregularIndexes)
 }
 
-func hasSelfReferentialSetNull(tableDef *plan.TableDef) bool {
+// applyOrderedSelfReferentialReplaceActions applies the part of self-referencing
+// CASCADE/SET NULL semantics that depends on the order of rows produced by the
+// REPLACE source. The input row image is materialized before it is referenced a
+// second time, so volatile expressions and parameters are evaluated exactly once.
+// For every row, only a later replacement row can act as its parent replacement.
+func (builder *QueryBuilder) applyOrderedSelfReferentialReplaceActions(
+	bindCtx *BindContext,
+	lastNodeID int32,
+	tableDef *plan.TableDef,
+	colName2Idx map[string]int32,
+) (int32, error) {
+	var selfActions []*plan.ForeignKeyDef
 	for _, fk := range tableDef.Fkeys {
-		if fk.ForeignTbl == 0 && fk.OnDelete == plan.ForeignKeyDef_SET_NULL {
-			return true
+		if fk.ForeignTbl == 0 &&
+			(fk.OnDelete == plan.ForeignKeyDef_CASCADE || fk.OnDelete == plan.ForeignKeyDef_SET_NULL) {
+			selfActions = append(selfActions, fk)
 		}
 	}
-	return false
-}
-
-func (builder *QueryBuilder) applyOrderedSelfSetNullToValues(
-	lastNodeID int32, tableDef *plan.TableDef, colName2Idx map[string]int32,
-) error {
-	valueScanID := lastNodeID
-	for builder.qry.Nodes[valueScanID].NodeType != plan.Node_VALUE_SCAN {
-		node := builder.qry.Nodes[valueScanID]
-		if len(node.Children) != 1 {
-			return moerr.NewInternalError(
-				builder.GetContext(), "multi-row REPLACE VALUES source is unavailable")
-		}
-		valueScanID = node.Children[0]
-	}
-	rowset := builder.qry.Nodes[valueScanID].RowsetData
-	if rowset == nil || rowset.RowCount < 2 {
-		return nil
+	if len(selfActions) == 0 {
+		return lastNodeID, nil
 	}
 
-	original := make([][]*plan.Expr, len(rowset.Cols))
-	for colPos, col := range rowset.Cols {
-		original[colPos] = make([]*plan.Expr, len(col.Data))
-		for rowPos, value := range col.Data {
-			original[colPos][rowPos] = DeepCopyExpr(value.Expr)
-		}
+	inputNode := builder.qry.Nodes[lastNodeID]
+	if len(inputNode.BindingTags) != 1 {
+		return 0, moerr.NewInternalError(
+			builder.GetContext(), "self-referencing REPLACE source has no binding tag")
 	}
-	colIDToName := make(map[uint64]string, len(tableDef.Cols))
+	inputTag := inputNode.BindingTags[0]
+	rowNumberFunc, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "row_number", nil)
+	if err != nil {
+		return 0, err
+	}
+	windowTag := builder.genNewBindTag()
+	windowID := builder.appendNode(&plan.Node{
+		NodeType:  plan.Node_WINDOW,
+		Children:  []int32{lastNodeID},
+		WindowIdx: 0,
+		WinSpecList: []*plan.Expr{{
+			Typ: rowNumberFunc.Typ,
+			Expr: &plan.Expr_W{W: &plan.WindowSpec{
+				WindowFunc: rowNumberFunc,
+				Name:       "row_number",
+				Frame: &plan.FrameClause{
+					Type:  plan.FrameClause_ROWS,
+					Start: &plan.FrameBound{Type: plan.FrameBound_PRECEDING, UnBounded: true},
+					End:   &plan.FrameBound{Type: plan.FrameBound_FOLLOWING, UnBounded: true},
+				},
+			}},
+		}},
+		BindingTags: []int32{windowTag},
+	}, bindCtx)
+
+	rowWidth := len(inputNode.ProjectList)
+	orderedTag := builder.genNewBindTag()
+	orderedProjection := getProjectionByLastNodeWithTag(builder, lastNodeID, inputTag)
+	orderedProjection = append(orderedProjection, &plan.Expr{
+		Typ: rowNumberFunc.Typ,
+		Expr: &plan.Expr_Col{Col: &plan.ColRef{
+			RelPos: windowTag, ColPos: 0, Name: "__mo_replace_row_number",
+		}},
+	})
+	lastNodeID = builder.appendNode(&plan.Node{
+		NodeType: plan.Node_PROJECT, Children: []int32{windowID},
+		ProjectList: orderedProjection, BindingTags: []int32{orderedTag},
+	}, bindCtx)
+
+	materialize := func(nodeID, tag int32) (int32, int32) {
+		sinkID := appendSinkNodeWithTag(builder, bindCtx, nodeID, tag)
+		// Each ordered action compares two scans of the same row image. Use the
+		// replayable materialized sink contract so both consumers receive data
+		// and terminal signals independently.
+		builder.qry.Nodes[sinkID].ExtraOptions = materialized.CTESinkOption
+		if builder.preserveSinkProjection == nil {
+			builder.preserveSinkProjection = make(map[int32]struct{})
+		}
+		builder.preserveSinkProjection[sinkID] = struct{}{}
+		step := builder.appendStep(sinkID)
+		return step, tag
+	}
+	step, currentTag := materialize(lastNodeID, orderedTag)
+
+	colIDToPos := make(map[uint64]int32, len(tableDef.Cols))
 	for _, col := range tableDef.Cols {
-		colIDToName[col.ColId] = col.Name
+		if pos, ok := colName2Idx[tableDef.Name+"."+col.Name]; ok {
+			colIDToPos[col.ColId] = pos
+		}
 	}
+	ordinalPos := int32(rowWidth)
+	ordinalType := rowNumberFunc.Typ
 
-	for _, fk := range tableDef.Fkeys {
-		if fk.ForeignTbl != 0 || fk.OnDelete != plan.ForeignKeyDef_SET_NULL {
-			continue
-		}
-		childPositions := make([]int32, len(fk.Cols))
-		parentPositions := make([]int32, len(fk.ForeignCols))
-		for i := range fk.Cols {
-			var ok bool
-			childName := colIDToName[fk.Cols[i]]
-			parentName := colIDToName[fk.ForeignCols[i]]
-			childPositions[i], ok = colName2Idx[tableDef.Name+"."+childName]
-			if !ok {
-				return moerr.NewInternalErrorf(builder.GetContext(),
-					"self-referencing SET NULL column %s is unavailable", childName)
+	for _, fk := range selfActions {
+		leftTag := builder.genNewBindTag()
+		rightTag := builder.genNewBindTag()
+		leftID := builder.appendTaggedSinkScan(bindCtx, step, leftTag)
+		rightID := builder.appendTaggedSinkScan(bindCtx, step, rightTag)
+
+		joinPreds := make([]*plan.Expr, 0, len(fk.Cols)+1)
+		for i, childColID := range fk.Cols {
+			childPos, childOK := colIDToPos[childColID]
+			parentPos, parentOK := colIDToPos[fk.ForeignCols[i]]
+			if !childOK || !parentOK || int(childPos) >= rowWidth || int(parentPos) >= rowWidth {
+				return 0, moerr.NewInternalError(
+					builder.GetContext(), "self-referencing REPLACE column mapping is incomplete")
 			}
-			parentPositions[i], ok = colName2Idx[tableDef.Name+"."+parentName]
-			if !ok {
-				return moerr.NewInternalErrorf(builder.GetContext(),
-					"self-referencing SET NULL parent column %s is unavailable", parentName)
+			childExpr := &plan.Expr{Typ: inputNode.ProjectList[childPos].Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{
+				RelPos: leftTag, ColPos: childPos,
+			}}}
+			parentExpr := &plan.Expr{Typ: inputNode.ProjectList[parentPos].Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{
+				RelPos: rightTag, ColPos: parentPos,
+			}}}
+			pred, bindErr := BindFuncExprImplByPlanExpr(
+				builder.GetContext(), "=", []*plan.Expr{childExpr, parentExpr})
+			if bindErr != nil {
+				return 0, bindErr
+			}
+			joinPreds = append(joinPreds, pred)
+		}
+		leftOrdinal := &plan.Expr{Typ: ordinalType, Expr: &plan.Expr_Col{Col: &plan.ColRef{
+			RelPos: leftTag, ColPos: ordinalPos,
+		}}}
+		rightOrdinal := &plan.Expr{Typ: ordinalType, Expr: &plan.Expr_Col{Col: &plan.ColRef{
+			RelPos: rightTag, ColPos: ordinalPos,
+		}}}
+		laterPred, bindErr := BindFuncExprImplByPlanExpr(
+			builder.GetContext(), "<", []*plan.Expr{leftOrdinal, rightOrdinal})
+		if bindErr != nil {
+			return 0, bindErr
+		}
+		joinPreds = append(joinPreds, laterPred)
+
+		var marker *plan.Expr
+		if fk.OnDelete == plan.ForeignKeyDef_CASCADE {
+			lastNodeID = builder.appendNode(&plan.Node{
+				NodeType: plan.Node_JOIN, Children: []int32{leftID, rightID},
+				JoinType: plan.Node_ANTI, OnList: joinPreds,
+			}, bindCtx)
+		} else {
+			lastNodeID, marker, err = builder.insertMarkJoin(
+				leftID, rightID, joinPreds, nil, false, bindCtx)
+			if err != nil {
+				return 0, err
 			}
 		}
 
-		for childRow := int32(0); childRow < rowset.RowCount-1; childRow++ {
-			var laterParentMatch *plan.Expr
-			for parentRow := childRow + 1; parentRow < rowset.RowCount; parentRow++ {
-				var rowMatch *plan.Expr
-				for i := range childPositions {
-					childPos := childPositions[i]
-					parentPos := parentPositions[i]
-					if childPos < 0 || parentPos < 0 || int(childPos) >= len(original) ||
-						int(parentPos) >= len(original) || int(childRow) >= len(original[childPos]) ||
-						int(parentRow) >= len(original[parentPos]) {
-						return moerr.NewInternalError(
-							builder.GetContext(), "self-referencing SET NULL VALUES mapping is incomplete")
-					}
-					equal, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*plan.Expr{
-						DeepCopyExpr(original[childPos][childRow]),
-						DeepCopyExpr(original[parentPos][parentRow]),
-					})
-					if err != nil {
-						return err
-					}
-					if rowMatch == nil {
-						rowMatch = equal
-					} else {
-						rowMatch, err = BindFuncExprImplByPlanExpr(
-							builder.GetContext(), "and", []*plan.Expr{rowMatch, equal})
-						if err != nil {
-							return err
-						}
-					}
-				}
-				var err error
-				if laterParentMatch == nil {
-					laterParentMatch = rowMatch
-				} else {
-					laterParentMatch, err = BindFuncExprImplByPlanExpr(
-						builder.GetContext(), "or", []*plan.Expr{laterParentMatch, rowMatch})
-					if err != nil {
-						return err
-					}
-				}
+		nextTag := builder.genNewBindTag()
+		nextProjection := make([]*plan.Expr, rowWidth+1)
+		for pos := range nextProjection {
+			typ := ordinalType
+			if pos < rowWidth {
+				typ = inputNode.ProjectList[pos].Typ
 			}
-			for _, childPos := range childPositions {
-				current := rowset.Cols[childPos].Data[childRow].Expr
-				nullExpr := &plan.Expr{Typ: current.Typ, Expr: &plan.Expr_Lit{Lit: &plan.Literal{Isnull: true}}}
-				updated, err := BindFuncExprImplByPlanExpr(
-					builder.GetContext(), "if", []*plan.Expr{DeepCopyExpr(laterParentMatch), nullExpr, current})
+			nextProjection[pos] = &plan.Expr{Typ: typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{
+				RelPos: leftTag, ColPos: int32(pos),
+			}}}
+		}
+		if marker != nil {
+			for _, childColID := range fk.Cols {
+				childPos := colIDToPos[childColID]
+				nullExpr := &plan.Expr{Typ: nextProjection[childPos].Typ, Expr: &plan.Expr_Lit{
+					Lit: &plan.Literal{Isnull: true},
+				}}
+				nextProjection[childPos], err = BindFuncExprImplByPlanExpr(
+					builder.GetContext(), "if", []*plan.Expr{DeepCopyExpr(marker), nullExpr, nextProjection[childPos]})
 				if err != nil {
-					return err
+					return 0, err
 				}
-				rowset.Cols[childPos].Data[childRow].Expr = updated
 			}
 		}
+		lastNodeID = builder.appendNode(&plan.Node{
+			NodeType: plan.Node_PROJECT, Children: []int32{lastNodeID},
+			ProjectList: nextProjection, BindingTags: []int32{nextTag},
+		}, bindCtx)
+		step, currentTag = materialize(lastNodeID, nextTag)
 	}
-	return nil
+
+	lastNodeID = builder.appendTaggedSinkScan(bindCtx, step, currentTag)
+	finalTag := builder.genNewBindTag()
+	finalProjection := getProjectionByLastNodeWithTag(builder, lastNodeID, currentTag)[:rowWidth]
+	return builder.appendNode(&plan.Node{
+		NodeType: plan.Node_PROJECT, Children: []int32{lastNodeID},
+		ProjectList: finalProjection, BindingTags: []int32{finalTag},
+	}, bindCtx), nil
 }
 
 func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
