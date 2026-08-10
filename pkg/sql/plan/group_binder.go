@@ -31,33 +31,77 @@ func normalizeGroupByName(name *tree.UnresolvedName) {
 	}
 }
 
-// canonicalGroupByAstKey folds only identifiers and function names through
-// their comparison form. String literals and all other case-sensitive values
-// retain their original spelling.
-func canonicalGroupByAstKey(astExpr tree.Expr) string {
+func resolveGroupByColumnIdentity(ctx *BindContext, name *tree.UnresolvedName) (*Binding, int32, bool) {
+	if ctx == nil || name == nil || name.Star || name.NumParts == 0 {
+		return nil, 0, false
+	}
+
+	col := name.ColName()
+	var binding *Binding
+	if table := name.TblName(); table != "" {
+		binding = ctx.bindingByTable[table]
+		if binding == nil && name.DbName() != "" {
+			binding = ctx.bindingByTable[name.DbName()+"."+table]
+		}
+	} else {
+		binding = ctx.bindingByCol[col]
+	}
+	if binding == nil {
+		return nil, 0, false
+	}
+
+	colPos := binding.FindColumn(col)
+	if colPos == NotFound || colPos == AmbiguousName {
+		return nil, 0, false
+	}
+	return binding, colPos, true
+}
+
+// canonicalGroupByAstKey folds identifiers and function names through their
+// comparison form. Resolved columns are represented by relation tag and column
+// position, so col, tbl.col, and db.tbl.col match only when they resolve to the
+// same source column. String literals and all other case-sensitive values retain
+// their original spelling.
+func canonicalGroupByAstKey(ctx *BindContext, astExpr tree.Expr) string {
 	normalized := cloneTreeExpr(astExpr)
+	var resolvedColumns strings.Builder
+	functionNames := make(map[*tree.UnresolvedName]struct{})
 	walkGroupingSetOrderByExpr(normalized, func(expr tree.Expr) bool {
 		switch node := expr.(type) {
 		case *tree.UnresolvedName:
 			normalizeGroupByName(node)
+			if _, isFunctionName := functionNames[node]; isFunctionName {
+				return true
+			}
+			if binding, colPos, ok := resolveGroupByColumnIdentity(ctx, node); ok {
+				node.NumParts = 1
+				node.CStrParts = tree.CStrParts{}
+				node.CStrParts[0] = tree.NewCStr("__mo_resolved_group_by_column", 0)
+				resolvedColumns.WriteByte('#')
+				resolvedColumns.WriteString(strconv.FormatInt(int64(binding.tag), 10))
+				resolvedColumns.WriteByte(':')
+				resolvedColumns.WriteString(strconv.FormatInt(int64(colPos), 10))
+				resolvedColumns.WriteByte(';')
+			}
 		case *tree.FuncExpr:
 			if node.FuncName != nil {
 				node.FuncName = tree.NewCStr(node.FuncName.Compare(), 0)
 			}
 			if name, ok := node.Func.FunctionReference.(*tree.UnresolvedName); ok {
 				normalizeGroupByName(name)
+				functionNames[name] = struct{}{}
 			}
 		}
 		return true
 	})
-	return semanticAstKey(normalized)
+	return semanticAstKey(normalized) + "\x00resolved-columns" + resolvedColumns.String()
 }
 
 func lookupGroupByAst(ctx *BindContext, astExpr tree.Expr, astKey string) (int32, bool) {
 	if pos, ok := ctx.groupByAst[astKey]; ok {
 		return pos, true
 	}
-	pos, ok := ctx.groupByCanonicalAst[canonicalGroupByAstKey(astExpr)]
+	pos, ok := ctx.groupByCanonicalAst[canonicalGroupByAstKey(ctx, astExpr)]
 	return pos, ok
 }
 
@@ -140,7 +184,7 @@ func (b *GroupBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool) (*pl
 			}
 			pos := int32(len(b.ctx.groups))
 			b.ctx.groupByAst[astStr] = pos
-			canonicalKey := canonicalGroupByAstKey(astExpr)
+			canonicalKey := canonicalGroupByAstKey(b.ctx, astExpr)
 			if _, ok := b.ctx.groupByCanonicalAst[canonicalKey]; !ok {
 				b.ctx.groupByCanonicalAst[canonicalKey] = pos
 			}

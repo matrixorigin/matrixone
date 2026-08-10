@@ -910,8 +910,13 @@ func TestQueryBuilderBuildRollupOrderByGroupingExpression(t *testing.T) {
 }
 
 func TestQueryBuilderBuildRollupWithGroupingFunctionExpressions(t *testing.T) {
-	tests := []string{
-		`select year(o.a) as order_year,
+	tests := []struct {
+		name string
+		sql  string
+	}{
+		{
+			name: "grouping expressions match case-insensitively",
+			sql: `select year(o.a) as order_year,
 		month(o.a) as order_month,
 		o.b,
 		count(*) as total_sales,
@@ -921,18 +926,42 @@ func TestQueryBuilderBuildRollupWithGroupingFunctionExpressions(t *testing.T) {
 		from select_test.bind_select as o
 		group by year(o.a), month(o.a), o.b with rollup
 		order by order_year, order_month, o.b`,
-		`select grouping(year(o.a)), grouping(month(o.a)), grouping(o.b), count(*)
+		},
+		{
+			name: "group by expressions match case-insensitively",
+			sql: `select grouping(year(o.a)), grouping(month(o.a)), grouping(o.b), count(*)
 		from select_test.bind_select as o
 		group by YEAR(O.A), MONTH(O.A), O.B with rollup`,
+		},
+		{
+			name: "database-qualified grouping argument matches unqualified group by",
+			sql: `select grouping(select_test.bind_select.a), count(*)
+		from select_test.bind_select
+		group by a with rollup`,
+		},
+		{
+			name: "unqualified grouping argument matches database-qualified group by",
+			sql: `select grouping(a), count(*)
+		from select_test.bind_select
+		group by select_test.bind_select.a with rollup`,
+		},
+		{
+			name: "nested expression matches across qualification depth",
+			sql: `select grouping(year(select_test.bind_select.a)), count(*)
+		from select_test.bind_select
+		group by year(a) with rollup`,
+		},
 	}
 
-	for _, sql := range tests {
-		stmts, err := parsers.Parse(context.TODO(), dialect.MYSQL, sql, 1)
-		require.NoError(t, err)
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			stmts, err := parsers.Parse(context.TODO(), dialect.MYSQL, test.sql, 1)
+			require.NoError(t, err)
 
-		queryPlan, err := BuildPlan(NewMockCompilerContext(true), stmts[0], false)
-		require.NoError(t, err)
-		require.NotNil(t, queryPlan.GetQuery())
+			queryPlan, err := BuildPlan(NewMockCompilerContext(true), stmts[0], false)
+			require.NoError(t, err)
+			require.NotNil(t, queryPlan.GetQuery())
+		})
 	}
 
 	stmts, err := parsers.Parse(
@@ -987,6 +1016,13 @@ func TestQueryBuilderBuildRollupRejectsNonGroupByGroupingArguments(t *testing.T)
 				from select_test.bind_select
 				group by a, b with rollup
 				order by grouping(a+b)`,
+			errorContains: "Argument #1 of GROUPING function is not in GROUP BY",
+		},
+		{
+			name: "same column name from a different relation",
+			sql: `select grouping(t1.a), count(*)
+				from select_test.bind_select as t1, select_test.bind_select as t2
+				group by t2.a with rollup`,
 			errorContains: "Argument #1 of GROUPING function is not in GROUP BY",
 		},
 	}
