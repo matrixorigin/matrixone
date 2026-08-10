@@ -63,14 +63,14 @@ func TestUpgradeEntries(t *testing.T) {
 	require.Equal(t, "CHECK_CONSTRAINTS", checkConstraints.TableName)
 	require.Equal(t, versions.CREATE_VIEW, checkConstraints.UpgType)
 	require.Equal(t, sysview.InformationSchemaCheckConstraintsDDL, checkConstraints.UpgSql)
-	require.Equal(t, int64(defines.MORPCVersion14), checkConstraints.RequiredProtocolVersion)
+	require.Equal(t, int64(defines.MORPCVersion15), checkConstraints.RequiredProtocolVersion)
 	require.Contains(t, strings.ToLower(checkConstraints.PreSql), "drop view if exists information_schema.check_constraints")
 	tableConstraints := tenantUpgEntries[10]
 	require.Equal(t, sysview.InformationDBConst, tableConstraints.Schema)
 	require.Equal(t, "TABLE_CONSTRAINTS", tableConstraints.TableName)
 	require.Equal(t, versions.MODIFY_VIEW, tableConstraints.UpgType)
 	require.Equal(t, sysview.InformationSchemaTableConstraintsDDL, tableConstraints.UpgSql)
-	require.Equal(t, int64(defines.MORPCVersion14), tableConstraints.RequiredProtocolVersion)
+	require.Equal(t, int64(defines.MORPCVersion15), tableConstraints.RequiredProtocolVersion)
 	require.Contains(t, strings.ToLower(tableConstraints.PreSql), "drop view if exists information_schema.table_constraints")
 }
 

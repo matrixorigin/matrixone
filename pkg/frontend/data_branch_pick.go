@@ -615,6 +615,12 @@ func materializeCompositeValuesUnified(
 		return nil, moerr.NewInternalErrorNoCtxf("failed to encode composite keys: %v", encErr)
 	}
 	defer encodedVec.Free(mp)
+	pkType := tblStuff.def.colTypes[tblStuff.def.pkColIdx]
+	// serial() is an opaque-binary expression, while an upgraded table may
+	// still expose the legacy zero identity on its persisted composite-key
+	// column. Match the table's physical key type before initializing/probing
+	// the hashmap; the encoded bytes themselves are identical.
+	*encodedVec.GetType() = pkType
 
 	// Sort the encoded vector (lexicographic order preserves composite key ordering).
 	encodedVec.InplaceSort()
@@ -625,7 +631,6 @@ func materializeCompositeValuesUnified(
 	}
 
 	// Build ZoneMap segments.
-	pkType := tblStuff.def.colTypes[tblStuff.def.pkColIdx]
 	if canBuildSegments {
 		pkFilter = buildPKFilterFromVec(encodedVec, pkType, tblStuff.def.pkSeqnum)
 	}
@@ -918,6 +923,7 @@ func materializeSubqueryUnified(
 						sqlRet.Close()
 						return nil, moerr.NewInternalErrorNoCtxf("failed to encode composite keys: %v", err)
 					}
+					*pkVec.GetType() = pkType
 					ownedPK = true
 				} else {
 					pkVec, ownedPK, err = coercePickKeyVectorToType(ses, bat.Vecs[0], pkType, mp)

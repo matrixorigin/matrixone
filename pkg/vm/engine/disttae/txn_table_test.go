@@ -96,6 +96,18 @@ func TestTxnTableGetTableDefKeepsTemporarySessionStateContextual(t *testing.T) {
 	require.False(t, tableDef.IsTemporary)
 }
 
+func TestTxnTableGetTableDefRestoresDefaultCharset(t *testing.T) {
+	table := &txnTable{
+		db: &txnDatabase{},
+		extraInfo: &api.SchemaExtra{
+			DefaultCharset: uint32(types.CharsetUTF8MB4Bin),
+		},
+	}
+	tableDef := table.GetTableDef(context.Background())
+	require.NotNil(t, tableDef)
+	require.Equal(t, uint32(types.CharsetUTF8MB4Bin), tableDef.DefaultCharset)
+}
+
 func makeBatchForTest(
 	mp *mpool.MPool,
 	ints ...int64,

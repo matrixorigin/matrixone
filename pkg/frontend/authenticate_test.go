@@ -462,12 +462,12 @@ func Test_createTablesInInformationSchemaOfGeneralTenant_UsesProtocolAwareViews(
 	}{
 		{
 			name:            "mixed version protocol uses legacy table constraints",
-			protocol:        defines.MORPCVersion13,
+			protocol:        defines.MORPCVersion14,
 			wantLegacyTable: true,
 		},
 		{
 			name:              "latest protocol uses check constraints views",
-			protocol:          defines.MORPCVersion14,
+			protocol:          defines.MORPCVersion15,
 			wantCheckView:     true,
 			wantLatestTable:   true,
 			wantCheckFunction: true,

@@ -137,7 +137,7 @@ func (tableFunction *TableFunction) Prepare(proc *process.Process) error {
 	retSchema := make([]types.Type, len(tblArg.Rets))
 	for i := range tblArg.Rets {
 		typ := tblArg.Rets[i].Typ
-		retSchema[i] = types.New(types.T(typ.Id), typ.Width, typ.Scale)
+		retSchema[i] = types.NewWithCharset(types.T(typ.Id), typ.Width, typ.Scale, uint8(typ.Charset))
 	}
 	tblArg.ctr.retSchema = retSchema
 
