@@ -180,13 +180,13 @@ invalid input: table_changes table name must be a non-empty string literal
 select * from table_changes('table_changes_db', 'ordinary_single_pk', '2-0', '1-0') c;
 invalid input: table_changes until must be greater than after
 select * from table_changes('table_changes_db', 'ordinary_single_pk', 'not-a-watermark', '1-0') c;
-invalid input: invalid table_changes after: timestamp must use physical-logical format
+invalid input: invalid table_changes after: invalid input: timestamp must use physical-logical format
 select * from table_changes('table_changes_db', 'ordinary_single_pk', '', 'not-a-watermark') c;
-invalid input: invalid table_changes until: timestamp must use physical-logical format
+invalid input: invalid table_changes until: invalid input: timestamp must use physical-logical format
 select * from table_changes('table_changes_db', 'ordinary_single_pk', NULL, '1-0') c;
-invalid input: table_changes after cannot be NULL
+invalid input: table_changes after must be a string
 select * from table_changes('table_changes_db', 'ordinary_single_pk', '', NULL) c;
-invalid input: table_changes until cannot be NULL
+invalid input: table_changes until must be a string
 select * from table_changes(
 'table_changes_db', 'ordinary_single_pk', @ordinary_after,
 '9223372036854775807-4294967295'
