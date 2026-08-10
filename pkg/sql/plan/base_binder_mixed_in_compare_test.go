@@ -129,26 +129,32 @@ func TestMixedStringNumericNotInBindsAndFoldsToFalse(t *testing.T) {
 func TestNumericInStringLiteralKeepsExactNumericComparison(t *testing.T) {
 	for _, tc := range []struct {
 		name     string
-		column   types.T
+		column   types.Type
 		value    string
 		expected types.T
 	}{
 		{
 			name:     "int64",
-			column:   types.T_int64,
+			column:   types.T_int64.ToType(),
 			value:    "9223372036854775806",
 			expected: types.T_int64,
 		},
 		{
+			name:     "decimal128",
+			column:   types.New(types.T_decimal128, 20, 4),
+			value:    "9007199254740992.0001",
+			expected: types.T_decimal128,
+		},
+		{
 			name:     "decimal256",
-			column:   types.T_decimal256,
+			column:   types.New(types.T_decimal256, 40, 0),
 			value:    "9999999999999999999999999999999999999998",
 			expected: types.T_decimal256,
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			left := &planpb.Expr{
-				Typ:  planpb.Type{Id: int32(tc.column)},
+				Typ:  makePlan2Type(&tc.column),
 				Expr: &planpb.Expr_Col{Col: &planpb.ColRef{RelPos: 0, ColPos: 0}},
 			}
 			rightList := &planpb.Expr{

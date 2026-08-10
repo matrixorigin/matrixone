@@ -95,30 +95,21 @@ func TestPreparedDecimalBinaryComparisonsDeriveParamType(t *testing.T) {
 	}
 }
 
-func TestDecimalStringComparisonsKeepMySQLCoercion(t *testing.T) {
+func TestDecimalStringColumnComparisonsKeepMySQLCoercion(t *testing.T) {
 	ctx := context.Background()
 	decimalType := types.New(types.T_decimal128, 20, 4)
+	stringColumn := &planpb.Expr{
+		Typ:  planpb.Type{Id: int32(types.T_varchar)},
+		Expr: &planpb.Expr_Col{Col: &planpb.ColRef{RelPos: 0, ColPos: 1}},
+	}
 
-	for _, tc := range []struct {
-		name  string
-		right *planpb.Expr
-	}{
-		{name: "string literal", right: makePlan2StringConstExprWithType("9007199254740992.0001")},
-		{name: "string column", right: &planpb.Expr{
-			Typ:  planpb.Type{Id: int32(types.T_varchar)},
-			Expr: &planpb.Expr_Col{Col: &planpb.ColRef{RelPos: 0, ColPos: 1}},
-		}},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			expr, err := BindFuncExprImplByPlanExpr(ctx, "<=>", []*planpb.Expr{
-				makePreparedDecimalComparisonColumn(decimalType),
-				DeepCopyExpr(tc.right),
-			})
-			require.NoError(t, err)
-			for _, arg := range expr.GetF().Args {
-				require.Equal(t, int32(types.T_float64), arg.Typ.Id)
-			}
-		})
+	expr, err := BindFuncExprImplByPlanExpr(ctx, "<=>", []*planpb.Expr{
+		makePreparedDecimalComparisonColumn(decimalType),
+		stringColumn,
+	})
+	require.NoError(t, err)
+	for _, arg := range expr.GetF().Args {
+		require.Equal(t, int32(types.T_float64), arg.Typ.Id)
 	}
 }
 

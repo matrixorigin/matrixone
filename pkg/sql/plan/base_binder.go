@@ -3379,6 +3379,9 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 	if listExpr, ok, err := bindSerialFuncOverExprList(ctx, name, args); ok || err != nil {
 		return listExpr, err
 	}
+	if err := normalizeDecimalStringLiteralComparisonArgs(ctx, name, args); err != nil {
+		return nil, err
+	}
 	if err := normalizeDecimalParamComparisonArgs(ctx, name, args); err != nil {
 		return nil, err
 	}
@@ -4510,10 +4513,78 @@ func integerMetadataWidth(oid types.T) int32 {
 	}
 }
 
+// A numeric string literal paired with DECIMAL64/128 has an exact numeric domain.
+// Resolve that domain before the generic string/numeric cast matrix selects
+// FLOAT64, which cannot distinguish adjacent DECIMAL values above 2^53. Keep
+// the original expression when it contains an explicit string cast, then cast
+// its result to the literal's natural DECIMAL type so the explicit cast still
+// executes and a peer with a narrower scale cannot truncate the boundary.
+func normalizeDecimalStringLiteralComparisonArgs(ctx context.Context, name string, args []*Expr) error {
+	switch name {
+	case "=", "<=>", "!=", "<>", "<", "<=", ">", ">=":
+		if len(args) != 2 {
+			return nil
+		}
+	default:
+		return nil
+	}
+
+	for stringPos, decimalPos := range []int{1, 0} {
+		decimalType := types.T(args[decimalPos].Typ.Id)
+		if decimalType != types.T_decimal64 && decimalType != types.T_decimal128 {
+			continue
+		}
+		value, ok := decimalStringLiteralValue(args[stringPos])
+		if !ok {
+			continue
+		}
+		if _, _, err := types.Parse128(value); err != nil {
+			if _, _, err = types.Parse256(value); err != nil {
+				continue
+			}
+		}
+
+		decimalExpr, err := makePlan2DecimalExprWithType(ctx, value)
+		if err != nil {
+			return err
+		}
+		if args[stringPos].GetLit() != nil {
+			args[stringPos] = decimalExpr
+			return nil
+		}
+		args[stringPos], err = appendCastBeforeExpr(ctx, args[stringPos], decimalExpr.Typ)
+		return err
+	}
+	return nil
+}
+
+// decimalStringLiteralValue recognizes only ordinary character-string
+// literals and cast chains rooted in one. Dynamic string expressions retain
+// the generic REAL comparison path. Binary literals are excluded because
+// their payload has numeric byte-string semantics rather than decimal text.
+func decimalStringLiteralValue(expr *Expr) (string, bool) {
+	if expr == nil || !isCharacterStringType(expr.Typ.Id) {
+		return "", false
+	}
+	if literal := expr.GetLit(); literal != nil {
+		value, ok := literal.Value.(*plan.Literal_Sval)
+		if !ok || literal.Isnull || literal.IsBin {
+			return "", false
+		}
+		return value.Sval, true
+	}
+
+	fn := expr.GetF()
+	if fn == nil || fn.Func == nil || fn.Func.GetObjName() != "cast" || len(fn.Args) != 2 {
+		return "", false
+	}
+	return decimalStringLiteralValue(fn.Args[0])
+}
+
 // A direct prepared parameter in a binary comparison derives its type from
 // the other operand. Preserve that contract for DECIMAL before the generic
-// string/numeric cast rules see the parameter's transport type (TEXT). Real
-// string expressions continue through the ordinary MySQL coercion path.
+// string/numeric cast rules see the parameter's transport type (TEXT).
+// Non-literal string expressions continue through ordinary coercion.
 func normalizeDecimalParamComparisonArgs(ctx context.Context, name string, args []*Expr) error {
 	switch name {
 	case "=", "<=>", "!=", "<>", "<", "<=", ">", ">=":

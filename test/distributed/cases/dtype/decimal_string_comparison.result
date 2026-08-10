@@ -1,0 +1,81 @@
+DROP DATABASE IF EXISTS decimal_string_comparison;
+CREATE DATABASE decimal_string_comparison;
+USE decimal_string_comparison;
+CREATE TABLE boundary_values (
+id INT PRIMARY KEY,
+d64 DECIMAL(18,2),
+d128 DECIMAL(20,4)
+);
+INSERT INTO boundary_values VALUES
+(1, NULL, NULL),
+(2, 9007199254740991.99, 9007199254740991.9999),
+(3, 9007199254740992.00, 9007199254740992.0000),
+(4, 9007199254740992.01, 9007199254740992.0001),
+(5, 9007199254740993.00, 9007199254740992.9999),
+(6, 9007199254740993.01, 9007199254740993.0000);
+SELECT GROUP_CONCAT(id ORDER BY id) AS eq_ids
+FROM boundary_values WHERE d128 = '9007199254740992.0001';
+➤ eq_ids[12,0,0]  𝄀
+4
+SELECT GROUP_CONCAT(id ORDER BY id) AS null_safe_eq_ids
+FROM boundary_values WHERE d128 <=> '9007199254740992.0001';
+➤ null_safe_eq_ids[12,0,0]  𝄀
+4
+SELECT GROUP_CONCAT(id ORDER BY id) AS ne_ids
+FROM boundary_values WHERE d128 <> '9007199254740992.0001';
+➤ ne_ids[12,0,0]  𝄀
+2,3,5,6
+SELECT GROUP_CONCAT(id ORDER BY id) AS lt_ids
+FROM boundary_values WHERE d128 < '9007199254740992.0001';
+➤ lt_ids[12,0,0]  𝄀
+2,3
+SELECT GROUP_CONCAT(id ORDER BY id) AS le_ids
+FROM boundary_values WHERE d128 <= '9007199254740992.0001';
+➤ le_ids[12,0,0]  𝄀
+2,3,4
+SELECT GROUP_CONCAT(id ORDER BY id) AS gt_ids
+FROM boundary_values WHERE d128 > '9007199254740992.0001';
+➤ gt_ids[12,0,0]  𝄀
+5,6
+SELECT GROUP_CONCAT(id ORDER BY id) AS ge_ids
+FROM boundary_values WHERE d128 >= '9007199254740992.0001';
+➤ ge_ids[12,0,0]  𝄀
+4,5,6
+SELECT GROUP_CONCAT(id ORDER BY id) AS reversed_eq_ids
+FROM boundary_values WHERE '9007199254740992.0001' = d128;
+➤ reversed_eq_ids[12,0,0]  𝄀
+4
+SELECT GROUP_CONCAT(id ORDER BY id) AS varchar_cast_eq_ids
+FROM boundary_values WHERE d128 <=> CAST('9007199254740992.0001' AS VARCHAR);
+➤ varchar_cast_eq_ids[12,0,0]  𝄀
+4
+SELECT GROUP_CONCAT(id ORDER BY id) AS decimal_cast_eq_ids
+FROM boundary_values WHERE d128 <=> CAST('9007199254740992.0001' AS DECIMAL(20,4));
+➤ decimal_cast_eq_ids[12,0,0]  𝄀
+4
+SELECT GROUP_CONCAT(id ORDER BY id) AS decimal64_eq_ids
+FROM boundary_values WHERE d64 = '9007199254740992.01';
+➤ decimal64_eq_ids[12,0,0]  𝄀
+4
+SELECT GROUP_CONCAT(id ORDER BY id) AS in_ids
+FROM boundary_values WHERE d128 IN ('9007199254740992.0001');
+➤ in_ids[12,0,0]  𝄀
+4
+SELECT GROUP_CONCAT(id ORDER BY id) AS not_in_ids
+FROM boundary_values WHERE d128 NOT IN ('9007199254740992.0001');
+➤ not_in_ids[12,0,0]  𝄀
+2,3,5,6
+CREATE TABLE scale_values (
+id INT PRIMARY KEY,
+d DECIMAL(10,4)
+);
+INSERT INTO scale_values VALUES (1, 1.2345), (2, 1.2346);
+SELECT GROUP_CONCAT(id ORDER BY id) AS higher_scale_lt_ids
+FROM scale_values WHERE d < '1.23456';
+➤ higher_scale_lt_ids[12,0,0]  𝄀
+1
+SELECT GROUP_CONCAT(id ORDER BY id) AS higher_scale_decimal_cast_lt_ids
+FROM scale_values WHERE d < CAST('1.23456' AS DECIMAL(10,5));
+➤ higher_scale_decimal_cast_lt_ids[12,0,0]  𝄀
+1
+DROP DATABASE decimal_string_comparison;
