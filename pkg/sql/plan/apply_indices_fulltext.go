@@ -424,6 +424,7 @@ func (builder *QueryBuilder) applyJoinFullTextIndices(nodeID int32, projNode *pl
 		curr_ftnode.TableDef.Cols[0].Typ.Id = pkType.Id
 		curr_ftnode.TableDef.Cols[0].Typ.Width = pkType.Width
 		curr_ftnode.TableDef.Cols[0].Typ.Scale = pkType.Scale
+		curr_ftnode.TableDef.Cols[0].Typ.Charset = pkType.Charset
 
 		if i > 0 {
 			// JOIN last_node_id and curr_ftnode_id
