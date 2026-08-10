@@ -155,8 +155,29 @@ func prepareQueryResultBatchForWrite(
 	mp *mpool.MPool,
 ) (*batch.Batch, func(), error) {
 	rowCount := bat.RowCount()
-	var writeBat *batch.Batch
-	var cloned []*vector.Vector
+	for i, vec := range bat.Vecs {
+		if vec == nil {
+			return nil, nil, moerr.NewInternalErrorNoCtxf(
+				"query result column %d is nil", i,
+			)
+		}
+		if vec.Length() != rowCount {
+			return normalizeQueryResultBatchForWrite(bat, mp, rowCount)
+		}
+	}
+	return bat, nil, nil
+}
+
+func normalizeQueryResultBatchForWrite(
+	bat *batch.Batch,
+	mp *mpool.MPool,
+	rowCount int,
+) (*batch.Batch, func(), error) {
+	writeBat := batch.NewWithSize(len(bat.Vecs))
+	writeBat.Attrs = bat.Attrs
+	copy(writeBat.Vecs, bat.Vecs)
+	writeBat.SetRowCount(rowCount)
+	cloned := make([]*vector.Vector, 0, len(bat.Vecs))
 
 	for i, vec := range bat.Vecs {
 		if vec == nil {
@@ -186,12 +207,6 @@ func prepareQueryResultBatchForWrite(
 				}
 			}
 		}
-		if writeBat == nil {
-			writeBat = batch.NewWithSize(len(bat.Vecs))
-			writeBat.Attrs = bat.Attrs
-			copy(writeBat.Vecs, bat.Vecs)
-			writeBat.SetRowCount(rowCount)
-		}
 		dup, err := vec.Dup(mp)
 		if err != nil {
 			freeQueryResultVectors(cloned, mp)
@@ -213,10 +228,6 @@ func prepareQueryResultBatchForWrite(
 			}
 		}
 		writeBat.Vecs[i] = dup
-	}
-
-	if writeBat == nil {
-		return bat, nil, nil
 	}
 	return writeBat, func() {
 		freeQueryResultVectors(cloned, mp)
