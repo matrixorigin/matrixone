@@ -257,6 +257,150 @@ SELECT * FROM multi_update_ignore_alias ORDER BY id;
 DEALLOCATE PREPARE multi_update_ignore_stmt;
 DROP TABLE multi_update_ignore_alias;
 
+DROP TABLE IF EXISTS multi_update_ignore_composite;
+CREATE TABLE multi_update_ignore_composite (
+    id INT PRIMARY KEY,
+    u INT,
+    v INT,
+    w INT,
+    UNIQUE KEY uk_uv_w (u, v, w)
+);
+INSERT INTO multi_update_ignore_composite VALUES (1, 1, 1, 1), (2, 2, 2, 1);
+UPDATE IGNORE multi_update_ignore_composite a
+JOIN multi_update_ignore_composite b ON a.id = b.id
+SET
+    a.u = 2,
+    b.v = 2
+WHERE a.id = 1;
+SELECT ROW_COUNT();
+SELECT * FROM multi_update_ignore_composite ORDER BY id;
+
+TRUNCATE TABLE multi_update_ignore_composite;
+INSERT INTO multi_update_ignore_composite VALUES (1, 1, 1, 1), (2, 2, 1, 1);
+UPDATE IGNORE multi_update_ignore_composite a
+JOIN multi_update_ignore_composite b ON a.id = b.id
+SET
+    a.u = 2,
+    b.v = 2
+WHERE a.id = 1;
+SELECT ROW_COUNT();
+SELECT * FROM multi_update_ignore_composite ORDER BY id;
+
+TRUNCATE TABLE multi_update_ignore_composite;
+INSERT INTO multi_update_ignore_composite VALUES (1, 1, 1, 1), (2, 2, 2, 2);
+UPDATE IGNORE multi_update_ignore_composite a
+JOIN multi_update_ignore_composite b ON a.id = b.id
+JOIN multi_update_ignore_composite c ON b.id = c.id
+SET
+    a.u = 2,
+    b.v = 2,
+    c.w = 2
+WHERE a.id = 1;
+SELECT ROW_COUNT();
+SELECT * FROM multi_update_ignore_composite ORDER BY id;
+
+TRUNCATE TABLE multi_update_ignore_composite;
+INSERT INTO multi_update_ignore_composite VALUES (1, 1, 1, 1), (2, 2, 2, 1);
+PREPARE multi_update_ignore_composite_stmt FROM
+    'UPDATE IGNORE multi_update_ignore_composite a JOIN multi_update_ignore_composite b ON a.id = b.id SET a.u = ?, b.v = ? WHERE a.id = 1';
+SET @multi_update_ignore_u = 2;
+SET @multi_update_ignore_v = 2;
+EXECUTE multi_update_ignore_composite_stmt USING @multi_update_ignore_u, @multi_update_ignore_v;
+SELECT ROW_COUNT();
+SELECT * FROM multi_update_ignore_composite ORDER BY id;
+DEALLOCATE PREPARE multi_update_ignore_composite_stmt;
+DROP TABLE multi_update_ignore_composite;
+
+DROP TABLE IF EXISTS multi_update_ignore_generated;
+CREATE TABLE multi_update_ignore_generated (
+    id INT PRIMARY KEY,
+    u INT,
+    v INT,
+    x INT,
+    gv INT GENERATED ALWAYS AS (u + v) STORED
+);
+INSERT INTO multi_update_ignore_generated (id, u, v, x) VALUES
+    (1, 1, 1, 0),
+    (2, 2, 2, 0);
+UPDATE IGNORE multi_update_ignore_generated a
+JOIN multi_update_ignore_generated b ON a.id = b.id
+SET
+    a.u = 10,
+    b.x = 1
+WHERE a.id = 1;
+SELECT ROW_COUNT();
+SELECT id, u, v, x, gv FROM multi_update_ignore_generated ORDER BY id;
+
+TRUNCATE TABLE multi_update_ignore_generated;
+INSERT INTO multi_update_ignore_generated (id, u, v, x) VALUES
+    (1, 1, 1, 0),
+    (2, 2, 2, 0);
+UPDATE IGNORE multi_update_ignore_generated a
+JOIN multi_update_ignore_generated b ON a.id = b.id
+SET
+    b.v = 20,
+    a.u = 10
+WHERE a.id = 1;
+SELECT ROW_COUNT();
+SELECT id, u, v, x, gv FROM multi_update_ignore_generated ORDER BY id;
+DROP TABLE multi_update_ignore_generated;
+
+DROP TABLE IF EXISTS multi_update_ignore_mixed_repeated;
+DROP TABLE IF EXISTS multi_update_ignore_mixed_singleton;
+CREATE TABLE multi_update_ignore_mixed_repeated (
+    id INT PRIMARY KEY,
+    u INT UNIQUE,
+    x INT,
+    y INT
+);
+CREATE TABLE multi_update_ignore_mixed_singleton (id INT PRIMARY KEY, v INT);
+INSERT INTO multi_update_ignore_mixed_repeated VALUES (1, 1, 0, 0), (2, 2, 0, 0);
+INSERT INTO multi_update_ignore_mixed_singleton VALUES (1, 0), (2, 0);
+UPDATE IGNORE multi_update_ignore_mixed_repeated a
+JOIN multi_update_ignore_mixed_repeated b ON a.id = b.id
+JOIN multi_update_ignore_mixed_singleton c ON c.id = a.id
+SET
+    a.u = a.u + 1,
+    b.x = b.x + 1,
+    c.v = c.v + 1;
+SELECT ROW_COUNT();
+SELECT * FROM multi_update_ignore_mixed_repeated ORDER BY id;
+SELECT * FROM multi_update_ignore_mixed_singleton ORDER BY id;
+
+TRUNCATE TABLE multi_update_ignore_mixed_repeated;
+TRUNCATE TABLE multi_update_ignore_mixed_singleton;
+INSERT INTO multi_update_ignore_mixed_repeated VALUES (1, 1, 0, 0), (2, 2, 0, 0);
+INSERT INTO multi_update_ignore_mixed_singleton VALUES (1, 0), (2, 0);
+UPDATE IGNORE multi_update_ignore_mixed_repeated a
+JOIN multi_update_ignore_mixed_repeated b ON a.id = b.id
+JOIN multi_update_ignore_mixed_singleton c ON c.id = a.id
+SET
+    a.x = a.x + 1,
+    b.u = b.u + 1,
+    c.v = c.v + 1;
+SELECT ROW_COUNT();
+SELECT * FROM multi_update_ignore_mixed_repeated ORDER BY id;
+SELECT * FROM multi_update_ignore_mixed_singleton ORDER BY id;
+
+TRUNCATE TABLE multi_update_ignore_mixed_repeated;
+TRUNCATE TABLE multi_update_ignore_mixed_singleton;
+INSERT INTO multi_update_ignore_mixed_repeated VALUES (1, 1, 0, 0), (2, 2, 0, 0);
+INSERT INTO multi_update_ignore_mixed_singleton VALUES (1, 0), (2, 0);
+UPDATE IGNORE multi_update_ignore_mixed_repeated a
+JOIN multi_update_ignore_mixed_repeated b ON a.id = b.id
+JOIN multi_update_ignore_mixed_repeated c ON b.id = c.id
+JOIN multi_update_ignore_mixed_singleton d ON d.id = a.id
+SET
+    a.u = a.u + 1,
+    b.x = b.x + 1,
+    c.y = c.y + 1,
+    d.v = d.v + 1;
+SELECT ROW_COUNT();
+SELECT * FROM multi_update_ignore_mixed_repeated ORDER BY id;
+SELECT * FROM multi_update_ignore_mixed_singleton ORDER BY id;
+DROP TABLE multi_update_ignore_mixed_repeated;
+DROP TABLE multi_update_ignore_mixed_singleton;
+
 DROP TABLE IF EXISTS multi_update_auto_a;
 DROP TABLE IF EXISTS multi_update_auto_b;
 CREATE TABLE multi_update_auto_a (

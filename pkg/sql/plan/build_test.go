@@ -2398,6 +2398,42 @@ func TestUpdateIgnoreChecksRepeatedPhysicalAliasesBeforeFinalRowMerge(t *testing
 	}
 }
 
+func TestCoalesceRepeatedPhysicalTargetCompositeUniqueCheck(t *testing.T) {
+	newTableDef := func() *plan.TableDef {
+		return &plan.TableDef{
+			TblId: 42,
+			Indexes: []*plan.IndexDef{
+				{
+					IndexName:      "uk_uv_w",
+					IndexTableName: "__mo_index_uk_uv_w",
+					Unique:         true,
+					Parts:          []string{"u", "v", "w"},
+				},
+			},
+		}
+	}
+	dmlCtx := &DMLContext{
+		tableDefs: []*plan.TableDef{newTableDef(), newTableDef(), newTableDef()},
+		updateCol2Expr: []map[string]tree.Expr{
+			{"u": nil},
+			{"v": nil},
+			{"w": nil},
+		},
+	}
+	assigned := map[int]map[string]struct{}{
+		0: {"u": {}},
+		1: {"v": {}},
+		2: {"w": {}},
+	}
+	checks := [][]bool{{true}, {true}, {true}}
+	partSources := [][][]int{make([][]int, 1), make([][]int, 1), make([][]int, 1)}
+
+	coalesceRepeatedPhysicalTargetUniqueChecks(dmlCtx, assigned, checks, partSources)
+
+	require.Equal(t, [][]bool{{false}, {false}, {true}}, checks)
+	require.Equal(t, []int{0, 1, 2}, partSources[2][0])
+}
+
 func planNodeDependsOn(query *plan.Query, nodeID, dependencyID int32, visited map[int32]struct{}) bool {
 	if nodeID == dependencyID {
 		return true
