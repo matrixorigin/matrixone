@@ -15,6 +15,7 @@ package v4_0_6
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -34,13 +35,18 @@ import (
 
 var Handler *versionHandle
 
+// The legacy invisible-index reconciliation is a dynamic per-tenant metadata
+// migration rather than a static UpgradeEntry. Count it explicitly so binaries
+// that already completed an earlier v4.0.6 offset still execute it.
+const legacyInvisibleIndexUpgradeOffset uint32 = 1
+
 func init() {
 	Handler = &versionHandle{metadata: versions.Version{
 		Version:           "4.0.6",
 		MinUpgradeVersion: "4.0.5",
 		UpgradeCluster:    versions.Yes,
 		UpgradeTenant:     versions.Yes,
-		VersionOffset:     uint32(len(tenantUpgEntries) + len(clusterUpgEntries)),
+		VersionOffset:     uint32(len(tenantUpgEntries)+len(clusterUpgEntries)) + legacyInvisibleIndexUpgradeOffset,
 	}}
 }
 
@@ -67,8 +73,104 @@ func (v *versionHandle) HandleTenantUpgrade(ctx context.Context, tenantID int32,
 	if err := upgradeLegacyForeignKeyMetadata(ctx, tenantID, txn); err != nil {
 		return err
 	}
+	if err := upgradeLegacyInvisibleIndexMetadata(tenantID, txn); err != nil {
+		return err
+	}
 	getLogger(txn.Txn().TxnOptions().CN).Info("tenant upgrade success", zap.Int32("tenantId", tenantID), zap.String("toVersion", v.metadata.Version))
 	return nil
+}
+
+type legacyInvisibleIndexDefinition struct {
+	database string
+	table    string
+	index    string
+}
+
+func legacyInvisibleIndexDefinitionsQuery(tenantID int32) string {
+	return fmt.Sprintf(
+		"SELECT DISTINCT tbl.reldatabase, tbl.relname, idx.name "+
+			"FROM mo_catalog.mo_indexes idx "+
+			"JOIN mo_catalog.mo_tables tbl ON tbl.rel_id = idx.table_id AND tbl.reldatabase_id = idx.database_id "+
+			"WHERE tbl.account_id = %d AND idx.is_visible = 0 AND idx.hidden = 0 AND idx.type <> 'PRIMARY' "+
+			"ORDER BY tbl.reldatabase, tbl.relname, idx.name",
+		tenantID,
+	)
+}
+
+// upgradeLegacyInvisibleIndexMetadata uses mo_indexes as the compatibility
+// source of truth for old IndexDefs. Before visibility_set existed, a default
+// visible index and an explicitly invisible index both serialized as
+// visible=false, so the table constraint alone cannot distinguish them.
+// Replaying the public ALTER path records visibility_set in the constraint and
+// keeps mo_indexes plus every logical component of a multi-table index aligned.
+func upgradeLegacyInvisibleIndexMetadata(tenantID int32, txn executor.TxnExecutor) error {
+	definitions, err := getLegacyInvisibleIndexDefinitions(tenantID, txn)
+	if err != nil {
+		return err
+	}
+
+	for _, definition := range definitions {
+		statement := fmt.Sprintf(
+			"ALTER TABLE %s ALTER INDEX %s INVISIBLE",
+			sqlquote.QualifiedIdent(definition.database, definition.table),
+			sqlquote.Ident(definition.index),
+		)
+		res, err := txn.Exec(statement, versions.UpgradeStatementOption(uint32(tenantID)))
+		if err != nil {
+			return errors.Join(
+				moerr.NewInternalErrorNoCtxf("migrate invisible index %s on %s.%s", definition.index, definition.database, definition.table),
+				err,
+			)
+		}
+		res.Close()
+	}
+	return nil
+}
+
+func getLegacyInvisibleIndexDefinitions(tenantID int32, txn executor.TxnExecutor) ([]legacyInvisibleIndexDefinition, error) {
+	res, err := txn.Exec(
+		legacyInvisibleIndexDefinitionsQuery(tenantID),
+		executor.StatementOption{}.WithAccountID(uint32(tenantID)),
+	)
+	if err != nil {
+		return nil, errors.Join(
+			moerr.NewInternalErrorNoCtxf("list legacy invisible indexes for tenant %d", tenantID),
+			err,
+		)
+	}
+	defer res.Close()
+
+	definitions := make([]legacyInvisibleIndexDefinition, 0)
+	seen := make(map[string]struct{})
+	validResult := true
+	res.ReadRows(func(rows int, cols []*vector.Vector) bool {
+		if len(cols) < 3 {
+			validResult = false
+			return false
+		}
+		for i := 0; i < rows; i++ {
+			definition := legacyInvisibleIndexDefinition{
+				database: cols[0].GetStringAt(i),
+				table:    cols[1].GetStringAt(i),
+				index:    cols[2].GetStringAt(i),
+			}
+			if definition.database == "" || definition.table == "" || definition.index == "" {
+				validResult = false
+				return false
+			}
+			key := definition.database + "\x00" + definition.table + "\x00" + definition.index
+			if _, ok := seen[key]; ok {
+				continue
+			}
+			seen[key] = struct{}{}
+			definitions = append(definitions, definition)
+		}
+		return true
+	})
+	if !validResult {
+		return nil, moerr.NewInternalErrorNoCtxf("invalid legacy invisible-index catalog result for tenant %d", tenantID)
+	}
+	return definitions, nil
 }
 
 const legacyForeignKeyTableDefinitionsSQL = "SELECT fk.db_name, fk.table_name, " +
