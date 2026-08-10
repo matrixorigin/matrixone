@@ -2230,6 +2230,7 @@ func makeOneDeletePlan(
 	canTruncate bool,
 ) (int32, error) {
 	if isUK || isSK {
+		delNodeInfo.preserveProjection = true
 
 		// For the hidden table of the secondary index, there will be no null situation, only unique key hidden table need this filter
 		if isUK {
@@ -2308,6 +2309,12 @@ func makeOneDeletePlan(
 		deleteNode.ProjectList = getProjectionByLastNode(builder, lastNodeId)
 	}
 	lastNodeId = builder.appendNode(deleteNode, bindCtx)
+	if delNodeInfo.preserveProjection {
+		if builder.preserveInsertProjection == nil {
+			builder.preserveInsertProjection = make(map[int32]struct{})
+		}
+		builder.preserveInsertProjection[lastNodeId] = struct{}{}
+	}
 
 	return lastNodeId, nil
 }
@@ -3485,6 +3492,13 @@ func appendPreInsertPlan(
 	}
 
 	lastNodeId = appendSinkNode(builder, bindCtx, lastNodeId)
+	if builder.preserveSinkProjection == nil {
+		builder.preserveSinkProjection = make(map[int32]struct{})
+	}
+	// The hidden-index INSERT consumes the first two pre-insert outputs by
+	// position. Keep them across step remapping even though they are not
+	// represented by ordinary column references in the terminal INSERT node.
+	builder.preserveSinkProjection[lastNodeId] = struct{}{}
 	sourceStep := builder.appendStep(lastNodeId)
 
 	return sourceStep, nil
@@ -3507,45 +3521,31 @@ func appendDeleteIndexTablePlan(
 	********/
 	lastNodeId := baseNodeId
 	var err error
-	projectList := getProjectionByLastNodeForRightJoin(builder, lastNodeId)
-	rfTag := builder.genNewMsgTag()
+	rightTag := builder.genNewBindTag()
+	lastNodeId = builder.appendNode(&plan.Node{
+		NodeType:    plan.Node_PROJECT,
+		Children:    []int32{lastNodeId},
+		ProjectList: getProjectionByLastNode(builder, lastNodeId),
+		BindingTags: []int32{rightTag},
+	}, bindCtx)
+	projectList := getProjectionByLastNodeWithTag(builder, lastNodeId, rightTag)
+	leftTag := builder.genNewBindTag()
 
 	var rightRowIdPos int32 = -1
 	var rightPkPos int32 = -1
-	scanNodeProject := make([]*Expr, len(uniqueTableDef.Cols))
 	for colIdx, col := range uniqueTableDef.Cols {
 		if col.Name == catalog.Row_ID {
 			rightRowIdPos = int32(colIdx)
 		} else if col.Name == catalog.IndexTableIndexColName {
 			rightPkPos = int32(colIdx)
 		}
-		scanNodeProject[colIdx] = &plan.Expr{
-			Typ: col.Typ,
-			Expr: &plan.Expr_Col{
-				Col: &plan.ColRef{
-					ColPos: int32(colIdx),
-					Name:   col.Name,
-				},
-			},
-		}
 	}
-	pkTyp := uniqueTableDef.Cols[rightPkPos].Typ
-
-	probeExpr := &plan.Expr{
-		Typ: pkTyp,
-		Expr: &plan.Expr_Col{
-			Col: &plan.ColRef{
-				Name: uniqueTableDef.Pkey.PkeyColName,
-			},
-		},
-	}
-
 	leftscan := &plan.Node{
 		NodeType:    plan.Node_TABLE_SCAN,
 		Stats:       &plan.Stats{},
 		ObjRef:      uniqueObjRef,
 		TableDef:    uniqueTableDef,
-		ProjectList: scanNodeProject,
+		BindingTags: []int32{leftTag},
 	}
 	leftId := builder.appendNode(leftscan, bindCtx)
 
@@ -3554,7 +3554,7 @@ func appendDeleteIndexTablePlan(
 		Typ: uniqueTableDef.Cols[rightRowIdPos].Typ,
 		Expr: &plan.Expr_Col{
 			Col: &plan.ColRef{
-				RelPos: 0,
+				RelPos: leftTag,
 				ColPos: rightRowIdPos,
 				Name:   catalog.Row_ID,
 			},
@@ -3563,7 +3563,7 @@ func appendDeleteIndexTablePlan(
 		Typ: uniqueTableDef.Cols[rightPkPos].Typ,
 		Expr: &plan.Expr_Col{
 			Col: &plan.ColRef{
-				RelPos: 0,
+				RelPos: leftTag,
 				ColPos: rightPkPos,
 				Name:   catalog.IndexTableIndexColName,
 			},
@@ -3574,7 +3574,7 @@ func appendDeleteIndexTablePlan(
 		Typ: uniqueTableDef.Cols[rightPkPos].Typ,
 		Expr: &plan.Expr_Col{
 			Col: &plan.ColRef{
-				RelPos: 0,
+				RelPos: leftTag,
 				ColPos: rightPkPos,
 				Name:   catalog.IndexTableIndexColName,
 			},
@@ -3592,7 +3592,7 @@ func appendDeleteIndexTablePlan(
 	if partsLength == 1 {
 		originIndexColumnName := catalog.ResolveAlias(indexdef.Parts[0])
 		leftExpr, err = builder.makeIndexPartExpr(
-			1,
+			rightTag,
 			int32(posMap[originIndexColumnName]),
 			originIndexColumnName,
 			typMap[originIndexColumnName],
@@ -3606,7 +3606,7 @@ func appendDeleteIndexTablePlan(
 		for i, column := range indexdef.Parts {
 			column = catalog.ResolveAlias(column)
 			args[i], err = builder.makeIndexPartExpr(
-				1,
+				rightTag,
 				int32(posMap[column]),
 				column,
 				typMap[column],
@@ -3637,31 +3637,6 @@ func appendDeleteIndexTablePlan(
 		return -1, err
 	}
 	joinConds = []*Expr{condExpr}
-
-	buildExpr := &plan.Expr{
-		Typ: condExpr.GetF().Args[1].Typ,
-		Expr: &plan.Expr_Col{
-			Col: &plan.ColRef{
-				RelPos: 0,
-				ColPos: 0,
-			},
-		},
-	}
-	probeSpec, buildSpec, hasRuntimeFilter := builder.makeExactRuntimeFilterPair(
-		rfTag,
-		false,
-		GetInFilterCardLimitOnPK(
-			builder.compCtx.GetProcess().GetService(),
-			builder.qry.Nodes[leftId].Stats.TableCnt,
-		),
-		probeExpr,
-		buildExpr,
-		false,
-	)
-	if hasRuntimeFilter {
-		leftscan.RuntimeFilterProbeList = []*plan.RuntimeFilterSpec{probeSpec}
-		leftscan.Stats.ForceOneCN = true
-	}
 
 	/*
 		Why we need RIGHT JOIN for both UNIQUE KEY and SECONDARY INDEX:
@@ -3708,15 +3683,14 @@ func appendDeleteIndexTablePlan(
 		JoinType:    plan.Node_RIGHT,
 		IsRightJoin: true,
 		OnList:      joinConds,
-		ProjectList: projectList,
-	}
-	if hasRuntimeFilter {
-		joinNode.RuntimeFilterBuildList = []*plan.RuntimeFilterSpec{buildSpec}
 	}
 	lastNodeId = builder.appendNode(joinNode, bindCtx)
-	if hasRuntimeFilter {
-		recalcStatsByRuntimeFilter(builder.qry.Nodes[leftId], joinNode, builder)
-	}
+	lastNodeId = builder.appendNode(&plan.Node{
+		NodeType:    plan.Node_PROJECT,
+		Children:    []int32{lastNodeId},
+		ProjectList: projectList,
+		BindingTags: []int32{builder.genNewBindTag()},
+	}, bindCtx)
 	return lastNodeId, nil
 }
 

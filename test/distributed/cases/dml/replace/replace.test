@@ -607,3 +607,64 @@ update t_replace_self_cascade set parent_id = 2 where id = 1;
 replace into t_replace_self_cascade values (1, null);
 select * from t_replace_self_cascade order by id;
 drop table t_replace_self_cascade;
+
+-- Indexed child maintenance remains valid across parent-side foreign-key actions
+-- and prepared-plan catalog changes.
+drop table if exists t_replace_idx_cascade_c;
+drop table if exists t_replace_idx_cascade_p;
+create table t_replace_idx_cascade_p(id int primary key, note varchar(20));
+create table t_replace_idx_cascade_c(
+  id int primary key,
+  pid int,
+  index idx_pid(pid),
+  foreign key(pid) references t_replace_idx_cascade_p(id) on delete cascade
+);
+prepare replace_idx_cascade_stmt from 'replace into t_replace_idx_cascade_p values (?, ?)';
+set @replace_idx_id = 1;
+set @replace_idx_note = 'first';
+execute replace_idx_cascade_stmt using @replace_idx_id, @replace_idx_note;
+select * from t_replace_idx_cascade_p order by id;
+insert into t_replace_idx_cascade_c values (10, 1);
+select * from t_replace_idx_cascade_c force index(idx_pid) where pid = 1 order by id;
+set @replace_idx_note = 'indexed';
+execute replace_idx_cascade_stmt using @replace_idx_id, @replace_idx_note;
+select * from t_replace_idx_cascade_p order by id;
+select * from t_replace_idx_cascade_c order by id;
+alter table t_replace_idx_cascade_c drop index idx_pid;
+insert into t_replace_idx_cascade_c values (20, 1);
+set @replace_idx_note = 'without-index';
+execute replace_idx_cascade_stmt using @replace_idx_id, @replace_idx_note;
+select * from t_replace_idx_cascade_c order by id;
+alter table t_replace_idx_cascade_c add index idx_pid(pid);
+insert into t_replace_idx_cascade_c values (30, 1);
+select * from t_replace_idx_cascade_c force index(idx_pid) where pid = 1 order by id;
+set @replace_idx_note = 'reindexed';
+execute replace_idx_cascade_stmt using @replace_idx_id, @replace_idx_note;
+select * from t_replace_idx_cascade_p order by id;
+select * from t_replace_idx_cascade_c force index(idx_pid) where pid = 1 order by id;
+deallocate prepare replace_idx_cascade_stmt;
+drop table t_replace_idx_cascade_c;
+drop table t_replace_idx_cascade_p;
+
+drop table if exists t_replace_idx_setnull_c;
+drop table if exists t_replace_idx_setnull_p;
+create table t_replace_idx_setnull_p(id int primary key, note varchar(20));
+create table t_replace_idx_setnull_c(
+  id int primary key,
+  pid int,
+  index idx_pid(pid),
+  foreign key(pid) references t_replace_idx_setnull_p(id) on delete set null
+);
+prepare replace_idx_setnull_stmt from 'replace into t_replace_idx_setnull_p values (?, ?)';
+set @replace_idx_id = 1;
+set @replace_idx_note = 'first';
+execute replace_idx_setnull_stmt using @replace_idx_id, @replace_idx_note;
+insert into t_replace_idx_setnull_c values (10, 1);
+select * from t_replace_idx_setnull_c force index(idx_pid) where pid = 1 order by id;
+replace into t_replace_idx_setnull_p values (1, 'replaced');
+select * from t_replace_idx_setnull_p order by id;
+select * from t_replace_idx_setnull_c order by id;
+select * from t_replace_idx_setnull_c force index(idx_pid) where pid = 1 order by id;
+deallocate prepare replace_idx_setnull_stmt;
+drop table t_replace_idx_setnull_c;
+drop table t_replace_idx_setnull_p;

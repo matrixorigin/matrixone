@@ -618,7 +618,14 @@ func TestAppendDeleteIndexTablePlanUsesPrefixLookupKey(t *testing.T) {
 		require.Len(t, joinFn.Args, 2)
 		return joinFn.Args[1]
 	}
-	requirePrefixExpr := func(t *testing.T, expr *plan.Expr, colName string, length int64) {
+	extractJoinNode := func(t *testing.T, builder *QueryBuilder, nodeID int32) *plan.Node {
+		t.Helper()
+		outputNode := builder.qry.Nodes[nodeID]
+		require.Equal(t, plan.Node_PROJECT, outputNode.NodeType)
+		require.Len(t, outputNode.Children, 1)
+		return builder.qry.Nodes[outputNode.Children[0]]
+	}
+	requirePrefixExpr := func(t *testing.T, expr *plan.Expr, colName string, length int64, tag int32) {
 		t.Helper()
 
 		castFn := expr.GetF()
@@ -631,7 +638,7 @@ func TestAppendDeleteIndexTablePlanUsesPrefixLookupKey(t *testing.T) {
 		require.Equal(t, "substring", substringFn.Func.ObjName)
 		require.Len(t, substringFn.Args, 3)
 		require.Equal(t, colName, substringFn.Args[0].GetCol().Name)
-		require.Equal(t, int32(1), substringFn.Args[0].GetCol().RelPos)
+		require.Equal(t, tag, substringFn.Args[0].GetCol().RelPos)
 		require.Equal(t, int64(1), substringFn.Args[1].GetLit().GetI64Val())
 		require.Equal(t, length, substringFn.Args[2].GetLit().GetI64Val())
 	}
@@ -655,8 +662,18 @@ func TestAppendDeleteIndexTablePlanUsesPrefixLookupKey(t *testing.T) {
 		)
 
 		require.NoError(t, err)
-		lookupExpr := extractLookupExpr(t, builder.qry.Nodes[gotNodeID])
-		requirePrefixExpr(t, lookupExpr, "body", 8)
+		joinNode := extractJoinNode(t, builder, gotNodeID)
+		require.Len(t, joinNode.Children, 2)
+		require.True(t, joinNode.IsRightJoin)
+		leftNode := builder.qry.Nodes[joinNode.Children[0]]
+		rightNode := builder.qry.Nodes[joinNode.Children[1]]
+		require.Len(t, leftNode.BindingTags, 1)
+		require.Len(t, rightNode.BindingTags, 1)
+		require.NotEqual(t, leftNode.BindingTags[0], rightNode.BindingTags[0])
+		require.Empty(t, leftNode.RuntimeFilterProbeList)
+		require.Empty(t, joinNode.RuntimeFilterBuildList)
+		lookupExpr := extractLookupExpr(t, joinNode)
+		requirePrefixExpr(t, lookupExpr, "body", 8, rightNode.BindingTags[0])
 	})
 
 	t.Run("composite prefix part", func(t *testing.T) {
@@ -678,13 +695,15 @@ func TestAppendDeleteIndexTablePlanUsesPrefixLookupKey(t *testing.T) {
 		)
 
 		require.NoError(t, err)
-		lookupExpr := extractLookupExpr(t, builder.qry.Nodes[gotNodeID])
+		joinNode := extractJoinNode(t, builder, gotNodeID)
+		lookupExpr := extractLookupExpr(t, joinNode)
 
 		serialFn := lookupExpr.GetF()
 		require.NotNil(t, serialFn)
 		require.Equal(t, "serial_full", serialFn.Func.ObjName)
 		require.Len(t, serialFn.Args, 2)
-		requirePrefixExpr(t, serialFn.Args[0], "body", 8)
+		rightNode := builder.qry.Nodes[joinNode.Children[1]]
+		requirePrefixExpr(t, serialFn.Args[0], "body", 8, rightNode.BindingTags[0])
 		require.Equal(t, "tenant", serialFn.Args[1].GetCol().Name)
 	})
 
@@ -707,13 +726,15 @@ func TestAppendDeleteIndexTablePlanUsesPrefixLookupKey(t *testing.T) {
 		)
 
 		require.NoError(t, err)
-		lookupExpr := extractLookupExpr(t, builder.qry.Nodes[gotNodeID])
+		joinNode := extractJoinNode(t, builder, gotNodeID)
+		lookupExpr := extractLookupExpr(t, joinNode)
 
 		serialFn := lookupExpr.GetF()
 		require.NotNil(t, serialFn)
 		require.Equal(t, "serial", serialFn.Func.ObjName)
 		require.Len(t, serialFn.Args, 2)
-		requirePrefixExpr(t, serialFn.Args[0], "body", 8)
+		rightNode := builder.qry.Nodes[joinNode.Children[1]]
+		requirePrefixExpr(t, serialFn.Args[0], "body", 8, rightNode.BindingTags[0])
 		require.Equal(t, "tenant", serialFn.Args[1].GetCol().Name)
 	})
 }

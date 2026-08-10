@@ -839,6 +839,75 @@ func releaseRetainedOrderRefs(colRefCnt map[[2]int32]int, refs [][2]int32) {
 	}
 }
 
+func (builder *QueryBuilder) remapRegularIndexPreInsert(
+	nodeID int32,
+	step int32,
+	colRefCnt map[[2]int32]int,
+	colRefBool map[[2]int32]bool,
+	sinkColRef map[[2]int32]int,
+	preInsertCtx *plan.PreInsertUkCtx,
+) (*ColRefRemapping, error) {
+	node := builder.qry.Nodes[nodeID]
+	if preInsertCtx == nil || len(node.Children) != 1 {
+		return nil, moerr.NewInternalError(builder.GetContext(), "invalid regular index pre-insert node")
+	}
+	child := builder.qry.Nodes[node.Children[0]]
+	if len(child.BindingTags) != 1 {
+		return nil, moerr.NewInternalError(builder.GetContext(), "invalid regular index pre-insert input")
+	}
+	if len(node.BindingTags) == 0 {
+		node.BindingTags = []int32{0}
+	}
+
+	childTag := child.BindingTags[0]
+	preservedRefs := make([][2]int32, len(child.ProjectList))
+	for i := range child.ProjectList {
+		ref := [2]int32{childTag, int32(i)}
+		preservedRefs[i] = ref
+		colRefCnt[ref]++
+	}
+	pkRef := [2]int32{childTag, preInsertCtx.PkColumn}
+
+	childRemapping, err := builder.remapAllColRefs(
+		node.Children[0], step, colRefCnt, colRefBool, sinkColRef,
+	)
+	if err != nil {
+		return nil, err
+	}
+	for _, ref := range preservedRefs {
+		colRefCnt[ref]--
+	}
+	for i, oldPos := range preInsertCtx.Columns {
+		ref := [2]int32{childTag, oldPos}
+		pos, ok := childRemapping.globalToLocal[ref]
+		if !ok {
+			return nil, moerr.NewInternalError(builder.GetContext(), "missing regular index key column")
+		}
+		preInsertCtx.Columns[i] = pos[1]
+	}
+	pkPos, ok := childRemapping.globalToLocal[pkRef]
+	if !ok {
+		return nil, moerr.NewInternalError(builder.GetContext(), "missing regular index primary key column")
+	}
+	preInsertCtx.PkColumn = pkPos[1]
+
+	remapping := &ColRefRemapping{
+		globalToLocal:    make(map[[2]int32][2]int32),
+		preserveRowCount: true,
+	}
+	for i, expr := range node.ProjectList {
+		if col := expr.GetCol(); col != nil && col.RelPos >= 0 {
+			// appendPreInsertPlan only emits a non-generated output here for
+			// UPDATE, where the original RowID is appended as the final input.
+			col.RelPos = 0
+			col.ColPos = int32(len(child.ProjectList) - 1)
+		}
+		remapping.addColRef([2]int32{node.BindingTags[0], int32(i)})
+	}
+	node.BindingTags = nil
+	return remapping, nil
+}
+
 func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt map[[2]int32]int, colRefBool map[[2]int32]bool, sinkColRef map[[2]int32]int) (*ColRefRemapping, error) {
 	node := builder.qry.Nodes[nodeID]
 
@@ -2841,8 +2910,15 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 
 	case plan.Node_INSERT, plan.Node_DELETE:
 		if _, preserve := builder.preserveInsertProjection[nodeID]; preserve {
-			for _, expr := range builder.qry.Nodes[node.Children[0]].ProjectList {
-				increaseRefCnt(expr, 1, colRefCnt)
+			child := builder.qry.Nodes[node.Children[0]]
+			if len(child.BindingTags) == 1 {
+				for i := range child.ProjectList {
+					colRefCnt[[2]int32{child.BindingTags[0], int32(i)}]++
+				}
+			} else {
+				for _, expr := range child.ProjectList {
+					increaseRefCnt(expr, 1, colRefCnt)
+				}
 			}
 		}
 		childRemapping, err := builder.remapAllColRefs(node.Children[0], step, colRefCnt, colRefBool, sinkColRef)
@@ -3097,6 +3173,11 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 		}
 		node.ProjectList = newProjectList
 		node.PreInsertUkCtx.OutputColumns = int32(len(newProjectList))
+
+	case plan.Node_PRE_INSERT_SK:
+		return builder.remapRegularIndexPreInsert(
+			nodeID, step, colRefCnt, colRefBool, sinkColRef, node.PreInsertSkCtx,
+		)
 
 	default:
 		return nil, moerr.NewInternalError(builder.GetContext(), "unsupport node type")
