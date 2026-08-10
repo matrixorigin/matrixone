@@ -154,7 +154,7 @@ func (s *fillSpill) writeRecord(fd *os.File, bat *batch.Batch) error {
 	var zero int64
 	s.buf.Write(types.EncodeInt64(&zero))
 	start := s.buf.Len()
-	if _, err := bat.MarshalBinaryWithBuffer(&s.buf, false); err != nil {
+	if _, err := bat.MarshalBinaryWithPrepareParamKinds(&s.buf, false); err != nil {
 		return err
 	}
 	size := int64(s.buf.Len() - start)
@@ -205,31 +205,18 @@ func readRecordReverse(fd *os.File, pos *int64, mp *mpool.MPool, reuse *batch.Ba
 	if types.DecodeInt64(head[:]) != size {
 		return nil, moerr.NewInternalErrorNoCtx("fill spill record length mismatch")
 	}
-	section := io.NewSectionReader(fd, start+8, size)
 	allocated := reuse == nil
 	if reuse == nil {
 		reuse = batch.NewWithSize(0)
 	} else {
 		reuse.CleanOnlyData()
 	}
-	if err := reuse.UnmarshalFromReader(section, mp); err != nil {
+	section := io.NewSectionReader(fd, start+8, size)
+	if err := reuse.UnmarshalFromReaderWithPrepareParamKinds(section, size, mp); err != nil {
 		if allocated {
 			reuse.Clean(mp)
 		}
 		return nil, err
-	}
-	consumed, err := section.Seek(0, io.SeekCurrent)
-	if err != nil {
-		if allocated {
-			reuse.Clean(mp)
-		}
-		return nil, err
-	}
-	if consumed != size {
-		if allocated {
-			reuse.Clean(mp)
-		}
-		return nil, moerr.NewInternalErrorNoCtx("fill spill record payload length mismatch")
 	}
 	*pos = start
 	return reuse, nil

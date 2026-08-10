@@ -387,6 +387,11 @@ func (builder *QueryBuilder) applyJoinFullTextIndices(nodeID int32, projNode *pl
 	// When filters remain, use pre-filter pushdown (nested JOIN + runtime filter)
 	// to reduce the number of doc_ids that fulltext_index_scan must process.
 	pushdownEnabled := len(scanNode.FilterList) > 0
+	if pushdownEnabled && types.T(pkType.Id).IsInteger() &&
+		!localProtocolEnablesSortedMembershipFilter(
+			builder.compCtx.GetProcess().GetService()) {
+		pushdownEnabled = false
+	}
 	if pushdownEnabled {
 		if val, err := builder.compCtx.ResolveVariable("fulltext_bloom_filter_pushdown", true, false); err == nil {
 			if v, ok := val.(int8); ok && v == 0 {
@@ -798,7 +803,7 @@ func (builder *QueryBuilder) findMatchFullTextIndex(fn *plan.Function, scanNode 
 
 	nargs := len(fn.Args) - 2
 	for _, idx := range scanNode.TableDef.Indexes {
-		if idx == nil || !idx.TableExist || !catalog.IsFullTextIndexAlgo(idx.IndexAlgo) {
+		if idx == nil || !catalog.IsIndexOptimizerEligible(idx) || !idx.TableExist || !catalog.IsFullTextIndexAlgo(idx.IndexAlgo) {
 			continue
 		}
 		if len(idx.Parts) != nargs {

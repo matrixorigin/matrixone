@@ -21,6 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/stretchr/testify/require"
 )
 
@@ -881,6 +882,54 @@ func TestInSubqueryJoinShapePreservesThreeValuedSemantics(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestNullableNotExistsJoinPredicateNormalization(t *testing.T) {
+	const correlatedNotExists = `not exists (
+		select 1 from tpch.region r where r.r_comment = n.n_comment
+	)`
+
+	t.Run("filtering anti join exposes equality", func(t *testing.T) {
+		logicPlan, err := runOneStmt(NewMockOptimizer(true), t,
+			"select n.n_nationkey from tpch.nation n where "+correlatedNotExists)
+		require.NoError(t, err)
+
+		var anti *plan.Node
+		for _, node := range logicPlan.GetQuery().Nodes {
+			if node.NodeType == plan.Node_JOIN && node.JoinType == plan.Node_ANTI {
+				anti = node
+				break
+			}
+		}
+		require.NotNil(t, anti)
+		require.Len(t, anti.OnList, 1)
+		condition := anti.OnList[0].GetF()
+		require.NotNil(t, condition)
+		require.True(t, IsEqualFunc(condition.Func.GetObj()),
+			"ANTI join must expose its equality as a hash key")
+	})
+
+	t.Run("projected mark join preserves is true", func(t *testing.T) {
+		logicPlan, err := runOneStmt(NewMockOptimizer(true), t,
+			"select "+correlatedNotExists+" from tpch.nation n")
+		require.NoError(t, err)
+
+		var mark *plan.Node
+		for _, node := range logicPlan.GetQuery().Nodes {
+			if node.NodeType == plan.Node_JOIN && node.JoinType == plan.Node_MARK {
+				mark = node
+				break
+			}
+		}
+		require.NotNil(t, mark)
+		require.Len(t, mark.OnList, 1)
+		isTrue := mark.OnList[0].GetF()
+		require.NotNil(t, isTrue)
+		funcID, _ := function.DecodeOverloadID(isTrue.Func.GetObj())
+		require.Equal(t, int32(function.ISTRUE), funcID)
+		require.Len(t, isTrue.Args, 1)
+		require.True(t, IsEqualFunc(isTrue.Args[0].GetF().Func.GetObj()))
+	})
 }
 
 func TestDirectCorrelatedScalarProjectionUsesMatchMarker(t *testing.T) {

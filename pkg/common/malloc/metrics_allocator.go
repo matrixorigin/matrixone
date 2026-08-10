@@ -100,9 +100,10 @@ func (m *MetricsAllocator[U]) Allocate(size uint64, hints Hints) ([]byte, Deallo
 	if err != nil {
 		return nil, nil, err
 	}
-	m.allocateBytes.Add(size)
-	m.inuseBytes.Add(int64(size))
-	m.currentInuse.Add(int64(size))
+	backingSize := uint64(cap(ptr))
+	m.allocateBytes.Add(backingSize)
+	m.inuseBytes.Add(int64(backingSize))
+	m.currentInuse.Add(int64(backingSize))
 	m.allocateObjects.Add(1)
 	m.inuseObjects.Add(1)
 	m.triggerUpdate()
@@ -110,7 +111,7 @@ func (m *MetricsAllocator[U]) Allocate(size uint64, hints Hints) ([]byte, Deallo
 	return ptr, ChainDeallocator(
 		dec,
 		m.deallocatorPool.Get(metricsDeallocatorArgs{
-			size: size,
+			size: backingSize,
 		}),
 	), nil
 }

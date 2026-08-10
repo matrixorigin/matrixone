@@ -17,13 +17,64 @@ package disttae
 import (
 	"context"
 	"fmt"
-	"github.com/stretchr/testify/require"
 	"math/rand"
 	"strconv"
 	"strings"
 	"sync"
 	"testing"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/cmd_util"
+	"github.com/stretchr/testify/require"
 )
+
+func TestGetChangedTableListWithNoTN(t *testing.T) {
+	ctx := context.Background()
+
+	client.RunTxnTests(func(cli client.TxnClient, _ rpc.TxnSender) {
+		rt := runtime.ServiceRuntime("")
+		oldCluster, hadOldCluster := rt.GetGlobalVariables(runtime.ClusterService)
+		emptyCluster := mockCluster{}
+		rt.SetGlobalVariables(runtime.ClusterService, emptyCluster)
+		t.Cleanup(func() {
+			if hadOldCluster {
+				rt.SetGlobalVariables(runtime.ClusterService, oldCluster)
+			} else {
+				rt.CompareAndDeleteGlobalVariables(runtime.ClusterService, emptyCluster)
+			}
+		})
+
+		eng := &Engine{cli: cli}
+		var (
+			pairs        []tablePair
+			to, oldest   types.TS
+			from, latest timestamp.Timestamp
+		)
+
+		err := getChangedTableList(
+			ctx,
+			"",
+			eng,
+			nil,
+			nil,
+			nil,
+			[]timestamp.Timestamp{from, latest},
+			&pairs,
+			&to,
+			&oldest,
+			cmd_util.CollectChanged,
+			nil,
+		)
+
+		require.Error(t, err)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrNoAvailableBackend), err)
+	})
+}
 
 func Test_intsJoin(t *testing.T) {
 	wg := sync.WaitGroup{}

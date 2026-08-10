@@ -17,6 +17,7 @@ package plan
 import (
 	"context"
 	"encoding/json"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -374,6 +375,421 @@ func TestBuildCreateViewExplicitColumnList(t *testing.T) {
 	})
 }
 
+func TestBuildCreateViewConsumesOutputColumnDefaultProvenance(t *testing.T) {
+	tests := []struct {
+		name         string
+		selectSQL    string
+		viewColumns  string
+		wantDefault  bool
+		wantNullable bool
+	}{
+		{name: "direct", selectSQL: "select n_nationkey from nation", wantDefault: true},
+		{name: "alias", selectSQL: "select n_nationkey as qty from nation", wantDefault: true},
+		{name: "explicit view column", selectSQL: "select n_nationkey from nation", viewColumns: "(qty)", wantDefault: true},
+		{name: "derived table", selectSQL: "select qty from (select n_nationkey as qty from nation) d", wantDefault: true},
+		{name: "non recursive cte", selectSQL: "with d as (select n_nationkey as qty from nation) select qty from d", wantDefault: true},
+		{name: "constant", selectSQL: "select 7"},
+		{name: "function", selectSQL: "select abs(n_nationkey) from nation"},
+		{name: "arithmetic", selectSQL: "select n_nationkey + 0 from nation"},
+		{name: "no unique provenance", selectSQL: "select coalesce(n_nationkey, 0) from nation"},
+		{name: "aggregate", selectSQL: "select max(n_nationkey) from nation", wantNullable: true},
+		{name: "union", selectSQL: "select n_nationkey from nation union select n_nationkey from nation"},
+		{name: "union all", selectSQL: "select n_nationkey from nation union all select n_nationkey from nation"},
+		{name: "recursive cte", selectSQL: "with recursive d(qty) as (select n_nationkey from nation union all select qty from d where false) select qty from d"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			rootSQL := "create view v " + test.viewColumns + " as " + test.selectSQL
+			ctx := &rootSQLCompilerContext{
+				MockCompilerContext: NewMockCompilerContext(false),
+				rootSQL:             rootSQL,
+			}
+			sourceCol := ctx.tables["nation"].Cols[0]
+			sourceCol.Typ.NotNullable = true
+			sourceCol.Default = &plan.Default{
+				NullAbility:  false,
+				Expr:         makePlan2Int32ConstExprWithType(7),
+				OriginString: "7",
+			}
+
+			stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, rootSQL, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			viewPlan, err := BuildPlan(ctx, stmt, false)
+			require.NoError(t, err)
+			cols := viewPlan.GetDdl().GetCreateView().GetTableDef().GetCols()
+			require.Len(t, cols, 1)
+			def := cols[0].GetDefault()
+			require.NotNil(t, def)
+			require.Equal(t, test.wantNullable, def.GetNullAbility())
+			if !test.wantDefault {
+				require.Empty(t, def.GetOriginString())
+				require.Nil(t, def.GetExpr())
+				return
+			}
+			require.Equal(t, "7", def.GetOriginString())
+			require.NotNil(t, def.GetExpr())
+			require.Equal(t, int32(7), def.GetExpr().GetLit().GetI32Val())
+			require.NotSame(t, sourceCol.Default.Expr, def.Expr)
+		})
+	}
+}
+
+func TestBuildCreateViewDefaultProvenanceAcrossBoundaries(t *testing.T) {
+	newDefault := func(value int32) *plan.Default {
+		return &plan.Default{
+			Expr:         makePlan2Int32ConstExprWithType(value),
+			OriginString: strconv.FormatInt(int64(value), 10),
+		}
+	}
+	buildView := func(t *testing.T, ctx *MockCompilerContext, sql string) *plan.TableDef {
+		t.Helper()
+		rootCtx := &rootSQLCompilerContext{MockCompilerContext: ctx, rootSQL: sql}
+		stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, sql, 1)
+		require.NoError(t, err)
+		defer stmt.Free()
+		p, err := BuildPlan(rootCtx, stmt, false)
+		require.NoError(t, err)
+		return p.GetDdl().GetCreateView().GetTableDef()
+	}
+
+	t.Run("view of view", func(t *testing.T) {
+		ctx := NewMockCompilerContext(false)
+		ctx.tables["nation"].Cols[0].Typ.NotNullable = true
+		ctx.tables["nation"].Cols[0].Default = newDefault(7)
+		v1 := DeepCopyTableDef(buildView(t, ctx,
+			"create view v1 as select n_nationkey as qty from nation"), true)
+		v1.Name = "v1"
+		v1.DbName = "tpch"
+		v1.TableType = catalog.SystemViewRel
+		ctx.tables[v1.Name] = v1
+		ctx.objects[v1.Name] = &plan.ObjectRef{SchemaName: "tpch", ObjName: v1.Name}
+
+		v2 := buildView(t, ctx, "create view v2 as select qty as amount from v1")
+		require.Len(t, v2.GetCols(), 1)
+		require.Equal(t, "7", v2.GetCols()[0].GetDefault().GetOriginString())
+		require.Equal(t, int32(7), v2.GetCols()[0].GetDefault().GetExpr().GetLit().GetI32Val())
+	})
+
+	t.Run("create or replace", func(t *testing.T) {
+		ctx := NewMockCompilerContext(false)
+		ctx.tables["nation"].Cols[0].Typ.NotNullable = true
+		ctx.tables["nation"].Cols[0].Default = newDefault(7)
+		const rootSQL = "create or replace view v_replace as select n_nationkey as qty from nation"
+		rootCtx := &rootSQLCompilerContext{MockCompilerContext: ctx, rootSQL: rootSQL}
+		stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, rootSQL, 1)
+		require.NoError(t, err)
+		defer stmt.Free()
+		p, err := BuildPlan(rootCtx, stmt, false)
+		require.NoError(t, err)
+		require.True(t, p.GetDdl().GetCreateView().GetReplace())
+		require.Equal(t, "7", p.GetDdl().GetCreateView().GetTableDef().GetCols()[0].GetDefault().GetOriginString())
+	})
+
+	t.Run("multi table exact bound source", func(t *testing.T) {
+		ctx := NewMockCompilerContext(false)
+		left := ctx.tables["nation"].Cols[0]
+		left.Typ.NotNullable = true
+		left.Default = newDefault(7)
+		rightTable := DeepCopyTableDef(ctx.tables["nation"], true)
+		rightTable.Name = "nation2"
+		rightTable.OriginalName = "nation2"
+		rightTable.TblId++
+		rightTable.Cols[0].Default = newDefault(9)
+		ctx.tables[rightTable.Name] = rightTable
+		ctx.objects[rightTable.Name] = &plan.ObjectRef{SchemaName: "tpch", ObjName: rightTable.Name}
+
+		viewDef := buildView(t, ctx, "create view v_join as "+
+			"select l.n_nationkey as left_qty, r.n_nationkey as right_qty "+
+			"from nation l join nation2 r on l.n_nationkey = r.n_nationkey")
+		require.Len(t, viewDef.GetCols(), 2)
+		require.Equal(t, "7", viewDef.GetCols()[0].GetDefault().GetOriginString())
+		require.Equal(t, "9", viewDef.GetCols()[1].GetDefault().GetOriginString())
+
+		leftJoinDef := buildView(t, ctx, "create view v_left_join as "+
+			"select r.n_nationkey as right_qty from nation l left join nation2 r "+
+			"on l.n_nationkey = r.n_nationkey")
+		require.Len(t, leftJoinDef.GetCols(), 1)
+		require.True(t, leftJoinDef.GetCols()[0].GetDefault().GetNullAbility())
+		require.Equal(t, "9", leftJoinDef.GetCols()[0].GetDefault().GetOriginString())
+
+		ambiguousSQL := "create view v_ambiguous as select n_nationkey from nation l join nation2 r " +
+			"on l.n_nationkey = r.n_nationkey"
+		rootCtx := &rootSQLCompilerContext{MockCompilerContext: ctx, rootSQL: ambiguousSQL}
+		stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, ambiguousSQL, 1)
+		require.NoError(t, err)
+		defer stmt.Free()
+		_, err = BuildPlan(rootCtx, stmt, false)
+		require.Error(t, err)
+	})
+}
+
+func TestBuildCreateViewPreservesDefaultKinds(t *testing.T) {
+	ctx := NewMockCompilerContext(false)
+	ctx.tables["nation"].Cols = append(ctx.tables["nation"].Cols,
+		&plan.ColDef{
+			Name: "nullable_default_null",
+			Typ:  plan.Type{Id: int32(types.T_int32)},
+			Default: &plan.Default{
+				NullAbility:  true,
+				Expr:         &plan.Expr{Typ: plan.Type{Id: int32(types.T_int32)}, Expr: makePlan2NullConstExprWithType().Expr},
+				OriginString: "null",
+			},
+		},
+		&plan.ColDef{
+			Name: "str_default",
+			Typ:  plan.Type{Id: int32(types.T_varchar), Width: 20, NotNullable: true},
+			Default: &plan.Default{
+				Expr:         makePlan2StringConstExprWithType("seed"),
+				OriginString: "'seed'",
+			},
+		},
+		&plan.ColDef{
+			Name: "expr_default",
+			Typ:  plan.Type{Id: int32(types.T_uuid), NotNullable: true},
+			Default: &plan.Default{
+				Expr: &plan.Expr{Typ: plan.Type{Id: int32(types.T_uuid), NotNullable: true}, Expr: &plan.Expr_F{F: &plan.Function{
+					Func: &plan.ObjectRef{ObjName: "uuid"},
+				}}},
+				OriginString: "(uuid())",
+			},
+		},
+	)
+	const rootSQL = "create view v_defaults as select nullable_default_null, str_default, expr_default from nation"
+	rootCtx := &rootSQLCompilerContext{MockCompilerContext: ctx, rootSQL: rootSQL}
+	stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, rootSQL, 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+	p, err := BuildPlan(rootCtx, stmt, false)
+	require.NoError(t, err)
+	cols := p.GetDdl().GetCreateView().GetTableDef().GetCols()
+	require.Len(t, cols, 3)
+	require.True(t, cols[0].GetDefault().GetNullAbility())
+	require.Equal(t, "null", cols[0].GetDefault().GetOriginString())
+	require.True(t, cols[0].GetDefault().GetExpr().GetLit().GetIsnull())
+	require.False(t, cols[1].GetDefault().GetNullAbility())
+	require.Equal(t, "'seed'", cols[1].GetDefault().GetOriginString())
+	require.Equal(t, "seed", cols[1].GetDefault().GetExpr().GetLit().GetSval())
+	require.False(t, cols[2].GetDefault().GetNullAbility())
+	require.Equal(t, "(uuid())", cols[2].GetDefault().GetOriginString())
+	require.Equal(t, "uuid", cols[2].GetDefault().GetExpr().GetF().GetFunc().GetObjName())
+}
+
+func TestBuildCTASFromViewUsesIndependentExecutableDefault(t *testing.T) {
+	ctx := NewMockCompilerContext(false)
+	sourceCol := ctx.tables["nation"].Cols[0]
+	sourceCol.Typ.NotNullable = true
+	sourceCol.Default = &plan.Default{
+		NullAbility:  false,
+		Expr:         makePlan2Int32ConstExprWithType(7),
+		OriginString: "7",
+	}
+	decimalExpr, err := makePlan2DecimalExprWithType(t.Context(), "1.25")
+	require.NoError(t, err)
+	ctx.tables["nation"].Cols = append(ctx.tables["nation"].Cols,
+		&plan.ColDef{
+			Name: "str_col",
+			Typ:  plan.Type{Id: int32(types.T_varchar), Width: 20, NotNullable: true},
+			Default: &plan.Default{
+				Expr:         makePlan2StringConstExprWithType("seed"),
+				OriginString: "'seed'",
+			},
+		},
+		&plan.ColDef{
+			Name: "amount",
+			Typ:  plan.Type{Id: int32(types.T_decimal64), Width: 10, Scale: 2, NotNullable: true},
+			Default: &plan.Default{
+				Expr:         decimalExpr,
+				OriginString: "1.25",
+			},
+		},
+		&plan.ColDef{
+			Name: "priority",
+			Typ:  plan.Type{Id: int32(types.T_enum), Enumvalues: "low,medium,high", NotNullable: true},
+			Default: &plan.Default{
+				Expr:         makePlan2StringConstExprWithType("medium"),
+				OriginString: "'medium'",
+			},
+		},
+		&plan.ColDef{
+			Name: "flags",
+			Typ:  plan.Type{Id: int32(types.T_uint64), Enumvalues: "a,b", NotNullable: true},
+			Default: &plan.Default{
+				Expr:         makePlan2Uint64ConstExprWithType(1),
+				OriginString: "'a'",
+			},
+		},
+		&plan.ColDef{
+			Name: "nullable_col",
+			Typ:  plan.Type{Id: int32(types.T_int32)},
+			Default: &plan.Default{
+				NullAbility:  true,
+				Expr:         makePlan2Int32ConstExprWithType(7),
+				OriginString: "7",
+			},
+		},
+		&plan.ColDef{
+			Name: "expr_col",
+			Typ:  plan.Type{Id: int32(types.T_uuid), NotNullable: true},
+			Default: &plan.Default{
+				Expr: &plan.Expr{Typ: plan.Type{Id: int32(types.T_uuid), NotNullable: true}, Expr: &plan.Expr_F{F: &plan.Function{
+					Func: &plan.ObjectRef{ObjName: "uuid"},
+				}}},
+				OriginString: "(uuid())",
+			},
+		},
+		&plan.ColDef{
+			Name: "nullable_expr",
+			Typ:  plan.Type{Id: int32(types.T_uuid)},
+			Default: &plan.Default{
+				NullAbility: true,
+				Expr: &plan.Expr{Typ: plan.Type{Id: int32(types.T_uuid)}, Expr: &plan.Expr_F{F: &plan.Function{
+					Func: &plan.ObjectRef{ObjName: "uuid"},
+				}}},
+				OriginString: "(uuid())",
+			},
+		},
+	)
+	const createViewSQL = "create view v_source_t as " +
+		"select n_nationkey as qty, str_col, amount, priority, flags, nullable_col, expr_col, nullable_expr from nation"
+	createCtx := &rootSQLCompilerContext{MockCompilerContext: ctx, rootSQL: createViewSQL}
+	stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, createViewSQL, 1)
+	require.NoError(t, err)
+	viewPlan, err := BuildPlan(createCtx, stmt, false)
+	stmt.Free()
+	require.NoError(t, err)
+
+	viewDef := DeepCopyTableDef(viewPlan.GetDdl().GetCreateView().GetTableDef(), true)
+	require.Equal(t, "7", viewDef.GetCols()[0].GetDefault().GetOriginString())
+	viewDef.Name = "v_source_t"
+	viewDef.DbName = "tpch"
+	viewDef.TableType = catalog.SystemViewRel
+	ctx.tables[viewDef.Name] = viewDef
+	ctx.objects[viewDef.Name] = &plan.ObjectRef{SchemaName: "tpch", ObjName: viewDef.Name}
+
+	for _, test := range []struct {
+		name      string
+		selectSQL string
+	}{
+		{name: "direct view", selectSQL: "select qty, str_col, amount, priority, flags, nullable_col, expr_col, nullable_expr from v_source_t"},
+		{name: "view through derived", selectSQL: "select * from (select qty, str_col, amount, priority, flags, nullable_col, expr_col, nullable_expr from v_source_t) d"},
+		{name: "view through cte", selectSQL: "with d as (select qty, str_col, amount, priority, flags, nullable_col, expr_col, nullable_expr from v_source_t) select * from d"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL,
+				"create table copied as "+test.selectSQL, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			ctasPlan, err := BuildPlan(ctx, stmt, false)
+			require.NoError(t, err)
+			cols := ctasPlan.GetDdl().GetCreateTable().GetTableDef().GetCols()
+			require.GreaterOrEqual(t, len(cols), 8)
+			for i, wantOrigin := range []string{"0", "''", "0.00", "'low'", "''", ""} {
+				def := cols[i].GetDefault()
+				require.NotNil(t, def)
+				require.Equal(t, wantOrigin, def.GetOriginString(), cols[i].GetName())
+				if i == 5 {
+					require.True(t, def.GetNullAbility())
+					require.Nil(t, def.GetExpr())
+					continue
+				}
+				require.False(t, def.GetNullAbility())
+				require.NotNil(t, def.GetExpr(), cols[i].GetName())
+				require.Equal(t, cols[i].Typ.Id, def.GetExpr().Typ.Id, cols[i].GetName())
+			}
+			for _, i := range []int{6, 7} {
+				def := cols[i].GetDefault()
+				require.NotNil(t, def)
+				require.Equal(t, "(uuid())", def.GetOriginString(), cols[i].GetName())
+				require.Equal(t, i == 7, def.GetNullAbility(), cols[i].GetName())
+				require.Equal(t, "uuid", def.GetExpr().GetF().GetFunc().GetObjName(), cols[i].GetName())
+			}
+		})
+	}
+}
+
+func TestCTASViewDefaultPolicyMatrix(t *testing.T) {
+	explicitDefault := &plan.Default{
+		Expr:         makePlan2Int32ConstExprWithType(1),
+		OriginString: "1",
+	}
+	expressionDefault := func(origin string, nullable bool) *plan.Default {
+		return &plan.Default{
+			NullAbility: nullable,
+			Expr: &plan.Expr{
+				Typ: plan.Type{Id: int32(types.T_int32), NotNullable: !nullable},
+				Expr: &plan.Expr_F{F: &plan.Function{
+					Func: &plan.ObjectRef{ObjName: "generated_default"},
+				}},
+			},
+			OriginString: origin,
+		}
+	}
+
+	for _, test := range []struct {
+		name       string
+		typ        plan.Type
+		defaultDef *plan.Default
+		wantPolicy CTASDefaultPolicy
+		wantOrigin string
+	}{
+		{name: "date", typ: plan.Type{Id: int32(types.T_date), NotNullable: true}, defaultDef: explicitDefault},
+		{name: "datetime", typ: plan.Type{Id: int32(types.T_datetime), NotNullable: true}, defaultDef: explicitDefault},
+		{name: "time", typ: plan.Type{Id: int32(types.T_time), NotNullable: true}, defaultDef: explicitDefault, wantPolicy: CTASDefaultUseTypeDefault, wantOrigin: "'00:00:00'"},
+		{name: "timestamp", typ: plan.Type{Id: int32(types.T_timestamp), NotNullable: true}, defaultDef: explicitDefault},
+		{name: "year", typ: plan.Type{Id: int32(types.T_year), NotNullable: true}, defaultDef: explicitDefault, wantPolicy: CTASDefaultUseTypeDefault, wantOrigin: "'0000'"},
+		{name: "binary", typ: plan.Type{Id: int32(types.T_binary), Width: 8, NotNullable: true}, defaultDef: explicitDefault, wantPolicy: CTASDefaultUseTypeDefault, wantOrigin: "''"},
+		{name: "varbinary", typ: plan.Type{Id: int32(types.T_varbinary), Width: 8, NotNullable: true}, defaultDef: explicitDefault, wantPolicy: CTASDefaultUseTypeDefault, wantOrigin: "''"},
+		{name: "float", typ: plan.Type{Id: int32(types.T_float32), NotNullable: true}, defaultDef: explicitDefault, wantPolicy: CTASDefaultUseTypeDefault, wantOrigin: "0"},
+		{name: "double", typ: plan.Type{Id: int32(types.T_float64), NotNullable: true}, defaultDef: explicitDefault, wantPolicy: CTASDefaultUseTypeDefault, wantOrigin: "0"},
+		{name: "bit", typ: plan.Type{Id: int32(types.T_bit), Width: 8, NotNullable: true}, defaultDef: explicitDefault, wantPolicy: CTASDefaultUseTypeDefault, wantOrigin: "0"},
+		{name: "uuid expression", typ: plan.Type{Id: int32(types.T_uuid), NotNullable: true}, defaultDef: expressionDefault("(uuid())", false), wantPolicy: CTASDefaultInheritViewSource},
+		{name: "date expression", typ: plan.Type{Id: int32(types.T_date), NotNullable: true}, defaultDef: expressionDefault("(curdate())", false), wantPolicy: CTASDefaultInheritViewSource},
+		{name: "datetime expression", typ: plan.Type{Id: int32(types.T_datetime), NotNullable: true}, defaultDef: expressionDefault("(now())", false), wantPolicy: CTASDefaultInheritViewSource},
+		{name: "timestamp expression", typ: plan.Type{Id: int32(types.T_timestamp), NotNullable: true}, defaultDef: expressionDefault("(now())", false), wantPolicy: CTASDefaultInheritViewSource},
+		{name: "int expression", typ: plan.Type{Id: int32(types.T_int32), NotNullable: true}, defaultDef: expressionDefault("(1 + 2)", false), wantPolicy: CTASDefaultInheritViewSource},
+		{name: "constant folded int expression", typ: plan.Type{Id: int32(types.T_int32), NotNullable: true}, defaultDef: &plan.Default{Expr: makePlan2Int32ConstExprWithType(3), OriginString: "(1 + 2)"}, wantPolicy: CTASDefaultInheritViewSource},
+		{name: "decimal expression", typ: plan.Type{Id: int32(types.T_decimal64), Width: 10, Scale: 2, NotNullable: true}, defaultDef: expressionDefault("(1.25 + 1)", false), wantPolicy: CTASDefaultInheritViewSource},
+		{name: "double expression", typ: plan.Type{Id: int32(types.T_float64), NotNullable: true}, defaultDef: expressionDefault("(1.5 + 1)", false), wantPolicy: CTASDefaultInheritViewSource},
+		{name: "varchar expression", typ: plan.Type{Id: int32(types.T_varchar), Width: 40, NotNullable: true}, defaultDef: expressionDefault("(uuid())", false), wantPolicy: CTASDefaultInheritViewSource},
+		{name: "varbinary expression", typ: plan.Type{Id: int32(types.T_varbinary), Width: 40, NotNullable: true}, defaultDef: expressionDefault("(uuid())", false), wantPolicy: CTASDefaultInheritViewSource},
+		{name: "time expression", typ: plan.Type{Id: int32(types.T_time), NotNullable: true}, defaultDef: expressionDefault("('01:30:00')", false), wantPolicy: CTASDefaultInheritViewSource},
+		{name: "year expression", typ: plan.Type{Id: int32(types.T_year), NotNullable: true}, defaultDef: expressionDefault("(2024)", false), wantPolicy: CTASDefaultInheritViewSource},
+		{name: "blob expression", typ: plan.Type{Id: int32(types.T_blob), NotNullable: true}, defaultDef: expressionDefault("(blob_default())", false), wantPolicy: CTASDefaultInheritViewSource},
+		{name: "text expression", typ: plan.Type{Id: int32(types.T_text), NotNullable: true}, defaultDef: expressionDefault("('seed')", false), wantPolicy: CTASDefaultInheritViewSource},
+		{name: "nullable int expression", typ: plan.Type{Id: int32(types.T_int32)}, defaultDef: expressionDefault("(1 + 2)", true), wantPolicy: CTASDefaultInheritViewSource},
+		{name: "nullable varchar expression", typ: plan.Type{Id: int32(types.T_varchar)}, defaultDef: expressionDefault("(uuid())", true), wantPolicy: CTASDefaultInheritViewSource},
+		{name: "nullable blob expression", typ: plan.Type{Id: int32(types.T_blob)}, defaultDef: expressionDefault("(blob_default())", true), wantPolicy: CTASDefaultInheritViewSource},
+		{name: "nullable text expression", typ: plan.Type{Id: int32(types.T_text)}, defaultDef: expressionDefault("('seed')", true), wantPolicy: CTASDefaultInheritViewSource},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			metadata := SourceColumnMetadata{Typ: test.typ, Default: DeepCopyDefault(test.defaultDef)}
+			require.Equal(t, test.wantPolicy, ctasViewDefaultPolicy(metadata))
+			origin, ok := ctasViewTypeDefaultOrigin(test.typ)
+			if test.wantPolicy == CTASDefaultUseTypeDefault {
+				require.True(t, ok)
+				require.Equal(t, test.wantOrigin, origin)
+			} else if test.wantPolicy == CTASDefaultNone && test.typ.NotNullable {
+				require.False(t, ok)
+			}
+		})
+	}
+}
+
+func TestBuildNullableLOBCTASDefaultFromOrigin(t *testing.T) {
+	ctx := NewMockCompilerContext(false)
+	for _, oid := range []types.T{types.T_text, types.T_blob} {
+		defaultDef, err := buildCTASDefaultFromOrigin(
+			ctx, plan.Type{Id: int32(oid)}, true, "('seed')")
+		require.NoError(t, err)
+		require.True(t, defaultDef.GetNullAbility())
+		require.Equal(t, "('seed')", defaultDef.GetOriginString())
+		require.NotNil(t, defaultDef.GetExpr())
+		require.Equal(t, int32(oid), defaultDef.GetExpr().Typ.Id)
+	}
+}
+
 func addMySQLSpecialTypeColumns(ctx *MockCompilerContext) {
 	ctx.tables["nation"].Cols = append(ctx.tables["nation"].Cols,
 		&plan.ColDef{
@@ -402,6 +818,17 @@ func TestBuildCreateViewPreservesMySQLSpecialColumnTypes(t *testing.T) {
 		rootSQL:             rootSQL,
 	}
 	addMySQLSpecialTypeColumns(ctx.MockCompilerContext)
+	priorityCol := ctx.tables["nation"].Cols[len(ctx.tables["nation"].Cols)-2]
+	priorityCol.Default = &plan.Default{
+		Expr:         makePlan2StringConstExprWithType("medium"),
+		OriginString: "'medium'",
+	}
+	flagsCol := ctx.tables["nation"].Cols[len(ctx.tables["nation"].Cols)-1]
+	flagsCol.Default = &plan.Default{
+		NullAbility:  true,
+		Expr:         makePlan2Uint64ConstExprWithType(1),
+		OriginString: "'red'",
+	}
 
 	stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, rootSQL, 1)
 	require.NoError(t, err)
@@ -418,10 +845,14 @@ func TestBuildCreateViewPreservesMySQLSpecialColumnTypes(t *testing.T) {
 	require.Equal(t, int32(types.T_enum), priorityType.GetId())
 	require.Equal(t, "low,medium,high", priorityType.GetEnumvalues())
 	require.True(t, priorityType.GetNotNullable())
+	require.Equal(t, "'medium'", cols[0].GetDefault().GetOriginString())
+	require.Equal(t, "medium", cols[0].GetDefault().GetExpr().GetLit().GetSval())
 	require.Equal(t, "renamed_flags", cols[1].GetName())
 	require.Equal(t, int32(types.T_uint64), flagsType.GetId())
 	require.Equal(t, "red,green,blue", flagsType.GetEnumvalues())
 	require.False(t, flagsType.GetNotNullable())
+	require.Equal(t, "'red'", cols[1].GetDefault().GetOriginString())
+	require.Equal(t, uint64(1), cols[1].GetDefault().GetExpr().GetLit().GetU64Val())
 	require.Equal(t, "renamed_name", cols[2].GetName())
 	require.Equal(t, int32(types.T_varchar), nameType.GetId())
 }
@@ -767,18 +1198,21 @@ func TestViewSpecialTypeBoundaryCanonicalizesSemanticResults(t *testing.T) {
 func TestOutputColumnProvenanceCarriesSourceAndClearsSemanticBoundaries(t *testing.T) {
 	ctx := NewMockCompilerContext(false)
 	addMySQLSpecialTypeColumns(ctx)
-	ctx.tables["nation"].Cols[0].Default = &plan.Default{OriginString: "'ALGERIA'"}
+	ctx.tables["nation"].Cols[0].Default = &plan.Default{
+		Expr:         makePlan2Int32ConstExprWithType(7),
+		OriginString: "7",
+	}
 
 	tests := []struct {
 		name              string
 		sql               string
 		wantState         ProvenanceState
 		wantDefault       string
-		canInheritDefault bool
+		ctasDefaultPolicy CTASDefaultPolicy
 	}{
-		{name: "direct", sql: "select n_nationkey from nation", wantState: ProvenanceSingleSource, wantDefault: "'ALGERIA'", canInheritDefault: true},
-		{name: "alias derived", sql: "select k from (select n_nationkey as k from nation) d", wantState: ProvenanceSingleSource, wantDefault: "'ALGERIA'"},
-		{name: "non recursive cte", sql: "with d as (select n_nationkey as k from nation) select k from d", wantState: ProvenanceSingleSource, wantDefault: "'ALGERIA'"},
+		{name: "direct", sql: "select n_nationkey from nation", wantState: ProvenanceSingleSource, wantDefault: "7", ctasDefaultPolicy: CTASDefaultInheritSource},
+		{name: "alias derived", sql: "select k from (select n_nationkey as k from nation) d", wantState: ProvenanceSingleSource, wantDefault: "7"},
+		{name: "non recursive cte", sql: "with d as (select n_nationkey as k from nation) select k from d", wantState: ProvenanceSingleSource, wantDefault: "7"},
 		{name: "expression", sql: "select n_nationkey + 0 from nation", wantState: ProvenanceNone},
 		{name: "same arms union distinct", sql: "select n_nationkey from nation union select n_nationkey from nation", wantState: ProvenanceNone},
 		{name: "union all", sql: "select n_nationkey from nation union all select n_nationkey from nation", wantState: ProvenanceNone},
@@ -800,8 +1234,8 @@ func TestOutputColumnProvenanceCarriesSourceAndClearsSemanticBoundaries(t *testi
 			require.Equal(t, test.wantState, provenance.State)
 			if test.wantState == ProvenanceSingleSource {
 				require.NotNil(t, provenance.Source)
-				require.Equal(t, test.wantDefault, provenance.Source.Metadata.DefaultOriginString)
-				require.Equal(t, test.canInheritDefault, provenance.CanInheritSourceDefault)
+				require.Equal(t, test.wantDefault, provenance.Source.Metadata.Default.GetOriginString())
+				require.Equal(t, test.ctasDefaultPolicy, provenance.CTASDefaultPolicy)
 				require.NotZero(t, provenance.Source.RelPos)
 			} else {
 				require.Nil(t, provenance.Source)
@@ -812,14 +1246,18 @@ func TestOutputColumnProvenanceCarriesSourceAndClearsSemanticBoundaries(t *testi
 
 func TestBuildCTASConsumesOutputColumnProvenance(t *testing.T) {
 	ctx := NewMockCompilerContext(false)
-	ctx.tables["nation"].Cols[0].Default = &plan.Default{OriginString: "'ALGERIA'"}
+	sourceDefault := &plan.Default{
+		Expr:         makePlan2Int32ConstExprWithType(7),
+		OriginString: "7",
+	}
+	ctx.tables["nation"].Cols[0].Default = sourceDefault
 
 	tests := []struct {
 		name        string
 		selectSQL   string
 		wantDefault string
 	}{
-		{name: "direct alias", selectSQL: "select n_nationkey as k from nation", wantDefault: "'ALGERIA'"},
+		{name: "direct alias", selectSQL: "select n_nationkey as k from nation", wantDefault: "7"},
 		{name: "derived", selectSQL: "select k from (select n_nationkey as k from nation) d"},
 		{name: "cte", selectSQL: "with d as (select n_nationkey as k from nation) select k from d"},
 		{name: "expression", selectSQL: "select n_nationkey + 0 as k from nation"},
@@ -837,6 +1275,12 @@ func TestBuildCTASConsumesOutputColumnProvenance(t *testing.T) {
 			cols := p.GetDdl().GetCreateTable().GetTableDef().GetCols()
 			require.NotEmpty(t, cols)
 			require.Equal(t, test.wantDefault, cols[0].GetDefault().GetOriginString())
+			if test.wantDefault == "" {
+				require.Nil(t, cols[0].GetDefault().GetExpr())
+			} else {
+				require.Equal(t, int32(7), cols[0].GetDefault().GetExpr().GetLit().GetI32Val())
+				require.NotSame(t, sourceDefault.Expr, cols[0].GetDefault().GetExpr())
+			}
 		})
 	}
 }
@@ -845,7 +1289,10 @@ func TestOutputColumnProvenanceSnapshotsCatalogMetadataOnce(t *testing.T) {
 	ctx := NewMockCompilerContext(false)
 	addMySQLSpecialTypeColumns(ctx)
 	priorityCol := ctx.tables["nation"].Cols[len(ctx.tables["nation"].Cols)-2]
-	priorityCol.Default = &plan.Default{OriginString: "'low'"}
+	priorityCol.Default = &plan.Default{
+		Expr:         makePlan2StringConstExprWithType("low"),
+		OriginString: "'low'",
+	}
 
 	stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, "select priority from nation", 1)
 	require.NoError(t, err)
@@ -860,9 +1307,11 @@ func TestOutputColumnProvenanceSnapshotsCatalogMetadataOnce(t *testing.T) {
 
 	priorityCol.Typ.Enumvalues = "changed"
 	priorityCol.Default.OriginString = "'changed'"
+	priorityCol.Default.Expr.GetLit().Value = &plan.Literal_Sval{Sval: "changed"}
 	require.Equal(t, "low,medium,high", provenance.Source.Metadata.Typ.Enumvalues)
-	require.True(t, provenance.Source.Metadata.HasDefault)
-	require.Equal(t, "'low'", provenance.Source.Metadata.DefaultOriginString)
+	require.NotNil(t, provenance.Source.Metadata.Default)
+	require.Equal(t, "'low'", provenance.Source.Metadata.Default.GetOriginString())
+	require.Equal(t, "low", provenance.Source.Metadata.Default.GetExpr().GetLit().GetSval())
 }
 
 func TestTransparentOutputSourceExprRejectsSemanticExpressions(t *testing.T) {
@@ -1196,6 +1645,10 @@ func TestBuildAlterView(t *testing.T) {
 						Width: types.MaxVarcharLen,
 						Table: "a",
 					},
+					Default: &plan.Default{
+						Expr:         makePlan2StringConstExprWithType("seed"),
+						OriginString: "'seed'",
+					},
 				},
 			},
 		}}
@@ -1235,8 +1688,10 @@ func TestBuildAlterView(t *testing.T) {
 	ctx.EXPECT().GetRootSql().Return(sql1).AnyTimes()
 	stmt1, err := parsers.ParseOne(context.Background(), dialect.MYSQL, sql1, 1)
 	assert.NoError(t, err)
-	_, err = buildAlterView(stmt1.(*tree.AlterView), ctx)
+	alterPlan, err := buildAlterView(stmt1.(*tree.AlterView), ctx)
 	assert.NoError(t, err)
+	require.Equal(t, "'seed'", alterPlan.GetDdl().GetAlterView().GetTableDef().GetCols()[0].GetDefault().GetOriginString())
+	require.Equal(t, "seed", alterPlan.GetDdl().GetAlterView().GetTableDef().GetCols()[0].GetDefault().GetExpr().GetLit().GetSval())
 	require.Equal(t, ctx.GetAccountName(), "")
 
 	//direct recursive refrence
@@ -1762,6 +2217,83 @@ func TestBuildRegularSecondaryIndexPersistsPrefixLengths(t *testing.T) {
 			require.Equal(t, tt.length, prefixLengths[tt.column])
 		})
 	}
+}
+
+func TestBuildIndexPersistsExplicitVisibility(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	tests := []struct {
+		name    string
+		sql     string
+		visible bool
+	}{
+		{
+			name:    "default regular index is visible",
+			sql:     "CREATE TABLE idx_visibility_default (id INT PRIMARY KEY, a INT, KEY idx_a(a))",
+			visible: true,
+		},
+		{
+			name:    "explicit visible regular index",
+			sql:     "CREATE TABLE idx_visibility_visible (id INT PRIMARY KEY, a INT, KEY idx_a(a) VISIBLE)",
+			visible: true,
+		},
+		{
+			name:    "invisible regular index",
+			sql:     "CREATE TABLE idx_visibility_invisible (id INT PRIMARY KEY, a INT, KEY idx_a(a) INVISIBLE)",
+			visible: false,
+		},
+		{
+			name:    "invisible unique index",
+			sql:     "CREATE TABLE idx_visibility_unique (id INT PRIMARY KEY, a INT, UNIQUE KEY idx_a(a) INVISIBLE)",
+			visible: false,
+		},
+		{
+			name:    "invisible fulltext index",
+			sql:     "CREATE TABLE idx_visibility_fulltext (id INT PRIMARY KEY, body TEXT, FULLTEXT KEY idx_body(body) INVISIBLE)",
+			visible: false,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			logicPlan, err := runOneStmt(mock, t, tc.sql)
+			require.NoError(t, err)
+			indexes := logicPlan.GetDdl().GetCreateTable().GetTableDef().GetIndexes()
+			require.NotEmpty(t, indexes)
+			for _, indexDef := range indexes {
+				require.True(t, indexDef.VisibilitySet)
+				require.Equal(t, tc.visible, indexDef.Visible)
+			}
+		})
+	}
+}
+
+func TestBuildPrefixIndexV2ProtocolGate(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	proc := mock.CurrentContext().GetProcess()
+	rt := moruntime.ServiceRuntime(proc.GetService())
+	original, hadOriginal := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	defer func() {
+		if hadOriginal {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, original)
+		} else {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+		}
+	}()
+
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion12)
+	_, err := runOneStmt(mock, t,
+		"CREATE TABLE prefix_v1_ok (id INT PRIMARY KEY, name VARCHAR(32), INDEX idx_name(name(4)))")
+	require.NoError(t, err)
+	_, err = runOneStmt(mock, t,
+		"CREATE TABLE prefix_v2_blocked (id INT PRIMARY KEY, `head:line` VARCHAR(32), INDEX idx_name(`head:line`(4)))")
+	require.ErrorContains(t, err, "protocol version 13")
+
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion13)
+	logicPlan, err := runOneStmt(mock, t,
+		"CREATE TABLE prefix_v2_ok (id INT PRIMARY KEY, `head:line` VARCHAR(32), INDEX idx_name(`head:line`(4)))")
+	require.NoError(t, err)
+	indexDef := logicPlan.GetDdl().GetCreateTable().GetTableDef().GetIndexes()[0]
+	require.Equal(t, map[string]int{"head:line": 4}, catalog.IndexPrefixLengthsFromParams(indexDef.IndexAlgoParams))
 }
 
 func TestBuildVectorIndexAllowsIvfFlatOnly(t *testing.T) {

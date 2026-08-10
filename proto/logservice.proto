@@ -145,6 +145,10 @@ message CNStoreHeartbeat {
   Resource        Resource           = 13 [(gogoproto.nullable) = false];
   string  ShardServiceAddress   = 14;
   string          CommitID           = 15;
+  // AckedCommandBatchID is the last schedule-command batch accepted by this
+  // service. It is meaningful only when CommandDeliveryAckSupported is true.
+  uint64          AckedCommandBatchID = 16;
+  bool            CommandDeliveryAckSupported = 17;
 }
 
 // CNAllocateID is the periodic message sent tp the HAKeeper by CN stores.
@@ -175,6 +179,10 @@ message LogStoreHeartbeat {
 
   ConfigData ConfigData = 7;
   Locality Locality = 8 [(gogoproto.nullable) = false];
+  // CommandDeliverySupported is a binary capability used to activate the
+  // acknowledged delivery protocol only after every HAKeeper replica has
+  // upgraded.
+  bool CommandDeliverySupported = 9;
 };
 
 // TNShardInfo contains information of a launched TN shard.
@@ -212,6 +220,8 @@ message TNStoreHeartbeat {
   // AutoIncrEpochFenceSupported reports that this TN rejects writes whose
   // allocator epoch does not match the table epoch.
   bool AutoIncrEpochFenceSupported = 12;
+  uint64 AckedCommandBatchID = 13;
+  bool CommandDeliveryAckSupported = 14;
 };
 
 message RSMState {
@@ -262,6 +272,7 @@ enum MethodType {
   CHECK_HEALTH = 26;
   READ_LSN = 27;
   UPDATE_LEASEHOLDER_ID = 28;
+  GET_SCHEDULE_COMMANDS = 29;
 };
 
 enum RecordType {
@@ -343,6 +354,7 @@ message Request {
   uint64 NonVotingReplicaNum     = 14;
   Locality NonVotingLocality     = 15;
   CheckHealth CheckHealth        = 16;
+  ScheduleCommandQuery ScheduleCommandQuery = 17;
 };
 
 message LogResponse {
@@ -404,6 +416,7 @@ enum HAKeeperUpdateType {
   LogShardUpdate = 17;
   RestoreIDWatermarkUpdate = 18;
   CompleteLogServiceRecoveryUpdate = 19;
+  EnableCommandDeliveryUpdate = 20;
 }
 
 // HAKeeperState state transition diagram
@@ -519,6 +532,31 @@ message ScheduleCommand {
   BootstrapShard    BootstrapShard    = 11;
 }
 
+// ScheduleCommandQuery fetches the pending command batch for a service without
+// coupling command progress to a heartbeat proposal.
+message ScheduleCommandQuery {
+  string UUID = 1;
+  ServiceType ServiceType = 2;
+}
+
+// CommandDeliveryTargets carries deterministic phase-two evaluation inputs.
+// CN/TN state keeps historical records, so current entries carry timeout ticks
+// and let the RSM determine the live target set at commit. The UUID lists are
+// retained for wire compatibility with the earlier snapshot-based form.
+message CommandDeliveryTargets {
+  // UUID snapshots are retained for compatibility with the first unpublished
+  // implementation of the activation barrier. New phase-two entries evaluate
+  // the live set inside the RSM at the activation entry's linearization point.
+  repeated string CNStoreUUIDs = 1;
+  repeated string TNStoreUUIDs = 2;
+  // Explicit distinguishes a replicated empty target set from the legacy
+  // no-payload activation command.
+  bool Explicit = 3;
+  uint64 CNStoreTimeoutTicks = 4;
+  uint64 TNStoreTimeoutTicks = 5;
+  bool EvaluateCurrentStores = 6;
+}
+
 message JoinGossipCluster {
   repeated string Existing = 1;
 }
@@ -557,6 +595,18 @@ message BootstrapShard {
 message CommandBatch {
   uint64 Term                       = 1;
   repeated ScheduleCommand Commands = 2 [(gogoproto.nullable) = false];
+  // BatchID is the HAKeeper log index that installed this batch. It is stable
+  // across heartbeat delivery and read-only polling, allowing a service to
+  // suppress the same batch when those paths race. Zero denotes a batch
+  // created by an older HAKeeper and is never used as a delivery ID.
+  uint64 BatchID                    = 3;
+  // CommandIDs is positionally aligned with Commands. HAKeeper preserves an
+  // ID when a command is carried into a newer batch and assigns a new ID only
+  // to newly scheduled work. This distinguishes inherited commands from a
+  // later, intentionally identical command without depending on payload
+  // fingerprints. A non-empty acknowledged batch must contain one valid ID per
+  // command before it is exposed to CN/TN services.
+  repeated ScheduleCommandID CommandIDs = 4 [(gogoproto.nullable) = false];
 }
 
 // CNStoreInfo contains information on a CN store.
@@ -578,6 +628,10 @@ message CNStoreInfo {
   int64           UpTime             = 15;
   string       ShardServiceAddress   = 16;
   string          CommitID           = 17;
+  // CommandDeliveryAckSupported reports whether this CN can use the
+  // non-destructive acknowledged schedule-command protocol. It is copied
+  // from CNStoreHeartbeat so HAKeeper can gate activation and admission.
+  bool CommandDeliveryAckSupported = 18;
 }
 
 // CNState contains all CN details known to the HAKeeper.
@@ -606,6 +660,10 @@ message TNStoreInfo {
   string  ShardServiceAddress   = 10;
   uint64 ReplayedLsn = 11;
   bool AutoIncrEpochFenceSupported = 12;
+  // CommandDeliveryAckSupported reports whether this TN can use the
+  // non-destructive acknowledged schedule-command protocol. It is copied
+  // from TNStoreHeartbeat so HAKeeper can gate activation and admission.
+  bool CommandDeliveryAckSupported = 13;
 }
 
 // TNState contains all TN details known to the HAKeeper.
@@ -674,6 +732,7 @@ message LogStoreInfo {
   bool TaskServiceCreated = 6;
   ConfigData ConfigData = 7;
   Locality Locality = 8 [(gogoproto.nullable) = false];
+  bool CommandDeliverySupported = 9;
 }
 
 message LogState {
@@ -755,6 +814,26 @@ message HAKeeperRSMState {
   uint64 IDWatermarkRestoreGeneration = 20;
   bool LogServiceRecoveryPrepared = 21;
   bool LogServiceRecoveryCompleted = 22;
+  // CommandDeliveryEnabled is a one-way cluster capability transition. Once
+  // set, upgraded CN/TN heartbeats use persistent delivery plus explicit ack.
+  bool CommandDeliveryEnabled = 23;
+  // Preparing/Ready form a replicated barrier: capability heartbeats observed
+  // before every RSM replica upgraded cannot be used to enable new semantics.
+  bool CommandDeliveryPreparing = 24;
+  map<string, bool> CommandDeliveryReady = 25;
+  // Service readiness is tracked separately from log-service readiness. The
+  // maps are reset by the first barrier entry, so only CN/TN heartbeats
+  // observed after the barrier can enable acknowledged delivery.
+  map<string, bool> CommandDeliveryCNReady = 26;
+  map<string, bool> CommandDeliveryTNReady = 27;
+  // Once true, every pending batch known at the first upgraded tick has a
+  // non-zero BatchID. New batches are assigned an ID at insertion time.
+  bool CommandDeliveryBatchIDsAssigned = 28;
+  // Kept separate from CommandDeliveryBatchIDsAssigned because snapshots made
+  // by the first acknowledged-delivery implementation can have BatchIDs but no
+  // per-command identities. An absent field therefore triggers one migration
+  // scan after upgrade.
+  bool CommandDeliveryCommandIDsAssigned = 29;
 }
 
 // ReplicaInfo contains details of a replica
@@ -806,4 +885,13 @@ message Locality {
 
 message CheckHealth {
   uint64 ShardID = 1;
+}
+
+// ScheduleCommandID is unique within one target service. OriginBatchID is the
+// replicated HAKeeper log index that assigned the identity (normally the
+// command's install entry, or the migration entry for legacy pending work);
+// CommandIndex disambiguates commands assigned by the same log entry.
+message ScheduleCommandID {
+  uint64 OriginBatchID = 1;
+  uint64 CommandIndex  = 2;
 }

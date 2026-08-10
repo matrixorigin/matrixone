@@ -114,20 +114,32 @@ func (c *DashboardCreator) initFSCacheRow() dashboard.Option {
 			` / sum by(component) (` + c.getMetricWithFilter("mo_fs_cache_bytes", capilter) + `)`
 	}
 
-	onePanel := func(title, componentFilter string) row.Option {
+	onePanel := func(title, componentFilter string, showBackingAccounting bool) row.Option {
+		queries := []string{
+			`sum by (component) (` + c.getMetricWithFilter("mo_fs_cache_bytes", `type="inuse", `+componentFilter) + `)`,
+			`sum by (component) (` + c.getMetricWithFilter("mo_fs_cache_bytes", `type="cap", `+componentFilter) + `)`,
+			cacheUsingPercent(componentFilter),
+		}
+		legends := []string{
+			"{{component}} - inuse",
+			"{{component}} - cap",
+			"{{component}} - Usage",
+		}
+		if showBackingAccounting {
+			queries = append([]string{
+				`sum by (component) (` + c.getMetricWithFilter("mo_fs_cache_bytes", `type="logical", `+componentFilter) + `)`,
+				`sum by (component) (` + c.getMetricWithFilter("mo_fs_cache_bytes", `type="backing-overhead", `+componentFilter) + `)`,
+			}, queries...)
+			legends = append([]string{
+				"{{component}} - logical",
+				"{{component}} - backing overhead",
+			}, legends...)
+		}
 		return c.withTimeSeries(
 			title,
 			3,
-			[]string{
-				`sum by (component) (` + c.getMetricWithFilter("mo_fs_cache_bytes", `type="inuse", `+componentFilter) + `)`,
-				`sum by (component) (` + c.getMetricWithFilter("mo_fs_cache_bytes", `type="cap", `+componentFilter) + `)`,
-				cacheUsingPercent(componentFilter),
-			},
-			[]string{
-				"{{component}} - inuse",
-				"{{component}} - cap",
-				"{{component}} - Usage",
-			},
+			queries,
+			legends,
 			timeseries.Axis(tsaxis.Unit("bytes")),
 			/* like:
 			"overrides": [
@@ -151,9 +163,9 @@ func (c *DashboardCreator) initFSCacheRow() dashboard.Option {
 
 	return dashboard.Row(
 		"FileService Cache",
-		onePanel("Mem", `component=~".*mem"`),
-		onePanel("Meta", `component=~".*meta"`),
-		onePanel("Disk", `component=~".*disk"`),
+		onePanel("Mem", `component=~".*mem"`, true),
+		onePanel("Meta", `component=~".*meta"`, false),
+		onePanel("Disk", `component=~".*disk"`, false),
 	)
 }
 

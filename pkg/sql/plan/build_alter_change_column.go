@@ -267,10 +267,18 @@ func buildColumnAndConstraint(
 	// If the column name of the table changes, it is necessary to check if it is associated
 	// with the index key. If it is an index key column, column name replacement is required.
 	if newColName != oldCol.Name {
+		if err := requirePrefixIndexesRenameProtocol(
+			ctx, targetTableDef.Indexes, oldCol.Name, newColName,
+		); err != nil {
+			return nil, err
+		}
 		for _, indexInfo := range targetTableDef.Indexes {
 			for j, partCol := range indexInfo.Parts {
 				partCol = catalog.ResolveAlias(partCol)
 				if partCol == oldCol.Name {
+					if _, err := renameIndexPrefixLengthMetadata(indexInfo, oldCol.Name, newColName); err != nil {
+						return nil, err
+					}
 					indexInfo.Parts[j] = newColName
 				}
 			}
@@ -342,7 +350,7 @@ func checkIndexedColumnTypeChange(ctx context.Context, tableDef *plan.TableDef, 
 
 // Check if the column name is valid and conflicts with internal hidden columns
 func checkColumnNameValid(ctx context.Context, colName string) error {
-	if _, ok := catalog.InternalColumns[colName]; ok {
+	if _, ok := catalog.InternalColumns[colName]; ok || catalog.IsAlias(colName) {
 		return moerr.NewErrWrongColumnName(ctx, colName)
 	}
 	return nil
