@@ -1526,19 +1526,15 @@ func boundedBackendCreate(
 	case <-ctx.Done():
 		return nil, ctx.Err()
 	}
-	type createResult struct {
-		backend Backend
-		err     error
-	}
-	resultC := make(chan createResult, 1)
+	resultC := make(chan backendCreateResult)
 	go func() {
 		defer func() { <-slots }()
 		backend, err := create()
-		if ctx.Err() != nil && backend != nil {
-			backend.Close()
-			backend = nil
-		}
-		resultC <- createResult{backend: backend, err: err}
+		transferBackendCreateResult(
+			ctx,
+			resultC,
+			backendCreateResult{backend: backend, err: err},
+		)
 	}()
 
 	select {
@@ -1552,6 +1548,29 @@ func boundedBackendCreate(
 			return nil, err
 		}
 		return result.backend, result.err
+	}
+}
+
+type backendCreateResult struct {
+	backend Backend
+	err     error
+}
+
+// transferBackendCreateResult is the ownership linearization point for a
+// completed legacy create. An unbuffered transfer gives the Backend to exactly
+// one live receiver; if cancellation wins instead, the producer remains its
+// owner and destroys it before releasing the shared create slot.
+func transferBackendCreateResult(
+	ctx context.Context,
+	resultC chan<- backendCreateResult,
+	result backendCreateResult,
+) {
+	select {
+	case resultC <- result:
+	case <-ctx.Done():
+		if result.backend != nil {
+			result.backend.Close()
+		}
 	}
 }
 

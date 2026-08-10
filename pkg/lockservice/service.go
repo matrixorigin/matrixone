@@ -977,8 +977,8 @@ func (s *service) Close() error {
 			// every remaining reservation by transferring invocation out of service
 			// ownership before releasing the RPC transport. External callback bodies
 			// are non-blocking by contract and are never a Close wait dependency.
-			for _, callback := range s.unknownCommitResolver.takeResolvedCallbacks() {
-				callback.dispatch()
+			for _, txn := range s.unknownCommitResolver.takeResolvedTxns() {
+				txn.complete()
 			}
 		}
 		clientErr := s.remote.client.Close()

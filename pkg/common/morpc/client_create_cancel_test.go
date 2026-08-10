@@ -237,6 +237,53 @@ func TestBoundedBackendCreateClosesLateResultBeforeReleasingSlot(t *testing.T) {
 	}, time.Second, time.Millisecond)
 }
 
+func TestBackendCreateResultOwnershipTransfer(t *testing.T) {
+	t.Run("receiver owns transferred backend", func(t *testing.T) {
+		backend := &testBackend{activeTime: time.Now()}
+		resultC := make(chan backendCreateResult)
+		transferred := make(chan struct{})
+		go func() {
+			transferBackendCreateResult(
+				context.Background(),
+				resultC,
+				backendCreateResult{backend: backend},
+			)
+			close(transferred)
+		}()
+
+		result := <-resultC
+		<-transferred
+		require.Same(t, backend, result.backend)
+		backend.RLock()
+		closed := backend.closed
+		backend.RUnlock()
+		require.False(t, closed)
+	})
+
+	t.Run("producer closes backend when transfer is cancelled", func(t *testing.T) {
+		backend := &testBackend{activeTime: time.Now()}
+		resultC := make(chan backendCreateResult)
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+
+		transferred := make(chan struct{})
+		go func() {
+			transferBackendCreateResult(
+				ctx,
+				resultC,
+				backendCreateResult{backend: backend},
+			)
+			close(transferred)
+		}()
+		<-transferred
+
+		backend.RLock()
+		closed := backend.closed
+		backend.RUnlock()
+		require.True(t, closed)
+	})
+}
+
 func TestFactoryDeadlineWithoutLifecycleCancelRemainsFailureEvidence(t *testing.T) {
 	rpcClient, err := NewClient(
 		t.Name(),

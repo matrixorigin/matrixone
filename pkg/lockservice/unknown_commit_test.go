@@ -245,24 +245,141 @@ func TestUnknownCommitCallbackSaturationKeepsCleanupOwned(t *testing.T) {
 
 		saturatedTxn := []byte("callback-slot-saturated")
 		var unexpected atomic.Int32
+		retainedCallback := func() { unexpected.Add(1) }
 		err := service.ResolveCommitUnknown(
 			saturatedTxn,
 			time.Now().Add(time.Hour),
 			service.NextCommitSequence(),
-			func() { unexpected.Add(1) },
+			retainedCallback,
 		)
 		require.ErrorContains(t, err, "capacity exhausted")
+		resolutionDone, scheduled := UnknownCommitResolutionDone(err)
+		require.True(t, scheduled)
 		// Callback ownership stayed with the caller, but lock-cleanup ownership
-		// still transferred. Saturation must not strand an unknown transaction.
+		// still transferred. Its terminal signal preserves the caller's admission
+		// until cleanup finishes without exceeding the callback execution bound.
 		require.Eventually(t, func() bool {
 			return !service.unknownCommitResolver.isPending(saturatedTxn)
 		}, 5*time.Second, time.Millisecond)
+		select {
+		case <-resolutionDone:
+		case <-time.After(5 * time.Second):
+			t.Fatal("saturated callback owner did not observe terminal cleanup")
+		}
 		require.Zero(t, unexpected.Load())
+		retainedCallback()
+		require.Equal(t, int32(1), unexpected.Load())
 
 		close(release)
 		require.Eventually(t, func() bool {
 			return len(service.unknownCommitResolver.callbacks.slots) == 0
 		}, time.Second, time.Millisecond)
+	})
+}
+
+func TestUnknownCommitDuplicateCallbackKeepsNewOwner(t *testing.T) {
+	runLockServiceTests(t, []string{"s1"}, func(allocator *lockTableAllocator, services []*service) {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+
+		service := services[0]
+		txnID := []byte("duplicate-callback")
+		_, err := service.Lock(
+			ctx,
+			1,
+			[][]byte{[]byte("duplicate-callback-key")},
+			txnID,
+			newTestRowExclusiveOptions(),
+		)
+		require.NoError(t, err)
+		_, err = allocator.Valid(service.serviceID, txnID, nil)
+		require.NoError(t, err)
+
+		deadline := time.Now().Add(time.Hour)
+		var firstCalled atomic.Int32
+		var secondCalled atomic.Int32
+		require.NoError(t, service.ResolveCommitUnknown(
+			txnID,
+			deadline,
+			service.NextCommitSequence(),
+			func() { firstCalled.Add(1) },
+		))
+
+		retainedCallback := func() { secondCalled.Add(1) }
+		err = service.ResolveCommitUnknown(
+			txnID,
+			deadline.Add(time.Second),
+			service.NextCommitSequence(),
+			retainedCallback,
+		)
+		require.ErrorContains(t, err, "callback already registered")
+		resolutionDone, scheduled := UnknownCommitResolutionDone(err)
+		require.True(t, scheduled)
+		require.Len(t, service.unknownCommitResolver.callbacks.slots, 1)
+		require.True(t, service.unknownCommitResolver.isPending(txnID))
+		require.Zero(t, firstCalled.Load())
+		require.Zero(t, secondCalled.Load())
+
+		allocator.FinishCommit(service.serviceID, txnID)
+		select {
+		case <-resolutionDone:
+		case <-time.After(5 * time.Second):
+			t.Fatal("duplicate callback owner did not observe terminal cleanup")
+		}
+		require.Eventually(t, func() bool {
+			return firstCalled.Load() == 1 &&
+				len(service.unknownCommitResolver.callbacks.slots) == 0
+		}, time.Second, time.Millisecond)
+		require.Zero(t, secondCalled.Load())
+
+		// A non-nil error leaves the new callback with its caller. Invoking it after
+		// the shared terminal signal models the txn client's retained-owner path.
+		retainedCallback()
+		require.Equal(t, int32(1), secondCalled.Load())
+	})
+}
+
+func TestUnknownCommitScheduledSignalCompletesOnClose(t *testing.T) {
+	runLockServiceTests(t, []string{"s1"}, func(allocator *lockTableAllocator, services []*service) {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+
+		service := services[0]
+		service.unknownCommitResolver.callbacks = newUnknownCommitCallbacks(0)
+		txnID := []byte("scheduled-signal-close")
+		_, err := service.Lock(
+			ctx,
+			1,
+			[][]byte{[]byte("scheduled-signal-close-key")},
+			txnID,
+			newTestRowExclusiveOptions(),
+		)
+		require.NoError(t, err)
+		_, err = allocator.Valid(service.serviceID, txnID, nil)
+		require.NoError(t, err)
+
+		var called atomic.Int32
+		retainedCallback := func() { called.Add(1) }
+		err = service.ResolveCommitUnknown(
+			txnID,
+			time.Now().Add(time.Hour),
+			service.NextCommitSequence(),
+			retainedCallback,
+		)
+		require.ErrorContains(t, err, "capacity exhausted")
+		resolutionDone, scheduled := UnknownCommitResolutionDone(err)
+		require.True(t, scheduled)
+		require.True(t, service.unknownCommitResolver.isPending(txnID))
+
+		require.NoError(t, service.Close())
+		select {
+		case <-resolutionDone:
+		case <-time.After(time.Second):
+			t.Fatal("service Close did not publish terminal cleanup")
+		}
+		require.Zero(t, called.Load())
+		retainedCallback()
+		require.Equal(t, int32(1), called.Load())
 	})
 }
 
@@ -278,6 +395,8 @@ func TestUnknownCommitCallbackAdmissionRollsBackWhenTaskStartFails(t *testing.T)
 			func() { called.Add(1) },
 		)
 		require.Error(t, err)
+		require.False(t, service.unknownCommitResolver.isPending(
+			[]byte("resolver-task-start-failure")))
 		require.Empty(t, service.unknownCommitResolver.callbacks.slots)
 		require.NoError(t, service.Close())
 		require.Zero(t, called.Load())
