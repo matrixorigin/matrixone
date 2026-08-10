@@ -28,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fulltext"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -4274,7 +4275,8 @@ type UserDefinedVar struct {
 	// compatibility, but MySQL fixes their effective type at statement start.
 	// Keeping the assignment type here prevents a numeric sibling operand from
 	// silently narrowing a decimal or floating-point variable.
-	Type planpb.Type
+	Type             planpb.Type
+	PrepareParamKind vector.PrepareParamKind
 }
 
 // inferUserDefinedVarType supplies a conservative type for callers which set
@@ -4283,7 +4285,7 @@ type UserDefinedVar struct {
 // type separately when it is available.
 func inferUserDefinedVarType(value interface{}) planpb.Type {
 	var oid types.T
-	switch value.(type) {
+	switch v := value.(type) {
 	case bool:
 		oid = types.T_bool
 	case int, int8, int16, int32, int64:
@@ -4304,12 +4306,54 @@ func inferUserDefinedVarType(value interface{}) planpb.Type {
 		oid = types.T_enum
 	case []byte:
 		oid = types.T_varbinary
+	case []float32:
+		return planpb.Type{Id: int32(types.T_array_float32), Width: int32(len(v))}
+	case []float64:
+		return planpb.Type{Id: int32(types.T_array_float64), Width: int32(len(v))}
+	case []types.BF16:
+		return planpb.Type{Id: int32(types.T_array_bf16), Width: int32(len(v))}
+	case []types.Float16:
+		return planpb.Type{Id: int32(types.T_array_float16), Width: int32(len(v))}
+	case []int8:
+		return planpb.Type{Id: int32(types.T_array_int8), Width: int32(len(v))}
 	case nil:
 		oid = types.T_text
 	default:
 		oid = types.T_text
 	}
 	return planpb.Type{Id: int32(oid)}
+}
+
+func prepareParamKindFromType(oid types.T) vector.PrepareParamKind {
+	switch oid {
+	case types.T_bit, types.T_int8, types.T_int16, types.T_int32, types.T_int64,
+		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
+		types.T_year:
+		return vector.PrepareParamInteger
+	case types.T_float32, types.T_float64:
+		return vector.PrepareParamFloat
+	case types.T_decimal64, types.T_decimal128, types.T_decimal256:
+		return vector.PrepareParamDecimal
+	case types.T_bool:
+		return vector.PrepareParamBoolean
+	default:
+		return vector.PrepareParamNone
+	}
+}
+
+func prepareParamKindFromValue(value any) vector.PrepareParamKind {
+	switch value.(type) {
+	case int, int8, int16, int32, int64, uint, uint8, uint16, uint32, uint64, types.MoYear:
+		return vector.PrepareParamInteger
+	case float32, float64:
+		return vector.PrepareParamFloat
+	case types.Decimal64, types.Decimal128, types.Decimal256:
+		return vector.PrepareParamDecimal
+	case bool:
+		return vector.PrepareParamBoolean
+	default:
+		return vector.PrepareParamNone
+	}
 }
 
 func autocommitValue(ses FeSession) (bool, error) {

@@ -196,17 +196,38 @@ var (
 	FSCachePressureMetaEvictDuration   = fsCachePressureEvictDuration.WithLabelValues("meta")
 )
 
-// GetFsCacheBytesGauge return inuse, cap Gauge metric
-// {typ} should be [mem, disk, meta]
+// GetFsCacheBytesGauge returns physical in-use and capacity gauges.
+// {typ} should be [mem, disk, meta].
 func GetFsCacheBytesGauge(name, typ string) (inuse prometheus.Gauge, capacity prometheus.Gauge) {
+	return getFsCacheBytesGauge(name, typ, "inuse"),
+		getFsCacheBytesGauge(name, typ, "cap")
+}
+
+// GetFsCacheLogicalBytesGauge returns the logical payload gauge for a cache.
+// Physical cache capacity and admission are exposed through GetFsCacheBytesGauge.
+func GetFsCacheLogicalBytesGauge(name, typ string) prometheus.Gauge {
+	return getFsCacheBytesGauge(name, typ, "logical")
+}
+
+// GetFsCacheBackingOverheadBytesGauge returns capacity retained by the cache
+// but not used by its logical payload. It includes allocator size-class
+// rounding and any caller-supplied slice capacity beyond the payload length.
+func GetFsCacheBackingOverheadBytesGauge(name, typ string) prometheus.Gauge {
+	return getFsCacheBytesGauge(name, typ, "backing-overhead")
+}
+
+func getFsCacheBytesGauge(name, typ, metricType string) prometheus.Gauge {
+	return fsCacheBytes.WithLabelValues(fsCacheComponent(name, typ), metricType)
+}
+
+func fsCacheComponent(name, typ string) string {
 	var component string
 	if name == "" {
 		component = typ
 	} else {
 		component = name + "-" + typ
 	}
-	return fsCacheBytes.WithLabelValues(component, "inuse"),
-		fsCacheBytes.WithLabelValues(component, "cap")
+	return component
 }
 
 var (

@@ -37,6 +37,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -367,16 +369,46 @@ func (ses *Session) SetUserDefinedVar(name string, value interface{}, sql string
 }
 
 func (ses *Session) setUserDefinedVar(name string, value interface{}, sql string, isBin bool) error {
-	return ses.setUserDefinedVarWithType(name, value, sql, isBin, inferUserDefinedVarType(value))
+	return ses.setUserDefinedVarWithTypeAndKind(
+		name, value, sql, isBin, inferUserDefinedVarType(value), prepareParamKindFromValue(value))
 }
 
 func (ses *Session) setUserDefinedVarWithType(name string, value interface{}, sql string, isBin bool, typ plan.Type) error {
+	return ses.setUserDefinedVarWithTypeAndKind(
+		name, value, sql, isBin, typ, prepareParamKindFromType(types.T(typ.Id)))
+}
+
+func (ses *Session) setUserDefinedVarWithKind(
+	name string,
+	value interface{},
+	sql string,
+	isBin bool,
+	kind vector.PrepareParamKind,
+) error {
+	return ses.setUserDefinedVarWithTypeAndKind(
+		name, value, sql, isBin, inferUserDefinedVarType(value), kind)
+}
+
+func (ses *Session) setUserDefinedVarWithTypeAndKind(
+	name string,
+	value interface{},
+	sql string,
+	isBin bool,
+	typ plan.Type,
+	kind vector.PrepareParamKind,
+) error {
 	if typ.Id == 0 {
 		typ = inferUserDefinedVarType(value)
 	}
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
-	ses.userDefinedVars[strings.ToLower(name)] = &UserDefinedVar{Value: value, Sql: sql, IsBin: isBin, Type: typ}
+	ses.userDefinedVars[strings.ToLower(name)] = &UserDefinedVar{
+		Value:            value,
+		Sql:              sql,
+		IsBin:            isBin,
+		Type:             typ,
+		PrepareParamKind: kind,
+	}
 	return nil
 }
 

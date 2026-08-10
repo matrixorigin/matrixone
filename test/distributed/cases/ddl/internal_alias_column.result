@@ -1,0 +1,38 @@
+drop database if exists internal_alias_column;
+create database internal_alias_column;
+use internal_alias_column;
+create table create_reject (
+id int primary key,
+`__mo_alias_payload` varchar(32),
+key idx_alias(`__mo_alias_payload`(2))
+);
+invalid input: table column name '__mo_alias_payload' is illegal and conflicts with internal keyword
+create table ctas_reject as
+select 1 as id, 'alpha-one' as `__mo_alias_payload`;
+invalid input: table column name '__mo_alias_payload' is illegal and conflicts with internal keyword
+create table ctas_ok as
+select 1 as id, 'alpha-one' as payload;
+show create table ctas_ok;
+➤ Table[12,7,0]  ¦  Create Table[12,82,0]  𝄀
+ctas_ok  ¦  CREATE TABLE `ctas_ok` (
+  `id` bigint NOT NULL,
+  `payload` varchar(9) NOT NULL
+)
+create table alter_reject (
+id int primary key,
+payload varchar(32)
+);
+alter table alter_reject rename column payload to `__mo_alias_payload`;
+Incorrect column name '__mo_alias_payload'
+alter table alter_reject change column payload `__mo_alias_payload` varchar(32);
+Incorrect column name '__mo_alias_payload'
+alter table alter_reject add column `__mo_alias_payload` varchar(32);
+Incorrect column name '__mo_alias_payload'
+show create table alter_reject;
+➤ Table[12,12,0]  ¦  Create Table[12,111,0]  𝄀
+alter_reject  ¦  CREATE TABLE `alter_reject` (
+  `id` int NOT NULL,
+  `payload` varchar(32) DEFAULT NULL,
+  PRIMARY KEY (`id`)
+)
+drop database internal_alias_column;

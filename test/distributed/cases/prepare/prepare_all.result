@@ -671,6 +671,26 @@ execute s using @maxint;
 18446744073709551615.5
 deallocate prepare s;
 drop table prepare_bit_numeric;
+drop table if exists prepare_bit64_signed;
+create table prepare_bit64_signed (b bit(64));
+insert into prepare_bit64_signed values (-6109877384019645241);
+select hex(b), cast(b as unsigned) from prepare_bit64_signed;
+➤ hex(b)[12,-1,0]  ¦  cast(b as unsigned)[-5,64,0]  𝄀
+AB355AE40850ECC7  ¦  12336866689689906375
+truncate table prepare_bit64_signed;
+insert into prepare_bit64_signed values ('-6109877384019645241');
+-- @regex("(data out of range|data too long)", true)
+Data truncation: data out of range: data type bit(64), value -6109877384019645241
+drop table if exists prepare_bit63_signed;
+create table prepare_bit63_signed (b bit(63));
+insert into prepare_bit63_signed values (-1);
+-- @regex("data out of range", true)
+Data truncation: data out of range: data type int63, value -1
+select count(*) from prepare_bit63_signed;
+➤ count(*)[-5,64,0]  𝄀
+0
+drop table prepare_bit64_signed;
+drop table prepare_bit63_signed;
 CREATE DATABASE mocloud_meta;
 PREPARE mo_stmt_id_1 FROM SELECT SCHEMA_NAME from Information_schema.SCHEMATA where SCHEMA_NAME LIKE ? ORDER BY SCHEMA_NAME=? DESC,SCHEMA_NAME limit 1;
 SET @dbname1 = 'mocloud_meta%';

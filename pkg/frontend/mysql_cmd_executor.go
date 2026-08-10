@@ -929,16 +929,19 @@ func doSetVar(
 	var ok bool
 	var userVarIsBin bool
 	var userVarType plan.Type
+	var userVarPrepareParamKind vector.PrepareParamKind
 	type evaluatedAssignment struct {
-		assign       *tree.VarAssignmentExpr
-		value        interface{}
-		userVarIsBin bool
-		valueType    plan.Type
+		assign                  *tree.VarAssignmentExpr
+		value                   interface{}
+		userVarIsBin            bool
+		valueType               plan.Type
+		userVarPrepareParamKind vector.PrepareParamKind
 	}
 	evaluateAssignment := func(assign *tree.VarAssignmentExpr) (evaluatedAssignment, error) {
 		isBin := false
-		value, valueType, evalErr := getExprValueWithPrepareModeAndType(
-			assign.Value, ses, execCtx, preparedExpression, &isBin)
+		prepareParamKind := vector.PrepareParamNone
+		value, valueType, evalErr := getExprValueWithPrepareMeta(
+			assign.Value, ses, execCtx, preparedExpression, &prepareParamKind, &isBin)
 		if evalErr != nil {
 			return evaluatedAssignment{}, evalErr
 		}
@@ -949,13 +952,13 @@ func doSetVar(
 			}
 		}
 		return evaluatedAssignment{
-			assign:       assign,
-			value:        value,
-			userVarIsBin: isBin,
-			valueType:    valueType,
+			assign:                  assign,
+			value:                   value,
+			userVarIsBin:            isBin,
+			valueType:               valueType,
+			userVarPrepareParamKind: prepareParamKind,
 		}, nil
 	}
-
 	setVarFunc := func(system, global bool, name string, value interface{}, sql string) error {
 		var oldValueRaw interface{}
 		if system {
@@ -992,7 +995,8 @@ func doSetVar(
 				}
 			}
 		} else {
-			err = ses.setUserDefinedVarWithType(name, value, sql, userVarIsBin, userVarType)
+			err = ses.setUserDefinedVarWithTypeAndKind(
+				name, value, sql, userVarIsBin, userVarType, userVarPrepareParamKind)
 			if err != nil {
 				return err
 			}
@@ -1006,6 +1010,7 @@ func doSetVar(
 		value := item.value
 		userVarIsBin = item.userVarIsBin
 		userVarType = item.valueType
+		userVarPrepareParamKind = item.userVarPrepareParamKind
 
 		//TODO : fix SET NAMES after parser is ready
 		if assign.SetNames {
@@ -4608,6 +4613,7 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 	proc.SetAffectedRows(ses.GetLastAffectedRows())
 	proc.SetResolveVariableFunc(ses.txnCompileCtx.ResolveVariable)
 	proc.SetResolveVariableIsBinFunc(ses.txnCompileCtx.ResolveVariableIsBin)
+	proc.SetResolveVariablePrepareParamKindFunc(ses.txnCompileCtx.ResolveVariablePrepareParamKind)
 	refreshStatementScopedSessionInfo(ses, proc)
 	// Frontend client SQL — session-bound resolver. Procs constructed
 	// via pkg/sql/compile/sql_executor.go's NewTopProcess inherit

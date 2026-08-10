@@ -1761,6 +1761,17 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 	if stmt.IsAsSelect {
 		// add as select cols
 		for _, col := range asSelectCols {
+			if !checkTableColumnNameValid(col.Name) {
+				colName := col.OriginName
+				if colName == "" {
+					colName = col.Name
+				}
+				return moerr.NewInvalidInputf(
+					ctx.GetContext(),
+					"table column name '%s' is illegal and conflicts with internal keyword",
+					colName,
+				)
+			}
 			colMap[col.Name] = col
 			createTable.TableDef.Cols = append(createTable.TableDef.Cols, col)
 		}
@@ -2422,6 +2433,7 @@ func buildFullTextIndexTable(createTable *plan.CreateTable, indexInfos []*tree.F
 		if err != nil {
 			return err
 		}
+		setIndexDefsVisibility(idxDefs, indexInfo.IndexOption)
 		createTable.IndexTables = append(createTable.IndexTables, tblDefs...)
 		createTable.TableDef.Indexes = append(createTable.TableDef.Indexes, idxDefs...)
 	}
@@ -2534,12 +2546,13 @@ func buildUniqueIndexTable(createTable *plan.CreateTable, indexInfos []*tree.Uni
 		indexDef.IndexTableName = indexTableName
 		indexDef.Parts = indexParts
 		indexDef.TableExist = true
+		setIndexDefVisibility(indexDef, indexInfo.IndexOption)
 		if indexInfo.IndexOption != nil {
 			indexDef.Comment = indexInfo.IndexOption.Comment
 		} else {
 			indexDef.Comment = ""
 		}
-		indexDef.IndexAlgoParams, err = catalog.AddIndexPrefixLengthsToParams(indexDef.IndexAlgoParams, indexInfo.KeyParts)
+		indexDef.IndexAlgoParams, err = addIndexPrefixLengthsToParams(ctx, indexDef.IndexAlgoParams, indexInfo.KeyParts)
 		if err != nil {
 			return err
 		}
@@ -2565,6 +2578,20 @@ func buildIndexAlgoParams(indexInfo *tree.Index) (string, error) {
 		return catalog.IndexParamsMapToJsonString(res)
 	}
 	return catalog.IndexParamsToJsonString(indexInfo)
+}
+
+func addIndexPrefixLengthsToParams(ctx CompilerContext, indexParams string, keyParts []*tree.KeyPart) (string, error) {
+	for _, keyPart := range keyParts {
+		if keyPart == nil || keyPart.ColName == nil || keyPart.Length <= 0 {
+			continue
+		}
+		if err := requirePrefixIndexV2Protocol(
+			ctx.GetContext(), ctx.GetProcess(), keyPart.ColName.ColName(),
+		); err != nil {
+			return "", err
+		}
+	}
+	return catalog.AddIndexPrefixLengthsToParams(indexParams, keyParts)
 }
 
 func buildSecondaryIndexDef(createTable *plan.CreateTable, indexInfos []*tree.Index, colMap map[string]*ColDef, existedIndexes []*plan.IndexDef, pkeyName string, ctx CompilerContext) (err error) {
@@ -2602,11 +2629,23 @@ func buildSecondaryIndexDef(createTable *plan.CreateTable, indexInfos []*tree.In
 		if err != nil {
 			return err
 		}
+		setIndexDefsVisibility(indexDef, indexInfo.IndexOption)
 		createTable.IndexTables = append(createTable.IndexTables, tableDef...)
 		createTable.TableDef.Indexes = append(createTable.TableDef.Indexes, indexDef...)
 
 	}
 	return nil
+}
+
+func setIndexDefsVisibility(indexDefs []*plan.IndexDef, option *tree.IndexOption) {
+	for _, indexDef := range indexDefs {
+		setIndexDefVisibility(indexDef, option)
+	}
+}
+
+func setIndexDefVisibility(indexDef *plan.IndexDef, option *tree.IndexOption) {
+	visible := option == nil || option.Visible != tree.VISIBLE_TYPE_INVISIBLE
+	catalog.SetIndexVisibility(indexDef, visible)
 }
 
 func checkSpatialIndexColumnSupport(ctx CompilerContext, indexInfo *tree.Index, colMap map[string]*ColDef) error {
@@ -2751,7 +2790,7 @@ func buildMasterSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, co
 		indexDef.Comment = ""
 		indexDef.IndexAlgoParams = ""
 	}
-	indexDef.IndexAlgoParams, err = catalog.AddIndexPrefixLengthsToParams(indexDef.IndexAlgoParams, indexInfo.KeyParts)
+	indexDef.IndexAlgoParams, err = addIndexPrefixLengthsToParams(ctx, indexDef.IndexAlgoParams, indexInfo.KeyParts)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -2940,7 +2979,7 @@ func buildRegularSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, c
 		indexDef.Comment = ""
 		indexDef.IndexAlgoParams = ""
 	}
-	indexDef.IndexAlgoParams, err = catalog.AddIndexPrefixLengthsToParams(indexDef.IndexAlgoParams, indexInfo.KeyParts)
+	indexDef.IndexAlgoParams, err = addIndexPrefixLengthsToParams(ctx, indexDef.IndexAlgoParams, indexInfo.KeyParts)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -3075,6 +3114,7 @@ func CreateIndexDef(ctx planplugin.CompilerContext, indexInfo *tree.Index,
 
 	indexDef.Unique = isUnique
 	indexDef.TableExist = true
+	setIndexDefVisibility(indexDef, indexInfo.IndexOption)
 
 	// Algorithm related fields
 	indexDef.IndexAlgo = indexInfo.KeyType.ToString()

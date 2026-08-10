@@ -39,6 +39,10 @@ const (
 	nextBatch   = 5
 	firstWindow = 6
 	interval    = 7
+	// resumeAfterFlush advances to the next active window after an internal
+	// result flush. The boundary window was already published by the previous
+	// aggregate generation, so this transition must not emit it again.
+	resumeAfterFlush = 8
 )
 
 type container struct {
@@ -71,6 +75,8 @@ type container struct {
 
 	group int
 	aggs  []aggexec.AggFuncExec
+
+	prepareParamKind aggexec.PrepareParamKindStates
 
 	wStart []types.Datetime
 	wEnd   []types.Datetime
@@ -194,6 +200,7 @@ func (timeWin *TimeWin) Reset(proc *process.Process, pipelineFailed bool, err er
 	ctr.freeAgg()
 	ctr.aggs = nil
 	ctr.resetParam(timeWin)
+	ctr.prepareParamKind.Reset(nil)
 }
 
 func (timeWin *TimeWin) MakeIntervalAndSliding(interval, sliding *plan.Expr) error {
@@ -251,6 +258,7 @@ func (timeWin *TimeWin) Free(proc *process.Process, pipelineFailed bool, err err
 	ctr.freeVector(proc.Mp())
 	ctr.freeExes()
 	ctr.freeAgg()
+	ctr.prepareParamKind.Reset(nil)
 }
 
 func (timeWin *TimeWin) ExecProjection(proc *process.Process, input *batch.Batch) (*batch.Batch, error) {

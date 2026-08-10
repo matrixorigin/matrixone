@@ -550,11 +550,29 @@ func TestDataProgressPendingSetIsBounded(t *testing.T) {
 	require.False(t, rb.livenessMu.overflow)
 }
 
-func TestFailedLivenessProbeResetsDataConnection(t *testing.T) {
-	probed := make(chan struct{}, 1)
+func TestTimedOutLivenessProbePreservesSlowDataResponse(t *testing.T) {
+	requestReceived := make(chan struct{})
+	releaseResponse := make(chan struct{})
+	probeStarted := make(chan struct{})
+	var requestOnce sync.Once
+	var probeOnce sync.Once
+	var releaseOnce sync.Once
+	release := func() { releaseOnce.Do(func() { close(releaseResponse) }) }
+	t.Cleanup(release)
+
 	testBackendSend(t,
-		func(goetty.IOSession, interface{}, uint64) error {
-			return nil
+		func(conn goetty.IOSession, msg interface{}, _ uint64) error {
+			request := msg.(RPCMessage)
+			requestOnce.Do(func() { close(requestReceived) })
+			select {
+			case <-releaseResponse:
+			case <-time.After(time.Second):
+				return context.DeadlineExceeded
+			}
+			return conn.Write(RPCMessage{
+				Ctx:     request.Ctx,
+				Message: newTestMessage(request.Message.GetID()),
+			}, goetty.WriteOptions{Flush: true})
 		},
 		func(b *remoteBackend) {
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
@@ -562,19 +580,33 @@ func TestFailedLivenessProbeResetsDataConnection(t *testing.T) {
 			f, err := b.Send(ctx, newTestMessage(1))
 			require.NoError(t, err)
 			defer f.Close()
-			_, err = f.Get()
-			require.Error(t, err)
-			require.NotErrorIs(t, err, context.DeadlineExceeded)
+
 			select {
-			case <-probed:
-			default:
+			case <-requestReceived:
+			case <-ctx.Done():
+				t.Fatal("request did not reach server")
+			}
+			select {
+			case <-probeStarted:
+			case <-ctx.Done():
 				t.Fatal("failed liveness probe did not run")
 			}
+
+			require.False(t, b.admissionAvailable(),
+				"an inconclusive probe must still seal the inactive data generation")
+			_, err = b.Send(ctx, newTestMessage(2))
+			require.ErrorIs(t, err, backendDraining)
+
+			release()
+			_, err = f.Get()
+			require.NoError(t, err,
+				"a timed-out control transport must not discard a valid slow data response")
 		},
 		WithBackendReadTimeout(20*time.Millisecond),
-		WithBackendLivenessProbe(func(context.Context, string) error {
-			probed <- struct{}{}
-			return errors.New("control transport unavailable")
+		WithBackendLivenessProbe(func(ctx context.Context, _ string) error {
+			probeOnce.Do(func() { close(probeStarted) })
+			<-ctx.Done()
+			return ctx.Err()
 		}),
 	)
 }
