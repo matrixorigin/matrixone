@@ -1940,19 +1940,14 @@ func (builder *QueryBuilder) applyExtraFiltersOnIndex(idxDef *IndexDef, node *pl
 		if col == nil {
 			continue
 		}
-		if partPos, ok := regularIndexPartPosition(idxDef, node.TableDef, col.ColPos); ok {
-			partName := catalog.ResolveAlias(idxDef.Parts[partPos])
-			if prefixLengths[partName] > 0 {
-				// A prefix index only stores a lossy substring. Applying a
-				// full-value predicate to it can reject valid candidates, so
-				// leave the predicate as a base-table residual.
-				continue
-			}
+		access := resolveRegularIndexBackfillResidualAccess(idxDef, node.TableDef, col.ColPos, prefixLengths, nil)
+		switch access.source {
+		case regularIndexResidualIndexKey:
 			idxColExpr := GetColExpr(idxTableNode.TableDef.Cols[0].Typ, idxTableNode.BindingTags[0], 0)
 			mappedExpr := idxColExpr
 			if indexTableStoresSerializedKey(idxDef) {
 				var err error
-				mappedExpr, err = MakeSerialExtractExpr(builder.GetContext(), idxColExpr, fn.Args[colArgIdx].Typ, int64(partPos))
+				mappedExpr, err = MakeSerialExtractExpr(builder.GetContext(), idxColExpr, fn.Args[colArgIdx].Typ, int64(access.position))
 				if err != nil {
 					// Extra-filter pushdown is optional. The original filter remains on
 					// the base table, so skip an unsupported serialized-key mapping.
@@ -1962,30 +1957,20 @@ func (builder *QueryBuilder) applyExtraFiltersOnIndex(idxDef *IndexDef, node *pl
 			newFilter := DeepCopyExpr(node.FilterList[i])
 			newFilter.GetF().Args[colArgIdx] = mappedExpr
 			idxTableNode.FilterList = append(idxTableNode.FilterList, newFilter)
-			continue
-		}
-
-		if len(node.TableDef.Pkey.Names) == 1 {
-			if col.Name == node.TableDef.Pkey.PkeyColName {
-				idxColExpr := GetColExpr(idxTableNode.TableDef.Cols[1].Typ, idxTableNode.BindingTags[0], 1)
-				newFilter := DeepCopyExpr(node.FilterList[i])
-				newFilter.GetF().Args[colArgIdx] = idxColExpr
-				idxTableNode.FilterList = append(idxTableNode.FilterList, newFilter)
+		case regularIndexResidualPhysicalPK:
+			idxColExpr := GetColExpr(idxTableNode.TableDef.Cols[1].Typ, idxTableNode.BindingTags[0], 1)
+			newFilter := DeepCopyExpr(node.FilterList[i])
+			newFilter.GetF().Args[colArgIdx] = idxColExpr
+			idxTableNode.FilterList = append(idxTableNode.FilterList, newFilter)
+		case regularIndexResidualCompoundPK:
+			idxColExpr := GetColExpr(idxTableNode.TableDef.Cols[1].Typ, idxTableNode.BindingTags[0], 1)
+			deserialExpr, err := MakeSerialExtractExpr(builder.GetContext(), idxColExpr, fn.Args[colArgIdx].Typ, int64(access.position))
+			if err != nil {
+				continue
 			}
-		} else {
-			for k := range node.TableDef.Pkey.Names {
-				if col.Name == node.TableDef.Pkey.Names[k] {
-					idxColExpr := GetColExpr(idxTableNode.TableDef.Cols[1].Typ, idxTableNode.BindingTags[0], 1)
-					deserialExpr, err := MakeSerialExtractExpr(builder.GetContext(), idxColExpr, fn.Args[colArgIdx].Typ, int64(k))
-					if err != nil {
-						break
-					}
-					newFilter := DeepCopyExpr(node.FilterList[i])
-					newFilter.GetF().Args[colArgIdx] = deserialExpr
-					idxTableNode.FilterList = append(idxTableNode.FilterList, newFilter)
-					break
-				}
-			}
+			newFilter := DeepCopyExpr(node.FilterList[i])
+			newFilter.GetF().Args[colArgIdx] = deserialExpr
+			idxTableNode.FilterList = append(idxTableNode.FilterList, newFilter)
 		}
 	}
 }
@@ -2509,7 +2494,6 @@ type encodedRegularIndexCostContext struct {
 	rangeFilters [][]int32
 	lowerFilters []int32
 	upperFilters []int32
-	pkComponents []int
 	requiredCols []int32
 
 	leadingFilters []bool
@@ -2534,6 +2518,66 @@ func regularIndexPartPosition(idxDef *IndexDef, tableDef *plan.TableDef, colPos 
 		}
 	}
 	return position, found
+}
+
+type regularIndexBackfillResidualSource uint8
+
+const (
+	regularIndexResidualUnavailable regularIndexBackfillResidualSource = iota
+	regularIndexResidualIndexKey
+	regularIndexResidualPhysicalPK
+	regularIndexResidualCompoundPK
+)
+
+type regularIndexBackfillResidualAccess struct {
+	source   regularIndexBackfillResidualSource
+	position int
+}
+
+// resolveRegularIndexBackfillResidualAccess is the single source of truth for
+// both materializing an extra predicate on an index table and costing that
+// predicate. A residual can read an exact index-key part, the separately stored
+// physical primary key, or one component serialized inside a compound primary
+// key. Prefix-index parts are deliberately unavailable because they are lossy.
+func resolveRegularIndexBackfillResidualAccess(
+	idxDef *IndexDef,
+	tableDef *plan.TableDef,
+	colPos int32,
+	prefixLengths map[string]int,
+	knownPartPositions []int,
+) regularIndexBackfillResidualAccess {
+	if idxDef == nil || tableDef == nil || tableDef.Pkey == nil || colPos < 0 {
+		return regularIndexBackfillResidualAccess{}
+	}
+	partPos := -1
+	if int(colPos) < len(knownPartPositions) {
+		partPos = knownPartPositions[colPos]
+	} else if resolvedPos, ok := regularIndexPartPosition(idxDef, tableDef, colPos); ok {
+		partPos = resolvedPos
+	}
+	if partPos >= len(idxDef.Parts) {
+		return regularIndexBackfillResidualAccess{}
+	}
+	if partPos >= 0 {
+		partName := catalog.ResolveAlias(idxDef.Parts[partPos])
+		if prefixLengths[partName] > 0 {
+			return regularIndexBackfillResidualAccess{}
+		}
+		return regularIndexBackfillResidualAccess{source: regularIndexResidualIndexKey, position: partPos}
+	}
+
+	if len(tableDef.Pkey.Names) == 1 {
+		if pkPos, ok := tableDef.Name2ColIndex[tableDef.Pkey.PkeyColName]; ok && pkPos == colPos {
+			return regularIndexBackfillResidualAccess{source: regularIndexResidualPhysicalPK}
+		}
+		return regularIndexBackfillResidualAccess{}
+	}
+	for componentPos, name := range tableDef.Pkey.Names {
+		if pkPos, ok := tableDef.Name2ColIndex[name]; ok && pkPos == colPos {
+			return regularIndexBackfillResidualAccess{source: regularIndexResidualCompoundPK, position: componentPos}
+		}
+	}
+	return regularIndexBackfillResidualAccess{}
 }
 
 type encodedRegularIndexCostShape uint8
@@ -2654,7 +2698,6 @@ func (builder *QueryBuilder) newEncodedRegularIndexCostContext(
 	ctx.rangeFilters = make([][]int32, numCols)
 	ctx.lowerFilters = make([]int32, numCols)
 	ctx.upperFilters = make([]int32, numCols)
-	ctx.pkComponents = make([]int, numCols)
 	ctx.leadingFilters = make([]bool, len(node.FilterList))
 	ctx.coveredCols = make([]bool, numCols)
 	ctx.partPositions = make([]int, numCols)
@@ -2666,16 +2709,10 @@ func (builder *QueryBuilder) newEncodedRegularIndexCostContext(
 		ctx.firstFilters[colPos] = -1
 		ctx.lowerFilters[colPos] = -1
 		ctx.upperFilters[colPos] = -1
-		ctx.pkComponents[colPos] = -1
 		ctx.partPositions[colPos] = -1
 		col := node.TableDef.Cols[colPos]
 		ctx.columnWidths[colPos] = estimatedRegularIndexColumnBytes(col, sizeMap, ctx.statsTableCnt)
 		ctx.serialWidths[colPos] = estimatedRegularIndexPartBytes(col, sizeMap, ctx.statsTableCnt)
-	}
-	for componentPos, name := range node.TableDef.Pkey.Names {
-		if colPos, ok := node.TableDef.Name2ColIndex[name]; ok && colPos >= 0 && int(colPos) < numCols {
-			ctx.pkComponents[colPos] = componentPos
-		}
 	}
 	for filterIdx, filter := range node.FilterList {
 		fact := &ctx.filterFacts[filterIdx]
@@ -2989,23 +3026,31 @@ func (ctx *encodedRegularIndexCostContext) score(
 			}
 		}
 	} else {
+		prefixLengths, prefixErr := catalog.IndexPrefixLengthsFromParamsWithError(idxDef.IndexAlgoParams)
 		hiddenSelectivity := candidateSelectivity
 		for filterIdx, fact := range ctx.filterFacts {
 			if ctx.leadingFilters[filterIdx] || fact.directCol < 0 {
 				continue
 			}
-			pushed := false
-			if ctx.partPositions[fact.directCol] >= 0 {
-				ctx.addExtractRef(fact.directCol, false)
-				pushed = true
-			} else if ctx.pkComponents[fact.directCol] >= 0 {
-				ctx.addExtractRef(fact.directCol, true)
-				pushed = true
-			} else if len(ctx.node.TableDef.Pkey.Names) == 1 &&
-				fact.directCol == ctx.node.TableDef.Name2ColIndex[ctx.node.TableDef.Pkey.PkeyColName] {
-				pushed = true
+			if prefixErr != nil {
+				// Invalid optional-pushdown metadata has the same fail-safe
+				// behavior as applyExtraFiltersOnIndex: leave every residual on
+				// the base scan and do not credit its selectivity.
+				continue
 			}
-			if !pushed {
+			access := resolveRegularIndexBackfillResidualAccess(
+				idxDef, ctx.node.TableDef, fact.directCol, prefixLengths, ctx.partPositions,
+			)
+			switch access.source {
+			case regularIndexResidualIndexKey:
+				if indexTableStoresSerializedKey(idxDef) {
+					ctx.addExtractRef(fact.directCol, false)
+				}
+			case regularIndexResidualCompoundPK:
+				ctx.addExtractRef(fact.directCol, true)
+			case regularIndexResidualPhysicalPK:
+				// The physical PK is stored directly in index-table column 1.
+			default:
 				continue
 			}
 			selectivity := ctx.node.FilterList[filterIdx].Selectivity
@@ -3066,7 +3111,7 @@ func (ctx *encodedRegularIndexCostContext) score(
 				indexWork += candidateRows * float64(ctx.extractRefs[colPos]) * extractWork
 				indexWork += ctx.outputRows * float64(downstreamRefs) * extractWork
 			}
-		} else if refs := ctx.extractRefs[colPos]; refs > 0 && colPos != pkIdx {
+		} else if refs := ctx.extractRefs[colPos]; refs > 0 {
 			extractWork := prefixWidth + ctx.columnWidths[colPos]
 			indexWork += candidateRows * float64(refs) * extractWork
 		}

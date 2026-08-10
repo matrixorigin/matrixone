@@ -336,6 +336,103 @@ func TestApplyExtraFiltersOnIndexUsesPhysicalKeyEncoding(t *testing.T) {
 	})
 }
 
+func TestResolveRegularIndexBackfillResidualAccess(t *testing.T) {
+	simpleTable := &planpb.TableDef{
+		Name2ColIndex: map[string]int32{"id": 0, "status": 1, "note": 2},
+		Pkey:          &planpb.PrimaryKeyDef{PkeyColName: "id", Names: []string{"id"}},
+	}
+	compoundTable := &planpb.TableDef{
+		Name2ColIndex: map[string]int32{
+			"tenant_id": 0,
+			"event_id":  1,
+			"status":    2,
+		},
+		Pkey: &planpb.PrimaryKeyDef{
+			PkeyColName: catalog.CPrimaryKeyColName,
+			Names:       []string{"tenant_id", "event_id"},
+		},
+	}
+
+	tests := []struct {
+		name          string
+		idxDef        *planpb.IndexDef
+		tableDef      *planpb.TableDef
+		colPos        int32
+		prefixLengths map[string]int
+		wantSource    regularIndexBackfillResidualSource
+		wantPosition  int
+	}{
+		{
+			name:       "direct unique index key",
+			idxDef:     &planpb.IndexDef{Parts: []string{"status"}, Unique: true},
+			tableDef:   simpleTable,
+			colPos:     1,
+			wantSource: regularIndexResidualIndexKey,
+		},
+		{
+			name:          "lossy prefix index key",
+			idxDef:        &planpb.IndexDef{Parts: []string{"status"}, Unique: true},
+			tableDef:      simpleTable,
+			colPos:        1,
+			prefixLengths: map[string]int{"status": 4},
+			wantSource:    regularIndexResidualUnavailable,
+		},
+		{
+			name:         "separately stored simple primary key",
+			idxDef:       &planpb.IndexDef{Parts: []string{"status"}, Unique: true},
+			tableDef:     simpleTable,
+			colPos:       0,
+			wantSource:   regularIndexResidualPhysicalPK,
+			wantPosition: 0,
+		},
+		{
+			name:         "simple primary key appended to serialized index key",
+			idxDef:       &planpb.IndexDef{Parts: []string{"status", catalog.CreateAlias("id")}},
+			tableDef:     simpleTable,
+			colPos:       0,
+			wantSource:   regularIndexResidualIndexKey,
+			wantPosition: 1,
+		},
+		{
+			name:         "compound primary key component",
+			idxDef:       &planpb.IndexDef{Parts: []string{"status"}, Unique: true},
+			tableDef:     compoundTable,
+			colPos:       1,
+			wantSource:   regularIndexResidualCompoundPK,
+			wantPosition: 1,
+		},
+		{
+			name:       "unavailable non-key column",
+			idxDef:     &planpb.IndexDef{Parts: []string{"status"}, Unique: true},
+			tableDef:   simpleTable,
+			colPos:     2,
+			wantSource: regularIndexResidualUnavailable,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := resolveRegularIndexBackfillResidualAccess(
+				tt.idxDef, tt.tableDef, tt.colPos, tt.prefixLengths, nil,
+			)
+			require.Equal(t, tt.wantSource, got.source)
+			require.Equal(t, tt.wantPosition, got.position)
+
+			knownPartPositions := []int{-1, -1, -1}
+			for partPos, part := range tt.idxDef.Parts {
+				if colPos, ok := tt.tableDef.Name2ColIndex[catalog.ResolveAlias(part)]; ok {
+					knownPartPositions[colPos] = partPos
+				}
+			}
+			fastPath := resolveRegularIndexBackfillResidualAccess(
+				tt.idxDef, tt.tableDef, tt.colPos, tt.prefixLengths, knownPartPositions,
+			)
+			require.Equal(t, got, fastPath,
+				"the scorer's precomputed part map must preserve materializer resolution")
+		})
+	}
+}
+
 func TestFilterRegularIndexesByScanHints(t *testing.T) {
 	idxA := &planpb.IndexDef{IndexName: "idx_a"}
 	idxB := &planpb.IndexDef{IndexName: "idx_b"}
@@ -3969,6 +4066,92 @@ func TestEncodedIndexCostChargesUnpushableResidualOnBackfillCandidates(t *testin
 	require.True(t, builder.shouldSkipEncodedRegularIndex(
 		idxDef, node, colRefCnt, []int32{0}, false, encodedRegularIndexCostBackfill,
 	))
+}
+
+func TestEncodedIndexCostDoesNotCreditLossyPrefixResidualPushdown(t *testing.T) {
+	leading := makeStringEqFilterExpr(0, 2, "READY")
+	leading.Selectivity = 0.25
+	residual := makeStringEqFilterExpr(0, 3, "2026-08-10T12:00:00")
+	residual.Selectivity = 0.0001
+	builder, scanID, idxDef, colRefCnt := newEncodedIndexCostTestCase(
+		t,
+		[]string{"category", "event_time", catalog.CreateAlias(catalog.CPrimaryKeyColName)},
+		[]*planpb.Expr{leading, residual},
+		&planpb.Stats{TableCnt: 800_000, Outcnt: 20, Selectivity: 0.000025, Cost: 760_000},
+		map[int32]int{1: 1}, false,
+	)
+	prefixParams, err := catalog.IndexParamsMapToJsonString(map[string]string{
+		catalog.IndexAlgoParamPrefixLengths: "event_time:4",
+	})
+	require.NoError(t, err)
+	idxDef.IndexAlgoParams = prefixParams
+	node := builder.qry.Nodes[scanID]
+	node.TableDef.Cols[3].Typ = planpb.Type{Id: int32(types.T_varchar), Width: 64}
+	for _, filter := range node.FilterList {
+		filter.GetF().Args[0].GetCol().RelPos = node.BindingTags[0]
+	}
+
+	costCtx := builder.newEncodedRegularIndexCostContext(node, colRefCnt)
+	work, reject, valid := costCtx.score(
+		idxDef, []int32{0}, nil, encodedRegularIndexCostBackfill,
+	)
+	require.True(t, valid)
+	require.True(t, reject,
+		"a lossy prefix residual must not make an otherwise expensive backfill look selective: work=%v base=%v", work, costCtx.baseWork)
+
+	residual.Selectivity = 1
+	controlWork, controlReject, controlValid := costCtx.score(
+		idxDef, []int32{0}, nil, encodedRegularIndexCostBackfill,
+	)
+	require.True(t, controlValid)
+	require.True(t, controlReject)
+	require.Equal(t, controlWork, work,
+		"cost must be invariant to the selectivity of a residual the index table cannot evaluate")
+
+	idxTableNode := &planpb.Node{
+		TableDef:    makeTestIndexTableDef(),
+		BindingTags: []int32{builder.genNewBindTag()},
+	}
+	builder.applyExtraFiltersOnIndex(idxDef, node, idxTableNode, []int32{0})
+	require.Empty(t, idxTableNode.FilterList,
+		"the physical plan must agree with the cost model and leave the lossy predicate on the base scan")
+}
+
+func TestEncodedIndexCostChargesSerializedSimplePKResidual(t *testing.T) {
+	leading := makeStringEqFilterExpr(0, 2, "READY")
+	leading.Selectivity = 0.5
+	residual := makeRangeFilterExpr(0, 1, "=", 7)
+	residual.Selectivity = 0.0001
+	builder, scanID, idxDef, colRefCnt := newEncodedIndexCostTestCase(
+		t,
+		[]string{"category", catalog.CreateAlias("event_id")},
+		[]*planpb.Expr{leading, residual},
+		&planpb.Stats{TableCnt: 800_000, Outcnt: 40, Selectivity: 0.00005, Cost: 800_000},
+		map[int32]int{0: 1}, false,
+	)
+	node := builder.qry.Nodes[scanID]
+	node.TableDef.Pkey = &planpb.PrimaryKeyDef{PkeyColName: "event_id", Names: []string{"event_id"}}
+	for _, filter := range node.FilterList {
+		filter.GetF().Args[0].GetCol().RelPos = node.BindingTags[0]
+	}
+
+	idxTableNode := &planpb.Node{
+		TableDef:    makeTestIndexTableDef(),
+		BindingTags: []int32{builder.genNewBindTag()},
+	}
+	builder.applyExtraFiltersOnIndex(idxDef, node, idxTableNode, []int32{0})
+	require.Len(t, idxTableNode.FilterList, 1)
+	mapped := idxTableNode.FilterList[0].GetF().Args[0]
+	require.Equal(t, "serial_extract", wrappedSerialFuncName(t, mapped))
+	require.Equal(t, int32(0), mapped.GetF().Args[0].GetCol().ColPos,
+		"the appended simple PK is encoded in index-table column 0")
+
+	_, reject, valid := builder.newEncodedRegularIndexCostContext(node, colRefCnt).score(
+		idxDef, []int32{0}, nil, encodedRegularIndexCostBackfill,
+	)
+	require.True(t, valid)
+	require.True(t, reject,
+		"cost must include the serial_extract that the physical plan materializes")
 }
 
 func TestEncodedIndexCostCountsConsumersAfterProjectionElimination(t *testing.T) {
