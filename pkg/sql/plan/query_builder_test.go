@@ -2407,8 +2407,12 @@ func TestQueryBuilder_bindOrderByNullDistinctRejectsFollowingMissingSelectExpr(t
 }
 
 func bindDistinctOrderByForTest(sql string) (*QueryBuilder, *BindContext, []*plan.OrderBySpec, int, error) {
+	return bindOrderByForTest(sql, true)
+}
+
+func bindOrderByForTest(sql string, distinct bool) (*QueryBuilder, *BindContext, []*plan.OrderBySpec, int, error) {
 	builder, bindCtx := genBuilderAndCtx()
-	return bindDistinctOrderByWithTestContext(sql, builder, bindCtx)
+	return bindOrderByWithTestContext(sql, builder, bindCtx, distinct)
 }
 
 func bindDistinctOrderByWithTestContext(
@@ -2416,7 +2420,16 @@ func bindDistinctOrderByWithTestContext(
 	builder *QueryBuilder,
 	bindCtx *BindContext,
 ) (*QueryBuilder, *BindContext, []*plan.OrderBySpec, int, error) {
-	bindCtx.isDistinct = true
+	return bindOrderByWithTestContext(sql, builder, bindCtx, true)
+}
+
+func bindOrderByWithTestContext(
+	sql string,
+	builder *QueryBuilder,
+	bindCtx *BindContext,
+	distinct bool,
+) (*QueryBuilder, *BindContext, []*plan.OrderBySpec, int, error) {
+	bindCtx.isDistinct = distinct
 	bindCtx.projectTag = builder.genNewBindTag()
 
 	stmts, err := parsers.Parse(context.TODO(), dialect.MYSQL, sql, 1)
@@ -2457,6 +2470,140 @@ func bindDistinctOrderByWithTestContext(
 
 	boundOrderBys, err := builder.bindOrderBy(bindCtx, selectStmt.OrderBy, projectionBinder, selectClause.Exprs)
 	return builder, bindCtx, boundOrderBys, resultLen, err
+}
+
+func TestQueryBuilder_bindOrderByExpressionAliasPrecedence(t *testing.T) {
+	for _, testCase := range []struct {
+		name string
+		sql  string
+	}{
+		{
+			name: "unary expression",
+			sql:  "select a, -a as a from select_test.bind_select order by a",
+		},
+		{
+			name: "binary expression",
+			sql:  "select a, b + 0 as a from select_test.bind_select order by a",
+		},
+		{
+			name: "constant expression",
+			sql:  "select a, 20 as a from select_test.bind_select order by a",
+		},
+		{
+			name: "parenthesized root name",
+			sql:  "select a, -a as a from select_test.bind_select order by (a)",
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			_, bindCtx, boundOrderBys, _, err := bindOrderByForTest(testCase.sql, false)
+			require.NoError(t, err)
+			require.Len(t, boundOrderBys, 1)
+			col := boundOrderBys[0].Expr.GetCol()
+			require.NotNil(t, col)
+			require.Equal(t, bindCtx.projectTag, col.RelPos)
+			require.Equal(t, int32(1), col.ColPos,
+				"a top-level ORDER BY name must select the explicit expression alias")
+		})
+	}
+
+	t.Run("name inside expression prefers source column", func(t *testing.T) {
+		_, bindCtx, boundOrderBys, _, err := bindOrderByForTest(
+			"select a, -a as a from select_test.bind_select order by a + 0",
+			false,
+		)
+		require.NoError(t, err)
+		require.Len(t, boundOrderBys, 1)
+		orderCol := boundOrderBys[0].Expr.GetCol()
+		require.NotNil(t, orderCol)
+		require.Equal(t, bindCtx.projectTag, orderCol.RelPos)
+		require.GreaterOrEqual(t, int(orderCol.ColPos), 2)
+
+		derived := bindCtx.projects[orderCol.ColPos].GetF()
+		require.NotNil(t, derived)
+		require.Equal(t, "+", derived.Func.ObjName)
+		require.NotNil(t, derived.Args[0].GetCol(),
+			"a nested ORDER BY name must bind to the source column, not expand the alias")
+	})
+
+	t.Run("name inside expression falls back to noncolliding alias", func(t *testing.T) {
+		_, _, boundOrderBys, _, err := bindOrderByForTest(
+			"select a, -a as neg from select_test.bind_select order by neg + 0",
+			false,
+		)
+		require.NoError(t, err)
+		require.Len(t, boundOrderBys, 1)
+		require.NotNil(t, boundOrderBys[0].Expr.GetCol())
+	})
+
+	t.Run("qualified source name bypasses alias", func(t *testing.T) {
+		_, bindCtx, boundOrderBys, _, err := bindOrderByForTest(
+			"select a, -a as a from select_test.bind_select order by bind_select.a",
+			false,
+		)
+		require.NoError(t, err)
+		require.Len(t, boundOrderBys, 1)
+		col := boundOrderBys[0].Expr.GetCol()
+		require.NotNil(t, col)
+		require.Equal(t, bindCtx.projectTag, col.RelPos)
+		require.Equal(t, int32(0), col.ColPos)
+	})
+
+	for _, testCase := range []struct {
+		name string
+		sql  string
+	}{
+		{
+			name: "bare column alias collides with selected column",
+			sql:  "select a, b as a from select_test.bind_select order by a",
+		},
+		{
+			name: "duplicate explicit aliases",
+			sql:  "select -a as x, b + 0 as x from select_test.bind_select order by x",
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			_, _, _, _, err := bindOrderByForTest(testCase.sql, false)
+			require.Error(t, err)
+			require.Contains(t, err.Error(), "in order clause is ambiguous")
+		})
+	}
+}
+
+func TestQueryBuilder_bindOrderByDistinctExpressionAliasPrecedence(t *testing.T) {
+	for _, sql := range []string{
+		"select distinct a, -a as a from select_test.bind_select order by a",
+		"select distinct a, 20 as a from select_test.bind_select order by (a)",
+	} {
+		_, bindCtx, boundOrderBys, _, err := bindOrderByForTest(sql, true)
+		require.NoError(t, err)
+		require.Len(t, boundOrderBys, 1)
+		col := boundOrderBys[0].Expr.GetCol()
+		require.NotNil(t, col)
+		require.Equal(t, bindCtx.projectTag, col.RelPos)
+		require.Equal(t, int32(1), col.ColPos)
+	}
+
+	_, bindCtx, boundOrderBys, _, err := bindOrderByForTest(
+		"select distinct a, -a as a from select_test.bind_select order by a + 0",
+		true,
+	)
+	require.NoError(t, err)
+	require.Len(t, boundOrderBys, 1)
+	derived := boundOrderBys[0].Expr.GetF()
+	require.NotNil(t, derived)
+	require.Equal(t, "+", derived.Func.ObjName)
+	col := derived.Args[0].GetCol()
+	require.NotNil(t, col)
+	require.Equal(t, bindCtx.projectTag, col.RelPos)
+	require.Equal(t, int32(0), col.ColPos,
+		"a nested DISTINCT ORDER BY name must bind to the selected source column")
+
+	_, _, _, _, err = bindOrderByForTest(
+		"select distinct a, b as a from select_test.bind_select order by a",
+		true,
+	)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "in order clause is ambiguous")
 }
 
 func TestQueryBuilder_bindOrderByDistinctDerivedSelectedColumns(t *testing.T) {

@@ -76,25 +76,23 @@ select t1.ename, t2.loc, t2.deptno as deptno from emp t1 left join dept t2 on t1
 --11. mysql：error; mo: error
 select t1.ename, t2.loc from emp t1 left join dept t2 on t1.deptno = t2.deptno order by deptno;
 
---12. mysql: error, 别名不会参与order by表达式运算, mo: ok(bug)
+--12. mysql: error, mo: error; names inside expressions prefer source columns
 select t1.ename, t2.loc, t2.deptno as deptno from emp t1 left join dept t2 on t1.deptno = t2.deptno order by deptno+33;
 
 --13.mysql：error; mo: error
 select t1.ename, t2.loc from emp t1 left join dept t2 on t1.deptno = t2.deptno order by deptno;
 
---14.mysql：ok, mo: error(bug,暂时选择报错)
--- mysql的别名是有作用域的， 通常selectList中子查询别名的优先级较高，即使主查询和子查询使用了相同的别名 ename，
--- 排序键冲突时MySQL会优先选择子查询别名，
-select ename, (select ename from emp i1 where i1.empno = emp.mgr order by 1 limit 1) as ename from emp order by ename;
+--14.mysql：ok, mo: ok; an explicit subquery-expression alias wins at the top level
+select ename, (select ename from emp i1 where i1.empno = 7369 order by 1 limit 1) as ename from emp order by ename desc, emp.empno;
 
---15.mysql：ok, mo: error(bug,暂时选择报错) (同上)
-select empno, (select ename from emp i1 where i1.empno = emp.mgr order by 1 limit 1) as ename, ename from emp order by ename;
+--15.mysql：ok, mo: ok (同上)
+select empno, (select ename from emp i1 where i1.empno = 7369 order by 1 limit 1) as ename, ename from emp order by ename, emp.empno;
 
---16.mysql: ok, mo: error(bug,暂时选择报错)
-select empno, 20 as empno from emp order by empno;
+--16.mysql: ok, mo: ok
+select empno, 20 as empno from emp order by empno desc, emp.empno;
 
---17..mysql: ok, mo: error(bug,暂时选择报错) (同上)
-select empno,  space(50) as empno from emp order by empno;
+--17.mysql: ok, mo: ok; function-expression alias follows the same rule
+select empno, length(space(50)) as empno from emp order by empno desc, emp.empno;
 
 --18.mysql:ok, mo: ok
 select empno, ename, job, mgr, hiredate, sal, empno from emp where deptno != 20 order by empno;
@@ -114,3 +112,24 @@ select t1.ename, t2.loc, t1.deptno, t2.deptno as deptno from emp t1 left join de
 
 drop table if exists dept;
 drop table if exists emp;
+
+-- ORDER BY output-name resolution: a top-level name prefers an explicit
+-- expression alias, while qualified and nested names keep source-column
+-- semantics. Bare-column/duplicate aliases remain ambiguous.
+drop table if exists order_alias_shadow;
+create table order_alias_shadow(id int primary key, k int);
+insert into order_alias_shadow values (1, 30), (2, 10), (3, 20);
+
+select id, -id as id from order_alias_shadow order by id;
+select id, k + 0 as id from order_alias_shadow order by id;
+select id, 20 as id from order_alias_shadow order by id desc, order_alias_shadow.id;
+select id, -id as neg_id from order_alias_shadow order by neg_id;
+select id, -id as id from order_alias_shadow order by order_alias_shadow.id;
+select id, -id as id from order_alias_shadow order by id + 0 desc;
+select id as x, k as x from order_alias_shadow order by x;
+
+select distinct id, -id as id from order_alias_shadow order by id;
+select distinct id, 20 as id from order_alias_shadow order by id desc, order_alias_shadow.id;
+select distinct id, -id as id from order_alias_shadow order by id + 0 desc;
+
+drop table order_alias_shadow;
