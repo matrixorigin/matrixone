@@ -141,12 +141,7 @@ type UpgradeEntry struct {
 
 // Upgrade entity execution upgrade entrance
 func (u *UpgradeEntry) Upgrade(txn executor.TxnExecutor, accountId uint32) error {
-	userId := uint32(sysRootID)
-	roleId := uint32(sysAdminRoleID)
-	if accountId != catalog.System_Account {
-		userId = accountAdminUserID
-		roleId = accountAdminRoleID
-	}
+	statementOption := UpgradeStatementOption(accountId)
 
 	exist, err := u.CheckFunc(txn, accountId)
 	if err != nil {
@@ -159,7 +154,7 @@ func (u *UpgradeEntry) Upgrade(txn executor.TxnExecutor, accountId uint32) error
 	} else {
 		// 1. First, judge whether there is prefix sql
 		if u.PreSql != "" {
-			res, err := txn.Exec(u.PreSql, executor.StatementOption{}.WithAccountID(accountId).WithUserID(userId).WithRoleID(roleId))
+			res, err := txn.Exec(u.PreSql, statementOption)
 			if err != nil {
 				getLogger(txn.Txn().TxnOptions().CN).Error("execute upgrade entry pre-sql error", zap.Error(err), zap.String("upgrade entry", u.String()))
 				return err
@@ -168,7 +163,7 @@ func (u *UpgradeEntry) Upgrade(txn executor.TxnExecutor, accountId uint32) error
 		}
 
 		// 2. Second, Execute upgrade sql
-		res, err := txn.Exec(u.UpgSql, executor.StatementOption{}.WithAccountID(accountId).WithUserID(userId).WithRoleID(roleId))
+		res, err := txn.Exec(u.UpgSql, statementOption)
 		if err != nil {
 			getLogger(txn.Txn().TxnOptions().CN).Error("execute upgrade entry sql error", zap.Error(err), zap.String("upgrade entry", u.String()))
 			return err
@@ -177,7 +172,7 @@ func (u *UpgradeEntry) Upgrade(txn executor.TxnExecutor, accountId uint32) error
 
 		// 2. Third, after the upgrade is completed, judge whether there is post-sql
 		if u.PostSql != "" {
-			res, err = txn.Exec(u.PostSql, executor.StatementOption{}.WithAccountID(accountId).WithUserID(userId).WithRoleID(roleId))
+			res, err = txn.Exec(u.PostSql, statementOption)
 			if err != nil {
 				getLogger(txn.Txn().TxnOptions().CN).Error("execute upgrade entry post-sql error", zap.Error(err), zap.String("upgrade entry", u.String()))
 				return err
@@ -186,6 +181,22 @@ func (u *UpgradeEntry) Upgrade(txn executor.TxnExecutor, accountId uint32) error
 		}
 	}
 	return nil
+}
+
+// UpgradeStatementOption executes upgrade SQL as the administrator of the
+// target account. Dynamic migrations must use the same identity as static
+// UpgradeEntries when they issue tenant DDL.
+func UpgradeStatementOption(accountID uint32) executor.StatementOption {
+	userID := uint32(sysRootID)
+	roleID := uint32(sysAdminRoleID)
+	if accountID != catalog.System_Account {
+		userID = accountAdminUserID
+		roleID = accountAdminRoleID
+	}
+	return executor.StatementOption{}.
+		WithAccountID(accountID).
+		WithUserID(userID).
+		WithRoleID(roleID)
 }
 
 func (u *UpgradeEntry) String() string {
