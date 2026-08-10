@@ -43,9 +43,10 @@ func TestEvalDeleteMaskFromDNCreatedTombstonesAbortColumnCompatibility(t *testin
 		abortColumn := vector.NewVec(types.T_bool.ToType())
 		defer abortColumn.Free(mp)
 
-		rows := EvalDeleteMaskFromDNCreatedTombstones(
+		rows, err := EvalDeleteMaskFromDNCreatedTombstones(
 			rowIDs, commitTS, abortColumn, objectio.BlockObject{}, types.BuildTSForTest(2, 0), &blockID,
 		)
+		require.NoError(t, err)
 		require.True(t, rows.IsValid())
 		require.True(t, rows.Contains(1))
 		require.True(t, rows.Contains(2))
@@ -60,13 +61,56 @@ func TestEvalDeleteMaskFromDNCreatedTombstonesAbortColumnCompatibility(t *testin
 		}
 		defer abortColumn.Free(mp)
 
-		rows := EvalDeleteMaskFromDNCreatedTombstones(
+		rows, err := EvalDeleteMaskFromDNCreatedTombstones(
 			rowIDs, commitTS, abortColumn, objectio.BlockObject{}, types.BuildTSForTest(2, 0), &blockID,
 		)
+		require.NoError(t, err)
 		require.True(t, rows.IsValid())
 		require.True(t, rows.Contains(1))
 		require.False(t, rows.Contains(2))
 		require.True(t, rows.Contains(3))
 		rows.Release()
 	})
+}
+
+func TestValidateTombstoneAbortColumn(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+
+	legacy := vector.NewVec(types.T_bool.ToType())
+	column, err := ValidateTombstoneAbortColumn(3, legacy)
+	require.NoError(t, err)
+	require.False(t, column.IsPresent())
+	legacy.Free(mp)
+
+	partial := vector.NewVec(types.T_bool.ToType())
+	require.NoError(t, vector.AppendFixed(partial, true, false, mp))
+	_, err = ValidateTombstoneAbortColumn(3, partial)
+	require.Error(t, err)
+	partial.Free(mp)
+
+	wrongType := vector.NewVec(types.T_int8.ToType())
+	_, err = ValidateTombstoneAbortColumn(3, wrongType)
+	require.Error(t, err)
+	wrongType.Free(mp)
+
+	nullAbort := vector.NewVec(types.T_bool.ToType())
+	require.NoError(t, vector.AppendFixed(nullAbort, false, true, mp))
+	_, err = ValidateTombstoneAbortColumn(1, nullAbort)
+	require.Error(t, err)
+	nullAbort.Free(mp)
+
+	constAbort, err := vector.NewConstFixed(types.T_bool.ToType(), true, 3, mp)
+	require.NoError(t, err)
+	column, err = ValidateTombstoneAbortColumn(3, constAbort)
+	require.NoError(t, err)
+	require.True(t, column.IsPresent())
+	require.True(t, column.IsAborted(0))
+	require.True(t, column.IsAborted(2))
+	constAbort.Free(mp)
+
+	constNull := vector.NewConstNull(types.T_bool.ToType(), 3, mp)
+	_, err = ValidateTombstoneAbortColumn(3, constNull)
+	require.Error(t, err)
+	constNull.Free(mp)
 }
