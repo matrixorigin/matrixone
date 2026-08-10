@@ -24,12 +24,16 @@ import (
 func TestIndexVisibilityCompatibility(t *testing.T) {
 	legacy := &plan.IndexDef{}
 	require.True(t, IsIndexVisible(legacy))
+	require.True(t, IsIndexOptimizerEligible(legacy))
 
 	SetIndexVisibility(legacy, false)
 	require.True(t, legacy.VisibilitySet)
 	require.False(t, IsIndexVisible(legacy))
+	require.False(t, IsIndexOptimizerEligible(legacy))
 
 	SetIndexVisibility(legacy, true)
 	require.True(t, IsIndexVisible(legacy))
+	require.True(t, IsIndexOptimizerEligible(legacy))
 	require.False(t, IsIndexVisible(nil))
+	require.False(t, IsIndexOptimizerEligible(nil))
 }

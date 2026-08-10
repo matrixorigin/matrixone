@@ -6603,6 +6603,10 @@ func TestRegularIndexPrefixMetadataUsable(t *testing.T) {
 	require.ErrorContains(t, validateTableRegularIndexPrefixMetadata(&planpb.TableDef{
 		Indexes: []*planpb.IndexDef{staleIndex},
 	}), "rebuild the index")
+	catalog.SetIndexVisibility(staleIndex, false)
+	require.ErrorContains(t, validateTableRegularIndexPrefixMetadata(&planpb.TableDef{
+		Indexes: []*planpb.IndexDef{staleIndex},
+	}), "rebuild the index", "optimizer visibility must not bypass index-maintenance validation")
 }
 
 func TestGetIndexForNonEquiCondSkipsDeclaredPrefixIndexes(t *testing.T) {

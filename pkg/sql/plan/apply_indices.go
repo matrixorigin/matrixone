@@ -759,7 +759,7 @@ func (builder *QueryBuilder) buildRegularIndexTopSortContext(projNode *plan.Node
 
 func usableRegularHintIndex(idxDef *plan.IndexDef) bool {
 	return idxDef != nil &&
-		catalog.IsIndexVisible(idxDef) &&
+		catalog.IsIndexOptimizerEligible(idxDef) &&
 		idxDef.TableExist &&
 		catalog.IsRegularIndexAlgo(idxDef.IndexAlgo) &&
 		!isSpatialIndexDef(idxDef) &&
@@ -1592,7 +1592,7 @@ func (builder *QueryBuilder) collectVectorIndexes(scanNode *plan.Node) (map[stri
 		if indexDef == nil || !indexplugin.IsVectorIndexAlgo(indexDef.IndexAlgo) {
 			continue
 		}
-		if !catalog.IsIndexVisible(indexDef) {
+		if !catalog.IsIndexOptimizerEligible(indexDef) {
 			if invisibleIndexNames == nil {
 				invisibleIndexNames = make(map[string]struct{})
 			}
@@ -1726,7 +1726,7 @@ func validateTableRegularIndexPrefixMetadata(tableDef *TableDef) error {
 		return nil
 	}
 	for _, idxDef := range tableDef.Indexes {
-		if idxDef == nil || !catalog.IsIndexVisible(idxDef) || !idxDef.TableExist || !catalog.IsRegularIndexAlgo(idxDef.IndexAlgo) {
+		if idxDef == nil || !idxDef.TableExist || !catalog.IsRegularIndexAlgo(idxDef.IndexAlgo) {
 			continue
 		}
 		if err := validateRegularIndexPrefixMetadata(idxDef); err != nil {
@@ -1778,7 +1778,7 @@ func (builder *QueryBuilder) applyIndicesForFiltersRegularIndex(nodeID int32, no
 	indexes := make([]*IndexDef, 0, len(node.TableDef.Indexes))
 	spatialIndexes := make([]*IndexDef, 0, len(node.TableDef.Indexes))
 	for i := range node.TableDef.Indexes {
-		if !catalog.IsIndexVisible(node.TableDef.Indexes[i]) || !node.TableDef.Indexes[i].TableExist || !catalog.IsRegularIndexAlgo(node.TableDef.Indexes[i].IndexAlgo) {
+		if !catalog.IsIndexOptimizerEligible(node.TableDef.Indexes[i]) || !node.TableDef.Indexes[i].TableExist || !catalog.IsRegularIndexAlgo(node.TableDef.Indexes[i].IndexAlgo) {
 			continue
 		}
 		if isSpatialIndexDef(node.TableDef.Indexes[i]) {

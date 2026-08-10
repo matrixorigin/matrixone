@@ -16,7 +16,7 @@ package catalog
 
 import "github.com/matrixorigin/matrixone/pkg/pb/plan"
 
-// IsIndexVisible reports whether an index is eligible for optimizer use.
+// IsIndexVisible reports the persisted visibility of an index.
 //
 // IndexDef.Visible predates optimizer visibility enforcement and is a proto3
 // bool, so old metadata cannot distinguish an omitted value from an explicitly
@@ -25,6 +25,14 @@ import "github.com/matrixorigin/matrixone/pkg/pb/plan"
 // instead of disabling every pre-existing index whose Visible field is absent.
 func IsIndexVisible(indexDef *plan.IndexDef) bool {
 	return indexDef != nil && (!indexDef.VisibilitySet || indexDef.Visible)
+}
+
+// IsIndexOptimizerEligible reports whether an index may participate in query
+// optimization. Keep this policy boundary separate from index maintenance:
+// invisible indexes remain physically maintained and continue enforcing unique
+// constraints even though the optimizer must not select them.
+func IsIndexOptimizerEligible(indexDef *plan.IndexDef) bool {
+	return IsIndexVisible(indexDef)
 }
 
 // SetIndexVisibility records an explicit visibility value on an IndexDef.

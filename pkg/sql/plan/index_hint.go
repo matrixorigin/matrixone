@@ -119,7 +119,7 @@ func validateIndexHintNames(ctx context.Context, tableDef *plan.TableDef, names 
 		existing[strings.ToLower(PrimaryKeyName)] = strings.ToLower(PrimaryKeyName)
 	}
 	for _, idx := range tableDef.Indexes {
-		if idx == nil || !idx.TableExist || !catalog.IsIndexVisible(idx) {
+		if idx == nil || !idx.TableExist || !catalog.IsIndexOptimizerEligible(idx) {
 			continue
 		}
 		lowerName := strings.ToLower(idx.IndexName)
@@ -209,7 +209,7 @@ func (builder *QueryBuilder) filterRegularIndexesByJoinHints(node *plan.Node, in
 }
 
 func (builder *QueryBuilder) filterRegularIndexesByHints(node *plan.Node, indexes []*plan.IndexDef, getScope func(*indexHintSet) indexHintScopeSet) []*plan.IndexDef {
-	indexes = filterOptimizerVisibleIndexes(indexes)
+	indexes = filterOptimizerEligibleIndexes(indexes)
 	if builder == nil || node == nil || len(indexes) == 0 {
 		return indexes
 	}
@@ -224,10 +224,10 @@ func (builder *QueryBuilder) filterRegularIndexesByHints(node *plan.Node, indexe
 	return filterIndexesByHintScope(indexes, scope)
 }
 
-func filterOptimizerVisibleIndexes(indexes []*plan.IndexDef) []*plan.IndexDef {
+func filterOptimizerEligibleIndexes(indexes []*plan.IndexDef) []*plan.IndexDef {
 	firstInvisible := -1
 	for i, indexDef := range indexes {
-		if !catalog.IsIndexVisible(indexDef) {
+		if !catalog.IsIndexOptimizerEligible(indexDef) {
 			firstInvisible = i
 			break
 		}
@@ -239,7 +239,7 @@ func filterOptimizerVisibleIndexes(indexes []*plan.IndexDef) []*plan.IndexDef {
 	visible := make([]*plan.IndexDef, 0, len(indexes)-1)
 	visible = append(visible, indexes[:firstInvisible]...)
 	for _, indexDef := range indexes[firstInvisible+1:] {
-		if catalog.IsIndexVisible(indexDef) {
+		if catalog.IsIndexOptimizerEligible(indexDef) {
 			visible = append(visible, indexDef)
 		}
 	}
