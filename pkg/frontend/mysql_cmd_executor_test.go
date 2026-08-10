@@ -692,6 +692,45 @@ func TestSetTransactionIsolationAppliedToTxnMeta(t *testing.T) {
 		getPu("").TxnClient = realTxnClient
 		require.Equal(t, txn.TxnIsolation_SI, createTxn())
 		require.Equal(t, txn.TxnIsolation_RC, createTxn())
+
+		for _, testCase := range []struct {
+			name       string
+			sessionSQL string
+		}{
+			{
+				name:       "SET SESSION TRANSACTION",
+				sessionSQL: "set session transaction isolation level repeatable read",
+			},
+			{
+				name:       "bare system variable",
+				sessionSQL: "set transaction_isolation = 'REPEATABLE-READ'",
+			},
+			{
+				name:       "explicit SESSION system variable",
+				sessionSQL: "set @@session.transaction_isolation = 'REPEATABLE-READ'",
+			},
+		} {
+			t.Run(testCase.name+" clears pending NEXT", func(t *testing.T) {
+				execSet("set transaction isolation level read committed")
+				handler.mu.Lock()
+				require.True(t, handler.hasNextTxnIsolation)
+				handler.mu.Unlock()
+
+				execSet(testCase.sessionSQL)
+				got, err := ses.GetSessionSysVar("transaction_isolation")
+				require.NoError(t, err)
+				require.Equal(t, "REPEATABLE-READ", got)
+
+				handler.mu.Lock()
+				isolation, overridden, consumeNext := handler.txnIsolationUnsafe(true)
+				handler.mu.Unlock()
+				require.False(t, consumeNext)
+				require.True(t, overridden)
+				require.Equal(t, txn.TxnIsolation_SI, isolation)
+				require.Equal(t, txn.TxnIsolation_SI, createTxn())
+				require.Equal(t, txn.TxnIsolation_SI, createTxn())
+			})
+		}
 	})
 }
 

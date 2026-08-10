@@ -359,6 +359,8 @@ func (th *TxnHandler) setSessionTxnIsolation(isolation pbtxn.TxnIsolation) {
 	defer th.mu.Unlock()
 	th.sessionTxnIsolation = isolation
 	th.hasSessionTxnIsolation = true
+	th.nextTxnIsolation = 0
+	th.hasNextTxnIsolation = false
 }
 
 func (th *TxnHandler) setNextTxnIsolation(
