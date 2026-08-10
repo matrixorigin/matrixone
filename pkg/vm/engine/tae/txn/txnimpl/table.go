@@ -303,6 +303,7 @@ func (tbl *txnTable) recurTransferS3Delete(
 			err = moerr.NewTxnRWConflictNoCtx()
 			return
 		}
+		memo[*blkID2] = pinned
 	}
 	page := pinned.Item()
 	newID, ok = page.Transfer(row)
@@ -358,20 +359,30 @@ func (tbl *txnTable) TransferDeletes(
 		v2.TxnS3TombstoneTransferGetSoftdeleteObjectsHistogram.Observe(time.Since(tGetSoftdeleteObjects).Seconds())
 		v2.TxnS3TombstoneSoftdeleteObjectCounter.Add(float64(len(softDeleteObjects)))
 		var findTombstoneDuration, readTombstoneDuration, deleteRowsDuration time.Duration
-		var sinker *ioutil.Sinker
+		var transferSink *transferredTombstoneSink
 		defer func() {
-			if sinker != nil {
-				sinker.Close()
+			if transferSink != nil {
+				err = transferSink.close(ctx, err)
 			}
 		}()
 		// transfer deltaloc
 		memo := make(map[types.Blockid]*common.PinnedItem[*model.TransferHashPage])
+		defer func() {
+			for _, pinned := range memo {
+				pinned.Close()
+			}
+		}()
 		objMap := make(map[types.Objectid]struct{})
 		for _, obj := range softDeleteObjects {
 			objMap[*obj.ID()] = struct{}{}
 		}
-		for _, obj := range softDeleteObjects {
+		processObject := func(obj *catalog.ObjectEntry) error {
 			var currentTransferBatch *containers.Batch
+			defer func() {
+				if currentTransferBatch != nil {
+					currentTransferBatch.Close()
+				}
+			}()
 			tFindTombstone := time.Now()
 			sel, err := ioutil.FindTombstonesOfObject(
 				ctx, obj.ID(), tbl.tombstoneTable.tableSpace.stats, tbl.store.rt.Fs,
@@ -382,7 +393,7 @@ func (tbl *txnTable) TransferDeletes(
 			}
 			id := obj.AsCommonID()
 			if sel.IsEmpty() {
-				continue
+				return nil
 			}
 
 			v2.TxnS3TombstoneTransferDataObjectCounter.Add(1)
@@ -456,26 +467,33 @@ func (tbl *txnTable) TransferDeletes(
 			}
 			tbl.store.warChecker.Delete(id)
 			if currentTransferBatch != nil {
-				if sinker == nil {
-					sinker = ioutil.NewTombstoneSinker(
-						objectio.HiddenColumnSelection_None,
-						*pkType,
-						common.WorkspaceAllocator,
-						tbl.store.rt.Fs,
-						ioutil.WithMemorySizeThreshold(TransferSinkerMemorySizeThreshold))
+				if transferSink == nil {
+					transferSink = &transferredTombstoneSink{
+						sinker: ioutil.NewTombstoneSinker(
+							objectio.HiddenColumnSelection_None,
+							*pkType,
+							common.WorkspaceAllocator,
+							tbl.store.rt.Fs,
+							ioutil.WithMemorySizeThreshold(TransferSinkerMemorySizeThreshold)),
+					}
 				}
-				sinker.Write(ctx, containers.ToCNBatch(currentTransferBatch))
-				currentTransferBatch.Close()
+				if err := transferSink.write(ctx, containers.ToCNBatch(currentTransferBatch)); err != nil {
+					return err
+				}
+			}
+			return nil
+		}
+		for _, obj := range softDeleteObjects {
+			if err = processObject(obj); err != nil {
+				return err
 			}
 		}
-		if sinker != nil {
-			sinker.Sync(ctx)
-			stats, bats := sinker.GetResult()
-
-			tbl.tombstoneTable.tableSpace.registerStats(stats...)
-
-			if len(bats) != 0 {
-				panic(fmt.Sprintf("TN-TRANSFER-TOMBSTONE-FILES, batch is %d", len(bats)))
+		if transferSink != nil {
+			if err = transferSink.publish(
+				ctx,
+				tbl.tombstoneTable.tableSpace.registerStats,
+			); err != nil {
+				return err
 			}
 			logutil.Info(
 				"TN-TRANSFER-TOMBSTONE-FILES",
