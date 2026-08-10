@@ -18,7 +18,6 @@
 package fulltext2
 
 import (
-	"os"
 	"strings"
 	"testing"
 
@@ -111,8 +110,7 @@ func TestTailBuilderLiveness(t *testing.T) {
 	deletes := map[any]int64{}
 	recency := int64(100)
 	for i, ts := range segs {
-		framed, rerr := os.ReadFile(ts.Path)
-		require.NoError(t, rerr)
+		framed := readTailFrame(t, ts)
 		seg, dels, uerr := UnframeTail("tail", framed)
 		require.NoError(t, uerr)
 		switch {
@@ -175,8 +173,7 @@ func TestTailBuilderDeleteSpill(t *testing.T) {
 	nDeleteFrames := 0
 	recency := int64(100)
 	for i, ts := range segs {
-		framed, rerr := os.ReadFile(ts.Path)
-		require.NoError(t, rerr)
+		framed := readTailFrame(t, ts)
 		seg, dels, uerr := UnframeTail("tail", framed)
 		require.NoError(t, uerr)
 		switch {

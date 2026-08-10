@@ -96,7 +96,7 @@ func RunFulltext2(c *IndexConsumer, ctx context.Context, errch chan error, r Dat
 						for _, seg := range segs {
 							// The frame is already on disk (TailBuilder spilled it): INSERT it
 							// via load_file straight from the file, split across MaxChunkSize rows.
-							for _, s := range fulltext2.TailFileInsertSqls(w.cfg, chunkID, seg.Path, seg.FrameLen) {
+							for _, s := range fulltext2.TailFileInsertSqls(w.cfg, chunkID, seg.Path, seg.Offset, seg.FrameLen) {
 								res, e := sqlexec.RunSql(sqlproc, s)
 								if e != nil {
 									return e

@@ -124,13 +124,16 @@ func (s *Segment) ToInsertSqls(sqlproc *sqlexec.SqlProcess, cfg TableConfig, ts 
 		catalog.FullText2Index_TblCol_Metadata_Checksum, catalog.FullText2Index_TblCol_Metadata_Filesize,
 		catalog.FullText2Index_TblCol_Metadata_Recency, catalog.FullText2Index_TblCol_Metadata_Nrow,
 		sqlquote.String(s.Id), ts, sqlquote.String(checksum), filesize, s.Recency, s.N))
-	sqls = append(sqls, fileChunkInsertSqls(cfg, s.Id, 0, path, int(filesize), tag)...)
+	sqls = append(sqls, fileChunkInsertSqls(cfg, s.Id, 0, path, 0, int(filesize), tag)...)
 	return sqls, cleanup, nil
 }
 
-// fileChunkInsertSqls splits a spilled file into <= MaxChunkSize storage rows read
-// via load_file (no hex/unhex). Mirrors bm25.wand.FileChunkInsertSqls.
-func fileChunkInsertSqls(cfg TableConfig, id string, startChunkId int64, path string, dataLen int, tag int) []string {
+// fileChunkInsertSqls splits a [baseOffset, baseOffset+dataLen) BYTE RANGE of a spilled file into
+// <= MaxChunkSize storage rows read via load_file (no hex/unhex). baseOffset is 0 for a whole-file
+// base segment; for a CDC tail frame it is the frame's offset within a PACKED spool file (many
+// frames share one file), so the load_file range addresses exactly this frame. Mirrors
+// bm25.wand.FileChunkInsertSqls.
+func fileChunkInsertSqls(cfg TableConfig, id string, startChunkId int64, path string, baseOffset int64, dataLen int, tag int) []string {
 	prefix := fmt.Sprintf("INSERT INTO %s (%s, %s, %s, %s) VALUES ",
 		sqlquote.QualifiedIdent(cfg.DbName, cfg.IndexTable),
 		catalog.FullText2Index_TblCol_Storage_Index_Id, catalog.FullText2Index_TblCol_Storage_Chunk_Id,
@@ -142,7 +145,7 @@ func fileChunkInsertSqls(cfg TableConfig, id string, startChunkId int64, path st
 		if off+sz > dataLen {
 			sz = dataLen - off
 		}
-		url := fmt.Sprintf("file://%s?offset=%d&size=%d", path, off, sz)
+		url := fmt.Sprintf("file://%s?offset=%d&size=%d", path, baseOffset+int64(off), sz)
 		vals = append(vals, fmt.Sprintf("(%s, %d, load_file(cast(%s as datalink)), %d)",
 			sqlquote.String(id), chunkID, sqlquote.String(url), tag))
 		chunkID++
@@ -157,9 +160,11 @@ func fileChunkInsertSqls(cfg TableConfig, id string, startChunkId int64, path st
 	return sqls
 }
 
-// TailFileInsertSqls persists a spilled tag=1 CDC frame file (index_id=CdcTailId).
-func TailFileInsertSqls(cfg TableConfig, startChunkId int64, path string, frameLen int) []string {
-	return fileChunkInsertSqls(cfg, vectorindex.CdcTailId, startChunkId, path, frameLen, int(vectorindex.Tag_CdcEvents))
+// TailFileInsertSqls persists ONE spilled tag=1 CDC frame (index_id=CdcTailId) that lives at
+// [offset, offset+frameLen) within a packed spool file. Its chunk rows are contiguous from
+// startChunkId, so recency (chunk_id) ordering across frames is unchanged by the packing.
+func TailFileInsertSqls(cfg TableConfig, startChunkId int64, path string, offset int64, frameLen int) []string {
+	return fileChunkInsertSqls(cfg, vectorindex.CdcTailId, startChunkId, path, offset, frameLen, int(vectorindex.Tag_CdcEvents))
 }
 
 // DeleteSqls removes one index id's chunks + metadata row (rebuild idempotency).

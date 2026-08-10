@@ -16,6 +16,7 @@ package fulltext2
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"strings"
 	"testing"
@@ -56,8 +57,8 @@ func TestDeleteSqls(t *testing.T) {
 func TestFileChunkInsertSqls(t *testing.T) {
 	cfg := testStorageCfg()
 
-	// a small file fits in ONE chunk row and ONE INSERT.
-	one := fileChunkInsertSqls(cfg, "idx:0", 0, "/tmp/spill", 10, int(vectorindex.Tag_ModelChunk))
+	// a small whole-file (baseOffset 0) fits in ONE chunk row and ONE INSERT.
+	one := fileChunkInsertSqls(cfg, "idx:0", 0, "/tmp/spill", 0, 10, int(vectorindex.Tag_ModelChunk))
 	require.Len(t, one, 1)
 	require.Contains(t, one[0], "load_file(")
 	require.Contains(t, one[0], "offset=0")
@@ -66,15 +67,25 @@ func TestFileChunkInsertSqls(t *testing.T) {
 	// a file spanning > maxInsertTuples chunks splits into multiple INSERT statements.
 	// 101 chunks ⇒ one full 100-tuple INSERT + one trailing INSERT.
 	dataLen := 101 * vectorindex.MaxChunkSize
-	many := fileChunkInsertSqls(cfg, "idx:0", 0, "/tmp/spill", dataLen, int(vectorindex.Tag_ModelChunk))
+	many := fileChunkInsertSqls(cfg, "idx:0", 0, "/tmp/spill", 0, dataLen, int(vectorindex.Tag_ModelChunk))
 	require.Len(t, many, 2)
 	// every chunk contributes one VALUES tuple; total tuples == 101.
 	require.Equal(t, 101, strings.Count(many[0], "load_file(")+strings.Count(many[1], "load_file("))
 
-	// the tail helper delegates to fileChunkInsertSqls with CdcTailId + Tag_CdcEvents.
-	tail := TailFileInsertSqls(cfg, 5, "/tmp/frame", vectorindex.MaxChunkSize+1)
+	// a PACKED frame at a non-zero baseOffset: the load_file range is shifted by the offset, so a
+	// two-chunk frame reads [off, off+MaxChunkSize) then [off+MaxChunkSize, off+len).
+	off := int64(4096)
+	packed := fileChunkInsertSqls(cfg, "idx:0", 0, "/tmp/spool", off, vectorindex.MaxChunkSize+7, int(vectorindex.Tag_CdcEvents))
+	require.Len(t, packed, 1)
+	require.Contains(t, packed[0], fmt.Sprintf("offset=%d", off))
+	require.Contains(t, packed[0], fmt.Sprintf("offset=%d", off+int64(vectorindex.MaxChunkSize)))
+	require.Contains(t, packed[0], "size=7")
+
+	// the tail helper delegates to fileChunkInsertSqls with CdcTailId + Tag_CdcEvents, threading the frame offset.
+	tail := TailFileInsertSqls(cfg, 5, "/tmp/spool", 200, vectorindex.MaxChunkSize+1)
 	require.Len(t, tail, 1)
 	require.Contains(t, tail[0], vectorindex.CdcTailId)
+	require.Contains(t, tail[0], "offset=200")
 }
 
 func TestNextTailChunkIdSql(t *testing.T) {

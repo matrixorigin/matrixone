@@ -20,6 +20,7 @@
 package fulltext2
 
 import (
+	"fmt"
 	"os"
 	"strings"
 	"testing"
@@ -63,7 +64,14 @@ func buildTailIndexLWWMulti(t *testing.T, base *Segment, capacity int64, cdcs ..
 	}
 	segs, err := tb.Finish()
 	require.NoError(t, err)
+	return framesToIndex(t, base, segs)
+}
 
+// framesToIndex decodes packed tail frames in Finish order (recency = position, above the base)
+// exactly like LoadTailSegments, and assembles the queryable Index. Shared by the LWW helpers and
+// the packed-spool test.
+func framesToIndex(t *testing.T, base *Segment, segs []TailSegment) *Index {
+	t.Helper()
 	var tails []*Segment
 	if base != nil {
 		tails = append(tails, base)
@@ -71,8 +79,7 @@ func buildTailIndexLWWMulti(t *testing.T, base *Segment, capacity int64, cdcs ..
 	deletes := map[any]int64{}
 	recency := int64(100)
 	for i, ts := range segs {
-		framed, rerr := os.ReadFile(ts.Path)
-		require.NoError(t, rerr)
+		framed := readTailFrame(t, ts)
 		seg, dels, uerr := UnframeTail("tail", framed)
 		require.NoError(t, uerr)
 		switch {
@@ -84,6 +91,15 @@ func buildTailIndexLWWMulti(t *testing.T, base *Segment, capacity int64, cdcs ..
 		}
 	}
 	return NewIndex(tails, deletes)
+}
+
+// distinctPaths counts the distinct spool files a frame set occupies.
+func distinctPaths(segs []TailSegment) int {
+	seen := map[string]struct{}{}
+	for _, s := range segs {
+		seen[s.Path] = struct{}{}
+	}
+	return len(seen)
 }
 
 // TestCdcInsertThenDeleteAcrossCdcBlobs is the cross-blob regression: the producer flushes a new
@@ -122,6 +138,82 @@ func TestCdcUpdateAcrossCdcBlobs(t *testing.T) {
 	idx := buildTailIndexLWWMulti(t, base, 1000, del, ins)
 	require.Empty(t, queryIDs(t, idx, "oldterm"), "old version superseded by the update")
 	require.Equal(t, []any{int64(1)}, queryIDs(t, idx, "newterm"), "updated version is live")
+}
+
+// readTailFrame reads one frame's bytes from its (now packed) spool file, honoring Offset/FrameLen
+// exactly as persist's load_file range does — so tests decode the same bytes the DB would store.
+func readTailFrame(t *testing.T, ts TailSegment) []byte {
+	t.Helper()
+	all, err := os.ReadFile(ts.Path)
+	require.NoError(t, err)
+	require.LessOrEqual(t, int(ts.Offset)+ts.FrameLen, len(all), "frame range must lie within the spool file")
+	return all[ts.Offset : ts.Offset+int64(ts.FrameLen)]
+}
+
+// TestCdcPackedSpoolBoundedFiles is the regression for the reviewer's unbounded-file finding: an
+// alternating DELETE,INSERT,… update stream still produces one FRAME per op run (chronological seal
+// preserved — LWW unchanged), but the frames are PACKED into a bounded number of spool files instead
+// of one file per frame. Proves file count is bounded while frame/chunk count and LWW are unchanged.
+func TestCdcPackedSpoolBoundedFiles(t *testing.T) {
+	const n = 200
+	baseTexts := map[int64]string{}
+	for i := int64(1); i <= n; i++ {
+		baseTexts[i] = fmt.Sprintf("old%d", i)
+	}
+	base := mkBase(t, baseTexts)
+
+	var blobs []*Cdc
+	for i := int64(1); i <= n; i++ {
+		del := NewCdc(int32(types.T_int64))
+		del.Delete(i)
+		ins := NewCdc(int32(types.T_int64))
+		ins.Insert(i, fmt.Sprintf("new%d", i), nil)
+		blobs = append(blobs, del, ins)
+	}
+
+	tb, err := NewTailBuilder(int32(types.T_int64), 1000, 0, "", wsTokenize)
+	require.NoError(t, err)
+	defer tb.Cleanup()
+	for _, c := range blobs {
+		require.NoError(t, tb.AddBatch(c))
+	}
+	segs, err := tb.Finish()
+	require.NoError(t, err)
+
+	// Frames are NOT collapsed — one per op run (the faithful op log is preserved).
+	require.Greater(t, len(segs), n, "chronological seal keeps one frame per op run")
+	// ...but they pack into a SINGLE default spool file — not len(segs) files.
+	require.Equal(t, 1, distinctPaths(segs), "tiny frames pack into one spool file, not one file per frame")
+
+	// LWW still correct after packing: each pk updated to its new text, old gone.
+	idx := framesToIndex(t, base, segs)
+	for i := int64(1); i <= n; i++ {
+		require.Emptyf(t, queryIDs(t, idx, fmt.Sprintf("old%d", i)), "old version of pk %d gone", i)
+		require.Equalf(t, []any{i}, queryIDs(t, idx, fmt.Sprintf("new%d", i)), "updated pk %d live", i)
+	}
+
+	// With a roll cap of ~1/4 the total frame bytes the spool ROLLS to a handful of files, but the
+	// count stays bounded (bytes/rollCap ≈ 4–5) — far below one file per frame — and LWW is
+	// unaffected by which file a frame lands in.
+	var total int64
+	for _, s := range segs {
+		total += int64(s.FrameLen)
+	}
+	tb2, err := NewTailBuilder(int32(types.T_int64), 1000, 0, "", wsTokenize)
+	require.NoError(t, err)
+	defer tb2.Cleanup()
+	tb2.rollCap = total / 4 // force a few rolls, many frames per file
+	for _, c := range blobs {
+		require.NoError(t, tb2.AddBatch(c))
+	}
+	segs2, err := tb2.Finish()
+	require.NoError(t, err)
+	files := distinctPaths(segs2)
+	require.GreaterOrEqual(t, files, 2, "roll cap forces multiple spool files")
+	require.Less(t, files, len(segs2)/10, "each spool file still packs many frames (not one-per-file)")
+	idx2 := framesToIndex(t, base, segs2)
+	require.Equal(t, []any{int64(1)}, queryIDs(t, idx2, "new1"), "LWW holds across rolled spool files")
+	require.Empty(t, queryIDs(t, idx2, "old1"))
 }
 
 func queryIDs(t *testing.T, idx *Index, word string) []any {

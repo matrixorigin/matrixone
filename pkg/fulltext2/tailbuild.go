@@ -24,11 +24,13 @@ import (
 // capacity is passed (the sinker sources it from max_index_capacity, default 1M).
 const defaultTailCapacity int64 = DefaultBuildCapacity
 
-// TailSegment is one sealed CDC segment spilled to a temp file: the path to its
-// framed bytes (FrameSegment output) and the frame length (so persist can advance
-// chunk_id without re-reading the file). Mirrors bm25's TailSegment.
+// TailSegment locates one sealed CDC frame inside a PACKED spool file: Path is the spool file,
+// Offset is the frame's start byte within it, and FrameLen its length. Many frames share one spool
+// file (rolled at DefaultTailSpoolRollBytes), so a burst of tiny CDC frames costs a handful of files
+// instead of one file per frame; persist reads exactly [Offset, Offset+FrameLen) via load_file.
 type TailSegment struct {
 	Path     string
+	Offset   int64
 	FrameLen int
 }
 
@@ -46,6 +48,13 @@ type TailSegment struct {
 // blob per op change, so this seals at blob granularity, not per event. Mirrors bm25's TailBuilder
 // (positional Builder here). NOT safe for concurrent use; Cleanup() must be deferred to remove the
 // temp files.
+//
+// Each sealed frame is APPENDED to a rolling packed spool file (rolled at rollCap), not written to
+// its own file — so an alternating delete/insert stream (which seals one frame per op run) costs a
+// bounded number of files, O(total frame bytes / rollCap), instead of one file per op run (which
+// could reach hundreds of thousands over a 30-minute iteration and exhaust inodes). The frame
+// ORDER, count, and per-frame chunk_id are unchanged — only the file storage is packed — so
+// last-writer-wins recency is byte-for-byte identical to a file-per-frame layout.
 type TailBuilder struct {
 	pkType     int32
 	capacity   int64 // doc cap (max_index_capacity)
@@ -57,6 +66,15 @@ type TailBuilder struct {
 	cur        *Builder       // open INSERT segment (nil between insert runs)
 	delBatch   []DeleteRecord // open DELETE run (sealed on an op switch to insert, at capacity, or at Finish)
 	frames     []TailSegment  // sealed frames (insert segs + delete frames) in chronological (recency) order
+
+	// Packed spool: sealed frames are appended to curFile at curOff until it would exceed rollCap,
+	// then a fresh file is opened. curFile is closed on roll and in Finish/Cleanup so persist's
+	// load_file reads flushed bytes. fileSeq names the spool files.
+	rollCap int64
+	curFile *os.File
+	curPath string
+	curOff  int64
+	fileSeq int
 
 	opts         []BuildOpt // carried into each per-segment Builder (e.g. WithPositionFree)
 	includeTypes []int32    // INCLUDE column schema, adopted from the first CDC batch
@@ -78,7 +96,40 @@ func NewTailBuilder(pkType int32, capacity, postingCap int64, spillDir string, t
 	if err != nil {
 		return nil, err
 	}
-	return &TailBuilder{pkType: pkType, capacity: capacity, postingCap: postingCap, tokenize: tokenize, dir: dir, opts: opts}, nil
+	return &TailBuilder{pkType: pkType, capacity: capacity, postingCap: postingCap, tokenize: tokenize, dir: dir, rollCap: DefaultTailSpoolRollBytes, opts: opts}, nil
+}
+
+// DefaultTailSpoolRollBytes caps one packed spool file; appending a frame that would exceed it
+// starts a fresh file (a single frame larger than the cap gets its own file). Bounds a temp file's
+// size while packing many small CDC frames into few files instead of one file per frame.
+const DefaultTailSpoolRollBytes int64 = 128 << 20 // 128 MiB
+
+// writeFrame appends framed to the current rolling spool file — starting a new file when the
+// current one would exceed rollCap — and returns the file path plus the frame's byte offset within
+// it, so persist can address exactly [offset, offset+len) via load_file. A frame is never split
+// across files, so load_file always sees a contiguous range.
+func (t *TailBuilder) writeFrame(framed []byte) (string, int64, error) {
+	if t.curFile != nil && t.curOff > 0 && t.curOff+int64(len(framed)) > t.rollCap {
+		if err := t.curFile.Close(); err != nil {
+			return "", 0, err
+		}
+		t.curFile = nil
+	}
+	if t.curFile == nil {
+		path := filepath.Join(t.dir, fmt.Sprintf("spool-%d.frames", t.fileSeq))
+		t.fileSeq++
+		f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
+		if err != nil {
+			return "", 0, err
+		}
+		t.curFile, t.curPath, t.curOff = f, path, 0
+	}
+	off := t.curOff
+	if _, err := t.curFile.Write(framed); err != nil {
+		return "", 0, err
+	}
+	t.curOff += int64(len(framed))
+	return t.curPath, off, nil
 }
 
 // AddBatch streams one decoded CDC batch: insert/upsert rows are tokenized into
@@ -162,12 +213,12 @@ func (t *TailBuilder) seal() error {
 	if err != nil {
 		return err
 	}
-	path := filepath.Join(t.dir, fmt.Sprintf("seg-%d.frame", t.seq))
 	t.seq++
-	if err := os.WriteFile(path, framed, 0o600); err != nil {
+	path, off, err := t.writeFrame(framed)
+	if err != nil {
 		return err
 	}
-	t.frames = append(t.frames, TailSegment{Path: path, FrameLen: len(framed)})
+	t.frames = append(t.frames, TailSegment{Path: path, Offset: off, FrameLen: len(framed)})
 	return nil
 }
 
@@ -184,20 +235,21 @@ func (t *TailBuilder) sealDeletes() error {
 		return err
 	}
 	t.delBatch = nil // free the run; the next delete re-grows a fresh slice
-	path := filepath.Join(t.dir, fmt.Sprintf("delete-%d.frame", t.delSeq))
 	t.delSeq++
-	if err := os.WriteFile(path, framed, 0o600); err != nil {
+	path, off, err := t.writeFrame(framed)
+	if err != nil {
 		return err
 	}
-	t.frames = append(t.frames, TailSegment{Path: path, FrameLen: len(framed)})
+	t.frames = append(t.frames, TailSegment{Path: path, Offset: off, FrameLen: len(framed)})
 	return nil
 }
 
 // Finish seals the final open insert segment and delete run (in that order — at most one is open,
-// since an op switch already sealed the other), then returns ALL frames in chronological (recency)
-// order. chunk_id is assigned sequentially at persist, so recency = operation order and the last
-// writer wins across CDC blobs (see AddBatch / the type doc). Each frame is a temp file the caller
-// persists via load_file. Cleanup must be called afterwards.
+// since an op switch already sealed the other), CLOSES the current spool file so its bytes are
+// flushed for load_file, then returns ALL frames in chronological (recency) order. chunk_id is
+// assigned sequentially at persist, so recency = operation order and the last writer wins across
+// CDC blobs (see AddBatch / the type doc). Each frame is a [Offset, Offset+FrameLen) range in its
+// packed spool file, which the caller persists via load_file. Cleanup must be called afterwards.
 func (t *TailBuilder) Finish() ([]TailSegment, error) {
 	if err := t.seal(); err != nil {
 		return nil, err
@@ -205,11 +257,21 @@ func (t *TailBuilder) Finish() ([]TailSegment, error) {
 	if err := t.sealDeletes(); err != nil {
 		return nil, err
 	}
+	if t.curFile != nil {
+		if err := t.curFile.Close(); err != nil {
+			return nil, err
+		}
+		t.curFile = nil
+	}
 	return t.frames, nil
 }
 
-// Cleanup removes the temp dir and all spilled segment files. Idempotent.
+// Cleanup closes any open spool file and removes the temp dir with all packed spool files. Idempotent.
 func (t *TailBuilder) Cleanup() {
+	if t.curFile != nil {
+		t.curFile.Close()
+		t.curFile = nil
+	}
 	if t.dir != "" {
 		os.RemoveAll(t.dir)
 		t.dir = ""
