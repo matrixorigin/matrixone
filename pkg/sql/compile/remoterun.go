@@ -1498,7 +1498,7 @@ func validateRemoteAggregateProtocol(
 		if aggregateUsesCollationAwareTextMinMax(agg) &&
 			(proc == nil || !supportsRemoteTextCollationAggregates(proc.GetService())) {
 			return moerr.NewNotSupportedNoCtx(
-				"collation-aware text MIN/MAX remote execution requires MORPC protocol version 12",
+				"collation-aware text MIN/MAX remote execution requires MORPC protocol version 14",
 			)
 		}
 	}

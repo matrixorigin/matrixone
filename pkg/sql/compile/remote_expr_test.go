@@ -119,10 +119,10 @@ func TestTextMinMaxRemoteProtocolValidation(t *testing.T) {
 	generalCIMin := textMinForCharset(uint32(types.CharsetUTF8))
 	binMin := textMinForCharset(uint32(types.CharsetUTF8MB4Bin))
 
-	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion11)
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion13)
 	for _, collationAwareMin := range [][]aggexec.AggFuncExecExpression{generalCIMin, binMin} {
 		require.ErrorContains(t, validateRemoteAggregateProtocol(proc, collationAwareMin),
-			"requires MORPC protocol version 12")
+			"requires MORPC protocol version 14")
 	}
 
 	ordered := aggexec.MakeAggFunctionExpression(
@@ -135,10 +135,10 @@ func TestTextMinMaxRemoteProtocolValidation(t *testing.T) {
 	require.ErrorContains(t,
 		validateRemoteAggregateProtocol(proc,
 			append([]aggexec.AggFuncExecExpression{ordered}, generalCIMin...)),
-		"requires MORPC protocol version 12",
+		"requires MORPC protocol version 14",
 	)
 
-	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion12)
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion14)
 	require.NoError(t, validateRemoteAggregateProtocol(proc, generalCIMin))
 	require.NoError(t, validateRemoteAggregateProtocol(proc, binMin))
 

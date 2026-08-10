@@ -1025,7 +1025,7 @@ func useLegacyTextMinMaxForRemote(proc *process.Process) bool {
 	value, ok := moruntime.ServiceRuntime(proc.GetService()).
 		GetGlobalVariables(moruntime.MOProtocolVersion)
 	version, valid := value.(int64)
-	return !ok || !valid || version < defines.MORPCVersion12
+	return !ok || !valid || version < defines.MORPCVersion14
 }
 
 // freeAggListPartial frees the first n aggregators in the list.

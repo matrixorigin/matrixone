@@ -2219,13 +2219,13 @@ func TestMakeAggListFreesPartialOnExtraConfigError(t *testing.T) {
 	require.Error(t, err)
 }
 
-func TestRemoteTextMinMaxUsesLegacyComparatorBeforeProtocolV12(t *testing.T) {
+func TestRemoteTextMinMaxUsesLegacyComparatorBeforeProtocolV14(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	defer proc.Free()
 	proc.Ctx = context.WithValue(proc.Ctx, defines.RemoteRunContext{}, true)
 	rt := moruntime.ServiceRuntime(proc.GetService())
 	defer rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion11)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion13)
 	require.True(t, useLegacyTextMinMaxForRemote(proc))
 
 	argType := types.New(types.T_varchar, 10, 0)
@@ -2254,6 +2254,6 @@ func TestRemoteTextMinMaxUsesLegacyComparatorBeforeProtocolV12(t *testing.T) {
 	defer results[0].Free(proc.Mp())
 	require.Equal(t, "B", string(results[0].GetBytesAt(0)))
 
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion12)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion14)
 	require.False(t, useLegacyTextMinMaxForRemote(proc))
 }
