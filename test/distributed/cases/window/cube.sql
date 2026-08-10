@@ -96,7 +96,6 @@ drop table sales_data;
 -- @bvt:issue
 drop database cube_test;
 
--- @bvt:issue#26827
 drop database if exists ctas_grouping_roundtrip;
 create database ctas_grouping_roundtrip;
 use ctas_grouping_roundtrip;
@@ -109,4 +108,3 @@ create table grouping_sets_ctas as select coalesce(g, -1) as g, coalesce(h, -1) 
 select count(*) as grouping_sets_rows from grouping_sets_ctas;
 select concat(g, ':', h, ':', c) as grouping_sets_row from grouping_sets_ctas order by g, h, c;
 drop database ctas_grouping_roundtrip;
--- @bvt:issue
