@@ -82,23 +82,13 @@ func queryIDs(t *testing.T, idx *Index, word string) []any {
 	return resultIDs(res)
 }
 
-func queryScores(t *testing.T, idx *Index, algo ScoreAlgo, word string) map[int64]float64 {
-	t.Helper()
-	res, err := idx.SearchQuery([]byte(word), false, ParserDefault, algo, 100, nil)
-	require.NoError(t, err)
-	m := make(map[int64]float64, len(res))
-	for _, r := range res {
-		m[r.Pk.(int64)] = float64(r.Score)
-	}
-	return m
-}
-
 // TestDirtyVsCompactedScoreParity pins the live-DF fix: a base+tail carrying DEAD copies
 // (rows updated in the tail, their stale base copies not yet reclaimed) must score and rank a
 // query IDENTICALLY to a clean index holding only the same LIVE rows. Before live-DF, df was
 // summed over physical postings (dead copies included), inflating df past the live N and giving
 // the dirty corpus different idf — hence a different ranking — until a MERGE reclaimed the dead
-// copies. Covers both BM25 and TF-IDF.
+// copies. Covers BM25 and TF-IDF across EVERY path that consumes global DF: WAND bag-of-words
+// disjunction and boolean OR (term df), and NL / boolean phrase clauses (phrase df).
 func TestDirtyVsCompactedScoreParity(t *testing.T) {
 	// The final LIVE state a compacted index holds.
 	live := map[int64]string{
@@ -119,15 +109,41 @@ func TestDirtyVsCompactedScoreParity(t *testing.T) {
 
 	require.Equal(t, compacted.NumDocs(), dirty.NumDocs(), "same live doc count")
 
+	scoresOf := func(res []Result, err error) map[int64]float64 {
+		require.NoError(t, err)
+		m := make(map[int64]float64, len(res))
+		for _, r := range res {
+			m[r.Pk.(int64)] = float64(r.Score)
+		}
+		return m
+	}
+	// Every scoring path that reads global DF, so both the term df() (WAND) and the phraseDf()
+	// live-fixes are exercised — SearchQuery(boolean=false) alone would only hit the phrase path.
+	modes := []struct {
+		name string
+		run  func(idx *Index, algo ScoreAlgo, q string) map[int64]float64
+	}{
+		{"wand-bag", func(idx *Index, algo ScoreAlgo, q string) map[int64]float64 { // WAND disjunction -> df()
+			return scoresOf(idx.SearchBagOfWords([]byte(q), ParserDefault, algo, 100, nil))
+		}},
+		{"bool-or", func(idx *Index, algo ScoreAlgo, q string) map[int64]float64 { // boolean OR -> WAND -> df()
+			return scoresOf(idx.SearchQuery([]byte(q), true, ParserDefault, algo, 100, nil))
+		}},
+		{"nl-phrase", func(idx *Index, algo ScoreAlgo, q string) map[int64]float64 { // NL / phrase -> phraseDf()
+			return scoresOf(idx.SearchQuery([]byte(q), false, ParserDefault, algo, 100, nil))
+		}},
+	}
 	for _, algo := range []ScoreAlgo{BM25, TfIdf} {
-		for _, q := range []string{"x", "y", "x y"} {
-			cs := queryScores(t, compacted, algo, q)
-			ds := queryScores(t, dirty, algo, q)
-			require.Equalf(t, len(cs), len(ds), "algo=%v q=%q same match count", algo, q)
-			for pk, cscore := range cs {
-				dscore, ok := ds[pk]
-				require.Truef(t, ok, "algo=%v q=%q pk %d present in dirty result", algo, q, pk)
-				require.InDeltaf(t, cscore, dscore, 1e-6, "algo=%v q=%q pk %d dirty-vs-compacted score parity", algo, q, pk)
+		for _, m := range modes {
+			for _, q := range []string{"x", "y", "x y"} {
+				cs := m.run(compacted, algo, q)
+				ds := m.run(dirty, algo, q)
+				require.Equalf(t, len(cs), len(ds), "algo=%v mode=%s q=%q same match count", algo, m.name, q)
+				for pk, cscore := range cs {
+					dscore, ok := ds[pk]
+					require.Truef(t, ok, "algo=%v mode=%s q=%q pk %d present in dirty result", algo, m.name, q, pk)
+					require.InDeltaf(t, cscore, dscore, 1e-6, "algo=%v mode=%s q=%q pk %d dirty-vs-compacted score parity", algo, m.name, q, pk)
+				}
 			}
 		}
 	}
