@@ -127,7 +127,9 @@ func NewExpressionExecutorWithAllocation(
 ) (ExpressionExecutor, error) {
 	switch t := planExpr.Expr.(type) {
 	case *plan.Expr_Lit:
-		typ := types.New(types.T(planExpr.Typ.Id), planExpr.Typ.Width, planExpr.Typ.Scale)
+		typ := types.NewWithCharset(
+			types.T(planExpr.Typ.Id), planExpr.Typ.Width, planExpr.Typ.Scale, uint8(planExpr.Typ.Charset),
+		)
 		vec, err := generateConstExpressionExecutor(proc, typ, t.Lit, selection)
 		if err != nil {
 			return nil, err
@@ -135,7 +137,9 @@ func NewExpressionExecutorWithAllocation(
 		return NewFixedVectorExpressionExecutor(proc.Mp(), false, vec), nil
 
 	case *plan.Expr_T:
-		typ := types.New(types.T(planExpr.Typ.Id), planExpr.Typ.Width, planExpr.Typ.Scale)
+		typ := types.NewWithCharset(
+			types.T(planExpr.Typ.Id), planExpr.Typ.Width, planExpr.Typ.Scale, uint8(planExpr.Typ.Charset),
+		)
 		vec, err := newExpressionConstNull(typ, 1, selection)
 		if err != nil {
 			return nil, err
@@ -143,7 +147,9 @@ func NewExpressionExecutorWithAllocation(
 		return NewFixedVectorExpressionExecutor(proc.Mp(), false, vec), nil
 
 	case *plan.Expr_Col:
-		typ := types.New(types.T(planExpr.Typ.Id), planExpr.Typ.Width, planExpr.Typ.Scale)
+		typ := types.NewWithCharset(
+			types.T(planExpr.Typ.Id), planExpr.Typ.Width, planExpr.Typ.Scale, uint8(planExpr.Typ.Charset),
+		)
 		ce := NewColumnExpressionExecutor()
 		*ce = ColumnExpressionExecutor{
 			mp:         proc.Mp(),
@@ -160,13 +166,17 @@ func NewExpressionExecutorWithAllocation(
 		return ce, nil
 
 	case *plan.Expr_P:
-		typ := types.New(types.T(planExpr.Typ.Id), planExpr.Typ.Width, planExpr.Typ.Scale)
+		typ := types.NewWithCharset(
+			types.T(planExpr.Typ.Id), planExpr.Typ.Width, planExpr.Typ.Scale, uint8(planExpr.Typ.Charset),
+		)
 		executor := NewParamExpressionExecutor(proc.Mp(), int(t.P.Pos), typ)
 		executor.allocation = selection
 		return executor, nil
 
 	case *plan.Expr_V:
-		typ := types.New(types.T(planExpr.Typ.Id), planExpr.Typ.Width, planExpr.Typ.Scale)
+		typ := types.NewWithCharset(
+			types.T(planExpr.Typ.Id), planExpr.Typ.Width, planExpr.Typ.Scale, uint8(planExpr.Typ.Charset),
+		)
 		ve := NewVarExpressionExecutor()
 		*ve = VarExpressionExecutor{
 			mp:         proc.Mp(),
@@ -190,7 +200,9 @@ func NewExpressionExecutorWithAllocation(
 	case *plan.Expr_List:
 		executor := NewListExpressionExecutor()
 		resultVecTyp := t.List.List[0].GetTyp()
-		typ := types.New(types.T(resultVecTyp.Id), resultVecTyp.Width, resultVecTyp.Scale)
+		typ := types.NewWithCharset(
+			types.T(resultVecTyp.Id), resultVecTyp.Width, resultVecTyp.Scale, uint8(resultVecTyp.Charset),
+		)
 		if err := executor.init(proc, typ, len(t.List.List), selection); err != nil {
 			executor.Free()
 			return nil, err
@@ -224,7 +236,9 @@ func NewExpressionExecutorWithAllocation(
 			executor.fid, _ = function.DecodeOverloadID(overloadID)
 			executor.evalFn, executor.resetFn, executor.freeFn, executor.retainedBytesFn = overload.GetExecuteMethod()
 		}
-		typ := types.New(types.T(planExpr.Typ.Id), planExpr.Typ.Width, planExpr.Typ.Scale)
+		typ := types.NewWithCharset(
+			types.T(planExpr.Typ.Id), planExpr.Typ.Width, planExpr.Typ.Scale, uint8(planExpr.Typ.Charset),
+		)
 
 		if err = executor.init(proc, len(t.F.Args), typ, selection); err != nil {
 			executor.Free()
@@ -1503,7 +1517,9 @@ func generateConstExpressionExecutor(
 
 func GenerateConstListExpressionExecutor(proc *process.Process, exprs []*plan.Expr) (*vector.Vector, error) {
 	lenList := len(exprs)
-	vec, err := proc.AllocVectorOfRows(types.New(types.T(exprs[0].Typ.Id), exprs[0].Typ.Width, exprs[0].Typ.Scale), lenList, nil)
+	vec, err := proc.AllocVectorOfRows(types.NewWithCharset(
+		types.T(exprs[0].Typ.Id), exprs[0].Typ.Width, exprs[0].Typ.Scale, uint8(exprs[0].Typ.Charset),
+	), lenList, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -2118,7 +2134,9 @@ func GetExprZoneMap(
 					}
 				}
 				fn, _, fnFree, _ := overload.GetExecuteMethod()
-				typ := types.New(types.T(expr.Typ.Id), expr.Typ.Width, expr.Typ.Scale)
+				typ := types.NewWithCharset(
+					types.T(expr.Typ.Id), expr.Typ.Width, expr.Typ.Scale, uint8(expr.Typ.Charset),
+				)
 
 				result := vector.NewFunctionResultWrapper(typ, proc.Mp())
 				if err = result.PreExtendAndReset(2); err != nil {
@@ -2439,7 +2457,9 @@ func MakeEvalVector(proc *process.Process, expressions []*plan.Expr) (ev ExprEva
 	ev.Vec = make([]*vector.Vector, len(ev.Executor))
 	ev.Typ = make([]types.Type, len(ev.Executor))
 	for i, expr := range expressions {
-		ev.Typ[i] = types.New(types.T(expr.Typ.Id), expr.Typ.Width, expr.Typ.Scale)
+		ev.Typ[i] = types.NewWithCharset(
+			types.T(expr.Typ.Id), expr.Typ.Width, expr.Typ.Scale, uint8(expr.Typ.Charset),
+		)
 	}
 	return
 }
