@@ -74,6 +74,25 @@ type buildEntry struct {
 	positions []int32
 }
 
+// addPosting records one (term, byte-position) occurrence for document ord into global,
+// keeping each term's buildEntry list ascending by ord. The caller MUST feed documents in
+// ascending ord and a document's tokens contiguously (both build paths do), so the last
+// entry for a term is always the current document's when the term repeats within it — a
+// repeat then extends that entry's positions in place. This groups a document's repeated
+// occurrences of a term into ONE buildEntry (tf = len(positions), df = len(entries)) without
+// a per-document map, which profiled as ~21% of a large CREATE FULLTEXT2 build (the old
+// per-doc `local := make(map[string][]int32)` + per-token map assign).
+func addPosting(global map[string][]buildEntry, w string, ord int64, pos int32) {
+	entries := global[w]
+	if n := len(entries); n > 0 && entries[n-1].ord == ord {
+		// Same document, repeated term: extend the open entry in place. entries aliases the
+		// map's slice, so mutating entries[n-1] updates global[w][n-1] — no map write needed.
+		entries[n-1].positions = append(entries[n-1].positions, pos)
+		return
+	}
+	global[w] = append(entries, buildEntry{ord: ord, positions: []int32{pos}})
+}
+
 // assembleTerms turns the collected per-term (ord, positions) lists into termPostings.
 // When positionFree, tf is still derived from the occurrence count but the positional
 // payload is dropped (tp.positions left nil) — Serialize then writes an empty positions
@@ -127,20 +146,15 @@ func BuildSegmentFromDocs(id string, pkType int32, docs []Doc, tok tokenizer.Tok
 
 	for ord, d := range docs {
 		s.pks[ord] = d.Pk
-		local := make(map[string][]int32) // term -> positions in THIS doc
 		var ntok int32
 		for tk, err := range tok.Tokenize(d.Text) {
 			if err != nil {
 				return nil, err
 			}
-			w := tokenWord(tk)
-			local[w] = append(local[w], tk.BytePos)
+			addPosting(global, tokenWord(tk), int64(ord), tk.BytePos)
 			ntok++
 		}
 		s.docLen[ord] = ntok
-		for w, pos := range local {
-			global[w] = append(global[w], buildEntry{int64(ord), pos})
-		}
 	}
 
 	terms := assembleTerms(global, s.docLen, bo.positionFree)
@@ -185,18 +199,14 @@ func BuildSegmentFromTokenized(id string, pkType int32, docs []TokenizedDoc, opt
 
 	for ord, d := range docs {
 		s.pks[ord] = d.Pk
-		local := make(map[string][]int32)
 		for i, w := range d.Terms {
 			pos := int32(i) // fall back to token index when Positions is unset
 			if i < len(d.Positions) {
 				pos = d.Positions[i] // byte position
 			}
-			local[w] = append(local[w], pos)
+			addPosting(global, w, int64(ord), pos)
 		}
 		s.docLen[ord] = int32(len(d.Terms))
-		for w, pos := range local {
-			global[w] = append(global[w], buildEntry{int64(ord), pos})
-		}
 	}
 
 	terms := assembleTerms(global, s.docLen, bo.positionFree)
