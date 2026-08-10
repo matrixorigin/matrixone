@@ -113,7 +113,15 @@ func saveBatch(ctx context.Context, ses *Session, bat *batch.Batch) error {
 	n := uint64(bat.RowCount())
 	ses.queryRowCount += n
 
-	s := ses.curResultSize + float64(bat.Size())/(1024*1024)
+	writeBat, release, err := prepareQueryResultBatchForWrite(bat, ses.GetMemPool())
+	if err != nil {
+		return err
+	}
+	if release != nil {
+		defer release()
+	}
+
+	s := ses.curResultSize + float64(writeBat.Size())/(1024*1024)
 	if s > ses.limitResultSize {
 		ses.Debug(ctx, "open save query result", zap.Float64("current result size:", s))
 		return nil
@@ -125,13 +133,6 @@ func saveBatch(ctx context.Context, ses *Session, bat *batch.Batch) error {
 	writer, err := objectio.NewObjectWriterSpecial(objectio.WriterQueryResult, path, fs)
 	if err != nil {
 		return err
-	}
-	writeBat, release, err := prepareQueryResultBatchForWrite(bat, ses.GetMemPool())
-	if err != nil {
-		return err
-	}
-	if release != nil {
-		defer release()
 	}
 	_, err = writer.Write(writeBat)
 	if err != nil {

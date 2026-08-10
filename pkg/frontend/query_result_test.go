@@ -371,6 +371,43 @@ func TestSaveBatchPreservesTrailingFlatNullRows(t *testing.T) {
 	})
 }
 
+func TestSaveBatchUsesNormalizedSizeForAdmission(t *testing.T) {
+	ioutil.RunPipelineTest(func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		ses := newTestSession(t, ctrl)
+		defer ses.Close()
+		ses.SetStmtId(uuid.New())
+		require.NoError(t, initQueryResulConfig(context.Background(), ses))
+		ses.limitResultSize = 0
+
+		proc := testutil.NewProcess(t)
+		proc.Base.FileService = getPu("").FileService
+		proc.Base.SessionInfo = process.SessionInfo{Account: sysAccountName}
+		ses.GetTxnCompileCtx().execCtx = &ExecCtx{
+			reqCtx: context.Background(),
+			proc:   proc,
+		}
+
+		constantNull := vector.NewConstNull(types.T_varchar.ToType(), 0, proc.Mp())
+		data := batch.NewWithSize(1)
+		data.SetVector(0, constantNull)
+		data.SetRowCount(1)
+		defer data.Clean(proc.Mp())
+		require.Zero(t, data.Size(), "the source batch reproduces the pre-normalization zero-size case")
+		before := proc.Mp().CurrNB()
+
+		require.NoError(t, saveBatch(context.Background(), ses, data))
+		assert.Zero(t, constantNull.Length(), "saving must not mutate the executor-owned vector")
+		assert.Equal(t, uint64(1), ses.queryRowCount)
+		assert.Zero(t, ses.savedRowCount)
+		assert.Zero(t, ses.curResultSize)
+		assert.Zero(t, ses.blockIdx)
+		assert.Equal(t, before, proc.Mp().CurrNB(), "rejected normalized vectors must be released")
+	})
+}
+
 func TestPrepareQueryResultBatchForWriteMaterializesTrailingNulls(t *testing.T) {
 	mp := mpool.MustNewZero()
 	vec := vector.NewVec(types.T_varchar.ToType())
