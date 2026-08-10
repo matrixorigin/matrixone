@@ -303,6 +303,9 @@ func TestBootstrapWithWait(t *testing.T) {
 				if sql == fmt.Sprintf("show tables from %s", bootstrappedCheckerDB) {
 					return newBootstrapStringResult(allBootstrappedCheckerTables()...), nil
 				}
+				if strings.HasPrefix(sql, "select state from mo_catalog.mo_version") {
+					return newBootstrapStateResult(versions.StateReady), nil
+				}
 				return executor.Result{}, nil
 			})
 
@@ -320,6 +323,7 @@ func TestBootstrapWithWait(t *testing.T) {
 
 			require.NoError(t, b.Bootstrap(ctx))
 			assert.True(t, n.Load() > 0)
+			assert.True(t, b.IsFinalVersionReady())
 		},
 	)
 }

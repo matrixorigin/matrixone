@@ -240,8 +240,18 @@ func (s *service) heartbeat(ctx context.Context) {
 }
 
 func (s *service) viewMetadataRefreshReady() bool {
+	if s.viewMetadataReady.Load() {
+		return true
+	}
 	readiness := s.viewMetadataBootstrap.Load()
-	return readiness != nil && readiness.service.IsFinalVersionReady()
+	if readiness == nil {
+		return s.viewMetadataReady.Load()
+	}
+	if !readiness.service.IsFinalVersionReady() {
+		return false
+	}
+	s.viewMetadataReady.Store(true)
+	return true
 }
 
 func (s *service) handleCommandBatch(batch logservicepb.CommandBatch) {

@@ -216,7 +216,10 @@ func (s *service) Bootstrap(ctx context.Context) error {
 			s.logger.Info("waiting bootstrap completed",
 				zap.Bool("result", ok),
 				zap.Error(err))
-			return err
+			if err != nil {
+				return err
+			}
+			return s.refreshFinalVersionReadiness(ctx)
 		}
 	}
 }

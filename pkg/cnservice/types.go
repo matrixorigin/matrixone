@@ -696,6 +696,9 @@ type service struct {
 	// viewMetadataBootstrap lets heartbeat observe the bootstrap service's
 	// atomic readiness without waiting for the long-running lifecycle lock.
 	viewMetadataBootstrap atomic.Pointer[bootstrapReadiness]
+	// viewMetadataReady latches final catalog readiness across bootstrap service
+	// retirement. Catalog readiness is monotonic for the lifetime of a CN.
+	viewMetadataReady atomic.Bool
 	// beforeBootstrapClose is a deterministic test barrier.
 	beforeBootstrapClose func()
 	incrservice          incrservice.AutoIncrementService

@@ -556,13 +556,17 @@ func (s *service) closeBootstrapService() error {
 	if s.beforeBootstrapClose != nil {
 		s.beforeBootstrapClose()
 	}
-	s.viewMetadataBootstrap.Store(nil)
 	s.bootstrapMu.Lock()
 	defer s.bootstrapMu.Unlock()
 	if s.bootstrapService == nil {
+		s.viewMetadataBootstrap.Store(nil)
 		return nil
 	}
 	service := s.bootstrapService
+	if service.IsFinalVersionReady() {
+		s.viewMetadataReady.Store(true)
+	}
+	s.viewMetadataBootstrap.Store(nil)
 	s.bootstrapService = nil
 	return service.Close()
 }

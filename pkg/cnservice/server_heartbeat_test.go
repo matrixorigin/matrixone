@@ -216,7 +216,7 @@ func TestViewMetadataHeartbeatCapabilityRequiresCatalogReadiness(t *testing.T) {
 		t.Fatal("heartbeat readiness waited for bootstrap lifecycle lock")
 	}
 	s.viewMetadataBootstrap.Store(nil)
-	require.False(t, s.viewMetadataRefreshReady())
+	require.True(t, s.viewMetadataRefreshReady())
 }
 
 func TestCNCommandPollProgressesWhileHeartbeatIsBlocked(t *testing.T) {
