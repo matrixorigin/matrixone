@@ -25,11 +25,7 @@ var (
 	defaultColDefs = []*plan.ColDef{
 		{
 			Name: "col",
-			Typ: plan.Type{
-				Id:          int32(types.T_varchar),
-				NotNullable: false,
-				Width:       types.MaxVarcharLen,
-			},
+			Typ:  makeGeneratedPlan2Type(types.T_varchar, types.MaxVarcharLen, 0, false),
 		},
 		{
 			Name: "seq",
@@ -41,19 +37,11 @@ var (
 		},
 		{
 			Name: "key",
-			Typ: plan.Type{
-				Id:          int32(types.T_varchar),
-				NotNullable: false,
-				Width:       types.MaxVarcharLen,
-			},
+			Typ:  makeGeneratedPlan2Type(types.T_varchar, types.MaxVarcharLen, 0, false),
 		},
 		{
 			Name: "path",
-			Typ: plan.Type{
-				Id:          int32(types.T_varchar),
-				NotNullable: false,
-				Width:       types.MaxVarcharLen,
-			},
+			Typ:  makeGeneratedPlan2Type(types.T_varchar, types.MaxVarcharLen, 0, false),
 		},
 		{
 			Name: "index",

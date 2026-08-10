@@ -33,6 +33,7 @@ message Type {
   int32 scale = 5;
   string table = 6;
   string enumvalues = 7;
+  uint32 charset = 8;
 }
 
 message msgHeader {
@@ -497,6 +498,9 @@ message TableDef {
   string original_name = 37;
   // Persistent cache epoch for AUTO_INCREMENT allocation.
   uint32 auto_incr_epoch = 38;
+  // Default collation class inherited by textual columns without an explicit
+  // column-level collation. Uses the container/types Charset constants.
+  uint32 default_charset = 39;
 }
 
 message TableFunction {
