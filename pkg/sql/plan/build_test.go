@@ -4916,11 +4916,6 @@ func addReplaceChildIndex(
 	return indexTableName
 }
 
-func addReplaceChildSecondaryIndex(t *testing.T, mock *MockOptimizer, childName string) string {
-	t.Helper()
-	return addReplaceChildIndex(t, mock, childName, "pid", false)
-}
-
 func assertLockTargetTypesMatchInput(t *testing.T, query *plan.Query) {
 	t.Helper()
 	for _, node := range query.Nodes {
