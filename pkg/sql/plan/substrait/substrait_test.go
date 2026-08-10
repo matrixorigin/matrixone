@@ -526,6 +526,39 @@ type gatedJournalHeaderFS struct {
 	once           sync.Once
 }
 
+// staleAuthorityCacheFS models one CN's private read cache. Delete through a
+// different instance reaches the shared backing store but cannot invalidate
+// this cache, matching the remote-cache failure mode of authority-by-read.
+type staleAuthorityCacheFS struct {
+	fileservice.FileService
+	mu    sync.Mutex
+	cache map[string][]byte
+}
+
+func newStaleAuthorityCacheFS(fs fileservice.FileService) *staleAuthorityCacheFS {
+	return &staleAuthorityCacheFS{FileService: fs, cache: make(map[string][]byte)}
+}
+
+func (f *staleAuthorityCacheFS) Read(ctx context.Context, vector *fileservice.IOVector) error {
+	if !strings.Contains(vector.FilePath, "/authority/") || len(vector.Entries) != 1 {
+		return f.FileService.Read(ctx, vector)
+	}
+	f.mu.Lock()
+	cached := append([]byte(nil), f.cache[vector.FilePath]...)
+	f.mu.Unlock()
+	if cached != nil {
+		vector.Entries[0].Data = cached
+		return nil
+	}
+	if err := f.FileService.Read(ctx, vector); err != nil {
+		return err
+	}
+	f.mu.Lock()
+	f.cache[vector.FilePath] = append([]byte(nil), vector.Entries[0].Data...)
+	f.mu.Unlock()
+	return nil
+}
+
 func (f *gatedJournalHeaderFS) Read(ctx context.Context, vector *fileservice.IOVector) error {
 	if vector.FilePath == f.path && len(vector.Entries) == 1 && vector.Entries[0].Size == int64(journalHeaderSize) {
 		f.once.Do(func() { close(f.started) })
@@ -1032,6 +1065,36 @@ func TestPersistentLeaseReplayExpiresWithoutResurrection(t *testing.T) {
 	require.Empty(t, loaded)
 }
 
+func TestAdmissionReconcilesRemoteRevocationBeforeCapacity(t *testing.T) {
+	now := time.Now()
+	journal := new(fakeLeaseJournal)
+	oldLease := testDurableLease(t, 1, uint64(now.Add(time.Minute).UnixMilli()))
+	journal.leases = append(journal.leases, cloneLease(oldLease))
+
+	protectorA := new(fakeProtector)
+	managerA := NewPersistentLeaseManager(1, protectorA, journal)
+	managerA.now = func() time.Time { return now }
+	require.NoError(t, managerA.Replay(context.Background()))
+
+	protectorB := new(fakeProtector)
+	managerB := NewPersistentLeaseManager(1, protectorB, journal)
+	managerB.now = func() time.Time { return now }
+	require.NoError(t, managerB.Replay(context.Background()))
+
+	// Manager A owns durable revocation. Manager B still has the immutable
+	// lease locally and would reject at capacity without reconciliation.
+	require.NoError(t, managerA.Release(context.Background(), oldLease.Read.ReadRef))
+	newLease := testDurableLease(t, 2, uint64(now.Add(time.Minute).UnixMilli()))
+	require.NoError(t, managerB.Acquire(context.Background(), []*Lease{newLease}))
+
+	_, oldOK := resolveLease(managerB, oldLease.Read.ReadRef)
+	_, newOK := resolveLease(managerB, newLease.Read.ReadRef)
+	require.False(t, oldOK)
+	require.True(t, newOK)
+	require.Equal(t, 1, protectorB.unregistered)
+	require.Equal(t, 2, protectorB.registered)
+}
+
 func TestLeaseResolveReleaseRace(t *testing.T) {
 	c, err := Export(scanQuery())
 	require.NoError(t, err)
@@ -1310,6 +1373,14 @@ func TestFileServiceLeaseJournalValidationAndAuthority(t *testing.T) {
 	active, err = journal.Active(context.Background(), stale)
 	require.NoError(t, err)
 	require.False(t, active)
+	require.NoError(t, fs.Delete(context.Background(), journal.authorityPath(lease.Read.ReadRef)))
+	require.NoError(t, fs.Write(context.Background(), fileservice.IOVector{
+		FilePath: journal.authorityPath(lease.Read.ReadRef),
+		Entries:  []fileservice.IOEntry{{Offset: 0, Size: sha256.Size, Data: make([]byte, sha256.Size)}},
+	}))
+	active, err = journal.Active(context.Background(), lease)
+	require.NoError(t, err)
+	require.False(t, active, "authority existence must not replace its lease/SPKI digest binding")
 	require.NoError(t, journal.MarkReleased(context.Background(), lease.Read.ReadRef))
 	active, err = journal.Active(context.Background(), lease)
 	require.NoError(t, err)
@@ -1349,6 +1420,44 @@ func TestFileServiceLeaseJournalAuthorityLinearizesRelease(t *testing.T) {
 	close(gated.allow)
 	require.NoError(t, <-errs)
 	require.False(t, <-result)
+}
+
+func TestFileServiceLeaseJournalAuthorityIgnoresAnotherClientStaleCache(t *testing.T) {
+	ctx := context.Background()
+	shared, err := fileservice.NewMemoryFS("journal-authority-cache", fileservice.CacheConfig{}, nil)
+	require.NoError(t, err)
+	clientA := newStaleAuthorityCacheFS(shared)
+	clientB := newStaleAuthorityCacheFS(shared)
+	journalA, err := NewFileServiceLeaseJournal(clientA, "sirius/read-leases")
+	require.NoError(t, err)
+	journalB, err := NewFileServiceLeaseJournal(clientB, "sirius/read-leases")
+	require.NoError(t, err)
+	lease := testDurableLease(t, 10, uint64(time.Now().Add(time.Minute).UnixMilli()))
+	require.NoError(t, journalA.Store(ctx, lease))
+
+	// Warm client A's private authority cache, then revoke through client B.
+	authority := fileservice.IOVector{
+		FilePath: journalA.authorityPath(lease.Read.ReadRef),
+		Entries:  []fileservice.IOEntry{{Offset: 0, Size: sha256.Size}},
+	}
+	require.NoError(t, clientA.Read(ctx, &authority))
+	authority.Release()
+	require.NoError(t, journalB.MarkReleased(ctx, lease.Read.ReadRef))
+
+	// The adversarial cache still returns the deleted authority bytes.
+	stale := fileservice.IOVector{
+		FilePath: journalA.authorityPath(lease.Read.ReadRef),
+		Entries:  []fileservice.IOEntry{{Offset: 0, Size: sha256.Size}},
+	}
+	require.NoError(t, clientA.Read(ctx, &stale))
+	require.Len(t, stale.Entries[0].Data, sha256.Size)
+	stale.Release()
+
+	// Active uses the shared backing-store stat as its final linearization
+	// point and therefore observes client B's revocation.
+	active, err := journalA.Active(ctx, lease)
+	require.NoError(t, err)
+	require.False(t, active)
 }
 
 func TestFileServiceLeaseJournalCleansOrphanAuthoritiesInBoundedBatches(t *testing.T) {

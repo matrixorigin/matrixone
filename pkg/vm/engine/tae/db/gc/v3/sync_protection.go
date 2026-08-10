@@ -40,11 +40,12 @@ const (
 
 // SyncProtection represents a single sync protection entry
 type SyncProtection struct {
-	JobID      string            // Sync job ID
-	BF         index.BloomFilter // BloomFilter for protected objects (using xorfilter, deterministic)
-	ValidTS    int64             // Valid timestamp (nanoseconds), needs to be renewed
-	SoftDelete bool              // Whether soft deleted
-	CreateTime time.Time         // Creation time for logging
+	JobID            string            // Sync job ID
+	BF               index.BloomFilter // BloomFilter for protected objects (using xorfilter, deterministic)
+	ValidTS          int64             // Renewal timestamp or absolute expiry, in nanoseconds
+	ExpiresAtValidTS bool              // ValidTS is an absolute terminal expiry rather than a renewal timestamp
+	SoftDelete       bool              // Whether soft deleted
+	CreateTime       time.Time         // Creation time for logging
 }
 
 // EnsureSyncProtection makes crash replay idempotent while still rejecting a
@@ -58,8 +59,8 @@ func (m *SyncProtectionManager) EnsureSyncProtection(jobID, bfData string, valid
 	return guard.EnsureSyncProtection(jobID, bfData, validTS, taskID)
 }
 
-func (m *SyncProtectionManager) ensureSyncProtection(jobID, bfData string, validTS int64, taskID string) (*SyncProtection, bool, error) {
-	registered, err := m.registerSyncProtection(jobID, bfData, validTS, taskID)
+func (m *SyncProtectionManager) ensureSyncProtection(jobID, bfData string, validTS int64, taskID string, expiresAtValidTS bool) (*SyncProtection, bool, error) {
+	registered, err := m.registerSyncProtection(jobID, bfData, validTS, taskID, expiresAtValidTS)
 	if err == nil {
 		return registered, true, nil
 	}
@@ -72,7 +73,7 @@ func (m *SyncProtectionManager) ensureSyncProtection(jobID, bfData string, valid
 	}
 	m.RLock()
 	p := m.protections[jobID]
-	if p == nil || p.SoftDelete || p.ValidTS != validTS {
+	if p == nil || p.SoftDelete || p.ValidTS != validTS || p.ExpiresAtValidTS != expiresAtValidTS {
 		m.RUnlock()
 		return nil, false, err
 	}
@@ -118,6 +119,17 @@ func (m *SyncProtectionManager) BeginProtection() (*SyncProtectionGuard, error) 
 }
 
 func (g *SyncProtectionGuard) EnsureSyncProtection(jobID, bfData string, validTS int64, taskID string) error {
+	return g.ensureSyncProtection(jobID, bfData, validTS, taskID, false)
+}
+
+// EnsureExpiringSyncProtection registers a protection whose ValidTS is its
+// absolute terminal expiry. It is used by fixed-lifetime read capabilities,
+// which must not inherit the renewal TTL after their authority has expired.
+func (g *SyncProtectionGuard) EnsureExpiringSyncProtection(jobID, bfData string, validTS int64, taskID string) error {
+	return g.ensureSyncProtection(jobID, bfData, validTS, taskID, true)
+}
+
+func (g *SyncProtectionGuard) ensureSyncProtection(jobID, bfData string, validTS int64, taskID string, expiresAtValidTS bool) error {
 	if g == nil || g.manager == nil {
 		return moerr.NewSyncProtectionInvalidNoCtx()
 	}
@@ -126,7 +138,7 @@ func (g *SyncProtectionGuard) EnsureSyncProtection(jobID, bfData string, validTS
 	if g.closed {
 		return moerr.NewSyncProtectionInvalidNoCtx()
 	}
-	protection, created, err := g.manager.ensureSyncProtection(jobID, bfData, validTS, taskID)
+	protection, created, err := g.manager.ensureSyncProtection(jobID, bfData, validTS, taskID, expiresAtValidTS)
 	if err == nil && created {
 		if g.owned == nil {
 			g.owned = make(map[string]*SyncProtection)
@@ -220,7 +232,7 @@ func (m *SyncProtectionManager) RegisterSyncProtection(
 		return err
 	}
 	defer guard.Close()
-	_, err = m.registerSyncProtection(jobID, bfData, validTS, taskID)
+	_, err = m.registerSyncProtection(jobID, bfData, validTS, taskID, false)
 	return err
 }
 
@@ -229,6 +241,7 @@ func (m *SyncProtectionManager) registerSyncProtection(
 	bfData string,
 	validTS int64,
 	taskID string,
+	expiresAtValidTS bool,
 ) (*SyncProtection, error) {
 	m.Lock()
 	defer m.Unlock()
@@ -254,6 +267,12 @@ func (m *SyncProtectionManager) registerSyncProtection(
 	}
 
 	// Check max count
+	if len(m.protections) >= m.maxCount {
+		// Reclaim terminal entries only on the rejection slow path. This keeps
+		// normal registration O(1) while preventing expired fixed-lifetime
+		// capabilities from consuming all protection capacity between GC runs.
+		m.cleanupExpiredAtLocked(time.Now())
+	}
 	if len(m.protections) >= m.maxCount {
 		logutil.Warn(
 			"GC-Sync-Protection-Register-Max-Count-Reached",
@@ -312,11 +331,12 @@ func (m *SyncProtectionManager) registerSyncProtection(
 	}
 
 	protection := &SyncProtection{
-		JobID:      jobID,
-		BF:         bf,
-		ValidTS:    validTS,
-		SoftDelete: false,
-		CreateTime: time.Now(),
+		JobID:            jobID,
+		BF:               bf,
+		ValidTS:          validTS,
+		ExpiresAtValidTS: expiresAtValidTS,
+		SoftDelete:       false,
+		CreateTime:       time.Now(),
 	}
 	m.protections[jobID] = protection
 
@@ -430,18 +450,30 @@ func (m *SyncProtectionManager) CleanupSoftDeleted(checkpointWatermark int64) {
 	}
 }
 
-// CleanupExpired cleans up expired protections (TTL exceeded and not soft deleted)
-// This handles crashed sync jobs that didn't unregister
+// CleanupExpired removes absolute-expiry protections at their terminal
+// timestamp and renewable protections after their renewal TTL. This also
+// handles crashed sync jobs that did not unregister.
 func (m *SyncProtectionManager) CleanupExpired() {
+	m.cleanupExpiredAt(time.Now())
+}
+
+func (m *SyncProtectionManager) cleanupExpiredAt(now time.Time) {
 	m.Lock()
 	defer m.Unlock()
+	m.cleanupExpiredAtLocked(now)
+}
 
-	now := time.Now()
+func (m *SyncProtectionManager) cleanupExpiredAtLocked(now time.Time) {
 	for jobID, p := range m.protections {
 		validTime := time.Unix(0, p.ValidTS)
 
-		// Non soft delete state, but TTL exceeded without renewal
-		if !p.SoftDelete && now.Sub(validTime) > m.ttl {
+		// Fixed-lifetime capabilities expire at ValidTS. Renewable sync jobs
+		// retain the existing last-renewal-plus-TTL contract.
+		expired := p.ExpiresAtValidTS && !now.Before(validTime)
+		if !p.ExpiresAtValidTS {
+			expired = now.Sub(validTime) > m.ttl
+		}
+		if !p.SoftDelete && expired {
 			delete(m.protections, jobID)
 			logutil.Warn(
 				"GC-Sync-Protection-Force-Cleaned-Expired",

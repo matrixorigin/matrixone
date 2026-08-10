@@ -275,6 +275,9 @@ func (m *LeaseManager) acquireProtected(
 	if err := m.pruneExpired(ctx); err != nil {
 		return err
 	}
+	if err := m.reconcileRevokedForCapacity(ctx, len(leases)); err != nil {
+		return err
+	}
 	m.mu.RLock()
 	if !m.ready {
 		m.mu.RUnlock()
@@ -475,6 +478,48 @@ func (m *LeaseManager) pruneExpired(ctx context.Context) error {
 	for _, key := range expired {
 		if err := m.releaseLease(ctx, key); err != nil {
 			return moerr.NewInternalErrorNoCtxf("substrait: prune expired read lease: %v", err)
+		}
+	}
+	return nil
+}
+
+// reconcileRevokedForCapacity is the admission-pressure slow path. Managers
+// may share a durable journal during rolling replacement, so a lease revoked
+// by another manager can remain in this manager's immutable local map. Before
+// rejecting for capacity, consult the durable authority and advance stale
+// local leases through the ordinary release owner. mutation must be held by
+// the caller; the scan is bounded by the configured live-lease capacity.
+func (m *LeaseManager) reconcileRevokedForCapacity(ctx context.Context, incoming int) error {
+	if m.journal == nil {
+		return nil
+	}
+	m.mu.RLock()
+	if len(m.leases)+incoming <= m.maximum {
+		m.mu.RUnlock()
+		return nil
+	}
+	leases := make([]*Lease, 0, len(m.leases))
+	for _, lease := range m.leases {
+		leases = append(leases, lease)
+	}
+	m.mu.RUnlock()
+
+	for _, lease := range leases {
+		m.mu.RLock()
+		hasCapacity := len(m.leases)+incoming <= m.maximum
+		m.mu.RUnlock()
+		if hasCapacity {
+			return nil
+		}
+		active, err := m.journal.Active(ctx, lease)
+		if err != nil {
+			return moerr.NewInternalErrorNoCtxf("substrait: reconcile durable read lease: %v", err)
+		}
+		if active {
+			continue
+		}
+		if err := m.releaseLease(ctx, string(lease.Read.ReadRef)); err != nil {
+			return moerr.NewInternalErrorNoCtxf("substrait: release revoked read lease: %v", err)
 		}
 	}
 	return nil

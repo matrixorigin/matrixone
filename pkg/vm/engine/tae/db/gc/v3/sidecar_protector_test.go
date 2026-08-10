@@ -55,6 +55,38 @@ func TestSidecarReadProtectorLifecycle(t *testing.T) {
 	require.NoError(t, protector.Unregister(ctx, ref))
 }
 
+func TestSidecarReadProtectorUsesAbsoluteLeaseExpiry(t *testing.T) {
+	ctx := context.Background()
+	now := time.Unix(1_800_000_000, 0)
+	expires := now.Add(time.Minute)
+	manager := NewSyncProtectionManager()
+	manager.ttl = time.Hour
+	protector := SidecarReadProtector{Manager: manager}
+	ref := []byte("expiring-read")
+	jobID := sidecarReadJobID(ref)
+
+	require.NoError(t, protector.Register(ctx, ref, []string{"obj"}, expires))
+	manager.cleanupExpiredAt(expires.Add(-time.Nanosecond))
+	require.True(t, manager.HasProtection(jobID))
+	require.True(t, manager.IsProtected("obj"))
+
+	// Fixed-lifetime sidecar capabilities expire at their lease deadline;
+	// the generic sync-job renewal TTL is not added a second time.
+	manager.cleanupExpiredAt(expires)
+	require.False(t, manager.HasProtection(jobID))
+	require.False(t, manager.IsProtected("obj"))
+
+	// Registration pressure also reclaims absolute expirations before
+	// rejecting, without adding an O(n) scan to the ordinary path.
+	manager.maxCount = 1
+	expiredRef := []byte("already-expired-read")
+	require.NoError(t, protector.Register(ctx, expiredRef, []string{"old"}, time.Now().Add(-time.Minute)))
+	replacementRef := []byte("replacement-read")
+	require.NoError(t, protector.Register(ctx, replacementRef, []string{"new"}, time.Now().Add(time.Minute)))
+	require.False(t, manager.HasProtection(sidecarReadJobID(expiredRef)))
+	require.True(t, manager.HasProtection(sidecarReadJobID(replacementRef)))
+}
+
 func TestSidecarReadProtectionScopeExcludesGC(t *testing.T) {
 	ctx := context.Background()
 	manager := NewSyncProtectionManager()

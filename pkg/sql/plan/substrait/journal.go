@@ -107,11 +107,18 @@ func (j *FileServiceLeaseJournal) Store(ctx context.Context, lease *Lease) error
 	if !equalBytes(activeAuthority, authority[:]) {
 		return moerr.NewInternalErrorNoCtx("substrait: lease journal authority changed during store")
 	}
+	active, err := j.authorityActive(ctx, lease.Read.ReadRef)
+	if err != nil {
+		return err
+	}
+	if !active {
+		return moerr.NewInternalErrorNoCtx("substrait: lease journal authority revoked during store")
+	}
 	return nil
 }
 
-// Active validates the immutable record before reading the single authority
-// object. The final authority read is the durable linearization point against
+// Active validates the immutable record and its single authority object. The
+// final backing-store stat is the durable linearization point against
 // MarkReleased: it either precedes the atomic delete or observes revocation.
 func (j *FileServiceLeaseJournal) Active(ctx context.Context, lease *Lease) (bool, error) {
 	if lease == nil || lease.Read == nil || len(lease.Read.ReadRef) != 32 {
@@ -138,7 +145,17 @@ func (j *FileServiceLeaseJournal) Active(ctx context.Context, lease *Lease) (boo
 	if err != nil {
 		return false, err
 	}
-	return equalBytes(authority, want[:]), nil
+	if !equalBytes(authority, want[:]) {
+		return false, nil
+	}
+	// This cache-independent backing-store check is intentionally last. A
+	// stale authority cache may satisfy the digest read after another CN has
+	// revoked the lease, but it cannot satisfy this existence check.
+	active, err := j.authorityActive(ctx, lease.Read.ReadRef)
+	if err != nil {
+		return false, err
+	}
+	return active, nil
 }
 
 func (j *FileServiceLeaseJournal) MarkReleased(ctx context.Context, readRef []byte) error {
@@ -227,6 +244,13 @@ func (j *FileServiceLeaseJournal) Load(ctx context.Context, visit func(*Lease) e
 		lease.Released = moerr.IsMoErrCode(authorityErr, moerr.ErrFileNotFound)
 		if authorityErr == nil && !equalBytes(activeAuthority, wantAuthority[:]) {
 			return moerr.NewInternalErrorNoCtxf("substrait: lease journal authority state mismatch %q", name)
+		}
+		if !lease.Released {
+			active, statErr := j.authorityActive(ctx, readRef)
+			if statErr != nil {
+				return statErr
+			}
+			lease.Released = !active
 		}
 		if err := visit(lease); err != nil {
 			return err
@@ -334,6 +358,24 @@ func (j *FileServiceLeaseJournal) readAuthority(ctx context.Context, readRef []b
 		return nil, moerr.NewInternalErrorNoCtx("substrait: invalid lease journal authority size")
 	}
 	return append([]byte(nil), vector.Entries[0].Data...), nil
+}
+
+// authorityActive deliberately uses StatFile for the final authority check.
+// FileService.Read above preserves the digest's independent lease/SPKI binding
+// but may be served by vector, memory, disk, or remote caches owned by another
+// CN. StatFile reaches the backing store, so its result linearizes with delete.
+func (j *FileServiceLeaseJournal) authorityActive(ctx context.Context, readRef []byte) (bool, error) {
+	entry, err := j.fs.StatFile(ctx, j.authorityPath(readRef))
+	if moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	if entry == nil || entry.IsDir || entry.Size != sha256.Size {
+		return false, moerr.NewInternalErrorNoCtx("substrait: invalid lease journal authority size")
+	}
+	return true, nil
 }
 
 func (j *FileServiceLeaseJournal) activePath(readRef []byte) string {
