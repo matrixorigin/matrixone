@@ -175,13 +175,17 @@ func (bat *Batch) HasBinaryStringMetadata() bool {
 		if vec == nil {
 			continue
 		}
+		if vec.GetIsBinaryString() || vec.HasBinaryStringRows() {
+			return true
+		}
 		switch vec.GetType().Oid {
 		case types.T_binary, types.T_varbinary, types.T_blob:
-			// Static binary types need no dynamic trailer.
-			continue
-		}
-		if vec.GetIsBinaryString() {
-			return true
+			// A static binary vector normally needs no dynamic metadata. Row-mode
+			// prepare provenance shares one byte with the binary marker, though,
+			// so old decoders must still be gated when that mode is selected.
+			if len(vec.GetPrepareParamKinds()) != 0 {
+				return true
+			}
 		}
 	}
 	return false
@@ -250,6 +254,37 @@ func (bat *Batch) AppendPrepareParamKindMetadata(w *bytes.Buffer) error {
 	ext.Write(types.EncodeUint32(&total))
 	_, err := w.Write(ext.Bytes())
 	return err
+}
+
+// PrepareParamKindMetadataSize returns the exact optional transient trailer
+// size without allocating it. Spill owners use this to reserve memory and disk
+// before serialization.
+func (bat *Batch) PrepareParamKindMetadataSize() (int, error) {
+	if bat == nil || !bat.HasPrepareParamKindMetadata() {
+		return 0, nil
+	}
+	total := uint64(4 + 4 + 8 + 4)
+	for _, vec := range bat.Vecs {
+		if vec == nil {
+			return 0, moerr.NewInvalidInputNoCtx("cannot size prepared parameter metadata for nil vector")
+		}
+		kinds := vec.GetPrepareParamKinds()
+		if len(kinds) != 0 || vec.HasBinaryStringRows() {
+			if (len(kinds) != 0 && len(kinds) != vec.Length()) ||
+				int64(vec.Length()) > int64(prepareParamKindBatchMaxRows) {
+				return 0, moerr.NewInvalidInputNoCtx("invalid prepared parameter metadata row count")
+			}
+			total += uint64(1 + 4 + vec.Length())
+		} else if vec.HasPrepareParamKind() && vec.GetPrepareParamKind() != vector.PrepareParamNone {
+			total += 2
+		} else {
+			total++
+		}
+		if total > uint64(^uint32(0)) {
+			return 0, moerr.NewInvalidInputNoCtx("prepared parameter metadata exceeds wire limit")
+		}
+	}
+	return int(total), nil
 }
 
 // MarshalBinaryWithPrepareParamKinds is the pipeline-only transport encoder.

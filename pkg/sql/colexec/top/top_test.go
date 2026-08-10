@@ -246,6 +246,7 @@ func TestTopSpillPrepareParamMetadata(t *testing.T) {
 	vec.SetPrepareParamKinds([]vector.PrepareParamKind{
 		vector.PrepareParamInteger, vector.PrepareParamNone,
 	})
+	require.NoError(t, vec.SetIsBinaryStringAt(0, true))
 	src.Vecs[0] = vec
 	src.SetRowCount(2)
 	defer src.Clean(mp)
@@ -258,10 +259,12 @@ func TestTopSpillPrepareParamMetadata(t *testing.T) {
 	require.NotEqual(t, data, withMetadata)
 	decoded := batch.NewWithSize(1)
 	defer decoded.Clean(mp)
-	require.NoError(t, decoded.UnmarshalBinaryWithAnyMp(base, mp))
+	require.NoError(t, decoded.UnmarshalBinaryWithPrepareParamKinds(base, mp))
 	require.NoError(t, restoreTopSpillPrepareParamMetadata(decoded, metadata, metadataRows, mp))
 	require.Equal(t, vector.PrepareParamInteger, decoded.Vecs[0].GetPrepareParamKindAt(0))
 	require.Equal(t, vector.PrepareParamNone, decoded.Vecs[0].GetPrepareParamKindAt(1))
+	require.True(t, decoded.Vecs[0].GetIsBinaryStringAt(0))
+	require.False(t, decoded.Vecs[0].GetIsBinaryStringAt(1))
 
 	bad := append([]byte(nil), withMetadata...)
 	bad[len(bad)-1] = 0xff
