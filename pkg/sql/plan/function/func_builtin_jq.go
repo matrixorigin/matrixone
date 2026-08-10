@@ -72,9 +72,10 @@ func (op *opBuiltInJq) tryJq(params []*vector.Vector, result vector.FunctionResu
 func (op *opBuiltInJq) tryJqImpl(params []*vector.Vector, result vector.FunctionResultWrapper,
 	proc *process.Process, length int, selectList *FunctionSelectList,
 	isTry bool) error {
-	p1 := vector.GenerateFunctionStrParameter(params[0])
-	p2 := vector.GenerateFunctionStrParameter(params[1])
 	rs := vector.MustFunctionResult[types.Varlena](result)
+	if length == 0 {
+		return nil
+	}
 
 	// special case
 	if selectList.IgnoreAllRow() {
@@ -82,6 +83,8 @@ func (op *opBuiltInJq) tryJqImpl(params []*vector.Vector, result vector.Function
 		return nil
 	}
 
+	p1 := vector.GenerateFunctionStrParameter(params[0])
+	p2 := vector.GenerateFunctionStrParameter(params[1])
 	c1, c2 := params[0].IsConst(), params[1].IsConst()
 	// if both parameters are constant, just eval
 	if c1 && c2 {

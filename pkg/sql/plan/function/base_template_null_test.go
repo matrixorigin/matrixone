@@ -515,19 +515,38 @@ func TestMoTupleExprMixedNullPreservesRowPositions(t *testing.T) {
 		[]FunctionTestInput{
 			NewFunctionTestInput(
 				types.T_varchar.ToType(),
-				[]string{"", "", ""},
-				[]bool{false, true, false},
+				[]string{"", "", "", "invalid"},
+				[]bool{false, true, false, false},
 			),
 		},
 		NewFunctionTestResult(
 			types.T_varchar.ToType(),
 			false,
-			[]string{"()", "", "()"},
-			[]bool{false, true, false},
+			[]string{"()", "", "()", ""},
+			[]bool{false, true, false, true},
 		),
 		MoTupleExpr,
 	)
 
 	succeed, info := testCase.Run()
 	require.True(t, succeed, info)
+
+	require.NoError(t, testCase.result.PreExtendAndReset(testCase.fnLength))
+	require.NoError(t, MoTupleExpr(
+		testCase.parameters,
+		testCase.result,
+		proc,
+		testCase.fnLength,
+		&FunctionSelectList{AnyNull: true, SelectList: []bool{false, true, true, true}},
+	))
+	result := testCase.GetResultVectorDirectly()
+	require.Equal(t, 4, result.Length())
+	parameter := vector.GenerateFunctionStrParameter(result)
+	for row, wantNull := range []bool{true, true, false, true} {
+		value, isNull := parameter.GetStrValue(uint64(row))
+		require.Equalf(t, wantNull, isNull, "row %d null state", row)
+		if !isNull {
+			require.Equal(t, "()", string(value))
+		}
+	}
 }

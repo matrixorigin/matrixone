@@ -161,6 +161,9 @@ func (op *opOnnxRun) ensureSession(proc *process.Process, rawArg []byte, isDatal
 func (op *opOnnxRun) onnxRun(params []*vector.Vector, result vector.FunctionResultWrapper,
 	proc *process.Process, length int, selectList *FunctionSelectList) error {
 	rs := vector.MustFunctionResult[types.Varlena](result)
+	if length == 0 {
+		return nil
+	}
 	if selectList.IgnoreAllRow() {
 		rs.SetNullResult(uint64(length))
 		return nil

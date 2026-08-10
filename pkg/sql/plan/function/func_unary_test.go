@@ -40,6 +40,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
@@ -3583,6 +3584,118 @@ func TestLoadFile(t *testing.T) {
 	}
 }
 
+func evalLoadFileForTest(
+	t *testing.T,
+	proc *process.Process,
+	input FunctionTestInput,
+	fn fEvalFn,
+	selectList *FunctionSelectList,
+) *vector.Vector {
+	t.Helper()
+	testCase := NewFunctionTestCase(
+		proc,
+		[]FunctionTestInput{input},
+		NewFunctionTestResult(types.T_text.ToType(), false, nil, nil),
+		fn,
+	)
+	require.NoError(t, testCase.result.PreExtendAndReset(testCase.fnLength))
+	require.NoError(t, fn(
+		testCase.parameters,
+		testCase.result,
+		proc,
+		testCase.fnLength,
+		selectList,
+	))
+	return testCase.GetResultVectorDirectly()
+}
+
+func requireLoadFileResult(t *testing.T, result *vector.Vector, values []string, nulls []bool) {
+	t.Helper()
+	require.Equal(t, len(values), result.Length())
+	parameter := vector.GenerateFunctionStrParameter(result)
+	for i := range values {
+		value, isNull := parameter.GetStrValue(uint64(i))
+		require.Equalf(t, nulls[i], isNull, "row %d null state", i)
+		if !isNull {
+			require.Equalf(t, values[i], string(value), "row %d value", i)
+		}
+	}
+}
+
+func TestLoadFileCardinalityAndSelection(t *testing.T) {
+	dir := t.TempDir()
+	proc := testutil.NewProc(t)
+	ctx := context.Background()
+	valuePath := filepath.Join(dir, "value")
+	emptyPath := filepath.Join(dir, "empty")
+	missingPath := filepath.Join(dir, "missing")
+	writeFile := func(filePath string, data []byte) {
+		t.Helper()
+		fs, readPath, err := fileservice.GetForETL(ctx, proc.Base.FileService, filePath)
+		require.NoError(t, err)
+		require.NoError(t, fs.Write(ctx, fileservice.IOVector{
+			FilePath: readPath,
+			Entries: []fileservice.IOEntry{{
+				Offset: 0,
+				Size:   int64(len(data)),
+				Data:   data,
+			}},
+		}))
+	}
+	writeFile(valuePath, []byte("value"))
+	writeFile(emptyPath, nil)
+
+	t.Run("zero rows", func(t *testing.T) {
+		result := evalLoadFileForTest(t, proc,
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{}, nil),
+			LoadFile, nil)
+		requireLoadFileResult(t, result, nil, nil)
+	})
+
+	t.Run("constant null", func(t *testing.T) {
+		result := evalLoadFileForTest(t, proc,
+			NewFunctionTestConstInput(types.T_varchar.ToType(),
+				[]string{missingPath, missingPath}, []bool{true, false}),
+			LoadFile, nil)
+		requireLoadFileResult(t, result, []string{"", ""}, []bool{true, true})
+	})
+
+	t.Run("constant empty", func(t *testing.T) {
+		result := evalLoadFileForTest(t, proc,
+			NewFunctionTestConstInput(types.T_varchar.ToType(),
+				[]string{emptyPath, emptyPath}, nil),
+			LoadFile, nil)
+		requireLoadFileResult(t, result, []string{"", ""}, []bool{true, true})
+	})
+
+	t.Run("row null empty and value", func(t *testing.T) {
+		result := evalLoadFileForTest(t, proc,
+			NewFunctionTestInput(types.T_varchar.ToType(),
+				[]string{missingPath, emptyPath, valuePath}, []bool{true, false, false}),
+			LoadFile, nil)
+		requireLoadFileResult(t, result,
+			[]string{"", "", "value"}, []bool{true, true, false})
+	})
+
+	t.Run("selection skips IO", func(t *testing.T) {
+		result := evalLoadFileForTest(t, proc,
+			NewFunctionTestInput(types.T_varchar.ToType(),
+				[]string{missingPath, valuePath}, nil),
+			LoadFile,
+			&FunctionSelectList{AnyNull: true, SelectList: []bool{false, true}})
+		requireLoadFileResult(t, result, []string{"", "value"}, []bool{true, false})
+	})
+
+	t.Run("ignore all skips IO", func(t *testing.T) {
+		result := evalLoadFileForTest(t, proc,
+			NewFunctionTestInput(types.T_varchar.ToType(),
+				[]string{missingPath, missingPath}, nil),
+			LoadFile,
+			&FunctionSelectList{AnyNull: true, AllNull: true, SelectList: []bool{false, false}})
+		requireLoadFileResult(t, result, []string{"", ""}, []bool{true, true})
+	})
+}
+
 func TestLoadFileDatalink(t *testing.T) {
 	dir := t.TempDir()
 	proc := testutil.NewProc(t)
@@ -3614,7 +3727,79 @@ func TestLoadFileDatalink(t *testing.T) {
 	}
 }
 
-func TestLoadFileDatalinkTooLarge(t *testing.T) {
+func TestLoadFileDatalinkCardinalityAndSelection(t *testing.T) {
+	dir := t.TempDir()
+	proc := testutil.NewProc(t)
+	emptyPath := filepath.Join(dir, "empty")
+	valuePath := filepath.Join(dir, "value")
+	missingPath := filepath.Join(dir, "missing")
+	require.NoError(t, os.WriteFile(emptyPath, nil, 0o600))
+	require.NoError(t, os.WriteFile(valuePath, []byte("value"), 0o600))
+
+	t.Run("zero rows", func(t *testing.T) {
+		result := evalLoadFileForTest(t, proc,
+			NewFunctionTestInput(types.T_datalink.ToType(), []string{}, nil),
+			LoadFileDatalink, nil)
+		requireLoadFileResult(t, result, nil, nil)
+	})
+
+	t.Run("empty row preserves later positions", func(t *testing.T) {
+		result := evalLoadFileForTest(t, proc,
+			NewFunctionTestInput(types.T_datalink.ToType(),
+				[]string{"file://" + emptyPath, "file://" + valuePath}, nil),
+			LoadFileDatalink, nil)
+		requireLoadFileResult(t, result, []string{"", "value"}, []bool{true, false})
+
+		resultBatch := batch.NewWithSize(1)
+		resultBatch.Vecs[0] = result
+		resultBatch.SetRowCount(2)
+		require.NoError(t, resultBatch.Shuffle([]int64{1, 0}, proc.Mp()))
+	})
+
+	t.Run("constant empty expands to batch length", func(t *testing.T) {
+		result := evalLoadFileForTest(t, proc,
+			NewFunctionTestConstInput(types.T_datalink.ToType(),
+				[]string{"file://" + emptyPath, "file://" + emptyPath}, nil),
+			LoadFileDatalink, nil)
+		requireLoadFileResult(t, result, []string{"", ""}, []bool{true, true})
+	})
+
+	t.Run("constant value expands to batch length", func(t *testing.T) {
+		result := evalLoadFileForTest(t, proc,
+			NewFunctionTestConstInput(types.T_datalink.ToType(),
+				[]string{"file://" + valuePath, "file://" + valuePath}, nil),
+			LoadFileDatalink, nil)
+		requireLoadFileResult(t, result, []string{"value", "value"}, []bool{false, false})
+	})
+
+	t.Run("constant null skips IO", func(t *testing.T) {
+		result := evalLoadFileForTest(t, proc,
+			NewFunctionTestConstInput(types.T_datalink.ToType(),
+				[]string{"file://" + missingPath, "file://" + missingPath}, []bool{true, false}),
+			LoadFileDatalink, nil)
+		requireLoadFileResult(t, result, []string{"", ""}, []bool{true, true})
+	})
+
+	t.Run("selection skips IO", func(t *testing.T) {
+		result := evalLoadFileForTest(t, proc,
+			NewFunctionTestInput(types.T_datalink.ToType(),
+				[]string{"file://" + missingPath, "file://" + valuePath}, nil),
+			LoadFileDatalink,
+			&FunctionSelectList{AnyNull: true, SelectList: []bool{false, true}})
+		requireLoadFileResult(t, result, []string{"", "value"}, []bool{true, false})
+	})
+
+	t.Run("ignore all skips IO", func(t *testing.T) {
+		result := evalLoadFileForTest(t, proc,
+			NewFunctionTestInput(types.T_datalink.ToType(),
+				[]string{"file://" + missingPath, "file://" + missingPath}, nil),
+			LoadFileDatalink,
+			&FunctionSelectList{AnyNull: true, AllNull: true, SelectList: []bool{false, false}})
+		requireLoadFileResult(t, result, []string{"", ""}, []bool{true, true})
+	})
+}
+
+func TestLoadFileDatalinkErrors(t *testing.T) {
 	dir := t.TempDir()
 	proc := testutil.NewProc(t)
 	filePath := filepath.Join(dir, "test")
@@ -3622,13 +3807,34 @@ func TestLoadFileDatalinkTooLarge(t *testing.T) {
 	err := os.WriteFile(filePath, []byte("1234"), 0o600)
 	require.NoError(t, err)
 
-	datalinkPath := fmt.Sprintf("file://%s?offset=0&size=%d", filePath, int64(types.MaxBlobLen)+1)
 	testCases := []tcTemp{
 		{
 			info: "test load file datalink too large",
 			inputs: []FunctionTestInput{
 				NewFunctionTestInput(types.T_datalink.ToType(),
-					[]string{datalinkPath},
+					[]string{fmt.Sprintf("file://%s?offset=0&size=%d", filePath, int64(types.MaxBlobLen)+1)},
+					[]bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_text.ToType(), true,
+				[]string{""},
+				[]bool{false}),
+		},
+		{
+			info: "test load file datalink offset past end",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_datalink.ToType(),
+					[]string{fmt.Sprintf("file://%s?offset=5", filePath)},
+					[]bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_text.ToType(), true,
+				[]string{""},
+				[]bool{false}),
+		},
+		{
+			info: "test load file invalid datalink",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_datalink.ToType(),
+					[]string{"wrong datalink url"},
 					[]bool{false}),
 			},
 			expect: NewFunctionTestResult(types.T_text.ToType(), true,

@@ -25,6 +25,16 @@ a    load_file(b)
 2    Hello world!
 3    Hel
 4    Hello world!
+create table load_file_cardinality_probe(a int, b datalink);
+insert into load_file_cardinality_probe values
+(1, 'file://$resources/file_test/empty.txt'),
+(2, 'file://$resources/file_test/normal.txt');
+select a, length(load_file(b)) as content_length
+from load_file_cardinality_probe order by a;
+a    content_length
+1    null
+2    12
+drop table load_file_cardinality_probe;
 create stage filestage URL='file://$resources/file_test/';
 create stage outfilestage URL='file://$resources/into_outfile/';
 select load_file(cast('stage://filestage/normal.txt' as datalink));

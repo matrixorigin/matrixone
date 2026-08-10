@@ -21,6 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
 
@@ -82,4 +83,149 @@ func TestJqConstResultPreservesCardinalityMaskAndReuse(t *testing.T) {
 	resultBatch.SetRowCount(3)
 	require.NoError(t, resultBatch.Shuffle([]int64{2, 1, 0}, proc.Mp()))
 	require.Equal(t, 3, resultBatch.RowCount())
+}
+
+func evalJqForTest(
+	t *testing.T,
+	proc *process.Process,
+	op *opBuiltInJq,
+	inputs []FunctionTestInput,
+	selectList *FunctionSelectList,
+	isTry bool,
+) (*vector.Vector, error) {
+	t.Helper()
+	testCase := NewFunctionTestCase(
+		proc,
+		inputs,
+		NewFunctionTestResult(types.T_varchar.ToType(), false, nil, nil),
+		op.jq,
+	)
+	require.NoError(t, testCase.result.PreExtendAndReset(testCase.fnLength))
+	fn := op.jq
+	if isTry {
+		fn = op.tryJq
+	}
+	err := fn(testCase.parameters, testCase.result, proc, testCase.fnLength, selectList)
+	return testCase.GetResultVectorDirectly(), err
+}
+
+func requireJqResult(t *testing.T, result *vector.Vector, values []string, nulls []bool) {
+	t.Helper()
+	require.Equal(t, len(values), result.Length())
+	parameter := vector.GenerateFunctionStrParameter(result)
+	for i := range values {
+		value, isNull := parameter.GetStrValue(uint64(i))
+		require.Equalf(t, nulls[i], isNull, "row %d null state", i)
+		if !isNull {
+			require.Equalf(t, values[i], string(value), "row %d value", i)
+		}
+	}
+}
+
+func TestJqVarlenaProducerMatrix(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	t.Run("zero rows", func(t *testing.T) {
+		op := newOpBuiltInJq()
+		result, err := evalJqForTest(t, proc, op, []FunctionTestInput{
+			NewFunctionTestConstInput(types.T_varchar.ToType(), []string{}, nil),
+			NewFunctionTestConstInput(types.T_varchar.ToType(), []string{}, nil),
+		}, nil, false)
+		require.NoError(t, err)
+		require.Zero(t, result.Length())
+	})
+
+	t.Run("both constant try error", func(t *testing.T) {
+		op := newOpBuiltInJq()
+		result, err := evalJqForTest(t, proc, op, []FunctionTestInput{
+			NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"invalid", "invalid"}, nil),
+			NewFunctionTestConstInput(types.T_varchar.ToType(), []string{".", "."}, nil),
+		}, nil, true)
+		require.NoError(t, err)
+		requireJqResult(t, result, []string{"", ""}, []bool{true, true})
+	})
+
+	t.Run("one constant null and try compile error", func(t *testing.T) {
+		op := newOpBuiltInJq()
+		result, err := evalJqForTest(t, proc, op, []FunctionTestInput{
+			NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"", ""}, []bool{true, false}),
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{".", "."}, nil),
+		}, nil, true)
+		require.NoError(t, err)
+		requireJqResult(t, result, []string{"", ""}, []bool{true, true})
+
+		result, err = evalJqForTest(t, proc, op, []FunctionTestInput{
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{`{"foo":1}`, `{"foo":2}`}, nil),
+			NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"", ""}, []bool{true, false}),
+		}, nil, true)
+		require.NoError(t, err)
+		requireJqResult(t, result, []string{"", ""}, []bool{true, true})
+
+		result, err = evalJqForTest(t, proc, op, []FunctionTestInput{
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{`{"foo":1}`, `{"foo":2}`}, nil),
+			NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"(", "("}, nil),
+		}, nil, true)
+		require.NoError(t, err)
+		requireJqResult(t, result, []string{"", ""}, []bool{true, true})
+	})
+
+	t.Run("constant json vector query", func(t *testing.T) {
+		op := newOpBuiltInJq()
+		result, err := evalJqForTest(t, proc, op, []FunctionTestInput{
+			NewFunctionTestConstInput(types.T_varchar.ToType(),
+				[]string{`{"foo":1}`, `{"foo":1}`, `{"foo":1}`, `{"foo":1}`}, nil),
+			NewFunctionTestInput(types.T_varchar.ToType(),
+				[]string{".foo", "(", ".foo", ".foo"}, []bool{false, false, true, false}),
+		}, &FunctionSelectList{AnyNull: true, SelectList: []bool{true, true, true, false}}, true)
+		require.NoError(t, err)
+		requireJqResult(t, result,
+			[]string{"1", "", "", ""}, []bool{false, true, true, true})
+	})
+
+	t.Run("vector json constant query", func(t *testing.T) {
+		op := newOpBuiltInJq()
+		result, err := evalJqForTest(t, proc, op, []FunctionTestInput{
+			NewFunctionTestInput(types.T_varchar.ToType(),
+				[]string{`{"foo":1}`, "invalid", `{"foo":1}`, `{"foo":1}`},
+				[]bool{false, false, true, false}),
+			NewFunctionTestConstInput(types.T_varchar.ToType(),
+				[]string{".foo", ".foo", ".foo", ".foo"}, nil),
+		}, &FunctionSelectList{AnyNull: true, SelectList: []bool{true, true, true, false}}, true)
+		require.NoError(t, err)
+		requireJqResult(t, result,
+			[]string{"1", "", "", ""}, []bool{false, true, true, true})
+
+		// A try_jq row error must reset the reusable encoder before the next
+		// evaluation on the same operator.
+		result, err = evalJqForTest(t, proc, op, []FunctionTestInput{
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{`{"foo":2}`}, nil),
+			NewFunctionTestConstInput(types.T_varchar.ToType(), []string{".foo"}, nil),
+		}, nil, true)
+		require.NoError(t, err)
+		requireJqResult(t, result, []string{"2"}, []bool{false})
+	})
+
+	t.Run("both vectors", func(t *testing.T) {
+		op := newOpBuiltInJq()
+		result, err := evalJqForTest(t, proc, op, []FunctionTestInput{
+			NewFunctionTestInput(types.T_varchar.ToType(),
+				[]string{`{"foo":1}`, `{"foo":2}`, "invalid", `{"foo":4}`}, nil),
+			NewFunctionTestInput(types.T_varchar.ToType(),
+				[]string{".foo", "(", ".foo", ".foo"}, []bool{false, false, true, false}),
+		}, &FunctionSelectList{AnyNull: true, SelectList: []bool{true, true, true, false}}, true)
+		require.NoError(t, err)
+		requireJqResult(t, result,
+			[]string{"1", "", "", ""}, []bool{false, true, true, true})
+	})
+
+	t.Run("strict compile error", func(t *testing.T) {
+		op := newOpBuiltInJq()
+		result, err := evalJqForTest(t, proc, op, []FunctionTestInput{
+			NewFunctionTestInput(types.T_varchar.ToType(),
+				[]string{`{"foo":1}`, `{"foo":2}`}, nil),
+			NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"(", "("}, nil),
+		}, nil, false)
+		require.Error(t, err)
+		require.Zero(t, result.Length())
+	})
 }

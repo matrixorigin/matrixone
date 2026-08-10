@@ -4389,56 +4389,107 @@ func LoadFile(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc 
 	return nil
 }
 
+func readLoadFileDatalinkContents(filePath string, proc *process.Process) ([]byte, error) {
+	dl, err := datalink.NewDatalink(filePath, proc)
+	if err != nil {
+		return nil, err
+	}
+	size := dl.Size
+	if size < 0 {
+		etlFS, readPath, err := fileservice.GetForETL(proc.Ctx, proc.GetFileService(), dl.MoPath)
+		if err != nil {
+			return nil, err
+		}
+		entry, err := etlFS.StatFile(proc.Ctx, readPath)
+		if err != nil {
+			return nil, err
+		}
+		if dl.Offset > entry.Size {
+			return nil, moerr.NewInternalError(proc.Ctx, "offset exceeds file size")
+		}
+		size = entry.Size - dl.Offset
+	}
+	if size > int64(types.MaxBlobLen) {
+		return nil, moerr.NewInternalError(proc.Ctx, "Data too long for blob")
+	}
+	r, err := dl.NewReadCloser(proc)
+	if err != nil {
+		return nil, err
+	}
+	contents, readErr := io.ReadAll(io.LimitReader(r, int64(types.MaxBlobLen)+1))
+	closeErr := r.Close()
+	if readErr != nil {
+		return nil, readErr
+	}
+	if closeErr != nil {
+		return nil, closeErr
+	}
+	if len(contents) > types.MaxBlobLen {
+		return nil, moerr.NewInternalError(proc.Ctx, "Data too long for blob")
+	}
+	return contents, nil
+}
+
 // LoadFileDatalink reads a file from the file service and returns the content as a blob.
 func LoadFileDatalink(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	rs := vector.MustFunctionResult[types.Varlena](result)
+	if length == 0 {
+		return nil
+	}
+	if selectList.IgnoreAllRow() {
+		rs.SetNullResult(uint64(length))
+		return nil
+	}
+
 	filePathVec := vector.GenerateFunctionStrParameter(ivecs[0])
+	if ivecs[0].IsConst() {
+		filePath, isNull := filePathVec.GetStrValue(0)
+		if isNull {
+			rs.SetNullResult(uint64(length))
+			return nil
+		}
+		contents, err := readLoadFileDatalinkContents(util.UnsafeBytesToString(filePath), proc)
+		if err != nil {
+			return err
+		}
+		isNull = len(contents) == 0
+		for i := uint64(0); i < uint64(length); i++ {
+			if isNull || selectList.Contains(i) {
+				err = rs.AppendBytes(nil, true)
+			} else {
+				err = rs.AppendBytes(contents, false)
+			}
+			if err != nil {
+				return err
+			}
+		}
+		return nil
+	}
 
 	for i := uint64(0); i < uint64(length); i++ {
-		_filePath, null1 := filePathVec.GetStrValue(i)
-		if null1 {
+		if selectList.Contains(i) {
 			if err := rs.AppendBytes(nil, true); err != nil {
 				return err
 			}
 			continue
 		}
-		filePath := util.UnsafeBytesToString(_filePath)
-
-		dl, err := datalink.NewDatalink(filePath, proc)
+		filePath, isNull := filePathVec.GetStrValue(i)
+		if isNull {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+		contents, err := readLoadFileDatalinkContents(util.UnsafeBytesToString(filePath), proc)
 		if err != nil {
 			return err
 		}
-		size := dl.Size
-		if size < 0 {
-			etlFS, readPath, err := fileservice.GetForETL(proc.Ctx, proc.GetFileService(), dl.MoPath)
-			if err != nil {
-				return err
-			}
-			entry, err := etlFS.StatFile(proc.Ctx, readPath)
-			if err != nil {
-				return err
-			}
-			if dl.Offset > entry.Size {
-				return moerr.NewInternalError(proc.Ctx, "offset exceeds file size")
-			}
-			size = entry.Size - dl.Offset
+		if len(contents) == 0 {
+			err = rs.AppendBytes(nil, true)
+		} else {
+			err = rs.AppendBytes(contents, false)
 		}
-		if size > int64(types.MaxBlobLen) {
-			return moerr.NewInternalError(proc.Ctx, "Data too long for blob")
-		}
-		fileBytes, err := dl.GetBytes(proc)
 		if err != nil {
-			return err
-		}
-
-		if len(fileBytes) == 0 {
-			if err = rs.AppendBytes(nil, true); err != nil {
-				return err
-			}
-			return nil
-		}
-
-		if err = rs.AppendBytes(fileBytes, false); err != nil {
 			return err
 		}
 	}
