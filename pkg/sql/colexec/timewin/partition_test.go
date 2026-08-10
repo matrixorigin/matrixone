@@ -394,6 +394,16 @@ func TestGapFillResourceAccountingLimits(t *testing.T) {
 
 	ctr = container{partitionWindows: maxGapFillRowsPerPartition - 1, gapFillWindows: maxGapFillRowsTotal - 1}
 	require.NoError(t, ctr.accountGapFillWindow(arg))
+
+	// The post-flush transition owns the next GAPFILL window's accounting.
+	// Verify that its limit error reaches the operator caller instead of being
+	// swallowed while the replacement aggregate generation is resumed.
+	arg.ctr = container{
+		status:           resumeAfterFlush,
+		partitionWindows: maxGapFillRowsPerPartition,
+	}
+	_, err := arg.Call(nil)
+	require.ErrorContains(t, err, "partition")
 }
 
 // A single partition must behave exactly like the unpartitioned operator.
