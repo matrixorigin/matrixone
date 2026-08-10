@@ -308,29 +308,78 @@ func TestPreparedDecimalCommonTypeFunctionsUseAllNumericPeers(t *testing.T) {
 	}
 }
 
-func TestPreparedDecimalCommonTypeFunctionsKeepStringAndFloatCoercion(t *testing.T) {
+func TestPreparedDecimalCommonTypeFunctionsUseMySQLNumericPeers(t *testing.T) {
 	ctx := context.Background()
 	decimalType := types.New(types.T_decimal128, 20, 4)
 
-	for _, name := range []string{"coalesce", "greatest", "least"} {
-		t.Run(name+"/real_string", func(t *testing.T) {
-			expr, err := BindFuncExprImplByPlanExpr(ctx, name, []*planpb.Expr{
-				makePlan2StringConstExprWithType("9007199254740992.0001"),
-				makePreparedDecimalComparisonColumn(decimalType),
-			})
-			require.NoError(t, err)
-			require.True(t, types.T(expr.Typ.Id).IsMySQLString())
-		})
+	peers := []struct {
+		name     string
+		typ      types.Type
+		wantType types.T
+	}{
+		{name: "float32", typ: types.T_float32.ToType(), wantType: types.T_float64},
+		{name: "float64", typ: types.T_float64.ToType(), wantType: types.T_float64},
+		{name: "bool", typ: types.T_bool.ToType(), wantType: types.T_decimal128},
+		{name: "year", typ: types.T_year.ToType(), wantType: types.T_decimal128},
+	}
 
-		t.Run(name+"/prepared_with_float_peer", func(t *testing.T) {
-			expr, err := BindFuncExprImplByPlanExpr(ctx, name, []*planpb.Expr{
-				makePreparedDecimalComparisonParam(0),
-				makePreparedDecimalComparisonColumn(decimalType),
-				makePlan2Float64ConstExprWithType(1.5),
+	for _, name := range []string{"coalesce", "greatest", "least"} {
+		for _, peer := range peers {
+			t.Run(name+"/"+peer.name, func(t *testing.T) {
+				expr, err := BindFuncExprImplByPlanExpr(ctx, name, []*planpb.Expr{
+					makePreparedDecimalComparisonParam(0),
+					makePreparedDecimalComparisonColumn(decimalType),
+					makePreparedDecimalComparisonColumn(peer.typ),
+				})
+				require.NoError(t, err)
+				require.Equal(t, int32(peer.wantType), expr.Typ.Id)
+				for _, arg := range expr.GetF().Args {
+					require.Equal(t, int32(peer.wantType), arg.Typ.Id)
+					if peer.wantType.IsDecimal() {
+						require.Equal(t, expr.Typ.Width, arg.Typ.Width)
+						require.Equal(t, expr.Typ.Scale, arg.Typ.Scale)
+					}
+				}
+				if peer.typ.Oid == types.T_bool {
+					boolCast := expr.GetF().Args[2].GetF()
+					require.NotNil(t, boolCast)
+					require.Equal(t, "cast", boolCast.Func.GetObjName())
+					require.Len(t, boolCast.Args, 2)
+					require.Equal(t, int32(types.T_uint8), boolCast.Args[0].Typ.Id)
+					integerCast := boolCast.Args[0].GetF()
+					require.NotNil(t, integerCast)
+					require.Equal(t, "cast", integerCast.Func.GetObjName())
+					require.Len(t, integerCast.Args, 2)
+					require.Equal(t, int32(types.T_bool), integerCast.Args[0].Typ.Id)
+				}
 			})
-			require.NoError(t, err)
-			require.True(t, types.T(expr.Typ.Id).IsMySQLString())
-		})
+		}
+	}
+}
+
+func TestPreparedDecimalCommonTypeFunctionsKeepStringBoundaries(t *testing.T) {
+	ctx := context.Background()
+	decimalType := types.New(types.T_decimal128, 20, 4)
+	stringPeers := []struct {
+		name string
+		expr *planpb.Expr
+	}{
+		{name: "real_string", expr: makePlan2StringConstExprWithType("9007199254740992.0001")},
+		{name: "enum", expr: makePreparedDecimalComparisonColumn(types.T_enum.ToType())},
+	}
+
+	for _, name := range []string{"coalesce", "greatest", "least"} {
+		for _, peer := range stringPeers {
+			t.Run(name+"/"+peer.name, func(t *testing.T) {
+				expr, err := BindFuncExprImplByPlanExpr(ctx, name, []*planpb.Expr{
+					makePreparedDecimalComparisonParam(0),
+					makePreparedDecimalComparisonColumn(decimalType),
+					DeepCopyExpr(peer.expr),
+				})
+				require.NoError(t, err)
+				require.True(t, types.T(expr.Typ.Id).IsMySQLString())
+			})
+		}
 	}
 }
 
