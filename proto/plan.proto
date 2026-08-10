@@ -33,6 +33,7 @@ message Type {
   int32 scale = 5;
   string table = 6;
   string enumvalues = 7;
+  uint32 charset = 8;
 }
 
 message msgHeader {
@@ -366,6 +367,10 @@ message IndexDef {
   string index_algo_params = 12;
   // Logical INCLUDE columns of the index, letter case: lower.
   repeated string included_columns = 13;
+  // True when visible contains an initialized visibility value. Legacy
+  // IndexDefs predate optimizer visibility enforcement and omit this marker;
+  // they remain visible for backward compatibility.
+  bool visibility_set = 14;
 }
 
 message ForeignKeyDef {
@@ -490,6 +495,9 @@ message TableDef {
   string original_name = 37;
   // Persistent cache epoch for AUTO_INCREMENT allocation.
   uint32 auto_incr_epoch = 38;
+  // Default collation class inherited by textual columns without an explicit
+  // column-level collation. Uses the container/types Charset constants.
+  uint32 default_charset = 39;
 }
 
 message TableFunction {

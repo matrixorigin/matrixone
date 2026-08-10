@@ -397,6 +397,7 @@ func DeepCopyType(typ *plan.Type) *plan.Type {
 		AutoIncr:    typ.AutoIncr,
 		Table:       typ.Table,
 		Enumvalues:  typ.Enumvalues,
+		Charset:     typ.Charset,
 	}
 }
 
@@ -462,6 +463,7 @@ func DeepCopyIndexDef(indexDef *plan.IndexDef) *plan.IndexDef {
 		IndexTableName:     indexDef.IndexTableName,
 		Comment:            indexDef.Comment,
 		Visible:            indexDef.Visible,
+		VisibilitySet:      indexDef.VisibilitySet,
 		IndexAlgo:          indexDef.IndexAlgo,
 		IndexAlgoTableType: indexDef.IndexAlgoTableType,
 		IndexAlgoParams:    indexDef.IndexAlgoParams,
@@ -568,6 +570,7 @@ func DeepCopyTableDef(table *plan.TableDef, withCols bool) *plan.TableDef {
 		IsTemporary:    table.IsTemporary,
 		AutoIncrOffset: table.AutoIncrOffset,
 		AutoIncrEpoch:  table.AutoIncrEpoch,
+		DefaultCharset: table.DefaultCharset,
 		DbName:         table.DbName,
 		DbId:           table.DbId,
 		FeatureFlag:    table.FeatureFlag,
