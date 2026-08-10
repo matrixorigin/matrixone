@@ -413,6 +413,32 @@ func TestAlterTableCopyPreservesFinalColumnReplacementIdentity(t *testing.T) {
 	}
 }
 
+func TestAlterTableCopyDoesNotSkipDedupForSameNamePrimaryKeyReplacement(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	// Match the type metadata produced by ADD COLUMN so the only difference is
+	// the source-column identity. A name/type comparison alone must not prove
+	// that the replacement key is copied from the old key.
+	mock.ctxt.tables["t1"].Cols[0].Typ.NotNullable = false
+	mock.ctxt.tables["t1"].Cols[0].Typ.Width = 64
+	mock.ctxt.tables["t1"].Cols[0].Typ.Scale = -1
+	logicPlan, err := buildSingleStmt(mock, t,
+		`ALTER TABLE constraint_test.t1 DROP COLUMN a, ADD COLUMN a BIGINT NOT NULL DEFAULT 0 PRIMARY KEY;`)
+	require.NoError(t, err)
+
+	alter := logicPlan.GetDdl().GetAlterTable()
+	require.NotNil(t, alter)
+	require.NotNil(t, alter.Options)
+	oldCol := FindColumn(alter.TableDef.Cols, "a")
+	newCol := FindColumn(alter.CopyTableDef.Cols, "a")
+	require.NotNil(t, oldCol)
+	require.NotNil(t, newCol)
+	require.Equal(t, oldCol.Typ, newCol.Typ)
+	require.NotEqual(t, oldCol.ColId, newCol.ColId)
+	_, inherited := alter.ChangeTblColIdMap[oldCol.ColId]
+	require.False(t, inherited)
+	assert.False(t, alter.Options.SkipPkDedup)
+}
+
 func TestAlterTableCopyPreservesExistingColumnIdentity(t *testing.T) {
 	for _, tc := range []struct {
 		sql              string
