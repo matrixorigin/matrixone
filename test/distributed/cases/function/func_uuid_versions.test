@@ -1,0 +1,50 @@
+-- uuid_v7() is an alias of uuid(); uuid_v1()/uuid_v4()/uuid_v6() generate version-specific UUIDs.
+select length(uuid_v7()), length(uuid_v1()), length(uuid_v4()), length(uuid_v6());
+select is_uuid(uuid_v7()), is_uuid(uuid_v1()), is_uuid(uuid_v4()), is_uuid(uuid_v6());
+-- the version nibble is the 15th character of the canonical string form
+select substring(cast(uuid_v7() as varchar), 15, 1), substring(cast(uuid_v1() as varchar), 15, 1), substring(cast(uuid_v4() as varchar), 15, 1), substring(cast(uuid_v6() as varchar), 15, 1);
+-- uuid(ts)/uuid_v7(ts) return the deterministic minimal v7 UUID for that instant (boundary value for range predicates)
+select uuid_v7('2026-01-01 00:00:00') = uuid_v7('2026-01-01 00:00:00');
+select uuid('2026-01-01 00:00:00') = uuid_v7('2026-01-01 00:00:00');
+select uuid_v7('2026-01-01 00:00:00') < uuid_v7('2026-01-02 00:00:00');
+select is_uuid(uuid_v7('2026-01-01 00:00:00')), substring(cast(uuid_v7('2026-01-01 00:00:00') as varchar), 15, 1);
+select substring(cast(uuid_v7('2026-01-01 00:00:00') as varchar), 20, 17);
+select uuid_v7(now()) <= uuid_v7();
+select uuid_v7('9999-01-01') > uuid_v7();
+-- uuid_v1(ts)/uuid_v6(ts) boundaries; v6 sorts by time in string order, v1 does not (time_low comes first)
+select uuid_v1('2026-01-01 00:00:00') = uuid_v1('2026-01-01 00:00:00'), uuid_v6('2026-01-01 00:00:00') = uuid_v6('2026-01-01 00:00:00');
+select is_uuid(uuid_v1('2026-01-01 00:00:00')), is_uuid(uuid_v6('2026-01-01 00:00:00'));
+select substring(cast(uuid_v1('2026-01-01 00:00:00') as varchar), 15, 1), substring(cast(uuid_v6('2026-01-01 00:00:00') as varchar), 15, 1);
+select uuid_v6('2026-01-01 00:00:00') < uuid_v6('2026-01-02 00:00:00');
+select uuid_v6(now() - interval 1 minute) < uuid_v6();
+select uuid_v6('5000-01-01') > uuid_v6();
+select uuid_v6('9999-01-01');
+-- uuid(interval)/uuid_vN(interval): fresh random id whose timestamp is the evaluation-time wall clock shifted by the interval
+select is_uuid(uuid(interval 1 minute)), is_uuid(uuid_v7(interval 1 minute)), is_uuid(uuid_v1(interval 1 hour)), is_uuid(uuid_v6(interval 1 hour));
+select substring(cast(uuid_v7(interval 1 minute) as varchar), 15, 1), substring(cast(uuid_v1(interval 1 hour) as varchar), 15, 1), substring(cast(uuid_v6(interval 1 hour) as varchar), 15, 1);
+select uuid_v7(interval 1 minute) > uuid_v7(), uuid_v7(interval -1 minute) < uuid_v7();
+select uuid_v6(interval 1 hour) > uuid_v6(), uuid_v6(interval -1 hour) < uuid_v6();
+select uuid_v7(interval 1 month) > uuid_v7(interval 27 day), uuid_v7(interval 1 month) < uuid_v7(interval 32 day);
+select uuid_v7(interval 1 minute) = uuid_v7(interval 1 minute);
+select uuid_v7(interval null minute) is null;
+select uuid_v4(interval 1 minute);
+-- the internal (count, unit) form must not be callable directly
+select uuid_v7(5, 3);
+select uuid(5, 3);
+select uuid_v6(5, 3);
+-- uuid_extract_version / uuid_extract_timestamp (PostgreSQL semantics; timestamp renders in session timezone like current_timestamp)
+select uuid_extract_version(uuid()), uuid_extract_version(uuid_v1()), uuid_extract_version(uuid_v4()), uuid_extract_version(uuid_v6()), uuid_extract_version(uuid_v7());
+select uuid_extract_timestamp(uuid_v7('2026-01-02 03:04:05.678'));
+select uuid_extract_timestamp(uuid_v1('2026-01-02 03:04:05.678'));
+-- v6 extraction is only ~6.5ms-accurate (the generator layout drops timestamp bits 15-12) and the lost bits vary with session timezone, so check a tolerance instead of an exact value
+select abs(timestampdiff(microsecond, cast('2026-01-02 03:04:05.678' as timestamp(6)), uuid_extract_timestamp(uuid_v6('2026-01-02 03:04:05.678')))) < 7000;
+select uuid_extract_timestamp(uuid_v4()) is null, uuid_extract_timestamp(uuid_v7()) is not null;
+select uuid_extract_version(null) is null, uuid_extract_timestamp(null) is null;
+select uuid_extract_timestamp(uuid_v7('2026-01-01')) = cast('2026-01-01' as timestamp);
+select uuid_extract_timestamp(uuid_v7(interval 1 day)) > current_timestamp();
+select uuid_v7(1);
+select uuid_v4(1);
+create table uuid_versions_t (id uuid default uuid_v4() primary key, name varchar(10));
+insert into uuid_versions_t (name) values ('Tom'), ('Jane'), ('Bob');
+select count(distinct id) from uuid_versions_t;
+drop table uuid_versions_t;
