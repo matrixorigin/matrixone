@@ -915,7 +915,7 @@ func makeType(typ *plan.Type, flag bool) types.Type {
 	if flag && !isDirectParallelLoadType(types.T(typ.Id)) {
 		return types.New(types.T_varchar, 0, 0)
 	}
-	return types.New(types.T(typ.Id), typ.Width, typ.Scale)
+	return types.NewWithCharset(types.T(typ.Id), typ.Width, typ.Scale, uint8(typ.Charset))
 }
 
 // isDirectParallelLoadType identifies types that must be decoded by the
