@@ -35,19 +35,23 @@ const (
 )
 
 const (
-	MORPCMinVersion    int64 = math.MinInt64
-	MORPCVersion1      int64 = 1
-	MORPCVersion2      int64 = 2
-	MORPCVersion3      int64 = 3  // start from 1.3.0
-	MORPCVersion4      int64 = 4  // start from 2.0.1
-	MORPCVersion5      int64 = 5  // assignment-aware CHAR/VARCHAR casts
-	MORPCVersion6      int64 = 6  // ordered aggregate pipeline configuration
-	MORPCVersion7      int64 = 7  // structured CHECK constraint metadata and enforcement
-	MORPCVersion8      int64 = 8  // versioned exact runtime-filter key contract
-	MORPCVersion9      int64 = 9  // AUTO_INCREMENT epoch-fenced commit
-	MORPCVersion10     int64 = 10 // persisted appendable-object abort metadata
-	MORPCVersion11     int64 = 11 // bounded Sorted64 membership-filter wire format
-	MORPCLatestVersion       = MORPCVersion11
+	MORPCMinVersion int64 = math.MinInt64
+	MORPCVersion1   int64 = 1
+	MORPCVersion2   int64 = 2
+	MORPCVersion3   int64 = 3  // start from 1.3.0
+	MORPCVersion4   int64 = 4  // start from 2.0.1
+	MORPCVersion5   int64 = 5  // assignment-aware CHAR/VARCHAR casts
+	MORPCVersion6   int64 = 6  // ordered aggregate pipeline configuration
+	MORPCVersion7   int64 = 7  // structured CHECK constraint metadata and enforcement
+	MORPCVersion8   int64 = 8  // versioned exact runtime-filter key contract
+	MORPCVersion9   int64 = 9  // AUTO_INCREMENT epoch-fenced commit
+	MORPCVersion10  int64 = 10 // persisted appendable-object abort metadata
+	MORPCVersion11  int64 = 11 // bounded Sorted64 membership-filter wire format
+	// MORPCVersion12 is intentionally reserved.  Keep protocol numbers stable
+	// across release branches; the next newly persisted contract is v13.
+	MORPCVersion12     int64 = 12
+	MORPCVersion13     int64 = 13 // information_schema CHECK_CONSTRAINTS table function
+	MORPCLatestVersion       = MORPCVersion13
 )
 
 // DefaultLockWaitTimeoutSeconds is shared by the frontend default and by

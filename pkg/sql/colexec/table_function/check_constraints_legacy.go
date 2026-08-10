@@ -19,8 +19,10 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
@@ -38,16 +40,43 @@ func parseLegacyCheckConstraintRows(
 		!strings.Contains(strings.ToUpper(createSQL), "CHECK") {
 		return nil, nil
 	}
-	stmt, err := parsers.ParseOneWithSQLMode(ctx, dialect.MYSQL, createSQL, 1, "")
-	if err != nil {
-		return nil, err
+	var canonical []checkConstraintRow
+	var firstErr error
+	parsed := 0
+	for _, sqlMode := range mysql.ParserSQLModeCombinations() {
+		stmt, err := parsers.ParseOneWithSQLMode(ctx, dialect.MYSQL, createSQL, 1, sqlMode)
+		if err != nil {
+			if firstErr == nil {
+				firstErr = err
+			}
+			continue
+		}
+		createStmt, ok := stmt.(*tree.CreateTable)
+		if !ok {
+			stmt.Free()
+			continue
+		}
+		rows := legacyCheckRowsFromCreateTable(schema, table, createStmt)
+		stmt.Free()
+		if parsed == 0 {
+			canonical = rows
+		} else if !equalLegacyCheckRows(canonical, rows) {
+			return nil, moerr.NewInvalidInput(ctx,
+				"cannot recover legacy CHECK constraints with ambiguous SQL mode")
+		}
+		parsed++
 	}
-	defer stmt.Free()
-	createStmt, ok := stmt.(*tree.CreateTable)
-	if !ok {
-		return nil, nil
+	if parsed == 0 {
+		return nil, firstErr
 	}
+	return canonical, nil
+}
 
+func legacyCheckRowsFromCreateTable(
+	schema string,
+	table string,
+	createStmt *tree.CreateTable,
+) []checkConstraintRow {
 	rows := make([]checkConstraintRow, 0, len(createStmt.Defs))
 	for _, def := range createStmt.Defs {
 		switch typedDef := def.(type) {
@@ -65,7 +94,21 @@ func parseLegacyCheckConstraintRows(
 			}
 		}
 	}
-	return rows, nil
+	return rows
+}
+
+func equalLegacyCheckRows(left, right []checkConstraintRow) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for i := range left {
+		if left[i].name != right[i].name ||
+			left[i].clause != right[i].clause ||
+			left[i].enforced != right[i].enforced {
+			return false
+		}
+	}
+	return true
 }
 
 func legacyCheckConstraintRow(

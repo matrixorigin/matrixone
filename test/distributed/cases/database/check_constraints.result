@@ -16,6 +16,15 @@ order by constraint_name;
 def  ¦  check_constraints_metadata  ¦  chk_amount_limit  ¦  `amount` < 100  𝄀
 def  ¦  check_constraints_metadata  ¦  chk_amount_nonnegative  ¦  `amount` >= 0  𝄀
 def  ¦  check_constraints_metadata  ¦  chk_amount_positive  ¦  `amount` > 0
+select count(*)
+from (
+select constraint_name
+from check_constraints
+where constraint_schema = 'check_constraints_metadata'
+limit 1
+) limited_checks;
+➤ count(*)[-5,64,0]  𝄀
+1
 use check_constraints_metadata;
 create table partitioned_values (
 id int,

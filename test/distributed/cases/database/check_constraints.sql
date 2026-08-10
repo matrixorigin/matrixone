@@ -20,6 +20,16 @@ from check_constraints
 where constraint_schema = 'check_constraints_metadata'
 order by constraint_name;
 
+-- LIMIT must be honored by the metadata table function before the catalog
+-- stream is exhausted.
+select count(*)
+from (
+    select constraint_name
+    from check_constraints
+    where constraint_schema = 'check_constraints_metadata'
+    limit 1
+) limited_checks;
+
 use check_constraints_metadata;
 create table partitioned_values (
     id int,

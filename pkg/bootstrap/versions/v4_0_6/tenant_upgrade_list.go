@@ -18,6 +18,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/sql/mongodb"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/util/sysview"
@@ -126,10 +127,11 @@ func upgradeInformationSchemaReferentialConstraints() versions.UpgradeEntry {
 
 func upgradeInformationSchemaCheckConstraints() versions.UpgradeEntry {
 	return versions.UpgradeEntry{
-		Schema:    sysview.InformationDBConst,
-		TableName: "CHECK_CONSTRAINTS",
-		UpgType:   versions.CREATE_VIEW,
-		UpgSql:    sysview.InformationSchemaCheckConstraintsDDL,
+		Schema:                  sysview.InformationDBConst,
+		TableName:               "CHECK_CONSTRAINTS",
+		UpgType:                 versions.CREATE_VIEW,
+		UpgSql:                  sysview.InformationSchemaCheckConstraintsDDL,
+		RequiredProtocolVersion: defines.MORPCVersion13,
 		CheckFunc: checkViewDefinition("CHECK_CONSTRAINTS",
 			sysview.InformationSchemaCheckConstraintsDDL),
 		PreSql: fmt.Sprintf("DROP VIEW IF EXISTS %s.%s;",
@@ -139,10 +141,11 @@ func upgradeInformationSchemaCheckConstraints() versions.UpgradeEntry {
 
 func upgradeInformationSchemaTableConstraints() versions.UpgradeEntry {
 	return versions.UpgradeEntry{
-		Schema:    sysview.InformationDBConst,
-		TableName: "TABLE_CONSTRAINTS",
-		UpgType:   versions.MODIFY_VIEW,
-		UpgSql:    sysview.InformationSchemaTableConstraintsDDL,
+		Schema:                  sysview.InformationDBConst,
+		TableName:               "TABLE_CONSTRAINTS",
+		UpgType:                 versions.MODIFY_VIEW,
+		UpgSql:                  sysview.InformationSchemaTableConstraintsDDL,
+		RequiredProtocolVersion: defines.MORPCVersion13,
 		CheckFunc: checkViewDefinition("TABLE_CONSTRAINTS",
 			sysview.InformationSchemaTableConstraintsDDL),
 		PreSql: fmt.Sprintf("DROP VIEW IF EXISTS %s.%s;",

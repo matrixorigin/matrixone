@@ -16,6 +16,7 @@ package table_function
 
 import (
 	"context"
+	"fmt"
 	"sort"
 	"strings"
 
@@ -48,7 +49,7 @@ var checkConstraintCatalogQuery = "SELECT tbl.reldatabase, tbl.relname, tbl.rel_
 	"FROM mo_catalog.mo_tables tbl " +
 	"WHERE tbl.account_id = current_account_id() AND " +
 	catalog.NonTemporaryTableSQLPredicate("tbl") +
-	" ORDER BY tbl.reldatabase, tbl.relname"
+	" AND tbl.relkind = '" + catalog.SystemOrdinaryRel + "'"
 
 type checkConstraintRow struct {
 	schema         string
@@ -78,6 +79,9 @@ type checkConstraintsState struct {
 	streamDone  chan struct{}
 	streamClose context.CancelFunc
 	streamEnded bool
+	limit       uint64
+	limited     bool
+	emitted     uint64
 }
 
 // checkConstraintOutputPositions maps logical columns to vectors retained by
@@ -119,6 +123,9 @@ func (s *checkConstraintsState) reset(_ *TableFunction, proc *process.Process) {
 	s.pending = nil
 	s.called = false
 	s.streamEnded = false
+	s.limit = 0
+	s.limited = false
+	s.emitted = 0
 }
 
 func (s *checkConstraintsState) free(_ *TableFunction, proc *process.Process, _ bool, _ error) {
@@ -150,11 +157,26 @@ func (s *checkConstraintsState) start(
 	s.called = false
 	s.pending = nil
 	s.streamEnded = false
+	s.limit = 0
+	s.limited = false
+	s.emitted = 0
 
 	// A child-dependent invocation has no metadata input.  Keep the normal
 	// table-function lifecycle and return an empty result for non-zero rows.
 	if nthRow != 0 {
 		return nil
+	}
+	if tf.Limit != nil {
+		limit, err := evalLimitExpression(proc, tf.Limit, 0)
+		if err != nil {
+			return err
+		}
+		s.limit = limit
+		s.limited = true
+		if limit == 0 {
+			s.streamEnded = true
+			return nil
+		}
 	}
 
 	if s.collectRows != nil {
@@ -165,7 +187,6 @@ func (s *checkConstraintsState) start(
 		s.pending = rows
 		return s.fillBatch(tf, proc)
 	}
-
 	if err := s.startStreaming(proc); err != nil {
 		return err
 	}
@@ -203,7 +224,7 @@ func (s *checkConstraintsState) startStreaming(proc *process.Process) error {
 		_, err := sqlexec.RunStreamingSql(
 			ctx,
 			sqlexec.NewSqlProcess(proc),
-			checkConstraintCatalogQuery,
+			checkConstraintCatalogQueryWithLimit(s.limit, s.limited),
 			s.streamCh,
 			s.errCh,
 		)
@@ -215,6 +236,13 @@ func (s *checkConstraintsState) startStreaming(proc *process.Process) error {
 		}
 	}()
 	return nil
+}
+
+func checkConstraintCatalogQueryWithLimit(limit uint64, limited bool) string {
+	if !limited {
+		return checkConstraintCatalogQuery
+	}
+	return fmt.Sprintf("%s LIMIT %d", checkConstraintCatalogQuery, limit)
 }
 
 func (s *checkConstraintsState) stopStreaming(_ *process.Process) {
@@ -241,6 +269,12 @@ func (s *checkConstraintsState) fillBatch(tf *TableFunction, proc *process.Proce
 	positions := checkConstraintOutputPositions(s.batch.Attrs)
 	rowCount := 0
 	for rowCount < checkConstraintBatchSize {
+		if s.limited && s.emitted >= s.limit {
+			s.pending = nil
+			s.streamEnded = true
+			s.stopStreaming(proc)
+			break
+		}
 		if len(s.pending) == 0 {
 			if s.streamEnded || !s.streaming {
 				break
@@ -256,13 +290,29 @@ func (s *checkConstraintsState) fillBatch(tf *TableFunction, proc *process.Proce
 		if count > space {
 			count = space
 		}
+		if s.limited {
+			remaining := s.limit - s.emitted
+			if uint64(count) > remaining {
+				count = int(remaining)
+			}
+		}
+		if count == 0 {
+			continue
+		}
 		for i := 0; i < count; i++ {
 			if err := appendCheckConstraintRow(s.batch.Vecs, positions, s.pending[i], proc); err != nil {
 				return err
 			}
 		}
 		rowCount += count
+		s.emitted += uint64(count)
 		s.pending = s.pending[count:]
+		if s.limited && s.emitted >= s.limit {
+			s.pending = nil
+			s.streamEnded = true
+			s.stopStreaming(proc)
+			break
+		}
 	}
 	if rowCount == 0 && s.streamEnded {
 		return nil
@@ -367,9 +417,17 @@ func decodeCheckConstraintBatch(bat *batch.Batch) ([]checkConstraintRow, error) 
 	tableNames := bat.Vecs[1]
 	createSQLs := bat.Vecs[2]
 	extraInfos := bat.Vecs[3]
+	var relKinds *vector.Vector
+	if len(bat.Vecs) >= 5 {
+		relKinds = bat.Vecs[4]
+	}
 	rows := make([]checkConstraintRow, 0, bat.RowCount())
 	for row := 0; row < bat.RowCount(); row++ {
 		if databaseNames.IsNull(uint64(row)) || tableNames.IsNull(uint64(row)) {
+			continue
+		}
+		if relKinds != nil && !relKinds.IsNull(uint64(row)) &&
+			relKinds.GetStringAt(row) != catalog.SystemOrdinaryRel {
 			continue
 		}
 		createSQL := ""

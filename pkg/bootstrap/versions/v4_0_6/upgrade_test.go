@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/sql/mongodb"
@@ -62,12 +63,14 @@ func TestUpgradeEntries(t *testing.T) {
 	require.Equal(t, "CHECK_CONSTRAINTS", checkConstraints.TableName)
 	require.Equal(t, versions.CREATE_VIEW, checkConstraints.UpgType)
 	require.Equal(t, sysview.InformationSchemaCheckConstraintsDDL, checkConstraints.UpgSql)
+	require.Equal(t, int64(defines.MORPCVersion13), checkConstraints.RequiredProtocolVersion)
 	require.Contains(t, strings.ToLower(checkConstraints.PreSql), "drop view if exists information_schema.check_constraints")
 	tableConstraints := tenantUpgEntries[10]
 	require.Equal(t, sysview.InformationDBConst, tableConstraints.Schema)
 	require.Equal(t, "TABLE_CONSTRAINTS", tableConstraints.TableName)
 	require.Equal(t, versions.MODIFY_VIEW, tableConstraints.UpgType)
 	require.Equal(t, sysview.InformationSchemaTableConstraintsDDL, tableConstraints.UpgSql)
+	require.Equal(t, int64(defines.MORPCVersion13), tableConstraints.RequiredProtocolVersion)
 	require.Contains(t, strings.ToLower(tableConstraints.PreSql), "drop view if exists information_schema.table_constraints")
 }
 
@@ -375,6 +378,9 @@ func TestVersionHandleLifecycleWithNoLegacyDefinitions(t *testing.T) {
 
 		var executed []string
 		txnExecutor := newVersionTxnExecutor(t, func(sql string) (executor.Result, error) {
+			if strings.Contains(strings.ToLower(sql), "getprotocolversion") {
+				return newProtocolVersionResult(t), nil
+			}
 			executed = append(executed, sql)
 			return executor.Result{}, nil
 		})
@@ -847,6 +853,18 @@ func newHistoricalCreateSQLResult(t *testing.T, createSQL string) executor.Resul
 	result.NewBatchWithRowCount(1)
 	if err := executor.AppendStringRows(result, 0, []string{createSQL}); err != nil {
 		t.Fatalf("append historical CREATE definition: %v", err)
+	}
+	return result.GetResult()
+}
+
+func newProtocolVersionResult(t *testing.T) executor.Result {
+	t.Helper()
+	mp := mpool.MustNewZeroNoFixed()
+	t.Cleanup(func() { mpool.DeleteMPool(mp) })
+	result := executor.NewMemResult([]types.Type{types.T_varchar.ToType()}, mp)
+	result.NewBatchWithRowCount(1)
+	if err := executor.AppendStringRows(result, 0, []string{`{"method":"GETPROTOCOLVERSION","result":"cn-a:13, cn-b:13"}`}); err != nil {
+		t.Fatalf("append protocol version result: %v", err)
 	}
 	return result.GetResult()
 }

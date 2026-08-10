@@ -16,8 +16,10 @@ package table_function
 
 import (
 	"context"
+	"strings"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -330,4 +332,94 @@ func TestAppendEncodedCheckConstraintRowsSkipsPhysicalPartitions(t *testing.T) {
 	})
 	require.NoError(t, appendEncodedCheckConstraintRows(&rows, "app", "p0", "", data))
 	require.Empty(t, rows)
+}
+
+func TestCheckConstraintCatalogQueryFiltersLegacyEligibleRelations(t *testing.T) {
+	require.NotContains(t, strings.ToUpper(checkConstraintCatalogQuery), "ORDER BY")
+	require.Contains(t, checkConstraintCatalogQuery, "relkind = 'r'")
+}
+
+func TestDecodeCheckConstraintBatchSkipsNonTableCreateSQLPayloads(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+
+	data := batch.NewWithSize(5)
+	for i := range data.Vecs {
+		data.Vecs[i] = vector.NewVec(types.T_varchar.ToType())
+	}
+	appendValue := func(vec *vector.Vector, value []byte, isNull bool) {
+		require.NoError(t, vector.AppendBytes(vec, value, isNull, mp))
+	}
+	addRow := func(schema, table, createSQL, relkind string) {
+		appendValue(data.Vecs[0], []byte(schema), false)
+		appendValue(data.Vecs[1], []byte(table), false)
+		appendValue(data.Vecs[2], []byte(createSQL), false)
+		appendValue(data.Vecs[3], nil, true)
+		appendValue(data.Vecs[4], []byte(relkind), false)
+	}
+	// External envelopes, views, and sources may contain the word CHECK in
+	// user-controlled payloads. They must never enter the legacy SQL parser.
+	addRow("app", "external", `stage://bucket/check.csv`, catalog.SystemExternalRel)
+	addRow("app", "view", `CREATE VIEW view AS SELECT 'CHECK'`, catalog.SystemViewRel)
+	addRow("app", "source", `source://bucket/check.csv`, catalog.SystemSourceRel)
+	addRow("app", "base_table", `CREATE TABLE base_table (id int CHECK (id > 0))`, catalog.SystemOrdinaryRel)
+	data.SetRowCount(4)
+
+	rows, err := decodeCheckConstraintBatch(data)
+	require.NoError(t, err)
+	require.Equal(t, []checkConstraintRow{
+		{schema: "app", table: "base_table", name: "__mo_chk_1", clause: "`id` > 0", constraintType: "CHECK", enforced: "YES"},
+	}, rows)
+}
+
+func TestParseLegacyCheckConstraintRowsRejectsAmbiguousSQLMode(t *testing.T) {
+	for name, createSQL := range map[string]string{
+		"ANSI_QUOTES":          `CREATE TABLE legacy (a int, CHECK ("a" > 0))`,
+		"NO_BACKSLASH_ESCAPES": `CREATE TABLE legacy (a varchar(16), CHECK (a = 'a\\b'))`,
+		"PIPES_AS_CONCAT":      `CREATE TABLE legacy (a int, b int, CHECK (a = 1 || b = 2))`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := parseLegacyCheckConstraintRows(context.Background(), "app", "legacy", createSQL)
+			require.ErrorContains(t, err, "ambiguous SQL mode")
+		})
+	}
+}
+
+func TestCheckConstraintsLimitIsHonoredBeforeStreaming(t *testing.T) {
+	proc := testutil.NewProc(t)
+	tf := &TableFunction{
+		FuncName: "mo_check_constraints",
+		Attrs: []string{
+			"constraint_catalog",
+			"constraint_schema",
+			"constraint_name",
+			"check_clause",
+		},
+		Rets: func() []*planpb.ColDef {
+			cols := make([]*planpb.ColDef, 4)
+			for i := range cols {
+				cols[i] = &planpb.ColDef{Typ: planpb.Type{Id: int32(types.T_varchar)}}
+			}
+			return cols
+		}(),
+		Limit: &planpb.Expr{
+			Typ: planpb.Type{Id: int32(types.T_uint64)},
+			Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{
+				Value: &planpb.Literal_U64Val{U64Val: 1},
+			}},
+		},
+		OperatorBase: vm.OperatorBase{OperatorInfo: vm.OperatorInfo{Idx: 0}},
+	}
+	require.NoError(t, tf.Prepare(proc))
+	state := tf.ctr.state.(*checkConstraintsState)
+	state.collectRows = func(*process.Process) ([]checkConstraintRow, error) {
+		return []checkConstraintRow{
+			{schema: "app", table: "t", name: "a", clause: "a > 0"},
+			{schema: "app", table: "t", name: "b", clause: "b > 0"},
+		}, nil
+	}
+	require.NoError(t, state.start(tf, proc, 0, nil))
+	require.Equal(t, 1, state.batch.RowCount())
+	require.Equal(t, "a", state.batch.Vecs[2].GetStringAt(0))
+	tf.Free(proc, false, nil)
 }

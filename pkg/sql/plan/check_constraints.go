@@ -83,6 +83,10 @@ func (builder *QueryBuilder) buildCheckConstraints(
 		return 0, moerr.NewInvalidArg(builder.GetContext(),
 			"mo_check_constraints function has invalid input args length", len(tbl.Func.Exprs))
 	}
+	if err := requireInformationSchemaCheckConstraintsProtocol(
+		builder.GetContext(), builder.compCtx.GetProcess()); err != nil {
+		return 0, err
+	}
 
 	node := &planpb.Node{
 		NodeType: planpb.Node_FUNCTION_SCAN,
