@@ -110,6 +110,42 @@ func TestLockAdded(t *testing.T) {
 	})
 }
 
+func TestCleanupOnlyLockStateTransitions(t *testing.T) {
+	reuse.RunReuseTests(func() {
+		id := []byte("t1")
+		bind := pb.LockTable{Group: 0, Table: 1}
+		logger := getLogger("")
+		txn := newActiveTxn(id, string(id), newFixedSlicePool(8), "")
+		defer reuse.Free(txn, nil)
+
+		key1 := []byte("k1")
+		key2 := []byte("k2")
+		require.NoError(t, txn.lockAddedForCleanup(
+			bind.Group, bind, [][]byte{key1}, logger))
+
+		holder := txn.getHoldLocksLocked(bind.Group)
+		require.Contains(t, holder.tableKeys, bind.Table,
+			"cleanup-only locks must remain available to transaction close")
+		require.Contains(t, holder.uncertainLockKeys[bind.Table], string(key1))
+
+		// A successful retry promotes the row to a confirmed holder.
+		require.NoError(t, txn.lockAdded(
+			bind.Group, bind, [][]byte{key1}, logger))
+		require.Nil(t, holder.uncertainLockKeys)
+
+		// A later failed retry must not downgrade a row already confirmed held.
+		require.NoError(t, txn.lockAddedForCleanup(
+			bind.Group, bind, [][]byte{key1, key2}, logger))
+		require.NotContains(t, holder.uncertainLockKeys[bind.Table], string(key1))
+		require.Contains(t, holder.uncertainLockKeys[bind.Table], string(key2))
+
+		txn.lockRemoved(bind.Group, bind.Table, map[string]struct{}{
+			string(key2): {},
+		})
+		require.Nil(t, holder.uncertainLockKeys)
+	})
+}
+
 func TestLockAddedThatShouldFail(t *testing.T) {
 	reuse.RunReuseTests(func() {
 		id := []byte("t1")
