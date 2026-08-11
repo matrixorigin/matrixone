@@ -1299,13 +1299,17 @@ func TestIndexHintJoinScopeFiltersCandidates(t *testing.T) {
 }
 
 func TestApplyIndicesForJoinsSkipsNilIndexMetadata(t *testing.T) {
-	builder, joinID, _, leftDef := makeIndexHintJoinBuilder(t)
+	builder, joinID, leftScanID, leftDef := makeIndexHintJoinBuilder(t)
 	leftDef.Indexes = append([]*planpb.IndexDef{nil}, leftDef.Indexes...)
 
 	newID, err := builder.applyIndicesForJoins(
 		joinID, builder.qry.Nodes[joinID], map[[2]int32]int{}, map[[2]int32]*planpb.Expr{})
 	require.NoError(t, err)
 	require.Equal(t, joinID, newID)
+	join := builder.qry.Nodes[joinID]
+	require.NotEqual(t, leftScanID, join.Children[0])
+	require.Equal(t, planpb.Node_INDEX, builder.qry.Nodes[join.Children[0]].JoinType)
+	require.Len(t, join.RuntimeFilterBuildList, 1)
 }
 
 func TestIndexJoinSkipsLossyPrefixIndex(t *testing.T) {
