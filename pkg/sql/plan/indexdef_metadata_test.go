@@ -145,6 +145,52 @@ func TestSparseIndexMetadataRelatedMutationTablesFailClosed(t *testing.T) {
 	}
 }
 
+func TestSparseIndexMetadataLegacyDMLTargetsFailClosed(t *testing.T) {
+	tests := []struct {
+		name     string
+		sql      string
+		nilFirst bool
+	}{
+		{
+			name:     "joined update nil first",
+			sql:      "update emp left join dept on emp.deptno = dept.deptno set emp.sal = 5000",
+			nilFirst: true,
+		},
+		{
+			name: "joined update nil after valid",
+			sql:  "update emp left join dept on emp.deptno = dept.deptno set emp.sal = 5000",
+		},
+		{
+			name:     "multi-table delete nil first",
+			sql:      "delete emp, dept from emp, dept where emp.deptno = dept.deptno",
+			nilFirst: true,
+		},
+		{
+			name: "multi-table delete nil after valid",
+			sql:  "delete emp, dept from emp, dept where emp.deptno = dept.deptno",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			mock := NewMockOptimizer(true)
+			tableDef := mock.ctxt.tables["emp"]
+			require.NotNil(t, tableDef)
+			require.NotEmpty(t, tableDef.Indexes)
+			if test.nilFirst {
+				tableDef.Indexes = append([]*planpb.IndexDef{nil}, tableDef.Indexes...)
+			} else {
+				tableDef.Indexes = append(tableDef.Indexes, nil)
+			}
+
+			_, err := runOneStmt(mock, t, test.sql)
+			require.Error(t, err)
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrInternal), err)
+			require.ErrorContains(t, err, "nil index metadata")
+		})
+	}
+}
+
 func TestValidateTableIndexDefinitions(t *testing.T) {
 	require.NoError(t, validateTableIndexDefinitions(&planpb.TableDef{
 		Name:    "dense",
