@@ -23,6 +23,7 @@ import (
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -371,6 +372,10 @@ func (b *baseBinder) baseBindParam(astExpr *tree.ParamExpr, depth int32, isRoot 
 			param.Typ = makePlan2Type(&bindingType)
 			return param, nil
 		}
+		// Preserve which direct parameter consumed a runtime hint after the
+		// enclosing cast is materialized. Dependency extraction uses this marker
+		// to invalidate exactly that position on later executions.
+		param.Typ.Enumvalues = "mo_decimal_common_type_dependency"
 		return appendCastBeforeExpr(b.GetContext(), param, makePlan2Type(&bindingType))
 	}
 	if b.numericParamType != nil {
@@ -3141,7 +3146,8 @@ func (b *baseBinder) bindPythonUdf(udf *function.Udf, astArgs []tree.Expr, depth
 }
 
 func bindFuncExprAndConstFold(ctx context.Context, proc *process.Process, name string, args []*Expr) (*plan.Expr, error) {
-	retExpr, err := BindFuncExprImplByPlanExpr(ctx, name, args)
+	retExpr, err := bindFuncExprImplByPlanExpr(
+		ctx, name, args, preparedDecimalPrefixCastEnabled(proc))
 	if err != nil {
 		return nil, err
 	}
@@ -3405,6 +3411,12 @@ func bindMixedInListComparison(ctx context.Context, operator string, left, right
 }
 
 func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) (*plan.Expr, error) {
+	return bindFuncExprImplByPlanExpr(ctx, name, args, true)
+}
+
+func bindFuncExprImplByPlanExpr(
+	ctx context.Context, name string, args []*Expr, prefixCastEnabled bool,
+) (*plan.Expr, error) {
 	var err error
 	if name == NameApproxPercentile {
 		if err = validateApproxPercentileArgs(ctx, args); err != nil {
@@ -3864,7 +3876,7 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 	var argsCastType []types.Type
 
 	// get function definition
-	resolutionTypes := decimalParamCommonTypeResolutionTypes(name, args, argsType)
+	resolutionTypes := decimalParamCommonTypeResolutionTypes(name, args, argsType, prefixCastEnabled)
 	var fGet function.FuncGetResult
 	fGet, err = function.GetFunctionByName(ctx, name, resolutionTypes)
 	if err != nil {
@@ -4626,7 +4638,9 @@ func normalizeDecimalParamComparisonArgs(ctx context.Context, name string, args 
 // contributes DECIMAL(65,30) for it while aggregating DECIMAL-aware common
 // types. Keep argsType unchanged so cast insertion still converts the runtime
 // TEXT value to the selected numeric type.
-func decimalParamCommonTypeResolutionTypes(name string, args []*Expr, argsType []types.Type) []types.Type {
+func decimalParamCommonTypeResolutionTypes(
+	name string, args []*Expr, argsType []types.Type, prefixCastEnabled bool,
+) []types.Type {
 	switch name {
 	case "coalesce", "greatest", "least":
 	default:
@@ -4665,6 +4679,9 @@ func decimalParamCommonTypeResolutionTypes(name string, args []*Expr, argsType [
 		if isUnresolvedPreparedNumericParam(args[i], typ) && args[i].Typ.Enumvalues == "" {
 			args[i].Typ.Enumvalues = "mo_decimal_common_type_dependency"
 		}
+	}
+	if !prefixCastEnabled {
+		return argsType
 	}
 
 	dynamicParamType, ok := types.Type{}, true
@@ -4732,6 +4749,15 @@ func decimalParamCommonTypeResolutionTypes(name string, args []*Expr, argsType [
 		return argsType
 	}
 	return resolutionTypes
+}
+
+func preparedDecimalPrefixCastEnabled(proc *process.Process) bool {
+	if proc == nil {
+		return true
+	}
+	value, ok := moruntime.ServiceRuntime(proc.GetService()).GetGlobalVariables(moruntime.MOProtocolVersion)
+	version, valid := value.(int64)
+	return ok && valid && version >= defines.MORPCVersion15
 }
 
 func decimalParamCommonTypeHasFloatingPeer(args []*Expr, argsType []types.Type) bool {

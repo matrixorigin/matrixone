@@ -19,9 +19,12 @@ import (
 	"fmt"
 	"testing"
 
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/require"
 )
 
@@ -46,6 +49,33 @@ func makeRuntimeNumericPreparedParam(pos, mode, width, scale int32) *planpb.Expr
 	expr := makePreparedDecimalComparisonParam(pos)
 	expr.Typ.Enumvalues = fmt.Sprintf("mo_runtime_numeric:%d:%d:%d", mode, width, scale)
 	return expr
+}
+
+func TestPreparedDecimalPrefixCastProtocolGate(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	rt := moruntime.ServiceRuntime(proc.GetService())
+	defer rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion14)
+	require.False(t, preparedDecimalPrefixCastEnabled(proc))
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion15)
+	require.True(t, preparedDecimalPrefixCastEnabled(proc))
+
+	args := []*planpb.Expr{
+		makePreparedDecimalComparisonParam(0),
+		makePreparedDecimalComparisonColumn(types.New(types.T_decimal64, 10, 2)),
+	}
+	legacy, err := bindFuncExprImplByPlanExpr(context.Background(), "coalesce", args, false)
+	require.NoError(t, err)
+	require.True(t, types.T(legacy.Typ.Id).IsMySQLString())
+
+	args = []*planpb.Expr{
+		makePreparedDecimalComparisonParam(0),
+		makePreparedDecimalComparisonColumn(types.New(types.T_decimal64, 10, 2)),
+	}
+	current, err := bindFuncExprImplByPlanExpr(context.Background(), "coalesce", args, true)
+	require.NoError(t, err)
+	require.True(t, types.T(current.Typ.Id).IsDecimal())
 }
 
 func preparedDecimalCommonType() types.Type {
@@ -446,7 +476,7 @@ func TestRuntimePreparedDecimalCommonTypeUsesStableDomain(t *testing.T) {
 				args := []*planpb.Expr{DeepCopyExpr(test.param), makePreparedDecimalComparisonColumn(peer)}
 				_, _, found := runtimePreparedNumericType(args[0])
 				require.True(t, found)
-				resolution := decimalParamCommonTypeResolutionTypes(name, args, []types.Type{types.T_text.ToType(), peer})
+				resolution := decimalParamCommonTypeResolutionTypes(name, args, []types.Type{types.T_text.ToType(), peer}, true)
 				if test.wantType.IsDecimal() {
 					require.True(t, resolution[0].Oid.IsDecimal())
 				} else {

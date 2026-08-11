@@ -363,7 +363,12 @@ func TestPreparedNumericTextDomainIsBoundedAndClassified(t *testing.T) {
 		{value: "1.234567", wantWidth: 7, wantScale: 6, wantFull: true, wantBindingMode: preparedNumericTextPrefix},
 		{value: "12.5tail", wantWidth: 3, wantScale: 1, wantBindingMode: preparedNumericTextPrefix},
 		{value: "abc", wantWidth: 1, wantBindingMode: preparedNumericTextPrefix},
-		{value: "001.200e2", wantWidth: 4, wantScale: 1, wantFull: true, wantExponent: true, wantBindingMode: preparedNumericTextPrefix},
+		{value: "001.200e2", wantWidth: 3, wantFull: true, wantExponent: true, wantBindingMode: preparedNumericTextPrefix},
+		{value: "0.1e35", wantWidth: 35, wantFull: true, wantExponent: true, wantBindingMode: preparedNumericTextPrefix},
+		{value: ".1e35", wantWidth: 35, wantFull: true, wantExponent: true, wantBindingMode: preparedNumericTextPrefix},
+		{value: "0.0001e35", wantWidth: 32, wantFull: true, wantExponent: true, wantBindingMode: preparedNumericTextPrefix},
+		{value: "0e100", wantWidth: 1, wantFull: true, wantExponent: true, wantBindingMode: preparedNumericTextPrefix},
+		{value: "0e-100", wantWidth: 1, wantFull: true, wantExponent: true, wantBindingMode: preparedNumericTextPrefix},
 		{value: "000000000000000000000000000000000000000000000000000000000000000000000000000001", wantWidth: 1, wantFull: true, wantBindingMode: preparedNumericTextPrefix},
 		{value: "\v1.25", wantWidth: 3, wantScale: 2, wantFull: true, wantBindingMode: preparedNumericTextPrefix},
 		{value: "\f1.25", wantWidth: 3, wantScale: 2, wantFull: true, wantBindingMode: preparedNumericTextPrefix},
@@ -516,6 +521,39 @@ func TestInitExecuteStmtParamMapsRuntimeBindingCategoriesByPosition(t *testing.T
 	require.Equal(t, []types.T{types.T_float64, types.T_decimal256}, executeTypes())
 	require.Equal(t, types.T_float64.ToType(), prepareStmt.paramBindingTypes[0])
 	require.Equal(t, preparedNumericTextPrefix, prepareStmt.paramBindingTypes[1].Size)
+}
+
+func TestInitExecuteStmtParamMasksNonDependentTargetFunctionBindings(t *testing.T) {
+	ses, prepareStmt, cw, execCtx := newPreparedExecuteEnvForSQL(t, 114,
+		"select coalesce(?, 'fallback'), coalesce(?, cast(2 as decimal(10,2)))")
+	defer func() {
+		cw.proc.SetPrepareParams(nil)
+		prepareStmt.Close()
+	}()
+
+	prepareStmt.params = vector.NewVec(types.T_text.ToType())
+	setParams := func(first string, firstType defines.MysqlType) {
+		prepareStmt.params.CleanOnlyData()
+		require.NoError(t, vector.AppendBytes(prepareStmt.params, []byte(first), false, cw.proc.Mp()))
+		require.NoError(t, vector.AppendBytes(prepareStmt.params, []byte("1.25"), false, cw.proc.Mp()))
+		prepareStmt.ParamTypes = []byte{byte(firstType), 0, byte(defines.MYSQL_TYPE_VAR_STRING), 0}
+	}
+	execute := func() (*plan.Plan, []types.T) {
+		_, queryPlan, _, _, _, err := initExecuteStmtParam(execCtx, ses, cw, nil, prepareStmt.Name)
+		require.NoError(t, err)
+		columns := plan2.GetResultColumnsFromPlan(queryPlan)
+		return prepareStmt.PreparePlan, []types.T{types.T(columns[0].Typ.Id), types.T(columns[1].Typ.Id)}
+	}
+
+	setParams("10", defines.MYSQL_TYPE_LONGLONG)
+	firstPlan, resultTypes := execute()
+	require.Equal(t, []types.T{types.T_text, types.T_decimal256}, resultTypes)
+	require.Equal(t, []bool{false, true}, prepareStmt.paramBindingDependencies)
+
+	setParams("abc", defines.MYSQL_TYPE_VAR_STRING)
+	secondPlan, resultTypes := execute()
+	require.Same(t, firstPlan, secondPlan)
+	require.Equal(t, []types.T{types.T_text, types.T_decimal256}, resultTypes)
 }
 
 func TestInitExecuteStmtParamIgnoresUnrelatedRuntimeCategories(t *testing.T) {
@@ -1220,6 +1258,33 @@ func TestInitExecuteStmtParamRebuildsWhenProtocolVersionChanges(t *testing.T) {
 			require.Equal(t, test.to, prepareStmt.protocolVersion)
 		})
 	}
+}
+
+func TestProtocolUpgradeRebuildUsesPreparedDecimalBinding(t *testing.T) {
+	rt := moruntime.ServiceRuntime("")
+	defer rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion14)
+
+	ses, prepareStmt, cw, execCtx := newPreparedExecuteEnvForSQL(t, 115,
+		"select coalesce(?, cast(2 as decimal(10,2)))")
+	defer func() {
+		cw.proc.SetPrepareParams(nil)
+		prepareStmt.Close()
+	}()
+	require.Equal(t, []bool{true}, plan2.PreparedParamCommonTypeDependencies(
+		prepareStmt.PreparePlan.GetDcl().GetPrepare().Plan, 1))
+
+	prepareStmt.params = vector.NewVec(types.T_text.ToType())
+	require.NoError(t, vector.AppendBytes(prepareStmt.params, []byte("1e100"), false, cw.proc.Mp()))
+	prepareStmt.ParamTypes = []byte{byte(defines.MYSQL_TYPE_DOUBLE), 0}
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion15)
+
+	_, queryPlan, _, _, _, err := initExecuteStmtParam(execCtx, ses, cw, nil, prepareStmt.Name)
+	require.NoError(t, err)
+	columns := plan2.GetResultColumnsFromPlan(queryPlan)
+	require.Len(t, columns, 1)
+	require.Equal(t, int32(types.T_float64), columns[0].Typ.Id)
+	require.Equal(t, []bool{true}, prepareStmt.paramBindingDependencies)
 }
 
 func TestInitExecuteStmtParamKeepsOldStateWhenColumnMetadataRefreshFails(t *testing.T) {

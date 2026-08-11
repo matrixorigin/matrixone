@@ -4629,6 +4629,8 @@ func TestMySQLDecimalPrefix(t *testing.T) {
 		{input: "12.5tail", want: "12.5"},
 		{input: "2026-08-10", want: "2026"},
 		{input: "9007199254740993e0tail", want: "9007199254740993e0"},
+		{input: "1E2", want: "1e2"},
+		{input: "1E-2tail", want: "1e-2"},
 		{input: "1e+tail", want: "1"},
 		{input: "-.5x", want: "-.5"},
 	} {
@@ -4648,6 +4650,19 @@ func TestMySQLDecimalPrefix(t *testing.T) {
 	maximum, err := clampDecimal256Value(false, 65, 30)
 	require.NoError(t, err)
 	require.Equal(t, maximum, clamped)
+
+	uppercase, err := parseMySQLDecimal256Prefix("1E2tail", 65, 30)
+	require.NoError(t, err)
+	wantUppercase, err := types.ParseDecimal256("100", 65, 30)
+	require.NoError(t, err)
+	require.Equal(t, wantUppercase, uppercase)
+
+	underflow, err := parseMySQLDecimal256Prefix("1e-2147483648tail", 65, 30)
+	require.NoError(t, err)
+	require.Equal(t, types.Decimal256{}, underflow)
+	underflow, err = parseMySQLDecimal256Prefix("9999999999e-2147483648tail", 65, 30)
+	require.NoError(t, err)
+	require.Equal(t, types.Decimal256{}, underflow)
 }
 
 func TestParseStringToFloatWithBitSize(t *testing.T) {

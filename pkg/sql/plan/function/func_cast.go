@@ -6834,7 +6834,58 @@ sign:
 			i = exponentStart
 		}
 	}
-	return s[start:i]
+	prefix := s[start:i]
+	if exponentAt := strings.IndexByte(prefix, 'E'); exponentAt >= 0 {
+		prefix = prefix[:exponentAt] + "e" + prefix[exponentAt+1:]
+	}
+	return prefix
+}
+
+func mysqlDecimalPrefixUnderflows(prefix string, scale int32) bool {
+	exponentAt := strings.IndexByte(prefix, 'e')
+	if exponentAt < 0 || exponentAt+1 >= len(prefix) {
+		return false
+	}
+	mantissaStart := 0
+	if prefix[0] == '+' || prefix[0] == '-' {
+		mantissaStart++
+	}
+	decimalPos, digitPos, firstNonZero := int64(0), int64(0), int64(-1)
+	seenDecimal := false
+	for j := mantissaStart; j < exponentAt; j++ {
+		if prefix[j] == '.' {
+			decimalPos = digitPos
+			seenDecimal = true
+			continue
+		}
+		if prefix[j] != '0' && firstNonZero < 0 {
+			firstNonZero = digitPos
+		}
+		digitPos++
+	}
+	if !seenDecimal {
+		decimalPos = digitPos
+	}
+	if firstNonZero < 0 {
+		return true
+	}
+	i := exponentAt + 1
+	if prefix[i] != '-' {
+		return false
+	}
+	i++
+	// Once the magnitude exceeds the target scale plus all mantissa digits,
+	// rounding to the target DECIMAL scale is necessarily zero. Keep the scan
+	// bounded so an arbitrarily long exponent cannot create proportional work.
+	limit := int64(scale) + decimalPos - firstNonZero - 1
+	magnitude := int64(0)
+	for ; i < len(prefix); i++ {
+		if magnitude > limit {
+			return true
+		}
+		magnitude = magnitude*10 + int64(prefix[i]-'0')
+	}
+	return magnitude > limit
 }
 
 func parseMySQLDecimal64Prefix(s string, width, scale int32) (types.Decimal64, error) {
@@ -6842,6 +6893,9 @@ func parseMySQLDecimal64Prefix(s string, width, scale int32) (types.Decimal64, e
 	result, err := types.ParseDecimal64(prefix, width, scale)
 	if err == nil {
 		return result, nil
+	}
+	if mysqlDecimalPrefixUnderflows(prefix, scale) {
+		return 0, nil
 	}
 	return clampDecimal64Value(len(prefix) > 0 && prefix[0] == '-', width, scale)
 }
@@ -6852,6 +6906,9 @@ func parseMySQLDecimal128Prefix(s string, width, scale int32) (types.Decimal128,
 	if err == nil {
 		return result, nil
 	}
+	if mysqlDecimalPrefixUnderflows(prefix, scale) {
+		return types.Decimal128{}, nil
+	}
 	return clampDecimal128Value(len(prefix) > 0 && prefix[0] == '-', width, scale)
 }
 
@@ -6860,6 +6917,9 @@ func parseMySQLDecimal256Prefix(s string, width, scale int32) (types.Decimal256,
 	result, err := types.ParseDecimal256(prefix, width, scale)
 	if err == nil {
 		return result, nil
+	}
+	if mysqlDecimalPrefixUnderflows(prefix, scale) {
+		return types.Decimal256{}, nil
 	}
 	return clampDecimal256Value(len(prefix) > 0 && prefix[0] == '-', width, scale)
 }

@@ -16,6 +16,7 @@ package plan
 
 import (
 	"context"
+	"strings"
 
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
@@ -64,13 +65,17 @@ func (r *preparedParamCommonTypeDependencyRule) collectDirectParams(expr *Expr) 
 	}
 	switch impl := expr.Expr.(type) {
 	case *planpb.Expr_P:
-		if expr.Typ.Enumvalues == "mo_decimal_common_type_dependency" {
+		if expr.Typ.Enumvalues == "mo_decimal_common_type_dependency" ||
+			strings.HasPrefix(expr.Typ.Enumvalues, "mo_runtime_numeric:") {
 			r.positions[impl.P.Pos] = struct{}{}
 		}
 	case *planpb.Expr_F:
-		functionID, _ := function.DecodeOverloadID(impl.F.Func.Obj)
-		if functionID == function.CAST && len(impl.F.Args) == 2 && impl.F.Args[1].Typ.Charset == 255 {
-			r.collectDirectParams(impl.F.Args[0])
+		// Common-type resolution may wrap the marked parameter in an ordinary
+		// string cast when the deployment protocol still uses legacy semantics.
+		// The marker on the parameter, not a particular CAST encoding, is the
+		// dependency contract.
+		for _, arg := range impl.F.Args {
+			r.collectDirectParams(arg)
 		}
 	case *planpb.Expr_List:
 		for _, item := range impl.List.List {

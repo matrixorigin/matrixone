@@ -768,26 +768,34 @@ func preparedNumericTextDomain(value []byte) (width, scale int32, full, exponent
 	if i < len(value) && (value[i] == '+' || value[i] == '-') {
 		i++
 	}
-	integerDigits, fractionalDigits := int64(0), int64(0)
-	rawIntegerDigits := 0
+	decimalPos := int64(0)
+	digitPos := int64(0)
+	firstNonZero, lastNonZero := int64(-1), int64(-1)
 	for i < len(value) && value[i] >= '0' && value[i] <= '9' {
-		rawIntegerDigits++
-		if value[i] != '0' || integerDigits > 0 {
-			integerDigits = min(integerDigits+1, capDigits)
+		if value[i] != '0' {
+			if firstNonZero < 0 {
+				firstNonZero = digitPos
+			}
+			lastNonZero = digitPos
 		}
+		digitPos++
 		i++
 	}
-	if rawIntegerDigits > 0 && integerDigits == 0 {
-		integerDigits = 1
-	}
-	hasDigits := rawIntegerDigits > 0
+	decimalPos = digitPos
+	hasDigits := digitPos > 0
 	if i < len(value) && value[i] == '.' {
 		i++
 		for i < len(value) && value[i] >= '0' && value[i] <= '9' {
-			fractionalDigits = min(fractionalDigits+1, capDigits)
+			if value[i] != '0' {
+				if firstNonZero < 0 {
+					firstNonZero = digitPos
+				}
+				lastNonZero = digitPos
+			}
+			digitPos++
 			i++
 		}
-		hasDigits = hasDigits || fractionalDigits > 0
+		hasDigits = digitPos > 0
 	}
 	exp := int64(0)
 	if hasDigits && i < len(value) && (value[i] == 'e' || value[i] == 'E') {
@@ -820,8 +828,13 @@ func preparedNumericTextDomain(value []byte) (width, scale int32, full, exponent
 	if !hasDigits {
 		return 1, 0, false, false
 	}
-	integral := max(integerDigits+exp, 0)
-	scale64 := max(fractionalDigits-exp, 0)
+	// Zero has no precision domain: spelling it with leading/trailing zeroes or
+	// an exponent must not promote an otherwise exact prepared value to DOUBLE.
+	if firstNonZero < 0 {
+		return 1, 0, full, exponent
+	}
+	integral := max(decimalPos-firstNonZero+exp, 0)
+	scale64 := max(lastNonZero+1-decimalPos-exp, 0)
 	width64 := min(integral+scale64, capDigits)
 	return int32(max(width64, 1)), int32(min(scale64, capDigits)), full, exponent
 }
@@ -862,22 +875,6 @@ func preparedParamBindingTypes(
 	return bindingTypes
 }
 
-func preparedParamBindingTypesEqual(left, right []types.Type, count int) bool {
-	for i := 0; i < count; i++ {
-		var leftType, rightType types.Type
-		if i < len(left) {
-			leftType = left[i]
-		}
-		if i < len(right) {
-			rightType = right[i]
-		}
-		if !leftType.Eq(rightType) {
-			return false
-		}
-	}
-	return true
-}
-
 func preparedParamBindingTypesEqualAtDependencies(left, right []types.Type, dependencies []bool, count int) bool {
 	for i := 0; i < count; i++ {
 		if i >= len(dependencies) || !dependencies[i] {
@@ -902,6 +899,19 @@ func clonePreparedParamBindingTypes(bindingTypes []types.Type) []types.Type {
 		return nil
 	}
 	return append([]types.Type(nil), bindingTypes...)
+}
+
+func preparedParamBindingTypesAtDependencies(bindingTypes []types.Type, dependencies []bool) []types.Type {
+	if len(bindingTypes) == 0 || len(dependencies) == 0 {
+		return nil
+	}
+	masked := make([]types.Type, len(bindingTypes))
+	for i := range bindingTypes {
+		if i < len(dependencies) && dependencies[i] {
+			masked[i] = bindingTypes[i]
+		}
+	}
+	return masked
 }
 
 type preparedExecuteParamState struct {
@@ -1117,7 +1127,8 @@ func initExecuteStmtParamWithResolverInSession(
 	// parameter category changed.
 	if needRebuild {
 		compilerCtx := executionSes.GetTxnCompileCtx()
-		compilerCtx.setPreparedParamBindingTypes(paramBindingTypes)
+		compilerCtx.setPreparedParamBindingTypes(preparedParamBindingTypesAtDependencies(
+			paramBindingTypes, prepareStmt.paramBindingDependencies))
 		newPlan, err := func() (*plan.Plan, error) {
 			defer compilerCtx.setPreparedParamBindingTypes(nil)
 			return rebuildPreparePlan(execCtx, executionSes, prepareStmt, buildPlan)
@@ -1160,6 +1171,9 @@ func initExecuteStmtParamWithResolverInSession(
 		prepareStmt.preparedMetadataCheckTS = preparedMetadataTS
 		prepareStmt.protocolVersion = protocolVersion
 		prepareStmt.paramBindingTypes = clonePreparedParamBindingTypes(paramBindingTypes)
+		prepareStmt.paramBindingDependencies = plan2.PreparedParamCommonTypeDependencies(
+			newPreparePlan.Plan, len(newPreparePlan.ParamTypes))
+		prepareStmt.paramBindingDependenciesSet = true
 	}
 
 	// Recreate the cached compile only when a plan dependency changed.
