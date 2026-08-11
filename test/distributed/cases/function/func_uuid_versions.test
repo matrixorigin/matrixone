@@ -42,6 +42,16 @@ select unix_timestamp(uuid_extract_timestamp(cast('1ec9414c-232a-6b00-b3c8-9f6bd
 select uuid_extract_version(cast('1ec9414c-232a-6b00-b3c8-9f6bdeced846' as uuid));
 select uuid_extract_timestamp(uuid_v4()) is null, uuid_extract_timestamp(uuid_v7()) is not null;
 select uuid_extract_version(null) is null, uuid_extract_timestamp(null) is null, cast(null as uuid) is null;
+-- non-RFC variant (all-zero uuid): both extractors return NULL even for a non-NULL input
+select uuid_extract_version(cast('00000000-0000-0000-0000-000000000000' as uuid)) is null, uuid_extract_timestamp(cast('00000000-0000-0000-0000-000000000000' as uuid)) is null;
+-- the extractors synthesize NULL from non-NULL inputs, so planner metadata must keep their results nullable (view/CTAS)
+create table uuid_extract_ctas as select uuid_extract_version(cast('00000000-0000-0000-0000-000000000000' as uuid)) v, uuid_extract_timestamp(uuid_v4()) ts;
+desc uuid_extract_ctas;
+select v is null, ts is null from uuid_extract_ctas;
+drop table uuid_extract_ctas;
+create view uuid_extract_view as select uuid_extract_version(uuid_v4()) v, uuid_extract_timestamp(uuid_v4()) ts;
+desc uuid_extract_view;
+drop view uuid_extract_view;
 select uuid_extract_timestamp(uuid_v7('2026-01-01')) = cast('2026-01-01' as timestamp);
 select uuid_extract_timestamp(uuid_v7(interval 1 day)) > current_timestamp();
 select uuid_v7(1);

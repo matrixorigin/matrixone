@@ -28,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -2359,6 +2360,19 @@ func TestBuiltInUUIDShifted(t *testing.T) {
 	defer units.Free(proc.Mp())
 	require.NoError(t, makeBuiltInUUIDShifted(7)([]*vector.Vector{nums, units}, result, proc, 1, nil))
 	require.True(t, result.GetResultVector().GetNulls().Contains(0))
+}
+
+func TestUUIDExtractNullableDeduction(t *testing.T) {
+	notNullUuid := &plan.Expr{Typ: plan.Type{Id: int32(types.T_uuid), NotNullable: true}}
+	// the extractors synthesize NULL from non-NULL UUIDs (v4 timestamps,
+	// non-RFC variants), so the planner must keep their results nullable
+	for _, fid := range []int32{UUID_EXTRACT_VERSION, UUID_EXTRACT_TIMESTAMP} {
+		require.False(t, DeduceNotNullable(encodeOverloadID(fid, 0), []*plan.Expr{notNullUuid}))
+	}
+	// control: a plain strict function still deduces NOT NULL from NOT NULL args
+	require.True(t, DeduceNotNullable(encodeOverloadID(int32(IS_UUID), 0), []*plan.Expr{
+		{Typ: plan.Type{Id: int32(types.T_varchar), NotNullable: true}},
+	}))
 }
 
 func TestUUIDShiftDSTSemantics(t *testing.T) {

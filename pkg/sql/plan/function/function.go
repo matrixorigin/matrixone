@@ -309,6 +309,11 @@ func DeduceNotNullable(overloadID int64, args []*plan.Expr) bool {
 		if len(args) != 3 {
 			return false
 		}
+	// The UUID extractors synthesize NULL from valid non-NULL inputs: both
+	// return NULL for non-RFC-4122 variants, and uuid_extract_timestamp also
+	// returns NULL for versions without a time source (e.g. v4).
+	case UUID_EXTRACT_VERSION, UUID_EXTRACT_TIMESTAMP:
+		return false
 	}
 	if allSupportedFunctions[fid].testFlag(plan.Function_PRODUCE_NO_NULL) {
 		return true
