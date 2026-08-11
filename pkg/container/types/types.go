@@ -150,9 +150,9 @@ const (
 type Type struct {
 	Oid T
 
-	// XXX Dummies.  T is uint8, make it 4 bytes aligned, otherwise, it may contain
-	// garbage data.  In theory these unused garbage should not be a problem, but
-	// it is.  Give it a name will zero fill it ...
+	// Charset originally existed only to keep T four-byte aligned and was always
+	// zero-filled. It now carries text collation identity; the two following
+	// bytes remain explicit padding so the serialized layout stays unchanged.
 	Charset uint8
 	notNull uint8
 	dummy2  uint8
@@ -163,6 +163,49 @@ type Type struct {
 	Width int32
 	// Scale means number of fractional digits for decimal, timestamp, float, etc.
 	Scale int32
+}
+
+const (
+	// CharsetLegacy is the zero value written before text collation metadata
+	// became meaningful. Text values with this identity keep the historical
+	// bytewise ordering so an upgrade cannot change results for existing data.
+	CharsetLegacy uint8 = 0
+	// CharsetBinary marks binary string types and opaque bytes carried in a
+	// text-shaped container.
+	CharsetBinary uint8 = 1
+	// CharsetUTF8MB4Bin is utf8/utf8mb4 text using the legacy binary
+	// collations' PAD SPACE ordering. It remains nonbinary in MySQL protocol
+	// metadata (collation 46 rather than binary charset 63).
+	CharsetUTF8MB4Bin uint8 = 2
+	// CharsetUTF8 is the explicit utf8mb4_general_ci text identity. It must not
+	// use zero: old catalog rows have zero in this formerly dummy field.
+	CharsetUTF8 uint8 = 3
+)
+
+// MergeStringCharset derives one collation identity for a value composed from
+// multiple MySQL strings. Binary bytes must never be reinterpreted as UTF-8;
+// binary-collated utf8mb4 and legacy text likewise retain their stronger
+// ordering identity when combined with default general-ci text.
+func MergeStringCharset(parameters []Type, fallback uint8) uint8 {
+	result := fallback
+	for _, parameter := range parameters {
+		if !parameter.Oid.IsMySQLString() {
+			continue
+		}
+		switch parameter.Charset {
+		case CharsetBinary:
+			result = CharsetBinary
+		case CharsetUTF8MB4Bin:
+			if result != CharsetBinary {
+				result = CharsetUTF8MB4Bin
+			}
+		case CharsetLegacy:
+			if result == CharsetUTF8 {
+				result = CharsetLegacy
+			}
+		}
+	}
+	return result
 }
 
 // ProtoSize is used by gogoproto.
@@ -489,14 +532,27 @@ func New(oid T, width, scale int32) Type {
 	return typ
 }
 
+// NewWithCharset restores charset metadata carried by a plan type. Legacy text
+// plans must retain zero, while old plans for intrinsically binary OIDs still
+// need the OID-derived binary identity.
+func NewWithCharset(oid T, width, scale int32, charset uint8) Type {
+	typ := New(oid, width, scale)
+	if charset != CharsetLegacy || oid == T_char || oid == T_varchar || oid == T_text {
+		typ.Charset = charset
+	}
+	return typ
+}
+
 func CharsetType(oid T) uint8 {
 	switch oid {
 	case T_blob, T_varbinary, T_binary, T_geometry, T_geometry32:
 		// binary charset
-		return 1
+		return CharsetBinary
+	case T_char, T_varchar, T_text:
+		return CharsetUTF8
 	default:
-		// utf8 charset
-		return 0
+		// Charset is not meaningful for non-string types.
+		return CharsetLegacy
 	}
 }
 
@@ -657,8 +713,12 @@ func (t Type) Eq(b Type) bool {
 	// XXX need to find out why these types have different size/width
 	case T_bool, T_uint8, T_uint16, T_uint32, T_uint64, T_uint128, T_int8, T_int16, T_int32, T_int64, T_int128:
 		return t.Oid == b.Oid
+	case T_char, T_varchar, T_text:
+		return t.Oid == b.Oid && t.Charset == b.Charset &&
+			t.Size == b.Size && t.Width == b.Width && t.Scale == b.Scale
 	default:
-		return t.Oid == b.Oid && t.Size == b.Size && t.Width == b.Width && t.Scale == b.Scale
+		return t.Oid == b.Oid && t.Size == b.Size &&
+			t.Width == b.Width && t.Scale == b.Scale
 	}
 }
 
@@ -737,6 +797,7 @@ func (t T) ToType() Type {
 	default:
 		panic("Unknown type")
 	}
+	typ.Charset = CharsetType(t)
 	return typ
 }
 

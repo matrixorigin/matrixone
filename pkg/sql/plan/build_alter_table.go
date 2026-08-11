@@ -35,7 +35,7 @@ import (
 	"go.uber.org/zap"
 )
 
-func skipPkDedup(old, new *TableDef) bool {
+func skipPkDedup(old, new *TableDef, sourceColumns map[string]selectExpr) bool {
 	oldPk := old.Pkey
 	newPk := new.Pkey
 
@@ -49,11 +49,20 @@ func skipPkDedup(old, new *TableDef) bool {
 		return false
 	}
 
-	// oldPk and newPk are not nil, check if the primary key is the same
-	return slices.Equal(oldPk.Names, newPk.Names)
+	// The copy INSERT can skip PK dedup only when every target key value is
+	// guaranteed to be identical to its source value. Matching column names are
+	// not enough: a type conversion can collapse distinct values during copy.
+	if !slices.Equal(oldPk.Names, newPk.Names) {
+		return false
+	}
+	parts := newPk.Names
+	if len(parts) == 0 {
+		parts = []string{newPk.PkeyColName}
+	}
+	return alterCopyKeyPartsValueUnchanged(old, new, parts, sourceColumns)
 }
 
-func skipUniqueIdxDedup(old, new *TableDef) map[string]bool {
+func skipUniqueIdxDedup(old, new *TableDef, sourceColumns map[string]selectExpr) map[string]bool {
 	var skip map[string]bool
 	// In spite of the O(n^2) complexity,
 	// it's rare for a table to have enough indexes to cause
@@ -67,7 +76,10 @@ func skipUniqueIdxDedup(old, new *TableDef) map[string]bool {
 				continue
 			}
 			if oldidx.IndexName == idx.IndexName &&
-				slices.Equal(idx.Parts, oldidx.Parts) {
+				slices.Equal(idx.Parts, oldidx.Parts) &&
+				oldidx.IndexAlgo == idx.IndexAlgo &&
+				oldidx.IndexAlgoParams == idx.IndexAlgoParams &&
+				alterCopyKeyPartsValueUnchanged(old, new, idx.Parts, sourceColumns) {
 				if skip == nil {
 					skip = make(map[string]bool)
 				}
@@ -77,6 +89,51 @@ func skipUniqueIdxDedup(old, new *TableDef) map[string]bool {
 		}
 	}
 	return skip
+}
+
+func alterCopyKeyPartsValueUnchanged(
+	old, new *TableDef,
+	parts []string,
+	sourceColumns map[string]selectExpr,
+) bool {
+	for _, part := range parts {
+		name := catalog.ResolveAlias(part)
+		source, ok := sourceColumns[name]
+		// A same-name DROP/ADD creates a new target column, even when its type is
+		// identical to the removed column. The copy INSERT then supplies a default
+		// (or generated) value instead of reading the old column. Dedup can only be
+		// skipped when the planner's source mapping proves this exact target key is
+		// copied from the corresponding old key column.
+		if !ok || source.sexprType != exprColumnName || !strings.EqualFold(source.sexprStr, name) {
+			return false
+		}
+		oldCol := FindColumn(old.Cols, name)
+		newCol := FindColumn(new.Cols, name)
+		if !alterCopyKeyColumnValueUnchanged(oldCol, newCol) {
+			return false
+		}
+	}
+	return true
+}
+
+func alterCopyKeyColumnValueUnchanged(oldCol, newCol *ColDef) bool {
+	if oldCol == nil || newCol == nil {
+		return false
+	}
+	// Generated columns are recomputed for the copy INSERT. Even an unchanged
+	// generated expression can produce different key values when one of its
+	// input columns is altered, so keep target-side dedup enabled.
+	if oldCol.GeneratedCol != nil || newCol.GeneratedCol != nil {
+		return false
+	}
+	oldTyp, newTyp := oldCol.Typ, newCol.Typ
+	return oldTyp.Id == newTyp.Id &&
+		oldTyp.NotNullable == newTyp.NotNullable &&
+		oldTyp.AutoIncr == newTyp.AutoIncr &&
+		oldTyp.Width == newTyp.Width &&
+		oldTyp.Scale == newTyp.Scale &&
+		oldTyp.Table == newTyp.Table &&
+		oldTyp.Enumvalues == newTyp.Enumvalues
 }
 
 func tableHasAutoIncrementColumn(tableDef *TableDef) bool {
@@ -273,9 +330,9 @@ func buildAlterTableCopy(stmt *tree.AlterTable, cctx CompilerContext) (*Plan, er
 	alterTablePlan.AffectedCols = affectedCols
 
 	opt := &plan.AlterCopyOpt{
-		SkipPkDedup:        skipPkDedup(tableDef, copyTableDef),
+		SkipPkDedup:        skipPkDedup(tableDef, copyTableDef, alterTableCtx.alterColMap),
 		TargetTableName:    copyTableDef.Name,
-		SkipUniqueIdxDedup: skipUniqueIdxDedup(tableDef, copyTableDef),
+		SkipUniqueIdxDedup: skipUniqueIdxDedup(tableDef, copyTableDef, alterTableCtx.alterColMap),
 	}
 
 	opt.SkipIndexesCopy = make(map[string]bool)
@@ -759,7 +816,7 @@ func isInplaceColumnDefinition(
 		return
 	}
 
-	ok, err = storageAgnosticType(ctx, column, oCol)
+	ok, err = storageAgnosticType(ctx, column, oCol, tableDef.DefaultCharset)
 	if err != nil {
 		return
 	}
@@ -804,13 +861,15 @@ func storageAgnosticType(
 	ctx context.Context,
 	nCol *tree.ColumnTableDef,
 	oCol *ColDef,
+	defaultCharset uint32,
 ) (ok bool, err error) {
 
 	nTy, err := getTypeFromAst(ctx, nCol.Type)
 	if err != nil {
 		return
 	}
-	if err = applyColumnAttributesToType(ctx, &nTy, nCol.Attributes); err != nil {
+	nTy.Charset = uint32(types.CharsetType(types.T(nTy.Id)))
+	if err = applyDefaultAndColumnAttributesToType(ctx, &nTy, defaultCharset, nCol.Attributes); err != nil {
 		return
 	}
 
@@ -819,7 +878,8 @@ func storageAgnosticType(
 	if oTy.Id != nTy.Id ||
 		oTy.Scale != nTy.Scale ||
 		oTy.Enumvalues != nTy.Enumvalues ||
-		oTy.AutoIncr != nTy.AutoIncr {
+		oTy.AutoIncr != nTy.AutoIncr ||
+		oTy.Charset != nTy.Charset {
 		return
 	}
 

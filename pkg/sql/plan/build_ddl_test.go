@@ -17,6 +17,7 @@ package plan
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strconv"
 	"strings"
 	"testing"
@@ -95,6 +96,207 @@ func TestBuildRenameTableUsesPriorDestinationAsNextSource(t *testing.T) {
 	require.Equal(t, "t3", renames[1].GetActions()[0].GetAlterName().GetNewName())
 }
 
+func TestBuildCreateTablePreservesTextCharset(t *testing.T) {
+	testCases := []struct {
+		name      string
+		sql       string
+		want      uint32
+		wantTable uint32
+	}{
+		{
+			name:      "default text collation",
+			sql:       "create table t(name varchar(10))",
+			want:      uint32(types.CharsetUTF8),
+			wantTable: uint32(types.CharsetUTF8),
+		},
+		{
+			name: "table binary collation",
+			sql: "create table t(name varchar(10)) character set utf8mb4 " +
+				"collate utf8mb4_bin",
+			want:      uint32(types.CharsetUTF8MB4Bin),
+			wantTable: uint32(types.CharsetUTF8MB4Bin),
+		},
+		{
+			name: "table binary collation before charset",
+			sql: "create table t(name varchar(10)) collate utf8mb4_bin " +
+				"character set utf8mb4",
+			want:      uint32(types.CharsetUTF8MB4Bin),
+			wantTable: uint32(types.CharsetUTF8MB4Bin),
+		},
+		{
+			name:      "column binary collation",
+			sql:       "create table t(name varchar(10) collate utf8mb4_bin)",
+			want:      uint32(types.CharsetUTF8MB4Bin),
+			wantTable: uint32(types.CharsetUTF8),
+		},
+		{
+			name: "column collation overrides table",
+			sql: "create table t(name varchar(10) collate utf8mb4_general_ci) " +
+				"collate utf8mb4_bin",
+			want:      uint32(types.CharsetUTF8),
+			wantTable: uint32(types.CharsetUTF8MB4Bin),
+		},
+		{
+			name: "column charset overrides table collation",
+			sql: "create table t(name varchar(10) character set utf8mb4) " +
+				"collate utf8mb4_bin",
+			want:      uint32(types.CharsetUTF8),
+			wantTable: uint32(types.CharsetUTF8MB4Bin),
+		},
+		{
+			name: "column collation overrides binary table charset",
+			sql: "create table t(name varchar(10) collate utf8mb4_general_ci) " +
+				"character set binary",
+			want:      uint32(types.CharsetUTF8),
+			wantTable: uint32(types.CharsetBinary),
+		},
+		{
+			name: "column charset overrides binary table charset",
+			sql: "create table t(name varchar(10) character set utf8mb4) " +
+				"character set binary",
+			want:      uint32(types.CharsetUTF8),
+			wantTable: uint32(types.CharsetBinary),
+		},
+		{
+			name: "column collation wins independent of option order",
+			sql: "create table t(name varchar(10) collate utf8mb4_bin " +
+				"character set utf8mb4)",
+			want:      uint32(types.CharsetUTF8MB4Bin),
+			wantTable: uint32(types.CharsetUTF8),
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, tc.sql, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+
+			p, err := BuildPlan(NewMockCompilerContext(false), stmt, false)
+			require.NoError(t, err)
+			tableDef := p.GetDdl().GetCreateTable().GetTableDef()
+			cols := tableDef.GetCols()
+			require.NotEmpty(t, cols)
+			require.Equal(t, int32(types.T_varchar), cols[0].Typ.Id)
+			require.Equal(t, tc.want, cols[0].Typ.Charset)
+			require.Equal(t, tc.wantTable, tableDef.DefaultCharset)
+		})
+	}
+}
+
+func TestBuildCreateTableRejectsUnsupportedCollations(t *testing.T) {
+	for _, sql := range []string{
+		"create table t(v varchar(8)) collate utf8mb4_0900_ai_ci",
+		"create table t(v varchar(8)) collate utf8mb4_unicode_ci",
+		"create table t(v varchar(8) collate utf8mb4_0900_bin)",
+		"create table t(v varchar(8) collate utf8_unicode_ci)",
+	} {
+		t.Run(sql, func(t *testing.T) {
+			stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, sql, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			_, err = BuildPlan(NewMockCompilerContext(false), stmt, false)
+			require.ErrorContains(t, err, "unsupported collation")
+		})
+	}
+}
+
+func TestUnsupportedLegacyCollationExplainsDumpReplacement(t *testing.T) {
+	stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL,
+		"create table t(v varchar(8)) collate utf8mb4_unicode_ci", 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+
+	_, err = BuildPlan(NewMockCompilerContext(false), stmt, false)
+	require.ErrorContains(t, err,
+		"replace it with 'utf8mb4_general_ci' when restoring legacy MatrixOne DDL")
+}
+
+func TestCreateTableInheritsEffectiveServerCollation(t *testing.T) {
+	mock := NewMockCompilerContext(false)
+	mock.ResolveVariableFunc = func(name string, isSystem, isGlobal bool) (interface{}, error) {
+		if name == "collation_server" && isSystem && !isGlobal {
+			return "utf8mb4_bin", nil
+		}
+		return nil, nil
+	}
+	stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL,
+		"create table t(v varchar(8))", 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+
+	p, err := BuildPlan(mock, stmt, false)
+	require.NoError(t, err)
+	tableDef := p.GetDdl().GetCreateTable().GetTableDef()
+	require.Equal(t, uint32(types.CharsetUTF8MB4Bin), tableDef.DefaultCharset)
+	require.Equal(t, uint32(types.CharsetUTF8MB4Bin), tableDef.Cols[0].Typ.Charset)
+}
+
+func TestBuildCreateTableCharacterSetBinaryConvertsStringTypes(t *testing.T) {
+	stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL,
+		"create table t(c char(4) character set binary, "+
+			"v varchar(8) character set binary, x text character set binary)", 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+
+	p, err := BuildPlan(NewMockCompilerContext(false), stmt, false)
+	require.NoError(t, err)
+	cols := p.GetDdl().GetCreateTable().GetTableDef().GetCols()
+	require.GreaterOrEqual(t, len(cols), 3)
+	require.Equal(t, int32(types.T_binary), cols[0].Typ.Id)
+	require.Equal(t, int32(types.T_varbinary), cols[1].Typ.Id)
+	require.Equal(t, int32(types.T_blob), cols[2].Typ.Id)
+	for _, col := range cols[:3] {
+		require.Equal(t, uint32(types.CharsetBinary), col.Typ.Charset)
+	}
+}
+
+func TestBuildCreateTableBinaryDefaultConvertsUnqualifiedStringType(t *testing.T) {
+	stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL,
+		"create table t(v varchar(8)) character set binary", 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+
+	p, err := BuildPlan(NewMockCompilerContext(false), stmt, false)
+	require.NoError(t, err)
+	tableDef := p.GetDdl().GetCreateTable().GetTableDef()
+	require.Equal(t, uint32(types.CharsetBinary), tableDef.DefaultCharset)
+	require.Equal(t, int32(types.T_varbinary), tableDef.Cols[0].Typ.Id)
+	require.Equal(t, uint32(types.CharsetBinary), tableDef.Cols[0].Typ.Charset)
+}
+
+func TestBuildCreateTableRejectsIncompatibleCharsetAndCollation(t *testing.T) {
+	for _, sql := range []string{
+		"create table t(v varchar(8)) character set utf8mb4 collate binary",
+		"create table t(v varchar(8) character set binary collate utf8mb4_bin)",
+	} {
+		t.Run(sql, func(t *testing.T) {
+			stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, sql, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			_, err = BuildPlan(NewMockCompilerContext(false), stmt, false)
+			require.ErrorContains(t, err, "is not valid for CHARACTER SET")
+		})
+	}
+}
+
+func TestBuildCreateTableAcceptsUTF8MB3Aliases(t *testing.T) {
+	for _, sql := range []string{
+		"create table t(v varchar(8)) character set utf8 collate utf8mb3_bin",
+		"create table t(v varchar(8) character set utf8mb3 collate utf8_general_ci)",
+		"create table t(v varchar(8)) character set utf8 collate utf8mb4_general_ci",
+		"create table t(v varchar(8) character set utf8 collate utf8mb4_bin)",
+	} {
+		t.Run(sql, func(t *testing.T) {
+			stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, sql, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			_, err = BuildPlan(NewMockCompilerContext(false), stmt, false)
+			require.NoError(t, err)
+		})
+	}
+}
+
 func TestBuildDropTemporaryTableOnlyTargetsTemporaryTable(t *testing.T) {
 	stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, "drop temporary table nation", 1)
 	require.NoError(t, err)
@@ -119,6 +321,271 @@ func TestBuildDropTemporaryTableIfExistsDoesNotTargetPermanentTable(t *testing.T
 	p, err := BuildPlan(NewMockCompilerContext(false), stmt, false)
 	require.NoError(t, err)
 	require.Nil(t, p.GetDdl().GetDropTable().GetTableDef())
+}
+
+func TestBuildTruncateTemporaryTableDoesNotTargetPermanentTable(t *testing.T) {
+	for _, prepare := range []bool{false, true} {
+		t.Run(fmt.Sprintf("prepare=%t", prepare), func(t *testing.T) {
+			stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, "truncate table nation", 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+
+			ctx := NewMockCompilerContext(false)
+			ctx.tables["nation"].IsTemporary = true
+
+			_, err = BuildPlan(ctx, stmt, prepare)
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrNoSuchTable))
+			require.Equal(t, "no such table tpch.nation", err.Error())
+		})
+	}
+}
+
+func TestBuildTruncateTableSkipsSelfReferenceMarker(t *testing.T) {
+	stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, "truncate table tree", 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+
+	ctx := NewMockCompilerContext(false)
+	ctx.tables["tree"] = &TableDef{
+		Name:         "tree",
+		TblId:        42,
+		TableType:    catalog.SystemOrdinaryRel,
+		RefChildTbls: []uint64{0},
+		Fkeys: []*plan.ForeignKeyDef{
+			{Name: "fk_self", ForeignTbl: 0},
+			{Name: "fk_parent", ForeignTbl: 99},
+		},
+	}
+	ctx.objects["tree"] = &ObjectRef{SchemaName: "tpch", ObjName: "tree"}
+
+	p, err := BuildPlan(ctx, stmt, false)
+	require.NoError(t, err)
+	require.Equal(t, []uint64{99}, p.GetDdl().GetTruncateTable().GetForeignTbl())
+}
+
+func TestBuildAlterRenameColumnCarriesRewrittenChecks(t *testing.T) {
+	stmt, err := parsers.ParseOne(
+		t.Context(),
+		dialect.MYSQL,
+		"alter table nation rename column n_nationkey to nation_id",
+		1,
+	)
+	require.NoError(t, err)
+	defer stmt.Free()
+
+	ctx := NewMockCompilerContext(false)
+	ctx.tables["nation"].Checks = []*plan.CheckDef{{
+		Name:      "ck_nationkey",
+		OriginSql: "`n_nationkey` >= 0",
+	}}
+
+	p, err := BuildPlan(ctx, stmt, false)
+	require.NoError(t, err)
+	alter := p.GetDdl().GetAlterTable()
+	require.Equal(t, plan.AlterTable_INPLACE, alter.GetAlgorithmType())
+	require.Equal(t, "`nation_id` >= 0", alter.GetCopyTableDef().GetChecks()[0].GetOriginSql())
+}
+
+func TestBuildAlterRenameColumnRewritesComplexChecks(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		check string
+		want  string
+	}{
+		{
+			name:  "searched case",
+			check: "case when `n_nationkey` > 0 then 1 else 0 end = 1",
+			want:  "case when `nation_id` > 0 then 1 else 0 end = 1",
+		},
+		{
+			name:  "case without else",
+			check: "case `n_nationkey` when 1 then 1 end = 1",
+			want:  "case `nation_id` when 1 then 1 end = 1",
+		},
+		{
+			name:  "fulltext match",
+			check: "match (`n_nationkey`) against ('1')",
+			want:  "MATCH (`nation_id`) AGAINST ('1')",
+		},
+		{
+			name:  "like escape expression",
+			check: "`n_name` like 'a!%' escape `n_nationkey`",
+			want:  "`n_name` like 'a!%' escape `nation_id`",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			stmt, err := parsers.ParseOne(
+				t.Context(),
+				dialect.MYSQL,
+				"alter table nation rename column n_nationkey to nation_id",
+				1,
+			)
+			require.NoError(t, err)
+			defer stmt.Free()
+
+			ctx := NewMockCompilerContext(false)
+			ctx.tables["nation"].Checks = []*plan.CheckDef{{
+				Name:      "ck_case",
+				OriginSql: tc.check,
+			}}
+
+			p, err := BuildPlan(ctx, stmt, false)
+			require.NoError(t, err)
+			checks := p.GetDdl().GetAlterTable().GetCopyTableDef().GetChecks()
+			require.Len(t, checks, 1)
+			require.Equal(t, tc.want, checks[0].GetOriginSql())
+		})
+	}
+}
+
+func TestBuildAlterRenameColumnRecoversLegacyChecks(t *testing.T) {
+	parseRename := func(t *testing.T) tree.Statement {
+		t.Helper()
+		stmt, err := parsers.ParseOne(
+			t.Context(),
+			dialect.MYSQL,
+			"alter table nation rename column n_nationkey to nation_id",
+			1,
+		)
+		require.NoError(t, err)
+		return stmt
+	}
+
+	for _, tc := range []struct {
+		name      string
+		sql       string
+		algorithm plan.AlterTable_AlgorithmType
+	}{
+		{
+			name:      "inplace",
+			sql:       "alter table nation rename column n_nationkey to nation_id",
+			algorithm: plan.AlterTable_INPLACE,
+		},
+		{
+			name:      "copy",
+			sql:       "alter table nation rename column n_nationkey to nation_id, algorithm=copy",
+			algorithm: plan.AlterTable_COPY,
+		},
+	} {
+		t.Run("unambiguous legacy check is recovered and rewritten "+tc.name, func(t *testing.T) {
+			stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, tc.sql, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+
+			ctx := NewMockCompilerContext(false)
+			ctx.tables["nation"].Checks = nil
+			ctx.tables["nation"].Createsql = "create table nation(" +
+				"n_nationkey int, constraint ck_nationkey check (n_nationkey >= 0))"
+
+			p, err := BuildPlan(ctx, stmt, false)
+			require.NoError(t, err)
+			alter := p.GetDdl().GetAlterTable()
+			require.Equal(t, tc.algorithm, alter.GetAlgorithmType())
+			require.Len(t, alter.GetCopyTableDef().GetChecks(), 1)
+			require.Equal(t, "ck_nationkey", alter.GetCopyTableDef().GetChecks()[0].GetName())
+			require.Equal(t, "`nation_id` >= 0", alter.GetCopyTableDef().GetChecks()[0].GetOriginSql())
+			require.Empty(t, ctx.tables["nation"].Checks, "catalog-owned source must remain unchanged")
+		})
+	}
+
+	t.Run("legacy check inplace is rejected before protocol version 15", func(t *testing.T) {
+		stmt := parseRename(t)
+		defer stmt.Free()
+
+		ctx := NewMockCompilerContext(false)
+		ctx.tables["nation"].Checks = nil
+		ctx.tables["nation"].Createsql = "create table nation(" +
+			"n_nationkey int, constraint ck_nationkey check (n_nationkey >= 0))"
+
+		proc := ctx.GetProcess()
+		rt := moruntime.ServiceRuntime(proc.GetService())
+		original, hadOriginal := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+		defer func() {
+			if hadOriginal {
+				rt.SetGlobalVariables(moruntime.MOProtocolVersion, original)
+			} else {
+				rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+			}
+		}()
+		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion14)
+
+		_, err := BuildPlan(ctx, stmt, false)
+		require.ErrorContains(t, err, "protocol version 15")
+		require.Empty(t, ctx.tables["nation"].Checks, "catalog-owned source must remain unchanged")
+	})
+
+	t.Run("legacy check copy remains compatible at protocol version 14", func(t *testing.T) {
+		stmt, err := parsers.ParseOne(
+			t.Context(),
+			dialect.MYSQL,
+			"alter table nation rename column n_nationkey to nation_id, algorithm=copy",
+			1,
+		)
+		require.NoError(t, err)
+		defer stmt.Free()
+
+		ctx := NewMockCompilerContext(false)
+		ctx.tables["nation"].Checks = nil
+		ctx.tables["nation"].Createsql = "create table nation(" +
+			"n_nationkey int, constraint ck_nationkey check (n_nationkey >= 0))"
+
+		proc := ctx.GetProcess()
+		rt := moruntime.ServiceRuntime(proc.GetService())
+		original, hadOriginal := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+		defer func() {
+			if hadOriginal {
+				rt.SetGlobalVariables(moruntime.MOProtocolVersion, original)
+			} else {
+				rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+			}
+		}()
+		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion14)
+
+		p, err := BuildPlan(ctx, stmt, false)
+		require.NoError(t, err)
+		alter := p.GetDdl().GetAlterTable()
+		require.Equal(t, plan.AlterTable_COPY, alter.GetAlgorithmType())
+		require.Equal(t, "`nation_id` >= 0", alter.GetCopyTableDef().GetChecks()[0].GetOriginSql())
+		require.Empty(t, ctx.tables["nation"].Checks, "catalog-owned source must remain unchanged")
+	})
+
+	t.Run("ambiguous legacy SQL mode is rejected", func(t *testing.T) {
+		stmt := parseRename(t)
+		defer stmt.Free()
+
+		ctx := NewMockCompilerContext(false)
+		ctx.tables["nation"].Checks = nil
+		ctx.tables["nation"].Createsql = `create table nation(
+			n_nationkey int, n_name varchar(25), check (n_name = 'a\nb'))`
+
+		_, err := BuildPlan(ctx, stmt, false)
+		require.ErrorContains(t, err, "ambiguous SQL mode")
+	})
+
+	t.Run("multiple renames ignore CHECK text outside constraints", func(t *testing.T) {
+		stmt, err := parsers.ParseOne(
+			t.Context(),
+			dialect.MYSQL,
+			"alter table nation rename column n_nationkey to nation_id, "+
+				"rename column n_name to nation_name",
+			1,
+		)
+		require.NoError(t, err)
+		defer stmt.Free()
+
+		ctx := NewMockCompilerContext(false)
+		ctx.tables["nation"].Checks = nil
+		ctx.tables["nation"].Createsql = "create table fk_foreign_key_checks4.nation(" +
+			"n_nationkey int primary key, n_name varchar(25), " +
+			"n_regionkey int, n_comment varchar(152))"
+
+		p, err := BuildPlan(ctx, stmt, false)
+		require.NoError(t, err)
+		copyDef := p.GetDdl().GetAlterTable().GetCopyTableDef()
+		require.NotNil(t, FindColumn(copyDef.Cols, "nation_id"))
+		require.NotNil(t, FindColumn(copyDef.Cols, "nation_name"))
+		require.Empty(t, copyDef.Checks)
+	})
 }
 
 func (c *rootSQLCompilerContext) GetRootSql() string {
@@ -574,6 +1041,147 @@ func TestBuildCreateViewPreservesDefaultKinds(t *testing.T) {
 	require.False(t, cols[2].GetDefault().GetNullAbility())
 	require.Equal(t, "(uuid())", cols[2].GetDefault().GetOriginString())
 	require.Equal(t, "uuid", cols[2].GetDefault().GetExpr().GetF().GetFunc().GetObjName())
+}
+
+func TestGroupingExtensionsExposeNullableKeysInViewAndCTAS(t *testing.T) {
+	newContext := func(rootSQL string) *rootSQLCompilerContext {
+		ctx := NewMockCompilerContext(false)
+		for _, name := range []string{"n_nationkey", "n_regionkey"} {
+			col := ctx.tables["nation"].Cols[ctx.tables["nation"].Name2ColIndex[name]]
+			col.Typ.NotNullable = true
+			col.Default = &plan.Default{NullAbility: false}
+		}
+		return &rootSQLCompilerContext{MockCompilerContext: ctx, rootSQL: rootSQL}
+	}
+
+	for _, test := range []struct {
+		name     string
+		groupBy  string
+		nullable []bool
+	}{
+		{
+			name:     "ordinary group by preserves source nullability",
+			groupBy:  "n_nationkey, n_regionkey",
+			nullable: []bool{false, false},
+		},
+		{
+			name:     "rollup",
+			groupBy:  "n_nationkey, n_regionkey with rollup",
+			nullable: []bool{true, true},
+		},
+		{
+			name:     "cube",
+			groupBy:  "cube(n_nationkey, n_regionkey)",
+			nullable: []bool{true, true},
+		},
+		{
+			name:     "grouping sets",
+			groupBy:  "grouping sets ((n_nationkey, n_regionkey), (n_nationkey), ())",
+			nullable: []bool{true, true},
+		},
+		{
+			name:     "grouping sets preserve keys active in every branch",
+			groupBy:  "grouping sets ((n_nationkey, n_regionkey), (n_nationkey))",
+			nullable: []bool{false, true},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			rootSQL := "create view grouping_extension_view as select n_nationkey, n_regionkey, count(*) as cnt from nation group by " + test.groupBy
+			stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, rootSQL, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+
+			viewPlan, err := BuildPlan(newContext(rootSQL), stmt, false)
+			require.NoError(t, err)
+			viewCols := viewPlan.GetDdl().GetCreateView().GetTableDef().GetCols()
+			require.Len(t, viewCols, 3)
+			for i, wantNullable := range test.nullable {
+				require.Equal(t, wantNullable, viewCols[i].GetDefault().GetNullAbility(), viewCols[i].GetName())
+			}
+		})
+	}
+
+	for _, test := range []struct {
+		name     string
+		groupBy  string
+		nullable []bool
+	}{
+		{
+			name:     "rollup",
+			groupBy:  "n_nationkey, n_regionkey with rollup",
+			nullable: []bool{true, true},
+		},
+		{
+			name:     "grouping sets preserve keys active in every branch",
+			groupBy:  "grouping sets ((n_nationkey, n_regionkey), (n_nationkey))",
+			nullable: []bool{false, true},
+		},
+	} {
+		t.Run("CTAS "+test.name, func(t *testing.T) {
+			ctasSQL := "create table grouping_extension_ctas as select n_nationkey, n_regionkey, count(*) as cnt from nation group by " + test.groupBy
+			stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, ctasSQL, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+
+			ctasPlan, err := BuildPlan(newContext(ctasSQL), stmt, false)
+			require.NoError(t, err)
+			ctasCols := ctasPlan.GetDdl().GetCreateTable().GetTableDef().GetCols()
+			require.GreaterOrEqual(t, len(ctasCols), 3)
+			for i, wantNullable := range test.nullable {
+				require.Equal(t, wantNullable, ctasCols[i].GetDefault().GetNullAbility(), ctasCols[i].GetName())
+			}
+		})
+	}
+}
+
+func TestGroupingExtensionQueryOutputKeysAreNullable(t *testing.T) {
+	for _, test := range []struct {
+		name        string
+		groupBy     string
+		notNullable []bool
+	}{
+		{
+			name:        "ordinary group by preserves source nullability",
+			groupBy:     "n_nationkey, n_regionkey",
+			notNullable: []bool{true, true},
+		},
+		{
+			name:        "rollup",
+			groupBy:     "n_nationkey, n_regionkey with rollup",
+			notNullable: []bool{false, false},
+		},
+		{
+			name:        "cube",
+			groupBy:     "cube(n_nationkey, n_regionkey)",
+			notNullable: []bool{false, false},
+		},
+		{
+			name:        "grouping sets",
+			groupBy:     "grouping sets ((n_nationkey, n_regionkey), (n_nationkey), ())",
+			notNullable: []bool{false, false},
+		},
+		{
+			name:        "grouping sets preserve keys active in every branch",
+			groupBy:     "grouping sets ((n_nationkey, n_regionkey), (n_nationkey))",
+			notNullable: []bool{true, false},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			opt := NewMockOptimizer(false)
+			ctx := opt.CurrentContext().(*MockCompilerContext)
+			for _, name := range []string{"n_nationkey", "n_regionkey"} {
+				ctx.tables["nation"].Cols[ctx.tables["nation"].Name2ColIndex[name]].Typ.NotNullable = true
+			}
+
+			queryPlan, err := runOneStmt(opt, t, "select n_nationkey, n_regionkey, count(*) as cnt from nation group by "+test.groupBy)
+			require.NoError(t, err)
+			query := queryPlan.GetQuery()
+			rootNode := query.Nodes[query.Steps[0]]
+			for i, wantNotNullable := range test.notNullable {
+				require.Equal(t, wantNotNullable, rootNode.ProjectList[i].Typ.NotNullable)
+			}
+		})
+	}
 }
 
 func TestBuildCTASFromViewUsesIndependentExecutableDefault(t *testing.T) {
@@ -2296,6 +2904,19 @@ func TestBuildPrefixIndexV2ProtocolGate(t *testing.T) {
 	require.NoError(t, err)
 	indexDef := logicPlan.GetDdl().GetCreateTable().GetTableDef().GetIndexes()[0]
 	require.Equal(t, map[string]int{"head:line": 4}, catalog.IndexPrefixLengthsFromParams(indexDef.IndexAlgoParams))
+}
+
+func TestBuildCompositeIndexMarksEncodedKeyBinary(t *testing.T) {
+	logicPlan, err := runOneStmt(NewMockOptimizer(false), t,
+		"create table composite_key_charset (id int primary key, a varchar(10), b varchar(10), index idx_ab(a, b))")
+	require.NoError(t, err)
+
+	createTable := logicPlan.GetDdl().GetCreateTable()
+	require.NotNil(t, createTable)
+	require.Len(t, createTable.IndexTables, 1)
+	key := FindColumn(createTable.IndexTables[0].Cols, catalog.IndexTableIndexColName)
+	require.NotNil(t, key)
+	require.Equal(t, uint32(types.CharsetBinary), key.Typ.Charset)
 }
 
 func TestBuildVectorIndexAllowsIvfFlatOnly(t *testing.T) {

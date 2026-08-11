@@ -44,9 +44,9 @@ func (b *HavingBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool) (*p
 	astStr := windowExprAstKey(astExpr)
 
 	if !b.insideAgg {
-		if colPos, ok := b.ctx.groupByAst[astStr]; ok {
+		if colPos, ok := lookupGroupByAst(b.ctx, astExpr, astStr); ok {
 			return &plan.Expr{
-				Typ: b.ctx.groups[colPos].Typ,
+				Typ: b.ctx.groupOutputType(colPos),
 				Expr: &plan.Expr_Col{
 					Col: &plan.ColRef{
 						RelPos: b.ctx.groupTag,
@@ -284,7 +284,7 @@ func (b *HavingBinder) remapAggToTimeWindowCacheAgg(expr *Expr) (*Expr, error) {
 	funcId, _ := function.DecodeOverloadID(f.Func.Obj)
 	switch funcId {
 	case function.AVG:
-		typ := types.New(types.T(f.Args[0].Typ.Id), f.Args[0].Typ.Width, f.Args[0].Typ.Scale)
+		typ := makeTypeByPlan2Type(f.Args[0].Typ)
 		fGet, err := function.GetFunctionByName(b.GetContext(), "avg_tw_cache", []types.Type{typ})
 		if err != nil {
 			return nil, err
@@ -314,7 +314,7 @@ func (b *HavingBinder) remapAggToTimeWindowResultAgg(expr *Expr) (*Expr, error) 
 	switch funcId {
 	case function.SUM:
 		arg := expr.GetF().Args[0]
-		typ := types.New(types.T(arg.Typ.Id), arg.Typ.Width, arg.Typ.Scale)
+		typ := makeTypeByPlan2Type(arg.Typ)
 		fGet, err := function.GetFunctionByName(b.GetContext(), "sum", []types.Type{typ})
 		if err != nil {
 			return nil, err
@@ -339,7 +339,7 @@ func (b *HavingBinder) remapAggToTimeWindowResultAgg(expr *Expr) (*Expr, error) 
 		expr.Typ.Width = fGet.GetReturnType().Width
 		expr.Typ.Scale = fGet.GetReturnType().Scale
 	case function.AVG_TW_CACHE:
-		typ := types.New(types.T(expr.Typ.Id), expr.Typ.Width, expr.Typ.Scale)
+		typ := makeTypeByPlan2Type(expr.Typ)
 		fGet, err := function.GetFunctionByName(b.GetContext(), "avg_tw_result", []types.Type{typ})
 		if err != nil {
 			return nil, err
@@ -356,7 +356,7 @@ func (b *HavingBinder) remapAggToTimeWindowResultAgg(expr *Expr) (*Expr, error) 
 		// so the outer aggregate is an identity operation. Retaining max_by here
 		// would construct a one-argument max_by and fail during Prepare.
 		arg := expr.GetF().Args[0]
-		typ := types.New(types.T(arg.Typ.Id), arg.Typ.Width, arg.Typ.Scale)
+		typ := makeTypeByPlan2Type(arg.Typ)
 		fGet, err := function.GetFunctionByName(b.GetContext(), "any_value", []types.Type{typ})
 		if err != nil {
 			return nil, err

@@ -21,8 +21,12 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
@@ -104,6 +108,19 @@ func updateRenameColumnInTableDef(
 	}
 	if err := requirePrefixIndexesRenameProtocol(
 		ctx, tableDef.Indexes, oldColName, newColName,
+	); err != nil {
+		return nil, err
+	}
+
+	// Pre-upgrade tables can have CHECK constraints only in Createsql. Recover
+	// them on the planner-owned table copy before rewriting the renamed column,
+	// so both COPY and INPLACE ALTER persist the structured definitions.
+	if err := recoverLegacyChecks(ctx, tableDef); err != nil {
+		return nil, err
+	}
+
+	if err := renameColumnInCheckConstraints(
+		ctx.GetContext(), tableDef.Checks, oldColName, newColNameOrigin,
 	); err != nil {
 		return nil, err
 	}
@@ -206,6 +223,93 @@ func requirePrefixIndexesRenameProtocol(ctx CompilerContext, indexes []*plan.Ind
 				return err
 			}
 			break
+		}
+	}
+	return nil
+}
+
+// requireCheckRenameProtocol prevents a new CN from sending CHECK metadata in
+// AlterTableRenameCol to an old TN whose generated request type cannot expose
+// the unknown protobuf field to its alter handler. During a rolling upgrade,
+// the deployment protocol version stays at the oldest live service, so v15
+// proves every receiver can persist the rewritten CHECK definitions.
+func requireCheckRenameProtocol(ctx CompilerContext, checks []*plan.CheckDef) error {
+	if len(checks) == 0 || ctx.GetProcess() == nil {
+		return nil
+	}
+	value, ok := moruntime.ServiceRuntime(ctx.GetProcess().GetService()).
+		GetGlobalVariables(moruntime.MOProtocolVersion)
+	version, valid := value.(int64)
+	if !ok || !valid || version < defines.MORPCVersion15 {
+		return moerr.NewNotSupported(
+			ctx.GetContext(),
+			"renaming a column in a table with CHECK constraints requires all services to support protocol version 15",
+		)
+	}
+	return nil
+}
+
+type renameCheckColumnVisitor struct {
+	oldName string
+	newName string
+	changed bool
+}
+
+func (v *renameCheckColumnVisitor) Enter(expr tree.Expr) (tree.Expr, bool) {
+	name, ok := expr.(*tree.UnresolvedName)
+	if !ok {
+		return expr, false
+	}
+	if name.NumParts == 1 && strings.EqualFold(name.ColName(), v.oldName) {
+		v.changed = true
+		return tree.NewUnresolvedColName(v.newName), true
+	}
+	return expr, true
+}
+
+func (v *renameCheckColumnVisitor) Exit(expr tree.Expr) (tree.Expr, bool) {
+	return expr, true
+}
+
+func renameColumnInCheckConstraints(
+	ctx context.Context,
+	checks []*plan.CheckDef,
+	oldName string,
+	newName string,
+) error {
+	rewritten := make([]string, len(checks))
+	for i, check := range checks {
+		if check == nil || check.OriginSql == "" {
+			continue
+		}
+		stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, "select "+check.OriginSql, 1)
+		if err != nil {
+			return err
+		}
+		selectStmt, ok := stmt.(*tree.Select)
+		if !ok {
+			stmt.Free()
+			return moerr.NewInternalError(ctx, "invalid CHECK constraint expression")
+		}
+		clause, ok := selectStmt.Select.(*tree.SelectClause)
+		if !ok || len(clause.Exprs) != 1 {
+			stmt.Free()
+			return moerr.NewInternalError(ctx, "invalid CHECK constraint expression")
+		}
+		visitor := &renameCheckColumnVisitor{oldName: oldName, newName: newName}
+		expr, ok := clause.Exprs[0].Expr.Accept(visitor)
+		if !ok {
+			stmt.Free()
+			return moerr.NewInternalError(ctx, "failed to rename CHECK constraint column")
+		}
+		if visitor.changed {
+			rewritten[i] = formatCheckConstraintExpr(expr)
+		}
+		stmt.Free()
+	}
+	for i, originSQL := range rewritten {
+		if originSQL != "" {
+			checks[i].OriginSql = originSQL
 		}
 	}
 	return nil
@@ -335,6 +439,9 @@ func AlterColumn(
 	originalCol := FindColumn(tableDef.Cols, originalColName)
 	if originalCol == nil || originalCol.Hidden {
 		return false, moerr.NewBadFieldError(ctx.GetContext(), spec.ColumnName.ColNameOrigin(), alterPlan.TableDef.Name)
+	}
+	if spec.OptionType == tree.AlterColumnOptionSetVisibility && spec.Visibility == tree.VISIBLE_TYPE_INVISIBLE {
+		return false, moerr.NewNotSupported(ctx.GetContext(), "invisible columns")
 	}
 
 	for i, col := range tableDef.Cols {

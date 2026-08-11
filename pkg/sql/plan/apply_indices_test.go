@@ -4660,6 +4660,18 @@ func TestFullTextJoinRewriteLeftChild(t *testing.T) {
 	require.Len(t, joinNode.OnList, 1)
 }
 
+func TestFullTextJoinRewritePreservesPrimaryKeyCharset(t *testing.T) {
+	builder, joinID, leftScanID, _ := buildFullTextJoinRewriteTestPlan(t, true, false, false)
+	builder.qry.Nodes[leftScanID].TableDef.Cols[0].Typ.Charset = uint32(types.CharsetUTF8MB4Bin)
+
+	_, err := builder.applyIndicesForJoins(joinID, builder.qry.Nodes[joinID], map[[2]int32]int{}, map[[2]int32]*planpb.Expr{})
+	require.NoError(t, err)
+
+	functionScans := collectFullTextFunctionScans(builder, builder.qry.Nodes[joinID].Children[0])
+	require.Len(t, functionScans, 1)
+	require.Equal(t, uint32(types.CharsetUTF8MB4Bin), functionScans[0].TableDef.Cols[0].Typ.Charset)
+}
+
 func TestFullTextJoinRewriteRightChild(t *testing.T) {
 	builder, joinID, leftScanID, rightScanID := buildFullTextJoinRewriteTestPlan(t, false, true, false)
 
@@ -4668,6 +4680,22 @@ func TestFullTextJoinRewriteRightChild(t *testing.T) {
 	require.Equal(t, joinID, newID)
 
 	joinNode := builder.qry.Nodes[joinID]
+	require.Equal(t, leftScanID, joinNode.Children[0])
+	require.NotEqual(t, rightScanID, joinNode.Children[1])
+	require.Equal(t, planpb.Node_JOIN, builder.qry.Nodes[joinNode.Children[1]].NodeType)
+	require.Equal(t, 1, countFullTextFunctionScans(builder, joinNode.Children[1]))
+	require.False(t, nodeHasFullTextMatchFilter(builder.qry.Nodes[rightScanID]))
+	require.Len(t, joinNode.OnList, 1)
+}
+
+func TestFullTextSemiJoinRewriteRightChild(t *testing.T) {
+	builder, joinID, leftScanID, rightScanID := buildFullTextJoinRewriteTestPlan(t, false, true, false)
+	joinNode := builder.qry.Nodes[joinID]
+	joinNode.JoinType = planpb.Node_SEMI
+
+	newID, err := builder.applyIndices(joinID, map[[2]int32]int{}, map[[2]int32]*planpb.Expr{})
+	require.NoError(t, err)
+	require.Equal(t, joinID, newID)
 	require.Equal(t, leftScanID, joinNode.Children[0])
 	require.NotEqual(t, rightScanID, joinNode.Children[1])
 	require.Equal(t, planpb.Node_JOIN, builder.qry.Nodes[joinNode.Children[1]].NodeType)

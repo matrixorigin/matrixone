@@ -234,3 +234,7 @@ select a,e.* from t1,unnest(t1.b,'$.people[0]') e where seq=0 and e.this=json_ex
 a    col    seq    key    path    index    value    this
 1    t1.b    0    address    $.people[0].address    null    "a2"    {"address": "a2", "name": "a1"}
 2    t1.b    0    address    $.people[0].address    null    "c2"    {"address": "c2", "name": "c1"}
+select min(`key`), max(`key`), min(path), max(path)
+from unnest('{"a":1,"B":2}') u;
+min(key)	max(key)	min(path)	max(path)
+a	B	$.a	$.B
