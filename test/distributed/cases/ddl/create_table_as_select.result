@@ -2058,8 +2058,8 @@ agg01  ¦  CREATE TABLE `agg01` (
   `avgcol` double DEFAULT NULL,
   `sumcol` decimal(38,0) DEFAULT NULL,
   `countcol` bigint NOT NULL,
-  `maxcol` double NOT NULL,
-  `mincol` double NOT NULL
+  `maxcol` double DEFAULT NULL,
+  `mincol` double DEFAULT NULL
 )
 select * from agg01;
 ➤ avgcol[8,54,0]  ¦  sumcol[3,38,0]  ¦  countcol[-5,64,0]  ¦  maxcol[8,54,0]  ¦  mincol[8,54,0]  𝄀
