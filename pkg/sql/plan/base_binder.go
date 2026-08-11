@@ -4984,10 +4984,10 @@ func normalizeDecimalStringLiteralComparisonArgs(ctx context.Context, name strin
 	return nil
 }
 
-// decimalStringLiteralValue recognizes character or binary string
-// literals and cast chains rooted in one. Dynamic string expressions retain
-// the generic REAL comparison path. Literal.IsBin is provenance rather than a
-// different numeric domain: MySQL parses its decimal text exactly here.
+// decimalStringLiteralValue recognizes character-string literals, including
+// _binary/BINARY character forms, and cast chains rooted in one. Raw hex/bit
+// literals use the varbinary byte-value domain and are deliberately excluded.
+// Dynamic string expressions retain the generic REAL comparison path.
 func decimalStringLiteralValue(expr *Expr) (string, bool) {
 	if expr == nil || !types.T(expr.Typ.Id).IsMySQLString() {
 		return "", false
