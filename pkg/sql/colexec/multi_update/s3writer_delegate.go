@@ -39,6 +39,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/deletion"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	sqlutil "github.com/matrixorigin/matrixone/pkg/sql/util"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
@@ -86,8 +87,9 @@ type s3WriterDelegate struct {
 	deleteBatches []*batch.BatchSet
 	segmentMap    map[string]int32
 
-	action   actionType
-	isRemote bool
+	action             actionType
+	isRemote           bool
+	rejectZeroTemporal bool
 
 	updateCtxs     []*MultiUpdateCtx
 	updateCtxInfos map[string]*updateCtxInfo
@@ -142,6 +144,7 @@ func newS3Writer(
 		deleteBlockMap:      make([]map[types.Blockid]*deleteBlockData, tableCount),
 		insertFreeLists:     make([]*containers.BatchFreeList, tableCount),
 		isRemote:            update.IsRemote,
+		rejectZeroTemporal:  update.RejectZeroTemporal,
 	}
 	for i := range writer.insertFreeLists {
 		writer.insertFreeLists[i] = containers.NewBatchFreeList(nil, nil, true)
@@ -284,7 +287,9 @@ func (writer *s3WriterDelegate) append(
 		if tableType == UpdateMainTable {
 			if mainTableNullPkFilter {
 				var checked *batch.Batch
-				if checked, err = projBat.Clone(mp, false); err != nil {
+				// This validation copy leaves any allocation-accounted join owner;
+				// it is short-lived and never published back into that owner.
+				if checked, err = sqlutil.CopyBatch(projBat, proc); err != nil {
 					return
 				}
 				nulls := checked.Vecs[mainTablePkProjectIdx].GetNulls().GetBitmap().Clone()
@@ -319,7 +324,9 @@ func (writer *s3WriterDelegate) append(
 			// Clone because SelectColumns shares vectors, and ShrinkByMask
 			// modifies in-place.
 			var filtered *batch.Batch
-			if filtered, err = projBat.Clone(mp, false); err != nil {
+			// The sinker owns the filtered copy independently of the input
+			// pipeline, so cross the allocation ownership boundary explicitly.
+			if filtered, err = sqlutil.CopyBatch(projBat, proc); err != nil {
 				return
 			}
 			nullIdx := writer.sortIndexes[i]
@@ -329,6 +336,12 @@ func (writer *s3WriterDelegate) append(
 			nulls := filtered.Vecs[nullIdx].GetNulls().GetBitmap().Clone()
 			filtered.ShrinkByMask(nulls, true, 0)
 			if filtered.RowCount() > 0 {
+				if tableType == UpdateMainTable {
+					if err = checkZeroTemporalInStrictMode(writer.rejectZeroTemporal, proc, filtered); err != nil {
+						filtered.Clean(mp)
+						return
+					}
+				}
 				err = writer.insertSinkers[i].Write(proc.Ctx, filtered)
 			}
 			filtered.Clean(mp)
@@ -336,6 +349,12 @@ func (writer *s3WriterDelegate) append(
 				return
 			}
 			continue
+		}
+
+		if tableType == UpdateMainTable {
+			if err = checkZeroTemporalInStrictMode(writer.rejectZeroTemporal, proc, projBat); err != nil {
+				return
+			}
 		}
 
 		if err = writer.insertSinkers[i].Write(proc.Ctx, projBat); err != nil {

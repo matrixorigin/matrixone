@@ -290,6 +290,7 @@ func GetForBackup(ctx context.Context, spec string, backend string) (res FileSer
 				return nil, err
 			}
 			args.NoBucketValidation = true
+			setBackupConnectionPool(&args)
 			res, err = NewS3FS(
 				ctx,
 				args,
@@ -311,4 +312,14 @@ func GetForBackup(ctx context.Context, spec string, backend string) (res FileSer
 	}
 
 	return
+}
+
+func setBackupConnectionPool(args *ObjectStorageArguments) {
+	if args.MaxConnsPerHost == 0 {
+		// A backup destination must not share the process-wide HTTP pool with
+		// the cluster source file service. A streaming copy retains its source
+		// response while opening the destination request; sharing a saturated
+		// per-host pool would make those two operations wait on each other.
+		args.MaxConnsPerHost = maxConnsPerHost
+	}
 }

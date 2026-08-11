@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	rt "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -27,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	txnpb "github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/stretchr/testify/require"
@@ -76,37 +78,41 @@ func newCodecTestProcess(t *testing.T) (*Process, client.TxnOperator) {
 	proc.SetQueryId("query-1")
 	proc.Base.UnixTime = 12345
 	proc.Base.SessionInfo = SessionInfo{
-		Account:             "acc",
-		User:                "user",
-		Host:                "host",
-		Role:                "role",
-		ConnectionID:        99,
-		Database:            "db1",
-		Version:             "v1",
-		TimeZone:            time.FixedZone("UTC+8", 8*3600),
-		LockWaitTimeout:     7,
-		LockWaitTimeoutSet:  true,
-		QueryId:             []string{"stmt-qid"},
-		MatrixOneNativeMode: true,
-		LogLevel:            zap.WarnLevel,
-		SessionId:           uuid.MustParse("11111111-2222-3333-4444-555555555555"),
+		Account:                             "acc",
+		User:                                "user",
+		Host:                                "host",
+		Role:                                "role",
+		ConnectionID:                        99,
+		Database:                            "db1",
+		Version:                             "v1",
+		TimeZone:                            time.FixedZone("UTC+8", 8*3600),
+		LockWaitTimeout:                     7,
+		LockWaitTimeoutSet:                  true,
+		QueryId:                             []string{"stmt-qid"},
+		MatrixOneNativeMode:                 true,
+		LogLevel:                            zap.WarnLevel,
+		SessionId:                           uuid.MustParse("11111111-2222-3333-4444-555555555555"),
+		ExplicitZeroTemporalCastReturnsNull: true,
+		SqlMode:                             "STRICT_TRANS_TABLES",
 	}
 	sp := NewStmtProfile(uuid.MustParse("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"), uuid.MustParse("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"))
 	sp.SetTxnId([]byte("txn-profile-123456"))
 	sp.SetStmtId(uuid.MustParse("cccccccc-cccc-cccc-cccc-cccccccccccc"))
 	proc.SetStmtProfile(sp)
+	sp.SetStatementRuntimeProfile("Insert", "DML", true)
 
 	vec := vector.NewVec(types.T_text.ToType())
 	require.NoError(t, vector.AppendBytes(vec, []byte("a"), false, proc.Mp()))
 	require.NoError(t, vector.AppendBytes(vec, []byte("b"), true, proc.Mp()))
 	proc.SetPrepareParamsWithIsBin(vec, []bool{true, false})
 	proc.SetAffectedRows(42)
+	proc.SetPlanSnapshotTS(timestamp.Timestamp{PhysicalTime: 123, LogicalTime: 4})
 	return proc, txnOp
 }
 
 func TestProcessCodecHelpers(t *testing.T) {
 	t.Run("limitation conversion", func(t *testing.T) {
-		lim := Limitation{Size: 1, BatchRows: 2, BatchSize: 3, PartitionRows: 4, ReaderSize: 5}
+		lim := Limitation{Size: 1, BatchRows: 2, BatchSize: 3, PartitionRows: 4, ReaderSize: 5, SpillSize: 6}
 		pb := convertToPipelineLimitation(lim)
 		require.Equal(t, lim.Size, pb.Size)
 		require.Equal(t, lim.BatchRows, pb.BatchRows)
@@ -127,24 +133,28 @@ func TestProcessCodecHelpers(t *testing.T) {
 		timeBytes, err := time.Now().In(time.UTC).MarshalBinary()
 		require.NoError(t, err)
 		info, err := ConvertToProcessSessionInfo(pipeline.SessionInfo{
-			User:                "u",
-			Host:                "h",
-			Role:                "r",
-			ConnectionId:        1,
-			Database:            "d",
-			Version:             "v",
-			Account:             "a",
-			QueryId:             []string{"q1"},
-			TimeZone:            timeBytes,
-			LockWaitTimeout:     9,
-			LockWaitTimeoutSet:  true,
-			MatrixoneNativeMode: true,
+			User:                                "u",
+			Host:                                "h",
+			Role:                                "r",
+			ConnectionId:                        1,
+			Database:                            "d",
+			Version:                             "v",
+			Account:                             "a",
+			QueryId:                             []string{"q1"},
+			TimeZone:                            timeBytes,
+			LockWaitTimeout:                     9,
+			LockWaitTimeoutSet:                  true,
+			MatrixoneNativeMode:                 true,
+			ExplicitZeroTemporalCastReturnsNull: true,
+			SqlMode:                             "STRICT_ALL_TABLES",
 		})
 		require.NoError(t, err)
 		require.Equal(t, "u", info.User)
 		require.Equal(t, int64(9), info.LockWaitTimeout)
 		require.True(t, info.MatrixOneNativeMode)
 		require.True(t, info.LockWaitTimeoutSet)
+		require.True(t, info.ExplicitZeroTemporalCastReturnsNull)
+		require.Equal(t, "STRICT_ALL_TABLES", info.SqlMode)
 		require.Equal(t, "UTC", info.TimeZone.String())
 
 		info, err = ConvertToProcessSessionInfo(pipeline.SessionInfo{TimeZone: []byte("bad")})
@@ -189,6 +199,114 @@ func TestProcessCodecHelpers(t *testing.T) {
 		require.Equal(t, defines.DefaultLockWaitTimeoutSeconds, resolveLockWaitTimeoutSeconds(proc),
 			"the legacy wire field must remain positive when an explicit clear is sent to an old peer")
 	})
+
+	t.Run("sql mode resolution", func(t *testing.T) {
+		require.Equal(t, "", resolveSqlMode(nil))
+
+		// Resolver present: its value wins.
+		proc := &Process{Base: &BaseProcess{SessionInfo: SessionInfo{SqlMode: "STRICT_ALL_TABLES"}}}
+		proc.SetResolveVariableFunc(func(string, bool, bool) (interface{}, error) {
+			return "STRICT_TRANS_TABLES", nil
+		})
+		require.Equal(t, "STRICT_TRANS_TABLES", resolveSqlMode(proc))
+
+		// Resolver returns explicit empty string -> sentinel (explicitly non-strict).
+		proc.SetResolveVariableFunc(func(string, bool, bool) (interface{}, error) {
+			return "", nil
+		})
+		require.Equal(t, EmptySqlModeSentinel, resolveSqlMode(proc))
+
+		// Resolver error / non-string -> fall back to captured SessionInfo.SqlMode.
+		proc.SetResolveVariableFunc(func(string, bool, bool) (interface{}, error) {
+			return nil, moerr.NewInternalErrorNoCtx("boom")
+		})
+		require.Equal(t, "STRICT_ALL_TABLES", resolveSqlMode(proc))
+
+		// Resolver is nil (remote CN): fall back to SessionInfo.SqlMode so a second
+		// forward preserves the upstream mode instead of defaulting to strict.
+		strictProc := &Process{Base: &BaseProcess{SessionInfo: SessionInfo{SqlMode: "STRICT_TRANS_TABLES"}}}
+		require.Equal(t, "STRICT_TRANS_TABLES", resolveSqlMode(strictProc))
+
+		sentinelProc := &Process{Base: &BaseProcess{SessionInfo: SessionInfo{SqlMode: EmptySqlModeSentinel}}}
+		require.Equal(t, EmptySqlModeSentinel, resolveSqlMode(sentinelProc))
+
+		emptyProc := &Process{Base: &BaseProcess{SessionInfo: SessionInfo{}}}
+		require.Equal(t, "", resolveSqlMode(emptyProc))
+	})
+}
+
+func TestPrepareParamMetadataForRemoteCompatibility(t *testing.T) {
+	runtime := rt.ServiceRuntime("")
+	original, hadOriginal := runtime.GetGlobalVariables(rt.MOProtocolVersion)
+	defer func() {
+		if hadOriginal {
+			runtime.SetGlobalVariables(rt.MOProtocolVersion, original)
+		} else {
+			runtime.SetGlobalVariables(rt.MOProtocolVersion, defines.MORPCLatestVersion)
+		}
+	}()
+
+	metadata := make([]bool, 8) // N=2: legacy flags + three one-bit sections.
+	metadata[2] = true          // parameter 0 has integer provenance.
+	runtime.SetGlobalVariables(rt.MOProtocolVersion, defines.MORPCVersion11)
+	_, err := PrepareParamMetadataForRemote("", 2, metadata)
+	require.Error(t, err)
+
+	metadata[2] = false
+	metadata[0] = true // binary-only extended metadata is safe to down-pack.
+	legacy, err := PrepareParamMetadataForRemote("", 2, metadata)
+	require.NoError(t, err)
+	require.Equal(t, []bool{true, false}, legacy)
+
+	runtime.SetGlobalVariables(rt.MOProtocolVersion, defines.MORPCVersion12)
+	metadata[2] = true
+	extended, err := PrepareParamMetadataForRemote("", 2, metadata)
+	require.NoError(t, err)
+	require.Equal(t, metadata, extended)
+
+	_, err = PrepareParamMetadataForRemote("", 2, []bool{false, false, true})
+	require.Error(t, err, "partial extended metadata must not be silently interpreted")
+
+	invalidKind := []bool{false, true, false, true} // integer + boolean = 5
+	_, err = PrepareParamMetadataForRemote("", 1, invalidKind)
+	require.Error(t, err, "invalid packed kind bits must be rejected")
+}
+
+func TestCodecServiceRejectsPreparedProvenanceForOldProtocol(t *testing.T) {
+	runtime := rt.ServiceRuntime("")
+	original, hadOriginal := runtime.GetGlobalVariables(rt.MOProtocolVersion)
+	defer func() {
+		if hadOriginal {
+			runtime.SetGlobalVariables(rt.MOProtocolVersion, original)
+		} else {
+			runtime.SetGlobalVariables(rt.MOProtocolVersion, defines.MORPCLatestVersion)
+		}
+	}()
+
+	proc, _ := newCodecTestProcess(t)
+	defer proc.Free()
+	params := proc.GetPrepareParams()
+	proc.SetPrepareParamsWithMeta(params, []bool{false, false}, []vector.PrepareParamKind{
+		vector.PrepareParamFloat,
+		vector.PrepareParamNone,
+	})
+	runtime.SetGlobalVariables(rt.MOProtocolVersion, defines.MORPCVersion12)
+	info, err := proc.BuildProcessInfo("select ?")
+	require.NoError(t, err)
+
+	svc := NewCodecService(
+		fakeCodecTxnClient{op: fakeCodecTxnOperator{}},
+		nil, nil, nil, nil, nil, nil, nil,
+	).(*codecService)
+	runtime.SetGlobalVariables(rt.MOProtocolVersion, defines.MORPCVersion11)
+	_, err = svc.Decode(context.Background(), info)
+	require.Error(t, err)
+
+	runtime.SetGlobalVariables(rt.MOProtocolVersion, defines.MORPCVersion12)
+	decoded, err := svc.Decode(context.Background(), info)
+	require.NoError(t, err)
+	defer decoded.Free()
+	require.Equal(t, vector.PrepareParamFloat, decoded.GetPrepareParamKind(0))
 }
 
 func TestBuildProcessInfoAndMockProcessInfoWithPro(t *testing.T) {
@@ -202,9 +320,13 @@ func TestBuildProcessInfoAndMockProcessInfoWithPro(t *testing.T) {
 	require.Equal(t, []bool{false, true}, info.PrepareParams.Nulls)
 	require.Equal(t, []bool{true, false}, info.PrepareParams.IsBin)
 	require.Equal(t, int64(42), info.AffectedRows)
+	require.True(t, info.StatementRuntimeIgnore)
+	require.Equal(t, &timestamp.Timestamp{PhysicalTime: 123, LogicalTime: 4}, info.PlanSnapshotTs)
 	require.Equal(t, uint64(99), info.SessionInfo.ConnectionId)
 	require.Equal(t, int64(7), info.SessionInfo.LockWaitTimeout)
 	require.True(t, info.SessionInfo.MatrixoneNativeMode)
+	require.True(t, info.SessionInfo.ExplicitZeroTemporalCastReturnsNull)
+	require.Equal(t, "STRICT_TRANS_TABLES", info.SessionInfo.SqlMode)
 	require.True(t, info.SessionInfo.LockWaitTimeoutSet)
 	require.Equal(t, pipeline.SessionLoggerInfo_Warn, info.SessionLogger.LogLevel)
 
@@ -252,17 +374,32 @@ func TestCodecServiceEncodeDecodeAndLookup(t *testing.T) {
 	require.Equal(t, info.SessionInfo.User, decodedProc.Base.SessionInfo.User)
 	require.Equal(t, info.SessionInfo.LockWaitTimeout, decodedProc.Base.SessionInfo.LockWaitTimeout)
 	require.Equal(t, info.SessionInfo.MatrixoneNativeMode, decodedProc.Base.SessionInfo.MatrixOneNativeMode)
+	require.True(t, decodedProc.Base.SessionInfo.ExplicitZeroTemporalCastReturnsNull)
+	require.Equal(t, info.SessionInfo.SqlMode, decodedProc.Base.SessionInfo.SqlMode)
 	require.Equal(t, info.SessionInfo.LockWaitTimeoutSet, decodedProc.Base.SessionInfo.LockWaitTimeoutSet)
 	require.NotNil(t, decodedProc.GetPrepareParams())
 	require.Equal(t, 2, decodedProc.GetPrepareParams().Length())
 	require.True(t, decodedProc.GetPrepareParams().GetNulls().Contains(1))
 	require.True(t, decodedProc.GetPrepareParamIsBin(0))
 	require.False(t, decodedProc.GetPrepareParamIsBin(1))
+	require.Equal(t, vector.PrepareParamNone, decodedProc.GetPrepareParamKind(0))
+	require.Equal(t, vector.PrepareParamNone, decodedProc.GetPrepareParamKind(1))
 	require.Equal(t, int64(42), decodedProc.GetAffectedRows())
+	require.True(t, decodedProc.GetStmtProfile().GetStatementIgnore())
+	decodedPlanSnapshot, ok := decodedProc.GetPlanSnapshotTS()
+	require.True(t, ok)
+	require.Equal(t, timestamp.Timestamp{PhysicalTime: 123, LogicalTime: 4}, decodedPlanSnapshot)
 	decodedParams := decodedProc.GetPrepareParams()
 	require.NotPanics(t, decodedProc.Free)
 	require.Nil(t, decodedParams.GetData())
 	require.Nil(t, decodedParams.GetArea())
+
+	info.PlanSnapshotTs = nil // simulate a sender from before the field existed
+	legacyProc, err := svc.Decode(context.Background(), info)
+	require.NoError(t, err)
+	_, ok = legacyProc.GetPlanSnapshotTS()
+	require.False(t, ok)
+	require.NotPanics(t, legacyProc.Free)
 
 	rtSvc := "codec-test-svc"
 	runtime := rt.DefaultRuntime()
@@ -271,12 +408,47 @@ func TestCodecServiceEncodeDecodeAndLookup(t *testing.T) {
 	require.Same(t, svc, GetCodecService(rtSvc))
 }
 
+func TestPlanSnapshotIsCopiedPerPipelineProcess(t *testing.T) {
+	proc, _ := newCodecTestProcess(t)
+	firstSnapshot := timestamp.Timestamp{PhysicalTime: 10}
+	secondSnapshot := timestamp.Timestamp{PhysicalTime: 20}
+	proc.SetPlanSnapshotTS(firstSnapshot)
+
+	child := proc.NewNoContextChildProc(0)
+	got, ok := child.GetPlanSnapshotTS()
+	require.True(t, ok)
+	require.Equal(t, firstSnapshot, got)
+	channelChild := proc.NewNoContextChildProcWithChannel(1, []int32{1}, []int32{0})
+	got, ok = channelChild.GetPlanSnapshotTS()
+	require.True(t, ok)
+	require.Equal(t, firstSnapshot, got)
+
+	// A later generation on the top process cannot mutate an already-created
+	// pipeline generation because setting a generation installs a new immutable
+	// binding rather than mutating the prior one.
+	proc.SetPlanSnapshotTS(secondSnapshot)
+	got, ok = child.GetPlanSnapshotTS()
+	require.True(t, ok)
+	require.Equal(t, firstSnapshot, got)
+
+	proc.ClearPlanSnapshotTS()
+	legacyChild := proc.NewNoContextChildProc(0)
+	_, ok = legacyChild.GetPlanSnapshotTS()
+	require.False(t, ok)
+	proc.Free()
+}
+
 func TestCodecServiceRoundTripsPreparedRowsFrameParams(t *testing.T) {
 	proc, _ := newCodecTestProcess(t)
 	frameParams := vector.NewVec(types.T_text.ToType())
 	require.NoError(t, vector.AppendBytes(frameParams, []byte("1"), false, proc.Mp()))
 	require.NoError(t, vector.AppendBytes(frameParams, []byte("0"), false, proc.Mp()))
-	proc.SetPrepareParamsWithIsBin(frameParams, []bool{true, false})
+	require.NoError(t, vector.AppendBytes(frameParams, []byte("true"), false, proc.Mp()))
+	proc.SetPrepareParamsWithMeta(frameParams, []bool{true, false, false}, []vector.PrepareParamKind{
+		vector.PrepareParamNone,
+		vector.PrepareParamDecimal,
+		vector.PrepareParamBoolean,
+	})
 
 	svc := NewCodecService(fakeCodecTxnClient{op: fakeCodecTxnOperator{}}, nil, nil, nil, nil, nil, nil, nil)
 	payload, err := svc.Encode(proc, "select sum(n) over (order by id rows between ? preceding and ? following)")
@@ -284,19 +456,30 @@ func TestCodecServiceRoundTripsPreparedRowsFrameParams(t *testing.T) {
 
 	info := pipeline.ProcessInfo{}
 	require.NoError(t, info.Unmarshal(payload))
+	require.Equal(t, []bool{
+		true, false, false,
+		false, true, false,
+		false, true, false,
+		false, false, true,
+	}, info.PrepareParams.IsBin)
 	decodedProc, err := svc.Decode(context.Background(), info)
 	require.NoError(t, err)
 	defer decodedProc.Free()
 
 	decodedParams := decodedProc.GetPrepareParams()
 	require.NotNil(t, decodedParams)
-	require.Equal(t, 2, decodedParams.Length())
+	require.Equal(t, 3, decodedParams.Length())
 	require.False(t, decodedParams.GetNulls().Contains(0))
 	require.False(t, decodedParams.GetNulls().Contains(1))
+	require.False(t, decodedParams.GetNulls().Contains(2))
 	require.True(t, decodedProc.GetPrepareParamIsBin(0))
 	require.False(t, decodedProc.GetPrepareParamIsBin(1))
+	require.Equal(t, vector.PrepareParamNone, decodedProc.GetPrepareParamKind(0))
+	require.Equal(t, vector.PrepareParamDecimal, decodedProc.GetPrepareParamKind(1))
+	require.Equal(t, vector.PrepareParamBoolean, decodedProc.GetPrepareParamKind(2))
 	require.Equal(t, "1", decodedParams.GetStringAt(0))
 	require.Equal(t, "0", decodedParams.GetStringAt(1))
+	require.Equal(t, "true", decodedParams.GetStringAt(2))
 }
 
 func TestCodecServiceDecodesLegacyPrepareParamsWithoutBinaryFlags(t *testing.T) {
@@ -304,6 +487,9 @@ func TestCodecServiceDecodesLegacyPrepareParamsWithoutBinaryFlags(t *testing.T) 
 	info, err := proc.BuildProcessInfo("select ?")
 	require.NoError(t, err)
 	info.PrepareParams.IsBin = nil
+	// An old coordinator does not send the new field. Protobuf decodes that
+	// absence as false, preserving the prior strict-mode behavior remotely.
+	info.StatementRuntimeIgnore = false
 
 	payload, err := info.Marshal()
 	require.NoError(t, err)
@@ -318,6 +504,9 @@ func TestCodecServiceDecodesLegacyPrepareParamsWithoutBinaryFlags(t *testing.T) 
 	require.Equal(t, 2, decodedProc.GetPrepareParams().Length())
 	require.False(t, decodedProc.GetPrepareParamIsBin(0))
 	require.False(t, decodedProc.GetPrepareParamIsBin(1))
+	require.Equal(t, vector.PrepareParamNone, decodedProc.GetPrepareParamKind(0))
+	require.Equal(t, vector.PrepareParamNone, decodedProc.GetPrepareParamKind(1))
+	require.False(t, decodedProc.GetStmtProfile().GetStatementIgnore())
 	decodedProc.Free()
 }
 

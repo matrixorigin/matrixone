@@ -17,6 +17,7 @@ package function
 import (
 	"bytes"
 	"sort"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -28,6 +29,9 @@ import (
 func betweenImpl(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	paramType := parameters[0].GetType()
 	rs := vector.MustFunctionResult[bool](result)
+	if isMixedDatetimeTimestampTypes(parameters) {
+		return opBetweenDatetimeTimestamp(parameters, rs, proc, length)
+	}
 	switch paramType.Oid {
 	case types.T_bool:
 		return opBetweenBool(parameters, rs, proc, length)
@@ -81,6 +85,147 @@ func betweenImpl(parameters []*vector.Vector, result vector.FunctionResultWrappe
 	}
 
 	panic("unreached code")
+}
+
+func isMixedDatetimeTimestampTypes(parameters []*vector.Vector) bool {
+	if len(parameters) != 3 {
+		return false
+	}
+	hasDatetime, hasTimestamp := false, false
+	for _, parameter := range parameters {
+		switch parameter.GetType().Oid {
+		case types.T_datetime:
+			hasDatetime = true
+		case types.T_timestamp:
+			hasTimestamp = true
+		default:
+			return false
+		}
+	}
+	return hasDatetime && hasTimestamp
+}
+
+func opBetweenDatetimeTimestamp(
+	parameters []*vector.Vector,
+	result *vector.FunctionResult[bool],
+	proc *process.Process,
+	length int,
+) error {
+	zone := proc.GetSessionInfo().TimeZone
+	valueScale := parameters[0].GetType().Scale
+	lowerScale := parameters[1].GetType().Scale
+	upperScale := parameters[2].GetType().Scale
+
+	switch {
+	case parameters[0].GetType().Oid == types.T_datetime &&
+		parameters[1].GetType().Oid == types.T_datetime:
+		return opBetweenTemporal[types.Datetime, types.Datetime, types.Timestamp](
+			parameters, result, length,
+			func(value, lower types.Datetime) bool { return value >= lower },
+			func(value types.Datetime, upper types.Timestamp) bool {
+				return value.ToTimestamp(zone).TruncateToScale(upperScale) <= upper
+			})
+	case parameters[0].GetType().Oid == types.T_datetime &&
+		parameters[2].GetType().Oid == types.T_datetime:
+		return opBetweenTemporal[types.Datetime, types.Timestamp, types.Datetime](
+			parameters, result, length,
+			func(value types.Datetime, lower types.Timestamp) bool {
+				return value.ToTimestamp(zone).TruncateToScale(lowerScale) >= lower
+			},
+			func(value, upper types.Datetime) bool { return value <= upper })
+	case parameters[0].GetType().Oid == types.T_datetime:
+		return opBetweenDatetimeAndTimestampBounds(
+			parameters, result, zone, lowerScale, length,
+		)
+	case parameters[0].GetType().Oid == types.T_timestamp &&
+		parameters[1].GetType().Oid == types.T_timestamp:
+		return opBetweenTemporal[types.Timestamp, types.Timestamp, types.Datetime](
+			parameters, result, length,
+			func(value, lower types.Timestamp) bool { return value >= lower },
+			func(value types.Timestamp, upper types.Datetime) bool {
+				return value <= upper.ToTimestamp(zone).TruncateToScale(valueScale)
+			})
+	case parameters[0].GetType().Oid == types.T_timestamp &&
+		parameters[2].GetType().Oid == types.T_timestamp:
+		return opBetweenTemporal[types.Timestamp, types.Datetime, types.Timestamp](
+			parameters, result, length,
+			func(value types.Timestamp, lower types.Datetime) bool {
+				return value >= lower.ToTimestamp(zone).TruncateToScale(valueScale)
+			},
+			func(value, upper types.Timestamp) bool { return value <= upper })
+	default:
+		return opBetweenTemporal[types.Timestamp, types.Datetime, types.Datetime](
+			parameters, result, length,
+			func(value types.Timestamp, lower types.Datetime) bool {
+				return value >= lower.ToTimestamp(zone).TruncateToScale(valueScale)
+			},
+			func(value types.Timestamp, upper types.Datetime) bool {
+				return value <= upper.ToTimestamp(zone).TruncateToScale(valueScale)
+			})
+	}
+}
+
+// The pre-existing BETWEEN cast rule converted the value using the lower
+// comparison's target type, then reused that value for the upper comparison.
+// Preserve that observable precision contract while keeping the plan operands
+// cross-typed so storage can still see an unwrapped DATETIME column.
+func opBetweenDatetimeAndTimestampBounds(
+	parameters []*vector.Vector,
+	result *vector.FunctionResult[bool],
+	zone *time.Location,
+	timestampScale int32,
+	length int,
+) error {
+	valueParam := vector.GenerateFunctionFixedTypeParameter[types.Datetime](parameters[0])
+	lowerParam := vector.GenerateFunctionFixedTypeParameter[types.Timestamp](parameters[1])
+	upperParam := vector.GenerateFunctionFixedTypeParameter[types.Timestamp](parameters[2])
+	resultVector := result.GetResultVector()
+	values := vector.MustFixedColNoTypeCheck[bool](resultVector)
+	resultNulls := resultVector.GetNulls()
+
+	for i := uint64(0); i < uint64(length); i++ {
+		value, valueNull := valueParam.GetValue(i)
+		lower, lowerNull := lowerParam.GetValue(i)
+		upper, upperNull := upperParam.GetValue(i)
+		if valueNull || lowerNull || upperNull {
+			resultNulls.Add(i)
+			continue
+		}
+		instant := value.ToTimestamp(zone).TruncateToScale(timestampScale)
+		values[i] = instant >= lower && instant <= upper
+	}
+	return nil
+}
+
+func opBetweenTemporal[
+	V types.Datetime | types.Timestamp,
+	L types.Datetime | types.Timestamp,
+	U types.Datetime | types.Timestamp,
+](
+	parameters []*vector.Vector,
+	result *vector.FunctionResult[bool],
+	length int,
+	matchesLower func(V, L) bool,
+	matchesUpper func(V, U) bool,
+) error {
+	valueParam := vector.GenerateFunctionFixedTypeParameter[V](parameters[0])
+	lowerParam := vector.GenerateFunctionFixedTypeParameter[L](parameters[1])
+	upperParam := vector.GenerateFunctionFixedTypeParameter[U](parameters[2])
+	resultVector := result.GetResultVector()
+	values := vector.MustFixedColNoTypeCheck[bool](resultVector)
+	resultNulls := resultVector.GetNulls()
+
+	for i := uint64(0); i < uint64(length); i++ {
+		value, valueNull := valueParam.GetValue(i)
+		lower, lowerNull := lowerParam.GetValue(i)
+		upper, upperNull := upperParam.GetValue(i)
+		if valueNull || lowerNull || upperNull {
+			resultNulls.Add(i)
+			continue
+		}
+		values[i] = matchesLower(value, lower) && matchesUpper(value, upper)
+	}
+	return nil
 }
 
 func opBetweenBool(

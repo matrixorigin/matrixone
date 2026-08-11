@@ -113,6 +113,116 @@ func Test_inc_dec(t *testing.T) {
 	assert.False(t, rt.connectionBeCounted.Load())
 }
 
+func newUnitTestRoutine(t *testing.T, connID uint32) (*Routine, *MysqlProtocolImpl) {
+	t.Helper()
+	pu, err := getParameterUnit("test/system_vars_config.toml", nil, nil)
+	require.NoError(t, err)
+	pu.SV.KillRountinesInterval = 0
+	setSessionAlloc("", NewLeakCheckAllocator())
+	setPu("", pu)
+
+	conn := &Conn{
+		conn:       &testConn{},
+		localAddr:  "local",
+		remoteAddr: "remote",
+	}
+	proto := NewMysqlClientProtocol("", connID, conn, int(pu.SV.MaxBytesInOutbufToFlush), pu.SV)
+	rt := NewRoutine(context.Background(), proto, pu.SV)
+	return rt, proto
+}
+
+func TestRoutineStateHelpers(t *testing.T) {
+	rt, proto := newUnitTestRoutine(t, 42)
+
+	require.True(t, rt.needPrintSessionInfo())
+	require.False(t, rt.needPrintSessionInfo())
+
+	rt.setResricted(true)
+	require.True(t, rt.isRestricted())
+	rt.setResricted(false)
+	require.False(t, rt.isRestricted())
+
+	rt.setExpired(true)
+	require.True(t, rt.isExpired())
+	rt.setExpired(false)
+	require.False(t, rt.isExpired())
+
+	require.False(t, rt.setCancelled(true))
+	require.True(t, rt.isCancelled())
+	require.True(t, rt.setCancelled(false))
+	require.False(t, rt.isCancelled())
+
+	require.Same(t, proto, rt.getProtocol())
+	require.Equal(t, uint32(42), rt.getConnectionID())
+	require.NotZero(t, rt.getGoroutineId())
+	require.Same(t, rt.parameters, rt.getParameters())
+	require.Nil(t, (*Routine)(nil).getSession())
+}
+
+func TestRoutineRequestCallbacksAndCancelContexts(t *testing.T) {
+	rt, _ := newUnitTestRoutine(t, 43)
+
+	var called int32
+	rt.execCallbackBasedOnRequest(false, func() {
+		atomic.AddInt32(&called, 1)
+	})
+	require.Equal(t, int32(1), called)
+
+	rt.setInProcessRequest(true)
+	rt.execCallbackBasedOnRequest(false, func() {
+		atomic.AddInt32(&called, 1)
+	})
+	require.Equal(t, int32(1), called)
+	rt.execCallbackBasedOnRequest(true, func() {
+		atomic.AddInt32(&called, 1)
+	})
+	require.Equal(t, int32(2), called)
+
+	reqCtx, cancelReq := context.WithCancel(context.Background())
+	rt.setCancelRequestFunc(cancelReq)
+	rt.cancelRequestCtx()
+	require.ErrorIs(t, reqCtx.Err(), context.Canceled)
+
+	routineCtx := rt.getCancelRoutineCtx()
+	rt.releaseRoutineCtx()
+	require.Eventually(t, func() bool {
+		return routineCtx.Err() == context.Canceled
+	}, time.Second, 10*time.Millisecond)
+}
+
+func TestRoutineKillQueryAndConnection(t *testing.T) {
+	rt, _ := newUnitTestRoutine(t, 44)
+	ses := &Session{}
+	ses.SetQueryInExecute(true)
+	rt.setSession(ses)
+
+	reqCtx, cancelReq := context.WithCancel(context.Background())
+	rt.setCancelRequestFunc(cancelReq)
+	rt.killQuery(false, "")
+	require.ErrorIs(t, reqCtx.Err(), context.Canceled)
+	require.False(t, ses.GetQueryInExecute())
+
+	rt.setCancelled(false)
+	routineCtx := rt.getCancelRoutineCtx()
+	rt.killConnection(false)
+	require.True(t, rt.isCancelled())
+	require.ErrorIs(t, routineCtx.Err(), context.Canceled)
+
+	rt.killConnection(false)
+	require.True(t, rt.isCancelled())
+}
+
+func TestRoutineCleanupContextFallback(t *testing.T) {
+	rt, _ := newUnitTestRoutine(t, 45)
+	require.NotNil(t, rt.getCleanupContext())
+
+	rm := &RoutineManager{}
+	ses := &Session{}
+	ses.setRoutineManager(rm)
+	rt.setSession(ses)
+	require.NotNil(t, rt.getCleanupContext())
+}
+
 func TestRoutineCleanupWithoutSession(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	rt := &Routine{
@@ -244,6 +354,9 @@ func TestRoutineCloseCancelsResetRollback(t *testing.T) {
 	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
 	txnOp.EXPECT().Txn().Return(txn.TxnMeta{}).AnyTimes()
 	txnOp.EXPECT().SetFootPrints(gomock.Any(), gomock.Any()).AnyTimes()
+	workspace := mock_frontend.NewMockWorkspace(ctrl)
+	workspace.EXPECT().GetHaveDDL().Return(false)
+	txnOp.EXPECT().GetWorkspace().Return(workspace)
 	rollbackStarted := make(chan struct{})
 	txnOp.EXPECT().Rollback(gomock.Any()).DoAndReturn(func(ctx context.Context) error {
 		close(rollbackStarted)
@@ -310,6 +423,9 @@ func TestRoutineCleanupCancelsRequestBeforeRollback(t *testing.T) {
 	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
 	txnOp.EXPECT().Txn().Return(txn.TxnMeta{}).AnyTimes()
 	txnOp.EXPECT().SetFootPrints(gomock.Any(), gomock.Any()).AnyTimes()
+	workspace := mock_frontend.NewMockWorkspace(ctrl)
+	workspace.EXPECT().GetHaveDDL().Return(false)
+	txnOp.EXPECT().GetWorkspace().Return(workspace)
 
 	routine := NewRoutine(context.Background(), ses.GetResponser().MysqlRrWr(), &config.FrontendParameters{})
 	routine.setSession(ses)
@@ -349,6 +465,8 @@ func TestMigrateConnectionFromPreservesLastAffectedRows(t *testing.T) {
 func TestRoutineResetSessionKeepsReplacementRegistered(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	oldSession := newTestSession(t, ctrl)
+	timeZone := time.FixedZone("reset-session-test", 8*60*60)
+	oldSession.SetTimeZone(timeZone)
 	rm, err := NewRoutineManager(context.Background(), "")
 	require.NoError(t, err)
 	rm.sessionManager = queryservice.NewSessionManager()
@@ -372,6 +490,7 @@ func TestRoutineResetSessionKeepsReplacementRegistered(t *testing.T) {
 
 	require.NotSame(t, oldSession, newSession)
 	require.Equal(t, oldSession.GetUUIDString(), newSession.GetUUIDString())
+	require.Same(t, timeZone, newSession.GetTimeZone())
 
 	registered := rm.sessionManager.GetAllSessions()
 	require.Len(t, registered, 1, "successful reset must keep the replacement session registered")
@@ -404,6 +523,9 @@ func TestRoutineResetSessionFailureRestoresProtocolState(t *testing.T) {
 	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
 	txnOp.EXPECT().Txn().Return(txn.TxnMeta{}).AnyTimes()
 	txnOp.EXPECT().SetFootPrints(gomock.Any(), gomock.Any()).AnyTimes()
+	workspace := mock_frontend.NewMockWorkspace(ctrl)
+	workspace.EXPECT().GetHaveDDL().Return(false)
+	txnOp.EXPECT().GetWorkspace().Return(workspace)
 	txnOp.EXPECT().Rollback(gomock.Any()).Return(assert.AnError)
 	oldSession.txnHandler = InitTxnHandler("", eng, context.Background(), txnOp)
 	oldSession.txnHandler.shareTxn = false

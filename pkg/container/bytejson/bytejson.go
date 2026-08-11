@@ -16,6 +16,7 @@ package bytejson
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -38,11 +39,19 @@ func (bj ByteJson) String() string {
 }
 
 func (bj ByteJson) Unquote() (string, error) {
+	if bj.Type == TpCodeBlob {
+		if payload, ok := bj.persistedBitPayload(); ok {
+			return base64.StdEncoding.EncodeToString(payload), nil
+		}
+		return string(bj.GetString()), nil
+	}
+	if bj.Type == TpCodeOpaque || bj.Type == TpCodeBit {
+		return base64.StdEncoding.EncodeToString(bj.GetString()), nil
+	}
 	if bj.Type != TpCodeString &&
 		bj.Type != TpCodeDate &&
 		bj.Type != TpCodeTime &&
-		bj.Type != TpCodeDatetime &&
-		bj.Type != TpCodeBlob {
+		bj.Type != TpCodeDatetime {
 		return bj.String(), nil
 	}
 	str := bj.GetString()
@@ -88,10 +97,28 @@ func (bj ByteJson) MarshalJSON() ([]byte, error) {
 
 // Marshal transform bytejson to []byte,for storage
 func (bj ByteJson) Marshal() ([]byte, error) {
-	buf := make([]byte, len(bj.Data)+1)
-	buf[0] = byte(bj.Type)
-	copy(buf[1:], bj.Data)
+	stored, err := bj.StorageCompatible()
+	if err != nil {
+		return nil, err
+	}
+	buf := make([]byte, len(stored.Data)+1)
+	buf[0] = byte(stored.Type)
+	copy(buf[1:], stored.Data)
 	return buf, nil
+}
+
+// StorageCompatible returns a representation that only uses type codes known
+// before TpCodeOpaque and TpCodeBit were introduced. The receiver is returned
+// unchanged when it is already safe to persist.
+func (bj ByteJson) StorageCompatible() (ByteJson, error) {
+	if !bj.requiresLegacyBinaryEncoding() {
+		return bj, nil
+	}
+	tp, data, err := appendLegacyCompatibleJSON(nil, bj)
+	if err != nil {
+		return ByteJson{}, err
+	}
+	return ByteJson{Type: tp, Data: data}, nil
 }
 
 // Unmarshal transform storage []byte  to bytejson
@@ -175,10 +202,27 @@ func (bj ByteJson) to(buf []byte) ([]byte, error) {
 	case TpCodeDecimal:
 		data := bj.GetString()
 		buf = append(buf, data...)
-	case TpCodeDate, TpCodeTime, TpCodeDatetime, TpCodeBlob:
+	case TpCodeDate, TpCodeTime, TpCodeDatetime:
 		buf = append(buf, '"')
 		data := bj.GetString()
 		buf = append(buf, data...)
+		buf = append(buf, '"')
+	case TpCodeBlob:
+		buf = append(buf, '"')
+		if payload, ok := bj.persistedBitPayload(); ok {
+			start := len(buf)
+			buf = append(buf, make([]byte, base64.StdEncoding.EncodedLen(len(payload)))...)
+			base64.StdEncoding.Encode(buf[start:], payload)
+		} else {
+			buf = append(buf, bj.GetString()...)
+		}
+		buf = append(buf, '"')
+	case TpCodeOpaque, TpCodeBit:
+		buf = append(buf, '"')
+		data := bj.GetString()
+		start := len(buf)
+		buf = append(buf, make([]byte, base64.StdEncoding.EncodedLen(len(data)))...)
+		base64.StdEncoding.Encode(buf[start:], data)
 		buf = append(buf, '"')
 	default:
 		err = moerr.NewInvalidInputNoCtxf("invalid json type '%v'", bj.Type)
@@ -309,13 +353,431 @@ func (bj ByteJson) getValEntry(off int) ByteJson {
 		return ByteJson{Type: TpCodeLiteral, Data: bj.Data[off+valTypeSize : off+valTypeSize+1]}
 	case TpCodeUint64, TpCodeInt64, TpCodeFloat64:
 		return ByteJson{Type: TpCode(tpCode), Data: bj.Data[valOff : valOff+numberSize]}
-	case TpCodeString, TpCodeDecimal, TpCodeDate, TpCodeTime, TpCodeDatetime, TpCodeBlob:
+	case TpCodeString, TpCodeDecimal, TpCodeDate, TpCodeTime, TpCodeDatetime, TpCodeBlob, TpCodeOpaque, TpCodeBit:
 		num, length := calStrLen(bj.Data[valOff:])
 		totalLen := uint32(num) + uint32(length)
 		return ByteJson{Type: TpCode(tpCode), Data: bj.Data[valOff : valOff+totalLen]}
 	}
 	dataBytes := endian.Uint32(bj.Data[valOff+docSizeOff:])
 	return ByteJson{Type: TpCode(tpCode), Data: bj.Data[valOff : valOff+dataBytes]}
+}
+
+const persistedBitPrefix = "~mo:json-bit:v1:"
+
+func (bj ByteJson) persistedBitPayload() ([]byte, bool) {
+	if bj.Type != TpCodeBlob {
+		return nil, false
+	}
+	payload := bj.GetString()
+	if !bytes.HasPrefix(payload, []byte(persistedBitPrefix)) {
+		return nil, false
+	}
+	raw, err := base64.StdEncoding.DecodeString(string(payload[len(persistedBitPrefix):]))
+	if err != nil {
+		return nil, false
+	}
+	return raw, true
+}
+
+func (bj ByteJson) requiresLegacyBinaryEncoding() bool {
+	switch bj.Type {
+	case TpCodeOpaque, TpCodeBit:
+		return true
+	case TpCodeArray:
+		for i := 0; i < bj.GetElemCnt(); i++ {
+			if bj.getArrayElem(i).requiresLegacyBinaryEncoding() {
+				return true
+			}
+		}
+	case TpCodeObject:
+		for i := 0; i < bj.GetElemCnt(); i++ {
+			if bj.getObjectVal(i).requiresLegacyBinaryEncoding() {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// appendLegacyCompatibleJSON writes only type codes understood by readers
+// predating TpCodeOpaque and TpCodeBit. Opaque values use the legacy BLOB
+// representation; BIT values use a tagged BLOB payload whose subtype new
+// readers recover through TYPE, display, and comparison operations.
+func appendLegacyCompatibleJSON(buf []byte, bj ByteJson) (TpCode, []byte, error) {
+	switch bj.Type {
+	case TpCodeOpaque:
+		encoded := base64.StdEncoding.EncodeToString(bj.GetString())
+		return TpCodeBlob, appendBinaryString(buf, encoded), nil
+	case TpCodeBit:
+		encoded := persistedBitPrefix + base64.StdEncoding.EncodeToString(bj.GetString())
+		return TpCodeBlob, appendBinaryString(buf, encoded), nil
+	case TpCodeArray:
+		data, err := appendLegacyCompatibleArray(buf, bj)
+		return TpCodeArray, data, err
+	case TpCodeObject:
+		data, err := appendLegacyCompatibleObject(buf, bj)
+		return TpCodeObject, data, err
+	default:
+		return bj.Type, append(buf, bj.Data...), nil
+	}
+}
+
+func appendLegacyCompatibleArray(buf []byte, bj ByteJson) ([]byte, error) {
+	docOff := len(buf)
+	count := bj.GetElemCnt()
+	buf = appendUint32(buf, uint32(count))
+	buf = appendZero(buf, docSizeOff)
+	valEntryBegin := len(buf)
+	buf = appendZero(buf, count*valEntrySize)
+	for i := 0; i < count; i++ {
+		var err error
+		buf, err = appendLegacyCompatibleValueEntry(buf, docOff, valEntryBegin+i*valEntrySize, bj.getArrayElem(i))
+		if err != nil {
+			return nil, err
+		}
+	}
+	endian.PutUint32(buf[docOff+docSizeOff:], uint32(len(buf)-docOff))
+	return buf, nil
+}
+
+func appendLegacyCompatibleObject(buf []byte, bj ByteJson) ([]byte, error) {
+	docOff := len(buf)
+	count := bj.GetElemCnt()
+	buf = appendUint32(buf, uint32(count))
+	buf = appendZero(buf, docSizeOff)
+	keyEntryBegin := len(buf)
+	buf = appendZero(buf, count*keyEntrySize)
+	valEntryBegin := len(buf)
+	buf = appendZero(buf, count*valEntrySize)
+	for i := 0; i < count; i++ {
+		key := bj.getObjectKey(i)
+		keyEntryOff := keyEntryBegin + i*keyEntrySize
+		endian.PutUint32(buf[keyEntryOff:], uint32(len(buf)-docOff))
+		endian.PutUint16(buf[keyEntryOff+keyOriginOff:], uint16(len(key)))
+		buf = append(buf, key...)
+	}
+	for i := 0; i < count; i++ {
+		var err error
+		buf, err = appendLegacyCompatibleValueEntry(buf, docOff, valEntryBegin+i*valEntrySize, bj.getObjectVal(i))
+		if err != nil {
+			return nil, err
+		}
+	}
+	endian.PutUint32(buf[docOff+docSizeOff:], uint32(len(buf)-docOff))
+	return buf, nil
+}
+
+func appendLegacyCompatibleValueEntry(buf []byte, docOff, valEntryOff int, bj ByteJson) ([]byte, error) {
+	elemOff := len(buf)
+	tp, buf, err := appendLegacyCompatibleJSON(buf, bj)
+	if err != nil {
+		return nil, err
+	}
+	buf[valEntryOff] = byte(tp)
+	if tp == TpCodeLiteral {
+		buf[valEntryOff+valTypeSize] = buf[elemOff]
+		return buf[:elemOff], nil
+	}
+	endian.PutUint32(buf[valEntryOff+valTypeSize:], uint32(elemOff-docOff))
+	return buf, nil
+}
+
+type binaryJSONSubtype uint8
+
+const (
+	binaryJSONBit binaryJSONSubtype = iota
+	binaryJSONBlob
+)
+
+const (
+	binaryJSONCompareEncodedChunkSize = 4 * 1024
+	binaryJSONCompareDecodedChunkSize = binaryJSONCompareEncodedChunkSize / 4 * 3
+)
+
+type binaryJSONValueView struct {
+	subtype       binaryJSONSubtype
+	rawPayload    []byte
+	legacyEncoded []byte
+	fallbackRaw   []byte
+}
+
+func binaryJSONValue(bj ByteJson) (binaryJSONValueView, bool) {
+	switch bj.Type {
+	case TpCodeBlob:
+		payload := bj.GetString()
+		if bytes.HasPrefix(payload, []byte(persistedBitPrefix)) {
+			encoded := payload[len(persistedBitPrefix):]
+			if _, ok := base64DecodedLen(encoded); ok {
+				return binaryJSONValueView{
+					subtype:       binaryJSONBit,
+					legacyEncoded: encoded,
+				}, true
+			}
+		}
+		return binaryJSONValueView{
+			subtype:       binaryJSONBlob,
+			legacyEncoded: payload,
+			fallbackRaw:   payload,
+		}, true
+	case TpCodeOpaque:
+		return binaryJSONValueView{
+			subtype:    binaryJSONBlob,
+			rawPayload: bj.GetString(),
+		}, true
+	case TpCodeBit:
+		return binaryJSONValueView{
+			subtype:    binaryJSONBit,
+			rawPayload: bj.GetString(),
+		}, true
+	default:
+		return binaryJSONValueView{}, false
+	}
+}
+
+// CompareBinaryJSON compares opaque JSON values by their MySQL subtype and
+// original bytes. TpCodeBlob is the legacy BLOB encoding and aliases Opaque.
+func CompareBinaryJSON(left, right ByteJson) (int, bool) {
+	leftValue, leftOK := binaryJSONValue(left)
+	rightValue, rightOK := binaryJSONValue(right)
+	if !leftOK || !rightOK {
+		return 0, false
+	}
+	if leftValue.subtype != rightValue.subtype {
+		return int(leftValue.subtype) - int(rightValue.subtype), true
+	}
+	switch {
+	case leftValue.legacyEncoded != nil && rightValue.legacyEncoded != nil:
+		if cmp, ok := compareDecodedBase64Payloads(leftValue.legacyEncoded, rightValue.legacyEncoded); ok {
+			return cmp, true
+		}
+		return bytes.Compare(leftValue.fallbackRaw, rightValue.fallbackRaw), true
+	case leftValue.legacyEncoded != nil:
+		if cmp, ok := compareDecodedBase64WithRaw(leftValue.legacyEncoded, rightValue.rawPayload); ok {
+			return cmp, true
+		}
+		return bytes.Compare(leftValue.fallbackRaw, rightValue.rawPayload), true
+	case rightValue.legacyEncoded != nil:
+		if cmp, ok := compareDecodedBase64WithRaw(rightValue.legacyEncoded, leftValue.rawPayload); ok {
+			return -cmp, true
+		}
+		return bytes.Compare(leftValue.rawPayload, rightValue.fallbackRaw), true
+	default:
+		return bytes.Compare(leftValue.rawPayload, rightValue.rawPayload), true
+	}
+}
+
+// BinaryJSONPayloadLen returns the decoded byte length of an opaque JSON
+// value. It keeps legacy TpCodeBlob values compatible with new raw payloads.
+func BinaryJSONPayloadLen(bj ByteJson) (int, bool) {
+	value, ok := binaryJSONValue(bj)
+	if !ok {
+		return 0, false
+	}
+	if value.legacyEncoded == nil {
+		return len(value.rawPayload), true
+	}
+	if n, ok := base64DecodedLen(value.legacyEncoded); ok {
+		return n, true
+	}
+	return len(value.fallbackRaw), true
+}
+
+const canonicalBinaryMarker byte = 0x84
+
+// CanonicalBinarySize returns the exact equality-key size for a binary JSON
+// value. Legacy Base64 BLOB/BIT representations and their raw successors use
+// one subtype-plus-payload domain.
+func CanonicalBinarySize(bj ByteJson) (int, bool) {
+	value, ok := binaryJSONValue(bj)
+	if !ok {
+		return 0, false
+	}
+	payloadSize := len(value.rawPayload)
+	if value.legacyEncoded != nil {
+		if decodedSize, valid := base64DecodedLen(value.legacyEncoded); valid {
+			payloadSize = decodedSize
+		} else {
+			payloadSize = len(value.fallbackRaw)
+		}
+	}
+	return 2 + payloadSize, true
+}
+
+// AppendCanonicalBinary appends the equality key for a binary JSON value.
+// Valid legacy payloads are decoded directly into dst; malformed legacy data
+// retains CompareBinaryJSON's raw fallback behavior.
+func AppendCanonicalBinary(dst []byte, bj ByteJson) ([]byte, bool) {
+	value, ok := binaryJSONValue(bj)
+	if !ok {
+		return dst, false
+	}
+	dst = append(dst, canonicalBinaryMarker, byte(value.subtype))
+	if value.legacyEncoded == nil {
+		return append(dst, value.rawPayload...), true
+	}
+	start := len(dst)
+	var decodedBuffer [binaryJSONCompareDecodedChunkSize]byte
+	for offset := 0; offset < len(value.legacyEncoded); {
+		n, nextOffset, decoded := decodeBase64Chunk(
+			value.legacyEncoded,
+			offset,
+			decodedBuffer[:],
+		)
+		if !decoded {
+			dst = dst[:start]
+			return append(dst, value.fallbackRaw...), true
+		}
+		dst = append(dst, decodedBuffer[:n]...)
+		offset = nextOffset
+	}
+	return dst, true
+}
+
+func compareDecodedBase64Payloads(leftEncoded, rightEncoded []byte) (int, bool) {
+	var leftBuf [binaryJSONCompareDecodedChunkSize]byte
+	var rightBuf [binaryJSONCompareDecodedChunkSize]byte
+	var leftEncOff, rightEncOff int
+	var leftN, rightN int
+	var leftOff, rightOff int
+	for {
+		if leftOff == leftN && leftEncOff < len(leftEncoded) {
+			n, nextOff, ok := decodeBase64Chunk(leftEncoded, leftEncOff, leftBuf[:])
+			if !ok {
+				return 0, false
+			}
+			leftEncOff, leftN, leftOff = nextOff, n, 0
+		}
+		if rightOff == rightN && rightEncOff < len(rightEncoded) {
+			n, nextOff, ok := decodeBase64Chunk(rightEncoded, rightEncOff, rightBuf[:])
+			if !ok {
+				return 0, false
+			}
+			rightEncOff, rightN, rightOff = nextOff, n, 0
+		}
+		leftAvail := leftN - leftOff
+		rightAvail := rightN - rightOff
+		if leftAvail == 0 || rightAvail == 0 {
+			switch {
+			case leftAvail == 0 && rightAvail == 0:
+				if leftEncOff == len(leftEncoded) && rightEncOff == len(rightEncoded) {
+					return 0, true
+				}
+				continue
+			case leftAvail == 0 && leftEncOff == len(leftEncoded):
+				return -1, true
+			case rightAvail == 0 && rightEncOff == len(rightEncoded):
+				return 1, true
+			default:
+				continue
+			}
+		}
+
+		chunkLen := leftAvail
+		if rightAvail < chunkLen {
+			chunkLen = rightAvail
+		}
+		if cmp := bytes.Compare(leftBuf[leftOff:leftOff+chunkLen], rightBuf[rightOff:rightOff+chunkLen]); cmp != 0 {
+			return cmp, true
+		}
+		leftOff += chunkLen
+		rightOff += chunkLen
+	}
+}
+
+func compareDecodedBase64WithRaw(encoded, raw []byte) (int, bool) {
+	var decodedBuf [binaryJSONCompareDecodedChunkSize]byte
+	var encodedOff, rawOff int
+	var decodedN, decodedOff int
+	for {
+		if decodedOff == decodedN && encodedOff < len(encoded) {
+			n, nextOff, ok := decodeBase64Chunk(encoded, encodedOff, decodedBuf[:])
+			if !ok {
+				return 0, false
+			}
+			encodedOff, decodedN, decodedOff = nextOff, n, 0
+		}
+		decodedAvail := decodedN - decodedOff
+		rawAvail := len(raw) - rawOff
+		if decodedAvail == 0 || rawAvail == 0 {
+			switch {
+			case decodedAvail == 0 && rawAvail == 0:
+				if encodedOff == len(encoded) {
+					return 0, true
+				}
+				continue
+			case decodedAvail == 0 && encodedOff == len(encoded):
+				return -1, true
+			case rawAvail == 0:
+				return 1, true
+			default:
+				continue
+			}
+		}
+		chunkLen := decodedAvail
+		if rawAvail < chunkLen {
+			chunkLen = rawAvail
+		}
+		if cmp := bytes.Compare(decodedBuf[decodedOff:decodedOff+chunkLen], raw[rawOff:rawOff+chunkLen]); cmp != 0 {
+			return cmp, true
+		}
+		decodedOff += chunkLen
+		rawOff += chunkLen
+	}
+}
+
+func base64DecodedLen(encoded []byte) (int, bool) {
+	var buf [binaryJSONCompareDecodedChunkSize]byte
+	total := 0
+	for off := 0; off < len(encoded); {
+		n, nextOff, ok := decodeBase64Chunk(encoded, off, buf[:])
+		if !ok {
+			return 0, false
+		}
+		total += n
+		off = nextOff
+	}
+	return total, true
+}
+
+func decodeBase64Chunk(encoded []byte, offset int, dst []byte) (int, int, bool) {
+	if offset >= len(encoded) {
+		return 0, offset, true
+	}
+	end := base64ChunkEnd(encoded, offset)
+	n, err := base64.StdEncoding.Decode(dst, encoded[offset:end])
+	if err != nil {
+		return 0, offset, false
+	}
+	return n, end, true
+}
+
+// base64ChunkEnd selects a complete Base64 quantum. EncodeJson emits compact
+// Base64, but DecodeString historically also accepted CR/LF in legacy values;
+// retaining quantum alignment preserves that behavior while keeping decoding
+// bounded by the fixed comparison buffer.
+func base64ChunkEnd(encoded []byte, offset int) int {
+	limit := offset + binaryJSONCompareEncodedChunkSize
+	if limit >= len(encoded) {
+		return len(encoded)
+	}
+	if bytes.IndexByte(encoded[offset:limit], '\r') == -1 &&
+		bytes.IndexByte(encoded[offset:limit], '\n') == -1 {
+		return limit
+	}
+	end := offset
+	base64Chars := 0
+	for i := offset; i < len(encoded); i++ {
+		if encoded[i] != '\r' && encoded[i] != '\n' {
+			base64Chars++
+			if base64Chars%4 == 0 {
+				end = i + 1
+			}
+		}
+		if i+1 >= limit && end != offset {
+			return end
+		}
+	}
+	return len(encoded)
 }
 
 func (bj ByteJson) queryValByKey(key []byte) ByteJson {

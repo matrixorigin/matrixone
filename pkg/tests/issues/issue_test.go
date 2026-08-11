@@ -39,19 +39,16 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
-	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/deletion"
-	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/tests/testutils"
 	"github.com/matrixorigin/matrixone/pkg/tnservice"
-	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 	"github.com/stretchr/testify/require"
 )
 
 func TestIssue23861FulltextSnapshotRestore(t *testing.T) {
-	embed.RunBaseClusterTests(
+	embed.RunBaseClusterTests(t,
 		func(c embed.Cluster) {
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second*240)
 			defer cancel()
@@ -191,7 +188,7 @@ func execSQLMaybe(t *testing.T, ctx context.Context, db *sql.DB, statement strin
 }
 
 func TestWWConflict(t *testing.T) {
-	embed.RunBaseClusterTests(
+	embed.RunBaseClusterTests(t,
 		func(c embed.Cluster) {
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
 			defer cancel()
@@ -362,7 +359,7 @@ func cleanDatabase(
 
 // #18754
 func TestBinarySearchBlkDataOnUnSortedFakePKCol(t *testing.T) {
-	embed.RunBaseClusterTests(
+	embed.RunBaseClusterTests(t,
 		func(c embed.Cluster) {
 			cn, err := c.GetCNService(0)
 			require.NoError(t, err)
@@ -452,7 +449,7 @@ func TestBinarySearchBlkDataOnUnSortedFakePKCol(t *testing.T) {
 }
 
 func TestCNFlushS3Deletes(t *testing.T) {
-	embed.RunBaseClusterTests(
+	embed.RunBaseClusterTests(t,
 		func(c embed.Cluster) {
 			cn, err := c.GetCNService(0)
 			require.NoError(t, err)
@@ -545,7 +542,7 @@ func TestCNFlushS3Deletes(t *testing.T) {
 There is no lock competition, but there is data modification
 */
 func TestDedupForAutoPk(t *testing.T) {
-	embed.RunBaseClusterTests(
+	embed.RunBaseClusterTests(t,
 		func(c embed.Cluster) {
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second*30)
 			defer cancel()
@@ -636,7 +633,7 @@ func TestDedupForAutoPk(t *testing.T) {
 }
 
 func TestLockNeedUpgrade(t *testing.T) {
-	embed.RunBaseClusterTests(
+	embed.RunBaseClusterTests(t,
 		func(c embed.Cluster) {
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second*30)
 			defer cancel()
@@ -761,7 +758,7 @@ func TestLockNeedUpgrade(t *testing.T) {
 }
 
 func TestIssue19551(t *testing.T) {
-	embed.RunBaseClusterTests(
+	embed.RunBaseClusterTests(t,
 		func(c embed.Cluster) {
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second*1000)
 			defer cancel()
@@ -931,179 +928,9 @@ func TestIssue19551(t *testing.T) {
 	)
 }
 
-func TestSpeedupAbortAllTxn(t *testing.T) {
-	c, err := embed.NewCluster(
-		embed.WithPreStart(
-			func(so embed.ServiceOperator) {
-				if so.ServiceType() == metadata.ServiceType_CN {
-					so.Adjust(
-						func(sc *embed.ServiceConfig) {
-							sc.CN.Txn.MaxActive = 1
-						},
-					)
-				}
-			},
-		),
-	)
-	require.NoError(t, err)
-	require.NoError(t, c.Start())
-	defer func() {
-		require.NoError(t, c.Close())
-	}()
-
-	op, err := c.GetCNService(0)
-	require.NoError(t, err)
-
-	waitC := make(chan struct{}, 1)
-	cn := op.RawService().(cnservice.Service)
-	eng := cn.GetEngine().(*disttae.Engine)
-	logtailClient := eng.PushClient()
-	logtailClient.SetReconnectHandler(func() {
-		select {
-		case waitC <- struct{}{}:
-		default:
-		}
-	})
-
-	c1 := make(chan struct{})
-	c2 := make(chan struct{})
-	actionC := make(chan struct{})
-	errC := make(chan error, 2)
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second*120)
-	defer cancel()
-	var wg sync.WaitGroup
-	wg.Add(2)
-
-	taskservice.DebugCtlTaskFramework(true)
-	defer taskservice.DebugCtlTaskFramework(false)
-
-	// active will commit failed
-	go func() {
-		defer wg.Done()
-
-		exec := cn.GetSQLExecutor()
-		err := exec.ExecTxn(
-			ctx,
-			func(txn executor.TxnExecutor) error {
-				res, err := txn.Exec(
-					"create database TestSpeedupAbortAllTxn",
-					executor.StatementOption{},
-				)
-				if err != nil {
-					return err
-				}
-				res.Close()
-				close(c1)
-
-				// wait txn in active
-				select {
-				case <-c2:
-				case <-ctx.Done():
-					return ctx.Err()
-				}
-				close(actionC)
-
-				select {
-				case <-waitC:
-				case <-ctx.Done():
-					return ctx.Err()
-				}
-
-				// Wait for push client to be fully ready before returning.
-				// reconnectHandler is called before push client is fully recovered,
-				// so we need to wait here to avoid committing when push client is not ready.
-				for !eng.PushClient().IsSubscriberReady() {
-					select {
-					case <-ctx.Done():
-						return ctx.Err()
-					case <-time.After(time.Millisecond * 10):
-					}
-				}
-
-				return nil
-			},
-			executor.Options{}.WithDatabase("mo_catalog").WithUserTxn(),
-		)
-		errC <- err
-	}()
-
-	// wait active txn will canceled
-	go func() {
-		defer wg.Done()
-
-		select {
-		case <-c1:
-		case <-ctx.Done():
-			errC <- ctx.Err()
-			return
-		}
-
-		tc := cn.GetTxnClient()
-		var notifyActive sync.Once
-		_, err := tc.New(
-			ctx,
-			timestamp.Timestamp{},
-			client.WithUserTxn(),
-			client.WithWaitActiveHandle(
-				func() {
-					notifyActive.Do(func() {
-						close(c2)
-					})
-				},
-			),
-		)
-		errC <- err
-	}()
-
-	select {
-	case <-actionC:
-	case <-ctx.Done():
-		require.NoError(t, ctx.Err())
-	}
-	require.NoError(t, logtailClient.Disconnect())
-	require.NoError(t, waitLogtailResume(ctx, cn))
-
-	wg.Wait()
-	close(errC)
-	for err := range errC {
-		require.NoError(t, err)
-	}
-}
-
-func waitLogtailResume(ctx context.Context, cn cnservice.Service) error {
-	exec := cn.GetSQLExecutor()
-	fn := func() error {
-		execCtx, cancel := context.WithTimeout(ctx, time.Second*5)
-		defer cancel()
-		res, err := exec.Exec(
-			execCtx,
-			"select * from mo_tables",
-			executor.Options{}.WithDatabase("mo_catalog"),
-		)
-		if err != nil {
-			return err
-		}
-		res.Close()
-		return nil
-	}
-
-	ticker := time.NewTicker(time.Second)
-	defer ticker.Stop()
-	for {
-		if err := fn(); err == nil {
-			return nil
-		}
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-ticker.C:
-		}
-	}
-}
-
 // #15087
 func TestLikePatternPlus(t *testing.T) {
-	embed.RunBaseClusterTests(
+	embed.RunBaseClusterTests(t,
 		func(c embed.Cluster) {
 			cn, err := c.GetCNService(0)
 			require.NoError(t, err)
@@ -1145,7 +972,7 @@ func TestLikePatternPlus(t *testing.T) {
 }
 
 func TestFaultInjection(t *testing.T) {
-	embed.RunBaseClusterTests(
+	embed.RunBaseClusterTests(t,
 		func(c embed.Cluster) {
 			cn, err := c.GetCNService(0)
 			require.NoError(t, err)

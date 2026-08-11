@@ -28,17 +28,22 @@ import (
 
 	"github.com/fagongzi/goetty/v2/buf"
 	"github.com/lni/goutils/leaktest"
+	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/lock"
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
+	"go.uber.org/zap/zaptest/observer"
 )
 
 var (
@@ -1608,6 +1613,84 @@ func TestReLockSuccWithLockTableBindChanged(t *testing.T) {
 	)
 }
 
+func TestUnlockWithContextKeepsTxnForRetryAfterRemoteTimeout(t *testing.T) {
+	runLockServiceTestsWithLevel(
+		t,
+		zapcore.DebugLevel,
+		[]string{"s1", "s2"},
+		time.Second,
+		func(alloc *lockTableAllocator, s []*service) {
+			l1 := s[0]
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
+			defer cancel()
+
+			txnID := []byte("user-lock-cleanup")
+			option := pb.LockOptions{
+				Granularity: pb.Granularity_Row,
+				Mode:        pb.LockMode_Exclusive,
+				Policy:      pb.WaitPolicy_Wait,
+			}
+			_, err := l1.Lock(ctx, 0, [][]byte{{1}}, txnID, option)
+			require.NoError(t, err)
+
+			localTable := l1.tableGroups.get(0, 0)
+			bind := localTable.getBind()
+			client := &blockingUnlockClient{unlockStarted: make(chan struct{}, 1)}
+			l1.tableGroups.Lock()
+			l1.tableGroups.holders[0].tables[0] = &remoteLockTable{
+				bind:   bind,
+				client: client,
+				logger: l1.logger,
+			}
+			l1.tableGroups.Unlock()
+
+			unlockCtx, unlockCancel := context.WithTimeout(context.Background(), time.Millisecond*50)
+			defer unlockCancel()
+			err = l1.UnlockWithContext(unlockCtx, txnID, timestamp.Timestamp{})
+			require.ErrorIs(t, err, context.DeadlineExceeded)
+			require.NotNil(t, l1.activeTxnHolder.getActiveTxn(txnID, false, ""))
+
+			l1.tableGroups.Lock()
+			l1.tableGroups.holders[0].tables[0] = localTable
+			l1.tableGroups.Unlock()
+			require.NoError(t, l1.Unlock(ctx, txnID, timestamp.Timestamp{}))
+			require.Nil(t, l1.activeTxnHolder.getActiveTxn(txnID, false, ""))
+		},
+		nil,
+	)
+}
+
+func TestUnlockIgnoresCanceledCallerContextForTransactionCleanup(t *testing.T) {
+	runLockServiceTestsWithLevel(
+		t,
+		zapcore.DebugLevel,
+		[]string{"s1"},
+		time.Second,
+		func(alloc *lockTableAllocator, s []*service) {
+			l1 := s[0]
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
+			defer cancel()
+
+			txnID := []byte("timed-out-statement-cleanup")
+			option := pb.LockOptions{
+				Granularity: pb.Granularity_Row,
+				Mode:        pb.LockMode_Exclusive,
+				Policy:      pb.WaitPolicy_Wait,
+			}
+			_, err := l1.Lock(ctx, 0, [][]byte{{1}}, txnID, option)
+			require.NoError(t, err)
+
+			canceledCtx, cancelCanceledCtx := context.WithCancel(context.Background())
+			cancelCanceledCtx()
+			require.NoError(t, l1.Unlock(canceledCtx, txnID, timestamp.Timestamp{}))
+
+			_, err = l1.Lock(ctx, 0, [][]byte{{1}}, []byte("contender"), option)
+			require.NoError(t, err)
+		},
+		nil,
+	)
+}
+
 func TestIssue4007(t *testing.T) {
 	runLockServiceTestsWithLevel(
 		t,
@@ -2065,7 +2148,8 @@ func TestIssue3288(t *testing.T) {
 			l1.Close()
 
 			// Real scenario: after s1 (l1) dies, s2 (l2) acquires the lock. Caller retries on
-			// ErrBackendClosed or ErrLockTableBindChanged per API contract until success.
+			// ErrBackendClosed, ErrBackendCannotConnect, or
+			// ErrLockTableBindChanged per API contract until success.
 			//
 			// No infinite wait: (1) success -> break; (2) retryable error -> continue; (3) any other
 			// error -> require.NoError fails and test stops; (4) ctx has 10s timeout, so even if we
@@ -2087,10 +2171,11 @@ func TestIssue3288(t *testing.T) {
 					txnSeq++
 					continue
 				}
-				if moerr.IsMoErrCode(err, moerr.ErrBackendClosed) {
+				if moerr.IsMoErrCode(err, moerr.ErrBackendClosed) ||
+					moerr.IsMoErrCode(err, moerr.ErrBackendCannotConnect) {
 					continue
 				}
-				require.NoError(t, err, "lock must succeed or return retryable error (ErrBackendClosed/ErrLockTableBindChanged)")
+				require.NoError(t, err, "lock must succeed or return a retryable backend/bind error")
 			}
 			_ = result
 
@@ -2416,8 +2501,14 @@ func TestCheckTxnTimeout(t *testing.T) {
 				}
 			}
 
-			l2.checkTxnTimeout(ctx)
-			require.True(t, l2.activeTxnHolder.empty())
+			// A recovery RPC timeout is deliberately indeterminate: the current
+			// scan must retain the transaction and a later scan retries it. Assert
+			// the scanner's eventual contract instead of requiring a cold recovery
+			// connection to be created within one 500ms attempt.
+			require.Eventually(t, func() bool {
+				l2.checkTxnTimeout(ctx)
+				return l2.activeTxnHolder.empty()
+			}, time.Second*10, time.Millisecond*10)
 		},
 		nil,
 	)
@@ -2802,51 +2893,37 @@ func TestReLockInRollingRestartCN(t *testing.T) {
 			require.NoError(t, err)
 
 			alloc.setRestartService("s1")
-			for {
-				if l1.isStatus(pb.Status_ServiceLockWaiting) {
-					break
-				}
-				select {
-				case <-ctx.Done():
-					require.True(t, false)
-					return
-				default:
-				}
-			}
+			requireServiceStatus(t, l1, pb.Status_ServiceLockWaiting)
 
-			_, err = l2.Lock(
-				ctx,
-				0,
-				[][]byte{{3}},
-				[]byte("txn2"),
-				option)
-			require.NoError(t, err)
+			txnID := []byte("txn2")
+			requireRollingRestartLockEventuallySucceeds(t, ctx, func(retryCtx context.Context) error {
+				_, err = l2.Lock(
+					retryCtx,
+					0,
+					[][]byte{{3}},
+					txnID,
+					option)
+				return err
+			}, func() {
+				require.NoError(t, l2.Unlock(ctx, txnID, timestamp.Timestamp{}))
+				txnID = []byte("txn3")
+				option.SnapShotTs, _ = l2.clock.Now()
+			})
 
 			err = l1.Unlock(
 				ctx,
 				[]byte("txn1"),
 				timestamp.Timestamp{})
 			require.NoError(t, err)
-			// Actually, txn1 and txn2 are executed concurrently.
-			// it should use a loop check.
-			for {
-				if l1.validGroupTable(0, 0) {
-					break
-				}
-				select {
-				case <-ctx.Done():
-					require.True(t, false)
-				default:
-				}
-			}
-			require.True(t, l1.isStatus(pb.Status_ServiceLockWaiting))
+			requireGroupTableRef(t, l1, 0, 0, true)
+			requireServiceStatus(t, l1, pb.Status_ServiceLockWaiting)
 
 			err = l2.Unlock(
 				ctx,
-				[]byte("txn2"),
+				txnID,
 				timestamp.Timestamp{})
 			require.NoError(t, err)
-			require.False(t, l1.validGroupTable(0, 0))
+			requireGroupTableRef(t, l1, 0, 0, false)
 		},
 	)
 }
@@ -2879,16 +2956,7 @@ func TestOldTxnLockInRollingRestartCN(t *testing.T) {
 			require.NoError(t, err)
 
 			alloc.setRestartService("s1")
-			for {
-				if l.isStatus(pb.Status_ServiceLockWaiting) {
-					break
-				}
-				select {
-				case <-ctx.Done():
-					return
-				default:
-				}
-			}
+			requireServiceStatus(t, l, pb.Status_ServiceLockWaiting)
 
 			// old txn
 			_, err = l.Lock(
@@ -4140,7 +4208,16 @@ func requireServiceStatus(t *testing.T, service *service, status pb.Status) {
 	t.Helper()
 	require.Eventually(t,
 		func() bool { return service.isStatus(status) },
-		5*time.Second,
+		10*time.Second,
+		10*time.Millisecond,
+	)
+}
+
+func requireGroupTableRef(t *testing.T, service *service, group uint32, table uint64, want bool) {
+	t.Helper()
+	require.Eventually(t,
+		func() bool { return service.validGroupTable(group, table) == want },
+		10*time.Second,
 		10*time.Millisecond,
 	)
 }
@@ -4178,6 +4255,23 @@ func requireRollingRestartLockEventuallySucceeds(
 		case <-time.After(10 * time.Millisecond):
 		}
 	}
+}
+
+func TestRequireRollingRestartLockEventuallySucceedsRetriesTransientRPCErrors(t *testing.T) {
+	errs := []error{
+		moerr.NewBackendClosedNoCtx(),
+		moerr.NewBackendCannotConnectNoCtx("s1"),
+		nil,
+	}
+	attempts := 0
+
+	requireRollingRestartLockEventuallySucceeds(t, context.Background(), func(context.Context) error {
+		err := errs[attempts]
+		attempts++
+		return err
+	}, nil)
+
+	require.Equal(t, len(errs), attempts)
 }
 
 func TestRetryLockSuccInRollingRestartCN(t *testing.T) {
@@ -4517,13 +4611,15 @@ func TestPreTxnLockInRollingRestartCN(t *testing.T) {
 
 			// remote lock should be succ, because txn3 start time earlier than restart time
 			option.SnapShotTs = t1
-			_, err = l1.Lock(
-				ctx,
-				1,
-				[][]byte{{1}},
-				[]byte("txn3"),
-				option)
-			require.NoError(t, err)
+			requireRollingRestartLockEventuallySucceeds(t, ctx, func(retryCtx context.Context) error {
+				_, err = l1.Lock(
+					retryCtx,
+					1,
+					[][]byte{{1}},
+					[]byte("txn3"),
+					option)
+				return err
+			}, nil)
 		},
 	)
 }
@@ -4566,17 +4662,15 @@ func TestIssue5543(t *testing.T) {
 				}, closeReasonBindChanged)
 			}
 
-			var wg sync.WaitGroup
-			wg.Add(1)
+			errCh := make(chan error, 1)
 			go func() {
-				defer wg.Done()
 				_, err1 := l1.Lock(
 					ctx,
 					0,
 					[][]byte{{2}},
 					[]byte("txn3"),
 					option)
-				require.NoError(t, err1)
+				errCh <- err1
 			}()
 
 			waitWaiters(t, l1, 0, []byte{2}, 1)
@@ -4585,7 +4679,7 @@ func TestIssue5543(t *testing.T) {
 				[]byte("txn2"),
 				timestamp.Timestamp{})
 			require.NoError(t, err)
-			wg.Wait()
+			require.NoError(t, <-errCh)
 		},
 	)
 }
@@ -4755,7 +4849,7 @@ func TestRowLockWithConflictAndUnlock(t *testing.T) {
 			require.NoError(t, s.Unlock(ctx, txn2, timestamp.Timestamp{}))
 
 			<-c
-			checkLock(t, lt, rows[0], [][]byte{txn1}, [][]byte{txn2}, []int32{1})
+			checkLock(t, lt, rows[0], [][]byte{txn1}, nil, nil)
 			require.NoError(t, s.Unlock(ctx, txn1, timestamp.Timestamp{}))
 		})
 }
@@ -5026,6 +5120,41 @@ func TestRowLockWithFailFast(t *testing.T) {
 
 					_, err = s.Lock(ctx, table, rows, txn2, option)
 					require.Error(t, ErrLockConflict, err)
+				})
+		})
+	}
+}
+
+func TestRowLockFastFailConflictActiveTxnCleanup(t *testing.T) {
+	for name, runner := range runners {
+		t.Run(name, func(t *testing.T) {
+			table := uint64(0)
+			runner(
+				t,
+				table,
+				func(
+					ctx context.Context,
+					s *service,
+					lt *localLockTable) {
+					option := newTestRowExclusiveOptions()
+					option.Policy = pb.WaitPolicy_FastFail
+					rows := newTestRows(1)
+					holderTxn := newTestTxnID(1)
+					conflictTxn := newTestTxnID(2)
+
+					_, err := s.Lock(ctx, table, rows, holderTxn, option)
+					require.NoError(t, err)
+					defer func() {
+						assert.NoError(t, s.Unlock(ctx, holderTxn, timestamp.Timestamp{}))
+					}()
+
+					_, err = s.Lock(ctx, table, rows, conflictTxn, option)
+					require.Error(t, err)
+					require.ErrorIs(t, err, ErrLockConflict)
+					require.NotNil(t, s.activeTxnHolder.getActiveTxn(conflictTxn, false, ""))
+
+					require.NoError(t, s.Unlock(ctx, conflictTxn, timestamp.Timestamp{}))
+					require.Nil(t, s.activeTxnHolder.getActiveTxn(conflictTxn, false, ""))
 				})
 		})
 	}
@@ -5335,6 +5464,16 @@ func TestIssue14008(t *testing.T) {
 		})
 }
 
+type bindChangeCountingTxnHolder struct {
+	activeTxnHolder
+	fenceCalls atomic.Int64
+}
+
+func (h *bindChangeCountingTxnHolder) fenceByBindChanged(bind pb.LockTable) int {
+	h.fenceCalls.Add(1)
+	return h.activeTxnHolder.fenceByBindChanged(bind)
+}
+
 func TestHandleBindChangedConcurrently(t *testing.T) {
 	table := uint64(10)
 	getRunner(false)(
@@ -5345,6 +5484,11 @@ func TestHandleBindChangedConcurrently(t *testing.T) {
 			s *service,
 			lt *localLockTable) {
 			bind := lt.getBind()
+			core, logs := observer.New(zap.InfoLevel)
+			s.logger = log.GetServiceLogger(zap.New(core), metadata.ServiceType_CN, s.serviceID).
+				Named("lockservice")
+			holder := &bindChangeCountingTxnHolder{activeTxnHolder: s.activeTxnHolder}
+			s.activeTxnHolder = holder
 
 			var wg sync.WaitGroup
 			for i := 0; i < 20; i++ {
@@ -5365,6 +5509,10 @@ func TestHandleBindChangedConcurrently(t *testing.T) {
 				s.handleBindChanged(bind)
 			}
 			wg.Wait()
+			require.Same(t, lt, s.tableGroups.get(bind.Group, bind.Table))
+			assert.Zero(t, logs.FilterMessage("bind created").Len())
+			assert.Zero(t, logs.FilterMessage("bind closed").Len())
+			assert.Zero(t, holder.fenceCalls.Load())
 		},
 	)
 }
@@ -5407,6 +5555,160 @@ func TestLockWaitTimeout(t *testing.T) {
 			require.Less(t, elapsed, 3*time.Second)
 		},
 	)
+}
+
+func TestCanceledLockWaitRemovesWaiterImmediately(t *testing.T) {
+	testCases := []struct {
+		name        string
+		holderRows  [][]byte
+		waiterRows  [][]byte
+		options     pb.LockOptions
+		conflictKey []byte
+	}{
+		{
+			name:        "row",
+			holderRows:  newTestRows(1),
+			waiterRows:  newTestRows(1),
+			options:     newTestRowExclusiveOptions(),
+			conflictKey: []byte{1},
+		},
+		{
+			name:        "range",
+			holderRows:  newTestRows(1, 10),
+			waiterRows:  newTestRows(2, 3),
+			options:     newTestRangeExclusiveOptions(),
+			conflictKey: []byte{1},
+		},
+	}
+
+	for idx, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			table := uint64(21204 + idx)
+			getRunner(false)(
+				t,
+				table,
+				func(ctx context.Context, s *service, lt *localLockTable) {
+					holderTxn := []byte("issue-21204-holder")
+					waiterTxn := []byte("issue-21204-waiter")
+
+					_, err := s.Lock(ctx, table, testCase.holderRows, holderTxn, testCase.options)
+					require.NoError(t, err)
+
+					waitCtx, cancel := context.WithCancel(ctx)
+					defer cancel()
+					resultC := make(chan error, 1)
+					go func() {
+						_, err := s.Lock(waitCtx, table, testCase.waiterRows, waiterTxn, testCase.options)
+						resultC <- err
+					}()
+
+					require.NoError(t, WaitWaiters(s, 0, table, testCase.conflictKey, 1))
+					cancel()
+					select {
+					case err := <-resultC:
+						require.ErrorIs(t, err, context.Canceled)
+					case <-time.After(time.Second):
+						t.Fatal("canceled lock wait did not return")
+					}
+
+					checkLock(t, lt, testCase.conflictKey, [][]byte{holderTxn}, nil, nil)
+					require.NoError(t, s.Unlock(ctx, waiterTxn, timestamp.Timestamp{}))
+					require.NoError(t, s.Unlock(ctx, holderTxn, timestamp.Timestamp{}))
+				})
+		})
+	}
+}
+
+func TestLockAddedFailureAfterWaitDoesNotLeavePromotedHolder(t *testing.T) {
+	testCases := []struct {
+		name          string
+		holderRows    [][]byte
+		holderOptions pb.LockOptions
+		waiterRows    [][]byte
+		waiterOptions pb.LockOptions
+		conflictKey   []byte
+	}{
+		{
+			name:          "row",
+			holderRows:    newTestRows(1),
+			holderOptions: newTestRowExclusiveOptions(),
+			waiterRows:    newTestRows(1),
+			waiterOptions: newTestRowExclusiveOptions(),
+			conflictKey:   []byte{1},
+		},
+		{
+			name:          "range",
+			holderRows:    newTestRows(5),
+			holderOptions: newTestRowExclusiveOptions(),
+			waiterRows:    newTestRows(1, 9),
+			waiterOptions: newTestRangeExclusiveOptions(),
+			conflictKey:   []byte{5},
+		},
+	}
+
+	for idx, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			table := uint64(21206 + idx)
+			getRunner(false)(
+				t,
+				table,
+				func(ctx context.Context, s *service, lt *localLockTable) {
+					holderTxn := []byte("lock-added-failure-holder")
+					waiterTxn := []byte("lock-added-failure-waiter")
+					recoveryTxn := []byte("lock-added-failure-recovery")
+
+					waiterActiveTxn := lt.txnHolder.getActiveTxn(waiterTxn, true, "")
+					var lockAddedCalls atomic.Int32
+					waiterActiveTxn.Lock()
+					waiterActiveTxn.beforeLockAdded = func([]byte, [][]byte) error {
+						lockAddedCalls.Add(1)
+						return ErrTxnNotFound
+					}
+					waiterActiveTxn.Unlock()
+
+					_, err := s.Lock(ctx, table, testCase.holderRows, holderTxn, testCase.holderOptions)
+					require.NoError(t, err)
+
+					resultC := make(chan error, 1)
+					go func() {
+						_, err := s.Lock(ctx, table, testCase.waiterRows, waiterTxn, testCase.waiterOptions)
+						resultC <- err
+					}()
+
+					require.NoError(t, WaitWaiters(s, 0, table, testCase.conflictKey, 1))
+					require.Zero(t, lockAddedCalls.Load())
+					require.NoError(t, s.Unlock(ctx, holderTxn, timestamp.Timestamp{}))
+
+					select {
+					case err := <-resultC:
+						require.ErrorIs(t, err, ErrTxnNotFound)
+					case <-time.After(time.Second):
+						t.Fatal("notified lock waiter did not return bookkeeping failure")
+					}
+					require.Equal(t, int32(1), lockAddedCalls.Load())
+
+					// Do not let the test-only hook follow a pooled activeTxn into
+					// the recovery acquisition below.
+					waiterActiveTxn.Lock()
+					waiterActiveTxn.beforeLockAdded = nil
+					waiterActiveTxn.Unlock()
+					require.NoError(t, s.Unlock(ctx, waiterTxn, timestamp.Timestamp{}))
+					checkLock(t, lt, testCase.conflictKey, nil, nil, nil)
+
+					recoveryCtx, cancel := context.WithTimeout(ctx, time.Second)
+					defer cancel()
+					_, err = s.Lock(
+						recoveryCtx,
+						table,
+						testCase.waiterRows,
+						recoveryTxn,
+						testCase.waiterOptions,
+					)
+					require.NoError(t, err)
+					require.NoError(t, s.Unlock(ctx, recoveryTxn, timestamp.Timestamp{}))
+				})
+		})
+	}
 }
 
 func TestLockWaitTimeoutCeilingBoundsMissingCallerTimeout(t *testing.T) {
@@ -5590,8 +5892,28 @@ func TestLockWaitTimeoutExpiresDuringLockTableBindRPC(t *testing.T) {
 		[]string{"s1"},
 		func(alloc *lockTableAllocator, services []*service) {
 			s := services[0]
+			const (
+				warmupTableID = uint64(24915)
+				targetTableID = uint64(24916)
+			)
+			// Establish allocator reachability and the normal-client backend before
+			// starting the lock-wait budget. The behavior under test is expiry while
+			// GetBind is in flight, not cold transport creation or service startup.
+			warmupCtx, cancelWarmup := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancelWarmup()
+			warmupTxnID := []byte("bind-rpc-warmup")
+			_, err := s.Lock(
+				warmupCtx,
+				warmupTableID,
+				[][]byte{{1}},
+				warmupTxnID,
+				newTestRowExclusiveOptions())
+			require.NoError(t, err)
+			require.NoError(t, s.Unlock(context.Background(), warmupTxnID, timestamp.Timestamp{}))
+
 			entered := make(chan struct{})
 			release := make(chan struct{})
+			var enteredOnce sync.Once
 			var releaseOnce sync.Once
 			releaseHandler := func() {
 				releaseOnce.Do(func() { close(release) })
@@ -5600,26 +5922,29 @@ func TestLockWaitTimeoutExpiresDuringLockTableBindRPC(t *testing.T) {
 			alloc.server.RegisterMethodHandler(
 				pb.Method_GetBind,
 				func(
-					context.Context,
-					context.CancelFunc,
-					*pb.Request,
-					*pb.Response,
-					morpc.ClientSession,
+					ctx context.Context,
+					cancel context.CancelFunc,
+					req *pb.Request,
+					resp *pb.Response,
+					cs morpc.ClientSession,
 				) {
-					close(entered)
+					if req.GetBind.Table != targetTableID {
+						alloc.handleGetBind(ctx, cancel, req, resp, cs)
+						return
+					}
+					enteredOnce.Do(func() { close(entered) })
 					<-release
 				})
 
 			options := newTestRowExclusiveOptions()
 			options.LockWaitTimeout = 60
-			options.LockWaitDeadline = time.Now().Add(100 * time.Millisecond).UnixNano()
+			options.LockWaitDeadline = time.Now().Add(time.Second).UnixNano()
 			txnID := []byte("bind-rpc-waiter")
 			resultC := make(chan error, 1)
-			start := time.Now()
 			go func() {
 				_, err := s.Lock(
 					context.Background(),
-					24916,
+					targetTableID,
 					[][]byte{{1}},
 					txnID,
 					options)
@@ -5628,16 +5953,21 @@ func TestLockWaitTimeoutExpiresDuringLockTableBindRPC(t *testing.T) {
 
 			select {
 			case <-entered:
-			case <-time.After(time.Second):
-				require.Fail(t, "lock request did not reach the allocator")
+			case err := <-resultC:
+				require.FailNowf(
+					t,
+					"lock request returned before entering allocator RPC",
+					"error=%v",
+					err)
+			case <-time.After(5 * time.Second):
+				require.FailNow(t, "lock request did not reach the allocator")
 			}
 			select {
 			case err := <-resultC:
 				require.ErrorIs(t, err, ErrLockTimeout)
-				require.Less(t, time.Since(start), time.Second)
-			case <-time.After(2 * time.Second):
+			case <-time.After(5 * time.Second):
 				releaseHandler()
-				require.Fail(t, "lock budget did not cancel the allocator RPC")
+				require.FailNow(t, "lock budget did not cancel the allocator RPC")
 			}
 			releaseHandler()
 			require.NoError(t, s.Unlock(context.Background(), txnID, timestamp.Timestamp{}))
@@ -6466,4 +6796,183 @@ func TestLockReturnsWhenServiceReadinessWaitIsCanceled(t *testing.T) {
 			<-ctx.Done()
 			return ctx.Err()
 		}))
+}
+
+type closeResultClient struct {
+	Client
+	err     error
+	calls   int
+	onClose func()
+}
+
+func (c *closeResultClient) Close() error {
+	c.calls++
+	if c.onClose != nil {
+		c.onClose()
+	}
+	return c.err
+}
+
+type closeResultKeeper struct {
+	LockTableKeeper
+	err     error
+	calls   int
+	onClose func()
+}
+
+func (k *closeResultKeeper) Close() error {
+	k.calls++
+	if k.onClose != nil {
+		k.onClose()
+	}
+	return k.err
+}
+
+type closeResultServer struct {
+	Server
+	err     error
+	calls   int
+	onClose func()
+}
+
+func (s *closeResultServer) Close() error {
+	s.calls++
+	if s.onClose != nil {
+		s.onClose()
+	}
+	return s.err
+}
+
+func TestServiceCloseAttemptsAllCleanupAfterErrors(t *testing.T) {
+	defer leaktest.AfterTest(t)()
+
+	clientErr := errors.New("client close failed")
+	keeperErr := errors.New("keeper close failed")
+	serverErr := errors.New("server close failed")
+	var closeOrder []string
+	client := &closeResultClient{
+		err: clientErr,
+		onClose: func() {
+			closeOrder = append(closeOrder, "client")
+		},
+	}
+	keeper := &closeResultKeeper{
+		err: keeperErr,
+		onClose: func() {
+			closeOrder = append(closeOrder, "keeper")
+		},
+	}
+	server := &closeResultServer{
+		err: serverErr,
+		onClose: func() {
+			closeOrder = append(closeOrder, "server")
+		},
+	}
+
+	logger := getLogger("")
+	fsp := newFixedSlicePool(32)
+	holder := newMapBasedTxnHandler(
+		"s1",
+		logger,
+		fsp,
+		func(string) (bool, error) { return true, nil },
+		func([]pb.OrphanTxn) (pb.CannotCommitResponse, error) {
+			return pb.CannotCommitResponse{}, nil
+		},
+		func(pb.WaitTxn) (bool, error) { return true, nil },
+	)
+	detector := newDeadlockDetector(
+		logger,
+		func(context.Context, pb.WaitTxn, *waiters) (bool, error) {
+			return false, nil
+		},
+		func(pb.WaitTxn, error) {},
+	)
+	events := newWaiterEvents(0, detector, holder, time.Second, nil, logger)
+	fetchWhoWaitingListC := make(chan who, 1)
+	fetchCanceled := false
+	fetchWhoWaitingListC <- who{
+		resp: acquireResponse(),
+		cancel: func() {
+			fetchCanceled = true
+		},
+	}
+	s := &service{
+		serviceID:            "s1",
+		tableGroups:          &lockTableHolders{holders: map[uint32]*lockTableHolder{}},
+		activeTxnHolder:      holder,
+		deadlockDetector:     detector,
+		events:               events,
+		stopper:              stopper.NewStopper("test-service-close"),
+		fetchWhoWaitingListC: fetchWhoWaitingListC,
+	}
+	s.remote.client = client
+	s.remote.keeper = keeper
+	s.remote.server = server
+
+	err := s.Close()
+	require.ErrorIs(t, err, clientErr)
+	require.ErrorIs(t, err, keeperErr)
+	require.ErrorIs(t, err, serverErr)
+	require.Equal(t, 1, client.calls)
+	require.Equal(t, 1, keeper.calls)
+	require.Equal(t, 1, server.calls)
+	require.Equal(t, []string{"server", "keeper", "client"}, closeOrder)
+
+	detector.mu.Lock()
+	require.True(t, detector.mu.closed)
+	detector.mu.Unlock()
+	_, eventsOpen := <-events.eventC
+	require.False(t, eventsOpen)
+	_, fetchOpen := <-s.fetchWhoWaitingListC
+	require.False(t, fetchOpen)
+	require.True(t, fetchCanceled)
+
+	// Close is idempotent and preserves the first cleanup result for every
+	// caller instead of re-running components or returning a transient nil.
+	err = s.Close()
+	require.ErrorIs(t, err, clientErr)
+	require.ErrorIs(t, err, keeperErr)
+	require.ErrorIs(t, err, serverErr)
+	require.Equal(t, 1, client.calls)
+	require.Equal(t, 1, keeper.calls)
+	require.Equal(t, 1, server.calls)
+}
+
+func TestServiceCloseSealsCancelsAndJoinsOperationAdmission(t *testing.T) {
+	runLockServiceTests(t, []string{"s1"},
+		func(_ *lockTableAllocator, services []*service) {
+			s := services[0]
+			serviceCtx, admitted := s.beginServiceOperation()
+			require.True(t, admitted)
+			require.NotNil(t, serviceCtx)
+
+			closeDone := make(chan error, 1)
+			go func() {
+				closeDone <- s.Close()
+			}()
+
+			select {
+			case <-serviceCtx.Done():
+			case <-time.After(time.Second):
+				t.Fatal("service close did not cancel an admitted operation")
+			}
+			select {
+			case err := <-closeDone:
+				t.Fatalf("service close returned before admitted operation: %v", err)
+			case <-time.After(20 * time.Millisecond):
+			}
+
+			s.endServiceOperation()
+			select {
+			case err := <-closeDone:
+				require.NoError(t, err)
+			case <-time.After(time.Second):
+				t.Fatal("service close did not join after operation completion")
+			}
+
+			_, admitted = s.beginServiceOperation()
+			require.False(t, admitted)
+			require.False(t, s.beginLockTablePublication())
+		})
 }

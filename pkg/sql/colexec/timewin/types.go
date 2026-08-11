@@ -39,6 +39,10 @@ const (
 	nextBatch   = 5
 	firstWindow = 6
 	interval    = 7
+	// resumeAfterFlush advances to the next active window after an internal
+	// result flush. The boundary window was already published by the previous
+	// aggregate generation, so this transition must not emit it again.
+	resumeAfterFlush = 8
 )
 
 type container struct {
@@ -46,8 +50,8 @@ type container struct {
 	colCnt int
 	i      int
 
-	aggExe []colexec.ExpressionExecutor
-	aggVec [][]*vector.Vector
+	aggExe []colexec.ExprEvalVector
+	aggVec [][][]*vector.Vector
 
 	partExe []colexec.ExpressionExecutor
 	partVec [][]*vector.Vector
@@ -72,6 +76,8 @@ type container struct {
 	group int
 	aggs  []aggexec.AggFuncExec
 
+	prepareParamKind aggexec.PrepareParamKindStates
+
 	wStart []types.Datetime
 	wEnd   []types.Datetime
 
@@ -86,6 +92,10 @@ type container struct {
 
 	nextLeft  types.Datetime
 	nextRight types.Datetime
+	// zeroWindow marks the dedicated bucket for MySQL's 0000-00-00 temporal
+	// sentinel. It must not enter regular modulo/arithmetic window math, where
+	// its internal value (-1) would alias the valid 0001-01-01 epoch (0).
+	zeroWindow bool
 
 	withoutFill bool
 
@@ -110,7 +120,10 @@ type container struct {
 	partLastRowIdx int
 	// partitionBreak marks that the pending flush ends a partition, so the
 	// next window must restart rather than slide.
-	partitionBreak bool
+	partitionBreak   bool
+	partitionWindows int64
+	partitionCount   int64
+	gapFillWindows   int64
 }
 
 type TimeWin struct {
@@ -131,8 +144,9 @@ type TimeWin struct {
 	Interval types.Datetime
 	Sliding  types.Datetime
 
-	WStart bool
-	WEnd   bool
+	WStart  bool
+	WEnd    bool
+	GapFill bool
 
 	vm.OperatorBase
 }
@@ -186,6 +200,7 @@ func (timeWin *TimeWin) Reset(proc *process.Process, pipelineFailed bool, err er
 	ctr.freeAgg()
 	ctr.aggs = nil
 	ctr.resetParam(timeWin)
+	ctr.prepareParamKind.Reset(nil)
 }
 
 func (timeWin *TimeWin) MakeIntervalAndSliding(interval, sliding *plan.Expr) error {
@@ -243,6 +258,7 @@ func (timeWin *TimeWin) Free(proc *process.Process, pipelineFailed bool, err err
 	ctr.freeVector(proc.Mp())
 	ctr.freeExes()
 	ctr.freeAgg()
+	ctr.prepareParamKind.Reset(nil)
 }
 
 func (timeWin *TimeWin) ExecProjection(proc *process.Process, input *batch.Batch) (*batch.Batch, error) {
@@ -251,9 +267,7 @@ func (timeWin *TimeWin) ExecProjection(proc *process.Process, input *batch.Batch
 
 func (ctr *container) resetExes() {
 	for _, exe := range ctr.aggExe {
-		if exe != nil {
-			exe.ResetForNextQuery()
-		}
+		exe.ResetForNextQuery()
 	}
 	for _, exe := range ctr.partExe {
 		if exe != nil {
@@ -295,6 +309,7 @@ func (ctr *container) resetParam(timeWin *TimeWin) {
 	ctr.right = 0
 	ctr.nextLeft = 0
 	ctr.nextRight = 0
+	ctr.zeroWindow = false
 	ctr.withoutFill = false
 	ctr.last = false
 	ctr.lastVal = 0
@@ -308,13 +323,14 @@ func (ctr *container) resetParam(timeWin *TimeWin) {
 	ctr.partLastVecIdx = 0
 	ctr.partLastRowIdx = 0
 	ctr.partitionBreak = false
+	ctr.partitionWindows = 0
+	ctr.partitionCount = 0
+	ctr.gapFillWindows = 0
 }
 
 func (ctr *container) freeExes() {
 	for _, exe := range ctr.aggExe {
-		if exe != nil {
-			exe.Free()
-		}
+		exe.Free()
 	}
 	for _, exe := range ctr.partExe {
 		if exe != nil {
@@ -354,10 +370,12 @@ func (ctr *container) freeVector(mp *mpool.MPool) {
 	}
 	ctr.tsVec = nil
 
-	for _, vecs := range ctr.aggVec {
-		for _, vec := range vecs {
-			if vec != nil {
-				vec.Free(mp)
+	for _, aggregateVecs := range ctr.aggVec {
+		for _, vecs := range aggregateVecs {
+			for _, vec := range vecs {
+				if vec != nil {
+					vec.Free(mp)
+				}
 			}
 		}
 	}

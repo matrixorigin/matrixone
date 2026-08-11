@@ -19,6 +19,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"math"
 	"math/rand"
 	"os"
 	"strconv"
@@ -36,6 +37,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/common/objectkey"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	commonutil "github.com/matrixorigin/matrixone/pkg/common/util"
 	mo_config "github.com/matrixorigin/matrixone/pkg/config"
@@ -185,6 +187,27 @@ func WildcardMatch(pattern, target string) bool {
 
 // getExprValue executes the expression and returns the value.
 func getExprValue(e tree.Expr, ses *Session, execCtx *ExecCtx, isBin ...*bool) (interface{}, error) {
+	return getExprValueWithPrepareMode(e, ses, execCtx, false, isBin...)
+}
+
+func getExprValueWithPrepareMode(
+	e tree.Expr,
+	ses *Session,
+	execCtx *ExecCtx,
+	preparedExpression bool,
+	isBin ...*bool,
+) (interface{}, error) {
+	return getExprValueWithPrepareMeta(e, ses, execCtx, preparedExpression, nil, isBin...)
+}
+
+func getExprValueWithPrepareMeta(
+	e tree.Expr,
+	ses *Session,
+	execCtx *ExecCtx,
+	preparedExpression bool,
+	prepareParamKind *vector.PrepareParamKind,
+	isBin ...*bool,
+) (interface{}, error) {
 	/*
 		CORNER CASE:
 			SET character_set_results = utf8; // e = tree.UnresolvedName{'utf8'}.
@@ -196,6 +219,9 @@ func getExprValue(e tree.Expr, ses *Session, execCtx *ExecCtx, isBin ...*bool) (
 		// set @a = on, type of a is bool.
 		if len(isBin) > 0 {
 			*isBin[0] = false
+		}
+		if prepareParamKind != nil {
+			*prepareParamKind = vector.PrepareParamNone
 		}
 		return v.ColName(), nil
 	}
@@ -236,7 +262,8 @@ func getExprValue(e tree.Expr, ses *Session, execCtx *ExecCtx, isBin ...*bool) (
 		ses:    ses,
 	}
 	defer tempExecCtx.Close()
-	err = executeStmtInSameSession(tempExecCtx.reqCtx, ses, &tempExecCtx, compositedSelect)
+	err = executeStmtInSameSession(
+		tempExecCtx.reqCtx, ses, &tempExecCtx, compositedSelect, preparedExpression)
 	if err != nil {
 		return nil, err
 	}
@@ -275,10 +302,8 @@ func getExprValue(e tree.Expr, ses *Session, execCtx *ExecCtx, isBin ...*bool) (
 	var planExpr *plan.Expr
 	oid := resultVec.GetType().Oid
 	if oid == types.T_decimal64 || oid == types.T_decimal128 || oid == types.T_decimal256 {
-		builder := plan2.NewQueryBuilder(plan.Query_SELECT, ses.GetTxnCompileCtx(), false, false)
-		bindContext := plan2.NewBindContext(builder, nil)
-		binder := plan2.NewSetVarBinder(builder, bindContext)
-		planExpr, err = binder.BindExpr(e, 0, false)
+		planExpr, err = bindSetVariableResultExpr(
+			e, ses.GetTxnCompileCtx(), preparedExpression)
 		if err != nil {
 			return nil, err
 		}
@@ -287,41 +312,134 @@ func getExprValue(e tree.Expr, ses *Session, execCtx *ExecCtx, isBin ...*bool) (
 	if len(isBin) > 0 {
 		*isBin[0] = resultVec.GetIsBin()
 	}
+	if prepareParamKind != nil {
+		*prepareParamKind = resultVec.GetPrepareParamKind()
+		if *prepareParamKind == vector.PrepareParamNone {
+			*prepareParamKind, err = transparentPrepareParamKind(e, ses)
+			if err != nil {
+				return nil, err
+			}
+		}
+		if *prepareParamKind == vector.PrepareParamNone {
+			*prepareParamKind = prepareParamKindFromType(resultVec.GetType().Oid)
+		}
+	}
 	return getValueFromVector(execCtx.reqCtx, resultVec, ses, planExpr)
+}
+
+// transparentPrepareParamKind closes the metadata boundary introduced by SET's
+// synthetic SELECT evaluation. A direct parameter or variable retains its
+// source conversion category even if projection materialization drops vector-
+// local metadata. Parentheses are transparent; casts and other expressions are
+// intentionally not, because their result type defines the conversion category.
+func transparentPrepareParamKind(e tree.Expr, ses *Session) (vector.PrepareParamKind, error) {
+	for {
+		switch expr := e.(type) {
+		case *tree.ParenExpr:
+			e = expr.Expr
+		case *tree.ParamExpr:
+			proc := ses.GetProc()
+			// Parser ordinals are one-based; the normalized plan/process positions
+			// are zero-based (see decrementParamOrdinalRule).
+			if proc == nil || expr.Offset <= 0 {
+				return vector.PrepareParamNone, nil
+			}
+			return proc.GetPrepareParamKind(expr.Offset - 1), nil
+		case *tree.VarExpr:
+			return ses.GetTxnCompileCtx().ResolveVariablePrepareParamKind(
+				expr.Name, expr.System, expr.Global)
+		default:
+			return vector.PrepareParamNone, nil
+		}
+	}
+}
+
+func bindSetVariableResultExpr(
+	e tree.Expr,
+	compilerContext plan2.CompilerContext,
+	preparedExpression bool,
+) (*plan.Expr, error) {
+	builder := plan2.NewQueryBuilder(
+		plan.Query_SELECT, compilerContext, preparedExpression, false)
+	bindContext := plan2.NewBindContext(builder, nil)
+	binder := plan2.NewSetVarBinder(builder, bindContext)
+	return binder.BindExpr(e, 0, false)
 }
 
 // only support single value and unary minus
 func GetSimpleExprValue(ctx context.Context, e tree.Expr, feSes FeSession) (interface{}, error) {
-	switch v := e.(type) {
-	case *tree.UnresolvedName:
-		// set @a = on, type of a is bool.
-		return v.ColName(), nil
-	default:
+	return getSimpleExprValue(ctx, e, feSes, nil)
+}
+
+// GetSimpleExprValueWithType evaluates an expression after coercing it to the
+// supplied assignment target. This preserves declared stored-procedure types
+// even when their runtime representation is a Go string (for example DECIMAL).
+func GetSimpleExprValueWithType(ctx context.Context, e tree.Expr, feSes FeSession, targetType plan.Type) (interface{}, error) {
+	return getSimpleExprValue(ctx, e, feSes, &targetType)
+}
+
+func getSimpleExprValue(ctx context.Context, e tree.Expr, feSes FeSession, targetType *plan.Type) (interface{}, error) {
+	var planExpr *plan.Expr
+	if v, ok := e.(*tree.UnresolvedName); ok && !storedProcedureVariableExists(ctx, v.ColName()) {
+		// Preserve SET @a = on behavior. A stored-procedure variable with the
+		// same syntax is instead bound through its declared type below.
+		if targetType == nil {
+			return v.ColName(), nil
+		}
+		planExpr = plan2.MakePlan2StringConstExprWithType(v.ColName())
+	} else {
 		builder := plan2.NewQueryBuilder(plan.Query_SELECT, feSes.GetTxnCompileCtx(), false, false)
 		bindContext := plan2.NewBindContext(builder, nil)
 		binder := plan2.NewSetVarBinder(builder, bindContext)
-		planExpr, err := binder.BindExpr(e, 0, false)
+		var err error
+		planExpr, err = binder.BindExpr(e, 0, false)
 		if err != nil {
 			return nil, err
 		}
-
-		txnCompileCtx := feSes.GetTxnCompileCtx()
-		// set @a = 'on', type of a is bool. And mo cast rule does not fit set variable rule so delay to convert type.
-		// Here the evalExpr may execute some function that needs engine.Engine.
-		txnCompileCtx.GetProcess().ReplaceTopCtx(
-			attachValue(txnCompileCtx.GetProcess().GetTopContext(),
-				defines.EngineKey{},
-				feSes.GetTxnHandler().GetStorage()))
-
-		vec, free, err := colexec.GetReadonlyResultFromNoColumnExpression(txnCompileCtx.GetProcess(), planExpr)
-		if err != nil {
-			return nil, err
-		}
-
-		value, err := getValueFromVector(ctx, vec, feSes, planExpr)
-		free()
-		return value, err
 	}
+
+	if targetType != nil {
+		var err error
+		planExpr, err = plan2.MakePlan2AssignmentCastExpr(ctx, planExpr, *targetType)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	txnCompileCtx := feSes.GetTxnCompileCtx()
+	// set @a = 'on', type of a is bool. And mo cast rule does not fit set variable rule so delay to convert type.
+	// Here the evalExpr may execute some function that needs engine.Engine.
+	txnCompileCtx.GetProcess().ReplaceTopCtx(
+		attachValue(txnCompileCtx.GetProcess().GetTopContext(),
+			defines.EngineKey{},
+			feSes.GetTxnHandler().GetStorage()))
+
+	vec, free, err := colexec.GetReadonlyResultFromNoColumnExpression(txnCompileCtx.GetProcess(), planExpr)
+	if err != nil {
+		return nil, err
+	}
+
+	value, err := getValueFromVector(ctx, vec, feSes, planExpr)
+	free()
+	return value, err
+}
+
+func storedProcedureVariableExists(ctx context.Context, name string) bool {
+	inSp, _ := ctx.Value(defines.InSp{}).(bool)
+	if !inSp {
+		return false
+	}
+	scopes, ok := ctx.Value(defines.VarScopeKey{}).(*[]map[string]interface{})
+	if !ok || scopes == nil {
+		return false
+	}
+	name = strings.ToLower(name)
+	for i := len(*scopes) - 1; i >= 0; i-- {
+		if _, ok := (*scopes)[i][name]; ok {
+			return true
+		}
+	}
+	return false
 }
 
 func getValueFromVector(ctx context.Context, vec *vector.Vector, feSes FeSession, expr *plan2.Expr) (interface{}, error) {
@@ -1577,8 +1695,30 @@ func setMysqlColumnTypeInfo(ctx context.Context, typ types.Type, col *MysqlColum
 		return err
 	}
 	setMysqlColumnTypeMetadata(col, typ)
+	setCharacter(col)
+	switch typ.Charset {
+	case types.CharsetUTF8:
+		// CharsetUTF8 is MatrixOne's explicit utf8mb4_general_ci identity.
+		// setCharacter uses the older utf8_general_ci protocol default, so
+		// override it with the exact utf8mb4 collation ID.
+		col.SetCharset(uint16(Utf8mb4CollationID))
+	case types.CharsetUTF8MB4Bin:
+		// A _bin collation still describes nonbinary UTF-8 text. Protocol
+		// collation 63 is reserved for the binary character set.
+		col.SetCharset(uint16(utf8mb4BinCollationID))
+	case types.CharsetBinary:
+		// Some internal functions intentionally return packed bytes in a VARCHAR
+		// container. Keep those values binary even though their physical OID is a
+		// text OID; clients must not attempt UTF-8 conversion on the payload.
+		col.SetCharset(charsetBinary)
+	}
+	if typ.Oid == types.T_binary || typ.Oid == types.T_varbinary {
+		col.SetFlag(col.Flag() | uint16(defines.BINARY_FLAG))
+	}
 	return nil
 }
+
+const mysqlDecimalNotSpecified = 0x1f
 
 func setMysqlColumnTypeMetadata(col *MysqlColumn, typ types.Type) {
 	if typ.IsDecimal() {
@@ -1587,10 +1727,42 @@ func setMysqlColumnTypeMetadata(col *MysqlColumn, typ types.Type) {
 	} else if typ.Oid == types.T_year {
 		// Keep YEAR metadata consistent with regular query result columns.
 		col.SetLength(uint32(types.MaxVarcharLen))
+	} else if typ.Oid == types.T_char || typ.Oid == types.T_varchar {
+		// Protocol::ColumnDefinition41 expresses column_length in bytes. Character
+		// string widths are declared in characters and use utf8mb3 metadata.
+		if typ.Oid == types.T_varchar && typ.Width == 0 {
+			// Synthesized VARCHAR result columns historically use zero as an
+			// unspecified width and must keep their unbounded metadata.
+			col.SetLength(math.MaxUint32)
+		} else {
+			col.SetLength(mysqlStringColumnLength(typ.Width, charsetVarcharMaxBytesPerCharacter))
+		}
+	} else if typ.Oid == types.T_binary || typ.Oid == types.T_varbinary {
+		// Binary string widths are already declared in bytes.
+		col.SetLength(mysqlStringColumnLength(typ.Width, 1))
 	} else {
 		setColLength(col, typ.Width)
 	}
+	// MySQL uses 0x1f (DECIMAL_NOT_SPECIFIED) for FLOAT and DOUBLE
+	// without an explicit display scale. Clients use this metadata when
+	// converting binary floating-point results to text.
+	if (typ.Oid == types.T_float32 || typ.Oid == types.T_float64) &&
+		(typ.Scale < 0 || typ.Width == 0 && typ.Scale == 0) {
+		col.SetDecimal(mysqlDecimalNotSpecified)
+		return
+	}
 	col.SetDecimal(typ.Scale)
+}
+
+func mysqlStringColumnLength(width int32, maxBytesPerCharacter uint32) uint32 {
+	if width < 0 {
+		return math.MaxUint32
+	}
+	length := uint64(width) * uint64(maxBytesPerCharacter)
+	if length > math.MaxUint32 {
+		return math.MaxUint32
+	}
+	return uint32(length)
 }
 
 // errCodeRollbackWholeTxn denotes that the error code
@@ -1692,6 +1864,12 @@ type UserInput struct {
 	sqlSourceType             []string
 	isRestore                 bool
 	isBinaryProtExecute       bool
+	// isSetExpression marks an AST-only SELECT synthesized to evaluate a SET
+	// assignment. Such statements have no stable SQL cache key.
+	isSetExpression bool
+	// isPreparedExpression marks a nested SET-derived expression that is being
+	// evaluated as part of prepared-statement execution.
+	isPreparedExpression bool
 	// isInternalInput mark this UserInput is come from mo internal.
 	// replace old logic: (stmt != nil)
 	// cc isInternal()
@@ -1737,6 +1915,14 @@ func (ui *UserInput) getSqlSourceTypes() []string {
 // currently, we use it to handle the 'set_var' statement.
 func (ui *UserInput) isInternal() bool {
 	return ui.isInternalInput
+}
+
+func (ui *UserInput) isPreparedExpr() bool {
+	return ui != nil && ui.isPreparedExpression
+}
+
+func (ui *UserInput) canUsePlanCache() bool {
+	return ui != nil && !ui.isSetExpression
 }
 
 func (ui *UserInput) genSqlSourceType(ses FeSession) {
@@ -1885,18 +2071,22 @@ func attachValue(ctx context.Context, key, val any) context.Context {
 	return context.WithValue(ctx, key, val)
 }
 
-const KeySep = "#"
+const KeySep = objectkey.Separator
 
 func genKey(dbName, tblName string) string {
-	return fmt.Sprintf("%s%s%s", dbName, KeySep, tblName)
+	return objectkey.Encode(dbName, tblName)
+}
+
+func normalizeViewDependencyKey(key string) (string, error) {
+	databaseName, viewName, _, err := plan2.ParseViewDependencyKey(key)
+	if err != nil {
+		return "", err
+	}
+	return genKey(databaseName, viewName), nil
 }
 
 func splitKey(key string) (string, string) {
-	parts := strings.Split(key, KeySep)
-	if len(parts) >= 2 {
-		return parts[0], parts[1]
-	}
-	return parts[0], ""
+	return objectkey.Decode(key)
 }
 
 type toposort struct {
@@ -2011,19 +2201,13 @@ func colDef2MysqlColumn(ctx context.Context, col *plan.ColDef) (*MysqlColumn, er
 	c.SetOrgTable(col.TblName)
 	c.SetAutoIncr(col.Typ.AutoIncr)
 	c.SetSchema(col.DbName)
-	typ := types.New(types.T(col.Typ.Id), col.Typ.Width, col.Typ.Scale)
+	typ := types.NewWithCharset(
+		types.T(col.Typ.Id), col.Typ.Width, col.Typ.Scale, uint8(col.Typ.Charset),
+	)
 	if err = setMysqlColumnTypeInfo(ctx, typ, c); err != nil {
 		return nil, err
 	}
-	setColFlag(c)
-	setCharacter(c)
-
-	// For binary/varbinary with mysql_type_varchar.Change the charset.
-	if types.T(col.Typ.Id) == types.T_binary || types.T(col.Typ.Id) == types.T_varbinary {
-		c.SetCharset(0x3f)
-	}
-
-	c.SetDecimal(col.Typ.Scale)
+	setColFlag(c, col)
 
 	// For TIMESTAMPADD function compatibility with MySQL:
 	// GetResultColumnsFromPlan sets the return type based on input type and unit:
@@ -2251,6 +2435,7 @@ func extractTableDefColumns(erArray []ExecResult, ctx context.Context, dbName, t
 					Id:          int32(typ.Oid),
 					Width:       typ.Width,
 					Scale:       typ.Scale,
+					Charset:     uint32(typ.Charset),
 					Table:       table,
 					NotNullable: !def.NullAbility,
 				},

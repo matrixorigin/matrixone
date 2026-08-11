@@ -16,8 +16,11 @@ package incrservice
 
 import (
 	"context"
+	"math"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
@@ -68,8 +71,9 @@ type AutoIncrementService interface {
 	CurrentValue(ctx context.Context, tableID uint64, col string) (uint64, error)
 	// Reload reload auto increment cache.
 	Reload(ctx context.Context, tableID uint64) error
-	// SetOffset sets the offset of an auto-increment column and refreshes local cache.
-	SetOffset(ctx context.Context, tableID uint64, colName string, offset uint64, txn client.TxnOperator) error
+	// SetOffset sets the offset of an auto-increment column identified by its stable
+	// ordinal, synchronizes its current name, and refreshes local cache.
+	SetOffset(ctx context.Context, tableID uint64, colIndex int, colName string, offset uint64, txn client.TxnOperator) error
 	// DiscardOffsetReset synchronously retires a transaction-private reset cache.
 	DiscardOffsetReset(ctx context.Context, tableID uint64, txn client.TxnOperator) error
 	// Close close the auto increment service
@@ -129,7 +133,7 @@ type valueAllocator interface {
 	allocate(ctx context.Context, tableID uint64, col string, count int, txnOp client.TxnOperator) (uint64, uint64, timestamp.Timestamp, error)
 	asyncAllocate(ctx context.Context, tableID uint64, col string, count int, txnOp client.TxnOperator, cb func(uint64, uint64, timestamp.Timestamp, error)) error
 	updateMinValue(ctx context.Context, tableID uint64, col string, minValue uint64, txnOp client.TxnOperator) error
-	forceSetOffset(ctx context.Context, tableID uint64, col string, offset uint64, txnOp client.TxnOperator) error
+	forceSetOffset(ctx context.Context, tableID uint64, colIndex int, colName string, offset uint64, txnOp client.TxnOperator) error
 	close()
 }
 
@@ -146,10 +150,10 @@ type IncrValueStore interface {
 	// SetOffset updates the offset of an auto-increment column, only raising it when the new
 	// value exceeds the current. If the current offset is already >= the new offset, this is a no-op.
 	SetOffset(ctx context.Context, tableID uint64, colName string, offset uint64, txnOp client.TxnOperator) error
-	// ForceSetOffset sets the offset of an auto-increment column to any value, bypassing
-	// the monotonic guard. Only called during ALTER TABLE AUTO_INCREMENT which holds an
-	// exclusive DDL lock, ensuring no concurrent inserts.
-	ForceSetOffset(ctx context.Context, tableID uint64, colName string, offset uint64, txnOp client.TxnOperator) error
+	// ForceSetOffset sets the offset and current name of an auto-increment column to any
+	// value, bypassing the monotonic guard. Only called during ALTER TABLE AUTO_INCREMENT
+	// which holds an exclusive DDL lock, ensuring no concurrent inserts.
+	ForceSetOffset(ctx context.Context, tableID uint64, colIndex int, colName string, offset uint64, txnOp client.TxnOperator) error
 	// Delete remove metadata records from catalog.AutoIncrTableName.
 	Delete(ctx context.Context, tableID uint64) error
 	// Close the store
@@ -165,11 +169,62 @@ type AutoColumn struct {
 	Step     uint64
 }
 
-// GetAutoColumnFromDef get auto columns from table def
+// ValidateAutoColumnOffset rejects allocator offsets that cannot be represented
+// by the destination AUTO_INCREMENT column type.
+func ValidateAutoColumnOffset(ctx context.Context, typ types.T, offset uint64) error {
+	var limit uint64
+	switch typ {
+	case types.T_uint8:
+		limit = math.MaxUint8
+	case types.T_uint16:
+		limit = math.MaxUint16
+	case types.T_uint32:
+		limit = math.MaxUint32
+	case types.T_uint64:
+		return nil
+	case types.T_int8:
+		limit = math.MaxInt8
+	case types.T_int16:
+		limit = math.MaxInt16
+	case types.T_int32:
+		limit = math.MaxInt32
+	case types.T_int64:
+		limit = math.MaxInt64
+	default:
+		return nil
+	}
+	if offset <= limit {
+		return nil
+	}
+	return moerr.NewOutOfRangef(
+		ctx,
+		typ.ToType().String(),
+		"AUTO_INCREMENT value %d",
+		offset,
+	)
+}
+
+// GetAutoColumnFromDef gets all allocator-owned columns from a table definition,
+// including internal hidden columns such as __mo_fake_pk_col.
 func GetAutoColumnFromDef(def *plan.TableDef) []AutoColumn {
+	return getAutoColumnsFromDef(def, func(*plan.ColDef) bool { return true })
+}
+
+// GetUserAutoColumnFromDef gets only SQL-visible AUTO_INCREMENT columns.
+func GetUserAutoColumnFromDef(def *plan.TableDef) []AutoColumn {
+	return getAutoColumnsFromDef(def, func(col *plan.ColDef) bool { return !col.Hidden })
+}
+
+// GetInternalAutoColumnFromDef gets allocator-owned hidden columns. User offset
+// requests must not change these columns.
+func GetInternalAutoColumnFromDef(def *plan.TableDef) []AutoColumn {
+	return getAutoColumnsFromDef(def, func(col *plan.ColDef) bool { return col.Hidden })
+}
+
+func getAutoColumnsFromDef(def *plan.TableDef, include func(*plan.ColDef) bool) []AutoColumn {
 	var cols []AutoColumn
 	for i, col := range def.Cols {
-		if col.Typ.AutoIncr {
+		if col.Typ.AutoIncr && include(col) {
 			cols = append(cols, AutoColumn{
 				ColName:  col.Name,
 				TableID:  def.TblId,

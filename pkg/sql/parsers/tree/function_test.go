@@ -96,4 +96,11 @@ func Test_Function(t *testing.T) {
 	ctx.Reset()
 	drop.Format(ctx)
 	require.Equal(t, "drop function sql_sum (a int, b int)", ctx.String())
+
+	dropIfExists := NewDropFunction(name, []FunctionArg{arg1, arg2})
+	dropIfExists.IfExists = true
+	require.True(t, dropIfExists.IfExists)
+	ctx.Reset()
+	dropIfExists.Format(ctx)
+	require.Equal(t, "drop function if exists sql_sum (a int, b int)", ctx.String())
 }

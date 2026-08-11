@@ -39,13 +39,16 @@ var StrKeyPadding [16]byte
 type StringHashMap struct {
 	mp *mpool.MPool
 
-	blockCellCnt    uint64
-	blockMaxElemCnt uint64
-	cellCntMask     uint64
+	blockCellCntBits uint8
+	cellCntMask      uint64
 
 	cellCnt uint64
 	elemCnt uint64
 	cells   [][]StringHashMapCell
+	account *AllocationAccountSelection
+
+	version uint64
+	admit   ResizeAdmission
 }
 
 var (
@@ -53,48 +56,144 @@ var (
 	maxStrCellCntPerBlock uint64
 )
 
+func StringHashMapInitialAllocationBytes() uint64 { return kInitialCellCnt * strCellSize }
+
 func init() {
 	strCellSize = uint64(unsafe.Sizeof(StringHashMapCell{}))
 	maxStrCellCntPerBlock = maxBlockSize / strCellSize
 }
 
-func (ht *StringHashMap) Free() {
-	for i, c := range ht.cells {
-		mpool.FreeSlice(ht.mp, c)
-		ht.cells[i] = nil
-	}
-	ht.cells = nil
+func (ht *StringHashMap) blockCellCnt() uint64 {
+	return uint64(1) << ht.blockCellCntBits
 }
 
-func (ht *StringHashMap) allocate(index int, ncells int) error {
-	if ht.cells[index] != nil {
-		panic("overwriting")
+func (ht *StringHashMap) cellAt(index uint64) *StringHashMapCell {
+	blockID := index >> ht.blockCellCntBits
+	cellID := index & (ht.blockCellCnt() - 1)
+	return &ht.cells[blockID][cellID]
+}
+
+func (ht *StringHashMap) Free() {
+	ht.freeCells(ht.cells)
+	ht.cells = nil
+	ht.account = nil
+}
+
+func (ht *StringHashMap) freeCells(cells [][]StringHashMapCell) {
+	for i, block := range cells {
+		freeHashTableCellSlice(ht.mp, block)
+		cells[i] = nil
 	}
-	c, err := mpool.MakeSlice[StringHashMapCell](ncells, ht.mp, true)
+	freeHashTableDescriptorSlice(ht.mp, cells, ht.account)
+}
+
+func (ht *StringHashMap) allocateCells(blockCount int, blockCellCnt uint64) ([][]StringHashMapCell, error) {
+	cells, err := makeHashTableDescriptorSlice[[]StringHashMapCell](
+		blockCount,
+		ht.mp,
+		ht.account,
+		ht.descriptorSite(),
+	)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	ht.cells[index] = c
-	return nil
+	for i := range cells {
+		block, err := makeHashTableCellSlice[StringHashMapCell](
+			int(blockCellCnt),
+			ht.mp,
+			ht.account,
+			ht.cellSite(),
+		)
+		if err != nil {
+			ht.freeCells(cells)
+			return nil, err
+		}
+		cells[i] = block
+	}
+	return cells, nil
+}
+
+func (ht *StringHashMap) appendCells(
+	blockCount int,
+	blockCellCnt uint64,
+) ([][]StringHashMapCell, error) {
+	cells, err := makeHashTableDescriptorSlice[[]StringHashMapCell](
+		blockCount,
+		ht.mp,
+		ht.account,
+		ht.descriptorSite(),
+	)
+	if err != nil {
+		return nil, err
+	}
+	copy(cells, ht.cells)
+	for i := len(ht.cells); i < len(cells); i++ {
+		block, allocErr := makeHashTableCellSlice[StringHashMapCell](
+			int(blockCellCnt),
+			ht.mp,
+			ht.account,
+			ht.cellSite(),
+		)
+		if allocErr != nil {
+			for j := len(ht.cells); j < i; j++ {
+				freeHashTableCellSlice(ht.mp, cells[j])
+				cells[j] = nil
+			}
+			freeHashTableDescriptorSlice(ht.mp, cells, ht.account)
+			return nil, allocErr
+		}
+		cells[i] = block
+	}
+	return cells, nil
 }
 
 func (ht *StringHashMap) Init(mp *mpool.MPool) (err error) {
+	return ht.InitWithAllocation(mp, nil)
+}
+
+func (ht *StringHashMap) InitWithAllocation(
+	mp *mpool.MPool,
+	account *AllocationAccountSelection,
+) (err error) {
+	if account != nil {
+		if err = account.validate(); err != nil {
+			return err
+		}
+	}
 	ht.mp = mp
-	ht.blockCellCnt = kInitialCellCnt
-	ht.blockMaxElemCnt = maxElemCnt(kInitialCellCnt, strCellSize)
+	ht.account = account
+	ht.blockCellCntBits = kInitialCellCntBits
 	ht.elemCnt = 0
 	ht.cellCnt = kInitialCellCnt
+	ht.version = 0
 	ht.cellCntMask = kInitialCellCnt - 1
 
-	ht.cells = make([][]StringHashMapCell, 1)
-	if err := ht.allocate(0, int(ht.blockCellCnt)); err != nil {
+	if ht.cells, err = ht.allocateCells(1, ht.blockCellCnt()); err != nil {
+		ht.account = nil
 		return err
 	}
 
 	return
 }
 
+func (ht *StringHashMap) cellSite() mpool.AllocationSite {
+	if ht.account == nil {
+		return 0
+	}
+	return ht.account.cellSite
+}
+
+func (ht *StringHashMap) descriptorSite() mpool.AllocationSite {
+	if ht.account == nil {
+		return 0
+	}
+	return ht.account.descriptorSite
+}
+
 func (ht *StringHashMap) InsertStringBatch(states [][3]uint64, keys [][]byte, values []uint64) error {
+	if len(keys) == 0 {
+		return nil
+	}
 	if err := ht.ResizeOnDemand(uint64(len(keys))); err != nil {
 		return err
 	}
@@ -114,6 +213,9 @@ func (ht *StringHashMap) InsertStringBatch(states [][3]uint64, keys [][]byte, va
 }
 
 func (ht *StringHashMap) InsertStringBatchWithRing(zValues []int64, states [][3]uint64, keys [][]byte, values []uint64) error {
+	if len(keys) == 0 {
+		return nil
+	}
 	if err := ht.ResizeOnDemand(uint64(len(keys))); err != nil {
 		return err
 	}
@@ -147,9 +249,7 @@ func (ht *StringHashMap) FindStringBatch(states [][3]uint64, keys [][]byte, valu
 
 func (ht *StringHashMap) findCell(state *[3]uint64) *StringHashMapCell {
 	for idx := state[0] & ht.cellCntMask; true; idx = (idx + 1) & ht.cellCntMask {
-		blockId := idx / ht.blockCellCnt
-		cellId := idx % ht.blockCellCnt
-		cell := &ht.cells[blockId][cellId]
+		cell := ht.cellAt(idx)
 		if cell.Mapped == 0 || cell.HashState == *state {
 			return cell
 		}
@@ -159,9 +259,7 @@ func (ht *StringHashMap) findCell(state *[3]uint64) *StringHashMapCell {
 
 func (ht *StringHashMap) findEmptyCell(state *[3]uint64) *StringHashMapCell {
 	for idx := state[0] & ht.cellCntMask; true; idx = (idx + 1) & ht.cellCntMask {
-		blockId := idx / ht.blockCellCnt
-		cellId := idx % ht.blockCellCnt
-		cell := &ht.cells[blockId][cellId]
+		cell := ht.cellAt(idx)
 		if cell.Mapped == 0 {
 			return cell
 		}
@@ -169,109 +267,137 @@ func (ht *StringHashMap) findEmptyCell(state *[3]uint64) *StringHashMapCell {
 	return nil
 }
 
-func (ht *StringHashMap) ResizeOnDemand(n uint64) error {
+func (ht *StringHashMap) rehashInPlace(oldCellCnt uint64) {
+	// Start immediately after an old empty slot, which is a linear-probing
+	// cluster boundary. The load factor guarantees at least one such slot.
+	emptyIndex := uint64(0)
+	for emptyIndex < oldCellCnt && ht.cellAt(emptyIndex).Mapped != 0 {
+		emptyIndex++
+	}
+	if emptyIndex == oldCellCnt {
+		panic("cannot grow a full string hash map")
+	}
 
-	targetCnt := ht.elemCnt + n
-	if targetCnt <= uint64(len(ht.cells))*ht.blockMaxElemCnt {
+	var emptyCell StringHashMapCell
+	oldMask := oldCellCnt - 1
+	for offset := uint64(1); offset < oldCellCnt; offset++ {
+		index := (emptyIndex + offset) & oldMask
+		source := ht.cellAt(index)
+		if source.Mapped == 0 {
+			continue
+		}
+		cell := *source
+		*source = emptyCell
+		// Under the wider mask, a cell either moves into a newly allocated block
+		// or into a hole at/before its old position in this scan order. It cannot
+		// overwrite an unvisited old cell.
+		*ht.findEmptyCell(&cell.HashState) = cell
+	}
+}
+
+func (ht *StringHashMap) ResizeOnDemand(n uint64) error {
+	if !resizeNeeded(ht.elemCnt, n, ht.cellCnt, strCellSize) {
+		return nil
+	}
+	return ht.resizeOnDemand(n)
+}
+
+func (ht *StringHashMap) resizeOnDemand(additional uint64) error {
+	return ht.ResizeWithPlan(ht.PlanResize(additional))
+}
+
+// SetResizeAdmission installs an optional memory admission callback. The
+// callback is called once for each growth, before any allocation or mutation.
+func (ht *StringHashMap) SetResizeAdmission(admit ResizeAdmission) { ht.admit = admit }
+
+// PlanResize computes growth accounting without allocating or changing the map.
+func (ht *StringHashMap) PlanResize(n uint64) ResizePlan {
+	return newResizePlan(ht.elemCnt, n, ht.cellCnt, ht.blockCellCnt(),
+		uint64(len(ht.cells)), strCellSize,
+		maxStrCellCntPerBlock, ht.version)
+}
+
+// ResizeWithPlan applies a previously computed plan transactionally.
+func (ht *StringHashMap) ResizeWithPlan(plan ResizePlan) error {
+	if plan.Invalid {
+		return ErrInvalidResizePlan
+	}
+	if plan.Noop {
+		return nil
+	}
+	if !plan.matches(ht.version, ht.cellCnt, ht.blockCellCnt(), uint64(len(ht.cells))) {
+		return ErrStaleResizePlan
+	}
+	var reservation ResizeReservation
+	if ht.admit != nil {
+		var err error
+		if reservation, err = ht.admit(plan); err != nil {
+			return err
+		}
+	}
+	committed := false
+	defer func() {
+		if reservation != nil && !committed {
+			reservation.Rollback()
+		}
+	}()
+
+	if plan.ReuseCurrentBlocks {
+		newCells, err := ht.appendCells(
+			int(plan.TargetBlockCount),
+			plan.TargetBlockCellCount,
+		)
+		if err != nil {
+			return err
+		}
+		oldCellCnt := ht.cellCnt
+		oldDescriptors := ht.cells
+		ht.cells = newCells
+		freeHashTableDescriptorSlice(ht.mp, oldDescriptors, ht.account)
+		ht.cellCnt = plan.TargetCellCount
+		ht.cellCntMask = ht.cellCnt - 1
+		ht.version++
+		ht.rehashInPlace(oldCellCnt)
+		if reservation != nil {
+			reservation.Commit(plan)
+		}
+		committed = true
 		return nil
 	}
 
-	newCellCnt := ht.cellCnt << 1
-	newMaxElemCnt := maxElemCnt(newCellCnt, strCellSize)
-	for newMaxElemCnt < targetCnt {
-		newCellCnt <<= 1
-		newMaxElemCnt = maxElemCnt(newCellCnt, strCellSize)
+	newCells, err := ht.allocateCells(int(plan.TargetBlockCount), plan.TargetBlockCellCount)
+	if err != nil {
+		return err
 	}
-
-	newAlloc := int(newCellCnt * strCellSize)
-	if ht.blockCellCnt == maxStrCellCntPerBlock {
-		// double the blocks
-		oldBlockNum := len(ht.cells)
-		newBlockNum := newAlloc / maxBlockSize
-
-		ht.cells = append(ht.cells, make([][]StringHashMapCell, newBlockNum-oldBlockNum)...)
-		ht.cellCnt = ht.blockCellCnt * uint64(newBlockNum)
-		ht.cellCntMask = ht.cellCnt - 1
-
-		for i := oldBlockNum; i < newBlockNum; i++ {
-			if err := ht.allocate(i, int(ht.blockCellCnt)); err != nil {
-				return err
+	newMask := plan.TargetCellCount - 1
+	newBlockBits := powerOfTwoBits(plan.TargetBlockCellCount)
+	for i := range ht.cells {
+		for j := range ht.cells[i] {
+			old := ht.cells[i][j]
+			if old.Mapped == 0 {
+				continue
 			}
-		}
-
-		// rearrange the cells
-		var block []StringHashMapCell
-		var emptyCell StringHashMapCell
-
-		for i := 0; i < oldBlockNum; i++ {
-			block = ht.cells[i]
-			for j := uint64(0); j < ht.blockCellCnt; j++ {
-				cell := &block[j]
+			for idx := old.HashState[0] & newMask; ; idx = (idx + 1) & newMask {
+				cell := &newCells[idx>>newBlockBits][idx&(plan.TargetBlockCellCount-1)]
 				if cell.Mapped == 0 {
-					continue
+					*cell = old
+					break
 				}
-				newCell := ht.findCell(&cell.HashState)
-				if newCell != cell {
-					*newCell = *cell
-					*cell = emptyCell
-				}
-			}
-		}
-
-		block = ht.cells[oldBlockNum]
-		for j := uint64(0); j < ht.blockCellCnt; j++ {
-			cell := &block[j]
-			if cell.Mapped == 0 {
-				break
-			}
-			newCell := ht.findCell(&cell.HashState)
-			if newCell != cell {
-				*newCell = *cell
-				*cell = emptyCell
-			}
-		}
-	} else {
-		oldCells0 := ht.cells[0]
-		ht.cells[0] = nil
-		defer mpool.FreeSlice(ht.mp, oldCells0)
-
-		ht.cellCnt = newCellCnt
-		ht.cellCntMask = ht.cellCnt - 1
-
-		if newAlloc <= maxBlockSize {
-			ht.blockCellCnt = newCellCnt
-			ht.blockMaxElemCnt = newMaxElemCnt
-
-			if err := ht.allocate(0, int(newCellCnt)); err != nil {
-				return err
-			}
-
-		} else {
-			ht.blockCellCnt = maxStrCellCntPerBlock
-			ht.blockMaxElemCnt = maxElemCnt(ht.blockCellCnt, strCellSize)
-
-			newBlockNum := newAlloc / maxBlockSize
-			ht.cells = make([][]StringHashMapCell, newBlockNum)
-			ht.cellCnt = ht.blockCellCnt * uint64(newBlockNum)
-			ht.cellCntMask = ht.cellCnt - 1
-
-			for i := 0; i < newBlockNum; i++ {
-				if err := ht.allocate(i, int(ht.blockCellCnt)); err != nil {
-					return err
-				}
-			}
-		}
-
-		// rearrange the cells
-		for i := range oldCells0 {
-			cell := &oldCells0[i]
-			if cell.Mapped != 0 {
-				newCell := ht.findEmptyCell(&cell.HashState)
-				*newCell = *cell
 			}
 		}
 	}
 
+	oldCells := ht.cells
+	ht.cells = newCells
+	ht.cellCnt = plan.TargetCellCount
+	ht.cellCntMask = newMask
+	ht.blockCellCntBits = newBlockBits
+	ht.version++
+	ht.freeCells(oldCells)
+	if reservation != nil {
+		reservation.Commit(plan)
+	}
+	committed = true
 	return nil
 }
 
@@ -280,6 +406,9 @@ func (ht *StringHashMap) Size() int64 {
 	ret := int64(88)
 	for i := range ht.cells {
 		ret += int64(int(strCellSize) * len(ht.cells[i]))
+	}
+	if ht.account != nil {
+		ret += int64(len(ht.cells)) * int64(unsafe.Sizeof([]StringHashMapCell(nil)))
 	}
 	return ret
 }
@@ -295,9 +424,7 @@ func (it *StringHashMapIterator) Init(ht *StringHashMap) {
 
 func (it *StringHashMapIterator) Next() (cell *StringHashMapCell, err error) {
 	for it.pos < it.table.cellCnt {
-		blockId := it.pos / it.table.blockCellCnt
-		cellId := it.pos % it.table.blockCellCnt
-		cell = &it.table.cells[blockId][cellId]
+		cell = it.table.cellAt(it.pos)
 		if cell.Mapped != 0 {
 			break
 		}

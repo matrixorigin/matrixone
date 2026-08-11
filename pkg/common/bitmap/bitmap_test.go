@@ -15,8 +15,11 @@
 package bitmap
 
 import (
+	"bytes"
 	"fmt"
+	"io"
 	"testing"
+	"unsafe"
 
 	"github.com/stretchr/testify/require"
 )
@@ -30,6 +33,12 @@ func newBm(n int) *Bitmap {
 	var bm Bitmap
 	bm.InitWithSize(int64(n))
 	return &bm
+}
+
+type shortMarshalWriter struct{}
+
+func (shortMarshalWriter) Write(value []byte) (int, error) {
+	return len(value) - 1, nil
 }
 
 func TestNulls(t *testing.T) {
@@ -59,7 +68,8 @@ func TestNulls(t *testing.T) {
 	np.AddMany([]uint64{1, 2, 3})
 	require.Equal(t, 3, np.Count())
 	np.RemoveRange(1, 3)
-	require.Equal(t, 0, np.Count())
+	require.Equal(t, 1, np.Count())
+	require.True(t, np.Contains(3))
 
 	np.AddMany([]uint64{1, 2, 3})
 	np.Filter([]int64{0})
@@ -68,11 +78,37 @@ func TestNulls(t *testing.T) {
 	fmt.Printf("numbers: %v\n", np.Count())
 
 	nq := newBm(Rows)
-	nq.Unmarshal(np.Marshal())
+	encoded := np.Marshal()
+	var streamed bytes.Buffer
+	require.NoError(t, np.MarshalTo(&streamed))
+	require.Equal(t, encoded, streamed.Bytes())
+	require.Equal(t, len(encoded), np.MarshalSize())
+	require.ErrorIs(t, np.MarshalTo(shortMarshalWriter{}), io.ErrShortWrite)
+	nq.Unmarshal(encoded)
 
 	require.Equal(t, np.ToArray(), nq.ToArray())
 
 	np.Reset()
+}
+
+func TestRemoveRangeSameWordBoundary(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		length int
+		start  uint64
+	}{
+		{name: "one word", length: 64, start: 52},
+		{name: "aggregate chunk boundary", length: 8192, start: 8180},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			np := newBm(tc.length)
+			np.AddRange(0, uint64(tc.length))
+			np.RemoveRange(tc.start, uint64(tc.length))
+			require.Equal(t, int(tc.start), np.Count())
+			require.True(t, np.Contains(tc.start-1))
+			require.False(t, np.Contains(tc.start))
+		})
+	}
 }
 
 func BenchmarkAdd(b *testing.B) {
@@ -159,8 +195,8 @@ func TestBitmap_Compatibility(t *testing.T) {
 	np.AddMany(rows)
 
 	npV1 := &Bitmap{
-		len:  np.len,
-		data: np.data,
+		taggedLen: np.taggedLen,
+		data:      np.data,
 	}
 	data := npV1.MarshalV1()
 
@@ -217,4 +253,125 @@ func TestBitmap_And2(t *testing.T) {
 	require.Equal(t, 100, np2.Count())
 	np.And(np2)
 	require.Equal(t, 100, np.Count())
+}
+
+func TestBitmapExternalStorageLifecycle(t *testing.T) {
+	require.Equal(
+		t,
+		2*unsafe.Sizeof(int64(0))+unsafe.Sizeof([]uint64(nil)),
+		unsafe.Sizeof(Bitmap{}),
+	)
+	storage := []uint64{^uint64(0), ^uint64(0)}
+	var value Bitmap
+	require.Nil(t, value.InstallExternalStorage(storage))
+	require.True(t, value.HasExternalStorage())
+	require.Equal(t, 2, value.ExternalStorageCapacity())
+
+	value.InitWithSize(65)
+	require.Equal(t, []uint64{0, 0}, storage)
+	value.Add(64)
+	require.True(t, value.Contains(64))
+
+	value.Reset()
+	require.True(t, value.HasExternalStorage())
+	require.Equal(t, 2, value.ExternalStorageCapacity())
+	require.Equal(t, []uint64{0, 0}, storage)
+	value.TryExpandWithSize(128)
+	value.Add(127)
+	require.True(t, value.Contains(127))
+	require.Panics(t, func() {
+		value.TryExpandWithSize(129)
+	})
+
+	released := value.ReleaseExternalStorage()
+	require.Equal(t, storage, released)
+	require.False(t, value.HasExternalStorage())
+	value.TryExpandWithSize(129)
+	value.Add(128)
+	require.True(t, value.Contains(128))
+}
+
+func TestBitmapRemapOrdered(t *testing.T) {
+	for _, external := range []bool{false, true} {
+		t.Run(fmt.Sprintf("external=%t", external), func(t *testing.T) {
+			var value Bitmap
+			if external {
+				value.InstallExternalStorage(make([]uint64, 3))
+			}
+			value.InitWithSize(130)
+			value.AddMany([]uint64{0, 2, 63, 64, 65, 128, 129})
+
+			value.RemapOrdered([]int64{0, 2, 64, 65, 129}, false)
+			require.Equal(t, int64(5), value.Len())
+			require.Equal(t, 5, value.Count())
+			for row := uint64(0); row < 5; row++ {
+				require.True(t, value.Contains(row))
+			}
+
+			value.InitWithSize(130)
+			value.AddMany([]uint64{0, 2, 63, 64, 65, 128, 129})
+			value.RemapOrdered([]int64{1, 63, 128}, true)
+			require.Equal(t, int64(130), value.Len())
+			require.Equal(t, 5, value.Count())
+			require.True(t, value.Contains(0))
+			require.True(t, value.Contains(1))
+			require.True(t, value.Contains(62))
+			require.True(t, value.Contains(63))
+			require.True(t, value.Contains(126))
+		})
+	}
+}
+
+func TestBitmapRemapMaskOrdered(t *testing.T) {
+	var value Bitmap
+	value.InitWithSize(130)
+	value.AddMany([]uint64{1, 63, 64, 127, 129})
+
+	selection := newBm(130)
+	selection.AddMany([]uint64{1, 64, 129})
+	value.RemapMaskOrdered(selection, false)
+	require.Equal(t, int64(3), value.Len())
+	require.Equal(t, 3, value.Count())
+	require.True(t, value.Contains(0))
+	require.True(t, value.Contains(1))
+	require.True(t, value.Contains(2))
+
+	value.InitWithSize(130)
+	value.AddMany([]uint64{1, 63, 64, 127, 129})
+	value.RemapMaskOrdered(selection, true)
+	require.Equal(t, int64(130), value.Len())
+	require.Equal(t, 2, value.Count())
+	require.True(t, value.Contains(62))
+	require.True(t, value.Contains(125))
+}
+
+func TestBitmapExternalStorageUnmarshal(t *testing.T) {
+	source := newBm(128)
+	source.Add(1)
+	source.Add(127)
+	encoded := source.Marshal()
+
+	storage := make([]uint64, 2)
+	var copied Bitmap
+	copied.InstallExternalStorage(storage)
+	copied.Unmarshal(encoded)
+	require.True(t, copied.IsSame(source))
+	require.True(t, copied.HasExternalStorage())
+
+	var streamed Bitmap
+	streamStorage := make([]uint64, 2)
+	streamed.InstallExternalStorage(streamStorage)
+	payload, err := streamed.PrepareExternalUnmarshal(
+		encoded[:MarshalHeaderSize],
+		len(encoded),
+	)
+	require.NoError(t, err)
+	copy(payload, encoded[MarshalHeaderSize:])
+	require.True(t, streamed.IsSame(source))
+
+	_, err = streamed.PrepareExternalUnmarshal(
+		encoded[:MarshalHeaderSize],
+		len(encoded)-1,
+	)
+	require.Error(t, err)
 }

@@ -850,14 +850,20 @@ func getCompressType(param *tree.ExternParam, filepath string) string {
 // a prepared LOAD statement is EXECUTEd under a different sql_mode.
 func makeCastExpr(stmt *tree.Load, fileName string, tableDef *TableDef, node *plan.Node) []*plan.Expr {
 	ret := make([]*plan.Expr, 0)
-	stringTyp := &plan.Type{
-		Id: int32(types.T_varchar),
-	}
+	stringTyp := makeGeneratedPlan2Type(types.T_varchar, 0, 0, false)
 	for i := 0; i < len(tableDef.Cols); i++ {
 		typ := node.ProjectList[i].Typ
 		expr := node.ProjectList[i].Expr
+		// Parallel CSV LOAD normally scans varchar values and casts them in the
+		// project. Vector columns are decoded directly by external instead: a
+		// varchar staging vector would otherwise coexist with its binary form for
+		// the entire batch and make large vector imports unbounded in practice.
+		if isDirectParallelLoadType(types.T(typ.Id)) {
+			ret = append(ret, node.ProjectList[i])
+			continue
+		}
 		planExpr := &plan.Expr{
-			Typ:  *stringTyp,
+			Typ:  stringTyp,
 			Expr: expr,
 		}
 
@@ -866,4 +872,8 @@ func makeCastExpr(stmt *tree.Load, fileName string, tableDef *TableDef, node *pl
 	}
 
 	return ret
+}
+
+func isDirectParallelLoadType(id types.T) bool {
+	return id == types.T_array_float32 || id == types.T_array_float64
 }

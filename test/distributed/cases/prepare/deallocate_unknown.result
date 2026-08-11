@@ -1,0 +1,12 @@
+deallocate prepare missing_stmt;
+Unknown prepared statement handler (missing_stmt) given to DEALLOCATE PREPARE
+select 1;
+➤ 1[-5,64,0]  𝄀
+1
+prepare deallocated_stmt from 'select 1';
+deallocate prepare deallocated_stmt;
+deallocate prepare deallocated_stmt;
+Unknown prepared statement handler (deallocated_stmt) given to DEALLOCATE PREPARE
+select 2;
+➤ 2[-5,64,0]  𝄀
+2

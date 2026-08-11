@@ -189,6 +189,37 @@ func TestRestoreCreateTableDDLUsesExternalCreateSQL(t *testing.T) {
 	assert.Equal(t, "CREATE EXTERNAL TABLE `ckp_external`.`ext_csv_local` (\n  `id` INT\n) INFILE {'filepath'='/tmp/ext.csv', 'compression'='none', 'format'='csv'} FIELDS TERMINATED BY ',' ENCLOSED BY '\"' LINES TERMINATED BY '\\\\n' IGNORE 1 LINES", ddl)
 }
 
+func TestRestoreCreateTableDDLAcceptsUnicodeColumnComment(t *testing.T) {
+	table := checkpointtool.TableCatalogEntry{
+		TableID:      272864,
+		DatabaseName: "big_data_test",
+		TableName:    "ca_comprehensive_dataset",
+	}
+	data := &checkpointtool.TableDumpData{
+		TableID: table.TableID,
+		Schema: &checkpointtool.TableSchema{
+			TableName:    table.TableName,
+			DatabaseName: table.DatabaseName,
+			Columns: []checkpointtool.TableColumn{
+				{Name: "md5_id", SQLType: "VARCHAR(255)", NotNull: true},
+				{Name: "question_vector", SQLType: "VECF64(1024)", Comment: "摘要的向量集"},
+			},
+			PrimaryKey: []string{"md5_id"},
+		},
+	}
+
+	ddl, err := restoreCreateTableDDL(
+		context.Background(),
+		&checkpointtool.CheckpointReader{},
+		table,
+		data,
+		types.BuildTS(10, 0),
+	)
+	require.NoError(t, err)
+	require.Contains(t, ddl, "`question_vector` VECF64(1024)")
+	require.Contains(t, ddl, "COMMENT '摘要的向量集'")
+}
+
 func TestRestoreCreateTableDDLExternalRequiresCreateSQL(t *testing.T) {
 	table := checkpointtool.TableCatalogEntry{
 		DatabaseName: "ckp_external",

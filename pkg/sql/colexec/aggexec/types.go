@@ -40,19 +40,48 @@ type AggFuncExecExpression struct {
 	isDistinct     bool
 	argExpressions []*plan.Expr
 	extraConfig    []byte
+	configType     plan.AggregateConfigType
 }
 
-func MakeAggFunctionExpression(id int64, isDistinct bool, args []*plan.Expr, config []byte) AggFuncExecExpression {
+func MakeAggFunctionExpression(
+	id int64,
+	isDistinct bool,
+	args []*plan.Expr,
+	config []byte,
+	configType ...plan.AggregateConfigType,
+) AggFuncExecExpression {
+	var typ plan.AggregateConfigType
+	if len(configType) > 0 {
+		typ = configType[0]
+	}
 	return AggFuncExecExpression{
 		aggID:          id,
 		isDistinct:     isDistinct,
 		argExpressions: args,
 		extraConfig:    config,
+		configType:     typ,
 	}
 }
 
 func (ag *AggFuncExecExpression) GetAggID() int64 {
 	return ag.aggID
+}
+
+// PreservesFirstArgPrepareParamKind reports aggregates whose result is one of
+// the first argument's original values without a semantic type conversion.
+// Source conversion provenance may cross these materialization boundaries.
+func (ag *AggFuncExecExpression) PreservesFirstArgPrepareParamKind() bool {
+	switch ag.aggID {
+	case AggIdOfMin, AggIdOfMax, AggIdOfAny, AggIdOfMaxBy, AggIdOfMaxByNonNull,
+		WinIdOfFirstValue, WinIdOfLastValue, WinIdOfNthValue:
+		return true
+	case WinIdOfLag, WinIdOfLead:
+		// With no explicit default, LAG/LEAD return the first argument or NULL.
+		// A default expression can introduce a different source category.
+		return len(ag.argExpressions) < 3
+	default:
+		return false
+	}
 }
 
 func (ag *AggFuncExecExpression) IsDistinct() bool {
@@ -85,6 +114,29 @@ func (ag *AggFuncExecExpression) RewriteArgExpressions(rewrite func(*plan.Expr) 
 
 func (ag *AggFuncExecExpression) GetExtraConfig() []byte {
 	return ag.extraConfig
+}
+
+func (ag *AggFuncExecExpression) SetExtraConfig(config []byte) {
+	ag.extraConfig = config
+}
+
+type AggregateConfig struct {
+	Type plan.AggregateConfigType
+	Data []byte
+}
+
+func (ag *AggFuncExecExpression) GetExtraInformation() any {
+	if ag.extraConfig == nil {
+		return nil
+	}
+	if ag.configType == plan.AggregateConfigType_AGG_CONFIG_NONE {
+		return ag.extraConfig
+	}
+	return AggregateConfig{Type: ag.configType, Data: ag.extraConfig}
+}
+
+func (ag *AggFuncExecExpression) GetConfigType() plan.AggregateConfigType {
+	return ag.configType
 }
 
 // AggFuncExec is an interface to do execution for aggregation.
@@ -142,19 +194,58 @@ type AggFuncExec interface {
 	Free()
 }
 
+// PrepareParamKindStateAccessor is an optional capability implemented by the
+// aggregate state backed executors.  It exposes the provenance of the value
+// vector without widening AggFuncExec (value-window and other non-serializable
+// executors do not have a chunk state to expose).  Group spill/partial codecs
+// use this capability to carry the winner category alongside the packed state
+// rows.
+type PrepareParamKindStateAccessor interface {
+	PrepareParamKindsForChunk(chunk int) []vector.PrepareParamKind
+	PrepareParamKindsForSelection(flags [][]uint8) []vector.PrepareParamKind
+	// Row counts let transient provenance decoders validate an exact record
+	// before allocating its row payload. They are intentionally separate from
+	// the optional payload accessors because uniform states do not allocate.
+	PrepareParamKindRowCountForChunk(chunk int) int
+	PrepareParamKindRowCountFlat() int
+	PrepareParamKindSummaryForChunk(chunk int) (vector.PrepareParamKind, bool)
+	PrepareParamKindSummaryForSelection(flags [][]uint8) (vector.PrepareParamKind, bool)
+	RestorePrepareParamKindsForChunk(chunk int, kinds []vector.PrepareParamKind, mp *mpool.MPool) error
+	RestorePrepareParamKindsFlat(kinds []vector.PrepareParamKind, mp *mpool.MPool) error
+}
+
 // indicate who implements the AggFuncExec interface.
 var (
 	_ AggFuncExec = &groupConcatExec{}
 )
 
 // MakeAgg is the only exporting method to create an aggregation function executor.
-// all the aggID should be registered before calling this function.
 func MakeAgg(
 	mg *mpool.MPool,
 	aggID int64, isDistinct bool,
 	param ...types.Type,
 ) (AggFuncExec, error) {
-	exec, ok, err := makeSpecialAggExec(mg, aggID, isDistinct, param...)
+	return makeAgg(mg, aggID, isDistinct, false, param...)
+}
+
+// MakeAggWithLegacyTextMinMax is used only while decoding a remote pipeline
+// during the MORPC v10 -> v11 rollout. It preserves the old bytewise text
+// MIN/MAX comparator without changing the argument or result type metadata.
+func MakeAggWithLegacyTextMinMax(
+	mg *mpool.MPool,
+	aggID int64, isDistinct bool,
+	param ...types.Type,
+) (AggFuncExec, error) {
+	return makeAgg(mg, aggID, isDistinct, true, param...)
+}
+
+func makeAgg(
+	mg *mpool.MPool,
+	aggID int64, isDistinct bool,
+	legacyTextMinMax bool,
+	param ...types.Type,
+) (AggFuncExec, error) {
+	exec, ok, err := makeSpecialAggExec(mg, aggID, isDistinct, legacyTextMinMax, param...)
 	if err != nil {
 		return nil, err
 	}
@@ -167,81 +258,92 @@ func MakeAgg(
 
 func makeSpecialAggExec(
 	mp *mpool.MPool,
-	id int64, isDistinct bool, params ...types.Type,
+	id int64, isDistinct bool, legacyTextMinMax bool, params ...types.Type,
 ) (AggFuncExec, bool, error) {
-	if _, ok := specialAgg[id]; ok {
-		switch id {
-		case AggIdOfBitmapConstruct:
-			return makeBmpConstructExec(mp, id, params[0]), true, nil
-		case AggIdOfBitmapOr:
-			return makeBmpOrExec(mp, id, params[0]), true, nil
-		case AggIdOfBitXor:
-			return makeBitXorExec(mp, id, isDistinct, params[0]), true, nil
-		case AggIdOfBitAnd:
-			return makeBitAndExec(mp, id, isDistinct, params[0]), true, nil
-		case AggIdOfBitOr:
-			return makeBitOrExec(mp, id, isDistinct, params[0]), true, nil
-		case AggIdOfVarPop:
-			return makeVarPopExec(mp, id, isDistinct, params[0]), true, nil
-		case AggIdOfStdDevPop:
-			return makeStdDevPopExec(mp, id, isDistinct, params[0]), true, nil
-		case AggIdOfVarSample:
-			return makeVarSampleExec(mp, id, isDistinct, params[0]), true, nil
-		case AggIdOfStdDevSample:
-			return makeStdDevSampleExec(mp, id, isDistinct, params[0]), true, nil
-		case AggIdOfAny:
-			return makeAnyValueExec(mp, id, params[0]), true, nil
-		case AggIdOfMin:
-			return makeMinMaxExec(mp, id, true, params[0]), true, nil
-		case AggIdOfMax:
-			return makeMinMaxExec(mp, id, false, params[0]), true, nil
-		case AggIdOfSum:
-			return makeSumAvgExec(mp, true, id, isDistinct, params[0]), true, nil
-		case AggIdOfAvg:
-			return makeSumAvgExec(mp, false, id, isDistinct, params[0]), true, nil
-		case AggIdOfCountColumn:
-			return makeCount(mp, false, id, isDistinct, params), true, nil
-		case AggIdOfCountStar:
-			return makeCount(mp, true, id, isDistinct, params), true, nil
-		case AggIdOfMedian:
-			exec, err := makeMedian(mp, id, isDistinct, params[0])
-			return exec, true, err
-		case AggIdOfGroupConcat:
-			return makeGroupConcat(mp, id, isDistinct, params, getGroupConcatRet(params...), groupConcatSep), true, nil
-		case AggIdOfApproxCount:
-			return makeApproxCount(mp, id, params[0]), true, nil
-		case AggIdOfHllAdd:
-			return makeHllAdd(mp, id, params[0]), true, nil
-		case AggIdOfHllMerge:
-			return makeHllMerge(mp, id, params[0]), true, nil
-		case AggIdOfJsonArrayAgg:
-			exec, err := makeJsonArrayAgg(mp, id, isDistinct, params)
-			return exec, true, err
-		case AggIdOfJsonObjectAgg:
-			exec, err := makeJsonObjectAgg(mp, id, isDistinct, params)
-			return exec, true, err
-		case AggIdOfAvgTwCache:
-			exec, err := makeAvgTwCacheExec(mp, id, params[0])
-			return exec, true, err
-		case AggIdOfAvgTwResult:
-			exec, err := makeAvgTwResultExec(mp, id, params[0])
-			return exec, true, err
-		case WinIdOfRowNumber, WinIdOfRank, WinIdOfDenseRank:
-			exec, err := makeWindowExec(mp, id, isDistinct)
-			return exec, true, err
-		case WinIdOfPercentRank:
-			exec, err := makePercentRankExec(mp, id, isDistinct)
-			return exec, true, err
-		case WinIdOfNtile:
-			exec, err := makeNtileExec(mp, id, isDistinct, params)
-			return exec, true, err
-		case WinIdOfCumeDist:
-			exec, err := makeWindowExec(mp, id, isDistinct)
-			return exec, true, err
-		case WinIdOfLag, WinIdOfLead, WinIdOfFirstValue, WinIdOfLastValue, WinIdOfNthValue:
-			exec, err := makeValueWindowExec(mp, id, isDistinct, params)
-			return exec, true, err
-		}
+	if id == AggIdOfMaxBy && len(params) != 3 {
+		return nil, true, moerr.NewInternalErrorNoCtx("max_by requires value, order, and tie arguments")
+	}
+	if id == AggIdOfMaxByNonNull && len(params) != 3 {
+		return nil, true, moerr.NewInternalErrorNoCtx("max_by_non_null requires value, order, and tie arguments")
+	}
+	switch id {
+	case AggIdOfBitmapConstruct:
+		return makeBmpConstructExec(mp, id, params[0]), true, nil
+	case AggIdOfBitmapOr:
+		return makeBmpOrExec(mp, id, params[0]), true, nil
+	case AggIdOfBitXor:
+		return makeBitXorExec(mp, id, isDistinct, params[0]), true, nil
+	case AggIdOfBitAnd:
+		return makeBitAndExec(mp, id, isDistinct, params[0]), true, nil
+	case AggIdOfBitOr:
+		return makeBitOrExec(mp, id, isDistinct, params[0]), true, nil
+	case AggIdOfVarPop:
+		return makeVarPopExec(mp, id, isDistinct, params[0]), true, nil
+	case AggIdOfStdDevPop:
+		return makeStdDevPopExec(mp, id, isDistinct, params[0]), true, nil
+	case AggIdOfVarSample:
+		return makeVarSampleExec(mp, id, isDistinct, params[0]), true, nil
+	case AggIdOfStdDevSample:
+		return makeStdDevSampleExec(mp, id, isDistinct, params[0]), true, nil
+	case AggIdOfAny:
+		return makeAnyValueExec(mp, id, params[0]), true, nil
+	case AggIdOfMin:
+		return makeMinMaxExecWithLegacyText(mp, id, true, params[0], legacyTextMinMax), true, nil
+	case AggIdOfMax:
+		return makeMinMaxExecWithLegacyText(mp, id, false, params[0], legacyTextMinMax), true, nil
+	case AggIdOfMaxBy:
+		return makeMaxByExec(mp, id, false, params), true, nil
+	case AggIdOfMaxByNonNull:
+		return makeMaxByExec(mp, id, true, params), true, nil
+	case AggIdOfSum:
+		return makeSumAvgExec(mp, true, id, isDistinct, params[0]), true, nil
+	case AggIdOfAvg:
+		return makeSumAvgExec(mp, false, id, isDistinct, params[0]), true, nil
+	case AggIdOfCountColumn:
+		return makeCount(mp, false, id, isDistinct, params), true, nil
+	case AggIdOfCountStar:
+		return makeCount(mp, true, id, isDistinct, params), true, nil
+	case AggIdOfMedian:
+		exec, err := makeMedian(mp, id, isDistinct, params[0])
+		return exec, true, err
+	case AggIdOfGroupConcat:
+		return makeGroupConcat(mp, id, isDistinct, params, GroupConcatReturnType(params), ","), true, nil
+	case AggIdOfApproxCount, AggIdOfApproxCountDistinct:
+		return makeApproxCount(mp, id, params[0]), true, nil
+	case AggIdOfHllAdd:
+		return makeHllAdd(mp, id, params[0]), true, nil
+	case AggIdOfHllMerge:
+		return makeHllMerge(mp, id, params[0]), true, nil
+	case AggIdOfApproxPercentile:
+		exec, err := makeApproxPercentile(mp, id, isDistinct, params[0])
+		return exec, true, err
+	case AggIdOfJsonArrayAgg:
+		exec, err := makeJsonArrayAgg(mp, id, isDistinct, params)
+		return exec, true, err
+	case AggIdOfJsonObjectAgg:
+		exec, err := makeJsonObjectAgg(mp, id, isDistinct, params)
+		return exec, true, err
+	case AggIdOfAvgTwCache:
+		exec, err := makeAvgTwCacheExec(mp, id, params[0])
+		return exec, true, err
+	case AggIdOfAvgTwResult:
+		exec, err := makeAvgTwResultExec(mp, id, params[0])
+		return exec, true, err
+	case WinIdOfRowNumber, WinIdOfRank, WinIdOfDenseRank:
+		exec, err := makeWindowExec(mp, id, isDistinct)
+		return exec, true, err
+	case WinIdOfPercentRank:
+		exec, err := makePercentRankExec(mp, id, isDistinct)
+		return exec, true, err
+	case WinIdOfNtile:
+		exec, err := makeNtileExec(mp, id, isDistinct, params)
+		return exec, true, err
+	case WinIdOfCumeDist:
+		exec, err := makeWindowExec(mp, id, isDistinct)
+		return exec, true, err
+	case WinIdOfLag, WinIdOfLead, WinIdOfFirstValue, WinIdOfLastValue, WinIdOfNthValue:
+		exec, err := makeValueWindowExec(mp, id, isDistinct, params)
+		return exec, true, err
 	}
 	return nil, false, nil
 }
@@ -300,6 +402,23 @@ func makeJsonObjectAgg(
 func makeMedian(
 	mp *mpool.MPool, aggID int64, isDistinct bool, param types.Type) (AggFuncExec, error) {
 	return newMedianExec(mp, aggID, isDistinct, param)
+}
+
+func makeApproxPercentile(
+	mp *mpool.MPool, aggID int64, isDistinct bool, param types.Type) (AggFuncExec, error) {
+	info := singleAggInfo{
+		aggID:     aggID,
+		distinct:  isDistinct,
+		argType:   param,
+		emptyNull: true,
+	}
+	switch param.Oid {
+	case types.T_decimal64, types.T_decimal128:
+		info.retType = ApproxPercentileReturnType([]types.Type{param})
+	default:
+		info.retType = types.T_float64.ToType()
+	}
+	return newApproxPercentileExec(mp, info)
 }
 
 func makeWindowExec(

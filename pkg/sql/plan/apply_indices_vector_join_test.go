@@ -83,13 +83,20 @@ func newVectorJoinHnswIndex() *MultiTableIndex {
 		IndexAlgo: catalog.MoIndexHnswAlgo.ToString(),
 		IndexDefs: map[string]*plan.IndexDef{
 			catalog.Hnsw_TblType_Metadata: {
-				IndexTableName:  "hnsw_meta",
-				IndexAlgoParams: idxAlgoParams,
+				IndexName:          "idx_hnsw_v",
+				IndexAlgo:          catalog.MoIndexHnswAlgo.ToString(),
+				IndexAlgoTableType: catalog.Hnsw_TblType_Metadata,
+				IndexTableName:     "hnsw_meta",
+				Parts:              []string{"v"},
+				IndexAlgoParams:    idxAlgoParams,
 			},
 			catalog.Hnsw_TblType_Storage: {
-				IndexTableName:  "hnsw_storage",
-				Parts:           []string{"v"},
-				IndexAlgoParams: idxAlgoParams,
+				IndexName:          "idx_hnsw_v",
+				IndexAlgo:          catalog.MoIndexHnswAlgo.ToString(),
+				IndexAlgoTableType: catalog.Hnsw_TblType_Storage,
+				IndexTableName:     "hnsw_storage",
+				Parts:              []string{"v"},
+				IndexAlgoParams:    idxAlgoParams,
 			},
 		},
 	}
@@ -101,16 +108,28 @@ func newVectorJoinIvfIndex() *MultiTableIndex {
 		IndexAlgo: catalog.MoIndexIvfFlatAlgo.ToString(),
 		IndexDefs: map[string]*plan.IndexDef{
 			catalog.SystemSI_IVFFLAT_TblType_Metadata: {
-				IndexTableName:  "ivf_meta",
-				IndexAlgoParams: idxAlgoParams,
+				IndexName:          "idx_ivf_v",
+				IndexAlgo:          catalog.MoIndexIvfFlatAlgo.ToString(),
+				IndexAlgoTableType: catalog.SystemSI_IVFFLAT_TblType_Metadata,
+				IndexTableName:     "ivf_meta",
+				Parts:              []string{"v"},
+				IndexAlgoParams:    idxAlgoParams,
 			},
 			catalog.SystemSI_IVFFLAT_TblType_Centroids: {
-				IndexTableName:  "ivf_centroids",
-				Parts:           []string{"v"},
-				IndexAlgoParams: idxAlgoParams,
+				IndexName:          "idx_ivf_v",
+				IndexAlgo:          catalog.MoIndexIvfFlatAlgo.ToString(),
+				IndexAlgoTableType: catalog.SystemSI_IVFFLAT_TblType_Centroids,
+				IndexTableName:     "ivf_centroids",
+				Parts:              []string{"v"},
+				IndexAlgoParams:    idxAlgoParams,
 			},
 			catalog.SystemSI_IVFFLAT_TblType_Entries: {
-				IndexTableName: "ivf_entries",
+				IndexName:          "idx_ivf_v",
+				IndexAlgo:          catalog.MoIndexIvfFlatAlgo.ToString(),
+				IndexAlgoTableType: catalog.SystemSI_IVFFLAT_TblType_Entries,
+				IndexTableName:     "ivf_entries",
+				Parts:              []string{"v"},
+				IndexAlgoParams:    idxAlgoParams,
 			},
 		},
 	}
@@ -762,6 +781,15 @@ func TestVectorJoinGuardHelperBranches(t *testing.T) {
 	require.Nil(t, builder.directScanWithVectorIndex(&plan.Node{
 		NodeType:    plan.Node_TABLE_SCAN,
 		TableDef:    newVectorJoinTableDef(false, false),
+		BindingTags: []int32{1},
+	}))
+	invisibleVectorDef := newVectorJoinTableDef(true, false)
+	for _, indexDef := range invisibleVectorDef.Indexes {
+		catalog.SetIndexVisibility(indexDef, false)
+	}
+	require.Nil(t, builder.directScanWithVectorIndex(&plan.Node{
+		NodeType:    plan.Node_TABLE_SCAN,
+		TableDef:    invisibleVectorDef,
 		BindingTags: []int32{1},
 	}))
 

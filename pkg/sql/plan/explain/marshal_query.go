@@ -117,7 +117,7 @@ func (m MarshalNodeImpl) GetNodeTitle(ctx context.Context, options *ExplainOptio
 	buf := bytes.NewBuffer(make([]byte, 0, 400))
 	var err error
 	switch m.node.NodeType {
-	case plan.Node_TABLE_SCAN, plan.Node_EXTERNAL_SCAN, plan.Node_MATERIAL_SCAN, plan.Node_SOURCE_SCAN:
+	case plan.Node_TABLE_SCAN, plan.Node_EXTERNAL_SCAN, plan.Node_MATERIAL_SCAN:
 		//"title" : "SNOWFLAKE_SAMPLE_DATA.TPCDS_SF10TCL.DATE_DIM",
 		if m.node.ObjRef != nil {
 			buf.WriteString(m.node.ObjRef.GetSchemaName() + "." + m.node.ObjRef.GetObjName())
@@ -155,7 +155,7 @@ func (m MarshalNodeImpl) GetNodeTitle(ctx context.Context, options *ExplainOptio
 		if err != nil {
 			return "", err
 		}
-	case plan.Node_FILTER:
+	case plan.Node_FILTER, plan.Node_ASSERT:
 		//"title" : "(D_0.D_MONTH_SEQ >= 1189) AND (D_0.D_MONTH_SEQ <= 1200)",
 		exprs := NewExprListDescribeImpl(m.node.FilterList)
 		err = exprs.GetDescription(ctx, options, buf)
@@ -192,8 +192,6 @@ func (m MarshalNodeImpl) GetNodeTitle(ctx context.Context, options *ExplainOptio
 		return "cte_scan", nil
 	case plan.Node_LOCK_OP:
 		return "lock_op", nil
-	case plan.Node_ASSERT:
-		return "assert", nil
 	case plan.Node_BROADCAST:
 		return "broadcast", nil
 	case plan.Node_SPLIT:
@@ -250,7 +248,7 @@ func (m MarshalNodeImpl) GetNodeLabels(ctx context.Context, options *ExplainOpti
 
 	// 1. Handling unique label information for different nodes
 	switch m.node.NodeType {
-	case plan.Node_TABLE_SCAN, plan.Node_EXTERNAL_SCAN, plan.Node_MATERIAL_SCAN, plan.Node_SOURCE_SCAN:
+	case plan.Node_TABLE_SCAN, plan.Node_EXTERNAL_SCAN, plan.Node_MATERIAL_SCAN:
 		tableDef := m.node.TableDef
 		objRef := m.node.ObjRef
 		fullTableName := ""
@@ -381,6 +379,23 @@ func (m MarshalNodeImpl) GetNodeLabels(ctx context.Context, options *ExplainOpti
 				Name:  Label_Grouping_Keys, //"Grouping keys",
 				Value: value,
 			})
+			if len(m.node.GroupByHashKey) > 0 {
+				hashExprs := make([]*plan.Expr, len(m.node.GroupByHashKey))
+				for i, idx := range m.node.GroupByHashKey {
+					if idx < 0 || int(idx) >= len(m.node.GroupBy) {
+						return nil, moerr.NewInternalErrorf(ctx, "invalid group-by hash key index %d", idx)
+					}
+					hashExprs[i] = m.node.GroupBy[idx]
+				}
+				value, err = GetExprsLabelValue(ctx, hashExprs, options)
+				if err != nil {
+					return nil, err
+				}
+				labels = append(labels, models.Label{
+					Name:  Label_Grouping_Hash_Keys,
+					Value: value,
+				})
+			}
 		}
 
 		// Get Aggregate function info
@@ -569,9 +584,13 @@ func (m MarshalNodeImpl) GetNodeLabels(ctx context.Context, options *ExplainOpti
 			Value: []string{},
 		})
 	case plan.Node_ASSERT:
+		value, err := GetExprsLabelValue(ctx, m.node.FilterList, options)
+		if err != nil {
+			return nil, err
+		}
 		labels = append(labels, models.Label{
 			Name:  Label_Assert,
-			Value: []string{},
+			Value: value,
 		})
 	case plan.Node_FUZZY_FILTER:
 		labels = append(labels, models.Label{
@@ -648,7 +667,7 @@ func (m MarshalNodeImpl) GetNodeLabels(ctx context.Context, options *ExplainOpti
 	}
 
 	// 2. handle shared label information for all nodes, such as filter conditions
-	if len(m.node.FilterList) > 0 && m.node.NodeType != plan.Node_FILTER {
+	if len(m.node.FilterList) > 0 && m.node.NodeType != plan.Node_FILTER && m.node.NodeType != plan.Node_ASSERT {
 		value, err := GetExprsLabelValue(ctx, m.node.FilterList, options)
 		if err != nil {
 			return nil, err

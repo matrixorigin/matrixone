@@ -27,6 +27,7 @@ type SelectStatement interface {
 // Select represents a SelectStatement with an ORDER and/or LIMIT.
 type Select struct {
 	statementImpl
+	IsPerform      bool
 	Select         SelectStatement
 	RewriteOption  *RewriteOption
 	TimeWindow     *TimeWindow
@@ -39,6 +40,9 @@ type Select struct {
 }
 
 func (node *Select) Format(ctx *FmtCtx) {
+	if node.IsPerform {
+		ctx.WriteString("perform ")
+	}
 	if node.With != nil {
 		node.With.Format(ctx)
 		ctx.WriteByte(' ')
@@ -70,8 +74,13 @@ func (node *Select) Format(ctx *FmtCtx) {
 	}
 }
 
-func (node *Select) GetStatementType() string { return "Select" }
-func (node *Select) GetQueryType() string     { return QueryTypeDQL }
+func (node *Select) GetStatementType() string {
+	if node.IsPerform {
+		return "Perform"
+	}
+	return "Select"
+}
+func (node *Select) GetQueryType() string { return QueryTypeDQL }
 
 func NewSelect(s SelectStatement, o OrderBy, l *Limit) *Select {
 	return &Select{
@@ -106,6 +115,7 @@ type Rewrite struct {
 type TimeWindow struct {
 	Interval *Interval
 	Sliding  *Sliding
+	GapFill  bool
 	Fill     *Fill
 }
 
@@ -114,6 +124,9 @@ func (node *TimeWindow) Format(ctx *FmtCtx) {
 	if node.Sliding != nil {
 		ctx.WriteByte(' ')
 		node.Sliding.Format(ctx)
+	}
+	if node.GapFill {
+		ctx.WriteString(" gapfill(partition)")
 	}
 	if node.Fill != nil {
 		ctx.WriteByte(' ')
@@ -504,10 +517,41 @@ type GroupByClause struct {
 	GroupingSet      Exprs
 	Apart            bool
 	Cube             bool
+	GroupingSets     bool
 	Rollup           bool
 }
 
 func (node *GroupByClause) Format(ctx *FmtCtx) {
+	if node.Apart {
+		if len(node.GroupingSet) == 0 {
+			return
+		}
+		ctx.WriteString("group by ")
+		node.GroupingSet.Format(ctx)
+		return
+	}
+	if node.Cube {
+		ctx.WriteString("group by cube(")
+		if len(node.GroupByExprsList) > 0 {
+			node.GroupByExprsList[0].Format(ctx)
+		}
+		ctx.WriteByte(')')
+		return
+	}
+	if node.GroupingSets {
+		ctx.WriteString("group by grouping sets (")
+		for i, list := range node.GroupByExprsList {
+			if i > 0 {
+				ctx.WriteString(", ")
+			}
+			ctx.WriteByte('(')
+			list.Format(ctx)
+			ctx.WriteByte(')')
+		}
+		ctx.WriteByte(')')
+		return
+	}
+
 	prefix := "group by "
 	for _, list := range node.GroupByExprsList {
 		for _, n := range list {
@@ -515,9 +559,6 @@ func (node *GroupByClause) Format(ctx *FmtCtx) {
 			n.Format(ctx)
 			prefix = ", "
 		}
-	}
-	if node.Cube {
-		ctx.WriteString("with cube")
 	}
 	if node.Rollup {
 		ctx.WriteString(" with rollup")

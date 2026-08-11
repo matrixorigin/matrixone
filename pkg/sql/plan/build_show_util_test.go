@@ -15,15 +15,23 @@
 package plan
 
 import (
+	"context"
 	"encoding/json"
 	"strings"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/iceberg/model"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/features"
 	sqliceberg "github.com/matrixorigin/matrixone/pkg/sql/iceberg"
+	sqlmongodb "github.com/matrixorigin/matrixone/pkg/sql/mongodb"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/stretchr/testify/require"
@@ -188,6 +196,19 @@ func Test_buildShowCreateTableSpatialIndex(t *testing.T) {
 	require.Equal(t, "CREATE TABLE `spatial_src` (\n  `id` int NOT NULL,\n  `g` point NOT NULL,\n  PRIMARY KEY (`id`),\n  SPATIAL KEY `idx_g` (`g`)\n)", got)
 }
 
+func TestShowCreateTablePreservesInvisibleIndexes(t *testing.T) {
+	got, err := buildTestShowCreateTable(`CREATE TABLE invisible_show_src (
+		id INT PRIMARY KEY,
+		name VARCHAR(191),
+		body TEXT,
+		KEY idx_name(name) INVISIBLE,
+		FULLTEXT KEY idx_body(body) INVISIBLE
+	)`)
+	require.NoError(t, err)
+	require.Contains(t, got, "KEY `idx_name` (`name`) INVISIBLE")
+	require.Contains(t, got, "FULLTEXT `idx_body`(`body`) INVISIBLE")
+}
+
 func TestShowCreateTablePreservesIndexPrefixLengths(t *testing.T) {
 	mock := NewMockOptimizer(false)
 	tableDef, err := buildTestCreateTableStmt(mock, `CREATE TABLE prefix_show_src (
@@ -229,6 +250,122 @@ func TestConstructCreateTableSQLDoesNotMutateIndexComments(t *testing.T) {
 	require.Contains(t, first, `COMMENT 'O''Reilly'`)
 }
 
+func Test_ShowCreateTableUsesIncludedColumnsFromIndexDef(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	tableDef, err := buildTestCreateTableStmt(mock, `CREATE TABLE vector_src (
+		id INT NOT NULL,
+		embedding VECF32(3),
+		title VARCHAR(20),
+		category INT,
+		PRIMARY KEY (id)
+	)`)
+	require.NoError(t, err)
+
+	tableDef.Indexes = append(tableDef.Indexes, &plan.IndexDef{
+		IndexName:       "idx_vec",
+		Parts:           []string{"embedding"},
+		IndexAlgo:       catalog.MoIndexIvfFlatAlgo.ToString(),
+		IndexAlgoParams: `{"lists":"2","op_type":"vector_l2_ops"}`,
+		IncludedColumns: []string{"title", "category"},
+	})
+
+	got, _, err := ConstructCreateTableSQL(&mock.ctxt, tableDef, nil, false, nil)
+	require.NoError(t, err)
+	require.Contains(t, got, "KEY `idx_vec` USING ivfflat (`embedding`) lists = 2  op_type 'vector_l2_ops'  INCLUDE (`title`, `category`)")
+}
+
+func Test_ShowCreateTableQuotesIncludedColumns(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	tableDef, err := buildTestCreateTableStmt(mock, `CREATE TABLE vector_src_reserved (
+		id INT NOT NULL,
+		embedding VECF32(3),
+		status INT,
+		PRIMARY KEY (id)
+	)`)
+	require.NoError(t, err)
+
+	tableDef.Indexes = append(tableDef.Indexes, &plan.IndexDef{
+		IndexName:       "idx_vec_reserved",
+		Parts:           []string{"embedding"},
+		IndexAlgo:       catalog.MoIndexIvfFlatAlgo.ToString(),
+		IndexAlgoParams: `{"lists":"2","op_type":"vector_l2_ops"}`,
+		IncludedColumns: []string{"status"},
+	})
+
+	got, _, err := ConstructCreateTableSQL(&mock.ctxt, tableDef, nil, false, nil)
+	require.NoError(t, err)
+	require.Contains(t, got, "INCLUDE (`status`)")
+}
+
+func Test_ShowCreateTableRendersSingleIncludeWhenAlgoParamsAlsoCarryIncludeColumns(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		algo string
+	}{
+		{name: "cagra", algo: catalog.MoIndexCagraAlgo.ToString()},
+		{name: "ivfpq", algo: catalog.MoIndexIvfpqAlgo.ToString()},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mock := NewMockOptimizer(false)
+			tableDef, err := buildTestCreateTableStmt(mock, `CREATE TABLE vector_src_gpu (
+				id INT NOT NULL,
+				embedding VECF32(3),
+				price INT,
+				category BIGINT,
+				PRIMARY KEY (id)
+			)`)
+			require.NoError(t, err)
+
+			tableDef.Indexes = append(tableDef.Indexes, &plan.IndexDef{
+				IndexName:       "idx_vec_gpu",
+				Parts:           []string{"embedding"},
+				IndexAlgo:       tc.algo,
+				IndexAlgoParams: `{"op_type":"vector_l2_ops","included_columns":"price,category"}`,
+				IncludedColumns: []string{"price", "category"},
+			})
+
+			got, _, err := ConstructCreateTableSQL(&mock.ctxt, tableDef, nil, false, nil)
+			require.NoError(t, err)
+			require.Equal(t, 1, strings.Count(got, "INCLUDE"))
+			require.Contains(t, got, "INCLUDE (`price`, `category`)")
+		})
+	}
+}
+
+func Test_ShowCreateTableRendersLegacyAlgoParamsIncludeColumns(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		algo string
+	}{
+		{name: "cagra", algo: catalog.MoIndexCagraAlgo.ToString()},
+		{name: "ivfpq", algo: catalog.MoIndexIvfpqAlgo.ToString()},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mock := NewMockOptimizer(false)
+			tableDef, err := buildTestCreateTableStmt(mock, `CREATE TABLE vector_src_gpu (
+				id INT NOT NULL,
+				embedding VECF32(3),
+				price INT,
+				category BIGINT,
+				PRIMARY KEY (id)
+			)`)
+			require.NoError(t, err)
+
+			tableDef.Indexes = append(tableDef.Indexes, &plan.IndexDef{
+				IndexName:       "idx_vec_gpu",
+				Parts:           []string{"embedding"},
+				IndexAlgo:       tc.algo,
+				IndexAlgoParams: `{"op_type":"vector_l2_ops","included_columns":"price,category"}`,
+			})
+
+			got, _, err := ConstructCreateTableSQL(&mock.ctxt, tableDef, nil, false, nil)
+			require.NoError(t, err)
+			require.Equal(t, 1, strings.Count(got, "INCLUDE"))
+			require.Contains(t, got, "INCLUDE (`price`, `category`)")
+		})
+	}
+}
+
 func Test_ShowCreateTableUsesStoredDDLForChecks(t *testing.T) {
 	const sql = `CREATE TABLE t_numeric_types (
 		id BIGINT NOT NULL AUTO_INCREMENT,
@@ -250,14 +387,133 @@ func Test_ShowCreateTableUsesStoredDDLForChecks(t *testing.T) {
 	if err != nil {
 		t.Fatalf("construct show create failed: %+v", err)
 	}
-	if !strings.Contains(showSQL, "CONSTRAINT chk_age CHECK (c_age IS NULL OR (c_age >= 0 AND c_age <= 200))") {
+	if !strings.Contains(showSQL, "CONSTRAINT `chk_age` CHECK (`c_age` is null or (`c_age` >= 0 and `c_age` <= 200))") {
 		t.Fatalf("expected chk_age check constraint in show create output: %s", showSQL)
 	}
-	if !strings.Contains(showSQL, "CONSTRAINT chk_score CHECK (c_score IS NULL OR (c_score >= 0 AND c_score <= 100))") {
+	if !strings.Contains(showSQL, "CONSTRAINT `chk_score` CHECK (`c_score` is null or (`c_score` >= 0 and `c_score` <= 100))") {
 		t.Fatalf("expected chk_score check constraint in show create output: %s", showSQL)
 	}
 	if !strings.Contains(showSQL, "PRIMARY KEY (`id`)") {
 		t.Fatalf("expected canonical primary key output to be preserved: %s", showSQL)
+	}
+}
+
+func TestConstructCreateTableSQLUsesStructuredColumnCheck(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	tableDef, err := buildTestCreateTableStmt(
+		mock,
+		"create table t(a int constraint positive_a check (a > 0))",
+	)
+	require.NoError(t, err)
+	require.Len(t, tableDef.Checks, 1)
+	tableDef.Createsql = "create table t(a int)"
+
+	showSQL, _, err := ConstructCreateTableSQL(&mock.ctxt, tableDef, nil, false, nil)
+	require.NoError(t, err)
+	require.Contains(
+		t,
+		showSQL,
+		"CONSTRAINT `positive_a` CHECK (`a` > 0)",
+	)
+}
+
+func TestConstructCreateTableSQLPreservesCheckAcrossSQLModes(t *testing.T) {
+	build := func(sql, sqlMode string) *plan.TableDef {
+		mock := NewMockOptimizer(false)
+		mock.ctxt.SetSqlModeOverride(sqlMode)
+		stmt, err := parsers.ParseOneWithSQLMode(
+			context.Background(),
+			dialect.MYSQL,
+			sql,
+			1,
+			sqlMode,
+		)
+		require.NoError(t, err)
+		defer stmt.Free()
+		built, err := BuildPlan(&mock.ctxt, stmt, false)
+		require.NoError(t, err)
+		return built.GetDdl().GetCreateTable().GetTableDef()
+	}
+
+	testCases := []struct {
+		name       string
+		sourceMode string
+		replayMode string
+		createSQL  string
+		canonical  string
+	}{
+		{
+			name:       "no backslash escapes to default",
+			sourceMode: "NO_BACKSLASH_ESCAPES",
+			replayMode: "",
+			createSQL:  `create table t(s varchar(10), check (s = 'a\nb'))`,
+			canonical:  "cast(0x615c6e62 as varchar)",
+		},
+		{
+			name:       "default to no backslash escapes",
+			sourceMode: "",
+			replayMode: "NO_BACKSLASH_ESCAPES",
+			createSQL:  `create table t(s varchar(10), check (s = 'a\\nb'))`,
+			canonical:  "cast(0x615c6e62 as varchar)",
+		},
+		{
+			name:       "binary string keeps introducer",
+			sourceMode: "",
+			replayMode: "NO_BACKSLASH_ESCAPES",
+			createSQL:  `create table t(b varbinary(10), check (b = _binary 'x'))`,
+			canonical:  "_binary 0x78",
+		},
+		{
+			name:       "binary string with backslash",
+			sourceMode: "NO_BACKSLASH_ESCAPES",
+			replayMode: "",
+			createSQL:  `create table t(b varbinary(10), check (b = _binary 'x\y'))`,
+			canonical:  "_binary 0x785c79",
+		},
+		{
+			name:       "binary hex keeps introducer",
+			sourceMode: "",
+			replayMode: "NO_BACKSLASH_ESCAPES",
+			createSQL:  `create table t(b varbinary(10), check (bit_count(_binary X'3132') > 0))`,
+			canonical:  "_binary 0x3132",
+		},
+		{
+			name:       "name const keeps literal contract",
+			sourceMode: "NO_BACKSLASH_ESCAPES",
+			replayMode: "",
+			createSQL:  `create table t(a int, check (name_const('a\b', 1) = 1))`,
+			canonical:  "name_const(0x615c62, 1)",
+		},
+		{
+			name:       "name const value from no backslash escapes",
+			sourceMode: "NO_BACKSLASH_ESCAPES",
+			replayMode: "",
+			createSQL:  `create table t(s varchar(10), check (name_const('n', 'a\b') = s))`,
+			canonical:  "name_const('n', cast(0x615c62 as varchar))",
+		},
+		{
+			name:       "name const value from default mode",
+			sourceMode: "",
+			replayMode: "NO_BACKSLASH_ESCAPES",
+			createSQL:  `create table t(s varchar(10), check (name_const('n', 'a\\b') = s))`,
+			canonical:  "name_const('n', cast(0x615c62 as varchar))",
+		},
+	}
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			tableDef := build(tc.createSQL, tc.sourceMode)
+			require.Len(t, tableDef.Checks, 1)
+			require.Contains(t, tableDef.Checks[0].OriginSql, tc.canonical)
+
+			showSQL, _, err := ConstructCreateTableSQL(nil, tableDef, nil, false, nil)
+			require.NoError(t, err)
+			require.Contains(t, showSQL, tc.canonical)
+
+			replayedTableDef := build(showSQL, tc.replayMode)
+			require.Len(t, replayedTableDef.Checks, 1)
+			require.Equal(t, tableDef.Checks[0].OriginSql, replayedTableDef.Checks[0].OriginSql)
+			require.Equal(t, tableDef.Checks[0].Check, replayedTableDef.Checks[0].Check)
+		})
 	}
 }
 
@@ -277,6 +533,24 @@ func Test_extractTopLevelCheckDefs(t *testing.T) {
 	if checks[1] != "CHECK(score>0)" {
 		t.Fatalf("unexpected second check def: %s", checks[1])
 	}
+}
+
+func TestExtractTopLevelCheckDefsIgnoresCheckPrefixedColumns(t *testing.T) {
+	tableDef := &plan.TableDef{Createsql: `CREATE TABLE t_check_cpk (
+		run_id varchar(64) not null,
+		user_id varchar(128) not null,
+		retry_scope varchar(16) not null default 'node',
+		checkpoint_version varchar(32) null,
+		checkpoint_json longtext null,
+		check$point varchar(32) null,
+		error_code varchar(128) null,
+		constraint chk_scope check (retry_scope in ('node','subtree','siblings')),
+		primary key(user_id, run_id)
+	)`}
+	require.Equal(t,
+		[]string{"constraint chk_scope check (retry_scope in ('node','subtree','siblings'))"},
+		extractTopLevelCheckDefs(tableDef),
+	)
 }
 
 func Test_SingleShowCreateTable(t *testing.T) {
@@ -404,6 +678,47 @@ func TestShowCreateIcebergExternalTable(t *testing.T) {
 	require.Equal(t, "CREATE EXTERNAL TABLE `gold_orders` (\n  `id` int DEFAULT NULL\n) ENGINE = ICEBERG WITH (\"catalog\" = 'ksa_gold', \"namespace\" = 'sales', \"table\" = 'orders', \"ref\" = 'main', \"read_mode\" = 'append_only', \"write_mode\" = 'read_only')", showSQL)
 }
 
+func TestShowCreateMongoDBExternalTable(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	tableDef := &plan.TableDef{
+		Name:        "events",
+		TableType:   catalog.SystemExternalRel,
+		FeatureFlag: features.MongoDBExternal,
+		Createsql: sqlmongodb.BuildCreateSQLEnvelope(sqlmongodb.TableMapping{
+			Connection:     "telemetry_source",
+			Database:       "telemetry",
+			Collection:     "measurements",
+			SchemaMode:     sqlmongodb.SchemaExplicit,
+			Conversion:     sqlmongodb.ConversionStrict,
+			MaxParallelism: 1,
+			Columns: []sqlmongodb.ColumnMapping{
+				{Name: "device_id", Path: "metadata.device_id", TypeID: int32(types.T_varchar), Conversion: sqlmongodb.ConversionStrict},
+				{Name: "measurement", Path: "reading.measurement", TypeID: int32(types.T_float64), Conversion: sqlmongodb.ConversionTryNull},
+			},
+		}),
+		Cols: []*plan.ColDef{
+			{
+				Name:       "device_id",
+				OriginName: "DeviceID",
+				Typ:        plan.Type{Id: int32(types.T_varchar), Width: 64},
+				Default:    &plan.Default{NullAbility: true},
+			},
+			{
+				Name:    "measurement",
+				Typ:     plan.Type{Id: int32(types.T_float64)},
+				Default: &plan.Default{NullAbility: true},
+			},
+		},
+	}
+
+	showSQL, stmt, err := ConstructCreateTableSQL(&mock.ctxt, tableDef, nil, false, nil)
+	require.NoError(t, err)
+	require.NotNil(t, stmt)
+	require.Equal(t, "CREATE EXTERNAL TABLE `events` (\n  `DeviceID` varchar(64) COLLATE utf8mb4_bin DEFAULT NULL MONGODB_PATH 'metadata.device_id' MONGODB_CONVERT 'strict',\n  `measurement` double DEFAULT NULL MONGODB_PATH 'reading.measurement' MONGODB_CONVERT 'try_null'\n) ENGINE = MONGODB WITH (\"connection\" = 'telemetry_source', \"database\" = 'telemetry', \"collection\" = 'measurements', \"schema_mode\" = 'explicit', \"conversion_mode\" = 'strict', \"max_parallelism\" = '1')", showSQL)
+	require.NotContains(t, strings.ToLower(showSQL), "credential")
+	require.NotContains(t, strings.ToLower(showSQL), "password")
+}
+
 func TestShowCreateLegacyExternalTablesIgnoreIcebergEnvelope(t *testing.T) {
 	tests := []struct {
 		name   string
@@ -513,6 +828,14 @@ func TestFormatColTypeGeometrySubtype(t *testing.T) {
 		Id:    int32(types.T_geometry32),
 		Scale: int32(geometrySubtypeEnum("POINT")),
 	}))
+}
+
+func TestFormatColTypeTinyText(t *testing.T) {
+	require.Equal(t, "TINYTEXT", FormatColType(plan.Type{
+		Id:    int32(types.T_text),
+		Width: types.MaxTinyTextLen,
+	}))
+	require.Equal(t, "TEXT", FormatColType(plan.Type{Id: int32(types.T_text)}))
 }
 
 func TestFormatColTypeArrayMetadata(t *testing.T) {
@@ -635,4 +958,188 @@ func TestFormatLinesTerminatedBy(t *testing.T) {
 	require.Equal(t, `\\r\\n`, formatLinesTerminatedBy("\r\n"))
 	require.NotEqual(t, formatLinesTerminatedBy("\n"), formatLinesTerminatedBy("\r\n"))
 	require.Equal(t, "#EOL#", formatLinesTerminatedBy("#EOL#"))
+}
+
+func TestShowCreatePreservesTextCollationMetadata(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	tableDef, err := buildTestCreateTableStmt(mock, `create table collated_show(
+		bin_text varchar(10),
+		general_text varchar(10) collate utf8mb4_general_ci,
+		packed varchar(10)
+	) collate utf8mb4_bin`)
+	require.NoError(t, err)
+	FindColumn(tableDef.Cols, "packed").Typ.Charset = uint32(types.CharsetBinary)
+
+	showSQL, _, err := ConstructCreateTableSQL(&mock.ctxt, tableDef, nil, false, nil)
+	require.NoError(t, err)
+	require.Contains(t, showSQL, "`bin_text` varchar(10) COLLATE utf8mb4_bin")
+	require.Contains(t, showSQL, "`general_text` varchar(10) COLLATE utf8mb4_general_ci")
+	require.Contains(t, showSQL, "`packed` varchar(10) COLLATE binary")
+	require.Contains(t, showSQL, ") COLLATE=utf8mb4_bin")
+}
+
+func TestShowCreateSerializesGeneralCIDefault(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	mock.ctxt.ResolveVariableFunc = func(name string, isSystem, isGlobal bool) (interface{}, error) {
+		if name == "collation_server" && isSystem && !isGlobal {
+			return "utf8mb4_bin", nil
+		}
+		return nil, nil
+	}
+	tableDef, err := buildTestCreateTableStmt(mock,
+		"create table general_show(v varchar(10)) collate utf8mb4_general_ci")
+	require.NoError(t, err)
+
+	showSQL, _, err := ConstructCreateTableSQL(&mock.ctxt, tableDef, nil, false, nil)
+	require.NoError(t, err)
+	require.Contains(t, showSQL, ") COLLATE=utf8mb4_general_ci")
+}
+
+func TestCreateSQLWithoutContextSerializesGeneralCIDefault(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	tableDef, err := buildTestCreateTableStmt(mock,
+		"create table general_replay(v varchar(10)) collate utf8mb4_general_ci")
+	require.NoError(t, err)
+
+	createSQL, _, err := ConstructCreateTableSQL(nil, tableDef, nil, false, nil)
+	require.NoError(t, err)
+	require.Contains(t, createSQL, ") COLLATE=utf8mb4_general_ci")
+}
+
+func TestShowCreateKeepsLegacyDefaultOutputStable(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	tableDef, err := buildTestCreateTableStmt(mock,
+		"create table legacy_show(general_text varchar(10))")
+	require.NoError(t, err)
+	tableDef.DefaultCharset = uint32(types.CharsetLegacy)
+
+	showSQL, _, err := ConstructCreateTableSQL(&mock.ctxt, tableDef, nil, false, nil)
+	require.NoError(t, err)
+	require.Contains(t, showSQL, "`general_text` varchar(10) DEFAULT NULL")
+	require.NotContains(t, showSQL, "COLLATE")
+}
+
+func TestShowCreateRoundTripsMigratedGeneralCIColumnWithLegacyDefault(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	mock.ctxt.ResolveVariableFunc = func(name string, isSystem, isGlobal bool) (interface{}, error) {
+		if name == "collation_server" && isSystem && !isGlobal {
+			return "utf8mb4_bin", nil
+		}
+		return nil, nil
+	}
+	tableDef, err := buildTestCreateTableStmt(mock,
+		"create table legacy_show(general_text varchar(10)) collate utf8mb4_general_ci")
+	require.NoError(t, err)
+	tableDef.DefaultCharset = uint32(types.CharsetLegacy)
+	require.Equal(t, uint32(types.CharsetUTF8), FindColumn(tableDef.Cols, "general_text").Typ.Charset)
+
+	showSQL, _, err := ConstructCreateTableSQL(&mock.ctxt, tableDef, nil, false, nil)
+	require.NoError(t, err)
+	require.Contains(t, showSQL, ") COLLATE=utf8mb4_general_ci")
+
+	roundTripped, err := buildTestCreateTableStmt(mock, showSQL)
+	require.NoError(t, err)
+	require.Equal(t, uint32(types.CharsetUTF8), roundTripped.DefaultCharset)
+	require.Equal(t, uint32(types.CharsetUTF8), FindColumn(roundTripped.Cols, "general_text").Typ.Charset)
+}
+
+func TestShowCreateDistinguishesMixedLegacyAndGeneralCIColumns(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	tableDef, err := buildTestCreateTableStmt(mock,
+		"create table legacy_show(legacy_text varchar(10), general_text varchar(10))")
+	require.NoError(t, err)
+	tableDef.DefaultCharset = uint32(types.CharsetLegacy)
+	FindColumn(tableDef.Cols, "legacy_text").Typ.Charset = uint32(types.CharsetLegacy)
+
+	showSQL, _, err := ConstructCreateTableSQL(&mock.ctxt, tableDef, nil, false, nil)
+	require.NoError(t, err)
+	require.Contains(t, showSQL, "`legacy_text` varchar(10) DEFAULT NULL")
+	require.Contains(t, showSQL,
+		"`general_text` varchar(10) COLLATE utf8mb4_general_ci DEFAULT NULL")
+	require.Contains(t, showSQL, ") COLLATE=utf8mb4_bin")
+
+	roundTripped, err := buildTestCreateTableStmt(mock, showSQL)
+	require.NoError(t, err)
+	require.Equal(t, uint32(types.CharsetUTF8MB4Bin), roundTripped.DefaultCharset)
+	require.Equal(t, uint32(types.CharsetUTF8MB4Bin),
+		FindColumn(roundTripped.Cols, "legacy_text").Typ.Charset)
+	require.Equal(t, uint32(types.CharsetUTF8),
+		FindColumn(roundTripped.Cols, "general_text").Typ.Charset)
+	require.Equal(t, "B", textMinForShowCreateTest(t,
+		FindColumn(roundTripped.Cols, "legacy_text").Typ))
+	require.Equal(t, "a", textMinForShowCreateTest(t,
+		FindColumn(roundTripped.Cols, "general_text").Typ))
+}
+
+func TestShowCreateRoundTripsFullyLegacyBytewiseText(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	mock.ctxt.ResolveVariableFunc = func(name string, isSystem, isGlobal bool) (interface{}, error) {
+		if name == "collation_server" && isSystem && !isGlobal {
+			return "utf8mb4_general_ci", nil
+		}
+		return nil, nil
+	}
+	tableDef, err := buildTestCreateTableStmt(mock,
+		"create table legacy_show(legacy_text varchar(10))")
+	require.NoError(t, err)
+	tableDef.DefaultCharset = uint32(types.CharsetLegacy)
+	FindColumn(tableDef.Cols, "legacy_text").Typ.Charset = uint32(types.CharsetLegacy)
+	require.Equal(t, "B", textMinForShowCreateTest(t,
+		FindColumn(tableDef.Cols, "legacy_text").Typ))
+
+	showSQL, _, err := ConstructCreateTableSQL(&mock.ctxt, tableDef, nil, false, nil)
+	require.NoError(t, err)
+	require.Contains(t, showSQL, ") COLLATE=utf8mb4_bin")
+
+	roundTripped, err := buildTestCreateTableStmt(mock, showSQL)
+	require.NoError(t, err)
+	require.Equal(t, uint32(types.CharsetUTF8MB4Bin), roundTripped.DefaultCharset)
+	require.Equal(t, uint32(types.CharsetUTF8MB4Bin),
+		FindColumn(roundTripped.Cols, "legacy_text").Typ.Charset)
+	require.Equal(t, "B", textMinForShowCreateTest(t,
+		FindColumn(roundTripped.Cols, "legacy_text").Typ))
+}
+
+func TestShowCreateRoundTripsLegacyColumnWithGeneralDefault(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	tableDef, err := buildTestCreateTableStmt(mock,
+		"create table migrated_default(legacy_text varchar(10)) collate utf8mb4_general_ci")
+	require.NoError(t, err)
+	FindColumn(tableDef.Cols, "legacy_text").Typ.Charset = uint32(types.CharsetLegacy)
+
+	showSQL, _, err := ConstructCreateTableSQL(&mock.ctxt, tableDef, nil, false, nil)
+	require.NoError(t, err)
+	require.Contains(t, showSQL, "`legacy_text` varchar(10) COLLATE utf8mb4_bin")
+
+	roundTripped, err := buildTestCreateTableStmt(mock, showSQL)
+	require.NoError(t, err)
+	require.Equal(t, uint32(types.CharsetUTF8), roundTripped.DefaultCharset)
+	require.Equal(t, uint32(types.CharsetUTF8MB4Bin),
+		FindColumn(roundTripped.Cols, "legacy_text").Typ.Charset)
+	require.Equal(t, "B", textMinForShowCreateTest(t,
+		FindColumn(roundTripped.Cols, "legacy_text").Typ))
+}
+
+func textMinForShowCreateTest(t *testing.T, typ plan.Type) string {
+	t.Helper()
+	mp := mpool.MustNewZero()
+	runtimeType := types.NewWithCharset(
+		types.T(typ.Id), typ.Width, typ.Scale, uint8(typ.Charset))
+	input := vector.NewVec(runtimeType)
+	defer input.Free(mp)
+	for _, value := range []string{"a", "B"} {
+		require.NoError(t, vector.AppendBytes(input, []byte(value), false, mp))
+	}
+
+	exec, err := aggexec.MakeAgg(mp, aggexec.AggIdOfMin, false, runtimeType)
+	require.NoError(t, err)
+	defer exec.Free()
+	require.NoError(t, exec.GroupGrow(1))
+	require.NoError(t, exec.BulkFill(0, []*vector.Vector{input}))
+
+	results, err := exec.Flush()
+	require.NoError(t, err)
+	require.Len(t, results, 1)
+	defer results[0].Free(mp)
+	return string(results[0].GetBytesAt(0))
 }

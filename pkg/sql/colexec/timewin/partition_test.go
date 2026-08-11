@@ -16,6 +16,7 @@ package timewin
 
 import (
 	"testing"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -93,6 +94,115 @@ func newPartArg(t *testing.T, proc *process.Process, sliding types.Datetime, wit
 	return arg
 }
 
+func newPreparedTextPartArg(t *testing.T, sliding types.Datetime) *TimeWin {
+	t.Helper()
+	partExpr := newExpression(2)
+	partExpr.Typ = plan.Type{Id: int32(types.T_text)}
+	return &TimeWin{
+		WStart: true,
+		Types:  []types.Type{types.T_int32.ToType()},
+		Aggs: []aggexec.AggFuncExecExpression{
+			aggexec.MakeAggFunctionExpression(
+				function.AggSumOverloadID, false, []*plan.Expr{newExpression(1)}, nil),
+		},
+		TsType:      plan.Type{Id: int32(types.T_datetime)},
+		Ts:          newExpression(0),
+		Interval:    makeInterval(),
+		Sliding:     sliding,
+		PartitionBy: []*plan.Expr{partExpr},
+	}
+}
+
+func makePreparedTextPartInput(
+	t *testing.T,
+	mp *mpool.MPool,
+	key string,
+	kinds []vector.PrepareParamKind,
+) *batch.Batch {
+	t.Helper()
+	rows := len(kinds)
+	timestamps := make([]string, rows)
+	values := make([]int32, rows)
+	keys := make([][]byte, rows)
+	for row := range kinds {
+		timestamps[row] = "2023-08-01 00:00:00"
+		if row > 0 {
+			timestamps[row] = "2023-08-01 00:00:12"
+		}
+		values[row] = int32(row + 1)
+		keys[row] = []byte(key)
+	}
+	bat := batch.NewWithSize(3)
+	bat.Vecs[0] = testutil.NewVector(rows, types.T_datetime.ToType(), mp, false, timestamps)
+	bat.Vecs[1] = testutil.NewVector(rows, types.T_int32.ToType(), mp, false, values)
+	bat.Vecs[2] = vector.NewVec(types.T_text.ToType())
+	for _, value := range keys {
+		require.NoError(t, vector.AppendBytes(bat.Vecs[2], value, false, mp))
+	}
+	require.NoError(t, bat.Vecs[2].SetPrepareParamKindsWithMP(kinds, mp))
+	bat.SetRowCount(rows)
+	return bat
+}
+
+func TestTimeWinBroadcastsPreparedPartitionKind(t *testing.T) {
+	sliding, err := calcDatetime(5, 2)
+	require.NoError(t, err)
+	for _, gapFill := range []bool{false, true} {
+		t.Run(map[bool]string{false: "sliding", true: "gapfill"}[gapFill], func(t *testing.T) {
+			proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+			var first, second *batch.Batch
+			var arg *TimeWin
+			t.Cleanup(func() {
+				if arg != nil {
+					arg.Free(proc, false, nil)
+				}
+				if first != nil {
+					first.Clean(proc.Mp())
+				}
+				if second != nil {
+					second.Clean(proc.Mp())
+				}
+				proc.Free()
+				require.Zero(t, proc.Mp().CurrNB())
+			})
+			first = makePreparedTextPartInput(t, proc.Mp(), "5", []vector.PrepareParamKind{
+				vector.PrepareParamFloat,
+				vector.PrepareParamInteger,
+			})
+			second = makePreparedTextPartInput(t, proc.Mp(), "6", []vector.PrepareParamKind{
+				vector.PrepareParamDecimal,
+				vector.PrepareParamBoolean,
+			})
+			arg = newPreparedTextPartArg(t, sliding)
+			arg.GapFill = gapFill
+			arg.AppendChild(colexec.NewMockOperator().WithBatchs([]*batch.Batch{first, second}))
+			require.NoError(t, arg.Prepare(proc))
+			want := map[string]vector.PrepareParamKind{
+				"5": vector.PrepareParamFloat,
+				"6": vector.PrepareParamDecimal,
+			}
+			seen := make(map[string]vector.PrepareParamKind)
+			rows := 0
+			for {
+				result, callErr := vm.Exec(arg, proc)
+				require.NoError(t, callErr)
+				if result.Batch == nil || result.Status == vm.ExecStop {
+					break
+				}
+				part := result.Batch.Vecs[2]
+				for row := 0; row < part.Length(); row++ {
+					key := string(part.GetBytesAt(row))
+					require.Contains(t, want, key)
+					seen[key] = part.GetPrepareParamKindAt(row)
+				}
+				rows += part.Length()
+			}
+			require.Positive(t, rows)
+			require.Equal(t, want, seen)
+		})
+	}
+}
+
 // runPartArg drives the operator to exhaustion and returns (wstart, max, part)
 // per output row.
 func runPartArg(t *testing.T, arg *TimeWin, proc *process.Process, in *batch.Batch) (starts []types.Datetime, sums []int64, parts []int64) {
@@ -135,6 +245,27 @@ func runPartArg(t *testing.T, arg *TimeWin, proc *process.Process, in *batch.Bat
 		}
 	}
 	return
+}
+
+func TestTimeWinSlidingKeepsZeroDatetimeSeparateFromEpoch(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	sliding, err := calcDatetime(5, types.Second)
+	require.NoError(t, err)
+
+	in := makePartInput(t, proc.Mp(), []row{
+		{"0000-00-00 00:00:00", 10, 1},
+		{"0001-01-01 00:00:00", 20, 1},
+	})
+	arg := newPartArg(t, proc, sliding, false)
+	starts, sums, _ := runPartArg(t, arg, proc, in)
+
+	require.Equal(t, []types.Datetime{types.ZeroDatetime, types.DatetimeEpoch}, starts)
+	require.Equal(t, []int64{10, 20}, sums)
+
+	arg.Free(proc, false, nil)
+	in.Clean(proc.Mp())
+	proc.Free()
+	require.Equal(t, int64(0), proc.Mp().CurrNB())
 }
 
 // Sliding windows carry state across rows, so a partition boundary has to
@@ -201,6 +332,78 @@ func TestTimeWinPartitionEmitsTrailingWindows(t *testing.T) {
 	in.Clean(proc.Mp())
 	proc.Free()
 	require.Equal(t, int64(0), proc.Mp().CurrNB())
+}
+
+func TestGapFillGeneratesOnlyInteriorBuckets(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		gapFill    bool
+		wantStarts []string
+		wantNull   []bool
+	}{
+		{name: "legacy", wantStarts: []string{"2023-08-01 00:00:00", "2023-08-01 00:00:10"}, wantNull: []bool{false, false}},
+		{name: "gapfill", gapFill: true, wantStarts: []string{"2023-08-01 00:00:00", "2023-08-01 00:00:05", "2023-08-01 00:00:10"}, wantNull: []bool{false, true, false}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+			sliding, err := calcDatetime(5, types.Second)
+			require.NoError(t, err)
+			in := makePartInput(t, proc.Mp(), []row{
+				{"2023-08-01 00:00:00", 1, 1},
+				{"2023-08-01 00:00:12", 3, 1},
+			})
+			arg := newPartArg(t, proc, sliding, false)
+			arg.GapFill = tc.gapFill
+			op := colexec.NewMockOperator().WithBatchs([]*batch.Batch{in})
+			arg.AppendChild(op)
+			require.NoError(t, arg.Prepare(proc))
+			var starts []types.Datetime
+			var nulls []bool
+			for {
+				res, callErr := vm.Exec(arg, proc)
+				require.NoError(t, callErr)
+				if res.Batch == nil {
+					break
+				}
+				for i := 0; i < res.Batch.RowCount(); i++ {
+					starts = append(starts, vector.GetFixedAtNoTypeCheck[types.Datetime](res.Batch.Vecs[1], i))
+					nulls = append(nulls, res.Batch.Vecs[0].IsNull(uint64(i)))
+				}
+			}
+			want := make([]types.Datetime, len(tc.wantStarts))
+			for i := range want {
+				want[i] = mustDatetime(t, tc.wantStarts[i])
+			}
+			require.Equal(t, want, starts)
+			require.Equal(t, tc.wantNull, nulls)
+			arg.Free(proc, false, nil)
+			in.Clean(proc.Mp())
+			proc.Free()
+			require.Equal(t, int64(0), proc.Mp().CurrNB())
+		})
+	}
+}
+
+func TestGapFillResourceAccountingLimits(t *testing.T) {
+	arg := &TimeWin{GapFill: true}
+	ctr := container{partitionWindows: maxGapFillRowsPerPartition + 1}
+	require.ErrorContains(t, ctr.accountGapFillWindow(arg), "partition")
+
+	ctr = container{gapFillWindows: maxGapFillRowsTotal}
+	require.ErrorContains(t, ctr.accountGapFillWindow(arg), "total")
+
+	ctr = container{partitionWindows: maxGapFillRowsPerPartition - 1, gapFillWindows: maxGapFillRowsTotal - 1}
+	require.NoError(t, ctr.accountGapFillWindow(arg))
+
+	// The post-flush transition owns the next GAPFILL window's accounting.
+	// Verify that its limit error reaches the operator caller instead of being
+	// swallowed while the replacement aggregate generation is resumed.
+	arg.ctr = container{
+		status:           resumeAfterFlush,
+		partitionWindows: maxGapFillRowsPerPartition,
+	}
+	_, err := arg.Call(nil)
+	require.ErrorContains(t, err, "partition")
 }
 
 // A single partition must behave exactly like the unpartitioned operator.
@@ -515,6 +718,188 @@ func runPartArgBats(t *testing.T, arg *TimeWin, proc *process.Process, bats []*b
 		}
 	}
 	return
+}
+
+func makeFlushBoundaryRows(gap int, part int64) []row {
+	start := time.Date(2023, time.August, 1, 0, 0, 0, 0, time.UTC)
+	end := start.Add(time.Duration(gap) * 5 * time.Second)
+	return []row{
+		{start.Format("2006-01-02 15:04:05"), 1, part},
+		{end.Format("2006-01-02 15:04:05"), 2, part},
+	}
+}
+
+func makeDenseWindowRows(count int, part int64) []row {
+	start := time.Date(2023, time.August, 1, 0, 0, 0, 0, time.UTC)
+	rows := make([]row, count)
+	for i := range rows {
+		rows[i] = row{
+			ts:   start.Add(time.Duration(i) * 5 * time.Second).Format("2006-01-02 15:04:05"),
+			val:  int32(i + 1),
+			part: part,
+		}
+	}
+	return rows
+}
+
+func requireStrictWindowSequence(t *testing.T, starts []types.Datetime, sliding types.Datetime, want int) {
+	t.Helper()
+	require.Len(t, starts, want)
+	for i := 1; i < len(starts); i++ {
+		require.Equal(t, sliding, starts[i]-starts[i-1], "window %d must advance exactly one slide", i)
+	}
+}
+
+// The boundary window is already included in the flushed generation. The
+// replacement generation must start at the following window, including when a
+// second internal flush is required.
+func TestTimeWinGapFillInternalFlushKeepsWindowsUnique(t *testing.T) {
+	sliding, err := calcDatetime(5, types.Second)
+	require.NoError(t, err)
+
+	for _, tc := range []struct {
+		name string
+		gap  int
+	}{
+		{name: "adjacent control", gap: maxTimeWindowRows + 1},
+		{name: "first internal flush", gap: maxTimeWindowRows + 2},
+		{name: "second internal flush", gap: 2*maxTimeWindowRows + 5},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+			rows := makeFlushBoundaryRows(tc.gap, 1)
+			bats := []*batch.Batch{
+				makePartInput(t, proc.Mp(), rows[:1]),
+				makePartInput(t, proc.Mp(), rows[1:]),
+			}
+			arg := newPartArg(t, proc, sliding, true)
+			arg.GapFill = true
+
+			starts, sums, parts := runPartArgBats(t, arg, proc, bats)
+			requireStrictWindowSequence(t, starts, sliding, tc.gap+1)
+			require.Len(t, sums, tc.gap+1)
+			require.Equal(t, int64(1), sums[0])
+			require.Equal(t, int64(2), sums[len(sums)-1])
+			require.Len(t, parts, tc.gap+1)
+			for _, part := range parts {
+				require.Equal(t, int64(1), part)
+			}
+			require.Equal(t, int64(tc.gap+1), arg.ctr.partitionWindows)
+			require.Equal(t, int64(tc.gap+1), arg.ctr.gapFillWindows)
+
+			arg.Free(proc, false, nil)
+			for _, bat := range bats {
+				bat.Clean(proc.Mp())
+			}
+			proc.Free()
+			require.Equal(t, int64(0), proc.Mp().CurrNB())
+		})
+	}
+}
+
+// A dense non-GAPFILL input also crosses the result flush threshold. Its
+// existing semantics must remain unchanged even though the replacement
+// generation now resumes through the explicit post-flush state.
+func TestTimeWinInternalFlushPreservesDenseWindowsWithoutGapFill(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	sliding, err := calcDatetime(5, types.Second)
+	require.NoError(t, err)
+	rows := makeDenseWindowRows(maxTimeWindowRows+3, 1)
+	bats := []*batch.Batch{
+		makePartInput(t, proc.Mp(), rows[:maxTimeWindowRows]),
+		makePartInput(t, proc.Mp(), rows[maxTimeWindowRows:]),
+	}
+	arg := newPartArg(t, proc, sliding, true)
+
+	starts, sums, parts := runPartArgBats(t, arg, proc, bats)
+	requireStrictWindowSequence(t, starts, sliding, len(rows))
+	require.Len(t, sums, len(rows))
+	for i, sum := range sums {
+		require.Equal(t, int64(i+1), sum)
+	}
+	require.Len(t, parts, len(rows))
+	for _, part := range parts {
+		require.Equal(t, int64(1), part)
+	}
+	require.Zero(t, arg.ctr.gapFillWindows)
+
+	arg.Free(proc, false, nil)
+	for _, bat := range bats {
+		bat.Clean(proc.Mp())
+	}
+	proc.Free()
+	require.Equal(t, int64(0), proc.Mp().CurrNB())
+}
+
+func TestTimeWinGapFillInternalFlushResetsPerPartition(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	sliding, err := calcDatetime(5, types.Second)
+	require.NoError(t, err)
+	rows := append(makeFlushBoundaryRows(maxTimeWindowRows+2, 1), makeFlushBoundaryRows(maxTimeWindowRows+1, 2)...)
+	bats := []*batch.Batch{
+		makePartInput(t, proc.Mp(), rows[:2]),
+		makePartInput(t, proc.Mp(), rows[2:]),
+	}
+	arg := newPartArg(t, proc, sliding, true)
+	arg.GapFill = true
+
+	starts, _, parts := runPartArgBats(t, arg, proc, bats)
+	wantCounts := map[int64]int{1: maxTimeWindowRows + 3, 2: maxTimeWindowRows + 2}
+	seen := make(map[int64]int)
+	last := make(map[int64]types.Datetime)
+	for i, part := range parts {
+		seen[part]++
+		if count := seen[part]; count > 1 {
+			require.Equal(t, sliding, starts[i]-last[part], "partition %d window %d must advance one slide", part, count)
+		}
+		last[part] = starts[i]
+	}
+	require.Equal(t, wantCounts, seen)
+	require.Equal(t, int64(maxTimeWindowRows+2), arg.ctr.partitionWindows)
+	require.Equal(t, int64(2*maxTimeWindowRows+5), arg.ctr.gapFillWindows)
+
+	arg.Free(proc, false, nil)
+	for _, bat := range bats {
+		bat.Clean(proc.Mp())
+	}
+	proc.Free()
+	require.Equal(t, int64(0), proc.Mp().CurrNB())
+}
+
+func TestTimeWinGapFillInternalFlushReuseAfterReset(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	sliding, err := calcDatetime(5, types.Second)
+	require.NoError(t, err)
+	rows := makeFlushBoundaryRows(maxTimeWindowRows+2, 1)
+	arg := newPartArg(t, proc, sliding, true)
+	arg.GapFill = true
+
+	bats1 := []*batch.Batch{
+		makePartInput(t, proc.Mp(), rows[:1]),
+		makePartInput(t, proc.Mp(), rows[1:]),
+	}
+	starts1, sums1, parts1 := runPartArgBats(t, arg, proc, bats1)
+	requireStrictWindowSequence(t, starts1, sliding, maxTimeWindowRows+3)
+
+	arg.Reset(proc, false, nil)
+	bats2 := []*batch.Batch{
+		makePartInput(t, proc.Mp(), rows[:1]),
+		makePartInput(t, proc.Mp(), rows[1:]),
+	}
+	starts2, sums2, parts2 := runPartArgBats(t, arg, proc, bats2)
+	require.Equal(t, starts1, starts2)
+	require.Equal(t, sums1, sums2)
+	require.Equal(t, parts1, parts2)
+
+	arg.Free(proc, false, nil)
+	for _, bat := range bats1 {
+		bat.Clean(proc.Mp())
+	}
+	for _, bat := range bats2 {
+		bat.Clean(proc.Mp())
+	}
+	proc.Free()
+	require.Equal(t, int64(0), proc.Mp().CurrNB())
 }
 
 // The same rows produce the same windows regardless of how the child chops

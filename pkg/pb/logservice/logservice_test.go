@@ -34,17 +34,23 @@ func TestLogRecord(t *testing.T) {
 func TestCNStateUpdate(t *testing.T) {
 	state := CNState{Stores: map[string]CNStoreInfo{}}
 
-	hb1 := CNStoreHeartbeat{UUID: "cn-a", ServiceAddress: "addr-a", Role: metadata.CNRole_AP}
+	hb1 := CNStoreHeartbeat{
+		UUID:                        "cn-a",
+		ServiceAddress:              "addr-a",
+		Role:                        metadata.CNRole_AP,
+		CommandDeliveryAckSupported: true,
+	}
 	tick1 := uint64(100)
 
 	state.Update(hb1, tick1)
 	assert.Equal(t, state.Stores[hb1.UUID], CNStoreInfo{
-		Tick:           tick1,
-		ServiceAddress: hb1.ServiceAddress,
-		Role:           metadata.CNRole_AP,
-		WorkState:      metadata.WorkState_Working,
-		Labels:         map[string]metadata.LabelList{},
-		UpTime:         state.Stores[hb1.UUID].UpTime,
+		Tick:                        tick1,
+		ServiceAddress:              hb1.ServiceAddress,
+		Role:                        metadata.CNRole_AP,
+		WorkState:                   metadata.WorkState_Working,
+		Labels:                      map[string]metadata.LabelList{},
+		UpTime:                      state.Stores[hb1.UUID].UpTime,
+		CommandDeliveryAckSupported: true,
 	})
 
 	hb2 := CNStoreHeartbeat{UUID: "cn-b", ServiceAddress: "addr-b", Role: metadata.CNRole_TP}
@@ -65,12 +71,13 @@ func TestCNStateUpdate(t *testing.T) {
 
 	state.Update(hb3, tick3)
 	assert.Equal(t, state.Stores[hb3.UUID], CNStoreInfo{
-		Tick:           tick3,
-		ServiceAddress: hb3.ServiceAddress,
-		Role:           metadata.CNRole_TP,
-		WorkState:      metadata.WorkState_Working,
-		Labels:         map[string]metadata.LabelList{},
-		UpTime:         state.Stores[hb3.UUID].UpTime,
+		Tick:                        tick3,
+		ServiceAddress:              hb3.ServiceAddress,
+		Role:                        metadata.CNRole_TP,
+		WorkState:                   metadata.WorkState_Working,
+		Labels:                      map[string]metadata.LabelList{},
+		UpTime:                      state.Stores[hb3.UUID].UpTime,
+		CommandDeliveryAckSupported: false,
 	})
 }
 
@@ -102,17 +109,36 @@ func TestTNStateUpdate(t *testing.T) {
 		Shards: []TNShardInfo{
 			{ShardID: 1, ReplicaID: 1},
 			{ShardID: 2, ReplicaID: 1}},
-		LogtailServerAddress: "addr-0",
+		LogtailServerAddress:        "addr-0",
+		AutoIncrEpochFenceSupported: true,
+		CommandDeliveryAckSupported: true,
 	}
 	tick2 := uint64(200)
 
 	state.Update(hb2, tick2)
 	assert.Equal(t, state.Stores[hb2.UUID], TNStoreInfo{
-		Tick:                 tick2,
-		ServiceAddress:       hb2.ServiceAddress,
-		Shards:               hb2.Shards,
-		LogtailServerAddress: "addr-0",
+		Tick:                        tick2,
+		ServiceAddress:              hb2.ServiceAddress,
+		Shards:                      hb2.Shards,
+		LogtailServerAddress:        "addr-0",
+		AutoIncrEpochFenceSupported: true,
+		CommandDeliveryAckSupported: true,
 	})
+
+	data, err := state.Marshal()
+	assert.NoError(t, err)
+	var restored TNState
+	assert.NoError(t, restored.Unmarshal(data))
+	assert.True(t, restored.Stores[hb2.UUID].AutoIncrEpochFenceSupported)
+	assert.True(t, restored.Stores[hb2.UUID].CommandDeliveryAckSupported)
+
+	// A heartbeat from a legacy TN must clear a capability previously
+	// advertised by a newer process using the same store UUID.
+	hb2.AutoIncrEpochFenceSupported = false
+	hb2.CommandDeliveryAckSupported = false
+	state.Update(hb2, tick2+1)
+	assert.False(t, state.Stores[hb2.UUID].AutoIncrEpochFenceSupported)
+	assert.False(t, state.Stores[hb2.UUID].CommandDeliveryAckSupported)
 }
 
 func TestLogStateUpdateStores(t *testing.T) {
@@ -128,10 +154,11 @@ func TestLogStateUpdateStores(t *testing.T) {
 	}
 
 	hb1 := LogStoreHeartbeat{
-		UUID:           "log-a",
-		RaftAddress:    "raft-a",
-		ServiceAddress: "addr-a",
-		GossipAddress:  "gossip-a",
+		UUID:                     "log-a",
+		RaftAddress:              "raft-a",
+		ServiceAddress:           "addr-a",
+		GossipAddress:            "gossip-a",
+		CommandDeliverySupported: true,
 		Replicas: []LogReplicaInfo{{
 			LogShardInfo: LogShardInfo{
 				ShardID:  1,
@@ -146,11 +173,12 @@ func TestLogStateUpdateStores(t *testing.T) {
 	tick1 := uint64(100)
 	state.Update(hb1, tick1)
 	assert.Equal(t, state.Stores[hb1.UUID], LogStoreInfo{
-		Tick:           tick1,
-		RaftAddress:    hb1.RaftAddress,
-		ServiceAddress: hb1.ServiceAddress,
-		GossipAddress:  hb1.GossipAddress,
-		Replicas:       hb1.Replicas,
+		Tick:                     tick1,
+		RaftAddress:              hb1.RaftAddress,
+		ServiceAddress:           hb1.ServiceAddress,
+		GossipAddress:            hb1.GossipAddress,
+		Replicas:                 hb1.Replicas,
+		CommandDeliverySupported: true,
 	})
 
 	hb2 := LogStoreHeartbeat{
@@ -171,6 +199,8 @@ func TestLogStateUpdateStores(t *testing.T) {
 	}
 	tick2 := uint64(200)
 	state.Update(hb2, tick2)
+	assert.False(t, state.Stores[hb2.UUID].CommandDeliverySupported,
+		"a legacy heartbeat must clear a capability cached for the same UUID")
 	assert.Equal(t, state.Stores[hb2.UUID], LogStoreInfo{
 		Tick:           tick2,
 		RaftAddress:    hb2.RaftAddress,

@@ -25,8 +25,19 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	apipb "github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 )
+
+type nilReplayDataFactory struct{}
+
+func (*nilReplayDataFactory) MakeTableFactory() TableDataFactory {
+	return func(*TableEntry) data.Table { return nil }
+}
+
+func (*nilReplayDataFactory) MakeObjectFactory() ObjectDataFactory {
+	return func(*ObjectEntry) data.Object { return nil }
+}
 
 func TestTableObjectStats(t *testing.T) {
 	db := MockDBEntryWithAccInfo(0, 0)
@@ -85,6 +96,19 @@ func TestAutoIncrementEpochTransition(t *testing.T) {
 	require.Equal(t, uint32(math.MaxUint32), schema.Extra.AutoIncrEpoch)
 }
 
+func TestSchemaExtraSerializationDoesNotMutateSchema(t *testing.T) {
+	schema := MockSchemaAll(3, 1)
+	schema.FromPublication = true
+	require.False(t, schema.Extra.FromPublication)
+
+	data := schema.MustGetExtraBytes()
+	require.False(t, schema.Extra.FromPublication)
+
+	var extra apipb.SchemaExtra
+	require.NoError(t, extra.Unmarshal(data))
+	require.True(t, extra.FromPublication)
+}
+
 func TestObjectList(t *testing.T) {
 	ll := NewObjectList(false)
 	nobjid := objectio.NewObjectid()
@@ -100,6 +124,8 @@ func TestObjectList(t *testing.T) {
 	entry2 := entry1.Clone()
 	entry2.DeletedAt = types.BuildTS(2, 0)
 	entry2.ObjectState = ObjectState_Delete_ApplyCommit
+	entry1.nextVersion = entry2
+	entry2.prevVersion = entry1
 	ll.Set(entry1)
 	ll.Set(entry2)
 
@@ -107,6 +133,49 @@ func TestObjectList(t *testing.T) {
 
 	t.Log(ll.getNodes(entry1.ID(), true))
 	t.Log(ll.getNodes(entry1.ID(), false))
+}
+
+func TestObjectListUpdateCreateTSWithDeleteEntry(t *testing.T) {
+	ll := NewObjectList(false)
+	nobjid := objectio.NewObjectid()
+	createTS := types.BuildTS(10, 0)
+	deleteTS := types.BuildTS(20, 0)
+	updatedCreateTS := types.BuildTS(5, 0)
+	createEntry := &ObjectEntry{
+		ObjectNode: ObjectNode{SortHint: 1},
+		EntryMVCCNode: EntryMVCCNode{
+			CreatedAt: createTS,
+		},
+		ObjectMVCCNode: ObjectMVCCNode{ObjectStats: *objectio.NewObjectStatsWithObjectID(&nobjid, true, false, false)},
+		CreateNode:     txnbase.NewTxnMVCCNodeWithTS(createTS),
+		ObjectState:    ObjectState_Create_ApplyCommit,
+	}
+	deleteEntry := createEntry.Clone()
+	deleteEntry.DeletedAt = deleteTS
+	deleteEntry.DeleteNode = txnbase.NewTxnMVCCNodeWithTS(deleteTS)
+	deleteEntry.ObjectState = ObjectState_Delete_ApplyCommit
+	updatedCreateEntry := createEntry.Clone()
+	updatedCreateEntry.nextVersion = deleteEntry
+	deleteEntry.prevVersion = updatedCreateEntry
+
+	ll.modify(nil, deleteEntry, updatedCreateEntry)
+	updated, err := ll.UpdateCreateTS(createEntry.ID(), updatedCreateTS)
+	require.NoError(t, err)
+	require.True(t, updated.IsDEntry())
+
+	nodes := ll.GetAllNodes(createEntry.ID())
+	require.Len(t, nodes, 2)
+	require.Equal(t, updatedCreateTS, nodes[0].CreatedAt)
+	require.Equal(t, updatedCreateTS, nodes[0].CreateNode.GetPrepare())
+	require.Equal(t, updatedCreateTS, nodes[1].CreatedAt)
+	require.Equal(t, updatedCreateTS, nodes[1].CreateNode.GetPrepare())
+	require.Same(t, nodes[0].prevVersion, nodes[1])
+	require.Same(t, nodes[1].nextVersion, nodes[0])
+	require.Equal(t, 2, ll.loadTree().Len())
+	require.Equal(t, 1, ll.loadTrees().visible.Len())
+	require.NoError(t, ll.DeleteAllEntries(createEntry.ID()))
+	require.Zero(t, ll.loadTree().Len())
+	require.Zero(t, ll.loadTrees().visible.Len())
 }
 
 func TestGetSoftdeleteObjects(t *testing.T) {
@@ -120,11 +189,19 @@ func TestGetSoftdeleteObjects(t *testing.T) {
 	// Add some objects
 	obj1 := MockObjEntryWithTbl(tbl, 10, false)
 	obj1.DeletedAt = types.BuildTS(2, 0)
-	tbl.dataObjects.Set(obj1)
+	obj1Create := obj1.Clone()
+	obj1Create.DeletedAt = types.TS{}
+	obj1Create.nextVersion = obj1
+	obj1.prevVersion = obj1Create
+	tbl.dataObjects.modify(nil, obj1, obj1Create)
 
 	obj2 := MockObjEntryWithTbl(tbl, 20, false)
 	obj2.DeletedAt = types.BuildTS(3, 0)
-	tbl.dataObjects.Set(obj2)
+	obj2Create := obj2.Clone()
+	obj2Create.DeletedAt = types.TS{}
+	obj2Create.nextVersion = obj2
+	obj2.prevVersion = obj2Create
+	tbl.dataObjects.modify(nil, obj2, obj2Create)
 
 	// Test getting objects between ts1 and ts2
 	objs = tbl.GetSoftdeleteObjects(types.BuildTS(1, 0), types.BuildTS(2, 0))
@@ -161,14 +238,17 @@ func TestGetSoftdeleteObjects2(t *testing.T) {
 	addSoftDeleteObject := func(create, delete int64) *ObjectEntry {
 		createEntry := addActiveObject(create)
 		dropEntry := createEntry.Clone()
+		updatedCreate := createEntry.Clone()
 		dropEntry.DeletedAt = types.BuildTS(delete, 0)
 		dropEntry.ObjectState = ObjectState_Delete_ApplyCommit
-		dropEntry.CreateNode = txnbase.TxnMVCCNode{
+		dropEntry.DeleteNode = txnbase.TxnMVCCNode{
 			Start:   types.BuildTS(delete-1, 0),
 			Prepare: types.BuildTS(delete, 0),
 			End:     types.BuildTS(delete, 0),
 		}
-		tbl.dataObjects.modify(nil, dropEntry, nil)
+		updatedCreate.nextVersion = dropEntry
+		dropEntry.prevVersion = updatedCreate
+		tbl.dataObjects.modify(nil, dropEntry, updatedCreate)
 		return dropEntry
 	}
 
@@ -184,4 +264,72 @@ func TestGetSoftdeleteObjects2(t *testing.T) {
 	addActiveObject(4)
 	objs = tbl.GetSoftdeleteObjects(types.BuildTS(2, 0), types.BuildTS(5, 0))
 	assert.Equal(t, 2, len(objs))
+}
+
+func TestReplayCheckpointDeleteObjectSoftDeleteCollection(t *testing.T) {
+	catalog := MockCatalog(&nilReplayDataFactory{})
+	db := NewReplayDBEntry()
+	db.ID = 100
+	db.catalog = catalog
+	db.DBNode = &DBNode{name: "backup"}
+	require.NoError(t, catalog.AddEntryLocked(db, nil, true))
+
+	tbl := MockTableEntryWithDB(db, 200)
+	require.NoError(t, db.AddEntryLocked(tbl, nil, true))
+
+	createTS := types.BuildTS(10, 0)
+	deleteTS := types.BuildTS(20, 0)
+	endTS := types.BuildTS(30, 0)
+	objID := objectio.NewObjectid()
+	stats := objectio.NewObjectStatsWithObjectID(&objID, true, false, false)
+
+	// Neither timestamp equals the checkpoint commit timestamp, reproducing the
+	// backup-only replay branch that used to publish one combined C/D entry.
+	catalog.onReplayCheckpointObject(
+		db.ID,
+		tbl.ID,
+		&objID,
+		createTS,
+		deleteTS,
+		createTS.Prev(),
+		endTS,
+		endTS,
+		&ObjectMVCCNode{ObjectStats: *stats},
+		false,
+	)
+
+	nodes := tbl.dataObjects.GetAllNodes(&objID)
+	require.Len(t, nodes, 2)
+	createEntry := nodes[1]
+	deleteEntry := createEntry.GetNextVersion()
+	require.NotNil(t, deleteEntry)
+	require.Same(t, createEntry, deleteEntry.GetPrevVersion())
+	require.True(t, createEntry.HasDCounterpart())
+	require.True(t, deleteEntry.IsDEntry())
+	require.Equal(t, createTS, createEntry.CreatedAt)
+	require.True(t, createEntry.DeletedAt.IsEmpty())
+	require.Equal(t, deleteTS, deleteEntry.DeletedAt)
+	require.Same(t, deleteEntry, nodes[0])
+	require.Same(t, createEntry, nodes[1])
+
+	softDeletes := tbl.GetSoftdeleteObjects(createTS, deleteTS)
+	require.Len(t, softDeletes, 1)
+	require.Same(t, deleteEntry, softDeletes[0])
+
+	// Replaying the same checkpoint record must reuse the linked versions
+	// instead of inserting another pair.
+	catalog.onReplayCheckpointObject(
+		db.ID,
+		tbl.ID,
+		&objID,
+		createTS,
+		deleteTS,
+		createTS.Prev(),
+		endTS,
+		endTS,
+		&ObjectMVCCNode{ObjectStats: *stats},
+		false,
+	)
+	require.Len(t, tbl.dataObjects.GetAllNodes(&objID), 2)
+	require.Len(t, tbl.GetSoftdeleteObjects(createTS, deleteTS), 1)
 }

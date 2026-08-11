@@ -21,6 +21,7 @@ import (
 	"errors"
 	"io"
 	"iter"
+	"math"
 	pathpkg "path"
 	"runtime"
 	"slices"
@@ -241,23 +242,27 @@ func resolveS3CopySource(fs FileService, filePath string) (*S3FS, string, error)
 
 func (s *S3FS) AllocateCacheData(ctx context.Context, size int) fscache.Data {
 	if s.memCache != nil {
-		s.memCache.cache.EnsureNBytes(withoutEventLogger(ctx), size)
+		ensureCacheDataCapacity(ctx, s.memCache.cache, DefaultCacheDataAllocator(), size)
 	}
 	return DefaultCacheDataAllocator().AllocateCacheData(ctx, size)
 }
 
 func (s *S3FS) AllocateCacheDataWithHint(ctx context.Context, size int, hints malloc.Hints) fscache.Data {
 	if s.memCache != nil {
-		s.memCache.cache.EnsureNBytes(withoutEventLogger(ctx), size)
+		ensureCacheDataCapacity(ctx, s.memCache.cache, DefaultCacheDataAllocator(), size)
 	}
 	return DefaultCacheDataAllocator().AllocateCacheDataWithHint(ctx, size, hints)
 }
 
 func (s *S3FS) CopyToCacheData(ctx context.Context, data []byte) fscache.Data {
 	if s.memCache != nil {
-		s.memCache.cache.EnsureNBytes(withoutEventLogger(ctx), len(data))
+		ensureCacheDataCapacity(ctx, s.memCache.cache, DefaultCacheDataAllocator(), len(data))
 	}
 	return DefaultCacheDataAllocator().CopyToCacheData(ctx, data)
+}
+
+func (s *S3FS) BackingSize(size int) int {
+	return DefaultCacheDataAllocator().BackingSize(size)
 }
 
 func (s *S3FS) initCaches(ctx context.Context, config CacheConfig) error {
@@ -269,6 +274,7 @@ func (s *S3FS) initCaches(ctx context.Context, config CacheConfig) error {
 			return moerr.NewInternalError(ctx, "query client is nil")
 		}
 		s.remoteCache = NewRemoteCache(config.QueryClient, config.KeyRouterFactory)
+		s.remoteCache.setAllocator(s)
 		logutil.Info("fileservice: remote cache initialized",
 			zap.Any("fs-name", s.name),
 		)
@@ -416,6 +422,9 @@ func (s *S3FS) PrefetchFile(ctx context.Context, filePath string) error {
 	if err != nil {
 		return err
 	}
+	if s.diskCache == nil {
+		return nil
+	}
 
 	startLock := time.Now()
 	defer func() {
@@ -425,6 +434,7 @@ func (s *S3FS) PrefetchFile(ctx context.Context, filePath string) error {
 	done, _ := s.ioMerger.Merge(IOMergeKey{
 		Path:       filePath,
 		FullObject: true,
+		CacheFill:  true,
 	}, maxIOWaitDuration)
 	if done != nil {
 		defer done()
@@ -434,15 +444,13 @@ func (s *S3FS) PrefetchFile(ctx context.Context, filePath string) error {
 	}
 
 	// load to disk cache
-	if s.diskCache != nil {
-		if err := s.diskCache.SetFile(
-			ctx, path.File,
-			func(ctx context.Context) (io.ReadCloser, error) {
-				return s.newReadCloser(ctx, filePath)
-			},
-		); err != nil {
-			return err
-		}
+	if err := s.diskCache.SetFile(
+		ctx, path.File,
+		func(ctx context.Context) (io.ReadCloser, error) {
+			return s.newReadCloser(ctx, filePath)
+		},
+	); err != nil {
+		return err
 	}
 	return nil
 }
@@ -658,6 +666,10 @@ func (s *S3FS) Read(ctx context.Context, vector *IOVector) (err error) {
 		}()
 	}
 
+	mayReadMemoryCache := vector.Policy&SkipMemoryCacheReads == 0
+	mayReadDiskCache := vector.Policy&SkipDiskCacheReads == 0
+	forceMinimalRangeRead := false
+	forcePerEntryRangeRead := false
 read_memory_cache:
 	if s.memCache != nil {
 
@@ -748,19 +760,25 @@ read_disk_cache:
 		}
 	}
 
-	mayReadMemoryCache := vector.Policy&SkipMemoryCacheReads == 0
-	mayReadDiskCache := vector.Policy&SkipDiskCacheReads == 0
-	forceMinimalRangeRead := false
+	if forcePerEntryRangeRead || forceMinimalRangeRead {
+		goto read_s3
+	}
 	if mayReadMemoryCache || mayReadDiskCache {
 		// may read caches, merge
+		mergeKey := s.readMergeKey(vector)
+		if mergeKey.FullObject && !mergeKey.CacheFill {
+			// Stream-only reads cannot publish a reusable cache artifact, so
+			// serializing them behind an unrelated request only adds head-of-line
+			// blocking without eliminating any storage read.
+			goto read_s3
+		}
 		LogEvent(ctx, str_ioMerger_Merge_begin)
 		startLock := time.Now()
-		mergeKey := vector.ioMergeKey()
 		waitDuration := maxIOWaitDuration
 		if mergeKey.FullObject {
 			waitDuration = shortIOWaitDuration
 		}
-		done, wait := s.ioMerger.Merge(mergeKey, waitDuration)
+		done, generation := s.ioMerger.merge(mergeKey)
 		if done != nil {
 			finishMerge = done
 			stats.AddS3FSReadIOMergerTimeConsumption(time.Since(startLock))
@@ -769,19 +787,92 @@ read_disk_cache:
 			LogEvent(ctx, str_ioMerger_Merge_end)
 		} else {
 			LogEvent(ctx, str_ioMerger_Merge_wait)
-			wait()
+			completed, waitErr := waitForIOGeneration(ctx, mergeKey, generation, waitDuration)
 			stats.AddS3FSReadIOMergerTimeConsumption(time.Since(startLock))
 			metric.FSReadDurationIOMerger.Observe(time.Since(startLock).Seconds())
 			LogEvent(ctx, str_ioMerger_Merge_end)
-			if mergeKey.FullObject && s.ioMerger.IsMerging(mergeKey) {
+			if waitErr != nil {
+				return waitErr
+			}
+			if !completed && mergeKey.FullObject {
+				logicalBytes, spanBytes, expensive := vector.expensiveMinimalRangeRead()
+				if mergeKey.CacheFill && expensive {
+					LogEvent(ctx, str_ioMerger_Merge_wait_expensive_range,
+						logicalBytes, spanBytes)
+					waitStart := time.Now()
+					remainingWaitDuration := maxIOWaitDuration - waitDuration
+					if remainingWaitDuration > 0 {
+						completed, waitErr = waitForIOGeneration(
+							ctx,
+							mergeKey,
+							generation,
+							remainingWaitDuration,
+						)
+					}
+					waitTime := time.Since(waitStart)
+					stats.AddS3FSReadIOMergerTimeConsumption(waitTime)
+					metric.FSReadDurationIOMerger.Observe(waitTime.Seconds())
+					if waitErr != nil {
+						return waitErr
+					}
+					if !completed {
+						forcePerEntryRangeRead = true
+						if mayReadMemoryCache {
+							goto read_memory_cache
+						}
+						goto read_disk_cache
+					}
+					if mayReadMemoryCache {
+						goto read_memory_cache
+					}
+					goto read_disk_cache
+				}
+				if expensive {
+					forcePerEntryRangeRead = true
+					goto read_s3
+				}
 				forceMinimalRangeRead = true
+				if rangeKey, ok := s.singleEntryRangeMergeKey(vector); ok {
+					LogEvent(ctx, str_ioMerger_Merge_begin)
+					rangeMergeStart := time.Now()
+					rangeDone, rangeGeneration := s.ioMerger.merge(rangeKey)
+					if rangeDone != nil {
+						finishMerge = rangeDone
+						stats.AddS3FSReadIOMergerTimeConsumption(time.Since(rangeMergeStart))
+						metric.FSReadDurationIOMerger.Observe(time.Since(rangeMergeStart).Seconds())
+						LogEvent(ctx, str_ioMerger_Merge_initiate)
+						LogEvent(ctx, str_ioMerger_Merge_end)
+					} else {
+						LogEvent(ctx, str_ioMerger_Merge_wait)
+						completed, waitErr = waitForIOGeneration(
+							ctx, rangeKey, rangeGeneration, maxIOWaitDuration,
+						)
+						rangeMergeTime := time.Since(rangeMergeStart)
+						stats.AddS3FSReadIOMergerTimeConsumption(rangeMergeTime)
+						metric.FSReadDurationIOMerger.Observe(rangeMergeTime.Seconds())
+						LogEvent(ctx, str_ioMerger_Merge_end)
+						if waitErr != nil {
+							return waitErr
+						}
+						if completed {
+							if mayReadMemoryCache {
+								goto read_memory_cache
+							}
+							goto read_disk_cache
+						}
+					}
+				}
 				goto read_s3
 			}
-			if mayReadMemoryCache {
-				goto read_memory_cache
-			} else {
+			if completed {
+				if mayReadMemoryCache {
+					goto read_memory_cache
+				}
 				goto read_disk_cache
 			}
+			// The local bound expired. Do not join the same generation again;
+			// make bounded follower progress through the normal range read.
+			goto read_s3
 		}
 	}
 
@@ -794,7 +885,12 @@ read_s3:
 		}
 	}
 	s3ReadStart := time.Now()
-	if err := s.read(ctx, vector, forceMinimalRangeRead); err != nil {
+	if forcePerEntryRangeRead {
+		err = s.readEntriesIndividually(ctx, vector)
+	} else {
+		err = s.read(ctx, vector, forceMinimalRangeRead)
+	}
+	if err != nil {
 		return err
 	}
 	metric.FSReadDurationS3Read.Observe(time.Since(s3ReadStart).Seconds())
@@ -805,6 +901,31 @@ read_s3:
 		})
 	}
 
+	return nil
+}
+
+func (s *S3FS) readEntriesIndividually(ctx context.Context, vector *IOVector) error {
+	// The full-object merge is still stalled after its bounded wait. Read exact
+	// entry ranges sequentially so this follower can progress without fetching
+	// the potentially much larger sparse envelope.
+	for i := range vector.Entries {
+		if vector.Entries[i].done {
+			continue
+		}
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		single := &IOVector{
+			FilePath: vector.FilePath,
+			Entries:  []IOEntry{vector.Entries[i]},
+			ExpireAt: vector.ExpireAt,
+			Policy:   vector.Policy,
+		}
+		if err := s.read(ctx, single, true); err != nil {
+			return err
+		}
+		vector.Entries[i] = single.Entries[0]
+	}
 	return nil
 }
 
@@ -1130,6 +1251,71 @@ func (s *S3FS) shouldStreamFullObjectToDiskCache(vector *IOVector) bool {
 		}
 	}
 	return true
+}
+
+func (s *S3FS) readMergeKey(vector *IOVector) IOMergeKey {
+	key := vector.ioMergeKey()
+	if key.FullObject {
+		key.CacheFill = s.willCacheFullObject(vector)
+	}
+	return key
+}
+
+func (s *S3FS) singleEntryRangeMergeKey(vector *IOVector) (IOMergeKey, bool) {
+	var target *IOEntry
+	for i := range vector.Entries {
+		entry := &vector.Entries[i]
+		if entry.done {
+			continue
+		}
+		if target != nil || entry.Offset < 0 || entry.Size <= 0 ||
+			entry.Offset > math.MaxInt64-entry.Size ||
+			entry.WriterForRead != nil || entry.ReadCloserForRead != nil {
+			return IOMergeKey{}, false
+		}
+		target = entry
+	}
+	if target == nil {
+		return IOMergeKey{}, false
+	}
+
+	canPublish := target.ToCacheData != nil && s.memCache != nil &&
+		!vector.Policy.Any(SkipMemoryCacheReads, SkipMemoryCacheWrites)
+	if !canPublish {
+		canPublish = s.diskCache != nil && vector.Policy.CacheIOEntry() &&
+			!vector.Policy.Any(SkipDiskCacheReads, SkipDiskCacheWrites)
+	}
+	if !canPublish {
+		return IOMergeKey{}, false
+	}
+
+	return IOMergeKey{
+		Path:      vector.FilePath,
+		Offset:    target.Offset,
+		End:       target.Offset + target.Size,
+		Policy:    vector.Policy,
+		CacheFill: true,
+	}, true
+}
+
+func (s *S3FS) willCacheFullObject(vector *IOVector) bool {
+	if s.diskCache == nil || vector.Policy.Any(SkipDiskCacheWrites) {
+		return false
+	}
+	willReadFullObject := false
+	for i := range vector.Entries {
+		entry := &vector.Entries[i]
+		if entry.done {
+			continue
+		}
+		if entry.Size == 0 {
+			return false
+		}
+		if entry.WriterForRead == nil && entry.ReadCloserForRead == nil {
+			willReadFullObject = true
+		}
+	}
+	return willReadFullObject
 }
 
 func (s *S3FS) readFullObjectToDiskCacheStreaming(

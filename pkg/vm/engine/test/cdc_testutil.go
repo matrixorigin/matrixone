@@ -198,6 +198,7 @@ func mock_mo_indexes(
 		"`ordinal_position` int unsigned NOT NULL," +
 		"`options` text DEFAULT NULL," +
 		"`index_table_name` varchar(5000) DEFAULT NULL," +
+		"`included_columns` text DEFAULT NULL," +
 		"PRIMARY KEY (`table_id`,`column_name`)" + // use table_id as primary key instead of id to avoid duplicate
 		")"
 
@@ -247,6 +248,9 @@ func mock_mo_foreign_keys(
 		"`refer_column_id` bigint unsigned NOT NULL DEFAULT 0," +
 		"`on_delete` varchar(128) NOT NULL," +
 		"`on_update` varchar(128) NOT NULL," +
+		"`referenced_index_name` varchar(5000) NOT NULL DEFAULT ''," +
+		"`on_delete_origin` varchar(64) NOT NULL DEFAULT 'ACTION_ORIGIN_LEGACY_AMBIGUOUS'," +
+		"`on_update_origin` varchar(64) NOT NULL DEFAULT 'ACTION_ORIGIN_LEGACY_AMBIGUOUS'," +
 		"PRIMARY KEY (`constraint_name`,`constraint_id`,`db_name`,`db_id`,`table_name`,`table_id`,`column_name`,`column_id`,`refer_db_name`,`refer_db_id`,`refer_table_name`,`refer_table_id`,`refer_column_name`,`refer_column_id`)" +
 		")"
 

@@ -17,11 +17,13 @@ package morpc
 import (
 	"context"
 	"runtime/debug"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestNewFutureWillPanic(t *testing.T) {
@@ -135,6 +137,76 @@ func TestGetWithError(t *testing.T) {
 	assert.Equal(t, errResp, err)
 }
 
+func TestGetOwnedRequestReturnsBeforeWriteCompletes(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Hour)
+	requestReleased := make(chan Message, 1)
+	futureReleased := make(chan struct{}, 1)
+
+	f := newFuture(func(*Future) { futureReleased <- struct{}{} })
+	f.ref()
+	f.init(newTestRPCMessage(ctx, 1))
+	f.setSendRelease(func(message Message) {
+		requestReleased <- message
+	})
+
+	cancel()
+	resp, err := f.Get()
+	require.ErrorIs(t, err, context.Canceled)
+	require.Nil(t, resp)
+	f.Close()
+
+	select {
+	case <-requestReleased:
+		t.Fatal("request released before the writer completed")
+	default:
+	}
+	select {
+	case <-futureReleased:
+		t.Fatal("future released while the writer still owned it")
+	default:
+	}
+
+	f.messageSent(context.Canceled)
+	require.Equal(t, uint64(1), (<-requestReleased).GetID())
+	select {
+	case <-futureReleased:
+	case <-time.After(time.Second):
+		t.Fatal("future was not released after the writer completed")
+	}
+}
+
+func TestGetInternalReturnsBeforeWriteCompletes(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	futureReleased := make(chan struct{}, 1)
+
+	f := newFuture(func(*Future) { futureReleased <- struct{}{} })
+	f.ref()
+	f.init(RPCMessage{
+		Ctx:      ctx,
+		internal: true,
+		Message:  &flagOnlyMessage{flag: flagPing},
+	})
+
+	cancel()
+	resp, err := f.Get()
+	require.ErrorIs(t, err, context.Canceled)
+	require.Nil(t, resp)
+	f.Close()
+
+	select {
+	case <-futureReleased:
+		t.Fatal("internal future released while the writer still owned it")
+	default:
+	}
+
+	f.messageSent(context.Canceled)
+	select {
+	case <-futureReleased:
+	case <-time.After(time.Second):
+		t.Fatal("internal future was not released after writer completion")
+	}
+}
+
 func TestGetWithInvalidResponse(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
@@ -147,6 +219,50 @@ func TestGetWithInvalidResponse(t *testing.T) {
 	assert.Equal(t, 0, len(f.c))
 }
 
+func TestFutureTerminalCallbackRunsExactlyOnce(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	var callbacks atomic.Int32
+
+	f := newFuture(nil)
+	f.init(newTestRPCMessage(ctx, 1))
+	require.True(t, f.done(newTestMessage(1), func() {
+		callbacks.Add(1)
+	}))
+	f.Close()
+	require.Equal(t, int32(1), callbacks.Load())
+
+	late := newFuture(nil)
+	late.init(newTestRPCMessage(ctx, 2))
+	require.True(t, late.error(2, moerr.NewBackendClosedNoCtx(), nil))
+	require.False(t, late.done(newTestMessage(2), func() {
+		callbacks.Add(1)
+	}))
+	require.Equal(t, int32(2), callbacks.Load(),
+		"a rejected late response must release its payload callback")
+}
+
+func TestFutureCloseReleasesAbandonedResponse(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	var callbacks, responses atomic.Int32
+
+	f := newFuture(func(*Future) {})
+	f.setResponseRelease(func(Message) {
+		responses.Add(1)
+	})
+	f.init(newTestRPCMessage(ctx, 1))
+	require.True(t, f.done(newTestMessage(1), func() {
+		callbacks.Add(1)
+	}))
+
+	// Simulate a context/response select race or a caller that closes without
+	// consuming the response. Future still owns the queued response.
+	f.Close()
+	require.Equal(t, int32(1), callbacks.Load())
+	require.Equal(t, int32(1), responses.Load())
+}
+
 func TestTimeout(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Hour)
 	f := newFuture(func(f *Future) { f.reset() })
@@ -156,6 +272,25 @@ func TestTimeout(t *testing.T) {
 	assert.False(t, f.timeout())
 	cancel()
 	assert.True(t, f.timeout())
+}
+
+func TestEarliestDeadline(t *testing.T) {
+	now := time.Now()
+	early := now.Add(time.Second)
+	late := now.Add(3 * time.Second)
+	assert.Equal(t, late, earliestDeadline(time.Time{}, late))
+	assert.Equal(t, early, earliestDeadline(late, early))
+	assert.Equal(t, early, earliestDeadline(early, late))
+	assert.Equal(t, early, earliestDeadline(early, time.Time{}))
+	assert.Equal(t, time.Second, remainingDeadlineTimeout(early, now))
+	assert.Equal(t, time.Nanosecond, remainingDeadlineTimeout(now, early))
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	timeout, err := (RPCMessage{Ctx: ctx, internal: true}).GetTimeoutFromContext()
+	require.NoError(t, err)
+	require.Positive(t, timeout)
+	require.LessOrEqual(t, timeout, time.Second)
 }
 
 func newTestRPCMessage(ctx context.Context, id uint64) RPCMessage {

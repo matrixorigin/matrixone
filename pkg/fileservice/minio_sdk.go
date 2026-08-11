@@ -369,7 +369,7 @@ func (a *MinioSDK) Write(
 		if err != nil {
 			return err
 		}
-		_, err = DoWithRetry("write", func() (minio.UploadInfo, error) {
+		_, err = DoWithRetryContext(ctx, "write", func() (minio.UploadInfo, error) {
 			return a.putObject(
 				ctx,
 				key,
@@ -500,7 +500,8 @@ func (a *MinioSDK) deleteSingle(ctx context.Context, key string) error {
 func (a *MinioSDK) listObjects(ctx context.Context, prefix string, marker string) (minio.ListBucketResult, error) {
 	ctx, task := gotrace.NewTask(ctx, "MinioSDK.listObjects")
 	defer task.End()
-	return DoWithRetry(
+	return DoWithRetryContext(
+		ctx,
 		"s3 list objects",
 		func() (minio.ListBucketResult, error) {
 			perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
@@ -579,7 +580,8 @@ func (a *MinioSDK) getObject(ctx context.Context, key string, min *int64, max *i
 	}
 	r, err := newRetryableReader(
 		func(offset int64) (io.ReadCloser, error) {
-			obj, err := DoWithRetry(
+			obj, err := DoWithRetryContext(
+				ctx,
 				"s3 get object",
 				func() (obj *minio.Object, err error) {
 					perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
@@ -619,7 +621,8 @@ func (a *MinioSDK) getObject(ctx context.Context, key string, min *int64, max *i
 func (a *MinioSDK) deleteObject(ctx context.Context, key string) (any, error) {
 	ctx, task := gotrace.NewTask(ctx, "MinioSDK.deleteObject")
 	defer task.End()
-	return DoWithRetry(
+	return DoWithRetryContext(
+		ctx,
 		"s3 delete object",
 		func() (any, error) {
 			perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
@@ -638,7 +641,8 @@ func (a *MinioSDK) deleteObject(ctx context.Context, key string) (any, error) {
 func (a *MinioSDK) deleteObjects(ctx context.Context, keys ...string) (any, error) {
 	ctx, task := gotrace.NewTask(ctx, "MinioSDK.deleteObjects")
 	defer task.End()
-	return DoWithRetry(
+	return DoWithRetryContext(
+		ctx,
 		"s3 delete objects",
 		func() (any, error) {
 			perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {

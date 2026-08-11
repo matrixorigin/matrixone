@@ -47,19 +47,30 @@ var (
 )
 
 const (
-	// ZeroDatetime is the zero value for date Time '0000-01-01 00:00:00'.
-	ZeroDatetime = Datetime(0)
+	// DatetimeEpoch is the internal epoch for 0001-01-01 00:00:00.
+	DatetimeEpoch = Datetime(0)
+	// ZeroDatetime represents MySQL's 0000-00-00 00:00:00 value.
+	ZeroDatetime = Datetime(-1)
 )
 
 // The Datetime type holds number of microseconds since January 1, year 1 in Gregorian calendar
 
 func (dt Datetime) String() string {
+	if dt == ZeroDatetime {
+		return "0000-00-00 00:00:00"
+	}
 	y, m, d, _ := dt.ToDate().Calendar(true)
 	hour, minute, sec := dt.Clock()
 	return fmt.Sprintf("%04d-%02d-%02d %02d:%02d:%02d", y, m, d, hour, minute, sec)
 }
 
 func (dt Datetime) String2(scale int32) string {
+	if dt == ZeroDatetime {
+		if scale > 0 {
+			return "0000-00-00 00:00:00." + strings.Repeat("0", int(scale))
+		}
+		return "0000-00-00 00:00:00"
+	}
 	y, m, d, _ := dt.ToDate().Calendar(true)
 	hour, minute, sec := dt.Clock()
 
@@ -105,6 +116,9 @@ func (dt Datetime) String2(scale int32) string {
 //	"1999-09-09 11:11:"             "1999-09-09 11:11:00.000"
 func ParseDatetime(s string, scale int32) (Datetime, error) {
 	s = strings.TrimSpace(s)
+	if isZeroDatetimeString(s) {
+		return ZeroDatetime, nil
+	}
 	if len(s) < 14 {
 		if d, err := ParseDateCast(s); err == nil {
 			return d.ToDatetime(), nil
@@ -297,6 +311,28 @@ func ParseDatetime(s string, scale int32) (Datetime, error) {
 	return result, nil
 }
 
+func isZeroDatetimeString(s string) bool {
+	base := s
+	if dot := strings.IndexByte(s, '.'); dot >= 0 {
+		base = s[:dot]
+		fraction := s[dot+1:]
+		if fraction == "" || !isAllDigit(fraction) {
+			return false
+		}
+		for i := range fraction {
+			if fraction[i] != '0' {
+				return false
+			}
+		}
+	}
+	switch base {
+	case "0000-00-00", "00000000", "0000-00-00 00:00:00", "0000-00-00T00:00:00", "00000000000000":
+		return true
+	default:
+		return false
+	}
+}
+
 // validTimeInDay return true if hour, minute and second can be a time during a day
 func ValidTimeInDay(h, m, s uint8) bool {
 	if h < minHourInDay || h > maxHourInDay {
@@ -312,6 +348,9 @@ func ValidTimeInDay(h, m, s uint8) bool {
 }
 
 func (dt Datetime) UnixTimestamp(loc *time.Location) int64 {
+	if dt == ZeroDatetime {
+		return -1
+	}
 	return dt.ConvertToGoTime(loc).Unix()
 }
 
@@ -339,6 +378,9 @@ func UTC() Datetime {
 }
 
 func (dt Datetime) ToDate() Date {
+	if dt == ZeroDatetime {
+		return ZeroDate
+	}
 	return Date(dt.sec() / SecsPerDay)
 }
 
@@ -389,6 +431,9 @@ func (dt Datetime) ToTime(scale int32) Time {
 //   - 6: microseconds (full precision, no truncation)
 //   - >6: treated as scale 6 (full precision)
 func (dt Datetime) TruncateToScale(scale int32) Datetime {
+	if dt == ZeroDatetime {
+		return ZeroDatetime
+	}
 	// For scale >= 6, return full precision (no truncation)
 	if scale >= 6 {
 		return dt
@@ -410,6 +455,9 @@ func (dt Datetime) TruncateToScale(scale int32) Datetime {
 }
 
 func (dt Datetime) Clock() (hour, minute, sec int8) {
+	if dt == ZeroDatetime {
+		return 0, 0, 0
+	}
 	t := dt.sec() % SecsPerDay
 	hour = int8(t / SecsPerHour)
 	minute = int8(t % SecsPerHour / SecsPerMinute)
@@ -571,6 +619,9 @@ func (dt Datetime) ConvertToMonth(secondDt Datetime) int64 {
 }
 
 func (dt Datetime) MicroSec() int64 {
+	if dt == ZeroDatetime {
+		return 0
+	}
 	return int64(dt) % MicroSecsPerSec
 }
 
@@ -616,6 +667,9 @@ func (dt Datetime) YearWeek(mode int) (year int, week int) {
 }
 
 func (dt Datetime) ToTimestamp(loc *time.Location) Timestamp {
+	if dt == ZeroDatetime {
+		return ZeroTimestamp
+	}
 	return Timestamp(dt.ConvertToGoTime(loc).UnixMicro() + unixEpochMicroSecs)
 }
 

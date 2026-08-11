@@ -111,6 +111,19 @@ uint8_t *mo_croaring_serialize(void *r, size_t *len) {
 
 void mo_croaring_free_buf(uint8_t *buf) { free(buf); }
 
+size_t mo_croaring_serialized_size(void *r) {
+  if (!r) return 0;
+  return roaring64_bitmap_portable_size_in_bytes((const roaring64_bitmap_t *)r);
+}
+
+bool mo_croaring_serialize_into(void *r, uint8_t *buf, size_t len) {
+  if (!r || !buf) return false;
+  const roaring64_bitmap_t *b = (const roaring64_bitmap_t *)r;
+  size_t required = roaring64_bitmap_portable_size_in_bytes(b);
+  if (len != required) return false;
+  return roaring64_bitmap_portable_serialize(b, (char *)buf) == required;
+}
+
 void *mo_croaring_deserialize(const uint8_t *buf, size_t len) {
   return (void *)roaring64_bitmap_portable_deserialize_safe((const char *)buf,
                                                            len);

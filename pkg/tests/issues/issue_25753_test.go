@@ -108,7 +108,7 @@ func (c *issue25753TraceConn) executeClosedStatement(t *testing.T, stmtID uint32
 // interpolateParams=false prevents the client from replacing placeholders in
 // a text query, and all executions below reuse the same server-side statement.
 func TestIssue25753PreparedNumericProtocolLifecycle(t *testing.T) {
-	require.NoError(t, embed.RunBaseClusterTests(
+	embed.RunBaseClusterTests(t,
 		func(c embed.Cluster) {
 			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 			defer cancel()
@@ -218,5 +218,5 @@ func TestIssue25753PreparedNumericProtocolLifecycle(t *testing.T) {
 			require.Equal(t, [5]byte{'H', 'Y', '0', '0', '0'}, closeErr.SQLState)
 			require.True(t, strings.Contains(closeErr.Message, "does not exist"), closeErr.Message)
 		},
-	))
+	)
 }

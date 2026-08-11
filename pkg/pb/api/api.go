@@ -16,6 +16,7 @@ package api
 import (
 	"strings"
 
+	"github.com/gogo/protobuf/proto"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 )
 
@@ -61,6 +62,12 @@ func CloneExtra(info *SchemaExtra) *SchemaExtra {
 	if info == nil {
 		return nil
 	}
+	checks := make([]*plan.CheckDef, len(info.Checks))
+	for i, check := range info.Checks {
+		if check != nil {
+			checks[i] = proto.Clone(check).(*plan.CheckDef)
+		}
+	}
 	return &SchemaExtra{
 		NextColSeqnum:     info.NextColSeqnum,
 		DroppedAttrs:      append([]string{}, info.DroppedAttrs...),
@@ -78,6 +85,8 @@ func CloneExtra(info *SchemaExtra) *SchemaExtra {
 		ParentTableID:     info.ParentTableID,
 		AutoIncrOffset:    info.AutoIncrOffset,
 		AutoIncrEpoch:     info.AutoIncrEpoch,
+		DefaultCharset:    info.DefaultCharset,
+		Checks:            checks,
 	}
 }
 
@@ -175,6 +184,17 @@ func NewRenameColumnReq(did, tid uint64, oldname, newname string, seqnum uint32)
 			},
 		},
 	}
+}
+
+func NewRenameColumnReqWithChecks(
+	did, tid uint64,
+	oldname, newname string,
+	seqnum uint32,
+	checks []*plan.CheckDef,
+) *AlterTableReq {
+	req := NewRenameColumnReq(did, tid, oldname, newname, seqnum)
+	req.GetRenameCol().Checks = CloneExtra(&SchemaExtra{Checks: checks}).Checks
+	return req
 }
 
 func NewReplaceDefReq(did, tid uint64, planDef *plan.TableDef) *AlterTableReq {

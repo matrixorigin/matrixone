@@ -143,7 +143,7 @@ json_type(json_extract(json_array(e), $[0]))
 STRING
 select json_type(json_extract(json_array(bitcol), '$[0]')) from jtt where bitcol is not null;
 json_type(json_extract(json_array(bitcol), $[0]))
-BLOB
+BIT
 select json_type(json_extract(json_object('id', id, 'name', vc), '$.id')) from jtt where vc is not null;
 json_type(json_extract(json_object(id, id, name, vc), $.id))
 INTEGER

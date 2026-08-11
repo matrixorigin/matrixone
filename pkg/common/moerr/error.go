@@ -65,6 +65,7 @@ const (
 	ErrQueryInterrupted            uint16 = 20104
 	ErrNotSupported                uint16 = 20105
 	ErrRemoteDispatchNotRegistered uint16 = 20106
+	ErrMPoolCapacity               uint16 = 20107
 
 	// Group 2: numeric and functions
 	ErrDivByZero                   uint16 = 20200
@@ -93,6 +94,15 @@ const (
 	ErrOperandColumns       uint16 = 20314
 	ErrSubqueryNo1Row       uint16 = 20315
 	ErrInvalidTypeForJSON   uint16 = 20316
+	ErrUnknownStmtHandler   uint16 = 20317
+	ErrViewWrongList        uint16 = 20318
+	ErrWrongArguments       uint16 = 20319
+	ErrDerivedMustHaveAlias uint16 = 20320
+	ErrWrongUsage           uint16 = 20321
+	ErrUpdateTableUsed      uint16 = 20322
+	ErrWindowInvalidUse     uint16 = 20323
+	ErrViewSelectTmpTable   uint16 = 20324
+	ErrCantChangeTxn        uint16 = 20325
 
 	// Group 4: unexpected state and io errors
 	ErrInvalidState                             uint16 = 20400
@@ -171,6 +181,7 @@ const (
 	ErrCantCompileForPrepare                    uint16 = 20473
 	ErrTableMustHaveAVisibleColumn              uint16 = 20474
 	ErrKeyDoesNotExist                          uint16 = 20475
+	ErrMaxPreparedStmtCountReached              uint16 = 20476
 
 	// Group 5: rpc errors
 	//
@@ -313,6 +324,7 @@ const (
 	ErrRowSinglePartitionField             uint16 = 20822
 	ErrTooManyPartitionFuncFields          uint16 = 20823
 	ErrTooManyParameter                    uint16 = 20824
+	ErrCteMemoryQuotaExceeded              uint16 = 20825
 
 	// Group 9: streaming
 	ErrUnsupportedOption   uint16 = 20901
@@ -321,6 +333,14 @@ const (
 	ErrDuplicateConnector  uint16 = 20904
 	ErrUnsupportedDataType uint16 = 20905
 	ErrTaskNotFound        uint16 = 20906
+
+	// ErrCastWidthExceeded is returned by cast width-violation paths (DML
+	// assignment / generated columns) when strict sql_mode rejects an
+	// over-length CHAR/VARCHAR value. It maps to MySQL ER_DATA_TOO_LONG (1406),
+	// the correct protocol code for this condition; the JDBC driver used by
+	// mo-tester wraps it as java.sql.DataTruncation (prepending "Data
+	// truncation: " to the message), which the BVT result files reflect.
+	ErrCastWidthExceeded uint16 = 20907
 
 	// Group 10: skip list
 	ErrKeyAlreadyExists uint16 = 21001
@@ -375,11 +395,13 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrQueryInterrupted:            {ER_QUERY_INTERRUPTED, []string{MySQLDefaultSqlState}, "query interrupted"},
 	ErrNotSupported:                {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "not supported: %s"},
 	ErrRemoteDispatchNotRegistered: {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "remote dispatch receiver %s is not registered yet"},
+	ErrMPoolCapacity:               {ER_ENGINE_OUT_OF_MEMORY, []string{MySQLDefaultSqlState}, "mpool physical capacity exceeded: %s"},
 
 	// Group 2: numeric
 	ErrDivByZero:                   {ER_DIVISION_BY_ZERO, []string{MySQLDefaultSqlState}, "division by zero"},
 	ErrOutOfRange:                  {ER_DATA_OUT_OF_RANGE, []string{MySQLDefaultSqlState}, "data out of range: data type %s, %s"},
 	ErrDataTruncated:               {ER_DATA_TOO_LONG, []string{MySQLDefaultSqlState}, "data truncated: data type %s, %s"},
+	ErrCastWidthExceeded:           {ER_DATA_TOO_LONG, []string{"22001"}, "%s"},
 	ErrInvalidArg:                  {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "invalid argument %s, bad value %s"},
 	ErrTruncatedWrongValueForField: {ER_TRUNCATED_WRONG_VALUE_FOR_FIELD, []string{MySQLDefaultSqlState}, "truncated type %s value %s for column %s, %d"},
 	ErrTooBigPrecision:             {ER_TOO_BIG_PRECISION, []string{"42000", "S1009"}, "Too-big precision %d specified for '%-.192s'. Maximum is %d."},
@@ -402,6 +424,15 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrOperandColumns:       {ER_OPERAND_COLUMNS, []string{"21000"}, "Operand should contain %d column(s)"},
 	ErrSubqueryNo1Row:       {ER_SUBQUERY_NO_1_ROW, []string{"21000"}, "Subquery returns more than 1 row"},
 	ErrInvalidTypeForJSON:   {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "Invalid data type for JSON data in argument %d to function %s; a JSON string or JSON type is required."},
+	ErrUnknownStmtHandler:   {ER_UNKNOWN_STMT_HANDLER, []string{MySQLDefaultSqlState}, "Unknown prepared statement handler (%s) given to %s"},
+	ErrViewWrongList:        {ER_VIEW_WRONG_LIST, []string{MySQLDefaultSqlState}, "In definition of view, derived table or common table expression, SELECT list and column names list have different column counts"},
+	ErrWrongArguments:       {ER_WRONG_ARGUMENTS, []string{MySQLDefaultSqlState}, "Incorrect arguments to %s"},
+	ErrDerivedMustHaveAlias: {ER_DERIVED_MUST_HAVE_ALIAS, []string{"42000"}, "Every derived table must have its own alias"},
+	ErrWrongUsage:           {ER_WRONG_USAGE, []string{MySQLDefaultSqlState}, "Incorrect usage of %s and %s"},
+	ErrUpdateTableUsed:      {ER_UPDATE_TABLE_USED, []string{MySQLDefaultSqlState}, "You can't specify target table '%-.192s' for update in FROM clause"},
+	ErrWindowInvalidUse:     {ER_WINDOW_INVALID_WINDOW_FUNC_USE, []string{"HY000"}, "You cannot use the window function '%s' in this context"},
+	ErrViewSelectTmpTable:   {ER_VIEW_SELECT_TMPTABLE, []string{MySQLDefaultSqlState}, "View's SELECT refers to a temporary table '%-.192s'"},
+	ErrCantChangeTxn:        {ER_CANT_CHANGE_TX_CHARACTERISTICS, []string{"25001"}, "Transaction characteristics can't be changed while a transaction is in progress"},
 
 	// Group 4: unexpected state or file io error
 	ErrInvalidState:                             {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "invalid state %s"},
@@ -479,6 +510,7 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrFKNoReferencedRow2:                       {ER_NO_REFERENCED_ROW_2, []string{"23000"}, "Cannot add or update a child row: a foreign key constraint fails"},
 	ErrBlobCantHaveDefault:                      {ER_BLOB_CANT_HAVE_DEFAULT, []string{MySQLDefaultSqlState}, "BLOB, TEXT, GEOMETRY or JSON column '%-.192s' can't have a default value"},
 	ErrTableMustHaveAVisibleColumn:              {ER_TABLE_MUST_HAVE_A_VISIBLE_COLUMN, []string{MySQLDefaultSqlState}, "A table must have at least one visible column."},
+	ErrMaxPreparedStmtCountReached:              {ER_MAX_PREPARED_STMT_COUNT_REACHED, []string{"42000"}, "Can't create more than max_prepared_stmt_count statements (current value: %d)"},
 
 	// Group 5: rpc errors
 	ErrRPCTimeout:   {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "rpc timeout"},
@@ -581,6 +613,7 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrRowSinglePartitionField:             {ER_ROW_SINGLE_PARTITION_FIELD_ERROR, []string{MySQLDefaultSqlState}, "Row expressions in VALUES IN only allowed for multi-field column partitioning"},
 	ErrTooManyPartitionFuncFields:          {ER_TOO_MANY_PARTITION_FUNC_FIELDS_ERROR, []string{MySQLDefaultSqlState}, "Too many fields in '%-.192s'"},
 	ErrTooManyParameter:                    {ER_PS_MANY_PARAM, []string{MySQLDefaultSqlState}, "Prepared statement contains too many placeholders"},
+	ErrCteMemoryQuotaExceeded:              {ErrCteMemoryQuotaExceeded, []string{MySQLDefaultSqlState}, "recursive CTE memory quota exceeded on this CN: projected %d bytes, query limit %d bytes; increase @@cte_max_memory_bytes or rewrite the query to converge"},
 
 	// Group 9: streaming
 	ErrUnsupportedOption:   {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "unsupported option %s"},
@@ -924,6 +957,24 @@ func NewOOM(ctx context.Context) *Error {
 	return newError(ctx, ErrOOM)
 }
 
+// NewMPoolCapacity reports a physical allocator or MPool capacity failure.
+// Its dedicated wire code lets pressure recovery distinguish retryable
+// physical capacity from unrelated OOMs without wrapping the MO error.
+func NewMPoolCapacity(ctx context.Context, msg string) *Error {
+	return newError(ctx, ErrMPoolCapacity, msg)
+}
+
+// NewResourceExhaustedf preserves the existing resource-exhaustion wire code
+// while adding bounded, actionable context for guards that reject before the
+// allocator or operating system itself fails. The formatted message is
+// serialized with the error, so remote execution does not collapse the
+// diagnostic back to a generic internal error.
+func NewResourceExhaustedf(ctx context.Context, format string, args ...any) *Error {
+	err := newError(ctx, ErrOOM)
+	err.message = fmt.Sprintf("error: resource exhausted: %s", fmt.Sprintf(format, args...))
+	return err
+}
+
 func NewQueryInterrupted(ctx context.Context) *Error {
 	return newError(ctx, ErrQueryInterrupted)
 }
@@ -977,8 +1028,28 @@ func NewInvalidInput(ctx context.Context, msg string) *Error {
 	return newError(ctx, ErrInvalidInput, msg)
 }
 
+func NewWrongArguments(ctx context.Context, function string) *Error {
+	return newError(ctx, ErrWrongArguments, function)
+}
+
+func NewWrongUsage(ctx context.Context, first, second string) *Error {
+	return newError(ctx, ErrWrongUsage, first, second)
+}
+
+func NewUpdateTableUsed(ctx context.Context, table string) *Error {
+	return newError(ctx, ErrUpdateTableUsed, table)
+}
+
+func NewWindowInvalidUse(ctx context.Context, function string) *Error {
+	return newError(ctx, ErrWindowInvalidUse, function)
+}
+
 func NewInvalidTypeForJSON(ctx context.Context, argument int, function string) *Error {
 	return newError(ctx, ErrInvalidTypeForJSON, argument, function)
+}
+
+func NewUnknownStmtHandler(ctx context.Context, name, operation string) *Error {
+	return newError(ctx, ErrUnknownStmtHandler, name, operation)
 }
 
 func NewSyntaxErrorf(ctx context.Context, format string, args ...any) *Error {
@@ -1127,6 +1198,14 @@ func NewNotLeaseHolder(ctx context.Context, holderId uint64) *Error {
 func NewNoSuchTable(ctx context.Context, db, tbl string) *Error {
 	noReportCtx := errutil.ContextWithNoReport(ctx, true)
 	return newError(noReportCtx, ErrNoSuchTable, db, tbl)
+}
+
+// NewNoSuchTablef preserves a caller-facing diagnostic while classifying the
+// error as ErrNoSuchTable for MySQL protocol compatibility.
+func NewNoSuchTablef(ctx context.Context, format string, args ...any) *Error {
+	err := NewNoSuchTable(ctx, "", "")
+	err.message = fmt.Sprintf(format, args...)
+	return err
 }
 
 func NewNoSuchSequence(ctx context.Context, db, tbl string) *Error {
@@ -1436,12 +1515,28 @@ func NewWrongValueCountOnRow(ctx context.Context, row int) *Error {
 	return newError(ctx, ErrWrongValueCountOnRow, row)
 }
 
+func NewViewWrongList(ctx context.Context) *Error {
+	return newError(ctx, ErrViewWrongList)
+}
+
+func NewViewSelectTmpTable(ctx context.Context, table string) *Error {
+	return newError(ctx, ErrViewSelectTmpTable, table)
+}
+
+func NewCantChangeTxCharacteristics(ctx context.Context) *Error {
+	return newError(ctx, ErrCantChangeTxn)
+}
+
 func NewOperandColumns(ctx context.Context, columns int) *Error {
 	return newError(ctx, ErrOperandColumns, columns)
 }
 
 func NewErrSubqueryNo1Row(ctx context.Context) *Error {
 	return newError(ctx, ErrSubqueryNo1Row)
+}
+
+func NewDerivedMustHaveAlias(ctx context.Context) *Error {
+	return newError(ctx, ErrDerivedMustHaveAlias)
 }
 
 func NewBadFieldError(ctx context.Context, column, table string) *Error {
@@ -1622,6 +1717,10 @@ func NewCheckRecursiveLevel(ctx context.Context) *Error {
 	return newError(ctx, ErrCheckRecursiveLevel)
 }
 
+func NewCteMemoryQuotaExceeded(ctx context.Context, projected, limit uint64) *Error {
+	return newError(ctx, ErrCteMemoryQuotaExceeded, projected, limit)
+}
+
 func NewErrTooManyFields(ctx context.Context) *Error {
 	return newError(ctx, ErrTooManyFields)
 }
@@ -1664,6 +1763,10 @@ func NewErrWrongNameForIndex(ctx context.Context, k any) *Error {
 
 func NewErrInvalidDefault(ctx context.Context, k any) *Error {
 	return newError(ctx, ErrInvalidDefault, k)
+}
+
+func NewErrCastWidthExceeded(ctx context.Context, msg string) *Error {
+	return newError(ctx, ErrCastWidthExceeded, msg)
 }
 
 func NewErrDropIndexNeededInForeignKey(ctx context.Context, args1 any) *Error {
@@ -1766,6 +1869,10 @@ func NewTableMustHaveVisibleColumn(ctx context.Context) *Error {
 	return newError(ctx, ErrTableMustHaveAVisibleColumn)
 }
 
+func NewMaxPreparedStmtCountReached(ctx context.Context, limit uint64) *Error {
+	return newError(ctx, ErrMaxPreparedStmtCountReached, limit)
+}
+
 func NewTxnUnknown(ctx context.Context, txnID string) *Error {
 	return newError(ctx, ErrTxnUnknown, txnID)
 }
@@ -1774,7 +1881,7 @@ func NewErrExecutorRunning(ctx context.Context, executor string) *Error {
 	return newError(ctx, ErrExecutorRunning, executor)
 }
 
-func NewErrTooBigPrecision(ctx context.Context, precision int32, funcName string, maxPrecision uint64) *Error {
+func NewErrTooBigPrecision(ctx context.Context, precision int64, funcName string, maxPrecision uint64) *Error {
 	return newError(ctx, ErrTooBigPrecision, precision, funcName, maxPrecision)
 }
 

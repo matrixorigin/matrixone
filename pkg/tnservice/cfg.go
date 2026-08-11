@@ -185,8 +185,6 @@ type Config struct {
 			// Backend txn storage backend implementation. [TAE|MEMKV], default TAE.
 			Backend StorageType `toml:"backend"`
 		}
-
-		DebugMode bool `toml:"debug-mode"`
 	}
 
 	// Cluster configuration
@@ -251,6 +249,18 @@ func (c *Config) Validate() error {
 	}
 	if c.HAKeeper.HeatbeatTimeout.Duration == 0 {
 		c.HAKeeper.HeatbeatTimeout.Duration = defaultHeatbeatTimeout
+	}
+	if c.HAKeeper.HeatbeatInterval.Duration < 0 {
+		return moerr.NewBadConfigNoCtx("hakeeper heartbeat interval must be positive")
+	}
+	if c.HAKeeper.HeatbeatInterval.Duration > logservice.ScheduleCommandPollInterval {
+		return moerr.NewBadConfigNoCtxf(
+			"hakeeper heartbeat interval %s exceeds schedule-command progress budget %s",
+			c.HAKeeper.HeatbeatInterval.Duration,
+			logservice.ScheduleCommandPollInterval)
+	}
+	if c.HAKeeper.HeatbeatTimeout.Duration < 0 {
+		return moerr.NewBadConfigNoCtx("hakeeper heartbeat timeout must be positive")
 	}
 	if c.LogService.ConnectTimeout.Duration == 0 {
 		c.LogService.ConnectTimeout.Duration = defaultConnectTimeout

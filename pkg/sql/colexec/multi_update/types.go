@@ -75,6 +75,7 @@ type MultiUpdate struct {
 	IsOnduplicateKeyUpdate bool
 	IsRemote               bool
 	CountDeleteAffectRows  bool
+	RejectZeroTemporal     bool
 	Engine                 engine.Engine
 
 	getS3WriterFunc          func(sid string, id uint64) (*s3WriterDelegate, error)
@@ -115,7 +116,8 @@ type MultiUpdateCtx struct {
 	SkipInsertOnNullPk bool
 	// InsertPkColIdx is the PK column's index within InsertCols. It is only
 	// used with SkipInsertOnNullPk for REPLACE delete-only rows.
-	InsertPkColIdx int
+	InsertPkColIdx     int
+	IgnoreAffectedRows bool
 }
 
 func (update MultiUpdate) TypeName() string {
@@ -134,6 +136,13 @@ func (update *MultiUpdate) Release() {
 
 func (update *MultiUpdate) GetOperatorBase() *vm.OperatorBase {
 	return &update.OperatorBase
+}
+
+func (update *MultiUpdate) SetRejectZeroTemporal(reject bool) {
+	update.RejectZeroTemporal = reject
+	if update.ctr.s3Writer != nil {
+		update.ctr.s3Writer.rejectZeroTemporal = reject
+	}
 }
 
 func (update *MultiUpdate) Reset(proc *process.Process, pipelineFailed bool, err error) {
@@ -222,5 +231,8 @@ func (update *MultiUpdate) addDeleteAffectRows(tableType UpdateTableType, rowCou
 }
 
 func (update *MultiUpdate) doAddAffectedRows(affectedRows uint64) {
+	if len(update.MultiUpdateCtx) > 0 && update.MultiUpdateCtx[0].IgnoreAffectedRows {
+		return
+	}
 	update.ctr.affectedRows += affectedRows
 }

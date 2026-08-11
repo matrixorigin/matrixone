@@ -785,10 +785,28 @@ const (
 	VECF16_FROM_BASE64   = 551
 	VECINT8_FROM_BASE64  = 552
 	VECUINT8_FROM_BASE64 = 553
+	// function `cast_assign`
+	CAST_ASSIGN = 554
+	// function `cast_ignore`
+	CAST_IGNORE = 555
+	// function `approx_percentile`
+	APPROX_PERCENTILE = 557
+	// function `mo_is_legacy_temporary_table`
+	MO_IS_LEGACY_TEMPORARY_TABLE = 558
+
+	// onnx_run: evaluate an ONNX model. Renumbered as main merges claim ids
+	// (549->554->556); referenced by name only, so renumbering is safe.
+	ONNX_RUN = 556
+	// Internal CHECK constraint assertion. This is protocol-gated because older
+	// CNs do not have this function ID.
+	CHECK_CONSTRAINT_ASSERT = 561
+
+	MAX_BY          = 559
+	MAX_BY_NON_NULL = 560
 
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
-	FUNCTION_END_NUMBER = 554
+	FUNCTION_END_NUMBER = 562
 )
 
 // functionIdRegister is what function we have registered already.
@@ -826,6 +844,8 @@ var functionIdRegister = map[string]int32{
 	"coalesce":     COALESCE,
 	"cast":         CAST,
 	"cast_strict":  CAST_STRICT,
+	"cast_assign":  CAST_ASSIGN,
+	"cast_ignore":  CAST_IGNORE,
 	"bit_cast":     BIT_CAST,
 	"is":           IS,
 	"is_not":       ISNOT,
@@ -854,35 +874,39 @@ var functionIdRegister = map[string]int32{
 	"prefix_between":  PREFIX_BETWEEN,
 	"prefix_in_range": PREFIX_IN_RANGE,
 	// aggregate
-	"max":                   MAX,
-	"min":                   MIN,
-	"sum":                   SUM,
-	"group_concat":          GROUP_CONCAT,
-	"grouping":              GROUPING,
-	"avg":                   AVG,
-	"avg_tw_cache":          AVG_TW_CACHE,
-	"avg_tw_result":         AVG_TW_RESULT,
-	"count":                 COUNT,
-	"starcount":             STARCOUNT,
-	"bit_or":                BIT_OR,
-	"bit_and":               BIT_AND,
-	"bit_xor":               BIT_XOR,
-	"bit_count":             BIT_COUNT,
-	"cluster_centers":       CLUSTER_CENTERS,
-	"subvector":             SUB_VECTOR,
-	"std":                   STDDEV_POP,
-	"stddev":                STDDEV_POP,
-	"stddev_pop":            STDDEV_POP,
-	"stddev_samp":           STDDEV_SAMPLE,
-	"variance":              VAR_POP,
-	"var_pop":               VAR_POP,
-	"var_samp":              VAR_SAMPLE,
-	"approx_count":          APPROX_COUNT,
-	"approx_count_distinct": APPROX_COUNT_DISTINCT,
-	"hll_add_agg":           HLL_ADD_AGG,
-	"hll_merge_agg":         HLL_MERGE_AGG,
-	"any_value":             ANY_VALUE,
-	"median":                MEDIAN,
+	"max":                          MAX,
+	"min":                          MIN,
+	"sum":                          SUM,
+	"group_concat":                 GROUP_CONCAT,
+	"grouping":                     GROUPING,
+	"avg":                          AVG,
+	"avg_tw_cache":                 AVG_TW_CACHE,
+	"avg_tw_result":                AVG_TW_RESULT,
+	"count":                        COUNT,
+	"starcount":                    STARCOUNT,
+	"bit_or":                       BIT_OR,
+	"bit_and":                      BIT_AND,
+	"bit_xor":                      BIT_XOR,
+	"bit_count":                    BIT_COUNT,
+	"cluster_centers":              CLUSTER_CENTERS,
+	"subvector":                    SUB_VECTOR,
+	"std":                          STDDEV_POP,
+	"stddev":                       STDDEV_POP,
+	"stddev_pop":                   STDDEV_POP,
+	"stddev_samp":                  STDDEV_SAMPLE,
+	"variance":                     VAR_POP,
+	"var_pop":                      VAR_POP,
+	"var_samp":                     VAR_SAMPLE,
+	"approx_count":                 APPROX_COUNT,
+	"approx_count_distinct":        APPROX_COUNT_DISTINCT,
+	"hll_add_agg":                  HLL_ADD_AGG,
+	"hll_merge_agg":                HLL_MERGE_AGG,
+	"any_value":                    ANY_VALUE,
+	"median":                       MEDIAN,
+	"approx_percentile":            APPROX_PERCENTILE,
+	"mo_is_legacy_temporary_table": MO_IS_LEGACY_TEMPORARY_TABLE,
+	"max_by":                       MAX_BY,
+	"max_by_non_null":              MAX_BY_NON_NULL,
 	// count window
 	"rank":         RANK,
 	"row_number":   ROW_NUMBER,
@@ -966,6 +990,7 @@ var functionIdRegister = map[string]int32{
 	"is_ipv4_mapped":                 IS_IPV4_MAPPED,
 	"asin":                           ASIN,
 	"assert":                         ASSERT,
+	"_check_constraint_assert":       CHECK_CONSTRAINT_ASSERT,
 	"bit_length":                     BIT_LENGTH,
 	"date":                           DATE,
 	"time":                           TIME,
@@ -991,6 +1016,7 @@ var functionIdRegister = map[string]int32{
 	"octet_length":                   LENGTH,
 	"lengthutf8":                     LENGTH_UTF8,
 	"char_length":                    LENGTH_UTF8,
+	"character_length":               LENGTH_UTF8,
 	"ln":                             LN,
 	"log":                            LOG,
 	"log2":                           LOG2,
@@ -1077,6 +1103,7 @@ var functionIdRegister = map[string]int32{
 	"json_merge_patch":               JSON_MERGE_PATCH,
 	"json_merge_preserve":            JSON_MERGE_PRESERVE,
 	"json_overlaps":                  JSON_OVERLAPS,
+	"onnx_run":                       ONNX_RUN,
 	"json_keys":                      JSON_KEYS,
 	"json_pretty":                    JSON_PRETTY,
 	"json_schema_valid":              JSON_SCHEMA_VALID,

@@ -84,6 +84,95 @@ func TestLifecycleControllerRejectsBusyTryOperation(t *testing.T) {
 	mc.endOperation()
 }
 
+func TestLifecycleControllerRequestAndOperationAreMutuallyExclusive(t *testing.T) {
+	t.Run("request first", func(t *testing.T) {
+		mc := newMigrateController()
+		assert.True(t, mc.tryBeginRequest())
+		assert.False(t, mc.tryBeginRequest())
+		assert.False(t, mc.tryBeginOperation())
+		mc.endRequest()
+		assert.True(t, mc.tryBeginOperation())
+		mc.endOperation()
+	})
+
+	t.Run("operation first", func(t *testing.T) {
+		mc := newMigrateController()
+		assert.True(t, mc.tryBeginOperation())
+		assert.False(t, mc.tryBeginRequest())
+		mc.endOperation()
+		assert.True(t, mc.tryBeginRequest())
+		mc.endRequest()
+	})
+}
+
+func TestLifecycleControllerOperationWaitsForRequest(t *testing.T) {
+	mc := newMigrateController()
+	assert.True(t, mc.tryBeginRequest())
+
+	operationStarted := make(chan bool, 1)
+	go func() {
+		_, ok := mc.beginOperationWithContext(context.Background())
+		operationStarted <- ok
+		if ok {
+			mc.endOperation()
+		}
+	}()
+
+	select {
+	case <-operationStarted:
+		t.Fatal("lifecycle operation started while a request owned the session")
+	case <-time.After(50 * time.Millisecond):
+	}
+	mc.endRequest()
+
+	select {
+	case ok := <-operationStarted:
+		assert.True(t, ok)
+	case <-time.After(time.Second):
+		t.Fatal("lifecycle operation did not start after request completion")
+	}
+}
+
+func TestLifecycleControllerWaitingForRequestHonorsContext(t *testing.T) {
+	mc := newMigrateController()
+	assert.True(t, mc.tryBeginRequest())
+
+	ctx, cancel := context.WithCancel(context.Background())
+	result := make(chan bool, 1)
+	go func() {
+		_, ok := mc.beginOperationWithContext(ctx)
+		result <- ok
+	}()
+	cancel()
+
+	select {
+	case ok := <-result:
+		assert.False(t, ok)
+	case <-time.After(time.Second):
+		t.Fatal("lifecycle operation waiting for a request ignored caller cancellation")
+	}
+	mc.endRequest()
+}
+
+func TestLifecycleControllerCloseDoesNotWaitForRequest(t *testing.T) {
+	mc := newMigrateController()
+	assert.True(t, mc.tryBeginRequest())
+
+	closed := make(chan struct{})
+	go func() {
+		mc.waitAndClose()
+		close(closed)
+	}()
+
+	select {
+	case <-closed:
+	case <-time.After(time.Second):
+		t.Fatal("routine close waited for request completion")
+	}
+	assert.False(t, mc.tryBeginRequest())
+	mc.endRequest()
+}
+
 func TestLifecycleControllerCloseRejectsQueuedOperation(t *testing.T) {
 	mc := newMigrateController()
 	assert.True(t, mc.beginOperation())

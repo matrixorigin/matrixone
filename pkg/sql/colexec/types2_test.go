@@ -58,6 +58,9 @@ func (m *mockClientSession) Close() error {
 func (m *mockClientSession) CreateCache(ctx context.Context, cacheID uint64) (morpc.MessageCache, error) {
 	return nil, nil
 }
+func (m *mockClientSession) CreateCacheWithCancel(context.Context, uint64, context.CancelFunc) (morpc.MessageCache, error) {
+	return nil, nil
+}
 
 func (m *mockClientSession) DeleteCache(cacheID uint64) {}
 
@@ -350,6 +353,9 @@ func TestCancelPipelineSending(t *testing.T) {
 	require.True(t, record3.alreadyDone, "Tombstone should mark the pipeline already done")
 	require.Nil(t, record3.receiver, "Tombstone should not carry a dispatch receiver")
 	require.Nil(t, record3.queryCancel, "Tombstone should not carry a cancel func yet")
+	require.True(t, srv.HasPendingPipelineCancellation(session, streamID3))
+	require.False(t, srv.HasPendingPipelineCancellation(session, streamID2),
+		"a registered dispatch pipeline is not a pre-registration cancellation")
 }
 
 // TestRemoveRelatedPipeline tests RemoveRelatedPipeline function

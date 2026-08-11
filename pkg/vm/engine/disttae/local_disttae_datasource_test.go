@@ -40,6 +40,95 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
 )
 
+type fixedObjectIter struct {
+	entries []objectio.ObjectEntry
+	pos     int
+}
+
+func (i *fixedObjectIter) Next() bool {
+	if i.pos >= len(i.entries) {
+		return false
+	}
+	i.pos++
+	return true
+}
+
+func (i *fixedObjectIter) Entry() objectio.ObjectEntry {
+	return i.entries[i.pos-1]
+}
+
+func (i *fixedObjectIter) Close() error {
+	return nil
+}
+
+func TestReusableObjectStatsIterAllocations(t *testing.T) {
+	const count = 10_000
+	entries := make([]objectio.ObjectEntry, count)
+
+	var visited int
+	allocs := testing.AllocsPerRun(10, func() {
+		visited = 0
+		iter := reusableObjectStatsIter{
+			iter: &fixedObjectIter{entries: entries},
+		}
+		for {
+			stats, err := iter.next()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if stats == nil {
+				break
+			}
+			visited++
+		}
+	})
+
+	require.Equal(t, count, visited)
+	require.LessOrEqual(t, allocs, float64(2))
+}
+
+func TestLocalDisttaeDataSourceUsesTombstoneObjectIndex(t *testing.T) {
+	pState := logtailreplay.NewPartitionState("", true, 0, false)
+	pState.UpdateDuration(types.BuildTS(0, 0), types.MaxTs())
+
+	stats := testTombstoneStats(10, 20)
+	require.NoError(t, objectio.SetObjectStatsObjectName(
+		&stats,
+		objectio.BuildObjectName(objectio.NewSegmentid(), 0),
+	))
+	require.NoError(t, objectio.SetObjectStatsSize(&stats, 1))
+	require.NoError(t, pState.HandleObjectEntry(
+		context.Background(),
+		nil,
+		objectio.ObjectEntry{
+			ObjectStats: stats,
+			CreateTime:  types.BuildTS(1, 0),
+		},
+		true,
+	))
+
+	ls := LocalDisttaeDataSource{
+		ctx:        context.Background(),
+		pState:     pState,
+		snapshotTS: types.BuildTS(2, 0),
+		rangeSlice: readutil.NewBlockListRelationData(
+			tombstoneRangeIndexMinBlocks,
+		).GetBlockInfoSlice(),
+	}
+	block := testBlockID(5)
+	offsets := []int64{7}
+
+	left, err := ls.applyPStateTombstoneObjects(&block, offsets, nil)
+	require.NoError(t, err)
+	require.Equal(t, offsets, left)
+	require.True(t, ls.pStateTombstoneObjects.initialized)
+	require.Len(t, ls.pStateTombstoneObjects.index.objects, 1)
+	require.Empty(t, ls.pStateTombstoneObjects.candidates)
+
+	require.NoError(t, ls.initPStateTombstoneObjectIndex())
+	require.Len(t, ls.pStateTombstoneObjects.index.objects, 1)
+}
+
 func TestRelationDataV2_MarshalAndUnMarshal(t *testing.T) {
 	location := objectio.NewRandomLocation(0, 0)
 	objID := location.ObjectId()

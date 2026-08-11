@@ -41,7 +41,7 @@ func (b *ProjectionBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool)
 		return makeTimeWindowProjectionExpr(b.GetContext(), b.ctx, astExpr, colPos)
 	}
 
-	if colPos, ok := b.ctx.groupByAst[astStr]; ok {
+	if colPos, ok := lookupGroupByAst(b.ctx, astExpr, astStr); ok {
 		return &plan.Expr{
 			Typ: b.ctx.groups[colPos].Typ,
 			Expr: &plan.Expr_Col{
@@ -98,6 +98,12 @@ func (b *ProjectionBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool)
 		target := b.numericTargetType
 		b.numericTargetType = nil
 		defer func() { b.numericTargetType = target }()
+		_, isBareColumn := unwrapParenExpr(astExpr).(*tree.UnresolvedName)
+		if isBareColumn && isEnumOrSetPlanType(target) {
+			previousTarget := b.mysqlSpecialTargetType
+			b.mysqlSpecialTargetType = target
+			defer func() { b.mysqlSpecialTargetType = previousTarget }()
+		}
 		if subquery, ok := scalarSubqueryExpr(astExpr); ok && !subquery.Exists {
 			previousSubqueryTarget := b.numericSubqueryTarget
 			b.numericSubqueryTarget = target

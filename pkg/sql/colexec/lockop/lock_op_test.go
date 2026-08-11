@@ -69,6 +69,21 @@ var (
 	sid = ""
 )
 
+type immediateLockTimestampWaiter struct{}
+
+func (immediateLockTimestampWaiter) GetTimestamp(
+	_ context.Context,
+	ts timestamp.Timestamp,
+) (timestamp.Timestamp, error) {
+	return ts.Next(), nil
+}
+
+func (immediateLockTimestampWaiter) NotifyLatestCommitTS(timestamp.Timestamp) {}
+func (immediateLockTimestampWaiter) Close()                                   {}
+func (immediateLockTimestampWaiter) LatestTS() timestamp.Timestamp {
+	return timestamp.Timestamp{}
+}
+
 func forceLockRetryMemoryPressure(t *testing.T, level lockRetryMemoryPressureLevel) {
 	oldPressure := getLockRetryMemoryPressureLevel
 	getLockRetryMemoryPressureLevel = func() lockRetryMemoryPressureLevel {
@@ -1109,8 +1124,9 @@ func TestCallLockOpLocksTableAtEOFWhenNoRowsProduced(t *testing.T) {
 				IsFirst: false,
 				IsLast:  false,
 			}
-			arg.AddLockTarget(tableID, nil, 0, pkType, -1, -1, nil, true)
-			arg.LockTable(tableID, false)
+			arg.AddLockTargetWithMode(
+				tableID, nil, lock.LockMode_Shared, 0, pkType, -1, -1, nil, true)
+			arg.LockTableWithMode(tableID, lock.LockMode_Shared, false)
 			resetChildren(arg, nil)
 			defer arg.Free(proc, false, nil)
 
@@ -1118,6 +1134,16 @@ func TestCallLockOpLocksTableAtEOFWhenNoRowsProduced(t *testing.T) {
 			_, err := vm.Exec(arg, proc)
 			require.NoError(t, err)
 			require.True(t, proc.GetTxnOperator().HasLockTable(tableID))
+
+			sharedTxn, err := proc.Base.TxnClient.New(proc.Ctx, timestamp.Timestamp{})
+			require.NoError(t, err)
+			defer func() { require.NoError(t, sharedTxn.Rollback(proc.Ctx)) }()
+			sharedProc := process.NewTopProcess(proc.Ctx, mpool.MustNewZero(), proc.Base.TxnClient,
+				sharedTxn, nil, proc.GetLockService(), nil, nil, nil, nil, nil)
+			require.NoError(t, LockTableWithMode(
+				nil, sharedProc, tableID, pkType, lock.LockMode_Shared, false))
+			require.NoError(t, LockTable(nil, proc, tableID+1, pkType, false))
+			require.True(t, proc.GetTxnOperator().HasLockTable(tableID+1))
 		},
 	)
 }
@@ -1397,6 +1423,264 @@ func TestLockWithHasNewVersionInLockedTS(t *testing.T) {
 		client.WithTimestampWaiter(tw),
 	)
 	stopper.Stop()
+}
+
+func TestLockOpDefinitionChangeRebuildsBeforeRefreshExpression(t *testing.T) {
+	timestampWaiter := immediateLockTimestampWaiter{}
+
+	runLockNonBlockingOpTest(
+		t,
+		[]uint64{1},
+		[][]int32{{0, 1, 2}},
+		func(proc *process.Process, arg *LockOp) {
+			runtime.SetupServiceRuntimeTestingContext(proc.GetService())
+			testingContext := runtime.MustGetTestingContext(proc.GetService())
+			testingContext.SetBeforeLockFunc(func(_ []byte, _ uint64) {})
+			defer testingContext.SetBeforeLockFunc(nil)
+			testingContext.SetAdjustLockResultFunc(func(_ []byte, _ uint64, result *lock.Result) {
+				marker := proc.GetTxnOperator().Txn().SnapshotTS.Next()
+				result.Timestamp = marker
+				result.TableDefChangedAt = &marker
+			})
+			defer testingContext.SetAdjustLockResultFunc(nil)
+
+			require.NoError(t, arg.Prepare(proc))
+			arg.ctr.hasNewVersionInRange = func(
+				_ *process.Process,
+				_ engine.Relation,
+				_ process.Analyzer,
+				_ uint64,
+				_ engine.Engine,
+				_ *batch.Batch,
+				_ int32,
+				_ int32,
+				_, _ timestamp.Timestamp,
+			) (bool, error) {
+				t.Fatal("definition-change fence must bypass row-version scanning")
+				return false, nil
+			}
+
+			_, err := vm.Exec(arg, proc)
+			require.NoError(t, err)
+			require.True(t, arg.ctr.defChanged)
+
+			resetChildren(arg, nil)
+			_, err = vm.Exec(arg, proc)
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged), err)
+		},
+		client.WithTimestampWaiter(timestampWaiter),
+		client.WithEnableRefreshExpression(),
+	)
+}
+
+func TestLockOpDefinitionFenceUsesPlanSnapshotAcrossTargets(t *testing.T) {
+	runLockNonBlockingOpTest(
+		t,
+		[]uint64{1, 2},
+		[][]int32{{1}, {2}},
+		func(proc *process.Process, arg *LockOp) {
+			runtime.SetupServiceRuntimeTestingContext(proc.GetService())
+			testingContext := runtime.MustGetTestingContext(proc.GetService())
+			statementSnapshot := proc.GetTxnOperator().Txn().SnapshotTS
+			definitionFence := statementSnapshot.Next()
+			proc.SetPlanSnapshotTS(statementSnapshot)
+
+			testingContext.SetBeforeLockFunc(func(_ []byte, _ uint64) {})
+			defer testingContext.SetBeforeLockFunc(nil)
+			testingContext.SetAdjustLockResultFunc(func(_ []byte, tableID uint64, result *lock.Result) {
+				result.NewLockAdd = true
+				result.HasConflict = false
+				result.Timestamp = definitionFence
+				if tableID == 2 {
+					result.TableDefChangedAt = &definitionFence
+				}
+			})
+			defer testingContext.SetAdjustLockResultFunc(nil)
+
+			require.NoError(t, arg.Prepare(proc))
+			arg.ctr.hasNewVersionInRange = func(
+				_ *process.Process,
+				_ engine.Relation,
+				_ process.Analyzer,
+				tableID uint64,
+				_ engine.Engine,
+				_ *batch.Batch,
+				_ int32,
+				_ int32,
+				_, _ timestamp.Timestamp,
+			) (bool, error) {
+				// The first target advances the mutable RC snapshot to the DDL
+				// fence. The second target must still compare that fence with
+				// the snapshot used to bind the plan.
+				return tableID == 1, nil
+			}
+
+			_, err := vm.Exec(arg, proc)
+			require.NoError(t, err)
+			require.True(t, arg.ctr.defChanged)
+			require.False(t, proc.GetTxnOperator().Txn().SnapshotTS.Less(definitionFence))
+
+			resetChildren(arg, nil)
+			_, err = vm.Exec(arg, proc)
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged), err)
+		},
+		client.WithTimestampWaiter(immediateLockTimestampWaiter{}),
+		client.WithEnableRefreshExpression(),
+	)
+}
+
+func TestLockOpDefinitionFenceAcceptsPlanAtFence(t *testing.T) {
+	runLockNonBlockingOpTest(
+		t,
+		[]uint64{1},
+		[][]int32{{1}},
+		func(proc *process.Process, arg *LockOp) {
+			runtime.SetupServiceRuntimeTestingContext(proc.GetService())
+			testingContext := runtime.MustGetTestingContext(proc.GetService())
+			planSnapshot := proc.GetTxnOperator().Txn().SnapshotTS.Next()
+			proc.GetTxnOperator().SetSnapshotTS(planSnapshot)
+			proc.SetPlanSnapshotTS(planSnapshot)
+
+			testingContext.SetBeforeLockFunc(func(_ []byte, _ uint64) {})
+			defer testingContext.SetBeforeLockFunc(nil)
+			testingContext.SetAdjustLockResultFunc(func(_ []byte, _ uint64, result *lock.Result) {
+				result.NewLockAdd = true
+				result.HasConflict = false
+				result.Timestamp = planSnapshot.Prev()
+				result.TableDefChangedAt = &planSnapshot
+			})
+			defer testingContext.SetAdjustLockResultFunc(nil)
+
+			require.NoError(t, arg.Prepare(proc))
+			arg.ctr.hasNewVersionInRange = func(
+				_ *process.Process,
+				_ engine.Relation,
+				_ process.Analyzer,
+				_ uint64,
+				_ engine.Engine,
+				_ *batch.Batch,
+				_ int32,
+				_ int32,
+				_, _ timestamp.Timestamp,
+			) (bool, error) {
+				t.Fatal("a lock result older than the current snapshot must not scan")
+				return false, nil
+			}
+
+			_, err := vm.Exec(arg, proc)
+			require.NoError(t, err)
+			require.False(t, arg.ctr.defChanged)
+
+			resetChildren(arg, nil)
+			_, err = vm.Exec(arg, proc)
+			require.NoError(t, err)
+		},
+	)
+}
+
+func TestLockOpRowVersionScanUsesCurrentSnapshotAcrossTargets(t *testing.T) {
+	runLockNonBlockingOpTest(
+		t,
+		[]uint64{1, 2},
+		[][]int32{{1}, {2}},
+		func(proc *process.Process, arg *LockOp) {
+			runtime.SetupServiceRuntimeTestingContext(proc.GetService())
+			testingContext := runtime.MustGetTestingContext(proc.GetService())
+			planSnapshot := proc.GetTxnOperator().Txn().SnapshotTS
+			firstCommit := planSnapshot.Next()
+			secondCommit := firstCommit.Next().Next()
+			proc.SetPlanSnapshotTS(planSnapshot)
+
+			testingContext.SetBeforeLockFunc(func(_ []byte, _ uint64) {})
+			defer testingContext.SetBeforeLockFunc(nil)
+			testingContext.SetAdjustLockResultFunc(func(_ []byte, tableID uint64, result *lock.Result) {
+				result.NewLockAdd = true
+				result.HasConflict = false
+				if tableID == 1 {
+					result.Timestamp = firstCommit
+				} else {
+					result.Timestamp = secondCommit
+				}
+			})
+			defer testingContext.SetAdjustLockResultFunc(nil)
+
+			require.NoError(t, arg.Prepare(proc))
+			secondTargetScanned := false
+			arg.ctr.hasNewVersionInRange = func(
+				_ *process.Process,
+				_ engine.Relation,
+				_ process.Analyzer,
+				tableID uint64,
+				_ engine.Engine,
+				_ *batch.Batch,
+				_ int32,
+				_ int32,
+				from, to timestamp.Timestamp,
+			) (bool, error) {
+				if tableID == 1 {
+					return true, nil
+				}
+				// Definition fences use the immutable plan snapshot, but an
+				// ordinary version scan must start at the refreshed transaction
+				// snapshot to avoid rescanning an ever-growing historical range.
+				require.Equal(t, proc.GetTxnOperator().Txn().SnapshotTS, from)
+				require.True(t, from.Less(to))
+				secondTargetScanned = true
+				return false, nil
+			}
+
+			_, err := vm.Exec(arg, proc)
+			require.NoError(t, err)
+			require.True(t, secondTargetScanned)
+			require.False(t, arg.ctr.defChanged)
+		},
+		client.WithTimestampWaiter(immediateLockTimestampWaiter{}),
+	)
+}
+
+func TestLockOpAbortedDefinitionChangeDoesNotRebuild(t *testing.T) {
+	runLockNonBlockingOpTest(
+		t,
+		[]uint64{1},
+		[][]int32{{0, 1, 2}},
+		func(proc *process.Process, arg *LockOp) {
+			runtime.SetupServiceRuntimeTestingContext(proc.GetService())
+			testingContext := runtime.MustGetTestingContext(proc.GetService())
+			testingContext.SetBeforeLockFunc(func(_ []byte, _ uint64) {})
+			defer testingContext.SetBeforeLockFunc(nil)
+			testingContext.SetAdjustLockResultFunc(func(_ []byte, _ uint64, result *lock.Result) {
+				result.TableDefChanged = true
+				result.HasConflict = true
+				result.HasPrevCommit = false
+				result.Timestamp = proc.GetTxnOperator().Txn().SnapshotTS.Next()
+			})
+			defer testingContext.SetAdjustLockResultFunc(nil)
+
+			require.NoError(t, arg.Prepare(proc))
+			arg.ctr.hasNewVersionInRange = func(
+				_ *process.Process,
+				_ engine.Relation,
+				_ process.Analyzer,
+				_ uint64,
+				_ engine.Engine,
+				_ *batch.Batch,
+				_ int32,
+				_ int32,
+				_, _ timestamp.Timestamp,
+			) (bool, error) {
+				return false, nil
+			}
+
+			_, err := vm.Exec(arg, proc)
+			require.NoError(t, err)
+			require.False(t, arg.ctr.defChanged)
+
+			resetChildren(arg, nil)
+			_, err = vm.Exec(arg, proc)
+			require.NoError(t, err)
+		},
+		client.WithTimestampWaiter(immediateLockTimestampWaiter{}),
+	)
 }
 
 func TestLockOpResetClearsLockCount(t *testing.T) {
@@ -1716,4 +2000,116 @@ func TestDedupLockRows_Idempotent(t *testing.T) {
 	once := dedupLockRows(in)
 	twice := dedupLockRows(append([][]byte(nil), once...))
 	require.Equal(t, once, twice)
+}
+
+func TestLockOpMergeableTargetsRemainStreaming(t *testing.T) {
+	runLockOpTest(t, func(proc *process.Process) {
+		pkType := types.T_int32.ToType()
+		makeBatch := func(left, right int32) *batch.Batch {
+			bat := batch.NewWithSize(2)
+			bat.Vecs[0] = testutil.MakeInt32Vector([]int32{left}, nil, proc.Mp())
+			bat.Vecs[1] = testutil.MakeInt32Vector([]int32{right}, nil, proc.Mp())
+			bat.SetRowCount(1)
+			return bat
+		}
+		first := makeBatch(2, 1)
+		second := makeBatch(1, 2)
+		defer first.Clean(proc.Mp())
+		defer second.Clean(proc.Mp())
+
+		arg := NewArgumentByEngine(nil)
+		arg.AddLockTargetWithMode(1, nil, lock.LockMode_Shared, 0, pkType, -1, -1, nil, false)
+		arg.AddLockTargetWithMode(1, nil, lock.LockMode_Shared, 1, pkType, -1, -1, nil, false)
+		arg.AppendChild(colexec.NewMockOperator().WithBatchs([]*batch.Batch{first, second}))
+		require.NoError(t, arg.Prepare(proc))
+		arg.ctr.hasNewVersionInRange = testFunc
+
+		result, err := vm.Exec(arg, proc)
+		require.NoError(t, err)
+		require.Same(t, first, result.Batch)
+		require.True(t, proc.GetTxnOperator().HasLockTable(uint64(1)))
+		result, err = vm.Exec(arg, proc)
+		require.NoError(t, err)
+		require.Same(t, second, result.Batch)
+		result, err = vm.Exec(arg, proc)
+		require.NoError(t, err)
+		require.Nil(t, result.Batch)
+		arg.Free(proc, false, nil)
+	})
+}
+
+func TestLockOpMergeableTargetsSkipLeadingAllNull(t *testing.T) {
+	runLockOpTest(t, func(proc *process.Process) {
+		pkType := types.T_int32.ToType()
+		bat := batch.NewWithSize(2)
+		bat.Vecs[0] = testutil.MakeInt32Vector([]int32{0}, []uint64{0}, proc.Mp())
+		bat.Vecs[1] = testutil.MakeInt32Vector([]int32{42}, nil, proc.Mp())
+		bat.SetRowCount(1)
+		defer bat.Clean(proc.Mp())
+
+		arg := NewArgumentByEngine(nil)
+		arg.AddLockTargetWithMode(1, nil, lock.LockMode_Shared, 0, pkType, -1, -1, nil, false)
+		arg.AddLockTargetWithMode(1, nil, lock.LockMode_Shared, 1, pkType, -1, -1, nil, false)
+		arg.AppendChild(colexec.NewMockOperator().WithBatchs([]*batch.Batch{bat}))
+		require.NoError(t, arg.Prepare(proc))
+		arg.ctr.hasNewVersionInRange = testFunc
+
+		result, err := vm.Exec(arg, proc)
+		require.NoError(t, err)
+		require.Same(t, bat, result.Batch)
+		require.True(t, proc.GetTxnOperator().HasLockTable(uint64(1)))
+		arg.Free(proc, false, nil)
+	})
+}
+
+func TestLockOpMergedTargetChecksEveryVersionRange(t *testing.T) {
+	arg := NewArgumentByEngine(nil)
+	pkType := types.T_int32.ToType()
+	arg.AddLockTargetWithMode(1, nil, lock.LockMode_Shared, 3, pkType, -1, -1, nil, false)
+	arg.AddLockTargetWithMode(1, nil, lock.LockMode_Shared, 7, pkType, -1, -1, nil, false)
+	arg.ctr.relations = make([]engine.Relation, len(arg.targets))
+	var checked []int32
+	arg.ctr.hasNewVersionInRange = func(
+		_ *process.Process,
+		_ engine.Relation,
+		_ process.Analyzer,
+		_ uint64,
+		_ engine.Engine,
+		_ *batch.Batch,
+		idx int32,
+		_ int32,
+		_, _ timestamp.Timestamp,
+	) (bool, error) {
+		checked = append(checked, idx)
+		return idx == 7, nil
+	}
+
+	changed, err := arg.hasNewVersionInRangeForTargets([]int{0, 1})(
+		nil, nil, nil, 1, nil, nil, -1, -1, timestamp.Timestamp{}, timestamp.Timestamp{})
+	require.NoError(t, err)
+	require.True(t, changed)
+	require.Equal(t, []int32{3, 7}, checked)
+}
+
+func TestLockOpExclusiveTargetsStayRowLocked(t *testing.T) {
+	runLockOpTest(t, func(proc *process.Process) {
+		pkType := types.T_int32.ToType()
+		bat := batch.NewWithSize(2)
+		bat.Vecs[0] = testutil.MakeInt32Vector([]int32{1}, nil, proc.Mp())
+		bat.Vecs[1] = testutil.MakeInt32Vector([]int32{1}, nil, proc.Mp())
+		bat.SetRowCount(1)
+		defer bat.Clean(proc.Mp())
+
+		arg := NewArgumentByEngine(nil)
+		arg.AddLockTargetWithMode(1, nil, lock.LockMode_Exclusive, 0, pkType, -1, -1, nil, false)
+		arg.AddLockTargetWithMode(1, nil, lock.LockMode_Exclusive, 1, pkType, -1, -1, nil, false)
+		require.False(t, mergeableLockTargets(arg.targets[0], arg.targets[1]))
+		arg.AppendChild(colexec.NewMockOperator().WithBatchs([]*batch.Batch{bat}))
+		require.NoError(t, arg.Prepare(proc))
+		arg.ctr.hasNewVersionInRange = testFunc
+
+		_, err := vm.Exec(arg, proc)
+		require.NoError(t, err)
+		arg.Free(proc, false, nil)
+	})
 }

@@ -25,6 +25,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/partition"
@@ -63,6 +64,7 @@ func (window *Window) OpType() vm.OpType {
 }
 
 func (window *Window) Prepare(proc *process.Process) (err error) {
+	window.ctr.prepareParamKind.Reset(window.Aggs)
 	if window.OpAnalyzer == nil {
 		window.OpAnalyzer = process.NewAnalyzer(window.GetIdx(), window.IsFirst, window.IsLast, "window")
 	} else {
@@ -196,6 +198,10 @@ func (window *Window) Call(proc *process.Process) (vm.CallResult, error) {
 
 	var err error
 	ctr := &window.ctr
+	// A returned batch is valid through the caller's processing of it. Once the
+	// next Call begins, release its borrowed input windows and owned result
+	// vector before reusing any operator state.
+	ctr.cleanOutput(proc.Mp())
 
 	for {
 		if err, canceled := vm.CancelCheck(proc); canceled {
@@ -216,6 +222,9 @@ func (window *Window) Call(proc *process.Process) (vm.CallResult, error) {
 					}
 					break
 				}
+				if result.Batch.IsEmpty() {
+					continue
+				}
 				ctr.bat, err = ctr.bat.AppendWithCopy(proc.Ctx, proc.Mp(), result.Batch)
 				if err != nil {
 					return result, err
@@ -228,6 +237,8 @@ func (window *Window) Call(proc *process.Process) (vm.CallResult, error) {
 			}
 			if result.Batch == nil {
 				ctr.status = done
+			} else if result.Batch.IsEmpty() {
+				continue
 			} else {
 				ctr.status = eval
 				if ctr.bat != nil {
@@ -243,77 +254,64 @@ func (window *Window) Call(proc *process.Process) (vm.CallResult, error) {
 			if err = ctr.evalAggVector(ctr.bat, proc); err != nil {
 				return result, err
 			}
-
-			ctr.batAggs = make([]aggexec.AggFuncExec, len(window.Aggs))
-			for i, ag := range window.Aggs {
-				// Skip AggFuncExec creation for WIN_VALUE functions (lag/lead/first_value/last_value/nth_value)
-				// as they are handled directly in processValueFunc.
-				winName := window.WinSpecList[i].Expr.(*plan.Expr_W).W.Name
-				if function.GetFunctionIsWinValueFunByName(winName) {
-					continue
-				}
-				// Derive one argument type per aggregate argument so multi-argument
-				// window aggregates (e.g. json_objectagg) receive all their types,
-				// mirroring the group operator (colexec/group/helper.go).
-				argExprs := ag.GetArgExpressions()
-				argTypes := make([]types.Type, len(argExprs))
-				for j, arg := range argExprs {
-					argTypes[j] = types.New(types.T(arg.Typ.Id), arg.Typ.Width, arg.Typ.Scale)
-				}
-				ctr.batAggs[i], err = aggexec.MakeAgg(proc.Mp(), ag.GetAggID(), ag.IsDistinct(), argTypes...)
-				if err != nil {
-					return result, err
-				}
-				if config := ag.GetExtraConfig(); config != nil {
-					if err = ctr.batAggs[i].SetExtraInformation(config, 0); err != nil {
-						return result, err
+			for i := range window.Aggs {
+				if i < len(ctr.aggVecs) && len(ctr.aggVecs[i].Vec) > 0 {
+					arg := ctr.aggVecs[i].Vec[0]
+					if arg.Length() > 0 && !arg.AllNull() {
+						ctr.prepareParamKind.Observe(i, arg.GetPrepareParamKind())
 					}
 				}
-				if err = ctr.batAggs[i].GroupGrow(ctr.bat.RowCount()); err != nil {
-					return result, err
-				}
 			}
-			// calculate
-			for i, w := range window.WinSpecList {
-				if err = checkCanceled(proc, 0); err != nil {
-					return result, err
-				}
-				// sort and partitions
-				if window.Fs = makeOrderBy(w); window.Fs != nil {
-					if len(ctr.orderVecs) == 0 {
-						ctr.orderVecs = make([]colexec.ExprEvalVector, len(window.Fs))
-						for j := range ctr.orderVecs {
-							ctr.orderVecs[j], err = colexec.MakeEvalVector(proc, []*plan.Expr{window.Fs[j].Expr})
-							if err != nil {
-								return result, err
-							}
+
+			// Query planning creates one Window operator per window expression.
+			// Keep the materialized and sorted logical partition, then evaluate it
+			// lazily in bounded output chunks. A LIMIT consumer can stop after the
+			// first chunk without forcing the remaining frame calculations.
+			ctr.ps = nil
+			ctr.os = nil
+			ctr.sels = nil
+			w := window.WinSpecList[0]
+			if window.Fs = makeOrderBy(w); window.Fs != nil {
+				if len(ctr.orderVecs) == 0 {
+					ctr.orderVecs = make([]colexec.ExprEvalVector, len(window.Fs))
+					for j := range ctr.orderVecs {
+						ctr.orderVecs[j], err = colexec.MakeEvalVector(proc, []*plan.Expr{window.Fs[j].Expr})
+						if err != nil {
+							return result, err
 						}
 					}
-
-					_, err = ctr.processOrder(i, window, ctr.bat, proc)
-					if err != nil {
-						return result, err
-					}
 				}
-				// evaluate func
-				if err = ctr.processFunc(i, window, proc, analyzer); err != nil {
+
+				if _, err = ctr.processOrder(0, window, ctr.bat, proc); err != nil {
 					return result, err
 				}
 			}
-			// we can not reuse agg func
-			ctr.freeAggFun()
+			ctr.emitOffset = 0
+			ctr.status = emit
 
-			if len(window.WinSpecList[0].Expr.(*plan.Expr_W).W.PartitionBy) == 0 {
-				ctr.status = done
-			} else {
-				ctr.status = receive
+		case emit:
+			result := vm.NewCallResult()
+			start := ctr.emitOffset
+			end := min(start+colexec.DefaultBatchSize, ctr.bat.RowCount())
+			vec, err := ctr.processFuncRange(0, window, proc, analyzer, start, end)
+			if err != nil {
+				return result, err
+			}
+			result.Batch, err = ctr.makeResultBatch(start, end, vec)
+			if err != nil {
+				vec.Free(proc.Mp())
+				return result, err
 			}
 
-			if ctr.rBat != nil {
-				result.Batch = ctr.resetResultBatch(ctr.bat, ctr.vec)
-			} else {
-				result.Batch = ctr.makeResultBatch(ctr.bat, ctr.vec)
+			ctr.emitOffset = end
+			if end == ctr.bat.RowCount() {
+				if len(window.WinSpecList[0].Expr.(*plan.Expr_W).W.PartitionBy) == 0 {
+					ctr.status = done
+				} else {
+					ctr.status = receive
+				}
 			}
+
 			result.Status = vm.ExecNext
 			return result, nil
 		case done:
@@ -324,185 +322,338 @@ func (window *Window) Call(proc *process.Process) (vm.CallResult, error) {
 	}
 }
 
-func (ctr *container) makeResultBatch(bat *batch.Batch, vec *vector.Vector) *batch.Batch {
-	ctr.rBat = batch.NewWithSize(len(bat.Vecs) + 1)
-	i := 0
-	for i < len(bat.Vecs) {
-		ctr.rBat.Vecs[i] = bat.Vecs[i]
-		i++
+func (ctr *container) makeResultBatch(start, end int, vec *vector.Vector) (*batch.Batch, error) {
+	if vec == nil || vec.Length() != end-start {
+		return nil, moerr.NewInternalErrorNoCtx("window result length does not match output chunk")
 	}
-	ctr.rBat.Vecs[i] = vec
-	ctr.rBat.SetRowCount(vec.Length())
-	return ctr.rBat
+	rBat, err := ctr.bat.Window(start, end)
+	if err != nil {
+		return nil, err
+	}
+	rBat.Vecs = append(rBat.Vecs, vec)
+	rBat.SetRowCount(end - start)
+	ctr.rBat = rBat
+	return rBat, nil
 }
 
-func (ctr *container) resetResultBatch(bat *batch.Batch, vec *vector.Vector) *batch.Batch {
-	i := 0
-	for i < len(bat.Vecs) {
-		ctr.rBat.Vecs[i] = bat.Vecs[i]
-		i++
-	}
-	ctr.rBat.Vecs[i] = vec
-	ctr.rBat.SetRowCount(vec.Length())
-	return ctr.rBat
-}
-
+// processFunc retains the full-range helper used by focused cancellation
+// tests. Production Call uses processFuncRange with bounded output ranges.
 func (ctr *container) processFunc(idx int, ap *Window, proc *process.Process, analyzer process.Analyzer) error {
-	var err error
-	n := ctr.bat.Vecs[0].Length()
+	vec, err := ctr.processFuncRange(idx, ap, proc, analyzer, 0, ctr.bat.RowCount())
+	if vec != nil {
+		vec.Free(proc.Mp())
+	}
+	return err
+}
+
+func (ctr *container) processFuncRange(
+	idx int,
+	ap *Window,
+	proc *process.Process,
+	analyzer process.Analyzer,
+	outputStart int,
+	outputEnd int,
+) (*vector.Vector, error) {
+	if outputStart < 0 || outputEnd <= outputStart || outputEnd > ctr.bat.RowCount() {
+		return nil, moerr.NewInternalErrorNoCtx("invalid window output range")
+	}
+
 	w := ap.WinSpecList[idx].Expr.(*plan.Expr_W).W
 	funcName := w.Name
-	isWinOrder := function.GetFunctionIsWinOrderFunByName(funcName)
-	isWinValue := function.GetFunctionIsWinValueFunByName(funcName)
+	var (
+		vec *vector.Vector
+		err error
+	)
+	switch {
+	case function.GetFunctionIsWinValueFunByName(funcName):
+		// Value window functions use direct source-row lookup and therefore can
+		// materialize only the rows requested by this output chunk.
+		vec, err = ctr.processValueFuncRange(idx, ap, proc, outputStart, outputEnd)
+	case function.GetFunctionIsWinOrderFunByName(funcName):
+		// Rank-family functions are derived directly from the sorted peer
+		// boundaries. This avoids building one aggregate group per input row.
+		vec, err = ctr.processOrderFuncRange(idx, ap, proc, outputStart, outputEnd)
+	default:
+		vec, err = ctr.processAggregateFuncRange(idx, ap, proc, outputStart, outputEnd)
+	}
+	if err != nil {
+		return nil, err
+	}
+	if !vec.HasPrepareParamKind() {
+		vec.SetPrepareParamKind(ctr.prepareParamKind.Get(idx))
+	}
+	analyzer.Alloc(int64(vec.Size()))
+	return vec, nil
+}
 
-	if isWinValue {
-		// WIN_VALUE functions (lag/lead/first_value/last_value/nth_value):
-		// Direct index-based evaluation, bypassing AggFuncExec Fill/Flush entirely.
-		if ctr.vec != nil {
-			ctr.vec.Free(proc.Mp())
+func (ctr *container) makeAggregateExecutor(
+	idx int,
+	ap *Window,
+	proc *process.Process,
+	groupCount int,
+) error {
+	ctr.freeAggFun()
+	ctr.batAggs = make([]aggexec.AggFuncExec, len(ap.Aggs))
+	ag := ap.Aggs[idx]
+	// Derive one argument type per aggregate argument so multi-argument
+	// window aggregates (for example json_objectagg) match Group's contract.
+	argExprs := ag.GetArgExpressions()
+	argTypes := make([]types.Type, len(argExprs))
+	for j, arg := range argExprs {
+		argTypes[j] = types.NewWithCharset(
+			types.T(arg.Typ.Id), arg.Typ.Width, arg.Typ.Scale, uint8(arg.Typ.Charset),
+		)
+	}
+
+	var err error
+	ctr.batAggs[idx], err = aggexec.MakeAgg(proc.Mp(), ag.GetAggID(), ag.IsDistinct(), argTypes...)
+	if err != nil {
+		ctr.freeAggFun()
+		return err
+	}
+	if config := ag.GetExtraInformation(); config != nil {
+		if err = ctr.batAggs[idx].SetExtraInformation(config, 0); err != nil {
+			ctr.freeAggFun()
+			return err
 		}
-		ctr.vec, err = ctr.processValueFunc(idx, ap, proc)
+	}
+	if err = ctr.batAggs[idx].GroupGrow(groupCount); err != nil {
+		ctr.freeAggFun()
+		return err
+	}
+	return nil
+}
+
+func (ctr *container) processAggregateFuncRange(
+	idx int,
+	ap *Window,
+	proc *process.Process,
+	outputStart int,
+	outputEnd int,
+) (*vector.Vector, error) {
+	if err := ctr.makeAggregateExecutor(idx, ap, proc, outputEnd-outputStart); err != nil {
+		return nil, err
+	}
+	defer ctr.freeAggFun()
+
+	n := ctr.bat.RowCount()
+	w := ap.WinSpecList[idx].Expr.(*plan.Expr_W).W
+	for j := outputStart; j < outputEnd; j++ {
+		if err := checkCanceled(proc, j-outputStart); err != nil {
+			return nil, err
+		}
+
+		partitionStart, partitionEnd := 0, n
+		if ctr.ps != nil {
+			partitionStart, partitionEnd = buildPartitionInterval(ctr.ps, j, n)
+		}
+
+		left, right, err := ctr.buildInterval(
+			j, partitionStart, partitionEnd, ctr.frameAt(idx, w.Frame))
 		if err != nil {
-			return err
+			return nil, err
 		}
-		if ctr.vec != nil {
-			analyzer.Alloc(int64(ctr.vec.Size()))
+		if right < partitionStart || left > partitionEnd || left >= right {
+			continue
 		}
-		ctr.os = nil
-		ctr.ps = nil
-		return nil
-	}
+		left = max(left, partitionStart)
+		right = min(right, partitionEnd)
 
-	if isWinOrder {
-		if ctr.ps == nil {
-			ctr.ps = append(ctr.ps, 0)
-		}
-		if ctr.os == nil {
-			ctr.os = append(ctr.os, 0)
-		}
-		ctr.ps = append(ctr.ps, int64(n))
-		ctr.os = append(ctr.os, int64(n))
-		if len(ctr.os) < len(ctr.ps) {
-			ctr.os = ctr.ps
-		}
-
-		// Special handling for NTILE: evaluate bucket count parameter
-		if funcName == "ntile" && len(ctr.aggVecs[idx].Vec) > 0 {
-			if err = ctr.evalAggVector(ctr.bat, proc); err != nil {
-				return err
+		group := j - outputStart
+		for k := left; k < right; k++ {
+			if err = checkCanceled(proc, k-left); err != nil {
+				return nil, err
 			}
-		}
-
-		vec := vector.NewVec(types.T_int64.ToType())
-		defer vec.Free(proc.Mp())
-		if err = vector.AppendFixedList(vec, ctr.os, nil, proc.Mp()); err != nil {
-			return err
-		}
-
-		o := 0
-		for p := 1; p < len(ctr.ps); p++ {
-			if err = checkCanceled(proc, p); err != nil {
-				return err
+			if err = ctr.batAggs[idx].Fill(group, k, ctr.aggVecs[idx].Vec); err != nil {
+				return nil, err
 			}
-			for ; o < len(ctr.os); o++ {
-				if err = checkCanceled(proc, o); err != nil {
-					return err
-				}
-
-				if ctr.os[o] <= ctr.ps[p] {
-					// For NTILE, pass both os vector and bucket count vector
-					var fillVecs []*vector.Vector
-					if funcName == "ntile" && len(ctr.aggVecs[idx].Vec) > 0 {
-						fillVecs = []*vector.Vector{vec, ctr.aggVecs[idx].Vec[0]}
-					} else {
-						fillVecs = []*vector.Vector{vec}
-					}
-
-					if err = ctr.batAggs[idx].Fill(p-1, o, fillVecs); err != nil {
-						return err
-					}
-
-				} else {
-					o--
-					break
-				}
-
-			}
-		}
-	} else {
-		// plan.Function_AGG
-		for j := 0; j < n; j++ {
-			if err = checkCanceled(proc, j); err != nil {
-				return err
-			}
-
-			start, end := 0, n
-
-			if ctr.ps != nil {
-				start, end = buildPartitionInterval(ctr.ps, j, n)
-			}
-
-			left, right, err := ctr.buildInterval(j, start, end, ctr.frameAt(idx, w.Frame))
-			if err != nil {
-				return err
-			}
-
-			if right < start || left > end || left >= right {
-				continue
-			}
-
-			if left < start {
-				left = start
-			}
-			if right > end {
-				right = end
-			}
-
-			for k := left; k < right; k++ {
-				if err = checkCanceled(proc, k-left); err != nil {
-					return err
-				}
-				if err = ctr.batAggs[idx].Fill(j, k, ctr.aggVecs[idx].Vec); err != nil {
-					return err
-				}
-			}
-
 		}
 	}
 
-	// result of agg eval is not reuse the vector
-	if ctr.vec != nil {
-		ctr.vec.Free(proc.Mp())
-	}
 	vecs, err := ctr.batAggs[idx].Flush()
 	if err != nil {
-		return err
+		return nil, err
 	}
-	ctr.vec, err = aggexec.MergeSplitResult(vecs, proc.Mp())
+	// groupCount is bounded by DefaultBatchSize (the aggregate chunk size),
+	// so this is normally the zero-copy one-vector path. Keep the merge for
+	// defensive compatibility with aggregate implementations that split early.
+	vec, err := aggexec.MergeSplitResult(vecs, proc.Mp())
 	if err != nil {
-		return err
+		return nil, err
 	}
-	if isWinOrder {
-		ctr.vec.SetNulls(nil)
+	// Aggregate state initializes its physical capacity as NULL. Keep only
+	// logical-row nulls so downstream HasNull checks do not see an unused tail.
+	nulls.RemoveRange(vec.GetNulls(), uint64(vec.Length()), math.MaxUint64)
+	return vec, nil
+}
+
+func (ctr *container) processOrderFuncRange(
+	idx int,
+	ap *Window,
+	proc *process.Process,
+	outputStart int,
+	outputEnd int,
+) (*vector.Vector, error) {
+	n := ctr.bat.RowCount()
+	funcName := ap.WinSpecList[idx].Expr.(*plan.Expr_W).W.Name
+
+	if funcName == "percent_rank" || funcName == "cume_dist" {
+		values := make([]float64, outputEnd-outputStart)
+		peerIndex, peerStart, peerEnd := peerInterval(ctr.os, outputStart, n)
+		for j := outputStart; j < outputEnd; j++ {
+			if err := checkCanceled(proc, j-outputStart); err != nil {
+				return nil, err
+			}
+			for j >= peerEnd {
+				peerIndex++
+				peerStart = peerEnd
+				peerEnd = n
+				if peerIndex+1 < len(ctr.os) {
+					peerEnd = int(ctr.os[peerIndex+1])
+				}
+			}
+			if funcName == "percent_rank" {
+				if n > 1 {
+					values[j-outputStart] = float64(peerStart) / float64(n-1)
+				}
+			} else {
+				values[j-outputStart] = float64(peerEnd) / float64(n)
+			}
+		}
+		vec := vector.NewVec(types.T_float64.ToType())
+		if err := vector.AppendFixedList(vec, values, nil, proc.Mp()); err != nil {
+			vec.Free(proc.Mp())
+			return nil, err
+		}
+		return vec, nil
 	}
-	if ctr.vec != nil {
-		analyzer.Alloc(int64(ctr.vec.Size()))
+	values := make([]int64, outputEnd-outputStart)
+	switch funcName {
+	case "row_number":
+		for j := outputStart; j < outputEnd; j++ {
+			if err := checkCanceled(proc, j-outputStart); err != nil {
+				return nil, err
+			}
+			values[j-outputStart] = int64(j + 1)
+		}
+	case "ntile":
+		bucketCount, err := ctr.ntileBucketCount(idx)
+		if err != nil {
+			return nil, err
+		}
+		for j := outputStart; j < outputEnd; j++ {
+			if err := checkCanceled(proc, j-outputStart); err != nil {
+				return nil, err
+			}
+			values[j-outputStart] = ntileBucket(int64(j), int64(n), bucketCount)
+		}
+	case "rank", "dense_rank":
+		peerIndex, peerStart, peerEnd := peerInterval(ctr.os, outputStart, n)
+		for j := outputStart; j < outputEnd; j++ {
+			if err := checkCanceled(proc, j-outputStart); err != nil {
+				return nil, err
+			}
+			for j >= peerEnd {
+				peerIndex++
+				peerStart = peerEnd
+				peerEnd = n
+				if peerIndex+1 < len(ctr.os) {
+					peerEnd = int(ctr.os[peerIndex+1])
+				}
+			}
+			if funcName == "rank" {
+				values[j-outputStart] = int64(peerStart + 1)
+			} else {
+				values[j-outputStart] = int64(peerIndex + 1)
+			}
+		}
+	default:
+		return nil, moerr.NewInternalErrorNoCtxf("unsupported order window function: %s", funcName)
 	}
-	ctr.os = nil
-	ctr.ps = nil
-	return nil
+	vec := vector.NewVec(types.T_int64.ToType())
+	if err := vector.AppendFixedList(vec, values, nil, proc.Mp()); err != nil {
+		vec.Free(proc.Mp())
+		return nil, err
+	}
+	return vec, nil
+}
+
+func peerInterval(boundaries []int64, row int, rowCount int) (index, start, end int) {
+	if len(boundaries) == 0 {
+		return 0, 0, rowCount
+	}
+	lo, hi := 0, len(boundaries)
+	for lo < hi {
+		mid := int(uint(lo+hi) >> 1)
+		if boundaries[mid] <= int64(row) {
+			lo = mid + 1
+		} else {
+			hi = mid
+		}
+	}
+	index = max(0, lo-1)
+	start = int(boundaries[index])
+	end = rowCount
+	if index+1 < len(boundaries) {
+		end = int(boundaries[index+1])
+	}
+	return index, start, end
+}
+
+func (ctr *container) ntileBucketCount(idx int) (int64, error) {
+	if idx >= len(ctr.aggVecs) || len(ctr.aggVecs[idx].Vec) == 0 {
+		return 1, nil
+	}
+	vec := ctr.aggVecs[idx].Vec[0]
+	if vec.Length() == 0 || vec.IsNull(0) {
+		return 1, nil
+	}
+	bucketCount, ok := getInt64FromVec(vec, 0)
+	if !ok {
+		return 0, moerr.NewInternalErrorNoCtx("ntile bucket count must be integer type")
+	}
+	if bucketCount <= 0 {
+		return 0, moerr.NewInternalErrorNoCtx("ntile bucket count must be positive")
+	}
+	return bucketCount, nil
+}
+
+func ntileBucket(row, rowCount, bucketCount int64) int64 {
+	regularSize := rowCount / bucketCount
+	largerBuckets := rowCount % bucketCount
+	largerSize := regularSize + 1
+	largerRows := largerBuckets * largerSize
+	if row < largerRows {
+		return row/largerSize + 1
+	}
+	// When there are more buckets than rows, every emitted row belongs to
+	// one of the larger buckets and the division below is unreachable.
+	return largerBuckets + (row-largerRows)/regularSize + 1
 }
 
 // processValueFunc handles WIN_VALUE functions (lag/lead/first_value/last_value/nth_value)
 // by directly computing results via index lookup, avoiding O(n²) frame materialization.
 func (ctr *container) processValueFunc(idx int, ap *Window, proc *process.Process) (result *vector.Vector, err error) {
-	n := ctr.bat.Vecs[0].Length()
+	return ctr.processValueFuncRange(idx, ap, proc, 0, ctr.bat.RowCount())
+}
+
+func (ctr *container) processValueFuncRange(
+	idx int,
+	ap *Window,
+	proc *process.Process,
+	outputStart int,
+	outputEnd int,
+) (result *vector.Vector, err error) {
+	n := ctr.bat.RowCount()
 	w := ap.WinSpecList[idx].Expr.(*plan.Expr_W).W
 	funcName := w.Name
 
 	// aggVecs already evaluated by caller (eval case in Call)
 	srcVec := ctr.aggVecs[idx].Vec[0] // the expression column
-	retType := types.New(types.T(w.WindowFunc.Typ.Id), w.WindowFunc.Typ.Width, w.WindowFunc.Typ.Scale)
+	retType := types.NewWithCharset(
+		types.T(w.WindowFunc.Typ.Id), w.WindowFunc.Typ.Width, w.WindowFunc.Typ.Scale,
+		uint8(w.WindowFunc.Typ.Charset),
+	)
 	localResult := vector.NewVec(retType)
 	defer func() {
 		if err != nil && localResult != nil {
@@ -525,8 +676,8 @@ func (ctr *container) processValueFunc(idx int, ap *Window, proc *process.Proces
 		if len(ctr.aggVecs[idx].Vec) >= 3 {
 			defaultVec = ctr.aggVecs[idx].Vec[2]
 		}
-		for j := 0; j < n; j++ {
-			if err = checkCanceled(proc, j); err != nil {
+		for j := outputStart; j < outputEnd; j++ {
+			if err = checkCanceled(proc, j-outputStart); err != nil {
 				return nil, err
 			}
 			offset, ok := constOffset, constOK
@@ -568,8 +719,8 @@ func (ctr *container) processValueFunc(idx int, ap *Window, proc *process.Proces
 		if len(ctr.aggVecs[idx].Vec) >= 3 {
 			defaultVec = ctr.aggVecs[idx].Vec[2]
 		}
-		for j := 0; j < n; j++ {
-			if err = checkCanceled(proc, j); err != nil {
+		for j := outputStart; j < outputEnd; j++ {
+			if err = checkCanceled(proc, j-outputStart); err != nil {
 				return nil, err
 			}
 			offset, ok := constOffset, constOK
@@ -599,8 +750,8 @@ func (ctr *container) processValueFunc(idx int, ap *Window, proc *process.Proces
 		}
 
 	case "first_value":
-		for j := 0; j < n; j++ {
-			if err = checkCanceled(proc, j); err != nil {
+		for j := outputStart; j < outputEnd; j++ {
+			if err = checkCanceled(proc, j-outputStart); err != nil {
 				return nil, err
 			}
 			start, end := 0, n
@@ -629,8 +780,8 @@ func (ctr *container) processValueFunc(idx int, ap *Window, proc *process.Proces
 		}
 
 	case "last_value":
-		for j := 0; j < n; j++ {
-			if err = checkCanceled(proc, j); err != nil {
+		for j := outputStart; j < outputEnd; j++ {
+			if err = checkCanceled(proc, j-outputStart); err != nil {
 				return nil, err
 			}
 			start, end := 0, n
@@ -668,8 +819,8 @@ func (ctr *container) processValueFunc(idx int, ap *Window, proc *process.Proces
 				constNth, constOK = getInt64FromVec(nthVec, 0)
 			}
 		}
-		for j := 0; j < n; j++ {
-			if err = checkCanceled(proc, j); err != nil {
+		for j := outputStart; j < outputEnd; j++ {
+			if err = checkCanceled(proc, j-outputStart); err != nil {
 				return nil, err
 			}
 			nthVal, ok := constNth, constOK
@@ -833,9 +984,13 @@ func (ctr *container) buildRangeInterval(rowIdx int, start, end int, frame *plan
 	}
 	switch frame.Start.Type {
 	case plan.FrameBound_CURRENT_ROW:
-		start, err = searchLeft(start, end, rowIdx, ctr.orderVecs[len(ctr.orderVecs)-1].Vec[0], nil, false, desc)
-		if err != nil {
-			return start, end, err
+		if len(ctr.os) > 0 || end-start <= 1 {
+			start, _ = buildPeerInterval(ctr.os, rowIdx, start, end)
+		} else {
+			start, err = searchLeft(start, end, rowIdx, ctr.orderVecs[len(ctr.orderVecs)-1].Vec[0], nil, false, desc)
+			if err != nil {
+				return start, end, err
+			}
 		}
 	case plan.FrameBound_PRECEDING:
 		if !frame.Start.UnBounded {
@@ -853,9 +1008,13 @@ func (ctr *container) buildRangeInterval(rowIdx int, start, end int, frame *plan
 
 	switch frame.End.Type {
 	case plan.FrameBound_CURRENT_ROW:
-		end, err = searchRight(start, end, rowIdx, ctr.orderVecs[len(ctr.orderVecs)-1].Vec[0], nil, false, desc)
-		if err != nil {
-			return start, end, err
+		if len(ctr.os) > 0 || end-start <= 1 {
+			_, end = buildPeerInterval(ctr.os, rowIdx, start, end)
+		} else {
+			end, err = searchRight(start, end, rowIdx, ctr.orderVecs[len(ctr.orderVecs)-1].Vec[0], nil, false, desc)
+			if err != nil {
+				return start, end, err
+			}
 		}
 	case plan.FrameBound_PRECEDING:
 		end, err = searchRight(start, end, rowIdx, ctr.orderVecs[len(ctr.orderVecs)-1].Vec[0], frame.End.Val, true, desc)
@@ -871,6 +1030,29 @@ func (ctr *container) buildRangeInterval(rowIdx int, start, end int, frame *plan
 		}
 	}
 	return start, end, nil
+}
+
+// buildPeerInterval returns the peer group containing rowIdx. orderBoundaries
+// contains the first row of every peer group in the sorted window input.
+func buildPeerInterval(orderBoundaries []int64, rowIdx, start, end int) (int, int) {
+	low, high := 0, len(orderBoundaries)
+	for low < high {
+		mid := low + (high-low)/2
+		if orderBoundaries[mid] <= int64(rowIdx) {
+			low = mid + 1
+		} else {
+			high = mid
+		}
+	}
+
+	peerStart, peerEnd := start, end
+	if low > 0 && int(orderBoundaries[low-1]) > peerStart {
+		peerStart = int(orderBoundaries[low-1])
+	}
+	if low < len(orderBoundaries) && int(orderBoundaries[low]) < peerEnd {
+		peerEnd = int(orderBoundaries[low])
+	}
+	return peerStart, peerEnd
 }
 
 func buildPartitionInterval(ps []int64, j int, l int) (int, int) {
@@ -901,11 +1083,13 @@ func (ctr *container) evalAggVector(bat *batch.Batch, proc *process.Process) (er
 			if err != nil {
 				return err
 			}
-
 			if ctr.aggVecs[i].Vec[j] != nil {
 				ctr.aggVecs[i].Vec[j].CleanOnlyData()
 				if err = ctr.aggVecs[i].Vec[j].UnionBatch(vec, 0, vec.Length(), nil, proc.Mp()); err != nil {
 					return err
+				}
+				if !ctr.aggVecs[i].Vec[j].HasPrepareParamKind() {
+					ctr.aggVecs[i].Vec[j].SetPrepareParamKind(vec.GetPrepareParamKind())
 				}
 			} else {
 				ctr.aggVecs[i].Vec[j], err = vec.Dup(proc.Mp())

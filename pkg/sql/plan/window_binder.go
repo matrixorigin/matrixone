@@ -34,6 +34,7 @@ import (
 type windowFuncExprBinder interface {
 	BindExpr(tree.Expr, int32, bool) (*plan.Expr, error)
 	bindFuncExprImplByAstExpr(string, []tree.Expr, int32) (*plan.Expr, error)
+	bindPreparedNumericAggregateFuncExpr(string, []tree.Expr, int32) (*plan.Expr, error)
 	bindPreparedRowsFrameBound(tree.Expr) (*plan.Expr, error)
 	makeFrameConstValue(tree.Expr, *plan.Type) (*plan.Expr, error)
 	GetContext() context.Context
@@ -253,7 +254,7 @@ func bindWindowFuncExpr(b windowFuncExprBinder, ctx *BindContext, funcName strin
 	}
 
 	// window function
-	windowFunc, err := b.bindFuncExprImplByAstExpr(funcName, astExpr.Exprs, depth)
+	windowFunc, err := b.bindPreparedNumericAggregateFuncExpr(funcName, astExpr.Exprs, depth)
 	if err != nil {
 		return nil, err
 	}
@@ -292,10 +293,19 @@ func bindWindowFuncExpr(b windowFuncExprBinder, ctx *BindContext, funcName strin
 				return nil, err
 			}
 
-			// Keep enum/set window ordering aligned with definition order.
-			if fn := expr.GetF(); fn != nil &&
-				(fn.Func.ObjName == moEnumCastIndexToValueFun || fn.Func.ObjName == moSetCastIndexToValueFun) {
-				expr = fn.Args[1]
+			// Keep enum/set window ordering aligned with definition order. The
+			// originating block can use the raw storage value; a pure display
+			// column crossing a query boundary uses its planner provenance.
+			if isEnumOrSetDisplayValueExpr(expr) {
+				fn := expr.GetF()
+				if len(fn.Args) == 2 && isEnumOrSetPlanType(&fn.Args[1].Typ) {
+					expr = fn.Args[1]
+				}
+			} else if storageType := ctx.mysqlSpecialOrderTypeForExpr(expr); storageType != nil {
+				expr, err = makeMySQLSpecialOrderKey(b.GetContext(), expr, storageType)
+				if err != nil {
+					return nil, err
+				}
 			}
 
 			orderBy := &plan.OrderBySpec{
@@ -363,7 +373,7 @@ func bindWindowFuncExpr(b windowFuncExprBinder, ctx *BindContext, funcName strin
 		}
 		typ = &w.OrderBy[0].Expr.Typ
 		t := types.Type{Oid: types.T(typ.Id)}
-		if !function.GetFunctionIsWinOrderFunByName(funcName) && !t.IsNumericOrTemporal() {
+		if !function.GetFunctionIsWinOrderFunByName(funcName) && isNRange(ws.Frame) && !t.IsNumericOrTemporal() {
 			return nil, moerr.NewParseError(b.GetContext(), "Window '<unnamed window>' with RANGE frame requires ORDER BY expression of numeric or temporal type")
 		}
 	case tree.Groups:

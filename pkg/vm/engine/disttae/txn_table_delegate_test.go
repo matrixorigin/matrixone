@@ -55,15 +55,16 @@ func TestTxnTableDelegate_CollectChanges(t *testing.T) {
 	table.combined.is = true
 	table.combined.tbl = newMockCombinedTxnTable()
 
-	assert.PanicsWithValue(t, "not implemented", func() {
-		table.CollectChanges(
-			context.Background(),
-			types.TS{},
-			types.TS{},
-			false,
-			&mpool.MPool{},
-		)
-	})
+	handle, err := table.CollectChanges(
+		context.Background(),
+		types.TS{},
+		types.TS{},
+		false,
+		&mpool.MPool{},
+	)
+	assert.NoError(t, err)
+	assert.NotNil(t, handle)
+	assert.NoError(t, handle.Close())
 }
 
 func TestTxnTableDelegate_MergeObjects(t *testing.T) {

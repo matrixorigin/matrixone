@@ -17,6 +17,7 @@ package mergerecursive
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/cteaccount"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -31,6 +32,7 @@ type container struct {
 
 	freeBats []*batch.Batch
 	i        int
+	memory   cteaccount.Accountant
 }
 
 type MergeRecursive struct {
@@ -71,17 +73,21 @@ func (mergeRecursive *MergeRecursive) Release() {
 }
 
 func (mergeRecursive *MergeRecursive) Reset(proc *process.Process, pipelineFailed bool, err error) {
-	mergeRecursive.ctr.last = false
-	mergeRecursive.ctr.i = 0
-	for _, bat := range mergeRecursive.ctr.freeBats {
-		bat.Clean(proc.Mp())
-	}
-	mergeRecursive.ctr.freeBats = nil
-	mergeRecursive.ctr.bats = nil
-	mergeRecursive.ctr.buf = nil
+	mergeRecursive.clean(proc)
 }
 
 func (mergeRecursive *MergeRecursive) Free(proc *process.Process, pipelineFailed bool, err error) {
+	mergeRecursive.clean(proc)
+}
+
+func (mergeRecursive *MergeRecursive) clean(proc *process.Process) {
+	mergeRecursive.ctr.memory.Release()
+	for _, bat := range mergeRecursive.ctr.freeBats {
+		if bat != nil {
+			bat.Clean(proc.Mp())
+		}
+	}
+	mergeRecursive.ctr = container{}
 }
 
 func (mergeRecursive *MergeRecursive) ExecProjection(proc *process.Process, input *batch.Batch) (*batch.Batch, error) {

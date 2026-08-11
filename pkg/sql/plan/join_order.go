@@ -158,16 +158,27 @@ func isEquiCond(expr *plan.Expr, leftTags, rightTags map[int32]bool) bool {
 // Can only be used after optimizer!!!
 func IsEquiJoin2(exprs []*plan.Expr) bool {
 	for _, expr := range exprs {
-		if e, ok := expr.Expr.(*plan.Expr_F); ok {
-			if !IsEqualFunc(e.F.Func.GetObj()) {
-				continue
-			}
-			lpos, rpos := HasColExpr(e.F.Args[0], -1), HasColExpr(e.F.Args[1], -1)
-			if lpos == -1 || rpos == -1 || (lpos == rpos) {
-				continue
-			}
+		if isEquiCond2(expr) {
 			return true
 		}
+	}
+	return false
+}
+
+func isEquiCond2(expr *plan.Expr) bool {
+	e, ok := expr.Expr.(*plan.Expr_F)
+	if !ok || !IsEqualFunc(e.F.Func.GetObj()) {
+		return false
+	}
+	lpos, rpos := HasColExpr(e.F.Args[0], -1), HasColExpr(e.F.Args[1], -1)
+	if lpos == 0 && rpos == 1 {
+		return true
+	}
+	if lpos == 1 && rpos == 0 {
+		// Keep the executor contract identical before and after remapping: the
+		// probe/left expression is always argument 0.
+		e.F.Args[0], e.F.Args[1] = e.F.Args[1], e.F.Args[0]
+		return true
 	}
 	return false
 }

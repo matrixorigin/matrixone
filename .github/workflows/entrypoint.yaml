@@ -2,12 +2,15 @@ name: MatrixOne ALL CI
 
 on:
   pull_request_target:
-    types: [ opened, synchronize, reopened ]
-    branches: [ main,'[0-9]+.[0-9]+*' ]
+    types: [ opened, synchronize, reopened, ready_for_review ]
+    branches: [ main, 4.2-dev, '[0-9]+.[0-9]+*' ]
 
 concurrency: 
   group: ${{ github.event.pull_request.head.repo.full_name}}/${{ github.event.pull_request.head.ref }}/${{ github.workflow }}
   cancel-in-progress: true
+
+permissions:
+  contents: read
 
 jobs:
   check-pr-valid:
@@ -23,12 +26,50 @@ jobs:
           title_for_find_issue: "Which issue(s) this PR fixes:"
           title_for_find_content: "What this PR does / why we need it:"
 
+  bvt-group-plan:
+    name: Plan complementary BVT groups
+    needs: check-pr-valid
+    if: ${{ needs.check-pr-valid.outputs.pr_valid == 'true' && github.base_ref != '3.0-dev' }}
+    runs-on: ubuntu-latest
+    outputs:
+      compose_group: ${{ steps.plan.outputs.compose_group }}
+      launch_group: ${{ steps.plan.outputs.launch_group }}
+      generation: ${{ steps.plan.outputs.generation }}
+    steps:
+      - id: plan
+        name: Assign both BVT groups
+        run: |
+          set -euo pipefail
+          compose_group=$(( (${{ github.run_id }} + ${{ github.run_attempt }}) % 2 ))
+          launch_group=$((1 - compose_group))
+          generation='${{ github.run_id }}-${{ github.run_attempt }}'
+          {
+            echo "compose_group=${compose_group}"
+            echo "launch_group=${launch_group}"
+            echo "generation=${generation}"
+          } >> "$GITHUB_OUTPUT"
+          {
+            echo '### BVT group plan'
+            echo "- Compose + Proxy: group ${compose_group}"
+            echo "- Launch + Pessimistic: group ${launch_group}"
+            echo "- Generation: ${generation}"
+          } >> "$GITHUB_STEP_SUMMARY"
+
   # ============ 非 3.0-dev 分支使用 @main ============
   matrixone-ci:
     name: Matrixone CI
     needs: check-pr-valid
     if: ${{ needs.check-pr-valid.outputs.pr_valid == 'true' && github.base_ref != '3.0-dev' }}
     uses: matrixorigin/CI/.github/workflows/ci.yaml@main
+    secrets: inherit
+
+  matrixone-ut-coverage:
+    name: Matrixone UT Coverage
+    needs: [check-pr-valid, bvt-group-plan]
+    if: ${{ needs.check-pr-valid.outputs.pr_valid == 'true' && github.base_ref != '3.0-dev' }}
+    uses: matrixorigin/CI/.github/workflows/coverage-ut.yaml@main
+    with:
+      bvt_generation: ${{ needs.bvt-group-plan.outputs.generation }}
     secrets: inherit
 
   matrixone-upgrade-ci:
@@ -40,23 +81,39 @@ jobs:
 
   matrixone-compose-ci:
     name: Matrixone Compose CI
-    needs: check-pr-valid
+    needs: [check-pr-valid, bvt-group-plan]
     if: ${{ needs.check-pr-valid.outputs.pr_valid == 'true' && github.base_ref != '3.0-dev' }}
-    uses: matrixorigin/CI/.github/workflows/e2e-compose.yaml@main
+    uses: matrixorigin/CI/.github/workflows/e2e-compose-parallel.yaml@main
+    with:
+      bvt_group: ${{ needs.bvt-group-plan.outputs.compose_group }}
+      bvt_generation: ${{ needs.bvt-group-plan.outputs.generation }}
     secrets: inherit
 
   matrixone-standalone-ci:
     name: Matrixone Standlone CI
-    needs: check-pr-valid
+    needs: [check-pr-valid, bvt-group-plan]
     if: ${{ needs.check-pr-valid.outputs.pr_valid == 'true' && github.base_ref != '3.0-dev' }}
-    uses: matrixorigin/CI/.github/workflows/e2e-standalone.yaml@main
+    uses: matrixorigin/CI/.github/workflows/e2e-standalone-parallel.yaml@main
+    with:
+      bvt_group: ${{ needs.bvt-group-plan.outputs.launch_group }}
+      bvt_generation: ${{ needs.bvt-group-plan.outputs.generation }}
     secrets: inherit
 
   matrixone-utils-ci:
     name: Matrixone Utils CI
     needs: check-pr-valid
     if: ${{ needs.check-pr-valid.outputs.pr_valid == 'true' && github.base_ref != '3.0-dev' }}
-    uses: matrixorigin/CI/.github/workflows/utils.yaml@main
+    uses: matrixorigin/CI/.github/workflows/utils-parallel.yaml@main
+    secrets: inherit
+
+  matrixone-coverage-merge:
+    name: Matrixone Utils CI
+    needs: [check-pr-valid, bvt-group-plan, matrixone-ut-coverage, matrixone-compose-ci, matrixone-standalone-ci]
+    if: ${{ !cancelled() && needs.check-pr-valid.outputs.pr_valid == 'true' && github.base_ref != '3.0-dev' }}
+    uses: matrixorigin/CI/.github/workflows/coverage-merge.yaml@main
+    with:
+      prerequisites_ready: ${{ needs.bvt-group-plan.result == 'success' && needs.matrixone-ut-coverage.result == 'success' && needs.matrixone-ut-coverage.outputs.coverage_ready == 'true' && needs.matrixone-compose-ci.result == 'success' && needs.matrixone-standalone-ci.result == 'success' }}
+      expected_bvt_generation: ${{ needs.bvt-group-plan.outputs.generation }}
     secrets: inherit
 
   # ============ 3.0-dev 分支使用 @release/3.0-dev ============

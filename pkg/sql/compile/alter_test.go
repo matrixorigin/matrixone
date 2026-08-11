@@ -17,6 +17,8 @@ package compile
 import (
 	"context"
 	"errors"
+	"fmt"
+	"math"
 	"testing"
 	"time"
 
@@ -35,15 +37,24 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/frontend/databranchutils"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	mock_lock "github.com/matrixorigin/matrixone/pkg/frontend/test/mock_lock"
+	"github.com/matrixorigin/matrixone/pkg/incrservice"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
+	"github.com/matrixorigin/matrixone/pkg/pb/partition"
 	plan2 "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/pb/txn"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -55,14 +66,1347 @@ func TestShouldEnableAlterCopyPipelineFlush(t *testing.T) {
 	assert.True(t, shouldEnableAlterCopyPipelineFlush(&plan2.AlterCopyOpt{SkipPkDedup: true}))
 }
 
-type alterCopyInsertSpyExecutor struct {
-	insertSQL    string
-	insertErr    error
-	insertCtx    context.Context
-	insertOption executor.StatementOption
-	results      map[string]executor.Result
-	errs         map[string]error
+func TestShouldUseFixedAlterCopySnapshot(t *testing.T) {
+	require.True(t, isExplicitAlterTxn(true, true))
+	require.True(t, isExplicitAlterTxn(false, false))
+	require.False(t, isExplicitAlterTxn(false, true))
+
+	require.True(t, shouldUseFixedAlterCopySnapshot(true, false))
+	require.False(t, shouldUseFixedAlterCopySnapshot(true, true))
+	require.False(t, shouldUseFixedAlterCopySnapshot(false, false))
+	require.False(t, shouldUseFixedAlterCopySnapshot(false, true))
+}
+
+func TestAlterCopySQLAtLineageSnapshot(t *testing.T) {
+	const sql = "insert into copy select * from source"
+	require.Equal(t, sql, alterCopySQLAtLineageSnapshot(sql, alterDataBranchLineagePlan{}))
+	require.Equal(t, sql, alterCopySQLAtLineageSnapshot(sql, alterDataBranchLineagePlan{
+		enabled: true,
+		cloneTS: 123,
+	}))
+	require.Equal(t, sql+" {MO_TS = 123}", alterCopySQLAtLineageSnapshot(sql, alterDataBranchLineagePlan{
+		enabled:     true,
+		fixedCopyTS: true,
+		cloneTS:     123,
+	}))
+}
+
+func TestAlterCopySameStatementColumnReplacement(t *testing.T) {
+	tableDef := &plan2.TableDef{Cols: []*plan2.ColDef{
+		{Name: "a", ColId: 1, Seqnum: 0},
+		{Name: "b", ColId: 2, Seqnum: 1},
+	}}
+	replacement := &plan2.AlterTable{
+		TableDef: tableDef,
+		ChangeTblColIdMap: map[uint64]*plan2.ColDef{
+			1: {Name: "a"},
+		},
+		CopyTableDef: &plan2.TableDef{Cols: []*plan2.ColDef{
+			{Name: "a", ColId: 1, Seqnum: 0},
+			{Name: "B", ColId: ^uint64(0), Seqnum: 0},
+		}},
+	}
+	name, ok := alterCopySameStatementColumnReplacement(replacement)
+	require.True(t, ok)
+	require.Equal(t, "B", name)
+
+	t.Run("same identity survives rename and reorder", func(t *testing.T) {
+		unchanged := &plan2.AlterTable{
+			TableDef: tableDef,
+			ChangeTblColIdMap: map[uint64]*plan2.ColDef{
+				1: {Name: "a"},
+				2: {Name: "B"},
+			},
+			CopyTableDef: &plan2.TableDef{Cols: []*plan2.ColDef{
+				{Name: "B", ColId: 2, Seqnum: 1},
+				{Name: "a", ColId: 1, Seqnum: 0},
+			}},
+		}
+		_, replaced := alterCopySameStatementColumnReplacement(unchanged)
+		require.False(t, replaced)
+	})
+
+	t.Run("different-name drop and add is rejected", func(t *testing.T) {
+		dropped := &plan2.AlterTable{
+			TableDef: tableDef,
+			ChangeTblColIdMap: map[uint64]*plan2.ColDef{
+				1: {Name: "a"},
+			},
+			CopyTableDef: &plan2.TableDef{Cols: []*plan2.ColDef{
+				{Name: "a", ColId: 1, Seqnum: 0},
+				{Name: "c", ColId: ^uint64(0), Seqnum: 0},
+			}},
+		}
+		name, replaced := alterCopySameStatementColumnReplacement(dropped)
+		require.True(t, replaced)
+		require.Equal(t, "c", name)
+	})
+
+	t.Run("target-only add without a drop remains supported", func(t *testing.T) {
+		added := &plan2.AlterTable{
+			TableDef: tableDef,
+			ChangeTblColIdMap: map[uint64]*plan2.ColDef{
+				1: {Name: "a"},
+				2: {Name: "b"},
+			},
+			CopyTableDef: &plan2.TableDef{Cols: []*plan2.ColDef{
+				{Name: "a", ColId: 1, Seqnum: 0},
+				{Name: "b", ColId: 2, Seqnum: 1},
+				{Name: "c", ColId: ^uint64(0), Seqnum: 0},
+			}},
+		}
+		_, replaced := alterCopySameStatementColumnReplacement(added)
+		require.False(t, replaced)
+	})
+
+	t.Run("drop without an add remains supported", func(t *testing.T) {
+		dropped := &plan2.AlterTable{
+			TableDef: tableDef,
+			ChangeTblColIdMap: map[uint64]*plan2.ColDef{
+				1: {Name: "a"},
+			},
+			CopyTableDef: &plan2.TableDef{Cols: []*plan2.ColDef{
+				{Name: "a", ColId: 1, Seqnum: 0},
+			}},
+		}
+		_, replaced := alterCopySameStatementColumnReplacement(dropped)
+		require.False(t, replaced)
+	})
+}
+
+func TestBuildAlterDataBranchLineageSQL(t *testing.T) {
+	metadataSQL, snapshotSQL := buildAlterDataBranchLineageSQL(
+		11, 22, 123456, 7,
+		"alter:table", "tenant'o", "db'x", "tbl'y", "snapshot-id",
+	)
+
+	require.Equal(t,
+		"insert into mo_catalog.mo_branch_metadata values(22, 123456, 11, 7, 'alter:table', false)",
+		metadataSQL,
+	)
+	require.Contains(t, snapshotSQL, "insert into mo_catalog.mo_snapshots")
+	require.Contains(t, snapshotSQL, "'snapshot-id', '__mo_branch_22', 123456")
+	require.Contains(t, snapshotSQL, "'tenant''o', 'db''x', 'tbl''y', 11, 'branch'")
+}
+
+func TestAlterDataBranchHistoricalSourceSQL(t *testing.T) {
+	for _, sql := range []string{
+		alterDataBranchHistoricalSnapshotSourceSQL("tenant'o", "db'x", "tbl'y", 42),
+		alterDataBranchHistoricalPitrSourceSQL("tenant'o", "db'x", "tbl'y", 42),
+	} {
+		require.Contains(t, sql, "account_name = 'tenant''o'")
+		require.Contains(t, sql, "database_name = 'db''x'")
+		require.Contains(t, sql, "table_name = 'tbl''y'")
+		require.Contains(t, sql, "obj_id = 42")
+		require.Contains(t, sql, "limit 1 for update")
+	}
+}
+
+func TestAlterTableHasLatestHistoricalBranchSourceUsesFreshUnlockedProbe(t *testing.T) {
+	const (
+		oldTableID = uint64(42)
+		database   = "test"
+		table      = "dept"
+	)
+	ctrl := gomock.NewController(t)
+	spyExec := &alterCopyInsertSpyExecutor{results: make(map[string]executor.Result)}
+	c := newAlterCopyPrecheckCompile(t, ctrl, spyExec)
+	snapshotSQL := alterDataBranchHistoricalSnapshotSourceProbeSQL(
+		"", database, table, oldTableID, false,
+	)
+	spyExec.results[snapshotSQL] = newAlterCopyFixedResult(
+		t, c.proc.Mp(), types.T_int32.ToType(), []int32{1},
+	)
+
+	hasHistory, err := c.alterTableHasLatestHistoricalBranchSource(oldTableID, database, table)
+	require.NoError(t, err)
+	require.True(t, hasHistory)
+	require.NotContains(t, snapshotSQL, "for update")
+	require.Equal(t, []string{snapshotSQL}, spyExec.executedSQLs)
+}
+
+func TestAlterDataBranchLineageMetadata(t *testing.T) {
+	dag := databranchutils.NewBranchReclaimDag([]databranchutils.DataBranchMetadata{
+		{TableID: 2, PTableID: 1, Creator: 9, Level: "table", TableDeleted: false},
+	})
+
+	creator, level := alterDataBranchLineageMetadata(dag, 2)
+	require.Equal(t, uint32(9), creator)
+	require.Equal(t, "alter:table", level)
+
+	creator, level = alterDataBranchLineageMetadata(dag, 1)
+	require.Equal(t, uint32(catalog.System_Account), creator)
+	require.Equal(t, "alter", level)
+}
+
+func TestValidateAlterDataBranchLineageTxn(t *testing.T) {
+	require.NoError(t, validateAlterDataBranchLineageTxn(false, true, true))
+	require.NoError(t, validateAlterDataBranchLineageTxn(false, true, false))
+
+	for _, tc := range []struct {
+		name        string
+		byBegin     bool
+		autocommit  bool
+		pessimistic bool
+		want        string
+	}{
+		{
+			name:        "explicit begin",
+			byBegin:     true,
+			autocommit:  true,
+			pessimistic: true,
+			want:        "not supported inside an explicit transaction",
+		},
+		{
+			name:        "autocommit disabled",
+			autocommit:  false,
+			pessimistic: true,
+			want:        "not supported inside an explicit transaction",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := validateAlterDataBranchLineageTxn(tc.byBegin, tc.autocommit, tc.pessimistic)
+			require.Error(t, err)
+			require.Contains(t, err.Error(), tc.want)
+		})
+	}
+}
+
+func TestPrepareAlterDataBranchLineageAllowsHistoricalSourceTxn(t *testing.T) {
+	const (
+		oldTableID = uint64(42)
+		database   = "test"
+		table      = "dept"
+	)
+	participationSQL := alterDataBranchParticipationSQL(oldTableID)
+	snapshotSQL := alterDataBranchHistoricalSnapshotSourceSQL("", database, table, oldTableID)
+	pitrSQL := alterDataBranchHistoricalPitrSourceSQL("", database, table, oldTableID)
+
+	for _, tc := range []struct {
+		name     string
+		history  string
+		wantSQLs []string
+	}{
+		{
+			name:     "snapshot",
+			history:  snapshotSQL,
+			wantSQLs: []string{participationSQL, snapshotSQL},
+		},
+		{
+			name:     "pitr",
+			history:  pitrSQL,
+			wantSQLs: []string{participationSQL, snapshotSQL, pitrSQL},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			spyExec := &alterCopyInsertSpyExecutor{results: make(map[string]executor.Result)}
+			c := newAlterCopyPrecheckCompile(t, ctrl, spyExec)
+			spyExec.results[tc.history] = newAlterCopyFixedResult(
+				t, c.proc.Mp(), types.T_int32.ToType(), []int32{1},
+			)
+
+			lineagePlan, err := c.prepareAlterDataBranchLineage(oldTableID, database, table)
+			require.NoError(t, err)
+			require.True(t, lineagePlan.enabled)
+			require.True(t, lineagePlan.preserveHistoricalSource)
+			require.Equal(t, tc.wantSQLs, spyExec.executedSQLs)
+		})
+	}
+}
+
+func TestPrepareAlterDataBranchLineageAllowsHistoricalOnlyGenerationInExplicitTxn(t *testing.T) {
+	const (
+		oldTableID    = uint64(42)
+		parentTableID = uint64(41)
+		database      = "test"
+		table         = "dept"
+		cloneTS       = int64(100)
+	)
+	ctrl := gomock.NewController(t)
+	spyExec := &alterCopyInsertSpyExecutor{
+		results:         make(map[string]executor.Result),
+		resultSequences: make(map[string][]executor.Result),
+	}
+	c := newAlterCopyPrecheckCompile(t, ctrl, spyExec)
+	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+	txnOp.EXPECT().TxnOptions().Return(txn.TxnOptions{ByBegin: true, Autocommit: true}).AnyTimes()
+	txnOp.EXPECT().Txn().Return(txn.TxnMeta{}).AnyTimes()
+	txnOp.EXPECT().SnapshotTS().Return(timestamp.Timestamp{PhysicalTime: cloneTS + 1}).AnyTimes()
+	c.proc.Base.TxnOperator = txnOp
+
+	participationSQL := alterDataBranchParticipationSQL(oldTableID)
+	metadataSQL := "select table_id, p_table_id, clone_ts, creator, level, table_deleted from mo_catalog.mo_branch_metadata"
+	lockedMetadataSQL := metadataSQL + " for update"
+	edgeSQL := alterDataBranchLineageEdgeSQL()
+	snapshotSourceSQL := alterDataBranchSnapshotSourceSQL()
+	pitrSourceSQL := alterDataBranchPitrSourceSQL()
+	spyExec.results[participationSQL] = newAlterCopyFixedResult(
+		t, c.proc.Mp(), types.T_int32.ToType(), []int32{1},
+	)
+	newMetadataResult := func() executor.Result {
+		return newAlterLineageMetadataResult(
+			t, c.proc.Mp(), []uint64{oldTableID}, []uint64{parentTableID}, []int64{cloneTS},
+			[]uint64{uint64(catalog.System_Account)}, []string{databranchutils.AlterLineageLevel}, []bool{false},
+		)
+	}
+	spyExec.resultSequences[metadataSQL] = []executor.Result{newMetadataResult(), newMetadataResult()}
+	spyExec.results[lockedMetadataSQL] = newMetadataResult()
+	spyExec.results[edgeSQL] = newAlterLineageEdgeResult(
+		t, c.proc.Mp(), []string{databranchutils.BranchSnapshotName(oldTableID)}, []int64{cloneTS},
+		[]string{""}, []string{database}, []string{table}, []uint64{parentTableID},
+	)
+	spyExec.results[snapshotSourceSQL] = newAlterLineageSnapshotSourceResult(
+		t, c.proc.Mp(), []int64{cloneTS - 1}, []string{"table"}, []string{""},
+		[]string{database}, []string{table}, []uint64{parentTableID},
+	)
+	spyExec.results[pitrSourceSQL] = newAlterLineagePitrSourceResult(
+		t, c.proc.Mp(), nil, nil, nil, nil, nil, nil, nil,
+	)
+
+	lineagePlan, err := c.prepareAlterDataBranchLineage(oldTableID, database, table)
+	require.NoError(t, err)
+	require.True(t, lineagePlan.enabled)
+	require.False(t, lineagePlan.preserveHistoricalSource)
+	require.Equal(t, []string{
+		participationSQL,
+		metadataSQL,
+		lockedMetadataSQL,
+		edgeSQL,
+		snapshotSourceSQL,
+		pitrSourceSQL,
+		metadataSQL,
+	}, spyExec.executedSQLs)
+}
+
+func TestShouldAdvanceAlterDataBranchLineageSnapshot(t *testing.T) {
+	require.True(t, shouldAdvanceAlterDataBranchLineageSnapshot(true, true))
+	require.False(t, shouldAdvanceAlterDataBranchLineageSnapshot(true, false))
+	require.False(t, shouldAdvanceAlterDataBranchLineageSnapshot(false, true))
+	require.False(t, shouldAdvanceAlterDataBranchLineageSnapshot(false, false))
+}
+
+func TestAdvanceAlterDataBranchLineageSnapshotRejectsOverflow(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+	txnOp.EXPECT().SnapshotTS().Return(timestamp.Timestamp{
+		PhysicalTime: math.MaxInt64 - int64(time.Microsecond) + 1,
+	})
+
+	proc := testutil.NewProcess(t)
+	proc.Base.TxnOperator = txnOp
+	c := &Compile{proc: proc}
+	_, err := c.advanceAlterDataBranchLineageSnapshot()
+	require.ErrorContains(t, err, "timestamp limit")
+}
+
+func TestIsAlterAffectedPluginIndexMatchesIndexNamePartsAndIncludedColumns(t *testing.T) {
+	indexDef := &plan2.IndexDef{
+		IndexName:       "idx_vec",
+		Parts:           []string{"embedding"},
+		IncludedColumns: []string{"doc_id", catalog.CreateAlias("category")},
+	}
+
+	require.True(t, isAlterAffectedPluginIndex(indexDef, []string{"idx_vec"}))
+	require.True(t, isAlterAffectedPluginIndex(indexDef, []string{"embedding"}))
+	require.True(t, isAlterAffectedPluginIndex(indexDef, []string{"category"}))
+	require.False(t, isAlterAffectedPluginIndex(indexDef, []string{"other"}))
+	require.False(t, isAlterAffectedPluginIndex(indexDef, nil))
+	require.False(t, isAlterAffectedPluginIndex(nil, []string{"idx_vec"}))
+}
+
+func TestReplaceRefChildTableID(t *testing.T) {
+	t.Run("replace altered child and preserve siblings", func(t *testing.T) {
+		constraintDef := &engine.ConstraintDef{Cts: []engine.Constraint{
+			&engine.RefChildTableDef{Tables: []uint64{10, 20, 30}},
+		}}
+		replaceRefChildTableID(constraintDef, 20, 21)
+		require.Equal(t, []uint64{10, 21, 30}, canonicalRefChildTableIDs(constraintDef))
+	})
+
+	t.Run("do not invent a missing child reference", func(t *testing.T) {
+		constraintDef := &engine.ConstraintDef{Cts: []engine.Constraint{
+			&engine.RefChildTableDef{Tables: []uint64{10, 30}},
+		}}
+		replaceRefChildTableID(constraintDef, 20, 21)
+		require.Equal(t, []uint64{10, 30}, canonicalRefChildTableIDs(constraintDef))
+	})
+
+	t.Run("canonicalize duplicate definitions and table ids", func(t *testing.T) {
+		constraintDef := &engine.ConstraintDef{Cts: []engine.Constraint{
+			&engine.RefChildTableDef{Tables: []uint64{10, 20, 21}},
+			&engine.RefChildTableDef{Tables: []uint64{20, 30, 0}},
+			&engine.RefChildTableDef{Tables: []uint64{0}},
+		}}
+		replaceRefChildTableID(constraintDef, 20, 21)
+
+		require.Len(t, constraintDef.Cts, 1)
+		require.Equal(
+			t,
+			[]uint64{10, 21, 30, 0},
+			constraintDef.Cts[0].(*engine.RefChildTableDef).Tables,
+		)
+	})
+
+	t.Run("keep an empty reference list empty", func(t *testing.T) {
+		constraintDef := &engine.ConstraintDef{}
+		replaceRefChildTableID(constraintDef, 20, 21)
+		require.Len(t, constraintDef.Cts, 1)
+		require.Empty(t, canonicalRefChildTableIDs(constraintDef))
+	})
+}
+
+func TestTruncateRefChildTableIDReplacementCanonicalizesLegacyState(t *testing.T) {
+	constraintDef := &engine.ConstraintDef{Cts: []engine.Constraint{
+		&engine.RefChildTableDef{Tables: []uint64{0, 10, 20}},
+		&engine.RefChildTableDef{Tables: []uint64{10, 20, 30}},
+		&engine.RefChildTableDef{Tables: []uint64{0}},
+	}}
+
+	replaceRefChildTableID(constraintDef, 20, 21)
+
+	require.Len(t, constraintDef.Cts, 1)
+	require.Equal(
+		t,
+		[]uint64{0, 10, 21, 30},
+		constraintDef.Cts[0].(*engine.RefChildTableDef).Tables,
+	)
+}
+
+func TestCanonicalRefChildTableIDMutations(t *testing.T) {
+	t.Run("add merges definitions and deduplicates sentinel", func(t *testing.T) {
+		constraintDef := &engine.ConstraintDef{Cts: []engine.Constraint{
+			&engine.RefChildTableDef{Tables: []uint64{0, 10}},
+			&engine.RefChildTableDef{Tables: []uint64{10, 20}},
+		}}
+
+		addRefChildTableIDs(constraintDef, []uint64{0, 20, 30})
+
+		require.Len(t, constraintDef.Cts, 1)
+		require.Equal(
+			t,
+			[]uint64{0, 10, 20, 30},
+			constraintDef.Cts[0].(*engine.RefChildTableDef).Tables,
+		)
+	})
+
+	t.Run("remove deletes every duplicate and keeps other ids", func(t *testing.T) {
+		constraintDef := &engine.ConstraintDef{Cts: []engine.Constraint{
+			&engine.RefChildTableDef{Tables: []uint64{0, 10, 20}},
+			&engine.RefChildTableDef{Tables: []uint64{10, 30}},
+		}}
+
+		removeRefChildTableID(constraintDef, 10)
+
+		require.Len(t, constraintDef.Cts, 1)
+		require.Equal(
+			t,
+			[]uint64{0, 20, 30},
+			constraintDef.Cts[0].(*engine.RefChildTableDef).Tables,
+		)
+	})
+}
+
+func TestRewriteForeignKeyReferencesForAlterCopy(t *testing.T) {
+	constraintDef := &engine.ConstraintDef{Cts: []engine.Constraint{
+		&engine.ForeignKeyDef{Fkeys: []*plan2.ForeignKeyDef{
+			{ForeignTbl: 10, ForeignCols: []uint64{1, 2}},
+			{ForeignTbl: 10, ForeignCols: []uint64{3}},
+			{ForeignTbl: 20, ForeignCols: []uint64{1}},
+		}},
+	}}
+
+	changed, err := rewriteForeignKeyReferencesForAlterCopy(
+		context.Background(),
+		constraintDef,
+		map[uint64]*plan2.ColDef{1: {ColId: 101}, 3: {ColId: 103}},
+		10,
+		11,
+	)
+	require.NoError(t, err)
+	require.True(t, changed)
+
+	fkeys := constraintDef.Cts[0].(*engine.ForeignKeyDef).Fkeys
+	require.Equal(t, uint64(11), fkeys[0].ForeignTbl)
+	require.Equal(t, []uint64{101, 2}, fkeys[0].ForeignCols)
+	require.Equal(t, uint64(11), fkeys[1].ForeignTbl)
+	require.Equal(t, []uint64{103}, fkeys[1].ForeignCols)
+	require.Equal(t, uint64(20), fkeys[2].ForeignTbl)
+	require.Equal(t, []uint64{1}, fkeys[2].ForeignCols)
+
+	changed, err = rewriteForeignKeyReferencesForAlterCopy(context.Background(), constraintDef, nil, 10, 11)
+	require.NoError(t, err)
+	require.False(t, changed)
+
+	_, err = rewriteForeignKeyReferencesForAlterCopy(context.Background(), &engine.ConstraintDef{Cts: []engine.Constraint{
+		&engine.ForeignKeyDef{Fkeys: []*plan2.ForeignKeyDef{nil}},
+	}}, nil, 10, 11)
+	require.ErrorContains(t, err, "nil foreign key definition")
+}
+
+func TestReconcileRefChildTableIDForAlterCopy(t *testing.T) {
+	t.Run("replace child in existing reverse reference", func(t *testing.T) {
+		constraintDef := &engine.ConstraintDef{Cts: []engine.Constraint{
+			&engine.RefChildTableDef{Tables: []uint64{10, 20, 30}},
+		}}
+		reconcileRefChildTableID(constraintDef, 20, 21)
+
+		require.Equal(t, []uint64{10, 21, 30}, canonicalRefChildTableIDs(constraintDef))
+	})
+
+	t.Run("restore reverse reference removed while dropping old child", func(t *testing.T) {
+		constraintDef := &engine.ConstraintDef{}
+		reconcileRefChildTableID(constraintDef, 20, 21)
+
+		require.Equal(t, []uint64{21}, canonicalRefChildTableIDs(constraintDef))
+	})
+}
+
+func TestReconcileAlterCopyForeignKeyReferencesOncePerRelation(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	proc := testutil.NewProcess(t)
+
+	childUpdated := mock_frontend.NewMockRelation(ctrl)
+	childUnchanged := mock_frontend.NewMockRelation(ctrl)
+	parentOne := mock_frontend.NewMockRelation(ctrl)
+	parentTwo := mock_frontend.NewMockRelation(ctrl)
+
+	childUpdatedConstraint := &engine.ConstraintDef{Cts: []engine.Constraint{
+		&engine.ForeignKeyDef{Fkeys: []*plan2.ForeignKeyDef{{ForeignTbl: 1}}},
+	}}
+	childUnchangedConstraint := &engine.ConstraintDef{Cts: []engine.Constraint{
+		&engine.ForeignKeyDef{Fkeys: []*plan2.ForeignKeyDef{{ForeignTbl: 99}}},
+	}}
+	parentOneConstraint := &engine.ConstraintDef{Cts: []engine.Constraint{
+		&engine.RefChildTableDef{Tables: []uint64{1}},
+	}}
+	parentTwoConstraint := &engine.ConstraintDef{Cts: []engine.Constraint{
+		&engine.RefChildTableDef{Tables: []uint64{1}},
+	}}
+
+	childUpdated.EXPECT().UpdateConstraint(gomock.Any(), childUpdatedConstraint).Return(nil).Times(1)
+	parentOne.EXPECT().UpdateConstraint(gomock.Any(), parentOneConstraint).Return(nil).Times(1)
+	parentTwo.EXPECT().UpdateConstraint(gomock.Any(), parentTwoConstraint).Return(nil).Times(1)
+
+	eng := mock_frontend.NewMockEngine(ctrl)
+	eng.EXPECT().GetRelationById(gomock.Any(), gomock.Any(), uint64(10)).Return("", "", childUpdated, nil).Times(1)
+	eng.EXPECT().GetRelationById(gomock.Any(), gomock.Any(), uint64(20)).Return("", "", childUnchanged, nil).Times(1)
+	eng.EXPECT().GetRelationById(gomock.Any(), gomock.Any(), uint64(30)).Return("", "", parentOne, nil).Times(1)
+	eng.EXPECT().GetRelationById(gomock.Any(), gomock.Any(), uint64(40)).Return("", "", parentTwo, nil).Times(1)
+
+	getConstraintDef := gostub.Stub(&GetConstraintDef, func(_ context.Context, rel engine.Relation) (*engine.ConstraintDef, error) {
+		switch rel {
+		case childUpdated:
+			return childUpdatedConstraint, nil
+		case childUnchanged:
+			return childUnchangedConstraint, nil
+		case parentOne:
+			return parentOneConstraint, nil
+		case parentTwo:
+			return parentTwoConstraint, nil
+		default:
+			t.Fatalf("unexpected relation passed to GetConstraintDef")
+			return nil, nil
+		}
+	})
+	defer getConstraintDef.Reset()
+
+	c := NewCompile("test", "test", "alter table child", "", "", eng, proc, nil, false, nil, time.Now())
+	require.NoError(t, reconcileAlterCopyChildForeignKeyReferences(c, nil, []uint64{10, 10, 0, 20}, 1, 2))
+	require.NoError(t, reconcileAlterCopyParentForeignKeyReferences(c, []*plan2.ForeignKeyDef{
+		{ForeignTbl: 30},
+		{ForeignTbl: 30},
+		{ForeignTbl: 0},
+		{ForeignTbl: 40},
+	}, 1, 2))
+
+	require.Equal(t, uint64(2), childUpdatedConstraint.Cts[0].(*engine.ForeignKeyDef).Fkeys[0].ForeignTbl)
+	require.Equal(t, uint64(99), childUnchangedConstraint.Cts[0].(*engine.ForeignKeyDef).Fkeys[0].ForeignTbl)
+	require.Equal(t, []uint64{2}, canonicalRefChildTableIDs(parentOneConstraint))
+	require.Equal(t, []uint64{2}, canonicalRefChildTableIDs(parentTwoConstraint))
+	require.ErrorContains(t, reconcileAlterCopyParentForeignKeyReferences(c, []*plan2.ForeignKeyDef{nil}, 1, 2), "nil foreign key definition")
+}
+
+func TestAlterCopyAutoIncrementCleanupDiscardsTrackedReset(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	proc := testutil.NewProcess(t)
+	proc.Ctx = context.Background()
+	_, txnOp := newTestTxnClientAndOp(ctrl)
+	proc.Base.TxnOperator = txnOp
+
+	cleanupErr := errors.New("discard failed")
+	autoSvc := mock_frontend.NewMockAutoIncrementService(ctrl)
+	autoSvc.EXPECT().DiscardOffsetReset(gomock.Any(), uint64(11), txnOp).Return(cleanupErr)
+	autoSvc.EXPECT().DiscardOffsetReset(gomock.Any(), uint64(12), txnOp).Return(nil)
+	incrservice.SetAutoIncrementServiceByID(proc.GetService(), autoSvc)
+
+	cleanup := newAlterAutoIncrementResetCleanup(&Compile{proc: proc})
+	cleanup.track(11)
+	cleanup.track(11)
+	cleanup.track(12)
+	originalErr := errors.New("statement failed")
+	statementErr := originalErr
+	cleanup.finish(&statementErr)
+
+	require.ErrorIs(t, statementErr, originalErr)
+	require.ErrorIs(t, statementErr, cleanupErr)
+}
+
+type partitionAlterTestExecutor struct {
 	executedSQLs []string
+	failAt       int
+	failErr      error
+	cancel       context.CancelFunc
+}
+
+func (e *partitionAlterTestExecutor) Exec(
+	ctx context.Context,
+	sql string,
+	opts executor.Options,
+) (executor.Result, error) {
+	index := len(e.executedSQLs)
+	e.executedSQLs = append(e.executedSQLs, sql)
+	if index > 0 {
+		if err := ctx.Err(); err != nil {
+			return executor.Result{}, err
+		}
+	}
+	if index == e.failAt && e.failErr != nil {
+		return executor.Result{}, e.failErr
+	}
+	if index == 0 && e.cancel != nil {
+		e.cancel()
+	}
+	return executor.Result{}, nil
+}
+
+func (e *partitionAlterTestExecutor) ExecTxn(
+	ctx context.Context,
+	execFunc func(executor.TxnExecutor) error,
+	opts executor.Options,
+) error {
+	return execFunc(executor.NewMemTxnExecutor(func(sql string) (executor.Result, error) {
+		return e.Exec(ctx, sql, opts)
+	}, opts.Txn()))
+}
+
+func TestAlterPartitionTablesKeepsAutoIncrementCleanupAtStatementBoundary(t *testing.T) {
+	partitionFailure := errors.New("partition alter failed")
+	for _, tc := range []struct {
+		name      string
+		configure func(context.CancelFunc) *partitionAlterTestExecutor
+		wantErr   error
+	}{
+		{
+			name: "later partition fails",
+			configure: func(context.CancelFunc) *partitionAlterTestExecutor {
+				return &partitionAlterTestExecutor{failAt: 1, failErr: partitionFailure}
+			},
+			wantErr: partitionFailure,
+		},
+		{
+			name: "cancel after earlier partition succeeds",
+			configure: func(cancel context.CancelFunc) *partitionAlterTestExecutor {
+				return &partitionAlterTestExecutor{failAt: -1, cancel: cancel}
+			},
+			wantErr: context.Canceled,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			baseCtx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			exec := tc.configure(cancel)
+			c := newAlterCopyPrecheckCompile(t, ctrl, exec)
+			c.proc.Ctx = defines.AttachAccountId(baseCtx, catalog.System_Account)
+			c.proc.ReplaceTopCtx(c.proc.Ctx)
+
+			autoSvc := mock_frontend.NewMockAutoIncrementService(ctrl)
+			gomock.InOrder(
+				autoSvc.EXPECT().DiscardOffsetReset(gomock.Any(), uint64(10), c.proc.GetTxnOperator()).Return(nil),
+				autoSvc.EXPECT().DiscardOffsetReset(gomock.Any(), uint64(11), c.proc.GetTxnOperator()).Return(nil),
+			)
+			incrservice.SetAutoIncrementServiceByID(c.proc.GetService(), autoSvc)
+
+			st, err := parsers.ParseOne(
+				c.proc.Ctx,
+				dialect.MYSQL,
+				"alter table test.t auto_increment = 100",
+				1,
+			)
+			require.NoError(t, err)
+			cleanup := newAlterAutoIncrementResetCleanup(c)
+			cleanup.track(10)
+			statementErr := c.alterPartitionTables(
+				st.(*tree.AlterTable),
+				[]partition.Partition{
+					{PartitionID: 11, PartitionTableName: "t_p0"},
+					{PartitionID: 12, PartitionTableName: "t_p1"},
+				},
+				true,
+				cleanup,
+			)
+			require.ErrorIs(t, statementErr, tc.wantErr)
+			cleanup.finish(&statementErr)
+			require.ErrorIs(t, statementErr, tc.wantErr)
+			require.Len(t, exec.executedSQLs, 2)
+			require.Contains(t, exec.executedSQLs[0], "`t_p0`")
+			require.Contains(t, exec.executedSQLs[1], "`t_p1`")
+		})
+	}
+}
+
+type alterCopyInsertSpyExecutor struct {
+	insertSQL       string
+	insertErr       error
+	insertCtx       context.Context
+	insertOption    executor.StatementOption
+	results         map[string]executor.Result
+	resultSequences map[string][]executor.Result
+	errs            map[string]error
+	executedSQLs    []string
+}
+
+type alterCopyAutoIncrEpochWorkspace struct {
+	client.Workspace
+	supported bool
+}
+
+func (w alterCopyAutoIncrEpochWorkspace) SupportsAutoIncrEpochFence() bool {
+	return w.supported
+}
+
+func TestReconcileAlterCopyAutoIncrementUsesStableIdentityAndSafeBounds(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	resultMP := mpool.MustNewZero()
+	sourceOffsetSQL := "select col_index, offset from mo_catalog.mo_increment_columns where table_id = 1"
+	renamedMaxSQL := "select cast(coalesce(max(case when `renamed_id` > 0 then `renamed_id` else 0 end), 0) as unsigned) from `test`.`dept_copy`"
+	reusedMaxSQL := "select cast(coalesce(max(case when `id` > 0 then `id` else 0 end), 0) as unsigned) from `test`.`dept_copy`"
+	spyExec := &alterCopyInsertSpyExecutor{results: map[string]executor.Result{
+		sourceOffsetSQL: newTableCloneOffsetResult(t, resultMP, 0, 500),
+		renamedMaxSQL:   newAlterCopyFixedResult(t, resultMP, types.T_uint64.ToType(), []uint64{40}),
+		reusedMaxSQL:    newAlterCopyFixedResult(t, resultMP, types.T_uint64.ToType(), []uint64{0}),
+	}}
+	c := newAlterCopyPrecheckCompile(t, ctrl, spyExec)
+
+	autoType := plan.Type{Id: int32(types.T_uint64), AutoIncr: true}
+	srcDef := &plan.TableDef{
+		TblId: 1,
+		Cols: []*plan.ColDef{
+			{ColId: 10, Name: "id", Typ: autoType},
+			{ColId: 11, Name: "payload", Typ: plan.Type{Id: int32(types.T_int64)}},
+		},
+	}
+	copyDef := &plan.TableDef{
+		TblId:          2,
+		Name:           "dept_copy",
+		AutoIncrOffset: 99,
+		Cols: []*plan.ColDef{
+			{ColId: 12, Name: "id", Typ: autoType},
+			{ColId: 10, Name: "renamed_id", Typ: autoType},
+			{ColId: 11, Name: "payload", Typ: plan.Type{Id: int32(types.T_int64)}},
+		},
+	}
+	copyRel := mock_frontend.NewMockRelation(ctrl)
+	copyRel.EXPECT().GetTableDef(gomock.Any()).Return(copyDef)
+	copyRel.EXPECT().GetTableID(gomock.Any()).Return(copyDef.TblId).AnyTimes()
+	copyRel.EXPECT().GetDBID(gomock.Any()).Return(uint64(1))
+	copyRel.EXPECT().AlterTable(gomock.Any(), nil, gomock.Any()).DoAndReturn(
+		func(_ context.Context, _ *engine.ConstraintDef, reqs []*api.AlterTableReq) error {
+			require.Len(t, reqs, 2)
+			require.Equal(t, api.NewUpdateAutoIncrementReq(1, copyDef.TblId, 99, 0), reqs[0])
+			require.Equal(t, api.NewUpdateAutoIncrementReq(1, copyDef.TblId, 500, 0), reqs[1])
+			return nil
+		},
+	)
+	autoSvc := mock_frontend.NewMockAutoIncrementService(ctrl)
+	gomock.InOrder(
+		autoSvc.EXPECT().SetOffset(c.proc.Ctx, copyDef.TblId, 0, "id", uint64(99), c.proc.GetTxnOperator()),
+		autoSvc.EXPECT().SetOffset(c.proc.Ctx, copyDef.TblId, 1, "renamed_id", uint64(500), c.proc.GetTxnOperator()),
+		autoSvc.EXPECT().DiscardOffsetReset(gomock.Any(), copyDef.TblId, c.proc.GetTxnOperator()).Return(nil),
+	)
+	incrservice.SetAutoIncrementServiceByID(c.proc.GetService(), autoSvc)
+
+	cleanup := newAlterAutoIncrementResetCleanup(c)
+	require.NoError(t, c.reconcileAlterCopyAutoIncrement(
+		"test", srcDef, copyDef, copyRel, false, cleanup,
+	))
+	require.Equal(t, []string{sourceOffsetSQL, reusedMaxSQL, renamedMaxSQL}, spyExec.executedSQLs)
+	require.Zero(t, resultMP.CurrNB(), "all internal SQL results must be closed")
+	laterErr := errors.New("later ALTER COPY step failed")
+	cleanup.finish(&laterErr)
+	require.ErrorContains(t, laterErr, "later ALTER COPY step failed")
+}
+
+func TestReconcileAlterCopyAutoIncrementPreservesFreshColumnInitialization(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	resultMP := mpool.MustNewZero()
+	maxSQL := "select cast(coalesce(max(case when `new_id` > 0 then `new_id` else 0 end), 0) as unsigned) from `test`.`dept_copy`"
+	spyExec := &alterCopyInsertSpyExecutor{results: map[string]executor.Result{
+		maxSQL: newAlterCopyFixedResult(t, resultMP, types.T_uint64.ToType(), []uint64{0}),
+	}}
+	c := newAlterCopyPrecheckCompile(t, ctrl, spyExec)
+	c.proc.SetResolveVariableFunc(func(name string, isSystemVar, isGlobalVar bool) (interface{}, error) {
+		switch name {
+		case "auto_increment_offset":
+			require.True(t, isSystemVar)
+			require.False(t, isGlobalVar)
+			return int64(10), nil
+		case "lower_case_table_names":
+			return int64(1), nil
+		default:
+			return nil, fmt.Errorf("unexpected variable %q", name)
+		}
+	})
+	srcDef := &plan.TableDef{
+		TblId: 1,
+		Cols: []*plan.ColDef{{
+			ColId: 10, Name: "payload", Typ: plan.Type{Id: int32(types.T_int64)},
+		}},
+	}
+	copyDef := &plan.TableDef{
+		TblId: 2,
+		Name:  "dept_copy",
+		Cols: []*plan.ColDef{
+			{ColId: 10, Name: "payload", Typ: plan.Type{Id: int32(types.T_int64)}},
+			{ColId: 11, Name: catalog.Row_ID, Hidden: true, Typ: plan.Type{Id: int32(types.T_Rowid)}},
+			{ColId: 12, Name: catalog.FakePrimaryKeyColName, Hidden: true, Typ: plan.Type{Id: int32(types.T_uint64), AutoIncr: true}},
+			{ColId: 20, Name: "new_id", Typ: plan.Type{Id: int32(types.T_uint64), AutoIncr: true}},
+		},
+	}
+	createdDef := &plan.TableDef{
+		TblId: 2,
+		Name:  "dept_copy",
+		Cols: []*plan.ColDef{
+			{ColId: 30, Name: "payload", Typ: plan.Type{Id: int32(types.T_int64)}},
+			{ColId: 31, Name: "new_id", Typ: plan.Type{Id: int32(types.T_uint64), AutoIncr: true}},
+			{ColId: 32, Name: catalog.FakePrimaryKeyColName, Hidden: true, Typ: plan.Type{Id: int32(types.T_uint64), AutoIncr: true}},
+		},
+	}
+	copyRel := mock_frontend.NewMockRelation(ctrl)
+	copyRel.EXPECT().GetTableDef(gomock.Any()).Return(createdDef)
+	copyRel.EXPECT().GetTableID(gomock.Any()).Return(copyDef.TblId)
+	copyRel.EXPECT().GetDBID(gomock.Any()).Return(uint64(1))
+	copyRel.EXPECT().AlterTable(gomock.Any(), nil, gomock.Any()).DoAndReturn(
+		func(_ context.Context, _ *engine.ConstraintDef, reqs []*api.AlterTableReq) error {
+			require.Equal(t, []*api.AlterTableReq{
+				api.NewUpdateAutoIncrementReq(1, copyDef.TblId, 9, 0),
+			}, reqs)
+			return nil
+		},
+	)
+	autoSvc := mock_frontend.NewMockAutoIncrementService(ctrl)
+	autoSvc.EXPECT().SetOffset(
+		c.proc.Ctx, copyDef.TblId, 1, "new_id", uint64(9), c.proc.GetTxnOperator(),
+	)
+	incrservice.SetAutoIncrementServiceByID(c.proc.GetService(), autoSvc)
+
+	require.NoError(t, c.reconcileAlterCopyAutoIncrement(
+		"test", srcDef, copyDef, copyRel, false, newAlterAutoIncrementResetCleanup(c),
+	))
+	require.Equal(t, []string{maxSQL}, spyExec.executedSQLs)
+	require.Zero(t, resultMP.CurrNB())
+}
+
+func TestReconcileAlterCopyAutoIncrementAdvancesFreshColumnFromCopiedRows(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	resultMP := mpool.MustNewZero()
+	maxSQL := "select cast(coalesce(max(case when `new_id` > 0 then `new_id` else 0 end), 0) as unsigned) from `test`.`dept_copy`"
+	spyExec := &alterCopyInsertSpyExecutor{results: map[string]executor.Result{
+		maxSQL: newAlterCopyFixedResult(t, resultMP, types.T_uint64.ToType(), []uint64{7}),
+	}}
+	c := newAlterCopyPrecheckCompile(t, ctrl, spyExec)
+	srcDef := &plan.TableDef{
+		TblId: 1,
+		Cols: []*plan.ColDef{{
+			ColId: 10, Name: "payload", Typ: plan.Type{Id: int32(types.T_int64)},
+		}},
+	}
+	copyDef := &plan.TableDef{
+		TblId: 2,
+		Name:  "dept_copy",
+		Cols: []*plan.ColDef{
+			{ColId: 10, Name: "payload", Typ: plan.Type{Id: int32(types.T_int64)}},
+			{ColId: 20, Name: "new_id", Typ: plan.Type{Id: int32(types.T_uint64), AutoIncr: true}},
+		},
+	}
+	copyRel := mock_frontend.NewMockRelation(ctrl)
+	copyRel.EXPECT().GetTableDef(gomock.Any()).Return(copyDef)
+	copyRel.EXPECT().GetTableID(gomock.Any()).Return(copyDef.TblId)
+	copyRel.EXPECT().GetDBID(gomock.Any()).Return(uint64(1))
+	copyRel.EXPECT().AlterTable(gomock.Any(), nil, gomock.Any()).DoAndReturn(
+		func(_ context.Context, _ *engine.ConstraintDef, reqs []*api.AlterTableReq) error {
+			require.Equal(t, []*api.AlterTableReq{
+				api.NewUpdateAutoIncrementReq(1, copyDef.TblId, 7, 0),
+			}, reqs)
+			return nil
+		},
+	)
+	autoSvc := mock_frontend.NewMockAutoIncrementService(ctrl)
+	autoSvc.EXPECT().SetOffset(
+		c.proc.Ctx, copyDef.TblId, 1, "new_id", uint64(7), c.proc.GetTxnOperator(),
+	)
+	incrservice.SetAutoIncrementServiceByID(c.proc.GetService(), autoSvc)
+
+	require.NoError(t, c.reconcileAlterCopyAutoIncrement(
+		"test", srcDef, copyDef, copyRel, false, newAlterAutoIncrementResetCleanup(c),
+	))
+	require.Equal(t, []string{maxSQL}, spyExec.executedSQLs)
+	require.Zero(t, resultMP.CurrNB())
+}
+
+func TestReconcileAlterCopyAutoIncrementReappliesConfiguredFreshColumnAlongsideRetainedColumn(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	resultMP := mpool.MustNewZero()
+	sourceOffsetSQL := "select col_index, offset from mo_catalog.mo_increment_columns where table_id = 1"
+	retainedMaxSQL := "select cast(coalesce(max(case when `old_id` > 0 then `old_id` else 0 end), 0) as unsigned) from `test`.`dept_copy`"
+	freshMaxSQL := "select cast(coalesce(max(case when `new_id` > 0 then `new_id` else 0 end), 0) as unsigned) from `test`.`dept_copy`"
+	spyExec := &alterCopyInsertSpyExecutor{results: map[string]executor.Result{
+		sourceOffsetSQL: newTableCloneOffsetResult(t, resultMP, 0, 50),
+		retainedMaxSQL:  newAlterCopyFixedResult(t, resultMP, types.T_uint64.ToType(), []uint64{0}),
+		freshMaxSQL:     newAlterCopyFixedResult(t, resultMP, types.T_uint64.ToType(), []uint64{0}),
+	}}
+	c := newAlterCopyPrecheckCompile(t, ctrl, spyExec)
+	c.proc.SetResolveVariableFunc(func(name string, _, _ bool) (interface{}, error) {
+		switch name {
+		case "lower_case_table_names":
+			return int64(1), nil
+		case "auto_increment_offset":
+			return int64(10), nil
+		default:
+			return nil, fmt.Errorf("unexpected variable %q", name)
+		}
+	})
+	autoType := plan.Type{Id: int32(types.T_uint64), AutoIncr: true}
+	srcDef := &plan.TableDef{
+		TblId: 1,
+		Cols: []*plan.ColDef{{
+			ColId: 10, Name: "old_id", Typ: autoType,
+		}},
+	}
+	copyDef := &plan.TableDef{
+		TblId: 2,
+		Name:  "dept_copy",
+		Cols: []*plan.ColDef{
+			{ColId: 10, Name: "old_id", Typ: autoType},
+			{ColId: 20, Name: "new_id", Typ: autoType},
+		},
+	}
+	copyRel := mock_frontend.NewMockRelation(ctrl)
+	copyRel.EXPECT().GetTableDef(gomock.Any()).Return(copyDef)
+	copyRel.EXPECT().GetTableID(gomock.Any()).Return(copyDef.TblId)
+	copyRel.EXPECT().GetDBID(gomock.Any()).Return(uint64(1))
+	copyRel.EXPECT().AlterTable(gomock.Any(), nil, gomock.Any()).DoAndReturn(
+		func(_ context.Context, _ *engine.ConstraintDef, reqs []*api.AlterTableReq) error {
+			require.Equal(t, []*api.AlterTableReq{
+				api.NewUpdateAutoIncrementReq(1, copyDef.TblId, 50, 0),
+				api.NewUpdateAutoIncrementReq(1, copyDef.TblId, 9, 0),
+			}, reqs)
+			return nil
+		},
+	)
+	autoSvc := mock_frontend.NewMockAutoIncrementService(ctrl)
+	gomock.InOrder(
+		autoSvc.EXPECT().SetOffset(
+			c.proc.Ctx, copyDef.TblId, 0, "old_id", uint64(50), c.proc.GetTxnOperator(),
+		),
+		autoSvc.EXPECT().SetOffset(
+			c.proc.Ctx, copyDef.TblId, 1, "new_id", uint64(9), c.proc.GetTxnOperator(),
+		),
+	)
+	incrservice.SetAutoIncrementServiceByID(c.proc.GetService(), autoSvc)
+
+	require.NoError(t, c.reconcileAlterCopyAutoIncrement(
+		"test", srcDef, copyDef, copyRel, false, newAlterAutoIncrementResetCleanup(c),
+	))
+	require.Equal(
+		t,
+		[]string{sourceOffsetSQL, retainedMaxSQL, freshMaxSQL},
+		spyExec.executedSQLs,
+	)
+	require.Zero(t, resultMP.CurrNB())
+}
+
+func TestReconcileAlterCopyAutoIncrementExplicitResetIgnoresReservedSourceRange(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	resultMP := mpool.MustNewZero()
+	sourceOffsetSQL := "select col_index, offset from mo_catalog.mo_increment_columns where table_id = 1"
+	maxSQL := "select cast(coalesce(max(case when `id` > 0 then `id` else 0 end), 0) as unsigned) from `test`.`dept_copy`"
+	spyExec := &alterCopyInsertSpyExecutor{results: map[string]executor.Result{
+		maxSQL: newAlterCopyFixedResult(t, resultMP, types.T_uint64.ToType(), []uint64{500}),
+	}, errs: map[string]error{sourceOffsetSQL: errors.New("source offset must not be read")}}
+	c := newAlterCopyPrecheckCompile(t, ctrl, spyExec)
+	autoType := plan.Type{Id: int32(types.T_uint64), AutoIncr: true}
+	srcDef := &plan.TableDef{TblId: 1, Cols: []*plan.ColDef{{
+		ColId: 10, Name: "id", Typ: autoType,
+	}}}
+	copyDef := &plan.TableDef{
+		TblId: 2, Name: "dept_copy", AutoIncrOffset: 99,
+		Cols: []*plan.ColDef{{ColId: 10, Name: "id", Typ: autoType}},
+	}
+	copyRel := mock_frontend.NewMockRelation(ctrl)
+	copyRel.EXPECT().GetTableDef(gomock.Any()).Return(copyDef)
+	copyRel.EXPECT().GetTableID(gomock.Any()).Return(copyDef.TblId).AnyTimes()
+	copyRel.EXPECT().GetDBID(gomock.Any()).Return(uint64(1))
+	copyRel.EXPECT().AlterTable(gomock.Any(), nil, gomock.Any()).DoAndReturn(
+		func(_ context.Context, _ *engine.ConstraintDef, reqs []*api.AlterTableReq) error {
+			require.Equal(t, []*api.AlterTableReq{
+				api.NewUpdateAutoIncrementReq(1, copyDef.TblId, 500, 0),
+			}, reqs)
+			return nil
+		},
+	)
+	autoSvc := mock_frontend.NewMockAutoIncrementService(ctrl)
+	autoSvc.EXPECT().SetOffset(
+		c.proc.Ctx, copyDef.TblId, 0, "id", uint64(500), c.proc.GetTxnOperator(),
+	)
+	incrservice.SetAutoIncrementServiceByID(c.proc.GetService(), autoSvc)
+
+	require.NoError(t, c.reconcileAlterCopyAutoIncrement(
+		"test", srcDef, copyDef, copyRel, true, newAlterAutoIncrementResetCleanup(c),
+	))
+	require.Equal(t, []string{maxSQL}, spyExec.executedSQLs,
+		"an explicit epoch-fenced reset must not inherit the source allocator's reserved high-water mark")
+	require.Zero(t, resultMP.CurrNB())
+}
+
+func TestReconcileAlterCopyAutoIncrementAdvancesReplacementEpoch(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	resultMP := mpool.MustNewZero()
+	maxSQL := "select cast(coalesce(max(case when `id` > 0 then `id` else 0 end), 0) as unsigned) from `test`.`dept_copy`"
+	spyExec := &alterCopyInsertSpyExecutor{results: map[string]executor.Result{
+		maxSQL: newAlterCopyFixedResult(t, resultMP, types.T_uint64.ToType(), []uint64{40}),
+	}}
+	c := newAlterCopyPrecheckCompile(t, ctrl, spyExec)
+	autoType := plan.Type{Id: int32(types.T_uint64), AutoIncr: true}
+	copyDef := &plan.TableDef{
+		TblId: 2, Name: "dept_copy", AutoIncrOffset: 99,
+		Cols: []*plan.ColDef{{ColId: 10, Name: "id", Typ: autoType}},
+	}
+	copyRel := mock_frontend.NewMockRelation(ctrl)
+	copyRel.EXPECT().GetTableDef(gomock.Any()).Return(copyDef)
+	copyRel.EXPECT().GetTableID(gomock.Any()).Return(copyDef.TblId).AnyTimes()
+	copyRel.EXPECT().GetDBID(gomock.Any()).Return(uint64(1))
+	copyRel.EXPECT().AlterTable(gomock.Any(), nil, gomock.Any()).DoAndReturn(
+		func(_ context.Context, _ *engine.ConstraintDef, reqs []*api.AlterTableReq) error {
+			require.Equal(t, []*api.AlterTableReq{
+				api.NewUpdateAutoIncrementReq(1, copyDef.TblId, 99, 0),
+			}, reqs)
+			return nil
+		},
+	)
+	autoSvc := mock_frontend.NewMockAutoIncrementService(ctrl)
+	autoSvc.EXPECT().SetOffset(
+		c.proc.Ctx, copyDef.TblId, 0, "id", uint64(99), c.proc.GetTxnOperator(),
+	)
+	incrservice.SetAutoIncrementServiceByID(c.proc.GetService(), autoSvc)
+
+	require.NoError(t, c.reconcileAlterCopyAutoIncrement(
+		"test", &plan.TableDef{}, copyDef, copyRel, true, newAlterAutoIncrementResetCleanup(c),
+	))
+	require.Equal(t, []string{maxSQL}, spyExec.executedSQLs)
+	require.Zero(t, resultMP.CurrNB())
+}
+
+func TestReconcileAlterCopyAutoIncrementRejectsLegacyTN(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	spyExec := &alterCopyInsertSpyExecutor{}
+	c := newAlterCopyPrecheckCompile(
+		t,
+		ctrl,
+		spyExec,
+	)
+	legacyTxn := mock_frontend.NewMockTxnOperator(ctrl)
+	legacyTxn.EXPECT().GetWorkspace().Return(alterCopyAutoIncrEpochWorkspace{})
+	c.proc.Base.TxnOperator = legacyTxn
+	copyDef := &plan.TableDef{Cols: []*plan.ColDef{{
+		Name: "id",
+		Typ:  plan.Type{Id: int32(types.T_uint64), AutoIncr: true},
+	}}}
+
+	err := c.reconcileAlterCopyAutoIncrement(
+		"test",
+		&plan.TableDef{},
+		copyDef,
+		mock_frontend.NewMockRelation(ctrl),
+		false,
+		newAlterAutoIncrementResetCleanup(c),
+	)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported), err)
+	require.Empty(t, spyExec.executedSQLs)
+}
+
+func TestAppendAlterAutoIncrementReqsUsesStableColumnIndexAfterRename(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	resultMP := mpool.MustNewZero()
+	maxSQL := "select cast(coalesce(max(case when `renamed_id` > 0 then `renamed_id` else 0 end), 0) as unsigned) from `resolved_db`.`dept`"
+	spyExec := &alterCopyInsertSpyExecutor{results: map[string]executor.Result{
+		maxSQL: newAlterCopyFixedResult(t, resultMP, types.T_uint64.ToType(), []uint64{140}),
+	}}
+	c := newAlterCopyPrecheckCompile(t, ctrl, spyExec)
+	tableDef := &plan.TableDef{
+		TblId: 7,
+		Name:  "dept",
+		Cols: []*plan.ColDef{{
+			Name: "renamed_id",
+			Typ:  plan.Type{Id: int32(types.T_uint64), AutoIncr: true},
+		}},
+	}
+	autoSvc := mock_frontend.NewMockAutoIncrementService(ctrl)
+	autoSvc.EXPECT().SetOffset(
+		c.proc.Ctx,
+		tableDef.TblId,
+		0,
+		"renamed_id",
+		uint64(140),
+		c.proc.GetTxnOperator(),
+	).Return(nil)
+	autoSvc.EXPECT().DiscardOffsetReset(
+		gomock.Any(),
+		tableDef.TblId,
+		c.proc.GetTxnOperator(),
+	).Return(nil)
+	incrservice.SetAutoIncrementServiceByID(c.proc.GetService(), autoSvc)
+
+	cleanup := newAlterAutoIncrementResetCleanup(c)
+	var reqs []*api.AlterTableReq
+	require.NoError(t, c.appendAlterAutoIncrementReqs(
+		"resolved_db", tableDef, tableDef, 6, tableDef.TblId, 99, cleanup, &reqs,
+	))
+	require.Equal(t, []string{maxSQL}, spyExec.executedSQLs)
+	require.Len(t, reqs, 1)
+	require.Equal(t, uint64(6), reqs[0].GetDbId())
+	require.Equal(t, tableDef.TblId, reqs[0].GetTableId())
+	require.Equal(t, uint64(140), reqs[0].GetUpdateAutoIncrement().GetOffset())
+	require.Zero(t, reqs[0].GetUpdateAutoIncrement().GetEpoch(),
+		"disttae must assign the actual next catalog epoch when applying the request")
+	require.Zero(t, resultMP.CurrNB(), "the internal MAX result must be closed")
+
+	statementErr := errors.New("later ALTER step failed")
+	cleanup.finish(&statementErr)
+	require.ErrorContains(t, statementErr, "later ALTER step failed")
+}
+
+func TestAppendAlterAutoIncrementReqsUsesFinalColumnNameInCombinedRename(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	resultMP := mpool.MustNewZero()
+	maxSQL := "select cast(coalesce(max(case when `id` > 0 then `id` else 0 end), 0) as unsigned) from `resolved_db`.`dept`"
+	spyExec := &alterCopyInsertSpyExecutor{results: map[string]executor.Result{
+		maxSQL: newAlterCopyFixedResult(t, resultMP, types.T_uint64.ToType(), []uint64{140}),
+	}}
+	c := newAlterCopyPrecheckCompile(t, ctrl, spyExec)
+	tableDef := &plan.TableDef{TblId: 7, Name: "dept", Cols: []*plan.ColDef{{
+		ColId: 11, Name: "id",
+		Typ: plan.Type{Id: int32(types.T_uint64), AutoIncr: true},
+	}}}
+	targetTableDef := plan.DeepCopyTableDef(tableDef, true)
+	targetTableDef.Cols[0].Name = "new_id"
+	autoSvc := mock_frontend.NewMockAutoIncrementService(ctrl)
+	autoSvc.EXPECT().SetOffset(
+		c.proc.Ctx, tableDef.TblId, 0, "new_id", uint64(140), c.proc.GetTxnOperator(),
+	).Return(nil)
+	autoSvc.EXPECT().DiscardOffsetReset(
+		gomock.Any(), tableDef.TblId, c.proc.GetTxnOperator(),
+	).Return(nil)
+	incrservice.SetAutoIncrementServiceByID(c.proc.GetService(), autoSvc)
+
+	cleanup := newAlterAutoIncrementResetCleanup(c)
+	var reqs []*api.AlterTableReq
+	require.NoError(t, c.appendAlterAutoIncrementReqs(
+		"resolved_db", tableDef, targetTableDef, 6, tableDef.TblId, 99, cleanup, &reqs,
+	))
+	require.Equal(t, []string{maxSQL}, spyExec.executedSQLs,
+		"MAX must use the source column that exists before the ALTER is applied")
+	require.Len(t, reqs, 1)
+	require.Zero(t, resultMP.CurrNB())
+
+	statementErr := errors.New("later ALTER step failed")
+	cleanup.finish(&statementErr)
+	require.ErrorContains(t, statementErr, "later ALTER step failed")
+}
+
+func TestAppendAlterAutoIncrementReqsRejectsLegacyTNBeforeQuery(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	spyExec := &alterCopyInsertSpyExecutor{}
+	c := newAlterCopyPrecheckCompile(t, ctrl, spyExec)
+	legacyTxn := mock_frontend.NewMockTxnOperator(ctrl)
+	legacyTxn.EXPECT().GetWorkspace().Return(alterCopyAutoIncrEpochWorkspace{})
+	c.proc.Base.TxnOperator = legacyTxn
+	tableDef := &plan.TableDef{Name: "dept", Cols: []*plan.ColDef{{
+		Name: "id",
+		Typ:  plan.Type{Id: int32(types.T_uint64), AutoIncr: true},
+	}}}
+
+	var reqs []*api.AlterTableReq
+	err := c.appendAlterAutoIncrementReqs(
+		"test", tableDef, tableDef, 6, 7, 99, newAlterAutoIncrementResetCleanup(c), &reqs,
+	)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported), err)
+	require.Empty(t, spyExec.executedSQLs)
+	require.Empty(t, reqs)
+}
+
+func TestAppendAlterAutoIncrementReqsDiscardsResetAfterCancellation(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	resultMP := mpool.MustNewZero()
+	maxSQL := "select cast(coalesce(max(case when `id` > 0 then `id` else 0 end), 0) as unsigned) from `test`.`dept`"
+	spyExec := &alterCopyInsertSpyExecutor{results: map[string]executor.Result{
+		maxSQL: newAlterCopyFixedResult(t, resultMP, types.T_uint64.ToType(), []uint64{40}),
+	}}
+	c := newAlterCopyPrecheckCompile(t, ctrl, spyExec)
+	ctx, cancel := context.WithCancel(c.proc.Ctx)
+	c.proc.Ctx = ctx
+	c.proc.ReplaceTopCtx(ctx)
+	tableDef := &plan.TableDef{TblId: 7, Name: "dept", Cols: []*plan.ColDef{{
+		Name: "id",
+		Typ:  plan.Type{Id: int32(types.T_uint64), AutoIncr: true},
+	}}}
+	autoSvc := mock_frontend.NewMockAutoIncrementService(ctrl)
+	autoSvc.EXPECT().SetOffset(
+		ctx, tableDef.TblId, 0, "id", uint64(99), c.proc.GetTxnOperator(),
+	).DoAndReturn(func(context.Context, uint64, int, string, uint64, client.TxnOperator) error {
+		cancel()
+		return nil
+	})
+	autoSvc.EXPECT().DiscardOffsetReset(
+		gomock.Any(), tableDef.TblId, c.proc.GetTxnOperator(),
+	).Return(nil)
+	incrservice.SetAutoIncrementServiceByID(c.proc.GetService(), autoSvc)
+
+	cleanup := newAlterAutoIncrementResetCleanup(c)
+	var reqs []*api.AlterTableReq
+	err := c.appendAlterAutoIncrementReqs(
+		"test", tableDef, tableDef, 6, tableDef.TblId, 99, cleanup, &reqs,
+	)
+	require.ErrorIs(t, err, context.Canceled)
+	require.Empty(t, reqs)
+	cleanup.finish(&err)
+	require.ErrorIs(t, err, context.Canceled)
+	require.Zero(t, resultMP.CurrNB())
+}
+
+func TestAppendAlterAutoIncrementReqsRejectsNarrowedOverflow(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	resultMP := mpool.MustNewZero()
+	maxSQL := "select cast(coalesce(max(case when `id` > 0 then `id` else 0 end), 0) as unsigned) from `test`.`dept`"
+	spyExec := &alterCopyInsertSpyExecutor{results: map[string]executor.Result{
+		maxSQL: newAlterCopyFixedResult(t, resultMP, types.T_uint64.ToType(), []uint64{0}),
+	}}
+	c := newAlterCopyPrecheckCompile(t, ctrl, spyExec)
+	tableDef := &plan.TableDef{TblId: 7, Name: "dept", Cols: []*plan.ColDef{{
+		Name: "id",
+		Typ:  plan.Type{Id: int32(types.T_uint8), AutoIncr: true},
+	}}}
+	autoSvc := mock_frontend.NewMockAutoIncrementService(ctrl)
+	autoSvc.EXPECT().SetOffset(
+		gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(),
+	).Times(0)
+	incrservice.SetAutoIncrementServiceByID(c.proc.GetService(), autoSvc)
+
+	var reqs []*api.AlterTableReq
+	err := c.appendAlterAutoIncrementReqs(
+		"test", tableDef, tableDef, 6, tableDef.TblId, 300,
+		newAlterAutoIncrementResetCleanup(c), &reqs,
+	)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrOutOfRange), err)
+	require.Empty(t, reqs)
+	require.Zero(t, resultMP.CurrNB())
+}
+
+func TestReconcileAlterCopyAutoIncrementSkipsHiddenAndRejectsNarrowedOverflow(t *testing.T) {
+	t.Run("hidden only", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		spyExec := &alterCopyInsertSpyExecutor{}
+		c := newAlterCopyPrecheckCompile(t, ctrl, spyExec)
+		copyDef := &plan.TableDef{
+			TblId: 2,
+			Name:  "dept_copy",
+			Cols: []*plan.ColDef{{
+				ColId: 1, Name: catalog.FakePrimaryKeyColName, Hidden: true,
+				Typ: plan.Type{Id: int32(types.T_uint64), AutoIncr: true},
+			}},
+		}
+		copyRel := mock_frontend.NewMockRelation(ctrl)
+		autoSvc := mock_frontend.NewMockAutoIncrementService(ctrl)
+		autoSvc.EXPECT().SetOffset(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Times(0)
+		incrservice.SetAutoIncrementServiceByID(c.proc.GetService(), autoSvc)
+
+		require.NoError(t, c.reconcileAlterCopyAutoIncrement(
+			"test", &plan.TableDef{}, copyDef, copyRel, false, newAlterAutoIncrementResetCleanup(c),
+		))
+		require.Empty(t, spyExec.executedSQLs)
+	})
+
+	t.Run("source offset exceeds narrowed type", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		resultMP := mpool.MustNewZero()
+		sourceOffsetSQL := "select col_index, offset from mo_catalog.mo_increment_columns where table_id = 1"
+		maxSQL := "select cast(coalesce(max(case when `id` > 0 then `id` else 0 end), 0) as unsigned) from `test`.`dept_copy`"
+		spyExec := &alterCopyInsertSpyExecutor{results: map[string]executor.Result{
+			sourceOffsetSQL: newTableCloneOffsetResult(t, resultMP, 0, 300),
+			maxSQL:          newAlterCopyFixedResult(t, resultMP, types.T_uint64.ToType(), []uint64{40}),
+		}}
+		c := newAlterCopyPrecheckCompile(t, ctrl, spyExec)
+		srcDef := &plan.TableDef{TblId: 1, Cols: []*plan.ColDef{{
+			ColId: 10, Name: "id", Typ: plan.Type{Id: int32(types.T_uint64), AutoIncr: true},
+		}}}
+		copyDef := &plan.TableDef{TblId: 2, Name: "dept_copy", Cols: []*plan.ColDef{{
+			ColId: 10, Name: "id", Typ: plan.Type{Id: int32(types.T_uint8), AutoIncr: true},
+		}}}
+		copyRel := mock_frontend.NewMockRelation(ctrl)
+		copyRel.EXPECT().GetTableDef(gomock.Any()).Return(copyDef)
+		copyRel.EXPECT().GetTableID(gomock.Any()).Return(copyDef.TblId).AnyTimes()
+		autoSvc := mock_frontend.NewMockAutoIncrementService(ctrl)
+		autoSvc.EXPECT().SetOffset(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Times(0)
+		incrservice.SetAutoIncrementServiceByID(c.proc.GetService(), autoSvc)
+
+		err := c.reconcileAlterCopyAutoIncrement(
+			"test", srcDef, copyDef, copyRel, false, newAlterAutoIncrementResetCleanup(c),
+		)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrOutOfRange), err)
+		require.Zero(t, resultMP.CurrNB(), "all internal SQL results must be closed")
+	})
+}
+
+func TestReconcileAlterCopyAutoIncrementStopsAfterCancellation(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	resultMP := mpool.MustNewZero()
+	firstMaxSQL := "select cast(coalesce(max(case when `first` > 0 then `first` else 0 end), 0) as unsigned) from `test`.`dept_copy`"
+	spyExec := &alterCopyInsertSpyExecutor{results: map[string]executor.Result{
+		firstMaxSQL: newAlterCopyFixedResult(t, resultMP, types.T_uint64.ToType(), []uint64{40}),
+	}}
+	c := newAlterCopyPrecheckCompile(t, ctrl, spyExec)
+	ctx, cancel := context.WithCancel(c.proc.Ctx)
+	c.proc.Ctx = ctx
+	c.proc.ReplaceTopCtx(ctx)
+
+	copyDef := &plan.TableDef{
+		TblId:          2,
+		Name:           "dept_copy",
+		AutoIncrOffset: 99,
+		Cols: []*plan.ColDef{
+			{ColId: 20, Name: "first", Typ: plan.Type{Id: int32(types.T_uint64), AutoIncr: true}},
+			{ColId: 21, Name: "second", Typ: plan.Type{Id: int32(types.T_uint64), AutoIncr: true}},
+		},
+	}
+	copyRel := mock_frontend.NewMockRelation(ctrl)
+	copyRel.EXPECT().GetTableDef(gomock.Any()).Return(copyDef)
+	copyRel.EXPECT().GetTableID(gomock.Any()).Return(copyDef.TblId).AnyTimes()
+	autoSvc := mock_frontend.NewMockAutoIncrementService(ctrl)
+	autoSvc.EXPECT().SetOffset(ctx, copyDef.TblId, 0, "first", uint64(99), c.proc.GetTxnOperator()).DoAndReturn(
+		func(context.Context, uint64, int, string, uint64, client.TxnOperator) error {
+			cancel()
+			return nil
+		},
+	)
+	incrservice.SetAutoIncrementServiceByID(c.proc.GetService(), autoSvc)
+
+	err := c.reconcileAlterCopyAutoIncrement(
+		"test", &plan.TableDef{}, copyDef, copyRel, false, newAlterAutoIncrementResetCleanup(c),
+	)
+	require.ErrorIs(t, err, context.Canceled)
+	require.Equal(t, []string{firstMaxSQL}, spyExec.executedSQLs)
+	require.Zero(t, resultMP.CurrNB())
 }
 
 const (
@@ -86,6 +1430,10 @@ func (e *alterCopyInsertSpyExecutor) Exec(
 			return executor.Result{}, err
 		}
 	}
+	if results := e.resultSequences[sql]; len(results) > 0 {
+		e.resultSequences[sql] = results[1:]
+		return results[0], nil
+	}
 	if e.results != nil {
 		if res, ok := e.results[sql]; ok {
 			return res, nil
@@ -99,7 +1447,9 @@ func (e *alterCopyInsertSpyExecutor) ExecTxn(
 	execFunc func(executor.TxnExecutor) error,
 	opts executor.Options,
 ) error {
-	return nil
+	return execFunc(executor.NewMemTxnExecutor(func(sql string) (executor.Result, error) {
+		return e.Exec(ctx, sql, opts)
+	}, opts.Txn()))
 }
 
 func TestScopeAlterTableCopyInsertTmpDataPipelineFlush(t *testing.T) {
@@ -257,6 +1607,7 @@ func TestGetAlterCopyPkPrecheck(t *testing.T) {
 		name             string
 		tableDef         *plan.TableDef
 		copyTableDef     *plan.TableDef
+		changeColMap     map[uint64]*plan.ColDef
 		skipPkDedup      bool
 		wantCols         []string
 		wantCheckNotNull bool
@@ -264,27 +1615,40 @@ func TestGetAlterCopyPkPrecheck(t *testing.T) {
 		{
 			name: "add pk on nullable original column",
 			tableDef: &plan.TableDef{
-				Cols: []*plan.ColDef{{Name: "col4", Typ: plan.Type{Id: int32(types.T_int32)}}},
+				Cols: []*plan.ColDef{{ColId: 1, Name: "col4", Typ: plan.Type{Id: int32(types.T_int32)}}},
 				Pkey: &plan.PrimaryKeyDef{PkeyColName: catalog.FakePrimaryKeyColName},
 			},
 			copyTableDef: &plan.TableDef{
 				Cols: []*plan.ColDef{{Name: "col4", NotNull: true, Primary: true, Typ: plan.Type{Id: int32(types.T_int32)}}},
 				Pkey: &plan.PrimaryKeyDef{PkeyColName: "col4", Names: []string{"col4"}},
 			},
+			changeColMap:     map[uint64]*plan.ColDef{1: {Name: "col4"}},
 			wantCols:         []string{"col4"},
 			wantCheckNotNull: true,
 		},
 		{
 			name: "add pk on not null original column",
 			tableDef: &plan.TableDef{
-				Cols: []*plan.ColDef{{Name: "col4", NotNull: true, Typ: plan.Type{Id: int32(types.T_int32)}}},
+				Cols: []*plan.ColDef{{ColId: 1, Name: "col4", NotNull: true, Typ: plan.Type{Id: int32(types.T_int32)}}},
 				Pkey: &plan.PrimaryKeyDef{PkeyColName: catalog.FakePrimaryKeyColName},
 			},
 			copyTableDef: &plan.TableDef{
 				Cols: []*plan.ColDef{{Name: "col4", NotNull: true, Typ: plan.Type{Id: int32(types.T_int32)}}},
 				Pkey: &plan.PrimaryKeyDef{PkeyColName: "col4", Names: []string{"col4"}},
 			},
-			wantCols: []string{"col4"},
+			changeColMap: map[uint64]*plan.ColDef{1: {Name: "col4"}},
+			wantCols:     []string{"col4"},
+		},
+		{
+			name: "same name pk replacement is not a copied source column",
+			tableDef: &plan.TableDef{
+				Cols: []*plan.ColDef{{ColId: 1, Name: "col4", Typ: plan.Type{Id: int32(types.T_int32)}}},
+				Pkey: &plan.PrimaryKeyDef{PkeyColName: "col4", Names: []string{"col4"}},
+			},
+			copyTableDef: &plan.TableDef{
+				Cols: []*plan.ColDef{{ColId: 2, Name: "col4", NotNull: true, Primary: true, Typ: plan.Type{Id: int32(types.T_int32)}}},
+				Pkey: &plan.PrimaryKeyDef{PkeyColName: "col4", Names: []string{"col4"}},
+			},
 		},
 		{
 			name: "static skip pk dedup needs no precheck",
@@ -331,11 +1695,35 @@ func TestGetAlterCopyPkPrecheck(t *testing.T) {
 				Pkey: &plan.PrimaryKeyDef{PkeyColName: "col4", Names: []string{"col4"}},
 			},
 		},
+		{
+			name: "generated pk is recomputed during copy",
+			tableDef: &plan.TableDef{
+				Cols: []*plan.ColDef{{
+					Name: "col4",
+					Typ:  plan.Type{Id: int32(types.T_int32)},
+					GeneratedCol: &plan2.GeneratedCol{
+						IsStored: true,
+					},
+				}},
+				Pkey: &plan.PrimaryKeyDef{PkeyColName: "col4", Names: []string{"col4"}},
+			},
+			copyTableDef: &plan.TableDef{
+				Cols: []*plan.ColDef{{
+					Name: "col4",
+					Typ:  plan.Type{Id: int32(types.T_int32)},
+					GeneratedCol: &plan2.GeneratedCol{
+						IsStored: true,
+					},
+				}},
+				Pkey: &plan.PrimaryKeyDef{PkeyColName: "col4", Names: []string{"col4"}},
+			},
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			qry := &plan2.AlterTable{
-				TableDef:     tc.tableDef,
-				CopyTableDef: tc.copyTableDef,
+				TableDef:          tc.tableDef,
+				CopyTableDef:      tc.copyTableDef,
+				ChangeTblColIdMap: tc.changeColMap,
 				Options: &plan2.AlterCopyOpt{
 					SkipPkDedup:     tc.skipPkDedup,
 					TargetTableName: "dept_copy",
@@ -375,7 +1763,7 @@ func TestScopeAlterTableCopyPrecheckPrimaryKeyThenSkipDedup(t *testing.T) {
 		TblId: 1,
 		Name:  "dept",
 		Cols: []*plan.ColDef{
-			{Name: "col4", Typ: plan.Type{Id: int32(types.T_int32)}},
+			{ColId: 1, Name: "col4", Typ: plan.Type{Id: int32(types.T_int32)}},
 		},
 		Pkey: &plan.PrimaryKeyDef{PkeyColName: catalog.FakePrimaryKeyColName},
 	}
@@ -393,6 +1781,7 @@ func TestScopeAlterTableCopyPrecheckPrimaryKeyThenSkipDedup(t *testing.T) {
 		CopyTableDef:      copyTableDef,
 		CreateTmpTableSql: "create table dept_copy",
 		InsertTmpDataSql:  "insert into dept_copy select * from dept",
+		ChangeTblColIdMap: map[uint64]*plan.ColDef{1: {Name: "col4"}},
 		Options: &plan2.AlterCopyOpt{
 			SkipPkDedup:     false,
 			TargetTableName: "dept_copy",
@@ -446,6 +1835,12 @@ func TestScopeAlterTableCopyPrecheckPrimaryKeyThenSkipDedup(t *testing.T) {
 	require.True(t, spyExec.insertOption.AlterCopyDedupOpt().SkipPkDedup)
 	require.Equal(t, alterTable.Options.TargetTableName, spyExec.insertOption.AlterCopyDedupOpt().TargetTableName)
 	assert.Equal(t, []string{
+		databranchutils.LineageOwnerPublicationLockSQL(),
+		alterDataBranchParticipationSQL(1),
+		alterDataBranchHistoricalSnapshotSourceSQL("", "test", "dept", 1),
+		alterDataBranchHistoricalPitrSourceSQL("", "test", "dept", 1),
+		alterDataBranchHistoricalSnapshotSourceProbeSQL("", "test", "dept", 1, false),
+		alterDataBranchHistoricalPitrSourceProbeSQL("", "test", "dept", 1, false),
 		alterTable.CreateTmpTableSql,
 		alterCopyTestPkNullCheckSQL,
 		alterCopyTestPkDuplicateCheckSQL,
@@ -544,7 +1939,7 @@ func testAlterCopyAddPrimaryKeyPlan() *plan2.AlterTable {
 		TableDef: &plan.TableDef{
 			Name: "dept",
 			Cols: []*plan.ColDef{
-				{Name: "col4", Typ: plan.Type{Id: int32(types.T_int32)}},
+				{ColId: 1, Name: "col4", Typ: plan.Type{Id: int32(types.T_int32)}},
 			},
 			Pkey: &plan.PrimaryKeyDef{PkeyColName: catalog.FakePrimaryKeyColName},
 		},
@@ -559,10 +1954,15 @@ func testAlterCopyAddPrimaryKeyPlan() *plan2.AlterTable {
 			SkipPkDedup:     false,
 			TargetTableName: "dept_copy",
 		},
+		ChangeTblColIdMap: map[uint64]*plan.ColDef{1: {Name: "col4"}},
 	}
 }
 
-func newAlterCopyPrecheckCompile(t *testing.T, ctrl *gomock.Controller, exec executor.SQLExecutor) *Compile {
+func newAlterCopyPrecheckCompile(
+	t *testing.T,
+	ctrl *gomock.Controller,
+	exec executor.SQLExecutor,
+) *Compile {
 	proc := testutil.NewProcess(t)
 	proc.Base.SessionInfo.Buf = buffer.New()
 	proc.Base.SessionInfo.TimeZone = time.Local
@@ -576,7 +1976,13 @@ func newAlterCopyPrecheckCompile(t *testing.T, ctrl *gomock.Controller, exec exe
 	proc.Ctx = ctx
 	proc.ReplaceTopCtx(ctx)
 
-	txnCli, txnOp := newTestTxnClientAndOp(ctrl)
+	txnCli, txnOp := newTestTxnClientAndOp(
+		ctrl,
+		alterCopyAutoIncrEpochWorkspace{
+			Workspace: &Ws{},
+			supported: true,
+		},
+	)
 	proc.Base.TxnClient = txnCli
 	proc.Base.TxnOperator = txnOp
 
@@ -607,6 +2013,322 @@ func newAlterCopyFixedResult[T any](t *testing.T, mp *mpool.MPool, typ types.Typ
 	memRes := executor.NewMemResult([]types.Type{typ}, mp)
 	memRes.NewBatchWithRowCount(len(values))
 	require.NoError(t, executor.AppendFixedRows(memRes, 0, values))
+	return memRes.GetResult()
+}
+
+func TestLoadAlterDataBranchHistoricalSourcesUsesPitrCatalogType(t *testing.T) {
+	now := time.Date(2026, time.July, 17, 12, 0, 0, 0, time.UTC)
+	ctrl := gomock.NewController(t)
+	c := newAlterCopyPrecheckCompile(t, ctrl, &alterCopyInsertSpyExecutor{})
+	mp := c.proc.Mp()
+	results := map[string]executor.Result{
+		alterDataBranchSnapshotSourceSQL(): newAlterLineageSnapshotSourceResult(
+			t, mp, nil, nil, nil, nil, nil, nil,
+		),
+		alterDataBranchPitrSourceSQL(): newAlterLineagePitrSourceResult(
+			t, mp,
+			[]string{"database", "table"},
+			[]string{"tenant", "tenant"},
+			[]string{"db_hour", "db_day"},
+			[]string{"", "tbl"},
+			[]uint64{101, 102},
+			[]uint8{1, 100},
+			[]string{"h", "d"},
+		),
+	}
+
+	sources, err := loadAlterDataBranchHistoricalSourcesWithQuery(
+		func(sql string) (executor.Result, error) {
+			res, ok := results[sql]
+			require.True(t, ok, "unexpected lineage source query: %s", sql)
+			return res, nil
+		},
+		now,
+	)
+	require.NoError(t, err)
+	require.Equal(t, []databranchutils.HistoricalSource{
+		{
+			Level:        "database",
+			AccountName:  "tenant",
+			DatabaseName: "db_hour",
+			ObjectID:     101,
+			OldestTS:     now.Add(-time.Hour).UnixNano(),
+		},
+		{
+			Level:        "table",
+			AccountName:  "tenant",
+			DatabaseName: "db_day",
+			TableName:    "tbl",
+			ObjectID:     102,
+			OldestTS:     now.AddDate(0, 0, -100).UnixNano(),
+		},
+	}, sources)
+}
+
+func TestCompactExpiredAlterDataBranchLineage(t *testing.T) {
+	now := time.Date(2026, time.July, 17, 12, 0, 0, 0, time.UTC)
+	cloneTS := now.Add(-48 * time.Hour).UnixNano()
+	const (
+		metadataSQL = "select table_id, p_table_id, clone_ts, creator, level, table_deleted from mo_catalog.mo_branch_metadata for update"
+		edgeSQL     = "select sname, ts, account_name, database_name, table_name, obj_id from mo_catalog.mo_snapshots where kind = 'branch'"
+		snapshotSQL = "select ts, level, account_name, database_name, table_name, obj_id from mo_catalog.mo_snapshots where kind = 'user'"
+		pitrSQL     = "select level, account_name, database_name, table_name, obj_id, pitr_length, pitr_unit from mo_catalog.mo_pitr where pitr_status = 1"
+	)
+
+	for _, tc := range []struct {
+		name          string
+		pitrLength    uint8
+		wantDeletes   bool
+		wantSQLSuffix []string
+	}{
+		{
+			name:        "expired PITR releases ALTER edge",
+			pitrLength:  24,
+			wantDeletes: true,
+			wantSQLSuffix: []string{
+				"delete from mo_catalog.mo_snapshots where kind = 'branch' and sname in ('__mo_branch_2')",
+				"delete from mo_catalog.mo_branch_metadata where table_id in (2) and (level = 'alter' or level like 'alter:%')",
+			},
+		},
+		{
+			name:        "active PITR retains ALTER edge",
+			pitrLength:  72,
+			wantDeletes: false,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			spyExec := &alterCopyInsertSpyExecutor{results: make(map[string]executor.Result)}
+			c := newAlterCopyPrecheckCompile(t, ctrl, spyExec)
+			mp := c.proc.Mp()
+
+			spyExec.results[metadataSQL] = newAlterLineageMetadataResult(
+				t, mp, []uint64{2}, []uint64{1}, []int64{cloneTS},
+				[]uint64{uint64(catalog.System_Account)}, []string{databranchutils.AlterLineageLevel}, []bool{false},
+			)
+			spyExec.results[edgeSQL] = newAlterLineageEdgeResult(
+				t, mp, []string{databranchutils.BranchSnapshotName(2)}, []int64{cloneTS},
+				[]string{"tenant"}, []string{"db"}, []string{"tbl"}, []uint64{1},
+			)
+			spyExec.results[snapshotSQL] = newAlterLineageSnapshotSourceResult(t, mp, nil, nil, nil, nil, nil, nil)
+			spyExec.results[pitrSQL] = newAlterLineagePitrSourceResult(
+				t, mp, []string{"table"}, []string{"tenant"}, []string{"db"}, []string{"tbl"},
+				[]uint64{1}, []uint8{tc.pitrLength}, []string{"h"},
+			)
+
+			require.NoError(t, c.compactExpiredAlterDataBranchLineage(now))
+			want := []string{metadataSQL, edgeSQL, snapshotSQL, pitrSQL}
+			if tc.wantDeletes {
+				want = append(want, tc.wantSQLSuffix...)
+			}
+			require.Equal(t, want, spyExec.executedSQLs)
+		})
+	}
+}
+
+func TestCompactExpiredAlterDataBranchLineageWithExecutor(t *testing.T) {
+	now := time.Date(2026, time.July, 17, 12, 0, 0, 0, time.UTC)
+	cloneTS := now.Add(-48 * time.Hour).UnixNano()
+	ctrl := gomock.NewController(t)
+	c := newAlterCopyPrecheckCompile(t, ctrl, &alterCopyInsertSpyExecutor{})
+	mp := c.proc.Mp()
+
+	metadataSQL := fmt.Sprintf(
+		"select table_id, p_table_id, clone_ts, creator, level, table_deleted from %s.%s for update",
+		catalog.MO_CATALOG, catalog.MO_BRANCH_METADATA,
+	)
+	results := map[string]executor.Result{
+		metadataSQL: newAlterLineageMetadataResult(
+			t, mp, []uint64{2}, []uint64{1}, []int64{cloneTS},
+			[]uint64{uint64(catalog.System_Account)}, []string{databranchutils.AlterLineageLevel}, []bool{false},
+		),
+		alterDataBranchLineageEdgeSQL(): newAlterLineageEdgeResult(
+			t, mp, []string{databranchutils.BranchSnapshotName(2)}, []int64{cloneTS},
+			[]string{"tenant"}, []string{"db"}, []string{"tbl"}, []uint64{1},
+		),
+		alterDataBranchSnapshotSourceSQL(): newAlterLineageSnapshotSourceResult(t, mp, nil, nil, nil, nil, nil, nil),
+		alterDataBranchPitrSourceSQL(): newAlterLineagePitrSourceResult(
+			t, mp, []string{"table"}, []string{"tenant"}, []string{"db"}, []string{"tbl"},
+			[]uint64{1}, []uint8{24}, []string{"h"},
+		),
+	}
+	var executed []string
+	sqlExecutor := executor.NewMemExecutor(func(sql string) (executor.Result, error) {
+		executed = append(executed, sql)
+		return results[sql], nil
+	})
+
+	require.NoError(t, compactExpiredAlterDataBranchLineageWithExecutor(context.Background(), sqlExecutor, now))
+	require.Equal(t, []string{
+		metadataSQL,
+		alterDataBranchLineageEdgeSQL(),
+		alterDataBranchSnapshotSourceSQL(),
+		alterDataBranchPitrSourceSQL(),
+		"delete from mo_catalog.mo_snapshots where kind = 'branch' and sname in ('__mo_branch_2')",
+		"delete from mo_catalog.mo_branch_metadata where table_id in (2) and (level = 'alter' or level like 'alter:%')",
+	}, executed)
+}
+
+type lineageGCDeadlineExecutor struct {
+	deadline time.Time
+}
+
+func (e *lineageGCDeadlineExecutor) Exec(
+	context.Context, string, executor.Options,
+) (executor.Result, error) {
+	return executor.Result{}, nil
+}
+
+func (e *lineageGCDeadlineExecutor) ExecTxn(
+	ctx context.Context,
+	_ func(executor.TxnExecutor) error,
+	_ executor.Options,
+) error {
+	e.deadline, _ = ctx.Deadline()
+	return nil
+}
+
+func TestDataBranchLineageGCExecutorSetsDeadline(t *testing.T) {
+	spyExec := &lineageGCDeadlineExecutor{}
+	started := time.Now()
+	require.NoError(t, DataBranchLineageGCExecutor(spyExec)(context.Background(), nil))
+	require.False(t, spyExec.deadline.IsZero())
+	require.WithinDuration(t, started.Add(dataBranchLineageGCTimeout), spyExec.deadline, time.Second)
+
+	parentDeadline := time.Now().Add(time.Minute)
+	ctx, cancel := context.WithDeadline(context.Background(), parentDeadline)
+	defer cancel()
+	require.NoError(t, DataBranchLineageGCExecutor(spyExec)(ctx, nil))
+	require.WithinDuration(t, parentDeadline, spyExec.deadline, time.Second)
+}
+
+func TestCompactExpiredAlterDataBranchLineageWithExecutorPropagatesDeleteError(t *testing.T) {
+	now := time.Date(2026, time.July, 17, 12, 0, 0, 0, time.UTC)
+	cloneTS := now.Add(-48 * time.Hour).UnixNano()
+	ctrl := gomock.NewController(t)
+	c := newAlterCopyPrecheckCompile(t, ctrl, &alterCopyInsertSpyExecutor{})
+	mp := c.proc.Mp()
+	metadataSQL := fmt.Sprintf(
+		"select table_id, p_table_id, clone_ts, creator, level, table_deleted from %s.%s for update",
+		catalog.MO_CATALOG, catalog.MO_BRANCH_METADATA,
+	)
+	results := map[string]executor.Result{
+		metadataSQL: newAlterLineageMetadataResult(
+			t, mp, []uint64{2}, []uint64{1}, []int64{cloneTS},
+			[]uint64{uint64(catalog.System_Account)}, []string{databranchutils.AlterLineageLevel}, []bool{false},
+		),
+		alterDataBranchLineageEdgeSQL(): newAlterLineageEdgeResult(
+			t, mp, []string{databranchutils.BranchSnapshotName(2)}, []int64{cloneTS},
+			[]string{"tenant"}, []string{"db"}, []string{"tbl"}, []uint64{1},
+		),
+		alterDataBranchSnapshotSourceSQL(): newAlterLineageSnapshotSourceResult(t, mp, nil, nil, nil, nil, nil, nil),
+		alterDataBranchPitrSourceSQL(): newAlterLineagePitrSourceResult(
+			t, mp, []string{"table"}, []string{"tenant"}, []string{"db"}, []string{"tbl"},
+			[]uint64{1}, []uint8{24}, []string{"h"},
+		),
+	}
+	wantErr := errors.New("delete failed")
+	snapshotDeleteSQL := "delete from mo_catalog.mo_snapshots where kind = 'branch' and sname in ('__mo_branch_2')"
+	sqlExecutor := executor.NewMemExecutor(func(sql string) (executor.Result, error) {
+		if sql == snapshotDeleteSQL {
+			return executor.Result{}, wantErr
+		}
+		return results[sql], nil
+	})
+
+	require.ErrorIs(t,
+		compactExpiredAlterDataBranchLineageWithExecutor(context.Background(), sqlExecutor, now),
+		wantErr,
+	)
+}
+
+func newAlterLineageMetadataResult(
+	t *testing.T,
+	mp *mpool.MPool,
+	tableIDs, parentIDs []uint64,
+	cloneTSs []int64,
+	creators []uint64,
+	levels []string,
+	deleted []bool,
+) executor.Result {
+	memRes := executor.NewMemResult([]types.Type{
+		types.T_uint64.ToType(), types.T_uint64.ToType(), types.T_int64.ToType(),
+		types.T_uint64.ToType(), types.T_varchar.ToType(), types.T_bool.ToType(),
+	}, mp)
+	memRes.NewBatchWithRowCount(len(tableIDs))
+	require.NoError(t, executor.AppendFixedRows(memRes, 0, tableIDs))
+	require.NoError(t, executor.AppendFixedRows(memRes, 1, parentIDs))
+	require.NoError(t, executor.AppendFixedRows(memRes, 2, cloneTSs))
+	require.NoError(t, executor.AppendFixedRows(memRes, 3, creators))
+	require.NoError(t, executor.AppendStringRows(memRes, 4, levels))
+	require.NoError(t, executor.AppendFixedRows(memRes, 5, deleted))
+	return memRes.GetResult()
+}
+
+func newAlterLineageEdgeResult(
+	t *testing.T,
+	mp *mpool.MPool,
+	names []string,
+	cloneTSs []int64,
+	accounts, databases, tables []string,
+	objectIDs []uint64,
+) executor.Result {
+	memRes := executor.NewMemResult([]types.Type{
+		types.T_varchar.ToType(), types.T_int64.ToType(), types.T_varchar.ToType(),
+		types.T_varchar.ToType(), types.T_varchar.ToType(), types.T_uint64.ToType(),
+	}, mp)
+	memRes.NewBatchWithRowCount(len(names))
+	require.NoError(t, executor.AppendStringRows(memRes, 0, names))
+	require.NoError(t, executor.AppendFixedRows(memRes, 1, cloneTSs))
+	require.NoError(t, executor.AppendStringRows(memRes, 2, accounts))
+	require.NoError(t, executor.AppendStringRows(memRes, 3, databases))
+	require.NoError(t, executor.AppendStringRows(memRes, 4, tables))
+	require.NoError(t, executor.AppendFixedRows(memRes, 5, objectIDs))
+	return memRes.GetResult()
+}
+
+func newAlterLineageSnapshotSourceResult(
+	t *testing.T,
+	mp *mpool.MPool,
+	cloneTSs []int64,
+	levels, accounts, databases, tables []string,
+	objectIDs []uint64,
+) executor.Result {
+	memRes := executor.NewMemResult([]types.Type{
+		types.T_int64.ToType(), types.T_varchar.ToType(), types.T_varchar.ToType(),
+		types.T_varchar.ToType(), types.T_varchar.ToType(), types.T_uint64.ToType(),
+	}, mp)
+	memRes.NewBatchWithRowCount(len(cloneTSs))
+	require.NoError(t, executor.AppendFixedRows(memRes, 0, cloneTSs))
+	require.NoError(t, executor.AppendStringRows(memRes, 1, levels))
+	require.NoError(t, executor.AppendStringRows(memRes, 2, accounts))
+	require.NoError(t, executor.AppendStringRows(memRes, 3, databases))
+	require.NoError(t, executor.AppendStringRows(memRes, 4, tables))
+	require.NoError(t, executor.AppendFixedRows(memRes, 5, objectIDs))
+	return memRes.GetResult()
+}
+
+func newAlterLineagePitrSourceResult(
+	t *testing.T,
+	mp *mpool.MPool,
+	levels, accounts, databases, tables []string,
+	objectIDs []uint64,
+	lengths []uint8,
+	units []string,
+) executor.Result {
+	memRes := executor.NewMemResult([]types.Type{
+		types.T_varchar.ToType(), types.T_varchar.ToType(), types.T_varchar.ToType(),
+		types.T_varchar.ToType(), types.T_uint64.ToType(), types.T_uint8.ToType(),
+		types.T_varchar.ToType(),
+	}, mp)
+	memRes.NewBatchWithRowCount(len(levels))
+	require.NoError(t, executor.AppendStringRows(memRes, 0, levels))
+	require.NoError(t, executor.AppendStringRows(memRes, 1, accounts))
+	require.NoError(t, executor.AppendStringRows(memRes, 2, databases))
+	require.NoError(t, executor.AppendStringRows(memRes, 3, tables))
+	require.NoError(t, executor.AppendFixedRows(memRes, 4, objectIDs))
+	require.NoError(t, executor.AppendFixedRows(memRes, 5, lengths))
+	require.NoError(t, executor.AppendStringRows(memRes, 6, units))
 	return memRes.GetResult()
 }
 

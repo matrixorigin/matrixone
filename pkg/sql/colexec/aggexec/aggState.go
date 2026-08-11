@@ -46,6 +46,10 @@ type MarshalerUnmarshaler interface {
 	UnmarshalFromReader(io.Reader) error
 }
 
+type freeableMarshalerUnmarshaler interface {
+	Free()
+}
+
 type aggInfo struct {
 	aggId                    int64
 	isDistinct               bool
@@ -144,29 +148,34 @@ func (ag *aggState) init(mp *mpool.MPool, l, c int32, info *aggInfo, setNulls bo
 	return nil
 }
 
-func (ag *aggState) grow(mp *mpool.MPool, more int32, expandLen bool) (int32, int32) {
+func (ag *aggState) grow(mp *mpool.MPool, more int32, expandLen bool) (int32, int32, error) {
 	canAdd := int32(ag.capacity - ag.length)
 	var toAdd int32
 
 	if more <= canAdd {
 		canAdd = more
-		if expandLen {
-			ag.length += more
-		}
 	} else {
-		if expandLen {
-			ag.length = ag.capacity
-		}
 		toAdd = more - canAdd
 	}
 
-	if expandLen {
-		for _, vec := range ag.vecs {
-			vec.SetLength(int(ag.length))
-		}
+	if !expandLen || canAdd == 0 {
+		return canAdd, toAdd, nil
 	}
 
-	return canAdd, toAdd
+	// Reserve every row-parallel allocation before publishing the group count.
+	// Successful capacity growth is reusable if a later vector fails, while all
+	// logical lengths remain unchanged and the caller receives the OOM.
+	for _, vec := range ag.vecs {
+		if err := vec.PreExtend(int(canAdd), mp); err != nil {
+			return 0, more, err
+		}
+	}
+	ag.length += canAdd
+	for _, vec := range ag.vecs {
+		vec.SetLength(int(ag.length))
+	}
+
+	return canAdd, toAdd, nil
 }
 
 func (ag *aggState) writeStateArg(i int32, buf *bytes.Buffer, info *aggInfo) error {
@@ -379,14 +388,38 @@ func (ag *aggState) readState(mp *mpool.MPool, reader io.Reader, info *aggInfo) 
 		return 0, err
 	}
 	if cnt == 0 {
+		if !info.saveArg && info.makeMarshalerUnmarshaler == nil {
+			ag.length = 0
+			for _, vec := range ag.vecs {
+				if vec != nil {
+					vec.CleanOnlyData()
+				}
+			}
+		} else {
+			ag.free(mp)
+			ag.length = 0
+			ag.capacity = 0
+		}
 		return 0, nil
 	}
 
-	if cnt > AggBatchSize {
+	if cnt < 0 || cnt > AggBatchSize {
 		return 0, moerr.NewInternalErrorNoCtxf("invalid count: %d", cnt)
 	}
-	if err := ag.init(mp, cnt, cnt, info, false); err != nil {
-		return 0, err
+	reuseVectors := !info.saveArg && info.makeMarshalerUnmarshaler == nil &&
+		len(ag.vecs) == len(info.stateTypes) && ag.capacity >= cnt
+	if reuseVectors {
+		ag.length = cnt
+		for _, vec := range ag.vecs {
+			if vec != nil {
+				vec.CleanOnlyData()
+			}
+		}
+	} else {
+		ag.free(mp)
+		if err := ag.init(mp, cnt, cnt, info, false); err != nil {
+			return 0, err
+		}
 	}
 
 	if !info.saveArg {
@@ -624,6 +657,12 @@ func (ag *aggState) free(mp *mpool.MPool) {
 		vec.Free(mp)
 	}
 	ag.vecs = nil
+	for _, mob := range ag.mobs {
+		if freeable, ok := mob.(freeableMarshalerUnmarshaler); ok {
+			freeable.Free()
+		}
+	}
+	ag.mobs = nil
 }
 
 type aggExec struct {
@@ -631,6 +670,259 @@ type aggExec struct {
 	aggInfo
 	chunkSize int
 	state     []aggState
+}
+
+// SetPrepareParamKind restores the scalar compatibility summary on a
+// deserialized preserving aggregate state. Row-exact metadata, when present,
+// is installed by the aggregate implementation and remains authoritative;
+// this method is only the v1 partial-state fallback.
+func (ae *aggExec) SetPrepareParamKind(kind vector.PrepareParamKind) {
+	for i := range ae.state {
+		if len(ae.state[i].vecs) > 0 && ae.state[i].vecs[0] != nil {
+			// An exact winner sidecar is authoritative. A scalar trailer can
+			// restore only legacy states that did not carry row provenance.
+			if len(ae.state[i].vecs[0].GetPrepareParamKinds()) == 0 {
+				ae.state[i].vecs[0].SetPrepareParamKind(kind)
+			}
+		}
+	}
+}
+
+// prepareParamKindsFromVector returns a compact copy only when at least one
+// non-NULL row carries provenance.  The nil result is the ordinary/unobserved
+// fast path and keeps spill/partial records byte-for-byte unchanged.
+func prepareParamKindsFromVector(vec *vector.Vector) []vector.PrepareParamKind {
+	// A uniform scalar is already represented by the aggregate's legacy
+	// summary.  Only the heterogeneous sidecar needs an O(rows) payload.
+	if vec == nil || len(vec.GetPrepareParamKinds()) == 0 {
+		return nil
+	}
+	kinds := make([]vector.PrepareParamKind, vec.Length())
+	hasKind := false
+	for i := range kinds {
+		if vec.IsNull(uint64(i)) {
+			continue
+		}
+		kind := vec.GetPrepareParamKindAt(i)
+		kinds[i] = kind
+		if kind != vector.PrepareParamNone {
+			hasKind = true
+		}
+	}
+	if !hasKind {
+		return nil
+	}
+	return kinds
+}
+
+// PrepareParamKindsForChunk returns winner provenance in the same row order as
+// SaveIntermediateResultOfChunk.  Preserving aggregates use vecs[0] as their
+// result vector; callers only request this capability for those aggregates.
+func (ae *aggExec) PrepareParamKindsForChunk(chunk int) []vector.PrepareParamKind {
+	if chunk < 0 || chunk >= len(ae.state) || len(ae.state[chunk].vecs) == 0 {
+		return nil
+	}
+	return prepareParamKindsFromVector(ae.state[chunk].vecs[0])
+}
+
+// PrepareParamKindRowCountForChunk returns the number of rows serialized by
+// SaveIntermediateResultOfChunk.  It is used only as a validation bound by
+// the transient PPK decoder; it must not allocate or inspect provenance.
+func (ae *aggExec) PrepareParamKindRowCountForChunk(chunk int) int {
+	if chunk < 0 || chunk >= len(ae.state) || len(ae.state[chunk].vecs) == 0 ||
+		ae.state[chunk].vecs[0] == nil {
+		return -1
+	}
+	return ae.state[chunk].vecs[0].Length()
+}
+
+// PrepareParamKindRowCountFlat returns the packed row count consumed by
+// RestorePrepareParamKindsFlat after UnmarshalFromReader has compacted all
+// serialized chunks into the aggregate state.
+func (ae *aggExec) PrepareParamKindRowCountFlat() int {
+	rows := 0
+	for i := range ae.state {
+		if len(ae.state[i].vecs) == 0 || ae.state[i].vecs[0] == nil {
+			continue
+		}
+		rows += ae.state[i].vecs[0].Length()
+	}
+	return rows
+}
+
+// prepareParamKindSummaryFromVector returns the transport-significant scalar
+// summary for a result vector.  Uniform metadata is deliberately kept O(1);
+// a heterogeneous sidecar is scanned only when the caller needs to summarize
+// a selected subset (the exact sidecar is emitted separately in that case).
+func prepareParamKindSummaryFromVector(vec *vector.Vector) (vector.PrepareParamKind, bool) {
+	if vec == nil || vec.Length() == 0 || vec.AllNull() {
+		return vector.PrepareParamNone, false
+	}
+	if len(vec.GetPrepareParamKinds()) == 0 {
+		kind := vec.GetPrepareParamKind()
+		if kind == vector.PrepareParamNone {
+			return vector.PrepareParamNone, false
+		}
+		return kind, true
+	}
+	var kind vector.PrepareParamKind
+	seen := false
+	for row := 0; row < vec.Length(); row++ {
+		if vec.IsNull(uint64(row)) {
+			continue
+		}
+		current := vec.GetPrepareParamKindAt(row)
+		if !seen {
+			kind, seen = current, true
+		} else if current != kind {
+			kind = vector.PrepareParamNone
+		}
+	}
+	if !seen || kind == vector.PrepareParamNone {
+		return vector.PrepareParamNone, false
+	}
+	return kind, true
+}
+
+// PrepareParamKindSummaryForChunk returns the scalar source category for the
+// rows written by SaveIntermediateResultOfChunk.  It is separate from
+// PrepareParamKindsForChunk so uniform vectors do not allocate a row payload.
+func (ae *aggExec) PrepareParamKindSummaryForChunk(chunk int) (vector.PrepareParamKind, bool) {
+	if chunk < 0 || chunk >= len(ae.state) || len(ae.state[chunk].vecs) == 0 {
+		return vector.PrepareParamNone, false
+	}
+	return prepareParamKindSummaryFromVector(ae.state[chunk].vecs[0])
+}
+
+// PrepareParamKindSummaryForSelection summarizes the rows emitted by
+// writeStateToBuf without materializing a uniform per-row representation.
+func (ae *aggExec) PrepareParamKindSummaryForSelection(flags [][]uint8) (vector.PrepareParamKind, bool) {
+	var kind vector.PrepareParamKind
+	seen := false
+	for chunk, chunkFlags := range flags {
+		if len(chunkFlags) == 0 || chunk >= len(ae.state) || len(ae.state[chunk].vecs) == 0 {
+			continue
+		}
+		vec := ae.state[chunk].vecs[0]
+		if vec == nil {
+			continue
+		}
+		for row, flag := range chunkFlags {
+			if flag == 0 || row >= vec.Length() || vec.IsNull(uint64(row)) {
+				continue
+			}
+			current := vec.GetPrepareParamKindAt(row)
+			if current == vector.PrepareParamNone {
+				continue
+			}
+			if !seen {
+				kind, seen = current, true
+			} else if current != kind {
+				kind = vector.PrepareParamNone
+			}
+		}
+	}
+	if !seen || kind == vector.PrepareParamNone {
+		return vector.PrepareParamNone, false
+	}
+	return kind, true
+}
+
+// PrepareParamKindsForSelection follows writeStateToBuf's packed row order:
+// chunks in ascending order, then selected rows within each chunk.
+func (ae *aggExec) PrepareParamKindsForSelection(flags [][]uint8) []vector.PrepareParamKind {
+	hasMetadata := false
+	rowCount := 0
+	for chunk, chunkFlags := range flags {
+		if len(chunkFlags) == 0 || chunk >= len(ae.state) || len(ae.state[chunk].vecs) == 0 {
+			continue
+		}
+		vec := ae.state[chunk].vecs[0]
+		if vec != nil && len(vec.GetPrepareParamKinds()) != 0 {
+			hasMetadata = true
+		}
+		for _, flag := range chunkFlags {
+			if flag != 0 {
+				rowCount++
+			}
+		}
+	}
+	if !hasMetadata || rowCount == 0 {
+		return nil
+	}
+	kinds := make([]vector.PrepareParamKind, 0, rowCount)
+	for chunk, chunkFlags := range flags {
+		if len(chunkFlags) == 0 || chunk >= len(ae.state) || len(ae.state[chunk].vecs) == 0 {
+			continue
+		}
+		vec := ae.state[chunk].vecs[0]
+		for row, flag := range chunkFlags {
+			if flag == 0 {
+				continue
+			}
+			if vec == nil {
+				kinds = append(kinds, vector.PrepareParamNone)
+			} else {
+				kinds = append(kinds, vec.GetPrepareParamKindAt(row))
+			}
+		}
+	}
+	for _, kind := range kinds {
+		if kind != vector.PrepareParamNone {
+			return kinds
+		}
+	}
+	return nil
+}
+
+func (ae *aggExec) RestorePrepareParamKindsForChunk(
+	chunk int,
+	kinds []vector.PrepareParamKind,
+	mp *mpool.MPool,
+) error {
+	if chunk < 0 || chunk >= len(ae.state) || len(ae.state[chunk].vecs) == 0 {
+		return moerr.NewInternalErrorNoCtxf("aggregate provenance chunk out of range: %d", chunk)
+	}
+	vec := ae.state[chunk].vecs[0]
+	if vec == nil {
+		return moerr.NewInternalErrorNoCtx("aggregate provenance vector is nil")
+	}
+	if len(kinds) != vec.Length() {
+		return moerr.NewInternalErrorNoCtxf(
+			"aggregate provenance row count %d does not match %d", len(kinds), vec.Length())
+	}
+	return vec.SetPrepareParamKindsWithMP(kinds, mp)
+}
+
+// RestorePrepareParamKindsFlat restores rows packed by UnmarshalFromReader.
+// The aggregate reader may repack several serialized chunks into fresh
+// AggBatchSize chunks, so the wire metadata is intentionally a flat sequence.
+func (ae *aggExec) RestorePrepareParamKindsFlat(
+	kinds []vector.PrepareParamKind,
+	mp *mpool.MPool,
+) error {
+	if len(kinds) == 0 {
+		return nil
+	}
+	pos := 0
+	for chunk := range ae.state {
+		if len(ae.state[chunk].vecs) == 0 || ae.state[chunk].vecs[0] == nil {
+			continue
+		}
+		vec := ae.state[chunk].vecs[0]
+		n := vec.Length()
+		if pos+n > len(kinds) {
+			return moerr.NewInternalErrorNoCtx("aggregate provenance payload is shorter than state")
+		}
+		if err := vec.SetPrepareParamKindsWithMP(kinds[pos:pos+n], mp); err != nil {
+			return err
+		}
+		pos += n
+	}
+	if pos != len(kinds) {
+		return moerr.NewInternalErrorNoCtx("aggregate provenance payload has trailing rows")
+	}
+	return nil
 }
 
 func (ae *aggExec) getChunkSize() int {
@@ -671,17 +963,24 @@ func (ae *aggExec) GetNumGroups() int {
 func (ae *aggExec) GroupGrow(more int) error {
 	if ae.chunkSize == 1 {
 		ae.state = make([]aggState, 1)
-		if err := ae.state[0].init(ae.mp, 1, 1, &ae.aggInfo, true); err != nil {
-			panic(err)
+		if err := ae.state[0].init(ae.mp, 0, 1, &ae.aggInfo, true); err != nil {
+			ae.state = nil
+			return err
 		}
-		ae.state[0].grow(ae.mp, 1, true)
 		// Ensure vecs have AggBatchSize capacity so chunkArr is safe.
 		for _, vec := range ae.state[0].vecs {
 			if vec != nil && vec.Capacity() < AggBatchSize {
 				if err := vec.PreExtend(AggBatchSize, ae.mp); err != nil {
-					panic(err)
+					ae.state[0].free(ae.mp)
+					ae.state = nil
+					return err
 				}
 			}
+		}
+		if _, _, err := ae.state[0].grow(ae.mp, 1, true); err != nil {
+			ae.state[0].free(ae.mp)
+			ae.state = nil
+			return err
 		}
 		return nil
 	}
@@ -689,7 +988,11 @@ func (ae *aggExec) GroupGrow(more int) error {
 	// grow the state until the more groups are added
 	for remain := int32(more); remain > 0; {
 		if len(ae.state) != 0 {
-			_, remain = ae.state[len(ae.state)-1].grow(ae.mp, remain, true)
+			var err error
+			_, remain, err = ae.state[len(ae.state)-1].grow(ae.mp, remain, true)
+			if err != nil {
+				return err
+			}
 		}
 
 		if remain == 0 {
@@ -697,6 +1000,7 @@ func (ae *aggExec) GroupGrow(more int) error {
 		}
 		ae.state = append(ae.state, aggState{})
 		if err := ae.state[len(ae.state)-1].init(ae.mp, 0, AggBatchSize, &ae.aggInfo, true); err != nil {
+			ae.state = ae.state[:len(ae.state)-1]
 			return err
 		}
 	}
@@ -711,7 +1015,7 @@ func (ae *aggExec) preAllocateGroupsWithNulls(more int, setNulls bool) error {
 	// grow the state until the more groups are added
 	for remain := int32(more); remain > 0; {
 		if len(ae.state) != 0 {
-			_, remain = ae.state[len(ae.state)-1].grow(ae.mp, remain, false)
+			_, remain, _ = ae.state[len(ae.state)-1].grow(ae.mp, remain, false)
 		}
 
 		if remain == 0 {
@@ -719,6 +1023,7 @@ func (ae *aggExec) preAllocateGroupsWithNulls(more int, setNulls bool) error {
 		}
 		ae.state = append(ae.state, aggState{})
 		if err := ae.state[len(ae.state)-1].init(ae.mp, 0, AggBatchSize, &ae.aggInfo, setNulls); err != nil {
+			ae.state = ae.state[:len(ae.state)-1]
 			return err
 		}
 	}
@@ -738,9 +1043,26 @@ func (ae *aggExec) SaveIntermediateResult(cnt int64, flags [][]uint8, buf *bytes
 		return err
 	}
 
-	// write the number of chunks
-	types.WriteInt32(buf, int32(len(flags)))
+	// Empty chunks carry no positional meaning in the intermediate format: the
+	// reader packs every selected state contiguously. Group spill commonly
+	// selects one 8K state chunk out of hundreds, so emitting all of the empty
+	// chunk headers bloats millions of small records and adds needless decode work.
+	// A nil/empty flag slice is the caller's compact representation of an empty
+	// chunk; non-empty all-zero flags remain encoded for compatibility.
+	var chunks int32
 	for i := range flags {
+		if len(flags[i]) > 0 {
+			chunks++
+		}
+	}
+	types.WriteInt32(buf, chunks)
+	for i := range flags {
+		if len(flags[i]) == 0 {
+			continue
+		}
+		if i >= len(ae.state) {
+			return moerr.NewInternalErrorNoCtxf("aggregate state chunk out of range: %d >= %d", i, len(ae.state))
+		}
 		if err := ae.state[i].writeStateToBuf(ae.mp, &ae.aggInfo, flags[i], buf); err != nil {
 			return err
 		}
@@ -781,12 +1103,15 @@ func checkAggStateMagic(reader io.Reader) {
 	}
 }
 
-func (ae *aggExec) UnmarshalFromReader(reader io.Reader, mp *mpool.MPool) error {
+func (ae *aggExec) UnmarshalFromReader(reader io.Reader, mp *mpool.MPool) (retErr error) {
 	checkAggStateMagic(reader)
 	defer checkAggStateMagic(reader)
-
-	// Always unmarshal from a clean state.
-	ae.Free()
+	defer func() {
+		if retErr != nil {
+			ae.Free()
+			ae.state = nil
+		}
+	}()
 
 	// read number of chunks
 	cnt, err := types.ReadInt32(reader)
@@ -796,10 +1121,17 @@ func (ae *aggExec) UnmarshalFromReader(reader io.Reader, mp *mpool.MPool) error 
 
 	// nothing to read
 	if cnt == 0 {
+		ae.Free()
+		ae.state = nil
 		return nil
 	} else if cnt == 1 {
-		// easy case, just one chunk and we read it directly.
-		ae.state = make([]aggState, 1)
+		// The compact spill format makes this the common path. Retain one simple
+		// fixed-state chunk across records so UnmarshalWithReader can reuse its
+		// off-heap vector capacity instead of mmap/munmap for every small record.
+		if len(ae.state) != 1 {
+			ae.Free()
+			ae.state = make([]aggState, 1)
+		}
 		if _, err := ae.state[0].readState(mp, reader, &ae.aggInfo); err != nil {
 			return err
 		}
@@ -811,8 +1143,17 @@ func (ae *aggExec) UnmarshalFromReader(reader io.Reader, mp *mpool.MPool) error 
 				}
 			}
 		}
+		if !ae.aggInfo.saveArg && ae.aggInfo.makeMarshalerUnmarshaler == nil {
+			ae.state[0].capacity = AggBatchSize
+		}
 		return nil
 	}
+
+	// Multi-chunk inputs may need to repack several independently allocated
+	// states. Keep their historical cleanup path; only the one-chunk path above
+	// has a complete bounded reuse invariant.
+	ae.Free()
+	ae.state = nil
 
 	// multi chunks to read, in this case, we will read each chunk and merge them
 	// into fully packed chunks.

@@ -29,3 +29,16 @@ select _wstart, _wend, max(temperature) from sensor_data where ts > "2023-08-01 
 select _wstart, _wend, max(temperature) from sensor_data interval(ts, 1, second);
 select _wstart, _wend, max(temperature) from sensor_data interval(ts, 2, hour);
 select _wstart, _wend, max(temperature) from sensor_data interval(ts, 3, day);
+
+-- Zero temporal values are distinct from the valid 0001-01-01 epoch in
+-- sliding-window boundary construction.
+set @old_sql_mode_time_window = @@sql_mode;
+set sql_mode = '';
+drop table if exists zero_temporal_window;
+create table zero_temporal_window(ts datetime primary key, v int);
+insert into zero_temporal_window values
+    ('0000-00-00 00:00:00', 10),
+    ('0001-01-01 00:00:00', 20);
+select _wstart, _wend, max(v) from zero_temporal_window interval(ts, 1, second) sliding(1, second);
+drop table zero_temporal_window;
+set sql_mode = @old_sql_mode_time_window;

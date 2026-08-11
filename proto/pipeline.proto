@@ -35,6 +35,7 @@ enum Method {
   StopSending = 4;
   PipelineStreamFinish = 5;
   PipelineStreamFinishAck = 6;
+  PipelineBatchAck = 7;
 }
 
 // StreamTeardownMode negotiates whether a completed logical pipeline stream can
@@ -66,6 +67,12 @@ message Message {
   string debugMsg = 10;
   StreamTeardownMode requested_teardown_mode = 11;
   StreamTeardownMode accepted_teardown_mode = 12;
+  uint32 requested_batch_credit_count = 13;
+  uint64 requested_batch_credit_bytes = 14;
+  uint32 accepted_batch_credit_count = 15;
+  uint64 accepted_batch_credit_bytes = 16;
+  uint64 batch_sequence = 17;
+  uint64 batch_ack_sequence = 18;
 }
 
 message Connector {
@@ -118,6 +125,7 @@ message Aggregate {
   bool dist = 2;
   repeated plan.Expr expr = 3;
   bytes config = 4;
+  plan.AggregateConfigType config_type = 5;
 }
 
 message Group {
@@ -132,6 +140,8 @@ message Group {
   repeated uint32 PartialResultTypes = 9;
   repeated bool grouping_flag = 10;
   int64 spill_mem = 11;
+  // Positions in exprs used for physical hash/equality. Empty means all exprs.
+  repeated int32 group_by_hash_key = 12;
 }
 
 message Insert {
@@ -162,6 +172,7 @@ message MultiUpdate {
   uint64 affected_rows = 1;
   uint32 Action = 2;
   repeated plan.UpdateCtx update_ctx_list = 3;
+  bool reject_zero_temporal = 4;
 }
 
 message Array {
@@ -202,6 +213,7 @@ message PreInsert {
   plan.Expr cluster_by_expr = 9;
   bool is_old_update = 10;
   bool is_new_update = 11;
+  bool reject_zero_temporal = 12;
 }
 
 message PostDml {
@@ -251,6 +263,7 @@ message FuzzyFilter {
   plan.Type PkTyp = 3 [(gogoproto.nullable) = false];
   int32 BuildIdx = 4;
   bool IfInsertFromUnique = 5;
+  plan.RuntimeFilterSpec runtime_filter_spec = 6;
 }
 
 message HashJoin {
@@ -359,6 +372,8 @@ message TableFunction {
   bool is_single = 6;
   plan.IndexReaderParam index_reader_param = 7;
   repeated plan.RuntimeFilterSpec runtime_filter_probe_list = 8;
+  plan.ObjectRef fulltext_source_ref = 9;
+  plan.ObjectRef fulltext_index_ref = 10;
 }
 
 message ExternalName2ColIndex {
@@ -471,12 +486,6 @@ message ExternalScan {
   bool iceberg_delete_spill_enabled = 23;
 }
 
-message StreamScan {
-  plan.TableDef tbl_def = 1;
-  int64 offset = 2;
-  int64 limit = 3;
-}
-
 message TableScan {
   repeated plan.Type types = 1 [(gogoproto.nullable) = false];
   repeated plan.Expr filter_exprs = 2;
@@ -565,7 +574,8 @@ message Instruction {
   LockOp lock_op = 33;
   Shuffle shuffle = 34;
   Merge merge = 35;
-  StreamScan stream_scan = 36;
+  reserved 36; // former stream_scan
+  reserved "stream_scan";
   PreInsertSecondaryIndex pre_insert_secondary_index = 37;
   SampleFunc sample_func = 38;
   FuzzyFilter fuzzy_filter = 39;
@@ -585,6 +595,10 @@ message Instruction {
   MultiUpdate multi_update = 52;
   PostDml post_dml = 53;
   int64 spill_mem = 54;
+  plan.MongoScan mongodb_scan = 55;
+  // FILTER only: execute assertion expressions for their error side effect and
+  // pass the input batch through without building a selection vector.
+  bool filter_is_assert = 56;
 }
 
 message AnalysisList {
@@ -623,6 +637,7 @@ message ProcessLimitation {
   int64 batch_size = 3;
   int64 partition_rows = 4;
   int64 reader_size = 5;
+  int64 spill_size = 6;
 }
 
 message PrepareParamInfo {
@@ -644,6 +659,20 @@ message ProcessInfo {
   SessionLoggerInfo session_logger = 8 [(gogoproto.nullable) = false];
   PrepareParamInfo prepare_params = 9 [(gogoproto.nullable) = false];
   int64 affected_rows = 10;
+  // Planned PipelineMessage RPCs per target CN for statement-level remote
+  // MessageBoard and resource-account terminal ownership.
+  map<string, uint32> remote_fragment_counts = 11;
+  // Unique physical execution attempt. Unlike the SQL statement ID, this
+  // changes across retries and prepared-statement executions.
+  bytes remote_execution_id = 12;
+  // Statement-level INSERT IGNORE semantics used by casts in remote pipelines.
+  // Absent in messages from older CNs, which safely decodes as false.
+  bool statement_runtime_ignore = 13;
+  // Snapshot against which this execution generation's plan was bound. It is
+  // immutable for the generation even when RC lock handling advances the
+  // transaction snapshot. Absent on older senders, receivers fall back to the
+  // transaction snapshot for rolling-upgrade compatibility.
+  timestamp.Timestamp plan_snapshot_ts = 14;
 }
 
 message SessionInfo {
@@ -659,6 +688,8 @@ message SessionInfo {
   int64 lock_wait_timeout = 10;
   bool lock_wait_timeout_set = 11;
   bool matrixone_native_mode = 12;
+  bool explicit_zero_temporal_cast_returns_null = 13;
+  string sql_mode = 14;
 }
 
 message SessionLoggerInfo {

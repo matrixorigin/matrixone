@@ -110,6 +110,7 @@ func (proc *Process) NewNoContextChildProc(dataEntryCount int) *Process {
 	child := &Process{
 		Base: proc.Base,
 	}
+	child.CopyPlanSnapshotFrom(proc)
 
 	if dataEntryCount > 0 {
 		child.Reg.MergeReceivers = make([]*WaitRegister, dataEntryCount)
@@ -126,6 +127,7 @@ func (proc *Process) NewNoContextChildProcWithChannel(dataEntryCount int, channe
 	child := &Process{
 		Base: proc.Base,
 	}
+	child.CopyPlanSnapshotFrom(proc)
 
 	if dataEntryCount > 0 {
 		child.Reg.MergeReceivers = make([]*WaitRegister, dataEntryCount)
@@ -240,6 +242,12 @@ func (proc *Process) Free() {
 		proc.Base.messageBoard.Reset()
 		proc.Base.messageBoard = nil
 	}
+	proc.Base.cteMemoryBudgetMu.Lock()
+	if proc.Base.cteMemoryBudget != nil {
+		proc.Base.cteMemoryBudget.Close()
+		proc.Base.cteMemoryBudget = nil
+	}
+	proc.Base.cteMemoryBudgetMu.Unlock()
 	proc.setPrepareParams(nil, nil, false)
 }
 

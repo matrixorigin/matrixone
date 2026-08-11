@@ -18,13 +18,33 @@ import (
 	"context"
 	"sync"
 	"sync/atomic"
+	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"golang.org/x/sys/cpu"
 )
+
+const (
+	shuffleMemoryShardCount   = 64
+	shuffleBatchPoolShardSize = 2
+)
+
+type shuffleMemoryShard struct {
+	sync.Mutex
+	tracked map[*batch.Batch]int64
+	_       cpu.CacheLinePad
+}
+
+type shuffleBatchPoolShard struct {
+	sync.Mutex
+	batches [shuffleBatchPoolShardSize]*batch.Batch
+	count   int
+	_       cpu.CacheLinePad
+}
 
 type ShufflePool struct {
 	bucketNum  int32
@@ -44,8 +64,12 @@ type ShufflePool struct {
 	batchSets  []*batch.BatchSet
 	batchLocks []sync.Mutex
 	closed     []bool
-	batchPool  []*batch.Batch
-	batchLock  sync.Mutex
+
+	// Recycle storage is sharded by the local holder bound, not by the global
+	// bucket count. This keeps lookup O(1), gives each concurrent holder two
+	// cache slots, and prevents one previously hot bucket from consuming the
+	// capacity needed to warm every other holder shard.
+	batchPools []shuffleBatchPoolShard
 
 	batchWaiters   []chan bool
 	endingWaiters  []chan bool
@@ -62,15 +86,15 @@ type ShufflePool struct {
 	readyBuckets       chan int32
 	finalCursor        atomic.Uint32
 
-	memoryLock sync.Mutex
-	tracked    map[*batch.Batch]int64
-	current    int64
-	peak       int64
+	memoryShards [shuffleMemoryShardCount]shuffleMemoryShard
+	current      atomic.Int64
+	peak         atomic.Int64
 }
 
 func NewShufflePool(bucketNum int32, maxHolders int32, drainAll bool) *ShufflePool {
 	allBuckets := drainAll
 	readyLimit := max(2, int(maxHolders)*2)
+	batchPoolShards := max(1, int(maxHolders))
 	sp := &ShufflePool{
 		bucketNum:          bucketNum,
 		maxHolders:         maxHolders,
@@ -80,14 +104,13 @@ func NewShufflePool(bucketNum int32, maxHolders int32, drainAll bool) *ShufflePo
 		closed:             make([]bool, bucketNum),
 		batchWaiters:       make([]chan bool, bucketNum),
 		endingWaiters:      make([]chan bool, bucketNum),
-		batchPool:          make([]*batch.Batch, 0, readyLimit),
+		batchPools:         make([]shuffleBatchPoolShard, batchPoolShards),
 		anyBatchWaiter:     make(chan struct{}, 1),
 		endingWaiter:       make(chan struct{}),
 		readyLimit:         readyLimit,
 		spaceWaiter:        make(chan struct{}),
 		bucketReadyCounts:  make([]int, bucketNum),
 		bucketSpaceWaiters: make([]chan struct{}, bucketNum),
-		tracked:            make(map[*batch.Batch]int64),
 		producers:          make(map[int32]context.CancelCauseFunc),
 	}
 	if allBuckets {
@@ -279,25 +302,66 @@ func (sp *ShufflePool) closeConsumer(bucket int32, m *mpool.MPool) {
 }
 
 func (sp *ShufflePool) cleanBatchPool(m *mpool.MPool) {
-	sp.batchLock.Lock()
-	defer sp.batchLock.Unlock()
-	for _, bat := range sp.batchPool {
-		sp.forgetBatch(bat)
-		bat.Clean(m)
+	for i := range sp.batchPools {
+		shard := &sp.batchPools[i]
+		shard.Lock()
+		pool := shard.batches
+		count := shard.count
+		clear(shard.batches[:count])
+		shard.count = 0
+		shard.Unlock()
+		for _, bat := range pool[:count] {
+			sp.forgetBatch(bat)
+			bat.Clean(m)
+		}
 	}
-	sp.batchPool = sp.batchPool[:0]
 }
 
 func (sp *ShufflePool) putBatchToPool(buf *batch.Batch, m *mpool.MPool) {
 	sp.syncBatch(buf)
-	sp.batchLock.Lock()
-	defer sp.batchLock.Unlock()
-	if len(sp.batchPool) < sp.readyLimit {
-		sp.batchPool = append(sp.batchPool, buf)
+	shard := sp.batchPoolShard(buf.ShuffleIDX)
+	shard.Lock()
+	if shard.count < len(shard.batches) {
+		shard.batches[shard.count] = buf
+		shard.count++
+		shard.Unlock()
 		return
 	}
+	shard.Unlock()
 	sp.forgetBatch(buf)
 	buf.Clean(m)
+}
+
+func (sp *ShufflePool) getBatchFromPool(bucket int32) *batch.Batch {
+	shard := sp.batchPoolShard(bucket)
+	shard.Lock()
+	if shard.count == 0 {
+		shard.Unlock()
+		return nil
+	}
+	shard.count--
+	buf := shard.batches[shard.count]
+	shard.batches[shard.count] = nil
+	shard.Unlock()
+	return buf
+}
+
+func (sp *ShufflePool) batchPoolLength() int {
+	length := 0
+	for i := range sp.batchPools {
+		shard := &sp.batchPools[i]
+		shard.Lock()
+		length += shard.count
+		shard.Unlock()
+	}
+	return length
+}
+
+func (sp *ShufflePool) batchPoolShard(bucket int32) *shuffleBatchPoolShard {
+	if bucket < 0 {
+		bucket = 0
+	}
+	return &sp.batchPools[int(bucket)%len(sp.batchPools)]
 }
 
 func (sp *ShufflePool) discardBatch(buf *batch.Batch, m *mpool.MPool) {
@@ -308,47 +372,58 @@ func (sp *ShufflePool) discardBatch(buf *batch.Batch, m *mpool.MPool) {
 	buf.Clean(m)
 }
 
-func (sp *ShufflePool) getBatchFromPool() *batch.Batch {
-	sp.batchLock.Lock()
-	defer sp.batchLock.Unlock()
-	if len(sp.batchPool) == 0 {
-		return nil
-	}
-	last := len(sp.batchPool) - 1
-	buf := sp.batchPool[last]
-	sp.batchPool = sp.batchPool[:last]
-	return buf
-}
-
 func (sp *ShufflePool) syncBatch(buf *batch.Batch) {
-	sp.memoryLock.Lock()
-	defer sp.memoryLock.Unlock()
+	shard := sp.memoryShard(buf)
+	shard.Lock()
 	allocated := int64(buf.Allocated())
-	previous := sp.tracked[buf]
-	sp.tracked[buf] = allocated
-	sp.current += allocated - previous
-	sp.peak = max(sp.peak, sp.current)
+	if shard.tracked == nil {
+		shard.tracked = make(map[*batch.Batch]int64)
+	}
+	previous := shard.tracked[buf]
+	shard.tracked[buf] = allocated
+	shard.Unlock()
+	sp.addMemory(allocated - previous)
 }
 
-func (sp *ShufflePool) syncBatchSet(bs *batch.BatchSet) {
-	for i := 0; i < bs.Length(); i++ {
+func (sp *ShufflePool) syncBatchSetFrom(bs *batch.BatchSet, start int) {
+	for i := start; i < bs.Length(); i++ {
 		sp.syncBatch(bs.Get(i))
 	}
 }
 
 func (sp *ShufflePool) forgetBatch(buf *batch.Batch) {
-	sp.memoryLock.Lock()
-	defer sp.memoryLock.Unlock()
-	if allocated, ok := sp.tracked[buf]; ok {
-		sp.current -= allocated
-		delete(sp.tracked, buf)
+	shard := sp.memoryShard(buf)
+	shard.Lock()
+	allocated, ok := shard.tracked[buf]
+	if ok {
+		delete(shard.tracked, buf)
+	}
+	shard.Unlock()
+	if ok {
+		sp.current.Add(-allocated)
+	}
+}
+
+func (sp *ShufflePool) memoryShard(buf *batch.Batch) *shuffleMemoryShard {
+	idx := (uintptr(unsafe.Pointer(buf)) >> 6) & (shuffleMemoryShardCount - 1)
+	return &sp.memoryShards[idx]
+}
+
+func (sp *ShufflePool) addMemory(delta int64) {
+	if delta == 0 {
+		return
+	}
+	current := sp.current.Add(delta)
+	for {
+		peak := sp.peak.Load()
+		if current <= peak || sp.peak.CompareAndSwap(peak, current) {
+			return
+		}
 	}
 }
 
 func (sp *ShufflePool) memoryPeak() int64 {
-	sp.memoryLock.Lock()
-	defer sp.memoryLock.Unlock()
-	return sp.peak
+	return sp.peak.Load()
 }
 
 func (sp *ShufflePool) reserveReady(bucket int32, count int) (<-chan struct{}, bool) {
@@ -543,21 +618,26 @@ func (sp *ShufflePool) tryWrite(
 				sp.batchLocks[bucket].Unlock()
 				break
 			}
-			readyDelta := sp.batchSets[bucket].ReadyDelta(len(chunk))
+			readyDelta := sp.batchSets[bucket].ReadyDeltaFor(srcBatch, len(chunk))
 			wait, ok := sp.reserveReady(int32(bucket), readyDelta)
 			if !ok {
 				sp.batchLocks[bucket].Unlock()
 				return bucket, offset, wait, false, nil
 			}
 
-			oldReady := sp.batchSets[bucket].ReadyCount()
-			buf := sp.getBatchFromPool()
-			consumed, writeErr := sp.batchSets[bucket].Union(proc.Mp(), srcBatch, chunk, buf)
+			batchSet := sp.batchSets[bucket]
+			oldReady := batchSet.ReadyCount()
+			oldLength := batchSet.Length()
+			buf := sp.getBatchFromPool(int32(bucket))
+			consumed, writeErr := batchSet.Union(proc.Mp(), srcBatch, chunk, buf)
 			if !consumed && buf != nil {
 				sp.putBatchToPool(buf, proc.Mp())
 			}
-			sp.syncBatchSet(sp.batchSets[bucket])
-			actualDelta := sp.batchSets[bucket].ReadyCount() - oldReady
+			// Union can only grow the previous writable tail and append new
+			// batches. Full batches before that tail are immutable, so avoid
+			// rescanning the entire bucket after every chunk.
+			sp.syncBatchSetFrom(batchSet, max(0, oldLength-1))
+			actualDelta := batchSet.ReadyCount() - oldReady
 			if actualDelta < readyDelta {
 				sp.releaseReady(int32(bucket), readyDelta-actualDelta)
 			}

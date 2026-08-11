@@ -130,14 +130,15 @@ func getRaftConfig(shardID uint64, replicaID uint64) config.Config {
 
 // store manages log shards including the HAKeeper shard on each node.
 type store struct {
-	cfg               Config
-	nh                *dragonboat.NodeHost
-	haKeeperReplicaID uint64
-	checker           hakeeper.Checker
-	alloc             hakeeper.IDAllocator
-	stopper           *stopper.Stopper
-	tickerStopper     *stopper.Stopper
-	runtime           runtime.Runtime
+	cfg                    Config
+	nh                     *dragonboat.NodeHost
+	haKeeperReplicaID      uint64
+	commandDeliveryEnabled atomic.Bool
+	checker                hakeeper.Checker
+	alloc                  hakeeper.IDAllocator
+	stopper                *stopper.Stopper
+	tickerStopper          *stopper.Stopper
+	runtime                runtime.Runtime
 
 	bootstrapCheckCycles uint64
 	bootstrapMgr         *bootstrap.Manager
@@ -859,6 +860,138 @@ func (l *store) getCommandBatch(ctx context.Context,
 	return *(v.(*pb.CommandBatch)), nil
 }
 
+func (l *store) getCommandDeliveryState(ctx context.Context) (hakeeper.CommandDeliveryState, error) {
+	v, err := l.read(ctx, hakeeper.DefaultHAKeeperShardID,
+		&hakeeper.CommandDeliveryStateQuery{})
+	if err != nil {
+		return hakeeper.CommandDeliveryState{}, handleNotHAKeeperError(ctx, err)
+	}
+	return v.(hakeeper.CommandDeliveryState), nil
+}
+
+func (l *store) commandDeliveryTargetsReady(
+	delivery hakeeper.CommandDeliveryState,
+	state *pb.CheckerState,
+) bool {
+	cfg := l.cfg.GetHAKeeperConfig()
+	cfg.Fill()
+	for uuid, info := range state.CNState.Stores {
+		if !cfg.CNStoreExpired(info.Tick, state.Tick) && !delivery.CNReady[uuid] {
+			return false
+		}
+	}
+	for uuid, info := range state.TNState.Stores {
+		if !cfg.TNStoreExpired(info.Tick, state.Tick) && !delivery.TNReady[uuid] {
+			return false
+		}
+	}
+	return true
+}
+
+func (l *store) commandDeliveryLogStoresReady(state *pb.CheckerState) bool {
+	cfg := l.cfg.GetHAKeeperConfig()
+	cfg.Fill()
+	for _, info := range state.LogState.Stores {
+		if !cfg.LogStoreExpired(info.Tick, state.Tick) &&
+			!info.CommandDeliverySupported {
+			return false
+		}
+	}
+	return true
+}
+
+func (l *store) tryEnableCommandDelivery(
+	ctx context.Context,
+	state *pb.CheckerState,
+) (bool, error) {
+	if l.commandDeliveryEnabled.Load() {
+		return true, nil
+	}
+	delivery, err := l.getCommandDeliveryState(ctx)
+	if err != nil {
+		return false, err
+	}
+	if delivery.Enabled {
+		l.commandDeliveryEnabled.Store(true)
+		return true, nil
+	}
+	// Phase one is proposed only after the leader has observed support from
+	// every current HAKeeper voter/non-voter, every live LogStore that can be
+	// admitted, and every current CN/TN command target, and only after all earlier
+	// HAKeeper admissions have completed. An old replica cannot decode the new
+	// update tag, and an old service would otherwise consume a command
+	// destructively. The committed phase-one barrier then discards these possibly
+	// divergent pre-upgrade observations on every replica.
+	if state == nil {
+		state, err = l.getCheckerStateWithContext(ctx)
+		if err != nil {
+			return false, err
+		}
+	}
+	shard, ok := state.LogState.Shards[hakeeper.DefaultHAKeeperShardID]
+	if !ok || len(shard.Replicas) == 0 {
+		return false, nil
+	}
+	resetServiceBarrier := delivery.Preparing &&
+		(delivery.Ready == nil || delivery.CNReady == nil || delivery.TNReady == nil)
+	cfg := l.cfg.GetHAKeeperConfig()
+	cfg.Fill()
+	allMembers := func(replicas map[uint64]string, predicate func(string) bool) bool {
+		for _, uuid := range replicas {
+			if !predicate(uuid) {
+				return false
+			}
+		}
+		return true
+	}
+	ready := func(uuid string) bool {
+		if delivery.Preparing && !resetServiceBarrier {
+			return delivery.Ready[uuid]
+		}
+		store, ok := state.LogState.Stores[uuid]
+		return ok && store.CommandDeliverySupported
+	}
+	if !allMembers(shard.Replicas, ready) || !allMembers(shard.NonVotingReplicas, ready) {
+		return false, nil
+	}
+	if !delivery.Preparing && !delivery.HAKeeperAdmissionReady {
+		return false, nil
+	}
+	if delivery.Preparing && !resetServiceBarrier {
+		if !l.commandDeliveryTargetsReady(delivery, state) {
+			return false, nil
+		}
+	} else {
+		if !l.commandDeliveryLogStoresReady(state) {
+			return false, nil
+		}
+		for _, info := range state.CNState.Stores {
+			if !cfg.CNStoreExpired(info.Tick, state.Tick) && !info.CommandDeliveryAckSupported {
+				return false, nil
+			}
+		}
+		for _, info := range state.TNState.Stores {
+			if !cfg.TNStoreExpired(info.Tick, state.Tick) && !info.CommandDeliveryAckSupported {
+				return false, nil
+			}
+		}
+	}
+	cmd := hakeeper.GetEnableCommandDeliveryCmd()
+	if delivery.Preparing && !resetServiceBarrier {
+		cmd = hakeeper.GetEnableCommandDeliveryCmdForConfig(l.cfg.GetHAKeeperConfig())
+	}
+	session := l.nh.GetNoOPSession(hakeeper.DefaultHAKeeperShardID)
+	result, err := l.propose(ctx, session, cmd)
+	if err != nil {
+		return false, handleNotHAKeeperError(ctx, err)
+	}
+	enabled := result.Value == 1
+	if enabled {
+		l.commandDeliveryEnabled.Store(true)
+	}
+	return enabled, nil
+}
+
 func (l *store) getClusterDetails(ctx context.Context) (pb.ClusterDetails, error) {
 	v, err := l.read(ctx,
 		hakeeper.DefaultHAKeeperShardID, &hakeeper.ClusterDetailsQuery{Cfg: l.cfg.GetHAKeeperConfig()})
@@ -1164,14 +1297,20 @@ func (l *store) queryLogLsn(ctx context.Context, shardID uint64, ts time.Time) (
 	}
 }
 
-func (l *store) tickerForTaskSchedule(ctx context.Context, duration time.Duration) {
+type checkerStateGetter func() (*pb.CheckerState, uint64)
+
+func (l *store) tickerForTaskSchedule(
+	ctx context.Context,
+	duration time.Duration,
+	getCheckerState checkerStateGetter,
+) {
 	ticker := time.NewTicker(duration)
 	defer ticker.Stop()
 
 	for {
 		select {
 		case <-ticker.C:
-			state, _ := l.getCheckerStateFromLeader()
+			state, _ := getCheckerState()
 			if state != nil && state.State == pb.HAKeeperRunning {
 				l.taskSchedule(state)
 			}
@@ -1190,6 +1329,23 @@ func (l *store) tickerForTaskSchedule(ctx context.Context, duration time.Duratio
 		}
 	}
 
+}
+
+// startTaskScheduleTicker keeps task scheduling independent from the HAKeeper
+// tick loop while making tickerStopper own and join it before NodeHost.Close.
+func (l *store) startTaskScheduleTicker(
+	getCheckerState checkerStateGetter,
+) error {
+	return l.tickerStopper.RunNamedTask(
+		"hakeeper-task-scheduler",
+		func(ctx context.Context) {
+			l.tickerForTaskSchedule(
+				ctx,
+				l.cfg.HAKeeperCheckInterval.Duration,
+				getCheckerState,
+			)
+		},
+	)
 }
 
 func (l *store) ticker(ctx context.Context) {
@@ -1214,7 +1370,9 @@ func (l *store) ticker(ctx context.Context) {
 	// separate goroutine can avoid the hakeeper's health check and tick update
 	// operations being blocked by task schedule, or the tick will be skipped and
 	// can not correctly estimate the time passing.
-	go l.tickerForTaskSchedule(ctx, l.cfg.HAKeeperCheckInterval.Duration)
+	if err := l.startTaskScheduleTicker(l.getCheckerStateFromLeader); err != nil {
+		return
+	}
 
 	for {
 		select {
@@ -1266,12 +1424,13 @@ func (l *store) hakeeperTick() {
 
 func (l *store) getHeartbeatMessage() pb.LogStoreHeartbeat {
 	m := pb.LogStoreHeartbeat{
-		UUID:           l.id(),
-		RaftAddress:    l.cfg.RaftServiceAddr(),
-		ServiceAddress: l.cfg.LogServiceServiceAddr(),
-		GossipAddress:  l.cfg.GossipServiceAddr(),
-		Replicas:       make([]pb.LogReplicaInfo, 0),
-		Locality:       l.cfg.getLocality(),
+		UUID:                     l.id(),
+		RaftAddress:              l.cfg.RaftServiceAddr(),
+		ServiceAddress:           l.cfg.LogServiceServiceAddr(),
+		GossipAddress:            l.cfg.GossipServiceAddr(),
+		Replicas:                 make([]pb.LogReplicaInfo, 0),
+		Locality:                 l.cfg.getLocality(),
+		CommandDeliverySupported: true,
 	}
 	opts := dragonboat.NodeHostInfoOption{
 		SkipLogInfo: true,

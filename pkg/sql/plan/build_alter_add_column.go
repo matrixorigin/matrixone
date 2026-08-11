@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	indexplugin "github.com/matrixorigin/matrixone/pkg/indexplugin"
+	planplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
@@ -54,7 +55,8 @@ func AddColumn(
 	if err != nil {
 		return false, err
 	}
-	if err = applyColumnAttributesToType(ctx.GetContext(), &colType, specNewColumn.Attributes); err != nil {
+	colType.Charset = uint32(types.CharsetType(types.T(colType.Id)))
+	if err = applyDefaultAndColumnAttributesToType(ctx.GetContext(), &colType, tableDef.DefaultCharset, specNewColumn.Attributes); err != nil {
 		return false, err
 	}
 	if err = checkTypeCapSize(ctx.GetContext(), &colType, newColName); err != nil {
@@ -191,6 +193,8 @@ func buildAddColumnAndConstraint(ctx CompilerContext, alterPlan *plan.AlterTable
 				return nil, err
 			}
 			newCol.GeneratedCol = generatedCol
+		case *tree.AttributeCharset, *tree.AttributeCollate:
+			// Type metadata was resolved centrally before constructing the column.
 			//default:
 			//	return nil, moerr.NewNotSupported(ctx.GetContext(), "unsupport column definition %v", attribute)
 		}
@@ -328,6 +332,7 @@ func checkAddColumWithUniqueKey(ctx context.Context, tableDef *TableDef, uniKey 
 	if uniKey.IndexOption != nil {
 		indexDef.Comment = uniKey.IndexOption.Comment
 	}
+	setIndexDefVisibility(indexDef, uniKey.IndexOption)
 	return indexDef, nil
 }
 
@@ -408,6 +413,7 @@ func DropColumn(
 	}
 
 	delete(alterCtx.alterColMap, colName)
+	delete(alterCtx.changColDefMap, column.ColId)
 	return column.Primary, nil
 }
 
@@ -464,18 +470,25 @@ func handleDropColumnWithIndex(ctx context.Context, colName string, tbInfo *Tabl
 					tbInfo.Indexes = append(tbInfo.Indexes[:i], tbInfo.Indexes[i+1:]...)
 				}
 			default:
-				// Plugin-registered indexes (vector + fulltext) own
-				// their hidden-table count via HiddenTableTypes(). The
-				// previous shape hardcoded 3 for IVF-FLAT, 2 for HNSW,
-				// 1 for fulltext, and silently omitted CAGRA / IVF-PQ
-				// — which left orphan hidden-table IndexDefs in tbInfo
-				// for those algos when the affected column emptied
-				// Parts. Reading the count from the plugin restores
-				// CAGRA / IVF-PQ coverage and stays correct for any
-				// future algo added under the plugin system.
-				if p, ok := indexplugin.Get(algo); ok && len(indexInfo.Parts) == 0 {
-					n := len(p.Catalog().HiddenTableTypes())
-					tbInfo.Indexes = append(tbInfo.Indexes[:i], tbInfo.Indexes[i+n:]...)
+				// Plugin-registered indexes may span multiple hidden IndexDefs;
+				// remove all entries sharing the logical index name when the key
+				// columns are gone or plugin-owned metadata depends on this column.
+				if p, ok := indexplugin.Get(algo); ok {
+					dropIndex := len(indexInfo.Parts) == 0
+					if alterHooks, ok := p.Plan().(planplugin.AlterColumnHooks); ok {
+						affected, err := alterHooks.HandleAlterDropColumn(tbInfo, indexInfo, colName)
+						if err != nil {
+							return err
+						}
+						dropIndex = dropIndex || affected
+					}
+					if !dropIndex {
+						continue
+					}
+					tbInfo.Indexes = RemoveIf[*IndexDef](tbInfo.Indexes, func(def *IndexDef) bool {
+						return def.IndexName == indexInfo.IndexName
+					})
+					i--
 				}
 			}
 		}

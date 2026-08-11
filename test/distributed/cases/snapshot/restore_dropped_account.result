@@ -3,18 +3,18 @@ create account acc01 admin_name = 'test_account' identified by '111';
 drop snapshot if exists spsp01;
 create snapshot spsp01 for account acc01;
 show snapshots;
-SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-spsp01    2025-07-19 05:50:41.915817    account    acc01
+➤ SNAPSHOT_NAME[12,-1,0]  ¦  TIMESTAMP[12,-1,0]  ¦  SNAPSHOT_LEVEL[12,-1,0]  ¦  ACCOUNT_NAME[12,-1,0]  ¦  DATABASE_NAME[12,-1,0]  ¦  TABLE_NAME[12,-1,0]  𝄀
+spsp01  ¦  2026-07-27 06:49:37.558279897  ¦  account  ¦  acc01  ¦    ¦  
 show accounts;
-account_name    admin_name    created_time    status    suspended_time    db_count    tbl_count    size    snapshot_size    comments
-acc01    test_account    2025-07-19 05:50:41    open    null    5    65    0.0    0.0
-sys    root    2025-07-19 05:30:43    open    null    8    110    46.624066    0.0    system account
+➤ account_name[12,-1,0]  ¦  admin_name[12,-1,0]  ¦  created_time[93,64,0]  ¦  status[12,-1,0]  ¦  suspended_time[93,64,0]  ¦  db_count[-5,64,0]  ¦  tbl_count[-5,64,0]  ¦  size[8,54,0]  ¦  snapshot_size[8,54,0]  ¦  comments[12,-1,0]  𝄀
+acc01  ¦  test_account  ¦  2026-07-27 06:49:37  ¦  open  ¦  null  ¦  5  ¦  75  ¦  0.0  ¦  0.0  ¦    𝄀
+sys  ¦  root  ¦  2026-07-23 09:21:25  ¦  open  ¦  null  ¦  8  ¦  131  ¦  63.313232  ¦  0.0  ¦  system account
 drop account acc01;
 restore account acc01{snapshot="spsp01"};
 show accounts;
-account_name    admin_name    created_time    status    suspended_time    db_count    tbl_count    size    snapshot_size    comments
-acc01    test_account    2025-07-19 05:50:42    open    null    5    65    0.0    0.0
-sys    root    2025-07-19 05:30:43    open    null    8    110    46.624066    0.0    system account
+➤ account_name[12,-1,0]  ¦  admin_name[12,-1,0]  ¦  created_time[93,64,0]  ¦  status[12,-1,0]  ¦  suspended_time[93,64,0]  ¦  db_count[-5,64,0]  ¦  tbl_count[-5,64,0]  ¦  size[8,54,0]  ¦  snapshot_size[8,54,0]  ¦  comments[12,-1,0]  𝄀
+acc01  ¦  test_account  ¦  2026-07-27 06:49:37  ¦  open  ¦  null  ¦  5  ¦  75  ¦  0.0  ¦  0.0  ¦    𝄀
+sys  ¦  root  ¦  2026-07-23 09:21:25  ¦  open  ¦  null  ¦  8  ¦  131  ¦  63.313232  ¦  0.0  ¦  system account
 drop account acc01;
 drop snapshot spsp01;
 drop account if exists acc02;
@@ -31,7 +31,7 @@ insert into rs01 values (4, 10, null);
 insert into rs01 values (1, -321.321, null);
 insert into rs01 values (2, -1, null);
 select count(*) from rs01;
-count(*)
+➤ count(*)[-5,64,0]  𝄀
 6
 drop database if exists test03;
 create database test03;
@@ -98,100 +98,104 @@ insert into src values (0, 'color is red', 't1'), (1, 'car is yellow', 'crazy ca
 (10, NULL, NULL);
 create fulltext index ftidx on src (body, title);
 select * from src;
-id    body    title
-0    color is red    t1
-1    car is yellow    crazy car
-2    sky is blue    no limit
-3    blue is not red    colorful
-4    遠東兒童中文是針對6到9歲的小朋友精心設計的中文學習教材，共三冊，目前已出版一、二冊。    遠東兒童中文
-5    每冊均採用近百張全幅彩圖及照片，生動活潑、自然真實，加深兒童學習印象，洋溢學習樂趣。    遠東兒童中文
-6    各個單元主題內容涵蓋中華文化及生活應用的介紹。本套教材含課本、教學指引、生字卡、學生作業本與CD，中英對照，精美大字版。本系列有繁體字及簡體字兩種版本印行。    中文短篇小說
-7    59個簡單的英文和中文短篇小說    適合初學者
-8    null    NOT INCLUDED
-9    NOT INCLUDED BODY    null
-10    null    null
+➤ id[-5,64,0]  ¦  body[12,-1,0]  ¦  title[12,0,0]  𝄀
+0  ¦  color is red  ¦  t1  𝄀
+1  ¦  car is yellow  ¦  crazy car  𝄀
+2  ¦  sky is blue  ¦  no limit  𝄀
+3  ¦  blue is not red  ¦  colorful  𝄀
+4  ¦  遠東兒童中文是針對6到9歲的小朋友精心設計的中文學習教材，共三冊，目前已出版一、二冊。  ¦  遠東兒童中文  𝄀
+5  ¦  每冊均採用近百張全幅彩圖及照片，生動活潑、自然真實，加深兒童學習印象，洋溢學習樂趣。  ¦  遠東兒童中文  𝄀
+6  ¦  各個單元主題內容涵蓋中華文化及生活應用的介紹。本套教材含課本、教學指引、生字卡、學生作業本與CD，中英對照，精美大字版。本系列有繁體字及簡體字兩種版本印行。  ¦  中文短篇小說  𝄀
+7  ¦  59個簡單的英文和中文短篇小說  ¦  適合初學者  𝄀
+8  ¦  null  ¦  NOT INCLUDED  𝄀
+9  ¦  NOT INCLUDED BODY  ¦  null  𝄀
+10  ¦  null  ¦  null
 drop view if exists view01;
 create view v01 as select * from src;
 select * from v01;
-id    body    title
-0    color is red    t1
-1    car is yellow    crazy car
-2    sky is blue    no limit
-3    blue is not red    colorful
-4    遠東兒童中文是針對6到9歲的小朋友精心設計的中文學習教材，共三冊，目前已出版一、二冊。    遠東兒童中文
-5    每冊均採用近百張全幅彩圖及照片，生動活潑、自然真實，加深兒童學習印象，洋溢學習樂趣。    遠東兒童中文
-6    各個單元主題內容涵蓋中華文化及生活應用的介紹。本套教材含課本、教學指引、生字卡、學生作業本與CD，中英對照，精美大字版。本系列有繁體字及簡體字兩種版本印行。    中文短篇小說
-7    59個簡單的英文和中文短篇小說    適合初學者
-8    null    NOT INCLUDED
-9    NOT INCLUDED BODY    null
-10    null    null
+➤ id[-5,64,0]  ¦  body[12,-1,0]  ¦  title[12,0,0]  𝄀
+0  ¦  color is red  ¦  t1  𝄀
+1  ¦  car is yellow  ¦  crazy car  𝄀
+2  ¦  sky is blue  ¦  no limit  𝄀
+3  ¦  blue is not red  ¦  colorful  𝄀
+4  ¦  遠東兒童中文是針對6到9歲的小朋友精心設計的中文學習教材，共三冊，目前已出版一、二冊。  ¦  遠東兒童中文  𝄀
+5  ¦  每冊均採用近百張全幅彩圖及照片，生動活潑、自然真實，加深兒童學習印象，洋溢學習樂趣。  ¦  遠東兒童中文  𝄀
+6  ¦  各個單元主題內容涵蓋中華文化及生活應用的介紹。本套教材含課本、教學指引、生字卡、學生作業本與CD，中英對照，精美大字版。本系列有繁體字及簡體字兩種版本印行。  ¦  中文短篇小說  𝄀
+7  ¦  59個簡單的英文和中文短篇小說  ¦  適合初學者  𝄀
+8  ¦  null  ¦  NOT INCLUDED  𝄀
+9  ¦  NOT INCLUDED BODY  ¦  null  𝄀
+10  ¦  null  ¦  null
 show create table v01;
-View    Create View    character_set_client    collation_connection
-v01    create view v01 as select * from src;    utf8mb4    utf8mb4_general_ci
+➤ View[12,-1,0]  ¦  Create View[12,-1,0]  ¦  character_set_client[12,-1,0]  ¦  collation_connection[12,-1,0]  𝄀
+v01  ¦  create view v01 as select * from src;  ¦  utf8mb4  ¦  utf8mb4_general_ci
 drop snapshot if exists spsp02;
 create snapshot spsp02 for account acc02;
 drop account acc02;
 restore account acc02{snapshot="spsp02"};
 show accounts;
-account_name    admin_name    created_time    status    suspended_time    db_count    tbl_count    size    snapshot_size    comments
-acc02    test_account    2025-07-19 05:50:43    open    null    9    71    0.0    0.0
-sys    root    2025-07-19 05:30:43    open    null    8    110    46.624066    0.0    system account
+➤ account_name[12,-1,0]  ¦  admin_name[12,-1,0]  ¦  created_time[93,64,0]  ¦  status[12,-1,0]  ¦  suspended_time[93,64,0]  ¦  db_count[-5,64,0]  ¦  tbl_count[-5,64,0]  ¦  size[8,54,0]  ¦  snapshot_size[8,54,0]  ¦  comments[12,-1,0]  𝄀
+acc02  ¦  test_account  ¦  2026-07-27 06:49:39  ¦  open  ¦  null  ¦  9  ¦  81  ¦  0.0  ¦  0.0  ¦    𝄀
+sys  ¦  root  ¦  2026-07-23 09:21:25  ¦  open  ¦  null  ¦  8  ¦  131  ¦  63.313232  ¦  0.0  ¦  system account
 show databases;
-Database
-information_schema
-mo_catalog
-mysql
-system
-system_metrics
-test01
-test03
-test04
+➤ Database[12,-1,0]  𝄀
+information_schema  𝄀
+mo_catalog  𝄀
+mysql  𝄀
+system  𝄀
+system_metrics  𝄀
+test01  𝄀
+test03  𝄀
+test04  𝄀
 test06
 use test01;
 select * from rs01;
-col1    col2    col3
-1    null    database
-2    38291    database
-3    null    database management system
-4    10    null
-1    -321    null
-2    -1    null
+➤ col1[4,32,0]  ¦  col2[3,6,0]  ¦  col3[12,-1,0]  𝄀
+1  ¦  null  ¦  database  𝄀
+2  ¦  38291  ¦  database  𝄀
+3  ¦  null  ¦  database management system  𝄀
+4  ¦  10  ¦  null  𝄀
+1  ¦  -321  ¦  null  𝄀
+2  ¦  -1  ¦  null
 show create table rs01;
-Table    Create Table
-rs01    CREATE TABLE `rs01` (\n  `col1` int DEFAULT NULL,\n  `col2` decimal(6,0) DEFAULT NULL,\n  `col3` varchar(30) DEFAULT NULL\n)
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+rs01  ¦  CREATE TABLE `rs01` (
+  `col1` int DEFAULT NULL,
+  `col2` decimal(6,0) DEFAULT NULL,
+  `col3` varchar(30) DEFAULT NULL
+)
 use test03;
 select * from pri01;
-deptno    dname    loc
-10    ACCOUNTING    NEW YORK
-20    RESEARCH    DALLAS
-30    SALES    CHICAGO
-40    OPERATIONS    BOSTON
+➤ deptno[4,32,0]  ¦  dname[12,-1,0]  ¦  loc[12,-1,0]  𝄀
+10  ¦  ACCOUNTING  ¦  NEW YORK  𝄀
+20  ¦  RESEARCH  ¦  DALLAS  𝄀
+30  ¦  SALES  ¦  CHICAGO  𝄀
+40  ¦  OPERATIONS  ¦  BOSTON
 select * from aff01;
-empno    ename    job    mgr    hiredate    sal    comm    deptno
-7369    SMITH    CLERK    7902    1980-12-17    800.00    null    20
-7499    ALLEN    SALESMAN    7698    1981-02-20    1600.00    300.00    30
-7521    WARD    SALESMAN    7698    1981-02-22    1250.00    500.00    30
-7566    JONES    MANAGER    7839    1981-04-02    2975.00    null    20
+➤ empno[4,32,0]  ¦  ename[12,-1,0]  ¦  job[12,-1,0]  ¦  mgr[4,32,0]  ¦  hiredate[91,64,0]  ¦  sal[3,7,2]  ¦  comm[3,7,2]  ¦  deptno[4,32,0]  𝄀
+7369  ¦  SMITH  ¦  CLERK  ¦  7902  ¦  1980-12-17  ¦  800.00  ¦  null  ¦  20  𝄀
+7499  ¦  ALLEN  ¦  SALESMAN  ¦  7698  ¦  1981-02-20  ¦  1600.00  ¦  300.00  ¦  30  𝄀
+7521  ¦  WARD  ¦  SALESMAN  ¦  7698  ¦  1981-02-22  ¦  1250.00  ¦  500.00  ¦  30  𝄀
+7566  ¦  JONES  ¦  MANAGER  ¦  7839  ¦  1981-04-02  ¦  2975.00  ¦  null  ¦  20
 delete from aff01;
 use test04;
 select * from partition01;
-emp_no    birth_date    first_name    last_name    gender    hire_date
-9001    1980-12-17    SMITH    CLERK    F    2008-12-17
-9002    1981-02-20    ALLEN    SALESMAN    F    2008-02-20
+➤ emp_no[4,32,0]  ¦  birth_date[91,64,0]  ¦  first_name[12,-1,0]  ¦  last_name[12,-1,0]  ¦  gender[12,-1,0]  ¦  hire_date[91,64,0]  𝄀
+9001  ¦  1980-12-17  ¦  SMITH  ¦  CLERK  ¦  F  ¦  2008-12-17  𝄀
+9002  ¦  1981-02-20  ¦  ALLEN  ¦  SALESMAN  ¦  F  ¦  2008-02-20
 use test06;
 select * from src;
-id    body    title
-0    color is red    t1
-1    car is yellow    crazy car
-2    sky is blue    no limit
-3    blue is not red    colorful
-4    遠東兒童中文是針對6到9歲的小朋友精心設計的中文學習教材，共三冊，目前已出版一、二冊。    遠東兒童中文
-5    每冊均採用近百張全幅彩圖及照片，生動活潑、自然真實，加深兒童學習印象，洋溢學習樂趣。    遠東兒童中文
-6    各個單元主題內容涵蓋中華文化及生活應用的介紹。本套教材含課本、教學指引、生字卡、學生作業本與CD，中英對照，精美大字版。本系列有繁體字及簡體字兩種版本印行。    中文短篇小說
-7    59個簡單的英文和中文短篇小說    適合初學者
-8    null    NOT INCLUDED
-9    NOT INCLUDED BODY    null
-10    null    null
+➤ id[-5,64,0]  ¦  body[12,-1,0]  ¦  title[12,0,0]  𝄀
+0  ¦  color is red  ¦  t1  𝄀
+1  ¦  car is yellow  ¦  crazy car  𝄀
+2  ¦  sky is blue  ¦  no limit  𝄀
+3  ¦  blue is not red  ¦  colorful  𝄀
+4  ¦  遠東兒童中文是針對6到9歲的小朋友精心設計的中文學習教材，共三冊，目前已出版一、二冊。  ¦  遠東兒童中文  𝄀
+5  ¦  每冊均採用近百張全幅彩圖及照片，生動活潑、自然真實，加深兒童學習印象，洋溢學習樂趣。  ¦  遠東兒童中文  𝄀
+6  ¦  各個單元主題內容涵蓋中華文化及生活應用的介紹。本套教材含課本、教學指引、生字卡、學生作業本與CD，中英對照，精美大字版。本系列有繁體字及簡體字兩種版本印行。  ¦  中文短篇小說  𝄀
+7  ¦  59個簡單的英文和中文短篇小說  ¦  適合初學者  𝄀
+8  ¦  null  ¦  NOT INCLUDED  𝄀
+9  ¦  NOT INCLUDED BODY  ¦  null  𝄀
+10  ¦  null  ¦  null
 truncate src;
 drop account acc02;
 drop snapshot spsp02;
@@ -201,21 +205,21 @@ drop database if exists udf_db;
 create database udf_db;
 use udf_db;
 select name, db from mo_catalog.mo_user_defined_function;
-name    db
+➤ name[12,-1,0]  ¦  db[12,-1,0]
 create function `addab`(x int, y int) returns int
 language sql as
 '$1 + $2';
 select addab(10, 5);
-addab(10, 5)
+➤ addab(10, 5)[-5,64,0]  𝄀
 15
 select name, db from mo_catalog.mo_user_defined_function;
-name    db
-addab    udf_db
+➤ name[12,-1,0]  ¦  db[12,-1,0]  𝄀
+addab  ¦  udf_db
 create function`concatenate`(str1 varchar(255), str2 varchar(255)) returns varchar(255)
 language sql as
 '$1 + $2';
 select concatenate('Hello, ', 'World!');
-concatenate(Hello, , World!)
+➤ concatenate(Hello, , World!)[12,-1,0]  𝄀
 Hello, World!
 drop database if exists test01;
 create database test01;
@@ -242,12 +246,12 @@ rank() over (order by Salary desc) as SalaryRank
 from
 EmployeeSalaries;
 select * from EmployeeSalaryRanking;
-employeeid    employeename    salary    salaryrank
-3    Charlie    90000.00    1
-2    Bob    80000.00    2
-5    Eva    75000.00    3
-1    Alice    70000.00    4
-4    David    65000.00    5
+➤ EmployeeID[4,32,0]  ¦  EmployeeName[12,-1,0]  ¦  Salary[3,10,2]  ¦  SalaryRank[-5,64,0]  𝄀
+3  ¦  Charlie  ¦  90000.00  ¦  1  𝄀
+2  ¦  Bob  ¦  80000.00  ¦  2  𝄀
+5  ¦  Eva  ¦  75000.00  ¦  3  𝄀
+1  ¦  Alice  ¦  70000.00  ¦  4  𝄀
+4  ¦  David  ¦  65000.00  ¦  5
 drop database if exists procedure_test;
 create database procedure_test;
 use procedure_test;
@@ -266,8 +270,8 @@ insert into tbh3(id, val) values(1,1.5),(2,2.5),(3,3.5);
 drop procedure if exists test_if_hit_second_elseif;
 create procedure test_if_hit_second_elseif() 'begin DECLARE v1 INT; SET v1 = 4; IF v1 > 5 THEN select * from tbh1; ELSEIF v1 = 5 THEN select * from tbh2; ELSEIF v1 = 4 THEN select * from tbh2 order by id limit 1; ELSE select * from tbh3; END IF; end';
 call test_if_hit_second_elseif();
-id    val
-1    a
+➤ id[4,32,0]  ¦  val[1,1,0]  𝄀
+1  ¦  a
 drop snapshot if exists spsp03;
 create snapshot spsp03 for account acc03;
 drop account acc03;
@@ -294,24 +298,24 @@ col4 bool
 set time_zone = 'SYSTEM';
 load data infile '$resources/load_data/time_date_1.csv' into table t1 fields terminated by ',';
 select * from t1;
-col1    col2    col3    col4
-1000-01-01    0001-01-01 00:00:00    1970-01-01 00:00:01    0
-9999-12-31    9999-12-31 00:00:00    2038-01-19 00:00:00    1
+➤ col1[91,64,0]  ¦  col2[93,64,0]  ¦  col3[93,64,0]  ¦  col4[-7,1,0]  𝄀
+1000-01-01  ¦  0001-01-01 00:00:00  ¦  1970-01-02 00:00:01  ¦  0  𝄀
+9999-12-31  ¦  9999-12-31 00:00:00  ¦  2038-01-19 00:00:00  ¦  1
 drop stage if exists stage01;
 create stage stage01 url = 'file:///$resources/into_outfile/stage';
 select * from mo_catalog.mo_stages;
-stage_id    stage_name    url    stage_credentials    stage_status    created_time    comment
-1    stage01    file:////Users/fengttt/m/matrixone/test/distributed/resources/into_outfile/stage        in_use    2025-07-19 05:50:45
+➤ stage_id[4,32,0]  ¦  stage_name[12,-1,0]  ¦  url[12,0,0]  ¦  stage_credentials[12,0,0]  ¦  stage_status[12,-1,0]  ¦  created_time[93,64,0]  ¦  comment[12,0,0]  𝄀
+1  ¦  stage01  ¦  file:////mnt/fastdata/temp/matrixone/test/distributed/resources/into_outfile/stage  ¦    ¦  in_use  ¦  2026-07-27 06:49:43  ¦  
 show stages;
-STAGE_NAME    URL    STATUS    COMMENT
-stage01    file:////Users/fengttt/m/matrixone/test/distributed/resources/into_outfile/stage    in_use
+➤ STAGE_NAME[12,-1,0]  ¦  URL[12,0,0]  ¦  STATUS[12,-1,0]  ¦  COMMENT[12,0,0]  𝄀
+stage01  ¦  file:////mnt/fastdata/temp/matrixone/test/distributed/resources/into_outfile/stage  ¦  in_use  ¦  
 select * from t1 into outfile 'stage://stage01/local_stage_table20.csv';
 truncate t1;
 load data infile 'stage://stage01/local_stage_table20.csv' into table t1 fields terminated by ',' ignore 1 lines;
 select * from t1;
-col1    col2    col3    col4
-1000-01-01    0001-01-01 00:00:00    1970-01-01 00:00:01    0
-9999-12-31    9999-12-31 00:00:00    2038-01-19 00:00:00    1
+➤ col1[91,64,0]  ¦  col2[93,64,0]  ¦  col3[93,64,0]  ¦  col4[-7,1,0]  𝄀
+1000-01-01  ¦  0001-01-01 00:00:00  ¦  1970-01-02 00:00:01  ¦  0  𝄀
+9999-12-31  ¦  9999-12-31 00:00:00  ¦  2038-01-19 00:00:00  ¦  1
 drop table if exists vtab32;
 drop table if exists vtab64;
 create table vtab32(id int primary key auto_increment,`vecf32_3` vecf32(3),`vecf32_5` vecf32(5));
@@ -342,12 +346,12 @@ insert into t1 values(7,4,4,3,7443.11,744311,7443.11,'yes','subquery','2022-04-2
 insert into t1 values(8,7,5,8,8758.00,875800,8758.11,'nice to meet','just subquery','2022-04-28','2022-04-28 22:40:11');
 insert into t1 values(9,8,4,9,9849.312,9849312,9849.312,'see you','subquery','2022-04-28','2022-04-28 22:40:11');
 select * from (select * from t1) sub where id > 4;
-id    ti    si    bi    fl    dl    de    ch    vch    dd    dt
-5    1    2    6    51.26    5126.0    51    byebye     is subquery?    2022-04-28    2022-04-28 22:40:11
-6    3    2    1    632.1    6321.0    632    good night    maybe subquery    2022-04-28    2022-04-28 22:40:11
-7    4    4    3    7443.11    744311.0    7443    yes    subquery    2022-04-28    2022-04-28 22:40:11
-8    7    5    8    8758.0    875800.0    8758    nice to meet    just subquery    2022-04-28    2022-04-28 22:40:11
-9    8    4    9    9849.312    9849312.0    9849    see you    subquery    2022-04-28    2022-04-28 22:40:11
+➤ id[4,32,0]  ¦  ti[-6,8,0]  ¦  si[5,16,0]  ¦  bi[-5,64,0]  ¦  fl[7,24,0]  ¦  dl[8,54,0]  ¦  de[3,38,0]  ¦  ch[1,20,0]  ¦  vch[12,-1,0]  ¦  dd[91,64,0]  ¦  dt[93,64,0]  𝄀
+5  ¦  1  ¦  2  ¦  6  ¦  51.26  ¦  5126.0  ¦  51  ¦  byebye  ¦   is subquery?  ¦  2022-04-28  ¦  2022-04-28 22:40:11  𝄀
+6  ¦  3  ¦  2  ¦  1  ¦  632.1  ¦  6321.0  ¦  632  ¦  good night  ¦  maybe subquery  ¦  2022-04-28  ¦  2022-04-28 22:40:11  𝄀
+7  ¦  4  ¦  4  ¦  3  ¦  7443.11  ¦  744311.0  ¦  7443  ¦  yes  ¦  subquery  ¦  2022-04-28  ¦  2022-04-28 22:40:11  𝄀
+8  ¦  7  ¦  5  ¦  8  ¦  8758.0  ¦  875800.0  ¦  8758  ¦  nice to meet  ¦  just subquery  ¦  2022-04-28  ¦  2022-04-28 22:40:11  𝄀
+9  ¦  8  ¦  4  ¦  9  ¦  9849.312  ¦  9849312.0  ¦  9849  ¦  see you  ¦  subquery  ¦  2022-04-28  ¦  2022-04-28 22:40:11
 drop database if exists test05;
 create database test05;
 use test05;
@@ -357,9 +361,9 @@ insert into length01 values('12');
 insert into length01 values('372814');
 insert into length01 values('&***');
 select * from length01;
-col1
-12                  
-372814              
+➤ col1[12,60,0]  𝄀
+12                    𝄀
+372814                𝄀
 &***                
 drop table if exists t1;
 create table t1 (a blob);
@@ -371,14 +375,27 @@ insert into t1 values('abc_ef');
 insert into t1 values('abcd_f');
 insert into t1 values('abcde_');
 select * from t1 where a like 'ab\_def' order by 1 asc;
-a
+➤ a[12,0,0]  𝄀
 ab_def
 drop table if exists test02;
 create table test02 (col1 int, col2 datalink);
 insert into test02 values (1, 'file://$resources/load_data/time_date_2.csv');
 select col1, load_file(col2) from test02;
-col1    load_file(col2)
-1    1000-01-01,0001-01-01,,0\n1000-01-01,0001-01-01 00:00:00,,0\n1000-01-01,0001-01-01 00:00:00.000000,,0\n"1000-01-01","0001-01-01",,"0"\n"9999-12-31","9999-12-31",,"1"\n9999-12-31,9999-12-31,,1\n9999-12-31,9999-12-31 23:59:59,,1\n,,,true\n,,,"true"\n,,,"false"\n,,,"true"\n\N,\N,\N,\N\n,,,,\n
+➤ col1[4,32,0]  ¦  load_file(col2)[12,0,0]  𝄀
+1  ¦  1000-01-01,0001-01-01,,0
+1000-01-01,0001-01-01 00:00:00,,0
+1000-01-01,0001-01-01 00:00:00.000000,,0
+"1000-01-01","0001-01-01",,"0"
+"9999-12-31","9999-12-31",,"1"
+9999-12-31,9999-12-31,,1
+9999-12-31,9999-12-31 23:59:59,,1
+,,,true
+,,,"true"
+,,,"false"
+,,,"true"
+\N,\N,\N,\N
+,,,,
+
 drop database if exists test06;
 create database test06;
 use test06;
@@ -405,14 +422,14 @@ create table t2 (a json,b int);
 delete from t2;
 insert into t2 values ('{"t1":"a"}',1),('{"t1":"b"}',2);
 select * from t2;
-a    b
-{"t1": "a"}    1
-{"t1": "b"}    2
+➤ a[-1,2147483647,0]  ¦  b[4,32,0]  𝄀
+{"t1": "a"}  ¦  1  𝄀
+{"t1": "b"}  ¦  2
 drop table if exists t_timestamp;
 create table t_timestamp(id timestamp(6));
 insert into t_timestamp values ('2020-01-01 23:59:59.999999'), ('2022-01-02 00:00:00');
 select * from t_timestamp where id = 20200102;
-id
+➤ id[93,64,0]
 drop snapshot if exists spsp06;
 create snapshot spsp06 for cluster;
 drop account acc04;
@@ -421,61 +438,61 @@ drop account acc06;
 restore cluster{snapshot="spsp06"};
 use test04;
 select * from t1;
-id    ti    si    bi    fl    dl    de    ch    vch    dd    dt
-1    1    4    3    1113.32    111332.0    1113    hello    subquery    2022-04-28    2022-04-28 22:40:11
-2    2    5    2    2252.05    225205.0    2252    bye    sub query    2022-04-28    2022-04-28 22:40:11
-3    6    6    3    3663.21    366321.0    3663    hi    subquery    2022-04-28    2022-04-28 22:40:11
-4    7    1    5    4715.22    471522.0    4715    good morning    my subquery    2022-04-28    2022-04-28 22:40:11
-5    1    2    6    51.26    5126.0    51    byebye     is subquery?    2022-04-28    2022-04-28 22:40:11
-6    3    2    1    632.1    6321.0    632    good night    maybe subquery    2022-04-28    2022-04-28 22:40:11
-7    4    4    3    7443.11    744311.0    7443    yes    subquery    2022-04-28    2022-04-28 22:40:11
-8    7    5    8    8758.0    875800.0    8758    nice to meet    just subquery    2022-04-28    2022-04-28 22:40:11
-9    8    4    9    9849.312    9849312.0    9849    see you    subquery    2022-04-28    2022-04-28 22:40:11
+➤ id[4,32,0]  ¦  ti[-6,8,0]  ¦  si[5,16,0]  ¦  bi[-5,64,0]  ¦  fl[7,24,0]  ¦  dl[8,54,0]  ¦  de[3,38,0]  ¦  ch[1,20,0]  ¦  vch[12,-1,0]  ¦  dd[91,64,0]  ¦  dt[93,64,0]  𝄀
+1  ¦  1  ¦  4  ¦  3  ¦  1113.32  ¦  111332.0  ¦  1113  ¦  hello  ¦  subquery  ¦  2022-04-28  ¦  2022-04-28 22:40:11  𝄀
+2  ¦  2  ¦  5  ¦  2  ¦  2252.05  ¦  225205.0  ¦  2252  ¦  bye  ¦  sub query  ¦  2022-04-28  ¦  2022-04-28 22:40:11  𝄀
+3  ¦  6  ¦  6  ¦  3  ¦  3663.21  ¦  366321.0  ¦  3663  ¦  hi  ¦  subquery  ¦  2022-04-28  ¦  2022-04-28 22:40:11  𝄀
+4  ¦  7  ¦  1  ¦  5  ¦  4715.22  ¦  471522.0  ¦  4715  ¦  good morning  ¦  my subquery  ¦  2022-04-28  ¦  2022-04-28 22:40:11  𝄀
+5  ¦  1  ¦  2  ¦  6  ¦  51.26  ¦  5126.0  ¦  51  ¦  byebye  ¦   is subquery?  ¦  2022-04-28  ¦  2022-04-28 22:40:11  𝄀
+6  ¦  3  ¦  2  ¦  1  ¦  632.1  ¦  6321.0  ¦  632  ¦  good night  ¦  maybe subquery  ¦  2022-04-28  ¦  2022-04-28 22:40:11  𝄀
+7  ¦  4  ¦  4  ¦  3  ¦  7443.11  ¦  744311.0  ¦  7443  ¦  yes  ¦  subquery  ¦  2022-04-28  ¦  2022-04-28 22:40:11  𝄀
+8  ¦  7  ¦  5  ¦  8  ¦  8758.0  ¦  875800.0  ¦  8758  ¦  nice to meet  ¦  just subquery  ¦  2022-04-28  ¦  2022-04-28 22:40:11  𝄀
+9  ¦  8  ¦  4  ¦  9  ¦  9849.312  ¦  9849312.0  ¦  9849  ¦  see you  ¦  subquery  ¦  2022-04-28  ¦  2022-04-28 22:40:11
 show stages;
-STAGE_NAME    URL    STATUS    COMMENT
-stage01    file:////Users/fengttt/m/matrixone/test/distributed/resources/into_outfile/stage    in_use
+➤ STAGE_NAME[12,-1,0]  ¦  URL[12,0,0]  ¦  STATUS[12,-1,0]  ¦  COMMENT[12,0,0]  𝄀
+stage01  ¦  file:////mnt/fastdata/temp/matrixone/test/distributed/resources/into_outfile/stage  ¦  in_use  ¦  
 select * from vtab32;
-id    vecf32_3    vecf32_5
-1    null    null
-2    [0.8166459, 0.66616553, 0.4886152]    null
-3    [0.1726299, 3.2908857, 30.433094]    [0.45052445, 2.1984527, 9.579752, 123.48039, 4635.894]
-4    [8.560689, 6.790359, 821.9778]    [0.46323407, 23.498016, 563.923, 56.076736, 8732.958]
+➤ id[4,32,0]  ¦  vecf32_3[12,3,0]  ¦  vecf32_5[12,5,0]  𝄀
+1  ¦  null  ¦  null  𝄀
+2  ¦  [0.8166459, 0.66616553, 0.4886152]  ¦  null  𝄀
+3  ¦  [0.1726299, 3.2908857, 30.433094]  ¦  [0.45052445, 2.1984527, 9.579752, 123.48039, 4635.894]  𝄀
+4  ¦  [8.560689, 6.790359, 821.9778]  ¦  [0.46323407, 23.498016, 563.923, 56.076736, 8732.958]
 select * from vtab64;
-id    vecf64_3    vecf64_5
-1    null    null
-2    [0.8166459, 0.66616553, 0.4886152]    null
-3    [8.5606893, 6.7903588, 821.977768]    [0.46323407, 23.49801546, 563.9229458, 56.07673508, 8732.9583881]
-4    [0.9260021, 0.26637346, 0.06567037]    [0.45756745, 65.2996871, 321.623636, 3.60082066, 87.58445764]
+➤ id[4,32,0]  ¦  vecf64_3[12,3,0]  ¦  vecf64_5[12,5,0]  𝄀
+1  ¦  null  ¦  null  𝄀
+2  ¦  [0.8166459, 0.66616553, 0.4886152]  ¦  null  𝄀
+3  ¦  [8.5606893, 6.7903588, 821.977768]  ¦  [0.46323407, 23.49801546, 563.9229458, 56.07673508, 8732.9583881]  𝄀
+4  ¦  [0.9260021, 0.26637346, 0.06567037]  ¦  [0.45756745, 65.2996871, 321.623636, 3.60082066, 87.58445764]
 use test05;
 select * from length01;
-col1
-12                  
-372814              
+➤ col1[12,60,0]  𝄀
+12                    𝄀
+372814                𝄀
 &***                
 select * from t1;
-a
-abcdef
-_bcdef
-a_cdef
-ab_def
-abc_ef
-abcd_f
+➤ a[12,0,0]  𝄀
+abcdef  𝄀
+_bcdef  𝄀
+a_cdef  𝄀
+ab_def  𝄀
+abc_ef  𝄀
+abcd_f  𝄀
 abcde_
 select * from test02;
-col1    col2
-1    file:///Users/fengttt/m/matrixone/test/distributed/resources/load_data/time_date_2.csv
+➤ col1[4,32,0]  ¦  col2[12,0,0]  𝄀
+1  ¦  file:///mnt/fastdata/temp/matrixone/test/distributed/resources/load_data/time_date_2.csv
 use test06;
 select * from table01;
-id    col1    col2    col3    col4    col5    col6    col7    col8    col9    col10
-1    Value2    456    78.90    2023-10-24    0    banana    Another text    2022-01-01 01:01:01    More binary data    D
-2    Value3    789    12.34    2023-10-25    1    orange    Yet another text    1979-01-01 01:01:01    Even more binary data    E
+➤ id[4,32,0]  ¦  col1[12,-1,0]  ¦  col2[4,32,0]  ¦  col3[3,10,2]  ¦  col4[91,64,0]  ¦  col5[-7,1,0]  ¦  col6[12,-1,0]  ¦  col7[12,0,0]  ¦  col8[93,64,0]  ¦  col9[12,0,0]  ¦  col10[1,1,0]  𝄀
+1  ¦  Value2  ¦  456  ¦  78.90  ¦  2023-10-24  ¦  0  ¦  banana  ¦  Another text  ¦  2022-01-01 01:01:01  ¦  More binary data  ¦  D  𝄀
+2  ¦  Value3  ¦  789  ¦  12.34  ¦  2023-10-25  ¦  1  ¦  orange  ¦  Yet another text  ¦  1979-01-01 01:01:01  ¦  Even more binary data  ¦  E
 select * from t2;
-a    b
-{"t1": "a"}    1
-{"t1": "b"}    2
+➤ a[-1,2147483647,0]  ¦  b[4,32,0]  𝄀
+{"t1": "a"}  ¦  1  𝄀
+{"t1": "b"}  ¦  2
 select * from t_timestamp;
-id
-2020-01-01 23:59:59.999999000
+➤ id[93,64,0]  𝄀
+2020-01-01 23:59:59.999999000  𝄀
 2022-01-02 00:00:00
 drop account acc04;
 drop account acc05;
@@ -488,11 +505,11 @@ create snapshot spsp07 for account acc07;
 drop account acc07;
 restore account acc07{snapshot="spsp07"};
 show databases;
-Database
-information_schema
-mo_catalog
-mysql
-system
+➤ Database[12,-1,0]  𝄀
+information_schema  𝄀
+mo_catalog  𝄀
+mysql  𝄀
+system  𝄀
 system_metrics
 drop account acc07;
 drop snapshot spsp07;

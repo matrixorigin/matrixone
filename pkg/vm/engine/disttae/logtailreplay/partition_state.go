@@ -490,39 +490,29 @@ func (p *PartitionState) HandleDataObjectList(
 			p.dataObjectTSIndex.Set(e)
 		}
 
-		// for appendable object, gc rows when delete object
-		iter := p.rows.Copy().Iter()
-		defer iter.Release()
-		objID := objEntry.ObjectStats.ObjectName().ObjectId()
-		trunctPoint := startTSCol[idx]
-		blkCnt := objEntry.ObjectStats.BlkCnt()
-		for i := uint32(0); i < blkCnt; i++ {
-
-			blkID := objectio.NewBlockidWithObjectID(objID, uint16(i))
-			pivot := &RowEntry{
-				// aobj has only one blk
-				BlockID: blkID,
-			}
-			for ok := iter.Seek(pivot); ok; ok = iter.Next() {
-				entry := iter.Item()
-				if entry.BlockID != blkID {
-					break
+		// Only dropped appendable objects need in-memory row GC. Keeping this
+		// outside the non-appendable groups avoids copying and seeking the row
+		// tree once per persisted object.
+		if objEntry.GetAppendable() {
+			iter := p.rows.Copy().Iter()
+			objID := objEntry.ObjectStats.ObjectName().ObjectId()
+			trunctPoint := startTSCol[idx]
+			blkCnt := objEntry.ObjectStats.BlkCnt()
+			for i := uint32(0); i < blkCnt; i++ {
+				blkID := objectio.NewBlockidWithObjectID(objID, uint16(i))
+				pivot := &RowEntry{
+					BlockID: blkID,
 				}
-
-				// cannot gc the inmem tombstone at this point
-				if entry.Deleted {
-					continue
-				}
-
-				// if the inserting block is appendable, need to delete the rows for it;
-				// if the inserting block is non-appendable and has delta location, need to delete
-				// the deletes for it.
-				if objEntry.GetAppendable() {
+				for ok := iter.Seek(pivot); ok; ok = iter.Next() {
+					entry := iter.Item()
+					if entry.BlockID != blkID {
+						break
+					}
+					if entry.Deleted {
+						continue
+					}
 					if entry.Time.LE(&trunctPoint) {
-						// delete the row
 						p.rows.Delete(entry)
-
-						// delete the row's primary index
 						if len(entry.PrimaryIndexBytes) > 0 {
 							p.rowPrimaryKeyIndex.Delete(&PrimaryIndexEntry{
 								Bytes:      entry.PrimaryIndexBytes,
@@ -534,26 +524,8 @@ func (p *PartitionState) HandleDataObjectList(
 						blockDeleted++
 					}
 				}
-
-				//it's tricky here.
-				//Due to consuming lazily the checkpoint,
-				//we have to take the following scenario into account:
-				//1. CN receives deletes for a non-appendable block from the log tail,
-				//   then apply the deletes into PartitionState.rows.
-				//2. CN receives block meta of the above non-appendable block to be inserted
-				//   from the checkpoint, then apply the block meta into PartitionState.blocks.
-				// So , if the above scenario happens, we need to set the non-appendable block into
-				// PartitionState.dirtyBlocks.
-				//if !objEntry.EntryState && !objEntry.HasDeltaLoc {
-				//	p.dirtyBlocks.Set(entry.BlockID)
-				//	break
-				//}
 			}
-
-			// if there are no rows for the block, delete the block from the dirty
-			//if objEntry.EntryState && scanCnt == blockDeleted && p.dirtyBlocks.Len() > 0 {
-			//	p.dirtyBlocks.Delete(*blkID)
-			//}
+			iter.Release()
 		}
 
 		p.prefetchObject(fs, objEntry)
@@ -687,27 +659,18 @@ func (p *PartitionState) HandleRowsDelete(
 	ctx context.Context,
 	input *api.Batch,
 	packer *types.Packer,
-	pool *mpool.MPool,
+	_ *mpool.MPool,
 ) {
 	ctx, task := trace.NewTask(ctx, "PartitionState.HandleRowsDelete")
 	defer task.End()
-
-	vec := mustVectorFromProto(input.Vecs[0])
-	defer vec.Free(pool)
-	rowIDVector := vector.MustFixedColWithTypeCheck[types.Rowid](vec)
-
-	vec = mustVectorFromProto(input.Vecs[1])
-	defer vec.Free(pool)
-	timeVector := vector.MustFixedColWithTypeCheck[types.TS](vec)
-
-	vec = mustVectorFromProto(input.Vecs[3])
-	defer vec.Free(pool)
-	tbRowIdVector := vector.MustFixedColWithTypeCheck[types.Rowid](vec)
 
 	batch, err := batch.ProtoBatchToBatch(input)
 	if err != nil {
 		panic(err)
 	}
+	rowIDVector := vector.MustFixedColWithTypeCheck[types.Rowid](batch.Vecs[0])
+	timeVector := vector.MustFixedColWithTypeCheck[types.TS](batch.Vecs[1])
+	tbRowIdVector := vector.MustFixedColWithTypeCheck[types.Rowid](batch.Vecs[3])
 
 	var primaryKeys [][]byte
 	if len(input.Vecs) > 2 {
@@ -781,25 +744,19 @@ func (p *PartitionState) HandleRowsInsert(
 	input *api.Batch,
 	primarySeqnum int,
 	packer *types.Packer,
-	pool *mpool.MPool,
+	_ *mpool.MPool,
 ) (
 	primaryKeys [][]byte,
 ) {
 	ctx, task := trace.NewTask(ctx, "PartitionState.HandleRowsInsert")
 	defer task.End()
 
-	vec := mustVectorFromProto(input.Vecs[0])
-	defer vec.Free(pool)
-	rowIDVector := vector.MustFixedColWithTypeCheck[types.Rowid](vec)
-
-	vec = mustVectorFromProto(input.Vecs[1])
-	defer vec.Free(pool)
-	timeVector := vector.MustFixedColWithTypeCheck[types.TS](vec)
-
 	batch, err := batch.ProtoBatchToBatch(input)
 	if err != nil {
 		panic(err)
 	}
+	rowIDVector := vector.MustFixedColWithTypeCheck[types.Rowid](batch.Vecs[0])
+	timeVector := vector.MustFixedColWithTypeCheck[types.TS](batch.Vecs[1])
 	primaryKeys = readutil.EncodePrimaryKeyVector(
 		batch.Vecs[2+primarySeqnum],
 		packer,
@@ -1277,9 +1234,9 @@ func (p *PartitionState) countVisibleRowsInAppendableObject(
 	obj objectio.ObjectEntry,
 	mp *mpool.MPool,
 ) (uint64, error) {
-	cols := []uint16{objectio.SEQNUM_COMMITTS}
-	typs := []types.Type{types.T_TS.ToType()}
-	cacheVectors := containers.NewVectors(1)
+	cols := []uint16{objectio.SEQNUM_COMMITTS, objectio.SEQNUM_ABORT}
+	typs := []types.Type{types.T_TS.ToType(), types.T_bool.ToType()}
+	cacheVectors := containers.NewVectors(2)
 
 	var count uint64
 	var loadErr error
@@ -1296,8 +1253,13 @@ func (p *PartitionState) countVisibleRowsInAppendableObject(
 				return true
 			}
 			commitTSCol := vector.MustFixedColWithTypeCheck[types.TS](&cacheVectors[0])
-			for _, ts := range commitTSCol {
-				if ts.LE(&snapshot) {
+			abortColumn, err := ioutil.ValidateTombstoneAbortColumn(len(commitTSCol), &cacheVectors[1])
+			if err != nil {
+				loadErr = err
+				return false
+			}
+			for row, ts := range commitTSCol {
+				if (!abortColumn.IsPresent() || !abortColumn.IsAborted(row)) && ts.LE(&snapshot) {
 					count++
 				}
 			}
@@ -1645,10 +1607,15 @@ func (p *PartitionState) countTombstoneStatsLinear(
 			rowIds := vector.MustFixedColNoTypeCheck[types.Rowid](&persistedDeletes[0])
 
 			var commitTSs []types.TS
+			var abortColumn ioutil.TombstoneAbortColumn
 			// When cnCreated=false (TN created), ReadDeletes reads [Rowid, CommitTS] at indices [0, 1]
 			// When cnCreated=true (CN created), ReadDeletes only reads [Rowid] at index [0], no CommitTS
 			if needCheckCommitTs && len(persistedDeletes) > 2 {
 				commitTSs = vector.MustFixedColNoTypeCheck[types.TS](&persistedDeletes[1])
+				abortColumn, readErr = ioutil.ValidateTombstoneAbortColumn(len(rowIds), &persistedDeletes[2])
+				if readErr != nil {
+					return false
+				}
 			}
 
 			var lastObjId types.Objectid
@@ -1661,7 +1628,8 @@ func (p *PartitionState) countTombstoneStatsLinear(
 					continue
 				}
 
-				if needCheckCommitTs && len(commitTSs) > 0 && commitTSs[j].GT(&snapshot) {
+				if (abortColumn.IsPresent() && abortColumn.IsAborted(j)) ||
+					(needCheckCommitTs && len(commitTSs) > 0 && commitTSs[j].GT(&snapshot)) {
 					continue
 				}
 
@@ -1744,10 +1712,15 @@ func (p *PartitionState) countTombstoneStatsWithMap(
 				rowIds := vector.MustFixedColNoTypeCheck[types.Rowid](&persistedDeletes[0])
 
 				var commitTSs []types.TS
+				var abortColumn ioutil.TombstoneAbortColumn
 				// When cnCreated=false (TN created), ReadDeletes reads [Rowid, CommitTS] at indices [0, 1]
 				// When cnCreated=true (CN created), ReadDeletes only reads [Rowid] at index [0], no CommitTS
 				if needCheckCommitTs && len(persistedDeletes) > 2 {
 					commitTSs = vector.MustFixedColNoTypeCheck[types.TS](&persistedDeletes[1])
+					abortColumn, readErr = ioutil.ValidateTombstoneAbortColumn(len(rowIds), &persistedDeletes[2])
+					if readErr != nil {
+						return false
+					}
 				}
 
 				var lastObjId types.Objectid
@@ -1759,7 +1732,8 @@ func (p *PartitionState) countTombstoneStatsWithMap(
 						continue
 					}
 
-					if needCheckCommitTs && len(commitTSs) > 0 && commitTSs[j].GT(&snapshot) {
+					if (abortColumn.IsPresent() && abortColumn.IsAborted(j)) ||
+						(needCheckCommitTs && len(commitTSs) > 0 && commitTSs[j].GT(&snapshot)) {
 						continue
 					}
 
@@ -1838,6 +1812,7 @@ type tombstoneBlockIterator struct {
 	blockIdx     int
 	rowIds       []types.Rowid
 	commitTSs    []types.TS
+	abortColumn  ioutil.TombstoneAbortColumn
 	rowIdx       int
 	needCheckTS  bool
 	snapshot     types.TS
@@ -1876,9 +1851,14 @@ func (it *tombstoneBlockIterator) loadNextBlock() bool {
 	it.rowIds = vector.MustFixedColNoTypeCheck[types.Rowid](&it.persistedDel[0])
 
 	if it.needCheckTS && len(it.persistedDel) > 2 {
-		it.commitTSs = vector.MustFixedColNoTypeCheck[types.TS](&it.persistedDel[len(it.persistedDel)-1])
+		it.commitTSs = vector.MustFixedColNoTypeCheck[types.TS](&it.persistedDel[1])
+		it.abortColumn, it.err = ioutil.ValidateTombstoneAbortColumn(len(it.rowIds), &it.persistedDel[2])
+		if it.err != nil {
+			return false
+		}
 	} else {
 		it.commitTSs = nil
+		it.abortColumn = ioutil.TombstoneAbortColumn{}
 	}
 
 	it.rowIdx = 0
@@ -1910,7 +1890,8 @@ func (it *tombstoneBlockIterator) next() bool {
 	// Persisted tombstone iterator
 	for {
 		for it.rowIdx < len(it.rowIds) {
-			if it.needCheckTS && len(it.commitTSs) > 0 && it.commitTSs[it.rowIdx].GT(&it.snapshot) {
+			if (it.abortColumn.IsPresent() && it.abortColumn.IsAborted(it.rowIdx)) ||
+				(it.needCheckTS && len(it.commitTSs) > 0 && it.commitTSs[it.rowIdx].GT(&it.snapshot)) {
 				it.rowIdx++
 				continue
 			}
@@ -1977,6 +1958,14 @@ func (p *PartitionState) countTombstoneStatsWithMerge(
 	stats TombstoneStats,
 ) (TombstoneStats, error) {
 	iterators := make([]*tombstoneBlockIterator, 0, len(objects))
+	releaseIterators := func() {
+		for _, it := range iterators {
+			if it.release != nil {
+				it.release()
+				it.release = nil
+			}
+		}
+	}
 
 	for _, obj := range objects {
 		cnCreated := obj.GetCNCreated()
@@ -2015,9 +2004,18 @@ func (p *PartitionState) countTombstoneStatsWithMerge(
 			p:            p,
 		}
 
-		if it.next() {
-			iterators = append(iterators, it)
+		if !it.next() {
+			if it.release != nil {
+				it.release()
+				it.release = nil
+			}
+			if it.err != nil {
+				releaseIterators()
+				return stats, it.err
+			}
+			continue
 		}
+		iterators = append(iterators, it)
 	}
 
 	// Add in-memory tombstones as an iterator
@@ -2058,10 +2056,8 @@ func (p *PartitionState) countTombstoneStatsWithMerge(
 		}
 	}
 
+	releaseIterators()
 	for _, it := range iterators {
-		if it.release != nil {
-			it.release()
-		}
 		if it.err != nil {
 			return stats, it.err
 		}

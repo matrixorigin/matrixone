@@ -28,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/query"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/util/metric"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
@@ -556,6 +557,18 @@ func (rt *Routine) migrateConnectionFromWithContext(
 	ctx context.Context,
 	resp *query.MigrateConnFromResponse,
 ) error {
+	action := query.MigrateConnFromAction_MigrateConnFromExport
+	if resp == nil {
+		action = query.MigrateConnFromAction_MigrateConnFromSkipUserLevelLockRelease
+	}
+	return rt.migrateConnectionFromActionWithContext(ctx, action, resp)
+}
+
+func (rt *Routine) migrateConnectionFromActionWithContext(
+	ctx context.Context,
+	action query.MigrateConnFromAction,
+	resp *query.MigrateConnFromResponse,
+) error {
 	operationCtx, ok := rt.mc.beginOperationWithContext(ctx)
 	if !ok {
 		if ctx != nil {
@@ -567,10 +580,25 @@ func (rt *Routine) migrateConnectionFromWithContext(
 	}
 	defer rt.mc.endOperation()
 
-	ses := rt.getSession()
 	if cause := context.Cause(operationCtx); cause != nil {
 		return cause
 	}
+	ses := rt.getSession()
+	switch action {
+	case query.MigrateConnFromAction_MigrateConnFromSkipUserLevelLockRelease:
+		if states := function.UserLevelLocksForMigration(ses.proc); len(states) > 0 {
+			return moerr.NewInternalErrorNoCtx("cannot migrate connection while user-level locks are held")
+		}
+		ses.userLevelLocksMigrated = true
+		return nil
+	case query.MigrateConnFromAction_MigrateConnFromEnableUserLevelLockRelease:
+		ses.userLevelLocksMigrated = false
+		return nil
+	}
+	if states := function.UserLevelLocksForMigration(ses.proc); len(states) > 0 {
+		return moerr.NewInternalErrorNoCtx("cannot migrate connection while user-level locks are held")
+	}
+	resp.UserLevelLockReleaseSupported = true
 	resp.DB = ses.GetDatabaseName()
 	resp.LastAffectedRows = ses.GetLastAffectedRows()
 	for _, st := range ses.GetPrepareStmts() {

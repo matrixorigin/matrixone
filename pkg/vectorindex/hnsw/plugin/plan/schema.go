@@ -54,6 +54,9 @@ func (Hooks) BuildSecondaryIndexDefs(
 	if !catalogplugin.SupportsPrimaryKeyType(hnswCatalogHooks, types.T(colMap[pkeyName].Typ.Id)) {
 		return nil, nil, moerr.NewInternalErrorNoCtx("type of primary key must be bigint")
 	}
+	if indexInfo.IndexOption != nil && len(indexInfo.IndexOption.IncludeColumns) > 0 {
+		return nil, nil, moerr.NewNotSupported(ctx.GetContext(), "HNSW index does not support INCLUDE columns")
+	}
 
 	indexParts := make([]string, 1)
 	{
@@ -98,9 +101,10 @@ func (Hooks) BuildSecondaryIndexDefs(
 			Name: catalog.Hnsw_TblCol_Metadata_Index_Id,
 			Alg:  plan.CompressType_Lz4,
 			Typ: plan.Type{
-				Id:    int32(types.T_varchar),
-				Width: 128,
-				Scale: 0,
+				Id:      int32(types.T_varchar),
+				Width:   128,
+				Scale:   0,
+				Charset: uint32(types.CharsetBinary),
 			},
 			Primary: true,
 			Default: &plan.Default{NullAbility: false, Expr: nil, OriginString: ""},
@@ -109,8 +113,9 @@ func (Hooks) BuildSecondaryIndexDefs(
 			Name: catalog.Hnsw_TblCol_Metadata_Checksum,
 			Alg:  plan.CompressType_Lz4,
 			Typ: plan.Type{
-				Id:    int32(types.T_varchar),
-				Width: types.MaxVarcharLen,
+				Id:      int32(types.T_varchar),
+				Width:   types.MaxVarcharLen,
+				Charset: uint32(types.CharsetBinary),
 			},
 			Default: &plan.Default{NullAbility: false, Expr: nil, OriginString: ""},
 		}
@@ -170,9 +175,10 @@ func (Hooks) BuildSecondaryIndexDefs(
 			Name: catalog.Hnsw_TblCol_Storage_Index_Id,
 			Alg:  plan.CompressType_Lz4,
 			Typ: plan.Type{
-				Id:    int32(types.T_varchar),
-				Width: 128,
-				Scale: 0,
+				Id:      int32(types.T_varchar),
+				Width:   128,
+				Scale:   0,
+				Charset: uint32(types.CharsetBinary),
 			},
 			Default: &plan.Default{NullAbility: false, Expr: nil, OriginString: ""},
 		}

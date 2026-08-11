@@ -18,20 +18,29 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/stretchr/testify/require"
 )
 
 func makeRuntimeFilterTestEq(typ planpb.Type, leftTag, rightTag, leftPos, rightPos int32) *planpb.Expr {
+	return makeRuntimeFilterTestEqTypes(typ, typ, leftTag, rightTag, leftPos, rightPos)
+}
+
+func makeRuntimeFilterTestEqTypes(
+	leftType, rightType planpb.Type,
+	leftTag, rightTag, leftPos, rightPos int32,
+) *planpb.Expr {
 	return &planpb.Expr{
 		Typ: planpb.Type{Id: int32(types.T_bool), NotNullable: true},
 		Expr: &planpb.Expr_F{F: &planpb.Function{
 			Func: getFunctionObjRef(function.EncodeOverloadID(int32(function.EQUAL), 0), "="),
 			Args: []*planpb.Expr{
-				GetColExpr(typ, leftTag, leftPos),
-				GetColExpr(typ, rightTag, rightPos),
+				GetColExpr(leftType, leftTag, leftPos),
+				GetColExpr(rightType, rightTag, rightPos),
 			},
 		}},
 	}
@@ -181,6 +190,758 @@ func TestRightSingleRuntimeFilterSemanticAndDeliveryContract(t *testing.T) {
 		require.Len(t, builder.qry.Nodes[2].RuntimeFilterBuildList, 1)
 		require.Len(t, builder.qry.Nodes[2].OnList, 2)
 		require.Same(t, mixed, builder.qry.Nodes[2].OnList[1])
+	})
+}
+
+func TestFloatRuntimeFilterUsesOnlySoundEncoding(t *testing.T) {
+	protocolProbe := newRuntimeFilterSingleTestBuilder(true)
+	rt := moruntime.ServiceRuntime(
+		protocolProbe.compCtx.GetProcess().GetService())
+	original, hadOriginal := rt.GetGlobalVariables(
+		moruntime.MOProtocolVersion)
+	rt.SetGlobalVariables(
+		moruntime.MOProtocolVersion, defines.MORPCVersion8)
+	t.Cleanup(func() {
+		if hadOriginal {
+			rt.SetGlobalVariables(
+				moruntime.MOProtocolVersion, original)
+		} else {
+			rt.SetGlobalVariables(
+				moruntime.MOProtocolVersion,
+				defines.MORPCLatestVersion)
+		}
+	})
+
+	tests := []struct {
+		name     string
+		typ      planpb.Type
+		want     bool
+		encoding planpb.RuntimeFilterKeyEncoding
+	}{
+		{
+			name: "scaled FLOAT32 is omitted",
+			typ:  planpb.Type{Id: int32(types.T_float32), Width: 5, Scale: 2},
+		},
+		{
+			name:     "unscaled FLOAT32 closes signed zero",
+			typ:      planpb.Type{Id: int32(types.T_float32)},
+			want:     true,
+			encoding: planpb.RuntimeFilterKeyEncoding_RUNTIME_FILTER_KEY_FLOAT_ZERO_CLOSED_V1,
+		},
+		{
+			name:     "FLOAT64 closes signed zero",
+			typ:      planpb.Type{Id: int32(types.T_float64)},
+			want:     true,
+			encoding: planpb.RuntimeFilterKeyEncoding_RUNTIME_FILTER_KEY_FLOAT_ZERO_CLOSED_V1,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			builder := newRuntimeFilterSingleTestBuilder(true)
+			builder.qry.Nodes[0].TableDef.Cols[0].Typ = test.typ
+			builder.qry.Nodes[1].TableDef.Cols[0].Typ = test.typ
+			builder.qry.Nodes[2].OnList = []*planpb.Expr{
+				makeRuntimeFilterTestEq(test.typ, 1, 2, 0, 0),
+			}
+
+			builder.generateRuntimeFilters(2)
+
+			if !test.want {
+				require.Empty(t, builder.qry.Nodes[2].RuntimeFilterBuildList)
+				require.Empty(t, builder.qry.Nodes[0].RuntimeFilterProbeList)
+				return
+			}
+			require.Len(t, builder.qry.Nodes[2].RuntimeFilterBuildList, 1)
+			require.Len(t, builder.qry.Nodes[0].RuntimeFilterProbeList, 1)
+			require.Equal(t, test.encoding,
+				builder.qry.Nodes[2].RuntimeFilterBuildList[0].KeyEncoding)
+			require.Equal(t, test.typ,
+				*builder.qry.Nodes[2].RuntimeFilterBuildList[0].ProbeType)
+		})
+	}
+
+	t.Run("different decimal scales", func(t *testing.T) {
+		builder := newRuntimeFilterSingleTestBuilder(true)
+		probeType := planpb.Type{Id: int32(types.T_decimal64), Width: 10, Scale: 2}
+		buildType := planpb.Type{Id: int32(types.T_decimal64), Width: 10, Scale: 3}
+		builder.qry.Nodes[0].TableDef.Cols[0].Typ = probeType
+		builder.qry.Nodes[1].TableDef.Cols[0].Typ = buildType
+		builder.qry.Nodes[2].OnList = []*planpb.Expr{
+			makeRuntimeFilterTestEqTypes(probeType, buildType, 1, 2, 0, 0),
+		}
+		require.True(t, isEquiCond(builder.qry.Nodes[2].OnList[0],
+			map[int32]bool{1: true}, map[int32]bool{2: true}))
+
+		builder.generateRuntimeFilters(2)
+
+		require.Empty(t, builder.qry.Nodes[2].RuntimeFilterBuildList)
+		require.Empty(t, builder.qry.Nodes[0].RuntimeFilterProbeList)
+	})
+
+	t.Run("same decimal scale carries explicit raw pair contract", func(t *testing.T) {
+		builder := newRuntimeFilterSingleTestBuilder(true)
+		decimalType := planpb.Type{Id: int32(types.T_decimal64), Width: 10, Scale: 3}
+		builder.qry.Nodes[0].TableDef.Cols[0].Typ = decimalType
+		builder.qry.Nodes[1].TableDef.Cols[0].Typ = decimalType
+		builder.qry.Nodes[2].OnList = []*planpb.Expr{
+			makeRuntimeFilterTestEq(decimalType, 1, 2, 0, 0),
+		}
+
+		builder.generateRuntimeFilters(2)
+
+		require.Len(t, builder.qry.Nodes[2].RuntimeFilterBuildList, 1)
+		spec := builder.qry.Nodes[2].RuntimeFilterBuildList[0]
+		require.Equal(t, planpb.RuntimeFilterKeyEncoding_RUNTIME_FILTER_KEY_RAW_V1,
+			spec.KeyEncoding)
+		require.NotNil(t, spec.ProbeType)
+		require.Equal(t, decimalType, *spec.ProbeType)
+		require.Nil(t, spec.Expr)
+		require.Equal(t, decimalType, spec.BuildExpr.Typ)
+	})
+
+	t.Run("different varchar widths remain raw-compatible", func(t *testing.T) {
+		builder := newRuntimeFilterSingleTestBuilder(true)
+		probeType := planpb.Type{Id: int32(types.T_varchar), Width: 10}
+		buildType := planpb.Type{Id: int32(types.T_varchar), Width: 20}
+		builder.qry.Nodes[0].TableDef.Cols[0].Typ = probeType
+		builder.qry.Nodes[1].TableDef.Cols[0].Typ = buildType
+		builder.qry.Nodes[2].OnList = []*planpb.Expr{
+			makeRuntimeFilterTestEqTypes(probeType, buildType, 1, 2, 0, 0),
+		}
+
+		builder.generateRuntimeFilters(2)
+
+		require.Len(t, builder.qry.Nodes[2].RuntimeFilterBuildList, 1)
+		require.Len(t, builder.qry.Nodes[0].RuntimeFilterProbeList, 1)
+		spec := builder.qry.Nodes[2].RuntimeFilterBuildList[0]
+		require.Equal(t, planpb.RuntimeFilterKeyEncoding_RUNTIME_FILTER_KEY_RAW_V1,
+			spec.KeyEncoding)
+		require.Equal(t, probeType, *spec.ProbeType)
+		require.Nil(t, spec.Expr)
+		require.Equal(t, buildType, spec.BuildExpr.Typ)
+	})
+
+	t.Run("float closure follows the deployment rollout gate", func(t *testing.T) {
+		build := func(version int64) *QueryBuilder {
+			builder := newRuntimeFilterSingleTestBuilder(true)
+			floatType := planpb.Type{Id: int32(types.T_float64)}
+			builder.qry.Nodes[0].TableDef.Cols[0].Typ = floatType
+			builder.qry.Nodes[1].TableDef.Cols[0].Typ = floatType
+			builder.qry.Nodes[2].OnList = []*planpb.Expr{
+				makeRuntimeFilterTestEq(floatType, 1, 2, 0, 0),
+			}
+			sid := builder.compCtx.GetProcess().GetService()
+			moruntime.ServiceRuntime(sid).SetGlobalVariables(
+				moruntime.MOProtocolVersion, version)
+			builder.generateRuntimeFilters(2)
+			return builder
+		}
+
+		probe := newRuntimeFilterSingleTestBuilder(true)
+		sid := probe.compCtx.GetProcess().GetService()
+		rt := moruntime.ServiceRuntime(sid)
+		original, hadOriginal := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+		t.Cleanup(func() {
+			if hadOriginal {
+				rt.SetGlobalVariables(moruntime.MOProtocolVersion, original)
+			} else {
+				rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+			}
+		})
+
+		gateV7 := build(defines.MORPCVersion7)
+		require.Empty(t, gateV7.qry.Nodes[2].RuntimeFilterBuildList)
+		require.Empty(t, gateV7.qry.Nodes[0].RuntimeFilterProbeList)
+
+		gateV8 := build(defines.MORPCVersion8)
+		require.Len(t, gateV8.qry.Nodes[2].RuntimeFilterBuildList, 1)
+		require.Equal(t,
+			planpb.RuntimeFilterKeyEncoding_RUNTIME_FILTER_KEY_FLOAT_ZERO_CLOSED_V1,
+			gateV8.qry.Nodes[2].RuntimeFilterBuildList[0].KeyEncoding)
+
+		loweredGate := build(defines.MORPCVersion7)
+		require.Empty(t, loweredGate.qry.Nodes[2].RuntimeFilterBuildList)
+		require.Empty(t, loweredGate.qry.Nodes[0].RuntimeFilterProbeList)
+	})
+
+	t.Run("raw contract remains enabled below the rollout gate", func(t *testing.T) {
+		builder := newRuntimeFilterSingleTestBuilder(true)
+		sid := builder.compCtx.GetProcess().GetService()
+		rt := moruntime.ServiceRuntime(sid)
+		original, hadOriginal := rt.GetGlobalVariables(
+			moruntime.MOProtocolVersion)
+		t.Cleanup(func() {
+			if hadOriginal {
+				rt.SetGlobalVariables(
+					moruntime.MOProtocolVersion, original)
+			} else {
+				rt.SetGlobalVariables(
+					moruntime.MOProtocolVersion,
+					defines.MORPCLatestVersion)
+			}
+		})
+		typ := planpb.Type{Id: int32(types.T_int64)}
+		probeExpr := GetColExpr(typ, 1, 0)
+		buildExpr := GetColExpr(typ, -1, 0)
+
+		rt.SetGlobalVariables(
+			moruntime.MOProtocolVersion, defines.MORPCVersion7)
+		_, preRollout, ok := builder.makeExactRuntimeFilterPair(
+			1, false, 100, probeExpr, buildExpr, false)
+		require.True(t, ok)
+		require.Equal(t,
+			planpb.RuntimeFilterKeyEncoding_RUNTIME_FILTER_KEY_RAW_V1,
+			preRollout.KeyEncoding)
+		require.NotNil(t, preRollout.Expr)
+		require.NotNil(t, preRollout.BuildExpr)
+		require.True(t,
+			exprStructuralEqual(preRollout.Expr, preRollout.BuildExpr))
+
+		rt.SetGlobalVariables(
+			moruntime.MOProtocolVersion, defines.MORPCVersion8)
+		_, versioned, ok := builder.makeExactRuntimeFilterPair(
+			1, false, 100, probeExpr, buildExpr, false)
+		require.True(t, ok)
+		require.Nil(t, versioned.Expr)
+		require.NotNil(t, versioned.BuildExpr)
+
+		rt.SetGlobalVariables(
+			moruntime.MOProtocolVersion, defines.MORPCVersion7)
+		_, loweredGate, ok := builder.makeExactRuntimeFilterPair(
+			1, false, 100, probeExpr, buildExpr, false)
+		require.True(t, ok)
+		require.Equal(t,
+			planpb.RuntimeFilterKeyEncoding_RUNTIME_FILTER_KEY_RAW_V1,
+			loweredGate.KeyEncoding)
+		require.NotNil(t, loweredGate.Expr)
+		require.True(t,
+			exprStructuralEqual(loweredGate.Expr, loweredGate.BuildExpr))
+
+		decimalType := planpb.Type{
+			Id: int32(types.T_decimal64), Width: 18, Scale: 2}
+		decimalProbe := GetColExpr(decimalType, 1, 0)
+		decimalBuild := GetColExpr(decimalType, -1, 0)
+		_, _, ok = builder.makeExactRuntimeFilterPair(
+			2, false, 100, decimalProbe, decimalBuild, false)
+		require.False(t, ok,
+			"metadata-dependent RAW must wait for versioned producers")
+
+		enumType := planpb.Type{
+			Id:         int32(types.T_enum),
+			Enumvalues: "small,large",
+		}
+		enumProbe := GetColExpr(enumType, 1, 0)
+		enumBuild := GetColExpr(enumType, -1, 0)
+		_, _, ok = builder.makeExactRuntimeFilterPair(
+			3, false, 100, enumProbe, enumBuild, false)
+		require.False(t, ok,
+			"ENUM RAW must wait for versioned consumers with ENUM IN")
+
+		rt.SetGlobalVariables(
+			moruntime.MOProtocolVersion, defines.MORPCVersion8)
+		_, decimalV8, ok := builder.makeExactRuntimeFilterPair(
+			2, false, 100, decimalProbe, decimalBuild, false)
+		require.True(t, ok)
+		require.Nil(t, decimalV8.Expr)
+		require.NotNil(t, decimalV8.BuildExpr)
+
+		_, enumV8, ok := builder.makeExactRuntimeFilterPair(
+			3, false, 100, enumProbe, enumBuild, false)
+		require.True(t, ok)
+		require.Equal(t,
+			planpb.RuntimeFilterKeyEncoding_RUNTIME_FILTER_KEY_RAW_V1,
+			enumV8.KeyEncoding)
+		require.Nil(t, enumV8.Expr)
+		require.NotNil(t, enumV8.BuildExpr)
+	})
+}
+
+func TestExactRuntimeFilterPairRequiresMaterializableShape(t *testing.T) {
+	builder := newRuntimeFilterSingleTestBuilder(true)
+	varcharType := planpb.Type{
+		Id: int32(types.T_varchar), Width: types.MaxVarcharLen,
+	}
+	intType := planpb.Type{Id: int32(types.T_int32)}
+	probe := GetColExpr(varcharType, 1, 0)
+
+	for _, functionName := range []string{"serial", "serial_full"} {
+		t.Run(functionName+" output type is not a composite contract", func(t *testing.T) {
+			build, err := BindFuncExprImplByPlanExpr(
+				builder.GetContext(),
+				functionName,
+				[]*planpb.Expr{
+					GetColExpr(intType, -1, 0),
+					GetColExpr(intType, -1, 1),
+				},
+			)
+			require.NoError(t, err)
+			require.Equal(t, types.T_varchar, types.T(build.Typ.Id))
+
+			probeSpec, buildSpec, ok := builder.makeExactRuntimeFilterPair(
+				1, functionName == "serial_full", 100, probe, build, false)
+			require.False(t, ok)
+			require.Nil(t, probeSpec)
+			require.Nil(t, buildSpec)
+		})
+	}
+
+	t.Run("prefix consumer must support the probe type", func(t *testing.T) {
+		probeSpec, buildSpec, ok := builder.makeExactRuntimeFilterPair(
+			1,
+			true,
+			100,
+			GetColExpr(intType, 1, 0),
+			GetColExpr(intType, -1, 0),
+			false,
+		)
+		require.False(t, ok)
+		require.Nil(t, probeSpec)
+		require.Nil(t, buildSpec)
+	})
+
+	t.Run("direct producer slot is explicit", func(t *testing.T) {
+		probeSpec, buildSpec, ok := builder.makeExactRuntimeFilterPair(
+			1,
+			false,
+			100,
+			GetColExpr(intType, 1, 0),
+			GetColExpr(intType, -1, 1),
+			false,
+		)
+		require.True(t, ok)
+		require.NotNil(t, probeSpec)
+		require.Equal(t, int32(1),
+			buildSpec.BuildExpr.GetCol().ColPos)
+	})
+
+	t.Run("negative direct producer slot is invalid", func(t *testing.T) {
+		probeSpec, buildSpec, ok := builder.makeExactRuntimeFilterPair(
+			1,
+			false,
+			100,
+			GetColExpr(intType, 1, 0),
+			GetColExpr(intType, -1, -1),
+			false,
+		)
+		require.False(t, ok)
+		require.Nil(t, probeSpec)
+		require.Nil(t, buildSpec)
+	})
+}
+
+func TestSerializedExactRuntimeFilterPairContract(t *testing.T) {
+	builder := newRuntimeFilterSingleTestBuilder(true)
+	sid := builder.compCtx.GetProcess().GetService()
+	rt := moruntime.ServiceRuntime(sid)
+	original, hadOriginal := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	t.Cleanup(func() {
+		if hadOriginal {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, original)
+		} else {
+			rt.SetGlobalVariables(
+				moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+		}
+	})
+	rt.SetGlobalVariables(
+		moruntime.MOProtocolVersion, defines.MORPCVersion8)
+
+	varcharType := planpb.Type{
+		Id: int32(types.T_varchar), Width: types.MaxVarcharLen,
+	}
+	intType := planpb.Type{Id: int32(types.T_int32)}
+	finalProbe := GetColExpr(varcharType, 1, 0)
+	componentProbes := []*planpb.Expr{
+		GetColExpr(intType, 1, 0),
+		GetColExpr(intType, 1, 1),
+	}
+
+	for _, test := range []struct {
+		functionName string
+		marker       planpb.RuntimeFilterKeyEncoding
+		matchPrefix  bool
+	}{
+		{
+			functionName: function.SerialFunctionName,
+			marker: planpb.
+				RuntimeFilterKeyEncoding_RUNTIME_FILTER_KEY_SERIAL_V1,
+		},
+		{
+			functionName: function.SerialFullFunctionName,
+			marker: planpb.
+				RuntimeFilterKeyEncoding_RUNTIME_FILTER_KEY_SERIAL_FULL_V1,
+			matchPrefix: true,
+		},
+	} {
+		t.Run(test.functionName, func(t *testing.T) {
+			build, err := BindFuncExprImplByPlanExpr(
+				builder.GetContext(),
+				test.functionName,
+				[]*planpb.Expr{
+					GetColExpr(intType, -1, 0),
+					GetColExpr(intType, -1, 1),
+				},
+			)
+			require.NoError(t, err)
+
+			probeSpec, buildSpec, ok :=
+				builder.makeSerializedExactRuntimeFilterPair(
+					1,
+					test.matchPrefix,
+					100,
+					finalProbe,
+					build,
+					componentProbes,
+					false,
+				)
+			require.True(t, ok)
+			require.NotNil(t, probeSpec)
+			require.Equal(t, test.marker, buildSpec.KeyEncoding)
+			require.Nil(t, buildSpec.Expr)
+			require.NotNil(t, buildSpec.BuildExpr)
+			require.Equal(t, varcharType, *buildSpec.ProbeType)
+			require.Equal(t,
+				[]planpb.Type{intType, intType},
+				buildSpec.KeyComponentProbeTypes)
+		})
+	}
+
+	t.Run("tuple marker must match consumer prefix semantics", func(t *testing.T) {
+		for _, test := range []struct {
+			name         string
+			functionName string
+			wrongPrefix  bool
+		}{
+			{
+				name:         "serial cannot drive prefix in",
+				functionName: function.SerialFunctionName,
+				wrongPrefix:  true,
+			},
+			{
+				name:         "serial full requires prefix in",
+				functionName: function.SerialFullFunctionName,
+			},
+		} {
+			t.Run(test.name, func(t *testing.T) {
+				build, err := BindFuncExprImplByPlanExpr(
+					builder.GetContext(),
+					test.functionName,
+					[]*planpb.Expr{GetColExpr(intType, -1, 0)},
+				)
+				require.NoError(t, err)
+				_, _, ok := builder.makeSerializedExactRuntimeFilterPair(
+					1,
+					test.wrongPrefix,
+					100,
+					finalProbe,
+					build,
+					componentProbes[:1],
+					false,
+				)
+				require.False(t, ok)
+			})
+		}
+	})
+
+	t.Run("tuple function identity and build slots are part of the contract", func(t *testing.T) {
+		for _, test := range []struct {
+			name   string
+			mutate func(*planpb.Expr)
+		}{
+			{
+				name: "encoded function id drift",
+				mutate: func(build *planpb.Expr) {
+					build.GetF().Func.Obj++
+				},
+			},
+			{
+				name: "negative materialization slot",
+				mutate: func(build *planpb.Expr) {
+					build.GetF().Args[0].GetCol().ColPos = -1
+				},
+			},
+		} {
+			t.Run(test.name, func(t *testing.T) {
+				build, err := BindFuncExprImplByPlanExpr(
+					builder.GetContext(),
+					function.SerialFunctionName,
+					[]*planpb.Expr{GetColExpr(intType, -1, 0)},
+				)
+				require.NoError(t, err)
+				test.mutate(build)
+
+				probeSpec, buildSpec, ok :=
+					builder.makeSerializedExactRuntimeFilterPair(
+						1,
+						false,
+						100,
+						finalProbe,
+						build,
+						componentProbes[:1],
+						false,
+					)
+				require.False(t, ok)
+				require.Nil(t, probeSpec)
+				require.Nil(t, buildSpec)
+			})
+		}
+	})
+
+	t.Run("tuple result must retain the production varchar type", func(t *testing.T) {
+		build, err := BindFuncExprImplByPlanExpr(
+			builder.GetContext(),
+			function.SerialFunctionName,
+			[]*planpb.Expr{GetColExpr(intType, -1, 0)},
+		)
+		require.NoError(t, err)
+		build.Typ = intType
+
+		probeSpec, buildSpec, ok :=
+			builder.makeSerializedExactRuntimeFilterPair(
+				1,
+				false,
+				100,
+				GetColExpr(intType, 1, 0),
+				build,
+				componentProbes[:1],
+				false,
+			)
+		require.False(t, ok)
+		require.Nil(t, probeSpec)
+		require.Nil(t, buildSpec)
+	})
+
+	t.Run("component decimal scale mismatch", func(t *testing.T) {
+		scale2 := planpb.Type{
+			Id: int32(types.T_decimal64), Width: 18, Scale: 2,
+		}
+		scale3 := planpb.Type{
+			Id: int32(types.T_decimal64), Width: 18, Scale: 3,
+		}
+		build, err := BindFuncExprImplByPlanExpr(
+			builder.GetContext(),
+			function.SerialFunctionName,
+			[]*planpb.Expr{GetColExpr(scale3, -1, 0)},
+		)
+		require.NoError(t, err)
+
+		probeSpec, buildSpec, ok :=
+			builder.makeSerializedExactRuntimeFilterPair(
+				1,
+				false,
+				100,
+				finalProbe,
+				build,
+				[]*planpb.Expr{GetColExpr(scale2, 1, 0)},
+				false,
+			)
+		require.False(t, ok)
+		require.Nil(t, probeSpec)
+		require.Nil(t, buildSpec)
+	})
+
+	t.Run("float component has no bounded tuple closure", func(t *testing.T) {
+		floatType := planpb.Type{Id: int32(types.T_float64)}
+		build, err := BindFuncExprImplByPlanExpr(
+			builder.GetContext(),
+			function.SerialFullFunctionName,
+			[]*planpb.Expr{GetColExpr(floatType, -1, 0)},
+		)
+		require.NoError(t, err)
+
+		_, _, ok := builder.makeSerializedExactRuntimeFilterPair(
+			1,
+			true,
+			100,
+			finalProbe,
+			build,
+			[]*planpb.Expr{GetColExpr(floatType, 1, 0)},
+			false,
+		)
+		require.False(t, ok)
+	})
+
+	t.Run("pre-rollout deployment omits tuple contract", func(t *testing.T) {
+		rt.SetGlobalVariables(
+			moruntime.MOProtocolVersion, defines.MORPCVersion7)
+		build, err := BindFuncExprImplByPlanExpr(
+			builder.GetContext(),
+			function.SerialFunctionName,
+			[]*planpb.Expr{GetColExpr(intType, -1, 0)},
+		)
+		require.NoError(t, err)
+
+		_, _, ok := builder.makeSerializedExactRuntimeFilterPair(
+			1,
+			false,
+			100,
+			finalProbe,
+			build,
+			componentProbes[:1],
+			false,
+		)
+		require.False(t, ok)
+	})
+}
+
+func TestSortedMembershipFilterProtocolGate(t *testing.T) {
+	builder := newRuntimeFilterSingleTestBuilder(true)
+	sid := builder.compCtx.GetProcess().GetService()
+	rt := moruntime.ServiceRuntime(sid)
+	original, hadOriginal := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	t.Cleanup(func() {
+		if hadOriginal {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, original)
+		} else {
+			rt.SetGlobalVariables(
+				moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+		}
+	})
+
+	rt.SetGlobalVariables(
+		moruntime.MOProtocolVersion, defines.MORPCVersion10)
+	require.False(t, localProtocolEnablesSortedMembershipFilter(sid))
+	rt.SetGlobalVariables(
+		moruntime.MOProtocolVersion, defines.MORPCVersion11)
+	require.True(t, localProtocolEnablesSortedMembershipFilter(sid))
+	rt.SetGlobalVariables(
+		moruntime.MOProtocolVersion, defines.MORPCVersion10)
+	require.False(t, localProtocolEnablesSortedMembershipFilter(sid))
+}
+
+func TestFinalizeFuzzyRuntimeFilterKeepsDecisionAtomic(t *testing.T) {
+	protocolProbe := newRuntimeFilterSingleTestBuilder(true)
+	rt := moruntime.ServiceRuntime(
+		protocolProbe.compCtx.GetProcess().GetService())
+	original, hadOriginal := rt.GetGlobalVariables(
+		moruntime.MOProtocolVersion)
+	rt.SetGlobalVariables(
+		moruntime.MOProtocolVersion, defines.MORPCVersion8)
+	t.Cleanup(func() {
+		if hadOriginal {
+			rt.SetGlobalVariables(
+				moruntime.MOProtocolVersion, original)
+		} else {
+			rt.SetGlobalVariables(
+				moruntime.MOProtocolVersion,
+				defines.MORPCLatestVersion)
+		}
+	})
+
+	newBuilder := func(tableCost, sinkCost float64) (*QueryBuilder, *planpb.Node, *planpb.Node, *planpb.Node) {
+		builder := newRuntimeFilterSingleTestBuilder(true)
+		tableScan := builder.qry.Nodes[0]
+		sinkScan := builder.qry.Nodes[1]
+		fuzzy := builder.qry.Nodes[2]
+		fuzzy.NodeType = planpb.Node_FUZZY_FILTER
+		tableScan.Stats.Cost = tableCost
+		tableScan.Stats.Outcnt = 800
+		tableScan.Stats.TableCnt = 1_000
+		tableScan.Stats.BlockNum = 100
+		tableScan.Stats.Selectivity = 0.8
+		sinkScan.Stats.Cost = sinkCost
+		sinkScan.Stats.Outcnt = 10
+		sinkScan.Stats.TableCnt = 10
+
+		typ := tableScan.TableDef.Cols[0].Typ
+		probeSpec := MakeRuntimeFilter(
+			71, false, 0, GetColExpr(typ, 1, 0), false)
+		buildSpec := MakeRuntimeFilter(
+			71, false, 100, GetColExpr(typ, 0, 0), false)
+		buildSpec.BuildExpr = DeepCopyExpr(buildSpec.Expr)
+		buildSpec.Expr = nil
+		buildSpec.ProbeType = DeepCopyType(&typ)
+		buildSpec.KeyEncoding =
+			planpb.RuntimeFilterKeyEncoding_RUNTIME_FILTER_KEY_RAW_V1
+		tableScan.RuntimeFilterProbeList =
+			[]*planpb.RuntimeFilterSpec{probeSpec}
+		fuzzy.RuntimeFilterBuildList =
+			[]*planpb.RuntimeFilterSpec{buildSpec}
+		return builder, tableScan, sinkScan, fuzzy
+	}
+
+	t.Run("build on table clears only candidate state", func(t *testing.T) {
+		builder, tableScan, _, fuzzy := newBuilder(20, 100)
+		before := DeepCopyStats(tableScan.Stats)
+
+		builder.finalizeFuzzyRuntimeFilter(fuzzy)
+
+		require.Equal(t, planpb.Node_FUZZY_BUILD_SIDE_TABLE,
+			fuzzy.FuzzyBuildSide)
+		require.Empty(t, fuzzy.RuntimeFilterBuildList)
+		require.Empty(t, tableScan.RuntimeFilterProbeList)
+		require.Equal(t, before, tableScan.Stats)
+		require.False(t, tableScan.Stats.ForceOneCN)
+	})
+
+	t.Run("malformed pair cannot publish optimistic state", func(t *testing.T) {
+		builder, tableScan, _, fuzzy := newBuilder(100, 100)
+		before := DeepCopyStats(tableScan.Stats)
+		fuzzy.RuntimeFilterBuildList[0].BuildExpr.GetCol().ColPos = 1
+
+		builder.finalizeFuzzyRuntimeFilter(fuzzy)
+
+		require.Empty(t, fuzzy.RuntimeFilterBuildList)
+		require.Empty(t, tableScan.RuntimeFilterProbeList)
+		require.Equal(t, before, tableScan.Stats)
+		require.False(t, tableScan.Stats.ForceOneCN)
+		require.Equal(t,
+			planpb.Node_FUZZY_BUILD_SIDE_UNSPECIFIED,
+			fuzzy.FuzzyBuildSide)
+	})
+
+	t.Run("pre rollout fuzzy transport removes both dependency ends", func(t *testing.T) {
+		builder, tableScan, _, fuzzy := newBuilder(300_000, 1_000_000)
+		sid := builder.compCtx.GetProcess().GetService()
+		rt := moruntime.ServiceRuntime(sid)
+		original, hadOriginal := rt.GetGlobalVariables(
+			moruntime.MOProtocolVersion)
+		rt.SetGlobalVariables(
+			moruntime.MOProtocolVersion, defines.MORPCVersion7)
+		t.Cleanup(func() {
+			if hadOriginal {
+				rt.SetGlobalVariables(
+					moruntime.MOProtocolVersion, original)
+			} else {
+				rt.SetGlobalVariables(
+					moruntime.MOProtocolVersion,
+					defines.MORPCLatestVersion)
+			}
+		})
+		before := DeepCopyStats(tableScan.Stats)
+
+		builder.finalizeFuzzyRuntimeFilter(fuzzy)
+
+		require.Empty(t, fuzzy.RuntimeFilterBuildList)
+		require.Empty(t, tableScan.RuntimeFilterProbeList)
+		require.Equal(t, before, tableScan.Stats)
+		require.False(t, tableScan.Stats.ForceOneCN)
+		require.Equal(t,
+			planpb.Node_FUZZY_BUILD_SIDE_UNSPECIFIED,
+			fuzzy.FuzzyBuildSide)
+	})
+
+	t.Run("build on sink publishes pair placement and stats together", func(t *testing.T) {
+		builder, tableScan, sinkScan, fuzzy := newBuilder(300_000, 1_000_000)
+		tableScan.Stats.TableCnt = 1_000_000
+		sinkScan.Stats.Outcnt = 1
+
+		builder.finalizeFuzzyRuntimeFilter(fuzzy)
+
+		require.Equal(t, planpb.Node_FUZZY_BUILD_SIDE_SINK,
+			fuzzy.FuzzyBuildSide)
+		require.Len(t, fuzzy.RuntimeFilterBuildList, 1)
+		require.Len(t, tableScan.RuntimeFilterProbeList, 1)
+		require.True(t, tableScan.Stats.ForceOneCN)
+		require.Equal(t, sinkScan.Stats.Outcnt, tableScan.Stats.Outcnt)
+		require.Equal(t, sinkScan.Stats.Outcnt/tableScan.Stats.TableCnt,
+			tableScan.Stats.Selectivity)
+		after := DeepCopyStats(tableScan.Stats)
+
+		// Finalization is idempotent if a later planning pass revisits the node.
+		builder.finalizeFuzzyRuntimeFilter(fuzzy)
+		require.Equal(t, after, tableScan.Stats)
+		require.Len(t, fuzzy.RuntimeFilterBuildList, 1)
+		require.Len(t, tableScan.RuntimeFilterProbeList, 1)
 	})
 }
 
@@ -405,40 +1166,31 @@ func TestRightSingleRuntimeFilterConservativeEligibility(t *testing.T) {
 		require.Empty(t, probe.RuntimeFilterProbeList)
 	})
 
-	t.Run("full composite prefix remains exact", func(t *testing.T) {
+	t.Run("full composite filter is omitted until HashBuild can materialize it", func(t *testing.T) {
 		builder := newRuntimeFilterSingleTestBuilder(true)
 		probe, _ := configureRuntimeFilterCompositePK(builder)
 
 		builder.generateRuntimeFilters(2)
-
-		require.Len(t, builder.qry.Nodes[2].RuntimeFilterBuildList, 1)
-		require.Len(t, probe.RuntimeFilterProbeList, 1)
-		require.Equal(t, int32(2), probe.RuntimeFilterProbeList[0].Expr.GetCol().ColPos)
-	})
-
-	t.Run("leading composite prefix remains prunable", func(t *testing.T) {
-		builder := newRuntimeFilterSingleTestBuilder(true)
-		probe, _ := configureRuntimeFilterCompositePK(builder)
-		builder.qry.Nodes[2].OnList = builder.qry.Nodes[2].OnList[:1]
-
-		builder.generateRuntimeFilters(2)
-
-		require.Len(t, builder.qry.Nodes[2].RuntimeFilterBuildList, 1)
-		require.Len(t, probe.RuntimeFilterProbeList, 1)
-		require.True(t, probe.RuntimeFilterProbeList[0].MatchPrefix)
-		require.Equal(t, int32(2), probe.RuntimeFilterProbeList[0].Expr.GetCol().ColPos)
-	})
-
-	t.Run("missing hidden composite key metadata leaves no partial runtime filter", func(t *testing.T) {
-		builder := newRuntimeFilterSingleTestBuilder(true)
-		probe, _ := configureRuntimeFilterCompositePK(builder)
-		builder.qry.Nodes[2].OnList = builder.qry.Nodes[2].OnList[:1]
-		delete(probe.TableDef.Name2ColIndex, catalog.CPrimaryKeyColName)
-
-		builder.generateRuntimeFilters(2)
+		builder.forceJoinOnOneCN(2, false)
 
 		require.Empty(t, builder.qry.Nodes[2].RuntimeFilterBuildList)
 		require.Empty(t, probe.RuntimeFilterProbeList)
+		require.False(t, probe.Stats.ForceOneCN)
+		require.False(t, builder.qry.Nodes[1].Stats.ForceOneCN)
+	})
+
+	t.Run("leading composite prefix is omitted until HashBuild can materialize it", func(t *testing.T) {
+		builder := newRuntimeFilterSingleTestBuilder(true)
+		probe, _ := configureRuntimeFilterCompositePK(builder)
+		builder.qry.Nodes[2].OnList = builder.qry.Nodes[2].OnList[:1]
+
+		builder.generateRuntimeFilters(2)
+		builder.forceJoinOnOneCN(2, false)
+
+		require.Empty(t, builder.qry.Nodes[2].RuntimeFilterBuildList)
+		require.Empty(t, probe.RuntimeFilterProbeList)
+		require.False(t, probe.Stats.ForceOneCN)
+		require.False(t, builder.qry.Nodes[1].Stats.ForceOneCN)
 	})
 
 	t.Run("composite probe preserves existing runtime filters", func(t *testing.T) {
@@ -449,21 +1201,9 @@ func TestRightSingleRuntimeFilterConservativeEligibility(t *testing.T) {
 
 		builder.generateRuntimeFilters(2)
 
-		require.Len(t, probe.RuntimeFilterProbeList, 2)
+		require.Len(t, probe.RuntimeFilterProbeList, 1)
 		require.Same(t, existing, probe.RuntimeFilterProbeList[0])
-		require.Equal(t, builder.qry.Nodes[2].RuntimeFilterBuildList[0].Tag, probe.RuntimeFilterProbeList[1].Tag)
-	})
-
-	t.Run("composite build estimate must fit exact IN limit", func(t *testing.T) {
-		builder := newRuntimeFilterSingleTestBuilder(true)
-		probe, build := configureRuntimeFilterCompositePK(builder)
-		probe.Stats.TableCnt = 100_000
-		build.Stats.Outcnt = 50_000
-
-		builder.generateRuntimeFilters(2)
-
 		require.Empty(t, builder.qry.Nodes[2].RuntimeFilterBuildList)
-		require.Empty(t, probe.RuntimeFilterProbeList)
 	})
 }
 

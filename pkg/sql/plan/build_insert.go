@@ -77,6 +77,9 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool, isPrepa
 	// }
 
 	builder := NewQueryBuilder(plan.Query_SELECT, ctx, isPrepareStmt, false)
+	// INSERT IGNORE (OnDuplicateUpdate == [nil]) downgrades over-length
+	// CHAR/VARCHAR writes to truncation instead of rejection.
+	builder.isInsertIgnore = len(stmt.OnDuplicateUpdate) == 1 && stmt.OnDuplicateUpdate[0] == nil
 	if stmt.IsRestore {
 		builder.isRestore = true
 		if stmt.IsRestoreByTs {
@@ -556,7 +559,7 @@ func getPkValueExpr(builder *QueryBuilder, ctx CompilerContext, tableDef *TableD
 
 		for i, data := range node.RowsetData.Cols[idx].Data {
 			rowExpr := DeepCopyExpr(data.Expr)
-			e, err := forceAssignmentCastExpr(builder.GetContext(), rowExpr, col.Typ)
+			e, err := builder.forceAssignmentCastExpr(rowExpr, col.Typ, builder.isInsertIgnore)
 			if err != nil {
 				return nil, err
 			}

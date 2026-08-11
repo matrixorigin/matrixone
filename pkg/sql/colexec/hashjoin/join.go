@@ -17,15 +17,16 @@ package hashjoin
 import (
 	"bytes"
 
-	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/spillutil"
 	"github.com/matrixorigin/matrixone/pkg/util/resource"
 	"github.com/matrixorigin/matrixone/pkg/vm"
@@ -75,6 +76,18 @@ func (hashJoin *HashJoin) Prepare(proc *process.Process) (err error) {
 			return err
 		}
 	}
+	if hashJoin.allocationAccount == nil {
+		return mpool.ErrAllocationAccountInvalid
+	}
+	hashJoin.recursiveProbe = false
+	if hashJoin.NumChildren() > 0 {
+		_ = vm.HandleAllOp(hashJoin.GetChildren(0), func(_ vm.Operator, op vm.Operator) error {
+			if op.OpType() == vm.MergeRecursive {
+				hashJoin.recursiveProbe = true
+			}
+			return nil
+		})
+	}
 
 	if hashJoin.OpAnalyzer == nil {
 		hashJoin.OpAnalyzer = process.NewAnalyzer(hashJoin.GetIdx(), hashJoin.IsFirst, hashJoin.IsLast, opName)
@@ -90,20 +103,30 @@ func (hashJoin *HashJoin) Prepare(proc *process.Process) (err error) {
 	}
 
 	if len(ctr.eqCondVecs) == 0 {
-		eqCondExecs, err := colexec.NewExpressionExecutorsFromPlanExpressions(proc, hashJoin.EqConds[0])
+		eqCondExecs, err := hashbuild.NewExpressionExecutors(
+			proc,
+			hashJoin.EqConds[0],
+			hashJoin.allocationAccount,
+		)
 		if err != nil {
 			return err
 		}
 
 		var nonEqCondExec colexec.ExpressionExecutor
 		if hashJoin.NonEqCond != nil {
-			nonEqCondExec, err = colexec.NewExpressionExecutor(proc, hashJoin.NonEqCond)
+			var nonEqExecs []colexec.ExpressionExecutor
+			nonEqExecs, err = hashbuild.NewExpressionExecutors(
+				proc,
+				[]*plan.Expr{hashJoin.NonEqCond},
+				hashJoin.allocationAccount,
+			)
 			if err != nil {
 				for _, exec := range eqCondExecs {
 					exec.Free()
 				}
 				return err
 			}
+			nonEqCondExec = nonEqExecs[0]
 		}
 
 		ctr.eqCondVecs = make([]*vector.Vector, len(hashJoin.EqConds[0]))
@@ -149,10 +172,10 @@ func (hashJoin *HashJoin) Call(proc *process.Process) (vm.CallResult, error) {
 		case Build:
 			err = hashJoin.build(analyzer, proc)
 			if err != nil {
-				return result, err
+				return result, hashbuild.TerminalBudgetError(proc.Ctx, err)
 			}
 
-			if ctr.mp == nil && ctr.spillEngine == nil && !hashJoin.EmitUnmatchedProbe() && !hashJoin.IsMark() {
+			if ctr.mp == nil && ctr.spillEngine == nil && !hashJoin.EmitUnmatchedProbe() && !hashJoin.IsMark() && !hashJoin.recursiveProbe {
 				// TODO: early terminate the probe side for shuffle join
 				if !hashJoin.IsShuffle {
 					ctr.state = End
@@ -170,7 +193,7 @@ func (hashJoin *HashJoin) Call(proc *process.Process) (vm.CallResult, error) {
 			if ctr.leftBat == nil {
 				input, err = hashJoin.getInputBatch(proc, analyzer)
 				if err != nil {
-					return result, err
+					return result, hashbuild.TerminalBudgetError(proc.Ctx, err)
 				}
 				bat := input.Batch
 
@@ -201,7 +224,9 @@ func (hashJoin *HashJoin) Call(proc *process.Process) (vm.CallResult, error) {
 				ctr.lastIdx = 0
 			}
 
-			hashJoin.resetResultBat()
+			if err = hashJoin.resetResultBat(); err != nil {
+				return result, err
+			}
 			for i, rp := range hashJoin.ResultCols {
 				if rp.Rel == 0 {
 					ctr.resBat.Vecs[i].SetSorted(ctr.leftBat.Vecs[rp.Pos].GetSorted())
@@ -218,7 +243,7 @@ func (hashJoin *HashJoin) Call(proc *process.Process) (vm.CallResult, error) {
 					targetVec = ctr.resBat.Vecs[i]
 					err = targetVec.UnionBatch(srcVec, 0, rowCount, nil, proc.Mp())
 					if err != nil {
-						return result, err
+						return result, hashbuild.TerminalBudgetError(proc.Ctx, err)
 					}
 				}
 
@@ -237,7 +262,7 @@ func (hashJoin *HashJoin) Call(proc *process.Process) (vm.CallResult, error) {
 				err = ctr.probe(hashJoin, proc, &result)
 			}
 			if err != nil {
-				return result, err
+				return result, hashbuild.TerminalBudgetError(proc.Ctx, err)
 			}
 
 			if hashJoin.IsRightSemi() || hashJoin.IsRightAnti() {
@@ -254,7 +279,7 @@ func (hashJoin *HashJoin) Call(proc *process.Process) (vm.CallResult, error) {
 		case SyncBitmap:
 			err := ctr.syncBitmap(hashJoin, proc)
 			if err != nil {
-				return result, err
+				return result, hashbuild.TerminalBudgetError(proc.Ctx, err)
 			}
 
 			// Only enter Finalize when syncBitmap ran to completion and set
@@ -273,7 +298,7 @@ func (hashJoin *HashJoin) Call(proc *process.Process) (vm.CallResult, error) {
 		case Finalize:
 			err := ctr.finalize(hashJoin, proc, &result)
 			if err != nil {
-				return result, err
+				return result, hashbuild.TerminalBudgetError(proc.Ctx, err)
 			}
 
 			if result.Batch == nil {
@@ -281,7 +306,7 @@ func (hashJoin *HashJoin) Call(proc *process.Process) (vm.CallResult, error) {
 
 				// For spilled join, clean up current bucket and move to next
 				if (ctr.spillEngine != nil) && (ctr.spillEngine.HasMoreBuckets() || ctr.spillEngine.IsProbing()) {
-					ctr.rightRowsMatched = nil
+					ctr.freeRightRowsMatched(proc)
 					ctr.cleanHashMap()
 					ctr.state = Probe
 				}
@@ -300,17 +325,23 @@ func (hashJoin *HashJoin) Call(proc *process.Process) (vm.CallResult, error) {
 
 func (hashJoin *HashJoin) build(analyzer process.Analyzer, proc *process.Process) (err error) {
 	ctr := &hashJoin.ctr
-	ctr.mp, err = process.MeasureWait(analyzer, resource.WaitOther, func() (*message.JoinMap, error) {
-		return message.ReceiveJoinMap(hashJoin.JoinMapTag, hashJoin.IsShuffle, hashJoin.ShuffleIdx, proc.GetMessageBoard(), proc.Ctx)
+	dep, err := process.MeasureWait(analyzer, resource.WaitOther, func() (message.JoinMapResult, error) {
+		return message.ReceiveJoinMapResult(hashJoin.JoinMapTag, hashJoin.IsShuffle, hashJoin.ShuffleIdx, proc.GetMessageBoard(), proc.Ctx)
 	})
 	if err != nil {
 		return err
 	}
+	if buildErr := dep.BuildError(); buildErr != nil {
+		// A terminal BuildError is a failed dependency, never an empty build.
+		// Return before consuming probe input so no successful rows can escape.
+		return buildErr.AsMoErr()
+	}
+	ctr.mp = dep.JoinMap()
 
 	// Pre-compute per-query flags for the probe loop.
 	ctr.probeEmitUnmatched = hashJoin.EmitUnmatchedProbe()
 	ctr.probeRightSemiAnti = !hashJoin.IsRightSemi() && !hashJoin.IsAnti()
-	ctr.probeRightJoin = hashJoin.IsRightJoin
+	ctr.probeTrackBuildMatches = hashJoin.EmitUnmatchedBuild()
 	ctr.probeSingle = hashJoin.IsSingle()
 	ctr.probeLeftSingle = hashJoin.IsLeftSingle()
 	ctr.probeLeftSemi = hashJoin.IsLeftSemi()
@@ -326,16 +357,36 @@ func (hashJoin *HashJoin) build(analyzer process.Analyzer, proc *process.Process
 
 		// Handle spilled build side
 		if ctr.mp.IsSpilled() {
-			engine := spillutil.NewSpillEngine(spillutil.SpillEngineConfig{
+			payload, budget, takeErr := spillutil.TakeSpillBuildPayload(proc, ctr.mp)
+			if takeErr != nil {
+				return takeErr
+			}
+			if hashJoin.allocationAccount == nil {
+				_ = payload.Close()
+				ctr.mp.Free()
+				ctr.mp = nil
+				return mpool.ErrAllocationAccountInvalid
+			}
+			engine, engineErr := spillutil.NewSpillEngine(spillutil.SpillEngineConfig{
 				BuildKeyExprs:           hashJoin.EqConds[1],
+				ProbeKeyExprs:           hashJoin.EqConds[0],
 				SpillThreshold:          ctr.spillThreshold,
 				NeedsProbeForEmptyBuild: hashJoin.EmitUnmatchedProbe() || hashJoin.IsMark(),
 				NeedsBuildForEmptyProbe: hashJoin.EmitUnmatchedBuild(),
 				HashOnPK:                hashJoin.HashOnPK,
 				NeedAllocateSels:        !hashJoin.HashOnPK,
 				NeedBatches:             hashJoin.NeedBuildBatches(),
-			})
-			engine.InitFromSpilledMap(ctr.mp.TakeSpillBuildFds())
+				Budget:                  budget,
+			}, hashJoin.allocationAccount, hashbuild.HashBuildAllocationOwner)
+			if engineErr != nil {
+				_ = payload.Close()
+				ctr.mp.Free()
+				ctr.mp = nil
+				ctr.cleanEqCondExecutors()
+				return engineErr
+			}
+			engine.InitFromSpilledFiles(payload.Files)
+			ctr.spillEngine = engine
 			if err := engine.ScatterProbeTable(proc,
 				func() (*batch.Batch, error) {
 					input, err := vm.ChildrenCall(hashJoin.GetChildren(0), proc, analyzer)
@@ -352,10 +403,10 @@ func (hashJoin *HashJoin) build(analyzer process.Analyzer, proc *process.Process
 				ctr.mp.Free()
 				ctr.mp = nil
 				engine.Cleanup(proc)
+				ctr.spillEngine = nil
 				return err
 			}
 			ctr.mp.Free()
-			ctr.spillEngine = engine
 			ctr.mp = nil
 			return nil
 		}
@@ -370,8 +421,16 @@ func (hashJoin *HashJoin) build(analyzer process.Analyzer, proc *process.Process
 
 	if hashJoin.EmitUnmatchedBuild() {
 		if ctr.rightRowCnt > 0 {
-			ctr.rightRowsMatched = &bitmap.Bitmap{}
-			ctr.rightRowsMatched.InitWithSize(ctr.rightRowCnt)
+			ctr.rightRowsMatched, err = colexec.NewAccountedBitmap(
+				ctr.rightRowCnt,
+				proc.Mp(),
+				hashJoin.allocationAccount,
+				hashbuild.HashBuildAllocationOwner,
+				hashJoinAllocationSiteMatchedRows,
+			)
+			if err != nil {
+				return err
+			}
 		}
 	}
 
@@ -412,6 +471,7 @@ func (hashJoin *HashJoin) getSpilledInputBatch(proc *process.Process, analyzer p
 
 		// Load next bucket via engine convenience method.
 		if ctr.mp == nil {
+			var allocationErr error
 			ok, err := engine.AdvanceToNextBucket(proc, analyzer,
 				func(jm *message.JoinMap, res spillutil.BucketResult) {
 					if res == spillutil.BucketReady {
@@ -420,8 +480,14 @@ func (hashJoin *HashJoin) getSpilledInputBatch(proc *process.Process, analyzer p
 						ctr.rightRowCnt = jm.GetRowCount()
 						ctr.probeHashOnPK = hashJoin.HashOnPK || ctr.mp.HashOnUnique()
 						if hashJoin.EmitUnmatchedBuild() && ctr.rightRowCnt > 0 {
-							ctr.rightRowsMatched = &bitmap.Bitmap{}
-							ctr.rightRowsMatched.InitWithSize(ctr.rightRowCnt)
+							ctr.rightRowsMatched, allocationErr =
+								colexec.NewAccountedBitmap(
+									ctr.rightRowCnt,
+									proc.Mp(),
+									hashJoin.allocationAccount,
+									hashbuild.HashBuildAllocationOwner,
+									hashJoinAllocationSiteMatchedRows,
+								)
 							ctr.rightMatchedIter = nil
 						}
 					}
@@ -429,9 +495,13 @@ func (hashJoin *HashJoin) getSpilledInputBatch(proc *process.Process, analyzer p
 			if err != nil {
 				return result, err
 			}
+			if allocationErr != nil {
+				return result, allocationErr
+			}
 			if !ok {
 				return result, nil
 			}
+			hashmap.IteratorClearOwner(ctr.itr)
 			ctr.itr = nil
 			ctr.probeState = psNextBatch
 			ctr.lastIdx = 0
@@ -467,7 +537,15 @@ func (ctr *container) probe(hashJoin *HashJoin, proc *process.Process, result *v
 		case psNextBatch:
 			if ctr.lastIdx < leftRowCnt {
 				hashBatch := min(leftRowCnt-ctr.lastIdx, hashmap.UnitLimit)
-				ctr.vs, ctr.zvs = ctr.itr.Find(ctr.lastIdx, hashBatch, ctr.eqCondVecs)
+				var err error
+				ctr.vs, ctr.zvs, err = ctr.itr.Find(
+					ctr.lastIdx,
+					hashBatch,
+					ctr.eqCondVecs,
+				)
+				if err != nil {
+					return err
+				}
 				ctr.vsIdx = 0
 				ctr.probeState = psBatchRow
 			} else {
@@ -513,7 +591,9 @@ func (ctr *container) probe(hashJoin *HashJoin, proc *process.Process, result *v
 
 			if z == 0 || v == 0 {
 				if ctr.probeEmitUnmatched {
-					ctr.appendOneNotMatch(hashJoin, proc, row)
+					if err = ctr.appendOneNotMatch(hashJoin, proc, row); err != nil {
+						return err
+					}
 					resRowCnt++
 				}
 
@@ -541,7 +621,7 @@ func (ctr *container) probe(hashJoin *HashJoin, proc *process.Process, result *v
 						resRowCnt++
 					}
 
-					if ctr.probeRightJoin {
+					if ctr.probeTrackBuildMatches {
 						if ctr.probeSingle && ctr.rightRowsMatched.Contains(uint64(idx)) {
 							return moerr.NewErrSubqueryNo1Row(proc.Ctx)
 						}
@@ -564,7 +644,7 @@ func (ctr *container) probe(hashJoin *HashJoin, proc *process.Process, result *v
 							resRowCnt++
 						}
 
-						if ctr.probeRightJoin {
+						if ctr.probeTrackBuildMatches {
 							if ctr.probeSingle && ctr.rightRowsMatched.Contains(uint64(idx)) {
 								return moerr.NewErrSubqueryNo1Row(proc.Ctx)
 							}
@@ -589,7 +669,9 @@ func (ctr *container) probe(hashJoin *HashJoin, proc *process.Process, result *v
 							return moerr.NewErrSubqueryNo1Row(proc.Ctx)
 						}
 					} else if ctr.probeLeftSemi {
-						ctr.appendOneNotMatch(hashJoin, proc, row)
+						if err = ctr.appendOneNotMatch(hashJoin, proc, row); err != nil {
+							return err
+						}
 						resRowCnt++
 						ctr.sels = nil
 					} else if ctr.probeLeftAnti {
@@ -619,7 +701,7 @@ func (ctr *container) probe(hashJoin *HashJoin, proc *process.Process, result *v
 			// remove processed sels
 			ctr.sels = ctr.sels[processCount:]
 			if hashJoin.NonEqCond == nil {
-				if ctr.probeRightJoin {
+				if ctr.probeTrackBuildMatches {
 					for _, sel := range sels {
 						if ctr.probeSingle && ctr.rightRowsMatched.Contains(uint64(sel)) {
 							return moerr.NewErrSubqueryNo1Row(proc.Ctx)
@@ -660,7 +742,7 @@ func (ctr *container) probe(hashJoin *HashJoin, proc *process.Process, result *v
 					}
 
 					if ok {
-						if ctr.probeRightJoin {
+						if ctr.probeTrackBuildMatches {
 							if ctr.probeSingle && ctr.rightRowsMatched.Contains(uint64(sel)) {
 								return moerr.NewErrSubqueryNo1Row(proc.Ctx)
 							}
@@ -675,7 +757,9 @@ func (ctr *container) probe(hashJoin *HashJoin, proc *process.Process, result *v
 						ctr.leftRowMatched = true
 
 						if ctr.probeRightSemiAnti {
-							ctr.appendOneMatch(hashJoin, proc, int64(row), idx1, idx2)
+							if err = ctr.appendOneMatch(hashJoin, proc, int64(row), idx1, idx2); err != nil {
+								return err
+							}
 							resRowCnt++
 						}
 
@@ -688,7 +772,9 @@ func (ctr *container) probe(hashJoin *HashJoin, proc *process.Process, result *v
 
 				if len(ctr.sels) == 0 &&
 					!ctr.leftRowMatched && ctr.probeEmitUnmatched {
-					ctr.appendOneNotMatch(hashJoin, proc, int64(row))
+					if err = ctr.appendOneNotMatch(hashJoin, proc, int64(row)); err != nil {
+						return err
+					}
 					resRowCnt++
 				}
 			}
@@ -758,11 +844,17 @@ func (ctr *container) appendMarkForEmptyBuildBucket(marker *vector.Vector, proc 
 	}
 	for _, vec := range ctr.eqCondVecs {
 		if vec.IsConstNull() {
+			if err := marker.PreExtendNulls(rowCnt, proc.Mp()); err != nil {
+				return err
+			}
 			marker.GetNulls().AddRange(0, uint64(rowCnt))
 			return nil
 		}
 		if !vec.GetNulls().Any() {
 			continue
+		}
+		if err := marker.PreExtendNulls(rowCnt, proc.Mp()); err != nil {
+			return err
 		}
 		nulls.Or(marker.GetNulls(), vec.GetNulls(), marker.GetNulls())
 	}
@@ -778,34 +870,34 @@ func (ctr *container) syncBitmap(hashJoin *HashJoin, proc *process.Process) erro
 
 	if hashJoin.NumCPU > 1 {
 		if !hashJoin.IsMerger {
-			hashJoin.Channel <- ctr.rightRowsMatched
+			if hashJoin.Mailbox.Send(ctr.rightRowsMatched) {
+				ctr.rightRowsMatched = nil
+			}
 			return nil
 		} else {
 			matchedCnt := ctr.rightRowsMatched.Count()
 
 			for cnt := 1; cnt < int(hashJoin.NumCPU); cnt++ {
-				v := colexec.ReceiveBitmapFromChannel(proc.Ctx, hashJoin.Channel)
-				if v == nil {
+				v, received := hashJoin.Mailbox.Receive(proc.Ctx)
+				if !received || v == nil {
 					// A worker was torn down before syncing (its Reset sends
-					// nil) or the context was canceled. The merge is aborted,
-					// but keep draining this generation's remaining messages
-					// so no stale bitmap is left behind in the shared
-					// channel, then bail out without initializing the
+					// nil) or the context was canceled. Sealing transfers all
+					// already-published values to cleanup and makes late
+					// publishers retain their own value. Bail out without initializing the
 					// iterator — Call routes to End and nothing is finalized.
-					for cnt++; cnt < int(hashJoin.NumCPU); cnt++ {
-						colexec.ReceiveBitmapFromChannel(proc.Ctx, hashJoin.Channel)
-					}
+					hashJoin.Mailbox.SealAndDrain(proc.Mp())
 					return nil
 				}
 				matchedCnt += v.Count()
 				ctr.rightRowsMatched.Or(v)
+				colexec.FreeAccountedBitmap(v, proc.Mp())
 			}
 
 			if ctr.probeSingle && matchedCnt > ctr.rightRowsMatched.Count() {
 				return moerr.NewErrSubqueryNo1Row(proc.Ctx)
 			}
 
-			close(hashJoin.Channel)
+			hashJoin.Mailbox.SealAndDrain(proc.Mp())
 		}
 	}
 
@@ -819,7 +911,9 @@ func (ctr *container) syncBitmap(hashJoin *HashJoin, proc *process.Process) erro
 }
 
 func (ctr *container) finalize(hashJoin *HashJoin, proc *process.Process, result *vm.CallResult) error {
-	hashJoin.resetResultBat()
+	if err := hashJoin.resetResultBat(); err != nil {
+		return err
+	}
 	rowCnt := 0
 
 	for ; rowCnt < colexec.DefaultBatchSize && ctr.rightMatchedIter.HasNext(); rowCnt++ {
@@ -947,7 +1041,7 @@ func (ctr *container) evalJoinCondition(bat *batch.Batch, proc *process.Process)
 	return nil
 }
 
-func (hashJoin *HashJoin) resetResultBat() {
+func (hashJoin *HashJoin) resetResultBat() error {
 	ctr := &hashJoin.ctr
 	if ctr.resBat != nil {
 		ctr.resBat.CleanOnlyData()
@@ -968,5 +1062,11 @@ func (hashJoin *HashJoin) resetResultBat() {
 				ctr.resBat.Vecs[i] = vector.NewOffHeapVecWithType(types.T_bool.ToType())
 			}
 		}
+		if err := ctr.resBat.SetAllocationAccount(hashJoin.resultAllocation); err != nil {
+			ctr.resBat.Clean(nil)
+			ctr.resBat = nil
+			return err
+		}
 	}
+	return nil
 }

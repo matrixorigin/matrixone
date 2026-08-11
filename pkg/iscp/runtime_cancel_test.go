@@ -89,6 +89,103 @@ func TestRegisterRunningConsumerRejectsFencedJob(t *testing.T) {
 	require.False(t, ok)
 }
 
+func TestCNJobFenceSurvivesExecutorGenerationReplacement(t *testing.T) {
+	const runnerCN = "generation-runner-cn"
+	key := NewJobRuntimeKey(1, 2, "index_idx01", 1)
+	first := newRuntimeTestExecutor()
+	first.cnUUID = runnerCN
+	second := newRuntimeTestExecutor()
+	second.cnUUID = runnerCN
+	RegisterExecutorRuntime(runnerCN, first)
+
+	require.NoError(t, first.CancelAndDrainJobConsumer(
+		context.Background(),
+		key.AccountID,
+		key.TableID,
+		key.JobName,
+		key.JobID,
+	))
+	UnregisterExecutorRuntime(runnerCN, first)
+	RegisterExecutorRuntime(runnerCN, second)
+	defer func() {
+		second.RemoveJobFence(key)
+		UnregisterExecutorRuntime(runnerCN, second)
+	}()
+	_, ok := second.RegisterRunningConsumer(key, key.JobID, 1, func() {}, nil)
+	require.False(t, ok, "replacement generation must inherit the CN fence")
+
+	second.RemoveJobFence(key)
+	handle, ok := second.RegisterRunningConsumer(key, key.JobID, 2, func() {}, nil)
+	require.True(t, ok)
+	second.UnregisterRunningConsumer(handle)
+}
+
+func TestCNJobFenceDoesNotCrossRunnerBoundary(t *testing.T) {
+	key := NewJobRuntimeKey(1, 2, "index_idx01", 1)
+	first := newRuntimeTestExecutor()
+	first.cnUUID = "runner-a"
+	second := newRuntimeTestExecutor()
+	second.cnUUID = "runner-b"
+	RegisterExecutorRuntime(first.cnUUID, first)
+	RegisterExecutorRuntime(second.cnUUID, second)
+	defer func() {
+		first.RemoveJobFence(key)
+		UnregisterExecutorRuntime(first.cnUUID, first)
+		UnregisterExecutorRuntime(second.cnUUID, second)
+	}()
+
+	require.NoError(t, first.CancelAndDrainJobConsumer(
+		context.Background(),
+		key.AccountID,
+		key.TableID,
+		key.JobName,
+		key.JobID,
+	))
+	handle, ok := second.RegisterRunningConsumer(key, key.JobID, 1, func() {}, nil)
+	require.True(t, ok)
+	second.UnregisterRunningConsumer(handle)
+}
+
+func TestRenewJobFenceCannotResurrectRemovedCNFence(t *testing.T) {
+	const runnerCN = "late-renew-runner-cn"
+	key := NewJobRuntimeKey(1, 2, "index_idx01", 1)
+	first := newRuntimeTestExecutor()
+	first.cnUUID = runnerCN
+	second := newRuntimeTestExecutor()
+	second.cnUUID = runnerCN
+	RegisterExecutorRuntime(runnerCN, first)
+	defer func() {
+		first.RemoveJobFence(key)
+		second.RemoveJobFence(key)
+		UnregisterExecutorRuntime(runnerCN, first)
+		UnregisterExecutorRuntime(runnerCN, second)
+	}()
+
+	require.NoError(t, first.CancelAndDrainJobConsumer(
+		context.Background(),
+		key.AccountID,
+		key.TableID,
+		key.JobName,
+		key.JobID,
+	))
+	UnregisterExecutorRuntime(runnerCN, first)
+	RegisterExecutorRuntime(runnerCN, second)
+	RemoveCNJobFence(runnerCN, key)
+
+	// A stale executor pointer may retain its old local copy after generation
+	// replacement. Once the CN fence is removed, that old generation must not
+	// use the retained copy to recreate state in the current generation.
+	require.True(t, first.IsJobFenced(key))
+	require.False(t, second.IsJobFenced(key))
+	require.False(t, first.RenewJobFence(key, time.Minute))
+	require.False(t, RenewCNJobFence(runnerCN, key, time.Minute))
+
+	UnregisterExecutorRuntime(runnerCN, second)
+	RegisterExecutorRuntime(runnerCN, first)
+	require.False(t, first.IsJobFenced(key),
+		"republishing an old executor must reconcile its local map with the removed CN fence")
+}
+
 func TestExpiredJobFenceIsClearedWhenChecked(t *testing.T) {
 	exec := newRuntimeTestExecutor()
 	key := NewJobRuntimeKey(1, 2, "index_idx01", 1)
@@ -279,6 +376,69 @@ func TestAddOrUpdateJobDropAtClearsGenerationFence(t *testing.T) {
 	require.False(t, exec.IsJobFenced(key))
 	iters, _ := table.getCandidate()
 	require.Empty(t, iters)
+}
+
+func TestAddOrUpdateJobNormalizesZeroTimestampDropAt(t *testing.T) {
+	exec := newRuntimeTestExecutor()
+	key := NewJobRuntimeKey(1, 2, "index_idx01", 1)
+	table := NewTableEntry(exec, key.AccountID, 1, key.TableID, "db", "tbl")
+	exec.setTable(table)
+
+	err := exec.addOrUpdateJob(
+		key.AccountID,
+		key.TableID,
+		key.JobName,
+		key.JobID,
+		ISCPJobState_Completed,
+		types.BuildTS(1, 0).ToString(),
+		mustEncodeRuntimeJobSpec(t),
+		encodeJSONRows(t, []string{mustMarshalJobStatus(t, 1, JobStage_Running)})[0],
+		types.ZeroTimestamp,
+		false,
+	)
+
+	require.NoError(t, err)
+	job := table.jobs[JobKey{JobName: key.JobName, JobID: key.JobID}]
+	require.NotNil(t, job)
+	require.Equal(t, types.TimestampMinValue, job.dropAt)
+	iters, _ := table.getCandidate()
+	require.Empty(t, iters)
+	require.True(t, table.gcInMemoryJob(0))
+}
+
+func TestAddOrUpdateJobPreservesExistingDropAtSemantics(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		dropAt types.Timestamp
+	}{
+		{name: "null sentinel stays active", dropAt: 0},
+		{name: "normal drop time is preserved", dropAt: types.TimestampMinValue + types.Timestamp(types.MicroSecsPerSec)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			exec := newRuntimeTestExecutor()
+			key := NewJobRuntimeKey(1, 2, "index_idx01", 1)
+			table := NewTableEntry(exec, key.AccountID, 1, key.TableID, "db", "tbl")
+			exec.setTable(table)
+
+			err := exec.addOrUpdateJob(
+				key.AccountID,
+				key.TableID,
+				key.JobName,
+				key.JobID,
+				ISCPJobState_Completed,
+				types.BuildTS(1, 0).ToString(),
+				mustEncodeRuntimeJobSpec(t),
+				encodeJSONRows(t, []string{mustMarshalJobStatus(t, 1, JobStage_Running)})[0],
+				tc.dropAt,
+				false,
+			)
+
+			require.NoError(t, err)
+			job := table.jobs[JobKey{JobName: key.JobName, JobID: key.JobID}]
+			require.NotNil(t, job)
+			require.Equal(t, tc.dropAt, job.dropAt)
+		})
+	}
 }
 
 func TestAddOrUpdateJobDropAtPreservesFenceOnParseFailure(t *testing.T) {

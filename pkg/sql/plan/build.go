@@ -16,7 +16,9 @@ package plan
 
 import (
 	"context"
+	"reflect"
 	gotrace "runtime/trace"
+	"strings"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -28,6 +30,32 @@ import (
 )
 
 func bindAndOptimizeSelectQuery(stmtType plan.Query_StatementType, ctx CompilerContext, stmt *tree.Select, isPrepareStmt bool, skipStats bool) (*Plan, error) {
+	return bindAndOptimizeSelectQueryWithValidator(stmtType, ctx, stmt, isPrepareStmt, skipStats, nil)
+}
+
+func bindAndOptimizeSelectQueryWithValidator(
+	stmtType plan.Query_StatementType,
+	ctx CompilerContext,
+	stmt *tree.Select,
+	isPrepareStmt bool,
+	skipStats bool,
+	validate func(*Query) error,
+) (*Plan, error) {
+	return bindAndOptimizeSelectQueryWithValidatorAndCapture(
+		stmtType, ctx, stmt, isPrepareStmt, skipStats, validate, nil, false,
+	)
+}
+
+func bindAndOptimizeSelectQueryWithValidatorAndCapture(
+	stmtType plan.Query_StatementType,
+	ctx CompilerContext,
+	stmt *tree.Select,
+	isPrepareStmt bool,
+	skipStats bool,
+	validate func(*Query) error,
+	capture func(*BindContext),
+	restoreViewMySQLSpecialTypes bool,
+) (*Plan, error) {
 	start := time.Now()
 	defer func() {
 		v2.TxnStatementBuildSelectHistogram.Observe(time.Since(start).Seconds())
@@ -35,6 +63,7 @@ func bindAndOptimizeSelectQuery(stmtType plan.Query_StatementType, ctx CompilerC
 
 	builder := NewQueryBuilder(stmtType, ctx, isPrepareStmt, true)
 	bindCtx := NewBindContext(builder, nil)
+	bindCtx.restoreViewMySQLSpecialTypes = restoreViewMySQLSpecialTypes
 	if IsSnapshotValid(ctx.GetSnapshot()) {
 		bindCtx.snapshot = ctx.GetSnapshot()
 	}
@@ -43,10 +72,19 @@ func bindAndOptimizeSelectQuery(stmtType plan.Query_StatementType, ctx CompilerC
 	if err != nil {
 		return nil, err
 	}
+	builder.skipStats = skipStats
+	rootId = builder.reuseMultiReferenceCTEs(rootId)
 	ctx.SetViews(bindCtx.views)
+	if capture != nil {
+		capture(bindCtx)
+	}
 
 	builder.qry.Steps = append(builder.qry.Steps, rootId)
-	builder.skipStats = skipStats
+	if validate != nil {
+		if err = validate(builder.qry); err != nil {
+			return nil, err
+		}
+	}
 	query, err := builder.createQuery()
 	if err != nil {
 		return nil, err
@@ -70,16 +108,25 @@ func bindAndOptimizeInsertQuery(ctx CompilerContext, stmt *tree.Insert, isPrepar
 	if IsSnapshotValid(ctx.GetSnapshot()) {
 		bindCtx.snapshot = ctx.GetSnapshot()
 	}
+	if err := validateReturningSyntax(builder, stmt); err != nil {
+		return nil, err
+	}
+	builder.returningRequested = stmt.HasReturning()
 
 	rootId, err := builder.bindInsert(stmt, bindCtx)
 	if err != nil {
+		if stmt.HasReturning() {
+			if feature := returningFallbackFeature(err, "legacy INSERT path"); feature != "" {
+				return nil, returningNotSupported(builder, feature)
+			}
+		}
 		// ON DUPLICATE KEY UPDATE is fully handled by the modern path; it must
 		// never fall back to the legacy ODKU operator. Two exceptions still fall
 		// back: plain INSERT (e.g. inserting into a system index table); and the
 		// degenerate ODKU on a table with no primary/unique key (no dedup key to
 		// represent the upsert; legacy treats it as a plain INSERT and preserves
 		// the prepared-statement parameters).
-		if err.(*moerr.Error).ErrorCode() == moerr.ErrUnsupportedDML &&
+		if !stmt.HasReturning() && moerr.IsMoErrCode(err, moerr.ErrUnsupportedDML) &&
 			(len(stmt.OnDuplicateUpdate) == 0 ||
 				err.Error() == noPkOnDupUpdateMsg) {
 			return buildInsert(stmt, ctx, false, isPrepareStmt)
@@ -89,6 +136,9 @@ func bindAndOptimizeInsertQuery(ctx CompilerContext, stmt *tree.Insert, isPrepar
 	ctx.SetViews(bindCtx.views)
 
 	builder.qry.Steps = append(builder.qry.Steps, rootId)
+	if err = builder.appendReturningProjection(stmt.Returning, bindCtx); err != nil {
+		return nil, err
+	}
 	builder.skipStats = skipStats
 	query, err := builder.createQuery()
 	if err != nil {
@@ -183,7 +233,28 @@ func bindAndOptimizeReplaceQuery(ctx CompilerContext, stmt *tree.Replace, isPrep
 	if err != nil {
 		return nil, err
 	}
-	if len(tblInfo.tableDefs) == 1 {
+	// FK checks/actions are all disabled when foreign_key_checks is off, the
+	// same way MySQL skips foreign-key enforcement. Gate every FK SQL below
+	// (self-referencing checks, the RESTRICT pre-check, and the non-self
+	// parent-side actions) under one guard so the behavior is consistent.
+	fkChecksEnabled, err := IsForeignKeyChecksEnabled(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if len(tblInfo.tableDefs) == 1 &&
+		(len(tblInfo.tableDefs[0].Fkeys) > 0 || len(tblInfo.tableDefs[0].RefChildTbls) > 0) {
+		// The presence or absence of DetectSqls depends on the session's
+		// foreign_key_checks value. Keep the plan FK-sensitive even when the
+		// variable is currently off, otherwise a cached plan built without the
+		// checks could survive after they are enabled.
+		query.HasForeignKeyAction = true
+	}
+	if fkChecksEnabled && len(tblInfo.tableDefs) == 1 {
+		if len(tblInfo.tableDefs[0].RefChildTbls) > 0 {
+			// Parent-side actions are part of the modern REPLACE plan. Keep a
+			// marker solely for the optimistic-transaction fail-closed guard.
+			query.DetectSqls = append(query.DetectSqls, "REPLACE_PARENT_PLAN:")
+		}
 		sqls, err := genSqlsForCheckFKSelfRefer(
 			ctx.GetContext(),
 			tblInfo.objRef[0].SchemaName,
@@ -194,7 +265,7 @@ func bindAndOptimizeReplaceQuery(ctx CompilerContext, stmt *tree.Replace, isPrep
 		if err != nil {
 			return nil, err
 		}
-		query.DetectSqls = sqls
+		query.DetectSqls = append(query.DetectSqls, sqls...)
 
 		// Generate pre-check SQLs for parent→child safety (RESTRICT).
 		preCheckSqls, err := genPreCheckSqlsForReplaceFKSelfRefer(
@@ -235,7 +306,7 @@ func bindAndOptimizeLoadQuery(ctx CompilerContext, stmt *tree.Load, isPrepareStm
 
 	rootId, err := builder.bindLoad(stmt, bindCtx)
 	if err != nil {
-		if err.(*moerr.Error).ErrorCode() == moerr.ErrUnsupportedDML {
+		if moerr.IsMoErrCode(err, moerr.ErrUnsupportedDML) {
 			return buildLoad(stmt, ctx, isPrepareStmt)
 		}
 		return nil, err
@@ -273,10 +344,19 @@ func bindAndOptimizeDeleteQuery(ctx CompilerContext, stmt *tree.Delete, isPrepar
 	if IsSnapshotValid(ctx.GetSnapshot()) {
 		bindCtx.snapshot = ctx.GetSnapshot()
 	}
+	if err := validateReturningSyntax(builder, stmt); err != nil {
+		return nil, err
+	}
+	builder.returningRequested = stmt.HasReturning()
 
 	rootId, err := builder.bindDelete(ctx, stmt, bindCtx)
 	if err != nil {
-		if err.(*moerr.Error).ErrorCode() == moerr.ErrUnsupportedDML {
+		if stmt.HasReturning() {
+			if feature := returningFallbackFeature(err, "legacy DELETE path"); feature != "" {
+				return nil, returningNotSupported(builder, feature)
+			}
+		}
+		if !stmt.HasReturning() && moerr.IsMoErrCode(err, moerr.ErrUnsupportedDML) {
 			if err.Error() == icebergRowLevelDMLUnsupportedMsg {
 				return buildIcebergDeletePlan(stmt, ctx, isPrepareStmt)
 			}
@@ -287,9 +367,15 @@ func bindAndOptimizeDeleteQuery(ctx CompilerContext, stmt *tree.Delete, isPrepar
 	ctx.SetViews(bindCtx.views)
 
 	builder.qry.Steps = append(builder.qry.Steps, rootId)
+	if err = builder.appendReturningProjection(stmt.Returning, bindCtx); err != nil {
+		return nil, err
+	}
 	builder.skipStats = skipStats
 	query, err := builder.createQuery()
 	if err != nil {
+		return nil, err
+	}
+	if err = builder.finishIrregularIndexMaintenance(query, bindCtx); err != nil {
 		return nil, err
 	}
 	return &Plan{
@@ -304,31 +390,107 @@ func bindAndOptimizeUpdateQuery(ctx CompilerContext, stmt *tree.Update, isPrepar
 	defer func() {
 		v2.TxnStatementBuildDeleteHistogram.Observe(time.Since(start).Seconds())
 	}()
+	if err := validateMultiTableUpdateClauses(ctx, stmt); err != nil {
+		return nil, err
+	}
 
 	builder := NewQueryBuilder(plan.Query_UPDATE, ctx, isPrepareStmt, true)
 	bindCtx := NewBindContext(builder, nil)
 	if IsSnapshotValid(ctx.GetSnapshot()) {
 		bindCtx.snapshot = ctx.GetSnapshot()
 	}
+	if err := validateReturningSyntax(builder, stmt); err != nil {
+		return nil, err
+	}
+	builder.returningRequested = stmt.HasReturning()
 
 	rootId, err := builder.bindUpdate(stmt, bindCtx)
 	if err != nil {
-		if err.(*moerr.Error).ErrorCode() == moerr.ErrUnsupportedDML {
-			if err.Error() == icebergRowLevelDMLUnsupportedMsg {
-				return buildIcebergUpdatePlan(stmt, ctx, isPrepareStmt)
+		route, reason, routedErr := classifyUpdatePlannerError(err)
+		switch route {
+		case updatePlannerLegacy:
+			recordUpdatePlannerRoute(route, reason, "selected")
+			if stmt.HasReturning() {
+				if reason == updateRouteReasonExternalTable {
+					return nil, returningNotSupported(builder, "external table")
+				}
+				return nil, returningNotSupported(builder, "legacy UPDATE path")
 			}
 			return buildTableUpdate(stmt, ctx, isPrepareStmt)
+		case updatePlannerSpecialized:
+			recordUpdatePlannerRoute(route, reason, "selected")
+			if stmt.HasReturning() {
+				if reason == updateRouteReasonIceberg {
+					return nil, returningNotSupported(builder, "Iceberg table")
+				}
+				return nil, returningNotSupported(builder, "specialized UPDATE path")
+			}
+			return buildIcebergUpdatePlan(stmt, ctx, isPrepareStmt)
+		case updatePlannerRejected, updatePlannerUnknown:
+			recordUpdatePlannerRoute(route, reason, "rejected")
+			if stmt.HasReturning() {
+				switch reason {
+				case updateRouteReasonExternalTable:
+					return nil, returningNotSupported(builder, "external table")
+				case updateRouteReasonTableForm:
+					return nil, returningNotSupported(builder, "internal table")
+				}
+			}
+			return nil, routedErr
 		}
-		return nil, err
+		return nil, routedErr
 	}
 	ctx.SetViews(bindCtx.views)
 
 	builder.qry.Steps = append(builder.qry.Steps, rootId)
+	if err = builder.appendReturningProjection(stmt.Returning, bindCtx); err != nil {
+		return nil, err
+	}
 	builder.skipStats = skipStats
 	query, err := builder.createQuery()
 	if err != nil {
 		return nil, err
 	}
+	if err = builder.finishIrregularIndexMaintenance(query, bindCtx); err != nil {
+		return nil, err
+	}
+
+	enabled, err := IsForeignKeyChecksEnabled(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if enabled && query.HasForeignKeyAction {
+		tblInfo, resolveErr := getUpdateTableInfo(ctx, stmt)
+		if resolveErr != nil {
+			return nil, resolveErr
+		}
+		for i, tableDef := range tblInfo.tableDefs {
+			if len(tblInfo.updateKeys[i]) == 0 {
+				continue
+			}
+			selfFkeys := make([]*plan.ForeignKeyDef, 0, len(tableDef.Fkeys))
+			for _, fk := range tableDef.Fkeys {
+				if fk.ForeignTbl == 0 {
+					selfFkeys = append(selfFkeys, fk)
+				}
+			}
+			if len(selfFkeys) == 0 {
+				continue
+			}
+			sqls, genErr := genSqlsForCheckFKSelfRefer(
+				ctx.GetContext(),
+				tblInfo.objRef[i].SchemaName,
+				tableDef.Name,
+				tableDef.Cols,
+				selfFkeys,
+			)
+			if genErr != nil {
+				return nil, genErr
+			}
+			query.DetectSqls = append(query.DetectSqls, sqls...)
+		}
+	}
+	recordUpdatePlannerRoute(updatePlannerModern, updateRouteReasonNone, "selected")
 	return &Plan{
 		Plan: &plan.Plan_Query{
 			Query: query,
@@ -375,6 +537,47 @@ func buildExplainPhyPlan(ctx CompilerContext, stmt *tree.ExplainPhyPlan, isPrepa
 	return buildExplainPlan(ctx, stmt.Statement, isPrepareStmt)
 }
 
+func selectHasExportParam(stmt tree.SelectStatement) bool {
+	return selectTreeHasExportParam(reflect.ValueOf(stmt))
+}
+
+// selectTreeHasExportParam follows the complete parser tree because SELECT
+// nodes can also be nested in CTEs, table expressions, and scalar predicates.
+// The parser's expression visitor cannot be used here because Subquery.Accept
+// is intentionally unimplemented.
+func selectTreeHasExportParam(value reflect.Value) bool {
+	if !value.IsValid() {
+		return false
+	}
+	if value.Kind() == reflect.Interface || value.Kind() == reflect.Pointer {
+		if value.IsNil() {
+			return false
+		}
+		if value.CanInterface() {
+			if selectStmt, ok := value.Interface().(*tree.Select); ok && selectStmt.Ep != nil {
+				return true
+			}
+		}
+		return selectTreeHasExportParam(value.Elem())
+	}
+
+	switch value.Kind() {
+	case reflect.Struct:
+		for i := 0; i < value.NumField(); i++ {
+			if selectTreeHasExportParam(value.Field(i)) {
+				return true
+			}
+		}
+	case reflect.Slice, reflect.Array:
+		for i := 0; i < value.Len(); i++ {
+			if selectTreeHasExportParam(value.Index(i)) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func BuildPlan(ctx CompilerContext, stmt tree.Statement, isPrepareStmt bool) (*Plan, error) {
 	start := time.Now()
 	defer func() {
@@ -384,6 +587,9 @@ func BuildPlan(ctx CompilerContext, stmt tree.Statement, isPrepareStmt bool) (*P
 	defer task.End()
 	switch stmt := stmt.(type) {
 	case *tree.Select:
+		if stmt.IsPerform && selectHasExportParam(stmt) {
+			return nil, moerr.NewNotSupported(ctx.GetContext(), "PERFORM SELECT INTO OUTFILE")
+		}
 		return bindAndOptimizeSelectQuery(plan.Query_SELECT, ctx, stmt, isPrepareStmt, false)
 	case *tree.ParenSelect:
 		return bindAndOptimizeSelectQuery(plan.Query_SELECT, ctx, stmt.Select, isPrepareStmt, false)
@@ -396,12 +602,18 @@ func BuildPlan(ctx CompilerContext, stmt tree.Statement, isPrepareStmt bool) (*P
 	case *tree.Insert:
 		return bindAndOptimizeInsertQuery(ctx, stmt, isPrepareStmt, false)
 	case *tree.Replace:
+		if stmt.HasReturning() {
+			return nil, moerr.NewNotSupported(ctx.GetContext(), "DML RETURNING does not support REPLACE")
+		}
 		return bindAndOptimizeReplaceQuery(ctx, stmt, isPrepareStmt, false)
 	case *tree.Update:
 		return bindAndOptimizeUpdateQuery(ctx, stmt, isPrepareStmt, false)
 	case *tree.Delete:
 		return bindAndOptimizeDeleteQuery(ctx, stmt, isPrepareStmt, false)
 	case *tree.Merge:
+		if stmt.HasReturning() {
+			return nil, moerr.NewNotSupported(ctx.GetContext(), "DML RETURNING does not support MERGE")
+		}
 		return bindAndOptimizeMergeQuery(ctx, stmt, isPrepareStmt, false)
 	case *tree.BeginTransaction:
 		return buildBeginTransaction(stmt, ctx)
@@ -437,8 +649,6 @@ func BuildPlan(ctx CompilerContext, stmt tree.Statement, isPrepareStmt bool) (*P
 		return buildDropView(stmt, ctx)
 	case *tree.CreateView:
 		return buildCreateView(stmt, ctx)
-	case *tree.CreateSource:
-		return buildCreateSource(stmt, ctx)
 	case *tree.AlterView:
 		return buildAlterView(stmt, ctx)
 	case *tree.AlterTable:
@@ -492,7 +702,7 @@ func BuildPlan(ctx CompilerContext, stmt tree.Statement, isPrepareStmt bool) (*P
 	case *tree.ShowRolesStmt:
 		return buildShowRoles(stmt, ctx)
 	case *tree.SetVar:
-		return buildSetVariables(stmt, ctx)
+		return buildSetVariables(stmt, ctx, isPrepareStmt)
 	case *tree.Execute:
 		return buildExecute(stmt, ctx)
 	case *tree.Deallocate:
@@ -542,7 +752,17 @@ func BuildPlan(ctx CompilerContext, stmt tree.Statement, isPrepareStmt bool) (*P
 // GetResultColumnsFromPlan
 func GetResultColumnsFromPlan(p *Plan) []*ColDef {
 	getResultColumnsByProjectionlist := func(query *Query) []*ColDef {
-		lastNode := query.Nodes[query.Steps[len(query.Steps)-1]]
+		step := len(query.Steps) - 1
+		if query.HasReturning {
+			if query.ReturningStep < 0 || int(query.ReturningStep) >= len(query.Steps) {
+				return nil
+			}
+			step = int(query.ReturningStep)
+		}
+		lastNode := query.Nodes[query.Steps[step]]
+		if query.HasReturning && len(query.Headings) != len(lastNode.ProjectList) {
+			return nil
+		}
 		columns := make([]*ColDef, len(lastNode.ProjectList))
 		for idx, expr := range lastNode.ProjectList {
 			columns[idx] = &ColDef{
@@ -557,6 +777,18 @@ func GetResultColumnsFromPlan(p *Plan) []*ColDef {
 				}
 			}
 
+			if source := findResultColumnSource(query, query.Steps[step], expr); source != nil {
+				columns[idx].Primary = source.primary
+				columns[idx].Unique = source.unique
+				columns[idx].NotNull = source.notNull
+				if source.nullExtended {
+					columns[idx].Typ.NotNullable = false
+				} else {
+					columns[idx].Typ.NotNullable = columns[idx].Typ.NotNullable || source.notNull
+				}
+				columns[idx].Typ.AutoIncr = columns[idx].Typ.AutoIncr || source.autoIncr
+			}
+
 		}
 
 		return columns
@@ -567,6 +799,11 @@ func GetResultColumnsFromPlan(p *Plan) []*ColDef {
 		switch logicPlan.Query.StmtType {
 		case plan.Query_SELECT:
 			return getResultColumnsByProjectionlist(logicPlan.Query)
+		case plan.Query_INSERT, plan.Query_UPDATE, plan.Query_DELETE:
+			if logicPlan.Query.HasReturning {
+				return getResultColumnsByProjectionlist(logicPlan.Query)
+			}
+			return nil
 		default:
 			// insert/update/delete statement will return nil
 			return nil
@@ -577,10 +814,7 @@ func GetResultColumnsFromPlan(p *Plan) []*ColDef {
 	case *plan.Plan_Ddl:
 		switch logicPlan.Ddl.DdlType {
 		case plan.DataDefinition_SHOW_VARIABLES:
-			typ := plan.Type{
-				Id:    int32(types.T_varchar),
-				Width: 1024,
-			}
+			typ := makeGeneratedPlan2Type(types.T_varchar, 1024, 0, false)
 			return []*ColDef{
 				{Typ: typ, Name: "Variable_name"},
 				{Typ: typ, Name: "Value"},
@@ -596,4 +830,363 @@ func GetResultColumnsFromPlan(p *Plan) []*ColDef {
 		}
 	}
 	return nil
+}
+
+type resultColumnSource struct {
+	primary      bool
+	unique       bool
+	notNull      bool
+	autoIncr     bool
+	nullExtended bool
+}
+
+// findResultColumnSource follows a result projection through transparent plan
+// nodes and JOIN remappings until it reaches the table column that produced
+// it. Expressions such as arithmetic, aggregation, and DISTINCT intentionally
+// do not produce source metadata: marking those outputs as key columns would
+// be less compatible than leaving the flags unset.
+func findResultColumnSource(query *plan.Query, nodeID int32, expr *plan.Expr) *resultColumnSource {
+	if query == nil || expr == nil || expr.GetCol() == nil {
+		return nil
+	}
+	return findResultColumnSourceAtNode(query, nodeID, expr.GetCol(), make(map[int32]bool))
+}
+
+func findResultColumnSourceAtNode(
+	query *plan.Query,
+	nodeID int32,
+	ref *plan.ColRef,
+	visited map[int32]bool,
+) *resultColumnSource {
+	if query == nil || ref == nil || nodeID < 0 || int(nodeID) >= len(query.Nodes) || visited[nodeID] {
+		return nil
+	}
+	visited[nodeID] = true
+	node := query.Nodes[nodeID]
+	if node == nil {
+		return nil
+	}
+
+	if node.TableDef != nil && isResultColumnSourceNode(node.NodeType) {
+		if len(node.ProjectList) > 0 {
+			if sourceExpr := resultColumnProjectionAtNode(node, ref); sourceExpr != nil {
+				if sourceRef := sourceExpr.GetCol(); sourceRef != nil {
+					return resultColumnSourceFromTableDef(node.TableDef, sourceRef.ColPos)
+				}
+			}
+			return nil
+		}
+		if source := resultColumnSourceFromTableDef(node.TableDef, ref.ColPos); source != nil {
+			return source
+		}
+	}
+
+	if node.NodeType == plan.Node_JOIN {
+		return findResultColumnSourceAtJoin(query, node, ref, visited)
+	}
+
+	if !isResultColumnTransparentNode(node.NodeType) || len(node.Children) == 0 {
+		return nil
+	}
+
+	projected := resultColumnProjectionAtNode(node, ref)
+	if projected == nil {
+		return nil
+	}
+	projectedRef := projected.GetCol()
+	if projectedRef == nil {
+		return nil
+	}
+
+	var found *resultColumnSource
+	for _, childID := range node.Children {
+		candidate := findResultColumnSourceAtNode(query, childID, projectedRef, cloneVisitedResultColumnNodes(visited))
+		if candidate == nil {
+			continue
+		}
+		if found != nil && *found != *candidate {
+			// The reference is ambiguous across children. Do not claim a key
+			// flag when the plan no longer identifies one source column.
+			return nil
+		}
+		found = candidate
+	}
+	return found
+}
+
+func findResultColumnSourceAtJoin(
+	query *plan.Query,
+	node *plan.Node,
+	ref *plan.ColRef,
+	visited map[int32]bool,
+) *resultColumnSource {
+	if query == nil || node == nil || ref == nil || len(node.Children) == 0 {
+		return nil
+	}
+
+	projectedRef := ref
+	childIdx := -1
+	if projected := resultColumnProjectionAtNode(node, ref); projected != nil {
+		if col := projected.GetCol(); col != nil {
+			projectedRef = col
+			// JOIN ProjectList entries use RelPos 0/1 to identify the
+			// corresponding child and ColPos to identify that child's output
+			// slot. This is a local remapping, not a source-table position.
+			if projectedRef.RelPos >= 0 && int(projectedRef.RelPos) < len(node.Children) {
+				childIdx = int(projectedRef.RelPos)
+				if childRef := resultColumnJoinChildProjectionRef(query, node, childIdx, projectedRef.ColPos); childRef != nil {
+					projectedRef = childRef
+				}
+			}
+		}
+	}
+
+	if childIdx < 0 {
+		childIdx = resultColumnJoinChildByBinding(query, node, projectedRef)
+	}
+	if childIdx >= 0 && childIdx < len(node.Children) {
+		candidate := findResultColumnSourceAtNode(
+			query,
+			node.Children[childIdx],
+			projectedRef,
+			cloneVisitedResultColumnNodes(visited),
+		)
+		return resultColumnSourceAfterJoin(candidate, node, childIdx)
+	}
+
+	// Plans from earlier optimization stages may not yet have the local JOIN
+	// projection. Fall back to tracing each child by the source identity, but
+	// reject an ambiguous match rather than assigning metadata from one side.
+	var found *resultColumnSource
+	foundChild := -1
+	for childIdx, childID := range node.Children {
+		candidate := findResultColumnSourceAtNode(
+			query,
+			childID,
+			projectedRef,
+			cloneVisitedResultColumnNodes(visited),
+		)
+		if candidate == nil {
+			continue
+		}
+		if found != nil {
+			return nil
+		}
+		found = candidate
+		foundChild = childIdx
+	}
+	return resultColumnSourceAfterJoin(found, node, foundChild)
+}
+
+func resultColumnJoinChildProjectionRef(
+	query *plan.Query,
+	node *plan.Node,
+	childIdx int,
+	colPos int32,
+) *plan.ColRef {
+	if query == nil || node == nil || childIdx < 0 || childIdx >= len(node.Children) || colPos < 0 {
+		return nil
+	}
+	childID := node.Children[childIdx]
+	if childID < 0 || int(childID) >= len(query.Nodes) || query.Nodes[childID] == nil {
+		return nil
+	}
+	child := query.Nodes[childID]
+	if int(colPos) >= len(child.ProjectList) {
+		return nil
+	}
+	return child.ProjectList[colPos].GetCol()
+}
+
+func resultColumnJoinChildByBinding(query *plan.Query, node *plan.Node, ref *plan.ColRef) int {
+	if query == nil || node == nil || ref == nil || len(node.Children) == 0 {
+		return -1
+	}
+	childIdx := -1
+	for i, childID := range node.Children {
+		if !resultColumnNodeHasBindingTag(query, childID, ref.RelPos, make(map[int32]bool)) {
+			continue
+		}
+		if childIdx >= 0 {
+			return -1
+		}
+		childIdx = i
+	}
+	return childIdx
+}
+
+func resultColumnNodeHasBindingTag(query *plan.Query, nodeID, tag int32, visited map[int32]bool) bool {
+	if query == nil || nodeID < 0 || int(nodeID) >= len(query.Nodes) || visited[nodeID] {
+		return false
+	}
+	visited[nodeID] = true
+	node := query.Nodes[nodeID]
+	if node == nil {
+		return false
+	}
+	for _, bindingTag := range node.BindingTags {
+		if bindingTag == tag {
+			return true
+		}
+	}
+	for _, childID := range node.Children {
+		if resultColumnNodeHasBindingTag(query, childID, tag, visited) {
+			return true
+		}
+	}
+	return false
+}
+
+func resultColumnSourceAfterJoin(source *resultColumnSource, node *plan.Node, childIdx int) *resultColumnSource {
+	if source == nil || !nodeNullExtendsChild(node, childIdx) {
+		return source
+	}
+	result := *source
+	result.notNull = false
+	result.nullExtended = true
+	return &result
+}
+
+func cloneVisitedResultColumnNodes(visited map[int32]bool) map[int32]bool {
+	clone := make(map[int32]bool, len(visited)+1)
+	for nodeID, seen := range visited {
+		clone[nodeID] = seen
+	}
+	return clone
+}
+
+func resultColumnProjectionAtNode(node *plan.Node, ref *plan.ColRef) *plan.Expr {
+	if node == nil || ref == nil {
+		return nil
+	}
+	// ColPos identifies the source column, not the position of the expression
+	// in this node's projection.  A projection can reorder columns (for example
+	// SELECT unique_value, id), so looking up ProjectList[ref.ColPos] can attach
+	// the metadata of a different source column.  Resolve the source identity
+	// across the whole projection first.
+	for _, expr := range node.ProjectList {
+		col := expr.GetCol()
+		if col == nil {
+			continue
+		}
+		if resultColumnRefsHaveSamePosition(ref, col) {
+			return expr
+		}
+	}
+
+	// Some plan nodes omit relation/column positions while retaining names.
+	// Use names only after the identity lookup, and require the names that are
+	// available on both refs to agree so an ambiguous table-only match cannot
+	// claim key metadata.
+	for _, expr := range node.ProjectList {
+		col := expr.GetCol()
+		if col == nil {
+			continue
+		}
+		if resultColumnRefsMatchByName(ref, col) {
+			return expr
+		}
+	}
+	return nil
+}
+
+func resultColumnRefsHaveSamePosition(left, right *plan.ColRef) bool {
+	if left == nil || right == nil {
+		return false
+	}
+	return left.RelPos == right.RelPos && left.ColPos == right.ColPos
+}
+
+func resultColumnRefsMatchByName(left, right *plan.ColRef) bool {
+	if left == nil || right == nil {
+		return false
+	}
+	if left.Name != "" && right.Name != "" {
+		if !strings.EqualFold(left.Name, right.Name) {
+			return false
+		}
+		if left.TblName != "" && right.TblName != "" &&
+			!strings.EqualFold(left.TblName, right.TblName) {
+			return false
+		}
+		if left.DbName != "" && right.DbName != "" &&
+			!strings.EqualFold(left.DbName, right.DbName) {
+			return false
+		}
+		return true
+	}
+	if left.TblName == "" || right.TblName == "" ||
+		!strings.EqualFold(left.TblName, right.TblName) {
+		return false
+	}
+	if left.DbName != "" && right.DbName != "" &&
+		!strings.EqualFold(left.DbName, right.DbName) {
+		return false
+	}
+	return left.Name == "" && right.Name == ""
+}
+
+func isResultColumnSourceNode(nodeType plan.Node_NodeType) bool {
+	switch nodeType {
+	case plan.Node_TABLE_SCAN, plan.Node_EXTERNAL_SCAN, plan.Node_FUNCTION_SCAN:
+		return true
+	default:
+		return false
+	}
+}
+
+func isResultColumnTransparentNode(nodeType plan.Node_NodeType) bool {
+	switch nodeType {
+	case plan.Node_PROJECT,
+		plan.Node_FILTER,
+		plan.Node_SORT,
+		plan.Node_SAMPLE,
+		plan.Node_MATERIAL,
+		plan.Node_PARTITION,
+		plan.Node_GATHER:
+		return true
+	default:
+		return false
+	}
+}
+
+func resultColumnSourceFromTableDef(tableDef *plan.TableDef, colPos int32) *resultColumnSource {
+	if tableDef == nil || colPos < 0 || int(colPos) >= len(tableDef.Cols) {
+		return nil
+	}
+	col := tableDef.Cols[colPos]
+	if col == nil {
+		return nil
+	}
+	primary := col.Primary
+	if !primary && tableDef.Pkey != nil {
+		primary = resultColumnNameInList(tableDef.Pkey.Names, col.Name)
+	}
+	unique := col.Unique && !primary
+	if !primary && !unique {
+		for _, index := range tableDef.Indexes {
+			if index == nil || !index.Unique {
+				continue
+			}
+			if resultColumnNameInList(index.Parts, col.Name) {
+				unique = true
+				break
+			}
+		}
+	}
+	return &resultColumnSource{
+		primary:  primary,
+		unique:   unique,
+		notNull:  primary || col.NotNull || col.Typ.NotNullable,
+		autoIncr: col.Typ.AutoIncr,
+	}
+}
+
+func resultColumnNameInList(names []string, name string) bool {
+	for _, candidate := range names {
+		if strings.EqualFold(candidate, name) {
+			return true
+		}
+	}
+	return false
 }

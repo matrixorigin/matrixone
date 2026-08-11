@@ -38,7 +38,7 @@ import (
 )
 
 func TestDeleteAndSelect(t *testing.T) {
-	embed.RunBaseClusterTests(
+	embed.RunBaseClusterTests(t,
 		func(c embed.Cluster) {
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second*120)
 			defer cancel()
@@ -112,8 +112,47 @@ func TestDeleteAndSelect(t *testing.T) {
 	)
 }
 
+func TestInsertIgnoreSpecialTypeOnRemoteCN(t *testing.T) {
+	embed.RunBaseClusterTests(t, func(c embed.Cluster) {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		defer cancel()
+
+		cn, err := c.GetCNService(0)
+		require.NoError(t, err)
+		port := cn.GetServiceConfig().CN.Frontend.Port
+		db, err := sql.Open("mysql", fmt.Sprintf("dump:111@tcp(127.0.0.1:%d)/", port))
+		require.NoError(t, err)
+		defer db.Close()
+
+		dbName := testutils.GetDatabaseName(t)
+		execSQLDB(t, ctx, db, "create database `"+dbName+"`")
+		defer func() {
+			execSQLDB(t, ctx, db, "use mo_catalog")
+			execSQLDB(t, ctx, db, "drop database if exists `"+dbName+"`")
+		}()
+		execSQLDB(t, ctx, db, "use `"+dbName+"`")
+		execSQLDB(t, ctx, db, "set session sql_mode = 'STRICT_TRANS_TABLES'")
+		execSQLDB(t, ctx, db, "create table src (v int)")
+		// Multiple source blocks ensure the forced AP multi-CN scan evaluates
+		// assignment casts on remote scan scopes, not only on the coordinator.
+		execSQLDB(t, ctx, db, "insert into src select 31 from generate_series(1, 24576) g")
+		execSQLDB(t, ctx, db, "create table dst (b bit(4))")
+
+		plan.SetForceScanOnMultiCN(true)
+		defer plan.SetForceScanOnMultiCN(false)
+		execSQLDB(t, ctx, db, "insert ignore into dst select v from src")
+
+		var count, min, max int
+		err = db.QueryRowContext(ctx, "select count(*), min(b + 0), max(b + 0) from dst").Scan(&count, &min, &max)
+		require.NoError(t, err)
+		require.Equal(t, 24576, count)
+		require.Equal(t, 15, min)
+		require.Equal(t, 15, max)
+	})
+}
+
 func TestDataBranchDiffAsFile(t *testing.T) {
-	embed.RunBaseClusterTests(
+	embed.RunBaseClusterTests(t,
 		func(c embed.Cluster) {
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second*240)
 			defer cancel()
@@ -191,7 +230,7 @@ func dataBranchScaleRows(full, short int) int {
 }
 
 func TestCloneCommitFailureRollbackKeepsSourceFiles(t *testing.T) {
-	embed.RunBaseClusterTests(
+	embed.RunBaseClusterTests(t,
 		func(c embed.Cluster) {
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second*240)
 			defer cancel()

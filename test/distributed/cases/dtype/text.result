@@ -330,4 +330,18 @@ WHERE a.spaceId=12 AND a.uniqueCode in ('U001','U002')
 GROUP BY a.spaceId;
 spaceId    cnt    max_chars
 12    2    65535
+set @old_sql_mode = @@sql_mode;
+set session sql_mode = '';
+drop table if exists tinytext_limit_repro;
+create table tinytext_limit_repro (value tinytext);
+insert into tinytext_limit_repro values (repeat('A', 1000));
+insert into tinytext_limit_repro values (repeat('你', 86));
+select length(value), char_length(value)
+from tinytext_limit_repro
+order by char_length(value) desc;
+length(value)    char_length(value)
+255    255
+255    85
+drop table tinytext_limit_repro;
+set session sql_mode = @old_sql_mode;
 drop database text_test;

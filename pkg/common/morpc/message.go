@@ -38,6 +38,15 @@ func (m RPCMessage) Timeout() bool {
 // GetTimeoutFromContext returns the timeout duration from context.
 func (m RPCMessage) GetTimeoutFromContext() (time.Duration, error) {
 	if m.internal {
+		if deadline, ok := m.Ctx.Deadline(); ok {
+			remaining := time.Until(deadline)
+			if remaining <= 0 {
+				return 0, m.Ctx.Err()
+			}
+			if remaining < internalTimeout {
+				return remaining, nil
+			}
+		}
 		return internalTimeout, nil
 	}
 	if m.oneWay {
@@ -53,4 +62,26 @@ func (m RPCMessage) GetTimeoutFromContext() (time.Duration, error) {
 		return 0, moerr.NewInvalidInputNoCtx("timeout has invalid deadline")
 	}
 	return d.Sub(now), nil
+}
+
+// earliestDeadline returns the earliest non-zero deadline in a batch.
+func earliestDeadline(current, candidate time.Time) time.Time {
+	if candidate.IsZero() {
+		return current
+	}
+	if current.IsZero() || candidate.Before(current) {
+		return candidate
+	}
+	return current
+}
+
+// remainingDeadlineTimeout converts an absolute deadline into the positive
+// duration expected by goetty Flush. An expired deadline must not become zero,
+// because zero is commonly interpreted as "no timeout".
+func remainingDeadlineTimeout(deadline, now time.Time) time.Duration {
+	timeout := deadline.Sub(now)
+	if timeout <= 0 {
+		return time.Nanosecond
+	}
+	return timeout
 }

@@ -59,7 +59,7 @@ func builtInDateDiff(parameters []*vector.Vector, result vector.FunctionResultWr
 	for i := uint64(0); i < uint64(length); i++ {
 		v1, null1 := p1.GetValue(i)
 		v2, null2 := p2.GetValue(i)
-		if null1 || null2 {
+		if null1 || null2 || v1 == types.ZeroDate || v2 == types.ZeroDate {
 			if err := rs.Append(0, true); err != nil {
 				return err
 			}
@@ -81,7 +81,7 @@ func builtInCurrentTimestamp(ivecs []*vector.Vector, result vector.FunctionResul
 		scale = int32(vector.MustFixedColWithTypeCheck[int64](ivecs[0])[0])
 		// Validate scale range [0, 6] for TIMESTAMP
 		if scale < 0 || scale > 6 {
-			return moerr.NewErrTooBigPrecision(proc.Ctx, scale, "now", 6)
+			return moerr.NewErrTooBigPrecision(proc.Ctx, int64(scale), "now", 6)
 		}
 	}
 	rs.TempSetType(types.New(types.T_timestamp, 0, scale))
@@ -104,7 +104,7 @@ func builtInSysdate(ivecs []*vector.Vector, result vector.FunctionResultWrapper,
 		scale = int32(vector.MustFixedColWithTypeCheck[int64](ivecs[0])[0])
 		// Validate scale range [0, 6] for TIMESTAMP
 		if scale < 0 || scale > 6 {
-			return moerr.NewErrTooBigPrecision(proc.Ctx, scale, "sysdate", 6)
+			return moerr.NewErrTooBigPrecision(proc.Ctx, int64(scale), "sysdate", 6)
 		}
 	}
 	rs.TempSetType(types.New(types.T_timestamp, 0, scale))
@@ -157,16 +157,9 @@ func builtInCurrentTime(ivecs []*vector.Vector, result vector.FunctionResultWrap
 func builtInUtcTime(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	rs := vector.MustFunctionResult[types.Time](result)
 
-	// Get scale from optional parameter (default 0 for TIME type)
-	scale := int32(0)
-	if len(ivecs) == 1 && !ivecs[0].IsConstNull() {
-		scale = int32(vector.MustFixedColWithTypeCheck[int64](ivecs[0])[0])
-		// Clamp scale to valid range [0, 6]
-		if scale < 0 {
-			scale = 0
-		} else if scale > 6 {
-			scale = 6
-		}
+	scale, err := utcFunctionScale(ivecs, proc, "utc_time")
+	if err != nil {
+		return err
 	}
 	rs.TempSetType(types.New(types.T_time, 0, scale))
 
@@ -184,6 +177,27 @@ func builtInUtcTime(ivecs []*vector.Vector, result vector.FunctionResultWrapper,
 	}
 
 	return nil
+}
+
+func utcFunctionScale(ivecs []*vector.Vector, proc *process.Process, name string) (int32, error) {
+	if len(ivecs) == 0 {
+		return 0, nil
+	}
+	if len(ivecs) != 1 || ivecs[0] == nil || ivecs[0].IsConstNull() || ivecs[0].Length() == 0 {
+		return 0, moerr.NewInvalidArg(proc.Ctx, name, "fractional seconds precision must be a constant integer between 0 and 6")
+	}
+
+	scale := vector.MustFixedColWithTypeCheck[int64](ivecs[0])[0]
+	if scale < 0 {
+		return 0, moerr.NewInvalidArg(proc.Ctx, name, fmt.Sprintf("negative precision %d specified", scale))
+	}
+	if scale > 6 {
+		return 0, moerr.NewErrTooBigPrecision(proc.Ctx, scale, name, 6)
+	}
+	if !ivecs[0].IsConst() {
+		return 0, moerr.NewInvalidArg(proc.Ctx, name, "fractional seconds precision must be a constant integer between 0 and 6")
+	}
+	return int32(scale), nil
 }
 
 // parseLeadingInteger extracts and parses the longest leading integer prefix
@@ -622,8 +636,18 @@ func builtInInternalCharSize(parameters []*vector.Vector, result vector.Function
 			if err := typ.Unmarshal(v); err != nil {
 				return err
 			}
-			if typ.Oid.IsMySQLString() {
-				if err := rs.Append(int64(typ.GetSize()*typ.Width), false); err != nil {
+			switch typ.Oid {
+			case types.T_char, types.T_varchar, types.T_text:
+				// Width is measured in characters for character strings. The
+				// information schema needs the maximum encoded byte length, not
+				// the size of MatrixOne's internal Varlena storage slot.
+				if err := rs.Append(int64(typ.Width)*utf8.UTFMax, false); err != nil {
+					return err
+				}
+				continue
+			case types.T_binary, types.T_varbinary, types.T_blob:
+				// Binary string widths are already measured in octets.
+				if err := rs.Append(int64(typ.Width), false); err != nil {
 					return err
 				}
 				continue
@@ -1956,7 +1980,7 @@ func builtInUnixTimestamp(parameters []*vector.Vector, result vector.FunctionRes
 	for i := uint64(0); i < uint64(length); i++ {
 		v1, null1 := p1.GetValue(i)
 		val := v1.Unix()
-		if val < 0 || null1 {
+		if v1 == types.ZeroTimestamp || val < 0 || null1 {
 			// XXX v1 < 0 need to raise error here.
 			if err := rs.Append(0, true); err != nil {
 				return err
@@ -1973,7 +1997,7 @@ func builtInUnixTimestamp(parameters []*vector.Vector, result vector.FunctionRes
 func mustTimestamp(loc *time.Location, s string) types.Timestamp {
 	ts, err := types.ParseTimestamp(loc, s, 6)
 	if err != nil {
-		ts = 0
+		ts = types.ZeroTimestamp
 	}
 	return ts
 }
@@ -1989,8 +2013,9 @@ func builtInUnixTimestampVarcharToInt64(parameters []*vector.Vector, result vect
 				return err
 			}
 		} else {
-			val := mustTimestamp(proc.GetSessionInfo().TimeZone, string(v1)).Unix()
-			if val < 0 {
+			timestamp := mustTimestamp(proc.GetSessionInfo().TimeZone, string(v1))
+			val := timestamp.Unix()
+			if timestamp == types.ZeroTimestamp || val < 0 {
 				if err := rs.Append(0, true); err != nil {
 					return err
 				}
@@ -2018,7 +2043,14 @@ func builtInUnixTimestampVarcharToFloat64(parameters []*vector.Vector, result ve
 			}
 		} else {
 			val := mustTimestamp(proc.GetSessionInfo().TimeZone, string(v1))
-			if err := rs.Append(val.UnixToFloat(), false); err != nil {
+			unix := val.UnixToFloat()
+			if val == types.ZeroTimestamp || unix < 0 {
+				if err := rs.Append(0, true); err != nil {
+					return err
+				}
+				continue
+			}
+			if err := rs.Append(unix, false); err != nil {
 				return err
 			}
 		}
@@ -2038,7 +2070,14 @@ func builtInUnixTimestampVarcharToDecimal128(parameters []*vector.Vector, result
 				return err
 			}
 		} else {
-			val, err := mustTimestamp(proc.GetSessionInfo().TimeZone, string(v1)).UnixToDecimal128()
+			timestamp := mustTimestamp(proc.GetSessionInfo().TimeZone, string(v1))
+			if timestamp == types.ZeroTimestamp {
+				if err := rs.Append(d, true); err != nil {
+					return err
+				}
+				continue
+			}
+			val, err := timestamp.UnixToDecimal128()
 			if err != nil {
 				return err
 			}
@@ -2046,6 +2085,7 @@ func builtInUnixTimestampVarcharToDecimal128(parameters []*vector.Vector, result
 				if err := rs.Append(d, true); err != nil {
 					return err
 				}
+				continue
 			}
 			if err = rs.Append(val, false); err != nil {
 				return err
@@ -3209,7 +3249,13 @@ func builtInToDays(parameters []*vector.Vector, result vector.FunctionResultWrap
 			}
 			continue
 		}
-		rs.Append(DateTimeDiff(intervalUnitDAY, types.ZeroDatetime, datetimeValue)+ADZeroDays, false)
+		if datetimeValue == types.ZeroDatetime {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+			continue
+		}
+		rs.Append(DateTimeDiff(intervalUnitDAY, types.DatetimeEpoch, datetimeValue)+ADZeroDays, false)
 	}
 	return nil
 }
@@ -3228,12 +3274,12 @@ func builtInFromDays(parameters []*vector.Vector, result vector.FunctionResultWr
 			}
 			continue
 		}
-		// TO_DAYS(date) = DateTimeDiff(intervalUnitDAY, ZeroDatetime, date) + ADZeroDays
+		// TO_DAYS(date) = DateTimeDiff(intervalUnitDAY, DatetimeEpoch, date) + ADZeroDays
 		// So FROM_DAYS(N) should reverse this:
-		// DateTimeDiff(intervalUnitDAY, ZeroDatetime, date) = N - ADZeroDays
-		// date = ZeroDatetime + (N - ADZeroDays) days
+		// DateTimeDiff(intervalUnitDAY, DatetimeEpoch, date) = N - ADZeroDays
+		// date = DatetimeEpoch + (N - ADZeroDays) days
 		daysToAdd := dayNumber - ADZeroDays
-		dt, success := types.ZeroDatetime.AddInterval(daysToAdd, types.Day, types.DateTimeType)
+		dt, success := types.DatetimeEpoch.AddInterval(daysToAdd, types.Day, types.DateTimeType)
 		if !success {
 			if err := rs.Append(types.Date(0), true); err != nil {
 				return err
@@ -3403,7 +3449,13 @@ func builtInToSeconds(parameters []*vector.Vector, result vector.FunctionResultW
 			}
 			continue
 		}
-		rs.Append(DateTimeDiff(intervalUnitSECOND, types.ZeroDatetime, datetimeValue)+ADZeroSeconds, false)
+		if datetimeValue == types.ZeroDatetime {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+			continue
+		}
+		rs.Append(DateTimeDiff(intervalUnitSECOND, types.DatetimeEpoch, datetimeValue)+ADZeroSeconds, false)
 	}
 	return nil
 }
@@ -3415,7 +3467,7 @@ func CalcToSeconds(ctx context.Context, datetimes []types.Datetime, ns *nulls.Nu
 		if nulls.Contains(ns, uint64(idx)) {
 			continue
 		}
-		res[idx] = DateTimeDiff(intervalUnitSECOND, types.ZeroDatetime, datetime) + ADZeroSeconds
+		res[idx] = DateTimeDiff(intervalUnitSECOND, types.DatetimeEpoch, datetime) + ADZeroSeconds
 	}
 	return res, nil
 }
@@ -3760,7 +3812,9 @@ func builtInConvertUsingCharset(parameters []*vector.Vector, result vector.Funct
 }
 
 func isUTF8Charset(charset []byte) bool {
-	return strings.EqualFold(string(charset), "utf8") || strings.EqualFold(string(charset), "utf8mb4")
+	return strings.EqualFold(string(charset), "utf8") ||
+		strings.EqualFold(string(charset), "utf8mb3") ||
+		strings.EqualFold(string(charset), "utf8mb4")
 }
 
 func builtInToUpper(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {

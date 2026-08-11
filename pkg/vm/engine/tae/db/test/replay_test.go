@@ -255,8 +255,9 @@ func TestReplayCatalog3(t *testing.T) {
 	assert.Nil(t, err)
 	rel, err = e.GetRelationByName(schema.Name)
 	assert.Nil(t, err)
-	obj, err = rel.CreateObject(false)
+	obj, err = rel.CreateNonAppendableObject(false, nil)
 	assert.Nil(t, err)
+	testutil.MockObjectStats(t, obj)
 	assert.Nil(t, txn.Commit(context.Background()))
 
 	txn, _ = tae.StartTxn(nil)
@@ -462,7 +463,7 @@ func TestReplay2(t *testing.T) {
 	assert.NotNil(t, err)
 	assert.Nil(t, txn.Commit(context.Background()))
 
-	ctx2, cancel := context.WithTimeout(context.Background(), time.Second*10)
+	ctx2, cancel := context.WithTimeout(context.Background(), testutil.TestCheckpointTimeout)
 	defer cancel()
 	err = tae2.ForceFlush(ctx2, tae2.TxnMgr.Now())
 	assert.NoError(t, err)
@@ -966,11 +967,14 @@ func TestReplay6(t *testing.T) {
 
 func TestReplay7(t *testing.T) {
 	defer testutils.AfterTest(t)()
-	t.Skip(any("This case crashes occasionally, is being fixed, skip it for now"))
 	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
 	opts := config.WithQuickScanAndCKPOpts(nil)
+	opts.CheckpointCfg.ScanInterval = time.Hour
+	opts.CheckpointCfg.FlushInterval = time.Hour
+	opts.CheckpointCfg.IncrementalInterval = time.Hour
+	opts.CheckpointCfg.GlobalMinCount = 10000000
 	tae := testutil.InitTestDB(ctx, ModuleName, t, opts)
 
 	schema := catalog.MockSchemaAll(18, 14)
@@ -979,12 +983,24 @@ func TestReplay7(t *testing.T) {
 
 	bat := catalog.MockBatch(schema, int(schema.Extra.BlockMaxRows*15+1))
 	defer bat.Close()
-	testutil.CreateRelationAndAppend(t, 0, tae, testutil.DefaultTestDB, schema, bat, true)
-	testutil.CompactBlocks(t, 0, tae, testutil.DefaultTestDB, schema, true)
-	testutil.MergeBlocks(t, 0, tae, testutil.DefaultTestDB, schema, true)
-	time.Sleep(time.Millisecond * 100)
+	testutil.CreateRelationAndAppend2(t, 0, tae, testutil.DefaultTestDB, schema, bat, true)
+	testutil.CompactBlocks(t, 0, tae, testutil.DefaultTestDB, schema, false)
+	testutil.MergeBlocks(t, 0, tae, testutil.DefaultTestDB, schema, false)
+	ts := tae.TxnMgr.Now()
+	assert.NoError(t, tae.ForceCheckpoint(ctx, ts))
+	assert.NoError(t, tae.BGCheckpointRunner.ForceGCKP(
+		ctx, ts, opts.CheckpointCfg.GlobalVersionInterval,
+	))
+	testutils.WaitExpect(testutil.DefaultCheckpointWaitTimeoutMS, func() bool {
+		watermark := tae.DiskCleaner.GetCleaner().GetCheckpointGCWaterMark()
+		return watermark != nil && watermark.GE(&ts)
+	})
+	watermark := tae.DiskCleaner.GetCleaner().GetCheckpointGCWaterMark()
+	if assert.NotNil(t, watermark) {
+		assert.True(t, watermark.GE(&ts))
+	}
 
-	_ = tae.Close()
+	assert.NoError(t, tae.Close())
 	tae, err := db.Open(ctx, tae.Dir, opts)
 	assert.NoError(t, err)
 	defer tae.Close()

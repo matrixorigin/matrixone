@@ -187,6 +187,8 @@ var PlanDefsToExeDefs = func(tableDef *plan.TableDef) ([]TableDef, *api.SchemaEx
 		FeatureFlag:    tableDef.FeatureFlag,
 		AutoIncrOffset: tableDef.AutoIncrOffset,
 		AutoIncrEpoch:  tableDef.AutoIncrEpoch,
+		Checks:         tableDef.Checks,
+		DefaultCharset: tableDef.DefaultCharset,
 	}
 	propDef.Properties = append(
 		propDef.Properties,
@@ -240,11 +242,14 @@ func PlanColsToExeCols(planCols []*plan.ColDef) []TableDef {
 			alg = compress.Lz4
 		}
 		colTyp := col.GetTyp()
+		exeTyp := types.NewWithCharset(
+			types.T(colTyp.GetId()), colTyp.GetWidth(), colTyp.GetScale(), uint8(colTyp.GetCharset()),
+		)
 		exeCols[i] = &AttributeDef{
 			Attr: Attribute{
 				Name:          col.GetOriginCaseName(),
 				Alg:           alg,
-				Type:          types.New(types.T(colTyp.GetId()), colTyp.GetWidth(), colTyp.GetScale()),
+				Type:          exeTyp,
 				Default:       planCols[i].GetDefault(),
 				OnUpdate:      planCols[i].GetOnUpdate(),
 				GeneratedCol:  col.GetGeneratedCol(),
@@ -530,90 +535,107 @@ const (
 )
 
 func (def *ConstraintDef) MarshalBinary() (data []byte, err error) {
-	buf := bytes.NewBuffer(make([]byte, 0))
+	data = make([]byte, 0, def.marshalSize())
 	for _, ct := range def.Cts {
 		switch def := ct.(type) {
 		case *IndexDef:
-			if err := binary.Write(buf, binary.BigEndian, Index); err != nil {
-				return nil, err
-			}
-			if err := binary.Write(buf, binary.BigEndian, uint64(len(def.Indexes))); err != nil {
-				return nil, err
-			}
-
+			data = append(data, byte(Index))
+			data = appendConstraintUint64(data, uint64(len(def.Indexes)))
 			for _, indexdef := range def.Indexes {
-				bytes, err := indexdef.Marshal()
+				data, err = appendConstraintProto(data, indexdef)
 				if err != nil {
 					return nil, err
 				}
-				if err := binary.Write(buf, binary.BigEndian, uint64(len(bytes))); err != nil {
-					return nil, err
-				}
-				buf.Write(bytes)
 			}
 		case *RefChildTableDef:
-			if err := binary.Write(buf, binary.BigEndian, RefChildTable); err != nil {
-				return nil, err
-			}
-			if err := binary.Write(buf, binary.BigEndian, uint64(len(def.Tables))); err != nil {
-				return nil, err
-			}
+			data = append(data, byte(RefChildTable))
+			data = appendConstraintUint64(data, uint64(len(def.Tables)))
 			for _, tblId := range def.Tables {
-				if err := binary.Write(buf, binary.BigEndian, tblId); err != nil {
-					return nil, err
-				}
+				data = appendConstraintUint64(data, tblId)
 			}
 
 		case *ForeignKeyDef:
-			if err := binary.Write(buf, binary.BigEndian, ForeignKey); err != nil {
-				return nil, err
-			}
-			if err := binary.Write(buf, binary.BigEndian, uint64(len(def.Fkeys))); err != nil {
-				return nil, err
-			}
+			data = append(data, byte(ForeignKey))
+			data = appendConstraintUint64(data, uint64(len(def.Fkeys)))
 			for _, fk := range def.Fkeys {
-				bytes, err := fk.Marshal()
+				data, err = appendConstraintProto(data, fk)
 				if err != nil {
 					return nil, err
 				}
-
-				if err := binary.Write(buf, binary.BigEndian, uint64(len(bytes))); err != nil {
-					return nil, err
-				}
-				buf.Write(bytes)
 			}
 		case *PrimaryKeyDef:
-			if err := binary.Write(buf, binary.BigEndian, PrimaryKey); err != nil {
-				return nil, err
-			}
-			bytes, err := def.Pkey.Marshal()
+			data = append(data, byte(PrimaryKey))
+			data, err = appendConstraintProto(data, def.Pkey)
 			if err != nil {
 				return nil, err
 			}
-			if err := binary.Write(buf, binary.BigEndian, uint64((len(bytes)))); err != nil {
-				return nil, err
-			}
-			buf.Write(bytes)
 		case *StreamConfigsDef:
-			if err := binary.Write(buf, binary.BigEndian, StreamConfig); err != nil {
-				return nil, err
-			}
-			if err := binary.Write(buf, binary.BigEndian, uint64(len(def.Configs))); err != nil {
-				return nil, err
-			}
+			data = append(data, byte(StreamConfig))
+			data = appendConstraintUint64(data, uint64(len(def.Configs)))
 			for _, c := range def.Configs {
-				bytes, err := c.Marshal()
+				data, err = appendConstraintProto(data, c)
 				if err != nil {
 					return nil, err
 				}
-				if err := binary.Write(buf, binary.BigEndian, uint64(len(bytes))); err != nil {
-					return nil, err
-				}
-				buf.Write(bytes)
 			}
 		}
 	}
-	return buf.Bytes(), nil
+	return data, nil
+}
+
+type constraintProtoMarshaler interface {
+	ProtoSize() int
+	MarshalTo([]byte) (int, error)
+}
+
+func (def *ConstraintDef) marshalSize() int {
+	size := 0
+	for _, ct := range def.Cts {
+		switch def := ct.(type) {
+		case *IndexDef:
+			size += 1 + 8
+			for _, indexdef := range def.Indexes {
+				size += 8 + indexdef.ProtoSize()
+			}
+		case *RefChildTableDef:
+			size += 1 + 8 + 8*len(def.Tables)
+		case *ForeignKeyDef:
+			size += 1 + 8
+			for _, fk := range def.Fkeys {
+				size += 8 + fk.ProtoSize()
+			}
+		case *PrimaryKeyDef:
+			size += 1 + 8 + def.Pkey.ProtoSize()
+		case *StreamConfigsDef:
+			size += 1 + 8
+			for _, config := range def.Configs {
+				size += 8 + config.ProtoSize()
+			}
+		}
+	}
+	return size
+}
+
+func appendConstraintUint64(data []byte, value uint64) []byte {
+	start := len(data)
+	data = append(data, 0, 0, 0, 0, 0, 0, 0, 0)
+	binary.BigEndian.PutUint64(data[start:], value)
+	return data
+}
+
+func appendConstraintProto(data []byte, message constraintProtoMarshaler) ([]byte, error) {
+	size := message.ProtoSize()
+	data = appendConstraintUint64(data, uint64(size))
+	start := len(data)
+	data = data[:start+size]
+	written, err := message.MarshalTo(data[start:])
+	if err != nil {
+		return nil, err
+	}
+	if written != size {
+		return nil, moerr.NewInternalErrorNoCtx("constraint protobuf size mismatch")
+	}
+	return data, nil
 }
 
 func (def *ConstraintDef) UnmarshalBinary(data []byte) error {
@@ -1242,7 +1264,8 @@ type Engine interface {
 		expr *plan.Expr,
 		def *plan.TableDef,
 		relData RelData,
-		num int) ([]Reader, error)
+		num int,
+		filterHint ...FilterHint) ([]Reader, error)
 
 	// Get database name & table name by table id
 	GetNameById(ctx context.Context, op client.TxnOperator, tableId uint64) (dbName string, tblName string, err error)
@@ -1281,6 +1304,25 @@ type CatalogCacheGCer interface {
 
 type Hints struct {
 	CommitOrRollbackTimeout time.Duration
+}
+
+// AutoIncrEpochFenceSupporter is implemented by transaction workspaces whose
+// target TN snapshot can prove that every target enforces AUTO_INCREMENT
+// allocator epochs.
+type AutoIncrEpochFenceSupporter interface {
+	SupportsAutoIncrEpochFence() bool
+}
+
+// SupportsAutoIncrEpochFence fails closed for legacy and unknown workspaces.
+func SupportsAutoIncrEpochFence(workspace client.Workspace) bool {
+	supporter, ok := workspace.(AutoIncrEpochFenceSupporter)
+	return ok && supporter.SupportsAutoIncrEpochFence()
+}
+
+// TxnSupportsAutoIncrEpochFence fails closed when the transaction or its
+// workspace cannot prove that every target TN enforces allocator epochs.
+func TxnSupportsAutoIncrEpochFence(txn client.TxnOperator) bool {
+	return txn != nil && SupportsAutoIncrEpochFence(txn.GetWorkspace())
 }
 
 // EntireEngine is a wrapper for Engine to support temporary table
@@ -1409,8 +1451,8 @@ func GetPrefetchOnSubscribed() (bool, []*regexp.Regexp) {
 // MembershipFilter is a membership filter over the indexed primary-key values
 // (fulltext calls this PK doc_id) used to prune an index scan to the candidate
 // rows that pass the surrounding relational predicate. It is implemented in
-// pkg/common/docfilter by an exact bitset (cbitmap / CRoaring) for integer PKs
-// and by a CBloomFilter (approximate) for non-integer PKs.
+// pkg/common/docfilter by an exact set (dense cbitmap / sparse Sorted64) for
+// integer PKs and by a CBloomFilter (approximate) for non-integer PKs.
 //
 // This is the CONSUMER (probe) view, so it deliberately omits Share() — a plain
 // *bloomfilter.CBloomFilter satisfies it directly. The PRODUCER superset is

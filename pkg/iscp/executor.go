@@ -476,6 +476,7 @@ func (exec *ISCPTaskExecutor) run(ctx context.Context, worker Worker) {
 			// injection is for ut
 			if msg, injected := objectio.ISCPExecutorInjected(); injected && msg == "getDirtyTables" {
 				err = moerr.NewInternalErrorNoCtx(msg)
+				objectio.WaitForISCPExecutorFault(ctx, msg)
 			}
 			var getDirtyTablesFailed bool
 			if err != nil {
@@ -618,6 +619,7 @@ func (exec *ISCPTaskExecutor) applyISCPLog(ctx context.Context, from, to types.T
 	}
 	if msg, injected := objectio.ISCPExecutorInjected(); injected && msg == "invalid timestamp" {
 		to = types.TS{}
+		objectio.WaitForISCPExecutorFault(ctx, msg)
 	}
 	ctx = context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
 	ctx, cancel := context.WithTimeout(ctx, time.Minute*5)
@@ -662,6 +664,7 @@ func (exec *ISCPTaskExecutor) applyISCPLog(ctx context.Context, from, to types.T
 	// injection is for ut
 	if msg, injected := objectio.ISCPExecutorInjected(); injected && msg == "applyISCPLog" {
 		err = moerr.NewInternalErrorNoCtx(msg)
+		objectio.WaitForISCPExecutorFault(ctx, msg)
 	}
 	if err != nil {
 		return
@@ -971,6 +974,12 @@ func (exec *ISCPTaskExecutor) addOrUpdateJob(
 	dropAt types.Timestamp,
 	notPrint bool,
 ) error {
+	// SQL NULL is represented by Timestamp(0) for active jobs. A non-NULL zero
+	// timestamp still means dropped, so normalize it to a GC-safe timestamp.
+	if dropAt == types.ZeroTimestamp {
+		dropAt = types.TimestampMinValue
+	}
+
 	var newCreate bool
 	fenceKey := NewJobRuntimeKey(accountID, tableID, jobName, jobID)
 

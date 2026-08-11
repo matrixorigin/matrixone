@@ -83,6 +83,18 @@ type unknownCommitResolverLockService struct {
 	resolveErr       error
 }
 
+type scheduledUnknownCommitResolutionError struct {
+	done <-chan struct{}
+}
+
+func (e scheduledUnknownCommitResolutionError) Error() string {
+	return "unknown commit cleanup scheduled without callback"
+}
+
+func (e scheduledUnknownCommitResolutionError) ResolutionDone() <-chan struct{} {
+	return e.done
+}
+
 func (s *unknownCommitResolverLockService) GetServiceID() string {
 	return "unknown-commit-resolver"
 }
@@ -435,6 +447,68 @@ func TestCommit(t *testing.T) {
 	})
 }
 
+func TestAutoIncrEpochFenceUsesGuardedCommitMethod(t *testing.T) {
+	t.Run("commit", func(t *testing.T) {
+		runOperatorTests(t, func(ctx context.Context, tc *txnOperator, ts *testTxnSender) {
+			tc.RequireAutoIncrEpochFenceCommit()
+			tc.mu.txn.TNShards = append(tc.mu.txn.TNShards, metadata.TNShard{TNShardRecord: metadata.TNShardRecord{ShardID: 1}})
+			require.NoError(t, tc.Commit(ctx))
+			requests := ts.getLastRequests()
+			require.Len(t, requests, 1)
+			require.Equal(t, txn.TxnMethod_CommitAutoIncrEpochFence, requests[0].Method)
+		})
+	})
+
+	t.Run("write and commit", func(t *testing.T) {
+		runOperatorTests(t, func(ctx context.Context, tc *txnOperator, ts *testTxnSender) {
+			tc.RequireAutoIncrEpochFenceCommit()
+			result, err := tc.WriteAndCommit(ctx, []txn.TxnRequest{newTNRequest(1, 1)})
+			require.NoError(t, err)
+			if result != nil {
+				result.Release()
+			}
+			requests := ts.getLastRequests()
+			require.Equal(t, txn.TxnMethod_CommitAutoIncrEpochFence, requests[len(requests)-1].Method)
+		})
+	})
+
+	t.Run("cached write", func(t *testing.T) {
+		runOperatorTests(t, func(ctx context.Context, tc *txnOperator, ts *testTxnSender) {
+			_, err := tc.Write(ctx, []txn.TxnRequest{newTNRequest(1, 1)})
+			require.NoError(t, err)
+			tc.RequireAutoIncrEpochFenceCommit()
+			require.NoError(t, tc.Commit(ctx))
+			requests := ts.getLastRequests()
+			require.Equal(t, txn.TxnMethod_CommitAutoIncrEpochFence, requests[len(requests)-1].Method)
+		}, WithTxnCacheWrite())
+	})
+}
+
+func TestAutoIncrEpochFenceLifecycle(t *testing.T) {
+	RunTxnTests(func(c TxnClient, _ rpc.TxnSender) {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+
+		op, err := c.New(ctx, timestamp.Timestamp{})
+		require.NoError(t, err)
+		tc := op.(*txnOperator)
+		workspace := &trackingWorkspace{}
+		tc.AddWorkspace(workspace)
+		tc.RequireAutoIncrEpochFenceCommit()
+
+		require.NoError(t, workspace.RollbackLastStatement(ctx))
+		require.True(t, tc.Txn().RequireAutoIncrEpochFenceCommit,
+			"statement rollback must not clear a transaction-wide commit requirement")
+		require.NoError(t, tc.Rollback(ctx))
+
+		restarted, err := c.(*txnClient).RestartTxn(ctx, tc, timestamp.Timestamp{})
+		require.NoError(t, err)
+		require.False(t, restarted.Txn().RequireAutoIncrEpochFenceCommit,
+			"a restarted transaction generation must not inherit the old requirement")
+		require.NoError(t, restarted.Rollback(ctx))
+	})
+}
+
 func TestCommitFinalizesPreparedWorkspaceAfterCommitSuccess(t *testing.T) {
 	runOperatorTests(t, func(ctx context.Context, tc *txnOperator, _ *testTxnSender) {
 		ws := &trackingWorkspace{
@@ -762,17 +836,14 @@ func TestCheckLockTableBindsCleanSecondCallIsThrottled(t *testing.T) {
 	})
 }
 
-func TestContextWithoutDeadlineWillPanic(t *testing.T) {
-	runOperatorTests(t, func(_ context.Context, tc *txnOperator, _ *testTxnSender) {
-		defer func() {
-			if err := recover(); err != nil {
-				return
-			}
-			assert.Fail(t, "must panic")
-		}()
-
+func TestContextWithoutDeadlineReturnsError(t *testing.T) {
+	runOperatorTests(t, func(_ context.Context, tc *txnOperator, sender *testTxnSender) {
 		_, err := tc.Write(context.Background(), nil)
-		assert.NoError(t, err)
+		require.ErrorContains(t, err, "txn operation context deadline not set")
+
+		sender.Lock()
+		defer sender.Unlock()
+		require.Empty(t, sender.lastRequests)
 	})
 }
 
@@ -966,6 +1037,13 @@ func TestApplySnapshotTxnOperator(t *testing.T) {
 		snapshot.LockTables = append(snapshot.LockTables, lock.LockTable{Table: 1})
 		assert.NoError(t, tc.ApplySnapshot(protoc.MustMarshal(snapshot)))
 		assert.Equal(t, 1, len(tc.mu.lockTables))
+
+		snapshot.Txn.RequireAutoIncrEpochFenceCommit = true
+		assert.NoError(t, tc.ApplySnapshot(protoc.MustMarshal(snapshot)))
+		assert.True(t, tc.mu.txn.RequireAutoIncrEpochFenceCommit)
+		snapshot.Txn.RequireAutoIncrEpochFenceCommit = false
+		assert.NoError(t, tc.ApplySnapshot(protoc.MustMarshal(snapshot)))
+		assert.True(t, tc.mu.txn.RequireAutoIncrEpochFenceCommit)
 	})
 }
 
@@ -1015,6 +1093,30 @@ func TestUpdateSnapshotTSWithWaiter(t *testing.T) {
 				require.Equal(t, newTestTimestamp(ts).Next(), tc.Txn().SnapshotTS)
 			})
 	})
+}
+
+func TestUpdateSnapshotPreservesSnapshotOnWaitError(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		waiter TimestampWaiter
+	}{
+		{name: "close-aware waiter", waiter: &blockingTimestampWaiter{entered: make(chan struct{}, 1)}},
+		{name: "legacy waiter", waiter: &legacyBlockingTimestampWaiter{entered: make(chan struct{}, 1)}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			runOperatorTests(t, func(_ context.Context, tc *txnOperator, _ *testTxnSender) {
+				initial := newTestTimestamp(10)
+				tc.timestampWaiter = test.waiter
+				tc.mu.txn.SnapshotTS = initial
+
+				ctx, cancel := context.WithCancel(context.Background())
+				cancel()
+				err := tc.UpdateSnapshot(ctx, newTestTimestamp(20))
+				require.ErrorIs(t, err, context.Canceled)
+				require.Equal(t, initial, tc.SnapshotTS())
+			})
+		})
+	}
 }
 
 func TestRollbackMultiTimes(t *testing.T) {
@@ -1243,6 +1345,7 @@ func TestCommitUnknownSchedulesUnknownCommitResolution(t *testing.T) {
 			commitRequests: []txn.TxnRequest{newTNRequest(1, 1)},
 		}
 		tc.AddWorkspace(ws)
+		tc.RequireAutoIncrEpochFenceCommit()
 		ts.setManual(func(sr *rpc.SendResult, err error) (*rpc.SendResult, error) {
 			return nil, moerr.NewTxnUnknown(ctx, "test")
 		})
@@ -1255,6 +1358,11 @@ func TestCommitUnknownSchedulesUnknownCommitResolution(t *testing.T) {
 		require.Equal(t, tc.reset.commitSequence, resolver.resolvedSequence)
 		require.NotEmpty(t, ts.lastRequests)
 		commitReq := ts.lastRequests[len(ts.lastRequests)-1]
+		require.Equal(t, txn.TxnMethod_CommitAutoIncrEpochFence, commitReq.Method)
+		for _, req := range ts.lastRequests {
+			require.NotEqual(t, txn.TxnMethod_Commit, req.Method,
+				"unknown guarded commit must not fall back to the legacy method")
+		}
 		require.NotNil(t, commitReq.CommitRequest)
 		require.Equal(t, resolver.resolvedDeadline.UnixNano(), commitReq.CommitRequest.DeadlineUnixNano)
 		require.Equal(t, resolver.resolvedSequence, commitReq.CommitRequest.CommitSequence)
@@ -1529,6 +1637,115 @@ func TestCommitUnknownScheduleFailureReleasesAdmission(t *testing.T) {
 		require.Zero(t, active)
 		require.Zero(t, waiting)
 	}, WithLockService(resolver), WithMaxActiveTxn(1))
+}
+
+func TestCommitUnknownScheduledWithoutCallbackRetainsAdmission(t *testing.T) {
+	resolutionDone := make(chan struct{})
+	resolver := &unknownCommitResolverLockService{
+		resolveErr: fmt.Errorf(
+			"wrapped resolver result: %w",
+			scheduledUnknownCommitResolutionError{done: resolutionDone},
+		),
+	}
+	RunTxnTests(func(c TxnClient, sender rpc.TxnSender) {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		ts := sender.(*testTxnSender)
+		ts.setManual(func(result *rpc.SendResult, err error) (*rpc.SendResult, error) {
+			return nil, moerr.NewTxnUnknown(ctx, "test")
+		})
+
+		op, err := c.New(
+			ctx,
+			newTestTimestamp(0),
+			WithUserTxn(),
+			WithTxnMode(txn.TxnMode_Pessimistic),
+		)
+		require.NoError(t, err)
+		tc := op.(*txnOperator)
+		tc.AddWorkspace(&trackingWorkspace{
+			commitRequests: []txn.TxnRequest{newTNRequest(1, 1)},
+		})
+		tc.mu.txn.TNShards = append(
+			tc.mu.txn.TNShards,
+			metadata.TNShard{TNShardRecord: metadata.TNShardRecord{ShardID: 1}},
+		)
+		err = tc.Commit(ctx)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnUnknown))
+		require.True(t, tc.reset.unknownCommitResolutionTransferred)
+		users, active, waiting := txnAdmissionCounts(c)
+		require.Equal(t, 1, users)
+		require.Zero(t, active)
+		require.Zero(t, waiting)
+
+		type newResult struct {
+			op  TxnOperator
+			err error
+		}
+		newC := make(chan newResult, 1)
+		go func() {
+			op, err := c.New(ctx, newTestTimestamp(0), WithUserTxn())
+			newC <- newResult{op: op, err: err}
+		}()
+		require.Eventually(t, func() bool {
+			_, _, waiting := txnAdmissionCounts(c)
+			return waiting == 1
+		}, time.Second, 10*time.Millisecond)
+		select {
+		case result := <-newC:
+			require.FailNow(t, "new user txn bypassed scheduled cleanup", result.err)
+		case <-time.After(100 * time.Millisecond):
+		}
+
+		close(resolutionDone)
+		result := <-newC
+		require.NoError(t, result.err)
+		require.NoError(t, result.op.Rollback(ctx))
+		require.Eventually(t, func() bool {
+			users, active, waiting := txnAdmissionCounts(c)
+			return users == 0 && active == 0 && waiting == 0
+		}, time.Second, 10*time.Millisecond)
+	}, WithLockService(resolver), WithMaxActiveTxn(1))
+}
+
+func TestInternalCommitUnknownScheduledWithoutCallbackRetainsAdmission(t *testing.T) {
+	resolutionDone := make(chan struct{})
+	resolver := &unknownCommitResolverLockService{
+		resolveErr: scheduledUnknownCommitResolutionError{done: resolutionDone},
+	}
+	RunTxnTests(func(c TxnClient, sender rpc.TxnSender) {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		ts := sender.(*testTxnSender)
+		ts.setManual(func(result *rpc.SendResult, err error) (*rpc.SendResult, error) {
+			return nil, moerr.NewTxnUnknown(ctx, "test")
+		})
+
+		op, err := c.New(
+			ctx,
+			newTestTimestamp(0),
+			WithTxnMode(txn.TxnMode_Pessimistic),
+		)
+		require.NoError(t, err)
+		tc := op.(*txnOperator)
+		tc.AddWorkspace(&trackingWorkspace{
+			commitRequests: []txn.TxnRequest{newTNRequest(1, 1)},
+		})
+		tc.mu.txn.TNShards = append(
+			tc.mu.txn.TNShards,
+			metadata.TNShard{TNShardRecord: metadata.TNShardRecord{ShardID: 1}},
+		)
+		err = tc.Commit(ctx)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnUnknown))
+		require.True(t, tc.reset.unknownCommitResolutionTransferred)
+		require.False(t, tc.reset.internalUnknownCommitAdmissionHeld)
+		require.Len(t, c.(*txnClient).internalUnknownCommitC, 1)
+
+		close(resolutionDone)
+		require.Eventually(t, func() bool {
+			return len(c.(*txnClient).internalUnknownCommitC) == 0
+		}, time.Second, time.Millisecond)
+	}, WithLockService(resolver))
 }
 
 func TestInternalCommitUnknownAdmissionIsBounded(t *testing.T) {

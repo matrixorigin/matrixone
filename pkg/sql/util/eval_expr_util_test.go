@@ -15,12 +15,15 @@
 package util
 
 import (
+	"errors"
+	"math"
 	"testing"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
 
@@ -137,6 +140,164 @@ func TestBinaryToInt(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestSetInsertValueBitIgnoreAdjustment(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	bit4 := types.New(types.T_bit, 4, 0)
+	bit64 := types.New(types.T_bit, 64, 0)
+
+	tests := []struct {
+		name    string
+		value   *tree.NumVal
+		typ     *types.Type
+		ignore  bool
+		want    uint64
+		wantErr bool
+	}{
+		{
+			name:  "boolean converts to one",
+			value: tree.NewNumVal(true, "true", false, tree.P_bool),
+			typ:   &bit4,
+			want:  1,
+		},
+		{
+			name:   "character bytes convert within width",
+			value:  tree.NewNumVal("A", "A", false, tree.P_char),
+			typ:    &bit4,
+			want:   15,
+			ignore: true,
+		},
+		{
+			name:  "positive integer converts within width",
+			value: tree.NewNumVal(int64(7), "7", false, tree.P_int64),
+			typ:   &bit4,
+			want:  7,
+		},
+		{
+			name:  "unsigned integer converts within width",
+			value: tree.NewNumVal(uint64(8), "8", false, tree.P_uint64),
+			typ:   &bit4,
+			want:  8,
+		},
+		{
+			name:  "hexadecimal literal converts",
+			value: tree.NewNumVal("0x0f", "0x0f", false, tree.P_hexnum),
+			typ:   &bit4,
+			want:  15,
+		},
+		{
+			name:  "score binary converts",
+			value: tree.NewNumVal("1", "1", false, tree.P_ScoreBinary),
+			typ:   &bit64,
+			want:  49,
+		},
+		{
+			name:  "floating value rounds within width",
+			value: tree.NewNumVal(7.6, "7.6", false, tree.P_float64),
+			typ:   &bit4,
+			want:  8,
+		},
+		{
+			name:    "strict bit literal overflow fails",
+			value:   tree.NewNumVal("0b11111", "0b11111", false, tree.P_bit),
+			typ:     &bit4,
+			wantErr: true,
+		},
+		{
+			name:   "ignore bit literal overflow saturates",
+			value:  tree.NewNumVal("0b11111", "0b11111", false, tree.P_bit),
+			typ:    &bit4,
+			ignore: true,
+			want:   15,
+		},
+		{
+			name:   "ignore negative integer becomes zero",
+			value:  tree.NewNumVal(int64(-1), "-1", false, tree.P_int64),
+			typ:    &bit4,
+			ignore: true,
+			want:   0,
+		},
+		{
+			name:   "ignore bit64 floating upper boundary saturates",
+			value:  tree.NewNumVal(math.Exp2(64), "18446744073709551616", false, tree.P_float64),
+			typ:    &bit64,
+			ignore: true,
+			want:   math.MaxUint64,
+		},
+		{
+			name:   "ignore negative floating value becomes zero",
+			value:  tree.NewNumVal(-1.5, "-1.5", false, tree.P_float64),
+			typ:    &bit4,
+			ignore: true,
+			want:   0,
+		},
+		{
+			name:  "false boolean converts to zero",
+			value: tree.NewNumVal(false, "false", false, tree.P_bool),
+			typ:   &bit4,
+			want:  0,
+		},
+		{
+			name:  "character bytes convert without adjustment",
+			value: tree.NewNumVal("A", "A", false, tree.P_char),
+			typ: func() *types.Type {
+				typ := types.New(types.T_bit, 8, 0)
+				return &typ
+			}(),
+			want: 65,
+		},
+		{
+			name:    "long character literal fails",
+			value:   tree.NewNumVal("123456789", "123456789", false, tree.P_char),
+			typ:     &bit64,
+			wantErr: true,
+		},
+		{
+			name:    "strict integer overflow fails",
+			value:   tree.NewNumVal(int64(16), "16", false, tree.P_int64),
+			typ:     &bit4,
+			wantErr: true,
+		},
+		{
+			name:    "strict unsigned overflow fails",
+			value:   tree.NewNumVal(uint64(16), "16", false, tree.P_uint64),
+			typ:     &bit4,
+			wantErr: true,
+		},
+		{
+			name:    "strict hexadecimal overflow fails",
+			value:   tree.NewNumVal("0x10", "0x10", false, tree.P_hexnum),
+			typ:     &bit4,
+			wantErr: true,
+		},
+		{
+			name:    "strict score binary overflow fails",
+			value:   tree.NewNumVal("1", "1", false, tree.P_ScoreBinary),
+			typ:     &bit4,
+			wantErr: true,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			canInsert, got, err := SetInsertValueBit(proc, tc.value, tc.typ, tc.ignore)
+			if tc.wantErr {
+				require.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+			require.True(t, canInsert)
+			require.Equal(t, tc.want, got)
+		})
+	}
+
+	require.Equal(t, uint64(0), bitMaxValue(0))
+	require.Equal(t, uint64(15), bitMaxValue(4))
+	require.Equal(t, uint64(math.MaxUint64), bitMaxValue(64))
+	require.True(t, bitFloatOutOfRange(math.Inf(1), 4))
+	require.True(t, bitFloatOutOfRange(math.Exp2(64), 64))
+	require.False(t, bitFloatOutOfRange(15, 4))
+}
+
 func TestScoreBinaryToInt(t *testing.T) {
 	var val uint64
 	var err error
@@ -209,6 +370,13 @@ func TestSetInsertValueTimeStamp_MinValueValidation(t *testing.T) {
 			description: "UTC: 1970-01-01 00:00:01 -> UTC 1970-01-01 00:00:01 (at min, should pass)",
 		},
 		{
+			name:        "zero_timestamp",
+			timezone:    time.UTC,
+			input:       "0000-00-00 00:00:00",
+			shouldError: false,
+			description: "the dedicated zero timestamp sentinel bypasses the normal minimum range check",
+		},
+		{
 			name:        "UTC-8_at_min",
 			timezone:    time.FixedZone("UTC-8", -8*3600),
 			input:       "1969-12-31 16:00:01",
@@ -253,8 +421,136 @@ func TestSetInsertValueTimeStamp_MinValueValidation(t *testing.T) {
 				require.True(t, canInsert, tc.description)
 				require.NoError(t, err, tc.description)
 				require.False(t, isnull, tc.description)
-				require.GreaterOrEqual(t, res, types.TimestampMinValue, tc.description)
+				if tc.input == "0000-00-00 00:00:00" {
+					require.Equal(t, types.ZeroTimestamp, res, tc.description)
+				} else {
+					require.GreaterOrEqual(t, res, types.TimestampMinValue, tc.description)
+				}
 			}
+		})
+	}
+}
+
+func TestSetInsertValueRejectsZeroTemporalInStrictNoZeroDateMode(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	proc.SetResolveVariableFunc(func(name string, isSystemVar, isGlobalVar bool) (interface{}, error) {
+		require.Equal(t, "sql_mode", name)
+		require.True(t, isSystemVar)
+		require.False(t, isGlobalVar)
+		return "STRICT_TRANS_TABLES,NO_ZERO_DATE,NO_ZERO_IN_DATE", nil
+	})
+
+	dateType := types.T_date.ToType()
+	datetimeType := types.T_datetime.ToType()
+	timestampType := types.T_timestamp.ToType()
+	for _, tc := range []struct {
+		name string
+		call func() (bool, error)
+	}{
+		{
+			name: "date",
+			call: func() (bool, error) {
+				canInsert, _, _, err := SetInsertValueDate(proc, tree.NewNumVal("0000-00-00", "0000-00-00", false, tree.P_char), &dateType)
+				return canInsert, err
+			},
+		},
+		{
+			name: "datetime",
+			call: func() (bool, error) {
+				canInsert, _, _, err := SetInsertValueDateTime(proc, tree.NewNumVal("0000-00-00 00:00:00", "0000-00-00 00:00:00", false, tree.P_char), &datetimeType)
+				return canInsert, err
+			},
+		},
+		{
+			name: "timestamp",
+			call: func() (bool, error) {
+				canInsert, _, _, err := SetInsertValueTimeStamp(proc, tree.NewNumVal("0000-00-00 00:00:00", "0000-00-00 00:00:00", false, tree.P_char), &timestampType)
+				return canInsert, err
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			canInsert, err := tc.call()
+			require.False(t, canInsert)
+			require.Error(t, err)
+		})
+	}
+}
+
+func TestRejectZeroTemporalWritePolicy(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	cases := []struct {
+		name    string
+		resolve func(string, bool, bool) (any, error)
+		ignore  bool
+		want    bool
+		wantErr string
+	}{
+		{
+			name: "strict no zero date rejects",
+			resolve: func(name string, isSystemVar, isGlobalVar bool) (any, error) {
+				require.Equal(t, "sql_mode", name)
+				require.True(t, isSystemVar)
+				require.False(t, isGlobalVar)
+				return "STRICT_TRANS_TABLES,NO_ZERO_DATE", nil
+			},
+			want: true,
+		},
+		{
+			name: "traditional rejects",
+			resolve: func(string, bool, bool) (any, error) {
+				return "TRADITIONAL", nil
+			},
+			want: true,
+		},
+		{
+			name: "ignore disables rejection",
+			resolve: func(string, bool, bool) (any, error) {
+				return "STRICT_ALL_TABLES,NO_ZERO_DATE", nil
+			},
+			ignore: true,
+			want:   false,
+		},
+		{
+			name: "non strict does not reject",
+			resolve: func(string, bool, bool) (any, error) {
+				return "NO_ZERO_DATE", nil
+			},
+			want: false,
+		},
+		{
+			name:    "nil resolver is conservative false",
+			resolve: nil,
+			want:    false,
+		},
+		{
+			name: "non string mode is conservative false",
+			resolve: func(string, bool, bool) (any, error) {
+				return 1, nil
+			},
+			want: false,
+		},
+		{
+			name: "resolver error is returned",
+			resolve: func(string, bool, bool) (any, error) {
+				return nil, errors.New("boom")
+			},
+			wantErr: "boom",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			proc.SetResolveVariableFunc(tc.resolve)
+			proc.SetStmtProfile(&process.StmtProfile{})
+			proc.GetStmtProfile().SetStatementRuntimeProfile("Insert", "DML", tc.ignore)
+
+			got, err := RejectZeroTemporalWritePolicy(proc)
+			if tc.wantErr != "" {
+				require.EqualError(t, err, tc.wantErr)
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, tc.want, got)
 		})
 	}
 }

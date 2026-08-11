@@ -15,6 +15,7 @@
 package shuffle
 
 import (
+	"sync"
 	"testing"
 	"time"
 
@@ -120,12 +121,12 @@ func TestShufflePoolGracefulCleanupWaitsForAllExpectedHolders(t *testing.T) {
 	require.Zero(t, peak)
 	require.False(t, ownsStats)
 	require.False(t, sp.cleaned)
-	require.Len(t, sp.batchPool, 1)
+	require.Equal(t, 1, sp.batchPoolLength())
 	peak, ownsStats = sp.release(proc.Mp(), false)
 	require.Positive(t, peak)
 	require.True(t, ownsStats)
 	require.True(t, sp.cleaned)
-	require.Empty(t, sp.batchPool)
+	require.Zero(t, sp.batchPoolLength())
 	require.Equal(t, int64(0), proc.Mp().CurrNB())
 }
 
@@ -179,6 +180,57 @@ func TestShufflePoolBoundsReadyBatchesAndResumes(t *testing.T) {
 	require.True(t, ownsStats)
 	require.Positive(t, peak)
 	require.Equal(t, int64(0), proc.Mp().CurrNB())
+}
+
+func TestShufflePoolReservesReadyCreditForProvenanceChange(t *testing.T) {
+	mp := mpool.MustNewZero()
+	proc := testutil.NewProcessWithMPool(t, "", mp)
+	defer proc.Free()
+	registry, err := mpool.NewAllocationAccountRegistry(1, 16)
+	require.NoError(t, err)
+	account, err := registry.Open(1 << 20)
+	require.NoError(t, err)
+	selection, err := vector.NewAllocationAccountSelection(account, 1, 1, 2, 3, 4)
+	require.NoError(t, err)
+
+	sp := NewShufflePool(1, 1, true)
+	unaccounted := testutil.NewBatch([]types.Type{types.T_int64.ToType()}, false, 2, mp)
+	done, err := writeBatchToBucketForTest(sp, unaccounted, proc, 0)
+	require.NoError(t, err)
+	require.True(t, done)
+	require.Zero(t, sp.readyCount)
+
+	accounted := batch.NewWithSchema(
+		true,
+		nil,
+		[]types.Type{types.T_int64.ToType()},
+	)
+	require.NoError(t, accounted.SetAllocationAccount(selection))
+	require.NoError(t, vector.AppendFixed(accounted.Vecs[0], int64(7), false, mp))
+	accounted.SetRowCount(1)
+	done, err = writeBatchToBucketForTest(sp, accounted, proc, 0)
+	require.NoError(t, err)
+	require.True(t, done)
+	require.Equal(t, 1, sp.readyCount)
+
+	ready := sp.getAnyFullBatch()
+	require.NotNil(t, ready)
+	require.Equal(t, 2, ready.RowCount())
+	sp.discardBatch(ready, mp)
+	require.Zero(t, sp.readyCount)
+	tail := sp.getAnyLastBatch()
+	require.NotNil(t, tail)
+	require.Equal(t, 1, tail.RowCount())
+	require.Same(t, selection, tail.AllocationAccountSelection())
+	sp.discardBatch(tail, mp)
+
+	unaccounted.Clean(mp)
+	accounted.Clean(mp)
+	sp.abort(mp)
+	require.Zero(t, account.Seal().Used)
+	_, err = registry.Finalize(account)
+	require.NoError(t, err)
+	require.Equal(t, int64(0), mp.CurrNB())
 }
 
 func TestShufflePoolFixedBucketsHaveIndependentBackpressure(t *testing.T) {
@@ -301,15 +353,353 @@ func TestShufflePoolRecycleCacheUsesWorkerBound(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
 	sp := NewShufflePool(128, 2, false)
-	for range sp.readyLimit + 3 {
+	for i := range sp.readyLimit + 3 {
 		bat := batch.NewOffHeapWithSize(1)
 		bat.Vecs[0] = vector.NewOffHeapVecWithType(types.T_int64.ToType())
 		require.NoError(t, bat.Vecs[0].PreExtend(1, proc.Mp()))
+		bat.ShuffleIDX = int32(i) % sp.maxHolders
 		sp.putBatchToPool(bat, proc.Mp())
 	}
-	require.Len(t, sp.batchPool, sp.readyLimit)
+	require.Equal(t, sp.readyLimit, sp.batchPoolLength())
 	sp.abort(proc.Mp())
 	require.Equal(t, int64(0), proc.Mp().CurrNB())
+}
+
+func fillShufflePoolRecycleCache(
+	tb testing.TB,
+	sp *ShufflePool,
+	proc *process.Process,
+	rows int,
+) map[*batch.Batch]struct{} {
+	tb.Helper()
+	pooled := make(map[*batch.Batch]struct{}, sp.readyLimit)
+	for i := range sp.readyLimit {
+		bat := batch.NewOffHeapWithSize(1)
+		bat.Vecs[0] = vector.NewOffHeapVecWithType(types.T_int64.ToType())
+		if err := bat.Vecs[0].PreExtend(rows, proc.Mp()); err != nil {
+			tb.Fatal(err)
+		}
+		bat.ShuffleIDX = int32(i) % sp.bucketNum
+		pooled[bat] = struct{}{}
+		sp.putBatchToPool(bat, proc.Mp())
+	}
+	return pooled
+}
+
+func TestShufflePoolRecycleCacheReusesAcrossBucketLayouts(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		bucketNum  int32
+		maxHolders int32
+		drainAll   bool
+	}{
+		{name: "single-cn", bucketNum: 16, maxHolders: 16},
+		{name: "multi-cn", bucketNum: 128, maxHolders: 16},
+		{name: "drain-all", bucketNum: 128, maxHolders: 1, drainAll: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+			defer proc.Free()
+			sp := NewShufflePool(tc.bucketNum, tc.maxHolders, tc.drainAll)
+
+			pooled := fillShufflePoolRecycleCache(t, sp, proc, 128)
+			require.Equal(t, sp.readyLimit, sp.batchPoolLength())
+			input := testutil.NewBatch(
+				[]types.Type{types.T_int64.ToType()}, false, 128, proc.Mp())
+
+			// Visit every bucket after warming only the holder-bounded recycle
+			// shards. Reuse must not grow linearly with the global bucket count.
+			for bucket := int32(0); bucket < tc.bucketNum; bucket++ {
+				done, err := writeBatchToBucketForTest(sp, input, proc, bucket)
+				require.NoError(t, err)
+				require.True(t, done)
+				output := sp.getLastBatch(bucket)
+				require.NotNil(t, output)
+				_, reused := pooled[output]
+				require.True(t, reused,
+					"bucket %d allocated instead of reusing its holder shard", bucket)
+				output.CleanOnlyData()
+				sp.putBatchToPool(output, proc.Mp())
+			}
+
+			require.Equal(t, sp.readyLimit, sp.batchPoolLength())
+			input.Clean(proc.Mp())
+			sp.abort(proc.Mp())
+			require.Equal(t, int64(0), proc.Mp().CurrNB())
+		})
+	}
+}
+
+func TestShufflePoolRecycleCacheWarmsColdShardOnce(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+	sp := NewShufflePool(128, 16, false)
+
+	for range shuffleBatchPoolShardSize {
+		bat := batch.NewOffHeapWithSize(1)
+		bat.Vecs[0] = vector.NewOffHeapVecWithType(types.T_int64.ToType())
+		require.NoError(t, bat.Vecs[0].PreExtend(1, proc.Mp()))
+		bat.ShuffleIDX = 0
+		sp.putBatchToPool(bat, proc.Mp())
+	}
+	require.Equal(t, shuffleBatchPoolShardSize, sp.batchPoolLength())
+
+	input := testutil.NewBatch(
+		[]types.Type{types.T_int64.ToType()}, false, 1, proc.Mp())
+	var warmed *batch.Batch
+	for _, bucket := range []int32{1, 17, 33, 49, 65, 81, 97, 113} {
+		done, err := writeBatchToBucketForTest(sp, input, proc, bucket)
+		require.NoError(t, err)
+		require.True(t, done)
+		output := sp.getLastBatch(bucket)
+		require.NotNil(t, output)
+		if warmed == nil {
+			warmed = output
+		} else {
+			require.Same(t, warmed, output,
+				"a warmed holder shard must not repeatedly allocate after a phase change")
+		}
+		output.CleanOnlyData()
+		sp.putBatchToPool(output, proc.Mp())
+	}
+
+	require.Equal(t, shuffleBatchPoolShardSize+1, sp.batchPoolLength())
+	input.Clean(proc.Mp())
+	sp.abort(proc.Mp())
+	require.Equal(t, int64(0), proc.Mp().CurrNB())
+}
+
+func TestShufflePoolRecycleCacheConcurrentReuse(t *testing.T) {
+	const (
+		shards          = 16
+		workersPerShard = 2
+		iterations      = 100
+	)
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+	sp := NewShufflePool(128, shards, false)
+	pooled := fillShufflePoolRecycleCache(t, sp, proc, 1)
+
+	var wg sync.WaitGroup
+	errC := make(chan string, shards*workersPerShard)
+	for worker := range shards * workersPerShard {
+		wg.Add(1)
+		go func(bucket int32) {
+			defer wg.Done()
+			for i := range iterations {
+				buf := sp.getBatchFromPool(bucket)
+				if buf == nil {
+					errC <- "recycle shard unexpectedly empty"
+					return
+				}
+				if _, ok := pooled[buf]; !ok {
+					sp.putBatchToPool(buf, proc.Mp())
+					errC <- "recycle shard returned an unknown batch"
+					return
+				}
+				buf.ShuffleIDX = bucket + int32(i%8)*shards
+				sp.putBatchToPool(buf, proc.Mp())
+			}
+		}(int32(worker % shards))
+	}
+	wg.Wait()
+	close(errC)
+	for err := range errC {
+		t.Error(err)
+	}
+
+	require.Equal(t, sp.readyLimit, sp.batchPoolLength())
+	sp.abort(proc.Mp())
+	require.Equal(t, int64(0), proc.Mp().CurrNB())
+}
+
+func BenchmarkShufflePoolRecycleCache(b *testing.B) {
+	for _, tc := range []struct {
+		name       string
+		bucketNum  int32
+		maxHolders int32
+	}{
+		{name: "single-cn-16-buckets", bucketNum: 16, maxHolders: 16},
+		{name: "multi-cn-128-buckets", bucketNum: 128, maxHolders: 16},
+		{name: "multi-cn-1024-buckets", bucketNum: 1024, maxHolders: 16},
+	} {
+		b.Run("pool-round-robin/"+tc.name, func(b *testing.B) {
+			proc := testutil.NewProcessWithMPool(b, "", mpool.MustNewZero())
+			defer proc.Free()
+			sp := NewShufflePool(tc.bucketNum, tc.maxHolders, false)
+			defer sp.abort(proc.Mp())
+			fillShufflePoolRecycleCache(b, sp, proc, 1)
+
+			b.ReportAllocs()
+			b.ResetTimer()
+			for i := range b.N {
+				buf := sp.getBatchFromPool(int32(i) % tc.bucketNum)
+				if buf == nil {
+					b.Fatal("recycle cache unexpectedly empty")
+				}
+				buf.ShuffleIDX = int32(i) % tc.bucketNum
+				sp.putBatchToPool(buf, proc.Mp())
+			}
+			b.StopTimer()
+		})
+	}
+
+	b.Run("pool-parallel/fixed-16-workers", func(b *testing.B) {
+		const workers = 16
+		proc := testutil.NewProcessWithMPool(b, "", mpool.MustNewZero())
+		defer proc.Free()
+		sp := NewShufflePool(128, workers, false)
+		defer sp.abort(proc.Mp())
+		fillShufflePoolRecycleCache(b, sp, proc, 1)
+
+		b.ReportAllocs()
+		b.ResetTimer()
+		var wg sync.WaitGroup
+		wg.Add(workers)
+		for worker := range workers {
+			iterations := b.N / workers
+			if worker < b.N%workers {
+				iterations++
+			}
+			go func(bucket int32, iterations int) {
+				defer wg.Done()
+				for range iterations {
+					buf := sp.getBatchFromPool(bucket)
+					if buf == nil {
+						panic("recycle cache unexpectedly empty")
+					}
+					buf.ShuffleIDX = bucket
+					sp.putBatchToPool(buf, proc.Mp())
+				}
+			}(int32(worker), iterations)
+		}
+		wg.Wait()
+		b.StopTimer()
+	})
+	b.Run("try-write-parallel/fixed-16-workers", func(b *testing.B) {
+		benchmarkShufflePoolTryWriteParallel(b)
+	})
+
+	for _, tc := range []struct {
+		name       string
+		bucketNum  int32
+		maxHolders int32
+		drainAll   bool
+	}{
+		{name: "single-cn-16-buckets", bucketNum: 16, maxHolders: 16},
+		{name: "multi-cn-128-buckets", bucketNum: 128, maxHolders: 16},
+		{name: "multi-cn-1024-buckets", bucketNum: 1024, maxHolders: 16},
+		{name: "drain-all-128-buckets", bucketNum: 128, maxHolders: 1, drainAll: true},
+	} {
+		b.Run("try-write-round-robin/"+tc.name, func(b *testing.B) {
+			benchmarkShufflePoolTryWrite(b, tc.bucketNum, tc.maxHolders, tc.drainAll, false)
+		})
+	}
+	b.Run("try-write-phased/multi-cn-128-buckets", func(b *testing.B) {
+		benchmarkShufflePoolTryWrite(b, 128, 16, false, true)
+	})
+}
+
+func benchmarkShufflePoolTryWrite(
+	b *testing.B,
+	bucketNum int32,
+	maxHolders int32,
+	drainAll bool,
+	phased bool,
+) {
+	proc := testutil.NewProcessWithMPool(b, "", mpool.MustNewZero())
+	defer proc.Free()
+	sp := NewShufflePool(bucketNum, maxHolders, drainAll)
+	defer sp.abort(proc.Mp())
+	fillShufflePoolRecycleCache(b, sp, proc, 1)
+
+	input := testutil.NewBatch(
+		[]types.Type{types.T_int64.ToType()}, false, 1, proc.Mp())
+	defer input.Clean(proc.Mp())
+	sels := make([][]int32, bucketNum)
+	oneRow := []int32{0}
+	previousBucket := int32(-1)
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := range b.N {
+		bucket := int32(i) % bucketNum
+		if phased {
+			phase := min(3, i*4/max(1, b.N))
+			bucket = [...]int32{0, bucketNum - 1, bucketNum / 2, 1}[phase]
+		}
+		if previousBucket != bucket {
+			if previousBucket >= 0 {
+				sels[previousBucket] = nil
+			}
+			sels[bucket] = oneRow
+			previousBucket = bucket
+		}
+		done, err := writeSelectionsForTest(sp, input, sels, proc)
+		if err != nil {
+			b.Fatal(err)
+		}
+		if !done {
+			b.Fatal("recycle benchmark was backpressured")
+		}
+		output := sp.getLastBatch(bucket)
+		if output == nil {
+			b.Fatal("recycle benchmark produced no output")
+		}
+		output.CleanOnlyData()
+		sp.putBatchToPool(output, proc.Mp())
+	}
+	b.StopTimer()
+}
+
+func benchmarkShufflePoolTryWriteParallel(b *testing.B) {
+	const workers = 16
+	proc := testutil.NewProcessWithMPool(b, "", mpool.MustNewZero())
+	defer proc.Free()
+	sp := NewShufflePool(128, workers, false)
+	defer sp.abort(proc.Mp())
+	fillShufflePoolRecycleCache(b, sp, proc, 1)
+
+	input := testutil.NewBatch(
+		[]types.Type{types.T_int64.ToType()}, false, 1, proc.Mp())
+	defer input.Clean(proc.Mp())
+	selsByWorker := make([][][]int32, workers)
+	for worker := range workers {
+		selsByWorker[worker] = make([][]int32, sp.bucketNum)
+		selsByWorker[worker][worker] = []int32{0}
+	}
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	var wg sync.WaitGroup
+	wg.Add(workers)
+	for worker := range workers {
+		iterations := b.N / workers
+		if worker < b.N%workers {
+			iterations++
+		}
+		go func(bucket int32, iterations int) {
+			defer wg.Done()
+			for range iterations {
+				done, err := writeSelectionsForTest(
+					sp, input, selsByWorker[bucket], proc)
+				if err != nil {
+					panic(err)
+				}
+				if !done {
+					panic("parallel recycle benchmark was backpressured")
+				}
+				output := sp.getLastBatch(bucket)
+				if output == nil {
+					panic("parallel recycle benchmark produced no output")
+				}
+				output.CleanOnlyData()
+				sp.putBatchToPool(output, proc.Mp())
+			}
+		}(int32(worker), iterations)
+	}
+	wg.Wait()
+	b.StopTimer()
 }
 
 func TestShufflePoolPeakIsReportedByExactlyOneHolder(t *testing.T) {
@@ -342,6 +732,38 @@ func TestShufflePoolPeakIsReportedByExactlyOneHolder(t *testing.T) {
 	require.Equal(t, int64(0), proc.Mp().CurrNB())
 }
 
+func TestShufflePoolMemoryAccountingAcrossShards(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+	sp := NewShufflePool(64, 64, false)
+
+	batches := make([]*batch.Batch, 64)
+	var expected int64
+	for i := range batches {
+		batches[i] = batch.NewOffHeapWithSize(1)
+		batches[i].Vecs[0] = vector.NewOffHeapVecWithType(types.T_int64.ToType())
+		require.NoError(t, batches[i].Vecs[0].PreExtend(128+i, proc.Mp()))
+		batches[i].ShuffleIDX = int32(i)
+		expected += int64(batches[i].Allocated())
+	}
+
+	var wg sync.WaitGroup
+	wg.Add(len(batches))
+	for _, bat := range batches {
+		go func() {
+			defer wg.Done()
+			sp.putBatchToPool(bat, proc.Mp())
+		}()
+	}
+	wg.Wait()
+
+	require.Equal(t, expected, sp.current.Load())
+	require.Equal(t, expected, sp.memoryPeak())
+	sp.abort(proc.Mp())
+	require.Zero(t, sp.current.Load())
+	require.Equal(t, int64(0), proc.Mp().CurrNB())
+}
+
 func TestShufflePoolRetainsOwnershipWhenBatchSetWriteFails(t *testing.T) {
 	for _, tc := range []struct {
 		name  string
@@ -355,7 +777,7 @@ func TestShufflePoolRetainsOwnershipWhenBatchSetWriteFails(t *testing.T) {
 				return err
 			},
 			check: func(t *testing.T, sp *ShufflePool) {
-				require.Len(t, sp.batchPool, 1)
+				require.Equal(t, 1, sp.batchPoolLength())
 				require.Zero(t, sp.batchSets[0].Length())
 			},
 		},
@@ -370,7 +792,7 @@ func TestShufflePoolRetainsOwnershipWhenBatchSetWriteFails(t *testing.T) {
 				return err
 			},
 			check: func(t *testing.T, sp *ShufflePool) {
-				require.Empty(t, sp.batchPool)
+				require.Zero(t, sp.batchPoolLength())
 				require.Equal(t, 1, sp.batchSets[0].Length())
 			},
 		},

@@ -301,6 +301,116 @@ func TestStartWriteLoopCompletesBatchOnWriteFailure(t *testing.T) {
 	require.Equal(t, int32(2), released.Load())
 }
 
+func TestStartWriteLoopFlushFailureOnlyCompletesWrittenFutures(t *testing.T) {
+	s := &server{
+		name:     "test",
+		metrics:  newServerMetrics("test"),
+		logger:   logutil.GetPanicLoggerWithLevel(zap.FatalLevel),
+		stopper:  stopper.NewStopper("test"),
+		sessions: &sync.Map{},
+	}
+	s.adjust()
+	s.options.batchSendSize = 2
+	defer s.stopper.Stop()
+
+	var filterMu sync.Mutex
+	filterCalls := make(map[uint64]int)
+	lateAccess := false
+	s.options.filter = func(message Message) bool {
+		filterMu.Lock()
+		defer filterMu.Unlock()
+		if message == nil {
+			lateAccess = true
+			return false
+		}
+		id := message.GetID()
+		filterCalls[id]++
+		return id != 1
+	}
+
+	conn := newTestIOSession(nil, io.ErrClosedPipe)
+	cs := newClientSession(
+		s.metrics,
+		conn,
+		newTestCodec(),
+		func() *Future { return newFuture(nil) },
+		nil,
+	)
+	released := make(chan uint64, 2)
+	newResponse := func(id uint64) *Future {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		t.Cleanup(cancel)
+		f := newFuture(func(f *Future) {
+			f.reset()
+			released <- id
+		})
+		f.init(RPCMessage{Ctx: ctx, Message: newTestMessage(id)})
+		f.ref()
+		f.Close()
+		return f
+	}
+	cs.c <- newResponse(1)
+	cs.c <- newResponse(2)
+
+	require.NoError(t, s.startWriteLoop(cs))
+	for range 2 {
+		select {
+		case <-released:
+		case <-time.After(time.Second):
+			t.Fatal("future was not released after batch flush failure")
+		}
+	}
+	s.stopper.Stop()
+
+	filterMu.Lock()
+	defer filterMu.Unlock()
+	require.False(t, lateAccess, "flush failure accessed a future after it was released")
+	require.Equal(t, map[uint64]int{1: 1, 2: 1}, filterCalls)
+}
+
+func TestStartWriteLoopUsesEarliestBatchDeadline(t *testing.T) {
+	s := &server{
+		name:     "test",
+		metrics:  newServerMetrics("test"),
+		logger:   logutil.GetPanicLoggerWithLevel(zap.FatalLevel),
+		stopper:  stopper.NewStopper("test"),
+		sessions: &sync.Map{},
+	}
+	s.adjust()
+	s.options.batchSendSize = 2
+	defer s.stopper.Stop()
+
+	conn := newTestIOSession(nil, nil)
+	cs := newClientSession(
+		s.metrics,
+		conn,
+		newTestCodec(),
+		func() *Future { return newFuture(nil) },
+		nil,
+	)
+
+	newResponse := func(id uint64, timeout time.Duration) *Future {
+		ctx, cancel := context.WithTimeout(context.Background(), timeout)
+		t.Cleanup(cancel)
+		f := newFuture(nil)
+		f.init(RPCMessage{Ctx: ctx, Message: newTestMessage(id)})
+		f.ref()
+		t.Cleanup(f.Close)
+		return f
+	}
+	cs.c <- newResponse(1, 3*time.Second)
+	cs.c <- newResponse(2, time.Second)
+
+	require.NoError(t, s.startWriteLoop(cs))
+	select {
+	case timeout := <-conn.flushC:
+		require.Positive(t, timeout)
+		require.LessOrEqual(t, timeout, time.Second)
+	case <-time.After(time.Second):
+		t.Fatal("server writer did not flush the queued batch")
+	}
+}
+
 func TestStreamServer(t *testing.T) {
 	testRPCServer(t, func(rs *server) {
 		ctx, cancel := context.WithTimeout(context.TODO(), time.Second*10)
@@ -349,6 +459,7 @@ type testIOSession struct {
 	writeErrAt int32
 	writeCount atomic.Int32
 	flushErr   error
+	flushC     chan time.Duration
 }
 
 func newTestIOSession(writeErr, flushErr error) *testIOSession {
@@ -365,6 +476,7 @@ func newTestIOSessionWithWriteErrorAt(writeErrAt int32, writeErr, flushErr error
 		writeErr:   writeErr,
 		writeErrAt: writeErrAt,
 		flushErr:   flushErr,
+		flushC:     make(chan time.Duration, 1),
 	}
 }
 
@@ -381,11 +493,17 @@ func (s *testIOSession) Write(any, goetty.WriteOptions) error {
 	}
 	return nil
 }
-func (s *testIOSession) Flush(time.Duration) error { return s.flushErr }
-func (s *testIOSession) RemoteAddress() string     { return "" }
-func (s *testIOSession) RawConn() net.Conn         { return nil }
-func (s *testIOSession) UseConn(net.Conn)          {}
-func (s *testIOSession) OutBuf() *buf.ByteBuf      { return s.out }
+func (s *testIOSession) Flush(timeout time.Duration) error {
+	select {
+	case s.flushC <- timeout:
+	default:
+	}
+	return s.flushErr
+}
+func (s *testIOSession) RemoteAddress() string { return "" }
+func (s *testIOSession) RawConn() net.Conn     { return nil }
+func (s *testIOSession) UseConn(net.Conn)      {}
+func (s *testIOSession) OutBuf() *buf.ByteBuf  { return s.out }
 
 func TestStreamServerWithCache(t *testing.T) {
 	testRPCServer(t, func(rs *server) {
@@ -686,6 +804,12 @@ func TestFinishStreamRacesWithSessionClose(t *testing.T) {
 }
 
 func TestServerTimeoutCacheWillRemoved(t *testing.T) {
+	type cacheObservation struct {
+		cache   MessageCache
+		session ClientSession
+	}
+
+	scanDone := make(chan struct{}, 1)
 	testRPCServer(t, func(rs *server) {
 		ctx, cancel := context.WithTimeout(context.TODO(), time.Second*10)
 		defer cancel()
@@ -695,40 +819,286 @@ func TestServerTimeoutCacheWillRemoved(t *testing.T) {
 			assert.NoError(t, c.Close())
 		}()
 
-		cc := make(chan MessageCache, 1)
+		cacheCreated := make(chan cacheObservation, 1)
 		rs.RegisterRequestHandler(func(ctx context.Context, msg RPCMessage, seq uint64, cs ClientSession) error {
 			request := msg.Message
 			cache, err := cs.CreateCache(ctx, request.GetID())
 			if err != nil {
 				return err
 			}
-			cc <- cache
-			return cache.Add(request)
+			if err := cache.Add(request); err != nil {
+				return err
+			}
+			select {
+			case cacheCreated <- cacheObservation{
+				cache:   cache,
+				session: cs,
+			}:
+				return nil
+			case <-ctx.Done():
+				return ctx.Err()
+			}
 		})
 
 		st, err := c.NewStream(context.Background(), testAddr, false)
-		assert.NoError(t, err)
+		require.NoError(t, err)
 		defer func() {
 			assert.NoError(t, st.Close(false))
 		}()
 
 		// Stream.Send requires request.GetID() == stream.ID(); stream id is assigned by backend at NewStream().
-		assert.NoError(t, st.Send(ctx, newTestMessage(st.ID())))
-		cache := <-cc
-		v, ok := rs.sessions.Load(uint64(1))
-		if ok {
-			cs := v.(*clientSession)
-			for {
-				cs.mu.RLock()
-				if len(cs.mu.caches) == 0 {
-					cs.mu.RUnlock()
-					_, err := cache.Len()
-					require.Error(t, err, "expired cache must be closed before removal")
-					return
+		require.NoError(t, st.Send(ctx, newTestMessage(st.ID())))
+		var observation cacheObservation
+		select {
+		case observation = <-cacheCreated:
+		case <-ctx.Done():
+			t.Fatal("server handler did not create the message cache")
+		}
+	waitForRetirement:
+		for {
+			select {
+			case <-scanDone:
+				cached, err := observation.session.GetCache(st.ID())
+				require.NoError(t, err)
+				if cached == nil {
+					break waitForRetirement
 				}
-				cs.mu.RUnlock()
+			case <-ctx.Done():
+				t.Fatal("message cache was not retired by timeout scans")
 			}
 		}
+		_, err = observation.cache.Len()
+		require.Error(t, err, "expired cache must be closed before removal")
+	}, WithServerMessageCacheScanHookForTesting(func() {
+		select {
+		case scanDone <- struct{}{}:
+		default:
+		}
+	}))
+}
+
+type cacheRetirementObserver struct {
+	session           *clientSession
+	cacheID           uint64
+	registeredAtClose chan bool
+}
+
+func (c *cacheRetirementObserver) Add(Message) error           { return nil }
+func (c *cacheRetirementObserver) Len() (int, error)           { return 0, nil }
+func (c *cacheRetirementObserver) Pop() (Message, bool, error) { return nil, false, nil }
+
+func (c *cacheRetirementObserver) Close() {
+	_, registered := c.session.mu.caches[c.cacheID]
+	c.registeredAtClose <- registered
+}
+
+func TestMessageCacheRetirementLinearizesBeforeRemoval(t *testing.T) {
+	newSessionWithCache := func(t *testing.T, ctx context.Context) (*clientSession, *cacheRetirementObserver) {
+		t.Helper()
+		cs := newClientSession(nil, newTestIOSession(nil, nil), nil, nil, nil)
+		t.Cleanup(func() { require.NoError(t, cs.Close()) })
+		cache := &cacheRetirementObserver{
+			session:           cs,
+			cacheID:           1,
+			registeredAtClose: make(chan bool, 1),
+		}
+		cs.mu.caches[1] = cacheWithContext{ctx: ctx, cache: cache}
+		return cs, cache
+	}
+	assertLinearized := func(t *testing.T, cache *cacheRetirementObserver) {
+		t.Helper()
+		select {
+		case registered := <-cache.registeredAtClose:
+			require.True(t, registered, "cache was removed before MessageCache.Close ran")
+		case <-time.After(time.Second):
+			t.Fatal("cache retirement did not close the cache")
+		}
+	}
+
+	t.Run("explicit delete", func(t *testing.T) {
+		cs, cache := newSessionWithCache(t, context.Background())
+		cs.DeleteCache(1)
+		assertLinearized(t, cache)
+		cached, err := cs.GetCache(1)
+		require.NoError(t, err)
+		require.Nil(t, cached)
+		require.NoError(t, cs.Close())
+	})
+
+	t.Run("session close", func(t *testing.T) {
+		cs, cache := newSessionWithCache(t, context.Background())
+		require.NoError(t, cs.Close())
+		assertLinearized(t, cache)
+	})
+
+	t.Run("request timeout", func(t *testing.T) {
+		ctx, expire := context.WithCancel(context.Background())
+		cs, cache := newSessionWithCache(t, ctx)
+		scanDone := make(chan struct{}, 1)
+		cs.messageCacheScanHook = func() { scanDone <- struct{}{} }
+		cs.startCheckCacheTimeout()
+		expire()
+		select {
+		case <-scanDone:
+		case <-time.After(2500 * time.Millisecond):
+			t.Fatal("message cache timeout scan did not complete")
+		}
+		assertLinearized(t, cache)
+		cached, err := cs.GetCache(1)
+		require.NoError(t, err)
+		require.Nil(t, cached)
+		require.NoError(t, cs.Close())
+	})
+}
+
+func TestCancelableMessageCacheLifecycle(t *testing.T) {
+	t.Run("delete", func(t *testing.T) {
+		cs := newClientSession(nil, newTestIOSession(nil, nil), nil, nil, nil)
+		var canceled atomic.Int32
+		cache, err := cs.CreateCacheWithCancel(
+			context.Background(),
+			1,
+			func() { canceled.Add(1) },
+		)
+		require.NoError(t, err)
+		require.NoError(t, cache.Add(newTestMessage(1)))
+		cs.DeleteCache(1)
+		require.Equal(t, int32(1), canceled.Load())
+		_, err = cache.Len()
+		require.Error(t, err)
+		require.NoError(t, cs.Close())
+		require.Equal(t, int32(1), canceled.Load())
+	})
+
+	t.Run("session close", func(t *testing.T) {
+		cs := newClientSession(nil, newTestIOSession(nil, nil), nil, nil, nil)
+		var canceled atomic.Int32
+		cache, err := cs.CreateCacheWithCancel(
+			context.Background(),
+			1,
+			func() { canceled.Add(1) },
+		)
+		require.NoError(t, err)
+		require.NoError(t, cs.Close())
+		require.Equal(t, int32(1), canceled.Load())
+		_, err = cache.Len()
+		require.Error(t, err)
+	})
+
+	t.Run("all fragments", func(t *testing.T) {
+		cs := newClientSession(nil, newTestIOSession(nil, nil), nil, nil, nil)
+		var canceled atomic.Int32
+		for range 2 {
+			_, err := cs.CreateCacheWithCancel(
+				context.Background(),
+				1,
+				func() { canceled.Add(1) },
+			)
+			require.NoError(t, err)
+		}
+		cs.DeleteCache(1)
+		require.Equal(t, int32(2), canceled.Load())
+		require.NoError(t, cs.Close())
+	})
+
+	t.Run("request timeout", func(t *testing.T) {
+		cs := newClientSession(nil, newTestIOSession(nil, nil), nil, nil, nil)
+		ctx, expire := context.WithCancel(context.Background())
+		scanDone := make(chan struct{}, 1)
+		cs.messageCacheScanHook = func() { scanDone <- struct{}{} }
+		var canceled atomic.Int32
+		cache, err := cs.CreateCacheWithCancel(
+			ctx,
+			1,
+			func() { canceled.Add(1) },
+		)
+		require.NoError(t, err)
+		expire()
+		select {
+		case <-scanDone:
+		case <-time.After(2500 * time.Millisecond):
+			t.Fatal("message cache timeout scan did not complete")
+		}
+		require.Equal(t, int32(1), canceled.Load())
+		_, err = cache.Len()
+		require.Error(t, err)
+		require.NoError(t, cs.Close())
+		require.Equal(t, int32(1), canceled.Load())
+	})
+}
+
+func TestCancelableMessageCacheCallbacksCanReenterSession(t *testing.T) {
+	assertReentrantCancel := func(
+		t *testing.T,
+		cs *clientSession,
+		trigger func(),
+	) {
+		t.Helper()
+		callbackDone := make(chan struct{})
+		cacheClosed := make(chan error, 1)
+		var cache MessageCache
+		cache, err := cs.CreateCacheWithCancel(
+			context.Background(),
+			1,
+			func() {
+				_, err := cache.Len()
+				cacheClosed <- err
+				_, _ = cs.GetCache(1)
+				close(callbackDone)
+			},
+		)
+		require.NoError(t, err)
+		triggerDone := make(chan struct{})
+		go func() {
+			trigger()
+			close(triggerDone)
+		}()
+		select {
+		case <-callbackDone:
+		case <-time.After(time.Second):
+			t.Fatal("cache cancel callback deadlocked while re-entering the session")
+		}
+		require.Error(t, <-cacheClosed, "cache must be closed before cancellation callbacks run")
+		select {
+		case <-triggerDone:
+		case <-time.After(time.Second):
+			t.Fatal("cache cleanup did not return after the callback completed")
+		}
+	}
+
+	t.Run("delete", func(t *testing.T) {
+		cs := newClientSession(nil, newTestIOSession(nil, nil), nil, nil, nil)
+		assertReentrantCancel(t, cs, func() { cs.DeleteCache(1) })
+		require.NoError(t, cs.Close())
+	})
+
+	t.Run("session close", func(t *testing.T) {
+		cs := newClientSession(nil, newTestIOSession(nil, nil), nil, nil, nil)
+		assertReentrantCancel(t, cs, func() { _ = cs.Close() })
+		require.NoError(t, cs.Close())
+	})
+
+	t.Run("request timeout", func(t *testing.T) {
+		cs := newClientSession(nil, newTestIOSession(nil, nil), nil, nil, nil)
+		ctx, expire := context.WithCancel(context.Background())
+		callbackDone := make(chan struct{})
+		cacheClosed := make(chan error, 1)
+		var cache MessageCache
+		cache, err := cs.CreateCacheWithCancel(ctx, 1, func() {
+			_, err := cache.Len()
+			cacheClosed <- err
+			_, _ = cs.GetCache(1)
+			close(callbackDone)
+		})
+		require.NoError(t, err)
+		expire()
+		select {
+		case <-callbackDone:
+		case <-time.After(2500 * time.Millisecond):
+			t.Fatal("timeout cancel callback deadlocked while re-entering the session")
+		}
+		require.Error(t, <-cacheClosed, "cache must be closed before cancellation callbacks run")
+		require.NoError(t, cs.Close())
 	})
 }
 

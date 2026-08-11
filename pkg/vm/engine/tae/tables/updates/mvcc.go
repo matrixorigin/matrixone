@@ -315,6 +315,9 @@ func (n *AppendMVCCHandle) PrepareCompact() bool {
 }
 
 func (n *AppendMVCCHandle) GetLatestAppendPrepareTSLocked() types.TS {
+	if n.appends == nil || n.appends.IsEmpty() {
+		return types.TS{}
+	}
 	return n.appends.GetUpdateNodeLocked().Prepare
 }
 func (n *AppendMVCCHandle) GetMeta() *catalog.ObjectEntry {
@@ -331,13 +334,10 @@ func (n *AppendMVCCHandle) allAppendsCommittedLocked() bool {
 			meta.GetDeleteAt().ToString())
 		return false
 	}
+	if n.appends.IsEmpty() {
+		return true
+	}
 	return n.appends.IsCommitted()
-}
-
-// DeleteAppendNodeLocked deletes the appendnode from the append list.
-// it is called when txn of the appendnode is aborted.
-func (n *AppendMVCCHandle) DeleteAppendNodeLocked(node *AppendNode) {
-	n.appends.DeleteNode(node)
 }
 
 func (n *AppendMVCCHandle) SetAppendListener(l func(txnif.AppendNode) error) {

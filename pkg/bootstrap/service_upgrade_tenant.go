@@ -128,6 +128,19 @@ func (s *service) MaybeUpgradeTenant(
 	return upgraded, nil
 }
 
+// shouldRunTenantUpgrade keeps the normal version-transition behavior (a tenant
+// already at the target version is skipped), but reruns an offset-only upgrade.
+// mo_account.create_version does not store a version offset, so FromVersion ==
+// ToVersion is the signal that an equal-version tenant still needs this step.
+func shouldRunTenantUpgrade(createVersion string, upgrade versions.VersionUpgrade) bool {
+	tenantVersionCompare := versions.Compare(createVersion, upgrade.ToVersion)
+	if tenantVersionCompare < 0 {
+		return true
+	}
+	return tenantVersionCompare == 0 &&
+		versions.Compare(upgrade.FromVersion, upgrade.ToVersion) == 0
+}
+
 // asyncUpgradeTenantTask is a task to execute the tenant upgrade logic in
 // parallel based on the grouped tenant batch.
 func (s *service) asyncUpgradeTenantTask(ctx context.Context) {
@@ -247,8 +260,7 @@ func (s *service) asyncUpgradeTenantTask(ctx context.Context) {
 						zap.String("tenant-version", createVersion),
 						zap.String("upgrade", upgrade.String()))
 
-					// createVersion >= upgrade.ToVersion already upgrade
-					if versions.Compare(createVersion, upgrade.ToVersion) > 0 {
+					if !shouldRunTenantUpgrade(createVersion, upgrade) {
 						continue
 					}
 

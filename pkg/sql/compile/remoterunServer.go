@@ -19,6 +19,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
+	"math"
 	"sync"
 	"time"
 
@@ -26,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/common/system"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -35,6 +38,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	qclient "github.com/matrixorigin/matrixone/pkg/queryservice/client"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
@@ -49,6 +53,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"go.uber.org/zap"
 )
@@ -111,6 +116,9 @@ func CnServerMessageHandler(
 	if msg.GetCmd() == pipeline.Method_PipelineStreamFinish {
 		return handlePipelineStreamFinish(ctx, msg, cs, messageAcquirer)
 	}
+	if msg.GetCmd() == pipeline.Method_PipelineBatchAck {
+		return handlePipelineBatchAck(msg, cs)
+	}
 
 	// prepare the receiver structure, just for easy using the `send` method.
 	receiver, err := newMessageReceiverOnServer(ctx, serverAddress, msg,
@@ -124,11 +132,18 @@ func CnServerMessageHandler(
 
 	finishNegotiated := false
 	if receiver.supportsFinishAck() {
-		lifecycle, err = registerPipelineStreamLifecycle(receiver.clientSession, receiver.messageId)
+		lifecycle, err = registerPipelineStreamLifecycle(
+			receiver.clientSession,
+			receiver.messageId,
+			newPipelineBatchFlow(
+				msg.GetRequestedBatchCreditCount(),
+				msg.GetRequestedBatchCreditBytes()))
 		finishNegotiated = err == nil
 		if err != nil {
 			return err
 		}
+		receiver.streamLifecycle = lifecycle
+		receiver.abortBatchFlowForPendingStop()
 		receiver.acceptedTeardownMode = pipeline.StreamTeardownMode_FinishAck
 	}
 
@@ -136,6 +151,20 @@ func CnServerMessageHandler(
 	// requested StopSending may make execution return an error, but its terminal
 	// response and FIN still need the same cleanup barrier.
 	handlerErr := handlePipelineMessage(&receiver)
+	if handlerErr == nil && lifecycle != nil && lifecycle.batchFlow != nil {
+		handlerErr = lifecycle.batchFlow.waitUntilDrained(
+			receiver.messageCtx,
+			receiver.connectionCtx,
+			func(count int, bytes uint64) {
+				logutil.Warn("pipeline batch drain delayed before terminal response",
+					zap.Uint64("stream-id", receiver.messageId),
+					zap.String("remote-address", receiver.clientSession.RemoteAddress()),
+					zap.String("query-id", receiver.procBuildHelper.id),
+					zap.String("statement-id", receiver.procBuildHelper.StmtId.String()),
+					zap.Int("outstanding-batches", count),
+					zap.Uint64("outstanding-bytes", bytes))
+			})
+	}
 	responseSent := false
 	if receiver.messageTyp != pipeline.Method_StopSending {
 		// stop message only close a running pipeline, there is no need to reply the finished-message.
@@ -186,7 +215,24 @@ func (receiver *messageReceiverOnServer) waitUntilDisconnectedOrCancelled() {
 	}
 }
 
-func handlePipelineMessage(receiver *messageReceiverOnServer) error {
+// abortBatchFlowForPendingStop closes the registration race with StopSending.
+// StopSending first publishes a colexec cancellation tombstone and then looks
+// up the lifecycle; registration publishes the lifecycle and then checks that
+// tombstone. Whichever message wins, one side observes the other side's state.
+func (receiver *messageReceiverOnServer) abortBatchFlowForPendingStop() {
+	if receiver.streamLifecycle == nil || receiver.colexecServer == nil {
+		return
+	}
+	if receiver.colexecServer.HasPendingPipelineCancellation(
+		receiver.clientSession, receiver.messageId,
+	) {
+		receiver.streamLifecycle.batchFlow.abort(
+			moerr.NewQueryInterrupted(receiver.messageCtx),
+		)
+	}
+}
+
+func handlePipelineMessage(receiver *messageReceiverOnServer) (err error) {
 
 	switch receiver.messageTyp {
 	case pipeline.Method_PrepareDoneNotifyMessage:
@@ -209,6 +255,14 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) error {
 			Uid:          receiver.messageUuid,
 			Cs:           receiver.clientSession,
 			Err:          make(chan error, 1),
+		}
+		if receiver.streamLifecycle != nil && receiver.streamLifecycle.batchFlow != nil {
+			flow := receiver.streamLifecycle.batchFlow
+			infoToDispatchOperator.BatchCredits, infoToDispatchOperator.ByteCredits = flow.accepted()
+			infoToDispatchOperator.ReserveBatch = func(ctx context.Context, size uint64) (uint64, error) {
+				return flow.reserve(ctx, receiver.connectionCtx, size)
+			}
+			infoToDispatchOperator.RollbackBatch = flow.rollback
 		}
 		receiver.colexecServer.RecordDispatchPipeline(receiver.clientSession, receiver.messageId, infoToDispatchOperator)
 
@@ -249,19 +303,108 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) error {
 		if errBuildCompile != nil {
 			return errBuildCompile
 		}
+		var allocationAttempt *statementAllocationAttempt
+		var allocationParticipant *remoteAllocationStatementParticipant
+		var allocationGroupKey string
+		var localAllocation resource.AllocationAccountTotals
+		var localAllocationQuality resource.QualityFlags
 		var runErr error
+		sharedMessageBoard := runCompile.MessageBoard
+		memoryPool := runCompile.proc.Mp()
+		statementGroupEnabled := len(runCompile.remoteFragmentCounts) > 0
+		participantFinished := false
+		// This outer defer is the last-resort owner for a participant if the
+		// normal terminal path itself panics. Keep the Compile alive until after
+		// this guard runs: Release can make the pooled object reachable by a new
+		// RPC while terminal cleanup still needs its stable attempt references.
 		defer func() {
+			recovered := recover()
+			defer runCompile.Release()
+			if allocationParticipant != nil && !participantFinished {
+				if allocationAttempt != nil {
+					runCompile.allocationAttempt = nil
+				}
+				allocationParticipant.stage(allocationAttempt, memoryPool)
+				cause := err
+				if recovered != nil {
+					cause = joinAllocationLifecycleErrors(
+						cause,
+						moerr.ConvertPanicError(receiver.messageCtx, recovered),
+					)
+				}
+				_, terminalErr := allocationParticipant.finish(cause)
+				err = joinAllocationLifecycleErrors(err, terminalErr)
+				participantFinished = true
+			}
+			if recovered != nil {
+				panic(recovered)
+			}
+		}()
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				err = joinAllocationLifecycleErrors(
+					err,
+					moerr.ConvertPanicError(receiver.messageCtx, recovered),
+				)
+			}
 			// Capture operator and descendant facts before cleanup. The MPool
 			// snapshot intentionally follows Compile.clear so temporary execution
 			// allocations are released before LiveBytesAtSeal is measured. The
 			// descendant snapshot is already reduced under AnalyzeModule's mutex;
 			// sender quiescence remains the lifecycle contract for this boundary.
-			localDelta := collectScopeResourceDelta(runCompile.scopes, receiver.cnInformation.cnAddr)
-			descendant := runCompile.anal.remoteResourceSummary()
-			expectedDirect := countExpectedRemoteScopes(runCompile.scopes, receiver.cnInformation.cnAddr)
-			memoryPool := runCompile.proc.Mp()
-			runCompile.clear()
-			localMemory, localMemoryQuality := memoryPool.ResourceSnapshot()
+			var localDelta resource.Delta
+			var descendant remoteResourceSnapshot
+			var expectedDirect uint64
+			err = joinAllocationLifecycleErrors(err, allocationLifecycleCall(func() error {
+				localDelta = collectScopeResourceDelta(
+					runCompile.scopes,
+					receiver.cnInformation.cnAddr,
+				)
+				descendant = runCompile.anal.remoteResourceSummary()
+				expectedDirect = countExpectedRemoteScopes(
+					runCompile.scopes,
+					receiver.cnInformation.cnAddr,
+				)
+				return nil
+			}))
+			var terminal remoteAllocationStatementTerminal
+			if allocationAttempt != nil {
+				runCompile.allocationAttempt = nil
+			}
+			allocationParticipant.stage(allocationAttempt, memoryPool)
+			err = joinAllocationLifecycleErrors(err, allocationLifecycleCall(func() error {
+				if statementGroupEnabled {
+					// The remote statement group, rather than any one fragment Compile,
+					// owns the shared multi-CN board. Detach it before clear resets the
+					// fragment-local Compile state. A fragment rejected before it joins a
+					// group is terminal for the statement, so it closes its unowned board.
+					if allocationParticipant == nil {
+						sharedMessageBoard.CloseAndDrain()
+					}
+					runCompile.MessageBoard = message.NewMessageBoard()
+					runCompile.proc.SetMessageBoard(runCompile.MessageBoard)
+				}
+				runCompile.clear()
+				return nil
+			}))
+			terminal, terminalErr := allocationParticipant.finish(err)
+			participantFinished = true
+			err = joinAllocationLifecycleErrors(err, terminalErr)
+			for _, snapshot := range terminal.allocation {
+				localAllocationQuality |= localAllocation.AddGeneration(
+					snapshot.Peak,
+					snapshot.Used,
+					snapshot.State == mpool.AllocationAccountTerminalValid,
+				)
+			}
+			var localMemory resource.MemoryDomainSummary
+			var localMemoryQuality resource.QualityFlags
+			if !statementGroupEnabled {
+				err = joinAllocationLifecycleErrors(err, allocationLifecycleCall(func() error {
+					localMemory, localMemoryQuality = memoryPool.ResourceSnapshot()
+					return nil
+				}))
+			}
 			aggregate := composeRemoteResourceAggregate(
 				localDelta,
 				localMemory,
@@ -269,13 +412,60 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) error {
 				descendant,
 				expectedDirect,
 			)
+			aggregate.Delta.Quality |= localAllocationQuality |
+				resource.MergeAllocationAccountTotals(
+					&aggregate.Allocation,
+					localAllocation,
+				)
+			aggregate.Delta.Quality |= terminal.quality |
+				resource.MergeMemoryTotals(&aggregate.Memory, terminal.memory)
+			if allocationParticipant != nil {
+				addRemoteAllocationGroupSignal(
+					&aggregate,
+					allocationGroupKey,
+					terminal.complete,
+				)
+			}
 			receiver.resourceDelta = aggregate.Delta
 			receiver.resourceMemory = aggregate.Memory
+			receiver.resourceAllocation = aggregate.Allocation
 			receiver.resourceMissingFragments = aggregate.MissingFragmentCount
 			receiver.resourceMissingMemoryDomains = aggregate.MissingMemoryDomainCount
-
-			runCompile.Release()
+			receiver.resourcePendingAllocationGroups = aggregate.PendingAllocationGroups
+			receiver.resourceCompletedAllocationGroups = aggregate.CompletedAllocationGroups
 		}()
+		if statementGroupEnabled {
+			expectedFragments, ok := runCompile.remoteFragmentCounts[runCompile.addr]
+			if !ok || expectedFragments == 0 {
+				return errors.Join(
+					mpool.ErrAllocationAccountInvariant,
+					moerr.NewInternalErrorNoCtx(
+						"remote fragment topology has no local CN entry",
+					),
+				)
+			}
+			// Capture the function value for this execution generation. Both the
+			// Compile and Process fields are reset after an early sibling returns;
+			// looking up proc.Cancel later could cancel an unrelated generation.
+			remoteCancel := runCompile.proc.Cancel
+			allocationGroupKey = remoteAllocationStatementGroupKey(
+				runCompile.remoteExecutionID,
+				runCompile.addr,
+			)
+			allocationParticipant, runErr = acquireRemoteAllocationStatementParticipant(
+				allocationGroupKey,
+				runCompile.MessageBoard,
+				expectedFragments,
+				func(cause error) {
+					if remoteCancel != nil {
+						remoteCancel(cause)
+					}
+				},
+			)
+			if runErr != nil {
+				return runErr
+			}
+		}
 
 		// decode and running the pipeline.
 		s, runErr := decodeScope(receiver.scopeData, runCompile.proc, true, runCompile.e)
@@ -299,6 +489,23 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) error {
 		}
 
 		runCompile.scopes = []*Scope{s}
+		if runErr = validateRemoteAllocationTopologyCapability(
+			runCompile.scopes,
+			runCompile.remoteFragmentCounts,
+		); runErr != nil {
+			return runErr
+		}
+		if statementGroupEnabled {
+			runErr = runCompile.ensureAllocationAccountLifecycle(
+				func(mpool.AllocationAccountTerminalSnapshot) {},
+			)
+			if runErr == nil {
+				allocationAttempt, runErr = runCompile.beginAllocationAccountAttempt()
+			}
+		}
+		if runErr != nil {
+			return runErr
+		}
 		runCompile.InitPipelineContextToExecuteQuery()
 		normalizeRemoteDispatchReceiverAddresses(s, runCompile.addr)
 
@@ -326,6 +533,11 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) error {
 
 	case pipeline.Method_StopSending:
 		receiver.colexecServer.CancelPipelineSending(receiver.clientSession, receiver.messageId)
+		abortPipelineBatchFlow(
+			receiver.clientSession,
+			receiver.messageId,
+			moerr.NewQueryInterrupted(receiver.messageCtx),
+		)
 
 	default:
 		panic(fmt.Sprintf("unknown pipeline message type %d.", receiver.messageTyp))
@@ -523,9 +735,14 @@ type processHelper struct {
 	txnClient   client.TxnClient
 	sessionInfo process.SessionInfo
 	//analysisNodeList []int32
-	StmtId        uuid.UUID
-	prepareParams pipeline.PrepareParamInfo
-	affectedRows  int64
+	StmtId                 uuid.UUID
+	statementRuntimeIgnore bool
+	planSnapshotTS         timestamp.Timestamp
+	hasPlanSnapshotTS      bool
+	prepareParams          pipeline.PrepareParamInfo
+	affectedRows           int64
+	remoteFragmentCounts   map[string]uint32
+	remoteExecutionID      uuid.UUID
 }
 
 // messageReceiverOnServer supported a series methods to write back results.
@@ -550,15 +767,19 @@ type messageReceiverOnServer struct {
 
 	requestedTeardownMode pipeline.StreamTeardownMode
 	acceptedTeardownMode  pipeline.StreamTeardownMode
+	streamLifecycle       *pipelineStreamLifecycle
 
 	colexecServer *colexec.Server
 
 	// result.
-	phyPlan                      *models.PhyPlan
-	resourceDelta                resource.Delta
-	resourceMemory               resource.MemoryTotals
-	resourceMissingFragments     uint64
-	resourceMissingMemoryDomains uint64
+	phyPlan                           *models.PhyPlan
+	resourceDelta                     resource.Delta
+	resourceMemory                    resource.MemoryTotals
+	resourceAllocation                resource.AllocationAccountTotals
+	resourceMissingFragments          uint64
+	resourceMissingMemoryDomains      uint64
+	resourcePendingAllocationGroups   []remoteAllocationGroupPending
+	resourceCompletedAllocationGroups []string
 }
 
 func newMessageReceiverOnServer(
@@ -643,13 +864,25 @@ func (receiver *messageReceiverOnServer) acquireMessage() (*pipeline.Message, er
 		return nil, moerr.NewInternalError(receiver.messageCtx, "get a message with wrong type.")
 	}
 	message.SetID(receiver.messageId)
+	if receiver.streamLifecycle != nil {
+		count, bytes := receiver.streamLifecycle.batchFlow.accepted()
+		message.AcceptedBatchCreditCount = count
+		message.AcceptedBatchCreditBytes = bytes
+	}
 	return message, nil
 }
 
 // newCompile make and return a new compile to run a pipeline.
 func (receiver *messageReceiverOnServer) newCompile() (*Compile, error) {
-	// compile is almost surely wanting a small or middle pool.  Later.
-	mp, err := mpool.NewMPool("compile", 0, mpool.NoFixed)
+	// A remote compile used to have an unlimited local pool. HashBuild could
+	// therefore grow until the CN was killed even though the process limitation
+	// was already present on the wire. Keep a finite physical backstop while the
+	// finer-grained HashBuild admission layer decides whether to spill or fail.
+	poolCap, err := resolveRemoteCompileMPoolCap(receiver.procBuildHelper.lim)
+	if err != nil {
+		return nil, err
+	}
+	mp, err := mpool.NewMPool("compile", poolCap, mpool.NoFixed)
 	if err != nil {
 		return nil, err
 	}
@@ -674,6 +907,19 @@ func (receiver *messageReceiverOnServer) newCompile() (*Compile, error) {
 	proc.Base.Lim = pHelper.lim
 	proc.Base.SessionInfo = pHelper.sessionInfo
 	proc.Base.SessionInfo.StorageEngine = cnInfo.storeEngine
+	if pHelper.hasPlanSnapshotTS {
+		proc.SetPlanSnapshotTS(pHelper.planSnapshotTS)
+	}
+	prepareParamMetadata, err := process.PrepareParamMetadataForRemote(
+		proc.GetService(),
+		int(pHelper.prepareParams.Length),
+		pHelper.prepareParams.IsBin,
+	)
+	if err != nil {
+		proc.Free()
+		mpool.DeleteMPool(mp)
+		return nil, err
+	}
 	if pHelper.prepareParams.Length > 0 {
 		prepareParams, err := vector.NewVecWithDataCopy(
 			types.T_text.ToType(),
@@ -692,7 +938,7 @@ func (receiver *messageReceiverOnServer) newCompile() (*Compile, error) {
 				prepareParams.GetNulls().Add(uint64(i))
 			}
 		}
-		proc.SetOwnedPrepareParamsWithIsBin(prepareParams, append([]bool(nil), pHelper.prepareParams.IsBin...))
+		proc.SetOwnedPrepareParamsWithIsBin(prepareParams, prepareParamMetadata)
 	}
 	// Carry ROW_COUNT() state so row_count() pushed down to this remote CN reads
 	// the previous statement's affected rows instead of the default 0.
@@ -700,16 +946,24 @@ func (receiver *messageReceiverOnServer) newCompile() (*Compile, error) {
 	{
 		txn := proc.GetTxnOperator().Txn()
 		txnId := txn.GetID()
-		proc.Base.StmtProfile = process.NewStmtProfile(uuid.UUID(txnId), pHelper.StmtId)
+		stmtProfile := process.NewStmtProfile(uuid.UUID(txnId), pHelper.StmtId)
+		stmtProfile.SetStatementRuntimeProfile("", "", pHelper.statementRuntimeIgnore)
+		proc.Base.StmtProfile = stmtProfile
 	}
 
 	c := allocateNewCompile(proc)
 	c.execType = plan2.ExecTypeAP_MULTICN
 	c.e = cnInfo.storeEngine
-	c.MessageBoard = c.MessageBoard.SetMultiCN(c.GetMessageCenter(), c.proc.GetStmtProfile().GetStmtId())
+	messageBoardID := remoteMessageBoardID(
+		c.proc.GetStmtProfile().GetStmtId(),
+		pHelper.remoteExecutionID,
+	)
+	c.MessageBoard = c.MessageBoard.SetMultiCN(c.GetMessageCenter(), messageBoardID)
 	c.proc.SetMessageBoard(c.MessageBoard)
 	c.anal = newAnalyzeModule()
 	c.addr = receiver.cnInformation.cnAddr
+	c.remoteFragmentCounts = maps.Clone(pHelper.remoteFragmentCounts)
+	c.remoteExecutionID = pHelper.remoteExecutionID
 
 	// a method to send back.
 	c.execType = plan2.ExecTypeAP_MULTICN
@@ -718,6 +972,51 @@ func (receiver *messageReceiverOnServer) newCompile() (*Compile, error) {
 	}
 
 	return c, nil
+}
+
+func resolveRemoteCompileMPoolCap(lim process.Limitation) (int64, error) {
+	globalCap := uint64(0)
+	if cap := mpool.GlobalCap(); cap > 0 && cap < mpool.PB {
+		globalCap = uint64(cap)
+	}
+	fileCacheHint := uint64(0)
+	if hint := fileservice.GlobalMemoryCacheSizeHint.Load(); hint > 0 {
+		fileCacheHint = uint64(hint)
+	}
+	return resolveRemoteCompileMPoolCapFrom(lim, system.CgroupMemoryLimit(), system.MemoryTotal(), globalCap, fileCacheHint)
+}
+
+func resolveRemoteCompileMPoolCapFrom(lim process.Limitation, cgroupLimit, memoryTotal, globalCap, fileCacheHint uint64) (int64, error) {
+	effective := uint64(0)
+	for _, candidate := range []uint64{cgroupLimit, memoryTotal, globalCap} {
+		if candidate == 0 || candidate == math.MaxUint64 {
+			continue
+		}
+		if effective == 0 || candidate < effective {
+			effective = candidate
+		}
+	}
+	if effective == 0 {
+		return 0, process.ErrHashBuildCeilingMissing
+	}
+	reserve := effective / 10
+	if reserve < 256*mpool.MB {
+		reserve = 256 * mpool.MB
+	}
+	if fileCacheHint > reserve {
+		reserve = fileCacheHint
+	}
+	if reserve >= effective {
+		return 0, moerr.NewInternalErrorNoCtx("remote compile memory ceiling is too small")
+	}
+	cap := effective - reserve
+	if lim.Size > 0 && uint64(lim.Size) < cap {
+		cap = uint64(lim.Size)
+	}
+	if cap > uint64(math.MaxInt64) {
+		return 0, moerr.NewInternalErrorNoCtx("remote compile memory cap exceeds int64")
+	}
+	return int64(cap), nil
 }
 
 func (receiver *messageReceiverOnServer) sendError(
@@ -751,6 +1050,29 @@ func (receiver *messageReceiverOnServer) sendBatch(
 		return err
 	}
 
+	var batchSequence uint64
+	batchSent := false
+	flow := (*pipelineBatchFlow)(nil)
+	if receiver.streamLifecycle != nil {
+		flow = receiver.streamLifecycle.batchFlow
+	}
+	if flow != nil {
+		flow.sendMu.Lock()
+		defer flow.sendMu.Unlock()
+		batchSequence, err = flow.reserve(
+			receiver.messageCtx,
+			receiver.connectionCtx,
+			uint64(len(data)))
+		if err != nil {
+			return err
+		}
+		defer func() {
+			if !batchSent {
+				flow.rollback(batchSequence)
+			}
+		}()
+	}
+
 	dataLen := len(data)
 	if dataLen <= receiver.maxMessageSize {
 		m, errA := receiver.acquireMessage()
@@ -760,7 +1082,10 @@ func (receiver *messageReceiverOnServer) sendBatch(
 		m.SetMessageType(pipeline.Method_BatchMessage)
 		m.SetData(data)
 		m.SetSid(pipeline.Status_Last)
-		return receiver.clientSession.Write(receiver.messageCtx, m)
+		m.BatchSequence = batchSequence
+		err = receiver.clientSession.Write(receiver.messageCtx, m)
+		batchSent = err == nil
+		return err
 	}
 	// if data is too large, cut and send
 	for start, end := 0, 0; start < dataLen; start = end {
@@ -777,11 +1102,13 @@ func (receiver *messageReceiverOnServer) sendBatch(
 		}
 		m.SetMessageType(pipeline.Method_BatchMessage)
 		m.SetData(data[start:end])
+		m.BatchSequence = batchSequence
 
-		if errW := receiver.clientSession.Write(receiver.messageCtx, m); errW != nil {
-			return errW
+		if err = receiver.clientSession.Write(receiver.messageCtx, m); err != nil {
+			return err
 		}
 	}
+	batchSent = true
 	return nil
 }
 
@@ -804,11 +1131,14 @@ func (receiver *messageReceiverOnServer) sendEndMessage() error {
 
 func (receiver *messageReceiverOnServer) setTerminalAnalysis(message *pipeline.Message) error {
 	envelope := remoteTerminalEnvelope{
-		TerminalResourceVersion:  remoteTerminalResourceVersion,
-		Delta:                    receiver.resourceDelta,
-		Memory:                   receiver.resourceMemory,
-		MissingFragmentCount:     receiver.resourceMissingFragments,
-		MissingMemoryDomainCount: receiver.resourceMissingMemoryDomains,
+		TerminalResourceVersion:   remoteTerminalResourceVersion,
+		Delta:                     receiver.resourceDelta,
+		Memory:                    receiver.resourceMemory,
+		Allocation:                receiver.resourceAllocation,
+		MissingFragmentCount:      receiver.resourceMissingFragments,
+		MissingMemoryDomainCount:  receiver.resourceMissingMemoryDomains,
+		PendingAllocationGroups:   receiver.resourcePendingAllocationGroups,
+		CompletedAllocationGroups: receiver.resourceCompletedAllocationGroups,
 	}
 	if receiver.phyPlan != nil {
 		envelope.PhyPlan = *receiver.phyPlan
@@ -829,12 +1159,29 @@ func generateProcessHelper(ctx context.Context, data []byte, cli client.TxnClien
 	}
 
 	result := processHelper{
-		id:           procInfo.Id,
-		lim:          process.ConvertToProcessLimitation(procInfo.Lim),
-		unixTime:     procInfo.UnixTime,
-		accountId:    procInfo.AccountId,
-		txnClient:    cli,
-		affectedRows: procInfo.AffectedRows,
+		id:                     procInfo.Id,
+		lim:                    process.ConvertToProcessLimitation(procInfo.Lim),
+		unixTime:               procInfo.UnixTime,
+		accountId:              procInfo.AccountId,
+		txnClient:              cli,
+		affectedRows:           procInfo.AffectedRows,
+		statementRuntimeIgnore: procInfo.StatementRuntimeIgnore,
+		remoteFragmentCounts:   maps.Clone(procInfo.RemoteFragmentCounts),
+	}
+	if procInfo.PlanSnapshotTs != nil {
+		result.planSnapshotTS = *procInfo.PlanSnapshotTs
+		result.hasPlanSnapshotTS = true
+	}
+	if len(procInfo.RemoteExecutionId) > 0 {
+		result.remoteExecutionID, err = uuid.FromBytes(procInfo.RemoteExecutionId)
+		if err != nil {
+			return processHelper{}, err
+		}
+	}
+	if (len(result.remoteFragmentCounts) == 0) != (result.remoteExecutionID == uuid.Nil) {
+		return processHelper{}, moerr.NewInternalErrorNoCtx(
+			"incomplete remote allocation lifecycle metadata",
+		)
 	}
 	result.txnOperator, err = cli.NewWithSnapshot(ctx, procInfo.Snapshot)
 	if err != nil {

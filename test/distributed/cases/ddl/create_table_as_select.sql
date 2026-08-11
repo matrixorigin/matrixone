@@ -486,22 +486,22 @@ select * from time07;
 drop table time07;
 
 drop table if exists test01;
-create table test01 as select col1 from time01 order by col1 nulls first;
+create table test01 as select col1 from time01 order by col1;
 select * from test01;
 drop table test01;
 
 drop table if exists test02;
-create table test02 as select * from time01 order by col2 desc nulls first;
+create table test02 as select * from time01 order by col2 is not null, col2 desc;
 select * from test02;
 drop table test02;
 
 drop table if exists test03;
-create table test03 as select * from time01 order by col2 desc nulls last;
+create table test03 as select * from time01 order by col2 desc;
 select * from test03;
 drop table test03;
 
 drop table if exists test04;
-create table test04 as select col1 from time01 order by col1 nulls first;
+create table test04 as select col1 from time01 order by col1;
 select * from test04;
 drop table test04;
 
@@ -1433,6 +1433,23 @@ CREATE TABLE tx1 (
 );
 
 -- error test
-create dynamic table dt_test as select * from tx1;
 drop table tx1;
 drop database db9;
+
+-- CTAS must preserve DATETIME(fsp) casts when it serializes the SELECT for the insert plan.
+drop database if exists repro_ctas_datetime6;
+create database repro_ctas_datetime6;
+use repro_ctas_datetime6;
+create table t as
+select cast('2025-05-06 07:08:09.123456' as datetime(6)) as dt_lit;
+select dt_lit from t;
+select table_name, column_name, column_type, is_nullable
+from information_schema.columns
+where table_schema = 'repro_ctas_datetime6'
+order by ordinal_position;
+create table t_union as
+select cast('2025-05-06 07:08:09.123456' as datetime(6)) as dt_lit
+union all
+select cast('2025-05-07 08:09:10.654321' as datetime(6));
+select dt_lit from t_union order by dt_lit;
+drop database repro_ctas_datetime6;

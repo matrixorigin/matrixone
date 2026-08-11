@@ -125,6 +125,14 @@ type RPCClient interface {
 	CloseBackend() error
 }
 
+// ControlClient exposes only the operations allowed on an isolated control
+// transport. It deliberately cannot carry application messages.
+type ControlClient interface {
+	Ping(ctx context.Context, backend string) error
+	CloseBackendFor(backend string) error
+	Close() error
+}
+
 // ClientSession client session, which is used to send the response message.
 // Note that it is not thread-safe.
 type ClientSession interface {
@@ -139,6 +147,8 @@ type ClientSession interface {
 	// CreateCache create a message cache using cache ID. Cache will removed if
 	// context is done.
 	CreateCache(ctx context.Context, cacheID uint64) (MessageCache, error)
+	// CreateCacheWithCancel transfers cancel ownership to the cache.
+	CreateCacheWithCancel(ctx context.Context, cacheID uint64, cancel context.CancelFunc) (MessageCache, error)
 	// DeleteCache delete cache using the spec cacheID
 	DeleteCache(cacheID uint64)
 	// GetCache returns the message cache
@@ -198,6 +208,22 @@ type HeaderCodec interface {
 type BackendFactory interface {
 	// Create create the corresponding backend based on the given address.
 	Create(address string, extraOptions ...BackendOption) (Backend, error)
+}
+
+// ContextBackendFactory extends BackendFactory with cancellable creation.
+// Clients prefer this method when it is available and cancel ctx when the
+// client, manager incarnation, or remote generation stops owning the create.
+// Implementations must return promptly; if lower-level work cannot be
+// interrupted, it must remain bounded and retain ownership of any late result.
+// BackendFactory remains supported for compatibility, but its in-flight Create
+// calls cannot be interrupted by the client.
+type ContextBackendFactory interface {
+	BackendFactory
+	CreateWithContext(
+		ctx context.Context,
+		address string,
+		extraOptions ...BackendOption,
+	) (Backend, error)
 }
 
 // Backend backend represents a wrapper for a client communicating with a

@@ -16,14 +16,56 @@ package cnservice
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"net"
+	"os"
+	"syscall"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/logservice"
 )
+
+type bootstrapLockClient struct {
+	logservice.CNHAKeeperClient
+	key       string
+	batch     uint64
+	requestID string
+}
+
+func (c *bootstrapLockClient) AllocateIDByKeyWithRequestID(
+	_ context.Context,
+	key string,
+	batch uint64,
+	requestID string,
+) (uint64, error) {
+	c.key = key
+	c.batch = batch
+	c.requestID = requestID
+	return 1, nil
+}
+
+func TestBootstrapLockerUsesCNUUIDAsRequestID(t *testing.T) {
+	client := &bootstrapLockClient{}
+	l := locker{hakeeperClient: client, requestID: "cn-1"}
+	ok, err := l.Get(context.Background(), "bootstrap")
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Equal(t, "bootstrap", client.key)
+	require.Equal(t, uint64(1), client.batch)
+	require.Equal(t, "cn-1", client.requestID)
+}
+
+func TestBootstrapLockerRejectsClientWithoutIdempotentAllocation(t *testing.T) {
+	l := locker{hakeeperClient: &testHAKClient{}, requestID: "cn-1"}
+	_, err := l.Get(context.Background(), "bootstrap")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "idempotent bootstrap lock allocation")
+}
 
 func TestHandleBootstrapErr(t *testing.T) {
 	t.Run("context.Canceled returns error", func(t *testing.T) {
@@ -41,40 +83,52 @@ func TestHandleBootstrapErr(t *testing.T) {
 		assert.ErrorIs(t, err, context.Canceled)
 	})
 
-	t.Run("context.DeadlineExceeded panics", func(t *testing.T) {
+	t.Run("context.DeadlineExceeded returns error", func(t *testing.T) {
 		ctx := context.Background()
-		assert.Panics(t, func() {
-			handleBootstrapErr(ctx, context.DeadlineExceeded)
-		})
+		err := handleBootstrapErr(ctx, context.DeadlineExceeded)
+		require.Error(t, err)
+		assert.ErrorIs(t, err, context.DeadlineExceeded)
 	})
 
-	t.Run("bootstrap timeout with cause panics", func(t *testing.T) {
-		// Simulate the real bootstrap context: WithTimeoutCause sets a
-		// custom cause, but the 5-minute timeout is a legitimate failure
-		// that must still panic.
+	t.Run("bootstrap timeout preserves cause", func(t *testing.T) {
 		ctx, cancel := context.WithTimeoutCause(
 			context.Background(), 0, moerr.CauseBootstrap,
 		)
 		defer cancel()
-		// Wait for the timeout to fire.
 		<-ctx.Done()
 
-		assert.Panics(t, func() {
-			handleBootstrapErr(ctx, ctx.Err())
-		})
+		err := handleBootstrapErr(ctx, ctx.Err())
+		require.Error(t, err)
+		assert.ErrorIs(t, err, context.DeadlineExceeded)
+		assert.Contains(t, err.Error(), "bootstrap")
 	})
 
-	t.Run("other error panics", func(t *testing.T) {
+	t.Run("other error returns error", func(t *testing.T) {
 		ctx := context.Background()
-		assert.Panics(t, func() {
-			handleBootstrapErr(ctx, fmt.Errorf("SQL execution failed"))
-		})
+		bootstrapErr := errors.New("SQL execution failed")
+		err := handleBootstrapErr(ctx, bootstrapErr)
+		require.Error(t, err)
+		assert.ErrorIs(t, err, bootstrapErr)
 	})
 
-	t.Run("moerr wrapped error panics", func(t *testing.T) {
+	t.Run("moerr wrapped error returns error", func(t *testing.T) {
 		ctx := context.Background()
-		assert.Panics(t, func() {
-			handleBootstrapErr(ctx, moerr.NewInternalErrorNoCtx("bootstrap init failed"))
-		})
+		bootstrapErr := moerr.NewInternalErrorNoCtx("bootstrap init failed")
+		err := handleBootstrapErr(ctx, bootstrapErr)
+		require.Error(t, err)
+		assert.ErrorIs(t, err, bootstrapErr)
+	})
+
+	t.Run("connection reset returns error", func(t *testing.T) {
+		ctx := context.Background()
+		bootstrapErr := &net.OpError{
+			Op:  "read",
+			Net: "tcp4",
+			Err: os.NewSyscallError("read", syscall.ECONNRESET),
+		}
+		err := handleBootstrapErr(ctx, bootstrapErr)
+		require.Error(t, err)
+		assert.ErrorIs(t, err, bootstrapErr)
+		assert.ErrorIs(t, err, syscall.ECONNRESET)
 	})
 }

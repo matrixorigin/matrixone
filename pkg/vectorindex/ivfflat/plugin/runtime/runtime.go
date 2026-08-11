@@ -187,8 +187,23 @@ func (CatalogHooks) ValidQuantization(quant, op string) error {
 	return nil
 }
 
-// SupportedIncludeColumnTypes: this index has no INCLUDE-column support.
-func (CatalogHooks) SupportedIncludeColumnTypes() []types.T { return nil }
+// SupportedIncludeColumnTypes is limited to types that both the full-build SQL
+// and the ISCP row extractor can copy into the entries table. Async IVF indexes
+// use ISCP for tail maintenance, so advertising a wider set would let CREATE
+// INDEX succeed and then make maintenance stop on the first non-NULL value.
+func (CatalogHooks) SupportedIncludeColumnTypes() []types.T {
+	return []types.T{
+		types.T_bool, types.T_bit,
+		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
+		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
+		types.T_float32, types.T_float64,
+		types.T_decimal64, types.T_decimal128,
+		types.T_date, types.T_time, types.T_datetime, types.T_timestamp,
+		types.T_char, types.T_varchar, types.T_json, types.T_uuid, types.T_binary, types.T_varbinary,
+		types.T_enum,
+		types.T_blob, types.T_text, types.T_datalink,
+	}
+}
 
 func (CatalogHooks) SupportedOpTypes() map[string]string {
 	out := make(map[string]string, len(metric.OpTypeToIvfMetric))
@@ -247,7 +262,7 @@ func (CatalogHooks) ParamsFromTree(idx *tree.Index) (map[string]string, error) {
 	if len(idx.IndexOption.AlgoParamVectorOpType) > 0 {
 		opType := catalog.ToLower(idx.IndexOption.AlgoParamVectorOpType)
 		if _, ok := metric.OpTypeToIvfMetric[opType]; !ok {
-			return nil, moerr.NewInternalErrorNoCtx(fmt.Sprintf("invalid op_type: '%s'", opType))
+			return nil, moerr.NewInvalidInputNoCtxf("invalid op_type: '%s'", opType)
 		}
 		res[catalog.IndexAlgoParamOpType] = idx.IndexOption.AlgoParamVectorOpType
 	} else {
@@ -279,11 +294,24 @@ func (CatalogHooks) ParamsFromTree(idx *tree.Index) (map[string]string, error) {
 	// so the entries build (compile) and the search can read it back. Only the
 	// predefined names that map to a MO narrow vector type are accepted.
 	if q := idx.IndexOption.Quantization; q != "" {
-		if _, ok := quantizer.ToVectorType(q); !ok {
-			return nil, moerr.NewInternalErrorNoCtx(fmt.Sprintf(
-				"ivfflat: unsupported quantization '%s' (supported: 'float32', 'float16', 'bf16', 'int8', 'uint8')", q))
+		normalized := catalog.ToLower(q)
+		if err := (CatalogHooks{}).ValidQuantization(normalized, ""); err != nil {
+			return nil, moerr.NewNotSupportedNoCtxf(
+				"ivfflat: unsupported quantization '%s' (supported: 'float32', 'float16', 'bf16', 'int8', 'uint8')", q)
 		}
-		res[catalog.Quantization] = catalog.ToLower(q)
+		res[catalog.Quantization] = normalized
+	}
+
+	if len(idx.IndexOption.IncludeColumns) > 0 {
+		names := make([]string, len(idx.IndexOption.IncludeColumns))
+		for i, col := range idx.IndexOption.IncludeColumns {
+			names[i] = col.ColName()
+		}
+		encoded, err := catalog.MarshalIncludeColumnsValue(names)
+		if err != nil {
+			return nil, err
+		}
+		res[catalog.IncludedColumns] = encoded
 	}
 	return res, nil
 }

@@ -475,7 +475,7 @@ func TestPreparedNumericContextUsesInsertSelectTarget(t *testing.T) {
 		{
 			name: "outer parameter follows scalar cte column double domain",
 			sql: "insert into constraint_test.emp (sal) select " +
-				"(select x from (with c as (select cast(1 as double) as x) select x from c)) + ?",
+				"(select x from (with c as (select cast(1 as double) as x) select x from c) d) + ?",
 			want:       types.T_float64,
 			paramCount: 1,
 		},
@@ -483,7 +483,7 @@ func TestPreparedNumericContextUsesInsertSelectTarget(t *testing.T) {
 			name: "outer parameter follows scalar cte star double domain",
 			sql: "insert into constraint_test.emp (sal) select " +
 				"(select x from (with c as (select cast(1 as double) as x), " +
-				"d as (select * from c) select x from d)) + ?",
+				"d as (select * from c) select x from d) q) + ?",
 			want:       types.T_float64,
 			paramCount: 1,
 		},
@@ -800,6 +800,31 @@ func TestPreparedNumericFunctionControlArgUsesOverloadType(t *testing.T) {
 	paramTypes := collectUniquePlanParamTypes(t, queryPlan)
 	require.Equal(t, planpb.Type{Id: int32(types.T_decimal64), Width: 7, Scale: 2}, paramTypes[1])
 	require.Equal(t, int32(types.T_int64), paramTypes[2].Id)
+}
+
+func TestPreparedNumericAggregateReachesCorrelatedDerivedTable(t *testing.T) {
+	optimizer := NewMockOptimizer(true)
+	// SUM seeds a float64 target for d.x before the correlated derived source is
+	// bound, exercising the numeric-projection buildTable entry.
+	stmt, err := mysql.ParseOne(
+		optimizer.CurrentContext().GetContext(),
+		"insert into constraint_test.emp (sal) "+
+			"select (select sum(d.x) from "+
+			"(select ? as x from NATION n2 "+
+			"where n2.N_REGIONKEY = n1.N_REGIONKEY) d) from NATION n1",
+		1,
+	)
+	require.NoError(t, err)
+
+	queryPlan, err := BuildPlan(optimizer.CurrentContext(), stmt, true)
+	require.NoError(t, err)
+
+	paramTypes := collectUniquePlanParamTypes(t, queryPlan)
+	require.Equal(t, map[int32]planpb.Type{
+		1: {Id: int32(types.T_float64)},
+	}, paramTypes)
+	require.True(t, hasJoinType(queryPlan.GetQuery(), planpb.Node_LEFT))
+	assertReachablePlanHasNoCorrelatedExpr(t, queryPlan.GetQuery())
 }
 
 func TestSeedNumericSourceTargetKeepsAmbiguousPositionEmpty(t *testing.T) {
@@ -1228,7 +1253,8 @@ func collectExprEffectiveParamPlanTypesByPos(
 	}
 	if fn := expr.GetF(); fn != nil {
 		childType := inherited
-		if fn.Func != nil && fn.Func.ObjName == "cast" {
+		if fn.Func != nil && (fn.Func.ObjName == "cast" ||
+			(fn.Func.ObjName == "cast_strict" && types.T(expr.Typ.Id).IsDateRelate())) {
 			childType = expr.Typ
 		} else if childType.Id == 0 && types.T(expr.Typ.Id).ToType().IsNumeric() {
 			// Numeric operators carry the resolved width and scale on their result;

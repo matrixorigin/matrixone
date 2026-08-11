@@ -15,7 +15,11 @@
 package lockservice
 
 import (
+	"cmp"
 	"context"
+	"math/rand"
+	"slices"
+	"sort"
 	"time"
 
 	"go.uber.org/zap"
@@ -26,14 +30,31 @@ import (
 	pb "github.com/matrixorigin/matrixone/pkg/pb/lock"
 )
 
+const keepRemoteLockBatchSize = 64
+const keeperIntervalJitterFraction = 10 // +/- 10%
+const maxKeepRemoteLockFailureSummaries = 16
+const maxKeepRemoteLockRefreshes = 64
+
+type keepRemoteLockPeerWork struct {
+	serviceID string
+	binds     []pb.LockTable
+	next      int
+	start     int
+	launched  int
+}
+
 type lockTableKeeper struct {
-	serviceID                 string
-	client                    Client
-	stopper                   *stopper.Stopper
-	keepLockTableBindInterval time.Duration
-	keepRemoteLockInterval    time.Duration
-	groupTables               *lockTableHolders
-	service                   *service
+	serviceID                   string
+	client                      Client
+	stopper                     *stopper.Stopper
+	keepLockTableBindInterval   time.Duration
+	keepRemoteLockInterval      time.Duration
+	groupTables                 *lockTableHolders
+	service                     *service
+	keepRemoteLockPeerOffset    uint64
+	keepRemoteLockRefreshOffset uint64
+	keepRemoteLockBindOffsets   map[string]uint64
+	keepRemoteLockPeerScratch   []keepRemoteLockPeerWork
 }
 
 // NewLockTableKeeper create a locktable keeper, an internal timer is started
@@ -74,7 +95,7 @@ func (k *lockTableKeeper) Close() error {
 func (k *lockTableKeeper) keepLockTableBind(ctx context.Context) {
 	defer k.service.logger.InfoAction("keep lock table bind task")()
 
-	timer := time.NewTimer(k.keepLockTableBindInterval)
+	timer := time.NewTimer(jitterKeeperInterval(k.keepLockTableBindInterval))
 	defer timer.Stop()
 
 	for {
@@ -83,7 +104,7 @@ func (k *lockTableKeeper) keepLockTableBind(ctx context.Context) {
 			return
 		case <-timer.C:
 			k.doKeepLockTableBind(ctx)
-			timer.Reset(k.keepLockTableBindInterval)
+			timer.Reset(jitterKeeperInterval(k.keepLockTableBindInterval))
 		}
 	}
 }
@@ -91,7 +112,7 @@ func (k *lockTableKeeper) keepLockTableBind(ctx context.Context) {
 func (k *lockTableKeeper) keepRemoteLock(ctx context.Context) {
 	defer k.service.logger.InfoAction("keep remote locks task")()
 
-	timer := time.NewTimer(k.keepRemoteLockInterval)
+	timer := time.NewTimer(jitterKeeperInterval(k.keepRemoteLockInterval))
 	defer timer.Stop()
 
 	var futures []*morpc.Future
@@ -105,9 +126,88 @@ func (k *lockTableKeeper) keepRemoteLock(ctx context.Context) {
 				ctx,
 				futures,
 				binds)
-			timer.Reset(k.keepRemoteLockInterval)
+			timer.Reset(jitterKeeperInterval(k.keepRemoteLockInterval))
 		}
 	}
+}
+
+func jitterKeeperInterval(interval time.Duration) time.Duration {
+	if interval <= 0 {
+		return interval
+	}
+	window := interval / keeperIntervalJitterFraction
+	if window == 0 {
+		return interval
+	}
+	return interval - window + time.Duration(rand.Int63n(int64(2*window)+1))
+}
+
+func collectKeepRemoteLockBinds(
+	serviceID string,
+	groupTables *lockTableHolders,
+	scratch []pb.LockTable,
+) []pb.LockTable {
+	oldLen := len(scratch)
+	binds := scratch[:0]
+	groupTables.iter(func(_ uint64, v lockTable) bool {
+		bind := v.getBind()
+		if bind.ServiceID != serviceID {
+			binds = append(binds, bind)
+		}
+		return true
+	})
+	if len(binds) < oldLen {
+		clear(scratch[len(binds):oldLen])
+	}
+	return binds
+}
+
+func prepareKeepRemoteLockPeers(
+	binds []pb.LockTable,
+	scratch []keepRemoteLockPeerWork,
+) []keepRemoteLockPeerWork {
+	slices.SortFunc(binds, func(left, right pb.LockTable) int {
+		if n := cmp.Compare(left.ServiceID, right.ServiceID); n != 0 {
+			return n
+		}
+		if left.Group != right.Group {
+			if left.Group < right.Group {
+				return -1
+			}
+			return 1
+		}
+		if left.Table != right.Table {
+			if left.Table < right.Table {
+				return -1
+			}
+			return 1
+		}
+		if left.Version < right.Version {
+			return -1
+		}
+		if left.Version > right.Version {
+			return 1
+		}
+		return 0
+	})
+
+	// Peer entries retain sub-slices of the bind scratch. Clear the previous
+	// generation before reuse so a shrinking peer set cannot pin multiple old
+	// high-water bind arrays through the unused scratch tail.
+	clear(scratch)
+	peers := scratch[:0]
+	for begin := 0; begin < len(binds); {
+		end := begin + 1
+		for end < len(binds) && binds[end].ServiceID == binds[begin].ServiceID {
+			end++
+		}
+		peers = append(peers, keepRemoteLockPeerWork{
+			serviceID: binds[begin].ServiceID,
+			binds:     binds[begin:end],
+		})
+		begin = end
+	}
+	return peers
 }
 
 func (k *lockTableKeeper) doKeepRemoteLock(
@@ -120,90 +220,253 @@ func (k *lockTableKeeper) doKeepRemoteLock(
 		serviceID string
 		version   uint64
 	}
+	type failureSummary struct {
+		bind  pb.LockTable
+		err   error
+		count int
+	}
+	type failureKey struct {
+		code     uint16
+		message  string
+		overflow bool
+	}
+	type keepResult struct {
+		bind                       pb.LockTable
+		err                        error
+		refresh                    bool
+		invalidateOnRefreshFailure bool
+		remove                     bool
+	}
+	type keepCompletion struct {
+		result keepResult
+	}
 
-	allBinds := make([]pb.LockTable, 0, cap(binds))
-	binds = binds[:0]
+	allBinds := collectKeepRemoteLockBinds(k.serviceID, k.groupTables, binds)
 	futures = futures[:0]
-	checkedBinds := make(map[bindKey]struct{})
-	maybeHandleRemoteBindChanged := func(
-		ctx context.Context,
-		bind pb.LockTable,
-		invalidateOnRefreshFailure bool,
-	) {
-		key := bindKey{
+	peers := prepareKeepRemoteLockPeers(allBinds, k.keepRemoteLockPeerScratch)
+	k.keepRemoteLockPeerScratch = peers
+	if len(allBinds) == 0 {
+		return futures, allBinds
+	}
+	checkedBinds := make(map[bindKey]struct{}, maxKeepRemoteLockRefreshes)
+	refreshEligible := make(map[bindKey]struct{}, maxKeepRemoteLockRefreshes)
+	refreshes := make([]keepResult, 0, maxKeepRemoteLockRefreshes)
+	failures := make(map[failureKey]*failureSummary)
+	bindKeyOf := func(bind pb.LockTable) bindKey {
+		return bindKey{
 			group:     bind.Group,
 			table:     bind.Table,
 			serviceID: bind.ServiceID,
 			version:   bind.Version,
 		}
+	}
+	recordFailure := func(bind pb.LockTable, err error) {
+		key := failureKey{}
+		if code, ok := moerr.GetMoErrCode(err); ok {
+			key.code = code
+		} else {
+			key.message = err.Error()
+		}
+		if _, exists := failures[key]; !exists &&
+			len(failures) >= maxKeepRemoteLockFailureSummaries {
+			key = failureKey{overflow: true}
+		}
+		if summary, ok := failures[key]; ok {
+			summary.count++
+			return
+		}
+		failures[key] = &failureSummary{bind: bind, err: err, count: 1}
+	}
+	defer func() {
+		for _, summary := range failures {
+			logKeepRemoteLocksFailed(
+				k.service.logger,
+				summary.bind,
+				summary.err,
+				summary.count,
+			)
+		}
+	}()
+	recordRefresh := func(result keepResult) {
+		key := bindKeyOf(result.bind)
+		if _, ok := refreshEligible[key]; !ok {
+			return
+		}
 		if _, ok := checkedBinds[key]; ok {
 			return
 		}
+		if len(refreshes) == maxKeepRemoteLockRefreshes {
+			return
+		}
 		checkedBinds[key] = struct{}{}
-		k.maybeHandleRemoteBindChanged(ctx, bind, invalidateOnRefreshFailure)
+		refreshes = append(refreshes, result)
 	}
 
-	k.groupTables.iter(func(_ uint64, v lockTable) bool {
-		bind := v.getBind()
-		if bind.ServiceID != k.serviceID {
-			allBinds = append(allBinds, bind)
-		}
-		return true
-	})
-	if len(allBinds) == 0 {
-		return futures[:0], binds[:0]
+	refreshStart := int(k.keepRemoteLockRefreshOffset % uint64(len(allBinds)))
+	refreshCount := min(maxKeepRemoteLockRefreshes, len(allBinds))
+	for i := 0; i < refreshCount; i++ {
+		refreshEligible[bindKeyOf(allBinds[(refreshStart+i)%len(allBinds)])] = struct{}{}
 	}
+	k.keepRemoteLockRefreshOffset = uint64(
+		(refreshStart + refreshCount) % len(allBinds),
+	)
 
-	ctx, cancel := context.WithTimeoutCause(ctx, defaultRPCTimeout, moerr.CauseDoKeepRemoteLock)
+	roundCtx, cancel := context.WithTimeoutCause(
+		ctx,
+		defaultRPCTimeout,
+		moerr.CauseDoKeepRemoteLock,
+	)
 	defer cancel()
-	for _, bind := range allBinds {
-		req := acquireRequest()
-		defer releaseRequest(req)
 
-		req.Method = pb.Method_KeepRemoteLock
-		req.LockTable = bind
-		req.KeepRemoteLock.ServiceID = k.serviceID
-
-		f, err := k.client.AsyncSend(ctx, req)
-		if err == nil {
-			futures = append(futures, f)
-			binds = append(binds, bind)
-			continue
+	// Give every peer one slot before distributing additional slots
+	// round-robin. This avoids cross-peer head-of-line blocking while keeping a
+	// hard global cap on goroutines, Futures, requests, and completions.
+	if k.keepRemoteLockBindOffsets == nil {
+		k.keepRemoteLockBindOffsets = make(map[string]uint64)
+	}
+	for i := range peers {
+		peer := &peers[i]
+		peer.start = int(
+			k.keepRemoteLockBindOffsets[peer.serviceID] % uint64(len(peer.binds)),
+		)
+	}
+	for serviceID := range k.keepRemoteLockBindOffsets {
+		idx := sort.Search(len(peers), func(i int) bool {
+			return peers[i].serviceID >= serviceID
+		})
+		if idx == len(peers) || peers[idx].serviceID != serviceID {
+			delete(k.keepRemoteLockBindOffsets, serviceID)
 		}
-		err = moerr.AttachCause(ctx, err)
-		logKeepRemoteLocksFailed(k.service.logger, bind, err)
-		maybeHandleRemoteBindChanged(ctx, bind, false)
-		if !isRetryError(err) {
+	}
+	peerStart := int(k.keepRemoteLockPeerOffset % uint64(len(peers)))
+	peerAt := func(logicalIndex int) *keepRemoteLockPeerWork {
+		return &peers[(peerStart+logicalIndex)%len(peers)]
+	}
+
+	completions := make(chan keepCompletion, keepRemoteLockBatchSize)
+	active := 0
+	uniqueStarted := 0
+	nextNewPeer := 0
+	nextPeer := 0
+	launch := func(peer *keepRemoteLockPeerWork) {
+		bind := peer.binds[(peer.start+peer.next)%len(peer.binds)]
+		peer.next++
+		peer.launched++
+		if peer.next == 1 {
+			uniqueStarted++
+		}
+		active++
+		go func() {
+			req := acquireRequest()
+			req.Method = pb.Method_KeepRemoteLock
+			req.LockTable = bind
+			req.KeepRemoteLock.ServiceID = k.serviceID
+
+			f, err := k.client.AsyncSend(roundCtx, req)
+			if err != nil {
+				err = moerr.AttachCause(roundCtx, err)
+				completions <- keepCompletion{
+					result: keepResult{
+						bind:    bind,
+						err:     err,
+						refresh: true,
+						remove:  !isRetryError(err),
+					},
+				}
+				return
+			}
+
+			v, err := f.Get()
+			result := keepResult{bind: bind}
+			if err == nil {
+				resp := v.(*pb.Response)
+				if err = resp.UnwrapError(); err != nil {
+					result.err = err
+					result.refresh = canRefreshRemoteBindOnKeepError(err)
+					result.invalidateOnRefreshFailure = result.refresh
+				} else if resp.NewBind != nil {
+					// A late response must not republish a superseded bind.
+					result.refresh = true
+					result.invalidateOnRefreshFailure = true
+				}
+				releaseResponse(resp)
+			} else {
+				result.err = err
+				result.refresh = true
+			}
+			f.Close()
+			completions <- keepCompletion{result: result}
+		}()
+	}
+	findReadyPeer := func() *keepRemoteLockPeerWork {
+		for nextNewPeer < len(peers) {
+			peer := peerAt(nextNewPeer)
+			nextNewPeer++
+			if peer.next < len(peer.binds) {
+				return peer
+			}
+		}
+		for checked := 0; checked < len(peers); checked++ {
+			peer := peerAt(nextPeer)
+			nextPeer = (nextPeer + 1) % len(peers)
+			if peer.next < len(peer.binds) {
+				return peer
+			}
+		}
+		return nil
+	}
+	handleResult := func(result keepResult) {
+		if result.err != nil {
+			recordFailure(result.bind, result.err)
+		}
+		if result.refresh {
+			recordRefresh(result)
+		}
+		if result.remove {
+			bind := result.bind
 			k.groupTables.removeWithFilter(func(_ uint64, v lockTable) bool {
 				return !v.getBind().Changed(bind)
 			}, closeReasonKeeperFailed)
 		}
 	}
 
-	for idx, f := range futures {
-		v, err := f.Get()
-		if err == nil {
-			resp := v.(*pb.Response)
-			if err = resp.UnwrapError(); err != nil {
-				logKeepRemoteLocksFailed(k.service.logger, binds[idx], err)
-				if canRefreshRemoteBindOnKeepError(err) {
-					maybeHandleRemoteBindChanged(ctx, binds[idx], true)
-				}
-			} else if resp.NewBind != nil {
-				// The response can arrive after this CN has observed a newer
-				// allocator and purged the request bind. Refresh from the current
-				// allocator so a late response cannot republish a superseded bind.
-				maybeHandleRemoteBindChanged(ctx, binds[idx], true)
+	for {
+		for active < keepRemoteLockBatchSize && roundCtx.Err() == nil {
+			peer := findReadyPeer()
+			if peer == nil {
+				break
 			}
-			releaseResponse(resp)
-		} else {
-			logKeepRemoteLocksFailed(k.service.logger, binds[idx], err)
-			maybeHandleRemoteBindChanged(ctx, binds[idx], false)
+			launch(peer)
 		}
-		f.Close()
-		futures[idx] = nil // gc
+		if active == 0 {
+			break
+		}
+		completion := <-completions
+		active--
+		handleResult(completion.result)
 	}
-	return futures[:0], binds[:0]
+	if uniqueStarted < len(peers) {
+		k.keepRemoteLockPeerOffset = uint64(
+			(peerStart + uniqueStarted) % len(peers),
+		)
+	} else {
+		k.keepRemoteLockPeerOffset = uint64((peerStart + 1) % len(peers))
+	}
+	for i := range peers {
+		peer := &peers[i]
+		k.keepRemoteLockBindOffsets[peer.serviceID] = uint64(
+			(peer.start + peer.launched) % len(peer.binds),
+		)
+	}
+
+	for _, result := range refreshes {
+		k.maybeHandleRemoteBindChanged(
+			roundCtx,
+			result.bind,
+			result.invalidateOnRefreshFailure,
+		)
+	}
+	return futures[:0], allBinds
 }
 
 func canRefreshRemoteBindOnKeepError(err error) bool {

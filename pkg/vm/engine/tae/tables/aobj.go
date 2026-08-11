@@ -118,7 +118,6 @@ func (obj *aobject) PrepareCompact() bool {
 		}
 		return false
 	}
-
 	// see more notes in flushtabletail.go
 	obj.freezelock.Lock()
 	obj.FreezeAppend()

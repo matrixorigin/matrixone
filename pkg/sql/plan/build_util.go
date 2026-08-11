@@ -15,6 +15,7 @@
 package plan
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"regexp"
@@ -89,6 +90,17 @@ func GetFunctionTypeStrFromAst(typRef tree.ResolvableTypeReference) (string, err
 }
 
 func getTypeFromAst(ctx context.Context, typ tree.ResolvableTypeReference) (plan.Type, error) {
+	ret, err := getTypeFromAstWithoutCharset(ctx, typ)
+	if err != nil {
+		return plan.Type{}, err
+	}
+	// AST-authored types are new metadata. Assign their explicit charset here so
+	// CharsetLegacy remains reserved for types decoded from pre-collation catalogs.
+	ret.Charset = uint32(types.CharsetType(types.T(ret.Id)))
+	return ret, nil
+}
+
+func getTypeFromAstWithoutCharset(ctx context.Context, typ tree.ResolvableTypeReference) (plan.Type, error) {
 	if n, ok := typ.(*tree.T); ok {
 		switch defines.MysqlType(n.InternalType.Oid) {
 		case defines.MYSQL_TYPE_BIT:
@@ -227,6 +239,12 @@ func getTypeFromAst(ctx context.Context, typ tree.ResolvableTypeReference) (plan
 			if fstr == "datalink" {
 				return plan.Type{Id: int32(types.T_datalink)}, nil
 			}
+			if fstr == "tinytext" {
+				// TEXT-family limits are byte limits in MySQL. Preserve TINYTEXT's
+				// 255-byte bound in the plan so DML assignment casts can enforce it
+				// without changing the externally visible TEXT type family.
+				return plan.Type{Id: int32(types.T_text), Width: types.MaxTinyTextLen}, nil
+			}
 
 			return plan.Type{Id: int32(types.T_text)}, nil
 		case defines.MYSQL_TYPE_JSON:
@@ -295,26 +313,253 @@ func getTypeFromAst(ctx context.Context, typ tree.ResolvableTypeReference) (plan
 	return plan.Type{}, moerr.NewInternalError(ctx, "unknown data type")
 }
 
+// GetTypeFromAst resolves a parser SQL type into its plan representation.
+// Stored procedure variables use this to retain their declared type, including
+// metadata such as DECIMAL width and scale, throughout interpretation.
+func GetTypeFromAst(ctx context.Context, typ tree.ResolvableTypeReference) (plan.Type, error) {
+	return getTypeFromAst(ctx, typ)
+}
+
 func applyColumnAttributesToType(ctx context.Context, colType *plan.Type, attrs []tree.ColumnAttribute) error {
-	if !isGeometryPlanType(colType) {
-		for _, attr := range attrs {
-			if _, ok := attr.(*tree.AttributeSRID); ok {
+	return applyDefaultAndColumnAttributesToType(ctx, colType, colType.Charset, attrs)
+}
+
+func applyDefaultAndColumnAttributesToType(
+	ctx context.Context,
+	colType *plan.Type,
+	tableCharset uint32,
+	attrs []tree.ColumnAttribute,
+) error {
+	isGeometry := isGeometryPlanType(colType)
+	srid, sridDefined := geometrySRIDValue(colType)
+	var columnCharset string
+	var columnCollation string
+	for _, attr := range attrs {
+		switch attribute := attr.(type) {
+		case *tree.AttributeVisable:
+			if !attribute.Is {
+				return moerr.NewNotSupported(ctx, "invisible columns")
+			}
+		case *tree.AttributeCharset:
+			columnCharset = attribute.Charset
+		case *tree.AttributeCollate:
+			columnCollation = attribute.Collate
+		case *tree.AttributeSRID:
+			if !isGeometry {
 				return moerr.NewInvalidInputf(ctx, "SRID is only supported for GEOMETRY columns")
 			}
-		}
-		return nil
-	}
-	// Scale (subtype) is already set by getTypeFromAst; an SRID column attribute
-	// only overrides the SRID, which lives in Width.
-	srid, sridDefined := geometrySRIDValue(colType)
-	for _, attr := range attrs {
-		if sridAttr, ok := attr.(*tree.AttributeSRID); ok {
+			sridAttr := attribute
 			srid = sridAttr.Value
 			sridDefined = true
 		}
 	}
-	colType.Width = encodeGeometrySRIDWidth(srid, sridDefined)
+	// Charset and collation clauses are independent attributes. Resolve both
+	// after scanning the list so a compatible COLLATE wins regardless of
+	// textual order.
+	var charset uint32
+	if columnCharset != "" {
+		var ok bool
+		charset, ok = charsetForName(columnCharset)
+		if !ok {
+			return moerr.NewInvalidInputf(ctx, "unsupported character set '%s'", columnCharset)
+		}
+	}
+	var collation uint32
+	if columnCollation != "" {
+		var ok bool
+		collation, ok = collationForName(columnCollation)
+		if !ok {
+			return unsupportedCollationError(ctx, columnCollation)
+		}
+	}
+	if columnCharset != "" && columnCollation != "" &&
+		!charsetAndCollationCompatible(columnCharset, columnCollation) {
+		return moerr.NewInvalidInputf(ctx,
+			"COLLATION '%s' is not valid for CHARACTER SET '%s'",
+			columnCollation, columnCharset)
+	}
+	// Resolve the effective identity before applying it. In particular, a binary
+	// table default converts VARCHAR to VARBINARY; applying that conversion before
+	// an explicit nonbinary column override would make the override irreversible.
+	switch {
+	case columnCharset != "":
+		applyCharsetToPlanType(colType, charset)
+		if columnCollation != "" {
+			applyTextCharsetToPlanType(colType, collation)
+		}
+	case columnCollation != "":
+		applyTextCharsetToPlanType(colType, collation)
+	default:
+		applyTableDefaultCharsetToPlanType(colType, tableCharset)
+	}
+	if isGeometry {
+		// Scale (subtype) is already set by getTypeFromAst; an SRID column
+		// attribute only overrides the SRID, which lives in Width.
+		colType.Width = encodeGeometrySRIDWidth(srid, sridDefined)
+	}
 	return nil
+}
+
+func applyTextCharsetToPlanType(typ *plan.Type, charset uint32) {
+	switch types.T(typ.Id) {
+	case types.T_char, types.T_varchar, types.T_text:
+		typ.Charset = charset
+	}
+}
+
+func applyCharsetToPlanType(typ *plan.Type, charset uint32) {
+	if charset != uint32(types.CharsetBinary) {
+		applyTextCharsetToPlanType(typ, charset)
+		return
+	}
+
+	// MySQL defines CHARACTER SET binary on a nonbinary string column as the
+	// corresponding binary string type, not as a _bin collation on text.
+	switch types.T(typ.Id) {
+	case types.T_char:
+		typ.Id = int32(types.T_binary)
+	case types.T_varchar:
+		typ.Id = int32(types.T_varbinary)
+	case types.T_text:
+		typ.Id = int32(types.T_blob)
+	default:
+		return
+	}
+	typ.Charset = uint32(types.CharsetBinary)
+}
+
+func charsetForName(name string) (uint32, bool) {
+	switch strings.ToLower(name) {
+	case "binary":
+		return uint32(types.CharsetBinary), true
+	case "utf8", "utf8mb3", "utf8mb4":
+		return uint32(types.CharsetUTF8), true
+	default:
+		return 0, false
+	}
+}
+
+func collationForName(name string) (uint32, bool) {
+	switch strings.ToLower(name) {
+	case "binary":
+		return uint32(types.CharsetBinary), true
+	case "utf8_bin", "utf8mb3_bin", "utf8mb4_bin":
+		return uint32(types.CharsetUTF8MB4Bin), true
+	case "utf8_general_ci", "utf8mb3_general_ci", "utf8mb4_general_ci":
+		return uint32(types.CharsetUTF8), true
+	default:
+		// Do not silently alias advertised UCA/0900 collations to either legacy
+		// general_ci or byte ordering. Their weight and padding contracts differ.
+		return 0, false
+	}
+}
+
+func unsupportedCollationError(ctx context.Context, name string) error {
+	// Older MatrixOne releases accepted these spellings but collapsed them to
+	// general_ci or byte ordering. A dump can preserve that historical MO
+	// behavior by replacing the name with the explicit supported identity below;
+	// keeping the rejected spelling would falsely promise MySQL UCA semantics.
+	var replacement string
+	switch strings.ToLower(name) {
+	case "utf8_unicode_ci", "utf8mb3_unicode_ci":
+		replacement = "utf8_general_ci"
+	case "utf8mb4_unicode_ci", "utf8mb4_0900_ai_ci",
+		"utf8mb4_de_pb_0900_ai_ci", "utf8mb4_is_0900_ai_ci", "utf8mb4_lv_0900_ai_ci":
+		replacement = "utf8mb4_general_ci"
+	case "utf8mb4_0900_bin":
+		replacement = "utf8mb4_bin"
+	}
+	if replacement != "" {
+		return moerr.NewInvalidInputf(ctx,
+			"unsupported collation '%s'; replace it with '%s' when restoring legacy MatrixOne DDL",
+			name, replacement)
+	}
+	return moerr.NewInvalidInputf(ctx, "unsupported collation '%s'", name)
+}
+
+func applyTableDefaultCharsetToPlanType(typ *plan.Type, charset uint32) {
+	applyCharsetToPlanType(typ, charset)
+}
+
+func charsetAndCollationCompatible(charset, collation string) bool {
+	charset = canonicalCharsetName(charset)
+	collation = strings.ToLower(collation)
+	if charset == "binary" || collation == "binary" {
+		return charset == collation
+	}
+	if separator := strings.IndexByte(collation, '_'); separator > 0 {
+		return canonicalCharsetName(collation[:separator]) == charset
+	}
+	return true
+}
+
+func canonicalCharsetName(name string) string {
+	switch strings.ToLower(name) {
+	case "utf8", "utf8mb3", "utf8mb4":
+		// MatrixOne implements the accepted utf8/utf8mb3/utf8mb4 general_ci
+		// and _bin spellings with the same internal collation identities.
+		return "utf8mb4"
+	default:
+		return strings.ToLower(name)
+	}
+}
+
+func tableDefaultCharset(ctx CompilerContext, options []tree.TableOption) (uint32, error) {
+	tableCharset := uint32(types.CharsetUTF8)
+	tableCollation := uint32(types.CharsetUTF8)
+	var tableCharsetName string
+	var tableCollationName string
+	hasTableCollation := false
+	for _, option := range options {
+		switch opt := option.(type) {
+		case *tree.TableOptionCharset:
+			tableCharsetName = opt.Charset
+			var ok bool
+			tableCharset, ok = charsetForName(opt.Charset)
+			if !ok {
+				return 0, moerr.NewInvalidInputf(ctx.GetContext(), "unsupported character set '%s'", opt.Charset)
+			}
+		case *tree.TableOptionCollate:
+			tableCollationName = opt.Collate
+			var ok bool
+			tableCollation, ok = collationForName(opt.Collate)
+			if !ok {
+				return 0, unsupportedCollationError(ctx.GetContext(), opt.Collate)
+			}
+			hasTableCollation = true
+		}
+	}
+	if tableCharsetName != "" && tableCollationName != "" &&
+		!charsetAndCollationCompatible(tableCharsetName, tableCollationName) {
+		return 0, moerr.NewInvalidInputf(ctx.GetContext(),
+			"COLLATION '%s' is not valid for CHARACTER SET '%s'",
+			tableCollationName, tableCharsetName)
+	}
+	if hasTableCollation {
+		return tableCollation, nil
+	}
+	if tableCharsetName == "" {
+		// An unqualified table inherits the effective server collation. Older
+		// compiler contexts and internal callers may not expose session variables,
+		// in which case the compiled-in general_ci default remains the fallback.
+		value, err := ctx.ResolveVariable("collation_server", true, false)
+		if err != nil {
+			return tableCharset, nil
+		}
+		if value != nil {
+			name, ok := value.(string)
+			if !ok {
+				return 0, moerr.NewInternalError(ctx.GetContext(), "collation_server is not a string")
+			}
+			if name != "" {
+				if serverCollation, supported := collationForName(name); supported {
+					return serverCollation, nil
+				}
+				return 0, unsupportedCollationError(ctx.GetContext(), name)
+			}
+		}
+	}
+	return tableCharset, nil
 }
 
 func buildDefaultExpr(col *tree.ColumnTableDef, typ plan.Type, proc *process.Process) (*plan.Default, error) {
@@ -381,7 +626,7 @@ func buildDefaultExpr(col *tree.ColumnTableDef, typ plan.Type, proc *process.Pro
 	// try to calculate default value, return err if fails
 	newExpr, err := ConstantFold(batch.EmptyForConstFoldBatch, DeepCopyExpr(defaultExpr), proc, false, true)
 	if err != nil {
-		return nil, err
+		return nil, mapDDLAssignmentCastError(proc.Ctx, typ, colNameOrigin, err)
 	}
 
 	fmtCtx := tree.NewFmtCtx(dialect.MYSQL, tree.WithSingleQuoteString())
@@ -426,7 +671,7 @@ func buildOnUpdate(col *tree.ColumnTableDef, typ plan.Type, proc *process.Proces
 	defer executor.Free()
 	_, err = executor.Eval(proc, []*batch.Batch{batch.EmptyForConstFoldBatch}, nil)
 	if err != nil {
-		return nil, err
+		return nil, mapDDLAssignmentCastError(proc.Ctx, typ, col.Name.ColNameOrigin(), err)
 	}
 
 	ret := &plan.OnUpdate{
@@ -505,10 +750,9 @@ func buildGeneratedExpr(col *tree.ColumnTableDef, typ plan.Type, existingCols []
 		return nil, err
 	}
 
-	// A generated CHAR/VARCHAR column is materialized as a real column write, so
-	// use the strict assignment cast: an over-length value is rejected instead of
-	// being silently truncated, matching column DEFAULT / ON UPDATE and the DML
-	// assignment paths.
+	// Persist only stable function IDs in generated-column catalog metadata.
+	// DML plan construction rewrites this wrapper to cast_assign/cast_ignore
+	// when the active protocol supports those functions.
 	genExpr, err := makePlan2AssignmentCastExpr(proc.Ctx, planExpr, typ)
 	if err != nil {
 		return nil, err
@@ -521,6 +765,14 @@ func buildGeneratedExpr(col *tree.ColumnTableDef, typ plan.Type, existingCols []
 		OriginString: fmtCtx.String(),
 		IsStored:     genAttr.Stored,
 	}, nil
+}
+
+func mapDDLAssignmentCastError(ctx context.Context, typ plan.Type, colName string, err error) error {
+	if useSqlModeStringAssignmentCast(typ) &&
+		moerr.IsMoErrCode(err, moerr.ErrInternal) {
+		return moerr.NewErrInvalidDefault(ctx, colName)
+	}
+	return err
 }
 
 // checkGeneratedExprReferences rejects variable references and auto-increment
@@ -659,6 +911,28 @@ func inlineGeneratedColExpr(expr *plan.Expr, colIdxToProjPos map[int32]int32, pr
 	}
 }
 
+// applyGeneratedColumnAssignmentCast upgrades persisted legacy cast_strict
+// wrappers to cast_assign and uses cast_ignore for INSERT/UPDATE IGNORE. This
+// keeps generated-column assignment semantics compatible across catalog
+// versions without rewriting catalog rows.
+func (builder *QueryBuilder) applyGeneratedColumnAssignmentCast(expr *plan.Expr, isIgnore bool) *plan.Expr {
+	if expr == nil {
+		return expr
+	}
+	f := expr.GetF()
+	if f == nil || f.Func == nil ||
+		(f.Func.ObjName != "cast_assign" && f.Func.ObjName != "cast_strict") ||
+		len(f.Args) == 0 {
+		return expr
+	}
+	funcName := assignmentCastFunctionName(expr.Typ, isIgnore, builder.compCtx.GetProcess())
+	assignmentCast, err := forceAssignmentCastExprWithName(builder.GetContext(), f.Args[0], expr.Typ, funcName)
+	if err != nil {
+		return expr
+	}
+	return assignmentCast
+}
+
 // substituteColRefsInExpr replaces ColRef(0, colIdx) in a generated column expression
 // with the actual expressions from projList at offset+colIdx. This is used in UPDATE
 // to inline referenced column values into the generated expression.
@@ -684,8 +958,10 @@ func substituteColRefsInExpr(expr *plan.Expr, projList []*plan.Expr, offset int3
 			Typ: expr.Typ,
 			Expr: &plan.Expr_F{
 				F: &plan.Function{
-					Func: e.F.Func,
-					Args: newArgs,
+					Func:          e.F.Func,
+					Args:          newArgs,
+					AggConfig:     bytes.Clone(e.F.AggConfig),
+					AggConfigType: e.F.AggConfigType,
 				},
 			},
 		}
@@ -850,16 +1126,15 @@ func getDefaultExpr(ctx context.Context, d *plan.ColDef) (*Expr, error) {
 		return nil, moerr.NewInvalidInputf(ctx, "invalid default value for column '%s'", d.Name)
 	}
 	if d.Default.Expr == nil {
+		typ := d.Typ
+		typ.NotNullable = false
 		return &Expr{
 			Expr: &plan.Expr_Lit{
 				Lit: &Const{
 					Isnull: true,
 				},
 			},
-			Typ: plan.Type{
-				Id:          d.Typ.Id,
-				NotNullable: false,
-			},
+			Typ: typ,
 		}, nil
 	}
 	newDefExpr := DeepCopyExpr(d.Default.Expr)
@@ -921,7 +1196,8 @@ func getTablePriKeyName(priKeyDef *plan.PrimaryKeyDef) string {
 func checkTableColumnNameValid(name string) bool {
 	if name == catalog.Row_ID || name == catalog.CPrimaryKeyColName ||
 		name == catalog.TableTailAttrDeleteRowID || name == catalog.TableTailAttrAborted ||
-		name == catalog.TableTailAttrPKVal || name == catalog.TableTailAttrCommitTs {
+		name == catalog.TableTailAttrPKVal || name == catalog.TableTailAttrCommitTs ||
+		catalog.IsAlias(name) {
 		return false
 	}
 	return true
@@ -1016,7 +1292,7 @@ basic logic of fk constraint check.
 			select distinct S.b from S where S.b is not null
 			except
 			select distinct T.a from T
-		)
+		) as __mo_fk_check_source
 	if the result is true, then the fk constraint confirmed.
 */
 func genSqlForCheckFKConstraints(ctx context.Context,
@@ -1050,7 +1326,7 @@ func genSqlForCheckFKConstraints(ctx context.Context,
 	sql := strings.Join([]string{
 		"select count(*) = 0 from (",
 		except,
-		")",
+		") as __mo_fk_check_source",
 	}, " ")
 	return sql, nil
 }

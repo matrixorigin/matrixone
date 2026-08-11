@@ -15,8 +15,10 @@
 package indexbuild
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
@@ -31,15 +33,74 @@ const (
 	End
 )
 
+const indexBuildAllocationOwner mpool.AllocationOwner = 1
+
+const (
+	indexBuildAllocationSiteRuntimeFilterData mpool.AllocationSite = iota + 1
+	indexBuildAllocationSiteRuntimeFilterArea
+	indexBuildAllocationSiteRuntimeFilterNulls
+	indexBuildAllocationSiteRuntimeFilterGrouping
+	indexBuildAllocationSiteRuntimeFilterPayload
+)
+
 type container struct {
-	state int
-	buf   *batch.Batch
+	state               int
+	buf                 *batch.Batch
+	runtimeFilterUsable bool
+	runtimeFilterDone   bool
 }
 
 type IndexBuild struct {
-	ctr               container
-	RuntimeFilterSpec *plan.RuntimeFilterSpec
+	ctr                     container
+	RuntimeFilterSpec       *plan.RuntimeFilterSpec
+	allocationAccount       *mpool.AllocationAccount
+	runtimeFilterAllocation *vector.AllocationAccountSelection
 	vm.OperatorBase
+}
+
+func (indexBuild *IndexBuild) SetAllocationAccount(
+	account *mpool.AllocationAccount,
+) error {
+	if account == nil {
+		return mpool.ErrAllocationAccountInvalid
+	}
+	if indexBuild.allocationAccount != nil {
+		if indexBuild.allocationAccount == account {
+			return nil
+		}
+		return mpool.ErrAllocationAccountMismatch
+	}
+	selection, err := vector.NewAllocationAccountSelection(
+		account,
+		indexBuildAllocationOwner,
+		indexBuildAllocationSiteRuntimeFilterData,
+		indexBuildAllocationSiteRuntimeFilterArea,
+		indexBuildAllocationSiteRuntimeFilterNulls,
+		indexBuildAllocationSiteRuntimeFilterGrouping,
+	)
+	if err != nil {
+		return err
+	}
+	indexBuild.allocationAccount = account
+	indexBuild.runtimeFilterAllocation = selection
+	return nil
+}
+
+func (indexBuild *IndexBuild) ClearAllocationAccount(
+	account *mpool.AllocationAccount,
+) error {
+	if indexBuild.allocationAccount == nil {
+		return nil
+	}
+	if indexBuild.allocationAccount != account {
+		return mpool.ErrAllocationAccountMismatch
+	}
+	if indexBuild.ctr.buf != nil {
+		return mpool.ErrAllocationAccountInvariant
+	}
+	indexBuild.allocationAccount = nil
+	indexBuild.runtimeFilterAllocation = nil
+	return nil
 }
 
 func (indexBuild *IndexBuild) GetOperatorBase() *vm.OperatorBase {
@@ -76,10 +137,22 @@ func (indexBuild *IndexBuild) Release() {
 func (indexBuild *IndexBuild) Reset(proc *process.Process, pipelineFailed bool, err error) {
 	runtimeSucceed := indexBuild.ctr.state > HandleRuntimeFilter
 
-	message.FinalizeRuntimeFilter(indexBuild.RuntimeFilterSpec, runtimeSucceed, proc.GetMessageBoard())
+	if !indexBuild.ctr.runtimeFilterDone {
+		if !runtimeSucceed && (pipelineFailed || err != nil) {
+			message.FinalizeRuntimeFilterOnBuildError(
+				indexBuild.RuntimeFilterSpec, proc.GetMessageBoard())
+		} else {
+			message.FinalizeRuntimeFilter(
+				indexBuild.RuntimeFilterSpec, runtimeSucceed, proc.GetMessageBoard())
+		}
+		indexBuild.ctr.runtimeFilterDone =
+			indexBuild.RuntimeFilterSpec != nil
+	}
 	indexBuild.ctr.state = ReceiveBatch
+	indexBuild.ctr.runtimeFilterUsable = false
 	if indexBuild.ctr.buf != nil {
-		indexBuild.ctr.buf.CleanOnlyData()
+		indexBuild.ctr.buf.Clean(proc.Mp())
+		indexBuild.ctr.buf = nil
 	}
 }
 

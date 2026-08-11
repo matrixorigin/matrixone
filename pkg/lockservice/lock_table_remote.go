@@ -26,6 +26,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
@@ -192,7 +193,7 @@ func (l *remoteLockTable) lock(
 	// The request may have reached the remote owner and acquired locks even if
 	// the response was lost or the client-side context timed out. Keep local
 	// bookkeeping so normal transaction close can send the remote unlock.
-	_ = txn.lockAdded(l.bind.Group, l.bind, rows, l.logger)
+	_ = txn.lockAddedForCleanup(l.bind.Group, l.bind, rows, l.logger)
 	logRemoteLockFailed(l.logger, txn, rows, opts, l.bind, err)
 	if moerr.IsMoErrCode(err, moerr.ErrRemoteLockWaitTimeout) {
 		cb(pb.Result{}, err)
@@ -226,7 +227,7 @@ func (l *remoteLockTable) lock(
 			zap.String("bind", l.bind.DebugString()),
 		)
 		// Return ErrLockTableBindChanged to trigger retry, preventing transaction from continuing without lock
-		err = moerr.NewLockTableBindChangedNoCtx()
+		err = ErrLockTableBindChanged
 	}
 	cb(pb.Result{}, err)
 }
@@ -604,8 +605,14 @@ func (l *remoteLockTable) maybeHandleBindChanged(
 }
 
 func isRetryError(err error) bool {
-	if moerr.IsMoErrCode(err, moerr.ErrBackendClosed) ||
-		moerr.IsMoErrCode(err, moerr.ErrBackendCannotConnect) {
+	// A backend-create timeout and BackendClosed are observations about this
+	// local transport generation. They can also be produced by a concurrent
+	// targeted reset, so neither is proof that the discovered service is dead.
+	if errors.Is(err, morpc.ErrBackendCreateTimeout) ||
+		moerr.IsMoErrCode(err, moerr.ErrBackendClosed) {
+		return true
+	}
+	if moerr.IsMoErrCode(err, moerr.ErrBackendCannotConnect) {
 		return false
 	}
 	return true

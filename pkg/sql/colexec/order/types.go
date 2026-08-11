@@ -84,7 +84,11 @@ type container struct {
 func (order *Order) Reset(proc *process.Process, pipelineFailed bool, err error) {
 	ctr := &order.ctr
 	if ctr.batWaitForSort != nil {
-		if ctr.batWaitForSort.RowCount() > colexec.DefaultBatchSize {
+		if ctr.batWaitForSort.HasAllocationAccount() ||
+			ctr.batWaitForSort.RowCount() > colexec.DefaultBatchSize {
+			// A partially accumulated sort batch can survive when an upstream
+			// pipeline is stopped before sortAndSend transfers it to rbat. Its
+			// allocation account belongs to the completed execution generation.
 			ctr.batWaitForSort.Clean(proc.Mp())
 			ctr.batWaitForSort = nil
 		} else {

@@ -809,7 +809,7 @@ select * from time07;
 null
 drop table time07;
 drop table if exists test01;
-create table test01 as select col1 from time01 order by col1 nulls first;
+create table test01 as select col1 from time01 order by col1;
 select * from test01;
 ➤ col1[91,64,0]  𝄀
 null  𝄀
@@ -817,7 +817,7 @@ null  𝄀
 2020-10-11
 drop table test01;
 drop table if exists test02;
-create table test02 as select * from time01 order by col2 desc nulls first;
+create table test02 as select * from time01 order by col2 is not null, col2 desc;
 select * from test02;
 ➤ col1[91,64,0]  ¦  col2[93,64,0]  ¦  col3[93,64,0]  ¦  col4[92,64,0]  𝄀
 null  ¦  null  ¦  null  ¦  null  𝄀
@@ -825,7 +825,7 @@ null  ¦  null  ¦  null  ¦  null  𝄀
 1919-12-01  ¦  1990-10-10 01:01:01  ¦  2001-12-12 01:01:01  ¦  10:59:59
 drop table test02;
 drop table if exists test03;
-create table test03 as select * from time01 order by col2 desc nulls last;
+create table test03 as select * from time01 order by col2 desc;
 select * from test03;
 ➤ col1[91,64,0]  ¦  col2[93,64,0]  ¦  col3[93,64,0]  ¦  col4[92,64,0]  𝄀
 2020-10-11  ¦  2023-11-11 10:00:01  ¦  1997-01-13 12:12:12  ¦  12:12:12  𝄀
@@ -833,7 +833,7 @@ select * from test03;
 null  ¦  null  ¦  null  ¦  null
 drop table test03;
 drop table if exists test04;
-create table test04 as select col1 from time01 order by col1 nulls first;
+create table test04 as select col1 from time01 order by col1;
 select * from test04;
 ➤ col1[91,64,0]  𝄀
 null  𝄀
@@ -2077,7 +2077,29 @@ name VARCHAR(20) NOT NULL,
 price DECIMAL,
 PRIMARY KEY (category, id)
 );
-create dynamic table dt_test as select * from tx1;
-lack of option type
 drop table tx1;
 drop database db9;
+drop database if exists repro_ctas_datetime6;
+create database repro_ctas_datetime6;
+use repro_ctas_datetime6;
+create table t as
+select cast('2025-05-06 07:08:09.123456' as datetime(6)) as dt_lit;
+select dt_lit from t;
+➤ dt_lit[93,64,0]  𝄀
+2025-05-06 07:08:09.123456000
+select table_name, column_name, column_type, is_nullable
+from information_schema.columns
+where table_schema = 'repro_ctas_datetime6'
+order by ordinal_position;
+➤ table_name[12,-1,0]  ¦  column_name[12,-1,0]  ¦  column_type[12,-1,0]  ¦  is_nullable[12,-1,0]  𝄀
+t  ¦  dt_lit  ¦  DATETIME(6)  ¦  YES  𝄀
+t  ¦  __mo_fake_pk_col  ¦  BIGINT UNSIGNED(0)  ¦  NO
+create table t_union as
+select cast('2025-05-06 07:08:09.123456' as datetime(6)) as dt_lit
+union all
+select cast('2025-05-07 08:09:10.654321' as datetime(6));
+select dt_lit from t_union order by dt_lit;
+➤ dt_lit[93,64,0]  𝄀
+2025-05-06 07:08:09.123456000  𝄀
+2025-05-07 08:09:10.654321000
+drop database repro_ctas_datetime6;

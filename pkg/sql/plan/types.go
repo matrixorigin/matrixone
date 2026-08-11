@@ -16,10 +16,12 @@ package plan
 
 import (
 	"context"
+	"encoding/base64"
 	"fmt"
 	"math"
 	"strings"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -77,6 +79,7 @@ type SnapshotTenant = plan.SnapshotTenant
 type ExternAttr = plan.ExternAttr
 
 const ViewSnapshotKeySuffix = "@ts="
+const viewDependencyKeyPrefix = "\x00mo_view_dependency\x00"
 
 // FormatViewKeyWithSnapshot appends snapshot information to a view key for privilege checks.
 func FormatViewKeyWithSnapshot(viewKey string, snapshot *Snapshot) string {
@@ -84,6 +87,60 @@ func FormatViewKeyWithSnapshot(viewKey string, snapshot *Snapshot) string {
 		return viewKey
 	}
 	return fmt.Sprintf("%s%s%d", viewKey, ViewSnapshotKeySuffix, snapshot.TS.PhysicalTime)
+}
+
+// FormatViewDependencyKey preserves database and view identifiers separately,
+// plus the complete optional table-level snapshot used to resolve the view.
+func FormatViewDependencyKey(databaseName, viewName string, snapshot *Snapshot) (string, error) {
+	var snapshotData []byte
+	if IsSnapshotValid(snapshot) {
+		var err error
+		snapshotData, err = snapshot.Marshal()
+		if err != nil {
+			return "", err
+		}
+	}
+	return viewDependencyKeyPrefix +
+		base64.RawURLEncoding.EncodeToString([]byte(databaseName)) + "." +
+		base64.RawURLEncoding.EncodeToString([]byte(viewName)) + "." +
+		base64.RawURLEncoding.EncodeToString(snapshotData), nil
+}
+
+// ParseViewDependencyKey returns the database, view, and optional table-level
+// snapshot recorded while binding a view. Plain database#view keys remain
+// readable for callers that have not recorded the structured dependency form.
+func ParseViewDependencyKey(viewKey string) (string, string, *Snapshot, error) {
+	if !strings.HasPrefix(viewKey, viewDependencyKeyPrefix) {
+		databaseName, viewName, ok := strings.Cut(viewKey, "#")
+		if !ok || databaseName == "" || viewName == "" {
+			return "", "", nil, moerr.NewInternalErrorNoCtx("invalid view dependency")
+		}
+		return databaseName, viewName, nil, nil
+	}
+	parts := strings.Split(viewKey[len(viewDependencyKeyPrefix):], ".")
+	if len(parts) != 3 || parts[0] == "" || parts[1] == "" {
+		return "", "", nil, moerr.NewInternalErrorNoCtx("invalid encoded view dependency")
+	}
+	databaseName, err := base64.RawURLEncoding.DecodeString(parts[0])
+	if err != nil {
+		return "", "", nil, err
+	}
+	viewName, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		return "", "", nil, err
+	}
+	if parts[2] == "" {
+		return string(databaseName), string(viewName), nil, nil
+	}
+	data, err := base64.RawURLEncoding.DecodeString(parts[2])
+	if err != nil {
+		return "", "", nil, err
+	}
+	snapshot := &Snapshot{}
+	if err = snapshot.Unmarshal(data); err != nil {
+		return "", "", nil, err
+	}
+	return string(databaseName), string(viewName), snapshot, nil
 }
 
 type CompilerContext interface {
@@ -180,26 +237,36 @@ type QueryBuilder struct {
 	qry     *plan.Query
 	compCtx CompilerContext
 
-	ctxByNode            []*BindContext
-	nameByColRef         map[[2]int32]string
-	protectedScans       map[int32]int
-	projectSpecialGuards map[int32]*specialIndexGuard
-	indexHintsByScan     map[int32]*indexHintSet
-	indexHintOwnerByNode map[int32]int32
+	ctxByNode                   []*BindContext
+	nameByColRef                map[[2]int32]string
+	protectedScans              map[int32]int
+	projectSpecialGuards        map[int32]*specialIndexGuard
+	setBitmapByDisplayNode      map[[2]int32]int32
+	indexHintsByScan            map[int32]*indexHintSet
+	indexHintOwnerByNode        map[int32]int32
+	preserveSinkProjection      map[int32]struct{}
+	preserveLockProjection      map[int32]struct{}
+	preservePreInsertProjection map[int32]struct{}
+	preserveInsertProjection    map[int32]struct{}
+	preserveScanProjection      map[int32]struct{}
+	positionalSinkScans         map[int32]struct{}
 
 	tag2Table  map[int32]*TableDef
 	tag2NodeID map[int32]int32
 
-	nextBindTag int32
-	nextMsgTag  int32
+	nextBindTag      int32
+	nextMsgTag       int32
+	nextSQLUdfCallID uint64
 
-	isPrepareStatement    bool
-	mysqlCompatible       bool
-	isForUpdate           bool // if it's a query plan for update
-	isRestore             bool
-	isRestoreByTs         bool
-	isSkipResolveTableDef bool
-	skipStats             bool
+	isPrepareStatement     bool
+	mysqlCompatible        bool
+	mysqlFullGroupByCompat bool
+	isForUpdate            bool // if it's a query plan for update
+	isRestore              bool
+	isRestoreByTs          bool
+	isSkipResolveTableDef  bool
+	skipStats              bool
+	isInsertIgnore         bool // INSERT IGNORE: over-length CHAR/VARCHAR writes are truncated instead of rejected
 
 	deleteNode map[uint64]int32 //delete node in this query. key is tableId, value is the nodeId of sinkScan node in the delete plan
 
@@ -241,6 +308,18 @@ type QueryBuilder struct {
 	irregularMaintIndexes     []*plan.IndexDef
 	irregularMaintTableDef    *plan.TableDef
 	irregularMaintObjRef      *plan.ObjectRef
+	irregularMaintSkipInsert  bool
+
+	// DML RETURNING consumes an attempt-local row image from a dedicated sink.
+	// The mutation plan and the returning projection use independent SINK_SCAN
+	// readers, so index/FK side-effect branches cannot multiply returned rows.
+	returningSourceStep int32
+	returningRequested  bool
+	returningTableDef   *plan.TableDef
+	returningObjRef     *plan.ObjectRef
+	returningTableName  string
+	returningAlias      string
+	returningColPos     map[string]int32
 	// sinkColRef records, per materialized step, the post-pruning column remap
 	// produced by createQuery's final remapAllColRefs pass: {step, originalColPos}
 	// -> newColPos. The irregular-index maintenance sub-plans are appended after
@@ -248,6 +327,11 @@ type QueryBuilder struct {
 	// so positions recorded pre-prune (e.g. the REPLACE old-PK key) must be remapped
 	// through this map before use.
 	sinkColRef map[[2]int32]int
+
+	// cteRefs contains only non-recursive CTEs that were actually bound. It is
+	// populated lazily so unused CTE bodies retain their existing lazy-binding
+	// semantics.
+	cteRefs []*CTERef
 }
 
 type OptimizerHints struct {
@@ -281,6 +365,18 @@ type CTERef struct {
 	maskedCTEs     map[string]bool
 	snapshot       *Snapshot
 	declarationCtx *BindContext
+	occurrences    []cteOccurrence
+	hasNestedRef   bool
+	hasNestedUse   bool
+}
+
+type cteOccurrence struct {
+	rootID       int32
+	rootTag      int32
+	ctx          *BindContext
+	headings     []string
+	types        []plan.Type
+	isCorrelated bool
 }
 
 type CteBindState struct {
@@ -317,15 +413,43 @@ type aliasItem struct {
 type BindContext struct {
 	binder Binder
 
+	// outputColumnProvenance records planner-local source or pure-NULL identity
+	// by output position. An explicit None prevents later transparent-boundary
+	// code from rediscovering metadata after a semantic boundary has cleared it.
+	outputColumnProvenance map[int32]OutputColumnProvenance
+
+	// mysqlSpecialOrderTypes records the storage type behind a visible ENUM/SET
+	// display value.  It is planner-local semantic provenance: only a pure
+	// display projection (or a pure column passthrough of one) may populate it.
+	// A present key with a nil value explicitly suppresses provenance when a
+	// multi-input construct proves the originating display contract unsafe.
+	// The generated plan consumes the provenance by materializing an ordinary
+	// numeric sort expression, so this metadata never crosses the plan wire.
+	mysqlSpecialOrderTypes map[int32]*plan.Type
+	// mysqlSpecialCanonicalTypes records outputs whose SQL-visible value has
+	// already passed through GROUP BY or DISTINCT and must be canonically
+	// re-encoded when a persisted View exposes an ENUM/SET catalog type.
+	mysqlSpecialCanonicalTypes map[int32]*plan.Type
+	// restoreViewMySQLSpecialTypes is inherited only while rebinding a persisted
+	// View. It lets transparent derived/CTE query boundaries expose their raw
+	// ENUM/SET values without changing ordinary query-boundary behavior.
+	restoreViewMySQLSpecialTypes bool
+	// mysqlSpecialRawProjectPositions maps a visible output position to a hidden
+	// raw ENUM/SET sidecar in the query block's PROJECT. It is populated only
+	// for row-preserving View ORDER BY boundaries.
+	mysqlSpecialRawProjectPositions map[int32]int32
+
 	//cteByName saves all cte definitions in the current stmt
 	cteByName map[string]*CTERef
 	//cteState records state of binding cte
-	cteState      CteBindState
-	sliding       bool
-	isDistinct    bool
-	isCorrelated  bool
-	hasSingleRow  bool
-	isGroupingSet bool
+	cteState                     CteBindState
+	sliding                      bool
+	explicitSliding              bool
+	isDistinct                   bool
+	normalizeGroupingSetDistinct bool
+	isCorrelated                 bool
+	hasSingleRow                 bool
+	isGroupingSet                bool
 
 	//cteName denotes the alias of this BindContext.
 	//it may be from view name, cte name or subquery name
@@ -350,13 +474,15 @@ type BindContext struct {
 	windows    []*plan.Expr
 	times      []*plan.Expr
 
-	groupByAst      map[string]int32
-	groupByParamAst map[string]int32
-	aggregateByAst  map[string]int32
-	sampleByAst     map[string]int32
-	windowByAst     map[string]int32
-	projectByExpr   map[string]int32
-	timeByAst       map[string]int32
+	groupByAst          map[string]int32
+	groupByCanonicalAst map[string]int32
+	groupByParamAst     map[string]int32
+	aggregateByAst      map[string]int32
+	sampleByAst         map[string]int32
+	windowByAst         map[string]int32
+	projectByExpr       map[string]int32
+	timeByAst           map[string]int32
+	whereFilters        []*plan.Expr
 
 	projectColByAst map[string]int32
 
@@ -381,6 +507,11 @@ type BindContext struct {
 	// Only populated when the column has been merged through at least one
 	// FULL OUTER JOIN ... USING. Length is always >= 2 when present.
 	outerUsingCols map[string][]string
+	// sqlUdfArgs holds the already-bound arguments of the SQL UDF currently
+	// being expanded in this query block. The UDF body uses body-unique marker
+	// names for its $n parameters; resolving those markers from a child query
+	// block turns the argument's column references into correlated references.
+	sqlUdfArgs map[string]*plan.Expr
 
 	// for join tables
 	bindingTree *BindingTreeNode
@@ -391,10 +522,6 @@ type BindContext struct {
 
 	// sample function related.
 	sampleFunc SampleFuncCtx
-
-	// groupConcatOrderBys stores ORDER BY specs from group_concat functions.
-	// Used to generate a Sort node before the Agg node instead of using window function.
-	groupConcatOrderBys []*plan.OrderBySpec
 
 	snapshot *Snapshot
 	// all view keys(dbName#viewName)
@@ -453,14 +580,23 @@ type Binder interface {
 }
 
 type baseBinder struct {
-	sysCtx                context.Context
-	builder               *QueryBuilder
-	ctx                   *BindContext
-	impl                  Binder
-	boundCols             []string
-	numericParamType      *Type
-	numericSubqueryTarget *Type
-	numericFunctionTarget bool
+	sysCtx                           context.Context
+	builder                          *QueryBuilder
+	ctx                              *BindContext
+	impl                             Binder
+	boundCols                        []boundColumn
+	numericParamType                 *Type
+	numericSubqueryTarget            *Type
+	numericFunctionTarget            bool
+	mysqlSpecialTargetType           *Type
+	allowCanonicalNameConstValueCast bool
+	bindRawMySQLSpecialType          bool
+}
+
+type boundColumn struct {
+	name      string
+	relation  int32
+	columnPos int32
 }
 
 type DefaultBinder struct {
@@ -572,7 +708,17 @@ type Binding struct {
 	originCols  []string
 	colIsHidden []bool
 	types       []*plan.Type
-	refCnts     []uint
+	// mysqlSpecialOrderTypes is aligned with cols. A non-nil entry means that
+	// the string column is a pure display of the recorded ENUM/SET storage
+	// type, and may therefore use definition-order semantics when ordered.
+	mysqlSpecialOrderTypes []*plan.Type
+	// mysqlSpecialCanonicalTypes is aligned with cols and propagates the
+	// post-semantic canonical-value contract through transparent bindings.
+	mysqlSpecialCanonicalTypes []*plan.Type
+	// outputColumnProvenance is aligned with cols and carries planner-local
+	// source or pure-NULL output identity. It is never serialized into the plan.
+	outputColumnProvenance []OutputColumnProvenance
+	refCnts                []uint
 	// lower case
 	colIdByName    map[string]int32
 	isClusterTable bool

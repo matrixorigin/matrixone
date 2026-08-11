@@ -144,6 +144,12 @@ type LocalDisttaeDataSource struct {
 		entries     []workspaceDeleteEntry
 		byBlock     map[objectio.Blockid][]workspaceDeleteEntry
 	}
+
+	pStateTombstoneObjects struct {
+		initialized bool
+		index       tombstoneObjectIndex
+		candidates  []int
+	}
 }
 
 type workspaceDeleteEntry struct {
@@ -152,6 +158,11 @@ type workspaceDeleteEntry struct {
 }
 
 const mergeWorkspaceDeleteEntriesThreshold = 1024
+
+// Building the tombstone range index has a fixed per-scan cost. Benchmarks
+// with the QA shape (700 tombstone objects) put its break-even point below 32
+// blocks, so smaller scans retain the allocation-free linear iterator.
+const tombstoneRangeIndexMinBlocks = 32
 
 func (ls *LocalDisttaeDataSource) String() string {
 	blks := make([]*objectio.BlockInfo, ls.rangeSlice.Len())
@@ -382,6 +393,9 @@ func (ls *LocalDisttaeDataSource) Close() {
 		ls.pStateRows.insIter.Close()
 		ls.pStateRows.insIter = nil
 	}
+	ls.pStateTombstoneObjects.initialized = false
+	ls.pStateTombstoneObjects.index = tombstoneObjectIndex{}
+	ls.pStateTombstoneObjects.candidates = nil
 }
 
 func (ls *LocalDisttaeDataSource) Next(
@@ -1395,27 +1409,37 @@ func (ls *LocalDisttaeDataSource) applyPStateTombstoneObjects(
 		return offsets, nil
 	}
 
-	var iter objectio.ObjectIter
-	getTombstone := func() (*objectio.ObjectStats, error) {
-		var err error
-		if iter == nil {
-			if iter, err = ls.pState.NewObjectsIter(
-				ls.snapshotTS, true, true,
-			); err != nil {
-				return nil, err
-			}
+	var (
+		getTombstone func() (*objectio.ObjectStats, error)
+		closeIter    = func() {}
+	)
+	if ls.rangeSlice.Len() >= tombstoneRangeIndexMinBlocks {
+		if err := ls.initPStateTombstoneObjectIndex(); err != nil {
+			return nil, err
 		}
-		if iter.Next() {
-			entry := iter.Entry()
-			return &entry.ObjectStats, nil
+		candidates := ls.pStateTombstoneObjects.index.selectCandidates(
+			bid, ls.pStateTombstoneObjects.candidates,
+		)
+		ls.pStateTombstoneObjects.candidates = candidates
+		statsIter := &indexedObjectStatsIter{
+			index:      &ls.pStateTombstoneObjects.index,
+			candidates: candidates,
 		}
-		return nil, nil
+		getTombstone = statsIter.next
+	} else {
+		iter, err := ls.pState.NewObjectsIter(
+			ls.snapshotTS, true, true,
+		)
+		if err != nil {
+			return nil, err
+		}
+		closeIter = func() {
+			_ = iter.Close()
+		}
+		statsIter := &reusableObjectStatsIter{iter: iter}
+		getTombstone = statsIter.next
 	}
-	defer func() {
-		if iter != nil {
-			iter.Close()
-		}
-	}()
+	defer closeIter()
 
 	// PXU TODO: handle len(offsets) < 10 or 20, 30?
 	if len(offsets) == 1 {
@@ -1460,6 +1484,51 @@ func (ls *LocalDisttaeDataSource) applyPStateTombstoneObjects(
 	})
 
 	return offsets, nil
+}
+
+func (ls *LocalDisttaeDataSource) initPStateTombstoneObjectIndex() error {
+	if ls.pStateTombstoneObjects.initialized {
+		return nil
+	}
+	iter, err := ls.pState.NewObjectsIter(ls.snapshotTS, true, true)
+	if err != nil {
+		return err
+	}
+	defer iter.Close()
+
+	objects := make(
+		[]objectio.ObjectStats,
+		0,
+		ls.pState.ApproxTombstoneObjectsNum(),
+	)
+	statsIter := reusableObjectStatsIter{iter: iter}
+	for {
+		stats, err := statsIter.next()
+		if err != nil {
+			return err
+		}
+		if stats == nil {
+			break
+		}
+		objects = append(objects, *stats)
+	}
+	ls.pStateTombstoneObjects.index = newTombstoneObjectIndex(objects)
+	ls.pStateTombstoneObjects.initialized = true
+	return nil
+}
+
+type reusableObjectStatsIter struct {
+	iter    objectio.ObjectIter
+	current objectio.ObjectStats
+}
+
+// next returns stats that remain valid until the next call.
+func (i *reusableObjectStatsIter) next() (*objectio.ObjectStats, error) {
+	if !i.iter.Next() {
+		return nil, nil
+	}
+	i.current = i.iter.Entry().ObjectStats
+	return &i.current, nil
 }
 
 func (ls *LocalDisttaeDataSource) batchPrefetch(seqNums []uint16) {
@@ -1562,10 +1631,16 @@ func (ls *LocalDisttaeDataSource) batchApplyTombstoneObjects(
 
 			var deletedRowIds []objectio.Rowid
 			var commit []types.TS
+			var abortColumn ioutil.TombstoneAbortColumn
 
 			deletedRowIds = vector.MustFixedColWithTypeCheck[objectio.Rowid](&cacheVectors[0])
 			if !obj.GetCNCreated() {
 				commit = vector.MustFixedColWithTypeCheck[types.TS](&cacheVectors[1])
+				var abortErr error
+				abortColumn, abortErr = ioutil.ValidateTombstoneAbortColumn(len(deletedRowIds), &cacheVectors[2])
+				if abortErr != nil {
+					return abortErr
+				}
 			}
 
 			for i := 0; i < len(rowIds); i++ {
@@ -1574,6 +1649,7 @@ func (ls *LocalDisttaeDataSource) batchApplyTombstoneObjects(
 
 				for j := s; j < e; j++ {
 					if rowIds[i].EQ(&deletedRowIds[j]) &&
+						(!abortColumn.IsPresent() || !abortColumn.IsAborted(j)) &&
 						(commit == nil || commit[j].LE(&ls.snapshotTS)) {
 						deletedMask.Add(uint64(i))
 						break

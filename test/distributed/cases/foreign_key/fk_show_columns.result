@@ -10,7 +10,7 @@ owner  ¦  INT UNSIGNED(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 creator  ¦  INT UNSIGNED(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 created_time  ¦  TIMESTAMP(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 account_id  ¦  INT UNSIGNED(0)  ¦  YES  ¦  PRI  ¦  null  ¦    ¦    𝄀
-dat_type  ¦  VARCHAR(32)  ¦  YES  ¦    ¦  null  ¦    ¦  
+dat_type  ¦  VARCHAR(32)  ¦  YES  ¦    ¦  null  ¦    ¦
 desc	mo_catalog.mo_tables                  ;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 rel_id  ¦  BIGINT UNSIGNED(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
@@ -31,7 +31,7 @@ viewdef  ¦  VARCHAR(5000)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 constraint  ¦  VARCHAR(5000)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 rel_version  ¦  INT UNSIGNED(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 catalog_version  ¦  INT UNSIGNED(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-rel_logical_id  ¦  BIGINT UNSIGNED(0)  ¦  YES  ¦  UNI  ¦  null  ¦    ¦  
+rel_logical_id  ¦  BIGINT UNSIGNED(0)  ¦  YES  ¦  UNI  ¦  null  ¦    ¦
 desc	mo_catalog.mo_columns                 ;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 att_uniq_name  ¦  VARCHAR(256)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
@@ -59,7 +59,7 @@ attr_is_clusterby  ¦  TINYINT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 attr_seqnum  ¦  SMALLINT UNSIGNED(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 attr_enum  ¦  VARCHAR(65535)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 attr_has_generated  ¦  TINYINT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-attr_generated  ¦  VARCHAR(2048)  ¦  YES  ¦    ¦  null  ¦    ¦  
+attr_generated  ¦  VARCHAR(2048)  ¦  YES  ¦    ¦  null  ¦    ¦
 desc	mo_catalog.mo_account                 ;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 account_id  ¦  INT(32)  ¦  NO  ¦  PRI  ¦  null  ¦  auto_increment  ¦    𝄀
@@ -70,7 +70,7 @@ created_time  ¦  TIMESTAMP(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 comments  ¦  VARCHAR(256)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 version  ¦  BIGINT UNSIGNED(64)  ¦  YES  ¦    ¦  null  ¦  auto_increment  ¦    𝄀
 suspended_time  ¦  TIMESTAMP(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-create_version  ¦  VARCHAR(50)  ¦  YES  ¦    ¦  1.2.0  ¦    ¦  
+create_version  ¦  VARCHAR(50)  ¦  YES  ¦    ¦  1.2.0  ¦    ¦
 desc	mo_catalog.mo_user                    ;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 user_id  ¦  INT(32)  ¦  NO  ¦  PRI  ¦  null  ¦  auto_increment  ¦    𝄀
@@ -87,7 +87,7 @@ lock_time  ¦  TIMESTAMP(0)  ¦  YES  ¦    ¦  utc_timestamp()  ¦    ¦    �
 login_type  ¦  VARCHAR(16)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 creator  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 owner  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-default_role  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦    ¦  
+default_role  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦    ¦
 desc	mo_catalog.mo_role                    ;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 role_id  ¦  INT(32)  ¦  NO  ¦  PRI  ¦  null  ¦  auto_increment  ¦    𝄀
@@ -95,13 +95,13 @@ role_name  ¦  VARCHAR(300)  ¦  YES  ¦  UNI  ¦  null  ¦    ¦    𝄀
 creator  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 owner  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 created_time  ¦  TIMESTAMP(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-comments  ¦  TEXT(0)  ¦  YES  ¦    ¦  null  ¦    ¦  
+comments  ¦  TEXT(0)  ¦  YES  ¦    ¦  null  ¦    ¦
 desc	mo_catalog.mo_user_grant              ;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 role_id  ¦  INT(32)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
 user_id  ¦  INT(32)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
 granted_time  ¦  TIMESTAMP(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-with_grant_option  ¦  BOOL(0)  ¦  YES  ¦    ¦  null  ¦    ¦  
+with_grant_option  ¦  BOOL(0)  ¦  YES  ¦    ¦  null  ¦    ¦
 desc	mo_catalog.mo_role_grant              ;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 granted_id  ¦  INT(32)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
@@ -109,7 +109,7 @@ grantee_id  ¦  INT(32)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
 operation_role_id  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 operation_user_id  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 granted_time  ¦  TIMESTAMP(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-with_grant_option  ¦  BOOL(0)  ¦  YES  ¦    ¦  null  ¦    ¦  
+with_grant_option  ¦  BOOL(0)  ¦  YES  ¦    ¦  null  ¦    ¦
 desc	mo_catalog.mo_role_privs              ;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 role_id  ¦  INT(32)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
@@ -121,7 +121,7 @@ privilege_name  ¦  VARCHAR(100)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 privilege_level  ¦  VARCHAR(100)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
 operation_user_id  ¦  INT UNSIGNED(32)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 granted_time  ¦  TIMESTAMP(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-with_grant_option  ¦  BOOL(0)  ¦  YES  ¦    ¦  null  ¦    ¦  
+with_grant_option  ¦  BOOL(0)  ¦  YES  ¦    ¦  null  ¦    ¦
 desc	mo_catalog.mo_user_defined_function   ;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 function_id  ¦  INT(32)  ¦  NO  ¦  PRI  ¦  null  ¦  auto_increment  ¦    𝄀
@@ -140,8 +140,8 @@ security_type  ¦  VARCHAR(10)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 comment  ¦  VARCHAR(5000)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 character_set_client  ¦  VARCHAR(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 collation_connection  ¦  VARCHAR(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-database_collation  ¦  VARCHAR(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-sql_mode  ¦  VARCHAR(1024)  ¦  NO  ¦    ¦  PIPES_AS_CONCAT  ¦    ¦  
+database_collation  ¦  VARCHAR(64)  ¦  YES  ¦    ¦  null  ¦    ¦
+sql_mode  ¦  VARCHAR(1024)  ¦  NO  ¦    ¦  PIPES_AS_CONCAT  ¦    ¦
 desc	mo_catalog.mo_stored_procedure        ;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 proc_id  ¦  INT(32)  ¦  NO  ¦  PRI  ¦  null  ¦  auto_increment  ¦    𝄀
@@ -160,7 +160,7 @@ security_type  ¦  VARCHAR(10)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 comment  ¦  VARCHAR(5000)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 character_set_client  ¦  VARCHAR(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 collation_connection  ¦  VARCHAR(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-database_collation  ¦  VARCHAR(64)  ¦  YES  ¦    ¦  null  ¦    ¦  
+database_collation  ¦  VARCHAR(64)  ¦  YES  ¦    ¦  null  ¦    ¦
 desc	mo_catalog.mo_mysql_compatibility_mode;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 configuration_id  ¦  INT(32)  ¦  NO  ¦  PRI  ¦  null  ¦  auto_increment  ¦    𝄀
@@ -169,14 +169,14 @@ account_name  ¦  VARCHAR(300)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 dat_name  ¦  VARCHAR(5000)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 variable_name  ¦  VARCHAR(300)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 variable_value  ¦  VARCHAR(5000)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-system_variables  ¦  BOOL(0)  ¦  YES  ¦    ¦  null  ¦    ¦  
+system_variables  ¦  BOOL(0)  ¦  YES  ¦    ¦  null  ¦    ¦
 desc	mo_catalog.mo_increment_columns       ;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 table_id  ¦  BIGINT UNSIGNED(64)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
 col_name  ¦  VARCHAR(770)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
 col_index  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 offset  ¦  BIGINT UNSIGNED(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-step  ¦  BIGINT UNSIGNED(64)  ¦  YES  ¦    ¦  null  ¦    ¦  
+step  ¦  BIGINT UNSIGNED(64)  ¦  YES  ¦    ¦  null  ¦    ¦
 desc	mo_catalog.mo_indexes                 ;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 id  ¦  BIGINT UNSIGNED(64)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
@@ -193,7 +193,8 @@ comment  ¦  VARCHAR(2048)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
 column_name  ¦  VARCHAR(256)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
 ordinal_position  ¦  INT UNSIGNED(32)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
 options  ¦  TEXT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-index_table_name  ¦  VARCHAR(5000)  ¦  YES  ¦    ¦  null  ¦    ¦  
+index_table_name  ¦  VARCHAR(5000)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+included_columns  ¦  TEXT(0)  ¦  YES  ¦    ¦  null  ¦    ¦
 desc	mo_catalog.mo_table_partitions        ;
 [unknown result because it is related to issue#16438]
 desc	mo_catalog.mo_pubs                    ;
@@ -210,7 +211,7 @@ created_time  ¦  TIMESTAMP(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 update_time  ¦  TIMESTAMP(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 owner  ¦  INT UNSIGNED(32)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 creator  ¦  INT UNSIGNED(32)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-comment  ¦  TEXT(0)  ¦  YES  ¦    ¦  null  ¦    ¦  
+comment  ¦  TEXT(0)  ¦  YES  ¦    ¦  null  ¦    ¦
 desc	mo_catalog.mo_stages                  ;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 stage_id  ¦  INT UNSIGNED(32)  ¦  NO  ¦  PRI  ¦  null  ¦  auto_increment  ¦    𝄀
@@ -219,7 +220,7 @@ url  ¦  TEXT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 stage_credentials  ¦  TEXT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 stage_status  ¦  VARCHAR(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 created_time  ¦  TIMESTAMP(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-comment  ¦  TEXT(0)  ¦  YES  ¦    ¦  null  ¦    ¦  
+comment  ¦  TEXT(0)  ¦  YES  ¦    ¦  null  ¦    ¦
 desc	mo_catalog.mo_sessions                ;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 node_id  ¦  VARCHAR(65535)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
@@ -240,7 +241,7 @@ sql_source_type  ¦  VARCHAR(65535)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 query_start  ¦  VARCHAR(65535)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 client_host  ¦  VARCHAR(65535)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 role  ¦  VARCHAR(65535)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-proxy_host  ¦  VARCHAR(65535)  ¦  YES  ¦    ¦  null  ¦    ¦  
+proxy_host  ¦  VARCHAR(65535)  ¦  YES  ¦    ¦  null  ¦    ¦
 desc	mo_catalog.mo_configurations          ;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 node_type  ¦  VARCHAR(65535)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
@@ -248,7 +249,7 @@ node_id  ¦  VARCHAR(65535)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 name  ¦  VARCHAR(65535)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 current_value  ¦  VARCHAR(65535)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 default_value  ¦  VARCHAR(65535)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-internal  ¦  VARCHAR(65535)  ¦  YES  ¦    ¦  null  ¦    ¦  
+internal  ¦  VARCHAR(65535)  ¦  YES  ¦    ¦  null  ¦    ¦
 desc	mo_catalog.mo_locks                   ;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 cn_id  ¦  VARCHAR(65535)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
@@ -258,7 +259,7 @@ lock_key  ¦  VARCHAR(65535)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 lock_content  ¦  VARCHAR(65535)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 lock_mode  ¦  VARCHAR(65535)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 lock_status  ¦  VARCHAR(65535)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-lock_wait  ¦  VARCHAR(65535)  ¦  YES  ¦    ¦  null  ¦    ¦  
+lock_wait  ¦  VARCHAR(65535)  ¦  YES  ¦    ¦  null  ¦    ¦
 desc	mo_catalog.mo_variables               ;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 configuration_id  ¦  INT(32)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
@@ -267,7 +268,7 @@ account_name  ¦  VARCHAR(300)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 dat_name  ¦  VARCHAR(5000)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 variable_name  ¦  VARCHAR(300)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 variable_value  ¦  VARCHAR(5000)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-system_variables  ¦  BOOL(0)  ¦  YES  ¦    ¦  null  ¦    ¦  
+system_variables  ¦  BOOL(0)  ¦  YES  ¦    ¦  null  ¦    ¦
 desc	mo_catalog.mo_transactions            ;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 cn_id  ¦  VARCHAR(65535)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
@@ -283,7 +284,7 @@ txn_status  ¦  VARCHAR(65535)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 table_id  ¦  VARCHAR(65535)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 lock_key  ¦  VARCHAR(65535)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 lock_content  ¦  VARCHAR(65535)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-lock_mode  ¦  VARCHAR(65535)  ¦  YES  ¦    ¦  null  ¦    ¦  
+lock_mode  ¦  VARCHAR(65535)  ¦  YES  ¦    ¦  null  ¦    ¦
 desc	mo_catalog.mo_cache                   ;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 node_type  ¦  VARCHAR(65535)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
@@ -291,7 +292,7 @@ node_id  ¦  VARCHAR(65535)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 type  ¦  VARCHAR(65535)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 used  ¦  BIGINT UNSIGNED(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 free  ¦  BIGINT UNSIGNED(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-hit_ratio  ¦  FLOAT(0)  ¦  YES  ¦    ¦  null  ¦    ¦  
+hit_ratio  ¦  FLOAT(0)  ¦  YES  ¦    ¦  null  ¦    ¦
 desc	mo_catalog.mo_foreign_keys            ;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 constraint_name  ¦  VARCHAR(5000)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
@@ -309,7 +310,10 @@ refer_table_id  ¦  BIGINT UNSIGNED(64)  ¦  NO  ¦  PRI  ¦  0  ¦    ¦    �
 refer_column_name  ¦  VARCHAR(256)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
 refer_column_id  ¦  BIGINT UNSIGNED(64)  ¦  NO  ¦  PRI  ¦  0  ¦    ¦    𝄀
 on_delete  ¦  VARCHAR(128)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
-on_update  ¦  VARCHAR(128)  ¦  NO  ¦    ¦  null  ¦    ¦  
+on_update  ¦  VARCHAR(128)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+referenced_index_name  ¦  VARCHAR(5000)  ¦  NO  ¦    ¦    ¦    ¦    𝄀
+on_delete_origin  ¦  VARCHAR(64)  ¦  NO  ¦    ¦  ACTION_ORIGIN_EXPLICIT  ¦    ¦    𝄀
+on_update_origin  ¦  VARCHAR(64)  ¦  NO  ¦    ¦  ACTION_ORIGIN_EXPLICIT  ¦    ¦
 desc	mo_catalog.mo_snapshots               ;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 snapshot_id  ¦  UUID(0)  ¦  YES  ¦  UNI  ¦  null  ¦    ¦    𝄀
@@ -320,7 +324,7 @@ account_name  ¦  VARCHAR(300)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 database_name  ¦  VARCHAR(5000)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 table_name  ¦  VARCHAR(5000)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 obj_id  ¦  BIGINT UNSIGNED(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-kind  ¦  VARCHAR(32)  ¦  NO  ¦    ¦  user  ¦    ¦  
+kind  ¦  VARCHAR(32)  ¦  NO  ¦    ¦  user  ¦    ¦
 show columns from	mo_catalog.mo_database                ;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 dat_id  ¦  BIGINT UNSIGNED(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
@@ -331,7 +335,7 @@ owner  ¦  INT UNSIGNED(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 creator  ¦  INT UNSIGNED(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 created_time  ¦  TIMESTAMP(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 account_id  ¦  INT UNSIGNED(0)  ¦  YES  ¦  PRI  ¦  null  ¦    ¦    𝄀
-dat_type  ¦  VARCHAR(32)  ¦  YES  ¦    ¦  null  ¦    ¦  
+dat_type  ¦  VARCHAR(32)  ¦  YES  ¦    ¦  null  ¦    ¦
 show columns from	mo_catalog.mo_tables                  ;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 rel_id  ¦  BIGINT UNSIGNED(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
@@ -352,7 +356,7 @@ viewdef  ¦  VARCHAR(5000)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 constraint  ¦  VARCHAR(5000)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 rel_version  ¦  INT UNSIGNED(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 catalog_version  ¦  INT UNSIGNED(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-rel_logical_id  ¦  BIGINT UNSIGNED(0)  ¦  YES  ¦  UNI  ¦  null  ¦    ¦  
+rel_logical_id  ¦  BIGINT UNSIGNED(0)  ¦  YES  ¦  UNI  ¦  null  ¦    ¦
 show columns from	mo_catalog.mo_columns                 ;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 att_uniq_name  ¦  VARCHAR(256)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
@@ -380,7 +384,7 @@ attr_is_clusterby  ¦  TINYINT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 attr_seqnum  ¦  SMALLINT UNSIGNED(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 attr_enum  ¦  VARCHAR(65535)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 attr_has_generated  ¦  TINYINT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-attr_generated  ¦  VARCHAR(2048)  ¦  YES  ¦    ¦  null  ¦    ¦  
+attr_generated  ¦  VARCHAR(2048)  ¦  YES  ¦    ¦  null  ¦    ¦
 show columns from	mo_catalog.mo_account                 ;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 account_id  ¦  INT(32)  ¦  NO  ¦  PRI  ¦  null  ¦  auto_increment  ¦    𝄀
@@ -391,7 +395,7 @@ created_time  ¦  TIMESTAMP(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 comments  ¦  VARCHAR(256)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 version  ¦  BIGINT UNSIGNED(64)  ¦  YES  ¦    ¦  null  ¦  auto_increment  ¦    𝄀
 suspended_time  ¦  TIMESTAMP(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-create_version  ¦  VARCHAR(50)  ¦  YES  ¦    ¦  1.2.0  ¦    ¦  
+create_version  ¦  VARCHAR(50)  ¦  YES  ¦    ¦  1.2.0  ¦    ¦
 show columns from	mo_catalog.mo_user                    ;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 user_id  ¦  INT(32)  ¦  NO  ¦  PRI  ¦  null  ¦  auto_increment  ¦    𝄀
@@ -408,7 +412,7 @@ lock_time  ¦  TIMESTAMP(0)  ¦  YES  ¦    ¦  utc_timestamp()  ¦    ¦    �
 login_type  ¦  VARCHAR(16)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 creator  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 owner  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-default_role  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦    ¦  
+default_role  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦    ¦
 show columns from	mo_catalog.mo_role                    ;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 role_id  ¦  INT(32)  ¦  NO  ¦  PRI  ¦  null  ¦  auto_increment  ¦    𝄀
@@ -416,13 +420,13 @@ role_name  ¦  VARCHAR(300)  ¦  YES  ¦  UNI  ¦  null  ¦    ¦    𝄀
 creator  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 owner  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 created_time  ¦  TIMESTAMP(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-comments  ¦  TEXT(0)  ¦  YES  ¦    ¦  null  ¦    ¦  
+comments  ¦  TEXT(0)  ¦  YES  ¦    ¦  null  ¦    ¦
 show columns from	mo_catalog.mo_user_grant              ;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 role_id  ¦  INT(32)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
 user_id  ¦  INT(32)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
 granted_time  ¦  TIMESTAMP(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-with_grant_option  ¦  BOOL(0)  ¦  YES  ¦    ¦  null  ¦    ¦  
+with_grant_option  ¦  BOOL(0)  ¦  YES  ¦    ¦  null  ¦    ¦
 show columns from	mo_catalog.mo_role_grant              ;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 granted_id  ¦  INT(32)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
@@ -430,7 +434,7 @@ grantee_id  ¦  INT(32)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
 operation_role_id  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 operation_user_id  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 granted_time  ¦  TIMESTAMP(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-with_grant_option  ¦  BOOL(0)  ¦  YES  ¦    ¦  null  ¦    ¦  
+with_grant_option  ¦  BOOL(0)  ¦  YES  ¦    ¦  null  ¦    ¦
 show columns from	mo_catalog.mo_role_privs              ;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 role_id  ¦  INT(32)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
@@ -442,7 +446,7 @@ privilege_name  ¦  VARCHAR(100)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 privilege_level  ¦  VARCHAR(100)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
 operation_user_id  ¦  INT UNSIGNED(32)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 granted_time  ¦  TIMESTAMP(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-with_grant_option  ¦  BOOL(0)  ¦  YES  ¦    ¦  null  ¦    ¦  
+with_grant_option  ¦  BOOL(0)  ¦  YES  ¦    ¦  null  ¦    ¦
 show columns from	mo_catalog.mo_user_defined_function   ;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 function_id  ¦  INT(32)  ¦  NO  ¦  PRI  ¦  null  ¦  auto_increment  ¦    𝄀
@@ -461,8 +465,8 @@ security_type  ¦  VARCHAR(10)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 comment  ¦  VARCHAR(5000)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 character_set_client  ¦  VARCHAR(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 collation_connection  ¦  VARCHAR(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-database_collation  ¦  VARCHAR(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-sql_mode  ¦  VARCHAR(1024)  ¦  NO  ¦    ¦  PIPES_AS_CONCAT  ¦    ¦  
+database_collation  ¦  VARCHAR(64)  ¦  YES  ¦    ¦  null  ¦    ¦
+sql_mode  ¦  VARCHAR(1024)  ¦  NO  ¦    ¦  PIPES_AS_CONCAT  ¦    ¦
 show columns from	mo_catalog.mo_stored_procedure        ;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 proc_id  ¦  INT(32)  ¦  NO  ¦  PRI  ¦  null  ¦  auto_increment  ¦    𝄀
@@ -481,7 +485,7 @@ security_type  ¦  VARCHAR(10)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 comment  ¦  VARCHAR(5000)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 character_set_client  ¦  VARCHAR(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 collation_connection  ¦  VARCHAR(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-database_collation  ¦  VARCHAR(64)  ¦  YES  ¦    ¦  null  ¦    ¦  
+database_collation  ¦  VARCHAR(64)  ¦  YES  ¦    ¦  null  ¦    ¦
 show columns from	mo_catalog.mo_mysql_compatibility_mode;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 configuration_id  ¦  INT(32)  ¦  NO  ¦  PRI  ¦  null  ¦  auto_increment  ¦    𝄀
@@ -490,14 +494,14 @@ account_name  ¦  VARCHAR(300)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 dat_name  ¦  VARCHAR(5000)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 variable_name  ¦  VARCHAR(300)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 variable_value  ¦  VARCHAR(5000)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-system_variables  ¦  BOOL(0)  ¦  YES  ¦    ¦  null  ¦    ¦  
+system_variables  ¦  BOOL(0)  ¦  YES  ¦    ¦  null  ¦    ¦
 show columns from	mo_catalog.mo_increment_columns       ;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 table_id  ¦  BIGINT UNSIGNED(64)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
 col_name  ¦  VARCHAR(770)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
 col_index  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 offset  ¦  BIGINT UNSIGNED(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-step  ¦  BIGINT UNSIGNED(64)  ¦  YES  ¦    ¦  null  ¦    ¦  
+step  ¦  BIGINT UNSIGNED(64)  ¦  YES  ¦    ¦  null  ¦    ¦
 show columns from	mo_catalog.mo_indexes                 ;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 id  ¦  BIGINT UNSIGNED(64)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
@@ -514,7 +518,8 @@ comment  ¦  VARCHAR(2048)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
 column_name  ¦  VARCHAR(256)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
 ordinal_position  ¦  INT UNSIGNED(32)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
 options  ¦  TEXT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-index_table_name  ¦  VARCHAR(5000)  ¦  YES  ¦    ¦  null  ¦    ¦  
+index_table_name  ¦  VARCHAR(5000)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+included_columns  ¦  TEXT(0)  ¦  YES  ¦    ¦  null  ¦    ¦
 show columns from	mo_catalog.mo_table_partitions        ;
 [unknown result because it is related to issue#16438]
 show columns from	mo_catalog.mo_pubs                    ;
@@ -531,7 +536,7 @@ created_time  ¦  TIMESTAMP(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 update_time  ¦  TIMESTAMP(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 owner  ¦  INT UNSIGNED(32)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 creator  ¦  INT UNSIGNED(32)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-comment  ¦  TEXT(0)  ¦  YES  ¦    ¦  null  ¦    ¦  
+comment  ¦  TEXT(0)  ¦  YES  ¦    ¦  null  ¦    ¦
 show columns from	mo_catalog.mo_stages                  ;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 stage_id  ¦  INT UNSIGNED(32)  ¦  NO  ¦  PRI  ¦  null  ¦  auto_increment  ¦    𝄀
@@ -540,7 +545,7 @@ url  ¦  TEXT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 stage_credentials  ¦  TEXT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 stage_status  ¦  VARCHAR(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 created_time  ¦  TIMESTAMP(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-comment  ¦  TEXT(0)  ¦  YES  ¦    ¦  null  ¦    ¦  
+comment  ¦  TEXT(0)  ¦  YES  ¦    ¦  null  ¦    ¦
 show columns from	mo_catalog.mo_sessions                ;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 node_id  ¦  VARCHAR(65535)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
@@ -561,7 +566,7 @@ sql_source_type  ¦  VARCHAR(65535)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 query_start  ¦  VARCHAR(65535)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 client_host  ¦  VARCHAR(65535)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 role  ¦  VARCHAR(65535)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-proxy_host  ¦  VARCHAR(65535)  ¦  YES  ¦    ¦  null  ¦    ¦  
+proxy_host  ¦  VARCHAR(65535)  ¦  YES  ¦    ¦  null  ¦    ¦
 show columns from	mo_catalog.mo_configurations          ;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 node_type  ¦  VARCHAR(65535)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
@@ -569,7 +574,7 @@ node_id  ¦  VARCHAR(65535)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 name  ¦  VARCHAR(65535)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 current_value  ¦  VARCHAR(65535)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 default_value  ¦  VARCHAR(65535)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-internal  ¦  VARCHAR(65535)  ¦  YES  ¦    ¦  null  ¦    ¦  
+internal  ¦  VARCHAR(65535)  ¦  YES  ¦    ¦  null  ¦    ¦
 show columns from	mo_catalog.mo_locks                   ;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 cn_id  ¦  VARCHAR(65535)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
@@ -579,7 +584,7 @@ lock_key  ¦  VARCHAR(65535)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 lock_content  ¦  VARCHAR(65535)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 lock_mode  ¦  VARCHAR(65535)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 lock_status  ¦  VARCHAR(65535)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-lock_wait  ¦  VARCHAR(65535)  ¦  YES  ¦    ¦  null  ¦    ¦  
+lock_wait  ¦  VARCHAR(65535)  ¦  YES  ¦    ¦  null  ¦    ¦
 show columns from	mo_catalog.mo_variables               ;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 configuration_id  ¦  INT(32)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
@@ -588,7 +593,7 @@ account_name  ¦  VARCHAR(300)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 dat_name  ¦  VARCHAR(5000)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 variable_name  ¦  VARCHAR(300)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 variable_value  ¦  VARCHAR(5000)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-system_variables  ¦  BOOL(0)  ¦  YES  ¦    ¦  null  ¦    ¦  
+system_variables  ¦  BOOL(0)  ¦  YES  ¦    ¦  null  ¦    ¦
 show columns from	mo_catalog.mo_transactions            ;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 cn_id  ¦  VARCHAR(65535)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
@@ -604,7 +609,7 @@ txn_status  ¦  VARCHAR(65535)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 table_id  ¦  VARCHAR(65535)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 lock_key  ¦  VARCHAR(65535)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 lock_content  ¦  VARCHAR(65535)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-lock_mode  ¦  VARCHAR(65535)  ¦  YES  ¦    ¦  null  ¦    ¦  
+lock_mode  ¦  VARCHAR(65535)  ¦  YES  ¦    ¦  null  ¦    ¦
 show columns from	mo_catalog.mo_cache                   ;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 node_type  ¦  VARCHAR(65535)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
@@ -612,7 +617,7 @@ node_id  ¦  VARCHAR(65535)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 type  ¦  VARCHAR(65535)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 used  ¦  BIGINT UNSIGNED(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 free  ¦  BIGINT UNSIGNED(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-hit_ratio  ¦  FLOAT(0)  ¦  YES  ¦    ¦  null  ¦    ¦  
+hit_ratio  ¦  FLOAT(0)  ¦  YES  ¦    ¦  null  ¦    ¦
 show columns from	mo_catalog.mo_foreign_keys            ;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 constraint_name  ¦  VARCHAR(5000)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
@@ -630,7 +635,10 @@ refer_table_id  ¦  BIGINT UNSIGNED(64)  ¦  NO  ¦  PRI  ¦  0  ¦    ¦    �
 refer_column_name  ¦  VARCHAR(256)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
 refer_column_id  ¦  BIGINT UNSIGNED(64)  ¦  NO  ¦  PRI  ¦  0  ¦    ¦    𝄀
 on_delete  ¦  VARCHAR(128)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
-on_update  ¦  VARCHAR(128)  ¦  NO  ¦    ¦  null  ¦    ¦  
+on_update  ¦  VARCHAR(128)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+referenced_index_name  ¦  VARCHAR(5000)  ¦  NO  ¦    ¦    ¦    ¦    𝄀
+on_delete_origin  ¦  VARCHAR(64)  ¦  NO  ¦    ¦  ACTION_ORIGIN_EXPLICIT  ¦    ¦    𝄀
+on_update_origin  ¦  VARCHAR(64)  ¦  NO  ¦    ¦  ACTION_ORIGIN_EXPLICIT  ¦    ¦
 show columns from	mo_catalog.mo_snapshots           ;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 snapshot_id  ¦  UUID(0)  ¦  YES  ¦  UNI  ¦  null  ¦    ¦    𝄀
@@ -641,7 +649,7 @@ account_name  ¦  VARCHAR(300)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 database_name  ¦  VARCHAR(5000)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 table_name  ¦  VARCHAR(5000)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 obj_id  ¦  BIGINT UNSIGNED(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-kind  ¦  VARCHAR(32)  ¦  NO  ¦    ¦  user  ¦    ¦  
+kind  ¦  VARCHAR(32)  ¦  NO  ¦    ¦  user  ¦    ¦
 desc	mo_catalog.mo_database                ;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 dat_id  ¦  BIGINT UNSIGNED(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
@@ -652,7 +660,7 @@ owner  ¦  INT UNSIGNED(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 creator  ¦  INT UNSIGNED(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 created_time  ¦  TIMESTAMP(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 account_id  ¦  INT UNSIGNED(0)  ¦  YES  ¦  PRI  ¦  null  ¦    ¦    𝄀
-dat_type  ¦  VARCHAR(32)  ¦  YES  ¦    ¦  null  ¦    ¦  
+dat_type  ¦  VARCHAR(32)  ¦  YES  ¦    ¦  null  ¦    ¦
 desc	mo_catalog.mo_tables                  ;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 rel_id  ¦  BIGINT UNSIGNED(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
@@ -673,7 +681,7 @@ viewdef  ¦  VARCHAR(5000)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 constraint  ¦  VARCHAR(5000)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 rel_version  ¦  INT UNSIGNED(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 catalog_version  ¦  INT UNSIGNED(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-rel_logical_id  ¦  BIGINT UNSIGNED(0)  ¦  YES  ¦  UNI  ¦  null  ¦    ¦  
+rel_logical_id  ¦  BIGINT UNSIGNED(0)  ¦  YES  ¦  UNI  ¦  null  ¦    ¦
 desc	mo_catalog.mo_columns                 ;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 att_uniq_name  ¦  VARCHAR(256)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
@@ -701,7 +709,7 @@ attr_is_clusterby  ¦  TINYINT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 attr_seqnum  ¦  SMALLINT UNSIGNED(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 attr_enum  ¦  VARCHAR(65535)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 attr_has_generated  ¦  TINYINT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-attr_generated  ¦  VARCHAR(2048)  ¦  YES  ¦    ¦  null  ¦    ¦  
+attr_generated  ¦  VARCHAR(2048)  ¦  YES  ¦    ¦  null  ¦    ¦
 desc	mo_catalog.mo_account                 ;
 no such table mo_catalog.mo_account
 desc	mo_catalog.mo_user                    ;
@@ -720,7 +728,7 @@ lock_time  ¦  TIMESTAMP(0)  ¦  YES  ¦    ¦  utc_timestamp()  ¦    ¦    �
 login_type  ¦  VARCHAR(16)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 creator  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 owner  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-default_role  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦    ¦  
+default_role  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦    ¦
 desc	mo_catalog.mo_role                    ;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 role_id  ¦  INT(32)  ¦  NO  ¦  PRI  ¦  null  ¦  auto_increment  ¦    𝄀
@@ -728,13 +736,13 @@ role_name  ¦  VARCHAR(300)  ¦  YES  ¦  UNI  ¦  null  ¦    ¦    𝄀
 creator  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 owner  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 created_time  ¦  TIMESTAMP(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-comments  ¦  TEXT(0)  ¦  YES  ¦    ¦  null  ¦    ¦  
+comments  ¦  TEXT(0)  ¦  YES  ¦    ¦  null  ¦    ¦
 desc	mo_catalog.mo_user_grant              ;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 role_id  ¦  INT(32)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
 user_id  ¦  INT(32)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
 granted_time  ¦  TIMESTAMP(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-with_grant_option  ¦  BOOL(0)  ¦  YES  ¦    ¦  null  ¦    ¦  
+with_grant_option  ¦  BOOL(0)  ¦  YES  ¦    ¦  null  ¦    ¦
 desc	mo_catalog.mo_role_grant              ;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 granted_id  ¦  INT(32)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
@@ -742,7 +750,7 @@ grantee_id  ¦  INT(32)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
 operation_role_id  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 operation_user_id  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 granted_time  ¦  TIMESTAMP(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-with_grant_option  ¦  BOOL(0)  ¦  YES  ¦    ¦  null  ¦    ¦  
+with_grant_option  ¦  BOOL(0)  ¦  YES  ¦    ¦  null  ¦    ¦
 desc	mo_catalog.mo_role_privs              ;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 role_id  ¦  INT(32)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
@@ -754,7 +762,7 @@ privilege_name  ¦  VARCHAR(100)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 privilege_level  ¦  VARCHAR(100)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
 operation_user_id  ¦  INT UNSIGNED(32)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 granted_time  ¦  TIMESTAMP(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-with_grant_option  ¦  BOOL(0)  ¦  YES  ¦    ¦  null  ¦    ¦  
+with_grant_option  ¦  BOOL(0)  ¦  YES  ¦    ¦  null  ¦    ¦
 desc	mo_catalog.mo_user_defined_function   ;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 function_id  ¦  INT(32)  ¦  NO  ¦  PRI  ¦  null  ¦  auto_increment  ¦    𝄀
@@ -773,8 +781,8 @@ security_type  ¦  VARCHAR(10)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 comment  ¦  VARCHAR(5000)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 character_set_client  ¦  VARCHAR(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 collation_connection  ¦  VARCHAR(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-database_collation  ¦  VARCHAR(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-sql_mode  ¦  VARCHAR(1024)  ¦  NO  ¦    ¦  PIPES_AS_CONCAT  ¦    ¦  
+database_collation  ¦  VARCHAR(64)  ¦  YES  ¦    ¦  null  ¦    ¦
+sql_mode  ¦  VARCHAR(1024)  ¦  NO  ¦    ¦  PIPES_AS_CONCAT  ¦    ¦
 desc	mo_catalog.mo_stored_procedure        ;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 proc_id  ¦  INT(32)  ¦  NO  ¦  PRI  ¦  null  ¦  auto_increment  ¦    𝄀
@@ -793,7 +801,7 @@ security_type  ¦  VARCHAR(10)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 comment  ¦  VARCHAR(5000)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 character_set_client  ¦  VARCHAR(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 collation_connection  ¦  VARCHAR(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-database_collation  ¦  VARCHAR(64)  ¦  YES  ¦    ¦  null  ¦    ¦  
+database_collation  ¦  VARCHAR(64)  ¦  YES  ¦    ¦  null  ¦    ¦
 desc	mo_catalog.mo_mysql_compatibility_mode;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 configuration_id  ¦  INT(32)  ¦  NO  ¦  PRI  ¦  null  ¦  auto_increment  ¦    𝄀
@@ -802,14 +810,14 @@ account_name  ¦  VARCHAR(300)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 dat_name  ¦  VARCHAR(5000)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 variable_name  ¦  VARCHAR(300)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 variable_value  ¦  VARCHAR(5000)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-system_variables  ¦  BOOL(0)  ¦  YES  ¦    ¦  null  ¦    ¦  
+system_variables  ¦  BOOL(0)  ¦  YES  ¦    ¦  null  ¦    ¦
 desc	mo_catalog.mo_increment_columns       ;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 table_id  ¦  BIGINT UNSIGNED(64)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
 col_name  ¦  VARCHAR(770)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
 col_index  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 offset  ¦  BIGINT UNSIGNED(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-step  ¦  BIGINT UNSIGNED(64)  ¦  YES  ¦    ¦  null  ¦    ¦  
+step  ¦  BIGINT UNSIGNED(64)  ¦  YES  ¦    ¦  null  ¦    ¦
 desc	mo_catalog.mo_indexes                 ;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 id  ¦  BIGINT UNSIGNED(64)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
@@ -826,7 +834,8 @@ comment  ¦  VARCHAR(2048)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
 column_name  ¦  VARCHAR(256)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
 ordinal_position  ¦  INT UNSIGNED(32)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
 options  ¦  TEXT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-index_table_name  ¦  VARCHAR(5000)  ¦  YES  ¦    ¦  null  ¦    ¦  
+index_table_name  ¦  VARCHAR(5000)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+included_columns  ¦  TEXT(0)  ¦  YES  ¦    ¦  null  ¦    ¦
 desc	mo_catalog.mo_table_partitions        ;
 [unknown result because it is related to issue#16438]
 desc	mo_catalog.mo_pubs                    ;
@@ -839,7 +848,7 @@ url  ¦  TEXT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 stage_credentials  ¦  TEXT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 stage_status  ¦  VARCHAR(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 created_time  ¦  TIMESTAMP(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-comment  ¦  TEXT(0)  ¦  YES  ¦    ¦  null  ¦    ¦  
+comment  ¦  TEXT(0)  ¦  YES  ¦    ¦  null  ¦    ¦
 desc	mo_catalog.mo_sessions                ;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 node_id  ¦  VARCHAR(65535)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
@@ -860,7 +869,7 @@ sql_source_type  ¦  VARCHAR(65535)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 query_start  ¦  VARCHAR(65535)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 client_host  ¦  VARCHAR(65535)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 role  ¦  VARCHAR(65535)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-proxy_host  ¦  VARCHAR(65535)  ¦  YES  ¦    ¦  null  ¦    ¦  
+proxy_host  ¦  VARCHAR(65535)  ¦  YES  ¦    ¦  null  ¦    ¦
 desc	mo_catalog.mo_configurations          ;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 node_type  ¦  VARCHAR(65535)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
@@ -868,7 +877,7 @@ node_id  ¦  VARCHAR(65535)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 name  ¦  VARCHAR(65535)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 current_value  ¦  VARCHAR(65535)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 default_value  ¦  VARCHAR(65535)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-internal  ¦  VARCHAR(65535)  ¦  YES  ¦    ¦  null  ¦    ¦  
+internal  ¦  VARCHAR(65535)  ¦  YES  ¦    ¦  null  ¦    ¦
 desc	mo_catalog.mo_locks                   ;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 cn_id  ¦  VARCHAR(65535)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
@@ -878,7 +887,7 @@ lock_key  ¦  VARCHAR(65535)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 lock_content  ¦  VARCHAR(65535)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 lock_mode  ¦  VARCHAR(65535)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 lock_status  ¦  VARCHAR(65535)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-lock_wait  ¦  VARCHAR(65535)  ¦  YES  ¦    ¦  null  ¦    ¦  
+lock_wait  ¦  VARCHAR(65535)  ¦  YES  ¦    ¦  null  ¦    ¦
 desc	mo_catalog.mo_variables               ;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 configuration_id  ¦  INT(32)  ¦  NO  ¦    ¦  null  ¦  auto_increment  ¦    𝄀
@@ -887,7 +896,7 @@ account_name  ¦  VARCHAR(300)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 dat_name  ¦  VARCHAR(5000)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 variable_name  ¦  VARCHAR(300)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 variable_value  ¦  VARCHAR(5000)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-system_variables  ¦  BOOL(0)  ¦  YES  ¦    ¦  null  ¦    ¦  
+system_variables  ¦  BOOL(0)  ¦  YES  ¦    ¦  null  ¦    ¦
 desc	mo_catalog.mo_transactions            ;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 cn_id  ¦  VARCHAR(65535)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
@@ -903,7 +912,7 @@ txn_status  ¦  VARCHAR(65535)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 table_id  ¦  VARCHAR(65535)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 lock_key  ¦  VARCHAR(65535)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 lock_content  ¦  VARCHAR(65535)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-lock_mode  ¦  VARCHAR(65535)  ¦  YES  ¦    ¦  null  ¦    ¦  
+lock_mode  ¦  VARCHAR(65535)  ¦  YES  ¦    ¦  null  ¦    ¦
 desc	mo_catalog.mo_cache                   ;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 node_type  ¦  VARCHAR(65535)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
@@ -911,7 +920,7 @@ node_id  ¦  VARCHAR(65535)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 type  ¦  VARCHAR(65535)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 used  ¦  BIGINT UNSIGNED(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 free  ¦  BIGINT UNSIGNED(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-hit_ratio  ¦  FLOAT(0)  ¦  YES  ¦    ¦  null  ¦    ¦  
+hit_ratio  ¦  FLOAT(0)  ¦  YES  ¦    ¦  null  ¦    ¦
 desc	mo_catalog.mo_foreign_keys            ;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 constraint_name  ¦  VARCHAR(5000)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
@@ -929,7 +938,10 @@ refer_table_id  ¦  BIGINT UNSIGNED(64)  ¦  NO  ¦  PRI  ¦  0  ¦    ¦    �
 refer_column_name  ¦  VARCHAR(256)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
 refer_column_id  ¦  BIGINT UNSIGNED(64)  ¦  NO  ¦  PRI  ¦  0  ¦    ¦    𝄀
 on_delete  ¦  VARCHAR(128)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
-on_update  ¦  VARCHAR(128)  ¦  NO  ¦    ¦  null  ¦    ¦  
+on_update  ¦  VARCHAR(128)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+referenced_index_name  ¦  VARCHAR(5000)  ¦  NO  ¦    ¦    ¦    ¦    𝄀
+on_delete_origin  ¦  VARCHAR(64)  ¦  NO  ¦    ¦  ACTION_ORIGIN_EXPLICIT  ¦    ¦    𝄀
+on_update_origin  ¦  VARCHAR(64)  ¦  NO  ¦    ¦  ACTION_ORIGIN_EXPLICIT  ¦    ¦
 desc	mo_catalog.mo_snapshots               ;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 snapshot_id  ¦  UUID(0)  ¦  YES  ¦  UNI  ¦  null  ¦    ¦    𝄀
@@ -940,7 +952,7 @@ account_name  ¦  VARCHAR(300)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 database_name  ¦  VARCHAR(5000)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 table_name  ¦  VARCHAR(5000)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 obj_id  ¦  BIGINT UNSIGNED(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-kind  ¦  VARCHAR(32)  ¦  NO  ¦    ¦  user  ¦    ¦  
+kind  ¦  VARCHAR(32)  ¦  NO  ¦    ¦  user  ¦    ¦
 show columns from	mo_catalog.mo_database                ;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 dat_id  ¦  BIGINT UNSIGNED(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
@@ -951,7 +963,7 @@ owner  ¦  INT UNSIGNED(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 creator  ¦  INT UNSIGNED(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 created_time  ¦  TIMESTAMP(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 account_id  ¦  INT UNSIGNED(0)  ¦  YES  ¦  PRI  ¦  null  ¦    ¦    𝄀
-dat_type  ¦  VARCHAR(32)  ¦  YES  ¦    ¦  null  ¦    ¦  
+dat_type  ¦  VARCHAR(32)  ¦  YES  ¦    ¦  null  ¦    ¦
 show columns from	mo_catalog.mo_tables                  ;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 rel_id  ¦  BIGINT UNSIGNED(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
@@ -972,7 +984,7 @@ viewdef  ¦  VARCHAR(5000)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 constraint  ¦  VARCHAR(5000)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 rel_version  ¦  INT UNSIGNED(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 catalog_version  ¦  INT UNSIGNED(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-rel_logical_id  ¦  BIGINT UNSIGNED(0)  ¦  YES  ¦  UNI  ¦  null  ¦    ¦  
+rel_logical_id  ¦  BIGINT UNSIGNED(0)  ¦  YES  ¦  UNI  ¦  null  ¦    ¦
 show columns from	mo_catalog.mo_columns                 ;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 att_uniq_name  ¦  VARCHAR(256)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
@@ -1000,7 +1012,7 @@ attr_is_clusterby  ¦  TINYINT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 attr_seqnum  ¦  SMALLINT UNSIGNED(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 attr_enum  ¦  VARCHAR(65535)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 attr_has_generated  ¦  TINYINT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-attr_generated  ¦  VARCHAR(2048)  ¦  YES  ¦    ¦  null  ¦    ¦  
+attr_generated  ¦  VARCHAR(2048)  ¦  YES  ¦    ¦  null  ¦    ¦
 show columns from	mo_catalog.mo_account                 ;
 no such table mo_catalog.mo_account
 show columns from	mo_catalog.mo_user                    ;
@@ -1019,7 +1031,7 @@ lock_time  ¦  TIMESTAMP(0)  ¦  YES  ¦    ¦  utc_timestamp()  ¦    ¦    �
 login_type  ¦  VARCHAR(16)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 creator  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 owner  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-default_role  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦    ¦  
+default_role  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦    ¦
 show columns from	mo_catalog.mo_role                    ;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 role_id  ¦  INT(32)  ¦  NO  ¦  PRI  ¦  null  ¦  auto_increment  ¦    𝄀
@@ -1027,13 +1039,13 @@ role_name  ¦  VARCHAR(300)  ¦  YES  ¦  UNI  ¦  null  ¦    ¦    𝄀
 creator  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 owner  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 created_time  ¦  TIMESTAMP(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-comments  ¦  TEXT(0)  ¦  YES  ¦    ¦  null  ¦    ¦  
+comments  ¦  TEXT(0)  ¦  YES  ¦    ¦  null  ¦    ¦
 show columns from	mo_catalog.mo_user_grant              ;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 role_id  ¦  INT(32)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
 user_id  ¦  INT(32)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
 granted_time  ¦  TIMESTAMP(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-with_grant_option  ¦  BOOL(0)  ¦  YES  ¦    ¦  null  ¦    ¦  
+with_grant_option  ¦  BOOL(0)  ¦  YES  ¦    ¦  null  ¦    ¦
 show columns from	mo_catalog.mo_role_grant              ;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 granted_id  ¦  INT(32)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
@@ -1041,7 +1053,7 @@ grantee_id  ¦  INT(32)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
 operation_role_id  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 operation_user_id  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 granted_time  ¦  TIMESTAMP(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-with_grant_option  ¦  BOOL(0)  ¦  YES  ¦    ¦  null  ¦    ¦  
+with_grant_option  ¦  BOOL(0)  ¦  YES  ¦    ¦  null  ¦    ¦
 show columns from	mo_catalog.mo_role_privs              ;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 role_id  ¦  INT(32)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
@@ -1053,7 +1065,7 @@ privilege_name  ¦  VARCHAR(100)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 privilege_level  ¦  VARCHAR(100)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
 operation_user_id  ¦  INT UNSIGNED(32)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 granted_time  ¦  TIMESTAMP(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-with_grant_option  ¦  BOOL(0)  ¦  YES  ¦    ¦  null  ¦    ¦  
+with_grant_option  ¦  BOOL(0)  ¦  YES  ¦    ¦  null  ¦    ¦
 show columns from	mo_catalog.mo_user_defined_function   ;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 function_id  ¦  INT(32)  ¦  NO  ¦  PRI  ¦  null  ¦  auto_increment  ¦    𝄀
@@ -1072,8 +1084,8 @@ security_type  ¦  VARCHAR(10)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 comment  ¦  VARCHAR(5000)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 character_set_client  ¦  VARCHAR(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 collation_connection  ¦  VARCHAR(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-database_collation  ¦  VARCHAR(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-sql_mode  ¦  VARCHAR(1024)  ¦  NO  ¦    ¦  PIPES_AS_CONCAT  ¦    ¦  
+database_collation  ¦  VARCHAR(64)  ¦  YES  ¦    ¦  null  ¦    ¦
+sql_mode  ¦  VARCHAR(1024)  ¦  NO  ¦    ¦  PIPES_AS_CONCAT  ¦    ¦
 show columns from	mo_catalog.mo_stored_procedure        ;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 proc_id  ¦  INT(32)  ¦  NO  ¦  PRI  ¦  null  ¦  auto_increment  ¦    𝄀
@@ -1092,7 +1104,7 @@ security_type  ¦  VARCHAR(10)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 comment  ¦  VARCHAR(5000)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 character_set_client  ¦  VARCHAR(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 collation_connection  ¦  VARCHAR(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-database_collation  ¦  VARCHAR(64)  ¦  YES  ¦    ¦  null  ¦    ¦  
+database_collation  ¦  VARCHAR(64)  ¦  YES  ¦    ¦  null  ¦    ¦
 show columns from	mo_catalog.mo_mysql_compatibility_mode;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 configuration_id  ¦  INT(32)  ¦  NO  ¦  PRI  ¦  null  ¦  auto_increment  ¦    𝄀
@@ -1101,14 +1113,14 @@ account_name  ¦  VARCHAR(300)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 dat_name  ¦  VARCHAR(5000)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 variable_name  ¦  VARCHAR(300)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 variable_value  ¦  VARCHAR(5000)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-system_variables  ¦  BOOL(0)  ¦  YES  ¦    ¦  null  ¦    ¦  
+system_variables  ¦  BOOL(0)  ¦  YES  ¦    ¦  null  ¦    ¦
 show columns from	mo_catalog.mo_increment_columns       ;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 table_id  ¦  BIGINT UNSIGNED(64)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
 col_name  ¦  VARCHAR(770)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
 col_index  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 offset  ¦  BIGINT UNSIGNED(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-step  ¦  BIGINT UNSIGNED(64)  ¦  YES  ¦    ¦  null  ¦    ¦  
+step  ¦  BIGINT UNSIGNED(64)  ¦  YES  ¦    ¦  null  ¦    ¦
 show columns from	mo_catalog.mo_indexes                 ;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 id  ¦  BIGINT UNSIGNED(64)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
@@ -1125,7 +1137,8 @@ comment  ¦  VARCHAR(2048)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
 column_name  ¦  VARCHAR(256)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
 ordinal_position  ¦  INT UNSIGNED(32)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
 options  ¦  TEXT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-index_table_name  ¦  VARCHAR(5000)  ¦  YES  ¦    ¦  null  ¦    ¦  
+index_table_name  ¦  VARCHAR(5000)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+included_columns  ¦  TEXT(0)  ¦  YES  ¦    ¦  null  ¦    ¦
 show columns from	mo_catalog.mo_table_partitions        ;
 [unknown result because it is related to issue#16438]
 show columns from	mo_catalog.mo_pubs                    ;
@@ -1138,7 +1151,7 @@ url  ¦  TEXT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 stage_credentials  ¦  TEXT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 stage_status  ¦  VARCHAR(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 created_time  ¦  TIMESTAMP(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-comment  ¦  TEXT(0)  ¦  YES  ¦    ¦  null  ¦    ¦  
+comment  ¦  TEXT(0)  ¦  YES  ¦    ¦  null  ¦    ¦
 show columns from	mo_catalog.mo_sessions                ;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 node_id  ¦  VARCHAR(65535)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
@@ -1159,7 +1172,7 @@ sql_source_type  ¦  VARCHAR(65535)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 query_start  ¦  VARCHAR(65535)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 client_host  ¦  VARCHAR(65535)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 role  ¦  VARCHAR(65535)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-proxy_host  ¦  VARCHAR(65535)  ¦  YES  ¦    ¦  null  ¦    ¦  
+proxy_host  ¦  VARCHAR(65535)  ¦  YES  ¦    ¦  null  ¦    ¦
 show columns from	mo_catalog.mo_configurations          ;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 node_type  ¦  VARCHAR(65535)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
@@ -1167,7 +1180,7 @@ node_id  ¦  VARCHAR(65535)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 name  ¦  VARCHAR(65535)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 current_value  ¦  VARCHAR(65535)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 default_value  ¦  VARCHAR(65535)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-internal  ¦  VARCHAR(65535)  ¦  YES  ¦    ¦  null  ¦    ¦  
+internal  ¦  VARCHAR(65535)  ¦  YES  ¦    ¦  null  ¦    ¦
 show columns from	mo_catalog.mo_locks                   ;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 cn_id  ¦  VARCHAR(65535)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
@@ -1177,7 +1190,7 @@ lock_key  ¦  VARCHAR(65535)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 lock_content  ¦  VARCHAR(65535)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 lock_mode  ¦  VARCHAR(65535)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 lock_status  ¦  VARCHAR(65535)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-lock_wait  ¦  VARCHAR(65535)  ¦  YES  ¦    ¦  null  ¦    ¦  
+lock_wait  ¦  VARCHAR(65535)  ¦  YES  ¦    ¦  null  ¦    ¦
 show columns from	mo_catalog.mo_variables               ;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 configuration_id  ¦  INT(32)  ¦  NO  ¦    ¦  null  ¦  auto_increment  ¦    𝄀
@@ -1186,7 +1199,7 @@ account_name  ¦  VARCHAR(300)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 dat_name  ¦  VARCHAR(5000)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 variable_name  ¦  VARCHAR(300)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 variable_value  ¦  VARCHAR(5000)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-system_variables  ¦  BOOL(0)  ¦  YES  ¦    ¦  null  ¦    ¦  
+system_variables  ¦  BOOL(0)  ¦  YES  ¦    ¦  null  ¦    ¦
 show columns from	mo_catalog.mo_transactions            ;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 cn_id  ¦  VARCHAR(65535)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
@@ -1202,7 +1215,7 @@ txn_status  ¦  VARCHAR(65535)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 table_id  ¦  VARCHAR(65535)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 lock_key  ¦  VARCHAR(65535)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 lock_content  ¦  VARCHAR(65535)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-lock_mode  ¦  VARCHAR(65535)  ¦  YES  ¦    ¦  null  ¦    ¦  
+lock_mode  ¦  VARCHAR(65535)  ¦  YES  ¦    ¦  null  ¦    ¦
 show columns from	mo_catalog.mo_cache                   ;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 node_type  ¦  VARCHAR(65535)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
@@ -1210,7 +1223,7 @@ node_id  ¦  VARCHAR(65535)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 type  ¦  VARCHAR(65535)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 used  ¦  BIGINT UNSIGNED(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 free  ¦  BIGINT UNSIGNED(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-hit_ratio  ¦  FLOAT(0)  ¦  YES  ¦    ¦  null  ¦    ¦  
+hit_ratio  ¦  FLOAT(0)  ¦  YES  ¦    ¦  null  ¦    ¦
 show columns from	mo_catalog.mo_foreign_keys            ;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 constraint_name  ¦  VARCHAR(5000)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
@@ -1228,7 +1241,10 @@ refer_table_id  ¦  BIGINT UNSIGNED(64)  ¦  NO  ¦  PRI  ¦  0  ¦    ¦    �
 refer_column_name  ¦  VARCHAR(256)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
 refer_column_id  ¦  BIGINT UNSIGNED(64)  ¦  NO  ¦  PRI  ¦  0  ¦    ¦    𝄀
 on_delete  ¦  VARCHAR(128)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
-on_update  ¦  VARCHAR(128)  ¦  NO  ¦    ¦  null  ¦    ¦  
+on_update  ¦  VARCHAR(128)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+referenced_index_name  ¦  VARCHAR(5000)  ¦  NO  ¦    ¦    ¦    ¦    𝄀
+on_delete_origin  ¦  VARCHAR(64)  ¦  NO  ¦    ¦  ACTION_ORIGIN_EXPLICIT  ¦    ¦    𝄀
+on_update_origin  ¦  VARCHAR(64)  ¦  NO  ¦    ¦  ACTION_ORIGIN_EXPLICIT  ¦    ¦
 show columns from	mo_catalog.mo_snapshots           ;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 snapshot_id  ¦  UUID(0)  ¦  YES  ¦  UNI  ¦  null  ¦    ¦    𝄀
@@ -1239,5 +1255,5 @@ account_name  ¦  VARCHAR(300)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 database_name  ¦  VARCHAR(5000)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 table_name  ¦  VARCHAR(5000)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 obj_id  ¦  BIGINT UNSIGNED(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-kind  ¦  VARCHAR(32)  ¦  NO  ¦    ¦  user  ¦    ¦  
+kind  ¦  VARCHAR(32)  ¦  NO  ¦    ¦  user  ¦    ¦
 drop account if exists fk_show_column;

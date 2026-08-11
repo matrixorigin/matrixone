@@ -27,6 +27,7 @@ import (
 	"github.com/prashantv/gostub"
 	"github.com/smartystreets/goconvey/convey"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -259,6 +260,227 @@ func Test_saveQueryResultMeta(t *testing.T) {
 			//fmt.Println(string(content))
 		},
 	)
+}
+
+func TestSaveBatchPreservesBroadcastConstantRows(t *testing.T) {
+	ioutil.RunPipelineTest(func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		ses := newTestSession(t, ctrl)
+		defer ses.Close()
+		stmtID := uuid.New()
+		ses.SetStmtId(stmtID)
+		require.NoError(t, initQueryResulConfig(context.Background(), ses))
+
+		proc := testutil.NewProcess(t)
+		proc.Base.FileService = getPu("").FileService
+		proc.Base.SessionInfo = process.SessionInfo{Account: sysAccountName}
+		ses.GetTxnCompileCtx().execCtx = &ExecCtx{
+			reqCtx: context.Background(),
+			proc:   proc,
+		}
+
+		constant, err := vector.NewConstFixed(types.T_int64.ToType(), int64(7), 1, proc.Mp())
+		require.NoError(t, err)
+		totals := vector.NewVec(types.T_int64.ToType())
+		for _, value := range []int64{10, 20, 30} {
+			require.NoError(t, vector.AppendFixed(totals, value, false, proc.Mp()))
+		}
+		data := batch.NewWithSize(2)
+		data.SetVector(0, constant)
+		data.SetVector(1, totals)
+		data.SetRowCount(3)
+		defer data.Clean(proc.Mp())
+
+		ctx := context.Background()
+		require.NoError(t, saveBatch(ctx, ses, data))
+		assert.Equal(t, 1, constant.Length(), "saving must not mutate the executor-owned vector")
+		assert.Equal(t, uint64(3), ses.queryRowCount)
+		assert.Equal(t, uint64(3), ses.savedRowCount)
+
+		path := catalog.BuildQueryResultPath(sysAccountName, stmtID.String(), 1)
+		reader, err := ioutil.NewFileReader(getPu("").FileService, path)
+		require.NoError(t, err)
+		blocks, err := reader.LoadAllBlocks(ctx, proc.Mp())
+		require.NoError(t, err)
+		require.Len(t, blocks, 1)
+		assert.Equal(t, uint32(3), blocks[0].GetRows())
+
+		loaded, release, err := reader.LoadColumns(
+			ctx, []uint16{0}, nil, blocks[0].BlockHeader().BlockID().Sequence(), proc.Mp(),
+		)
+		require.NoError(t, err)
+		defer release()
+		assert.Equal(t, 3, loaded.RowCount())
+		require.True(t, loaded.Vecs[0].IsConst())
+		for row := range loaded.RowCount() {
+			assert.Equal(t, int64(7), vector.GetFixedAtWithTypeCheck[int64](loaded.Vecs[0], row))
+		}
+	})
+}
+
+func TestSaveBatchPreservesTrailingFlatNullRows(t *testing.T) {
+	ioutil.RunPipelineTest(func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		ses := newTestSession(t, ctrl)
+		defer ses.Close()
+		stmtID := uuid.New()
+		ses.SetStmtId(stmtID)
+		require.NoError(t, initQueryResulConfig(context.Background(), ses))
+
+		proc := testutil.NewProcess(t)
+		proc.Base.FileService = getPu("").FileService
+		proc.Base.SessionInfo = process.SessionInfo{Account: sysAccountName}
+		ses.GetTxnCompileCtx().execCtx = &ExecCtx{
+			reqCtx: context.Background(),
+			proc:   proc,
+		}
+
+		flatNull := vector.NewVec(types.T_varchar.ToType())
+		flatNull.GetNulls().Add(0)
+		data := batch.NewWithSize(1)
+		data.SetVector(0, flatNull)
+		data.SetRowCount(1)
+		defer data.Clean(proc.Mp())
+
+		ctx := context.Background()
+		require.NoError(t, saveBatch(ctx, ses, data))
+		assert.Zero(t, flatNull.Length(), "saving must not mutate the executor-owned vector")
+		assert.Equal(t, uint64(1), ses.queryRowCount)
+		assert.Equal(t, uint64(1), ses.savedRowCount)
+
+		path := catalog.BuildQueryResultPath(sysAccountName, stmtID.String(), 1)
+		reader, err := ioutil.NewFileReader(getPu("").FileService, path)
+		require.NoError(t, err)
+		blocks, err := reader.LoadAllBlocks(ctx, proc.Mp())
+		require.NoError(t, err)
+		require.Len(t, blocks, 1)
+		assert.Equal(t, uint32(1), blocks[0].GetRows())
+
+		loaded, release, err := reader.LoadColumns(
+			ctx, []uint16{0}, nil, blocks[0].BlockHeader().BlockID().Sequence(), proc.Mp(),
+		)
+		require.NoError(t, err)
+		defer release()
+		assert.Equal(t, 1, loaded.RowCount())
+		assert.Equal(t, 1, loaded.Vecs[0].Length())
+		assert.True(t, loaded.Vecs[0].GetNulls().Contains(0))
+	})
+}
+
+func TestSaveBatchUsesNormalizedSizeForAdmission(t *testing.T) {
+	ioutil.RunPipelineTest(func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		ses := newTestSession(t, ctrl)
+		defer ses.Close()
+		ses.SetStmtId(uuid.New())
+		require.NoError(t, initQueryResulConfig(context.Background(), ses))
+		ses.limitResultSize = 0
+
+		proc := testutil.NewProcess(t)
+		proc.Base.FileService = getPu("").FileService
+		proc.Base.SessionInfo = process.SessionInfo{Account: sysAccountName}
+		ses.GetTxnCompileCtx().execCtx = &ExecCtx{
+			reqCtx: context.Background(),
+			proc:   proc,
+		}
+
+		constantNull := vector.NewConstNull(types.T_varchar.ToType(), 0, proc.Mp())
+		data := batch.NewWithSize(1)
+		data.SetVector(0, constantNull)
+		data.SetRowCount(1)
+		defer data.Clean(proc.Mp())
+		require.Zero(t, data.Size(), "the source batch reproduces the pre-normalization zero-size case")
+		before := proc.Mp().CurrNB()
+
+		require.NoError(t, saveBatch(context.Background(), ses, data))
+		assert.Zero(t, constantNull.Length(), "saving must not mutate the executor-owned vector")
+		assert.Equal(t, uint64(1), ses.queryRowCount)
+		assert.Zero(t, ses.savedRowCount)
+		assert.Zero(t, ses.curResultSize)
+		assert.Zero(t, ses.blockIdx)
+		assert.Equal(t, before, proc.Mp().CurrNB(), "rejected normalized vectors must be released")
+	})
+}
+
+func TestPrepareQueryResultBatchForWriteMaterializesTrailingNulls(t *testing.T) {
+	mp := mpool.MustNewZero()
+	vec := vector.NewVec(types.T_varchar.ToType())
+	require.NoError(t, vector.AppendBytes(vec, []byte("value"), false, mp))
+	vec.GetNulls().Add(1)
+	bat := batch.NewWithSize(1)
+	bat.SetVector(0, vec)
+	bat.SetRowCount(2)
+
+	writeBat, release, err := prepareQueryResultBatchForWrite(bat, mp)
+	require.NoError(t, err)
+	require.NotNil(t, release)
+	require.NotSame(t, bat, writeBat)
+	assert.Equal(t, 1, vec.Length(), "normalization must not mutate the source vector")
+	require.Len(t, writeBat.Vecs, 1)
+	assert.Equal(t, 2, writeBat.Vecs[0].Length())
+	assert.Equal(t, "value", string(writeBat.Vecs[0].GetBytesAt(0)))
+	assert.True(t, writeBat.Vecs[0].GetNulls().Contains(1))
+
+	release()
+	bat.Clean(mp)
+	require.Zero(t, mp.CurrNB())
+}
+
+func TestPrepareQueryResultBatchForWriteRejectsInvalidFlatCardinality(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		makeBatch func(*testing.T, *mpool.MPool) *batch.Batch
+		errText   string
+	}{
+		{
+			name: "missing non-null row",
+			makeBatch: func(t *testing.T, mp *mpool.MPool) *batch.Batch {
+				bat := batch.NewWithSize(1)
+				bat.SetVector(0, vector.NewVec(types.T_varchar.ToType()))
+				bat.SetRowCount(1)
+				return bat
+			},
+			errText: "missing non-null row 0",
+		},
+		{
+			name: "vector longer than batch",
+			makeBatch: func(t *testing.T, mp *mpool.MPool) *batch.Batch {
+				vec := vector.NewVec(types.T_int64.ToType())
+				require.NoError(t, vector.AppendFixed(vec, int64(1), false, mp))
+				bat := batch.NewWithSize(1)
+				bat.SetVector(0, vec)
+				bat.SetRowCount(0)
+				return bat
+			},
+			errText: "has 1 rows, batch has 0",
+		},
+		{
+			name: "nil vector",
+			makeBatch: func(t *testing.T, mp *mpool.MPool) *batch.Batch {
+				bat := batch.NewWithSize(1)
+				bat.SetRowCount(1)
+				return bat
+			},
+			errText: "column 0 is nil",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			bat := test.makeBatch(t, mp)
+			writeBat, release, err := prepareQueryResultBatchForWrite(bat, mp)
+			require.ErrorContains(t, err, test.errText)
+			require.Nil(t, writeBat)
+			require.Nil(t, release)
+			bat.Clean(mp)
+			require.Zero(t, mp.CurrNB())
+		})
+	}
 }
 
 func Test_getFileSize(t *testing.T) {

@@ -15,10 +15,10 @@
 package proxy
 
 import (
-	"github.com/petermattis/goid"
 	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/common/log"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 )
 
 type TunnelDeliver interface {
@@ -30,6 +30,12 @@ type TunnelDeliver interface {
 	// Count returns the number of tunnels in the queue.
 	Count() int
 }
+
+var (
+	eventTunnelTransferSkippedNotStarted = logutil.Event{Name: "proxy.tunnel.transfer-skipped-not-started", Message: "tunnel has not started, skip transfer"}
+	eventTunnelTransferSkippedInProgress = logutil.Event{Name: "proxy.tunnel.transfer-skipped-in-progress", Message: "tunnel is already in transfer, skip transfer"}
+	eventProxyRebalanceQueueFull         = logutil.Event{Name: "proxy.rebalance.queue-full", Message: "rebalance queue is full"}
+)
 
 type tunnelDeliver struct {
 	logger *log.MOLogger
@@ -53,12 +59,13 @@ func (d *tunnelDeliver) Deliver(t *tunnel, typ transferType) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if !t.mu.started {
-		d.logger.Info("tunnel has not started, skip transfer", zap.Any("tunnel", t))
+		d.logger.DebugEvent(eventTunnelTransferSkippedNotStarted)
 		return
 	}
 	if t.mu.inTransfer {
-		d.logger.Info("tunnel is already in transfer, skip transfer",
-			zap.Uint32("conn ID", t.cc.ConnID()), zap.Int64("goId", goid.Get()))
+		d.logger.DebugEventLazy(eventTunnelTransferSkippedInProgress, func() []zap.Field {
+			return []zap.Field{zap.Uint32("connection-id", t.cc.ConnID())}
+		})
 		return
 	}
 
@@ -73,8 +80,9 @@ func (d *tunnelDeliver) Deliver(t *tunnel, typ transferType) {
 	queueFullAction := func() {
 		t.mu.inTransfer = false
 		t.setTransferType(transferByRebalance)
-		d.logger.Info("rebalance queue is full",
-			zap.Uint32("conn ID", t.cc.ConnID()), zap.Int64("goId", goid.Get()))
+		d.logger.WarnEventLazy(eventProxyRebalanceQueueFull, func() []zap.Field {
+			return []zap.Field{zap.Uint32("connection-id", t.cc.ConnID()), zap.Int("queue-capacity", cap(d.queue))}
+		})
 	}
 
 	preDeliver()

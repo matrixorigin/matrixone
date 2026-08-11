@@ -47,6 +47,33 @@ func getVal(val any) string {
 	}
 }
 
+func rejectZeroTemporalInStrictMode(proc *process.Process, value, typ string) error {
+	reject, err := RejectZeroTemporalWritePolicy(proc)
+	if err != nil {
+		return err
+	}
+	if reject {
+		return moerr.NewTruncatedValueForField(proc.Ctx, typ, value, "value", 1)
+	}
+	return nil
+}
+
+func RejectZeroTemporalWritePolicy(proc *process.Process) (bool, error) {
+	if proc == nil || proc.GetResolveVariableFunc() == nil {
+		return false, nil
+	}
+
+	mode, err := proc.GetResolveVariableFunc()("sql_mode", true, false)
+	if err != nil {
+		return false, err
+	}
+	statementIgnore := false
+	if sp := proc.GetStmtProfile(); sp != nil {
+		statementIgnore = sp.GetStatementIgnore()
+	}
+	return process.IsStrictNoZeroDateMode(mode) && !statementIgnore, nil
+}
+
 func HexToInt(hex string) (uint64, error) {
 	s := hex[2:]
 	return strconv.ParseUint(s, 16, 64)
@@ -84,13 +111,28 @@ func DecodeBinaryString(s string) ([]byte, error) {
 }
 
 func GenVectorByVarValue(proc *process.Process, typ types.Type, val any) (*vector.Vector, error) {
+	return GenVectorByVarValueWithAllocation(proc, typ, val, nil)
+}
+
+func GenVectorByVarValueWithAllocation(
+	proc *process.Process,
+	typ types.Type,
+	val any,
+	selection *vector.AllocationAccountSelection,
+) (*vector.Vector, error) {
 	if val == nil {
-		vec := vector.NewConstNull(typ, 1, proc.Mp())
-		return vec, nil
-	} else {
-		strVal := getVal(val)
+		if selection == nil {
+			return vector.NewConstNull(typ, 1, proc.Mp()), nil
+		}
+		return vector.NewConstNullWithAllocation(typ, 1, selection)
+	}
+	strVal := getVal(val)
+	if selection == nil {
 		return vector.NewConstBytes(typ, []byte(strVal), 1, proc.Mp())
 	}
+	return vector.NewConstBytesWithAllocation(
+		typ, []byte(strVal), 1, proc.Mp(), selection,
+	)
 }
 
 func AppendAnyToStringVector(proc *process.Process, val any, vec *vector.Vector) error {
@@ -323,6 +365,11 @@ func SetInsertValueTimeStamp(proc *process.Process, numVal *tree.NumVal, typ *ty
 			if err != nil {
 				return false, false, res, err
 			}
+			if res == types.ZeroTimestamp {
+				if err = rejectZeroTemporalInStrictMode(proc, s, "datetime"); err != nil {
+					return false, false, res, err
+				}
+			}
 			// Validate TIMESTAMP minimum value: '1970-01-01 00:00:01.000000' (MySQL behavior)
 			// Note: We don't enforce maximum value limit to allow values beyond MySQL's 2038 limit
 			// MySQL behavior: TIMESTAMP column valid range is always UTC [1970-01-01 00:00:01, 2038-01-19 03:14:07]
@@ -330,7 +377,7 @@ func SetInsertValueTimeStamp(proc *process.Process, numVal *tree.NumVal, typ *ty
 			// The value 'res' is already the UTC timestamp after conversion from the session timezone.
 			// So we directly compare 'res' with TimestampMinValue (which is also in UTC).
 			// This matches MySQL: timezones further west (smaller UTC offset) allow earlier local dates.
-			if res < types.TimestampMinValue {
+			if !types.ValidTimestamp(res) {
 				// MySQL error format: "Incorrect datetime value: 'value' for column 'column' at row 1"
 				// Use row 1 as default since we don't have row number in this context
 				return false, false, res, moerr.NewTruncatedValueForField(proc.Ctx, "datetime", s, "ts_min", 1)
@@ -378,6 +425,11 @@ func SetInsertValueDateTime(proc *process.Process, numVal *tree.NumVal, typ *typ
 			isnull = true
 		} else {
 			res, err = types.ParseDatetime(s, typ.Scale)
+			if err == nil && res == types.ZeroDatetime {
+				if err = rejectZeroTemporalInStrictMode(proc, s, "datetime"); err != nil {
+					canInsert = false
+				}
+			}
 		}
 
 	case tree.P_bool:
@@ -489,6 +541,10 @@ func SetInsertValueDate(proc *process.Process, numVal *tree.NumVal, typ *types.T
 			res, err = types.ParseDateCast(s)
 			if err != nil {
 				canInsert = false
+			} else if res == types.ZeroDate {
+				if err = rejectZeroTemporalInStrictMode(proc, s, "date"); err != nil {
+					canInsert = false
+				}
 			}
 		}
 
@@ -549,7 +605,12 @@ func SetInsertValueString(proc *process.Process, numVal *tree.NumVal, typ *types
 
 	checkStrLen := func(s string, binaryLiteral bool) ([]byte, error) {
 		destLen := int(typ.Width)
-		checkWidth := typ.Oid != types.T_text && typ.Oid != types.T_datalink &&
+		// CHAR/VARCHAR width is enforced at runtime by the assignment cast
+		// (cast_assign), which honors sql_mode, the trailing-space exemption and
+		// the INSERT IGNORE downgrade. Excluding them here avoids a plan-time
+		// hard rejection that would ignore sql_mode.
+		checkWidth := typ.Oid != types.T_char && typ.Oid != types.T_varchar &&
+			typ.Oid != types.T_text && typ.Oid != types.T_datalink &&
 			(typ.Oid != types.T_binary || binaryLiteral) && destLen != 0 && !typ.Oid.IsArrayRelate()
 		if checkWidth {
 			srcLen := utf8.RuneCountInString(s)
@@ -947,10 +1008,22 @@ func floatNumToFixFloat[T constraints.Float | constraints.Integer](
 	return T(v), nil
 }
 
-func SetInsertValueBit(proc *process.Process, numVal *tree.NumVal, colType *types.Type) (canInsert bool, val uint64, err error) {
+func SetInsertValueBit(proc *process.Process, numVal *tree.NumVal, colType *types.Type, isIgnore bool) (canInsert bool, val uint64, err error) {
 	var ok bool
 	canInsert = true
 	width := colType.Width
+	max := bitMaxValue(width)
+	adjustOverflow := func(value uint64) bool {
+		if value <= max {
+			return false
+		}
+		if isIgnore {
+			val = max
+			return true
+		}
+		err = moerr.NewInvalidInputf(proc.Ctx, "data too long, type width = %d, val = %b", width, value)
+		return true
+	}
 
 	switch numVal.ValType {
 	case tree.P_bool:
@@ -968,8 +1041,7 @@ func SetInsertValueBit(proc *process.Process, numVal *tree.NumVal, colType *type
 		for i := 0; i < len(s); i++ {
 			val = (val << 8) | uint64(s[i])
 		}
-		if val > uint64(1<<width-1) {
-			err = moerr.NewInvalidInputf(proc.Ctx, "data too long, type width = %d, val = %b", width, val)
+		if adjustOverflow(val) {
 			return
 		}
 
@@ -979,13 +1051,23 @@ func SetInsertValueBit(proc *process.Process, numVal *tree.NumVal, colType *type
 			err = moerr.NewInvalidInputf(proc.Ctx, "invalid float value '%s'", numVal.String())
 			return
 		} else if num < 0 {
+			if isIgnore {
+				val = 0
+				return
+			}
 			err = moerr.NewInvalidInputf(proc.Ctx, "unsupported negative value %v", val)
 			return
-		} else if uint64(math.Round(num)) > uint64(1<<width-1) {
-			err = moerr.NewInvalidInputf(proc.Ctx, "data too long, type width = %d, val = %b", width, val)
+		}
+		rounded := math.Round(num)
+		if math.IsNaN(rounded) || bitFloatOutOfRange(rounded, width) {
+			if isIgnore {
+				val = max
+				return
+			}
+			err = moerr.NewInvalidInputf(proc.Ctx, "data too long, type width = %d, val = %v", width, num)
 			return
 		}
-		val = uint64(math.Round(num))
+		val = uint64(rounded)
 
 	case tree.P_int64:
 		var tempVal int64
@@ -993,10 +1075,13 @@ func SetInsertValueBit(proc *process.Process, numVal *tree.NumVal, colType *type
 			err = moerr.NewInvalidInputf(proc.Ctx, "invalid int value '%s'", numVal.String())
 			return
 		} else if tempVal < 0 {
+			if isIgnore {
+				val = 0
+				return
+			}
 			err = moerr.NewInvalidInputf(proc.Ctx, "unsupported negative value %d", tempVal)
 			return
-		} else if uint64(tempVal) > uint64(1<<width-1) {
-			err = moerr.NewInvalidInputf(proc.Ctx, "data too long, type width = %d, val = %b", width, tempVal)
+		} else if adjustOverflow(uint64(tempVal)) {
 			return
 		}
 		val = uint64(tempVal)
@@ -1005,32 +1090,28 @@ func SetInsertValueBit(proc *process.Process, numVal *tree.NumVal, colType *type
 		if val, ok = numVal.Uint64(); !ok {
 			err = moerr.NewInvalidInputf(proc.Ctx, "invalid int value '%s'", numVal.String())
 			return
-		} else if val > uint64(1<<width-1) {
-			err = moerr.NewInvalidInputf(proc.Ctx, "data too long, type width = %d, val = %b", width, val)
+		} else if adjustOverflow(val) {
 			return
 		}
 
 	case tree.P_hexnum:
 		if val, err = HexToInt(numVal.String()); err != nil {
 			return
-		} else if val > uint64(1<<width-1) {
-			err = moerr.NewInvalidInputf(proc.Ctx, "data too long, type width = %d, val = %b", width, val)
+		} else if adjustOverflow(val) {
 			return
 		}
 
 	case tree.P_bit:
 		if val, err = BinaryToInt(numVal.String()); err != nil {
 			return
-		} else if val > uint64(1<<width-1) {
-			err = moerr.NewInvalidInputf(proc.Ctx, "data too long, type width = %d, val = %b", width, val)
+		} else if adjustOverflow(val) {
 			return
 		}
 
 	case tree.P_ScoreBinary:
 		if val, err = ScoreBinaryToInt(numVal.String()); err != nil {
 			return
-		} else if val > uint64(1<<width-1) {
-			err = moerr.NewInvalidInputf(proc.Ctx, "data too long, type width = %d, val = %b", width, val)
+		} else if adjustOverflow(val) {
 			return
 		}
 
@@ -1038,4 +1119,24 @@ func SetInsertValueBit(proc *process.Process, numVal *tree.NumVal, colType *type
 		canInsert = false
 	}
 	return
+}
+
+func bitMaxValue(width int32) uint64 {
+	if width >= 64 {
+		return math.MaxUint64
+	}
+	if width <= 0 {
+		return 0
+	}
+	return uint64(1)<<width - 1
+}
+
+func bitFloatOutOfRange(value float64, width int32) bool {
+	if math.IsInf(value, 0) {
+		return true
+	}
+	if width >= 64 {
+		return value >= math.Exp2(64)
+	}
+	return value > float64(bitMaxValue(width))
 }

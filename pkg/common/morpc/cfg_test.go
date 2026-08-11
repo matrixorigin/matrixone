@@ -15,6 +15,7 @@
 package morpc
 
 import (
+	"runtime"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/util/toml"
@@ -22,6 +23,11 @@ import (
 )
 
 func TestAdjustConfig(t *testing.T) {
+	previousMaxProcs := runtime.GOMAXPROCS(1)
+	t.Cleanup(func() {
+		runtime.GOMAXPROCS(previousMaxProcs)
+	})
+
 	c := Config{}
 	c.Adjust()
 	assert.Equal(t, defaultMaxConnections, c.MaxConnections)
@@ -30,4 +36,44 @@ func TestAdjustConfig(t *testing.T) {
 	assert.Equal(t, toml.ByteSize(defaultBufferSize), c.WriteBufferSize)
 	assert.Equal(t, toml.ByteSize(defaultBufferSize), c.ReadBufferSize)
 	assert.Equal(t, toml.ByteSize(defaultMaxMessageSize), c.MaxMessageSize)
+	assert.Equal(t, defaultMinServerWorkers, c.ServerWorkers)
+
+	c = Config{ServerWorkers: 7}
+	c.Adjust()
+	assert.Equal(t, 7, c.ServerWorkers)
+}
+
+func TestDefaultServerWorkers(t *testing.T) {
+	tests := []struct {
+		name     string
+		maxProcs int
+		expected int
+	}{
+		{
+			name:     "minimum",
+			maxProcs: 1,
+			expected: defaultMinServerWorkers,
+		},
+		{
+			name:     "minimum boundary",
+			maxProcs: 12,
+			expected: defaultMinServerWorkers,
+		},
+		{
+			name:     "scales above minimum",
+			maxProcs: 13,
+			expected: 104,
+		},
+		{
+			name:     "large scheduler",
+			maxProcs: 112,
+			expected: 896,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			assert.Equal(t, test.expected, defaultServerWorkers(test.maxProcs))
+		})
+	}
 }

@@ -17,8 +17,7 @@ package bytejson
 import (
 	"bytes"
 	"encoding/binary"
-	"math/big"
-	"strconv"
+	"math"
 )
 
 type subPathType byte
@@ -141,7 +140,11 @@ const (
 	TpCodeDate     TpCode = 0x0e
 	TpCodeTime     TpCode = 0x0f
 	TpCodeDatetime TpCode = 0x10
-	TpCodeBlob     TpCode = 0x11
+	// TpCodeBlob is the legacy base64-encoded BLOB representation. New binary
+	// JSON values retain their bytes in TpCodeOpaque and encode only on output.
+	TpCodeBlob   TpCode = 0x11
+	TpCodeOpaque TpCode = 0x12
+	TpCodeBit    TpCode = 0x13
 )
 
 func (bj ByteJson) TYPE() string {
@@ -169,7 +172,14 @@ func (bj ByteJson) TYPE() string {
 	case TpCodeDatetime:
 		return "DATETIME"
 	case TpCodeBlob:
+		if _, ok := bj.persistedBitPayload(); ok {
+			return "BIT"
+		}
 		return "BLOB"
+	case TpCodeOpaque:
+		return "BLOB"
+	case TpCodeBit:
+		return "BIT"
 	default:
 		return "OPAQUE"
 	}
@@ -186,6 +196,7 @@ var jsonTpOrder = map[string]int{
 	"TIME":     -8,
 	"DATETIME": -9,
 	"BLOB":     -10,
+	"BIT":      -10,
 	"LITERAL":  -11,
 }
 
@@ -203,13 +214,15 @@ const (
 )
 
 func CompareByteJson(left, right ByteJson) int {
+	if cmp, ok := CompareBinaryJSON(left, right); ok {
+		return cmp
+	}
+	if isByteJsonNumeric(left.Type) && isByteJsonNumeric(right.Type) {
+		return compareByteJsonNumeric(left, right)
+	}
+
 	order1 := jsonTpOrder[left.TYPE()]
 	order2 := jsonTpOrder[right.TYPE()]
-
-	if (left.Type == TpCodeDecimal || right.Type == TpCodeDecimal) &&
-		isByteJsonNumeric(left.Type) && isByteJsonNumeric(right.Type) {
-		return compareByteJsonNumericExact(left, right)
-	}
 
 	var cmp int
 	if order1 == order2 {
@@ -219,24 +232,7 @@ func CompareByteJson(left, right ByteJson) int {
 		switch left.Type {
 		case TpCodeLiteral:
 			cmp = int(left.Data[0]) - int(right.Data[0])
-		case TpCodeInt64:
-			if right.Type == TpCodeUint64 {
-				cmp = compareInt64Uint64(left.GetInt64(), right.GetUint64())
-			} else if right.Type == TpCodeInt64 {
-				cmp = compareInt64(left.GetInt64(), right.GetInt64())
-			}
-
-		case TpCodeUint64:
-			if right.Type == TpCodeInt64 {
-				cmp = -compareInt64Uint64(right.GetInt64(), left.GetUint64())
-			} else if right.Type == TpCodeUint64 {
-				cmp = compareUint64(left.GetUint64(), right.GetUint64())
-			}
-		case TpCodeFloat64:
-			cmp = compareFloat64(left.GetFloat64(), right.GetFloat64())
-		case TpCodeDecimal:
-			cmp = compareByteJsonNumericExact(left, right)
-		case TpCodeString, TpCodeDate, TpCodeTime, TpCodeDatetime, TpCodeBlob:
+		case TpCodeString, TpCodeDate, TpCodeTime, TpCodeDatetime:
 			cmp = bytes.Compare(left.GetString(), right.GetString())
 		case TpCodeArray:
 			leftCnt := left.GetElemCnt()
@@ -248,8 +244,8 @@ func CompareByteJson(left, right ByteJson) int {
 				if cmp != 0 {
 					return cmp
 				}
-				cmp = leftCnt - rightCnt
 			}
+			cmp = leftCnt - rightCnt
 		case TpCodeObject:
 			leftCnt := left.GetElemCnt()
 			rightCnt := right.GetElemCnt()
@@ -271,45 +267,11 @@ func CompareByteJson(left, right ByteJson) int {
 			}
 		}
 	} else {
-		if (-6 <= order1 && order1 <= -4) && (-6 <= order2 && order2 <= -4) {
-			switch left.Type {
-			case TpCodeInt64:
-				switch right.Type {
-				case TpCodeInt64:
-					cmp = compareInt64(left.GetInt64(), right.GetInt64())
-				case TpCodeUint64:
-					cmp = compareInt64Uint64((left.GetInt64()), right.GetUint64())
-				case TpCodeFloat64:
-					cmp = -compareFloat64Int64(right.GetFloat64(), left.GetInt64())
-				}
-			case TpCodeUint64:
-				switch right.Type {
-				case TpCodeInt64:
-					cmp = -compareInt64Uint64(right.GetInt64(), left.GetUint64())
-				case TpCodeUint64:
-					cmp = compareUint64(left.GetUint64(), right.GetUint64())
-				case TpCodeFloat64:
-					cmp = -compareFloat64Uint64(right.GetFloat64(), left.GetUint64())
-				}
-			case TpCodeFloat64:
-				switch right.Type {
-				case TpCodeInt64:
-					cmp = compareFloat64Int64(left.GetFloat64(), right.GetInt64())
-				case TpCodeUint64:
-					cmp = compareFloat64Uint64(left.GetFloat64(), right.GetUint64())
-				case TpCodeFloat64:
-					cmp = compareFloat64(left.GetFloat64(), right.GetFloat64())
-				}
-			}
-			return cmp
-		} else {
-			cmp = order1 - order2
-			if cmp > 0 {
-				cmp = 1
-			} else if cmp < 0 {
-				cmp = -1
-			}
-
+		cmp = order1 - order2
+		if cmp > 0 {
+			cmp = 1
+		} else if cmp < 0 {
+			cmp = -1
 		}
 	}
 	return cmp
@@ -324,55 +286,79 @@ func isByteJsonNumeric(tp TpCode) bool {
 	}
 }
 
-func compareByteJsonNumericExact(left, right ByteJson) int {
-	leftRat, ok1 := byteJsonNumericRat(left)
-	rightRat, ok2 := byteJsonNumericRat(right)
-	if ok1 && ok2 {
-		return leftRat.Cmp(rightRat)
+func compareByteJsonNumeric(left, right ByteJson) int {
+	if left.Type == TpCodeDecimal || right.Type == TpCodeDecimal {
+		return compareByteJsonNumericExact(left, right)
 	}
-	leftJSON, _ := left.MarshalJSON()
-	rightJSON, _ := right.MarshalJSON()
-	return bytes.Compare(leftJSON, rightJSON)
-}
-
-func byteJsonNumericRat(bj ByteJson) (*big.Rat, bool) {
-	switch bj.Type {
+	switch left.Type {
 	case TpCodeInt64:
-		return big.NewRat(bj.GetInt64(), 1), true
+		switch right.Type {
+		case TpCodeInt64:
+			return compareInt64(left.GetInt64(), right.GetInt64())
+		case TpCodeUint64:
+			return compareInt64Uint64(left.GetInt64(), right.GetUint64())
+		case TpCodeFloat64:
+			return -compareFloat64Int64(right.GetFloat64(), left.GetInt64())
+		}
 	case TpCodeUint64:
-		return new(big.Rat).SetInt(new(big.Int).SetUint64(bj.GetUint64())), true
+		switch right.Type {
+		case TpCodeInt64:
+			return -compareInt64Uint64(right.GetInt64(), left.GetUint64())
+		case TpCodeUint64:
+			return compareUint64(left.GetUint64(), right.GetUint64())
+		case TpCodeFloat64:
+			return -compareFloat64Uint64(right.GetFloat64(), left.GetUint64())
+		}
 	case TpCodeFloat64:
-		r := new(big.Rat)
-		if _, ok := r.SetString(strconv.FormatFloat(bj.GetFloat64(), 'g', -1, 64)); !ok {
-			return nil, false
+		switch right.Type {
+		case TpCodeInt64:
+			return compareFloat64Int64(left.GetFloat64(), right.GetInt64())
+		case TpCodeUint64:
+			return compareFloat64Uint64(left.GetFloat64(), right.GetUint64())
+		case TpCodeFloat64:
+			return compareFloat64(left.GetFloat64(), right.GetFloat64())
 		}
-		return r, true
-	case TpCodeDecimal:
-		r := new(big.Rat)
-		if _, ok := r.SetString(string(bj.GetString())); !ok {
-			return nil, false
-		}
-		return r, true
-	default:
-		return nil, false
 	}
+	return 0
 }
 
-const floatEpsilon = 1.e-8
-
-// compareFloat64PrecisionLoss compares two float64 numbers with precision loss.
-func compareFloat64PrecisionLoss(x, y float64) int {
-	if x-y < floatEpsilon && y-x < floatEpsilon {
-		return 0
-	} else if x-y < 0 {
-		return -1
+func compareByteJsonNumericExact(left, right ByteJson) int {
+	if cmp, handled := compareNonFiniteNumeric(left, right); handled {
+		return cmp
 	}
-	return 1
+	leftKey, leftOK := numericKeyFromByteJSON(left)
+	rightKey, rightOK := numericKeyFromByteJSON(right)
+	if leftOK && rightOK {
+		return compareNumericKeys(&leftKey, &rightKey)
+	}
+	if leftOK != rightOK {
+		if leftOK {
+			return -1
+		}
+		return 1
+	}
+	if left.Type != right.Type {
+		return int(left.Type) - int(right.Type)
+	}
+	return bytes.Compare(left.Data, right.Data)
 }
 
 // compareFloat64Uint64 compares a float64 number and a uint64 number.
 func compareFloat64Uint64(x float64, y uint64) int {
-	return compareFloat64PrecisionLoss(x, float64(y))
+	if math.IsNaN(x) {
+		return 1
+	}
+	if x < 0 {
+		return -1
+	}
+	if x >= canonicalUint64LimitFloat {
+		return 1
+	}
+	truncated := math.Trunc(x)
+	if cmp := compareUint64(uint64(truncated), y); cmp != 0 {
+		return cmp
+	}
+	return compareFloat64(x, truncated)
 }
 
 // compareInt64 compares two int64 numbers.
@@ -418,5 +404,18 @@ func compareInt64Uint64(x int64, y uint64) int {
 
 // compareFloat64Int64 compares a float64 number and an int64 number.
 func compareFloat64Int64(x float64, y int64) int {
-	return compareFloat64PrecisionLoss(x, float64(y))
+	if math.IsNaN(x) {
+		return 1
+	}
+	if x < canonicalMinInt64Float {
+		return -1
+	}
+	if x >= -canonicalMinInt64Float {
+		return 1
+	}
+	truncated := math.Trunc(x)
+	if cmp := compareInt64(int64(truncated), y); cmp != 0 {
+		return cmp
+	}
+	return compareFloat64(x, truncated)
 }

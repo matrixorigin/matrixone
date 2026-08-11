@@ -221,7 +221,6 @@ order by
     cat.category_name;
 -- @bvt:issue
 
--- @bvt:issue#19993
 select
     year(o.order_date) as order_year,
     month(o.order_date) as order_month,
@@ -257,7 +256,6 @@ order by
     order_month,
     c.city,
     cat.category_name;
--- @bvt:issue
 
 drop table if exists orders;
 drop table if exists order_items;
@@ -593,6 +591,245 @@ order by year_label;
 
 drop table sales_mixed_types;
 
+drop table if exists grouping_order;
+create table grouping_order (
+    region varchar(8),
+    product varchar(8),
+    amount int
+);
+insert into grouping_order values
+    (null, 'tea', 10),
+    (null, 'tea', 20),
+    ('east', null, 5),
+    ('east', 'coffee', 7),
+    ('east', 'tea', null),
+    ('west', 'tea', 3);
+
+select
+    if(grouping(region), 'ROLLUP', if(region is null, 'NULL', region)) as region_label,
+    grouping(region) as grp_region,
+    if(grouping(product), 'ROLLUP', if(product is null, 'NULL', product)) as product_label,
+    grouping(product) as grp_product,
+    count(*) as count_all,
+    count(amount) as count_amount,
+    sum(amount) as sum_amount
+from grouping_order
+group by region, product with rollup
+order by grouping(region), region_label, grouping(product), product_label;
+
+-- star-expanded select list with rollup order by: positional ORDER BY must be
+-- validated against the visible (star-expanded) columns, and grouping() must
+-- resolve to its hidden sort key rather than a visible column shifted by '*'.
+select *, count(*) as cnt
+from grouping_order
+group by region, product, amount with rollup
+order by grouping(region), 1, 2, 3;
+
+select *, count(*) as cnt
+from grouping_order
+group by region, product, amount with rollup
+order by 4 desc, 1, 2, 3;
+
+select *, count(*) as cnt
+from grouping_order
+group by region, product, amount with rollup
+order by 6;
+
+-- DISTINCT grouping-set path: a grouping() ORDER BY key matching a visible
+-- select item must resolve to that item's star-expanded position, and the row
+-- set must be de-duplicated globally across all grouping-set branches, not only
+-- within each branch.
+select distinct *, grouping(region) as gr
+from grouping_order
+group by region, product, amount with rollup
+order by grouping(region), 1, 2, 3;
+
+select distinct region, grouping(region) as gr
+from grouping_order
+group by region, product with rollup
+order by grouping(region), region;
+
+-- Hidden and derived ORDER BY keys must be computed after visible DISTINCT.
+select count(*) as visible_regions
+from (
+    select distinct region
+    from grouping_order
+    group by region, product with rollup
+    order by rand()
+) as ordered_distinct;
+
+select distinct grouping(region) as gr, amount
+from grouping_order
+group by region, amount with rollup
+order by grouping(region) + amount;
+
+-- nested ORDER BY names prefer source columns; the source amount is not a
+-- visible DISTINCT output and must not resolve through the same-named alias.
+select distinct grouping(region), abs(amount) as amount
+from grouping_order
+group by region, product, amount with rollup
+order by grouping(region) + amount;
+
+-- DISTINCT over GROUPING SETS must de-duplicate globally across every generated
+-- grouping-set branch, the same as ROLLUP.
+select distinct region, grouping(region) as gr
+from grouping_order
+group by grouping sets((region, product), (region), ())
+order by grouping(region), region;
+
+-- a grouping() ORDER BY key matching a select item that sits between two star
+-- expansions (t1.*, grouping(...), t2.*) must be located precisely, not rejected.
+drop table if exists grouping_order2;
+create table grouping_order2 (city varchar(8), qty int);
+insert into grouping_order2 values ('x', 1), ('y', 2);
+select distinct t1.*, grouping(region) as gr, t2.*
+from grouping_order t1, grouping_order2 t2
+group by region, product, amount, city, qty with rollup
+order by grouping(region), region, product, amount, city, qty;
+drop table grouping_order2;
+
+-- Typed grouping NULL materialization must support types that reject ANY casts.
+drop table if exists grouping_uuid;
+create table grouping_uuid (snapshot_id uuid);
+insert into grouping_uuid values
+    ('00000000-0000-0000-0000-000000000001'),
+    ('00000000-0000-0000-0000-000000000002'),
+    (null);
+select distinct snapshot_id
+from grouping_uuid
+group by snapshot_id with rollup
+order by snapshot_id;
+drop table grouping_uuid;
+
+-- Grouping NULL normalization must preserve vector projection types.
+drop table if exists grouping_vector;
+create table grouping_vector (
+    v32 vecf32(3),
+    v64 vecf64(3),
+    vbf16 vecbf16(3),
+    vf16 vecf16(3),
+    vi8 vecint8(3),
+    vu8 vecuint8(3)
+);
+insert into grouping_vector values
+    ('[1, 2, 3]', '[1, 2, 3]', '[1, 2, 3]', '[1, 2, 3]', '[-128, 0, 127]', '[0, 1, 255]'),
+    ('[4, 5, 6]', '[4, 5, 6]', '[4, 5, 6]', '[4, 5, 6]', '[-1, 1, 2]', '[2, 3, 4]'),
+    (null, null, null, null, null, null);
+select distinct v32
+from grouping_vector
+group by v32 with rollup
+order by v32;
+select distinct v64
+from grouping_vector
+group by cube(v64)
+order by v64;
+select distinct vbf16
+from grouping_vector
+group by vbf16 with rollup
+order by vbf16;
+select distinct vf16
+from grouping_vector
+group by cube(vf16)
+order by vf16;
+select distinct vi8
+from grouping_vector
+group by vi8 with rollup
+order by vi8;
+select distinct vu8
+from grouping_vector
+group by cube(vu8)
+order by vu8;
+drop table grouping_vector;
+
+-- Grouping NULL normalization must preserve binary metadata and bytes.
+drop table if exists grouping_binary;
+create table grouping_binary (b binary(4), vb varbinary(4));
+insert into grouping_binary values
+    (x'0001feff', x'0001feff'),
+    (x'80007fff', x'80007fff'),
+    (null, null);
+select hex(b) as b
+from (
+    select distinct b
+    from grouping_binary
+    group by b with rollup
+) dt
+order by b;
+select hex(vb) as vb
+from (
+    select distinct vb
+    from grouping_binary
+    group by cube(vb)
+) dt
+order by vb;
+drop table grouping_binary;
+
+-- DISTINCT must preserve subtotal and grand-total rows for NOT NULL inputs.
+drop table if exists grouping_not_null;
+create table grouping_not_null (a int not null, b int not null);
+insert into grouping_not_null values (1, 10), (2, 20);
+select distinct a, grouping(a) as ga
+from grouping_not_null
+group by a with rollup
+order by ga, a;
+select distinct a, b, grouping(a) as ga, grouping(b) as gb
+from grouping_not_null
+group by cube(a, b)
+order by ga, gb, a, b;
+select distinct a, b, grouping(a) as ga, grouping(b) as gb
+from grouping_not_null
+group by grouping sets ((a, b), (a), ())
+order by ga, gb, a, b;
+
+drop table grouping_not_null;
+
+-- GROUPING arguments must each identify one complete GROUP BY item. A miss
+-- must be rejected in SELECT, HAVING, and ORDER BY before recursive binding.
+drop table if exists grouping_argument_validation;
+create table grouping_argument_validation (a int, b int);
+insert into grouping_argument_validation values (1, 10), (2, 20);
+
+select grouping(a + b), count(*)
+from grouping_argument_validation
+group by a, b with rollup;
+
+select grouping(a + 1, b + 1), count(*)
+from grouping_argument_validation
+group by a + 1, b with rollup;
+
+select grouping(sum(a)), count(*)
+from grouping_argument_validation
+group by a with rollup;
+
+select count(*)
+from grouping_argument_validation
+group by a, b with rollup
+having grouping(a + b) = 0;
+
+select count(*)
+from grouping_argument_validation
+group by a, b with rollup
+order by grouping(a + b);
+
+select a + 1 as a1, b, grouping(a + 1, b) as grouping_bits, count(*) as cnt
+from grouping_argument_validation
+group by a + 1, b with rollup
+order by grouping_bits, a1, b;
+
+drop table grouping_argument_validation;
+
+-- Wrapped grouping columns remain available as hidden source sort keys.
+select
+    coalesce(region, '<null>') as display_region,
+    coalesce(product, '<null>') as display_product,
+    sum(amount) as total_amount,
+    grouping(region) as grouping_region,
+    grouping(product) as grouping_product
+from grouping_order
+group by region, product with rollup
+order by grouping(region), region, grouping(product), product;
+
+drop table grouping_order;
 -- rollup with window functions should rank over the full rollup result
 create table rollup_window_sales(region varchar(20), product varchar(20), qty int);
 insert into rollup_window_sales values

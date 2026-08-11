@@ -50,6 +50,41 @@ const (
 
 var running atomic.Bool
 
+var (
+	eventPublicationRetryAttempt = logutil.Event{
+		Name:    "publication.retry.attempt-failed",
+		Message: "publication operation failed and will be retried",
+	}
+	eventPublicationRetryExhausted = logutil.Event{
+		Name:    "publication.retry.exhausted",
+		Message: "publication operation failed after retry attempts",
+	}
+	eventPublicationLeaseCheckFailed = logutil.Event{
+		Name:    "publication.lease.check-failed",
+		Message: "publication lease check failed",
+	}
+	eventPublicationLeaseNotHeld = logutil.Event{
+		Name:    "publication.lease.executor-stopping",
+		Message: "publication executor is stopping because it does not hold the lease",
+	}
+	eventPublicationLeaseOwnerMismatch = logutil.Event{
+		Name:    "publication.lease.owner-mismatch",
+		Message: "publication lease is held by another CN",
+	}
+	eventPublicationTaskSubmitFailed = logutil.Event{
+		Name:    "publication.task.submit-failed",
+		Message: "publication task could not be submitted to the worker",
+	}
+	eventPublicationIterationStateUpdateFailed = logutil.Event{
+		Name:    "publication.iteration.state-update-failed",
+		Message: "publication iteration state update failed",
+	}
+	eventPublicationExecutorStartFailed = logutil.Event{
+		Name:    "publication.executor.start-failed",
+		Message: "publication executor startup failed",
+	}
+)
+
 const (
 	// These are kept for backward compatibility, prefer using config center
 	DefaultRetryDuration = time.Minute * 10
@@ -127,7 +162,10 @@ func PublicationTaskExecutorFactory(
 		}
 
 		if err = exec.Start(); err != nil {
-			return
+			eventPublicationExecutorStartFailed.ErrorLazy(func() []zap.Field {
+				return append([]zap.Field{zap.String("operation", "start")}, logutil.ErrorFingerprintFields("error", err)...)
+			})
+			return moerr.NewInternalErrorNoCtx("publication executor startup failed")
 		}
 		exec.waitForTermination(ctx)
 		exec.Stop()
@@ -330,6 +368,7 @@ func (exec *PublicationTaskExecutor) initStateLocked(parent context.Context) err
 	// next generation entirely from that authoritative snapshot.
 	err := retryPublication(
 		ctx,
+		"repair-abandoned-tasks",
 		func() error {
 			return exec.repairAbandonedTasks(ctx)
 		},
@@ -341,6 +380,7 @@ func (exec *PublicationTaskExecutor) initStateLocked(parent context.Context) err
 	}
 	err = retryPublication(
 		ctx,
+		"load-pending-tasks",
 		func() error {
 			return exec.rebuildState(ctx)
 		},
@@ -432,27 +472,24 @@ func (exec *PublicationTaskExecutor) run(ctx context.Context, worker Worker) {
 			// check lease before submitting tasks
 			ok, err := CheckLeaseWithRetry(ctx, exec.cnUUID, exec.txnEngine, exec.cnTxnClient)
 			if err != nil {
-				logutil.Error(
-					"Publication-Task check lease failed",
-					zap.Error(err),
-				)
 				continue
 			}
 			if !ok {
-				logutil.Error("Publication-Task lease check failed, stopping executor")
+				eventPublicationLeaseNotHeld.WarnLazy(func() []zap.Field {
+					return append(logutil.StringFingerprintFields("cn", exec.cnUUID), zap.Int("candidate-count", len(candidateTasks)))
+				})
 				go exec.Cancel()
 				return
 			}
 			for _, task := range candidateTasks {
 				err = worker.Submit(task.TaskID, task.LSN, task.State)
 				if err != nil {
-					logutil.Error(
-						"Publication-Task submit task failed",
-						zap.String("taskID", task.TaskID),
-						zap.Uint64("lsn", task.LSN),
-						zap.Int8("state", task.State),
-						zap.Error(err),
-					)
+					eventPublicationTaskSubmitFailed.ErrorLazy(func() []zap.Field {
+						return append([]zap.Field{
+							zap.Uint64("lsn", task.LSN),
+							zap.Int8("state", task.State),
+						}, append(logutil.StringFingerprintFields("task-id", task.TaskID), logutil.ErrorFingerprintFields("error", err)...)...)
+					})
 					continue
 				}
 				// Admission is the linearization point. Mark the task pending only
@@ -1335,6 +1372,7 @@ func deleteCcprLogRecordInSeparateTxn(
 
 func retryPublication(
 	ctx context.Context,
+	operation string,
 	fn func() error,
 	retryOpt *ExecutorRetryOption,
 ) (err error) {
@@ -1375,17 +1413,27 @@ func retryPublication(
 
 		err = fn()
 		if err != nil {
-			logutil.Warn("Publication-Task retry attempt",
-				zap.Int("attempt", attempt),
-				zap.Int("maxAttempts", maxAttempts),
-				zap.Error(err),
-			)
+			eventPublicationRetryAttempt.WarnLazy(func() []zap.Field {
+				return append([]zap.Field{
+					zap.String("operation", operation),
+					zap.Int("attempt", attempt),
+					zap.Int("max-attempts", maxAttempts),
+					zap.Duration("elapsed", time.Since(startTime)),
+				}, logutil.ErrorFingerprintFields("error", err)...)
+			})
 		}
 		return err
 	})
 
 	if err != nil && !errors.Is(err, ErrNonRetryable) {
-		logutil.Errorf("Publication-Task retry failed, err: %v", err)
+		eventPublicationRetryExhausted.ErrorLazy(func() []zap.Field {
+			return append([]zap.Field{
+				zap.String("operation", operation),
+				zap.Int("attempt", attempt),
+				zap.Int("max-attempts", maxAttempts),
+				zap.Duration("elapsed", time.Since(startTime)),
+			}, logutil.ErrorFingerprintFields("error", err)...)
+		})
 	}
 	return err
 }

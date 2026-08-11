@@ -19,6 +19,7 @@ import (
 	"math"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -63,6 +64,13 @@ func (proc *Process) BuildProcessInfo(
 		// Carry ROW_COUNT() state so it is correct when an expression that reads
 		// it (e.g. row_count() in a projection) is pushed down to a remote CN.
 		procInfo.AffectedRows = proc.GetAffectedRows()
+		// Assignment casts can run in a remote scan scope. Carry INSERT IGNORE
+		// semantics with the process so those casts take the same adjustment
+		// path as they do on the coordinating CN.
+		procInfo.StatementRuntimeIgnore = proc.GetStmtProfile().GetStatementIgnore()
+		if planSnapshotTS, ok := proc.GetPlanSnapshotTS(); ok {
+			procInfo.PlanSnapshotTs = &planSnapshotTS
+		}
 		snapshot, err := proc.GetTxnOperator().Snapshot()
 		if err != nil {
 			return procInfo, err
@@ -80,7 +88,15 @@ func (proc *Process) BuildProcessInfo(
 			for i := range procInfo.PrepareParams.Nulls {
 				procInfo.PrepareParams.Nulls[i] = vec.GetNulls().Contains(uint64(i))
 			}
-			procInfo.PrepareParams.IsBin = append(procInfo.PrepareParams.IsBin, proc.Base.prepareParamsIsBin...)
+			metadata, err := PrepareParamMetadataForRemote(
+				proc.GetService(),
+				vec.Length(),
+				proc.Base.prepareParamsIsBin,
+			)
+			if err != nil {
+				return procInfo, err
+			}
+			procInfo.PrepareParams.IsBin = metadata
 		}
 	}
 	{ // session info
@@ -105,7 +121,13 @@ func (proc *Process) BuildProcessInfo(
 			LockWaitTimeout:     resolveLockWaitTimeoutSeconds(proc),
 			LockWaitTimeoutSet:  proc.Base.SessionInfo.LockWaitTimeoutSet,
 			MatrixoneNativeMode: proc.Base.SessionInfo.MatrixOneNativeMode,
+			SqlMode:             resolveSqlMode(proc),
 		}
+		nullifyZeroTemporal, err := ResolveExplicitZeroTemporalCastReturnsNull(proc)
+		if err != nil {
+			return procInfo, err
+		}
+		procInfo.SessionInfo.ExplicitZeroTemporalCastReturnsNull = nullifyZeroTemporal
 	}
 	{ // log info
 		stmtId := proc.GetStmtProfile().GetStmtId()
@@ -194,6 +216,18 @@ func (c *codecService) Decode(
 	ctx context.Context,
 	value pipeline.ProcessInfo,
 ) (*Process, error) {
+	service := ""
+	if c.lockService != nil {
+		service = c.lockService.GetConfig().ServiceID
+	}
+	prepareParamMetadata, err := PrepareParamMetadataForRemote(
+		service,
+		int(value.PrepareParams.Length),
+		value.PrepareParams.IsBin,
+	)
+	if err != nil {
+		return nil, err
+	}
 	txnOp, err := c.txnClient.NewWithSnapshot(ctx, value.Snapshot)
 	if err != nil {
 		return nil, err
@@ -224,7 +258,13 @@ func (c *codecService) Decode(
 	proc.Base.Lim = ConvertToProcessLimitation(value.Lim)
 	proc.Base.SessionInfo = sessionInfo
 	proc.Base.SessionInfo.StorageEngine = c.engine
+	if value.PlanSnapshotTs != nil {
+		proc.SetPlanSnapshotTS(*value.PlanSnapshotTs)
+	}
 	proc.SetAffectedRows(value.AffectedRows)
+	stmtProfile := NewStmtProfile(uuid.Nil, uuid.Nil)
+	stmtProfile.SetStatementRuntimeProfile("", "", value.StatementRuntimeIgnore)
+	proc.Base.StmtProfile = stmtProfile
 	if value.PrepareParams.Length > 0 {
 		prepareParams, err := vector.NewVecWithDataCopy(
 			types.T_text.ToType(),
@@ -242,7 +282,7 @@ func (c *codecService) Decode(
 				prepareParams.GetNulls().Add(uint64(i))
 			}
 		}
-		proc.SetOwnedPrepareParamsWithIsBin(prepareParams, append([]bool(nil), value.PrepareParams.IsBin...))
+		proc.SetOwnedPrepareParamsWithIsBin(prepareParams, prepareParamMetadata)
 	}
 	return proc, nil
 }
@@ -255,6 +295,7 @@ func convertToPipelineLimitation(lim Limitation) pipeline.ProcessLimitation {
 		BatchSize:     lim.BatchSize,
 		PartitionRows: lim.PartitionRows,
 		ReaderSize:    lim.ReaderSize,
+		SpillSize:     lim.SpillSize,
 	}
 }
 
@@ -301,6 +342,7 @@ func ConvertToProcessLimitation(
 		BatchSize:     lim.BatchSize,
 		PartitionRows: lim.PartitionRows,
 		ReaderSize:    lim.ReaderSize,
+		SpillSize:     lim.SpillSize,
 	}
 }
 
@@ -309,17 +351,19 @@ func ConvertToProcessSessionInfo(
 	sei pipeline.SessionInfo,
 ) (SessionInfo, error) {
 	sessionInfo := SessionInfo{
-		User:                sei.User,
-		Host:                sei.Host,
-		Role:                sei.Role,
-		ConnectionID:        sei.ConnectionId,
-		Database:            sei.Database,
-		Version:             sei.Version,
-		Account:             sei.Account,
-		QueryId:             sei.QueryId,
-		LockWaitTimeout:     sei.LockWaitTimeout,
-		LockWaitTimeoutSet:  sei.LockWaitTimeoutSet,
-		MatrixOneNativeMode: sei.MatrixoneNativeMode,
+		User:                                sei.User,
+		Host:                                sei.Host,
+		Role:                                sei.Role,
+		ConnectionID:                        sei.ConnectionId,
+		Database:                            sei.Database,
+		Version:                             sei.Version,
+		Account:                             sei.Account,
+		QueryId:                             sei.QueryId,
+		LockWaitTimeout:                     sei.LockWaitTimeout,
+		LockWaitTimeoutSet:                  sei.LockWaitTimeoutSet,
+		MatrixOneNativeMode:                 sei.MatrixoneNativeMode,
+		ExplicitZeroTemporalCastReturnsNull: sei.ExplicitZeroTemporalCastReturnsNull,
+		SqlMode:                             sei.SqlMode,
 	}
 	t := time.Time{}
 	err := t.UnmarshalBinary(sei.TimeZone)
@@ -328,6 +372,26 @@ func ConvertToProcessSessionInfo(
 	}
 	sessionInfo.TimeZone = t.Location()
 	return sessionInfo, nil
+}
+
+func resolveSqlMode(proc *Process) string {
+	if proc == nil {
+		return ""
+	}
+	if f := proc.GetResolveVariableFunc(); f != nil {
+		if v, err := f("sql_mode", true, false); err == nil {
+			if s, ok := v.(string); ok {
+				if s == "" {
+					return EmptySqlModeSentinel // explicitly non-strict
+				}
+				return s
+			}
+		}
+	}
+	// Resolver is nil on a remote CN (no session). Fall back to the sql_mode
+	// captured from the upstream CN so it survives a second forward
+	// (encode -> decode -> encode); otherwise the next hop defaults to strict.
+	return proc.Base.SessionInfo.SqlMode
 }
 
 func resolveLockWaitTimeoutSeconds(proc *Process) int64 {

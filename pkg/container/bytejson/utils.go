@@ -33,7 +33,7 @@ import (
 
 func ParseFromString(s string) (ret ByteJson, err error) {
 	if len(s) == 0 {
-		err = moerr.NewInvalidInputNoCtxf("json text %s", s)
+		err = moerr.NewInvalidInputNoCtx("json text is empty")
 		return
 	}
 	data := util.UnsafeStringToBytes(s)
@@ -43,7 +43,7 @@ func ParseFromString(s string) (ret ByteJson, err error) {
 
 func ParseFromByteSlice(s []byte) (bj ByteJson, err error) {
 	if len(s) == 0 {
-		err = moerr.NewInvalidInputNoCtxf("json text %s", string(s))
+		err = moerr.NewInvalidInputNoCtx("json text is empty")
 		return
 	}
 	if !json.Valid(s) {

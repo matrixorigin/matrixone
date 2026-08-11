@@ -88,7 +88,14 @@ func (c *compilerContext) IsPublishing(dbName string) (bool, error) {
 }
 
 func (c *compilerContext) BuildTableDefByMoColumns(dbName, table string) (*plan.TableDef, error) {
-	panic("not supported in internal sql executor")
+	_, tableDef, err := c.Resolve(dbName, table, nil)
+	if err != nil {
+		return nil, err
+	}
+	if tableDef == nil {
+		return nil, moerr.NewNoSuchTable(c.GetContext(), dbName, table)
+	}
+	return tableDef, nil
 }
 
 func (c *compilerContext) ResolveSnapshotWithSnapshotName(snapshotName string) (*plan.Snapshot, error) {
@@ -346,6 +353,29 @@ func (c *compilerContext) Resolve(dbName string, tableName string, snapshot *pla
 	}
 
 	tableDef := plan.CloneTableDefForPlan(table.GetTableDef(ctx), true)
+	if tableDef.DbName == "" {
+		tableDef.DbName = dbName
+	}
+	if err := plan.RecoverLegacyTinyText(ctx, tableDef, func(
+		_ context.Context,
+		sourceDB string,
+		sourceTable string,
+	) (*plan.TableDef, error) {
+		if sourceDB == "" {
+			sourceDB = dbName
+		}
+		sourceCtx, sourceRelation, err := c.getRelation(sourceDB, sourceTable, snapshot)
+		if err != nil || sourceRelation == nil {
+			return nil, err
+		}
+		sourceDef := plan.CloneTableDefForPlan(sourceRelation.GetTableDef(sourceCtx), true)
+		if sourceDef.DbName == "" {
+			sourceDef.DbName = sourceDB
+		}
+		return sourceDef, nil
+	}); err != nil {
+		return nil, nil, err
+	}
 	if isTmpTable || tableDef.IsTemporary {
 		tableDef.IsTemporary = true
 		tableDef.Name = tableName

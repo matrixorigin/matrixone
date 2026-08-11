@@ -479,3 +479,16 @@ Insert into auto_increment02 values(10);
 Select * from auto_increment02;
 select last_insert_id();
 Drop table auto_increment02;
+
+-- issue #23143 prerequisite: COPY ALTER must preserve the source allocator's
+-- reserved range, not rebuild it only from the copied row maximum.
+drop table if exists issue_23143_copy_auto_increment;
+create table issue_23143_copy_auto_increment(id bigint auto_increment primary key, payload int) auto_increment = 1000;
+insert into issue_23143_copy_auto_increment(payload) values (1), (2);
+delete from issue_23143_copy_auto_increment where payload = 2;
+select count(*) = 1 as deleted_value_removed, min(id) = 1000 as requested_start_used from issue_23143_copy_auto_increment;
+alter table issue_23143_copy_auto_increment add column copied_payload varchar(20) default 'copied';
+insert into issue_23143_copy_auto_increment(payload, copied_payload) values (3, 'after-copy');
+select count(*) = 2 as copied_rows_preserved, max(id) > 1001 as source_allocator_preserved from issue_23143_copy_auto_increment;
+select payload, copied_payload from issue_23143_copy_auto_increment order by payload;
+drop table issue_23143_copy_auto_increment;

@@ -38,6 +38,12 @@ func (merge *Merge) Prepare(proc *process.Process) error {
 	} else {
 		merge.OpAnalyzer.Reset()
 	}
+	if merge.MaterializedSource != nil {
+		merge.ctr.receiver = nil
+		merge.ctr.materializedPosition = 0
+		merge.ctr.materializedReleased = false
+		return nil
+	}
 
 	if merge.Partial {
 		merge.ctr.receiver = process.InitPipelineSignalReceiver(proc.Ctx, proc.Reg.MergeReceivers[merge.StartIDX:merge.EndIDX])
@@ -49,6 +55,20 @@ func (merge *Merge) Prepare(proc *process.Process) error {
 
 func (merge *Merge) Call(proc *process.Process) (vm.CallResult, error) {
 	analyzer := merge.OpAnalyzer
+	if merge.MaterializedSource != nil {
+		bat, end, err := merge.MaterializedSource.Next(proc.Ctx, merge.MaterializedReaderID, merge.ctr.materializedPosition)
+		if err != nil {
+			return vm.CancelResult, err
+		}
+		result := vm.NewCallResult()
+		if end {
+			result.Status = vm.ExecStop
+			return result, nil
+		}
+		merge.ctr.materializedPosition++
+		result.Batch = bat
+		return result, nil
+	}
 
 	var info error
 	result := vm.NewCallResult()

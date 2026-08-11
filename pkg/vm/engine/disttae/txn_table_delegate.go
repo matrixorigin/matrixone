@@ -588,6 +588,12 @@ func (tbl *txnTableDelegate) BuildShardingReaders(
 	}
 
 	var rds []engine.Reader
+	completed := false
+	defer func() {
+		if !completed {
+			closeReaders(rds)
+		}
+	}()
 	proc := p.(*process.Process)
 
 	if plan2.IsFalseExpr(expr) {
@@ -701,6 +707,7 @@ func (tbl *txnTableDelegate) BuildShardingReaders(
 		rds = append(rds, srd)
 	}
 
+	completed = true
 	return rds, nil
 }
 
@@ -1528,7 +1535,7 @@ func (r *shardingLocalReader) Read(
 					resp = resp[1:]
 					l := types.DecodeUint32(resp)
 					resp = resp[4:]
-					if err := bat.UnmarshalBinary(resp[:l]); err != nil {
+					if err := bat.UnmarshalBinaryWithAnyMp(resp[:l], mp); err != nil {
 						panic(err)
 					}
 				},

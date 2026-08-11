@@ -44,6 +44,7 @@ func (timeWin *TimeWin) OpType() vm.OpType {
 
 func (timeWin *TimeWin) Prepare(proc *process.Process) (err error) {
 	ctr := &timeWin.ctr
+	ctr.prepareParamKind.Reset(timeWin.Aggs)
 	if timeWin.OpAnalyzer == nil {
 		timeWin.OpAnalyzer = process.NewAnalyzer(timeWin.GetIdx(), timeWin.IsFirst, timeWin.IsLast, "time_window")
 	} else {
@@ -51,13 +52,11 @@ func (timeWin *TimeWin) Prepare(proc *process.Process) (err error) {
 	}
 
 	if len(ctr.aggExe) == 0 {
-		ctr.aggExe = make([]colexec.ExpressionExecutor, len(timeWin.Aggs))
+		ctr.aggExe = make([]colexec.ExprEvalVector, len(timeWin.Aggs))
 		for i, ag := range timeWin.Aggs {
-			if expressions := ag.GetArgExpressions(); len(expressions) > 0 {
-				ctr.aggExe[i], err = colexec.NewExpressionExecutor(proc, expressions[0])
-				if err != nil {
-					return err
-				}
+			ctr.aggExe[i], err = colexec.MakeEvalVector(proc, ag.GetArgExpressions())
+			if err != nil {
+				return err
 			}
 		}
 	}
@@ -81,7 +80,9 @@ func (timeWin *TimeWin) Prepare(proc *process.Process) (err error) {
 				return err
 			}
 			ctr.partSet[i] = getPartitionSetFunction(
-				types.New(types.T(expr.Typ.Id), expr.Typ.Width, expr.Typ.Scale), proc.Mp())
+				types.NewWithCharset(
+					types.T(expr.Typ.Id), expr.Typ.Width, expr.Typ.Scale, uint8(expr.Typ.Charset),
+				), proc.Mp())
 		}
 	}
 
@@ -148,7 +149,12 @@ func getPartitionSetFunction(
 		if !w.IsConstNull() && !w.IsNull(uint64(sel)) {
 			return moerr.NewInternalErrorNoCtx("time window received a non-NULL T_any partition key")
 		}
-		return vector.SetConstNull(v, length, mp)
+		if err := vector.SetConstNull(v, length, mp); err != nil {
+			return err
+		}
+		// A reused output vector may carry metadata from an earlier flush;
+		// NULL is not an observed conversion category.
+		return v.SetPrepareParamKindsWithMP(nil, mp)
 	}
 }
 
@@ -172,6 +178,7 @@ func (timeWin *TimeWin) Call(proc *process.Process) (vm.CallResult, error) {
 			if err = ctr.evalVector(result.Batch, proc); err != nil {
 				return result, err
 			}
+			timeWin.observePrepareParamKinds()
 
 			if err = ctr.calResForInterval(timeWin, proc); err != nil {
 				return result, err
@@ -192,6 +199,7 @@ func (timeWin *TimeWin) Call(proc *process.Process) (vm.CallResult, error) {
 			if err = ctr.evalVector(result.Batch, proc); err != nil {
 				return result, err
 			}
+			timeWin.observePrepareParamKinds()
 
 			if ctr.curVecIdx == 0 && ctr.curRowIdx == 0 {
 				ctr.status = firstWindow
@@ -213,6 +221,13 @@ func (timeWin *TimeWin) Call(proc *process.Process) (vm.CallResult, error) {
 			}
 			ctr.status = fill
 
+		case resumeAfterFlush:
+
+			if err = ctr.resumeWindowAfterFlush(timeWin); err != nil {
+				return result, err
+			}
+			ctr.status = fill
+
 		case nextBatch:
 			if ctr.curVecIdx < ctr.i-1 {
 				ctr.curVecIdx++
@@ -229,6 +244,15 @@ func (timeWin *TimeWin) Call(proc *process.Process) (vm.CallResult, error) {
 			}
 
 			if ctr.end {
+				if ctr.zeroWindow {
+					ctr.last = true
+					if !ctr.withoutFill {
+						ctr.wStart = append(ctr.wStart, types.ZeroDatetime)
+						ctr.wEnd = append(ctr.wEnd, types.ZeroDatetime)
+					}
+					ctr.status = flush
+					break
+				}
 				if ctr.preVecIdx == ctr.i-1 &&
 					ctr.preRowIdx == ctr.tsVec[ctr.preVecIdx].Length()-1 {
 					ctr.last = true
@@ -291,10 +315,12 @@ func (timeWin *TimeWin) Call(proc *process.Process) (vm.CallResult, error) {
 				ctr.curRowIdx = ctr.breakRowIdx
 				ctr.preVecIdx = ctr.breakVecIdx
 				ctr.preRowIdx = ctr.breakRowIdx
+				ctr.partIdx = -1
 				ctr.group = -1
 				ctr.withoutFill = true
 				ctr.partEnd = false
 				ctr.partitionBreak = false
+				ctr.partitionWindows = 0
 				ctr.status = firstWindow
 			default:
 				replacements, err := makeAggExecutors(timeWin, proc, true)
@@ -309,7 +335,7 @@ func (timeWin *TimeWin) Call(proc *process.Process) (vm.CallResult, error) {
 				// normal terminal cleanup path.
 				ctr.freeAgg()
 				ctr.aggs = replacements
-				ctr.status = nextWindow
+				ctr.status = resumeAfterFlush
 				ctr.group = 0
 				ctr.withoutFill = true
 			}
@@ -327,6 +353,22 @@ func (timeWin *TimeWin) Call(proc *process.Process) (vm.CallResult, error) {
 	}
 }
 
+func (timeWin *TimeWin) observePrepareParamKinds() {
+	batchIndex := timeWin.ctr.i - 1
+	if batchIndex < 0 || batchIndex >= len(timeWin.ctr.aggVec) {
+		return
+	}
+	for i := range timeWin.Aggs {
+		if i < len(timeWin.ctr.aggVec[batchIndex]) &&
+			len(timeWin.ctr.aggVec[batchIndex][i]) > 0 {
+			arg := timeWin.ctr.aggVec[batchIndex][i][0]
+			if arg.Length() > 0 && !arg.AllNull() {
+				timeWin.ctr.prepareParamKind.Observe(i, arg.GetPrepareParamKind())
+			}
+		}
+	}
+}
+
 func makeAggExecutors(timeWin *TimeWin, proc *process.Process, growFirstGroup bool) (_ []aggexec.AggFuncExec, err error) {
 	aggs := make([]aggexec.AggFuncExec, len(timeWin.Aggs))
 	defer func() {
@@ -340,12 +382,23 @@ func makeAggExecutors(timeWin *TimeWin, proc *process.Process, growFirstGroup bo
 	}()
 
 	for i, expression := range timeWin.Aggs {
+		params := make([]types.Type, len(expression.GetArgExpressions()))
+		for j, argument := range expression.GetArgExpressions() {
+			params[j] = types.NewWithCharset(
+				types.T(argument.Typ.Id), argument.Typ.Width, argument.Typ.Scale, uint8(argument.Typ.Charset),
+			)
+			if j == 0 && params[j].Oid == types.T_any && i < len(timeWin.Types) {
+				// Older manually-constructed plans/tests keep the physical first
+				// argument type in TimeWin.Types rather than the expression.
+				params[j] = timeWin.Types[i]
+			}
+		}
 		aggs[i], err = aggexec.MakeAgg(
-			proc.Mp(), expression.GetAggID(), expression.IsDistinct(), timeWin.Types[i])
+			proc.Mp(), expression.GetAggID(), expression.IsDistinct(), params...)
 		if err != nil {
 			return nil, err
 		}
-		if config := expression.GetExtraConfig(); config != nil {
+		if config := expression.GetExtraInformation(); config != nil {
 			if err = aggs[i].SetExtraInformation(config, 0); err != nil {
 				return nil, err
 			}
@@ -371,8 +424,8 @@ func newTsExpr(typ plan.Type, ctx context.Context) (*plan.Expr, error) {
 
 	typ.NotNullable = col.Typ.NotNullable
 	argsType := []types.Type{
-		types.New(types.T(col.Typ.Id), col.Typ.Width, col.Typ.Scale),
-		types.New(types.T(typ.Id), typ.Width, typ.Scale),
+		types.NewWithCharset(types.T(col.Typ.Id), col.Typ.Width, col.Typ.Scale, uint8(col.Typ.Charset)),
+		types.NewWithCharset(types.T(typ.Id), typ.Width, typ.Scale, uint8(typ.Charset)),
 	}
 	fGet, err := function.GetFunctionByName(ctx, "cast", argsType)
 	if err != nil {
@@ -398,7 +451,8 @@ func newTsExpr(typ plan.Type, ctx context.Context) (*plan.Expr, error) {
 }
 
 func (ctr *container) nextWindow(t *TimeWin) error {
-	if !ctr.withoutFill {
+	emit := !ctr.withoutFill || t.GapFill
+	if emit {
 		ctr.wStart = append(ctr.wStart, ctr.left)
 		ctr.wEnd = append(ctr.wEnd, ctr.right)
 	}
@@ -412,26 +466,79 @@ func (ctr *container) nextWindow(t *TimeWin) error {
 	ctr.curVecIdx = ctr.preVecIdx
 	ctr.curRowIdx = ctr.preRowIdx
 
-	if !ctr.withoutFill {
+	if emit {
 		for _, ag := range ctr.aggs {
 			if err := ag.GroupGrow(1); err != nil {
 				return err
 			}
 		}
 		ctr.group++
+		ctr.partitionWindows++
+		if err := ctr.accountGapFillWindow(t); err != nil {
+			return err
+		}
 	}
 	// See firstWindow: the new window is empty until a row lands in it.
 	ctr.withoutFill = true
 	return nil
 }
 
-func (ctr *container) firstWindow(t *TimeWin) error {
-	val := vector.MustFixedColWithTypeCheck[types.Datetime](ctr.tsVec[ctr.curVecIdx])[ctr.curRowIdx]
-	ctr.left = val - val%t.Interval
-	ctr.right = ctr.left + t.Interval
+// resumeWindowAfterFlush starts the replacement aggregate generation at the
+// next window. fillRows already appended the current window before requesting
+// the flush, and makeAggExecutors grew the replacement generation's first
+// group. Re-entering nextWindow here would append the old bounds a second time
+// and grow a second group for the same transition.
+func (ctr *container) resumeWindowAfterFlush(t *TimeWin) error {
+	ctr.left = ctr.nextLeft
+	ctr.right = ctr.nextRight
 
 	ctr.nextLeft = ctr.left + t.Sliding
 	ctr.nextRight = ctr.nextLeft + t.Interval
+
+	ctr.curVecIdx = ctr.preVecIdx
+	ctr.curRowIdx = ctr.preRowIdx
+
+	if t.GapFill {
+		ctr.partitionWindows++
+		if err := ctr.accountGapFillWindow(t); err != nil {
+			return err
+		}
+	}
+	ctr.withoutFill = true
+	return nil
+}
+
+func (ctr *container) firstWindow(t *TimeWin) error {
+	if ctr.partIdx < 0 {
+		ctr.partitionCount++
+		if t.GapFill && ctr.partitionCount > maxGapFillPartitions {
+			return moerr.NewInvalidInputNoCtx("GAPFILL partition limit exceeded")
+		}
+		ctr.partitionWindows = 1
+	} else {
+		ctr.partitionWindows++
+	}
+	if err := ctr.accountGapFillWindow(t); err != nil {
+		return err
+	}
+	val := vector.MustFixedColWithTypeCheck[types.Datetime](ctr.tsVec[ctr.curVecIdx])[ctr.curRowIdx]
+	if val == types.ZeroDatetime {
+		// A zero temporal has no chronological position, but it is a storable
+		// non-NULL key. Keep it in its own sentinel window instead of letting
+		// -1 % interval turn it into the valid epoch (0).
+		ctr.left = types.ZeroDatetime
+		ctr.right = types.ZeroDatetime
+		ctr.nextLeft = types.ZeroDatetime
+		ctr.nextRight = types.ZeroDatetime
+		ctr.zeroWindow = true
+	} else {
+		ctr.left = val - val%t.Interval
+		ctr.right = ctr.left + t.Interval
+
+		ctr.nextLeft = ctr.left + t.Sliding
+		ctr.nextRight = ctr.nextLeft + t.Interval
+		ctr.zeroWindow = false
+	}
 
 	// This row opens the partition every window until the next boundary
 	// belongs to; fillRows compares against it to spot the change.
@@ -459,6 +566,41 @@ func (ctr *container) fillRows() error {
 	outRange := false
 	partBreak := false
 	for ; ctr.curRowIdx < cnt; ctr.curRowIdx++ {
+		if ctr.zeroWindow {
+			if len(ctr.partExe) > 0 && !ctr.samePartition(ctr.curVecIdx, ctr.curRowIdx, ctr.partIdx, ctr.partRow) {
+				if !ctr.withoutFill {
+					ctr.wStart = append(ctr.wStart, types.ZeroDatetime)
+					ctr.wEnd = append(ctr.wEnd, types.ZeroDatetime)
+				}
+				ctr.breakVecIdx = ctr.curVecIdx
+				ctr.breakRowIdx = ctr.curRowIdx
+				ctr.partitionBreak = true
+				ctr.zeroWindow = false
+				ctr.status = flush
+				return nil
+			}
+			if vals[ctr.curRowIdx] == types.ZeroDatetime {
+				for j, agg := range ctr.aggs {
+					if err := agg.Fill(ctr.group, ctr.curRowIdx, ctr.aggVec[ctr.curVecIdx][j]); err != nil {
+						return err
+					}
+				}
+				ctr.withoutFill = false
+				ctr.partLastVal = vals[ctr.curRowIdx]
+				ctr.partLastVecIdx = ctr.curVecIdx
+				ctr.partLastRowIdx = ctr.curRowIdx
+				continue
+			}
+
+			if !ctr.withoutFill {
+				ctr.wStart = append(ctr.wStart, types.ZeroDatetime)
+				ctr.wEnd = append(ctr.wEnd, types.ZeroDatetime)
+			}
+			ctr.zeroWindow = false
+			ctr.status = firstWindow
+			return nil
+		}
+
 		// Input arrives ordered by partition key, so the first row that
 		// disagrees with the key this window opened on ends the partition's
 		// data. Its remaining windows still have to be produced, so record
@@ -482,7 +624,7 @@ func (ctr *container) fillRows() error {
 
 		if vals[ctr.curRowIdx] >= ctr.left && vals[ctr.curRowIdx] < ctr.right {
 			for j, agg := range ctr.aggs {
-				if err := agg.Fill(ctr.group, ctr.curRowIdx, []*vector.Vector{ctr.aggVec[ctr.curVecIdx][j]}); err != nil {
+				if err := agg.Fill(ctr.group, ctr.curRowIdx, ctr.aggVec[ctr.curVecIdx][j]); err != nil {
 					return err
 				}
 			}
@@ -524,11 +666,31 @@ func (ctr *container) fillRows() error {
 
 const maxTimeWindowRows = 8192
 
+const (
+	maxGapFillRowsPerPartition = 1_000_000
+	maxGapFillPartitions       = 100_000
+	maxGapFillRowsTotal        = 10_000_000
+)
+
+func (ctr *container) accountGapFillWindow(timeWin *TimeWin) error {
+	if !timeWin.GapFill {
+		return nil
+	}
+	if ctr.partitionWindows > maxGapFillRowsPerPartition {
+		return moerr.NewInvalidInputNoCtx("GAPFILL generated row limit exceeded for a partition")
+	}
+	ctr.gapFillWindows++
+	if ctr.gapFillWindows > maxGapFillRowsTotal {
+		return moerr.NewInvalidInputNoCtx("GAPFILL generated total row limit exceeded")
+	}
+	return nil
+}
+
 func (ctr *container) calRes(ap *TimeWin, proc *process.Process) (err error) {
 	ctr.freeFlushedAggVecs(proc.Mp())
 	ctr.bat = batch.NewWithSize(ctr.colCnt)
 	i := 0
-	for _, agg := range ctr.aggs {
+	for aggIndex, agg := range ctr.aggs {
 		vecs, err := agg.Flush()
 		if err != nil {
 			return err
@@ -536,6 +698,9 @@ func (ctr *container) calRes(ap *TimeWin, proc *process.Process) (err error) {
 		result, err := aggexec.MergeSplitResult(vecs, proc.Mp())
 		if err != nil {
 			return err
+		}
+		if !result.HasPrepareParamKind() {
+			result.SetPrepareParamKind(ctr.prepareParamKind.Get(aggIndex))
 		}
 
 		ctr.bat.SetVector(int32(i), result)
@@ -609,8 +774,11 @@ func (ctr *container) calRes(ap *TimeWin, proc *process.Process) (err error) {
 func (ctr *container) calResForInterval(ap *TimeWin, proc *process.Process) (err error) {
 	ctr.bat = batch.NewWithSize(ctr.colCnt)
 	i := 0
-	for _, vec := range ctr.aggVec[ctr.i-1] {
-		ctr.bat.SetVector(int32(i), vec)
+	for aggIndex, vecs := range ctr.aggVec[ctr.i-1] {
+		if !vecs[0].HasPrepareParamKind() {
+			vecs[0].SetPrepareParamKind(ctr.prepareParamKind.Get(aggIndex))
+		}
+		ctr.bat.SetVector(int32(i), vecs[0])
 		i++
 	}
 
@@ -797,21 +965,27 @@ func (ctr *container) evalTsVector(bat *batch.Batch, proc *process.Process) erro
 func (ctr *container) evalAggVector(bat *batch.Batch, proc *process.Process) error {
 	f := len(ctr.aggVec) > ctr.i
 	if !f {
-		ctr.aggVec = append(ctr.aggVec, make([]*vector.Vector, len(ctr.aggExe)))
+		ctr.aggVec = append(ctr.aggVec, make([][]*vector.Vector, len(ctr.aggExe)))
 	}
 	for i := range ctr.aggExe {
-		if ctr.aggExe[i] != nil {
-			vec, err := ctr.aggExe[i].Eval(proc, []*batch.Batch{bat}, nil)
+		if !f {
+			ctr.aggVec[ctr.i][i] = make([]*vector.Vector, len(ctr.aggExe[i].Executor))
+		}
+		for j := range ctr.aggExe[i].Executor {
+			vec, err := ctr.aggExe[i].Executor[j].Eval(proc, []*batch.Batch{bat}, nil)
 			if err != nil {
 				return err
 			}
 			if f {
-				ctr.aggVec[ctr.i][i].CleanOnlyData()
-				if err = ctr.aggVec[ctr.i][i].UnionBatch(vec, 0, vec.Length(), nil, proc.Mp()); err != nil {
+				ctr.aggVec[ctr.i][i][j].CleanOnlyData()
+				if err = ctr.aggVec[ctr.i][i][j].UnionBatch(vec, 0, vec.Length(), nil, proc.Mp()); err != nil {
 					return err
 				}
+				if !ctr.aggVec[ctr.i][i][j].HasPrepareParamKind() {
+					ctr.aggVec[ctr.i][i][j].SetPrepareParamKind(vec.GetPrepareParamKind())
+				}
 			} else {
-				ctr.aggVec[ctr.i][i], err = vec.Dup(proc.Mp())
+				ctr.aggVec[ctr.i][i][j], err = vec.Dup(proc.Mp())
 				if err != nil {
 					return err
 				}
