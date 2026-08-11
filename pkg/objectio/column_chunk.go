@@ -202,7 +202,7 @@ func decodeChunkedColumn(
 	data []byte,
 	allocator fileservice.CacheDataAllocator,
 ) (fscache.Data, error) {
-	_, metas, err := parseColumnChunkHeader(data, uint32(len(data)))
+	totalRows, metas, err := parseColumnChunkHeader(data, uint32(len(data)))
 	if err != nil {
 		return nil, err
 	}
@@ -227,12 +227,18 @@ func decodeChunkedColumn(
 		if !ok {
 			return nil, moerr.NewInvalidInputNoCtx("chunked object column does not contain a vector")
 		}
+		if uint32(source.Length()) != meta.rowCount {
+			return nil, moerr.NewInvalidInputNoCtx("chunked object column payload row count mismatch")
+		}
 		if dst == nil {
 			dst = vector.NewVec(*source.GetType())
 		}
 		if err = dst.UnionBatch(source, 0, source.Length(), nil, mp); err != nil {
 			return nil, err
 		}
+	}
+	if dst == nil || uint32(dst.Length()) != totalRows {
+		return nil, moerr.NewInvalidInputNoCtx("chunked object column row count mismatch")
 	}
 	var encoded bytes.Buffer
 	header := IOEntryHeader{Type: IOET_ColData, Version: IOET_ColumnData_CurrVer}

@@ -142,3 +142,25 @@ func TestChunkedColumnRejectsMalformedMetadata(t *testing.T) {
 	_, _, err = parseColumnChunkHeader(header, uint32(len(header)+1))
 	require.Error(t, err)
 }
+
+func TestChunkedColumnRejectsPayloadRowCountMismatch(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	source := vector.NewVec(types.T_int32.ToType())
+	require.NoError(t, vector.AppendFixed(source, int32(1), false, mp))
+	require.NoError(t, vector.AppendFixed(source, int32(2), false, mp))
+	defer source.Free(mp)
+
+	encoded, err := encodeChunkedColumn(source)
+	require.NoError(t, err)
+	_, metas, err := parseColumnChunkHeader(encoded, uint32(len(encoded)))
+	require.NoError(t, err)
+	require.Len(t, metas, 1)
+	// Keep the header internally consistent while claiming that the payload
+	// contains one row. The serialized vector still contains two rows.
+	binary.LittleEndian.PutUint32(encoded[8:12], 1)
+	binary.LittleEndian.PutUint32(encoded[columnChunkHeaderSize+4:columnChunkHeaderSize+8], 1)
+	_, err = decodeChunkedColumn(context.Background(), encoded, fileservice.DefaultCacheDataAllocator())
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "payload row count mismatch")
+}
