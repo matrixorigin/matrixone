@@ -113,10 +113,128 @@ func (s *Segment) SearchBoolean(q BoolQuery, algo ScoreAlgo, k int, allow Member
 	if k <= 0 || s.N == 0 || (len(q.must) == 0 && len(q.should) == 0 && len(q.adjust) == 0) {
 		return nil, nil
 	}
+	if terms, ok := conjunctiveTerms(q); ok {
+		return s.searchConjunctiveTerms(terms, algo, k, allow, gs), nil
+	}
 	if terms, ok := disjunctiveTerms(q); ok {
 		return s.searchWAND(terms, algo, k, allow, gs), nil
 	}
 	return s.searchBooleanFull(q, algo, k, allow, gs)
+}
+
+// conjunctiveTerms reports whether q is a pure conjunction of single-term MUST
+// clauses. A one-term conjunction is included: it degenerates to one ordered posting
+// cursor without allocating the dense full-boolean accumulators.
+func conjunctiveTerms(q BoolQuery) ([]clause, bool) {
+	if len(q.must) == 0 || len(q.mustNot) != 0 || len(q.should) != 0 || len(q.adjust) != 0 {
+		return nil, false
+	}
+	for _, c := range q.must {
+		if c.kind != clauseTerm || len(c.terms) != 1 {
+			return nil, false
+		}
+	}
+	return q.must, true
+}
+
+type conjunctiveTermState struct {
+	it *wandIter
+}
+
+// searchConjunctiveTerms intersects ordered posting cursors for a pure MUST query.
+// One cursor is built per distinct term; duplicate clauses share membership work but
+// retain their original score contributions through clauseTermState. The rarest term
+// drives the walk and every other cursor skipTo-probes its candidates, so memory is
+// O(unique terms * BlockSize + k), independent of the segment's document count.
+func (s *Segment) searchConjunctiveTerms(clauses []clause, algo ScoreAlgo, k int, allow Membership, gs *globalStats) []Result {
+	if k <= 0 || s.N == 0 || len(clauses) == 0 {
+		return nil
+	}
+
+	avgDocLen := gs.avgdl(s)
+	states := make([]conjunctiveTermState, 0, len(clauses))
+	stateByTerm := make(map[string]int, len(clauses))
+	clauseTermState := make([]int, len(clauses))
+	iters := make([]*wandIter, 0, len(clauses))
+	defer func() { releaseWandIters(iters) }()
+
+	driver := -1
+	for i, c := range clauses {
+		term := c.terms[0]
+		if si, ok := stateByTerm[term]; ok {
+			clauseTermState[i] = si
+			continue
+		}
+		pl, ok := s.lookup(term)
+		if !ok || pl.df() == 0 {
+			return nil
+		}
+		it := newWandIter(pl)
+		it.idf2 = gs.idfFor(s, term, pl)
+		si := len(states)
+		states = append(states, conjunctiveTermState{it: it})
+		stateByTerm[term] = si
+		clauseTermState[i] = si
+		iters = append(iters, it)
+		if driver < 0 || pl.df() < states[driver].it.tp.df() {
+			driver = si
+		}
+	}
+
+	driverIter := states[driver].it
+	probeOrder := make([]int, 0, len(states)-1)
+	for si := range states {
+		if si != driver {
+			probeOrder = append(probeOrder, si)
+		}
+	}
+	// Probe rarer lists first. This does not affect score accumulation order.
+	for i := 1; i < len(probeOrder); i++ {
+		v := probeOrder[i]
+		j := i - 1
+		for j >= 0 && states[probeOrder[j]].it.tp.df() > states[v].it.tp.df() {
+			probeOrder[j+1] = probeOrder[j]
+			j--
+		}
+		probeOrder[j+1] = v
+	}
+
+	h := newTopKHeap(k, s.N)
+	for !driverIter.atEnd() {
+		doc := driverIter.doc()
+		if !allowed(allow, doc) {
+			driverIter.idx++
+			driverIter.refresh()
+			continue
+		}
+
+		matched := true
+		for _, si := range probeOrder {
+			probe := states[si].it
+			probe.skipTo(doc)
+			if probe.atEnd() {
+				return heapToResults(s, h)
+			}
+			if probe.doc() != doc {
+				driverIter.skipTo(probe.doc())
+				matched = false
+				break
+			}
+		}
+		if !matched {
+			continue
+		}
+
+		var score float32
+		for i, c := range clauses {
+			it := states[clauseTermState[i]].it
+			score += c.weight * s.scoreTerm(algo, float64(it.tf()), it.idf2, doc, avgDocLen)
+		}
+		h.Push(doc, -score)
+		driverIter.idx++
+		driverIter.refresh()
+	}
+	return heapToResults(s, h)
 }
 
 // disjunctiveTerms reports whether q is a pure OR of single-term SHOULD clauses
