@@ -259,6 +259,16 @@ func (builder *QueryBuilder) applyIndicesForSortUsingCagra(nodeID int32, vecCtx 
 	// filters or a peeled distance-range bound will prune candidates the TVF
 	// over-fetches k -> k' at EXECUTE (post_filter_overfetch flag). Leaving
 	// node.Limit unset keeps the full candidate stream flowing to the JOIN.
+	//
+	// Safe because cagra_search is a local-only TVF: compileTableFunction routes
+	// it to compileSingleTableFunction, which pins the operator to a Merge scope
+	// at the local c.addr (never shipped to a remote CN). Planner and executor
+	// are therefore always the same binary, so a node.Limit=nil plan is always
+	// read back by a TVF that reads IndexReaderParam.Limit. If cagra_search is
+	// ever made multi-CN (like ivf_search), its *SearchPrepare must first read
+	// IndexReaderParam.Limit (ivf_search already does) — and/or gate this on a
+	// MORPCVersion — before node.Limit may be dropped, or an older remote CN
+	// would default to 1 candidate and under-return after the JOIN.
 	tableFuncNode.IndexReaderParam = &plan.IndexReaderParam{
 		Limit:          DeepCopyExpr(limit),
 		OrigFuncName:   cagraCtx.origFuncName,
