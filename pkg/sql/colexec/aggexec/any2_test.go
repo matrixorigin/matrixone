@@ -64,6 +64,7 @@ func TestAnyValuePreservesFirstPrepareParamKind(t *testing.T) {
 		vector.PrepareParamFloat,
 		vector.PrepareParamNone,
 	})
+	require.NoError(t, input.SetBinaryStringRowsWithMP([]bool{true, false}, mp))
 
 	exec := makeAnyValueExec(mp, AggIdOfAny, types.T_text.ToType())
 	defer func() {
@@ -77,6 +78,7 @@ func TestAnyValuePreservesFirstPrepareParamKind(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, results, 1)
 	require.Equal(t, vector.PrepareParamFloat, results[0].GetPrepareParamKindAt(0))
+	require.True(t, results[0].GetBinaryStringMetadataAt(0))
 	results[0].Free(mp)
 }
 

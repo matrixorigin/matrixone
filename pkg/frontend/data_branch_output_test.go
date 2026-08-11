@@ -541,9 +541,10 @@ func TestDataBranchOutputSpool_RoundTrip(t *testing.T) {
 
 	bat := batch.NewWithSize(2)
 	bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
-	bat.Vecs[1] = vector.NewVec(types.T_varbinary.ToType())
+	bat.Vecs[1] = vector.NewVec(types.T_text.ToType())
 	require.NoError(t, vector.AppendFixed(bat.Vecs[0], int64(42), false, ses.proc.Mp()))
 	require.NoError(t, vector.AppendBytes(bat.Vecs[1], []byte{0, '\'', '\\', 0xff}, false, ses.proc.Mp()))
+	bat.Vecs[1].SetIsBinaryString(true)
 	bat.SetRowCount(1)
 	defer bat.Clean(ses.proc.Mp())
 
@@ -558,6 +559,7 @@ func TestDataBranchOutputSpool_RoundTrip(t *testing.T) {
 	require.Equal(t, 1, got.batch.RowCount())
 	require.Equal(t, int64(42), vector.MustFixedColNoTypeCheck[int64](got.batch.Vecs[0])[0])
 	require.Equal(t, []byte{0, '\'', '\\', 0xff}, got.batch.Vecs[1].GetBytesAt(0))
+	require.True(t, got.batch.Vecs[1].GetBinaryStringMetadataAt(0))
 
 	_, ok, err = spool.next()
 	require.NoError(t, err)

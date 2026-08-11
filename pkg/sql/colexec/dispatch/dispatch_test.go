@@ -147,7 +147,14 @@ func TestMarshalRemoteBatchBinaryStringProtocolGate(t *testing.T) {
 		require.Equal(t, "sentinel", buf.String())
 	}
 
-	staticRows := newBatch(types.T_varbinary.ToType())
+	staticSource := newBatch(types.T_varbinary.ToType())
+	defer staticSource.Clean(proc.Mp())
+	staticRows := batch.NewWithSize(1)
+	staticRows.Vecs[0] = vector.NewVec(types.T_varbinary.ToType())
+	require.NoError(t, staticRows.Vecs[0].UnionBatch(
+		staticSource.Vecs[0], 0, staticSource.RowCount(), nil, proc.Mp()))
+	staticRows.SetRowCount(staticSource.RowCount())
+	require.False(t, staticRows.HasBinaryStringMetadata())
 	require.NoError(t, staticRows.Vecs[0].SetPrepareParamKindsWithMP(
 		[]vector.PrepareParamKind{vector.PrepareParamInteger, vector.PrepareParamNone}, proc.Mp()))
 	defer staticRows.Clean(proc.Mp())
