@@ -1182,47 +1182,33 @@ func (builder *QueryBuilder) findNonEqPred(preds []*plan.Expr) bool {
 }
 
 // pushdownScalarAggregateKeys limits a decorrelated scalar aggregate to keys
-// that can actually occur in the outer relation.  Decorrelating
+// that can actually occur in the outer relation. Decorrelating
 //
 //	... where inner.key = outer.key
 //
 // currently adds inner.key to the aggregate GROUP BY, but leaves the
-// aggregate input independent of the filtered outer relation.  A SEMI join
+// aggregate input independent of the filtered outer relation. A SEMI join
 // provides the missing dependency without duplicating rows (which an ordinary
 // INNER JOIN would do when the outer relation has duplicate keys).
 //
-// This is deliberately conservative.  Only direct equality correlations whose
-// outer operand belongs to one binding and whose inner operand is one of the
-// pulled-up aggregate group keys are rewritten.  Other shapes retain the
-// existing decorrelation plan.
-func correlatedOrLocalCol(expr *plan.Expr) (*plan.ColRef, bool) {
-	switch e := expr.Expr.(type) {
-	case *plan.Expr_Col:
-		return e.Col, e.Col != nil
-	case *plan.Expr_Corr:
-		if e.Corr == nil {
-			return nil, false
-		}
-		return &plan.ColRef{RelPos: e.Corr.RelPos, ColPos: e.Corr.ColPos}, true
-	default:
-		return nil, false
-	}
-}
-
+// This is deliberately conservative: the correlation must be direct equality
+// on pulled-up group keys, all outer keys must come from one base-table
+// binding, and that table must have a deterministic local WHERE predicate.
+// Copying only that predicate domain is safe because it is a superset of the
+// outer rows that survive the complete query. Volatile, multi-table, derived,
+// and unfiltered shapes retain the existing decorrelation plan.
 func (builder *QueryBuilder) pushdownScalarAggregateKeys(subID int32, preds []*plan.Expr, ctx *BindContext) {
 	aggNode := builder.findAggNodeBelow(subID)
 	if aggNode == nil || len(aggNode.Children) != 1 || len(aggNode.BindingTags) == 0 {
 		return
 	}
 
-	groupTag := aggNode.BindingTags[0]
 	type keyPair struct {
-		outerTag int32
 		outerPos int32
 		groupPos int32
 	}
-	var pairs []keyPair
-	var outerTag int32 = -1
+	pairs := make([]keyPair, 0, len(preds))
+	outerTag := int32(-1)
 
 	for _, pred := range splitPlanConjunctions(preds) {
 		f := pred.GetF()
@@ -1235,69 +1221,37 @@ func (builder *QueryBuilder) pushdownScalarAggregateKeys(subID int32, preds []*p
 				return
 			}
 		}
-		if (f.Func.ObjName != "=" && !IsEqualFunc(f.Func.GetObj())) || len(f.Args) != 2 {
+		if len(f.Args) != 2 || (f.Func.ObjName != "=" && !IsEqualFunc(f.Func.GetObj())) {
 			return
 		}
 
-		left, leftOK := correlatedOrLocalCol(f.Args[0])
-		right, rightOK := correlatedOrLocalCol(f.Args[1])
-		if !leftOK || !rightOK {
+		left := f.Args[0].GetCol()
+		right := f.Args[1].GetCol()
+		if left == nil || right == nil {
 			return
 		}
 
-		var outer, inner *plan.ColRef
-		groupPos := int32(-1)
-		_, leftIsCorr := f.Args[0].Expr.(*plan.Expr_Corr)
-		_, rightIsCorr := f.Args[1].Expr.(*plan.Expr_Corr)
+		leftGroupPos, leftIsGroup := builder.scalarAggregateGroupPos(subID, aggNode, left)
+		rightGroupPos, rightIsGroup := builder.scalarAggregateGroupPos(subID, aggNode, right)
+		var outer *plan.ColRef
+		var groupPos int32
 		switch {
-		case leftIsCorr && !rightIsCorr:
-			outer, inner = left, right
-		case rightIsCorr && !leftIsCorr:
-			outer, inner = right, left
-		case left.RelPos == groupTag:
-			inner, outer = left, right
-		case right.RelPos == groupTag:
-			inner, outer = right, left
+		case leftIsGroup && !rightIsGroup:
+			groupPos, outer = leftGroupPos, right
+		case rightIsGroup && !leftIsGroup:
+			groupPos, outer = rightGroupPos, left
 		default:
-			for i, group := range aggNode.GroupBy {
-				g, ok := correlatedOrLocalCol(group)
-				if !ok {
-					continue
-				}
-				if g.RelPos == left.RelPos && g.ColPos == left.ColPos {
-					inner, outer, groupPos = left, right, int32(i)
-				} else if g.RelPos == right.RelPos && g.ColPos == right.ColPos {
-					inner, outer, groupPos = right, left, int32(i)
-				}
-			}
-			if inner == nil {
-				for i, group := range aggNode.GroupBy {
-					g, ok := correlatedOrLocalCol(group)
-					if ok && g.ColPos == left.ColPos {
-						inner, outer, groupPos = left, right, int32(i)
-						break
-					}
-				}
-			}
-			if inner == nil {
-				return
-			}
+			return
 		}
-		if groupPos < 0 {
-			groupPos = inner.ColPos
-		}
-		if ctx == nil || ctx.bindingByTag[outer.RelPos] == nil {
+		if groupPos < 0 || int(groupPos) >= len(aggNode.GroupBy) ||
+			ctx == nil || ctx.bindingByTag[outer.RelPos] == nil {
 			return
 		}
 		if outerTag >= 0 && outerTag != outer.RelPos {
 			return
 		}
-		if int(groupPos) < 0 || int(groupPos) >= len(aggNode.GroupBy) {
-			return
-		}
 		outerTag = outer.RelPos
 		pairs = append(pairs, keyPair{
-			outerTag: outer.RelPos,
 			outerPos: outer.ColPos,
 			groupPos: groupPos,
 		})
@@ -1307,24 +1261,44 @@ func (builder *QueryBuilder) pushdownScalarAggregateKeys(subID int32, preds []*p
 	}
 
 	outerBinding := ctx.bindingByTag[outerTag]
-	if outerBinding == nil || outerBinding.nodeId < 0 {
+	if outerBinding == nil || outerBinding.nodeId < 0 || int(outerBinding.nodeId) >= len(builder.qry.Nodes) {
+		return
+	}
+	outerScan := builder.qry.Nodes[outerBinding.nodeId]
+	if outerScan.NodeType != plan.Node_TABLE_SCAN || len(outerScan.Children) != 0 ||
+		len(outerScan.BindingTags) == 0 || outerScan.BindingTags[0] != outerTag {
 		return
 	}
 
-	semiPreds := make([]*plan.Expr, len(pairs))
-	for i, pair := range pairs {
+	outerTags := map[int32]bool{outerTag: true}
+	domainFilters := make([]*plan.Expr, 0, len(ctx.whereFilters))
+	for _, filter := range splitPlanConjunctions(ctx.whereFilters) {
+		if !hasSubquery(filter) && !containsVolatileFunction(filter) &&
+			containsTag(filter, outerTag) && containsOnlyTags(filter, outerTags) {
+			domainFilters = append(domainFilters, DeepCopyExpr(filter))
+		}
+	}
+	if len(domainFilters) == 0 {
+		return
+	}
+
+	for _, pair := range pairs {
 		if pair.outerPos < 0 || int(pair.outerPos) >= len(outerBinding.types) {
 			return
 		}
-		innerKey := replaceGroupTagRefs(
-			DeepCopyExpr(aggNode.GroupBy[pair.groupPos]),
-			groupTag,
-			aggNode.GroupBy,
-		)
+	}
+	domainScan := DeepCopyNode(outerScan)
+	domainScan.ScanSnapshot = DeepCopySnapshot(outerScan.ScanSnapshot)
+	domainScan.FilterList = append(domainScan.FilterList, domainFilters...)
+	builder.rebindScanNode(domainScan)
+	domainTag := domainScan.BindingTags[0]
+	semiPreds := make([]*plan.Expr, len(pairs))
+	for i, pair := range pairs {
+		innerKey := DeepCopyExpr(aggNode.GroupBy[pair.groupPos])
 		rightKey := &plan.Expr{
 			Typ: *outerBinding.types[pair.outerPos],
 			Expr: &plan.Expr_Col{Col: &plan.ColRef{
-				RelPos: outerTag,
+				RelPos: domainTag,
 				ColPos: pair.outerPos,
 			}},
 		}
@@ -1335,14 +1309,53 @@ func (builder *QueryBuilder) pushdownScalarAggregateKeys(subID int32, preds []*p
 		semiPreds[i] = cond
 	}
 
+	domainID := builder.appendNode(domainScan, ctx)
 	semiID := builder.appendNode(&plan.Node{
 		NodeType: plan.Node_JOIN,
-		Children: []int32{aggNode.Children[0], builder.copyNode(ctx, outerBinding.nodeId)},
+		Children: []int32{aggNode.Children[0], domainID},
 		JoinType: plan.Node_SEMI,
 		OnList:   semiPreds,
 		SpillMem: builder.joinSpillMem,
 	}, ctx)
 	aggNode.Children[0] = semiID
+}
+
+// scalarAggregateGroupPos resolves a pulled-up predicate column through the
+// transparent unary projections above aggNode. It returns an AGG group-output
+// position, never an aggregate-output position.
+func (builder *QueryBuilder) scalarAggregateGroupPos(
+	nodeID int32,
+	aggNode *plan.Node,
+	col *plan.ColRef,
+) (int32, bool) {
+	if col == nil || aggNode == nil || len(aggNode.BindingTags) == 0 {
+		return 0, false
+	}
+	ref := *col
+	for nodeID != aggNode.NodeId {
+		if nodeID < 0 || int(nodeID) >= len(builder.qry.Nodes) {
+			return 0, false
+		}
+		node := builder.qry.Nodes[nodeID]
+		if node.NodeType == plan.Node_PROJECT && len(node.BindingTags) > 0 && ref.RelPos == node.BindingTags[0] {
+			if ref.ColPos < 0 || int(ref.ColPos) >= len(node.ProjectList) {
+				return 0, false
+			}
+			projected := node.ProjectList[ref.ColPos].GetCol()
+			if projected == nil {
+				return 0, false
+			}
+			ref = *projected
+		}
+		if len(node.Children) != 1 {
+			return 0, false
+		}
+		nodeID = node.Children[0]
+	}
+	if ref.RelPos != aggNode.BindingTags[0] || ref.ColPos < 0 || int(ref.ColPos) >= len(aggNode.GroupBy) {
+		return 0, false
+	}
+	return ref.ColPos, true
 }
 
 // containsNonEqComparison reports whether expr contains a comparison

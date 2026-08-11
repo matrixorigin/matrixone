@@ -6835,6 +6835,11 @@ func (builder *QueryBuilder) bindWhere(
 	if err != nil {
 		return
 	}
+	// Scalar-subquery decorrelation may need a safe outer-key domain while it
+	// is flattening one conjunct. Publish the complete bound WHERE list before
+	// walking it so the optimization is independent of SQL predicate order.
+	// The list is replaced with the flattened predicates below.
+	ctx.whereFilters = whereList
 	var expr *plan.Expr
 	for _, cond := range whereList {
 		if nodeID, expr, err = builder.flattenFilterSubqueries(nodeID, cond, ctx); err != nil {

@@ -5898,33 +5898,130 @@ func TestSubQuery(t *testing.T) {
 }
 
 func TestCorrelatedScalarAggregatePushdown(t *testing.T) {
-	mock := NewMockOptimizer(false)
-	sql := `select
-		sum(l_extendedprice) / 7.0 as avg_yearly
-	from lineitem, part
-	where p_partkey = l_partkey
-	  and p_brand = 'Brand#54'
-	  and p_container = 'LG BAG'
-	  and l_quantity < (
+	correlated := `l_quantity < (
 		select 0.2 * avg(l_quantity)
 		from lineitem
 		where l_partkey = p_partkey
-	  )`
-	logicPlan, err := runOneStmt(mock, t, sql)
-	if err != nil {
-		t.Fatal(err)
+	)`
+	optimized := []string{
+		`select sum(l_extendedprice) / 7.0
+		 from lineitem, part
+		 where p_partkey = l_partkey
+		   and p_brand = 'Brand#54'
+		   and p_container = 'LG BAG'
+		   and ` + correlated,
+		`select sum(l_extendedprice) / 7.0
+		 from lineitem, part
+		 where ` + correlated + `
+		   and p_container = 'LG BAG'
+		   and p_brand = 'Brand#54'
+		   and p_partkey = l_partkey`,
 	}
-	query := logicPlan.GetQuery()
+
+	for i, sql := range optimized {
+		logicPlan, err := runSelectWithValidator(NewMockOptimizer(false), t, sql, func(query *plan.Query) error {
+			agg := findAggregateByFunction(query, "avg")
+			require.NotNil(t, agg, "case %d: correlated AVG not found before remapping", i)
+			require.Len(t, agg.Children, 1)
+			semi := query.Nodes[agg.Children[0]]
+			require.Equal(t, plan.Node_JOIN, semi.NodeType)
+			require.Equal(t, plan.Node_SEMI, semi.JoinType)
+			require.Len(t, semi.Children, 2)
+			domain := query.Nodes[semi.Children[1]]
+			require.Len(t, domain.BindingTags, 1)
+
+			partTags := make([]int32, 0, 2)
+			for _, node := range query.Nodes {
+				if node.NodeType == plan.Node_TABLE_SCAN && node.TableDef != nil && node.TableDef.Name == "part" {
+					require.Len(t, node.BindingTags, 1)
+					partTags = append(partTags, node.BindingTags[0])
+				}
+			}
+			require.Len(t, partTags, 2)
+			require.NotEqual(t, partTags[0], partTags[1],
+				"case %d: cloned scans must have distinct binding tags", i)
+			for _, pred := range semi.OnList {
+				require.True(t, containsTag(pred, domain.BindingTags[0]),
+					"case %d: SEMI predicate must reference the cloned scan binding", i)
+			}
+			return nil
+		})
+		require.NoError(t, err)
+		query := logicPlan.GetQuery()
+		agg := findAggregateByFunction(query, "avg")
+		require.NotNil(t, agg, "case %d: correlated AVG not found", i)
+		require.Len(t, agg.Children, 1)
+		semi := query.Nodes[agg.Children[0]]
+		require.Equal(t, plan.Node_JOIN, semi.NodeType)
+		require.Equal(t, plan.Node_SEMI, semi.JoinType)
+		require.Len(t, semi.Children, 2)
+		domain := query.Nodes[semi.Children[1]]
+		require.Equal(t, plan.Node_TABLE_SCAN, domain.NodeType)
+		require.Equal(t, "part", domain.TableDef.Name)
+		require.Len(t, domain.FilterList, 2, "case %d: copied key domain must retain both selective filters", i)
+		require.True(t, exprListContainsStringLiteral(domain.FilterList, "Brand#54"))
+		require.True(t, exprListContainsStringLiteral(domain.FilterList, "LG BAG"))
+	}
+
+	controls := []string{
+		`select sum(l_extendedprice) / 7.0
+		 from lineitem, part
+		 where p_partkey = l_partkey and ` + correlated,
+		`select sum(l_extendedprice) / 7.0
+		 from lineitem, part
+		 where p_partkey = l_partkey
+		   and p_partkey > floor(rand() * 100)
+		   and ` + correlated,
+	}
+	for i, sql := range controls {
+		logicPlan, err := runOneStmt(NewMockOptimizer(false), t, sql)
+		require.NoError(t, err)
+		query := logicPlan.GetQuery()
+		agg := findAggregateByFunction(query, "avg")
+		require.NotNil(t, agg, "control %d: correlated AVG not found", i)
+		require.Len(t, agg.Children, 1)
+		child := query.Nodes[agg.Children[0]]
+		require.False(t, child.NodeType == plan.Node_JOIN && child.JoinType == plan.Node_SEMI,
+			"control %d: an unfiltered or volatile domain must not be copied", i)
+	}
+}
+
+func findAggregateByFunction(query *plan.Query, name string) *plan.Node {
 	for _, node := range query.Nodes {
-		if node.NodeType != plan.Node_AGG || len(node.Children) != 1 {
+		if node.NodeType != plan.Node_AGG {
 			continue
 		}
-		child := query.Nodes[node.Children[0]]
-		if child.NodeType == plan.Node_JOIN && child.JoinType == plan.Node_SEMI {
-			return
+		for _, expr := range node.AggList {
+			if exprContainsFuncName(expr, name) {
+				return node
+			}
 		}
 	}
-	t.Fatal("correlated scalar aggregate was not restricted by a SEMI join")
+	return nil
+}
+
+func exprListContainsStringLiteral(exprs []*plan.Expr, value string) bool {
+	for _, expr := range exprs {
+		if exprContainsStringLiteral(expr, value) {
+			return true
+		}
+	}
+	return false
+}
+
+func runSelectWithValidator(
+	opt Optimizer,
+	t *testing.T,
+	sql string,
+	validate func(*plan.Query) error,
+) (*Plan, error) {
+	stmts, err := mysql.Parse(opt.CurrentContext().GetContext(), sql, 1)
+	require.NoError(t, err)
+	stmt, ok := stmts[0].(*tree.Select)
+	require.True(t, ok)
+	return bindAndOptimizeSelectQueryWithValidator(
+		plan.Query_SELECT, opt.CurrentContext(), stmt, false, false, validate,
+	)
 }
 
 func TestAggregateArgumentScalarSubqueryFlattened(t *testing.T) {
