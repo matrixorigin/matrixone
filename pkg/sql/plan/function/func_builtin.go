@@ -1686,6 +1686,48 @@ func builtInUUID(_ []*vector.Vector, result vector.FunctionResultWrapper, proc *
 // seconds from the UUID Gregorian epoch (1582-10-15) to the unix epoch
 const uuidGregorianToUnixSecs = 12219292800
 
+// rfcV6EncodeTime writes ts (a 60-bit count of 100ns intervals since
+// 1582-10-15) into u[0:8] per RFC 9562 section 5.6: time_high (bits 59-28) in
+// octets 0-3, time_mid (bits 27-12) in octets 4-5, then the version nibble and
+// time_low (bits 11-0) in octets 6-7.
+func rfcV6EncodeTime(u *types.Uuid, ts int64) {
+	u[0] = byte(ts >> 52)
+	u[1] = byte(ts >> 44)
+	u[2] = byte(ts >> 36)
+	u[3] = byte(ts >> 28)
+	u[4] = byte(ts >> 20)
+	u[5] = byte(ts >> 12)
+	u[6] = 0x60 | byte(ts>>8)&0x0f
+	u[7] = byte(ts)
+}
+
+// rfcV6DecodeTime is the inverse of rfcV6EncodeTime.
+func rfcV6DecodeTime(u types.Uuid) int64 {
+	hi := int64(binary.BigEndian.Uint32(u[0:4]))
+	mid := int64(binary.BigEndian.Uint16(u[4:6]))
+	low := int64(u[6]&0x0f)<<8 | int64(u[7])
+	return hi<<28 | mid<<12 | low
+}
+
+// newRFCUUIDV6 generates an RFC 9562-compliant UUIDv6. google/uuid's NewV6 is
+// known to deviate from the RFC field layout (it writes the timestamp as a
+// plain 64-bit BE value, losing bits 15-12 to the version nibble), so instead
+// we take a v1 from uuid.NewUUID — which manages the monotonic timestamp,
+// clock sequence, and node id correctly — and reorder its timestamp fields
+// into the v6 layout, the field-compatible transformation the RFC defines.
+func newRFCUUIDV6() (uuid.UUID, error) {
+	v1, err := uuid.NewUUID()
+	if err != nil {
+		return v1, err
+	}
+	ts := int64(binary.BigEndian.Uint32(v1[0:4])) |
+		int64(binary.BigEndian.Uint16(v1[4:6]))<<32 |
+		int64(binary.BigEndian.Uint16(v1[6:8])&0x0fff)<<48
+	u := types.Uuid(v1)
+	rfcV6EncodeTime(&u, ts)
+	return uuid.UUID(u), nil
+}
+
 // makeBuiltInUUIDBoundary implements uuid_v1/uuid_v6/uuid_v7 (and uuid, the
 // uuid_v7 alias) with an explicit datetime argument: the result is the
 // deterministic minimal UUID of that version for that instant — timestamp and
@@ -1734,20 +1776,7 @@ func makeBuiltInUUIDBoundary(version int) executeLogicOfOverload {
 					return moerr.NewInvalidInputf(proc.Ctx, "uuid_v%d timestamp out of range: %s", version, v.String())
 				}
 				if version == 6 {
-					// Match google/uuid's NewV6 layout — the timestamp is laid
-					// out as a 64-bit BE value with the version nibble
-					// overwriting bits 15-12 (NOT the RFC 9562 field layout) —
-					// because uuid_v6() generates via uuid.NewV6 and boundary
-					// values must compare consistently against those. Still
-					// time-ordered in byte/string order.
-					u[0] = byte(ts >> 56)
-					u[1] = byte(ts >> 48)
-					u[2] = byte(ts >> 40)
-					u[3] = byte(ts >> 32)
-					u[4] = byte(ts >> 24)
-					u[5] = byte(ts >> 16)
-					u[6] = 0x60 | byte(ts>>8)&0x0f
-					u[7] = byte(ts)
+					rfcV6EncodeTime(&u, ts)
 				} else {
 					// v1: time_low(32) | time_mid(16) | version(4) | time_high(12)
 					u[0] = byte(ts >> 24)
@@ -1786,14 +1815,11 @@ func shiftUUIDTimestamp(u *types.Uuid, version int, deltaMicro int64) bool {
 		u[4] = byte(ms >> 8)
 		u[5] = byte(ms)
 	case 6:
-		// google/uuid layout: 64-bit BE timestamp with the version nibble at
-		// bits 15-12 (see makeBuiltInUUIDBoundary)
-		t := int64(binary.BigEndian.Uint64(u[:8])) + deltaMicro*10
-		if t < 0 || t >= 1<<60 {
+		ts := rfcV6DecodeTime(*u) + deltaMicro*10
+		if ts < 0 || ts >= 1<<60 {
 			return false
 		}
-		binary.BigEndian.PutUint64(u[:8], uint64(t))
-		u[6] = 0x60 | u[6]&0x0f
+		rfcV6EncodeTime(u, ts)
 	case 1:
 		ts := int64(binary.BigEndian.Uint32(u[0:4])) |
 			int64(binary.BigEndian.Uint16(u[4:6]))<<32 |
@@ -1824,7 +1850,7 @@ func makeBuiltInUUIDShifted(version int) executeLogicOfOverload {
 	case 1:
 		newFn = uuid.NewUUID
 	case 6:
-		newFn = uuid.NewV6
+		newFn = newRFCUUIDV6
 	default:
 		newFn = uuid.NewV7
 	}
@@ -1911,16 +1937,27 @@ func builtInUUIDExtractTimestamp(parameters []*vector.Vector, result vector.Func
 			}
 			continue
 		}
+		var t time.Time
 		switch u.Version() {
-		case 1, 6, 7:
+		case 1, 7:
+			sec, nsec := u.Time().UnixTime()
+			t = time.Unix(sec, nsec).UTC()
+		case 6:
+			// decode the RFC 9562 v6 fields explicitly — google/uuid's Time()
+			// assumes its own non-standard v6 layout
+			rel := rfcV6DecodeTime(v) - uuidGregorianToUnixSecs*10_000_000
+			sec, frac := rel/10_000_000, rel%10_000_000
+			if frac < 0 {
+				sec--
+				frac += 10_000_000
+			}
+			t = time.Unix(sec, frac*100).UTC()
 		default:
 			if err := appendNull(); err != nil {
 				return err
 			}
 			continue
 		}
-		sec, nsec := u.Time().UnixTime()
-		t := time.Unix(sec, nsec).UTC()
 		y, mo, d := t.Date()
 		if y < 1 || y > 9999 {
 			// a crafted UUID can encode a timestamp outside the TIMESTAMP range
@@ -1947,7 +1984,7 @@ func builtInUUIDV4(_ []*vector.Vector, result vector.FunctionResultWrapper, proc
 }
 
 func builtInUUIDV6(_ []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return generateUUIDs(result, proc, length, uuid.NewV6)
+	return generateUUIDs(result, proc, length, newRFCUUIDV6)
 }
 
 func builtInIsUUID(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {

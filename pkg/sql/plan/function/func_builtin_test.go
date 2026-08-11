@@ -2255,18 +2255,15 @@ func TestBuiltInUUIDBoundary(t *testing.T) {
 	dt, err := types.ParseDatetime("2026-01-02 03:04:05.678", 6)
 	require.NoError(t, err)
 
+	// that instant as 100ns intervals since the UUID Gregorian epoch 1582-10-15
+	const wantTs = int64(139866158456780000)
 	cases := []struct {
 		version int
 		want    string
-		// that instant as 100ns intervals since the UUID Gregorian epoch
-		// 1582-10-15, as reported by google/uuid's Time() decoder. For v6 the
-		// generator's layout loses timestamp bits 15-12 to the version nibble,
-		// so its Time() differs slightly from the true 139866158456780000.
-		wantTime uuid.Time
 	}{
-		{7, "019b7ca9-8f2e-7000-8000-000000000000", 139866158456780000},
-		{6, "01f0e787-b2ea-64e0-8000-000000000000", 139866158456792288},
-		{1, "b2ea34e0-e787-11f0-8000-000000000000", 139866158456780000},
+		{7, "019b7ca9-8f2e-7000-8000-000000000000"},
+		{6, "1f0e787b-2ea3-64e0-8000-000000000000"},
+		{1, "b2ea34e0-e787-11f0-8000-000000000000"},
 	}
 	for _, c := range cases {
 		t.Run(fmt.Sprintf("v%d", c.version), func(t *testing.T) {
@@ -2285,11 +2282,17 @@ func TestBuiltInUUIDBoundary(t *testing.T) {
 			succeed, info := tcc.Run()
 			require.True(t, succeed, tc.info, info)
 
-			// cross-check the pinned value against google/uuid's decoder
+			// cross-check the pinned value against an independent decoder:
+			// google/uuid's Time() for v1/v7 (RFC-correct there), our explicit
+			// RFC field decode for v6 (google's v6 layout is non-standard)
 			u := uuid.UUID(mustParseUuid(t, c.want))
 			require.Equal(t, uuid.Version(c.version), u.Version())
 			require.Equal(t, uuid.RFC4122, u.Variant())
-			require.Equal(t, c.wantTime, u.Time())
+			if c.version == 6 {
+				require.Equal(t, wantTs, rfcV6DecodeTime(mustParseUuid(t, c.want)))
+			} else {
+				require.Equal(t, uuid.Time(wantTs), u.Time())
+			}
 		})
 	}
 
@@ -2297,7 +2300,7 @@ func TestBuiltInUUIDBoundary(t *testing.T) {
 	gen7, err := uuid.NewV7()
 	require.NoError(t, err)
 	require.True(t, strings.Compare(cases[0].want, gen7.String()) < 0)
-	gen6, err := uuid.NewV6()
+	gen6, err := newRFCUUIDV6()
 	require.NoError(t, err)
 	require.True(t, strings.Compare(cases[1].want, gen6.String()) < 0)
 }
@@ -2333,10 +2336,14 @@ func TestBuiltInUUIDShifted(t *testing.T) {
 				seen[types.Uuid(u)] = true
 
 				// embedded timestamp must be ~1 hour ahead of the wall clock
-				// (google/uuid's v6 layout drops timestamp bits 15-12, ~6.5ms —
-				// well inside the 1-minute tolerance)
-				sec, nsec := u.Time().UnixTime()
-				got := time.Unix(sec, nsec)
+				var got time.Time
+				if version == 6 {
+					rel := rfcV6DecodeTime(types.Uuid(u)) - 12219292800*10_000_000
+					got = time.Unix(rel/10_000_000, rel%10_000_000*100)
+				} else {
+					sec, nsec := u.Time().UnixTime()
+					got = time.Unix(sec, nsec)
+				}
 				require.WithinDuration(t, before.Add(time.Hour), got, time.Minute+after.Sub(before))
 			}
 		})
@@ -2357,18 +2364,20 @@ func TestBuiltInUUIDShifted(t *testing.T) {
 func TestBuiltInUUIDExtract(t *testing.T) {
 	proc := testutil.NewProcess(t)
 
-	// the boundary pins for 2026-01-02 03:04:05.678 UTC (see TestBuiltInUUIDBoundary);
-	// the v6 layout loses timestamp bits 15-12, so its decoded instant is .679228
+	// the boundary pins for 2026-01-02 03:04:05.678 UTC (see TestBuiltInUUIDBoundary)
 	v7 := mustParseUuid(t, "019b7ca9-8f2e-7000-8000-000000000000")
 	v1 := mustParseUuid(t, "b2ea34e0-e787-11f0-8000-000000000000")
-	v6 := mustParseUuid(t, "01f0e787-b2ea-64e0-8000-000000000000")
+	v6 := mustParseUuid(t, "1f0e787b-2ea3-64e0-8000-000000000000")
 	v4 := mustParseUuid(t, "788b2cf7-aa3a-4b87-867b-e40ca351c179")
+	// externally constructed control: the standard UUIDv6 example from
+	// RFC 9562 appendix A.4, timestamp 2022-02-22 14:22:22 -05:00
+	rfc := mustParseUuid(t, "1ec9414c-232a-6b00-b3c8-9f6bdeced846")
 	var zero types.Uuid // NCS variant: both functions return NULL
 
 	inputs := []FunctionTestInput{
 		NewFunctionTestInput(types.T_uuid.ToType(),
-			[]types.Uuid{v7, v1, v6, v4, zero, zero},
-			[]bool{false, false, false, false, false, true}),
+			[]types.Uuid{v7, v1, v6, rfc, v4, zero, zero},
+			[]bool{false, false, false, false, false, false, true}),
 	}
 
 	{
@@ -2376,8 +2385,8 @@ func TestBuiltInUUIDExtract(t *testing.T) {
 			info:   "uuid_extract_version",
 			inputs: inputs,
 			expect: NewFunctionTestResult(types.T_int16.ToType(), false,
-				[]int16{7, 1, 6, 4, 0, 0},
-				[]bool{false, false, false, false, true, true}),
+				[]int16{7, 1, 6, 6, 4, 0, 0},
+				[]bool{false, false, false, false, false, true, true}),
 		}
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, builtInUUIDExtractVersion)
 		succeed, info := tcc.Run()
@@ -2386,13 +2395,13 @@ func TestBuiltInUUIDExtract(t *testing.T) {
 
 	{
 		want := types.FromClockUTC(2026, 1, 2, 3, 4, 5, 678000)
-		want6 := types.FromClockUTC(2026, 1, 2, 3, 4, 5, 679228)
+		wantRfc := types.FromClockUTC(2022, 2, 22, 19, 22, 22, 0)
 		tc := tcTemp{
 			info:   "uuid_extract_timestamp",
 			inputs: inputs,
 			expect: NewFunctionTestResult(types.T_timestamp.ToType(), false,
-				[]types.Timestamp{want, want, want6, 0, 0, 0},
-				[]bool{false, false, false, true, true, true}),
+				[]types.Timestamp{want, want, want, wantRfc, 0, 0, 0},
+				[]bool{false, false, false, false, true, true, true}),
 		}
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, builtInUUIDExtractTimestamp)
 		succeed, info := tcc.Run()
