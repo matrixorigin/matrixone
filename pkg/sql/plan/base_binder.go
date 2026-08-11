@@ -4598,7 +4598,7 @@ func temporalDisplayWidthForVarchar(typ types.Type) (int32, bool) {
 
 func adjustControlFlowDecimalLiteralMetadata(args []*Expr, argTypes []types.Type, valueIndexes []int, returnType *types.Type) bool {
 	hasDecimal := false
-	hasIntegerLiteral := false
+	hasNarrowLiteral := false
 	maxIntegral := int32(0)
 	maxScale := int32(0)
 
@@ -4610,23 +4610,28 @@ func adjustControlFlowDecimalLiteralMetadata(args []*Expr, argTypes []types.Type
 		switch {
 		case typ.Oid.IsDecimal():
 			hasDecimal = true
-			integral := typ.Width - typ.Scale
+			width, scale := typ.Width, typ.Scale
+			if literalWidth, literalScale, ok := controlFlowDecimalLiteralMetadata(args[idx]); ok {
+				width, scale = literalWidth, literalScale
+				hasNarrowLiteral = true
+			}
+			integral := width - scale
 			if integral > maxIntegral {
 				maxIntegral = integral
 			}
-			if typ.Scale > maxScale {
-				maxScale = typ.Scale
+			if scale > maxScale {
+				maxScale = scale
 			}
 		case typ.Oid.IsInteger():
 			integral, literal := decimalIntegerWidth(args[idx], typ)
 			if integral > maxIntegral {
 				maxIntegral = integral
 			}
-			hasIntegerLiteral = hasIntegerLiteral || literal
+			hasNarrowLiteral = hasNarrowLiteral || literal
 		}
 	}
 
-	if !hasDecimal || !hasIntegerLiteral {
+	if !hasDecimal || !hasNarrowLiteral {
 		return false
 	}
 	precision := maxIntegral + maxScale
@@ -4639,6 +4644,23 @@ func adjustControlFlowDecimalLiteralMetadata(args []*Expr, argTypes []types.Type
 	returnType.Width = precision
 	returnType.Scale = maxScale
 	return changed
+}
+
+func controlFlowDecimalLiteralMetadata(expr *Expr) (int32, int32, bool) {
+	fn := expr.GetF()
+	if fn == nil || fn.Func == nil || fn.Func.GetObjName() != "cast" || len(fn.Args) != 2 {
+		return 0, 0, false
+	}
+	_, overload := function.DecodeOverloadID(fn.Func.GetObj())
+	if overload != 0 || fn.Args[1].Typ.Width != expr.Typ.Width || fn.Args[1].Typ.Scale != expr.Typ.Scale {
+		return 0, 0, false
+	}
+	value, ok := decimalStringLiteralValue(fn.Args[0])
+	if !ok {
+		return 0, 0, false
+	}
+	_, width, scale, ok := canonicalExactDecimalString(value)
+	return width, scale, ok
 }
 
 func decimalIntegerWidth(expr *Expr, typ types.Type) (int32, bool) {
@@ -4685,6 +4707,9 @@ func controlFlowStringWidth(expr *Expr, typ types.Type) (int32, bool) {
 		return 0, false
 	}
 	if typ.Oid.IsDecimal() {
+		if width, scale, ok := controlFlowDecimalLiteralMetadata(expr); ok {
+			return decimalDisplayWidth(types.New(typ.Oid, width, scale)), true
+		}
 		if typ.Width <= 0 {
 			return 0, false
 		}
@@ -5067,7 +5092,7 @@ func (b *baseBinder) bindNumVal(astExpr *tree.NumVal, typ Type) (*Expr, error) {
 		if !typ.IsEmpty() {
 			return appendCastBeforeExpr(b.GetContext(), makePlan2StringConstExprWithType(val), typ)
 		}
-		return makePlan2DecimalExprWithType(b.GetContext(), val)
+		return makePlan2LegacyDecimalExprWithType(b.GetContext(), val)
 	}
 
 	returnHexNumExpr := func(val string, isBin ...bool) (*Expr, error) {

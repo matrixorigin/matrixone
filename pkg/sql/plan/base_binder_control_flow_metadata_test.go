@@ -742,6 +742,17 @@ func TestDecimalLiteralMetadataPrecision(t *testing.T) {
 	require.Equal(t, int32(1), expr.Typ.Scale)
 }
 
+func TestOrdinaryDecimalLiteralKeepsLegacyMetadata(t *testing.T) {
+	stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, "select 9.5", 1)
+	require.NoError(t, err)
+	pl, err := BuildPlan(NewMockCompilerContext(true), stmt, false)
+	require.NoError(t, err)
+	query := pl.GetQuery()
+	expr := query.Nodes[query.Steps[len(query.Steps)-1]].ProjectList[0]
+	require.Equal(t, int32(18), expr.Typ.Width)
+	require.Equal(t, int32(1), expr.Typ.Scale)
+}
+
 func TestBuildIfNullMetadata(t *testing.T) {
 	for _, sql := range []string{
 		"select ifnull(null, 9.5)",
