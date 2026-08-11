@@ -1060,6 +1060,37 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 		outcnt:       10,
 	}
 
+	constraintTestSchema["self_ref_multi_cascade"] = &Schema{
+		tblId: 99997,
+		cols: []col{
+			{"id", types.T_int32, true, 32, 0},
+			{"parent_a", types.T_int32, true, 32, 0},
+			{"parent_b", types.T_int32, true, 32, 0},
+			{catalog.Row_ID, types.T_Rowid, false, 16, 0},
+		},
+		pks: []int{0},
+		fks: []*plan.ForeignKeyDef{
+			{
+				Name:        "fk_self_cascade_a",
+				Cols:        []uint64{1},
+				ForeignTbl:  0,
+				ForeignCols: []uint64{0},
+				OnDelete:    plan.ForeignKeyDef_CASCADE,
+				OnUpdate:    plan.ForeignKeyDef_CASCADE,
+			},
+			{
+				Name:        "fk_self_cascade_b",
+				Cols:        []uint64{2},
+				ForeignTbl:  0,
+				ForeignCols: []uint64{0},
+				OnDelete:    plan.ForeignKeyDef_CASCADE,
+				OnUpdate:    plan.ForeignKeyDef_CASCADE,
+			},
+		},
+		refChildTbls: []uint64{0},
+		outcnt:       10,
+	}
+
 	/*
 		Parent-side FK action fixtures for REPLACE (issue #24951).
 

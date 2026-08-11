@@ -132,31 +132,73 @@ ALLEN    CHICAGO    30
 select t1.ename, t2.loc from emp t1 left join dept t2 on t1.deptno = t2.deptno order by deptno;
 invalid input: ambiguous column reference to 'deptno'
 select t1.ename, t2.loc, t2.deptno as deptno from emp t1 left join dept t2 on t1.deptno = t2.deptno order by deptno+33;
-ename    loc    deptno
-CLARK    NEW YORK    10
-MILLER    NEW YORK    10
-KING    NEW YORK    10
-JONES    DALLAS    20
-SMITH    DALLAS    20
-SCOTT    DALLAS    20
-ADAMS    DALLAS    20
-FORD    DALLAS    20
-MARTIN    CHICAGO    30
-BLAKE    CHICAGO    30
-WARD    CHICAGO    30
-TURNER    CHICAGO    30
-JAMES    CHICAGO    30
-ALLEN    CHICAGO    30
+invalid input: ambiguous column reference to 'deptno'
 select t1.ename, t2.loc from emp t1 left join dept t2 on t1.deptno = t2.deptno order by deptno;
 invalid input: ambiguous column reference to 'deptno'
-select ename, (select ename from emp i1 where i1.empno = emp.mgr order by 1 limit 1) as ename from emp order by ename;
-invalid input: Column 'ename' in order clause is ambiguous
-select empno, (select ename from emp i1 where i1.empno = emp.mgr order by 1 limit 1) as ename, ename from emp order by ename;
-invalid input: Column 'ename' in order clause is ambiguous
-select empno, 20 as empno from emp order by empno;
-invalid input: Column 'empno' in order clause is ambiguous
-select empno,  space(50) as empno from emp order by empno;
-invalid input: Column 'empno' in order clause is ambiguous
+select ename, (select ename from emp i1 where i1.empno = 7369 order by 1 limit 1) as ename from emp order by ename desc, emp.empno;
+ename    ename
+SMITH    SMITH
+ALLEN    SMITH
+WARD    SMITH
+JONES    SMITH
+MARTIN    SMITH
+BLAKE    SMITH
+CLARK    SMITH
+SCOTT    SMITH
+KING    SMITH
+TURNER    SMITH
+ADAMS    SMITH
+JAMES    SMITH
+FORD    SMITH
+MILLER    SMITH
+select empno, (select ename from emp i1 where i1.empno = 7369 order by 1 limit 1) as ename, ename from emp order by ename, emp.empno;
+empno    ename    ename
+7369    SMITH    SMITH
+7499    SMITH    ALLEN
+7521    SMITH    WARD
+7566    SMITH    JONES
+7654    SMITH    MARTIN
+7698    SMITH    BLAKE
+7782    SMITH    CLARK
+7788    SMITH    SCOTT
+7839    SMITH    KING
+7844    SMITH    TURNER
+7876    SMITH    ADAMS
+7900    SMITH    JAMES
+7902    SMITH    FORD
+7934    SMITH    MILLER
+select empno, 20 as empno from emp order by empno desc, emp.empno;
+empno    empno
+7369    20
+7499    20
+7521    20
+7566    20
+7654    20
+7698    20
+7782    20
+7788    20
+7839    20
+7844    20
+7876    20
+7900    20
+7902    20
+7934    20
+select empno, length(space(50)) as empno from emp order by empno desc, emp.empno;
+empno    empno
+7369    50
+7499    50
+7521    50
+7566    50
+7654    50
+7698    50
+7782    50
+7788    50
+7839    50
+7844    50
+7876    50
+7900    50
+7902    50
+7934    50
 select empno, ename, job, mgr, hiredate, sal, empno from emp where deptno != 20 order by empno;
 empno    ename    job    mgr    hiredate    sal    empno
 7499    ALLEN    SALESMAN    7698    1981-02-20    1600.00    7499
@@ -201,3 +243,140 @@ select t1.ename, t2.loc, t1.deptno, t2.deptno as deptno from emp t1 left join de
 invalid input: Column 'deptno' in order clause is ambiguous
 drop table if exists dept;
 drop table if exists emp;
+drop table if exists order_alias_shadow;
+create table order_alias_shadow(id int primary key, k int);
+insert into order_alias_shadow values (1, 30), (2, 10), (3, 20);
+select id, -id as id from order_alias_shadow order by id;
+id    id
+3    -3
+2    -2
+1    -1
+select id, k + 0 as id from order_alias_shadow order by id;
+id    id
+2    10
+3    20
+1    30
+select id, 20 as id from order_alias_shadow order by id desc, order_alias_shadow.id;
+id    id
+1    20
+2    20
+3    20
+select id, -id as neg_id from order_alias_shadow order by neg_id;
+id    neg_id
+3    -3
+2    -2
+1    -1
+select id, -id as id from order_alias_shadow order by order_alias_shadow.id;
+id    id
+1    -1
+2    -2
+3    -3
+select id, -id as id from order_alias_shadow order by id + 0 desc;
+id    id
+3    -3
+2    -2
+1    -1
+select id as x, k as x from order_alias_shadow order by x;
+invalid input: Column 'x' in order clause is ambiguous
+select id, id as id from order_alias_shadow order by id;
+id    id
+1    1
+2    2
+3    3
+select id as x, k + 0 as x from order_alias_shadow order by x;
+x    x
+2    10
+3    20
+1    30
+select -id as x, k + 0 as x from order_alias_shadow order by x;
+x    x
+-3    20
+-2    10
+-1    30
+select -id as x, k + 0 as x from order_alias_shadow order by x + 0;
+x    x
+-3    20
+-2    10
+-1    30
+select distinct id, -id as id from order_alias_shadow order by id;
+id    id
+3    -3
+2    -2
+1    -1
+select distinct id, 20 as id from order_alias_shadow order by id desc, order_alias_shadow.id;
+id    id
+1    20
+2    20
+3    20
+select distinct id, -id as id from order_alias_shadow order by id + 0 desc;
+id    id
+3    -3
+2    -2
+1    -1
+select k as id, id as source_id, count(*) as row_count
+from order_alias_shadow
+group by id, k with rollup
+order by id + 0, grouping(k), source_id + 0;
+id    source_id    row_count
+null    null    3
+30    1    1
+null    1    1
+10    2    1
+null    2    1
+20    3    1
+null    3    1
+select k as id, id as source_id, count(*) as row_count,
+count(*) over () as window_rows
+from order_alias_shadow
+group by id, k with rollup
+order by id + 0, grouping(k), source_id + 0;
+id    source_id    row_count    window_rows
+null    null    3    7
+30    1    1    7
+null    1    1    7
+10    2    1    7
+null    2    1    7
+20    3    1    7
+null    3    1    7
+select -id as expression_alias, count(*) as row_count,
+count(*) over () as window_rows
+from order_alias_shadow
+group by id with rollup
+order by expression_alias is null, expression_alias;
+expression_alias    row_count    window_rows
+-3    1    4
+-2    1    4
+-1    1    4
+null    3    4
+select k as id, id as source_id, k as source_k, count(*) as row_count
+from order_alias_shadow
+group by cube(id, k)
+order by id + 0, grouping(id), grouping(k), source_k + 0;
+id    source_id    source_k    row_count
+10    null    10    1
+20    null    20    1
+30    null    30    1
+null    null    null    3
+30    1    30    1
+null    1    null    1
+10    2    10    1
+null    2    null    1
+20    3    20    1
+null    3    null    1
+select k as id, id as source_id, k as source_k, count(*) as row_count,
+count(*) over () as window_rows
+from order_alias_shadow
+group by cube(id, k)
+order by id + 0, grouping(id), grouping(k), source_k + 0;
+id    source_id    source_k    row_count    window_rows
+10    null    10    1    10
+20    null    20    1    10
+30    null    30    1    10
+null    null    null    3    10
+30    1    30    1    10
+null    1    null    1    10
+10    2    10    1    10
+null    2    null    1    10
+20    3    20    1    10
+null    3    null    1    10
+drop table order_alias_shadow;

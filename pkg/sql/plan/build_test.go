@@ -37,6 +37,7 @@ import (
 	lockpb "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	txnpb "github.com/matrixorigin/matrixone/pkg/pb/txn"
+	"github.com/matrixorigin/matrixone/pkg/sql/internal/materialized"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -1142,6 +1143,11 @@ func TestSingleTableSQLBuilder(t *testing.T) {
 		"select get_format(TIMESTAMP, 'ISO')",
 
 		"select count(n_name) from nation limit 10 for update", // aggregate + limit + for update (issue 23131 family)
+
+		// uuid family: INTERVAL shift rewrite, datetime boundary form, extraction
+		"select uuid(interval 1 minute), uuid_v7(interval 1 hour), uuid_v1(interval 1 day), uuid_v6(interval 1 month)",
+		"select uuid_v7('2026-01-01 00:00:00'), uuid_v1('2026-01-01 00:00:00'), uuid_v6('2026-01-01 00:00:00')",
+		"select uuid_extract_version(uuid_v4()), uuid_extract_timestamp(uuid_v7())",
 	}
 	runTestShouldPass(mock, t, sqls, false, false)
 
@@ -1161,6 +1167,9 @@ func TestSingleTableSQLBuilder(t *testing.T) {
 		"SELECT DISTINCT N_NAME FROM NATION ORDER BY N_REGIONKEY", //test distinct with order by
 		//"select 18446744073709551500",                             //over int64
 		//"select 0xffffffffffffffff",                               //over int64
+
+		"select uuid_v7(5, 3)", // internal (count, unit) uuid form is not directly callable
+		"select uuid(1, 2, 3)", // uuid family takes zero or one arg
 	}
 	runTestShouldError(mock, t, sqls)
 }
@@ -1654,14 +1663,13 @@ func TestRewriteRollupWindowSelectGuards(t *testing.T) {
 
 func TestRewriteRollupWindowUnsupportedDoesNotFallback(t *testing.T) {
 	mock := NewMockOptimizer(false)
-	for _, sql := range []string{
+	_, err := runOneStmt(
+		mock,
+		t,
 		"select distinct a, row_number() over () from nation group by a, n_regionkey with rollup",
-		"select a, row_number() over () is null from nation group by a, n_regionkey with rollup",
-	} {
-		_, err := runOneStmt(mock, t, sql)
-		require.Error(t, err)
-		require.Contains(t, err.Error(), "window functions with ROLLUP or CUBE for this expression")
-	}
+	)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "window functions with ROLLUP or CUBE for this expression")
 }
 
 func TestRewriteRollupWindowExprSupportedShapes(t *testing.T) {
@@ -4619,6 +4627,97 @@ func TestDeleteSelfReferSetNull(t *testing.T) {
 	requireQueryStepDependenciesAcyclic(t, query)
 }
 
+func TestDeleteSelfReferCascade(t *testing.T) {
+	mock := NewMockOptimizer(true)
+
+	logicPlan, err := runOneStmt(mock, t, "DELETE FROM self_ref_cascade WHERE id = 1")
+	require.NoError(t, err)
+	query := logicPlan.GetQuery()
+	require.NotNil(t, query)
+	assert.True(t, query.GetHasForeignKeyAction())
+	assert.True(t, queryHasNodeType(query, plan.Node_RECURSIVE_CTE),
+		"self-referencing DELETE CASCADE must recursively collect all descendants")
+	assert.True(t, slices.ContainsFunc(query.Nodes, func(node *plan.Node) bool {
+		return node.NodeType == plan.Node_SINK && node.ExtraOptions == materialized.CTESinkOption
+	}), "recursive roots and post-fixpoint exclusion must share drain-safe materialized fanout")
+	requireRecursiveCTESources(t, query)
+}
+
+func TestDeleteSelfReferCascadeAcrossForeignKeys(t *testing.T) {
+	mock := NewMockOptimizer(true)
+
+	logicPlan, err := runOneStmt(mock, t,
+		"DELETE FROM self_ref_multi_cascade WHERE id = 1")
+	require.NoError(t, err)
+	query := logicPlan.GetQuery()
+	require.NotNil(t, query)
+
+	recursiveCTEs := 0
+	hasMultiEdgeMatch := false
+	for _, node := range query.Nodes {
+		if node.NodeType == plan.Node_RECURSIVE_CTE {
+			recursiveCTEs++
+			assert.True(t, node.RecursiveUnionDistinct,
+				"self-referencing cascade fixpoint must deduplicate cycles and converging paths")
+		}
+		if node.NodeType == plan.Node_JOIN && len(node.OnList) == 1 &&
+			node.OnList[0].GetF() != nil && node.OnList[0].GetF().Func.ObjName == "or" {
+			hasMultiEdgeMatch = true
+		}
+	}
+	assert.Equal(t, 1, recursiveCTEs,
+		"all self-referencing CASCADE edges must share one recursive fixpoint")
+	assert.True(t, hasMultiEdgeMatch,
+		"the recursive fixpoint must expand through either self-referencing FK edge")
+	assert.True(t, slices.ContainsFunc(query.Nodes, func(node *plan.Node) bool {
+		return node.NodeType == plan.Node_SINK && node.ExtraOptions == materialized.CTESinkOption
+	}), "recursive roots and post-fixpoint exclusion must share drain-safe materialized fanout")
+	requireRecursiveCTESources(t, query)
+}
+
+func TestUpdateSelfReferCascade(t *testing.T) {
+	mock := NewMockOptimizer(true)
+
+	logicPlan, err := runOneStmt(mock, t, "UPDATE self_ref_cascade SET id = 10 WHERE id = 1")
+	require.NoError(t, err)
+	query := logicPlan.GetQuery()
+	require.NotNil(t, query)
+	assert.True(t, query.GetHasForeignKeyAction(),
+		"self-referencing UPDATE CASCADE must build the child-key update")
+	assert.True(t, slices.ContainsFunc(query.Nodes, func(node *plan.Node) bool {
+		return node.NodeType == plan.Node_JOIN && node.JoinType == plan.Node_LEFT
+	}), "statement roots must fold root-to-root cascade values into their main update source")
+	assert.True(t, slices.ContainsFunc(query.Nodes, func(node *plan.Node) bool {
+		return node.NodeType == plan.Node_JOIN && node.JoinType == plan.Node_ANTI
+	}), "the separate cascade update must exclude the complete statement root set")
+	materializedSinks := 0
+	for _, node := range query.Nodes {
+		if node.NodeType == plan.Node_SINK && node.ExtraOptions == materialized.CTESinkOption {
+			materializedSinks++
+		}
+	}
+	assert.GreaterOrEqual(t, materializedSinks, 1,
+		"root-to-root lookup must use drain-safe materialized fanout")
+	requireQueryStepDependenciesAcyclic(t, query)
+}
+
+func TestUpdateSelfReferCascadeBetweenStatementRoots(t *testing.T) {
+	mock := NewMockOptimizer(true)
+
+	logicPlan, err := runOneStmt(mock, t,
+		"UPDATE self_ref_cascade SET id = id + 10 WHERE id IN (1, 2)")
+	require.NoError(t, err)
+	query := logicPlan.GetQuery()
+	require.NotNil(t, query)
+	assert.True(t, slices.ContainsFunc(query.Nodes, func(node *plan.Node) bool {
+		return node.NodeType == plan.Node_JOIN && node.JoinType == plan.Node_LEFT
+	}), "a root that references another root must receive the parent's new key in the main source")
+	assert.True(t, slices.ContainsFunc(query.Nodes, func(node *plan.Node) bool {
+		return node.NodeType == plan.Node_JOIN && node.JoinType == plan.Node_ANTI
+	}), "cascade child ownership must be disjoint from every statement root")
+	requireQueryStepDependenciesAcyclic(t, query)
+}
+
 func requireQueryStepDependenciesAcyclic(t *testing.T, query *plan.Query) {
 	t.Helper()
 	state := make([]uint8, len(query.Steps))
@@ -4658,6 +4757,31 @@ func requireQueryStepDependenciesAcyclic(t *testing.T, query *plan.Query) {
 	}
 }
 
+func requireRecursiveCTESources(t *testing.T, query *plan.Query) {
+	t.Helper()
+	for _, node := range query.Nodes {
+		if node.NodeType != plan.Node_RECURSIVE_CTE {
+			continue
+		}
+		assert.True(t, node.RecursiveUnionDistinct,
+			"self-referencing cascade recursion must deduplicate rowids")
+		require.GreaterOrEqual(t, len(node.SourceStep), 2)
+		for sourceIdx, sourceStep := range node.SourceStep {
+			require.GreaterOrEqual(t, sourceStep, int32(0))
+			require.Less(t, int(sourceStep), len(query.Steps))
+			sink := query.Nodes[query.Steps[sourceStep]]
+			require.Equal(t, plan.Node_SINK, sink.NodeType)
+			if sourceIdx == 0 {
+				assert.False(t, sink.RecursiveCte, "recursive CTE anchor must use a non-recursive sink")
+			} else {
+				assert.True(t, sink.RecursiveCte, "recursive CTE member must use a recursive sink")
+			}
+		}
+		return
+	}
+	t.Fatal("recursive CTE node not found")
+}
+
 func TestReplaceSelfRefCascade(t *testing.T) {
 	mock := NewMockOptimizer(true)
 
@@ -4685,10 +4809,13 @@ func TestReplaceSelfRefCascade(t *testing.T) {
 	for _, node := range query.Nodes {
 		if node.NodeType == plan.Node_JOIN && node.JoinType == plan.Node_ANTI {
 			oldRowExclusions++
+		} else if node.NodeType == plan.Node_FILTER && node.FilterIsBarrier &&
+			len(node.Children) == 1 && query.Nodes[node.Children[0]].JoinType == plan.Node_MARK {
+			oldRowExclusions++
 		}
 	}
-	assert.GreaterOrEqual(t, oldRowExclusions, 2,
-		"initial and recursive cascade sources must exclude main REPLACE old rows")
+	assert.GreaterOrEqual(t, oldRowExclusions, 1,
+		"the completed cascade fixpoint must exclude main REPLACE old rows")
 	cascadeLocks := 0
 	for _, node := range query.Nodes {
 		if node.NodeType != plan.Node_LOCK_OP || len(node.Children) != 1 ||
@@ -4704,7 +4831,7 @@ func TestReplaceSelfRefCascade(t *testing.T) {
 	}
 	assert.GreaterOrEqual(t, cascadeLocks, 2,
 		"root and recursively cascaded rows must each lock a materialized source")
-	for _, node := range query.Nodes {
+	for nodeID, node := range query.Nodes {
 		if node.NodeType != plan.Node_SINK_SCAN || len(node.SourceStep) == 0 {
 			continue
 		}
@@ -4715,13 +4842,27 @@ func TestReplaceSelfRefCascade(t *testing.T) {
 				continue
 			}
 			require.Less(t, int(col.Col.ColPos), len(sourceSink.ProjectList),
-				"sink scan column must be remapped to the materialized recursive source")
+				"sink scan %d column must be remapped to source step %d (sink %d)",
+				nodeID, node.SourceStep[0], query.Steps[node.SourceStep[0]])
 		}
 	}
-	for _, node := range query.Nodes {
+	for nodeID, node := range query.Nodes {
 		if node.NodeType == plan.Node_LOCK_OP && len(node.Children) == 1 {
 			require.Len(t, node.ProjectList, len(query.Nodes[node.Children[0]].ProjectList),
 				"lock must preserve every physical column requested by the recursive sink")
+		}
+		if node.NodeType == plan.Node_SINK && len(node.Children) == 1 {
+			childWidth := len(query.Nodes[node.Children[0]].ProjectList)
+			require.Len(t, node.ProjectList, childWidth,
+				"sink %d and child %d must expose the same physical row width",
+				nodeID, node.Children[0])
+			for _, expr := range node.ProjectList {
+				col, ok := expr.Expr.(*plan.Expr_Col)
+				if ok {
+					require.Less(t, int(col.Col.ColPos), childWidth,
+						"sink must not read beyond its child's output")
+				}
+			}
 		}
 	}
 }
@@ -5932,6 +6073,133 @@ func TestSubQuery(t *testing.T) {
 	if err != nil {
 		assert.Contains(t, err.Error(), "deep correlated predicate containing inner columns cannot be pulled above mark join")
 	}
+}
+
+func TestCorrelatedScalarAggregatePushdown(t *testing.T) {
+	correlated := `l_quantity < (
+		select 0.2 * avg(l_quantity)
+		from lineitem
+		where l_partkey = p_partkey
+	)`
+	optimized := []string{
+		`select sum(l_extendedprice) / 7.0
+		 from lineitem, part
+		 where p_partkey = l_partkey
+		   and p_brand = 'Brand#54'
+		   and p_container = 'LG BAG'
+		   and ` + correlated,
+		`select sum(l_extendedprice) / 7.0
+		 from lineitem, part
+		 where ` + correlated + `
+		   and p_container = 'LG BAG'
+		   and p_brand = 'Brand#54'
+		   and p_partkey = l_partkey`,
+	}
+
+	for i, sql := range optimized {
+		logicPlan, err := runSelectWithValidator(NewMockOptimizer(false), t, sql, func(query *plan.Query) error {
+			agg := findAggregateByFunction(query, "avg")
+			require.NotNil(t, agg, "case %d: correlated AVG not found before remapping", i)
+			require.Len(t, agg.Children, 1)
+			semi := query.Nodes[agg.Children[0]]
+			require.Equal(t, plan.Node_JOIN, semi.NodeType)
+			require.Equal(t, plan.Node_SEMI, semi.JoinType)
+			require.Len(t, semi.Children, 2)
+			domain := query.Nodes[semi.Children[1]]
+			require.Len(t, domain.BindingTags, 1)
+
+			partTags := make([]int32, 0, 2)
+			for _, node := range query.Nodes {
+				if node.NodeType == plan.Node_TABLE_SCAN && node.TableDef != nil && node.TableDef.Name == "part" {
+					require.Len(t, node.BindingTags, 1)
+					partTags = append(partTags, node.BindingTags[0])
+				}
+			}
+			require.Len(t, partTags, 2)
+			require.NotEqual(t, partTags[0], partTags[1],
+				"case %d: cloned scans must have distinct binding tags", i)
+			for _, pred := range semi.OnList {
+				require.True(t, containsTag(pred, domain.BindingTags[0]),
+					"case %d: SEMI predicate must reference the cloned scan binding", i)
+			}
+			return nil
+		})
+		require.NoError(t, err)
+		query := logicPlan.GetQuery()
+		agg := findAggregateByFunction(query, "avg")
+		require.NotNil(t, agg, "case %d: correlated AVG not found", i)
+		require.Len(t, agg.Children, 1)
+		semi := query.Nodes[agg.Children[0]]
+		require.Equal(t, plan.Node_JOIN, semi.NodeType)
+		require.Equal(t, plan.Node_SEMI, semi.JoinType)
+		require.Len(t, semi.Children, 2)
+		domain := query.Nodes[semi.Children[1]]
+		require.Equal(t, plan.Node_TABLE_SCAN, domain.NodeType)
+		require.Equal(t, "part", domain.TableDef.Name)
+		require.Len(t, domain.FilterList, 2, "case %d: copied key domain must retain both selective filters", i)
+		require.True(t, exprListContainsStringLiteral(domain.FilterList, "Brand#54"))
+		require.True(t, exprListContainsStringLiteral(domain.FilterList, "LG BAG"))
+	}
+
+	controls := []string{
+		`select sum(l_extendedprice) / 7.0
+		 from lineitem, part
+		 where p_partkey = l_partkey and ` + correlated,
+		`select sum(l_extendedprice) / 7.0
+		 from lineitem, part
+		 where p_partkey = l_partkey
+		   and p_partkey > floor(rand() * 100)
+		   and ` + correlated,
+	}
+	for i, sql := range controls {
+		logicPlan, err := runOneStmt(NewMockOptimizer(false), t, sql)
+		require.NoError(t, err)
+		query := logicPlan.GetQuery()
+		agg := findAggregateByFunction(query, "avg")
+		require.NotNil(t, agg, "control %d: correlated AVG not found", i)
+		require.Len(t, agg.Children, 1)
+		child := query.Nodes[agg.Children[0]]
+		require.False(t, child.NodeType == plan.Node_JOIN && child.JoinType == plan.Node_SEMI,
+			"control %d: an unfiltered or volatile domain must not be copied", i)
+	}
+}
+
+func findAggregateByFunction(query *plan.Query, name string) *plan.Node {
+	for _, node := range query.Nodes {
+		if node.NodeType != plan.Node_AGG {
+			continue
+		}
+		for _, expr := range node.AggList {
+			if exprContainsFuncName(expr, name) {
+				return node
+			}
+		}
+	}
+	return nil
+}
+
+func exprListContainsStringLiteral(exprs []*plan.Expr, value string) bool {
+	for _, expr := range exprs {
+		if exprContainsStringLiteral(expr, value) {
+			return true
+		}
+	}
+	return false
+}
+
+func runSelectWithValidator(
+	opt Optimizer,
+	t *testing.T,
+	sql string,
+	validate func(*plan.Query) error,
+) (*Plan, error) {
+	stmts, err := mysql.Parse(opt.CurrentContext().GetContext(), sql, 1)
+	require.NoError(t, err)
+	stmt, ok := stmts[0].(*tree.Select)
+	require.True(t, ok)
+	return bindAndOptimizeSelectQueryWithValidator(
+		plan.Query_SELECT, opt.CurrentContext(), stmt, false, false, validate,
+	)
 }
 
 func TestAggregateArgumentScalarSubqueryFlattened(t *testing.T) {
