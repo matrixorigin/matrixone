@@ -15,7 +15,10 @@
 package versions
 
 import (
+	"encoding/json"
 	"fmt"
+	"strconv"
+	"strings"
 
 	"go.uber.org/zap"
 
@@ -135,8 +138,13 @@ type UpgradeEntry struct {
 	// return true if the system is already in the final state and does not need to be upgraded,
 	// otherwise return false
 	CheckFunc func(txn executor.TxnExecutor, accountId uint32) (bool, error)
-	PreSql    string
-	PostSql   string
+	// RequiredProtocolVersion delays an upgrade entry until every service in the
+	// deployment reports the protocol understood by the persisted metadata it
+	// installs. The check is performed only when the entry still needs work, so
+	// an already-completed upgrade remains idempotent during a rolling restart.
+	RequiredProtocolVersion int64
+	PreSql                  string
+	PostSql                 string
 }
 
 // Upgrade entity execution upgrade entrance
@@ -151,33 +159,93 @@ func (u *UpgradeEntry) Upgrade(txn executor.TxnExecutor, accountId uint32) error
 
 	if exist {
 		return nil
-	} else {
-		// 1. First, judge whether there is prefix sql
-		if u.PreSql != "" {
-			res, err := txn.Exec(u.PreSql, statementOption)
-			if err != nil {
-				getLogger(txn.Txn().TxnOptions().CN).Error("execute upgrade entry pre-sql error", zap.Error(err), zap.String("upgrade entry", u.String()))
-				return err
-			}
-			res.Close()
+	}
+	if u.RequiredProtocolVersion > 0 {
+		if txn == nil {
+			return moerr.NewNotSupportedNoCtxf(
+				"upgrade %s requires protocol version %d, transaction is unavailable",
+				u.TableName, u.RequiredProtocolVersion)
 		}
+		if err := checkCommonProtocolVersion(txn, u.RequiredProtocolVersion); err != nil {
+			return err
+		}
+	}
 
-		// 2. Second, Execute upgrade sql
-		res, err := txn.Exec(u.UpgSql, statementOption)
+	// 1. First, judge whether there is prefix sql
+	if u.PreSql != "" {
+		res, err := txn.Exec(u.PreSql, statementOption)
 		if err != nil {
-			getLogger(txn.Txn().TxnOptions().CN).Error("execute upgrade entry sql error", zap.Error(err), zap.String("upgrade entry", u.String()))
+			getLogger(txn.Txn().TxnOptions().CN).Error("execute upgrade entry pre-sql error", zap.Error(err), zap.String("upgrade entry", u.String()))
 			return err
 		}
 		res.Close()
+	}
 
-		// 2. Third, after the upgrade is completed, judge whether there is post-sql
-		if u.PostSql != "" {
-			res, err = txn.Exec(u.PostSql, statementOption)
-			if err != nil {
-				getLogger(txn.Txn().TxnOptions().CN).Error("execute upgrade entry post-sql error", zap.Error(err), zap.String("upgrade entry", u.String()))
-				return err
-			}
-			res.Close()
+	// 2. Second, Execute upgrade sql
+	res, err := txn.Exec(u.UpgSql, statementOption)
+	if err != nil {
+		getLogger(txn.Txn().TxnOptions().CN).Error("execute upgrade entry sql error", zap.Error(err), zap.String("upgrade entry", u.String()))
+		return err
+	}
+	res.Close()
+
+	// 2. Third, after the upgrade is completed, judge whether there is post-sql
+	if u.PostSql != "" {
+		res, err = txn.Exec(u.PostSql, statementOption)
+		if err != nil {
+			getLogger(txn.Txn().TxnOptions().CN).Error("execute upgrade entry post-sql error", zap.Error(err), zap.String("upgrade entry", u.String()))
+			return err
+		}
+		res.Close()
+	}
+	return nil
+}
+
+// checkCommonProtocolVersion asks every CN for its rollout value. A local
+// runtime can already be at the new version while a same-version, lower-offset
+// CN is still serving traffic, so checking only the upgrader would publish an
+// information_schema view that the older CN cannot plan.
+func checkCommonProtocolVersion(txn executor.TxnExecutor, required int64) error {
+	res, err := txn.Exec(
+		"SELECT mo_ctl('cn', 'GetProtocolVersion', '')",
+		executor.StatementOption{},
+	)
+	if err != nil {
+		return err
+	}
+	defer res.Close()
+
+	var encoded string
+	res.ReadRows(func(rows int, cols []*vector.Vector) bool {
+		if rows == 0 || len(cols) == 0 || cols[0].IsNull(0) {
+			return false
+		}
+		encoded = cols[0].GetStringAt(0)
+		return false
+	})
+	if encoded == "" {
+		return moerr.NewNotSupportedNoCtxf(
+			"upgrade requires all CNs to support protocol version %d: no protocol response", required)
+	}
+
+	var envelope struct {
+		Result string `json:"result"`
+	}
+	if err := json.Unmarshal([]byte(encoded), &envelope); err != nil {
+		return moerr.NewNotSupportedNoCtxf(
+			"upgrade requires all CNs to support protocol version %d: invalid protocol response", required)
+	}
+	for _, nodeVersion := range strings.Split(envelope.Result, ",") {
+		nodeVersion = strings.TrimSpace(nodeVersion)
+		separator := strings.LastIndexByte(nodeVersion, ':')
+		if separator < 0 {
+			return moerr.NewNotSupportedNoCtxf(
+				"upgrade requires all CNs to support protocol version %d: invalid node version %q", required, nodeVersion)
+		}
+		version, parseErr := strconv.ParseInt(strings.TrimSpace(nodeVersion[separator+1:]), 10, 64)
+		if parseErr != nil || version < required {
+			return moerr.NewNotSupportedNoCtxf(
+				"upgrade requires all CNs to support protocol version %d: node %q is at version %d", required, nodeVersion[:separator], version)
 		}
 	}
 	return nil

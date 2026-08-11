@@ -74,7 +74,10 @@ show variables where variable_name like 'system%' and variable_name != 'system_t
 select @@system_time_zone != '';
 
 -- transaction_isolation, enum type
+-- transaction isolation follows the service configuration
+-- @ignore:1
 show variables like 'trans%';
+-- @ignore:1
 show variables like 'transaction_isolation';
 
 -- wait_timeout
@@ -196,12 +199,17 @@ set character_set_server = default;
 show variables like 'character_set_server';
 
 --enum type
+-- transaction isolation follows the service configuration
+-- @ignore:1
 show variables like 'transaction_isolation';
 set transaction_isolation = default;
+-- @ignore:1
 show variables like 'transaction_isolation';
 
+-- @ignore:1
 show variables like 'tx_isolation';
 set tx_isolation = default;
+-- @ignore:1
 show variables like 'tx_isolation';
 
 select @@sql_mode;
