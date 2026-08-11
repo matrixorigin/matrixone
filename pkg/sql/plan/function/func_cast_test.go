@@ -4618,40 +4618,6 @@ func TestCompatibilityModeFromProcess(t *testing.T) {
 	require.Equal(t, SQLCompatibilityMatrixOne, CompatibilityModeFromProcess(proc))
 }
 
-func TestMySQLNumericDecimalCastIsContextSpecific(t *testing.T) {
-	proc := testutil.NewProcess(t)
-	source := vector.NewVec(types.T_text.ToType())
-	defer source.Free(proc.Mp())
-	for _, value := range []string{
-		"abc",
-		"2026-08-10 12:34:56",
-		"0.123456789012345678901234567890tail",
-	} {
-		require.NoError(t, vector.AppendBytes(source, []byte(value), false, proc.Mp()))
-	}
-
-	target := types.New(types.T_decimal256, 65, 30)
-	result := vector.NewFunctionResultWrapper(target, proc.Mp()).(*vector.FunctionResult[types.Decimal256])
-	defer result.Free()
-	require.NoError(t, result.PreExtendAndReset(source.Length()))
-	require.NoError(t, strToDecimal256(
-		vector.GenerateFunctionStrParameter(source), result, source.Length(), nil, castModeMySQLNumeric))
-	got := vector.MustFixedColWithTypeCheck[types.Decimal256](result.GetResultVector())
-	require.Equal(t, "0.000000000000000000000000000000", got[0].Format(target.Scale))
-	require.Equal(t, "2026.000000000000000000000000000000", got[1].Format(target.Scale))
-	require.Equal(t, "0.123456789012345678901234567890", got[2].Format(target.Scale))
-
-	strictResult := vector.NewFunctionResultWrapper(target, proc.Mp()).(*vector.FunctionResult[types.Decimal256])
-	defer strictResult.Free()
-	require.NoError(t, strictResult.PreExtendAndReset(1))
-	strictSource, err := vector.NewConstBytes(types.T_text.ToType(), []byte("abc"), 1, proc.Mp())
-	require.NoError(t, err)
-	defer strictSource.Free(proc.Mp())
-	err = strToDecimal256(
-		vector.GenerateFunctionStrParameter(strictSource), strictResult, 1, nil, castModeNormal)
-	require.Error(t, err, "ordinary implicit DECIMAL casts must remain strict")
-}
-
 func TestParseStringToFloatWithBitSize(t *testing.T) {
 	t.Run("mysql_default_range_handling", func(t *testing.T) {
 		got32, err := parseStringToFloatWithBitSize("1e100", 32, SQLCompatibilityMySQL)

@@ -720,12 +720,126 @@ func binaryProtocolPrepareParamKind(
 	}
 }
 
-func preparedParamBindingType(kind vector.PrepareParamKind, _ []byte) types.Type {
+const preparedNumericTextBindingCharset = uint8(255)
+
+const (
+	preparedNumericTextExact int32 = iota + 1
+	preparedNumericTextPrefix
+	preparedNumericTextFloat
+)
+
+func preparedParamBindingType(kind vector.PrepareParamKind, value []byte) types.Type {
 	switch kind {
+	case vector.PrepareParamInteger:
+		if len(value) > 0 && value[0] == '-' {
+			return types.T_int64.ToType()
+		}
+		return types.T_uint64.ToType()
 	case vector.PrepareParamFloat:
 		return types.T_float64.ToType()
+	case vector.PrepareParamDecimal:
+		width, scale, _, _ := preparedNumericTextDomain(value)
+		return decimalTypeForPreparedValue(width, scale)
+	case vector.PrepareParamBoolean:
+		return types.T_bool.ToType()
 	}
-	return types.Type{}
+
+	width, scale, full, exponent := preparedNumericTextDomain(value)
+	binding := types.T_text.ToType()
+	binding.Charset = preparedNumericTextBindingCharset
+	binding.Width = width
+	binding.Scale = scale
+	switch {
+	case exponent && (!full || width-scale > 35 || scale > 30):
+		binding.Size = preparedNumericTextFloat
+	case full:
+		binding.Size = preparedNumericTextExact
+	default:
+		binding.Size = preparedNumericTextPrefix
+	}
+	return binding
+}
+
+func decimalTypeForPreparedValue(width, scale int32) types.Type {
+	width = max(width, 1)
+	switch {
+	case width <= 18:
+		return types.New(types.T_decimal64, width, scale)
+	case width <= 38:
+		return types.New(types.T_decimal128, width, scale)
+	default:
+		return types.New(types.T_decimal256, min(width, 76), min(scale, 76))
+	}
+}
+
+// preparedNumericTextDomain scans only the numeric prefix and caps all counts
+// at 77. It never expands the exponent or allocates proportionally to its
+// numeric value.
+func preparedNumericTextDomain(value []byte) (width, scale int32, full, exponent bool) {
+	const capDigits = int64(77)
+	i := 0
+	for i < len(value) && (value[i] == ' ' || value[i] == '\t' || value[i] == '\n' || value[i] == '\r') {
+		i++
+	}
+	if i < len(value) && (value[i] == '+' || value[i] == '-') {
+		i++
+	}
+	integerDigits, fractionalDigits := int64(0), int64(0)
+	rawIntegerDigits := 0
+	for i < len(value) && value[i] >= '0' && value[i] <= '9' {
+		rawIntegerDigits++
+		if value[i] != '0' || integerDigits > 0 {
+			integerDigits = min(integerDigits+1, capDigits)
+		}
+		i++
+	}
+	if rawIntegerDigits > 0 && integerDigits == 0 {
+		integerDigits = 1
+	}
+	hasDigits := rawIntegerDigits > 0
+	if i < len(value) && value[i] == '.' {
+		i++
+		for i < len(value) && value[i] >= '0' && value[i] <= '9' {
+			fractionalDigits = min(fractionalDigits+1, capDigits)
+			i++
+		}
+		hasDigits = hasDigits || fractionalDigits > 0
+	}
+	exp := int64(0)
+	if hasDigits && i < len(value) && (value[i] == 'e' || value[i] == 'E') {
+		exponent = true
+		expAt := i
+		i++
+		negative := false
+		if i < len(value) && (value[i] == '+' || value[i] == '-') {
+			negative = value[i] == '-'
+			i++
+		}
+		expDigits := 0
+		for i < len(value) && value[i] >= '0' && value[i] <= '9' {
+			exp = min(exp*10+int64(value[i]-'0'), capDigits)
+			expDigits++
+			i++
+		}
+		if expDigits == 0 {
+			i = expAt
+			exponent = false
+			exp = 0
+		} else if negative {
+			exp = -exp
+		}
+	}
+	for i < len(value) && (value[i] == ' ' || value[i] == '\t' || value[i] == '\n' || value[i] == '\r') {
+		i++
+	}
+	full = hasDigits && i == len(value)
+	if !hasDigits {
+		return 1, 0, false, false
+	}
+	integral := max(integerDigits+exp, 0)
+	scale64 := max(fractionalDigits-exp, 0)
+	width64 := min(integral+scale64, capDigits)
+	return int32(max(width64, 1)), int32(min(scale64, capDigits)), full, exponent
 }
 
 func preparedParamBindingTypes(
@@ -833,11 +947,22 @@ func initPreparedExecuteParams(
 				kinds[i] = kind
 			}
 		}
+		bindingTypes := preparedParamBindingTypes(prepareStmt.params, kinds, numParams)
+		for i := 0; i < paramCount && i*2+1 < len(prepareStmt.ParamTypes); i++ {
+			if i >= len(kinds) || kinds[i] != vector.PrepareParamInteger || bindingTypes == nil {
+				continue
+			}
+			if prepareStmt.ParamTypes[i*2+1]&0x80 != 0 {
+				bindingTypes[i] = types.T_uint64.ToType()
+			} else {
+				bindingTypes[i] = types.T_int64.ToType()
+			}
+		}
 		return &preparedExecuteParamState{
 			params:       prepareStmt.params,
 			paramVals:    preparedParamValues(prepareStmt.params, nil),
 			paramKinds:   kinds,
-			bindingTypes: preparedParamBindingTypes(prepareStmt.params, kinds, numParams),
+			bindingTypes: bindingTypes,
 		}, nil
 	} else if execPlan != nil && len(execPlan.Args) > 0 {
 		if len(execPlan.Args) != numParams {

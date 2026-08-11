@@ -865,15 +865,6 @@ var supportedStringBuiltIns = []FuncNew{
 					return greatestYearNumericFn
 				},
 			},
-			{
-				overloadId: leastGreatestMySQLNumericTextOverload,
-				retType: func(parameters []types.Type) types.Type {
-					return leastGreatestReturnType(parameters)
-				},
-				newOp: func() executeLogicOfOverload {
-					return greatestMySQLNumericTextFn
-				},
-			},
 		},
 	},
 
@@ -2383,15 +2374,6 @@ var supportedStringBuiltIns = []FuncNew{
 				},
 				newOp: func() executeLogicOfOverload {
 					return leastYearNumericFn
-				},
-			},
-			{
-				overloadId: leastGreatestMySQLNumericTextOverload,
-				retType: func(parameters []types.Type) types.Type {
-					return leastGreatestReturnType(parameters)
-				},
-				newOp: func() executeLogicOfOverload {
-					return leastMySQLNumericTextFn
 				},
 			},
 		},

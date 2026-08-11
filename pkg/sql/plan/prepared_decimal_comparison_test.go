@@ -42,6 +42,12 @@ func makePreparedDecimalComparisonParam(pos int32) *planpb.Expr {
 	}
 }
 
+func makeRuntimeNumericPreparedParam(pos, mode, width, scale int32) *planpb.Expr {
+	expr := makePreparedDecimalComparisonParam(pos)
+	expr.Typ.Enumvalues = fmt.Sprintf("mo_runtime_numeric:%d:%d:%d", mode, width, scale)
+	return expr
+}
+
 func preparedDecimalCommonType() types.Type {
 	return types.New(types.T_decimal256, 65, 30)
 }
@@ -283,8 +289,8 @@ func TestPreparedDecimalCommonTypeFunctionsDeriveParamType(t *testing.T) {
 					require.NotNil(t, expr.GetF().Args[paramPos].GetF())
 					require.NotNil(t, expr.GetF().Args[paramPos].GetF().Args[0].GetP())
 					_, overloadID := function.DecodeOverloadID(expr.GetF().Args[paramPos].GetF().Func.Obj)
-					require.Equal(t, int32(2), overloadID,
-						"only prepared DECIMAL common-type parameters use MySQL numeric-prefix conversion")
+					require.Equal(t, int32(0), overloadID,
+						"prepared DECIMAL common-type parameters must use the legacy CAST overload")
 				})
 			}
 		}
@@ -340,25 +346,10 @@ func TestPreparedDecimalCommonTypeFunctionsDoNotNarrowUnrepresentableDomains(t *
 					makePreparedDecimalComparisonParam(0),
 					makePreparedDecimalComparisonColumn(test.peer),
 				}
-				resolutionTypes := decimalParamCommonTypeResolutionTypes(name, args, []types.Type{
-					types.T_text.ToType(), test.peer,
-				})
-				require.Equal(t, types.T_text, resolutionTypes[0].Oid)
-				require.True(t, resolutionTypes[1].Eq(test.peer))
 				expr, err := BindFuncExprImplByPlanExpr(ctx, name, args)
 				require.NoError(t, err)
-				require.True(t, types.T(expr.Typ.Id).IsMySQLString())
-				_, overloadID := function.DecodeOverloadID(expr.GetF().Func.Obj)
-				if name == "greatest" || name == "least" {
-					require.Equal(t, function.LeastGreatestMySQLNumericTextOverloadID, overloadID)
-				} else {
-					require.NotEqual(t, function.LeastGreatestMySQLNumericTextOverloadID, overloadID)
-				}
-				paramArg := expr.GetF().Args[0]
-				require.True(t, types.T(paramArg.Typ.Id).IsMySQLString())
-				require.True(t, planExprContainsPreparedDecimalParam(paramArg))
-				peerArg := expr.GetF().Args[1]
-				require.True(t, types.T(peerArg.Typ.Id).IsMySQLString())
+				require.True(t, types.T(expr.Typ.Id).IsMySQLString(),
+					"the prepare-time placeholder plan is never executed before runtime replanning")
 			})
 		}
 	}
@@ -427,7 +418,60 @@ func TestPreparedDecimalCommonTypeExtremeDecimalWithFloatUsesDouble(t *testing.T
 				require.NoError(t, err)
 				require.Equal(t, int32(types.T_float64), expr.Typ.Id)
 				_, overloadID := function.DecodeOverloadID(expr.GetF().Func.Obj)
-				require.NotEqual(t, function.LeastGreatestMySQLNumericTextOverloadID, overloadID)
+				if name == "greatest" || name == "least" {
+					require.LessOrEqual(t, overloadID, int32(3))
+				}
+			})
+		}
+	}
+}
+
+func TestRuntimePreparedDecimalCommonTypeUsesValueDomain(t *testing.T) {
+	ctx := context.Background()
+	peer := types.New(types.T_decimal256, 65, 0)
+	tests := []struct {
+		name      string
+		param     *planpb.Expr
+		wantType  types.T
+		wantWidth int32
+		wantScale int32
+		wantErr   bool
+	}{
+		{name: "native sized decimal", param: makeRuntimeNumericPreparedParam(0, 1, 3, 1), wantType: types.T_decimal256, wantWidth: 66, wantScale: 1},
+		{name: "numeric prefix", param: makeRuntimeNumericPreparedParam(0, 2, 3, 1), wantType: types.T_decimal256, wantWidth: 66, wantScale: 1},
+		{name: "large exponent", param: makeRuntimeNumericPreparedParam(0, 3, 77, 0), wantType: types.T_float64},
+		{name: "unrepresentable exact fraction", param: makeRuntimeNumericPreparedParam(0, 1, 12, 12), wantErr: true},
+	}
+	for _, name := range []string{"coalesce", "greatest", "least"} {
+		for _, test := range tests {
+			t.Run(name+"/"+test.name, func(t *testing.T) {
+				args := []*planpb.Expr{DeepCopyExpr(test.param), makePreparedDecimalComparisonColumn(peer)}
+				_, _, found := runtimePreparedNumericType(args[0])
+				require.True(t, found)
+				resolution := decimalParamCommonTypeResolutionTypes(name, args, []types.Type{types.T_text.ToType(), peer})
+				if !test.wantErr {
+					if test.wantType.IsDecimal() {
+						require.True(t, resolution[0].Oid.IsDecimal())
+					} else {
+						require.Equal(t, test.wantType, resolution[0].Oid)
+					}
+				}
+				expr, err := BindFuncExprImplByPlanExpr(ctx, name, args)
+				if test.wantErr {
+					require.ErrorContains(t, err, "exceeding DECIMAL256 limit 76")
+					return
+				}
+				require.NoError(t, err)
+				require.Equal(t, int32(test.wantType), expr.Typ.Id)
+				if test.wantType.IsDecimal() {
+					require.Equal(t, test.wantWidth, expr.Typ.Width)
+					require.Equal(t, test.wantScale, expr.Typ.Scale)
+				}
+				if test.name == "numeric prefix" {
+					paramCast := expr.GetF().Args[0].GetF()
+					require.NotNil(t, paramCast)
+					require.Equal(t, int32(types.T_float64), paramCast.Args[0].Typ.Id)
+				}
 			})
 		}
 	}

@@ -893,7 +893,6 @@ const (
 	castModeExplicit
 	castModeAssignment
 	castModeAssignmentIgnore
-	castModeMySQLNumeric
 )
 
 func (m castMode) strictStringWidth() bool {
@@ -962,15 +961,6 @@ func sqlModeIsStrict(mode string) bool {
 
 func NewExplicitCast(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	return newCast(parameters, result, proc, length, selectList, castModeExplicit, false)
-}
-
-// NewMySQLNumericCast is reserved for direct prepared parameters whose
-// surrounding common-type function has already selected DECIMAL. MySQL uses
-// numeric-prefix conversion in that context; keeping it as a separate cast
-// overload prevents the permissive rule from leaking into arithmetic,
-// aggregate, assignment, or explicit CAST expressions.
-func NewMySQLNumericCast(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return newCast(parameters, result, proc, length, selectList, castModeMySQLNumeric, false)
 }
 
 func newCast(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList, mode castMode, allowTrailingSpaceTrim bool) error {
@@ -6689,9 +6679,6 @@ func strToDecimal64(
 			s := convertByteSliceToString(v)
 			if !isb {
 				isExplicit := mode == castModeExplicit
-				if mode == castModeMySQLNumeric {
-					s = mysqlNumericDecimalPrefix(s)
-				}
 				var result types.Decimal64
 				var err error
 				if isExplicit {
@@ -6887,9 +6874,6 @@ func strToDecimal128(
 			s := convertByteSliceToString(v)
 			if !isb {
 				isExplicit := mode == castModeExplicit
-				if mode == castModeMySQLNumeric {
-					s = mysqlNumericDecimalPrefix(s)
-				}
 				var result types.Decimal128
 				var err error
 				if isExplicit {
@@ -6973,9 +6957,6 @@ func strToDecimal256(
 			s := convertByteSliceToString(v)
 			if !isb {
 				isExplicit := mode == castModeExplicit
-				if mode == castModeMySQLNumeric {
-					s = mysqlNumericDecimalPrefix(s)
-				}
 				var result types.Decimal256
 				var err error
 				if isExplicit {
@@ -7006,14 +6987,6 @@ func strToDecimal256(
 		}
 	}
 	return nil
-}
-
-func mysqlNumericDecimalPrefix(s string) string {
-	prefix, _, ok := scanDecimalFloatPrefix(s)
-	if !ok {
-		return "0"
-	}
-	return prefix
 }
 
 func clampDecimal256Value(negative bool, width, scale int32) (types.Decimal256, error) {
