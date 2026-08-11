@@ -320,10 +320,13 @@ func DeduceNotNullable(overloadID int64, args []*plan.Expr) bool {
 		}
 		return true
 	// These STRICT functions can synthesize NULL from non-NULL arguments.
+	// The UUID extractors do so for non-RFC-4122 variants, and
+	// uuid_extract_timestamp also for versions without a time source (e.g. v4).
 	case DIV, INTEGER_DIV, MOD,
 		JSON_EXTRACT, JSON_EXTRACT_STRING, JSON_EXTRACT_FLOAT64,
 		REGEXP_SUBSTR,
-		INET6_ATON, ELT, UNHEX, MAKEDATE:
+		INET6_ATON, ELT, UNHEX, MAKEDATE,
+		UUID_EXTRACT_VERSION, UUID_EXTRACT_TIMESTAMP:
 		return false
 	}
 	if ProducesNoNull(overloadID) {

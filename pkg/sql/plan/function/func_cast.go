@@ -438,7 +438,7 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_decimal64, types.T_decimal128, types.T_decimal256,
 		types.T_date, types.T_datetime,
 		types.T_time, types.T_timestamp,
-		types.T_year,
+		types.T_year, types.T_uuid,
 		types.T_array_float32, types.T_array_float64,
 		types.T_array_bf16, types.T_array_float16, types.T_array_int8, types.T_array_uint8,
 		types.T_datalink, types.T_geometry, types.T_geometry32,
@@ -1243,6 +1243,8 @@ func scalarNullToOthers(ctx context.Context,
 		return appendNulls[types.Timestamp](result, length, selectList)
 	case types.T_year:
 		return appendNulls[types.MoYear](result, length, selectList)
+	case types.T_uuid:
+		return appendNulls[types.Uuid](result, length, selectList)
 	}
 	return moerr.NewInternalError(ctx, fmt.Sprintf("unsupported cast from NULL to %s", totype))
 }
