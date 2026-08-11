@@ -22,6 +22,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
@@ -29,6 +30,7 @@ import (
 
 const (
 	unpublishedObjectCleanupDir     = "gc/unpublished/"
+	ccprUnpublishedObjectCleanupDir = "gc/ccpr-unpublished/"
 	unpublishedObjectCleanupVersion = 2
 )
 
@@ -37,10 +39,13 @@ const (
 // before the object itself, so a persisted object always has a restart-safe
 // owner even when the object write returns an ambiguous error.
 type UnpublishedObject struct {
-	File        string `json:"file"`
-	DBID        uint64 `json:"db_id"`
-	TableID     uint64 `json:"table_id"`
-	IsTombstone bool   `json:"is_tombstone"`
+	File                  string `json:"file"`
+	DBID                  uint64 `json:"db_id"`
+	TableID               uint64 `json:"table_id"`
+	IsTombstone           bool   `json:"is_tombstone"`
+	TNShardID             uint64 `json:"tn_shard_id,omitempty"`
+	SyncProtectionJobID   string `json:"sync_protection_job_id,omitempty"`
+	SyncProtectionValidTS int64  `json:"sync_protection_valid_ts,omitempty"`
 }
 
 type unpublishedObjectCleanupIntent struct {
@@ -71,6 +76,33 @@ func RecordUnpublishedObjectCleanup(
 	fs fileservice.FileService,
 	object UnpublishedObject,
 ) (string, error) {
+	return recordUnpublishedObjectCleanup(
+		ctx, fs, unpublishedObjectCleanupDir, object)
+}
+
+// RecordCCPRUnpublishedObjectCleanup records a publication-owned object in
+// shared storage. Keeping publication intents in a separate namespace prevents
+// a TN-local active-writer fence from being mistaken for a cross-CN fence.
+func RecordCCPRUnpublishedObjectCleanup(
+	ctx context.Context,
+	fs fileservice.FileService,
+	object UnpublishedObject,
+) (string, error) {
+	if object.DBID == 0 || object.TableID == 0 || object.TNShardID == 0 ||
+		object.SyncProtectionJobID == "" || object.SyncProtectionValidTS <= 0 {
+		return "", moerr.NewInternalErrorNoCtx(
+			"CCPR unpublished object requires catalog and sync protection ownership")
+	}
+	return recordUnpublishedObjectCleanup(
+		ctx, fs, ccprUnpublishedObjectCleanupDir, object)
+}
+
+func recordUnpublishedObjectCleanup(
+	ctx context.Context,
+	fs fileservice.FileService,
+	dir string,
+	object UnpublishedObject,
+) (string, error) {
 	if object.File == "" {
 		return "", moerr.NewInternalErrorNoCtx(
 			"cannot record cleanup for an empty unpublished object")
@@ -83,7 +115,7 @@ func RecordUnpublishedObjectCleanup(
 		return "", err
 	}
 	digest := sha256.Sum256(payload)
-	path := fmt.Sprintf("%s%x.json", unpublishedObjectCleanupDir, digest)
+	path := fmt.Sprintf("%s%x.json", dir, digest)
 	err = fs.Write(ctx, fileservice.IOVector{
 		FilePath: path,
 		Entries: []fileservice.IOEntry{{
@@ -165,18 +197,29 @@ func ListUnpublishedObjectCleanupAfter(
 	after string,
 	limit int,
 ) (markers []string, remaining bool, err error) {
+	return listUnpublishedObjectCleanupAfter(
+		ctx, fs, unpublishedObjectCleanupDir, after, limit)
+}
+
+func listUnpublishedObjectCleanupAfter(
+	ctx context.Context,
+	fs fileservice.FileService,
+	dir string,
+	after string,
+	limit int,
+) (markers []string, remaining bool, err error) {
 	if limit <= 0 {
 		return nil, false, nil
 	}
 	candidates := make(maxMarkerPathHeap, 0, limit+1)
-	for entry, listErr := range fs.List(ctx, unpublishedObjectCleanupDir) {
+	for entry, listErr := range fs.List(ctx, dir) {
 		if listErr != nil {
 			return nil, true, listErr
 		}
 		if entry.IsDir {
 			continue
 		}
-		marker := unpublishedObjectCleanupDir + entry.Name
+		marker := dir + entry.Name
 		if marker <= after {
 			continue
 		}
@@ -253,8 +296,66 @@ func ReplayUnpublishedObjectCleanupPageFrom(
 	remaining bool,
 	err error,
 ) {
-	markers, more, err := ListUnpublishedObjectCleanupAfter(
-		ctx, markerFS, after, limit)
+	return replayUnpublishedObjectCleanupPageFrom(
+		ctx,
+		markerFS,
+		objectFS,
+		unpublishedObjectCleanupDir,
+		decide,
+		onReplayed,
+		onReleaseDeferred,
+		after,
+		limit,
+	)
+}
+
+// ReplayCCPRUnpublishedObjectCleanupPageFrom replays one bounded page of
+// cross-CN publication intents from shared storage.
+func ReplayCCPRUnpublishedObjectCleanupPageFrom(
+	ctx context.Context,
+	fs fileservice.FileService,
+	decide func(UnpublishedObject) (UnpublishedObjectCleanupDecision, error),
+	after string,
+	limit int,
+) (
+	replayed int,
+	inspected int,
+	next string,
+	remaining bool,
+	err error,
+) {
+	return replayUnpublishedObjectCleanupPageFrom(
+		ctx,
+		fs,
+		fs,
+		ccprUnpublishedObjectCleanupDir,
+		decide,
+		nil,
+		nil,
+		after,
+		limit,
+	)
+}
+
+func replayUnpublishedObjectCleanupPageFrom(
+	ctx context.Context,
+	markerFS fileservice.FileService,
+	objectFS fileservice.FileService,
+	dir string,
+	decide func(UnpublishedObject) (UnpublishedObjectCleanupDecision, error),
+	onReplayed func(marker string),
+	onReleaseDeferred func(marker string),
+	after string,
+	limit int,
+) (
+	replayed int,
+	inspected int,
+	next string,
+	remaining bool,
+	err error,
+) {
+	markers, more, err := listUnpublishedObjectCleanupAfter(
+		ctx, markerFS, dir, after, limit)
 	if err != nil {
 		return 0, 0, after, true, err
 	}
@@ -377,7 +478,16 @@ func readUnpublishedObjectCleanup(
 	if err := json.Unmarshal(vector.Entries[0].Data, &intent); err != nil {
 		return unpublishedObjectCleanupIntent{}, err
 	}
-	if intent.Version != unpublishedObjectCleanupVersion || intent.Object.File == "" {
+	invalidProtection := (intent.Object.SyncProtectionJobID == "") !=
+		(intent.Object.SyncProtectionValidTS == 0) ||
+		intent.Object.SyncProtectionValidTS < 0
+	invalidCCPROwner := strings.HasPrefix(
+		path, ccprUnpublishedObjectCleanupDir) &&
+		(intent.Object.DBID == 0 || intent.Object.TableID == 0 ||
+			intent.Object.TNShardID == 0 ||
+			intent.Object.SyncProtectionJobID == "")
+	if intent.Version != unpublishedObjectCleanupVersion ||
+		intent.Object.File == "" || invalidProtection || invalidCCPROwner {
 		return unpublishedObjectCleanupIntent{}, moerr.NewInternalErrorf(
 			ctx,
 			"invalid unpublished object cleanup intent %s version %d",

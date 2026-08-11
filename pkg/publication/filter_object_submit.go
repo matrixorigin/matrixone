@@ -413,6 +413,7 @@ func ApplyObjects(
 	ccprCache CCPRTxnCacheWriter,
 	aobjectMap *AObjectMap,
 	ttlChecker TTLChecker,
+	syncProtections ...CCPRSyncProtection,
 ) (err error) {
 	// Check TTL before starting
 	if ttlChecker != nil && !ttlChecker() {
@@ -453,6 +454,14 @@ func ApplyObjects(
 			tombstoneObjects = append(tombstoneObjects, info)
 		} else {
 			dataObjects = append(dataObjects, info)
+		}
+	}
+	var cleanupOwners map[TableKey]*CCPRObjectCleanupOwner
+	if aobjectMap != nil && len(syncProtections) != 0 {
+		cleanupOwners, err = resolveCCPRObjectCleanupOwners(
+			ctx, accountID, objectMap, txn, cnEngine, syncProtections[0])
+		if err != nil {
+			return err
 		}
 	}
 	if aobjectMap == nil {
@@ -580,7 +589,7 @@ func ApplyObjects(
 		if !info.Delete {
 			statsBytes := info.Stats.Marshal()
 			// Tombstone objects need aobjectMap for rowid rewriting
-			filterJob := NewFilterObjectJob(filterCtx, statsBytes, currentTS, upstreamExecutor, true, fs, mp, getChunkWorker, writeObjectWorker, subscriptionAccountName, pubName, ccprCache, txnID, aobjectMap, ttlChecker)
+			filterJob := NewFilterObjectJob(filterCtx, statsBytes, currentTS, upstreamExecutor, true, fs, mp, getChunkWorker, writeObjectWorker, subscriptionAccountName, pubName, ccprCache, txnID, aobjectMap, ttlChecker, cleanupOwners[TableKey{DBName: info.DBName, TableName: info.TableName}])
 			if filterObjectWorker != nil {
 				if err = filterObjectWorker.SubmitFilterObject(filterJob); err != nil {
 					return
@@ -767,7 +776,7 @@ func appendDownstreamTombstoneStats(
 }
 
 func downstreamObjectIDs(statsList []objectio.ObjectStats) []objectio.ObjectId {
-	var objectIDs []objectio.ObjectId
+	objectIDs := make([]objectio.ObjectId, 0, len(statsList))
 	for i := range statsList {
 		if statsList[i].IsZero() {
 			continue
@@ -775,6 +784,63 @@ func downstreamObjectIDs(statsList []objectio.ObjectStats) []objectio.ObjectId {
 		objectIDs = append(objectIDs, *statsList[i].ObjectName().ObjectId())
 	}
 	return objectIDs
+}
+
+// CCPRSyncProtection identifies the protection lease whose lifetime fences
+// cleanup of unpublished objects created by one ApplyObjects call.
+type CCPRSyncProtection struct {
+	JobID     string
+	TNShardID uint64
+	ValidTS   func() int64
+}
+
+func resolveCCPRObjectCleanupOwners(
+	ctx context.Context,
+	accountID uint32,
+	objectMap map[objectio.ObjectId]*ObjectWithTableInfo,
+	txn client.TxnOperator,
+	cnEngine engine.Engine,
+	protection CCPRSyncProtection,
+) (map[TableKey]*CCPRObjectCleanupOwner, error) {
+	var owners map[TableKey]*CCPRObjectCleanupOwner
+	for _, info := range objectMap {
+		if info.Delete || info.Stats.GetAppendable() || !info.IsTombstone {
+			continue
+		}
+		key := TableKey{DBName: info.DBName, TableName: info.TableName}
+		if _, ok := owners[key]; ok {
+			continue
+		}
+		if cnEngine == nil || protection.JobID == "" ||
+			protection.TNShardID == 0 || protection.ValidTS == nil {
+			return nil, moerr.NewInternalError(
+				ctx, "CCPR durable cleanup owner is not configured")
+		}
+		if owners == nil {
+			owners = make(map[TableKey]*CCPRObjectCleanupOwner)
+		}
+		downstreamCtx := context.WithValue(
+			ctx, defines.TenantIDKey{}, accountID)
+		db, err := cnEngine.Database(downstreamCtx, key.DBName, txn)
+		if err != nil {
+			return nil, moerr.NewInternalErrorf(
+				ctx, "failed to get cleanup-owner database %s: %v", key.DBName, err)
+		}
+		rel, err := db.Relation(downstreamCtx, key.TableName, nil)
+		if err != nil {
+			return nil, moerr.NewInternalErrorf(
+				ctx, "failed to get cleanup-owner relation %s.%s: %v",
+				key.DBName, key.TableName, err)
+		}
+		owners[key] = &CCPRObjectCleanupOwner{
+			DBID:                  rel.GetDBID(downstreamCtx),
+			TableID:               rel.GetTableID(downstreamCtx),
+			TNShardID:             protection.TNShardID,
+			SyncProtectionJobID:   protection.JobID,
+			SyncProtectionValidTS: protection.ValidTS,
+		}
+	}
+	return owners, nil
 }
 
 func appendDownstreamTombstoneObjectIDs(

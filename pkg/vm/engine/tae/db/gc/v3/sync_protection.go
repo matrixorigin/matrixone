@@ -321,6 +321,27 @@ func (m *SyncProtectionManager) HasProtection(jobID string) bool {
 	return ok
 }
 
+// CanCleanupUnpublishedObject reports whether a cross-CN cleanup owner is no
+// longer able to publish. Presence covers active and soft-deleted protections;
+// after a TN restart, the extra TTL past the last known lease prevents cleanup
+// from racing an in-flight writer whose process-local protection was lost.
+func (m *SyncProtectionManager) CanCleanupUnpublishedObject(
+	jobID string,
+	validTS int64,
+) bool {
+	if m == nil || jobID == "" || validTS <= 0 {
+		return false
+	}
+	m.RLock()
+	_, protected := m.protections[jobID]
+	ttl := m.ttl
+	m.RUnlock()
+	if protected {
+		return false
+	}
+	return time.Now().After(time.Unix(0, validTS).Add(ttl))
+}
+
 // IsProtected checks if an object name is protected by any BloomFilter
 func (m *SyncProtectionManager) IsProtected(objectName string) bool {
 	m.RLock()

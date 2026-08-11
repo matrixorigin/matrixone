@@ -745,6 +745,7 @@ func (c *Controller) AssembleDB(ctx context.Context) (err error) {
 		gc2.WithGCProbility(db.Opts.GCCfg.GCProbility),
 		gc2.WithCheckOption(db.Opts.GCCfg.CheckGC),
 		gc2.WithUnpublishedCleanupFS(db.Runtime.LocalFs),
+		gc2.WithUnpublishedCleanupTNShardID(db.Opts.Shard.ShardID),
 		gc2.WithGCCheckpointOption(!db.Opts.CheckpointCfg.DisableGCCheckpoint))
 	cleaner.AddChecker(
 		func(item any) bool {

@@ -50,9 +50,49 @@ type CCPRTxnCacheWriter interface {
 	WriteObject(ctx context.Context, objectName string, txnID []byte) (isNewFile bool, err error)
 	// WriteNewObject registers a caller-generated unique object without a
 	// remote existence probe. It fails if the name is already in flight.
-	WriteNewObject(ctx context.Context, objectName string, txnID []byte) error
+	WriteNewObject(
+		ctx context.Context,
+		object ioutil.UnpublishedObject,
+		txnID []byte,
+	) error
 	// OnFileWritten is called after the file has been successfully written to fileservice.
 	OnFileWritten(objectName string)
+}
+
+// CCPRObjectCleanupOwner supplies the durable catalog and sync-protection
+// identity for one table's attempt-unique publication outputs.
+type CCPRObjectCleanupOwner struct {
+	DBID                  uint64
+	TableID               uint64
+	TNShardID             uint64
+	SyncProtectionJobID   string
+	SyncProtectionValidTS func() int64
+}
+
+func (o *CCPRObjectCleanupOwner) intent(
+	ctx context.Context,
+	file string,
+	isTombstone bool,
+) (ioutil.UnpublishedObject, error) {
+	if o == nil || o.DBID == 0 || o.TableID == 0 || o.TNShardID == 0 ||
+		o.SyncProtectionJobID == "" || o.SyncProtectionValidTS == nil {
+		return ioutil.UnpublishedObject{}, moerr.NewInternalError(
+			ctx, "CCPR durable cleanup owner is not configured")
+	}
+	validTS := o.SyncProtectionValidTS()
+	if validTS <= time.Now().UnixNano() {
+		return ioutil.UnpublishedObject{}, moerr.NewInternalError(
+			ctx, "CCPR sync protection is no longer valid")
+	}
+	return ioutil.UnpublishedObject{
+		File:                  file,
+		DBID:                  o.DBID,
+		TableID:               o.TableID,
+		IsTombstone:           isTombstone,
+		TNShardID:             o.TNShardID,
+		SyncProtectionJobID:   o.SyncProtectionJobID,
+		SyncProtectionValidTS: validTS,
+	}, nil
 }
 
 // FilterObjectResult holds the result of FilterObject
@@ -97,6 +137,7 @@ func FilterObject(
 	txnID []byte,
 	aobjectMap *AObjectMap,
 	ttlChecker TTLChecker,
+	cleanupOwners ...*CCPRObjectCleanupOwner,
 ) (*FilterObjectResult, error) {
 	// Check TTL before processing
 	if ttlChecker != nil && !ttlChecker() {
@@ -113,13 +154,17 @@ func FilterObject(
 
 	// Check if it's an appendable object
 	isAObj := stats.GetAppendable()
+	var cleanupOwner *CCPRObjectCleanupOwner
+	if len(cleanupOwners) != 0 {
+		cleanupOwner = cleanupOwners[0]
+	}
 	if isAObj {
 		// Handle appendable object
 		return filterAppendableObject(ctx, &stats, snapshotTS, upstreamExecutor, localFS, isTombstone, mp, getChunkWorker, subscriptionAccountName, pubName, aobjectMap, ttlChecker)
 	} else {
 		// Handle non-appendable object - write directly to fileservice with new UUID
 		// For tombstone, need to convert to batch and rewrite rowids using aobjectMap
-		newStats, err := filterNonAppendableObject(ctx, &stats, snapshotTS, upstreamExecutor, localFS, isTombstone, mp, getChunkWorker, writeObjectWorker, subscriptionAccountName, pubName, ccprCache, txnID, aobjectMap, ttlChecker)
+		newStats, err := filterNonAppendableObject(ctx, &stats, snapshotTS, upstreamExecutor, localFS, isTombstone, mp, getChunkWorker, writeObjectWorker, subscriptionAccountName, pubName, ccprCache, txnID, cleanupOwner, aobjectMap, ttlChecker)
 		if err != nil {
 			return nil, err
 		}
@@ -370,6 +415,7 @@ func filterNonAppendableObject(
 	pubName string,
 	ccprCache CCPRTxnCacheWriter,
 	txnID []byte,
+	cleanupOwner *CCPRObjectCleanupOwner,
 	aobjectMap *AObjectMap,
 	ttlChecker TTLChecker,
 ) ([]objectio.ObjectStats, error) {
@@ -396,7 +442,7 @@ func filterNonAppendableObject(
 	if isTombstone && aobjectMap != nil {
 		objStats, err := rewriteNonAppendableTombstoneWithSinker(
 			ctx, objectContent, stats, localFS, mp, aobjectMap,
-			ccprCache, txnID,
+			ccprCache, txnID, cleanupOwner,
 		)
 		if err != nil {
 			return nil, err
@@ -638,6 +684,7 @@ func rewriteNonAppendableTombstoneWithSinker(
 	aobjectMap *AObjectMap,
 	ccprCache CCPRTxnCacheWriter,
 	txnID []byte,
+	cleanupOwner *CCPRObjectCleanupOwner,
 ) ([]objectio.ObjectStats, error) {
 	// Step 1: Parse object metadata
 	metaExtent := stats.Extent()
@@ -704,7 +751,8 @@ func rewriteNonAppendableTombstoneWithSinker(
 			"CCPR transaction cleanup owner is required for tombstone rewrite")
 	}
 	sinkerFactory := newCCPRTombstoneFileSinkerFactory(
-		ccprCache, txnID, objectio.HiddenColumnSelection_None)
+		ccprCache, txnID, cleanupOwner,
+		objectio.HiddenColumnSelection_None)
 	attrs, attrTypes := objectio.GetTombstoneSchema(pkType, objectio.HiddenColumnSelection_None)
 
 	sinker := ioutil.NewSinker(
@@ -782,6 +830,7 @@ func cleanupPublicationTombstoneSinker(
 func newCCPRTombstoneFileSinkerFactory(
 	cache CCPRTxnCacheWriter,
 	txnID []byte,
+	cleanupOwner *CCPRObjectCleanupOwner,
 	hidden objectio.HiddenColumnSelection,
 ) ioutil.FileSinkerFactory {
 	return func(mp *mpool.MPool, fs fileservice.FileService) ioutil.FileSinker {
@@ -789,6 +838,7 @@ func newCCPRTombstoneFileSinkerFactory(
 			inner: ioutil.NewTombstoneFSinkerImpl(hidden, mp, fs),
 			cache: cache,
 			txnID: append([]byte(nil), txnID...),
+			owner: cleanupOwner,
 		}
 	}
 }
@@ -797,6 +847,7 @@ type ccprTombstoneFileSinker struct {
 	inner *ioutil.FSinkerImpl
 	cache CCPRTxnCacheWriter
 	txnID []byte
+	owner *CCPRObjectCleanupOwner
 }
 
 func (s *ccprTombstoneFileSinker) Sink(
@@ -818,7 +869,11 @@ func (s *ccprTombstoneFileSinker) Sync(
 		return nil, moerr.NewInternalErrorNoCtx(
 			"CCPR tombstone sinker has no active object")
 	}
-	if err := s.cache.WriteNewObject(ctx, name, s.txnID); err != nil {
+	intent, err := s.owner.intent(ctx, name, true)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.cache.WriteNewObject(ctx, intent, s.txnID); err != nil {
 		return nil, err
 	}
 	stats, err := s.inner.Sync(ctx)

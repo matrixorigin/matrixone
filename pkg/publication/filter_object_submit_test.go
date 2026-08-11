@@ -118,6 +118,72 @@ func TestApplyObjects_NilObjectMap(t *testing.T) {
 	assert.NoError(t, err)
 }
 
+func TestResolveCCPRObjectCleanupOwnersScopesCostToUniqueTombstones(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	rel := mock_frontend.NewMockRelation(ctrl)
+	rel.EXPECT().GetDBID(gomock.Any()).Return(uint64(11))
+	rel.EXPECT().GetTableID(gomock.Any()).Return(uint64(22))
+	db := mock_frontend.NewMockDatabase(ctrl)
+	db.EXPECT().Relation(gomock.Any(), "table", nil).Return(rel, nil)
+	cnEngine := mock_frontend.NewMockEngine(ctrl)
+	cnEngine.EXPECT().Database(gomock.Any(), "db", nil).Return(db, nil)
+
+	tombstoneID := objectio.NewObjectid()
+	dataID := objectio.NewObjectid()
+	owners, err := resolveCCPRObjectCleanupOwners(
+		context.Background(),
+		7,
+		map[objectio.ObjectId]*ObjectWithTableInfo{
+			tombstoneID: {
+				Stats: *objectio.NewObjectStatsWithObjectID(
+					&tombstoneID, false, true, false),
+				DBName:      "db",
+				TableName:   "table",
+				IsTombstone: true,
+			},
+			dataID: {
+				Stats: *objectio.NewObjectStatsWithObjectID(
+					&dataID, false, false, false),
+				DBName:    "db",
+				TableName: "table",
+			},
+		},
+		nil,
+		cnEngine,
+		CCPRSyncProtection{
+			JobID:     "job",
+			TNShardID: 44,
+			ValidTS:   func() int64 { return 33 },
+		},
+	)
+	require.NoError(t, err)
+	require.Equal(t, uint64(11), owners[TableKey{
+		DBName: "db", TableName: "table"}].DBID)
+	require.Equal(t, uint64(22), owners[TableKey{
+		DBName: "db", TableName: "table"}].TableID)
+	require.Equal(t, uint64(44), owners[TableKey{
+		DBName: "db", TableName: "table"}].TNShardID)
+
+	owners, err = resolveCCPRObjectCleanupOwners(
+		context.Background(),
+		7,
+		map[objectio.ObjectId]*ObjectWithTableInfo{
+			dataID: {
+				Stats: *objectio.NewObjectStatsWithObjectID(
+					&dataID, false, false, false),
+				DBName:    "db",
+				TableName: "table",
+			},
+		},
+		nil,
+		nil,
+		CCPRSyncProtection{},
+	)
+	require.NoError(t, err)
+	require.Empty(t, owners,
+		"stable-name data copies must not pay durable-owner lookup cost")
+}
+
 func TestApplyObjects_TTLExpired(t *testing.T) {
 	objectMap := map[objectio.ObjectId]*ObjectWithTableInfo{
 		{}: {DBName: "db1", TableName: "t1"},

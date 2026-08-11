@@ -21,6 +21,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
@@ -28,6 +29,74 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/stretchr/testify/require"
 )
+
+func TestCheckpointCleanerReplaysCCPRCleanupAfterProtectionFence(t *testing.T) {
+	ctx := context.Background()
+	fs, err := fileservice.NewMemoryFS(
+		"shared", fileservice.DisabledCacheConfig, nil)
+	require.NoError(t, err)
+	cleaner := NewCheckpointCleaner(
+		ctx, "", fs, nil, nil, WithUnpublishedCleanupTNShardID(3),
+	).(*checkpointCleaner)
+
+	name := objectio.MockObjectName().String()
+	validTS := time.Now().Add(time.Hour).UnixNano()
+	marker, err := ioutil.RecordCCPRUnpublishedObjectCleanup(
+		ctx,
+		fs,
+		ioutil.UnpublishedObject{
+			File:                  name,
+			DBID:                  1,
+			TableID:               2,
+			IsTombstone:           true,
+			TNShardID:             3,
+			SyncProtectionJobID:   "job",
+			SyncProtectionValidTS: validTS,
+		},
+	)
+	require.NoError(t, err)
+	data := []byte("object")
+	require.NoError(t, fs.Write(ctx, fileservice.IOVector{
+		FilePath: name,
+		Entries: []fileservice.IOEntry{{
+			Offset: 0,
+			Size:   int64(len(data)),
+			Data:   data,
+		}},
+	}))
+	foreignCleaner := NewCheckpointCleaner(
+		ctx, "", fs, nil, nil, WithUnpublishedCleanupTNShardID(4),
+	).(*checkpointCleaner)
+	foreignCleaner.syncProtection.ttl = -2 * time.Hour
+	require.NoError(t, foreignCleaner.replayCCPRUnpublishedObjectCleanup(ctx))
+	_, err = fs.StatFile(ctx, name)
+	require.NoError(t, err, "a foreign TN shard must not delete the object")
+	_, err = fs.StatFile(ctx, marker)
+	require.NoError(t, err, "a foreign TN shard must not release the owner")
+
+	cleaner.syncProtection.Lock()
+	cleaner.syncProtection.protections["job"] = &SyncProtection{JobID: "job"}
+	cleaner.syncProtection.Unlock()
+	require.NoError(t, cleaner.replayCCPRUnpublishedObjectCleanup(ctx))
+	_, err = fs.StatFile(ctx, name)
+	require.NoError(t, err, "active protection must retain the object")
+
+	cleaner.syncProtection.Lock()
+	delete(cleaner.syncProtection.protections, "job")
+	cleaner.syncProtection.ttl = time.Hour
+	cleaner.syncProtection.Unlock()
+	require.NoError(t, cleaner.replayCCPRUnpublishedObjectCleanup(ctx))
+	_, err = fs.StatFile(ctx, name)
+	require.NoError(t, err, "restart grace must retain a recently valid object")
+
+	cleaner.syncProtection.Lock()
+	cleaner.syncProtection.ttl = -2 * time.Hour
+	cleaner.syncProtection.Unlock()
+	require.NoError(t, cleaner.replayCCPRUnpublishedObjectCleanup(ctx))
+	_, err = fs.StatFile(ctx, name)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrFileNotFound),
+		"an expired unowned object must eventually be deleted")
+}
 
 type controllableUnpublishedCleanupFS struct {
 	fileservice.FileService

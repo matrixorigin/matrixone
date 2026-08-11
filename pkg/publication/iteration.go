@@ -1516,6 +1516,7 @@ func ExecuteIteration(
 			err = moerr.NewInternalErrorf(ctx, "failed to renew sync protection before apply: %v", renewErr)
 			return
 		}
+		syncProtectionTTLExpireTS = newTTLExpireTS
 		// Update worker's TTL tracking after successful renew
 		if syncProtectionWorker != nil {
 			syncProtectionWorker.RegisterSyncProtection(syncProtectionJobID, newTTLExpireTS)
@@ -1525,13 +1526,19 @@ func ExecuteIteration(
 	// Create TTL checker for ApplyObjects if sync protection is registered
 	// ttlChecker returns true when TTL is still valid, false when TTL has expired
 	var ttlChecker func() bool
-	if syncProtectionJobID != "" && syncProtectionWorker != nil {
+	if syncProtectionJobID != "" {
 		ttlChecker = func() bool {
-			currentTTL := syncProtectionWorker.GetSyncProtectionTTL(syncProtectionJobID)
+			currentTTL := syncProtectionTTLExpireTS
+			if syncProtectionWorker != nil {
+				currentTTL = syncProtectionWorker.GetSyncProtectionTTL(
+					syncProtectionJobID)
+			}
 			// Return true if TTL is valid (currentTTL > 0 and now < TTL)
 			return currentTTL > 0 && time.Now().UnixNano() < currentTTL
 		}
 	}
+	ccprTNShardID := cnEngine.(*disttae.Engine).GetPrimaryTNShardID(
+		iterationCtx.LocalTxn.GetWorkspace())
 
 	err = ApplyObjects(
 		ctx,
@@ -1554,6 +1561,17 @@ func ExecuteIteration(
 		cnEngine.(*disttae.Engine).GetCCPRTxnCache(),
 		iterationCtx.AObjectMap,
 		ttlChecker,
+		CCPRSyncProtection{
+			JobID:     syncProtectionJobID,
+			TNShardID: ccprTNShardID,
+			ValidTS: func() int64 {
+				if syncProtectionWorker != nil {
+					return syncProtectionWorker.GetSyncProtectionTTL(
+						syncProtectionJobID)
+				}
+				return syncProtectionTTLExpireTS
+			},
+		},
 	)
 	if err != nil {
 		err = moerr.NewInternalErrorf(ctx, "failed to apply object list: %v", err)

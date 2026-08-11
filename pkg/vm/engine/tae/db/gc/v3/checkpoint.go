@@ -48,7 +48,8 @@ type checkpointCleaner struct {
 	ctx context.Context
 
 	// TODO: remove `sid`
-	sid string
+	sid       string
+	tnShardID uint64
 
 	mp *mpool.MPool
 	fs fileservice.FileService
@@ -150,6 +151,8 @@ type checkpointCleaner struct {
 	unpublishedCleanupGeneration atomic.Uint64
 	unpublishedCleanupProcessed  atomic.Uint64
 	unpublishedCleanupReplayMu   sync.Mutex
+	ccprUnpublishedCleanupMu     sync.Mutex
+	ccprUnpublishedCleanupCursor string
 	unpublishedCleanupOwnership  struct {
 		sync.Mutex
 		active       map[string]struct{}
@@ -230,6 +233,14 @@ func WithEstimateRows(
 func WithUnpublishedCleanupFS(fs fileservice.FileService) CheckpointCleanerOption {
 	return func(e *checkpointCleaner) {
 		e.unpublishedCleanupFS = fs
+	}
+}
+
+// WithUnpublishedCleanupTNShardID scopes shared cross-CN cleanup intents to
+// the catalog shard that owns the corresponding transaction writes.
+func WithUnpublishedCleanupTNShardID(shardID uint64) CheckpointCleanerOption {
+	return func(e *checkpointCleaner) {
+		e.tnShardID = shardID
 	}
 }
 
@@ -356,6 +367,15 @@ func (c *checkpointCleaner) Replay(inputCtx context.Context) (err error) {
 
 	ctx, cancel := context.WithCancelCause(inputCtx)
 	defer cancel(nil)
+	defer func() {
+		if err != nil {
+			return
+		}
+		if cleanupErr := c.replayCCPRUnpublishedObjectCleanup(ctx); cleanupErr != nil {
+			logutil.Warn(
+				"GC-CCPR-UNPUBLISHED-REPLAY-DEFERRED", zap.Error(cleanupErr))
+		}
+	}()
 	go func() {
 		select {
 		case <-c.ctx.Done():
@@ -1703,8 +1723,18 @@ func (c *checkpointCleaner) Process(
 	// bounded marker replay on return ensures a degraded marker/object service
 	// cannot make this cycle skip unrelated GC work.
 	defer func() {
-		if cleanupErr := c.replayUnpublishedObjectCleanup(inputCtx); cleanupErr != nil {
+		cleanupCtx, cancel := context.WithTimeoutCause(
+			inputCtx,
+			unpublishedCleanupReplayTimeout,
+			moerr.CauseCleanUpUselessFiles,
+		)
+		defer cancel()
+		if cleanupErr := c.replayUnpublishedObjectCleanup(cleanupCtx); cleanupErr != nil {
 			logutil.Warn("GC-UNPUBLISHED-REPLAY-DEFERRED", zap.Error(cleanupErr))
+		}
+		if cleanupErr := c.replayCCPRUnpublishedObjectCleanup(cleanupCtx); cleanupErr != nil {
+			logutil.Warn(
+				"GC-CCPR-UNPUBLISHED-REPLAY-DEFERRED", zap.Error(cleanupErr))
 		}
 	}()
 	if !c.GCEnabled() {
@@ -2171,6 +2201,14 @@ func (c *checkpointCleaner) replayUnpublishedObjectCleanup(ctx context.Context) 
 func (c *checkpointCleaner) decideUnpublishedObjectCleanup(
 	object ioutil.UnpublishedObject,
 ) (ioutil.UnpublishedObjectCleanupDecision, error) {
+	if object.TNShardID != 0 && object.TNShardID != c.tnShardID {
+		return ioutil.RetryUnpublishedObjectCleanup, nil
+	}
+	if object.SyncProtectionJobID != "" &&
+		!c.syncProtection.CanCleanupUnpublishedObject(
+			object.SyncProtectionJobID, object.SyncProtectionValidTS) {
+		return ioutil.RetryUnpublishedObjectCleanup, nil
+	}
 	c.unpublishedCleanupOwnership.Lock()
 	_, active := c.unpublishedCleanupOwnership.active[object.File]
 	c.unpublishedCleanupOwnership.Unlock()
@@ -2197,6 +2235,28 @@ func (c *checkpointCleaner) decideUnpublishedObjectCleanup(
 		return ioutil.ReleaseUnpublishedObjectCleanup, nil
 	}
 	return ioutil.DeleteUnpublishedObject, nil
+}
+
+func (c *checkpointCleaner) replayCCPRUnpublishedObjectCleanup(
+	ctx context.Context,
+) error {
+	if c.fs == nil || !c.ccprUnpublishedCleanupMu.TryLock() {
+		return nil
+	}
+	defer c.ccprUnpublishedCleanupMu.Unlock()
+
+	cleanupCtx, cancel := context.WithTimeoutCause(
+		ctx, unpublishedCleanupReplayTimeout, moerr.CauseCleanUpUselessFiles)
+	defer cancel()
+	_, _, next, _, err := ioutil.ReplayCCPRUnpublishedObjectCleanupPageFrom(
+		cleanupCtx,
+		c.fs,
+		c.decideUnpublishedObjectCleanup,
+		c.ccprUnpublishedCleanupCursor,
+		unpublishedCleanupReplayBatch,
+	)
+	c.ccprUnpublishedCleanupCursor = next
+	return err
 }
 
 func parseUnpublishedObjectID(file string) (types.Objectid, error) {

@@ -100,6 +100,82 @@ func TestDeleteUnpublishedObjectCleanupAcceptsAmbiguousDeleteAbsence(t *testing.
 		statCleanupTestFile(ctx, base, marker), moerr.ErrFileNotFound))
 }
 
+func TestCCPRUnpublishedCleanupIsRestartSafeAndNamespaceIsolated(t *testing.T) {
+	ctx := context.Background()
+	fs, err := fileservice.NewMemoryFS(
+		"cleanup", fileservice.DisabledCacheConfig, nil)
+	require.NoError(t, err)
+
+	_, err = RecordUnpublishedObjectCleanup(
+		ctx, fs, UnpublishedObject{File: "tn-local"})
+	require.NoError(t, err)
+	object := UnpublishedObject{
+		File:                  "ccpr-object",
+		DBID:                  1,
+		TableID:               2,
+		IsTombstone:           true,
+		TNShardID:             3,
+		SyncProtectionJobID:   "job",
+		SyncProtectionValidTS: 3,
+	}
+	marker, err := RecordCCPRUnpublishedObjectCleanup(ctx, fs, object)
+	require.NoError(t, err)
+	require.Contains(t, marker, ccprUnpublishedObjectCleanupDir)
+
+	localMarkers, _, err := ListUnpublishedObjectCleanup(ctx, fs, 10)
+	require.NoError(t, err)
+	require.Len(t, localMarkers, 1,
+		"TN-local admission must not count cross-CN markers")
+
+	var replayedObject UnpublishedObject
+	replayed, inspected, next, remaining, err :=
+		ReplayCCPRUnpublishedObjectCleanupPageFrom(
+			ctx,
+			fs,
+			func(got UnpublishedObject) (
+				UnpublishedObjectCleanupDecision, error,
+			) {
+				replayedObject = got
+				return ReleaseUnpublishedObjectCleanup, nil
+			},
+			"",
+			10,
+		)
+	require.NoError(t, err)
+	require.Equal(t, 1, replayed)
+	require.Equal(t, 1, inspected)
+	require.Empty(t, next)
+	require.False(t, remaining)
+	require.Equal(t, object, replayedObject)
+	require.True(t, moerr.IsMoErrCode(
+		statCleanupTestFile(ctx, fs, marker), moerr.ErrFileNotFound))
+}
+
+func TestRecordCCPRUnpublishedCleanupRequiresProtection(t *testing.T) {
+	ctx := context.Background()
+	fs, err := fileservice.NewMemoryFS(
+		"cleanup", fileservice.DisabledCacheConfig, nil)
+	require.NoError(t, err)
+
+	_, err = RecordCCPRUnpublishedObjectCleanup(
+		ctx, fs, UnpublishedObject{File: "missing-protection"})
+	require.ErrorContains(t, err, "requires catalog and sync protection ownership")
+	_, err = RecordCCPRUnpublishedObjectCleanup(ctx, fs, UnpublishedObject{
+		File:                  "missing-catalog-owner",
+		SyncProtectionJobID:   "job",
+		SyncProtectionValidTS: 1,
+	})
+	require.ErrorContains(t, err, "requires catalog and sync protection ownership")
+	_, err = RecordCCPRUnpublishedObjectCleanup(ctx, fs, UnpublishedObject{
+		File:                  "missing-shard-owner",
+		DBID:                  1,
+		TableID:               2,
+		SyncProtectionJobID:   "job",
+		SyncProtectionValidTS: 1,
+	})
+	require.ErrorContains(t, err, "requires catalog and sync protection ownership")
+}
+
 func TestUnpublishedObjectCleanupRejectsInvalidInputsAndListFailures(t *testing.T) {
 	ctx := context.Background()
 	base, err := fileservice.NewMemoryFS(

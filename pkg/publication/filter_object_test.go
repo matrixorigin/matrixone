@@ -147,7 +147,8 @@ func TestGetObjectFromUpstreamWithWorker_ContextCanceled(t *testing.T) {
 func TestFilterAppendableObject_TTLExpired(t *testing.T) {
 	var stats objectio.ObjectStats
 	_, err := filterAppendableObject(
-		context.Background(), &stats, types.TS{}, nil, nil, false, nil, nil, "", "", nil,
+		context.Background(), &stats, types.TS{}, nil, nil, false, nil, nil,
+		"", "", nil,
 		func() bool { return false },
 	)
 	assert.ErrorIs(t, err, ErrSyncProtectionTTLExpired)
@@ -166,7 +167,8 @@ func TestFilterAppendableObject_GetObjectError(t *testing.T) {
 
 	var stats objectio.ObjectStats
 	_, err := filterAppendableObject(
-		context.Background(), &stats, types.TS{}, nil, nil, false, nil, nil, "", "", nil, nil,
+		context.Background(), &stats, types.TS{}, nil, nil, false, nil, nil,
+		"", "", nil, nil,
 	)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "failed to get object from upstream")
@@ -194,7 +196,8 @@ func TestFilterAppendableObject_TTLExpiredAfterGetObject(t *testing.T) {
 
 	var stats objectio.ObjectStats
 	_, err := filterAppendableObject(
-		context.Background(), &stats, types.TS{}, nil, nil, false, nil, nil, "", "", nil, ttl,
+		context.Background(), &stats, types.TS{}, nil, nil, false, nil, nil,
+		"", "", nil, ttl,
 	)
 	assert.ErrorIs(t, err, ErrSyncProtectionTTLExpired)
 }
@@ -204,7 +207,8 @@ func TestFilterAppendableObject_TTLExpiredAfterGetObject(t *testing.T) {
 func TestFilterNonAppendableObject_TTLExpired(t *testing.T) {
 	var stats objectio.ObjectStats
 	_, err := filterNonAppendableObject(
-		context.Background(), &stats, types.TS{}, nil, nil, false, nil, nil, nil, "", "", nil, nil, nil,
+		context.Background(), &stats, types.TS{}, nil, nil, false, nil, nil,
+		nil, "", "", nil, nil, nil, nil,
 		func() bool { return false },
 	)
 	assert.ErrorIs(t, err, ErrSyncProtectionTTLExpired)
@@ -223,7 +227,8 @@ func TestFilterNonAppendableObject_GetObjectError(t *testing.T) {
 
 	var stats objectio.ObjectStats
 	_, err := filterNonAppendableObject(
-		context.Background(), &stats, types.TS{}, nil, nil, false, nil, nil, nil, "", "", nil, nil, nil, nil,
+		context.Background(), &stats, types.TS{}, nil, nil, false, nil, nil,
+		nil, "", "", nil, nil, nil, nil, nil,
 	)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "failed to get object from upstream")
@@ -251,7 +256,8 @@ func TestFilterNonAppendableObject_TTLExpiredAfterGetObject(t *testing.T) {
 
 	var stats objectio.ObjectStats
 	_, err := filterNonAppendableObject(
-		context.Background(), &stats, types.TS{}, nil, nil, false, nil, nil, nil, "", "", nil, nil, nil, ttl,
+		context.Background(), &stats, types.TS{}, nil, nil, false, nil, nil,
+		nil, "", "", nil, nil, nil, nil, ttl,
 	)
 	assert.ErrorIs(t, err, ErrSyncProtectionTTLExpired)
 }
@@ -331,7 +337,8 @@ func TestRewriteNonAppendableTombstoneWithSinker_ContentTooSmall(t *testing.T) {
 
 	amap := NewAObjectMap()
 	_, err = rewriteNonAppendableTombstoneWithSinker(
-		context.Background(), []byte("short"), &stats, nil, mp, amap, nil, nil,
+		context.Background(), []byte("short"), &stats, nil, mp, amap,
+		nil, nil, nil,
 	)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "object content too small")
@@ -351,7 +358,7 @@ func (fs *publicationPersistThenErrorFS) Write(
 	if err := fs.FileService.Write(ctx, vector); err != nil {
 		return err
 	}
-	if strings.HasPrefix(vector.FilePath, "gc/unpublished/") {
+	if strings.HasPrefix(vector.FilePath, "gc/") {
 		return nil
 	}
 	fs.persisted = vector.FilePath
@@ -364,14 +371,14 @@ func (fs *publicationPersistThenErrorFS) Delete(
 ) error {
 	if fs.failObjectDeletes {
 		for _, path := range paths {
-			if !strings.HasPrefix(path, "gc/unpublished/") {
+			if !strings.HasPrefix(path, "gc/") {
 				fs.objectDeletes++
 				return errors.New("injected publication object delete failure")
 			}
 		}
 	}
 	for _, path := range paths {
-		if !strings.HasPrefix(path, "gc/unpublished/") {
+		if !strings.HasPrefix(path, "gc/") {
 			fs.objectDeletes++
 		}
 	}
@@ -427,7 +434,8 @@ func TestRewriteNonAppendableTombstoneSyncErrorHandsOffCleanup(t *testing.T) {
 		},
 	}
 	_, err = rewriteNonAppendableTombstoneWithSinker(
-		ctx, objectContent, &stats, targetFS, mp, NewAObjectMap(), cache, []byte("txn"))
+		ctx, objectContent, &stats, targetFS, mp, NewAObjectMap(), cache,
+		[]byte("txn"), testCCPRObjectCleanupOwner())
 	require.ErrorContains(t, err, "injected publication post-persist sync failure")
 	require.NotEmpty(t, targetFS.persisted)
 	require.Equal(t, 1, targetFS.objectDeletes,
@@ -467,7 +475,8 @@ func TestCCPRTombstoneSinkerOwnsEveryUniqueSpill(t *testing.T) {
 		attrs,
 		attrTypes,
 		newCCPRTombstoneFileSinkerFactory(
-			cache, []byte("txn"), objectio.HiddenColumnSelection_None),
+			cache, []byte("txn"), testCCPRObjectCleanupOwner(),
+			objectio.HiddenColumnSelection_None),
 		mp,
 		fs,
 		ioutil.WithMemorySizeThreshold(1),
@@ -500,6 +509,18 @@ func TestCCPRTombstoneSinkerOwnsEveryUniqueSpill(t *testing.T) {
 		"each spill must have a generation-unique cleanup identity")
 	require.Equal(t, persisted[0].ObjectName().String(), registered[0])
 	require.Equal(t, persisted[1].ObjectName().String(), registered[1])
+}
+
+func testCCPRObjectCleanupOwner() *CCPRObjectCleanupOwner {
+	return &CCPRObjectCleanupOwner{
+		DBID:                1,
+		TableID:             2,
+		TNShardID:           3,
+		SyncProtectionJobID: "job",
+		SyncProtectionValidTS: func() int64 {
+			return time.Now().Add(time.Hour).UnixNano()
+		},
+	}
 }
 
 // ---- FilterObject dispatches to appendable vs non-appendable ----

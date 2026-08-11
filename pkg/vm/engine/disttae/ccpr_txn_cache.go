@@ -17,12 +17,15 @@ package disttae
 import (
 	"bytes"
 	"context"
+	"errors"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/panjf2000/ants/v2"
 	"github.com/tidwall/btree"
 	"go.uber.org/zap"
@@ -32,11 +35,13 @@ const ccprObjectCleanupTimeout = time.Minute
 
 // ItemEntry represents an entry in the items BTree, sorted by objectName
 type ItemEntry struct {
-	objectName string
-	txnIDs     [][]byte
-	isWriting  bool // true if the object is currently being written to fileservice
-	committed  bool // true if at least one txn has committed this object
-	deleteDone chan struct{}
+	objectName    string
+	txnIDs        [][]byte
+	preparing     bool // true while the durable marker write is unresolved
+	isWriting     bool // true if the object is currently being written to fileservice
+	committed     bool // true if at least one txn has committed this object
+	cleanupMarker string
+	deleteDone    chan struct{}
 }
 
 // Less compares two ItemEntry by objectName for BTree ordering
@@ -82,6 +87,10 @@ type CCPRTxnCache struct {
 	gcPool *ants.Pool
 	// fs is the file service for deleting object files
 	fs fileservice.FileService
+
+	// markerCleanupRunning bounds opportunistic foreground marker release to
+	// one detached operation. When busy, durable TN replay remains the owner.
+	markerCleanupRunning atomic.Bool
 }
 
 // NewCCPRTxnCache creates a new CCPRTxnCache instance
@@ -168,20 +177,27 @@ func (c *CCPRTxnCache) writeObjectLocked(
 	return true, nil, nil
 }
 
-// WriteNewObject admits a caller-generated unique object without StatFile.
+// WriteNewObject admits a caller-generated unique object without StatFile and
+// records a restart-safe cleanup owner before the caller can write the object.
 // Callers must not use this for stable/reused names: an existing in-memory
 // entry is an invariant violation rather than a reusable file.
 func (c *CCPRTxnCache) WriteNewObject(
 	ctx context.Context,
-	objectName string,
+	object ioutil.UnpublishedObject,
 	txnID []byte,
 ) error {
+	objectName := object.File
+	if objectName == "" || len(txnID) == 0 {
+		return moerr.NewInternalError(
+			ctx, "CCPR object name and transaction ID are required")
+	}
 	c.mu.Lock()
-	defer c.mu.Unlock()
 	if c.fs == nil {
+		c.mu.Unlock()
 		return moerr.NewInternalError(ctx, "fileservice is nil in CCPRTxnCache")
 	}
 	if _, exists := c.items.Get(ItemEntry{objectName: objectName}); exists {
+		c.mu.Unlock()
 		return moerr.NewInternalErrorf(
 			ctx, "new CCPR object %s is already registered", objectName)
 	}
@@ -189,10 +205,66 @@ func (c *CCPRTxnCache) WriteNewObject(
 	c.items.Set(ItemEntry{
 		objectName: objectName,
 		txnIDs:     [][]byte{txnIDCopy},
+		preparing:  true,
 		isWriting:  true,
 	})
 	c.addObjectToTxnIndex(txnIDCopy, objectName)
+	c.mu.Unlock()
+
+	marker, err := ioutil.RecordCCPRUnpublishedObjectCleanup(ctx, c.fs, object)
+	if err != nil {
+		// A remote write may return an error after persistence. Visibility is
+		// sufficient write-ahead ownership; an ambiguous result is retained for
+		// cleaner replay, but no object write follows the returned error.
+		if marker == "" {
+			c.removeNewObjectReservation(objectName, txnIDCopy)
+			return err
+		}
+		_, statErr := c.fs.StatFile(ctx, marker)
+		if statErr != nil {
+			c.removeNewObjectReservation(objectName, txnIDCopy)
+			if moerr.IsMoErrCode(statErr, moerr.ErrFileNotFound) {
+				return err
+			}
+			return errors.Join(err, statErr)
+		}
+	}
+
+	c.mu.Lock()
+	entry, exists := c.items.Get(ItemEntry{objectName: objectName})
+	if !exists {
+		c.mu.Unlock()
+		return moerr.NewInternalErrorf(
+			ctx, "new CCPR object %s lost its cache reservation", objectName)
+	}
+	entry.preparing = false
+	entry.cleanupMarker = marker
+	c.items.Set(entry)
+	c.mu.Unlock()
 	return nil
+}
+
+func (c *CCPRTxnCache) removeNewObjectReservation(
+	objectName string,
+	txnID []byte,
+) {
+	c.mu.Lock()
+	c.items.Delete(ItemEntry{objectName: objectName})
+	if entry, exists := c.txnIndex.Get(TxnIndexEntry{txnID: txnID}); exists {
+		for i, name := range entry.objectNames {
+			if name != objectName {
+				continue
+			}
+			entry.objectNames = append(entry.objectNames[:i], entry.objectNames[i+1:]...)
+			if len(entry.objectNames) == 0 {
+				c.txnIndex.Delete(entry)
+			} else {
+				c.txnIndex.Set(entry)
+			}
+			break
+		}
+	}
+	c.mu.Unlock()
 }
 
 // addObjectToTxnIndex adds an objectName to the txnIndex for the given txnID
@@ -215,17 +287,23 @@ func (c *CCPRTxnCache) addObjectToTxnIndex(txnID []byte, objectName string) {
 // since the file is now safely persisted and no longer needs cache tracking.
 func (c *CCPRTxnCache) OnFileWritten(objectName string) {
 	c.mu.Lock()
-	defer c.mu.Unlock()
 	entry, exists := c.items.Get(ItemEntry{objectName: objectName})
 	if !exists {
+		c.mu.Unlock()
 		return
 	}
 	entry.isWriting = false
 	if entry.committed {
 		// File written and committed — safe to remove the entire entry
 		c.items.Delete(entry)
+		marker := entry.cleanupMarker
+		c.mu.Unlock()
+		if marker != "" {
+			c.scheduleCleanupMarkerDeletion([]string{marker})
+		}
 	} else {
 		c.items.Set(entry)
+		c.mu.Unlock()
 	}
 }
 
@@ -235,22 +313,36 @@ func (c *CCPRTxnCache) OnFileWritten(objectName string) {
 // until OnFileWritten cleans it up.
 func (c *CCPRTxnCache) OnTxnCommit(txnID []byte) {
 	c.mu.Lock()
-	defer c.mu.Unlock()
 
 	txnEntry, exists := c.txnIndex.Get(TxnIndexEntry{txnID: txnID})
 	if !exists {
+		c.mu.Unlock()
 		return
 	}
 
+	var markers []string
 	for _, objectName := range txnEntry.objectNames {
 		entry, found := c.items.Get(ItemEntry{objectName: objectName})
 		if !found {
+			continue
+		}
+		if entry.preparing {
+			// The write-ahead marker may still appear after this terminal
+			// transition. Drop the local reservation and let durable replay
+			// resolve it; no object from this preparation can be in the commit.
+			c.items.Delete(entry)
 			continue
 		}
 		entry.committed = true
 		if !entry.isWriting {
 			// File already written and now committed — remove the entire entry
 			c.items.Delete(entry)
+			if entry.cleanupMarker != "" {
+				if markers == nil {
+					markers = make([]string, 0, len(txnEntry.objectNames))
+				}
+				markers = append(markers, entry.cleanupMarker)
+			}
 		} else {
 			// Still writing — keep entry, OnFileWritten will clean up
 			c.items.Set(entry)
@@ -258,6 +350,8 @@ func (c *CCPRTxnCache) OnTxnCommit(txnID []byte) {
 	}
 
 	c.txnIndex.Delete(txnEntry)
+	c.mu.Unlock()
+	c.scheduleCleanupMarkerDeletion(markers)
 }
 
 // OnTxnUnknownResult is called when the transaction commit result is unknown.
@@ -333,6 +427,7 @@ func (c *CCPRTxnCache) OnTxnRollback(txnID []byte) {
 	}
 
 	toGC := make([]string, 0)
+	var markers []string
 	deleteFences := make(map[string]chan struct{})
 
 	for _, objectName := range txnEntry.objectNames {
@@ -344,10 +439,31 @@ func (c *CCPRTxnCache) OnTxnRollback(txnID []byte) {
 
 		for i, id := range entry.txnIDs {
 			if bytes.Equal(id, txnID) {
+				if entry.preparing {
+					// Marker creation may finish after rollback. Removing the
+					// reservation makes WriteNewObject fail while the durable
+					// marker, if created, remains the sole cleanup owner.
+					c.items.Delete(entry)
+					break
+				}
 				if len(entry.txnIDs) == 1 {
 					// Last txnID — decide whether to GC
 					if !entry.committed {
+						if entry.cleanupMarker != "" && entry.isWriting {
+							// Sync did not report success, or is still in flight.
+							// A delete racing the write cannot prove absence, so
+							// leave the durable marker to the TN replay owner.
+							c.items.Delete(entry)
+							break
+						}
 						toGC = append(toGC, objectName)
+						if entry.cleanupMarker != "" {
+							if markers == nil {
+								markers = make(
+									[]string, 0, len(txnEntry.objectNames))
+							}
+							markers = append(markers, entry.cleanupMarker)
+						}
 						entry.txnIDs = nil
 						entry.deleteDone = make(chan struct{})
 						deleteFences[objectName] = entry.deleteDone
@@ -367,11 +483,15 @@ func (c *CCPRTxnCache) OnTxnRollback(txnID []byte) {
 	c.txnIndex.Delete(txnEntry)
 	c.mu.Unlock()
 
+	deleted := true
 	if len(toGC) > 0 {
 		// The cache ownership transition is complete. Object storage can take
 		// the full cleanup deadline, so it must not hold the global CCPR mutex
 		// and block unrelated transactions while doing remote IO.
-		c.gcObjects(toGC)
+		deleted = c.gcObjects(toGC)
+	}
+	if deleted {
+		c.scheduleCleanupMarkerDeletion(markers)
 	}
 
 	c.mu.Lock()
@@ -386,9 +506,9 @@ func (c *CCPRTxnCache) OnTxnRollback(txnID []byte) {
 }
 
 // gcObjects deletes object files from the file service
-func (c *CCPRTxnCache) gcObjects(objectNames []string) {
+func (c *CCPRTxnCache) gcObjects(objectNames []string) bool {
 	if c.gcPool == nil || c.fs == nil || len(objectNames) == 0 {
-		return
+		return false
 	}
 
 	logutil.Info("CCPR-TXN-CACHE-GC",
@@ -410,5 +530,39 @@ func (c *CCPRTxnCache) gcObjects(objectNames []string) {
 			zap.Strings("objects", names),
 			zap.Error(err),
 		)
+		return false
 	}
+	return true
+}
+
+func (c *CCPRTxnCache) scheduleCleanupMarkerDeletion(markers []string) {
+	if c.fs == nil {
+		return
+	}
+	filtered := markers[:0]
+	for _, marker := range markers {
+		if marker != "" {
+			filtered = append(filtered, marker)
+		}
+	}
+	if len(filtered) == 0 {
+		return
+	}
+	if !c.markerCleanupRunning.CompareAndSwap(false, true) {
+		return
+	}
+	owned := append([]string(nil), filtered...)
+	go func() {
+		defer c.markerCleanupRunning.Store(false)
+		ctx, cancel := context.WithTimeoutCause(
+			context.Background(), ccprObjectCleanupTimeout,
+			moerr.CauseCleanUpUselessFiles)
+		defer cancel()
+		if deleteErr := c.fs.Delete(ctx, owned...); deleteErr != nil &&
+			!moerr.IsMoErrCode(deleteErr, moerr.ErrFileNotFound) {
+			logutil.Warn("failed to release CCPR cleanup markers",
+				zap.Int("markers", len(owned)),
+				zap.Error(deleteErr))
+		}
+	}()
 }

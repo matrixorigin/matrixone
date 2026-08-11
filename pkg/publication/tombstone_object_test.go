@@ -28,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tidwall/btree"
@@ -86,16 +87,16 @@ func (m *mockCCPRTxnCacheWriterCB2) WriteObject(ctx context.Context, objectName 
 
 func (m *mockCCPRTxnCacheWriterCB2) WriteNewObject(
 	ctx context.Context,
-	objectName string,
+	object ioutil.UnpublishedObject,
 	txnID []byte,
 ) error {
-	isNew, err := m.WriteObject(ctx, objectName, txnID)
+	isNew, err := m.WriteObject(ctx, object.File, txnID)
 	if err != nil {
 		return err
 	}
 	if !isNew {
 		return moerr.NewInternalErrorNoCtxf(
-			"attempt-unique CCPR object %s already exists", objectName)
+			"attempt-unique CCPR object %s already exists", object.File)
 	}
 	return nil
 }
