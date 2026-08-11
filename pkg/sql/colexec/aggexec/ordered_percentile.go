@@ -23,13 +23,13 @@ import (
 	"io"
 	"math/big"
 	"os"
+	"sort"
 	"strconv"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	mosort "github.com/matrixorigin/matrixone/pkg/sort"
 )
 
 const orderedPercentileConfigVersion byte = 1
@@ -342,13 +342,11 @@ func (exec *orderedPercentileExec[T, R]) BatchFill(offset int, groups []uint64, 
 	return exec.maybeSpillOrdered()
 }
 
-// sortOrderedPercentileValues uses the same selector/vector sorter as the
-// query ORDER BY operator and ordered GROUP_CONCAT. The aggregate stores its
-// values in chunked Vectors, so flatten them into one temporary vector before
-// sorting; selectors still refer to the original values slice, avoiding a
-// second reordered copy.
+// sortOrderedPercentileValues uses the same total comparator as spilled-run
+// merge. FLOAT NaN must have one defined order across in-memory sorting, run
+// creation, and k-way merge; otherwise spill can change percentile ranks.
 func sortOrderedPercentileValues[T numeric | types.Decimal64 | types.Decimal128](
-	mp *mpool.MPool, typ types.Type, values []T, descending bool,
+	_ *mpool.MPool, _ types.Type, values []T, descending bool,
 ) ([]int64, error) {
 	selectors := make([]int64, len(values))
 	for i := range selectors {
@@ -358,17 +356,17 @@ func sortOrderedPercentileValues[T numeric | types.Decimal64 | types.Decimal128]
 		return selectors, nil
 	}
 
-	orderVector := vector.NewOffHeapVecWithType(typ)
-	defer orderVector.Free(mp)
-	if err := vector.AppendFixedList(orderVector, values, nil, mp); err != nil {
-		return nil, err
-	}
-	mosort.SortByVectors(
-		selectors,
-		[]*vector.Vector{orderVector},
-		[]bool{descending},
-		[]bool{false}, // percentile aggregation removes NULLs before sorting.
-	)
+	sort.Slice(selectors, func(i, j int) bool {
+		left, right := selectors[i], selectors[j]
+		cmp := compareOrderedPercentileValue(values[int(left)], values[int(right)])
+		if descending {
+			cmp = -cmp
+		}
+		if cmp == 0 {
+			return left < right
+		}
+		return cmp < 0
+	})
 	return selectors, nil
 }
 

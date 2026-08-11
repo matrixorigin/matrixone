@@ -16,6 +16,7 @@ package aggexec
 
 import (
 	"context"
+	"math"
 	"math/big"
 	"os"
 	"testing"
@@ -168,6 +169,112 @@ func TestOrderedPercentileExecSpillsRuns(t *testing.T) {
 	require.Equal(t, 10000.0, vector.GetFixedAtNoTypeCheck[float64](result[0], 0))
 	result[0].Free(mp)
 	exec.Free()
+}
+
+func TestOrderedPercentileFloatNaNSpillMatchesInMemory(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer func() { require.Equal(t, int64(0), mp.CurrNB()) }()
+
+	t.Run("float32", func(t *testing.T) {
+		runOrderedPercentileFloatNaNSpillMatchesInMemory[float32](t, mp, types.T_float32.ToType())
+	})
+	t.Run("float64", func(t *testing.T) {
+		runOrderedPercentileFloatNaNSpillMatchesInMemory[float64](t, mp, types.T_float64.ToType())
+	})
+}
+
+func runOrderedPercentileFloatNaNSpillMatchesInMemory[T float32 | float64](
+	t *testing.T, mp *mpool.MPool, typ types.Type,
+) {
+	t.Helper()
+	const rows = 20001
+	values := make([]T, rows)
+	for i := range values {
+		values[i] = T(i)
+	}
+	values[10000] = T(math.NaN())
+
+	for _, modeCase := range []struct {
+		name  string
+		aggID int64
+		mode  orderedPercentileMode
+	}{
+		{name: "continuous", aggID: AggIdOfPercentileCont, mode: orderedPercentileContinuous},
+		{name: "discrete", aggID: AggIdOfPercentileDisc, mode: orderedPercentileDiscrete},
+	} {
+		for _, descending := range []bool{false, true} {
+			direction := "asc"
+			if descending {
+				direction = "desc"
+			}
+			t.Run(modeCase.name+"_"+direction, func(t *testing.T) {
+				inMemory := runOrderedPercentileFloatNaNCase(t, mp, typ, values, modeCase.aggID, modeCase.mode, descending, false)
+				spilled := runOrderedPercentileFloatNaNCase(t, mp, typ, values, modeCase.aggID, modeCase.mode, descending, true)
+				requireSameFloatResult(t, inMemory, spilled)
+			})
+		}
+	}
+}
+
+func runOrderedPercentileFloatNaNCase[T float32 | float64](
+	t *testing.T,
+	mp *mpool.MPool,
+	typ types.Type,
+	values []T,
+	aggID int64,
+	mode orderedPercentileMode,
+	descending bool,
+	spill bool,
+) float64 {
+	t.Helper()
+	valueVec := buildFixedVec(t, mp, typ, values)
+	defer valueVec.Free(mp)
+
+	exec, err := makeOrderedPercentileExec(mp, aggID, false, typ, mode)
+	require.NoError(t, err)
+	require.NoError(t, exec.GroupGrow(1))
+	require.NoError(t, exec.SetExtraInformation(EncodeOrderedPercentileConfig([]byte("0"), descending), 0))
+
+	if spill {
+		var spillRows int64
+		ConfigureOrderedPercentileSpill(
+			exec,
+			1,
+			context.Background(),
+			func() (*os.File, error) { return os.CreateTemp(t.TempDir(), "ordered-percentile-float-*") },
+			func(_, rows, _ int64) { spillRows += rows },
+		)
+		for i := range values {
+			require.NoError(t, exec.Fill(0, i, []*vector.Vector{valueVec}))
+		}
+		require.Positive(t, spillRows)
+	} else {
+		require.NoError(t, exec.BulkFill(0, []*vector.Vector{valueVec}))
+	}
+
+	result, err := exec.Flush()
+	require.NoError(t, err)
+	got := orderedPercentileFloatResult(t, result[0], typ, mode)
+	result[0].Free(mp)
+	exec.Free()
+	return got
+}
+
+func orderedPercentileFloatResult(t *testing.T, result *vector.Vector, typ types.Type, mode orderedPercentileMode) float64 {
+	t.Helper()
+	if mode == orderedPercentileContinuous || typ.Oid == types.T_float64 {
+		return vector.GetFixedAtNoTypeCheck[float64](result, 0)
+	}
+	return float64(vector.GetFixedAtNoTypeCheck[float32](result, 0))
+}
+
+func requireSameFloatResult(t *testing.T, expected, actual float64) {
+	t.Helper()
+	if math.IsNaN(expected) || math.IsNaN(actual) {
+		require.True(t, math.IsNaN(expected) && math.IsNaN(actual), "expected %v, got %v", expected, actual)
+		return
+	}
+	require.Equal(t, expected, actual)
 }
 
 func TestOrderedPercentileCompactsSpillRuns(t *testing.T) {
@@ -348,6 +455,18 @@ func TestOrderedPercentileTypeDispatchAndMath(t *testing.T) {
 	descending, err := sortOrderedPercentileValues(mp, types.T_int64.ToType(), []int64{3, 1, 2}, true)
 	require.NoError(t, err)
 	require.Equal(t, []int64{0, 2, 1}, descending)
+	float32Ascending, err := sortOrderedPercentileValues(mp, types.T_float32.ToType(), []float32{1, float32(math.NaN()), 0}, false)
+	require.NoError(t, err)
+	require.Equal(t, []int64{1, 2, 0}, float32Ascending)
+	float32Descending, err := sortOrderedPercentileValues(mp, types.T_float32.ToType(), []float32{1, float32(math.NaN()), 0}, true)
+	require.NoError(t, err)
+	require.Equal(t, []int64{0, 2, 1}, float32Descending)
+	float64Ascending, err := sortOrderedPercentileValues(mp, types.T_float64.ToType(), []float64{1, math.NaN(), 0}, false)
+	require.NoError(t, err)
+	require.Equal(t, []int64{1, 2, 0}, float64Ascending)
+	float64Descending, err := sortOrderedPercentileValues(mp, types.T_float64.ToType(), []float64{1, math.NaN(), 0}, true)
+	require.NoError(t, err)
+	require.Equal(t, []int64{0, 2, 1}, float64Descending)
 	single, err := sortOrderedPercentileValues(mp, types.T_int64.ToType(), []int64{7}, false)
 	require.NoError(t, err)
 	require.Equal(t, []int64{0}, single)
