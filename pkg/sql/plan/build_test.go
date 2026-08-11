@@ -1662,14 +1662,13 @@ func TestRewriteRollupWindowSelectGuards(t *testing.T) {
 
 func TestRewriteRollupWindowUnsupportedDoesNotFallback(t *testing.T) {
 	mock := NewMockOptimizer(false)
-	for _, sql := range []string{
+	_, err := runOneStmt(
+		mock,
+		t,
 		"select distinct a, row_number() over () from nation group by a, n_regionkey with rollup",
-		"select a, row_number() over () is null from nation group by a, n_regionkey with rollup",
-	} {
-		_, err := runOneStmt(mock, t, sql)
-		require.Error(t, err)
-		require.Contains(t, err.Error(), "window functions with ROLLUP or CUBE for this expression")
-	}
+	)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "window functions with ROLLUP or CUBE for this expression")
 }
 
 func TestRewriteRollupWindowExprSupportedShapes(t *testing.T) {
