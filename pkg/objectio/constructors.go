@@ -59,6 +59,7 @@ type validatedVectorCacheData struct {
 }
 
 var _ fscache.Data = (*validatedVectorCacheData)(nil)
+var _ fscache.DataOwnership = (*validatedVectorCacheData)(nil)
 
 func (d *validatedVectorCacheData) Bytes() []byte {
 	return d.validatedVectorSnapshot()
@@ -89,6 +90,17 @@ func (d *validatedVectorCacheData) Retain() {
 
 func (d *validatedVectorCacheData) Release() {
 	d.data.Release()
+}
+
+func (d *validatedVectorCacheData) CacheDataOwner() *fscache.DataOwner {
+	if owned, ok := d.data.(fscache.DataOwnership); ok {
+		return owned.CacheDataOwner()
+	}
+	return nil
+}
+
+func (d *validatedVectorCacheData) RehomeCacheData(copyData func([]byte) fscache.Data) fscache.Data {
+	return &validatedVectorCacheData{data: copyData(d.data.Bytes())}
 }
 
 func (d *validatedVectorCacheData) validatedVectorSnapshot() []byte {

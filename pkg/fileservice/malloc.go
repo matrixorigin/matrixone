@@ -70,7 +70,7 @@ var memoryCacheAllocator = sync.OnceValue(func() malloc.Allocator {
 
 func newMemoryCacheDataAllocator() (*bytesAllocator, *malloc.JemallocAllocator) {
 	allocator, raw := newMemoryCacheAllocator()
-	return &bytesAllocator{allocator: allocator}, raw
+	return newBytesAllocator(allocator), raw
 }
 
 var ioAllocator = sync.OnceValue(func() malloc.Allocator {

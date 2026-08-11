@@ -29,6 +29,7 @@ import (
 type Bytes struct {
 	bytes       []byte
 	deallocator malloc.Deallocator
+	owner       *fscache.DataOwner
 	refs        atomic.Int32
 }
 
@@ -101,11 +102,29 @@ func (b *Bytes) Release() {
 	}
 }
 
+var _ fscache.DataOwnership = (*Bytes)(nil)
+
+func (b *Bytes) CacheDataOwner() *fscache.DataOwner {
+	return b.owner
+}
+
+func (b *Bytes) RehomeCacheData(copyData func([]byte) fscache.Data) fscache.Data {
+	return copyData(b.Bytes())
+}
+
 type bytesAllocator struct {
 	allocator malloc.Allocator
+	owner     *fscache.DataOwner
 }
 
 var _ CacheDataAllocator = new(bytesAllocator)
+
+func newBytesAllocator(allocator malloc.Allocator) *bytesAllocator {
+	return &bytesAllocator{
+		allocator: allocator,
+		owner:     new(fscache.DataOwner),
+	}
+}
 
 func (b *bytesAllocator) allocateCacheData(size int, hints malloc.Hints) fscache.Data {
 	slice, dec, err := b.allocator.Allocate(uint64(size), hints)
@@ -115,6 +134,7 @@ func (b *bytesAllocator) allocateCacheData(size int, hints malloc.Hints) fscache
 	bytes := &Bytes{
 		bytes:       slice,
 		deallocator: dec,
+		owner:       b.owner,
 	}
 	bytes.refs.Store(1)
 	return bytes

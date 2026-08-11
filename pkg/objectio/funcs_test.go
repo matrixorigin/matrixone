@@ -43,6 +43,23 @@ type releaseTrackingData struct {
 	bytes    []byte
 }
 
+func TestValidatedVectorCacheDataRehomePreservesValidation(t *testing.T) {
+	ctx := context.Background()
+	source := &validatedVectorCacheData{
+		data: fileservice.DefaultCacheDataAllocator().CopyToCacheData(ctx, []byte{1, 2, 3}),
+	}
+	defer source.Release()
+
+	rehomed := source.RehomeCacheData(func(data []byte) fscache.Data {
+		return fileservice.NewBytes(bytes.Clone(data))
+	})
+	defer rehomed.Release()
+
+	_, ok := rehomed.(validatedVectorCacheDataMarker)
+	require.True(t, ok)
+	require.Equal(t, []byte{1, 2, 3}, rehomed.Bytes())
+}
+
 func (r *releaseTrackingData) Size() int64 {
 	return int64(len(r.bytes))
 }

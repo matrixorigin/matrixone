@@ -25,3 +25,22 @@ type Data interface {
 	Retain()
 	Release()
 }
+
+// DataOwner identifies the allocator that owns a cache data buffer. It must
+// stay non-zero sized: Go is allowed to reuse addresses for zero-sized values,
+// which would make distinct allocators indistinguishable by pointer identity.
+type DataOwner struct{ _ byte }
+
+// DataOwnership is implemented by cache data that can identify its backing
+// allocator and be copied into another cache allocator without losing its
+// cache-specific representation. A MemCache uses this at its admission
+// boundary so its capacity, allocator arena, and fragmentation metrics all
+// describe the same bytes.
+//
+// Data implementations that do not implement this interface are still valid:
+// MemCache copies their Bytes into its own ordinary cache data representation.
+type DataOwnership interface {
+	Data
+	CacheDataOwner() *DataOwner
+	RehomeCacheData(copyData func([]byte) Data) Data
+}

@@ -164,6 +164,13 @@ var (
 			Name:      "cache_bytes",
 			Help:      "Total bytes of fs cache.",
 		}, []string{"component", "type"})
+	fsCacheAllocatorArenas = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Namespace: "mo",
+			Subsystem: "fs_cache",
+			Name:      "allocator_arenas",
+			Help:      "Number of jemalloc arenas contributing to an fs cache component.",
+		}, []string{"component"})
 )
 
 var (
@@ -221,6 +228,7 @@ func GetFsCacheBackingOverheadBytesGauge(name, typ string) prometheus.Gauge {
 // is Active-Allocated and therefore excludes caller-visible slice rounding,
 // which is reported separately by backing-overhead.
 type FsCacheAllocatorStatsGauges struct {
+	Arenas        prometheus.Gauge
 	Allocated     prometheus.Gauge
 	Active        prometheus.Gauge
 	Fragmentation prometheus.Gauge
@@ -235,7 +243,9 @@ type FsCacheAllocatorStatsGauges struct {
 // GetFsCacheAllocatorStatsGauges returns allocator gauges for a cache. The
 // values describe only the cache's dedicated allocator arena.
 func GetFsCacheAllocatorStatsGauges(name, typ string) FsCacheAllocatorStatsGauges {
+	component := fsCacheComponent(name, typ)
 	return FsCacheAllocatorStatsGauges{
+		Arenas:        fsCacheAllocatorArenas.WithLabelValues(component),
 		Allocated:     getFsCacheBytesGauge(name, typ, "allocator-allocated"),
 		Active:        getFsCacheBytesGauge(name, typ, "allocator-active"),
 		Fragmentation: getFsCacheBytesGauge(name, typ, "allocator-fragmentation"),

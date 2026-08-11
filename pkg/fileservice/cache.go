@@ -113,9 +113,7 @@ var DisabledCacheConfig = CacheConfig{
 const DisableCacheCapacity = 1
 
 var DefaultCacheDataAllocator = sync.OnceValue(func() CacheDataAllocator {
-	return &bytesAllocator{
-		allocator: memoryCacheAllocator(),
-	}
+	return newBytesAllocator(memoryCacheAllocator())
 })
 
 // VectorCache caches IOVector

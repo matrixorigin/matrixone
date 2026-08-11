@@ -38,10 +38,13 @@ type MemCache struct {
 	// allocator is dedicated to this cache. Do not use DefaultCacheDataAllocator
 	// here: that would merge unrelated FileService caches into one allocator
 	// arena and make fragmentation metrics untrustworthy.
-	allocator       *bytesAllocator
-	jemalloc        *malloc.JemallocAllocator
-	allocatorGauges metric.FsCacheAllocatorStatsGauges
-	lastStatsUpdate atomic.Int64
+	allocator           *bytesAllocator
+	jemalloc            *malloc.JemallocAllocator
+	allocatorGauges     metric.FsCacheAllocatorStatsGauges
+	metricName          string
+	lastStatsUpdate     atomic.Int64
+	statsRefreshPending atomic.Bool
+	closed              atomic.Bool
 }
 
 var memCacheCallbackSeed = maphash.MakeSeed()
@@ -192,6 +195,7 @@ func NewMemCache(
 		allocator:       cacheAllocator,
 		jemalloc:        jemallocAllocator,
 		allocatorGauges: allocatorGauges,
+		metricName:      name,
 	}
 
 	prepareSetFn := func(_ context.Context, _ fscache.CacheKey, value fscache.Data, _, _ int64, _ uint64) func(inserted bool) {
@@ -296,6 +300,7 @@ func NewMemCache(
 
 	if name != "" {
 		allMemoryCaches.Store(ret, name)
+		ret.refreshAllocatorMetrics(true)
 	}
 
 	return ret
@@ -338,6 +343,7 @@ func (m *MemCache) refreshAllocatorMetrics(force bool) {
 		for {
 			last := m.lastStatsUpdate.Load()
 			if now-last < int64(time.Second) {
+				m.scheduleAllocatorMetricsRefresh(time.Duration(int64(time.Second) - (now - last)))
 				return
 			}
 			if m.lastStatsUpdate.CompareAndSwap(last, now) {
@@ -348,7 +354,7 @@ func (m *MemCache) refreshAllocatorMetrics(force bool) {
 		m.lastStatsUpdate.Store(now)
 	}
 
-	stats, err := m.jemalloc.Stats()
+	stats, err := m.allocatorStats()
 	if err != nil {
 		return
 	}
@@ -357,6 +363,7 @@ func (m *MemCache) refreshAllocatorMetrics(force bool) {
 		fragmentation = stats.Active - stats.Allocated
 	}
 	m.allocatorGauges.Allocated.Set(float64(stats.Allocated))
+	m.allocatorGauges.Arenas.Set(float64(m.allocatorArenaCount()))
 	m.allocatorGauges.Active.Set(float64(stats.Active))
 	m.allocatorGauges.Fragmentation.Set(float64(fragmentation))
 	m.allocatorGauges.Metadata.Set(float64(stats.Metadata))
@@ -365,6 +372,70 @@ func (m *MemCache) refreshAllocatorMetrics(force bool) {
 	m.allocatorGauges.Retained.Set(float64(stats.Retained))
 	m.allocatorGauges.Dirty.Set(float64(stats.Dirty))
 	m.allocatorGauges.Muzzy.Set(float64(stats.Muzzy))
+}
+
+// allocatorStats aggregates every arena contributing to this metric component.
+// Cache capacity gauges already aggregate values from same-named MemCaches, so
+// publishing only the last arena would make allocator fragmentation appear
+// smaller than the logical cache it is meant to explain.
+func (m *MemCache) allocatorStats() (malloc.JemallocStats, error) {
+	if m.metricName == "" {
+		return m.jemalloc.Stats()
+	}
+
+	var total malloc.JemallocStats
+	var statsErr error
+	allMemoryCaches.Range(func(key, value any) bool {
+		if value.(string) != m.metricName {
+			return true
+		}
+		stats, err := key.(*MemCache).jemalloc.Stats()
+		if err != nil {
+			statsErr = err
+			return false
+		}
+		total.Allocated += stats.Allocated
+		total.Active += stats.Active
+		total.Metadata += stats.Metadata
+		total.Resident += stats.Resident
+		total.Mapped += stats.Mapped
+		total.Retained += stats.Retained
+		total.Dirty += stats.Dirty
+		total.Muzzy += stats.Muzzy
+		return true
+	})
+	if statsErr != nil {
+		return malloc.JemallocStats{}, statsErr
+	}
+	return total, nil
+}
+
+func (m *MemCache) allocatorArenaCount() int {
+	if m.metricName == "" {
+		return 1
+	}
+	count := 0
+	allMemoryCaches.Range(func(_, value any) bool {
+		if value.(string) == m.metricName {
+			count++
+		}
+		return true
+	})
+	return count
+}
+
+// scheduleAllocatorMetricsRefresh keeps allocator metrics cheap on the hot
+// cache-set path while ensuring a burst's final state is eventually exported.
+func (m *MemCache) scheduleAllocatorMetricsRefresh(delay time.Duration) {
+	if !m.statsRefreshPending.CompareAndSwap(false, true) {
+		return
+	}
+	time.AfterFunc(delay, func() {
+		m.statsRefreshPending.Store(false)
+		if !m.closed.Load() {
+			m.refreshAllocatorMetrics(true)
+		}
+	})
 }
 
 func (m *MemCache) Read(
@@ -432,12 +503,19 @@ func (m *MemCache) Update(
 		return err
 	}
 
-	for _, entry := range vector.Entries {
+	for i := range vector.Entries {
+		entry := &vector.Entries[i]
 		if entry.CachedData == nil {
 			continue
 		}
 		if entry.fromCache == m {
 			continue
+		}
+
+		data := m.admitCacheData(ctx, entry.CachedData)
+		if data != entry.CachedData {
+			entry.CachedData.Release()
+			entry.CachedData = data
 		}
 
 		key := fscache.CacheKey{
@@ -457,6 +535,26 @@ func (m *MemCache) Update(
 		}
 	}
 	return nil
+}
+
+// admitCacheData makes this cache the physical owner of every admitted entry.
+// Reads normally allocate through the FileService's MemCache and take the fast
+// path. Data from a vector cache, disk cache, or a legacy caller can originate
+// elsewhere; it is copied once here before MemCache retains it.
+func (m *MemCache) admitCacheData(ctx context.Context, data fscache.Data) fscache.Data {
+	// DataCache.Set is the sole FIFO admission decision for rehomed data.
+	// The public MemCache allocation methods reserve capacity before allocation
+	// for FileService read paths, which would reserve the same entry twice here.
+	copyData := func(bytes []byte) fscache.Data {
+		return m.allocator.CopyToCacheData(ctx, bytes)
+	}
+	if owned, ok := data.(fscache.DataOwnership); ok {
+		if owned.CacheDataOwner() == m.allocator.owner {
+			return data
+		}
+		return owned.RehomeCacheData(copyData)
+	}
+	return copyData(data.Bytes())
 }
 
 func (m *MemCache) Flush(ctx context.Context) {
@@ -496,7 +594,8 @@ func (m *MemCache) EvictToCapacityPercent(ctx context.Context, percent int64) in
 }
 
 func (m *MemCache) Close(ctx context.Context) {
+	m.closed.Store(true)
 	m.Flush(ctx)
-	m.refreshAllocatorMetrics(true)
 	allMemoryCaches.Delete(m)
+	m.refreshAllocatorMetrics(true)
 }

@@ -120,6 +120,115 @@ func TestMemCacheLeak(t *testing.T) {
 
 }
 
+func TestMemCacheUpdateRehomesForeignData(t *testing.T) {
+	ctx := context.Background()
+	foreign := DefaultCacheDataAllocator().CopyToCacheData(ctx, []byte("cache-data"))
+	foreignBytes := foreign.(*Bytes)
+
+	cache := NewMemCache(fscache.ConstCapacity(foreign.Capacity()), nil, nil, "")
+	defer cache.Close(ctx)
+	require.NotSame(t, cache.allocator.owner, foreignBytes.CacheDataOwner())
+
+	vector := &IOVector{
+		FilePath: "shared:/object",
+		Entries: []IOEntry{{
+			Size:       int64(len("cache-data")),
+			CachedData: foreign,
+		}},
+	}
+	require.NoError(t, cache.Update(ctx, vector, false))
+
+	rehomed := vector.Entries[0].CachedData.(*Bytes)
+	require.NotSame(t, foreign, rehomed)
+	require.Same(t, cache.allocator.owner, rehomed.CacheDataOwner())
+	require.Equal(t, []byte("cache-data"), rehomed.Bytes())
+
+	vector.Release()
+	read := &IOVector{FilePath: "shared:/object", Entries: []IOEntry{{Size: int64(len("cache-data"))}}}
+	require.NoError(t, cache.Read(ctx, read))
+	require.Same(t, rehomed, read.Entries[0].CachedData)
+	read.Release()
+}
+
+func TestMemCacheUpdateRetainsOwnedDataWithoutCopy(t *testing.T) {
+	ctx := context.Background()
+	cache := NewMemCache(fscache.ConstCapacity(1024), nil, nil, "")
+	defer cache.Close(ctx)
+
+	data := cache.CopyToCacheData(ctx, []byte("cache-data"))
+	vector := &IOVector{
+		FilePath: "shared:/object",
+		Entries: []IOEntry{{
+			Size:       int64(len("cache-data")),
+			CachedData: data,
+		}},
+	}
+	require.NoError(t, cache.Update(ctx, vector, false))
+	require.Same(t, data, vector.Entries[0].CachedData)
+	vector.Release()
+}
+
+func TestMemCacheAllocatorMetricsRefreshAfterBurst(t *testing.T) {
+	ctx := context.Background()
+	name := t.Name()
+	cache := NewMemCache(fscache.ConstCapacity(4<<20), nil, nil, name)
+	defer cache.Close(ctx)
+
+	for i := range 2 {
+		vector := &IOVector{
+			FilePath: "shared:/object",
+			Entries: []IOEntry{{
+				Offset:     int64(i) << 20,
+				Size:       700 << 10,
+				CachedData: NewBytes(make([]byte, 700<<10)),
+			}},
+		}
+		require.NoError(t, cache.Update(ctx, vector, false))
+		vector.Release()
+	}
+
+	physical, _ := metric.GetFsCacheBytesGauge(name, "mem")
+	allocator := metric.GetFsCacheAllocatorStatsGauges(name, "mem")
+	expected := float64(cache.cache.Used())
+	require.Eventually(t, func() bool {
+		return testutil.ToFloat64(physical) == expected &&
+			testutil.ToFloat64(allocator.Allocated) >= expected
+	}, 3*time.Second, 10*time.Millisecond)
+}
+
+func TestMemCacheAllocatorMetricsAggregateSameComponent(t *testing.T) {
+	ctx := context.Background()
+	name := t.Name()
+	first := NewMemCache(fscache.ConstCapacity(2<<20), nil, nil, name)
+	defer first.Close(ctx)
+	second := NewMemCache(fscache.ConstCapacity(2<<20), nil, nil, name)
+	defer second.Close(ctx)
+
+	for index, cache := range []*MemCache{first, second} {
+		vector := &IOVector{
+			FilePath: "shared:/object",
+			Entries: []IOEntry{{
+				Offset:     int64(index) << 20,
+				Size:       700 << 10,
+				CachedData: NewBytes(make([]byte, 700<<10)),
+			}},
+		}
+		require.NoError(t, cache.Update(ctx, vector, false))
+		vector.Release()
+	}
+
+	first.refreshAllocatorMetrics(true)
+	physical, _ := metric.GetFsCacheBytesGauge(name, "mem")
+	allocator := metric.GetFsCacheAllocatorStatsGauges(name, "mem")
+	expected := float64(first.cache.Used() + second.cache.Used())
+	require.Eventually(t, func() bool {
+		return testutil.ToFloat64(physical) == expected
+	}, time.Second, 10*time.Millisecond)
+	first.refreshAllocatorMetrics(true)
+	require.Equal(t, float64(2), testutil.ToFloat64(allocator.Arenas))
+	require.GreaterOrEqual(t, testutil.ToFloat64(allocator.Allocated), expected)
+}
+
 func TestMemCacheSeparatesPhysicalAndLogicalBytesMetrics(t *testing.T) {
 	ctx := context.Background()
 	name := t.Name()
@@ -697,13 +806,15 @@ func TestMemoryCachePressureAdmissionSkipsWritesAboveTarget(t *testing.T) {
 	clearMemoryCachePressureTargetForTest()
 	defer clearMemoryCachePressureTargetForTest()
 
+	unit := int64(DefaultCacheDataAllocator().BackingSize(1))
 	cache := NewMemCache(
-		fscache.ConstCapacity(10),
+		fscache.ConstCapacity(10*unit),
 		nil,
 		nil,
 		"",
 	)
 	defer cache.Close(ctx)
+	assert.Equal(t, unit, int64(cache.BackingSize(1)))
 
 	SetMemoryCachePressureTargetPercent(50, time.Now().Add(time.Minute))
 
@@ -718,7 +829,7 @@ func TestMemoryCachePressureAdmissionSkipsWritesAboveTarget(t *testing.T) {
 		}
 		assert.NoError(t, cache.Update(ctx, vec, false))
 	}
-	assert.Equal(t, int64(5), cache.cache.Used())
+	assert.Equal(t, 5*unit, cache.cache.Used())
 
 	vec := &IOVector{
 		FilePath: "foo",
@@ -729,7 +840,7 @@ func TestMemoryCachePressureAdmissionSkipsWritesAboveTarget(t *testing.T) {
 		}},
 	}
 	assert.NoError(t, cache.Update(ctx, vec, false))
-	assert.Equal(t, int64(5), cache.cache.Used())
+	assert.Equal(t, 5*unit, cache.cache.Used())
 
 	_, ok := cache.cache.Get(ctx, fscache.CacheKey{Path: "foo", Offset: 5, Sz: 1})
 	assert.False(t, ok)
@@ -775,13 +886,15 @@ func TestMemoryCachePressureAdmissionAdmitsGhostEntry(t *testing.T) {
 	clearMemoryCachePressureTargetForTest()
 	defer clearMemoryCachePressureTargetForTest()
 
+	unit := int64(DefaultCacheDataAllocator().BackingSize(1))
 	cache := NewMemCache(
-		fscache.ConstCapacity(4),
+		fscache.ConstCapacity(4*unit),
 		nil,
 		nil,
 		"",
 	)
 	defer cache.Close(ctx)
+	assert.Equal(t, unit, int64(cache.BackingSize(1)))
 
 	for i := 0; i < 3; i++ {
 		vec := &IOVector{
@@ -795,8 +908,8 @@ func TestMemoryCachePressureAdmissionAdmitsGhostEntry(t *testing.T) {
 		assert.NoError(t, cache.Update(ctx, vec, false))
 	}
 
-	assert.Equal(t, int64(2), cache.cache.EvictToTargetWithWait(ctx, 2))
-	assert.Equal(t, int64(2), cache.cache.Used())
+	assert.Equal(t, 2*unit, cache.cache.EvictToTargetWithWait(ctx, 2*unit))
+	assert.Equal(t, 2*unit, cache.cache.Used())
 	key0 := fscache.CacheKey{Path: "foo", Offset: 0, Sz: 1}
 	key1 := fscache.CacheKey{Path: "foo", Offset: 1, Sz: 1}
 	key2 := fscache.CacheKey{Path: "foo", Offset: 2, Sz: 1}
@@ -819,7 +932,7 @@ func TestMemoryCachePressureAdmissionAdmitsGhostEntry(t *testing.T) {
 		}},
 	}
 	assert.NoError(t, cache.Update(ctx, coldVec, false))
-	assert.Equal(t, int64(2), cache.cache.Used())
+	assert.Equal(t, 2*unit, cache.cache.Used())
 	_, ok = cache.cache.Get(ctx, key3)
 	assert.False(t, ok)
 
@@ -832,7 +945,7 @@ func TestMemoryCachePressureAdmissionAdmitsGhostEntry(t *testing.T) {
 		}},
 	}
 	assert.NoError(t, cache.Update(ctx, ghostVec, false))
-	assert.Equal(t, int64(2), cache.cache.Used())
+	assert.Equal(t, 2*unit, cache.cache.Used())
 	_, ok = cache.cache.Get(ctx, key0)
 	assert.True(t, ok)
 	_, ok = cache.cache.Get(ctx, key1)
@@ -844,13 +957,15 @@ func TestMemoryCachePressureAdmissionExpires(t *testing.T) {
 	clearMemoryCachePressureTargetForTest()
 	defer clearMemoryCachePressureTargetForTest()
 
+	unit := int64(DefaultCacheDataAllocator().BackingSize(1))
 	cache := NewMemCache(
-		fscache.ConstCapacity(10),
+		fscache.ConstCapacity(10*unit),
 		nil,
 		nil,
 		"",
 	)
 	defer cache.Close(ctx)
+	assert.Equal(t, unit, int64(cache.BackingSize(1)))
 
 	SetMemoryCachePressureTargetPercent(50, time.Now().Add(-time.Second))
 
@@ -863,5 +978,5 @@ func TestMemoryCachePressureAdmissionExpires(t *testing.T) {
 		}},
 	}
 	assert.NoError(t, cache.Update(ctx, vec, false))
-	assert.Equal(t, int64(1), cache.cache.Used())
+	assert.Equal(t, unit, cache.cache.Used())
 }

@@ -55,6 +55,36 @@ func TestJemallocAllocatorReportsClassBackingAndArenaStats(t *testing.T) {
 	require.Equal(t, before.Allocated, after.Allocated)
 }
 
+func TestJemallocAllocatorArenaStatsCoverMixedLiveSizeClasses(t *testing.T) {
+	allocator, err := NewJemallocAllocator()
+	require.NoError(t, err)
+
+	before, err := allocator.Stats()
+	require.NoError(t, err)
+
+	var backing uint64
+	var deallocators []Deallocator
+	for _, request := range []uint64{4 << 10, 128 << 10, 700 << 10, 1 << 20, 1500 << 10, 2 << 20} {
+		size, err := allocator.BackingSize(request)
+		require.NoError(t, err)
+		_, dec, err := allocator.Allocate(request, NoHints)
+		require.NoError(t, err)
+		backing += size
+		deallocators = append(deallocators, dec)
+	}
+
+	during, err := allocator.Stats()
+	require.NoError(t, err)
+	require.GreaterOrEqual(t, during.Allocated, before.Allocated+backing)
+
+	for _, dec := range deallocators {
+		dec.Deallocate()
+	}
+	after, err := allocator.Stats()
+	require.NoError(t, err)
+	require.Equal(t, before.Allocated, after.Allocated)
+}
+
 func TestJemallocAllocatorUsesIndependentArenas(t *testing.T) {
 	first, err := NewJemallocAllocator()
 	require.NoError(t, err)
