@@ -496,6 +496,10 @@ func readChunkedColumnWindow(
 		}
 		if dst == nil {
 			dst = part
+		} else if *part.GetType() != *dst.GetType() {
+			part.Free(mp)
+			dst.Free(mp)
+			return nil, moerr.NewInvalidInputNoCtx("chunked object column payload type mismatch")
 		} else {
 			if err = dst.UnionBatch(part, 0, part.Length(), nil, mp); err != nil {
 				part.Free(mp)

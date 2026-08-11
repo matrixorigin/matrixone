@@ -287,3 +287,58 @@ func TestChunkedColumnRejectsPayloadRowCountMismatch(t *testing.T) {
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "payload row count mismatch")
 }
+
+func makeMixedTypeChunkedColumn(t *testing.T, mp *mpool.MPool) []byte {
+	t.Helper()
+	left := vector.NewVec(types.T_int64.ToType())
+	right := vector.NewVec(types.T_int32.ToType())
+	require.NoError(t, vector.AppendFixed(left, int64(1), false, mp))
+	require.NoError(t, vector.AppendFixed(right, int32(2), false, mp))
+	defer left.Free(mp)
+	defer right.Free(mp)
+	leftPayload, err := marshalColumnVectorWindow(left, 0, 1, mp)
+	require.NoError(t, err)
+	rightPayload, err := marshalColumnVectorWindow(right, 0, 1, mp)
+	require.NoError(t, err)
+	headerSize := columnChunkHeaderSize + 2*columnChunkEntrySize
+	encoded := make([]byte, headerSize+len(leftPayload)+len(rightPayload))
+	copy(encoded, columnChunkMagic[:])
+	binary.LittleEndian.PutUint32(encoded[8:12], 2)
+	binary.LittleEndian.PutUint32(encoded[12:16], 2)
+	encodeColumnChunkMeta(encoded[columnChunkHeaderSize:], columnChunkMeta{
+		rowCount: 1, offset: uint32(headerSize), length: uint32(len(leftPayload)),
+		originSize: uint32(len(leftPayload)), algorithm: compress.None,
+	})
+	secondOffset := headerSize + len(leftPayload)
+	encodeColumnChunkMeta(encoded[columnChunkHeaderSize+columnChunkEntrySize:], columnChunkMeta{
+		rowStart: 1, rowCount: 1, offset: uint32(secondOffset), length: uint32(len(rightPayload)),
+		originSize: uint32(len(rightPayload)), algorithm: compress.None,
+	})
+	copy(encoded[headerSize:], leftPayload)
+	copy(encoded[secondOffset:], rightPayload)
+	return encoded
+}
+
+func TestChunkedColumnRejectsMixedLogicalTypes(t *testing.T) {
+	ctx := context.Background()
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	encoded := makeMixedTypeChunkedColumn(t, mp)
+	_, err := decodeChunkedColumn(ctx, encoded, fileservice.DefaultCacheDataAllocator())
+	require.ErrorContains(t, err, "payload type mismatch")
+
+	fs, err := fileservice.NewMemoryFS(
+		defines.SharedFileServiceName, fileservice.DisabledCacheConfig, nil,
+	)
+	require.NoError(t, err)
+	defer fs.Close(ctx)
+	const name = "mixed-type-chunked-column"
+	require.NoError(t, fs.Write(ctx, fileservice.IOVector{
+		FilePath: name,
+		Entries:  []fileservice.IOEntry{{Offset: 0, Size: int64(len(encoded)), Data: encoded}},
+	}))
+	_, err = readChunkedColumnWindow(ctx, name,
+		NewExtent(compress.Lz4Chunked, 0, uint32(len(encoded)), uint32(len(encoded))),
+		0, 2, fileservice.SkipAllCache, fs, mp)
+	require.ErrorContains(t, err, "payload type mismatch")
+}

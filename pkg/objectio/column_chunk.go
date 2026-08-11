@@ -258,6 +258,8 @@ func decodeChunkedColumn(
 		}
 		if dst == nil {
 			dst = vector.NewVec(*source.GetType())
+		} else if *source.GetType() != *dst.GetType() {
+			return nil, moerr.NewInvalidInputNoCtx("chunked object column payload type mismatch")
 		}
 		if err = dst.UnionBatch(source, 0, source.Length(), nil, mp); err != nil {
 			return nil, err
