@@ -367,7 +367,7 @@ func (mp *MysqlProtocolImpl) GetBool(id PropertyID) bool {
 }
 
 func (mp *MysqlProtocolImpl) Write(execCtx *ExecCtx, crs *perfcounter.CounterSet, bat *batch.Batch) error {
-	n := bat.Vecs[0].Length()
+	n := bat.RowCount()
 	//TODO: remove this MRS here
 	//Create a new temporary result set per pipeline thread.
 	mrs := MysqlResultSet{}
@@ -2141,7 +2141,19 @@ func setColLength(column *MysqlColumn, width int32) {
 	column.length = column.columnType.GetLength(width)
 }
 
-func setColFlag(column *MysqlColumn) {
+func setColFlag(column *MysqlColumn, col *planPb.ColDef) {
+	if col == nil {
+		return
+	}
+	if col.NotNull || col.Typ.NotNullable {
+		column.flag |= uint16(defines.NOT_NULL_FLAG)
+	}
+	if col.Primary {
+		column.flag |= uint16(defines.PRI_KEY_FLAG)
+	}
+	if col.Unique {
+		column.flag |= uint16(defines.UNIQUE_KEY_FLAG)
+	}
 	if column.auto_incr {
 		column.flag |= uint16(defines.AUTO_INCREMENT_FLAG)
 	}

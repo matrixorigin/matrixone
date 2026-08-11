@@ -410,6 +410,11 @@ type aliasItem struct {
 	astExpr tree.Expr
 }
 
+type orderResolutionMetadata struct {
+	bindAsts          []tree.Expr
+	semanticKeysByTag map[int32][]string
+}
+
 type BindContext struct {
 	binder Binder
 
@@ -447,9 +452,23 @@ type BindContext struct {
 	explicitSliding              bool
 	isDistinct                   bool
 	normalizeGroupingSetDistinct bool
-	isCorrelated                 bool
-	hasSingleRow                 bool
-	isGroupingSet                bool
+	// groupingSetOrderHiddenCount marks the generated ORDER BY projections at
+	// the tail of a grouping-set branch select list. They are qualified after
+	// FROM binding with source-column-first ORDER BY semantics.
+	groupingSetOrderHiddenCount int
+	// groupingSetOrderAliases carries the original select-list expressions for
+	// generated hidden ORDER BY projections. Unlike normal branch projections,
+	// those expressions use source-column-first alias fallback semantics.
+	groupingSetOrderAliases map[string][]tree.Expr
+	// groupingSetOrderSourceProbes resolves names whose presence cannot be known
+	// until the generated branch has bound its FROM scope.
+	groupingSetOrderSourceProbes map[string]*tree.GroupingSetOrderSourceProbe
+	// preserveOrderSemanticKeys retains source-scope projection identities for
+	// a grouping-set branch whose UNION output otherwise loses that identity.
+	preserveOrderSemanticKeys bool
+	isCorrelated              bool
+	hasSingleRow              bool
+	isGroupingSet             bool
 
 	//cteName denotes the alias of this BindContext.
 	//it may be from view name, cte name or subquery name
@@ -474,18 +493,25 @@ type BindContext struct {
 	windows    []*plan.Expr
 	times      []*plan.Expr
 
-	groupByAst      map[string]int32
-	groupByParamAst map[string]int32
-	aggregateByAst  map[string]int32
-	sampleByAst     map[string]int32
-	windowByAst     map[string]int32
-	projectByExpr   map[string]int32
-	timeByAst       map[string]int32
-	whereFilters    []*plan.Expr
+	groupByAst          map[string]int32
+	groupByCanonicalAst map[string]int32
+	groupByParamAst     map[string]int32
+	aggregateByAst      map[string]int32
+	sampleByAst         map[string]int32
+	windowByAst         map[string]int32
+	projectByExpr       map[string]int32
+	timeByAst           map[string]int32
+	whereFilters        []*plan.Expr
 
 	projectColByAst map[string]int32
 
 	projectByAst []SelectField
+	// projectSemanticKeys is populated only when preserveOrderSemanticKeys is
+	// set, keeping the ordinary-query projection path allocation-free.
+	projectSemanticKeys []string
+	// orderResolution is allocated only for generated ROLLUP/CUBE window
+	// boundaries that must preserve output AST categories and bound identity.
+	orderResolution *orderResolutionMetadata
 
 	numericProjectionTypes          []Type
 	numericTableProjectionTypes     map[string][]Type

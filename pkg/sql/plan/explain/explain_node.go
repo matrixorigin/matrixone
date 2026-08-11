@@ -768,7 +768,11 @@ func (ndesc *NodeDescribeImpl) GetDedupJoinCtxInfo(ctx context.Context, options 
 }
 func (ndesc *NodeDescribeImpl) GetFilterConditionInfo(ctx context.Context, options *ExplainOptions) (string, error) {
 	buf := bytes.NewBuffer(make([]byte, 0, 512))
-	buf.WriteString("Filter Cond: ")
+	if ndesc.Node.NodeType == plan.Node_ASSERT {
+		buf.WriteString("Assert Cond: ")
+	} else {
+		buf.WriteString("Filter Cond: ")
+	}
 	if options.Format == EXPLAIN_FORMAT_TEXT {
 		first := true
 		for _, v := range ndesc.Node.FilterList {
@@ -1288,7 +1292,7 @@ func (a AnalyzeInfoDescribeImpl) GetDescription(ctx context.Context, options *Ex
 	case plan.Node_SORT:
 		majorStr = "sort"
 		minorStr = "mergesort"
-	case plan.Node_FILTER:
+	case plan.Node_FILTER, plan.Node_ASSERT:
 		majorStr = ""
 		minorStr = "filter"
 	}

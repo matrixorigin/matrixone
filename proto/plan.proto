@@ -306,6 +306,9 @@ message ColDef {
   // get origin_name by ColDef.GetOriginCaseName(), letter case: origin
   string origin_name = 19;
   GeneratedCol generated_col = 20;
+  // Whether the column is part of a unique key. This is also used by result
+  // column metadata to populate the MySQL UNIQUE_KEY_FLAG.
+  bool unique = 21;
 }
 
 message Default {
@@ -1040,6 +1043,12 @@ message Node {
   // participates in hashing. A non-empty list must be a strict subset proven
   // by the optimizer to determine all remaining group_by expressions.
   repeated int32 group_by_hash_key = 78;
+
+  // FILTER only: evaluate this predicate at its current logical position.
+  // Neither the filter itself nor predicates from its parent may cross this
+  // node during pushdown. This is used when a predicate observes a final DML
+  // row image and moving it would change statement semantics.
+  bool filter_is_barrier = 79;
 }
 
 message SnapshotExtraInfo {
