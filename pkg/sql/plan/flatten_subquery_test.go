@@ -565,6 +565,139 @@ func TestCorrelatedPaginationKeepsSafeGlobalLimits(t *testing.T) {
 	}
 }
 
+func TestCorrelatedPaginationRootAndDeepScalarBoundaries(t *testing.T) {
+	const (
+		innerTag int32 = 10
+		outerTag int32 = 20
+	)
+	intType := plan.Type{Id: int32(types.T_int32)}
+	newCorr := func(depth int32) *plan.Expr {
+		return &plan.Expr{
+			Typ: intType,
+			Expr: &plan.Expr_Corr{Corr: &plan.CorrColRef{
+				RelPos: outerTag,
+				ColPos: 0,
+				Depth:  depth,
+			}},
+		}
+	}
+	equality := func(inner, outer *plan.Expr) *plan.Expr {
+		return &plan.Expr{Expr: &plan.Expr_F{F: &plan.Function{
+			Func: &plan.ObjectRef{ObjName: "="},
+			Args: []*plan.Expr{inner, outer},
+		}}}
+	}
+
+	t.Run("existential root rejects malformed sort", func(t *testing.T) {
+		builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+		node := &plan.Node{
+			NodeType: plan.Node_SORT,
+			Children: []int32{0, 0},
+			Limit:    makePlan2Uint64ConstExprWithType(1),
+		}
+		builder.qry.Nodes = []*plan.Node{{NodeType: plan.Node_TABLE_SCAN}, node}
+
+		_, err := builder.rewriteCorrelatedPagination(1, node, []*plan.Expr{
+			equality(GetColExpr(intType, innerTag, 0), newCorr(1)),
+		}, &BindContext{}, plan.SubqueryRef_EXISTS, true)
+		require.ErrorContains(t, err, "correlated LIMIT sort must have one child")
+	})
+
+	t.Run("deep scalar keeps its boundary for established rejection", func(t *testing.T) {
+		builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+		node := &plan.Node{NodeType: plan.Node_PROJECT, Limit: makePlan2Uint64ConstExprWithType(1)}
+		builder.qry.Nodes = []*plan.Node{node}
+
+		nodeID, err := builder.rewriteCorrelatedPagination(0, node, []*plan.Expr{
+			equality(GetColExpr(intType, innerTag, 0), newCorr(2)),
+		}, &BindContext{}, plan.SubqueryRef_SCALAR, false)
+		require.NoError(t, err)
+		require.Equal(t, int32(0), nodeID)
+		require.NotNil(t, node.Limit)
+	})
+}
+
+func TestCorrelatedPaginationProjectionCorrelationDetection(t *testing.T) {
+	const projectionTag int32 = 10
+	intType := plan.Type{Id: int32(types.T_int32)}
+	corr := &plan.Expr{
+		Typ:  intType,
+		Expr: &plan.Expr_Corr{Corr: &plan.CorrColRef{RelPos: 20, ColPos: 0, Depth: 1}},
+	}
+	projectedCol := GetColExpr(intType, projectionTag, 0)
+	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+	builder.qry.Nodes = []*plan.Node{
+		{NodeType: plan.Node_TABLE_SCAN},
+		{
+			NodeType:    plan.Node_PROJECT,
+			Children:    []int32{0},
+			BindingTags: []int32{projectionTag},
+			ProjectList: []*plan.Expr{corr},
+		},
+	}
+
+	require.False(t, builder.hasCorrColThroughProjection(nil, []int32{1}))
+	require.True(t, builder.hasCorrColThroughProjection(corr, []int32{1}))
+	require.True(t, builder.hasCorrColThroughProjection(projectedCol, []int32{1}))
+	require.True(t, builder.hasCorrColThroughProjection(&plan.Expr{Expr: &plan.Expr_F{F: &plan.Function{
+		Args: []*plan.Expr{makePlan2Int64ConstExprWithType(1), corr},
+	}}}, []int32{1}))
+	require.True(t, builder.hasCorrColThroughProjection(&plan.Expr{Expr: &plan.Expr_List{List: &plan.ExprList{
+		List: []*plan.Expr{makePlan2Int64ConstExprWithType(1), corr},
+	}}}, []int32{1}))
+	require.True(t, builder.hasCorrColThroughProjection(&plan.Expr{Expr: &plan.Expr_W{W: &plan.WindowSpec{
+		PartitionBy: []*plan.Expr{corr},
+	}}}, []int32{1}))
+	require.False(t, builder.hasCorrColThroughProjection(&plan.Expr{Expr: &plan.Expr_Col{}}, []int32{1}))
+	require.False(t, builder.hasCorrColThroughProjection(GetColExpr(intType, projectionTag+1, 0), []int32{1}))
+
+	projected, children, ok := builder.findProjectedExpr([]int32{1}, projectedCol.GetCol())
+	require.True(t, ok)
+	require.Same(t, corr, projected)
+	require.Equal(t, []int32{0}, children)
+	_, _, ok = builder.findProjectedExpr([]int32{1}, GetColExpr(intType, projectionTag, 1).GetCol())
+	require.False(t, ok)
+}
+
+func TestCorrelatedPaginationPartitionKeyHelpers(t *testing.T) {
+	const (
+		innerTag int32 = 10
+		outerTag int32 = 20
+	)
+	intType := plan.Type{Id: int32(types.T_int32)}
+	inner := GetColExpr(intType, innerTag, 0)
+	corr := &plan.Expr{
+		Typ:  intType,
+		Expr: &plan.Expr_Corr{Corr: &plan.CorrColRef{RelPos: outerTag, ColPos: 0, Depth: 1}},
+	}
+	equality := func(name string, left, right *plan.Expr) *plan.Expr {
+		return &plan.Expr{Expr: &plan.Expr_F{F: &plan.Function{
+			Func: &plan.ObjectRef{ObjName: name},
+			Args: []*plan.Expr{left, right},
+		}}}
+	}
+
+	keys, ok := correlatedPaginationPartitionKeys([]*plan.Expr{equality("=", corr, inner)})
+	require.True(t, ok)
+	require.Len(t, keys, 1)
+	require.Equal(t, inner.GetCol(), keys[0].GetCol())
+
+	keys, ok = correlatedPaginationPartitionKeys([]*plan.Expr{corr})
+	require.True(t, ok)
+	require.Empty(t, keys)
+
+	_, ok = correlatedPaginationPartitionKeys([]*plan.Expr{equality("<", inner, corr)})
+	require.False(t, ok)
+
+	require.False(t, exprHasColRef(nil))
+	require.True(t, exprHasColRef(&plan.Expr{Expr: &plan.Expr_List{List: &plan.ExprList{List: []*plan.Expr{inner}}}}))
+	require.True(t, exprHasColRef(&plan.Expr{Expr: &plan.Expr_F{F: &plan.Function{Args: []*plan.Expr{inner}}}}))
+	require.False(t, allCorrColsAtDepthOne(&plan.Expr{Expr: &plan.Expr_Corr{}}))
+	require.False(t, allCorrColsAtDepthOne(&plan.Expr{Expr: &plan.Expr_List{List: &plan.ExprList{List: []*plan.Expr{
+		{Expr: &plan.Expr_Corr{Corr: &plan.CorrColRef{Depth: 2}}},
+	}}}}))
+}
+
 func TestCorrelatedLimitOffsetUsesPartitionedInterval(t *testing.T) {
 	logicPlan, err := runOneStmt(NewMockOptimizer(true), t, `
 		SELECT n1.N_NATIONKEY,
