@@ -34,6 +34,7 @@ import (
 	indexplugin "github.com/matrixorigin/matrixone/pkg/indexplugin"
 	pbplan "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/sql/compile"
 	icebergsql "github.com/matrixorigin/matrixone/pkg/sql/iceberg"
 	sqlmongodb "github.com/matrixorigin/matrixone/pkg/sql/mongodb"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
@@ -643,6 +644,28 @@ func doDropSnapshot(ctx context.Context, ses *Session, stmt *tree.DropSnapShot) 
 				"snapshot %q is managed by data branch and cannot be dropped directly",
 				string(stmt.Name),
 			)
+		}
+		if compile.ViewMetadataRefreshEnabled(ses.GetService()) {
+			var record *snapshotRecord
+			if record, err = getSnapshotByName(ctx, bh, string(stmt.Name)); err != nil {
+				return err
+			}
+			var boundSnapshot *pbplan.Snapshot
+			if boundSnapshot, err = planSnapshotFromRecord(ctx, record); err != nil {
+				return err
+			}
+			var snapshotData []byte
+			if snapshotData, err = json.Marshal(boundSnapshot); err != nil {
+				return err
+			}
+			systemCtx := defines.AttachAccountId(ctx, catalog.System_Account)
+			if err = bh.Exec(systemCtx, catalog.ViewMetadataLifecycleGateSQL); err != nil {
+				return err
+			}
+			if err = bh.Exec(systemCtx, compile.SnapshotViewMetadataInvalidationSQL(
+				string(snapshotData), uint64(time.Now().UnixNano()))); err != nil {
+				return err
+			}
 		}
 		sql = getSqlForDropSnapshot(string(stmt.Name))
 		err = bh.Exec(ctx, sql)
@@ -1897,7 +1920,12 @@ func doResolveSnapshotWithSnapshotName(ctx context.Context, ses FeSession, snaps
 		return
 	}
 
+	return planSnapshotFromRecord(ctx, record)
+}
+
+func planSnapshotFromRecord(ctx context.Context, record *snapshotRecord) (*pbplan.Snapshot, error) {
 	var accountId uint32
+	var err error
 	// cluster level record has no accountName, so accountId is 0
 	if len(record.accountName) != 0 {
 		if record.level == tree.RESTORELEVELACCOUNT.String() {
@@ -1905,7 +1933,7 @@ func doResolveSnapshotWithSnapshotName(ctx context.Context, ses FeSession, snaps
 		} else {
 			accountId, err = defines.GetAccountId(ctx)
 			if err != nil {
-				return
+				return nil, err
 			}
 		}
 	}

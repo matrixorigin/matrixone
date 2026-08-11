@@ -95,6 +95,13 @@ func dropSubscription(ctx context.Context, c *Compile, dbName string) error {
 	if err != nil {
 		return err
 	}
+	if viewMetadataRefreshEnabled(c.proc.GetService()) &&
+		(!c.proc.GetSessionInfo().IsRestore || restoreInvalidatesViewMetadata(c.proc.Ctx)) {
+		if err = c.runSqlWithSystemTenant(SubscriptionViewMetadataInvalidationSQL(
+			accountId, dbName, uint64(c.proc.GetTxnOperator().SnapshotTS().PhysicalTime))); err != nil {
+			return err
+		}
+	}
 
 	// update SubStatusNormal records
 	sql := fmt.Sprintf(`

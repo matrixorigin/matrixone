@@ -154,6 +154,40 @@ CREATE TABLE invalid_left (c1 INT, c2 INT);
 SHOW CREATE TABLE invalid_left;
 Table    Create Table
 invalid_left    CREATE TABLE `invalid_left` (\n  `c1` int DEFAULT NULL,\n  `c2` int DEFAULT NULL\n)
+CREATE TABLE restored_source (a INT);
+CREATE VIEW restored_direct AS SELECT a FROM restored_source;
+CREATE VIEW restored_downstream AS SELECT a FROM restored_direct;
+DROP SNAPSHOT IF EXISTS view_metadata_before_widening;
+CREATE SNAPSHOT view_metadata_before_widening FOR ACCOUNT;
+ALTER TABLE restored_source MODIFY a BIGINT;
+DESC restored_downstream;
+Field    Type    Null    Key    Default    Extra    Comment
+a    BIGINT(64)    YES        NULL
+RESTORE TABLE view_metadata_refresh.restored_source{SNAPSHOT='view_metadata_before_widening'};
+SELECT sleep(12);
+sleep(12)
+0
+DESC restored_direct;
+Field    Type    Null    Key    Default    Extra    Comment
+a    INT(32)    YES        NULL
+DESC restored_downstream;
+Field    Type    Null    Key    Default    Extra    Comment
+a    INT(32)    YES        NULL
+CREATE VIEW snapshot_direct AS
+SELECT a FROM restored_source{SNAPSHOT='view_metadata_before_widening'};
+CREATE VIEW snapshot_downstream AS SELECT a FROM snapshot_direct;
+CREATE TABLE copied_snapshot_view AS SELECT * FROM snapshot_downstream;
+DESC copied_snapshot_view;
+Field    Type    Null    Key    Default    Extra    Comment
+a    INT(32)    YES        NULL
+DROP SNAPSHOT view_metadata_before_widening;
+SELECT count(*) = 2 AS snapshot_closure_invalidated
+FROM mo_catalog.mo_view_refresh
+WHERE target_database_name = 'view_metadata_refresh'
+AND target_relation_name IN ('snapshot_direct','snapshot_downstream')
+AND status <> 'CURRENT';
+snapshot_closure_invalidated
+1
 CREATE TABLE removed_source (a INT);
 CREATE VIEW removed_direct AS SELECT a FROM removed_source;
 CREATE VIEW removed_downstream AS SELECT a FROM removed_direct;

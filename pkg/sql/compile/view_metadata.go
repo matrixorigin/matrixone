@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
@@ -78,6 +79,18 @@ type viewRefreshIdentityKey struct {
 
 func viewMetadataRefreshEnabled(serviceID string) bool {
 	return clusterservice.AllKnownCNsSupportViewMetadataRefresh(serviceID)
+}
+
+// ViewMetadataRefreshEnabled reports whether every live CN has observed the
+// catalog version which owns the View metadata lifecycle tables. Frontend
+// binding-lifecycle DDL uses the same barrier before issuing invalidation SQL.
+func ViewMetadataRefreshEnabled(serviceID string) bool {
+	return viewMetadataRefreshEnabled(serviceID)
+}
+
+func restoreInvalidatesViewMetadata(ctx context.Context) bool {
+	level, ok := ctx.Value(tree.CloneLevelCtxKey{}).(tree.CloneLevelType)
+	return ok && (level == tree.RestoreCloneLevelTable || level == tree.RestoreCloneLevelDatabase)
 }
 
 func (c *Compile) persistViewDependencies(
@@ -233,6 +246,10 @@ func (c *Compile) refreshViewsAfterRelationMutation(
 	oldLogicalID uint64,
 ) error {
 	if c.proc.GetSessionInfo().IsRestore {
+		// Table/database restore invalidates at the relation-removal boundary,
+		// where the old physical and logical identities are still available.
+		// Repeating invalidation after recreation would advance the generation
+		// twice. Account/cluster restore rebuilds the lifecycle tables themselves.
 		return nil
 	}
 	if !viewMetadataRefreshEnabled(c.proc.GetService()) {
@@ -402,7 +419,7 @@ func (c *Compile) enqueueViewsAfterRelationRemoval(
 	relationID uint64,
 	logicalID uint64,
 ) error {
-	if c.proc.GetSessionInfo().IsRestore {
+	if c.proc.GetSessionInfo().IsRestore && !restoreInvalidatesViewMetadata(c.proc.Ctx) {
 		return nil
 	}
 	if !viewMetadataRefreshEnabled(c.proc.GetService()) {
@@ -430,7 +447,7 @@ func (c *Compile) enqueueViewsAfterRelationRemoval(
 }
 
 func (c *Compile) deleteDroppedViewMetadata(relationID uint64) error {
-	if c.proc.GetSessionInfo().IsRestore {
+	if c.proc.GetSessionInfo().IsRestore && !restoreInvalidatesViewMetadata(c.proc.Ctx) {
 		return nil
 	}
 	if !viewMetadataRefreshEnabled(c.proc.GetService()) {
@@ -461,7 +478,7 @@ func (c *Compile) deleteDroppedDatabaseViewMetadata(
 	databaseID uint64,
 	databaseName string,
 ) error {
-	if c.proc.GetSessionInfo().IsRestore {
+	if c.proc.GetSessionInfo().IsRestore && !restoreInvalidatesViewMetadata(c.proc.Ctx) {
 		return nil
 	}
 	if !viewMetadataRefreshEnabled(c.proc.GetService()) {
@@ -571,13 +588,6 @@ func viewRefreshKeyForMutation(mutation viewRelationMutation) viewRefreshIdentit
 	}
 }
 
-func viewRefreshKeyForTarget(target viewRefreshTarget) viewRefreshIdentityKey {
-	return viewRefreshKeyForMutation(viewRelationMutation{
-		accountID: target.accountID, databaseID: target.databaseID,
-		relationID: target.relationID, logicalID: target.logicalID,
-	})
-}
-
 // enqueueDependentViewClosure invalidates the complete reverse dependency DAG
 // without requiring any View in that DAG to rebind successfully. The queries
 // follow exact persisted dependency identities, so work is proportional to the
@@ -587,101 +597,95 @@ func (c *Compile) enqueueDependentViewClosure(
 	generation uint64,
 	seed ...viewRefreshIdentityKey,
 ) error {
-	seen := make(map[viewRefreshIdentityKey]struct{}, len(seed))
-	for _, key := range seed {
-		seen[key] = struct{}{}
-	}
-	targets, err := c.loadDependentViewIdentities(initialPredicate)
-	if err != nil {
+	if err := c.proc.Ctx.Err(); err != nil {
 		return err
 	}
-	queue := make([]viewRefreshTarget, 0, len(targets))
-	all := make([]viewRefreshTarget, 0, len(targets))
-	appendNew := func(candidates []viewRefreshTarget) {
-		for _, target := range candidates {
-			key := viewRefreshKeyForTarget(target)
-			if _, ok := seen[key]; ok {
-				continue
-			}
-			seen[key] = struct{}{}
-			queue = append(queue, target)
-			all = append(all, target)
-		}
-	}
-	appendNew(targets)
-	for len(queue) > 0 {
-		if err = c.proc.Ctx.Err(); err != nil {
-			return err
-		}
-		current := queue[0]
-		queue = queue[1:]
-		children, loadErr := c.loadDependentViewIdentities(
-			viewDependencyMutationPredicate(viewRelationMutation{
-				accountID: current.accountID, databaseID: current.databaseID,
-				relationID: current.relationID, logicalID: current.logicalID,
-				databaseName: current.databaseName, relationName: current.relationName,
-			}, 0, 0))
-		if loadErr != nil {
-			return loadErr
-		}
-		appendNew(children)
-	}
-	return c.enqueueViewRefreshTargets(all, generation)
+	return c.runSqlWithSystemTenant(
+		viewMetadataClosureInvalidationSQL(initialPredicate, generation, seed...))
 }
 
-func (c *Compile) loadDependentViewIdentities(predicate string) ([]viewRefreshTarget, error) {
-	result, err := c.runSqlWithResult(fmt.Sprintf(
-		"select distinct d.account_id,d.target_database_id,d.target_relation_id,"+
+func viewMetadataClosureInvalidationSQL(
+	initialPredicate string,
+	generation uint64,
+	seed ...viewRefreshIdentityKey,
+) string {
+	exclusions := make([]string, 0, len(seed))
+	for _, key := range seed {
+		exclusions = append(exclusions, fmt.Sprintf(
+			"(a.account_id=%d and a.target_database_id=%d and "+
+				"coalesce(nullif(a.target_logical_id,0),a.target_relation_id)=%d)",
+			key.accountID, key.databaseID, key.logicalID))
+	}
+	finalPredicate := "true"
+	if len(exclusions) > 0 {
+		finalPredicate = "not (" + strings.Join(exclusions, " or ") + ")"
+	}
+	return fmt.Sprintf(
+		"replace into %s.%s (%s) with recursive affected "+
+			"(account_id,target_database_id,target_relation_id,target_logical_id,"+
+			"target_database_name,target_relation_name) as ("+
+			"select d.account_id,d.target_database_id,d.target_relation_id,"+
 			"d.target_logical_id,d.target_database_name,d.target_relation_name from %s.%s d "+
-			"where %s order by d.account_id,d.target_database_id,d.target_relation_id",
-		catalog.MO_CATALOG, catalog.MO_VIEW_DEPENDENCIES, predicate),
-		int32(catalog.System_Account))
-	if err != nil {
-		return nil, err
-	}
-	defer result.Close()
-	targets := make([]viewRefreshTarget, 0)
-	result.ReadRows(func(rows int, columns []*vector.Vector) bool {
-		accounts := vector.MustFixedColNoTypeCheck[uint32](columns[0])
-		databaseIDs := vector.MustFixedColNoTypeCheck[uint64](columns[1])
-		relationIDs := vector.MustFixedColNoTypeCheck[uint64](columns[2])
-		logicalIDs := vector.MustFixedColNoTypeCheck[uint64](columns[3])
-		for row := range rows {
-			targets = append(targets, viewRefreshTarget{
-				accountID: accounts[row], databaseID: databaseIDs[row],
-				relationID: relationIDs[row], logicalID: logicalIDs[row],
-				databaseName: columns[4].GetStringAt(row), relationName: columns[5].GetStringAt(row),
-			})
-		}
-		return true
-	})
-	return targets, nil
+			"where d.target_relation_id<>0 and (%s) "+
+			"union select d.account_id,d.target_database_id,d.target_relation_id,"+
+			"d.target_logical_id,d.target_database_name,d.target_relation_name from %s.%s d "+
+			"join affected a on d.target_relation_id<>0 and d.source_account_id=a.account_id and ("+
+			"(d.source_database_id=a.target_database_id and d.source_relation_id<>0 "+
+			"and d.source_relation_id=a.target_relation_id) or "+
+			"(d.source_database_id=a.target_database_id and d.source_logical_id<>0 "+
+			"and d.source_logical_id=coalesce(nullif(a.target_logical_id,0),a.target_relation_id)) or "+
+			"(d.lower_case_table_names=0 and d.source_database_name=a.target_database_name "+
+			"and d.source_relation_name=a.target_relation_name) or "+
+			"(d.lower_case_table_names<>0 and lower(d.source_database_name)=lower(a.target_database_name) "+
+			"and lower(d.source_relation_name)=lower(a.target_relation_name)))) "+
+			"select a.account_id,a.target_database_id,a.target_relation_id,a.target_logical_id,"+
+			"a.target_database_name,a.target_relation_name,coalesce(r.target_generation+1,%d),"+
+			"coalesce(r.completed_generation,0),'%s',0,null,'',coalesce(r.lease_epoch,0)+1,null,"+
+			"coalesce(r.attempts,0) from affected a left join %s.%s r on "+
+			"a.account_id=r.account_id and a.target_relation_id=r.target_relation_id where %s",
+		catalog.MO_CATALOG, catalog.MO_VIEW_REFRESH, catalog.MoViewRefreshColumns,
+		catalog.MO_CATALOG, catalog.MO_VIEW_DEPENDENCIES, initialPredicate,
+		catalog.MO_CATALOG, catalog.MO_VIEW_DEPENDENCIES,
+		generation, viewRefreshStatusPending, catalog.MO_CATALOG, catalog.MO_VIEW_REFRESH,
+		finalPredicate)
 }
 
-func (c *Compile) enqueueViewRefreshTargets(targets []viewRefreshTarget, generation uint64) error {
-	for start := 0; start < len(targets); start += viewMetadataRecoveryPageSize {
-		end := min(start+viewMetadataRecoveryPageSize, len(targets))
-		predicates := make([]string, 0, end-start)
-		for _, target := range targets[start:end] {
-			predicates = append(predicates, fmt.Sprintf(
-				"(d.account_id=%d and d.target_relation_id=%d)",
-				target.accountID, target.relationID))
-		}
-		if err := c.runSqlWithSystemTenant(fmt.Sprintf(
-			"replace into %s.%s (%s) select distinct d.account_id,d.target_database_id,"+
-				"d.target_relation_id,d.target_logical_id,d.target_database_name,d.target_relation_name,"+
-				"coalesce(r.target_generation+1,%d),coalesce(r.completed_generation,0),'%s',"+
-				"0,null,'',coalesce(r.lease_epoch,0)+1,null,coalesce(r.attempts,0) "+
-				"from %s.%s d left join %s.%s r on d.account_id=r.account_id "+
-				"and d.target_relation_id=r.target_relation_id where %s",
-			catalog.MO_CATALOG, catalog.MO_VIEW_REFRESH, catalog.MoViewRefreshColumns,
-			generation, viewRefreshStatusPending,
-			catalog.MO_CATALOG, catalog.MO_VIEW_DEPENDENCIES,
-			catalog.MO_CATALOG, catalog.MO_VIEW_REFRESH, strings.Join(predicates, " or "))); err != nil {
-			return err
-		}
-	}
-	return nil
+// SnapshotViewMetadataInvalidationSQL returns one atomic reverse-closure
+// invalidation statement for Views bound to the exact persisted snapshot.
+func SnapshotViewMetadataInvalidationSQL(snapshotData string, generation uint64) string {
+	return viewMetadataClosureInvalidationSQL(fmt.Sprintf(
+		"d.snapshot_data='%s'", sqlquote.EscapeString(snapshotData)), generation)
+}
+
+// PublicationViewMetadataInvalidationSQL invalidates subscription Views bound
+// to a publication's physical publisher database. This deliberately includes
+// sibling publications of the same database: over-invalidation is safe and
+// avoids depending on mutable publication names which are not relation identity.
+func PublicationViewMetadataInvalidationSQL(
+	publisherAccountID uint32,
+	publisherDatabaseID uint64,
+	generation uint64,
+) string {
+	return viewMetadataClosureInvalidationSQL(fmt.Sprintf(
+		"d.publisher_account_id=%d and d.source_account_id=%d%s",
+		publisherAccountID, publisherAccountID, func() string {
+			if publisherDatabaseID == 0 {
+				return ""
+			}
+			return fmt.Sprintf(" and d.source_database_id=%d", publisherDatabaseID)
+		}()), generation)
+}
+
+// SubscriptionViewMetadataInvalidationSQL invalidates Views owned by one
+// subscriber which bind through the exact subscription database name.
+func SubscriptionViewMetadataInvalidationSQL(
+	subscriberAccountID uint32,
+	subscriptionName string,
+	generation uint64,
+) string {
+	return viewMetadataClosureInvalidationSQL(fmt.Sprintf(
+		"d.account_id=%d and d.subscription_name='%s'",
+		subscriberAccountID, sqlquote.EscapeString(subscriptionName)), generation)
 }
 
 func (c *Compile) refreshOneView(

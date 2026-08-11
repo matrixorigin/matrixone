@@ -34,6 +34,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/publication"
+	"github.com/matrixorigin/matrixone/pkg/sql/compile"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 )
@@ -478,6 +479,11 @@ func doAlterPublication(ctx context.Context, ses *Session, ap *tree.AlterPublica
 		err = moerr.NewInternalErrorf(ctx, "publication '%s' does not exist", pubName)
 		return
 	}
+	if ap.AccountsSet != nil || ap.DbName != "" || len(ap.Table) > 0 {
+		if err = invalidatePublicationViewMetadata(ctx, bh, ses.GetService(), pub); err != nil {
+			return err
+		}
+	}
 
 	// alter account
 	var oldSubAccounts, newSubAccounts map[int32]*pubsub.AccountInfo
@@ -662,7 +668,33 @@ func doDropPublication(ctx context.Context, ses *Session, dp *tree.DropPublicati
 		err = finishTxn(ctx, bh, err)
 	}()
 
+	pub, err := getPubInfo(ctx, bh, string(dp.Name))
+	if err != nil {
+		return err
+	}
+	if pub != nil {
+		if err = invalidatePublicationViewMetadata(ctx, bh, ses.GetService(), pub); err != nil {
+			return err
+		}
+	}
 	return dropPublication(ctx, bh, dp.IfExists, tenantInfo.Tenant, string(dp.Name))
+}
+
+func invalidatePublicationViewMetadata(
+	ctx context.Context,
+	bh BackgroundExec,
+	service string,
+	pub *pubsub.PubInfo,
+) error {
+	if !compile.ViewMetadataRefreshEnabled(service) {
+		return nil
+	}
+	systemCtx := defines.AttachAccountId(ctx, catalog.System_Account)
+	if err := bh.Exec(systemCtx, catalog.ViewMetadataLifecycleGateSQL); err != nil {
+		return err
+	}
+	return bh.Exec(systemCtx, compile.PublicationViewMetadataInvalidationSQL(
+		pub.PubAccountId, pub.DbId, uint64(time.Now().UnixNano())))
 }
 
 func doDropCcprSubscription(ctx context.Context, ses *Session, dcs *tree.DropCcprSubscription) (err error) {

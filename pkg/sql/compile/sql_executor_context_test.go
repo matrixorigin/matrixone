@@ -56,7 +56,7 @@ func TestNewInternalStatementContextPreservesRootAndClaimsStatsOnce(t *testing.T
 	}
 }
 
-func Test_panic(t *testing.T) {
+func TestCompilerContextUnsupportedOperations(t *testing.T) {
 	r := func() {
 		err := recover()
 		require.Equal(t, "not supported in internal sql executor", err)
@@ -64,20 +64,13 @@ func Test_panic(t *testing.T) {
 
 	c := &compilerContext{}
 
-	func() {
-		defer r()
-		_ = c.CheckSubscriptionValid("", "", "")
-	}()
-
-	func() {
-		defer r()
-		_, _ = c.IsPublishing("")
-	}()
-
-	func() {
-		defer r()
-		c.SetQueryingSubscription(nil)
-	}()
+	meta, err := c.GetSubscriptionMeta("", nil)
+	require.NoError(t, err)
+	require.Nil(t, meta)
+	require.Error(t, c.CheckSubscriptionValid("", "", ""))
+	_, err = c.IsPublishing("")
+	require.Error(t, err)
+	c.SetQueryingSubscription(nil)
 
 	func() {
 		defer r()
@@ -93,6 +86,103 @@ func Test_panic(t *testing.T) {
 		defer r()
 		_, _, _ = c.GetQueryResultMeta("")
 	}()
+}
+
+type compilerContextTestSQLHelper struct {
+	delegate any
+}
+
+type recordingSessionCompilerContext struct {
+	*plan.MockCompilerContext
+	snapshot             *plan.Snapshot
+	subscription         *plan.SubscriptionMeta
+	queryingSubscription *plan.SubscriptionMeta
+	checkedSubscription  []string
+	resolvedDatabase     string
+	resolvedTable        string
+	resolvedTableDef     *plan.TableDef
+}
+
+func (c *recordingSessionCompilerContext) ResolveSnapshotWithSnapshotName(name string) (*plan.Snapshot, error) {
+	if name != "daily" {
+		return nil, moerr.NewInternalErrorNoCtx("unexpected snapshot")
+	}
+	return c.snapshot, nil
+}
+
+func (c *recordingSessionCompilerContext) GetSubscriptionMeta(
+	dbName string,
+	snapshot *plan.Snapshot,
+) (*plan.SubscriptionMeta, error) {
+	if dbName != "sub" || snapshot != c.snapshot {
+		return nil, moerr.NewInternalErrorNoCtx("unexpected subscription binding")
+	}
+	return c.subscription, nil
+}
+
+func (c *recordingSessionCompilerContext) CheckSubscriptionValid(subName, accountName, pubName string) error {
+	c.checkedSubscription = []string{subName, accountName, pubName}
+	return nil
+}
+
+func (c *recordingSessionCompilerContext) SetQueryingSubscription(meta *plan.SubscriptionMeta) {
+	c.queryingSubscription = meta
+}
+
+func (c *recordingSessionCompilerContext) GetQueryingSubscription() *plan.SubscriptionMeta {
+	return c.queryingSubscription
+}
+
+func (c *recordingSessionCompilerContext) Resolve(
+	databaseName string,
+	tableName string,
+	_ *plan.Snapshot,
+) (*plan.ObjectRef, *plan.TableDef, error) {
+	c.resolvedDatabase = databaseName
+	c.resolvedTable = tableName
+	return &plan.ObjectRef{}, c.resolvedTableDef, nil
+}
+
+func (h *compilerContextTestSQLHelper) GetCompilerContext() any { return h.delegate }
+func (h *compilerContextTestSQLHelper) ExecSql(string) ([][]interface{}, error) {
+	return nil, nil
+}
+func (h *compilerContextTestSQLHelper) ExecSqlWithCtx(context.Context, string) ([][]interface{}, error) {
+	return nil, nil
+}
+func (h *compilerContextTestSQLHelper) GetSubscriptionMeta(string) (*plan.SubscriptionMeta, error) {
+	return nil, nil
+}
+
+func TestCompilerContextDelegatesSnapshotAndSubscriptionBinding(t *testing.T) {
+	snapshot := &plan.Snapshot{}
+	subscription := &plan.SubscriptionMeta{Name: "pub", SubName: "sub"}
+	delegate := &recordingSessionCompilerContext{
+		MockCompilerContext: plan.NewMockCompilerContext(false),
+		snapshot:            snapshot, subscription: subscription,
+		resolvedTableDef: &plan.TableDef{Name: "physical_source"},
+	}
+	proc := testutil.NewProcess(t)
+	c := &compilerContext{
+		ctx:  attachInternalExecutorCompilerContext(context.Background(), delegate),
+		proc: proc,
+	}
+
+	actualSnapshot, err := c.ResolveSnapshotWithSnapshotName("daily")
+	require.NoError(t, err)
+	require.Same(t, snapshot, actualSnapshot)
+	actualSubscription, err := c.GetSubscriptionMeta("sub", snapshot)
+	require.NoError(t, err)
+	require.Same(t, subscription, actualSubscription)
+	require.NoError(t, c.CheckSubscriptionValid("sub", "publisher", "pub"))
+	require.Equal(t, []string{"sub", "publisher", "pub"}, delegate.checkedSubscription)
+	c.SetQueryingSubscription(subscription)
+	require.Same(t, subscription, c.GetQueryingSubscription())
+	_, resolved, err := c.Resolve("subscription_db", "source", snapshot)
+	require.NoError(t, err)
+	require.Same(t, delegate.resolvedTableDef, resolved)
+	require.Equal(t, "subscription_db", delegate.resolvedDatabase)
+	require.Equal(t, "source", delegate.resolvedTable)
 }
 
 func TestCompilerContext_Database(t *testing.T) {

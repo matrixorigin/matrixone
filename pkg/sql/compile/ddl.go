@@ -145,7 +145,8 @@ func (s *Scope) DropDatabase(c *Compile) error {
 			}
 		}
 	}
-	if c.proc.Base.IsFrontend && !needSkipDbs[dbName] && !c.proc.GetSessionInfo().IsRestore {
+	if c.proc.Base.IsFrontend && !needSkipDbs[dbName] &&
+		(!c.proc.GetSessionInfo().IsRestore || restoreInvalidatesViewMetadata(c.proc.Ctx)) {
 		// Recovery takes this gate before locking a target View. Take it before
 		// the database lock so DROP cannot hold catalog/target locks while
 		// waiting for recovery's refresh-row transaction.
@@ -2095,6 +2096,11 @@ func (s *Scope) CreateTable(c *Compile) error {
 			oldCtx := c.proc.Ctx
 			// CTAS follow-up SQL needs frontend session for temp-table alias resolution.
 			ctxWithSession := attachInternalExecutorSession(c.proc.Ctx, c.proc.GetSession())
+			if helper := c.proc.GetSessionInfo().SqlHelper; helper != nil {
+				if compilerContext, ok := helper.GetCompilerContext().(plan2.CompilerContext); ok {
+					ctxWithSession = attachInternalExecutorCompilerContext(ctxWithSession, compilerContext)
+				}
+			}
 			// Force privilege checking for CTAS follow-up INSERT ... SELECT.
 			// Internal executor skips auth by default unless this flag is present.
 			c.proc.Ctx = attachInternalExecutorPrivilegeCheck(ctxWithSession)
@@ -3615,8 +3621,8 @@ func (s *Scope) dropTableSingle(c *Compile, qry *plan.DropTable) error {
 	droppedTableDef := rel.GetTableDef(c.proc.Ctx)
 	droppedLogicalID := droppedTableDef.GetLogicalId()
 	droppedDatabaseID := droppedTableDef.GetDbId()
-	if c.proc.Base.IsFrontend && !isTemp && !c.ignorePublish &&
-		!needSkipDbs[dbName] && !c.proc.GetSessionInfo().IsRestore {
+	if c.proc.Base.IsFrontend && !isTemp && !c.ignorePublish && !needSkipDbs[dbName] &&
+		(!c.proc.GetSessionInfo().IsRestore || restoreInvalidatesViewMetadata(c.proc.Ctx)) {
 		// Keep the global gate ahead of the target/source relation lock. This is
 		// the same order used by recovery when it claims and regenerates a View.
 		if err = lockViewMetadataLifecycleGate(c.proc); err != nil {

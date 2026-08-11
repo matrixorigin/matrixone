@@ -31,6 +31,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
@@ -87,66 +89,25 @@ type deadlineCheckingSQLExecutor struct {
 	expectedError error
 }
 
-func makeDependentViewIdentityResult(
-	t *testing.T,
-	proc *process.Process,
-	targets ...viewRefreshTarget,
-) executor.Result {
-	t.Helper()
-	result := executor.NewMemResult([]types.Type{
-		types.T_uint32.ToType(), types.T_uint64.ToType(), types.T_uint64.ToType(),
-		types.T_uint64.ToType(), types.T_varchar.ToType(), types.T_varchar.ToType(),
-	}, proc.Mp())
-	result.NewBatchWithRowCount(len(targets))
-	accounts := make([]uint32, len(targets))
-	databaseIDs := make([]uint64, len(targets))
-	relationIDs := make([]uint64, len(targets))
-	logicalIDs := make([]uint64, len(targets))
-	databaseNames := make([]string, len(targets))
-	relationNames := make([]string, len(targets))
-	for index, target := range targets {
-		accounts[index] = target.accountID
-		databaseIDs[index] = target.databaseID
-		relationIDs[index] = target.relationID
-		logicalIDs[index] = target.logicalID
-		databaseNames[index] = target.databaseName
-		relationNames[index] = target.relationName
-	}
-	require.NoError(t, executor.AppendFixedRows(result, 0, accounts))
-	require.NoError(t, executor.AppendFixedRows(result, 1, databaseIDs))
-	require.NoError(t, executor.AppendFixedRows(result, 2, relationIDs))
-	require.NoError(t, executor.AppendFixedRows(result, 3, logicalIDs))
-	require.NoError(t, executor.AppendStringRows(result, 4, databaseNames))
-	require.NoError(t, executor.AppendStringRows(result, 5, relationNames))
-	return result.GetResult()
-}
-
-func TestRelationRemovalInvalidatesCompleteDependencyClosureOnce(t *testing.T) {
+func TestRelationRemovalUsesOneAtomicRecursiveClosureInvalidation(t *testing.T) {
 	proc := testutil.NewProcess(t)
-	target := func(id uint64, name string) viewRefreshTarget {
-		return viewRefreshTarget{
-			accountID: 1, databaseID: 2, relationID: id, logicalID: id + 100,
-			databaseName: "db", relationName: name,
-		}
-	}
-	v1, v2, v3, v4 := target(11, "v1"), target(12, "v2"), target(13, "v3"), target(14, "v4")
-	exec := &viewMetadataCleanupRecordingExecutor{results: []executor.Result{
-		makeDependentViewIdentityResult(t, proc, v1),
-		makeDependentViewIdentityResult(t, proc, v2, v3),
-		makeDependentViewIdentityResult(t, proc, v4),
-		makeDependentViewIdentityResult(t, proc, v4),
-		makeDependentViewIdentityResult(t, proc, v1),
-	}}
+	exec := &viewMetadataCleanupRecordingExecutor{}
 	installViewMetadataTestExecutor(t, proc, exec)
 	c := &Compile{proc: proc, pn: &planpb.Plan{}}
 	root := viewRefreshIdentityKey{accountID: 1, databaseID: 2, logicalID: 999}
 	require.NoError(t, c.enqueueDependentViewClosure("root predicate", 77, root))
-	require.Len(t, exec.sqls, 6)
-	enqueueSQL := exec.sqls[5]
-	for _, id := range []uint64{11, 12, 13, 14} {
-		require.Equal(t, 1, strings.Count(enqueueSQL,
-			fmt.Sprintf("d.target_relation_id=%d", id)))
-	}
+	require.Len(t, exec.sqls, 1)
+	enqueueSQL := exec.sqls[0]
+	require.Contains(t, enqueueSQL, "with recursive affected")
+	require.Contains(t, enqueueSQL, "root predicate")
+	require.Equal(t, 2, strings.Count(enqueueSQL, "d.target_relation_id<>0"))
+	require.Contains(t, enqueueSQL, " union select ")
+	require.NotContains(t, enqueueSQL, "select distinct")
+	require.Contains(t, enqueueSQL, "coalesce(r.target_generation+1,77)")
+	require.Contains(t, enqueueSQL,
+		"not ((a.account_id=1 and a.target_database_id=2 and "+
+			"coalesce(nullif(a.target_logical_id,0),a.target_relation_id)=999))")
+	require.NotContains(t, enqueueSQL, " limit ")
 }
 
 func TestRecoveryPropagationOnlyInvalidatesCurrentDependents(t *testing.T) {
@@ -250,6 +211,60 @@ func TestViewMetadataLifecycleSkipsRestoreCatalogDDL(t *testing.T) {
 	require.NoError(t, c.enqueueViewsAfterRelationRemoval("db", "t", 0, 0, 0))
 	require.NoError(t, c.deleteDroppedViewMetadata(1))
 	require.NoError(t, c.deleteDroppedDatabaseViewMetadata(0, 1, "db"))
+}
+
+func TestTableAndDatabaseRestoreInvalidateAtRelationRemoval(t *testing.T) {
+	for _, level := range []tree.CloneLevelType{
+		tree.RestoreCloneLevelTable,
+		tree.RestoreCloneLevelDatabase,
+	} {
+		proc := testutil.NewProcess(t)
+		ctrl := gomock.NewController(t)
+		txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
+		txnOperator.EXPECT().SnapshotTS().Return(timestamp.Timestamp{PhysicalTime: 77})
+		proc.Base.TxnOperator = txnOperator
+		proc.GetSessionInfo().IsRestore = true
+		proc.Ctx = context.WithValue(proc.Ctx, tree.CloneLevelCtxKey{}, level)
+		exec := &viewMetadataCleanupRecordingExecutor{}
+		installViewMetadataTestExecutor(t, proc, exec)
+		c := &Compile{proc: proc, pn: &planpb.Plan{}}
+
+		require.NoError(t, c.enqueueViewsAfterRelationRemoval("db", "src", 8, 9, 10))
+		require.Len(t, exec.sqls, 1)
+		require.Contains(t, exec.sqls[0], "with recursive affected")
+		require.Contains(t, exec.sqls[0], "d.source_relation_id in (9,0)")
+		require.NotContains(t, exec.sqls[0], "for update")
+
+		exec.sqls = nil
+		require.NoError(t, c.refreshViewsAfterRelationMutation("db", "src", 9, 10))
+		require.Empty(t, exec.sqls)
+	}
+}
+
+func TestBindingLifecycleInvalidationSQLUsesPersistedIdentity(t *testing.T) {
+	snapshotSQL := SnapshotViewMetadataInvalidationSQL(`{"ExtraInfo":{"Name":"odd snapshot"}}`, 7)
+	require.Contains(t, snapshotSQL,
+		`d.snapshot_data='{"ExtraInfo":{"Name":"odd snapshot"}}'`)
+	require.NotContains(t, strings.ToLower(snapshotSQL), " like ")
+
+	publicationSQL := PublicationViewMetadataInvalidationSQL(8, 9, 10)
+	require.Contains(t, publicationSQL,
+		"d.publisher_account_id=8 and d.source_account_id=8 and d.source_database_id=9")
+	accountPublicationSQL := PublicationViewMetadataInvalidationSQL(8, 0, 10)
+	require.NotContains(t, accountPublicationSQL, "d.source_database_id=0")
+
+	subscriptionSQL := SubscriptionViewMetadataInvalidationSQL(11, "odd name", 12)
+	require.Contains(t, subscriptionSQL,
+		"d.account_id=11 and d.subscription_name='odd name'")
+	for _, sql := range []string{snapshotSQL, publicationSQL, accountPublicationSQL, subscriptionSQL} {
+		require.Contains(t, sql, "with recursive affected")
+		require.Contains(t, sql, " union select ")
+		require.NotContains(t, sql, "select distinct")
+		require.Contains(t, sql, "replace into mo_catalog.mo_view_refresh")
+		statements, err := mysql.Parse(context.Background(), sql, 1)
+		require.NoError(t, err)
+		require.Len(t, statements, 1)
+	}
 }
 
 func TestViewMetadataLifecycleSkipsCatalogDDLBeforeCapabilityActivation(t *testing.T) {

@@ -907,7 +907,8 @@ func (c *Compile) enqueueViewsAfterDatabaseRemoval(
 	databaseID uint64,
 	generation uint64,
 ) error {
-	if c.proc.GetSessionInfo().IsRestore || !viewMetadataRefreshEnabled(c.proc.GetService()) {
+	if (c.proc.GetSessionInfo().IsRestore && !restoreInvalidatesViewMetadata(c.proc.Ctx)) ||
+		!viewMetadataRefreshEnabled(c.proc.GetService()) {
 		return nil
 	}
 	return c.enqueueDependentViewClosure(fmt.Sprintf(
