@@ -2400,6 +2400,23 @@ func TestBuiltInUUIDExtract(t *testing.T) {
 	}
 }
 
+func TestUUIDFunctionRegistrations(t *testing.T) {
+	for _, fid := range []int{UUID, UUID_V1, UUID_V4, UUID_V6, UUID_EXTRACT_VERSION, UUID_EXTRACT_TIMESTAMP} {
+		f := allSupportedFunctions[fid]
+		require.Equal(t, fid, f.functionId)
+		require.NotEmpty(t, f.Overloads)
+		for _, ov := range f.Overloads {
+			argTs := make([]types.Type, len(ov.args))
+			for i, a := range ov.args {
+				argTs[i] = a.ToType()
+			}
+			rt := ov.retType(argTs)
+			require.NotEqual(t, types.T_any, rt.Oid)
+			require.NotNil(t, ov.newOp())
+		}
+	}
+}
+
 func mustParseUuid(t *testing.T, s string) types.Uuid {
 	u, err := uuid.Parse(s)
 	require.NoError(t, err)
