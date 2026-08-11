@@ -83,6 +83,18 @@ type unknownCommitResolverLockService struct {
 	resolveErr       error
 }
 
+type scheduledUnknownCommitResolutionError struct {
+	done <-chan struct{}
+}
+
+func (e scheduledUnknownCommitResolutionError) Error() string {
+	return "unknown commit cleanup scheduled without callback"
+}
+
+func (e scheduledUnknownCommitResolutionError) ResolutionDone() <-chan struct{} {
+	return e.done
+}
+
 func (s *unknownCommitResolverLockService) GetServiceID() string {
 	return "unknown-commit-resolver"
 }
@@ -1625,6 +1637,115 @@ func TestCommitUnknownScheduleFailureReleasesAdmission(t *testing.T) {
 		require.Zero(t, active)
 		require.Zero(t, waiting)
 	}, WithLockService(resolver), WithMaxActiveTxn(1))
+}
+
+func TestCommitUnknownScheduledWithoutCallbackRetainsAdmission(t *testing.T) {
+	resolutionDone := make(chan struct{})
+	resolver := &unknownCommitResolverLockService{
+		resolveErr: fmt.Errorf(
+			"wrapped resolver result: %w",
+			scheduledUnknownCommitResolutionError{done: resolutionDone},
+		),
+	}
+	RunTxnTests(func(c TxnClient, sender rpc.TxnSender) {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		ts := sender.(*testTxnSender)
+		ts.setManual(func(result *rpc.SendResult, err error) (*rpc.SendResult, error) {
+			return nil, moerr.NewTxnUnknown(ctx, "test")
+		})
+
+		op, err := c.New(
+			ctx,
+			newTestTimestamp(0),
+			WithUserTxn(),
+			WithTxnMode(txn.TxnMode_Pessimistic),
+		)
+		require.NoError(t, err)
+		tc := op.(*txnOperator)
+		tc.AddWorkspace(&trackingWorkspace{
+			commitRequests: []txn.TxnRequest{newTNRequest(1, 1)},
+		})
+		tc.mu.txn.TNShards = append(
+			tc.mu.txn.TNShards,
+			metadata.TNShard{TNShardRecord: metadata.TNShardRecord{ShardID: 1}},
+		)
+		err = tc.Commit(ctx)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnUnknown))
+		require.True(t, tc.reset.unknownCommitResolutionTransferred)
+		users, active, waiting := txnAdmissionCounts(c)
+		require.Equal(t, 1, users)
+		require.Zero(t, active)
+		require.Zero(t, waiting)
+
+		type newResult struct {
+			op  TxnOperator
+			err error
+		}
+		newC := make(chan newResult, 1)
+		go func() {
+			op, err := c.New(ctx, newTestTimestamp(0), WithUserTxn())
+			newC <- newResult{op: op, err: err}
+		}()
+		require.Eventually(t, func() bool {
+			_, _, waiting := txnAdmissionCounts(c)
+			return waiting == 1
+		}, time.Second, 10*time.Millisecond)
+		select {
+		case result := <-newC:
+			require.FailNow(t, "new user txn bypassed scheduled cleanup", result.err)
+		case <-time.After(100 * time.Millisecond):
+		}
+
+		close(resolutionDone)
+		result := <-newC
+		require.NoError(t, result.err)
+		require.NoError(t, result.op.Rollback(ctx))
+		require.Eventually(t, func() bool {
+			users, active, waiting := txnAdmissionCounts(c)
+			return users == 0 && active == 0 && waiting == 0
+		}, time.Second, 10*time.Millisecond)
+	}, WithLockService(resolver), WithMaxActiveTxn(1))
+}
+
+func TestInternalCommitUnknownScheduledWithoutCallbackRetainsAdmission(t *testing.T) {
+	resolutionDone := make(chan struct{})
+	resolver := &unknownCommitResolverLockService{
+		resolveErr: scheduledUnknownCommitResolutionError{done: resolutionDone},
+	}
+	RunTxnTests(func(c TxnClient, sender rpc.TxnSender) {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		ts := sender.(*testTxnSender)
+		ts.setManual(func(result *rpc.SendResult, err error) (*rpc.SendResult, error) {
+			return nil, moerr.NewTxnUnknown(ctx, "test")
+		})
+
+		op, err := c.New(
+			ctx,
+			newTestTimestamp(0),
+			WithTxnMode(txn.TxnMode_Pessimistic),
+		)
+		require.NoError(t, err)
+		tc := op.(*txnOperator)
+		tc.AddWorkspace(&trackingWorkspace{
+			commitRequests: []txn.TxnRequest{newTNRequest(1, 1)},
+		})
+		tc.mu.txn.TNShards = append(
+			tc.mu.txn.TNShards,
+			metadata.TNShard{TNShardRecord: metadata.TNShardRecord{ShardID: 1}},
+		)
+		err = tc.Commit(ctx)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnUnknown))
+		require.True(t, tc.reset.unknownCommitResolutionTransferred)
+		require.False(t, tc.reset.internalUnknownCommitAdmissionHeld)
+		require.Len(t, c.(*txnClient).internalUnknownCommitC, 1)
+
+		close(resolutionDone)
+		require.Eventually(t, func() bool {
+			return len(c.(*txnClient).internalUnknownCommitC) == 0
+		}, time.Second, time.Millisecond)
+	}, WithLockService(resolver))
 }
 
 func TestInternalCommitUnknownAdmissionIsBounded(t *testing.T) {

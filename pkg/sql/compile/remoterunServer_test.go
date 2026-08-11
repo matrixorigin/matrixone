@@ -272,12 +272,12 @@ func TestNewCompile_CreatesCorrectStructure(t *testing.T) {
 		},
 	}
 
-	runtime.SetGlobalVariables(rt.MOProtocolVersion, defines.MORPCVersion14)
+	runtime.SetGlobalVariables(rt.MOProtocolVersion, defines.MORPCVersion15)
 	compile, err := receiver.newCompile()
 	require.Error(t, err)
 	require.Nil(t, compile)
 
-	runtime.SetGlobalVariables(rt.MOProtocolVersion, defines.MORPCVersion15)
+	runtime.SetGlobalVariables(rt.MOProtocolVersion, defines.MORPCVersion16)
 	compile, err = receiver.newCompile()
 	require.NoError(t, err)
 	require.NotNil(t, compile)

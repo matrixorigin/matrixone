@@ -7613,7 +7613,15 @@ func vecToString[T types.FixedSizeT](v *Vector) string {
 // The returned object is NOT allowed to be modified (
 // TODO: Nulls are deep copied.
 func (v *Vector) Window(start, end int) (*Vector, error) {
-	return v.window(start, end, nil, nil)
+	return v.window(start, end, nil, nil, false)
+}
+
+// WindowByLogicalRows returns a borrowed window in a caller-owned logical row
+// domain. A non-empty const vector without row-specific metadata may broadcast
+// its single physical value beyond Length; ordinary vectors retain the strict
+// physical range check used by Window.
+func (v *Vector) WindowByLogicalRows(start, end int) (*Vector, error) {
+	return v.window(start, end, nil, nil, true)
 }
 
 // WindowWithAllocation returns a borrowed data window whose range bitmaps are
@@ -7628,7 +7636,21 @@ func (v *Vector) WindowWithAllocation(
 	if mp == nil || selection == nil {
 		return nil, mpool.ErrAllocationAccountInvalid
 	}
-	return v.window(start, end, mp, selection)
+	return v.window(start, end, mp, selection, false)
+}
+
+// WindowByLogicalRowsWithAllocation is the allocation-accounted counterpart
+// of WindowByLogicalRows.
+func (v *Vector) WindowByLogicalRowsWithAllocation(
+	start int,
+	end int,
+	mp *mpool.MPool,
+	selection *AllocationAccountSelection,
+) (*Vector, error) {
+	if mp == nil || selection == nil {
+		return nil, mpool.ErrAllocationAccountInvalid
+	}
+	return v.window(start, end, mp, selection, true)
 }
 
 func (v *Vector) window(
@@ -7636,8 +7658,9 @@ func (v *Vector) window(
 	end int,
 	mp *mpool.MPool,
 	selection *AllocationAccountSelection,
+	logicalRows bool,
 ) (*Vector, error) {
-	if start < 0 || end < start || end > v.Length() {
+	if !v.validWindowRange(start, end, logicalRows) {
 		return nil, moerr.NewInvalidInputNoCtx("invalid vector window")
 	}
 	w := NewVec(v.typ)
@@ -7675,6 +7698,12 @@ func (v *Vector) window(
 		}
 		w.data = v.data
 		w.area = v.area
+		// Const-null is a scalar property. In particular, an offset logical
+		// window must not lose it merely because the physical null marker (when
+		// present) lives at row zero.
+		if v.IsConstNull() {
+			w.data = nil
+		}
 		w.cantFreeArea = true
 		w.cantFreeData = true
 		return w, nil
@@ -7689,6 +7718,39 @@ func (v *Vector) window(
 	w.cantFreeData = true
 	w.cantFreeArea = true
 	return w, nil
+}
+
+func (v *Vector) validWindowRange(start, end int, logicalRows bool) bool {
+	if start < 0 || end < start {
+		return false
+	}
+	if !logicalRows {
+		return end <= v.Length()
+	}
+	return v.CoversLogicalRows(start, end-start)
+}
+
+// CoversLogicalRows reports whether [start, start+rows) is backed by physical
+// rows or by scalar const broadcast semantics. Grouping and heterogeneous
+// prepared-parameter provenance are row-specific, so they cannot be extended
+// beyond the vector's physical logical domain.
+func (v *Vector) CoversLogicalRows(start, rows int) bool {
+	if v == nil || start < 0 || rows < 0 {
+		return false
+	}
+	if start <= v.Length() && rows <= v.Length()-start {
+		return true
+	}
+	if !v.IsConst() {
+		return false
+	}
+	if rows == 0 {
+		return true
+	}
+	// Nullness and a uniform prepared-parameter category are scalar const
+	// properties. Grouping and a provenance sidecar are row-domain metadata;
+	// extending either past its physical domain would invent row state.
+	return v.Length() > 0 && !v.HasGrouping() && v.prepareParamKinds == nil
 }
 
 func (v *Vector) copyWindowBitmaps(w *Vector, start, end int, mp *mpool.MPool) error {

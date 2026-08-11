@@ -684,6 +684,21 @@ func TestGroupingAwareStringHashMapSeparatesRawSentinelBytes(t *testing.T) {
 	require.Equal(t, uint64(2), hashMap.GroupCount())
 }
 
+func TestStringHashMapRejectsShortConstRowMetadata(t *testing.T) {
+	mp := mpool.MustNewZero()
+	hashMap, err := NewStrHashMap(false, mp)
+	require.NoError(t, err)
+	require.NoError(t, hashMap.SetGroupingAware())
+	defer hashMap.Free()
+	grouping := vector.NewRollupConst(types.T_uint8.ToType(), 1, mp)
+	defer grouping.Free(mp)
+
+	_, _, err = hashMap.NewIterator().Insert(
+		0, 2, []*vector.Vector{grouping},
+	)
+	require.ErrorIs(t, err, mpool.ErrAllocationAccountInvalid)
+}
+
 func TestNullableStringHashMapTreatsGroupingRowsAsSentinel(t *testing.T) {
 	mp := mpool.MustNewZero()
 	hashMap, err := NewStrHashMap(true, mp)

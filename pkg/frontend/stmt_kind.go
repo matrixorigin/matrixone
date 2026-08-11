@@ -293,7 +293,7 @@ func statementCanBeExecutedInUncommittedTransaction(
 	case *tree.DropSequence: //Case1, Case3 above
 		//background transaction can execute the DROPxxx in one transaction
 		return ses.IsBackgroundSession() || !ses.GetTxnHandler().OptionBitsIsSet(OPTION_BEGIN), nil
-	case *tree.SetVar:
+	case *tree.SetVar, *tree.SetTransaction:
 		return true, nil
 	case *tree.CloneTable,
 		*tree.CloneDatabase,
