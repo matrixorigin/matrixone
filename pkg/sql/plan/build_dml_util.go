@@ -1583,7 +1583,6 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 					leftConds := make([]*Expr, len(fk.Cols))
 					parentActionTag := parentRelPos
 					var parentActionProjection []*Expr
-					parentActionStep := int32(-1)
 					if delCtx.skipTargetDelete {
 						parentActionTag = builder.genNewBindTag()
 						projectionLen := len(fk.Cols)
@@ -1731,7 +1730,7 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 							builder.preserveSinkProjection = make(map[int32]struct{})
 						}
 						builder.preserveSinkProjection[parentSinkID] = struct{}{}
-						parentActionStep = builder.appendStep(parentSinkID)
+						parentActionStep := builder.appendStep(parentSinkID)
 						lastNodeId = appendSinkScanNodeWithTag(builder, bindCtx, parentActionStep, parentActionTag)
 						builder.positionalSinkScans[lastNodeId] = struct{}{}
 					}
@@ -2179,12 +2178,16 @@ func appendExcludeSelfReferCascadeRoots(
 	if err != nil {
 		return 0, err
 	}
+	// This filter owns the complete descendant row image handed to the delete
+	// pipeline. If it is folded into the MARK join, sink-column preservation sees
+	// a join with no pre-remap projection and can prune columns used only by DELETE.
 	return builder.appendNode(&Node{
-		NodeType:    plan.Node_FILTER,
-		Children:    []int32{markJoinID},
-		FilterList:  []*Expr{notOwnedByReplace},
-		ProjectList: getProjectionByLastNodeWithTag(builder, inputNodeID, candidateTag),
-		BindingTags: []int32{candidateTag},
+		NodeType:        plan.Node_FILTER,
+		Children:        []int32{markJoinID},
+		FilterList:      []*Expr{notOwnedByReplace},
+		ProjectList:     getProjectionByLastNodeWithTag(builder, inputNodeID, candidateTag),
+		BindingTags:     []int32{candidateTag},
+		FilterIsBarrier: true,
 	}, bindCtx), nil
 }
 

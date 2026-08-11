@@ -4765,6 +4765,9 @@ func TestReplaceSelfRefCascade(t *testing.T) {
 	for _, node := range query.Nodes {
 		if node.NodeType == plan.Node_JOIN && node.JoinType == plan.Node_ANTI {
 			oldRowExclusions++
+		} else if node.NodeType == plan.Node_FILTER && node.FilterIsBarrier &&
+			len(node.Children) == 1 && query.Nodes[node.Children[0]].JoinType == plan.Node_MARK {
+			oldRowExclusions++
 		}
 	}
 	assert.GreaterOrEqual(t, oldRowExclusions, 1,
@@ -4799,10 +4802,23 @@ func TestReplaceSelfRefCascade(t *testing.T) {
 				nodeID, node.SourceStep[0], query.Steps[node.SourceStep[0]])
 		}
 	}
-	for _, node := range query.Nodes {
+	for nodeID, node := range query.Nodes {
 		if node.NodeType == plan.Node_LOCK_OP && len(node.Children) == 1 {
 			require.Len(t, node.ProjectList, len(query.Nodes[node.Children[0]].ProjectList),
 				"lock must preserve every physical column requested by the recursive sink")
+		}
+		if node.NodeType == plan.Node_SINK && len(node.Children) == 1 {
+			childWidth := len(query.Nodes[node.Children[0]].ProjectList)
+			require.Len(t, node.ProjectList, childWidth,
+				"sink %d and child %d must expose the same physical row width",
+				nodeID, node.Children[0])
+			for _, expr := range node.ProjectList {
+				col, ok := expr.Expr.(*plan.Expr_Col)
+				if ok {
+					require.Less(t, int(col.Col.ColPos), childWidth,
+						"sink must not read beyond its child's output")
+				}
+			}
 		}
 	}
 }
