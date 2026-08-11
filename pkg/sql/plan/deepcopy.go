@@ -283,6 +283,7 @@ func DeepCopyNode(node *plan.Node) *plan.Node {
 		DirectView:             node.DirectView,
 		RankOption:             DeepCopyRankOption(node.RankOption),
 		RecursiveUnionDistinct: node.RecursiveUnionDistinct,
+		FilterIsBarrier:        node.FilterIsBarrier,
 		SpillMem:               node.SpillMem,
 		RuntimeFilterProbeList: DeepCopyRuntimeFilterSpecList(
 			node.RuntimeFilterProbeList),
@@ -413,6 +414,7 @@ func DeepCopyColDef(col *plan.ColDef) *plan.ColDef {
 		Typ:          col.Typ,
 		Default:      DeepCopyDefault(col.Default),
 		Primary:      col.Primary,
+		Unique:       col.Unique,
 		Pkidx:        col.Pkidx,
 		Comment:      col.Comment,
 		OnUpdate:     DeepCopyOnUpdate(col.OnUpdate),

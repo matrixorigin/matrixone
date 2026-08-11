@@ -596,6 +596,9 @@ message Instruction {
   PostDml post_dml = 53;
   int64 spill_mem = 54;
   plan.MongoScan mongodb_scan = 55;
+  // FILTER only: execute assertion expressions for their error side effect and
+  // pass the input batch through without building a selection vector.
+  bool filter_is_assert = 56;
 }
 
 message AnalysisList {

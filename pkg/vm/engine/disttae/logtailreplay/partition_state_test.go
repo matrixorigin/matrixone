@@ -1973,6 +1973,48 @@ func TestCountTombstoneRowsReadError(t *testing.T) {
 	}
 }
 
+func TestCountTombstoneStatsWithMergePropagatesInitialReadError(t *testing.T) {
+	ctx := context.Background()
+	fs := testutil.NewSharedFS()
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+
+	blockID := types.Blockid{}
+	bat := batch.NewWithSize(3)
+	bat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
+	bat.Vecs[1] = vector.NewVec(types.T_TS.ToType())
+	bat.Vecs[2] = vector.NewVec(types.T_bool.ToType())
+	for offset := uint32(1); offset <= 3; offset++ {
+		require.NoError(t, vector.AppendFixed(bat.Vecs[0], types.NewRowid(&blockID, offset), false, mp))
+		require.NoError(t, vector.AppendFixed(bat.Vecs[1], types.BuildTS(1, 0), false, mp))
+	}
+	// Persist a malformed abort column shorter than the rowid/commit columns.
+	require.NoError(t, vector.AppendFixed(bat.Vecs[2], false, false, mp))
+	bat.SetRowCount(3)
+
+	writer := ioutil.ConstructWriter(
+		0,
+		[]uint16{0, objectio.SEQNUM_COMMITTS, objectio.SEQNUM_ABORT},
+		-1,
+		false,
+		false,
+		fs,
+	)
+	_, err := writer.WriteBatch(bat)
+	require.NoError(t, err)
+	_, _, err = writer.Sync(ctx)
+	require.NoError(t, err)
+
+	objects := []objectio.ObjectEntry{{
+		ObjectStats: writer.GetObjectStats(),
+		CreateTime:  types.BuildTS(1, 0),
+	}}
+	_, err = NewPartitionState("", false, 42, false).countTombstoneStatsWithMerge(
+		ctx, types.BuildTS(10, 0), fs, objects, TombstoneStats{},
+	)
+	require.Error(t, err)
+}
+
 func TestCountTombstoneRowsEdgeCases(t *testing.T) {
 	// Test various edge cases for CountTombstoneRows
 	ctx := context.Background()

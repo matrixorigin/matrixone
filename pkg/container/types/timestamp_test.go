@@ -155,6 +155,56 @@ func TestLocation(t *testing.T) {
 	require.Greater(t, len(locPtr.zone), 1)
 }
 
+func TestDatetimeRangeToTimestampRange(t *testing.T) {
+	parse := func(t *testing.T, value string) Datetime {
+		t.Helper()
+		dt, err := ParseDatetime(value, 6)
+		require.NoError(t, err)
+		return dt
+	}
+
+	t.Run("fixed offset", func(t *testing.T) {
+		loc := time.FixedZone("UTC+08", 8*3600)
+		minValue := parse(t, "2026-08-10 10:00:00")
+		maxValue := parse(t, "2026-08-10 11:00:00")
+		minTimestamp, maxTimestamp, ok := DatetimeRangeToTimestampRange(minValue, maxValue, loc)
+		require.True(t, ok)
+		require.Equal(t, minValue.ToTimestamp(loc), minTimestamp)
+		require.Equal(t, maxValue.ToTimestamp(loc), maxTimestamp)
+	})
+
+	newYork, err := time.LoadLocation("America/New_York")
+	require.NoError(t, err)
+
+	t.Run("ordinary named-zone range", func(t *testing.T) {
+		minValue := parse(t, "2024-01-10 10:00:00")
+		maxValue := parse(t, "2024-01-10 11:00:00")
+		_, _, ok := DatetimeRangeToTimestampRange(minValue, maxValue, newYork)
+		require.True(t, ok)
+	})
+
+	t.Run("recurring named-zone rules", func(t *testing.T) {
+		minValue := parse(t, "2050-01-10 10:00:00")
+		maxValue := parse(t, "2050-01-10 11:00:00")
+		_, _, ok := DatetimeRangeToTimestampRange(minValue, maxValue, newYork)
+		require.True(t, ok)
+	})
+
+	t.Run("DST spring gap", func(t *testing.T) {
+		minValue := parse(t, "2024-03-10 01:30:00")
+		maxValue := parse(t, "2024-03-10 03:30:00")
+		_, _, ok := DatetimeRangeToTimestampRange(minValue, maxValue, newYork)
+		require.False(t, ok)
+	})
+
+	t.Run("DST fall fold", func(t *testing.T) {
+		minValue := parse(t, "2024-11-03 01:00:00")
+		maxValue := parse(t, "2024-11-03 01:59:59")
+		_, _, ok := DatetimeRangeToTimestampRange(minValue, maxValue, newYork)
+		require.False(t, ok)
+	})
+}
+
 func TestTimestamp_TruncateToScale(t *testing.T) {
 	// Test timestamp with full microsecond precision: 1970-01-01 00:00:01.123456
 	ts := TimestampMinValue + 123456

@@ -103,6 +103,7 @@ const (
 	ErrWindowInvalidUse     uint16 = 20323
 	ErrViewSelectTmpTable   uint16 = 20324
 	ErrTooManyRows          uint16 = 20325
+	ErrCantChangeTxn        uint16 = 20326
 
 	// Group 4: unexpected state and io errors
 	ErrInvalidState                             uint16 = 20400
@@ -434,8 +435,7 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrWindowInvalidUse:     {ER_WINDOW_INVALID_WINDOW_FUNC_USE, []string{"HY000"}, "You cannot use the window function '%s' in this context"},
 	ErrViewSelectTmpTable:   {ER_VIEW_SELECT_TMPTABLE, []string{MySQLDefaultSqlState}, "View's SELECT refers to a temporary table '%-.192s'"},
 	ErrTooManyRows:          {ER_TOO_MANY_ROWS, []string{"42000"}, "Result consisted of more than one row"},
-	ErrWrongNumberOfColumnsInSelect: {ER_WRONG_NUMBER_OF_COLUMNS_IN_SELECT, []string{"21000"},
-		"The used SELECT statements have a different number of columns"},
+	ErrCantChangeTxn:        {ER_CANT_CHANGE_TX_CHARACTERISTICS, []string{"25001"}, "Transaction characteristics can't be changed while a transaction is in progress"},
 
 	// Group 4: unexpected state or file io error
 	ErrInvalidState:                             {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "invalid state %s"},
@@ -514,6 +514,7 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrBlobCantHaveDefault:                      {ER_BLOB_CANT_HAVE_DEFAULT, []string{MySQLDefaultSqlState}, "BLOB, TEXT, GEOMETRY or JSON column '%-.192s' can't have a default value"},
 	ErrTableMustHaveAVisibleColumn:              {ER_TABLE_MUST_HAVE_A_VISIBLE_COLUMN, []string{MySQLDefaultSqlState}, "A table must have at least one visible column."},
 	ErrMaxPreparedStmtCountReached:              {ER_MAX_PREPARED_STMT_COUNT_REACHED, []string{"42000"}, "Can't create more than max_prepared_stmt_count statements (current value: %d)"},
+	ErrWrongNumberOfColumnsInSelect:             {ER_WRONG_NUMBER_OF_COLUMNS_IN_SELECT, []string{"21000"}, "The used SELECT statements have a different number of columns"},
 
 	// Group 5: rpc errors
 	ErrRPCTimeout:   {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "rpc timeout"},
@@ -1524,6 +1525,10 @@ func NewViewWrongList(ctx context.Context) *Error {
 
 func NewViewSelectTmpTable(ctx context.Context, table string) *Error {
 	return newError(ctx, ErrViewSelectTmpTable, table)
+}
+
+func NewCantChangeTxCharacteristics(ctx context.Context) *Error {
+	return newError(ctx, ErrCantChangeTxn)
 }
 
 func NewOperandColumns(ctx context.Context, columns int) *Error {
