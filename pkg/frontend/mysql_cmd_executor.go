@@ -3328,21 +3328,33 @@ func checkModify(plan0 *plan.Plan, resolveFn func(string, string, *plan2.Snapsho
 		return true, nil
 	}
 
-	checkFn := func(ref *plan.ObjectRef, def *plan.TableDef) (bool, error) {
-		if ref == nil || def == nil {
+	checkCatalogObject := func(
+		ref *plan.ObjectRef,
+		name string,
+		snapshot *plan2.Snapshot,
+		version int64,
+		tableID int64,
+	) (bool, error) {
+		if ref == nil {
 			return true, nil
 		}
-		_, tableDef, err := resolveFn(ref.SchemaName, def.Name, nil)
+		_, tableDef, err := resolveFn(ref.SchemaName, name, snapshot)
 		if err != nil {
 			return true, err
 		}
 		if tableDef == nil {
 			return true, nil
 		}
-		if tableDef.Version != def.Version || tableDef.TblId != def.TblId {
+		if int64(tableDef.Version) != version || int64(tableDef.TblId) != tableID {
 			return true, nil
 		}
 		return false, nil
+	}
+	checkFn := func(ref *plan.ObjectRef, def *plan.TableDef) (bool, error) {
+		if ref == nil || def == nil {
+			return true, nil
+		}
+		return checkCatalogObject(ref, def.Name, nil, int64(def.Version), int64(def.TblId))
 	}
 	switch p := plan0.Plan.(type) {
 	case *plan.Plan_Query:
@@ -3370,6 +3382,18 @@ func checkModify(plan0 *plan.Plan, resolveFn func(string, string, *plan2.Snapsho
 				if err != nil || flag {
 					return true, err
 				}
+			}
+		}
+		for _, dependency := range p.Query.GetCatalogDependencies() {
+			flag, err := checkCatalogObject(
+				dependency,
+				dependency.GetObjName(),
+				dependency.GetSnapshot(),
+				dependency.GetServer(),
+				dependency.GetObj(),
+			)
+			if err != nil || flag {
+				return true, err
 			}
 		}
 	default:
@@ -4465,7 +4489,12 @@ func dispatchStmt(ses FeSession,
 		}
 		if flag {
 			//plan changed
-			//clear all cached plan and parse sql again
+			// Evict this stale entry before rebuilding so a successful replan
+			// replaces it instead of paying the validation/rebuild cost forever.
+			if session, ok := ses.(*Session); ok {
+				session.removeCachedPlan(execCtx.input.getHash())
+			}
+			// parse sql again
 			var stmts []tree.Statement
 			stmts, err = parseSql(execCtx, ses.GetMySQLParser())
 			if err != nil {

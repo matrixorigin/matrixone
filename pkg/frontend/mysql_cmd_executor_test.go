@@ -7634,6 +7634,65 @@ func Test_checkModify(t *testing.T) {
 	}
 }
 
+func TestCheckModifyValidatesCatalogDependencies(t *testing.T) {
+	snapshot := &plan.Snapshot{
+		TS: &timestamp.Timestamp{PhysicalTime: 42, LogicalTime: 7},
+	}
+	dependency := &plan.ObjectRef{
+		SchemaName: "test_db",
+		ObjName:    "test_view",
+		Server:     3,
+		Obj:        20,
+		Snapshot:   snapshot,
+	}
+	queryPlan := &plan.Plan{
+		Plan: &plan.Plan_Query{
+			Query: &plan.Query{CatalogDependencies: []*plan.ObjectRef{dependency}},
+		},
+	}
+
+	for _, testCase := range []struct {
+		name            string
+		resolved        *plan.TableDef
+		expectedChanged bool
+	}{
+		{
+			name:            "unchanged",
+			resolved:        &plan.TableDef{Version: 3, TblId: 20},
+			expectedChanged: false,
+		},
+		{
+			name:            "missing",
+			expectedChanged: true,
+		},
+		{
+			name:            "version changed",
+			resolved:        &plan.TableDef{Version: 4, TblId: 20},
+			expectedChanged: true,
+		},
+		{
+			name:            "identity changed",
+			resolved:        &plan.TableDef{Version: 3, TblId: 21},
+			expectedChanged: true,
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			changed, err := checkModify(queryPlan, func(
+				databaseName string,
+				tableName string,
+				gotSnapshot *plan.Snapshot,
+			) (*plan.ObjectRef, *plan.TableDef, error) {
+				require.Equal(t, "test_db", databaseName)
+				require.Equal(t, "test_view", tableName)
+				require.Same(t, snapshot, gotSnapshot)
+				return nil, testCase.resolved, nil
+			})
+			require.NoError(t, err)
+			require.Equal(t, testCase.expectedChanged, changed)
+		})
+	}
+}
+
 // testMysqlWriterWithError is a test mysql writer that can return error from ParseSendLongData
 type testMysqlWriterWithError struct {
 	*testMysqlWriter

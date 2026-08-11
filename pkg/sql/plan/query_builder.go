@@ -9038,6 +9038,14 @@ func (builder *QueryBuilder) bindView(
 			viewCtx.headings[i] = string(colName)
 		}
 	}
+	// Expanding a view removes the view catalog object from the executable
+	// scan nodes. Preserve that object's identity so every plan consumer,
+	// including the ordinary COM_QUERY cache, can validate the complete
+	// catalog dependency closure before reusing the expanded plan.
+	builder.qry.CatalogDependencies = appendPrepareSchemas(
+		builder.qry.CatalogDependencies,
+		prepareSchemaRefWithSnapshot(obj, tableDef, snapshot),
+	)
 	ctx.recordViews([]string{viewDependencyKey})
 	ctx.recordViews(viewCtx.views)
 	return
