@@ -16,6 +16,7 @@ package plan
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	indexplugin "github.com/matrixorigin/matrixone/pkg/indexplugin"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 )
@@ -905,16 +906,21 @@ func (builder *QueryBuilder) peelAndRewriteDistFnFilters(
 	return filters[:currIdx], peeled
 }
 
-// replaceDistFnExprsWithScoreCol walks each expression in exprs and substitutes
-// every `origFuncName(col[partPos, scanBindingTag], vecLit)` call with a direct
-// ColRef to the table function's score column (RelPos=tableFuncTag, ColPos=1).
+// replaceDistFnExprsWithScoreCol walks each expression in exprs and substitutes every distance call
+// on the base scan's vector column that uses the INDEX's distance function (origFuncName) with a
+// direct ColRef to the table function's score column (RelPos=tableFuncTag, ColPos=1).
 //
-// Use this on SELECT-side projections so the user's `l2_distance(ec, ?) AS dist`
-// reuses the table function's pre-computed score instead of re-running the
-// distance kernel on every scanned row. The existing `replaceColumnsForNode`
-// path only handles the case where ORDER BY uses an alias and the aliased
-// distance expression is the sortIdx entry in childNode.ProjectList; this
-// walker covers the other combinations.
+// Use this on SELECT-side projections so the user's `l2_distance(ec, ?)` — including one WRAPPED by a
+// scalar (CAST/ROUND/arithmetic) or bound to an alias — reuses the table function's pre-computed
+// score instead of leaving an orphaned ColRef to the base scan's vector column (which the base-scan
+// removal cannot remap: "cannot find column reference", issue #26961) and re-running the distance
+// kernel per row. The existing `replaceColumnsForNode` path only handles ORDER BY on an alias whose
+// distance is the sortIdx entry in childNode.ProjectList; this walker covers the other combinations.
+//
+// A candidate distance (right column + origFuncName metric) is rewritten only when it is against the
+// SAME query vector as vecLitArg — see sameQueryVector. This is a real value comparison: a distance
+// on the same column but a DIFFERENT vector must NOT become this index's score (that would silently
+// report the wrong distance).
 func replaceDistFnExprsWithScoreCol(
 	exprs []*plan.Expr,
 	scanBindingTag, partPos int32,
@@ -940,25 +946,19 @@ func replaceDistFnInExpr(
 	if expr == nil {
 		return expr
 	}
+	if isVectorDistanceExpr(expr, scanBindingTag, partPos) && expr.GetF().Func.ObjName == origFuncName &&
+		sameQueryVector(expr.GetF(), scanBindingTag, partPos, vecLitArg) {
+		return &plan.Expr{
+			Typ: scoreColType,
+			Expr: &plan.Expr_Col{
+				Col: &plan.ColRef{RelPos: tableFuncTag, ColPos: 1, Name: "score"},
+			},
+		}
+	}
 	switch e := expr.Expr.(type) {
 	case *plan.Expr_F:
-		f := e.F
-		if f.Func.ObjName == origFuncName && len(f.Args) == 2 {
-			col := f.Args[0].GetCol()
-			lit := f.Args[1].GetLit()
-			if col != nil && col.ColPos == partPos && col.RelPos == scanBindingTag &&
-				lit != nil && vecLitArg.GetLit() != nil &&
-				lit.GetVecVal() != "" && lit.GetVecVal() == vecLitArg.GetLit().GetVecVal() {
-				return &plan.Expr{
-					Typ: scoreColType,
-					Expr: &plan.Expr_Col{
-						Col: &plan.ColRef{RelPos: tableFuncTag, ColPos: 1, Name: "score"},
-					},
-				}
-			}
-		}
-		for i, arg := range f.Args {
-			f.Args[i] = replaceDistFnInExpr(arg, scanBindingTag, partPos,
+		for i, arg := range e.F.Args {
+			e.F.Args[i] = replaceDistFnInExpr(arg, scanBindingTag, partPos,
 				origFuncName, vecLitArg, tableFuncTag, scoreColType)
 		}
 	case *plan.Expr_List:
@@ -968,4 +968,87 @@ func replaceDistFnInExpr(
 		}
 	}
 	return expr
+}
+
+// sameQueryVector reports whether the distance function fn (already known to reference the base scan's
+// vector column and use the index's metric) is computed against the SAME query vector as vecLitArg —
+// the vector the index/ORDER BY search key uses. The query vector is the arg that is NOT the base-scan
+// column. A distance on a DIFFERENT vector must NOT be rewritten to this index's score (it would
+// silently report the wrong distance — 1 != 2). The comparison is a pure, executor-free parse: both
+// the folded vecLitArg (VecVal) and the possibly-unfolded SELECT-side cast('[...]') are parsed to the
+// index element precision and canonicalized, so format differences (fold-normalized text vs the raw
+// literal) don't matter. A non-constant (param) query vector yields no key and is left alone (fail-safe).
+func sameQueryVector(fn *plan.Function, scanBindingTag, partPos int32, vecLitArg *plan.Expr) bool {
+	if fn == nil || len(fn.Args) != 2 || vecLitArg == nil {
+		return false
+	}
+	isF64 := vecLitArg.Typ.GetId() == int32(types.T_array_float64)
+	litKey, ok := vecFloatKey(vecLitArg, isF64)
+	if !ok {
+		return false
+	}
+	// The query vector is whichever arg is not the base-scan column.
+	vecArg := fn.Args[1]
+	if c := fn.Args[0].GetCol(); c == nil || c.RelPos != scanBindingTag || c.ColPos != partPos {
+		vecArg = fn.Args[0]
+	}
+	argKey, ok := vecFloatKey(vecArg, isF64)
+	return ok && argKey == litKey
+}
+
+// vecFloatKey parses a vector-literal expression into a canonical key so two references to the same
+// query vector compare equal regardless of how each is encoded. It unwraps a CAST, then reads the
+// vector value in whichever form the literal carries:
+//   - a constant-folded vector literal stores the RAW element bytes in VecVal (constant_fold.go uses
+//     vec.GetStringAt) — decoded with BytesToArray;
+//   - an unfolded textual literal (e.g. the inner string of cast('[...]' as vecf32)) stores the
+//     "[...]" text in Sval — decoded with StringToArrayV2.
+//
+// Both are decoded at the index element precision (float32/float64) and re-stringified, so the folded
+// ORDER BY vector and the raw SELECT-side cast('[...]') of the same vector yield the same key, while a
+// genuinely different vector does not. Returns ok=false for a non-constant (e.g. param) or unparseable
+// argument (fail-safe: no rewrite).
+func vecFloatKey(e *plan.Expr, isF64 bool) (string, bool) {
+	for e != nil {
+		if f := e.GetF(); f != nil && f.Func.ObjName == "cast" && len(f.Args) >= 1 {
+			e = f.Args[0]
+			continue
+		}
+		break
+	}
+	lit := e.GetLit()
+	if lit == nil {
+		return "", false
+	}
+	// Folded vector literal: raw element bytes in VecVal. Guard the length against the element size
+	// so a malformed literal yields no key (fail-safe: no rewrite) rather than panicking BytesToArray.
+	if raw := lit.GetVecVal(); raw != "" {
+		if isF64 {
+			if len(raw)%8 != 0 {
+				return "", false
+			}
+			return types.ArrayToString(types.BytesToArray[float64]([]byte(raw))), true
+		}
+		if len(raw)%4 != 0 {
+			return "", false
+		}
+		return types.ArrayToString(types.BytesToArray[float32]([]byte(raw))), true
+	}
+	// Unfolded textual literal: "[...]" text in Sval.
+	sv, ok := lit.Value.(*plan.Literal_Sval)
+	if !ok {
+		return "", false
+	}
+	if isF64 {
+		a, err := types.StringToArrayV2[float64](sv.Sval)
+		if err != nil {
+			return "", false
+		}
+		return types.ArrayToString(a), true
+	}
+	a, err := types.StringToArrayV2[float32](sv.Sval)
+	if err != nil {
+		return "", false
+	}
+	return types.ArrayToString(a), true
 }
