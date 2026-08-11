@@ -115,6 +115,9 @@ func TestSelectIntoUserVariablesRejectsNestedInto(t *testing.T) {
 		"select * from (select 1 into @bad_derived) as d",
 		"with d as (select 1 into @bad_cte) select * from d",
 		"select exists(select 1 into @bad_exists)",
+		"select 1 order by (select 1 into @bad_order)",
+		"select 1 limit (select 1 into @bad_limit)",
+		"select 1 limit 1 offset (select 1 into @bad_offset)",
 	}
 
 	for _, testCase := range testCases {

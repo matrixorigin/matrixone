@@ -109,42 +109,56 @@ select @uv_p1_bad_middle;
 set @uv_p1_bad_scalar = 0;
 select (select 1 into @uv_p1_bad_scalar);
 -- @regex("Misplaced INTO clause|INTO is not allowed|syntax error", true)
-Misplaced INTO clause|INTO is not allowed|syntax error
+Misplaced INTO clause
 select @uv_p1_bad_scalar;
 ➤ @uv_p1_bad_scalar[-5,64,0]  𝄀
 0
 set @uv_p1_bad_derived = 0;
 select * from (select 1 into @uv_p1_bad_derived) as d;
 -- @regex("Misplaced INTO clause|INTO is not allowed|syntax error", true)
-Misplaced INTO clause|INTO is not allowed|syntax error
+Misplaced INTO clause
 select @uv_p1_bad_derived;
 ➤ @uv_p1_bad_derived[-5,64,0]  𝄀
 0
 set @uv_p1_bad_cte = 0;
 with d as (select 1 into @uv_p1_bad_cte) select * from d;
 -- @regex("Misplaced INTO clause|INTO is not allowed|syntax error", true)
-Misplaced INTO clause|INTO is not allowed|syntax error
+Misplaced INTO clause
 select @uv_p1_bad_cte;
 ➤ @uv_p1_bad_cte[-5,64,0]  𝄀
 0
 set @uv_p1_bad_exists = 0;
 select exists(select 1 into @uv_p1_bad_exists);
 -- @regex("Misplaced INTO clause|INTO is not allowed|syntax error", true)
-Misplaced INTO clause|INTO is not allowed|syntax error
+Misplaced INTO clause
 select @uv_p1_bad_exists;
 ➤ @uv_p1_bad_exists[-5,64,0]  𝄀
+0
+set @uv_p1_bad_order = 0;
+select 1 order by (select 1 into @uv_p1_bad_order);
+-- @regex("Misplaced INTO clause|INTO is not allowed|syntax error", true)
+Misplaced INTO clause
+select @uv_p1_bad_order;
+➤ @uv_p1_bad_order[-5,64,0]  𝄀
+0
+set @uv_p1_bad_limit = 0;
+select 1 limit (select 1 into @uv_p1_bad_limit);
+-- @regex("Misplaced INTO clause|INTO is not allowed|syntax error", true)
+Misplaced INTO clause
+select @uv_p1_bad_limit;
+➤ @uv_p1_bad_limit[-5,64,0]  𝄀
 0
 set @uv_p1_bad_perform = 0;
 perform select 1 into @uv_p1_bad_perform;
 -- @regex("INTO is not allowed with PERFORM statements|syntax error", true)
-INTO is not allowed with PERFORM statements|syntax error
+INTO is not allowed with PERFORM statements
 select @uv_p1_bad_perform;
 ➤ @uv_p1_bad_perform[-5,64,0]  𝄀
 0
 set @uv_p1_bad_mixed = 0;
 select 1 into @uv_p1_bad_mixed into outfile '/tmp/mo_uv_p1_bad_mixed';
 -- @regex("Misplaced INTO clause|INTO is not allowed|syntax error", true)
-Misplaced INTO clause|INTO is not allowed|syntax error
+Misplaced INTO clause
 select @uv_p1_bad_mixed;
 ➤ @uv_p1_bad_mixed[-5,64,0]  𝄀
 0

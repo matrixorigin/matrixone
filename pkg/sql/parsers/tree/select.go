@@ -567,7 +567,11 @@ func ValidateSelectIntoPlacement(stmt *Select) string {
 	if stmt.IsPerform && (len(stmt.IntoVars) > 0 || selectTreeHasInto(stmt.Select)) {
 		return PerformIntoClauseMessage
 	}
-	if withHasInto(stmt.With) || selectStatementHasNestedInto(stmt.Select) {
+	if withHasInto(stmt.With) ||
+		selectStatementHasNestedInto(stmt.Select) ||
+		timeWindowHasInto(stmt.TimeWindow) ||
+		orderByHasInto(stmt.OrderBy) ||
+		limitHasInto(stmt.Limit) {
 		return MisplacedIntoClauseMessage
 	}
 	return ""
@@ -590,7 +594,9 @@ func statementHasInto(stmt Statement) bool {
 	case *Select:
 		return len(node.IntoVars) > 0 || node.Ep != nil ||
 			withHasInto(node.With) || selectTreeHasInto(node.Select) ||
-			selectTreeHasExport(node.Select) || selectStatementHasNestedInto(node.Select)
+			selectTreeHasExport(node.Select) || selectStatementHasNestedInto(node.Select) ||
+			timeWindowHasInto(node.TimeWindow) || orderByHasInto(node.OrderBy) ||
+			limitHasInto(node.Limit)
 	default:
 		return false
 	}
@@ -599,7 +605,11 @@ func statementHasInto(stmt Statement) bool {
 func selectStatementHasNestedInto(stmt SelectStatement) bool {
 	switch node := stmt.(type) {
 	case *Select:
-		return withHasInto(node.With) || selectStatementHasNestedInto(node.Select)
+		return withHasInto(node.With) ||
+			selectStatementHasNestedInto(node.Select) ||
+			timeWindowHasInto(node.TimeWindow) ||
+			orderByHasInto(node.OrderBy) ||
+			limitHasInto(node.Limit)
 	case *SelectClause:
 		if selectExprsHaveInto(node.Exprs) {
 			return true
@@ -697,6 +707,23 @@ func orderByHasInto(orderBy OrderBy) bool {
 		}
 	}
 	return false
+}
+
+func limitHasInto(limit *Limit) bool {
+	return limit != nil && (exprHasNestedInto(limit.Offset) || exprHasNestedInto(limit.Count))
+}
+
+func timeWindowHasInto(timeWindow *TimeWindow) bool {
+	if timeWindow == nil {
+		return false
+	}
+	if timeWindow.Interval != nil && exprHasNestedInto(timeWindow.Interval.Val) {
+		return true
+	}
+	if timeWindow.Sliding != nil && exprHasNestedInto(timeWindow.Sliding.Val) {
+		return true
+	}
+	return timeWindow.Fill != nil && exprHasNestedInto(timeWindow.Fill.Val)
 }
 
 func exprsHaveInto(exprs Exprs) bool {

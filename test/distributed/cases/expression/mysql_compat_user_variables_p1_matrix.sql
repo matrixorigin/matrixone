@@ -110,6 +110,16 @@ set @uv_p1_bad_exists = 0;
 select exists(select 1 into @uv_p1_bad_exists);
 select @uv_p1_bad_exists;
 
+set @uv_p1_bad_order = 0;
+-- @regex("Misplaced INTO clause|INTO is not allowed|syntax error", true)
+select 1 order by (select 1 into @uv_p1_bad_order);
+select @uv_p1_bad_order;
+
+set @uv_p1_bad_limit = 0;
+-- @regex("Misplaced INTO clause|INTO is not allowed|syntax error", true)
+select 1 limit (select 1 into @uv_p1_bad_limit);
+select @uv_p1_bad_limit;
+
 set @uv_p1_bad_perform = 0;
 -- @regex("INTO is not allowed with PERFORM statements|syntax error", true)
 perform select 1 into @uv_p1_bad_perform;
