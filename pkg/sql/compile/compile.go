@@ -5150,7 +5150,7 @@ func supportsRemoteOrderedSetAggregates(service string) bool {
 		return false
 	}
 	protocolVersion, ok := version.(int64)
-	return ok && protocolVersion >= defines.MORPCVersion16
+	return ok && protocolVersion >= defines.MORPCVersion17
 }
 
 func supportsRemoteTextCollationAggregates(service string) bool {

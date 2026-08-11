@@ -1494,7 +1494,7 @@ func validateRemoteAggregateProtocol(
 			agg.GetAggID() == aggexec.AggIdOfPercentileDisc {
 			if proc == nil || !supportsRemoteOrderedSetAggregates(proc.GetService()) {
 				return moerr.NewNotSupportedNoCtx(
-					"ordered-set percentile remote execution requires MORPC protocol version 16",
+					"ordered-set percentile remote execution requires MORPC protocol version 17",
 				)
 			}
 		}

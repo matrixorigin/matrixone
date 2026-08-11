@@ -770,7 +770,7 @@ SELECT count(*) FROM information_schema.tables WHERE table_schema = '' AND table
 0
 SELECT datname AS name, IF (table_cnt IS NULL, 0, table_cnt) AS tables, role_name AS owner FROM (SELECT dat_id, datname, mo_database.created_time, IF(role_name IS NULL, '-', role_name) AS role_name FROM mo_catalog.mo_database LEFT JOIN mo_catalog.mo_role ON mo_database.owner = role_id) AS x LEFT JOIN(SELECT count(*) AS table_cnt, reldatabase_id FROM mo_catalog.mo_tables WHERE relkind IN ('r','v','e','cluster') GROUP BY reldatabase_id) AS y ON x.dat_id = y.reldatabase_id order by name;
 ➤ name[12,5000,0]  ¦  tables[-5,64,0]  ¦  owner[12,300,0]  𝄀
-information_schema  ¦  24  ¦  accountadmin  𝄀
+information_schema  ¦  25  ¦  accountadmin  𝄀
 mo_catalog  ¦  35  ¦  -  𝄀
 mo_mo  ¦  0  ¦  accountadmin  𝄀
 mysql  ¦  6  ¦  accountadmin  𝄀
@@ -780,6 +780,7 @@ SELECT mo_catalog.mo_database.datname,mo_catalog.mo_tables.relname,mo_catalog.mo
 ➤ datname[12,5000,0]  ¦  relname[12,5000,0]  ¦  relkind[12,5000,0]  ¦  owner[12,300,0]  𝄀
 mo_mo  ¦  null  ¦  null  ¦  -  𝄀
 information_schema  ¦  character_sets  ¦  r  ¦  accountadmin  𝄀
+information_schema  ¦  check_constraints  ¦  v  ¦  accountadmin  𝄀
 information_schema  ¦  collations  ¦  r  ¦  accountadmin  𝄀
 information_schema  ¦  column_privileges  ¦  r  ¦  accountadmin  𝄀
 information_schema  ¦  columns  ¦  v  ¦  accountadmin  𝄀
@@ -859,6 +860,7 @@ system_metrics  ¦  sql_transaction_errors  ¦  v  ¦  accountadmin  𝄀
 system_metrics  ¦  sql_transaction_total  ¦  v  ¦  accountadmin
 SELECT relname AS `name`, IF (role_name IS NULL, '-', role_name) AS `owner` FROM mo_catalog.mo_tables LEFT JOIN mo_catalog.mo_role ON mo_catalog.mo_tables.owner=role_id WHERE relkind IN ('v') AND reldatabase='information_schema';
 ➤ name[12,5000,0]  ¦  owner[12,300,0]  𝄀
+check_constraints  ¦  accountadmin  𝄀
 columns  ¦  accountadmin  𝄀
 key_column_usage  ¦  accountadmin  𝄀
 partitions  ¦  accountadmin  𝄀
