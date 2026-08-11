@@ -178,15 +178,6 @@ func (bat *Batch) HasBinaryStringMetadata() bool {
 		if vec.GetIsBinaryString() || vec.HasBinaryStringRows() {
 			return true
 		}
-		switch vec.GetType().Oid {
-		case types.T_binary, types.T_varbinary, types.T_blob:
-			// A static binary vector normally needs no dynamic metadata. Row-mode
-			// prepare provenance shares one byte with the binary marker, though,
-			// so old decoders must still be gated when that mode is selected.
-			if len(vec.GetPrepareParamKinds()) != 0 {
-				return true
-			}
-		}
 	}
 	return false
 }
@@ -196,17 +187,26 @@ func (bat *Batch) HasBinaryStringMetadata() bool {
 // MarshalBinaryTo: persisted/stable Vector and Batch bytes remain unchanged.
 // Callers that use this trailer must decode with
 // UnmarshalBinaryWithPrepareParamKinds.
-func (bat *Batch) AppendPrepareParamKindMetadata(w *bytes.Buffer) error {
+func (bat *Batch) AppendPrepareParamKindMetadata(w io.Writer) error {
 	if bat == nil || w == nil || !bat.HasPrepareParamKindMetadata() {
 		return nil
 	}
-	var ext bytes.Buffer
-	ext.Write([]byte{prepareParamKindBatchMagic0, prepareParamKindBatchMagic1, prepareParamKindBatchMagic2,
-		prepareParamKindBatchVersion})
+	metadataSize, err := bat.PrepareParamKindMetadataSize()
+	if err != nil {
+		return err
+	}
+	if err := writeBatchMarshalBytes(w, []byte{prepareParamKindBatchMagic0, prepareParamKindBatchMagic1,
+		prepareParamKindBatchMagic2, prepareParamKindBatchVersion}); err != nil {
+		return err
+	}
 	nVecs := int32(len(bat.Vecs))
-	ext.Write(types.EncodeInt32(&nVecs))
+	if err := writeBatchMarshalInt32(w, nVecs); err != nil {
+		return err
+	}
 	rowCount := int64(bat.rowCount)
-	ext.Write(types.EncodeInt64(&rowCount))
+	if err := writeBatchMarshalInt64(w, rowCount); err != nil {
+		return err
+	}
 	for _, vec := range bat.Vecs {
 		if vec == nil {
 			return moerr.NewInvalidInputNoCtx("cannot encode prepared parameter metadata for nil vector")
@@ -223,34 +223,44 @@ func (bat *Batch) AppendPrepareParamKindMetadata(w *bytes.Buffer) error {
 				int64(vec.Length()) > int64(prepareParamKindBatchMaxRows) {
 				return moerr.NewInvalidInputNoCtx("invalid prepared parameter metadata row count")
 			}
-			ext.WriteByte(prepareParamKindBatchModeRows)
+			if err := writeBatchMarshalByte(w, prepareParamKindBatchModeRows); err != nil {
+				return err
+			}
 			rowLen := int32(vec.Length())
-			ext.Write(types.EncodeInt32(&rowLen))
+			if err := writeBatchMarshalInt32(w, rowLen); err != nil {
+				return err
+			}
 			for row := 0; row < vec.Length(); row++ {
 				kind := vec.GetPrepareParamKindAt(row)
 				if kind > vector.PrepareParamBoolean {
 					return moerr.NewInvalidInputNoCtx("invalid prepared parameter metadata kind")
 				}
 				encoded := byte(kind)
-				if vec.GetIsBinaryStringAt(row) {
+				if vec.GetBinaryStringMetadataAt(row) {
 					encoded |= prepareParamKindBatchBinaryFlag
 				}
-				ext.WriteByte(encoded)
+				if err := writeBatchMarshalByte(w, encoded); err != nil {
+					return err
+				}
 			}
 		case vec.HasPrepareParamKind() && vec.GetPrepareParamKind() != vector.PrepareParamNone:
-			ext.WriteByte(prepareParamKindBatchModeUniform | binaryFlag)
-			ext.WriteByte(byte(vec.GetPrepareParamKind()))
+			if err := writeBatchMarshalByte(w, prepareParamKindBatchModeUniform|binaryFlag); err != nil {
+				return err
+			}
+			if err := writeBatchMarshalByte(w, byte(vec.GetPrepareParamKind())); err != nil {
+				return err
+			}
 		default:
-			ext.WriteByte(prepareParamKindBatchModeNone | binaryFlag)
+			if err := writeBatchMarshalByte(w, prepareParamKindBatchModeNone|binaryFlag); err != nil {
+				return err
+			}
 		}
 	}
-	if uint64(ext.Len()) > uint64(^uint32(0))-4 {
+	if uint64(metadataSize) > uint64(^uint32(0)) {
 		return moerr.NewInvalidInputNoCtx("prepared parameter metadata exceeds wire limit")
 	}
-	total := uint32(ext.Len() + 4)
-	ext.Write(types.EncodeUint32(&total))
-	_, err := w.Write(ext.Bytes())
-	return err
+	total := uint32(metadataSize)
+	return writeBatchMarshalUint32(w, total)
 }
 
 // PrepareParamKindMetadataSize returns the exact optional transient trailer
@@ -271,8 +281,16 @@ func (bat *Batch) PrepareParamKindMetadataSize() (int, error) {
 				int64(vec.Length()) > int64(prepareParamKindBatchMaxRows) {
 				return 0, moerr.NewInvalidInputNoCtx("invalid prepared parameter metadata row count")
 			}
+			for row := 0; row < vec.Length(); row++ {
+				if vec.GetPrepareParamKindAt(row) > vector.PrepareParamBoolean {
+					return 0, moerr.NewInvalidInputNoCtx("invalid prepared parameter metadata kind")
+				}
+			}
 			total += uint64(1 + 4 + vec.Length())
 		} else if vec.HasPrepareParamKind() && vec.GetPrepareParamKind() != vector.PrepareParamNone {
+			if vec.GetPrepareParamKind() > vector.PrepareParamBoolean {
+				return 0, moerr.NewInvalidInputNoCtx("invalid prepared parameter metadata kind")
+			}
 			total += 2
 		} else {
 			total++
@@ -454,6 +472,12 @@ func writeBatchMarshalUint32(w io.Writer, value uint32) error {
 	return writeBatchMarshalBytes(w, data[:])
 }
 
+func writeBatchMarshalByte(w io.Writer, value byte) error {
+	var data [1]byte
+	data[0] = value
+	return writeBatchMarshalBytes(w, data[:])
+}
+
 func writeBatchMarshalInt32(w io.Writer, value int32) error {
 	if typed, ok := w.(batchPrimitiveWriter); ok {
 		return typed.WriteInt32(value)
@@ -560,6 +584,15 @@ func (bat *Batch) UnmarshalFromReaderWithPrepareParamKinds(
 	payloadSize int64,
 	mp *mpool.MPool,
 ) error {
+	return bat.unmarshalFromReaderWithPrepareParamKinds(r, payloadSize, mp, true)
+}
+
+func (bat *Batch) unmarshalFromReaderWithPrepareParamKinds(
+	r io.Reader,
+	payloadSize int64,
+	mp *mpool.MPool,
+	allowStableMetadata bool,
+) error {
 	if bat == nil || r == nil {
 		return io.ErrClosedPipe
 	}
@@ -567,7 +600,7 @@ func (bat *Batch) UnmarshalFromReaderWithPrepareParamKinds(
 		return moerr.NewInvalidInputNoCtx("negative batch payload size")
 	}
 	limited := &io.LimitedReader{R: r, N: payloadSize}
-	if err := bat.UnmarshalFromReader(limited, mp); err != nil {
+	if err := bat.unmarshalFromReader(limited, mp, allowStableMetadata); err != nil {
 		return err
 	}
 	if limited.N == 0 {

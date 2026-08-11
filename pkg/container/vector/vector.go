@@ -1841,6 +1841,25 @@ func (v *Vector) GetIsBinaryStringAt(row int) bool {
 	return v.binaryString
 }
 
+// GetBinaryStringMetadataAt reports only dynamic byte-string provenance.
+// Static BINARY/VARBINARY/BLOB semantics are already carried by the type and
+// must not force a newer transient wire format.
+func (v *Vector) GetBinaryStringMetadataAt(row int) bool {
+	if v == nil {
+		return false
+	}
+	if v.IsConst() {
+		row = 0
+	}
+	if row < 0 || row >= v.length || v.IsNull(uint64(row)) {
+		return false
+	}
+	if v.binaryStringRowsActive {
+		return v.binaryStringRows.Contains(uint64(row))
+	}
+	return v.binaryString
+}
+
 // SetIsBinaryStringAt records row-exact provenance and allocates the bitmap
 // only when the new row disagrees with the uniform representation.
 func (v *Vector) SetIsBinaryStringAt(row int, binaryString bool, pools ...*mpool.MPool) error {
@@ -2109,16 +2128,25 @@ func (v *Vector) preflightBinaryStringCopy(row int, binaryString bool, mp *mpool
 }
 
 func (v *Vector) PreflightUnionOneBinaryString(w *Vector, sel int64, mp *mpool.MPool) error {
+	if !v.typ.Oid.IsMySQLString() && !w.typ.Oid.IsMySQLString() {
+		return nil
+	}
 	return v.preflightBinaryStringAppend(v.length+1, summarizeBinaryStringOne(w, int(sel)), mp)
 }
 
 func (v *Vector) PreflightUnionBinaryString(w *Vector, sels []int64, mp *mpool.MPool) error {
+	if !v.typ.Oid.IsMySQLString() && !w.typ.Oid.IsMySQLString() {
+		return nil
+	}
 	return v.preflightBinaryStringAppend(v.length+len(sels), summarizeBinaryStringSelection(w, sels), mp)
 }
 
 func (v *Vector) PreflightUnionBatchBinaryString(
 	w *Vector, offset int64, cnt int, flags []uint8, mp *mpool.MPool,
 ) error {
+	if !v.typ.Oid.IsMySQLString() && !w.typ.Oid.IsMySQLString() {
+		return nil
+	}
 	addCount := cnt
 	if flags != nil {
 		addCount = 0
@@ -2137,14 +2165,36 @@ func (v *Vector) remapBinaryStringRows(sels []int64, mp *mpool.MPool) error {
 	if !v.binaryStringRowsActive {
 		return nil
 	}
-	original := v.binaryStringRows
-	rows := make([]bool, len(sels))
+	words := (len(sels) + 63) / 64
+	var storage []uint64
+	var err error
+	if v.allocationAccount == nil {
+		storage, err = mpool.MakeSlice[uint64](words, mp, v.offHeap)
+	} else {
+		storage, err = mpool.MakeSliceAccounted[uint64](
+			words, mp, v.allocationAccount.account, v.allocationAccount.owner,
+			v.allocationAccount.nullsSite)
+	}
+	if err != nil {
+		return err
+	}
+	var remapped bitmap.Bitmap
+	remapped.InstallExternalStorage(storage)
+	remapped.InitWithSize(int64(len(sels)))
 	for destination, source := range sels {
-		if source >= 0 && source < original.Len() && original.Contains(uint64(source)) {
-			rows[destination] = true
+		if source >= 0 && source < v.binaryStringRows.Len() &&
+			v.binaryStringRows.Contains(uint64(source)) {
+			remapped.Add(uint64(destination))
 		}
 	}
-	return v.SetBinaryStringRowsWithMP(rows, mp)
+	if err = v.ensureBinaryStringCapacity(len(sels), mp); err == nil {
+		v.binaryStringRows.InitWith(&remapped)
+		v.binaryStringRowsActive = true
+		v.normalizeBinaryStringRows()
+	}
+	remapped.ReleaseExternalStorage()
+	mpool.FreeSlice(mp, storage)
+	return err
 }
 
 func (v *Vector) copyBinaryStringTo(dst *Vector, mp *mpool.MPool) error {
@@ -2152,11 +2202,14 @@ func (v *Vector) copyBinaryStringTo(dst *Vector, mp *mpool.MPool) error {
 		dst.setBinaryStringScalar(v.binaryString)
 		return nil
 	}
-	rows := make([]bool, v.length)
-	for row := range rows {
-		rows[row] = v.binaryStringRows.Contains(uint64(row))
+	if err := dst.ensureBinaryStringCapacity(v.length, mp); err != nil {
+		return err
 	}
-	return dst.SetBinaryStringRowsWithMP(rows, mp)
+	dst.binaryStringRows.InitWith(v.binaryStringRows)
+	dst.binaryString = true
+	dst.binaryStringRowsActive = true
+	dst.normalizeBinaryStringRows()
+	return nil
 }
 
 func (v *Vector) copyBinaryStringWindowTo(dst *Vector, start, end int, mp *mpool.MPool) error {
@@ -2168,19 +2221,28 @@ func (v *Vector) copyBinaryStringWindowTo(dst *Vector, start, end int, mp *mpool
 		dst.setBinaryStringScalar(v.binaryString)
 		return nil
 	}
-	rows := make([]bool, end-start)
+	if err := dst.ensureBinaryStringCapacity(end-start, mp); err != nil {
+		return err
+	}
+	dst.binaryStringRows.InitWithSize(int64(end - start))
 	for row := start; row < end; row++ {
 		if v.IsNull(uint64(row)) {
 			continue
 		}
 		if v.binaryStringRows.Contains(uint64(row)) {
-			rows[row-start] = true
+			dst.binaryStringRows.Add(uint64(row - start))
 		}
 	}
-	return dst.SetBinaryStringRowsWithMP(rows, mp)
+	dst.binaryString = true
+	dst.binaryStringRowsActive = true
+	dst.normalizeBinaryStringRows()
+	return nil
 }
 
 func (v *Vector) propagateBinaryStringAll(w *Vector, oldLength int, mp *mpool.MPool) error {
+	if !v.typ.Oid.IsMySQLString() && !w.typ.Oid.IsMySQLString() {
+		return nil
+	}
 	for row := 0; row < w.length; row++ {
 		if !w.IsNull(uint64(row)) {
 			if err := v.SetIsBinaryStringAt(oldLength+row, w.GetIsBinaryStringAt(row), mp); err != nil {
@@ -2192,6 +2254,9 @@ func (v *Vector) propagateBinaryStringAll(w *Vector, oldLength int, mp *mpool.MP
 }
 
 func propagateBinaryStringSelection[T int32 | int64](v, w *Vector, oldLength int, sels []T, mp *mpool.MPool) error {
+	if !v.typ.Oid.IsMySQLString() && !w.typ.Oid.IsMySQLString() {
+		return nil
+	}
 	for output, selected := range sels {
 		row := int(selected)
 		if !w.IsNull(uint64(row)) {
@@ -2204,6 +2269,9 @@ func propagateBinaryStringSelection[T int32 | int64](v, w *Vector, oldLength int
 }
 
 func (v *Vector) propagateBinaryStringBatch(w *Vector, oldLength int, offset int64, cnt int, flags []uint8, mp *mpool.MPool) error {
+	if !v.typ.Oid.IsMySQLString() && !w.typ.Oid.IsMySQLString() {
+		return nil
+	}
 	output := oldLength
 	for i := 0; i < cnt; i++ {
 		if flags != nil && flags[i] == 0 {
@@ -3955,16 +4023,7 @@ func (v *Vector) ShrinkByMask(sels *bitmap.Bitmap, negate bool, offset uint64) {
 	}
 	v.remapPrepareParamKindsAfterShrinkMask(oldKinds, oldLength, sels, negate, offset)
 	if v.binaryStringRowsActive {
-		if offset == 0 {
-			v.binaryStringRows.RemapMaskOrdered(sels, negate)
-		} else {
-			selected := make([]int64, 0, sels.Count())
-			iterator := sels.Iterator()
-			for iterator.HasNext() {
-				selected = append(selected, int64(iterator.Next()+offset))
-			}
-			v.binaryStringRows.RemapOrdered(selected, negate)
-		}
+		v.binaryStringRows.RemapMaskOrderedWithOffset(sels, negate, offset)
 		v.normalizeBinaryStringRows()
 	}
 }
@@ -8363,10 +8422,81 @@ func (v *Vector) GetMinMaxValue() (ok bool, minv, maxv []byte) {
 	return
 }
 
+type vectorMetadataSorter struct {
+	vector  *Vector
+	varlena []types.Varlena
+}
+
+func (s vectorMetadataSorter) Len() int { return s.vector.length }
+
+func (s vectorMetadataSorter) Less(left, right int) bool {
+	leftNull, rightNull := s.vector.IsNull(uint64(left)), s.vector.IsNull(uint64(right))
+	if leftNull != rightNull {
+		return leftNull
+	}
+	if leftNull {
+		return false
+	}
+	return bytes.Compare(s.vector.GetBytesAt(left), s.vector.GetBytesAt(right)) < 0
+}
+
+func setBitmapRow(value *bitmap.Bitmap, row int, enabled bool) {
+	value.Remove(uint64(row))
+	if enabled {
+		value.Add(uint64(row))
+	}
+}
+
+func (s vectorMetadataSorter) Swap(left, right int) {
+	if left == right {
+		return
+	}
+	s.varlena[left], s.varlena[right] = s.varlena[right], s.varlena[left]
+	leftNull, rightNull := s.vector.IsNull(uint64(left)), s.vector.IsNull(uint64(right))
+	leftGrouping, rightGrouping := s.vector.gsp.Contains(uint64(left)), s.vector.gsp.Contains(uint64(right))
+	setBitmapRow(s.vector.nsp.GetBitmap(), left, rightNull)
+	setBitmapRow(s.vector.nsp.GetBitmap(), right, leftNull)
+	setBitmapRow(s.vector.gsp.GetBitmap(), left, rightGrouping)
+	setBitmapRow(s.vector.gsp.GetBitmap(), right, leftGrouping)
+	if s.vector.binaryStringRowsActive {
+		leftBinary := s.vector.binaryStringRows.Contains(uint64(left))
+		rightBinary := s.vector.binaryStringRows.Contains(uint64(right))
+		setBitmapRow(s.vector.binaryStringRows, left, rightBinary)
+		setBitmapRow(s.vector.binaryStringRows, right, leftBinary)
+	}
+	if s.vector.prepareParamKinds != nil {
+		s.vector.prepareParamKinds[left], s.vector.prepareParamKinds[right] =
+			s.vector.prepareParamKinds[right], s.vector.prepareParamKinds[left]
+	}
+}
+
+func (v *Vector) sortRowsEquivalent(left, right int) bool {
+	if v.IsNull(uint64(left)) != v.IsNull(uint64(right)) ||
+		v.gsp.Contains(uint64(left)) != v.gsp.Contains(uint64(right)) ||
+		v.GetPrepareParamKindAt(left) != v.GetPrepareParamKindAt(right) ||
+		v.GetIsBinaryStringAt(left) != v.GetIsBinaryStringAt(right) {
+		return false
+	}
+	return v.IsNull(uint64(left)) || bytes.Equal(v.GetBytesAt(left), v.GetBytesAt(right))
+}
+
+func (v *Vector) copySortedRow(destination, source int, varlena []types.Varlena) {
+	if destination == source {
+		return
+	}
+	varlena[destination] = varlena[source]
+	setBitmapRow(v.nsp.GetBitmap(), destination, v.IsNull(uint64(source)))
+	setBitmapRow(v.gsp.GetBitmap(), destination, v.gsp.Contains(uint64(source)))
+	if v.binaryStringRowsActive {
+		setBitmapRow(v.binaryStringRows, destination, v.binaryStringRows.Contains(uint64(source)))
+	}
+	if v.prepareParamKinds != nil {
+		v.prepareParamKinds[destination] = v.prepareParamKinds[source]
+	}
+}
+
 func (v *Vector) inplaceSortRowMetadata(compact bool) bool {
-	hasBinaryStringRows := v.binaryStringRowsActive
-	hasPrepareParamKinds := v.prepareParamKinds != nil
-	if (!hasBinaryStringRows && !hasPrepareParamKinds) || v.IsConst() || !v.typ.IsVarlen() {
+	if (!v.binaryStringRowsActive && v.prepareParamKinds == nil) || v.IsConst() || !v.typ.IsVarlen() {
 		return false
 	}
 	switch v.typ.Oid {
@@ -8376,88 +8506,41 @@ func (v *Vector) inplaceSortRowMetadata(compact bool) bool {
 		return false
 	}
 
-	length := v.length
-	order := make([]int, length)
-	for row := range order {
-		order[row] = row
+	varlena := MustFixedColNoTypeCheck[types.Varlena](v)
+	v.nsp.GetBitmap().TryExpandWithSize(v.length)
+	v.gsp.GetBitmap().TryExpandWithSize(v.length)
+	if v.binaryStringRowsActive {
+		v.binaryStringRows.TryExpandWithSize(v.length)
 	}
-	sort.SliceStable(order, func(i, j int) bool {
-		left, right := order[i], order[j]
-		leftNull, rightNull := v.IsNull(uint64(left)), v.IsNull(uint64(right))
-		if leftNull != rightNull {
-			return leftNull
-		}
-		if leftNull {
-			return false
-		}
-		return bytes.Compare(v.GetBytesAt(left), v.GetBytesAt(right)) < 0
-	})
-	if compact {
-		unique := order[:0]
-		for _, row := range order {
-			if len(unique) == 0 {
-				unique = append(unique, row)
+	sort.Stable(vectorMetadataSorter{vector: v, varlena: varlena})
+	newLength := v.length
+	if compact && v.length > 1 {
+		write := 1
+		for read := 1; read < v.length; read++ {
+			if v.sortRowsEquivalent(write-1, read) {
 				continue
 			}
-			previous := unique[len(unique)-1]
-			if v.IsNull(uint64(previous)) && v.IsNull(uint64(row)) ||
-				!v.IsNull(uint64(previous)) && !v.IsNull(uint64(row)) &&
-					bytes.Equal(v.GetBytesAt(previous), v.GetBytesAt(row)) {
-				continue
-			}
-			unique = append(unique, row)
+			v.copySortedRow(write, read, varlena)
+			write++
 		}
-		order = unique
+		newLength = write
 	}
-
-	varlen := MustFixedColNoTypeCheck[types.Varlena](v)
-	original := append([]types.Varlena(nil), varlen...)
-	var binaryRows []bool
-	if hasBinaryStringRows {
-		binaryRows = make([]bool, length)
-	}
-	nullRows := make([]bool, length)
-	groupingRows := make([]bool, length)
-	for row := 0; row < length; row++ {
-		if hasBinaryStringRows {
-			binaryRows[row] = v.GetIsBinaryStringAt(row)
+	if newLength < v.length {
+		v.nsp.GetBitmap().RemoveRange(uint64(newLength), uint64(v.length))
+		v.gsp.GetBitmap().RemoveRange(uint64(newLength), uint64(v.length))
+		if v.binaryStringRowsActive {
+			v.binaryStringRows.RemoveRange(uint64(newLength), uint64(v.length))
 		}
-		nullRows[row] = v.IsNull(uint64(row))
-		groupingRows[row] = v.gsp.Contains(uint64(row))
+		if v.prepareParamKinds != nil {
+			clear(v.prepareParamKinds[newLength:])
+			v.prepareParamKinds = v.prepareParamKinds[:newLength]
+		}
+		v.length = newLength
 	}
-	var originalKinds []PrepareParamKind
 	if v.prepareParamKinds != nil {
-		originalKinds = append([]PrepareParamKind(nil), v.prepareParamKinds...)
-	}
-
-	v.nsp.GetBitmap().InitWithSize(int64(len(order)))
-	v.gsp.GetBitmap().InitWithSize(int64(len(order)))
-	if hasBinaryStringRows {
-		v.binaryStringRows.InitWithSize(int64(len(order)))
-		v.binaryStringRowsActive = true
-	}
-	for destination, source := range order {
-		varlen[destination] = original[source]
-		if nullRows[source] {
-			v.nsp.Add(uint64(destination))
-		}
-		if groupingRows[source] {
-			v.gsp.Add(uint64(destination))
-		}
-		if hasBinaryStringRows && binaryRows[source] && !nullRows[source] {
-			v.binaryStringRows.Add(uint64(destination))
-		}
-		if originalKinds != nil {
-			v.prepareParamKinds[destination] = originalKinds[source]
-		}
-	}
-	v.length = len(order)
-	if originalKinds != nil {
-		clear(v.prepareParamKinds[len(order):])
-		v.prepareParamKinds = v.prepareParamKinds[:len(order)]
 		v.normalizePrepareParamKinds()
 	}
-	if hasBinaryStringRows {
+	if v.binaryStringRowsActive {
 		v.normalizeBinaryStringRows()
 	}
 	v.sorted = true

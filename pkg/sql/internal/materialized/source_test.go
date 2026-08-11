@@ -15,6 +15,7 @@
 package materialized
 
 import (
+	"bytes"
 	"context"
 	"encoding/binary"
 	"errors"
@@ -618,6 +619,10 @@ func TestSpillBatchSizeMatchesEncoding(t *testing.T) {
 	bat.Vecs[1] = vector.NewVec(types.T_varchar.ToType())
 	require.NoError(t, vector.AppendBytes(bat.Vecs[1], []byte("materialized"), false, mp))
 	require.NoError(t, vector.AppendBytes(bat.Vecs[1], []byte("spill"), false, mp))
+	require.NoError(t, bat.Vecs[1].SetIsBinaryStringAt(0, true))
+	require.NoError(t, bat.Vecs[1].SetPrepareParamKindsWithMP([]vector.PrepareParamKind{
+		vector.PrepareParamInteger, vector.PrepareParamNone,
+	}, mp))
 	bat.Attrs = []string{"number", "word"}
 	bat.ExtraBuf = []byte("extra")
 	bat.SetRowCount(2)
@@ -625,7 +630,8 @@ func TestSpillBatchSizeMatchesEncoding(t *testing.T) {
 
 	serialized, scratch, err := spillBatchSize(bat)
 	require.NoError(t, err)
-	data, err := bat.MarshalBinary()
+	var encoded bytes.Buffer
+	data, err := bat.MarshalBinaryWithPrepareParamKinds(&encoded, false)
 	require.NoError(t, err)
 	require.Equal(t, uint64(len(data)), serialized)
 	require.GreaterOrEqual(t, scratch, serialized)
