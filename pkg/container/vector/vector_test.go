@@ -1799,7 +1799,31 @@ func TestMixedBinaryStringMetadataSurvivesMaterialization(t *testing.T) {
 	staticBinary := NewVec(types.T_varbinary.ToType())
 	require.NoError(t, AppendBytes(staticBinary, nil, true, mp))
 	require.False(t, staticBinary.GetIsBinaryStringAt(0), "NULL rows have no selected-value provenance")
+	require.NoError(t, AppendBytes(staticBinary, []byte("value"), false, mp))
+	staticCopy := NewVec(types.T_varbinary.ToType())
+	require.NoError(t, staticCopy.UnionBatch(staticBinary, 0, staticBinary.Length(), nil, mp))
+	require.False(t, staticCopy.HasBinaryStringRows())
+	require.False(t, staticCopy.GetIsBinaryString())
+	require.True(t, staticCopy.GetIsBinaryStringAt(1), "static type still provides byte semantics")
+	staticCopy.Free(mp)
 	staticBinary.Free(mp)
+
+	copySource := NewVec(types.T_text.ToType())
+	require.NoError(t, AppendBytes(copySource, []byte("binary"), false, mp))
+	require.NoError(t, AppendBytes(copySource, []byte("text"), false, mp))
+	require.NoError(t, copySource.SetIsBinaryStringAt(0, true, mp))
+	copyDestination := NewVec(types.T_text.ToType())
+	require.NoError(t, AppendBytes(copyDestination, []byte("old-text"), false, mp))
+	require.NoError(t, AppendBytes(copyDestination, []byte("old-binary"), false, mp))
+	require.NoError(t, copyDestination.SetIsBinaryStringAt(1, true, mp))
+	require.NoError(t, SetBytesAtFrom(copyDestination, 0, copySource, 0, mp))
+	require.NoError(t, SetBytesAtFrom(copyDestination, 1, copySource, 1, mp))
+	require.Equal(t, []byte("binary"), copyDestination.GetBytesAt(0))
+	require.Equal(t, []byte("text"), copyDestination.GetBytesAt(1))
+	require.True(t, copyDestination.GetBinaryStringMetadataAt(0))
+	require.False(t, copyDestination.GetBinaryStringMetadataAt(1))
+	copySource.Free(mp)
+	copyDestination.Free(mp)
 
 	nullable := NewVec(types.T_text.ToType())
 	require.NoError(t, AppendBytes(nullable, []byte("a"), false, mp))
@@ -2001,12 +2025,23 @@ func TestBinaryStringMetadataStableDecodeAndInplaceSort(t *testing.T) {
 	require.True(t, compact.GetGrouping().Contains(1))
 	require.False(t, compact.GetIsBinaryStringAt(1))
 	require.Equal(t, "z", string(compact.GetBytesAt(2)))
-	require.True(t, compact.GetIsBinaryStringAt(2))
-	require.Equal(t, PrepareParamInteger, compact.GetPrepareParamKindAt(2))
+	require.False(t, compact.GetIsBinaryStringAt(2))
+	require.Equal(t, PrepareParamNone, compact.GetPrepareParamKindAt(2))
 	require.Equal(t, "z", string(compact.GetBytesAt(3)))
-	require.False(t, compact.GetIsBinaryStringAt(3))
-	require.Equal(t, PrepareParamNone, compact.GetPrepareParamKindAt(3))
+	require.True(t, compact.GetIsBinaryStringAt(3))
+	require.Equal(t, PrepareParamInteger, compact.GetPrepareParamKindAt(3))
 	compact.Free(mp)
+
+	interleaved := NewVec(types.T_text.ToType())
+	for range 3 {
+		require.NoError(t, AppendBytes(interleaved, []byte("same"), false, mp))
+	}
+	require.NoError(t, interleaved.SetBinaryStringRowsWithMP([]bool{true, false, true}, mp))
+	interleaved.InplaceSortAndCompact()
+	require.Equal(t, 2, interleaved.Length())
+	require.False(t, interleaved.GetBinaryStringMetadataAt(0))
+	require.True(t, interleaved.GetBinaryStringMetadataAt(1))
+	interleaved.Free(mp)
 
 	for _, binaryFirst := range []bool{true, false} {
 		metadataDistinct := NewVec(types.T_text.ToType())
@@ -2042,8 +2077,8 @@ func TestBinaryStringMetadataStableDecodeAndInplaceSort(t *testing.T) {
 	require.NoError(t, groupingDistinct.SetIsBinaryStringAt(2, true))
 	groupingDistinct.InplaceSortAndCompact()
 	require.Equal(t, 4, groupingDistinct.Length())
-	require.True(t, groupingDistinct.GetGrouping().Contains(0))
-	require.False(t, groupingDistinct.GetGrouping().Contains(1))
+	require.False(t, groupingDistinct.GetGrouping().Contains(0))
+	require.True(t, groupingDistinct.GetGrouping().Contains(1))
 	groupingDistinct.Free(mp)
 
 	for _, compact := range []bool{false, true} {
@@ -2066,6 +2101,33 @@ func TestBinaryStringMetadataStableDecodeAndInplaceSort(t *testing.T) {
 		prepareOnly.Free(mp)
 	}
 	require.Zero(t, mp.CurrNB())
+}
+
+func TestBinaryStringShuffleWithBufScratchFailureIsAtomic(t *testing.T) {
+	dataMP := mpool.MustNewZero()
+	vec := NewVec(types.T_text.ToType())
+	vec.SetOffHeap(true)
+	require.NoError(t, AppendBytes(vec, []byte("z"), false, dataMP))
+	require.NoError(t, AppendBytes(vec, []byte("a"), false, dataMP))
+	require.NoError(t, vec.SetIsBinaryStringAt(0, true, dataMP))
+
+	scratchMP, err := mpool.NewMPool(t.Name(), mpool.MB, mpool.NoFixed)
+	require.NoError(t, err)
+	defer mpool.DeleteMPool(scratchMP)
+	hold, err := scratchMP.Alloc(mpool.MB, true)
+	require.NoError(t, err)
+	var scratch []byte
+	err = vec.ShuffleWithBuf([]int64{1, 0}, scratchMP, &scratch)
+	require.Error(t, err)
+	require.Equal(t, []byte("z"), vec.GetBytesAt(0))
+	require.Equal(t, []byte("a"), vec.GetBytesAt(1))
+	require.True(t, vec.GetBinaryStringMetadataAt(0))
+	require.False(t, vec.GetBinaryStringMetadataAt(1))
+
+	scratchMP.Free(hold)
+	vec.Free(dataMP)
+	require.Zero(t, scratchMP.CurrNB())
+	require.Zero(t, dataMP.CurrNB())
 }
 
 func TestCloneWindowWithMpNil(t *testing.T) {
@@ -5384,6 +5446,25 @@ func BenchmarkUnionBatchNoMetadata(b *testing.B) {
 		require.NoError(b, AppendFixed(source, int64(i), false, mp))
 	}
 	destination := NewVec(types.T_int64.ToType())
+	defer destination.Free(mp)
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		destination.ResetWithSameType()
+		if err := destination.UnionBatch(source, 0, source.Length(), nil, mp); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkUnionBatchStaticBinaryNoMetadata(b *testing.B) {
+	mp := mpool.MustNewZero()
+	source := NewVec(types.T_varbinary.ToType())
+	defer source.Free(mp)
+	for i := 0; i < 1024; i++ {
+		require.NoError(b, AppendBytes(source, []byte("value"), false, mp))
+	}
+	destination := NewVec(types.T_varbinary.ToType())
 	defer destination.Free(mp)
 	b.ReportAllocs()
 	b.ResetTimer()
