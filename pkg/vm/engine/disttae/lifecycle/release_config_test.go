@@ -21,6 +21,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -153,6 +154,201 @@ func TestSQLReleaseConfigRejectsUnknownReleaseScopeFields(t *testing.T) {
 	_, err := (SQLReleaseConfig{Executor: fake}).Enabled(context.Background())
 	require.ErrorContains(t, err, "invalid Lifecycle release scope")
 	require.Equal(t, 1, fake.offset)
+}
+
+func TestSQLReleaseConfigRejectsInvalidIdentityBeforeCatalogRead(t *testing.T) {
+	ctx := context.Background()
+	validDigest := strings.Repeat("00", sha256.Size)
+
+	_, err := (SQLReleaseConfig{}).ResolveArchiveTarget(ctx, 17, 12, validDigest)
+	require.ErrorContains(t, err, "release configuration is incomplete")
+
+	fake := &scriptedLifecycleSQLExecutor{t: t}
+	resolver := SQLReleaseConfig{Executor: fake}
+	_, err = resolver.ResolveArchiveTarget(ctx, 0, 12, validDigest)
+	require.ErrorContains(t, err, "release configuration is incomplete")
+	_, err = resolver.ResolveArchiveTarget(ctx, 17, 0, validDigest)
+	require.ErrorContains(t, err, "release configuration is incomplete")
+	_, err = resolver.ResolveArchiveTarget(ctx, 17, 12, "not-a-sha256")
+	require.ErrorContains(t, err, "Stage identity digest is invalid")
+	require.Zero(t, fake.offset, "invalid identity must not read Catalog or Stage credentials")
+}
+
+func TestSQLReleaseConfigFailsClosedOnInvalidRegistryRows(t *testing.T) {
+	ctx := context.Background()
+	_, err := (SQLReleaseConfig{}).Enabled(ctx)
+	require.ErrorContains(t, err, "SQL executor is nil")
+
+	expected := moerr.NewInternalErrorNoCtx("feature registry unavailable")
+	_, err = (SQLReleaseConfig{Executor: executor.NewMemExecutor(
+		func(string) (executor.Result, error) {
+			return executor.Result{}, expected
+		},
+	)}).Enabled(ctx)
+	require.ErrorIs(t, err, expected)
+
+	enabled, err := (SQLReleaseConfig{Executor: executor.NewMemExecutor(
+		func(string) (executor.Result, error) {
+			return executor.Result{}, nil
+		},
+	)}).Enabled(ctx)
+	require.NoError(t, err)
+	require.False(t, enabled, "an absent bootstrap row must keep Lifecycle disabled")
+
+	mp := mpool.MustNewZero()
+	invalid := batch.NewWithSize(1)
+	invalid.Vecs[0] = vector.NewVec(types.T_bool.ToType())
+	require.NoError(t, vector.AppendFixed(invalid.Vecs[0], true, false, mp))
+	invalid.SetRowCount(1)
+	_, err = (SQLReleaseConfig{Executor: executor.NewMemExecutor(
+		func(string) (executor.Result, error) {
+			return executor.Result{Batches: []*batch.Batch{invalid}, Mp: mp}, nil
+		},
+	)}).Enabled(ctx)
+	require.ErrorContains(t, err, "feature registry row is invalid")
+}
+
+func TestSQLReleaseConfigFailsClosedOnStageContractViolations(t *testing.T) {
+	const (
+		accountID   = uint32(17)
+		stageID     = uint64(12)
+		stageURL    = "s3://archive/history"
+		credentials = "provider=amazon,endpoint=https://s3.me-south-1.amazonaws.com,aws_region=me-south-1"
+		certified   = `{"archive_stages":[{"account_id":17,"stage_id":12,` +
+			`"canonical_url":"s3://archive/history","provider":"amazon",` +
+			`"endpoint":"https://s3.me-south-1.amazonaws.com","region":"me-south-1",` +
+			`"credential_handle":"role-arn:archive","versioning_disabled":true,` +
+			`"abort_incomplete_multipart":true}]}`
+	)
+	identity := ArchiveStageIdentity{
+		StageID:           stageID,
+		CanonicalURL:      stageURL,
+		Provider:          "amazon",
+		CanonicalEndpoint: "https://s3.me-south-1.amazonaws.com",
+		Region:            "me-south-1",
+		BucketOrContainer: "archive",
+		ImmutablePrefix:   "history",
+		CredentialHandle:  "role-arn:archive",
+	}
+	digest := ArchiveStageIdentityDigest(identity)
+	digestHex := hex.EncodeToString(digest[:])
+
+	tests := []struct {
+		name       string
+		scope      string
+		stageURL   string
+		status     string
+		digestHex  string
+		stageEmpty bool
+		stageErr   error
+		want       string
+	}{
+		{
+			name:       "stage removed",
+			scope:      certified,
+			stageEmpty: true,
+			want:       "Stage no longer exists",
+		},
+		{
+			name:     "stage read failure",
+			scope:    certified,
+			stageErr: moerr.NewInternalErrorNoCtx("stage catalog unavailable"),
+			want:     "stage catalog unavailable",
+		},
+		{
+			name:     "stage no longer active",
+			scope:    certified,
+			stageURL: stageURL,
+			status:   "disabled",
+			want:     "Stage is no longer in use",
+		},
+		{
+			name:     "non s3 stage",
+			scope:    certified,
+			stageURL: "https://archive/history",
+			status:   "in_use",
+			want:     "requires an S3-compatible Stage",
+		},
+		{
+			name:     "stage is not certified",
+			scope:    `{"archive_stages":[]}`,
+			stageURL: stageURL,
+			status:   "in_use",
+			want:     "not deployment-certified",
+		},
+		{
+			name: "provider storage contract missing",
+			scope: `{"archive_stages":[{"account_id":17,"stage_id":12,` +
+				`"canonical_url":"s3://archive/history","provider":"amazon",` +
+				`"endpoint":"https://s3.me-south-1.amazonaws.com","region":"me-south-1",` +
+				`"credential_handle":"role-arn:archive"}]}`,
+			stageURL: stageURL,
+			status:   "in_use",
+			want:     "does not satisfy the deployment storage contract",
+		},
+		{
+			name: "certification drift",
+			scope: `{"archive_stages":[{"account_id":17,"stage_id":12,` +
+				`"canonical_url":"s3://other/history","provider":"amazon",` +
+				`"endpoint":"https://s3.me-south-1.amazonaws.com","region":"me-south-1",` +
+				`"credential_handle":"role-arn:archive","versioning_disabled":true,` +
+				`"abort_incomplete_multipart":true}]}`,
+			stageURL: stageURL,
+			status:   "in_use",
+			want:     "drifted from deployment certification",
+		},
+		{
+			name:      "binding digest mismatch",
+			scope:     certified,
+			stageURL:  stageURL,
+			status:    "in_use",
+			digestHex: strings.Repeat("ff", sha256.Size),
+			want:      "Stage identity no longer matches",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			stageResult := executor.Result{Mp: mp}
+			if !test.stageEmpty && test.stageErr == nil {
+				stageResult = lifecycleStageResult(
+					t,
+					mp,
+					test.stageURL,
+					credentials,
+					test.status,
+				)
+			}
+			fake := &scriptedLifecycleSQLExecutor{
+				t: t,
+				steps: []lifecycleSQLStep{
+					{
+						contains:  "from mo_catalog.mo_feature_registry",
+						accountID: 0,
+						result:    lifecycleReleaseResult(t, mp, true, test.scope),
+					},
+					{
+						contains:  "from mo_catalog.mo_stages",
+						accountID: accountID,
+						result:    stageResult,
+						err:       test.stageErr,
+					},
+				},
+			}
+			gotDigest := test.digestHex
+			if gotDigest == "" {
+				gotDigest = digestHex
+			}
+			_, err := (SQLReleaseConfig{Executor: fake}).ResolveArchiveTarget(
+				context.Background(),
+				accountID,
+				stageID,
+				gotDigest,
+			)
+			require.ErrorContains(t, err, test.want)
+			require.Equal(t, 2, fake.offset)
+		})
+	}
 }
 
 func lifecycleReleaseResult(

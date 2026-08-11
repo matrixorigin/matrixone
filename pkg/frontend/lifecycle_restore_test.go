@@ -86,6 +86,31 @@ func TestLifecycleRangeRestoreResumeUsesFrozenBounds(t *testing.T) {
 		"2026-02-01 00:00:00",
 	)
 	require.ErrorContains(t, err, "does not match the resumable Attempt")
+
+	wrongScope := attempt
+	wrongScope.Scope = lifecyclepkg.RestoreScopeDataset
+	_, _, err = lifecycleRangeRestoreResumeBounds(
+		ctx,
+		wrongScope,
+		"2026-01-01 00:00:00",
+		"2026-02-01 00:00:00",
+	)
+	require.ErrorContains(t, err, "is not a range Restore")
+
+	_, _, err = lifecycleRangeRestoreResumeBounds(
+		ctx,
+		attempt,
+		"not-a-timestamp",
+		"2026-02-01 00:00:00",
+	)
+	require.Error(t, err)
+	_, _, err = lifecycleRangeRestoreResumeBounds(
+		ctx,
+		attempt,
+		"2026-01-01 00:00:00",
+		"not-a-timestamp",
+	)
+	require.Error(t, err)
 }
 
 func TestLifecycleRangeRestoreDeadlineScalesWithinBound(t *testing.T) {
@@ -102,6 +127,30 @@ func TestLifecycleRangeRestoreDeadlineScalesWithinBound(t *testing.T) {
 	require.NoError(t, err)
 	require.Greater(t, tenTiB.Sub(now), 4*24*time.Hour)
 	require.LessOrEqual(t, tenTiB.Sub(now), 7*24*time.Hour)
+
+	_, err = lifecycleRangeRestoreDeadline(now, nil)
+	require.ErrorContains(t, err, "selection is empty")
+	_, err = lifecycleRangeRestoreDeadline(now, []lifecyclepkg.RestoreDataset{{
+		LogicalBytes: 0,
+	}})
+	require.ErrorContains(t, err, "logical bytes are invalid")
+	_, err = lifecycleRangeRestoreDeadline(now, []lifecyclepkg.RestoreDataset{
+		{LogicalBytes: ^uint64(0)},
+		{LogicalBytes: 1},
+	})
+	require.ErrorContains(t, err, "logical bytes are invalid")
+
+	rounded, err := lifecycleRangeRestoreDeadline(now, []lifecyclepkg.RestoreDataset{{
+		LogicalBytes: lifecycleRangeRestoreBytesPerSecond + 1,
+	}})
+	require.NoError(t, err)
+	require.Equal(t, lifecycleRangeRestoreBaseDeadline+2*time.Second, rounded.Sub(now))
+
+	capped, err := lifecycleRangeRestoreDeadline(now, []lifecyclepkg.RestoreDataset{{
+		LogicalBytes: ^uint64(0),
+	}})
+	require.NoError(t, err)
+	require.Equal(t, lifecycleRangeRestoreMaxDeadline, capped.Sub(now))
 }
 
 func TestHandleRestoreArchiveDatasetFailsBeforeExternalSideEffects(t *testing.T) {

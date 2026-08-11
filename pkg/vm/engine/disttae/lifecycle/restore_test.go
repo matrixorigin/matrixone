@@ -145,6 +145,105 @@ func TestSelectRestoreDatasetsForRangeScopesGenerationCheckToOverlap(t *testing.
 	require.ErrorContains(t, err, "across Lifecycle column generations")
 }
 
+func TestLifecycleRangeFailsClosedOnInvalidMetadataAndRows(t *testing.T) {
+	ctx := context.Background()
+	schema := SchemaDescriptor{Columns: []SchemaColumn{
+		{SourceColumnID: 1, TypeID: int32(types.T_int64)},
+		{SourceColumnID: 7, TypeID: int32(types.T_timestamp), NotNull: true},
+	}}
+	lifecycleRange := ArchiveLifecycleRange{
+		SourceColumnID: 7,
+		TypeID:         int32(types.T_timestamp),
+	}
+	validRow := []CanonicalCell{
+		{Type: types.T_int64.ToType(), Value: int64(1)},
+		{Type: types.T_timestamp.ToType(), Value: types.Timestamp(150)},
+	}
+
+	_, err := lifecycleRangeColumnOrdinal(schema, ArchiveLifecycleRange{
+		SourceColumnID: 7,
+		TypeID:         int32(types.T_int64),
+	})
+	require.ErrorContains(t, err, "column identity is invalid")
+	_, err = lifecycleRangeColumnOrdinal(schema, ArchiveLifecycleRange{
+		SourceColumnID: 99,
+		TypeID:         int32(types.T_timestamp),
+	})
+	require.ErrorContains(t, err, "does not exist")
+
+	for _, test := range []struct {
+		name  string
+		ctx   context.Context
+		start int64
+		end   int64
+		rows  [][]CanonicalCell
+		want  string
+	}{
+		{name: "empty interval", ctx: ctx, start: 100, end: 100, rows: [][]CanonicalCell{validRow}, want: "must be non-empty"},
+		{name: "short row", ctx: ctx, start: 100, end: 200, rows: [][]CanonicalCell{{validRow[0]}}, want: "does not match the frozen schema"},
+		{name: "null range value", ctx: ctx, start: 100, end: 200, rows: [][]CanonicalCell{{validRow[0], {Type: types.T_timestamp.ToType(), Null: true}}}, want: "contains NULL"},
+		{name: "wrong physical value", ctx: ctx, start: 100, end: 200, rows: [][]CanonicalCell{{validRow[0], {Type: types.T_timestamp.ToType(), Value: int64(150)}}}, want: "value type TIMESTAMP is invalid"},
+		{name: "cancelled", ctx: func() context.Context { cancelled, cancel := context.WithCancel(ctx); cancel(); return cancelled }(), start: 100, end: 200, rows: [][]CanonicalCell{validRow}, want: context.Canceled.Error()},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := FilterCanonicalRowsByLifecycleRange(
+				test.ctx,
+				schema,
+				lifecycleRange,
+				test.start,
+				test.end,
+				test.rows,
+			)
+			require.ErrorContains(t, err, test.want)
+		})
+	}
+
+	dateValue, err := lifecycleRangeCellValue(CanonicalCell{
+		Type: types.T_date.ToType(), Value: types.Date(12),
+	})
+	require.NoError(t, err)
+	require.Equal(t, int64(12), dateValue)
+	datetimeValue, err := lifecycleRangeCellValue(CanonicalCell{
+		Type: types.T_datetime.ToType(), Value: types.Datetime(34),
+	})
+	require.NoError(t, err)
+	require.Equal(t, int64(34), datetimeValue)
+
+	dataset := RestoreDataset{
+		DatasetID: "dataset-1",
+		LifecycleRange: ArchiveLifecycleRange{
+			SourceColumnID: 7,
+			TypeID:         int32(types.T_date),
+			Min:            10,
+			Max:            20,
+		},
+		HasLifecycleRange: true,
+	}
+	for _, test := range []struct {
+		name    string
+		dataset RestoreDataset
+		from    string
+		to      string
+		want    string
+	}{
+		{name: "unverified dataset range", dataset: RestoreDataset{DatasetID: "missing-range"}, from: "2025-01-01", to: "2025-02-01", want: "has no verified range identity"},
+		{name: "invalid lower boundary", dataset: dataset, from: "not-a-date", to: "2025-02-01", want: "date"},
+		{name: "invalid upper boundary", dataset: dataset, from: "2025-01-01", to: "not-a-date", want: "date"},
+		{name: "reversed interval", dataset: dataset, from: "2025-02-01", to: "2025-01-01", want: "must be non-empty"},
+		{name: "no overlap", dataset: dataset, from: "2025-01-01", to: "2025-02-01", want: "no Dataset overlapping"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			_, _, _, err := SelectRestoreDatasetsForRange(
+				ctx,
+				[]RestoreDataset{test.dataset},
+				test.from,
+				test.to,
+			)
+			require.ErrorContains(t, err, test.want)
+		})
+	}
+}
+
 func TestRestoreRangeFiltersBoundaryDatasetsAndResumesIdempotently(t *testing.T) {
 	store := newMemoryArchiveStore()
 	const timestampSecond = int64(time.Second / time.Microsecond)
