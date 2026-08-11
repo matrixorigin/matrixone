@@ -1528,6 +1528,8 @@ func TestBuildCTASPreservesMySQLSpecialColumnTypes(t *testing.T) {
 	require.GreaterOrEqual(t, len(cols), 3)
 	require.True(t, isEnumPlanType(&cols[0].Typ))
 	require.Equal(t, "low,medium,high", cols[0].Typ.GetEnumvalues())
+	require.True(t, cols[0].Typ.GetNotNullable())
+	require.False(t, cols[0].GetDefault().GetNullAbility())
 	require.True(t, isSetPlanType(&cols[1].Typ))
 	require.Equal(t, "red,green,blue", cols[1].Typ.GetEnumvalues())
 	require.Equal(t, int32(types.T_varchar), cols[2].Typ.GetId())
@@ -2991,6 +2993,89 @@ func TestCreateTableAsSelect(t *testing.T) {
 	runTestShouldPass(mock, t, sqls, false, false)
 }
 
+func TestCreateTableAsSelectPropagatesNullExtension(t *testing.T) {
+	tests := []struct {
+		name        string
+		sql         string
+		nullAbility []bool
+	}{
+		{
+			name: "inner join control",
+			sql: "create table ctas_inner as select n.n_nationkey as left_key, r.r_regionkey as right_key " +
+				"from nation n join region r on n.n_regionkey = r.r_regionkey",
+			nullAbility: []bool{false, false},
+		},
+		{
+			name: "left join null extends right",
+			sql: "create table ctas_left as select n.n_nationkey as left_key, r.r_regionkey as right_key " +
+				"from nation n left join region r on n.n_regionkey = r.r_regionkey",
+			nullAbility: []bool{false, true},
+		},
+		{
+			name: "right join null extends left",
+			sql: "create table ctas_right as select n.n_nationkey as left_key, r.r_regionkey as right_key " +
+				"from nation n right join region r on n.n_regionkey = r.r_regionkey",
+			nullAbility: []bool{true, false},
+		},
+		{
+			name: "full join null extends both sides",
+			sql: "create table ctas_full as select n.n_nationkey as left_key, r.r_regionkey as right_key " +
+				"from nation n full join region r on n.n_regionkey = r.r_regionkey",
+			nullAbility: []bool{true, true},
+		},
+		{
+			name: "correlated scalar subquery may not match",
+			sql: "create table ctas_scalar as select n.n_nationkey as left_key, " +
+				"(select r.r_regionkey from region r where r.r_regionkey = n.n_regionkey) as scalar_key from nation n",
+			nullAbility: []bool{false, true},
+		},
+		{
+			name: "coalesce control removes null extension",
+			sql: "create table ctas_coalesce as select n.n_nationkey as left_key, " +
+				"coalesce(r.r_regionkey, 0) as right_key from nation n left join region r on n.n_regionkey = r.r_regionkey",
+			nullAbility: []bool{false, false},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			mock := NewMockOptimizer(false)
+			require.True(t, mock.ctxt.tables["nation"].Cols[0].Typ.NotNullable)
+			require.True(t, mock.ctxt.tables["region"].Cols[0].Typ.NotNullable)
+
+			logicPlan, err := buildSingleStmt(mock, t, test.sql)
+			require.NoError(t, err)
+			var visibleCols []*plan.ColDef
+			for _, col := range logicPlan.GetDdl().GetCreateTable().GetTableDef().GetCols() {
+				if !col.Hidden {
+					visibleCols = append(visibleCols, col)
+				}
+			}
+			require.Len(t, visibleCols, len(test.nullAbility))
+			for i, want := range test.nullAbility {
+				require.Equal(t, want, visibleCols[i].GetDefault().GetNullAbility())
+			}
+		})
+	}
+}
+
+func TestCreateTableAsSelectPreservesSpecialTypeNullability(t *testing.T) {
+	ctx := NewMockCompilerContext(false)
+	addMySQLSpecialTypeColumns(ctx)
+	stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL,
+		"create table copied as select n.priority from nation n right join region r on n.n_regionkey = r.r_regionkey", 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+
+	p, err := BuildPlan(ctx, stmt, false)
+	require.NoError(t, err)
+	col := p.GetDdl().GetCreateTable().GetTableDef().GetCols()[0]
+	require.True(t, isEnumPlanType(&col.Typ))
+	require.Equal(t, "low,medium,high", col.Typ.GetEnumvalues())
+	require.False(t, col.Typ.GetNotNullable())
+	require.True(t, col.GetDefault().GetNullAbility())
+}
+
 func TestCreateTableAsSelectWithTemporalFractionalSeconds(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -3085,6 +3170,15 @@ func TestPrepareCreateTableAsSelectWithParams(t *testing.T) {
 	prepare = prepared.GetDcl().GetPrepare()
 	require.Len(t, prepare.GetParamTypes(), 1)
 	require.NotEmpty(t, prepare.GetSchemas())
+	require.False(t, prepare.GetPlan().GetDdl().GetCreateTable().GetTableDef().GetCols()[0].GetDefault().GetNullAbility())
+
+	prepared, err = runOneStmt(mock, t, "prepare stmt_ctas_join from 'create table ctas_join as select n.N_NATIONKEY, r.R_REGIONKEY from NATION n left join REGION r on n.N_REGIONKEY = r.R_REGIONKEY where n.N_NATIONKEY = ?'")
+	require.NoError(t, err)
+	prepare = prepared.GetDcl().GetPrepare()
+	createTable := prepare.GetPlan().GetDdl().GetCreateTable()
+	require.NotNil(t, prepare.GetPlan().GetDdl().GetQuery())
+	require.False(t, createTable.GetTableDef().GetCols()[0].GetDefault().GetNullAbility())
+	require.True(t, createTable.GetTableDef().GetCols()[1].GetDefault().GetNullAbility())
 
 	_, err = runOneStmt(mock, t, "create table ctas_unprepared as select ? as a")
 	require.ErrorContains(t, err, "only prepare statement can use ? expr")
