@@ -120,6 +120,35 @@ func TestAlterTable1(t *testing.T) {
 	outPutPlan(logicPlan, true, t)
 }
 
+func TestInvisibleColumnClausesAreRejected(t *testing.T) {
+	tests := []string{
+		`CREATE TABLE visibility_create_invisible (id INT, secret INT INVISIBLE);`,
+		`ALTER TABLE t1 ADD COLUMN secret INT INVISIBLE;`,
+		`ALTER TABLE t1 MODIFY COLUMN b INT INVISIBLE;`,
+		`ALTER TABLE t1 CHANGE COLUMN b b INT INVISIBLE;`,
+		`ALTER TABLE t1 ALTER COLUMN b SET INVISIBLE;`,
+	}
+
+	for _, sql := range tests {
+		t.Run(sql, func(t *testing.T) {
+			_, err := buildSingleStmt(NewMockOptimizer(false), t, sql)
+			require.ErrorContains(t, err, "not supported: invisible columns")
+		})
+	}
+}
+
+func TestExplicitVisibleColumnClausesRemainSupported(t *testing.T) {
+	for _, sql := range []string{
+		`CREATE TABLE visibility_create_visible (id INT VISIBLE);`,
+		`ALTER TABLE t1 ALTER COLUMN b SET VISIBLE;`,
+	} {
+		t.Run(sql, func(t *testing.T) {
+			_, err := buildSingleStmt(NewMockOptimizer(false), t, sql)
+			require.NoError(t, err)
+		})
+	}
+}
+
 func TestSameNameChangeColumnUsesInplaceAlter(t *testing.T) {
 	mock := newMetadataOnlyChangeColumnOptimizer()
 	const sql = `ALTER TABLE metadata_only CHANGE v v INT NULL COMMENT 'metadata only';`
@@ -382,6 +411,32 @@ func TestAlterTableCopyPreservesFinalColumnReplacementIdentity(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestAlterTableCopyDoesNotSkipDedupForSameNamePrimaryKeyReplacement(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	// Match the type metadata produced by ADD COLUMN so the only difference is
+	// the source-column identity. A name/type comparison alone must not prove
+	// that the replacement key is copied from the old key.
+	mock.ctxt.tables["t1"].Cols[0].Typ.NotNullable = false
+	mock.ctxt.tables["t1"].Cols[0].Typ.Width = 64
+	mock.ctxt.tables["t1"].Cols[0].Typ.Scale = -1
+	logicPlan, err := buildSingleStmt(mock, t,
+		`ALTER TABLE constraint_test.t1 DROP COLUMN a, ADD COLUMN a BIGINT NOT NULL DEFAULT 0 PRIMARY KEY;`)
+	require.NoError(t, err)
+
+	alter := logicPlan.GetDdl().GetAlterTable()
+	require.NotNil(t, alter)
+	require.NotNil(t, alter.Options)
+	oldCol := FindColumn(alter.TableDef.Cols, "a")
+	newCol := FindColumn(alter.CopyTableDef.Cols, "a")
+	require.NotNil(t, oldCol)
+	require.NotNil(t, newCol)
+	require.Equal(t, oldCol.Typ, newCol.Typ)
+	require.NotEqual(t, oldCol.ColId, newCol.ColId)
+	_, inherited := alter.ChangeTblColIdMap[oldCol.ColId]
+	require.False(t, inherited)
+	assert.False(t, alter.Options.SkipPkDedup)
 }
 
 func TestAlterTableCopyPreservesExistingColumnIdentity(t *testing.T) {

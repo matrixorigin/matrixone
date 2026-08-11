@@ -159,6 +159,75 @@ func TestBatchWindowCleansPreparedParamMetadataAfterPartialFailure(t *testing.T)
 	require.Equal(t, secondBaseline, secondOwner.CurrNB())
 }
 
+func TestBatchWindowBroadcastsScalarConstants(t *testing.T) {
+	mp := mpool.MustNewZero()
+	source := NewWithSize(3)
+	source.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+	require.NoError(t, vector.AppendFixedList(
+		source.Vecs[0], []int64{10, 20, 30, 40}, nil, mp,
+	))
+	var err error
+	source.Vecs[1], err = vector.NewConstFixed(
+		types.T_int64.ToType(), int64(7), 1, mp,
+	)
+	require.NoError(t, err)
+	source.Vecs[1].SetPrepareParamKind(vector.PrepareParamInteger)
+	source.Vecs[2] = vector.NewConstNull(types.T_int64.ToType(), 1, mp)
+	source.SetRowCount(4)
+	defer func() {
+		source.Clean(mp)
+		require.Zero(t, mp.CurrNB())
+	}()
+
+	_, err = source.Vecs[1].Window(2, 4)
+	require.Error(t, err, "standalone vector windows retain physical bounds")
+
+	window, err := source.Window(2, 4)
+	require.NoError(t, err)
+	require.Equal(t, 2, window.RowCount())
+	require.Equal(t, []int64{30, 40}, vector.MustFixedColWithTypeCheck[int64](window.Vecs[0]))
+	require.True(t, window.Vecs[1].IsConst())
+	require.Equal(t, 2, window.Vecs[1].Length())
+	require.Equal(t, int64(7), vector.GetFixedAtWithTypeCheck[int64](window.Vecs[1], 1))
+	require.Equal(t, vector.PrepareParamInteger, window.Vecs[1].GetPrepareParamKindAt(1))
+	require.True(t, window.Vecs[2].IsConstNull())
+	require.Equal(t, 2, window.Vecs[2].Length())
+	window.Clean(nil)
+}
+
+func TestBatchWindowRejectsMissingRowMetadata(t *testing.T) {
+	mp := mpool.MustNewZero()
+	provenance, err := vector.NewConstFixed(
+		types.T_int64.ToType(), int64(1), 2, mp,
+	)
+	require.NoError(t, err)
+	require.NoError(t, provenance.SetPrepareParamKindsWithMP(
+		[]vector.PrepareParamKind{
+			vector.PrepareParamInteger,
+			vector.PrepareParamFloat,
+		},
+		mp,
+	))
+	for _, vec := range []*vector.Vector{
+		vector.NewVec(types.T_int64.ToType()),
+		vector.NewConstNull(types.T_int64.ToType(), 0, mp),
+		vector.NewRollupConst(types.T_int64.ToType(), 1, mp),
+		provenance,
+	} {
+		if !vec.IsConst() {
+			require.NoError(t, vector.AppendFixed(vec, int64(1), false, mp))
+		}
+		source := NewWithSize(1)
+		source.Vecs[0] = vec
+		source.SetRowCount(4)
+		window, err := source.Window(0, 4)
+		require.Error(t, err)
+		require.Nil(t, window)
+		source.Clean(mp)
+	}
+	require.Zero(t, mp.CurrNB())
+}
+
 type shortBatchMarshalWriter struct{}
 
 func (shortBatchMarshalWriter) Write(value []byte) (int, error) {
@@ -653,6 +722,30 @@ func TestClonePreservesConstantBinaryStringMetadata(t *testing.T) {
 	require.True(t, cloned.Vecs[0].GetIsBinaryString())
 	for row := 0; row < 3; row++ {
 		require.True(t, cloned.Vecs[0].GetIsBinaryStringAt(row))
+	}
+}
+
+func TestClonePreservesNormalizedConstantBinaryStringRows(t *testing.T) {
+	mp := mpool.MustNewZero()
+	source := NewWithSize(1)
+	var err error
+	source.Vecs[0], err = vector.NewConstBytes(
+		types.T_varchar.ToType(), []byte("text"), 2, mp)
+	require.NoError(t, err)
+	require.NoError(t, source.Vecs[0].SetBinaryStringRowsWithMP([]bool{false, true}, mp))
+	require.False(t, source.Vecs[0].HasBinaryStringRows())
+	for row := range 2 {
+		require.False(t, source.Vecs[0].GetIsBinaryStringAt(row))
+	}
+	source.SetRowCount(2)
+	defer source.Clean(mp)
+
+	cloned, err := source.Dup(mp)
+	require.NoError(t, err)
+	defer cloned.Clean(mp)
+	require.False(t, cloned.Vecs[0].HasBinaryStringRows())
+	for row := range 2 {
+		require.False(t, cloned.Vecs[0].GetIsBinaryStringAt(row))
 	}
 }
 

@@ -762,6 +762,23 @@ func TestWindowPreservesGroupingProvenance(t *testing.T) {
 	require.Zero(t, mp.CurrNB())
 }
 
+func TestWindowPreservesOffsetConstNull(t *testing.T) {
+	mp := mpool.MustNewZero()
+	source, err := NewConstFixed(
+		types.T_int64.ToType(), int64(7), 4, mp,
+	)
+	require.NoError(t, err)
+	source.SetNull(0)
+
+	window, err := source.Window(2, 4)
+	require.NoError(t, err)
+	require.True(t, window.IsConstNull())
+	require.Equal(t, 2, window.Length())
+	window.Free(mp)
+	source.Free(mp)
+	require.Zero(t, mp.CurrNB())
+}
+
 func TestAccountedWindowOwnsRangeBitmaps(t *testing.T) {
 	state := newTestVectorAllocationAccount(t, 1<<20, 16)
 	mp := mpool.MustNewZero()
@@ -1426,6 +1443,60 @@ func TestBinaryStringBitmapUsesVectorAllocationAccount(t *testing.T) {
 	finalizeTestVectorAllocationAccount(t, state)
 }
 
+func TestAccountedMixedBinaryStringPreExtendCoversSetLength(t *testing.T) {
+	state := newTestVectorAllocationAccount(t, 1<<20, 16)
+	mp := mpool.MustNewZero()
+	vec := newAccountedTestVector(t, types.T_text.ToType(), state.selection)
+	require.NoError(t, vec.PreExtend(2, mp))
+	vec.SetLength(2)
+	require.NoError(t, vec.SetIsBinaryStringAt(0, true, mp))
+
+	require.NoError(t, vec.PreExtend(65, mp))
+	require.NotPanics(t, func() { vec.SetLength(65) })
+	require.True(t, vec.GetIsBinaryStringAt(0))
+	require.False(t, vec.GetIsBinaryStringAt(1))
+	require.False(t, vec.GetIsBinaryStringAt(64))
+
+	vec.Free(mp)
+	finalizeTestVectorAllocationAccount(t, state)
+	require.Zero(t, mp.CurrNB())
+}
+
+func TestCombinedMetadataReaderSecondAllocationFailureIsAtomic(t *testing.T) {
+	const rows = 3
+	// The varlena backing rounds to 80 bytes. Leave exactly three more bytes
+	// for the staged kinds so the following bitmap allocation is the failure.
+	state := newTestVectorAllocationAccount(t, 83, 16)
+	mp := mpool.MustNewZero()
+	vec := newAccountedTestVector(t, types.T_text.ToType(), state.selection)
+	require.NoError(t, vec.PreExtend(rows, mp))
+	vec.SetLength(rows)
+	vec.SetPrepareParamKind(PrepareParamBoolean)
+	vec.SetIsBinaryString(true)
+	before := state.account.Snapshot().Used
+
+	err := vec.SetPrepareParamKindsAndBinaryStringFromReader(
+		bytes.NewReader([]byte{
+			byte(PrepareParamInteger) | 0x80,
+			byte(PrepareParamFloat),
+			byte(PrepareParamNone) | 0x80,
+		}),
+		rows,
+		mp,
+		0x80,
+	)
+	require.ErrorIs(t, err, mpool.ErrAllocationAccountCapacity)
+	require.Equal(t, before, state.account.Snapshot().Used)
+	for row := range rows {
+		require.Equal(t, PrepareParamBoolean, vec.GetPrepareParamKindAt(row))
+		require.True(t, vec.GetIsBinaryStringAt(row))
+	}
+
+	vec.Free(mp)
+	finalizeTestVectorAllocationAccount(t, state)
+	require.Zero(t, mp.CurrNB())
+}
+
 func TestBinaryStringBitmapAllocationFailureIsAtomic(t *testing.T) {
 	const twoVarlenaRowsBytes = 2 * types.VarlenaSize
 	state := newTestVectorAllocationAccount(t, twoVarlenaRowsBytes, 16)
@@ -1570,6 +1641,48 @@ func TestBinaryStringRawAppendAllocationFailureIsAtomic(t *testing.T) {
 			require.Equal(t, []byte("binary"), vec.GetBytesAt(0))
 			require.True(t, vec.GetIsBinaryString())
 			require.True(t, vec.GetIsBinaryStringAt(0))
+			require.False(t, vec.HasBinaryStringRows())
+
+			vec.Free(mp)
+			finalizeTestVectorAllocationAccount(t, state)
+			require.Zero(t, mp.CurrNB())
+		})
+	}
+}
+
+func TestBinaryStringRawAppendPayloadFailureRollsBackMetadata(t *testing.T) {
+	tests := []struct {
+		name string
+		run  func(*Vector, []byte, *mpool.MPool) error
+	}{
+		{name: "bytes", run: func(vec *Vector, value []byte, mp *mpool.MPool) error {
+			return AppendBytes(vec, value, false, mp)
+		}},
+		{name: "multi bytes", run: func(vec *Vector, value []byte, mp *mpool.MPool) error {
+			return AppendMultiBytes(vec, value, false, 1, mp)
+		}},
+		{name: "bytes list", run: func(vec *Vector, value []byte, mp *mpool.MPool) error {
+			return AppendBytesList(vec, [][]byte{value}, nil, mp)
+		}},
+		{name: "string list", run: func(vec *Vector, value []byte, mp *mpool.MPool) error {
+			return AppendStringList(vec, []string{string(value)}, nil, mp)
+		}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			const dataBytes = 2 * types.VarlenaSize
+			state := newTestVectorAllocationAccount(t, dataBytes+8, 16)
+			mp := mpool.MustNewZero()
+			vec := newAccountedTestVector(t, types.T_text.ToType(), state.selection)
+			require.NoError(t, vec.PreExtend(2, mp))
+			require.NoError(t, AppendBytes(vec, []byte("binary"), false, mp))
+			vec.SetIsBinaryString(true)
+
+			err := test.run(vec, bytes.Repeat([]byte{'x'}, types.VarlenaInlineSize+1), mp)
+			require.ErrorIs(t, err, mpool.ErrAllocationAccountCapacity)
+			require.Equal(t, 1, vec.Length())
+			require.Equal(t, []byte("binary"), vec.GetBytesAt(0))
+			require.True(t, vec.GetIsBinaryString())
 			require.False(t, vec.HasBinaryStringRows())
 
 			vec.Free(mp)

@@ -938,7 +938,6 @@ func (s *service) GetConfig() Config {
 }
 
 func (s *service) Close() error {
-	var resolvedCallbacks []func()
 	s.stopOnce.Do(func() {
 		// Seal every public mutation and bind-publication path first. Add and
 		// Wait are serialized by lifecycle: once closing is visible, no new
@@ -949,6 +948,9 @@ func (s *service) Close() error {
 			s.lifecycle.cancel()
 		}
 		s.lifecycle.Unlock()
+		if s.unknownCommitResolver != nil {
+			s.unknownCommitResolver.callbacks.seal()
+		}
 
 		// Stop producers before their consumers and dependencies. Inbound RPC
 		// handlers, service background tasks, and keeper tasks can all use lock
@@ -971,19 +973,18 @@ func (s *service) Close() error {
 		s.events.close()
 		s.activeTxnHolder.close()
 		if s.unknownCommitResolver != nil {
-			resolvedCallbacks = s.unknownCommitResolver.takeResolvedCallbacks()
+			// The resolver task is joined and callback admission is sealed. Drain
+			// every remaining reservation by transferring invocation out of service
+			// ownership before releasing the RPC transport. External callback bodies
+			// are non-blocking by contract and are never a Close wait dependency.
+			for _, txn := range s.unknownCommitResolver.takeResolvedTxns() {
+				txn.complete()
+			}
 		}
 		clientErr := s.remote.client.Close()
 		close(s.fetchWhoWaitingListC)
 		s.closeErr = errors.Join(serverErr, keeperErr, clientErr)
 	})
-	// User callbacks are outside sync.Once and after complete component
-	// teardown. A callback may safely re-enter Close without deadlocking on the
-	// in-progress Once, and a blocked callback cannot strand other concurrent
-	// Close callers inside component cleanup.
-	for _, callback := range resolvedCallbacks {
-		callback()
-	}
 	return s.closeErr
 }
 
