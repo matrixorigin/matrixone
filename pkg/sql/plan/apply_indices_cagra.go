@@ -262,9 +262,14 @@ func (builder *QueryBuilder) applyIndicesForSortUsingCagra(nodeID int32, vecCtx 
 		OrigFuncName:   cagraCtx.origFuncName,
 		OverFetchLimit: overFetchDisplayLimit(limit, postFilterOverFetch, false),
 	}
-	// obsolete: node.Limit is superseded by IndexReaderParam.Limit; kept only as a
-	// compatible arg.Limit for an older executor reached via a provider child scope.
-	tableFuncNode.Limit = obsoleteNodeLimit(limit, postFilterOverFetch, false)
+	// node.Limit is ALWAYS dropped by design: IndexReaderParam.Limit is the single
+	// candidate-budget channel. A filtered LIMIT ? cannot be over-fetched at plan
+	// time, so any non-nil plan-level top would truncate candidates before the
+	// post-filter JOIN and under-return (the #26869 bug this fixes). Mixed-version
+	// cross-CN fan-out (a provider-child scope shipped to a pre-change remote CN
+	// that reads only arg.Limit) is a control-plane rollout concern gated by
+	// MOProtocolVersion, not a plan defect — out of scope here.
+	tableFuncNode.Limit = nil
 
 	// oncond
 	wherePkEqPk, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*Expr{

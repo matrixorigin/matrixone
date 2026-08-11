@@ -768,10 +768,9 @@ func applyHnswAndGetTableConfig(t *testing.T, limit *plan.Expr) (vectorindex.Ind
 }
 
 // A prepared (non-literal) LIMIT with a residual filter cannot be over-fetched at
-// plan time: the search is flagged to over-fetch at EXECUTE, and the raw k travels
-// on IndexReaderParam.Limit as the TVF's k channel (#26869). node.Limit stays nil
-// here — there is no literal budget to park on it, and a raw ? would truncate the
-// candidates before the post-filter (obsoleteNodeLimit returns nil).
+// plan time: the search is flagged to over-fetch at EXECUTE, node.Limit is dropped
+// (so no plan-level top truncates the candidates), and the raw k travels on
+// IndexReaderParam.Limit as the TVF's only k channel (#26869).
 func TestApplyIndicesForSortUsingHnswFlagsPreparedLimitOverFetch(t *testing.T) {
 	paramLimit := &plan.Expr{
 		Typ:  plan.Type{Id: int32(types.T_uint64)},
@@ -779,22 +778,20 @@ func TestApplyIndicesForSortUsingHnswFlagsPreparedLimitOverFetch(t *testing.T) {
 	}
 	cfg, tf := applyHnswAndGetTableConfig(t, paramLimit)
 	require.True(t, cfg.PostFilterOverFetch, "prepared LIMIT ? + filter must flag over-fetch")
-	require.Nil(t, tf.Limit, "prepared filtered: node.Limit stays nil (no literal budget)")
+	require.Nil(t, tf.Limit, "node.Limit is always dropped; IndexReaderParam.Limit is the k channel")
 	require.NotNil(t, tf.IndexReaderParam.GetLimit(), "raw k must be carried on IndexReaderParam.Limit")
 	require.Nil(t, tf.IndexReaderParam.GetLimit().GetLit(), "IndexReaderParam.Limit is the raw parameter, not a literal")
 	require.Equal(t, uint64(0), tf.IndexReaderParam.GetOverFetchLimit(), "prepared ? has no plan-time over-fetch to display")
 }
 
-// A literal LIMIT with a filter carries raw k on IndexReaderParam.Limit (the TVF's
-// channel) and flags EXECUTE-time over-fetch. node.Limit is OBSOLETE for the TVF
-// but retained as a compatible arg.Limit for an older executor reached via a
-// provider child scope: it is parked at the over-fetched literal (2 -> 12), which
-// is >= k and so cannot under-fetch after the post-filter.
+// A literal LIMIT with a filter takes the SAME single path as a prepared one:
+// raw k on IndexReaderParam.Limit, node.Limit dropped, flag on so the TVF
+// over-fetches at EXECUTE. The only difference from the prepared case is that
+// IndexReaderParam.Limit is a literal here rather than a parameter.
 func TestApplyIndicesForSortUsingHnswLiteralLimitOverFetch(t *testing.T) {
 	cfg, tf := applyHnswAndGetTableConfig(t, makePlan2Uint64ConstExprWithType(2))
 	require.True(t, cfg.PostFilterOverFetch, "literal LIMIT + filter over-fetches at EXECUTE too")
-	require.NotNil(t, tf.Limit, "literal filtered: node.Limit is the over-fetched compat budget")
-	require.Equal(t, uint64(12), tf.Limit.GetLit().GetU64Val(), "node.Limit parks the over-fetched literal (2 -> 12)")
+	require.Nil(t, tf.Limit, "node.Limit must be dropped so no plan-level top truncates candidates")
 	require.NotNil(t, tf.IndexReaderParam.GetLimit(), "raw k carried on IndexReaderParam.Limit")
 	require.Equal(t, uint64(2), tf.IndexReaderParam.GetLimit().GetLit().GetU64Val(), "raw literal k, not over-fetched at plan time")
 	// EXPLAIN-only annotation: the over-fetched budget for a literal k (2 -> 12).
