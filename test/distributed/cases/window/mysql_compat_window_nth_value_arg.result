@@ -28,4 +28,40 @@ from t order by grp, id;
 3  ¦  2  𝄀
 4  ¦  5  𝄀
 5  ¦  5
+prepare nth_param from 'select id, nth_value(id, ?) over (
+partition by grp order by id
+rows between unbounded preceding and unbounded following
+) nth_id from t order by grp, id';
+set @nth_offset = 2;
+execute nth_param using @nth_offset;
+➤ id[4,32,0]  ¦  nth_id[4,32,0]  𝄀
+1  ¦  2  𝄀
+2  ¦  2  𝄀
+3  ¦  2  𝄀
+4  ¦  5  𝄀
+5  ¦  5
+set @nth_offset = 0;
+execute nth_param using @nth_offset;
+Incorrect arguments to nth_value
+set @nth_offset = -1;
+execute nth_param using @nth_offset;
+Incorrect arguments to nth_value
+set @nth_offset = null;
+execute nth_param using @nth_offset;
+Incorrect arguments to nth_value
+set @nth_offset = 2.5;
+execute nth_param using @nth_offset;
+Incorrect arguments to nth_value
+set @nth_offset = '2';
+execute nth_param using @nth_offset;
+Incorrect arguments to nth_value
+set @nth_offset = 1;
+execute nth_param using @nth_offset;
+➤ id[4,32,0]  ¦  nth_id[4,32,0]  𝄀
+1  ¦  1  𝄀
+2  ¦  1  𝄀
+3  ¦  1  𝄀
+4  ¦  4  𝄀
+5  ¦  4
+deallocate prepare nth_param;
 drop database mysql_compat_window_nth_value_arg;
