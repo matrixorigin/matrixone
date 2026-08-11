@@ -40,9 +40,9 @@ func TestDedupJoinCallConvertsTerminalBudgetAdmission(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	proc.SetMessageBoard(message.NewMessageBoard())
 
-	admission := &process.HashBuildBudgetError{
-		Kind:      process.HashBuildBudgetErrorAdmission,
-		Component: process.HashBuildBudgetComponentMemory,
+	admission := &process.ExecutionResourceError{
+		Kind:      process.ExecutionResourceErrorAdmission,
+		Component: process.ExecutionResourceComponentMemory,
 		Requested: 2,
 		Used:      1,
 		Cap:       1,
@@ -75,8 +75,8 @@ func TestDedupJoinCallConvertsTerminalBudgetAdmission(t *testing.T) {
 	_, callErr = arg.Call(proc)
 	require.Error(t, callErr)
 	require.True(t, moerr.IsMoErrCode(callErr, moerr.ErrOOM), callErr)
-	require.NotErrorIs(t, callErr, process.ErrHashBuildBudgetAdmission)
+	require.NotErrorIs(t, callErr, process.ErrExecutionResourceAdmission)
 	require.NotContains(t, callErr.Error(), "convert go error")
-	require.NotContains(t, callErr.Error(), process.ErrHashBuildBudgetAdmission.Error())
+	require.NotContains(t, callErr.Error(), process.ErrExecutionResourceAdmission.Error())
 	require.Contains(t, callErr.Error(), "hash build memory budget exceeded")
 }

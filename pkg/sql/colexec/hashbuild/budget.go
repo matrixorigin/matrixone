@@ -29,14 +29,14 @@ import (
 // such as spill files and disk. Physical memory admission is exclusively
 // driven by the allocation account installed through SetAllocationAccount.
 func (hb *HashmapBuilder) setBudget(
-	budget *process.HashBuildBudgetGeneration,
+	budget *process.ExecutionResourceGeneration,
 ) {
 	hb.budget = budget
 }
 
 // SetBudget is the exported boundary used by spill and integration tests.
 func (hb *HashmapBuilder) SetBudget(
-	budget *process.HashBuildBudgetGeneration,
+	budget *process.ExecutionResourceGeneration,
 ) {
 	hb.setBudget(budget)
 }
@@ -163,7 +163,7 @@ func (hb *HashmapBuilder) releaseOptionalRuntimeFilterKeys(
 	proc *process.Process,
 ) error {
 	if proc == nil {
-		return process.ErrHashBuildBudgetInvalid
+		return process.ErrExecutionResourceInvalid
 	}
 	for i := range hb.UniqueJoinKeys {
 		if hb.UniqueJoinKeys[i] != nil {

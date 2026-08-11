@@ -28,17 +28,17 @@ import (
 type HashBuildRecoveryCapacity struct {
 	mu sync.Mutex
 
-	generation *HashBuildBudgetGeneration
+	generation *ExecutionResourceGeneration
 	capacity   uint64
 	borrowed   uint64
 	closed     bool
 }
 
 func NewHashBuildRecoveryCapacity(
-	generation *HashBuildBudgetGeneration,
+	generation *ExecutionResourceGeneration,
 ) (*HashBuildRecoveryCapacity, error) {
 	if generation == nil || generation.budget == nil || generation.Closed() {
-		return nil, ErrHashBuildBudgetInvalid
+		return nil, ErrExecutionResourceInvalid
 	}
 	return &HashBuildRecoveryCapacity{generation: generation}, nil
 }
@@ -47,12 +47,12 @@ func NewHashBuildRecoveryCapacity(
 // a source which may later need that floor to make spill progress.
 func (c *HashBuildRecoveryCapacity) EnsureCapacity(target uint64) error {
 	if c == nil {
-		return ErrHashBuildBudgetInvalid
+		return ErrExecutionResourceInvalid
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.closed || c.generation == nil {
-		return ErrHashBuildSpillReservationInactive
+		return ErrExecutionSpillReservationInactive
 	}
 	if target <= c.capacity {
 		return nil
@@ -77,7 +77,7 @@ func (c *HashBuildRecoveryCapacity) AcquireAllocationCapacity(size uint64) error
 	if c.closed || c.generation == nil {
 		return errors.Join(
 			mpool.ErrAllocationAccountSealed,
-			ErrHashBuildSpillReservationInactive,
+			ErrExecutionSpillReservationInactive,
 		)
 	}
 	if c.borrowed > c.capacity || size > c.capacity-c.borrowed {

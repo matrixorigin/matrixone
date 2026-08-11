@@ -65,7 +65,7 @@ func newDedupTestSpillEngine(
 ) *spillutil.SpillEngine {
 	t.Helper()
 	if cfg.Budget == nil {
-		budget := process.MustNewHashBuildBudget(1<<60, 1<<60)
+		budget := process.MustNewExecutionResourceBudget(1<<60, 1<<60)
 		var err error
 		cfg.Budget, err = budget.OpenGeneration(1)
 		require.NoError(t, err)

@@ -82,7 +82,7 @@ func runRightDedupJoinDoubleSignedZeroContract(
 		if probeBatch != nil {
 			probeBatch.Clean(proc.Mp())
 		}
-		budget, budgetErr := proc.GetHashBuildBudget()
+		budget, budgetErr := proc.GetExecutionResourceBudget()
 		var used, diskUsed, fdUsed uint64
 		if budgetErr == nil {
 			used = budget.Used()
@@ -323,7 +323,7 @@ func runRightDedupJoinRemainingKeyContract(
 		if probeBatch != nil {
 			probeBatch.Clean(proc.Mp())
 		}
-		budget, budgetErr := proc.GetHashBuildBudget()
+		budget, budgetErr := proc.GetExecutionResourceBudget()
 		var used, diskUsed, fdUsed uint64
 		if budgetErr == nil {
 			used = budget.Used()

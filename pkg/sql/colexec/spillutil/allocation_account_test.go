@@ -36,7 +36,7 @@ type testSpillAllocationAccount struct {
 	registry   *mpool.AllocationAccountRegistry
 	account    *mpool.AllocationAccount
 	allocation *SpillAllocationAccount
-	generation *process.HashBuildBudgetGeneration
+	generation *process.ExecutionResourceGeneration
 }
 
 func makeTestCastKeyExpr(
@@ -75,7 +75,7 @@ func TestNewSpillEngineRequiresBudgetGeneration(t *testing.T) {
 		account,
 		hashbuild.HashBuildAllocationOwner,
 	)
-	require.ErrorIs(t, err, process.ErrHashBuildBudgetInvalid)
+	require.ErrorIs(t, err, process.ErrExecutionResourceInvalid)
 }
 
 func newTestSpillAllocationAccount(
@@ -86,7 +86,7 @@ func newTestSpillAllocationAccount(
 	t.Helper()
 	registry, err := mpool.NewAllocationAccountRegistry(1, metadataSlots)
 	require.NoError(t, err)
-	budget := process.MustNewHashBuildBudget(limit, limit)
+	budget := process.MustNewExecutionResourceBudget(limit, limit)
 	generation, err := budget.OpenGeneration(1)
 	require.NoError(t, err)
 	account, err := registry.OpenWithController(limit, generation)
@@ -336,7 +336,7 @@ func TestSpillAllocationAccountDecodedReuseRetriesFromCleanRecord(t *testing.T) 
 
 	limit := max(firstUsed, secondUsed) + 128<<10
 	require.Less(t, limit, firstUsed+secondUsed)
-	budget := process.MustNewHashBuildBudget(limit, limit)
+	budget := process.MustNewExecutionResourceBudget(limit, limit)
 	generation, err := budget.OpenGeneration(1)
 	require.NoError(t, err)
 	registry, err := mpool.NewAllocationAccountRegistry(1, 128)
@@ -443,7 +443,7 @@ func TestSpillAllocationAccountScatterDoesNotReadmitBorrowedSource(t *testing.T)
 	)
 	defer proc.Free()
 	const limit = uint64(8 << 20)
-	budget := process.MustNewHashBuildBudget(limit, limit)
+	budget := process.MustNewExecutionResourceBudget(limit, limit)
 	generation, err := budget.OpenGeneration(1)
 	require.NoError(t, err)
 	registry, err := mpool.NewAllocationAccountRegistry(1, 64)
@@ -940,7 +940,7 @@ func TestSpillAllocationAccountRebuildAndRecursiveSpillLifecycle(t *testing.T) {
 	)
 	defer proc.Free()
 	const limit = uint64(64 << 20)
-	budget := process.MustNewHashBuildBudget(limit, limit)
+	budget := process.MustNewExecutionResourceBudget(limit, limit)
 	generation, err := budget.OpenGenerationWithSpillCaps(
 		1,
 		limit,

@@ -379,8 +379,8 @@ type BaseProcess struct {
 	UdfService                          udf.Service
 	WaitPolicy                          lock.WaitPolicy
 	messageBoard                        *message.MessageBoard
-	hashBuildBudgetMu                   sync.Mutex
-	hashBuildBudget                     *HashBuildBudgetGeneration
+	executionResourceBudgetMu           sync.Mutex
+	executionResourceBudget             *ExecutionResourceGeneration
 	cteMemoryBudgetMu                   sync.Mutex
 	cteMemoryBudget                     *CTEMemoryBudget
 	logger                              *log.MOLogger
@@ -490,12 +490,12 @@ func (proc *Process) SetMessageBoard(mb *message.MessageBoard) {
 }
 
 func (proc *Process) SetStmtProfile(sp *StmtProfile) {
-	proc.Base.hashBuildBudgetMu.Lock()
-	if proc.Base.hashBuildBudget != nil {
-		proc.Base.hashBuildBudget.Close()
-		proc.Base.hashBuildBudget = nil
+	proc.Base.executionResourceBudgetMu.Lock()
+	if proc.Base.executionResourceBudget != nil {
+		proc.Base.executionResourceBudget.Close()
+		proc.Base.executionResourceBudget = nil
 	}
-	proc.Base.hashBuildBudgetMu.Unlock()
+	proc.Base.executionResourceBudgetMu.Unlock()
 	proc.Base.cteMemoryBudgetMu.Lock()
 	if proc.Base.cteMemoryBudget != nil {
 		proc.Base.cteMemoryBudget.Close()

@@ -567,7 +567,7 @@ func runHashJoinKeyContract(
 		if probe != nil {
 			probe.Clean(proc.Mp())
 		}
-		budget, budgetErr := proc.GetHashBuildBudget()
+		budget, budgetErr := proc.GetExecutionResourceBudget()
 		var used, diskUsed, fdUsed uint64
 		if budgetErr == nil {
 			used = budget.Used()

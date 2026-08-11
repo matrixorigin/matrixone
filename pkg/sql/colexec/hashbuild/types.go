@@ -153,8 +153,8 @@ type spillFileBundle struct {
 }
 
 type spillFileEntry struct {
-	fdToken   *process.HashBuildSpillFDReservation
-	diskToken *process.HashBuildSpillDiskReservation
+	fdToken   *process.ExecutionSpillFDReservation
+	diskToken *process.ExecutionSpillDiskReservation
 	rows      int64
 	bytes     uint64
 	bucket    int
@@ -183,7 +183,7 @@ func (b *spillFileBundle) release() {
 	}
 }
 
-func (b *spillFileBundle) addFD(file *os.File, bucket int, token *process.HashBuildSpillFDReservation) {
+func (b *spillFileBundle) addFD(file *os.File, bucket int, token *process.ExecutionSpillFDReservation) {
 	if b == nil || file == nil {
 		return
 	}
@@ -207,14 +207,14 @@ func (b *spillFileBundle) addFD(file *os.File, bucket int, token *process.HashBu
 	b.mu.Unlock()
 }
 
-func (b *spillFileBundle) growDisk(file *os.File, budget *process.HashBuildBudgetGeneration, bytes uint64) (uint64, bool, error) {
+func (b *spillFileBundle) growDisk(file *os.File, budget *process.ExecutionResourceGeneration, bytes uint64) (uint64, bool, error) {
 	if b == nil || file == nil || budget == nil {
-		return 0, false, process.ErrHashBuildBudgetInvalid
+		return 0, false, process.ErrExecutionResourceInvalid
 	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if b.released {
-		return 0, false, process.ErrHashBuildSpillReservationInactive
+		return 0, false, process.ErrExecutionSpillReservationInactive
 	}
 	if b.entries == nil {
 		b.entries = make(map[*os.File]*spillFileEntry)
@@ -337,7 +337,7 @@ func (hashBuild *HashBuild) SetAllocationAccount(
 }
 
 func (hashBuild *HashBuild) installRecoveryCapacity(
-	budget *process.HashBuildBudgetGeneration,
+	budget *process.ExecutionResourceGeneration,
 ) error {
 	ctr := &hashBuild.ctr
 	account := ctr.hashmapBuilder.mapAllocationAccount
@@ -739,7 +739,7 @@ func (hashBuild *HashBuild) cleanupSpillFiles(proc *process.Process) {
 // durably transferred to spill storage.
 func (hb *HashmapBuilder) CleanCopiedBatchAt(idx int, proc *process.Process) error {
 	if idx < 0 || idx >= len(hb.Batches.Buf) {
-		return process.ErrHashBuildBudgetInvalid
+		return process.ErrExecutionResourceInvalid
 	}
 	if bat := hb.Batches.Buf[idx]; bat != nil {
 		bat.Clean(proc.Mp())

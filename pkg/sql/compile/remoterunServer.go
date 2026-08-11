@@ -1013,7 +1013,7 @@ func resolveRemoteCompileMPoolCapFrom(lim process.Limitation, cgroupLimit, memor
 		}
 	}
 	if effective == 0 {
-		return 0, process.ErrHashBuildCeilingMissing
+		return 0, process.ErrExecutionMemoryCeilingMissing
 	}
 	reserve := effective / 10
 	if reserve < 256*mpool.MB {

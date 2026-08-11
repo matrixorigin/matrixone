@@ -326,7 +326,7 @@ func (loopJoin *LoopJoin) resetResultBat() error {
 				} else {
 					ctr.resBat.Clean(nil)
 					ctr.resBat = nil
-					return process.ErrHashBuildBudgetInvalid
+					return process.ErrExecutionResourceInvalid
 				}
 				ctr.resBat.Vecs[i] = vector.NewOffHeapVecWithType(leftType)
 

@@ -71,7 +71,7 @@ type HashmapBuilder struct {
 	dedupDeleteMarkerColIdx   int32
 	dedupDeleteKeepColIdxList []int32
 	DelRows                   *bitmap.Bitmap
-	budget                    *process.HashBuildBudgetGeneration
+	budget                    *process.ExecutionResourceGeneration
 	keyExprs                  []*plan.Expr
 	// retainedSpillTailSelected is the logical spill materialization of the
 	// one partial CopyIntoBatches tail. It avoids rescanning that growing tail.
@@ -962,7 +962,7 @@ buildUnits:
 		if hb.DelRows == nil {
 			delRows := max(cardinality, uint64(hb.Batches.RowCount()))
 			if delRows > uint64(math.MaxInt) {
-				return process.ErrHashBuildBudgetInvalid
+				return process.ErrExecutionResourceInvalid
 			}
 			hb.DelRows, err = hb.newDedupBitmap(
 				int(delRows),

@@ -35,7 +35,7 @@ func newExactTestSpillEngine(
 	registry, err := mpool.NewAllocationAccountRegistry(1, 1<<20)
 	require.NoError(t, err)
 	if cfg.Budget == nil {
-		budget := process.MustNewHashBuildBudget(1<<60, 1<<60)
+		budget := process.MustNewExecutionResourceBudget(1<<60, 1<<60)
 		cfg.Budget, err = budget.OpenGeneration(1)
 		require.NoError(t, err)
 	}

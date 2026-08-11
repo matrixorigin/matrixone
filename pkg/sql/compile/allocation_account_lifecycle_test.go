@@ -199,7 +199,7 @@ func newRunLifecycleCompile(
 	)
 	c.pn = &plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{}}}
 	c.anal = newAnalyzeModule()
-	budget, err := proc.GetHashBuildBudget()
+	budget, err := proc.GetExecutionResourceBudget()
 	require.NoError(t, err)
 	registry, err := budget.AllocationAccountRegistry()
 	require.NoError(t, err)

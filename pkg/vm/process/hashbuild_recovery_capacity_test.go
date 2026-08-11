@@ -25,7 +25,7 @@ import (
 func TestHashBuildRecoveryCapacitySupports256Workers(t *testing.T) {
 	const workers = 256
 
-	budget := MustNewHashBuildBudget(1, 1)
+	budget := MustNewExecutionResourceBudget(1, 1)
 	generation, err := budget.OpenGeneration(1)
 	require.NoError(t, err)
 	registry, err := mpool.NewAllocationAccountRegistry(1, 1)
@@ -52,7 +52,7 @@ func TestHashBuildRecoveryCapacitySupports256Workers(t *testing.T) {
 }
 
 func TestHashBuildRecoveryCapacityTransfersPhysicalCharge(t *testing.T) {
-	budget := MustNewHashBuildBudget(1024, 1024)
+	budget := MustNewExecutionResourceBudget(1024, 1024)
 	generation, err := budget.OpenGeneration(1)
 	require.NoError(t, err)
 	registry, err := mpool.NewAllocationAccountRegistry(1, 8)
@@ -101,7 +101,7 @@ func TestHashBuildRecoveryCapacityTransfersPhysicalCharge(t *testing.T) {
 }
 
 func TestHashBuildRecoveryCapacityRejectsUncoveredGrowth(t *testing.T) {
-	budget := MustNewHashBuildBudget(300, 300)
+	budget := MustNewExecutionResourceBudget(300, 300)
 	generation, err := budget.OpenGeneration(1)
 	require.NoError(t, err)
 	registry, err := mpool.NewAllocationAccountRegistry(1, 4)
@@ -133,7 +133,7 @@ func TestHashBuildRecoveryCapacityRejectsUncoveredGrowth(t *testing.T) {
 }
 
 func TestHashBuildRecoveryCapacityIsolatedAcrossWorkers(t *testing.T) {
-	budget := MustNewHashBuildBudget(512, 512)
+	budget := MustNewExecutionResourceBudget(512, 512)
 	generation, err := budget.OpenGeneration(1)
 	require.NoError(t, err)
 	registry, err := mpool.NewAllocationAccountRegistry(1, 8)
