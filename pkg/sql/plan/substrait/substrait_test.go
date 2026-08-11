@@ -323,10 +323,10 @@ func TestSemanticRegistryRejectsForgedNullability(t *testing.T) {
 	}
 	supported, err = hasSemanticCapability(semanticScalar, "modulus", ref, args, &forgedResult)
 	require.NoError(t, err)
-	require.True(t, supported)
+	require.False(t, supported)
 	supported, err = hasSemanticCapability(semanticScalar, "modulus", ref, args, ptrType(i64Type()))
 	require.NoError(t, err)
-	require.False(t, supported)
+	require.True(t, supported)
 }
 
 func TestExportRequiresCompleteBoundOutputHeadings(t *testing.T) {
