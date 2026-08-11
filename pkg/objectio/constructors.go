@@ -351,6 +351,18 @@ func MaterializeCachedVectorWindow(
 			offset, offset+length, source.Length(),
 		)
 	}
+	// A checked persisted vector may legally contain overlapping varlena
+	// descriptors (broadcast/shrink representations). Union would copy every
+	// logical value and can turn one compact area into rows*area bytes. Preserve
+	// the bounded physical representation for that shape instead.
+	if cachedVarlenaAreaOverlaps(&source) {
+		window, err := source.Window(offset, offset+length)
+		if err != nil {
+			return nil, err
+		}
+		defer window.Free(nil)
+		return window.DupOffHeap(mp)
+	}
 	dst := vector.NewVec(*source.GetType())
 	sels := make([]int64, length)
 	for i := range sels {
@@ -361,6 +373,34 @@ func MaterializeCachedVectorWindow(
 		return nil, err
 	}
 	return dst, nil
+}
+
+func cachedVarlenaAreaOverlaps(source *vector.Vector) bool {
+	if source == nil || !source.GetType().IsVarlen() || source.IsConst() {
+		return false
+	}
+	values := vector.MustFixedColNoTypeCheck[types.Varlena](source)
+	var previousEnd uint64
+	seen := false
+	for row, value := range values {
+		if source.IsNull(uint64(row)) || value.IsSmall() {
+			continue
+		}
+		offset, length := value.OffsetLen()
+		if length == 0 {
+			continue
+		}
+		start := uint64(offset)
+		if seen && start < previousEnd {
+			// This includes exact aliases and conservatively treats reordered
+			// disjoint ranges as potentially shared. The latter only retains the
+			// already-bounded source area; it never changes values.
+			return true
+		}
+		previousEnd = start + uint64(length)
+		seen = true
+	}
+	return false
 }
 
 func copyCachedVector(

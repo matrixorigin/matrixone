@@ -329,6 +329,8 @@ func materializeLegacyColumnWindow(
 	}()
 	if layout.typ.IsVarlen() {
 		descriptorSize := layout.typ.TypeSize()
+		type sourceAreaRef struct{ offset, length uint32 }
+		shared := make(map[sourceAreaRef]types.Varlena)
 		for row := offset; row < offset+length; row++ {
 			sourceRow := row
 			if layout.class == vector.CONSTANT {
@@ -345,22 +347,31 @@ func materializeLegacyColumnWindow(
 				continue
 			}
 			value := types.DecodeSlice[types.Varlena](descriptor)[0]
-			var payload []byte
 			if value.IsSmall() {
-				payload = value.GetByteSlice(nil)
-			} else {
-				areaOffset, areaLength := value.OffsetLen()
-				if uint64(areaOffset)+uint64(areaLength) > uint64(layout.areaLength) {
-					return nil, moerr.NewInvalidInputNoCtx("invalid legacy object column varlen offset")
-				}
-				payload = make([]byte, areaLength)
-				if _, err = source.ReadAt(payload, layout.areaOffset+int64(areaOffset)); err != nil {
+				if err = vector.AppendFixed(dst, value, false, mp); err != nil {
 					return nil, err
 				}
+				continue
+			}
+			areaOffset, areaLength := value.OffsetLen()
+			if uint64(areaOffset)+uint64(areaLength) > uint64(layout.areaLength) {
+				return nil, moerr.NewInvalidInputNoCtx("invalid legacy object column varlen offset")
+			}
+			key := sourceAreaRef{offset: areaOffset, length: areaLength}
+			if existing, ok := shared[key]; ok {
+				if err = vector.AppendFixed(dst, existing, false, mp); err != nil {
+					return nil, err
+				}
+				continue
+			}
+			payload := make([]byte, areaLength)
+			if _, err = source.ReadAt(payload, layout.areaOffset+int64(areaOffset)); err != nil {
+				return nil, err
 			}
 			if err = vector.AppendBytes(dst, payload, false, mp); err != nil {
 				return nil, err
 			}
+			shared[key] = vector.GetFixedAtNoTypeCheck[types.Varlena](dst, dst.Length()-1)
 		}
 	} else {
 		rowsToRead := length
@@ -369,10 +380,10 @@ func materializeLegacyColumnWindow(
 			rowsToRead = 1
 			sourceRow = 0
 		}
+		dataSize := rowsToRead * layout.typ.TypeSize()
 		if err = dst.PreExtend(rowsToRead, mp); err != nil {
 			return nil, err
 		}
-		dataSize := rowsToRead * layout.typ.TypeSize()
 		if dataSize > 0 {
 			if _, err = source.ReadAt(dst.GetData()[:dataSize], layout.dataOffset+int64(sourceRow*layout.typ.TypeSize())); err != nil {
 				return nil, err
@@ -417,5 +428,7 @@ func readLegacyColumnWindow(
 	if err = streamLegacyColumnToSpill(ctx, name, ext, fs, spill); err != nil {
 		return nil, err
 	}
-	return materializeLegacyColumnWindow(spill, int64(ext.OriginSize()), offset, length, mp)
+	return materializeLegacyColumnWindow(
+		spill, int64(ext.OriginSize()), offset, length, mp,
+	)
 }

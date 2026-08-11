@@ -67,10 +67,7 @@ var (
 		},
 		{
 			Name: "word",
-			Typ: plan.Type{
-				Id:          int32(types.T_varchar),
-				NotNullable: false,
-			},
+			Typ:  makeGeneratedPlan2Type(types.T_varchar, 0, 0, false),
 		},
 	}
 )

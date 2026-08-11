@@ -23,9 +23,7 @@ import (
 
 	"go.uber.org/zap"
 
-	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/objectio"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -149,13 +147,6 @@ func Open(
 		dbutils.WithRuntimeScheduler(scheduler),
 		dbutils.WithRuntimeOptions(db.Opts),
 	)
-	// Keep the writer on the legacy extent format until the deployment protocol
-	// gate confirms that every reader can decode chunked columns. Standalone
-	// tests/tools leave the objectio default enabled.
-	if runtime.ServiceRuntime(db.Runtime.SID()) != nil {
-		objectio.SetChunkedColumnEnabled(db.Runtime.PersistedColumnChunkSupported())
-	}
-
 	logutil.Info(Phase_Open + "-open-catalog-start")
 	dataFactory := tables.NewDataFactory(
 		db.Runtime, db.Dir,

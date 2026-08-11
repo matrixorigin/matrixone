@@ -28,6 +28,7 @@ func NewBindContext(builder *QueryBuilder, parent *BindContext) *BindContext {
 	bc := &BindContext{
 		outputColumnProvenance: make(map[int32]OutputColumnProvenance),
 		groupByAst:             make(map[string]int32),
+		groupByCanonicalAst:    make(map[string]int32),
 		groupByParamAst:        make(map[string]int32),
 		aggregateByAst:         make(map[string]int32),
 		sampleByAst:            make(map[string]int32),

@@ -2976,6 +2976,9 @@ func writeTestWideObjectWithCommitTS(
 		0, []uint16{0, objectio.SEQNUM_ROWID, objectio.SEQNUM_COMMITTS},
 		-1, false, false, fs,
 	)
+	// This helper covers both chunked and legacy reader windows. Production
+	// direct writers are fail-closed; tests that need the new format opt in.
+	writer.SetChunkedColumnPolicy(func() bool { return true })
 	bat := batch.NewWithSize(3)
 	bat.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
 	bat.Vecs[1] = vector.NewVec(types.T_Rowid.ToType())

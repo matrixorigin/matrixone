@@ -33,6 +33,7 @@ message Type {
   int32 scale = 5;
   string table = 6;
   string enumvalues = 7;
+  uint32 charset = 8;
 }
 
 message msgHeader {
@@ -494,6 +495,9 @@ message TableDef {
   string original_name = 37;
   // Persistent cache epoch for AUTO_INCREMENT allocation.
   uint32 auto_incr_epoch = 38;
+  // Default collation class inherited by textual columns without an explicit
+  // column-level collation. Uses the container/types Charset constants.
+  uint32 default_charset = 39;
 }
 
 message TableFunction {
@@ -1032,6 +1036,12 @@ message Node {
   // participates in hashing. A non-empty list must be a strict subset proven
   // by the optimizer to determine all remaining group_by expressions.
   repeated int32 group_by_hash_key = 78;
+
+  // FILTER only: evaluate this predicate at its current logical position.
+  // Neither the filter itself nor predicates from its parent may cross this
+  // node during pushdown. This is used when a predicate observes a final DML
+  // row image and moving it would change statement semantics.
+  bool filter_is_barrier = 79;
 }
 
 message SnapshotExtraInfo {

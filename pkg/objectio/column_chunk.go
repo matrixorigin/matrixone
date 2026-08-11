@@ -31,9 +31,10 @@ import (
 )
 
 const (
-	columnChunkTargetBytes = 8 << 20
-	columnChunkHeaderSize  = 16
-	columnChunkEntrySize   = 24
+	columnChunkTargetBytes         = 8 << 20
+	columnChunkMaxExtraOriginBytes = columnChunkTargetBytes
+	columnChunkHeaderSize          = 16
+	columnChunkEntrySize           = 24
 )
 
 var columnChunkMagic = [8]byte{'M', 'O', 'C', 'O', 'L', 'C', 'H', '1'}
@@ -62,38 +63,59 @@ func marshalColumnVectorWindow(
 	return buf.Bytes(), nil
 }
 
-func encodeChunkedColumn(vec *vector.Vector) ([]byte, error) {
+// encodeChunkedColumn returns chunked=false when the source representation
+// cannot be partitioned without unbounded physical amplification. The caller
+// must retain the already-serialized legacy column in that case.
+func encodeChunkedColumn(vec *vector.Vector) ([]byte, bool, error) {
 	if vec == nil || vec.Length() == 0 {
-		return nil, moerr.NewInvalidInputNoCtx("cannot chunk an empty object column")
+		return nil, false, moerr.NewInvalidInputNoCtx("cannot chunk an empty object column")
+	}
+	// A non-disjoint varlen area may contain many descriptors for the same
+	// payload (for example UnionBatch of a broadcast constant). Window cloning
+	// would materialize that shared payload once per logical row. Keep the
+	// compact legacy representation instead of multiplying it by row count.
+	if vec.GetType().IsVarlen() && !vec.VarlenaAreaIsDisjoint() {
+		return nil, false, nil
 	}
 	fullSize, err := vec.MarshalBinarySize()
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	fullSize += IOEntryHeaderSize
 	mp := mpool.MustNewZero()
 	defer mpool.DeleteMPool(mp)
-	rowsPerChunk := max(1, vec.Length()*columnChunkTargetBytes/max(1, fullSize))
+	rowsPerChunk := max(1, int(int64(vec.Length())*columnChunkTargetBytes/int64(max(1, fullSize))))
 	metas := make([]columnChunkMeta, 0, (vec.Length()+rowsPerChunk-1)/rowsPerChunk)
 	payloads := make([][]byte, 0, cap(metas))
+	totalOriginSize := 0
 	for start := 0; start < vec.Length(); {
 		end := min(vec.Length(), start+rowsPerChunk)
 		var encoded []byte
 		for {
 			encoded, err = marshalColumnVectorWindow(vec, start, end, mp)
 			if err != nil {
-				return nil, err
+				return nil, false, err
 			}
-			if len(encoded) <= columnChunkTargetBytes || end-start == 1 {
+			if len(encoded) <= columnChunkTargetBytes {
 				break
 			}
+			if end-start == 1 {
+				return nil, false, nil
+			}
 			end = start + max(1, (end-start)/2)
+		}
+		totalOriginSize += len(encoded)
+		// Even representations marked disjoint may carry per-window metadata.
+		// Bound all such overhead additively before allocating compressed output;
+		// this is a defensive backstop against future vector representations.
+		if totalOriginSize > fullSize+columnChunkMaxExtraOriginBytes {
+			return nil, false, nil
 		}
 		bound := lz4.CompressBlockBound(len(encoded))
 		compressed := make([]byte, bound)
 		n, compressErr := lz4.CompressBlock(encoded, compressed, nil)
 		if compressErr != nil {
-			return nil, compressErr
+			return nil, false, compressErr
 		}
 		algorithm := uint8(compress.Lz4)
 		if n == 0 || n >= len(encoded) {
@@ -126,7 +148,7 @@ func encodeChunkedColumn(vec *vector.Vector) ([]byte, error) {
 		copy(output[offset:], payloads[i])
 		offset += len(payloads[i])
 	}
-	return output, nil
+	return output, true, nil
 }
 
 func encodeColumnChunkMeta(dst []byte, meta columnChunkMeta) {
@@ -148,11 +170,12 @@ func parseColumnChunkHeader(data []byte, extentLength uint32) (uint32, []columnC
 	if headerSize > uint64(len(data)) {
 		return 0, nil, io.ErrUnexpectedEOF
 	}
-	if totalRows == 0 || count == 0 || headerSize > uint64(extentLength) {
+	if totalRows == 0 || totalRows > BlockMaxRows || count == 0 || count > totalRows ||
+		headerSize > uint64(extentLength) {
 		return 0, nil, moerr.NewInvalidInputNoCtx("invalid chunked object column size")
 	}
 	metas := make([]columnChunkMeta, count)
-	var expectedRow uint32
+	var expectedRow uint64
 	expectedOffset := headerSize
 	for i := range metas {
 		src := data[columnChunkHeaderSize+i*columnChunkEntrySize:]
@@ -164,16 +187,19 @@ func parseColumnChunkHeader(data []byte, extentLength uint32) (uint32, []columnC
 			originSize: binary.LittleEndian.Uint32(src[16:20]), algorithm: src[20],
 		}
 		meta := metas[i]
-		if meta.rowStart != expectedRow || meta.rowCount == 0 ||
+		if uint64(meta.rowStart) != expectedRow || meta.rowCount == 0 ||
 			uint64(meta.offset) != expectedOffset ||
 			uint64(meta.offset)+uint64(meta.length) > uint64(extentLength) ||
+			meta.length == 0 || meta.originSize == 0 ||
+			meta.originSize > uint32(columnChunkTargetBytes) || meta.length > meta.originSize ||
+			(meta.algorithm == uint8(compress.None) && meta.length != meta.originSize) ||
 			(meta.algorithm != uint8(compress.None) && meta.algorithm != uint8(compress.Lz4)) {
 			return 0, nil, moerr.NewInvalidInputNoCtx("invalid chunked object column entry")
 		}
-		expectedRow += meta.rowCount
+		expectedRow += uint64(meta.rowCount)
 		expectedOffset += uint64(meta.length)
 	}
-	if expectedRow != totalRows || expectedOffset != uint64(extentLength) {
+	if expectedRow != uint64(totalRows) || expectedOffset != uint64(extentLength) {
 		return 0, nil, moerr.NewInvalidInputNoCtx("chunked object column row count mismatch")
 	}
 	return totalRows, metas, nil
@@ -249,14 +275,18 @@ func decodeChunkedColumn(
 	return allocator.CopyToCacheData(ctx, encoded.Bytes()), nil
 }
 
-func chunkedColumnHeaderReadSize(prefix []byte) (int, error) {
+func chunkedColumnHeaderReadSize(prefix []byte, extentLength uint32) (int, error) {
 	if len(prefix) < columnChunkHeaderSize || !bytes.Equal(prefix[:8], columnChunkMagic[:]) {
 		return 0, moerr.NewInvalidInputNoCtx("invalid chunked object column prefix")
 	}
 	count := binary.LittleEndian.Uint32(prefix[12:16])
 	size := uint64(columnChunkHeaderSize) + uint64(count)*columnChunkEntrySize
-	if size > uint64(^uint(0)>>1) {
+	if size > uint64(extentLength) || size > uint64(^uint(0)>>1) {
 		return 0, moerr.NewInvalidInputNoCtx("chunked object column header is too large")
+	}
+	totalRows := binary.LittleEndian.Uint32(prefix[8:12])
+	if totalRows == 0 || totalRows > BlockMaxRows || count == 0 || count > totalRows {
+		return 0, moerr.NewInvalidInputNoCtx("invalid chunked object column size")
 	}
 	return int(size), nil
 }

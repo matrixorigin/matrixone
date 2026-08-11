@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"math"
 	"strings"
 	"testing"
 
@@ -25,6 +26,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/compress"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -44,8 +46,9 @@ func TestChunkedColumnRoundTripAndRangedRead(t *testing.T) {
 	}
 	defer source.Free(mp)
 
-	encoded, err := encodeChunkedColumn(source)
+	encoded, chunked, err := encodeChunkedColumn(source)
 	require.NoError(t, err)
+	require.True(t, chunked)
 	totalRows, metas, err := parseColumnChunkHeader(encoded, uint32(len(encoded)))
 	require.NoError(t, err)
 	require.Equal(t, uint32(rows), totalRows)
@@ -128,8 +131,28 @@ func TestChunkedColumnRoundTripAndRangedRead(t *testing.T) {
 func TestChunkedColumnRejectsMalformedMetadata(t *testing.T) {
 	_, _, err := parseColumnChunkHeader([]byte("short"), 5)
 	require.Error(t, err)
-	_, err = chunkedColumnHeaderReadSize([]byte("short"))
+	_, err = chunkedColumnHeaderReadSize([]byte("short"), columnChunkHeaderSize)
 	require.Error(t, err)
+
+	prefix := make([]byte, columnChunkHeaderSize)
+	copy(prefix, columnChunkMagic[:])
+	binary.LittleEndian.PutUint32(prefix[12:16], math.MaxUint32)
+	_, err = chunkedColumnHeaderReadSize(prefix, columnChunkHeaderSize)
+	require.ErrorContains(t, err, "header is too large")
+
+	// Reject impossible chunk counts before using them to size the header read.
+	binary.LittleEndian.PutUint32(prefix[8:12], 1)
+	binary.LittleEndian.PutUint32(prefix[12:16], 2)
+	_, err = chunkedColumnHeaderReadSize(
+		prefix, columnChunkHeaderSize+2*columnChunkEntrySize,
+	)
+	require.ErrorContains(t, err, "invalid chunked object column size")
+	binary.LittleEndian.PutUint32(prefix[8:12], BlockMaxRows+1)
+	binary.LittleEndian.PutUint32(prefix[12:16], 1)
+	_, err = chunkedColumnHeaderReadSize(
+		prefix, columnChunkHeaderSize+columnChunkEntrySize,
+	)
+	require.ErrorContains(t, err, "invalid chunked object column size")
 
 	header := make([]byte, columnChunkHeaderSize+columnChunkEntrySize)
 	copy(header, columnChunkMagic[:])
@@ -141,6 +164,106 @@ func TestChunkedColumnRejectsMalformedMetadata(t *testing.T) {
 	})
 	_, _, err = parseColumnChunkHeader(header, uint32(len(header)+1))
 	require.Error(t, err)
+
+	// The writer never emits a chunk whose decoded representation exceeds the
+	// target. Validate that bound before a corrupt originSize reaches an
+	// allocation in the decompressor.
+	header = append(header[:columnChunkHeaderSize+columnChunkEntrySize], 0)
+	encodeColumnChunkMeta(header[columnChunkHeaderSize:], columnChunkMeta{
+		rowCount: 1, offset: uint32(len(header) - 1), length: 1,
+		originSize: columnChunkTargetBytes + 1, algorithm: compress.Lz4,
+	})
+	_, _, err = parseColumnChunkHeader(header, uint32(len(header)))
+	require.ErrorContains(t, err, "invalid chunked object column entry")
+
+	// Row counts must not wrap around uint32 and accidentally match totalRows.
+	header = make([]byte, columnChunkHeaderSize+2*columnChunkEntrySize)
+	copy(header, columnChunkMagic[:])
+	binary.LittleEndian.PutUint32(header[8:12], 1)
+	binary.LittleEndian.PutUint32(header[12:16], 2)
+	encodeColumnChunkMeta(header[columnChunkHeaderSize:], columnChunkMeta{
+		rowCount: math.MaxUint32,
+		offset:   uint32(len(header)), algorithm: uint8(compress.None),
+	})
+	encodeColumnChunkMeta(header[columnChunkHeaderSize+columnChunkEntrySize:], columnChunkMeta{
+		rowStart: math.MaxUint32, rowCount: 2,
+		offset: uint32(len(header)), algorithm: uint8(compress.None),
+	})
+	_, _, err = parseColumnChunkHeader(header, uint32(len(header)))
+	require.Error(t, err)
+}
+
+func TestChunkedColumnSharedAreaFallsBackToLegacyWriter(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+
+	constant, err := vector.NewConstBytes(
+		types.T_text.ToType(), bytes.Repeat([]byte("x"), columnChunkTargetBytes+1), 3, mp,
+	)
+	require.NoError(t, err)
+	defer constant.Free(mp)
+	shared := vector.NewVec(types.T_text.ToType())
+	require.NoError(t, shared.UnionBatch(constant, 0, constant.Length(), nil, mp))
+	require.False(t, shared.VarlenaAreaIsDisjoint())
+	fullSize, err := shared.MarshalBinarySize()
+	require.NoError(t, err)
+	require.Greater(t, fullSize+IOEntryHeaderSize, columnChunkTargetBytes)
+
+	encoded, chunked, err := encodeChunkedColumn(shared)
+	require.NoError(t, err)
+	require.False(t, chunked)
+	require.Nil(t, encoded)
+
+	fs, err := fileservice.NewMemoryFS(
+		defines.SharedFileServiceName, fileservice.DisabledCacheConfig, nil,
+	)
+	require.NoError(t, err)
+	objectID := NewObjectid()
+	objectName := BuildObjectNameWithObjectID(&objectID)
+	writer, err := NewObjectWriter(
+		objectName, fs, 0, []uint16{0}, nil,
+	)
+	require.NoError(t, err)
+	writer.SetChunkedColumnPolicy(func() bool { return true })
+	bat := batch.NewWithSize(1)
+	bat.SetVector(0, shared)
+	bat.SetRowCount(shared.Length())
+	defer bat.Clean(mp)
+
+	block, err := writer.Write(bat)
+	require.NoError(t, err)
+	extent := block.MustGetColumn(0).Location()
+	require.Equal(t, uint8(compress.Lz4), extent.Alg())
+	require.Less(t, extent.OriginSize(), uint32(2*columnChunkTargetBytes),
+		"shared payload must remain O(source bytes), not O(rows*source bytes)")
+	blocks, err := writer.WriteEnd(context.Background())
+	require.NoError(t, err)
+	require.Len(t, blocks, 1)
+
+	reader, err := NewObjectReaderWithStr(objectName.String(), fs)
+	require.NoError(t, err)
+	metaExtent := blocks[0].GetExtent()
+	reader.CacheMetaExtent(&metaExtent)
+	read, err := reader.ReadOneBlock(
+		context.Background(), []uint16{0}, []types.Type{types.T_text.ToType()}, 0, mp,
+	)
+	require.NoError(t, err)
+	defer read.Release()
+	decoded, err := DecodeCached(read.Entries[0].CachedData)
+	require.NoError(t, err)
+	got := decoded.(*vector.Vector)
+	require.Equal(t, 3, got.Length())
+	for row := range got.Length() {
+		require.Equal(t, constant.GetBytesAt(0), got.GetBytesAt(row))
+	}
+	window, err := MaterializeCachedVectorWindow(read.Entries[0].CachedData, 0, 3, mp)
+	require.NoError(t, err)
+	defer window.Free(mp)
+	require.Less(t, window.Allocated(), 2*columnChunkTargetBytes,
+		"read-side materialization must preserve the compact shared area")
+	for row := range window.Length() {
+		require.Equal(t, constant.GetBytesAt(0), window.GetBytesAt(row))
+	}
 }
 
 func TestChunkedColumnRejectsPayloadRowCountMismatch(t *testing.T) {

@@ -126,7 +126,7 @@ func TestReadLegacyColumnWindowLZ4AndNone(t *testing.T) {
 	column.setLocation(stringsExtent)
 	bat, err := ReadOneBlockAllColumnsWindow(
 		ctx, &meta, "legacy-lz4", 0, []uint16{0}, 55, 5,
-		fileservice.SkipAllCache, fs, mp, 1, factory,
+		fileservice.SkipAllCache, fs, mp, 8<<10, factory,
 	)
 	require.NoError(t, err)
 	require.Equal(t, stringsSource.GetStringAt(55), bat.Vecs[0].GetStringAt(0))
@@ -156,6 +156,56 @@ func TestReadLegacyColumnWindowLZ4AndNone(t *testing.T) {
 		require.Greater(t, spill.grown, uint64(0))
 	}
 	require.Zero(t, mp.CurrNB())
+}
+
+func TestReadLegacyColumnWindowDeduplicatesSharedVarlenaArea(t *testing.T) {
+	ctx := context.Background()
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	fs, err := fileservice.NewMemoryFS(
+		defines.SharedFileServiceName, fileservice.DisabledCacheConfig, nil,
+	)
+	require.NoError(t, err)
+
+	const (
+		rows        = 64
+		payloadSize = 1 << 20
+		budget      = 2 << 20
+	)
+	constant, err := vector.NewConstBytes(
+		types.T_text.ToType(), bytes.Repeat([]byte("x"), payloadSize), rows, mp,
+	)
+	require.NoError(t, err)
+	defer constant.Free(mp)
+	shared := vector.NewVec(types.T_text.ToType())
+	require.NoError(t, shared.UnionBatch(constant, 0, rows, nil, mp))
+	defer shared.Free(mp)
+	require.False(t, shared.VarlenaAreaIsDisjoint())
+
+	extent := writeLegacyTestExtent(
+		t, fs, "legacy-shared", marshalLegacyTestColumn(t, shared), compress.Lz4,
+	)
+	var spill *testColumnWindowSpill
+	factory := func(context.Context) (ColumnWindowSpill, error) {
+		file, createErr := os.CreateTemp(t.TempDir(), "legacy-shared-*")
+		if createErr != nil {
+			return nil, createErr
+		}
+		spill = &testColumnWindowSpill{File: file}
+		return spill, nil
+	}
+	window, err := readLegacyColumnWindow(
+		ctx, "legacy-shared", extent, 0, rows, fs, mp, factory,
+	)
+	require.NoError(t, err)
+	defer window.Free(mp)
+	require.True(t, spill.closed)
+	require.Equal(t, rows, window.Length())
+	require.Less(t, window.Allocated(), budget,
+		"shared source payload must be materialized once, not once per row")
+	for row := range rows {
+		require.Equal(t, constant.GetBytesAt(0), window.GetBytesAt(row))
+	}
 }
 
 func TestReadLegacyColumnWindowRejectsInvalidInputs(t *testing.T) {

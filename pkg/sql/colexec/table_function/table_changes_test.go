@@ -203,6 +203,31 @@ func TestTableChangesAppendInsertAndDeleteRows(t *testing.T) {
 	require.NoError(t, state.appendDeleteRows(attrs, nil, proc))
 }
 
+func TestTableChangesDeleteKeyNamesAreCaseInsensitive(t *testing.T) {
+	proc := testutil.NewProc(t)
+	attrs := []string{"MixedCasePK"}
+	state := &tableChangesState{
+		tableDef: &plan.TableDef{
+			Name2ColIndex: map[string]int32{"mixedcasepk": 0},
+			Pkey:          &plan.PrimaryKeyDef{Names: attrs, PkeyColName: attrs[0]},
+		},
+		batch: batch.NewWithSize(1),
+	}
+	state.batch.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+	defer state.batch.Clean(proc.Mp())
+
+	deletes := batch.NewWithSize(2)
+	deletes.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+	deletes.Vecs[1] = vector.NewVec(types.T_TS.ToType())
+	require.NoError(t, vector.AppendFixed(deletes.Vecs[0], int64(7), false, proc.Mp()))
+	require.NoError(t, vector.AppendFixed(deletes.Vecs[1], types.BuildTS(10, 2), false, proc.Mp()))
+	deletes.SetRowCount(1)
+	defer deletes.Clean(proc.Mp())
+
+	require.NoError(t, state.appendDeleteRows(attrs, deletes, proc))
+	require.Equal(t, []int64{7}, vector.MustFixedColWithTypeCheck[int64](state.batch.Vecs[0]))
+}
+
 func TestValidateRuntimeTableChangesSourceRejectsMetadataColumnNames(t *testing.T) {
 	for _, name := range []string{
 		catalog.TableChangesAttrChangeType,

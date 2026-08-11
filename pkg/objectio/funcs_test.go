@@ -1271,6 +1271,19 @@ func TestReadOneBlockAllColumnsWindowMaterializesRequestedRows(t *testing.T) {
 		0, 0, fileservice.Policy(0), fs, queryMP, 0, nil,
 	)
 	require.Error(t, err)
+
+	var errorReleases atomic.Int32
+	readErr := moerr.NewInternalErrorNoCtx("window read failed")
+	errorFS := &partialReadErrorFS{
+		data: &releaseTrackingData{releases: &errorReleases},
+		err:  readErr,
+	}
+	_, err = ReadOneBlockAllColumnsWindow(
+		context.Background(), &meta, "test-object", 0, []uint16{0},
+		0, 1, fileservice.Policy(0), errorFS, queryMP, 0, nil,
+	)
+	require.ErrorIs(t, err, readErr)
+	require.Equal(t, int32(1), errorReleases.Load())
 	require.Zero(t, queryMP.CurrNB())
 	mpool.DeleteMPool(queryMP)
 	mpool.DeleteMPool(writerMP)

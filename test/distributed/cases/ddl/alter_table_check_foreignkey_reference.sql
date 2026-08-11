@@ -259,7 +259,6 @@ alter table dept ALTER COLUMN deptno SET DEFAULT 10;
 desc dept;
 
 alter table dept ALTER COLUMN deptno SET INVISIBLE;
---success
 desc dept;
 
 alter table dept ALTER COLUMN deptno drop default;

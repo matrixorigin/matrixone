@@ -7055,6 +7055,7 @@ group_by_opt:
             GroupByExprsList: $6,
             Apart:      false,
             Cube :      false,
+            GroupingSets: true,
             Rollup:     false,
         }
     }
@@ -11421,9 +11422,9 @@ column_attribute_elem:
     {
         $$ = tree.NewAttributeVisable(false)
     }
-|   default_opt CHARACTER SET equal_opt ident
+|   default_opt CHARACTER SET equal_opt charset_name
     {
-        $$ = nil
+		$$ = tree.NewAttributeCharset($5)
     }
 |   GENERATED ALWAYS AS '(' expression ')' generated_column_type_opt
     {
@@ -12747,19 +12748,13 @@ function_call_aggregate:
             WindowSpec: $6,
         }
     }
-|   GROUPING '(' func_type_opt column_list ')' window_spec_opt
+|   GROUPING '(' func_type_opt expression_list ')' window_spec_opt
     {
         name := tree.NewUnresolvedColName($1)
-        var columnList tree.Exprs
-        for _, columnStr := range $4{
-            column := tree.NewUnresolvedColName(string(columnStr))
-            columnList = append(columnList, column)
-        }
-
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
             FuncName: tree.NewCStr($1, 1),
-            Exprs: columnList,
+            Exprs: $4,
             Type: $3,
             WindowSpec: $6,
         }
