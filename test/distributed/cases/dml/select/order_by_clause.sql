@@ -148,10 +148,19 @@ order by id + 0, grouping(k), source_id + 0;
 -- An unrelated window expression activates the ROLLUP window rewrite but must
 -- not change the source-column-first binding of the same ORDER BY expression.
 select k as id, id as source_id, count(*) as row_count,
-       count(*) over () as window_rows
+count(*) over () as window_rows
 from order_alias_shadow
 group by id, k with rollup
 order by id + 0, grouping(k), source_id + 0;
+
+-- Predicate-shaped ORDER BY nodes must keep the same alias fallback when the
+-- ROLLUP window rewrite is active; the rewrite cannot bind the whole predicate
+-- in the source branch because expression_alias exists only in the output.
+select -id as expression_alias, count(*) as row_count,
+count(*) over () as window_rows
+from order_alias_shadow
+group by id with rollup
+order by expression_alias is null, expression_alias;
 
 select k as id, id as source_id, k as source_k, count(*) as row_count
 from order_alias_shadow
@@ -159,7 +168,7 @@ group by cube(id, k)
 order by id + 0, grouping(id), grouping(k), source_k + 0;
 
 select k as id, id as source_id, k as source_k, count(*) as row_count,
-       count(*) over () as window_rows
+count(*) over () as window_rows
 from order_alias_shadow
 group by cube(id, k)
 order by id + 0, grouping(id), grouping(k), source_k + 0;

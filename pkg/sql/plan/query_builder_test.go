@@ -1511,6 +1511,10 @@ func TestQueryBuilderBuildGroupingSetWindowKeepsOuterOrderReferences(t *testing.
 	for _, sql := range []string{
 		`select count(*), row_number() over () as window_rank
 		from select_test.bind_select group by a with rollup order by window_rank + 0`,
+		`select count(*), row_number() over () as window_rank
+		from select_test.bind_select group by a with rollup order by row_number() over () is null`,
+		`select count(*), row_number() over () as window_rank
+		from select_test.bind_select group by a with rollup order by row_number() over () between 1 and 2`,
 		`select -a as expression_alias, count(*), row_number() over () as window_rank
 		from select_test.bind_select group by a with rollup order by expression_alias + 0`,
 		`select a as duplicate_alias, a as duplicate_alias, count(*), row_number() over () as window_rank
@@ -1534,6 +1538,43 @@ func TestQueryBuilderBuildGroupingSetWindowKeepsOuterOrderReferences(t *testing.
 		require.NoError(t, err)
 		_, err = BuildPlan(NewMockCompilerContext(true), stmts[0], false)
 		require.NoError(t, err)
+	}
+}
+
+func TestQueryBuilderBuildGroupingSetWindowRewritesAliasFallbackPredicates(t *testing.T) {
+	for _, groupBy := range []string{"a with rollup", "cube(a)"} {
+		for _, testCase := range []struct {
+			orderBy string
+			astType tree.Expr
+		}{
+			{"expression_alias is null", &tree.IsNullExpr{}},
+			{"expression_alias is not null", &tree.IsNotNullExpr{}},
+			{"expression_alias is true", &tree.IsTrueExpr{}},
+			{"expression_alias is not true", &tree.IsNotTrueExpr{}},
+			{"expression_alias is false", &tree.IsFalseExpr{}},
+			{"expression_alias is not false", &tree.IsNotFalseExpr{}},
+			{"expression_alias is unknown", &tree.IsUnknownExpr{}},
+			{"expression_alias is not unknown", &tree.IsNotUnknownExpr{}},
+			{"expression_alias between -3 and -1", &tree.RangeCond{}},
+			{"bit_cast(unhex(hex(expression_alias)) as bigint)", &tree.BitCastExpr{}},
+			{"serial_extract(serial(expression_alias), 0 as bigint)", &tree.SerialExtractExpr{}},
+		} {
+			t.Run(groupBy+"/"+testCase.orderBy, func(t *testing.T) {
+				stmts, err := parsers.Parse(
+					context.TODO(),
+					dialect.MYSQL,
+					fmt.Sprintf(`select -a as expression_alias, count(*), row_number() over () as window_rank
+						from select_test.bind_select group by %s order by %s`, groupBy, testCase.orderBy),
+					1,
+				)
+				require.NoError(t, err)
+				selectStmt := stmts[0].(*tree.Select)
+				require.IsType(t, testCase.astType, selectStmt.OrderBy[0].Expr)
+
+				_, err = BuildPlan(NewMockCompilerContext(true), stmts[0], false)
+				require.NoError(t, err)
+			})
+		}
 	}
 }
 

@@ -6578,6 +6578,78 @@ func rewriteRollupWindowExpr(expr tree.Expr, state *rollupWindowRewriteState) (t
 		next := *e
 		next.Expr = child
 		return &next, true
+	case *tree.IsNullExpr:
+		child, ok := rewriteRollupWindowExpr(e.Expr, state)
+		if !ok {
+			return nil, false
+		}
+		next := *e
+		next.Expr = child
+		return &next, true
+	case *tree.IsNotNullExpr:
+		child, ok := rewriteRollupWindowExpr(e.Expr, state)
+		if !ok {
+			return nil, false
+		}
+		next := *e
+		next.Expr = child
+		return &next, true
+	case *tree.IsUnknownExpr:
+		child, ok := rewriteRollupWindowExpr(e.Expr, state)
+		if !ok {
+			return nil, false
+		}
+		next := *e
+		next.Expr = child
+		return &next, true
+	case *tree.IsNotUnknownExpr:
+		child, ok := rewriteRollupWindowExpr(e.Expr, state)
+		if !ok {
+			return nil, false
+		}
+		next := *e
+		next.Expr = child
+		return &next, true
+	case *tree.IsTrueExpr:
+		child, ok := rewriteRollupWindowExpr(e.Expr, state)
+		if !ok {
+			return nil, false
+		}
+		next := *e
+		next.Expr = child
+		return &next, true
+	case *tree.IsNotTrueExpr:
+		child, ok := rewriteRollupWindowExpr(e.Expr, state)
+		if !ok {
+			return nil, false
+		}
+		next := *e
+		next.Expr = child
+		return &next, true
+	case *tree.IsFalseExpr:
+		child, ok := rewriteRollupWindowExpr(e.Expr, state)
+		if !ok {
+			return nil, false
+		}
+		next := *e
+		next.Expr = child
+		return &next, true
+	case *tree.IsNotFalseExpr:
+		child, ok := rewriteRollupWindowExpr(e.Expr, state)
+		if !ok {
+			return nil, false
+		}
+		next := *e
+		next.Expr = child
+		return &next, true
+	case *tree.ExprList:
+		exprs, ok := rewriteRollupWindowExprs(e.Exprs, state)
+		if !ok {
+			return nil, false
+		}
+		next := *e
+		next.Exprs = exprs
+		return &next, true
 	case *tree.ParenExpr:
 		child, ok := rewriteRollupWindowExpr(e.Expr, state)
 		if !ok {
@@ -6594,6 +6666,27 @@ func rewriteRollupWindowExpr(expr tree.Expr, state *rollupWindowRewriteState) (t
 		next := *e
 		next.Expr = child
 		return &next, true
+	case *tree.BitCastExpr:
+		child, ok := rewriteRollupWindowExpr(e.Expr, state)
+		if !ok {
+			return nil, false
+		}
+		next := *e
+		next.Expr = child
+		return &next, true
+	case *tree.SerialExtractExpr:
+		serialExpr, ok := rewriteRollupWindowExpr(e.SerialExpr, state)
+		if !ok {
+			return nil, false
+		}
+		indexExpr, ok := rewriteRollupWindowExpr(e.IndexExpr, state)
+		if !ok {
+			return nil, false
+		}
+		next := *e
+		next.SerialExpr = serialExpr
+		next.IndexExpr = indexExpr
+		return &next, true
 	case *tree.Tuple:
 		exprs, ok := rewriteRollupWindowExprs(e.Exprs, state)
 		if !ok {
@@ -6601,6 +6694,24 @@ func rewriteRollupWindowExpr(expr tree.Expr, state *rollupWindowRewriteState) (t
 		}
 		next := *e
 		next.Exprs = exprs
+		return &next, true
+	case *tree.RangeCond:
+		left, ok := rewriteRollupWindowExpr(e.Left, state)
+		if !ok {
+			return nil, false
+		}
+		from, ok := rewriteRollupWindowExpr(e.From, state)
+		if !ok {
+			return nil, false
+		}
+		to, ok := rewriteRollupWindowExpr(e.To, state)
+		if !ok {
+			return nil, false
+		}
+		next := *e
+		next.Left = left
+		next.From = from
+		next.To = to
 		return &next, true
 	case *tree.CaseExpr:
 		next := *e
@@ -6633,7 +6744,37 @@ func rewriteRollupWindowExpr(expr tree.Expr, state *rollupWindowRewriteState) (t
 			next.Else = elseExpr
 		}
 		return &next, true
-	case *tree.NumVal, *tree.StrVal, *tree.TimeUnitExpr, *tree.ParamExpr, *tree.VarExpr:
+	case *tree.IntervalExpr:
+		next := *e
+		if e.Expr != nil {
+			child, ok := rewriteRollupWindowExpr(e.Expr, state)
+			if !ok {
+				return nil, false
+			}
+			next.Expr = child
+		}
+		return &next, true
+	case *tree.DefaultVal:
+		next := *e
+		if e.Expr != nil {
+			child, ok := rewriteRollupWindowExpr(e.Expr, state)
+			if !ok {
+				return nil, false
+			}
+			next.Expr = child
+		}
+		return &next, true
+	case *tree.VarExpr:
+		next := *e
+		if e.Expr != nil {
+			child, ok := rewriteRollupWindowExpr(e.Expr, state)
+			if !ok {
+				return nil, false
+			}
+			next.Expr = child
+		}
+		return &next, true
+	case *tree.NumVal, *tree.StrVal, *tree.TimeUnitExpr, *tree.ParamExpr:
 		return expr, true
 	case *tree.UnresolvedName:
 		if e.Star {
