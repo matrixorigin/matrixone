@@ -18,6 +18,7 @@ import (
 	"context"
 	"reflect"
 	gotrace "runtime/trace"
+	"strings"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -161,6 +162,12 @@ func bindAndOptimizeInsertQuery(ctx CompilerContext, stmt *tree.Insert, isPrepar
 		return nil, err
 	}
 	if len(tblInfo.tableDefs) == 1 && len(tblInfo.tableDefs[0].Fkeys) > 0 {
+		// The in-plan child checks and self-reference DetectSqls depend on the
+		// session's foreign_key_checks value. Keep prepared INSERT plans sensitive
+		// even while checks are disabled, so a later EXECUTE rebuilds the plan
+		// after either an OFF->ON or ON->OFF transition.
+		query.HasForeignKeyAction = true
+
 		enabled, err := IsForeignKeyChecksEnabled(ctx)
 		if err != nil {
 			return nil, err
@@ -337,6 +344,9 @@ func bindAndOptimizeDeleteQuery(ctx CompilerContext, stmt *tree.Delete, isPrepar
 	defer func() {
 		v2.TxnStatementBuildDeleteHistogram.Observe(time.Since(start).Seconds())
 	}()
+	if err := validateSingleTableDMLLimitOffset(ctx, "DELETE", stmt.Limit); err != nil {
+		return nil, err
+	}
 
 	builder := NewQueryBuilder(plan.Query_DELETE, ctx, isPrepareStmt, true)
 	bindCtx := NewBindContext(builder, nil)
@@ -390,6 +400,9 @@ func bindAndOptimizeUpdateQuery(ctx CompilerContext, stmt *tree.Update, isPrepar
 		v2.TxnStatementBuildDeleteHistogram.Observe(time.Since(start).Seconds())
 	}()
 	if err := validateMultiTableUpdateClauses(ctx, stmt); err != nil {
+		return nil, err
+	}
+	if err := validateSingleTableDMLLimitOffset(ctx, "UPDATE", stmt.Limit); err != nil {
 		return nil, err
 	}
 
@@ -776,6 +789,18 @@ func GetResultColumnsFromPlan(p *Plan) []*ColDef {
 				}
 			}
 
+			if source := findResultColumnSource(query, query.Steps[step], expr); source != nil {
+				columns[idx].Primary = source.primary
+				columns[idx].Unique = source.unique
+				columns[idx].NotNull = source.notNull
+				if source.nullExtended {
+					columns[idx].Typ.NotNullable = false
+				} else {
+					columns[idx].Typ.NotNullable = columns[idx].Typ.NotNullable || source.notNull
+				}
+				columns[idx].Typ.AutoIncr = columns[idx].Typ.AutoIncr || source.autoIncr
+			}
+
 		}
 
 		return columns
@@ -817,4 +842,363 @@ func GetResultColumnsFromPlan(p *Plan) []*ColDef {
 		}
 	}
 	return nil
+}
+
+type resultColumnSource struct {
+	primary      bool
+	unique       bool
+	notNull      bool
+	autoIncr     bool
+	nullExtended bool
+}
+
+// findResultColumnSource follows a result projection through transparent plan
+// nodes and JOIN remappings until it reaches the table column that produced
+// it. Expressions such as arithmetic, aggregation, and DISTINCT intentionally
+// do not produce source metadata: marking those outputs as key columns would
+// be less compatible than leaving the flags unset.
+func findResultColumnSource(query *plan.Query, nodeID int32, expr *plan.Expr) *resultColumnSource {
+	if query == nil || expr == nil || expr.GetCol() == nil {
+		return nil
+	}
+	return findResultColumnSourceAtNode(query, nodeID, expr.GetCol(), make(map[int32]bool))
+}
+
+func findResultColumnSourceAtNode(
+	query *plan.Query,
+	nodeID int32,
+	ref *plan.ColRef,
+	visited map[int32]bool,
+) *resultColumnSource {
+	if query == nil || ref == nil || nodeID < 0 || int(nodeID) >= len(query.Nodes) || visited[nodeID] {
+		return nil
+	}
+	visited[nodeID] = true
+	node := query.Nodes[nodeID]
+	if node == nil {
+		return nil
+	}
+
+	if node.TableDef != nil && isResultColumnSourceNode(node.NodeType) {
+		if len(node.ProjectList) > 0 {
+			if sourceExpr := resultColumnProjectionAtNode(node, ref); sourceExpr != nil {
+				if sourceRef := sourceExpr.GetCol(); sourceRef != nil {
+					return resultColumnSourceFromTableDef(node.TableDef, sourceRef.ColPos)
+				}
+			}
+			return nil
+		}
+		if source := resultColumnSourceFromTableDef(node.TableDef, ref.ColPos); source != nil {
+			return source
+		}
+	}
+
+	if node.NodeType == plan.Node_JOIN {
+		return findResultColumnSourceAtJoin(query, node, ref, visited)
+	}
+
+	if !isResultColumnTransparentNode(node.NodeType) || len(node.Children) == 0 {
+		return nil
+	}
+
+	projected := resultColumnProjectionAtNode(node, ref)
+	if projected == nil {
+		return nil
+	}
+	projectedRef := projected.GetCol()
+	if projectedRef == nil {
+		return nil
+	}
+
+	var found *resultColumnSource
+	for _, childID := range node.Children {
+		candidate := findResultColumnSourceAtNode(query, childID, projectedRef, cloneVisitedResultColumnNodes(visited))
+		if candidate == nil {
+			continue
+		}
+		if found != nil && *found != *candidate {
+			// The reference is ambiguous across children. Do not claim a key
+			// flag when the plan no longer identifies one source column.
+			return nil
+		}
+		found = candidate
+	}
+	return found
+}
+
+func findResultColumnSourceAtJoin(
+	query *plan.Query,
+	node *plan.Node,
+	ref *plan.ColRef,
+	visited map[int32]bool,
+) *resultColumnSource {
+	if query == nil || node == nil || ref == nil || len(node.Children) == 0 {
+		return nil
+	}
+
+	projectedRef := ref
+	childIdx := -1
+	if projected := resultColumnProjectionAtNode(node, ref); projected != nil {
+		if col := projected.GetCol(); col != nil {
+			projectedRef = col
+			// JOIN ProjectList entries use RelPos 0/1 to identify the
+			// corresponding child and ColPos to identify that child's output
+			// slot. This is a local remapping, not a source-table position.
+			if projectedRef.RelPos >= 0 && int(projectedRef.RelPos) < len(node.Children) {
+				childIdx = int(projectedRef.RelPos)
+				if childRef := resultColumnJoinChildProjectionRef(query, node, childIdx, projectedRef.ColPos); childRef != nil {
+					projectedRef = childRef
+				}
+			}
+		}
+	}
+
+	if childIdx < 0 {
+		childIdx = resultColumnJoinChildByBinding(query, node, projectedRef)
+	}
+	if childIdx >= 0 && childIdx < len(node.Children) {
+		candidate := findResultColumnSourceAtNode(
+			query,
+			node.Children[childIdx],
+			projectedRef,
+			cloneVisitedResultColumnNodes(visited),
+		)
+		return resultColumnSourceAfterJoin(candidate, node, childIdx)
+	}
+
+	// Plans from earlier optimization stages may not yet have the local JOIN
+	// projection. Fall back to tracing each child by the source identity, but
+	// reject an ambiguous match rather than assigning metadata from one side.
+	var found *resultColumnSource
+	foundChild := -1
+	for childIdx, childID := range node.Children {
+		candidate := findResultColumnSourceAtNode(
+			query,
+			childID,
+			projectedRef,
+			cloneVisitedResultColumnNodes(visited),
+		)
+		if candidate == nil {
+			continue
+		}
+		if found != nil {
+			return nil
+		}
+		found = candidate
+		foundChild = childIdx
+	}
+	return resultColumnSourceAfterJoin(found, node, foundChild)
+}
+
+func resultColumnJoinChildProjectionRef(
+	query *plan.Query,
+	node *plan.Node,
+	childIdx int,
+	colPos int32,
+) *plan.ColRef {
+	if query == nil || node == nil || childIdx < 0 || childIdx >= len(node.Children) || colPos < 0 {
+		return nil
+	}
+	childID := node.Children[childIdx]
+	if childID < 0 || int(childID) >= len(query.Nodes) || query.Nodes[childID] == nil {
+		return nil
+	}
+	child := query.Nodes[childID]
+	if int(colPos) >= len(child.ProjectList) {
+		return nil
+	}
+	return child.ProjectList[colPos].GetCol()
+}
+
+func resultColumnJoinChildByBinding(query *plan.Query, node *plan.Node, ref *plan.ColRef) int {
+	if query == nil || node == nil || ref == nil || len(node.Children) == 0 {
+		return -1
+	}
+	childIdx := -1
+	for i, childID := range node.Children {
+		if !resultColumnNodeHasBindingTag(query, childID, ref.RelPos, make(map[int32]bool)) {
+			continue
+		}
+		if childIdx >= 0 {
+			return -1
+		}
+		childIdx = i
+	}
+	return childIdx
+}
+
+func resultColumnNodeHasBindingTag(query *plan.Query, nodeID, tag int32, visited map[int32]bool) bool {
+	if query == nil || nodeID < 0 || int(nodeID) >= len(query.Nodes) || visited[nodeID] {
+		return false
+	}
+	visited[nodeID] = true
+	node := query.Nodes[nodeID]
+	if node == nil {
+		return false
+	}
+	for _, bindingTag := range node.BindingTags {
+		if bindingTag == tag {
+			return true
+		}
+	}
+	for _, childID := range node.Children {
+		if resultColumnNodeHasBindingTag(query, childID, tag, visited) {
+			return true
+		}
+	}
+	return false
+}
+
+func resultColumnSourceAfterJoin(source *resultColumnSource, node *plan.Node, childIdx int) *resultColumnSource {
+	if source == nil || !nodeNullExtendsChild(node, childIdx) {
+		return source
+	}
+	result := *source
+	result.notNull = false
+	result.nullExtended = true
+	return &result
+}
+
+func cloneVisitedResultColumnNodes(visited map[int32]bool) map[int32]bool {
+	clone := make(map[int32]bool, len(visited)+1)
+	for nodeID, seen := range visited {
+		clone[nodeID] = seen
+	}
+	return clone
+}
+
+func resultColumnProjectionAtNode(node *plan.Node, ref *plan.ColRef) *plan.Expr {
+	if node == nil || ref == nil {
+		return nil
+	}
+	// ColPos identifies the source column, not the position of the expression
+	// in this node's projection.  A projection can reorder columns (for example
+	// SELECT unique_value, id), so looking up ProjectList[ref.ColPos] can attach
+	// the metadata of a different source column.  Resolve the source identity
+	// across the whole projection first.
+	for _, expr := range node.ProjectList {
+		col := expr.GetCol()
+		if col == nil {
+			continue
+		}
+		if resultColumnRefsHaveSamePosition(ref, col) {
+			return expr
+		}
+	}
+
+	// Some plan nodes omit relation/column positions while retaining names.
+	// Use names only after the identity lookup, and require the names that are
+	// available on both refs to agree so an ambiguous table-only match cannot
+	// claim key metadata.
+	for _, expr := range node.ProjectList {
+		col := expr.GetCol()
+		if col == nil {
+			continue
+		}
+		if resultColumnRefsMatchByName(ref, col) {
+			return expr
+		}
+	}
+	return nil
+}
+
+func resultColumnRefsHaveSamePosition(left, right *plan.ColRef) bool {
+	if left == nil || right == nil {
+		return false
+	}
+	return left.RelPos == right.RelPos && left.ColPos == right.ColPos
+}
+
+func resultColumnRefsMatchByName(left, right *plan.ColRef) bool {
+	if left == nil || right == nil {
+		return false
+	}
+	if left.Name != "" && right.Name != "" {
+		if !strings.EqualFold(left.Name, right.Name) {
+			return false
+		}
+		if left.TblName != "" && right.TblName != "" &&
+			!strings.EqualFold(left.TblName, right.TblName) {
+			return false
+		}
+		if left.DbName != "" && right.DbName != "" &&
+			!strings.EqualFold(left.DbName, right.DbName) {
+			return false
+		}
+		return true
+	}
+	if left.TblName == "" || right.TblName == "" ||
+		!strings.EqualFold(left.TblName, right.TblName) {
+		return false
+	}
+	if left.DbName != "" && right.DbName != "" &&
+		!strings.EqualFold(left.DbName, right.DbName) {
+		return false
+	}
+	return left.Name == "" && right.Name == ""
+}
+
+func isResultColumnSourceNode(nodeType plan.Node_NodeType) bool {
+	switch nodeType {
+	case plan.Node_TABLE_SCAN, plan.Node_EXTERNAL_SCAN, plan.Node_FUNCTION_SCAN:
+		return true
+	default:
+		return false
+	}
+}
+
+func isResultColumnTransparentNode(nodeType plan.Node_NodeType) bool {
+	switch nodeType {
+	case plan.Node_PROJECT,
+		plan.Node_FILTER,
+		plan.Node_SORT,
+		plan.Node_SAMPLE,
+		plan.Node_MATERIAL,
+		plan.Node_PARTITION,
+		plan.Node_GATHER:
+		return true
+	default:
+		return false
+	}
+}
+
+func resultColumnSourceFromTableDef(tableDef *plan.TableDef, colPos int32) *resultColumnSource {
+	if tableDef == nil || colPos < 0 || int(colPos) >= len(tableDef.Cols) {
+		return nil
+	}
+	col := tableDef.Cols[colPos]
+	if col == nil {
+		return nil
+	}
+	primary := col.Primary
+	if !primary && tableDef.Pkey != nil {
+		primary = resultColumnNameInList(tableDef.Pkey.Names, col.Name)
+	}
+	unique := col.Unique && !primary
+	if !primary && !unique {
+		for _, index := range tableDef.Indexes {
+			if index == nil || !index.Unique {
+				continue
+			}
+			if resultColumnNameInList(index.Parts, col.Name) {
+				unique = true
+				break
+			}
+		}
+	}
+	return &resultColumnSource{
+		primary:  primary,
+		unique:   unique,
+		notNull:  primary || col.NotNull || col.Typ.NotNullable,
+		autoIncr: col.Typ.AutoIncr,
+	}
+}
+
+func resultColumnNameInList(names []string, name string) bool {
+	for _, candidate := range names {
+		if strings.EqualFold(candidate, name) {
+			return true
+		}
+	}
+	return false
 }

@@ -73,3 +73,19 @@ insert into t2 values(0, null, null);
 (select country,city from t1 where country='JAPAN' intersect all select country,city from t2) order by 1,2;
 (select country,city from t1 intersect all select country,city from t2 where country='JAPAN') order by 1,2;
 t1 intersect all select * from t2 ;
+
+drop table if exists intersect_all_digits;
+drop table if exists intersect_all_batch;
+create table intersect_all_digits(d int primary key);
+insert into intersect_all_digits values (0),(1),(2),(3),(4),(5),(6),(7),(8),(9);
+create table intersect_all_batch(id int primary key);
+insert into intersect_all_batch
+select a.d + 10 * b.d + 100 * c.d + 1
+from intersect_all_digits a cross join intersect_all_digits b cross join intersect_all_digits c
+where a.d + 10 * b.d + 100 * c.d < 768;
+insert into intersect_all_batch values (769);
+select count(*) as row_count, sum(id) as checksum
+from (select id from intersect_all_batch intersect all select id from intersect_all_batch) q;
+select 1 as session_healthy;
+drop table intersect_all_batch;
+drop table intersect_all_digits;

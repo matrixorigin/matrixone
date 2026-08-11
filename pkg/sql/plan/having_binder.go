@@ -46,7 +46,7 @@ func (b *HavingBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool) (*p
 	if !b.insideAgg {
 		if colPos, ok := lookupGroupByAst(b.ctx, astExpr, astStr); ok {
 			return &plan.Expr{
-				Typ: b.ctx.groups[colPos].Typ,
+				Typ: b.ctx.groupOutputType(colPos),
 				Expr: &plan.Expr_Col{
 					Col: &plan.ColRef{
 						RelPos: b.ctx.groupTag,
@@ -216,8 +216,15 @@ func (b *HavingBinder) BindAggFunc(funcName string, astExpr *tree.FuncExpr, dept
 	}
 
 	b.insideAgg = true
-	expr, err := b.bindPreparedNumericAggregateFuncExpr(funcName, astExpr.Exprs, depth)
+	var expr *plan.Expr
+	var err error
+	if strings.EqualFold(funcName, NamePercentileCont) || strings.EqualFold(funcName, NamePercentileDisc) {
+		expr, err = b.bindOrderedSetPercentileAgg(funcName, astExpr, depth, isRoot)
+	} else {
+		expr, err = b.bindPreparedNumericAggregateFuncExpr(funcName, astExpr.Exprs, depth)
+	}
 	if err != nil {
+		b.insideAgg = false
 		return nil, err
 	}
 
@@ -276,6 +283,75 @@ func (b *HavingBinder) BindAggFunc(funcName string, astExpr *tree.FuncExpr, dept
 			},
 		},
 	}, nil
+}
+
+// bindOrderedSetPercentileAgg converts the SQL-standard
+// PERCENTILE_{CONT,DISC}(p) WITHIN GROUP (ORDER BY value) shape into the
+// executor's ordinary two-argument aggregate shape: [value, p]. The direct
+// percentile argument is retained until compile time, where it is evaluated
+// and moved into the aggregate extra configuration.
+func (b *HavingBinder) bindOrderedSetPercentileAgg(
+	funcName string,
+	astExpr *tree.FuncExpr,
+	depth int32,
+	isRoot bool,
+) (*plan.Expr, error) {
+	if b.ctx != nil && b.ctx.timeTag > 0 {
+		return nil, moerr.NewNotSupported(b.GetContext(),
+			"ordered-set percentile aggregates in time windows")
+	}
+	if !astExpr.WithinGroup {
+		return nil, moerr.NewSyntaxErrorf(b.GetContext(),
+			"%s requires WITHIN GROUP (ORDER BY ...)", funcName)
+	}
+	if len(astExpr.Exprs) != 1 {
+		return nil, moerr.NewSyntaxErrorf(b.GetContext(),
+			"%s requires exactly one percentile argument", funcName)
+	}
+	if len(astExpr.OrderBy) != 1 {
+		return nil, moerr.NewSyntaxErrorf(b.GetContext(),
+			"%s requires exactly one WITHIN GROUP ORDER BY expression", funcName)
+	}
+
+	orderExpr := astExpr.OrderBy[0]
+	if orderExpr == nil || orderExpr.Expr == nil {
+		return nil, moerr.NewSyntaxErrorf(b.GetContext(),
+			"%s requires an ORDER BY expression", funcName)
+	}
+	value, err := b.BindExpr(orderExpr.Expr, depth, isRoot)
+	if err != nil {
+		return nil, err
+	}
+	percentile, err := b.BindExpr(astExpr.Exprs[0], depth, false)
+	if err != nil {
+		return nil, err
+	}
+
+	var expr *plan.Expr
+	if b.builder == nil || b.builder.compCtx == nil {
+		expr, err = BindFuncExprImplByPlanExpr(
+			b.GetContext(), funcName, []*plan.Expr{value, percentile})
+	} else {
+		expr, err = bindFuncExprAndConstFold(
+			b.GetContext(), b.builder.compCtx.GetProcess(), funcName,
+			[]*plan.Expr{value, percentile},
+		)
+	}
+	if err != nil {
+		return nil, err
+	}
+	fn := expr.GetF()
+	if fn == nil {
+		return nil, moerr.NewInternalError(b.GetContext(),
+			"invalid ordered-set percentile expression")
+	}
+	if orderExpr.Direction == tree.Descending {
+		fn.AggConfig = []byte{1}
+	} else {
+		fn.AggConfig = []byte{0}
+	}
+	fn.AggConfigType = plan.AggregateConfigType_AGG_CONFIG_NONE
+	return expr, nil
 }
 
 func (b *HavingBinder) remapAggToTimeWindowCacheAgg(expr *Expr) (*Expr, error) {
