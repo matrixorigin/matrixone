@@ -61,12 +61,100 @@ func TestExportBuildSupportedSubset(t *testing.T) {
 	require.Equal(t, TaeReadTypeURL, p.Relations[0].GetRoot().Input.GetFilter().Input.GetRead().GetExtensionTable().Detail.TypeUrl)
 }
 
-func TestExportRejectsBeforeSnapshotAccess(t *testing.T) {
+func TestExportRejectsFullOuterBeforeSnapshotAccess(t *testing.T) {
 	q := scanQuery()
-	q.Nodes = append(q.Nodes, &planpb.Node{NodeId: 1, NodeType: planpb.Node_JOIN, Children: []int32{0, 0}})
+	q.Nodes = append(q.Nodes, &planpb.Node{NodeId: 1, NodeType: planpb.Node_JOIN, JoinType: planpb.Node_OUTER, Children: []int32{0, 0}})
 	q.Steps[0] = 1
 	_, err := Export(q)
-	require.ErrorContains(t, err, "unsupported operator")
+	require.ErrorContains(t, err, "unsupported join type")
+}
+
+func TestRightOuterJoinSurvivesMOPhysicalChildSwap(t *testing.T) {
+	q := scanQuery()
+	left := &planpb.Expr{Typ: i64Type(), Expr: &planpb.Expr_Col{Col: &planpb.ColRef{RelPos: 0, ColPos: 0}}}
+	right := &planpb.Expr{Typ: i64Type(), Expr: &planpb.Expr_Col{Col: &planpb.ColRef{RelPos: 1, ColPos: 0}}}
+	q.Nodes = append(q.Nodes, &planpb.Node{
+		NodeId: 1, NodeType: planpb.Node_JOIN, JoinType: planpb.Node_RIGHT, IsRightJoin: true,
+		Children: []int32{0, 0}, OnList: []*planpb.Expr{fn("=", boolType(), left, right)},
+	})
+	q.Steps[0] = 1
+	q.Headings = []string{"left", "right"}
+	candidate, err := Export(q)
+	require.NoError(t, err)
+	wire, err := candidate.Build(map[int32][]byte{0: {1}})
+	require.NoError(t, err)
+	plan := new(spb.Plan)
+	require.NoError(t, proto.Unmarshal(wire, plan))
+	require.Equal(t, spb.JoinRel_JOIN_TYPE_RIGHT, plan.Relations[0].GetRoot().Input.GetJoin().Type)
+}
+
+func TestExportRejectsOutOfRangeRootWithoutPanicking(t *testing.T) {
+	q := scanQuery()
+	q.Steps[0] = int32(len(q.Nodes))
+	_, err := Export(q)
+	require.ErrorContains(t, err, "invalid root node id")
+}
+
+func TestUnprojectedSinkScanPreservesProducerWidth(t *testing.T) {
+	q := scanQuery()
+	q.Nodes = append(q.Nodes,
+		&planpb.Node{NodeId: 1, NodeType: planpb.Node_SINK, Children: []int32{0}},
+		&planpb.Node{NodeId: 2, NodeType: planpb.Node_SINK_SCAN, SourceStep: []int32{0}},
+	)
+	q.Steps = []int32{1, 2}
+	candidate, err := Export(q)
+	require.NoError(t, err)
+	require.Equal(t, []planpb.Type{i64Type()}, candidate.OutputTypes())
+	wire, err := candidate.Build(map[int32][]byte{0: {1}})
+	require.NoError(t, err)
+	plan := new(spb.Plan)
+	require.NoError(t, proto.Unmarshal(wire, plan))
+	require.Len(t, plan.Relations, 2)
+	require.Equal(t, int32(0), plan.Relations[1].GetRoot().Input.GetReference().SubtreeOrdinal)
+}
+
+func TestSemiAndAntiJoinProjectionCannotReferenceRightInput(t *testing.T) {
+	for _, joinType := range []planpb.Node_JoinType{planpb.Node_SEMI, planpb.Node_ANTI} {
+		t.Run(joinType.String(), func(t *testing.T) {
+			q := scanQuery()
+			left := &planpb.Expr{Typ: i64Type(), Expr: &planpb.Expr_Col{Col: &planpb.ColRef{RelPos: 0, ColPos: 0}}}
+			right := &planpb.Expr{Typ: i64Type(), Expr: &planpb.Expr_Col{Col: &planpb.ColRef{RelPos: 1, ColPos: 0}}}
+			q.Nodes = append(q.Nodes, &planpb.Node{
+				NodeId: 1, NodeType: planpb.Node_JOIN, JoinType: joinType, Children: []int32{0, 0},
+				OnList: []*planpb.Expr{fn("=", boolType(), left, right)}, ProjectList: []*planpb.Expr{left},
+			})
+			q.Steps[0] = 1
+			_, err := Export(q)
+			require.NoError(t, err)
+
+			q.Nodes[1].ProjectList = []*planpb.Expr{right}
+			_, err = Export(q)
+			require.ErrorContains(t, err, "outside join input 1 width 0")
+
+			q.Nodes[1].IsRightJoin = true
+			_, err = Export(q)
+			require.NoError(t, err)
+			q.Nodes[1].ProjectList = []*planpb.Expr{left}
+			_, err = Export(q)
+			require.ErrorContains(t, err, "outside join input 0 width 0")
+		})
+	}
+}
+
+func TestSharedScanNodeProducesOneAdmissionRead(t *testing.T) {
+	q := scanQuery()
+	q.Nodes = append(q.Nodes, &planpb.Node{
+		NodeId: 1, NodeType: planpb.Node_JOIN, JoinType: planpb.Node_INNER, Children: []int32{0, 0},
+		OnList: []*planpb.Expr{fn("=", boolType(),
+			&planpb.Expr{Typ: i64Type(), Expr: &planpb.Expr_Col{Col: &planpb.ColRef{RelPos: 0, ColPos: 0}}},
+			&planpb.Expr{Typ: i64Type(), Expr: &planpb.Expr_Col{Col: &planpb.ColRef{RelPos: 1, ColPos: 0}}},
+		)},
+	})
+	q.Steps[0] = 1
+	q.Headings = []string{"left", "right"}
+	candidate, err := Export(q)
+	require.NoError(t, err)
+	require.Len(t, candidate.Reads(), 1)
 }
 
 func TestProjectEmitsOnlyMOProjectColumns(t *testing.T) {
@@ -226,15 +314,53 @@ func TestBoundNullOnEmptyAggregateProjectionIsNullable(t *testing.T) {
 	require.Equal(t, spb.Type_NULLABILITY_NULLABLE, add.OutputType.GetI64().GetNullability())
 }
 
-func TestBoundInt64SumIsNotAdvertised(t *testing.T) {
+func TestBoundInt64SumIsAdvertisedWithDecimalResult(t *testing.T) {
 	query := boundSQLQuery(t, "select sum(a) from select_test.bind_select")
 	aggregateNode := boundNode(t, query, planpb.Node_AGG)
 	require.Len(t, aggregateNode.AggList, 1)
 	require.Equal(t, int32(types.T_decimal128), aggregateNode.AggList[0].Typ.Id)
 
 	_, err := Export(query)
-	require.ErrorContains(t, err, "no declared Sirius semantic equivalence")
-	require.NotContains(t, CapabilityDocument, "sum(i64)->i64")
+	require.NoError(t, err)
+	require.Contains(t, CapabilityDocument, `"sum"`)
+}
+
+func TestCapabilityHashMatchesSidecarContract(t *testing.T) {
+	require.Equal(t, "600b2a4b0c57e37a2b1aac8e99e9d2b064d5e3d9c652419470009080946fb568", hex.EncodeToString(CapabilityHash[:]))
+}
+
+func TestBoundDecimalUnaryMinusLowersToSubtractFromTypedZero(t *testing.T) {
+	decimalType := types.New(types.T_decimal64, 18, 2)
+	resolved, err := function.GetFunctionByName(context.Background(), "unary_minus", []types.Type{decimalType})
+	require.NoError(t, err)
+	resultType := resolved.GetReturnType()
+	typ := planpb.Type{Id: int32(resultType.Oid), Width: resultType.Width, Scale: resultType.Scale, NotNullable: true}
+	argument := &planpb.Expr{Typ: typ, Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{Value: &planpb.Literal_Decimal64Val{Decimal64Val: &planpb.Decimal64{A: 123}}}}}
+	negated := &planpb.Expr{
+		Typ: typ,
+		Expr: &planpb.Expr_F{F: &planpb.Function{
+			Func: &planpb.ObjectRef{ObjName: "unary_minus", Obj: resolved.GetEncodedOverloadID()},
+			Args: []*planpb.Expr{argument},
+		}},
+	}
+	q := scanQuery()
+	q.Nodes = append(q.Nodes, &planpb.Node{NodeId: 1, NodeType: planpb.Node_PROJECT, Children: []int32{0}, ProjectList: []*planpb.Expr{negated}})
+	q.Steps[0] = 1
+	q.Headings = []string{"negated"}
+	candidate, err := Export(q)
+	require.NoError(t, err)
+	wire, err := candidate.Build(map[int32][]byte{0: {1}})
+	require.NoError(t, err)
+	plan := new(spb.Plan)
+	require.NoError(t, proto.Unmarshal(wire, plan))
+	project := plan.Relations[0].GetRoot().Input.GetProject()
+	require.NotNil(t, project)
+	require.Len(t, project.Expressions, 1)
+	subtract := project.Expressions[0].GetScalarFunction()
+	require.NotNil(t, subtract)
+	require.Equal(t, "subtract", scalarFunctionName(plan, subtract.FunctionReference))
+	require.Len(t, subtract.Arguments, 2)
+	require.NotNil(t, subtract.Arguments[0].GetValue().GetLiteral().GetDecimal())
 }
 
 func TestFetchAcceptsBoundUint64AndPreservesAbsentCount(t *testing.T) {
@@ -1914,7 +2040,6 @@ func TestSubstraitTypeAndLiteralMappings(t *testing.T) {
 		{typ: planpb.Type{Id: int32(types.T_int64)}, lit: &planpb.Literal{Value: &planpb.Literal_I64Val{I64Val: 4}}},
 		{typ: planpb.Type{Id: int32(types.T_float32)}, lit: &planpb.Literal{Value: &planpb.Literal_Fval{Fval: 1.5}}},
 		{typ: planpb.Type{Id: int32(types.T_float64)}, lit: &planpb.Literal{Value: &planpb.Literal_Dval{Dval: 2.5}}},
-		{typ: planpb.Type{Id: int32(types.T_char), Width: 1}, lit: &planpb.Literal{Value: &planpb.Literal_Sval{Sval: "c"}}},
 		{typ: planpb.Type{Id: int32(types.T_varchar), Width: 12}, lit: &planpb.Literal{Value: &planpb.Literal_Sval{Sval: "varchar"}}},
 	}
 	for _, tc := range typesAndLiterals {
@@ -1938,60 +2063,43 @@ func TestSubstraitTypeAndLiteralMappings(t *testing.T) {
 	_, err = substraitType(&planpb.Type{Id: int32(types.T_varchar), Width: -1})
 	require.ErrorContains(t, err, "negative varchar")
 	_, err = substraitType(&planpb.Type{Id: int32(types.T_decimal64)})
-	require.ErrorContains(t, err, "unsupported type")
+	require.ErrorContains(t, err, "outside the supported bound")
 
 	charType := planpb.Type{Id: int32(types.T_char), Width: 5}
-	charSubstrait, err := substraitType(&charType)
-	require.NoError(t, err)
-	require.Equal(t, int32(5), charSubstrait.GetFixedChar().GetLength())
-	charLiteral, err := literal(&planpb.Literal{Value: &planpb.Literal_Sval{Sval: "fixed"}}, &charType)
-	require.NoError(t, err)
-	require.Equal(t, "fixed", charLiteral.GetLiteral().GetFixedChar())
-	_, err = literal(&planpb.Literal{Value: &planpb.Literal_Sval{Sval: "short"}}, &planpb.Type{Id: int32(types.T_char), Width: 8})
+	_, err = substraitType(&charType)
 	require.True(t, IsNotEligible(err))
-
-	_, err = substraitType(&planpb.Type{Id: int32(types.T_char)})
+	_, err = literal(&planpb.Literal{Value: &planpb.Literal_Sval{Sval: "fixed"}}, &charType)
 	require.True(t, IsNotEligible(err))
 }
 
-func TestExportRejectsTemporalScansAndLiteralsUntilRepresentationIsDefined(t *testing.T) {
-	// Integer remains the nearest admitted control.
-	_, err := Export(scanQuery())
+func TestExportAcceptsDateAndRejectsTimestamp(t *testing.T) {
+	dateType := planpb.Type{Id: int32(types.T_date)}
+	q := scanQuery()
+	q.Nodes[0].TableDef.Cols[0].Typ = dateType
+	_, err := Export(q)
 	require.NoError(t, err)
 
-	for _, tc := range []struct {
-		name string
-		typ  planpb.Type
-		lit  *planpb.Literal
-	}{
-		{name: "date", typ: planpb.Type{Id: int32(types.T_date)}, lit: &planpb.Literal{Value: &planpb.Literal_Dateval{Dateval: int32(types.DateFromCalendar(1970, 1, 1))}}},
-		{name: "timestamp", typ: planpb.Type{Id: int32(types.T_timestamp), Scale: 6}, lit: &planpb.Literal{Value: &planpb.Literal_Timestampval{Timestampval: int64(types.FromClockUTC(1970, 1, 1, 0, 0, 0, 0))}}},
-	} {
-		t.Run(tc.name+" scan", func(t *testing.T) {
-			q := scanQuery()
-			q.Nodes[0].TableDef.Cols[0].Typ = tc.typ
-			_, err := Export(q)
-			require.True(t, IsNotEligible(err))
-			reason, ok := NotEligibleReason(err)
-			require.True(t, ok)
-			require.Equal(t, EligibilityType, reason)
-		})
-		t.Run(tc.name+" literal", func(t *testing.T) {
-			q := scanQuery()
-			q.Nodes = append(q.Nodes, &planpb.Node{
-				NodeId:      1,
-				NodeType:    planpb.Node_PROJECT,
-				Children:    []int32{0},
-				ProjectList: []*planpb.Expr{{Typ: tc.typ, Expr: &planpb.Expr_Lit{Lit: tc.lit}}},
-			})
-			q.Steps[0] = 1
-			_, err := Export(q)
-			require.True(t, IsNotEligible(err))
-			reason, ok := NotEligibleReason(err)
-			require.True(t, ok)
-			require.Equal(t, EligibilityType, reason)
-		})
-	}
+	q = scanQuery()
+	q.Nodes = append(q.Nodes, &planpb.Node{
+		NodeId:   1,
+		NodeType: planpb.Node_PROJECT,
+		Children: []int32{0},
+		ProjectList: []*planpb.Expr{{Typ: dateType, Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{
+			Value: &planpb.Literal_Dateval{Dateval: int32(types.DateFromCalendar(1970, 1, 1))},
+		}}}},
+	})
+	q.Steps[0] = 1
+	_, err = Export(q)
+	require.NoError(t, err)
+
+	timestampType := planpb.Type{Id: int32(types.T_timestamp), Scale: 6}
+	q = scanQuery()
+	q.Nodes[0].TableDef.Cols[0].Typ = timestampType
+	_, err = Export(q)
+	require.True(t, IsNotEligible(err))
+	reason, ok := NotEligibleReason(err)
+	require.True(t, ok)
+	require.Equal(t, EligibilityType, reason)
 }
 
 func TestEligibilityDeclinesAreDistinctFromMalformedAndOperationalErrors(t *testing.T) {
@@ -2110,16 +2218,16 @@ func TestExporterValidationGuards(t *testing.T) {
 	require.ErrorContains(t, err, "unsupported width")
 
 	exprExporter := &exporter{functions: make(map[string]uint32)}
-	_, err = exprExporter.conjunction(nil)
+	_, err = exprExporter.conjunction(nil, []int{1})
 	require.ErrorContains(t, err, "empty filter")
-	_, err = exprExporter.conjunction([]*planpb.Expr{intExpr(1)})
+	_, err = exprExporter.conjunction([]*planpb.Expr{intExpr(1)}, []int{1})
 	require.ErrorContains(t, err, "not boolean")
 	predicate := fn(">", boolType(), col(0), i64(1))
-	_, err = exprExporter.conjunction([]*planpb.Expr{predicate, predicate})
+	_, err = exprExporter.conjunction([]*planpb.Expr{predicate, predicate}, []int{1})
 	require.NoError(t, err)
-	require.ErrorContains(t, validateExprFields([]*planpb.Expr{nil}, 1), "nil expression")
-	require.ErrorContains(t, validateExprFields([]*planpb.Expr{{Expr: &planpb.Expr_F{}}}, 1), "malformed function")
-	require.ErrorContains(t, validateExprFields([]*planpb.Expr{{}}, 1), "unsupported expression")
+	require.ErrorContains(t, validateExprFields([]*planpb.Expr{nil}, []int{1}), "nil expression")
+	require.ErrorContains(t, validateExprFields([]*planpb.Expr{{Expr: &planpb.Expr_F{}}}, []int{1}), "malformed function")
+	require.ErrorContains(t, validateExprFields([]*planpb.Expr{{}}, []int{1}), "unsupported expression")
 
 	q := scanQuery()
 	q.Nodes = append(q.Nodes, &planpb.Node{NodeId: 1, NodeType: planpb.Node_AGG, Children: []int32{0}, GroupingFlag: []bool{true}})
@@ -2240,6 +2348,16 @@ func findSubstraitSort(rel *spb.Rel) *spb.SortRel {
 		}
 	}
 	return nil
+}
+
+func scalarFunctionName(plan *spb.Plan, anchor uint32) string {
+	for _, declaration := range plan.Extensions {
+		function := declaration.GetExtensionFunction()
+		if function != nil && function.FunctionAnchor == anchor {
+			return function.Name
+		}
+	}
+	return ""
 }
 
 func scanQuery() *planpb.Query {

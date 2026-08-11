@@ -173,6 +173,12 @@ func (c *Compile) Release() {
 	if c == nil {
 		return
 	}
+	if c.siriusRead != nil {
+		if err := c.siriusRead.finish(context.Background(), false); err != nil && c.proc != nil {
+			c.proc.Error(context.Background(), "failed to quiesce Sirius read during compile release", zap.Error(err))
+		}
+		c.siriusRead = nil
+	}
 	c.SetSchedulingTraceRecorder(nil)
 	if c.proc != nil {
 		c.proc.ResetQueryContext()
@@ -209,6 +215,12 @@ func (c *Compile) GetPlan() *plan.Plan {
 }
 
 func (c *Compile) Reset(proc *process.Process, startAt time.Time, fill func(*batch.Batch, *perfcounter.CounterSet) error, sql string) error {
+	if c.siriusRead != nil {
+		if err := c.siriusRead.finish(context.Background(), false); err != nil {
+			return err
+		}
+		c.siriusRead = nil
+	}
 	// clean up the process for a new query.
 	proc.ResetQueryContext()
 	proc.ResetCloneTxnOperator()

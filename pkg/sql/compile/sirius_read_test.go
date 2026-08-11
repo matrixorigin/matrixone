@@ -19,6 +19,7 @@ import (
 	"testing"
 
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/substrait"
 	"github.com/stretchr/testify/require"
 )
@@ -48,10 +49,10 @@ func TestCompileSiriusReadRejectsMissingPlan(t *testing.T) {
 	var c *Compile
 	_, err := c.CompileSiriusRead(ctx, nil, 0, nil, nil, "", 0, nil)
 	require.ErrorContains(t, err, "no query plan")
-	_, err = c.CompileSiriusRead(ctx, &planpb.Plan{}, 0, nil, nil, "", 0, nil)
-	require.ErrorContains(t, err, "no query plan")
-
 	c = &Compile{}
+	_, err = c.CompileSiriusRead(ctx, &planpb.Plan{}, 0, nil, nil, "", 0, nil)
+	require.True(t, substrait.IsNotEligible(err))
+
 	invalid := &planpb.Plan{Plan: &planpb.Plan_Query{Query: &planpb.Query{StmtType: planpb.Query_SELECT}}}
 	_, err = c.CompileSiriusRead(ctx, invalid, 0, nil, nil, "", 0, nil)
 	require.Error(t, err)
@@ -65,4 +66,13 @@ func TestCompileSiriusReadRejectsMissingPlan(t *testing.T) {
 	_, err = c.CompileSiriusRead(ctx, unsupported, 0, nil, nil, "", 0, nil)
 	require.Error(t, err)
 	require.True(t, substrait.IsNotEligible(err), "normal plan ineligibility must reach the compile caller")
+}
+
+func TestSiriusOffloadContextIsExplicit(t *testing.T) {
+	require.False(t, siriusOffloadRequested(context.Background()))
+	require.True(t, siriusOffloadRequested(WithSiriusOffload(context.Background())))
+	require.True(t, siriusStatementEligible(&tree.Select{}))
+	require.False(t, siriusStatementEligible(&tree.Select{IsPerform: true}))
+	require.False(t, siriusStatementEligible(&tree.Select{Ep: &tree.ExportParam{}}))
+	require.False(t, siriusStatementEligible(&tree.ExplainAnalyze{}))
 }

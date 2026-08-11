@@ -30,8 +30,10 @@ import (
 // SiriusReadPlan is an admitted Substrait plan plus the leases its eventual
 // execution owner must release on every terminal path.
 type SiriusReadPlan struct {
-	Plan     []byte
-	ReadRefs [][]byte
+	Plan        []byte
+	ReadRefs    [][]byte
+	OutputTypes []planpb.Type
+	Headings    []string
 }
 
 func (p *SiriusReadPlan) Release(ctx context.Context, leases *substrait.LeaseManager) error {
@@ -49,12 +51,15 @@ func (p *SiriusReadPlan) Release(ctx context.Context, leases *substrait.LeaseMan
 
 // CompileSiriusRead runs at the logical-plan cutpoint, before compileScope.
 // Export validates the whole tree before this function opens any relation.
-// PR #3 will call this opt-in API, pass the selected sidecar client's TLS SPKI
-// hash, and transfer lease ownership to execution. The execution owner must
+// The opt-in compile path passes the selected sidecar client's TLS SPKI hash
+// and transfers lease ownership to execution. The execution owner must
 // cancel and join the sidecar request before calling SiriusReadPlan.Release.
 func (c *Compile) CompileSiriusRead(ctx context.Context, queryPlan *planpb.Plan, accountID uint64, queryID, authorizedClientSPKIHash []byte, dataDir string, ttl time.Duration, leases *substrait.LeaseManager) (*SiriusReadPlan, error) {
-	if c == nil || queryPlan == nil || queryPlan.GetQuery() == nil {
+	if c == nil || queryPlan == nil {
 		return nil, moerr.NewInternalError(ctx, "substrait: compile has no query plan")
+	}
+	if queryPlan.GetQuery() == nil {
+		return nil, substrait.NotEligible(substrait.EligibilityPlanShape, "statement is not a SELECT query")
 	}
 	candidate, err := substrait.Export(queryPlan.GetQuery())
 	if err != nil {
@@ -92,16 +97,20 @@ func (c *Compile) CompileSiriusRead(ctx context.Context, queryPlan *planpb.Plan,
 	if err != nil {
 		return nil, err
 	}
-	result := &SiriusReadPlan{ReadRefs: make([][]byte, 0, len(wires))}
+	result := &SiriusReadPlan{
+		ReadRefs: make([][]byte, 0, len(wires)), OutputTypes: candidate.OutputTypes(),
+		Headings: append([]string(nil), queryPlan.GetQuery().Headings...),
+	}
 	for _, candidateRead := range candidate.Reads() {
 		read, decodeErr := substrait.UnmarshalTaeRead(wires[candidateRead.NodeID], 0)
 		if decodeErr != nil {
+			var releaseErr error
 			for _, wire := range wires {
 				if admitted, ok := substrait.UnmarshalTaeRead(wire, 0); ok == nil {
-					_ = leases.Release(ctx, admitted.ReadRef)
+					releaseErr = errors.Join(releaseErr, leases.Release(ctx, admitted.ReadRef))
 				}
 			}
-			return nil, decodeErr
+			return nil, errors.Join(decodeErr, releaseErr)
 		}
 		result.ReadRefs = append(result.ReadRefs, read.ReadRef)
 	}

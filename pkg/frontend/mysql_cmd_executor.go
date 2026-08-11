@@ -5195,31 +5195,15 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 		return resp, moerr.GetMysqlClientQuit()
 	case COM_QUERY:
 		var query = commonutil.UnsafeBytesToString(req.GetData().([]byte))
-		// Sidecar offload: intercept /*+ SIDECAR */ or /*+ SIDECAR GPU */ hint
-		// before normal processing. If sidecar is not configured, silently
-		// fall through to normal MO execution.
-		if isSidecar, useGPU := isSidecarQuery(query); isSidecar {
+		// A sidecar hint is only an explicit selector. Strip it before parsing so
+		// normal authentication, planning, tracing, and result writing remain in
+		// control; the compile cut point performs negotiated Substrait admission.
+		if isSidecar, _ := isSidecarQuery(query); isSidecar {
 			ses.addSqlCount(1)
-			if sidecarQueryMustRunLocally(execCtx.reqCtx, ses, query) {
-				query = stripSidecarHint(query)
-			} else {
-				err = handleSidecarOffload(ses, execCtx, query, useGPU)
-				if err == nil {
-					ses.resetDiagnostics()
-					setRowCount(ses, ses.GetProc(), -1)
-					mer := NewMysqlExecutionResult(0, 0, 0, 0, ses.GetMysqlResultSet())
-					resp = ses.SetNewResponse(ResultResponse, 0, int(COM_QUERY), mer, true)
-					return resp, nil
-				}
-				if err != errSidecarNotConfigured {
-					ses.resetDiagnostics()
-					markRowCountFailed(ses, ses.GetProc())
-					resp = NewGeneralErrorResponse(COM_QUERY, ses.GetTxnHandler().GetServerStatus(), err)
-					return resp, nil
-				}
-				// errSidecarNotConfigured: strip hint and fall through to normal execution
-				query = stripSidecarHint(query)
+			if !sidecarQueryMustRunLocally(execCtx.reqCtx, ses, query) {
+				execCtx.reqCtx = compile.WithSiriusOffload(execCtx.reqCtx)
 			}
+			query = stripSidecarHint(query)
 		} else {
 			ses.addSqlCount(1)
 		}
