@@ -212,20 +212,24 @@ func filterAppendableObject(
 	}, nil
 }
 
-// AObjectMapping represents a mapping from upstream aobj to downstream object stats
+// AObjectMapping retains the downstream object identities needed to rewrite or
+// retire an upstream object in a later publication iteration.
 type AObjectMapping struct {
 	DownstreamStats objectio.ObjectStats
-	IsTombstone     bool
-	DBName          string
-	TableName       string
+	// A non-nil pointer selects one-to-many identity ownership; an empty slice
+	// records that the rewrite intentionally produced no downstream object.
+	DownstreamObjectIDs *[]objectio.ObjectId
+	IsTombstone         bool
+	DBName              string
+	TableName           string
 	// RowOffsetMap maps original rowoffset to new rowoffset after sorting
 	// Key: original rowoffset, Value: new rowoffset
 	RowOffsetMap map[uint32]uint32
 }
 
-// AObjectMap stores the mapping from upstream aobj to downstream object stats
+// AObjectMap stores mappings from upstream objects to downstream objects.
 // Key: upstreamID (string), Value: *AObjectMapping
-// This map is used to track appendable object transformations during CCPR sync
+// This map is persisted with the publication iteration state.
 type AObjectMap struct {
 	mu sync.RWMutex
 	m  map[string]*AObjectMapping
@@ -350,7 +354,7 @@ func rewriteTombstoneRowids(
 // filterNonAppendableObject handles non-appendable objects
 // For data objects: writes directly to fileservice with the original object name
 // For tombstone objects: reads blocks one by one, rewrites rowids using aobjectMap,
-// writes to a sorted sinker with the original object name
+// and writes to a sorted sinker with attempt-unique object names.
 // Returns the ObjectStats (original for data, new for tombstone)
 func filterNonAppendableObject(
 	ctx context.Context,

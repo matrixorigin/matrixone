@@ -423,6 +423,7 @@ func ApplyObjects(
 	var collectedTombstoneInsertStats []*ObjectWithTableInfo
 	var collectedDataDeleteStats []*ObjectWithTableInfo
 	var collectedDataInsertStats []*ObjectWithTableInfo
+	var nonAppendableTombstoneMappingsToDelete []string
 	filterCtx, cancelFilters := context.WithCancel(ctx)
 	var acceptedFilters acceptedJobBatch[*FilterObjectJob]
 	defer func() {
@@ -452,6 +453,17 @@ func ApplyObjects(
 			tombstoneObjects = append(tombstoneObjects, info)
 		} else {
 			dataObjects = append(dataObjects, info)
+		}
+	}
+	if aobjectMap == nil {
+		for _, info := range tombstoneObjects {
+			if !info.Stats.GetAppendable() {
+				return moerr.NewInternalErrorf(
+					ctx,
+					"non-appendable tombstone mapping owner is required for %s",
+					info.Stats.ObjectName().ObjectId().String(),
+				)
+			}
 		}
 	}
 
@@ -647,7 +659,26 @@ func ApplyObjects(
 			}
 		} else {
 			// Handle non-appendable tombstone objects
+			upstreamID := info.Stats.ObjectName().ObjectId().String()
 			if info.Delete {
+				if existingMapping, exists := aobjectMap.Get(upstreamID); exists {
+					if !existingMapping.IsTombstone || existingMapping.DownstreamObjectIDs == nil {
+						err = moerr.NewInternalErrorf(
+							ctx, "mapping %s is not owned by a non-appendable tombstone", upstreamID)
+						return
+					}
+					collectedTombstoneDeleteStats = appendDownstreamTombstoneObjectIDs(
+						collectedTombstoneDeleteStats,
+						*existingMapping.DownstreamObjectIDs,
+						existingMapping.DBName,
+						existingMapping.TableName,
+					)
+					nonAppendableTombstoneMappingsToDelete = append(
+						nonAppendableTombstoneMappingsToDelete, upstreamID)
+					continue
+				}
+				// Backward compatibility: older iterations preserved the upstream
+				// object name and therefore have no one-to-many mapping.
 				collectedTombstoneDeleteStats = append(collectedTombstoneDeleteStats, &ObjectWithTableInfo{
 					Stats:       info.Stats,
 					DBName:      info.DBName,
@@ -657,6 +688,13 @@ func ApplyObjects(
 				})
 			} else {
 				filterResult := tombstoneResults[info]
+				downstreamIDs := downstreamObjectIDs(filterResult.DownstreamStatsList)
+				aobjectMap.Set(upstreamID, &AObjectMapping{
+					DownstreamObjectIDs: &downstreamIDs,
+					IsTombstone:         true,
+					DBName:              info.DBName,
+					TableName:           info.TableName,
+				})
 				collectedTombstoneInsertStats = appendDownstreamTombstoneStats(
 					collectedTombstoneInsertStats,
 					filterResult.DownstreamStatsList,
@@ -678,6 +716,9 @@ func ApplyObjects(
 			err = moerr.NewInternalErrorf(ctx, "failed to submit tombstone delete objects: %v", err)
 			return
 		}
+	}
+	for _, upstreamID := range nonAppendableTombstoneMappingsToDelete {
+		aobjectMap.Delete(upstreamID)
 	}
 
 	// 2. Submit tombstone insert objects
@@ -720,6 +761,37 @@ func appendDownstreamTombstoneStats(
 			DBName:      info.DBName,
 			TableName:   info.TableName,
 			IsTombstone: true,
+		})
+	}
+	return dst
+}
+
+func downstreamObjectIDs(statsList []objectio.ObjectStats) []objectio.ObjectId {
+	var objectIDs []objectio.ObjectId
+	for i := range statsList {
+		if statsList[i].IsZero() {
+			continue
+		}
+		objectIDs = append(objectIDs, *statsList[i].ObjectName().ObjectId())
+	}
+	return objectIDs
+}
+
+func appendDownstreamTombstoneObjectIDs(
+	dst []*ObjectWithTableInfo,
+	objectIDs []objectio.ObjectId,
+	dbName string,
+	tableName string,
+) []*ObjectWithTableInfo {
+	for i := range objectIDs {
+		stats := objectio.NewObjectStatsWithObjectID(
+			&objectIDs[i], false, true, true)
+		dst = append(dst, &ObjectWithTableInfo{
+			Stats:       *stats,
+			DBName:      dbName,
+			TableName:   tableName,
+			IsTombstone: true,
+			Delete:      true,
 		})
 	}
 	return dst

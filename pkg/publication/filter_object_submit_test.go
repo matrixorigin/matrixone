@@ -16,11 +16,18 @@ package publication
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"testing"
 
+	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -194,7 +201,7 @@ func TestApplyObjects_TombstoneDelete_NilEngine(t *testing.T) {
 	err := ApplyObjects(
 		context.Background(), "task-1", 0, nil, objectMap,
 		nil, nil, types.TS{}, nil, nil, nil, nil,
-		nil, nil, nil, "", "", nil, nil, nil,
+		nil, nil, nil, "", "", nil, NewAObjectMap(), nil,
 	)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "engine is nil")
@@ -236,6 +243,36 @@ func (w *presetFilterObjectWorker) SubmitFilterObject(job Job) error {
 
 func (*presetFilterObjectWorker) Stop() {}
 
+type recordingSoftDeleteRelation struct {
+	engine.Relation
+	objectIDs  []objectio.ObjectId
+	tombstones []bool
+	err        error
+}
+
+func (r *recordingSoftDeleteRelation) SoftDeleteObject(
+	_ context.Context,
+	objectID *objectio.ObjectId,
+	isTombstone bool,
+) error {
+	r.objectIDs = append(r.objectIDs, *objectID)
+	r.tombstones = append(r.tombstones, isTombstone)
+	return r.err
+}
+
+func roundTripAObjectMap(t *testing.T, mapping *AObjectMap) *AObjectMap {
+	t.Helper()
+	encoded, err := json.Marshal(IterationContextJSON{
+		AObjectMap: serializeAObjectMap(mapping),
+	})
+	require.NoError(t, err)
+	var decoded IterationContextJSON
+	require.NoError(t, json.Unmarshal(encoded, &decoded))
+	restored, err := restoreAObjectMap(context.Background(), decoded.AObjectMap)
+	require.NoError(t, err)
+	return restored
+}
+
 func TestApplyObjectsSubmitsNonAppendableTombstoneSpills(t *testing.T) {
 	firstID := objectio.NewObjectid()
 	secondID := objectio.NewObjectid()
@@ -245,8 +282,11 @@ func TestApplyObjectsSubmitsNonAppendableTombstoneSpills(t *testing.T) {
 		&secondID, false, true, true)
 	var upstreamID objectio.ObjectId
 	upstreamID[0] = 1
+	upstreamStats := *objectio.NewObjectStatsWithObjectID(
+		&upstreamID, false, true, false)
 	objects := map[objectio.ObjectId]*ObjectWithTableInfo{
 		upstreamID: {
+			Stats:       upstreamStats,
 			IsTombstone: true,
 			DBName:      "db",
 			TableName:   "table",
@@ -259,8 +299,265 @@ func TestApplyObjectsSubmitsNonAppendableTombstoneSpills(t *testing.T) {
 	err := ApplyObjects(
 		context.Background(), "task", 0, nil, objects,
 		nil, nil, types.TS{}, nil, nil, nil, nil,
-		worker, nil, nil, "account", "publication", nil, nil, nil,
+		worker, nil, nil, "account", "publication", nil, NewAObjectMap(), nil,
 	)
 	require.ErrorContains(t, err, "engine is nil",
 		"a non-empty spill list must reach tombstone submission")
+}
+
+func TestApplyObjectsTracksNonAppendableTombstoneSpillsAcrossIterations(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	mp, err := mpool.NewMPool("ccpr-nonappendable-tombstone-map", 0, mpool.NoFixed)
+	require.NoError(t, err)
+
+	upstreamID := objectio.NewObjectid()
+	upstreamStats := *objectio.NewObjectStatsWithObjectID(
+		&upstreamID, false, true, false)
+	firstID := objectio.NewObjectid()
+	secondID := objectio.NewObjectid()
+	first := *objectio.NewObjectStatsWithObjectID(
+		&firstID, false, true, true)
+	second := *objectio.NewObjectStatsWithObjectID(
+		&secondID, false, true, true)
+
+	insertRelation := mock_frontend.NewMockRelation(ctrl)
+	insertRelation.EXPECT().GetTableDef(gomock.Any()).Return(nil)
+	var insertedIDs []objectio.ObjectId
+	insertRelation.EXPECT().Delete(gomock.Any(), gomock.Any(), "").DoAndReturn(
+		func(_ context.Context, bat *batch.Batch, _ string) error {
+			for i := 0; i < bat.RowCount(); i++ {
+				stats := objectio.ObjectStats(bat.Vecs[0].GetBytesAt(i))
+				insertedIDs = append(insertedIDs, *stats.ObjectName().ObjectId())
+			}
+			return nil
+		},
+	)
+	insertDB := mock_frontend.NewMockDatabase(ctrl)
+	insertDB.EXPECT().Relation(gomock.Any(), "table", nil).Return(insertRelation, nil)
+	insertEngine := mock_frontend.NewMockEngine(ctrl)
+	insertEngine.EXPECT().Database(gomock.Any(), "db", nil).Return(insertDB, nil)
+
+	mapping := NewAObjectMap()
+	worker := &presetFilterObjectWorker{result: &FilterObjectJobResult{
+		DownstreamStatsList: []objectio.ObjectStats{first, {}, second},
+	}}
+	createObjects := map[objectio.ObjectId]*ObjectWithTableInfo{
+		upstreamID: {
+			Stats:       upstreamStats,
+			IsTombstone: true,
+			DBName:      "db",
+			TableName:   "table",
+		},
+	}
+	require.NoError(t, ApplyObjects(
+		context.Background(), "task", 0, nil, createObjects,
+		nil, nil, types.TS{}, nil, insertEngine, mp, nil,
+		worker, nil, nil, "account", "publication", nil, mapping, nil,
+	))
+	require.Equal(t, []objectio.ObjectId{firstID, secondID}, insertedIDs)
+
+	restored := roundTripAObjectMap(t, mapping)
+	stored, ok := restored.Get(upstreamID.String())
+	require.True(t, ok)
+	require.NotNil(t, stored.DownstreamObjectIDs)
+	require.Equal(t, []objectio.ObjectId{firstID, secondID}, *stored.DownstreamObjectIDs)
+
+	deleteRelationMock := mock_frontend.NewMockRelation(ctrl)
+	deleteRelationMock.EXPECT().GetTableDef(gomock.Any()).Return(nil)
+	deleteRelation := &recordingSoftDeleteRelation{Relation: deleteRelationMock}
+	deleteDB := mock_frontend.NewMockDatabase(ctrl)
+	deleteDB.EXPECT().Relation(gomock.Any(), "table", nil).Return(deleteRelation, nil)
+	deleteEngine := mock_frontend.NewMockEngine(ctrl)
+	deleteEngine.EXPECT().Database(gomock.Any(), "db", nil).Return(deleteDB, nil)
+	deleteObjects := map[objectio.ObjectId]*ObjectWithTableInfo{
+		upstreamID: {
+			Stats:       upstreamStats,
+			IsTombstone: true,
+			Delete:      true,
+			DBName:      "db",
+			TableName:   "table",
+		},
+	}
+	require.NoError(t, ApplyObjects(
+		context.Background(), "task", 0, nil, deleteObjects,
+		nil, nil, types.TS{}, nil, deleteEngine, mp, nil,
+		nil, nil, nil, "account", "publication", nil, restored, nil,
+	))
+	require.Equal(t, []objectio.ObjectId{firstID, secondID}, deleteRelation.objectIDs)
+	require.Equal(t, []bool{true, true}, deleteRelation.tombstones)
+	_, ok = restored.Get(upstreamID.String())
+	require.False(t, ok)
+	require.Zero(t, mp.CurrNB())
+}
+
+func TestApplyObjectsTracksEmptyNonAppendableTombstoneRewrite(t *testing.T) {
+	upstreamID := objectio.NewObjectid()
+	upstreamStats := *objectio.NewObjectStatsWithObjectID(
+		&upstreamID, false, true, false)
+	mapping := NewAObjectMap()
+	worker := &presetFilterObjectWorker{result: &FilterObjectJobResult{}}
+
+	require.NoError(t, ApplyObjects(
+		context.Background(), "task", 0, nil,
+		map[objectio.ObjectId]*ObjectWithTableInfo{
+			upstreamID: {
+				Stats:       upstreamStats,
+				IsTombstone: true,
+				DBName:      "db",
+				TableName:   "table",
+			},
+		},
+		nil, nil, types.TS{}, nil, nil, nil, nil,
+		worker, nil, nil, "account", "publication", nil, mapping, nil,
+	))
+	stored, ok := mapping.Get(upstreamID.String())
+	require.True(t, ok)
+	require.NotNil(t, stored.DownstreamObjectIDs)
+	require.Empty(t, *stored.DownstreamObjectIDs)
+
+	mapping = roundTripAObjectMap(t, mapping)
+	stored, ok = mapping.Get(upstreamID.String())
+	require.True(t, ok)
+	require.NotNil(t, stored.DownstreamObjectIDs)
+	require.Empty(t, *stored.DownstreamObjectIDs)
+
+	require.NoError(t, ApplyObjects(
+		context.Background(), "task", 0, nil,
+		map[objectio.ObjectId]*ObjectWithTableInfo{
+			upstreamID: {
+				Stats:       upstreamStats,
+				IsTombstone: true,
+				Delete:      true,
+				DBName:      "db",
+				TableName:   "table",
+			},
+		},
+		nil, nil, types.TS{}, nil, nil, nil, nil,
+		nil, nil, nil, "account", "publication", nil, mapping, nil,
+	))
+	_, ok = mapping.Get(upstreamID.String())
+	require.False(t, ok)
+}
+
+func TestApplyObjectsRequiresNonAppendableTombstoneMappingOwner(t *testing.T) {
+	upstreamID := objectio.NewObjectid()
+	upstreamStats := *objectio.NewObjectStatsWithObjectID(
+		&upstreamID, false, true, false)
+	downstreamID := objectio.NewObjectid()
+	downstreamStats := *objectio.NewObjectStatsWithObjectID(
+		&downstreamID, false, true, true)
+	worker := &presetFilterObjectWorker{result: &FilterObjectJobResult{
+		DownstreamStatsList: []objectio.ObjectStats{downstreamStats},
+	}}
+
+	err := ApplyObjects(
+		context.Background(), "task", 0, nil,
+		map[objectio.ObjectId]*ObjectWithTableInfo{
+			upstreamID: {
+				Stats:       upstreamStats,
+				IsTombstone: true,
+				DBName:      "db",
+				TableName:   "table",
+			},
+		},
+		nil, nil, types.TS{}, nil, nil, nil, nil,
+		worker, nil, nil, "account", "publication", nil, nil, nil,
+	)
+	require.ErrorContains(t, err, "mapping owner is required")
+
+	err = ApplyObjects(
+		context.Background(), "task", 0, nil,
+		map[objectio.ObjectId]*ObjectWithTableInfo{
+			upstreamID: {
+				Stats:       upstreamStats,
+				IsTombstone: true,
+				Delete:      true,
+				DBName:      "db",
+				TableName:   "table",
+			},
+		},
+		nil, nil, types.TS{}, nil, nil, nil, nil,
+		nil, nil, nil, "account", "publication", nil, nil, nil,
+	)
+	require.ErrorContains(t, err, "mapping owner is required")
+}
+
+func TestApplyObjectsRetainsNonAppendableTombstoneMappingOnDeleteFailure(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	upstreamID := objectio.NewObjectid()
+	upstreamStats := *objectio.NewObjectStatsWithObjectID(
+		&upstreamID, false, true, false)
+	downstreamID := objectio.NewObjectid()
+	downstreamIDs := []objectio.ObjectId{downstreamID}
+	mapping := NewAObjectMap()
+	mapping.Set(upstreamID.String(), &AObjectMapping{
+		DownstreamObjectIDs: &downstreamIDs,
+		IsTombstone:         true,
+		DBName:              "db",
+		TableName:           "table",
+	})
+
+	deleteRelationMock := mock_frontend.NewMockRelation(ctrl)
+	deleteRelationMock.EXPECT().GetTableDef(gomock.Any()).Return(nil)
+	deleteRelation := &recordingSoftDeleteRelation{
+		Relation: deleteRelationMock,
+		err:      errors.New("delete failed"),
+	}
+	deleteDB := mock_frontend.NewMockDatabase(ctrl)
+	deleteDB.EXPECT().Relation(gomock.Any(), "table", nil).Return(deleteRelation, nil)
+	deleteEngine := mock_frontend.NewMockEngine(ctrl)
+	deleteEngine.EXPECT().Database(gomock.Any(), "db", nil).Return(deleteDB, nil)
+
+	err := ApplyObjects(
+		context.Background(), "task", 0, nil,
+		map[objectio.ObjectId]*ObjectWithTableInfo{
+			upstreamID: {
+				Stats:       upstreamStats,
+				IsTombstone: true,
+				Delete:      true,
+				DBName:      "db",
+				TableName:   "table",
+			},
+		},
+		nil, nil, types.TS{}, nil, deleteEngine, nil, nil,
+		nil, nil, nil, "account", "publication", nil, mapping, nil,
+	)
+	require.ErrorContains(t, err, "delete failed")
+	stored, ok := mapping.Get(upstreamID.String())
+	require.True(t, ok)
+	require.NotNil(t, stored.DownstreamObjectIDs)
+	require.Equal(t, []objectio.ObjectId{downstreamID}, *stored.DownstreamObjectIDs)
+}
+
+func TestApplyObjectsRejectsWrongNonAppendableTombstoneMappingKind(t *testing.T) {
+	upstreamID := objectio.NewObjectid()
+	upstreamStats := *objectio.NewObjectStatsWithObjectID(
+		&upstreamID, false, true, false)
+	appendableDownstreamID := objectio.NewObjectid()
+	mapping := NewAObjectMap()
+	mapping.Set(upstreamID.String(), &AObjectMapping{
+		DownstreamStats: *objectio.NewObjectStatsWithObjectID(
+			&appendableDownstreamID, true, true, true),
+		IsTombstone: true,
+		DBName:      "db",
+		TableName:   "table",
+	})
+
+	err := ApplyObjects(
+		context.Background(), "task", 0, nil,
+		map[objectio.ObjectId]*ObjectWithTableInfo{
+			upstreamID: {
+				Stats:       upstreamStats,
+				IsTombstone: true,
+				Delete:      true,
+				DBName:      "db",
+				TableName:   "table",
+			},
+		},
+		nil, nil, types.TS{}, nil, nil, nil, nil,
+		nil, nil, nil, "account", "publication", nil, mapping, nil,
+	)
+	require.ErrorContains(t, err, "is not owned by a non-appendable tombstone")
+	_, ok := mapping.Get(upstreamID.String())
+	require.True(t, ok)
 }

@@ -509,6 +509,7 @@ func ReleaseAObjectMapping(mapping *AObjectMapping) {
 		return
 	}
 	mapping.DownstreamStats = objectio.ObjectStats{}
+	mapping.DownstreamObjectIDs = nil
 	mapping.IsTombstone = false
 	mapping.DBName = ""
 	mapping.TableName = ""
