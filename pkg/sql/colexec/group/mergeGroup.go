@@ -219,8 +219,8 @@ func (mergeGroup *MergeGroup) buildOneBatch(proc *process.Process, bat *batch.Ba
 					expectedRows[i] = accessor.PrepareParamKindRowCountForChunk(0)
 				}
 			}
-			prepareParamKinds, prepareParamKindSummaries, err := readPrepareParamKindTrailer(proc.Ctx, reader, nAggs,
-				&mergeGroup.ctr.prepareParamKind, expectedRows)
+			prepareParamKinds, prepareParamKindSummaries, binaryStringRows, binaryStringSummaries, err := readPrepareParamKindTrailer(proc.Ctx, reader, nAggs,
+				&mergeGroup.ctr.prepareParamKind, expectedRows, binaryStringWireEnabled(proc))
 			if err != nil {
 				return false, err
 			}
@@ -236,12 +236,12 @@ func (mergeGroup *MergeGroup) buildOneBatch(proc *process.Process, bat *batch.Ba
 					!mergeGroup.Aggs[i].PreservesFirstArgPrepareParamKind() {
 					continue
 				}
+				accessor, ok := agg.(aggexec.PrepareParamKindStateAccessor)
+				if !ok {
+					return false, moerr.NewInternalErrorNoCtx(
+						"aggregate state cannot restore provenance")
+				}
 				if i < len(prepareParamKinds) && len(prepareParamKinds[i]) != 0 {
-					accessor, ok := agg.(aggexec.PrepareParamKindStateAccessor)
-					if !ok {
-						return false, moerr.NewInternalErrorNoCtx(
-							"aggregate state cannot restore prepared parameter rows")
-					}
 					if err := accessor.RestorePrepareParamKindsForChunk(
 						0, prepareParamKinds[i], mergeGroup.ctr.mp); err != nil {
 						return false, err
@@ -254,6 +254,13 @@ func (mergeGroup *MergeGroup) buildOneBatch(proc *process.Process, bat *batch.Ba
 					if i < len(prepareParamKindSummaries) && prepareParamKindSummaries[i].seen {
 						setter.SetPrepareParamKind(prepareParamKindSummaries[i].kind)
 					}
+				}
+				if i < len(binaryStringRows) && len(binaryStringRows[i]) != 0 {
+					if err := accessor.RestoreBinaryStringRowsForChunk(0, binaryStringRows[i], mergeGroup.ctr.mp); err != nil {
+						return false, err
+					}
+				} else if i < len(binaryStringSummaries) {
+					accessor.SetBinaryStringSummary(binaryStringSummaries[i])
 				}
 			}
 		}

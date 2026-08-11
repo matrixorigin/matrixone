@@ -169,8 +169,8 @@ func TestPrepareParamKindTrailerRejectsRowAmplificationBeforeAllocation(t *testi
 			localStates.Reset([]aggexec.AggFuncExecExpression{
 				aggexec.MakeAggFunctionExpression(aggexec.AggIdOfMin, false, nil, nil),
 			})
-			_, _, err := readPrepareParamKindTrailer(
-				context.Background(), bytes.NewReader(tc.payload), 1, &localStates, []int{1})
+			_, _, _, _, err := readPrepareParamKindTrailer(
+				context.Background(), bytes.NewReader(tc.payload), 1, &localStates, []int{1}, true)
 			require.Error(t, err)
 			require.ErrorContains(t, err, tc.wantErr)
 		})
@@ -183,8 +183,8 @@ func TestPrepareParamKindTrailerRejectsBufferedSpillAmplification(t *testing.T) 
 		aggexec.MakeAggFunctionExpression(aggexec.AggIdOfMin, false, nil, nil),
 	})
 	payload := prepareParamKindRowsTrailerForTest(1<<24, nil)
-	_, _, err := readPrepareParamKindTrailer(
-		context.Background(), bufio.NewReader(bytes.NewReader(payload)), 1, &states, []int{1})
+	_, _, _, _, err := readPrepareParamKindTrailer(
+		context.Background(), bufio.NewReader(bytes.NewReader(payload)), 1, &states, []int{1}, true)
 	require.ErrorContains(t, err, "row count 16777216 does not match 1")
 }
 
@@ -194,8 +194,8 @@ func TestPrepareParamKindTrailerRejectsRowsWithoutStateBound(t *testing.T) {
 		aggexec.MakeAggFunctionExpression(aggexec.AggIdOfMin, false, nil, nil),
 	})
 	payload := prepareParamKindRowsTrailerForTest(1<<24, nil)
-	_, _, err := readPrepareParamKindTrailer(
-		context.Background(), bufio.NewReader(bytes.NewReader(payload)), 1, &states, []int{-1})
+	_, _, _, _, err := readPrepareParamKindTrailer(
+		context.Background(), bufio.NewReader(bytes.NewReader(payload)), 1, &states, []int{-1}, true)
 	require.ErrorContains(t, err, "does not expose a prepared parameter row count")
 }
 
@@ -240,4 +240,30 @@ func TestPrepareParamKindStateCodec(t *testing.T) {
 		require.False(t, seen)
 		require.Equal(t, vector.PrepareParamNone, kind)
 	}
+}
+
+func TestAggregateTrailerPreservesBinaryStringRows(t *testing.T) {
+	aggs := []aggexec.AggFuncExecExpression{
+		aggexec.MakeAggFunctionExpression(aggexec.AggIdOfAny, false, nil, nil),
+	}
+	states := aggexec.PrepareParamKindStates{}
+	states.Reset(aggs)
+	var wire bytes.Buffer
+	require.NoError(t, writePrepareParamKindTrailer(
+		context.Background(), &wire, aggs, &states,
+		[][]vector.PrepareParamKind{nil}, []prepareParamKindSummary{{}},
+		[][]bool{{true, false}}, []bool{true},
+	))
+
+	restored := aggexec.PrepareParamKindStates{}
+	restored.Reset(aggs)
+	_, _, binaryRows, binarySummaries, err := readPrepareParamKindTrailer(
+		context.Background(), bytes.NewReader(wire.Bytes()), 1, &restored, []int{2}, true)
+	require.NoError(t, err)
+	require.Equal(t, []bool{true, false}, binaryRows[0])
+	require.False(t, binarySummaries[0])
+
+	_, _, _, _, err = readPrepareParamKindTrailer(
+		context.Background(), bytes.NewReader(wire.Bytes()), 1, &restored, []int{2}, false)
+	require.ErrorContains(t, err, "MORPCVersion17")
 }

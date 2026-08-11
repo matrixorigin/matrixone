@@ -1803,6 +1803,12 @@ func (v *Vector) HasBinaryStringRows() bool {
 	return v != nil && v.binaryStringRowsActive
 }
 
+// HasBinaryStringMetadata reports dynamic byte-string provenance without
+// treating a static BINARY/VARBINARY/BLOB type as transient metadata.
+func (v *Vector) HasBinaryStringMetadata() bool {
+	return v != nil && (v.binaryString || v.binaryStringRowsActive)
+}
+
 func (v *Vector) SetIsBinaryString(binaryString bool) {
 	v.setBinaryStringScalar(binaryString)
 }

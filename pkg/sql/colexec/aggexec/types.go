@@ -212,6 +212,13 @@ type PrepareParamKindStateAccessor interface {
 	PrepareParamKindSummaryForSelection(flags [][]uint8) (vector.PrepareParamKind, bool)
 	RestorePrepareParamKindsForChunk(chunk int, kinds []vector.PrepareParamKind, mp *mpool.MPool) error
 	RestorePrepareParamKindsFlat(kinds []vector.PrepareParamKind, mp *mpool.MPool) error
+	BinaryStringRowsForChunk(chunk int) []bool
+	BinaryStringRowsForSelection(flags [][]uint8) []bool
+	BinaryStringSummaryForChunk(chunk int) bool
+	BinaryStringSummaryForSelection(flags [][]uint8) bool
+	RestoreBinaryStringRowsForChunk(chunk int, rows []bool, mp *mpool.MPool) error
+	RestoreBinaryStringRowsFlat(rows []bool, mp *mpool.MPool) error
+	SetBinaryStringSummary(binaryString bool)
 }
 
 // indicate who implements the AggFuncExec interface.

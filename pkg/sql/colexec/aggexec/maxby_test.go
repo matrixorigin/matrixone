@@ -321,6 +321,27 @@ func TestMaxByNullContractAndDeterministicMerge(t *testing.T) {
 	restored.Free()
 }
 
+func TestMaxByEqualWinnerOrsBinaryStringProvenance(t *testing.T) {
+	mp := mpool.MustNewZero()
+	params := []types.Type{types.T_varchar.ToType(), types.T_int64.ToType(), types.T_varchar.ToType()}
+	for _, binaryFirst := range []bool{false, true} {
+		inputs := maxByInputs(t, mp, []string{"same", "same"}, nil, []int64{10, 10}, []string{"tie", "tie"})
+		require.NoError(t, inputs[0].SetBinaryStringRowsWithMP([]bool{binaryFirst, !binaryFirst}, mp))
+		exec := makeMaxByExec(mp, 7020, false, params).(*maxByExec)
+		require.NoError(t, exec.GroupGrow(1))
+		require.NoError(t, exec.BulkFill(0, inputs))
+		result, err := exec.Flush()
+		require.NoError(t, err)
+		require.True(t, result[0].GetBinaryStringMetadataAt(0))
+		result[0].Free(mp)
+		exec.Free()
+		for _, input := range inputs {
+			input.Free(mp)
+		}
+	}
+	require.Zero(t, mp.CurrNB())
+}
+
 func TestMaxByMergeIsCommutativeAndAssociative(t *testing.T) {
 	mp := mpool.MustNewZero()
 	params := []types.Type{types.T_varchar.ToType(), types.T_int64.ToType(), types.T_varchar.ToType()}
