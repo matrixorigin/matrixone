@@ -1030,6 +1030,62 @@ func TestPreparedDynamicNumericCoversEquivalentExactContexts(t *testing.T) {
 	}
 }
 
+func TestPreparedDynamicNumericRebindsNestedExactFunctionTrees(t *testing.T) {
+	queries := []string{
+		"select ? + (-1 + 0)",
+		"select ? + (1 + 0)",
+		"select ? + abs(1)",
+		"select ? + mod(3, 2)",
+		"select ? + coalesce(1, 0)",
+	}
+	params := []ParamValue{
+		{Value: "3", RuntimeType: types.T_int64},
+		{Value: "2.5", RuntimeType: types.T_float64},
+		{Value: strconv.FormatUint(math.MaxUint64, 10), RuntimeType: types.T_uint64},
+	}
+	for _, sql := range queries {
+		t.Run(sql, func(t *testing.T) {
+			prepare := buildPreparedAggregatePlan(t, sql)
+			for _, param := range params {
+				specialized, err := SpecializePreparedNumericPlan(
+					context.Background(), prepare.Plan, []any{param})
+				require.NoError(t, err, param.RuntimeType.String())
+				require.False(t, HasPreparedDynamicNumericParams(specialized))
+				root := specialized.GetQuery().Nodes[specialized.GetQuery().Steps[0]]
+				require.Len(t, root.ProjectList, 1)
+				requirePreparedScalarFunctionTypeClosure(t, root.ProjectList[0])
+			}
+		})
+	}
+
+	logicPlan, err := runOneStmt(NewMockOptimizer(false), t,
+		"prepare stmt1 from 'create table prepared_nested_exact_ctas as select ? + (-1 + 0) as v'")
+	require.NoError(t, err)
+	ctas, err := SpecializePreparedNumericPlan(context.Background(), logicPlan.GetDcl().GetPrepare().Plan, []any{
+		ParamValue{Value: "3", RuntimeType: types.T_int64},
+	})
+	require.NoError(t, err)
+	require.Equal(t, int32(types.T_int64), ctas.GetDdl().GetCreateTable().GetTableDef().GetCols()[0].Typ.Id)
+}
+
+func requirePreparedScalarFunctionTypeClosure(t *testing.T, expr *planpb.Expr) {
+	t.Helper()
+	fn := expr.GetF()
+	if fn == nil {
+		return
+	}
+	for _, arg := range fn.Args {
+		requirePreparedScalarFunctionTypeClosure(t, arg)
+	}
+	if fn.Func.GetObjName() == "cast" {
+		return
+	}
+	rebound, err := BindFuncExprImplByPlanExpr(context.Background(), fn.Func.GetObjName(), fn.Args)
+	require.NoError(t, err)
+	require.Equal(t, rebound.Typ, expr.Typ, fn.Func.GetObjName())
+	require.Equal(t, rebound.GetF().Func.GetObj(), fn.Func.GetObj(), fn.Func.GetObjName())
+}
+
 func TestPreparedScalarSubqueryParameterDetection(t *testing.T) {
 	for _, test := range []struct {
 		sql     string

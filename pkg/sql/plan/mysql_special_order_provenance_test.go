@@ -88,6 +88,32 @@ func TestGreatestLeastKeepEnumDisplaySemantics(t *testing.T) {
 	}
 }
 
+func TestPreparedGreatestLeastKeepStringAndMySQLSpecialDomains(t *testing.T) {
+	for _, sql := range []string{
+		"select greatest(e, ?), least(e, ?) from enum_order_t",
+		"select greatest(?, e), least(?, e) from enum_order_t",
+		"select greatest(s, ?), least(s, ?) from enum_order_t",
+		"select greatest(?, s), least(?, s) from enum_order_t",
+		"select greatest(v, ?), least(v, ?) from enum_order_t",
+		"select greatest(?, v), least(?, v) from enum_order_t",
+	} {
+		t.Run(sql, func(t *testing.T) {
+			logicPlan, err := runOneStmt(newMySQLSpecialOrderMock(), t,
+				"prepare stmt1 from '"+sql+"'")
+			require.NoError(t, err)
+			prepare := logicPlan.GetDcl().GetPrepare()
+			require.NotNil(t, prepare)
+			require.False(t, HasPreparedDynamicNumericParams(prepare.Plan))
+			require.Equal(t, []types.T{types.T_text, types.T_text}, collectPlanParamTypes(prepare.Plan))
+		})
+	}
+
+	logicPlan, err := runOneStmt(newMySQLSpecialOrderMock(), t,
+		"prepare stmt1 from 'select greatest(?, 10), least(?, 10)'")
+	require.NoError(t, err)
+	require.True(t, HasPreparedDynamicNumericParams(logicPlan.GetDcl().GetPrepare().Plan))
+}
+
 func singleSortSpec(t *testing.T, logicPlan *planpb.Plan) *planpb.OrderBySpec {
 	t.Helper()
 	var found []*planpb.OrderBySpec

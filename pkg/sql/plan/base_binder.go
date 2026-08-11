@@ -1178,9 +1178,9 @@ func (b *baseBinder) numericAstTypesInternalWithHint(
 				if scanErr != nil {
 					return numericAstTypeScan{}, scanErr
 				}
-				scan.hasParam = scan.hasParam || argScan.hasParam
+				scan = scan.merge(argScan)
 			}
-			if supportsPreparedDynamicNumericFunctionContext(name) && scan.hasParam {
+			if b.preparedDynamicNumericFunctionCandidate(name, expr.Exprs, scan) {
 				scan.dynamicCandidate = true
 			}
 			return scan, nil
@@ -1834,6 +1834,24 @@ func supportsPreparedDynamicNumericFunctionContext(name string) bool {
 	// Keeping them out of supportsGenericNumericFunctionContext prevents ENUM
 	// values in ordinary SQL from being exposed as their internal ordinals.
 	return name == "greatest" || name == "least"
+}
+
+func (b *baseBinder) preparedDynamicNumericFunctionCandidate(
+	name string,
+	args []tree.Expr,
+	scan numericAstTypeScan,
+) bool {
+	if !scan.hasParam || scan.incompatible || scan.hasUnknown {
+		return false
+	}
+	if name != "greatest" && name != "least" {
+		return supportsGenericNumericFunctionContext(name)
+	}
+	// GREATEST/LEAST are polymorphic. A parameter alone is not evidence for a
+	// numeric domain: VARCHAR, DATE, ENUM and SET must retain their string/MySQL
+	// special comparison contract. Enter runtime numeric specialization only
+	// when another operand positively proves an exact numeric domain.
+	return scan.hasExactOperand() && !mysqlSpecialTypeInExprs(b, args)
 }
 
 func isNumericContextFunction(name string) bool {
@@ -2681,7 +2699,7 @@ func (b *baseBinder) bindFuncExpr(astExpr *tree.FuncExpr, depth int32, isRoot bo
 		if err != nil {
 			return nil, err
 		}
-		if scan.hasParam && !scan.incompatible {
+		if b.preparedDynamicNumericFunctionCandidate(strings.ToLower(funcName), astExpr.Exprs, scan) {
 			if planType, ok := numericTypeFromAstScan(scan, nil); ok {
 				b.numericParamType = &planType
 				defer func() { b.numericParamType = nil }()

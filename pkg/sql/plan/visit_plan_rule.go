@@ -537,7 +537,11 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 			if rewriteErr != nil {
 				return nil, rewriteErr
 			}
-			if directParam || (dynamicNumericParam && rewrittenArg != arg) {
+			// Any child replacement invalidates the parent's selected overload.
+			// Generated exact-sibling casts do not contain ParamRefs themselves,
+			// so restricting this to dynamicNumericParam leaves their parent tree
+			// frozen at the prepare-time DECIMAL256 shape.
+			if directParam || rewrittenArg != arg {
 				needResetFunction = true
 			}
 			exprImpl.F.Args[i] = rewrittenArg
@@ -545,7 +549,10 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 		if needResetFunction {
 			for i, arg := range exprImpl.F.Args {
 				if !dynamicNumericArgs[i] {
-					exprImpl.F.Args[i] = restorePreparedNumericLiteralType(arg)
+					exprImpl.F.Args[i], err = restorePreparedNumericLiteralType(rule.ctx, arg)
+					if err != nil {
+						return nil, err
+					}
 				}
 			}
 		}
@@ -599,7 +606,7 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 				// The prepare-time dynamic DECIMAL domain also coerces the
 				// parameter's sibling operands. Restore those operands before
 				// rebinding the enclosing function for the current runtime type.
-				return restorePreparedNumericLiteralType(e), nil
+				return restorePreparedNumericLiteralType(rule.ctx, e)
 			}
 			value := exprImpl.F.Args[0]
 			if literal := value.GetLit(); literal != nil {
@@ -667,58 +674,88 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 	}
 }
 
-func restorePreparedNumericLiteralType(expr *plan.Expr) *plan.Expr {
+func restorePreparedNumericLiteralType(ctx context.Context, expr *plan.Expr) (*plan.Expr, error) {
+	restored, _, err := restorePreparedNumericExactType(ctx, expr)
+	return restored, err
+}
+
+func restorePreparedNumericExactType(ctx context.Context, expr *plan.Expr) (*plan.Expr, bool, error) {
 	if expr == nil {
-		return expr
-	}
-	if fn := expr.GetF(); fn != nil && len(fn.Args) == 1 &&
-		(fn.Func.GetObjName() == "unary_plus" || fn.Func.GetObjName() == "unary_minus") &&
-		!containsPreparedDynamicNumericParam(expr) {
-		restored := restorePreparedNumericLiteralType(fn.Args[0])
-		fn.Args[0] = restored
-		if !samePreparedNumericShape(expr.Typ, restored.Typ) || isPreparedDynamicNumericType(expr.Typ) ||
-			(types.T(expr.Typ.Id).IsDecimal() && expr.Typ.Width > 65) {
-			// Negative literals are represented as unary_minus(cast(literal)).
-			// Once the prepare-time dynamic cast is removed, the unary function
-			// itself must be rebound too; retaining its DECIMAL256 overload makes
-			// the executor reinterpret an 8-byte integer vector as 32-byte decimal.
-			if rebound, err := BindFuncExprImplByPlanExpr(
-				context.TODO(), fn.Func.GetObjName(), []*plan.Expr{restored}); err == nil {
-				return rebound
-			}
-		}
+		return expr, false, nil
 	}
 	if fn := expr.GetF(); fn != nil && fn.Func.GetObjName() == "cast" && len(fn.Args) > 0 &&
 		(isPreparedDynamicNumericCast(expr) ||
 			(types.T(expr.Typ.Id).IsDecimal() && expr.Typ.Width > 65)) {
 		_, overload := planfunction.DecodeOverloadID(fn.Func.GetObj())
 		if overload == 0 {
-			restored := restorePreparedNumericLiteralType(fn.Args[0])
+			restored, _, err := restorePreparedNumericExactType(ctx, fn.Args[0])
+			if err != nil {
+				return nil, false, err
+			}
 			if lit := restored.GetLit(); lit != nil {
 				if value, ok := lit.Value.(*plan.Literal_Sval); ok {
 					if decimal, err := makePlan2DecimalExprWithType(
-						context.TODO(), value.Sval, lit.GetIsBin()); err == nil {
-						return decimal
+						ctx, value.Sval, lit.GetIsBin()); err == nil {
+						return decimal, true, nil
 					}
 				}
 			}
-			return restored
+			return restored, true, nil
 		}
 	}
+	if fn := expr.GetF(); fn != nil {
+		if fn.Func.GetObjName() == "cast" {
+			// An unmarked CAST is explicit SQL and forms a type boundary. Its
+			// declared target must not be inferred again from the surrounding
+			// prepared arithmetic domain.
+			return expr, false, nil
+		}
+		changed := isPreparedDynamicNumericType(expr.Typ) ||
+			(types.T(expr.Typ.Id).IsDecimal() && expr.Typ.Width > 65)
+		args := make([]*plan.Expr, len(fn.Args))
+		for i, arg := range fn.Args {
+			restored, childChanged, err := restorePreparedNumericExactType(ctx, arg)
+			if err != nil {
+				return nil, false, err
+			}
+			args[i] = restored
+			changed = changed || childChanged
+		}
+		if !changed {
+			return expr, false, nil
+		}
+		name := fn.Func.GetObjName()
+		if planfunction.GetFunctionIsAggregateByName(name) || planfunction.GetFunctionIsWinFunByName(name) {
+			return expr, false, nil
+		}
+		// Exact siblings can be arbitrary function trees (for example ABS(1),
+		// MOD(3, 2), COALESCE(1, 0), or (-1 + 0)). Rebind every parent bottom-up:
+		// the explicit changed bit propagates a removed generated cast through the
+		// tree without rebinding unrelated aggregate, window, or CAST nodes.
+		rebound, err := BindFuncExprImplByPlanExpr(ctx, name, args)
+		if err != nil {
+			return nil, false, err
+		}
+		if reboundFn := rebound.GetF(); reboundFn != nil {
+			reboundFn.AggConfig = bytes.Clone(fn.AggConfig)
+			reboundFn.AggConfigType = fn.AggConfigType
+		}
+		return rebound, true, nil
+	}
 	if !isPreparedDynamicNumericType(expr.Typ) {
-		return expr
+		return expr, false, nil
 	}
 	literal := expr.GetLit()
 	if literal == nil {
-		return expr
+		return expr, false, nil
 	}
 	switch value := literal.Value.(type) {
 	case *plan.Literal_I64Val:
-		return makePlan2Int64ConstExprWithType(value.I64Val)
+		return makePlan2Int64ConstExprWithType(value.I64Val), true, nil
 	case *plan.Literal_U64Val:
-		return makePlan2Uint64ConstExprWithType(value.U64Val)
+		return makePlan2Uint64ConstExprWithType(value.U64Val), true, nil
 	default:
-		return expr
+		return expr, false, nil
 	}
 }
 
