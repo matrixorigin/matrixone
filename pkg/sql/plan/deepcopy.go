@@ -645,6 +645,7 @@ func DeepCopyExpr(expr *Expr) *Expr {
 		Ndv:               expr.Ndv,
 		Selectivity:       expr.Selectivity,
 		ExactDecimalParam: expr.ExactDecimalParam,
+		ExactDecimalGroup: expr.ExactDecimalGroup,
 	}
 
 	switch item := expr.Expr.(type) {

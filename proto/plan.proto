@@ -249,6 +249,9 @@ message Expr {
   // Marks a planner-injected DECIMAL cast whose target domain must be
   // specialized from the actual prepared TEXT parameter value at EXECUTE.
   bool exact_decimal_param = 19;
+  // Identifies operands that belong to one prepared grouped coercion
+  // domain. Zero means the expression is not part of a grouped comparison.
+  int32 exact_decimal_group = 20;
 }
 
 message FoldVal {

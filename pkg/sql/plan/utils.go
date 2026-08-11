@@ -3202,8 +3202,13 @@ func FillExactDecimalComparisonParamsInPlan(ctx context.Context, preparePlan *Pl
 		return nil, nil
 	}
 	params := makePrepareParamExprs(paramVals)
+	realGroups := make(map[int32]bool)
+	domainRule := &findPreparedDecimalGroupDomainsRule{params: params, realGroups: realGroups}
+	if err := NewVisitPlan(copied, []VisitPlanRule{domainRule}).Visit(ctx); err != nil {
+		return nil, err
+	}
 	visitor := NewVisitPlan(copied, []VisitPlanRule{
-		NewResetExactDecimalComparisonParamRule(ctx, params),
+		NewResetExactDecimalComparisonParamRule(ctx, params, realGroups),
 	})
 	if err := visitor.Visit(ctx); err != nil {
 		return nil, err

@@ -79,7 +79,7 @@ FROM numeric_prefix_values WHERE d = '1e2';
 CREATE TABLE binary_literal_values (id INT PRIMARY KEY, d DECIMAL(10,0));
 INSERT INTO binary_literal_values VALUES (1, 9), (2, 57);
 SELECT GROUP_CONCAT(id ORDER BY id) AS raw_hex_bytes_ids
-FROM binary_literal_values WHERE d = x'393030373139393235343734303939322e30303031';
+FROM binary_literal_values WHERE d = x'39';
 SELECT GROUP_CONCAT(id ORDER BY id) AS raw_bit_bytes_ids
 FROM binary_literal_values WHERE d = b'111001';
 SELECT GROUP_CONCAT(id ORDER BY id) AS binary_character_text_ids

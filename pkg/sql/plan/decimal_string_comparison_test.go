@@ -258,7 +258,7 @@ func TestDecimalNonExactStringExpressionsKeepGenericCoercion(t *testing.T) {
 		{name: "non-numeric literal", expr: makePlan2StringConstExprWithType("not-a-number")},
 		{name: "null literal", expr: MakePlan2NullTextConstExprWithType("")},
 		{name: "raw binary literal", expr: &planpb.Expr{
-			Typ: planpb.Type{Id: int32(types.T_varbinary)},
+			Typ: planpb.Type{Id: int32(types.T_varchar), Charset: uint32(types.CharsetBinary)},
 			Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{
 				IsBin: true, Value: &planpb.Literal_Sval{Sval: "9007199254740992.0001"}}},
 		}},
@@ -283,13 +283,32 @@ func TestDecimalNonExactStringExpressionsKeepGenericCoercion(t *testing.T) {
 }
 
 func TestDecimalBinaryStringLiteralUsesExactComparison(t *testing.T) {
-	expr, err := BindFuncExprImplByPlanExpr(context.Background(), "=", []*planpb.Expr{
-		makePreparedDecimalComparisonColumn(types.New(types.T_decimal128, 20, 4)),
-		makePlan2StringConstExprWithType("9007199254740992.0001", true),
-	})
-	require.NoError(t, err)
-	for _, arg := range expr.GetF().Args {
-		require.True(t, types.T(arg.Typ.Id).IsDecimal(), "type id %d", arg.Typ.Id)
+	mock := NewMockOptimizer(false)
+	decimalType := types.New(types.T_decimal128, 20, 4)
+	mock.ctxt.tables["part"].Cols[7].Typ = makePlan2Type(&decimalType)
+	for _, test := range []struct {
+		name  string
+		value string
+		exact bool
+	}{
+		{name: "binary character introducer", value: "_binary'9007199254740992.0001'", exact: true},
+		{name: "raw hex", value: "x'39'"},
+		{name: "raw bit", value: "b'111001'"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			logicPlan, err := runOneStmt(mock, t,
+				"select p_partkey from part where p_retailprice = "+test.value)
+			require.NoError(t, err)
+			expr := findPreparedDecimalComparisonInPlan(logicPlan, "=")
+			require.NotNil(t, expr)
+			for _, arg := range expr.GetF().Args {
+				if test.exact {
+					require.True(t, types.T(arg.Typ.Id).IsDecimal(), "type id %d", arg.Typ.Id)
+				} else {
+					require.Equal(t, int32(types.T_float64), arg.Typ.Id)
+				}
+			}
+		})
 	}
 }
 

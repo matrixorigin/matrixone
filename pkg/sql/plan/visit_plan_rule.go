@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"sort"
+	"strconv"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -396,6 +397,7 @@ type ResetParamRefRule struct {
 	params                      []*Expr
 	exprMemo                    map[*plan.Expr]*plan.Expr
 	exactDecimalComparisonsOnly bool
+	realDecimalGroups           map[int32]bool
 }
 
 func NewResetParamRefRule(ctx context.Context, params []*Expr) *ResetParamRefRule {
@@ -405,11 +407,14 @@ func NewResetParamRefRule(ctx context.Context, params []*Expr) *ResetParamRefRul
 	}
 }
 
-func NewResetExactDecimalComparisonParamRule(ctx context.Context, params []*Expr) *ResetParamRefRule {
+func NewResetExactDecimalComparisonParamRule(
+	ctx context.Context, params []*Expr, realDecimalGroups map[int32]bool,
+) *ResetParamRefRule {
 	return &ResetParamRefRule{
 		ctx:                         ctx,
 		params:                      params,
 		exactDecimalComparisonsOnly: true,
+		realDecimalGroups:           realDecimalGroups,
 	}
 }
 
@@ -457,6 +462,8 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 	switch exprImpl := e.Expr.(type) {
 	case *plan.Expr_F:
 		needResetFunction := false
+		comparisonNeedsReal := rule.realDecimalGroups[e.ExactDecimalGroup]
+		preparedInGroup, preparedInNeedsReal := preparedDecimalInCommonDomain(exprImpl.F, rule.params)
 		if isDecimalComparisonOperator(exprImpl.F.Func.GetObjName()) {
 			for i, arg := range exprImpl.F.Args {
 				replacement, ok, err := rule.preparedDecimalComparisonValue(arg)
@@ -466,6 +473,7 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 				if ok {
 					exprImpl.F.Args[i] = replacement
 					needResetFunction = true
+					comparisonNeedsReal = comparisonNeedsReal || preparedDecimalGroupNeedsReal(replacement)
 				}
 			}
 		}
@@ -477,6 +485,17 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 			if err != nil {
 				return nil, err
 			}
+		}
+		if preparedInGroup {
+			return rebindPreparedDecimalInGroup(rule.ctx, e, preparedInNeedsReal)
+		}
+		if comparisonNeedsReal {
+			return rebindPreparedDecimalGroupAsReal(rule.ctx, e)
+		}
+		if rule.exactDecimalComparisonsOnly && e.ExactDecimalParam &&
+			(exprImpl.F.Func.GetObjName() == "and" || exprImpl.F.Func.GetObjName() == "or") &&
+			preparedDecimalGroupNeedsReal(e) {
+			return rebindPreparedDecimalGroupAsReal(rule.ctx, e)
 		}
 
 		// reset function
@@ -494,6 +513,7 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 				rewrittenFn.AggConfig = bytes.Clone(exprImpl.F.AggConfig)
 				rewrittenFn.AggConfigType = exprImpl.F.AggConfigType
 			}
+			rewritten.ExactDecimalGroup = e.ExactDecimalGroup
 			return rewritten, nil
 		}
 		return e, nil
@@ -537,21 +557,45 @@ func (rule *ResetParamRefRule) preparedDecimalComparisonValue(expr *plan.Expr) (
 			int(paramRef.Pos),
 		)
 	}
-	raw := &plan.Expr{Typ: cast.Args[0].Typ, Expr: rule.params[int(paramRef.Pos)].Expr}
+	raw := DeepCopyExpr(rule.params[int(paramRef.Pos)])
 	literal := raw.GetLit()
 	if literal == nil || literal.Isnull || literal.IsBin {
 		return nil, false, nil
 	}
 	stringValue, ok := literal.Value.(*plan.Literal_Sval)
 	if !ok {
-		// Binary-protocol numeric parameters already carry their coercion
-		// domain in the literal type.  Replace the planner-injected DECIMAL
-		// cast with that typed value so the enclosing comparison can be rebound
-		// in the protocol value's native domain (for example, FLOAT64).
+		var numericValue string
+		switch value := literal.Value.(type) {
+		case *plan.Literal_I64Val:
+			numericValue = strconv.FormatInt(value.I64Val, 10)
+		case *plan.Literal_U64Val:
+			numericValue = strconv.FormatUint(value.U64Val, 10)
+		case *plan.Literal_Bval:
+			if value.Bval {
+				numericValue = "1"
+			} else {
+				numericValue = "0"
+			}
+		default:
+			// FLOAT/DOUBLE retain the protocol REAL domain. The enclosing
+			// comparison, and any marked BETWEEN/IN group, will be rebound.
+			raw.ExactDecimalParam = true
+			return raw, true, nil
+		}
+		exact, exactOK, err := makePlan2ExactDecimalStringExprWithType(rule.ctx, numericValue)
+		if err != nil {
+			return nil, false, err
+		}
+		if exactOK {
+			exact.ExactDecimalParam = true
+			return exact, true, nil
+		}
+		raw.ExactDecimalParam = true
 		return raw, true, nil
 	}
 	numericValue, ok := function.GetNumericStringPrefix(stringValue.Sval)
 	if !ok {
+		raw.ExactDecimalParam = true
 		return raw, true, nil
 	}
 	exact, ok, err := makePlan2ExactDecimalStringExprWithType(rule.ctx, numericValue)
@@ -559,9 +603,200 @@ func (rule *ResetParamRefRule) preparedDecimalComparisonValue(expr *plan.Expr) (
 		return nil, false, err
 	}
 	if !ok {
+		raw.ExactDecimalParam = true
 		return raw, true, nil
 	}
+	exact.ExactDecimalParam = true
 	return exact, true, nil
+}
+
+func rebindPreparedDecimalInGroup(ctx context.Context, expr *plan.Expr, real bool) (*plan.Expr, error) {
+	fn := expr.GetF()
+	if fn == nil || fn.Func == nil || len(fn.Args) != 2 || fn.Args[1].GetList() == nil {
+		return expr, nil
+	}
+	args := DeepCopyExprList(fn.Args)
+	if real {
+		floatType := types.T_float64.ToType()
+		target := makePlan2Type(&floatType)
+		var err error
+		args[0], err = appendCastBeforeExpr(ctx, args[0], target)
+		if err != nil {
+			return nil, err
+		}
+		for i, item := range args[1].GetList().List {
+			item.ExactDecimalParam = false
+			item.ExactDecimalGroup = 0
+			args[1].GetList().List[i], err = appendCastBeforeExpr(ctx, item, target)
+			if err != nil {
+				return nil, err
+			}
+		}
+	}
+	rebound, err := BindFuncExprImplByPlanExpr(ctx, fn.Func.GetObjName(), args)
+	if err == nil {
+		rebound.ExactDecimalGroup = expr.ExactDecimalGroup
+	}
+	return rebound, err
+}
+
+func preparedDecimalInCommonDomain(fn *plan.Function, params []*Expr) (bool, bool) {
+	if fn == nil || fn.Func == nil || (fn.Func.GetObjName() != "in" && fn.Func.GetObjName() != "not_in") ||
+		len(fn.Args) != 2 || fn.Args[1].GetList() == nil {
+		return false, false
+	}
+	count := 0
+	real := false
+	for _, item := range fn.Args[1].GetList().List {
+		cast, ok := preparedDecimalComparisonCast(item)
+		if !ok {
+			continue
+		}
+		count++
+		pos := int(cast.Args[0].GetP().Pos)
+		if pos >= 0 && pos < len(params) && preparedDecimalParamRequiresReal(params[pos]) {
+			real = true
+		}
+	}
+	return count > 1, real
+}
+
+func preparedDecimalGroupNeedsReal(expr *plan.Expr) bool {
+	if expr == nil {
+		return false
+	}
+	if expr.ExactDecimalParam {
+		typ := types.T(expr.Typ.Id)
+		if typ == types.T_float32 || typ == types.T_float64 || typ.IsMySQLString() {
+			return true
+		}
+	}
+	if fn := expr.GetF(); fn != nil {
+		for _, arg := range fn.Args {
+			if preparedDecimalGroupNeedsReal(arg) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func rebindPreparedDecimalGroupAsReal(ctx context.Context, expr *plan.Expr) (*plan.Expr, error) {
+	fn := expr.GetF()
+	if fn == nil || fn.Func == nil {
+		return expr, nil
+	}
+	name := fn.Func.GetObjName()
+	if isDecimalComparisonOperator(name) {
+		floatType := types.T_float64.ToType()
+		target := makePlan2Type(&floatType)
+		args := make([]*plan.Expr, len(fn.Args))
+		for i, arg := range fn.Args {
+			var err error
+			args[i], err = appendCastBeforeExpr(ctx, arg, target)
+			if err != nil {
+				return nil, err
+			}
+		}
+		rebound, err := BindFuncExprImplByPlanExpr(ctx, name, args)
+		if err == nil {
+			rebound.ExactDecimalGroup = expr.ExactDecimalGroup
+		}
+		return rebound, err
+	}
+	for i, arg := range fn.Args {
+		var err error
+		fn.Args[i], err = rebindPreparedDecimalGroupAsReal(ctx, arg)
+		if err != nil {
+			return nil, err
+		}
+	}
+	rebound, err := BindFuncExprImplByPlanExpr(ctx, name, fn.Args)
+	if err != nil {
+		return nil, err
+	}
+	rebound.ExactDecimalParam = expr.ExactDecimalParam
+	rebound.ExactDecimalGroup = expr.ExactDecimalGroup
+	return rebound, nil
+}
+
+type findPreparedDecimalGroupDomainsRule struct {
+	params     []*Expr
+	realGroups map[int32]bool
+}
+
+func (rule *findPreparedDecimalGroupDomainsRule) MatchNode(_ *Node) bool { return false }
+func (rule *findPreparedDecimalGroupDomainsRule) IsApplyExpr() bool      { return true }
+func (rule *findPreparedDecimalGroupDomainsRule) ApplyNode(_ *Node) error {
+	return nil
+}
+
+func (rule *findPreparedDecimalGroupDomainsRule) ApplyExpr(expr *plan.Expr) (*plan.Expr, error) {
+	if expr == nil {
+		return nil, nil
+	}
+	if group := expr.ExactDecimalGroup; group != 0 && preparedDecimalGroupHasRealParam(expr, rule.params) {
+		rule.realGroups[group] = true
+	}
+	if fn := expr.GetF(); fn != nil {
+		for _, arg := range fn.Args {
+			if _, err := rule.ApplyExpr(arg); err != nil {
+				return nil, err
+			}
+		}
+	} else if list := expr.GetList(); list != nil {
+		for _, item := range list.List {
+			if _, err := rule.ApplyExpr(item); err != nil {
+				return nil, err
+			}
+		}
+	}
+	return expr, nil
+}
+
+func preparedDecimalGroupHasRealParam(expr *plan.Expr, params []*Expr) bool {
+	if cast, ok := preparedDecimalComparisonCast(expr); ok {
+		pos := int(cast.Args[0].GetP().Pos)
+		if pos >= 0 && pos < len(params) {
+			return preparedDecimalParamRequiresReal(params[pos])
+		}
+	}
+	if fn := expr.GetF(); fn != nil {
+		for _, arg := range fn.Args {
+			if preparedDecimalGroupHasRealParam(arg, params) {
+				return true
+			}
+		}
+	} else if list := expr.GetList(); list != nil {
+		for _, item := range list.List {
+			if preparedDecimalGroupHasRealParam(item, params) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func preparedDecimalParamRequiresReal(param *Expr) bool {
+	if param == nil {
+		return false
+	}
+	typ := types.T(param.Typ.Id)
+	if typ == types.T_float32 || typ == types.T_float64 {
+		return true
+	}
+	if literal := param.GetLit(); literal != nil && literal.IsBin {
+		return true
+	}
+	if typ.IsMySQLString() {
+		literal := param.GetLit()
+		if literal == nil || literal.Isnull {
+			return false
+		}
+		_, ok := function.GetNumericStringPrefix(literal.GetSval())
+		return !ok
+	}
+	return false
 }
 
 func preparedDecimalComparisonCast(expr *plan.Expr) (*plan.Function, bool) {

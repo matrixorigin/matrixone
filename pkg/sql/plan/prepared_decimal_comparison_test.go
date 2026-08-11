@@ -420,6 +420,37 @@ func TestFillExactDecimalComparisonPreservesFloatProtocolDomain(t *testing.T) {
 	require.False(t, planExprContainsPreparedDecimalParam(rewritten))
 }
 
+func TestFillExactDecimalComparisonPreservesExactNumericProtocolDomain(t *testing.T) {
+	ctx := context.Background()
+	decimalType := types.New(types.T_decimal128, 20, 4)
+	for _, test := range []struct {
+		name  string
+		value ParamValue
+	}{
+		{name: "signed integer", value: ParamValue{Value: "9007199254740993", Kind: vector.PrepareParamInteger}},
+		{name: "unsigned integer", value: ParamValue{Value: uint64(9007199254740993), Kind: vector.PrepareParamInteger}},
+		{name: "boolean", value: ParamValue{Value: true, Kind: vector.PrepareParamBoolean}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			comparison, err := BindFuncExprImplByPlanExpr(ctx, "=", []*planpb.Expr{
+				makePreparedDecimalComparisonColumn(decimalType), makePreparedDecimalComparisonParam(0),
+			})
+			require.NoError(t, err)
+			prepared := &planpb.Plan{Plan: &planpb.Plan_Query{Query: &planpb.Query{
+				Steps: []int32{0}, Nodes: []*planpb.Node{{NodeType: planpb.Node_FILTER, FilterList: []*planpb.Expr{comparison}}},
+			}}}
+			filled, err := FillExactDecimalComparisonParamsInPlan(ctx, prepared, []any{test.value})
+			require.NoError(t, err)
+			rewritten := findPreparedDecimalComparisonInPlan(filled, "=")
+			require.NotNil(t, rewritten)
+			for _, arg := range rewritten.GetF().Args {
+				require.True(t, types.T(arg.Typ.Id).IsDecimal(), "type id %d", arg.Typ.Id)
+			}
+			require.False(t, planExprContainsPreparedDecimalParam(rewritten))
+		})
+	}
+}
+
 func TestDecimalScalarSubqueryPreservesConstantAndParamDomain(t *testing.T) {
 	mock := NewMockOptimizer(false)
 	decimalType := types.New(types.T_decimal128, 20, 4)
@@ -566,6 +597,83 @@ func TestPreparedDecimalMultiInMaterializesEveryTextParam(t *testing.T) {
 					require.False(t, planExprContainsPreparedDecimalParam(filter))
 				}
 			}
+		})
+	}
+}
+
+func TestPreparedDecimalGroupsUseExecutionCommonDomain(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	decimalType := types.New(types.T_decimal128, 20, 4)
+	mock.ctxt.tables["part"].Cols[7].Typ = makePlan2Type(&decimalType)
+
+	for _, test := range []struct {
+		name       string
+		predicate  string
+		params     []any
+		expectedID types.T
+	}{
+		{
+			name: "between text float", predicate: "p_retailprice between ? and ?",
+			params:     []any{"9007199254740992.00005", ParamValue{Value: "9007199254740992", Kind: vector.PrepareParamFloat}},
+			expectedID: types.T_float64,
+		},
+		{
+			name: "between float text", predicate: "p_retailprice between ? and ?",
+			params: []any{ParamValue{Value: "9007199254740992", Kind: vector.PrepareParamFloat},
+				"9007199254740992.99995"},
+			expectedID: types.T_float64,
+		},
+		{
+			name: "in text float", predicate: "p_retailprice in (?,?)",
+			params:     []any{"9007199254740992.0001", ParamValue{Value: "9007199254740992", Kind: vector.PrepareParamFloat}},
+			expectedID: types.T_float64,
+		},
+		{
+			name: "not in text float", predicate: "p_retailprice not in (?,?)",
+			params:     []any{"9007199254740992.0001", ParamValue{Value: "9007199254740992", Kind: vector.PrepareParamFloat}},
+			expectedID: types.T_float64,
+		},
+		{
+			name: "in text integer", predicate: "p_retailprice in (?,?)",
+			params:     []any{"9007199254740992.0001", ParamValue{Value: "9007199254740993", Kind: vector.PrepareParamInteger}},
+			expectedID: types.T_decimal128,
+		},
+		{
+			name: "in integer text", predicate: "p_retailprice in (?,?)",
+			params: []any{ParamValue{Value: "9007199254740993", Kind: vector.PrepareParamInteger},
+				"9007199254740992.0001"},
+			expectedID: types.T_decimal128,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			logicPlan, err := runOneStmt(mock, t,
+				"prepare decimal_group from 'select p_partkey from part where "+test.predicate+"'")
+			require.NoError(t, err)
+			filled, err := FillExactDecimalComparisonParamsInPlan(
+				context.Background(), logicPlan.GetDcl().GetPrepare().Plan, test.params)
+			require.NoError(t, err)
+			comparisons := 0
+			var check func(*planpb.Expr)
+			check = func(expr *planpb.Expr) {
+				if expr == nil || expr.GetF() == nil {
+					return
+				}
+				if isDecimalComparisonOperator(expr.GetF().Func.GetObjName()) {
+					comparisons++
+					for _, arg := range expr.GetF().Args {
+						require.Equal(t, int32(test.expectedID), arg.Typ.Id)
+					}
+				}
+				for _, arg := range expr.GetF().Args {
+					check(arg)
+				}
+			}
+			for _, node := range filled.GetQuery().Nodes {
+				for _, filter := range node.FilterList {
+					check(filter)
+				}
+			}
+			require.Equal(t, 2, comparisons)
 		})
 	}
 }

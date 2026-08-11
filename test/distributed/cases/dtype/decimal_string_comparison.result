@@ -110,9 +110,9 @@ FROM numeric_prefix_values WHERE d = '1e2';
 CREATE TABLE binary_literal_values (id INT PRIMARY KEY, d DECIMAL(10,0));
 INSERT INTO binary_literal_values VALUES (1, 9), (2, 57);
 SELECT GROUP_CONCAT(id ORDER BY id) AS raw_hex_bytes_ids
-FROM binary_literal_values WHERE d = x'393030373139393235343734303939322e30303031';
+FROM binary_literal_values WHERE d = x'39';
 ➤ raw_hex_bytes_ids[12,0,0]  𝄀
-null
+2
 SELECT GROUP_CONCAT(id ORDER BY id) AS raw_bit_bytes_ids
 FROM binary_literal_values WHERE d = b'111001';
 ➤ raw_bit_bytes_ids[12,0,0]  𝄀
@@ -336,12 +336,12 @@ SELECT GROUP_CONCAT(id ORDER BY id) AS mixed_numeric_between_ids
 FROM boundary_values
 WHERE d128 BETWEEN '9007199254740992.00005' AND 9007199254740992.99995;
 ➤ mixed_numeric_between_ids[12,0,0]  𝄀
-2,3,4,5
+2,3,4,5,6
 SELECT GROUP_CONCAT(id ORDER BY id) AS mixed_numeric_not_between_ids
 FROM boundary_values
 WHERE d128 NOT BETWEEN '9007199254740992.00005' AND 9007199254740992.99995;
 ➤ mixed_numeric_not_between_ids[12,0,0]  𝄀
-6
+null
 SELECT GROUP_CONCAT(id ORDER BY id) AS quantified_any_concat_ids
 FROM boundary_values
 WHERE d128 = ANY(SELECT CONCAT('9007199254740992.000', '1'));

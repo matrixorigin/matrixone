@@ -21,6 +21,7 @@ import (
 	"math"
 	"strconv"
 	"strings"
+	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -53,6 +54,16 @@ var kAlwaysFalseExpr = &plan.Expr{
 			},
 		},
 	},
+}
+
+var exactDecimalListGroupID atomic.Int32
+
+func nextExactDecimalListGroupID() int32 {
+	id := exactDecimalListGroupID.Add(-1)
+	if id == 0 {
+		id = exactDecimalListGroupID.Add(-1)
+	}
+	return id
 }
 
 func (b *baseBinder) baseBindExpr(astExpr tree.Expr, depth int32, isRoot bool) (expr *Expr, err error) {
@@ -781,6 +792,10 @@ func (b *baseBinder) bindRangeCond(astExpr *tree.RangeCond, depth int32, isRoot 
 				// runtime parameter with a literal/foldable endpoint uses REAL.
 				exact := fromType.IsMySQLString() && toType.IsMySQLString() &&
 					isDirectDynamicParam(from) && isDirectDynamicParam(to)
+				groupID := int32(0)
+				if exact {
+					groupID = b.builder.genNewBindTag()
+				}
 				if !exact {
 					floatType := types.T_float64.ToType()
 					target := makePlan2Type(&floatType)
@@ -807,7 +822,10 @@ func (b *baseBinder) bindRangeCond(astExpr *tree.RangeCond, depth int32, isRoot 
 				if err != nil {
 					return nil, err
 				}
-				return BindFuncExprImplByPlanExpr(b.GetContext(), logical, []*plan.Expr{lower, upper})
+				lower.ExactDecimalGroup = groupID
+				upper.ExactDecimalGroup = groupID
+				result, err := BindFuncExprImplByPlanExpr(b.GetContext(), logical, []*plan.Expr{lower, upper})
+				return result, err
 			}
 			if astExpr.Not {
 				lower, err := BindFuncExprImplByPlanExpr(b.GetContext(), "<", []*plan.Expr{DeepCopyExpr(left), from})
@@ -3948,6 +3966,16 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 		if rightList := args[1].GetList(); rightList != nil {
 			exactSingleComparison := len(rightList.List) == 1
 			leftIsPreparedParam := isDirectDynamicParam(args[0])
+			preparedListParams := 0
+			for _, item := range rightList.List {
+				if isDirectDynamicParam(item) || item.ExactDecimalParam {
+					preparedListParams++
+				}
+			}
+			groupID := int32(0)
+			if preparedListParams > 1 {
+				groupID = nextExactDecimalListGroupID()
+			}
 			typLeft := makeTypeByPlan2Expr(args[0])
 			leftIsConstNull := typLeft.Oid == types.T_any && args[0].GetLit() != nil && args[0].GetLit().Isnull
 			var inExprList, orExprList []*plan.Expr
@@ -3959,7 +3987,7 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 				// Prepared TEXT parameters derive their exact DECIMAL domain from
 				// the execution value. Do not pack them into the peer-typed IN
 				// vector, which would truncate scale before that value is known.
-				if !partitionIn && (leftIsPreparedParam || isDirectDynamicParam(rightVal)) {
+				if !partitionIn && (leftIsPreparedParam || isDirectDynamicParam(rightVal) || rightVal.ExactDecimalParam) {
 					orExprList = append(orExprList, rightVal)
 					continue
 				}
@@ -4015,21 +4043,23 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 			}
 			if name == "in" {
 				for _, expr := range orExprList {
-					exactComparison := exactSingleComparison || leftIsPreparedParam || isDirectDynamicParam(expr)
+					exactComparison := exactSingleComparison || leftIsPreparedParam || isDirectDynamicParam(expr) || expr.ExactDecimalParam
 					tmpExpr, err := bindMixedInListComparison(ctx, "=", DeepCopyExpr(args[0]), expr, exactComparison)
 					if err != nil {
 						return nil, err
 					}
+					tmpExpr.ExactDecimalGroup = groupID
 					expanded = append(expanded, tmpExpr)
 				}
 				return combinePlanExprsBalanced(ctx, "or", expanded)
 			} else {
 				for _, expr := range orExprList {
-					exactComparison := exactSingleComparison || leftIsPreparedParam || isDirectDynamicParam(expr)
+					exactComparison := exactSingleComparison || leftIsPreparedParam || isDirectDynamicParam(expr) || expr.ExactDecimalParam
 					tmpExpr, err := bindMixedInListComparison(ctx, "!=", DeepCopyExpr(args[0]), expr, exactComparison)
 					if err != nil {
 						return nil, err
 					}
+					tmpExpr.ExactDecimalGroup = groupID
 					expanded = append(expanded, tmpExpr)
 				}
 				return combinePlanExprsBalanced(ctx, "and", expanded)
@@ -4994,7 +5024,7 @@ func decimalStringLiteralValue(expr *Expr) (string, bool) {
 	}
 	if literal := expr.GetLit(); literal != nil {
 		value, ok := literal.Value.(*plan.Literal_Sval)
-		if !ok || literal.Isnull || literal.IsBin && !isCharacterStringType(expr.Typ.Id) {
+		if !ok || literal.Isnull || literal.IsBin {
 			return "", false
 		}
 		return value.Sval, true
