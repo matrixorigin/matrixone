@@ -1729,7 +1729,8 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 										return []int32{childActionTag}
 									}(),
 								}, bindCtx)
-								if childTableDef.TblId == delCtx.replaceTargetTableID {
+								if childTableDef.TblId == delCtx.replaceTargetTableID &&
+									!(fkSelfReferCond && delCtx.skipTargetDelete) {
 									lastNodeId, err = appendExcludeReplaceOldRows(
 										builder, bindCtx, lastNodeId,
 										childScanTag, int32(childRowIdPos),
@@ -1858,16 +1859,27 @@ func appendExcludeReplaceOldRows(
 		return 0, err
 	}
 
-	markJoinID, notOwnedByReplace, err := builder.insertMarkJoin(
-		inputNodeID, oldRowsScanID, []*Expr{rowIDEqual}, nil, true, bindCtx)
-	if err != nil {
-		return 0, err
+	candidateProjection := make([]*Expr, len(inputProject))
+	for i, e := range inputProject {
+		candidateProjection[i] = &Expr{
+			Typ: e.Typ,
+			Expr: &plan.Expr_Col{Col: &plan.ColRef{
+				RelPos: candidateTag,
+				ColPos: int32(i),
+			}},
+		}
 	}
+	antiJoinID := builder.appendNode(&Node{
+		NodeType: plan.Node_JOIN,
+		Children: []int32{inputNodeID, oldRowsScanID},
+		JoinType: plan.Node_ANTI,
+		OnList:   []*Expr{rowIDEqual},
+		SpillMem: builder.joinSpillMem,
+	}, bindCtx)
 	return builder.appendNode(&Node{
-		NodeType:    plan.Node_FILTER,
-		Children:    []int32{markJoinID},
-		FilterList:  []*Expr{notOwnedByReplace},
-		ProjectList: getProjectionByLastNodeWithTag(builder, inputNodeID, candidateTag),
+		NodeType:    plan.Node_PROJECT,
+		Children:    []int32{antiJoinID},
+		ProjectList: candidateProjection,
 		BindingTags: []int32{candidateTag},
 	}, bindCtx), nil
 }
@@ -1924,10 +1936,10 @@ func appendAggNodeForFkJoin(
 }
 
 // appendSelfReferCascadeSource expands the directly matched child rows into the
-// complete descendant set for a self-referencing ON DELETE CASCADE. The
-// Every recursion level excludes the complete main-REPLACE old-row set, which
-// also prevents a valid FK cycle from revisiting a replaced row. The final
-// aggregate removes duplicate row images produced by converging paths.
+// complete descendant set for a self-referencing ON DELETE CASCADE. Recursive
+// expansion keeps rows that are also replaced by the main REPLACE because they
+// can still be parents of later descendants. Those rows are removed from the
+// final delete stream after the descendant closure has been computed.
 func appendSelfReferCascadeSource(
 	builder *QueryBuilder,
 	bindCtx *BindContext,
@@ -1940,11 +1952,51 @@ func appendSelfReferCascadeSource(
 	oldRowsSourceTag int32,
 	oldRowIDPos int32,
 ) (int32, error) {
+	rowIDPos, rowIDOK := childPosMap[catalog.Row_ID]
+	if !rowIDOK {
+		return 0, moerr.NewInternalErrorf(
+			builder.GetContext(), "self-referencing cascade rowid is unavailable")
+	}
+	seedTag := builder.genNewBindTag()
+	seedProject := make([]*Expr, len(builder.qry.Nodes[initialNodeID].ProjectList))
+	for i, e := range builder.qry.Nodes[initialNodeID].ProjectList {
+		seedProject[i] = &Expr{Typ: e.Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{
+			RelPos: seedTag, ColPos: int32(i),
+		}}}
+	}
+	initialNodeID = builder.appendNode(&Node{
+		NodeType: plan.Node_PROJECT, Children: []int32{initialNodeID},
+		ProjectList: DeepCopyExprList(builder.qry.Nodes[initialNodeID].ProjectList),
+		BindingTags: []int32{seedTag},
+	}, bindCtx)
+	oldRowsScanID := appendSinkScanNodeWithTag(builder, bindCtx, oldRowsSourceStep, oldRowsSourceTag)
+	ownedTag := builder.genNewBindTag()
+	oldRowsScanID = builder.appendNode(&Node{
+		NodeType: plan.Node_PROJECT, Children: []int32{oldRowsScanID},
+		ProjectList: DeepCopyExprList(builder.qry.Nodes[oldRowsScanID].ProjectList),
+		BindingTags: []int32{ownedTag},
+	}, bindCtx)
+	seedRowID := &Expr{Typ: seedProject[rowIDPos].Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{
+		RelPos: seedTag, ColPos: rowIDPos,
+	}}}
+	ownedRowID := &Expr{Typ: builder.qry.Nodes[oldRowsScanID].ProjectList[oldRowIDPos].Typ,
+		Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: ownedTag, ColPos: oldRowIDPos}}}
+	ownedEqual, err := BindFuncExprImplByPlanExpr(
+		builder.GetContext(), "=", []*Expr{seedRowID, ownedRowID})
+	if err != nil {
+		return 0, err
+	}
+	initialNodeID, emitInitial, err := builder.insertMarkJoin(
+		initialNodeID, oldRowsScanID, []*Expr{ownedEqual}, nil, true, bindCtx)
+	if err != nil {
+		return 0, err
+	}
+	seedProject = append(seedProject, emitInitial)
 	cteTag := builder.genNewBindTag()
 	initialNodeID = builder.appendNode(&Node{
 		NodeType:    plan.Node_PROJECT,
 		Children:    []int32{initialNodeID},
-		ProjectList: DeepCopyExprList(builder.qry.Nodes[initialNodeID].ProjectList),
+		ProjectList: seedProject,
 		BindingTags: []int32{cteTag},
 	}, bindCtx)
 	initialSinkID := appendSinkNodeWithTag(builder, bindCtx, initialNodeID, cteTag)
@@ -1963,7 +2015,7 @@ func appendSelfReferCascadeSource(
 	}, bindCtx)
 
 	descendantTag := builder.genNewBindTag()
-	descendantJoinProject := make([]*Expr, len(childTableDef.Cols))
+	descendantJoinProject := make([]*Expr, len(childTableDef.Cols), len(childTableDef.Cols)+1)
 	for i, col := range childTableDef.Cols {
 		descendantJoinProject[i] = &Expr{
 			Typ: col.Typ,
@@ -1974,6 +2026,7 @@ func appendSelfReferCascadeSource(
 			}},
 		}
 	}
+	descendantJoinProject = append(descendantJoinProject, makePlan2BoolConstExprWithType(true))
 	descendantScanID := builder.appendNode(&Node{
 		NodeType:    plan.Node_TABLE_SCAN,
 		Stats:       &plan.Stats{},
@@ -2022,11 +2075,6 @@ func appendSelfReferCascadeSource(
 		}
 		recursiveConds[i] = cond
 	}
-	rowIDPos, rowIDOK := childPosMap[catalog.Row_ID]
-	if !rowIDOK {
-		return 0, moerr.NewInternalErrorf(
-			builder.GetContext(), "self-referencing cascade rowid is unavailable")
-	}
 	recursiveJoinID := builder.appendNode(&Node{
 		NodeType:    plan.Node_JOIN,
 		Children:    []int32{recursiveScanID, descendantScanID},
@@ -2034,7 +2082,6 @@ func appendSelfReferCascadeSource(
 		OnList:      recursiveConds,
 		ProjectList: descendantJoinProject,
 	}, bindCtx)
-	var err error
 	recursiveJoinID, err = appendExcludeReplaceOldRows(
 		builder, bindCtx, recursiveJoinID,
 		descendantTag, rowIDPos,
@@ -2074,13 +2121,48 @@ func appendSelfReferCascadeSource(
 		builder.preserveScanProjection = make(map[int32]struct{})
 	}
 	builder.preserveScanProjection[lastNodeID] = struct{}{}
+	emitFilter := &Expr{Typ: plan.Type{Id: int32(types.T_bool), NotNullable: true},
+		Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: cteTag, ColPos: int32(len(childTableDef.Cols))}}}
+	lastNodeID = builder.appendNode(&Node{
+		NodeType: plan.Node_FILTER, Children: []int32{lastNodeID},
+		FilterList:  []*Expr{emitFilter},
+		ProjectList: getProjectionByLastNodeWithTag(builder, lastNodeID, cteTag),
+		BindingTags: []int32{cteTag},
+	}, bindCtx)
 	lastNodeID = builder.appendNode(&Node{
 		NodeType:    plan.Node_PROJECT,
 		Children:    []int32{lastNodeID},
 		ProjectList: DeepCopyExprList(builder.qry.Nodes[lastNodeID].ProjectList[:len(childTableDef.Cols)]),
 		BindingTags: []int32{cteTag},
 	}, bindCtx)
-	return appendAggNodeForFkJoin(builder, bindCtx, lastNodeID, true), nil
+	groupByList := getProjectionByLastNodeWithTag(builder, lastNodeID, cteTag)
+	aggProject := make([]*Expr, len(groupByList))
+	for i, e := range groupByList {
+		aggProject[i] = &Expr{
+			Typ: e.Typ,
+			Expr: &plan.Expr_Col{Col: &plan.ColRef{
+				RelPos: -2,
+				ColPos: int32(i),
+			}},
+		}
+	}
+	lastNodeID = builder.appendNode(&Node{
+		NodeType:    plan.Node_AGG,
+		GroupBy:     groupByList,
+		Children:    []int32{lastNodeID},
+		ProjectList: aggProject,
+		BindingTags: []int32{builder.genNewBindTag(), builder.genNewBindTag()},
+		SpillMem:    builder.aggSpillMem,
+	}, bindCtx)
+	filteredTag := builder.genNewBindTag()
+	lastNodeID = builder.appendNode(&Node{
+		NodeType: plan.Node_PROJECT,
+		Children: []int32{lastNodeID},
+		ProjectList: getProjectionByLastNodeWithTag(
+			builder, lastNodeID, builder.qry.Nodes[lastNodeID].BindingTags[0]),
+		BindingTags: []int32{filteredTag},
+	}, bindCtx)
+	return appendSinkNodeWithTag(builder, bindCtx, lastNodeID, filteredTag), nil
 }
 
 // buildInsertPlansWithRelatedHiddenTable build insert plan recursively for origin table

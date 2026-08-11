@@ -599,6 +599,37 @@ func TestSpillBatchSizeMatchesEncoding(t *testing.T) {
 	require.GreaterOrEqual(t, scratch, serialized)
 }
 
+func TestSharedMaterializedSourceDropsProducerAllocationAccount(t *testing.T) {
+	mp := mpool.MustNewZeroNoFixed()
+	t.Cleanup(func() { mpool.DeleteMPool(mp) })
+	registry, err := mpool.NewAllocationAccountRegistry(1, 8)
+	require.NoError(t, err)
+	account, err := registry.Open(1 << 20)
+	require.NoError(t, err)
+	selection, err := vector.NewAllocationAccountSelection(account, 1, 1, 2, 3, 4)
+	require.NoError(t, err)
+
+	producer := batch.NewOffHeapWithSize(1)
+	producer.Vecs[0] = vector.NewOffHeapVecWithType(types.T_int64.ToType())
+	require.NoError(t, producer.Vecs[0].SetAllocationAccount(selection))
+	require.NoError(t, vector.AppendFixed(producer.Vecs[0], int64(42), false, mp))
+	producer.SetRowCount(1)
+
+	source := NewSource(1)
+	require.NoError(t, source.Begin(mp))
+	require.NoError(t, source.Append(producer))
+	producer.Clean(mp)
+	require.Zero(t, account.Snapshot().Used)
+	source.Finish(nil)
+
+	replayed, end, err := source.Next(context.Background(), 0, 0)
+	require.NoError(t, err)
+	require.False(t, end)
+	require.Nil(t, replayed.Vecs[0].AllocationAccountSelection())
+	require.Equal(t, int64(42), vector.GetFixedAtNoTypeCheck[int64](replayed.Vecs[0], 0))
+	source.ReleaseReader(0)
+}
+
 func TestReadSpilledBatchRejectsRuntimeOversizeBeforeAllocation(t *testing.T) {
 	file, err := os.CreateTemp(t.TempDir(), "oversize-spill")
 	require.NoError(t, err)

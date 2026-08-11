@@ -789,7 +789,11 @@ func (c *Compile) runOnce() (err error) {
 	}
 
 	for _, sql := range c.proc.Base.PostDmlSqlList.Values() {
-		err = c.runSql(sql)
+		if strings.HasPrefix(sql, "REPLACE_CYCLE_CHECK:") {
+			err = runDetectSql(c, strings.TrimPrefix(sql, "REPLACE_CYCLE_CHECK:"))
+		} else {
+			err = c.runSql(sql)
+		}
 		if err != nil {
 			c.debugLogFor19288(err, sql)
 			return err

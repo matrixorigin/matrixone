@@ -2424,6 +2424,7 @@ func constructPostDml(node *plan.Node, eng engine.Engine) *postdml.PostDml {
 		IsDelete:               oldCtx.IsDelete,
 		IsInsert:               oldCtx.IsInsert,
 		IsDeleteWithoutFilters: oldCtx.IsDeleteWithoutFilters,
+		ReplaceCycleCheck:      oldCtx.ReplaceCycleCheck,
 	}
 
 	if oldCtx.FullText != nil {

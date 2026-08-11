@@ -18,6 +18,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -299,4 +300,126 @@ func TestIssue25526PreparedUpdateJoinSecondExecute(t *testing.T) {
 			require.Equal(t, 0, cascadeOthers)
 		},
 	)
+}
+
+func TestIssue26875ConflictDrivenSelfActions(t *testing.T) {
+	embed.RunBaseClusterTests(t, func(c embed.Cluster) {
+		ctx, cancel := context.WithTimeout(context.Background(), 180*time.Second)
+		defer cancel()
+		cn, err := c.GetCNService(0)
+		require.NoError(t, err)
+		db, err := sql.Open("mysql", fmt.Sprintf(
+			"dump:111@tcp(127.0.0.1:%d)/?interpolateParams=false", cn.GetServiceConfig().CN.Frontend.Port))
+		require.NoError(t, err)
+		defer db.Close()
+		conn, err := db.Conn(ctx)
+		require.NoError(t, err)
+		defer conn.Close()
+		dbName := testutils.GetDatabaseName(t)
+		mustExec(t, ctx, conn, fmt.Sprintf("create database `%s`", dbName))
+		mustExec(t, ctx, conn, fmt.Sprintf("use `%s`", dbName))
+		defer db.ExecContext(context.Background(), fmt.Sprintf("drop database if exists `%s`", dbName))
+
+		for _, action := range []string{"cascade", "set null"} {
+			name := "empty_" + strings.ReplaceAll(action, " ", "_")
+			mustExec(t, ctx, conn, fmt.Sprintf(`create table %s(
+				id int primary key, pid int,
+				foreign key(pid) references %s(id) on delete %s)`, name, name, action))
+			mustExec(t, ctx, conn, fmt.Sprintf("replace into %s values(2,1),(1,null)", name))
+			var rows, linked int
+			require.NoError(t, conn.QueryRowContext(ctx, fmt.Sprintf(
+				"select count(*), count(case when id=2 and pid=1 then 1 end) from %s", name)).Scan(&rows, &linked))
+			require.Equal(t, 2, rows)
+			require.Equal(t, 1, linked)
+		}
+
+		mustExec(t, ctx, conn, `create table conflict_cascade(
+			id int primary key, u int unique, pid int, key idx_pid(pid),
+			foreign key(pid) references conflict_cascade(id) on delete cascade)`)
+		mustExec(t, ctx, conn, "insert into conflict_cascade values(1,10,null)")
+		mustExec(t, ctx, conn, "replace into conflict_cascade values(2,20,1),(4,10,null)")
+		var cascadeRows, cascadeParent int
+		require.NoError(t, conn.QueryRowContext(ctx,
+			"select count(*), count(case when id=4 and u=10 and pid is null then 1 end) from conflict_cascade").
+			Scan(&cascadeRows, &cascadeParent))
+		require.Equal(t, 1, cascadeRows)
+		require.Equal(t, 1, cascadeParent)
+
+		mustExec(t, ctx, conn, `create table conflict_setnull(
+			id int primary key, u int unique, pid int, unique key uk_pid(pid),
+			foreign key(pid) references conflict_setnull(id) on delete set null)`)
+		mustExec(t, ctx, conn, "insert into conflict_setnull values(1,10,null)")
+		mustExec(t, ctx, conn, "replace into conflict_setnull values(2,20,1),(4,10,null)")
+		var setNullRows, nulled int
+		require.NoError(t, conn.QueryRowContext(ctx,
+			"select count(*), count(case when id=2 and pid is null then 1 end) from conflict_setnull").
+			Scan(&setNullRows, &nulled))
+		require.Equal(t, 2, setNullRows)
+		require.Equal(t, 1, nulled)
+		mustExec(t, ctx, conn, "insert into conflict_setnull values(1,30,null),(5,50,1)")
+	})
+}
+
+func TestIssue26875ReplaceCycleChecksEvaluatedRowsOnly(t *testing.T) {
+	embed.RunBaseClusterTests(t, func(c embed.Cluster) {
+		ctx, cancel := context.WithTimeout(context.Background(), 180*time.Second)
+		defer cancel()
+		cn, err := c.GetCNService(0)
+		require.NoError(t, err)
+		db, err := sql.Open("mysql", fmt.Sprintf(
+			"dump:111@tcp(127.0.0.1:%d)/?interpolateParams=false", cn.GetServiceConfig().CN.Frontend.Port))
+		require.NoError(t, err)
+		defer db.Close()
+		conn, err := db.Conn(ctx)
+		require.NoError(t, err)
+		defer conn.Close()
+		dbName := testutils.GetDatabaseName(t)
+		mustExec(t, ctx, conn, fmt.Sprintf("create database `%s`", dbName))
+		mustExec(t, ctx, conn, fmt.Sprintf("use `%s`", dbName))
+		defer db.ExecContext(context.Background(), fmt.Sprintf("drop database if exists `%s`", dbName))
+
+		mustExec(t, ctx, conn, "set foreign_key_checks=0")
+		mustExec(t, ctx, conn, "create table cycle_a(id int primary key, cid int)")
+		mustExec(t, ctx, conn, "create table cycle_b(id int primary key, aid int)")
+		mustExec(t, ctx, conn, "create table cycle_c(id int primary key, bid int)")
+		mustExec(t, ctx, conn, `alter table cycle_a add constraint cycle_a_c_fk
+			foreign key(cid) references cycle_c(id) on delete cascade`)
+		mustExec(t, ctx, conn, `alter table cycle_b add constraint cycle_b_a_fk
+			foreign key(aid) references cycle_a(id) on delete cascade`)
+		mustExec(t, ctx, conn, `alter table cycle_c add constraint cycle_c_b_fk
+			foreign key(bid) references cycle_b(id) on delete cascade`)
+		mustExec(t, ctx, conn, "insert into cycle_a values(1,1),(99,999)")
+		mustExec(t, ctx, conn, "insert into cycle_b values(1,1)")
+		mustExec(t, ctx, conn, "insert into cycle_c values(1,1)")
+		mustExec(t, ctx, conn, "set foreign_key_checks=1")
+
+		// The post-action check must use the cast final image (id=1), not the
+		// original 1.6 literal, and the failed statement must remain atomic.
+		_, err = conn.ExecContext(ctx, "replace into cycle_a values(1.6,1)")
+		require.Error(t, err)
+		var a1, b1, c1 int
+		require.NoError(t, conn.QueryRowContext(ctx, "select count(*) from cycle_a where id=1 and cid=1").Scan(&a1))
+		require.NoError(t, conn.QueryRowContext(ctx, "select count(*) from cycle_b where id=1 and aid=1").Scan(&b1))
+		require.NoError(t, conn.QueryRowContext(ctx, "select count(*) from cycle_c where id=1 and bid=1").Scan(&c1))
+		require.Equal(t, 1, a1)
+		require.Equal(t, 1, b1)
+		require.Equal(t, 1, c1)
+
+		// Dynamic sources validate only their own evaluated rows; the unrelated
+		// historical orphan cycle_a(99,999) must not reject them.
+		mustExec(t, ctx, conn, "replace into cycle_a values(2,null)")
+		stmt, err := conn.PrepareContext(ctx, "replace into cycle_a values(?,?)")
+		require.NoError(t, err)
+		_, err = stmt.ExecContext(ctx, 3, nil)
+		require.NoError(t, err)
+		require.NoError(t, stmt.Close())
+		mustExec(t, ctx, conn, "replace into cycle_a values(2+3,null)")
+		mustExec(t, ctx, conn, "create table cycle_source(id int, bid int)")
+		mustExec(t, ctx, conn, "insert into cycle_source values(6,null)")
+		mustExec(t, ctx, conn, "replace into cycle_a select id,bid from cycle_source")
+		var inserted int
+		require.NoError(t, conn.QueryRowContext(ctx,
+			"select count(*) from cycle_a where id in (2,3,5,6)").Scan(&inserted))
+		require.Equal(t, 4, inserted)
+	})
 }

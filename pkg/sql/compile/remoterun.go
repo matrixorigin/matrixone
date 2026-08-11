@@ -919,6 +919,7 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			IsDelete:               t.PostDmlCtx.IsDelete,
 			IsInsert:               t.PostDmlCtx.IsInsert,
 			IsDeleteWithoutFilters: t.PostDmlCtx.IsDeleteWithoutFilters,
+			ReplaceCycleCheck:      t.PostDmlCtx.ReplaceCycleCheck,
 		}
 		if t.PostDmlCtx.FullText != nil {
 			ft := t.PostDmlCtx.FullText
@@ -1433,6 +1434,7 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 			IsDelete:               t.IsDelete,
 			IsInsert:               t.IsInsert,
 			IsDeleteWithoutFilters: t.IsDeleteWithoutFilters,
+			ReplaceCycleCheck:      t.ReplaceCycleCheck,
 		}
 
 		if t.FullText != nil {

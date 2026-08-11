@@ -35,6 +35,7 @@ type container struct {
 type PostDml struct {
 	ctr        container
 	PostDmlCtx *PostDmlCtx
+	cycleCheck *replaceCycleCheckConfig
 
 	vm.OperatorBase
 }
@@ -85,13 +86,33 @@ type PostDmlCtx struct {
 	IsDelete               bool
 	IsInsert               bool
 	IsDeleteWithoutFilters bool
+	ReplaceCycleCheck      string
 
 	// define various context for different tasks
 	FullText *PostDmlFullTextCtx
 }
 
-func (postdml *PostDml) Reset(proc *process.Process, pipelineFailed bool, err error) {
+type replaceCycleCheckColumn struct {
+	Name string `json:"name"`
+	Pos  int32  `json:"pos"`
+}
 
+type replaceCycleCheckFK struct {
+	ParentSchema string   `json:"parent_schema"`
+	ParentTable  string   `json:"parent_table"`
+	ChildCols    []string `json:"child_cols"`
+	ParentCols   []string `json:"parent_cols"`
+}
+
+type replaceCycleCheckConfig struct {
+	ChildSchema string                    `json:"child_schema"`
+	ChildTable  string                    `json:"child_table"`
+	PrimaryKey  []replaceCycleCheckColumn `json:"primary_key"`
+	ForeignKeys []replaceCycleCheckFK     `json:"foreign_keys"`
+}
+
+func (postdml *PostDml) Reset(proc *process.Process, pipelineFailed bool, err error) {
+	postdml.cycleCheck = nil
 }
 
 func (postdml *PostDml) Free(proc *process.Process, pipelineFailed bool, err error) {

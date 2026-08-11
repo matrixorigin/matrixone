@@ -4645,13 +4645,19 @@ func TestReplaceSelfRefCascade(t *testing.T) {
 	assert.True(t, queryHasNodeType(query, plan.Node_RECURSIVE_CTE),
 		"CASCADE self-ref FK must recursively collect the full descendant chain")
 	oldRowExclusions := 0
+	initialOwnershipMarkers := 0
 	for _, node := range query.Nodes {
 		if node.NodeType == plan.Node_JOIN && node.JoinType == plan.Node_ANTI {
 			oldRowExclusions++
 		}
+		if node.NodeType == plan.Node_JOIN && node.JoinType == plan.Node_MARK {
+			initialOwnershipMarkers++
+		}
 	}
-	assert.GreaterOrEqual(t, oldRowExclusions, 2,
-		"initial and recursive cascade sources must exclude main REPLACE old rows")
+	assert.GreaterOrEqual(t, oldRowExclusions, 1,
+		"recursive cascade sources must exclude main REPLACE old rows")
+	assert.GreaterOrEqual(t, initialOwnershipMarkers, 1,
+		"initial cascade rows must retain REPLACE ownership through recursion")
 	cascadeLocks := 0
 	for _, node := range query.Nodes {
 		if node.NodeType != plan.Node_LOCK_OP || len(node.Children) != 1 ||

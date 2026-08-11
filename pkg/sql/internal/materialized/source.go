@@ -175,7 +175,10 @@ func (s *Source) Append(bat *batch.Batch) error {
 	generation := s.generation
 	s.mu.Unlock()
 
-	cloned, err := bat.Dup(mp)
+	// The materialized source can outlive the producing join/hashbuild owner and
+	// is replayed by independent consumer pipelines. Do not retain the producer's
+	// allocation-account selection in the cached copy.
+	cloned, err := bat.DupWithoutAllocationAccount(mp)
 	if err != nil {
 		s.mu.Lock()
 		if s.generation == generation && s.active {

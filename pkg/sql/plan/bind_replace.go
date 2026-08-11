@@ -16,6 +16,7 @@ package plan
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"slices"
 	"strings"
@@ -61,48 +62,39 @@ func (builder *QueryBuilder) bindReplace(stmt *tree.Replace, bindCtx *BindContex
 	if err != nil {
 		return 0, err
 	}
-	if fkChecksEnabled {
-		lastNodeID, err = builder.applyOrderedSelfReferentialReplaceActions(
-			bindCtx, lastNodeID, tableDef, colName2Idx)
+	replaceOrdinalPos := int32(-1)
+	if fkChecksEnabled && hasOrderedSelfReferentialAction(tableDef) {
+		lastNodeID, replaceOrdinalPos, err = builder.appendReplaceSourceOrdinal(bindCtx, lastNodeID)
 		if err != nil {
 			return 0, err
 		}
 	}
-	return builder.appendDedupAndMultiUpdateNodesForBindReplace(
-		bindCtx, dmlCtx, lastNodeID, colName2Idx, skipUniqueIdx, irregularIndexes)
+	return builder.appendDedupAndMultiUpdateNodesForBindReplaceWithOrdinal(
+		bindCtx, dmlCtx, lastNodeID, colName2Idx, skipUniqueIdx, irregularIndexes, replaceOrdinalPos)
 }
 
-// applyOrderedSelfReferentialReplaceActions applies the part of self-referencing
-// CASCADE/SET NULL semantics that depends on the order of rows produced by the
-// REPLACE source. The input row image is materialized before it is referenced a
-// second time, so volatile expressions and parameters are evaluated exactly once.
-// For every row, only a later replacement row can act as its parent replacement.
-func (builder *QueryBuilder) applyOrderedSelfReferentialReplaceActions(
-	bindCtx *BindContext,
-	lastNodeID int32,
-	tableDef *plan.TableDef,
-	colName2Idx map[string]int32,
-) (int32, error) {
-	var selfActions []*plan.ForeignKeyDef
+func hasOrderedSelfReferentialAction(tableDef *plan.TableDef) bool {
 	for _, fk := range tableDef.Fkeys {
 		if fk.ForeignTbl == 0 &&
 			(fk.OnDelete == plan.ForeignKeyDef_CASCADE || fk.OnDelete == plan.ForeignKeyDef_SET_NULL) {
-			selfActions = append(selfActions, fk)
+			return true
 		}
 	}
-	if len(selfActions) == 0 {
-		return lastNodeID, nil
-	}
+	return false
+}
 
+func (builder *QueryBuilder) appendReplaceSourceOrdinal(
+	bindCtx *BindContext, lastNodeID int32,
+) (int32, int32, error) {
 	inputNode := builder.qry.Nodes[lastNodeID]
 	if len(inputNode.BindingTags) != 1 {
-		return 0, moerr.NewInternalError(
+		return 0, 0, moerr.NewInternalError(
 			builder.GetContext(), "self-referencing REPLACE source has no binding tag")
 	}
 	inputTag := inputNode.BindingTags[0]
 	rowNumberFunc, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "row_number", nil)
 	if err != nil {
-		return 0, err
+		return 0, 0, err
 	}
 	windowTag := builder.genNewBindTag()
 	windowID := builder.appendNode(&plan.Node{
@@ -124,136 +116,189 @@ func (builder *QueryBuilder) applyOrderedSelfReferentialReplaceActions(
 		BindingTags: []int32{windowTag},
 	}, bindCtx)
 
-	rowWidth := len(inputNode.ProjectList)
-	orderedTag := builder.genNewBindTag()
-	orderedProjection := getProjectionByLastNodeWithTag(builder, lastNodeID, inputTag)
-	orderedProjection = append(orderedProjection, &plan.Expr{
+	ordinalPos := int32(len(inputNode.ProjectList))
+	outputTag := builder.genNewBindTag()
+	projection := getProjectionByLastNodeWithTag(builder, lastNodeID, inputTag)
+	projection = append(projection, &plan.Expr{
 		Typ: rowNumberFunc.Typ,
 		Expr: &plan.Expr_Col{Col: &plan.ColRef{
 			RelPos: windowTag, ColPos: 0, Name: "__mo_replace_row_number",
 		}},
 	})
-	lastNodeID = builder.appendNode(&plan.Node{
+	return builder.appendNode(&plan.Node{
 		NodeType: plan.Node_PROJECT, Children: []int32{windowID},
-		ProjectList: orderedProjection, BindingTags: []int32{orderedTag},
-	}, bindCtx)
+		ProjectList: projection, BindingTags: []int32{outputTag},
+	}, bindCtx), ordinalPos, nil
+}
 
-	materialize := func(nodeID, tag int32) (int32, int32) {
+func (builder *QueryBuilder) applyOrderedSelfActionsFromConflicts(
+	bindCtx *BindContext,
+	lastNodeID int32,
+	inputTag int32,
+	tableDef *plan.TableDef,
+	newColName2Idx map[string]int32,
+	oldColName2Idx map[string][2]int32,
+	ordinalPos int32,
+) (int32, int32, error) {
+	inputProjection := getProjectionByLastNodeWithTag(builder, lastNodeID, inputTag)
+	rowWidth := len(inputProjection)
+	if ordinalPos < 0 || int(ordinalPos) >= rowWidth {
+		return 0, 0, moerr.NewInternalError(
+			builder.GetContext(), "self-referencing REPLACE ordinal is unavailable")
+	}
+	oldRowID, ok := oldColName2Idx[tableDef.Name+"."+catalog.Row_ID]
+	if !ok || int(oldRowID[1]) >= rowWidth {
+		return 0, 0, moerr.NewInternalError(
+			builder.GetContext(), "self-referencing REPLACE old RowID is unavailable")
+	}
+
+	materialize := func(nodeID, tag int32) int32 {
 		sinkID := appendSinkNodeWithTag(builder, bindCtx, nodeID, tag)
-		// Each ordered action compares two scans of the same row image. Use the
-		// replayable materialized sink contract so both consumers receive data
-		// and terminal signals independently.
 		builder.qry.Nodes[sinkID].ExtraOptions = materialized.CTESinkOption
 		if builder.preserveSinkProjection == nil {
 			builder.preserveSinkProjection = make(map[int32]struct{})
 		}
 		builder.preserveSinkProjection[sinkID] = struct{}{}
-		step := builder.appendStep(sinkID)
-		return step, tag
+		return builder.appendStep(sinkID)
 	}
-	step, currentTag := materialize(lastNodeID, orderedTag)
 
-	colIDToPos := make(map[uint64]int32, len(tableDef.Cols))
-	for _, col := range tableDef.Cols {
-		if pos, ok := colName2Idx[tableDef.Name+"."+col.Name]; ok {
-			colIDToPos[col.ColId] = pos
+	selfActions := make([]*plan.ForeignKeyDef, 0, len(tableDef.Fkeys))
+	for _, fk := range tableDef.Fkeys {
+		if fk.ForeignTbl == 0 &&
+			(fk.OnDelete == plan.ForeignKeyDef_CASCADE || fk.OnDelete == plan.ForeignKeyDef_SET_NULL) {
+			selfActions = append(selfActions, fk)
 		}
 	}
-	ordinalPos := int32(rowWidth)
-	ordinalType := rowNumberFunc.Typ
-
-	for _, fk := range selfActions {
+	step := materialize(lastNodeID, inputTag)
+	currentTag := inputTag
+	for actionIdx, fk := range selfActions {
 		leftTag := builder.genNewBindTag()
 		rightTag := builder.genNewBindTag()
 		leftID := builder.appendTaggedSinkScan(bindCtx, step, leftTag)
 		rightID := builder.appendTaggedSinkScan(bindCtx, step, rightTag)
-
-		joinPreds := make([]*plan.Expr, 0, len(fk.Cols)+1)
+		predicates := make([]*plan.Expr, 0, len(fk.Cols)+2)
 		for i, childColID := range fk.Cols {
-			childPos, childOK := colIDToPos[childColID]
-			parentPos, parentOK := colIDToPos[fk.ForeignCols[i]]
-			if !childOK || !parentOK || int(childPos) >= rowWidth || int(parentPos) >= rowWidth {
-				return 0, moerr.NewInternalError(
-					builder.GetContext(), "self-referencing REPLACE column mapping is incomplete")
+			childName := colIDToName(tableDef, childColID)
+			parentName := colIDToName(tableDef, fk.ForeignCols[i])
+			if childName == "" || parentName == "" {
+				return 0, 0, moerr.NewInternalError(
+					builder.GetContext(), "self-referencing REPLACE column is unavailable")
 			}
-			childExpr := &plan.Expr{Typ: inputNode.ProjectList[childPos].Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{
+			childPos, childOK := newColName2Idx[tableDef.Name+"."+childName]
+			parentRef, parentOK := oldColName2Idx[tableDef.Name+"."+parentName]
+			if !childOK || !parentOK || int(childPos) >= rowWidth || int(parentRef[1]) >= rowWidth {
+				return 0, 0, moerr.NewInternalError(
+					builder.GetContext(), "self-referencing REPLACE conflict mapping is incomplete")
+			}
+			childExpr := &plan.Expr{Typ: inputProjection[childPos].Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{
 				RelPos: leftTag, ColPos: childPos,
 			}}}
-			parentExpr := &plan.Expr{Typ: inputNode.ProjectList[parentPos].Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{
-				RelPos: rightTag, ColPos: parentPos,
+			parentExpr := &plan.Expr{Typ: inputProjection[parentRef[1]].Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{
+				RelPos: rightTag, ColPos: parentRef[1],
 			}}}
-			pred, bindErr := BindFuncExprImplByPlanExpr(
+			predicate, bindErr := BindFuncExprImplByPlanExpr(
 				builder.GetContext(), "=", []*plan.Expr{childExpr, parentExpr})
 			if bindErr != nil {
-				return 0, bindErr
+				return 0, 0, bindErr
 			}
-			joinPreds = append(joinPreds, pred)
+			predicates = append(predicates, predicate)
 		}
-		leftOrdinal := &plan.Expr{Typ: ordinalType, Expr: &plan.Expr_Col{Col: &plan.ColRef{
+		leftOrdinal := &plan.Expr{Typ: inputProjection[ordinalPos].Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{
 			RelPos: leftTag, ColPos: ordinalPos,
 		}}}
-		rightOrdinal := &plan.Expr{Typ: ordinalType, Expr: &plan.Expr_Col{Col: &plan.ColRef{
+		rightOrdinal := &plan.Expr{Typ: inputProjection[ordinalPos].Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{
 			RelPos: rightTag, ColPos: ordinalPos,
 		}}}
-		laterPred, bindErr := BindFuncExprImplByPlanExpr(
+		later, bindErr := BindFuncExprImplByPlanExpr(
 			builder.GetContext(), "<", []*plan.Expr{leftOrdinal, rightOrdinal})
 		if bindErr != nil {
-			return 0, bindErr
+			return 0, 0, bindErr
 		}
-		joinPreds = append(joinPreds, laterPred)
-
-		var marker *plan.Expr
-		if fk.OnDelete == plan.ForeignKeyDef_CASCADE {
-			lastNodeID = builder.appendNode(&plan.Node{
-				NodeType: plan.Node_JOIN, Children: []int32{leftID, rightID},
-				JoinType: plan.Node_ANTI, OnList: joinPreds,
-			}, bindCtx)
-		} else {
-			lastNodeID, marker, err = builder.insertMarkJoin(
-				leftID, rightID, joinPreds, nil, false, bindCtx)
-			if err != nil {
-				return 0, err
-			}
+		predicates = append(predicates, later)
+		oldRowIDExpr := &plan.Expr{Typ: inputProjection[oldRowID[1]].Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{
+			RelPos: rightTag, ColPos: oldRowID[1],
+		}}}
+		hasConflict, bindErr := BindFuncExprImplByPlanExpr(
+			builder.GetContext(), "isnotnull", []*plan.Expr{oldRowIDExpr})
+		if bindErr != nil {
+			return 0, 0, bindErr
 		}
+		predicates = append(predicates, hasConflict)
 
-		nextTag := builder.genNewBindTag()
-		nextProjection := make([]*plan.Expr, rowWidth+1)
+		joinID, marker, bindErr := builder.insertMarkJoin(
+			leftID, rightID, predicates, nil, false, bindCtx)
+		if bindErr != nil {
+			return 0, 0, bindErr
+		}
+		nextProjection := make([]*plan.Expr, rowWidth)
 		for pos := range nextProjection {
-			typ := ordinalType
-			if pos < rowWidth {
-				typ = inputNode.ProjectList[pos].Typ
-			}
-			nextProjection[pos] = &plan.Expr{Typ: typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{
+			nextProjection[pos] = &plan.Expr{Typ: inputProjection[pos].Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{
 				RelPos: leftTag, ColPos: int32(pos),
 			}}}
 		}
-		if marker != nil {
+		positionsToNull := make(map[int32]struct{})
+		if fk.OnDelete == plan.ForeignKeyDef_CASCADE {
+			for _, pos := range newColName2Idx {
+				if pos >= 0 && int(pos) < rowWidth {
+					positionsToNull[pos] = struct{}{}
+				}
+			}
+		} else {
+			actionCols := make(map[string]struct{}, len(fk.Cols))
 			for _, childColID := range fk.Cols {
-				childPos := colIDToPos[childColID]
-				nullExpr := &plan.Expr{Typ: nextProjection[childPos].Typ, Expr: &plan.Expr_Lit{
-					Lit: &plan.Literal{Isnull: true},
-				}}
-				nextProjection[childPos], err = BindFuncExprImplByPlanExpr(
-					builder.GetContext(), "if", []*plan.Expr{DeepCopyExpr(marker), nullExpr, nextProjection[childPos]})
-				if err != nil {
-					return 0, err
+				childName := colIDToName(tableDef, childColID)
+				actionCols[childName] = struct{}{}
+				positionsToNull[newColName2Idx[tableDef.Name+"."+childName]] = struct{}{}
+			}
+			// The derived index key was computed before the action. Null every
+			// affected key image as well, otherwise MULTI_UPDATE reinserts the old
+			// child key and leaves a ghost secondary/unique-index entry.
+			for _, idxDef := range tableDef.Indexes {
+				affected := false
+				for _, part := range idxDef.Parts {
+					if _, ok := actionCols[catalog.ResolveAlias(part)]; ok {
+						affected = true
+						break
+					}
+				}
+				if affected {
+					if pos, ok := newColName2Idx[idxDef.IndexTableName+"."+catalog.IndexTableIndexColName]; ok {
+						positionsToNull[pos] = struct{}{}
+					}
 				}
 			}
 		}
+		for pos := range positionsToNull {
+			nullExpr := &plan.Expr{Typ: nextProjection[pos].Typ, Expr: &plan.Expr_Lit{Lit: &plan.Literal{Isnull: true}}}
+			nextProjection[pos], bindErr = BindFuncExprImplByPlanExpr(
+				builder.GetContext(), "if", []*plan.Expr{DeepCopyExpr(marker), nullExpr, nextProjection[pos]})
+			if bindErr != nil {
+				return 0, 0, bindErr
+			}
+		}
+		nextTag := builder.genNewBindTag()
 		lastNodeID = builder.appendNode(&plan.Node{
-			NodeType: plan.Node_PROJECT, Children: []int32{lastNodeID},
+			NodeType: plan.Node_PROJECT, Children: []int32{joinID},
 			ProjectList: nextProjection, BindingTags: []int32{nextTag},
 		}, bindCtx)
-		step, currentTag = materialize(lastNodeID, nextTag)
+		if actionIdx == len(selfActions)-1 {
+			return lastNodeID, nextTag, nil
+		}
+		step = materialize(lastNodeID, nextTag)
+		currentTag = nextTag
 	}
 
 	lastNodeID = builder.appendTaggedSinkScan(bindCtx, step, currentTag)
-	finalTag := builder.genNewBindTag()
-	finalProjection := getProjectionByLastNodeWithTag(builder, lastNodeID, currentTag)[:rowWidth]
-	return builder.appendNode(&plan.Node{
-		NodeType: plan.Node_PROJECT, Children: []int32{lastNodeID},
-		ProjectList: finalProjection, BindingTags: []int32{finalTag},
-	}, bindCtx), nil
+	return lastNodeID, currentTag, nil
+}
+
+func colIDToName(tableDef *plan.TableDef, colID uint64) string {
+	for _, col := range tableDef.Cols {
+		if col.ColId == colID {
+			return col.Name
+		}
+	}
+	return ""
 }
 
 func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
@@ -263,6 +308,19 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 	colName2Idx map[string]int32,
 	skipUniqueIdx []bool,
 	irregularIndexes []*plan.IndexDef,
+) (int32, error) {
+	return builder.appendDedupAndMultiUpdateNodesForBindReplaceWithOrdinal(
+		bindCtx, dmlCtx, lastNodeID, colName2Idx, skipUniqueIdx, irregularIndexes, -1)
+}
+
+func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplaceWithOrdinal(
+	bindCtx *BindContext,
+	dmlCtx *DMLContext,
+	lastNodeID int32,
+	colName2Idx map[string]int32,
+	skipUniqueIdx []bool,
+	irregularIndexes []*plan.IndexDef,
+	replaceOrdinalPos int32,
 ) (int32, error) {
 	objRef := dmlCtx.objRefs[0]
 	tableDef := dmlCtx.tableDefs[0]
@@ -789,8 +847,8 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 		}
 
 		joinCond, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*plan.Expr{
-			leftExpr,
 			rightExpr,
+			leftExpr,
 		})
 
 		var dedupColName string
@@ -954,6 +1012,31 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 		}, bindCtx)
 	}
 
+	// Give the dedup output an explicit, flat owner before adding the old index
+	// rows. DEDUP is probe-pass-through and otherwise has no ProjectList of its
+	// own, which makes later dual-scan materialization unable to describe the
+	// physical row layout.
+	if replaceOrdinalPos >= 0 {
+		flatTag := builder.genNewBindTag()
+		flatProjection := make([]*plan.Expr, len(fullProjList))
+		for pos, expr := range fullProjList {
+			flatProjection[pos] = &plan.Expr{Typ: expr.Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{
+				RelPos: fullProjTag, ColPos: int32(pos),
+			}}}
+		}
+		lastNodeID = builder.appendNode(&plan.Node{
+			NodeType: plan.Node_PROJECT, Children: []int32{lastNodeID},
+			ProjectList: flatProjection, BindingTags: []int32{flatTag},
+		}, bindCtx)
+		for name, oldRef := range oldColName2Idx {
+			if oldRef[0] == fullProjTag {
+				oldColName2Idx[name] = [2]int32{flatTag, oldRef[1]}
+			}
+		}
+		fullProjTag = flatTag
+		fullProjList = flatProjection
+	}
+
 	// get old RowID for index tables
 	for i, idxDef := range tableDef.Indexes {
 		if skipUniqueIdx[i] && !needsOldIndexMaintenance {
@@ -970,8 +1053,11 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 			ScanSnapshot: bindCtx.snapshot,
 		}
 		idxTableNodeID := builder.appendNode(idxScanNode, bindCtx)
-
-		oldColName2Idx[idxTableDefs[i].Name+"."+catalog.Row_ID] = [2]int32{idxTag, idxTableDefs[i].Name2ColIndex[catalog.Row_ID]}
+		if replaceOrdinalPos < 0 {
+			oldColName2Idx[idxTableDefs[i].Name+"."+catalog.Row_ID] = [2]int32{
+				idxTag, idxTableDefs[i].Name2ColIndex[catalog.Row_ID],
+			}
+		}
 
 		lookupColName := indexLookupColumnName(idxDef)
 		idxPkPos := idxTableDefs[i].Name2ColIndex[lookupColName]
@@ -988,7 +1074,11 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 		}
 
 		oldPkPos := oldColName2Idx[idxTableDefs[i].Name+"."+lookupColName]
-		oldColName2Idx[idxTableDefs[i].Name+"."+lookupColName] = [2]int32{idxTag, idxTableDefs[i].Name2ColIndex[lookupColName]}
+		if replaceOrdinalPos < 0 {
+			oldColName2Idx[idxTableDefs[i].Name+"."+lookupColName] = [2]int32{
+				idxTag, idxTableDefs[i].Name2ColIndex[lookupColName],
+			}
+		}
 
 		rightExpr := &plan.Expr{
 			Typ: pkTyp,
@@ -1005,12 +1095,66 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 			rightExpr,
 		})
 
-		lastNodeID = builder.appendNode(&plan.Node{
-			NodeType: plan.Node_JOIN,
-			Children: []int32{lastNodeID, idxTableNodeID},
-			JoinType: plan.Node_LEFT,
-			OnList:   []*plan.Expr{joinCond},
+		if replaceOrdinalPos < 0 {
+			lastNodeID = builder.appendNode(&plan.Node{
+				NodeType: plan.Node_JOIN,
+				Children: []int32{lastNodeID, idxTableNodeID},
+				JoinType: plan.Node_LEFT,
+				OnList:   []*plan.Expr{joinCond},
+			}, bindCtx)
+			continue
+		}
+
+		joinProjection := make([]*plan.Expr, 0, len(fullProjList)+len(idxTableDefs[i].Cols))
+		for pos, expr := range fullProjList {
+			joinProjection = append(joinProjection, &plan.Expr{Typ: expr.Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{
+				RelPos: fullProjTag, ColPos: int32(pos),
+			}}})
+		}
+		for pos, col := range idxTableDefs[i].Cols {
+			joinProjection = append(joinProjection, &plan.Expr{Typ: col.Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{
+				RelPos: idxTag, ColPos: int32(pos), Name: col.Name,
+			}}})
+		}
+		joinTag := builder.genNewBindTag()
+		joinID := builder.appendNode(&plan.Node{
+			NodeType: plan.Node_JOIN, Children: []int32{lastNodeID, idxTableNodeID},
+			JoinType: plan.Node_LEFT, OnList: []*plan.Expr{joinCond},
 		}, bindCtx)
+		lastNodeID = builder.appendNode(&plan.Node{
+			NodeType: plan.Node_PROJECT, Children: []int32{joinID},
+			ProjectList: joinProjection, BindingTags: []int32{joinTag},
+		}, bindCtx)
+		for name, oldRef := range oldColName2Idx {
+			if oldRef[0] == fullProjTag {
+				oldColName2Idx[name] = [2]int32{joinTag, oldRef[1]}
+			}
+		}
+		baseWidth := int32(len(fullProjList))
+		oldColName2Idx[idxTableDefs[i].Name+"."+catalog.Row_ID] = [2]int32{
+			joinTag, baseWidth + idxTableDefs[i].Name2ColIndex[catalog.Row_ID],
+		}
+		oldColName2Idx[idxTableDefs[i].Name+"."+lookupColName] = [2]int32{
+			joinTag, baseWidth + idxTableDefs[i].Name2ColIndex[lookupColName],
+		}
+		fullProjTag = joinTag
+		fullProjList = joinProjection
+	}
+
+	if replaceOrdinalPos >= 0 {
+		conflictInputTag := fullProjTag
+		lastNodeID, fullProjTag, err = builder.applyOrderedSelfActionsFromConflicts(
+			bindCtx, lastNodeID, fullProjTag, tableDef, colName2Idx,
+			oldColName2Idx, replaceOrdinalPos)
+		if err != nil {
+			return 0, err
+		}
+		for name, oldRef := range oldColName2Idx {
+			if oldRef[0] == conflictInputTag {
+				oldColName2Idx[name] = [2]int32{fullProjTag, oldRef[1]}
+			}
+		}
+		fullProjList = builder.qry.Nodes[lastNodeID].ProjectList
 	}
 
 	lockTargets := make([]*plan.LockTarget, 0)
@@ -1376,18 +1520,146 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 		builder.qry.Nodes[lastNodeID].BindingTags = []int32{finalProjTag}
 	}
 
-	// Self-referencing FK constraint checks are handled by DetectSqls (generated in
-	// bindAndOptimizeReplaceQuery) which run after the REPLACE execution to verify
-	// that no child rows reference deleted parent rows.
+	cycleFks, err := builder.replaceCycleForeignKeys(tableDef)
+	if err != nil {
+		return 0, err
+	}
+	if len(cycleFks) > 0 {
+		encoded, encodeErr := builder.encodeReplaceCycleCheck(objRef.SchemaName, tableDef, cycleFks)
+		if encodeErr != nil {
+			return 0, encodeErr
+		}
+		pkName := catalog.ResolveAlias(tableDef.Pkey.Names[0])
+		materializedSinkID := appendSinkNodeWithTag(builder, bindCtx, lastNodeID, finalProjTag)
+		builder.qry.Nodes[materializedSinkID].ExtraOptions = materialized.CTESinkOption
+		if builder.preserveSinkProjection == nil {
+			builder.preserveSinkProjection = make(map[int32]struct{})
+		}
+		builder.preserveSinkProjection[materializedSinkID] = struct{}{}
+		materializedStep := builder.appendStep(materializedSinkID)
 
-	lastNodeID = builder.appendNode(&plan.Node{
+		postTag := builder.genNewBindTag()
+		postSourceID := builder.appendTaggedSinkScan(bindCtx, materializedStep, postTag)
+		postID := builder.appendNode(&plan.Node{
+			NodeType: plan.Node_POSTDML, Children: []int32{postSourceID},
+			PostDmlCtx: &plan.PostDmlCtx{
+				Ref: objRef, PrimaryKeyIdx: tableDef.Name2ColIndex[pkName],
+				PrimaryKeyName: pkName, ReplaceCycleCheck: encoded,
+			},
+		}, bindCtx)
+		builder.appendStep(postID)
+
+		writeTag := builder.genNewBindTag()
+		lastNodeID = builder.appendTaggedSinkScan(bindCtx, materializedStep, writeTag)
+		for i := range updateCtxList {
+			for j := range updateCtxList[i].InsertCols {
+				updateCtxList[i].InsertCols[j].RelPos = writeTag
+			}
+			for j := range updateCtxList[i].DeleteCols {
+				updateCtxList[i].DeleteCols[j].RelPos = writeTag
+			}
+		}
+	}
+
+	return builder.appendNode(&plan.Node{
 		NodeType:      plan.Node_MULTI_UPDATE,
 		Children:      []int32{lastNodeID},
 		BindingTags:   []int32{builder.genNewBindTag()},
 		UpdateCtxList: updateCtxList,
-	}, bindCtx)
+	}, bindCtx), nil
+}
 
-	return lastNodeID, nil
+type replaceCycleCheckColumn struct {
+	Name string `json:"name"`
+	Pos  int32  `json:"pos"`
+}
+
+type replaceCycleCheckFK struct {
+	ParentSchema string   `json:"parent_schema"`
+	ParentTable  string   `json:"parent_table"`
+	ChildCols    []string `json:"child_cols"`
+	ParentCols   []string `json:"parent_cols"`
+}
+
+type replaceCycleCheckConfig struct {
+	ChildSchema string                    `json:"child_schema"`
+	ChildTable  string                    `json:"child_table"`
+	PrimaryKey  []replaceCycleCheckColumn `json:"primary_key"`
+	ForeignKeys []replaceCycleCheckFK     `json:"foreign_keys"`
+}
+
+func (builder *QueryBuilder) encodeReplaceCycleCheck(
+	childSchema string, tableDef *plan.TableDef, cycleFks []*plan.ForeignKeyDef,
+) (string, error) {
+	config := replaceCycleCheckConfig{ChildSchema: childSchema, ChildTable: tableDef.Name}
+	for _, name := range tableDef.Pkey.Names {
+		name = catalog.ResolveAlias(name)
+		config.PrimaryKey = append(config.PrimaryKey, replaceCycleCheckColumn{
+			Name: name, Pos: tableDef.Name2ColIndex[name],
+		})
+	}
+	for _, fk := range cycleFks {
+		parentRef, parentDef, err := builder.compCtx.ResolveById(fk.ForeignTbl, nil)
+		if err != nil {
+			return "", err
+		}
+		if parentRef == nil || parentDef == nil {
+			return "", moerr.NewInternalErrorf(builder.GetContext(),
+				"foreign-key parent table %d is unavailable", fk.ForeignTbl)
+		}
+		item := replaceCycleCheckFK{
+			ParentSchema: parentRef.SchemaName,
+			ParentTable:  parentDef.Name,
+		}
+		for i, childID := range fk.Cols {
+			item.ChildCols = append(item.ChildCols, colIDToName(tableDef, childID))
+			item.ParentCols = append(item.ParentCols, colIDToName(parentDef, fk.ForeignCols[i]))
+		}
+		config.ForeignKeys = append(config.ForeignKeys, item)
+	}
+	encoded, err := json.Marshal(config)
+	return string(encoded), err
+}
+
+func (builder *QueryBuilder) replaceCycleForeignKeys(tableDef *plan.TableDef) ([]*plan.ForeignKeyDef, error) {
+	cycleFks := make([]*plan.ForeignKeyDef, 0, len(tableDef.Fkeys))
+	for _, fk := range tableDef.Fkeys {
+		if fk.ForeignTbl == 0 {
+			continue
+		}
+		pending := []uint64{fk.ForeignTbl}
+		seen := make(map[uint64]struct{})
+		closesCycle := false
+		for len(pending) > 0 && !closesCycle {
+			tableID := pending[len(pending)-1]
+			pending = pending[:len(pending)-1]
+			if tableID == tableDef.TblId {
+				closesCycle = true
+				break
+			}
+			if tableID == 0 {
+				continue
+			}
+			if _, ok := seen[tableID]; ok {
+				continue
+			}
+			seen[tableID] = struct{}{}
+			_, parentDef, err := builder.compCtx.ResolveById(tableID, nil)
+			if err != nil {
+				return nil, err
+			}
+			if parentDef == nil {
+				continue
+			}
+			for _, parentFK := range parentDef.Fkeys {
+				pending = append(pending, parentFK.ForeignTbl)
+			}
+		}
+		if closesCycle {
+			cycleFks = append(cycleFks, fk)
+		}
+	}
+	return cycleFks, nil
 }
 
 func ensureName2ColIndexForReplace(tableDef *TableDef) {
