@@ -78,7 +78,8 @@ func TestIssue26882ComQueryCacheTracksViewIdentity(t *testing.T) {
 		mustExec(t, ctx, ddl, "drop view vv")
 		rows, err := reader.QueryContext(ctx, exactSQL)
 		if rows != nil {
-			rows.Close()
+			defer rows.Close()
+			require.NoError(t, rows.Err())
 		}
 		require.Error(t, err)
 		var mysqlErr *mysql.MySQLError
