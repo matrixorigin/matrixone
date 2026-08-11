@@ -1876,7 +1876,11 @@ func makeBuiltInUUIDShifted(version int) executeLogicOfOverload {
 		for i := uint64(0); i < uint64(length); i++ {
 			num, null1 := nums.GetValue(i)
 			unit, null2 := units.GetValue(i)
-			if null1 || null2 || num == math.MaxInt64 ||
+			// math.MaxInt64 is the binder's invalid-interval marker;
+			// math.MinInt64 must be rejected explicitly because
+			// JudgeIntervalNumOverflow negates num, which overflows there and
+			// lets the value through to wrapping interval arithmetic.
+			if null1 || null2 || num == math.MaxInt64 || num == math.MinInt64 ||
 				types.JudgeIntervalNumOverflow(num, types.IntervalType(unit)) != nil {
 				if err := rs.Append(types.Uuid{}, true); err != nil {
 					return err

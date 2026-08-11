@@ -69,6 +69,15 @@ select uuid_v7(interval 1 minute) = uuid_v7(interval 1 minute);
 select uuid_v7(interval null minute) is null;
 ➤ uuid_v7(INTERVAL null minute) is null[-7,1,0]  𝄀
 1
+select uuid_v7(interval -9223372036854775808 second) is null;
+➤ uuid_v7(INTERVAL -9223372036854775808 second) is null[-7,1,0]  𝄀
+1
+select uuid_v7(interval -9223372036854775808 microsecond) is null;
+➤ uuid_v7(INTERVAL -9223372036854775808 microsecond) is null[-7,1,0]  𝄀
+1
+select uuid_v6(interval -9223372036854775808 second) is null, uuid_v1(interval -9223372036854775808 second) is null;
+➤ uuid_v6(INTERVAL -9223372036854775808 second) is null[-7,1,0]  ¦  uuid_v1(INTERVAL -9223372036854775808 second) is null[-7,1,0]  𝄀
+1  ¦  1
 select uuid_v4(interval 1 minute);
 invalid argument function uuid_v4, bad value [INTERVAL]
 select uuid_v7(5, 3);

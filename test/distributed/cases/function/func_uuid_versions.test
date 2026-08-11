@@ -27,6 +27,10 @@ select uuid_v6(interval 1 hour) > uuid_v6(), uuid_v6(interval -1 hour) < uuid_v6
 select uuid_v7(interval 1 month) > uuid_v7(interval 27 day), uuid_v7(interval 1 month) < uuid_v7(interval 32 day);
 select uuid_v7(interval 1 minute) = uuid_v7(interval 1 minute);
 select uuid_v7(interval null minute) is null;
+-- extreme interval counts yield NULL (math.MinInt64 must not wrap in interval arithmetic)
+select uuid_v7(interval -9223372036854775808 second) is null;
+select uuid_v7(interval -9223372036854775808 microsecond) is null;
+select uuid_v6(interval -9223372036854775808 second) is null, uuid_v1(interval -9223372036854775808 second) is null;
 select uuid_v4(interval 1 minute);
 -- the internal (count, unit) form must not be callable directly
 select uuid_v7(5, 3);

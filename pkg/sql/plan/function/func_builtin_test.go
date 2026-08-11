@@ -2425,16 +2425,27 @@ func TestBuiltInUUIDShifted(t *testing.T) {
 		})
 	}
 
-	// invalid-interval marker yields NULL, like date_add
-	result := vector.NewFunctionResultWrapper(types.T_uuid.ToType(), proc.Mp())
-	defer result.Free()
-	require.NoError(t, result.PreExtendAndReset(1))
-	nums := testutil.NewInt64Vector(1, types.T_int64.ToType(), proc.Mp(), false, nil, []int64{math.MaxInt64})
-	units := testutil.NewInt64Vector(1, types.T_int64.ToType(), proc.Mp(), false, nil, []int64{int64(types.Hour)})
-	defer nums.Free(proc.Mp())
-	defer units.Free(proc.Mp())
-	require.NoError(t, makeBuiltInUUIDShifted(7)([]*vector.Vector{nums, units}, result, proc, 1, nil))
-	require.True(t, result.GetResultVector().GetNulls().Contains(0))
+	// extreme interval counts yield NULL, like date_add: math.MaxInt64 is the
+	// binder's invalid-interval marker, and math.MinInt64 would overflow
+	// JudgeIntervalNumOverflow's negation and wrap in interval arithmetic
+	for _, c := range []struct {
+		num  int64
+		unit types.IntervalType
+	}{
+		{math.MaxInt64, types.Hour},
+		{math.MinInt64, types.Second},
+		{math.MinInt64, types.MicroSecond},
+	} {
+		result := vector.NewFunctionResultWrapper(types.T_uuid.ToType(), proc.Mp())
+		require.NoError(t, result.PreExtendAndReset(1))
+		nums := testutil.NewInt64Vector(1, types.T_int64.ToType(), proc.Mp(), false, nil, []int64{c.num})
+		units := testutil.NewInt64Vector(1, types.T_int64.ToType(), proc.Mp(), false, nil, []int64{int64(c.unit)})
+		require.NoError(t, makeBuiltInUUIDShifted(7)([]*vector.Vector{nums, units}, result, proc, 1, nil))
+		require.True(t, result.GetResultVector().GetNulls().Contains(0), "num=%d unit=%d", c.num, c.unit)
+		nums.Free(proc.Mp())
+		units.Free(proc.Mp())
+		result.Free()
+	}
 }
 
 func TestUUIDExtractNullableDeduction(t *testing.T) {
