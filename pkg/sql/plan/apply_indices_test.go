@@ -4688,6 +4688,22 @@ func TestFullTextJoinRewriteRightChild(t *testing.T) {
 	require.Len(t, joinNode.OnList, 1)
 }
 
+func TestFullTextSemiJoinRewriteRightChild(t *testing.T) {
+	builder, joinID, leftScanID, rightScanID := buildFullTextJoinRewriteTestPlan(t, false, true, false)
+	joinNode := builder.qry.Nodes[joinID]
+	joinNode.JoinType = planpb.Node_SEMI
+
+	newID, err := builder.applyIndices(joinID, map[[2]int32]int{}, map[[2]int32]*planpb.Expr{})
+	require.NoError(t, err)
+	require.Equal(t, joinID, newID)
+	require.Equal(t, leftScanID, joinNode.Children[0])
+	require.NotEqual(t, rightScanID, joinNode.Children[1])
+	require.Equal(t, planpb.Node_JOIN, builder.qry.Nodes[joinNode.Children[1]].NodeType)
+	require.Equal(t, 1, countFullTextFunctionScans(builder, joinNode.Children[1]))
+	require.False(t, nodeHasFullTextMatchFilter(builder.qry.Nodes[rightScanID]))
+	require.Len(t, joinNode.OnList, 1)
+}
+
 func TestFullTextJoinRewriteFallsBackToScanContextWhenJoinContextIsNil(t *testing.T) {
 	builder, joinID, leftScanID, _ := buildFullTextJoinRewriteTestPlan(t, true, false, false)
 	builder.ctxByNode[joinID] = nil
