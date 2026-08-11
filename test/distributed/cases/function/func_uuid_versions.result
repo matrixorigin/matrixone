@@ -1,0 +1,146 @@
+select length(uuid_v7()), length(uuid_v1()), length(uuid_v4()), length(uuid_v6());
+➤ length(uuid_v7())[-5,64,0]  ¦  length(uuid_v1())[-5,64,0]  ¦  length(uuid_v4())[-5,64,0]  ¦  length(uuid_v6())[-5,64,0]  𝄀
+36  ¦  36  ¦  36  ¦  36
+select is_uuid(uuid_v7()), is_uuid(uuid_v1()), is_uuid(uuid_v4()), is_uuid(uuid_v6());
+➤ is_uuid(uuid_v7())[-7,1,0]  ¦  is_uuid(uuid_v1())[-7,1,0]  ¦  is_uuid(uuid_v4())[-7,1,0]  ¦  is_uuid(uuid_v6())[-7,1,0]  𝄀
+1  ¦  1  ¦  1  ¦  1
+select substring(cast(uuid_v7() as varchar), 15, 1), substring(cast(uuid_v1() as varchar), 15, 1), substring(cast(uuid_v4() as varchar), 15, 1), substring(cast(uuid_v6() as varchar), 15, 1);
+➤ substring(cast(uuid_v7() as varchar), 15, 1)[12,49151,0]  ¦  substring(cast(uuid_v1() as varchar), 15, 1)[12,49151,0]  ¦  substring(cast(uuid_v4() as varchar), 15, 1)[12,49151,0]  ¦  substring(cast(uuid_v6() as varchar), 15, 1)[12,49151,0]  𝄀
+7  ¦  1  ¦  4  ¦  6
+select uuid_v7('2026-01-01 00:00:00') = uuid_v7('2026-01-01 00:00:00');
+➤ uuid_v7(2026-01-01 00:00:00) = uuid_v7(2026-01-01 00:00:00)[-7,1,0]  𝄀
+1
+select uuid('2026-01-01 00:00:00') = uuid_v7('2026-01-01 00:00:00');
+➤ uuid(2026-01-01 00:00:00) = uuid_v7(2026-01-01 00:00:00)[-7,1,0]  𝄀
+1
+select uuid_v7('2026-01-01 00:00:00') < uuid_v7('2026-01-02 00:00:00');
+➤ uuid_v7(2026-01-01 00:00:00) < uuid_v7(2026-01-02 00:00:00)[-7,1,0]  𝄀
+1
+select is_uuid(uuid_v7('2026-01-01 00:00:00')), substring(cast(uuid_v7('2026-01-01 00:00:00') as varchar), 15, 1);
+➤ is_uuid(uuid_v7(2026-01-01 00:00:00))[-7,1,0]  ¦  substring(cast(uuid_v7(2026-01-01 00:00:00) as varchar), 15, 1)[12,65535,0]  𝄀
+1  ¦  7
+select substring(cast(uuid_v7('2026-01-01 00:00:00') as varchar), 20, 17);
+➤ substring(cast(uuid_v7(2026-01-01 00:00:00) as varchar), 20, 17)[12,65535,0]  𝄀
+8000-000000000000
+select uuid_v7(now()) <= uuid_v7();
+➤ uuid_v7(now()) <= uuid_v7()[-7,1,0]  𝄀
+1
+select uuid_v7('9999-01-01') > uuid_v7();
+➤ uuid_v7(9999-01-01) > uuid_v7()[-7,1,0]  𝄀
+1
+select uuid_v1('2026-01-01 00:00:00') = uuid_v1('2026-01-01 00:00:00'), uuid_v6('2026-01-01 00:00:00') = uuid_v6('2026-01-01 00:00:00');
+➤ uuid_v1(2026-01-01 00:00:00) = uuid_v1(2026-01-01 00:00:00)[-7,1,0]  ¦  uuid_v6(2026-01-01 00:00:00) = uuid_v6(2026-01-01 00:00:00)[-7,1,0]  𝄀
+1  ¦  1
+select is_uuid(uuid_v1('2026-01-01 00:00:00')), is_uuid(uuid_v6('2026-01-01 00:00:00'));
+➤ is_uuid(uuid_v1(2026-01-01 00:00:00))[-7,1,0]  ¦  is_uuid(uuid_v6(2026-01-01 00:00:00))[-7,1,0]  𝄀
+1  ¦  1
+select substring(cast(uuid_v1('2026-01-01 00:00:00') as varchar), 15, 1), substring(cast(uuid_v6('2026-01-01 00:00:00') as varchar), 15, 1);
+➤ substring(cast(uuid_v1(2026-01-01 00:00:00) as varchar), 15, 1)[12,65535,0]  ¦  substring(cast(uuid_v6(2026-01-01 00:00:00) as varchar), 15, 1)[12,65535,0]  𝄀
+1  ¦  6
+select uuid_v6('2026-01-01 00:00:00') < uuid_v6('2026-01-02 00:00:00');
+➤ uuid_v6(2026-01-01 00:00:00) < uuid_v6(2026-01-02 00:00:00)[-7,1,0]  𝄀
+1
+select uuid_v6(now() - interval 1 minute) < uuid_v6();
+➤ uuid_v6(now() - INTERVAL 1 minute) < uuid_v6()[-7,1,0]  𝄀
+1
+select uuid_v6('5000-01-01') > uuid_v6();
+➤ uuid_v6(5000-01-01) > uuid_v6()[-7,1,0]  𝄀
+1
+select uuid_v6('9999-01-01');
+invalid input: uuid_v6 timestamp out of range: 9999-01-01 00:00:00
+select is_uuid(uuid(interval 1 minute)), is_uuid(uuid_v7(interval 1 minute)), is_uuid(uuid_v1(interval 1 hour)), is_uuid(uuid_v6(interval 1 hour));
+➤ is_uuid(uuid(INTERVAL 1 minute))[-7,1,0]  ¦  is_uuid(uuid_v7(INTERVAL 1 minute))[-7,1,0]  ¦  is_uuid(uuid_v1(INTERVAL 1 hour))[-7,1,0]  ¦  is_uuid(uuid_v6(INTERVAL 1 hour))[-7,1,0]  𝄀
+1  ¦  1  ¦  1  ¦  1
+select substring(cast(uuid_v7(interval 1 minute) as varchar), 15, 1), substring(cast(uuid_v1(interval 1 hour) as varchar), 15, 1), substring(cast(uuid_v6(interval 1 hour) as varchar), 15, 1);
+➤ substring(cast(uuid_v7(INTERVAL 1 minute) as varchar), 15, 1)[12,49151,0]  ¦  substring(cast(uuid_v1(INTERVAL 1 hour) as varchar), 15, 1)[12,49151,0]  ¦  substring(cast(uuid_v6(INTERVAL 1 hour) as varchar), 15, 1)[12,49151,0]  𝄀
+7  ¦  1  ¦  6
+select uuid_v7(interval 1 minute) > uuid_v7(), uuid_v7(interval -1 minute) < uuid_v7();
+➤ uuid_v7(INTERVAL 1 minute) > uuid_v7()[-7,1,0]  ¦  uuid_v7(INTERVAL -1 minute) < uuid_v7()[-7,1,0]  𝄀
+1  ¦  1
+select uuid_v6(interval 1 hour) > uuid_v6(), uuid_v6(interval -1 hour) < uuid_v6();
+➤ uuid_v6(INTERVAL 1 hour) > uuid_v6()[-7,1,0]  ¦  uuid_v6(INTERVAL -1 hour) < uuid_v6()[-7,1,0]  𝄀
+1  ¦  1
+select uuid_v7(interval 1 month) > uuid_v7(interval 27 day), uuid_v7(interval 1 month) < uuid_v7(interval 32 day);
+➤ uuid_v7(INTERVAL 1 month) > uuid_v7(INTERVAL 27 day)[-7,1,0]  ¦  uuid_v7(INTERVAL 1 month) < uuid_v7(INTERVAL 32 day)[-7,1,0]  𝄀
+1  ¦  1
+select uuid_v7(interval 1 minute) = uuid_v7(interval 1 minute);
+➤ uuid_v7(INTERVAL 1 minute) = uuid_v7(INTERVAL 1 minute)[-7,1,0]  𝄀
+0
+select uuid_v7(interval null minute) is null;
+➤ uuid_v7(INTERVAL null minute) is null[-7,1,0]  𝄀
+1
+select uuid_v7(interval -9223372036854775808 second) is null;
+➤ uuid_v7(INTERVAL -9223372036854775808 second) is null[-7,1,0]  𝄀
+1
+select uuid_v7(interval -9223372036854775808 microsecond) is null;
+➤ uuid_v7(INTERVAL -9223372036854775808 microsecond) is null[-7,1,0]  𝄀
+1
+select uuid_v6(interval -9223372036854775808 second) is null, uuid_v1(interval -9223372036854775808 second) is null;
+➤ uuid_v6(INTERVAL -9223372036854775808 second) is null[-7,1,0]  ¦  uuid_v1(INTERVAL -9223372036854775808 second) is null[-7,1,0]  𝄀
+1  ¦  1
+select uuid_v4(interval 1 minute);
+invalid argument function uuid_v4, bad value [INTERVAL]
+select uuid_v7(5, 3);
+invalid argument uuid_v7 function needs zero or one arg, bad value 2
+select uuid(5, 3);
+invalid argument uuid function needs zero or one arg, bad value 2
+select uuid_v6(5, 3);
+invalid argument uuid_v6 function needs zero or one arg, bad value 2
+select uuid_extract_version(uuid()), uuid_extract_version(uuid_v1()), uuid_extract_version(uuid_v4()), uuid_extract_version(uuid_v6()), uuid_extract_version(uuid_v7());
+➤ uuid_extract_version(uuid())[5,16,0]  ¦  uuid_extract_version(uuid_v1())[5,16,0]  ¦  uuid_extract_version(uuid_v4())[5,16,0]  ¦  uuid_extract_version(uuid_v6())[5,16,0]  ¦  uuid_extract_version(uuid_v7())[5,16,0]  𝄀
+7  ¦  1  ¦  4  ¦  6  ¦  7
+select uuid_extract_timestamp(uuid_v7('2026-01-02 03:04:05.678'));
+➤ uuid_extract_timestamp(uuid_v7(2026-01-02 03:04:05.678))[93,64,0]  𝄀
+2026-01-02 03:04:05.678000000
+select uuid_extract_timestamp(uuid_v1('2026-01-02 03:04:05.678'));
+➤ uuid_extract_timestamp(uuid_v1(2026-01-02 03:04:05.678))[93,64,0]  𝄀
+2026-01-02 03:04:05.678000000
+select uuid_extract_timestamp(uuid_v6('2026-01-02 03:04:05.678'));
+➤ uuid_extract_timestamp(uuid_v6(2026-01-02 03:04:05.678))[93,64,0]  𝄀
+2026-01-02 03:04:05.678000000
+select unix_timestamp(uuid_extract_timestamp(cast('1ec9414c-232a-6b00-b3c8-9f6bdeced846' as uuid)));
+➤ unix_timestamp(uuid_extract_timestamp(cast(1ec9414c-232a-6b00-b3c8-9f6bdeced846 as uuid)))[-5,64,0]  𝄀
+1645557742
+select uuid_extract_version(cast('1ec9414c-232a-6b00-b3c8-9f6bdeced846' as uuid));
+➤ uuid_extract_version(cast(1ec9414c-232a-6b00-b3c8-9f6bdeced846 as uuid))[5,16,0]  𝄀
+6
+select uuid_extract_timestamp(uuid_v4()) is null, uuid_extract_timestamp(uuid_v7()) is not null;
+➤ uuid_extract_timestamp(uuid_v4()) is null[-7,1,0]  ¦  uuid_extract_timestamp(uuid_v7()) is not null[-7,1,0]  𝄀
+1  ¦  1
+select uuid_extract_version(null) is null, uuid_extract_timestamp(null) is null, cast(null as uuid) is null;
+➤ uuid_extract_version(null) is null[-7,1,0]  ¦  uuid_extract_timestamp(null) is null[-7,1,0]  ¦  cast(null as uuid) is null[-7,1,0]  𝄀
+1  ¦  1  ¦  1
+select uuid_extract_version(cast('00000000-0000-0000-0000-000000000000' as uuid)) is null, uuid_extract_timestamp(cast('00000000-0000-0000-0000-000000000000' as uuid)) is null;
+➤ uuid_extract_version(cast(00000000-0000-0000-0000-000000000000 as uuid)) is null[-7,1,0]  ¦  uuid_extract_timestamp(cast(00000000-0000-0000-0000-000000000000 as uuid)) is null[-7,1,0]  𝄀
+1  ¦  1
+create table uuid_extract_ctas as select uuid_extract_version(cast('00000000-0000-0000-0000-000000000000' as uuid)) v, uuid_extract_timestamp(uuid_v4()) ts;
+desc uuid_extract_ctas;
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+v  ¦  SMALLINT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+ts  ¦  TIMESTAMP(0)  ¦  YES  ¦    ¦  null  ¦    ¦  
+select v is null, ts is null from uuid_extract_ctas;
+➤ v is null[-7,1,0]  ¦  ts is null[-7,1,0]  𝄀
+1  ¦  1
+drop table uuid_extract_ctas;
+create view uuid_extract_view as select uuid_extract_version(uuid_v4()) v, uuid_extract_timestamp(uuid_v4()) ts;
+desc uuid_extract_view;
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+v  ¦  SMALLINT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+ts  ¦  TIMESTAMP(0)  ¦  YES  ¦    ¦  null  ¦    ¦  
+drop view uuid_extract_view;
+select uuid_extract_timestamp(uuid_v7('2026-01-01')) = cast('2026-01-01' as timestamp);
+➤ uuid_extract_timestamp(uuid_v7(2026-01-01)) = cast(2026-01-01 as timestamp)[-7,1,0]  𝄀
+1
+select uuid_extract_timestamp(uuid_v7(interval 1 day)) > current_timestamp();
+➤ uuid_extract_timestamp(uuid_v7(INTERVAL 1 day)) > current_timestamp()[-7,1,0]  𝄀
+1
+select uuid_v7(1);
+invalid argument function uuid_v7, bad value [BIGINT]
+select uuid_v4(1);
+invalid argument function uuid_v4, bad value [BIGINT]
+create table uuid_versions_t (id uuid default uuid_v4() primary key, name varchar(10));
+insert into uuid_versions_t (name) values ('Tom'), ('Jane'), ('Bob');
+select count(distinct id) from uuid_versions_t;
+➤ count(distinct id)[-5,64,0]  𝄀
+3
+drop table uuid_versions_t;
