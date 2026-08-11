@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	commonutil "github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
@@ -415,7 +416,11 @@ func (exec *txnExecutor) Exec(
 	prepared := false
 	if statementOption.HasParams() {
 		vec := statementOption.Params(exec.s.mp)
-		proc.SetPrepareParams(vec)
+		kinds := make([]vector.PrepareParamKind, vec.Length())
+		for i := range kinds {
+			kinds[i] = vec.GetPrepareParamKindAt(i)
+		}
+		proc.SetPrepareParamsWithMeta(vec, nil, kinds)
 		prepared = true
 		defer vec.Free(proc.Mp())
 	}

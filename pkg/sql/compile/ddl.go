@@ -2057,13 +2057,15 @@ func (s *Scope) CreateTable(c *Compile) error {
 		if params := c.proc.GetPrepareParams(); c.pn.IsPrepare && params != nil && params.Length() > 0 {
 			values := make([]string, params.Length())
 			nulls := make([]bool, params.Length())
+			kinds := make([]vector.PrepareParamKind, params.Length())
 			for i := range values {
 				nulls[i] = params.IsNull(uint64(i))
+				kinds[i] = c.proc.GetPrepareParamKind(i)
 				if !nulls[i] {
 					values[i] = string(params.GetRawBytesAt(i))
 				}
 			}
-			statementOption = statementOption.WithParamsAndNulls(values, nulls)
+			statementOption = statementOption.WithParamsNullsAndKinds(values, nulls, kinds)
 		}
 		res, err := func() (executor.Result, error) {
 			oldCtx := c.proc.Ctx

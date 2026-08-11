@@ -76,6 +76,19 @@ func TestIssue25408PreparedNestedExactAndStringDomains(t *testing.T) {
 				}
 			})
 		}
+		mustExec(t, ctx, conn, "create table aggregate_sink(id int, v double)")
+		mustExec(t, ctx, conn, "insert into aggregate_sink values (2, 8.5)")
+		t.Run("approximate comparison domain", func(t *testing.T) {
+			stmt, prepareErr := conn.PrepareContext(ctx,
+				"delete from aggregate_sink where id = 2 and v > (select sum(? + 1) from n)")
+			require.NoError(t, prepareErr)
+			defer stmt.Close()
+			result, execErr := stmt.ExecContext(ctx, float64(0.5))
+			require.NoError(t, execErr)
+			affected, affectedErr := result.RowsAffected()
+			require.NoError(t, affectedErr)
+			require.Equal(t, int64(1), affected)
+		})
 
 		mustExec(t, ctx, conn, "create table bool_strings(v text)")
 		mustExec(t, ctx, conn, "set @bool_value = true")
@@ -85,7 +98,33 @@ func TestIssue25408PreparedNestedExactAndStringDomains(t *testing.T) {
 		mustExec(t, ctx, conn, "deallocate prepare bool_insert")
 		mustExec(t, ctx, conn, "prepare bool_numeric from 'select ? + 1'")
 		requireIssue25408Scalar(t, ctx, conn, "2", "execute bool_numeric using @bool_value")
+		mustExec(t, ctx, conn, "set @bool_value = false")
+		requireIssue25408Scalar(t, ctx, conn, "1", "execute bool_numeric using @bool_value")
 		mustExec(t, ctx, conn, "deallocate prepare bool_numeric")
+		mustExec(t, ctx, conn, "prepare bool_float from 'select cast(? as double)'")
+		requireIssue25408Scalar(t, ctx, conn, "0", "execute bool_float using @bool_value")
+		mustExec(t, ctx, conn, "set @bool_value = true")
+		requireIssue25408Scalar(t, ctx, conn, "1", "execute bool_float using @bool_value")
+		mustExec(t, ctx, conn, "deallocate prepare bool_float")
+		mustExec(t, ctx, conn, "prepare bool_decimal from 'select cast(? as decimal(10,2))'")
+		requireIssue25408Scalar(t, ctx, conn, "1.00", "execute bool_decimal using @bool_value")
+		mustExec(t, ctx, conn, "set @bool_value = false")
+		requireIssue25408Scalar(t, ctx, conn, "0.00", "execute bool_decimal using @bool_value")
+		mustExec(t, ctx, conn, "deallocate prepare bool_decimal")
+		mustExec(t, ctx, conn, "create table bool_numbers(v double)")
+		mustExec(t, ctx, conn, "prepare bool_number_insert from 'insert into bool_numbers values (? + 1e0)'")
+		mustExec(t, ctx, conn, "set @bool_value = true")
+		mustExec(t, ctx, conn, "execute bool_number_insert using @bool_value")
+		mustExec(t, ctx, conn, "set @bool_value = false")
+		mustExec(t, ctx, conn, "execute bool_number_insert using @bool_value")
+		requireIssue25408Scalar(t, ctx, conn, "3", "select sum(v) from bool_numbers")
+		mustExec(t, ctx, conn, "deallocate prepare bool_number_insert")
+		mustExec(t, ctx, conn, "set @bool_value = true")
+		mustExec(t, ctx, conn, "prepare bool_ctas from 'create table bool_ctas as select ? + 1e0 as v'")
+		mustExec(t, ctx, conn, "execute bool_ctas using @bool_value")
+		requireIssue25408Scalar(t, ctx, conn, "2", "select v from bool_ctas")
+		mustExec(t, ctx, conn, "deallocate prepare bool_ctas")
+		mustExec(t, ctx, conn, "set @bool_value = true")
 		mustExec(t, ctx, conn, "prepare bool_limit from 'select a from n order by a limit ?'")
 		requireIssue25408Scalar(t, ctx, conn, "1", "execute bool_limit using @bool_value")
 		mustExec(t, ctx, conn, "deallocate prepare bool_limit")
@@ -109,6 +148,8 @@ func TestIssue25408PreparedNestedExactAndStringDomains(t *testing.T) {
 			{name: "mod", query: "select ? + mod(3, 2)", arg: int64(3), want: "4"},
 			{name: "coalesce", query: "select ? + coalesce(1, 0)", arg: int64(3), want: "4"},
 			{name: "double", query: "select ? + (-1 + 0)", arg: float64(2.5), want: "1.5"},
+			{name: "boolean true float", query: "select ? + 1e0", arg: true, want: "2"},
+			{name: "boolean false float", query: "select ? + 1e0", arg: false, want: "1"},
 			{name: "uint64", query: "select ? + (-1 + 0)", arg: ^uint64(0), want: "18446744073709551614"},
 		} {
 			t.Run(test.name, func(t *testing.T) {

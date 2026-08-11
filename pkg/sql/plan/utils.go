@@ -3622,11 +3622,10 @@ func unwrapPreparedImplicitCast(expr *Expr) *Expr {
 // runtime-specialized producers or vector wrappers will read the wrong layout.
 func preparedLocalInputTypes(query *Query, node *Node) map[[2]int32]plan.Type {
 	result := make(map[[2]int32]plan.Type)
-	if len(node.Children) > 0 {
-		childID := node.Children[0]
+	for relPos, childID := range node.Children {
 		if childID >= 0 && int(childID) < len(query.Nodes) && query.Nodes[childID] != nil {
 			for col, expr := range query.Nodes[childID].ProjectList {
-				result[[2]int32{0, int32(col)}] = expr.Typ
+				result[[2]int32{int32(relPos), int32(col)}] = expr.Typ
 			}
 		}
 	}

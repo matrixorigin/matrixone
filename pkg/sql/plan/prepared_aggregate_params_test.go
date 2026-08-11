@@ -315,6 +315,27 @@ func TestPreparedNumericAggregateParameterIdentity(t *testing.T) {
 	require.NoError(t, err)
 }
 
+func TestPreparedScalarAggregateSubqueryRuntimeTypes(t *testing.T) {
+	prepare := buildPreparedAggregatePlan(t, "select (select sum(? + 1) from nation) + 1")
+	specialized, err := FillValuesOfParamsInPlan(context.Background(), prepare.Plan, []any{
+		ParamValue{Value: int64(1), RuntimeType: types.T_int64},
+	})
+	require.NoError(t, err)
+	query := specialized.GetQuery()
+	for _, node := range query.Nodes {
+		if node.NodeType != planpb.Node_JOIN || len(node.Children) != 2 || len(node.ProjectList) != 1 {
+			continue
+		}
+		producer := query.Nodes[node.Children[1]]
+		require.NotNil(t, producer)
+		require.Len(t, producer.ProjectList, 1)
+		require.Equal(t, producer.ProjectList[0].Typ, node.ProjectList[0].Typ,
+			"flattened scalar aggregate materialization must keep producer and join consumer physical types equal")
+		return
+	}
+	t.Fatal("flattened scalar aggregate join not found")
+}
+
 func TestPreparedNumericAggregateDoesNotCoerceStrings(t *testing.T) {
 	tests := []string{
 		"select sum(n_name) from nation",

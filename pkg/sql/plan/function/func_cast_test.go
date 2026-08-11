@@ -223,12 +223,26 @@ func TestPreparedTypedTextToBit(t *testing.T) {
 	run("malformed decimal rejected", vector.PrepareParamDecimal, []string{"5.9junk"}, bit64, nil, true)
 }
 
-func TestPreparedBooleanTextToInteger(t *testing.T) {
+func TestPreparedBooleanTextToNumeric(t *testing.T) {
 	proc := testutil.NewProcess(t)
+	decimal64 := types.New(types.T_decimal64, 10, 2)
+	decimal128 := types.New(types.T_decimal128, 30, 2)
+	decimal256 := types.New(types.T_decimal256, 65, 2)
+	want128, err := types.ParseDecimal128("1.00", 30, 2)
+	require.NoError(t, err)
+	want256, err := types.ParseDecimal256("1.00", 65, 2)
+	require.NoError(t, err)
 	for _, test := range []struct {
 		target types.Type
 		want   any
-	}{{types.T_int64.ToType(), []int64{1, 0}}, {types.T_uint64.ToType(), []uint64{1, 0}}} {
+	}{
+		{types.T_int64.ToType(), []int64{1, 0}},
+		{types.T_uint64.ToType(), []uint64{1, 0}},
+		{types.T_float64.ToType(), []float64{1, 0}},
+		{decimal64, []types.Decimal64{100, 0}},
+		{decimal128, []types.Decimal128{want128, {}}},
+		{decimal256, []types.Decimal256{want256, {}}},
+	} {
 		tcc := NewFunctionTestCase(proc,
 			[]FunctionTestInput{
 				NewFunctionTestInput(types.T_varchar.ToType(), []string{"true", "false"}, nil),

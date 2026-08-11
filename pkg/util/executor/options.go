@@ -372,6 +372,9 @@ func (opts StatementOption) Params(
 		nulls,
 		mp,
 	)
+	if len(opts.paramKinds) == len(opts.params) {
+		vec.SetPrepareParamKinds(opts.paramKinds)
+	}
 	return vec
 }
 
@@ -389,6 +392,18 @@ func (opts StatementOption) WithParamsAndNulls(
 ) StatementOption {
 	opts.params = values
 	opts.paramNulls = nulls
+	opts.paramKinds = nil
+	return opts
+}
+
+func (opts StatementOption) WithParamsNullsAndKinds(
+	values []string,
+	nulls []bool,
+	kinds []vector.PrepareParamKind,
+) StatementOption {
+	opts.params = values
+	opts.paramNulls = nulls
+	opts.paramKinds = kinds
 	return opts
 }
 

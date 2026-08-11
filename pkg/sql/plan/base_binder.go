@@ -2447,8 +2447,8 @@ func (b *baseBinder) bindPreparedDynamicComparison(
 		}
 		return nil, true, rightErr
 	}
-	leftDynamic := leftScan.hasParam && isNumericContextNode(leftAst)
-	rightDynamic := rightScan.hasParam && isNumericContextNode(rightAst)
+	leftDynamic := leftScan.hasParam && (isNumericContextNode(leftAst) || leftScan.dynamicCandidate)
+	rightDynamic := rightScan.hasParam && (isNumericContextNode(rightAst) || rightScan.dynamicCandidate)
 	if !leftDynamic && !rightDynamic {
 		return nil, false, nil
 	}
@@ -2484,7 +2484,15 @@ func (b *baseBinder) bindPreparedDynamicComparison(
 		// predicates into broad matches.
 		return nil, false, nil
 	}
-	dynamicExpr, err := b.bindNumericExprWithDefaultContext(dynamicAst, depth, nil)
+	var dynamicOuter *Type
+	if otherType, ok := numericTypeFromAstScan(otherScan, nil); ok &&
+		makeTypeByPlan2Type(otherType).IsFloat() {
+		// An approximate operand determines the whole comparison domain. Feed
+		// that positive type evidence into scalar subquery/aggregate binding so
+		// it does not retain the prepare-time DECIMAL256 fallback.
+		dynamicOuter = &otherType
+	}
+	dynamicExpr, err := b.bindNumericExprWithDefaultContext(dynamicAst, depth, dynamicOuter)
 	if err != nil {
 		return nil, true, err
 	}

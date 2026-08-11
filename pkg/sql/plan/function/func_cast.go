@@ -6118,6 +6118,20 @@ func decimalStringToBit(ctx context.Context, proc *process.Process, value string
 	return 0, moerr.NewOutOfRangef(ctx, fmt.Sprintf("bit(%d)", bitSize), "value '%v'", value)
 }
 
+func normalizePreparedBooleanNumericBytes(source *vector.Vector, row int, value []byte) ([]byte, error) {
+	if source.GetPrepareParamKindAt(row) != vector.PrepareParamBoolean {
+		return value, nil
+	}
+	boolean, _, err := preparedBooleanToBit(string(value))
+	if err != nil {
+		return value, err
+	}
+	if boolean == 0 {
+		return []byte("0"), nil
+	}
+	return []byte("1"), nil
+}
+
 func strToSigned[T constraints.Signed](
 	ctx context.Context,
 	from vector.FunctionParameterWrapper[types.Varlena],
@@ -6135,15 +6149,9 @@ func strToSigned[T constraints.Signed](
 				return err
 			}
 		} else {
-			if from.GetSourceVector().GetPrepareParamKindAt(int(i)) == vector.PrepareParamBoolean {
-				boolean, _, err := preparedBooleanToBit(string(v))
-				if err != nil {
-					return moerr.NewInvalidArg(ctx, "cast to int", string(v))
-				}
-				if err = to.Append(T(boolean), false); err != nil {
-					return err
-				}
-				continue
+			v, err := normalizePreparedBooleanNumericBytes(from.GetSourceVector(), int(i), v)
+			if err != nil {
+				return moerr.NewInvalidArg(ctx, "cast to int", string(v))
 			}
 			if isBinary {
 				var r int64
@@ -6592,15 +6600,9 @@ func strToUnsigned[T constraints.Unsigned](
 				return err
 			}
 		} else {
-			if from.GetSourceVector().GetPrepareParamKindAt(int(i)) == vector.PrepareParamBoolean {
-				boolean, _, err := preparedBooleanToBit(string(v))
-				if err != nil {
-					return moerr.NewInvalidArg(ctx, fmt.Sprintf("cast to uint%d", bitSize), string(v))
-				}
-				if err = to.Append(T(boolean), false); err != nil {
-					return err
-				}
-				continue
+			v, err := normalizePreparedBooleanNumericBytes(from.GetSourceVector(), int(i), v)
+			if err != nil {
+				return moerr.NewInvalidArg(ctx, fmt.Sprintf("cast to uint%d", bitSize), string(v))
 			}
 			var res *string
 			if isBinary {
@@ -6660,6 +6662,10 @@ func strToFloat[T constraints.Float](
 				return err
 			}
 		} else {
+			v, err := normalizePreparedBooleanNumericBytes(from.GetSourceVector(), int(i), v)
+			if err != nil {
+				return err
+			}
 			parseBitSize := bitSize
 			if !isBinary && bitSize == 32 && to.GetType().Width > 0 && to.GetType().Scale >= 0 {
 				parseBitSize = 64
@@ -6702,6 +6708,10 @@ func strToDecimal64(
 				return err
 			}
 		} else {
+			v, err := normalizePreparedBooleanNumericBytes(from.GetSourceVector(), int(i), v)
+			if err != nil {
+				return err
+			}
 			s := convertByteSliceToString(v)
 			if !isb {
 				isExplicit := len(explicit) > 0 && explicit[0]
@@ -6897,6 +6907,10 @@ func strToDecimal128(
 				return err
 			}
 		} else {
+			v, err := normalizePreparedBooleanNumericBytes(from.GetSourceVector(), int(i), v)
+			if err != nil {
+				return err
+			}
 			s := convertByteSliceToString(v)
 			if !isb {
 				isExplicit := len(explicit) > 0 && explicit[0]
@@ -6980,6 +6994,10 @@ func strToDecimal256(
 				return err
 			}
 		} else {
+			v, err := normalizePreparedBooleanNumericBytes(from.GetSourceVector(), int(i), v)
+			if err != nil {
+				return err
+			}
 			s := convertByteSliceToString(v)
 			if !isb {
 				isExplicit := len(explicit) > 0 && explicit[0]
