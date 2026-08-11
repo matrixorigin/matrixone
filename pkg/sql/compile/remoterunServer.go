@@ -15,6 +15,7 @@
 package compile
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -28,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/system"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -1059,7 +1061,26 @@ func (receiver *messageReceiverOnServer) sendBatch(
 		return nil
 	}
 
-	data, err := b.MarshalBinary()
+	service := ""
+	if receiver.cnInformation.lockService != nil {
+		service = receiver.cnInformation.lockService.GetConfig().ServiceID
+	}
+	version := int64(0)
+	if runtime := moruntime.ServiceRuntime(service); runtime != nil {
+		if value, ok := runtime.GetGlobalVariables(moruntime.MOProtocolVersion); ok {
+			version, _ = value.(int64)
+		}
+	}
+	if b.HasBinaryStringMetadata() && version < defines.MORPCVersion17 {
+		return moerr.NewInvalidStateNoCtx(
+			"binary-string provenance requires MORPCVersion17 for remote results")
+	}
+	if b.HasPrepareParamKindMetadata() && version < defines.MORPCVersion12 {
+		return moerr.NewInvalidStateNoCtx(
+			"prepared parameter provenance requires MORPCVersion12 for remote results")
+	}
+	var transport bytes.Buffer
+	data, err := b.MarshalBinaryWithPrepareParamKinds(&transport, false)
 	if err != nil {
 		return err
 	}

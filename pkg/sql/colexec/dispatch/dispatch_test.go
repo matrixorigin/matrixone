@@ -137,11 +137,13 @@ func TestMarshalRemoteBatchBinaryStringProtocolGate(t *testing.T) {
 		defines.MORPCVersion12,
 		defines.MORPCVersion13,
 		defines.MORPCVersion14,
+		defines.MORPCVersion15,
+		defines.MORPCVersion16,
 	} {
 		runtime.SetGlobalVariables(moruntime.MOProtocolVersion, version)
 		buf := bytes.NewBufferString("sentinel")
 		_, err := marshalRemoteBatch(proc, dynamic, buf)
-		require.ErrorContains(t, err, "binary-string provenance requires MORPCVersion16")
+		require.ErrorContains(t, err, "binary-string provenance requires MORPCVersion17")
 		require.Equal(t, "sentinel", buf.String())
 	}
 
@@ -149,13 +151,17 @@ func TestMarshalRemoteBatchBinaryStringProtocolGate(t *testing.T) {
 	require.NoError(t, staticRows.Vecs[0].SetPrepareParamKindsWithMP(
 		[]vector.PrepareParamKind{vector.PrepareParamInteger, vector.PrepareParamNone}, proc.Mp()))
 	defer staticRows.Clean(proc.Mp())
-	runtime.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion14)
+	runtime.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion12)
 	buf := bytes.NewBufferString("sentinel")
-	_, err := marshalRemoteBatch(proc, staticRows, buf)
-	require.ErrorContains(t, err, "binary-string provenance requires MORPCVersion16")
-	require.Equal(t, "sentinel", buf.String())
+	staticEncoded, err := marshalRemoteBatch(proc, staticRows, buf)
+	require.NoError(t, err)
+	staticDecoded := batch.NewOffHeapEmpty()
+	defer staticDecoded.Clean(proc.Mp())
+	require.NoError(t, staticDecoded.UnmarshalBinaryWithPrepareParamKinds(staticEncoded, proc.Mp()))
+	require.Equal(t, vector.PrepareParamInteger, staticDecoded.Vecs[0].GetPrepareParamKindAt(0))
+	require.Equal(t, vector.PrepareParamNone, staticDecoded.Vecs[0].GetPrepareParamKindAt(1))
 
-	runtime.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion16)
+	runtime.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion17)
 	buf.Reset()
 	encoded, err := marshalRemoteBatch(proc, dynamic, buf)
 	require.NoError(t, err)

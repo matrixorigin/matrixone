@@ -29,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	mock_morpc "github.com/matrixorigin/matrixone/pkg/common/morpc/mock_morpc"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	rt "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -272,12 +273,12 @@ func TestNewCompile_CreatesCorrectStructure(t *testing.T) {
 		},
 	}
 
-	runtime.SetGlobalVariables(rt.MOProtocolVersion, defines.MORPCVersion15)
+	runtime.SetGlobalVariables(rt.MOProtocolVersion, defines.MORPCVersion16)
 	compile, err := receiver.newCompile()
 	require.Error(t, err)
 	require.Nil(t, compile)
 
-	runtime.SetGlobalVariables(rt.MOProtocolVersion, defines.MORPCVersion16)
+	runtime.SetGlobalVariables(rt.MOProtocolVersion, defines.MORPCVersion17)
 	compile, err = receiver.newCompile()
 	require.NoError(t, err)
 	require.NotNil(t, compile)
@@ -705,6 +706,59 @@ func TestMessageReceiverSendBatchUsesNegotiatedCredits(t *testing.T) {
 	require.Len(t, flow.pending, 1)
 	flow.mu.Unlock()
 	require.NoError(t, flow.acknowledge(sent.GetBatchSequence()))
+}
+
+func TestMessageReceiverSendBatchPreservesMetadataAndRejectsOldProtocol(t *testing.T) {
+	runtime := rt.ServiceRuntime("")
+	original, hadOriginal := runtime.GetGlobalVariables(rt.MOProtocolVersion)
+	t.Cleanup(func() {
+		if hadOriginal {
+			runtime.SetGlobalVariables(rt.MOProtocolVersion, original)
+		} else {
+			runtime.SetGlobalVariables(rt.MOProtocolVersion, defines.MORPCLatestVersion)
+		}
+	})
+
+	mp := mpool.MustNewZero()
+	bat := batch.NewWithSize(1)
+	bat.Vecs[0] = vector.NewVec(types.T_text.ToType())
+	require.NoError(t, vector.AppendBytes(bat.Vecs[0], []byte("raw"), false, mp))
+	require.NoError(t, vector.AppendBytes(bat.Vecs[0], []byte("text"), false, mp))
+	require.NoError(t, bat.Vecs[0].SetIsBinaryStringAt(0, true))
+	require.NoError(t, bat.Vecs[0].SetPrepareParamKindsWithMP([]vector.PrepareParamKind{
+		vector.PrepareParamInteger, vector.PrepareParamNone,
+	}, mp))
+	bat.SetRowCount(2)
+	defer bat.Clean(mp)
+
+	ctrl := gomock.NewController(t)
+	session := mock_morpc.NewMockClientSession(ctrl)
+	receiver := &messageReceiverOnServer{
+		messageCtx:      context.Background(),
+		connectionCtx:   context.Background(),
+		messageId:       404,
+		clientSession:   session,
+		messageAcquirer: func() morpc.Message { return &pipeline.Message{} },
+		maxMessageSize:  1 << 20,
+	}
+	runtime.SetGlobalVariables(rt.MOProtocolVersion, defines.MORPCVersion16)
+	require.ErrorContains(t, receiver.sendBatch(bat), "MORPCVersion17")
+
+	var sent *pipeline.Message
+	session.EXPECT().Write(gomock.Any(), gomock.Any()).DoAndReturn(
+		func(_ context.Context, message any) error {
+			sent = message.(*pipeline.Message)
+			return nil
+		})
+	runtime.SetGlobalVariables(rt.MOProtocolVersion, defines.MORPCVersion17)
+	require.NoError(t, receiver.sendBatch(bat))
+	require.NotNil(t, sent)
+	decoded := batch.NewOffHeapEmpty()
+	defer decoded.Clean(mp)
+	require.NoError(t, decoded.UnmarshalBinaryWithPrepareParamKinds(sent.Data, mp))
+	require.True(t, decoded.Vecs[0].GetIsBinaryStringAt(0))
+	require.False(t, decoded.Vecs[0].GetIsBinaryStringAt(1))
+	require.Equal(t, vector.PrepareParamInteger, decoded.Vecs[0].GetPrepareParamKindAt(0))
 }
 
 func TestMessageReceiverSendFragmentedBatchRollsBackCreditOnWriteFailure(t *testing.T) {

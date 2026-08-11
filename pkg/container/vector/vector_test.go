@@ -1994,7 +1994,7 @@ func TestBinaryStringMetadataStableDecodeAndInplaceSort(t *testing.T) {
 		PrepareParamBoolean, PrepareParamDecimal,
 	}, mp))
 	compact.InplaceSortAndCompact()
-	require.Equal(t, 3, compact.Length())
+	require.Equal(t, 4, compact.Length())
 	require.True(t, compact.IsNull(0))
 	require.Equal(t, PrepareParamNone, compact.GetPrepareParamKindAt(0))
 	require.Equal(t, "a", string(compact.GetBytesAt(1)))
@@ -2003,7 +2003,48 @@ func TestBinaryStringMetadataStableDecodeAndInplaceSort(t *testing.T) {
 	require.Equal(t, "z", string(compact.GetBytesAt(2)))
 	require.True(t, compact.GetIsBinaryStringAt(2))
 	require.Equal(t, PrepareParamInteger, compact.GetPrepareParamKindAt(2))
+	require.Equal(t, "z", string(compact.GetBytesAt(3)))
+	require.False(t, compact.GetIsBinaryStringAt(3))
+	require.Equal(t, PrepareParamNone, compact.GetPrepareParamKindAt(3))
 	compact.Free(mp)
+
+	for _, binaryFirst := range []bool{true, false} {
+		metadataDistinct := NewVec(types.T_text.ToType())
+		for range 2 {
+			require.NoError(t, AppendBytes(metadataDistinct, []byte("same"), false, mp))
+		}
+		binaryRow := 1
+		if binaryFirst {
+			binaryRow = 0
+		}
+		require.NoError(t, metadataDistinct.SetIsBinaryStringAt(binaryRow, true))
+		require.NoError(t, metadataDistinct.SetPrepareParamKindsWithMP([]PrepareParamKind{
+			PrepareParamInteger, PrepareParamFloat,
+		}, mp))
+		metadataDistinct.InplaceSortAndCompact()
+		require.Equal(t, 2, metadataDistinct.Length())
+		require.Equal(t, binaryFirst, metadataDistinct.GetIsBinaryStringAt(0))
+		require.Equal(t, !binaryFirst, metadataDistinct.GetIsBinaryStringAt(1))
+		require.Equal(t, PrepareParamInteger, metadataDistinct.GetPrepareParamKindAt(0))
+		require.Equal(t, PrepareParamFloat, metadataDistinct.GetPrepareParamKindAt(1))
+		metadataDistinct.Free(mp)
+	}
+
+	groupingDistinct := NewVec(types.T_text.ToType())
+	require.NoError(t, AppendBytes(groupingDistinct, nil, true, mp))
+	require.NoError(t, AppendBytes(groupingDistinct, nil, true, mp))
+	require.NoError(t, AppendBytes(groupingDistinct, []byte("x"), false, mp))
+	require.NoError(t, AppendBytes(groupingDistinct, []byte("y"), false, mp))
+	groupingDistinct.GetGrouping().Add(0)
+	require.NoError(t, groupingDistinct.SetPrepareParamKindsWithMP([]PrepareParamKind{
+		PrepareParamInteger, PrepareParamFloat, PrepareParamBoolean, PrepareParamDecimal,
+	}, mp))
+	require.NoError(t, groupingDistinct.SetIsBinaryStringAt(2, true))
+	groupingDistinct.InplaceSortAndCompact()
+	require.Equal(t, 4, groupingDistinct.Length())
+	require.True(t, groupingDistinct.GetGrouping().Contains(0))
+	require.False(t, groupingDistinct.GetGrouping().Contains(1))
+	groupingDistinct.Free(mp)
 
 	for _, compact := range []bool{false, true} {
 		prepareOnly := NewVec(types.T_text.ToType())
@@ -5323,6 +5364,25 @@ func BenchmarkUnionBatchPrepareParamKind(b *testing.B) {
 		require.NoError(b, AppendFixed(source, int64(i), false, mp))
 	}
 	source.SetPrepareParamKind(PrepareParamFloat)
+	destination := NewVec(types.T_int64.ToType())
+	defer destination.Free(mp)
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		destination.ResetWithSameType()
+		if err := destination.UnionBatch(source, 0, source.Length(), nil, mp); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkUnionBatchNoMetadata(b *testing.B) {
+	mp := mpool.MustNewZero()
+	source := NewVec(types.T_int64.ToType())
+	defer source.Free(mp)
+	for i := 0; i < 1024; i++ {
+		require.NoError(b, AppendFixed(source, int64(i), false, mp))
+	}
 	destination := NewVec(types.T_int64.ToType())
 	defer destination.Free(mp)
 	b.ReportAllocs()
