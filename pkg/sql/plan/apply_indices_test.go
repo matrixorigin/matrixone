@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	statspb "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
@@ -2934,9 +2935,10 @@ func TestTryIndexOnlyScanEncodedCostControls(t *testing.T) {
 func TestTryIndexOnlyScanChargesNullableLeadingResiduals(t *testing.T) {
 	parts := []string{"tenant_id", catalog.CreateAlias(catalog.CPrimaryKeyColName)}
 	tests := []struct {
-		name        string
-		makeLiteral func(int32) *planpb.Expr
-		makeRuntime func(int32) *planpb.Expr
+		name             string
+		makeLiteral      func(int32) *planpb.Expr
+		makeRuntime      func(int32) *planpb.Expr
+		runtimeWantIndex bool
 	}{
 		{
 			name: "equality",
@@ -2957,7 +2959,8 @@ func TestTryIndexOnlyScanChargesNullableLeadingResiduals(t *testing.T) {
 			},
 		},
 		{
-			name: "between",
+			name:             "between",
+			runtimeWantIndex: true,
 			makeLiteral: func(relPos int32) *planpb.Expr {
 				return makeIntBetweenFilterExpr(relPos, 0, 7, 8)
 			},
@@ -2969,6 +2972,10 @@ func TestTryIndexOnlyScanChargesNullableLeadingResiduals(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
+			runtimeName := "nullable runtime value crosses"
+			if test.runtimeWantIndex {
+				runtimeName = "unknown runtime bounds fail open"
+			}
 			for _, variant := range []struct {
 				name         string
 				makeFilter   func(int32) *planpb.Expr
@@ -2976,7 +2983,10 @@ func TestTryIndexOnlyScanChargesNullableLeadingResiduals(t *testing.T) {
 				wantIndex    bool
 			}{
 				{name: "non-null literal stays below crossover", makeFilter: test.makeLiteral, wantIndex: true},
-				{name: "nullable runtime value crosses", makeFilter: test.makeRuntime, wantResidual: true},
+				{
+					name: runtimeName, makeFilter: test.makeRuntime,
+					wantResidual: true, wantIndex: test.runtimeWantIndex,
+				},
 			} {
 				t.Run(variant.name, func(t *testing.T) {
 					filter := variant.makeFilter(0)
@@ -3181,6 +3191,123 @@ func TestEncodedIndexCostBoundaryControls(t *testing.T) {
 		require.True(t, valid)
 		require.InDelta(t, costCtx.baseWork, work, 1e-9)
 		require.True(t, skip)
+	})
+
+	t.Run("base scan work uses block-granular estimate", func(t *testing.T) {
+		const tableCnt = 2_000_000.0
+		const outputRows = 60.0
+		filter := makeIntBetweenFilterExpr(0, 0, 100, 105)
+		filter.Selectivity = outputRows / tableCnt
+		builder, scanID, idxDef, colRefCnt := newEncodedIndexCostTestCase(
+			t,
+			[]string{"tenant_id", catalog.CreateAlias(catalog.CPrimaryKeyColName)},
+			[]*planpb.Expr{filter},
+			&planpb.Stats{
+				TableCnt: tableCnt, Outcnt: outputRows, Selectivity: filter.Selectivity,
+				Cost: outputRows, BlockNum: 1,
+			},
+			map[int32]int{0: 1},
+			false,
+		)
+		node := builder.qry.Nodes[scanID]
+		node.FilterList[0].GetF().Args[0].GetCol().RelPos = node.BindingTags[0]
+		costCtx := builder.newEncodedRegularIndexCostContext(node, colRefCnt)
+		work, skip, valid := costCtx.score(
+			idxDef, []int32{0}, nil, encodedRegularIndexCostIndexOnly,
+		)
+		require.True(t, valid)
+		require.Equal(t, float64(objectio.BlockMaxRows), costCtx.baseRows)
+		require.Less(t, work, costCtx.baseWork)
+		require.False(t, skip)
+	})
+
+	t.Run("prepared range fails open against base scan", func(t *testing.T) {
+		const tableCnt = 2_000_000.0
+		const outputRows = 200.0
+		filter := makeParamBetweenFilterExpr(0, 0, 0, 1)
+		filter.Selectivity = outputRows / tableCnt
+		builder, scanID, idxDef, colRefCnt := newEncodedIndexCostTestCase(
+			t,
+			[]string{"tenant_id", catalog.CreateAlias(catalog.CPrimaryKeyColName)},
+			[]*planpb.Expr{filter},
+			&planpb.Stats{
+				TableCnt: tableCnt, Outcnt: outputRows, Selectivity: filter.Selectivity,
+				Cost: 10_000, BlockNum: 2,
+			},
+			map[int32]int{0: 1},
+			false,
+		)
+		node := builder.qry.Nodes[scanID]
+		node.FilterList[0].GetF().Args[0].GetCol().RelPos = node.BindingTags[0]
+		costCtx := builder.newEncodedRegularIndexCostContext(node, colRefCnt)
+		rankingWork, skip, valid := costCtx.score(
+			idxDef, []int32{0}, nil, encodedRegularIndexCostIndexOnly,
+		)
+		require.True(t, valid)
+		require.Greater(t, rankingWork, costCtx.baseWork,
+			"neutral prepared-range work remains available for sibling ranking")
+		require.False(t, skip,
+			"unknown prepared bounds cannot prove the base scan is cheaper")
+	})
+
+	t.Run("prepared residual preserves interval-dominant rejection", func(t *testing.T) {
+		equality := makeRangeFilterExpr(0, 0, "=", 7)
+		equality.Selectivity = 0.5
+		runtimeRange := makeParamBetweenFilterExpr(0, 3, 0, 1)
+		runtimeRange.Selectivity = 0.13
+		builder, scanID, idxDef, colRefCnt := newEncodedIndexCostTestCase(
+			t,
+			[]string{"tenant_id", "event_time", catalog.CreateAlias(catalog.CPrimaryKeyColName)},
+			[]*planpb.Expr{equality, runtimeRange},
+			&planpb.Stats{
+				TableCnt: 800_000, Outcnt: 52_000, Selectivity: 0.065,
+				Cost: 10_000, BlockNum: 1,
+			},
+			map[int32]int{0: 1, 3: 1},
+			false,
+		)
+		node := builder.qry.Nodes[scanID]
+		for _, filter := range node.FilterList {
+			filter.GetF().Args[0].GetCol().RelPos = node.BindingTags[0]
+		}
+		costCtx := builder.newEncodedRegularIndexCostContext(node, colRefCnt)
+		work, skip, valid := costCtx.score(
+			idxDef, []int32{0}, nil, encodedRegularIndexCostIndexOnly,
+		)
+		require.True(t, valid)
+		require.Greater(t, work, costCtx.baseWork)
+		require.True(t, skip,
+			"stable index input work exceeds even a full base scan")
+	})
+
+	t.Run("unpushable prepared residual preserves backfill lower bound", func(t *testing.T) {
+		equality := makeRangeFilterExpr(0, 0, "=", 7)
+		equality.Selectivity = 0.5
+		runtimeRange := makeParamBetweenFilterExpr(0, 3, 0, 1)
+		runtimeRange.Selectivity = 0.13
+		builder, scanID, idxDef, colRefCnt := newEncodedIndexCostTestCase(
+			t,
+			[]string{"tenant_id", catalog.CreateAlias(catalog.CPrimaryKeyColName)},
+			[]*planpb.Expr{equality, runtimeRange},
+			&planpb.Stats{
+				TableCnt: 800_000, Outcnt: 52_000, Selectivity: 0.065,
+				Cost: 10_000, BlockNum: 1,
+			},
+			map[int32]int{1: 1},
+			false,
+		)
+		node := builder.qry.Nodes[scanID]
+		for _, filter := range node.FilterList {
+			filter.GetF().Args[0].GetCol().RelPos = node.BindingTags[0]
+		}
+		costCtx := builder.newEncodedRegularIndexCostContext(node, colRefCnt)
+		work, skip, valid := costCtx.score(
+			idxDef, []int32{0}, nil, encodedRegularIndexCostBackfill,
+		)
+		require.True(t, valid)
+		require.Greater(t, work, costCtx.baseWork)
+		require.True(t, skip,
+			"a residual unavailable to the index cannot reduce index rows or base lookups")
 	})
 
 	t.Run("nullable PK leading residual charges physical column", func(t *testing.T) {
@@ -3735,6 +3862,46 @@ func TestEncodedIndexCostPreparedRangeDoesNotOutrankEqualityByHeuristic(t *testi
 			require.True(t, hasParamRef, "the prepared public plan must retain ParamRefs")
 		})
 	}
+}
+
+func TestEncodedIndexCostPreparedRangesUseUncertaintyFromPublicPlan(t *testing.T) {
+	const tableCnt = 2_000_000
+	ctx := newEncodedExistsPlanTestContext(10)
+	activity := ctx.tables["cost_activity"]
+	activity.Indexes = nil
+	stats := ctx.statsByID[activity.TblId]
+	stats.TableCnt = tableCnt
+	stats.BlockNumber = 240
+	stats.NdvMap["amount"] = tableCnt
+	stats.MinValMap["amount"] = 0
+	stats.MaxValMap["amount"] = tableCnt
+	stats.SizeMap = map[string]uint64{
+		"tenant_id": tableCnt * 4, "activity_id": tableCnt * 8,
+		"state": tableCnt * 5, "created_at": tableCnt * 8, "amount": tableCnt * 8,
+		catalog.CPrimaryKeyColName: tableCnt * 14,
+	}
+	addCostActivityRegularIndex(t, ctx, "idx_amount_pk", []string{
+		"amount", catalog.CreateAlias(catalog.CPrimaryKeyColName),
+	}, false)
+	optimizer := &encodedIndexPlanTestOptimizer{ctx: ctx}
+
+	preparePlan, err := runOneStmt(optimizer, t, `
+		prepare cost_random_ranges from '
+			select count(amount) from cost_activity
+			where amount between ? and ?
+			   or amount between ? and ?
+			   or amount between ? and ?'`)
+	require.NoError(t, err)
+	preparedPlan := resolveQueryPlan(preparePlan)
+	preparedIndex := findFirstIndexScanNode(preparedPlan)
+	require.NotNil(t, preparedIndex,
+		"overlapping cost intervals retain the ranked index candidate")
+	require.Equal(t, "idx_amount_pk", preparedIndex.IndexScanInfo.IndexName)
+	hasParamRef := false
+	for _, filter := range preparedIndex.FilterList {
+		hasParamRef = hasParamRef || containsDynamicParam(filter)
+	}
+	require.True(t, hasParamRef, "the prepared public plan must retain ParamRefs")
 }
 
 func TestEncodedIndexCostKeepsCatalogOrderOnEqualScore(t *testing.T) {
@@ -4429,6 +4596,48 @@ func TestEncodedIndexCostIsReachableFromExistsPlan(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestEncodedIndexCostPreparedExistsStillRejectsBroadEncodedAccess(t *testing.T) {
+	optimizer := &encodedIndexPlanTestOptimizer{ctx: newEncodedExistsPlanTestContext(2)}
+	preparePlan, err := runOneStmt(optimizer, t, `
+		prepare cost_exists_range from '
+			select count(*), coalesce(sum(a.activity_id), 0)
+			from cost_activity a
+			where a.tenant_id between ? and ?
+			  and a.state = ''READY''
+			  and exists (
+				select 1 from cost_tags t
+				where t.tenant_id = a.tenant_id
+				  and t.activity_id = a.activity_id
+				  and t.tag_id = 2
+				  and t.weight >= 50.000
+			  )'`)
+	require.NoError(t, err)
+	queryPlan := resolveQueryPlan(preparePlan)
+	require.Empty(t, findFirstIndexScanName(queryPlan),
+		"unknown range bounds must not mask the stable broad encoded-access cost")
+	require.Zero(t, countPlanFunctionCalls(queryPlan, "serial_extract"))
+}
+
+func TestEncodedIndexCostPreparedUnpushableResidualStillRejectsBroadBackfill(t *testing.T) {
+	ctx := newEncodedExistsPlanTestContext(4)
+	ctx.tables["cost_activity"].Indexes = nil
+	addCostActivityRegularIndex(t, ctx, "idx_state_time_pk", []string{
+		"state", "created_at", catalog.CreateAlias(catalog.CPrimaryKeyColName),
+	}, false)
+	optimizer := &encodedIndexPlanTestOptimizer{ctx: ctx}
+	preparePlan, err := runOneStmt(optimizer, t, `
+		prepare cost_unpushable_range from '
+			select count(*)
+			from cost_activity
+			where state = ''READY''
+			  and amount between ? and ?'`)
+	require.NoError(t, err)
+	queryPlan := resolveQueryPlan(preparePlan)
+	require.Empty(t, findFirstIndexScanName(queryPlan),
+		"an unavailable runtime residual cannot reduce the candidate backfill lower bound")
+	require.False(t, planHasIndexJoin(queryPlan))
 }
 
 func TestEncodedIndexCostRejectsBroadBackfillSiblingFromPublicPlan(t *testing.T) {
