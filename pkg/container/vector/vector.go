@@ -298,6 +298,7 @@ func (v *Vector) SetLength(n int) {
 type AppendCheckpoint struct {
 	length               int
 	areaLength           int
+	areaDisjoint         bool
 	sorted               bool
 	prepareParamKind     PrepareParamKind
 	prepareParamKindSeen bool
@@ -310,6 +311,7 @@ func (v *Vector) MakeAppendCheckpoint() AppendCheckpoint {
 	return AppendCheckpoint{
 		length:               v.length,
 		areaLength:           len(v.area),
+		areaDisjoint:         v.areaDisjoint,
 		sorted:               v.sorted,
 		prepareParamKind:     v.prepareParamKind,
 		prepareParamKindSeen: v.prepareParamKindSeen,
@@ -333,6 +335,9 @@ func (v *Vector) RollbackAppend(checkpoint AppendCheckpoint, attemptedRows int) 
 	nulls.RemoveRange(&v.gsp, uint64(checkpoint.length), uint64(end))
 	v.length = checkpoint.length
 	v.area = v.area[:checkpoint.areaLength]
+	// A failed varlen append may already have exposed shared or partial area
+	// layout. Roll back logical lengths, but keep this proof fail-closed.
+	v.areaDisjoint = checkpoint.areaDisjoint && v.areaDisjoint
 	v.sorted = checkpoint.sorted
 	if checkpoint.hadPrepareParamKinds {
 		if len(v.prepareParamKinds) < checkpoint.length {
@@ -717,7 +722,6 @@ func (v *Vector) SetPrepareParamKindsAndBinaryStringFromReader(
 			mpool.FreeSlice(owner, kinds)
 		}
 	}
-	var binaryRows *bitmap.Bitmap
 	var one [1]byte
 	for row := range kinds {
 		if _, err = io.ReadFull(r, one[:]); err != nil {
@@ -730,27 +734,62 @@ func (v *Vector) SetPrepareParamKindsAndBinaryStringFromReader(
 			return moerr.NewInvalidInputNoCtxf(
 				"invalid prepared parameter row kind %d", kind)
 		}
-		kinds[row] = kind
-		if one[0]&binaryMask != 0 && !v.IsNull(uint64(row)) {
-			if binaryRows == nil {
-				binaryRows = &bitmap.Bitmap{}
-				binaryRows.InitWithSize(int64(n))
-			}
-			binaryRows.Add(uint64(row))
-		}
+		// Keep the binary bit in the temporary kind byte. This single accounted
+		// slice stages both sidecars until every allocation has succeeded.
+		kinds[row] = PrepareParamKind(one[0])
 	}
 
 	var first PrepareParamKind
 	seen := false
 	mixed := false
-	for row, kind := range kinds {
+	nonNull := 0
+	binaryCount := 0
+	physicalRows := n
+	if v.IsConst() {
+		physicalRows = 1
+	}
+	for row := 0; row < physicalRows; row++ {
 		if v.IsNull(uint64(row)) {
 			continue
+		}
+		nonNull++
+		encoded := byte(kinds[row])
+		kind := PrepareParamKind(encoded &^ binaryMask)
+		if encoded&binaryMask != 0 {
+			binaryCount++
 		}
 		if !seen {
 			first, seen = kind, true
 		} else if first != kind {
 			mixed = true
+		}
+	}
+	mixedBinary := binaryCount > 0 && binaryCount < nonNull
+	if mixedBinary {
+		if err := v.ensureBinaryStringCapacity(v.length, mp); err != nil {
+			releaseKinds()
+			return err
+		}
+	}
+	// All fallible work is complete. Publish the new generation from here.
+	switch {
+	case binaryCount == 0:
+		v.setBinaryStringScalar(false)
+	case binaryCount == nonNull:
+		v.setBinaryStringScalar(true)
+	default:
+		v.binaryStringRows.InitWithSize(int64(v.length))
+		for row := 0; row < physicalRows; row++ {
+			if byte(kinds[row])&binaryMask != 0 && !v.IsNull(uint64(row)) {
+				v.binaryStringRows.Add(uint64(row))
+			}
+		}
+		v.binaryString = true
+		v.binaryStringRowsActive = true
+	}
+	if mixed {
+		for row := range kinds {
+			kinds[row] = PrepareParamKind(byte(kinds[row]) &^ binaryMask)
 		}
 	}
 	v.releasePrepareParamKinds()
@@ -769,17 +808,6 @@ func (v *Vector) SetPrepareParamKindsAndBinaryStringFromReader(
 		v.prepareParamKinds = kinds
 		v.prepareParamKindsMP = owner
 	}
-	v.resetBinaryString()
-	if binaryRows != nil {
-		rows := make([]bool, n)
-		for row := range rows {
-			rows[row] = binaryRows.Contains(uint64(row))
-		}
-		if err := v.SetBinaryStringRowsWithMP(rows, mp); err != nil {
-			return err
-		}
-	}
-	v.normalizeBinaryStringRows()
 	return nil
 }
 
@@ -1820,7 +1848,6 @@ func (v *Vector) SetIsBinaryStringAt(row int, binaryString bool, pools ...*mpool
 		return nil
 	}
 	if v.IsConst() {
-		row = 0
 		if v.IsNull(0) {
 			return nil
 		}
@@ -1878,6 +1905,14 @@ func (v *Vector) SetBinaryStringRowsWithMP(rows []bool, mp *mpool.MPool) error {
 	}
 	if len(rows) == 0 {
 		v.resetBinaryString()
+		return nil
+	}
+	if v.IsConst() {
+		if v.IsNull(0) {
+			v.setBinaryStringScalar(false)
+		} else {
+			v.setBinaryStringScalar(rows[0])
+		}
 		return nil
 	}
 	nonNull, binaryCount := 0, 0
@@ -7017,8 +7052,7 @@ func appendOneFixed[T any](vec *Vector, val T, isNull bool, mp *mpool.MPool) err
 	return nil
 }
 
-func appendOneBytes(vec *Vector, val []byte, isNull bool, mp *mpool.MPool) error {
-	var err error
+func appendOneBytes(vec *Vector, val []byte, isNull bool, mp *mpool.MPool) (err error) {
 	var va types.Varlena
 	if vec.IsConst() {
 		return moerr.NewInternalErrorNoCtx("append to const vector")
@@ -7030,6 +7064,12 @@ func appendOneBytes(vec *Vector, val []byte, isNull bool, mp *mpool.MPool) error
 		// treating every null as a varlena descriptor.
 		return appendOneFixed(vec, va, true, mp)
 	} else {
+		checkpoint := vec.MakeAppendCheckpoint()
+		defer func() {
+			if err != nil {
+				vec.RollbackAppend(checkpoint, 1)
+			}
+		}()
 		if err = vec.prepareOrdinaryAppendMetadata(1, mp); err != nil {
 			return err
 		}
@@ -7041,8 +7081,7 @@ func appendOneBytes(vec *Vector, val []byte, isNull bool, mp *mpool.MPool) error
 	}
 }
 
-func appendOneByteJson(vec *Vector, bj bytejson.ByteJson, isNull bool, mp *mpool.MPool) error {
-	var err error
+func appendOneByteJson(vec *Vector, bj bytejson.ByteJson, isNull bool, mp *mpool.MPool) (err error) {
 	var va types.Varlena
 	if vec.IsConst() {
 		return moerr.NewInternalErrorNoCtx("append to const vector")
@@ -7051,6 +7090,12 @@ func appendOneByteJson(vec *Vector, bj bytejson.ByteJson, isNull bool, mp *mpool
 	if isNull {
 		return appendOneFixed(vec, va, true, mp)
 	} else {
+		checkpoint := vec.MakeAppendCheckpoint()
+		defer func() {
+			if err != nil {
+				vec.RollbackAppend(checkpoint, 1)
+			}
+		}()
 		if err = vec.prepareOrdinaryAppendMetadata(1, mp); err != nil {
 			return err
 		}
@@ -7063,8 +7108,7 @@ func appendOneByteJson(vec *Vector, bj bytejson.ByteJson, isNull bool, mp *mpool
 }
 
 // appendOneArray mainly used for unit tests
-func appendOneArray[T types.ArrayElement](vec *Vector, val []T, isNull bool, mp *mpool.MPool) error {
-	var err error
+func appendOneArray[T types.ArrayElement](vec *Vector, val []T, isNull bool, mp *mpool.MPool) (err error) {
 	var va types.Varlena
 	if vec.IsConst() {
 		return moerr.NewInternalErrorNoCtx("append to const vector")
@@ -7073,6 +7117,12 @@ func appendOneArray[T types.ArrayElement](vec *Vector, val []T, isNull bool, mp 
 	if isNull {
 		return appendOneFixed(vec, va, true, mp)
 	} else {
+		checkpoint := vec.MakeAppendCheckpoint()
+		defer func() {
+			if err != nil {
+				vec.RollbackAppend(checkpoint, 1)
+			}
+		}()
 		if err = vec.prepareOrdinaryAppendMetadata(1, mp); err != nil {
 			return err
 		}
@@ -7129,10 +7179,15 @@ func appendMultiFixed[T any](vec *Vector, val T, isNull bool, cnt int, mp *mpool
 	return nil
 }
 
-func appendMultiBytes(vec *Vector, val []byte, isNull bool, cnt int, mp *mpool.MPool) error {
+func appendMultiBytes(vec *Vector, val []byte, isNull bool, cnt int, mp *mpool.MPool) (err error) {
 	// A non-inline value is materialized once and its descriptor is broadcast.
+	checkpoint := vec.MakeAppendCheckpoint()
+	defer func() {
+		if err != nil {
+			vec.RollbackAppend(checkpoint, cnt)
+		}
+	}()
 	vec.areaDisjoint = false
-	var err error
 	var va types.Varlena
 	if err = extendWithBitmaps(vec, cnt, mp, isNull, false); err != nil {
 		return err
@@ -7191,8 +7246,13 @@ func appendList[T any](vec *Vector, vals []T, isNulls []bool, mp *mpool.MPool) e
 	return nil
 }
 
-func appendBytesList(vec *Vector, vals [][]byte, isNulls []bool, mp *mpool.MPool) error {
-	var err error
+func appendBytesList(vec *Vector, vals [][]byte, isNulls []bool, mp *mpool.MPool) (err error) {
+	checkpoint := vec.MakeAppendCheckpoint()
+	defer func() {
+		if err != nil {
+			vec.RollbackAppend(checkpoint, len(vals))
+		}
+	}()
 	disjoint := vec.areaDisjoint
 	vec.areaDisjoint = false
 	if err = extendWithBitmaps(
@@ -7229,8 +7289,13 @@ func appendBytesList(vec *Vector, vals [][]byte, isNulls []bool, mp *mpool.MPool
 	return nil
 }
 
-func appendStringList(vec *Vector, vals []string, isNulls []bool, mp *mpool.MPool) error {
-	var err error
+func appendStringList(vec *Vector, vals []string, isNulls []bool, mp *mpool.MPool) (err error) {
+	checkpoint := vec.MakeAppendCheckpoint()
+	defer func() {
+		if err != nil {
+			vec.RollbackAppend(checkpoint, len(vals))
+		}
+	}()
 	disjoint := vec.areaDisjoint
 	vec.areaDisjoint = false
 
@@ -7270,8 +7335,13 @@ func appendStringList(vec *Vector, vals []string, isNulls []bool, mp *mpool.MPoo
 }
 
 // appendArrayList mainly used for unit tests
-func appendArrayList[T types.ArrayElement](vec *Vector, vals [][]T, isNulls []bool, mp *mpool.MPool) error {
-	var err error
+func appendArrayList[T types.ArrayElement](vec *Vector, vals [][]T, isNulls []bool, mp *mpool.MPool) (err error) {
+	checkpoint := vec.MakeAppendCheckpoint()
+	defer func() {
+		if err != nil {
+			vec.RollbackAppend(checkpoint, len(vals))
+		}
+	}()
 	disjoint := vec.areaDisjoint
 	vec.areaDisjoint = false
 
@@ -7543,7 +7613,15 @@ func vecToString[T types.FixedSizeT](v *Vector) string {
 // The returned object is NOT allowed to be modified (
 // TODO: Nulls are deep copied.
 func (v *Vector) Window(start, end int) (*Vector, error) {
-	return v.window(start, end, nil, nil)
+	return v.window(start, end, nil, nil, false)
+}
+
+// WindowByLogicalRows returns a borrowed window in a caller-owned logical row
+// domain. A non-empty const vector without row-specific metadata may broadcast
+// its single physical value beyond Length; ordinary vectors retain the strict
+// physical range check used by Window.
+func (v *Vector) WindowByLogicalRows(start, end int) (*Vector, error) {
+	return v.window(start, end, nil, nil, true)
 }
 
 // WindowWithAllocation returns a borrowed data window whose range bitmaps are
@@ -7558,7 +7636,21 @@ func (v *Vector) WindowWithAllocation(
 	if mp == nil || selection == nil {
 		return nil, mpool.ErrAllocationAccountInvalid
 	}
-	return v.window(start, end, mp, selection)
+	return v.window(start, end, mp, selection, false)
+}
+
+// WindowByLogicalRowsWithAllocation is the allocation-accounted counterpart
+// of WindowByLogicalRows.
+func (v *Vector) WindowByLogicalRowsWithAllocation(
+	start int,
+	end int,
+	mp *mpool.MPool,
+	selection *AllocationAccountSelection,
+) (*Vector, error) {
+	if mp == nil || selection == nil {
+		return nil, mpool.ErrAllocationAccountInvalid
+	}
+	return v.window(start, end, mp, selection, true)
 }
 
 func (v *Vector) window(
@@ -7566,8 +7658,9 @@ func (v *Vector) window(
 	end int,
 	mp *mpool.MPool,
 	selection *AllocationAccountSelection,
+	logicalRows bool,
 ) (*Vector, error) {
-	if start < 0 || end < start || end > v.Length() {
+	if !v.validWindowRange(start, end, logicalRows) {
 		return nil, moerr.NewInvalidInputNoCtx("invalid vector window")
 	}
 	w := NewVec(v.typ)
@@ -7605,6 +7698,12 @@ func (v *Vector) window(
 		}
 		w.data = v.data
 		w.area = v.area
+		// Const-null is a scalar property. In particular, an offset logical
+		// window must not lose it merely because the physical null marker (when
+		// present) lives at row zero.
+		if v.IsConstNull() {
+			w.data = nil
+		}
 		w.cantFreeArea = true
 		w.cantFreeData = true
 		return w, nil
@@ -7619,6 +7718,39 @@ func (v *Vector) window(
 	w.cantFreeData = true
 	w.cantFreeArea = true
 	return w, nil
+}
+
+func (v *Vector) validWindowRange(start, end int, logicalRows bool) bool {
+	if start < 0 || end < start {
+		return false
+	}
+	if !logicalRows {
+		return end <= v.Length()
+	}
+	return v.CoversLogicalRows(start, end-start)
+}
+
+// CoversLogicalRows reports whether [start, start+rows) is backed by physical
+// rows or by scalar const broadcast semantics. Grouping and heterogeneous
+// prepared-parameter provenance are row-specific, so they cannot be extended
+// beyond the vector's physical logical domain.
+func (v *Vector) CoversLogicalRows(start, rows int) bool {
+	if v == nil || start < 0 || rows < 0 {
+		return false
+	}
+	if start <= v.Length() && rows <= v.Length()-start {
+		return true
+	}
+	if !v.IsConst() {
+		return false
+	}
+	if rows == 0 {
+		return true
+	}
+	// Nullness and a uniform prepared-parameter category are scalar const
+	// properties. Grouping and a provenance sidecar are row-domain metadata;
+	// extending either past its physical domain would invent row state.
+	return v.Length() > 0 && !v.HasGrouping() && v.prepareParamKinds == nil
 }
 
 func (v *Vector) copyWindowBitmaps(w *Vector, start, end int, mp *mpool.MPool) error {

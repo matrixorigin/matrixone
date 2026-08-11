@@ -1037,7 +1037,7 @@ func preserveChecksForCreateLike(p *Plan, src *plan.TableDef) {
 	ct.GetTableDef().Checks = dstChecks
 }
 
-func bindLegacyChecksForCreateLike(
+func bindLegacyChecks(
 	ctx CompilerContext,
 	tableDef *plan.TableDef,
 	sqlMode string,
@@ -1079,21 +1079,27 @@ func bindLegacyChecksForCreateLike(
 				return nil, true, err
 			}
 		case *tree.ColumnTableDef:
-			columnPos := slices.IndexFunc(
-				tableDef.Cols,
-				func(col *plan.ColDef) bool { return col.Name == typedDef.Name.ColName() },
-			)
-			if columnPos == -1 {
-				return nil, true, moerr.NewInvalidInputf(
-					ctx.GetContext(),
-					"legacy CHECK column '%s' does not exist",
-					typedDef.Name.ColNameOrigin(),
-				)
-			}
+			columnPos := -1
 			for _, attr := range typedDef.Attributes {
 				check, ok := attr.(*tree.AttributeCheckConstraint)
 				if !ok {
 					continue
+				}
+				// CREATE SQL can be stale after an earlier ALTER, but columns
+				// without a column-level CHECK are irrelevant to recovery. Resolve
+				// the catalog position only when this column owns a CHECK.
+				if columnPos == -1 {
+					columnPos = slices.IndexFunc(
+						tableDef.Cols,
+						func(col *plan.ColDef) bool { return col.Name == typedDef.Name.ColName() },
+					)
+					if columnPos == -1 {
+						return nil, true, moerr.NewInvalidInputf(
+							ctx.GetContext(),
+							"legacy CHECK column '%s' does not exist",
+							typedDef.Name.ColNameOrigin(),
+						)
+					}
 				}
 				if !check.Enforced {
 					return nil, true, moerr.NewNotSupported(
@@ -1122,11 +1128,11 @@ func equalCheckDefs(left, right []*plan.CheckDef) bool {
 	return true
 }
 
-// recoverLegacyChecksForCreateLike rebuilds structured CHECK metadata for
+// recoverLegacyChecks rebuilds structured CHECK metadata for
 // pre-upgrade tables, whose catalog rows contain only the original CREATE SQL.
 // The old catalog did not record the creating SQL mode, so recovery must not
 // silently choose between two valid but semantically different parses.
-func recoverLegacyChecksForCreateLike(ctx CompilerContext, tableDef *plan.TableDef) error {
+func recoverLegacyChecks(ctx CompilerContext, tableDef *plan.TableDef) error {
 	if tableDef == nil || len(tableDef.Checks) > 0 || tableDef.Createsql == "" ||
 		tableDef.TableType == catalog.SystemExternalRel ||
 		!strings.Contains(strings.ToUpper(tableDef.Createsql), "CHECK") {
@@ -1139,7 +1145,7 @@ func recoverLegacyChecksForCreateLike(ctx CompilerContext, tableDef *plan.TableD
 	parsedModes := 0
 	successfulModes := 0
 	for _, sqlMode := range mysql.ParserSQLModeCombinations() {
-		checks, parsed, err := bindLegacyChecksForCreateLike(ctx, tableDef, sqlMode)
+		checks, parsed, err := bindLegacyChecks(ctx, tableDef, sqlMode)
 		if !parsed {
 			if firstParseErr == nil {
 				firstParseErr = err
@@ -1220,7 +1226,7 @@ func buildCreateTable(
 			return nil, moerr.NewNoSuchTable(ctx.GetContext(), dbName, tblName)
 		}
 		hadStructuredChecks := len(tableDef.Checks) > 0
-		if err := recoverLegacyChecksForCreateLike(ctx, tableDef); err != nil {
+		if err := recoverLegacyChecks(ctx, tableDef); err != nil {
 			return nil, err
 		}
 		recoveredLegacyChecks := !hadStructuredChecks && len(tableDef.Checks) > 0
@@ -3485,6 +3491,12 @@ func buildTruncateTable(stmt *tree.TruncateTable, ctx CompilerContext) (*Plan, e
 		truncateTable.TableId = tableDef.TblId
 		if tableDef.Fkeys != nil {
 			for _, fk := range tableDef.Fkeys {
+				// A self-referencing foreign key uses table ID 0 as the durable
+				// marker for "this table". Its metadata is recreated together with
+				// the table and there is no external parent relation to refresh.
+				if fk.ForeignTbl == 0 {
+					continue
+				}
 				truncateTable.ForeignTbl = append(truncateTable.ForeignTbl, fk.ForeignTbl)
 			}
 		}
@@ -4959,6 +4971,12 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 				opt,
 			)
 			if err != nil {
+				return nil, err
+			}
+			// Only INPLACE sends AlterTableRenameCol.checks to TN. COPY persists
+			// the rewritten CHECK definitions through its temporary-table schema
+			// and therefore remains compatible with protocol versions before v15.
+			if err := requireCheckRenameProtocol(ctx, alterTable.CopyTableDef.Checks); err != nil {
 				return nil, err
 			}
 

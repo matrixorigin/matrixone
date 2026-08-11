@@ -90,11 +90,11 @@ func (proc *Process) BuildProcessInfo(
 			for _, binaryString := range proc.Base.prepareParamsBinaryString {
 				hasBinaryString = hasBinaryString || binaryString
 			}
-			if hasBinaryString && protocolVersion < defines.MORPCVersion15 {
+			if hasBinaryString && protocolVersion < defines.MORPCVersion16 {
 				return procInfo, moerr.NewNotSupportedf(
 					proc.Ctx,
 					"binary string prepared parameters require protocol version %d",
-					defines.MORPCVersion15,
+					defines.MORPCVersion16,
 				)
 			}
 			procInfo.PrepareParams.Length = int64(vec.Length())
@@ -250,6 +250,14 @@ func (c *codecService) Decode(
 	if err != nil {
 		return nil, err
 	}
+	binaryStringMetadata, err := BinaryStringPrepareParamMetadataForRemote(
+		service,
+		int(value.PrepareParams.Length),
+		value.PrepareParams.IsBinaryString,
+	)
+	if err != nil {
+		return nil, err
+	}
 	txnOp, err := c.txnClient.NewWithSnapshot(ctx, value.Snapshot)
 	if err != nil {
 		return nil, err
@@ -307,7 +315,7 @@ func (c *codecService) Decode(
 		proc.SetOwnedPrepareParamsWithMetadata(
 			prepareParams,
 			prepareParamMetadata,
-			value.PrepareParams.IsBinaryString,
+			binaryStringMetadata,
 		)
 	}
 	return proc, nil

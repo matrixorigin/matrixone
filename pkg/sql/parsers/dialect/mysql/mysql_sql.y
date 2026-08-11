@@ -2712,21 +2712,21 @@ set_transaction_stmt:
     SET TRANSACTION transaction_characteristic_list
     {
 	$$ = &tree.SetTransaction{
-	    Global: false,
+	    Scope: tree.TransactionScopeNext,
 	    CharacterList: $3,
 	    }
     }
 |   SET GLOBAL TRANSACTION transaction_characteristic_list
     {
         $$ = &tree.SetTransaction{
-            Global: true,
+            Scope: tree.TransactionScopeGlobal,
             CharacterList: $4,
             }
     }
 |   SET SESSION TRANSACTION transaction_characteristic_list
     {
         $$ = &tree.SetTransaction{
-            Global: false,
+            Scope: tree.TransactionScopeSession,
             CharacterList: $4,
             }
     }
@@ -2907,6 +2907,7 @@ var_assignment:
     {
         $$ = &tree.VarAssignmentExpr{
             System: true,
+            TxnScope: tree.TransactionScopeSession,
             Name: $1,
             Value: $3,
         }
@@ -2916,6 +2917,7 @@ var_assignment:
         $$ = &tree.VarAssignmentExpr{
             System: true,
             Global: true,
+            TxnScope: tree.TransactionScopeGlobal,
             Name: $2,
             Value: $4,
         }
@@ -2925,6 +2927,7 @@ var_assignment:
         $$ = &tree.VarAssignmentExpr{
             System: true,
             Global: true,
+            TxnScope: tree.TransactionScopeGlobal,
             Name: $2,
             Value: $4,
         }
@@ -2933,6 +2936,7 @@ var_assignment:
     {
         $$ = &tree.VarAssignmentExpr{
             System: true,
+            TxnScope: tree.TransactionScopeSession,
             Name: $2,
             Value: $4,
         }
@@ -2941,6 +2945,7 @@ var_assignment:
     {
         $$ = &tree.VarAssignmentExpr{
             System: true,
+            TxnScope: tree.TransactionScopeSession,
             Name: $2,
             Value: $4,
         }
@@ -2972,17 +2977,22 @@ var_assignment:
     {
         v := strings.ToLower($1)
 		var isGlobal bool
+		txnScope := tree.TransactionScopeNext
 		if strings.HasPrefix(v, "global.") {
 			isGlobal = true
+			txnScope = tree.TransactionScopeGlobal
 			v = strings.TrimPrefix(v, "global.")
 		} else if strings.HasPrefix(v, "session.") {
+			txnScope = tree.TransactionScopeSession
 			v = strings.TrimPrefix(v, "session.")
 		} else if strings.HasPrefix(v, "local.") {
+			txnScope = tree.TransactionScopeSession
 			v = strings.TrimPrefix(v, "local.")
 		} 
         $$ = &tree.VarAssignmentExpr{
             System: true,
             Global: isGlobal,
+			TxnScope: txnScope,
             Name: v,
             Value: $3,
         }
@@ -12748,19 +12758,13 @@ function_call_aggregate:
             WindowSpec: $6,
         }
     }
-|   GROUPING '(' func_type_opt column_list ')' window_spec_opt
+|   GROUPING '(' func_type_opt expression_list ')' window_spec_opt
     {
         name := tree.NewUnresolvedColName($1)
-        var columnList tree.Exprs
-        for _, columnStr := range $4{
-            column := tree.NewUnresolvedColName(string(columnStr))
-            columnList = append(columnList, column)
-        }
-
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
             FuncName: tree.NewCStr($1, 1),
-            Exprs: columnList,
+            Exprs: $4,
             Type: $3,
             WindowSpec: $6,
         }

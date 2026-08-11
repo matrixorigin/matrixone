@@ -57,7 +57,7 @@ func prepareParamKindRemoteWireEnabled(proc *process.Process) bool {
 }
 
 func binaryStringRemoteWireEnabled(proc *process.Process) bool {
-	return remoteBatchWireVersion(proc) >= defines.MORPCVersion15
+	return remoteBatchWireVersion(proc) >= defines.MORPCVersion16
 }
 
 func remoteBatchWireVersion(proc *process.Process) int64 {
@@ -87,7 +87,7 @@ func marshalRemoteBatch(proc *process.Process, bat *batch.Batch, buf *bytes.Buff
 	wireEnabled := prepareParamKindRemoteWireEnabled(proc)
 	if bat.HasBinaryStringMetadata() && !binaryStringRemoteWireEnabled(proc) {
 		return nil, moerr.NewInvalidStateNoCtx(
-			"binary-string provenance requires MORPCVersion15 for remote dispatch")
+			"binary-string provenance requires MORPCVersion16 for remote dispatch")
 	}
 	if bat.HasPrepareParamKindMetadata() && !wireEnabled {
 		return nil, moerr.NewInvalidStateNoCtx(

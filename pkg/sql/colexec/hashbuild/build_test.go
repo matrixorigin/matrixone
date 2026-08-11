@@ -2666,6 +2666,75 @@ func TestShuffleHashBuildAccountedSpillLifecycle(t *testing.T) {
 	require.Zero(t, tc.proc.Mp().CurrNB())
 }
 
+func TestShuffleHashBuildRetainsBroadcastConstNull(t *testing.T) {
+	typ := types.T_varchar.ToType()
+	tc := newTestCase(
+		t,
+		[]bool{true},
+		[]types.Type{typ},
+		[]*plan.Expr{newExpr(0, typ)},
+	)
+	tc.arg.IsShuffle = true
+	tc.arg.ShuffleIdx = 0
+	tc.arg.SpillThreshold = math.MaxInt64
+	tc.arg.RuntimeFilterSpec = &plan.RuntimeFilterSpec{
+		Tag: tc.arg.JoinMapTag + 4_502,
+	}
+	tc.arg.SetChildren([]vm.Operator{tc.marg})
+	require.NoError(t, tc.marg.Prepare(tc.proc))
+	require.NoError(t, tc.arg.Prepare(tc.proc))
+	var (
+		build   *batch.Batch
+		joinMap *message.JoinMap
+		execErr error
+	)
+	defer func() {
+		if joinMap != nil {
+			joinMap.Free()
+		}
+		if build != nil {
+			build.Clean(tc.proc.Mp())
+		}
+		failed := execErr != nil
+		tc.arg.Reset(tc.proc, failed, execErr)
+		tc.marg.Reset(tc.proc, failed, execErr)
+		tc.arg.Free(tc.proc, failed, execErr)
+		tc.proc.Free()
+		require.Zero(t, tc.proc.Mp().CurrNB())
+	}()
+
+	constant, err := vector.NewConstBytes(
+		typ, []byte(strings.Repeat("x", 64)), 1, tc.proc.Mp(),
+	)
+	require.NoError(t, err)
+	constant.SetNull(0)
+	build = batch.NewWithSize(1)
+	build.Vecs[0] = constant
+	build.SetRowCount(4)
+	tc.proc.Reg.MergeReceivers[0].Ch2 <- process.NewPipelineSignalToDirectly(
+		build, nil, tc.proc.Mp(),
+	)
+	tc.proc.Reg.MergeReceivers[0].Ch2 <- process.NewPipelineSignalToDirectly(
+		nil, nil, tc.proc.Mp(),
+	)
+
+	_, execErr = vm.Exec(tc.arg, tc.proc)
+	require.NoError(t, execErr)
+	result, err := message.ReceiveJoinMapResult(
+		tc.arg.JoinMapTag,
+		true,
+		tc.arg.ShuffleIdx,
+		tc.proc.GetMessageBoard(),
+		tc.proc.Ctx,
+	)
+	require.NoError(t, err)
+	require.True(t, result.IsSuccess())
+	joinMap = result.JoinMap()
+	require.NotNil(t, joinMap)
+	require.False(t, joinMap.IsSpilled())
+	require.Equal(t, int64(4), joinMap.GetRowCount())
+}
+
 func TestShuffleHashBuildDirectSpillUsesActualAllocation(t *testing.T) {
 	tc := newTestCase(
 		t,
