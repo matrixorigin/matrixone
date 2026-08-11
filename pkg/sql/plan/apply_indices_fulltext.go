@@ -807,7 +807,7 @@ func (builder *QueryBuilder) findMatchFullTextIndex(fn *plan.Function, scanNode 
 
 	nargs := len(fn.Args) - 2
 	for _, idx := range scanNode.TableDef.Indexes {
-		if idx == nil || !catalog.IsIndexOptimizerEligible(idx) || !idx.TableExist || !catalog.IsFullTextIndexAlgo(idx.IndexAlgo) {
+		if idx == nil || !idx.TableExist || !catalog.IsFullTextIndexAlgo(idx.IndexAlgo) {
 			continue
 		}
 		if len(idx.Parts) != nargs {

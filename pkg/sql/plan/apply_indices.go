@@ -759,7 +759,6 @@ func (builder *QueryBuilder) buildRegularIndexTopSortContext(projNode *plan.Node
 
 func usableRegularHintIndex(idxDef *plan.IndexDef) bool {
 	return idxDef != nil &&
-		catalog.IsIndexOptimizerEligible(idxDef) &&
 		idxDef.TableExist &&
 		catalog.IsRegularIndexAlgo(idxDef.IndexAlgo) &&
 		!isSpatialIndexDef(idxDef) &&
@@ -1587,29 +1586,16 @@ func (builder *QueryBuilder) collectVectorIndexes(scanNode *plan.Node) (map[stri
 		return multiTableIndexes, nil
 	}
 
-	var invisibleIndexNames map[string]struct{}
 	for _, indexDef := range scanNode.TableDef.Indexes {
-		if indexDef == nil || !indexplugin.IsVectorIndexAlgo(indexDef.IndexAlgo) {
-			continue
-		}
-		if !catalog.IsIndexOptimizerEligible(indexDef) {
-			if invisibleIndexNames == nil {
-				invisibleIndexNames = make(map[string]struct{})
+		if indexDef != nil && indexplugin.IsVectorIndexAlgo(indexDef.IndexAlgo) {
+			if _, ok := multiTableIndexes[indexDef.IndexName]; !ok {
+				multiTableIndexes[indexDef.IndexName] = &MultiTableIndex{
+					IndexAlgo: catalog.ToLower(indexDef.IndexAlgo),
+					IndexDefs: make(map[string]*plan.IndexDef),
+				}
 			}
-			invisibleIndexNames[indexDef.IndexName] = struct{}{}
-			delete(multiTableIndexes, indexDef.IndexName)
-			continue
+			multiTableIndexes[indexDef.IndexName].IndexDefs[catalog.ToLower(indexDef.IndexAlgoTableType)] = indexDef
 		}
-		if _, invisible := invisibleIndexNames[indexDef.IndexName]; invisible {
-			continue
-		}
-		if _, ok := multiTableIndexes[indexDef.IndexName]; !ok {
-			multiTableIndexes[indexDef.IndexName] = &MultiTableIndex{
-				IndexAlgo: catalog.ToLower(indexDef.IndexAlgo),
-				IndexDefs: make(map[string]*plan.IndexDef),
-			}
-		}
-		multiTableIndexes[indexDef.IndexName].IndexDefs[catalog.ToLower(indexDef.IndexAlgoTableType)] = indexDef
 	}
 
 	for name, multiTableIndex := range multiTableIndexes {
@@ -1778,7 +1764,7 @@ func (builder *QueryBuilder) applyIndicesForFiltersRegularIndex(nodeID int32, no
 	indexes := make([]*IndexDef, 0, len(node.TableDef.Indexes))
 	spatialIndexes := make([]*IndexDef, 0, len(node.TableDef.Indexes))
 	for i := range node.TableDef.Indexes {
-		if !catalog.IsIndexOptimizerEligible(node.TableDef.Indexes[i]) || !node.TableDef.Indexes[i].TableExist || !catalog.IsRegularIndexAlgo(node.TableDef.Indexes[i].IndexAlgo) {
+		if node.TableDef.Indexes[i] == nil || !node.TableDef.Indexes[i].TableExist || !catalog.IsRegularIndexAlgo(node.TableDef.Indexes[i].IndexAlgo) {
 			continue
 		}
 		if isSpatialIndexDef(node.TableDef.Indexes[i]) {

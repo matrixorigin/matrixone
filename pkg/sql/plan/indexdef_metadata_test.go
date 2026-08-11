@@ -15,6 +15,7 @@
 package plan
 
 import (
+	"bytes"
 	"testing"
 
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -28,8 +29,6 @@ func TestIndexDefIncludedColumnsRoundTripAndDeepCopy(t *testing.T) {
 		IndexAlgo:       "ivfflat",
 		IndexAlgoParams: `{"lists":"2","op_type":"vector_l2_ops"}`,
 		IncludedColumns: []string{"title", "category"},
-		Visible:         false,
-		VisibilitySet:   true,
 	}
 
 	data, err := indexDef.Marshal()
@@ -38,14 +37,24 @@ func TestIndexDefIncludedColumnsRoundTripAndDeepCopy(t *testing.T) {
 	var decoded planpb.IndexDef
 	require.NoError(t, decoded.Unmarshal(data))
 	require.Equal(t, indexDef.IncludedColumns, decoded.IncludedColumns)
-	require.True(t, decoded.VisibilitySet)
-	require.False(t, decoded.Visible)
 
 	copied := DeepCopyIndexDef(indexDef)
 	require.Equal(t, indexDef.IncludedColumns, copied.IncludedColumns)
-	require.True(t, copied.VisibilitySet)
-	require.False(t, copied.Visible)
 
 	indexDef.IncludedColumns[0] = "headline"
 	require.Equal(t, []string{"title", "category"}, copied.IncludedColumns)
+}
+
+func TestIndexDefPreservesRemovedVisibilityMarkerAsUnknownWireData(t *testing.T) {
+	data, err := (&planpb.IndexDef{IndexName: "idx_a"}).Marshal()
+	require.NoError(t, err)
+	data = append(data, 0x70, 0x01) // Former field 14: visibility_set=true.
+
+	var decoded planpb.IndexDef
+	require.NoError(t, decoded.Unmarshal(data))
+	require.False(t, decoded.Visible)
+
+	roundTrip, err := decoded.Marshal()
+	require.NoError(t, err)
+	require.True(t, bytes.Contains(roundTrip, []byte{0x70, 0x01}))
 }
