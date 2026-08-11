@@ -51,7 +51,7 @@ const (
 	MORPCVersion13     int64 = 13 // lossless v2 prefix-index metadata
 	MORPCVersion14     int64 = 14 // utf8mb4 text MIN/MAX collation semantics
 	MORPCVersion15     int64 = 15 // CHECK metadata in rename-column alter requests
-	MORPCVersion16     int64 = 16 // chunked persisted column extents
+	MORPCVersion16     int64 = 16 // information_schema CHECK_CONSTRAINTS table function and chunked persisted column extents
 	MORPCLatestVersion       = MORPCVersion16
 )
 

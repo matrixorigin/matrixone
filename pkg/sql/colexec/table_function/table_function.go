@@ -172,6 +172,8 @@ func (tableFunction *TableFunction) Prepare(proc *process.Process) error {
 		tblArg.ctr.state, err = moTransactionsPrepare(proc, tblArg)
 	case "mo_cache":
 		tblArg.ctr.state, err = moCachePrepare(proc, tblArg)
+	case "mo_check_constraints":
+		tblArg.ctr.state, err = checkConstraintsPrepare(proc, tblArg)
 	case "fulltext_index_scan":
 		tblArg.ctr.state, err = fulltextIndexScanPrepare(proc, tblArg)
 	case "fulltext_index_tokenize":
