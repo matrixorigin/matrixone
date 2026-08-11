@@ -17,14 +17,22 @@ package compile
 import (
 	"context"
 	"fmt"
+	"sort"
+	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 )
 
 type lifecycleDDLQuery func(string, int32) (executor.Result, error)
+
+type lifecycleForeignKeyParent struct {
+	databaseName string
+	tableName    string
+}
 
 // ignoreMissingLifecycleCatalog keeps ordinary management DDL usable while a
 // tenant's asynchronous version upgrade has not created the Lifecycle tables
@@ -104,6 +112,136 @@ func (c *Compile) rejectBoundLifecycleDDL(
 		physicalTableID,
 		operation,
 		c.runSqlWithResult,
+	)
+}
+
+func lifecycleForeignKeyIsSelfReference(
+	childDatabaseName string,
+	childTableName string,
+	parentDatabaseName string,
+	parentTableName string,
+) bool {
+	return strings.EqualFold(parentDatabaseName, childDatabaseName) &&
+		strings.EqualFold(parentTableName, childTableName)
+}
+
+func lifecycleForeignKeyParents(
+	ctx context.Context,
+	childDatabaseName string,
+	childTableName string,
+	parentDatabaseNames []string,
+	parentTableNames []string,
+) ([]lifecycleForeignKeyParent, error) {
+	if len(parentDatabaseNames) != len(parentTableNames) {
+		return nil, moerr.NewInternalError(
+			ctx,
+			"foreign key parent metadata is incomplete",
+		)
+	}
+	parents := make([]lifecycleForeignKeyParent, 0, len(parentTableNames))
+	seen := make(map[string]struct{}, len(parentTableNames))
+	for index, tableName := range parentTableNames {
+		databaseName := parentDatabaseNames[index]
+		if lifecycleForeignKeyIsSelfReference(
+			childDatabaseName,
+			childTableName,
+			databaseName,
+			tableName,
+		) {
+			continue
+		}
+		key := strings.ToLower(databaseName) + "\x00" + strings.ToLower(tableName)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		parents = append(parents, lifecycleForeignKeyParent{
+			databaseName: databaseName,
+			tableName:    tableName,
+		})
+	}
+	sort.Slice(parents, func(left, right int) bool {
+		leftDatabase := strings.ToLower(parents[left].databaseName)
+		rightDatabase := strings.ToLower(parents[right].databaseName)
+		if leftDatabase != rightDatabase {
+			return leftDatabase < rightDatabase
+		}
+		return strings.ToLower(parents[left].tableName) <
+			strings.ToLower(parents[right].tableName)
+	})
+	return parents, nil
+}
+
+// lockAndRejectLifecycleForeignKeyParents serializes reverse FK publication
+// with SET LIFECYCLE on each parent. Both paths lock the same mo_tables row
+// before validating their mutually exclusive Catalog state, so the later
+// transaction observes and rejects the winner. This is a narrow management
+// path fence; ordinary DML, queries, Merge, and DDL without a foreign key do
+// not enter it.
+func (c *Compile) lockAndRejectLifecycleForeignKeyParents(
+	childDatabaseName string,
+	childTableName string,
+	parentDatabaseNames []string,
+	parentTableNames []string,
+) error {
+	if !c.proc.Base.IsFrontend {
+		return nil
+	}
+	accountID, err := defines.GetAccountId(c.proc.Ctx)
+	if err != nil {
+		return err
+	}
+	if accountID == 0 {
+		return nil
+	}
+	parents, err := lifecycleForeignKeyParents(
+		c.proc.Ctx,
+		childDatabaseName,
+		childTableName,
+		parentDatabaseNames,
+		parentTableNames,
+	)
+	if err != nil {
+		return err
+	}
+	for _, parent := range parents {
+		if err = lockMoTable(
+			c,
+			parent.databaseName,
+			parent.tableName,
+			lock.LockMode_Exclusive,
+		); err != nil {
+			return err
+		}
+		if err = c.rejectLifecycleForeignKeyParentAfterLock(
+			parent.databaseName,
+			parent.tableName,
+		); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (c *Compile) rejectLifecycleForeignKeyParentAfterLock(
+	databaseName string,
+	tableName string,
+) error {
+	database, err := c.e.Database(
+		c.proc.Ctx,
+		databaseName,
+		c.proc.GetTxnOperator(),
+	)
+	if err != nil {
+		return err
+	}
+	relation, err := database.Relation(c.proc.Ctx, tableName, nil)
+	if err != nil {
+		return err
+	}
+	return c.rejectBoundLifecycleDDL(
+		relation.GetTableID(c.proc.Ctx),
+		"ADD FOREIGN KEY referencing",
 	)
 }
 

@@ -625,6 +625,8 @@ func (s *Scope) alterTableInplace(c *Compile, cleanup *alterAutoIncrementResetCl
 
 	if c.proc.GetTxnOperator().Txn().IsPessimistic() {
 		var retryErr error
+		var addFKParentDatabaseNames []string
+		var addFKParentTableNames []string
 		// 0. lock origin database metadata in catalog
 		if err = lockMoDatabase(c, dbName, lock.LockMode_Shared); err != nil {
 			return err
@@ -714,11 +716,33 @@ func (s *Scope) alterTableInplace(c *Compile, cleanup *alterAutoIncrementResetCl
 					return moerr.NewErrDuplicateKeyName(c.proc.Ctx, act.AddFk.Fkey.Name)
 				}
 				newAddedFkNames[act.AddFk.Fkey.Name] = true
+				if act.AddFk.Fkey.ForeignTbl != 0 {
+					fkDbName, fkTableName, resolveErr := c.e.GetNameById(
+						c.proc.Ctx,
+						c.proc.GetTxnOperator(),
+						act.AddFk.Fkey.ForeignTbl,
+					)
+					if resolveErr != nil {
+						return resolveErr
+					}
+					addFKParentDatabaseNames = append(addFKParentDatabaseNames, fkDbName)
+					addFKParentTableNames = append(addFKParentTableNames, fkTableName)
+				}
 			}
 		}
 
 		if retryErr != nil {
 			return retryErr
+		}
+		if len(addFKParentTableNames) > 0 {
+			if err = c.lockAndRejectLifecycleForeignKeyParents(
+				dbName,
+				tblName,
+				addFKParentDatabaseNames,
+				addFKParentTableNames,
+			); err != nil {
+				return err
+			}
 		}
 	}
 	if err = c.rejectBoundLifecycleDDL(tblId, "ALTER TABLE"); err != nil {
@@ -1351,10 +1375,9 @@ func (s *Scope) alterTableInplace(c *Compile, cleanup *alterAutoIncrementResetCl
 			if err != nil {
 				return err
 			}
-			// UpdateConstraint is the ordinary FK path's existing parent
-			// mo_tables write/conflict point. Probe only after that write has
-			// established ordering with SET LIFECYCLE; rejection rolls this
-			// whole DDL transaction back without adding another parent lock.
+			// The parent mo_tables row was locked and probed before this
+			// mutation. Keep this post-update check as a fail-closed backstop if
+			// a future FK call path reaches the shared mutation helper directly.
 			if err = c.rejectBoundLifecycleDDL(
 				fkRelation.GetTableID(c.proc.Ctx),
 				"ADD FOREIGN KEY referencing",
@@ -1515,6 +1538,17 @@ func (s *Scope) createTable(c *Compile, tableCreated func()) error {
 				zap.Error(err),
 			)
 			return err
+		}
+		ignoreForeignKey, _ := c.proc.Ctx.Value(defines.IgnoreForeignKey{}).(bool)
+		if !ignoreForeignKey && len(qry.GetFkTables()) > 0 {
+			if err = c.lockAndRejectLifecycleForeignKeyParents(
+				dbName,
+				tblName,
+				qry.GetFkDbs(),
+				qry.GetFkTables(),
+			); err != nil {
+				return err
+			}
 		}
 	}
 
