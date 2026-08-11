@@ -2831,9 +2831,9 @@ func TestObserveExecutionResourceBudgetUsesGenerationSnapshot(t *testing.T) {
 	account, err := registry.OpenWithController(2048, generation)
 	require.NoError(t, err)
 	mp := mpool.MustNewZero()
-	allocation, err := mp.AllocAccounted(128, account, HashBuildAllocationOwner, HashBuildAllocationSiteHashCell)
+	allocation, err := mp.AllocAccounted(128, account, mpool.AllocationOwnerHashBuild, HashBuildAllocationSiteHashCell)
 	require.NoError(t, err)
-	_, err = mp.AllocAccounted(1024, account, HashBuildAllocationOwner, HashBuildAllocationSiteHashCell)
+	_, err = mp.AllocAccounted(1024, account, mpool.AllocationOwnerHashBuild, HashBuildAllocationSiteHashCell)
 	require.ErrorIs(t, err, process.ErrExecutionResourceAdmission)
 	mp.Free(allocation)
 
@@ -2852,4 +2852,9 @@ func TestObserveExecutionResourceBudgetUsesGenerationSnapshot(t *testing.T) {
 	account.Seal()
 	_, err = registry.Finalize(account)
 	require.NoError(t, err)
+}
+
+func TestHashBuildExpressionAllocationSiteLedger(t *testing.T) {
+	require.Equal(t, uint8(98), uint8(executionResourceAllocationSiteExpressionData))
+	require.Equal(t, uint8(101), uint8(executionResourceAllocationSiteExpressionGrouping))
 }

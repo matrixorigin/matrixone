@@ -262,20 +262,29 @@ rename so behavioral review remains readable.
 ### Repository-wide owner catalog
 
 Before a second family uses the account, owner IDs become a central bounded
-catalog under `pkg/sql/colexec`. Today multiple packages independently use
-owner value `1`; that is adequate inside the single HashBuild domain but is not
-a repository-wide attribution contract.
+catalog beside the owning type in `pkg/common/mpool`. Today multiple packages
+independently use owner value `1`; that is adequate inside the single HashBuild
+domain but is not a repository-wide attribution contract.
 
 The catalog assigns stable classes such as HashBuild, Group, Order, Top, CTE,
 Set, Fulltext, and DML. Allocation-site values remain private to the owner
-class. Tests enforce:
+class and are stable numeric provenance, not a second repository-wide name
+catalog. Tests enforce:
 
-- owner IDs are unique, non-zero, and at most `AllocationOwnerMax`;
-- sites are unique within an owner and have stable text names;
+- implemented owner IDs are unique, non-zero, and at most
+  `AllocationOwnerCatalogMax`; the existing `AllocationOwnerMax` bound keeps
+  unknown IDs serializable during rolling upgrades;
+- numeric sites are unique within an owner; shared owner ranges have a complete
+  non-overlap ledger;
 - every account-aware constructor receives a non-zero owner/site selection;
 - an unknown numeric value is still serializable during rolling upgrades.
 
-The catalog is a small constants file and tests, not a runtime registry.
+The catalog is a small constants file and tests, not a runtime registry. M2
+renders the stable owner name plus numeric site; human-readable site names can
+be added later without changing the wire or profile identity.
+Package-local colexec owner constants are implementation details rather than a
+supported external API; migration removes them instead of retaining aliases
+that could become a second catalog.
 
 ### Owner-class current and peak facts
 
@@ -291,6 +300,14 @@ merge follows the same peak semantics as MPool domains:
 - max owner-domain peak is a lower bound on the statement's largest owner;
 - sum of independent owner peaks is an upper bound, not a synchronized peak;
 - overflow or an owner-sum invariant failure sets a resource quality flag.
+
+Statement summaries retain an immutable sparse owner set, so an owner-less
+statement pays one pointer instead of a 63-entry table; merge is copy-on-write
+only at terminal reduction. Plan export performs an explicit semantic clone.
+During rolling upgrades, a pre-owner remote total remains usable but carries
+`QualityPartial | QualityMissingAllocationOwner` through every newer hop. A
+version that promises owner facts but omits or fabricates them is an invariant
+failure rather than silently exact attribution.
 
 Site-level always-on counters are intentionally omitted. The existing fixed
 owner/site allocation profile provides site detail without a per-query dynamic
@@ -382,7 +399,7 @@ Primary files:
 
 - `pkg/common/mpool/allocation_account.go` and MPool tests;
 - `pkg/common/mpool/mpool_profile.go`;
-- a new central owner constants file under `pkg/sql/colexec`;
+- `pkg/common/mpool/allocation_owner.go`, the central owner constants file;
 - `pkg/util/resource/summary.go`;
 - compile remote terminal serialization and physical-plan export.
 
@@ -391,7 +408,8 @@ Deliverables:
 - exact fixed owner current/peak counters at allocation boundaries;
 - quiescent `account.used == sum(owner.used)` validation;
 - bounded remote/retry aggregation and quality flags;
-- stable owner/site text in controlled errors and profile evidence;
+- stable owner text and numeric site provenance in controlled errors and
+  profile evidence;
 - no change to hard admission decisions.
 
 Performance gate: account-aware alloc/grow/free must not add a Go allocation,

@@ -56,7 +56,9 @@ func finalizeTestAllocationAccount(
 func TestMPoolAccountedAllocGrowFree(t *testing.T) {
 	require.Equal(t, uintptr(kMemHdrSz), unsafe.Sizeof(memHdr{}))
 	require.Equal(t, uintptr(16), unsafe.Sizeof(allocationLease{}))
-	require.LessOrEqual(t, unsafe.Sizeof(AllocationAccount{}), uintptr(96))
+	// Owner current/peak counters are fixed to this binary's catalog and remain
+	// allocation-free at physical allocation boundaries.
+	require.LessOrEqual(t, unsafe.Sizeof(AllocationAccount{}), uintptr(320))
 	require.LessOrEqual(t, unsafe.Sizeof(allocationAccountRegistrySlot{}), uintptr(32))
 
 	registry, account := newTestAllocationAccount(t, 1024, 8)
@@ -122,6 +124,52 @@ func TestMPoolAccountedAllocGrowFree(t *testing.T) {
 	finalizeTestAllocationAccount(t, registry, account)
 }
 
+func TestMPoolAccountedOwnerAttribution(t *testing.T) {
+	registry, account := newTestAllocationAccount(t, 1024, 3)
+	mp := MustNew("accounted-owner-attribution")
+	defer DeleteMPool(mp)
+
+	hashBuffer, err := mp.AllocAccounted(
+		64,
+		account,
+		AllocationOwnerHashBuild,
+		testAllocationSite,
+	)
+	require.NoError(t, err)
+	indexBuffer, err := mp.AllocAccounted(
+		32,
+		account,
+		AllocationOwnerIndexBuild,
+		testAllocationSite,
+	)
+	require.NoError(t, err)
+	hashBuffer, err = mp.Grow(hashBuffer, 128, true)
+	require.NoError(t, err)
+
+	hash, ok := account.OwnerUsage(AllocationOwnerHashBuild)
+	require.True(t, ok)
+	require.Equal(t, uint64(128), hash.Current)
+	require.Equal(t, uint64(192), hash.Peak)
+	index, ok := account.OwnerUsage(AllocationOwnerIndexBuild)
+	require.True(t, ok)
+	require.Equal(t, uint64(32), index.Current)
+	require.Equal(t, uint64(32), index.Peak)
+	require.Equal(t, uint64(160), account.Snapshot().Used)
+	require.Equal(t, uint64(224), account.Snapshot().Peak)
+
+	mp.Free(indexBuffer)
+	mp.Free(hashBuffer)
+	snapshot, first, err := registry.CompleteTerminal(account)
+	require.NoError(t, err)
+	require.True(t, first)
+	require.Equal(t, AllocationAccountTerminalValid, snapshot.State)
+	require.Zero(t, snapshot.Used)
+	require.Equal(t, []AllocationAccountOwnerSnapshot{
+		{Owner: AllocationOwnerHashBuild, Peak: 192},
+		{Owner: AllocationOwnerIndexBuild, Peak: 32},
+	}, snapshot.Owners)
+}
+
 func TestMPoolTerminalLeakDiagnosticUsesPublishedProvenance(t *testing.T) {
 	registry, account := newTestAllocationAccount(t, 64, 1)
 	mp := MustNew("accounted-terminal-diagnostic")
@@ -140,6 +188,7 @@ func TestMPoolTerminalLeakDiagnosticUsesPublishedProvenance(t *testing.T) {
 	require.Equal(t, testAllocationSite, snapshot.LiveSite)
 	require.Equal(t, uint64(1), snapshot.LiveAllocations)
 	require.Contains(t, err.Error(), "owner=1 site=1 live-allocations=1")
+	require.Contains(t, err.Error(), "owner-name=hash_build")
 	mp.Free(buffer)
 	require.False(t, registry.AdmissionSuspended())
 	_, ok := registry.Resolve(snapshot.Handle)
@@ -224,6 +273,7 @@ func TestMPoolAccountedRollback(t *testing.T) {
 		)
 		require.ErrorIs(t, err, ErrAllocationAccountCapacity)
 		require.Contains(t, err.Error(), "owner=1 site=1")
+		require.Contains(t, err.Error(), "owner-name=hash_build")
 		require.Zero(t, account.Snapshot().Used)
 		require.Zero(t, registry.LiveAllocationMetadata())
 		finalizeTestAllocationAccount(t, registry, account)
@@ -243,6 +293,11 @@ func TestMPoolAccountedRollback(t *testing.T) {
 		require.ErrorIs(t, err, ErrAllocationMetadataSlots)
 		require.Contains(t, err.Error(), "owner=1 site=1")
 		require.Zero(t, account.Snapshot().Used)
+		owner, ok := account.OwnerUsage(testAllocationOwner)
+		require.True(t, ok)
+		require.Zero(t, owner.Current)
+		// The exact admission was acquired and rolled back before publication.
+		require.Equal(t, uint64(64), owner.Peak)
 		require.Zero(t, registry.LiveAllocationMetadata())
 		finalizeTestAllocationAccount(t, registry, account)
 	})

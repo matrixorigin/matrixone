@@ -1098,7 +1098,7 @@ func (hashBuild *HashBuild) materializeSerializedRuntimeFilter(
 	scratch, err := mpool.NewAccountedBuffer(
 		proc.Mp(),
 		hashBuild.ctr.hashmapBuilder.mapAllocationAccount,
-		HashBuildAllocationOwner,
+		mpool.AllocationOwnerHashBuild,
 		HashBuildAllocationSiteRuntimeFilterScratch,
 	)
 	if err != nil {

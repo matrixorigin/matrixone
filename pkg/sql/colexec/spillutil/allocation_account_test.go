@@ -73,7 +73,7 @@ func TestNewSpillEngineRequiresBudgetGeneration(t *testing.T) {
 	_, err = NewSpillEngine(
 		SpillEngineConfig{},
 		account,
-		hashbuild.HashBuildAllocationOwner,
+		mpool.AllocationOwnerHashBuild,
 	)
 	require.ErrorIs(t, err, process.ErrExecutionResourceInvalid)
 }
@@ -960,7 +960,7 @@ func TestSpillAllocationAccountRebuildAndRecursiveSpillLifecycle(t *testing.T) {
 			NeedsBuildForEmptyProbe: true,
 		},
 		account,
-		hashbuild.HashBuildAllocationOwner,
+		mpool.AllocationOwnerHashBuild,
 	)
 	require.NoError(t, err)
 

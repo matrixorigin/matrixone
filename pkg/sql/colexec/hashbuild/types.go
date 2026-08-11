@@ -48,8 +48,6 @@ const (
 	SendSucceed
 )
 
-const HashBuildAllocationOwner mpool.AllocationOwner = 1
-
 const (
 	HashBuildSpillAllocationSiteSelectedData mpool.AllocationSite = iota + 64
 	HashBuildSpillAllocationSiteSelectedArea
@@ -320,7 +318,7 @@ func (hashBuild *HashBuild) SetAllocationAccount(
 ) error {
 	selection, err := vector.NewAllocationAccountSelection(
 		account,
-		HashBuildAllocationOwner,
+		mpool.AllocationOwnerHashBuild,
 		HashBuildSpillAllocationSiteSelectedData,
 		HashBuildSpillAllocationSiteSelectedArea,
 		HashBuildSpillAllocationSiteSelectedNulls,
@@ -365,7 +363,7 @@ func (hashBuild *HashBuild) installRecoveryCapacity(
 	}
 	selection, err := vector.NewAllocationAccountSelectionWithCapacityClass(
 		account,
-		HashBuildAllocationOwner,
+		mpool.AllocationOwnerHashBuild,
 		HashBuildSpillAllocationSiteSelectedData,
 		HashBuildSpillAllocationSiteSelectedArea,
 		HashBuildSpillAllocationSiteSelectedNulls,
@@ -421,7 +419,7 @@ func (hashBuild *HashBuild) releaseRecoveryCapacity(
 	}
 	selection, err := vector.NewAllocationAccountSelection(
 		account,
-		HashBuildAllocationOwner,
+		mpool.AllocationOwnerHashBuild,
 		HashBuildSpillAllocationSiteSelectedData,
 		HashBuildSpillAllocationSiteSelectedArea,
 		HashBuildSpillAllocationSiteSelectedNulls,
@@ -451,7 +449,7 @@ func (hb *HashmapBuilder) SetAllocationAccount(
 	}
 	selection, err := hashtable.NewAllocationAccountSelection(
 		account,
-		HashBuildAllocationOwner,
+		mpool.AllocationOwnerHashBuild,
 		HashBuildAllocationSiteHashCell,
 		HashBuildAllocationSiteHashDescriptor,
 	)
@@ -460,7 +458,7 @@ func (hb *HashmapBuilder) SetAllocationAccount(
 	}
 	iteratorAllocation, err := hashmap.NewIteratorAllocation(
 		account,
-		HashBuildAllocationOwner,
+		mpool.AllocationOwnerHashBuild,
 		HashBuildAllocationSiteHashIterator,
 	)
 	if err != nil {
@@ -468,7 +466,7 @@ func (hb *HashmapBuilder) SetAllocationAccount(
 	}
 	batchSelection, err := vector.NewAllocationAccountSelection(
 		account,
-		HashBuildAllocationOwner,
+		mpool.AllocationOwnerHashBuild,
 		HashBuildAllocationSiteBatchData,
 		HashBuildAllocationSiteBatchArea,
 		HashBuildAllocationSiteBatchNulls,
@@ -479,7 +477,7 @@ func (hb *HashmapBuilder) SetAllocationAccount(
 	}
 	uniqueKeySelection, err := vector.NewAllocationAccountSelection(
 		account,
-		HashBuildAllocationOwner,
+		mpool.AllocationOwnerHashBuild,
 		HashBuildAllocationSiteUniqueKeyData,
 		HashBuildAllocationSiteUniqueKeyArea,
 		HashBuildAllocationSiteUniqueKeyNulls,

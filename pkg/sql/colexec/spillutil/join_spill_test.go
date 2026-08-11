@@ -27,7 +27,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -217,7 +216,7 @@ func TestAccountedBucketReaderRoundTripAndCorruption(t *testing.T) {
 	require.NoError(t, err)
 	allocation, err := NewSpillAllocationAccount(
 		account,
-		hashbuild.HashBuildAllocationOwner,
+		mpool.AllocationOwnerHashBuild,
 	)
 	require.NoError(t, err)
 	reader := &BucketReader{

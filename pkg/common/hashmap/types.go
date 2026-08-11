@@ -100,7 +100,7 @@ func NewIteratorAllocation(
 		site:    site,
 	}
 	if account == nil || account.Handle() == 0 ||
-		owner < mpool.AllocationOwnerMin || owner > mpool.AllocationOwnerMax ||
+		owner < mpool.AllocationOwnerMin || owner > mpool.AllocationOwnerCatalogMax ||
 		site < mpool.AllocationSiteMin {
 		return nil, mpool.ErrAllocationAccountInvalid
 	}

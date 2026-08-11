@@ -54,7 +54,7 @@ func NewAccountedEmptyJoinMap(
 	}
 	selection, err := hashtable.NewAllocationAccountSelection(
 		account,
-		HashBuildAllocationOwner,
+		mpool.AllocationOwnerHashBuild,
 		HashBuildAllocationSiteHashCell,
 		HashBuildAllocationSiteHashDescriptor,
 	)
@@ -74,7 +74,7 @@ func NewAccountedEmptyJoinMap(
 	} else {
 		iteratorAllocation, allocationErr := hashmap.NewIteratorAllocation(
 			account,
-			HashBuildAllocationOwner,
+			mpool.AllocationOwnerHashBuild,
 			HashBuildAllocationSiteHashIterator,
 		)
 		if allocationErr != nil {
@@ -197,7 +197,7 @@ func (hb *HashmapBuilder) marshalRuntimeFilterVector(
 		vec,
 		mp,
 		hb.mapAllocationAccount,
-		HashBuildAllocationOwner,
+		mpool.AllocationOwnerHashBuild,
 		HashBuildAllocationSiteRuntimeFilterPayload,
 	)
 }

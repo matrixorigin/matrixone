@@ -393,10 +393,9 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) (err error) {
 			participantFinished = true
 			err = joinAllocationLifecycleErrors(err, terminalErr)
 			for _, snapshot := range terminal.allocation {
-				localAllocationQuality |= localAllocation.AddGeneration(
-					snapshot.Peak,
-					snapshot.Used,
-					snapshot.State == mpool.AllocationAccountTerminalValid,
+				localAllocationQuality |= addAllocationAccountTerminal(
+					&localAllocation,
+					snapshot,
 				)
 			}
 			var localMemory resource.MemoryDomainSummary

@@ -23,7 +23,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/spillutil"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	metricv2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
@@ -58,7 +57,7 @@ func newAccountedTestSpillEngine(
 	engine, err := spillutil.NewSpillEngine(
 		cfg,
 		account,
-		hashbuild.HashBuildAllocationOwner,
+		mpool.AllocationOwnerHashBuild,
 	)
 	require.NoError(t, err)
 	return engine

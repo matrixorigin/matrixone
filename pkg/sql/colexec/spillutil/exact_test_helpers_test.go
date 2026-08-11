@@ -21,7 +21,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
@@ -44,7 +43,7 @@ func newExactTestSpillEngine(
 	engine, err := NewSpillEngine(
 		cfg,
 		account,
-		hashbuild.HashBuildAllocationOwner,
+		mpool.AllocationOwnerHashBuild,
 	)
 	require.NoError(t, err)
 	return engine

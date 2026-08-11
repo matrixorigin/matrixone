@@ -43,6 +43,12 @@ type rightDedupKeyContractMode struct {
 	wantReSpill      bool
 }
 
+func TestRightDedupJoinAllocationSiteLedger(t *testing.T) {
+	require.Equal(t, uint8(90), uint8(rightDedupJoinAllocationSiteMatched))
+	require.Equal(t, uint8(114), uint8(rightDedupJoinAllocationSiteResultData))
+	require.Equal(t, uint8(117), uint8(rightDedupJoinAllocationSiteResultGrouping))
+}
+
 func TestRightDedupJoinDoubleSignedZeroContract(t *testing.T) {
 	// Pessimistic RightDedupJoin must report a duplicate when -0 probes an
 	// existing +0 build key, in every execution mode.

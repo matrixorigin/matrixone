@@ -357,7 +357,7 @@ func (ctr *container) initRightMatchedBitmap(
 		len(bats),
 		proc.Mp(),
 		ap.allocationAccount,
-		hashbuild.HashBuildAllocationOwner,
+		mpool.AllocationOwnerHashBuild,
 		loopJoinAllocationSiteBatchOffsets,
 	)
 	if err != nil {
@@ -376,7 +376,7 @@ func (ctr *container) initRightMatchedBitmap(
 		int64(total),
 		proc.Mp(),
 		ap.allocationAccount,
-		hashbuild.HashBuildAllocationOwner,
+		mpool.AllocationOwnerHashBuild,
 		loopJoinAllocationSiteMatched,
 	)
 	if err != nil {

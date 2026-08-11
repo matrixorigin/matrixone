@@ -569,7 +569,7 @@ func (hb *HashmapBuilder) buildHashmap(
 			hb.InputBatchRowCount,
 			proc.Mp(),
 			hb.mapAllocationAccount,
-			HashBuildAllocationOwner,
+			mpool.AllocationOwnerHashBuild,
 			HashBuildAllocationSiteGroupSels,
 		)
 		if err != nil {
@@ -1186,7 +1186,7 @@ func (hb *HashmapBuilder) makeDeleteOnlyBatch(rows []int32, proc *process.Proces
 	}
 	selection, err := vector.NewAllocationAccountSelection(
 		hb.mapAllocationAccount,
-		HashBuildAllocationOwner,
+		mpool.AllocationOwnerHashBuild,
 		HashBuildAllocationSiteDedupDeleteOnlyData,
 		HashBuildAllocationSiteDedupDeleteOnlyArea,
 		HashBuildAllocationSiteDedupDeleteOnlyNulls,

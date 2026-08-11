@@ -77,7 +77,7 @@ func newDedupTestSpillEngine(
 	engine, err := spillutil.NewSpillEngine(
 		cfg,
 		account,
-		hashbuild.HashBuildAllocationOwner,
+		mpool.AllocationOwnerHashBuild,
 	)
 	require.NoError(t, err)
 	return engine

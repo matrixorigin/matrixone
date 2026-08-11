@@ -848,17 +848,19 @@ func allocationAccountSiteError(
 		// encoding preserves only direct *moerr.Error values. The ownership
 		// dimensions are folded into the serialized message instead.
 		return moerr.NewMPoolCapacityNoCtxf(
-			"allocation owner=%d site=%d: %s",
+			"allocation owner=%d site=%d owner-name=%s: %s",
 			request.owner,
 			request.site,
+			request.owner,
 			err.Error(),
 		)
 	}
 	return prefixAllocationAccountError(
 		err,
-		"allocation owner=%d site=%d",
+		"allocation owner=%d site=%d owner-name=%s",
 		request.owner,
 		request.site,
+		request.owner,
 	)
 }
 
@@ -953,13 +955,18 @@ func (mp *MPool) allocAccounted(
 			request.account.registry.releaseMetadata()
 		}
 		if accountHeld {
-			request.account.releaseWithCapacityClass(uint64(sz), request.capacityClass)
+			request.account.releaseWithCapacityClass(
+				uint64(sz),
+				request.capacityClass,
+				request.owner,
+			)
 		}
 	}()
 
 	if err = request.account.acquireWithCapacityClass(
 		uint64(sz),
 		request.capacityClass,
+		request.owner,
 	); err != nil {
 		return nil, err
 	}

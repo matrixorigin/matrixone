@@ -61,7 +61,7 @@ func newExpressionExecutorsWithCapacityClass(
 	}
 	selection, err := vector.NewAllocationAccountSelectionWithCapacityClass(
 		account,
-		HashBuildAllocationOwner,
+		mpool.AllocationOwnerHashBuild,
 		executionResourceAllocationSiteExpressionData,
 		executionResourceAllocationSiteExpressionArea,
 		executionResourceAllocationSiteExpressionNulls,

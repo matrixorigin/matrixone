@@ -37,8 +37,10 @@ const (
 	SpillAllocationSiteDecodedGrouping
 	SpillAllocationSiteSelectedNulls
 	SpillAllocationSiteSelectedGrouping
-	SpillAllocationSiteReadBuffer
 )
+
+// Sites 44-59 belong to hashbuild runtime-filter and dedup allocations.
+const SpillAllocationSiteReadBuffer mpool.AllocationSite = 60
 
 // SpillAllocationAccount is the allocation provenance for one spill
 // engine.
@@ -87,7 +89,7 @@ func NewSpillAllocationAccount(
 func (a *SpillAllocationAccount) validate() error {
 	if a == nil || a.account == nil || a.account.Handle() == 0 ||
 		a.owner < mpool.AllocationOwnerMin ||
-		a.owner > mpool.AllocationOwnerMax ||
+		a.owner > mpool.AllocationOwnerCatalogMax ||
 		a.decoded == nil || a.selected == nil {
 		return mpool.ErrAllocationAccountInvalid
 	}

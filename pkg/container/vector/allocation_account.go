@@ -215,7 +215,7 @@ func NewConstArrayWithAllocation[T types.ArrayElement](
 func (s *AllocationAccountSelection) validate() error {
 	if s == nil || s.account == nil || s.account.Handle() == 0 ||
 		s.owner < mpool.AllocationOwnerMin ||
-		s.owner > mpool.AllocationOwnerMax ||
+		s.owner > mpool.AllocationOwnerCatalogMax ||
 		s.dataSite < mpool.AllocationSiteMin ||
 		s.areaSite < mpool.AllocationSiteMin ||
 		s.nullsSite < mpool.AllocationSiteMin ||

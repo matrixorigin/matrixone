@@ -497,7 +497,7 @@ func TestIndexBuildRuntimeFilterBudgetErrorPolicy(t *testing.T) {
 			} else {
 				remaining := generation.Cap() - generation.Used()
 				filler, err = proc.Mp().AllocAccounted(
-					int(remaining), account, 63, 255)
+					int(remaining), account, mpool.AllocationOwnerDML, 255)
 				require.NoError(t, err)
 			}
 

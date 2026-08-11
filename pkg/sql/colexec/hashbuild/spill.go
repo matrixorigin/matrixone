@@ -103,7 +103,7 @@ func growHashBuildSpillSlice[T any](
 		capacity,
 		mp,
 		account,
-		HashBuildAllocationOwner,
+		mpool.AllocationOwnerHashBuild,
 		site,
 		capacityClass,
 	)
@@ -726,7 +726,7 @@ func (ctr *container) appendSpillRecord(
 		ctr.spillAccountedWrite, err = mpool.NewAccountedBufferWithCapacityClass(
 			proc.Mp(),
 			ctr.hashmapBuilder.mapAllocationAccount,
-			HashBuildAllocationOwner,
+			mpool.AllocationOwnerHashBuild,
 			HashBuildSpillAllocationSiteMarshalBuffer,
 			ctr.recoveryCapacityClass,
 		)
@@ -761,7 +761,7 @@ func (ctr *container) appendSpillRecord(
 		buffer, err = mpool.NewAccountedBuffer(
 			proc.Mp(),
 			ctr.hashmapBuilder.mapAllocationAccount,
-			HashBuildAllocationOwner,
+			mpool.AllocationOwnerHashBuild,
 			HashBuildSpillAllocationSiteCoalesceBuffer,
 		)
 		if err != nil {

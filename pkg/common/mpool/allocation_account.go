@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"math"
 	"runtime"
+	"slices"
 	"sync"
 	"sync/atomic"
 
@@ -26,15 +27,14 @@ import (
 )
 
 // AllocationOwner and AllocationSite are bounded diagnostic dimensions.
-// Callers assign stable values in their own allocation-site ledger. Zero is
-// reserved so an accounted allocation can never be published without an
-// explicit owner and site.
+// Owners come from the repository catalog; packages assign stable sites in
+// the range reserved for that owner. Zero is reserved so an accounted
+// allocation can never be published without explicit provenance.
 type AllocationOwner uint8
 type AllocationSite uint8
 
 const (
 	AllocationOwnerMin AllocationOwner = 1
-	AllocationOwnerMax AllocationOwner = 63
 	AllocationSiteMin  AllocationSite  = 1
 	AllocationSiteMax  AllocationSite  = math.MaxUint8
 )
@@ -138,6 +138,15 @@ type AllocationAccountSnapshot struct {
 	Sealed bool
 }
 
+// AllocationAccountOwnerSnapshot is exact, bounded observation state for one
+// repository owner class. Current is live capacity at the snapshot boundary;
+// Peak is that owner's high-water capacity within the generation.
+type AllocationAccountOwnerSnapshot struct {
+	Owner   AllocationOwner
+	Current uint64
+	Peak    uint64
+}
+
 // AllocationAccountTerminalState classifies the one immutable snapshot
 // exported by an execution generation. A nonzero account at terminal cleanup
 // is an ownership invariant failure, not recoverable capacity pressure.
@@ -207,6 +216,7 @@ func IsRetryableAllocationCapacity(err error) bool {
 type AllocationAccountTerminalSnapshot struct {
 	AllocationAccountSnapshot
 	State           AllocationAccountTerminalState
+	Owners          []AllocationAccountOwnerSnapshot
 	LiveOwner       AllocationOwner
 	LiveSite        AllocationSite
 	LiveAllocations uint64
@@ -243,6 +253,8 @@ type AllocationAccount struct {
 	peak     atomic.Uint64
 	inflight atomic.Int64
 
+	ownerUsage [AllocationOwnerCatalogMax + 1]allocationAccountOwnerUsage
+
 	capacityMu          sync.Mutex
 	capacityControllers map[AllocationCapacityClass]*allocationCapacityRegistration
 	nextCapacityClass   AllocationCapacityClass
@@ -251,6 +263,11 @@ type AllocationAccount struct {
 type allocationCapacityRegistration struct {
 	control AllocationCapacityController
 	used    uint64
+}
+
+type allocationAccountOwnerUsage struct {
+	current atomic.Uint64
+	peak    atomic.Uint64
 }
 
 func (a *AllocationAccount) Handle() AllocationAccountHandle {
@@ -272,6 +289,22 @@ func (a *AllocationAccount) Snapshot() AllocationAccountSnapshot {
 		Peak:   a.peak.Load(),
 		Sealed: state&allocationAccountSealedBit != 0,
 	}
+}
+
+// OwnerUsage returns one owner's current and peak capacities. The two fields
+// are an observational pair; callers requiring a generation-wide invariant
+// must use the immutable terminal snapshot after producers quiesce.
+func (a *AllocationAccount) OwnerUsage(
+	owner AllocationOwner,
+) (AllocationAccountOwnerSnapshot, bool) {
+	if a == nil || owner < AllocationOwnerMin || owner > AllocationOwnerCatalogMax {
+		return AllocationAccountOwnerSnapshot{}, false
+	}
+	return AllocationAccountOwnerSnapshot{
+		Owner:   owner,
+		Current: a.ownerUsage[owner].current.Load(),
+		Peak:    a.ownerUsage[owner].peak.Load(),
+	}, true
 }
 
 // RegisterCapacityController installs one execution-local capacity class. The
@@ -350,15 +383,24 @@ func (a *AllocationAccount) capacityControllerLocked(
 	return registration, nil
 }
 
-func (a *AllocationAccount) acquire(capacity uint64) error {
-	return a.acquireWithCapacityClass(capacity, AllocationCapacityClassDefault)
+func (a *AllocationAccount) acquire(
+	capacity uint64,
+	owner AllocationOwner,
+) error {
+	return a.acquireWithCapacityClass(
+		capacity,
+		AllocationCapacityClassDefault,
+		owner,
+	)
 }
 
 func (a *AllocationAccount) acquireWithCapacityClass(
 	capacity uint64,
 	class AllocationCapacityClass,
+	owner AllocationOwner,
 ) error {
-	if a == nil || a.registry == nil || a.handle == 0 {
+	if a == nil || a.registry == nil || a.handle == 0 ||
+		owner < AllocationOwnerMin || owner > AllocationOwnerCatalogMax {
 		return ErrAllocationAccountInvalid
 	}
 	if capacity == 0 {
@@ -425,13 +467,24 @@ func (a *AllocationAccount) acquireWithCapacityClass(
 			if registration != nil {
 				registration.used += capacity
 			}
-			for {
-				peak := a.peak.Load()
-				if next <= peak || a.peak.CompareAndSwap(peak, next) {
-					acquired = true
-					return nil
-				}
-			}
+			ownerUsage := &a.ownerUsage[owner]
+			ownerCurrent := ownerUsage.current.Add(capacity)
+			raiseAllocationAccountPeak(&ownerUsage.peak, ownerCurrent)
+			raiseAllocationAccountPeak(&a.peak, next)
+			acquired = true
+			return nil
+		}
+	}
+}
+
+func raiseAllocationAccountPeak(peak *atomic.Uint64, current uint64) {
+	for {
+		value := peak.Load()
+		if current <= value {
+			return
+		}
+		if peak.CompareAndSwap(value, current) {
+			return
 		}
 	}
 }
@@ -450,60 +503,122 @@ func newAllocationAccountCapacityError(
 	)
 }
 
-func (a *AllocationAccount) release(capacity uint64) {
-	a.releaseWithCapacityClass(capacity, AllocationCapacityClassDefault)
+func (a *AllocationAccount) release(
+	capacity uint64,
+	owner AllocationOwner,
+) {
+	a.releaseWithCapacityClass(
+		capacity,
+		AllocationCapacityClassDefault,
+		owner,
+	)
 }
 
 func (a *AllocationAccount) releaseWithCapacityClass(
 	capacity uint64,
 	class AllocationCapacityClass,
+	owner AllocationOwner,
 ) {
 	if capacity == 0 {
 		return
+	}
+	if a == nil || owner < AllocationOwnerMin || owner > AllocationOwnerCatalogMax {
+		panic("invalid allocation account owner")
 	}
 	// Keep the local charge until the higher-level policy charge is gone. With
 	// metadata released by allocationLease first, exact local zero is therefore
 	// also a complete-release boundary.
 	control := a.control
 	var registration *allocationCapacityRegistration
+	capacityLocked := false
 	if class != AllocationCapacityClassDefault {
 		a.capacityMu.Lock()
+		capacityLocked = true
 		var err error
 		registration, err = a.capacityControllerLocked(class)
 		if err != nil {
 			a.capacityMu.Unlock()
+			capacityLocked = false
 			panic(err)
 		}
 		control = registration.control
-		defer a.capacityMu.Unlock()
+		defer func() {
+			if capacityLocked {
+				a.capacityMu.Unlock()
+			}
+		}()
 	}
+	state := a.state.Load()
+	ownerUsage := &a.ownerUsage[owner]
+	ownerCurrent := ownerUsage.current.Load()
+	if capacity > state&allocationAccountUsedMask || capacity > ownerCurrent {
+		panic("allocation account release underflow")
+	}
+	if registration != nil && capacity > registration.used {
+		panic("allocation capacity class release underflow")
+	}
+	// Validation must precede inflight registration: callers deliberately
+	// recover release-underflow panics in invariant tests, and a rejected
+	// release must not leave Seal waiting for work that never started.
+	a.inflight.Add(1)
 	if control != nil {
-		state := a.state.Load()
-		if capacity > state&allocationAccountUsedMask {
-			panic("allocation account release underflow")
-		}
-		control.ReleaseAllocationCapacity(capacity)
+		releaseAllocationCapacity(control, capacity, &a.inflight)
 	}
 	for {
-		state := a.state.Load()
+		if capacity > ownerCurrent {
+			a.inflight.Add(-1)
+			panic("allocation account owner release underflow")
+		}
+		if ownerUsage.current.CompareAndSwap(
+			ownerCurrent,
+			ownerCurrent-capacity,
+		) {
+			break
+		}
+		ownerCurrent = ownerUsage.current.Load()
+	}
+	becameZero := false
+	for {
 		used := state & allocationAccountUsedMask
 		if capacity > used {
+			a.inflight.Add(-1)
 			panic("allocation account release underflow")
 		}
 		next := state - capacity
 		if a.state.CompareAndSwap(state, next) {
 			if registration != nil {
-				if capacity > registration.used {
-					panic("allocation capacity class release underflow")
-				}
 				registration.used -= capacity
 			}
-			if next&allocationAccountUsedMask == 0 {
-				a.registry.tryDrainTombstone(a)
-			}
-			return
+			becameZero = next&allocationAccountUsedMask == 0
+			break
 		}
+		state = a.state.Load()
 	}
+	a.inflight.Add(-1)
+	// Keep registry and capacity-controller locking independent. In particular,
+	// tombstone draining must never wait for the registry while holding
+	// capacityMu needed by unregister and terminal inspection.
+	if capacityLocked {
+		a.capacityMu.Unlock()
+		capacityLocked = false
+	}
+	if becameZero {
+		a.registry.tryDrainTombstone(a)
+	}
+}
+
+func releaseAllocationCapacity(
+	control AllocationCapacityController,
+	capacity uint64,
+	inflight *atomic.Int64,
+) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			inflight.Add(-1)
+			panic(recovered)
+		}
+	}()
+	control.ReleaseAllocationCapacity(capacity)
 }
 
 // Seal prevents every later acquisition. It waits only for acquisitions that
@@ -523,6 +638,78 @@ func (a *AllocationAccount) Seal() AllocationAccountSnapshot {
 		runtime.Gosched()
 	}
 	return a.Snapshot()
+}
+
+// terminalOwnerSnapshot captures total and per-owner state at one quiescent
+// point. Seal prevents new acquisitions; releases register in inflight, so a
+// zero-before/zero-after observation is coherent even when a late physical
+// Free is draining an invariant-failure tombstone.
+func (a *AllocationAccount) terminalOwnerSnapshot() (
+	AllocationAccountSnapshot,
+	[]AllocationAccountOwnerSnapshot,
+	error,
+) {
+	if a == nil {
+		return AllocationAccountSnapshot{}, nil, ErrAllocationAccountInvalid
+	}
+	var fixed [AllocationOwnerCatalogMax]AllocationAccountOwnerSnapshot
+	for {
+		for a.inflight.Load() != 0 {
+			runtime.Gosched()
+		}
+		state := a.state.Load()
+		peak := a.peak.Load()
+		count := 0
+		var ownerCurrentTotal uint64
+		var ownerInvariant bool
+		for owner := AllocationOwnerMin; owner <= AllocationOwnerCatalogMax; owner++ {
+			ownerUsage := &a.ownerUsage[owner]
+			current := ownerUsage.current.Load()
+			ownerPeak := ownerUsage.peak.Load()
+			if current > ownerPeak || ownerPeak > peak ||
+				ownerCurrentTotal > math.MaxUint64-current {
+				ownerInvariant = true
+			} else {
+				ownerCurrentTotal += current
+			}
+			if current != 0 || ownerPeak != 0 {
+				fixed[count] = AllocationAccountOwnerSnapshot{
+					Owner:   owner,
+					Current: current,
+					Peak:    ownerPeak,
+				}
+				count++
+			}
+		}
+		if peak != 0 && count == 0 {
+			ownerInvariant = true
+		}
+		if a.inflight.Load() != 0 || a.state.Load() != state ||
+			a.peak.Load() != peak {
+			continue
+		}
+		current := AllocationAccountSnapshot{
+			Handle: a.handle,
+			Limit:  a.limit,
+			Used:   state & allocationAccountUsedMask,
+			Peak:   peak,
+			Sealed: state&allocationAccountSealedBit != 0,
+		}
+		var owners []AllocationAccountOwnerSnapshot
+		if count != 0 {
+			owners = make([]AllocationAccountOwnerSnapshot, count)
+			copy(owners, fixed[:count])
+		}
+		if ownerInvariant || ownerCurrentTotal != current.Used {
+			return current, owners, wrapAllocationAccountError(
+				ErrAllocationAccountInvariant,
+				"owner current total=%d account used=%d",
+				ownerCurrentTotal,
+				current.Used,
+			)
+		}
+		return current, owners, nil
+	}
 }
 
 type allocationAccountRegistrySlot struct {
@@ -635,7 +822,36 @@ func (r *AllocationAccountRegistry) CompleteTerminalWithError(
 		return snapshot, false, ErrAllocationAccountInvalid
 	}
 	account.Seal()
+	// Owner capture is bounded but intentionally outside the registry's shared
+	// lock. A concurrent terminal publisher can make this work redundant, but
+	// cannot mutate peak after Seal; releases already participate in the
+	// snapshot's inflight handshake.
+	current, owners, ownerErr := account.terminalOwnerSnapshot()
+	account.capacityMu.Lock()
+	liveCapacityControllers := len(account.capacityControllers)
+	account.capacityMu.Unlock()
+	return r.publishTerminalSnapshot(
+		account,
+		current,
+		owners,
+		ownerErr,
+		liveCapacityControllers,
+		terminalCause,
+	)
+}
 
+// publishTerminalSnapshot commits a coherent snapshot captured after Seal.
+// A physical Free may start after that capture. The snapshot remains a valid
+// terminal linearization point; publishing its nonzero state as a tombstone
+// lets that Free drain the generation instead of stranding a sealed slot.
+func (r *AllocationAccountRegistry) publishTerminalSnapshot(
+	account *AllocationAccount,
+	current AllocationAccountSnapshot,
+	owners []AllocationAccountOwnerSnapshot,
+	ownerErr error,
+	liveCapacityControllers int,
+	terminalCause error,
+) (snapshot AllocationAccountTerminalSnapshot, first bool, err error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	slot := account.handle.slot()
@@ -645,26 +861,24 @@ func (r *AllocationAccountRegistry) CompleteTerminalWithError(
 	}
 	entry := &r.slots[slot]
 	if entry.terminal != nil {
-		snapshot = *entry.terminal
+		snapshot = cloneAllocationAccountTerminalSnapshot(*entry.terminal)
 		if snapshot.State == AllocationAccountTerminalInvariantFailure {
 			return snapshot, false, newAllocationTerminalInvariantError(snapshot)
 		}
 		return snapshot, false, nil
 	}
 
-	current := account.Snapshot()
-	if !current.Sealed || account.inflight.Load() != 0 {
+	terminalCause = errors.Join(terminalCause, ownerErr)
+	if !current.Sealed {
 		return AllocationAccountTerminalSnapshot{
 				AllocationAccountSnapshot: current,
 				State:                     AllocationAccountTerminalInvariantFailure,
+				Owners:                    owners,
 			}, false, wrapAllocationAccountError(
 				ErrAllocationAccountInvariant,
 				"terminal account is not quiescent",
 			)
 	}
-	account.capacityMu.Lock()
-	liveCapacityControllers := len(account.capacityControllers)
-	account.capacityMu.Unlock()
 	if liveCapacityControllers != 0 {
 		terminalCause = errors.Join(
 			terminalCause,
@@ -678,6 +892,7 @@ func (r *AllocationAccountRegistry) CompleteTerminalWithError(
 	snapshot = AllocationAccountTerminalSnapshot{
 		AllocationAccountSnapshot: current,
 		State:                     AllocationAccountTerminalValid,
+		Owners:                    owners,
 	}
 	if terminalCause != nil {
 		snapshot.State = AllocationAccountTerminalInvariantFailure
@@ -697,7 +912,8 @@ func (r *AllocationAccountRegistry) CompleteTerminalWithError(
 	snapshot.State = AllocationAccountTerminalInvariantFailure
 	snapshot.LiveOwner, snapshot.LiveSite, snapshot.LiveAllocations =
 		allocationAccountLiveDiagnostic(account)
-	entry.terminal = &snapshot
+	stored := cloneAllocationAccountTerminalSnapshot(snapshot)
+	entry.terminal = &stored
 	entry.tombstone = true
 	r.tombstones++
 	r.suspended = true
@@ -713,12 +929,19 @@ func (r *AllocationAccountRegistry) CompleteTerminalWithError(
 	)
 }
 
+func cloneAllocationAccountTerminalSnapshot(
+	snapshot AllocationAccountTerminalSnapshot,
+) AllocationAccountTerminalSnapshot {
+	snapshot.Owners = slices.Clone(snapshot.Owners)
+	return snapshot
+}
+
 func newAllocationTerminalInvariantError(
 	snapshot AllocationAccountTerminalSnapshot,
 ) error {
 	return wrapAllocationAccountError(
 		ErrAllocationAccountInvariant,
-		"handle=%d used=%d peak=%d limit=%d owner=%d site=%d live-allocations=%d",
+		"handle=%d used=%d peak=%d limit=%d owner=%d site=%d live-allocations=%d owner-name=%s",
 		snapshot.Handle,
 		snapshot.Used,
 		snapshot.Peak,
@@ -726,6 +949,7 @@ func newAllocationTerminalInvariantError(
 		snapshot.LiveOwner,
 		snapshot.LiveSite,
 		snapshot.LiveAllocations,
+		snapshot.LiveOwner,
 	)
 }
 
@@ -955,7 +1179,7 @@ type allocationAccountRequest struct {
 
 func (r allocationAccountRequest) validate() error {
 	if r.account == nil || r.account.registry == nil ||
-		r.owner < AllocationOwnerMin || r.owner > AllocationOwnerMax ||
+		r.owner < AllocationOwnerMin || r.owner > AllocationOwnerCatalogMax ||
 		r.site < AllocationSiteMin {
 		return ErrAllocationAccountInvalid
 	}
@@ -982,5 +1206,5 @@ func (l allocationLease) release(capacity uint64) {
 	// until controller cleanup completes, so exact zero is a complete-release
 	// boundary.
 	l.account.registry.releaseMetadata()
-	l.account.releaseWithCapacityClass(capacity, l.capacityClass)
+	l.account.releaseWithCapacityClass(capacity, l.capacityClass, l.owner)
 }
