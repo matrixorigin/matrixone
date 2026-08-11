@@ -1752,43 +1752,13 @@ func makeBuiltInUUIDBoundary(version int) executeLogicOfOverload {
 				}
 				continue
 			}
-			t := v.ConvertToGoTime(loc)
 			var u types.Uuid
-			switch version {
-			case 7:
-				// 48-bit unix-millisecond timestamp
-				ms := t.UnixMilli()
-				if ms < 0 || ms >= 1<<48 {
-					return moerr.NewInvalidInputf(proc.Ctx, "uuid_v7 timestamp out of range: %s", v.String())
-				}
-				u[0] = byte(ms >> 40)
-				u[1] = byte(ms >> 32)
-				u[2] = byte(ms >> 24)
-				u[3] = byte(ms >> 16)
-				u[4] = byte(ms >> 8)
-				u[5] = byte(ms)
-				u[6] = 0x70 // version 7; rand_a bits zero
-				u[8] = 0x80 // RFC 4122 variant; rand_b bits zero
-			case 1, 6:
-				// 60-bit count of 100ns intervals since 1582-10-15
-				ts := t.UnixMicro()*10 + uuidGregorianToUnixSecs*10_000_000
-				if ts < 0 || ts >= 1<<60 {
-					return moerr.NewInvalidInputf(proc.Ctx, "uuid_v%d timestamp out of range: %s", version, v.String())
-				}
-				if version == 6 {
-					rfcV6EncodeTime(&u, ts)
-				} else {
-					// v1: time_low(32) | time_mid(16) | version(4) | time_high(12)
-					u[0] = byte(ts >> 24)
-					u[1] = byte(ts >> 16)
-					u[2] = byte(ts >> 8)
-					u[3] = byte(ts)
-					u[4] = byte(ts >> 40)
-					u[5] = byte(ts >> 32)
-					u[6] = 0x10 | byte(ts>>56)&0x0f
-					u[7] = byte(ts >> 48)
-				}
-				u[8] = 0x80 // RFC 4122 variant; clock-seq and node bits zero
+			if version == 7 {
+				u[6] = 0x70 // version 7; rand_a bits zero (v1/v6 versions are set by setUUIDTimestamp)
+			}
+			u[8] = 0x80 // RFC 4122 variant; random/clock-seq/node bits zero
+			if !setUUIDTimestamp(&u, version, v.ConvertToGoTime(loc)) {
+				return moerr.NewInvalidInputf(proc.Ctx, "uuid_v%d timestamp out of range: %s", version, v.String())
 			}
 			if err := rs.Append(u, false); err != nil {
 				return err
@@ -1798,13 +1768,17 @@ func makeBuiltInUUIDBoundary(version int) executeLogicOfOverload {
 	}
 }
 
-// shiftUUIDTimestamp adds deltaMicro microseconds to the timestamp embedded in
-// u, leaving the random/clock-seq/node bits untouched. Reports false if the
-// shifted timestamp no longer fits the version's timestamp field.
-func shiftUUIDTimestamp(u *types.Uuid, version int, deltaMicro int64) bool {
+// setUUIDTimestamp encodes the absolute instant t into u's timestamp field,
+// preserving all non-time bits (rand_a/rand_b for v7 in the untouched nibbles,
+// clock-seq and node for v1/v6). For v1/v6 the version nibble lives inside the
+// encoded field and is written here; for v7 only octets 0-5 are timestamp, so
+// the caller's byte 6 (version + rand_a) is preserved. Reports false if t is
+// outside the version's representable range.
+func setUUIDTimestamp(u *types.Uuid, version int, t time.Time) bool {
 	switch version {
 	case 7:
-		ms := int64(binary.BigEndian.Uint64(u[:8])>>16) + deltaMicro/1000
+		// 48-bit unix-millisecond timestamp in octets 0-5
+		ms := t.UnixMilli()
 		if ms < 0 || ms >= 1<<48 {
 			return false
 		}
@@ -1814,25 +1788,62 @@ func shiftUUIDTimestamp(u *types.Uuid, version int, deltaMicro int64) bool {
 		u[3] = byte(ms >> 16)
 		u[4] = byte(ms >> 8)
 		u[5] = byte(ms)
-	case 6:
-		ts := rfcV6DecodeTime(*u) + deltaMicro*10
+	case 1, 6:
+		// 60-bit count of 100ns intervals since 1582-10-15 (keep the sub-µs
+		// 100ns digit — consecutive v1/v6 timestamps differ only there)
+		ts := t.UnixMicro()*10 + int64(t.Nanosecond()%1000)/100 + uuidGregorianToUnixSecs*10_000_000
 		if ts < 0 || ts >= 1<<60 {
 			return false
 		}
-		rfcV6EncodeTime(u, ts)
-	case 1:
-		ts := int64(binary.BigEndian.Uint32(u[0:4])) |
-			int64(binary.BigEndian.Uint16(u[4:6]))<<32 |
-			int64(binary.BigEndian.Uint16(u[6:8])&0x0fff)<<48
-		ts += deltaMicro * 10
-		if ts < 0 || ts >= 1<<60 {
-			return false
+		if version == 6 {
+			rfcV6EncodeTime(u, ts)
+		} else {
+			// v1: time_low(32) | time_mid(16) | version(4) | time_high(12)
+			binary.BigEndian.PutUint32(u[0:4], uint32(ts))
+			binary.BigEndian.PutUint16(u[4:6], uint16(ts>>32))
+			binary.BigEndian.PutUint16(u[6:8], 0x1000|uint16(ts>>48)&0x0fff)
 		}
-		binary.BigEndian.PutUint32(u[0:4], uint32(ts))
-		binary.BigEndian.PutUint16(u[4:6], uint16(ts>>32))
-		binary.BigEndian.PutUint16(u[6:8], 0x1000|uint16(ts>>48)&0x0fff)
 	}
 	return true
+}
+
+// uuidEmbeddedTime decodes the absolute instant embedded in a v1/v6/v7 UUID.
+// v6 is decoded via the RFC 9562 field layout (google/uuid's Time() assumes
+// its own non-standard v6 layout); v1 and v7 use google/uuid's RFC-correct
+// decoder.
+func uuidEmbeddedTime(u types.Uuid, version int) time.Time {
+	if version == 6 {
+		rel := rfcV6DecodeTime(u) - uuidGregorianToUnixSecs*10_000_000
+		sec, frac := rel/10_000_000, rel%10_000_000
+		if frac < 0 {
+			sec--
+			frac += 10_000_000
+		}
+		return time.Unix(sec, frac*100).UTC()
+	}
+	sec, nsec := uuid.UUID(u).Time().UnixTime()
+	return time.Unix(sec, nsec).UTC()
+}
+
+// addIntervalInZone applies (num, unit) to the instant t with date_add
+// calendar semantics in loc: the shift is computed on t's local wall clock and
+// the shifted wall clock is converted back to an absolute instant in loc, so
+// across a DST transition the absolute delta absorbs the UTC-offset change
+// (e.g. a 3-month shift over an EDT->EST boundary is 1 hour longer than its
+// nominal length, keeping the same local time of day).
+func addIntervalInZone(t time.Time, num int64, unit types.IntervalType, loc *time.Location) (time.Time, bool) {
+	tl := t.In(loc)
+	y, mo, d := tl.Date()
+	h, mi, s := tl.Clock()
+	dt := types.DatetimeFromClock(int32(y), uint8(mo), uint8(d), uint8(h), uint8(mi), uint8(s), uint32(tl.Nanosecond()/1000))
+	shifted, ok := dt.AddInterval(num, unit, types.DateTimeType)
+	if !ok {
+		return time.Time{}, false
+	}
+	// Datetime only holds microseconds; carry t's sub-microsecond residue
+	// through so v1/v6 inputs 100ns apart stay distinct after the shift
+	// (their per-call uniqueness lives in those timestamp bits).
+	return shifted.ConvertToGoTime(loc).Add(time.Duration(tl.Nanosecond() % 1000)), true
 }
 
 // makeBuiltInUUIDShifted implements uuid_v1/uuid_v6/uuid_v7 (and uuid, the
@@ -1872,23 +1883,22 @@ func makeBuiltInUUIDShifted(version int) executeLogicOfOverload {
 				}
 				continue
 			}
-			tl := time.Now().In(loc)
-			y, mo, d := tl.Date()
-			h, mi, s := tl.Clock()
-			nowDt := types.DatetimeFromClock(int32(y), uint8(mo), uint8(d), uint8(h), uint8(mi), uint8(s), uint32(tl.Nanosecond()/1000))
-			shifted, ok := nowDt.AddInterval(num, types.IntervalType(unit), types.DateTimeType)
+			val, err := newFn()
+			if err != nil {
+				return moerr.NewInternalError(proc.Ctx, "newuuid failed")
+			}
+			u := types.Uuid(val)
+			// shift the instant the generated UUID actually embeds, in the
+			// session timezone, so DST transitions keep local wall-clock
+			// semantics like date_add
+			target, ok := addIntervalInZone(uuidEmbeddedTime(u, version), num, types.IntervalType(unit), loc)
 			if !ok {
 				if err := rs.Append(types.Uuid{}, true); err != nil {
 					return err
 				}
 				continue
 			}
-			val, err := newFn()
-			if err != nil {
-				return moerr.NewInternalError(proc.Ctx, "newuuid failed")
-			}
-			u := types.Uuid(val)
-			if !shiftUUIDTimestamp(&u, version, int64(shifted)-int64(nowDt)) {
+			if !setUUIDTimestamp(&u, version, target) {
 				return moerr.NewInvalidInputf(proc.Ctx, "uuid_v%d shifted timestamp out of range", version)
 			}
 			if err := rs.Append(u, false); err != nil {
@@ -1939,19 +1949,8 @@ func builtInUUIDExtractTimestamp(parameters []*vector.Vector, result vector.Func
 		}
 		var t time.Time
 		switch u.Version() {
-		case 1, 7:
-			sec, nsec := u.Time().UnixTime()
-			t = time.Unix(sec, nsec).UTC()
-		case 6:
-			// decode the RFC 9562 v6 fields explicitly — google/uuid's Time()
-			// assumes its own non-standard v6 layout
-			rel := rfcV6DecodeTime(v) - uuidGregorianToUnixSecs*10_000_000
-			sec, frac := rel/10_000_000, rel%10_000_000
-			if frac < 0 {
-				sec--
-				frac += 10_000_000
-			}
-			t = time.Unix(sec, frac*100).UTC()
+		case 1, 6, 7:
+			t = uuidEmbeddedTime(v, int(u.Version()))
 		default:
 			if err := appendNull(); err != nil {
 				return err

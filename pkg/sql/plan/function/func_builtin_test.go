@@ -2361,6 +2361,48 @@ func TestBuiltInUUIDShifted(t *testing.T) {
 	require.True(t, result.GetResultVector().GetNulls().Contains(0))
 }
 
+func TestUUIDShiftDSTSemantics(t *testing.T) {
+	loc, err := time.LoadLocation("America/New_York")
+	require.NoError(t, err)
+	cases := []struct {
+		name      string
+		base      time.Time
+		num       int64
+		unit      types.IntervalType
+		want      time.Time
+		wantDelta time.Duration
+	}{
+		// spring-forward (2026-03-08, EST -> EDT): same local wall clock, so
+		// the absolute delta is one hour shorter than the nominal month
+		{"forward-month", time.Date(2026, 3, 1, 10, 30, 0, 0, loc), 1, types.Month,
+			time.Date(2026, 4, 1, 10, 30, 0, 0, loc), 31*24*time.Hour - time.Hour},
+		// fall-back (2026-11-01, EDT -> EST): one hour longer
+		{"backward-month", time.Date(2026, 10, 15, 10, 30, 0, 0, loc), 1, types.Month,
+			time.Date(2026, 11, 15, 10, 30, 0, 0, loc), 31*24*time.Hour + time.Hour},
+		// negative shift back across the fall transition
+		{"negative-month", time.Date(2026, 11, 15, 10, 30, 0, 0, loc), -1, types.Month,
+			time.Date(2026, 10, 15, 10, 30, 0, 0, loc), -(31*24*time.Hour + time.Hour)},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			require.Equal(t, c.wantDelta, c.want.Sub(c.base))
+			got, ok := addIntervalInZone(c.base, c.num, c.unit, loc)
+			require.True(t, ok)
+			require.True(t, got.Equal(c.want), "got %v want %v", got, c.want)
+			// the shifted instant round-trips through every version's timestamp field
+			for _, version := range []int{1, 6, 7} {
+				var u types.Uuid
+				if version == 7 {
+					u[6] = 0x70
+				}
+				u[8] = 0x80
+				require.True(t, setUUIDTimestamp(&u, version, got))
+				require.True(t, uuidEmbeddedTime(u, version).Equal(got), "v%d roundtrip", version)
+			}
+		})
+	}
+}
+
 func TestBuiltInUUIDExtract(t *testing.T) {
 	proc := testutil.NewProcess(t)
 
