@@ -2481,7 +2481,10 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 		var newProjList []*plan.Expr
 		if _, preserve := builder.preserveScanProjection[nodeID]; preserve {
 			for i := range node.ProjectList {
-				colRefCnt[[2]int32{tag, int32(i)}] = 1
+				ref := [2]int32{tag, int32(i)}
+				if colRefCnt[ref] == 0 {
+					colRefCnt[ref] = 1
+				}
 			}
 		}
 
@@ -7271,6 +7274,11 @@ func (builder *QueryBuilder) bindWhere(
 	if err != nil {
 		return
 	}
+	// Scalar-subquery decorrelation may need a safe outer-key domain while it
+	// is flattening one conjunct. Publish the complete bound WHERE list before
+	// walking it so the optimization is independent of SQL predicate order.
+	// The list is replaced with the flattened predicates below.
+	ctx.whereFilters = whereList
 	var expr *plan.Expr
 	for _, cond := range whereList {
 		if nodeID, expr, err = builder.flattenFilterSubqueries(nodeID, cond, ctx); err != nil {
