@@ -208,11 +208,13 @@ func TestBytesSliceKeepsBackingCapacity(t *testing.T) {
 	require.Equal(t, int64(1024), data.Capacity())
 }
 
-func TestDefaultCacheDataAllocatorReportsPageBackingSize(t *testing.T) {
+func TestDefaultCacheDataAllocatorReportsJemallocClassBackingSize(t *testing.T) {
 	const request = 700 * 1024
-	want, ok := malloc.HybridMmapAllocationSize(request)
-	require.True(t, ok)
-	require.Equal(t, int(want), DefaultCacheDataAllocator().BackingSize(request))
+	backingSize := DefaultCacheDataAllocator().BackingSize(request)
+	require.GreaterOrEqual(t, backingSize, request)
+	data := DefaultCacheDataAllocator().AllocateCacheData(context.Background(), request)
+	defer data.Release()
+	require.Equal(t, int64(backingSize), data.Capacity())
 }
 
 type recordingDataCache struct {
@@ -372,4 +374,21 @@ func TestFileServiceCacheDataAllocatorsReserveBackingCapacity(t *testing.T) {
 			})
 		}
 	}
+}
+
+func TestMemCachesUseIndependentJemallocArenas(t *testing.T) {
+	first := NewMemCache(fscache.ConstCapacity(1<<20), nil, nil, "first")
+	defer first.Close(context.Background())
+	second := NewMemCache(fscache.ConstCapacity(1<<20), nil, nil, "second")
+	defer second.Close(context.Background())
+
+	require.NotNil(t, first.jemalloc)
+	require.NotNil(t, second.jemalloc)
+	require.NotEqual(t, first.jemalloc.Arena(), second.jemalloc.Arena())
+
+	data := first.AllocateCacheData(context.Background(), 1024)
+	defer data.Release()
+	stats, err := first.jemalloc.Stats()
+	require.NoError(t, err)
+	require.GreaterOrEqual(t, stats.Allocated, uint64(data.Capacity()))
 }

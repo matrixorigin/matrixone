@@ -216,6 +216,38 @@ func GetFsCacheBackingOverheadBytesGauge(name, typ string) prometheus.Gauge {
 	return getFsCacheBytesGauge(name, typ, "backing-overhead")
 }
 
+// FsCacheAllocatorStatsGauges expose allocator state for one cache component.
+// Allocated is the allocator's size-class-rounded live payload; Fragmentation
+// is Active-Allocated and therefore excludes caller-visible slice rounding,
+// which is reported separately by backing-overhead.
+type FsCacheAllocatorStatsGauges struct {
+	Allocated     prometheus.Gauge
+	Active        prometheus.Gauge
+	Fragmentation prometheus.Gauge
+	Metadata      prometheus.Gauge
+	Resident      prometheus.Gauge
+	Mapped        prometheus.Gauge
+	Retained      prometheus.Gauge
+	Dirty         prometheus.Gauge
+	Muzzy         prometheus.Gauge
+}
+
+// GetFsCacheAllocatorStatsGauges returns allocator gauges for a cache. The
+// values describe only the cache's dedicated allocator arena.
+func GetFsCacheAllocatorStatsGauges(name, typ string) FsCacheAllocatorStatsGauges {
+	return FsCacheAllocatorStatsGauges{
+		Allocated:     getFsCacheBytesGauge(name, typ, "allocator-allocated"),
+		Active:        getFsCacheBytesGauge(name, typ, "allocator-active"),
+		Fragmentation: getFsCacheBytesGauge(name, typ, "allocator-fragmentation"),
+		Metadata:      getFsCacheBytesGauge(name, typ, "allocator-metadata"),
+		Resident:      getFsCacheBytesGauge(name, typ, "allocator-resident"),
+		Mapped:        getFsCacheBytesGauge(name, typ, "allocator-mapped"),
+		Retained:      getFsCacheBytesGauge(name, typ, "allocator-retained"),
+		Dirty:         getFsCacheBytesGauge(name, typ, "allocator-dirty"),
+		Muzzy:         getFsCacheBytesGauge(name, typ, "allocator-muzzy"),
+	}
+}
+
 func getFsCacheBytesGauge(name, typ, metricType string) prometheus.Gauge {
 	return fsCacheBytes.WithLabelValues(fsCacheComponent(name, typ), metricType)
 }

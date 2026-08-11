@@ -15,6 +15,7 @@
 package fileservice
 
 import (
+	"fmt"
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/common/malloc"
@@ -37,8 +38,16 @@ func decorateAllocator(allocator malloc.Allocator) malloc.Allocator {
 	return allocator
 }
 
-var memoryCacheAllocator = sync.OnceValue(func() malloc.Allocator {
-	allocator := malloc.Allocator(malloc.NewHybridMmapAllocator())
+// newMemoryCacheAllocator creates one dedicated jemalloc arena. Memory caches
+// must not silently fall back: admission uses this allocator's size classes and
+// its arena is the source of the per-cache fragmentation metrics.
+func newMemoryCacheAllocator() (malloc.Allocator, *malloc.JemallocAllocator) {
+	raw, err := malloc.NewJemallocAllocator()
+	if err != nil {
+		panic(fmt.Sprintf("initialize memory cache jemalloc arena: %v", err))
+	}
+
+	allocator := malloc.Allocator(raw)
 	allocator = malloc.DecorateWithDefaultConfig(allocator)
 	// with metrics
 	allocator = malloc.NewMetricsAllocator(
@@ -49,10 +58,20 @@ var memoryCacheAllocator = sync.OnceValue(func() malloc.Allocator {
 		metric.MallocGauge.WithLabelValues("memory-cache-inuse-objects"),
 		metric.OffHeapInuseGauge.WithLabelValues("memory-cache"),
 	)
-	// decorate
-	allocator = decorateAllocator(allocator)
+	return allocator, raw
+}
+
+// memoryCacheAllocator is used only by cache-like paths without a configured
+// MemCache. Configured caches create their own arena in NewMemCache.
+var memoryCacheAllocator = sync.OnceValue(func() malloc.Allocator {
+	allocator, _ := newMemoryCacheAllocator()
 	return allocator
 })
+
+func newMemoryCacheDataAllocator() (*bytesAllocator, *malloc.JemallocAllocator) {
+	allocator, raw := newMemoryCacheAllocator()
+	return &bytesAllocator{allocator: allocator}, raw
+}
 
 var ioAllocator = sync.OnceValue(func() malloc.Allocator {
 	allocator := malloc.GetDefault(nil)

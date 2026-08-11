@@ -248,26 +248,29 @@ func resolveS3CopySource(fs FileService, filePath string) (*S3FS, string, error)
 
 func (s *S3FS) AllocateCacheData(ctx context.Context, size int) fscache.Data {
 	if s.memCache != nil {
-		ensureCacheDataCapacity(ctx, s.memCache.cache, DefaultCacheDataAllocator(), size)
+		return s.memCache.AllocateCacheData(ctx, size)
 	}
 	return DefaultCacheDataAllocator().AllocateCacheData(ctx, size)
 }
 
 func (s *S3FS) AllocateCacheDataWithHint(ctx context.Context, size int, hints malloc.Hints) fscache.Data {
 	if s.memCache != nil {
-		ensureCacheDataCapacity(ctx, s.memCache.cache, DefaultCacheDataAllocator(), size)
+		return s.memCache.AllocateCacheDataWithHint(ctx, size, hints)
 	}
 	return DefaultCacheDataAllocator().AllocateCacheDataWithHint(ctx, size, hints)
 }
 
 func (s *S3FS) CopyToCacheData(ctx context.Context, data []byte) fscache.Data {
 	if s.memCache != nil {
-		ensureCacheDataCapacity(ctx, s.memCache.cache, DefaultCacheDataAllocator(), len(data))
+		return s.memCache.CopyToCacheData(ctx, data)
 	}
 	return DefaultCacheDataAllocator().CopyToCacheData(ctx, data)
 }
 
 func (s *S3FS) BackingSize(size int) int {
+	if s.memCache != nil {
+		return s.memCache.BackingSize(size)
+	}
 	return DefaultCacheDataAllocator().BackingSize(size)
 }
 
@@ -306,13 +309,17 @@ func (s *S3FS) initCaches(ctx context.Context, config CacheConfig) error {
 		*config.DiskCapacity > DisableCacheCapacity &&
 		config.DiskPath != nil {
 		var err error
+		var cacheDataAllocator CacheDataAllocator
+		if s.memCache != nil {
+			cacheDataAllocator = s.memCache
+		}
 		s.diskCache, err = NewDiskCache(
 			ctx,
 			*config.DiskPath,
 			fscache.ConstCapacity(int64(*config.DiskCapacity)),
 			s.perfCounterSets,
 			true,
-			nil,
+			cacheDataAllocator,
 			s.name,
 		)
 		if err != nil {

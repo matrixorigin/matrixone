@@ -152,6 +152,13 @@ type cacheCapacityGuardedAllocator struct {
 
 var _ CacheDataAllocator = cacheCapacityGuardedAllocator{}
 
+type capacityGuardedCacheDataAllocator interface {
+	CacheDataAllocator
+	cacheDataAllocationCapacityGuarded()
+}
+
+func (cacheCapacityGuardedAllocator) cacheDataAllocationCapacityGuarded() {}
+
 func (c cacheCapacityGuardedAllocator) AllocateCacheData(ctx context.Context, size int) fscache.Data {
 	ensureCacheDataCapacity(ctx, c.cache, c.allocator, size)
 	return c.allocator.AllocateCacheData(ctx, size)

@@ -22,6 +22,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/malloc"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/fileservice/fifocache"
 	"github.com/matrixorigin/matrixone/pkg/fileservice/fscache"
@@ -33,6 +34,14 @@ type MemCache struct {
 	cache       fscache.DataCache
 	counterSets []*perfcounter.CounterSet
 	callbacksMu [256]sync.Mutex
+
+	// allocator is dedicated to this cache. Do not use DefaultCacheDataAllocator
+	// here: that would merge unrelated FileService caches into one allocator
+	// arena and make fragmentation metrics untrustworthy.
+	allocator       *bytesAllocator
+	jemalloc        *malloc.JemallocAllocator
+	allocatorGauges metric.FsCacheAllocatorStatsGauges
+	lastStatsUpdate atomic.Int64
 }
 
 var memCacheCallbackSeed = maphash.MakeSeed()
@@ -164,6 +173,7 @@ func NewMemCache(
 	inuseBytes, capacityBytes := metric.GetFsCacheBytesGauge(name, "mem")
 	logicalInuseBytes := metric.GetFsCacheLogicalBytesGauge(name, "mem")
 	backingOverheadBytes := metric.GetFsCacheBackingOverheadBytesGauge(name, "mem")
+	allocatorGauges := metric.GetFsCacheAllocatorStatsGauges(name, "mem")
 	capacityBytes.Set(float64(capacity()))
 
 	capacityFunc := func() int64 {
@@ -176,8 +186,12 @@ func NewMemCache(
 	}
 
 	var dataCache *fifocache.DataCache
+	cacheAllocator, jemallocAllocator := newMemoryCacheDataAllocator()
 	ret := &MemCache{
-		counterSets: counterSets,
+		counterSets:     counterSets,
+		allocator:       cacheAllocator,
+		jemalloc:        jemallocAllocator,
+		allocatorGauges: allocatorGauges,
 	}
 
 	prepareSetFn := func(_ context.Context, _ fscache.CacheKey, value fscache.Data, _, _ int64, _ uint64) func(inserted bool) {
@@ -200,6 +214,7 @@ func NewMemCache(
 		logicalInuseBytes.Add(float64(logicalSize))
 		backingOverheadBytes.Add(float64(size - logicalSize))
 		capacityBytes.Set(float64(capacityFunc()))
+		ret.refreshAllocatorMetrics(false)
 		LogEvent(ctx, str_update_metrics_end)
 
 		// callbacks
@@ -253,6 +268,7 @@ func NewMemCache(
 
 		// release
 		value.Release()
+		ret.refreshAllocatorMetrics(false)
 
 		// callbacks
 		if callbacks != nil {
@@ -276,6 +292,7 @@ func NewMemCache(
 	dataCache.SetAdmissionTarget(memoryCachePressureTarget)
 
 	ret.cache = dataCache
+	ret.refreshAllocatorMetrics(true)
 
 	if name != "" {
 		allMemoryCaches.Store(ret, name)
@@ -285,6 +302,70 @@ func NewMemCache(
 }
 
 var _ IOVectorCache = new(MemCache)
+var _ CacheDataAllocator = new(MemCache)
+
+// cacheDataAllocationCapacityGuarded marks allocators that reserve FIFO cache
+// capacity before allocating. DiskCache uses it to avoid a second eviction
+// pass when its cache data is allocated directly into this MemCache.
+func (*MemCache) cacheDataAllocationCapacityGuarded() {}
+
+func (m *MemCache) AllocateCacheData(ctx context.Context, size int) fscache.Data {
+	ensureCacheDataCapacity(ctx, m.cache, m.allocator, size)
+	return m.allocator.AllocateCacheData(ctx, size)
+}
+
+func (m *MemCache) AllocateCacheDataWithHint(ctx context.Context, size int, hints malloc.Hints) fscache.Data {
+	ensureCacheDataCapacity(ctx, m.cache, m.allocator, size)
+	return m.allocator.AllocateCacheDataWithHint(ctx, size, hints)
+}
+
+func (m *MemCache) CopyToCacheData(ctx context.Context, data []byte) fscache.Data {
+	ensureCacheDataCapacity(ctx, m.cache, m.allocator, len(data))
+	return m.allocator.CopyToCacheData(ctx, data)
+}
+
+func (m *MemCache) BackingSize(size int) int {
+	return m.allocator.BackingSize(size)
+}
+
+func (m *MemCache) refreshAllocatorMetrics(force bool) {
+	if m.jemalloc == nil {
+		return
+	}
+
+	now := time.Now().UnixNano()
+	if !force {
+		for {
+			last := m.lastStatsUpdate.Load()
+			if now-last < int64(time.Second) {
+				return
+			}
+			if m.lastStatsUpdate.CompareAndSwap(last, now) {
+				break
+			}
+		}
+	} else {
+		m.lastStatsUpdate.Store(now)
+	}
+
+	stats, err := m.jemalloc.Stats()
+	if err != nil {
+		return
+	}
+	fragmentation := uint64(0)
+	if stats.Active > stats.Allocated {
+		fragmentation = stats.Active - stats.Allocated
+	}
+	m.allocatorGauges.Allocated.Set(float64(stats.Allocated))
+	m.allocatorGauges.Active.Set(float64(stats.Active))
+	m.allocatorGauges.Fragmentation.Set(float64(fragmentation))
+	m.allocatorGauges.Metadata.Set(float64(stats.Metadata))
+	m.allocatorGauges.Resident.Set(float64(stats.Resident))
+	m.allocatorGauges.Mapped.Set(float64(stats.Mapped))
+	m.allocatorGauges.Retained.Set(float64(stats.Retained))
+	m.allocatorGauges.Dirty.Set(float64(stats.Dirty))
+	m.allocatorGauges.Muzzy.Set(float64(stats.Muzzy))
+}
 
 func (m *MemCache) Read(
 	ctx context.Context,
@@ -380,6 +461,7 @@ func (m *MemCache) Update(
 
 func (m *MemCache) Flush(ctx context.Context) {
 	m.cache.Flush(ctx)
+	m.refreshAllocatorMetrics(true)
 }
 
 func (m *MemCache) DeletePaths(
@@ -415,5 +497,6 @@ func (m *MemCache) EvictToCapacityPercent(ctx context.Context, percent int64) in
 
 func (m *MemCache) Close(ctx context.Context) {
 	m.Flush(ctx)
+	m.refreshAllocatorMetrics(true)
 	allMemoryCaches.Delete(m)
 }

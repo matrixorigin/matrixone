@@ -244,26 +244,29 @@ func (l *LocalFS) contentSize(fileSize int64) int64 {
 
 func (l *LocalFS) AllocateCacheData(ctx context.Context, size int) fscache.Data {
 	if l.memCache != nil {
-		ensureCacheDataCapacity(ctx, l.memCache.cache, DefaultCacheDataAllocator(), size)
+		return l.memCache.AllocateCacheData(ctx, size)
 	}
 	return DefaultCacheDataAllocator().AllocateCacheData(ctx, size)
 }
 
 func (l *LocalFS) AllocateCacheDataWithHint(ctx context.Context, size int, hints malloc.Hints) fscache.Data {
 	if l.memCache != nil {
-		ensureCacheDataCapacity(ctx, l.memCache.cache, DefaultCacheDataAllocator(), size)
+		return l.memCache.AllocateCacheDataWithHint(ctx, size, hints)
 	}
 	return DefaultCacheDataAllocator().AllocateCacheDataWithHint(ctx, size, hints)
 }
 
 func (l *LocalFS) CopyToCacheData(ctx context.Context, data []byte) fscache.Data {
 	if l.memCache != nil {
-		ensureCacheDataCapacity(ctx, l.memCache.cache, DefaultCacheDataAllocator(), len(data))
+		return l.memCache.CopyToCacheData(ctx, data)
 	}
 	return DefaultCacheDataAllocator().CopyToCacheData(ctx, data)
 }
 
 func (l *LocalFS) BackingSize(size int) int {
+	if l.memCache != nil {
+		return l.memCache.BackingSize(size)
+	}
 	return DefaultCacheDataAllocator().BackingSize(size)
 }
 
@@ -303,13 +306,17 @@ func (l *LocalFS) initCaches(ctx context.Context, config CacheConfig) error {
 		*config.DiskCapacity > DisableCacheCapacity &&
 		config.DiskPath != nil {
 		var err error
+		var cacheDataAllocator CacheDataAllocator
+		if l.memCache != nil {
+			cacheDataAllocator = l.memCache
+		}
 		l.diskCache, err = NewDiskCache(
 			ctx,
 			*config.DiskPath,
 			fscache.ConstCapacity(int64(*config.DiskCapacity)),
 			l.perfCounterSets,
 			true,
-			nil,
+			cacheDataAllocator,
 			l.name,
 		)
 		if err != nil {

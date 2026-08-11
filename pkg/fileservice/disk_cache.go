@@ -384,9 +384,11 @@ func (d *DiskCache) Read(
 
 		allocator := d.cacheDataAllocator
 		if entry.ToCacheData != nil && d.memoryCache != nil {
-			allocator = cacheCapacityGuardedAllocator{
-				cache:     d.memoryCache,
-				allocator: allocator,
+			if _, ok := allocator.(capacityGuardedCacheDataAllocator); !ok {
+				allocator = cacheCapacityGuardedAllocator{
+					cache:     d.memoryCache,
+					allocator: allocator,
+				}
 			}
 		}
 		readOffset, readSize := int64(0), entry.Size
