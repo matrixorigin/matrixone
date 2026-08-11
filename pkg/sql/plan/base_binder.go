@@ -733,40 +733,6 @@ func (b *baseBinder) bindCaseExpr(astExpr *tree.CaseExpr, depth int32, isRoot bo
 }
 
 func (b *baseBinder) bindRangeCond(astExpr *tree.RangeCond, depth int32, isRoot bool) (*Expr, error) {
-	if _, tuple := astExpr.Left.(*tree.Tuple); !tuple &&
-		isDirectStringLiteralOrParam(astExpr.From) && isDirectStringLiteralOrParam(astExpr.To) {
-		left, err := b.impl.BindExpr(astExpr.Left, depth, false)
-		if err != nil {
-			return nil, err
-		}
-		if types.T(left.Typ.Id).IsDecimal() {
-			from, err := b.impl.BindExpr(astExpr.From, depth, false)
-			if err != nil {
-				return nil, err
-			}
-			to, err := b.impl.BindExpr(astExpr.To, depth, false)
-			if err != nil {
-				return nil, err
-			}
-			if isCharacterStringType(from.Typ.Id) && isCharacterStringType(to.Typ.Id) {
-				lowerOp, upperOp, logical := ">=", "<=", "and"
-				if astExpr.Not {
-					lowerOp, upperOp, logical = "<", ">", "or"
-				}
-				lower, err := bindMixedInListComparison(
-					b.GetContext(), lowerOp, DeepCopyExpr(left), from, isDirectDynamicParam(from))
-				if err != nil {
-					return nil, err
-				}
-				upper, err := bindMixedInListComparison(
-					b.GetContext(), upperOp, left, to, isDirectDynamicParam(to))
-				if err != nil {
-					return nil, err
-				}
-				return BindFuncExprImplByPlanExpr(b.GetContext(), logical, []*plan.Expr{lower, upper})
-			}
-		}
-	}
 	bind := func() (*Expr, error) {
 		if astExpr.Not {
 			// rewrite 'col not between 1, 20' to 'col < 1 or col > 20'
@@ -788,18 +754,57 @@ func (b *baseBinder) bindRangeCond(astExpr *tree.RangeCond, depth int32, isRoot 
 		b.mysqlSpecialTypeNumericContext(astExpr.To) {
 		return b.bindWithRawMySQLSpecialTypes(bind)
 	}
-	return bind()
-}
 
-func isDirectStringLiteralOrParam(expr tree.Expr) bool {
-	switch value := unwrapParenExpr(expr).(type) {
-	case *tree.ParamExpr:
-		return true
-	case *tree.NumVal:
-		return value.ValType == tree.P_char
-	default:
-		return false
+	if _, tuple := astExpr.Left.(*tree.Tuple); !tuple {
+		left, err := b.impl.BindExpr(astExpr.Left, depth, false)
+		if err != nil {
+			return nil, err
+		}
+		if types.T(left.Typ.Id).IsDecimal() {
+			from, err := b.impl.BindExpr(astExpr.From, depth, false)
+			if err != nil {
+				return nil, err
+			}
+			to, err := b.impl.BindExpr(astExpr.To, depth, false)
+			if err != nil {
+				return nil, err
+			}
+			if types.T(from.Typ.Id).IsMySQLString() && types.T(to.Typ.Id).IsMySQLString() {
+				lowerOp, upperOp, logical := ">=", "<=", "and"
+				if astExpr.Not {
+					lowerOp, upperOp, logical = "<", ">", "or"
+				}
+				// BETWEEN selects one common coercion domain for all three
+				// operands. Only two prepared TEXT endpoints are exact; mixing a
+				// runtime parameter with a literal/foldable endpoint uses REAL.
+				exact := isDirectDynamicParam(from) && isDirectDynamicParam(to)
+				lower, err := bindMixedInListComparison(
+					b.GetContext(), lowerOp, DeepCopyExpr(left), from, exact)
+				if err != nil {
+					return nil, err
+				}
+				upper, err := bindMixedInListComparison(
+					b.GetContext(), upperOp, left, to, exact)
+				if err != nil {
+					return nil, err
+				}
+				return BindFuncExprImplByPlanExpr(b.GetContext(), logical, []*plan.Expr{lower, upper})
+			}
+			if astExpr.Not {
+				lower, err := BindFuncExprImplByPlanExpr(b.GetContext(), "<", []*plan.Expr{DeepCopyExpr(left), from})
+				if err != nil {
+					return nil, err
+				}
+				upper, err := BindFuncExprImplByPlanExpr(b.GetContext(), ">", []*plan.Expr{left, to})
+				if err != nil {
+					return nil, err
+				}
+				return BindFuncExprImplByPlanExpr(b.GetContext(), "or", []*plan.Expr{lower, upper})
+			}
+			return BindFuncExprImplByPlanExpr(b.GetContext(), "between", []*plan.Expr{left, from, to})
+		}
 	}
+	return bind()
 }
 
 func (b *baseBinder) bindUnaryExpr(astExpr *tree.UnaryExpr, depth int32, isRoot bool) (*Expr, error) {
@@ -2381,10 +2386,11 @@ func (b *baseBinder) bindDecimalScalarSubqueryComparison(
 			return expr, true, bindErr
 		}
 		projects := b.subqueryProjectList(subExpr)
-		if len(projects) != 1 || !isCharacterStringType(projects[0].Typ.Id) {
+		if len(projects) != 1 || !types.T(projects[0].Typ.Id).IsMySQLString() {
 			return bindCurrentArgs()
 		}
 		args := []*Expr{peer, projects[0]}
+		foldDecimalComparisonStringConstants(b.builder.compCtx.GetProcess(), op, args)
 		if err = normalizeDecimalStringLiteralComparisonArgs(b.GetContext(), op, args); err != nil {
 			return nil, true, err
 		}
@@ -4812,7 +4818,7 @@ func foldDecimalComparisonStringConstants(proc *process.Process, name string, ar
 	}
 	for stringPos, decimalPos := range []int{1, 0} {
 		if !types.T(args[decimalPos].Typ.Id).IsDecimal() ||
-			!isCharacterStringType(args[stringPos].Typ.Id) ||
+			!types.T(args[stringPos].Typ.Id).IsMySQLString() ||
 			args[stringPos].GetLit() != nil ||
 			!isFoldableDecimalComparisonConstant(args[stringPos]) {
 			continue
@@ -4915,17 +4921,17 @@ func normalizeDecimalStringLiteralComparisonArgs(ctx context.Context, name strin
 	return nil
 }
 
-// decimalStringLiteralValue recognizes only ordinary character-string
+// decimalStringLiteralValue recognizes character or binary string
 // literals and cast chains rooted in one. Dynamic string expressions retain
-// the generic REAL comparison path. Binary literals are excluded because
-// their payload has numeric byte-string semantics rather than decimal text.
+// the generic REAL comparison path. Literal.IsBin is provenance rather than a
+// different numeric domain: MySQL parses its decimal text exactly here.
 func decimalStringLiteralValue(expr *Expr) (string, bool) {
-	if expr == nil || !isCharacterStringType(expr.Typ.Id) {
+	if expr == nil || !types.T(expr.Typ.Id).IsMySQLString() {
 		return "", false
 	}
 	if literal := expr.GetLit(); literal != nil {
 		value, ok := literal.Value.(*plan.Literal_Sval)
-		if !ok || literal.Isnull || literal.IsBin {
+		if !ok || literal.Isnull {
 			return "", false
 		}
 		return value.Sval, true

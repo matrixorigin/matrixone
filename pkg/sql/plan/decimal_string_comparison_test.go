@@ -257,7 +257,6 @@ func TestDecimalNonExactStringExpressionsKeepGenericCoercion(t *testing.T) {
 	}{
 		{name: "non-numeric literal", expr: makePlan2StringConstExprWithType("not-a-number")},
 		{name: "null literal", expr: MakePlan2NullTextConstExprWithType("")},
-		{name: "binary literal", expr: makePlan2StringConstExprWithType("9007199254740992.0001", true)},
 		{name: "varchar column", expr: &planpb.Expr{
 			Typ:  planpb.Type{Id: int32(types.T_varchar)},
 			Expr: &planpb.Expr_Col{Col: &planpb.ColRef{RelPos: 0, ColPos: 1}},
@@ -275,6 +274,17 @@ func TestDecimalNonExactStringExpressionsKeepGenericCoercion(t *testing.T) {
 				require.Equal(t, int32(types.T_float64), arg.Typ.Id)
 			}
 		})
+	}
+}
+
+func TestDecimalBinaryStringLiteralUsesExactComparison(t *testing.T) {
+	expr, err := BindFuncExprImplByPlanExpr(context.Background(), "=", []*planpb.Expr{
+		makePreparedDecimalComparisonColumn(types.New(types.T_decimal128, 20, 4)),
+		makePlan2StringConstExprWithType("9007199254740992.0001", true),
+	})
+	require.NoError(t, err)
+	for _, arg := range expr.GetF().Args {
+		require.True(t, types.T(arg.Typ.Id).IsDecimal(), "type id %d", arg.Typ.Id)
 	}
 }
 

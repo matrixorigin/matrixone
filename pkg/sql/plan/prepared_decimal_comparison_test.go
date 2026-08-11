@@ -17,6 +17,7 @@ package plan
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -408,6 +409,18 @@ func TestDecimalScalarSubqueryPreservesConstantAndParamDomain(t *testing.T) {
 		require.True(t, types.T(arg.Typ.Id).IsDecimal())
 	}
 
+	foldablePlan, err := runOneStmt(
+		mock,
+		t,
+		"select p_partkey from part where p_retailprice = (select concat('9007199254740992.000', '1'))",
+	)
+	require.NoError(t, err)
+	foldableComparison := findPreparedDecimalComparisonInPlan(foldablePlan, "=")
+	require.NotNil(t, foldableComparison)
+	for _, arg := range foldableComparison.GetF().Args {
+		require.True(t, types.T(arg.Typ.Id).IsDecimal())
+	}
+
 	preparedPlan, err := runOneStmt(
 		mock,
 		t,
@@ -458,20 +471,25 @@ func TestDecimalBetweenAndNotBetweenUseOneSourceDomain(t *testing.T) {
 	mock.ctxt.tables["part"].Cols[7].Typ = makePlan2Type(&decimalType)
 
 	for _, tc := range []struct {
-		name       string
-		predicate  string
-		prepared   bool
-		expectedID types.T
+		name        string
+		predicate   string
+		prepared    bool
+		expectExact bool
+		expectedID  types.T
 	}{
-		{name: "prepared_between", predicate: "p_retailprice between ? and ?", prepared: true, expectedID: types.T_decimal128},
-		{name: "prepared_not_between", predicate: "p_retailprice not between ? and ?", prepared: true, expectedID: types.T_decimal128},
+		{name: "prepared_between", predicate: "p_retailprice between ? and ?", prepared: true, expectExact: true, expectedID: types.T_decimal128},
+		{name: "prepared_not_between", predicate: "p_retailprice not between ? and ?", prepared: true, expectExact: true, expectedID: types.T_decimal128},
+		{name: "mixed_prepared_literal_between", predicate: "p_retailprice between ? and '9007199254740992.99995'", prepared: true, expectedID: types.T_float64},
+		{name: "mixed_prepared_literal_not_between", predicate: "p_retailprice not between ? and '9007199254740992.99995'", prepared: true, expectedID: types.T_float64},
 		{name: "literal_between", predicate: "p_retailprice between '9007199254740992.00005' and '9007199254740992.99995'", expectedID: types.T_float64},
 		{name: "literal_not_between", predicate: "p_retailprice not between '9007199254740992.00005' and '9007199254740992.99995'", expectedID: types.T_float64},
+		{name: "cast_between", predicate: "p_retailprice between cast('9007199254740992.00005' as char) and cast('9007199254740992.99995' as char)", expectedID: types.T_float64},
+		{name: "cast_not_between", predicate: "p_retailprice not between cast('9007199254740992.00005' as char) and cast('9007199254740992.99995' as char)", expectedID: types.T_float64},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			sql := "select p_partkey from part where " + tc.predicate
 			if tc.prepared {
-				sql = "prepare decimal_range from '" + sql + "'"
+				sql = "prepare decimal_range from '" + strings.ReplaceAll(sql, "'", "''") + "'"
 			}
 			logicPlan, err := runOneStmt(mock, t, sql)
 			require.NoError(t, err)
@@ -480,7 +498,7 @@ func TestDecimalBetweenAndNotBetweenUseOneSourceDomain(t *testing.T) {
 				planToInspect = logicPlan.GetDcl().GetPrepare().Plan
 				found, err := PlanHasExactDecimalComparisonParam(context.Background(), planToInspect)
 				require.NoError(t, err)
-				require.True(t, found)
+				require.Equal(t, tc.expectExact, found)
 			}
 			comparisons := 0
 			for _, op := range []string{"<", "<=", ">", ">="} {

@@ -280,6 +280,44 @@ FROM boundary_values
 WHERE d128 = (SELECT '9007199254740992.0001');
 ➤ scalar_literal_ids[12,0,0]  𝄀
 4
+SELECT GROUP_CONCAT(id ORDER BY id) AS scalar_concat_ids
+FROM boundary_values
+WHERE d128 = (SELECT CONCAT('9007199254740992.000', '1'));
+➤ scalar_concat_ids[12,0,0]  𝄀
+4
+CREATE TABLE scalar_foldable_update LIKE boundary_values;
+ALTER TABLE scalar_foldable_update ADD COLUMN matched INT DEFAULT 0;
+INSERT INTO scalar_foldable_update (id, d64, d128) SELECT id, d64, d128 FROM boundary_values;
+UPDATE scalar_foldable_update SET matched = 1
+WHERE d128 = (SELECT LOWER('9007199254740992.0001'));
+SELECT GROUP_CONCAT(id ORDER BY id) AS scalar_foldable_update_ids
+FROM scalar_foldable_update WHERE matched = 1;
+➤ scalar_foldable_update_ids[12,0,0]  𝄀
+4
+SELECT GROUP_CONCAT(id ORDER BY id) AS binary_introducer_ids
+FROM boundary_values WHERE d128 = _binary'9007199254740992.0001';
+➤ binary_introducer_ids[12,0,0]  𝄀
+4
+SELECT GROUP_CONCAT(id ORDER BY id) AS binary_operator_ids
+FROM boundary_values WHERE d128 = BINARY '9007199254740992.0001';
+➤ binary_operator_ids[12,0,0]  𝄀
+4
+SELECT GROUP_CONCAT(id ORDER BY id) AS binary_cast_ids
+FROM boundary_values WHERE d128 = CAST('9007199254740992.0001' AS BINARY);
+➤ binary_cast_ids[12,0,0]  𝄀
+4
+SELECT GROUP_CONCAT(id ORDER BY id) AS cast_between_ids
+FROM boundary_values
+WHERE d128 BETWEEN CAST('9007199254740992.00005' AS CHAR)
+AND CAST('9007199254740992.99995' AS CHAR);
+➤ cast_between_ids[12,0,0]  𝄀
+2,3,4,5,6
+SELECT GROUP_CONCAT(id ORDER BY id) AS cast_not_between_ids
+FROM boundary_values
+WHERE d128 NOT BETWEEN CAST('9007199254740992.00005' AS CHAR)
+AND CAST('9007199254740992.99995' AS CHAR);
+➤ cast_not_between_ids[12,0,0]  𝄀
+null
 CREATE TABLE scalar_runtime_strings AS
 SELECT s FROM runtime_strings;
 SELECT GROUP_CONCAT(b.id ORDER BY b.id) AS scalar_runtime_column_ids
