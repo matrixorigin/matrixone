@@ -280,16 +280,27 @@ func genAsSelectCols(ctx CompilerContext, stmt *tree.Select, isPrepareStmt bool)
 	if rootId, err = builder.bindSelect(stmt, bindCtx, true); err != nil {
 		return nil, nil, err
 	}
+	outputColumnProvenance := make([]OutputColumnProvenance, len(bindCtx.headings))
+	for i := range outputColumnProvenance {
+		outputColumnProvenance[i] = bindCtx.outputColumnProvenanceForProject(int32(i))
+	}
 	builder.qry.Steps = append(builder.qry.Steps, rootId)
-	rootNode := builder.qry.Nodes[rootId]
+	// CTAS metadata must reflect the final query output: outer joins and scalar
+	// subqueries can synthesize NULLs even when their source columns are NOT NULL.
+	query, err := builder.createQuery()
+	if err != nil {
+		return nil, nil, err
+	}
+	rootNode := query.Nodes[query.Steps[len(query.Steps)-1]]
 
 	cols := make([]*plan.ColDef, len(rootNode.ProjectList))
 	for i, expr := range rootNode.ProjectList {
-		typ := &expr.Typ
-		provenance := bindCtx.outputColumnProvenanceForProject(int32(i))
+		typ := expr.Typ
+		provenance := outputColumnProvenance[i]
 		if provenance.State == ProvenanceSingleSource && provenance.Source != nil {
 			if isEnumOrSetPlanType(&provenance.Source.Metadata.Typ) {
-				typ = &provenance.Source.Metadata.Typ
+				typ = provenance.Source.Metadata.Typ
+				typ.NotNullable = expr.Typ.NotNullable
 			}
 		}
 		nullAbility := ctasExprCanBeNull(expr)
@@ -302,14 +313,14 @@ func genAsSelectCols(ctx CompilerContext, stmt *tree.Select, isPrepareStmt bool)
 					defaultDef.NullAbility = nullAbility
 					if defaultDef.Expr == nil && defaultDef.OriginString != "" {
 						defaultDef, err = buildCTASDefaultFromOrigin(
-							ctx, *typ, nullAbility, defaultDef.OriginString)
+							ctx, typ, nullAbility, defaultDef.OriginString)
 						if err != nil {
 							return nil, nil, err
 						}
 					}
 				}
 			case CTASDefaultUseTypeDefault:
-				defaultDef, err = buildCTASDefaultForView(ctx, *typ, nullAbility)
+				defaultDef, err = buildCTASDefaultForView(ctx, typ, nullAbility)
 				if err != nil {
 					return nil, nil, err
 				}
@@ -319,11 +330,11 @@ func genAsSelectCols(ctx CompilerContext, stmt *tree.Select, isPrepareStmt bool)
 		cols[i] = &plan.ColDef{
 			Name:    strings.ToLower(bindCtx.headings[i]),
 			Alg:     plan.CompressType_Lz4,
-			Typ:     *typ,
+			Typ:     typ,
 			Default: defaultDef,
 		}
 	}
-	return cols, builder.qry, nil
+	return cols, query, nil
 }
 
 func buildCTASDefaultForView(ctx CompilerContext, typ plan.Type, nullAbility bool) (*plan.Default, error) {
