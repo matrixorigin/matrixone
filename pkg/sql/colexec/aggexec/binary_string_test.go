@@ -86,8 +86,9 @@ func TestAggregatesRecognizeMaterializedBinaryStringType(t *testing.T) {
 	defer input.Free(mp)
 
 	tests := []struct {
-		name string
-		new  func() AggFuncExec
+		name        string
+		dynamicWire bool
+		new         func() AggFuncExec
 	}{
 		{
 			name: "min",
@@ -102,7 +103,8 @@ func TestAggregatesRecognizeMaterializedBinaryStringType(t *testing.T) {
 			},
 		},
 		{
-			name: "group_concat",
+			name:        "group_concat",
+			dynamicWire: true,
 			new: func() AggFuncExec {
 				return newGroupConcatExec(mp, multiAggInfo{
 					aggID:     AggIdOfGroupConcat,
@@ -123,7 +125,9 @@ func TestAggregatesRecognizeMaterializedBinaryStringType(t *testing.T) {
 			result, err := exec.Flush()
 			require.NoError(t, err)
 			require.Len(t, result, 1)
-			require.True(t, result[0].GetIsBinaryString())
+			require.True(t, result[0].GetIsBinaryStringAt(0))
+			require.Equal(t, test.dynamicWire, result[0].GetIsBinaryString(),
+				"static binary result types must not create dynamic wire metadata")
 			result[0].Free(mp)
 			exec.Free()
 		})

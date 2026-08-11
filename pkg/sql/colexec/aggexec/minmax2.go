@@ -441,7 +441,6 @@ func (exec *minMaxExecBytes) Flush() ([]*vector.Vector, error) {
 	vecs := make([]*vector.Vector, len(exec.state))
 	for i := range vecs {
 		vecs[i] = exec.state[i].vecs[0]
-		vecs[i].SetIsBinaryString(exec.binaryString)
 		exec.state[i].vecs[0] = nil
 		exec.state[i].length = 0
 		exec.state[i].capacity = 0
