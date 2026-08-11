@@ -1624,6 +1624,81 @@ func TestSerialExtractUUID(t *testing.T) {
 	}
 }
 
+func TestSerialExtractEnumAndYear(t *testing.T) {
+	t.Run("enum", func(t *testing.T) {
+		testSerialExtractNamedType(
+			t,
+			types.T_enum.ToType(),
+			[]types.Enum{1, 3},
+			func(ps *types.Packer, value types.Enum) {
+				ps.EncodeEnum(value)
+			},
+		)
+	})
+
+	t.Run("year", func(t *testing.T) {
+		testSerialExtractNamedType(
+			t,
+			types.T_year.ToType(),
+			[]types.MoYear{2024, 2026},
+			func(ps *types.Packer, value types.MoYear) {
+				ps.EncodeMoYear(value)
+			},
+		)
+	})
+}
+
+func testSerialExtractNamedType[T types.Enum | types.MoYear](
+	t *testing.T,
+	typ types.Type,
+	values []T,
+	encode func(*types.Packer, T),
+) {
+	t.Helper()
+
+	serialized := make([]string, len(values))
+	for i, value := range values {
+		ps := types.NewPacker()
+		encode(ps, value)
+		serialized[i] = string(ps.Bytes())
+		ps.Close()
+	}
+
+	indexInputs := []struct {
+		name  string
+		input FunctionTestInput
+	}{
+		{
+			name:  "constant index",
+			input: NewFunctionTestConstInput(types.T_int64.ToType(), []int64{0, 0}, nil),
+		},
+		{
+			name:  "row index",
+			input: NewFunctionTestInput(types.T_int64.ToType(), []int64{0, 0}, nil),
+		},
+	}
+
+	for _, tt := range indexInputs {
+		t.Run(tt.name, func(t *testing.T) {
+			testCase := NewFunctionTestCase(
+				testutil.NewProcess(t),
+				[]FunctionTestInput{
+					NewFunctionTestInput(types.T_varchar.ToType(), serialized, nil),
+					tt.input,
+					NewFunctionTestInput(typ, make([]T, len(values)), nil),
+				},
+				NewFunctionTestResult(typ, false, values, nil),
+				builtInSerialExtract,
+			)
+			require.NoError(t, testCase.result.PreExtendAndReset(testCase.fnLength))
+			result, err := testCase.DebugRun()
+			require.NoError(t, err)
+			require.Equal(t, typ.Oid, result.GetType().Oid)
+			require.Equal(t, values, vector.MustFixedColWithTypeCheck[T](result))
+		})
+	}
+}
+
 func Test_BuiltIn_Math(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	{

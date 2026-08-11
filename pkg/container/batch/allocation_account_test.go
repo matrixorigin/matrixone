@@ -171,6 +171,37 @@ func TestBatchAllocationAccountCloneDupAndWindow(t *testing.T) {
 	finalizeTestBatchAllocationAccount(t, state)
 }
 
+func TestBatchAccountedWindowBroadcastsScalarConstant(t *testing.T) {
+	state := newTestBatchAllocationAccount(t, 16)
+	mp := mpool.MustNewZero()
+	source := NewWithSize(2)
+	source.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+	require.NoError(t, vector.AppendFixedList(
+		source.Vecs[0], []int64{10, 20, 30, 40}, nil, mp,
+	))
+	var err error
+	source.Vecs[1], err = vector.NewConstBytes(
+		types.T_varchar.ToType(), []byte("prepared"), 1, mp,
+	)
+	require.NoError(t, err)
+	source.Vecs[1].SetPrepareParamKind(vector.PrepareParamInteger)
+	source.SetRowCount(4)
+
+	window, err := source.WindowWithAllocation(2, 4, mp, state.selection)
+	require.NoError(t, err)
+	require.Equal(t, 2, window.RowCount())
+	require.Same(t, state.selection, window.AllocationAccountSelection())
+	require.Equal(t, 2, window.Vecs[1].Length())
+	require.Equal(t, []byte("prepared"), window.Vecs[1].GetBytesAt(1))
+	require.Equal(t, vector.PrepareParamInteger, window.Vecs[1].GetPrepareParamKindAt(1))
+	window.Clean(mp)
+	require.Zero(t, state.account.Snapshot().Used)
+
+	source.Clean(mp)
+	require.Zero(t, mp.CurrNB())
+	finalizeTestBatchAllocationAccount(t, state)
+}
+
 func TestBatchDupWithoutAllocationAccountCrossesStatementBoundary(t *testing.T) {
 	state := newTestBatchAllocationAccount(t, 64)
 	mp := mpool.MustNewZero()
