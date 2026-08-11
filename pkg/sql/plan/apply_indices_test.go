@@ -89,6 +89,15 @@ func TestIndexHintMissingIndexReturnsMysqlKeyDoesNotExist(t *testing.T) {
 	require.Contains(t, moErr.Error(), "Key 'idx_missing' doesn't exist in table 'single_idx_t'")
 }
 
+func TestIndexVisibilityMetadataDoesNotRejectHint(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	indexDef := mock.ctxt.tables["single_idx_t"].Indexes[0]
+	indexDef.Visible = false
+
+	_, err := runOneStmt(mock, t, "select val from single_idx_t force index(idx_val) where val = 1")
+	require.NoError(t, err)
+}
+
 func TestSingleColumnUniqueDecimalRangeUsesIndex(t *testing.T) {
 	mock := NewMockOptimizer(true)
 	addIndexHintChoiceTableForTest(mock)
@@ -433,39 +442,10 @@ func TestResolveRegularIndexBackfillResidualAccess(t *testing.T) {
 	}
 }
 
-func TestInvisibleIndexHintIsRejected(t *testing.T) {
-	for _, tc := range []struct {
-		name      string
-		visible   bool
-		wantError bool
-	}{
-		{name: "visible control", visible: true},
-		{name: "invisible index", visible: false, wantError: true},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			mock := NewMockOptimizer(true)
-			indexDef := mock.ctxt.tables["single_idx_t"].Indexes[0]
-			indexDef.Visible = tc.visible
-			indexDef.VisibilitySet = true
-
-			_, err := runOneStmt(mock, t, "select val from single_idx_t force index(idx_val) where val = 1")
-			if tc.wantError {
-				require.Error(t, err)
-				var moErr *moerr.Error
-				require.ErrorAs(t, err, &moErr)
-				require.Equal(t, moerr.ER_KEY_DOES_NOT_EXIST, moErr.MySQLCode())
-				return
-			}
-			require.NoError(t, err)
-		})
-	}
-}
-
 func TestFilterRegularIndexesByScanHints(t *testing.T) {
 	idxA := &planpb.IndexDef{IndexName: "idx_a"}
 	idxB := &planpb.IndexDef{IndexName: "idx_b"}
-	invisible := &planpb.IndexDef{IndexName: "idx_invisible", VisibilitySet: true}
-	indexes := []*planpb.IndexDef{idxA, invisible, idxB}
+	indexes := []*planpb.IndexDef{idxA, idxB}
 	node := &planpb.Node{NodeId: 7}
 
 	testCases := []struct {
@@ -5015,15 +4995,13 @@ func TestApplyIndicesForJoinsSkipsIrregularIndexes(t *testing.T) {
 func TestFindMatchFullTextIndexRequiresScanBindingAndConstantMode(t *testing.T) {
 	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true), false, true)
 	ftDef := makeFullTextJoinTestTableDef("ft", true)
+	ftDef.Indexes[0].Visible = false
 	ftTag := builder.genNewBindTag()
 	baseTag := builder.genNewBindTag()
 	scan := makeFullTextJoinTestScan(ftDef, ftTag, nil)
 
 	matched := builder.findMatchFullTextIndex(makeFullTextMatchExpr("hello", 0, ftDef, ftTag, []int32{2, 3}).GetF(), scan)
 	require.NotNil(t, matched)
-	catalog.SetIndexVisibility(ftDef.Indexes[0], false)
-	require.Nil(t, builder.findMatchFullTextIndex(makeFullTextMatchExpr("hello", 0, ftDef, ftTag, []int32{2, 3}).GetF(), scan))
-	catalog.SetIndexVisibility(ftDef.Indexes[0], true)
 
 	crossTableExpr := makeFullTextMatchExpr("hello", 0, ftDef, ftTag, []int32{2})
 	crossTableExpr.GetF().Args = append(crossTableExpr.GetF().Args, &planpb.Expr{
@@ -6839,10 +6817,6 @@ func TestRegularIndexPrefixMetadataUsable(t *testing.T) {
 	require.ErrorContains(t, validateTableRegularIndexPrefixMetadata(&planpb.TableDef{
 		Indexes: []*planpb.IndexDef{staleIndex},
 	}), "rebuild the index")
-	catalog.SetIndexVisibility(staleIndex, false)
-	require.ErrorContains(t, validateTableRegularIndexPrefixMetadata(&planpb.TableDef{
-		Indexes: []*planpb.IndexDef{staleIndex},
-	}), "rebuild the index", "optimizer visibility must not bypass index-maintenance validation")
 }
 
 func TestGetIndexForNonEquiCondSkipsDeclaredPrefixIndexes(t *testing.T) {
@@ -7313,7 +7287,7 @@ func TestApplyIndicesForFiltersUsesIndexJoinForPrefixIndex(t *testing.T) {
 			},
 			Name2ColIndex: map[string]int32{"id": 0, "status": 1},
 			Pkey:          &planpb.PrimaryKeyDef{PkeyColName: "id", Names: []string{"id"}},
-			Indexes:       []*planpb.IndexDef{idxDef},
+			Indexes:       []*planpb.IndexDef{nil, idxDef},
 		},
 		Stats:      &planpb.Stats{TableCnt: 100, Outcnt: 1, Selectivity: 0.01, Cost: 100},
 		FilterList: []*planpb.Expr{makeStringEqFilterExpr(bindTag, 1, "active")},
@@ -7335,7 +7309,7 @@ func TestApplyIndicesForFiltersUsesIndexJoinForPrefixIndex(t *testing.T) {
 	require.Equal(t, idxDef.IndexName, indexScan.IndexScanInfo.IndexName)
 }
 
-func TestApplyIndicesForFiltersSkipsInvisibleIndex(t *testing.T) {
+func TestApplyIndicesForFiltersIgnoresVisibilityMetadata(t *testing.T) {
 	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true), false, true)
 	ctx := NewBindContext(builder, nil)
 	bindTag := builder.genNewBindTag()
@@ -7345,7 +7319,6 @@ func TestApplyIndicesForFiltersSkipsInvisibleIndex(t *testing.T) {
 		Parts:          []string{"status", "id"},
 		TableExist:     true,
 		Visible:        false,
-		VisibilitySet:  true,
 	}
 	registerMockIndexTable(t, builder, idxDef.IndexTableName)
 	node := &planpb.Node{
@@ -7369,7 +7342,7 @@ func TestApplyIndicesForFiltersSkipsInvisibleIndex(t *testing.T) {
 
 	resultID := builder.applyIndicesForFiltersRegularIndex(scanID, builder.qry.Nodes[scanID],
 		map[[2]int32]int{{bindTag, 1}: 1}, map[[2]int32]*planpb.Expr{})
-	require.Equal(t, scanID, resultID)
+	require.NotEqual(t, scanID, resultID)
 }
 
 func TestTryIndexOnlyScanKeepsResidualFilterForSerialFullNullSemantics(t *testing.T) {
