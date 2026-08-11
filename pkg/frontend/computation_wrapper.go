@@ -723,9 +723,8 @@ func binaryProtocolPrepareParamKind(
 const preparedNumericTextBindingCharset = uint8(255)
 
 const (
-	preparedNumericTextExact int32 = iota + 1
-	preparedNumericTextPrefix
-	preparedNumericTextFloat
+	preparedNumericTextPrefix int32 = 2
+	preparedNumericTextFloat  int32 = 3
 )
 
 func preparedParamBindingType(kind vector.PrepareParamKind, value []byte) types.Type {
@@ -738,38 +737,23 @@ func preparedParamBindingType(kind vector.PrepareParamKind, value []byte) types.
 	case vector.PrepareParamFloat:
 		return types.T_float64.ToType()
 	case vector.PrepareParamDecimal:
-		width, scale, _, _ := preparedNumericTextDomain(value)
-		return decimalTypeForPreparedValue(width, scale)
+		return types.New(types.T_decimal256, 65, 30)
 	case vector.PrepareParamBoolean:
 		return types.T_bool.ToType()
 	}
 
-	width, scale, full, exponent := preparedNumericTextDomain(value)
+	width, scale, _, exponent := preparedNumericTextDomain(value)
 	binding := types.T_text.ToType()
 	binding.Charset = preparedNumericTextBindingCharset
-	binding.Width = width
-	binding.Scale = scale
 	switch {
-	case exponent && (!full || width-scale > 35 || scale > 30):
+	case exponent && (width-scale > 35 || scale > 30):
 		binding.Size = preparedNumericTextFloat
-	case full:
-		binding.Size = preparedNumericTextExact
 	default:
 		binding.Size = preparedNumericTextPrefix
+		binding.Width = 65
+		binding.Scale = 30
 	}
 	return binding
-}
-
-func decimalTypeForPreparedValue(width, scale int32) types.Type {
-	width = max(width, 1)
-	switch {
-	case width <= 18:
-		return types.New(types.T_decimal64, width, scale)
-	case width <= 38:
-		return types.New(types.T_decimal128, width, scale)
-	default:
-		return types.New(types.T_decimal256, min(width, 76), min(scale, 76))
-	}
 }
 
 // preparedNumericTextDomain scans only the numeric prefix and caps all counts
@@ -778,7 +762,7 @@ func decimalTypeForPreparedValue(width, scale int32) types.Type {
 func preparedNumericTextDomain(value []byte) (width, scale int32, full, exponent bool) {
 	const capDigits = int64(77)
 	i := 0
-	for i < len(value) && (value[i] == ' ' || value[i] == '\t' || value[i] == '\n' || value[i] == '\r') {
+	for i < len(value) && isPreparedNumericSpace(value[i]) {
 		i++
 	}
 	if i < len(value) && (value[i] == '+' || value[i] == '-') {
@@ -829,7 +813,7 @@ func preparedNumericTextDomain(value []byte) (width, scale int32, full, exponent
 			exp = -exp
 		}
 	}
-	for i < len(value) && (value[i] == ' ' || value[i] == '\t' || value[i] == '\n' || value[i] == '\r') {
+	for i < len(value) && isPreparedNumericSpace(value[i]) {
 		i++
 	}
 	full = hasDigits && i == len(value)
@@ -840,6 +824,15 @@ func preparedNumericTextDomain(value []byte) (width, scale int32, full, exponent
 	scale64 := max(fractionalDigits-exp, 0)
 	width64 := min(integral+scale64, capDigits)
 	return int32(max(width64, 1)), int32(min(scale64, capDigits)), full, exponent
+}
+
+func isPreparedNumericSpace(ch byte) bool {
+	switch ch {
+	case ' ', '\t', '\n', '\v', '\f', '\r':
+		return true
+	default:
+		return false
+	}
 }
 
 func preparedParamBindingTypes(

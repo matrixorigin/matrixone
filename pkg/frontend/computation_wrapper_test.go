@@ -335,7 +335,7 @@ func TestPreparedParamBindingType(t *testing.T) {
 		{name: "numeric text range", value: []byte("1e1000"), want: types.T_text},
 		{name: "integer", kind: vector.PrepareParamInteger, value: []byte("42"), want: types.T_uint64},
 		{name: "signed integer", kind: vector.PrepareParamInteger, value: []byte("-42"), want: types.T_int64},
-		{name: "decimal", kind: vector.PrepareParamDecimal, value: []byte("1.2"), want: types.T_decimal64},
+		{name: "decimal", kind: vector.PrepareParamDecimal, value: []byte("1.2"), want: types.T_decimal256},
 		{name: "boolean", kind: vector.PrepareParamBoolean, value: []byte("1"), want: types.T_bool},
 		{name: "time value", value: []byte("2026-08-10 12:34:56"), want: types.T_text},
 		{name: "ordinary string", value: []byte("matrixone"), want: types.T_text},
@@ -360,11 +360,13 @@ func TestPreparedNumericTextDomainIsBoundedAndClassified(t *testing.T) {
 		wantExponent    bool
 		wantBindingMode int32
 	}{
-		{value: "1.234567", wantWidth: 7, wantScale: 6, wantFull: true, wantBindingMode: preparedNumericTextExact},
+		{value: "1.234567", wantWidth: 7, wantScale: 6, wantFull: true, wantBindingMode: preparedNumericTextPrefix},
 		{value: "12.5tail", wantWidth: 3, wantScale: 1, wantBindingMode: preparedNumericTextPrefix},
 		{value: "abc", wantWidth: 1, wantBindingMode: preparedNumericTextPrefix},
-		{value: "001.200e2", wantWidth: 4, wantScale: 1, wantFull: true, wantExponent: true, wantBindingMode: preparedNumericTextExact},
-		{value: "000000000000000000000000000000000000000000000000000000000000000000000000000001", wantWidth: 1, wantFull: true, wantBindingMode: preparedNumericTextExact},
+		{value: "001.200e2", wantWidth: 4, wantScale: 1, wantFull: true, wantExponent: true, wantBindingMode: preparedNumericTextPrefix},
+		{value: "000000000000000000000000000000000000000000000000000000000000000000000000000001", wantWidth: 1, wantFull: true, wantBindingMode: preparedNumericTextPrefix},
+		{value: "\v1.25", wantWidth: 3, wantScale: 2, wantFull: true, wantBindingMode: preparedNumericTextPrefix},
+		{value: "\f1.25", wantWidth: 3, wantScale: 2, wantFull: true, wantBindingMode: preparedNumericTextPrefix},
 		{value: "1e100", wantWidth: 77, wantFull: true, wantExponent: true, wantBindingMode: preparedNumericTextFloat},
 		{value: "1e-40", wantWidth: 40, wantScale: 40, wantFull: true, wantExponent: true, wantBindingMode: preparedNumericTextFloat},
 		{value: "1e999999999999999999999999999999", wantWidth: 77, wantFull: true, wantExponent: true, wantBindingMode: preparedNumericTextFloat},
@@ -379,6 +381,10 @@ func TestPreparedNumericTextDomainIsBoundedAndClassified(t *testing.T) {
 			binding := preparedParamBindingType(vector.PrepareParamNone, []byte(test.value))
 			require.Equal(t, preparedNumericTextBindingCharset, binding.Charset)
 			require.Equal(t, test.wantBindingMode, binding.Size)
+			if test.wantBindingMode == preparedNumericTextPrefix {
+				require.Equal(t, int32(65), binding.Width)
+				require.Equal(t, int32(30), binding.Scale)
+			}
 		})
 	}
 }
@@ -448,17 +454,17 @@ func TestInitExecuteStmtParamRebuildsForRuntimeBindingCategory(t *testing.T) {
 	setParam("2026-08-10 12:34:56", defines.MYSQL_TYPE_STRING)
 	decimalPlan, resultType := execute()
 	require.NotSame(t, floatPlan, decimalPlan)
-	require.Equal(t, int32(types.T_decimal64), resultType.Id)
+	require.Equal(t, int32(types.T_decimal256), resultType.Id)
 	require.Len(t, prepareStmt.paramBindingTypes, 1)
 	require.Equal(t, preparedNumericTextPrefix, prepareStmt.paramBindingTypes[0].Size)
 
 	setParam("1.234567", defines.MYSQL_TYPE_VAR_STRING)
 	exactDecimalPlan, resultType := execute()
-	require.NotSame(t, decimalPlan, exactDecimalPlan,
-		"a different exact value domain must rebuild the common type")
-	require.Equal(t, int32(types.T_decimal64), resultType.Id)
+	require.Same(t, decimalPlan, exactDecimalPlan,
+		"ordinary text values must share one stable DECIMAL plan category")
+	require.Equal(t, int32(types.T_decimal256), resultType.Id)
 	require.Len(t, prepareStmt.paramBindingTypes, 1)
-	require.Equal(t, preparedNumericTextExact, prepareStmt.paramBindingTypes[0].Size)
+	require.Equal(t, preparedNumericTextPrefix, prepareStmt.paramBindingTypes[0].Size)
 
 	setParam("1e100", defines.MYSQL_TYPE_DOUBLE)
 	secondFloatPlan, resultType := execute()
@@ -502,14 +508,14 @@ func TestInitExecuteStmtParamMapsRuntimeBindingCategoriesByPosition(t *testing.T
 	}
 
 	setParams("1.25", defines.MYSQL_TYPE_VAR_STRING, "1e100", defines.MYSQL_TYPE_DOUBLE)
-	require.Equal(t, []types.T{types.T_decimal64, types.T_float64}, executeTypes())
-	require.Equal(t, preparedNumericTextExact, prepareStmt.paramBindingTypes[0].Size)
+	require.Equal(t, []types.T{types.T_decimal256, types.T_float64}, executeTypes())
+	require.Equal(t, preparedNumericTextPrefix, prepareStmt.paramBindingTypes[0].Size)
 	require.Equal(t, types.T_float64.ToType(), prepareStmt.paramBindingTypes[1])
 
 	setParams("1e-40", defines.MYSQL_TYPE_DOUBLE, "1.25", defines.MYSQL_TYPE_VAR_STRING)
-	require.Equal(t, []types.T{types.T_float64, types.T_decimal64}, executeTypes())
+	require.Equal(t, []types.T{types.T_float64, types.T_decimal256}, executeTypes())
 	require.Equal(t, types.T_float64.ToType(), prepareStmt.paramBindingTypes[0])
-	require.Equal(t, preparedNumericTextExact, prepareStmt.paramBindingTypes[1].Size)
+	require.Equal(t, preparedNumericTextPrefix, prepareStmt.paramBindingTypes[1].Size)
 }
 
 func TestSQLVariablePrepareParamKind(t *testing.T) {

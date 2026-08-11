@@ -82,11 +82,15 @@ func TestIssue26879PreparedDecimalRuntimeDomains(t *testing.T) {
 
 		assertRow(float64(1e100), "DOUBLE", []string{"1e+100", "1e+100", "2"})
 		assertRow(float64(1e-40), "DOUBLE", []string{"1e-40", "2", "1e-40"})
-		assertRow("1.234567", "DECIMAL", []string{"1.2345670000", "2.0000000000", "1.2345670000"})
-		assertRow("abc", "DECIMAL", []string{"0.0000000000", "2.0000000000", "0.0000000000"})
-		assertRow("12.5tail", "DECIMAL", []string{"12.5000000000", "12.5000000000", "2.0000000000"})
-		assertRow("001.200e2", "DECIMAL", []string{"120.0000000000", "120.0000000000", "2.0000000000"})
-		assertRow("2026-08-10 12:34:56", "DECIMAL", []string{"2026.0000000000", "2026.0000000000", "2.0000000000"})
+		assertRow("1.234567", "DECIMAL", []string{"1.234567000000000000000000000000", "2.000000000000000000000000000000", "1.234567000000000000000000000000"})
+		assertRow("abc", "DECIMAL", []string{"0.000000000000000000000000000000", "2.000000000000000000000000000000", "0.000000000000000000000000000000"})
+		assertRow("12.5tail", "DECIMAL", []string{"12.500000000000000000000000000000", "12.500000000000000000000000000000", "2.000000000000000000000000000000"})
+		assertRow("001.200e2", "DECIMAL", []string{"120.000000000000000000000000000000", "120.000000000000000000000000000000", "2.000000000000000000000000000000"})
+		assertRow("2026-08-10 12:34:56", "DECIMAL", []string{"2026.000000000000000000000000000000", "2026.000000000000000000000000000000", "2.000000000000000000000000000000"})
+		assertRow("9007199254740993tail", "DECIMAL", []string{"9007199254740993.000000000000000000000000000000", "9007199254740993.000000000000000000000000000000", "2.000000000000000000000000000000"})
+		assertRow("9007199254740993e0tail", "DECIMAL", []string{"9007199254740993.000000000000000000000000000000", "9007199254740993.000000000000000000000000000000", "2.000000000000000000000000000000"})
+		assertRow("\v1.25", "DECIMAL", []string{"1.250000000000000000000000000000", "2.000000000000000000000000000000", "1.250000000000000000000000000000"})
+		assertRow("\f1.25", "DECIMAL", []string{"1.250000000000000000000000000000", "2.000000000000000000000000000000", "1.250000000000000000000000000000"})
 		assertRow(int64(10), "DECIMAL", []string{"10.0000000000", "10.0000000000", "2.0000000000"})
 		assertRow(false, "DECIMAL", []string{"0.0000000000", "2.0000000000", "0.0000000000"})
 
@@ -100,8 +104,11 @@ func TestIssue26879PreparedDecimalRuntimeDomains(t *testing.T) {
 		var extremeValue string
 		require.NoError(t, extremeStmt.QueryRowContext(ctx, int64(10)).Scan(&extremeValue))
 		require.Equal(t, "10", extremeValue)
-		err = extremeStmt.QueryRowContext(ctx, "0.123456789012").Scan(new(string))
-		require.ErrorContains(t, err, "exceeding DECIMAL256 limit 76")
+		// DECIMAL256 cannot represent the full declared 77-digit aggregate
+		// domain. Do not introduce a new PREPARE-time failure for this existing
+		// representation boundary.
+		require.NoError(t, extremeStmt.QueryRowContext(ctx, "0.123456789012").Scan(&extremeValue))
+		require.Equal(t, "0.123456789012", extremeValue)
 
 		_, err = conn.ExecContext(ctx, "create table issue26879.small(d decimal(10,2))")
 		require.NoError(t, err)
@@ -119,6 +126,7 @@ func TestIssue26879PreparedDecimalRuntimeDomains(t *testing.T) {
 			rows, queryErr := conn.QueryContext(ctx,
 				"execute issue26879_sql using @issue26879_p,@issue26879_p,@issue26879_p")
 			require.NoError(t, queryErr)
+			defer rows.Close()
 			columnTypes, typeErr := rows.ColumnTypes()
 			require.NoError(t, typeErr)
 			for _, columnType := range columnTypes {
@@ -135,7 +143,6 @@ func TestIssue26879PreparedDecimalRuntimeDomains(t *testing.T) {
 			require.NoError(t, rows.Scan(&values[0], &values[1], &values[2]))
 			require.False(t, rows.Next())
 			require.NoError(t, rows.Err())
-			require.NoError(t, rows.Close())
 		}
 		assertSQLPrepareType("1.234567", "DECIMAL", 14, 6)
 		assertSQLPrepareType("1e100", "DOUBLE", 0, 0)

@@ -362,7 +362,7 @@ func (b *baseBinder) baseBindParam(astExpr *tree.ParamExpr, depth int32, isRoot 
 			},
 		},
 	}
-	if bindingType, found := b.preparedParamBindingType(int32(astExpr.Offset)); found {
+	if bindingType, found := b.preparedParamBindingType(int32(astExpr.Offset)); found && b.decimalParamCommonTypeTarget {
 		if bindingType.Oid == types.T_text && bindingType.Charset == 255 {
 			param.Typ.Enumvalues = fmt.Sprintf("mo_runtime_numeric:%d:%d:%d", bindingType.Size, bindingType.Width, bindingType.Scale)
 			return param, nil
@@ -1069,7 +1069,7 @@ func (b *baseBinder) numericAstTypesInternalWithHint(
 	switch expr := astExpr.(type) {
 	case *tree.ParamExpr:
 		scan := numericAstTypeScan{hasParam: true}
-		if bindingType, found := b.preparedParamBindingType(int32(expr.Offset)); found {
+		if bindingType, found := b.preparedParamBindingType(int32(expr.Offset)); found && b.decimalParamCommonTypeTarget {
 			if bindingType.Oid == types.T_text && bindingType.Charset == 255 {
 				return scan, nil
 			}
@@ -2711,6 +2711,14 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 		args = []*Expr{serialExpr, idxExpr, typeExpr}
 	} else {
 		args = make([]*Expr, len(astArgs))
+		decimalParamCommonTypeTarget := b.decimalParamCommonTypeTarget
+		switch name {
+		case "coalesce", "greatest", "least":
+			b.decimalParamCommonTypeTarget = true
+		default:
+			b.decimalParamCommonTypeTarget = false
+		}
+		defer func() { b.decimalParamCommonTypeTarget = decimalParamCommonTypeTarget }()
 		var functionContext numericFunctionContext
 		hasFunctionContext := false
 		if b.numericFunctionTarget {
@@ -3856,9 +3864,6 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 	var argsCastType []types.Type
 
 	// get function definition
-	if err := validateDecimalParamCommonTypeDomain(ctx, name, args, argsType); err != nil {
-		return nil, err
-	}
 	resolutionTypes := decimalParamCommonTypeResolutionTypes(name, args, argsType)
 	var fGet function.FuncGetResult
 	fGet, err = function.GetFunctionByName(ctx, name, resolutionTypes)
@@ -4711,56 +4716,6 @@ func decimalParamCommonTypeResolutionTypes(name string, args []*Expr, argsType [
 	return resolutionTypes
 }
 
-func validateDecimalParamCommonTypeDomain(ctx context.Context, name string, args []*Expr, argsType []types.Type) error {
-	switch name {
-	case "coalesce", "greatest", "least":
-	default:
-		return nil
-	}
-	if len(args) != len(argsType) {
-		return nil
-	}
-	maxIntegral, maxScale := int32(0), int32(0)
-	hasParam, hasDecimal, hasFloat, hasUnclassifiedParam := false, false, false, false
-	for i, typ := range argsType {
-		if isUnresolvedPreparedNumericParam(args[i], typ) {
-			hasParam = true
-			if runtimeType, _, found := runtimePreparedNumericType(args[i]); found {
-				if runtimeType.Oid.IsFloat() {
-					hasFloat = true
-				} else if runtimeType.Oid.IsDecimal() {
-					maxIntegral = max(maxIntegral, runtimeType.Width-runtimeType.Scale)
-					maxScale = max(maxScale, runtimeType.Scale)
-				}
-			} else {
-				hasUnclassifiedParam = true
-			}
-			continue
-		}
-		if typ.Oid.IsDecimal() {
-			hasDecimal = true
-			maxIntegral = max(maxIntegral, typ.Width-typ.Scale)
-			maxScale = max(maxScale, typ.Scale)
-		} else if typ.Oid.IsFloat() {
-			hasFloat = true
-		}
-	}
-	if !hasParam || !hasDecimal || hasFloat || hasUnclassifiedParam {
-		return nil
-	}
-	if maxIntegral == 0 && maxScale == 0 {
-		_, ok := dynamicParamDecimalCommonType(argsType)
-		if ok {
-			return nil
-		}
-	} else if maxIntegral+maxScale <= 76 {
-		return nil
-	}
-	return moerr.NewInvalidInputf(ctx,
-		"DECIMAL common type for prepared parameter requires %d digits, exceeding DECIMAL256 limit 76",
-		maxIntegral+maxScale)
-}
-
 func decimalParamCommonTypeHasFloatingPeer(args []*Expr, argsType []types.Type) bool {
 	for i, typ := range argsType {
 		if !isUnresolvedPreparedNumericParam(args[i], typ) && typ.Oid.IsFloat() {
@@ -4811,20 +4766,9 @@ func normalizeDecimalParamCommonTypeCastSources(
 	}
 	for i := range args {
 		if returnType.Oid.IsDecimal() && isUnresolvedPreparedNumericParam(args[i], argsType[i]) {
-			castSource := args[i]
-			_, mode, _ := runtimePreparedNumericType(args[i])
-			if mode == 2 {
-				// Existing implicit FLOAT conversion implements MySQL numeric-prefix
-				// semantics. Keeping the conversion in the expression tree avoids a
-				// new CAST overload that old CNs cannot decode.
-				var err error
-				floatType := types.T_float64.ToType()
-				castSource, err = appendCastBeforeExpr(ctx, castSource, makePlan2Type(&floatType))
-				if err != nil {
-					return err
-				}
-			}
-			castExpr, err := appendCastBeforeExpr(ctx, castSource, makePlan2Type(&returnType))
+			// The normal string-to-DECIMAL cast scans MySQL's numeric prefix
+			// directly, so integers above 2^53 must not pass through FLOAT64.
+			castExpr, err := appendCastBeforeExpr(ctx, args[i], makePlan2Type(&returnType))
 			if err != nil {
 				return err
 			}

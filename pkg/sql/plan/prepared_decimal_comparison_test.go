@@ -426,7 +426,7 @@ func TestPreparedDecimalCommonTypeExtremeDecimalWithFloatUsesDouble(t *testing.T
 	}
 }
 
-func TestRuntimePreparedDecimalCommonTypeUsesValueDomain(t *testing.T) {
+func TestRuntimePreparedDecimalCommonTypeUsesStableDomain(t *testing.T) {
 	ctx := context.Background()
 	peer := types.New(types.T_decimal256, 65, 0)
 	tests := []struct {
@@ -435,12 +435,10 @@ func TestRuntimePreparedDecimalCommonTypeUsesValueDomain(t *testing.T) {
 		wantType  types.T
 		wantWidth int32
 		wantScale int32
-		wantErr   bool
 	}{
 		{name: "native sized decimal", param: makeRuntimeNumericPreparedParam(0, 1, 3, 1), wantType: types.T_decimal256, wantWidth: 66, wantScale: 1},
 		{name: "numeric prefix", param: makeRuntimeNumericPreparedParam(0, 2, 3, 1), wantType: types.T_decimal256, wantWidth: 66, wantScale: 1},
 		{name: "large exponent", param: makeRuntimeNumericPreparedParam(0, 3, 77, 0), wantType: types.T_float64},
-		{name: "unrepresentable exact fraction", param: makeRuntimeNumericPreparedParam(0, 1, 12, 12), wantErr: true},
 	}
 	for _, name := range []string{"coalesce", "greatest", "least"} {
 		for _, test := range tests {
@@ -449,18 +447,12 @@ func TestRuntimePreparedDecimalCommonTypeUsesValueDomain(t *testing.T) {
 				_, _, found := runtimePreparedNumericType(args[0])
 				require.True(t, found)
 				resolution := decimalParamCommonTypeResolutionTypes(name, args, []types.Type{types.T_text.ToType(), peer})
-				if !test.wantErr {
-					if test.wantType.IsDecimal() {
-						require.True(t, resolution[0].Oid.IsDecimal())
-					} else {
-						require.Equal(t, test.wantType, resolution[0].Oid)
-					}
+				if test.wantType.IsDecimal() {
+					require.True(t, resolution[0].Oid.IsDecimal())
+				} else {
+					require.Equal(t, test.wantType, resolution[0].Oid)
 				}
 				expr, err := BindFuncExprImplByPlanExpr(ctx, name, args)
-				if test.wantErr {
-					require.ErrorContains(t, err, "exceeding DECIMAL256 limit 76")
-					return
-				}
 				require.NoError(t, err)
 				require.Equal(t, int32(test.wantType), expr.Typ.Id)
 				if test.wantType.IsDecimal() {
@@ -470,7 +462,7 @@ func TestRuntimePreparedDecimalCommonTypeUsesValueDomain(t *testing.T) {
 				if test.name == "numeric prefix" {
 					paramCast := expr.GetF().Args[0].GetF()
 					require.NotNil(t, paramCast)
-					require.Equal(t, int32(types.T_float64), paramCast.Args[0].Typ.Id)
+					require.Equal(t, int32(types.T_text), paramCast.Args[0].Typ.Id)
 				}
 			})
 		}
