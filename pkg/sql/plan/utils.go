@@ -3357,7 +3357,7 @@ func validateIntegerPaginationParam(value any) (bool, bool) {
 			return true, false
 		}
 		if param.RuntimeType != types.T_any {
-			if !param.RuntimeType.IsInteger() && param.RuntimeType != types.T_bit {
+			if !param.RuntimeType.IsInteger() && param.RuntimeType != types.T_bit && param.RuntimeType != types.T_bool {
 				return false, false
 			}
 			return paginationValueSign(param.Value)
@@ -3369,7 +3369,7 @@ func validateIntegerPaginationParam(value any) (bool, bool) {
 	}
 	switch value.(type) {
 	case int, int8, int16, int32, int64,
-		uint, uint8, uint16, uint32, uint64:
+		uint, uint8, uint16, uint32, uint64, bool:
 		return paginationValueSign(value)
 	default:
 		return false, false
@@ -3388,6 +3388,8 @@ func paginationValueSign(value any) (bool, bool) {
 		return true, v < 0
 	case int64:
 		return true, v < 0
+	case bool:
+		return true, false
 	case string:
 		trimmed := strings.TrimSpace(v)
 		if !strings.HasPrefix(trimmed, "-") {

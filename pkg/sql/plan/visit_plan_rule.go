@@ -444,6 +444,16 @@ func (rule *preparedTypeLineageRule) ApplyExpr(e *plan.Expr) (*plan.Expr, error)
 		if !changed {
 			return e, nil
 		}
+		// The prepare-time dynamic DECIMAL domain also coerces siblings that do
+		// not themselves reference the producer. Restore those generated casts
+		// before selecting the consumer overload for the new lineage generation.
+		for i, arg := range impl.F.Args {
+			restored, err := restorePreparedNumericLiteralType(rule.ctx, arg)
+			if err != nil {
+				return nil, err
+			}
+			impl.F.Args[i] = restored
+		}
 		rewritten, err := BindFuncExprImplByPlanExpr(rule.ctx, impl.F.Func.GetObjName(), impl.F.Args)
 		if err != nil {
 			return nil, err

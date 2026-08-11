@@ -62,17 +62,19 @@ func TestIssue25408PreparedNestedExactAndStringDomains(t *testing.T) {
 			"select sum(? + 1) + 1 from n",
 			"select sum(? + 1) over () + 1 from n limit 1",
 		} {
-			stmt, prepareErr := conn.PrepareContext(ctx, query)
-			require.NoError(t, prepareErr)
-			for _, execution := range []struct {
-				arg  any
-				want string
-			}{{int64(1), "7"}, {float64(2.5), "11.5"}, {int64(1), "7"}} {
-				var got string
-				require.NoError(t, stmt.QueryRowContext(ctx, execution.arg).Scan(&got))
-				require.Equal(t, execution.want, got)
-			}
-			require.NoError(t, stmt.Close())
+			t.Run(query, func(t *testing.T) {
+				stmt, prepareErr := conn.PrepareContext(ctx, query)
+				require.NoError(t, prepareErr)
+				defer stmt.Close()
+				for _, execution := range []struct {
+					arg  any
+					want string
+				}{{int64(1), "7"}, {float64(2.5), "11.5"}, {int64(1), "7"}} {
+					var got string
+					require.NoError(t, stmt.QueryRowContext(ctx, execution.arg).Scan(&got))
+					require.Equal(t, execution.want, got)
+				}
+			})
 		}
 
 		mustExec(t, ctx, conn, "create table bool_strings(v text)")
@@ -81,6 +83,12 @@ func TestIssue25408PreparedNestedExactAndStringDomains(t *testing.T) {
 		mustExec(t, ctx, conn, "execute bool_insert using @bool_value")
 		requireIssue25408Scalar(t, ctx, conn, "true", "select v from bool_strings")
 		mustExec(t, ctx, conn, "deallocate prepare bool_insert")
+		mustExec(t, ctx, conn, "prepare bool_numeric from 'select ? + 1'")
+		requireIssue25408Scalar(t, ctx, conn, "2", "execute bool_numeric using @bool_value")
+		mustExec(t, ctx, conn, "deallocate prepare bool_numeric")
+		mustExec(t, ctx, conn, "prepare bool_limit from 'select a from n order by a limit ?'")
+		requireIssue25408Scalar(t, ctx, conn, "1", "execute bool_limit using @bool_value")
+		mustExec(t, ctx, conn, "deallocate prepare bool_limit")
 
 		// SQL PREPARE reaches the same nested exact-expression specialization as
 		// EXECUTE USING user variables.

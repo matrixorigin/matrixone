@@ -6135,6 +6135,16 @@ func strToSigned[T constraints.Signed](
 				return err
 			}
 		} else {
+			if from.GetSourceVector().GetPrepareParamKindAt(int(i)) == vector.PrepareParamBoolean {
+				boolean, _, err := preparedBooleanToBit(string(v))
+				if err != nil {
+					return moerr.NewInvalidArg(ctx, "cast to int", string(v))
+				}
+				if err = to.Append(T(boolean), false); err != nil {
+					return err
+				}
+				continue
+			}
 			if isBinary {
 				var r int64
 				var num uint64
@@ -6582,6 +6592,16 @@ func strToUnsigned[T constraints.Unsigned](
 				return err
 			}
 		} else {
+			if from.GetSourceVector().GetPrepareParamKindAt(int(i)) == vector.PrepareParamBoolean {
+				boolean, _, err := preparedBooleanToBit(string(v))
+				if err != nil {
+					return moerr.NewInvalidArg(ctx, fmt.Sprintf("cast to uint%d", bitSize), string(v))
+				}
+				if err = to.Append(T(boolean), false); err != nil {
+					return err
+				}
+				continue
+			}
 			var res *string
 			if isBinary {
 				s := hex.EncodeToString(v)

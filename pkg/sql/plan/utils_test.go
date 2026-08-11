@@ -261,11 +261,13 @@ func TestFillValuesOfParamsInPlanValidatesPaginationParamTypes(t *testing.T) {
 		{name: "signed integer", value: int64(2)},
 		{name: "negative signed integer", value: int64(-1), wantErr: true},
 		{name: "unsigned integer", value: uint64(2)},
+		{name: "boolean", value: true},
 		{name: "null", value: nil},
 		{name: "string", value: "3", wantErr: true},
 		{name: "float", value: float64(3), wantErr: true},
 		{name: "decimal", value: types.Decimal64(3), wantErr: true},
 		{name: "binary integer", value: ParamValue{Value: "2", RuntimeType: types.T_int64}},
+		{name: "runtime boolean", value: ParamValue{Value: true, RuntimeType: types.T_bool}},
 		{name: "negative binary integer", value: ParamValue{Value: "-1", RuntimeType: types.T_int64}, wantErr: true},
 		{name: "binary string", value: ParamValue{Value: "2", RuntimeType: types.T_varchar}, wantErr: true},
 	} {

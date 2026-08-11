@@ -223,6 +223,24 @@ func TestPreparedTypedTextToBit(t *testing.T) {
 	run("malformed decimal rejected", vector.PrepareParamDecimal, []string{"5.9junk"}, bit64, nil, true)
 }
 
+func TestPreparedBooleanTextToInteger(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	for _, test := range []struct {
+		target types.Type
+		want   any
+	}{{types.T_int64.ToType(), []int64{1, 0}}, {types.T_uint64.ToType(), []uint64{1, 0}}} {
+		tcc := NewFunctionTestCase(proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{"true", "false"}, nil),
+				NewFunctionTestInput(test.target, test.want, nil),
+			},
+			NewFunctionTestResult(test.target, false, test.want, nil), NewCast)
+		tcc.parameters[0].SetPrepareParamKind(vector.PrepareParamBoolean)
+		succeed, info := tcc.Run()
+		require.True(t, succeed, info)
+	}
+}
+
 func TestInsertIgnoreCastsSpecialValues(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	proc.SetStmtProfile(&process.StmtProfile{})

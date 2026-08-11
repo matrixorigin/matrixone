@@ -1339,6 +1339,8 @@ func buildExecuteUserParams(
 
 func preparedTextParamRuntimeType(value any) types.T {
 	switch value.(type) {
+	case bool:
+		return types.T_bool
 	case int8:
 		return types.T_int8
 	case int16:
