@@ -226,19 +226,31 @@ func unionBatchAreaProjection(
 	if src == nil || !src.GetType().IsVarlen() {
 		return 0, 0, nil
 	}
-	if start < 0 || rows < 0 || start > src.Length() || rows > src.Length()-start {
+	if start < 0 || rows < 0 {
 		return 0, 0, process.ErrHashBuildBudgetInvalid
 	}
-	if rows == 0 || len(src.GetArea()) == 0 {
-		return 0, 0, nil
-	}
 	if src.IsConst() {
+		if rows > 0 && src.Length() == 0 {
+			return 0, 0, process.ErrHashBuildBudgetInvalid
+		}
+		// SetConstNull intentionally retains reusable area capacity while
+		// clearing the only physical descriptor. NULL contributes no payload,
+		// regardless of whether that stale area is still present.
+		if rows == 0 || src.IsConstNull() || len(src.GetArea()) == 0 {
+			return 0, 0, nil
+		}
 		payload, err := selectedVarlenaPayload(src, 0, 1)
 		if err != nil || payload > math.MaxInt {
 			return 0, 0, process.ErrHashBuildBudgetInvalid
 		}
 		selected, err = recoveryCheckedMul(payload, uint64(rows))
 		return int(payload), selected, err
+	}
+	if start > src.Length() || rows > src.Length()-start {
+		return 0, 0, process.ErrHashBuildBudgetInvalid
+	}
+	if rows == 0 || len(src.GetArea()) == 0 {
+		return 0, 0, nil
 	}
 	if start == 0 && rows == src.Length() && src.VarlenaAreaIsDisjoint() {
 		return len(src.GetArea()), uint64(len(src.GetArea())), nil

@@ -78,7 +78,7 @@ func TestInformationSchemaTableConstraintsLegacyDDL_DoesNotUseCheckConstraints(t
 }
 
 func TestInitInformationSchemaSysTablesForProtocol(t *testing.T) {
-	legacy := InitInformationSchemaSysTablesForProtocol(defines.MORPCVersion14)
+	legacy := InitInformationSchemaSysTablesForProtocol(defines.MORPCVersion15)
 	assert.NotContains(t, legacy, InformationSchemaCheckConstraintsDDL)
 	assert.NotContains(t, legacy, InformationSchemaTableConstraintsDDL)
 	assert.Contains(t, legacy, InformationSchemaTableConstraintsLegacyDDL)
@@ -86,7 +86,7 @@ func TestInitInformationSchemaSysTablesForProtocol(t *testing.T) {
 		assert.NotContains(t, sql, "mo_check_constraints()")
 	}
 
-	latest := InitInformationSchemaSysTablesForProtocol(defines.MORPCVersion15)
+	latest := InitInformationSchemaSysTablesForProtocol(defines.MORPCVersion16)
 	assert.Equal(t, InitInformationSchemaSysTables, latest)
 }
 

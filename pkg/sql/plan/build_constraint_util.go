@@ -237,15 +237,15 @@ func requireInformationSchemaCheckConstraintsProtocol(ctx context.Context, proc 
 	if rt == nil {
 		return moerr.NewNotSupported(
 			ctx,
-			"information_schema CHECK_CONSTRAINTS requires all CNs to support protocol version 15",
+			"information_schema CHECK_CONSTRAINTS requires all CNs to support protocol version 16",
 		)
 	}
 	value, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
 	version, valid := value.(int64)
-	if !ok || !valid || version < defines.MORPCVersion15 {
+	if !ok || !valid || version < defines.MORPCVersion16 {
 		return moerr.NewNotSupported(
 			ctx,
-			"information_schema CHECK_CONSTRAINTS requires all CNs to support protocol version 15",
+			"information_schema CHECK_CONSTRAINTS requires all CNs to support protocol version 16",
 		)
 	}
 	return nil
