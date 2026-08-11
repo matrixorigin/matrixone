@@ -28,6 +28,7 @@ import (
 	"time"
 
 	"github.com/gogo/protobuf/proto"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -59,6 +60,16 @@ type testFlightServer struct {
 	cancelStarted       chan struct{}
 	blockCancel         chan struct{}
 	cancelOnce          sync.Once
+}
+
+func TestInternalErrorfUsesMoerrAndPreservesCause(t *testing.T) {
+	plain := internalErrorf("protocol failure")
+	require.True(t, moerr.IsMoErrCode(plain, moerr.ErrInternal))
+
+	cause := errors.New("transport failure")
+	wrapped := internalErrorf("prepare: %w", cause)
+	require.ErrorIs(t, wrapped, cause)
+	require.ErrorContains(t, wrapped, "prepare: transport failure")
 }
 
 func TestExecutionIdempotencyKeyMatchesProtocolVector(t *testing.T) {

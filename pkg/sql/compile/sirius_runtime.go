@@ -17,7 +17,6 @@ package compile
 import (
 	"context"
 	"errors"
-	"fmt"
 	"sync"
 	"time"
 
@@ -69,7 +68,7 @@ func (r *SiriusRuntime) Validate() error {
 	if r == nil || r.Flight == nil || r.Leases == nil || !r.Leases.Ready() || !r.Leases.Protected() ||
 		r.Resolver == nil || len(r.AuthorizedClientSPKIHash) != 32 || r.DataDir == "" ||
 		r.LeaseTTL <= 0 || r.LeaseTTL > substrait.MaxLeaseTTL || r.CleanupTimeout <= 0 {
-		return fmt.Errorf("substrait: incomplete CN Sirius runtime")
+		return moerr.NewInternalErrorNoCtx("substrait: incomplete CN Sirius runtime")
 	}
 	return nil
 }

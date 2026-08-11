@@ -15,11 +15,23 @@
 package cnservice
 
 import (
+	"errors"
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/stretchr/testify/require"
 )
+
+func TestSiriusInternalErrorfUsesMoerrAndPreservesCause(t *testing.T) {
+	plain := siriusInternalErrorf("configuration failure")
+	require.True(t, moerr.IsMoErrCode(plain, moerr.ErrInternal))
+
+	cause := errors.New("certificate failure")
+	wrapped := siriusInternalErrorf("load certificate: %w", cause)
+	require.ErrorIs(t, wrapped, cause)
+	require.ErrorContains(t, wrapped, "load certificate: certificate failure")
+}
 
 func TestSiriusConfigIsOptInAndFailClosed(t *testing.T) {
 	var disabled SiriusConfig

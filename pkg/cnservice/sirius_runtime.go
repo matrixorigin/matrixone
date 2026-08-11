@@ -21,15 +21,34 @@ import (
 	"crypto/x509"
 	"encoding/pem"
 	"errors"
-	"fmt"
 	"os"
+	"strings"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/sql/compile"
 	"github.com/matrixorigin/matrixone/pkg/sql/compile/sidecarflight"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/substrait"
 )
+
+func siriusInternalErrorf(format string, args ...any) error {
+	var cause error
+	if strings.Contains(format, "%w") {
+		format = strings.ReplaceAll(format, "%w", "%v")
+		for _, arg := range args {
+			if err, ok := arg.(error); ok {
+				cause = err
+				break
+			}
+		}
+	}
+	err := error(moerr.NewInternalErrorNoCtxf(format, args...))
+	if cause != nil {
+		err = errors.Join(err, cause)
+	}
+	return err
+}
 
 func (s *service) startSiriusRuntime(ctx context.Context) error {
 	config := s.cfg.Sirius
@@ -37,7 +56,7 @@ func (s *service) startSiriusRuntime(ctx context.Context) error {
 		return nil
 	}
 	if s.options.siriusLeases == nil || !s.options.siriusLeases.Ready() || !s.options.siriusLeases.Protected() || s.options.siriusAuditor == nil {
-		return fmt.Errorf("substrait: enabled Sirius runtime requires replayed GC-protected lease dependencies")
+		return siriusInternalErrorf("substrait: enabled Sirius runtime requires replayed GC-protected lease dependencies")
 	}
 	flightTLS, err := loadSiriusClientTLS(config)
 	if err != nil {
@@ -58,7 +77,7 @@ func (s *service) startSiriusRuntime(ctx context.Context) error {
 		return err
 	}
 	if err = resolver.Start(); err != nil {
-		return fmt.Errorf("substrait: start read resolver: %w", err)
+		return siriusInternalErrorf("substrait: start read resolver: %w", err)
 	}
 	flight, err := sidecarflight.NewRuntime(ctx, sidecarflight.Config{
 		Address: config.FlightAddress, TLSConfig: flightTLS, MaxBatchBytes: config.MaxBatchBytes,
@@ -103,11 +122,11 @@ func (s *service) closeSiriusRuntime() error {
 func loadSiriusClientTLS(config SiriusConfig) (*tls.Config, error) {
 	certificate, err := tls.LoadX509KeyPair(config.FlightClientCertPath, config.FlightClientKeyPath)
 	if err != nil {
-		return nil, fmt.Errorf("substrait: load Flight client certificate: %w", err)
+		return nil, siriusInternalErrorf("substrait: load Flight client certificate: %w", err)
 	}
 	roots, err := loadCertificatePool(config.FlightServerCAPath)
 	if err != nil {
-		return nil, fmt.Errorf("substrait: load Flight server CA: %w", err)
+		return nil, siriusInternalErrorf("substrait: load Flight server CA: %w", err)
 	}
 	return &tls.Config{
 		MinVersion: tls.VersionTLS12, ServerName: config.FlightServerName,
@@ -118,11 +137,11 @@ func loadSiriusClientTLS(config SiriusConfig) (*tls.Config, error) {
 func loadSiriusResolverTLS(config SiriusConfig) (*tls.Config, error) {
 	certificate, err := tls.LoadX509KeyPair(config.ResolverServerCertPath, config.ResolverServerKeyPath)
 	if err != nil {
-		return nil, fmt.Errorf("substrait: load resolver server certificate: %w", err)
+		return nil, siriusInternalErrorf("substrait: load resolver server certificate: %w", err)
 	}
 	clients, err := loadCertificatePool(config.ResolverClientCAPath)
 	if err != nil {
-		return nil, fmt.Errorf("substrait: load resolver client CA: %w", err)
+		return nil, siriusInternalErrorf("substrait: load resolver client CA: %w", err)
 	}
 	return &tls.Config{
 		MinVersion: tls.VersionTLS12, Certificates: []tls.Certificate{certificate},
@@ -137,7 +156,7 @@ func loadCertificatePool(path string) (*x509.CertPool, error) {
 	}
 	pool := x509.NewCertPool()
 	if !pool.AppendCertsFromPEM(contents) {
-		return nil, fmt.Errorf("certificate file contains no CA certificates")
+		return nil, siriusInternalErrorf("certificate file contains no CA certificates")
 	}
 	return pool, nil
 }
@@ -145,18 +164,18 @@ func loadCertificatePool(path string) (*x509.CertPool, error) {
 func loadCertificateSPKIHash(path string) ([]byte, error) {
 	contents, err := os.ReadFile(path)
 	if err != nil {
-		return nil, fmt.Errorf("substrait: load resolver client certificate: %w", err)
+		return nil, siriusInternalErrorf("substrait: load resolver client certificate: %w", err)
 	}
 	block, _ := pem.Decode(contents)
 	if block == nil || block.Type != "CERTIFICATE" {
-		return nil, fmt.Errorf("substrait: resolver client certificate is not PEM")
+		return nil, siriusInternalErrorf("substrait: resolver client certificate is not PEM")
 	}
 	certificate, err := x509.ParseCertificate(block.Bytes)
 	if err != nil {
-		return nil, fmt.Errorf("substrait: parse resolver client certificate: %w", err)
+		return nil, siriusInternalErrorf("substrait: parse resolver client certificate: %w", err)
 	}
 	if len(certificate.RawSubjectPublicKeyInfo) == 0 {
-		return nil, fmt.Errorf("substrait: resolver client certificate has no subject public key info")
+		return nil, siriusInternalErrorf("substrait: resolver client certificate has no subject public key info")
 	}
 	// Hash the exact DER bytes used by tls.ConnectionState.VerifiedChains in
 	// ResolveHandler so unusual but valid algorithm parameters cannot make the

@@ -17,7 +17,6 @@ package sidecarflight
 import (
 	"context"
 	"errors"
-	"fmt"
 	"io"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -36,7 +35,7 @@ func (e *Execution) Run(
 	fill func(*batch.Batch, *perfcounter.CounterSet) error,
 ) error {
 	if e == nil || e.runtime == nil || mp == nil || fill == nil {
-		return fmt.Errorf("sidecar flight: invalid execution")
+		return internalErrorf("sidecar flight: invalid execution")
 	}
 	if ctx == nil {
 		ctx = context.Background()
@@ -44,7 +43,7 @@ func (e *Execution) Run(
 	e.mu.Lock()
 	if e.started || e.terminal {
 		e.mu.Unlock()
-		return fmt.Errorf("sidecar flight: ticket was already claimed or completed")
+		return internalErrorf("sidecar flight: ticket was already claimed or completed")
 	}
 	e.started = true
 	streamCtx, cancel := context.WithCancel(ctx)
@@ -70,13 +69,13 @@ func (e *Execution) Run(
 
 	stream, err := e.runtime.conn.NewStream(streamCtx, serverStream, doGetMethod)
 	if err != nil {
-		return fmt.Errorf("sidecar flight: open result stream: %w", err)
+		return internalErrorf("sidecar flight: open result stream: %w", err)
 	}
 	if err = stream.SendMsg(&flightTicket{Ticket: e.ticket}); err != nil {
-		return fmt.Errorf("sidecar flight: send ticket: %w", err)
+		return internalErrorf("sidecar flight: send ticket: %w", err)
 	}
 	if err = stream.CloseSend(); err != nil {
-		return fmt.Errorf("sidecar flight: close ticket request: %w", err)
+		return internalErrorf("sidecar flight: close ticket request: %w", err)
 	}
 	seenSchema := false
 	for {
@@ -84,36 +83,36 @@ func (e *Execution) Run(
 		err = stream.RecvMsg(data)
 		if err == io.EOF {
 			if !seenSchema {
-				return fmt.Errorf("sidecar flight: stream ended before its schema")
+				return internalErrorf("sidecar flight: stream ended before its schema")
 			}
 			return e.finishSuccess()
 		}
 		if err != nil {
-			return fmt.Errorf("sidecar flight: receive result: %w", err)
+			return internalErrorf("sidecar flight: receive result: %w", err)
 		}
 		if len(data.DataHeader) == 0 || uint64(len(data.DataBody)) > e.runtime.config.MaxBatchBytes {
-			return fmt.Errorf("sidecar flight: malformed or oversized FlightData")
+			return internalErrorf("sidecar flight: malformed or oversized FlightData")
 		}
 		if !seenSchema {
 			if len(data.DataBody) != 0 {
-				return fmt.Errorf("sidecar flight: schema message contains a body")
+				return internalErrorf("sidecar flight: schema message contains a body")
 			}
 			if err = e.schema.validateStreamSchema(data.DataHeader); err != nil {
-				return fmt.Errorf("sidecar flight: stream schema: %w", err)
+				return internalErrorf("sidecar flight: stream schema: %w", err)
 			}
 			seenSchema = true
 			continue
 		}
 		bat, decodeErr := e.schema.decodeRecordBatch(data.DataHeader, data.DataBody, e.runtime.config.MaxBatchBytes, mp)
 		if decodeErr != nil {
-			return fmt.Errorf("sidecar flight: decode record batch: %w", decodeErr)
+			return internalErrorf("sidecar flight: decode record batch: %w", decodeErr)
 		}
 		fillErr := func() error {
 			defer bat.Clean(mp)
 			return fill(bat, counters)
 		}()
 		if fillErr != nil {
-			return fmt.Errorf("sidecar flight: write result batch: %w", fillErr)
+			return internalErrorf("sidecar flight: write result batch: %w", fillErr)
 		}
 	}
 }
@@ -128,7 +127,7 @@ func (e *Execution) finishSuccess() error {
 		err := e.cleanupErr
 		e.mu.Unlock()
 		if err == nil {
-			err = fmt.Errorf("sidecar flight: execution was cancelled while finishing")
+			err = internalErrorf("sidecar flight: execution was cancelled while finishing")
 		}
 		return err
 	}

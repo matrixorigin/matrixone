@@ -16,7 +16,6 @@ package sidecarflight
 
 import (
 	"encoding/binary"
-	"fmt"
 	"math"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -65,10 +64,10 @@ type Schema struct {
 // capability are accepted.
 func ParseSchema(wire []byte, expected []planpb.Type, headings []string) (*Schema, error) {
 	if len(wire) == 0 || len(wire) > maxArrowMetadataBytes {
-		return nil, fmt.Errorf("Arrow schema metadata exceeds the supported bound")
+		return nil, internalErrorf("Arrow schema metadata exceeds the supported bound")
 	}
 	if len(expected) == 0 || len(headings) != len(expected) {
-		return nil, fmt.Errorf("MatrixOne result schema is empty or inconsistent")
+		return nil, internalErrorf("MatrixOne result schema is empty or inconsistent")
 	}
 	metadata, err := ipcMetadata(wire)
 	if err != nil {
@@ -76,56 +75,56 @@ func ParseSchema(wire []byte, expected []planpb.Type, headings []string) (*Schem
 	}
 	message, err := rootTable(metadata)
 	if err != nil {
-		return nil, fmt.Errorf("Arrow schema message: %w", err)
+		return nil, internalErrorf("Arrow schema message: %w", err)
 	}
 	version, err := message.byteField(0, 0)
 	if err != nil || version != 4 {
-		return nil, fmt.Errorf("Arrow schema message has unsupported metadata version %d", version)
+		return nil, internalErrorf("Arrow schema message has unsupported metadata version %d", version)
 	}
 	headerType, err := message.byteField(1, 0)
 	if err != nil || headerType != arrowHeaderSchema {
-		return nil, fmt.Errorf("Arrow schema message has header type %d", headerType)
+		return nil, internalErrorf("Arrow schema message has header type %d", headerType)
 	}
 	if bodyLength, bodyErr := message.int64Field(3, 0); bodyErr != nil || bodyLength != 0 {
-		return nil, fmt.Errorf("Arrow schema message has an invalid body length")
+		return nil, internalErrorf("Arrow schema message has an invalid body length")
 	}
 	schemaTable, ok, err := message.tableField(2)
 	if err != nil {
-		return nil, fmt.Errorf("Arrow schema message is missing its schema: %w", err)
+		return nil, internalErrorf("Arrow schema message is missing its schema: %w", err)
 	}
 	if !ok {
-		return nil, fmt.Errorf("Arrow schema message is missing its schema")
+		return nil, internalErrorf("Arrow schema message is missing its schema")
 	}
 	endianness, err := schemaTable.int16Field(0, 0)
 	if err != nil || endianness != 0 {
-		return nil, fmt.Errorf("Arrow schema is not little-endian")
+		return nil, internalErrorf("Arrow schema is not little-endian")
 	}
 	_, featureCount, _, err := schemaTable.vector(3, 8)
 	if err != nil || featureCount != 0 {
-		return nil, fmt.Errorf("Arrow schema uses unsupported features")
+		return nil, internalErrorf("Arrow schema uses unsupported features")
 	}
 	_, fieldCount, fieldsPresent, err := schemaTable.vector(1, 4)
 	if err != nil {
-		return nil, fmt.Errorf("Arrow schema fields: %w", err)
+		return nil, internalErrorf("Arrow schema fields: %w", err)
 	}
 	if !fieldsPresent {
 		fieldCount = 0
 	}
 	if fieldCount != len(expected) || len(headings) != len(expected) {
-		return nil, fmt.Errorf("Arrow schema has %d fields; MatrixOne expects %d", fieldCount, len(expected))
+		return nil, internalErrorf("Arrow schema has %d fields; MatrixOne expects %d", fieldCount, len(expected))
 	}
 	fieldTables, err := schemaTable.tableVector(1)
 	if err != nil {
-		return nil, fmt.Errorf("Arrow schema fields: %w", err)
+		return nil, internalErrorf("Arrow schema fields: %w", err)
 	}
 	result := &Schema{fields: make([]arrowField, len(fieldTables)), headings: append([]string(nil), headings...)}
 	for i, table := range fieldTables {
 		field, parseErr := parseArrowField(table, expected[i])
 		if parseErr != nil {
-			return nil, fmt.Errorf("Arrow field %d: %w", i, parseErr)
+			return nil, internalErrorf("Arrow field %d: %w", i, parseErr)
 		}
 		if field.name != headings[i] {
-			return nil, fmt.Errorf("Arrow field %d is named %q; MatrixOne expects %q", i, field.name, headings[i])
+			return nil, internalErrorf("Arrow field %d is named %q; MatrixOne expects %q", i, field.name, headings[i])
 		}
 		result.fields[i] = field
 	}
@@ -135,29 +134,29 @@ func ParseSchema(wire []byte, expected []planpb.Type, headings []string) (*Schem
 func parseArrowField(table flatTable, expected planpb.Type) (arrowField, error) {
 	name, ok, err := table.stringField(0)
 	if err != nil {
-		return arrowField{}, fmt.Errorf("missing name: %w", err)
+		return arrowField{}, internalErrorf("missing name: %w", err)
 	}
 	if !ok {
-		return arrowField{}, fmt.Errorf("missing name")
+		return arrowField{}, internalErrorf("missing name")
 	}
 	if dictionary, present, dictionaryErr := table.tableField(4); dictionaryErr != nil {
 		return arrowField{}, dictionaryErr
 	} else if present || dictionary.data != nil {
-		return arrowField{}, fmt.Errorf("dictionary encoding is not supported")
+		return arrowField{}, internalErrorf("dictionary encoding is not supported")
 	}
 	_, childCount, _, err := table.vector(5, 4)
 	if err != nil {
 		return arrowField{}, err
 	}
 	if childCount != 0 {
-		return arrowField{}, fmt.Errorf("nested Arrow fields are not supported")
+		return arrowField{}, internalErrorf("nested Arrow fields are not supported")
 	}
 	nullable, err := table.boolField(1, false)
 	if err != nil {
 		return arrowField{}, err
 	}
 	if nullable == expected.NotNullable {
-		return arrowField{}, fmt.Errorf("Arrow nullability does not match MatrixOne type")
+		return arrowField{}, internalErrorf("Arrow nullability does not match MatrixOne type")
 	}
 	typeID, err := table.byteField(2, 0)
 	if err != nil {
@@ -165,10 +164,10 @@ func parseArrowField(table flatTable, expected planpb.Type) (arrowField, error) 
 	}
 	typeTable, ok, err := table.tableField(3)
 	if err != nil {
-		return arrowField{}, fmt.Errorf("missing Arrow type metadata: %w", err)
+		return arrowField{}, internalErrorf("missing Arrow type metadata: %w", err)
 	}
 	if !ok {
-		return arrowField{}, fmt.Errorf("missing Arrow type metadata")
+		return arrowField{}, internalErrorf("missing Arrow type metadata")
 	}
 	field := arrowField{name: name, nullable: nullable, arrowType: typeID, expected: expected, bufferCount: 2}
 	moType := types.T(expected.Id)
@@ -237,7 +236,7 @@ func parseArrowField(table flatTable, expected planpb.Type) (arrowField, error) 
 		}
 		field.bitWidth = 32
 	default:
-		return arrowField{}, fmt.Errorf("unsupported Arrow type id %d", typeID)
+		return arrowField{}, internalErrorf("unsupported Arrow type id %d", typeID)
 	}
 	return field, nil
 }
@@ -258,7 +257,7 @@ func expectedIntegerShape(t types.T) (int32, bool) {
 }
 
 func typeMismatch(arrowType byte, moType types.T) error {
-	return fmt.Errorf("Arrow type %d does not match MatrixOne type %s", arrowType, moType.String())
+	return internalErrorf("Arrow type %d does not match MatrixOne type %s", arrowType, moType.String())
 }
 
 func (s *Schema) matches(other *Schema) bool {
@@ -289,7 +288,7 @@ func (s *Schema) validateStreamSchema(header []byte) error {
 		return err
 	}
 	if !s.matches(streamSchema) {
-		return fmt.Errorf("Arrow stream schema differs from FlightInfo schema")
+		return internalErrorf("Arrow stream schema differs from FlightInfo schema")
 	}
 	return nil
 }
@@ -309,10 +308,10 @@ type arrowBuffer struct {
 // synchronous consumer before the next Flight message is requested.
 func (s *Schema) decodeRecordBatch(header, body []byte, maxDecodedBytes uint64, mp *mpool.MPool) (result *batch.Batch, err error) {
 	if s == nil || mp == nil || maxDecodedBytes == 0 {
-		return nil, fmt.Errorf("sidecar flight: missing schema or memory pool")
+		return nil, internalErrorf("sidecar flight: missing schema or memory pool")
 	}
 	if len(header) == 0 || len(header) > maxArrowMetadataBytes {
-		return nil, fmt.Errorf("Arrow record batch metadata exceeds the supported bound")
+		return nil, internalErrorf("Arrow record batch metadata exceeds the supported bound")
 	}
 	metadata, err := ipcMetadata(header)
 	if err != nil {
@@ -324,45 +323,45 @@ func (s *Schema) decodeRecordBatch(header, body []byte, maxDecodedBytes uint64, 
 	}
 	version, err := message.byteField(0, 0)
 	if err != nil || version != 4 {
-		return nil, fmt.Errorf("Arrow record batch has unsupported metadata version %d", version)
+		return nil, internalErrorf("Arrow record batch has unsupported metadata version %d", version)
 	}
 	headerType, err := message.byteField(1, 0)
 	if err != nil || headerType != arrowHeaderRecordBatch {
-		return nil, fmt.Errorf("Arrow message has unsupported header type %d", headerType)
+		return nil, internalErrorf("Arrow message has unsupported header type %d", headerType)
 	}
 	bodyLength, err := message.int64Field(3, 0)
 	if err != nil || bodyLength < 0 || bodyLength != int64(len(body)) {
-		return nil, fmt.Errorf("Arrow record batch body length mismatch")
+		return nil, internalErrorf("Arrow record batch body length mismatch")
 	}
 	record, ok, err := message.tableField(2)
 	if err != nil {
-		return nil, fmt.Errorf("Arrow record batch metadata is missing: %w", err)
+		return nil, internalErrorf("Arrow record batch metadata is missing: %w", err)
 	}
 	if !ok {
-		return nil, fmt.Errorf("Arrow record batch metadata is missing")
+		return nil, internalErrorf("Arrow record batch metadata is missing")
 	}
 	rows, err := record.int64Field(0, 0)
 	if err != nil || rows < 0 || rows > int64(maxInt()) {
-		return nil, fmt.Errorf("Arrow record batch row count is invalid")
+		return nil, internalErrorf("Arrow record batch row count is invalid")
 	}
 	if compression, present, compressionErr := record.tableField(3); compressionErr != nil {
 		return nil, compressionErr
 	} else if present || compression.data != nil {
-		return nil, fmt.Errorf("compressed Arrow batches are not supported")
+		return nil, internalErrorf("compressed Arrow batches are not supported")
 	}
 	_, variadicCount, _, err := record.vector(4, 8)
 	if err != nil || variadicCount != 0 {
-		return nil, fmt.Errorf("variadic Arrow buffers are not supported")
+		return nil, internalErrorf("variadic Arrow buffers are not supported")
 	}
 	nodeBytes, nodeCount, err := record.structVector(1, 16)
 	if err != nil || nodeCount != len(s.fields) {
-		return nil, fmt.Errorf("Arrow record batch has %d field nodes; expected %d", nodeCount, len(s.fields))
+		return nil, internalErrorf("Arrow record batch has %d field nodes; expected %d", nodeCount, len(s.fields))
 	}
 	nodes := make([]arrowNode, nodeCount)
 	for i := range nodes {
 		nodes[i] = arrowNode{length: int64(binary.LittleEndian.Uint64(nodeBytes[i*16:])), nullCount: int64(binary.LittleEndian.Uint64(nodeBytes[i*16+8:]))}
 		if nodes[i].length != rows || nodes[i].nullCount < 0 || nodes[i].nullCount > rows {
-			return nil, fmt.Errorf("Arrow field %d has invalid node metadata", i)
+			return nil, internalErrorf("Arrow field %d has invalid node metadata", i)
 		}
 	}
 	bufferBytes, bufferCount, err := record.structVector(2, 16)
@@ -371,13 +370,13 @@ func (s *Schema) decodeRecordBatch(header, body []byte, maxDecodedBytes uint64, 
 		wantBuffers += field.bufferCount
 	}
 	if err != nil || bufferCount != wantBuffers {
-		return nil, fmt.Errorf("Arrow record batch has %d buffers; expected %d", bufferCount, wantBuffers)
+		return nil, internalErrorf("Arrow record batch has %d buffers; expected %d", bufferCount, wantBuffers)
 	}
 	buffers := make([]arrowBuffer, bufferCount)
 	for i := range buffers {
 		buffers[i] = arrowBuffer{offset: int64(binary.LittleEndian.Uint64(bufferBytes[i*16:])), length: int64(binary.LittleEndian.Uint64(bufferBytes[i*16+8:]))}
 		if buffers[i].offset < 0 || buffers[i].length < 0 || buffers[i].offset > int64(len(body)) || buffers[i].length > int64(len(body))-buffers[i].offset {
-			return nil, fmt.Errorf("Arrow buffer %d is outside the record body", i)
+			return nil, internalErrorf("Arrow buffer %d is outside the record body", i)
 		}
 	}
 	decodedBytes := uint64(0)
@@ -385,18 +384,18 @@ func (s *Schema) decodeRecordBatch(header, body []byte, maxDecodedBytes uint64, 
 	for _, field := range s.fields {
 		rowBytes := uint64(types.New(types.T(field.expected.Id), field.expected.Width, field.expected.Scale).TypeSize())
 		if rowBytes == 0 || uint64(rows) > (maxDecodedBytes-decodedBytes)/rowBytes {
-			return nil, fmt.Errorf("Arrow record batch exceeds the decoded-memory budget")
+			return nil, internalErrorf("Arrow record batch exceeds the decoded-memory budget")
 		}
 		decodedBytes += uint64(rows) * rowBytes
 		nullBytes := uint64(bitmapBytes(rows))
 		if nullBytes > maxDecodedBytes-decodedBytes {
-			return nil, fmt.Errorf("Arrow record batch exceeds the decoded-memory budget")
+			return nil, internalErrorf("Arrow record batch exceeds the decoded-memory budget")
 		}
 		decodedBytes += nullBytes
 		if field.arrowType == arrowTypeUTF8 {
 			dataBytes := uint64(buffers[bufferIndex+2].length)
 			if dataBytes > maxDecodedBytes-decodedBytes {
-				return nil, fmt.Errorf("Arrow record batch exceeds the decoded-memory budget")
+				return nil, internalErrorf("Arrow record batch exceeds the decoded-memory budget")
 			}
 			decodedBytes += dataBytes
 		}
@@ -418,7 +417,7 @@ func (s *Schema) decodeRecordBatch(header, body []byte, maxDecodedBytes uint64, 
 		columnBuffers := buffers[bufferIndex : bufferIndex+field.bufferCount]
 		bufferIndex += field.bufferCount
 		if err = decodeColumn(result.Vecs[i], field, nodes[i], columnBuffers, body, mp); err != nil {
-			return nil, fmt.Errorf("Arrow field %d: %w", i, err)
+			return nil, internalErrorf("Arrow field %d: %w", i, err)
 		}
 	}
 	result.SetRowCount(int(rows))
@@ -427,15 +426,15 @@ func (s *Schema) decodeRecordBatch(header, body []byte, maxDecodedBytes uint64, 
 
 func decodeColumn(vec *vector.Vector, field arrowField, node arrowNode, buffers []arrowBuffer, body []byte, mp *mpool.MPool) error {
 	if !field.nullable && node.nullCount != 0 {
-		return fmt.Errorf("required field contains nulls")
+		return internalErrorf("required field contains nulls")
 	}
 	validity := sliceBuffer(body, buffers[0])
 	if node.nullCount == 0 {
 		if len(validity) != 0 && int64(len(validity)) < bitmapBytes(node.length) {
-			return fmt.Errorf("validity buffer is too short")
+			return internalErrorf("validity buffer is too short")
 		}
 	} else if int64(len(validity)) < bitmapBytes(node.length) {
-		return fmt.Errorf("validity buffer is too short")
+		return internalErrorf("validity buffer is too short")
 	}
 	isNull := func(row int64) bool {
 		return node.nullCount != 0 && validity[row>>3]&(1<<uint(row&7)) == 0
@@ -448,7 +447,7 @@ func decodeColumn(vec *vector.Vector, field arrowField, node arrowNode, buffers 
 			}
 		}
 		if actualNulls != node.nullCount {
-			return fmt.Errorf("validity bitmap does not match the declared null count")
+			return internalErrorf("validity bitmap does not match the declared null count")
 		}
 	}
 	values := sliceBuffer(body, buffers[1])
@@ -456,14 +455,14 @@ func decodeColumn(vec *vector.Vector, field arrowField, node arrowNode, buffers 
 		offsetsBytes := values
 		data := sliceBuffer(body, buffers[2])
 		if node.length > math.MaxInt64/4-1 || int64(len(offsetsBytes)) != (node.length+1)*4 {
-			return fmt.Errorf("UTF8 offsets have an invalid length")
+			return internalErrorf("UTF8 offsets have an invalid length")
 		}
 		previous := int32(0)
 		for row := int64(0); row < node.length; row++ {
 			start := int32(binary.LittleEndian.Uint32(offsetsBytes[row*4:]))
 			end := int32(binary.LittleEndian.Uint32(offsetsBytes[(row+1)*4:]))
 			if start != previous || end < start || end < 0 || int64(end) > int64(len(data)) {
-				return fmt.Errorf("UTF8 offsets are invalid")
+				return internalErrorf("UTF8 offsets are invalid")
 			}
 			if err := vector.AppendBytes(vec, data[start:end], isNull(row), mp); err != nil {
 				return err
@@ -471,7 +470,7 @@ func decodeColumn(vec *vector.Vector, field arrowField, node arrowNode, buffers 
 			previous = end
 		}
 		if int(previous) != len(data) {
-			return fmt.Errorf("UTF8 data has trailing bytes")
+			return internalErrorf("UTF8 data has trailing bytes")
 		}
 		return nil
 	}
@@ -479,10 +478,10 @@ func decodeColumn(vec *vector.Vector, field arrowField, node arrowNode, buffers 
 	if field.arrowType == arrowTypeBool {
 		width = 0
 		if int64(len(values)) < bitmapBytes(node.length) {
-			return fmt.Errorf("boolean values buffer is too short")
+			return internalErrorf("boolean values buffer is too short")
 		}
 	} else if width <= 0 || node.length > math.MaxInt64/width || int64(len(values)) != node.length*width {
-		return fmt.Errorf("fixed-width values have an invalid length")
+		return internalErrorf("fixed-width values have an invalid length")
 	}
 	for row := int64(0); row < node.length; row++ {
 		null := isNull(row)
@@ -504,11 +503,11 @@ func decodeColumn(vec *vector.Vector, field arrowField, node arrowNode, buffers 
 			case types.T_uint32:
 				value := int64(binary.LittleEndian.Uint64(values[offset:]))
 				if !null && (value < 0 || value > math.MaxUint32) {
-					return fmt.Errorf("signed i64 value %d overflows MatrixOne uint32", value)
+					return internalErrorf("signed i64 value %d overflows MatrixOne uint32", value)
 				}
 				err = vector.AppendFixed(vec, uint32(value), null, mp)
 			default:
-				return fmt.Errorf("unsupported MatrixOne integer type")
+				return internalErrorf("unsupported MatrixOne integer type")
 			}
 		case arrowTypeFloatingPoint:
 			if types.T(field.expected.Id) == types.T_float32 {
@@ -527,14 +526,14 @@ func decodeColumn(vec *vector.Vector, field arrowField, node arrowNode, buffers 
 					signExtension = math.MaxUint64
 				}
 				if !null && high != signExtension {
-					return fmt.Errorf("decimal128 value does not fit MatrixOne decimal64")
+					return internalErrorf("decimal128 value does not fit MatrixOne decimal64")
 				}
 				err = vector.AppendFixed(vec, types.Decimal64(low), null, mp)
 			} else {
 				err = vector.AppendFixed(vec, types.Decimal128{B0_63: low, B64_127: high}, null, mp)
 			}
 		default:
-			return fmt.Errorf("unsupported Arrow field type")
+			return internalErrorf("unsupported Arrow field type")
 		}
 		if err != nil {
 			return err
@@ -559,15 +558,15 @@ func sliceBuffer(body []byte, buffer arrowBuffer) []byte {
 // metadata (continuation marker plus size, or the legacy size prefix).
 func ipcMetadata(wire []byte) ([]byte, error) {
 	if len(wire) < 4 {
-		return nil, fmt.Errorf("Arrow IPC metadata is truncated")
+		return nil, internalErrorf("Arrow IPC metadata is truncated")
 	}
 	if binary.LittleEndian.Uint32(wire[:4]) == math.MaxUint32 {
 		if len(wire) < 8 {
-			return nil, fmt.Errorf("Arrow IPC continuation header is truncated")
+			return nil, internalErrorf("Arrow IPC continuation header is truncated")
 		}
 		length := uint64(binary.LittleEndian.Uint32(wire[4:8]))
 		if length == 0 || length > uint64(len(wire)-8) {
-			return nil, fmt.Errorf("Arrow IPC metadata length is invalid")
+			return nil, internalErrorf("Arrow IPC metadata length is invalid")
 		}
 		return wire[8 : 8+length], nil
 	}
@@ -585,12 +584,12 @@ type flatTable struct {
 
 func rootTable(data []byte) (flatTable, error) {
 	if len(data) < 4 {
-		return flatTable{}, fmt.Errorf("flatbuffer root is truncated")
+		return flatTable{}, internalErrorf("flatbuffer root is truncated")
 	}
 	start := uint64(binary.LittleEndian.Uint32(data[:4]))
 	table := flatTable{data: data, start: start}
 	if start < 4 {
-		return flatTable{}, fmt.Errorf("flatbuffer root offset is invalid")
+		return flatTable{}, internalErrorf("flatbuffer root offset is invalid")
 	}
 	if _, _, err := table.vtable(); err != nil {
 		return flatTable{}, err
@@ -600,18 +599,18 @@ func rootTable(data []byte) (flatTable, error) {
 
 func (t flatTable) vtable() (uint64, uint16, error) {
 	if t.start+4 > uint64(len(t.data)) {
-		return 0, 0, fmt.Errorf("flatbuffer table is outside metadata")
+		return 0, 0, internalErrorf("flatbuffer table is outside metadata")
 	}
 	back := int64(int32(binary.LittleEndian.Uint32(t.data[t.start:])))
 	vtablePosition := int64(t.start) - back
 	if vtablePosition < 0 || uint64(vtablePosition) > uint64(len(t.data))-4 {
-		return 0, 0, fmt.Errorf("flatbuffer vtable offset is invalid")
+		return 0, 0, internalErrorf("flatbuffer vtable offset is invalid")
 	}
 	start := uint64(vtablePosition)
 	length := binary.LittleEndian.Uint16(t.data[start:])
 	objectLength := binary.LittleEndian.Uint16(t.data[start+2:])
 	if length < 4 || start+uint64(length) > uint64(len(t.data)) || objectLength < 4 || t.start+uint64(objectLength) > uint64(len(t.data)) {
-		return 0, 0, fmt.Errorf("flatbuffer vtable has invalid bounds")
+		return 0, 0, internalErrorf("flatbuffer vtable has invalid bounds")
 	}
 	return start, length, nil
 }
@@ -631,11 +630,11 @@ func (t flatTable) field(index int, width uint64) (uint64, bool, error) {
 	}
 	objectLength := uint64(binary.LittleEndian.Uint16(t.data[vtable+2:]))
 	if offset < 4 || offset > objectLength || width > objectLength-offset {
-		return 0, false, fmt.Errorf("flatbuffer field is outside its table")
+		return 0, false, internalErrorf("flatbuffer field is outside its table")
 	}
 	position := t.start + offset
 	if position+width > uint64(len(t.data)) {
-		return 0, false, fmt.Errorf("flatbuffer field is truncated")
+		return 0, false, internalErrorf("flatbuffer field is truncated")
 	}
 	return position, true, nil
 }
@@ -651,7 +650,7 @@ func (t flatTable) byteField(index int, defaultValue byte) (byte, error) {
 func (t flatTable) boolField(index int, defaultValue bool) (bool, error) {
 	value, err := t.byteField(index, map[bool]byte{false: 0, true: 1}[defaultValue])
 	if err != nil || value > 1 {
-		return false, fmt.Errorf("flatbuffer boolean is invalid")
+		return false, internalErrorf("flatbuffer boolean is invalid")
 	}
 	return value != 0, nil
 }
@@ -682,11 +681,11 @@ func (t flatTable) int64Field(index int, defaultValue int64) (int64, error) {
 
 func (t flatTable) indirect(position uint64) (uint64, error) {
 	if position+4 > uint64(len(t.data)) {
-		return 0, fmt.Errorf("flatbuffer offset is truncated")
+		return 0, internalErrorf("flatbuffer offset is truncated")
 	}
 	offset := uint64(binary.LittleEndian.Uint32(t.data[position:]))
 	if offset == 0 || offset > uint64(len(t.data))-position {
-		return 0, fmt.Errorf("flatbuffer offset is invalid")
+		return 0, internalErrorf("flatbuffer offset is invalid")
 	}
 	return position + offset, nil
 }
@@ -714,15 +713,15 @@ func (t flatTable) vector(index int, elementWidth uint64) (uint64, int, bool, er
 	}
 	start, err := t.indirect(position)
 	if err != nil || start+4 > uint64(len(t.data)) {
-		return 0, 0, true, fmt.Errorf("flatbuffer vector is truncated")
+		return 0, 0, true, internalErrorf("flatbuffer vector is truncated")
 	}
 	length := uint64(binary.LittleEndian.Uint32(t.data[start:]))
 	dataStart := start + 4
 	if elementWidth != 0 && length > (uint64(len(t.data))-dataStart)/elementWidth {
-		return 0, 0, true, fmt.Errorf("flatbuffer vector has invalid bounds")
+		return 0, 0, true, internalErrorf("flatbuffer vector has invalid bounds")
 	}
 	if length > uint64(maxInt()) {
-		return 0, 0, true, fmt.Errorf("flatbuffer vector is too large")
+		return 0, 0, true, internalErrorf("flatbuffer vector is too large")
 	}
 	return dataStart, int(length), true, nil
 }
@@ -733,7 +732,7 @@ func (t flatTable) stringField(index int) (string, bool, error) {
 		return "", ok, err
 	}
 	if start+uint64(length) >= uint64(len(t.data)) || t.data[start+uint64(length)] != 0 {
-		return "", true, fmt.Errorf("flatbuffer string is not terminated")
+		return "", true, internalErrorf("flatbuffer string is not terminated")
 	}
 	return string(t.data[start : start+uint64(length)]), true, nil
 }

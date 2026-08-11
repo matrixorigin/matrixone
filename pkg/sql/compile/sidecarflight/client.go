@@ -21,7 +21,6 @@ import (
 	"crypto/tls"
 	"encoding/binary"
 	"errors"
-	"fmt"
 	"io"
 	"strings"
 	"sync"
@@ -112,17 +111,17 @@ func NewRuntime(ctx context.Context, config Config, capabilityDocument string) (
 	}
 	if config.Address == "" || config.TLSConfig == nil || config.TLSConfig.InsecureSkipVerify ||
 		len(config.TLSConfig.Certificates) == 0 || config.TLSConfig.RootCAs == nil {
-		return nil, fmt.Errorf("sidecar flight: address, client certificate, and server CA are required")
+		return nil, internalErrorf("sidecar flight: address, client certificate, and server CA are required")
 	}
 	if config.MaxBatchBytes == 0 || config.RequestTimeout <= 0 || config.CleanupTimeout <= 0 || capabilityDocument == "" {
-		return nil, fmt.Errorf("sidecar flight: invalid transport limits")
+		return nil, internalErrorf("sidecar flight: invalid transport limits")
 	}
 	tlsConfig := config.TLSConfig.Clone()
 	if tlsConfig.MinVersion < tls.VersionTLS12 {
 		tlsConfig.MinVersion = tls.VersionTLS12
 	}
 	if config.MaxBatchBytes > uint64(maxInt())-(1<<20) {
-		return nil, fmt.Errorf("sidecar flight: max batch bytes overflows platform int")
+		return nil, internalErrorf("sidecar flight: max batch bytes overflows platform int")
 	}
 	maximumMessage := config.MaxBatchBytes + 1<<20
 	conn, err := grpc.NewClient(
@@ -131,7 +130,7 @@ func NewRuntime(ctx context.Context, config Config, capabilityDocument string) (
 		grpc.WithDefaultCallOptions(grpc.MaxCallRecvMsgSize(int(maximumMessage))),
 	)
 	if err != nil {
-		return nil, fmt.Errorf("sidecar flight: create client: %w", err)
+		return nil, internalErrorf("sidecar flight: create client: %w", err)
 	}
 	runtime := &Runtime{
 		config: config, conn: conn, executions: make(map[*Execution]struct{}), preparing: make(map[*preparation]struct{}),
@@ -142,11 +141,11 @@ func NewRuntime(ctx context.Context, config Config, capabilityDocument string) (
 	capabilities, err := runtime.doAction(negotiationCtx, "GetCapabilities", nil)
 	if err != nil {
 		_ = conn.Close()
-		return nil, fmt.Errorf("sidecar flight: negotiate capabilities: %w", err)
+		return nil, internalErrorf("sidecar flight: negotiate capabilities: %w", err)
 	}
 	if !bytes.Equal(capabilities, []byte(capabilityDocument)) {
 		_ = conn.Close()
-		return nil, fmt.Errorf("sidecar flight: capability document mismatch")
+		return nil, internalErrorf("sidecar flight: capability document mismatch")
 	}
 	return runtime, nil
 }
@@ -155,13 +154,13 @@ func NewRuntime(ctx context.Context, config Config, capabilityDocument string) (
 // ticket and validates the result schema before the caller exposes metadata.
 func (r *Runtime) Prepare(ctx context.Context, accountID uint64, queryID, plan []byte, outputTypes []planpb.Type, headings []string) (*Execution, error) {
 	if r == nil {
-		return nil, fmt.Errorf("sidecar flight: nil runtime")
+		return nil, internalErrorf("sidecar flight: nil runtime")
 	}
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	if accountID == 0 || len(queryID) != 16 || len(plan) == 0 || len(plan) > 16<<20 {
-		return nil, fmt.Errorf("sidecar flight: query identity and Substrait plan are required")
+		return nil, internalErrorf("sidecar flight: query identity and Substrait plan are required")
 	}
 	deadline := time.Now().Add(r.config.RequestTimeout)
 	if callerDeadline, ok := ctx.Deadline(); ok && callerDeadline.Before(deadline) {
@@ -173,7 +172,7 @@ func (r *Runtime) Prepare(ctx context.Context, accountID uint64, queryID, plan [
 	if r.stopped {
 		r.mu.Unlock()
 		cancelPrepare()
-		return nil, fmt.Errorf("sidecar flight: runtime is stopping")
+		return nil, internalErrorf("sidecar flight: runtime is stopping")
 	}
 	if r.preparing == nil {
 		r.preparing = make(map[*preparation]struct{})
@@ -197,7 +196,7 @@ func (r *Runtime) Prepare(ctx context.Context, accountID uint64, queryID, plan [
 	}
 	command, err := proto.Marshal(request)
 	if err != nil {
-		return nil, fmt.Errorf("sidecar flight: encode request: %w", err)
+		return nil, internalErrorf("sidecar flight: encode request: %w", err)
 	}
 	descriptor := &flightDescriptor{Type: commandDescriptor, Cmd: command}
 	info := new(flightInfo)
@@ -209,21 +208,21 @@ func (r *Runtime) Prepare(ctx context.Context, accountID uint64, queryID, plan [
 		}
 	}
 	if err != nil {
-		return nil, r.failAmbiguousPrepare(fmt.Errorf("sidecar flight: prepare: %w", err), idempotencyKey[:])
+		return nil, r.failAmbiguousPrepare(internalErrorf("sidecar flight: prepare: %w", err), idempotencyKey[:])
 	}
 	if len(info.Endpoint) != 1 || info.Endpoint[0] == nil || info.Endpoint[0].Ticket == nil || len(info.Endpoint[0].Ticket.Ticket) != ticketBytes {
-		return nil, r.failAmbiguousPrepare(fmt.Errorf("sidecar flight: malformed endpoint ticket"), idempotencyKey[:])
+		return nil, r.failAmbiguousPrepare(internalErrorf("sidecar flight: malformed endpoint ticket"), idempotencyKey[:])
 	}
 	ticket := append([]byte(nil), info.Endpoint[0].Ticket.Ticket...)
 	if len(info.Endpoint[0].Locations) != 0 {
-		return nil, r.failPrepared(fmt.Errorf("sidecar flight: endpoint redirection is not allowed"), ticket)
+		return nil, r.failPrepared(internalErrorf("sidecar flight: endpoint redirection is not allowed"), ticket)
 	}
 	if !bytes.Equal(info.AppMetadata, r.capabilityHash[:]) {
-		return nil, r.failPrepared(fmt.Errorf("sidecar flight: response capability hash mismatch"), ticket)
+		return nil, r.failPrepared(internalErrorf("sidecar flight: response capability hash mismatch"), ticket)
 	}
 	schema, err := ParseSchema(info.Schema, outputTypes, headings)
 	if err != nil {
-		return nil, r.failPrepared(fmt.Errorf("sidecar flight: validate schema: %w", err), ticket)
+		return nil, r.failPrepared(internalErrorf("sidecar flight: validate schema: %w", err), ticket)
 	}
 	execution := &Execution{
 		runtime:     r,
@@ -234,7 +233,7 @@ func (r *Runtime) Prepare(ctx context.Context, accountID uint64, queryID, plan [
 	r.mu.Lock()
 	if r.stopped {
 		r.mu.Unlock()
-		return nil, r.failPrepared(fmt.Errorf("sidecar flight: runtime is stopping"), ticket)
+		return nil, r.failPrepared(internalErrorf("sidecar flight: runtime is stopping"), ticket)
 	}
 	r.executions[execution] = struct{}{}
 	r.mu.Unlock()
@@ -272,14 +271,14 @@ func (r *Runtime) cancel(ctx context.Context, ticket, idempotencyKey []byte) err
 	request := &cancelExecutionRequest{Ticket: ticket, IdempotencyKey: idempotencyKey}
 	body, err := proto.Marshal(request)
 	if err != nil {
-		return fmt.Errorf("sidecar flight: encode cancellation: %w", err)
+		return internalErrorf("sidecar flight: encode cancellation: %w", err)
 	}
 	response, err := r.doAction(ctx, "CancelExecution", body)
 	if err != nil {
-		return fmt.Errorf("sidecar flight: cancel execution: %w", err)
+		return internalErrorf("sidecar flight: cancel execution: %w", err)
 	}
 	if string(response) != "quiesced" && string(response) != "not-found" {
-		return fmt.Errorf("sidecar flight: unexpected cancellation acknowledgement %q", response)
+		return internalErrorf("sidecar flight: unexpected cancellation acknowledgement %q", response)
 	}
 	return nil
 }
@@ -373,7 +372,7 @@ func (r *Runtime) doAction(ctx context.Context, actionType string, body []byte) 
 	extra := new(flightResult)
 	if err = stream.RecvMsg(extra); err != io.EOF {
 		if err == nil {
-			return nil, fmt.Errorf("sidecar flight: action returned multiple results")
+			return nil, internalErrorf("sidecar flight: action returned multiple results")
 		}
 		return nil, err
 	}
