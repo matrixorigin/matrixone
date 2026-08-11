@@ -24,7 +24,6 @@ import (
 	"io"
 	"path"
 	"strings"
-	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
@@ -105,10 +104,9 @@ func (j *fileServiceLeaseJournal) StoreIfCapacity(ctx context.Context, leases []
 	}
 	possiblyStored := 0
 	err := j.admission.RunExclusive(ctx, j.admissionKey, func(exclusiveCtx context.Context) error {
-		now := uint64(time.Now().UnixMilli())
 		live := 0
 		if err := j.load(exclusiveCtx, func(lease *Lease) error {
-			if !lease.Released && lease.Read.ExpiresAtUnixMS > now {
+			if !lease.Released {
 				live++
 			}
 			return nil

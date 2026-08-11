@@ -278,9 +278,6 @@ func (m *LeaseManager) acquireProtected(
 	if len(leases) == 0 {
 		return moerr.NewInternalErrorNoCtx("substrait: empty lease acquisition")
 	}
-	if err := m.pruneExpired(ctx); err != nil {
-		return err
-	}
 	if err := m.reconcileRevokedForCapacity(ctx, len(leases)); err != nil {
 		return err
 	}
@@ -440,6 +437,9 @@ func (m *LeaseManager) resolve(ctx context.Context, readRef []byte) (*Lease, boo
 	return result, true, nil
 }
 
+// Release is the terminal execution-owner transition. The caller must first
+// stop and join every sidecar reader that received this reference; capability
+// expiry alone is not evidence that those readers have stopped.
 func (m *LeaseManager) Release(ctx context.Context, readRef []byte) error {
 	cleanupCtx, cancel := leaseCleanupContext(ctx)
 	defer cancel()
@@ -473,24 +473,6 @@ func leaseCleanupContext(ctx context.Context) (context.Context, context.CancelFu
 		rollbackCleanupTimeout,
 		moerr.NewInternalErrorNoCtx("substrait: read lease cleanup timed out"),
 	)
-}
-
-func (m *LeaseManager) pruneExpired(ctx context.Context) error {
-	now := uint64(m.now().UnixMilli())
-	m.mu.RLock()
-	expired := make([]string, 0)
-	for key, l := range m.leases {
-		if l.Read.ExpiresAtUnixMS <= now {
-			expired = append(expired, key)
-		}
-	}
-	m.mu.RUnlock()
-	for _, key := range expired {
-		if err := m.releaseLease(ctx, key); err != nil {
-			return moerr.NewInternalErrorNoCtxf("substrait: prune expired read lease: %v", err)
-		}
-	}
-	return nil
 }
 
 // reconcileRevokedForCapacity is the admission-pressure slow path. Managers
@@ -647,7 +629,7 @@ func (m *LeaseManager) Replay(ctx context.Context) error {
 				replayErr = moerr.NewInternalErrorNoCtxf("substrait: invalid durable read lease: %v", err)
 				return replayErr
 			}
-			if l.Released || l.Read.ExpiresAtUnixMS <= now {
+			if l.Released {
 				terminals = append(terminals, replayTerminal{
 					readRef:  append([]byte(nil), l.Read.ReadRef...),
 					released: l.Released,

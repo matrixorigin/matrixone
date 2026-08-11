@@ -55,7 +55,7 @@ func TestSidecarReadProtectorLifecycle(t *testing.T) {
 	require.NoError(t, protector.Unregister(ctx, ref))
 }
 
-func TestSidecarReadProtectorUsesAbsoluteLeaseExpiry(t *testing.T) {
+func TestSidecarReadProtectorRequiresTerminalRelease(t *testing.T) {
 	ctx := context.Background()
 	now := time.Unix(1_800_000_000, 0)
 	expires := now.Add(time.Minute)
@@ -70,20 +70,30 @@ func TestSidecarReadProtectorUsesAbsoluteLeaseExpiry(t *testing.T) {
 	require.True(t, manager.HasProtection(jobID))
 	require.True(t, manager.IsProtected("obj"))
 
-	// Fixed-lifetime sidecar capabilities expire at their lease deadline;
-	// the generic sync-job renewal TTL is not added a second time.
+	// Capability expiry revokes new resolution, but it cannot prove that an
+	// already resolved sidecar reader has canceled and joined.
 	manager.cleanupExpiredAt(expires)
-	require.False(t, manager.HasProtection(jobID))
-	require.False(t, manager.IsProtected("obj"))
+	require.True(t, manager.HasProtection(jobID))
+	require.True(t, manager.IsProtected("obj"))
+	manager.cleanupExpiredAt(expires.Add(24 * time.Hour))
+	require.True(t, manager.HasProtection(jobID))
+	require.True(t, manager.IsProtected("obj"))
+	require.Error(t, manager.UnregisterSyncProtection(jobID))
+	manager.CleanupSoftDeleted(expires.Add(24 * time.Hour).UnixNano())
+	require.True(t, manager.HasProtection(jobID))
+	require.True(t, manager.IsProtected("obj"))
 
-	// Registration pressure also reclaims absolute expirations before
-	// rejecting, without adding an O(n) scan to the ordinary path.
+	// Admission pressure must fail closed rather than infer execution
+	// termination and evict an expired reader's pin.
 	manager.maxCount = 1
-	expiredRef := []byte("already-expired-read")
-	require.NoError(t, protector.Register(ctx, expiredRef, []string{"old"}, time.Now().Add(-time.Minute)))
 	replacementRef := []byte("replacement-read")
+	require.Error(t, protector.Register(ctx, replacementRef, []string{"new"}, time.Now().Add(time.Minute)))
+	require.False(t, manager.HasProtection(sidecarReadJobID(replacementRef)))
+
+	// The execution owner releases only after normal Finish or cancel-and-join.
+	require.NoError(t, protector.Unregister(ctx, ref))
+	require.False(t, manager.HasProtection(jobID))
 	require.NoError(t, protector.Register(ctx, replacementRef, []string{"new"}, time.Now().Add(time.Minute)))
-	require.False(t, manager.HasProtection(sidecarReadJobID(expiredRef)))
 	require.True(t, manager.HasProtection(sidecarReadJobID(replacementRef)))
 }
 

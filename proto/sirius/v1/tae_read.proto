@@ -29,6 +29,7 @@ message TaeRead {
   bytes schema_digest = 8;
   bytes manifest_sha256 = 9;
   bytes capability_hash = 10;
+  // Revokes new resolution. GC retention lasts through execution Finish.
   uint64 expires_at_unix_ms = 11;
   uint64 database_id = 12;
 }

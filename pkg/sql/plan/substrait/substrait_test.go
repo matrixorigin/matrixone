@@ -735,9 +735,8 @@ func (f *fakeLeaseJournal) StoreIfCapacity(_ context.Context, leases []*Lease, m
 		return 0, moerr.NewInternalErrorNoCtx("substrait: invalid lease journal admission")
 	}
 	live := 0
-	now := uint64(time.Now().UnixMilli())
 	for _, lease := range f.leases {
-		if !lease.Released && lease.Read.ExpiresAtUnixMS > now {
+		if !lease.Released {
 			live++
 		}
 	}
@@ -845,39 +844,28 @@ func storeJournalLease(t *testing.T, journal *fileServiceLeaseJournal, lease *Le
 	require.Equal(t, 1, stored)
 }
 
-func TestReplayCleansTerminalRecordsBeforeLiveCapacity(t *testing.T) {
+func TestReplayCleansReleasedRecordsBeforeLiveCapacity(t *testing.T) {
 	now := time.Now()
-	for _, tc := range []struct {
-		name     string
-		released bool
-		expires  time.Time
-	}{
-		{name: "released", released: true, expires: now.Add(time.Minute)},
-		{name: "expired", expires: now.Add(-time.Minute)},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			journal := new(fakeLeaseJournal)
-			for seed := byte(1); seed <= 3; seed++ {
-				lease := testDurableLease(t, seed, uint64(tc.expires.UnixMilli()))
-				lease.Released = tc.released
-				journal.leases = append(journal.leases, lease)
-			}
-			live := testDurableLease(t, 4, uint64(now.Add(time.Minute).UnixMilli()))
-			journal.leases = append(journal.leases, live)
-			protector := new(fakeProtector)
-			manager := NewPersistentLeaseManager(1, protector, journal)
-			manager.now = func() time.Time { return now }
-
-			require.NoError(t, manager.Replay(context.Background()))
-			require.True(t, manager.Ready())
-			_, ok := resolveLease(manager, live.Read.ReadRef)
-			require.True(t, ok)
-			require.Len(t, journal.leases, 1)
-			require.Equal(t, 5, journal.loaded)
-			require.Equal(t, 1, protector.registered)
-			require.Equal(t, 3, protector.unregistered)
-		})
+	journal := new(fakeLeaseJournal)
+	for seed := byte(1); seed <= 3; seed++ {
+		lease := testDurableLease(t, seed, uint64(now.Add(time.Minute).UnixMilli()))
+		lease.Released = true
+		journal.leases = append(journal.leases, lease)
 	}
+	live := testDurableLease(t, 4, uint64(now.Add(time.Minute).UnixMilli()))
+	journal.leases = append(journal.leases, live)
+	protector := new(fakeProtector)
+	manager := NewPersistentLeaseManager(1, protector, journal)
+	manager.now = func() time.Time { return now }
+
+	require.NoError(t, manager.Replay(context.Background()))
+	require.True(t, manager.Ready())
+	_, ok := resolveLease(manager, live.Read.ReadRef)
+	require.True(t, ok)
+	require.Len(t, journal.leases, 1)
+	require.Equal(t, 5, journal.loaded)
+	require.Equal(t, 1, protector.registered)
+	require.Equal(t, 3, protector.unregistered)
 }
 
 func TestReplayStopsAfterBoundedLiveCapacity(t *testing.T) {
@@ -1200,7 +1188,7 @@ func TestPersistentLeaseReplayAndReleasedCrashRecovery(t *testing.T) {
 	require.Empty(t, loaded)
 }
 
-func TestPersistentLeaseReplayExpiresWithoutResurrection(t *testing.T) {
+func TestPersistentLeaseReplayRetainsExpiredPinUntilRelease(t *testing.T) {
 	ctx := context.Background()
 	fs, err := fileservice.NewMemoryFS("expiry-test", fileservice.CacheConfig{}, nil)
 	require.NoError(t, err)
@@ -1218,14 +1206,65 @@ func TestPersistentLeaseReplayExpiresWithoutResurrection(t *testing.T) {
 	tr, err := UnmarshalTaeRead(wires[0], uint64(now.UnixMilli()))
 	require.NoError(t, err)
 
-	replayed := NewPersistentLeaseManager(1, new(fakeProtector), journal)
+	replayProtector := new(fakeProtector)
+	replayed := NewPersistentLeaseManager(1, replayProtector, journal)
 	replayed.now = func() time.Time { return now.Add(2 * time.Second) }
 	require.NoError(t, replayed.Replay(ctx))
 	_, ok := resolveLease(replayed, tr.ReadRef)
 	require.False(t, ok)
 	loaded, err := collectJournalLeases(ctx, journal)
 	require.NoError(t, err)
+	require.Len(t, loaded, 1)
+	require.Len(t, replayed.leases, 1)
+	require.Equal(t, 1, replayProtector.registered)
+	require.Zero(t, replayProtector.unregistered)
+
+	// Expiry only revokes resolution. The execution owner confirms Finish (or
+	// cancel-and-join) through the terminal release path before GC unpins.
+	require.NoError(t, replayed.Release(ctx, tr.ReadRef))
+	require.Empty(t, replayed.leases)
+	require.Equal(t, 1, replayProtector.unregistered)
+	loaded, err = collectJournalLeases(ctx, journal)
+	require.NoError(t, err)
 	require.Empty(t, loaded)
+}
+
+func TestExpiredLeaseRemainsCapacityOwningUntilRelease(t *testing.T) {
+	now := time.Now()
+	protector := new(fakeProtector)
+	manager := NewLeaseManager(1, protector)
+	manager.now = func() time.Time { return now }
+	expired := testDurableLease(t, 1, uint64(now.Add(time.Second).UnixMilli()))
+	require.NoError(t, manager.Acquire(context.Background(), []*Lease{expired}))
+	resolved, ok := resolveLease(manager, expired.Read.ReadRef)
+	require.True(t, ok)
+	require.Equal(t, expired.Manifest, resolved.Manifest)
+
+	manager.now = func() time.Time { return now.Add(2 * time.Second) }
+	_, ok = resolveLease(manager, expired.Read.ReadRef)
+	require.False(t, ok)
+	replacement := testDurableLease(t, 2, uint64(now.Add(time.Minute).UnixMilli()))
+	require.ErrorContains(t, manager.Acquire(context.Background(), []*Lease{replacement}), "capacity reached")
+	require.Zero(t, protector.unregistered)
+
+	require.NoError(t, manager.Release(context.Background(), expired.Read.ReadRef))
+	require.Equal(t, 1, protector.unregistered)
+	require.NoError(t, manager.Acquire(context.Background(), []*Lease{replacement}))
+}
+
+func TestJournalCapacityCountsExpiredUnreleasedLease(t *testing.T) {
+	ctx := context.Background()
+	fs, err := fileservice.NewMemoryFS("expired-capacity-test", fileservice.CacheConfig{}, nil)
+	require.NoError(t, err)
+	journal, err := newFileServiceLeaseJournal(fs, "sirius/read-leases", newTestJournalAdmission())
+	require.NoError(t, err)
+	expired := testDurableLease(t, 1, uint64(time.Now().Add(-time.Minute).UnixMilli()))
+	storeJournalLease(t, journal, expired)
+
+	replacement := testDurableLease(t, 2, uint64(time.Now().Add(time.Minute).UnixMilli()))
+	stored, err := journal.StoreIfCapacity(ctx, []*Lease{replacement}, 1)
+	require.ErrorContains(t, err, "capacity reached")
+	require.Zero(t, stored)
 }
 
 func TestJournalCapacityIsAtomicAcrossManagersAndReplay(t *testing.T) {

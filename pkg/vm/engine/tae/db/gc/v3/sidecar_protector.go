@@ -88,7 +88,7 @@ func registerSidecarReadProtection(guard *SyncProtectionGuard, readRef []byte, o
 		return err
 	}
 	jobID := sidecarReadJobID(readRef)
-	return guard.EnsureExpiringSyncProtection(jobID, base64.StdEncoding.EncodeToString(data), expires.UnixNano(), jobID)
+	return guard.EnsureTerminalSyncProtection(jobID, base64.StdEncoding.EncodeToString(data), expires.UnixNano(), jobID)
 }
 
 func (p SidecarReadProtector) Unregister(_ context.Context, readRef []byte) error {

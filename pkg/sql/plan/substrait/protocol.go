@@ -44,7 +44,9 @@ type TaeRead struct {
 	ReadRef, QueryID                                         []byte
 	AccountID, DatabaseID, TableID                           uint64
 	SnapshotTS, SchemaDigest, ManifestSHA256, CapabilityHash []byte
-	ExpiresAtUnixMS                                          uint64
+	// ExpiresAtUnixMS revokes new resolution. It is not a GC-retention
+	// deadline; the execution owner releases the pin after Finish.
+	ExpiresAtUnixMS uint64
 }
 
 func (r *TaeRead) Validate(nowUnixMS uint64) error {

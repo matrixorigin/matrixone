@@ -40,12 +40,12 @@ const (
 
 // SyncProtection represents a single sync protection entry
 type SyncProtection struct {
-	JobID            string            // Sync job ID
-	BF               index.BloomFilter // BloomFilter for protected objects (using xorfilter, deterministic)
-	ValidTS          int64             // Renewal timestamp or absolute expiry, in nanoseconds
-	ExpiresAtValidTS bool              // ValidTS is an absolute terminal expiry rather than a renewal timestamp
-	SoftDelete       bool              // Whether soft deleted
-	CreateTime       time.Time         // Creation time for logging
+	JobID               string            // Sync job ID
+	BF                  index.BloomFilter // BloomFilter for protected objects (using xorfilter, deterministic)
+	ValidTS             int64             // Renewal timestamp or owner-supplied deadline, in nanoseconds
+	TerminalReleaseOnly bool              // CleanupExpired must not remove this protection
+	SoftDelete          bool              // Whether soft deleted
+	CreateTime          time.Time         // Creation time for logging
 }
 
 // EnsureSyncProtection makes crash replay idempotent while still rejecting a
@@ -59,8 +59,8 @@ func (m *SyncProtectionManager) EnsureSyncProtection(jobID, bfData string, valid
 	return guard.EnsureSyncProtection(jobID, bfData, validTS, taskID)
 }
 
-func (m *SyncProtectionManager) ensureSyncProtection(jobID, bfData string, validTS int64, taskID string, expiresAtValidTS bool) (*SyncProtection, bool, error) {
-	registered, err := m.registerSyncProtection(jobID, bfData, validTS, taskID, expiresAtValidTS)
+func (m *SyncProtectionManager) ensureSyncProtection(jobID, bfData string, validTS int64, taskID string, terminalReleaseOnly bool) (*SyncProtection, bool, error) {
+	registered, err := m.registerSyncProtection(jobID, bfData, validTS, taskID, terminalReleaseOnly)
 	if err == nil {
 		return registered, true, nil
 	}
@@ -73,7 +73,7 @@ func (m *SyncProtectionManager) ensureSyncProtection(jobID, bfData string, valid
 	}
 	m.RLock()
 	p := m.protections[jobID]
-	if p == nil || p.SoftDelete || p.ValidTS != validTS || p.ExpiresAtValidTS != expiresAtValidTS {
+	if p == nil || p.SoftDelete || p.ValidTS != validTS || p.TerminalReleaseOnly != terminalReleaseOnly {
 		m.RUnlock()
 		return nil, false, err
 	}
@@ -122,14 +122,15 @@ func (g *SyncProtectionGuard) EnsureSyncProtection(jobID, bfData string, validTS
 	return g.ensureSyncProtection(jobID, bfData, validTS, taskID, false)
 }
 
-// EnsureExpiringSyncProtection registers a protection whose ValidTS is its
-// absolute terminal expiry. It is used by fixed-lifetime read capabilities,
-// which must not inherit the renewal TTL after their authority has expired.
-func (g *SyncProtectionGuard) EnsureExpiringSyncProtection(jobID, bfData string, validTS int64, taskID string) error {
+// EnsureTerminalSyncProtection registers a protection that only its terminal
+// owner may release. ValidTS can still record the owner's deadline, but the
+// generic expiry reaper must not infer that all readers have stopped from that
+// timestamp alone.
+func (g *SyncProtectionGuard) EnsureTerminalSyncProtection(jobID, bfData string, validTS int64, taskID string) error {
 	return g.ensureSyncProtection(jobID, bfData, validTS, taskID, true)
 }
 
-func (g *SyncProtectionGuard) ensureSyncProtection(jobID, bfData string, validTS int64, taskID string, expiresAtValidTS bool) error {
+func (g *SyncProtectionGuard) ensureSyncProtection(jobID, bfData string, validTS int64, taskID string, terminalReleaseOnly bool) error {
 	if g == nil || g.manager == nil {
 		return moerr.NewSyncProtectionInvalidNoCtx()
 	}
@@ -138,7 +139,7 @@ func (g *SyncProtectionGuard) ensureSyncProtection(jobID, bfData string, validTS
 	if g.closed {
 		return moerr.NewSyncProtectionInvalidNoCtx()
 	}
-	protection, created, err := g.manager.ensureSyncProtection(jobID, bfData, validTS, taskID, expiresAtValidTS)
+	protection, created, err := g.manager.ensureSyncProtection(jobID, bfData, validTS, taskID, terminalReleaseOnly)
 	if err == nil && created {
 		if g.owned == nil {
 			g.owned = make(map[string]*SyncProtection)
@@ -241,7 +242,7 @@ func (m *SyncProtectionManager) registerSyncProtection(
 	bfData string,
 	validTS int64,
 	taskID string,
-	expiresAtValidTS bool,
+	terminalReleaseOnly bool,
 ) (*SyncProtection, error) {
 	m.Lock()
 	defer m.Unlock()
@@ -268,9 +269,9 @@ func (m *SyncProtectionManager) registerSyncProtection(
 
 	// Check max count
 	if len(m.protections) >= m.maxCount {
-		// Reclaim terminal entries only on the rejection slow path. This keeps
-		// normal registration O(1) while preventing expired fixed-lifetime
-		// capabilities from consuming all protection capacity between GC runs.
+		// Reclaim ordinary expired entries only on the rejection slow path. A
+		// terminal-release-only entry remains capacity-owning until its execution
+		// owner has confirmed termination and releases it.
 		m.cleanupExpiredAtLocked(time.Now())
 	}
 	if len(m.protections) >= m.maxCount {
@@ -331,12 +332,12 @@ func (m *SyncProtectionManager) registerSyncProtection(
 	}
 
 	protection := &SyncProtection{
-		JobID:            jobID,
-		BF:               bf,
-		ValidTS:          validTS,
-		ExpiresAtValidTS: expiresAtValidTS,
-		SoftDelete:       false,
-		CreateTime:       time.Now(),
+		JobID:               jobID,
+		BF:                  bf,
+		ValidTS:             validTS,
+		TerminalReleaseOnly: terminalReleaseOnly,
+		SoftDelete:          false,
+		CreateTime:          time.Now(),
 	}
 	m.protections[jobID] = protection
 
@@ -399,6 +400,12 @@ func (m *SyncProtectionManager) UnregisterSyncProtection(jobID string) error {
 		)
 		return moerr.NewSyncProtectionNotFoundNoCtx(jobID)
 	}
+	if p.TerminalReleaseOnly {
+		// A capability deadline or generic sync-job cleanup cannot prove that a
+		// sidecar reader has stopped. Its execution owner must use the explicit
+		// terminal release path after Finish or cancel-and-join.
+		return moerr.NewSyncProtectionInvalidNoCtx()
+	}
 
 	p.SoftDelete = true
 
@@ -438,7 +445,7 @@ func (m *SyncProtectionManager) CleanupSoftDeleted(checkpointWatermark int64) {
 
 	for jobID, p := range m.protections {
 		// Condition: soft delete state AND checkpoint watermark > validTS
-		if p.SoftDelete && checkpointWatermark > p.ValidTS {
+		if p.SoftDelete && !p.TerminalReleaseOnly && checkpointWatermark > p.ValidTS {
 			delete(m.protections, jobID)
 			logutil.Info(
 				"GC-Sync-Protection-Cleaned-Soft-Deleted",
@@ -450,9 +457,9 @@ func (m *SyncProtectionManager) CleanupSoftDeleted(checkpointWatermark int64) {
 	}
 }
 
-// CleanupExpired removes absolute-expiry protections at their terminal
-// timestamp and renewable protections after their renewal TTL. This also
-// handles crashed sync jobs that did not unregister.
+// CleanupExpired removes ordinary protections after their renewal TTL. A
+// terminal-release-only protection can outlive its advertised deadline while
+// its reader cancels and joins; only ReleaseSyncProtection may remove it.
 func (m *SyncProtectionManager) CleanupExpired() {
 	m.cleanupExpiredAt(time.Now())
 }
@@ -467,13 +474,7 @@ func (m *SyncProtectionManager) cleanupExpiredAtLocked(now time.Time) {
 	for jobID, p := range m.protections {
 		validTime := time.Unix(0, p.ValidTS)
 
-		// Fixed-lifetime capabilities expire at ValidTS. Renewable sync jobs
-		// retain the existing last-renewal-plus-TTL contract.
-		expired := p.ExpiresAtValidTS && !now.Before(validTime)
-		if !p.ExpiresAtValidTS {
-			expired = now.Sub(validTime) > m.ttl
-		}
-		if !p.SoftDelete && expired {
+		if !p.SoftDelete && !p.TerminalReleaseOnly && now.Sub(validTime) > m.ttl {
 			delete(m.protections, jobID)
 			logutil.Warn(
 				"GC-Sync-Protection-Force-Cleaned-Expired",
