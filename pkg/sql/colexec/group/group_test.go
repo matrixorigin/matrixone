@@ -2218,3 +2218,42 @@ func TestMakeAggListFreesPartialOnExtraConfigError(t *testing.T) {
 	})
 	require.Error(t, err)
 }
+
+func TestRemoteTextMinMaxUsesLegacyComparatorBeforeProtocolV14(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	proc.Ctx = context.WithValue(proc.Ctx, defines.RemoteRunContext{}, true)
+	rt := moruntime.ServiceRuntime(proc.GetService())
+	defer rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion13)
+	require.True(t, useLegacyTextMinMaxForRemote(proc))
+
+	argType := types.New(types.T_varchar, 10, 0)
+	arg := &plan.Expr{Typ: plan.Type{
+		Id:      int32(argType.Oid),
+		Width:   argType.Width,
+		Charset: uint32(argType.Charset),
+	}}
+	ctr := &container{mp: proc.Mp(), mtyp: H0, legacyTextMinMax: true}
+	aggs, err := ctr.makeAggList([]aggexec.AggFuncExecExpression{
+		aggexec.MakeAggFunctionExpression(aggexec.AggIdOfMin, false, []*plan.Expr{arg}, nil),
+	})
+	require.NoError(t, err)
+	defer freeAggList(aggs)
+	_, resultType := aggs[0].TypesInfo()
+	require.Equal(t, types.CharsetUTF8, resultType.Charset,
+		"compatibility comparator must not change result metadata")
+
+	vec := vector.NewVec(argType)
+	defer vec.Free(proc.Mp())
+	require.NoError(t, vector.AppendBytes(vec, []byte("a"), false, proc.Mp()))
+	require.NoError(t, vector.AppendBytes(vec, []byte("B"), false, proc.Mp()))
+	require.NoError(t, aggs[0].BulkFill(0, []*vector.Vector{vec}))
+	results, err := aggs[0].Flush()
+	require.NoError(t, err)
+	defer results[0].Free(proc.Mp())
+	require.Equal(t, "B", string(results[0].GetBytesAt(0)))
+
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion14)
+	require.False(t, useLegacyTextMinMaxForRemote(proc))
+}

@@ -120,6 +120,35 @@ func TestAlterTable1(t *testing.T) {
 	outPutPlan(logicPlan, true, t)
 }
 
+func TestInvisibleColumnClausesAreRejected(t *testing.T) {
+	tests := []string{
+		`CREATE TABLE visibility_create_invisible (id INT, secret INT INVISIBLE);`,
+		`ALTER TABLE t1 ADD COLUMN secret INT INVISIBLE;`,
+		`ALTER TABLE t1 MODIFY COLUMN b INT INVISIBLE;`,
+		`ALTER TABLE t1 CHANGE COLUMN b b INT INVISIBLE;`,
+		`ALTER TABLE t1 ALTER COLUMN b SET INVISIBLE;`,
+	}
+
+	for _, sql := range tests {
+		t.Run(sql, func(t *testing.T) {
+			_, err := buildSingleStmt(NewMockOptimizer(false), t, sql)
+			require.ErrorContains(t, err, "not supported: invisible columns")
+		})
+	}
+}
+
+func TestExplicitVisibleColumnClausesRemainSupported(t *testing.T) {
+	for _, sql := range []string{
+		`CREATE TABLE visibility_create_visible (id INT VISIBLE);`,
+		`ALTER TABLE t1 ALTER COLUMN b SET VISIBLE;`,
+	} {
+		t.Run(sql, func(t *testing.T) {
+			_, err := buildSingleStmt(NewMockOptimizer(false), t, sql)
+			require.NoError(t, err)
+		})
+	}
+}
+
 func TestSameNameChangeColumnUsesInplaceAlter(t *testing.T) {
 	mock := newMetadataOnlyChangeColumnOptimizer()
 	const sql = `ALTER TABLE metadata_only CHANGE v v INT NULL COMMENT 'metadata only';`
@@ -229,6 +258,136 @@ func TestAlterTableAddColumns(t *testing.T) {
 	runTestShouldPass(mock, t, sqls, false, false)
 }
 
+func TestAlterTableAddColumnInheritsTableDefaultCharset(t *testing.T) {
+	testCases := []struct {
+		name string
+		sql  string
+		want uint32
+	}{
+		{
+			name: "inherits table utf8mb4_bin",
+			sql:  "alter table t1 add column d varchar(10)",
+			want: uint32(types.CharsetUTF8MB4Bin),
+		},
+		{
+			name: "column collation overrides table",
+			sql:  "alter table t1 add column d varchar(10) collate utf8mb4_general_ci",
+			want: uint32(types.CharsetUTF8),
+		},
+		{
+			name: "column charset overrides table",
+			sql:  "alter table t1 add column d varchar(10) character set utf8mb4",
+			want: uint32(types.CharsetUTF8),
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			mock := NewMockOptimizer(false)
+			mock.ctxt.tables["t1"].DefaultCharset = uint32(types.CharsetUTF8MB4Bin)
+
+			logicPlan, err := buildSingleStmt(mock, t, tc.sql)
+			assert.NoError(t, err)
+			newCol := FindColumn(logicPlan.GetDdl().GetAlterTable().CopyTableDef.Cols, "d")
+			if assert.NotNil(t, newCol) {
+				assert.Equal(t, tc.want, newCol.Typ.Charset)
+			}
+		})
+	}
+}
+
+func TestAlterTableAddColumnOverridesBinaryTableCharsetBeforeTypeConversion(t *testing.T) {
+	for _, clause := range []string{
+		"character set utf8mb4",
+		"collate utf8mb4_general_ci",
+	} {
+		t.Run(clause, func(t *testing.T) {
+			mock := NewMockOptimizer(false)
+			mock.ctxt.tables["t1"].DefaultCharset = uint32(types.CharsetBinary)
+
+			logicPlan, err := buildSingleStmt(mock, t,
+				"alter table t1 add column d varchar(10) "+clause)
+			if !assert.NoError(t, err) {
+				return
+			}
+			newCol := FindColumn(logicPlan.GetDdl().GetAlterTable().CopyTableDef.Cols, "d")
+			if assert.NotNil(t, newCol) {
+				assert.Equal(t, int32(types.T_varchar), newCol.Typ.Id)
+				assert.Equal(t, uint32(types.CharsetUTF8), newCol.Typ.Charset)
+			}
+		})
+	}
+}
+
+func TestAlterTableModifyColumnInheritsTableDefaultCharset(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	mock.ctxt.tables["t1"].DefaultCharset = uint32(types.CharsetUTF8MB4Bin)
+
+	logicPlan, err := buildSingleStmt(mock, t, "alter table t1 modify column b char(20)")
+	assert.NoError(t, err)
+	newCol := FindColumn(logicPlan.GetDdl().GetAlterTable().CopyTableDef.Cols, "b")
+	if assert.NotNil(t, newCol) {
+		assert.Equal(t, uint32(types.CharsetUTF8MB4Bin), newCol.Typ.Charset)
+	}
+}
+
+func TestAlterTableModifyColumnCharsetOverridesTableDefault(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		clause      string
+		wantType    int32
+		wantCharset uint32
+	}{
+		{
+			name:        "utf8mb4 resets to its default collation",
+			clause:      "character set utf8mb4",
+			wantType:    int32(types.T_char),
+			wantCharset: uint32(types.CharsetUTF8),
+		},
+		{
+			name:        "general ci overrides the binary table charset",
+			clause:      "collate utf8mb4_general_ci",
+			wantType:    int32(types.T_char),
+			wantCharset: uint32(types.CharsetUTF8),
+		},
+		{
+			name:        "binary changes the physical string type",
+			clause:      "character set binary",
+			wantType:    int32(types.T_binary),
+			wantCharset: uint32(types.CharsetBinary),
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mock := NewMockOptimizer(false)
+			mock.ctxt.tables["t1"].DefaultCharset = uint32(types.CharsetBinary)
+			logicPlan, err := buildSingleStmt(mock, t,
+				"alter table t1 modify column b char(20) "+tc.clause)
+			if !assert.NoError(t, err) {
+				return
+			}
+			newCol := FindColumn(logicPlan.GetDdl().GetAlterTable().CopyTableDef.Cols, "b")
+			if assert.NotNil(t, newCol) {
+				assert.Equal(t, tc.wantType, newCol.Typ.Id)
+				assert.Equal(t, tc.wantCharset, newCol.Typ.Charset)
+			}
+		})
+	}
+}
+
+func TestAlterTableAddColumnCharacterSetBinaryChangesType(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	logicPlan, err := buildSingleStmt(mock, t,
+		"alter table t1 add column d varchar(10) character set binary")
+	if !assert.NoError(t, err) {
+		return
+	}
+	newCol := FindColumn(logicPlan.GetDdl().GetAlterTable().CopyTableDef.Cols, "d")
+	if assert.NotNil(t, newCol) {
+		assert.Equal(t, int32(types.T_varbinary), newCol.Typ.Id)
+		assert.Equal(t, uint32(types.CharsetBinary), newCol.Typ.Charset)
+	}
+}
+
 func TestAlterTableCopyPreservesFinalColumnReplacementIdentity(t *testing.T) {
 	for _, sql := range []string{
 		`ALTER TABLE t1 DROP COLUMN b, ADD COLUMN b INT;`,
@@ -252,6 +411,32 @@ func TestAlterTableCopyPreservesFinalColumnReplacementIdentity(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestAlterTableCopyDoesNotSkipDedupForSameNamePrimaryKeyReplacement(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	// Match the type metadata produced by ADD COLUMN so the only difference is
+	// the source-column identity. A name/type comparison alone must not prove
+	// that the replacement key is copied from the old key.
+	mock.ctxt.tables["t1"].Cols[0].Typ.NotNullable = false
+	mock.ctxt.tables["t1"].Cols[0].Typ.Width = 64
+	mock.ctxt.tables["t1"].Cols[0].Typ.Scale = -1
+	logicPlan, err := buildSingleStmt(mock, t,
+		`ALTER TABLE constraint_test.t1 DROP COLUMN a, ADD COLUMN a BIGINT NOT NULL DEFAULT 0 PRIMARY KEY;`)
+	require.NoError(t, err)
+
+	alter := logicPlan.GetDdl().GetAlterTable()
+	require.NotNil(t, alter)
+	require.NotNil(t, alter.Options)
+	oldCol := FindColumn(alter.TableDef.Cols, "a")
+	newCol := FindColumn(alter.CopyTableDef.Cols, "a")
+	require.NotNil(t, oldCol)
+	require.NotNil(t, newCol)
+	require.Equal(t, oldCol.Typ, newCol.Typ)
+	require.NotEqual(t, oldCol.ColId, newCol.ColId)
+	_, inherited := alter.ChangeTblColIdMap[oldCol.ColId]
+	require.False(t, inherited)
+	assert.False(t, alter.Options.SkipPkDedup)
 }
 
 func TestAlterTableCopyPreservesExistingColumnIdentity(t *testing.T) {

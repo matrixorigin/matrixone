@@ -56,6 +56,33 @@ func TestGetNodeBasicInfoApplyType(t *testing.T) {
 	}
 }
 
+func TestAssertConditionExplainLabel(t *testing.T) {
+	node := &plan2.Node{
+		NodeType:   plan2.Node_ASSERT,
+		FilterList: []*plan2.Expr{plan.MakePlan2BoolConstExprWithType(true)},
+	}
+	got, err := NewNodeDescriptionImpl(node).GetFilterConditionInfo(
+		context.Background(),
+		&ExplainOptions{Format: EXPLAIN_FORMAT_TEXT},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(got, "Assert Cond: ") {
+		t.Fatalf("expected Assert Cond label, got %q", got)
+	}
+	labels, err := NewMarshalNodeImpl(node).GetNodeLabels(
+		context.Background(),
+		&ExplainOptions{Format: EXPLAIN_FORMAT_TEXT},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(labels) != 1 || labels[0].Name != Label_Assert {
+		t.Fatalf("expected one Assert label without duplicate Filter conditions, got %#v", labels)
+	}
+}
+
 func TestSingleSql(t *testing.T) {
 	// input := "explain verbose SELECT N_REGIONKEY + 2 as a, N_REGIONKEY/2, N_REGIONKEY* N_NATIONKEY, N_REGIONKEY % N_NATIONKEY, N_REGIONKEY - N_NATIONKEY FROM NATION WHERE -N_NATIONKEY < -20"
 	//input := "explain verbose SELECT N_REGIONKEY + 2 as a FROM NATION WHERE -N_NATIONKEY < -20"

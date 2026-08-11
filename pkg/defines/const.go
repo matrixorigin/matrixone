@@ -49,7 +49,9 @@ const (
 	MORPCVersion11     int64 = 11 // bounded Sorted64 membership-filter wire format
 	MORPCVersion12     int64 = 12 // prepared-parameter provenance in remote process metadata and aggregate trailers
 	MORPCVersion13     int64 = 13 // lossless v2 prefix-index metadata
-	MORPCLatestVersion       = MORPCVersion13
+	MORPCVersion14     int64 = 14 // utf8mb4 text MIN/MAX collation semantics
+	MORPCVersion15     int64 = 15 // CHECK metadata in rename-column alter requests
+	MORPCLatestVersion       = MORPCVersion15
 )
 
 // DefaultLockWaitTimeoutSeconds is shared by the frontend default and by

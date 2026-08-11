@@ -655,7 +655,11 @@ func newTypedSumAggExpr(t *testing.T, pos int32, typ types.Type) aggexec.AggFunc
 }
 
 func newRowNumberAggExpr(t *testing.T) aggexec.AggFuncExecExpression {
-	e, err := function.GetFunctionByName(context.Background(), "row_number", nil)
+	return newOrderWindowAggExpr(t, "row_number")
+}
+
+func newOrderWindowAggExpr(t *testing.T, name string) aggexec.AggFuncExecExpression {
+	e, err := function.GetFunctionByName(context.Background(), name, nil)
 	require.NoError(t, err)
 	return aggexec.MakeAggFunctionExpression(e.GetEncodedOverloadID(), false, nil, nil)
 }
@@ -723,8 +727,8 @@ func TestWindowJsonObjectAggOutput(t *testing.T) {
 }
 
 // TestWindowJsonObjectAggNullKeyNoLeak reproduces the NULL-key error exit
-// (json_objectagg key cannot be NULL) mid-aggregation and asserts that Reset/Free
-// release the aggregators, guarding the error-path mpool leak fix.
+// (json_objectagg key cannot be NULL) mid-aggregation and asserts that the
+// chunk-local aggregator is released immediately.
 func TestWindowJsonObjectAggNullKeyNoLeak(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	// Row 1 has a NULL key: json_objectagg errors while filling the frame.
@@ -744,8 +748,8 @@ func TestWindowJsonObjectAggNullKeyNoLeak(t *testing.T) {
 	_, err := vm.Exec(arg, proc)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "key cannot be NULL")
-	// Aggregators were allocated during the failed eval and would leak without the fix.
-	require.NotNil(t, arg.ctr.batAggs)
+	// Chunk-local aggregators do not need to survive until pipeline Reset.
+	require.Nil(t, arg.ctr.batAggs)
 
 	arg.Reset(proc, true, err)
 	require.Nil(t, arg.ctr.batAggs, "Reset must release window aggregators after an error")
@@ -756,9 +760,28 @@ func TestWindowJsonObjectAggNullKeyNoLeak(t *testing.T) {
 	require.Equal(t, int64(0), proc.Mp().CurrNB(), "no mpool leak on the json_objectagg error path")
 }
 
-// TestWindowAggResultAcrossChunks verifies that the aggregate executor's
-// physical result chunks are invisible to the Window operator. CURRENT ROW is
-// deliberately used to keep the test O(n) while crossing AggBatchSize.
+func collectFixedWindowColumn[T types.FixedSizeT](
+	t *testing.T,
+	arg *Window,
+	proc *process.Process,
+	column int,
+) []T {
+	t.Helper()
+	var values []T
+	for {
+		result, err := vm.Exec(arg, proc)
+		require.NoError(t, err)
+		if result.Batch == nil {
+			return values
+		}
+		require.LessOrEqual(t, result.Batch.RowCount(), colexec.DefaultBatchSize)
+		values = append(values, vector.MustFixedColWithTypeCheck[T](result.Batch.Vecs[column])...)
+	}
+}
+
+// TestWindowAggResultAcrossChunks verifies that Window exposes one logical
+// result as bounded output batches. CURRENT ROW keeps the test O(n) while the
+// input crosses AggBatchSize.
 func TestWindowAggResultAcrossChunks(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	rows := aggexec.AggBatchSize + 17
@@ -787,14 +810,117 @@ func TestWindowAggResultAcrossChunks(t *testing.T) {
 	arg.AppendChild(op)
 
 	require.NoError(t, arg.Prepare(proc))
-	result, err := vm.Exec(arg, proc)
-	require.NoError(t, err)
-	require.NotNil(t, result.Batch)
-	resultValues := vector.MustFixedColWithTypeCheck[int64](result.Batch.Vecs[1])
+	resultValues := collectFixedWindowColumn[int64](t, arg, proc, 1)
 	require.Len(t, resultValues, rows)
 	for _, idx := range []int{0, aggexec.AggBatchSize - 1, aggexec.AggBatchSize, rows - 1} {
 		require.Equal(t, int64(values[idx]), resultValues[idx], "row %d", idx)
 	}
+
+	arg.Free(proc, false, nil)
+	op.Free(proc, false, nil)
+	proc.Free()
+	require.Equal(t, int64(0), proc.Mp().CurrNB())
+}
+
+// TestWindowAggregateResultDropsTailNulls verifies that the window output
+// exposes null bits only for logical result rows. Aggregate state may retain
+// null bits in unused capacity, which must not make a fully populated output
+// look nullable to downstream operators.
+func TestWindowAggregateResultDropsTailNulls(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	rows := aggexec.AggBatchSize - 12
+	values := make([]int32, rows)
+	for i := range values {
+		values[i] = int32(i + 1)
+	}
+	bat := batch.NewWithSize(1)
+	bat.Vecs[0] = testutil.MakeInt32Vector(values, nil, proc.Mp())
+	bat.SetRowCount(rows)
+
+	spec := makeWindowSpec()
+	spec.Expr.(*plan.Expr_W).W.Frame = makeCurrentRowFrame()
+	arg := &Window{
+		WinSpecList: []*plan.Expr{spec},
+		Aggs:        []aggexec.AggFuncExecExpression{newAggExpr()},
+		OperatorBase: vm.OperatorBase{
+			OperatorInfo: vm.OperatorInfo{Idx: 0},
+		},
+	}
+	op := colexec.NewMockOperator().WithBatchs([]*batch.Batch{bat})
+	arg.AppendChild(op)
+
+	require.NoError(t, arg.Prepare(proc))
+	result, err := vm.Exec(arg, proc)
+	require.NoError(t, err)
+	require.NotNil(t, result.Batch)
+	resultVec := result.Batch.Vecs[1]
+	resultValues := vector.MustFixedColWithTypeCheck[int64](resultVec)
+	require.Len(t, resultValues, rows)
+	for _, idx := range []int{0, rows - 1} {
+		require.Equal(t, int64(values[idx]), resultValues[idx], "row %d", idx)
+	}
+	require.False(t, resultVec.HasNull(), "tail capacity must not make a non-null window result nullable")
+
+	arg.Free(proc, false, nil)
+	op.Free(proc, false, nil)
+	proc.Free()
+	require.Equal(t, int64(0), proc.Mp().CurrNB())
+}
+
+func TestWindowAggregateResultKeepsLogicalNulls(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	bat := batch.NewWithSize(1)
+	bat.Vecs[0] = testutil.MakeInt32Vector([]int32{1, 0, 3}, []uint64{1}, proc.Mp())
+	bat.SetRowCount(3)
+
+	spec := makeWindowSpec()
+	spec.Expr.(*plan.Expr_W).W.Frame = makeCurrentRowFrame()
+	arg := &Window{
+		WinSpecList: []*plan.Expr{spec},
+		Aggs:        []aggexec.AggFuncExecExpression{newAggExpr()},
+		OperatorBase: vm.OperatorBase{
+			OperatorInfo: vm.OperatorInfo{Idx: 0},
+		},
+	}
+	op := colexec.NewMockOperator().WithBatchs([]*batch.Batch{bat})
+	arg.AppendChild(op)
+
+	require.NoError(t, arg.Prepare(proc))
+	result, err := vm.Exec(arg, proc)
+	require.NoError(t, err)
+	require.NotNil(t, result.Batch)
+	resultVec := result.Batch.Vecs[1]
+	require.True(t, resultVec.HasNull())
+	require.False(t, resultVec.IsNull(0))
+	require.True(t, resultVec.IsNull(1))
+	require.False(t, resultVec.IsNull(2))
+
+	arg.Free(proc, false, nil)
+	op.Free(proc, false, nil)
+	proc.Free()
+	require.Equal(t, int64(0), proc.Mp().CurrNB())
+}
+
+func TestWindowSkipsEmptyInputBatch(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	empty := batch.NewWithSize(1)
+	empty.Vecs[0] = vector.NewVec(types.T_int32.ToType())
+	nonEmpty := makeInt32Batch(proc.Mp(), []int32{7})
+
+	spec := makeWindowSpec()
+	spec.Expr.(*plan.Expr_W).W.Frame = makeCurrentRowFrame()
+	arg := &Window{
+		WinSpecList: []*plan.Expr{spec},
+		Aggs:        []aggexec.AggFuncExecExpression{newAggExpr()},
+		OperatorBase: vm.OperatorBase{
+			OperatorInfo: vm.OperatorInfo{Idx: 0},
+		},
+	}
+	op := colexec.NewMockOperator().WithBatchs([]*batch.Batch{empty, nonEmpty})
+	arg.AppendChild(op)
+
+	require.NoError(t, arg.Prepare(proc))
+	require.Equal(t, []int64{7}, collectFixedWindowColumn[int64](t, arg, proc, 1))
 
 	arg.Free(proc, false, nil)
 	op.Free(proc, false, nil)
@@ -832,10 +958,7 @@ func TestWindowPartitionedAggResultAcrossChunks(t *testing.T) {
 	arg.AppendChild(op)
 
 	require.NoError(t, arg.Prepare(proc))
-	result, err := vm.Exec(arg, proc)
-	require.NoError(t, err)
-	require.NotNil(t, result.Batch)
-	resultValues := vector.MustFixedColWithTypeCheck[int64](result.Batch.Vecs[2])
+	resultValues := collectFixedWindowColumn[int64](t, arg, proc, 2)
 	require.Len(t, resultValues, rows)
 	for _, idx := range []int{0, aggexec.AggBatchSize - 1, aggexec.AggBatchSize, rows - 1} {
 		require.Equal(t, int64(values[idx]), resultValues[idx], "row %d", idx)
@@ -874,10 +997,7 @@ func TestWindowDecimalAggResultAcrossChunks(t *testing.T) {
 	arg.AppendChild(op)
 
 	require.NoError(t, arg.Prepare(proc))
-	result, err := vm.Exec(arg, proc)
-	require.NoError(t, err)
-	require.NotNil(t, result.Batch)
-	resultValues := vector.MustFixedColWithTypeCheck[types.Decimal128](result.Batch.Vecs[1])
+	resultValues := collectFixedWindowColumn[types.Decimal128](t, arg, proc, 1)
 	require.Len(t, resultValues, rows)
 	for _, idx := range []int{0, aggexec.AggBatchSize - 1, aggexec.AggBatchSize, rows - 1} {
 		require.Equal(t, values[idx], resultValues[idx], "row %d", idx)
@@ -889,8 +1009,8 @@ func TestWindowDecimalAggResultAcrossChunks(t *testing.T) {
 	require.Equal(t, int64(0), proc.Mp().CurrNB())
 }
 
-// TestWindowOrderResultAcrossChunks covers the dedicated window-function
-// executor, whose physical result is split independently of ordinary SUM.
+// TestWindowOrderResultAcrossChunks covers bounded rank-family output and the
+// row-number fast path across an output boundary.
 func TestWindowOrderResultAcrossChunks(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	rows := aggexec.AggBatchSize + 17
@@ -914,15 +1034,196 @@ func TestWindowOrderResultAcrossChunks(t *testing.T) {
 	arg.AppendChild(op)
 
 	require.NoError(t, arg.Prepare(proc))
-	result, err := vm.Exec(arg, proc)
-	require.NoError(t, err)
-	require.NotNil(t, result.Batch)
-	resultValues := vector.MustFixedColWithTypeCheck[int64](result.Batch.Vecs[1])
+	resultValues := collectFixedWindowColumn[int64](t, arg, proc, 1)
 	require.Len(t, resultValues, rows)
 	for _, idx := range []int{0, aggexec.AggBatchSize - 1, aggexec.AggBatchSize, rows - 1} {
 		require.Equal(t, int64(idx+1), resultValues[idx], "row %d", idx)
 	}
 
+	arg.Free(proc, false, nil)
+	op.Free(proc, false, nil)
+	proc.Free()
+	require.Equal(t, int64(0), proc.Mp().CurrNB())
+}
+
+func TestWindowRankPeerAcrossChunks(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	rows := colexec.DefaultBatchSize + 17
+	values := make([]int32, rows)
+	for i := range values {
+		values[i] = int32(i / 3)
+	}
+	bat := makeInt32Batch(proc.Mp(), values)
+	arg := &Window{
+		WinSpecList: []*plan.Expr{{
+			Expr: &plan.Expr_W{W: &plan.WindowSpec{
+				Name:       "rank",
+				WindowFunc: newFunExpr("rank"),
+				OrderBy: []*plan.OrderBySpec{{
+					Expr: newColExpr(0),
+				}},
+			}},
+		}},
+		Aggs: []aggexec.AggFuncExecExpression{newOrderWindowAggExpr(t, "rank")},
+		OperatorBase: vm.OperatorBase{
+			OperatorInfo: vm.OperatorInfo{Idx: 0},
+		},
+	}
+	op := colexec.NewMockOperator().WithBatchs([]*batch.Batch{bat})
+	arg.AppendChild(op)
+
+	require.NoError(t, arg.Prepare(proc))
+	resultValues := collectFixedWindowColumn[int64](t, arg, proc, 1)
+	require.Len(t, resultValues, rows)
+	for _, row := range []int{0, 1, colexec.DefaultBatchSize - 2, colexec.DefaultBatchSize - 1, colexec.DefaultBatchSize, rows - 1} {
+		want := int64(row/3*3 + 1)
+		require.Equal(t, want, resultValues[row], "row %d", row)
+	}
+
+	arg.Free(proc, false, nil)
+	op.Free(proc, false, nil)
+	proc.Free()
+	require.Equal(t, int64(0), proc.Mp().CurrNB())
+}
+
+func TestWindowValueResultAcrossChunks(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	rows := colexec.DefaultBatchSize + 17
+	values := make([]int32, rows)
+	for i := range values {
+		values[i] = int32(i + 1)
+	}
+	bat := batch.NewWithSize(1)
+	bat.Vecs[0] = testutil.MakeInt32Vector(values, nil, proc.Mp())
+	bat.SetRowCount(rows)
+
+	arg := &Window{
+		WinSpecList: []*plan.Expr{makeLagWindowSpec()},
+		Aggs:        []aggexec.AggFuncExecExpression{makeValueWindowAggExpr("lag")},
+		OperatorBase: vm.OperatorBase{
+			OperatorInfo: vm.OperatorInfo{Idx: 0},
+		},
+	}
+	op := colexec.NewMockOperator().WithBatchs([]*batch.Batch{bat})
+	arg.AppendChild(op)
+
+	require.NoError(t, arg.Prepare(proc))
+	var resultValues []int32
+	var resultNulls []bool
+	for {
+		result, err := vm.Exec(arg, proc)
+		require.NoError(t, err)
+		if result.Batch == nil {
+			break
+		}
+		require.LessOrEqual(t, result.Batch.RowCount(), colexec.DefaultBatchSize)
+		vec := result.Batch.Vecs[1]
+		resultValues = append(resultValues, vector.MustFixedColWithTypeCheck[int32](vec)...)
+		for row := range vec.Length() {
+			resultNulls = append(resultNulls, vec.IsNull(uint64(row)))
+		}
+	}
+	require.Len(t, resultValues, rows)
+	require.True(t, resultNulls[0])
+	for row := 1; row < rows; row++ {
+		require.False(t, resultNulls[row], "row %d", row)
+		require.Equal(t, values[row-1], resultValues[row], "row %d", row)
+	}
+
+	arg.Free(proc, false, nil)
+	op.Free(proc, false, nil)
+	proc.Free()
+	require.Equal(t, int64(0), proc.Mp().CurrNB())
+}
+
+func TestWindowOrderFunctionsUsePeerBoundaries(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	bat := batch.NewWithSize(1)
+	bat.Vecs[0] = testutil.MakeInt32Vector([]int32{10, 10, 20, 30}, nil, proc.Mp())
+	bat.SetRowCount(4)
+
+	tests := []struct {
+		name        string
+		wantInt     []int64
+		wantFloat   []float64
+		bucketCount int64
+	}{
+		{name: "row_number", wantInt: []int64{2, 3, 4}},
+		{name: "rank", wantInt: []int64{1, 3, 4}},
+		{name: "dense_rank", wantInt: []int64{1, 2, 3}},
+		{name: "percent_rank", wantFloat: []float64{0, 2.0 / 3.0, 1}},
+		{name: "cume_dist", wantFloat: []float64{0.5, 0.75, 1}},
+		{name: "ntile", wantInt: []int64{1, 2, 3}, bucketCount: 3},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			ctr := container{
+				bat: bat,
+				// Sorted rows have peer groups [0,2), [2,3), [3,4).
+				os: []int64{0, 2, 3},
+			}
+			if test.name == "ntile" {
+				bucketVec, err := vector.NewConstFixed(
+					types.T_int64.ToType(), test.bucketCount, bat.RowCount(), proc.Mp())
+				require.NoError(t, err)
+				defer bucketVec.Free(proc.Mp())
+				ctr.aggVecs = []colexec.ExprEvalVector{{Vec: []*vector.Vector{bucketVec}}}
+			}
+			arg := &Window{WinSpecList: []*plan.Expr{{
+				Expr: &plan.Expr_W{W: &plan.WindowSpec{Name: test.name}},
+			}}}
+			// Start in the middle of a peer group to prove chunk boundaries do
+			// not reset rank state.
+			result, err := ctr.processOrderFuncRange(0, arg, proc, 1, 4)
+			require.NoError(t, err)
+			defer result.Free(proc.Mp())
+			if test.wantFloat != nil {
+				require.Equal(t, test.wantFloat, vector.MustFixedColWithTypeCheck[float64](result))
+			} else {
+				require.Equal(t, test.wantInt, vector.MustFixedColWithTypeCheck[int64](result))
+			}
+		})
+	}
+
+	bat.Clean(proc.Mp())
+	proc.Free()
+	require.Equal(t, int64(0), proc.Mp().CurrNB())
+}
+
+func TestWindowResetBeforeAllChunksReleasesState(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	rows := colexec.DefaultBatchSize * 2
+	values := make([]int32, rows)
+	for i := range values {
+		values[i] = int32(i + 1)
+	}
+	bat := batch.NewWithSize(1)
+	bat.Vecs[0] = testutil.MakeInt32Vector(values, nil, proc.Mp())
+	bat.SetRowCount(rows)
+
+	spec := makeWindowSpec()
+	spec.Expr.(*plan.Expr_W).W.Frame = makeCurrentRowFrame()
+	arg := &Window{
+		WinSpecList: []*plan.Expr{spec},
+		Aggs:        []aggexec.AggFuncExecExpression{newAggExpr()},
+		OperatorBase: vm.OperatorBase{
+			OperatorInfo: vm.OperatorInfo{Idx: 0},
+		},
+	}
+	op := colexec.NewMockOperator().WithBatchs([]*batch.Batch{bat})
+	arg.AppendChild(op)
+
+	require.NoError(t, arg.Prepare(proc))
+	result, err := vm.Exec(arg, proc)
+	require.NoError(t, err)
+	require.Equal(t, colexec.DefaultBatchSize, result.Batch.RowCount())
+	require.Equal(t, colexec.DefaultBatchSize, arg.ctr.emitOffset)
+	require.Equal(t, emit, arg.ctr.status)
+	require.Nil(t, arg.ctr.batAggs)
+
+	// Model LIMIT stopping the pipeline after the first output chunk.
+	arg.Reset(proc, false, nil)
 	arg.Free(proc, false, nil)
 	op.Free(proc, false, nil)
 	proc.Free()
