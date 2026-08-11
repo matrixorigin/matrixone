@@ -32,8 +32,11 @@ import (
 type controllableUnpublishedCleanupFS struct {
 	fileservice.FileService
 	rejectMarkerWrites    atomic.Bool
+	rejectMarkerStats     atomic.Bool
+	rejectMarkerDeletes   atomic.Bool
 	ambiguousMarkerWrites atomic.Bool
 	rejectObjectDelete    atomic.Bool
+	markerDeleteCalls     atomic.Int64
 }
 
 func (fs *controllableUnpublishedCleanupFS) Write(
@@ -56,6 +59,14 @@ func (fs *controllableUnpublishedCleanupFS) Delete(
 	ctx context.Context,
 	paths ...string,
 ) error {
+	for _, path := range paths {
+		if strings.HasPrefix(path, "gc/unpublished/") {
+			fs.markerDeleteCalls.Add(1)
+			if fs.rejectMarkerDeletes.Load() {
+				return errors.New("injected marker delete failure")
+			}
+		}
+	}
 	if fs.rejectObjectDelete.Load() {
 		for _, path := range paths {
 			if !strings.HasPrefix(path, "gc/unpublished/") {
@@ -64,6 +75,17 @@ func (fs *controllableUnpublishedCleanupFS) Delete(
 		}
 	}
 	return fs.FileService.Delete(ctx, paths...)
+}
+
+func (fs *controllableUnpublishedCleanupFS) StatFile(
+	ctx context.Context,
+	path string,
+) (*fileservice.DirEntry, error) {
+	if strings.HasPrefix(path, "gc/unpublished/") &&
+		fs.rejectMarkerStats.Load() {
+		return nil, errors.New("injected marker stat failure")
+	}
+	return fs.FileService.StatFile(ctx, path)
 }
 
 func TestCheckpointCleanerWriteAheadOwnership(t *testing.T) {
@@ -119,8 +141,8 @@ func TestCheckpointCleanerRejectsBeforeObjectWriteWhenMarkerAdmissionFails(t *te
 		ctx, "", objectFS, nil, nil, WithUnpublishedCleanupFS(markerFS),
 	).(*checkpointCleaner)
 
-	_, err = cleaner.PrepareUnpublishedObject(
-		ctx, 1, 2, true, objectio.MockObjectName().String())
+	name := objectio.MockObjectName().String()
+	_, err = cleaner.PrepareUnpublishedObject(ctx, 1, 2, true, name)
 	require.ErrorContains(t, err, "injected marker write failure")
 	cleaner.unpublishedCleanupOwnership.Lock()
 	require.Zero(t, cleaner.unpublishedCleanupOwnership.pending)
@@ -152,6 +174,177 @@ func TestCheckpointCleanerAcceptsMarkerOnlyAfterAmbiguousWriteIsVisible(t *testi
 	require.Len(t, cleaner.unpublishedCleanupOwnership.active, 1)
 	require.Contains(t, cleaner.unpublishedCleanupOwnership.markers, marker)
 	cleaner.unpublishedCleanupOwnership.Unlock()
+}
+
+func TestCheckpointCleanerReconcilesAmbiguousMarkerWithoutObjectWrite(t *testing.T) {
+	ctx := context.Background()
+	objectFS, err := fileservice.NewMemoryFS(
+		"shared", fileservice.DisabledCacheConfig, nil)
+	require.NoError(t, err)
+	markerBase, err := fileservice.NewMemoryFS(
+		"local", fileservice.DisabledCacheConfig, nil)
+	require.NoError(t, err)
+	markerFS := &controllableUnpublishedCleanupFS{FileService: markerBase}
+	markerFS.rejectMarkerWrites.Store(true)
+	markerFS.rejectMarkerStats.Store(true)
+	cleaner := NewCheckpointCleaner(
+		ctx, "", objectFS, nil, nil, WithUnpublishedCleanupFS(markerFS),
+	).(*checkpointCleaner)
+
+	name := objectio.MockObjectName().String()
+	_, err = cleaner.PrepareUnpublishedObject(ctx, 1, 2, true, name)
+	require.ErrorContains(t, err, "injected marker write failure")
+	require.ErrorContains(t, err, "injected marker stat failure")
+	cleaner.unpublishedCleanupOwnership.Lock()
+	require.Equal(t, 1, cleaner.unpublishedCleanupOwnership.pending)
+	require.Contains(t, cleaner.unpublishedCleanupOwnership.active, name)
+	require.Len(t, cleaner.unpublishedCleanupOwnership.markers, 1)
+	require.Len(t, cleaner.unpublishedCleanupOwnership.uncertain, 1)
+	cleaner.unpublishedCleanupOwnership.Unlock()
+	_, err = cleaner.PrepareUnpublishedObject(ctx, 1, 2, true, name)
+	require.ErrorContains(t, err, "is already active")
+
+	markerFS.rejectMarkerWrites.Store(false)
+	markerFS.rejectMarkerDeletes.Store(true)
+	require.ErrorContains(
+		t, cleaner.replayUnpublishedObjectCleanup(ctx),
+		"injected marker delete failure",
+	)
+	cleaner.unpublishedCleanupOwnership.Lock()
+	require.Equal(t, 1, cleaner.unpublishedCleanupOwnership.pending)
+	require.Len(t, cleaner.unpublishedCleanupOwnership.uncertain, 1)
+	cleaner.unpublishedCleanupOwnership.Unlock()
+
+	markerFS.rejectMarkerDeletes.Store(false)
+	markerFS.rejectMarkerStats.Store(false)
+	require.NoError(t, cleaner.replayUnpublishedObjectCleanup(ctx))
+	cleaner.unpublishedCleanupOwnership.Lock()
+	require.Zero(t, cleaner.unpublishedCleanupOwnership.pending)
+	require.Empty(t, cleaner.unpublishedCleanupOwnership.markers)
+	require.Empty(t, cleaner.unpublishedCleanupOwnership.uncertain)
+	require.Empty(t, cleaner.unpublishedCleanupOwnership.active)
+	cleaner.unpublishedCleanupOwnership.Unlock()
+
+	marker, err := cleaner.PrepareUnpublishedObject(ctx, 1, 2, true, name)
+	require.NoError(t, err)
+	require.NoError(t, cleaner.FinishUnpublishedObject(ctx, marker, name))
+}
+
+func TestCheckpointCleanerReconcilesPersistedAmbiguousMarker(t *testing.T) {
+	ctx := context.Background()
+	objectFS, err := fileservice.NewMemoryFS(
+		"shared", fileservice.DisabledCacheConfig, nil)
+	require.NoError(t, err)
+	markerBase, err := fileservice.NewMemoryFS(
+		"local", fileservice.DisabledCacheConfig, nil)
+	require.NoError(t, err)
+	markerFS := &controllableUnpublishedCleanupFS{FileService: markerBase}
+	markerFS.ambiguousMarkerWrites.Store(true)
+	markerFS.rejectMarkerStats.Store(true)
+	cleaner := NewCheckpointCleaner(
+		ctx, "", objectFS, nil, nil, WithUnpublishedCleanupFS(markerFS),
+	).(*checkpointCleaner)
+
+	name := objectio.MockObjectName().String()
+	marker, err := cleaner.PrepareUnpublishedObject(ctx, 1, 2, true, name)
+	require.ErrorContains(t, err, "post-persist marker write failure")
+	require.ErrorContains(t, err, "marker stat failure")
+	_, err = markerBase.StatFile(ctx, marker)
+	require.NoError(t, err)
+
+	require.NoError(t, cleaner.replayUnpublishedObjectCleanup(ctx))
+	_, err = markerBase.StatFile(ctx, marker)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrFileNotFound))
+	cleaner.unpublishedCleanupOwnership.Lock()
+	require.Zero(t, cleaner.unpublishedCleanupOwnership.pending)
+	require.Empty(t, cleaner.unpublishedCleanupOwnership.active)
+	require.Empty(t, cleaner.unpublishedCleanupOwnership.markers)
+	require.Empty(t, cleaner.unpublishedCleanupOwnership.uncertain)
+	cleaner.unpublishedCleanupOwnership.Unlock()
+}
+
+func TestCheckpointCleanerBoundsAmbiguousMarkerReconciliation(t *testing.T) {
+	ctx := context.Background()
+	objectFS, err := fileservice.NewMemoryFS(
+		"shared", fileservice.DisabledCacheConfig, nil)
+	require.NoError(t, err)
+	markerBase, err := fileservice.NewMemoryFS(
+		"local", fileservice.DisabledCacheConfig, nil)
+	require.NoError(t, err)
+	markerFS := &controllableUnpublishedCleanupFS{FileService: markerBase}
+	cleaner := NewCheckpointCleaner(
+		ctx, "", objectFS, nil, nil, WithUnpublishedCleanupFS(markerFS),
+	).(*checkpointCleaner)
+	cleaner.unpublishedCleanupOwnership.initialized = true
+	cleaner.unpublishedCleanupOwnership.markers = make(map[string]struct{}, 1001)
+	cleaner.unpublishedCleanupOwnership.active = make(map[string]struct{}, 1001)
+	cleaner.unpublishedCleanupOwnership.uncertain = make(map[string]string, 1001)
+	for i := 0; i < 1001; i++ {
+		marker := fmt.Sprintf("gc/unpublished/ambiguous-%04d.json", i)
+		file := fmt.Sprintf("ambiguous-%04d", i)
+		cleaner.unpublishedCleanupOwnership.markers[marker] = struct{}{}
+		cleaner.unpublishedCleanupOwnership.active[file] = struct{}{}
+		cleaner.unpublishedCleanupOwnership.uncertain[marker] = file
+	}
+	cleaner.unpublishedCleanupOwnership.pending = 1001
+	cleaner.unpublishedCleanupGeneration.Add(1)
+
+	require.NoError(t, cleaner.replayUnpublishedObjectCleanup(ctx))
+	require.Equal(t, int64(1000), markerFS.markerDeleteCalls.Load())
+	cleaner.unpublishedCleanupOwnership.Lock()
+	require.Equal(t, 1, cleaner.unpublishedCleanupOwnership.pending)
+	require.Len(t, cleaner.unpublishedCleanupOwnership.uncertain, 1)
+	require.Len(t, cleaner.unpublishedCleanupOwnership.active, 1)
+	cleaner.unpublishedCleanupOwnership.Unlock()
+
+	require.NoError(t, cleaner.replayUnpublishedObjectCleanup(ctx))
+	require.Equal(t, int64(1001), markerFS.markerDeleteCalls.Load())
+	cleaner.unpublishedCleanupOwnership.Lock()
+	require.Zero(t, cleaner.unpublishedCleanupOwnership.pending)
+	require.Empty(t, cleaner.unpublishedCleanupOwnership.markers)
+	require.Empty(t, cleaner.unpublishedCleanupOwnership.uncertain)
+	require.Empty(t, cleaner.unpublishedCleanupOwnership.active)
+	cleaner.unpublishedCleanupOwnership.Unlock()
+}
+
+func TestCheckpointCleanerReconcilesAmbiguousMarkerBesideActiveWriter(t *testing.T) {
+	ctx := context.Background()
+	objectFS, err := fileservice.NewMemoryFS(
+		"shared", fileservice.DisabledCacheConfig, nil)
+	require.NoError(t, err)
+	markerBase, err := fileservice.NewMemoryFS(
+		"local", fileservice.DisabledCacheConfig, nil)
+	require.NoError(t, err)
+	markerFS := &controllableUnpublishedCleanupFS{FileService: markerBase}
+	cleaner := NewCheckpointCleaner(
+		ctx, "", objectFS, nil, nil, WithUnpublishedCleanupFS(markerFS),
+	).(*checkpointCleaner)
+
+	activeName := objectio.MockObjectName().String()
+	activeMarker, err := cleaner.PrepareUnpublishedObject(
+		ctx, 1, 2, true, activeName)
+	require.NoError(t, err)
+	phantom := "gc/unpublished/ambiguous-beside-active.json"
+	phantomName := "ambiguous-beside-active"
+	cleaner.unpublishedCleanupOwnership.Lock()
+	cleaner.unpublishedCleanupOwnership.markers[phantom] = struct{}{}
+	cleaner.unpublishedCleanupOwnership.active[phantomName] = struct{}{}
+	cleaner.unpublishedCleanupOwnership.uncertain = map[string]string{
+		phantom: phantomName,
+	}
+	cleaner.unpublishedCleanupOwnership.pending++
+	cleaner.unpublishedCleanupOwnership.Unlock()
+	cleaner.unpublishedCleanupGeneration.Add(1)
+
+	require.NoError(t, cleaner.replayUnpublishedObjectCleanup(ctx))
+	cleaner.unpublishedCleanupOwnership.Lock()
+	require.Equal(t, 1, cleaner.unpublishedCleanupOwnership.pending)
+	require.Empty(t, cleaner.unpublishedCleanupOwnership.uncertain)
+	require.Len(t, cleaner.unpublishedCleanupOwnership.markers, 1)
+	require.Contains(t, cleaner.unpublishedCleanupOwnership.active, activeName)
+	cleaner.unpublishedCleanupOwnership.Unlock()
+	require.NoError(t, cleaner.FinishUnpublishedObject(
+		ctx, activeMarker, activeName))
 }
 
 func TestCheckpointCleanerCleanupSurvivesRestart(t *testing.T) {

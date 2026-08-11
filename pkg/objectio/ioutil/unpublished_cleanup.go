@@ -29,7 +29,6 @@ import (
 const (
 	unpublishedObjectCleanupDir     = "gc/unpublished/"
 	unpublishedObjectCleanupVersion = 2
-	unpublishedCleanupReplayBatch   = 1000
 )
 
 // UnpublishedObject identifies one object and the catalog owner that will
@@ -154,7 +153,7 @@ func ListUnpublishedObjectCleanup(
 	return markers, false, nil
 }
 
-// ReplayUnpublishedObjectCleanupFrom replays at most one bounded marker batch.
+// ReplayUnpublishedObjectCleanupFrom replays at most limit markers.
 // decide must fence active writers and catalog-owned objects; replay never
 // infers ownership from a bare file name.
 func ReplayUnpublishedObjectCleanupFrom(
@@ -163,11 +162,12 @@ func ReplayUnpublishedObjectCleanupFrom(
 	objectFS fileservice.FileService,
 	decide func(UnpublishedObject) (UnpublishedObjectCleanupDecision, error),
 	onReplayed func(marker string),
-) (replayed int, remaining bool, err error) {
+	limit int,
+) (replayed int, inspected int, remaining bool, err error) {
 	markers, remaining, err := ListUnpublishedObjectCleanup(
-		ctx, markerFS, unpublishedCleanupReplayBatch)
+		ctx, markerFS, limit)
 	if err != nil {
-		return 0, true, err
+		return 0, 0, true, err
 	}
 
 	failed := 0
@@ -180,8 +180,9 @@ func ReplayUnpublishedObjectCleanupFrom(
 	}
 	for _, marker := range markers {
 		if cause := context.Cause(ctx); cause != nil {
-			return replayed, true, errors.Join(firstErr, cause)
+			return replayed, inspected, true, errors.Join(firstErr, cause)
 		}
+		inspected++
 		intent, readErr := readUnpublishedObjectCleanup(ctx, markerFS, marker)
 		if readErr != nil {
 			remaining = true
@@ -221,13 +222,13 @@ func ReplayUnpublishedObjectCleanupFrom(
 		}
 	}
 	if failed != 0 {
-		return replayed, remaining, errors.Join(
+		return replayed, inspected, remaining, errors.Join(
 			moerr.NewInternalErrorf(
 				ctx, "replay %d unpublished object cleanup intents", failed),
 			firstErr,
 		)
 	}
-	return replayed, remaining, nil
+	return replayed, inspected, remaining, nil
 }
 
 func readUnpublishedObjectCleanup(

@@ -153,6 +153,7 @@ type checkpointCleaner struct {
 		sync.Mutex
 		active      map[string]struct{}
 		markers     map[string]struct{}
+		uncertain   map[string]string
 		pending     int
 		overflow    bool
 		initialized bool
@@ -161,6 +162,7 @@ type checkpointCleaner struct {
 
 const (
 	unpublishedCleanupReplayTimeout = time.Minute
+	unpublishedCleanupReplayBatch   = 1_000
 	unpublishedCleanupMaxPending    = 10_000
 )
 
@@ -1889,8 +1891,11 @@ func (c *checkpointCleaner) PrepareUnpublishedObject(
 		if c.unpublishedCleanupOwnership.markers == nil {
 			c.unpublishedCleanupOwnership.markers = make(map[string]struct{})
 		}
+		if c.unpublishedCleanupOwnership.uncertain == nil {
+			c.unpublishedCleanupOwnership.uncertain = make(map[string]string)
+		}
 		c.unpublishedCleanupOwnership.markers[marker] = struct{}{}
-		delete(c.unpublishedCleanupOwnership.active, file)
+		c.unpublishedCleanupOwnership.uncertain[marker] = file
 		c.unpublishedCleanupOwnership.Unlock()
 		c.unpublishedCleanupGeneration.Add(1)
 		return marker, errors.Join(err, statErr)
@@ -1999,9 +2004,60 @@ func (c *checkpointCleaner) releaseUnpublishedObjectMarkerLocked(marker string) 
 		return
 	}
 	delete(c.unpublishedCleanupOwnership.markers, marker)
+	if file, uncertain := c.unpublishedCleanupOwnership.uncertain[marker]; uncertain {
+		delete(c.unpublishedCleanupOwnership.active, file)
+	}
+	delete(c.unpublishedCleanupOwnership.uncertain, marker)
 	if c.unpublishedCleanupOwnership.pending > 0 {
 		c.unpublishedCleanupOwnership.pending--
 	}
+}
+
+// reconcileUncertainUnpublishedObjectMarkers closes marker writes whose result
+// could not be observed. Prepare returned an error before the object write, so
+// these exact markers own no object and may be removed directly. The identity
+// map keeps the admission slot until deletion or absence is proven.
+func (c *checkpointCleaner) reconcileUncertainUnpublishedObjectMarkers(
+	ctx context.Context,
+	markerFS fileservice.FileService,
+	limit int,
+) (remaining bool, err error) {
+	c.unpublishedCleanupOwnership.Lock()
+	markers := make([]string, 0, min(
+		len(c.unpublishedCleanupOwnership.uncertain),
+		limit,
+	))
+	for marker := range c.unpublishedCleanupOwnership.uncertain {
+		if len(markers) == limit {
+			remaining = true
+			break
+		}
+		markers = append(markers, marker)
+	}
+	c.unpublishedCleanupOwnership.Unlock()
+
+	var firstErr error
+	for _, marker := range markers {
+		if cause := context.Cause(ctx); cause != nil {
+			return true, errors.Join(firstErr, cause)
+		}
+		if deleteErr := ioutil.DeleteUnpublishedObjectCleanup(
+			ctx, markerFS, marker); deleteErr != nil {
+			remaining = true
+			if firstErr == nil {
+				firstErr = deleteErr
+			}
+			continue
+		}
+		c.releaseUnpublishedObjectMarker(marker)
+	}
+	return remaining, firstErr
+}
+
+func (c *checkpointCleaner) hasUncertainUnpublishedObjectMarkers() bool {
+	c.unpublishedCleanupOwnership.Lock()
+	defer c.unpublishedCleanupOwnership.Unlock()
+	return len(c.unpublishedCleanupOwnership.uncertain) != 0
 }
 
 func (c *checkpointCleaner) replayUnpublishedObjectCleanup(ctx context.Context) error {
@@ -2016,13 +2072,29 @@ func (c *checkpointCleaner) replayUnpublishedObjectCleanup(ctx context.Context) 
 	if markerFS == nil {
 		markerFS = c.fs
 	}
-	_, remaining, replayErr := ioutil.ReplayUnpublishedObjectCleanupFrom(
+	durableLimit := unpublishedCleanupReplayBatch
+	if c.hasUncertainUnpublishedObjectMarkers() {
+		durableLimit /= 2
+	}
+	_, inspected, remaining, replayErr := ioutil.ReplayUnpublishedObjectCleanupFrom(
 		cleanupCtx,
 		markerFS,
 		c.fs,
 		c.decideUnpublishedObjectCleanup,
 		c.releaseUnpublishedObjectMarker,
+		durableLimit,
 	)
+	uncertainRemaining, uncertainErr :=
+		c.reconcileUncertainUnpublishedObjectMarkers(
+			cleanupCtx,
+			markerFS,
+			unpublishedCleanupReplayBatch-inspected,
+		)
+	remaining = remaining || uncertainRemaining
+	replayErr = errors.Join(replayErr, uncertainErr)
+	if c.hasUncertainUnpublishedObjectMarkers() {
+		remaining = true
+	}
 	if replayErr == nil && !remaining {
 		c.unpublishedCleanupOwnership.Lock()
 		if c.unpublishedCleanupOwnership.overflow {

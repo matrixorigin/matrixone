@@ -72,12 +72,13 @@ func TestUnpublishedObjectCleanupOwnershipDecisions(t *testing.T) {
 	marker, err := RecordUnpublishedObjectCleanup(ctx, fs, object)
 	require.NoError(t, err)
 
-	replayed, remaining, err := ReplayUnpublishedObjectCleanupFrom(
+	replayed, _, remaining, err := ReplayUnpublishedObjectCleanupFrom(
 		ctx, fs, fs,
 		func(UnpublishedObject) (UnpublishedObjectCleanupDecision, error) {
 			return RetryUnpublishedObjectCleanup, nil
 		},
 		nil,
+		10,
 	)
 	require.NoError(t, err)
 	require.Zero(t, replayed)
@@ -85,12 +86,13 @@ func TestUnpublishedObjectCleanupOwnershipDecisions(t *testing.T) {
 	require.NoError(t, statCleanupTestFile(ctx, base, object.File))
 	require.NoError(t, statCleanupTestFile(ctx, base, marker))
 
-	replayed, remaining, err = ReplayUnpublishedObjectCleanupFrom(
+	replayed, _, remaining, err = ReplayUnpublishedObjectCleanupFrom(
 		ctx, fs, fs,
 		func(UnpublishedObject) (UnpublishedObjectCleanupDecision, error) {
 			return ReleaseUnpublishedObjectCleanup, nil
 		},
 		nil,
+		10,
 	)
 	require.NoError(t, err)
 	require.Equal(t, 1, replayed)
@@ -102,8 +104,8 @@ func TestUnpublishedObjectCleanupOwnershipDecisions(t *testing.T) {
 
 	marker, err = RecordUnpublishedObjectCleanup(ctx, fs, object)
 	require.NoError(t, err)
-	replayed, remaining, err = ReplayUnpublishedObjectCleanupFrom(
-		ctx, fs, fs, nil, nil)
+	replayed, _, remaining, err = ReplayUnpublishedObjectCleanupFrom(
+		ctx, fs, fs, nil, nil, 10)
 	require.NoError(t, err)
 	require.Equal(t, 1, replayed)
 	require.False(t, remaining)
@@ -125,7 +127,8 @@ func TestUnpublishedObjectCleanupRetainsMarkerOnDeleteFailure(t *testing.T) {
 	require.NoError(t, err)
 
 	fs.deleteErr = errors.New("injected delete failure")
-	_, remaining, err := ReplayUnpublishedObjectCleanupFrom(ctx, fs, fs, nil, nil)
+	_, _, remaining, err := ReplayUnpublishedObjectCleanupFrom(
+		ctx, fs, fs, nil, nil, 10)
 	require.ErrorContains(t, err, "injected delete failure")
 	require.True(t, remaining)
 	require.NoError(t, statCleanupTestFile(ctx, base, marker))
@@ -136,20 +139,25 @@ func TestUnpublishedObjectCleanupReplayIsBounded(t *testing.T) {
 	fs, err := fileservice.NewMemoryFS(
 		"cleanup", fileservice.DisabledCacheConfig, nil)
 	require.NoError(t, err)
-	for i := 0; i < unpublishedCleanupReplayBatch+1; i++ {
+	const limit = 7
+	for i := 0; i < limit+1; i++ {
 		object := UnpublishedObject{File: fmt.Sprintf("unpublished-%04d", i)}
 		writeUnpublishedCleanupTestFile(t, fs, object.File)
 		_, err = RecordUnpublishedObjectCleanup(ctx, fs, object)
 		require.NoError(t, err)
 	}
 
-	replayed, remaining, err := ReplayUnpublishedObjectCleanupFrom(ctx, fs, fs, nil, nil)
+	replayed, inspected, remaining, err := ReplayUnpublishedObjectCleanupFrom(
+		ctx, fs, fs, nil, nil, limit)
 	require.NoError(t, err)
-	require.Equal(t, unpublishedCleanupReplayBatch, replayed)
+	require.Equal(t, limit, replayed)
+	require.Equal(t, limit, inspected)
 	require.True(t, remaining)
-	replayed, remaining, err = ReplayUnpublishedObjectCleanupFrom(ctx, fs, fs, nil, nil)
+	replayed, inspected, remaining, err = ReplayUnpublishedObjectCleanupFrom(
+		ctx, fs, fs, nil, nil, limit)
 	require.NoError(t, err)
 	require.Equal(t, 1, replayed)
+	require.Equal(t, 1, inspected)
 	require.False(t, remaining)
 }
 
