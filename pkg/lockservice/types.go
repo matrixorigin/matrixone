@@ -136,6 +136,44 @@ type LockService interface {
 	CloseRemoteLockTable(group uint32, tableID, version uint64) (bool, error)
 }
 
+// ExclusiveLockService extends LockService with a fenced callback whose
+// lifetime is exactly the lifetime of one exclusive row lock. The callback
+// context is canceled when the caller cancels, the service closes, or the
+// lock-table binding fences the holder. Binding transfer and service shutdown
+// wait for the callback to return after cancellation.
+//
+// This is intentionally optional rather than part of LockService: ordinary
+// transaction callers do not execute external side effects while holding a
+// lock and should not pay for callback ownership tracking.
+type ExclusiveLockService interface {
+	LockService
+	RunExclusiveLock(
+		context.Context,
+		uint64,
+		[]byte,
+		[]byte,
+		func(context.Context) error,
+	) error
+}
+
+// RunExclusiveLock invokes the fenced callback extension implemented by the
+// production lock service. It fails closed for alternate LockService
+// implementations that do not implement the ownership contract.
+func RunExclusiveLock(
+	ctx context.Context,
+	service LockService,
+	tableID uint64,
+	row []byte,
+	txnID []byte,
+	fn func(context.Context) error,
+) error {
+	runner, ok := service.(ExclusiveLockService)
+	if !ok {
+		return moerr.NewNotSupportedNoCtx("exclusive lock callbacks are not supported")
+	}
+	return runner.RunExclusiveLock(ctx, tableID, row, txnID, fn)
+}
+
 // UnknownCommitResolver resolves a Commit whose request may have reached TN but
 // whose final response was not received by CN. It must not release the txn's
 // locks until the allocator proves that the txn cannot still be committing.

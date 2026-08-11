@@ -112,6 +112,7 @@ type service struct {
 const maxSupersededAllocatorIDs = 64
 
 var _ CommitSequenceProvider = (*service)(nil)
+var _ ExclusiveLockService = (*service)(nil)
 
 // NextCommitSequence returns a non-zero sequence scoped to this lockservice
 // incarnation. serviceID also includes the process creation time, so a restart
@@ -303,6 +304,98 @@ func (s *service) Lock(
 		}
 	}
 	return result, err
+}
+
+// RunExclusiveLock holds one exclusive row lock while fn performs an external
+// mutation that must not overlap across lock-table owners. The lazy ownership
+// record lets bind-change fencing cancel and join fn before the binding can be
+// transferred. Service shutdown uses the same cancel-and-join boundary before
+// lock tables are removed.
+func (s *service) RunExclusiveLock(
+	ctx context.Context,
+	tableID uint64,
+	row []byte,
+	txnID []byte,
+	fn func(context.Context) error,
+) (resultErr error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if len(row) == 0 || len(txnID) == 0 || fn == nil {
+		return moerr.NewInternalErrorNoCtx("lockservice: invalid exclusive lock callback")
+	}
+	serviceCtx, admitted := s.beginExclusiveCallbackAdmission()
+	if !admitted {
+		return moerr.NewNewTxnInCNRollingRestart()
+	}
+	defer s.endResolverAdmission()
+
+	lockCtx, cancelServiceClose := contextWithServiceClose(ctx, serviceCtx)
+	defer cancelServiceClose()
+	_, lockErr := s.Lock(lockCtx, tableID, [][]byte{row}, txnID, pb.LockOptions{
+		Granularity: pb.Granularity_Row,
+		Mode:        pb.LockMode_Exclusive,
+		Policy:      pb.WaitPolicy_Wait,
+	})
+	if lockErr != nil {
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), defaultRPCTimeout)
+		cleanupErr := s.unlockWithContext(cleanupCtx, txnID, timestamp.Timestamp{})
+		cancel()
+		return errors.Join(lockErr, cleanupErr)
+	}
+
+	txn := s.activeTxnHolder.getActiveTxn(txnID, false, "")
+	if txn == nil {
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), defaultRPCTimeout)
+		cleanupErr := s.unlockWithContext(cleanupCtx, txnID, timestamp.Timestamp{})
+		cancel()
+		return errors.Join(moerr.NewInternalErrorNoCtx("lockservice: exclusive lock owner disappeared"), cleanupErr)
+	}
+	txn.Lock()
+	if !bytes.Equal(txn.txnID, txnID) || txn.deadlockFound || txn.bindChanged || txn.ownership != nil {
+		txn.Unlock()
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), defaultRPCTimeout)
+		cleanupErr := s.unlockWithContext(cleanupCtx, txnID, timestamp.Timestamp{})
+		cancel()
+		return errors.Join(moerr.NewInternalErrorNoCtx("lockservice: exclusive lock ownership is invalid"), cleanupErr)
+	}
+	callbackCtx, cancelCallback := context.WithCancelCause(lockCtx)
+	ownership := &exclusiveLockOwnership{ctx: callbackCtx, cancel: cancelCallback, done: make(chan struct{})}
+	txn.ownership = ownership
+	txn.Unlock()
+
+	finished := false
+	var ownershipCause error
+	finishOwnership := func() {
+		if finished {
+			return
+		}
+		finished = true
+		ownershipCause = context.Cause(callbackCtx)
+		close(ownership.done)
+		txn.Lock()
+		if txn.ownership == ownership {
+			txn.ownership = nil
+		}
+		cancelCallback(context.Canceled)
+		txn.Unlock()
+	}
+	defer func() {
+		// This defer is also the panic path: ownership fencing must never retain
+		// a callback wait after an upper statement boundary recovers a panic.
+		finishOwnership()
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), defaultRPCTimeout)
+		unlockErr := s.unlockWithContext(cleanupCtx, txnID, timestamp.Timestamp{})
+		cancel()
+		resultErr = errors.Join(resultErr, unlockErr)
+	}()
+
+	resultErr = fn(callbackCtx)
+	finishOwnership()
+	if resultErr == nil && ownershipCause != nil {
+		resultErr = ownershipCause
+	}
+	return resultErr
 }
 
 // applyLockWaitTimeoutCeiling bounds missing or oversized wait budgets and
@@ -901,6 +994,16 @@ func (s *service) beginResolverAdmission() bool {
 	}
 	s.lifecycle.resolverAdmissions.Add(1)
 	return true
+}
+
+func (s *service) beginExclusiveCallbackAdmission() (context.Context, bool) {
+	s.lifecycle.RLock()
+	defer s.lifecycle.RUnlock()
+	if s.lifecycle.closing {
+		return nil, false
+	}
+	s.lifecycle.resolverAdmissions.Add(1)
+	return s.lifecycle.ctx, true
 }
 
 func (s *service) endResolverAdmission() {
@@ -1912,11 +2015,16 @@ func (h *mapBasedTxnHolder) fenceByBindChanged(bind pb.LockTable) int {
 					time.Sleep(time.Millisecond)
 					continue
 				}
-				if entry.txn.fenceByBindChangedLocked(bind, h.logger) {
+				changed := entry.txn.fenceByBindChangedLocked(bind, h.logger)
+				done := entry.txn.ownershipDoneLocked()
+				if changed {
 					n++
 				}
 				entry.txn.Unlock()
 				shard.RUnlock()
+				if changed && done != nil {
+					<-done
+				}
 				break
 			}
 		}

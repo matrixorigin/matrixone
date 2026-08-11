@@ -19,6 +19,7 @@ import (
 	"context"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"math"
 	"sort"
 
@@ -224,7 +225,7 @@ func newManifestBuilder(def *planpb.TableDef, accountID, databaseID uint64, data
 		return nil, err
 	}
 	if len(empty) > maximum {
-		return nil, moerr.NewInternalErrorNoCtxf("manifest metadata is %d bytes, maximum is %d", len(empty), maximum)
+		return nil, substrait.NotEligible(substrait.EligibilitySnapshot, fmt.Sprintf("manifest metadata is %d bytes, maximum is %d", len(empty), maximum))
 	}
 	return &manifestBuilder{manifest: m, maximum: maximum, emptySize: len(empty)}, nil
 }
@@ -254,7 +255,7 @@ func (b *manifestBuilder) add(stats objectio.ObjectStats) error {
 	}
 	projected := b.emptySize - len("[]") + nextObjectBytes + decimalGrowth(uint64(nextRows)) + decimalGrowth(uint64(nextObjects)) + decimalGrowth(nextSize)
 	if projected > b.maximum {
-		return moerr.NewInternalErrorNoCtxf("manifest exceeds maximum of %d bytes", b.maximum)
+		return substrait.NotEligible(substrait.EligibilitySnapshot, fmt.Sprintf("manifest exceeds maximum of %d bytes", b.maximum))
 	}
 	b.manifest.Objects = append(b.manifest.Objects, obj)
 	b.manifest.Stats = manifestStats{TotalRows: nextRows, TotalObjects: nextObjects, TotalSize: nextSize}
@@ -274,7 +275,7 @@ func (b *manifestBuilder) finish() ([]byte, []string, error) {
 		return nil, nil, err
 	}
 	if len(encoded) > b.maximum {
-		return nil, nil, moerr.NewInternalErrorNoCtxf("manifest is %d bytes, maximum is %d", len(encoded), b.maximum)
+		return nil, nil, substrait.NotEligible(substrait.EligibilitySnapshot, fmt.Sprintf("manifest is %d bytes, maximum is %d", len(encoded), b.maximum))
 	}
 	return encoded, names, nil
 }

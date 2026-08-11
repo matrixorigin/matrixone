@@ -28,6 +28,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/lockservice"
 )
 
 // JSON base64-expands the 64 MiB manifest and 1 MiB schema by 4/3. The
@@ -48,10 +49,10 @@ type FileServiceLeaseJournal struct {
 	fs           fileservice.FileService
 	prefix       string
 	admissionKey string
-	admission    JournalAdmissionCoordinator
+	admission    journalAdmissionCoordinator
 }
 
-// JournalAdmissionCoordinator serializes admission and replay critical
+// journalAdmissionCoordinator serializes admission and replay critical
 // sections across every CN that can access one durable namespace.
 // Implementations must keep the named
 // exclusion held until fn returns and must not run two callbacks with the same
@@ -62,7 +63,7 @@ type FileServiceLeaseJournal struct {
 //
 // FileService is deliberately write-once and has no compare-and-swap primitive,
 // so a process-local mutex cannot implement namespace-wide capacity admission.
-type JournalAdmissionCoordinator interface {
+type journalAdmissionCoordinator interface {
 	RunExclusive(context.Context, string, func(context.Context) error) error
 }
 
@@ -79,7 +80,18 @@ type journalEnvelope struct {
 	SHA256 []byte        `json:"sha256"`
 }
 
-func NewFileServiceLeaseJournal(fs fileservice.FileService, prefix string, admission JournalAdmissionCoordinator) (*FileServiceLeaseJournal, error) {
+// NewFileServiceLeaseJournal constructs the production persistent journal.
+// Requiring LockService here prevents runtime wiring from accidentally using a
+// process-local mutex for a cluster-wide capacity invariant.
+func NewFileServiceLeaseJournal(fs fileservice.FileService, prefix string, locks lockservice.LockService) (*FileServiceLeaseJournal, error) {
+	admission, err := newLockServiceJournalAdmission(locks)
+	if err != nil {
+		return nil, err
+	}
+	return newFileServiceLeaseJournal(fs, prefix, admission)
+}
+
+func newFileServiceLeaseJournal(fs fileservice.FileService, prefix string, admission journalAdmissionCoordinator) (*FileServiceLeaseJournal, error) {
 	prefix = strings.Trim(path.Clean(prefix), "/")
 	if fs == nil || prefix == "" || prefix == "." || strings.HasPrefix(prefix, "..") || admission == nil {
 		return nil, moerr.NewInternalErrorNoCtx("substrait: invalid lease journal configuration")

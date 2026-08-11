@@ -33,14 +33,17 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	planbuilder "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/stretchr/testify/require"
 	spb "github.com/substrait-io/substrait-protobuf/go/substraitpb"
+	"go.uber.org/zap"
 	"google.golang.org/protobuf/encoding/protowire"
 	"google.golang.org/protobuf/proto"
 )
@@ -607,16 +610,8 @@ func (f *gatedJournalHeaderFS) Read(ctx context.Context, vector *fileservice.IOV
 }
 
 type testJournalAdmission struct {
-	lock          contextMutex
-	mu            sync.Mutex
-	key           string
-	open          int
-	max           int
-	gate          bool
-	gateCalls     int
-	firstEntered  chan struct{}
-	secondWaiting chan struct{}
-	allowFirst    chan struct{}
+	lock contextMutex
+	key  string
 }
 
 func newTestJournalAdmission() *testJournalAdmission {
@@ -624,64 +619,36 @@ func newTestJournalAdmission() *testJournalAdmission {
 }
 
 func (a *testJournalAdmission) RunExclusive(ctx context.Context, key string, fn func(context.Context) error) error {
-	a.mu.Lock()
-	gateCall := 0
-	if a.gate {
-		a.gateCalls++
-		gateCall = a.gateCalls
-		if gateCall == 2 {
-			close(a.secondWaiting)
-		}
-	}
-	a.mu.Unlock()
 	if err := a.lock.lock(ctx); err != nil {
 		return err
 	}
 	defer a.lock.unlock()
-	if gateCall == 1 {
-		close(a.firstEntered)
-		select {
-		case <-a.allowFirst:
-		case <-ctx.Done():
-			return context.Cause(ctx)
-		}
-	}
-	a.mu.Lock()
 	if a.key == "" {
 		a.key = key
 	}
 	if a.key != key {
-		a.mu.Unlock()
 		return moerr.NewInternalErrorNoCtx("substrait: test admission key mismatch")
 	}
-	a.open++
-	if a.open > a.max {
-		a.max = a.open
-	}
-	a.mu.Unlock()
-	defer func() {
-		a.mu.Lock()
-		a.open--
-		a.mu.Unlock()
-	}()
 	return fn(ctx)
 }
 
-func (a *testJournalAdmission) gateNextPair() (<-chan struct{}, <-chan struct{}, chan<- struct{}) {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	a.gate = true
-	a.gateCalls = 0
-	a.firstEntered = make(chan struct{})
-	a.secondWaiting = make(chan struct{})
-	a.allowFirst = make(chan struct{})
-	return a.firstEntered, a.secondWaiting, a.allowFirst
+type gatedJournalAdmission struct {
+	delegate journalAdmissionCoordinator
+	entered  chan struct{}
+	release  <-chan struct{}
+	once     sync.Once
 }
 
-func (a *testJournalAdmission) maxConcurrent() int {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	return a.max
+func (a *gatedJournalAdmission) RunExclusive(ctx context.Context, key string, fn func(context.Context) error) error {
+	return a.delegate.RunExclusive(ctx, key, func(lockCtx context.Context) error {
+		a.once.Do(func() { close(a.entered) })
+		select {
+		case <-a.release:
+			return fn(lockCtx)
+		case <-lockCtx.Done():
+			return context.Cause(lockCtx)
+		}
+	})
 }
 
 func (p *gatedProtector) Begin(context.Context) (func(context.Context, []byte, []string, time.Time) error, func(context.Context, []byte) error, func(), error) {
@@ -1134,7 +1101,7 @@ func TestPersistentLeaseReplayAndReleasedCrashRecovery(t *testing.T) {
 	ctx := context.Background()
 	fs, err := fileservice.NewMemoryFS("lease-test", fileservice.CacheConfig{}, nil)
 	require.NoError(t, err)
-	journal, err := NewFileServiceLeaseJournal(fs, "sirius/read-leases", newTestJournalAdmission())
+	journal, err := newFileServiceLeaseJournal(fs, "sirius/read-leases", newTestJournalAdmission())
 	require.NoError(t, err)
 	c, err := Export(scanQuery())
 	require.NoError(t, err)
@@ -1185,7 +1152,7 @@ func TestPersistentLeaseReplayExpiresWithoutResurrection(t *testing.T) {
 	ctx := context.Background()
 	fs, err := fileservice.NewMemoryFS("expiry-test", fileservice.CacheConfig{}, nil)
 	require.NoError(t, err)
-	journal, err := NewFileServiceLeaseJournal(fs, "sirius/read-leases", newTestJournalAdmission())
+	journal, err := newFileServiceLeaseJournal(fs, "sirius/read-leases", newTestJournalAdmission())
 	require.NoError(t, err)
 	c, err := Export(scanQuery())
 	require.NoError(t, err)
@@ -1210,52 +1177,63 @@ func TestPersistentLeaseReplayExpiresWithoutResurrection(t *testing.T) {
 }
 
 func TestJournalCapacityIsAtomicAcrossManagersAndReplay(t *testing.T) {
-	ctx := context.Background()
-	fs, err := fileservice.NewMemoryFS("journal-capacity-race", fileservice.CacheConfig{}, nil)
-	require.NoError(t, err)
-	admission := newTestJournalAdmission()
-	journalA, err := NewFileServiceLeaseJournal(fs, "sirius/read-leases", admission)
-	require.NoError(t, err)
-	journalB, err := NewFileServiceLeaseJournal(fs, "sirius/read-leases", admission)
-	require.NoError(t, err)
-	managerA := NewPersistentLeaseManager(1, new(fakeProtector), journalA)
-	managerB := NewPersistentLeaseManager(1, new(fakeProtector), journalB)
-	require.NoError(t, managerA.Replay(ctx))
-	require.NoError(t, managerB.Replay(ctx))
+	moruntime.RunTest("", func(moruntime.Runtime) {
+		lockservice.RunLockServicesForTest(
+			zap.DebugLevel,
+			[]string{"journal-cn-a", "journal-cn-b"},
+			time.Second,
+			func(_ lockservice.LockTableAllocator, services []lockservice.LockService) {
+				ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+				defer cancel()
+				fs, err := fileservice.NewMemoryFS("journal-capacity-race", fileservice.CacheConfig{}, nil)
+				require.NoError(t, err)
+				journalA, err := NewFileServiceLeaseJournal(fs, "sirius/read-leases", services[0])
+				require.NoError(t, err)
+				journalB, err := NewFileServiceLeaseJournal(fs, "sirius/read-leases", services[1])
+				require.NoError(t, err)
+				managerA := NewPersistentLeaseManager(1, new(fakeProtector), journalA)
+				managerB := NewPersistentLeaseManager(1, new(fakeProtector), journalB)
+				require.NoError(t, managerA.Replay(ctx))
+				require.NoError(t, managerB.Replay(ctx))
 
-	expires := uint64(time.Now().Add(time.Minute).UnixMilli())
-	firstEntered, secondWaiting, allowFirst := admission.gateNextPair()
-	resultA := make(chan error, 1)
-	resultB := make(chan error, 1)
-	go func() {
-		resultA <- managerA.Acquire(ctx, []*Lease{testDurableLease(t, 1, expires)})
-	}()
-	select {
-	case <-firstEntered:
-	case <-time.After(time.Second):
-		t.Fatal("first journal admission did not enter the shared critical section")
-	}
-	go func() {
-		resultB <- managerB.Acquire(ctx, []*Lease{testDurableLease(t, 2, expires)})
-	}()
-	select {
-	case <-secondWaiting:
-	case <-time.After(time.Second):
-		t.Fatal("second journal admission did not wait on the shared coordinator")
-	}
-	close(allowFirst)
-	require.NoError(t, <-resultA)
-	err = <-resultB
-	require.ErrorContains(t, err, "capacity reached")
-	if got := admission.maxConcurrent(); got != 1 {
-		t.Fatalf("journal critical section concurrency = %d, want 1", got)
-	}
+				entered := make(chan struct{})
+				allowFirst := make(chan struct{})
+				journalA.admission = &gatedJournalAdmission{
+					delegate: journalA.admission,
+					entered:  entered,
+					release:  allowFirst,
+				}
+				expires := uint64(time.Now().Add(time.Minute).UnixMilli())
+				leaseA := testDurableLease(t, 1, expires)
+				leaseB := testDurableLease(t, 2, expires)
+				resultA := make(chan error, 1)
+				resultB := make(chan error, 1)
+				go func() {
+					resultA <- managerA.Acquire(ctx, []*Lease{leaseA})
+				}()
+				select {
+				case <-entered:
+				case <-ctx.Done():
+					t.Fatal("first journal admission did not acquire the distributed lock")
+				}
+				go func() {
+					resultB <- managerB.Acquire(ctx, []*Lease{leaseB})
+				}()
+				row := journalAdmissionLockRow(journalA.admissionKey)
+				require.NoError(t, lockservice.WaitWaiters(services[0], 0, journalAdmissionLockTableID, row[:], 1))
+				close(allowFirst)
+				require.NoError(t, <-resultA)
+				require.ErrorContains(t, <-resultB, "capacity reached")
 
-	journalC, err := NewFileServiceLeaseJournal(fs, "sirius/read-leases", admission)
-	require.NoError(t, err)
-	afterWriters := NewPersistentLeaseManager(1, new(fakeProtector), journalC)
-	require.NoError(t, afterWriters.Replay(ctx))
-	require.Len(t, afterWriters.leases, 1)
+				journalC, err := NewFileServiceLeaseJournal(fs, "sirius/read-leases", services[1])
+				require.NoError(t, err)
+				afterWriters := NewPersistentLeaseManager(1, new(fakeProtector), journalC)
+				require.NoError(t, afterWriters.Replay(ctx))
+				require.Len(t, afterWriters.leases, 1)
+			},
+			nil,
+		)
+	})
 }
 
 func TestAdmissionReconcilesRemoteRevocationBeforeCapacity(t *testing.T) {
@@ -1415,6 +1393,28 @@ func TestAdmissionRejectsInvalidInputsBeforePublishing(t *testing.T) {
 	require.ErrorContains(t, err, "prepare table")
 	require.False(t, IsNotEligible(err))
 
+	r = valid()
+	r.Provider = &fakeProvider{err: NotEligible(EligibilitySnapshot, "manifest exceeds maximum")}
+	_, err = Admit(context.Background(), r)
+	require.ErrorContains(t, err, "manifest exceeds maximum")
+	require.NotContains(t, err.Error(), "prepare table", "typed provider declines must reach the compile caller unchanged")
+	require.True(t, IsNotEligible(err))
+	reason, ok := NotEligibleReason(err)
+	require.True(t, ok)
+	require.Equal(t, EligibilitySnapshot, reason)
+
+	r = valid()
+	protector := new(fakeProtector)
+	r.Leases = NewLeaseManager(1, protector)
+	r.Provider = &fakeProvider{facts: SnapshotFacts{Manifest: make([]byte, MaxManifestBytes+1), CanonicalSchema: read.Schema}}
+	_, err = Admit(context.Background(), r)
+	require.ErrorContains(t, err, "size bound")
+	require.True(t, IsNotEligible(err), "an otherwise valid oversized snapshot must fall back to native execution")
+	reason, ok = NotEligibleReason(err)
+	require.True(t, ok)
+	require.Equal(t, EligibilitySnapshot, reason)
+	require.Zero(t, protector.registered, "size decline must happen before lease publication")
+
 	for _, facts := range []SnapshotFacts{
 		{Manifest: []byte("m"), CanonicalSchema: read.Schema, CommittedInMemory: true},
 		{Manifest: []byte("m"), CanonicalSchema: read.Schema, Uncommitted: true},
@@ -1443,7 +1443,7 @@ func TestAdmissionRejectsInvalidInputsBeforePublishing(t *testing.T) {
 	_, err = Admit(context.Background(), r)
 	require.ErrorContains(t, err, "create read reference")
 
-	protector := &fakeProtector{fail: true}
+	protector = &fakeProtector{fail: true}
 	r = valid()
 	r.Leases = NewLeaseManager(1, protector)
 	_, err = Admit(context.Background(), r)
@@ -1534,15 +1534,19 @@ func TestResolverServerLifecycle(t *testing.T) {
 }
 
 func TestFileServiceLeaseJournalValidationAndAuthority(t *testing.T) {
-	_, err := NewFileServiceLeaseJournal(nil, "leases", newTestJournalAdmission())
+	_, err := NewFileServiceLeaseJournal(nil, "leases", nil)
+	require.ErrorContains(t, err, "lock service")
+	_, err = newFileServiceLeaseJournal(nil, "leases", newTestJournalAdmission())
 	require.Error(t, err)
 	fs, err := fileservice.NewMemoryFS("journal-validation", fileservice.CacheConfig{}, nil)
 	require.NoError(t, err)
-	_, err = NewFileServiceLeaseJournal(fs, "leases", nil)
+	_, err = NewFileServiceLeaseJournal(fs, "leases", &struct{ lockservice.LockService }{})
+	require.ErrorContains(t, err, "lacks fenced callbacks")
+	_, err = newFileServiceLeaseJournal(fs, "leases", nil)
 	require.Error(t, err)
-	_, err = NewFileServiceLeaseJournal(fs, "../leases", newTestJournalAdmission())
+	_, err = newFileServiceLeaseJournal(fs, "../leases", newTestJournalAdmission())
 	require.Error(t, err)
-	journal, err := NewFileServiceLeaseJournal(fs, "/sirius/read-leases/", newTestJournalAdmission())
+	journal, err := newFileServiceLeaseJournal(fs, "/sirius/read-leases/", newTestJournalAdmission())
 	require.NoError(t, err)
 	_, err = journal.StoreIfCapacity(context.Background(), []*Lease{nil}, 1)
 	require.Error(t, err)
@@ -1590,7 +1594,7 @@ func TestFileServiceLeaseJournalAuthorityLinearizesRelease(t *testing.T) {
 	ctx := context.Background()
 	fs, err := fileservice.NewMemoryFS("journal-authority-race", fileservice.CacheConfig{}, nil)
 	require.NoError(t, err)
-	journal, err := NewFileServiceLeaseJournal(fs, "sirius/read-leases", newTestJournalAdmission())
+	journal, err := newFileServiceLeaseJournal(fs, "sirius/read-leases", newTestJournalAdmission())
 	require.NoError(t, err)
 	lease := testDurableLease(t, 9, uint64(time.Now().Add(time.Minute).UnixMilli()))
 	storeJournalLease(t, journal, lease)
@@ -1627,9 +1631,9 @@ func TestFileServiceLeaseJournalAuthorityIgnoresAnotherClientStaleCache(t *testi
 	clientA := newStaleAuthorityCacheFS(shared)
 	clientB := newStaleAuthorityCacheFS(shared)
 	admission := newTestJournalAdmission()
-	journalA, err := NewFileServiceLeaseJournal(clientA, "sirius/read-leases", admission)
+	journalA, err := newFileServiceLeaseJournal(clientA, "sirius/read-leases", admission)
 	require.NoError(t, err)
-	journalB, err := NewFileServiceLeaseJournal(clientB, "sirius/read-leases", admission)
+	journalB, err := newFileServiceLeaseJournal(clientB, "sirius/read-leases", admission)
 	require.NoError(t, err)
 	lease := testDurableLease(t, 10, uint64(time.Now().Add(time.Minute).UnixMilli()))
 	storeJournalLease(t, journalA, lease)
@@ -1663,7 +1667,7 @@ func TestFileServiceLeaseJournalCleansOrphanAuthoritiesInBoundedBatches(t *testi
 	ctx := context.Background()
 	fs, err := fileservice.NewMemoryFS("journal-orphan-batches", fileservice.CacheConfig{}, nil)
 	require.NoError(t, err)
-	journal, err := NewFileServiceLeaseJournal(fs, "sirius/read-leases", newTestJournalAdmission())
+	journal, err := newFileServiceLeaseJournal(fs, "sirius/read-leases", newTestJournalAdmission())
 	require.NoError(t, err)
 	refs := make([][]byte, 0, journalCleanupBatchSize+1)
 	for i := 0; i <= journalCleanupBatchSize; i++ {
@@ -1764,7 +1768,7 @@ func TestLeaseMutationLockHonorsContext(t *testing.T) {
 	fs, err := fileservice.NewMemoryFS("journal-context-lock", fileservice.CacheConfig{}, nil)
 	require.NoError(t, err)
 	admission := newTestJournalAdmission()
-	journal, err := NewFileServiceLeaseJournal(fs, "sirius/read-leases", admission)
+	journal, err := newFileServiceLeaseJournal(fs, "sirius/read-leases", admission)
 	require.NoError(t, err)
 	require.NoError(t, admission.lock.lock(context.Background()))
 	defer admission.lock.unlock()
@@ -1791,7 +1795,7 @@ func TestFileServiceLeaseJournalRejectsCorruption(t *testing.T) {
 			ctx := context.Background()
 			fs, err := fileservice.NewMemoryFS("journal-corrupt-"+tc.name, fileservice.CacheConfig{}, nil)
 			require.NoError(t, err)
-			journal, err := NewFileServiceLeaseJournal(fs, "sirius/read-leases", newTestJournalAdmission())
+			journal, err := newFileServiceLeaseJournal(fs, "sirius/read-leases", newTestJournalAdmission())
 			require.NoError(t, err)
 			name := journal.activePath(bytes.Repeat([]byte{5}, 32))
 			data := make([]byte, 0, journalHeaderSize+len(tc.data))
@@ -1809,7 +1813,7 @@ func TestFileServiceLeaseJournalRejectsNonCanonicalName(t *testing.T) {
 	ctx := context.Background()
 	fs, err := fileservice.NewMemoryFS("journal-name", fileservice.CacheConfig{}, nil)
 	require.NoError(t, err)
-	journal, err := NewFileServiceLeaseJournal(fs, "sirius/read-leases", newTestJournalAdmission())
+	journal, err := newFileServiceLeaseJournal(fs, "sirius/read-leases", newTestJournalAdmission())
 	require.NoError(t, err)
 	lease := testDurableLease(t, 0xab, uint64(time.Now().Add(time.Minute).UnixMilli()))
 	storeJournalLease(t, journal, lease)

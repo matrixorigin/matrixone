@@ -1465,6 +1465,141 @@ func TestLockSuccWithKeepBindTimeout(t *testing.T) {
 
 }
 
+func TestRunExclusiveLockSerializesAcrossServices(t *testing.T) {
+	runLockServiceTests(t, []string{"exclusive-callback-1", "exclusive-callback-2"}, func(_ *lockTableAllocator, services []*service) {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		const tableID uint64 = 1<<62 + 1
+		row := []byte("journal")
+		firstEntered := make(chan struct{})
+		allowFirst := make(chan struct{})
+		secondEntered := make(chan struct{})
+		firstDone := make(chan error, 1)
+		secondDone := make(chan error, 1)
+
+		go func() {
+			firstDone <- services[0].RunExclusiveLock(ctx, tableID, row, []byte("exclusive-1"), func(callbackCtx context.Context) error {
+				close(firstEntered)
+				select {
+				case <-allowFirst:
+					return nil
+				case <-callbackCtx.Done():
+					return context.Cause(callbackCtx)
+				}
+			})
+		}()
+		select {
+		case <-firstEntered:
+		case <-ctx.Done():
+			t.Fatal("first exclusive callback did not start")
+		}
+		go func() {
+			secondDone <- services[1].RunExclusiveLock(ctx, tableID, row, []byte("exclusive-2"), func(context.Context) error {
+				close(secondEntered)
+				return nil
+			})
+		}()
+		waitWaiters(t, services[0], tableID, row, 1)
+		select {
+		case <-secondEntered:
+			t.Fatal("second exclusive callback overlapped the first")
+		default:
+		}
+		close(allowFirst)
+		require.NoError(t, <-firstDone)
+		select {
+		case <-secondEntered:
+		case <-ctx.Done():
+			t.Fatal("second exclusive callback did not start after release")
+		}
+		require.NoError(t, <-secondDone)
+	})
+}
+
+func TestRunExclusiveLockCancelsAndJoinsFencedOwnership(t *testing.T) {
+	runLockServiceTests(t, []string{"exclusive-fence"}, func(_ *lockTableAllocator, services []*service) {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		service := services[0]
+		const tableID uint64 = 1<<62 + 1
+		row := []byte("journal")
+		callbackEntered := make(chan struct{})
+		callbackStopped := make(chan struct{})
+		runDone := make(chan error, 1)
+		go func() {
+			runDone <- service.RunExclusiveLock(ctx, tableID, row, []byte("exclusive-fenced"), func(callbackCtx context.Context) error {
+				close(callbackEntered)
+				<-callbackCtx.Done()
+				close(callbackStopped)
+				return context.Cause(callbackCtx)
+			})
+		}()
+		select {
+		case <-callbackEntered:
+		case <-ctx.Done():
+			t.Fatal("exclusive callback did not start")
+		}
+
+		bind, err := service.GetLockTableBind(0, tableID)
+		require.NoError(t, err)
+		bind.Version++
+		fenceDone := make(chan int, 1)
+		go func() { fenceDone <- service.activeTxnHolder.fenceByBindChanged(bind) }()
+		select {
+		case <-callbackStopped:
+		case <-ctx.Done():
+			t.Fatal("ownership loss did not cancel the exclusive callback")
+		}
+		select {
+		case fenced := <-fenceDone:
+			require.Equal(t, 1, fenced)
+		case <-ctx.Done():
+			t.Fatal("binding fence did not join the canceled callback")
+		}
+		err = <-runDone
+		require.ErrorIs(t, err, ErrLockTableBindChanged)
+	})
+}
+
+func TestRunExclusiveLockPropagatesCallerCancellation(t *testing.T) {
+	runLockServiceTests(t, []string{"exclusive-cancel"}, func(_ *lockTableAllocator, services []*service) {
+		ctx, cancel := context.WithCancel(context.Background())
+		callbackEntered := make(chan struct{})
+		runDone := make(chan error, 1)
+		go func() {
+			runDone <- services[0].RunExclusiveLock(ctx, 1<<62+1, []byte("journal"), []byte("exclusive-canceled"), func(callbackCtx context.Context) error {
+				close(callbackEntered)
+				<-callbackCtx.Done()
+				return nil
+			})
+		}()
+		<-callbackEntered
+		cancel()
+		require.ErrorIs(t, <-runDone, context.Canceled)
+	})
+}
+
+func TestRunExclusiveLockReleasesOwnershipAfterCallbackPanic(t *testing.T) {
+	runLockServiceTests(t, []string{"exclusive-panic"}, func(_ *lockTableAllocator, services []*service) {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		service := services[0]
+		const tableID uint64 = 1<<62 + 1
+		row := []byte("journal")
+		var recovered any
+		func() {
+			defer func() { recovered = recover() }()
+			_ = service.RunExclusiveLock(ctx, tableID, row, []byte("exclusive-panicked"), func(context.Context) error {
+				panic("callback panic")
+			})
+		}()
+		require.Equal(t, "callback panic", recovered)
+		require.NoError(t, service.RunExclusiveLock(ctx, tableID, row, []byte("exclusive-after-panic"), func(context.Context) error {
+			return nil
+		}))
+	})
+}
+
 func TestAbortRemoteDeadlockTxn(t *testing.T) {
 	runLockServiceTestsWithLevel(
 		t,

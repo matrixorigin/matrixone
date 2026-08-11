@@ -868,12 +868,18 @@ func Admit(ctx context.Context, r AdmissionRequest) (map[int32][]byte, error) {
 			read.AccountID = r.AccountID
 			facts, err := r.Provider.PrepareSnapshotRead(ctx, read, r.SnapshotTS)
 			if err != nil {
+				if IsNotEligible(err) {
+					return nil, err
+				}
 				return nil, moerr.NewInternalErrorNoCtxf("substrait: prepare table %d: %v", read.TableID, err)
 			}
 			if facts.CommittedInMemory || facts.Uncommitted || facts.VisibleTombstones || facts.NonTAE {
 				return nil, notEligiblef(EligibilitySnapshot, "table %d has snapshot state unsupported by Sirius v1", read.TableID)
 			}
-			if len(facts.Manifest) == 0 || len(facts.Manifest) > maxManifestSize || len(facts.CanonicalSchema) > maxCanonicalSchemaSize || !equalBytes(facts.CanonicalSchema, read.Schema) {
+			if len(facts.Manifest) > maxManifestSize || len(facts.CanonicalSchema) > maxCanonicalSchemaSize {
+				return nil, notEligiblef(EligibilitySnapshot, "table %d snapshot metadata exceeds the Sirius v1 size bound", read.TableID)
+			}
+			if len(facts.Manifest) == 0 || !equalBytes(facts.CanonicalSchema, read.Schema) {
 				return nil, moerr.NewInternalErrorNoCtxf("substrait: table %d schema or manifest mismatch", read.TableID)
 			}
 			ref := make([]byte, 32)

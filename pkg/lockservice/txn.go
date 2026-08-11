@@ -56,9 +56,18 @@ type activeTxn struct {
 	remoteService  string
 	deadlockFound  bool
 	bindChanged    bool
+	// ownership is installed only for the optional exclusive-callback API.
+	// Ordinary transactions retain their existing allocation and hot path.
+	ownership *exclusiveLockOwnership
 
 	// test-only hook: called before lockAdded; return non-nil to abort
 	beforeLockAdded func(txnID []byte, locks [][]byte) error
+}
+
+type exclusiveLockOwnership struct {
+	ctx    context.Context
+	cancel context.CancelCauseFunc
+	done   chan struct{}
 }
 
 type contextUnlocker interface {
@@ -479,6 +488,7 @@ func (txn *activeTxn) removeClosedLockTable(
 }
 
 func (txn *activeTxn) reset() {
+	txn.cancelOwnershipLocked(ErrTxnNotFound)
 	for g, h := range txn.lockHolders {
 		for table, cs := range h.tableKeys {
 			cs.close()
@@ -499,6 +509,7 @@ func (txn *activeTxn) reset() {
 	txn.remoteService = ""
 	txn.deadlockFound = false
 	txn.bindChanged = false
+	txn.ownership = nil
 }
 
 func (txn *activeTxn) abort(
@@ -518,6 +529,7 @@ func (txn *activeTxn) abort(
 	}
 
 	txn.deadlockFound = true
+	txn.cancelOwnershipLocked(err)
 	if len(txn.blockedWaiters) == 0 {
 		return
 	}
@@ -528,8 +540,13 @@ func (txn *activeTxn) abort(
 
 func (txn *activeTxn) fenceByBindChanged(bind pb.LockTable, logger *log.MOLogger) bool {
 	txn.Lock()
-	defer txn.Unlock()
-	return txn.fenceByBindChangedLocked(bind, logger)
+	changed := txn.fenceByBindChangedLocked(bind, logger)
+	done := txn.ownershipDoneLocked()
+	txn.Unlock()
+	if changed && done != nil {
+		<-done
+	}
+	return changed
 }
 
 func (txn *activeTxn) fenceByBindChangedLocked(bind pb.LockTable, logger *log.MOLogger) bool {
@@ -545,10 +562,24 @@ func (txn *activeTxn) fenceByBindChangedLocked(bind pb.LockTable, logger *log.MO
 	}
 
 	txn.bindChanged = true
+	txn.cancelOwnershipLocked(ErrLockTableBindChanged)
 	for _, w := range txn.blockedWaiters {
 		w.notify(notifyValue{err: ErrLockTableBindChanged}, logger)
 	}
 	return true
+}
+
+func (txn *activeTxn) cancelOwnershipLocked(cause error) {
+	if txn.ownership != nil {
+		txn.ownership.cancel(cause)
+	}
+}
+
+func (txn *activeTxn) ownershipDoneLocked() <-chan struct{} {
+	if txn.ownership == nil {
+		return nil
+	}
+	return txn.ownership.done
 }
 
 func (txn *activeTxn) cancelBlocks(

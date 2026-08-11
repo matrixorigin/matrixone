@@ -203,6 +203,10 @@ func TestSnapshotProviderStopsObjectVisitationAtManifestBound(t *testing.T) {
 	provider := &SnapshotProvider{MPool: mpool.MustNewZero(), DataDir: "shared", Relations: map[uint64]engine.Relation{42: relation}}
 	_, err = provider.prepareSnapshotRead(context.Background(), read, make([]byte, types.TxnTsSize), len(one))
 	require.ErrorContains(t, err, "manifest exceeds maximum")
+	require.True(t, substrait.IsNotEligible(err))
+	reason, ok := substrait.NotEligibleReason(err)
+	require.True(t, ok)
+	require.Equal(t, substrait.EligibilitySnapshot, reason)
 	require.Equal(t, 2, relation.visits)
 	require.Zero(t, relation.starCalls)
 }
