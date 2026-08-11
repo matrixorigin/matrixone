@@ -274,7 +274,7 @@ func TestChunkedColumnRejectsPayloadRowCountMismatch(t *testing.T) {
 	require.NoError(t, vector.AppendFixed(source, int32(2), false, mp))
 	defer source.Free(mp)
 
-	encoded, err := encodeChunkedColumn(source)
+	encoded, _, err := encodeChunkedColumn(source)
 	require.NoError(t, err)
 	_, metas, err := parseColumnChunkHeader(encoded, uint32(len(encoded)))
 	require.NoError(t, err)
