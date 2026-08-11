@@ -137,4 +137,18 @@ WHERE target_database_name = 'view_metadata_refresh'
 AND target_relation_name IN ('removed_direct','removed_downstream')
 AND status <> 'CURRENT';
 
+CREATE TABLE cte_limited_source (a INT);
+CREATE VIEW cte_limited_direct AS SELECT a FROM cte_limited_source;
+CREATE VIEW cte_limited_downstream AS SELECT a FROM cte_limited_direct;
+SET cte_max_recursion_depth = 0;
+SET cte_max_memory_bytes = 1;
+DROP TABLE cte_limited_source;
+SELECT count(*) = 2 AS system_cte_limits_used
+FROM mo_catalog.mo_view_refresh
+WHERE target_database_name = 'view_metadata_refresh'
+AND target_relation_name IN ('cte_limited_direct','cte_limited_downstream')
+AND status <> 'CURRENT';
+SET cte_max_recursion_depth = DEFAULT;
+SET cte_max_memory_bytes = DEFAULT;
+
 DROP DATABASE view_metadata_refresh;

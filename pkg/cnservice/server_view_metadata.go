@@ -30,10 +30,19 @@ func (s *service) startViewMetadataRecovery() error {
 	return s.stopper.RunNamedTask("view-metadata-recovery", func(ctx context.Context) {
 		ticker := time.NewTicker(viewMetadataRecoveryInterval)
 		defer ticker.Stop()
+		initialized, previouslyEnabled := false, false
 		runViewMetadataRecoveryLoop(ctx, ticker.C, func(ctx context.Context) error {
-			if !clusterservice.AllKnownCNsSupportViewMetadataRefresh(s.cfg.UUID) {
+			enabled := clusterservice.AllKnownCNsSupportViewMetadataRefresh(s.cfg.UUID)
+			if !enabled {
+				initialized, previouslyEnabled = true, false
 				return nil
 			}
+			if initialized && !previouslyEnabled {
+				if err := compile.StartViewMetadataRevalidation(ctx, s.sqlExecutor, s.cfg.UUID); err != nil {
+					return err
+				}
+			}
+			initialized, previouslyEnabled = true, true
 			return compile.RunViewMetadataRecovery(ctx, s.sqlExecutor, s.cfg.UUID)
 		}, func(err error) {
 			s.logger.Warn("View metadata recovery tick failed", zap.Error(err))

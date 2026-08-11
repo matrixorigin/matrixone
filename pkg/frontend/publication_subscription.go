@@ -37,6 +37,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/compile"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 // sanitizeSQLInput escapes a string for safe SQL interpolation WITHOUT wrapping in quotes.
@@ -693,7 +694,7 @@ func invalidatePublicationViewMetadata(
 	if err := bh.Exec(systemCtx, catalog.ViewMetadataLifecycleGateSQL); err != nil {
 		return err
 	}
-	return bh.Exec(systemCtx, compile.PublicationViewMetadataInvalidationSQL(
+	return bh.Exec(process.WithSystemCTELimits(systemCtx), compile.PublicationViewMetadataInvalidationSQL(
 		pub.PubAccountId, pub.DbId, uint64(time.Now().UnixNano())))
 }
 

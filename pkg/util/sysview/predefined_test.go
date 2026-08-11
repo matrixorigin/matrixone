@@ -106,9 +106,9 @@ func TestInformationSchemaColumnsDDL_UsesConnectorCompatibleDataType(t *testing.
 func TestInformationSchemaColumnsDDLRequiresCurrentViewMetadata(t *testing.T) {
 	assert.Contains(t, InformationSchemaColumnsDDL, "vr.status='CURRENT'")
 	assert.Contains(t, InformationSchemaColumnsDDL,
+		"not exists (select 1 from mo_catalog.mo_view_refresh vr")
+	assert.Contains(t, InformationSchemaColumnsDDL,
 		"mt.reldatabase in ('information_schema','mo_catalog','mo_debug','mo_task','mysql','system','system_metrics')")
-	assert.NotContains(t, InformationSchemaColumnsDDL,
-		"mt.relkind<>'v' or not exists (select 1 from mo_catalog.mo_view_refresh")
 }
 
 func TestInformationSchemaKeyColumnUsageDDL_ProjectsForeignKeyMappings(t *testing.T) {

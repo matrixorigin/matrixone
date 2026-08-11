@@ -43,6 +43,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 type tableType string
@@ -662,7 +663,7 @@ func doDropSnapshot(ctx context.Context, ses *Session, stmt *tree.DropSnapShot) 
 			if err = bh.Exec(systemCtx, catalog.ViewMetadataLifecycleGateSQL); err != nil {
 				return err
 			}
-			if err = bh.Exec(systemCtx, compile.SnapshotViewMetadataInvalidationSQL(
+			if err = bh.Exec(process.WithSystemCTELimits(systemCtx), compile.SnapshotViewMetadataInvalidationSQL(
 				string(snapshotData), uint64(time.Now().UnixNano()))); err != nil {
 				return err
 			}
@@ -871,6 +872,11 @@ func doRestoreSnapshot(ctx context.Context, ses *Session, stmt *tree.RestoreSnap
 
 	if stmt.Level == tree.RESTORELEVELACCOUNT {
 		if err = restoreSystemCatalogsAfterObjects(ctx, ses.GetService(), bh, snapshot.ts, restoreAccount, toAccountId); err != nil {
+			return stats, err
+		}
+	}
+	if stmt.Level == tree.RESTORELEVELACCOUNT && toAccountId == catalog.System_Account {
+		if err = seedMissingViewMetadataAfterCatalogReset(ctx, ses, bh); err != nil {
 			return stats, err
 		}
 	}
@@ -2809,6 +2815,9 @@ func restoreToCluster(ctx context.Context,
 			return err
 		}
 	}
+	if err = seedMissingViewMetadataAfterCatalogReset(ctx, ses, bh); err != nil {
+		return err
+	}
 
 	return nil
 }
@@ -2864,7 +2873,24 @@ func restoreToAccountUsingCluster(
 	if err != nil {
 		return err
 	}
+	if toAccountId == catalog.System_Account {
+		if err = seedMissingViewMetadataAfterCatalogReset(ctx, ses, bh); err != nil {
+			return err
+		}
+	}
 	return err
+}
+
+func seedMissingViewMetadataAfterCatalogReset(
+	ctx context.Context,
+	ses *Session,
+	bh BackgroundExec,
+) error {
+	if !compile.ViewMetadataRefreshEnabled(ses.GetService()) {
+		return nil
+	}
+	systemCtx := process.WithSystemCTELimits(defines.AttachAccountId(ctx, catalog.System_Account))
+	return bh.Exec(systemCtx, compile.SeedMissingViewMetadataSQL(uint64(time.Now().UnixNano())))
 }
 
 func createDroppedAccount(ctx context.Context, ses *Session, bh BackgroundExec, snapshotName string, account accountRecord) (err error) {

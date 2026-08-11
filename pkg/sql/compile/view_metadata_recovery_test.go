@@ -41,9 +41,10 @@ import (
 )
 
 type viewMetadataCleanupRecordingExecutor struct {
-	sqls     []string
-	results  []executor.Result
-	failures map[int]error
+	sqls            []string
+	systemCTELimits []bool
+	results         []executor.Result
+	failures        map[int]error
 }
 
 type readyViewMetadataCluster struct {
@@ -61,11 +62,12 @@ func (readyViewMetadataCluster) GetCNService(
 }
 
 func (e *viewMetadataCleanupRecordingExecutor) Exec(
-	_ context.Context,
+	ctx context.Context,
 	sql string,
 	_ executor.Options,
 ) (executor.Result, error) {
 	e.sqls = append(e.sqls, sql)
+	e.systemCTELimits = append(e.systemCTELimits, process.HasSystemCTELimits(ctx))
 	call := len(e.sqls)
 	if err := e.failures[call]; err != nil {
 		return executor.Result{}, err
@@ -97,6 +99,7 @@ func TestRelationRemovalUsesOneAtomicRecursiveClosureInvalidation(t *testing.T) 
 	root := viewRefreshIdentityKey{accountID: 1, databaseID: 2, logicalID: 999}
 	require.NoError(t, c.enqueueDependentViewClosure("root predicate", 77, root))
 	require.Len(t, exec.sqls, 1)
+	require.Equal(t, []bool{true}, exec.systemCTELimits)
 	enqueueSQL := exec.sqls[0]
 	require.Contains(t, enqueueSQL, "with recursive affected")
 	require.Contains(t, enqueueSQL, "root predicate")
@@ -108,6 +111,14 @@ func TestRelationRemovalUsesOneAtomicRecursiveClosureInvalidation(t *testing.T) 
 		"not ((a.account_id=1 and a.target_database_id=2 and "+
 			"coalesce(nullif(a.target_logical_id,0),a.target_relation_id)=999))")
 	require.NotContains(t, enqueueSQL, " limit ")
+}
+
+func TestSeedMissingViewMetadataUsesOnlyUserViewsWithoutState(t *testing.T) {
+	sql := SeedMissingViewMetadataSQL(77)
+	require.Contains(t, sql, "t.relkind='v'")
+	require.Contains(t, sql, "r.target_relation_id is null")
+	require.Contains(t, sql, "77,0,'DISCOVERING'")
+	require.Contains(t, sql, "t.reldatabase not in ('")
 }
 
 func TestRecoveryPropagationOnlyInvalidatesCurrentDependents(t *testing.T) {
@@ -344,6 +355,17 @@ func TestNextLegacyViewScanCursorIsMonotonicAndWraps(t *testing.T) {
 	require.Equal(t, "new db", next.databaseName)
 	require.Equal(t, "new view", next.relationName)
 	require.Equal(t, catalog.ViewRefreshStatusLegacyScan, next.status)
+
+	revalidating := cursor
+	revalidating.status = catalog.ViewRefreshStatusRevalidateScan
+	revalidated, ok := nextLegacyViewScanCursor(revalidating, []legacyViewCandidate{{
+		accountID: 2, databaseName: "new db", relationName: "new view",
+	}})
+	require.True(t, ok)
+	require.Equal(t, catalog.ViewRefreshStatusRevalidateScan, revalidated.status)
+	revalidated, ok = nextLegacyViewScanCursor(revalidated, nil)
+	require.True(t, ok)
+	require.Equal(t, catalog.ViewRefreshStatusLegacyScan, revalidated.status)
 
 	done, ok := nextLegacyViewScanCursor(next, nil)
 	require.True(t, ok)
@@ -658,6 +680,45 @@ func TestLegacyDiscoveryCursorFailurePaths(t *testing.T) {
 		require.Contains(t, exec.sqls[1],
 			"t.reldatabase not in ('information_schema','mo_catalog','mo_debug','mo_task','mysql','system','system_metrics')")
 	})
+
+	t.Run("revalidation page enqueues current view", func(t *testing.T) {
+		proc := testutil.NewProcess(t)
+		page := executor.NewMemResult([]types.Type{
+			types.T_uint32.ToType(), types.T_uint64.ToType(), types.T_uint64.ToType(),
+			types.T_uint64.ToType(), types.T_varchar.ToType(), types.T_varchar.ToType(),
+			types.T_varchar.ToType(), types.T_uint64.ToType(), types.T_varchar.ToType(),
+		}, proc.Mp())
+		page.NewBatchWithRowCount(1)
+		require.NoError(t, executor.AppendFixedRows(page, 0, []uint32{1}))
+		require.NoError(t, executor.AppendFixedRows(page, 1, []uint64{2}))
+		require.NoError(t, executor.AppendFixedRows(page, 2, []uint64{3}))
+		require.NoError(t, executor.AppendFixedRows(page, 3, []uint64{4}))
+		require.NoError(t, executor.AppendStringRows(page, 4, []string{"db"}))
+		require.NoError(t, executor.AppendStringRows(page, 5, []string{"view"}))
+		require.NoError(t, executor.AppendStringRows(page, 6, []string{catalog.SystemViewRel}))
+		require.NoError(t, executor.AppendFixedRows(page, 7, []uint64{3}))
+		require.NoError(t, executor.AppendStringRows(page, 8, []string{viewRefreshStatusCurrent}))
+		exec := &viewMetadataCleanupRecordingExecutor{results: []executor.Result{
+			makeCursor(t, proc, catalog.ViewRefreshStatusRevalidateScan),
+			page.GetResult(), {}, {AffectedRows: 1},
+		}}
+		count, err := discoverLegacyViewPage(proc, exec, executor.Options{})
+		require.NoError(t, err)
+		require.Equal(t, 1, count)
+		require.Len(t, exec.sqls, 4)
+		require.Contains(t, exec.sqls[2], "set target_generation=target_generation+1,status='PENDING'")
+		require.Contains(t, exec.sqls[3], "source_relation_kind='REVALIDATE_SCAN'")
+	})
+}
+
+func TestBeginViewMetadataRevalidationResetsDurableCursor(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	exec := &viewMetadataCleanupRecordingExecutor{results: []executor.Result{{AffectedRows: 1}}}
+	installViewMetadataTestExecutor(t, proc, exec)
+	count, err := beginViewMetadataRevalidation(proc)
+	require.NoError(t, err)
+	require.Equal(t, 1, count)
+	require.Contains(t, exec.sqls[0], "source_relation_kind='REVALIDATE_SCAN'")
 }
 
 func TestRecoveryContextMissingSnapshotAndDependencyIdentity(t *testing.T) {

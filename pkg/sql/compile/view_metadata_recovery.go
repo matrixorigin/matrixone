@@ -46,8 +46,29 @@ const viewMetadataRecoveryPageSize = 32
 const viewMetadataRecoveryCallTimeout = 30 * time.Second
 
 type viewMetadataRecoveryCommand struct {
-	WorkerID string `json:"worker_id"`
-	Discover bool   `json:"discover"`
+	WorkerID   string `json:"worker_id"`
+	Discover   bool   `json:"discover"`
+	Revalidate bool   `json:"revalidate"`
+}
+
+// StartViewMetadataRevalidation starts one durable bounded pass over every
+// CURRENT user View after the rolling-upgrade capability barrier reopens.
+func StartViewMetadataRevalidation(ctx context.Context, sqlExecutor executor.SQLExecutor, workerID string) error {
+	command, err := json.Marshal(viewMetadataRecoveryCommand{WorkerID: workerID, Revalidate: true})
+	if err != nil {
+		return err
+	}
+	callCtx, cancel := context.WithTimeout(ctx, viewMetadataRecoveryCallTimeout)
+	defer cancel()
+	result, err := sqlExecutor.Exec(callCtx, fmt.Sprintf(
+		"select mo_ctl('CN','RefreshViewMetadata','%s')",
+		sqlquote.EscapeString(string(command))),
+		executor.Options{}.WithAccountID(catalog.System_Account))
+	if err != nil {
+		return err
+	}
+	result.Close()
+	return nil
 }
 
 // RunViewMetadataRecovery performs one bounded local-CN recovery tick. It is
@@ -140,7 +161,29 @@ func recoverViewMetadataCommand(proc *process.Process, parameter string) (int, e
 	if command.Discover {
 		return discoverLegacyViewMetadata(proc)
 	}
+	if command.Revalidate {
+		return beginViewMetadataRevalidation(proc)
+	}
 	return recoverOnePendingViewMetadata(proc, command.WorkerID)
+}
+
+func beginViewMetadataRevalidation(proc *process.Process) (int, error) {
+	v, ok := moruntime.ServiceRuntime(proc.GetService()).GetGlobalVariables(moruntime.InternalSQLExecutor)
+	if !ok {
+		return 0, moerr.NewInternalError(proc.Ctx, "internal SQL executor is unavailable")
+	}
+	result, err := v.(executor.SQLExecutor).Exec(proc.Ctx, fmt.Sprintf(
+		"update %s.%s set source_account_id=0,source_database_name='',source_relation_name='',"+
+			"source_relation_kind='%s',dependency_generation=dependency_generation+1 "+
+			"where account_id=0 and target_relation_id=0 and dependency_ordinal=0",
+		catalog.MO_CATALOG, catalog.MO_VIEW_DEPENDENCIES,
+		catalog.ViewRefreshStatusRevalidateScan), executor.Options{}.
+		WithDisableIncrStatement().WithTxn(proc.GetTxnOperator()).WithAccountID(catalog.System_Account))
+	if err != nil {
+		return 0, err
+	}
+	defer result.Close()
+	return int(result.AffectedRows), nil
 }
 
 func lockViewMetadataLifecycleGate(proc *process.Process) error {
@@ -195,14 +238,15 @@ type legacyViewScanCursor struct {
 }
 
 type legacyViewCandidate struct {
-	accountID    uint32
-	databaseID   uint64
-	relationID   uint64
-	logicalID    uint64
-	databaseName string
-	relationName string
-	relationKind string
-	missingState bool
+	accountID     uint32
+	databaseID    uint64
+	relationID    uint64
+	logicalID     uint64
+	databaseName  string
+	relationName  string
+	relationKind  string
+	missingState  bool
+	refreshStatus string
 }
 
 type recoveryCompilerContext struct {
@@ -529,7 +573,7 @@ func recoverOnePendingViewMetadata(proc *process.Process, workerID string) (int,
 		"select account_id,target_database_id,target_relation_id,target_logical_id,"+
 			"target_database_name,target_relation_name,target_generation,lease_epoch,status "+
 			"from %s.%s where status in ('%s','%s') and (next_retry_at is null or next_retry_at<=now()) "+
-			"order by account_id,target_relation_id limit 1",
+			"order by next_retry_at,attempts,account_id,target_relation_id limit 1",
 		catalog.MO_CATALOG, catalog.MO_VIEW_REFRESH,
 		viewRefreshStatusPending, viewRefreshStatusDiscovering), opts)
 	if err != nil {
@@ -602,8 +646,11 @@ func recoverOnePendingViewMetadata(proc *process.Process, workerID string) (int,
 	failure := classifyViewRefreshFailure(refreshErr)
 	switch failure.disposition {
 	case viewRefreshMarkInvalid:
-		return 0, updateViewRefreshFailure(proc, sqlExecutor, opts, pending,
-			viewRefreshStatusInvalid, failure.code, false)
+		if err = updateViewRefreshFailure(proc, sqlExecutor, opts, pending,
+			viewRefreshStatusInvalid, failure.code, false); err != nil {
+			return 0, err
+		}
+		return 1, nil
 	case viewRefreshRetry:
 		if failure.code == viewRefreshFailureCanceled || failure.code == viewRefreshFailureTxnConflict {
 			return 0, refreshErr
@@ -612,8 +659,11 @@ func recoverOnePendingViewMetadata(proc *process.Process, workerID string) (int,
 		if pending.legacyDiscovery {
 			retryStatus = viewRefreshStatusDiscovering
 		}
-		return 0, updateViewRefreshFailure(proc, sqlExecutor, opts, pending,
-			retryStatus, failure.code, true)
+		if err = updateViewRefreshFailure(proc, sqlExecutor, opts, pending,
+			retryStatus, failure.code, true); err != nil {
+			return 0, err
+		}
+		return 1, nil
 	default:
 		return 0, refreshErr
 	}
@@ -665,7 +715,8 @@ func discoverLegacyViewPage(
 		inserted.Close()
 		return 1, nil
 	}
-	if cursor.status != catalog.ViewRefreshStatusLegacyScan {
+	if cursor.status != catalog.ViewRefreshStatusLegacyScan &&
+		cursor.status != catalog.ViewRefreshStatusRevalidateScan {
 		return 0, moerr.NewInternalErrorf(
 			proc.Ctx, "invalid legacy View scan state %q", cursor.status)
 	}
@@ -673,7 +724,7 @@ func discoverLegacyViewPage(
 	escape := sqlquote.EscapeString
 	page, err := sqlExecutor.Exec(proc.Ctx, fmt.Sprintf(
 		"select t.account_id,t.reldatabase_id,t.rel_id,t.rel_logical_id,t.reldatabase,t.relname,"+
-			"t.relkind,r.target_relation_id from %s.%s t left join %s.%s r "+
+			"t.relkind,r.target_relation_id,r.status from %s.%s t left join %s.%s r "+
 			"on t.account_id=r.account_id and t.rel_id=r.target_relation_id where t.relkind='%s' "+
 			"and t.reldatabase not in ('%s') and "+
 			"(t.account_id>%d or (t.account_id=%d and t.reldatabase>'%s') or "+
@@ -694,37 +745,57 @@ func discoverLegacyViewPage(
 		relationIDs := vector.MustFixedColNoTypeCheck[uint64](columns[2])
 		logicalIDs := vector.MustFixedColNoTypeCheck[uint64](columns[3])
 		for row := range rows {
+			refreshStatus := ""
+			if !columns[8].IsNull(uint64(row)) {
+				refreshStatus = columns[8].GetStringAt(row)
+			}
 			candidates = append(candidates, legacyViewCandidate{
 				accountID: accounts[row], databaseID: databaseIDs[row], relationID: relationIDs[row],
 				logicalID: logicalIDs[row], databaseName: columns[4].GetStringAt(row),
 				relationName: columns[5].GetStringAt(row), relationKind: columns[6].GetStringAt(row),
-				missingState: columns[7].IsNull(uint64(row)),
+				missingState: columns[7].IsNull(uint64(row)), refreshStatus: refreshStatus,
 			})
 		}
 		return true
 	})
 	page.Close()
 
-	generation := uint64(proc.GetTxnOperator().SnapshotTS().PhysicalTime)
 	for index := range candidates {
 		candidate := &candidates[index]
-		if candidate.relationKind != catalog.SystemViewRel || !candidate.missingState {
+		if candidate.relationKind != catalog.SystemViewRel {
 			continue
 		}
-		if candidate.logicalID == 0 {
-			candidate.logicalID = candidate.relationID
+		if candidate.missingState {
+			generation := uint64(proc.GetTxnOperator().SnapshotTS().PhysicalTime)
+			if candidate.logicalID == 0 {
+				candidate.logicalID = candidate.relationID
+			}
+			inserted, insertErr := sqlExecutor.Exec(proc.Ctx, fmt.Sprintf(
+				"insert into %s.%s (%s) values (%d,%d,%d,%d,'%s','%s',%d,0,'%s',"+
+					"0,null,'',0,null,0)",
+				catalog.MO_CATALOG, catalog.MO_VIEW_REFRESH, catalog.MoViewRefreshColumns,
+				candidate.accountID, candidate.databaseID, candidate.relationID, candidate.logicalID,
+				escape(candidate.databaseName), escape(candidate.relationName), generation,
+				viewRefreshStatusDiscovering), opts)
+			if insertErr != nil {
+				return 0, insertErr
+			}
+			inserted.Close()
+			continue
 		}
-		inserted, insertErr := sqlExecutor.Exec(proc.Ctx, fmt.Sprintf(
-			"insert into %s.%s (%s) values (%d,%d,%d,%d,'%s','%s',%d,0,'%s',"+
-				"0,null,'',0,null,0)",
-			catalog.MO_CATALOG, catalog.MO_VIEW_REFRESH, catalog.MoViewRefreshColumns,
-			candidate.accountID, candidate.databaseID, candidate.relationID, candidate.logicalID,
-			escape(candidate.databaseName), escape(candidate.relationName), generation,
-			viewRefreshStatusDiscovering), opts)
-		if insertErr != nil {
-			return 0, insertErr
+		if cursor.status == catalog.ViewRefreshStatusRevalidateScan &&
+			candidate.refreshStatus == viewRefreshStatusCurrent {
+			revalidated, updateErr := sqlExecutor.Exec(proc.Ctx, fmt.Sprintf(
+				"update %s.%s set target_generation=target_generation+1,status='%s',"+
+					"failure_code=0,next_retry_at=null,lease_owner='',lease_epoch=lease_epoch+1,"+
+					"lease_expires_at=null where account_id=%d and target_relation_id=%d and status='%s'",
+				catalog.MO_CATALOG, catalog.MO_VIEW_REFRESH, viewRefreshStatusPending,
+				candidate.accountID, candidate.relationID, viewRefreshStatusCurrent), opts)
+			if updateErr != nil {
+				return 0, updateErr
+			}
+			revalidated.Close()
 		}
-		inserted.Close()
 	}
 
 	nextCursor, ok := nextLegacyViewScanCursor(*cursor, candidates)
@@ -738,7 +809,7 @@ func discoverLegacyViewPage(
 		catalog.MO_CATALOG, catalog.MO_VIEW_DEPENDENCIES, nextCursor.accountID,
 		escape(nextCursor.databaseName), escape(nextCursor.relationName), nextCursor.generation,
 		nextCursor.status,
-		cursor.generation, catalog.ViewRefreshStatusLegacyScan), opts)
+		cursor.generation, cursor.status), opts)
 	if err != nil {
 		return 0, err
 	}
@@ -772,7 +843,6 @@ func nextLegacyViewScanCursor(
 	cursor.accountID = last.accountID
 	cursor.databaseName = last.databaseName
 	cursor.relationName = last.relationName
-	cursor.status = catalog.ViewRefreshStatusLegacyScan
 	return cursor, true
 }
 

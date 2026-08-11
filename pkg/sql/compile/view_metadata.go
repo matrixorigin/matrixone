@@ -34,6 +34,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 const viewRefreshStatusCurrent = catalog.ViewRefreshStatusCurrent
@@ -600,6 +601,9 @@ func (c *Compile) enqueueDependentViewClosure(
 	if err := c.proc.Ctx.Err(); err != nil {
 		return err
 	}
+	oldCtx := c.proc.Ctx
+	c.proc.Ctx = process.WithSystemCTELimits(oldCtx)
+	defer func() { c.proc.Ctx = oldCtx }()
 	return c.runSqlWithSystemTenant(
 		viewMetadataClosureInvalidationSQL(initialPredicate, generation, seed...))
 }
@@ -686,6 +690,23 @@ func SubscriptionViewMetadataInvalidationSQL(
 	return viewMetadataClosureInvalidationSQL(fmt.Sprintf(
 		"d.account_id=%d and d.subscription_name='%s'",
 		subscriberAccountID, sqlquote.EscapeString(subscriptionName)), generation)
+}
+
+// SeedMissingViewMetadataSQL makes restored user Views fail closed before the
+// restore transaction commits. Recovery subsequently regenerates them through
+// the same authoritative View schema path.
+func SeedMissingViewMetadataSQL(generation uint64) string {
+	return fmt.Sprintf(
+		"insert into %s.%s (%s) select t.account_id,t.reldatabase_id,t.rel_id,"+
+			"coalesce(nullif(t.rel_logical_id,0),t.rel_id),t.reldatabase,t.relname,%d,0,'%s',"+
+			"0,null,'',0,null,0 from %s.%s t left join %s.%s r on "+
+			"t.account_id=r.account_id and t.rel_id=r.target_relation_id where t.relkind='%s' "+
+			"and t.reldatabase not in ('%s') and r.target_relation_id is null",
+		catalog.MO_CATALOG, catalog.MO_VIEW_REFRESH, catalog.MoViewRefreshColumns,
+		generation, catalog.ViewRefreshStatusDiscovering,
+		catalog.MO_CATALOG, catalog.MO_TABLES,
+		catalog.MO_CATALOG, catalog.MO_VIEW_REFRESH, catalog.SystemViewRel,
+		strings.Join(catalog.SystemDatabases, "','"))
 }
 
 func (c *Compile) refreshOneView(

@@ -398,6 +398,9 @@ func (exec *txnExecutor) Exec(
 	if exec.opts.ResolveVariableFunc() != nil {
 		proc.SetResolveVariableFunc(exec.opts.ResolveVariableFunc())
 	}
+	if process.HasSystemCTELimits(exec.ctx) {
+		proc.SetResolveVariableFunc(process.SystemCTEResolver(exec.opts.ResolveVariableFunc()))
+	}
 
 	// Propagate the "is this frontend?" signal onto the proc — same
 	// pattern as ResolveVariableFunc above. The Options default is
