@@ -130,37 +130,6 @@ func TestFullText(t *testing.T) {
 	require.Equal(t, int64(0), proc.GetMPool().CurrNB())
 }
 
-func TestReplaceCycleCheckUsesEvaluatedCompositePrimaryKey(t *testing.T) {
-	proc := testutil.NewProc(t)
-	proc.Ctx = context.Background()
-	arg := PostDml{PostDmlCtx: &PostDmlCtx{
-		PrimaryKeyIdx: 0,
-		ReplaceCycleCheck: `{"child_schema":"d","child_table":"child","primary_key":[` +
-			`{"name":"id","pos":0},{"name":"sub","pos":1}],"foreign_keys":[` +
-			`{"parent_schema":"d","parent_table":"parent","child_cols":["pid"],"parent_cols":["id"]}]}`,
-	}}
-	require.NoError(t, arg.Prepare(proc))
-
-	bat := batch.NewWithSize(2)
-	bat.Vecs[0] = testutil.MakeInt64Vector([]int64{1, 2, 3}, []uint64{2}, proc.Mp())
-	bat.Vecs[1] = testutil.MakeVarcharVector([]string{"a", "b", "ignored"}, nil, proc.Mp())
-	bat.SetRowCount(3)
-	require.NoError(t, arg.appendReplaceCycleChecks(proc, bat))
-
-	got, ok := proc.Base.PostDmlSqlList.Get(0)
-	require.True(t, ok)
-	require.Equal(t, "REPLACE_CYCLE_CHECK:select count(*) = 0 from ("+
-		"select distinct `child`.`pid` from `d`.`child` where "+
-		"((`child`.`id` = 1 and `child`.`sub` = 'a') or (`child`.`id` = 2 and `child`.`sub` = 'b')) "+
-		"and `child`.`pid` is not null except select distinct `parent`.`id` from `d`.`parent`) "+
-		"as __mo_fk_check_source", got)
-
-	bat.Clean(proc.Mp())
-	arg.Reset(proc, false, nil)
-	proc.Free()
-	require.Zero(t, proc.GetMPool().CurrNB())
-}
-
 // TestAuditFullTextStringKeyPreservesQuotedLiteral guards issue #26280: a
 // character primary key must be emitted as exactly one well-formed SQL string
 // literal, so the fulltext maintenance statement denotes the same key as the

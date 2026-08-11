@@ -15,13 +15,11 @@ package postdml
 
 import (
 	"bytes"
-	"encoding/json"
 	"fmt"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
@@ -53,13 +51,6 @@ func (postdml *PostDml) Prepare(proc *process.Process) error {
 	}
 
 	postdml.ctr.affectedRows = 0
-	postdml.cycleCheck = nil
-	if postdml.PostDmlCtx.ReplaceCycleCheck != "" {
-		postdml.cycleCheck = new(replaceCycleCheckConfig)
-		if err := json.Unmarshal([]byte(postdml.PostDmlCtx.ReplaceCycleCheck), postdml.cycleCheck); err != nil {
-			return moerr.NewInternalErrorf(proc.Ctx, "invalid REPLACE cycle check: %v", err)
-		}
-	}
 	return nil
 }
 
@@ -159,89 +150,8 @@ func (postdml *PostDml) runPostDml(proc *process.Process, result vm.CallResult) 
 			proc.Base.PostDmlSqlList.Append(sql)
 		}
 	}
-	if postdml.cycleCheck != nil {
-		if err := postdml.appendReplaceCycleChecks(proc, bat); err != nil {
-			return err
-		}
-	}
 
 	return nil
-}
-
-func (postdml *PostDml) appendReplaceCycleChecks(proc *process.Process, bat *batch.Batch) error {
-	config := postdml.cycleCheck
-	rowPredicates := make([]string, 0, bat.RowCount())
-	for row := 0; row < bat.RowCount(); row++ {
-		parts := make([]string, 0, len(config.PrimaryKey))
-		skip := false
-		for _, pk := range config.PrimaryKey {
-			if pk.Pos < 0 || int(pk.Pos) >= len(bat.Vecs) {
-				return moerr.NewInternalError(proc.Ctx, "REPLACE cycle check primary key is out of range")
-			}
-			vec := bat.Vecs[pk.Pos]
-			if vec.IsNull(uint64(row)) {
-				skip = true
-				break
-			}
-			literal, err := postDmlSQLLiteral(proc, vec, row)
-			if err != nil {
-				return err
-			}
-			parts = append(parts, fmt.Sprintf("%s.%s = %s",
-				quotePostDmlIdentifier(config.ChildTable), quotePostDmlIdentifier(pk.Name), literal))
-		}
-		if !skip {
-			rowPredicates = append(rowPredicates, "("+strings.Join(parts, " and ")+")")
-		}
-	}
-	if len(rowPredicates) == 0 {
-		return nil
-	}
-	childTable := quotePostDmlIdentifier(config.ChildSchema) + "." + quotePostDmlIdentifier(config.ChildTable)
-	for _, fk := range config.ForeignKeys {
-		if len(fk.ChildCols) == 0 || len(fk.ChildCols) != len(fk.ParentCols) {
-			return moerr.NewInternalError(proc.Ctx, "REPLACE cycle check foreign key is incomplete")
-		}
-		childCols := make([]string, len(fk.ChildCols))
-		parentCols := make([]string, len(fk.ParentCols))
-		nonNull := make([]string, len(fk.ChildCols))
-		for i := range fk.ChildCols {
-			childCols[i] = quotePostDmlIdentifier(config.ChildTable) + "." + quotePostDmlIdentifier(fk.ChildCols[i])
-			parentCols[i] = quotePostDmlIdentifier(fk.ParentTable) + "." + quotePostDmlIdentifier(fk.ParentCols[i])
-			nonNull[i] = childCols[i] + " is not null"
-		}
-		parentTable := quotePostDmlIdentifier(fk.ParentSchema) + "." + quotePostDmlIdentifier(fk.ParentTable)
-		sql := fmt.Sprintf(
-			"select count(*) = 0 from (select distinct %s from %s where (%s) and %s except select distinct %s from %s) as __mo_fk_check_source",
-			strings.Join(childCols, ","), childTable, strings.Join(rowPredicates, " or "), strings.Join(nonNull, " and "),
-			strings.Join(parentCols, ","), parentTable)
-		proc.Base.PostDmlSqlList.Append("REPLACE_CYCLE_CHECK:" + sql)
-	}
-	return nil
-}
-
-func quotePostDmlIdentifier(name string) string {
-	return "`" + strings.ReplaceAll(name, "`", "``") + "`"
-}
-
-func postDmlSQLLiteral(proc *process.Process, vec *vector.Vector, row int) (string, error) {
-	value, err := GetAnyAsString(vec, row)
-	if err != nil {
-		return "", err
-	}
-	switch vec.GetType().Oid {
-	case types.T_date, types.T_datetime, types.T_timestamp, types.T_time, types.T_uuid,
-		types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_json,
-		types.T_blob, types.T_text, types.T_datalink:
-		if postDmlNoBackslashEscapes(proc) {
-			return "'" + strings.ReplaceAll(value, "'", "''") + "'", nil
-		}
-		return sqlquote.String(value), nil
-	case types.T_array_float32, types.T_array_float64:
-		return "", moerr.NewInternalError(proc.Ctx, "array cannot be primary key")
-	default:
-		return value, nil
-	}
 }
 
 func postDmlNoBackslashEscapes(proc *process.Process) bool {

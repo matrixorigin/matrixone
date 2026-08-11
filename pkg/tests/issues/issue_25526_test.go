@@ -410,9 +410,9 @@ func TestIssue26875ReplaceCycleChecksEvaluatedRowsOnly(t *testing.T) {
 		mustExec(t, ctx, conn, "replace into cycle_a values(2,null)")
 		stmt, err := conn.PrepareContext(ctx, "replace into cycle_a values(?,?)")
 		require.NoError(t, err)
+		defer stmt.Close()
 		_, err = stmt.ExecContext(ctx, 3, nil)
 		require.NoError(t, err)
-		require.NoError(t, stmt.Close())
 		mustExec(t, ctx, conn, "replace into cycle_a values(2+3,null)")
 		mustExec(t, ctx, conn, "create table cycle_source(id int, bid int)")
 		mustExec(t, ctx, conn, "insert into cycle_source values(6,null)")
@@ -421,5 +421,44 @@ func TestIssue26875ReplaceCycleChecksEvaluatedRowsOnly(t *testing.T) {
 		require.NoError(t, conn.QueryRowContext(ctx,
 			"select count(*) from cycle_a where id in (2,3,5,6)").Scan(&inserted))
 		require.Equal(t, 4, inserted)
+
+		// Cross multiple execution batches without constructing per-row SQL or
+		// revalidating the unrelated historical orphan.
+		mustExec(t, ctx, conn, `replace into cycle_a
+			select result + 1000, null from generate_series(1, 20000) g`)
+		var bulkRows int
+		require.NoError(t, conn.QueryRowContext(ctx,
+			"select count(*) from cycle_a where id between 1001 and 21000").Scan(&bulkRows))
+		require.Equal(t, 20000, bulkRows)
+
+		// Composite keys keep the same fixed-size relational plan; key width no
+		// longer expands generated SQL.
+		mustExec(t, ctx, conn, "set foreign_key_checks=0")
+		mustExec(t, ctx, conn, `create table composite_a(
+			id int, sub int, cid int, csub int, primary key(id,sub))`)
+		mustExec(t, ctx, conn, `create table composite_b(
+			id int, sub int, aid int, asub int, primary key(id,sub))`)
+		mustExec(t, ctx, conn, `create table composite_c(
+			id int, sub int, bid int, bsub int, primary key(id,sub))`)
+		mustExec(t, ctx, conn, `alter table composite_a add foreign key(cid,csub)
+			references composite_c(id,sub) on delete cascade`)
+		mustExec(t, ctx, conn, `alter table composite_b add foreign key(aid,asub)
+			references composite_a(id,sub) on delete cascade`)
+		mustExec(t, ctx, conn, `alter table composite_c add foreign key(bid,bsub)
+			references composite_b(id,sub) on delete cascade`)
+		mustExec(t, ctx, conn, "insert into composite_a values(1,1,1,1)")
+		mustExec(t, ctx, conn, "insert into composite_b values(1,1,1,1)")
+		mustExec(t, ctx, conn, "insert into composite_c values(1,1,1,1)")
+		mustExec(t, ctx, conn, "set foreign_key_checks=1")
+		_, err = conn.ExecContext(ctx, "replace into composite_a values(1.6,1,1,1)")
+		require.Error(t, err)
+		var compositeRows int
+		require.NoError(t, conn.QueryRowContext(ctx, `select
+			(select count(*) from composite_a) +
+			(select count(*) from composite_b) +
+			(select count(*) from composite_c)`).Scan(&compositeRows))
+		require.Equal(t, 3, compositeRows)
+		mustExec(t, ctx, conn, "set foreign_key_checks=0")
+		mustExec(t, ctx, conn, "replace into composite_a values(1.6,1,1,1)")
 	})
 }

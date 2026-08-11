@@ -3102,54 +3102,6 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 			})
 		}
 
-	case plan.Node_POSTDML:
-		child := builder.qry.Nodes[node.Children[0]]
-		if len(child.BindingTags) != 1 || node.PostDmlCtx == nil {
-			return nil, moerr.NewInternalError(builder.GetContext(), "invalid POSTDML input")
-		}
-		childTag := child.BindingTags[0]
-		for _, expr := range child.ProjectList {
-			increaseRefCnt(expr, 1, colRefCnt)
-		}
-		childRemapping, err := builder.remapAllColRefs(node.Children[0], step, colRefCnt, colRefBool, sinkColRef)
-		if err != nil {
-			return nil, err
-		}
-		for _, expr := range child.ProjectList {
-			increaseRefCnt(expr, -1, colRefCnt)
-		}
-		if node.PostDmlCtx.ReplaceCycleCheck != "" {
-			var config replaceCycleCheckConfig
-			if err = json.Unmarshal([]byte(node.PostDmlCtx.ReplaceCycleCheck), &config); err != nil {
-				return nil, moerr.NewInternalErrorf(builder.GetContext(), "invalid REPLACE cycle check: %v", err)
-			}
-			for i := range config.PrimaryKey {
-				mapped, ok := childRemapping.globalToLocal[[2]int32{childTag, config.PrimaryKey[i].Pos}]
-				if !ok {
-					return nil, moerr.NewInternalError(builder.GetContext(), "missing REPLACE cycle check primary key")
-				}
-				config.PrimaryKey[i].Pos = mapped[1]
-			}
-			encoded, marshalErr := json.Marshal(config)
-			if marshalErr != nil {
-				return nil, marshalErr
-			}
-			node.PostDmlCtx.ReplaceCycleCheck = string(encoded)
-		}
-		if mapped, ok := childRemapping.globalToLocal[[2]int32{childTag, node.PostDmlCtx.PrimaryKeyIdx}]; ok {
-			node.PostDmlCtx.PrimaryKeyIdx = mapped[1]
-		}
-		childProjList := builder.qry.Nodes[node.Children[0]].ProjectList
-		for i, globalRef := range childRemapping.localToGlobal {
-			remapping.addColRef(globalRef)
-			node.ProjectList = append(node.ProjectList, &plan.Expr{
-				Typ: childProjList[i].Typ,
-				Expr: &plan.Expr_Col{Col: &plan.ColRef{
-					RelPos: 0, ColPos: int32(i), Name: builder.nameByColRef[globalRef],
-				}},
-			})
-		}
-
 	case plan.Node_PRE_INSERT:
 		if _, preserve := builder.preservePreInsertProjection[nodeID]; preserve {
 			for _, expr := range builder.qry.Nodes[node.Children[0]].ProjectList {

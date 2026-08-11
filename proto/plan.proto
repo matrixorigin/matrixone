@@ -1298,7 +1298,6 @@ message PostDmlCtx {
   bool is_insert = 6;
   bool is_delete_without_filters = 7;
   PostDmlFullTextCtx full_text = 8;
-  string replace_cycle_check = 9;
 }
 
 message Query {

@@ -16,7 +16,6 @@ package plan
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"slices"
 	"strings"
@@ -1520,16 +1519,14 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplaceWithOrd
 		builder.qry.Nodes[lastNodeID].BindingTags = []int32{finalProjTag}
 	}
 
-	cycleFks, err := builder.replaceCycleForeignKeys(tableDef)
-	if err != nil {
-		return 0, err
+	var cycleFks []*plan.ForeignKeyDef
+	if buildParentFKActions {
+		cycleFks, err = builder.replaceCycleForeignKeys(tableDef)
+		if err != nil {
+			return 0, err
+		}
 	}
 	if len(cycleFks) > 0 {
-		encoded, encodeErr := builder.encodeReplaceCycleCheck(objRef.SchemaName, tableDef, cycleFks)
-		if encodeErr != nil {
-			return 0, encodeErr
-		}
-		pkName := catalog.ResolveAlias(tableDef.Pkey.Names[0])
 		materializedSinkID := appendSinkNodeWithTag(builder, bindCtx, lastNodeID, finalProjTag)
 		builder.qry.Nodes[materializedSinkID].ExtraOptions = materialized.CTESinkOption
 		if builder.preserveSinkProjection == nil {
@@ -1537,17 +1534,6 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplaceWithOrd
 		}
 		builder.preserveSinkProjection[materializedSinkID] = struct{}{}
 		materializedStep := builder.appendStep(materializedSinkID)
-
-		postTag := builder.genNewBindTag()
-		postSourceID := builder.appendTaggedSinkScan(bindCtx, materializedStep, postTag)
-		postID := builder.appendNode(&plan.Node{
-			NodeType: plan.Node_POSTDML, Children: []int32{postSourceID},
-			PostDmlCtx: &plan.PostDmlCtx{
-				Ref: objRef, PrimaryKeyIdx: tableDef.Name2ColIndex[pkName],
-				PrimaryKeyName: pkName, ReplaceCycleCheck: encoded,
-			},
-		}, bindCtx)
-		builder.appendStep(postID)
 
 		writeTag := builder.genNewBindTag()
 		lastNodeID = builder.appendTaggedSinkScan(bindCtx, materializedStep, writeTag)
@@ -1559,6 +1545,15 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplaceWithOrd
 				updateCtxList[i].DeleteCols[j].RelPos = writeTag
 			}
 		}
+		writeID := builder.appendNode(&plan.Node{
+			NodeType:      plan.Node_MULTI_UPDATE,
+			Children:      []int32{lastNodeID},
+			BindingTags:   []int32{builder.genNewBindTag()},
+			UpdateCtxList: updateCtxList,
+		}, bindCtx)
+		builder.appendStep(writeID)
+		return builder.appendReplaceCycleAsserts(
+			bindCtx, tableDef, cycleFks, materializedStep)
 	}
 
 	return builder.appendNode(&plan.Node{
@@ -1569,56 +1564,143 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplaceWithOrd
 	}, bindCtx), nil
 }
 
-type replaceCycleCheckColumn struct {
-	Name string `json:"name"`
-	Pos  int32  `json:"pos"`
-}
-
-type replaceCycleCheckFK struct {
-	ParentSchema string   `json:"parent_schema"`
-	ParentTable  string   `json:"parent_table"`
-	ChildCols    []string `json:"child_cols"`
-	ParentCols   []string `json:"parent_cols"`
-}
-
-type replaceCycleCheckConfig struct {
-	ChildSchema string                    `json:"child_schema"`
-	ChildTable  string                    `json:"child_table"`
-	PrimaryKey  []replaceCycleCheckColumn `json:"primary_key"`
-	ForeignKeys []replaceCycleCheckFK     `json:"foreign_keys"`
-}
-
-func (builder *QueryBuilder) encodeReplaceCycleCheck(
-	childSchema string, tableDef *plan.TableDef, cycleFks []*plan.ForeignKeyDef,
-) (string, error) {
-	config := replaceCycleCheckConfig{ChildSchema: childSchema, ChildTable: tableDef.Name}
-	for _, name := range tableDef.Pkey.Names {
-		name = catalog.ResolveAlias(name)
-		config.PrimaryKey = append(config.PrimaryKey, replaceCycleCheckColumn{
-			Name: name, Pos: tableDef.Name2ColIndex[name],
-		})
-	}
-	for _, fk := range cycleFks {
+// appendReplaceCycleAsserts validates only rows written by this REPLACE after
+// MULTI_UPDATE and all FK action steps have completed. The affected key set is
+// carried as a spillable materialized relation, so validation has constant
+// planner/SQL-text size and does not cross the pipeline protobuf boundary.
+func (builder *QueryBuilder) appendReplaceCycleAsserts(
+	bindCtx *BindContext,
+	childDef *plan.TableDef,
+	cycleFks []*plan.ForeignKeyDef,
+	rowImageStep int32,
+) (int32, error) {
+	var lastAssertID int32
+	for fkIdx, fk := range cycleFks {
 		parentRef, parentDef, err := builder.compCtx.ResolveById(fk.ForeignTbl, nil)
 		if err != nil {
-			return "", err
+			return 0, err
 		}
-		if parentRef == nil || parentDef == nil {
-			return "", moerr.NewInternalErrorf(builder.GetContext(),
-				"foreign-key parent table %d is unavailable", fk.ForeignTbl)
+		if parentRef == nil || parentDef == nil || len(fk.Cols) == 0 || len(fk.Cols) != len(fk.ForeignCols) {
+			return 0, moerr.NewInternalErrorf(builder.GetContext(),
+				"foreign-key parent table %d is unavailable or incomplete", fk.ForeignTbl)
 		}
-		item := replaceCycleCheckFK{
-			ParentSchema: parentRef.SchemaName,
-			ParentTable:  parentDef.Name,
+
+		childTag := builder.genNewBindTag()
+		childID := builder.appendTaggedSinkScan(bindCtx, rowImageStep, childTag)
+		childProjection := make([]*plan.Expr, len(childDef.Cols))
+		for i, col := range childDef.Cols {
+			childProjection[i] = &plan.Expr{Typ: col.Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{
+				RelPos: childTag, ColPos: int32(i), Name: col.Name,
+			}}}
 		}
-		for i, childID := range fk.Cols {
-			item.ChildCols = append(item.ChildCols, colIDToName(tableDef, childID))
-			item.ParentCols = append(item.ParentCols, colIDToName(parentDef, fk.ForeignCols[i]))
+		parentTag := builder.genNewBindTag()
+		parentID := builder.appendNode(&plan.Node{
+			NodeType: plan.Node_TABLE_SCAN, Stats: &plan.Stats{},
+			ObjRef: parentRef, TableDef: CloneTableDefForPlan(parentDef, true),
+			BindingTags: []int32{parentTag}, ScanSnapshot: bindCtx.snapshot,
+		}, bindCtx)
+		if deleteSinkID, ok := builder.deleteNode[parentDef.TblId]; ok {
+			deleteStep := getStepByNodeId(builder, deleteSinkID)
+			rowIDPos, rowIDOK := parentDef.Name2ColIndex[catalog.Row_ID]
+			if deleteStep < 0 || !rowIDOK {
+				return 0, moerr.NewInternalErrorf(builder.GetContext(),
+					"REPLACE cycle delete source for table %s is incomplete", parentDef.Name)
+			}
+			deletedTag := builder.genNewBindTag()
+			deletedID := appendSinkScanNodeWithTag(builder, bindCtx, int32(deleteStep), deletedTag)
+			parentRowID := &plan.Expr{Typ: parentDef.Cols[rowIDPos].Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{
+				RelPos: parentTag, ColPos: rowIDPos, Name: catalog.Row_ID,
+			}}}
+			deletedRowID := &plan.Expr{Typ: parentDef.Cols[rowIDPos].Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{
+				RelPos: deletedTag, ColPos: rowIDPos, Name: catalog.Row_ID,
+			}}}
+			deletedEqual, bindErr := BindFuncExprImplByPlanExpr(
+				builder.GetContext(), "=", []*plan.Expr{parentRowID, deletedRowID})
+			if bindErr != nil {
+				return 0, bindErr
+			}
+			parentID = builder.appendNode(&plan.Node{
+				NodeType: plan.Node_JOIN, Children: []int32{parentID, deletedID},
+				JoinType: plan.Node_ANTI, OnList: []*plan.Expr{deletedEqual}, SpillMem: builder.joinSpillMem,
+			}, bindCtx)
+			parentProjection := make([]*plan.Expr, len(parentDef.Cols))
+			for i, col := range parentDef.Cols {
+				parentProjection[i] = &plan.Expr{Typ: col.Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{
+					RelPos: parentTag, ColPos: int32(i), Name: col.Name,
+				}}}
+			}
+			parentID = builder.appendNode(&plan.Node{
+				NodeType: plan.Node_PROJECT, Children: []int32{parentID},
+				ProjectList: parentProjection, BindingTags: []int32{parentTag},
+			}, bindCtx)
 		}
-		config.ForeignKeys = append(config.ForeignKeys, item)
+		fkConds := make([]*plan.Expr, 0, len(fk.Cols))
+		nullPasses := make([]*plan.Expr, 0, len(fk.Cols))
+		for i, childColID := range fk.Cols {
+			childPos, parentPos := int32(-1), int32(-1)
+			for pos, col := range childDef.Cols {
+				if col.ColId == childColID {
+					childPos = int32(pos)
+				}
+			}
+			for pos, col := range parentDef.Cols {
+				if col.ColId == fk.ForeignCols[i] {
+					parentPos = int32(pos)
+				}
+			}
+			if childPos < 0 || parentPos < 0 {
+				return 0, moerr.NewInternalError(
+					builder.GetContext(), "REPLACE cycle check column mapping is incomplete")
+			}
+			childExpr := &plan.Expr{Typ: childDef.Cols[childPos].Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{
+				RelPos: childTag, ColPos: childPos,
+			}}}
+			parentExpr := &plan.Expr{Typ: parentDef.Cols[parentPos].Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{
+				RelPos: parentTag, ColPos: parentPos,
+			}}}
+			cond, bindErr := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*plan.Expr{childExpr, parentExpr})
+			if bindErr != nil {
+				return 0, bindErr
+			}
+			fkConds = append(fkConds, cond)
+			nullExpr, bindErr := BindFuncExprImplByPlanExpr(
+				builder.GetContext(), "isnull", []*plan.Expr{DeepCopyExpr(childExpr)})
+			if bindErr != nil {
+				return 0, bindErr
+			}
+			nullPasses = append(nullPasses, nullExpr)
+		}
+		markID, parentExists, bindErr := builder.insertMarkJoin(
+			childID, parentID, fkConds, nil, false, bindCtx)
+		if bindErr != nil {
+			return 0, bindErr
+		}
+		valid := parentExists
+		for _, nullPass := range nullPasses {
+			valid, bindErr = BindFuncExprImplByPlanExpr(
+				builder.GetContext(), "or", []*plan.Expr{valid, nullPass})
+			if bindErr != nil {
+				return 0, bindErr
+			}
+		}
+		assertExpr, bindErr := BindFuncExprImplByPlanExpr(builder.GetContext(), "assert", []*plan.Expr{
+			valid,
+			makePlan2StringConstExprWithType("Cannot add or update a child row: a foreign key constraint fails"),
+			makePlan2StringConstExprWithType(foreignKeyNoReferencedRowAssert),
+		})
+		if bindErr != nil {
+			return 0, bindErr
+		}
+		lastAssertID = builder.appendNode(&plan.Node{
+			NodeType: plan.Node_ASSERT, Children: []int32{markID},
+			FilterList: []*plan.Expr{assertExpr}, ProjectList: childProjection,
+			BindingTags: []int32{childTag},
+		}, bindCtx)
+		if fkIdx < len(cycleFks)-1 {
+			builder.appendStep(lastAssertID)
+		}
 	}
-	encoded, err := json.Marshal(config)
-	return string(encoded), err
+	return lastAssertID, nil
 }
 
 func (builder *QueryBuilder) replaceCycleForeignKeys(tableDef *plan.TableDef) ([]*plan.ForeignKeyDef, error) {
