@@ -16,6 +16,7 @@ package tree
 
 import (
 	"fmt"
+	"reflect"
 	"sort"
 	"strings"
 )
@@ -575,6 +576,56 @@ func ValidateSelectIntoPlacement(stmt *Select) string {
 		return MisplacedIntoClauseMessage
 	}
 	return ""
+}
+
+func ValidatePerformSelectIntoPlacement(stmt *Select) string {
+	if stmt == nil {
+		return ""
+	}
+	if selectTreeHasUserVariableInto(reflect.ValueOf(stmt)) {
+		return PerformIntoClauseMessage
+	}
+	return ""
+}
+
+func selectTreeHasUserVariableInto(value reflect.Value) bool {
+	if !value.IsValid() {
+		return false
+	}
+	if value.Kind() == reflect.Interface || value.Kind() == reflect.Pointer {
+		if value.IsNil() {
+			return false
+		}
+		if value.CanInterface() {
+			switch node := value.Interface().(type) {
+			case *Select:
+				if len(node.IntoVars) > 0 {
+					return true
+				}
+			case *SelectClause:
+				if len(node.IntoVars) > 0 {
+					return true
+				}
+			}
+		}
+		return selectTreeHasUserVariableInto(value.Elem())
+	}
+
+	switch value.Kind() {
+	case reflect.Struct:
+		for i := 0; i < value.NumField(); i++ {
+			if selectTreeHasUserVariableInto(value.Field(i)) {
+				return true
+			}
+		}
+	case reflect.Slice, reflect.Array:
+		for i := 0; i < value.Len(); i++ {
+			if selectTreeHasUserVariableInto(value.Index(i)) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func withHasInto(with *With) bool {

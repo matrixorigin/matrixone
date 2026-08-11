@@ -14645,7 +14645,7 @@ perform_stmt:
     PERFORM perform_select
     {
         $2.IsPerform = true
-        if intoErr := tree.ValidateSelectIntoPlacement($2); intoErr != "" {
+        if intoErr := tree.ValidatePerformSelectIntoPlacement($2); intoErr != "" {
             yylex.Error(intoErr)
             return 1
         }
@@ -14655,34 +14655,16 @@ perform_stmt:
 perform_select:
     simple_select time_window_opt order_by_opt limit_opt rank_opt select_into_param_opt select_lock_opt
     {
-        intoVars, deprecatedInto, intoErr := tree.SelectIntoVariablesForTopLevel($1)
-        if intoErr != "" {
-            yylex.Error(intoErr)
-            return 1
-        }
-        if tree.SelectIntoActionConflict($1, $6) {
-            yylex.Error(tree.MisplacedIntoClauseMessage)
-            return 1
-        }
-        $$ = &tree.Select{Select: $1, TimeWindow: $2, OrderBy: $3, Limit: $4, RankOption: $5, Ep: tree.SelectIntoExportOr($1, $6.Export), IntoVars: append(intoVars, $6.UserVars...), DeprecatedInto: deprecatedInto, SelectLockInfo: $7}
-        if intoErr := tree.ValidateSelectIntoPlacement($$); intoErr != "" {
+        $$ = &tree.Select{Select: $1, TimeWindow: $2, OrderBy: $3, Limit: $4, RankOption: $5, Ep: tree.SelectIntoExportOr($1, $6.Export), IntoVars: $6.UserVars, SelectLockInfo: $7}
+        if intoErr := tree.ValidatePerformSelectIntoPlacement($$); intoErr != "" {
             yylex.Error(intoErr)
             return 1
         }
     }
 |   with_clause simple_select time_window_opt order_by_opt limit_opt rank_opt select_into_param_opt select_lock_opt
     {
-        intoVars, deprecatedInto, intoErr := tree.SelectIntoVariablesForTopLevel($2)
-        if intoErr != "" {
-            yylex.Error(intoErr)
-            return 1
-        }
-        if tree.SelectIntoActionConflict($2, $7) {
-            yylex.Error(tree.MisplacedIntoClauseMessage)
-            return 1
-        }
-        $$ = &tree.Select{Select: $2, TimeWindow: $3, OrderBy: $4, Limit: $5, RankOption: $6, Ep: tree.SelectIntoExportOr($2, $7.Export), IntoVars: append(intoVars, $7.UserVars...), DeprecatedInto: deprecatedInto, SelectLockInfo: $8, With: $1}
-        if intoErr := tree.ValidateSelectIntoPlacement($$); intoErr != "" {
+        $$ = &tree.Select{Select: $2, TimeWindow: $3, OrderBy: $4, Limit: $5, RankOption: $6, Ep: tree.SelectIntoExportOr($2, $7.Export), IntoVars: $7.UserVars, SelectLockInfo: $8, With: $1}
+        if intoErr := tree.ValidatePerformSelectIntoPlacement($$); intoErr != "" {
             yylex.Error(intoErr)
             return 1
         }
