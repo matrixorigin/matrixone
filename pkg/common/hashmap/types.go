@@ -49,6 +49,8 @@ type HashMap interface {
 	GroupCount() uint64
 	// Size returns the hash map's size
 	Size() int64
+	// PreAlloc admits capacity for at most n additional keys before mutation.
+	PreAlloc(n uint64) error
 	// MarshalBinary serializes the hash map into a byte slice.
 	MarshalBinary() ([]byte, error)
 	// UnmarshalBinary deserializes a byte slice into the hash map.

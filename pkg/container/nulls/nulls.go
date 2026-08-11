@@ -157,7 +157,7 @@ func Add(nsp *Nulls, sels ...uint64) {
 
 func (nsp *Nulls) AddRange(start, end uint64) {
 	if nsp != nil {
-		TryExpand(nsp, int(end+1))
+		TryExpand(nsp, int(end))
 		nsp.np.AddRange(start, end)
 	}
 }
@@ -226,7 +226,7 @@ func Range(nsp *Nulls, start, end, bias uint64, b *Nulls) {
 		return
 	}
 
-	b.np.InitWithSize(int64(end + 1 - bias))
+	b.np.InitWithSize(int64(end - bias))
 	for ; start < end; start++ {
 		if nsp.np.Contains(start) {
 			b.np.Add(start - bias)

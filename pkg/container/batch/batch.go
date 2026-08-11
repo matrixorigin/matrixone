@@ -1118,7 +1118,7 @@ func (bat *Batch) UnmarshalBinaryWithAnyMp(data []byte, mp *mpool.MPool) (err er
 	if err != nil {
 		return err
 	}
-	bat.ExtraBuf = nil
+	bat.releaseExtraBuf()
 	bat.ExtraBuf = append(bat.ExtraBuf, extraBuf...)
 
 	bat.Recursive, err = cursor.readInt32()
@@ -1208,6 +1208,7 @@ func (bat *Batch) unmarshalFromReader(
 	// ExtraBuf is a data-scaled Go-heap field in the stable Batch codec. Spill
 	// records do not use it and reject it before allocating its payload.
 	if allowMetadata {
+		bat.releaseExtraBuf()
 		if bat.ExtraBuf, err = readBatchSizedBytes(r); err != nil {
 			return err
 		}
@@ -1219,7 +1220,7 @@ func (bat *Batch) unmarshalFromReader(
 		if extraSize != 0 {
 			return moerr.NewInvalidInputNoCtx("spill batch extra buffer is not allowed")
 		}
-		bat.ExtraBuf = nil
+		bat.releaseExtraBuf()
 	}
 
 	if bat.Recursive, err = types.ReadInt32(r); err != nil {
@@ -1437,6 +1438,54 @@ func (bat *Batch) AllocationAccountSelection() *vector.AllocationAccountSelectio
 	return bat.allocationAccount
 }
 
+// SetAccountedExtraBuffer transfers one accounted byte buffer into the Batch.
+// Clean releases it exactly once; MoveExtraBufferFrom preserves ownership when
+// a pipeline spool moves the payload to another Batch object.
+func (bat *Batch) SetAccountedExtraBuffer(buffer *mpool.AccountedBuffer) error {
+	if bat == nil || buffer == nil {
+		return mpool.ErrAllocationAccountInvalid
+	}
+	data, pool, err := buffer.Detach()
+	if err != nil {
+		return err
+	}
+	bat.releaseExtraBuf()
+	bat.ExtraBuf = data
+	bat.extraBufMP = pool
+	return nil
+}
+
+func (bat *Batch) HasAccountedExtraBuffer() bool {
+	return bat != nil && bat.extraBufMP != nil
+}
+
+func (bat *Batch) MoveExtraBufferFrom(source *Batch) {
+	if bat == nil || source == nil || bat == source {
+		return
+	}
+	bat.releaseExtraBuf()
+	bat.ExtraBuf = source.ExtraBuf
+	bat.extraBufMP = source.extraBufMP
+	source.ExtraBuf = nil
+	source.extraBufMP = nil
+}
+
+// DropExtraBuffer releases an accounted payload or drops an ordinary Go-heap
+// payload. It is used by reusable pipeline batches before entering a cache.
+func (bat *Batch) DropExtraBuffer() {
+	if bat != nil {
+		bat.releaseExtraBuf()
+	}
+}
+
+func (bat *Batch) releaseExtraBuf() {
+	if bat.extraBufMP != nil && cap(bat.ExtraBuf) != 0 {
+		bat.extraBufMP.Free(bat.ExtraBuf)
+	}
+	bat.ExtraBuf = nil
+	bat.extraBufMP = nil
+}
+
 // SetAllocationAccount configures every existing empty destination vector as
 // one transaction. Existing physical allocations are never relabeled.
 func (bat *Batch) SetAllocationAccount(
@@ -1580,7 +1629,7 @@ func (bat *Batch) Clean(m *mpool.MPool) {
 
 	bat.Vecs = nil
 	bat.Attrs = nil
-	bat.ExtraBuf = nil
+	bat.releaseExtraBuf()
 	bat.SetRowCount(0)
 	bat.allocationAccount = nil
 }
@@ -1787,7 +1836,8 @@ func (bat *Batch) hasAllocationAccountVector() bool {
 // HasAllocationAccount reports whether the batch or one of its vectors owns
 // memory charged to an execution-scoped allocation account.
 func (bat *Batch) HasAllocationAccount() bool {
-	return bat != nil && (bat.allocationAccount != nil || bat.hasAllocationAccountVector())
+	return bat != nil && (bat.extraBufMP != nil || bat.allocationAccount != nil ||
+		bat.hasAllocationAccountVector())
 }
 
 func (bat *Batch) selectedColumnsHaveAllocationAccount(selectCols []int) bool {

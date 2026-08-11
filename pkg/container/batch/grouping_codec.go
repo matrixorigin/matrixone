@@ -31,6 +31,7 @@ func (bat *Batch) MarshalBinaryWithGroupingSize() (int, error) {
 	metadataFree := *bat
 	metadataFree.Attrs = nil
 	metadataFree.ExtraBuf = nil
+	metadataFree.extraBufMP = nil
 	size, err := metadataFree.MarshalBinarySize()
 	if err != nil {
 		return 0, err
@@ -61,6 +62,7 @@ func (bat *Batch) MarshalBinaryWithGroupingTo(w io.Writer) error {
 	metadataFree := *bat
 	metadataFree.Attrs = nil
 	metadataFree.ExtraBuf = nil
+	metadataFree.extraBufMP = nil
 	payloadSize, err := metadataFree.MarshalBinarySize()
 	if err != nil {
 		return err

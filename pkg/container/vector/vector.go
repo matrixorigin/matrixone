@@ -871,6 +871,39 @@ func (v *Vector) SetPrepareParamKindAtWithMP(row int, kind PrepareParamKind, mp 
 	return nil
 }
 
+// PreflightSetPrepareParamKindAt reserves the sidecar that a later
+// SetPrepareParamKindAtWithMP can require without changing any row's logical
+// provenance. Correlated-state owners use it before publishing a multi-vector
+// update so a sidecar allocation cannot fail after some values were replaced.
+func (v *Vector) PreflightSetPrepareParamKindAt(
+	row int,
+	kind PrepareParamKind,
+	mp *mpool.MPool,
+) error {
+	if v == nil || row < 0 {
+		return nil
+	}
+	if v.IsConst() {
+		row = 0
+	}
+	if row >= v.length || v.prepareParamKinds != nil ||
+		!v.prepareParamKindSeen || v.prepareParamKind == kind {
+		return nil
+	}
+	kinds, owner, err := v.allocatePrepareParamKinds(v.length, mp)
+	if err != nil {
+		return err
+	}
+	for i := range kinds {
+		kinds[i] = v.prepareParamKind
+	}
+	v.prepareParamKinds = kinds
+	v.prepareParamKindsMP = owner
+	v.prepareParamKind = PrepareParamNone
+	v.prepareParamKindSeen = true
+	return nil
+}
+
 func (v *Vector) resetPrepareParamKind() {
 	v.prepareParamKind = PrepareParamNone
 	v.prepareParamKindSeen = false
@@ -901,12 +934,13 @@ func (v *Vector) allocatePrepareParamKinds(n int, mp *mpool.MPool) ([]PreparePar
 		if owner == nil {
 			return nil, nil, mpool.ErrAllocationAccountInvalid
 		}
-		kinds, err := mpool.MakeSliceAccounted[PrepareParamKind](
+		kinds, err := mpool.MakeSliceAccountedWithCapacityClass[PrepareParamKind](
 			n,
 			owner,
 			v.allocationAccount.account,
 			v.allocationAccount.owner,
 			v.allocationAccount.dataSite,
+			v.allocationAccount.capacityClass,
 		)
 		return kinds, owner, err
 	}

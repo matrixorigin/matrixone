@@ -107,3 +107,40 @@ func TestRuntimeAggSerdeChunkAndNoGroupPaths(t *testing.T) {
 	err := unmarshalFromReaderNoGroup(bytes.NewReader([]byte{1, 2, 3}), &empty.optSplitResult)
 	require.Error(t, err)
 }
+
+func TestOptSplitResultRejectsCorruptCountsBeforeAllocation(t *testing.T) {
+	mp := mpool.MustNewZero()
+	source := vector.NewOffHeapVecWithType(types.T_int64.ToType())
+	defer func() {
+		source.Free(mp)
+		require.Zero(t, mp.CurrNB())
+	}()
+
+	makeRecord := func(emptyCount, distinctCount int64) []byte {
+		var record bytes.Buffer
+		require.NoError(t, source.MarshalBinaryTo(&record))
+		require.NoError(t, types.WriteInt64(&record, emptyCount))
+		require.NoError(t, types.WriteInt64(&record, distinctCount))
+		return record.Bytes()
+	}
+
+	for _, tc := range []struct {
+		name          string
+		emptyCount    int64
+		distinctCount int64
+	}{
+		{name: "negative-empty", emptyCount: -1},
+		{name: "negative-distinct", distinctCount: -1},
+		{name: "impossible-distinct", distinctCount: 1 << 40},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			target := optSplitResult{mp: mp, resultType: types.T_int64.ToType()}
+			err := target.unmarshalFromReader(bytes.NewReader(
+				makeRecord(tc.emptyCount, tc.distinctCount)))
+			require.Error(t, err)
+			require.Empty(t, target.resultList)
+			require.Empty(t, target.emptyList)
+			require.Empty(t, target.distinct)
+		})
+	}
+}

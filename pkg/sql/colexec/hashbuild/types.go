@@ -129,7 +129,7 @@ type container struct {
 	spillAccountedWrite    *mpool.AccountedBuffer
 	spillAccountedBuckets  [spillNumBuckets]*mpool.AccountedBuffer
 	spillCoalesceDisabled  bool
-	recoveryCapacity       *process.HashBuildRecoveryCapacity
+	recoveryCapacity       *process.ExecutionRecoveryCapacity
 	recoveryCapacityClass  mpool.AllocationCapacityClass
 	expressionRecoveryPeak uint64
 	expressionRecoveryRows int
@@ -352,7 +352,7 @@ func (hashBuild *HashBuild) installRecoveryCapacity(
 	if ctr.recoveryCapacityClass != mpool.AllocationCapacityClassDefault {
 		return mpool.ErrAllocationAccountInvariant
 	}
-	capacity, err := process.NewHashBuildRecoveryCapacity(budget)
+	capacity, err := process.NewExecutionRecoveryCapacity(budget)
 	if err != nil {
 		return err
 	}

@@ -372,7 +372,7 @@ Primary files:
 
 - `pkg/vm/process/execution_resource_budget.go` and tests, renamed from
   `hashbuild_budget.go`;
-- `pkg/vm/process/hashbuild_recovery_capacity.go`;
+- `pkg/vm/process/execution_recovery_capacity.go`;
 - `pkg/vm/process/types.go` and process cleanup;
 - `pkg/sql/compile/allocation_account_lifecycle.go`;
 - `pkg/sql/compile/compile.go` materialized spill wiring;
@@ -446,8 +446,9 @@ Required changes:
 8. reserve bounded recovery capacity for reload/remerge just as HashBuild does;
 9. at `spillMaxPass`, either finish inside admitted capacity or return a
    controlled error; never silently retain beyond the hard account;
-10. remove the 1 TiB DISTINCT escape. Until ordinary DISTINCT has a correct
-    spill representation, real pressure returns a controlled capability error.
+10. remove the 1 TiB DISTINCT escape. Ordinary DISTINCT uses the exact
+    argument-arena spill codec; special DISTINCT implementations without that
+    representation return a controlled capability error during `Prepare`.
 
 Aggregate closure is a prerequisite for enabling Group hard admission. In
 particular, `AdditionalMemorySize` may remain a diagnostic, but it cannot be
@@ -465,6 +466,31 @@ Acceptance:
 - ordinary DISTINCT cannot OOM by bypassing the account;
 - common non-spill Group performance and allocations per operation do not
   materially regress.
+
+The M3 implementation uses the following closed aggregate capability matrix.
+An aggregate outside the supported rows is rejected during Group `Prepare`;
+it cannot begin consuming input and later escape the hard account.
+
+| Aggregate family | Accounted Group mode | Physical boundary |
+| --- | --- | --- |
+| `BIT_AND`, `BIT_OR`, `BIT_XOR` | non-DISTINCT | state/result vectors are allocation-accounted |
+| `VAR_POP`, `STDDEV_POP`, `VAR_SAMP`, `STDDEV_SAMP` | ordinary and DISTINCT | vector state plus the allocation-accounted DISTINCT argument arena; final result vectors use the same account |
+| `ANY_VALUE`, `MIN`, `MAX` | normal SQL modes | winning state/result vectors are transferred without changing provenance |
+| `MAX_BY`, `MAX_BY_NON_NULL` | non-DISTINCT | three correlated vectors are preflighted transactionally; per-chunk usage metadata has a fixed three-entry bound |
+| `SUM`, `AVG`, `COUNT(expr)` | ordinary and DISTINCT | vector state, DISTINCT argument arena, null bitmap, and newly materialized result vectors are allocation-accounted |
+| `COUNT(*)` | non-DISTINCT | state vector is transferred without changing provenance |
+| unordered non-DISTINCT `GROUP_CONCAT` | supported | retained arguments and result vectors are accounted; one reusable account-backed finalization buffer is capped at the published result length; each formatted field is independently bounded by the existing 16-bit unit limit |
+| `AVG_TW_CACHE`, `AVG_TW_RESULT` | non-DISTINCT | state and materialized result vectors are allocation-accounted |
+| bitmap, HLL/approx-count, approximate percentile | rejected | library-owned opaque state has no physical allocator hook |
+| median and window executors | rejected | data-scaled Go/vector state does not implement the bounded Group spill contract |
+| JSON array/object aggregates | rejected | finalization currently constructs data-scaled Go arrays/maps before producing binary JSON |
+| DISTINCT or ordered `GROUP_CONCAT` | rejected | DISTINCT maps, ordered entries/sort selectors, and merge-run scratch are not yet closed under the Group account |
+
+Aggregate executor Go metadata is structurally bounded: one chunk descriptor
+and a constant number of vector pointers per 8,192 admitted group rows. It is
+not charged as guessed payload. Unsupported opaque families remain available
+to callers that do not install the Group hard account, preserving their legacy
+execution while making the M3 safety boundary explicit.
 
 This milestone should be split by closed behavioral contracts: aggregate
 storage primitives, Group account integration, and spill resource/lifecycle

@@ -5159,6 +5159,31 @@ func TestPrepareParamKindMetadataBoundaryLifecycle(t *testing.T) {
 	require.Equal(t, PrepareParamNone, vec.GetPrepareParamKindAt(vec.Length()))
 }
 
+func TestPreflightSetPrepareParamKindAtPreservesLogicalRows(t *testing.T) {
+	mp := mpool.MustNewZero()
+	vec := NewVec(types.T_int64.ToType())
+	defer func() {
+		vec.Free(mp)
+		require.Zero(t, mp.CurrNB())
+	}()
+	require.NoError(t, AppendFixedList(vec, []int64{1, 2, 3}, nil, mp))
+	vec.SetPrepareParamKind(PrepareParamInteger)
+
+	require.NoError(t,
+		vec.PreflightSetPrepareParamKindAt(1, PrepareParamFloat, mp))
+	require.Equal(t, PrepareParamInteger, vec.GetPrepareParamKindAt(0))
+	require.Equal(t, PrepareParamInteger, vec.GetPrepareParamKindAt(1))
+	require.Equal(t, PrepareParamInteger, vec.GetPrepareParamKindAt(2))
+	allocated := mp.CurrNB()
+
+	require.NoError(t,
+		vec.SetPrepareParamKindAtWithMP(1, PrepareParamFloat, mp))
+	require.Equal(t, allocated, mp.CurrNB())
+	require.Equal(t, PrepareParamInteger, vec.GetPrepareParamKindAt(0))
+	require.Equal(t, PrepareParamFloat, vec.GetPrepareParamKindAt(1))
+	require.Equal(t, PrepareParamInteger, vec.GetPrepareParamKindAt(2))
+}
+
 func TestAppendPrepareParamKindsContinueAfterDivergence(t *testing.T) {
 	mp := mpool.MustNewZero()
 	source := NewVec(types.T_int64.ToType())

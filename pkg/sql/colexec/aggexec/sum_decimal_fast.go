@@ -276,7 +276,11 @@ func (exec *sumDecimal64FastExec) Flush() (_ []*vector.Vector, retErr error) {
 
 	if exec.IsDistinct() {
 		for i := range vecs {
-			vecs[i] = vector.NewOffHeapVecWithType(resultType)
+			var err error
+			vecs[i], err = exec.allocation.newVector(resultType)
+			if err != nil {
+				return nil, err
+			}
 			if err := vecs[i].PreExtend(int(exec.state[i].length), exec.mp); err != nil {
 				return nil, err
 			}
@@ -320,6 +324,9 @@ func (exec *sumDecimal64FastExec) Flush() (_ []*vector.Vector, retErr error) {
 			sums := vector.MustFixedColNoTypeCheck[types.Decimal128](sumVec)
 			cntVec := exec.state[i].vecs[1]
 			cnts := vector.MustFixedColNoTypeCheck[int64](cntVec)
+			if err := preflightNullsForZeroCounts(sumVec, cnts, exec.mp); err != nil {
+				return nil, err
+			}
 
 			if exec.isSum {
 				for j, cnt := range cnts {
@@ -625,7 +632,11 @@ func (exec *sumDecimal128FastExec) Flush() (_ []*vector.Vector, retErr error) {
 
 	if exec.IsDistinct() {
 		for i := range vecs {
-			vecs[i] = vector.NewOffHeapVecWithType(resultType)
+			var err error
+			vecs[i], err = exec.allocation.newVector(resultType)
+			if err != nil {
+				return nil, err
+			}
 			if err := vecs[i].PreExtend(int(exec.state[i].length), exec.mp); err != nil {
 				return nil, err
 			}
@@ -674,6 +685,9 @@ func (exec *sumDecimal128FastExec) Flush() (_ []*vector.Vector, retErr error) {
 			sums := vector.MustFixedColNoTypeCheck[types.Decimal128](sumVec)
 			cntVec := exec.state[i].vecs[1]
 			cnts := vector.MustFixedColNoTypeCheck[int64](cntVec)
+			if err := preflightNullsForZeroCounts(sumVec, cnts, exec.mp); err != nil {
+				return nil, err
+			}
 
 			if exec.isSum {
 				for j, cnt := range cnts {

@@ -19,6 +19,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	io "io"
+	"math"
 
 	"github.com/matrixorigin/matrixone/pkg/common/arenaskl"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -28,16 +29,16 @@ import (
 )
 
 const (
-	AggBatchSize      = 8192
-	aggBatchSizeShift = 13 // log2(AggBatchSize)
-	aggBatchSizeMask  = AggBatchSize - 1
-	kAggArgArenaSize  = 512 * 1024
-	kAggArgPrefixSz   = 2
-	kAggArgOrdinalSz  = 4
-	magicNumber       = uint64(0xdeadbeefbeefdead)
+	AggBatchSize                = 8192
+	aggBatchSizeShift           = 13 // log2(AggBatchSize)
+	aggBatchSizeMask            = AggBatchSize - 1
+	kAggArgArenaSize            = 512 * 1024
+	kAggArgPrefixSz             = 2
+	kAggArgOrdinalSz            = 4
+	magicNumber                 = uint64(0xdeadbeefbeefdead)
+	spillMagicNumber            = uint64(0x4752505350494c4c) // "GRPSPILL"
+	aggBinaryStringTrailerMagic = uint64(0x4147474253545231)
 )
-
-const aggBinaryStringTrailerMagic uint64 = 0x4147474253545231
 
 var _ [0]struct{} = [AggBatchSize & aggBatchSizeMask]struct{}{}       // mask == size-1
 var _ [1]struct{} = [1 << aggBatchSizeShift / AggBatchSize]struct{}{} // shift matches size
@@ -48,20 +49,56 @@ type MarshalerUnmarshaler interface {
 	UnmarshalFromReader(io.Reader) error
 }
 
+// boundedMarshalerUnmarshaler is an opaque aggregate state whose encoded
+// representation can be written without first materializing a second copy.
+// Implementations admitted by aggInfo.boundedOpaqueState must also own every
+// data-scaled allocation through the aggregate allocation account.
+type boundedMarshalerUnmarshaler interface {
+	MarshalerUnmarshaler
+	MarshaledSize() int
+	MarshalTo(io.Writer) error
+}
+
 type freeableMarshalerUnmarshaler interface {
 	Free()
 }
 
+func writeBoundedOpaqueState(
+	state MarshalerUnmarshaler,
+	writer io.Writer,
+	aggregateID int64,
+) error {
+	stream, ok := state.(boundedMarshalerUnmarshaler)
+	if !ok {
+		return moerr.NewInternalErrorNoCtxf(
+			"aggregate %d opaque state is not streamable", aggregateID)
+	}
+	size := stream.MarshaledSize()
+	if size < 0 || uint64(size) > math.MaxInt32 {
+		return moerr.NewInvalidInputNoCtxf(
+			"aggregate %d opaque state size %d is invalid", aggregateID, size)
+	}
+	if err := types.WriteInt32(writer, int32(size)); err != nil {
+		return err
+	}
+	return stream.MarshalTo(writer)
+}
+
 type aggInfo struct {
-	aggId                    int64
-	isDistinct               bool
-	argTypes                 []types.Type
-	retType                  types.Type
-	stateTypes               []types.Type
-	emptyNull                bool
-	saveArg                  bool
-	opaqueArg                bool
-	makeMarshalerUnmarshaler func(mp *mpool.MPool) (MarshalerUnmarshaler, error)
+	aggId              int64
+	isDistinct         bool
+	argTypes           []types.Type
+	retType            types.Type
+	stateTypes         []types.Type
+	emptyNull          bool
+	saveArg            bool
+	opaqueArg          bool
+	boundedOpaqueState bool
+	// stableEmptyOpaqueState preserves an aggregate's historical partial-result
+	// representation when its resident implementation can now omit empty state.
+	// Private spill records deliberately keep the compact zero-size marker.
+	stableEmptyOpaqueState   func(io.Writer) error
+	makeMarshalerUnmarshaler func(mp *mpool.MPool, allocation *AllocationAccount) (MarshalerUnmarshaler, error)
 }
 
 func (a *aggInfo) String() string {
@@ -85,8 +122,9 @@ func (a *aggInfo) usesOpaqueArgEncoding() bool {
 }
 
 type aggState struct {
-	length   int32
-	capacity int32
+	length     int32
+	capacity   int32
+	allocation *AllocationAccount
 	// vecs are for agg state.
 	vecs []*vector.Vector
 	// MarshalerUnmarshaler, for state entries.
@@ -98,9 +136,27 @@ type aggState struct {
 	argCnt []uint32
 	argbuf []byte
 	argSkl *arenaskl.Skiplist
+	// argScratch is reusable physical storage for key construction and spill
+	// decode. It avoids data-scaled Go byte slices on row-frequency paths.
+	argScratch []byte
 }
 
-func (ag *aggState) init(mp *mpool.MPool, l, c int32, info *aggInfo, setNulls bool) error {
+func (ag *aggState) init(
+	mp *mpool.MPool,
+	l, c int32,
+	info *aggInfo,
+	setNulls bool,
+) error {
+	return ag.initWithAllocation(mp, l, c, info, setNulls, nil)
+}
+
+func (ag *aggState) initWithAllocation(
+	mp *mpool.MPool,
+	l, c int32,
+	info *aggInfo,
+	setNulls bool,
+	allocation *AllocationAccount,
+) error {
 	if c <= 0 || c > AggBatchSize {
 		return moerr.NewInternalErrorNoCtxf("invalid length or capacity: %d, %d", l, c)
 	}
@@ -109,12 +165,20 @@ func (ag *aggState) init(mp *mpool.MPool, l, c int32, info *aggInfo, setNulls bo
 	}
 	ag.length = l
 	ag.capacity = c
+	ag.allocation = allocation
 
 	var err error
 	if !info.saveArg {
 		ag.vecs = make([]*vector.Vector, len(info.stateTypes))
 		for i, typ := range info.stateTypes {
-			ag.vecs[i] = vector.NewOffHeapVecWithType(typ)
+			ag.vecs[i], err = allocation.newVector(typ)
+			if err != nil {
+				for j := 0; j < i; j++ {
+					ag.vecs[j].Free(mp)
+				}
+				ag.vecs = nil
+				return err
+			}
 			if err = ag.vecs[i].PreExtend(int(c), mp); err != nil {
 				for j := 0; j <= i; j++ {
 					ag.vecs[j].Free(mp)
@@ -123,6 +187,13 @@ func (ag *aggState) init(mp *mpool.MPool, l, c int32, info *aggInfo, setNulls bo
 				return err
 			}
 			if info.emptyNull && setNulls {
+				if err = ag.vecs[i].PreExtendNulls(int(c), mp); err != nil {
+					for j := 0; j <= i; j++ {
+						ag.vecs[j].Free(mp)
+					}
+					ag.vecs = nil
+					return err
+				}
 				ag.vecs[i].SetAllNulls(int(c))
 			}
 		}
@@ -130,7 +201,7 @@ func (ag *aggState) init(mp *mpool.MPool, l, c int32, info *aggInfo, setNulls bo
 			ag.mobs = make([]MarshalerUnmarshaler, int(c))
 		}
 	} else {
-		if ag.argCnt, err = mpool.MakeSlice[uint32](int(c), mp, true); err != nil {
+		if ag.argCnt, err = allocation.makeArgumentCounts(mp, int(c)); err != nil {
 			return err
 		}
 
@@ -139,7 +210,7 @@ func (ag *aggState) init(mp *mpool.MPool, l, c int32, info *aggInfo, setNulls bo
 			bufsz = 16 * 1024
 		}
 
-		if ag.argbuf, err = mp.Alloc(bufsz, true); err != nil {
+		if ag.argbuf, err = allocation.allocArgumentArena(mp, bufsz); err != nil {
 			mpool.FreeSlice(mp, ag.argCnt)
 			ag.argCnt = nil
 			return err
@@ -180,8 +251,10 @@ func (ag *aggState) grow(mp *mpool.MPool, more int32, expandLen bool) (int32, in
 	return canAdd, toAdd, nil
 }
 
-func (ag *aggState) writeStateArg(i int32, buf *bytes.Buffer, info *aggInfo) error {
-	types.WriteUint32(buf, ag.argCnt[i])
+func (ag *aggState) writeStateArg(i int32, writer io.Writer, info *aggInfo) error {
+	if err := types.WriteUint32(writer, ag.argCnt[i]); err != nil {
+		return err
+	}
 	if ag.argCnt[i] != 0 {
 		// open iterator and write to buf
 		xcnt := 0
@@ -191,6 +264,7 @@ func (ag *aggState) writeStateArg(i int32, buf *bytes.Buffer, info *aggInfo) err
 		binary.BigEndian.PutUint16(lk, uint16(i))
 		binary.BigEndian.PutUint16(uk, uint16(i+1))
 		it := ag.argSkl.NewIter(lk, uk)
+		defer it.Close()
 		if !info.usesOpaqueArgEncoding() {
 			for ok, k, _ := it.SeekGE(lk); ok; ok, k, _ = it.Next() {
 				/*
@@ -199,8 +273,13 @@ func (ag *aggState) writeStateArg(i int32, buf *bytes.Buffer, info *aggInfo) err
 						panic(moerr.NewInternalErrorNoCtxf("writeStateArg: mismatch i: %d != %d", checkI, i))
 					}
 				*/
-				if _, err := buf.Write(k[kAggArgPrefixSz:]); err != nil {
+				value := k[kAggArgPrefixSz:]
+				n, err := writer.Write(value)
+				if err != nil {
 					return err
+				}
+				if n != len(value) {
+					return io.ErrShortWrite
 				}
 				xcnt++
 			}
@@ -212,7 +291,7 @@ func (ag *aggState) writeStateArg(i int32, buf *bytes.Buffer, info *aggInfo) err
 						panic(moerr.NewInternalErrorNoCtxf("writeStateArg: mismatch i: %d != %d", checkI, i))
 					}
 				*/
-				if err := types.WriteSizeBytes(k[kAggArgPrefixSz:], buf); err != nil {
+				if err := types.WriteSizeBytes(k[kAggArgPrefixSz:], writer); err != nil {
 					return err
 				}
 				xcnt++
@@ -220,9 +299,9 @@ func (ag *aggState) writeStateArg(i int32, buf *bytes.Buffer, info *aggInfo) err
 		}
 
 		if int(ag.argCnt[i]) != xcnt {
-			panic(moerr.NewInternalErrorNoCtxf("writeStateArg: mismatch count: %d != %d", xcnt, ag.argCnt[i]))
+			return moerr.NewInternalErrorNoCtxf(
+				"writeStateArg: mismatch count: %d != %d", xcnt, ag.argCnt[i])
 		}
-		it.Close()
 	}
 	return nil
 }
@@ -235,42 +314,62 @@ func (ag *aggState) readStateArg(mp *mpool.MPool, i int32, r io.Reader, info *ag
 	if ag.argCnt[i] == 0 {
 		return nil
 	}
-	// read the state arguments
-	var kbuf []byte
+	// Read directly into reusable, allocation-accounted key scratch. The
+	// skiplist copies each key into its own arena before the next iteration.
+	var keySize int
 	if !info.usesOpaqueArgEncoding() {
-		fixedLen := info.argTypes[0].GetSize()
+		fixedLen := int(info.argTypes[0].GetSize())
 		if info.isDistinct {
-			kbuf = make([]byte, kAggArgPrefixSz+fixedLen)
+			keySize = kAggArgPrefixSz + fixedLen
 		} else {
-			kbuf = make([]byte, kAggArgPrefixSz+kAggArgOrdinalSz+fixedLen)
+			keySize = kAggArgPrefixSz + kAggArgOrdinalSz + fixedLen
 		}
-	} else {
-		kbuf = make([]byte, kAggArgPrefixSz)
 	}
 
 	for ui := uint32(0); ui < ag.argCnt[i]; ui++ {
 		if !info.usesOpaqueArgEncoding() && info.argTypes[0].IsFixedLen() {
+			kbuf, err := ag.resizeArgScratch(mp, keySize)
+			if err != nil {
+				return err
+			}
 			binary.BigEndian.PutUint16(kbuf[:kAggArgPrefixSz], uint16(i))
 			if _, err = io.ReadFull(r, kbuf[kAggArgPrefixSz:]); err != nil {
 				return err
 			}
+			if err = ag.insertArg(mp, kbuf); err != nil {
+				return err
+			}
 		} else {
-			binary.BigEndian.PutUint16(kbuf[:kAggArgPrefixSz], uint16(i))
-			_, kbuf, err = types.ReadSizeBytesToBuf(r, kbuf, kAggArgPrefixSz)
+			wireSize, err := types.ReadInt32AsInt(r)
 			if err != nil {
 				return err
 			}
-		}
-
-		if err = ag.insertArg(mp, kbuf); err != nil {
-			return err
+			if wireSize < 0 || wireSize > math.MaxInt-kAggArgPrefixSz {
+				return moerr.NewInvalidInputNoCtx("invalid aggregate argument size")
+			}
+			kbuf, err := ag.resizeArgScratch(mp, kAggArgPrefixSz+wireSize)
+			if err != nil {
+				return err
+			}
+			binary.BigEndian.PutUint16(kbuf[:kAggArgPrefixSz], uint16(i))
+			if _, err = io.ReadFull(r, kbuf[kAggArgPrefixSz:]); err != nil {
+				return err
+			}
+			if err = ag.insertArg(mp, kbuf); err != nil {
+				return err
+			}
 		}
 	}
 
 	return nil
 }
 
-func (ag *aggState) writeStateToBuf(mp *mpool.MPool, info *aggInfo, flags []uint8, buf *bytes.Buffer) error {
+func (ag *aggState) writeStateToBuf(mp *mpool.MPool, info *aggInfo, flags []uint8, writer io.Writer) error {
+	if len(flags) > int(ag.length) {
+		return moerr.NewInvalidInputNoCtxf(
+			"aggregate selection length %d exceeds state row count %d",
+			len(flags), ag.length)
+	}
 	var cnt int32
 	for i := range flags {
 		if flags[i] != 0 {
@@ -278,7 +377,9 @@ func (ag *aggState) writeStateToBuf(mp *mpool.MPool, info *aggInfo, flags []uint
 		}
 	}
 
-	types.WriteInt32(buf, cnt)
+	if err := types.WriteInt32(writer, cnt); err != nil {
+		return err
+	}
 	if cnt == 0 {
 		return nil
 	}
@@ -286,12 +387,15 @@ func (ag *aggState) writeStateToBuf(mp *mpool.MPool, info *aggInfo, flags []uint
 	if !info.saveArg {
 		for _, vec := range ag.vecs {
 			err := func() error {
-				bufVec := vector.NewOffHeapVecWithType(*vec.GetType())
+				bufVec, err := ag.allocation.newVector(*vec.GetType())
+				if err != nil {
+					return err
+				}
 				defer bufVec.Free(mp)
 				if err := bufVec.UnionBatch(vec, 0, int(cnt), flags, mp); err != nil {
 					return err
 				}
-				if err := bufVec.MarshalBinaryWithBuffer(buf); err != nil {
+				if err := bufVec.MarshalBinaryTo(writer); err != nil {
 					return err
 				}
 				return nil
@@ -305,14 +409,19 @@ func (ag *aggState) writeStateToBuf(mp *mpool.MPool, info *aggInfo, flags []uint
 			for i := range flags {
 				if flags[i] != 0 {
 					if ag.mobs[i] == nil {
-						if err := types.WriteSizeBytes(nil, buf); err != nil {
+						if err := writeStableEmptyOpaqueState(info, writer); err != nil {
+							return err
+						}
+					} else if info.boundedOpaqueState {
+						if err := writeBoundedOpaqueState(
+							ag.mobs[i], writer, info.aggId); err != nil {
 							return err
 						}
 					} else {
 						if bs, err := ag.mobs[i].MarshalBinary(); err != nil {
 							return err
 						} else {
-							if err := types.WriteSizeBytes(bs, buf); err != nil {
+							if err := types.WriteSizeBytes(bs, writer); err != nil {
 								return err
 							}
 						}
@@ -326,7 +435,7 @@ func (ag *aggState) writeStateToBuf(mp *mpool.MPool, info *aggInfo, flags []uint
 		}
 		for i := range flags {
 			if flags[i] != 0 {
-				if err := ag.writeStateArg(int32(i), buf, info); err != nil {
+				if err := ag.writeStateArg(int32(i), writer, info); err != nil {
 					return err
 				}
 			}
@@ -335,15 +444,163 @@ func (ag *aggState) writeStateToBuf(mp *mpool.MPool, info *aggInfo, flags []uint
 	return nil
 }
 
-func (ag *aggState) writeAllStatesToBuf(buf *bytes.Buffer, info *aggInfo) error {
-	types.WriteInt32(buf, ag.length)
+func (ag *aggState) writeSpillState(
+	info *aggInfo,
+	flags []uint8,
+	writer io.Writer,
+) (int32, error) {
+	if len(flags) > AggBatchSize || len(flags) > int(ag.length) {
+		return 0, moerr.NewInvalidInputNoCtxf(
+			"aggregate spill selection length %d exceeds state row count %d",
+			len(flags), ag.length)
+	}
+	var cnt int32
+	for _, selected := range flags {
+		if selected != 0 {
+			cnt++
+		}
+	}
+	if err := types.WriteInt32(writer, cnt); err != nil {
+		return 0, err
+	}
+	if cnt == 0 {
+		return 0, nil
+	}
+	if info.makeMarshalerUnmarshaler != nil && !info.boundedOpaqueState {
+		return 0, moerr.NewNotSupportedNoCtxf(
+			"aggregate %d has opaque spill state", info.aggId)
+	}
+	if !info.saveArg {
+		for _, vec := range ag.vecs {
+			written, err := vec.MarshalSelectedFlagsTo(writer, flags)
+			if err != nil {
+				return 0, err
+			}
+			if written != int(cnt) {
+				return 0, moerr.NewInternalErrorNoCtx(
+					"aggregate spill selection count mismatch")
+			}
+		}
+		if info.makeMarshalerUnmarshaler != nil {
+			for row, selected := range flags {
+				if selected == 0 {
+					continue
+				}
+				if ag.mobs[row] == nil {
+					if err := types.WriteInt32(writer, 0); err != nil {
+						return 0, err
+					}
+					continue
+				}
+				if err := writeBoundedOpaqueState(
+					ag.mobs[row], writer, info.aggId); err != nil {
+					return 0, err
+				}
+			}
+		}
+		return cnt, nil
+	}
+	if ag.argSkl == nil {
+		return 0, moerr.NewInternalErrorNoCtx("argSkl is not initialized")
+	}
+	for row, selected := range flags {
+		if selected != 0 {
+			if err := ag.writeStateArg(int32(row), writer, info); err != nil {
+				return 0, err
+			}
+		}
+	}
+	return cnt, nil
+}
+
+func (ag *aggState) readSpillState(
+	mp *mpool.MPool,
+	reader io.Reader,
+	info *aggInfo,
+	allocation *AllocationAccount,
+) (int32, error) {
+	cnt, err := types.ReadInt32(reader)
+	if err != nil {
+		return 0, err
+	}
+	if cnt < 0 || cnt > AggBatchSize {
+		return 0, moerr.NewInvalidInputNoCtxf(
+			"invalid aggregate spill count %d", cnt)
+	}
+	if info.makeMarshalerUnmarshaler != nil && !info.boundedOpaqueState {
+		return 0, moerr.NewNotSupportedNoCtxf(
+			"aggregate %d has opaque spill state", info.aggId)
+	}
+	if cnt == 0 {
+		ag.free(mp)
+		return 0, nil
+	}
+
+	// A spill record contains at most one bounded group work unit. Reuse its
+	// physical vectors when possible; otherwise initialize one exact-capacity
+	// state under the incoming aggregate's recovery allocation selection.
+	reuse := !info.saveArg && len(ag.vecs) == len(info.stateTypes) &&
+		ag.capacity >= cnt
+	if !reuse {
+		ag.free(mp)
+		if err := ag.initWithAllocation(mp, 0, cnt, info, false, allocation); err != nil {
+			return 0, err
+		}
+	}
+	if !info.saveArg {
+		for _, vec := range ag.vecs {
+			if err := vec.UnmarshalSelectedRowsFrom(reader, int(cnt), mp); err != nil {
+				return 0, err
+			}
+		}
+		if info.makeMarshalerUnmarshaler != nil {
+			for row := range cnt {
+				sz, err := types.ReadInt32(reader)
+				if err != nil {
+					return 0, err
+				}
+				if sz < 0 {
+					return 0, moerr.NewInvalidInputNoCtxf(
+						"invalid aggregate opaque spill state size %d", sz)
+				}
+				if sz == 0 {
+					continue
+				}
+				if ag.mobs[row], err = info.makeMarshalerUnmarshaler(mp, allocation); err != nil {
+					return 0, err
+				}
+				limited := &io.LimitedReader{R: reader, N: int64(sz)}
+				if err := ag.mobs[row].UnmarshalFromReader(limited); err != nil {
+					return 0, err
+				}
+				if limited.N != 0 {
+					return 0, io.ErrUnexpectedEOF
+				}
+			}
+		}
+		ag.length = cnt
+		return cnt, nil
+	}
+	for row := range cnt {
+		if err := ag.readStateArg(mp, row, reader, info); err != nil {
+			return 0, err
+		}
+	}
+	ag.length = cnt
+	return cnt, nil
+}
+
+func (ag *aggState) writeAllStatesToBuf(writer io.Writer, info *aggInfo) error {
+	if err := types.WriteInt32(writer, ag.length); err != nil {
+		return err
+	}
 	if ag.length == 0 {
 		return nil
 	}
 
 	if !info.saveArg {
 		for _, vec := range ag.vecs {
-			if err := vec.MarshalBinaryWithBuffer(buf); err != nil {
+			if err := vec.MarshalBinaryTo(writer); err != nil {
 				return err
 			}
 		}
@@ -357,14 +614,19 @@ func (ag *aggState) writeAllStatesToBuf(buf *bytes.Buffer, info *aggInfo) error 
 					group 1 does not have data. there is no marshal for group 1.
 				*/
 				if entry == nil {
-					if err := types.WriteSizeBytes(nil, buf); err != nil {
+					if err := writeStableEmptyOpaqueState(info, writer); err != nil {
+						return err
+					}
+				} else if info.boundedOpaqueState {
+					if err := writeBoundedOpaqueState(
+						entry, writer, info.aggId); err != nil {
 						return err
 					}
 				} else {
 					if bs, err := entry.MarshalBinary(); err != nil {
 						return err
 					} else {
-						if err := types.WriteSizeBytes(bs, buf); err != nil {
+						if err := types.WriteSizeBytes(bs, writer); err != nil {
 							return err
 						}
 					}
@@ -376,7 +638,7 @@ func (ag *aggState) writeAllStatesToBuf(buf *bytes.Buffer, info *aggInfo) error 
 			return moerr.NewInternalErrorNoCtx("argSkl is not initialized")
 		}
 		for i := range ag.length {
-			if err := ag.writeStateArg(int32(i), buf, info); err != nil {
+			if err := ag.writeStateArg(int32(i), writer, info); err != nil {
 				return err
 			}
 		}
@@ -384,7 +646,27 @@ func (ag *aggState) writeAllStatesToBuf(buf *bytes.Buffer, info *aggInfo) error 
 	return nil
 }
 
-func (ag *aggState) readState(mp *mpool.MPool, reader io.Reader, info *aggInfo) (int32, error) {
+func writeStableEmptyOpaqueState(info *aggInfo, writer io.Writer) error {
+	if info != nil && info.stableEmptyOpaqueState != nil {
+		return info.stableEmptyOpaqueState(writer)
+	}
+	return types.WriteSizeBytes(nil, writer)
+}
+
+func (ag *aggState) readState(
+	mp *mpool.MPool,
+	reader io.Reader,
+	info *aggInfo,
+) (int32, error) {
+	return ag.readStateWithAllocation(mp, reader, info, nil)
+}
+
+func (ag *aggState) readStateWithAllocation(
+	mp *mpool.MPool,
+	reader io.Reader,
+	info *aggInfo,
+	allocation *AllocationAccount,
+) (int32, error) {
 	cnt, err := types.ReadInt32(reader)
 	if err != nil {
 		return 0, err
@@ -419,7 +701,7 @@ func (ag *aggState) readState(mp *mpool.MPool, reader io.Reader, info *aggInfo) 
 		}
 	} else {
 		ag.free(mp)
-		if err := ag.init(mp, cnt, cnt, info, false); err != nil {
+		if err := ag.initWithAllocation(mp, cnt, cnt, info, false, allocation); err != nil {
 			return 0, err
 		}
 	}
@@ -429,6 +711,11 @@ func (ag *aggState) readState(mp *mpool.MPool, reader io.Reader, info *aggInfo) 
 			if err := vec.UnmarshalWithReader(reader, mp); err != nil {
 				return 0, err
 			}
+			if vec.Length() != int(cnt) {
+				return 0, moerr.NewInvalidInputNoCtxf(
+					"aggregate state vector row count %d does not match %d",
+					vec.Length(), cnt)
+			}
 		}
 		if info.makeMarshalerUnmarshaler != nil {
 			for i := range cnt {
@@ -436,16 +723,28 @@ func (ag *aggState) readState(mp *mpool.MPool, reader io.Reader, info *aggInfo) 
 				if err != nil {
 					return 0, err
 				}
+				if sz < 0 {
+					return 0, moerr.NewInvalidInputNoCtxf(
+						"invalid aggregate opaque state size %d", sz)
+				}
 				if sz > 0 {
 					//only need marshal for size > 0.
-					if ag.mobs[i], err = info.makeMarshalerUnmarshaler(mp); err != nil {
+					if ag.mobs[i], err = info.makeMarshalerUnmarshaler(mp, allocation); err != nil {
 						return 0, err
 					}
-					lr := io.LimitReader(reader, int64(sz))
+					lr := &io.LimitedReader{R: reader, N: int64(sz)}
 					if err := ag.mobs[i].UnmarshalFromReader(lr); err != nil {
 						return 0, err
 					}
-					if n, _ := io.Copy(io.Discard, lr); n > 0 {
+					remaining := lr.N
+					n, copyErr := io.Copy(io.Discard, lr)
+					if copyErr != nil {
+						return 0, copyErr
+					}
+					if n != remaining {
+						return 0, io.ErrUnexpectedEOF
+					}
+					if n > 0 {
 						return 0, moerr.NewInternalErrorNoCtxf("mob unmarshal did not consume all bytes: %d remaining", n)
 					}
 				}
@@ -500,25 +799,93 @@ func (ag *aggState) appendFromStateArg(mp *mpool.MPool, otherOffset int32, other
 			binary.BigEndian.PutUint16(uk, uint16(i+1))
 			it := other.argSkl.NewIter(lk, uk)
 			for ok, k, _ := it.SeekGE(lk); ok; ok, k, _ = it.Next() {
-				// copy the key to the new bytes buffer
-				kcpy := append([]byte(nil), k...)
+				kcpy, err := ag.resizeArgScratch(mp, len(k))
+				if err != nil {
+					it.Close()
+					return 0, err
+				}
+				copy(kcpy, k)
 				binary.BigEndian.PutUint16(kcpy[:kAggArgPrefixSz], uint16(ag.length))
 				if err := ag.insertArg(mp, kcpy); err != nil {
+					it.Close()
 					return 0, err
 				}
 			}
+			it.Close()
 			ag.length++
 		}
 	}
 	return end, nil
 }
 
+func (ag *aggState) resizeArgScratch(
+	mp *mpool.MPool,
+	length int,
+) ([]byte, error) {
+	if ag == nil || mp == nil || length < 0 {
+		return nil, mpool.ErrAllocationAccountInvalid
+	}
+	if _, err := aggregateArgumentNodeSize(uint64(length)); err != nil {
+		return nil, err
+	}
+	if cap(ag.argScratch) >= length {
+		ag.argScratch = ag.argScratch[:length]
+		return ag.argScratch, nil
+	}
+	next, err := ag.allocation.allocArgumentArena(mp, length)
+	if err != nil {
+		return nil, err
+	}
+	if cap(ag.argScratch) > 0 {
+		mp.Free(ag.argScratch)
+	}
+	ag.argScratch = next
+	return ag.argScratch, nil
+}
+
+func aggregateArgumentNodeSize(keySize uint64) (uint64, error) {
+	if keySize > math.MaxUint32 {
+		return 0, mpool.ErrAllocationAllocatorLimit
+	}
+	need := arenaskl.MaxNodeSize(uint32(keySize), 0)
+	// Arena offsets and a complete node are both uint32-sized. NewArena and
+	// newNode panic when those limits are exceeded, so reject the row as a
+	// controlled allocation error before either is called.
+	if need > math.MaxUint32 {
+		return 0, mpool.ErrAllocationAllocatorLimit
+	}
+	return need, nil
+}
+
 func (ag *aggState) insertArg(mp *mpool.MPool, kbuf []byte) error {
 	if ag.argSkl == nil {
 		return moerr.NewInternalErrorNoCtx("argSkl is not initialized")
 	}
+	nodeSize, err := aggregateArgumentNodeSize(uint64(len(kbuf)))
+	if err != nil {
+		return err
+	}
 
-	if err := ag.argSkl.Add(kbuf, nil); err != arenaskl.ErrArenaFull {
+	add := func(list *arenaskl.Skiplist, key []byte) error {
+		if ag.allocation != nil {
+			return list.AddWithPlan(key, nil, arenaskl.MakeAddPlan(key))
+		}
+		return list.Add(key, nil)
+	}
+	if ag.allocation != nil {
+		plan := arenaskl.MakeAddPlan(kbuf)
+		consumed, _, ok := plan.ArenaFootprint(uint32(len(kbuf)), 0)
+		if !ok {
+			return mpool.ErrAllocationAllocatorLimit
+		}
+		used := uint64(ag.argSkl.Arena().Size())
+		trailing := arenaskl.MaxNodeTrailingSize()
+		if used <= math.MaxUint64-consumed &&
+			used+consumed <= math.MaxUint64-trailing &&
+			used+consumed+trailing <= uint64(ag.argSkl.Arena().Capacity()) {
+			return add(ag.argSkl, kbuf)
+		}
+	} else if err := add(ag.argSkl, kbuf); err != arenaskl.ErrArenaFull {
 		return err
 	}
 
@@ -526,77 +893,109 @@ func (ag *aggState) insertArg(mp *mpool.MPool, kbuf []byte) error {
 	// but if a single key (plus its skiplist node overhead) needs more than that —
 	// e.g. a multi-column distinct key concatenating several large string args —
 	// grow by enough to fit it, otherwise the retry below would still ErrArenaFull.
-	grow := int64(kAggArgArenaSize)
-	if need := int64(arenaskl.MaxNodeSize(uint32(len(kbuf)), 0)); need > grow {
-		grow = need
+	grow := uint64(kAggArgArenaSize)
+	if ag.allocation != nil {
+		plan := arenaskl.MakeAddPlan(kbuf)
+		consumed, _, ok := plan.ArenaFootprint(uint32(len(kbuf)), 0)
+		if !ok || consumed > math.MaxUint64-arenaskl.MaxNodeTrailingSize() {
+			return mpool.ErrAllocationAllocatorLimit
+		}
+		nodeSize = consumed + arenaskl.MaxNodeTrailingSize()
 	}
-	argBuf, err := mp.Alloc(len(ag.argbuf)+int(grow), true)
+	if nodeSize > grow {
+		grow = nodeSize
+	}
+	current := uint64(len(ag.argbuf))
+	if current > math.MaxUint32 || grow > math.MaxUint32-current ||
+		current+grow > uint64(math.MaxInt) {
+		return mpool.ErrAllocationAllocatorLimit
+	}
+	argBuf, err := ag.allocation.allocArgumentArena(
+		mp,
+		int(current+grow),
+	)
 	if err != nil {
 		return err
 	}
-	oldArgBuf := ag.argbuf
-	ag.argbuf = argBuf
-	defer mp.Free(oldArgBuf)
-
-	newArena := arenaskl.NewArena(ag.argbuf)
+	newArena := arenaskl.NewArena(argBuf)
 	newArgSkl := arenaskl.NewSkiplist(newArena, bytes.Compare)
 	// move entries to new arena
 	// I am pretty sure a realloc then fix a few pointers in skl should work, but
 	// let's not do that for now, until the profiling shows this is a bottleneck.
 	it := ag.argSkl.NewIter(nil, nil)
 	for ok, k, _ := it.First(); ok; ok, k, _ = it.Next() {
-		if err := newArgSkl.Add(k, nil); err != nil {
-			// the tree is messed up.
-			ag.argSkl = nil
+		if err := add(newArgSkl, k); err != nil {
+			it.Close()
+			mp.Free(argBuf)
 			return err
 		}
 	}
 	it.Close()
-	ag.argSkl = newArgSkl
+	if err = add(newArgSkl, kbuf); err != nil {
+		mp.Free(argBuf)
+		return err
+	}
 
-	// Now do it again, this time it should succeed and if it errors again (ErrArenaFull, means
-	// we added an arg that is longer than kAggArgArenaSize, too bad, cannot handle such a long arg
-	// for agg.
-	err = ag.argSkl.Add(kbuf, nil)
-	return err
+	oldArgBuf := ag.argbuf
+	ag.argbuf = argBuf
+	ag.argSkl = newArgSkl
+	mp.Free(oldArgBuf)
+	return nil
 }
 
 func (ag *aggState) fillArg(mp *mpool.MPool, y uint16, val []byte, distinct bool) error {
-	if distinct {
-		k := make([]byte, len(val)+kAggArgPrefixSz)
-		binary.BigEndian.PutUint16(k[:kAggArgPrefixSz], y)
-		copy(k[kAggArgPrefixSz:], val)
-		if err := ag.insertArg(mp, k); err == nil {
-			ag.argCnt[y] += 1
-			if ag.argCnt[y] == 0 {
-				return moerr.NewInternalErrorNoCtx("agg fillArg: too many distinct arguments")
-			}
-			return nil
-		} else if err == arenaskl.ErrRecordExists {
-			return nil
-		} else {
-			return err
-		}
-	} else {
-		k := make([]byte, len(val)+kAggArgPrefixSz+kAggArgOrdinalSz)
-		binary.BigEndian.PutUint16(k[:kAggArgPrefixSz], y)
-		binary.BigEndian.PutUint32(k[kAggArgPrefixSz:kAggArgPrefixSz+kAggArgOrdinalSz], ag.argCnt[y])
-		ag.argCnt[y] += 1
-		if ag.argCnt[y] == 0 {
-			return moerr.NewInternalErrorNoCtx("agg fillArg: too many arguments")
-		}
-		copy(k[kAggArgPrefixSz+kAggArgOrdinalSz:], val)
-		if err := ag.insertArg(mp, k); err == nil {
-			return nil
-		} else {
-			return err
-		}
+	header := kAggArgPrefixSz
+	if !distinct {
+		header += kAggArgOrdinalSz
 	}
+	if len(val) > math.MaxInt-header {
+		return mpool.ErrAllocationAllocatorLimit
+	}
+	k, err := ag.resizeArgScratch(mp, header+len(val))
+	if err != nil {
+		return err
+	}
+	binary.BigEndian.PutUint16(k[:kAggArgPrefixSz], y)
+	if distinct {
+		copy(k[kAggArgPrefixSz:], val)
+	} else {
+		binary.BigEndian.PutUint32(k[kAggArgPrefixSz:kAggArgPrefixSz+kAggArgOrdinalSz], ag.argCnt[y])
+		copy(k[kAggArgPrefixSz+kAggArgOrdinalSz:], val)
+	}
+	return ag.insertPreparedArg(mp, y, k, distinct)
+}
+
+func (ag *aggState) insertPreparedArg(
+	mp *mpool.MPool,
+	y uint16,
+	key []byte,
+	distinct bool,
+) error {
+	err := ag.insertArg(mp, key)
+	if err == arenaskl.ErrRecordExists && distinct {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	ag.argCnt[y]++
+	if ag.argCnt[y] == 0 {
+		if distinct {
+			return moerr.NewInternalErrorNoCtx(
+				"agg fillArg: too many distinct arguments")
+		}
+		return moerr.NewInternalErrorNoCtx("agg fillArg: too many arguments")
+	}
+	return nil
 }
 
 func (ag *aggState) mergeArgs(mp *mpool.MPool, y uint16, other *aggState, otherY uint16, info *aggInfo) error {
 	err := other.iter(otherY, func(k []byte) error {
-		kcpy := append([]byte(nil), k...)
+		kcpy, err := ag.resizeArgScratch(mp, len(k))
+		if err != nil {
+			return err
+		}
+		copy(kcpy, k)
 		binary.BigEndian.PutUint16(kcpy[:kAggArgPrefixSz], y)
 		if !info.isDistinct {
 			binary.BigEndian.PutUint32(kcpy[kAggArgPrefixSz:kAggArgPrefixSz+kAggArgOrdinalSz], ag.argCnt[y])
@@ -611,9 +1010,9 @@ func (ag *aggState) mergeArgs(mp *mpool.MPool, y uint16, other *aggState, otherY
 		} else if fnerr == arenaskl.ErrRecordExists {
 			if info.isDistinct {
 				return nil
-			} else {
-				panic(moerr.NewInternalErrorNoCtx("agg mergeArgs: duplicate arguments"))
 			}
+			return moerr.NewInternalErrorNoCtx(
+				"agg mergeArgs: duplicate arguments")
 		} else {
 			return fnerr
 		}
@@ -649,12 +1048,19 @@ func aggPayloadFromKey(info *aggInfo, k []byte) []byte {
 }
 
 func (ag *aggState) free(mp *mpool.MPool) {
-	if ag.argSkl != nil {
+	if cap(ag.argCnt) > 0 {
 		mpool.FreeSlice(mp, ag.argCnt)
-		ag.argCnt = nil
-		mp.Free(ag.argbuf)
-		ag.argSkl = nil
 	}
+	ag.argCnt = nil
+	if cap(ag.argbuf) > 0 {
+		mp.Free(ag.argbuf)
+	}
+	ag.argbuf = nil
+	ag.argSkl = nil
+	if cap(ag.argScratch) > 0 {
+		mp.Free(ag.argScratch)
+	}
+	ag.argScratch = nil
 	for _, vec := range ag.vecs {
 		vec.Free(mp)
 	}
@@ -665,13 +1071,53 @@ func (ag *aggState) free(mp *mpool.MPool) {
 		}
 	}
 	ag.mobs = nil
+	ag.length = 0
+	ag.capacity = 0
+	ag.allocation = nil
 }
 
 type aggExec struct {
 	mp *mpool.MPool
 	aggInfo
-	chunkSize int
-	state     []aggState
+	chunkSize  int
+	state      []aggState
+	standby    []aggState
+	allocation *AllocationAccount
+}
+
+func (ae *aggExec) SetAllocationAccount(allocation *AllocationAccount) error {
+	if ae == nil || allocation == nil || allocation.account == nil {
+		return mpool.ErrAllocationAccountInvalid
+	}
+	if ae.allocation != nil {
+		if ae.allocation.sameGeneration(allocation) {
+			return nil
+		}
+		return mpool.ErrAllocationAccountMismatch
+	}
+	if len(ae.state) != 0 || len(ae.standby) != 0 {
+		return mpool.ErrAllocationAccountInvariant
+	}
+	if ae.aggInfo.makeMarshalerUnmarshaler != nil && !ae.aggInfo.boundedOpaqueState {
+		return moerr.NewNotSupportedNoCtxf(
+			"aggregate %d has opaque allocation state", ae.aggInfo.aggId)
+	}
+	ae.allocation = allocation
+	return nil
+}
+
+func (ae *aggExec) ClearAllocationAccount(allocation *AllocationAccount) error {
+	if ae == nil || ae.allocation == nil {
+		return nil
+	}
+	if !ae.allocation.sameGeneration(allocation) {
+		return mpool.ErrAllocationAccountMismatch
+	}
+	if len(ae.state) != 0 || len(ae.standby) != 0 {
+		return mpool.ErrAllocationAccountInvariant
+	}
+	ae.allocation = nil
+	return nil
 }
 
 // SetPrepareParamKind restores the scalar compatibility summary on a
@@ -690,384 +1136,19 @@ func (ae *aggExec) SetPrepareParamKind(kind vector.PrepareParamKind) {
 	}
 }
 
-// prepareParamKindsFromVector returns a compact copy only when at least one
-// non-NULL row carries provenance.  The nil result is the ordinary/unobserved
-// fast path and keeps spill/partial records byte-for-byte unchanged.
-func prepareParamKindsFromVector(vec *vector.Vector) []vector.PrepareParamKind {
-	// A uniform scalar is already represented by the aggregate's legacy
-	// summary.  Only the heterogeneous sidecar needs an O(rows) payload.
-	if vec == nil || len(vec.GetPrepareParamKinds()) == 0 {
+func (ae *aggExec) PrepareParamKindChunkCount() int {
+	if ae == nil {
+		return 0
+	}
+	return len(ae.state)
+}
+
+func (ae *aggExec) PrepareParamKindVectorForChunk(chunk int) *vector.Vector {
+	if ae == nil || chunk < 0 || chunk >= len(ae.state) ||
+		len(ae.state[chunk].vecs) == 0 {
 		return nil
 	}
-	kinds := make([]vector.PrepareParamKind, vec.Length())
-	hasKind := false
-	for i := range kinds {
-		if vec.IsNull(uint64(i)) {
-			continue
-		}
-		kind := vec.GetPrepareParamKindAt(i)
-		kinds[i] = kind
-		if kind != vector.PrepareParamNone {
-			hasKind = true
-		}
-	}
-	if !hasKind {
-		return nil
-	}
-	return kinds
-}
-
-// PrepareParamKindsForChunk returns winner provenance in the same row order as
-// SaveIntermediateResultOfChunk.  Preserving aggregates use vecs[0] as their
-// result vector; callers only request this capability for those aggregates.
-func (ae *aggExec) PrepareParamKindsForChunk(chunk int) []vector.PrepareParamKind {
-	if chunk < 0 || chunk >= len(ae.state) || len(ae.state[chunk].vecs) == 0 {
-		return nil
-	}
-	return prepareParamKindsFromVector(ae.state[chunk].vecs[0])
-}
-
-// PrepareParamKindRowCountForChunk returns the number of rows serialized by
-// SaveIntermediateResultOfChunk.  It is used only as a validation bound by
-// the transient PPK decoder; it must not allocate or inspect provenance.
-func (ae *aggExec) PrepareParamKindRowCountForChunk(chunk int) int {
-	if chunk < 0 || chunk >= len(ae.state) || len(ae.state[chunk].vecs) == 0 ||
-		ae.state[chunk].vecs[0] == nil {
-		return -1
-	}
-	return ae.state[chunk].vecs[0].Length()
-}
-
-// PrepareParamKindRowCountFlat returns the packed row count consumed by
-// RestorePrepareParamKindsFlat after UnmarshalFromReader has compacted all
-// serialized chunks into the aggregate state.
-func (ae *aggExec) PrepareParamKindRowCountFlat() int {
-	rows := 0
-	for i := range ae.state {
-		if len(ae.state[i].vecs) == 0 || ae.state[i].vecs[0] == nil {
-			continue
-		}
-		rows += ae.state[i].vecs[0].Length()
-	}
-	return rows
-}
-
-// prepareParamKindSummaryFromVector returns the transport-significant scalar
-// summary for a result vector.  Uniform metadata is deliberately kept O(1);
-// a heterogeneous sidecar is scanned only when the caller needs to summarize
-// a selected subset (the exact sidecar is emitted separately in that case).
-func prepareParamKindSummaryFromVector(vec *vector.Vector) (vector.PrepareParamKind, bool) {
-	if vec == nil || vec.Length() == 0 || vec.AllNull() {
-		return vector.PrepareParamNone, false
-	}
-	if len(vec.GetPrepareParamKinds()) == 0 {
-		kind := vec.GetPrepareParamKind()
-		if kind == vector.PrepareParamNone {
-			return vector.PrepareParamNone, false
-		}
-		return kind, true
-	}
-	var kind vector.PrepareParamKind
-	seen := false
-	for row := 0; row < vec.Length(); row++ {
-		if vec.IsNull(uint64(row)) {
-			continue
-		}
-		current := vec.GetPrepareParamKindAt(row)
-		if !seen {
-			kind, seen = current, true
-		} else if current != kind {
-			kind = vector.PrepareParamNone
-		}
-	}
-	if !seen || kind == vector.PrepareParamNone {
-		return vector.PrepareParamNone, false
-	}
-	return kind, true
-}
-
-// PrepareParamKindSummaryForChunk returns the scalar source category for the
-// rows written by SaveIntermediateResultOfChunk.  It is separate from
-// PrepareParamKindsForChunk so uniform vectors do not allocate a row payload.
-func (ae *aggExec) PrepareParamKindSummaryForChunk(chunk int) (vector.PrepareParamKind, bool) {
-	if chunk < 0 || chunk >= len(ae.state) || len(ae.state[chunk].vecs) == 0 {
-		return vector.PrepareParamNone, false
-	}
-	return prepareParamKindSummaryFromVector(ae.state[chunk].vecs[0])
-}
-
-// PrepareParamKindSummaryForSelection summarizes the rows emitted by
-// writeStateToBuf without materializing a uniform per-row representation.
-func (ae *aggExec) PrepareParamKindSummaryForSelection(flags [][]uint8) (vector.PrepareParamKind, bool) {
-	var kind vector.PrepareParamKind
-	seen := false
-	for chunk, chunkFlags := range flags {
-		if len(chunkFlags) == 0 || chunk >= len(ae.state) || len(ae.state[chunk].vecs) == 0 {
-			continue
-		}
-		vec := ae.state[chunk].vecs[0]
-		if vec == nil {
-			continue
-		}
-		for row, flag := range chunkFlags {
-			if flag == 0 || row >= vec.Length() || vec.IsNull(uint64(row)) {
-				continue
-			}
-			current := vec.GetPrepareParamKindAt(row)
-			if current == vector.PrepareParamNone {
-				continue
-			}
-			if !seen {
-				kind, seen = current, true
-			} else if current != kind {
-				kind = vector.PrepareParamNone
-			}
-		}
-	}
-	if !seen || kind == vector.PrepareParamNone {
-		return vector.PrepareParamNone, false
-	}
-	return kind, true
-}
-
-// PrepareParamKindsForSelection follows writeStateToBuf's packed row order:
-// chunks in ascending order, then selected rows within each chunk.
-func (ae *aggExec) PrepareParamKindsForSelection(flags [][]uint8) []vector.PrepareParamKind {
-	hasMetadata := false
-	rowCount := 0
-	for chunk, chunkFlags := range flags {
-		if len(chunkFlags) == 0 || chunk >= len(ae.state) || len(ae.state[chunk].vecs) == 0 {
-			continue
-		}
-		vec := ae.state[chunk].vecs[0]
-		if vec != nil && len(vec.GetPrepareParamKinds()) != 0 {
-			hasMetadata = true
-		}
-		for _, flag := range chunkFlags {
-			if flag != 0 {
-				rowCount++
-			}
-		}
-	}
-	if !hasMetadata || rowCount == 0 {
-		return nil
-	}
-	kinds := make([]vector.PrepareParamKind, 0, rowCount)
-	for chunk, chunkFlags := range flags {
-		if len(chunkFlags) == 0 || chunk >= len(ae.state) || len(ae.state[chunk].vecs) == 0 {
-			continue
-		}
-		vec := ae.state[chunk].vecs[0]
-		for row, flag := range chunkFlags {
-			if flag == 0 {
-				continue
-			}
-			if vec == nil {
-				kinds = append(kinds, vector.PrepareParamNone)
-			} else {
-				kinds = append(kinds, vec.GetPrepareParamKindAt(row))
-			}
-		}
-	}
-	for _, kind := range kinds {
-		if kind != vector.PrepareParamNone {
-			return kinds
-		}
-	}
-	return nil
-}
-
-func (ae *aggExec) RestorePrepareParamKindsForChunk(
-	chunk int,
-	kinds []vector.PrepareParamKind,
-	mp *mpool.MPool,
-) error {
-	if chunk < 0 || chunk >= len(ae.state) || len(ae.state[chunk].vecs) == 0 {
-		return moerr.NewInternalErrorNoCtxf("aggregate provenance chunk out of range: %d", chunk)
-	}
-	vec := ae.state[chunk].vecs[0]
-	if vec == nil {
-		return moerr.NewInternalErrorNoCtx("aggregate provenance vector is nil")
-	}
-	if len(kinds) != vec.Length() {
-		return moerr.NewInternalErrorNoCtxf(
-			"aggregate provenance row count %d does not match %d", len(kinds), vec.Length())
-	}
-	return vec.SetPrepareParamKindsWithMP(kinds, mp)
-}
-
-// RestorePrepareParamKindsFlat restores rows packed by UnmarshalFromReader.
-// The aggregate reader may repack several serialized chunks into fresh
-// AggBatchSize chunks, so the wire metadata is intentionally a flat sequence.
-func (ae *aggExec) RestorePrepareParamKindsFlat(
-	kinds []vector.PrepareParamKind,
-	mp *mpool.MPool,
-) error {
-	if len(kinds) == 0 {
-		return nil
-	}
-	pos := 0
-	for chunk := range ae.state {
-		if len(ae.state[chunk].vecs) == 0 || ae.state[chunk].vecs[0] == nil {
-			continue
-		}
-		vec := ae.state[chunk].vecs[0]
-		n := vec.Length()
-		if pos+n > len(kinds) {
-			return moerr.NewInternalErrorNoCtx("aggregate provenance payload is shorter than state")
-		}
-		if err := vec.SetPrepareParamKindsWithMP(kinds[pos:pos+n], mp); err != nil {
-			return err
-		}
-		pos += n
-	}
-	if pos != len(kinds) {
-		return moerr.NewInternalErrorNoCtx("aggregate provenance payload has trailing rows")
-	}
-	return nil
-}
-
-func binaryStringRowsFromVector(vec *vector.Vector) []bool {
-	if vec == nil || !vec.HasBinaryStringRows() {
-		return nil
-	}
-	rows := make([]bool, vec.Length())
-	for row := range rows {
-		rows[row] = vec.GetBinaryStringMetadataAt(row)
-	}
-	return rows
-}
-
-func (ae *aggExec) HasBinaryStringMetadata() bool {
-	for chunk := range ae.state {
-		if len(ae.state[chunk].vecs) > 0 && ae.state[chunk].vecs[0] != nil &&
-			ae.state[chunk].vecs[0].HasBinaryStringMetadata() {
-			return true
-		}
-	}
-	return false
-}
-
-func (ae *aggExec) BinaryStringRowsForChunk(chunk int) []bool {
-	if chunk < 0 || chunk >= len(ae.state) || len(ae.state[chunk].vecs) == 0 {
-		return nil
-	}
-	return binaryStringRowsFromVector(ae.state[chunk].vecs[0])
-}
-
-func (ae *aggExec) BinaryStringRowsForSelection(flags [][]uint8) []bool {
-	hasRows := false
-	for chunk := range flags {
-		if chunk < len(ae.state) && len(ae.state[chunk].vecs) > 0 &&
-			ae.state[chunk].vecs[0] != nil && ae.state[chunk].vecs[0].HasBinaryStringRows() {
-			hasRows = true
-			break
-		}
-	}
-	if !hasRows {
-		return nil
-	}
-	rowCount := 0
-	for _, chunkFlags := range flags {
-		for _, flag := range chunkFlags {
-			if flag != 0 {
-				rowCount++
-			}
-		}
-	}
-	if rowCount == 0 {
-		return nil
-	}
-	rows := make([]bool, 0, rowCount)
-	for chunk, chunkFlags := range flags {
-		var vec *vector.Vector
-		if chunk < len(ae.state) && len(ae.state[chunk].vecs) > 0 {
-			vec = ae.state[chunk].vecs[0]
-		}
-		for row, flag := range chunkFlags {
-			if flag == 0 {
-				continue
-			}
-			rows = append(rows, vec != nil && vec.GetBinaryStringMetadataAt(row))
-		}
-	}
-	return rows
-}
-
-func (ae *aggExec) BinaryStringSummaryForChunk(chunk int) bool {
-	if chunk < 0 || chunk >= len(ae.state) || len(ae.state[chunk].vecs) == 0 ||
-		ae.state[chunk].vecs[0] == nil {
-		return false
-	}
-	vec := ae.state[chunk].vecs[0]
-	if !vec.HasBinaryStringMetadata() {
-		return false
-	}
-	for row := 0; row < vec.Length(); row++ {
-		if !vec.IsNull(uint64(row)) {
-			return vec.GetBinaryStringMetadataAt(row)
-		}
-	}
-	return false
-}
-
-func (ae *aggExec) BinaryStringSummaryForSelection(flags [][]uint8) bool {
-	for chunk, chunkFlags := range flags {
-		if chunk >= len(ae.state) || len(ae.state[chunk].vecs) == 0 || ae.state[chunk].vecs[0] == nil {
-			continue
-		}
-		vec := ae.state[chunk].vecs[0]
-		if !vec.HasBinaryStringMetadata() {
-			continue
-		}
-		for row, flag := range chunkFlags {
-			if flag != 0 && !vec.IsNull(uint64(row)) && vec.GetBinaryStringMetadataAt(row) {
-				return true
-			}
-		}
-	}
-	return false
-}
-
-func (ae *aggExec) RestoreBinaryStringRowsForChunk(chunk int, rows []bool, mp *mpool.MPool) error {
-	if chunk < 0 || chunk >= len(ae.state) || len(ae.state[chunk].vecs) == 0 || ae.state[chunk].vecs[0] == nil {
-		return moerr.NewInternalErrorNoCtxf("aggregate binary provenance chunk out of range: %d", chunk)
-	}
-	return ae.state[chunk].vecs[0].SetBinaryStringRowsWithMP(rows, mp)
-}
-
-func (ae *aggExec) RestoreBinaryStringRowsFlat(rows []bool, mp *mpool.MPool) error {
-	pos := 0
-	for chunk := range ae.state {
-		if len(ae.state[chunk].vecs) == 0 || ae.state[chunk].vecs[0] == nil {
-			continue
-		}
-		vec := ae.state[chunk].vecs[0]
-		n := vec.Length()
-		if pos+n > len(rows) {
-			return moerr.NewInternalErrorNoCtx("aggregate binary provenance payload is shorter than state")
-		}
-		if err := vec.SetBinaryStringRowsWithMP(rows[pos:pos+n], mp); err != nil {
-			return err
-		}
-		pos += n
-	}
-	if pos != len(rows) {
-		return moerr.NewInternalErrorNoCtx("aggregate binary provenance payload has trailing rows")
-	}
-	return nil
-}
-
-func (ae *aggExec) SetBinaryStringSummary(binaryString bool) {
-	if !binaryString {
-		return
-	}
-	for chunk := range ae.state {
-		if len(ae.state[chunk].vecs) > 0 && ae.state[chunk].vecs[0] != nil &&
-			!ae.state[chunk].vecs[0].HasBinaryStringRows() {
-			ae.state[chunk].vecs[0].SetIsBinaryString(true)
-		}
-	}
+	return ae.state[chunk].vecs[0]
 }
 
 func (ae *aggExec) getChunkSize() int {
@@ -1093,6 +1174,13 @@ func chunkArr[T any](v *vector.Vector) *[AggBatchSize]T {
 	return (*[AggBatchSize]T)(vector.MustFixedColAsSlice[T](v, AggBatchSize))
 }
 
+// chunkRows returns only the logical state rows. Spill decode deliberately
+// gives source chunks exact capacity, so merge paths must not impose the
+// destination's fixed-capacity array contract on their immutable source.
+func chunkRows[T any](v *vector.Vector) []T {
+	return vector.MustFixedColNoTypeCheck[T](v)
+}
+
 func (ae *aggExec) GetNumChunks() int {
 	return len(ae.state)
 }
@@ -1105,10 +1193,12 @@ func (ae *aggExec) GetNumGroups() int {
 	return num
 }
 
+func (*aggExec) AdditionalMemorySize() int64 { return 0 }
+
 func (ae *aggExec) GroupGrow(more int) error {
 	if ae.chunkSize == 1 {
 		ae.state = make([]aggState, 1)
-		if err := ae.state[0].init(ae.mp, 0, 1, &ae.aggInfo, true); err != nil {
+		if err := ae.state[0].initWithAllocation(ae.mp, 0, 1, &ae.aggInfo, true, ae.allocation); err != nil {
 			ae.state = nil
 			return err
 		}
@@ -1143,11 +1233,25 @@ func (ae *aggExec) GroupGrow(more int) error {
 		if remain == 0 {
 			return nil
 		}
-		ae.state = append(ae.state, aggState{})
-		if err := ae.state[len(ae.state)-1].init(ae.mp, 0, AggBatchSize, &ae.aggInfo, true); err != nil {
-			ae.state = ae.state[:len(ae.state)-1]
+		if len(ae.state) == 0 && len(ae.standby) != 0 {
+			// The first preallocated chunk can become the active zero-length
+			// chunk without allocating a second slice. Cap the view so later
+			// active appends cannot overwrite the remaining standby chunks.
+			ae.state = ae.standby[:1:1]
+			ae.standby = ae.standby[1:]
+			continue
+		}
+		var next aggState
+		if len(ae.standby) != 0 {
+			next = ae.standby[0]
+			ae.standby[0] = aggState{}
+			ae.standby = ae.standby[1:]
+		} else if err := next.initWithAllocation(
+			ae.mp, 0, AggBatchSize, &ae.aggInfo, true, ae.allocation,
+		); err != nil {
 			return err
 		}
+		ae.state = append(ae.state, next)
 	}
 	return nil
 }
@@ -1167,7 +1271,7 @@ func (ae *aggExec) preAllocateGroupsWithNulls(more int, setNulls bool) error {
 			return nil
 		}
 		ae.state = append(ae.state, aggState{})
-		if err := ae.state[len(ae.state)-1].init(ae.mp, 0, AggBatchSize, &ae.aggInfo, setNulls); err != nil {
+		if err := ae.state[len(ae.state)-1].initWithAllocation(ae.mp, 0, AggBatchSize, &ae.aggInfo, setNulls, ae.allocation); err != nil {
 			ae.state = ae.state[:len(ae.state)-1]
 			return err
 		}
@@ -1176,15 +1280,40 @@ func (ae *aggExec) preAllocateGroupsWithNulls(more int, setNulls bool) error {
 }
 
 func (ae *aggExec) PreAllocateGroups(more int) error {
-	return ae.preAllocateGroupsWithNulls(more, true)
+	if more < 0 {
+		return moerr.NewInternalErrorNoCtxf("invalid more: %d", more)
+	}
+	if more == 0 || ae.chunkSize == 1 {
+		return nil
+	}
+
+	available := 0
+	if len(ae.state) != 0 {
+		last := &ae.state[len(ae.state)-1]
+		available = int(last.capacity - last.length)
+	}
+	for i := range ae.standby {
+		available += int(ae.standby[i].capacity)
+	}
+	for available < more {
+		var next aggState
+		if err := next.initWithAllocation(
+			ae.mp, 0, AggBatchSize, &ae.aggInfo, true, ae.allocation,
+		); err != nil {
+			return err
+		}
+		ae.standby = append(ae.standby, next)
+		available += int(next.capacity)
+	}
+	return nil
 }
 
 // Fill, BulkFill, BatchFill, and Flush are implemented by each agg function.
 // SetExtraInformation also implemented by each agg.
 
-func (ae *aggExec) SaveIntermediateResult(cnt int64, flags [][]uint8, buf *bytes.Buffer) error {
+func (ae *aggExec) SaveIntermediateResult(cnt int64, flags [][]uint8, writer io.Writer) error {
 	magic := magicNumber
-	if err := types.WriteUint64(buf, magic); err != nil {
+	if err := types.WriteUint64(writer, magic); err != nil {
 		return err
 	}
 
@@ -1200,7 +1329,9 @@ func (ae *aggExec) SaveIntermediateResult(cnt int64, flags [][]uint8, buf *bytes
 			chunks++
 		}
 	}
-	types.WriteInt32(buf, chunks)
+	if err := types.WriteInt32(writer, chunks); err != nil {
+		return err
+	}
 	for i := range flags {
 		if len(flags[i]) == 0 {
 			continue
@@ -1208,59 +1339,137 @@ func (ae *aggExec) SaveIntermediateResult(cnt int64, flags [][]uint8, buf *bytes
 		if i >= len(ae.state) {
 			return moerr.NewInternalErrorNoCtxf("aggregate state chunk out of range: %d >= %d", i, len(ae.state))
 		}
-		if err := ae.state[i].writeStateToBuf(ae.mp, &ae.aggInfo, flags[i], buf); err != nil {
+		if err := ae.state[i].writeStateToBuf(ae.mp, &ae.aggInfo, flags[i], writer); err != nil {
 			return err
 		}
 	}
-	if err := ae.writeBinaryStringTrailerForSelection(flags, buf); err != nil {
+	if err := ae.writeBinaryStringTrailerForSelection(flags, writer); err != nil {
 		return err
 	}
 
-	if err := types.WriteUint64(buf, magic); err != nil {
+	if err := types.WriteUint64(writer, magic); err != nil {
 		return err
 	}
 	return nil
 }
 
-func (ae *aggExec) SaveIntermediateResultOfChunk(chunk int, buf *bytes.Buffer) error {
-	magic := magicNumber
-	if err := types.WriteUint64(buf, magic); err != nil {
+func (ae *aggExec) SaveSpillIntermediateResult(
+	cnt int64,
+	chunk int,
+	flags []uint8,
+	writer io.Writer,
+) error {
+	if ae == nil || writer == nil || cnt < 0 {
+		return moerr.NewInvalidInputNoCtx("invalid aggregate spill state")
+	}
+	if chunk < 0 || chunk >= len(ae.state) || len(flags) == 0 {
+		return moerr.NewInternalErrorNoCtx("aggregate spill state chunk is invalid")
+	}
+	if len(flags) > int(ae.state[chunk].length) {
+		return moerr.NewInvalidInputNoCtxf(
+			"aggregate spill selection length %d exceeds state row count %d",
+			len(flags), ae.state[chunk].length)
+	}
+	if cnt > int64(len(flags)) {
+		return moerr.NewInvalidInputNoCtx("aggregate spill selection is invalid")
+	}
+	if err := types.WriteUint64(writer, spillMagicNumber); err != nil {
 		return err
 	}
+	written, err := ae.state[chunk].writeSpillState(&ae.aggInfo, flags, writer)
+	if err != nil {
+		return err
+	}
+	if int64(written) != cnt {
+		return moerr.NewInternalErrorNoCtxf(
+			"aggregate spill count %d does not match %d", written, cnt)
+	}
+	return types.WriteUint64(writer, spillMagicNumber)
+}
 
-	if chunk >= len(ae.state) {
+func (ae *aggExec) UnmarshalSpillFromReader(
+	reader io.Reader,
+	mp *mpool.MPool,
+) (retErr error) {
+	if ae == nil || reader == nil || mp == nil {
+		return moerr.NewInvalidInputNoCtx("invalid aggregate spill decoder")
+	}
+	magic, err := types.ReadUint64(reader)
+	if err != nil {
+		return err
+	}
+	if magic != spillMagicNumber {
+		return moerr.NewInvalidInputNoCtx("invalid aggregate spill header")
+	}
+	defer func() {
+		if retErr != nil {
+			ae.Free()
+		}
+	}()
+	ae.freeStandby()
+	if len(ae.state) == 0 {
+		ae.state = make([]aggState, 1)
+	} else if len(ae.state) != 1 {
+		ae.Free()
+		ae.state = make([]aggState, 1)
+	}
+	if _, err = ae.state[0].readSpillState(
+		mp, reader, &ae.aggInfo, ae.allocation); err != nil {
+		return err
+	}
+	magic, err = types.ReadUint64(reader)
+	if err != nil {
+		return err
+	}
+	if magic != spillMagicNumber {
+		return moerr.NewInvalidInputNoCtx("invalid aggregate spill trailer")
+	}
+	return nil
+}
+
+func (ae *aggExec) SaveIntermediateResultOfChunk(chunk int, writer io.Writer) error {
+	if chunk < 0 || chunk >= len(ae.state) {
 		return moerr.NewInternalErrorNoCtx("chunk index out of range")
 	}
 
-	types.WriteInt32(buf, int32(1))
-	if err := ae.state[chunk].writeAllStatesToBuf(buf, &ae.aggInfo); err != nil {
-		return err
-	}
-	if err := ae.writeBinaryStringTrailerForChunk(chunk, buf); err != nil {
+	magic := magicNumber
+	if err := types.WriteUint64(writer, magic); err != nil {
 		return err
 	}
 
-	if err := types.WriteUint64(buf, magic); err != nil {
+	if err := types.WriteInt32(writer, int32(1)); err != nil {
+		return err
+	}
+	if err := ae.state[chunk].writeAllStatesToBuf(writer, &ae.aggInfo); err != nil {
+		return err
+	}
+	if err := ae.writeBinaryStringTrailerForChunk(chunk, writer); err != nil {
+		return err
+	}
+
+	if err := types.WriteUint64(writer, magic); err != nil {
 		return err
 	}
 
 	return nil
 }
 
-func (ae *aggExec) writeBinaryStringTrailerForSelection(flags [][]uint8, buf *bytes.Buffer) error {
-	if !ae.BinaryStringSummaryForSelection(flags) {
-		return nil
+func writeAggBinaryStringByte(writer io.Writer, value byte) error {
+	var encoded [1]byte
+	encoded[0] = value
+	written, err := writer.Write(encoded[:])
+	if err != nil {
+		return err
 	}
-	rowCount := int32(0)
-	for _, chunkFlags := range flags {
-		for _, flag := range chunkFlags {
-			if flag != 0 {
-				rowCount++
-			}
-		}
+	if written != len(encoded) {
+		return io.ErrShortWrite
 	}
-	types.WriteUint64(buf, aggBinaryStringTrailerMagic)
-	types.WriteInt32(buf, rowCount)
+	return nil
+}
+
+func (ae *aggExec) writeBinaryStringTrailerForSelection(flags [][]uint8, writer io.Writer) error {
+	hasBinaryString := false
+	var rowCount int32
 	for chunk, chunkFlags := range flags {
 		if chunk >= len(ae.state) || len(ae.state[chunk].vecs) == 0 {
 			continue
@@ -1270,54 +1479,101 @@ func (ae *aggExec) writeBinaryStringTrailerForSelection(flags [][]uint8, buf *by
 			if flag == 0 {
 				continue
 			}
+			rowCount++
 			if vec != nil && vec.GetBinaryStringMetadataAt(row) {
-				buf.WriteByte(1)
-			} else {
-				buf.WriteByte(0)
+				hasBinaryString = true
+			}
+		}
+	}
+	if !hasBinaryString {
+		return nil
+	}
+	if err := types.WriteUint64(writer, aggBinaryStringTrailerMagic); err != nil {
+		return err
+	}
+	if err := types.WriteInt32(writer, rowCount); err != nil {
+		return err
+	}
+	for chunk, chunkFlags := range flags {
+		if chunk >= len(ae.state) || len(ae.state[chunk].vecs) == 0 {
+			continue
+		}
+		vec := ae.state[chunk].vecs[0]
+		for row, flag := range chunkFlags {
+			if flag == 0 {
+				continue
+			}
+			value := byte(0)
+			if vec != nil && vec.GetBinaryStringMetadataAt(row) {
+				value = 1
+			}
+			if err := writeAggBinaryStringByte(writer, value); err != nil {
+				return err
 			}
 		}
 	}
 	return nil
 }
 
-func (ae *aggExec) writeBinaryStringTrailerForChunk(chunk int, buf *bytes.Buffer) error {
+func (ae *aggExec) writeBinaryStringTrailerForChunk(chunk int, writer io.Writer) error {
 	if chunk < 0 || chunk >= len(ae.state) || len(ae.state[chunk].vecs) == 0 ||
 		ae.state[chunk].vecs[0] == nil || !ae.state[chunk].vecs[0].HasBinaryStringMetadata() {
 		return nil
 	}
 	vec := ae.state[chunk].vecs[0]
-	types.WriteUint64(buf, aggBinaryStringTrailerMagic)
-	types.WriteInt32(buf, int32(vec.Length()))
+	if err := types.WriteUint64(writer, aggBinaryStringTrailerMagic); err != nil {
+		return err
+	}
+	if err := types.WriteInt32(writer, int32(vec.Length())); err != nil {
+		return err
+	}
 	for row := 0; row < vec.Length(); row++ {
+		value := byte(0)
 		if vec.GetBinaryStringMetadataAt(row) {
-			buf.WriteByte(1)
-		} else {
-			buf.WriteByte(0)
+			value = 1
+		}
+		if err := writeAggBinaryStringByte(writer, value); err != nil {
+			return err
 		}
 	}
 	return nil
 }
 
-func checkAggStateMagic(reader io.Reader) {
+func checkAggStateMagic(reader io.Reader) error {
 	magic, err := types.ReadUint64(reader)
-	if err != nil || magic != magicNumber {
-		panic(moerr.NewInternalErrorNoCtxf("invalid magic number, got %d, %v", magic, err))
+	if err != nil {
+		return err
 	}
+	if magic != magicNumber {
+		return moerr.NewInvalidInputNoCtxf(
+			"invalid aggregate state magic number %d", magic)
+	}
+	return nil
 }
 
 func (ae *aggExec) UnmarshalFromReader(reader io.Reader, mp *mpool.MPool) (retErr error) {
-	checkAggStateMagic(reader)
+	if ae == nil || reader == nil || mp == nil {
+		return moerr.NewInvalidInputNoCtx("invalid aggregate state decoder")
+	}
 	defer func() {
 		if retErr != nil {
 			ae.Free()
 			ae.state = nil
 		}
 	}()
+	if err := checkAggStateMagic(reader); err != nil {
+		return err
+	}
+	ae.freeStandby()
 
 	// read number of chunks
 	cnt, err := types.ReadInt32(reader)
 	if err != nil {
 		return err
+	}
+	if cnt < 0 {
+		return moerr.NewInvalidInputNoCtxf(
+			"invalid aggregate state chunk count %d", cnt)
 	}
 
 	// nothing to read
@@ -1333,13 +1589,13 @@ func (ae *aggExec) UnmarshalFromReader(reader io.Reader, mp *mpool.MPool) (retEr
 			ae.Free()
 			ae.state = make([]aggState, 1)
 		}
-		if _, err := ae.state[0].readState(mp, reader, &ae.aggInfo); err != nil {
+		if _, err := ae.state[0].readStateWithAllocation(mp, reader, &ae.aggInfo, ae.allocation); err != nil {
 			return err
 		}
 		// Ensure vecs have AggBatchSize capacity so chunkArr is safe.
 		for _, vec := range ae.state[0].vecs {
 			if vec != nil && vec.Capacity() < AggBatchSize {
-				if err := vec.PreExtend(AggBatchSize, mp); err != nil {
+				if err := vec.PreExtend(AggBatchSize-vec.Length(), mp); err != nil {
 					return err
 				}
 			}
@@ -1362,7 +1618,7 @@ func (ae *aggExec) UnmarshalFromReader(reader io.Reader, mp *mpool.MPool) (retEr
 		err = func() error {
 			var st aggState
 			defer st.free(mp)
-			if _, err := st.readState(mp, reader, &ae.aggInfo); err != nil {
+			if _, err := st.readStateWithAllocation(mp, reader, &ae.aggInfo, ae.allocation); err != nil {
 				return err
 			}
 			if st.length == 0 {
@@ -1370,7 +1626,9 @@ func (ae *aggExec) UnmarshalFromReader(reader io.Reader, mp *mpool.MPool) (retEr
 			}
 
 			oldX := max(0, len(ae.state)-1)
-			ae.preAllocateGroupsWithNulls(int(st.length), false)
+			if err := ae.preAllocateGroupsWithNulls(int(st.length), false); err != nil {
+				return err
+			}
 			offset, err := ae.state[oldX].appendFromStateArg(mp, 0, &st, &ae.aggInfo)
 			if err != nil {
 				return err
@@ -1402,14 +1660,15 @@ func (ae *aggExec) readBinaryStringTrailerAndMagic(reader io.Reader, mp *mpool.M
 		return nil
 	}
 	if marker != aggBinaryStringTrailerMagic {
-		return moerr.NewInternalErrorNoCtxf("invalid aggregate trailer magic %d", marker)
+		return moerr.NewInvalidInputNoCtxf(
+			"invalid aggregate state magic number %d", marker)
 	}
 	rowCount, err := types.ReadInt32(reader)
 	if err != nil {
 		return err
 	}
 	if rowCount < 0 || int(rowCount) != ae.GetNumGroups() {
-		return moerr.NewInternalErrorNoCtxf(
+		return moerr.NewInvalidInputNoCtxf(
 			"aggregate binary provenance row count %d does not match %d", rowCount, ae.GetNumGroups())
 	}
 	for chunk := range ae.state {
@@ -1423,7 +1682,7 @@ func (ae *aggExec) readBinaryStringTrailerAndMagic(reader io.Reader, mp *mpool.M
 				return err
 			}
 			if binaryString > 1 {
-				return moerr.NewInternalErrorNoCtx("invalid aggregate binary provenance row")
+				return moerr.NewInvalidInputNoCtx("invalid aggregate binary provenance row")
 			}
 			if binaryString == 1 {
 				if err := vec.SetIsBinaryStringAt(row, true, mp); err != nil {
@@ -1432,8 +1691,7 @@ func (ae *aggExec) readBinaryStringTrailerAndMagic(reader io.Reader, mp *mpool.M
 			}
 		}
 	}
-	checkAggStateMagic(reader)
-	return nil
+	return checkAggStateMagic(reader)
 }
 
 func (ae *aggExec) Size() int64 {
@@ -1444,6 +1702,15 @@ func (ae *aggExec) Free() {
 	for _, st := range ae.state {
 		st.free(ae.mp)
 	}
+	ae.state = nil
+	ae.freeStandby()
+}
+
+func (ae *aggExec) freeStandby() {
+	for _, st := range ae.standby {
+		st.free(ae.mp)
+	}
+	ae.standby = nil
 }
 
 func (ae *aggExec) batchFillArgs(offset int, groups []uint64, vectors []*vector.Vector, distinct bool) error {
@@ -1452,15 +1719,19 @@ func (ae *aggExec) batchFillArgs(offset int, groups []uint64, vectors []*vector.
 			continue
 		}
 
-		idx := uint64(i) + uint64(offset)
+		logicalRow := offset + i
 
 		// For single-vector, use the fast path.
 		if len(vectors) == 1 {
-			if vectors[0].IsNull(idx) {
+			row, err := preflightPhysicalRow(vectors[0], logicalRow)
+			if err != nil {
+				return err
+			}
+			if vectors[0].IsNull(uint64(row)) {
 				continue
 			}
 			x, y := ae.getXY(group - 1)
-			bs := vectors[0].GetRawBytesAt(int(idx))
+			bs := vectors[0].GetRawBytesAt(row)
 			if err := ae.state[x].fillArg(ae.mp, y, bs, distinct); err != nil {
 				return err
 			}
@@ -1473,7 +1744,11 @@ func (ae *aggExec) batchFillArgs(offset int, groups []uint64, vectors []*vector.
 		//   [len1:4 bytes][raw1][len2:4 bytes][raw2]...
 		hasNull := false
 		for _, vec := range vectors {
-			if vec.IsNull(idx) {
+			row, err := preflightPhysicalRow(vec, logicalRow)
+			if err != nil {
+				return err
+			}
+			if vec.IsNull(uint64(row)) {
 				hasNull = true
 				break
 			}
@@ -1482,26 +1757,53 @@ func (ae *aggExec) batchFillArgs(offset int, groups []uint64, vectors []*vector.
 			continue
 		}
 
-		// Calculate total encoded size.
+		// Calculate total encoded size without retaining a row-frequency Go
+		// slice of column payloads.
 		totalSize := 0
-		rawBytes := make([][]byte, len(vectors))
-		for j, vec := range vectors {
-			rawBytes[j] = vec.GetRawBytesAt(int(idx))
-			totalSize += 4 + len(rawBytes[j])
-		}
-
-		// Encode all columns into a single key.
-		buf := make([]byte, totalSize)
-		off := 0
-		for _, raw := range rawBytes {
-			binary.BigEndian.PutUint32(buf[off:], uint32(len(raw)))
-			off += 4
-			copy(buf[off:], raw)
-			off += len(raw)
+		for _, vec := range vectors {
+			row, err := preflightPhysicalRow(vec, logicalRow)
+			if err != nil {
+				return err
+			}
+			raw := vec.GetRawBytesAt(row)
+			if uint64(len(raw)) > math.MaxUint32 ||
+				len(raw) > math.MaxInt-totalSize-4 {
+				return mpool.ErrAllocationAllocatorLimit
+			}
+			totalSize += 4 + len(raw)
 		}
 
 		x, y := ae.getXY(group - 1)
-		if err := ae.state[x].fillArg(ae.mp, y, buf, distinct); err != nil {
+		state := &ae.state[x]
+		header := kAggArgPrefixSz
+		if !distinct {
+			header += kAggArgOrdinalSz
+		}
+		if totalSize > math.MaxInt-header {
+			return mpool.ErrAllocationAllocatorLimit
+		}
+		key, err := state.resizeArgScratch(ae.mp, header+totalSize)
+		if err != nil {
+			return err
+		}
+		binary.BigEndian.PutUint16(key[:kAggArgPrefixSz], y)
+		if !distinct {
+			binary.BigEndian.PutUint32(
+				key[kAggArgPrefixSz:header], state.argCnt[y])
+		}
+		off := header
+		for _, vec := range vectors {
+			row, err := preflightPhysicalRow(vec, logicalRow)
+			if err != nil {
+				return err
+			}
+			raw := vec.GetRawBytesAt(row)
+			binary.BigEndian.PutUint32(key[off:], uint32(len(raw)))
+			off += 4
+			copy(key[off:], raw)
+			off += len(raw)
+		}
+		if err := state.insertPreparedArg(ae.mp, y, key, distinct); err != nil {
 			return err
 		}
 	}

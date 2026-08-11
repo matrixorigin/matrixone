@@ -15,9 +15,9 @@
 package aggexec
 
 import (
-	"bytes"
 	io "io"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -226,39 +226,53 @@ type optSplitResult struct {
 	distinct []distinctHash
 }
 
-func (r *optSplitResult) marshalToBuffers(flags [][]uint8, buf *bytes.Buffer) error {
+func (r *optSplitResult) marshalToBuffers(flags [][]uint8, writer io.Writer) error {
 	rvec := vector.NewOffHeapVecWithType(r.resultType)
 	defer rvec.Free(r.mp)
 
 	for i := range r.resultList {
-		rvec.UnionBatch(r.resultList[i], 0, r.resultList[i].Length(), flags[i], r.mp)
+		if err := rvec.UnionBatch(
+			r.resultList[i], 0, r.resultList[i].Length(), flags[i], r.mp,
+		); err != nil {
+			return err
+		}
 	}
-	if err := rvec.MarshalBinaryWithBuffer(buf); err != nil {
+	if err := rvec.MarshalBinaryTo(writer); err != nil {
 		return err
 	}
 
 	var cnt int64
 	cnt = int64(len(r.emptyList))
-	buf.Write(types.EncodeInt64(&cnt))
+	if err := types.WriteInt64(writer, cnt); err != nil {
+		return err
+	}
 	if cnt > 0 {
 		mvec := vector.NewOffHeapVecWithType(types.T_bool.ToType())
 		defer mvec.Free(r.mp)
 		for i := range r.emptyList {
-			mvec.UnionBatch(r.emptyList[i], 0, r.emptyList[i].Length(), flags[i], r.mp)
+			if err := mvec.UnionBatch(
+				r.emptyList[i], 0, r.emptyList[i].Length(), flags[i], r.mp,
+			); err != nil {
+				return err
+			}
 		}
-		if err := mvec.MarshalBinaryWithBuffer(buf); err != nil {
+		if err := mvec.MarshalBinaryTo(writer); err != nil {
 			return err
 		}
 	}
 
 	cnt = 0
 	if len(r.distinct) == 0 {
-		buf.Write(types.EncodeInt64(&cnt))
+		if err := types.WriteInt64(writer, cnt); err != nil {
+			return err
+		}
 	} else {
 		cnt = int64(rvec.Length())
-		buf.Write(types.EncodeInt64(&cnt))
+		if err := types.WriteInt64(writer, cnt); err != nil {
+			return err
+		}
 		for i := range r.distinct {
-			if err := r.distinct[i].marshalToBuffers(flags[i], buf); err != nil {
+			if err := r.distinct[i].marshalToBuffers(flags[i], writer); err != nil {
 				return err
 			}
 		}
@@ -267,38 +281,44 @@ func (r *optSplitResult) marshalToBuffers(flags [][]uint8, buf *bytes.Buffer) er
 	return nil
 }
 
-func (r *optSplitResult) marshalChunkToBuffer(chunk int, buf *bytes.Buffer) error {
-	if err := r.resultList[chunk].MarshalBinaryWithBuffer(buf); err != nil {
+func (r *optSplitResult) marshalChunkToBuffer(chunk int, writer io.Writer) error {
+	if err := r.resultList[chunk].MarshalBinaryTo(writer); err != nil {
 		return err
 	}
 
 	var cnt int64
 	cnt = int64(len(r.emptyList))
-	buf.Write(types.EncodeInt64(&cnt))
+	if err := types.WriteInt64(writer, cnt); err != nil {
+		return err
+	}
 	if cnt > 0 {
-		if err := r.emptyList[chunk].MarshalBinaryWithBuffer(buf); err != nil {
+		if err := r.emptyList[chunk].MarshalBinaryTo(writer); err != nil {
 			return err
 		}
 	}
 
 	cnt = 0
 	if len(r.distinct) == 0 {
-		buf.Write(types.EncodeInt64(&cnt))
+		if err := types.WriteInt64(writer, cnt); err != nil {
+			return err
+		}
 	} else {
 		cnt = int64(len(r.distinct[chunk].maps))
-		buf.Write(types.EncodeInt64(&cnt))
-		if err := r.distinct[chunk].marshalToBuffers(nil, buf); err != nil {
+		if err := types.WriteInt64(writer, cnt); err != nil {
+			return err
+		}
+		if err := r.distinct[chunk].marshalToBuffers(nil, writer); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func (r *optSplitResult) unmarshalFromReader(reader io.Reader) error {
+func (r *optSplitResult) unmarshalFromReader(reader io.Reader) (retErr error) {
 	var err error
 	r.free()
 	defer func() {
-		if err != nil {
+		if retErr != nil {
 			r.free()
 		}
 	}()
@@ -315,6 +335,10 @@ func (r *optSplitResult) unmarshalFromReader(reader io.Reader) error {
 	if err != nil {
 		return err
 	}
+	if cnt < 0 {
+		return moerr.NewInvalidInputNoCtxf(
+			"invalid aggregate empty-vector count %d", cnt)
+	}
 	if cnt > 0 {
 		r.emptyList = make([]*vector.Vector, 1)
 		r.bsFromEmptyList = make([][]bool, 1)
@@ -329,9 +353,25 @@ func (r *optSplitResult) unmarshalFromReader(reader io.Reader) error {
 	if err != nil {
 		return err
 	}
+	if cnt < 0 {
+		return moerr.NewInvalidInputNoCtxf(
+			"invalid aggregate distinct-state count %d", cnt)
+	}
 	if cnt > 0 {
-		r.distinct = make([]distinctHash, cnt)
+		maxInt := int64(^uint(0) >> 1)
+		if cnt > maxInt {
+			return mpool.ErrAllocationAllocatorLimit
+		}
+		// Every distinct state starts with an eight-byte map count. Bound
+		// complete in-memory records before corrupt framing can trigger a
+		// data-scaled Go allocation.
+		if sized, ok := reader.(interface{ Len() int }); ok &&
+			cnt > int64(sized.Len()/8) {
+			return io.ErrUnexpectedEOF
+		}
+		r.distinct = make([]distinctHash, int(cnt))
 		for i := range r.distinct {
+			r.distinct[i] = newDistinctHash(r.mp)
 			if err = r.distinct[i].unmarshalFromReader(reader, r.mp); err != nil {
 				return err
 			}
@@ -478,7 +518,7 @@ func (r *optSplitResult) extendResultPurely(more int) error {
 	for i := 0; i < apFullPart; i++ {
 		k := r.appendPartK()
 		if err := r.extendMoreToKthGroup(k, r.optInformation.chunkSize); err != nil {
-			return nil
+			return err
 		}
 		r.setLengthPartK(k, r.optInformation.chunkSize)
 	}

@@ -94,15 +94,6 @@ func freeAggResultVectors(vecs []*vector.Vector, mp *mpool.MPool) {
 	}
 }
 
-// vectorUnmarshal is instead of vector.UnmarshalBinary.
-// it will check if mp is nil first.
-func vectorUnmarshal(v *vector.Vector, data []byte, mp *mpool.MPool) error {
-	if mp == nil {
-		return v.UnmarshalBinary(data)
-	}
-	return v.UnmarshalBinaryWithCopy(data, mp)
-}
-
 func FromD64ToD128(v types.Decimal64) types.Decimal128 {
 	k := types.Decimal128{
 		B0_63:   uint64(v),
@@ -160,43 +151,49 @@ func (vs *Vectors[T]) MarshalBinary() ([]byte, error) {
 }
 
 func (vs *Vectors[T]) Unmarshal(data []byte, typ types.Type, mp *mpool.MPool) error {
-	bbuf := bytes.NewBuffer(data)
-	length := int64(0)
-	if _, err := bbuf.Read(types.EncodeInt64(&length)); err != nil {
-		return err
-	}
-	for i := int64(0); i < length; i++ {
-		var buf []byte
-		var err error
-		if buf, _, err = ReadBytes(bbuf); err != nil {
-			return err
-		}
-		vec := vector.NewOffHeapVecWithType(typ)
-		if err := vectorUnmarshal(vec, buf, mp); err != nil {
-			return err
-		}
-		vs.vecs = append(vs.vecs, vec)
-	}
-	return nil
+	return vs.UnmarshalFromReader(bytes.NewReader(data), typ, mp)
 }
 
-func (vs *Vectors[T]) UnmarshalFromReader(r io.Reader, typ types.Type, mp *mpool.MPool) error {
+func (vs *Vectors[T]) UnmarshalFromReader(
+	r io.Reader,
+	typ types.Type,
+	mp *mpool.MPool,
+) (retErr error) {
 	length := int64(0)
 	if _, err := io.ReadFull(r, types.EncodeInt64(&length)); err != nil {
 		return err
 	}
+	if length < 0 {
+		return moerr.NewInvalidInputNoCtxf(
+			"invalid aggregate vector count %d", length)
+	}
+	start := len(vs.vecs)
+	defer func() {
+		if retErr != nil {
+			for _, vec := range vs.vecs[start:] {
+				vec.Free(mp)
+			}
+			vs.vecs = vs.vecs[:start]
+		}
+	}()
 	for i := int64(0); i < length; i++ {
 		sz, err := types.ReadUint32(r)
 		if err != nil {
 			return err
 		}
-		lr := io.LimitReader(r, int64(sz))
+		lr := &io.LimitedReader{R: r, N: int64(sz)}
 		vec := vector.NewOffHeapVecWithType(typ)
 		if err := vec.UnmarshalWithReader(lr, mp); err != nil {
+			vec.Free(mp)
 			return err
 		}
 		if _, err := io.Copy(io.Discard, lr); err != nil {
+			vec.Free(mp)
 			return err
+		}
+		if lr.N != 0 {
+			vec.Free(mp)
+			return io.ErrUnexpectedEOF
 		}
 		vs.vecs = append(vs.vecs, vec)
 	}
@@ -286,21 +283,16 @@ func AppendMultiFixed[T numeric | types.Decimal64 | types.Decimal128](vecs *Vect
 
 func WriteBytes(b []byte, w io.Writer) (n int64, err error) {
 	size := uint32(len(b))
-	if _, err = w.Write(types.EncodeUint32(&size)); err != nil {
+	written, err := w.Write(types.EncodeUint32(&size))
+	if err != nil {
 		return
+	}
+	if written != 4 {
+		return int64(written), io.ErrShortWrite
 	}
 	wn, err := w.Write(b)
-	return int64(wn + 4), err
-}
-func ReadBytes(r io.Reader) (buf []byte, n int64, err error) {
-	strLen := uint32(0)
-	if _, err = io.ReadFull(r, types.EncodeUint32(&strLen)); err != nil {
-		return
+	if err == nil && wn != len(b) {
+		err = io.ErrShortWrite
 	}
-	buf = make([]byte, strLen)
-	if _, err = io.ReadFull(r, buf); err != nil {
-		return
-	}
-	n = 4 + int64(strLen)
-	return
+	return int64(wn + written), err
 }

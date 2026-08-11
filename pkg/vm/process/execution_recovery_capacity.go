@@ -21,11 +21,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 )
 
-// HashBuildRecoveryCapacity owns query/CN headroom which physical recovery
+// ExecutionRecoveryCapacity owns query/CN headroom which physical recovery
 // allocations borrow through an allocation-account capacity class. The
 // physical allocation remains the sole allocation-ledger owner; borrowing
 // prevents the same bytes from being charged to the shared budget twice.
-type HashBuildRecoveryCapacity struct {
+type ExecutionRecoveryCapacity struct {
 	mu sync.Mutex
 
 	generation *ExecutionResourceGeneration
@@ -34,18 +34,18 @@ type HashBuildRecoveryCapacity struct {
 	closed     bool
 }
 
-func NewHashBuildRecoveryCapacity(
+func NewExecutionRecoveryCapacity(
 	generation *ExecutionResourceGeneration,
-) (*HashBuildRecoveryCapacity, error) {
+) (*ExecutionRecoveryCapacity, error) {
 	if generation == nil || generation.budget == nil || generation.Closed() {
 		return nil, ErrExecutionResourceInvalid
 	}
-	return &HashBuildRecoveryCapacity{generation: generation}, nil
+	return &ExecutionRecoveryCapacity{generation: generation}, nil
 }
 
-// EnsureCapacity raises the reusable recovery floor before HashBuild retains
-// a source which may later need that floor to make spill progress.
-func (c *HashBuildRecoveryCapacity) EnsureCapacity(target uint64) error {
+// EnsureCapacity raises the reusable recovery floor before an operator retains
+// state which may later need that floor to make spill progress.
+func (c *ExecutionRecoveryCapacity) EnsureCapacity(target uint64) error {
 	if c == nil {
 		return ErrExecutionResourceInvalid
 	}
@@ -65,7 +65,7 @@ func (c *HashBuildRecoveryCapacity) EnsureCapacity(target uint64) error {
 	return nil
 }
 
-func (c *HashBuildRecoveryCapacity) AcquireAllocationCapacity(size uint64) error {
+func (c *ExecutionRecoveryCapacity) AcquireAllocationCapacity(size uint64) error {
 	if size == 0 {
 		return nil
 	}
@@ -94,22 +94,22 @@ func (c *HashBuildRecoveryCapacity) AcquireAllocationCapacity(size uint64) error
 	return nil
 }
 
-func (c *HashBuildRecoveryCapacity) ReleaseAllocationCapacity(size uint64) {
+func (c *ExecutionRecoveryCapacity) ReleaseAllocationCapacity(size uint64) {
 	if size == 0 {
 		return
 	}
 	if c == nil {
-		panic("nil hash build recovery capacity")
+		panic("nil execution recovery capacity")
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if size > c.borrowed {
-		panic("hash build recovery capacity release underflow")
+		panic("execution recovery capacity release underflow")
 	}
 	c.borrowed -= size
 }
 
-func (c *HashBuildRecoveryCapacity) Snapshot() (capacity, borrowed uint64) {
+func (c *ExecutionRecoveryCapacity) Snapshot() (capacity, borrowed uint64) {
 	if c == nil {
 		return 0, 0
 	}
@@ -120,7 +120,7 @@ func (c *HashBuildRecoveryCapacity) Snapshot() (capacity, borrowed uint64) {
 
 // Close releases the recovery floor only after all physical borrowers have
 // returned it. A failed close keeps ownership intact for terminal diagnostics.
-func (c *HashBuildRecoveryCapacity) Close() error {
+func (c *ExecutionRecoveryCapacity) Close() error {
 	if c == nil {
 		return nil
 	}
@@ -141,4 +141,4 @@ func (c *HashBuildRecoveryCapacity) Close() error {
 	return nil
 }
 
-var _ mpool.AllocationCapacityController = (*HashBuildRecoveryCapacity)(nil)
+var _ mpool.AllocationCapacityController = (*ExecutionRecoveryCapacity)(nil)

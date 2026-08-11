@@ -27,6 +27,7 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/hashtable"
@@ -206,6 +207,175 @@ type cancelOnDoneCheckContext struct {
 type cancelAfterWriteWriter struct {
 	cancel context.CancelFunc
 	writes int
+}
+
+type countingShortWriter struct {
+	writes int
+}
+
+type cancelAfterNErrChecksContext struct {
+	context.Context
+	remaining int
+	done      chan struct{}
+}
+
+func newCancelAfterNErrChecksContext(checks int) *cancelAfterNErrChecksContext {
+	return &cancelAfterNErrChecksContext{
+		Context:   context.Background(),
+		remaining: checks,
+		done:      make(chan struct{}),
+	}
+}
+
+func (ctx *cancelAfterNErrChecksContext) Done() <-chan struct{} {
+	return ctx.done
+}
+
+func (ctx *cancelAfterNErrChecksContext) Err() error {
+	if ctx.remaining > 0 {
+		ctx.remaining--
+		if ctx.remaining == 0 {
+			close(ctx.done)
+		}
+	}
+	select {
+	case <-ctx.done:
+		return context.Canceled
+	default:
+		return nil
+	}
+}
+
+func (w *countingShortWriter) Write(value []byte) (int, error) {
+	w.writes++
+	if len(value) == 0 {
+		return 0, nil
+	}
+	return len(value) - 1, nil
+}
+
+func TestGroupSpillWriterDoesNotRetryFailedFlush(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	target := &countingShortWriter{}
+	w, err := newGroupSpillWriter(&container{mp: proc.Mp()}, target, context.Background())
+	require.NoError(t, err)
+	require.NoError(t, w.ensureBuffer())
+	require.NoError(t, w.buffer.Resize(1))
+	w.buffer.Bytes()[0] = 1
+
+	require.ErrorIs(t, w.Flush(), io.ErrShortWrite)
+	require.ErrorIs(t, w.Flush(), io.ErrShortWrite)
+	require.Equal(t, 1, target.writes)
+	w.Free()
+	proc.Free()
+}
+
+func TestGroupSpillReaderRewindsLogicalReadAheadPosition(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+
+	content := bytes.Repeat([]byte("0123456789abcdef"), 4096)
+	file, err := os.CreateTemp(t.TempDir(), "group-spill-reader-*")
+	require.NoError(t, err)
+	defer file.Close()
+	_, err = file.Write(content)
+	require.NoError(t, err)
+	_, err = file.Seek(0, io.SeekStart)
+	require.NoError(t, err)
+
+	reader, err := newGroupSpillReader(
+		&container{mp: proc.Mp()}, file, context.Background())
+	require.NoError(t, err)
+	defer reader.Free()
+
+	first := make([]byte, 37)
+	_, err = io.ReadFull(reader, first)
+	require.NoError(t, err)
+	require.Equal(t, content[:37], first)
+	require.Equal(t, int64(37), reader.Position())
+
+	require.NoError(t, reader.Rewind(11))
+	replayed := make([]byte, 43)
+	_, err = io.ReadFull(reader, replayed)
+	require.NoError(t, err)
+	require.Equal(t, content[11:54], replayed)
+	require.Equal(t, int64(54), reader.Position())
+
+	dropped, err := reader.DisableReadAheadAndRewind(0)
+	require.NoError(t, err)
+	require.True(t, dropped)
+	require.True(t, reader.disabled)
+	direct := make([]byte, 23)
+	_, err = io.ReadFull(reader, direct)
+	require.NoError(t, err)
+	require.Equal(t, content[:23], direct)
+}
+
+func TestGroupSpillSaveArgCodecObservesCancellationWithinOneGroup(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+
+	const rows = 2048
+	groups := make([]int32, rows)
+	values := make([]string, rows)
+	orderKeys := make([]int64, rows)
+	for i := range rows {
+		groups[i] = 1
+		values[i] = fmt.Sprintf("%04d-%s", i, strings.Repeat("x", 48))
+		orderKeys[i] = int64(rows - i)
+	}
+	input := batch.NewWithSize(3)
+	input.Vecs[0] = testutil.MakeInt32Vector(groups, nil, proc.Mp())
+	input.Vecs[1] = testutil.MakeVarcharVector(values, nil, proc.Mp())
+	input.Vecs[2] = testutil.MakeInt64Vector(orderKeys, nil, proc.Mp())
+	input.SetRowCount(rows)
+	defer input.Clean(proc.Mp())
+
+	g := newGroupOp(
+		proc,
+		[]*plan.Expr{colExpr(0, types.T_int32)},
+		[]aggexec.AggFuncExecExpression{orderedGroupConcatAgg(false)},
+	)
+	require.NoError(t, g.Prepare(proc))
+	defer g.Free(proc, false, nil)
+	_, err := g.buildOneBatch(proc, input)
+	require.NoError(t, err)
+	require.Len(t, g.ctr.aggList, 1)
+	codec, ok := g.ctr.aggList[0].(aggexec.SpillStateCodec)
+	require.True(t, ok)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	target := &cancelAfterWriteWriter{cancel: cancel}
+	writer, err := newGroupSpillWriter(&g.ctr, target, ctx)
+	require.NoError(t, err)
+	err = codec.SaveSpillIntermediateResult(1, 0, []uint8{1}, writer)
+	require.ErrorIs(t, err, context.Canceled)
+	require.Equal(t, 1, target.writes)
+	writer.Free()
+
+	var encoded bytes.Buffer
+	require.NoError(t, codec.SaveSpillIntermediateResult(
+		1, 0, []uint8{1}, &encoded))
+	file, err := os.CreateTemp(t.TempDir(), "group-spill-cancel-read-*")
+	require.NoError(t, err)
+	defer file.Close()
+	_, err = file.Write(encoded.Bytes())
+	require.NoError(t, err)
+	_, err = file.Seek(0, io.SeekStart)
+	require.NoError(t, err)
+
+	targetAggs, err := g.ctr.makeSpillAggList(g.Aggs)
+	require.NoError(t, err)
+	require.Len(t, targetAggs, 1)
+	defer targetAggs[0].Free()
+	targetCodec, ok := targetAggs[0].(aggexec.SpillStateCodec)
+	require.True(t, ok)
+	readerCtx := newCancelAfterNErrChecksContext(64)
+	reader, err := newGroupSpillReader(&g.ctr, file, readerCtx)
+	require.NoError(t, err)
+	defer reader.Free()
+	err = targetCodec.UnmarshalSpillFromReader(reader, g.ctr.mp)
+	require.ErrorIs(t, err, context.Canceled)
 }
 
 func (w *cancelAfterWriteWriter) Write(p []byte) (int, error) {
@@ -652,6 +822,7 @@ func TestMergeGroupUsesIncomingWinnerPrepareParamKind(t *testing.T) {
 			outputs := collectBatches(t, merge, proc)
 			require.Len(t, outputs, 1)
 			require.Equal(t, tc.want, outputs[0].Vecs[0].GetPrepareParamKindAt(0))
+			require.True(t, outputs[0].Vecs[0].HasPrepareParamKind())
 		})
 	}
 }
@@ -698,6 +869,7 @@ func TestMergeGroupPreservesHeterogeneousPartialProvenance(t *testing.T) {
 	}
 	require.Equal(t, vector.PrepareParamFloat, seen[0])
 	require.Equal(t, vector.PrepareParamNone, seen[1])
+	require.True(t, outputs[0].Vecs[1].HasPrepareParamKind())
 	merge.Free(proc, false, nil)
 	partialBatch.Clean(proc.Mp())
 	require.Zero(t, proc.Mp().CurrNB())
@@ -1977,7 +2149,7 @@ func TestGroupSpillWriteStopsAtBucketBoundary(t *testing.T) {
 
 	_, _, err = g.ctr.spillDataToDisk(proc, g.OpAnalyzer, nil)
 	require.ErrorIs(t, err, context.Canceled)
-	require.Equal(t, 1, writer.writes)
+	require.Positive(t, writer.writes)
 	require.Equal(t, int64(1), g.OpAnalyzer.GetOpStats().ExtraStats["GroupSpillRecords"])
 
 	proc.Ctx = baseCtx
@@ -2031,7 +2203,7 @@ func TestGroupSpillWriteStopsAfterLastBucket(t *testing.T) {
 
 	_, _, err = g.ctr.spillDataToDisk(proc, g.OpAnalyzer, nil)
 	require.ErrorIs(t, err, context.Canceled)
-	require.Equal(t, 1, writer.writes)
+	require.Positive(t, writer.writes)
 	require.Equal(t, int64(1), g.OpAnalyzer.GetOpStats().ExtraStats["GroupSpillRecords"])
 }
 
@@ -2499,6 +2671,97 @@ func TestMergeGroupFreesSpillAggListAfterBatchMerge(t *testing.T) {
 		_, err := merge.buildOneBatch(proc, partial)
 		require.NoError(t, err)
 		require.Nil(t, merge.ctr.spillAggList)
+	}
+}
+
+func TestMergeGroupRejectsAggregateStateRowCountMismatch(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+
+	makeSource := func(keys []int32) *batch.Batch {
+		source := batch.NewWithSize(2)
+		source.Vecs[0] = testutil.MakeInt32Vector(keys, nil, proc.Mp())
+		source.Vecs[1] = testutil.MakeInt32Vector(keys, nil, proc.Mp())
+		source.SetRowCount(len(keys))
+		return source
+	}
+	threeRows := makeSource([]int32{1, 2, 3})
+	twoRows := makeSource([]int32{4, 5})
+	partials := buildPartialGroupBatches(
+		t, proc, []*batch.Batch{threeRows, twoRows}, false)
+	threeRows.Clean(proc.Mp())
+	twoRows.Clean(proc.Mp())
+	require.Len(t, partials, 2)
+
+	partials[0].ExtraBuf = append(partials[0].ExtraBuf[:0], partials[1].ExtraBuf...)
+	merge := newMergeGroupOp([]aggexec.AggFuncExecExpression{countStarAgg()})
+	require.NoError(t, merge.Prepare(proc))
+	_, err := merge.buildOneBatch(proc, partials[0])
+	require.ErrorContains(t, err, "does not match record row count")
+	merge.Free(proc, true, err)
+	for _, partial := range partials {
+		partial.Clean(proc.Mp())
+	}
+	require.Zero(t, proc.Mp().CurrNB())
+}
+
+func TestValidateDecodedAggregateGroupCount(t *testing.T) {
+	mp := mpool.MustNewZero()
+	exec, err := aggexec.MakeAgg(mp, aggexec.AggIdOfCountStar, false)
+	require.NoError(t, err)
+	require.NoError(t, exec.GroupGrow(2))
+	require.NoError(t, validateDecodedAggregateGroupCount(exec, 2))
+	require.ErrorContains(t,
+		validateDecodedAggregateGroupCount(exec, 3),
+		"row count 2 does not match record row count 3")
+	exec.Free()
+	require.Zero(t, mp.CurrNB())
+}
+
+func TestMergeGroupRejectsMissingOrChangedPartialMetadataAcrossSpill(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+
+	missing := batch.NewWithSize(1)
+	missing.Vecs[0] = testutil.MakeInt32Vector([]int32{1}, nil, proc.Mp())
+	missing.SetRowCount(1)
+	merge := newMergeGroupOp(nil)
+	require.NoError(t, merge.Prepare(proc))
+	_, err := merge.buildOneBatch(proc, missing)
+	require.ErrorContains(t, err, "partial metadata is missing")
+	merge.Free(proc, true, err)
+	missing.Clean(proc.Mp())
+
+	newSource := func(value int32) *batch.Batch {
+		source := batch.NewWithSize(2)
+		source.Vecs[0] = testutil.MakeInt32Vector([]int32{value}, nil, proc.Mp())
+		source.Vecs[1] = testutil.MakeInt32Vector([]int32{value}, nil, proc.Mp())
+		source.SetRowCount(1)
+		return source
+	}
+	first, second := newSource(1), newSource(2)
+	partials := buildPartialGroupBatches(
+		t, proc, []*batch.Batch{first, second}, false)
+	first.Clean(proc.Mp())
+	second.Clean(proc.Mp())
+	require.Len(t, partials, 2)
+	require.GreaterOrEqual(t, len(partials[1].ExtraBuf), 4)
+	firstType := int32(binary.LittleEndian.Uint32(partials[0].ExtraBuf[:4]))
+	changedType := int32(H8)
+	if firstType == changedType {
+		changedType = HStr
+	}
+	binary.LittleEndian.PutUint32(partials[1].ExtraBuf[:4], uint32(changedType))
+
+	merge = newMergeGroupOp([]aggexec.AggFuncExecExpression{countStarAgg()})
+	merge.SpillMem = 1
+	merge.AppendChild(colexec.NewMockOperator().WithBatchs(partials))
+	require.NoError(t, merge.Prepare(proc))
+	_, err = vm.Exec(merge, proc)
+	require.ErrorContains(t, err, "inconsistent merge-group partial metadata")
+	merge.Free(proc, true, err)
+	for _, partial := range partials {
+		partial.Clean(proc.Mp())
 	}
 }
 

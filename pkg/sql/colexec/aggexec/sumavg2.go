@@ -533,7 +533,11 @@ func (exec *sumAvgExec[T, A]) Flush() (_ []*vector.Vector, retErr error) {
 
 	if exec.IsDistinct() {
 		for i := range vecs {
-			vecs[i] = vector.NewOffHeapVecWithType(resultType)
+			var err error
+			vecs[i], err = exec.allocation.newVector(resultType)
+			if err != nil {
+				return nil, err
+			}
 			if err := vecs[i].PreExtend(int(exec.state[i].length), exec.mp); err != nil {
 				return nil, err
 			}
@@ -592,6 +596,9 @@ func (exec *sumAvgExec[T, A]) Flush() (_ []*vector.Vector, retErr error) {
 				avgs := util.UnsafeSliceCast[float64](sums)
 				cntVec := exec.state[i].vecs[1]
 				cnts := vector.MustFixedColNoTypeCheck[int64](cntVec)
+				if err := preflightNullsForZeroCounts(sumVec, cnts, exec.mp); err != nil {
+					return nil, err
+				}
 				for j, cnt := range cnts {
 					if cnt == 0 {
 						sumVec.SetNull(uint64(j))
@@ -1115,6 +1122,19 @@ func sumAvgDecimalArgScale(typ types.Type) int32 {
 	}
 }
 
+func preflightNullsForZeroCounts(
+	result *vector.Vector,
+	counts []int64,
+	mp *mpool.MPool,
+) error {
+	for _, count := range counts {
+		if count == 0 {
+			return result.PreExtendNulls(len(counts), mp)
+		}
+	}
+	return nil
+}
+
 func (exec *sumAvgDecExec[A, S]) Flush() (_ []*vector.Vector, retErr error) {
 	var err error
 	resultType := exec.aggInfo.retType
@@ -1131,7 +1151,11 @@ func (exec *sumAvgDecExec[A, S]) Flush() (_ []*vector.Vector, retErr error) {
 
 	if exec.IsDistinct() {
 		for i := range vecs {
-			vecs[i] = vector.NewOffHeapVecWithType(resultType)
+			var err error
+			vecs[i], err = exec.allocation.newVector(resultType)
+			if err != nil {
+				return nil, err
+			}
 			if err := vecs[i].PreExtend(int(exec.state[i].length), exec.mp); err != nil {
 				return nil, err
 			}
@@ -1187,6 +1211,9 @@ func (exec *sumAvgDecExec[A, S]) Flush() (_ []*vector.Vector, retErr error) {
 			if !exec.isSum {
 				cntVec := exec.state[i].vecs[1]
 				cnts := vector.MustFixedColNoTypeCheck[int64](cntVec)
+				if err := preflightNullsForZeroCounts(sumVec, cnts, exec.mp); err != nil {
+					return nil, err
+				}
 				for j, cnt := range cnts {
 					if cnt == 0 {
 						sumVec.SetNull(uint64(j))

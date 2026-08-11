@@ -290,7 +290,11 @@ func (exec *countColumnExec) Flush() (_ []*vector.Vector, retErr error) {
 		}
 
 		for i := range vecs {
-			vecs[i] = vector.NewOffHeapVecWithType(types.T_int64.ToType())
+			var err error
+			vecs[i], err = exec.allocation.newVector(types.T_int64.ToType())
+			if err != nil {
+				return nil, err
+			}
 			if err := vecs[i].PreExtend(int(exec.state[i].length), exec.mp); err != nil {
 				return nil, err
 			}

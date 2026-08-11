@@ -15,7 +15,6 @@
 package aggexec
 
 import (
-	"bytes"
 	io "io"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -96,12 +95,12 @@ func (exec *percentRankExec) GetOptResult() SplitResult {
 	return &exec.ret.optSplitResult
 }
 
-func (exec *percentRankExec) SaveIntermediateResult(cnt int64, flags [][]uint8, buf *bytes.Buffer) error {
-	return marshalRetAndGroupsToBuffer(cnt, flags, buf, &exec.ret.optSplitResult, exec.groups, nil)
+func (exec *percentRankExec) SaveIntermediateResult(cnt int64, flags [][]uint8, writer io.Writer) error {
+	return marshalRetAndGroupsToBuffer(cnt, flags, writer, &exec.ret.optSplitResult, exec.groups, nil)
 }
 
-func (exec *percentRankExec) SaveIntermediateResultOfChunk(chunk int, buf *bytes.Buffer) error {
-	return marshalChunkToBuffer(chunk, buf, &exec.ret.optSplitResult, exec.groups, nil)
+func (exec *percentRankExec) SaveIntermediateResultOfChunk(chunk int, writer io.Writer) error {
+	return marshalChunkToBuffer(chunk, writer, &exec.ret.optSplitResult, exec.groups, nil)
 }
 
 func (exec *percentRankExec) UnmarshalFromReader(reader io.Reader, mp *mpool.MPool) error {
@@ -222,15 +221,15 @@ func (exec *singleWindowExec) GetOptResult() SplitResult {
 	return &exec.ret.optSplitResult
 }
 
-func (exec *singleWindowExec) SaveIntermediateResult(cnt int64, flags [][]uint8, buf *bytes.Buffer) error {
+func (exec *singleWindowExec) SaveIntermediateResult(cnt int64, flags [][]uint8, writer io.Writer) error {
 	return marshalRetAndGroupsToBuffer(
-		cnt, flags, buf,
+		cnt, flags, writer,
 		&exec.ret.optSplitResult, exec.groups, nil)
 }
 
-func (exec *singleWindowExec) SaveIntermediateResultOfChunk(chunk int, buf *bytes.Buffer) error {
+func (exec *singleWindowExec) SaveIntermediateResultOfChunk(chunk int, writer io.Writer) error {
 	return marshalChunkToBuffer(
-		chunk, buf,
+		chunk, writer,
 		&exec.ret.optSplitResult, exec.groups, nil)
 }
 
@@ -466,15 +465,15 @@ func (exec *ntileWindowExec) GetOptResult() SplitResult {
 	return &exec.ret.optSplitResult
 }
 
-func (exec *ntileWindowExec) SaveIntermediateResult(cnt int64, flags [][]uint8, buf *bytes.Buffer) error {
+func (exec *ntileWindowExec) SaveIntermediateResult(cnt int64, flags [][]uint8, writer io.Writer) error {
 	return marshalRetAndGroupsToBuffer(
-		cnt, flags, buf,
+		cnt, flags, writer,
 		&exec.ret.optSplitResult, exec.groups, nil)
 }
 
-func (exec *ntileWindowExec) SaveIntermediateResultOfChunk(chunk int, buf *bytes.Buffer) error {
+func (exec *ntileWindowExec) SaveIntermediateResultOfChunk(chunk int, writer io.Writer) error {
 	return marshalChunkToBuffer(
-		chunk, buf,
+		chunk, writer,
 		&exec.ret.optSplitResult, exec.groups, nil)
 }
 
@@ -632,15 +631,15 @@ func (exec *cumeDistWindowExec) GetOptResult() SplitResult {
 	return &exec.ret.optSplitResult
 }
 
-func (exec *cumeDistWindowExec) SaveIntermediateResult(cnt int64, flags [][]uint8, buf *bytes.Buffer) error {
+func (exec *cumeDistWindowExec) SaveIntermediateResult(cnt int64, flags [][]uint8, writer io.Writer) error {
 	return marshalRetAndGroupsToBuffer(
-		cnt, flags, buf,
+		cnt, flags, writer,
 		&exec.ret.optSplitResult, exec.groups, nil)
 }
 
-func (exec *cumeDistWindowExec) SaveIntermediateResultOfChunk(chunk int, buf *bytes.Buffer) error {
+func (exec *cumeDistWindowExec) SaveIntermediateResultOfChunk(chunk int, writer io.Writer) error {
 	return marshalChunkToBuffer(
-		chunk, buf,
+		chunk, writer,
 		&exec.ret.optSplitResult, exec.groups, nil)
 }
 
@@ -840,11 +839,11 @@ func (exec *valueWindowExec) GetOptResult() SplitResult {
 	return nil
 }
 
-func (exec *valueWindowExec) SaveIntermediateResult(cnt int64, flags [][]uint8, buf *bytes.Buffer) error {
+func (exec *valueWindowExec) SaveIntermediateResult(cnt int64, flags [][]uint8, writer io.Writer) error {
 	return moerr.NewInternalErrorNoCtx("value window function does not support SaveIntermediateResult")
 }
 
-func (exec *valueWindowExec) SaveIntermediateResultOfChunk(chunk int, buf *bytes.Buffer) error {
+func (exec *valueWindowExec) SaveIntermediateResultOfChunk(chunk int, writer io.Writer) error {
 	return moerr.NewInternalErrorNoCtx("value window function does not support SaveIntermediateResultOfChunk")
 }
 

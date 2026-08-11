@@ -32,6 +32,19 @@ type jsonArrayAggExec struct {
 	groups       []struct{}
 }
 
+func (exec *jsonArrayAggExec) SetAllocationAccount(
+	allocation *AllocationAccount,
+) error {
+	return moerr.NewNotSupportedNoCtx(
+		"json_arrayagg has data-scaled Go finalization state")
+}
+
+func (exec *jsonArrayAggExec) ClearAllocationAccount(
+	allocation *AllocationAccount,
+) error {
+	return exec.aggExec.ClearAllocationAccount(allocation)
+}
+
 func newJsonArrayAggExec(mp *mpool.MPool, info multiAggInfo) *jsonArrayAggExec {
 	exec := &jsonArrayAggExec{}
 	exec.mp = mp
@@ -51,6 +64,10 @@ func newJsonArrayAggExec(mp *mpool.MPool, info multiAggInfo) *jsonArrayAggExec {
 
 func (exec *jsonArrayAggExec) IsDistinct() bool {
 	return exec.distinct
+}
+
+func (exec *jsonArrayAggExec) SupportsBoundedSpillState() bool {
+	return false
 }
 
 func (exec *jsonArrayAggExec) GroupGrow(more int) error {
@@ -209,6 +226,7 @@ func (exec *jsonArrayAggExec) Size() int64 {
 }
 
 func (exec *jsonArrayAggExec) Free() {
+	exec.groups = nil
 	exec.distinctHash.free()
 	exec.aggExec.Free()
 }
@@ -218,6 +236,19 @@ type jsonObjectAggExec struct {
 	distinct     bool
 	distinctHash distinctHash
 	groups       []struct{}
+}
+
+func (exec *jsonObjectAggExec) SetAllocationAccount(
+	allocation *AllocationAccount,
+) error {
+	return moerr.NewNotSupportedNoCtx(
+		"json_objectagg has data-scaled Go finalization state")
+}
+
+func (exec *jsonObjectAggExec) ClearAllocationAccount(
+	allocation *AllocationAccount,
+) error {
+	return exec.aggExec.ClearAllocationAccount(allocation)
 }
 
 func newJsonObjectAggExec(mg *mpool.MPool, info multiAggInfo) *jsonObjectAggExec {
@@ -239,6 +270,10 @@ func newJsonObjectAggExec(mg *mpool.MPool, info multiAggInfo) *jsonObjectAggExec
 
 func (exec *jsonObjectAggExec) IsDistinct() bool {
 	return exec.distinct
+}
+
+func (exec *jsonObjectAggExec) SupportsBoundedSpillState() bool {
+	return false
 }
 
 func (exec *jsonObjectAggExec) GroupGrow(more int) error {
@@ -416,6 +451,7 @@ func (exec *jsonObjectAggExec) Size() int64 {
 }
 
 func (exec *jsonObjectAggExec) Free() {
+	exec.groups = nil
 	exec.distinctHash.free()
 	exec.aggExec.Free()
 }

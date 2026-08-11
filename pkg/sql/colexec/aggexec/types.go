@@ -15,7 +15,6 @@
 package aggexec
 
 import (
-	"bytes"
 	"fmt"
 	io "io"
 
@@ -184,8 +183,8 @@ type AggFuncExec interface {
 	Flush() ([]*vector.Vector, error)
 
 	// Serialize intermediate result to bytes.
-	SaveIntermediateResult(cnt int64, flags [][]uint8, buf *bytes.Buffer) error
-	SaveIntermediateResultOfChunk(chunk int, buf *bytes.Buffer) error
+	SaveIntermediateResult(cnt int64, flags [][]uint8, writer io.Writer) error
+	SaveIntermediateResultOfChunk(chunk int, writer io.Writer) error
 	UnmarshalFromReader(reader io.Reader, mp *mpool.MPool) error
 
 	Size() int64
@@ -210,6 +209,28 @@ func MergePreservesSource(exec AggFuncExec) bool {
 	return ok
 }
 
+// AllocationAccountOwner is implemented by aggregate executors whose complete
+// retained state can participate in an operator's physical allocation
+// account.  It is deliberately separate from AggFuncExec: callers that do not
+// install a statement account keep the existing aggregate API, while an
+// accountable operator must reject an executor that does not implement this
+// closed lifecycle contract.
+type AllocationAccountOwner interface {
+	SetAllocationAccount(*AllocationAccount) error
+	ClearAllocationAccount(*AllocationAccount) error
+}
+
+// SpillStateCodec is the bounded-memory, execution-local aggregate codec.
+// It is separate from the stable intermediate-result codec because spill must
+// stream selected physical rows without first allocating a selection Vector.
+// Allocation-accounted Group rejects aggregates that do not implement this
+// closed spill contract.
+type SpillStateCodec interface {
+	SupportsBoundedSpillState() bool
+	SaveSpillIntermediateResult(cnt int64, chunk int, flags []uint8, writer io.Writer) error
+	UnmarshalSpillFromReader(reader io.Reader, mp *mpool.MPool) error
+}
+
 // PrepareParamKindStateAccessor is an optional capability implemented by the
 // aggregate state backed executors.  It exposes the provenance of the value
 // vector without widening AggFuncExec (value-window and other non-serializable
@@ -219,14 +240,14 @@ func MergePreservesSource(exec AggFuncExec) bool {
 type PrepareParamKindStateAccessor interface {
 	HasBinaryStringMetadata() bool
 	PrepareParamKindsForChunk(chunk int) []vector.PrepareParamKind
-	PrepareParamKindsForSelection(flags [][]uint8) []vector.PrepareParamKind
+	PrepareParamKindsForChunkSelection(chunk int, flags []uint8) []vector.PrepareParamKind
 	// Row counts let transient provenance decoders validate an exact record
 	// before allocating its row payload. They are intentionally separate from
 	// the optional payload accessors because uniform states do not allocate.
 	PrepareParamKindRowCountForChunk(chunk int) int
 	PrepareParamKindRowCountFlat() int
 	PrepareParamKindSummaryForChunk(chunk int) (vector.PrepareParamKind, bool)
-	PrepareParamKindSummaryForSelection(flags [][]uint8) (vector.PrepareParamKind, bool)
+	PrepareParamKindSummaryForChunkSelection(chunk int, flags []uint8) (vector.PrepareParamKind, bool)
 	RestorePrepareParamKindsForChunk(chunk int, kinds []vector.PrepareParamKind, mp *mpool.MPool) error
 	RestorePrepareParamKindsFlat(kinds []vector.PrepareParamKind, mp *mpool.MPool) error
 	BinaryStringRowsForChunk(chunk int) []bool
@@ -284,6 +305,11 @@ func makeSpecialAggExec(
 	mp *mpool.MPool,
 	id int64, isDistinct bool, legacyTextMinMax bool, params ...types.Type,
 ) (AggFuncExec, bool, error) {
+	if isDistinct &&
+		(id == AggIdOfBitAnd || id == AggIdOfBitOr || id == AggIdOfBitXor) {
+		return nil, true, moerr.NewNotSupportedNoCtx(
+			"distinct bit operations are not supported")
+	}
 	if id == AggIdOfMaxBy && len(params) != 3 {
 		return nil, true, moerr.NewInternalErrorNoCtx("max_by requires value, order, and tie arguments")
 	}

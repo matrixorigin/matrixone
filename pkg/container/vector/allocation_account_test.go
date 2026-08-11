@@ -286,6 +286,25 @@ func TestVectorAllocationAccountBitmapResetReuseAndFree(t *testing.T) {
 	finalizeTestVectorAllocationAccount(t, state)
 }
 
+func TestVectorAllocationAccountBitmapUsesExclusiveRowBoundary(t *testing.T) {
+	state := newTestVectorAllocationAccount(t, 1<<20, 4)
+	mp := mpool.MustNewZero()
+	vec := newAccountedTestVector(t, types.T_int64.ToType(), state.selection)
+
+	require.NoError(t, vec.PreExtendBitmap(64, mp))
+	require.Equal(t, 1, vec.nsp.GetBitmap().ExternalStorageCapacity())
+	require.Equal(t, 1, vec.gsp.GetBitmap().ExternalStorageCapacity())
+	require.Equal(t, uint64(16), state.account.Snapshot().Used)
+	vec.SetLength(64)
+	vec.SetAllNulls(64)
+	vec.GetGrouping().AddRange(0, 64)
+	require.Equal(t, 64, vec.GetNulls().Count())
+	require.Equal(t, 64, vec.GetGrouping().Count())
+
+	vec.Free(mp)
+	finalizeTestVectorAllocationAccount(t, state)
+}
+
 func TestVectorAllocationAccountBitmapShrinkUsesNoScratch(t *testing.T) {
 	state := newTestVectorAllocationAccount(t, 8<<20, 16)
 	mp := mpool.MustNewZero()

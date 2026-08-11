@@ -90,37 +90,43 @@ func TestGroupSpillGroupKeyPrepareParamKindCodec(t *testing.T) {
 	require.NoError(t, prepared.Vecs[0].SetPrepareParamKindsWithMP(
 		[]vector.PrepareParamKind{vector.PrepareParamFloat, vector.PrepareParamInteger}, mp))
 
-	var payload bytes.Buffer
+	rows := []int32{0, 1}
+	newDestination := func() *batch.Batch {
+		decoded := batch.NewOffHeapWithSize(1)
+		decoded.Vecs[0] = vector.NewOffHeapVecWithType(types.T_text.ToType())
+		return decoded
+	}
 	var legacyRecord bytes.Buffer
-	require.NoError(t, appendSpillGroupByBatch(&legacyRecord, legacy, &payload))
-	decoded := batch.NewWithSize(0)
-	require.NoError(t, unmarshalSpillGroupByBatch(
-		bufio.NewReader(bytes.NewReader(legacyRecord.Bytes())), decoded, mp))
+	require.NoError(t, appendSpillGroupByRows(&legacyRecord, legacy, rows))
+	decoded := newDestination()
+	require.NoError(t, unmarshalSpillGroupByRows(
+		bytes.NewReader(legacyRecord.Bytes()), decoded, len(rows), mp))
 	require.False(t, decoded.Vecs[0].HasPrepareParamKind())
 	decoded.Clean(mp)
 
 	var preparedRecord bytes.Buffer
-	require.NoError(t, appendSpillGroupByBatch(&preparedRecord, prepared, &payload))
-	decoded = batch.NewWithSize(0)
-	require.NoError(t, unmarshalSpillGroupByBatch(
-		bufio.NewReader(bytes.NewReader(preparedRecord.Bytes())), decoded, mp))
+	require.NoError(t, appendSpillGroupByRows(&preparedRecord, prepared, rows))
+	decoded = newDestination()
+	require.NoError(t, unmarshalSpillGroupByRows(
+		bytes.NewReader(preparedRecord.Bytes()), decoded, len(rows), mp))
 	require.Equal(t, vector.PrepareParamFloat, decoded.Vecs[0].GetPrepareParamKindAt(0))
 	require.Equal(t, vector.PrepareParamInteger, decoded.Vecs[0].GetPrepareParamKindAt(1))
 	decoded.Clean(mp)
 
 	truncated := append([]byte(nil), preparedRecord.Bytes()[:preparedRecord.Len()-1]...)
-	decoded = batch.NewWithSize(0)
-	require.Error(t, unmarshalSpillGroupByBatch(
-		bufio.NewReader(bytes.NewReader(truncated)), decoded, mp))
+	decoded = newDestination()
+	require.Error(t, unmarshalSpillGroupByRows(
+		bytes.NewReader(truncated), decoded, len(rows), mp))
 	decoded.Clean(mp)
 
 	invalid := append([]byte(nil), preparedRecord.Bytes()...)
-	trailer := bytes.Index(invalid, []byte{'P', 'P', 'B'})
-	require.Positive(t, trailer)
-	invalid[trailer] = 'X'
-	decoded = batch.NewWithSize(0)
-	require.Error(t, unmarshalSpillGroupByBatch(
-		bufio.NewReader(bytes.NewReader(invalid)), decoded, mp))
+	// column count (4 bytes), followed by selected row count (4 bytes), then
+	// the selected-vector metadata byte.
+	require.Greater(t, len(invalid), 8)
+	invalid[8] |= 0x80
+	decoded = newDestination()
+	require.ErrorContains(t, unmarshalSpillGroupByRows(
+		bytes.NewReader(invalid), decoded, len(rows), mp), "metadata")
 	decoded.Clean(mp)
 }
 

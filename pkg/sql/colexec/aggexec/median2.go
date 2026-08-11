@@ -15,7 +15,6 @@
 package aggexec
 
 import (
-	"bytes"
 	"cmp"
 	io "io"
 
@@ -92,12 +91,12 @@ func (exec *medianColumnExecSelf[T, R]) PreAllocateGroups(more int) error {
 	return exec.ret.preExtend(more)
 }
 
-func (exec *medianColumnExecSelf[T, R]) SaveIntermediateResult(cnt int64, flags [][]uint8, buf *bytes.Buffer) error {
-	return marshalRetAndGroupsToBuffer(cnt, flags, buf, &exec.ret.optSplitResult, exec.groups, nil)
+func (exec *medianColumnExecSelf[T, R]) SaveIntermediateResult(cnt int64, flags [][]uint8, writer io.Writer) error {
+	return marshalRetAndGroupsToBuffer(cnt, flags, writer, &exec.ret.optSplitResult, exec.groups, nil)
 }
 
-func (exec *medianColumnExecSelf[T, R]) SaveIntermediateResultOfChunk(chunk int, buf *bytes.Buffer) error {
-	return marshalChunkToBuffer(chunk, buf, &exec.ret.optSplitResult, exec.groups, nil)
+func (exec *medianColumnExecSelf[T, R]) SaveIntermediateResultOfChunk(chunk int, writer io.Writer) error {
+	return marshalChunkToBuffer(chunk, writer, &exec.ret.optSplitResult, exec.groups, nil)
 }
 
 func (exec *medianColumnExecSelf[T, R]) UnmarshalFromReader(reader io.Reader, mp *mpool.MPool) error {
@@ -124,11 +123,7 @@ func (exec *medianColumnExecSelf[T, R]) UnmarshalFromReader(reader io.Reader, mp
 			if err != nil {
 				return err
 			}
-			grp := NewVectors[T](exec.argType)
-			for _, vec := range grp.vecs {
-				vec.Free(mp)
-			}
-			grp.vecs = nil
+			grp := &Vectors[T]{}
 			if err = grp.Unmarshal(bs, exec.argType, mp); err != nil {
 				return err
 			}
@@ -399,6 +394,22 @@ func (exec *medianColumnExecSelf[T, R]) BatchMerge(next *medianColumnExecSelf[T,
 }
 
 func (exec *medianColumnExecSelf[T, R]) SetExtraInformation(partialResult any, groupIndex int) error {
+	return nil
+}
+
+func (exec *medianColumnExecSelf[T, R]) SetAllocationAccount(
+	allocation *AllocationAccount,
+) error {
+	if exec == nil || allocation == nil || allocation.account == nil {
+		return mpool.ErrAllocationAccountInvalid
+	}
+	return moerr.NewNotSupportedNoCtx(
+		"median has allocation state without a bounded spill codec")
+}
+
+func (exec *medianColumnExecSelf[T, R]) ClearAllocationAccount(
+	_ *AllocationAccount,
+) error {
 	return nil
 }
 

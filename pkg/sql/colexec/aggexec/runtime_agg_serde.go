@@ -15,7 +15,6 @@
 package aggexec
 
 import (
-	"bytes"
 	"encoding"
 	io "io"
 
@@ -24,20 +23,26 @@ import (
 )
 
 func marshalRetAndGroupsToBuffer[T encoding.BinaryMarshaler](
-	cnt int64, flags [][]uint8, buf *bytes.Buffer,
+	cnt int64, flags [][]uint8, writer io.Writer,
 	ret *optSplitResult, groups []T, extra [][]byte) error {
-	types.WriteInt64(buf, cnt)
+	if err := types.WriteInt64(writer, cnt); err != nil {
+		return err
+	}
 	if cnt == 0 {
 		return nil
 	}
-	if err := ret.marshalToBuffers(flags, buf); err != nil {
+	if err := ret.marshalToBuffers(flags, writer); err != nil {
 		return err
 	}
 
 	if len(groups) == 0 {
-		types.WriteInt64(buf, 0)
+		if err := types.WriteInt64(writer, 0); err != nil {
+			return err
+		}
 	} else {
-		types.WriteInt64(buf, cnt)
+		if err := types.WriteInt64(writer, cnt); err != nil {
+			return err
+		}
 		groupIdx := 0
 		for i := range flags {
 			for j := range flags[i] {
@@ -46,7 +51,7 @@ func marshalRetAndGroupsToBuffer[T encoding.BinaryMarshaler](
 					if err != nil {
 						return err
 					}
-					if err = types.WriteSizeBytes(bs, buf); err != nil {
+					if err = types.WriteSizeBytes(bs, writer); err != nil {
 						return err
 					}
 				}
@@ -56,9 +61,11 @@ func marshalRetAndGroupsToBuffer[T encoding.BinaryMarshaler](
 	}
 
 	cnt = int64(len(extra))
-	types.WriteInt64(buf, cnt)
+	if err := types.WriteInt64(writer, cnt); err != nil {
+		return err
+	}
 	for i := range extra {
-		if err := types.WriteSizeBytes(extra[i], buf); err != nil {
+		if err := types.WriteSizeBytes(extra[i], writer); err != nil {
 			return err
 		}
 	}
@@ -66,7 +73,7 @@ func marshalRetAndGroupsToBuffer[T encoding.BinaryMarshaler](
 }
 
 func marshalChunkToBuffer[T encoding.BinaryMarshaler](
-	chunk int, buf *bytes.Buffer,
+	chunk int, writer io.Writer,
 	ret *optSplitResult, groups []T, extra [][]byte) error {
 	chunkSz := ret.optInformation.chunkSize
 	start := chunkSz * chunk
@@ -76,31 +83,39 @@ func marshalChunkToBuffer[T encoding.BinaryMarshaler](
 	}
 
 	cnt := int64(chunkNGroup)
-	buf.Write(types.EncodeInt64(&cnt))
+	if err := types.WriteInt64(writer, cnt); err != nil {
+		return err
+	}
 
-	if err := ret.marshalChunkToBuffer(chunk, buf); err != nil {
+	if err := ret.marshalChunkToBuffer(chunk, writer); err != nil {
 		return err
 	}
 
 	if len(groups) == 0 {
-		types.WriteInt64(buf, 0)
+		if err := types.WriteInt64(writer, 0); err != nil {
+			return err
+		}
 	} else {
-		types.WriteInt64(buf, cnt)
+		if err := types.WriteInt64(writer, cnt); err != nil {
+			return err
+		}
 		for i := 0; i < chunkNGroup; i++ {
 			bs, err := groups[start+i].MarshalBinary()
 			if err != nil {
 				return err
 			}
-			if err = types.WriteSizeBytes(bs, buf); err != nil {
+			if err = types.WriteSizeBytes(bs, writer); err != nil {
 				return err
 			}
 		}
 	}
 
 	cnt = int64(len(extra))
-	types.WriteInt64(buf, cnt)
+	if err := types.WriteInt64(writer, cnt); err != nil {
+		return err
+	}
 	for i := range extra {
-		if err := types.WriteSizeBytes(extra[i], buf); err != nil {
+		if err := types.WriteSizeBytes(extra[i], writer); err != nil {
 			return err
 		}
 	}
