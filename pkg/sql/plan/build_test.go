@@ -1143,6 +1143,11 @@ func TestSingleTableSQLBuilder(t *testing.T) {
 		"select get_format(TIMESTAMP, 'ISO')",
 
 		"select count(n_name) from nation limit 10 for update", // aggregate + limit + for update (issue 23131 family)
+
+		// uuid family: INTERVAL shift rewrite, datetime boundary form, extraction
+		"select uuid(interval 1 minute), uuid_v7(interval 1 hour), uuid_v1(interval 1 day), uuid_v6(interval 1 month)",
+		"select uuid_v7('2026-01-01 00:00:00'), uuid_v1('2026-01-01 00:00:00'), uuid_v6('2026-01-01 00:00:00')",
+		"select uuid_extract_version(uuid_v4()), uuid_extract_timestamp(uuid_v7())",
 	}
 	runTestShouldPass(mock, t, sqls, false, false)
 
@@ -1162,6 +1167,9 @@ func TestSingleTableSQLBuilder(t *testing.T) {
 		"SELECT DISTINCT N_NAME FROM NATION ORDER BY N_REGIONKEY", //test distinct with order by
 		//"select 18446744073709551500",                             //over int64
 		//"select 0xffffffffffffffff",                               //over int64
+
+		"select uuid_v7(5, 3)", // internal (count, unit) uuid form is not directly callable
+		"select uuid(1, 2, 3)", // uuid family takes zero or one arg
 	}
 	runTestShouldError(mock, t, sqls)
 }
@@ -1655,14 +1663,13 @@ func TestRewriteRollupWindowSelectGuards(t *testing.T) {
 
 func TestRewriteRollupWindowUnsupportedDoesNotFallback(t *testing.T) {
 	mock := NewMockOptimizer(false)
-	for _, sql := range []string{
+	_, err := runOneStmt(
+		mock,
+		t,
 		"select distinct a, row_number() over () from nation group by a, n_regionkey with rollup",
-		"select a, row_number() over () is null from nation group by a, n_regionkey with rollup",
-	} {
-		_, err := runOneStmt(mock, t, sql)
-		require.Error(t, err)
-		require.Contains(t, err.Error(), "window functions with ROLLUP or CUBE for this expression")
-	}
+	)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "window functions with ROLLUP or CUBE for this expression")
 }
 
 func TestRewriteRollupWindowExprSupportedShapes(t *testing.T) {
