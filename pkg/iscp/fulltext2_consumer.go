@@ -92,18 +92,18 @@ func RunFulltext2(c *IndexConsumer, ctx context.Context, errch chan error, r Dat
 						if err != nil {
 							return err
 						}
-						chunkID := startChunk
-						for _, seg := range segs {
-							// The frame is already on disk (TailBuilder spilled it): INSERT it
-							// via load_file straight from the file, split across MaxChunkSize rows.
-							for _, s := range fulltext2.TailFileInsertSqls(w.cfg, chunkID, seg.Path, seg.Offset, seg.FrameLen) {
-								res, e := sqlexec.RunSql(sqlproc, s)
-								if e != nil {
-									return e
-								}
-								res.Close()
+						// The frames are already on disk (TailBuilder spilled them into packed spool
+						// files): INSERT them via load_file, batched at maxInsertTuples rows per
+						// statement ACROSS frames — so a burst of tiny frames costs ~totalChunks/maxInsertTuples
+						// RunSql round-trips in this one txn, not one INSERT per frame. chunk_ids stay
+						// contiguous in frame order, so recency is unchanged.
+						sqls, chunkID := fulltext2.TailFramesInsertSqls(w.cfg, startChunk, segs)
+						for _, s := range sqls {
+							res, e := sqlexec.RunSql(sqlproc, s)
+							if e != nil {
+								return e
 							}
-							chunkID += fulltext2.FrameChunkCount(seg.FrameLen)
+							res.Close()
 						}
 						// Per-flush-cycle sink summary: Debug, not Info — a continuously-ingesting index
 						// flushes often, so this would flood production logs at Info (see the 46 GB

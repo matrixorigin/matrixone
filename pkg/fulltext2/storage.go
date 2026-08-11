@@ -84,8 +84,16 @@ var (
 // builds never collide). Load enumerates ids from the metadata table.
 func SubIndexId(uid string, i int) string { return fmt.Sprintf("%s:%d", uid, i) }
 
-// maxInsertTuples bounds the (index_id, chunk_id, data, tag) rows per INSERT.
-const maxInsertTuples = 100
+// maxInsertTuples bounds the (index_id, chunk_id, data, tag) rows per INSERT (base-segment and
+// batched CDC-tail persist). Its primary job is cutting RunSql round-trips — many tiny frames become
+// a few multi-row INSERTs. It is kept MODERATE (500, well below hnsw's 2000 in
+// pkg/vectorindex/hnsw/model.go) because each row's load_file data flows into the storage engine's
+// ASYNC object writer (file/S3), which buffers-and-flushes and thus accumulates memory as rows are
+// pushed; fulltext2 CDC persist is a BACKGROUND op, so a smaller batch hands that writer a bounded
+// slice (<= maxInsertTuples*MaxChunkSize ≈ 32 MiB) per statement instead of a large burst. NOTE: this is only
+// a secondary throttle — the dominant memory bound is the TOTAL data pushed per iteration (the whole
+// tail delta), which the per-iteration work bound (not batch size) is what actually caps.
+const maxInsertTuples = 500
 
 // ToInsertSqls serializes the segment, spills it to a temp file under the LOCAL
 // fileservice's __fulltext2 dir (load_file reads it back by path), and emits the
@@ -128,35 +136,55 @@ func (s *Segment) ToInsertSqls(sqlproc *sqlexec.SqlProcess, cfg TableConfig, ts 
 	return sqls, cleanup, nil
 }
 
-// fileChunkInsertSqls splits a [baseOffset, baseOffset+dataLen) BYTE RANGE of a spilled file into
-// <= MaxChunkSize storage rows read via load_file (no hex/unhex). baseOffset is 0 for a whole-file
-// base segment; for a CDC tail frame it is the frame's offset within a PACKED spool file (many
-// frames share one file), so the load_file range addresses exactly this frame. Mirrors
-// bm25.wand.FileChunkInsertSqls.
-func fileChunkInsertSqls(cfg TableConfig, id string, startChunkId int64, path string, baseOffset int64, dataLen int, tag int) []string {
+// fileChunkRange is one contiguous [offset, offset+length) byte range of a spilled file to persist
+// as storage rows: offset 0 for a whole-file base segment, or a frame's offset within a PACKED CDC
+// spool file (many frames share one file).
+type fileChunkRange struct {
+	path   string
+	offset int64
+	length int
+}
+
+// framesInsertSqls emits the load_file storage-row tuples for a SEQUENCE of file ranges, each range
+// split into <= MaxChunkSize rows, batched at maxInsertTuples rows per INSERT statement
+// ACROSS range boundaries. chunk_ids are assigned contiguously from startChunkId in range order;
+// the next free chunk_id is returned. Batching across ranges is what keeps a burst of tiny CDC tail
+// frames to O(totalChunks/maxInsertTuples) statements instead of one INSERT per frame. Mirrors
+// bm25.wand.FileChunkInsertSqls (single-range) generalized to many ranges.
+func framesInsertSqls(cfg TableConfig, id string, startChunkId int64, ranges []fileChunkRange, tag int) (sqls []string, nextChunkId int64) {
 	prefix := fmt.Sprintf("INSERT INTO %s (%s, %s, %s, %s) VALUES ",
 		sqlquote.QualifiedIdent(cfg.DbName, cfg.IndexTable),
 		catalog.FullText2Index_TblCol_Storage_Index_Id, catalog.FullText2Index_TblCol_Storage_Chunk_Id,
 		catalog.FullText2Index_TblCol_Storage_Data, catalog.FullText2Index_TblCol_Storage_Tag)
-	var sqls, vals []string
+	var vals []string
 	chunkID := startChunkId
-	for off := 0; off < dataLen; off += vectorindex.MaxChunkSize {
-		sz := vectorindex.MaxChunkSize
-		if off+sz > dataLen {
-			sz = dataLen - off
-		}
-		url := fmt.Sprintf("file://%s?offset=%d&size=%d", path, baseOffset+int64(off), sz)
-		vals = append(vals, fmt.Sprintf("(%s, %d, load_file(cast(%s as datalink)), %d)",
-			sqlquote.String(id), chunkID, sqlquote.String(url), tag))
-		chunkID++
-		if len(vals) == maxInsertTuples {
-			sqls = append(sqls, prefix+strings.Join(vals, ", "))
-			vals = vals[:0]
+	for _, r := range ranges {
+		for off := 0; off < r.length; off += vectorindex.MaxChunkSize {
+			sz := vectorindex.MaxChunkSize
+			if off+sz > r.length {
+				sz = r.length - off
+			}
+			url := fmt.Sprintf("file://%s?offset=%d&size=%d", r.path, r.offset+int64(off), sz)
+			vals = append(vals, fmt.Sprintf("(%s, %d, load_file(cast(%s as datalink)), %d)",
+				sqlquote.String(id), chunkID, sqlquote.String(url), tag))
+			chunkID++
+			if len(vals) == maxInsertTuples {
+				sqls = append(sqls, prefix+strings.Join(vals, ", "))
+				vals = vals[:0]
+			}
 		}
 	}
 	if len(vals) > 0 {
 		sqls = append(sqls, prefix+strings.Join(vals, ", "))
 	}
+	return sqls, chunkID
+}
+
+// fileChunkInsertSqls splits a [baseOffset, baseOffset+dataLen) BYTE RANGE of a spilled file into
+// <= MaxChunkSize storage rows read via load_file (no hex/unhex). Single-range convenience over
+// framesInsertSqls (used by the base-segment persist).
+func fileChunkInsertSqls(cfg TableConfig, id string, startChunkId int64, path string, baseOffset int64, dataLen int, tag int) []string {
+	sqls, _ := framesInsertSqls(cfg, id, startChunkId, []fileChunkRange{{path: path, offset: baseOffset, length: dataLen}}, tag)
 	return sqls
 }
 
@@ -165,6 +193,20 @@ func fileChunkInsertSqls(cfg TableConfig, id string, startChunkId int64, path st
 // startChunkId, so recency (chunk_id) ordering across frames is unchanged by the packing.
 func TailFileInsertSqls(cfg TableConfig, startChunkId int64, path string, offset int64, frameLen int) []string {
 	return fileChunkInsertSqls(cfg, vectorindex.CdcTailId, startChunkId, path, offset, frameLen, int(vectorindex.Tag_CdcEvents))
+}
+
+// TailFramesInsertSqls persists ALL of an iteration's spilled tag=1 CDC frames as FEW multi-row
+// INSERTs: the per-chunk load_file tuples of every frame, batched at maxInsertTuples rows per
+// statement ACROSS frame boundaries — so N tiny frames cost ~N/maxInsertTuples statements (and
+// RunSql round-trips) instead of one INSERT per frame. chunk_ids are contiguous from startChunkId in frame
+// order (recency identical to a per-frame persist); the next free chunk_id (end of the tail range)
+// is returned.
+func TailFramesInsertSqls(cfg TableConfig, startChunkId int64, frames []TailSegment) (sqls []string, nextChunkId int64) {
+	ranges := make([]fileChunkRange, len(frames))
+	for i, f := range frames {
+		ranges[i] = fileChunkRange{path: f.Path, offset: f.Offset, length: f.FrameLen}
+	}
+	return framesInsertSqls(cfg, vectorindex.CdcTailId, startChunkId, ranges, int(vectorindex.Tag_CdcEvents))
 }
 
 // DeleteSqls removes one index id's chunks + metadata row (rebuild idempotency).
