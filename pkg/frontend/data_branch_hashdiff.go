@@ -221,7 +221,9 @@ func lcaProbeColumnLayout(
 			)
 		}
 		layout.attrs = append(layout.attrs, lcaAttrName)
-		layout.types = append(layout.types, types.New(types.T(lcaCol.Typ.Id), lcaCol.Typ.Width, lcaCol.Typ.Scale))
+		layout.types = append(layout.types, types.NewWithCharset(
+			types.T(lcaCol.Typ.Id), lcaCol.Typ.Width, lcaCol.Typ.Scale, uint8(lcaCol.Typ.Charset),
+		))
 		layout.targetIdxes = append(layout.targetIdxes, targetIdx)
 		layout.enumValues = append(layout.enumValues, lcaCol.Typ.Enumvalues)
 	}

@@ -341,7 +341,7 @@ func (hashJoin *HashJoin) build(analyzer process.Analyzer, proc *process.Process
 	// Pre-compute per-query flags for the probe loop.
 	ctr.probeEmitUnmatched = hashJoin.EmitUnmatchedProbe()
 	ctr.probeRightSemiAnti = !hashJoin.IsRightSemi() && !hashJoin.IsAnti()
-	ctr.probeRightJoin = hashJoin.IsRightJoin
+	ctr.probeTrackBuildMatches = hashJoin.EmitUnmatchedBuild()
 	ctr.probeSingle = hashJoin.IsSingle()
 	ctr.probeLeftSingle = hashJoin.IsLeftSingle()
 	ctr.probeLeftSemi = hashJoin.IsLeftSemi()
@@ -621,7 +621,7 @@ func (ctr *container) probe(hashJoin *HashJoin, proc *process.Process, result *v
 						resRowCnt++
 					}
 
-					if ctr.probeRightJoin {
+					if ctr.probeTrackBuildMatches {
 						if ctr.probeSingle && ctr.rightRowsMatched.Contains(uint64(idx)) {
 							return moerr.NewErrSubqueryNo1Row(proc.Ctx)
 						}
@@ -644,7 +644,7 @@ func (ctr *container) probe(hashJoin *HashJoin, proc *process.Process, result *v
 							resRowCnt++
 						}
 
-						if ctr.probeRightJoin {
+						if ctr.probeTrackBuildMatches {
 							if ctr.probeSingle && ctr.rightRowsMatched.Contains(uint64(idx)) {
 								return moerr.NewErrSubqueryNo1Row(proc.Ctx)
 							}
@@ -701,7 +701,7 @@ func (ctr *container) probe(hashJoin *HashJoin, proc *process.Process, result *v
 			// remove processed sels
 			ctr.sels = ctr.sels[processCount:]
 			if hashJoin.NonEqCond == nil {
-				if ctr.probeRightJoin {
+				if ctr.probeTrackBuildMatches {
 					for _, sel := range sels {
 						if ctr.probeSingle && ctr.rightRowsMatched.Contains(uint64(sel)) {
 							return moerr.NewErrSubqueryNo1Row(proc.Ctx)
@@ -742,7 +742,7 @@ func (ctr *container) probe(hashJoin *HashJoin, proc *process.Process, result *v
 					}
 
 					if ok {
-						if ctr.probeRightJoin {
+						if ctr.probeTrackBuildMatches {
 							if ctr.probeSingle && ctr.rightRowsMatched.Contains(uint64(sel)) {
 								return moerr.NewErrSubqueryNo1Row(proc.Ctx)
 							}

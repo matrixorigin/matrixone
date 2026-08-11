@@ -1607,6 +1607,7 @@ func TestGetAlterCopyPkPrecheck(t *testing.T) {
 		name             string
 		tableDef         *plan.TableDef
 		copyTableDef     *plan.TableDef
+		changeColMap     map[uint64]*plan.ColDef
 		skipPkDedup      bool
 		wantCols         []string
 		wantCheckNotNull bool
@@ -1614,27 +1615,40 @@ func TestGetAlterCopyPkPrecheck(t *testing.T) {
 		{
 			name: "add pk on nullable original column",
 			tableDef: &plan.TableDef{
-				Cols: []*plan.ColDef{{Name: "col4", Typ: plan.Type{Id: int32(types.T_int32)}}},
+				Cols: []*plan.ColDef{{ColId: 1, Name: "col4", Typ: plan.Type{Id: int32(types.T_int32)}}},
 				Pkey: &plan.PrimaryKeyDef{PkeyColName: catalog.FakePrimaryKeyColName},
 			},
 			copyTableDef: &plan.TableDef{
 				Cols: []*plan.ColDef{{Name: "col4", NotNull: true, Primary: true, Typ: plan.Type{Id: int32(types.T_int32)}}},
 				Pkey: &plan.PrimaryKeyDef{PkeyColName: "col4", Names: []string{"col4"}},
 			},
+			changeColMap:     map[uint64]*plan.ColDef{1: {Name: "col4"}},
 			wantCols:         []string{"col4"},
 			wantCheckNotNull: true,
 		},
 		{
 			name: "add pk on not null original column",
 			tableDef: &plan.TableDef{
-				Cols: []*plan.ColDef{{Name: "col4", NotNull: true, Typ: plan.Type{Id: int32(types.T_int32)}}},
+				Cols: []*plan.ColDef{{ColId: 1, Name: "col4", NotNull: true, Typ: plan.Type{Id: int32(types.T_int32)}}},
 				Pkey: &plan.PrimaryKeyDef{PkeyColName: catalog.FakePrimaryKeyColName},
 			},
 			copyTableDef: &plan.TableDef{
 				Cols: []*plan.ColDef{{Name: "col4", NotNull: true, Typ: plan.Type{Id: int32(types.T_int32)}}},
 				Pkey: &plan.PrimaryKeyDef{PkeyColName: "col4", Names: []string{"col4"}},
 			},
-			wantCols: []string{"col4"},
+			changeColMap: map[uint64]*plan.ColDef{1: {Name: "col4"}},
+			wantCols:     []string{"col4"},
+		},
+		{
+			name: "same name pk replacement is not a copied source column",
+			tableDef: &plan.TableDef{
+				Cols: []*plan.ColDef{{ColId: 1, Name: "col4", Typ: plan.Type{Id: int32(types.T_int32)}}},
+				Pkey: &plan.PrimaryKeyDef{PkeyColName: "col4", Names: []string{"col4"}},
+			},
+			copyTableDef: &plan.TableDef{
+				Cols: []*plan.ColDef{{ColId: 2, Name: "col4", NotNull: true, Primary: true, Typ: plan.Type{Id: int32(types.T_int32)}}},
+				Pkey: &plan.PrimaryKeyDef{PkeyColName: "col4", Names: []string{"col4"}},
+			},
 		},
 		{
 			name: "static skip pk dedup needs no precheck",
@@ -1681,11 +1695,35 @@ func TestGetAlterCopyPkPrecheck(t *testing.T) {
 				Pkey: &plan.PrimaryKeyDef{PkeyColName: "col4", Names: []string{"col4"}},
 			},
 		},
+		{
+			name: "generated pk is recomputed during copy",
+			tableDef: &plan.TableDef{
+				Cols: []*plan.ColDef{{
+					Name: "col4",
+					Typ:  plan.Type{Id: int32(types.T_int32)},
+					GeneratedCol: &plan2.GeneratedCol{
+						IsStored: true,
+					},
+				}},
+				Pkey: &plan.PrimaryKeyDef{PkeyColName: "col4", Names: []string{"col4"}},
+			},
+			copyTableDef: &plan.TableDef{
+				Cols: []*plan.ColDef{{
+					Name: "col4",
+					Typ:  plan.Type{Id: int32(types.T_int32)},
+					GeneratedCol: &plan2.GeneratedCol{
+						IsStored: true,
+					},
+				}},
+				Pkey: &plan.PrimaryKeyDef{PkeyColName: "col4", Names: []string{"col4"}},
+			},
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			qry := &plan2.AlterTable{
-				TableDef:     tc.tableDef,
-				CopyTableDef: tc.copyTableDef,
+				TableDef:          tc.tableDef,
+				CopyTableDef:      tc.copyTableDef,
+				ChangeTblColIdMap: tc.changeColMap,
 				Options: &plan2.AlterCopyOpt{
 					SkipPkDedup:     tc.skipPkDedup,
 					TargetTableName: "dept_copy",
@@ -1725,7 +1763,7 @@ func TestScopeAlterTableCopyPrecheckPrimaryKeyThenSkipDedup(t *testing.T) {
 		TblId: 1,
 		Name:  "dept",
 		Cols: []*plan.ColDef{
-			{Name: "col4", Typ: plan.Type{Id: int32(types.T_int32)}},
+			{ColId: 1, Name: "col4", Typ: plan.Type{Id: int32(types.T_int32)}},
 		},
 		Pkey: &plan.PrimaryKeyDef{PkeyColName: catalog.FakePrimaryKeyColName},
 	}
@@ -1743,6 +1781,7 @@ func TestScopeAlterTableCopyPrecheckPrimaryKeyThenSkipDedup(t *testing.T) {
 		CopyTableDef:      copyTableDef,
 		CreateTmpTableSql: "create table dept_copy",
 		InsertTmpDataSql:  "insert into dept_copy select * from dept",
+		ChangeTblColIdMap: map[uint64]*plan.ColDef{1: {Name: "col4"}},
 		Options: &plan2.AlterCopyOpt{
 			SkipPkDedup:     false,
 			TargetTableName: "dept_copy",
@@ -1900,7 +1939,7 @@ func testAlterCopyAddPrimaryKeyPlan() *plan2.AlterTable {
 		TableDef: &plan.TableDef{
 			Name: "dept",
 			Cols: []*plan.ColDef{
-				{Name: "col4", Typ: plan.Type{Id: int32(types.T_int32)}},
+				{ColId: 1, Name: "col4", Typ: plan.Type{Id: int32(types.T_int32)}},
 			},
 			Pkey: &plan.PrimaryKeyDef{PkeyColName: catalog.FakePrimaryKeyColName},
 		},
@@ -1915,6 +1954,7 @@ func testAlterCopyAddPrimaryKeyPlan() *plan2.AlterTable {
 			SkipPkDedup:     false,
 			TargetTableName: "dept_copy",
 		},
+		ChangeTblColIdMap: map[uint64]*plan.ColDef{1: {Name: "col4"}},
 	}
 }
 

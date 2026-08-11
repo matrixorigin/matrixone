@@ -909,10 +909,11 @@ func TestIvfFilterColumnAndDistanceRangeHelpers(t *testing.T) {
 
 func TestSkipPkDedupCoverage(t *testing.T) {
 	tests := []struct {
-		name string
-		old  *TableDef
-		new  *TableDef
-		want bool
+		name          string
+		old           *TableDef
+		new           *TableDef
+		sourceColumns map[string]selectExpr
+		want          bool
 	}{
 		{
 			name: "new table without primary key skips",
@@ -928,9 +929,16 @@ func TestSkipPkDedupCoverage(t *testing.T) {
 		},
 		{
 			name: "same primary key names skip dedup",
-			old:  &TableDef{Pkey: &PrimaryKeyDef{PkeyColName: "id", Names: []string{"id"}}},
-			new:  &TableDef{Pkey: &PrimaryKeyDef{PkeyColName: "id", Names: []string{"id"}}},
-			want: true,
+			old: &TableDef{
+				Cols: []*ColDef{{Name: "id", Typ: planpb.Type{Id: int32(types.T_int64)}}},
+				Pkey: &PrimaryKeyDef{PkeyColName: "id", Names: []string{"id"}},
+			},
+			new: &TableDef{
+				Cols: []*ColDef{{Name: "id", Typ: planpb.Type{Id: int32(types.T_int64)}}},
+				Pkey: &PrimaryKeyDef{PkeyColName: "id", Names: []string{"id"}},
+			},
+			sourceColumns: map[string]selectExpr{"id": {sexprType: exprColumnName, sexprStr: "id"}},
+			want:          true,
 		},
 		{
 			name: "changed primary key names do not skip",
@@ -942,7 +950,7 @@ func TestSkipPkDedupCoverage(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			assert.Equal(t, tc.want, skipPkDedup(tc.old, tc.new))
+			assert.Equal(t, tc.want, skipPkDedup(tc.old, tc.new, tc.sourceColumns))
 		})
 	}
 }

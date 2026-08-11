@@ -227,7 +227,7 @@ func (builder *QueryBuilder) buildRemapErrorMessage(
 		if remapInfo.node != nil {
 			var expr *plan.Expr
 			switch remapInfo.node.NodeType {
-			case plan.Node_FILTER:
+			case plan.Node_FILTER, plan.Node_ASSERT:
 				if remapInfo.srcExprIdx >= 0 && remapInfo.srcExprIdx < len(remapInfo.node.FilterList) {
 					expr = remapInfo.node.FilterList[remapInfo.srcExprIdx]
 				}
@@ -818,7 +818,7 @@ func (builder *QueryBuilder) retainInputOrder(nodeID int32, colRefCnt map[[2]int
 		}
 		return refs
 
-	case plan.Node_PROJECT, plan.Node_FILTER, plan.Node_MATERIAL, plan.Node_PARTITION:
+	case plan.Node_PROJECT, plan.Node_FILTER, plan.Node_ASSERT, plan.Node_MATERIAL, plan.Node_PARTITION:
 		if len(node.Children) == 1 {
 			return builder.retainInputOrder(node.Children[0], colRefCnt, refs)
 		}
@@ -2411,7 +2411,13 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 			})
 		}
 
-	case plan.Node_FILTER:
+	case plan.Node_FILTER, plan.Node_ASSERT:
+		if node.NodeType == plan.Node_ASSERT || node.FilterIsBarrier {
+			// Semantic-boundary filters have identity output. Rebuild their
+			// projections from the parent reference counts so stale pre-pruning
+			// child positions cannot survive into compileProjection.
+			node.ProjectList = nil
+		}
 		for _, expr := range node.FilterList {
 			increaseRefCnt(expr, 1, colRefCnt)
 		}
@@ -3150,35 +3156,9 @@ func (builder *QueryBuilder) rewriteStarApproxCount(nodeID int32) {
 
 						var exprs []*plan.Expr
 						str := child.ObjRef.SchemaName + "." + child.TableDef.Name
-						exprs = append(exprs, &plan.Expr{
-							Typ: Type{
-								Id:          int32(types.T_varchar),
-								NotNullable: true,
-								Width:       int32(len(str)),
-							},
-							Expr: &plan.Expr_Lit{
-								Lit: &plan.Literal{
-									Value: &plan.Literal_Sval{
-										Sval: str,
-									},
-								},
-							},
-						})
+						exprs = append(exprs, makePlan2StringConstExprWithType(str))
 						str = child.TableDef.Cols[0].Name
-						exprs = append(exprs, &plan.Expr{
-							Typ: Type{
-								Id:          int32(types.T_varchar),
-								NotNullable: true,
-								Width:       int32(len(str)),
-							},
-							Expr: &plan.Expr_Lit{
-								Lit: &plan.Literal{
-									Value: &plan.Literal_Sval{
-										Sval: str,
-									},
-								},
-							},
-						})
+						exprs = append(exprs, makePlan2StringConstExprWithType(str))
 						scanNode := &plan.Node{
 							NodeType: plan.Node_VALUE_SCAN,
 						}
@@ -3513,16 +3493,17 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 	}
 	// Type coercion below mutates branch project expressions in place, including
 	// the ENUM display expression and the type attached to a literal NULL.
-	// Capture both kinds of provenance before that mutation so a pure NULL can
-	// remain neutral without mistaking an explicit CAST(NULL AS string) for a
-	// neutral branch.
+	// Capture both kinds of provenance before that mutation so a bare NULL can
+	// remain neutral even after transparent derived-table or CTE projection,
+	// without mistaking an explicit CAST(NULL AS string) for a neutral branch.
 	setBranchPureNull := make([][]bool, len(subCtxList))
 	setBranchOrderTypes := make([][]*plan.Type, len(subCtxList))
 	for branchIdx, branchCtx := range subCtxList {
 		setBranchPureNull[branchIdx] = make([]bool, projectLength)
 		setBranchOrderTypes[branchIdx] = make([]*plan.Type, projectLength)
 		for colIdx := 0; colIdx < projectLength && colIdx < len(branchCtx.projects); colIdx++ {
-			setBranchPureNull[branchIdx][colIdx] = isNullLiteralExpr(branchCtx.projects[colIdx])
+			setBranchPureNull[branchIdx][colIdx] =
+				branchCtx.outputColumnProvenanceForProject(int32(colIdx)).State == ProvenancePureNull
 			setBranchOrderTypes[branchIdx][colIdx] = branchCtx.mysqlSpecialOrderTypeForProject(int32(colIdx))
 		}
 	}
@@ -3533,9 +3514,21 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 		// we don't cast null as any type in function
 		// but we will cast null as some target type in union/intersect/minus
 		var tmpArgsType []types.Type
-		for _, typ := range argsType {
-			if typ.Oid != types.T_any {
+		for branchIdx, typ := range argsType {
+			// A top-level NULL is carried as legacy T_text only so the binder has
+			// a concrete container. It has no collation or width of its own and
+			// must not change the common type chosen from real values.
+			if typ.Oid != types.T_any && !setBranchPureNull[branchIdx][columnIdx] {
 				tmpArgsType = append(tmpArgsType, typ)
+			}
+		}
+		// Preserve the historical concrete text result when every branch is a
+		// pure NULL; there is no real value from which to derive another type.
+		if len(tmpArgsType) == 0 {
+			for _, typ := range argsType {
+				if typ.Oid != types.T_any {
+					tmpArgsType = append(tmpArgsType, typ)
+				}
 			}
 		}
 
@@ -3557,7 +3550,7 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 				targetArgType = tmpArgsType[0]
 				// if string union string, different length may cause error.
 				if targetArgType.Oid == types.T_varchar || targetArgType.Oid == types.T_char {
-					for _, typ := range argsType {
+					for _, typ := range tmpArgsType {
 						if targetArgType.Width < typ.Width {
 							targetArgType.Width = typ.Width
 						}
@@ -3590,7 +3583,7 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 			for idx, tmpID := range nodes {
 				if !argsType[idx].Eq(targetArgType) {
 					node := builder.qry.Nodes[tmpID]
-					if argsType[idx].Oid == types.T_any {
+					if argsType[idx].Oid == types.T_any || setBranchPureNull[idx][columnIdx] {
 						node.ProjectList[columnIdx].Typ = targetType
 					} else {
 						node.ProjectList[columnIdx], err = appendCastBeforeExpr(builder.GetContext(), node.ProjectList[columnIdx], targetType)
@@ -3705,6 +3698,21 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 		})
 	}
 	ctx.clearOutputColumnProvenance()
+	// A set-operation output is itself pure NULL only when every branch is pure
+	// NULL. Preserve that fact for another transparent derived-table or CTE
+	// boundary so a later set operation still treats the column as neutral.
+	for colIdx := range ctx.projects {
+		allPureNull := true
+		for branchIdx := range setBranchPureNull {
+			if colIdx >= len(setBranchPureNull[branchIdx]) || !setBranchPureNull[branchIdx][colIdx] {
+				allPureNull = false
+				break
+			}
+		}
+		if allPureNull {
+			ctx.outputColumnProvenance[int32(colIdx)] = OutputColumnProvenance{State: ProvenancePureNull}
+		}
+	}
 	// A set-operation result keeps ENUM/SET definition-order provenance only
 	// when every non-NULL branch is the same pure display contract. A literal
 	// NULL is neutral because it cannot introduce a competing comparison
@@ -9592,9 +9600,10 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, t
 					ColId: catalog.ExternalFilePathColId,
 					Name:  catalog.ExternalFilePath,
 					Typ: plan.Type{
-						Id:    int32(types.T_varchar),
-						Width: types.MaxVarcharLen,
-						Table: table,
+						Id:      int32(types.T_varchar),
+						Width:   types.MaxVarcharLen,
+						Table:   table,
+						Charset: uint32(types.CharsetUTF8),
 					},
 				}
 				tableDef.Cols = append(tableDef.Cols, col)
@@ -10341,6 +10350,8 @@ func (builder *QueryBuilder) buildTableFunction(tbl *tree.TableFunction, ctx *Bi
 			nodeId, err = builder.buildMoTransactions(tbl, ctx, exprs, nil)
 		case "mo_cache":
 			nodeId, err = builder.buildMoCache(tbl, ctx, exprs, nil)
+		case "mo_check_constraints":
+			nodeId, err = builder.buildCheckConstraints(tbl, ctx, exprs, nil)
 		case "fulltext_index_scan":
 			nodeId, err = builder.buildFullTextIndexScan(tbl, ctx, exprs, nil)
 		case "fulltext_index_tokenize":

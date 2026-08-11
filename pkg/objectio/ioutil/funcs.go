@@ -20,6 +20,7 @@ import (
 	"sort"
 
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
@@ -349,16 +350,15 @@ func IsRowDeletedByLocation(
 		deleted = (idx < len(rowids)) && (rowids[idx].EQ(row))
 	} else {
 		tss := vector.MustFixedColNoTypeCheck[types.TS](&data[1])
-		abortVec := &data[2]
-		var aborts []bool
-		if !abortVec.IsConstNull() {
-			aborts = vector.MustFixedColNoTypeCheck[bool](abortVec)
+		aborts, err := ValidateTombstoneAbortColumn(len(rowids), &data[2])
+		if err != nil {
+			return false, err
 		}
 		for i := idx; i < len(rowids); i++ {
 			if !rowids[i].EQ(row) {
 				break
 			}
-			if (aborts == nil || !aborts[i]) && tss[i].LE(snapshotTS) {
+			if (!aborts.IsPresent() || !aborts.IsAborted(i)) && tss[i].LE(snapshotTS) {
 				deleted = true
 				break
 			}
@@ -402,7 +402,7 @@ func FillBlockDeleteMask(
 	if createdByCN {
 		deleteMask = EvalDeleteMaskFromCNCreatedTombstones(blockId, &persistedDeletes[0])
 	} else {
-		deleteMask = EvalDeleteMaskFromDNCreatedTombstones(
+		deleteMask, err = EvalDeleteMaskFromDNCreatedTombstones(
 			&persistedDeletes[0],
 			&persistedDeletes[1],
 			&persistedDeletes[2],
@@ -423,7 +423,7 @@ func ReadDeletes(
 	isPersistedByCN bool,
 	cacheVectors containers.Vectors,
 	pkType *types.Type,
-) (objectio.ObjectDataMeta, func(), error) {
+) (meta objectio.ObjectDataMeta, release func(), err error) {
 
 	var cols []uint16
 	var typs []types.Type
@@ -445,9 +445,92 @@ func ReadDeletes(
 		typs = append(typs[:1], append([]types.Type{*pkType}, typs[1:]...)...)
 	}
 
-	return LoadTombstoneColumns(
+	meta, release, err = LoadTombstoneColumns(
 		ctx, cols, typs, fs, deltaLoc, cacheVectors, nil, fileservice.Policy(0),
 	)
+	if err != nil || isPersistedByCN {
+		return
+	}
+	if len(cacheVectors) < 3 {
+		err = moerr.NewInvalidInputNoCtxf(
+			"tombstone column count %d is missing commit-ts or abort metadata",
+			len(cacheVectors),
+		)
+		if release != nil {
+			release()
+		}
+		release = nil
+		return
+	}
+	rowCount := cacheVectors[0].Length()
+	if _, err = ValidateTombstoneAbortColumn(rowCount, &cacheVectors[len(cacheVectors)-1]); err != nil {
+		if release != nil {
+			release()
+		}
+		release = nil
+	}
+	return
+}
+
+// TombstoneAbortColumn is the validated abort metadata for a tombstone block.
+// A const-null bool column with the block row count is the explicitly supported
+// legacy representation for an object written before abort metadata was
+// persisted. The object reader synthesizes this marker when the physical
+// column is absent.
+type TombstoneAbortColumn struct {
+	vec *vector.Vector
+}
+
+func (c TombstoneAbortColumn) IsPresent() bool {
+	return c.vec != nil
+}
+
+func (c TombstoneAbortColumn) IsAborted(row int) bool {
+	return vector.GetFixedAtNoTypeCheck[bool](c.vec, row)
+}
+
+// ValidateTombstoneAbortColumn validates the abort column against the row
+// count shared by all tombstone consumers. Only the reader's const-null
+// sentinel is treated as the legacy no-abort representation. All other
+// malformed layouts are returned as errors instead of being silently treated
+// as live rows.
+func ValidateTombstoneAbortColumn(
+	expectedRows int,
+	abortVec *vector.Vector,
+) (TombstoneAbortColumn, error) {
+	if abortVec == nil {
+		return TombstoneAbortColumn{}, nil
+	}
+	if abortVec.GetType().Oid != types.T_bool {
+		return TombstoneAbortColumn{}, moerr.NewInvalidInputNoCtxf(
+			"tombstone abort column has type %s, expected bool",
+			abortVec.GetType().String(),
+		)
+	}
+	if abortVec.IsConstNull() {
+		if abortVec.Length() == expectedRows {
+			return TombstoneAbortColumn{}, nil
+		}
+		return TombstoneAbortColumn{}, moerr.NewInvalidInputNoCtxf(
+			"tombstone abort const-null column has %d rows, expected %d",
+			abortVec.Length(), expectedRows,
+		)
+	}
+	if abortVec.Length() == 0 {
+		return TombstoneAbortColumn{}, moerr.NewInvalidInputNoCtx("tombstone abort column is empty")
+	}
+	if abortVec.Length() != expectedRows {
+		return TombstoneAbortColumn{}, moerr.NewInvalidInputNoCtxf(
+			"tombstone abort column has %d rows, expected %d",
+			abortVec.Length(), expectedRows,
+		)
+	}
+	for i := 0; i < expectedRows; i++ {
+		if abortVec.IsNull(uint64(i)) {
+			return TombstoneAbortColumn{}, moerr.NewInvalidInputNoCtxf("tombstone abort row %d is null", i)
+		}
+	}
+	return TombstoneAbortColumn{vec: abortVec}, nil
 }
 
 func EvalDeleteMaskFromDNCreatedTombstones(
@@ -457,22 +540,22 @@ func EvalDeleteMaskFromDNCreatedTombstones(
 	meta objectio.BlockObject,
 	ts *types.TS,
 	blockid *types.Blockid,
-) (rows objectio.Bitmap) {
+) (rows objectio.Bitmap, err error) {
 	if deletedRows == nil {
 		return
 	}
 	rowids := vector.MustFixedColWithTypeCheck[types.Rowid](deletedRows)
+	aborts, err := ValidateTombstoneAbortColumn(len(rowids), abortVec)
+	if err != nil {
+		return objectio.NullBitmap, err
+	}
 	start, end := FindStartEndOfBlockFromSortedRowids(rowids, blockid)
 	if start >= end {
 		return
 	}
 
 	noTSCheck := false
-	var aborts []bool
-	if abortVec != nil && !abortVec.IsConstNull() {
-		aborts = vector.MustFixedColWithTypeCheck[bool](abortVec)
-	}
-	if end-start > 10 && aborts == nil {
+	if end-start > 10 && !aborts.IsPresent() {
 		// fast path is true if the maxTS is less than the snapshotTS
 		// this means that all the rows between start and end are visible
 		layout := objectio.ResolveSpecialColumnLayout(meta)
@@ -489,7 +572,7 @@ func EvalDeleteMaskFromDNCreatedTombstones(
 	} else {
 		tss := vector.MustFixedColWithTypeCheck[types.TS](commitTSVec)
 		for i := end - 1; i >= start; i-- {
-			if (aborts != nil && aborts[i]) || tss[i].GT(ts) {
+			if (aborts.IsPresent() && aborts.IsAborted(i)) || tss[i].GT(ts) {
 				continue
 			}
 			row := rowids[i].GetRowOffset()

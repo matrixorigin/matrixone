@@ -228,9 +228,9 @@ func RunFunctionDirectly(proc *process.Process, overloadID int64, inputs []*vect
 
 	result := vector.NewFunctionResultWrapper(f.retType(inputTypes), mp)
 
-	fold := true
+	fold := !f.CannotFold() && !f.IsRealTimeRelated()
 	evaluateLength := length
-	if !f.CannotFold() && !f.IsRealTimeRelated() {
+	if fold {
 		for _, param := range inputs {
 			if !param.IsConst() {
 				fold = false

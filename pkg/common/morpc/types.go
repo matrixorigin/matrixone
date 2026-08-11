@@ -210,6 +210,22 @@ type BackendFactory interface {
 	Create(address string, extraOptions ...BackendOption) (Backend, error)
 }
 
+// ContextBackendFactory extends BackendFactory with cancellable creation.
+// Clients prefer this method when it is available and cancel ctx when the
+// client, manager incarnation, or remote generation stops owning the create.
+// Implementations must return promptly; if lower-level work cannot be
+// interrupted, it must remain bounded and retain ownership of any late result.
+// BackendFactory remains supported for compatibility, but its in-flight Create
+// calls cannot be interrupted by the client.
+type ContextBackendFactory interface {
+	BackendFactory
+	CreateWithContext(
+		ctx context.Context,
+		address string,
+		extraOptions ...BackendOption,
+	) (Backend, error)
+}
+
 // Backend backend represents a wrapper for a client communicating with a
 // remote server.
 type Backend interface {
