@@ -162,6 +162,12 @@ func bindAndOptimizeInsertQuery(ctx CompilerContext, stmt *tree.Insert, isPrepar
 		return nil, err
 	}
 	if len(tblInfo.tableDefs) == 1 && len(tblInfo.tableDefs[0].Fkeys) > 0 {
+		// The in-plan child checks and self-reference DetectSqls depend on the
+		// session's foreign_key_checks value. Keep prepared INSERT plans sensitive
+		// even while checks are disabled, so a later EXECUTE rebuilds the plan
+		// after either an OFF->ON or ON->OFF transition.
+		query.HasForeignKeyAction = true
+
 		enabled, err := IsForeignKeyChecksEnabled(ctx)
 		if err != nil {
 			return nil, err
@@ -338,6 +344,9 @@ func bindAndOptimizeDeleteQuery(ctx CompilerContext, stmt *tree.Delete, isPrepar
 	defer func() {
 		v2.TxnStatementBuildDeleteHistogram.Observe(time.Since(start).Seconds())
 	}()
+	if err := validateSingleTableDMLLimitOffset(ctx, "DELETE", stmt.Limit); err != nil {
+		return nil, err
+	}
 
 	builder := NewQueryBuilder(plan.Query_DELETE, ctx, isPrepareStmt, true)
 	bindCtx := NewBindContext(builder, nil)
@@ -391,6 +400,9 @@ func bindAndOptimizeUpdateQuery(ctx CompilerContext, stmt *tree.Update, isPrepar
 		v2.TxnStatementBuildDeleteHistogram.Observe(time.Since(start).Seconds())
 	}()
 	if err := validateMultiTableUpdateClauses(ctx, stmt); err != nil {
+		return nil, err
+	}
+	if err := validateSingleTableDMLLimitOffset(ctx, "UPDATE", stmt.Limit); err != nil {
 		return nil, err
 	}
 
