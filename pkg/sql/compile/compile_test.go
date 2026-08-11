@@ -923,6 +923,32 @@ func TestCompileShuffleGroupGatesOrderedAggregateByProtocolVersion(t *testing.T)
 		"legacy shuffle aggregates remain safe on protocol v5")
 }
 
+func TestFinalizeTableScanShuffleForCNCount(t *testing.T) {
+	newNode := func(ranges []float64) *plan.Node {
+		return &plan.Node{Stats: &plan.Stats{HashmapStats: &plan.HashMapStats{
+			ShuffleType:   plan.ShuffleType_Range,
+			ShuffleColMin: 1,
+			ShuffleColMax: 100,
+			Ranges:        ranges,
+		}}}
+	}
+
+	short := newNode([]float64{1, 50, 100})
+	finalizeTableScanShuffleForCNCount(short, 2)
+	require.Equal(t, plan.ShuffleType_Hash, short.Stats.HashmapStats.ShuffleType)
+	require.Nil(t, short.Stats.HashmapStats.Ranges)
+	require.Zero(t, short.Stats.HashmapStats.ShuffleColMin)
+	require.Zero(t, short.Stats.HashmapStats.ShuffleColMax)
+
+	enough := newNode([]float64{1, 25, 50, 100})
+	finalizeTableScanShuffleForCNCount(enough, 2)
+	require.Equal(t, plan.ShuffleType_Range, enough.Stats.HashmapStats.ShuffleType)
+
+	boundsOnly := newNode(nil)
+	finalizeTableScanShuffleForCNCount(boundsOnly, 512)
+	require.Equal(t, plan.ShuffleType_Range, boundsOnly.Stats.HashmapStats.ShuffleType)
+}
+
 func TestCompileShuffleGroupUsesDistributedPathWhenInputScopesNotSingle(t *testing.T) {
 	c := newCompileForShuffleGroupTest(t)
 	aggNode, nodes := newShuffleGroupTestNodes(16)

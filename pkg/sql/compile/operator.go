@@ -1928,6 +1928,7 @@ func constructShuffleOperatorForJoin(bucketNum int32, node *plan.Node, left bool
 	case types.T_uint64, types.T_uint32, types.T_uint16, types.T_varchar, types.T_char, types.T_text, types.T_bit, types.T_datalink:
 		arg.ShuffleRangeUint64 = plan2.ShuffleRangeReEvalUnsigned(node.Stats.HashmapStats.Ranges, int(arg.BucketNum), node.Stats.HashmapStats.Nullcnt, int64(node.Stats.TableCnt))
 	}
+	fallbackRangeShuffleToHash(arg, node)
 	if left && len(node.RuntimeFilterProbeList) > 0 {
 		arg.RuntimeFilterSpec = plan2.DeepCopyRuntimeFilterSpec(node.RuntimeFilterProbeList[0])
 	}
@@ -1953,7 +1954,24 @@ func constructShuffleArgForGroup(bucketNum int32, node *plan.Node) *shuffle.Shuf
 	case types.T_uint64, types.T_uint32, types.T_uint16, types.T_varchar, types.T_char, types.T_text, types.T_bit, types.T_datalink:
 		arg.ShuffleRangeUint64 = plan2.ShuffleRangeReEvalUnsigned(node.Stats.HashmapStats.Ranges, int(arg.BucketNum), node.Stats.HashmapStats.Nullcnt, int64(node.Stats.TableCnt))
 	}
+	fallbackRangeShuffleToHash(arg, node)
 	return arg
+}
+
+// Quantile boundaries are optional at plan time because bucket count is only
+// known during compilation. If re-evaluation cannot produce one boundary per
+// bucket, hash shuffle is the only safe fallback: sampled stats deliberately do
+// not provide global min/max, whose zero values would otherwise create extreme
+// range skew.
+func fallbackRangeShuffleToHash(arg *shuffle.Shuffle, node *plan.Node) {
+	if arg.ShuffleType != int32(plan.ShuffleType_Range) ||
+		node == nil || node.Stats == nil || node.Stats.HashmapStats == nil ||
+		len(node.Stats.HashmapStats.Ranges) == 0 {
+		return
+	}
+	if len(arg.ShuffleRangeInt64) == 0 && len(arg.ShuffleRangeUint64) == 0 {
+		arg.ShuffleType = int32(plan.ShuffleType_Hash)
+	}
 }
 
 // cross-cn dispath  will send same batch to all register

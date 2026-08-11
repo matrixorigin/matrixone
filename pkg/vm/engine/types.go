@@ -1044,10 +1044,11 @@ type RangesShuffleParam struct {
 	IsLocalCN bool
 	// ShuffleByObjectID assigns IVF persisted and appendable objects to the
 	// same physical CN owner.
-	ShuffleByObjectID  bool
-	ShuffleRangeUint64 []uint64
-	ShuffleRangeInt64  []int64
-	Init               bool
+	ShuffleByObjectID   bool
+	ShuffleRangeUint64  []uint64
+	ShuffleRangeInt64   []int64
+	Init                bool
+	ShuffleRangeBuckets int
 }
 
 type RangesParam struct {

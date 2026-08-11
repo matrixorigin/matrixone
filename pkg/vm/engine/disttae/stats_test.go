@@ -18,6 +18,7 @@ import (
 	"context"
 	"encoding/binary"
 	"fmt"
+	"math"
 	goruntime "runtime"
 	"sync"
 	"sync/atomic"
@@ -45,6 +46,123 @@ import (
 
 type mockStatsKeyRouter struct {
 	target string
+}
+
+func TestPatchStatsMaintainsMinMaxProvenance(t *testing.T) {
+	newGlobalStats := func() *GlobalStats {
+		gs := new(GlobalStats)
+		gs.mu.statsInfoMap = make(map[statsinfo.StatsInfoKey]*statsinfo.StatsInfo)
+		gs.mu.cond = sync.NewCond(&gs.mu)
+		return gs
+	}
+	key := statsinfo.StatsInfoKey{TableID: 42}
+
+	t.Run("paired bounds and ranges are authoritative by default", func(t *testing.T) {
+		gs := newGlobalStats()
+		err := gs.PatchStats(key, &PatchArgs{
+			MinValMap: map[string]float64{"k": 1},
+			MaxValMap: map[string]float64{"k": 100},
+			ShuffleRangeMap: map[string]*ShuffleRangePartialUpdate{
+				"k": {Result: []float64{1, 50, 100}},
+			},
+		})
+		require.NoError(t, err)
+		stats := gs.mu.statsInfoMap[key]
+		require.True(t, stats.MinMaxValidMap["k"])
+		require.True(t, stats.MinMaxCompleteMap["k"])
+		require.Equal(t, 1.0, stats.ShuffleRangeMap["k"].SampleRatio)
+	})
+
+	t.Run("sampled bounds remain valid but incomplete", func(t *testing.T) {
+		gs := newGlobalStats()
+		ratio := 0.1
+		err := gs.PatchStats(key, &PatchArgs{
+			SampleRatio:       &ratio,
+			MinValMap:         map[string]float64{"k": 1},
+			MaxValMap:         map[string]float64{"k": 100},
+			MinMaxCompleteMap: map[string]bool{"k": false},
+		})
+		require.NoError(t, err)
+		stats := gs.mu.statsInfoMap[key]
+		require.True(t, stats.MinMaxValidMap["k"])
+		require.False(t, stats.MinMaxCompleteMap["k"])
+		require.Equal(t, ratio, stats.SampleRatio)
+	})
+
+	t.Run("range-only patch carries explicit provenance", func(t *testing.T) {
+		gs := newGlobalStats()
+		err := gs.PatchStats(key, &PatchArgs{
+			ShuffleRangeMap: map[string]*ShuffleRangePartialUpdate{
+				"k": {Result: []float64{1, 50, 100}},
+			},
+		})
+		require.NoError(t, err)
+		require.Equal(t, 1.0, gs.mu.statsInfoMap[key].ShuffleRangeMap["k"].SampleRatio)
+	})
+
+	t.Run("one patched legacy bound is rejected atomically", func(t *testing.T) {
+		gs := newGlobalStats()
+		legacy := plan2.NewStatsInfo()
+		legacy.MinValMap["k"] = 0
+		legacy.MaxValMap["k"] = 0
+		gs.mu.statsInfoMap[key] = legacy
+		err := gs.PatchStats(key, &PatchArgs{
+			MaxValMap: map[string]float64{"k": 100},
+		})
+		require.Error(t, err)
+		require.Equal(t, 0.0, legacy.MaxValMap["k"])
+		require.False(t, legacy.MinMaxValidMap["k"])
+		require.False(t, legacy.MinMaxCompleteMap["k"])
+	})
+
+	t.Run("sequential bounds cannot create ambiguous provenance", func(t *testing.T) {
+		gs := newGlobalStats()
+		require.Error(t, gs.PatchStats(key, &PatchArgs{
+			MinValMap: map[string]float64{"k": 1},
+		}))
+		require.NotContains(t, gs.mu.statsInfoMap, key)
+		require.Error(t, gs.PatchStats(key, &PatchArgs{
+			MaxValMap: map[string]float64{"k": 100},
+		}))
+		require.NotContains(t, gs.mu.statsInfoMap, key)
+	})
+
+	t.Run("invalid ratio-only update is rejected atomically", func(t *testing.T) {
+		gs := newGlobalStats()
+		gs.mu.statsInfoMap[key] = plan2.NewStatsInfo()
+		invalidRatio := 2.0
+		tableCnt := 100.0
+		err := gs.PatchStats(key, &PatchArgs{
+			TableCnt: &tableCnt,
+			ShuffleRangeMap: map[string]*ShuffleRangePartialUpdate{
+				"k": {SampleRatio: &invalidRatio},
+			},
+		})
+		require.Error(t, err)
+		require.Equal(t, 0.0, gs.mu.statsInfoMap[key].TableCnt)
+	})
+
+	for _, tc := range []struct {
+		name   string
+		minVal float64
+		maxVal float64
+	}{
+		{name: "nan", minVal: math.NaN(), maxVal: 10},
+		{name: "infinite", minVal: 1, maxVal: math.Inf(1)},
+		{name: "reversed", minVal: 10, maxVal: 1},
+	} {
+		t.Run("invalid bounds "+tc.name, func(t *testing.T) {
+			gs := newGlobalStats()
+			tableCnt := 100.0
+			err := gs.PatchStats(key, &PatchArgs{
+				TableCnt:  &tableCnt,
+				MinValMap: map[string]float64{"k": tc.minVal},
+				MaxValMap: map[string]float64{"k": tc.maxVal},
+			})
+			require.Error(t, err)
+			require.NotContains(t, gs.mu.statsInfoMap, key)
+		})
+	}
 }
 
 func (r *mockStatsKeyRouter) Target(statsinfo.StatsInfoKey) string { return r.target }
