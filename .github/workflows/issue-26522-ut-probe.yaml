@@ -1,0 +1,54 @@
+name: Issue 26522 UT Probe
+
+# This diagnostic workflow only runs from a uniquely named temporary tag. A
+# branch cannot be created by repository rules; a tag avoids creating a PR and
+# therefore cannot trigger MatrixOne ALL CI.
+on:
+  push:
+    tags:
+      - ci-issue-26522-probe-*
+
+concurrency:
+  group: issue-26522-ut-probe-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  reproduce:
+    name: Reproduce on Ubuntu/x86 8c16g
+    runs-on: amd64-mo-shanghai-8c16g
+    timeout-minutes: 150
+    steps:
+      - name: Record runner capacity
+        run: |
+          set -euo pipefail
+          uname -a
+          nproc
+          free -h
+          df -h /
+
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          fetch-depth: "3"
+
+      - name: Set up Go and Java
+        uses: matrixorigin/CI/actions/setup-env@main
+        with:
+          setup-java: true
+          go-version-file: "${{ github.workspace }}/go.mod"
+
+      - name: Run controlled A/B UT probe
+        env:
+          PROBE_ARTIFACT_DIR: ${{ runner.temp }}/issue-26522-ut-probe
+          UT_TIMEOUT: "40"
+        run: ./optools/issue_26522_ut_probe.sh all 12
+
+      - name: Upload probe evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: issue-26522-ut-probe-${{ github.run_id }}
+          path: ${{ runner.temp }}/issue-26522-ut-probe
+          if-no-files-found: warn
