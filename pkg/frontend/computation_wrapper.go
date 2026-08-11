@@ -742,11 +742,11 @@ func preparedParamBindingType(kind vector.PrepareParamKind, value []byte) types.
 		return types.T_bool.ToType()
 	}
 
-	width, scale, _, exponent := preparedNumericTextDomain(value)
+	width, scale, full, exponent := preparedNumericTextDomain(value)
 	binding := types.T_text.ToType()
 	binding.Charset = preparedNumericTextBindingCharset
 	switch {
-	case exponent && (width-scale > 35 || scale > 30):
+	case full && exponent && (width-scale > 35 || scale > 30):
 		binding.Size = preparedNumericTextFloat
 	default:
 		binding.Size = preparedNumericTextPrefix
@@ -864,6 +864,25 @@ func preparedParamBindingTypes(
 
 func preparedParamBindingTypesEqual(left, right []types.Type, count int) bool {
 	for i := 0; i < count; i++ {
+		var leftType, rightType types.Type
+		if i < len(left) {
+			leftType = left[i]
+		}
+		if i < len(right) {
+			rightType = right[i]
+		}
+		if !leftType.Eq(rightType) {
+			return false
+		}
+	}
+	return true
+}
+
+func preparedParamBindingTypesEqualAtDependencies(left, right []types.Type, dependencies []bool, count int) bool {
+	for i := 0; i < count; i++ {
+		if i >= len(dependencies) || !dependencies[i] {
+			continue
+		}
 		var leftType, rightType types.Type
 		if i < len(left) {
 			leftType = left[i]
@@ -1082,8 +1101,14 @@ func initExecuteStmtParamWithResolverInSession(
 	protocolVersion := currentProtocolVersion(cwft.proc)
 	protocolMismatch := prepareStmt.protocolVersion != 0 &&
 		prepareStmt.protocolVersion != protocolVersion
-	paramBindingMismatch := !preparedParamBindingTypesEqual(
-		prepareStmt.paramBindingTypes, paramBindingTypes, len(preparePlan.ParamTypes))
+	if !prepareStmt.paramBindingDependenciesSet {
+		prepareStmt.paramBindingDependencies = plan2.PreparedParamCommonTypeDependencies(
+			preparePlan.Plan, len(preparePlan.ParamTypes))
+		prepareStmt.paramBindingDependenciesSet = true
+	}
+	paramBindingMismatch := !preparedParamBindingTypesEqualAtDependencies(
+		prepareStmt.paramBindingTypes, paramBindingTypes,
+		prepareStmt.paramBindingDependencies, len(preparePlan.ParamTypes))
 	needRebuild := preparePlanNeedsRebuild(change, modeMismatch, protocolMismatch) ||
 		fkSensitive || paramBindingMismatch
 

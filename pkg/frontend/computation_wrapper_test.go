@@ -518,6 +518,33 @@ func TestInitExecuteStmtParamMapsRuntimeBindingCategoriesByPosition(t *testing.T
 	require.Equal(t, preparedNumericTextPrefix, prepareStmt.paramBindingTypes[1].Size)
 }
 
+func TestInitExecuteStmtParamIgnoresUnrelatedRuntimeCategories(t *testing.T) {
+	ses, prepareStmt, cw, execCtx := newPreparedExecuteEnvForSQL(t, 113, "select ? + 1")
+	defer func() {
+		cw.proc.SetPrepareParams(nil)
+		prepareStmt.Close()
+	}()
+
+	prepareStmt.params = vector.NewVec(types.T_text.ToType())
+	setParam := func(value string, mysqlType defines.MysqlType) {
+		prepareStmt.params.CleanOnlyData()
+		require.NoError(t, vector.AppendBytes(prepareStmt.params, []byte(value), false, cw.proc.Mp()))
+		prepareStmt.ParamTypes = []byte{byte(mysqlType), 0}
+	}
+	execute := func() *plan.Plan {
+		_, _, _, _, _, err := initExecuteStmtParam(execCtx, ses, cw, nil, prepareStmt.Name)
+		require.NoError(t, err)
+		return prepareStmt.PreparePlan
+	}
+
+	initialPlan := prepareStmt.PreparePlan
+	setParam("1", defines.MYSQL_TYPE_VAR_STRING)
+	require.Same(t, initialPlan, execute(), "an unrelated text parameter must not trigger the first rebuild")
+	setParam("1", defines.MYSQL_TYPE_DOUBLE)
+	require.Same(t, initialPlan, execute(), "an unrelated category transition must reuse the plan")
+	require.Empty(t, prepareStmt.paramBindingDependencies)
+}
+
 func TestSQLVariablePrepareParamKind(t *testing.T) {
 	for _, test := range []struct {
 		oid  types.T

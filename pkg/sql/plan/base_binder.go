@@ -4661,6 +4661,11 @@ func decimalParamCommonTypeResolutionTypes(name string, args []*Expr, argsType [
 	if !hasDecimal {
 		return argsType
 	}
+	for i, typ := range argsType {
+		if isUnresolvedPreparedNumericParam(args[i], typ) && args[i].Typ.Enumvalues == "" {
+			args[i].Typ.Enumvalues = "mo_decimal_common_type_dependency"
+		}
+	}
 
 	dynamicParamType, ok := types.Type{}, true
 	if hasParam {
@@ -4712,6 +4717,19 @@ func decimalParamCommonTypeResolutionTypes(name string, args []*Expr, argsType [
 			// the resolution input avoids the temporal/string mixed-type path.
 			resolutionTypes[i] = types.New(types.T_decimal64, 4, 0)
 		}
+	}
+	maxIntegral, maxScale := int32(0), int32(0)
+	for _, typ := range resolutionTypes {
+		if typ.Oid.IsFloat() {
+			return resolutionTypes
+		}
+		if typ.Oid.IsDecimal() {
+			maxIntegral = max(maxIntegral, typ.Width-typ.Scale)
+			maxScale = max(maxScale, typ.Scale)
+		}
+	}
+	if hasParam && maxIntegral+maxScale > 76 {
+		return argsType
 	}
 	return resolutionTypes
 }
@@ -4766,9 +4784,12 @@ func normalizeDecimalParamCommonTypeCastSources(
 	}
 	for i := range args {
 		if returnType.Oid.IsDecimal() && isUnresolvedPreparedNumericParam(args[i], argsType[i]) {
-			// The normal string-to-DECIMAL cast scans MySQL's numeric prefix
-			// directly, so integers above 2^53 must not pass through FLOAT64.
-			castExpr, err := appendCastBeforeExpr(ctx, args[i], makePlan2Type(&returnType))
+			// Mark only this internal cast for MySQL numeric-prefix conversion.
+			// Charset is otherwise unused for numeric types and does not require a
+			// new CAST overload ID that an old CN could fail to decode.
+			castType := returnType
+			castType.Charset = 255
+			castExpr, err := appendCastBeforeExpr(ctx, args[i], makePlan2Type(&castType))
 			if err != nil {
 				return err
 			}

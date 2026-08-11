@@ -6669,6 +6669,23 @@ func strToDecimal64(
 	var dft types.Decimal64
 	totype := to.GetType()
 	isb := from.GetSourceVector().GetIsBin()
+	if totype.Charset == 255 && from.GetSourceVector().IsConst() {
+		v, null := from.GetStrValue(0)
+		var result types.Decimal64
+		var err error
+		if !null {
+			result, err = parseMySQLDecimal64Prefix(convertByteSliceToString(v), totype.Width, totype.Scale)
+			if err != nil {
+				return err
+			}
+		}
+		for i = 0; i < l; i++ {
+			if err = to.Append(result, null); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
 	for i = 0; i < l; i++ {
 		v, null := from.GetStrValue(i)
 		if null {
@@ -6681,7 +6698,9 @@ func strToDecimal64(
 				isExplicit := mode == castModeExplicit
 				var result types.Decimal64
 				var err error
-				if isExplicit {
+				if totype.Charset == 255 {
+					result, err = parseMySQLDecimal64Prefix(s, totype.Width, totype.Scale)
+				} else if isExplicit {
 					result, err = parseExplicitDecimal64CastString(s, totype.Width, totype.Scale)
 				} else {
 					result, err = parseDecimal64CastString(s, totype.Width, totype.Scale)
@@ -6769,6 +6788,80 @@ func parseDecimal64CastString(s string, width, scale int32) (types.Decimal64, er
 		result = result.Minus()
 	}
 	return result, nil
+}
+
+func mysqlDecimalPrefix(s string) string {
+	i := 0
+	for i < len(s) {
+		switch s[i] {
+		case ' ', '\t', '\n', '\v', '\f', '\r':
+			i++
+		default:
+			goto sign
+		}
+	}
+sign:
+	start := i
+	if i < len(s) && (s[i] == '+' || s[i] == '-') {
+		i++
+	}
+	digits := 0
+	for i < len(s) && s[i] >= '0' && s[i] <= '9' {
+		i++
+		digits++
+	}
+	if i < len(s) && s[i] == '.' {
+		i++
+		for i < len(s) && s[i] >= '0' && s[i] <= '9' {
+			i++
+			digits++
+		}
+	}
+	if digits == 0 {
+		return "0"
+	}
+	if i < len(s) && (s[i] == 'e' || s[i] == 'E') {
+		exponentStart := i
+		i++
+		if i < len(s) && (s[i] == '+' || s[i] == '-') {
+			i++
+		}
+		exponentDigits := i
+		for i < len(s) && s[i] >= '0' && s[i] <= '9' {
+			i++
+		}
+		if i == exponentDigits {
+			i = exponentStart
+		}
+	}
+	return s[start:i]
+}
+
+func parseMySQLDecimal64Prefix(s string, width, scale int32) (types.Decimal64, error) {
+	prefix := mysqlDecimalPrefix(s)
+	result, err := types.ParseDecimal64(prefix, width, scale)
+	if err == nil {
+		return result, nil
+	}
+	return clampDecimal64Value(len(prefix) > 0 && prefix[0] == '-', width, scale)
+}
+
+func parseMySQLDecimal128Prefix(s string, width, scale int32) (types.Decimal128, error) {
+	prefix := mysqlDecimalPrefix(s)
+	result, err := types.ParseDecimal128(prefix, width, scale)
+	if err == nil {
+		return result, nil
+	}
+	return clampDecimal128Value(len(prefix) > 0 && prefix[0] == '-', width, scale)
+}
+
+func parseMySQLDecimal256Prefix(s string, width, scale int32) (types.Decimal256, error) {
+	prefix := mysqlDecimalPrefix(s)
+	result, err := types.ParseDecimal256(prefix, width, scale)
+	if err == nil {
+		return result, nil
+	}
+	return clampDecimal256Value(len(prefix) > 0 && prefix[0] == '-', width, scale)
 }
 
 func parseDecimal128CastString(s string, width, scale int32) (types.Decimal128, error) {
@@ -6864,6 +6957,23 @@ func strToDecimal128(
 	var dft types.Decimal128
 	totype := to.GetType()
 	isb := from.GetSourceVector().GetIsBin()
+	if totype.Charset == 255 && from.GetSourceVector().IsConst() {
+		v, null := from.GetStrValue(0)
+		var result types.Decimal128
+		var err error
+		if !null {
+			result, err = parseMySQLDecimal128Prefix(convertByteSliceToString(v), totype.Width, totype.Scale)
+			if err != nil {
+				return err
+			}
+		}
+		for i = 0; i < l; i++ {
+			if err = to.Append(result, null); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
 	for i = 0; i < l; i++ {
 		v, null := from.GetStrValue(i)
 		if null {
@@ -6876,7 +6986,9 @@ func strToDecimal128(
 				isExplicit := mode == castModeExplicit
 				var result types.Decimal128
 				var err error
-				if isExplicit {
+				if totype.Charset == 255 {
+					result, err = parseMySQLDecimal128Prefix(s, totype.Width, totype.Scale)
+				} else if isExplicit {
 					result, err = parseExplicitDecimal128CastString(s, totype.Width, totype.Scale)
 				} else {
 					result, err = parseDecimal128CastString(s, totype.Width, totype.Scale)
@@ -6947,6 +7059,23 @@ func strToDecimal256(
 	var dft types.Decimal256
 	totype := to.GetType()
 	isb := from.GetSourceVector().GetIsBin()
+	if totype.Charset == 255 && from.GetSourceVector().IsConst() {
+		v, null := from.GetStrValue(0)
+		var result types.Decimal256
+		var err error
+		if !null {
+			result, err = parseMySQLDecimal256Prefix(convertByteSliceToString(v), totype.Width, totype.Scale)
+			if err != nil {
+				return err
+			}
+		}
+		for i = 0; i < l; i++ {
+			if err = to.Append(result, null); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
 	for i = 0; i < l; i++ {
 		v, null := from.GetStrValue(i)
 		if null {
@@ -6959,7 +7088,9 @@ func strToDecimal256(
 				isExplicit := mode == castModeExplicit
 				var result types.Decimal256
 				var err error
-				if isExplicit {
+				if totype.Charset == 255 {
+					result, err = parseMySQLDecimal256Prefix(s, totype.Width, totype.Scale)
+				} else if isExplicit {
 					result, err = parseExplicitDecimal256CastString(s, totype.Width, totype.Scale)
 				} else {
 					result, err = parseDecimal256CastString(s, totype.Width, totype.Scale)

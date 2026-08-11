@@ -88,6 +88,8 @@ SET @p='1e100';
 EXECUTE p_mysql_numeric_conversion USING @p,@p,@p;
 SET @p='1e-40';
 EXECUTE p_mysql_numeric_conversion USING @p,@p,@p;
+SET @p='1e100tail';
+EXECUTE p_mysql_numeric_conversion USING @p,@p,@p;
 DEALLOCATE PREPARE p_mysql_numeric_conversion;
 
 -- FLOAT participates in numeric aggregation and promotes the result to DOUBLE.

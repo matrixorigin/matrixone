@@ -307,11 +307,15 @@ type PrepareStmt struct {
 	// PreparePlan. A category transition invalidates both plan metadata and the
 	// cached compile.
 	paramBindingTypes []types.Type
-	ColDefData        [][]byte
-	IsCloudNonuser    bool
-	proc              *process.Process
-	remapDb           map[string]string
-	defaultDatabase   string
+	// paramBindingDependencies limits runtime category invalidation to parameter
+	// positions consumed directly by DECIMAL-aware common-type functions.
+	paramBindingDependencies    []bool
+	paramBindingDependenciesSet bool
+	ColDefData                  [][]byte
+	IsCloudNonuser              bool
+	proc                        *process.Process
+	remapDb                     map[string]string
+	defaultDatabase             string
 
 	params              *vector.Vector
 	getFromSendLongData map[int]struct{}
@@ -695,6 +699,8 @@ func (prepareStmt *PrepareStmt) Close() {
 		prepareStmt.ParamTypes = nil
 	}
 	prepareStmt.paramBindingTypes = nil
+	prepareStmt.paramBindingDependencies = nil
+	prepareStmt.paramBindingDependenciesSet = false
 	if prepareStmt.ColDefData != nil {
 		prepareStmt.ColDefData = nil
 	}
