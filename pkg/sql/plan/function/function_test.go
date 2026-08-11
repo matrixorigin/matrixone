@@ -656,8 +656,10 @@ func TestGetFunctionIsVolatileOrRealTimeRelatedByName(t *testing.T) {
 
 func TestProducesNoNullUsesFunctionContract(t *testing.T) {
 	require.True(t, ProducesNoNull(EncodeOverloadID(ISNULL, 0)))
-	require.False(t, ProducesNoNull(EncodeOverloadID(JSON_EXTRACT, 0)),
-		"STRICT only describes NULL-input propagation; a missing JSON path still returns SQL NULL")
+	for _, fid := range []int32{JSON_EXTRACT, JSON_EXTRACT_STRING, JSON_EXTRACT_FLOAT64} {
+		require.False(t, ProducesNoNull(EncodeOverloadID(fid, 0)),
+			"STRICT only describes NULL-input propagation; JSON extractors can still return SQL NULL")
+	}
 	require.False(t, ProducesNoNull(-1))
 }
 
@@ -673,6 +675,8 @@ func TestDeduceNotNullableKeepsNullSynthesizingFunctionsNullable(t *testing.T) {
 		{name: "integer division by zero", fid: INTEGER_DIV, argCount: 2},
 		{name: "modulo by zero", fid: MOD, argCount: 2},
 		{name: "missing JSON path", fid: JSON_EXTRACT, argCount: 2},
+		{name: "JSON string extractor", fid: JSON_EXTRACT_STRING, argCount: 2},
+		{name: "JSON float64 extractor", fid: JSON_EXTRACT_FLOAT64, argCount: 2},
 		{name: "regexp without a match", fid: REGEXP_SUBSTR, argCount: 2},
 		{name: "invalid IPv6 address", fid: INET6_ATON, argCount: 1},
 		{name: "out of range elt index", fid: ELT, argCount: 3},

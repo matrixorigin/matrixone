@@ -320,7 +320,9 @@ func DeduceNotNullable(overloadID int64, args []*plan.Expr) bool {
 		}
 		return true
 	// These STRICT functions can synthesize NULL from non-NULL arguments.
-	case DIV, INTEGER_DIV, MOD, JSON_EXTRACT, REGEXP_SUBSTR,
+	case DIV, INTEGER_DIV, MOD,
+		JSON_EXTRACT, JSON_EXTRACT_STRING, JSON_EXTRACT_FLOAT64,
+		REGEXP_SUBSTR,
 		INET6_ATON, ELT, UNHEX, MAKEDATE:
 		return false
 	}
