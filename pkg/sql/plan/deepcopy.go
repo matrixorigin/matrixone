@@ -425,6 +425,7 @@ func DeepCopyColDef(col *plan.ColDef) *plan.ColDef {
 		Typ:          col.Typ,
 		Default:      DeepCopyDefault(col.Default),
 		Primary:      col.Primary,
+		Unique:       col.Unique,
 		Pkidx:        col.Pkidx,
 		Comment:      col.Comment,
 		OnUpdate:     DeepCopyOnUpdate(col.OnUpdate),
