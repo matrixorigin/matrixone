@@ -29,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	mock_morpc "github.com/matrixorigin/matrixone/pkg/common/morpc/mock_morpc"
+	rt "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -190,6 +191,16 @@ func TestHandlePipelineMessage_UnknownType(t *testing.T) {
 // 3. Meaningful: Tests compile object structure creation
 // 4. Realistic: Tests real compile creation in remote run scenario
 func TestNewCompile_CreatesCorrectStructure(t *testing.T) {
+	runtime := rt.ServiceRuntime("")
+	original, hadOriginal := runtime.GetGlobalVariables(rt.MOProtocolVersion)
+	defer func() {
+		if hadOriginal {
+			runtime.SetGlobalVariables(rt.MOProtocolVersion, original)
+		} else {
+			runtime.SetGlobalVariables(rt.MOProtocolVersion, defines.MORPCLatestVersion)
+		}
+	}()
+
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
@@ -261,7 +272,13 @@ func TestNewCompile_CreatesCorrectStructure(t *testing.T) {
 		},
 	}
 
+	runtime.SetGlobalVariables(rt.MOProtocolVersion, defines.MORPCVersion14)
 	compile, err := receiver.newCompile()
+	require.Error(t, err)
+	require.Nil(t, compile)
+
+	runtime.SetGlobalVariables(rt.MOProtocolVersion, defines.MORPCVersion15)
+	compile, err = receiver.newCompile()
 	require.NoError(t, err)
 	require.NotNil(t, compile)
 	require.Equal(t, "test-addr", compile.addr)

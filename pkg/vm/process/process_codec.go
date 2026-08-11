@@ -250,6 +250,14 @@ func (c *codecService) Decode(
 	if err != nil {
 		return nil, err
 	}
+	binaryStringMetadata, err := BinaryStringPrepareParamMetadataForRemote(
+		service,
+		int(value.PrepareParams.Length),
+		value.PrepareParams.IsBinaryString,
+	)
+	if err != nil {
+		return nil, err
+	}
 	txnOp, err := c.txnClient.NewWithSnapshot(ctx, value.Snapshot)
 	if err != nil {
 		return nil, err
@@ -307,7 +315,7 @@ func (c *codecService) Decode(
 		proc.SetOwnedPrepareParamsWithMetadata(
 			prepareParams,
 			prepareParamMetadata,
-			value.PrepareParams.IsBinaryString,
+			binaryStringMetadata,
 		)
 	}
 	return proc, nil

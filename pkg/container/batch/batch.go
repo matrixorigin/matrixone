@@ -827,14 +827,17 @@ func parsePrepareParamKindBatchTrailer(
 			if reader.Len() < 4 || int64(count) > int64(reader.Len()-4) {
 				return nil, 0, io.ErrUnexpectedEOF
 			}
-			records[i].encodedRows = make([]byte, int(count))
-			for row := range records[i].encodedRows {
-				encoded, err := types.ReadByte(reader)
+			rowStart := len(ext) - reader.Len()
+			rowEnd := rowStart + int(count)
+			records[i].encodedRows = ext[rowStart:rowEnd]
+			for _, encoded := range records[i].encodedRows {
 				kind := encoded &^ prepareParamKindBatchBinaryFlag
-				if err != nil || vector.PrepareParamKind(kind) > vector.PrepareParamBoolean {
+				if vector.PrepareParamKind(kind) > vector.PrepareParamBoolean {
 					return nil, 0, moerr.NewInvalidInputNoCtx("invalid prepared parameter metadata kind")
 				}
-				records[i].encodedRows[row] = encoded
+			}
+			if _, err := reader.Seek(int64(count), io.SeekCurrent); err != nil {
+				return nil, 0, err
 			}
 		default:
 			return nil, 0, moerr.NewInvalidInputNoCtx("invalid prepared parameter metadata mode")

@@ -656,6 +656,30 @@ func TestClonePreservesConstantBinaryStringMetadata(t *testing.T) {
 	}
 }
 
+func TestClonePreservesNormalizedConstantBinaryStringRows(t *testing.T) {
+	mp := mpool.MustNewZero()
+	source := NewWithSize(1)
+	var err error
+	source.Vecs[0], err = vector.NewConstBytes(
+		types.T_varchar.ToType(), []byte("text"), 2, mp)
+	require.NoError(t, err)
+	require.NoError(t, source.Vecs[0].SetBinaryStringRowsWithMP([]bool{false, true}, mp))
+	require.False(t, source.Vecs[0].HasBinaryStringRows())
+	for row := range 2 {
+		require.False(t, source.Vecs[0].GetIsBinaryStringAt(row))
+	}
+	source.SetRowCount(2)
+	defer source.Clean(mp)
+
+	cloned, err := source.Dup(mp)
+	require.NoError(t, err)
+	defer cloned.Clean(mp)
+	require.False(t, cloned.Vecs[0].HasBinaryStringRows())
+	for row := range 2 {
+		require.False(t, cloned.Vecs[0].GetIsBinaryStringAt(row))
+	}
+}
+
 func TestPrepareParamKindTransportRoundTripAndReuse(t *testing.T) {
 	mp := mpool.MustNewZero()
 	source := NewWithSize(1)

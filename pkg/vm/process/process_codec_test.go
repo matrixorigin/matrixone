@@ -272,6 +272,33 @@ func TestPrepareParamMetadataForRemoteCompatibility(t *testing.T) {
 	require.Error(t, err, "invalid packed kind bits must be rejected")
 }
 
+func TestBinaryStringPrepareParamMetadataForRemoteCompatibility(t *testing.T) {
+	runtime := rt.ServiceRuntime("")
+	original, hadOriginal := runtime.GetGlobalVariables(rt.MOProtocolVersion)
+	defer func() {
+		if hadOriginal {
+			runtime.SetGlobalVariables(rt.MOProtocolVersion, original)
+		} else {
+			runtime.SetGlobalVariables(rt.MOProtocolVersion, defines.MORPCLatestVersion)
+		}
+	}()
+
+	metadata := []bool{true, false}
+	runtime.SetGlobalVariables(rt.MOProtocolVersion, defines.MORPCVersion14)
+	_, err := BinaryStringPrepareParamMetadataForRemote("", 2, metadata)
+	require.Error(t, err)
+
+	runtime.SetGlobalVariables(rt.MOProtocolVersion, defines.MORPCVersion15)
+	decoded, err := BinaryStringPrepareParamMetadataForRemote("", 2, metadata)
+	require.NoError(t, err)
+	require.Equal(t, metadata, decoded)
+	decoded[0] = false
+	require.True(t, metadata[0], "the receiver must own an independent metadata generation")
+
+	_, err = BinaryStringPrepareParamMetadataForRemote("", 2, []bool{true})
+	require.Error(t, err)
+}
+
 func TestCodecServiceRejectsPreparedProvenanceForOldProtocol(t *testing.T) {
 	runtime := rt.ServiceRuntime("")
 	original, hadOriginal := runtime.GetGlobalVariables(rt.MOProtocolVersion)
@@ -307,6 +334,40 @@ func TestCodecServiceRejectsPreparedProvenanceForOldProtocol(t *testing.T) {
 	require.NoError(t, err)
 	defer decoded.Free()
 	require.Equal(t, vector.PrepareParamFloat, decoded.GetPrepareParamKind(0))
+}
+
+func TestCodecServiceRejectsBinaryStringMetadataForOldProtocol(t *testing.T) {
+	runtime := rt.ServiceRuntime("")
+	original, hadOriginal := runtime.GetGlobalVariables(rt.MOProtocolVersion)
+	defer func() {
+		if hadOriginal {
+			runtime.SetGlobalVariables(rt.MOProtocolVersion, original)
+		} else {
+			runtime.SetGlobalVariables(rt.MOProtocolVersion, defines.MORPCLatestVersion)
+		}
+	}()
+
+	proc, _ := newCodecTestProcess(t)
+	defer proc.Free()
+	params := proc.GetPrepareParams()
+	proc.SetPrepareParamsWithMetadata(params, []bool{false, false}, []bool{true, false})
+	runtime.SetGlobalVariables(rt.MOProtocolVersion, defines.MORPCVersion15)
+	info, err := proc.BuildProcessInfo("select ?")
+	require.NoError(t, err)
+
+	svc := NewCodecService(
+		fakeCodecTxnClient{op: fakeCodecTxnOperator{}},
+		nil, nil, nil, nil, nil, nil, nil,
+	).(*codecService)
+	runtime.SetGlobalVariables(rt.MOProtocolVersion, defines.MORPCVersion14)
+	_, err = svc.Decode(context.Background(), info)
+	require.Error(t, err)
+
+	runtime.SetGlobalVariables(rt.MOProtocolVersion, defines.MORPCVersion15)
+	decoded, err := svc.Decode(context.Background(), info)
+	require.NoError(t, err)
+	defer decoded.Free()
+	require.True(t, decoded.GetPrepareParamIsBinaryString(0))
 }
 
 func TestBuildProcessInfoAndMockProcessInfoWithPro(t *testing.T) {

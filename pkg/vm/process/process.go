@@ -309,6 +309,29 @@ func PrepareParamMetadataForRemote(
 	return append([]bool(nil), metadata...), nil
 }
 
+// BinaryStringPrepareParamMetadataForRemote validates the v15-only prepared
+// parameter binary-string field at both ends of the process wire boundary.
+func BinaryStringPrepareParamMetadataForRemote(
+	service string,
+	paramCount int,
+	metadata []bool,
+) ([]bool, error) {
+	if len(metadata) == 0 {
+		return nil, nil
+	}
+	if paramCount <= 0 || len(metadata) != paramCount {
+		return nil, moerr.NewInvalidInputNoCtxf(
+			"invalid binary-string prepare parameter metadata length %d for %d parameters",
+			len(metadata), paramCount)
+	}
+	if prepareParamProtocolVersion(service) < defines.MORPCVersion15 {
+		return nil, moerr.NewNotSupportedNoCtxf(
+			"binary string prepared parameters require MORPC protocol version %d",
+			defines.MORPCVersion15)
+	}
+	return append([]bool(nil), metadata...), nil
+}
+
 func prepareParamProtocolVersion(service string) int64 {
 	rt := runtime.ServiceRuntime(service)
 	if rt == nil {
