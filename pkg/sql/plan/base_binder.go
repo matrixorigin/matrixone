@@ -2482,6 +2482,11 @@ func (b *baseBinder) bindFuncExpr(astExpr *tree.FuncExpr, depth int32, isRoot bo
 			return b.bindFuncExprImplByAstExpr(funcName, astExpr.Exprs, depth)
 		})
 	}
+	if (strings.EqualFold(funcName, NamePercentileCont) || strings.EqualFold(funcName, NamePercentileDisc)) &&
+		astExpr.WindowSpec != nil {
+		return nil, moerr.NewNotSupported(b.GetContext(),
+			"ordered-set percentile window functions")
+	}
 
 	if function.GetFunctionIsAggregateByName(funcName) && astExpr.WindowSpec == nil {
 
@@ -3373,6 +3378,22 @@ func validateApproxPercentileArgs(ctx context.Context, args []*Expr) error {
 	return nil
 }
 
+// validateOrderedPercentileArgs enforces the scalar MVP contract for the
+// ordered-set percentile aggregates. The aggregate executor consumes the
+// percentile as compile-time configuration, while the first argument is the
+// value expression ordered by WITHIN GROUP.
+func validateOrderedPercentileArgs(ctx context.Context, name string, args []*Expr) error {
+	if len(args) != 2 {
+		return moerr.NewInvalidInputf(ctx, "%s requires a value and a percentile argument", name)
+	}
+	percentile := args[1]
+	if percentile == nil || isNullExpr(percentile) || !rule.IsConstant(percentile, false) {
+		return moerr.NewInvalidInputf(ctx,
+			"percentile argument of %s must be a non-null constant", name)
+	}
+	return nil
+}
+
 // bindMixedInListComparison applies MySQL's REAL comparison semantics for a
 // string left operand and a numeric IN-list value. It is deliberately limited
 // to IN/NOT IN fallback comparisons: applying it to every comparison would
@@ -3399,6 +3420,11 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 	var err error
 	if name == NameApproxPercentile {
 		if err = validateApproxPercentileArgs(ctx, args); err != nil {
+			return nil, err
+		}
+	}
+	if name == NamePercentileCont || name == NamePercentileDisc {
+		if err = validateOrderedPercentileArgs(ctx, name, args); err != nil {
 			return nil, err
 		}
 	}
