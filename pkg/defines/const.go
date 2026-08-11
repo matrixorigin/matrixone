@@ -51,8 +51,9 @@ const (
 	MORPCVersion13     int64 = 13 // lossless v2 prefix-index metadata
 	MORPCVersion14     int64 = 14 // utf8mb4 text MIN/MAX collation semantics
 	MORPCVersion15     int64 = 15 // CHECK metadata in rename-column alter requests
-	MORPCVersion16     int64 = 16 // prepared-parameter binary-string metadata
-	MORPCLatestVersion       = MORPCVersion16
+	MORPCVersion16     int64 = 16 // information_schema CHECK_CONSTRAINTS table function
+	MORPCVersion17     int64 = 17 // prepared-parameter binary-string metadata
+	MORPCLatestVersion       = MORPCVersion17
 )
 
 // DefaultLockWaitTimeoutSeconds is shared by the frontend default and by
