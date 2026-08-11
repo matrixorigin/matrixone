@@ -1518,9 +1518,7 @@ func TestNormalizePreparedBoolAndDynamicNumericSignature(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, int64(1), value)
 	require.Equal(t, types.T_int64, typ)
-	require.Equal(t, int64(1), normalizePreparedParamValue(true))
-	require.Equal(t, int64(0), normalizePreparedParamValue(false))
-	require.Equal(t, types.T_int64, normalizePreparedParamRuntimeType(types.T_bool))
+	require.Equal(t, types.T_bool, preparedTextParamRuntimeType(true))
 
 	ctx := context.Background()
 	first, err := preparedNumericParamSignature(ctx, []any{plan2.ParamValue{Value: "2", RuntimeType: types.T_int64}})
@@ -1538,7 +1536,7 @@ func TestNormalizePreparedBoolAndDynamicNumericSignature(t *testing.T) {
 	require.NotEqual(t, decimalA, decimalDifferentShape, "decimal precision and scale changes must rebuild specialization")
 }
 
-func TestBuildExecuteUserParamsNormalizesBoolValueAndRuntimeTypeTogether(t *testing.T) {
+func TestBuildExecuteUserParamsPreservesBoolValueAndRuntimeType(t *testing.T) {
 	ses, prepareStmt, cw, _ := newPreparedExecuteEnv(t, 112)
 	defer prepareStmt.Close()
 	require.NoError(t, ses.setUserDefinedVarWithType("bool_param", true, "", false, types.T_bool))
@@ -1548,9 +1546,9 @@ func TestBuildExecuteUserParamsNormalizesBoolValueAndRuntimeTypeTogether(t *test
 	}})
 	require.NoError(t, err)
 	defer params.Free(cw.proc.Mp())
-	require.Equal(t, "1", params.GetStringAt(0))
+	require.Equal(t, "true", params.GetStringAt(0))
 	require.Equal(t, []any{plan2.ParamValue{
-		Value: int64(1), RuntimeType: types.T_int64,
+		Value: true, RuntimeType: types.T_bool,
 	}}, values)
 	require.Equal(t, []vector.PrepareParamKind{vector.PrepareParamBoolean}, kinds)
 }

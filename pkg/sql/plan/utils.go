@@ -3518,10 +3518,13 @@ func refreshPreparedTypeLineage(ctx context.Context, plan0 *Plan, paramRule *Res
 				return err
 			}
 		}
-		if err := visitor.exploreNode(ctx, rule, node, id); err != nil {
+		if err := visitor.exploreNode(ctx, paramRule, node, id); err != nil {
 			return err
 		}
-		if err := visitor.exploreNode(ctx, paramRule, node, id); err != nil {
+		// Parameter specialization can change aggregate/window producers.
+		// Refresh logical consumers only after that new producer generation
+		// exists, so SubqueryRef, parent overloads and physical wrappers agree.
+		if err := visitor.exploreNode(ctx, rule, node, id); err != nil {
 			return err
 		}
 		if err := reconcilePreparedSetOperationTypes(ctx, query, node); err != nil {

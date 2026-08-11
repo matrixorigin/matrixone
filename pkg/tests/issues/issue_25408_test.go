@@ -54,6 +54,33 @@ func TestIssue25408PreparedNestedExactAndStringDomains(t *testing.T) {
 			_, _ = db.ExecContext(cleanupCtx, fmt.Sprintf("drop database if exists `%s`", dbName))
 		}()
 		mustExec(t, ctx, conn, fmt.Sprintf("use `%s`", dbName))
+		mustExec(t, ctx, conn, "create table n(a int)")
+		mustExec(t, ctx, conn, "insert into n values (1), (2), (3)")
+
+		for _, query := range []string{
+			"select (select sum(? + 1) from n) + 1",
+			"select sum(? + 1) + 1 from n",
+			"select sum(? + 1) over () + 1 from n limit 1",
+		} {
+			stmt, prepareErr := conn.PrepareContext(ctx, query)
+			require.NoError(t, prepareErr)
+			for _, execution := range []struct {
+				arg  any
+				want string
+			}{{int64(1), "7"}, {float64(2.5), "11.5"}, {int64(1), "7"}} {
+				var got string
+				require.NoError(t, stmt.QueryRowContext(ctx, execution.arg).Scan(&got))
+				require.Equal(t, execution.want, got)
+			}
+			require.NoError(t, stmt.Close())
+		}
+
+		mustExec(t, ctx, conn, "create table bool_strings(v text)")
+		mustExec(t, ctx, conn, "set @bool_value = true")
+		mustExec(t, ctx, conn, "prepare bool_insert from 'insert into bool_strings values (?)'")
+		mustExec(t, ctx, conn, "execute bool_insert using @bool_value")
+		requireIssue25408Scalar(t, ctx, conn, "true", "select v from bool_strings")
+		mustExec(t, ctx, conn, "deallocate prepare bool_insert")
 
 		// SQL PREPARE reaches the same nested exact-expression specialization as
 		// EXECUTE USING user variables.

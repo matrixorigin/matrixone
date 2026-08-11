@@ -1325,9 +1325,7 @@ func buildExecuteUserParams(
 		} else {
 			paramKinds[i] = prepareParamKindFromValue(param)
 		}
-		runtimeType := normalizePreparedParamRuntimeType(
-			preparedExecuteParamRuntimeType(ses, exprImpl.V, param))
-		param = normalizePreparedParamValue(param)
+		runtimeType := preparedExecuteParamRuntimeType(ses, exprImpl.V, param)
 		err = util.AppendAnyToStringVector(proc, param, params)
 		if err != nil {
 			return
@@ -1337,23 +1335,6 @@ func buildExecuteUserParams(
 		}
 	}
 	return
-}
-
-func normalizePreparedParamValue(value any) any {
-	if v, ok := value.(bool); ok {
-		if v {
-			return int64(1)
-		}
-		return int64(0)
-	}
-	return value
-}
-
-func normalizePreparedParamRuntimeType(typ types.T) types.T {
-	if typ == types.T_bool {
-		return types.T_int64
-	}
-	return typ
 }
 
 func preparedTextParamRuntimeType(value any) types.T {

@@ -564,6 +564,13 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 				value := param.GetLit().GetSval()
 				runtimeType := types.T(param.Typ.Id)
 				switch runtimeType {
+				case types.T_bool:
+					// Keep the parameter value and source type intact at the
+					// frontend boundary. Numeric consumers alone interpret BOOL
+					// as MySQL integer 0/1 through their generated cast.
+					intType := types.T_int64.ToType()
+					return makePlan2CastExpr(rule.ctx, dynamicParamExpr,
+						makePlan2Type(&intType))
 				case types.T_float32:
 					parsed, parseErr := parsePreparedFloat(value, 32)
 					if parseErr != nil {
