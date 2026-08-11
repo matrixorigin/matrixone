@@ -197,7 +197,7 @@
 
 # pkg/util
 /pkg/util @XuPeng-SH
-/pkg/util/internalExecutor @aptend @iamlinjunhong @aptend
+/pkg/util/internalExecutor @aptend @iamlinjunhong @Xupeng-SH
 /pkg/util/metric @aptend @XuPeng-SH
 /pkg/util/toml @XuPeng-SH
 /pkg/util/trace @gouhongshen @aptend
