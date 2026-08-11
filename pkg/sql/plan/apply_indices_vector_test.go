@@ -330,8 +330,8 @@ func TestVecFloatKey_NarrowTextVsFoldedMatch(t *testing.T) {
 // distance to a DIFFERENT vecuint8 vector than the ORDER BY key must stay a distance, not become score.
 func TestReplaceDistFnInExpr_Uint8DifferentVectorNotRewritten(t *testing.T) {
 	const scanTag, tfTag, partPos int32 = 11, 22, 1
-	vecLit := foldedVecExpr(types.T_array_uint8, types.ArrayToBytes([]uint8{0, 0, 192, 127}))  // ORDER BY key
-	other := foldedVecExpr(types.T_array_uint8, types.ArrayToBytes([]uint8{1, 0, 192, 127}))   // SELECT vector
+	vecLit := foldedVecExpr(types.T_array_uint8, types.ArrayToBytes([]uint8{0, 0, 192, 127})) // ORDER BY key
+	other := foldedVecExpr(types.T_array_uint8, types.ArrayToBytes([]uint8{1, 0, 192, 127}))  // SELECT vector
 	distFn := &plan.Expr{
 		Typ: plan.Type{Id: int32(types.T_float64)},
 		Expr: &plan.Expr_F{F: &plan.Function{
@@ -347,7 +347,7 @@ func TestReplaceDistFnInExpr_Uint8DifferentVectorNotRewritten(t *testing.T) {
 	require.Equal(t, "l2_distance", out.GetF().Func.ObjName)
 }
 
-// TestReplaceDistFnInExpr_EmptyCastFailSafeNoPanic: the #P2 repro — an unfolded cast('' as vecf32)
+// TestReplaceDistFnInExpr_EmptyCastFailSafeNoPanic: the #P2 repro — an unfolded cast(” as vecf32)
 // SELECT distance must not panic the planner; it is unparseable, so it stays a distance (fail-safe).
 func TestReplaceDistFnInExpr_EmptyCastFailSafeNoPanic(t *testing.T) {
 	const scanTag, tfTag, partPos int32 = 11, 22, 1
