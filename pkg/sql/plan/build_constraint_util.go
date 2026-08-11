@@ -127,6 +127,28 @@ func appendCheckConstraintPlanWithColLookup(
 	lookupColPos func(string) (int32, bool),
 	ignoreMode bool,
 ) (int32, error) {
+	return appendCheckConstraintPlanWithColLookupAndEligibility(
+		builder,
+		bindCtx,
+		tableDef,
+		lastNodeID,
+		inputTag,
+		lookupColPos,
+		ignoreMode,
+		nil,
+	)
+}
+
+func appendCheckConstraintPlanWithColLookupAndEligibility(
+	builder *QueryBuilder,
+	bindCtx *BindContext,
+	tableDef *TableDef,
+	lastNodeID int32,
+	inputTag int32,
+	lookupColPos func(string) (int32, bool),
+	ignoreMode bool,
+	targetEligible *plan.Expr,
+) (int32, error) {
 	if len(tableDef.Checks) == 0 {
 		return lastNodeID, nil
 	}
@@ -170,6 +192,24 @@ func appendCheckConstraintPlanWithColLookup(
 		)
 		if err != nil {
 			return 0, err
+		}
+		if targetEligible != nil {
+			notEligible, err := BindFuncExprImplByPlanExpr(
+				builder.GetContext(),
+				"not",
+				[]*plan.Expr{DeepCopyExpr(targetEligible)},
+			)
+			if err != nil {
+				return 0, err
+			}
+			passExpr, err = BindFuncExprImplByPlanExpr(
+				builder.GetContext(),
+				"or",
+				[]*plan.Expr{notEligible, passExpr},
+			)
+			if err != nil {
+				return 0, err
+			}
 		}
 		if ignoreMode {
 			filterList = append(filterList, passExpr)

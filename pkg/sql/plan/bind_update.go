@@ -86,7 +86,7 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 	if err != nil {
 		return 0, err
 	}
-	if err = routeRepeatedPhysicalUpdateTargetsToLegacy(builder.GetContext(), dmlCtx); err != nil {
+	if err = rejectRepeatedPhysicalUpdateTargets(builder.GetContext(), dmlCtx); err != nil {
 		return 0, err
 	}
 	if err = builder.validateDistinctUpdateForeignKeyMutationTargets(bindCtx, dmlCtx); err != nil {
@@ -393,6 +393,44 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 
 	}
 
+	if !isMultiTargetUpdate && len(dmlCtx.aliases) > updatedTargetCount {
+		for i, alias := range dmlCtx.aliases {
+			if len(dmlCtx.updateCol2Expr[i]) == 0 {
+				continue
+			}
+			rowIDPos, ok := oldColName2Idx[alias+"."+catalog.Row_ID]
+			if !ok {
+				return 0, moerr.NewInternalErrorf(
+					builder.GetContext(),
+					"bind update err, can not find row_id for target %s",
+					alias,
+				)
+			}
+			eligible, buildErr := BindFuncExprImplByPlanExpr(
+				builder.GetContext(),
+				"isnotnull",
+				[]*plan.Expr{{
+					Typ: selectNode.ProjectList[rowIDPos].Typ,
+					Expr: &plan.Expr_Col{Col: &plan.ColRef{
+						RelPos: selectNodeTag,
+						ColPos: rowIDPos,
+					}},
+				}},
+			)
+			if buildErr != nil {
+				return 0, buildErr
+			}
+			lastNodeID = builder.appendNode(&plan.Node{
+				NodeType:        plan.Node_FILTER,
+				Children:        []int32{lastNodeID},
+				FilterList:      []*plan.Expr{eligible},
+				ProjectList:     getProjectionByLastNodeIfAvailable(builder, lastNodeID),
+				FilterIsBarrier: true,
+			}, bindCtx)
+			break
+		}
+	}
+
 	if stmt.Ignore && isMultiTargetUpdate {
 		lastNodeID, selectNode, selectNodeTag, err = builder.splitDistinctUpdateTargetBranches(
 			bindCtx,
@@ -505,13 +543,38 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 		if len(dmlCtx.updateCol2Expr[i]) == 0 || len(tableDef.Checks) == 0 {
 			continue
 		}
-		// resolveSingleTable accepts only TableName/AliasedTableExpr here. Joined
-		// UPDATE targets (including nullable outer-join sides) are routed to
-		// buildTableUpdate, whose per-target row-id filter runs before its CHECK.
-		// Therefore every row reaching this modern path is target-eligible and no
-		// extra row-id predicate is needed on this hot path.
 		alias := dmlCtx.aliases[i]
-		lastNodeID, err = appendCheckConstraintPlanWithColLookup(
+		selectorPos := targetActivePos[i]
+		if selectorPos < 0 {
+			var found bool
+			selectorPos, found = oldColName2Idx[alias+"."+catalog.Row_ID]
+			if !found {
+				return 0, moerr.NewInternalErrorf(
+					builder.GetContext(),
+					"bind update err, can not find row_id for target %s",
+					alias,
+				)
+			}
+		}
+		selectorCol := &plan.Expr{
+			Typ: selectNode.ProjectList[selectorPos].Typ,
+			Expr: &plan.Expr_Col{Col: &plan.ColRef{
+				RelPos: selectNodeTag,
+				ColPos: selectorPos,
+			}},
+		}
+		targetEligible := selectorCol
+		if targetActivePos[i] < 0 {
+			targetEligible, err = BindFuncExprImplByPlanExpr(
+				builder.GetContext(),
+				"isnotnull",
+				[]*plan.Expr{selectorCol},
+			)
+			if err != nil {
+				return 0, err
+			}
+		}
+		lastNodeID, err = appendCheckConstraintPlanWithColLookupAndEligibility(
 			builder,
 			bindCtx,
 			tableDef,
@@ -526,6 +589,7 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 				return colPos, found
 			},
 			stmt.Ignore,
+			targetEligible,
 		)
 		if err != nil {
 			return 0, err
@@ -1542,12 +1606,12 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 	return lastNodeID, err
 }
 
-// routeRepeatedPhysicalUpdateTargetsToLegacy keeps the first-stage multi-target
-// implementation limited to distinct physical tables without changing the
-// compatibility behavior of statements that the legacy planner already owns.
-// Read-only aliases do not count: only aliases with SET assignments are
-// writable targets.
-func routeRepeatedPhysicalUpdateTargetsToLegacy(ctx context.Context, dmlCtx *DMLContext) error {
+// rejectRepeatedPhysicalUpdateTargets keeps the first-stage multi-target
+// implementation limited to distinct physical tables. The legacy planner can
+// panic after matching rows from repeated writable aliases, so unsupported
+// shapes must fail before either planner constructs an executable plan.
+// Read-only aliases do not count: only aliases with SET assignments are targets.
+func rejectRepeatedPhysicalUpdateTargets(ctx context.Context, dmlCtx *DMLContext) error {
 	seen := make(map[uint64]string)
 	for i, updateCols := range dmlCtx.updateCol2Expr {
 		if len(updateCols) == 0 {
@@ -1555,9 +1619,10 @@ func routeRepeatedPhysicalUpdateTargetsToLegacy(ctx context.Context, dmlCtx *DML
 		}
 		tableID := dmlCtx.tableDefs[i].TblId
 		if previousAlias, ok := seen[tableID]; ok {
-			return newLegacyUpdatePlannerRouteError(
+			return newUpdatePlannerRouteError(
+				updatePlannerRejected,
 				updateRouteReasonMultiTarget,
-				moerr.NewUnsupportedDML(
+				moerr.NewNotSupportedf(
 					ctx,
 					"updating the same physical table through aliases '%s' and '%s'",
 					previousAlias,

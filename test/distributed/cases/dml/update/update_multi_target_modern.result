@@ -392,6 +392,18 @@ SELECT * FROM multi_update_auto_b ORDER BY id;
 3  ¦  1
 DROP TABLE multi_update_auto_a;
 DROP TABLE multi_update_auto_b;
+DROP TABLE IF EXISTS multi_update_repeated_alias;
+CREATE TABLE multi_update_repeated_alias (id INT PRIMARY KEY, x INT, y INT);
+INSERT INTO multi_update_repeated_alias VALUES (1, 0, 0), (2, 0, 0);
+UPDATE multi_update_repeated_alias a
+JOIN multi_update_repeated_alias b ON a.id <> b.id
+SET a.x = 1, b.y = 2;
+not supported: updating the same physical table through aliases 'a' and 'b'
+SELECT * FROM multi_update_repeated_alias ORDER BY id;
+➤ id[4,32,0]  ¦  x[4,32,0]  ¦  y[4,32,0]  𝄀
+1  ¦  0  ¦  0  𝄀
+2  ¦  0  ¦  0
+DROP TABLE multi_update_repeated_alias;
 DROP DATABASE IF EXISTS multi_update_db_a;
 DROP DATABASE IF EXISTS multi_update_db_b;
 CREATE DATABASE multi_update_db_a;

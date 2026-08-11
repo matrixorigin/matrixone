@@ -2753,7 +2753,7 @@ func TestPartitionedMultiTargetUpdateUsesModernPlan(t *testing.T) {
 	}
 }
 
-func TestRepeatedPhysicalUpdateTargetsUseLegacyPlanner(t *testing.T) {
+func TestRepeatedPhysicalUpdateTargetsAreRejected(t *testing.T) {
 	mock := NewMockOptimizer(true)
 	logicPlan, err := runOneStmt(
 		mock,
@@ -2761,8 +2761,9 @@ func TestRepeatedPhysicalUpdateTargetsUseLegacyPlanner(t *testing.T) {
 		"UPDATE nation a JOIN nation b ON a.n_nationkey = b.n_nationkey "+
 			"SET a.n_name = 'a', b.n_comment = 'b'",
 	)
-	require.NoError(t, err)
-	require.NotNil(t, logicPlan.GetQuery())
+	require.ErrorContains(t, err, "updating the same physical table through aliases 'a' and 'b'")
+	require.Nil(t, logicPlan)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported))
 
 	// A sibling alias that is only read from is not a second update target.
 	logicPlan, err = runOneStmt(
@@ -4349,6 +4350,23 @@ func TestInsertIgnoreChildParentFKDropsRows(t *testing.T) {
 }
 
 func TestCheckConstraintWithChildForeignKey(t *testing.T) {
+	var exprContainsFunction func(*plan.Expr, string) bool
+	exprContainsFunction = func(expr *plan.Expr, name string) bool {
+		fn := expr.GetF()
+		if fn == nil {
+			return false
+		}
+		if fn.GetFunc().GetObjName() == name {
+			return true
+		}
+		for _, arg := range fn.Args {
+			if exprContainsFunction(arg, name) {
+				return true
+			}
+		}
+		return false
+	}
+
 	build := func(sql string) *plan.Query {
 		mock := NewMockOptimizer(true)
 		tableDef := mock.ctxt.tables["emp"]
@@ -4384,7 +4402,7 @@ func TestCheckConstraintWithChildForeignKey(t *testing.T) {
 		for nodeID, node := range query.Nodes {
 			if node.NodeType == nodeType {
 				for _, expr := range node.FilterList {
-					if expr.GetF() != nil && expr.GetF().GetFunc().GetObjName() == checkFunc {
+					if exprContainsFunction(expr, checkFunc) {
 						hasCheck = true
 						checkNodeID = int32(nodeID)
 						if nodeType == plan.Node_FILTER && checkFunc == "coalesce" {
@@ -4487,6 +4505,26 @@ func TestCheckConstraintWithChildForeignKey(t *testing.T) {
 		require.Len(t, assertNames, 1)
 		require.Contains(t, assertNames[0], "target_check")
 		require.NotContains(t, assertNames[0], "source_check")
+	})
+
+	t.Run("nullable joined target check is guarded by eligibility", func(t *testing.T) {
+		query := build("UPDATE dept d LEFT JOIN emp e ON e.deptno = d.deptno " +
+			"SET e.deptno = e.deptno + 1")
+		guarded := false
+		for _, node := range query.Nodes {
+			if node.NodeType != plan.Node_ASSERT {
+				continue
+			}
+			for _, expr := range node.FilterList {
+				if exprContainsFunction(expr, "_check_constraint_assert") &&
+					exprContainsFunction(expr, "or") &&
+					exprContainsFunction(expr, "isnotnull") {
+					guarded = true
+				}
+			}
+		}
+		require.True(t, guarded,
+			"CHECK must pass rows whose nullable update target has no Rowid")
 	})
 
 	t.Run("on duplicate key update", func(t *testing.T) {

@@ -201,10 +201,10 @@ func TestBindUpdateProducesTypedPlannerRoutes(t *testing.T) {
 			wantReason: updateRouteReasonNone,
 		},
 		{
-			name: "repeated writable aliases preserve legacy route",
+			name: "repeated writable aliases are rejected",
 			sql: "UPDATE nation a JOIN nation b ON a.n_nationkey = b.n_nationkey " +
 				"SET a.n_name = 'a', b.n_comment = 'b'",
-			wantRoute:  updatePlannerLegacy,
+			wantRoute:  updatePlannerRejected,
 			wantReason: updateRouteReasonMultiTarget,
 		},
 	}
