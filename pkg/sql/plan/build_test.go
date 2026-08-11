@@ -37,6 +37,7 @@ import (
 	lockpb "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	txnpb "github.com/matrixorigin/matrixone/pkg/pb/txn"
+	"github.com/matrixorigin/matrixone/pkg/sql/internal/materialized"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -4592,6 +4593,41 @@ func TestDeleteSelfReferCascade(t *testing.T) {
 	assert.True(t, query.GetHasForeignKeyAction())
 	assert.True(t, queryHasNodeType(query, plan.Node_RECURSIVE_CTE),
 		"self-referencing DELETE CASCADE must recursively collect all descendants")
+	assert.True(t, slices.ContainsFunc(query.Nodes, func(node *plan.Node) bool {
+		return node.NodeType == plan.Node_SINK && node.ExtraOptions == materialized.CTESinkOption
+	}), "recursive roots and post-fixpoint exclusion must share drain-safe materialized fanout")
+	requireRecursiveCTESources(t, query)
+}
+
+func TestDeleteSelfReferCascadeAcrossForeignKeys(t *testing.T) {
+	mock := NewMockOptimizer(true)
+
+	logicPlan, err := runOneStmt(mock, t,
+		"DELETE FROM self_ref_multi_cascade WHERE id = 1")
+	require.NoError(t, err)
+	query := logicPlan.GetQuery()
+	require.NotNil(t, query)
+
+	recursiveCTEs := 0
+	hasMultiEdgeMatch := false
+	for _, node := range query.Nodes {
+		if node.NodeType == plan.Node_RECURSIVE_CTE {
+			recursiveCTEs++
+			assert.True(t, node.RecursiveUnionDistinct,
+				"self-referencing cascade fixpoint must deduplicate cycles and converging paths")
+		}
+		if node.NodeType == plan.Node_JOIN && len(node.OnList) == 1 &&
+			node.OnList[0].GetF() != nil && node.OnList[0].GetF().Func.ObjName == "or" {
+			hasMultiEdgeMatch = true
+		}
+	}
+	assert.Equal(t, 1, recursiveCTEs,
+		"all self-referencing CASCADE edges must share one recursive fixpoint")
+	assert.True(t, hasMultiEdgeMatch,
+		"the recursive fixpoint must expand through either self-referencing FK edge")
+	assert.True(t, slices.ContainsFunc(query.Nodes, func(node *plan.Node) bool {
+		return node.NodeType == plan.Node_SINK && node.ExtraOptions == materialized.CTESinkOption
+	}), "recursive roots and post-fixpoint exclusion must share drain-safe materialized fanout")
 	requireRecursiveCTESources(t, query)
 }
 
@@ -4605,8 +4641,36 @@ func TestUpdateSelfReferCascade(t *testing.T) {
 	assert.True(t, query.GetHasForeignKeyAction(),
 		"self-referencing UPDATE CASCADE must build the child-key update")
 	assert.True(t, slices.ContainsFunc(query.Nodes, func(node *plan.Node) bool {
-		return node.NodeType == plan.Node_JOIN && node.JoinType == plan.Node_INNER && len(node.OnList) > 1
-	}), "the separate cascade update must exclude a root row that references itself")
+		return node.NodeType == plan.Node_JOIN && node.JoinType == plan.Node_LEFT
+	}), "statement roots must fold root-to-root cascade values into their main update source")
+	assert.True(t, slices.ContainsFunc(query.Nodes, func(node *plan.Node) bool {
+		return node.NodeType == plan.Node_JOIN && node.JoinType == plan.Node_ANTI
+	}), "the separate cascade update must exclude the complete statement root set")
+	materializedSinks := 0
+	for _, node := range query.Nodes {
+		if node.NodeType == plan.Node_SINK && node.ExtraOptions == materialized.CTESinkOption {
+			materializedSinks++
+		}
+	}
+	assert.GreaterOrEqual(t, materializedSinks, 1,
+		"root-to-root lookup must use drain-safe materialized fanout")
+	requireQueryStepDependenciesAcyclic(t, query)
+}
+
+func TestUpdateSelfReferCascadeBetweenStatementRoots(t *testing.T) {
+	mock := NewMockOptimizer(true)
+
+	logicPlan, err := runOneStmt(mock, t,
+		"UPDATE self_ref_cascade SET id = id + 10 WHERE id IN (1, 2)")
+	require.NoError(t, err)
+	query := logicPlan.GetQuery()
+	require.NotNil(t, query)
+	assert.True(t, slices.ContainsFunc(query.Nodes, func(node *plan.Node) bool {
+		return node.NodeType == plan.Node_JOIN && node.JoinType == plan.Node_LEFT
+	}), "a root that references another root must receive the parent's new key in the main source")
+	assert.True(t, slices.ContainsFunc(query.Nodes, func(node *plan.Node) bool {
+		return node.NodeType == plan.Node_JOIN && node.JoinType == plan.Node_ANTI
+	}), "cascade child ownership must be disjoint from every statement root")
 	requireQueryStepDependenciesAcyclic(t, query)
 }
 
@@ -4655,6 +4719,8 @@ func requireRecursiveCTESources(t *testing.T, query *plan.Query) {
 		if node.NodeType != plan.Node_RECURSIVE_CTE {
 			continue
 		}
+		assert.True(t, node.RecursiveUnionDistinct,
+			"self-referencing cascade recursion must deduplicate rowids")
 		require.GreaterOrEqual(t, len(node.SourceStep), 2)
 		for sourceIdx, sourceStep := range node.SourceStep {
 			require.GreaterOrEqual(t, sourceStep, int32(0))
@@ -4701,8 +4767,8 @@ func TestReplaceSelfRefCascade(t *testing.T) {
 			oldRowExclusions++
 		}
 	}
-	assert.GreaterOrEqual(t, oldRowExclusions, 2,
-		"initial and recursive cascade sources must exclude main REPLACE old rows")
+	assert.GreaterOrEqual(t, oldRowExclusions, 1,
+		"the completed cascade fixpoint must exclude main REPLACE old rows")
 	cascadeLocks := 0
 	for _, node := range query.Nodes {
 		if node.NodeType != plan.Node_LOCK_OP || len(node.Children) != 1 ||
@@ -4718,7 +4784,7 @@ func TestReplaceSelfRefCascade(t *testing.T) {
 	}
 	assert.GreaterOrEqual(t, cascadeLocks, 2,
 		"root and recursively cascaded rows must each lock a materialized source")
-	for _, node := range query.Nodes {
+	for nodeID, node := range query.Nodes {
 		if node.NodeType != plan.Node_SINK_SCAN || len(node.SourceStep) == 0 {
 			continue
 		}
@@ -4729,7 +4795,8 @@ func TestReplaceSelfRefCascade(t *testing.T) {
 				continue
 			}
 			require.Less(t, int(col.Col.ColPos), len(sourceSink.ProjectList),
-				"sink scan column must be remapped to the materialized recursive source")
+				"sink scan %d column must be remapped to source step %d (sink %d)",
+				nodeID, node.SourceStep[0], query.Steps[node.SourceStep[0]])
 		}
 	}
 	for _, node := range query.Nodes {
