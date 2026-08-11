@@ -28,6 +28,7 @@ import (
 	planplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/plan"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	statspb "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
 )
@@ -2512,7 +2513,7 @@ type encodedRegularIndexCostContext struct {
 	upperFilters []int32
 	requiredCols []int32
 
-	hasUnknownRangeBounds bool
+	unknownRangeLowerSelectivities map[int32]float64
 
 	leadingFilters []bool
 	coveredCols    []bool
@@ -2695,9 +2696,10 @@ func (builder *QueryBuilder) newEncodedRegularIndexCostContext(
 	ctx.relPos = node.BindingTags[0]
 	ctx.force = builder.scanHintsForceIndexes(node)
 	ctx.statsTableCnt = node.Stats.TableCnt
+	var statsInfo *statspb.StatsInfo
 	var sizeMap map[string]uint64
 	if wrapper := builder.getStatsInfoByTableID(node.TableDef.TblId); wrapper != nil && wrapper.GetStats() != nil {
-		statsInfo := wrapper.GetStats()
+		statsInfo = wrapper.GetStats()
 		if finitePositive(statsInfo.TableCnt) {
 			ctx.statsTableCnt = statsInfo.TableCnt
 			sizeMap = statsInfo.SizeMap
@@ -2735,8 +2737,16 @@ func (builder *QueryBuilder) newEncodedRegularIndexCostContext(
 	for filterIdx, filter := range node.FilterList {
 		fact := &ctx.filterFacts[filterIdx]
 		fact.directCol = directEncodedIndexFilterCol(filter, ctx.relPos, numCols)
-		fact.unknownRangeBounds = encodedRegularIndexHasUnknownRangeBounds(filter)
-		ctx.hasUnknownRangeBounds = ctx.hasUnknownRangeBounds || fact.unknownRangeBounds
+		if containsDynamicParam(filter) {
+			lowerSelectivity, hasUnknownBounds := encodedRegularIndexRangeLowerSelectivity(filter, builder, statsInfo)
+			fact.unknownRangeBounds = hasUnknownBounds
+			if hasUnknownBounds {
+				if ctx.unknownRangeLowerSelectivities == nil {
+					ctx.unknownRangeLowerSelectivities = make(map[int32]float64)
+				}
+				ctx.unknownRangeLowerSelectivities[int32(filterIdx)] = lowerSelectivity
+			}
+		}
 		collectEncodedIndexFilterFact(filter, ctx.relPos, fact, ctx.filterRefs)
 		filterType, col := checkIndexFilter(filter.GetF())
 		if col != nil && col.ColPos >= 0 && int(col.ColPos) < numCols {
@@ -2934,20 +2944,48 @@ func (ctx *encodedRegularIndexCostContext) addExtractRef(colPos int32, compound 
 	}
 }
 
-func encodedRegularIndexHasUnknownRangeBounds(filter *plan.Expr) bool {
+func encodedRegularIndexRangeLowerSelectivity(
+	filter *plan.Expr,
+	builder *QueryBuilder,
+	statsInfo *statspb.StatsInfo,
+) (lower float64, hasUnknownBounds bool) {
 	if filter == nil {
-		return false
+		return 1, false
+	}
+	if !containsDynamicParam(filter) {
+		return estimateExprSelectivity(filter, builder, statsInfo), false
 	}
 	fn := filter.GetF()
-	if fn == nil || fn.Func == nil || !containsDynamicParam(filter) {
-		return false
+	if fn == nil || fn.Func == nil {
+		return estimateExprSelectivity(filter, builder, statsInfo), false
 	}
+
 	switch fn.Func.ObjName {
-	case ">", ">=", "<", "<=", "between", "in_range", "or":
-		return true
+	case ">", ">=", "<", "<=", "between", "in_range":
+		return 0, true
+	case "or":
+		for _, arg := range fn.Args {
+			argLower, argUnknown := encodedRegularIndexRangeLowerSelectivity(arg, builder, statsInfo)
+			lower = max(lower, argLower)
+			hasUnknownBounds = hasUnknownBounds || argUnknown
+		}
+		if hasUnknownBounds {
+			// Every OR result contains each stable child result. The largest child
+			// estimate is therefore conservative without assuming that known
+			// branches are disjoint. Cap it at the parent estimate so stale child
+			// statistics cannot make the lower estimate exceed the ranking point.
+			return min(lower, estimateExprSelectivity(filter, builder, statsInfo)), true
+		}
+		return estimateExprSelectivity(filter, builder, statsInfo), false
 	default:
-		return false
+		for _, arg := range fn.Args {
+			if _, argUnknown := encodedRegularIndexRangeLowerSelectivity(arg, builder, statsInfo); argUnknown {
+				// No non-OR parent guarantees that an unknown range preserves rows.
+				return 0, true
+			}
+		}
 	}
+	return estimateExprSelectivity(filter, builder, statsInfo), false
 }
 
 func (ctx *encodedRegularIndexCostContext) score(
@@ -2994,7 +3032,7 @@ func (ctx *encodedRegularIndexCostContext) score(
 	}
 
 	candidateSelectivity := 1.0
-	hasUnknownLeadingBounds := false
+	lowerCandidateSelectivity := 1.0
 	for _, pos := range leadingPos {
 		if pos < 0 || int(pos) >= len(ctx.node.FilterList) {
 			ctx.resetScratch()
@@ -3004,8 +3042,8 @@ func (ctx *encodedRegularIndexCostContext) score(
 			continue
 		}
 		selectivity := ctx.node.FilterList[pos].Selectivity
+		lowerSelectivity := selectivity
 		if ctx.filterFacts[pos].unknownRangeBounds {
-			hasUnknownLeadingBounds = true
 			// PREPARE has no range-bound values. The stats layer's optimistic dynamic
 			// estimate keeps parameterized ranges usable, but it is too speculative to
 			// rank one physical index ahead of a sibling with an NDV-backed equality.
@@ -3014,20 +3052,20 @@ func (ctx *encodedRegularIndexCostContext) score(
 			// Without the bound values there is no comparable absolute cardinality
 			// estimate for this access path. Keep the estimate for relative index
 			// ranking, but do not use it to eliminate every index candidate.
+			lowerSelectivity = ctx.unknownRangeLowerSelectivities[pos]
 		}
-		if math.IsNaN(selectivity) || math.IsInf(selectivity, 0) || selectivity < 0 || selectivity > 1 {
+		if math.IsNaN(selectivity) || math.IsInf(selectivity, 0) || selectivity < 0 || selectivity > 1 ||
+			math.IsNaN(lowerSelectivity) || math.IsInf(lowerSelectivity, 0) || lowerSelectivity < 0 || lowerSelectivity > 1 {
 			ctx.resetScratch()
 			return 0, false, false
 		}
 		ctx.leadingFilters[pos] = true
 		ctx.touchedLeading = append(ctx.touchedLeading, pos)
 		candidateSelectivity *= selectivity
+		lowerCandidateSelectivity *= lowerSelectivity
 	}
 	leadingCandidateRows := ctx.node.Stats.TableCnt * candidateSelectivity
-	lowerCandidateRows := leadingCandidateRows
-	if hasUnknownLeadingBounds {
-		lowerCandidateRows = 0
-	}
+	lowerCandidateRows := ctx.node.Stats.TableCnt * lowerCandidateSelectivity
 	candidateRows := max(ctx.outputRows, leadingCandidateRows)
 	if !finitePositive(candidateRows) {
 		ctx.resetScratch()
@@ -3068,11 +3106,28 @@ func (ctx *encodedRegularIndexCostContext) score(
 				ctx.addExtractRef(colPos, false)
 			}
 		}
+		if len(ctx.unknownRangeLowerSelectivities) > 0 {
+			lowerHiddenSelectivity := lowerCandidateSelectivity
+			for filterIdx, fact := range ctx.filterFacts {
+				if ctx.leadingFilters[filterIdx] {
+					continue
+				}
+				selectivity := ctx.node.FilterList[filterIdx].Selectivity
+				if fact.unknownRangeBounds {
+					selectivity = ctx.unknownRangeLowerSelectivities[int32(filterIdx)]
+				}
+				if math.IsNaN(selectivity) || math.IsInf(selectivity, 0) || selectivity < 0 || selectivity > 1 {
+					ctx.resetScratch()
+					return 0, false, false
+				}
+				lowerHiddenSelectivity *= selectivity
+			}
+			lowerHiddenRows = ctx.node.Stats.TableCnt * lowerHiddenSelectivity
+		}
 	} else {
 		prefixLengths, prefixErr := catalog.IndexPrefixLengthsFromParamsWithError(idxDef.IndexAlgoParams)
 		hiddenSelectivity := candidateSelectivity
-		lowerHiddenSelectivity := candidateSelectivity
-		hasUnknownHiddenBounds := hasUnknownLeadingBounds
+		lowerHiddenSelectivity := lowerCandidateSelectivity
 		for filterIdx, fact := range ctx.filterFacts {
 			if ctx.leadingFilters[filterIdx] || fact.directCol < 0 {
 				continue
@@ -3099,22 +3154,21 @@ func (ctx *encodedRegularIndexCostContext) score(
 				continue
 			}
 			selectivity := ctx.node.FilterList[filterIdx].Selectivity
-			if math.IsNaN(selectivity) || math.IsInf(selectivity, 0) || selectivity < 0 || selectivity > 1 {
+			lowerSelectivity := selectivity
+			if fact.unknownRangeBounds {
+				lowerSelectivity = ctx.unknownRangeLowerSelectivities[int32(filterIdx)]
+			}
+			if math.IsNaN(selectivity) || math.IsInf(selectivity, 0) || selectivity < 0 || selectivity > 1 ||
+				math.IsNaN(lowerSelectivity) || math.IsInf(lowerSelectivity, 0) || lowerSelectivity < 0 || lowerSelectivity > 1 {
 				ctx.resetScratch()
 				return 0, false, false
 			}
 			hiddenSelectivity *= selectivity
-			if fact.unknownRangeBounds {
-				hasUnknownHiddenBounds = true
-			} else {
-				lowerHiddenSelectivity *= selectivity
-			}
+			lowerHiddenSelectivity *= lowerSelectivity
 			hiddenFilterCount++
 		}
 		hiddenRows = max(ctx.outputRows, ctx.node.Stats.TableCnt*hiddenSelectivity)
-		if !hasUnknownHiddenBounds {
-			lowerHiddenRows = ctx.node.Stats.TableCnt * lowerHiddenSelectivity
-		}
+		lowerHiddenRows = ctx.node.Stats.TableCnt * lowerHiddenSelectivity
 	}
 	if math.IsNaN(hiddenRows) || math.IsInf(hiddenRows, 0) || hiddenRows < 0 {
 		ctx.resetScratch()
@@ -3202,7 +3256,7 @@ func (ctx *encodedRegularIndexCostContext) score(
 	indexWork, validWork := calculateWork(candidateRows, hiddenRows, ctx.outputRows)
 	rejectionWork := indexWork
 	baseComparisonWork := ctx.baseWork
-	if ctx.hasUnknownRangeBounds && validWork {
+	if len(ctx.unknownRangeLowerSelectivities) > 0 && validWork {
 		// Compare uncertainty intervals instead of the ranking point estimate. An
 		// unbound leading range may be empty, while an unbound residual can reduce
 		// hidden rows only when this candidate can evaluate it before backfill.

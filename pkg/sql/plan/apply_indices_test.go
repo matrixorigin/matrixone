@@ -3280,6 +3280,45 @@ func TestEncodedIndexCostBoundaryControls(t *testing.T) {
 			"stable index input work exceeds even a full base scan")
 	})
 
+	t.Run("index-only mixed OR residual preserves stable output work", func(t *testing.T) {
+		newCase := func(t testing.TB, residual *planpb.Expr, outputRows float64) (*encodedRegularIndexCostContext, *planpb.IndexDef) {
+			leading := makeStringEqFilterExpr(0, 2, "READY")
+			leading.Selectivity = 0.3
+			builder, scanID, idxDef, colRefCnt := newEncodedIndexCostTestCase(
+				t,
+				[]string{"category", "tenant_id", catalog.CreateAlias(catalog.CPrimaryKeyColName)},
+				[]*planpb.Expr{leading, residual},
+				&planpb.Stats{
+					TableCnt: 800_000, Outcnt: outputRows, Selectivity: outputRows / 800_000,
+					Cost: 10_000, BlockNum: 1,
+				},
+				map[int32]int{0: 1, 2: 1},
+				false,
+			)
+			return builder.newEncodedRegularIndexCostContext(builder.qry.Nodes[scanID], colRefCnt), idxDef
+		}
+
+		known := makeIntBetweenFilterExpr(0, 0, 1, 20)
+		known.Selectivity = 0.3
+		mixed := makeOrFilterExpr(known, makeParamBetweenFilterExpr(0, 0, 0, 1))
+		mixed.Selectivity = 0.37
+		costCtx, idxDef := newCase(t, mixed, 88_800)
+		_, skip, valid := costCtx.score(idxDef, []int32{0}, nil, encodedRegularIndexCostIndexOnly)
+		require.True(t, valid)
+		require.True(t, skip,
+			"the stable residual output makes the index lower work exceed a full base scan")
+
+		unknownOnly := makeOrFilterExpr(
+			makeParamBetweenFilterExpr(0, 0, 0, 1),
+			makeParamBetweenFilterExpr(0, 0, 2, 3),
+		)
+		unknownOnly.Selectivity = 0.19
+		costCtx, idxDef = newCase(t, unknownOnly, 45_600)
+		_, skip, valid = costCtx.score(idxDef, []int32{0}, nil, encodedRegularIndexCostIndexOnly)
+		require.True(t, valid)
+		require.False(t, skip, "an all-parameter residual may remove every hidden row")
+	})
+
 	t.Run("unpushable prepared residual preserves backfill lower bound", func(t *testing.T) {
 		equality := makeRangeFilterExpr(0, 0, "=", 7)
 		equality.Selectivity = 0.5
@@ -3902,6 +3941,58 @@ func TestEncodedIndexCostPreparedRangesUseUncertaintyFromPublicPlan(t *testing.T
 		hasParamRef = hasParamRef || containsDynamicParam(filter)
 	}
 	require.True(t, hasParamRef, "the prepared public plan must retain ParamRefs")
+}
+
+func TestEncodedIndexCostPreparedMixedOrPreservesKnownWorkFromPublicPlan(t *testing.T) {
+	const tableCnt = 600_000
+	ctx := newEncodedExistsPlanTestContext(10)
+	activity := ctx.tables["cost_activity"]
+	activity.Indexes = nil
+	stats := ctx.statsByID[activity.TblId]
+	stats.TableCnt = tableCnt
+	stats.BlockNumber = 120
+	stats.NdvMap["amount"] = tableCnt
+	stats.MinValMap["amount"] = 0
+	stats.MaxValMap["amount"] = tableCnt
+	addCostActivityRegularIndex(t, ctx, "idx_amount_wide", []string{
+		"amount", "state", "created_at", "tenant_id", "activity_id",
+		catalog.CreateAlias(catalog.CPrimaryKeyColName),
+	}, false)
+
+	preparePlan, err := runOneStmt(&encodedIndexPlanTestOptimizer{ctx: ctx}, t, `
+		prepare cost_mixed_ranges from '
+			select count(amount) from cost_activity
+			where amount between 0 and 60000
+			   or amount between ? and ?'`)
+	require.NoError(t, err)
+	preparedPlan := resolveQueryPlan(preparePlan)
+	require.Empty(t, findFirstIndexScanName(preparedPlan),
+		"the known OR branch alone makes the wide encoded scan more expensive than a base scan")
+}
+
+func TestEncodedIndexRangeLowerSelectivityComposesStableOrBranches(t *testing.T) {
+	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true), false, true)
+	knownNarrow := makeIntBetweenFilterExpr(0, 0, 1, 10)
+	knownNarrow.Selectivity = 0.2
+	knownWide := makeIntBetweenFilterExpr(0, 0, 1, 20)
+	knownWide.Selectivity = 0.3
+	unknown := makeParamBetweenFilterExpr(0, 0, 0, 1)
+
+	lower, hasUnknown := encodedRegularIndexRangeLowerSelectivity(
+		makeOrFilterExpr(makeOrFilterExpr(knownNarrow, unknown), knownWide), builder, nil,
+	)
+	require.True(t, hasUnknown)
+	require.Equal(t, 0.3, lower,
+		"OR uses its largest stable child without assuming that stable branches are disjoint")
+
+	lower, hasUnknown = encodedRegularIndexRangeLowerSelectivity(
+		makeOrFilterExpr(
+			makeParamBetweenFilterExpr(0, 0, 0, 1),
+			makeParamBetweenFilterExpr(0, 0, 2, 3),
+		), builder, nil,
+	)
+	require.True(t, hasUnknown)
+	require.Zero(t, lower, "an all-parameter OR may be empty")
 }
 
 func TestEncodedIndexCostKeepsCatalogOrderOnEqualScore(t *testing.T) {
