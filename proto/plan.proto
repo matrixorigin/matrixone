@@ -306,6 +306,9 @@ message ColDef {
   // get origin_name by ColDef.GetOriginCaseName(), letter case: origin
   string origin_name = 19;
   GeneratedCol generated_col = 20;
+  // Whether the column is part of a unique key. This is also used by result
+  // column metadata to populate the MySQL UNIQUE_KEY_FLAG.
+  bool unique = 21;
 }
 
 message Default {
