@@ -301,6 +301,7 @@ deptno    INT UNSIGNED(32)    NO    PRI    null    auto_increment    部门编�
 dname    VARCHAR(15)    YES        null        部门名称
 loc    VARCHAR(50)    YES        null        部门所在位置
 alter table dept ALTER COLUMN deptno SET INVISIBLE;
+not supported: invisible columns
 desc dept;
 Field    Type    Null    Key    Default    Extra    Comment
 deptno    INT UNSIGNED(32)    NO    PRI    null    auto_increment    部门编号

@@ -98,6 +98,53 @@ func TestSetNamesAssignmentKind(t *testing.T) {
 	}
 }
 
+func TestSetTransactionScope(t *testing.T) {
+	tests := []struct {
+		sql   string
+		scope tree.TransactionScope
+	}{
+		{sql: "set transaction isolation level read committed", scope: tree.TransactionScopeNext},
+		{sql: "set session transaction isolation level read committed", scope: tree.TransactionScopeSession},
+		{sql: "set global transaction isolation level read committed", scope: tree.TransactionScopeGlobal},
+	}
+
+	for _, test := range tests {
+		t.Run(test.sql, func(t *testing.T) {
+			stmt, err := ParseOne(context.Background(), test.sql, 1)
+			require.NoError(t, err)
+			setTxn, ok := stmt.(*tree.SetTransaction)
+			require.True(t, ok)
+			require.Equal(t, test.scope, setTxn.Scope)
+		})
+	}
+}
+
+func TestSetTransactionIsolationVariableScope(t *testing.T) {
+	tests := []struct {
+		sql   string
+		scope tree.TransactionScope
+	}{
+		{sql: "set transaction_isolation = 'READ-COMMITTED'", scope: tree.TransactionScopeSession},
+		{sql: "set session transaction_isolation = 'READ-COMMITTED'", scope: tree.TransactionScopeSession},
+		{sql: "set local transaction_isolation = 'READ-COMMITTED'", scope: tree.TransactionScopeSession},
+		{sql: "set global transaction_isolation = 'READ-COMMITTED'", scope: tree.TransactionScopeGlobal},
+		{sql: "set @@transaction_isolation = 'READ-COMMITTED'", scope: tree.TransactionScopeNext},
+		{sql: "set @@session.transaction_isolation = 'READ-COMMITTED'", scope: tree.TransactionScopeSession},
+		{sql: "set @@global.transaction_isolation = 'READ-COMMITTED'", scope: tree.TransactionScopeGlobal},
+	}
+
+	for _, test := range tests {
+		t.Run(test.sql, func(t *testing.T) {
+			stmt, err := ParseOne(context.Background(), test.sql, 1)
+			require.NoError(t, err)
+			setVar, ok := stmt.(*tree.SetVar)
+			require.True(t, ok)
+			require.Len(t, setVar.Assignments, 1)
+			require.Equal(t, test.scope, setVar.Assignments[0].TxnScope)
+		})
+	}
+}
+
 func TestDropFunctionIfExists(t *testing.T) {
 	tests := []struct {
 		sql      string
@@ -119,6 +166,17 @@ func TestDropFunctionIfExists(t *testing.T) {
 			require.Equal(t, test.sql, tree.String(stmt, dialect.MYSQL))
 		})
 	}
+}
+
+func TestGroupingAcceptsExpressions(t *testing.T) {
+	const sql = "select grouping(year(o.order_date), c.city) from orders as o, customers as c group by year(o.order_date), c.city with rollup"
+	const formatted = "select grouping(year(o.order_date), c.city) from orders as o cross join customers as c group by year(o.order_date), c.city with rollup"
+
+	stmt, err := ParseOne(context.Background(), sql, 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+
+	require.Equal(t, formatted, tree.String(stmt, dialect.MYSQL))
 }
 
 func TestQuantifiedTableSubqueryParse(t *testing.T) {
@@ -4102,11 +4160,11 @@ var (
 		},
 		{
 			input:  "set session transaction isolation level read committed , read write , isolation level read committed , read only;",
-			output: "set transaction isolation level read committed , read write , isolation level read committed , read only",
+			output: "set session transaction isolation level read committed , read write , isolation level read committed , read only",
 		},
 		{
 			input:  "set session transaction isolation level read committed , isolation level read uncommitted , isolation level repeatable read , isolation level serializable;",
-			output: "set transaction isolation level read committed , isolation level read uncommitted , isolation level repeatable read , isolation level serializable",
+			output: "set session transaction isolation level read committed , isolation level read uncommitted , isolation level repeatable read , isolation level serializable",
 		},
 		{
 			input:  "create table t1(a int) STORAGE DISK;",
@@ -4792,6 +4850,109 @@ func TestGroupConcatDeparseRoundTrip(t *testing.T) {
 		roundTripped.Format(roundTripFmtCtx)
 		require.Equal(t, formatted, roundTripFmtCtx.String())
 	}
+}
+
+func TestGroupingExtensionsDeparseRoundTrip(t *testing.T) {
+	tests := []struct {
+		name             string
+		input            string
+		want             string
+		wantCube         bool
+		wantGroupingSets bool
+		wantRollup       bool
+		wantSetWidths    []int
+	}{
+		{
+			name:          "single-column cube",
+			input:         "select count(*) from src group by cube(g)",
+			want:          "select count(*) from src group by cube(g)",
+			wantCube:      true,
+			wantSetWidths: []int{1},
+		},
+		{
+			name:          "multi-column cube",
+			input:         "select count(*) from src group by cube(g, h)",
+			want:          "select count(*) from src group by cube(g, h)",
+			wantCube:      true,
+			wantSetWidths: []int{2},
+		},
+		{
+			name:             "single grouping set",
+			input:            "select count(*) from src group by grouping sets ((g))",
+			want:             "select count(*) from src group by grouping sets ((g))",
+			wantGroupingSets: true,
+			wantSetWidths:    []int{1},
+		},
+		{
+			name:             "multiple grouping sets including empty set",
+			input:            "select count(*) from src group by grouping sets ((g, h), (g), ())",
+			want:             "select count(*) from src group by grouping sets ((g, h), (g), ())",
+			wantGroupingSets: true,
+			wantSetWidths:    []int{2, 1, 0},
+		},
+		{
+			name:          "rollup control",
+			input:         "select count(*) from src group by rollup(g, h)",
+			want:          "select count(*) from src group by g, h with rollup",
+			wantRollup:    true,
+			wantSetWidths: []int{2},
+		},
+	}
+
+	groupByOf := func(t *testing.T, stmt tree.Statement) *tree.GroupByClause {
+		t.Helper()
+		selectStmt, ok := stmt.(*tree.Select)
+		require.True(t, ok, "expected *tree.Select, got %T", stmt)
+		selectClause, ok := selectStmt.Select.(*tree.SelectClause)
+		require.True(t, ok, "expected *tree.SelectClause, got %T", selectStmt.Select)
+		require.NotNil(t, selectClause.GroupBy)
+		return selectClause.GroupBy
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			stmt, err := ParseOne(context.Background(), test.input, 1)
+			require.NoError(t, err)
+			t.Cleanup(stmt.Free)
+
+			formatted := tree.String(stmt, dialect.MYSQL)
+			require.Equal(t, test.want, formatted)
+
+			roundTripped, err := ParseOne(context.Background(), formatted, 1)
+			require.NoError(t, err, formatted)
+			t.Cleanup(roundTripped.Free)
+
+			groupBy := groupByOf(t, roundTripped)
+			require.Equal(t, test.wantCube, groupBy.Cube)
+			require.Equal(t, test.wantGroupingSets, groupBy.GroupingSets)
+			require.Equal(t, test.wantRollup, groupBy.Rollup)
+			require.Len(t, groupBy.GroupByExprsList, len(test.wantSetWidths))
+			for i, width := range test.wantSetWidths {
+				require.Len(t, groupBy.GroupByExprsList[i], width)
+			}
+		})
+	}
+}
+
+func TestApartGroupingSetDeparse(t *testing.T) {
+	stmt, err := ParseOne(context.Background(), "select count(*) from src group by grouping sets ((g), ())", 1)
+	require.NoError(t, err)
+	t.Cleanup(stmt.Free)
+
+	selectStmt, ok := stmt.(*tree.Select)
+	require.True(t, ok, "expected *tree.Select, got %T", stmt)
+	selectClause, ok := selectStmt.Select.(*tree.SelectClause)
+	require.True(t, ok, "expected *tree.SelectClause, got %T", selectStmt.Select)
+	groupBy := selectClause.GroupBy
+	require.NotNil(t, groupBy)
+
+	groupBy.Apart = true
+	groupBy.GroupingSets = false
+	groupBy.GroupingSet = groupBy.GroupByExprsList[0]
+	require.Equal(t, "group by g", tree.String(groupBy, dialect.MYSQL))
+
+	groupBy.GroupingSet = groupBy.GroupByExprsList[1]
+	require.Empty(t, tree.String(groupBy, dialect.MYSQL))
 }
 
 // TestFullTextMatchDeparseRoundTrip is the #24823 regression on the DEFAULT tree.String path

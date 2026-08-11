@@ -38,10 +38,14 @@ const (
 func TestGetTableDefRestoresChecksFromSchemaExtra(t *testing.T) {
 	check := &plan.CheckDef{Name: "t_chk_1", Check: &plan.Expr{}}
 	tableDef, _ := getTableDef(&TableItem{
-		Name:      "t",
-		ExtraInfo: &api.SchemaExtra{Checks: []*plan.CheckDef{check}},
+		Name: "t",
+		ExtraInfo: &api.SchemaExtra{
+			Checks:         []*plan.CheckDef{check},
+			DefaultCharset: uint32(types.CharsetBinary),
+		},
 	}, nil)
 	require.Equal(t, []*plan.CheckDef{check}, tableDef.Checks)
+	require.Equal(t, uint32(types.CharsetBinary), tableDef.DefaultCharset)
 }
 
 func TestGetTableDefKeepsTemporarySessionStateContextual(t *testing.T) {

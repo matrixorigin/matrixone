@@ -80,7 +80,9 @@ func (timeWin *TimeWin) Prepare(proc *process.Process) (err error) {
 				return err
 			}
 			ctr.partSet[i] = getPartitionSetFunction(
-				types.New(types.T(expr.Typ.Id), expr.Typ.Width, expr.Typ.Scale), proc.Mp())
+				types.NewWithCharset(
+					types.T(expr.Typ.Id), expr.Typ.Width, expr.Typ.Scale, uint8(expr.Typ.Charset),
+				), proc.Mp())
 		}
 	}
 
@@ -219,6 +221,13 @@ func (timeWin *TimeWin) Call(proc *process.Process) (vm.CallResult, error) {
 			}
 			ctr.status = fill
 
+		case resumeAfterFlush:
+
+			if err = ctr.resumeWindowAfterFlush(timeWin); err != nil {
+				return result, err
+			}
+			ctr.status = fill
+
 		case nextBatch:
 			if ctr.curVecIdx < ctr.i-1 {
 				ctr.curVecIdx++
@@ -326,7 +335,7 @@ func (timeWin *TimeWin) Call(proc *process.Process) (vm.CallResult, error) {
 				// normal terminal cleanup path.
 				ctr.freeAgg()
 				ctr.aggs = replacements
-				ctr.status = nextWindow
+				ctr.status = resumeAfterFlush
 				ctr.group = 0
 				ctr.withoutFill = true
 			}
@@ -375,7 +384,9 @@ func makeAggExecutors(timeWin *TimeWin, proc *process.Process, growFirstGroup bo
 	for i, expression := range timeWin.Aggs {
 		params := make([]types.Type, len(expression.GetArgExpressions()))
 		for j, argument := range expression.GetArgExpressions() {
-			params[j] = types.New(types.T(argument.Typ.Id), argument.Typ.Width, argument.Typ.Scale)
+			params[j] = types.NewWithCharset(
+				types.T(argument.Typ.Id), argument.Typ.Width, argument.Typ.Scale, uint8(argument.Typ.Charset),
+			)
 			if j == 0 && params[j].Oid == types.T_any && i < len(timeWin.Types) {
 				// Older manually-constructed plans/tests keep the physical first
 				// argument type in TimeWin.Types rather than the expression.
@@ -413,8 +424,8 @@ func newTsExpr(typ plan.Type, ctx context.Context) (*plan.Expr, error) {
 
 	typ.NotNullable = col.Typ.NotNullable
 	argsType := []types.Type{
-		types.New(types.T(col.Typ.Id), col.Typ.Width, col.Typ.Scale),
-		types.New(types.T(typ.Id), typ.Width, typ.Scale),
+		types.NewWithCharset(types.T(col.Typ.Id), col.Typ.Width, col.Typ.Scale, uint8(col.Typ.Charset)),
+		types.NewWithCharset(types.T(typ.Id), typ.Width, typ.Scale, uint8(typ.Charset)),
 	}
 	fGet, err := function.GetFunctionByName(ctx, "cast", argsType)
 	if err != nil {
@@ -468,6 +479,31 @@ func (ctr *container) nextWindow(t *TimeWin) error {
 		}
 	}
 	// See firstWindow: the new window is empty until a row lands in it.
+	ctr.withoutFill = true
+	return nil
+}
+
+// resumeWindowAfterFlush starts the replacement aggregate generation at the
+// next window. fillRows already appended the current window before requesting
+// the flush, and makeAggExecutors grew the replacement generation's first
+// group. Re-entering nextWindow here would append the old bounds a second time
+// and grow a second group for the same transition.
+func (ctr *container) resumeWindowAfterFlush(t *TimeWin) error {
+	ctr.left = ctr.nextLeft
+	ctr.right = ctr.nextRight
+
+	ctr.nextLeft = ctr.left + t.Sliding
+	ctr.nextRight = ctr.nextLeft + t.Interval
+
+	ctr.curVecIdx = ctr.preVecIdx
+	ctr.curRowIdx = ctr.preRowIdx
+
+	if t.GapFill {
+		ctr.partitionWindows++
+		if err := ctr.accountGapFillWindow(t); err != nil {
+			return err
+		}
+	}
 	ctr.withoutFill = true
 	return nil
 }

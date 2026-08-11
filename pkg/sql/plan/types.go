@@ -415,9 +415,9 @@ type aliasItem struct {
 type BindContext struct {
 	binder Binder
 
-	// outputColumnProvenance records planner-local lineage overrides by output
-	// position. An explicit None prevents later transparent-boundary code from
-	// rediscovering a source after a semantic boundary has cleared it.
+	// outputColumnProvenance records planner-local source or pure-NULL identity
+	// by output position. An explicit None prevents later transparent-boundary
+	// code from rediscovering metadata after a semantic boundary has cleared it.
 	outputColumnProvenance map[int32]OutputColumnProvenance
 
 	// mysqlSpecialOrderTypes records the storage type behind a visible ENUM/SET
@@ -476,14 +476,15 @@ type BindContext struct {
 	windows    []*plan.Expr
 	times      []*plan.Expr
 
-	groupByAst      map[string]int32
-	groupByParamAst map[string]int32
-	aggregateByAst  map[string]int32
-	sampleByAst     map[string]int32
-	windowByAst     map[string]int32
-	projectByExpr   map[string]int32
-	timeByAst       map[string]int32
-	whereFilters    []*plan.Expr
+	groupByAst          map[string]int32
+	groupByCanonicalAst map[string]int32
+	groupByParamAst     map[string]int32
+	aggregateByAst      map[string]int32
+	sampleByAst         map[string]int32
+	windowByAst         map[string]int32
+	projectByExpr       map[string]int32
+	timeByAst           map[string]int32
+	whereFilters        []*plan.Expr
 
 	projectColByAst map[string]int32
 
@@ -716,8 +717,8 @@ type Binding struct {
 	// mysqlSpecialCanonicalTypes is aligned with cols and propagates the
 	// post-semantic canonical-value contract through transparent bindings.
 	mysqlSpecialCanonicalTypes []*plan.Type
-	// outputColumnProvenance is aligned with cols and carries planner-local,
-	// single-source output lineage. It is never serialized into the plan.
+	// outputColumnProvenance is aligned with cols and carries planner-local
+	// source or pure-NULL output identity. It is never serialized into the plan.
 	outputColumnProvenance []OutputColumnProvenance
 	refCnts                []uint
 	// lower case
