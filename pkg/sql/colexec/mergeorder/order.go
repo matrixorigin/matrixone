@@ -69,7 +69,7 @@ func (ctr *container) generateCompares(fs []*plan.OrderBySpec) {
 		}
 
 		exprTyp := fs[i].Expr.Typ
-		typ := types.New(types.T(exprTyp.Id), exprTyp.Width, exprTyp.Scale)
+		typ := types.NewWithCharset(types.T(exprTyp.Id), exprTyp.Width, exprTyp.Scale, uint8(exprTyp.Charset))
 		ctr.compares[i] = compare.New(typ, desc, nullsLast)
 	}
 }

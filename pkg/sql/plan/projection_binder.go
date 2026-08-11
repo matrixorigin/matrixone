@@ -42,7 +42,7 @@ func (b *ProjectionBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool)
 		return makeTimeWindowProjectionExpr(b.GetContext(), b.ctx, astExpr, colPos)
 	}
 
-	if colPos, ok := b.ctx.groupByAst[astStr]; ok {
+	if colPos, ok := lookupGroupByAst(b.ctx, astExpr, astStr); ok {
 		return &plan.Expr{
 			Typ: b.ctx.groups[colPos].Typ,
 			Expr: &plan.Expr_Col{

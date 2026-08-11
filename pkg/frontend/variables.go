@@ -1046,6 +1046,23 @@ type SystemVariables struct {
 	mutationGeneration uint64
 }
 
+const (
+	transactionIsolationSystemVariable      = "transaction_isolation"
+	transactionIsolationSystemVariableAlias = "tx_isolation"
+)
+
+func canonicalSystemVariableName(name string) string {
+	name = strings.ToLower(name)
+	if name == transactionIsolationSystemVariableAlias {
+		return transactionIsolationSystemVariable
+	}
+	return name
+}
+
+func isTransactionIsolationSystemVariable(name string) bool {
+	return canonicalSystemVariableName(name) == transactionIsolationSystemVariable
+}
+
 func (sv *SystemVariables) getMutationGeneration() uint64 {
 	sv.mu.Lock()
 	defer sv.mu.Unlock()
@@ -1077,15 +1094,27 @@ func (sv *SystemVariables) Clone() *SystemVariables {
 func (sv *SystemVariables) Get(name string) interface{} {
 	sv.mu.Lock()
 	defer sv.mu.Unlock()
-	name = strings.ToLower(name)
-	return sv.mp[name]
+	name = canonicalSystemVariableName(name)
+	value, ok := sv.mp[name]
+	if !ok && name == transactionIsolationSystemVariable {
+		// Accept an in-memory snapshot produced by an older node that only
+		// populated the legacy alias. Catalog loading normalizes this state, but
+		// the fallback also keeps rolling upgrades and tests deterministic.
+		return sv.mp[transactionIsolationSystemVariableAlias]
+	}
+	return value
 }
 
 func (sv *SystemVariables) Set(name string, value interface{}) {
 	sv.mu.Lock()
 	defer sv.mu.Unlock()
-	name = strings.ToLower(name)
+	name = canonicalSystemVariableName(name)
 	sv.mp[name] = value
+	if name == transactionIsolationSystemVariable {
+		// Keep SHOW-style map iteration and any legacy direct lookup coherent
+		// while all semantic reads resolve through the canonical name.
+		sv.mp[transactionIsolationSystemVariableAlias] = value
+	}
 	sv.mutationGeneration++
 }
 
@@ -1274,7 +1303,8 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Dynamic:           true,
 		SetVarHintApplies: false,
 		Type:              InitSystemVariableStringType("collation_server"),
-		Default:           "utf8mb4_bin",
+		// This is also the fallback inherited by an unqualified CREATE TABLE.
+		Default: "utf8mb4_general_ci",
 	},
 	"license": {
 		Name:              "license",

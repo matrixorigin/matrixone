@@ -20,7 +20,43 @@ import (
 )
 
 func comparisonTypeCastRule(left, right types.Type) (bool, types.Type, types.Type) {
-	return fixedTypeCastRule1(left, right)
+	if isDatetimeTimestampComparison(left, right) {
+		return false, left, right
+	}
+	hasCast, castLeft, castRight := fixedTypeCastRule1(left, right)
+	if !isCollatedTextType(castLeft.Oid) || !isCollatedTextType(castRight.Oid) {
+		return hasCast, castLeft, castRight
+	}
+
+	// A comparison must use one collation domain, but rebuilding VARCHAR/TEXT
+	// through ToType would otherwise promote legacy catalog columns to the new
+	// general_ci default. Besides changing their bytewise semantics, that wraps
+	// an indexed column in CAST and makes the predicate ineligible for an index
+	// lookup. Derive the common identity from the original operands so the
+	// stronger binary/legacy identity is retained and only the other operand is
+	// coerced when necessary.
+	charset := types.MergeStringCharset([]types.Type{left, right}, castLeft.Charset)
+	if (left.Charset == types.CharsetLegacy && right.Charset == types.CharsetBinary) ||
+		(left.Charset == types.CharsetBinary && right.Charset == types.CharsetLegacy) {
+		// Legacy text and opaque binary text are both raw, NO PAD byte domains.
+		// If their physical types already match, no collation cast is needed at
+		// all. This keeps internal serialized predicates eligible for index and
+		// filter-domain rewrites without reinterpreting either operand as UTF-8.
+		if !hasCast {
+			return false, left, right
+		}
+		// A physical CHAR/VARCHAR/TEXT conversion is still required for unlike
+		// OIDs; use the legacy identity for that common bytewise target.
+		charset = types.CharsetLegacy
+	}
+	castLeft.Charset = charset
+	castRight.Charset = charset
+	return hasCast || left.Charset != charset || right.Charset != charset, castLeft, castRight
+}
+
+func isDatetimeTimestampComparison(left, right types.Type) bool {
+	return left.Oid == types.T_datetime && right.Oid == types.T_timestamp ||
+		left.Oid == types.T_timestamp && right.Oid == types.T_datetime
 }
 
 var supportedOperators = []FuncNew{
@@ -83,7 +119,7 @@ var supportedOperators = []FuncNew{
 		layout:     COMPARISON_OPERATOR,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
 			if len(inputs) == 2 {
-				has, t1, t2 := comparisonTypeCastRule(inputs[0], inputs[1])
+				has, t1, t2 := fixedTypeCastRule1(inputs[0], inputs[1])
 				if has {
 					if equalAndNotEqualOperatorSupports(t1, t2) {
 						if t1.Oid == t2.Oid && t1.Oid.IsDecimal() {
@@ -2445,9 +2481,7 @@ var supportedOperators = []FuncNew{
 		Overloads: []overload{
 			{
 				overloadId: 0,
-				retType: func(parameters []types.Type) types.Type {
-					return parameters[1]
-				},
+				retType:    caseReturnType,
 				newOp: func() executeLogicOfOverload {
 					return caseFn
 				},
@@ -2467,7 +2501,7 @@ var supportedOperators = []FuncNew{
 				overloadId: 0,
 				args:       []types.T{types.T_varchar},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_varchar.ToType()
+					return coalesceStringReturnType(types.T_varchar, parameters)
 				},
 				newOp: func() executeLogicOfOverload {
 					return CoalesceStr
@@ -2477,7 +2511,7 @@ var supportedOperators = []FuncNew{
 				overloadId: 1,
 				args:       []types.T{types.T_char},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_char.ToType()
+					return coalesceStringReturnType(types.T_char, parameters)
 				},
 				newOp: func() executeLogicOfOverload {
 					return CoalesceStr
@@ -2698,7 +2732,7 @@ var supportedOperators = []FuncNew{
 				overloadId: 22,
 				args:       []types.T{types.T_text},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_text.ToType()
+					return coalesceStringReturnType(types.T_text, parameters)
 				},
 				newOp: func() executeLogicOfOverload {
 					return CoalesceStr
