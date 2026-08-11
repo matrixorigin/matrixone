@@ -204,6 +204,11 @@ func (mergeGroup *MergeGroup) buildOneBatch(proc *process.Process, bat *batch.Ba
 			if err := ag.UnmarshalFromReader(reader, mergeGroup.ctr.mp); err != nil {
 				return false, err
 			}
+			if accessor, ok := ag.(aggexec.PrepareParamKindStateAccessor); ok &&
+				accessor.HasBinaryStringMetadata() && !binaryStringWireEnabled(proc) {
+				return false, moerr.NewInvalidStateNoCtx(
+					"aggregate binary-string metadata requires MORPCVersion17")
+			}
 		}
 		if !mergeGroup.ctr.prepareParamKindWireV1 && reader.Len() > 0 {
 			return false, moerr.NewInvalidStateNoCtx(

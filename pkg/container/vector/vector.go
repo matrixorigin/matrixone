@@ -1918,7 +1918,7 @@ func (v *Vector) setIsBinaryStringAt(row int, binaryString, normalize bool, pool
 		v.binaryStringRows.Remove(uint64(row))
 	}
 	if normalize {
-		v.normalizeBinaryStringRows()
+		v.normalizeBinaryStringRowsAfterSingleUpdate()
 	}
 	return nil
 }
@@ -1998,10 +1998,26 @@ func (v *Vector) normalizeBinaryStringRows() {
 	}
 }
 
+// normalizeBinaryStringRowsAfterSingleUpdate keeps the per-row setter O(1).
+// Bitmap maintains its population incrementally; detecting the empty state
+// therefore does not require rescanning either the binary or NULL bitmap.
+// Batch operations call normalizeBinaryStringRows once after all updates when
+// they also want to collapse an all-binary vector to the scalar form.
+func (v *Vector) normalizeBinaryStringRowsAfterSingleUpdate() {
+	if !v.binaryStringRowsActive {
+		return
+	}
+	if v.binaryStringRows.Count() == 0 {
+		v.setBinaryStringScalar(false)
+		return
+	}
+	v.binaryString = true
+}
+
 func (v *Vector) clearBinaryStringAt(row int) {
 	if v.binaryStringRowsActive {
 		v.binaryStringRows.Remove(uint64(row))
-		v.normalizeBinaryStringRows()
+		v.normalizeBinaryStringRowsAfterSingleUpdate()
 	} else if v.AllNull() {
 		v.binaryString = false
 	}

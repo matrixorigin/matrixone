@@ -201,6 +201,7 @@ type AggFuncExec interface {
 // use this capability to carry the winner category alongside the packed state
 // rows.
 type PrepareParamKindStateAccessor interface {
+	HasBinaryStringMetadata() bool
 	PrepareParamKindsForChunk(chunk int) []vector.PrepareParamKind
 	PrepareParamKindsForSelection(flags [][]uint8) []vector.PrepareParamKind
 	// Row counts let transient provenance decoders validate an exact record

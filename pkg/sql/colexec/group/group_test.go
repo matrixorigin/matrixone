@@ -32,6 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
@@ -466,6 +467,104 @@ func TestMergeGroupPreservesBinaryStringProvenance(t *testing.T) {
 	output := mergePreparedPartial(t, proc, partial,
 		[]aggexec.AggFuncExecExpression{minTextColumnAgg(0)})
 	require.True(t, output.Vecs[0].GetBinaryStringMetadataAt(0))
+}
+
+func TestGroupBinaryStringPartialRequiresMORPCVersion17(t *testing.T) {
+	tests := []struct {
+		name           string
+		version        int64
+		missingRuntime bool
+		wantErr        bool
+	}{
+		{name: "v11", version: defines.MORPCVersion11, wantErr: true},
+		{name: "v12", version: defines.MORPCVersion12, wantErr: true},
+		{name: "v16", version: defines.MORPCVersion16, wantErr: true},
+		{name: "v17", version: defines.MORPCVersion17},
+		{name: "missing runtime", missingRuntime: true, wantErr: true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			if tc.missingRuntime {
+				proc.Base.LockService = &unknownGroupServiceLockService{
+					cfg: lockservice.Config{ServiceID: "group-binary-unknown-service"},
+				}
+			} else {
+				setPrepareParamKindProtocolVersion(t, proc, tc.version)
+			}
+			input := batch.NewWithSize(2)
+			input.Vecs[0] = testutil.MakeInt32Vector([]int32{1}, nil, proc.Mp())
+			input.Vecs[1] = vector.NewVec(types.T_text.ToType())
+			require.NoError(t, vector.AppendBytes(input.Vecs[1], []byte("binary"), false, proc.Mp()))
+			input.Vecs[1].SetIsBinaryString(true)
+			input.SetRowCount(1)
+			child := colexec.NewMockOperator().WithBatchs([]*batch.Batch{input})
+			partial := newGroupOp(proc, []*plan.Expr{colExpr(0, types.T_int32)},
+				[]aggexec.AggFuncExecExpression{minTextColumnAgg(1)})
+			partial.NeedEval = false
+			partial.AppendChild(child)
+			require.NoError(t, partial.Prepare(proc))
+
+			var gotBatch *batch.Batch
+			var gotErr error
+			for range 4 {
+				result, err := vm.Exec(partial, proc)
+				if err != nil {
+					gotErr = err
+					break
+				}
+				if result.Batch != nil {
+					gotBatch = result.Batch
+					break
+				}
+			}
+			if tc.wantErr {
+				require.Nil(t, gotBatch)
+				require.ErrorContains(t, gotErr, "requires MORPCVersion17")
+			} else {
+				require.NoError(t, gotErr)
+				require.NotNil(t, gotBatch)
+			}
+			partial.Free(proc, false, nil)
+			child.Free(proc, false, nil)
+			require.Zero(t, proc.Mp().CurrNB())
+			proc.Free()
+		})
+	}
+}
+
+func TestMergeGroupBinaryStringPartialRequiresMORPCVersion17(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	t.Cleanup(func() {
+		require.Zero(t, proc.Mp().CurrNB())
+		proc.Free()
+	})
+	setPrepareParamKindProtocolVersion(t, proc, defines.MORPCVersion17)
+	partial := buildPreparedMinPartial(t, proc, preparedPartialSpec{
+		rows:   1,
+		binary: true,
+	})
+	trailerOffset := bytes.LastIndex(partial.ExtraBuf, []byte{
+		prepareParamKindTrailerMagic0,
+		prepareParamKindTrailerMagic1,
+		prepareParamKindTrailerMagic2,
+	})
+	require.NotEqual(t, -1, trailerOffset)
+	// Exercise the aggregate-owned receiver gate directly. The ordinary batch
+	// metadata is intentionally absent, while the aggregate state still carries
+	// its v17-only binary-string trailer.
+	partial.ExtraBuf = partial.ExtraBuf[:trailerOffset]
+	setPrepareParamKindProtocolVersion(t, proc, defines.MORPCVersion16)
+
+	child := colexec.NewMockOperator().WithBatchs([]*batch.Batch{partial})
+	t.Cleanup(func() { child.Free(proc, false, nil) })
+	merge := newMergeGroupOp([]aggexec.AggFuncExecExpression{minPreparedParamAgg()})
+	merge.AppendChild(child)
+	t.Cleanup(func() { merge.Free(proc, true, nil) })
+	require.NoError(t, merge.Prepare(proc))
+	result, err := vm.Exec(merge, proc)
+	require.Nil(t, result.Batch)
+	require.ErrorContains(t, err, "requires MORPCVersion17")
 }
 
 func TestMergeGroupUsesIncomingWinnerPrepareParamKind(t *testing.T) {

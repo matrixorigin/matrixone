@@ -644,6 +644,11 @@ func (group *Group) getNextIntermediateResult(proc *process.Process) (vm.CallRes
 	var binaryStringRows [][]bool
 	var binaryStringSummaries []bool
 	for i, ag := range group.ctr.aggList {
+		if accessor, ok := ag.(aggexec.PrepareParamKindStateAccessor); ok &&
+			accessor.HasBinaryStringMetadata() && !binaryStringWireEnabled(proc) {
+			return vm.CancelResult, false, moerr.NewInvalidStateNoCtx(
+				"aggregate binary-string metadata requires MORPCVersion17")
+		}
 		if err := ag.SaveIntermediateResultOfChunk(curr, &buf); err != nil {
 			return vm.CancelResult, false, err
 		}
@@ -663,14 +668,6 @@ func (group *Group) getNextIntermediateResult(proc *process.Process) (vm.CallRes
 		}
 	}
 	if group.ctr.prepareParamKindWireV1 {
-		if !binaryStringWireEnabled(proc) {
-			for i := range binaryStringRows {
-				if len(binaryStringRows[i]) != 0 || binaryStringSummaries[i] {
-					return vm.CancelResult, false, moerr.NewInvalidStateNoCtx(
-						"aggregate binary-string metadata requires MORPCVersion17")
-				}
-			}
-		}
 		if err := writePrepareParamKindTrailer(proc.Ctx, &buf, group.Aggs,
 			&group.ctr.prepareParamKind, prepareParamKinds, prepareParamKindSummaries,
 			binaryStringRows, binaryStringSummaries); err != nil {

@@ -5418,6 +5418,44 @@ func BenchmarkUnionOnePrepareParamKindLateDivergence(b *testing.B) {
 	}
 }
 
+func BenchmarkUnionOneBinaryStringProvenanceScale(b *testing.B) {
+	for _, rows := range []int{8 << 10, 32 << 10, 128 << 10, 512 << 10} {
+		for _, mixed := range []bool{false, true} {
+			name := fmt.Sprintf("rows=%d/mixed=%t", rows, mixed)
+			b.Run(name, func(b *testing.B) {
+				mp := mpool.MustNewZero()
+				source := NewVec(types.T_text.ToType())
+				destination := NewVec(types.T_text.ToType())
+				defer source.Free(mp)
+				defer destination.Free(mp)
+				values := make([][]byte, rows)
+				for row := range values {
+					values[row] = []byte("v")
+				}
+				require.NoError(b, AppendBytesList(source, values, nil, mp))
+				if mixed {
+					provenance := make([]bool, rows)
+					for row := range provenance {
+						provenance[row] = row&1 == 0
+					}
+					require.NoError(b, source.SetBinaryStringRowsWithMP(provenance, mp))
+				}
+				b.ReportAllocs()
+				b.ReportMetric(float64(rows), "rows/op")
+				b.ResetTimer()
+				for b.Loop() {
+					destination.ResetWithSameType()
+					for row := range rows {
+						if err := destination.UnionOne(source, int64(row), mp); err != nil {
+							b.Fatal(err)
+						}
+					}
+				}
+			})
+		}
+	}
+}
+
 func BenchmarkUnionBatchPrepareParamKind(b *testing.B) {
 	mp := mpool.MustNewZero()
 	source := NewVec(types.T_int64.ToType())

@@ -938,6 +938,16 @@ func binaryStringRowsFromVector(vec *vector.Vector) []bool {
 	return rows
 }
 
+func (ae *aggExec) HasBinaryStringMetadata() bool {
+	for chunk := range ae.state {
+		if len(ae.state[chunk].vecs) > 0 && ae.state[chunk].vecs[0] != nil &&
+			ae.state[chunk].vecs[0].HasBinaryStringMetadata() {
+			return true
+		}
+	}
+	return false
+}
+
 func (ae *aggExec) BinaryStringRowsForChunk(chunk int) []bool {
 	if chunk < 0 || chunk >= len(ae.state) || len(ae.state[chunk].vecs) == 0 {
 		return nil
