@@ -95,6 +95,38 @@ func TestMaterializedSinkScanConsumersAdvanceIndependently(t *testing.T) {
 	}
 }
 
+func TestMaterializedSinkScanResetCleansUnreleasedReaderBatches(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	source := materialized.NewSource(1)
+	require.NoError(t, source.Begin(proc.Mp()))
+
+	input := batch.NewWithSize(1)
+	input.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+	require.NoError(t, vector.AppendFixed(input.Vecs[0], int64(42), false, proc.Mp()))
+	input.SetRowCount(1)
+	inputMemory := proc.Mp().CurrNB()
+	require.NoError(t, source.Append(input))
+	source.Finish(nil)
+
+	reader := merge.NewArgument()
+	defer reader.Release()
+	reader.SinkScan = true
+	reader.MaterializedSource = source
+	reader.MaterializedReaderID = 0
+	require.NoError(t, reader.Prepare(proc))
+
+	result, err := reader.Call(proc)
+	require.NoError(t, err)
+	require.Equal(t, int64(42), vector.GetFixedAtNoTypeCheck[int64](result.Batch.Vecs[0], 0))
+	// Deliberately leave the caller-owned batch unreleased. Real pass-through
+	// pipelines can release only their derived output, so reader teardown must
+	// be the final ownership backstop.
+	reader.Reset(proc, false, nil)
+
+	require.Equal(t, inputMemory, proc.Mp().CurrNB())
+	input.Clean(proc.Mp())
+}
+
 func TestMaterializedSinkScanConcurrentProductionReaders(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	source := materialized.NewSource(2)
