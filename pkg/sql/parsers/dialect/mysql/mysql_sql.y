@@ -691,7 +691,7 @@ func sqlTaskInt64(v any) int64 {
 %type <nullsPosition> nulls_first_last_opt
 %type <order> order
 %type <orderBy> order_list order_by_clause order_by_opt
-%type <limit> limit_opt limit_clause dml_limit_opt
+%type <limit> limit_opt limit_clause
 %type <rankOption> rank_opt
 %type <str> insert_column optype_opt
 %type <str> optype
@@ -3283,7 +3283,7 @@ update_stmt:
     }
 
 update_no_with_stmt:
-    UPDATE priority_opt ignore_opt table_reference SET update_list where_expression_opt order_by_opt dml_limit_opt returning_clause_opt
+    UPDATE priority_opt ignore_opt table_reference SET update_list where_expression_opt order_by_opt limit_opt returning_clause_opt
     {
         // Single-table syntax
         $$ = &tree.Update{
@@ -5618,7 +5618,7 @@ delete_stmt:
     }
 
 delete_without_using_stmt:
-    DELETE priority_opt quick_opt ignore_opt FROM table_name partition_clause_opt as_opt_id where_expression_opt order_by_opt dml_limit_opt returning_clause_opt
+    DELETE priority_opt quick_opt ignore_opt FROM table_name partition_clause_opt as_opt_id where_expression_opt order_by_opt limit_opt returning_clause_opt
     {
         // Single-Table Syntax
         t := &tree.AliasedTableExpr {
@@ -6550,18 +6550,6 @@ limit_opt:
 |   limit_clause
     {
         $$ = $1
-    }
-
-// MySQL single-table UPDATE and DELETE accept LIMIT row_count only. Keep this
-// separate from limit_opt so offset forms are rejected by the parser, before a
-// DML plan can select or mutate any rows.
-dml_limit_opt:
-    {
-        $$ = nil
-    }
-|   LIMIT expression
-    {
-        $$ = &tree.Limit{Count: $2}
     }
 
 limit_clause:
