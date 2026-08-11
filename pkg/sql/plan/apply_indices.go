@@ -106,6 +106,29 @@ func overFetchDisplayLimit(limit *plan.Expr, overFetch bool, filteredPostMode bo
 	return overfetch.PostFilterLimit(k)
 }
 
+// obsoleteNodeLimit returns the value to park on the FUNCTION_SCAN node.Limit.
+// node.Limit is OBSOLETE for the vector-search TVF — the TVF takes its candidate
+// budget from IndexReaderParam.Limit. It is retained only as a compatible
+// arg.Limit for an executor that reads node.Limit instead (e.g. an older CN
+// reached through a provider child scope, where compileTableFunction attaches the
+// operator to an already-compiled — possibly Remote — scope rather than a local
+// Merge one). It is over-fetched for a filtered literal (>= k, so it can never
+// under-fetch after the post-filter JOIN) and exact k when unfiltered; it stays
+// nil only for a filtered prepared limit, where no literal budget exists and a
+// raw `?` would truncate candidates before the post-filter (the #26869 bug).
+func obsoleteNodeLimit(limit *plan.Expr, postFilterOverFetch, filteredPostMode bool) *plan.Expr {
+	if ofl := overFetchDisplayLimit(limit, postFilterOverFetch, filteredPostMode); ofl > 0 {
+		return &plan.Expr{
+			Typ:  limit.Typ,
+			Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_U64Val{U64Val: ofl}}},
+		}
+	}
+	if postFilterOverFetch {
+		return nil
+	}
+	return DeepCopyExpr(limit)
+}
+
 func containsDynamicParam(expr *plan.Expr) bool {
 	switch exprImpl := expr.Expr.(type) {
 	case *plan.Expr_P, *plan.Expr_V:

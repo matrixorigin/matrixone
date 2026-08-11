@@ -259,28 +259,18 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfpq(nodeID int32, vecCtx 
 		}
 	}
 
-	// The raw candidate limit (k) is always carried on IndexReaderParam.Limit — a
-	// TVF-only channel with no plan-level top — and node.Limit is always dropped,
-	// so the TVF is the single authority on the candidate budget. When residual
-	// filters or a peeled distance-range bound will prune candidates the TVF
-	// over-fetches k -> k' at EXECUTE (post_filter_overfetch flag). Leaving
-	// node.Limit unset keeps the full candidate stream flowing to the JOIN.
-	//
-	// Safe because ivfpq_search is a local-only TVF: compileTableFunction routes
-	// it to compileSingleTableFunction, which pins the operator to a Merge scope
-	// at the local c.addr (never shipped to a remote CN). Planner and executor
-	// are therefore always the same binary, so a node.Limit=nil plan is always
-	// read back by a TVF that reads IndexReaderParam.Limit. If ivfpq_search is
-	// ever made multi-CN (like ivf_search), its *SearchPrepare must first read
-	// IndexReaderParam.Limit (ivf_search already does) — and/or gate this on a
-	// MORPCVersion — before node.Limit may be dropped, or an older remote CN
-	// would default to 1 candidate and under-return after the JOIN.
+	// The raw candidate limit (k) is carried on IndexReaderParam.Limit; the TVF
+	// takes its budget from there and over-fetches k -> k' at EXECUTE when a
+	// residual filter or a peeled distance-range bound prunes candidates
+	// (post_filter_overfetch flag).
 	tableFuncNode.IndexReaderParam = &plan.IndexReaderParam{
 		Limit:          DeepCopyExpr(limit),
 		OrigFuncName:   ivfpqCtx.origFuncName,
 		OverFetchLimit: overFetchDisplayLimit(limit, postFilterOverFetch, false),
 	}
-	tableFuncNode.Limit = nil
+	// obsolete: node.Limit is superseded by IndexReaderParam.Limit; kept only as a
+	// compatible arg.Limit for an older executor reached via a provider child scope.
+	tableFuncNode.Limit = obsoleteNodeLimit(limit, postFilterOverFetch, false)
 
 	// oncond
 	wherePkEqPk, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*Expr{
