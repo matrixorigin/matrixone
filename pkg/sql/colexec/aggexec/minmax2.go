@@ -333,7 +333,7 @@ func (exec *minMaxExecBytes) BatchFill(offset int, groups []uint64, vectors []*v
 			kind := vectors[0].GetPrepareParamKindAt(int(idx))
 			if exec.state[x].vecs[0].IsNull(uint64(y)) {
 				exec.state[x].vecs[0].UnsetNull(uint64(y))
-				if err := vector.SetBytesAt(exec.state[x].vecs[0], int(y), value, exec.mp); err != nil {
+				if err := vector.SetBytesAtFrom(exec.state[x].vecs[0], int(y), vectors[0], int(idx), exec.mp); err != nil {
 					return err
 				}
 				if err := exec.state[x].vecs[0].SetPrepareParamKindAtWithMP(int(y), kind, exec.mp); err != nil {
@@ -343,13 +343,18 @@ func (exec *minMaxExecBytes) BatchFill(offset int, groups []uint64, vectors []*v
 				oldValue := exec.state[x].vecs[0].GetBytesAt(int(y))
 				switch cmp := exec.comp(value, oldValue); {
 				case cmp < 0:
-					if err := vector.SetBytesAt(exec.state[x].vecs[0], int(y), value, exec.mp); err != nil {
+					if err := vector.SetBytesAtFrom(exec.state[x].vecs[0], int(y), vectors[0], int(idx), exec.mp); err != nil {
 						return err
 					}
 					if err := exec.state[x].vecs[0].SetPrepareParamKindAtWithMP(int(y), kind, exec.mp); err != nil {
 						return err
 					}
 				case cmp == 0:
+					if err := exec.state[x].vecs[0].SetIsBinaryStringAt(
+						int(y), exec.state[x].vecs[0].GetBinaryStringMetadataAt(int(y)) ||
+							vectors[0].GetBinaryStringMetadataAt(int(idx)), exec.mp); err != nil {
+						return err
+					}
 					if err := mergeMinMaxPrepareParamKind(exec.state[x].vecs[0], int(y), kind, exec.mp); err != nil {
 						return err
 					}
@@ -379,9 +384,9 @@ func (exec *minMaxExecBytes) BatchMerge(next AggFuncExec, offset int, groups []u
 			continue
 		}
 		if exec.state[x1].vecs[0].IsNull(uint64(y1)) {
-			value := other.state[x2].vecs[0].GetBytesAt(int(y2))
 			exec.state[x1].vecs[0].UnsetNull(uint64(y1))
-			if err := vector.SetBytesAt(exec.state[x1].vecs[0], int(y1), value, exec.mp); err != nil {
+			if err := vector.SetBytesAtFrom(
+				exec.state[x1].vecs[0], int(y1), other.state[x2].vecs[0], int(y2), exec.mp); err != nil {
 				return err
 			}
 			if err := exec.state[x1].vecs[0].SetPrepareParamKindAtWithMP(
@@ -393,7 +398,8 @@ func (exec *minMaxExecBytes) BatchMerge(next AggFuncExec, offset int, groups []u
 			oldValue := exec.state[x1].vecs[0].GetBytesAt(int(y1))
 			switch cmp := exec.comp(value, oldValue); {
 			case cmp < 0:
-				if err := vector.SetBytesAt(exec.state[x1].vecs[0], int(y1), value, exec.mp); err != nil {
+				if err := vector.SetBytesAtFrom(
+					exec.state[x1].vecs[0], int(y1), other.state[x2].vecs[0], int(y2), exec.mp); err != nil {
 					return err
 				}
 				if err := exec.state[x1].vecs[0].SetPrepareParamKindAtWithMP(
@@ -401,6 +407,11 @@ func (exec *minMaxExecBytes) BatchMerge(next AggFuncExec, offset int, groups []u
 					return err
 				}
 			case cmp == 0:
+				if err := exec.state[x1].vecs[0].SetIsBinaryStringAt(
+					int(y1), exec.state[x1].vecs[0].GetBinaryStringMetadataAt(int(y1)) ||
+						other.state[x2].vecs[0].GetBinaryStringMetadataAt(int(y2)), exec.mp); err != nil {
+					return err
+				}
 				if err := mergeMinMaxPrepareParamKind(
 					exec.state[x1].vecs[0],
 					int(y1),
@@ -449,7 +460,7 @@ func (exec *minMaxExecBytes) Flush() ([]*vector.Vector, error) {
 			for i := range vec.Length() {
 				if vec.IsNull(uint64(i)) {
 					vec.UnsetNull(uint64(i))
-					if err := vector.SetBytesAt(vec, int(i), exec.extra, exec.mp); err != nil {
+					if err := vector.SetBytesAtWithBinaryString(vec, int(i), exec.extra, false, exec.mp); err != nil {
 						return freeResultsOnError(err)
 					}
 					if err := vec.SetPrepareParamKindAtWithMP(i, vector.PrepareParamNone, exec.mp); err != nil {
@@ -459,7 +470,7 @@ func (exec *minMaxExecBytes) Flush() ([]*vector.Vector, error) {
 					oldValue := vec.GetBytesAt(int(i))
 					switch cmp := exec.comp(exec.extra, oldValue); {
 					case cmp < 0:
-						if err := vector.SetBytesAt(vec, int(i), exec.extra, exec.mp); err != nil {
+						if err := vector.SetBytesAtWithBinaryString(vec, int(i), exec.extra, false, exec.mp); err != nil {
 							return freeResultsOnError(err)
 						}
 						if err := vec.SetPrepareParamKindAtWithMP(i, vector.PrepareParamNone, exec.mp); err != nil {
