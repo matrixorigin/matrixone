@@ -913,6 +913,12 @@ func executeStmtInSameSession(
 	proc := ses.proc
 	prepareParams := proc.DetachPrepareParams()
 	proc.BorrowPrepareParams(prepareParams)
+	if preparedExpression {
+		if cw, ok := execCtx.cw.(*TxnComputationWrapper); ok {
+			ses.GetTxnCompileCtx().setPreparedParamBindingTypes(cw.preparedParamBindingTypes)
+			defer ses.GetTxnCompileCtx().setPreparedParamBindingTypes(nil)
+		}
+	}
 	//restore normal protocol and output callback
 	defer func() {
 		defer proc.RestorePrepareParams(prepareParams)

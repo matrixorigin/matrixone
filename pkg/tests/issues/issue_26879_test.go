@@ -82,19 +82,22 @@ func TestIssue26879PreparedDecimalRuntimeDomains(t *testing.T) {
 
 		assertRow(float64(1e100), "DOUBLE", []string{"1e+100", "1e+100", "2"})
 		assertRow(float64(1e-40), "DOUBLE", []string{"1e-40", "2", "1e-40"})
-		assertRow("1.234567", "DECIMAL", []string{"1.234567000000000000000000000000", "2.000000000000000000000000000000", "1.234567000000000000000000000000"})
-		assertRow("abc", "DECIMAL", []string{"0.000000000000000000000000000000", "2.000000000000000000000000000000", "0.000000000000000000000000000000"})
-		assertRow("12.5tail", "DECIMAL", []string{"12.500000000000000000000000000000", "12.500000000000000000000000000000", "2.000000000000000000000000000000"})
-		assertRow("001.200e2", "DECIMAL", []string{"120.000000000000000000000000000000", "120.000000000000000000000000000000", "2.000000000000000000000000000000"})
-		assertRow("2026-08-10 12:34:56", "DECIMAL", []string{"2026.000000000000000000000000000000", "2026.000000000000000000000000000000", "2.000000000000000000000000000000"})
-		assertRow("9007199254740993tail", "DECIMAL", []string{"9007199254740993.000000000000000000000000000000", "9007199254740993.000000000000000000000000000000", "2.000000000000000000000000000000"})
-		assertRow("9007199254740993e0tail", "DECIMAL", []string{"9007199254740993.000000000000000000000000000000", "9007199254740993.000000000000000000000000000000", "2.000000000000000000000000000000"})
-		assertRow("1e100tail", "DECIMAL", []string{"99999999999999999999999999999999999.999999999999999999999999999999", "99999999999999999999999999999999999.999999999999999999999999999999", "2.000000000000000000000000000000"})
-		assertRow("1E2tail", "DECIMAL", []string{"100.000000000000000000000000000000", "100.000000000000000000000000000000", "2.000000000000000000000000000000"})
+		assertRow("1.234567", "DECIMAL", []string{"1.2345670000", "2.0000000000", "1.2345670000"})
+		assertRow("abc", "DECIMAL", []string{"0.0000000000", "2.0000000000", "0.0000000000"})
+		assertRow("12.5tail", "DECIMAL", []string{"12.5000000000", "12.5000000000", "2.0000000000"})
+		assertRow("001.200e2", "DECIMAL", []string{"120.0000000000", "120.0000000000", "2.0000000000"})
+		assertRow("2026-08-10 12:34:56", "DECIMAL", []string{"2026.0000000000", "2026.0000000000", "2.0000000000"})
+		assertRow("9007199254740993tail", "DECIMAL", []string{"9007199254740993.0000000000", "9007199254740993.0000000000", "2.0000000000"})
+		assertRow("9007199254740993e0tail", "DECIMAL", []string{"9007199254740993.0000000000", "9007199254740993.0000000000", "2.0000000000"})
+		assertRow("123456789012345678901234567890123456", "DECIMAL", []string{"123456789012345678901234567890123456.0000000000", "123456789012345678901234567890123456.0000000000", "2.0000000000"})
+		assertRow("1e35", "DECIMAL", []string{"100000000000000000000000000000000000.0000000000", "100000000000000000000000000000000000.0000000000", "2.0000000000"})
+		assertRow("1e100tail", "DECIMAL", []string{"9999999999999999999999999999999999999999999999999999999.9999999999", "9999999999999999999999999999999999999999999999999999999.9999999999", "2.0000000000"})
+		assertRow("1E2tail", "DECIMAL", []string{"100.0000000000", "100.0000000000", "2.0000000000"})
 		assertRow("1e-2147483648tail", "DECIMAL", []string{"0.000000000000000000000000000000", "2.000000000000000000000000000000", "0.000000000000000000000000000000"})
-		assertRow("0.1e35", "DECIMAL", []string{"10000000000000000000000000000000000.000000000000000000000000000000", "10000000000000000000000000000000000.000000000000000000000000000000", "2.000000000000000000000000000000"})
-		assertRow("\v1.25", "DECIMAL", []string{"1.250000000000000000000000000000", "2.000000000000000000000000000000", "1.250000000000000000000000000000"})
-		assertRow("\f1.25", "DECIMAL", []string{"1.250000000000000000000000000000", "2.000000000000000000000000000000", "1.250000000000000000000000000000"})
+		assertRow("1e-31", "DECIMAL", []string{"0.000000000000000000000000000000", "2.000000000000000000000000000000", "0.000000000000000000000000000000"})
+		assertRow("0.1e35", "DECIMAL", []string{"10000000000000000000000000000000000.0000000000", "10000000000000000000000000000000000.0000000000", "2.0000000000"})
+		assertRow("\v1.25", "DECIMAL", []string{"1.2500000000", "2.0000000000", "1.2500000000"})
+		assertRow("\f1.25", "DECIMAL", []string{"1.2500000000", "2.0000000000", "1.2500000000"})
 		assertRow(int64(10), "DECIMAL", []string{"10.0000000000", "10.0000000000", "2.0000000000"})
 		assertRow(false, "DECIMAL", []string{"0.0000000000", "2.0000000000", "0.0000000000"})
 
@@ -148,7 +151,38 @@ func TestIssue26879PreparedDecimalRuntimeDomains(t *testing.T) {
 			require.False(t, rows.Next())
 			require.NoError(t, rows.Err())
 		}
-		assertSQLPrepareType("1.234567", "DECIMAL", 65, 30)
+		assertSQLPrepareType("1.234567", "DECIMAL", 14, 6)
 		assertSQLPrepareType("1e100", "DOUBLE", 0, 0)
+
+		_, err = conn.ExecContext(ctx,
+			"prepare issue26879_set from 'set @issue26879_out = coalesce(?, cast(2 as decimal(10,2)))'")
+		require.NoError(t, err)
+		defer conn.ExecContext(context.Background(), "deallocate prepare issue26879_set") //nolint:errcheck
+		_, err = conn.ExecContext(ctx, "set @issue26879_p = '1e100'")
+		require.NoError(t, err)
+		_, err = conn.ExecContext(ctx, "execute issue26879_set using @issue26879_p")
+		require.NoError(t, err)
+		var dclValue string
+		require.NoError(t, conn.QueryRowContext(ctx, "select @issue26879_out").Scan(&dclValue))
+		require.Equal(t, "1e+100", dclValue)
+
+		_, err = conn.ExecContext(ctx,
+			"prepare issue26879_window from 'select sum(coalesce(?,d)) over () from issue26879.small'")
+		require.NoError(t, err)
+		defer conn.ExecContext(context.Background(), "deallocate prepare issue26879_window") //nolint:errcheck
+		var windowValue string
+		require.NoError(t, conn.QueryRowContext(ctx,
+			"execute issue26879_window using @issue26879_p").Scan(&windowValue))
+		require.Equal(t, "1e+100", windowValue)
+
+		_, err = conn.ExecContext(ctx,
+			"prepare issue26879_ctas from 'create table issue26879.ctas as select coalesce(?,d) x from issue26879.small'")
+		require.NoError(t, err)
+		defer conn.ExecContext(context.Background(), "deallocate prepare issue26879_ctas") //nolint:errcheck
+		_, err = conn.ExecContext(ctx, "execute issue26879_ctas using @issue26879_p")
+		require.NoError(t, err)
+		var ctasValue string
+		require.NoError(t, conn.QueryRowContext(ctx, "select x from issue26879.ctas").Scan(&ctasValue))
+		require.Equal(t, "1e+100", ctasValue)
 	})
 }

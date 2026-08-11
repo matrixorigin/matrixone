@@ -378,6 +378,13 @@ func (b *baseBinder) baseBindParam(astExpr *tree.ParamExpr, depth int32, isRoot 
 		param.Typ.Enumvalues = "mo_decimal_common_type_dependency"
 		return appendCastBeforeExpr(b.GetContext(), param, makePlan2Type(&bindingType))
 	}
+	if b.decimalParamCommonTypeTarget {
+		// Let COALESCE/GREATEST/LEAST see the unresolved parameter directly. In
+		// particular, an enclosing prepared SUM/AVG installs a generic numeric
+		// context; applying that cast here would hide the parameter before the
+		// DECIMAL common-type resolver can mark its runtime dependency.
+		return param, nil
+	}
 	if b.numericParamType != nil {
 		return appendCastBeforeExpr(b.GetContext(), param, *b.numericParamType)
 	}
@@ -4821,8 +4828,30 @@ func decimalParamCommonTypeResolutionTypes(
 			maxScale = max(maxScale, typ.Scale)
 		}
 	}
-	if hasParam && maxIntegral+maxScale > 76 {
-		return argsType
+	if hasParam {
+		// Preserve the peer scale and give a runtime numeric-prefix parameter all
+		// remaining MySQL DECIMAL integral digits when that parameter itself would
+		// exceed precision 65 after adopting the peer scale. Wider peer combinations
+		// can still use MatrixOne's Decimal256 width 76; they must not narrow merely
+		// because a prepared parameter is present.
+		availableIntegral := max(int32(65)-maxScale, 0)
+		for i, typ := range resolutionTypes {
+			if !isUnresolvedPreparedNumericParam(args[i], argsType[i]) || !typ.Oid.IsDecimal() ||
+				typ.Width-typ.Scale+maxScale <= 65 {
+				continue
+			}
+			integral := min(typ.Width-typ.Scale, availableIntegral)
+			resolutionTypes[i] = types.New(types.T_decimal256, max(integral+typ.Scale, 1), typ.Scale)
+		}
+		maxIntegral = 0
+		for _, typ := range resolutionTypes {
+			if typ.Oid.IsDecimal() {
+				maxIntegral = max(maxIntegral, typ.Width-typ.Scale)
+			}
+		}
+		if maxIntegral+maxScale > 76 {
+			return argsType
+		}
 	}
 	return resolutionTypes
 }

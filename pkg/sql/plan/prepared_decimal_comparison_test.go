@@ -499,6 +499,45 @@ func TestRuntimePreparedDecimalCommonTypeUsesStableDomain(t *testing.T) {
 	}
 }
 
+func TestRuntimePreparedDecimalCommonTypeUsesAvailablePhysicalDomain(t *testing.T) {
+	peer := types.New(types.T_decimal128, 38, 10)
+	tests := []struct {
+		name      string
+		param     *planpb.Expr
+		wantWidth int32
+		wantScale int32
+	}{
+		{
+			name:      "36 digit integer remains exact",
+			param:     makeRuntimeNumericPreparedParam(0, 2, 36, 0),
+			wantWidth: 46,
+			wantScale: 10,
+		},
+		{
+			name:      "large incomplete exponent uses remaining integral digits",
+			param:     makeRuntimeNumericPreparedParam(0, 2, 65, 0),
+			wantWidth: 65,
+			wantScale: 10,
+		},
+		{
+			name:      "scale above mysql limit was rounded before binding",
+			param:     makeRuntimeNumericPreparedParam(0, 2, 30, 30),
+			wantWidth: 58,
+			wantScale: 30,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			args := []*planpb.Expr{DeepCopyExpr(test.param), makePreparedDecimalComparisonColumn(peer)}
+			expr, err := BindFuncExprImplByPlanExpr(context.Background(), "coalesce", args)
+			require.NoError(t, err)
+			require.Equal(t, int32(types.T_decimal256), expr.Typ.Id)
+			require.Equal(t, test.wantWidth, expr.Typ.Width)
+			require.Equal(t, test.wantScale, expr.Typ.Scale)
+		})
+	}
+}
+
 func TestPreparedDecimalCommonTypeFunctionsUseMySQLNumericPeers(t *testing.T) {
 	ctx := context.Background()
 	decimalType := types.New(types.T_decimal128, 20, 4)

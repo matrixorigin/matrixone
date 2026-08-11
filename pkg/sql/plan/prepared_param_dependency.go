@@ -56,6 +56,27 @@ func (r *preparedParamCommonTypeDependencyRule) visit(expr *Expr) {
 		for _, item := range impl.List.List {
 			r.visit(item)
 		}
+	case *planpb.Expr_W:
+		if impl.W == nil {
+			return
+		}
+		r.visit(impl.W.WindowFunc)
+		for _, expr := range impl.W.PartitionBy {
+			r.visit(expr)
+		}
+		for _, orderBy := range impl.W.OrderBy {
+			if orderBy != nil {
+				r.visit(orderBy.Expr)
+			}
+		}
+		if frame := impl.W.Frame; frame != nil {
+			if frame.Start != nil {
+				r.visit(frame.Start.Val)
+			}
+			if frame.End != nil {
+				r.visit(frame.End.Val)
+			}
+		}
 	}
 }
 
@@ -81,7 +102,65 @@ func (r *preparedParamCommonTypeDependencyRule) collectDirectParams(expr *Expr) 
 		for _, item := range impl.List.List {
 			r.collectDirectParams(item)
 		}
+	case *planpb.Expr_W:
+		// A common-type function can itself wrap a window expression. Reuse the
+		// complete expression traversal so markers anywhere in the WindowSpec are
+		// not hidden by the Expr_W envelope.
+		r.visit(expr)
 	}
+}
+
+func (r *preparedParamCommonTypeDependencyRule) visitQuery(query *Query) error {
+	if query == nil {
+		return nil
+	}
+	for _, expr := range query.Params {
+		r.visit(expr)
+	}
+	if err := NewVisitPlan(&Plan{Plan: &planpb.Plan_Query{Query: query}}, []VisitPlanRule{r}).Visit(context.Background()); err != nil {
+		return err
+	}
+	for _, background := range query.BackgroundQueries {
+		if err := r.visitQuery(background); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (r *preparedParamCommonTypeDependencyRule) visitPlan(p *Plan) error {
+	if p == nil {
+		return nil
+	}
+	switch planImpl := p.Plan.(type) {
+	case *planpb.Plan_Query:
+		return r.visitQuery(planImpl.Query)
+	case *planpb.Plan_Ddl:
+		if planImpl.Ddl != nil {
+			return r.visitQuery(planImpl.Ddl.Query)
+		}
+	case *planpb.Plan_Dcl:
+		if planImpl.Dcl == nil {
+			return nil
+		}
+		if setVariables := planImpl.Dcl.GetSetVariables(); setVariables != nil {
+			for _, item := range setVariables.Items {
+				if item != nil {
+					r.visit(item.Value)
+					r.visit(item.Reserved)
+				}
+			}
+		}
+		if prepare := planImpl.Dcl.GetPrepare(); prepare != nil {
+			return r.visitPlan(prepare.Plan)
+		}
+		if execute := planImpl.Dcl.GetExecute(); execute != nil {
+			for _, arg := range execute.Args {
+				r.visit(arg)
+			}
+		}
+	}
+	return nil
 }
 
 // PreparedParamCommonTypeDependencies returns the parameter positions whose
@@ -91,7 +170,7 @@ func PreparedParamCommonTypeDependencies(p *Plan, paramCount int) []bool {
 		return nil
 	}
 	rule := &preparedParamCommonTypeDependencyRule{positions: make(map[int32]struct{})}
-	if err := NewVisitPlan(p, []VisitPlanRule{rule}).Visit(context.Background()); err != nil {
+	if err := rule.visitPlan(p); err != nil {
 		dependencies := make([]bool, paramCount)
 		for i := range dependencies {
 			dependencies[i] = true

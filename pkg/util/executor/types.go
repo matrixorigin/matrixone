@@ -20,6 +20,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -86,22 +87,23 @@ type Options struct {
 
 // StatementOption statement execute option.
 type StatementOption struct {
-	waitPolicy               lock.WaitPolicy
-	accountId                uint32
-	hasAccountID             bool
-	roleId                   uint32
-	userId                   uint32
-	disableLog               bool
-	ignoreForeignKey         bool
-	ignorePublish            bool
-	ignoreCheckExperimental  bool
-	params                   []string
-	paramNulls               []bool
-	alterCopyOpt             *plan.AlterCopyOpt
-	disableDropAutoIncrement bool
-	keepAutoIncrement        uint64
-	keepLogicalId            uint64
-	disableLock              bool
+	waitPolicy                lock.WaitPolicy
+	accountId                 uint32
+	hasAccountID              bool
+	roleId                    uint32
+	userId                    uint32
+	disableLog                bool
+	ignoreForeignKey          bool
+	ignorePublish             bool
+	ignoreCheckExperimental   bool
+	params                    []string
+	paramNulls                []bool
+	preparedParamBindingTypes []types.Type
+	alterCopyOpt              *plan.AlterCopyOpt
+	disableDropAutoIncrement  bool
+	keepAutoIncrement         uint64
+	keepLogicalId             uint64
+	disableLock               bool
 }
 
 // Result exec sql result

@@ -359,10 +359,12 @@ func TestPreparedNumericTextDomainIsBoundedAndClassified(t *testing.T) {
 		wantFull        bool
 		wantExponent    bool
 		wantBindingMode int32
+		wantBindWidth   int32
+		wantBindScale   int32
 	}{
-		{value: "1.234567", wantWidth: 7, wantScale: 6, wantFull: true, wantBindingMode: preparedNumericTextPrefix},
-		{value: "12.5tail", wantWidth: 3, wantScale: 1, wantBindingMode: preparedNumericTextPrefix},
-		{value: "abc", wantWidth: 1, wantBindingMode: preparedNumericTextPrefix},
+		{value: "1.234567", wantWidth: 7, wantScale: 6, wantFull: true, wantBindingMode: preparedNumericTextPrefix, wantBindWidth: 7, wantBindScale: 6},
+		{value: "12.5tail", wantWidth: 3, wantScale: 1, wantBindingMode: preparedNumericTextPrefix, wantBindWidth: 3, wantBindScale: 1},
+		{value: "abc", wantWidth: 1, wantBindingMode: preparedNumericTextPrefix, wantBindWidth: 1},
 		{value: "001.200e2", wantWidth: 3, wantFull: true, wantExponent: true, wantBindingMode: preparedNumericTextPrefix},
 		{value: "0.1e35", wantWidth: 35, wantFull: true, wantExponent: true, wantBindingMode: preparedNumericTextPrefix},
 		{value: ".1e35", wantWidth: 35, wantFull: true, wantExponent: true, wantBindingMode: preparedNumericTextPrefix},
@@ -372,8 +374,11 @@ func TestPreparedNumericTextDomainIsBoundedAndClassified(t *testing.T) {
 		{value: "000000000000000000000000000000000000000000000000000000000000000000000000000001", wantWidth: 1, wantFull: true, wantBindingMode: preparedNumericTextPrefix},
 		{value: "\v1.25", wantWidth: 3, wantScale: 2, wantFull: true, wantBindingMode: preparedNumericTextPrefix},
 		{value: "\f1.25", wantWidth: 3, wantScale: 2, wantFull: true, wantBindingMode: preparedNumericTextPrefix},
+		{value: "123456789012345678901234567890123456", wantWidth: 36, wantFull: true, wantBindingMode: preparedNumericTextPrefix, wantBindWidth: 36},
+		{value: "1e35", wantWidth: 36, wantFull: true, wantExponent: true, wantBindingMode: preparedNumericTextPrefix, wantBindWidth: 36},
+		{value: "1e100tail", wantWidth: 77, wantExponent: true, wantBindingMode: preparedNumericTextPrefix, wantBindWidth: 65},
 		{value: "1e100", wantWidth: 77, wantFull: true, wantExponent: true, wantBindingMode: preparedNumericTextFloat},
-		{value: "1e-40", wantWidth: 40, wantScale: 40, wantFull: true, wantExponent: true, wantBindingMode: preparedNumericTextFloat},
+		{value: "1e-31", wantWidth: 31, wantScale: 31, wantFull: true, wantExponent: true, wantBindingMode: preparedNumericTextPrefix, wantBindWidth: 30, wantBindScale: 30},
 		{value: "1e999999999999999999999999999999", wantWidth: 77, wantFull: true, wantExponent: true, wantBindingMode: preparedNumericTextFloat},
 	}
 	for _, test := range tests {
@@ -387,11 +392,20 @@ func TestPreparedNumericTextDomainIsBoundedAndClassified(t *testing.T) {
 			require.Equal(t, preparedNumericTextBindingCharset, binding.Charset)
 			require.Equal(t, test.wantBindingMode, binding.Size)
 			if test.wantBindingMode == preparedNumericTextPrefix {
-				require.Equal(t, int32(65), binding.Width)
-				require.Equal(t, int32(30), binding.Scale)
+				if test.wantBindWidth != 0 {
+					require.Equal(t, test.wantBindWidth, binding.Width)
+					require.Equal(t, test.wantBindScale, binding.Scale)
+				}
 			}
 		})
 	}
+}
+
+func TestPreparedParamBindingTypesSkipPlansWithoutDependencies(t *testing.T) {
+	// A nil vector is deliberately safe here only when dependency inspection
+	// happens before parameter value access. This also proves the fast path does
+	// not allocate a result slice.
+	require.Nil(t, preparedParamBindingTypes(nil, nil, nil, 1))
 }
 
 func TestPreparedExecuteParamStateOwnership(t *testing.T) {
@@ -459,17 +473,19 @@ func TestInitExecuteStmtParamRebuildsForRuntimeBindingCategory(t *testing.T) {
 	setParam("2026-08-10 12:34:56", defines.MYSQL_TYPE_STRING)
 	decimalPlan, resultType := execute()
 	require.NotSame(t, floatPlan, decimalPlan)
-	require.Equal(t, int32(types.T_decimal256), resultType.Id)
+	require.True(t, types.T(resultType.Id).IsDecimal())
 	require.Len(t, prepareStmt.paramBindingTypes, 1)
 	require.Equal(t, preparedNumericTextPrefix, prepareStmt.paramBindingTypes[0].Size)
 
 	setParam("1.234567", defines.MYSQL_TYPE_VAR_STRING)
 	exactDecimalPlan, resultType := execute()
-	require.Same(t, decimalPlan, exactDecimalPlan,
-		"ordinary text values must share one stable DECIMAL plan category")
-	require.Equal(t, int32(types.T_decimal256), resultType.Id)
+	require.NotSame(t, decimalPlan, exactDecimalPlan,
+		"a different exact DECIMAL domain must rebuild the common-type plan")
+	require.True(t, types.T(resultType.Id).IsDecimal())
 	require.Len(t, prepareStmt.paramBindingTypes, 1)
 	require.Equal(t, preparedNumericTextPrefix, prepareStmt.paramBindingTypes[0].Size)
+	require.Equal(t, int32(7), prepareStmt.paramBindingTypes[0].Width)
+	require.Equal(t, int32(6), prepareStmt.paramBindingTypes[0].Scale)
 
 	setParam("1e100", defines.MYSQL_TYPE_DOUBLE)
 	secondFloatPlan, resultType := execute()
@@ -487,6 +503,25 @@ func TestInitExecuteStmtParamRebuildsForRuntimeBindingCategory(t *testing.T) {
 	require.Equal(t, []types.Type{types.T_float64.ToType()}, prepareStmt.paramBindingTypes)
 	_, found = ses.GetTxnCompileCtx().ResolvePreparedParamBindingType(0)
 	require.False(t, found, "failed rebuild must clear temporary binding hints")
+}
+
+func TestInitExecuteStmtParamRebuildsDCLForTextUserVariable(t *testing.T) {
+	ses, prepareStmt, cw, execCtx := newPreparedExecuteEnvForSQL(
+		t, 116, "set @out = coalesce(?, cast(2 as decimal(10,2)))")
+	defer prepareStmt.Close()
+	require.NoError(t, ses.SetUserDefinedVar("p", "1e100", ""))
+	execPlan := &plan.Execute{
+		Name: prepareStmt.Name,
+		Args: []*plan.Expr{{Expr: &plan.Expr_V{V: &plan.VarRef{Name: "p"}}}},
+	}
+
+	_, rebuiltPlan, _, _, _, err := initExecuteStmtParam(execCtx, ses, cw, execPlan, "")
+	require.NoError(t, err)
+	require.Equal(t, []bool{true}, prepareStmt.paramBindingDependencies)
+	require.Len(t, prepareStmt.paramBindingTypes, 1)
+	require.Equal(t, preparedNumericTextFloat, prepareStmt.paramBindingTypes[0].Size)
+	item := rebuiltPlan.GetDcl().GetSetVariables().GetItems()[0]
+	require.Equal(t, int32(types.T_float64), item.GetValue().Typ.Id)
 }
 
 func TestInitExecuteStmtParamMapsRuntimeBindingCategoriesByPosition(t *testing.T) {
@@ -513,12 +548,16 @@ func TestInitExecuteStmtParamMapsRuntimeBindingCategoriesByPosition(t *testing.T
 	}
 
 	setParams("1.25", defines.MYSQL_TYPE_VAR_STRING, "1e100", defines.MYSQL_TYPE_DOUBLE)
-	require.Equal(t, []types.T{types.T_decimal256, types.T_float64}, executeTypes())
+	resultTypes := executeTypes()
+	require.True(t, resultTypes[0].IsDecimal())
+	require.Equal(t, types.T_float64, resultTypes[1])
 	require.Equal(t, preparedNumericTextPrefix, prepareStmt.paramBindingTypes[0].Size)
 	require.Equal(t, types.T_float64.ToType(), prepareStmt.paramBindingTypes[1])
 
 	setParams("1e-40", defines.MYSQL_TYPE_DOUBLE, "1.25", defines.MYSQL_TYPE_VAR_STRING)
-	require.Equal(t, []types.T{types.T_float64, types.T_decimal256}, executeTypes())
+	resultTypes = executeTypes()
+	require.Equal(t, types.T_float64, resultTypes[0])
+	require.True(t, resultTypes[1].IsDecimal())
 	require.Equal(t, types.T_float64.ToType(), prepareStmt.paramBindingTypes[0])
 	require.Equal(t, preparedNumericTextPrefix, prepareStmt.paramBindingTypes[1].Size)
 }
@@ -547,13 +586,15 @@ func TestInitExecuteStmtParamMasksNonDependentTargetFunctionBindings(t *testing.
 
 	setParams("10", defines.MYSQL_TYPE_LONGLONG)
 	firstPlan, resultTypes := execute()
-	require.Equal(t, []types.T{types.T_text, types.T_decimal256}, resultTypes)
+	require.Equal(t, types.T_text, resultTypes[0])
+	require.True(t, resultTypes[1].IsDecimal())
 	require.Equal(t, []bool{false, true}, prepareStmt.paramBindingDependencies)
 
 	setParams("abc", defines.MYSQL_TYPE_VAR_STRING)
 	secondPlan, resultTypes := execute()
 	require.Same(t, firstPlan, secondPlan)
-	require.Equal(t, []types.T{types.T_text, types.T_decimal256}, resultTypes)
+	require.Equal(t, types.T_text, resultTypes[0])
+	require.True(t, resultTypes[1].IsDecimal())
 }
 
 func TestInitExecuteStmtParamIgnoresUnrelatedRuntimeCategories(t *testing.T) {

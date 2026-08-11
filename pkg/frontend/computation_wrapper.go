@@ -73,6 +73,9 @@ type TxnComputationWrapper struct {
 	uuid         uuid.UUID
 	//holds values of params in the PREPARE
 	paramVals []any
+	// preparedParamBindingTypes carries the current execution's dependency-only
+	// runtime domains into AST-only SET expression evaluation.
+	preparedParamBindingTypes []types.Type
 
 	explainBuffer *bytes.Buffer
 	binaryPrepare bool
@@ -745,13 +748,14 @@ func preparedParamBindingType(kind vector.PrepareParamKind, value []byte) types.
 	width, scale, full, exponent := preparedNumericTextDomain(value)
 	binding := types.T_text.ToType()
 	binding.Charset = preparedNumericTextBindingCharset
+	integral := max(width-scale, 0)
 	switch {
-	case full && exponent && (width-scale > 35 || scale > 30):
+	case full && exponent && integral > 65:
 		binding.Size = preparedNumericTextFloat
 	default:
 		binding.Size = preparedNumericTextPrefix
-		binding.Width = 65
-		binding.Scale = 30
+		binding.Scale = min(scale, 30)
+		binding.Width = max(min(integral, 65-binding.Scale)+binding.Scale, 1)
 	}
 	return binding
 }
@@ -851,10 +855,17 @@ func isPreparedNumericSpace(ch byte) bool {
 func preparedParamBindingTypes(
 	params *vector.Vector,
 	kinds []vector.PrepareParamKind,
+	dependencies []bool,
 	count int,
 ) []types.Type {
+	if len(dependencies) == 0 {
+		return nil
+	}
 	var bindingTypes []types.Type
 	for i := 0; i < count; i++ {
+		if i >= len(dependencies) || !dependencies[i] {
+			continue
+		}
 		var value []byte
 		if !params.IsNull(uint64(i)) {
 			value = params.GetRawBytesAt(i)
@@ -949,6 +960,7 @@ func initPreparedExecuteParams(
 	prepareStmt *PrepareStmt,
 	execPlan *plan.Execute,
 	cwft *TxnComputationWrapper,
+	dependencies []bool,
 	numParams int,
 ) (*preparedExecuteParamState, error) {
 	if prepareStmt.params != nil && prepareStmt.params.Length() > 0 { // binary protocol
@@ -969,7 +981,7 @@ func initPreparedExecuteParams(
 				kinds[i] = kind
 			}
 		}
-		bindingTypes := preparedParamBindingTypes(prepareStmt.params, kinds, numParams)
+		bindingTypes := preparedParamBindingTypes(prepareStmt.params, kinds, dependencies, numParams)
 		for i := 0; i < paramCount && i*2+1 < len(prepareStmt.ParamTypes); i++ {
 			if i >= len(kinds) || kinds[i] != vector.PrepareParamInteger || bindingTypes == nil {
 				continue
@@ -999,7 +1011,7 @@ func initPreparedExecuteParams(
 			paramVals:    paramVals,
 			paramIsBin:   paramIsBin,
 			paramKinds:   paramKinds,
-			bindingTypes: preparedParamBindingTypes(params, paramKinds, numParams),
+			bindingTypes: preparedParamBindingTypes(params, paramKinds, dependencies, numParams),
 			owned:        true,
 		}, nil
 	} else if numParams > 0 {
@@ -1027,8 +1039,13 @@ func initExecuteStmtParamWithResolverInSession(
 	}
 	originSQL := prepareStmt.Sql
 	preparePlan := prepareStmt.PreparePlan.GetDcl().GetPrepare()
+	if !prepareStmt.paramBindingDependenciesSet {
+		prepareStmt.paramBindingDependencies = plan2.PreparedParamCommonTypeDependencies(
+			preparePlan.Plan, len(preparePlan.ParamTypes))
+		prepareStmt.paramBindingDependenciesSet = true
+	}
 	paramState, err := initPreparedExecuteParams(
-		reqCtx, prepareStmt, execPlan, cwft, len(preparePlan.ParamTypes))
+		reqCtx, prepareStmt, execPlan, cwft, prepareStmt.paramBindingDependencies, len(preparePlan.ParamTypes))
 	if err != nil {
 		return nil, nil, nil, originSQL, false, err
 	}
@@ -1111,11 +1128,6 @@ func initExecuteStmtParamWithResolverInSession(
 	protocolVersion := currentProtocolVersion(cwft.proc)
 	protocolMismatch := prepareStmt.protocolVersion != 0 &&
 		prepareStmt.protocolVersion != protocolVersion
-	if !prepareStmt.paramBindingDependenciesSet {
-		prepareStmt.paramBindingDependencies = plan2.PreparedParamCommonTypeDependencies(
-			preparePlan.Plan, len(preparePlan.ParamTypes))
-		prepareStmt.paramBindingDependenciesSet = true
-	}
 	paramBindingMismatch := !preparedParamBindingTypesEqualAtDependencies(
 		prepareStmt.paramBindingTypes, paramBindingTypes,
 		prepareStmt.paramBindingDependencies, len(preparePlan.ParamTypes))
@@ -1219,6 +1231,9 @@ func initExecuteStmtParamWithResolverInSession(
 	// new plan and cached compile generation are complete.
 	paramState.apply(cwft.proc)
 	cwft.paramVals = paramState.paramVals
+	cwft.preparedParamBindingTypes = preparedParamBindingTypesAtDependencies(
+		paramBindingTypes, prepareStmt.paramBindingDependencies)
+	cwft.proc.SetPreparedParamBindingTypes(cwft.preparedParamBindingTypes)
 	// A cached prepared Compile already owns a materialized worker topology.
 	// Explicit scheduling intent must be evaluated for this execution, so it
 	// cannot reuse a topology compiled under the prepare-time defaults. Keep a
