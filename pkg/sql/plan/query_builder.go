@@ -7240,6 +7240,7 @@ func (builder *QueryBuilder) bindSelectClause(
 		}
 		ctx.projectByAst = append(ctx.projectByAst, field)
 	}
+	ctx.hasSelectListAggregate = selectListHasAggregate(selectList)
 
 	// bind GROUP BY clause
 	if clause.GroupBy != nil || astTimeWindow != nil {

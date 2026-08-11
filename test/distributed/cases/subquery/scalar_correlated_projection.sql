@@ -54,6 +54,20 @@ select p.id, (select sum(c.v) from child_agg c where c.corr_key = p.corr_key gro
 select p.id, (select sum(c.v) from child_agg c where c.corr_key = p.corr_key having sum(c.v) > 100) as having_sum from parent_agg p order by p.id;
 
 -- @case
+-- @desc:ONLY_FULL_GROUP_BY allows inner HAVING to reference an ungrouped outer row
+-- @label:bvt
+set @@sql_mode = 'ONLY_FULL_GROUP_BY';
+select p.id, exists (select c.corr_key from child_agg c group by c.corr_key having count(*) >= p.id) as ex from parent_agg p order by p.id;
+select p.id, exists (select 1 from child_agg c having count(*) >= p.id) as ex from parent_agg p order by p.id;
+select p.id, exists (select corr_key from child_agg group by corr_key having corr_key >= p.id) as ex from parent_agg p order by p.id;
+-- @regex("must appear in the GROUP BY clause",true)
+select sum(p.id), exists (select c.corr_key from child_agg c group by c.corr_key having count(*) >= p.corr_key) as ex from parent_agg p;
+-- @regex("must appear in the GROUP BY clause",true)
+select exists (select c.corr_key from child_agg c group by c.corr_key having count(*) >= p.corr_key) as ex, sum(p.id) from parent_agg p;
+select count(*) as parent_count from parent_agg;
+set @@sql_mode = default;
+
+-- @case
 -- @desc:issue #24737 - Prisma 7.9.1 to-many relation join through transparent derived tables
 -- @label:bvt
 -- @ignore:2

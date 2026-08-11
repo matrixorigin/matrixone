@@ -630,18 +630,37 @@ func (b *baseBinder) correlatedGroupByColPos(depth int32, astName, table, col st
 }
 
 func (b *baseBinder) corrColRefTargetsGroup(corr *plan.CorrColRef) bool {
-	if corr == nil {
-		return false
-	}
-	ctx := b.ctx
-	for depth := int32(0); depth < corr.Depth && ctx != nil; depth++ {
-		ctx = ctx.parent
-	}
+	ctx := b.corrColRefTargetContext(corr)
 	return ctx != nil && ctx.groupTag > 0 && corr.RelPos == ctx.groupTag
 }
 
 func (b *baseBinder) corrColRefTargetsCurrentGroup(corr *plan.CorrColRef) bool {
 	return corr != nil && b.ctx != nil && b.ctx.groupTag > 0 && corr.RelPos == b.ctx.groupTag
+}
+
+func (b *baseBinder) corrColRefTargetsUngroupedQuery(corr *plan.CorrColRef) bool {
+	ctx := b.corrColRefTargetContext(corr)
+	if ctx == nil {
+		return false
+	}
+	if _, ok := ctx.bindingByTag[corr.RelPos]; !ok {
+		return false
+	}
+	return len(ctx.groups) == 0 &&
+		len(ctx.aggregates) == 0 &&
+		len(ctx.times) == 0 &&
+		!ctx.hasSelectListAggregate
+}
+
+func (b *baseBinder) corrColRefTargetContext(corr *plan.CorrColRef) *BindContext {
+	if corr == nil {
+		return nil
+	}
+	ctx := b.ctx
+	for depth := int32(0); depth < corr.Depth && ctx != nil; depth++ {
+		ctx = ctx.parent
+	}
+	return ctx
 }
 
 func (b *baseBinder) baseBindSubquery(astExpr *tree.Subquery, isRoot bool) (*Expr, error) {

@@ -1842,6 +1842,46 @@ func TestOnlyFullGroupByAllowsCorrelatedSubqueryOnGroupedColumn(t *testing.T) {
 	}
 }
 
+func TestOnlyFullGroupByAllowsCorrelatedHavingOnUngroupedOuterQuery(t *testing.T) {
+	sqls := []string{
+		`
+		SELECT nation.n_regionkey,
+		       EXISTS (
+		           SELECT nation2.n_name
+		           FROM nation2
+		           GROUP BY nation2.n_name
+		           HAVING COUNT(*) >= nation.n_regionkey
+		       ) AS ex
+		FROM nation
+		ORDER BY nation.n_regionkey`,
+		`
+		SELECT nation.n_regionkey,
+		       EXISTS (
+		           SELECT 1
+		           FROM nation2
+		           HAVING COUNT(*) >= nation.n_regionkey
+		       ) AS ex
+		FROM nation
+		ORDER BY nation.n_regionkey`,
+		`
+		SELECT nation.n_regionkey,
+		       EXISTS (
+		           SELECT n_nationkey
+		           FROM nation2
+		           GROUP BY n_nationkey
+		           HAVING n_nationkey >= nation.n_regionkey
+		       ) AS ex
+		FROM nation
+		ORDER BY nation.n_regionkey`,
+	}
+
+	for _, sql := range sqls {
+		mock := NewMockOptimizer(false)
+		_, err := runOneStmt(mock, t, sql)
+		require.NoError(t, err, sql)
+	}
+}
+
 func TestOnlyFullGroupByRejectsCorrelatedSubqueryOnUngroupedColumn(t *testing.T) {
 	sqls := []struct {
 		sql         string
@@ -1854,9 +1894,27 @@ func TestOnlyFullGroupByRejectsCorrelatedSubqueryOnUngroupedColumn(t *testing.T)
 		GROUP BY n_name`, "nation.n_comment"},
 		{`
 		SELECT n_name
-		FROM nation
-		GROUP BY n_name
-		HAVING (SELECT COUNT(*) FROM nation2 n2 WHERE n2.n_name = nation.n_comment) > 0`, "nation.n_comment"},
+			FROM nation
+			GROUP BY n_name
+			HAVING (SELECT COUNT(*) FROM nation2 n2 WHERE n2.n_name = nation.n_comment) > 0`, "nation.n_comment"},
+		{`
+			SELECT SUM(n_regionkey),
+			       EXISTS (
+			           SELECT n_name
+			           FROM nation2
+			           GROUP BY n_name
+			           HAVING COUNT(*) > nation.n_regionkey
+			       )
+			FROM nation`, "nation.n_regionkey"},
+		{`
+			SELECT EXISTS (
+			           SELECT n_name
+			           FROM nation2
+			           GROUP BY n_name
+			           HAVING COUNT(*) > nation.n_regionkey
+			       ),
+			       SUM(n_regionkey)
+			FROM nation`, "nation.n_regionkey"},
 	}
 
 	for _, tt := range sqls {
