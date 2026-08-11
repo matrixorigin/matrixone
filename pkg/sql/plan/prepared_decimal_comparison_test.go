@@ -301,15 +301,32 @@ func TestPreparedDecimalComparisonDetectionTraversesNestedExpressions(t *testing
 	}{
 		{name: "query", plan: &planpb.Plan{Plan: &planpb.Plan_Query{Query: DeepCopyQuery(query)}}},
 		{name: "ctas", plan: &planpb.Plan{Plan: &planpb.Plan_Ddl{Ddl: &planpb.DataDefinition{Query: DeepCopyQuery(query)}}}},
+		{name: "set", plan: &planpb.Plan{Plan: &planpb.Plan_Dcl{Dcl: &planpb.DataControl{
+			DclType: planpb.DataControl_SET_VARIABLES,
+			Control: &planpb.DataControl_SetVariables{SetVariables: &planpb.SetVariables{
+				Items: []*planpb.SetVariablesItem{{Value: DeepCopyExpr(nested)}},
+			}},
+		}}}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			found, err := PlanHasExactDecimalComparisonParam(ctx, tc.plan)
 			require.NoError(t, err)
 			require.True(t, found)
-			filled, err := FillValuesOfParamsInPlan(ctx, tc.plan, []any{"9007199254740992.00014"})
+			var filled *planpb.Plan
+			if tc.plan.GetDcl() != nil {
+				filled, err = FillExactDecimalComparisonParamsInPlan(ctx, tc.plan, []any{"9007199254740992.00014"})
+			} else {
+				filled, err = FillValuesOfParamsInPlan(ctx, tc.plan, []any{"9007199254740992.00014"})
+			}
 			require.NoError(t, err)
 			if ddl := filled.GetDdl(); ddl != nil {
 				filled = &planpb.Plan{Plan: &planpb.Plan_Query{Query: ddl.Query}}
+			}
+			if dcl := filled.GetDcl(); dcl != nil {
+				rewritten := dcl.GetSetVariables().Items[0].Value
+				require.False(t, planExprContainsPreparedDecimalParam(
+					findPreparedDecimalComparisonFunction(rewritten, "=")))
+				return
 			}
 			require.False(t, planExprContainsPreparedDecimalParam(
 				findPreparedDecimalComparisonInPlan(filled, "=")))
@@ -372,4 +389,137 @@ func TestFillExactDecimalComparisonLeavesOtherParamsForRuntimeTyping(t *testing.
 	require.NotNil(t, prepared.GetQuery().Nodes[0].ProjectList[0].GetP())
 	require.True(t, planExprContainsPreparedDecimalParam(
 		findPreparedDecimalComparisonInPlan(prepared, "=")))
+}
+
+func TestDecimalScalarSubqueryPreservesConstantAndParamDomain(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	decimalType := types.New(types.T_decimal128, 20, 4)
+	mock.ctxt.tables["part"].Cols[7].Typ = makePlan2Type(&decimalType)
+
+	literalPlan, err := runOneStmt(
+		mock,
+		t,
+		"select p_partkey from part where p_retailprice = (select '9007199254740992.0001')",
+	)
+	require.NoError(t, err)
+	literalComparison := findPreparedDecimalComparisonInPlan(literalPlan, "=")
+	require.NotNil(t, literalComparison)
+	for _, arg := range literalComparison.GetF().Args {
+		require.True(t, types.T(arg.Typ.Id).IsDecimal())
+	}
+
+	preparedPlan, err := runOneStmt(
+		mock,
+		t,
+		"prepare scalar_decimal from 'select p_partkey from part where p_retailprice = (select ?)'",
+	)
+	require.NoError(t, err)
+	prepared := preparedPlan.GetDcl().GetPrepare().Plan
+	found, err := PlanHasExactDecimalComparisonParam(context.Background(), prepared)
+	require.NoError(t, err)
+	require.True(t, found)
+
+	filled, err := FillExactDecimalComparisonParamsInPlan(
+		context.Background(), prepared, []any{"9007199254740992.00014"})
+	require.NoError(t, err)
+	require.Nil(t, findPreparedDecimalComparisonInPlan(filled, "="))
+}
+
+func TestPreparedSetExactDecimalComparisonVisitsTransientQuery(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	decimalType := types.New(types.T_decimal128, 20, 4)
+	mock.ctxt.tables["part"].Cols[7].Typ = makePlan2Type(&decimalType)
+
+	logicPlan, err := runOneStmt(
+		mock,
+		t,
+		"prepare set_decimal from 'set @answer=(select count(*) from part where p_retailprice=?)'",
+	)
+	require.NoError(t, err)
+	prepared := logicPlan.GetDcl().GetPrepare().Plan
+	setVars := prepared.GetDcl().GetSetVariables()
+	require.NotNil(t, setVars)
+	require.NotNil(t, setVars.GetQuery())
+
+	found, err := PlanHasExactDecimalComparisonParam(context.Background(), prepared)
+	require.NoError(t, err)
+	require.True(t, found)
+	filled, err := FillExactDecimalComparisonParamsInPlan(
+		context.Background(), prepared, []any{"9007199254740992.00014"})
+	require.NoError(t, err)
+	require.False(t, planExprContainsPreparedDecimalParam(
+		findPreparedDecimalComparisonInPlan(
+			&planpb.Plan{Plan: &planpb.Plan_Query{Query: filled.GetDcl().GetSetVariables().GetQuery()}}, "=")))
+}
+
+func TestDecimalBetweenAndNotBetweenUseOneSourceDomain(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	decimalType := types.New(types.T_decimal128, 20, 4)
+	mock.ctxt.tables["part"].Cols[7].Typ = makePlan2Type(&decimalType)
+
+	for _, tc := range []struct {
+		name       string
+		predicate  string
+		prepared   bool
+		expectedID types.T
+	}{
+		{name: "prepared_between", predicate: "p_retailprice between ? and ?", prepared: true, expectedID: types.T_decimal128},
+		{name: "prepared_not_between", predicate: "p_retailprice not between ? and ?", prepared: true, expectedID: types.T_decimal128},
+		{name: "literal_between", predicate: "p_retailprice between '9007199254740992.00005' and '9007199254740992.99995'", expectedID: types.T_float64},
+		{name: "literal_not_between", predicate: "p_retailprice not between '9007199254740992.00005' and '9007199254740992.99995'", expectedID: types.T_float64},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			sql := "select p_partkey from part where " + tc.predicate
+			if tc.prepared {
+				sql = "prepare decimal_range from '" + sql + "'"
+			}
+			logicPlan, err := runOneStmt(mock, t, sql)
+			require.NoError(t, err)
+			planToInspect := logicPlan
+			if tc.prepared {
+				planToInspect = logicPlan.GetDcl().GetPrepare().Plan
+				found, err := PlanHasExactDecimalComparisonParam(context.Background(), planToInspect)
+				require.NoError(t, err)
+				require.True(t, found)
+			}
+			comparisons := 0
+			for _, op := range []string{"<", "<=", ">", ">="} {
+				if comparison := findPreparedDecimalComparisonInPlan(planToInspect, op); comparison != nil {
+					comparisons++
+					for _, arg := range comparison.GetF().Args {
+						require.Equal(t, int32(tc.expectedID), arg.Typ.Id)
+					}
+				}
+			}
+			require.Equal(t, 2, comparisons)
+		})
+	}
+}
+
+func TestPreparedDecimalMultiInMaterializesEveryTextParam(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	decimalType := types.New(types.T_decimal128, 20, 4)
+	mock.ctxt.tables["part"].Cols[7].Typ = makePlan2Type(&decimalType)
+
+	for _, op := range []string{"in", "not in"} {
+		t.Run(op, func(t *testing.T) {
+			logicPlan, err := runOneStmt(mock, t,
+				"prepare decimal_multi from 'select p_partkey from part where p_retailprice "+op+" (?,?)'")
+			require.NoError(t, err)
+			prepared := logicPlan.GetDcl().GetPrepare().Plan
+			found, err := PlanHasExactDecimalComparisonParam(context.Background(), prepared)
+			require.NoError(t, err)
+			require.True(t, found)
+
+			filled, err := FillExactDecimalComparisonParamsInPlan(context.Background(), prepared, []any{
+				"9007199254740992.00014", "9007199254740992.99994",
+			})
+			require.NoError(t, err)
+			for _, node := range filled.GetQuery().Nodes {
+				for _, filter := range node.FilterList {
+					require.False(t, planExprContainsPreparedDecimalParam(filter))
+				}
+			}
+		})
+	}
 }

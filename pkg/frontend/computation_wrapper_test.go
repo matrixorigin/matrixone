@@ -58,6 +58,50 @@ func TestResourceAttemptOwnerEligible(t *testing.T) {
 	require.False(t, resourceAttemptOwnerEligible(derived))
 }
 
+func TestMaterializePreparedExpressionExactDecimalParams(t *testing.T) {
+	decimalType := types.New(types.T_decimal128, 20, 4)
+	comparison, err := plan2.BindFuncExprImplByPlanExpr(context.Background(), "=", []*plan.Expr{
+		{
+			Typ:  plan2.MakePlan2Type(&decimalType),
+			Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 1, ColPos: 0}},
+		},
+		{
+			Typ:  plan.Type{Id: int32(types.T_text)},
+			Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: 0}},
+		},
+	})
+	require.NoError(t, err)
+	original := &plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{
+		Steps: []int32{0},
+		Nodes: []*plan.Node{{NodeType: plan.Node_FILTER, FilterList: []*plan.Expr{comparison}}},
+	}}}
+
+	materialized, err := materializePreparedExpressionExactDecimalParams(
+		context.Background(), original, []any{"9007199254740992.00014"})
+	require.NoError(t, err)
+	require.NotSame(t, original, materialized)
+
+	var containsParam func(*plan.Expr) bool
+	containsParam = func(expr *plan.Expr) bool {
+		if expr == nil {
+			return false
+		}
+		if expr.GetP() != nil {
+			return true
+		}
+		if fn := expr.GetF(); fn != nil {
+			for _, arg := range fn.Args {
+				if containsParam(arg) {
+					return true
+				}
+			}
+		}
+		return false
+	}
+	require.False(t, containsParam(materialized.GetQuery().Nodes[0].FilterList[0]))
+	require.True(t, containsParam(original.GetQuery().Nodes[0].FilterList[0]))
+}
+
 func (m *mockCompile) Run(ts uint64) (*util2.RunResult, error) { return m.runFunc(ts) }
 func (m *mockCompile) GetPlan() *plan.Plan                     { return m.getPlanFunc() }
 func (m *mockCompile) Release()                                { m.releaseFunc() }

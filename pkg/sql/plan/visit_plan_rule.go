@@ -444,6 +444,15 @@ func (rule *ResetParamRefRule) ApplyExpr(e *plan.Expr) (*plan.Expr, error) {
 }
 
 func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
+	if rule.exactDecimalComparisonsOnly && e.ExactDecimalParam {
+		replacement, ok, err := rule.preparedDecimalComparisonValue(e)
+		if err != nil {
+			return nil, err
+		}
+		if ok {
+			return replacement, nil
+		}
+	}
 	var err error
 	switch exprImpl := e.Expr.(type) {
 	case *plan.Expr_F:
@@ -578,6 +587,10 @@ func (rule *findDecimalComparisonParamRule) ApplyNode(_ *Node) error {
 
 func (rule *findDecimalComparisonParamRule) ApplyExpr(expr *plan.Expr) (*plan.Expr, error) {
 	if rule.found || expr == nil {
+		return expr, nil
+	}
+	if expr.ExactDecimalParam {
+		rule.found = true
 		return expr, nil
 	}
 	switch impl := expr.Expr.(type) {

@@ -248,8 +248,39 @@ func (vq *VisitPlan) Visit(ctx context.Context) error {
 		return vq.visitQuery(ctx, pl.Query)
 	case *plan.Plan_Ddl:
 		return vq.visitQuery(ctx, pl.Ddl.GetQuery())
+	case *plan.Plan_Dcl:
+		return vq.visitDataControl(ctx, pl.Dcl)
 	}
 	return nil
+}
+
+func (vq *VisitPlan) visitDataControl(ctx context.Context, dcl *plan.DataControl) error {
+	if dcl == nil || dcl.GetDclType() != plan.DataControl_SET_VARIABLES {
+		return nil
+	}
+	setVars := dcl.GetSetVariables()
+	if setVars == nil {
+		return nil
+	}
+	for _, rule := range vq.rules {
+		if !rule.IsApplyExpr() {
+			continue
+		}
+		for _, item := range setVars.Items {
+			var err error
+			item.Value, err = rule.ApplyExpr(item.Value)
+			if err != nil {
+				return err
+			}
+			if item.Reserved != nil {
+				item.Reserved, err = rule.ApplyExpr(item.Reserved)
+				if err != nil {
+					return err
+				}
+			}
+		}
+	}
+	return vq.visitQuery(ctx, setVars.GetQuery())
 }
 
 func (vq *VisitPlan) visitQuery(ctx context.Context, qry *Query) error {

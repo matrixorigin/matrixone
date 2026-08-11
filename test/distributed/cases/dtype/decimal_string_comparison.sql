@@ -184,4 +184,21 @@ WHERE d128 IN (LOWER('9007199254740992.0001'));
 SELECT GROUP_CONCAT(id ORDER BY id) AS lower_single_in_update_ids
 FROM foldable_in_update WHERE matched = 1;
 
+SELECT GROUP_CONCAT(id ORDER BY id) AS literal_between_ids
+FROM boundary_values
+WHERE d128 BETWEEN '9007199254740992.00005' AND '9007199254740992.99995';
+SELECT GROUP_CONCAT(id ORDER BY id) AS literal_not_between_ids
+FROM boundary_values
+WHERE d128 NOT BETWEEN '9007199254740992.00005' AND '9007199254740992.99995';
+
+SELECT GROUP_CONCAT(id ORDER BY id) AS scalar_literal_ids
+FROM boundary_values
+WHERE d128 = (SELECT '9007199254740992.0001');
+
+CREATE TABLE scalar_runtime_strings AS
+SELECT s FROM runtime_strings;
+SELECT GROUP_CONCAT(b.id ORDER BY b.id) AS scalar_runtime_column_ids
+FROM boundary_values b
+WHERE b.d128 = (SELECT s FROM scalar_runtime_strings LIMIT 1);
+
 DROP DATABASE decimal_string_comparison;

@@ -313,6 +313,21 @@ func (cwft *TxnComputationWrapper) Compile(any any, fill func(*batch.Batch, *per
 			return nil, err
 		}
 	}
+	// Prepared SET expressions execute through a synthetic SELECT rather than
+	// the outer EXECUTE plan. Specialize that freshly built query with the same
+	// exact DECIMAL parameter rule before it is compiled; otherwise the nested
+	// evaluation silently falls back to the prepare-time DECIMAL cast.
+	if execCtx.input.isPreparedExpr() {
+		paramVals, valueErr := preparedParamValues(cwft.proc)
+		if valueErr != nil {
+			return nil, valueErr
+		}
+		cwft.plan, err = materializePreparedExpressionExactDecimalParams(
+			execCtx.reqCtx, cwft.plan, paramVals)
+		if err != nil {
+			return nil, err
+		}
+	}
 
 	if cwft.ses != nil && cwft.ses.GetTenantInfo() != nil && !cwft.ses.IsBackgroundSession() {
 		var accId uint32
@@ -491,6 +506,18 @@ func (cwft *TxnComputationWrapper) Compile(any any, fill func(*batch.Batch, *per
 	}
 
 	return cwft.compile, err
+}
+
+func materializePreparedExpressionExactDecimalParams(
+	ctx context.Context,
+	executionPlan *plan2.Plan,
+	paramVals []any,
+) (*plan2.Plan, error) {
+	hasExact, err := plan2.PlanHasExactDecimalComparisonParam(ctx, executionPlan)
+	if err != nil || !hasExact {
+		return executionPlan, err
+	}
+	return plan2.FillExactDecimalComparisonParamsInPlan(ctx, executionPlan, paramVals)
 }
 
 func authenticatePreparedDDLOwnerStatement(reqCtx context.Context, ses *Session, stmt tree.Statement, p *plan.Plan) (statistic.StatsArray, error) {

@@ -244,4 +244,54 @@ EXECUTE p_json_kind USING @value,@p;
 ➤ JSON_ARRAY(?)[-1,2147483647,0]  𝄀
 [5]
 DEALLOCATE PREPARE p_json_kind;
+PREPARE p_multi_in FROM
+'SELECT GROUP_CONCAT(id ORDER BY id) FROM t WHERE d128 IN (?,?)';
+PREPARE p_multi_not_in FROM
+'SELECT GROUP_CONCAT(id ORDER BY id) FROM t WHERE d128 NOT IN (?,?)';
+SET @lo = '9007199254740992.00014', @hi = '9007199254740992.99994';
+EXECUTE p_multi_in USING @lo,@hi;
+➤ GROUP_CONCAT(id order by id separator ,)[12,0,0]  𝄀
+null
+EXECUTE p_multi_not_in USING @lo,@hi;
+➤ GROUP_CONCAT(id order by id separator ,)[12,0,0]  𝄀
+2,3,4,5,6
+DEALLOCATE PREPARE p_multi_in;
+DEALLOCATE PREPARE p_multi_not_in;
+PREPARE p_between FROM
+'SELECT GROUP_CONCAT(id ORDER BY id) FROM t WHERE d128 BETWEEN ? AND ?';
+PREPARE p_not_between FROM
+'SELECT GROUP_CONCAT(id ORDER BY id) FROM t WHERE d128 NOT BETWEEN ? AND ?';
+SET @lo = '9007199254740992.00005', @hi = '9007199254740992.99995';
+EXECUTE p_between USING @lo,@hi;
+➤ GROUP_CONCAT(id order by id separator ,)[12,0,0]  𝄀
+4
+EXECUTE p_not_between USING @lo,@hi;
+➤ GROUP_CONCAT(id order by id separator ,)[12,0,0]  𝄀
+2,3,5,6
+DEALLOCATE PREPARE p_between;
+DEALLOCATE PREPARE p_not_between;
+PREPARE p_scalar FROM
+'SELECT GROUP_CONCAT(id ORDER BY id) FROM t WHERE d128=(SELECT ?)';
+SET @p = '9007199254740992.00014';
+EXECUTE p_scalar USING @p;
+➤ GROUP_CONCAT(id order by id separator ,)[12,0,0]  𝄀
+null
+SET @p = '9007199254740992.0001';
+EXECUTE p_scalar USING @p;
+➤ GROUP_CONCAT(id order by id separator ,)[12,0,0]  𝄀
+4
+DEALLOCATE PREPARE p_scalar;
+PREPARE p_set FROM
+'SET @answer=(SELECT COUNT(*) FROM t WHERE d128=?)';
+SET @p = '9007199254740992.00014';
+EXECUTE p_set USING @p;
+SELECT @answer;
+➤ @answer[12,0,0]  𝄀
+0
+SET @p = '9007199254740992.0001';
+EXECUTE p_set USING @p;
+SELECT @answer;
+➤ @answer[12,0,0]  𝄀
+1
+DEALLOCATE PREPARE p_set;
 DROP DATABASE prepare_decimal_comparison;

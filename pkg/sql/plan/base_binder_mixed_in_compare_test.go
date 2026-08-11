@@ -270,3 +270,37 @@ func TestDecimalMultiElementInKeepsRealFallback(t *testing.T) {
 	visit(expr)
 	require.Equal(t, 2, comparisons)
 }
+
+func TestDecimalMultiElementPreparedInUsesExactComparisons(t *testing.T) {
+	decimalType := types.New(types.T_decimal128, 20, 4)
+	for _, name := range []string{"in", "not_in"} {
+		t.Run(name, func(t *testing.T) {
+			left := makePreparedDecimalComparisonColumn(decimalType)
+			right := &planpb.Expr{Expr: &planpb.Expr_List{List: &planpb.ExprList{List: []*planpb.Expr{
+				makePreparedDecimalComparisonParam(0),
+				makePreparedDecimalComparisonParam(1),
+			}}}}
+			expr, err := BindFuncExprImplByPlanExpr(context.Background(), name, []*planpb.Expr{left, right})
+			require.NoError(t, err)
+
+			comparisons := 0
+			var visit func(*planpb.Expr)
+			visit = func(current *planpb.Expr) {
+				if fn := current.GetF(); fn != nil {
+					if fn.Func.GetObjName() == "=" || fn.Func.GetObjName() == "!=" {
+						comparisons++
+						require.Len(t, fn.Args, 2)
+						for _, arg := range fn.Args {
+							require.True(t, types.T(arg.Typ.Id).IsDecimal())
+						}
+					}
+					for _, arg := range fn.Args {
+						visit(arg)
+					}
+				}
+			}
+			visit(expr)
+			require.Equal(t, 2, comparisons)
+		})
+	}
+}

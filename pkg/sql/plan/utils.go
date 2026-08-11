@@ -2888,6 +2888,22 @@ func resetPreparePlan(
 				}
 			}
 		}
+		if transientQuery != nil && len(visitedRoots) > 0 {
+			roots := make([]int32, 0, len(visitedRoots))
+			for root := range visitedRoots {
+				roots = append(roots, root)
+			}
+			slices.Sort(roots)
+			query := *transientQuery
+			query.Steps = roots
+			queryPlan := &Plan{Plan: &plan.Plan_Query{Query: &query}}
+			if err := NewVisitPlan(queryPlan, []VisitPlanRule{resetRule}).Visit(ctx.GetContext()); err != nil {
+				return nil, nil, err
+			}
+			if err := visitMissingNodeExprs(&query, roots, []VisitPlanRule{resetRule}); err != nil {
+				return nil, nil, err
+			}
+		}
 		querySchemas, err := resolveIndexDependencies(getParamRule)
 		if err != nil {
 			return nil, nil, err

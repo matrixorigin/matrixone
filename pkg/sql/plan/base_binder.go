@@ -733,6 +733,40 @@ func (b *baseBinder) bindCaseExpr(astExpr *tree.CaseExpr, depth int32, isRoot bo
 }
 
 func (b *baseBinder) bindRangeCond(astExpr *tree.RangeCond, depth int32, isRoot bool) (*Expr, error) {
+	if _, tuple := astExpr.Left.(*tree.Tuple); !tuple &&
+		isDirectStringLiteralOrParam(astExpr.From) && isDirectStringLiteralOrParam(astExpr.To) {
+		left, err := b.impl.BindExpr(astExpr.Left, depth, false)
+		if err != nil {
+			return nil, err
+		}
+		if types.T(left.Typ.Id).IsDecimal() {
+			from, err := b.impl.BindExpr(astExpr.From, depth, false)
+			if err != nil {
+				return nil, err
+			}
+			to, err := b.impl.BindExpr(astExpr.To, depth, false)
+			if err != nil {
+				return nil, err
+			}
+			if isCharacterStringType(from.Typ.Id) && isCharacterStringType(to.Typ.Id) {
+				lowerOp, upperOp, logical := ">=", "<=", "and"
+				if astExpr.Not {
+					lowerOp, upperOp, logical = "<", ">", "or"
+				}
+				lower, err := bindMixedInListComparison(
+					b.GetContext(), lowerOp, DeepCopyExpr(left), from, isDirectDynamicParam(from))
+				if err != nil {
+					return nil, err
+				}
+				upper, err := bindMixedInListComparison(
+					b.GetContext(), upperOp, left, to, isDirectDynamicParam(to))
+				if err != nil {
+					return nil, err
+				}
+				return BindFuncExprImplByPlanExpr(b.GetContext(), logical, []*plan.Expr{lower, upper})
+			}
+		}
+	}
 	bind := func() (*Expr, error) {
 		if astExpr.Not {
 			// rewrite 'col not between 1, 20' to 'col < 1 or col > 20'
@@ -755,6 +789,17 @@ func (b *baseBinder) bindRangeCond(astExpr *tree.RangeCond, depth int32, isRoot 
 		return b.bindWithRawMySQLSpecialTypes(bind)
 	}
 	return bind()
+}
+
+func isDirectStringLiteralOrParam(expr tree.Expr) bool {
+	switch value := unwrapParenExpr(expr).(type) {
+	case *tree.ParamExpr:
+		return true
+	case *tree.NumVal:
+		return value.ValType == tree.P_char
+	default:
+		return false
+	}
 }
 
 func (b *baseBinder) bindUnaryExpr(astExpr *tree.UnaryExpr, depth int32, isRoot bool) (*Expr, error) {
@@ -2290,7 +2335,70 @@ func (b *baseBinder) bindComparisonExpr(astExpr *tree.ComparisonExpr, depth int3
 			return b.bindFuncExprImplByAstExpr(op, args, depth)
 		})
 	}
+	if isDecimalComparisonOperator(op) {
+		if expr, ok, err := b.bindDecimalScalarSubqueryComparison(op, astExpr.Left, astExpr.Right, depth); ok || err != nil {
+			return expr, err
+		}
+	}
 	return b.bindFuncExprImplByAstExpr(op, args, depth)
+}
+
+func (b *baseBinder) bindDecimalScalarSubqueryComparison(
+	op string,
+	leftAst tree.Expr,
+	rightAst tree.Expr,
+	depth int32,
+) (*Expr, bool, error) {
+	for _, candidate := range []struct {
+		subquery tree.Expr
+		peer     tree.Expr
+		subLeft  bool
+	}{
+		{subquery: leftAst, peer: rightAst, subLeft: true},
+		{subquery: rightAst, peer: leftAst},
+	} {
+		subquery, ok := scalarSubqueryExpr(candidate.subquery)
+		if !ok || subquery.Exists {
+			continue
+		}
+		peer, err := b.impl.BindExpr(candidate.peer, depth, false)
+		if err != nil {
+			return nil, true, err
+		}
+		if !types.T(peer.Typ.Id).IsDecimal() {
+			continue
+		}
+		subExpr, err := b.impl.BindExpr(candidate.subquery, depth, false)
+		if err != nil {
+			return nil, true, err
+		}
+		bindCurrentArgs := func() (*Expr, bool, error) {
+			boundArgs := []*Expr{peer, subExpr}
+			if candidate.subLeft {
+				boundArgs[0], boundArgs[1] = subExpr, peer
+			}
+			expr, bindErr := BindFuncExprImplByPlanExpr(b.GetContext(), op, boundArgs)
+			return expr, true, bindErr
+		}
+		projects := b.subqueryProjectList(subExpr)
+		if len(projects) != 1 || !isCharacterStringType(projects[0].Typ.Id) {
+			return bindCurrentArgs()
+		}
+		args := []*Expr{peer, projects[0]}
+		if err = normalizeDecimalStringLiteralComparisonArgs(b.GetContext(), op, args); err != nil {
+			return nil, true, err
+		}
+		if err = normalizeDecimalParamComparisonArgs(b.GetContext(), op, args); err != nil {
+			return nil, true, err
+		}
+		if !types.T(args[1].Typ.Id).IsDecimal() {
+			return bindCurrentArgs()
+		}
+		projects[0] = args[1]
+		subExpr.Typ = args[1].Typ
+		return bindCurrentArgs()
+	}
+	return nil, false, nil
 }
 
 func (b *baseBinder) bindWithRawMySQLSpecialTypes(bind func() (*Expr, error)) (*Expr, error) {
@@ -3779,6 +3887,7 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 		//if all the expr in the in list can safely cast to left type, we call it safe
 		if rightList := args[1].GetList(); rightList != nil {
 			exactSingleComparison := len(rightList.List) == 1
+			leftIsPreparedParam := isDirectDynamicParam(args[0])
 			typLeft := makeTypeByPlan2Expr(args[0])
 			leftIsConstNull := typLeft.Oid == types.T_any && args[0].GetLit() != nil && args[0].GetLit().Isnull
 			var inExprList, orExprList []*plan.Expr
@@ -3786,6 +3895,13 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 			for _, rightVal := range rightList.List {
 				if _, ok := rightVal.Expr.(*plan.Expr_List); ok && !partitionIn {
 					return nil, moerr.NewOperandColumns(ctx, 1)
+				}
+				// Prepared TEXT parameters derive their exact DECIMAL domain from
+				// the execution value. Do not pack them into the peer-typed IN
+				// vector, which would truncate scale before that value is known.
+				if !partitionIn && (leftIsPreparedParam || isDirectDynamicParam(rightVal)) {
+					orExprList = append(orExprList, rightVal)
+					continue
 				}
 				if leftIsConstNull && !partitionIn {
 					orExprList = append(orExprList, rightVal)
@@ -3839,7 +3955,8 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 			}
 			if name == "in" {
 				for _, expr := range orExprList {
-					tmpExpr, err := bindMixedInListComparison(ctx, "=", DeepCopyExpr(args[0]), expr, exactSingleComparison)
+					exactComparison := exactSingleComparison || leftIsPreparedParam || isDirectDynamicParam(expr)
+					tmpExpr, err := bindMixedInListComparison(ctx, "=", DeepCopyExpr(args[0]), expr, exactComparison)
 					if err != nil {
 						return nil, err
 					}
@@ -3848,7 +3965,8 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 				return combinePlanExprsBalanced(ctx, "or", expanded)
 			} else {
 				for _, expr := range orExprList {
-					tmpExpr, err := bindMixedInListComparison(ctx, "!=", DeepCopyExpr(args[0]), expr, exactSingleComparison)
+					exactComparison := exactSingleComparison || leftIsPreparedParam || isDirectDynamicParam(expr)
+					tmpExpr, err := bindMixedInListComparison(ctx, "!=", DeepCopyExpr(args[0]), expr, exactComparison)
 					if err != nil {
 						return nil, err
 					}
@@ -4817,6 +4935,7 @@ func normalizeDecimalParamComparisonArgs(ctx context.Context, name string, args 
 		if err != nil {
 			return err
 		}
+		castExpr.ExactDecimalParam = true
 		args[paramPos] = castExpr
 		return nil
 	}

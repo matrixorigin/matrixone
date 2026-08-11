@@ -246,6 +246,9 @@ message Expr {
   int32 aux_id = 16;
   double ndv = 17;
   double selectivity = 18;
+  // Marks a planner-injected DECIMAL cast whose target domain must be
+  // specialized from the actual prepared TEXT parameter value at EXECUTE.
+  bool exact_decimal_param = 19;
 }
 
 message FoldVal {
@@ -1855,6 +1858,10 @@ message ShowVariables {
 
 message SetVariables {
   repeated SetVariablesItem items = 1;
+  // SET scalar subqueries are planned in this transient query graph. Keep it
+  // with the DCL plan so prepared-parameter visitors see the same executable
+  // expressions as resetPreparePlan and execution.
+  Query query = 2;
 }
 
 message SetVariablesItem {
