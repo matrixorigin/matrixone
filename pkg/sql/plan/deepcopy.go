@@ -228,7 +228,16 @@ func DeepCopyRankOption(opt *plan.RankOption) *plan.RankOption {
 	}
 }
 
+// DeepCopyNode uses protobuf's generated field traversal so newly added plan
+// fields cannot silently disappear from execution-time copies.
 func DeepCopyNode(node *plan.Node) *plan.Node {
+	if node == nil {
+		return nil
+	}
+	return proto.Clone(node).(*plan.Node)
+}
+
+func deepCopyNodeLegacy(node *plan.Node) *plan.Node {
 	newNode := &Node{
 		NodeType:        node.NodeType,
 		NodeId:          node.NodeId,
@@ -682,6 +691,13 @@ func DeepCopyColData(col *plan.ColData) *plan.ColData {
 }
 
 func DeepCopyQuery(qry *plan.Query) *plan.Query {
+	if qry == nil {
+		return nil
+	}
+	return proto.Clone(qry).(*plan.Query)
+}
+
+func deepCopyQueryLegacy(qry *plan.Query) *plan.Query {
 	newQry := &plan.Query{
 		StmtType:            qry.StmtType,
 		Steps:               qry.Steps,
@@ -704,6 +720,13 @@ func DeepCopyQuery(qry *plan.Query) *plan.Query {
 }
 
 func DeepCopyPlan(pl *Plan) *Plan {
+	if pl == nil {
+		return nil
+	}
+	return proto.Clone(pl).(*plan.Plan)
+}
+
+func deepCopyPlanLegacy(pl *Plan) *Plan {
 	switch p := pl.Plan.(type) {
 	case *Plan_Query:
 		return &Plan{
@@ -730,6 +753,13 @@ func DeepCopyPlan(pl *Plan) *Plan {
 }
 
 func DeepCopyDataDefinition(old *plan.DataDefinition) *plan.DataDefinition {
+	if old == nil {
+		return nil
+	}
+	return proto.Clone(old).(*plan.DataDefinition)
+}
+
+func deepCopyDataDefinitionLegacy(old *plan.DataDefinition) *plan.DataDefinition {
 	newDf := &plan.DataDefinition{
 		DdlType: old.DdlType,
 	}

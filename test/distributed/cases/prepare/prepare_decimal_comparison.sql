@@ -142,4 +142,60 @@ EXECUTE p_ctas USING @p;
 SELECT COUNT(*) FROM ctas_decimal_param;
 DEALLOCATE PREPARE p_ctas;
 
+-- A copied prepared plan must preserve CTAS execution metadata on the matching path.
+DROP TABLE IF EXISTS ctas_decimal_exact;
+PREPARE p_ctas_exact FROM
+  'CREATE TABLE ctas_decimal_exact AS SELECT id,d128 FROM t WHERE d128=?';
+SET @p = '9007199254740992.0001';
+EXECUTE p_ctas_exact USING @p;
+SELECT id FROM ctas_decimal_exact ORDER BY id;
+DEALLOCATE PREPARE p_ctas_exact;
+
+-- OUTER APPLY, snapshot scans, and ODKU carry non-expression node semantics.
+CREATE TABLE apply_source (id INT, d DECIMAL(20,4), start_v INT, stop_v INT);
+INSERT INTO apply_source VALUES (1, 9007199254740992.0001, 1, 0);
+PREPARE p_outer_apply FROM
+  'SELECT s.id,g.result FROM apply_source s OUTER APPLY generate_series(s.start_v,s.stop_v,1) g WHERE s.d=?';
+SET @p = '9007199254740992.0001';
+EXECUTE p_outer_apply USING @p;
+DEALLOCATE PREPARE p_outer_apply;
+
+DROP SNAPSHOT IF EXISTS prepare_decimal_snapshot;
+CREATE TABLE snapshot_source (id INT, d DECIMAL(20,4));
+INSERT INTO snapshot_source VALUES (1, 9007199254740992.0001);
+CREATE SNAPSHOT prepare_decimal_snapshot FOR TABLE prepare_decimal_comparison snapshot_source;
+DELETE FROM snapshot_source;
+PREPARE p_snapshot FROM
+  'SELECT id FROM snapshot_source{snapshot="prepare_decimal_snapshot"} WHERE d=?';
+SET @p = '9007199254740992.0001';
+EXECUTE p_snapshot USING @p;
+DEALLOCATE PREPARE p_snapshot;
+DROP SNAPSHOT prepare_decimal_snapshot;
+
+CREATE TABLE odku_source (id INT, d DECIMAL(20,4), u INT, v INT);
+CREATE TABLE odku_target (id INT PRIMARY KEY, u INT UNIQUE, v INT);
+INSERT INTO odku_source VALUES (2, 9007199254740992.0001, 10, 200);
+INSERT INTO odku_target VALUES (1, 10, 100);
+PREPARE p_odku FROM
+  'INSERT INTO odku_target SELECT id,u,v FROM odku_source WHERE d=? ON DUPLICATE KEY UPDATE v=VALUES(v)';
+SET @p = '9007199254740992.0001';
+EXECUTE p_odku USING @p;
+SELECT id,u,v FROM odku_target;
+DEALLOCATE PREPARE p_odku;
+
+-- Parameters outside the exact comparison retain their runtime source kind.
+CREATE TABLE typed_param_target (id INT PRIMARY KEY, b BIT(8));
+INSERT INTO typed_param_target VALUES (1, 0);
+PREPARE p_bit_kind FROM
+  'UPDATE typed_param_target SET b=? WHERE EXISTS(SELECT 1 FROM t WHERE d128=?)';
+SET @value = 5, @p = '9007199254740992.0001';
+EXECUTE p_bit_kind USING @value,@p;
+SELECT HEX(b) FROM typed_param_target;
+DEALLOCATE PREPARE p_bit_kind;
+
+PREPARE p_json_kind FROM 'SELECT JSON_ARRAY(?) FROM t WHERE d128=?';
+SET @value = 5, @p = '9007199254740992.0001';
+EXECUTE p_json_kind USING @value,@p;
+DEALLOCATE PREPARE p_json_kind;
+
 DROP DATABASE prepare_decimal_comparison;

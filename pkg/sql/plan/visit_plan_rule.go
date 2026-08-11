@@ -392,15 +392,24 @@ func (rule *decrementParamOrdinalRule) ApplyExpr(e *plan.Expr) (*plan.Expr, erro
 // ---------------------------
 
 type ResetParamRefRule struct {
-	ctx      context.Context
-	params   []*Expr
-	exprMemo map[*plan.Expr]*plan.Expr
+	ctx                         context.Context
+	params                      []*Expr
+	exprMemo                    map[*plan.Expr]*plan.Expr
+	exactDecimalComparisonsOnly bool
 }
 
 func NewResetParamRefRule(ctx context.Context, params []*Expr) *ResetParamRefRule {
 	return &ResetParamRefRule{
 		ctx:    ctx,
 		params: params,
+	}
+}
+
+func NewResetExactDecimalComparisonParamRule(ctx context.Context, params []*Expr) *ResetParamRefRule {
+	return &ResetParamRefRule{
+		ctx:                         ctx,
+		params:                      params,
+		exactDecimalComparisonsOnly: true,
 	}
 }
 
@@ -452,7 +461,7 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 			}
 		}
 		for i, arg := range exprImpl.F.Args {
-			if _, ok := arg.Expr.(*plan.Expr_P); ok {
+			if _, ok := arg.Expr.(*plan.Expr_P); ok && !rule.exactDecimalComparisonsOnly {
 				needResetFunction = true
 			}
 			exprImpl.F.Args[i], err = rule.ApplyExpr(arg)
@@ -482,6 +491,9 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 	case *plan.Expr_W:
 		return applyWindowExpr(e, rule.ApplyExpr)
 	case *plan.Expr_P:
+		if rule.exactDecimalComparisonsOnly {
+			return e, nil
+		}
 		if int(exprImpl.P.Pos) >= len(rule.params) {
 			return nil, moerr.NewInternalErrorf(context.TODO(), "get prepare params error, index %d not exists", int(exprImpl.P.Pos))
 		}

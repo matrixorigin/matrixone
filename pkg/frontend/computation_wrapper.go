@@ -964,7 +964,7 @@ func initExecuteStmtParamWithResolverInSession(
 		prepareStmt.exactDecimalComparisonParamsSet = true
 	}
 	if prepareStmt.exactDecimalComparisonParams {
-		executionPlan, err = plan2.FillValuesOfParamsInPlan(reqCtx, executionPlan, cwft.paramVals)
+		executionPlan, err = plan2.FillExactDecimalComparisonParamsInPlan(reqCtx, executionPlan, cwft.paramVals)
 		if err != nil {
 			return nil, nil, nil, originSQL, false, err
 		}

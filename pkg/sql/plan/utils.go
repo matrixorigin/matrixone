@@ -3175,6 +3175,25 @@ func FillValuesOfParamsInPlan(ctx context.Context, preparePlan *Plan, paramVals 
 	return copied, nil
 }
 
+// FillExactDecimalComparisonParamsInPlan materializes only parameters whose
+// text value determines an exact DECIMAL comparison domain. Other parameter
+// references remain attached to the execution process, preserving protocol
+// source-kind metadata used by BIT, JSON, and other runtime conversions.
+func FillExactDecimalComparisonParamsInPlan(ctx context.Context, preparePlan *Plan, paramVals []any) (*Plan, error) {
+	copied := DeepCopyPlan(preparePlan)
+	if copied == nil {
+		return nil, nil
+	}
+	params := makePrepareParamExprs(paramVals)
+	visitor := NewVisitPlan(copied, []VisitPlanRule{
+		NewResetExactDecimalComparisonParamRule(ctx, params),
+	})
+	if err := visitor.Visit(ctx); err != nil {
+		return nil, err
+	}
+	return copied, nil
+}
+
 // PlanHasExactDecimalComparisonParam reports whether a prepared plan's
 // DECIMAL comparison domain depends on the actual text parameter.
 func PlanHasExactDecimalComparisonParam(ctx context.Context, preparePlan *Plan) (bool, error) {
@@ -3195,6 +3214,17 @@ type ParamValue struct {
 }
 
 func replaceParamVals(ctx context.Context, plan0 *Plan, paramVals []any) error {
+	params := makePrepareParamExprs(paramVals)
+	paramRule := NewResetParamRefRule(ctx, params)
+	VisitQuery := NewVisitPlan(plan0, []VisitPlanRule{paramRule})
+	err := VisitQuery.Visit(ctx)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func makePrepareParamExprs(paramVals []any) []*Expr {
 	params := make([]*Expr, len(paramVals))
 	for i, val := range paramVals {
 		isBin := false
@@ -3222,13 +3252,7 @@ func replaceParamVals(ctx context.Context, plan0 *Plan, paramVals []any) error {
 			}
 		}
 	}
-	paramRule := NewResetParamRefRule(ctx, params)
-	VisitQuery := NewVisitPlan(plan0, []VisitPlanRule{paramRule})
-	err := VisitQuery.Visit(ctx)
-	if err != nil {
-		return err
-	}
-	return nil
+	return params
 }
 
 // XXX: Any code relying on Name in ColRef, except for "explain", is bad design and practically buggy.

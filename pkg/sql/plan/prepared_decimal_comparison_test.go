@@ -341,3 +341,35 @@ func TestFillPreparedDecimalComparisonPreservesPlanMessages(t *testing.T) {
 	require.Equal(t, wantSend, filled.GetQuery().Nodes[0].SendMsgList)
 	require.Equal(t, wantRecv, filled.GetQuery().Nodes[0].RecvMsgList)
 }
+
+func TestFillExactDecimalComparisonLeavesOtherParamsForRuntimeTyping(t *testing.T) {
+	ctx := context.Background()
+	decimalType := types.New(types.T_decimal128, 20, 4)
+	comparison, err := BindFuncExprImplByPlanExpr(ctx, "=", []*planpb.Expr{
+		makePreparedDecimalComparisonColumn(decimalType), makePreparedDecimalComparisonParam(1),
+	})
+	require.NoError(t, err)
+	ordinaryParam := &planpb.Expr{
+		Typ:  planpb.Type{Id: int32(types.T_text)},
+		Expr: &planpb.Expr_P{P: &planpb.ParamRef{Pos: 0}},
+	}
+	prepared := &planpb.Plan{Plan: &planpb.Plan_Query{Query: &planpb.Query{
+		Steps: []int32{0},
+		Nodes: []*planpb.Node{{
+			NodeType:    planpb.Node_PROJECT,
+			ProjectList: []*planpb.Expr{ordinaryParam},
+			FilterList:  []*planpb.Expr{comparison},
+		}},
+	}}}
+
+	filled, err := FillExactDecimalComparisonParamsInPlan(ctx, prepared, []any{
+		ParamValue{Value: "5"}, ParamValue{Value: "9007199254740992.0001"},
+	})
+	require.NoError(t, err)
+	require.NotNil(t, filled.GetQuery().Nodes[0].ProjectList[0].GetP())
+	require.False(t, planExprContainsPreparedDecimalParam(
+		findPreparedDecimalComparisonInPlan(filled, "=")))
+	require.NotNil(t, prepared.GetQuery().Nodes[0].ProjectList[0].GetP())
+	require.True(t, planExprContainsPreparedDecimalParam(
+		findPreparedDecimalComparisonInPlan(prepared, "=")))
+}
