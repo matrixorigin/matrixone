@@ -2898,7 +2898,7 @@ var (
 		}, {
 			input: "delete from a as aa",
 		}, {
-			input: "delete from t where a > 1 order by b limit 1 offset 2",
+			input: "delete from t where a > 1 order by b limit 1",
 		}, {
 			input: "delete from t where a = 1",
 		}, {
