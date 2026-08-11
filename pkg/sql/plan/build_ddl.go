@@ -161,11 +161,13 @@ func genViewTableDef(ctx CompilerContext, stmt *tree.Select, colNames tree.Ident
 	// check view statement
 	var stmtPlan *Plan
 	var outputColumnProvenance []OutputColumnProvenance
+	var expandedSelectList tree.SelectExprs
 	captureColumnTypes := func(bindCtx *BindContext) {
 		outputColumnProvenance = make([]OutputColumnProvenance, len(bindCtx.headings))
 		for i := range outputColumnProvenance {
 			outputColumnProvenance[i] = bindCtx.outputColumnProvenanceForProject(int32(i))
 		}
+		expandedSelectList = cloneTreeSelectExprs(bindCtx.expandedSelectList)
 	}
 	var err error
 	switch s := stmt.Select.(type) {
@@ -234,6 +236,11 @@ func genViewTableDef(ctx CompilerContext, stmt *tree.Select, colNames tree.Ident
 			viewSql = strings.Replace(viewSql, "alter", "create", 1)
 		}
 	}
+	persistedCreateSQL := rootSQL
+	if stableViewSQL, rewritten := stableViewSQLWithExpandedStars(ctx, stmt, viewSql, expandedSelectList); rewritten {
+		viewSql = stableViewSQL
+		persistedCreateSQL = stableViewSQL
+	}
 
 	viewData, err := json.Marshal(ViewData{
 		Stmt:            viewSql,
@@ -254,7 +261,7 @@ func genViewTableDef(ctx CompilerContext, stmt *tree.Select, colNames tree.Ident
 		},
 		{
 			Key:   catalog.SystemRelAttr_CreateSQL,
-			Value: rootSQL,
+			Value: persistedCreateSQL,
 		},
 	}
 	tableDef.Defs = append(tableDef.Defs, &plan.TableDef_DefType{
@@ -266,6 +273,122 @@ func genViewTableDef(ctx CompilerContext, stmt *tree.Select, colNames tree.Ident
 	})
 
 	return &tableDef, nil
+}
+
+func stableViewSQLWithExpandedStars(
+	ctx CompilerContext,
+	stmt *tree.Select,
+	viewSql string,
+	expandedSelectList tree.SelectExprs,
+) (string, bool) {
+	if viewSql == "" || len(expandedSelectList) == 0 || !viewSelectHasStar(stmt) {
+		return viewSql, false
+	}
+
+	stableSelect, ok := viewSelectWithExpandedSelectList(stmt, expandedSelectList)
+	if !ok {
+		return viewSql, false
+	}
+
+	parserSQLMode := ""
+	if sqlMode := parserSQLModeFromContext(ctx); sqlMode != nil {
+		parserSQLMode = *sqlMode
+	}
+	stmts, err := mysql.ParseWithSQLMode(ctx.GetContext(), viewSql, ctx.GetLowerCaseTableNames(), parserSQLMode)
+	if err != nil {
+		return viewSql, false
+	}
+	defer func() {
+		for _, statement := range stmts {
+			statement.Free()
+		}
+	}()
+	if len(stmts) != 1 {
+		return viewSql, false
+	}
+
+	switch viewStmt := stmts[0].(type) {
+	case *tree.CreateView:
+		stableStmt := *viewStmt
+		stableStmt.AsSource = stableSelect
+		return formatStableViewSQL(&stableStmt), true
+	case *tree.AlterView:
+		stableStmt := &tree.CreateView{
+			Name:     viewStmt.Name,
+			ColNames: viewStmt.ColNames,
+			AsSource: stableSelect,
+		}
+		return formatStableViewSQL(stableStmt), true
+	default:
+		return viewSql, false
+	}
+}
+
+func formatStableViewSQL(stmt *tree.CreateView) string {
+	return tree.StringWithOpts(
+		stmt,
+		dialect.MYSQL,
+		tree.WithQuoteIdentifier(),
+		tree.WithSingleQuoteString(),
+		tree.WithModeIndependentStringLiterals(),
+	)
+}
+
+func viewSelectHasStar(stmt *tree.Select) bool {
+	if stmt == nil {
+		return false
+	}
+	switch selectStmt := stmt.Select.(type) {
+	case *tree.SelectClause:
+		for _, expr := range selectStmt.Exprs {
+			if selectExprHasStar(expr) {
+				return true
+			}
+		}
+	case *tree.ParenSelect:
+		return viewSelectHasStar(selectStmt.Select)
+	}
+	return false
+}
+
+func selectExprHasStar(selectExpr tree.SelectExpr) bool {
+	switch expr := selectExpr.Expr.(type) {
+	case tree.UnqualifiedStar:
+		return true
+	case *tree.UnresolvedName:
+		return expr.Star
+	case *tree.SampleExpr:
+		_, isStar := expr.GetColumns()
+		if isStar {
+			return true
+		}
+	}
+	return false
+}
+
+func viewSelectWithExpandedSelectList(stmt *tree.Select, expandedSelectList tree.SelectExprs) (*tree.Select, bool) {
+	if stmt == nil {
+		return nil, false
+	}
+	stableSelect := *stmt
+	switch selectStmt := stmt.Select.(type) {
+	case *tree.SelectClause:
+		stableClause := *selectStmt
+		stableClause.Exprs = cloneTreeSelectExprs(expandedSelectList)
+		stableSelect.Select = &stableClause
+		return &stableSelect, true
+	case *tree.ParenSelect:
+		innerSelect, ok := viewSelectWithExpandedSelectList(selectStmt.Select, expandedSelectList)
+		if !ok {
+			return nil, false
+		}
+		stableParen := *selectStmt
+		stableParen.Select = innerSelect
+		stableSelect.Select = &stableParen
+		return &stableSelect, true
+	default:
+		return nil, false
+	}
 }
 
 func genAsSelectCols(ctx CompilerContext, stmt *tree.Select, isPrepareStmt bool) ([]*ColDef, *Query, error) {

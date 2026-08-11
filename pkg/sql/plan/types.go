@@ -458,6 +458,12 @@ type BindContext struct {
 	boundCtes map[string]*CTERef
 	headings  []string
 
+	// expandedSelectList is the SELECT-list after star expansion and column
+	// qualification for this query block. CREATE VIEW persists it when the
+	// original view body used '*' so later base-table DDL cannot change the
+	// view's selected column set.
+	expandedSelectList tree.SelectExprs
+
 	groupTag     int32
 	aggregateTag int32
 	projectTag   int32
