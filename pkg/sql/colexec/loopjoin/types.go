@@ -125,6 +125,20 @@ type container struct {
 	rightBatchOffset []uint64
 	rightMatchedIter bitmap.Iterator
 	rightMatchedBat  int // monotonically advancing batIdx during finalize
+
+	// Byte-admission diagnostics are deliberately kept local to an operator
+	// execution.  Sampling avoids putting a clock read on every output row,
+	// while the counters make an EXPLAIN ANALYZE run identify whether the byte
+	// bound is material on a production-sized input.
+	byteAdmissionRowChecks       int64
+	byteAdmissionSizeChecks      int64
+	byteAdmissionRejectedRows    int64
+	byteAdmissionEstimatedBytes  int64
+	byteAdmissionRowSampleNanos  int64
+	byteAdmissionSizeSampleNanos int64
+	byteAdmissionRowSamples      int64
+	byteAdmissionSizeSamples     int64
+	byteAdmissionStatsFlushed    bool
 }
 
 type LoopJoin struct {
@@ -260,6 +274,15 @@ func (loopJoin *LoopJoin) Reset(proc *process.Process, pipelineFailed bool, err 
 	ctr.cleanRightMatchState(proc)
 	ctr.rightMatchedIter = nil
 	ctr.rightMatchedBat = 0
+	ctr.byteAdmissionRowChecks = 0
+	ctr.byteAdmissionSizeChecks = 0
+	ctr.byteAdmissionRejectedRows = 0
+	ctr.byteAdmissionEstimatedBytes = 0
+	ctr.byteAdmissionRowSampleNanos = 0
+	ctr.byteAdmissionSizeSampleNanos = 0
+	ctr.byteAdmissionRowSamples = 0
+	ctr.byteAdmissionSizeSamples = 0
+	ctr.byteAdmissionStatsFlushed = false
 }
 
 func (loopJoin *LoopJoin) Free(proc *process.Process, pipelineFailed bool, err error) {
