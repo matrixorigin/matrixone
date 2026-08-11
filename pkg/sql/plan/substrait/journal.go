@@ -28,7 +28,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
-	"github.com/matrixorigin/matrixone/pkg/lockservice"
 )
 
 // JSON base64-expands the 64 MiB manifest and 1 MiB schema by 4/3. The
@@ -41,11 +40,11 @@ const (
 	journalCleanupBatchSize = 128
 )
 
-// FileServiceLeaseJournal persists leases in the shared file service. The
+// fileServiceLeaseJournal persists leases in the shared file service. The
 // immutable record contains the payload while a separate write-once authority
 // object is the lease's single active state. Terminal release atomically
 // deletes that authority before GC protection is removed.
-type FileServiceLeaseJournal struct {
+type fileServiceLeaseJournal struct {
 	fs           fileservice.FileService
 	prefix       string
 	admissionKey string
@@ -80,23 +79,16 @@ type journalEnvelope struct {
 	SHA256 []byte        `json:"sha256"`
 }
 
-// NewFileServiceLeaseJournal constructs the production persistent journal.
-// Requiring LockService here prevents runtime wiring from accidentally using a
-// process-local mutex for a cluster-wide capacity invariant.
-func NewFileServiceLeaseJournal(fs fileservice.FileService, prefix string, locks lockservice.LockService) (*FileServiceLeaseJournal, error) {
-	admission, err := newLockServiceJournalAdmission(locks)
-	if err != nil {
-		return nil, err
-	}
-	return newFileServiceLeaseJournal(fs, prefix, admission)
-}
-
-func newFileServiceLeaseJournal(fs fileservice.FileService, prefix string, admission journalAdmissionCoordinator) (*FileServiceLeaseJournal, error) {
+// newFileServiceLeaseJournal remains internal until MatrixOne has a durable
+// coordinator whose ownership transfer is atomic with FileService publication.
+// A lock-table bind alone is insufficient: allocator failover can transfer the
+// bind while the old callback is still completing a write.
+func newFileServiceLeaseJournal(fs fileservice.FileService, prefix string, admission journalAdmissionCoordinator) (*fileServiceLeaseJournal, error) {
 	prefix = strings.Trim(path.Clean(prefix), "/")
 	if fs == nil || prefix == "" || prefix == "." || strings.HasPrefix(prefix, "..") || admission == nil {
 		return nil, moerr.NewInternalErrorNoCtx("substrait: invalid lease journal configuration")
 	}
-	return &FileServiceLeaseJournal{
+	return &fileServiceLeaseJournal{
 		fs:           fs,
 		prefix:       prefix,
 		admissionKey: strings.ToLower(fs.Name()) + ":" + prefix,
@@ -107,7 +99,7 @@ func newFileServiceLeaseJournal(fs fileservice.FileService, prefix string, admis
 // StoreIfCapacity is the journal-level admission linearization point. The
 // coordinator owns namespace-wide exclusion rather than a LeaseManager or one
 // journal object, so independent CNs cannot admit past the configured cap.
-func (j *FileServiceLeaseJournal) StoreIfCapacity(ctx context.Context, leases []*Lease, maximum int) (int, error) {
+func (j *fileServiceLeaseJournal) StoreIfCapacity(ctx context.Context, leases []*Lease, maximum int) (int, error) {
 	if len(leases) == 0 || maximum <= 0 || len(leases) > maximum {
 		return 0, moerr.NewInternalErrorNoCtx("substrait: invalid lease journal admission")
 	}
@@ -142,7 +134,7 @@ func (j *FileServiceLeaseJournal) StoreIfCapacity(ctx context.Context, leases []
 	return len(leases), nil
 }
 
-func (j *FileServiceLeaseJournal) store(ctx context.Context, lease *Lease) error {
+func (j *fileServiceLeaseJournal) store(ctx context.Context, lease *Lease) error {
 	if lease == nil || lease.Read == nil || len(lease.Read.ReadRef) != 32 {
 		return moerr.NewInternalErrorNoCtx("substrait: invalid lease journal record")
 	}
@@ -193,7 +185,7 @@ func (j *FileServiceLeaseJournal) store(ctx context.Context, lease *Lease) error
 // Active validates the immutable record and its single authority object. The
 // final backing-store stat is the durable linearization point against
 // MarkReleased: it either precedes the atomic delete or observes revocation.
-func (j *FileServiceLeaseJournal) Active(ctx context.Context, lease *Lease) (bool, error) {
+func (j *fileServiceLeaseJournal) Active(ctx context.Context, lease *Lease) (bool, error) {
 	if lease == nil || lease.Read == nil || len(lease.Read.ReadRef) != 32 {
 		return false, moerr.NewInternalErrorNoCtx("substrait: invalid active read lease")
 	}
@@ -231,7 +223,7 @@ func (j *FileServiceLeaseJournal) Active(ctx context.Context, lease *Lease) (boo
 	return active, nil
 }
 
-func (j *FileServiceLeaseJournal) MarkReleased(ctx context.Context, readRef []byte) error {
+func (j *fileServiceLeaseJournal) MarkReleased(ctx context.Context, readRef []byte) error {
 	if len(readRef) != 32 {
 		return moerr.NewInternalErrorNoCtx("substrait: invalid released read reference")
 	}
@@ -242,7 +234,7 @@ func (j *FileServiceLeaseJournal) MarkReleased(ctx context.Context, readRef []by
 	return err
 }
 
-func (j *FileServiceLeaseJournal) Delete(ctx context.Context, readRef []byte) error {
+func (j *fileServiceLeaseJournal) Delete(ctx context.Context, readRef []byte) error {
 	if len(readRef) != 32 {
 		return moerr.NewInternalErrorNoCtx("substrait: invalid deleted read reference")
 	}
@@ -254,13 +246,13 @@ func (j *FileServiceLeaseJournal) Delete(ctx context.Context, readRef []byte) er
 	return nil
 }
 
-func (j *FileServiceLeaseJournal) Load(ctx context.Context, visit func(*Lease) error) error {
+func (j *fileServiceLeaseJournal) Load(ctx context.Context, visit func(*Lease) error) error {
 	return j.admission.RunExclusive(ctx, j.admissionKey, func(exclusiveCtx context.Context) error {
 		return j.load(exclusiveCtx, visit)
 	})
 }
 
-func (j *FileServiceLeaseJournal) load(ctx context.Context, visit func(*Lease) error) error {
+func (j *fileServiceLeaseJournal) load(ctx context.Context, visit func(*Lease) error) error {
 	if visit == nil {
 		return moerr.NewInternalErrorNoCtx("substrait: missing lease journal visitor")
 	}
@@ -341,7 +333,7 @@ func (j *FileServiceLeaseJournal) load(ctx context.Context, visit func(*Lease) e
 // cleanOrphanAuthorities never retains the journal namespace. A fixed-size
 // batch also keeps deletion outside FileService.List callbacks, which may hold
 // an implementation read lock while yielding entries.
-func (j *FileServiceLeaseJournal) cleanOrphanAuthorities(ctx context.Context) error {
+func (j *fileServiceLeaseJournal) cleanOrphanAuthorities(ctx context.Context) error {
 	dir := path.Join(j.prefix, "authority")
 	for {
 		orphans := make([]string, 0, journalCleanupBatchSize)
@@ -399,11 +391,11 @@ func leaseAuthorityDigest(lease *Lease) [sha256.Size]byte {
 	return result
 }
 
-func (j *FileServiceLeaseJournal) writeOnce(ctx context.Context, name string, data []byte) error {
+func (j *fileServiceLeaseJournal) writeOnce(ctx context.Context, name string, data []byte) error {
 	return j.fs.Write(ctx, fileservice.IOVector{FilePath: name, Entries: []fileservice.IOEntry{{Offset: 0, Size: int64(len(data)), Data: data}}})
 }
 
-func (j *FileServiceLeaseJournal) read(ctx context.Context, name string) ([]byte, error) {
+func (j *fileServiceLeaseJournal) read(ctx context.Context, name string) ([]byte, error) {
 	vector := fileservice.IOVector{FilePath: name, Entries: []fileservice.IOEntry{{Offset: 0, Size: -1}}}
 	if err := j.fs.Read(ctx, &vector); err != nil {
 		return nil, err
@@ -415,7 +407,7 @@ func (j *FileServiceLeaseJournal) read(ctx context.Context, name string) ([]byte
 	return append([]byte(nil), vector.Entries[0].Data...), nil
 }
 
-func (j *FileServiceLeaseJournal) readHeader(ctx context.Context, name string) ([]byte, error) {
+func (j *fileServiceLeaseJournal) readHeader(ctx context.Context, name string) ([]byte, error) {
 	vector := fileservice.IOVector{FilePath: name, Entries: []fileservice.IOEntry{{Offset: 0, Size: int64(journalHeaderSize)}}}
 	if err := j.fs.Read(ctx, &vector); err != nil {
 		return nil, err
@@ -427,7 +419,7 @@ func (j *FileServiceLeaseJournal) readHeader(ctx context.Context, name string) (
 	return append([]byte(nil), vector.Entries[0].Data...), nil
 }
 
-func (j *FileServiceLeaseJournal) readAuthority(ctx context.Context, readRef []byte) ([]byte, error) {
+func (j *fileServiceLeaseJournal) readAuthority(ctx context.Context, readRef []byte) ([]byte, error) {
 	vector := fileservice.IOVector{FilePath: j.authorityPath(readRef), Entries: []fileservice.IOEntry{{Offset: 0, Size: sha256.Size}}}
 	if err := j.fs.Read(ctx, &vector); err != nil {
 		return nil, err
@@ -443,7 +435,7 @@ func (j *FileServiceLeaseJournal) readAuthority(ctx context.Context, readRef []b
 // FileService.Read above preserves the digest's independent lease/SPKI binding
 // but may be served by vector, memory, disk, or remote caches owned by another
 // CN. StatFile reaches the backing store, so its result linearizes with delete.
-func (j *FileServiceLeaseJournal) authorityActive(ctx context.Context, readRef []byte) (bool, error) {
+func (j *fileServiceLeaseJournal) authorityActive(ctx context.Context, readRef []byte) (bool, error) {
 	entry, err := j.fs.StatFile(ctx, j.authorityPath(readRef))
 	if moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
 		return false, nil
@@ -457,11 +449,11 @@ func (j *FileServiceLeaseJournal) authorityActive(ctx context.Context, readRef [
 	return true, nil
 }
 
-func (j *FileServiceLeaseJournal) activePath(readRef []byte) string {
+func (j *fileServiceLeaseJournal) activePath(readRef []byte) string {
 	return path.Join(j.prefix, "active", hex.EncodeToString(readRef)+".json")
 }
 
-func (j *FileServiceLeaseJournal) authorityPath(readRef []byte) string {
+func (j *fileServiceLeaseJournal) authorityPath(readRef []byte) string {
 	return path.Join(j.prefix, "authority", hex.EncodeToString(readRef))
 }
 

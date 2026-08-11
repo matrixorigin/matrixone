@@ -635,12 +635,6 @@ func (s *service) handleCheckActiveTxn(
 	resp *pb.Response,
 	cs morpc.ClientSession) {
 	resp.CheckActiveTxn.Valid = s.serviceID == req.CheckActiveTxn.ServiceID
-	if resp.CheckActiveTxn.Valid && s.activeTxnHolder != nil {
-		// Exclusive callbacks use synthetic transaction IDs and therefore never
-		// appear in TxnIterFunc. They remain authoritative activity from before
-		// their remote holder can become visible until the callback has returned.
-		resp.CheckActiveTxn.Active = s.activeTxnHolder.hasExclusiveLockActivity(req.CheckActiveTxn.Txn)
-	}
 	if resp.CheckActiveTxn.Valid && s.unknownCommitResolver != nil {
 		// TxnIterFunc tracks frontend transaction operators. An unknown Commit
 		// can already have removed its operator while lockservice is still
@@ -648,8 +642,7 @@ func (s *service) handleCheckActiveTxn(
 		// owned state must delay orphan cleanup. activeTxnHolder also contains
 		// ordinary lockservice holders, whose liveness must remain governed by
 		// TxnIterFunc.
-		resp.CheckActiveTxn.Active = resp.CheckActiveTxn.Active ||
-			s.unknownCommitResolver.isPending(req.CheckActiveTxn.Txn)
+		resp.CheckActiveTxn.Active = s.unknownCommitResolver.isPending(req.CheckActiveTxn.Txn)
 	}
 	if resp.CheckActiveTxn.Valid && !resp.CheckActiveTxn.Active && s.cfg.TxnIterFunc != nil {
 		s.cfg.TxnIterFunc(func(txnID []byte) bool {

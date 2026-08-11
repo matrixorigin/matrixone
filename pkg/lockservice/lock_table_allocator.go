@@ -602,21 +602,7 @@ func (l *lockTableAllocator) tryRebindLocked(
 	}
 	// find a valid table and service bind
 	if old.Valid {
-		// A GetBind from the current owner is positive liveness evidence. This is
-		// normally redundant with KeepLockTableBind, but it also lets a remote
-		// exclusive-callback holder renew the exact owner generation that granted
-		// its lock. The generation check in timeout cleanup makes this handoff
-		// atomic with invalidation; requests from any other service do not renew it.
-		if old.ServiceID == binds.serviceID {
-			if !binds.active() {
-				old.Valid = false
-				l.getLockTablesLocked(group)[tableID] = old
-			} else {
-				return old
-			}
-		} else {
-			return old
-		}
+		return old
 	}
 
 	// reaches here, it means that the original table and service bindings have
