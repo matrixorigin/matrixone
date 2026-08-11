@@ -804,13 +804,23 @@ const (
 	MAX_BY          = 559
 	MAX_BY_NON_NULL = 560
 
+	// Version-specific UUID generators. Plain uuid() generates UUIDv7 and
+	// uuid_v7 is registered as an alias for it.
+	UUID_V1 = 562
+	UUID_V4 = 563
+	UUID_V6 = 564
+	// PostgreSQL-style UUID inspection functions.
+	UUID_EXTRACT_VERSION   = 565
+	UUID_EXTRACT_TIMESTAMP = 566
+
 	// LOAD_TEXT reads a datalink and returns its EXTRACTED plain text (PDF/DOCX parsed
-	// via GetPlainText), unlike load_file which returns raw bytes.
-	LOAD_TEXT = 562
+	// via GetPlainText), unlike load_file which returns raw bytes. Renumbered as main
+	// merges claim ids (562->567); referenced by name only, so renumbering is safe.
+	LOAD_TEXT = 567
 
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
-	FUNCTION_END_NUMBER = 563
+	FUNCTION_END_NUMBER = 568
 )
 
 // functionIdRegister is what function we have registered already.
@@ -1125,6 +1135,12 @@ var functionIdRegister = map[string]int32{
 	"trigger_fault_point":            TRIGGER_FAULT_POINT,
 	"mo_win_truncate":                MO_WIN_TRUNCATE,
 	"uuid":                           UUID,
+	"uuid_v7":                        UUID,
+	"uuid_v1":                        UUID_V1,
+	"uuid_v4":                        UUID_V4,
+	"uuid_v6":                        UUID_V6,
+	"uuid_extract_version":           UUID_EXTRACT_VERSION,
+	"uuid_extract_timestamp":         UUID_EXTRACT_TIMESTAMP,
 	"is_uuid":                        IS_UUID,
 	"uuid_to_bin":                    UUID_TO_BIN,
 	"bin_to_uuid":                    BIN_TO_UUID,
