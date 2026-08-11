@@ -5823,6 +5823,54 @@ func TestApplyIndicesForProjectPushesTopValueThroughRegularIndexPKOrderAsc(t *te
 	assert.Equal(t, catalog.IndexTableIndexColName, scanNode.IndexReaderParam.OrderBy[0].Expr.GetCol().Name)
 }
 
+func TestApplyIndicesForProjectSkipsOrderedLimitForFloatSortKey(t *testing.T) {
+	floatType := planpb.Type{Id: int32(types.T_float64)}
+	builder, rootNodeID := makeTestRegularIndexProjectBuilder(
+		t,
+		2,
+		GetColExpr(floatType, 100, 1),
+		planpb.OrderBySpec_DESC,
+	)
+	scanNode := builder.qry.Nodes[0]
+	sortNode := builder.qry.Nodes[2]
+	scanNode.TableDef.Cols[1].Typ = floatType
+	sortNode.OrderBy[0].Expr.Typ = floatType
+
+	_, err := builder.applyIndicesForProject(rootNodeID, builder.qry.Nodes[rootNodeID], map[[2]int32]int{}, map[[2]int32]*planpb.Expr{})
+	require.NoError(t, err)
+
+	// The hidden key can still deliver ordered candidates, but a reader-side
+	// LIMIT would discard a SQL-earlier NaN under the distinct float ordering.
+	require.Len(t, scanNode.OrderBy, 1)
+	assert.Nil(t, scanNode.IndexReaderParam)
+}
+
+func TestApplyIndicesForProjectSkipsFloatCursorRangeRewrite(t *testing.T) {
+	floatType := planpb.Type{Id: int32(types.T_float64)}
+	builder, rootNodeID := makeTestRegularIndexProjectBuilder(
+		t,
+		2,
+		GetColExpr(floatType, 100, 1),
+		planpb.OrderBySpec_DESC,
+	)
+	scanNode := builder.qry.Nodes[0]
+	sortNode := builder.qry.Nodes[2]
+	scanNode.TableDef.Cols[1].Typ = floatType
+	sortNode.OrderBy[0].Expr.Typ = floatType
+	floatCursor, err := BindFuncExprImplByPlanExpr(context.Background(), "<", []*planpb.Expr{
+		GetColExpr(floatType, 100, 1),
+		MakePlan2Float64ConstExprWithType(4900),
+	})
+	require.NoError(t, err)
+	scanNode.FilterList = []*planpb.Expr{makeTestRegularIndexPrefixEq(t, 2), floatCursor}
+
+	_, err = builder.applyIndicesForProject(rootNodeID, builder.qry.Nodes[rootNodeID], map[[2]int32]int{}, map[[2]int32]*planpb.Expr{})
+	require.NoError(t, err)
+
+	assert.Nil(t, scanNode.IndexReaderParam)
+	assert.True(t, isRegularIndexFullPrefixEquality(scanNode.FilterList[0], 2))
+}
+
 func TestApplyIndicesForProjectSkipsOrderedLimitWithAdditionalResidualFilter(t *testing.T) {
 	builder, rootNodeID := makeTestRegularIndexProjectBuilder(
 		t,
@@ -5903,6 +5951,20 @@ func TestHandleMessageFromTopToScanRewritesRegularIndexPKOrderToHiddenKey(t *tes
 	assert.Equal(t, int32(100), indexParamCol.RelPos)
 	assert.Equal(t, int32(0), indexParamCol.ColPos)
 	assert.Equal(t, catalog.IndexTableIndexColName, indexParamCol.Name)
+}
+
+func TestHandleMessageFromTopToScanSkipsOrderedLimitForFloatSortKey(t *testing.T) {
+	builder, rootNodeID := makeTestRegularIndexMessageBuilder(t, 2, 1, planpb.OrderBySpec_DESC)
+	floatType := planpb.Type{Id: int32(types.T_float64)}
+	scanNode := builder.qry.Nodes[0]
+	sortNode := builder.qry.Nodes[1]
+	scanNode.TableDef.Cols[1].Typ = floatType
+	sortNode.OrderBy[0].Expr.Typ = floatType
+
+	builder.handleMessageFromTopToScan(rootNodeID)
+
+	require.Len(t, scanNode.OrderBy, 1)
+	assert.Nil(t, scanNode.IndexReaderParam)
 }
 
 func TestHandleMessageFromTopToScanThroughDirectProjection(t *testing.T) {

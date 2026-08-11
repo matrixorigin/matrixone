@@ -744,8 +744,9 @@ func (builder *QueryBuilder) buildRegularIndexTopSortContext(projNode *plan.Node
 	if !canUseRegularIndexHiddenSortKey(scanNode, orderExprCol) {
 		return nil
 	}
-	pushOrderedLimit := canPushRegularIndexOrderedLimit(scanNode)
-	if !pushOrderedLimit && isPositiveLiteralLimit(sortNode.Limit) {
+	orderedLimitSafe := regularIndexOrderedLimitSafe(orderExpr)
+	pushOrderedLimit := orderedLimitSafe && canPushRegularIndexOrderedLimit(scanNode)
+	if orderedLimitSafe && !pushOrderedLimit && isPositiveLiteralLimit(sortNode.Limit) {
 		pushOrderedLimit = builder.rewriteRegularIndexCursorRangeFilter(scanNode)
 	}
 
@@ -1091,7 +1092,7 @@ func (builder *QueryBuilder) applyForceIndexHintToScan(scanNode *plan.Node, requ
 					Expr: GetColExpr(idxNode.TableDef.Cols[0].Typ, idxNode.BindingTags[0], 0),
 					Flag: requirement.orderFlag,
 				}}
-				if covering && len(idxNode.FilterList) == 0 && requirement.limit != nil && requirement.canPushLim {
+				if covering && len(idxNode.FilterList) == 0 && requirement.limit != nil && requirement.canPushLim && regularIndexOrderedLimitSafe(requirement.columns...) {
 					applyRegularIndexOrderedLimitParam(idxNode, idxNode.OrderBy[0], requirement.limit)
 				}
 			}
@@ -1336,6 +1337,24 @@ func canPushRegularIndexOrderedLimit(scanNode *plan.Node) bool {
 	// Static reader limit is valid only when index scan candidates exactly match the SQL filter.
 	numKeyParts := len(scanNode.IndexScanInfo.Parts) - 1
 	return isRegularIndexFullPrefixEquality(scanNode.FilterList[0], numKeyParts)
+}
+
+// regularIndexOrderedLimitSafe reports whether an index reader may truncate an
+// ordered scan before the SQL sort runs. Float NaNs have a deterministic SQL
+// sort order, but their serialized regular-index keys are not proven to share
+// that order. Keep the existing index access path, while leaving all candidates
+// for the SQL top/sort to compare when any logical sort key is a float.
+func regularIndexOrderedLimitSafe(orderExprs ...*plan.Expr) bool {
+	for _, expr := range orderExprs {
+		if expr == nil {
+			return false
+		}
+		switch types.T(expr.Typ.Id) {
+		case types.T_float32, types.T_float64:
+			return false
+		}
+	}
+	return len(orderExprs) > 0
 }
 
 func isRegularIndexFullPrefixEquality(expr *plan.Expr, numKeyParts int) bool {

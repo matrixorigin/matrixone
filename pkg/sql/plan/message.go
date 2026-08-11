@@ -101,7 +101,8 @@ func (builder *QueryBuilder) handleMessageFromTopToScan(nodeID int32) {
 	scanOrderBy.Expr = scanOrderExpr
 	enableOrderedLimit := false
 	if canUseRegularIndexHiddenSortKey(scanNode, scanOrderByCol) {
-		eligibleOrderedLimit := staticLimitSafe && node.Offset == nil && node.RankOption == nil && isPositiveLiteralLimit(node.Limit)
+		eligibleOrderedLimit := staticLimitSafe && node.Offset == nil && node.RankOption == nil &&
+			isPositiveLiteralLimit(node.Limit) && regularIndexOrderedLimitSafe(scanOrderExpr)
 		if eligibleOrderedLimit {
 			enableOrderedLimit = canPushRegularIndexOrderedLimit(scanNode)
 			if !enableOrderedLimit {

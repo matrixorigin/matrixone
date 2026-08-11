@@ -75,14 +75,14 @@ func New(typ types.Type, desc, nullsLast bool) Compare {
 		return newCompare(types.GenericAscCompare[uint64], genericCopy[uint64], nullsLast)
 	case types.T_float32:
 		if desc {
-			return newCompare(types.GenericDescCompare[float32], genericCopy[float32], nullsLast)
+			return newCompare(types.Float32DescCompare, genericCopy[float32], nullsLast)
 		}
-		return newCompare(types.GenericAscCompare[float32], genericCopy[float32], nullsLast)
+		return newCompare(types.Float32AscCompare, genericCopy[float32], nullsLast)
 	case types.T_float64:
 		if desc {
-			return newCompare(types.GenericDescCompare[float64], genericCopy[float64], nullsLast)
+			return newCompare(types.Float64DescCompare, genericCopy[float64], nullsLast)
 		}
-		return newCompare(types.GenericAscCompare[float64], genericCopy[float64], nullsLast)
+		return newCompare(types.Float64AscCompare, genericCopy[float64], nullsLast)
 	case types.T_date:
 		if desc {
 			return newCompare(types.GenericDescCompare[types.Date], genericCopy[types.Date], nullsLast)

@@ -17,6 +17,7 @@ package top
 import (
 	"bytes"
 	"context"
+	"math"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -167,6 +168,60 @@ func TestTopCopiesNullVarlenaRow(t *testing.T) {
 	tc.arg.GetChildren(0).Free(tc.proc, false, nil)
 	tc.proc.Free()
 	require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
+}
+
+func TestTopOrdersFloatNaNDeterministically(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		flag plan.OrderBySpec_OrderByFlag
+		want []uint64
+	}{
+		{
+			name: "ascending",
+			want: []uint64{0x7ff8000000000001, 0x7ff8000000000002, math.Float64bits(-1)},
+		},
+		{
+			name: "descending",
+			flag: plan.OrderBySpec_DESC,
+			want: []uint64{math.Float64bits(1), math.Float64bits(-1), 0x7ff8000000000002},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			testCase := newTestCase(
+				t,
+				mpool.MustNewZero(),
+				[]types.Type{types.T_float64.ToType()},
+				3,
+				[]*plan.OrderBySpec{{Expr: newExpression(0), Flag: tc.flag}},
+			)
+			require.NoError(t, testCase.arg.Prepare(testCase.proc))
+
+			bat := batch.NewWithSize(1)
+			bat.Vecs[0] = vector.NewVec(types.T_float64.ToType())
+			for _, value := range []float64{
+				math.Float64frombits(0x7ff8000000000002), 1, -1,
+				math.Float64frombits(0x7ff8000000000001),
+			} {
+				require.NoError(t, vector.AppendFixed(bat.Vecs[0], value, false, testCase.proc.Mp()))
+			}
+			bat.SetRowCount(4)
+			resetChildren(testCase.arg, []*batch.Batch{bat, batch.EmptyBatch})
+
+			result, err := vm.Exec(testCase.arg, testCase.proc)
+			require.NoError(t, err)
+			require.NotNil(t, result.Batch)
+			got := vector.MustFixedColWithTypeCheck[float64](result.Batch.Vecs[0])
+			require.Len(t, got, len(tc.want))
+			for i := range got {
+				require.Equal(t, tc.want[i], math.Float64bits(got[i]))
+			}
+
+			testCase.arg.Free(testCase.proc, false, nil)
+			testCase.arg.GetChildren(0).Free(testCase.proc, false, nil)
+			testCase.proc.Free()
+			require.Zero(t, testCase.proc.Mp().CurrNB())
+		})
+	}
 }
 
 func TestTopSpill(t *testing.T) {
