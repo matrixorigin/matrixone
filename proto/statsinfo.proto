@@ -67,6 +67,9 @@ message StatsInfo {
   string TableName = 12;
   reserved 13;
 //  int64 TimeSecond = 13;
+  double SampleRatio = 14;
+  map<string, bool> MinMaxValidMap = 15;
+  map<string, bool> MinMaxCompleteMap = 16;
 }
 
 message StatsInfoKey {

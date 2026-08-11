@@ -19,6 +19,7 @@ import (
 	"context"
 	"encoding/binary"
 	"fmt"
+	"math"
 	"math/rand"
 	"testing"
 	"unsafe"
@@ -245,6 +246,147 @@ func TestShouldSkipObjByShuffle(t *testing.T) {
 	index2.UpdateZM(zm, bs)
 	objectio.SetObjectStatsSortKeyZoneMap(stats, zm)
 	ShouldSkipObjByShuffle(rsp, stats)
+}
+
+func TestObjectRangeShuffleUsesPlanBoundsWhenQuantilesDoNotCoverCNs(t *testing.T) {
+	row := types.RandomRowid()
+	objectID := row.BorrowObjectID()
+	stats := objectio.NewObjectStatsWithObjectID(objectID, false, false, true)
+	minVal, maxVal := int64(1), int64(100)
+	zm := index2.NewZM(types.T_int64, 0)
+	index2.UpdateZM(zm, types.EncodeInt64(&minVal))
+	index2.UpdateZM(zm, types.EncodeInt64(&maxVal))
+	objectio.SetObjectStatsSortKeyZoneMap(stats, zm)
+
+	makeNode := func(ranges []float64, composite bool) *plan.Node {
+		pkeyNames := []string{"k"}
+		if composite {
+			pkeyNames = []string{"k1", "k2"}
+		}
+		node := &plan.Node{
+			TableDef: &plan.TableDef{Pkey: &plan.PrimaryKeyDef{Names: pkeyNames}},
+			Stats:    DefaultStats(),
+		}
+		node.Stats.TableCnt = 1_000_000
+		node.Stats.HashmapStats.ShuffleType = plan.ShuffleType_Range
+		node.Stats.HashmapStats.ShuffleColIdx = int32(types.T_int64)
+		node.Stats.HashmapStats.ShuffleColMin = 1
+		node.Stats.HashmapStats.ShuffleColMax = 100
+		if len(ranges) >= 2 && ranges[0] < ranges[len(ranges)-1] {
+			node.Stats.HashmapStats.ShuffleColMin = int64(ranges[0])
+			node.Stats.HashmapStats.ShuffleColMax = int64(ranges[len(ranges)-1])
+		}
+		node.Stats.HashmapStats.Ranges = ranges
+		return node
+	}
+
+	for _, composite := range []bool{false, true} {
+		t.Run(fmt.Sprintf("short/composite=%v", composite), func(t *testing.T) {
+			node := makeNode([]float64{1, 50, 100}, composite)
+			objectStats := stats
+			wantOwner := GetRangeShuffleIndexForZM(1, 100, zm, 2)
+			if composite {
+				objectStats = objectio.NewObjectStatsWithObjectID(objectID, false, false, true)
+				compositeZM := index2.NewZM(types.T_varchar, 0)
+				packer := types.NewPacker()
+				packer.EncodeInt64(1)
+				index2.UpdateZM(compositeZM, packer.Bytes())
+				packer = types.NewPacker()
+				packer.EncodeInt64(100)
+				index2.UpdateZM(compositeZM, packer.Bytes())
+				objectio.SetObjectStatsSortKeyZoneMap(objectStats, compositeZM)
+				wantOwner = GetRangeShuffleIndexForExtractedZM(1, 100, compositeZM, 2, types.T_int64)
+			}
+			owners := 0
+			for cnidx := int32(0); cnidx < 2; cnidx++ {
+				rsp := &engine.RangesShuffleParam{Node: node, CNCNT: 2, CNIDX: cnidx}
+				if !ShouldSkipObjByShuffle(rsp, objectStats) {
+					owners++
+					require.Equal(t, uint64(cnidx), wantOwner)
+				}
+			}
+			require.Equal(t, 1, owners)
+		})
+	}
+
+	collectorRanges := make([]float64, 1023)
+	for i := range collectorRanges {
+		collectorRanges[i] = float64(i)
+	}
+	collectorNode := makeNode(collectorRanges, false)
+	collectorRsp := &engine.RangesShuffleParam{Node: collectorNode}
+	require.Equal(t, GetRangeShuffleIndexForZM(0, 1022, zm, 512),
+		CalcRangeShuffleIDXForObj(collectorRsp, stats, 512))
+
+	boundsNode := makeNode(nil, false)
+	boundsNode.Stats.HashmapStats.ShuffleColMin = 1
+	boundsNode.Stats.HashmapStats.ShuffleColMax = 100
+	boundsRsp := &engine.RangesShuffleParam{Node: boundsNode}
+	require.Equal(t, GetRangeShuffleIndexForZM(1, 100, zm, 2),
+		CalcRangeShuffleIDXForObj(boundsRsp, stats, 2))
+}
+
+func TestRangeShuffleMinMaxHandlesMoreBucketsThanValues(t *testing.T) {
+	require.Equal(t, uint64(0), GetRangeShuffleIndexSignedMinMax(1, 3, 2, 8))
+	require.Equal(t, uint64(0), GetRangeShuffleIndexUnsignedMinMax(1, 3, 2, 8))
+	require.Equal(t, uint64(0), GetRangeShuffleIndexSignedMinMax(1, 3, 2, 0))
+	require.Equal(t, uint64(0), GetRangeShuffleIndexUnsignedMinMax(1, 3, 2, 0))
+}
+
+func TestSampledRangeFallbackBounds(t *testing.T) {
+	minVal, maxVal, ok := sampledRangeFallbackBounds(types.T_int64, []float64{1, 25, 100})
+	require.True(t, ok)
+	require.Equal(t, int64(1), minVal)
+	require.Equal(t, int64(100), maxVal)
+
+	_, _, ok = sampledRangeFallbackBounds(types.T_int64, []float64{7, 7})
+	require.False(t, ok)
+	_, _, ok = sampledRangeFallbackBounds(types.T_int64, []float64{math.NaN(), 7})
+	require.False(t, ok)
+}
+
+func TestDetermineShuffleForScanPublishesSampledRangeFallbackBounds(t *testing.T) {
+	tableDef := &plan.TableDef{
+		TblId: 1,
+		Name:  "t",
+		Cols: []*plan.ColDef{{
+			Name: "k",
+			Typ:  plan.Type{Id: int32(types.T_int64)},
+		}},
+		Name2ColIndex: map[string]int32{"k": 0},
+		Pkey:          &plan.PrimaryKeyDef{PkeyColName: "k", Names: []string{"k"}},
+	}
+	stats := NewStatsInfo()
+	stats.TableCnt = 1_000_000
+	stats.SampleRatio = 0.1
+	stats.AccurateObjectNumber = 1_000
+	stats.NdvMap["k"] = 500_000
+	stats.MinValMap["k"] = 1
+	stats.MaxValMap["k"] = 1_000_000
+	stats.MinMaxValidMap["k"] = true
+	shuffleRange := NewShuffleRange(false)
+	shuffleRange.SampleRatio = 0.1
+	shuffleRange.Result = []float64{10, 250_000, 900_000}
+	stats.ShuffleRangeMap["k"] = shuffleRange
+	statsCache := NewStatsCache()
+	statsCache.Set(1, stats)
+	ctx := &statsCacheCompilerContext{
+		MockCompilerContext: &MockCompilerContext{ctx: context.Background()},
+		statsCache:          statsCache,
+	}
+	builder := NewQueryBuilder(plan.Query_SELECT, ctx, false, false)
+
+	node := &plan.Node{NodeType: plan.Node_TABLE_SCAN, TableDef: tableDef, Stats: DefaultStats()}
+	determineShuffleForScan(node, builder)
+	require.Equal(t, plan.ShuffleType_Range, node.Stats.HashmapStats.ShuffleType)
+	require.Equal(t, int64(10), node.Stats.HashmapStats.ShuffleColMin)
+	require.Equal(t, int64(900_000), node.Stats.HashmapStats.ShuffleColMax)
+	require.Equal(t, shuffleRange.Result, node.Stats.HashmapStats.Ranges)
+
+	shuffleRange.Result = []float64{7, 7}
+	node = &plan.Node{NodeType: plan.Node_TABLE_SCAN, TableDef: tableDef, Stats: DefaultStats()}
+	determineShuffleForScan(node, builder)
+	require.Equal(t, plan.ShuffleType_Hash, node.Stats.HashmapStats.ShuffleType)
 }
 
 func TestShouldSkipAppendableObjByShuffleKeepsDefaultLocalBehavior(t *testing.T) {
@@ -934,6 +1076,62 @@ func TestDetermineShuffleForJoinNormalizesReversedConditionAfterRemap(t *testing
 	require.Equal(t, int32(1), condition.GetF().Args[1].GetCol().RelPos)
 }
 
+func TestDetermineShuffleForJoinUsesResidualFilterInputForAdmission(t *testing.T) {
+	tests := []struct {
+		name              string
+		secondTag         int32
+		inputRows         float64
+		joinKeyNDV        float64
+		wantAdmissionRows float64
+		wantShuffle       bool
+	}{
+		{name: "large single relation residual filter uses input risk", secondTag: 2, inputRows: 60_000_000, joinKeyNDV: 100_000, wantAdmissionRows: 60_000_000, wantShuffle: true},
+		{name: "input risk admits known high ndv hash candidate", secondTag: 2, inputRows: 30_000_000, joinKeyNDV: 100_000, wantAdmissionRows: 30_000_000, wantShuffle: true},
+		{name: "input risk does not promote unknown ndv hash candidate", secondTag: 2, inputRows: 30_000_000, joinKeyNDV: -1, wantAdmissionRows: 30_000_000, wantShuffle: false},
+		{name: "unknown ndv preserves point admitted hash candidate", secondTag: 2, inputRows: 80_000_000, joinKeyNDV: -1, wantAdmissionRows: 80_000_000, wantShuffle: true},
+		{name: "small cross relation filter stays resident", secondTag: 3, inputRows: 1_000_000, joinKeyNDV: 100_000, wantAdmissionRows: 50_000, wantShuffle: false},
+		{name: "large cross relation filter uses input risk", secondTag: 3, inputRows: 60_000_000, joinKeyNDV: 100_000, wantAdmissionRows: 60_000_000, wantShuffle: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			predicate, err := BindFuncExprImplByPlanExpr(context.Background(), "!=", []*plan.Expr{
+				{Typ: plan.Type{Id: int32(types.T_int64)}, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 2, ColPos: 1}}},
+				{Typ: plan.Type{Id: int32(types.T_int64)}, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: tt.secondTag, ColPos: 1}}},
+			})
+			require.NoError(t, err)
+
+			probe := makeShuffleJoinTestChild(1, 10_000_000_000)
+			buildInput := makeShuffleJoinTestChild(2, tt.inputRows)
+			buildInput.BindingTags = []int32{2, 3}
+			filter := &plan.Node{
+				NodeType:   plan.Node_FILTER,
+				Children:   []int32{1},
+				FilterList: []*plan.Expr{predicate},
+				Stats:      DefaultStats(),
+			}
+			join := &plan.Node{
+				NodeType: plan.Node_JOIN,
+				JoinType: plan.Node_INNER,
+				Children: []int32{0, 2},
+				OnList:   []*plan.Expr{makeShuffleJoinEquality(t, types.T_int64, 100_000, 1, 2, 0)},
+				Stats:    DefaultStats(),
+			}
+			builder := &QueryBuilder{qry: &plan.Query{Nodes: []*plan.Node{probe, buildInput, filter, join}}}
+
+			ReCalcNodeStats(2, builder, false, false, false)
+			ReCalcNodeStats(3, builder, false, false, false)
+			join.OnList[0].Ndv = tt.joinKeyNDV
+			require.Equal(t, 0.05, filter.Stats.Selectivity)
+			require.Equal(t, tt.inputRows*0.05, join.Stats.HashmapStats.HashmapSize)
+			require.Equal(t, tt.wantAdmissionRows, shuffleJoinBuildSizeForAdmission(join, builder, false))
+
+			determineShuffleForJoin(join, builder)
+			require.Equal(t, tt.wantShuffle, join.Stats.HashmapStats.Shuffle)
+		})
+	}
+}
+
 func TestDetermineShuffleForJoinSkipsCandidateRejectedByFinalRecheck(t *testing.T) {
 	tests := []struct {
 		name            string
@@ -1072,9 +1270,13 @@ func TestSelectShuffleJoinConditionAdversarialPermutations(t *testing.T) {
 				}},
 			}
 
-			idx, _ := selectShuffleJoinCondition(node, builder, conditions, leftTags, rightTags, false, nil)
+			idx, _, eligible := selectShuffleJoinCondition(
+				node, builder, conditions, leftTags, rightTags, false, nil,
+				node.Stats.HashmapStats.HashmapSize,
+			)
 
 			require.NotEqual(t, -1, idx)
+			require.True(t, eligible)
 			require.Same(t, reusable, conditions[idx])
 			return
 		}

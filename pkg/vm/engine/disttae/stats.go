@@ -708,9 +708,10 @@ func (gs *GlobalStats) GetBaseObjectCnt(key pb.StatsInfoKey) int64 {
 
 // ShuffleRangePartialUpdate contains fields that can be independently updated in ShuffleRange
 type ShuffleRangePartialUpdate struct {
-	Overlap *float64  `json:"overlap,omitempty"`
-	Uniform *float64  `json:"uniform,omitempty"`
-	Result  []float64 `json:"result,omitempty"`
+	Overlap     *float64  `json:"overlap,omitempty"`
+	Uniform     *float64  `json:"uniform,omitempty"`
+	Result      []float64 `json:"result,omitempty"`
+	SampleRatio *float64  `json:"sample_ratio,omitempty"`
 }
 
 // PatchArgs defines arguments for patch command
@@ -719,6 +720,7 @@ type PatchArgs struct {
 	TableCnt             *float64 `json:"table_cnt,omitempty"`
 	BlockNumber          *int64   `json:"block_number,omitempty"`
 	AccurateObjectNumber *int64   `json:"accurate_object_number,omitempty"`
+	SampleRatio          *float64 `json:"sample_ratio,omitempty"`
 
 	// Column-level stats (merge mode)
 	NdvMap     map[string]float64 `json:"ndv_map,omitempty"`
@@ -726,6 +728,10 @@ type PatchArgs struct {
 	MaxValMap  map[string]float64 `json:"max_val_map,omitempty"`
 	NullCntMap map[string]uint64  `json:"null_cnt_map,omitempty"`
 	SizeMap    map[string]uint64  `json:"size_map,omitempty"`
+	// MinMaxCompleteMap explicitly marks a column's min/max pair as a
+	// whole-table bound. A paired min/max patch defaults to complete for
+	// backward compatibility; callers can set false for sampled bounds.
+	MinMaxCompleteMap map[string]bool `json:"min_max_complete_map,omitempty"`
 
 	// ShuffleRange partial updates (fine-grained control per column)
 	// Each column can have its Overlap/Uniform/Result fields updated independently
@@ -743,10 +749,64 @@ func (gs *GlobalStats) PatchStats(key pb.StatsInfoKey, patch *PatchArgs) error {
 
 	stats := gs.mu.statsInfoMap[key]
 	if stats == nil {
-		// Create new stats if not exists
 		stats = plan2.NewStatsInfo()
-		gs.mu.statsInfoMap[key] = stats
 	}
+	if patch.SampleRatio != nil && (*patch.SampleRatio <= 0 || *patch.SampleRatio > 1 ||
+		math.IsNaN(*patch.SampleRatio) || math.IsInf(*patch.SampleRatio, 0)) {
+		return moerr.NewInvalidInputNoCtxf("invalid stats sample ratio %v", *patch.SampleRatio)
+	}
+
+	// Validate every partial update before mutating the cached object so a
+	// rejected patch is atomic.
+	for col, update := range patch.ShuffleRangeMap {
+		if update == nil {
+			continue
+		}
+		if update.SampleRatio != nil {
+			ratio := *update.SampleRatio
+			if ratio <= 0 || ratio > 1 || math.IsNaN(ratio) || math.IsInf(ratio, 0) {
+				return moerr.NewInvalidInputNoCtxf(
+					"invalid shuffle range sample ratio %v for column %q", ratio, col)
+			}
+		}
+		for i, value := range update.Result {
+			if math.IsNaN(value) || math.IsInf(value, 0) || i > 0 && value < update.Result[i-1] {
+				return moerr.NewInvalidInputNoCtxf("invalid shuffle range result for column %q", col)
+			}
+		}
+	}
+
+	touchedMinMax := make(map[string]struct{}, len(patch.MinValMap)+len(patch.MaxValMap)+len(patch.MinMaxCompleteMap))
+	for col := range patch.MinValMap {
+		touchedMinMax[col] = struct{}{}
+	}
+	for col := range patch.MaxValMap {
+		touchedMinMax[col] = struct{}{}
+	}
+	for col := range patch.MinMaxCompleteMap {
+		touchedMinMax[col] = struct{}{}
+	}
+	for col := range touchedMinMax {
+		minVal, minOK := stats.MinValMap[col]
+		patchedMin, minPatched := patch.MinValMap[col]
+		if minPatched {
+			minVal, minOK = patchedMin, true
+		}
+		maxVal, maxOK := stats.MaxValMap[col]
+		patchedMax, maxPatched := patch.MaxValMap[col]
+		if maxPatched {
+			maxVal, maxOK = patchedMax, true
+		}
+		explicitComplete, hasExplicitComplete := patch.MinMaxCompleteMap[col]
+		provenanceKnown := stats.MinMaxValidMap[col] || minPatched && maxPatched ||
+			hasExplicitComplete && explicitComplete
+		if !minOK || !maxOK || !provenanceKnown || math.IsNaN(minVal) || math.IsNaN(maxVal) ||
+			math.IsInf(minVal, 0) || math.IsInf(maxVal, 0) || minVal > maxVal {
+			return moerr.NewInvalidInputNoCtxf(
+				"min/max patch for column %q requires a complete valid pair", col)
+		}
+	}
+	gs.mu.statsInfoMap[key] = stats
 
 	// Apply table-level stats
 	if patch.TableCnt != nil {
@@ -758,6 +818,9 @@ func (gs *GlobalStats) PatchStats(key pb.StatsInfoKey, patch *PatchArgs) error {
 	if patch.AccurateObjectNumber != nil {
 		stats.AccurateObjectNumber = *patch.AccurateObjectNumber
 	}
+	if patch.SampleRatio != nil {
+		stats.SampleRatio = *patch.SampleRatio
+	}
 
 	// Apply column-level stats (merge mode)
 	for col, v := range patch.NdvMap {
@@ -766,17 +829,53 @@ func (gs *GlobalStats) PatchStats(key pb.StatsInfoKey, patch *PatchArgs) error {
 		}
 		stats.NdvMap[col] = v
 	}
-	for col, v := range patch.MinValMap {
-		if stats.MinValMap == nil {
-			stats.MinValMap = make(map[string]float64)
-		}
-		stats.MinValMap[col] = v
+	if stats.MinValMap == nil {
+		stats.MinValMap = make(map[string]float64)
 	}
-	for col, v := range patch.MaxValMap {
-		if stats.MaxValMap == nil {
-			stats.MaxValMap = make(map[string]float64)
+	if stats.MaxValMap == nil {
+		stats.MaxValMap = make(map[string]float64)
+	}
+	if stats.MinMaxValidMap == nil {
+		stats.MinMaxValidMap = make(map[string]bool)
+	}
+	if stats.MinMaxCompleteMap == nil {
+		stats.MinMaxCompleteMap = make(map[string]bool)
+	}
+	for col := range touchedMinMax {
+		wasValid := stats.MinMaxValidMap[col]
+		wasComplete := stats.MinMaxCompleteMap[col]
+		minVal, minPatched := patch.MinValMap[col]
+		maxVal, maxPatched := patch.MaxValMap[col]
+		if minPatched {
+			stats.MinValMap[col] = minVal
 		}
-		stats.MaxValMap[col] = v
+		if maxPatched {
+			stats.MaxValMap[col] = maxVal
+		}
+		_, minOK := stats.MinValMap[col]
+		_, maxOK := stats.MaxValMap[col]
+		valid := minOK && maxOK && (wasValid || minPatched && maxPatched)
+		if explicit, ok := patch.MinMaxCompleteMap[col]; ok && explicit && minOK && maxOK {
+			valid = true
+		}
+		if valid {
+			stats.MinMaxValidMap[col] = true
+		} else {
+			delete(stats.MinMaxValidMap, col)
+		}
+
+		complete := wasComplete
+		if minPatched && maxPatched {
+			complete = true
+		}
+		if explicit, ok := patch.MinMaxCompleteMap[col]; ok {
+			complete = explicit
+		}
+		if valid && complete {
+			stats.MinMaxCompleteMap[col] = true
+		} else {
+			delete(stats.MinMaxCompleteMap, col)
+		}
 	}
 	for col, v := range patch.NullCntMap {
 		if stats.NullCntMap == nil {
@@ -793,6 +892,9 @@ func (gs *GlobalStats) PatchStats(key pb.StatsInfoKey, patch *PatchArgs) error {
 
 	// Apply ShuffleRange partial updates (fine-grained)
 	for col, update := range patch.ShuffleRangeMap {
+		if update == nil {
+			continue
+		}
 		if stats.ShuffleRangeMap == nil {
 			stats.ShuffleRangeMap = make(map[string]*pb.ShuffleRange)
 		}
@@ -813,6 +915,12 @@ func (gs *GlobalStats) PatchStats(key pb.StatsInfoKey, patch *PatchArgs) error {
 		}
 		if update.Result != nil {
 			sr.Result = update.Result
+			if update.SampleRatio == nil {
+				sr.SampleRatio = 1
+			}
+		}
+		if update.SampleRatio != nil {
+			sr.SampleRatio = *update.SampleRatio
 		}
 	}
 
@@ -1355,6 +1463,7 @@ func collectTableStats(
 	if exactObjectNumber > 0 {
 		actualSamplingRatio = float64(sampledObjectCount) / float64(exactObjectNumber)
 	}
+	info.SampleRatio = actualSamplingRatio
 	for _, r := range info.ShuffleRanges {
 		if r != nil {
 			r.SampleRatio = actualSamplingRatio
@@ -1367,8 +1476,9 @@ func collectTableStats(
 		for i := range info.ColumnSize {
 			info.ColumnSize[i] = int64(float64(info.ColumnSize[i]) * rowScaleFactor)
 			info.NullCnts[i] = int64(float64(info.NullCnts[i]) * rowScaleFactor)
-			// NDV: scale up by inverse of sampling ratio, cap at row count
-			upper := info.TableRowCount * 0.99
+			// NDV: scale up by inverse of sampling ratio, cap at row count.
+			// Equality with row count is valid for a unique column.
+			upper := info.TableRowCount
 			info.ColumnNDVs[i] = math.Min(info.ColumnNDVs[i]*rowScaleFactor, upper)
 		}
 	}

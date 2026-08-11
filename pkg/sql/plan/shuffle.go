@@ -108,16 +108,24 @@ func SimpleInt64HashToRange(i uint64, upperLimit uint64) uint64 {
 	return hashtable.Int64HashWithFixedSeed(i) % upperLimit
 }
 
-func shuffleByZonemap(rsp *engine.RangesShuffleParam, zm objectio.ZoneMap, bucketNum int) uint64 {
-	if !rsp.Init {
-		rsp.Init = true
-		switch zm.GetType() {
-		case types.T_int64, types.T_int32, types.T_int16:
-			rsp.ShuffleRangeInt64 = ShuffleRangeReEvalSigned(rsp.Node.Stats.HashmapStats.Ranges, bucketNum, rsp.Node.Stats.HashmapStats.Nullcnt, int64(rsp.Node.Stats.TableCnt))
-		case types.T_uint64, types.T_uint32, types.T_uint16, types.T_varchar, types.T_char, types.T_text, types.T_bit, types.T_datalink:
-			rsp.ShuffleRangeUint64 = ShuffleRangeReEvalUnsigned(rsp.Node.Stats.HashmapStats.Ranges, bucketNum, rsp.Node.Stats.HashmapStats.Nullcnt, int64(rsp.Node.Stats.TableCnt))
-		}
+func initRangesShuffleParam(rsp *engine.RangesShuffleParam, typ types.T, bucketNum int) {
+	if rsp.Init && rsp.ShuffleRangeBuckets == bucketNum {
+		return
 	}
+	rsp.Init = true
+	rsp.ShuffleRangeBuckets = bucketNum
+	rsp.ShuffleRangeInt64 = nil
+	rsp.ShuffleRangeUint64 = nil
+	switch typ {
+	case types.T_int64, types.T_int32, types.T_int16:
+		rsp.ShuffleRangeInt64 = ShuffleRangeReEvalSigned(rsp.Node.Stats.HashmapStats.Ranges, bucketNum, rsp.Node.Stats.HashmapStats.Nullcnt, int64(rsp.Node.Stats.TableCnt))
+	case types.T_uint64, types.T_uint32, types.T_uint16, types.T_varchar, types.T_char, types.T_text, types.T_bit, types.T_datalink:
+		rsp.ShuffleRangeUint64 = ShuffleRangeReEvalUnsigned(rsp.Node.Stats.HashmapStats.Ranges, bucketNum, rsp.Node.Stats.HashmapStats.Nullcnt, int64(rsp.Node.Stats.TableCnt))
+	}
+}
+
+func shuffleByZonemap(rsp *engine.RangesShuffleParam, zm objectio.ZoneMap, bucketNum int) uint64 {
+	initRangesShuffleParam(rsp, zm.GetType(), bucketNum)
 
 	var shuffleIDX uint64
 	if len(rsp.ShuffleRangeUint64) > 0 {
@@ -132,15 +140,7 @@ func shuffleByZonemap(rsp *engine.RangesShuffleParam, zm objectio.ZoneMap, bucke
 
 func shuffleByValueExtractedFromZonemap(rsp *engine.RangesShuffleParam, zm objectio.ZoneMap, bucketNum int) uint64 {
 	t := types.T(rsp.Node.Stats.HashmapStats.ShuffleColIdx) // actually this is specially used for sort key column type
-	if !rsp.Init {
-		rsp.Init = true
-		switch t {
-		case types.T_int64, types.T_int32, types.T_int16:
-			rsp.ShuffleRangeInt64 = ShuffleRangeReEvalSigned(rsp.Node.Stats.HashmapStats.Ranges, bucketNum, rsp.Node.Stats.HashmapStats.Nullcnt, int64(rsp.Node.Stats.TableCnt))
-		case types.T_uint64, types.T_uint32, types.T_uint16, types.T_varchar, types.T_char, types.T_text, types.T_bit, types.T_datalink:
-			rsp.ShuffleRangeUint64 = ShuffleRangeReEvalUnsigned(rsp.Node.Stats.HashmapStats.Ranges, bucketNum, rsp.Node.Stats.HashmapStats.Nullcnt, int64(rsp.Node.Stats.TableCnt))
-		}
-	}
+	initRangesShuffleParam(rsp, t, bucketNum)
 
 	var shuffleIDX uint64
 	if len(rsp.ShuffleRangeUint64) > 0 {
@@ -155,6 +155,11 @@ func shuffleByValueExtractedFromZonemap(rsp *engine.RangesShuffleParam, zm objec
 
 func CalcRangeShuffleIDXForObj(rsp *engine.RangesShuffleParam, objstats *objectio.ObjectStats, bucketNum int) uint64 {
 	zm := objstats.SortKeyZoneMap()
+	if len(rsp.Node.TableDef.Pkey.Names) == 1 {
+		initRangesShuffleParam(rsp, zm.GetType(), bucketNum)
+	} else {
+		initRangesShuffleParam(rsp, types.T(rsp.Node.Stats.HashmapStats.ShuffleColIdx), bucketNum)
+	}
 	if !zm.IsInited() {
 		// an object with all null will send to shuffleIDX 0
 		return 0
@@ -164,6 +169,19 @@ func CalcRangeShuffleIDXForObj(rsp *engine.RangesShuffleParam, objstats *objecti
 	} else {
 		return shuffleByValueExtractedFromZonemap(rsp, zm, bucketNum)
 	}
+}
+
+// sampledRangeFallbackBounds returns plan-level bounds for the legacy min/max
+// range path. They are distribution anchors, not whole-table extrema: SQL range
+// selectivity must continue to require complete min/max provenance. Encoding
+// the anchors in the plan keeps object ownership identical across CN versions
+// when there are too few quantiles for the runtime bucket count.
+func sampledRangeFallbackBounds(typ types.T, ranges []float64) (int64, int64, bool) {
+	if len(ranges) < 2 || !shuffleRangeValueSafe(typ, ranges[0]) ||
+		!shuffleRangeValueSafe(typ, ranges[len(ranges)-1]) || ranges[0] >= ranges[len(ranges)-1] {
+		return 0, 0, false
+	}
+	return int64(ranges[0]), int64(ranges[len(ranges)-1]), true
 }
 
 func ShouldSkipObjByShuffle(rsp *engine.RangesShuffleParam, objstats *objectio.ObjectStats) bool {
@@ -307,12 +325,18 @@ func GetRangeShuffleIndexForValuesExtractedFromZMUnsignedSlice(val []uint64, zm 
 }
 
 func GetRangeShuffleIndexSignedMinMax(minVal, maxVal, currentVal int64, upplerLimit uint64) uint64 {
+	if upplerLimit == 0 {
+		return 0
+	}
 	if currentVal <= minVal {
 		return 0
 	} else if currentVal >= maxVal {
 		return upplerLimit - 1
 	} else {
 		step := uint64(maxVal-minVal) / upplerLimit
+		if step == 0 {
+			return 0
+		}
 		ret := uint64(currentVal-minVal) / step
 		if ret >= upplerLimit {
 			return upplerLimit - 1
@@ -322,12 +346,18 @@ func GetRangeShuffleIndexSignedMinMax(minVal, maxVal, currentVal int64, upplerLi
 }
 
 func GetRangeShuffleIndexUnsignedMinMax(minVal, maxVal, currentVal uint64, upplerLimit uint64) uint64 {
+	if upplerLimit == 0 {
+		return 0
+	}
 	if currentVal <= minVal {
 		return 0
 	} else if currentVal >= maxVal {
 		return upplerLimit - 1
 	} else {
 		step := (maxVal - minVal) / upplerLimit
+		if step == 0 {
+			return 0
+		}
 		ret := (currentVal - minVal) / step
 		if ret >= upplerLimit {
 			return upplerLimit - 1
@@ -571,21 +601,66 @@ func determineNonReusableShuffleType(
 		return
 	}
 	s := w.GetStats()
+	colStats := validateColumnStats(s, tableDef, colName)
+	colID, ok := findColumnPosition(tableDef, colName)
+	if !ok {
+		return
+	}
+	typ := types.T(tableDef.Cols[colID].Typ.Id)
+	shuffleRange := s.ShuffleRangeMap[colName]
+	ranges := shouldUseShuffleRanges(shuffleRange, colStats.shuffleBoundsSafe)
+	rangesSafe := shuffleRangesSafe(typ, shuffleRange, ranges)
 	if node.NodeType == plan.Node_AGG {
 		if shouldUseHashShuffle(s.ShuffleRangeMap[colName]) {
 			return
 		}
 	}
+	if !colStats.shuffleBoundsSafe && !rangesSafe {
+		return
+	}
 	node.Stats.HashmapStats.ShuffleType = plan.ShuffleType_Range
-	node.Stats.HashmapStats.ShuffleColMin = int64(s.MinValMap[colName])
-	node.Stats.HashmapStats.ShuffleColMax = int64(s.MaxValMap[colName])
-	node.Stats.HashmapStats.Ranges = shouldUseShuffleRanges(s.ShuffleRangeMap[colName], colName)
-	node.Stats.HashmapStats.Nullcnt = int64(s.NullCntMap[colName])
+	if colStats.shuffleBoundsSafe {
+		node.Stats.HashmapStats.ShuffleColMin = int64(colStats.minVal)
+		node.Stats.HashmapStats.ShuffleColMax = int64(colStats.maxVal)
+	} else if minVal, maxVal, ok := sampledRangeFallbackBounds(typ, ranges); ok {
+		node.Stats.HashmapStats.ShuffleColMin = minVal
+		node.Stats.HashmapStats.ShuffleColMax = maxVal
+	} else {
+		resetShuffleStrategy(node.Stats.HashmapStats)
+		return
+	}
+	if rangesSafe {
+		node.Stats.HashmapStats.Ranges = ranges
+	}
+	node.Stats.HashmapStats.Nullcnt = int64(colStats.nullCnt)
 }
 
 // to determine if join need to go shuffle
 func determineShuffleForJoin(node *plan.Node, builder *QueryBuilder) {
 	determineShuffleForJoinWithColRefMode(node, builder, false)
+}
+
+// shuffleJoinBuildSizeForAdmission keeps the point estimate used by join
+// ordering separate from the memory-risk estimate used to admit shuffle. A
+// residual FILTER is currently estimated with a fixed heuristic rather than
+// column statistics, so its input cardinality is the conservative build-size
+// estimate for this physical decision.
+func shuffleJoinBuildSizeForAdmission(node *plan.Node, builder *QueryBuilder, afterRemap bool) float64 {
+	buildSize := node.Stats.HashmapStats.HashmapSize
+	if afterRemap || node.IsRightJoin || len(node.Children) != 2 {
+		return buildSize
+	}
+
+	build := builder.qry.Nodes[node.Children[1]]
+	if build.NodeType != plan.Node_FILTER || len(build.Children) != 1 {
+		return buildSize
+	}
+	input := builder.qry.Nodes[build.Children[0]]
+	if input.Stats != nil && input.Stats.Outcnt >= threshHoldForHashShuffle &&
+		input.Stats.Outcnt > buildSize {
+		return input.Stats.Outcnt
+	}
+	return buildSize
 }
 
 func isSupportedShuffleJoinKeyType(typ int32) bool {
@@ -599,9 +674,9 @@ func isSupportedShuffleJoinKeyType(typ int32) bool {
 	}
 }
 
-func shuffleJoinCandidateSurvivesRecheck(node *plan.Node, ndv float64) bool {
+func shuffleJoinCandidateSurvivesRecheck(node *plan.Node, ndv, admissionBuildSize float64) bool {
 	hashmapStats := node.Stats.HashmapStats
-	if hashmapStats.ShuffleType == plan.ShuffleType_Hash && hashmapStats.HashmapSize < threshHoldForHashShuffle {
+	if hashmapStats.ShuffleType == plan.ShuffleType_Hash && admissionBuildSize < threshHoldForHashShuffle {
 		return false
 	}
 	if hashmapStats.ShuffleType == plan.ShuffleType_Range && hashmapStats.Ranges == nil &&
@@ -633,7 +708,8 @@ func planShuffleJoinCandidate(
 	afterRemap bool,
 	candidateIdx int32,
 	previousHashmapStats *plan.HashMapStats,
-) (plan.HashMapStats, bool) {
+	admissionBuildSize float64,
+) (plan.HashMapStats, bool, bool) {
 	candidateNode := *node
 	candidateStats := *node.Stats
 	// HashmapSize and HashOnPK describe the join itself. All shuffle-strategy
@@ -652,7 +728,7 @@ func planShuffleJoinCandidate(
 		// Expressions cannot reuse an aggregate column partition. Shortcut the
 		// same known-low NDV guard used by the final check.
 		if condition.Ndv >= 0 && condition.Ndv < ShuffleThreshHoldOfNDV {
-			return candidateHashmapStats, false
+			return candidateHashmapStats, false, false
 		}
 	} else {
 		child, reusable := reusableShuffleChild(leftHashCol, &candidateNode, builder, afterRemap)
@@ -662,7 +738,7 @@ func planShuffleJoinCandidate(
 			// Reuse is the only exception to the low-NDV guard. Check it once,
 			// before looking up range statistics for a candidate that cannot win.
 			if condition.Ndv >= 0 && condition.Ndv < ShuffleThreshHoldOfNDV {
-				return candidateHashmapStats, false
+				return candidateHashmapStats, false, false
 			}
 			if !afterRemap || !restoreRangeStrategyAfterRemap(
 				&candidateHashmapStats, previousHashmapStats, candidateIdx,
@@ -671,7 +747,16 @@ func planShuffleJoinCandidate(
 			}
 		}
 	}
-	return candidateHashmapStats, shuffleJoinCandidateSurvivesRecheck(&candidateNode, condition.Ndv)
+	pointEligible := shuffleJoinCandidateSurvivesRecheck(
+		&candidateNode, condition.Ndv, node.Stats.HashmapStats.HashmapSize,
+	)
+	riskEligible := pointEligible
+	if !pointEligible && condition.Ndv >= ShuffleThreshHoldOfNDV {
+		riskEligible = shuffleJoinCandidateSurvivesRecheck(
+			&candidateNode, condition.Ndv, admissionBuildSize,
+		)
+	}
+	return candidateHashmapStats, pointEligible, riskEligible
 }
 
 // selectShuffleJoinCondition keeps the first condition that the current plan
@@ -686,9 +771,12 @@ func selectShuffleJoinCondition(
 	leftTags, rightTags map[int32]bool,
 	afterRemap bool,
 	previousHashmapStats *plan.HashMapStats,
-) (int, plan.HashMapStats) {
+	admissionBuildSize float64,
+) (int, plan.HashMapStats, bool) {
 	firstSupportedIdx := -1
 	var firstSupportedStats plan.HashMapStats
+	firstRiskEligibleIdx := -1
+	var firstRiskEligibleStats plan.HashMapStats
 
 	for i, condition := range onList {
 		fn := condition.GetF()
@@ -712,20 +800,27 @@ func selectShuffleJoinCondition(
 			continue
 		}
 
-		candidateStats, eligible := planShuffleJoinCandidate(
+		candidateStats, pointEligible, riskEligible := planShuffleJoinCandidate(
 			node, builder, condition, leftHashCol, rightHashCol, afterRemap,
-			int32(i), previousHashmapStats,
+			int32(i), previousHashmapStats, admissionBuildSize,
 		)
 		if firstSupportedIdx == -1 {
 			firstSupportedIdx = i
 			firstSupportedStats = candidateStats
 		}
-		if eligible {
-			return i, candidateStats
+		if pointEligible {
+			return i, candidateStats, true
+		}
+		if riskEligible && firstRiskEligibleIdx == -1 {
+			firstRiskEligibleIdx = i
+			firstRiskEligibleStats = candidateStats
 		}
 	}
 
-	return firstSupportedIdx, firstSupportedStats
+	if firstRiskEligibleIdx != -1 {
+		return firstRiskEligibleIdx, firstRiskEligibleStats, true
+	}
+	return firstSupportedIdx, firstSupportedStats, false
 }
 
 // determineShuffleForJoinWithColRefMode plans join shuffle either before or
@@ -797,13 +892,15 @@ func determineShuffleForJoinWithColRefMode(node *plan.Node, builder *QueryBuilde
 	if node.JoinType == plan.Node_MARK && !markJoinSupportsShuffle(node, builder, leftTags, rightTags, afterRemap) {
 		return
 	}
-	idx, candidateHashmapStats := selectShuffleJoinCondition(
+	admissionBuildSize := shuffleJoinBuildSizeForAdmission(node, builder, afterRemap)
+	idx, candidateHashmapStats, candidateEligible := selectShuffleJoinCondition(
 		node, builder, node.OnList, leftTags, rightTags, afterRemap,
-		previousHashmapStats,
+		previousHashmapStats, admissionBuildSize,
 	)
 	if idx == -1 {
 		return
 	}
+	admittedBuildSize := node.Stats.HashmapStats.HashmapSize
 	if node.IsRightJoin {
 		if node.Stats.HashmapStats.HashmapSize < threshHoldForRightJoinShuffle {
 			return
@@ -812,7 +909,12 @@ func determineShuffleForJoinWithColRefMode(node *plan.Node, builder *QueryBuilde
 		leftchild := builder.qry.Nodes[node.Children[0]]
 		rightchild := builder.qry.Nodes[node.Children[1]]
 		factor := math.Pow((leftchild.Stats.Outcnt / rightchild.Stats.Outcnt), 0.4)
-		if node.Stats.HashmapStats.HashmapSize < threshHoldForShuffleJoin*factor {
+		threshold := threshHoldForShuffleJoin * factor
+		if admittedBuildSize < threshold && candidateEligible &&
+			node.OnList[idx].Ndv >= ShuffleThreshHoldOfNDV {
+			admittedBuildSize = admissionBuildSize
+		}
+		if admittedBuildSize < threshold {
 			return
 		}
 	}
@@ -854,7 +956,7 @@ func determineShuffleForJoinWithColRefMode(node *plan.Node, builder *QueryBuilde
 
 	//recheck shuffle plan
 	if node.Stats.HashmapStats.Shuffle {
-		if !shuffleJoinCandidateSurvivesRecheck(node, node.OnList[idx].Ndv) {
+		if !shuffleJoinCandidateSurvivesRecheck(node, node.OnList[idx].Ndv, admittedBuildSize) {
 			node.Stats.HashmapStats.Shuffle = false
 		}
 
@@ -1261,22 +1363,40 @@ func determineShuffleForScan(node *plan.Node, builder *QueryBuilder) {
 	}
 
 	s := w.GetStats()
-	if s.NdvMap[firstSortColName] < ShuffleThreshHoldOfNDV {
+	colStats := validateColumnStats(s, node.TableDef, firstSortColName)
+	if !colStats.ndvKnown || colStats.ndv < ShuffleThreshHoldOfNDV {
 		return
 	}
 	firstSortColID, ok := node.TableDef.Name2ColIndex[firstSortColName]
 	if !ok {
 		return
 	}
-	switch types.T(node.TableDef.Cols[firstSortColID].Typ.Id) {
+	typ := types.T(node.TableDef.Cols[firstSortColID].Typ.Id)
+	shuffleRange := s.ShuffleRangeMap[firstSortColName]
+	ranges := shouldUseShuffleRanges(shuffleRange, colStats.shuffleBoundsSafe)
+	rangesSafe := shuffleRangesSafe(typ, shuffleRange, ranges)
+	if !colStats.shuffleBoundsSafe && !rangesSafe {
+		return
+	}
+	switch typ {
 	case types.T_int64, types.T_int32, types.T_int16, types.T_uint64,
 		types.T_uint32, types.T_uint16, types.T_char, types.T_varchar, types.T_text:
 		node.Stats.HashmapStats.ShuffleType = plan.ShuffleType_Range
 		node.Stats.HashmapStats.ShuffleColIdx = node.TableDef.Cols[firstSortColID].Typ.Id // actually this is specially used for sort key column type
-		node.Stats.HashmapStats.ShuffleColMin = int64(s.MinValMap[firstSortColName])
-		node.Stats.HashmapStats.ShuffleColMax = int64(s.MaxValMap[firstSortColName])
-		node.Stats.HashmapStats.Ranges = shouldUseShuffleRanges(s.ShuffleRangeMap[firstSortColName], firstSortColName)
-		node.Stats.HashmapStats.Nullcnt = int64(s.NullCntMap[firstSortColName])
+		if colStats.shuffleBoundsSafe {
+			node.Stats.HashmapStats.ShuffleColMin = int64(colStats.minVal)
+			node.Stats.HashmapStats.ShuffleColMax = int64(colStats.maxVal)
+		} else if minVal, maxVal, ok := sampledRangeFallbackBounds(typ, ranges); ok {
+			node.Stats.HashmapStats.ShuffleColMin = minVal
+			node.Stats.HashmapStats.ShuffleColMax = maxVal
+		} else {
+			resetShuffleStrategy(node.Stats.HashmapStats)
+			return
+		}
+		if rangesSafe {
+			node.Stats.HashmapStats.Ranges = ranges
+		}
+		node.Stats.HashmapStats.Nullcnt = int64(colStats.nullCnt)
 	}
 }
 
@@ -1348,11 +1468,16 @@ func shouldUseHashShuffle(s *pb.ShuffleRange) bool {
 	return false
 }
 
-func shouldUseShuffleRanges(s *pb.ShuffleRange, colname string) []float64 {
+func shouldUseShuffleRanges(s *pb.ShuffleRange, completeBoundsSafe bool) []float64 {
 	if s == nil || math.IsNaN(s.Uniform) || s.Result == nil {
 		return nil
 	}
-	if s.Uniform < uniformThreshold {
+	// Complete min/max can partition a uniform domain directly. When those
+	// bounds are unavailable (for example, object-sampled stats), the sampled
+	// quantiles are the only range-shuffle boundary with explicit provenance.
+	// Use them even for a uniform distribution instead of silently degrading to
+	// hash shuffle.
+	if !completeBoundsSafe || s.Uniform < uniformThreshold {
 		return s.Result
 	}
 	return nil

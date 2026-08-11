@@ -202,6 +202,265 @@ func TestSafeStatsRatiosAvoidNonFiniteSelectivity(t *testing.T) {
 	})
 }
 
+func TestSanitizeStatsInfoInvariants(t *testing.T) {
+	newTableDef := func(typ types.T, primaryKey bool) *planpb.TableDef {
+		tableDef := &planpb.TableDef{
+			Name: "t",
+			Cols: []*planpb.ColDef{
+				{Name: "c", Typ: planpb.Type{Id: int32(typ)}},
+				{Name: catalog.Row_ID},
+			},
+		}
+		if primaryKey {
+			tableDef.Pkey = &planpb.PrimaryKeyDef{PkeyColName: "c", Names: []string{"c"}}
+		}
+		return tableDef
+	}
+	newStats := func(tableCnt float64, nullCnt uint64, ndv, minVal, maxVal float64) *pb.StatsInfo {
+		return &pb.StatsInfo{
+			TableCnt:          tableCnt,
+			SampleRatio:       1,
+			NdvMap:            map[string]float64{"c": ndv},
+			NullCntMap:        map[string]uint64{"c": nullCnt},
+			MinValMap:         map[string]float64{"c": minVal},
+			MaxValMap:         map[string]float64{"c": maxVal},
+			MinMaxValidMap:    map[string]bool{"c": true},
+			MinMaxCompleteMap: map[string]bool{"c": true},
+		}
+	}
+
+	t.Run("discrete domain caps impossible ndv", func(t *testing.T) {
+		s := newStats(1000, 100, 2000, 1, 10)
+		tableDef := newTableDef(types.T_int32, false)
+		sanitizeStatsInfo(tableDef, s)
+		require.Equal(t, 10.0, s.NdvMap["c"])
+		validated := validateColumnStats(s, tableDef, "c")
+		require.True(t, validated.rangeEstimateSafe)
+		require.True(t, validated.shuffleBoundsSafe)
+	})
+
+	t.Run("sampled min max is not a hard domain bound", func(t *testing.T) {
+		s := newStats(1000, 0, 500, 1, 10)
+		s.SampleRatio = 0.1
+		delete(s.MinMaxCompleteMap, "c")
+		tableDef := newTableDef(types.T_int32, false)
+		sanitizeStatsInfo(tableDef, s)
+		require.Equal(t, 500.0, s.NdvMap["c"])
+		validated := validateColumnStats(s, tableDef, "c")
+		require.True(t, validated.minMaxKnown)
+		require.False(t, validated.minMaxComplete)
+		require.False(t, validated.rangeEstimateSafe)
+		require.False(t, validated.shuffleBoundsSafe)
+	})
+
+	t.Run("legacy zero pair is unknown without validity metadata", func(t *testing.T) {
+		s := newStats(1000, 0, 500, 0, 0)
+		s.AccurateObjectNumber = 1
+		s.MinMaxValidMap = nil
+		s.MinMaxCompleteMap = nil
+		sanitizeStatsInfo(newTableDef(types.T_int32, false), s)
+		require.Equal(t, 500.0, s.NdvMap["c"])
+		_, minOK := s.MinValMap["c"]
+		_, maxOK := s.MaxValMap["c"]
+		require.False(t, minOK)
+		require.False(t, maxOK)
+	})
+
+	t.Run("primary key rejects contradictory complete domain", func(t *testing.T) {
+		s := newStats(1000, 0, 10, 1, 10)
+		tableDef := newTableDef(types.T_int64, true)
+		sanitizeStatsInfo(tableDef, s)
+		require.Equal(t, 1000.0, s.NdvMap["c"])
+		require.NotContains(t, s.MinValMap, "c")
+		require.NotContains(t, s.MaxValMap, "c")
+		require.NotContains(t, s.MinMaxValidMap, "c")
+		require.NotContains(t, s.MinMaxCompleteMap, "c")
+	})
+
+	t.Run("non-null rows cap ndv", func(t *testing.T) {
+		s := newStats(1000, 999, 10, 1, 100)
+		sanitizeStatsInfo(newTableDef(types.T_int32, false), s)
+		require.Equal(t, 1.0, s.NdvMap["c"])
+	})
+
+	t.Run("invalid range becomes unknown without fabricating ndv", func(t *testing.T) {
+		s := newStats(1000, 100, 950, 10, 1)
+		sanitizeStatsInfo(newTableDef(types.T_int32, false), s)
+		require.Equal(t, 900.0, s.NdvMap["c"])
+		_, minOK := s.MinValMap["c"]
+		_, maxOK := s.MaxValMap["c"]
+		require.False(t, minOK)
+		require.False(t, maxOK)
+	})
+
+	t.Run("invalid ndv remains unknown", func(t *testing.T) {
+		s := newStats(1000, 0, math.NaN(), 1, 10)
+		sanitizeStatsInfo(newTableDef(types.T_int32, false), s)
+		_, ok := s.NdvMap["c"]
+		require.False(t, ok)
+	})
+
+	t.Run("single column primary key is exact", func(t *testing.T) {
+		s := newStats(1000, 100, math.NaN(), 1, 1000)
+		sanitizeStatsInfo(newTableDef(types.T_int64, true), s)
+		require.Equal(t, 1000.0, s.NdvMap["c"])
+		require.Equal(t, uint64(0), s.NullCntMap["c"])
+	})
+
+	t.Run("wide integer range is not narrowed through lossy float min max", func(t *testing.T) {
+		minVal := float64(1<<53) + 2
+		s := newStats(1000, 0, 500, minVal, minVal+8)
+		tableDef := newTableDef(types.T_int64, false)
+		sanitizeStatsInfo(tableDef, s)
+		require.Equal(t, 500.0, s.NdvMap["c"])
+		validated := validateColumnStats(s, tableDef, "c")
+		require.True(t, validated.minMaxComplete)
+		require.False(t, validated.rangeEstimateSafe)
+		require.False(t, validated.shuffleBoundsSafe)
+	})
+
+	t.Run("encoded string min max is not treated as a discrete domain", func(t *testing.T) {
+		s := newStats(1000, 0, 500, 1, 10)
+		tableDef := newTableDef(types.T_varchar, false)
+		sanitizeStatsInfo(tableDef, s)
+		require.Equal(t, 500.0, s.NdvMap["c"])
+		validated := validateColumnStats(s, tableDef, "c")
+		require.False(t, validated.rangeEstimateSafe)
+		require.False(t, validated.shuffleBoundsSafe)
+	})
+
+	t.Run("invalid table count collapses dependent counts safely", func(t *testing.T) {
+		s := newStats(math.NaN(), 10, 10, 1, 10)
+		sanitizeStatsInfo(newTableDef(types.T_int32, false), s)
+		require.Equal(t, 0.0, s.TableCnt)
+		require.Equal(t, uint64(0), s.NullCntMap["c"])
+		require.Equal(t, 0.0, s.NdvMap["c"])
+	})
+}
+
+func TestAdjustNDVUsesMinMaxOnlyWithCompleteObjectCoverage(t *testing.T) {
+	tableDef := &planpb.TableDef{
+		Name: "t",
+		Cols: []*planpb.ColDef{
+			{Name: "c", Typ: planpb.Type{Id: int32(types.T_int32)}},
+			{Name: catalog.Row_ID},
+		},
+	}
+
+	for _, tc := range []struct {
+		name        string
+		sampleRatio float64
+		wantNDV     float64
+	}{
+		{name: "full metadata", sampleRatio: 1, wantNDV: 10},
+		{name: "sampled metadata", sampleRatio: 0.1, wantNDV: 500},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			info := &TableStatsInfo{
+				ColumnNDVs:    []float64{500},
+				TableRowCount: 1000,
+				SampleRatio:   tc.sampleRatio,
+			}
+			s := NewStatsInfo()
+			s.TableCnt = 1000
+			s.AccurateObjectNumber = 1000
+			s.MinValMap["c"] = 1
+			s.MaxValMap["c"] = 10
+			s.MinMaxValidMap["c"] = true
+			if tc.sampleRatio == 1 {
+				s.MinMaxCompleteMap["c"] = true
+			}
+
+			AdjustNDV(info, tableDef, s)
+
+			require.Equal(t, tc.wantNDV, s.NdvMap["c"])
+		})
+	}
+}
+
+func TestRangeSelectivityRequiresCompleteMinMax(t *testing.T) {
+	stats := NewStatsInfo()
+	stats.TableCnt = 1000
+	stats.NdvMap["c"] = 100
+	stats.MinValMap["c"] = 1
+	stats.MaxValMap["c"] = 100
+	stats.MinMaxValidMap["c"] = true
+	stats.MinMaxCompleteMap["c"] = true
+	stats.DataTypeMap["c"] = uint64(types.T_int64)
+	statsCache := NewStatsCache()
+	statsCache.Set(1, stats)
+	ctx := &statsCacheCompilerContext{
+		MockCompilerContext: &MockCompilerContext{ctx: context.Background()},
+		statsCache:          statsCache,
+	}
+	builder := NewQueryBuilder(planpb.Query_SELECT, ctx, false, false)
+	builder.tag2Table[0] = &planpb.TableDef{
+		TblId: 1,
+		Cols:  []*planpb.ColDef{{Name: "c", Typ: planpb.Type{Id: int32(types.T_int64)}}},
+	}
+	expr := &planpb.Expr{Expr: &planpb.Expr_F{F: &planpb.Function{
+		Func: &planpb.ObjectRef{ObjName: ">"},
+		Args: []*planpb.Expr{
+			{Typ: planpb.Type{Id: int32(types.T_int64)}, Expr: &planpb.Expr_Col{Col: &planpb.ColRef{RelPos: 0, Name: "c"}}},
+			{Typ: planpb.Type{Id: int32(types.T_int64)}, Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{Value: &planpb.Literal_I64Val{I64Val: 50}}}},
+		},
+	}}}
+
+	stats.SampleRatio = 0.1
+	delete(stats.MinMaxCompleteMap, "c")
+	require.Equal(t, 0.1, estimateNonEqualitySelectivity(expr, ">", builder))
+
+	stats.SampleRatio = 1
+	stats.MinMaxCompleteMap["c"] = true
+	require.InDelta(t, 0.5, estimateNonEqualitySelectivity(expr, ">", builder), 0.02)
+
+	delete(stats.DataTypeMap, "c") // schema, not cached metadata, defines the type
+	require.InDelta(t, 0.5, estimateNonEqualitySelectivity(expr, ">", builder), 0.02)
+
+	stats.MinMaxValidMap = nil // mixed-version/legacy StatsInfo
+	require.Equal(t, 0.1, estimateNonEqualitySelectivity(expr, ">", builder))
+}
+
+func TestShuffleRangesRequireRepresentableSampledValues(t *testing.T) {
+	rangeInfo := &pb.ShuffleRange{SampleRatio: 0.1}
+	require.True(t, shuffleRangesSafe(types.T_int64, rangeInfo, []float64{1, 50.5, 100}))
+	require.False(t, shuffleRangesSafe(types.T_int64, rangeInfo, []float64{50, 1}))
+	require.False(t, shuffleRangesSafe(types.T_int64, rangeInfo, []float64{float64(1 << 53)}))
+	require.False(t, shuffleRangesSafe(types.T_varchar, rangeInfo, []float64{1, 50, 100}))
+	require.False(t, shuffleRangesSafe(types.T_int64, &pb.ShuffleRange{}, []float64{1, 50, 100}))
+}
+
+func TestSampledUniformShuffleUsesQuantileRangesWithoutCompleteBounds(t *testing.T) {
+	ranges := []float64{1, 50, 100}
+	rangeInfo := &pb.ShuffleRange{
+		SampleRatio: 0.1,
+		Uniform:     0.999,
+		Result:      ranges,
+	}
+
+	require.Equal(t, ranges, shouldUseShuffleRanges(rangeInfo, false))
+	require.Nil(t, shouldUseShuffleRanges(rangeInfo, true))
+
+	rangeInfo.Uniform = uniformThreshold - 0.01
+	require.Equal(t, ranges, shouldUseShuffleRanges(rangeInfo, true))
+}
+
+func TestStatsInfoMinMaxMetadataProtoRoundTrip(t *testing.T) {
+	stats := NewStatsInfo()
+	stats.SampleRatio = 0.25
+	stats.MinMaxValidMap["c"] = true
+	stats.MinMaxCompleteMap["c"] = false
+
+	data, err := stats.Marshal()
+	require.NoError(t, err)
+	var decoded pb.StatsInfo
+	require.NoError(t, decoded.Unmarshal(data))
+	require.Equal(t, 0.25, decoded.SampleRatio)
+	require.True(t, decoded.MinMaxValidMap["c"])
+	require.Contains(t, decoded.MinMaxCompleteMap, "c")
+	require.False(t, decoded.MinMaxCompleteMap["c"])
+}
+
 func TestStatsSelectivityClampAvoidsNonFiniteJoin(t *testing.T) {
 	t.Run("not over year equality stays in range", func(t *testing.T) {
 		builder := newStatsTestBuilderWithNDV("d", 1)
@@ -1048,6 +1307,7 @@ func TestUpdateStatsInfo_Decimal64_NegativeValues(t *testing.T) {
 	// Verify results
 	minVal := statsInfo.MinValMap["balance"]
 	maxVal := statsInfo.MaxValMap["balance"]
+	require.True(t, statsInfo.MinMaxValidMap["balance"])
 
 	// The key assertion: min should be less than max
 	require.Less(t, minVal, maxVal, "Min value should be less than max value")
@@ -1190,6 +1450,12 @@ func TestUpdateStatsInfo_ShuffleRangeWrittenWhenZoneMapNotInited(t *testing.T) {
 
 	// Before the fix: continue skipped the ShuffleRange block, so ShuffleRangeMap stayed empty.
 	require.NotNil(t, s.ShuffleRangeMap["id"], "ShuffleRange must be written when ZoneMap is not inited but ShuffleRange is present and other canFill conditions are met")
+	_, minOK := s.MinValMap["id"]
+	_, maxOK := s.MaxValMap["id"]
+	_, validOK := s.MinMaxValidMap["id"]
+	require.False(t, minOK, "uninitialized ZoneMap must leave min unknown")
+	require.False(t, maxOK, "uninitialized ZoneMap must leave max unknown")
+	require.False(t, validOK, "uninitialized ZoneMap must leave min/max invalid")
 	require.Nil(t, info.ShuffleRanges[0], "UpdateStatsInfo nils out info.ShuffleRanges after copying to s")
 }
 
@@ -1796,4 +2062,214 @@ func TestCompareStatsIsStrictWeakOrdering(t *testing.T) {
 			}
 		}
 	}
+}
+
+func TestInnerJoinCardinalityUsesAvailableSingleKeyStatsWithoutLoweringFallback(t *testing.T) {
+	type testCase struct {
+		name        string
+		leftRows    float64
+		rightRows   float64
+		leftNDV     float64
+		rightNDV    float64
+		leftNulls   uint64
+		rightNulls  uint64
+		omitNulls   bool
+		sampleRatio float64
+		objectCount int64
+		conditions  int
+		want        float64
+	}
+	tests := []testCase{
+		{
+			name:     "repeated single key raises underestimated join output",
+			leftRows: 1_000_000, rightRows: 1_000_000,
+			leftNDV: 10_000, rightNDV: 10_000, conditions: 1,
+			want: 100_000_000,
+		},
+		{
+			name:     "asymmetric repeated key uses both side ndv",
+			leftRows: 1_000_000, rightRows: 100_000,
+			leftNDV: 1_000, rightNDV: 1_000, conditions: 1,
+			want: 100_000_000,
+		},
+		{
+			name:     "unique sized key preserves old estimate",
+			leftRows: 1_000_000, rightRows: 100_000,
+			leftNDV: 1_000_000, rightNDV: 100_000, conditions: 1,
+			want: 1_000_000,
+		},
+		{
+			name:     "child rows below base ndv preserves old estimate",
+			leftRows: 100, rightRows: 1_000_000,
+			leftNDV: 10_000, rightNDV: 10_000, conditions: 1,
+			want: 1_000_000,
+		},
+		{
+			name:     "null heavy keys do not inflate the numerator",
+			leftRows: 1_000_000, rightRows: 1_000_000,
+			leftNDV: 1, rightNDV: 1, leftNulls: 999_000, rightNulls: 999_000, conditions: 1,
+			want: 1_000_000,
+		},
+		{
+			name:     "asymmetric null fractions use non null rows",
+			leftRows: 1_000_000, rightRows: 100_000,
+			leftNDV: 1_000, rightNDV: 1_000, leftNulls: 900_000, conditions: 1,
+			want: 10_000_000,
+		},
+		{
+			name:     "missing null count preserves old estimate",
+			leftRows: 1_000_000, rightRows: 1_000_000,
+			leftNDV: 10_000, rightNDV: 10_000, omitNulls: true, conditions: 1,
+			want: 1_000_000,
+		},
+		{
+			name:     "sampled zero null count keeps an uncertainty margin",
+			leftRows: 1_000_000, rightRows: 1_000_000,
+			leftNDV: 10_000, rightNDV: 10_000, sampleRatio: 0.1, objectCount: 1_000, conditions: 1,
+			want: 94_090_000,
+		},
+		{
+			name:     "missing ndv preserves old estimate",
+			leftRows: 1_000_000, rightRows: 100_000,
+			leftNDV: 0, rightNDV: 0, conditions: 1,
+			want: 1_000_000,
+		},
+		{
+			name:     "multiple keys preserve old estimate without tuple ndv",
+			leftRows: 1_000_000, rightRows: 1_000_000,
+			leftNDV: 1_000, rightNDV: 1_000, conditions: 2,
+			want: 1_000_000,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			statsCache := NewStatsCache()
+			makeTableStats := func(rows, ndv float64, nulls uint64) *pb.StatsInfo {
+				stats := NewStatsInfo()
+				stats.TableCnt = rows
+				stats.SampleRatio = tt.sampleRatio
+				stats.AccurateObjectNumber = tt.objectCount
+				if stats.SampleRatio == 0 {
+					stats.SampleRatio = 1
+				}
+				if stats.AccurateObjectNumber == 0 {
+					stats.AccurateObjectNumber = 1
+				}
+				if ndv > 0 {
+					stats.NdvMap["k1"] = ndv
+					stats.NdvMap["k2"] = ndv
+				}
+				if !tt.omitNulls {
+					stats.NullCntMap["k1"] = nulls
+					stats.NullCntMap["k2"] = nulls
+				}
+				return stats
+			}
+			statsCache.Set(1, makeTableStats(tt.leftRows, tt.leftNDV, tt.leftNulls))
+			statsCache.Set(2, makeTableStats(tt.rightRows, tt.rightNDV, tt.rightNulls))
+			ctx := &statsCacheCompilerContext{
+				MockCompilerContext: &MockCompilerContext{ctx: context.Background()},
+				statsCache:          statsCache,
+			}
+			builder := NewQueryBuilder(planpb.Query_SELECT, ctx, false, false)
+
+			makeTableDef := func(tableID uint64) *planpb.TableDef {
+				return &planpb.TableDef{
+					TblId: tableID,
+					Cols: []*planpb.ColDef{
+						{Name: "k1", Typ: planpb.Type{Id: int32(types.T_int64)}},
+						{Name: "k2", Typ: planpb.Type{Id: int32(types.T_int64)}},
+					},
+					Name2ColIndex: map[string]int32{"k1": 0, "k2": 1},
+				}
+			}
+			leftDef := makeTableDef(1)
+			rightDef := makeTableDef(2)
+			builder.tag2Table[1] = leftDef
+			builder.tag2Table[2] = rightDef
+			left := &planpb.Node{
+				NodeType: planpb.Node_TABLE_SCAN, BindingTags: []int32{1}, TableDef: leftDef,
+				Stats: &planpb.Stats{TableCnt: tt.leftRows, Outcnt: tt.leftRows, Cost: tt.leftRows, Selectivity: 1, BlockNum: 1},
+			}
+			right := &planpb.Node{
+				NodeType: planpb.Node_TABLE_SCAN, BindingTags: []int32{2}, TableDef: rightDef,
+				Stats: &planpb.Stats{TableCnt: tt.rightRows, Outcnt: tt.rightRows, Cost: tt.rightRows, Selectivity: 1, BlockNum: 1},
+			}
+			join := &planpb.Node{
+				NodeType: planpb.Node_JOIN, JoinType: planpb.Node_INNER,
+				Children: []int32{0, 1}, Stats: DefaultStats(),
+			}
+			for i := 0; i < tt.conditions; i++ {
+				name := "k1"
+				if i == 1 {
+					name = "k2"
+				}
+				predicate, err := BindFuncExprImplByPlanExpr(context.Background(), "=", []*planpb.Expr{
+					{Typ: planpb.Type{Id: int32(types.T_int64)}, Expr: &planpb.Expr_Col{Col: &planpb.ColRef{RelPos: 1, ColPos: int32(i), Name: name}}},
+					{Typ: planpb.Type{Id: int32(types.T_int64)}, Expr: &planpb.Expr_Col{Col: &planpb.ColRef{RelPos: 2, ColPos: int32(i), Name: name}}},
+				})
+				require.NoError(t, err)
+				join.OnList = append(join.OnList, predicate)
+			}
+			builder.qry.Nodes = []*planpb.Node{left, right, join}
+
+			ReCalcNodeStats(2, builder, false, false, false)
+
+			require.Equal(t, tt.want, join.Stats.Outcnt)
+		})
+	}
+}
+
+func TestJoinColumnNullLineageSafety(t *testing.T) {
+	col := &planpb.ColRef{RelPos: 1, ColPos: 0, Name: "k"}
+	scan := func(tag int32) *planpb.Node {
+		return &planpb.Node{NodeType: planpb.Node_TABLE_SCAN, BindingTags: []int32{tag}}
+	}
+
+	t.Run("filter on join key is unsafe", func(t *testing.T) {
+		builder := &QueryBuilder{qry: &planpb.Query{Nodes: []*planpb.Node{
+			scan(1),
+			{
+				NodeType: planpb.Node_FILTER,
+				Children: []int32{0},
+				FilterList: []*planpb.Expr{{
+					Expr: &planpb.Expr_Col{Col: col},
+				}},
+			},
+		}}}
+		require.False(t, joinColumnNullLineageSafe(1, col, builder))
+	})
+
+	t.Run("filter on another column keeps existing independence assumption", func(t *testing.T) {
+		builder := &QueryBuilder{qry: &planpb.Query{Nodes: []*planpb.Node{
+			scan(1),
+			{
+				NodeType: planpb.Node_FILTER,
+				Children: []int32{0},
+				FilterList: []*planpb.Expr{{
+					Expr: &planpb.Expr_Col{Col: &planpb.ColRef{RelPos: 1, ColPos: 1, Name: "v"}},
+				}},
+			},
+		}}}
+		require.True(t, joinColumnNullLineageSafe(1, col, builder))
+	})
+
+	t.Run("left join null extension is unsafe", func(t *testing.T) {
+		builder := &QueryBuilder{qry: &planpb.Query{Nodes: []*planpb.Node{
+			scan(3),
+			scan(1),
+			{NodeType: planpb.Node_JOIN, JoinType: planpb.Node_LEFT, Children: []int32{0, 1}},
+		}}}
+		require.False(t, joinColumnNullLineageSafe(2, col, builder))
+	})
+
+	t.Run("inner join lineage remains usable", func(t *testing.T) {
+		builder := &QueryBuilder{qry: &planpb.Query{Nodes: []*planpb.Node{
+			scan(1),
+			scan(3),
+			{NodeType: planpb.Node_JOIN, JoinType: planpb.Node_INNER, Children: []int32{0, 1}},
+		}}}
+		require.True(t, joinColumnNullLineageSafe(2, col, builder))
+	})
 }

@@ -3575,6 +3575,7 @@ func (c *Compile) compileTableScan(node *plan.Node) ([]*Scope, error) {
 	if err != nil {
 		return nil, err
 	}
+	finalizeTableScanShuffleForCNCount(node, len(nodes))
 	ss := make([]*Scope, 0, len(nodes))
 
 	currentFirstFlag := c.anal.isFirst
@@ -3595,6 +3596,23 @@ func (c *Compile) compileTableScan(node *plan.Node) ([]*Scope, error) {
 	}
 
 	return ss, nil
+}
+
+// finalizeTableScanShuffleForCNCount makes the coordinator the single owner of
+// the cross-CN object-partitioning decision. ShuffleRangeReEval cannot produce
+// one boundary per CN when the quantile list is too short; encode hash in the
+// existing plan field before scopes are serialized so old and new CNs cannot
+// choose different owners for the same object.
+func finalizeTableScanShuffleForCNCount(node *plan.Node, cnCount int) {
+	if node == nil || node.Stats == nil || node.Stats.HashmapStats == nil ||
+		node.Stats.HashmapStats.ShuffleType != plan.ShuffleType_Range ||
+		len(node.Stats.HashmapStats.Ranges) == 0 || cnCount <= len(node.Stats.HashmapStats.Ranges)/2 {
+		return
+	}
+	node.Stats.HashmapStats.ShuffleType = plan.ShuffleType_Hash
+	node.Stats.HashmapStats.Ranges = nil
+	node.Stats.HashmapStats.ShuffleColMin = 0
+	node.Stats.HashmapStats.ShuffleColMax = 0
 }
 
 func (c *Compile) compileTableScanWithNode(node *plan.Node, engNode engine.Node, firstFlag bool) (*Scope, error) {

@@ -173,9 +173,300 @@ func NewStatsInfo() *pb.StatsInfo {
 		NullCntMap:         make(map[string]uint64),
 		SizeMap:            make(map[string]uint64),
 		ShuffleRangeMap:    make(map[string]*pb.ShuffleRange),
+		MinMaxValidMap:     make(map[string]bool),
+		MinMaxCompleteMap:  make(map[string]bool),
 		BlockNumber:        0,
 		ApproxObjectNumber: 0,
 		TableCnt:           0,
+	}
+}
+
+type validatedColumnStats struct {
+	tableCnt          float64
+	nullCnt           float64
+	ndv               float64
+	ndvKnown          bool
+	minVal            float64
+	maxVal            float64
+	minMaxKnown       bool
+	minMaxComplete    bool
+	rangeEstimateSafe bool
+	shuffleBoundsSafe bool
+}
+
+func validTableCnt(tableCnt float64) float64 {
+	if tableCnt < 0 || math.IsNaN(tableCnt) || math.IsInf(tableCnt, 0) {
+		return 0
+	}
+	return tableCnt
+}
+
+func isSingleColumnPrimaryKey(tableDef *plan.TableDef, colName string) bool {
+	return tableDef != nil && tableDef.Pkey != nil &&
+		len(tableDef.Pkey.Names) == 1 && tableDef.Pkey.Names[0] == colName &&
+		colName != catalog.FakePrimaryKeyColName
+}
+
+func findColumnPosition(tableDef *plan.TableDef, colName string) (int32, bool) {
+	if tableDef == nil {
+		return 0, false
+	}
+	if colPos, ok := tableDef.Name2ColIndex[colName]; ok && colPos >= 0 && int(colPos) < len(tableDef.Cols) {
+		return colPos, true
+	}
+	for colPos, colDef := range tableDef.Cols {
+		if colDef.Name == colName {
+			return int32(colPos), true
+		}
+	}
+	return 0, false
+}
+
+// discreteDomainCardinality returns a provable upper bound on NDV from a
+// numeric min/max pair. Values wider than float64's exact integer range are
+// deliberately rejected: StatsInfo stores min/max as float64, so narrowing
+// such a domain could turn representation loss into a cardinality underestimate.
+func discreteDomainCardinality(typ types.T, minVal, maxVal float64) (float64, bool) {
+	if math.IsNaN(minVal) || math.IsNaN(maxVal) || math.IsInf(minVal, 0) ||
+		math.IsInf(maxVal, 0) || minVal > maxVal {
+		return 0, false
+	}
+
+	switch typ {
+	case types.T_bool:
+		if minVal < 0 || maxVal > 1 {
+			return 0, false
+		}
+	case types.T_int8:
+		if minVal < math.MinInt8 || maxVal > math.MaxInt8 {
+			return 0, false
+		}
+	case types.T_int16:
+		if minVal < math.MinInt16 || maxVal > math.MaxInt16 {
+			return 0, false
+		}
+	case types.T_int32, types.T_date:
+		if minVal < math.MinInt32 || maxVal > math.MaxInt32 {
+			return 0, false
+		}
+	case types.T_uint8:
+		if minVal < 0 || maxVal > math.MaxUint8 {
+			return 0, false
+		}
+	case types.T_uint16, types.T_year, types.T_enum:
+		if minVal < 0 || maxVal > math.MaxUint16 {
+			return 0, false
+		}
+	case types.T_uint32:
+		if minVal < 0 || maxVal > math.MaxUint32 {
+			return 0, false
+		}
+	case types.T_int64, types.T_uint64, types.T_bit,
+		types.T_time, types.T_datetime, types.T_timestamp:
+		const maxExactInteger = float64(1 << 53)
+		if math.Abs(minVal) >= maxExactInteger || math.Abs(maxVal) >= maxExactInteger ||
+			(typ == types.T_uint64 || typ == types.T_bit) && minVal < 0 {
+			return 0, false
+		}
+	default:
+		return 0, false
+	}
+
+	if math.Trunc(minVal) != minVal || math.Trunc(maxVal) != maxVal {
+		return 0, false
+	}
+	domain := maxVal - minVal + 1
+	if domain < 1 || domain >= float64(1<<53) || math.IsInf(domain, 0) {
+		return 0, false
+	}
+	return domain, true
+}
+
+func validSampleRatio(sampleRatio float64) float64 {
+	if sampleRatio <= 0 || sampleRatio > 1 || math.IsNaN(sampleRatio) || math.IsInf(sampleRatio, 0) {
+		return 0
+	}
+	return sampleRatio
+}
+
+func exactDiscreteValue(typ types.T, value float64) bool {
+	_, ok := discreteDomainCardinality(typ, value, value)
+	return ok
+}
+
+func rangeEstimateSafe(typ types.T, minVal, maxVal float64) bool {
+	switch typ {
+	case types.T_char, types.T_varchar, types.T_text, types.T_datalink:
+		// String extrema are stored as an encoded uint64 in float64. The encoding
+		// is useful for sampled shuffle quantiles, but is not an exact SQL domain.
+		return false
+	case types.T_float32, types.T_float64, types.T_decimal64, types.T_decimal128:
+		return true
+	default:
+		return exactDiscreteValue(typ, minVal) && exactDiscreteValue(typ, maxVal)
+	}
+}
+
+func shuffleRangeValueSafe(typ types.T, value float64) bool {
+	if math.IsNaN(value) || math.IsInf(value, 0) {
+		return false
+	}
+	switch typ {
+	case types.T_int16:
+		return value >= math.MinInt16 && value <= math.MaxInt16
+	case types.T_int32:
+		return value >= math.MinInt32 && value <= math.MaxInt32
+	case types.T_int64:
+		return math.Abs(value) < float64(1<<53)
+	case types.T_uint16:
+		return value >= 0 && value <= math.MaxUint16
+	case types.T_uint32:
+		return value >= 0 && value <= math.MaxUint32
+	case types.T_uint64:
+		return value >= 0 && value < float64(1<<53)
+	default:
+		return false
+	}
+}
+
+func shuffleRangesSafe(typ types.T, shuffleRange *pb.ShuffleRange, ranges []float64) bool {
+	if shuffleRange == nil || validSampleRatio(shuffleRange.SampleRatio) == 0 || len(ranges) == 0 {
+		return false
+	}
+	for i, value := range ranges {
+		if !shuffleRangeValueSafe(typ, value) {
+			return false
+		}
+		if i > 0 && value < ranges[i-1] {
+			return false
+		}
+	}
+	return true
+}
+
+// validateColumnStats is the single planner-side boundary for raw column
+// statistics. It removes impossible combinations without claiming that a
+// sampled value is accurate. A sampled min/max pair is not a hard domain bound;
+// completeness must be explicit in StatsInfo before range consumers may use it.
+// Missing or invalid NDV remains unknown.
+func validateColumnStats(
+	s *pb.StatsInfo,
+	tableDef *plan.TableDef,
+	colName string,
+) validatedColumnStats {
+	var ret validatedColumnStats
+	if s == nil || tableDef == nil {
+		return ret
+	}
+	colPos, ok := findColumnPosition(tableDef, colName)
+	if !ok {
+		return ret
+	}
+
+	ret.tableCnt = validTableCnt(s.TableCnt)
+	ret.nullCnt = math.Min(float64(s.NullCntMap[colName]), ret.tableCnt)
+	if isSingleColumnPrimaryKey(tableDef, colName) {
+		ret.nullCnt = 0
+	}
+	nonNullCnt := ret.tableCnt - ret.nullCnt
+
+	var minOK, maxOK bool
+	ret.minVal, minOK = s.MinValMap[colName]
+	ret.maxVal, maxOK = s.MaxValMap[colName]
+	ret.minMaxKnown = s.MinMaxValidMap[colName] && minOK && maxOK &&
+		!math.IsNaN(ret.minVal) && !math.IsNaN(ret.maxVal) &&
+		!math.IsInf(ret.minVal, 0) && !math.IsInf(ret.maxVal, 0) && ret.minVal <= ret.maxVal
+	ret.minMaxComplete = ret.minMaxKnown && s.MinMaxCompleteMap[colName]
+	if ret.minMaxComplete {
+		typ := types.T(tableDef.Cols[colPos].Typ.Id)
+		ret.rangeEstimateSafe = rangeEstimateSafe(typ, ret.minVal, ret.maxVal)
+		ret.shuffleBoundsSafe = exactDiscreteValue(typ, ret.minVal) && exactDiscreteValue(typ, ret.maxVal)
+	}
+	if isSingleColumnPrimaryKey(tableDef, colName) && ret.minMaxComplete {
+		if domain, domainOK := discreteDomainCardinality(
+			types.T(tableDef.Cols[colPos].Typ.Id), ret.minVal, ret.maxVal,
+		); domainOK && domain < nonNullCnt {
+			// Row count plus a single-column primary key proves this complete
+			// domain impossible. Keep the exact PK NDV and discard stale bounds.
+			ret.minMaxKnown = false
+			ret.minMaxComplete = false
+			ret.rangeEstimateSafe = false
+			ret.shuffleBoundsSafe = false
+		}
+	}
+
+	if nonNullCnt == 0 {
+		ret.ndvKnown = true
+		return ret
+	}
+	if isSingleColumnPrimaryKey(tableDef, colName) {
+		ret.ndv = nonNullCnt
+		ret.ndvKnown = true
+		return ret
+	}
+
+	rawNDV, ndvOK := s.NdvMap[colName]
+	if !ndvOK || rawNDV <= 0 || math.IsNaN(rawNDV) || math.IsInf(rawNDV, 0) {
+		return ret
+	}
+	ret.ndv = math.Min(math.Max(rawNDV, 1), nonNullCnt)
+	ret.ndvKnown = true
+	if ret.minMaxComplete {
+		if domain, domainOK := discreteDomainCardinality(
+			types.T(tableDef.Cols[colPos].Typ.Id), ret.minVal, ret.maxVal,
+		); domainOK {
+			ret.ndv = math.Min(ret.ndv, domain)
+		}
+	}
+	return ret
+}
+
+// sanitizeStatsInfo canonicalizes collected statistics before publication.
+// Planner consumers still validate on read so older cached or patched stats
+// cannot bypass the same invariants.
+func sanitizeStatsInfo(tableDef *plan.TableDef, s *pb.StatsInfo) {
+	if s == nil || tableDef == nil {
+		return
+	}
+	if s.NdvMap == nil {
+		s.NdvMap = make(map[string]float64)
+	}
+	if s.MinValMap == nil {
+		s.MinValMap = make(map[string]float64)
+	}
+	if s.MaxValMap == nil {
+		s.MaxValMap = make(map[string]float64)
+	}
+	if s.NullCntMap == nil {
+		s.NullCntMap = make(map[string]uint64)
+	}
+	if s.MinMaxValidMap == nil {
+		s.MinMaxValidMap = make(map[string]bool)
+	}
+	if s.MinMaxCompleteMap == nil {
+		s.MinMaxCompleteMap = make(map[string]bool)
+	}
+	s.TableCnt = validTableCnt(s.TableCnt)
+	s.SampleRatio = validSampleRatio(s.SampleRatio)
+	for _, col := range tableDef.Cols {
+		if col.Name == catalog.Row_ID {
+			continue
+		}
+		stats := validateColumnStats(s, tableDef, col.Name)
+		s.NullCntMap[col.Name] = uint64(stats.nullCnt)
+		if stats.ndvKnown {
+			s.NdvMap[col.Name] = stats.ndv
+		} else {
+			delete(s.NdvMap, col.Name)
+		}
+		if !stats.minMaxKnown {
+			delete(s.MinValMap, col.Name)
+			delete(s.MaxValMap, col.Name)
+			delete(s.MinMaxValidMap, col.Name)
+			delete(s.MinMaxCompleteMap, col.Name)
+		} else if !stats.minMaxComplete {
+			delete(s.MinMaxCompleteMap, col.Name)
+		}
 	}
 }
 
@@ -195,6 +486,7 @@ type TableStatsInfo struct {
 	AccurateObjectNumber int64
 	ApproxObjectNumber   int64
 	TableRowCount        float64 // Total row count in the table
+	SampleRatio          float64 // Fraction of objects whose column metadata was read
 }
 
 func NewTableStatsInfo(lenCols int) *TableStatsInfo {
@@ -216,7 +508,7 @@ func AdjustNDV(info *TableStatsInfo, tableDef *TableDef, s *pb.StatsInfo) {
 	if info.AccurateObjectNumber > 1 {
 		for i, coldef := range tableDef.Cols[:len(tableDef.Cols)-1] {
 			if info.ColumnNDVs[i] > s.TableCnt {
-				info.ColumnNDVs[i] = s.TableCnt * 0.99 // to avoid a bug
+				info.ColumnNDVs[i] = s.TableCnt
 			}
 			colName := coldef.Name
 			rate := info.ColumnNDVs[i] / info.TableRowCount
@@ -292,10 +584,9 @@ func AdjustNDV(info *TableStatsInfo, tableDef *TableDef, s *pb.StatsInfo) {
 	for i, coldef := range tableDef.Cols[:len(tableDef.Cols)-1] {
 		colName := coldef.Name
 		s.NdvMap[colName] = info.ColumnNDVs[i]
-		if s.NdvMap[colName] > s.TableCnt {
-			s.NdvMap[colName] = s.TableCnt * 0.99
-		}
 	}
+	s.SampleRatio = info.SampleRatio
+	sanitizeStatsInfo(tableDef, s)
 }
 
 func UpdateStatsInfo(info *TableStatsInfo, tableDef *plan.TableDef, s *pb.StatsInfo) {
@@ -308,6 +599,13 @@ func UpdateStatsInfo(info *TableStatsInfo, tableDef *plan.TableDef, s *pb.StatsI
 	s.BlockNumber = info.BlockNumber
 	s.TableCnt = info.TableRowCount
 	s.TableName = tableDef.Name
+	s.SampleRatio = info.SampleRatio
+	if s.MinMaxValidMap == nil {
+		s.MinMaxValidMap = make(map[string]bool)
+	}
+	if s.MinMaxCompleteMap == nil {
+		s.MinMaxCompleteMap = make(map[string]bool)
+	}
 
 	for i, coldef := range tableDef.Cols[:len(tableDef.Cols)-1] {
 		colName := coldef.Name
@@ -315,14 +613,15 @@ func UpdateStatsInfo(info *TableStatsInfo, tableDef *plan.TableDef, s *pb.StatsI
 		s.NullCntMap[colName] = uint64(info.NullCnts[i])
 		s.SizeMap[colName] = uint64(info.ColumnSize[i])
 
-		// When ZoneMap is not inited we cannot decode min/max from it; set them to 0 and skip the type switch.
+		// When ZoneMap is not inited we cannot decode min/max from it; leave them unknown and skip the type switch.
 		// We must NOT continue here: the ShuffleRange block below must still run so that a ShuffleRange
 		// produced by collect (e.g. from NDV accumulation in later objects) is written to s.ShuffleRangeMap.
 		// Otherwise, "collect has ShuffleRanges[i] but ZoneMap never inited" would leave ShuffleRangeMap empty.
-		if !info.ColumnZMs[i].IsInited() {
-			s.MinValMap[colName] = 0
-			s.MaxValMap[colName] = 0
-		} else {
+		delete(s.MinValMap, colName)
+		delete(s.MaxValMap, colName)
+		delete(s.MinMaxValidMap, colName)
+		delete(s.MinMaxCompleteMap, colName)
+		if info.ColumnZMs[i].IsInited() {
 			switch info.DataTypes[i].Oid {
 			case types.T_bit:
 				s.MinValMap[colName] = float64(types.DecodeUint64(info.ColumnZMs[i].GetMinBuf()))
@@ -398,11 +697,21 @@ func UpdateStatsInfo(info *TableStatsInfo, tableDef *plan.TableDef, s *pb.StatsI
 
 			}
 		}
+		_, minOK := s.MinValMap[colName]
+		_, maxOK := s.MaxValMap[colName]
+		if minOK && maxOK {
+			s.MinMaxValidMap[colName] = true
+			if validSampleRatio(info.SampleRatio) == 1 {
+				s.MinMaxCompleteMap[colName] = true
+			}
+		} else {
+			delete(s.MinMaxValidMap, colName)
+			delete(s.MinMaxCompleteMap, colName)
+		}
 
 		if info.ShuffleRanges[i] != nil {
 			// Allow writing ShuffleRange when we have one from collect and other conditions are met.
-			// When ZoneMap is not inited we set min=max=0, so min!=max is false; we relax by allowing
-			// write when !IsInited() so that collect-produced ShuffleRanges are not dropped.
+			// A collect-produced ShuffleRange remains useful even when the ZoneMap is not initialized.
 			canFill := (s.MinValMap[colName] != s.MaxValMap[colName] || !info.ColumnZMs[i].IsInited()) &&
 				s.TableCnt > ShuffleThreshHoldOfNDV*2 &&
 				info.ColumnNDVs[i] >= ShuffleThreshHoldOfNDV &&
@@ -435,9 +744,13 @@ func isHighNdvCols(cols []int32, tableDef *TableDef, builder *QueryBuilder) bool
 	s := w.GetStats()
 	var totalNDV float64 = 1
 	for i := range cols {
-		totalNDV *= s.NdvMap[tableDef.Cols[cols[i]].Name]
+		colStats := validateColumnStats(s, tableDef, tableDef.Cols[cols[i]].Name)
+		if !colStats.ndvKnown {
+			return false
+		}
+		totalNDV = math.Min(colStats.tableCnt, totalNDV*colStats.ndv)
 	}
-	return totalNDV > s.TableCnt*highNDVcolumnThreshHold
+	return totalNDV > validTableCnt(s.TableCnt)*highNDVcolumnThreshHold
 }
 
 func (builder *QueryBuilder) getColNDVRatio(cols []int32, tableDef *TableDef) float64 {
@@ -456,9 +769,13 @@ func (builder *QueryBuilder) getColNDVRatio(cols []int32, tableDef *TableDef) fl
 	s := w.GetStats()
 	var totalNDV float64 = 1
 	for i := range cols {
-		totalNDV *= s.NdvMap[tableDef.Cols[cols[i]].Name]
+		colStats := validateColumnStats(s, tableDef, tableDef.Cols[cols[i]].Name)
+		if !colStats.ndvKnown {
+			return 0
+		}
+		totalNDV = math.Min(colStats.tableCnt, totalNDV*colStats.ndv)
 	}
-	result := safeRatio(totalNDV, s.TableCnt, 0)
+	result := safeRatio(totalNDV, validTableCnt(s.TableCnt), 0)
 	if result > 1 {
 		result = 1
 	}
@@ -508,7 +825,15 @@ func (builder *QueryBuilder) getColNdv(col *plan.ColRef) float64 {
 	if w == nil || w.GetStats() == nil {
 		return -1
 	}
-	return w.GetStats().NdvMap[col.Name]
+	tableDef, ok := builder.tag2Table[col.RelPos]
+	if !ok {
+		return -1
+	}
+	stats := validateColumnStats(w.GetStats(), tableDef, col.Name)
+	if !stats.ndvKnown {
+		return -1
+	}
+	return stats.ndv
 }
 
 //func (builder *QueryBuilder) getColOverlap(col *plan.ColRef) float64 {
@@ -527,12 +852,15 @@ func getNullSelectivity(arg *plan.Expr, builder *QueryBuilder, isnull bool) floa
 		if w == nil || w.GetStats() == nil {
 			break
 		}
-		s := w.GetStats()
-		nullCnt := float64(s.NullCntMap[col.Name])
+		tableDef, ok := builder.tag2Table[col.RelPos]
+		if !ok {
+			break
+		}
+		s := validateColumnStats(w.GetStats(), tableDef, col.Name)
 		if isnull {
-			return safeRatio(nullCnt, s.TableCnt, 0.1)
+			return safeRatio(s.nullCnt, s.tableCnt, 0.1)
 		} else {
-			return 1 - safeRatio(nullCnt, s.TableCnt, 0.1)
+			return 1 - safeRatio(s.nullCnt, s.tableCnt, 0.1)
 		}
 	}
 
@@ -625,6 +953,189 @@ func getExprNdv(expr *plan.Expr, builder *QueryBuilder) float64 {
 		return builder.getColNdv(exprImpl.Col)
 	}
 	return -1
+}
+
+type equiJoinColumnStats struct {
+	ndv         float64
+	nonNullRows float64
+}
+
+func subtreeHasBindingTag(nodeID, tag int32, builder *QueryBuilder) bool {
+	if builder == nil || builder.qry == nil || nodeID < 0 || int(nodeID) >= len(builder.qry.Nodes) {
+		return false
+	}
+	for _, subtreeTag := range builder.enumerateTags(nodeID) {
+		if subtreeTag == tag {
+			return true
+		}
+	}
+	return false
+}
+
+// joinColumnNullLineageSafe rejects deterministic cases where a base-table
+// null fraction no longer describes the child column. Filters on the key can
+// select only NULL values, and outer/single joins can inject new NULL values.
+// Other predicates still use the optimizer's existing independence assumption.
+func joinColumnNullLineageSafe(nodeID int32, col *plan.ColRef, builder *QueryBuilder) bool {
+	if builder == nil || builder.qry == nil || col == nil ||
+		nodeID < 0 || int(nodeID) >= len(builder.qry.Nodes) {
+		return false
+	}
+	node := builder.qry.Nodes[nodeID]
+	if node == nil {
+		return false
+	}
+	for _, filter := range node.FilterList {
+		if refsColumn(filter, col.RelPos, col.ColPos) {
+			return false
+		}
+	}
+	for _, filter := range node.BlockFilterList {
+		if refsColumn(filter, col.RelPos, col.ColPos) {
+			return false
+		}
+	}
+
+	if node.NodeType == plan.Node_JOIN && len(node.Children) == 2 {
+		leftHasCol := subtreeHasBindingTag(node.Children[0], col.RelPos, builder)
+		rightHasCol := subtreeHasBindingTag(node.Children[1], col.RelPos, builder)
+		switch node.JoinType {
+		case plan.Node_LEFT:
+			if rightHasCol {
+				return false
+			}
+		case plan.Node_RIGHT:
+			if leftHasCol {
+				return false
+			}
+		case plan.Node_OUTER:
+			if leftHasCol || rightHasCol {
+				return false
+			}
+		case plan.Node_SINGLE:
+			if (!node.IsRightJoin && rightHasCol) || (node.IsRightJoin && leftHasCol) {
+				return false
+			}
+		}
+	}
+
+	foundSource := len(node.BindingTags) > 0
+	for _, childID := range node.Children {
+		if !subtreeHasBindingTag(childID, col.RelPos, builder) {
+			continue
+		}
+		foundSource = true
+		if !joinColumnNullLineageSafe(childID, col, builder) {
+			return false
+		}
+	}
+	return foundSource
+}
+
+func availableEquiJoinColumnStats(
+	builder *QueryBuilder,
+	childID int32,
+	col *plan.ColRef,
+	childRows float64,
+) (equiJoinColumnStats, bool) {
+	if builder == nil || col == nil || childRows <= 0 || math.IsNaN(childRows) || math.IsInf(childRows, 0) {
+		return equiJoinColumnStats{}, false
+	}
+	if !joinColumnNullLineageSafe(childID, col, builder) {
+		return equiJoinColumnStats{}, false
+	}
+	w := builder.getStatsInfoByCol(col)
+	if w == nil || w.GetStats() == nil {
+		return equiJoinColumnStats{}, false
+	}
+	tableDef, ok := builder.tag2Table[col.RelPos]
+	if !ok {
+		return equiJoinColumnStats{}, false
+	}
+	s := w.GetStats()
+	if _, nullCntKnown := s.NullCntMap[col.Name]; !nullCntKnown {
+		return equiJoinColumnStats{}, false
+	}
+	stats := validateColumnStats(s, tableDef, col.Name)
+	if !stats.ndvKnown || stats.ndv <= 0 || stats.tableCnt <= 0 {
+		return equiJoinColumnStats{}, false
+	}
+	nonNullFraction := safeRatio(stats.tableCnt-stats.nullCnt, stats.tableCnt, 0)
+	sampleRatio := validSampleRatio(s.SampleRatio)
+	if sampleRatio == 0 {
+		return equiJoinColumnStats{}, false
+	}
+	if sampleRatio < 1 {
+		sampledObjects := float64(s.AccurateObjectNumber) * sampleRatio
+		if sampledObjects <= 0 || math.IsNaN(sampledObjects) || math.IsInf(sampledObjects, 0) {
+			return equiJoinColumnStats{}, false
+		}
+		// The rule of three gives an approximate 95% upper bound for an unseen
+		// event. Apply it at object granularity so sampled NullCnt=0 is not
+		// mistaken for a complete proof that the column is non-NULL.
+		nonNullFraction = math.Max(0, nonNullFraction-math.Min(1, 3/sampledObjects))
+	}
+	nonNullRows := childRows * nonNullFraction
+	if nonNullRows <= 0 || math.IsNaN(nonNullRows) || math.IsInf(nonNullRows, 0) {
+		return equiJoinColumnStats{}, false
+	}
+	ndv := math.Min(stats.ndv, nonNullRows)
+	if ndv <= 0 || math.IsNaN(ndv) || math.IsInf(ndv, 0) {
+		return equiJoinColumnStats{}, false
+	}
+	return equiJoinColumnStats{ndv: ndv, nonNullRows: nonNullRows}, true
+}
+
+// availableSingleEquiJoinCardinality returns the standard uniform estimate
+// for a single direct-column equality. Equality does not match NULL, so both
+// inputs are reduced by their known non-NULL fractions before applying NDV.
+// Multi-key joins require tuple NDV/correlation statistics and are excluded.
+func availableSingleEquiJoinCardinality(
+	node *plan.Node,
+	builder *QueryBuilder,
+	leftStats, rightStats *Stats,
+) (float64, bool) {
+	if node == nil || builder == nil || builder.compCtx == nil || builder.qry == nil ||
+		leftStats == nil || rightStats == nil || len(node.Children) != 2 || len(node.OnList) != 1 {
+		return 0, false
+	}
+	fn := node.OnList[0].GetF()
+	if fn == nil || !IsEqualFunc(fn.Func.GetObj()) || len(fn.Args) != 2 {
+		return 0, false
+	}
+	leftCol := fn.Args[0].GetCol()
+	rightCol := fn.Args[1].GetCol()
+	if leftCol == nil || rightCol == nil {
+		return 0, false
+	}
+
+	leftTags := make(map[int32]bool)
+	for _, tag := range builder.enumerateTags(node.Children[0]) {
+		leftTags[tag] = true
+	}
+	rightTags := make(map[int32]bool)
+	for _, tag := range builder.enumerateTags(node.Children[1]) {
+		rightTags[tag] = true
+	}
+	leftFirst := leftTags[leftCol.RelPos] && !rightTags[leftCol.RelPos] &&
+		rightTags[rightCol.RelPos] && !leftTags[rightCol.RelPos]
+	if !leftFirst {
+		rightFirst := leftTags[rightCol.RelPos] && !rightTags[rightCol.RelPos] &&
+			rightTags[leftCol.RelPos] && !leftTags[leftCol.RelPos]
+		if !rightFirst {
+			return 0, false
+		}
+		leftCol, rightCol = rightCol, leftCol
+	}
+
+	left, leftOK := availableEquiJoinColumnStats(builder, node.Children[0], leftCol, leftStats.Outcnt)
+	right, rightOK := availableEquiJoinColumnStats(builder, node.Children[1], rightCol, rightStats.Outcnt)
+	if !leftOK || !rightOK {
+		return 0, false
+	}
+	joinNDV := math.Max(left.ndv, right.ndv)
+	cardinality := left.nonNullRows * right.nonNullRows / joinNDV
+	return cardinality, cardinality >= 0 && !math.IsNaN(cardinality) && !math.IsInf(cardinality, 0)
 }
 
 func estimateEqualitySelectivity(expr *plan.Expr, builder *QueryBuilder, s *pb.StatsInfo) float64 {
@@ -873,9 +1384,26 @@ func estimateNonEqualitySelectivity(expr *plan.Expr, funcName string, builder *Q
 			return 0.01
 		}
 	}
-	s := w.GetStats()
-	if colRef != nil && len(literals) > 0 {
-		typ := types.T(s.DataTypeMap[colRef.Name])
+	if colRef == nil || len(literals) == 0 {
+		return 0.1
+	}
+	tableDef, ok := builder.tag2Table[colRef.RelPos]
+	if !ok {
+		return 0.1
+	}
+	validated := validateColumnStats(w.GetStats(), tableDef, colRef.Name)
+	if len(literals) > 0 {
+		if !validated.rangeEstimateSafe {
+			return 0.1
+		}
+		colPos, ok := findColumnPosition(tableDef, colRef.Name)
+		if !ok {
+			return 0.1
+		}
+		// The table schema is authoritative. StatsInfo.DataTypeMap may be absent
+		// in old caches or stale after a schema change, and must not change how
+		// otherwise valid min/max values are interpreted.
+		typ := types.T(tableDef.Cols[colPos].Typ.Id)
 
 		switch colFnName {
 		case "":
@@ -883,15 +1411,15 @@ func estimateNonEqualitySelectivity(expr *plan.Expr, funcName string, builder *Q
 			// Decimal literals store internal scaled values, need proper conversion
 			if typ == types.T_decimal64 || typ == types.T_decimal128 {
 				return calcSelectivityByMinMaxForDecimal(
-					funcName, s.MinValMap[colRef.Name], s.MaxValMap[colRef.Name], expr)
+					funcName, validated.minVal, validated.maxVal, expr)
 			}
 			return calcSelectivityByMinMax(
-				funcName, s.MinValMap[colRef.Name], s.MaxValMap[colRef.Name], typ, literals)
+				funcName, validated.minVal, validated.maxVal, typ, literals)
 		case "year":
 			switch typ {
 			case types.T_date:
-				minVal := types.Date(s.MinValMap[colRef.Name])
-				maxVal := types.Date(s.MaxValMap[colRef.Name])
+				minVal := types.Date(validated.minVal)
+				maxVal := types.Date(validated.maxVal)
 				return calcSelectivityByMinMax(funcName, float64(minVal.Year()), float64(maxVal.Year()), litType, literals)
 			case types.T_datetime:
 				// TODO
@@ -1149,6 +1677,12 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 		switch node.JoinType {
 		case plan.Node_INNER:
 			outcnt := leftStats.Outcnt * rightStats.Outcnt / ndv
+			// The legacy fallback assumes the smaller input is effectively unique.
+			// A single direct equality with available NDV/null statistics can expose
+			// a possible many-to-many join. Never lower the established estimate.
+			if ndvOutcnt, ok := availableSingleEquiJoinCardinality(node, builder, leftStats, rightStats); ok && ndvOutcnt > outcnt {
+				outcnt = ndvOutcnt
+			}
 			if !isCrossJoin {
 				outcnt *= selectivity
 			}
@@ -1705,7 +2239,7 @@ func calcScanStats(node *plan.Node, builder *QueryBuilder) *plan.Stats {
 	}
 
 	stats := new(plan.Stats)
-	stats.TableCnt = s.TableCnt
+	stats.TableCnt = validTableCnt(s.TableCnt)
 	var blockSel float64 = 1
 	var preservedCompositeFilters []*plan.Expr
 	if builder.optimizerHints == nil || builder.optimizerHints.blockFilter != 2 {

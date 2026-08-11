@@ -802,6 +802,48 @@ func TestRangeShuffleJoinSingleBucketSkewedBatch(t *testing.T) {
 	require.Equal(t, rowCount, rows)
 }
 
+func TestRangeShuffleFallsBackToHashWhenQuantilesDoNotCoverBuckets(t *testing.T) {
+	makeNode := func(ranges []float64) *plan.Node {
+		left := &plan.Expr{
+			Typ:  plan.Type{Id: int32(types.T_int64)},
+			Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}},
+		}
+		right := &plan.Expr{
+			Typ:  plan.Type{Id: int32(types.T_int64)},
+			Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}},
+		}
+		return &plan.Node{
+			OnList:  []*plan.Expr{{Expr: &plan.Expr_F{F: &plan.Function{Args: []*plan.Expr{left, right}}}}},
+			GroupBy: []*plan.Expr{left},
+			Stats: &plan.Stats{
+				TableCnt: 1_000_000,
+				HashmapStats: &plan.HashMapStats{
+					ShuffleType:   plan.ShuffleType_Range,
+					ShuffleColIdx: 0,
+					Ranges:        ranges,
+				},
+			},
+		}
+	}
+
+	collectorRanges := make([]float64, 1023)
+	for i := range collectorRanges {
+		collectorRanges[i] = float64(i)
+	}
+	node := makeNode(collectorRanges)
+	require.Equal(t, int32(plan.ShuffleType_Hash), constructShuffleOperatorForJoin(512, node, true).ShuffleType)
+	require.Equal(t, int32(plan.ShuffleType_Hash), constructShuffleArgForGroup(512, node).ShuffleType)
+	require.Equal(t, int32(plan.ShuffleType_Range), constructShuffleOperatorForJoin(511, node, true).ShuffleType)
+
+	shortNode := makeNode([]float64{1, 25, 50, 75, 100})
+	require.Equal(t, int32(plan.ShuffleType_Hash), constructShuffleOperatorForJoin(4, shortNode, true).ShuffleType)
+
+	boundsOnly := makeNode(nil)
+	boundsOnly.Stats.HashmapStats.ShuffleColMin = 1
+	boundsOnly.Stats.HashmapStats.ShuffleColMax = 100
+	require.Equal(t, int32(plan.ShuffleType_Range), constructShuffleOperatorForJoin(512, boundsOnly, true).ShuffleType)
+}
+
 func TestGetPercentileConfig(t *testing.T) {
 	mp, err := mpool.NewMPool("test_pct_config", 0, mpool.NoFixed)
 	require.NoError(t, err)
