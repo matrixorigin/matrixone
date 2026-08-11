@@ -3459,6 +3459,10 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 		subCtx := NewBindContext(builder, ctx)
 		subCtx.numericProjectionTypes = setProjectionTypes
 		subCtx.normalizeGroupingSetDistinct = distinct && groupingOrderResolve != nil
+		if groupingOrderResolve != nil {
+			subCtx.groupingSetOrderHiddenCount = hiddenResultLen
+			subCtx.preserveOrderSemanticKeys = true
+		}
 		savedIsForUpdate := builder.isForUpdate
 		if slt, ok := sltStmt.(*tree.Select); ok {
 			nodeID, err = builder.bindSelect(slt, subCtx, isRoot)
@@ -3756,6 +3760,29 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 		return 0, moerr.NewInternalError(builder.GetContext(), "hidden UNION result length exceeds project length")
 	}
 	resultLen -= hiddenResultLen
+	if groupingOrderResolve != nil {
+		// The UNION projection replaces branch expressions with positional
+		// columns. Preserve the first branch's visible select-list metadata and
+		// semantic keys so duplicate output aliases retain normal ORDER BY
+		// first-match/ambiguity behavior above the grouping-set UNION.
+		ctx.projectSemanticKeys = make([]string, resultLen)
+		for _, field := range subCtxList[0].projectByAst {
+			if field.pos < 0 || int(field.pos) >= resultLen {
+				continue
+			}
+			ctx.projectByAst = append(ctx.projectByAst, field)
+			if int(field.pos) >= len(subCtxList[0].projectSemanticKeys) {
+				return 0, moerr.NewInternalError(builder.GetContext(), "grouping ORDER BY select item has no semantic key")
+			}
+			ctx.projectSemanticKeys[field.pos] = subCtxList[0].projectSemanticKeys[field.pos]
+		}
+	} else if subCtxList[0].preserveOrderSemanticKeys {
+		if len(subCtxList[0].projectSemanticKeys) < resultLen {
+			return 0, moerr.NewInternalError(builder.GetContext(), "generated UNION output has no ORDER BY semantic key")
+		}
+		ctx.projectSemanticKeys = append(ctx.projectSemanticKeys, subCtxList[0].projectSemanticKeys[:resultLen]...)
+		ctx.preserveOrderSemanticKeys = true
+	}
 
 	// bind orderBy BEFORE creating PROJECT node, so that any new expressions
 	// added to ctx.projects by ORDER BY are included in the PROJECT node
@@ -3825,12 +3852,29 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 				// GROUPING(a)+b without allowing an unselected GROUPING(a) to be
 				// recomputed after its grouping provenance has been materialized.
 				branchCtx := subCtxList[0]
-				qualifiedOrderExpr, qualifyErr := qualifyBoundGroupingOrderExpr(branchCtx, order.Expr)
+				qualifiedOrderExpr, aliasOverrides, qualifyErr := qualifyOrderExpression(
+					builder.GetContext(), branchCtx, order.Expr, true, true,
+				)
 				if qualifyErr != nil {
 					return 0, qualifyErr
 				}
 				branchProjectionBinder := NewProjectionBinder(builder, branchCtx, NewHavingBinder(builder, branchCtx))
-				branchExpr, bindErr := branchProjectionBinder.BindExpr(qualifiedOrderExpr, 0, true)
+				branchExpr, bindErr := func() (*plan.Expr, error) {
+					if len(aliasOverrides) == 0 {
+						return branchProjectionBinder.BindExpr(qualifiedOrderExpr, 0, true)
+					}
+					originalAliases := branchCtx.aliasMap
+					orderAliases := make(map[string]*aliasItem, len(originalAliases))
+					for name, item := range originalAliases {
+						orderAliases[name] = item
+					}
+					for name, item := range aliasOverrides {
+						orderAliases[name] = item
+					}
+					branchCtx.aliasMap = orderAliases
+					defer func() { branchCtx.aliasMap = originalAliases }()
+					return branchProjectionBinder.BindExpr(qualifiedOrderExpr, 0, true)
+				}()
 				if bindErr != nil {
 					return 0, bindErr
 				}
@@ -4772,6 +4816,11 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 			isRoot,
 		); err != nil {
 			return
+		}
+		if len(selectClause.OrderBySourceProbes) > 0 {
+			if err = resolveRollupWindowOrderSourceProbes(builder.GetContext(), astOrderBy, selectClause.OrderBySourceProbes); err != nil {
+				return
+			}
 		}
 		if selectClause.Having != nil {
 			rollupFilter = selectClause.Having.RollupHaving
@@ -5993,6 +6042,7 @@ func rewriteRollupWindowSelect(
 	}
 
 	rewriteState := newRollupWindowRewriteState(selectClause.Exprs)
+	rewriteState.addGroupingSourceNames(selectClause.GroupBy.GroupByExprsList)
 	outerExprs, ok := buildRollupWindowSelectExprs(selectClause.Exprs, rewriteState)
 	if !ok {
 		return nil, true
@@ -6011,7 +6061,7 @@ func rewriteRollupWindowSelect(
 	if !ok {
 		return nil, true
 	}
-	if len(rewriteState.innerExprs) == 0 {
+	if len(rewriteState.innerExprs)+len(rewriteState.orderExprs) == 0 {
 		_, ok = rewriteState.ensureInnerExpr(tree.NewNumVal(int64(1), "1", false, tree.P_int64))
 		if !ok {
 			return nil, true
@@ -6020,17 +6070,28 @@ func rewriteRollupWindowSelect(
 
 	groupingCount := len(selectClause.GroupBy.GroupByExprsList)
 	selectStmts := make([]*tree.SelectClause, groupingCount)
+	originalOutputExprs := make([]tree.Expr, len(selectClause.Exprs))
+	for i := range selectClause.Exprs {
+		originalOutputExprs[i] = selectClause.Exprs[i].Expr
+	}
 	for i, list := range selectClause.GroupBy.GroupByExprsList {
+		innerExprs := make(tree.SelectExprs, 0, len(rewriteState.innerExprs)+len(rewriteState.orderExprs))
+		innerExprs = append(innerExprs, rewriteState.innerExprs...)
+		innerExprs = append(innerExprs, rewriteState.orderExprs...)
 		selectStmts[i] = &tree.SelectClause{
-			Exprs: append(tree.SelectExprs(nil), rewriteState.innerExprs...),
+			Exprs: innerExprs,
 			From:  selectClause.From,
 			Where: selectClause.Where,
 			GroupBy: &tree.GroupByClause{
-				GroupByExprsList: selectClause.GroupBy.GroupByExprsList,
-				GroupingSet:      list,
-				Apart:            true,
-				Cube:             false,
-				Rollup:           false,
+				GroupByExprsList:             selectClause.GroupBy.GroupByExprsList,
+				GroupingSet:                  list,
+				Apart:                        true,
+				GroupingSetOrderHiddenCount:  len(rewriteState.orderExprs),
+				GroupingSetOrderAliases:      rewriteState.orderAliases,
+				GroupingSetOrderSourceProbes: rewriteState.sourceProbes,
+				PreserveOrderSemanticKeys:    true,
+				Cube:                         false,
+				Rollup:                       false,
 			},
 			Having: rewrittenHaving,
 			Option: selectClause.Option,
@@ -6048,8 +6109,10 @@ func rewriteRollupWindowSelect(
 	derived := &tree.Select{Select: leftClause}
 	return &tree.Select{
 		Select: &tree.SelectClause{
-			Distinct: selectClause.Distinct,
-			Exprs:    outerExprs,
+			Distinct:             selectClause.Distinct,
+			Exprs:                outerExprs,
+			OrderByOriginalExprs: originalOutputExprs,
+			OrderBySourceProbes:  rewriteState.sourceProbes,
 			From: &tree.From{
 				Tables: tree.TableExprs{
 					&tree.AliasedTableExpr{
@@ -6070,20 +6133,34 @@ func rewriteRollupWindowSelect(
 const rollupWindowInternalAliasPrefix = "__mo_rollup_window_col_"
 
 type rollupWindowRewriteState struct {
-	innerExprs        tree.SelectExprs
-	exprAliases       map[tree.Expr]string
-	outputAliases     map[string]string
-	activeNameAliases map[string]string
-	usedAliases       map[string]struct{}
-	nextAlias         int
+	innerExprs         tree.SelectExprs
+	orderExprs         tree.SelectExprs
+	exprAliases        map[tree.Expr]string
+	outputAliases      map[string]string
+	orderAliases       map[string][]tree.Expr
+	sourceProbeAliases map[string]string
+	sourceProbes       map[string]*tree.GroupingSetOrderSourceProbe
+	sourceNameAliases  map[string]string
+	branchSourceNames  map[string]struct{}
+	ambiguousSources   map[string]struct{}
+	activeNameAliases  map[string]string
+	activeOrderBy      bool
+	usedAliases        map[string]struct{}
+	nextAlias          int
 }
 
 func newRollupWindowRewriteState(selectExprs tree.SelectExprs) *rollupWindowRewriteState {
 	state := &rollupWindowRewriteState{
-		innerExprs:    make(tree.SelectExprs, 0, len(selectExprs)),
-		exprAliases:   make(map[tree.Expr]string),
-		outputAliases: make(map[string]string),
-		usedAliases:   make(map[string]struct{}),
+		innerExprs:         make(tree.SelectExprs, 0, len(selectExprs)),
+		exprAliases:        make(map[tree.Expr]string),
+		outputAliases:      make(map[string]string),
+		orderAliases:       make(map[string][]tree.Expr),
+		sourceProbeAliases: make(map[string]string),
+		sourceProbes:       make(map[string]*tree.GroupingSetOrderSourceProbe),
+		sourceNameAliases:  make(map[string]string),
+		branchSourceNames:  make(map[string]struct{}),
+		ambiguousSources:   make(map[string]struct{}),
+		usedAliases:        make(map[string]struct{}),
 	}
 	for _, selectExpr := range selectExprs {
 		if selectExpr.As != nil && !selectExpr.As.Empty() {
@@ -6093,12 +6170,37 @@ func newRollupWindowRewriteState(selectExprs tree.SelectExprs) *rollupWindowRewr
 			if _, exists := state.outputAliases[key]; !exists {
 				state.outputAliases[key] = alias
 			}
+			state.orderAliases[key] = append(state.orderAliases[key], selectExpr.Expr)
 		}
 		if colName, ok := rollupWindowBareColumnName(selectExpr.Expr); ok {
 			state.usedAliases[strings.ToLower(colName)] = struct{}{}
 		}
 	}
 	return state
+}
+
+func (state *rollupWindowRewriteState) addGroupingSourceNames(groupingSets []tree.Exprs) {
+	// ROLLUP and CUBE retain the original full grouping tuple among their
+	// generated sets. Scan that tuple once instead of revisiting the same AST
+	// nodes across every (exponentially many for CUBE) subset.
+	var fullGroupingSet tree.Exprs
+	for _, groupingSet := range groupingSets {
+		if len(groupingSet) > len(fullGroupingSet) {
+			fullGroupingSet = groupingSet
+		}
+	}
+	for _, groupExpr := range fullGroupingSet {
+		walkGroupingSetOrderByExpr(groupExpr, func(expr tree.Expr) bool {
+			if _, subquery := expr.(*tree.Subquery); subquery {
+				return false
+			}
+			name, ok := expr.(*tree.UnresolvedName)
+			if ok && !name.Star {
+				state.branchSourceNames[strings.ToLower(name.ColNameOrigin())] = struct{}{}
+			}
+			return true
+		})
+	}
 }
 
 func (state *rollupWindowRewriteState) addHavingAliasExprs(selectExprs tree.SelectExprs) {
@@ -6143,6 +6245,40 @@ func (state *rollupWindowRewriteState) ensureInnerExpr(expr tree.Expr) (string, 
 	return alias, true
 }
 
+func (state *rollupWindowRewriteState) ensureInnerOrderExpr(expr tree.Expr) (string, bool) {
+	if rollupWindowExprIsStar(expr) {
+		return "", false
+	}
+
+	alias := state.newInternalAlias()
+	state.orderExprs = append(state.orderExprs, tree.SelectExpr{
+		Expr: expr,
+		As:   tree.NewCStr(alias, 1),
+	})
+	state.addExprAlias(expr, alias)
+	return alias, true
+}
+
+func (state *rollupWindowRewriteState) ensureInnerOrderSourceProbe(
+	expr *tree.UnresolvedName,
+	fallbackName string,
+) (string, bool) {
+	name := strings.ToLower(expr.ColNameOrigin())
+	if alias, ok := state.sourceProbeAliases[name]; ok {
+		return alias, true
+	}
+
+	alias, ok := state.ensureInnerOrderExpr(expr)
+	if !ok {
+		return "", false
+	}
+	state.sourceProbeAliases[name] = alias
+	state.sourceProbes[strings.ToLower(alias)] = &tree.GroupingSetOrderSourceProbe{
+		FallbackName: fallbackName,
+	}
+	return alias, true
+}
+
 func (state *rollupWindowRewriteState) addExprAlias(expr tree.Expr, alias string) {
 	// Reuse only the exact AST occurrence. Structural keys such as the SQL
 	// text would incorrectly merge independent volatile calls like rand().
@@ -6183,6 +6319,9 @@ func buildRollupWindowSelectExprs(selectExprs tree.SelectExprs, state *rollupWin
 			return nil, false
 		}
 		aliasesByIndex[i] = alias
+		if sourceName, sourceColumn := rollupWindowBareColumnName(selectExpr.Expr); sourceColumn {
+			state.addSourceNameAlias(sourceName, alias)
+		}
 	}
 
 	for i, selectExpr := range selectExprs {
@@ -6205,6 +6344,20 @@ func buildRollupWindowSelectExprs(selectExprs tree.SelectExprs, state *rollupWin
 	}
 
 	return outerExprs, true
+}
+
+func (state *rollupWindowRewriteState) addSourceNameAlias(name, alias string) {
+	key := strings.ToLower(name)
+	state.branchSourceNames[key] = struct{}{}
+	if _, ambiguous := state.ambiguousSources[key]; ambiguous {
+		return
+	}
+	if _, exists := state.sourceNameAliases[key]; exists {
+		delete(state.sourceNameAliases, key)
+		state.ambiguousSources[key] = struct{}{}
+		return
+	}
+	state.sourceNameAliases[key] = alias
 }
 
 func rollupWindowOutputAlias(selectExpr tree.SelectExpr) *tree.CStr {
@@ -6248,6 +6401,49 @@ func rollupWindowExprIsStar(expr tree.Expr) bool {
 }
 
 func rewriteRollupWindowExpr(expr tree.Expr, state *rollupWindowRewriteState) (tree.Expr, bool) {
+	if funcExpr, ok := expr.(*tree.FuncExpr); ok && funcExpr.WindowSpec != nil && state.activeOrderBy {
+		previousOrderBy := state.activeOrderBy
+		previousAliases := state.activeNameAliases
+		state.activeOrderBy = false
+		state.activeNameAliases = nil
+		rewritten, ok := rewriteRollupWindowExpr(expr, state)
+		state.activeNameAliases = previousAliases
+		state.activeOrderBy = previousOrderBy
+		return rewritten, ok
+	}
+	if state.activeOrderBy && !rollupWindowExprContainsWindow(expr) {
+		switch expr.(type) {
+		case *tree.NumVal, *tree.StrVal, *tree.TimeUnitExpr, *tree.ParamExpr, *tree.VarExpr:
+			return expr, true
+		}
+		if unresolvedName, ok := expr.(*tree.UnresolvedName); ok && !unresolvedName.Star && unresolvedName.NumParts == 1 {
+			name := strings.ToLower(unresolvedName.ColNameOrigin())
+			if alias, exists := state.sourceNameAliases[name]; exists {
+				return tree.NewUnresolvedColName(alias), true
+			}
+			if _, exists := state.branchSourceNames[name]; exists {
+				alias, ok := state.ensureInnerOrderExpr(expr)
+				if !ok {
+					return nil, false
+				}
+				return tree.NewUnresolvedColName(alias), true
+			}
+			if fallbackName, exists := state.outputAliases[name]; exists {
+				alias, ok := state.ensureInnerOrderSourceProbe(unresolvedName, fallbackName)
+				if !ok {
+					return nil, false
+				}
+				return tree.NewUnresolvedColName(alias), true
+			}
+		}
+		if !state.orderExprNeedsOuterAlias(expr) {
+			alias, ok := state.ensureInnerOrderExpr(expr)
+			if !ok {
+				return nil, false
+			}
+			return tree.NewUnresolvedColName(alias), true
+		}
+	}
 	if funcExpr, ok := expr.(*tree.FuncExpr); ok && funcExpr.WindowSpec != nil && state.activeNameAliases != nil {
 		return rewriteRollupWindowExprWithNameAliases(expr, state, nil)
 	}
@@ -6382,6 +6578,78 @@ func rewriteRollupWindowExpr(expr tree.Expr, state *rollupWindowRewriteState) (t
 		next := *e
 		next.Expr = child
 		return &next, true
+	case *tree.IsNullExpr:
+		child, ok := rewriteRollupWindowExpr(e.Expr, state)
+		if !ok {
+			return nil, false
+		}
+		next := *e
+		next.Expr = child
+		return &next, true
+	case *tree.IsNotNullExpr:
+		child, ok := rewriteRollupWindowExpr(e.Expr, state)
+		if !ok {
+			return nil, false
+		}
+		next := *e
+		next.Expr = child
+		return &next, true
+	case *tree.IsUnknownExpr:
+		child, ok := rewriteRollupWindowExpr(e.Expr, state)
+		if !ok {
+			return nil, false
+		}
+		next := *e
+		next.Expr = child
+		return &next, true
+	case *tree.IsNotUnknownExpr:
+		child, ok := rewriteRollupWindowExpr(e.Expr, state)
+		if !ok {
+			return nil, false
+		}
+		next := *e
+		next.Expr = child
+		return &next, true
+	case *tree.IsTrueExpr:
+		child, ok := rewriteRollupWindowExpr(e.Expr, state)
+		if !ok {
+			return nil, false
+		}
+		next := *e
+		next.Expr = child
+		return &next, true
+	case *tree.IsNotTrueExpr:
+		child, ok := rewriteRollupWindowExpr(e.Expr, state)
+		if !ok {
+			return nil, false
+		}
+		next := *e
+		next.Expr = child
+		return &next, true
+	case *tree.IsFalseExpr:
+		child, ok := rewriteRollupWindowExpr(e.Expr, state)
+		if !ok {
+			return nil, false
+		}
+		next := *e
+		next.Expr = child
+		return &next, true
+	case *tree.IsNotFalseExpr:
+		child, ok := rewriteRollupWindowExpr(e.Expr, state)
+		if !ok {
+			return nil, false
+		}
+		next := *e
+		next.Expr = child
+		return &next, true
+	case *tree.ExprList:
+		exprs, ok := rewriteRollupWindowExprs(e.Exprs, state)
+		if !ok {
+			return nil, false
+		}
+		next := *e
+		next.Exprs = exprs
+		return &next, true
 	case *tree.ParenExpr:
 		child, ok := rewriteRollupWindowExpr(e.Expr, state)
 		if !ok {
@@ -6398,6 +6666,27 @@ func rewriteRollupWindowExpr(expr tree.Expr, state *rollupWindowRewriteState) (t
 		next := *e
 		next.Expr = child
 		return &next, true
+	case *tree.BitCastExpr:
+		child, ok := rewriteRollupWindowExpr(e.Expr, state)
+		if !ok {
+			return nil, false
+		}
+		next := *e
+		next.Expr = child
+		return &next, true
+	case *tree.SerialExtractExpr:
+		serialExpr, ok := rewriteRollupWindowExpr(e.SerialExpr, state)
+		if !ok {
+			return nil, false
+		}
+		indexExpr, ok := rewriteRollupWindowExpr(e.IndexExpr, state)
+		if !ok {
+			return nil, false
+		}
+		next := *e
+		next.SerialExpr = serialExpr
+		next.IndexExpr = indexExpr
+		return &next, true
 	case *tree.Tuple:
 		exprs, ok := rewriteRollupWindowExprs(e.Exprs, state)
 		if !ok {
@@ -6405,6 +6694,24 @@ func rewriteRollupWindowExpr(expr tree.Expr, state *rollupWindowRewriteState) (t
 		}
 		next := *e
 		next.Exprs = exprs
+		return &next, true
+	case *tree.RangeCond:
+		left, ok := rewriteRollupWindowExpr(e.Left, state)
+		if !ok {
+			return nil, false
+		}
+		from, ok := rewriteRollupWindowExpr(e.From, state)
+		if !ok {
+			return nil, false
+		}
+		to, ok := rewriteRollupWindowExpr(e.To, state)
+		if !ok {
+			return nil, false
+		}
+		next := *e
+		next.Left = left
+		next.From = from
+		next.To = to
 		return &next, true
 	case *tree.CaseExpr:
 		next := *e
@@ -6437,7 +6744,37 @@ func rewriteRollupWindowExpr(expr tree.Expr, state *rollupWindowRewriteState) (t
 			next.Else = elseExpr
 		}
 		return &next, true
-	case *tree.NumVal, *tree.StrVal, *tree.TimeUnitExpr, *tree.ParamExpr, *tree.VarExpr:
+	case *tree.IntervalExpr:
+		next := *e
+		if e.Expr != nil {
+			child, ok := rewriteRollupWindowExpr(e.Expr, state)
+			if !ok {
+				return nil, false
+			}
+			next.Expr = child
+		}
+		return &next, true
+	case *tree.DefaultVal:
+		next := *e
+		if e.Expr != nil {
+			child, ok := rewriteRollupWindowExpr(e.Expr, state)
+			if !ok {
+				return nil, false
+			}
+			next.Expr = child
+		}
+		return &next, true
+	case *tree.VarExpr:
+		next := *e
+		if e.Expr != nil {
+			child, ok := rewriteRollupWindowExpr(e.Expr, state)
+			if !ok {
+				return nil, false
+			}
+			next.Expr = child
+		}
+		return &next, true
+	case *tree.NumVal, *tree.StrVal, *tree.TimeUnitExpr, *tree.ParamExpr:
 		return expr, true
 	case *tree.UnresolvedName:
 		if e.Star {
@@ -6460,6 +6797,28 @@ func rewriteRollupWindowExpr(expr tree.Expr, state *rollupWindowRewriteState) (t
 		}
 		return tree.NewUnresolvedColName(alias), true
 	}
+}
+
+func (state *rollupWindowRewriteState) orderExprNeedsOuterAlias(expr tree.Expr) bool {
+	needsOuter := false
+	walkGroupingSetOrderByExpr(expr, func(candidate tree.Expr) bool {
+		if _, subquery := candidate.(*tree.Subquery); subquery {
+			return false
+		}
+		if function, ok := candidate.(*tree.FuncExpr); ok && function.WindowSpec != nil {
+			return false
+		}
+		name, ok := candidate.(*tree.UnresolvedName)
+		if !ok || name.Star || name.NumParts != 1 {
+			return !needsOuter
+		}
+		key := strings.ToLower(name.ColNameOrigin())
+		_, outputAlias := state.outputAliases[key]
+		_, branchSource := state.branchSourceNames[key]
+		needsOuter = outputAlias && !branchSource
+		return !needsOuter
+	})
+	return needsOuter
 }
 
 func rewriteRollupWindowExprWithNameAliases(
@@ -6582,11 +6941,62 @@ func rewriteRollupWindowOrderByWithNameAliases(
 	state *rollupWindowRewriteState,
 	aliases map[string]string,
 ) (tree.OrderBy, bool) {
-	previousAliases := state.activeNameAliases
-	state.activeNameAliases = aliases
-	rewritten, ok := rewriteRollupWindowOrderBy(orderBy, state)
-	state.activeNameAliases = previousAliases
-	return rewritten, ok
+	if len(orderBy) == 0 {
+		return nil, true
+	}
+
+	rewrittenOrderBy := make(tree.OrderBy, len(orderBy))
+	for i, order := range orderBy {
+		rootExpr := unwrapParenExpr(order.Expr)
+		name, topLevelName := rootExpr.(*tree.UnresolvedName)
+		topLevelName = topLevelName && !name.Star && name.NumParts == 1
+
+		var expr tree.Expr
+		var ok bool
+		if topLevelName {
+			expr, ok = rewriteRollupWindowExprWithNameAliases(order.Expr, state, aliases)
+		} else {
+			previousOrderBy := state.activeOrderBy
+			state.activeOrderBy = true
+			expr, ok = rewriteRollupWindowExpr(order.Expr, state)
+			state.activeOrderBy = previousOrderBy
+		}
+		if !ok {
+			return nil, false
+		}
+		next := *order
+		next.Expr = expr
+		rewrittenOrderBy[i] = &next
+	}
+	return rewrittenOrderBy, true
+}
+
+func resolveRollupWindowOrderSourceProbes(
+	sysCtx context.Context,
+	orderBy tree.OrderBy,
+	probes map[string]*tree.GroupingSetOrderSourceProbe,
+) error {
+	for _, probe := range probes {
+		if !probe.Resolved {
+			return moerr.NewInternalError(sysCtx, "generated ORDER BY source probe was not bound")
+		}
+	}
+
+	for _, order := range orderBy {
+		walkGroupingSetOrderByExpr(order.Expr, func(expr tree.Expr) bool {
+			name, ok := expr.(*tree.UnresolvedName)
+			if !ok || name.Star || name.NumParts != 1 {
+				return true
+			}
+			probe := probes[strings.ToLower(name.ColNameOrigin())]
+			if probe == nil || probe.SourceFound {
+				return true
+			}
+			name.CStrParts[0] = tree.NewCStr(probe.FallbackName, 1)
+			return true
+		})
+	}
+	return nil
 }
 
 func rollupWindowExprContainsWindow(expr tree.Expr) bool {
@@ -6728,6 +7138,16 @@ func (builder *QueryBuilder) bindSelectClause(
 	if nodeID, err = builder.buildFrom(clause.From.Tables, ctx, isRoot); err != nil {
 		return
 	}
+	if clause.GroupBy != nil && clause.GroupBy.Apart {
+		if clause.GroupBy.GroupingSetOrderHiddenCount > 0 {
+			ctx.groupingSetOrderHiddenCount = clause.GroupBy.GroupingSetOrderHiddenCount
+			ctx.groupingSetOrderAliases = clause.GroupBy.GroupingSetOrderAliases
+			ctx.groupingSetOrderSourceProbes = clause.GroupBy.GroupingSetOrderSourceProbes
+		}
+		if clause.GroupBy.PreserveOrderSemanticKeys {
+			ctx.preserveOrderSemanticKeys = true
+		}
+	}
 
 	ctx.binder = NewWhereBinder(builder, ctx)
 	// unfold stars and generate headings
@@ -6737,6 +7157,17 @@ func (builder *QueryBuilder) bindSelectClause(
 	if len(selectList) == 0 {
 		err = moerr.NewParseError(builder.GetContext(), "No tables used")
 		return
+	}
+	if len(clause.OrderByOriginalExprs) > 0 && len(clause.OrderByOriginalExprs) != len(selectList) {
+		err = moerr.NewInternalError(builder.GetContext(), "ORDER BY output metadata does not match select list")
+		return
+	}
+	if len(clause.OrderByOriginalExprs) > 0 {
+		ctx.preserveOrderSemanticKeys = true
+		if ctx.orderResolution == nil {
+			ctx.orderResolution = &orderResolutionMetadata{}
+		}
+		ctx.orderResolution.bindAsts = make([]tree.Expr, len(selectList))
 	}
 
 	// rewrite right join to left join
@@ -6791,7 +7222,12 @@ func (builder *QueryBuilder) bindSelectClause(
 			ctx.aliasFrequency[selectList[i].As.Compare()]++
 		}
 
-		field := SelectField{ast: selectList[i].Expr, pos: int32(i)}
+		orderAst := selectList[i].Expr
+		if len(clause.OrderByOriginalExprs) > 0 {
+			orderAst = clause.OrderByOriginalExprs[i]
+			ctx.orderResolution.bindAsts[i] = selectList[i].Expr
+		}
+		field := SelectField{ast: orderAst, pos: int32(i)}
 		if columnLike {
 			key := windowExprAstKey(selectList[i].Expr)
 			if _, exists := ctx.projectColByAst[key]; !exists {
@@ -7057,6 +7493,7 @@ func (builder *QueryBuilder) bindProjection(
 	}
 
 	resultLen = len(ctx.projects)
+	ctx.projectSemanticKeys = ctx.projectSemanticKeys[:0]
 	for i, proj := range ctx.projects {
 		exprKey, keyErr := projectExprKey(proj)
 		if keyErr != nil {
@@ -7065,6 +7502,18 @@ func (builder *QueryBuilder) bindProjection(
 		}
 		if _, ok := ctx.projectByExpr[exprKey]; !ok {
 			ctx.projectByExpr[exprKey] = int32(i)
+		}
+		if ctx.preserveOrderSemanticKeys {
+			semanticKey := exprKey
+			if col := proj.GetCol(); col != nil {
+				if metadata := ctx.orderResolution; metadata != nil {
+					keys := metadata.semanticKeysByTag[col.RelPos]
+					if col.ColPos >= 0 && int(col.ColPos) < len(keys) && keys[col.ColPos] != "" {
+						semanticKey = keys[col.ColPos]
+					}
+				}
+			}
+			ctx.projectSemanticKeys = append(ctx.projectSemanticKeys, semanticKey)
 		}
 
 		if exprCol, ok := proj.Expr.(*plan.Expr_Col); ok {
@@ -7237,7 +7686,7 @@ type groupingSetOrderResolution struct {
 	// bindDistinct[i] is true when a DISTINCT grouping-related ORDER BY entry
 	// must be resolved after the first generated grouping-set branch is fully
 	// bound. Binding there preserves source relation identity and normal
-	// AliasBeforeColumn semantics; textual pre-binding comparison cannot safely
+	// source-column-first semantics; textual pre-binding comparison cannot safely
 	// distinguish same-named columns from different self-join inputs.
 	bindDistinct []bool
 }
@@ -7360,7 +7809,7 @@ func remapGroupingSetDistinctOrderExpr(
 }
 
 func prepareGroupingSetOrderByProjects(
-	builder *QueryBuilder,
+	_ *QueryBuilder,
 	astOrderBy tree.OrderBy,
 	selectList tree.SelectExprs,
 	distinct bool,
@@ -7385,8 +7834,9 @@ func prepareGroupingSetOrderByProjects(
 	// participate in the branch-level DISTINCT and then be trimmed from the
 	// output, changing the visible result. Resolve these expressions only after
 	// the first generated branch has been fully bound, using its regular
-	// DISTINCT OrderBinder. That binder compares bound expressions and therefore
-	// preserves both source relation identity and normal alias precedence.
+	// DISTINCT OrderBinder. Top-level unqualified names remain output-name
+	// references; every other expression is rebound in the real branch scope so
+	// source columns win over aliases exactly as they do without ROLLUP/CUBE.
 
 	for i, order := range astOrderBy {
 		orderCopy := *order
@@ -7397,67 +7847,120 @@ func prepareGroupingSetOrderByProjects(
 			continue
 		}
 
+		rootExpr := unwrapParenExpr(order.Expr)
+		_, topLevelOutputName := rootExpr.(*tree.UnresolvedName)
+		if topLevelOutputName {
+			name := rootExpr.(*tree.UnresolvedName)
+			topLevelOutputName = !name.Star && name.NumParts == 1 &&
+				groupingSetSelectListMayExposeName(selectList, name.ColName())
+		}
+
 		if distinct {
-			if containsGroupingFunction(order.Expr) {
+			if !topLevelOutputName {
 				resolve.bindDistinct[i] = true
 			}
 			continue
 		}
 
-		if !containsGroupingFunction(order.Expr) {
-			matchedSelectExpr, matchesSelect, matchErr := groupingSetOrderMatchesSelectExpr(builder, selectList, order.Expr)
-			if matchErr != nil {
-				return nil, nil, nil, matchErr
-			}
-			if matchesSelect {
-				resolve.bindVisible[i] = true
-				if groupingSetOrderExprEqual(order.Expr, matchedSelectExpr) {
-					// The ORDER BY syntax itself names the selected expression.
-					// Rebind the SELECT spelling so identifier-case differences
-					// cannot miss the branch projection's AST key.
-					resolve.visibleExpr[i] = cloneTreeExpr(matchedSelectExpr)
-				} else {
-					// The match was produced by AliasBeforeColumn rewriting.
-					// Preserve the ORDER BY alias so the branch binder resolves
-					// it to the visible projection rather than recomputing the
-					// selected expression against source columns.
-					resolve.visibleExpr[i] = cloneTreeExpr(order.Expr)
-				}
-				continue
-			}
-			if !groupingSetOrderNeedsHiddenProject(selectList, order.Expr) {
-				continue
-			}
+		// A single unqualified name is an output-name lookup and must be left
+		// for the UNION projection binder. In a compound expression the same
+		// name is source-column-first, so it must be resolved inside each branch.
+		if topLevelOutputName {
+			continue
 		}
 
-		hiddenExpr, err := qualifyGroupingOrderExpr(builder, selectList, order.Expr, true)
-		if err != nil {
-			return nil, nil, nil, err
+		if !containsGroupingFunction(order.Expr) {
+			if matchedSelectExpr, matchesSelect := groupingSetOrderMatchesSelectExpr(selectList, order.Expr); matchesSelect {
+				resolve.bindVisible[i] = true
+				resolve.visibleExpr[i] = cloneTreeExpr(matchedSelectExpr)
+				continue
+			}
+			if groupingSetOrderCanBindAboveUnion(selectList, order.Expr) {
+				continue
+			}
 		}
 
 		// Record which appended hidden column this entry maps to (0-based). Its
-		// absolute ordinal is resolved later against the star-expanded width.
+		// absolute ordinal is resolved later against the star-expanded width. The
+		// raw expression is intentionally preserved here; appendSelectList binds
+		// it after FROM is known, using source-column-first alias fallback.
 		resolve.hiddenIdx[i] = len(branchSelectList) - len(selectList)
-		branchSelectList = append(branchSelectList, tree.SelectExpr{Expr: hiddenExpr})
+		branchSelectList = append(branchSelectList, tree.SelectExpr{Expr: cloneTreeExpr(order.Expr)})
 	}
 	return branchSelectList, unionOrderBy, resolve, nil
 }
 
 func groupingSetOrderMatchesSelectExpr(
-	builder *QueryBuilder,
 	selectList tree.SelectExprs,
 	astExpr tree.Expr,
-) (tree.Expr, bool, error) {
-	qualifiedOrder, err := qualifyGroupingOrderExpr(builder, selectList, astExpr, true)
-	if err != nil {
-		return nil, false, err
-	}
+) (tree.Expr, bool) {
 	for _, selectExpr := range selectList {
-		if groupingSetOrderExprEqual(qualifiedOrder, selectExpr.Expr) {
-			return selectExpr.Expr, true, nil
+		if groupingSetOrderExprEqual(astExpr, selectExpr.Expr) {
+			return selectExpr.Expr, true
 		}
 	}
-	return nil, false, nil
+	return nil, false
+}
+
+func groupingSetSelectListMayExposeName(selectList tree.SelectExprs, name string) bool {
+	for _, selectExpr := range selectList {
+		if selectExpr.As != nil && !selectExpr.As.Empty() {
+			if selectExpr.As.Compare() == name {
+				return true
+			}
+			continue
+		}
+		switch expr := unwrapParenExpr(selectExpr.Expr).(type) {
+		case tree.UnqualifiedStar:
+			return true
+		case *tree.UnresolvedName:
+			if expr.Star || expr.ColName() == name {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// groupingSetOrderCanBindAboveUnion recognizes the cheap, provably equivalent
+// case: every name in a compound expression is exposed exactly once as an
+// unaliased source column and no explicit alias shadows it. Such expressions
+// can stay above the UNION; all uncertain cases are resolved in real branches.
+func groupingSetOrderCanBindAboveUnion(selectList tree.SelectExprs, astExpr tree.Expr) bool {
+	naturalOutputs := make(map[string]int)
+	explicitAliases := make(map[string]struct{})
+	for _, selectExpr := range selectList {
+		if selectExpr.As != nil && !selectExpr.As.Empty() {
+			explicitAliases[selectExpr.As.Compare()] = struct{}{}
+			continue
+		}
+		name, ok := unwrapParenExpr(selectExpr.Expr).(*tree.UnresolvedName)
+		if ok && !name.Star {
+			naturalOutputs[name.ColName()]++
+		}
+	}
+
+	canBind := true
+	walkGroupingSetOrderByExpr(astExpr, func(expr tree.Expr) bool {
+		if _, subquery := expr.(*tree.Subquery); subquery {
+			canBind = false
+			return false
+		}
+		name, ok := expr.(*tree.UnresolvedName)
+		if !ok || name.Star {
+			return true
+		}
+		if name.NumParts != 1 || naturalOutputs[name.ColName()] != 1 {
+			canBind = false
+			return false
+		}
+		if _, shadowed := explicitAliases[name.ColName()]; shadowed {
+			canBind = false
+			return false
+		}
+		return true
+	})
+	return canBind
 }
 
 func groupingSetOrderExprEqual(left, right tree.Expr) bool {
@@ -7481,131 +7984,13 @@ func groupingSetOrderExprEqual(left, right tree.Expr) bool {
 	return reflect.DeepEqual(normalizeIdentifiers(left), normalizeIdentifiers(right))
 }
 
-func groupingSetOrderNeedsHiddenProject(selectList tree.SelectExprs, astExpr tree.Expr) bool {
-	availableNames := make(map[string]struct{})
-	for _, selectExpr := range selectList {
-		if selectExpr.As != nil && !selectExpr.As.Empty() {
-			availableNames[selectExpr.As.Compare()] = struct{}{}
-			continue
-		}
-		name, ok := unwrapParenExpr(selectExpr.Expr).(*tree.UnresolvedName)
-		if ok && !name.Star {
-			availableNames[name.ColName()] = struct{}{}
-		}
-	}
-
-	needsHidden := false
-	walkGroupingSetOrderByExpr(astExpr, func(expr tree.Expr) bool {
-		switch typedExpr := expr.(type) {
-		case *tree.Subquery:
-			// A scalar subquery may contain correlated references to grouping
-			// columns. Those bindings exist in each generated grouping-set
-			// branch, but not above the UNION, so materialize the complete
-			// subquery while its outer source scope is still available.
-			needsHidden = true
-			return false
-		case *tree.UnresolvedName:
-			if typedExpr.Star {
-				return true
-			}
-			if typedExpr.NumParts != 1 {
-				needsHidden = true
-				return false
-			}
-			if _, ok := availableNames[typedExpr.ColName()]; !ok {
-				needsHidden = true
-				return false
-			}
-		}
-		return !needsHidden
-	})
-	return needsHidden
-}
-
-// qualifyGroupingOrderExpr clones astExpr and canonicalizes it the same way a
-// grouping-set order key is materialized: GROUPING() arguments are protected
-// from alias rewriting, then, when useAlias is set, select-list aliases are
-// resolved via AliasBeforeColumn. useAlias must reflect the binding semantics
-// of the expression's clause: true for ORDER BY expressions (aliases shadow
-// source columns), false for select-list expressions (bound with NoAlias, a
-// name always means the source column). The returned expression is safe to
-// append as a hidden branch projection.
-func qualifyGroupingOrderExpr(
-	builder *QueryBuilder,
-	selectList tree.SelectExprs,
-	astExpr tree.Expr,
-	useAlias bool,
-) (tree.Expr, error) {
-	qualified := cloneTreeExpr(astExpr)
-	if !useAlias {
-		return qualified, nil
-	}
-	protectedNames := protectGroupingFunctionArguments(qualified)
-	aliasCtx := NewBindContext(builder, nil)
-	for selectIdx := range selectList {
-		selectExpr := selectList[selectIdx]
-		if selectExpr.As == nil || selectExpr.As.Empty() {
-			continue
-		}
-		alias := selectExpr.As.Compare()
-		aliasCtx.aliasMap[alias] = &aliasItem{
-			idx:     int32(selectIdx),
-			astExpr: cloneTreeExpr(selectExpr.Expr),
-		}
-	}
-	qualified, err := aliasCtx.qualifyColumnNames(qualified, AliasBeforeColumn)
-	restoreProtectedGroupingFunctionArguments(protectedNames)
-	if err != nil {
-		return nil, err
-	}
-	return qualified, nil
-}
-
 // qualifyBoundGroupingOrderExpr applies the real branch binding semantics used
 // by grouping-set ORDER BY expressions. GROUPING() arguments are source
 // expressions, so they bind with NoAlias and retain concrete relation identity;
-// the surrounding ORDER BY expression then binds with AliasBeforeColumn.
-func qualifyBoundGroupingOrderExpr(ctx *BindContext, astExpr tree.Expr) (tree.Expr, error) {
-	qualified := cloneTreeExpr(astExpr)
-	var bindErr error
-	walkGroupingSetOrderByExpr(qualified, func(expr tree.Expr) bool {
-		funcExpr, ok := expr.(*tree.FuncExpr)
-		if !ok || funcExpr.FuncName == nil || !strings.EqualFold(funcExpr.FuncName.Origin(), "grouping") {
-			return true
-		}
-		for i := range funcExpr.Exprs {
-			funcExpr.Exprs[i], bindErr = ctx.qualifyColumnNames(funcExpr.Exprs[i], NoAlias)
-			if bindErr != nil {
-				return false
-			}
-		}
-		// The complete GROUPING argument subtree is already source-qualified.
-		return false
-	})
-	if bindErr != nil {
-		return nil, bindErr
-	}
-
-	walkGroupingSetOrderByExpr(qualified, func(expr tree.Expr) bool {
-		if fn, ok := expr.(*tree.FuncExpr); ok && fn.FuncName != nil &&
-			strings.EqualFold(fn.FuncName.Origin(), "grouping") {
-			return false
-		}
-		name, ok := expr.(*tree.UnresolvedName)
-		if !ok || name.Star || name.NumParts != 1 {
-			return true
-		}
-		col := name.ColName()
-		if _, sourceColumn := ctx.bindingByCol[col]; !sourceColumn && ctx.aliasFrequency[col] > 1 {
-			bindErr = moerr.NewInvalidInputf(ctx.binder.GetContext(), "Column '%s' in order clause is ambiguous", col)
-			return false
-		}
-		return true
-	})
-	if bindErr != nil {
-		return nil, bindErr
-	}
-	return ctx.qualifyColumnNames(qualified, NoAlias)
+// the surrounding ORDER BY expression uses source-column-first alias fallback.
+func qualifyBoundGroupingOrderExpr(sysCtx context.Context, ctx *BindContext, astExpr tree.Expr) (tree.Expr, error) {
+	qualified, _, err := qualifyOrderExpression(sysCtx, ctx, astExpr, true, true)
+	return qualified, err
 }
 
 func cloneTreeExpr(astExpr tree.Expr) tree.Expr {
@@ -7686,36 +8071,6 @@ func cloneTreeStructFields(dst, src reflect.Value, visited map[treeClonePointer]
 	}
 }
 
-func protectGroupingFunctionArguments(astExpr tree.Expr) []*tree.UnresolvedName {
-	var protectedNames []*tree.UnresolvedName
-	walkGroupingSetOrderByExpr(astExpr, func(expr tree.Expr) bool {
-		function, ok := expr.(*tree.FuncExpr)
-		if !ok || function.FuncName == nil || function.FuncName.Compare() != "grouping" {
-			return true
-		}
-		for _, arg := range function.Exprs {
-			walkGroupingSetOrderByExpr(arg, func(argExpr tree.Expr) bool {
-				name, ok := argExpr.(*tree.UnresolvedName)
-				if ok && !name.Star && name.NumParts == 1 {
-					name.NumParts = 2
-					name.CStrParts[1] = tree.NewCStr("__mo_grouping_argument__", 0)
-					protectedNames = append(protectedNames, name)
-				}
-				return true
-			})
-		}
-		return false
-	})
-	return protectedNames
-}
-
-func restoreProtectedGroupingFunctionArguments(protectedNames []*tree.UnresolvedName) {
-	for _, name := range protectedNames {
-		name.NumParts = 1
-		name.CStrParts[1] = nil
-	}
-}
-
 func containsGroupingFunction(astExpr tree.Expr) bool {
 	found := false
 	walkGroupingSetOrderByExpr(unwrapParenExpr(astExpr), func(expr tree.Expr) bool {
@@ -7732,6 +8087,8 @@ func containsGroupingFunction(astExpr tree.Expr) bool {
 	})
 	return found
 }
+
+var groupingOrderFuncExprType = reflect.TypeOf(tree.FuncExpr{})
 
 func walkGroupingSetOrderByExpr(astExpr tree.Expr, visit func(tree.Expr) bool) {
 	visited := make(map[uintptr]struct{})
@@ -7769,6 +8126,12 @@ func walkGroupingSetOrderByExpr(astExpr tree.Expr, visit func(tree.Expr) bool) {
 		case reflect.Struct:
 			valueType := value.Type()
 			for i := 0; i < value.NumField(); i++ {
+				// Func is parser metadata naming the called function, not a
+				// column-bearing child expression. Walking it would mistake
+				// identifiers such as abs for ORDER BY column references.
+				if valueType == groupingOrderFuncExprType && valueType.Field(i).Name == "Func" {
+					continue
+				}
 				if valueType.Field(i).PkgPath == "" {
 					walk(value.Field(i))
 				}
@@ -8526,11 +8889,47 @@ func appendSelectList(
 	builder *QueryBuilder,
 	ctx *BindContext,
 	selectList tree.SelectExprs, exprs ...tree.SelectExpr) (tree.SelectExprs, error) {
+	return appendSelectListWithGroupingOrder(
+		builder,
+		ctx,
+		selectList,
+		ctx.groupingSetOrderHiddenCount,
+		exprs...,
+	)
+}
+
+func appendSelectListWithGroupingOrder(
+	builder *QueryBuilder,
+	ctx *BindContext,
+	selectList tree.SelectExprs,
+	groupingOrderHiddenCount int,
+	exprs ...tree.SelectExpr,
+) (tree.SelectExprs, error) {
 	accountId, err := builder.compCtx.GetAccountId()
 	if err != nil {
 		return nil, err
 	}
-	for _, selectExpr := range exprs {
+	hiddenStart := len(exprs) - groupingOrderHiddenCount
+	if hiddenStart < 0 {
+		return nil, moerr.NewInternalError(builder.GetContext(), "grouping ORDER BY projection count exceeds select list")
+	}
+	orderAliases := make(map[string][]tree.Expr, len(ctx.groupingSetOrderAliases))
+	for alias, candidates := range ctx.groupingSetOrderAliases {
+		orderAliases[alias] = append([]tree.Expr(nil), candidates...)
+	}
+	for exprIdx, selectExpr := range exprs {
+		generatedOrderExpr := exprIdx >= hiddenStart
+		selectStart := len(selectList)
+		qualifyExpr := func(expr tree.Expr) (tree.Expr, error) {
+			if generatedOrderExpr {
+				var sourceProbe *tree.GroupingSetOrderSourceProbe
+				if selectExpr.As != nil && !selectExpr.As.Empty() {
+					sourceProbe = ctx.groupingSetOrderSourceProbes[selectExpr.As.Compare()]
+				}
+				return qualifyGroupingSetHiddenOrderExpr(ctx, expr, orderAliases, sourceProbe)
+			}
+			return ctx.qualifyColumnNames(expr, NoAlias)
+		}
 		switch expr := selectExpr.Expr.(type) {
 		case tree.UnqualifiedStar:
 			cols, names, err := ctx.unfoldStar(builder.GetContext(), "", accountId == catalog.System_Account)
@@ -8551,12 +8950,12 @@ func appendSelectList(
 			oldLen := len(selectList)
 			columns, isStar := expr.GetColumns()
 			if isStar {
-				if selectList, err = appendSelectList(builder, ctx, selectList, tree.SelectExpr{Expr: tree.UnqualifiedStar{}}); err != nil {
+				if selectList, err = appendSelectListWithGroupingOrder(builder, ctx, selectList, 0, tree.SelectExpr{Expr: tree.UnqualifiedStar{}}); err != nil {
 					return nil, err
 				}
 			} else {
 				for _, column := range columns {
-					if selectList, err = appendSelectList(builder, ctx, selectList, tree.SelectExpr{Expr: column}); err != nil {
+					if selectList, err = appendSelectListWithGroupingOrder(builder, ctx, selectList, 0, tree.SelectExpr{Expr: column}); err != nil {
 						return nil, err
 					}
 				}
@@ -8589,7 +8988,7 @@ func appendSelectList(
 					ctx.headings = append(ctx.headings, expr.ColNameOrigin())
 				}
 
-				newExpr, err := ctx.qualifyColumnNames(expr, NoAlias)
+				newExpr, err := qualifyExpr(expr)
 				if err != nil {
 					return nil, err
 				}
@@ -8632,7 +9031,7 @@ func appendSelectList(
 				}
 			}
 
-			newExpr, err := ctx.qualifyColumnNames(expr, NoAlias)
+			newExpr, err := qualifyExpr(expr)
 			if err != nil {
 				return nil, err
 			}
@@ -8642,8 +9041,114 @@ func appendSelectList(
 				As:   selectExpr.As,
 			})
 		}
+
+		if groupingOrderHiddenCount > 0 && !generatedOrderExpr && selectExpr.As != nil && !selectExpr.As.Empty() {
+			if len(selectList)-selectStart != 1 {
+				return nil, moerr.NewInternalError(builder.GetContext(), "aliased select expression did not produce exactly one column")
+			}
+			alias := selectExpr.As.Compare()
+			orderAliases[alias] = append(orderAliases[alias], cloneTreeExpr(selectList[selectStart].Expr))
+		}
 	}
 	return selectList, nil
+}
+
+// qualifyGroupingSetHiddenOrderExpr resolves a generated grouping-set sort key
+// only after the branch FROM scope exists. Source columns therefore win inside
+// compound ORDER BY expressions; a missing source name falls back to the first
+// select alias. GROUPING() arguments always stay in the source namespace.
+func qualifyGroupingSetHiddenOrderExpr(
+	ctx *BindContext,
+	astExpr tree.Expr,
+	aliases map[string][]tree.Expr,
+	sourceProbe *tree.GroupingSetOrderSourceProbe,
+) (tree.Expr, error) {
+	if sourceProbe != nil {
+		name, ok := unwrapParenExpr(astExpr).(*tree.UnresolvedName)
+		if !ok || name.Star || name.NumParts != 1 {
+			return nil, moerr.NewInternalError(ctx.binder.GetContext(), "generated ORDER BY source probe is not a column name")
+		}
+		_, sourceFound := ctx.bindingByCol[name.ColName()]
+		if sourceProbe.Resolved && sourceProbe.SourceFound != sourceFound {
+			return nil, moerr.NewInternalError(ctx.binder.GetContext(), "generated grouping-set branches disagree on ORDER BY source resolution")
+		}
+		sourceProbe.Resolved = true
+		sourceProbe.SourceFound = sourceFound
+		if sourceFound {
+			return ctx.qualifyColumnNames(astExpr, NoAlias)
+		}
+		// The outer ORDER BY will use the already-materialized output alias.
+		// Keep this otherwise-unused UNION slot cheap and side-effect free.
+		return tree.NewNumVal(int64(0), "0", false, tree.P_int64), nil
+	}
+
+	qualified := cloneTreeExpr(astExpr)
+	var bindErr error
+	walkGroupingSetOrderByExpr(qualified, func(expr tree.Expr) bool {
+		function, ok := expr.(*tree.FuncExpr)
+		if !ok || function.FuncName == nil || function.FuncName.Compare() != "grouping" {
+			return true
+		}
+		for i := range function.Exprs {
+			function.Exprs[i], bindErr = ctx.qualifyColumnNames(function.Exprs[i], NoAlias)
+			if bindErr != nil {
+				return false
+			}
+		}
+		return false
+	})
+	if bindErr != nil {
+		return nil, bindErr
+	}
+
+	fallbackNames := make(map[string]struct{})
+	walkGroupingSetOrderByExpr(qualified, func(expr tree.Expr) bool {
+		if _, subquery := expr.(*tree.Subquery); subquery {
+			return false
+		}
+		if function, ok := expr.(*tree.FuncExpr); ok && function.FuncName != nil && function.FuncName.Compare() == "grouping" {
+			return false
+		}
+		name, ok := expr.(*tree.UnresolvedName)
+		if !ok || name.Star || name.NumParts != 1 {
+			return true
+		}
+		if _, sourceExists := ctx.bindingByCol[name.ColName()]; !sourceExists {
+			fallbackNames[name.ColName()] = struct{}{}
+		}
+		return true
+	})
+
+	aliasMap := make(map[string]*aliasItem, len(fallbackNames))
+	for name := range fallbackNames {
+		candidates := aliases[name]
+		if len(candidates) == 0 {
+			continue
+		}
+		selected := candidates[0]
+		ambiguous := false
+		for _, candidate := range candidates[1:] {
+			if !isDirectOrderColumn(selected) {
+				break
+			}
+			if !isDirectOrderColumn(candidate) {
+				selected = candidate
+				continue
+			}
+			if canonicalGroupByAstKey(ctx, selected) != canonicalGroupByAstKey(ctx, candidate) {
+				ambiguous = true
+				break
+			}
+		}
+		if ambiguous {
+			return nil, ambiguousOrderColumn(ctx.binder.GetContext(), name)
+		}
+		aliasMap[name] = &aliasItem{astExpr: cloneTreeExpr(selected)}
+	}
+
+	orderCtx := *ctx
+	orderCtx.aliasMap = aliasMap
+	return orderCtx.qualifyColumnNames(qualified, AliasAfterColumn)
 }
 
 func nameConstHeading(expr tree.Expr) (string, bool) {
@@ -10038,6 +10543,15 @@ func (builder *QueryBuilder) addBinding(nodeID int32, alias tree.AliasClause, ct
 		binding.mysqlSpecialOrderTypes = mysqlSpecialOrderTypes
 		binding.mysqlSpecialCanonicalTypes = mysqlSpecialCanonicalTypes
 		binding.outputColumnProvenance = outputColumnProvenance
+		if colLength > 0 && len(subCtx.projectSemanticKeys) >= colLength {
+			if ctx.orderResolution == nil {
+				ctx.orderResolution = &orderResolutionMetadata{}
+			}
+			if ctx.orderResolution.semanticKeysByTag == nil {
+				ctx.orderResolution.semanticKeysByTag = make(map[int32][]string)
+			}
+			ctx.orderResolution.semanticKeysByTag[binding.tag] = append([]string(nil), subCtx.projectSemanticKeys[:colLength]...)
+		}
 	}
 
 	if bindingToReplace != nil {
