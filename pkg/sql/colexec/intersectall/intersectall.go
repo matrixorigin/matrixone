@@ -129,8 +129,8 @@ func (intersectAll *IntersectAll) build(proc *process.Process, analyzer process.
 				if err != nil {
 					return err
 				}
-				if uint64(cap(ctr.counter)) < ctr.hashTable.GroupCount() {
-					gap := ctr.hashTable.GroupCount() - uint64(cap(ctr.counter))
+				if uint64(len(ctr.counter)) < ctr.hashTable.GroupCount() {
+					gap := ctr.hashTable.GroupCount() - uint64(len(ctr.counter))
 					ctr.counter = append(ctr.counter, make([]uint64, gap)...)
 				}
 				for _, v := range vs {
