@@ -56,9 +56,9 @@ func TestPreparedDecimalPrefixCastProtocolGate(t *testing.T) {
 	rt := moruntime.ServiceRuntime(proc.GetService())
 	defer rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
 
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion14)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion16)
 	require.False(t, preparedDecimalPrefixCastEnabled(proc))
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion15)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion17)
 	require.True(t, preparedDecimalPrefixCastEnabled(proc))
 
 	args := []*planpb.Expr{

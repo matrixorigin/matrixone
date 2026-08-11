@@ -1263,7 +1263,7 @@ func TestInitExecuteStmtParamRebuildsWhenProtocolVersionChanges(t *testing.T) {
 func TestProtocolUpgradeRebuildUsesPreparedDecimalBinding(t *testing.T) {
 	rt := moruntime.ServiceRuntime("")
 	defer rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion14)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion16)
 
 	ses, prepareStmt, cw, execCtx := newPreparedExecuteEnvForSQL(t, 115,
 		"select coalesce(?, cast(2 as decimal(10,2)))")
@@ -1277,7 +1277,7 @@ func TestProtocolUpgradeRebuildUsesPreparedDecimalBinding(t *testing.T) {
 	prepareStmt.params = vector.NewVec(types.T_text.ToType())
 	require.NoError(t, vector.AppendBytes(prepareStmt.params, []byte("1e100"), false, cw.proc.Mp()))
 	prepareStmt.ParamTypes = []byte{byte(defines.MYSQL_TYPE_DOUBLE), 0}
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion15)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion17)
 
 	_, queryPlan, _, _, _, err := initExecuteStmtParam(execCtx, ses, cw, nil, prepareStmt.Name)
 	require.NoError(t, err)

@@ -186,6 +186,17 @@ func NewRenameColumnReq(did, tid uint64, oldname, newname string, seqnum uint32)
 	}
 }
 
+func NewRenameColumnReqWithChecks(
+	did, tid uint64,
+	oldname, newname string,
+	seqnum uint32,
+	checks []*plan.CheckDef,
+) *AlterTableReq {
+	req := NewRenameColumnReq(did, tid, oldname, newname, seqnum)
+	req.GetRenameCol().Checks = CloneExtra(&SchemaExtra{Checks: checks}).Checks
+	return req
+}
+
 func NewReplaceDefReq(did, tid uint64, planDef *plan.TableDef) *AlterTableReq {
 	return &AlterTableReq{
 		DbId:    did,
