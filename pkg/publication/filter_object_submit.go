@@ -657,18 +657,11 @@ func ApplyObjects(
 				})
 			} else {
 				filterResult := tombstoneResults[info]
-				for _, stats := range filterResult.DownstreamStatsList {
-					if stats.IsZero() {
-						continue
-					}
-					collectedTombstoneInsertStats = append(collectedTombstoneInsertStats, &ObjectWithTableInfo{
-						Stats:       stats,
-						DBName:      info.DBName,
-						TableName:   info.TableName,
-						IsTombstone: true,
-						Delete:      false,
-					})
-				}
+				collectedTombstoneInsertStats = appendDownstreamTombstoneStats(
+					collectedTombstoneInsertStats,
+					filterResult.DownstreamStatsList,
+					info,
+				)
 			}
 		}
 	}
@@ -711,4 +704,23 @@ func ApplyObjects(
 		}
 	}
 	return
+}
+
+func appendDownstreamTombstoneStats(
+	dst []*ObjectWithTableInfo,
+	statsList []objectio.ObjectStats,
+	info *ObjectWithTableInfo,
+) []*ObjectWithTableInfo {
+	for _, stats := range statsList {
+		if stats.IsZero() {
+			continue
+		}
+		dst = append(dst, &ObjectWithTableInfo{
+			Stats:       stats,
+			DBName:      info.DBName,
+			TableName:   info.TableName,
+			IsTombstone: true,
+		})
+	}
+	return dst
 }

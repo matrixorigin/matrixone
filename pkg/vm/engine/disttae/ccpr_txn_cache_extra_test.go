@@ -17,6 +17,7 @@ package disttae
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -37,6 +38,28 @@ type rejectingStatFileService struct {
 type deadlineDeleteFileService struct {
 	fileservice.FileService
 	hasDeadline bool
+}
+
+type blockingDeleteFileService struct {
+	fileservice.FileService
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (fs *blockingDeleteFileService) Delete(
+	ctx context.Context,
+	paths ...string,
+) error {
+	select {
+	case fs.entered <- struct{}{}:
+	default:
+	}
+	select {
+	case <-fs.release:
+		return fs.FileService.Delete(ctx, paths...)
+	case <-ctx.Done():
+		return context.Cause(ctx)
+	}
 }
 
 func (fs *deadlineDeleteFileService) Delete(
@@ -80,6 +103,63 @@ func TestCCPRTxnCacheRollbackCleanupIsBounded(t *testing.T) {
 	require.NoError(t, cache.WriteNewObject(ctx, "unique", []byte("txn")))
 	cache.OnTxnRollback([]byte("txn"))
 	require.True(t, fs.hasDeadline)
+}
+
+func TestCCPRTxnCacheRollbackDeleteDoesNotHoldCacheMutex(t *testing.T) {
+	ctx := context.Background()
+	fs := &blockingDeleteFileService{
+		FileService: newCleanFS(t),
+		entered:     make(chan struct{}, 1),
+		release:     make(chan struct{}),
+	}
+	var releaseOnce sync.Once
+	release := func() { releaseOnce.Do(func() { close(fs.release) }) }
+	t.Cleanup(release)
+	gcPool, err := ants.NewPool(2)
+	require.NoError(t, err)
+	defer gcPool.Release()
+	cache := NewCCPRTxnCache(gcPool, fs)
+
+	require.NoError(t, cache.WriteNewObject(ctx, "rollback", []byte("txn")))
+	rollbackDone := make(chan struct{})
+	go func() {
+		cache.OnTxnRollback([]byte("txn"))
+		close(rollbackDone)
+	}()
+	select {
+	case <-fs.entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("rollback cleanup did not enter object deletion")
+	}
+
+	writeDone := make(chan error, 1)
+	go func() {
+		writeDone <- cache.WriteNewObject(ctx, "unrelated", []byte("other"))
+	}()
+	select {
+	case err := <-writeDone:
+		require.NoError(t, err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("remote rollback delete held the global CCPR cache mutex")
+	}
+	canceledCtx, cancel := context.WithCancel(ctx)
+	cancel()
+	isNew, err := cache.WriteObject(
+		canceledCtx, "rollback", []byte("same-name"))
+	require.ErrorIs(t, err, context.Canceled,
+		"the deleting generation must not be adopted by a same-name writer")
+	require.False(t, isNew)
+
+	release()
+	select {
+	case <-rollbackDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("rollback cleanup did not finish after delete was released")
+	}
+	isNew, err = cache.WriteObject(ctx, "rollback", []byte("same-name"))
+	require.NoError(t, err)
+	require.True(t, isNew,
+		"the same name may be rewritten only after the delete fence closes")
 }
 
 // TestCCPRTxnCache_WriteObject_DuplicateTxnID tests that calling WriteObject

@@ -15,6 +15,7 @@
 package ioutil
 
 import (
+	"container/heap"
 	"context"
 	"crypto/sha256"
 	"encoding/json"
@@ -153,6 +154,64 @@ func ListUnpublishedObjectCleanup(
 	return markers, false, nil
 }
 
+// ListUnpublishedObjectCleanupAfter lists one lexicographic page after marker.
+// FileService does not promise directory order, so the bounded max-heap finds
+// the next smallest paths without materializing the complete marker set. A
+// caller-held cursor can therefore advance past intents that must remain
+// durable instead of retrying the same prefix forever.
+func ListUnpublishedObjectCleanupAfter(
+	ctx context.Context,
+	fs fileservice.FileService,
+	after string,
+	limit int,
+) (markers []string, remaining bool, err error) {
+	if limit <= 0 {
+		return nil, false, nil
+	}
+	candidates := make(maxMarkerPathHeap, 0, limit+1)
+	for entry, listErr := range fs.List(ctx, unpublishedObjectCleanupDir) {
+		if listErr != nil {
+			return nil, true, listErr
+		}
+		if entry.IsDir {
+			continue
+		}
+		marker := unpublishedObjectCleanupDir + entry.Name
+		if marker <= after {
+			continue
+		}
+		if len(candidates) < limit+1 {
+			heap.Push(&candidates, marker)
+			continue
+		}
+		if marker < candidates[0] {
+			candidates[0] = marker
+			heap.Fix(&candidates, 0)
+		}
+	}
+	markers = append(markers, candidates...)
+	sort.Strings(markers)
+	if len(markers) > limit {
+		return markers[:limit], true, nil
+	}
+	return markers, false, nil
+}
+
+type maxMarkerPathHeap []string
+
+func (h maxMarkerPathHeap) Len() int           { return len(h) }
+func (h maxMarkerPathHeap) Less(i, j int) bool { return h[i] > h[j] }
+func (h maxMarkerPathHeap) Swap(i, j int)      { h[i], h[j] = h[j], h[i] }
+func (h *maxMarkerPathHeap) Push(value any)    { *h = append(*h, value.(string)) }
+func (h *maxMarkerPathHeap) Pop() any {
+	old := *h
+	last := len(old) - 1
+	value := old[last]
+	old[last] = ""
+	*h = old[:last]
+	return value
+}
+
 // ReplayUnpublishedObjectCleanupFrom replays at most limit markers.
 // decide must fence active writers and catalog-owned objects; replay never
 // infers ownership from a bare file name.
@@ -169,6 +228,69 @@ func ReplayUnpublishedObjectCleanupFrom(
 	if err != nil {
 		return 0, 0, true, err
 	}
+	return replayUnpublishedObjectCleanupMarkers(
+		ctx, markerFS, objectFS, decide, onReplayed, nil, markers, remaining)
+}
+
+// ReplayUnpublishedObjectCleanupPageFrom replays one cursor page. The
+// onReleaseDeferred callback receives exact marker identities whose object
+// ownership is already terminal but whose marker deletion was ambiguous. The
+// caller must retain those identities for exact-name reconciliation because a
+// successfully deleted marker will not appear in a later directory listing.
+func ReplayUnpublishedObjectCleanupPageFrom(
+	ctx context.Context,
+	markerFS fileservice.FileService,
+	objectFS fileservice.FileService,
+	decide func(UnpublishedObject) (UnpublishedObjectCleanupDecision, error),
+	onReplayed func(marker string),
+	onReleaseDeferred func(marker string),
+	after string,
+	limit int,
+) (
+	replayed int,
+	inspected int,
+	next string,
+	remaining bool,
+	err error,
+) {
+	markers, more, err := ListUnpublishedObjectCleanupAfter(
+		ctx, markerFS, after, limit)
+	if err != nil {
+		return 0, 0, after, true, err
+	}
+	if more && len(markers) != 0 {
+		next = markers[len(markers)-1]
+	}
+	replayed, inspected, remaining, err = replayUnpublishedObjectCleanupMarkers(
+		ctx,
+		markerFS,
+		objectFS,
+		decide,
+		onReplayed,
+		onReleaseDeferred,
+		markers,
+		more,
+	)
+	if after != "" && !more {
+		// Reaching the end of a cursor pass does not prove that markers before
+		// the cursor disappeared. Wrap once so a later empty first page can
+		// establish quiescence without starving retained prefix entries.
+		remaining = true
+	}
+	return
+}
+
+func replayUnpublishedObjectCleanupMarkers(
+	ctx context.Context,
+	markerFS fileservice.FileService,
+	objectFS fileservice.FileService,
+	decide func(UnpublishedObject) (UnpublishedObjectCleanupDecision, error),
+	onReplayed func(marker string),
+	onReleaseDeferred func(marker string),
+	markers []string,
+	remaining bool,
+) (replayed int, inspected int, hasRemaining bool, err error) {
+	hasRemaining = remaining
 
 	failed := 0
 	var firstErr error
@@ -185,7 +307,7 @@ func ReplayUnpublishedObjectCleanupFrom(
 		inspected++
 		intent, readErr := readUnpublishedObjectCleanup(ctx, markerFS, marker)
 		if readErr != nil {
-			remaining = true
+			hasRemaining = true
 			recordFailure(readErr)
 			continue
 		}
@@ -193,26 +315,29 @@ func ReplayUnpublishedObjectCleanupFrom(
 		if decide != nil {
 			decision, readErr = decide(intent.Object)
 			if readErr != nil {
-				remaining = true
+				hasRemaining = true
 				recordFailure(readErr)
 				continue
 			}
 		}
 		if decision == RetryUnpublishedObjectCleanup {
-			remaining = true
+			hasRemaining = true
 			continue
 		}
 		if decision == DeleteUnpublishedObject {
 			if _, deleteErr := DeleteUnpublishedObjects(
 				ctx, objectFS, intent.Object.File); deleteErr != nil {
-				remaining = true
+				hasRemaining = true
 				recordFailure(deleteErr)
 				continue
 			}
 		}
 		if deleteErr := DeleteUnpublishedObjectCleanup(
 			ctx, markerFS, marker); deleteErr != nil {
-			remaining = true
+			hasRemaining = true
+			if onReleaseDeferred != nil {
+				onReleaseDeferred(marker)
+			}
 			recordFailure(deleteErr)
 			continue
 		}
@@ -222,13 +347,13 @@ func ReplayUnpublishedObjectCleanupFrom(
 		}
 	}
 	if failed != 0 {
-		return replayed, inspected, remaining, errors.Join(
+		return replayed, inspected, hasRemaining, errors.Join(
 			moerr.NewInternalErrorf(
 				ctx, "replay %d unpublished object cleanup intents", failed),
 			firstErr,
 		)
 	}
-	return replayed, inspected, remaining, nil
+	return replayed, inspected, hasRemaining, nil
 }
 
 func readUnpublishedObjectCleanup(

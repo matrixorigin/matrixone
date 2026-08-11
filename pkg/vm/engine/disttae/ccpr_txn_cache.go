@@ -36,6 +36,7 @@ type ItemEntry struct {
 	txnIDs     [][]byte
 	isWriting  bool // true if the object is currently being written to fileservice
 	committed  bool // true if at least one txn has committed this object
+	deleteDone chan struct{}
 }
 
 // Less compares two ItemEntry by objectName for BTree ordering
@@ -64,7 +65,8 @@ func (e TxnIndexEntry) Less(other TxnIndexEntry) bool {
 //  1. WriteObject: creates entry with isWriting=true (if new file) or appends txnID
 //  2. OnFileWritten: clears isWriting; if already committed, deletes the entry
 //  3. OnTxnCommit: marks committed=true; if not isWriting, deletes the entry
-//  4. OnTxnRollback: removes txnID; if last txnID and not committed, GCs the file
+//  4. OnTxnRollback: removes txnID; if last txnID and not committed, fences the
+//     name while GC runs so a new writer cannot adopt an object being deleted
 //  5. OnTxnUnknownResult: removes cache tracking without deleting the file
 type CCPRTxnCache struct {
 	mu sync.Mutex
@@ -102,45 +104,68 @@ func NewCCPRTxnCache(gcPool *ants.Pool, fs fileservice.FileService) *CCPRTxnCach
 //   - isNewFile: true if file needs to be written, false if file already exists or is being written
 //   - error: error if operation failed
 func (c *CCPRTxnCache) WriteObject(ctx context.Context, objectName string, txnID []byte) (isNewFile bool, err error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	if c.fs == nil {
-		return false, moerr.NewInternalError(ctx, "fileservice is nil in CCPRTxnCache")
+	txnIDCopy := append([]byte(nil), txnID...)
+	for {
+		c.mu.Lock()
+		isNewFile, err, deleteDone := c.writeObjectLocked(
+			ctx, objectName, txnIDCopy)
+		c.mu.Unlock()
+		if deleteDone == nil {
+			return isNewFile, err
+		}
+		select {
+		case <-deleteDone:
+			// The old generation is physically absent, or its bounded delete
+			// attempt is complete. Re-check storage before adopting the name.
+		case <-ctx.Done():
+			return false, context.Cause(ctx)
+		}
 	}
+}
 
-	txnIDCopy := make([]byte, len(txnID))
-	copy(txnIDCopy, txnID)
+func (c *CCPRTxnCache) writeObjectLocked(
+	ctx context.Context,
+	objectName string,
+	txnIDCopy []byte,
+) (isNewFile bool, err error, deleteDone <-chan struct{}) {
+	if c.fs == nil {
+		return false, moerr.NewInternalError(
+			ctx, "fileservice is nil in CCPRTxnCache"), nil
+	}
 
 	// Check if object already exists in cache
 	if entry, exists := c.items.Get(ItemEntry{objectName: objectName}); exists {
+		if entry.deleteDone != nil {
+			return false, nil, entry.deleteDone
+		}
 		// Object exists in cache, add txnID if not already present
 		for _, id := range entry.txnIDs {
 			if bytes.Equal(id, txnIDCopy) {
-				return false, nil
+				return false, nil, nil
 			}
 		}
 		entry.txnIDs = append(entry.txnIDs, txnIDCopy)
 		c.items.Set(entry)
 		c.addObjectToTxnIndex(txnIDCopy, objectName)
-		return false, nil
+		return false, nil, nil
 	}
 
 	// Check if file already exists in fileservice
 	_, err = c.fs.StatFile(ctx, objectName)
 	if err == nil {
 		// File exists in fileservice, no need to write
-		return false, nil
+		return false, nil, nil
 	}
 	if !moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
-		return false, moerr.NewInternalErrorf(ctx, "failed to stat object in fileservice: %v", err)
+		return false, moerr.NewInternalErrorf(
+			ctx, "failed to stat object in fileservice: %v", err), nil
 	}
 
 	// File does not exist, mark as writing and register txnID
 	c.items.Set(ItemEntry{objectName: objectName, txnIDs: [][]byte{txnIDCopy}, isWriting: true})
 	c.addObjectToTxnIndex(txnIDCopy, objectName)
 
-	return true, nil
+	return true, nil, nil
 }
 
 // WriteNewObject admits a caller-generated unique object without StatFile.
@@ -300,14 +325,15 @@ func (c *CCPRTxnCache) removeObjectsFromTxnIndexLocked(objectNames map[string]st
 // If the entry was committed (by another txn), the file is kept.
 func (c *CCPRTxnCache) OnTxnRollback(txnID []byte) {
 	c.mu.Lock()
-	defer c.mu.Unlock()
 
 	txnEntry, exists := c.txnIndex.Get(TxnIndexEntry{txnID: txnID})
 	if !exists {
+		c.mu.Unlock()
 		return
 	}
 
 	toGC := make([]string, 0)
+	deleteFences := make(map[string]chan struct{})
 
 	for _, objectName := range txnEntry.objectNames {
 		entry, found := c.items.Get(ItemEntry{objectName: objectName})
@@ -322,8 +348,13 @@ func (c *CCPRTxnCache) OnTxnRollback(txnID []byte) {
 					// Last txnID — decide whether to GC
 					if !entry.committed {
 						toGC = append(toGC, objectName)
+						entry.txnIDs = nil
+						entry.deleteDone = make(chan struct{})
+						deleteFences[objectName] = entry.deleteDone
+						c.items.Set(entry)
+					} else {
+						c.items.Delete(entry)
 					}
-					c.items.Delete(entry)
 				} else {
 					entry.txnIDs = append(entry.txnIDs[:i], entry.txnIDs[i+1:]...)
 					c.items.Set(entry)
@@ -334,10 +365,24 @@ func (c *CCPRTxnCache) OnTxnRollback(txnID []byte) {
 	}
 
 	c.txnIndex.Delete(txnEntry)
+	c.mu.Unlock()
 
 	if len(toGC) > 0 {
+		// The cache ownership transition is complete. Object storage can take
+		// the full cleanup deadline, so it must not hold the global CCPR mutex
+		// and block unrelated transactions while doing remote IO.
 		c.gcObjects(toGC)
 	}
+
+	c.mu.Lock()
+	for objectName, done := range deleteFences {
+		entry, exists := c.items.Get(ItemEntry{objectName: objectName})
+		if exists && entry.deleteDone == done {
+			c.items.Delete(entry)
+		}
+		close(done)
+	}
+	c.mu.Unlock()
 }
 
 // gcObjects deletes object files from the file service

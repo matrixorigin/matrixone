@@ -199,3 +199,68 @@ func TestApplyObjects_TombstoneDelete_NilEngine(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "engine is nil")
 }
+
+func TestAppendDownstreamTombstoneStatsKeepsEverySpill(t *testing.T) {
+	firstID := objectio.NewObjectid()
+	secondID := objectio.NewObjectid()
+	first := *objectio.NewObjectStatsWithObjectID(
+		&firstID, false, true, true)
+	second := *objectio.NewObjectStatsWithObjectID(
+		&secondID, false, true, true)
+	info := &ObjectWithTableInfo{DBName: "db", TableName: "table"}
+
+	got := appendDownstreamTombstoneStats(
+		nil,
+		[]objectio.ObjectStats{first, {}, second},
+		info,
+	)
+	require.Len(t, got, 2)
+	require.Equal(t, first, got[0].Stats)
+	require.Equal(t, second, got[1].Stats)
+	for _, item := range got {
+		require.Equal(t, "db", item.DBName)
+		require.Equal(t, "table", item.TableName)
+		require.True(t, item.IsTombstone)
+		require.False(t, item.Delete)
+	}
+}
+
+type presetFilterObjectWorker struct {
+	result *FilterObjectJobResult
+}
+
+func (w *presetFilterObjectWorker) SubmitFilterObject(job Job) error {
+	job.(*FilterObjectJob).complete(w.result)
+	return nil
+}
+
+func (*presetFilterObjectWorker) Stop() {}
+
+func TestApplyObjectsSubmitsNonAppendableTombstoneSpills(t *testing.T) {
+	firstID := objectio.NewObjectid()
+	secondID := objectio.NewObjectid()
+	first := *objectio.NewObjectStatsWithObjectID(
+		&firstID, false, true, true)
+	second := *objectio.NewObjectStatsWithObjectID(
+		&secondID, false, true, true)
+	var upstreamID objectio.ObjectId
+	upstreamID[0] = 1
+	objects := map[objectio.ObjectId]*ObjectWithTableInfo{
+		upstreamID: {
+			IsTombstone: true,
+			DBName:      "db",
+			TableName:   "table",
+		},
+	}
+	worker := &presetFilterObjectWorker{result: &FilterObjectJobResult{
+		DownstreamStatsList: []objectio.ObjectStats{first, second},
+	}}
+
+	err := ApplyObjects(
+		context.Background(), "task", 0, nil, objects,
+		nil, nil, types.TS{}, nil, nil, nil, nil,
+		worker, nil, nil, "account", "publication", nil, nil, nil,
+	)
+	require.ErrorContains(t, err, "engine is nil",
+		"a non-empty spill list must reach tombstone submission")
+}

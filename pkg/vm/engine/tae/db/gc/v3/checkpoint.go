@@ -149,14 +149,16 @@ type checkpointCleaner struct {
 
 	unpublishedCleanupGeneration atomic.Uint64
 	unpublishedCleanupProcessed  atomic.Uint64
+	unpublishedCleanupReplayMu   sync.Mutex
 	unpublishedCleanupOwnership  struct {
 		sync.Mutex
-		active      map[string]struct{}
-		markers     map[string]struct{}
-		uncertain   map[string]string
-		pending     int
-		overflow    bool
-		initialized bool
+		active       map[string]struct{}
+		markers      map[string]struct{}
+		uncertain    map[string]string
+		pending      int
+		overflow     bool
+		initialized  bool
+		replayCursor string
 	}
 }
 
@@ -1967,12 +1969,42 @@ func (c *checkpointCleaner) FinishUnpublishedObject(
 	delete(c.unpublishedCleanupOwnership.active, file)
 	if err == nil {
 		c.releaseUnpublishedObjectMarkerLocked(marker)
+	} else {
+		c.retainUncertainUnpublishedObjectMarkerLocked(marker, "")
 	}
 	c.unpublishedCleanupOwnership.Unlock()
 	if err != nil {
 		c.unpublishedCleanupGeneration.Add(1)
 	}
 	return err
+}
+
+func (c *checkpointCleaner) retainUncertainUnpublishedObjectMarker(
+	marker string,
+	file string,
+) {
+	c.unpublishedCleanupOwnership.Lock()
+	c.retainUncertainUnpublishedObjectMarkerLocked(marker, file)
+	c.unpublishedCleanupOwnership.Unlock()
+}
+
+func (c *checkpointCleaner) retainUncertainUnpublishedObjectMarkerLocked(
+	marker string,
+	file string,
+) {
+	if c.unpublishedCleanupOwnership.markers == nil {
+		c.unpublishedCleanupOwnership.markers = make(map[string]struct{})
+	}
+	if c.unpublishedCleanupOwnership.uncertain == nil {
+		c.unpublishedCleanupOwnership.uncertain = make(map[string]string)
+	}
+	if _, exists := c.unpublishedCleanupOwnership.markers[marker]; !exists {
+		c.unpublishedCleanupOwnership.markers[marker] = struct{}{}
+		if !c.unpublishedCleanupOwnership.overflow {
+			c.unpublishedCleanupOwnership.pending++
+		}
+	}
+	c.unpublishedCleanupOwnership.uncertain[marker] = file
 }
 
 // AbandonUnpublishedObject transfers an already-durable intent from the
@@ -2005,7 +2037,9 @@ func (c *checkpointCleaner) releaseUnpublishedObjectMarkerLocked(marker string) 
 	}
 	delete(c.unpublishedCleanupOwnership.markers, marker)
 	if file, uncertain := c.unpublishedCleanupOwnership.uncertain[marker]; uncertain {
-		delete(c.unpublishedCleanupOwnership.active, file)
+		if file != "" {
+			delete(c.unpublishedCleanupOwnership.active, file)
+		}
 	}
 	delete(c.unpublishedCleanupOwnership.uncertain, marker)
 	if c.unpublishedCleanupOwnership.pending > 0 {
@@ -2013,10 +2047,12 @@ func (c *checkpointCleaner) releaseUnpublishedObjectMarkerLocked(marker string) 
 	}
 }
 
-// reconcileUncertainUnpublishedObjectMarkers closes marker writes whose result
-// could not be observed. Prepare returned an error before the object write, so
-// these exact markers own no object and may be removed directly. The identity
-// map keeps the admission slot until deletion or absence is proven.
+// reconcileUncertainUnpublishedObjectMarkers closes exact marker identities
+// whose creation or deletion could not be observed. A non-empty map value is
+// an active reservation from a failed Prepare before any object write; an
+// empty value means object ownership was already terminal when marker deletion
+// became ambiguous. In both cases the marker may be removed directly, and the
+// admission slot remains owned until deletion or absence is proven.
 func (c *checkpointCleaner) reconcileUncertainUnpublishedObjectMarkers(
 	ctx context.Context,
 	markerFS fileservice.FileService,
@@ -2061,6 +2097,13 @@ func (c *checkpointCleaner) hasUncertainUnpublishedObjectMarkers() bool {
 }
 
 func (c *checkpointCleaner) replayUnpublishedObjectCleanup(ctx context.Context) error {
+	// Process and startup replay may overlap. One bounded owner is enough; a
+	// concurrent caller must not duplicate remote deletes or race the cursor.
+	if !c.unpublishedCleanupReplayMu.TryLock() {
+		return nil
+	}
+	defer c.unpublishedCleanupReplayMu.Unlock()
+
 	generation := c.unpublishedCleanupGeneration.Load()
 	if generation == c.unpublishedCleanupProcessed.Load() {
 		return nil
@@ -2076,14 +2119,25 @@ func (c *checkpointCleaner) replayUnpublishedObjectCleanup(ctx context.Context) 
 	if c.hasUncertainUnpublishedObjectMarkers() {
 		durableLimit /= 2
 	}
-	_, inspected, remaining, replayErr := ioutil.ReplayUnpublishedObjectCleanupFrom(
-		cleanupCtx,
-		markerFS,
-		c.fs,
-		c.decideUnpublishedObjectCleanup,
-		c.releaseUnpublishedObjectMarker,
-		durableLimit,
-	)
+	c.unpublishedCleanupOwnership.Lock()
+	replayCursor := c.unpublishedCleanupOwnership.replayCursor
+	c.unpublishedCleanupOwnership.Unlock()
+	_, inspected, nextCursor, remaining, replayErr :=
+		ioutil.ReplayUnpublishedObjectCleanupPageFrom(
+			cleanupCtx,
+			markerFS,
+			c.fs,
+			c.decideUnpublishedObjectCleanup,
+			c.releaseUnpublishedObjectMarker,
+			func(marker string) {
+				c.retainUncertainUnpublishedObjectMarker(marker, "")
+			},
+			replayCursor,
+			durableLimit,
+		)
+	c.unpublishedCleanupOwnership.Lock()
+	c.unpublishedCleanupOwnership.replayCursor = nextCursor
+	c.unpublishedCleanupOwnership.Unlock()
 	uncertainRemaining, uncertainErr :=
 		c.reconcileUncertainUnpublishedObjectMarkers(
 			cleanupCtx,

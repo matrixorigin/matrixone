@@ -31,12 +31,13 @@ import (
 
 type controllableUnpublishedCleanupFS struct {
 	fileservice.FileService
-	rejectMarkerWrites    atomic.Bool
-	rejectMarkerStats     atomic.Bool
-	rejectMarkerDeletes   atomic.Bool
-	ambiguousMarkerWrites atomic.Bool
-	rejectObjectDelete    atomic.Bool
-	markerDeleteCalls     atomic.Int64
+	rejectMarkerWrites     atomic.Bool
+	rejectMarkerStats      atomic.Bool
+	rejectMarkerDeletes    atomic.Bool
+	ambiguousMarkerDeletes atomic.Bool
+	ambiguousMarkerWrites  atomic.Bool
+	rejectObjectDelete     atomic.Bool
+	markerDeleteCalls      atomic.Int64
 }
 
 func (fs *controllableUnpublishedCleanupFS) Write(
@@ -74,7 +75,107 @@ func (fs *controllableUnpublishedCleanupFS) Delete(
 			}
 		}
 	}
-	return fs.FileService.Delete(ctx, paths...)
+	err := fs.FileService.Delete(ctx, paths...)
+	if err == nil {
+		for _, path := range paths {
+			if strings.HasPrefix(path, "gc/unpublished/") &&
+				fs.ambiguousMarkerDeletes.Load() {
+				return errors.New("injected post-delete marker failure")
+			}
+		}
+	}
+	return err
+}
+
+func TestCheckpointCleanerReconcilesAmbiguousMarkerDeletion(t *testing.T) {
+	ctx := context.Background()
+	objectFS, err := fileservice.NewMemoryFS(
+		"shared", fileservice.DisabledCacheConfig, nil)
+	require.NoError(t, err)
+	markerBase, err := fileservice.NewMemoryFS(
+		"local", fileservice.DisabledCacheConfig, nil)
+	require.NoError(t, err)
+	markerFS := &controllableUnpublishedCleanupFS{FileService: markerBase}
+	cleaner := NewCheckpointCleaner(
+		ctx, "", objectFS, nil, nil, WithUnpublishedCleanupFS(markerFS),
+	).(*checkpointCleaner)
+
+	name := objectio.MockObjectName().String()
+	marker, err := cleaner.PrepareUnpublishedObject(ctx, 1, 2, true, name)
+	require.NoError(t, err)
+	markerFS.ambiguousMarkerDeletes.Store(true)
+	markerFS.rejectMarkerStats.Store(true)
+	require.ErrorContains(
+		t, cleaner.FinishUnpublishedObject(ctx, marker, name),
+		"injected post-delete marker failure",
+	)
+
+	markerFS.ambiguousMarkerDeletes.Store(false)
+	markerFS.rejectMarkerStats.Store(false)
+	require.NoError(t, cleaner.replayUnpublishedObjectCleanup(ctx))
+	cleaner.unpublishedCleanupOwnership.Lock()
+	require.Zero(t, cleaner.unpublishedCleanupOwnership.pending)
+	require.Empty(t, cleaner.unpublishedCleanupOwnership.markers)
+	cleaner.unpublishedCleanupOwnership.Unlock()
+}
+
+func TestCheckpointCleanerRetainsAmbiguousReplayMarkerIdentity(t *testing.T) {
+	ctx := context.Background()
+	objectFS, err := fileservice.NewMemoryFS(
+		"shared", fileservice.DisabledCacheConfig, nil)
+	require.NoError(t, err)
+	markerBase, err := fileservice.NewMemoryFS(
+		"local", fileservice.DisabledCacheConfig, nil)
+	require.NoError(t, err)
+	markerFS := &controllableUnpublishedCleanupFS{FileService: markerBase}
+	cleaner := NewCheckpointCleaner(
+		ctx, "", objectFS, nil, nil, WithUnpublishedCleanupFS(markerFS),
+	).(*checkpointCleaner)
+
+	name := objectio.MockObjectName().String()
+	marker, err := cleaner.PrepareUnpublishedObject(ctx, 1, 2, true, name)
+	require.NoError(t, err)
+	cleaner.AbandonUnpublishedObject(name)
+	markerFS.ambiguousMarkerDeletes.Store(true)
+	markerFS.rejectMarkerStats.Store(true)
+	require.ErrorContains(
+		t, cleaner.replayUnpublishedObjectCleanup(ctx),
+		"injected post-delete marker failure",
+	)
+	cleaner.unpublishedCleanupOwnership.Lock()
+	require.Contains(t, cleaner.unpublishedCleanupOwnership.uncertain, marker)
+	cleaner.unpublishedCleanupOwnership.Unlock()
+
+	markerFS.ambiguousMarkerDeletes.Store(false)
+	markerFS.rejectMarkerStats.Store(false)
+	require.NoError(t, cleaner.replayUnpublishedObjectCleanup(ctx))
+	cleaner.unpublishedCleanupOwnership.Lock()
+	require.Zero(t, cleaner.unpublishedCleanupOwnership.pending)
+	require.Empty(t, cleaner.unpublishedCleanupOwnership.markers)
+	require.Empty(t, cleaner.unpublishedCleanupOwnership.uncertain)
+	cleaner.unpublishedCleanupOwnership.Unlock()
+}
+
+func TestParseUnpublishedObjectID(t *testing.T) {
+	name := objectio.MockObjectName()
+	got, err := parseUnpublishedObjectID(name.String())
+	require.NoError(t, err)
+	require.Equal(t, *name.ObjectId(), got)
+
+	segment := objectio.NewSegmentid().String()
+	for _, file := range []string{
+		"",
+		"missing-separator",
+		segment + "_",
+		"not-a-uuid_1",
+		segment + "_not-a-number",
+		segment + "_65536",
+	} {
+		t.Run(file, func(t *testing.T) {
+			_, err := parseUnpublishedObjectID(file)
+			require.Error(t, err)
+		})
+	}
 }
 
 func (fs *controllableUnpublishedCleanupFS) StatFile(
