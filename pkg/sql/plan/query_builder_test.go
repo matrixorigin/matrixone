@@ -1410,6 +1410,251 @@ func TestQueryBuilderBuildGroupingSetNestedOrderUsesSourcePrecedence(t *testing.
 	}
 }
 
+func TestQueryBuilderBuildGroupingSetWindowNestedOrderUsesBranchSemantics(t *testing.T) {
+	for _, testCase := range []struct {
+		name          string
+		selectSQL     string
+		groupBy       string
+		orderBy       string
+		selectedPos   int
+		shadowedPos   int
+		wantOrderFunc string
+		wantBranches  int
+	}{
+		{
+			name:          "rollup source shadows output alias",
+			selectSQL:     "b as a, a as source_a, count(*), count(*) over() as window_count",
+			groupBy:       "a, b with rollup",
+			orderBy:       "a + 0",
+			selectedPos:   1,
+			shadowedPos:   0,
+			wantOrderFunc: "+",
+			wantBranches:  3,
+		},
+		{
+			name:          "cube source shadows output alias",
+			selectSQL:     "b as a, a as source_a, count(*), count(*) over() as window_count",
+			groupBy:       "cube(a, b)",
+			orderBy:       "a + 0",
+			selectedPos:   1,
+			shadowedPos:   0,
+			wantOrderFunc: "+",
+			wantBranches:  4,
+		},
+		{
+			name:          "window order keeps nonwindow sibling in source scope",
+			selectSQL:     "b as a, a as source_a, count(*)",
+			groupBy:       "a, b with rollup",
+			orderBy:       "row_number() over () + (a + 0)",
+			selectedPos:   1,
+			shadowedPos:   0,
+			wantOrderFunc: "+",
+			wantBranches:  3,
+		},
+		{
+			name:          "repeated source projections still shadow window alias",
+			selectSQL:     "row_number() over () as a, a as source_a, a as source_a_copy, count(*)",
+			groupBy:       "a with rollup",
+			orderBy:       "a + 0",
+			selectedPos:   0,
+			shadowedPos:   -1,
+			wantOrderFunc: "+",
+			wantBranches:  2,
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			stmts, err := parsers.Parse(
+				context.TODO(),
+				dialect.MYSQL,
+				fmt.Sprintf(`select %s from select_test.bind_select
+					group by %s order by %s`, testCase.selectSQL, testCase.groupBy, testCase.orderBy),
+				1,
+			)
+			require.NoError(t, err)
+
+			queryPlan, err := BuildPlan(NewMockCompilerContext(true), stmts[0], false)
+			require.NoError(t, err)
+
+			matchedBranches := 0
+			for _, node := range queryPlan.GetQuery().Nodes {
+				if node.NodeType != plan.Node_PROJECT || len(node.ProjectList) <= testCase.selectedPos {
+					continue
+				}
+				selectedKey, keyErr := projectExprKey(node.ProjectList[testCase.selectedPos])
+				require.NoError(t, keyErr)
+				for _, candidate := range node.ProjectList[testCase.selectedPos+1:] {
+					orderFunc := candidate.GetF()
+					if orderFunc == nil || orderFunc.Func == nil || orderFunc.Func.ObjName != testCase.wantOrderFunc || len(orderFunc.Args) != 2 {
+						continue
+					}
+					orderSourceKey, sourceErr := projectExprKey(orderFunc.Args[0])
+					require.NoError(t, sourceErr)
+					if orderSourceKey != selectedKey {
+						continue
+					}
+					if testCase.shadowedPos >= 0 {
+						shadowedKey, shadowErr := projectExprKey(node.ProjectList[testCase.shadowedPos])
+						require.NoError(t, shadowErr)
+						require.NotEqual(t, shadowedKey, orderSourceKey,
+							"nested ORDER BY name must not expand the shadowing output alias")
+					}
+					matchedBranches++
+				}
+			}
+			require.Equal(t, testCase.wantBranches, matchedBranches,
+				"the ORDER BY expression must be bound in each grouping-set source scope")
+		})
+	}
+}
+
+func TestQueryBuilderBuildGroupingSetWindowKeepsOuterOrderReferences(t *testing.T) {
+	for _, sql := range []string{
+		`select count(*), row_number() over () as window_rank
+		from select_test.bind_select group by a with rollup order by window_rank + 0`,
+		`select -a as expression_alias, count(*), row_number() over () as window_rank
+		from select_test.bind_select group by a with rollup order by expression_alias + 0`,
+		`select a as duplicate_alias, a as duplicate_alias, count(*), row_number() over () as window_rank
+		from select_test.bind_select group by a with rollup order by duplicate_alias`,
+		`select a as duplicate_alias, a as duplicate_alias, count(*), row_number() over () as window_rank
+		from select_test.bind_select group by a with rollup order by duplicate_alias + 0`,
+		`select a as duplicate_alias, bind_select.a as duplicate_alias, count(*), row_number() over () as window_rank
+		from select_test.bind_select group by a with rollup order by duplicate_alias`,
+		`select a as duplicate_alias, a as duplicate_alias, count(*), row_number() over () as window_rank
+		from select_test.bind_select group by cube(a, b) order by duplicate_alias`,
+		`select -a as duplicate_alias, b + 0 as duplicate_alias, count(*), row_number() over () as window_rank
+		from select_test.bind_select group by a, b with rollup order by duplicate_alias`,
+		`select -a as duplicate_alias, b + 0 as duplicate_alias, count(*), row_number() over () as window_rank
+		from select_test.bind_select group by a, b with rollup order by duplicate_alias + 0`,
+		`select count(*), row_number() over () as window_rank
+		from select_test.bind_select group by cube(a) order by window_rank`,
+		`select count(*), row_number() over () as window_rank
+		from select_test.bind_select group by a with rollup order by 1`,
+	} {
+		stmts, err := parsers.Parse(context.TODO(), dialect.MYSQL, sql, 1)
+		require.NoError(t, err)
+		_, err = BuildPlan(NewMockCompilerContext(true), stmts[0], false)
+		require.NoError(t, err)
+	}
+}
+
+func TestQueryBuilderBuildGroupingSetWindowRejectsDifferentSourceAliases(t *testing.T) {
+	for _, groupBy := range []string{"a, b with rollup", "cube(a, b)"} {
+		for _, orderBy := range []string{"duplicate_alias", "duplicate_alias + 0"} {
+			stmts, err := parsers.Parse(
+				context.TODO(),
+				dialect.MYSQL,
+				fmt.Sprintf(`select a as duplicate_alias, b as duplicate_alias, count(*), row_number() over () as window_rank
+				from select_test.bind_select group by %s order by %s`, groupBy, orderBy),
+				1,
+			)
+			require.NoError(t, err)
+
+			_, err = BuildPlan(NewMockCompilerContext(true), stmts[0], false)
+			require.ErrorContains(t, err, "Column 'duplicate_alias' in order clause is ambiguous",
+				"group by %s order by %s", groupBy, orderBy)
+		}
+	}
+}
+
+func TestQueryBuilderBuildGroupingSetWindowMatchesUngroupedSourceResolution(t *testing.T) {
+	for _, groupBy := range []string{"b with rollup", "cube(b)"} {
+		for _, windowExpr := range []string{"", ", row_number() over () as window_rank"} {
+			selectSQL := fmt.Sprintf(`select b as a, count(*)%s from select_test.bind_select
+			group by %s order by a + 0`, windowExpr, groupBy)
+			stmts, err := parsers.Parse(context.TODO(), dialect.MYSQL, selectSQL, 1)
+			require.NoError(t, err)
+			_, err = BuildPlan(NewMockCompilerContext(true), stmts[0], false)
+			require.ErrorContains(t, err, `column "bind_select.a" must appear in the GROUP BY clause`)
+		}
+	}
+}
+
+func TestRewriteRollupWindowOrderDistinguishesSourceFromWindowAlias(t *testing.T) {
+	for _, testCase := range []struct {
+		name              string
+		selectSQL         string
+		groupBy           string
+		orderBy           string
+		wantProbeFallback string
+	}{
+		{
+			name:      "selected source shadows window alias",
+			selectSQL: "row_number() over () as a, a as source_a, count(*)",
+			groupBy:   "a with rollup",
+			orderBy:   "a + 0",
+		},
+		{
+			name:      "grouped source shadows window alias without source projection",
+			selectSQL: "row_number() over () as a, count(*)",
+			groupBy:   "a with rollup",
+			orderBy:   "a + 0",
+		},
+		{
+			name:              "missing source keeps window alias",
+			selectSQL:         "row_number() over () as a, count(*)",
+			groupBy:           "b with rollup",
+			orderBy:           "a + 0",
+			wantProbeFallback: "a",
+		},
+		{
+			name:              "expression alias fallback reuses outer output",
+			selectSQL:         "rand() as x, count(*), row_number() over () as window_rank",
+			groupBy:           "a with rollup",
+			orderBy:           "x + 0",
+			wantProbeFallback: "x",
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			stmts, err := parsers.Parse(
+				context.TODO(),
+				dialect.MYSQL,
+				fmt.Sprintf(`select %s from select_test.bind_select
+					group by %s order by %s`, testCase.selectSQL, testCase.groupBy, testCase.orderBy),
+				1,
+			)
+			require.NoError(t, err)
+
+			selectStmt := stmts[0].(*tree.Select)
+			selectClause := selectStmt.Select.(*tree.SelectClause)
+			selectClause.GroupBy.GroupByExprsList = append(selectClause.GroupBy.GroupByExprsList, nil)
+			rewritten, hasWindow := rewriteRollupWindowSelect(
+				selectClause,
+				selectStmt.OrderBy,
+				selectStmt.Limit,
+				selectStmt.RankOption,
+			)
+			require.True(t, hasWindow)
+			require.NotNil(t, rewritten)
+			require.Len(t, rewritten.OrderBy, 1)
+
+			orderName, ok := unwrapParenExpr(rewritten.OrderBy[0].Expr).(*tree.UnresolvedName)
+			if !ok {
+				binary, binaryOK := unwrapParenExpr(rewritten.OrderBy[0].Expr).(*tree.BinaryExpr)
+				require.True(t, binaryOK)
+				orderName, ok = unwrapParenExpr(binary.Left).(*tree.UnresolvedName)
+			}
+			require.True(t, ok)
+			require.True(t, strings.HasPrefix(orderName.ColNameOrigin(), rollupWindowInternalAliasPrefix))
+			if testCase.wantProbeFallback != "" {
+				outerClause := rewritten.Select.(*tree.SelectClause)
+				probe := outerClause.OrderBySourceProbes[orderName.ColName()]
+				require.NotNil(t, probe)
+				require.Equal(t, testCase.wantProbeFallback, probe.FallbackName)
+				probe.Resolved = true
+				require.NoError(t, resolveRollupWindowOrderSourceProbes(
+					context.TODO(), rewritten.OrderBy, outerClause.OrderBySourceProbes,
+				))
+				binary := unwrapParenExpr(rewritten.OrderBy[0].Expr).(*tree.BinaryExpr)
+				fallbackName := unwrapParenExpr(binary.Left).(*tree.UnresolvedName)
+				require.Equal(t, testCase.wantProbeFallback, fallbackName.ColName())
+			} else {
+				outerClause := rewritten.Select.(*tree.SelectClause)
+				require.Empty(t, outerClause.OrderBySourceProbes)
+			}
+		})
+	}
+}
+
 func TestQueryBuilderBuildGroupingSetNestedOrderFallsBackToAlias(t *testing.T) {
 	stmts, err := parsers.Parse(
 		context.TODO(),

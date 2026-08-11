@@ -322,9 +322,14 @@ func qualifyOrderExpression(
 			return nil, nil, ambiguousOrderColumn(sysCtx, name)
 		}
 		if found {
+			bindAst := item.astExpr
+			if metadata := ctx.orderResolution; metadata != nil &&
+				item.idx >= 0 && int(item.idx) < len(metadata.bindAsts) && metadata.bindAsts[item.idx] != nil {
+				bindAst = metadata.bindAsts[item.idx]
+			}
 			orderAliasMap[name] = &aliasItem{
 				idx:     item.idx,
-				astExpr: item.astExpr,
+				astExpr: bindAst,
 			}
 		}
 	}

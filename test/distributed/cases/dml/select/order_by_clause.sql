@@ -145,4 +145,23 @@ from order_alias_shadow
 group by id, k with rollup
 order by id + 0, grouping(k), source_id + 0;
 
+-- An unrelated window expression activates the ROLLUP window rewrite but must
+-- not change the source-column-first binding of the same ORDER BY expression.
+select k as id, id as source_id, count(*) as row_count,
+       count(*) over () as window_rows
+from order_alias_shadow
+group by id, k with rollup
+order by id + 0, grouping(k), source_id + 0;
+
+select k as id, id as source_id, k as source_k, count(*) as row_count
+from order_alias_shadow
+group by cube(id, k)
+order by id + 0, grouping(id), grouping(k), source_k + 0;
+
+select k as id, id as source_id, k as source_k, count(*) as row_count,
+       count(*) over () as window_rows
+from order_alias_shadow
+group by cube(id, k)
+order by id + 0, grouping(id), grouping(k), source_k + 0;
+
 drop table order_alias_shadow;
