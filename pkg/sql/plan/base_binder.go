@@ -29,8 +29,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
+	mysqlparser "github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/rule"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"github.com/matrixorigin/matrixone/pkg/util/errutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -53,7 +55,7 @@ var kAlwaysFalseExpr = &plan.Expr{
 }
 
 func (b *baseBinder) baseBindExpr(astExpr tree.Expr, depth int32, isRoot bool) (expr *Expr, err error) {
-	if b.numericParamType != nil && !isNumericContextNode(astExpr) {
+	if b.numericParamType != nil && !b.isNumericContextNode(astExpr, depth) {
 		paramType := b.numericParamType
 		b.numericParamType = nil
 		defer func() { b.numericParamType = paramType }()
@@ -111,25 +113,41 @@ func (b *baseBinder) baseBindExpr(astExpr tree.Expr, depth int32, isRoot bool) (
 		expr, err = b.bindRangeCond(exprImpl, depth, isRoot)
 
 	case *tree.UnresolvedName:
+		if udfArg, ok := b.bindSQLUdfArgument(exprImpl); ok {
+			expr = udfArg
+			break
+		}
 		// check existence
 		if b.GetContext() != nil && b.GetContext().Value(defines.InSp{}) != nil && b.GetContext().Value(defines.InSp{}).(bool) {
-			tmpScope := b.GetContext().Value(defines.VarScopeKey{}).(*[]map[string]interface{})
-			for i := len(*tmpScope) - 1; i >= 0; i-- {
-				curScope := (*tmpScope)[i]
-				if _, ok := curScope[exprImpl.ColName()]; ok {
-					typ := types.T_text.ToType()
-					expr = &Expr{
-						Typ: makePlan2Type(&typ),
-						Expr: &plan.Expr_V{
-							V: &plan.VarRef{
-								Name:   exprImpl.ColName(),
-								System: false,
-								Global: false,
+			tmpScope, scopeOK := b.GetContext().Value(defines.VarScopeKey{}).(*[]map[string]interface{})
+			typeScopes, typeScopeOK := b.GetContext().Value(defines.VarScopeTypeKey{}).(*[]map[string]plan.Type)
+			if scopeOK && tmpScope != nil {
+				name := strings.ToLower(exprImpl.ColName())
+				for i := len(*tmpScope) - 1; i >= 0; i-- {
+					curScope := (*tmpScope)[i]
+					if _, ok := curScope[name]; ok {
+						typ := types.T_text.ToType()
+						expr = &Expr{
+							Typ: makePlan2Type(&typ),
+							Expr: &plan.Expr_V{
+								V: &plan.VarRef{
+									Name:   name,
+									System: false,
+									Global: false,
+								},
 							},
-						},
+						}
+						if typeScopeOK && typeScopes != nil && i < len(*typeScopes) {
+							if targetType, ok := (*typeScopes)[i][name]; ok {
+								expr, err = appendCastBeforeExpr(b.GetContext(), expr, targetType)
+							}
+							if err != nil {
+								return nil, err
+							}
+						}
+						err = nil
+						return
 					}
-					err = nil
-					return
 				}
 			}
 		}
@@ -146,7 +164,12 @@ func (b *baseBinder) baseBindExpr(astExpr tree.Expr, depth int32, isRoot bool) (
 		}
 		parentParamType := b.numericParamType
 		b.numericParamType = nil
-		if isNumericArithmeticRoot(exprImpl.Expr) {
+		if b.mysqlSpecialTypeInAst(exprImpl.Expr) && makeTypeByPlan2Type(typ).IsNumeric() {
+			expr, err = b.bindWithRawMySQLSpecialTypes(func() (*Expr, error) {
+				return b.impl.BindExpr(exprImpl.Expr, depth, false)
+			})
+		} else if isNumericArithmeticRoot(exprImpl.Expr) ||
+			b.isGenericNumericFunctionRoot(exprImpl.Expr, depth, &typ) {
 			expr, err = b.bindNumericExprWithContext(exprImpl.Expr, depth, &typ)
 		} else {
 			expr, err = b.impl.BindExpr(exprImpl.Expr, depth, false)
@@ -155,7 +178,27 @@ func (b *baseBinder) baseBindExpr(astExpr tree.Expr, depth int32, isRoot bool) (
 		if err != nil {
 			return
 		}
-		expr, err = appendCastBeforeExpr(b.GetContext(), expr, typ)
+		// ENUM and SET normally bind as their display strings.  An explicit
+		// numeric cast is, however, a numeric operand contract in MySQL and
+		// must start from the stored ordinal/bitmap instead of that string.
+		if makeTypeByPlan2Type(typ).IsNumeric() {
+			expr, _ = storedMySQLSpecialTypeExpr(expr)
+		}
+		if b.builder != nil {
+			var rewritten bool
+			expr, rewritten, err = b.builder.rewriteProjectedMySQLSpecialTypeDisplayCast(expr, expr, typ)
+			if err != nil {
+				return
+			}
+			if rewritten {
+				return
+			}
+		}
+		if useExplicitCastOverload(exprImpl.Type) {
+			expr, err = appendExplicitCastBeforeExpr(b.GetContext(), expr, typ)
+		} else {
+			expr, err = appendCastBeforeExpr(b.GetContext(), expr, typ)
+		}
 
 	case *tree.BitCastExpr:
 		expr, err = b.bindFuncExprImplByAstExpr("bit_cast", []tree.Expr{astExpr}, depth)
@@ -255,7 +298,7 @@ func (b *baseBinder) baseBindExpr(astExpr tree.Expr, depth int32, isRoot bool) (
 		expr, err = b.baseBindVar(exprImpl, depth, isRoot)
 
 	case *tree.ParamExpr:
-		if !b.builder.isPrepareStatement {
+		if b.builder == nil || !b.builder.isPrepareStatement {
 			err = moerr.NewInvalidInput(b.GetContext(), "only prepare statement can use ? expr")
 		} else {
 			expr, err = b.baseBindParam(exprImpl, depth, isRoot)
@@ -279,6 +322,24 @@ func (b *baseBinder) baseBindExpr(astExpr tree.Expr, depth int32, isRoot bool) (
 	}
 
 	return
+}
+
+func useExplicitCastOverload(typ tree.ResolvableTypeReference) bool {
+	t, ok := typ.(*tree.T)
+	if !ok {
+		return false
+	}
+	internal := t.InternalType
+	switch defines.MysqlType(internal.Oid) {
+	case defines.MYSQL_TYPE_DECIMAL, defines.MYSQL_TYPE_NEWDECIMAL:
+		return true
+	case defines.MYSQL_TYPE_LONGLONG:
+		family := strings.ToLower(internal.FamilyString)
+		return family == "signed" || family == "integer" ||
+			(internal.Unsigned && (family == "" || family == "unsigned"))
+	default:
+		return false
+	}
 }
 
 func unwrapParenExpr(astExpr tree.Expr) tree.Expr {
@@ -334,7 +395,7 @@ func (b *baseBinder) baseBindColRef(astExpr *tree.UnresolvedName, depth int32, i
 	col := astExpr.ColName()
 	table := astExpr.TblName()
 	db := astExpr.DbName()
-	name := tree.String(astExpr, dialect.MYSQL)
+	name := semanticAstKey(astExpr)
 
 	if b.ctx.timeTag > 0 && (col == TimeWindowStart || col == TimeWindowEnd) {
 		colPos := int32(len(b.ctx.times))
@@ -435,7 +496,7 @@ func (b *baseBinder) baseBindColRef(astExpr *tree.UnresolvedName, depth int32, i
 
 	if groupPos, ok := b.correlatedGroupByColPos(depth, name, table, col); ok {
 		expr = &plan.Expr{
-			Typ: b.ctx.groups[groupPos].Typ,
+			Typ: b.ctx.groupOutputType(groupPos),
 			Expr: &plan.Expr_Corr{
 				Corr: &plan.CorrColRef{
 					RelPos: b.ctx.groupTag,
@@ -450,7 +511,22 @@ func (b *baseBinder) baseBindColRef(astExpr *tree.UnresolvedName, depth int32, i
 		return
 	}
 
-	if isEnumOrSetPlanType(typ) {
+	if colPos != NotFound {
+		b.boundCols = append(b.boundCols, boundColumn{
+			name:      table + "." + col,
+			relation:  relPos,
+			columnPos: colPos,
+		})
+	}
+
+	preserveSpecialValue := typ != nil && b.mysqlSpecialTargetType != nil &&
+		typ.Enumvalues == b.mysqlSpecialTargetType.Enumvalues &&
+		((isEnumPlanType(typ) && isEnumPlanType(b.mysqlSpecialTargetType)) ||
+			(isSetPlanType(typ) && isSetPlanType(b.mysqlSpecialTargetType)))
+	// ENUM and SET have distinct storage and display representations. Keep their
+	// display value by default. Numeric and bitwise expression binders explicitly
+	// enable raw storage binding so they follow MySQL's numeric semantics.
+	if !b.bindRawMySQLSpecialType && !preserveSpecialValue && isEnumOrSetPlanType(typ) {
 		if err != nil {
 			errutil.ReportError(b.GetContext(), err)
 			return
@@ -490,8 +566,6 @@ func (b *baseBinder) baseBindColRef(astExpr *tree.UnresolvedName, depth int32, i
 	}
 
 	if colPos != NotFound {
-		b.boundCols = append(b.boundCols, table+"."+col)
-
 		expr = &plan.Expr{
 			Typ: *typ,
 		}
@@ -575,6 +649,9 @@ func (b *baseBinder) baseBindSubquery(astExpr *tree.Subquery, isRoot bool) (*Exp
 		return nil, moerr.NewInvalidInput(b.GetContext(), "field reference doesn't support SUBQUERY")
 	}
 	subCtx := NewBindContext(b.builder, b.ctx)
+	if b.numericSubqueryTarget != nil && !astExpr.Exists {
+		subCtx.numericProjectionTypes = []Type{*b.numericSubqueryTarget}
+	}
 
 	// A subquery is a nested SELECT and must not inherit the outer FOR UPDATE
 	// state. MySQL only locks rows in the outer query; rows reached through
@@ -655,25 +732,39 @@ func (b *baseBinder) bindCaseExpr(astExpr *tree.CaseExpr, depth int32, isRoot bo
 }
 
 func (b *baseBinder) bindRangeCond(astExpr *tree.RangeCond, depth int32, isRoot bool) (*Expr, error) {
-	if astExpr.Not {
-		// rewrite 'col not between 1, 20' to 'col < 1 or col > 20'
-		newLeftExpr := tree.NewComparisonExpr(tree.LESS_THAN, astExpr.Left, astExpr.From)
-		newRightExpr := tree.NewComparisonExpr(tree.GREAT_THAN, astExpr.Left, astExpr.To)
-		return b.bindFuncExprImplByAstExpr("or", []tree.Expr{newLeftExpr, newRightExpr}, depth)
-	} else {
-		if _, ok := astExpr.Left.(*tree.Tuple); ok {
-			newLeftExpr := tree.NewComparisonExpr(tree.GREAT_THAN_EQUAL, astExpr.Left, astExpr.From)
-			newRightExpr := tree.NewComparisonExpr(tree.LESS_THAN_EQUAL, astExpr.Left, astExpr.To)
-			return b.bindFuncExprImplByAstExpr("and", []tree.Expr{newLeftExpr, newRightExpr}, depth)
-		}
+	bind := func() (*Expr, error) {
+		if astExpr.Not {
+			// rewrite 'col not between 1, 20' to 'col < 1 or col > 20'
+			newLeftExpr := tree.NewComparisonExpr(tree.LESS_THAN, astExpr.Left, astExpr.From)
+			newRightExpr := tree.NewComparisonExpr(tree.GREAT_THAN, astExpr.Left, astExpr.To)
+			return b.bindFuncExprImplByAstExpr("or", []tree.Expr{newLeftExpr, newRightExpr}, depth)
+		} else {
+			if _, ok := astExpr.Left.(*tree.Tuple); ok {
+				newLeftExpr := tree.NewComparisonExpr(tree.GREAT_THAN_EQUAL, astExpr.Left, astExpr.From)
+				newRightExpr := tree.NewComparisonExpr(tree.LESS_THAN_EQUAL, astExpr.Left, astExpr.To)
+				return b.bindFuncExprImplByAstExpr("and", []tree.Expr{newLeftExpr, newRightExpr}, depth)
+			}
 
-		return b.bindFuncExprImplByAstExpr("between", []tree.Expr{astExpr.Left, astExpr.From, astExpr.To}, depth)
+			return b.bindFuncExprImplByAstExpr("between", []tree.Expr{astExpr.Left, astExpr.From, astExpr.To}, depth)
+		}
 	}
+	if b.mysqlSpecialTypeInAst(astExpr.Left) &&
+		b.mysqlSpecialTypeNumericContext(astExpr.From) &&
+		b.mysqlSpecialTypeNumericContext(astExpr.To) {
+		return b.bindWithRawMySQLSpecialTypes(bind)
+	}
+	return bind()
 }
 
 func (b *baseBinder) bindUnaryExpr(astExpr *tree.UnaryExpr, depth int32, isRoot bool) (*Expr, error) {
+	if (astExpr.Op == tree.UNARY_PLUS || astExpr.Op == tree.UNARY_MINUS || astExpr.Op == tree.UNARY_TILDE) &&
+		b.mysqlSpecialTypeInAst(astExpr.Expr) {
+		return b.bindWithRawMySQLSpecialTypes(func() (*Expr, error) {
+			return b.bindUnaryExprWithCurrentContext(astExpr, depth)
+		})
+	}
 	if (astExpr.Op == tree.UNARY_MINUS || astExpr.Op == tree.UNARY_PLUS) && b.numericParamType == nil {
-		return b.bindNumericExprWithContext(astExpr, depth, b.defaultNumericOuterType())
+		return b.bindNumericExprWithDefaultContext(astExpr, depth, b.defaultNumericOuterType())
 	}
 	return b.bindUnaryExprWithCurrentContext(astExpr, depth)
 }
@@ -693,10 +784,28 @@ func (b *baseBinder) bindUnaryExprWithCurrentContext(astExpr *tree.UnaryExpr, de
 }
 
 func (b *baseBinder) bindBinaryExpr(astExpr *tree.BinaryExpr, depth int32, isRoot bool) (*Expr, error) {
+	if (isNumericBinaryOp(astExpr.Op) || isBitwiseBinaryOp(astExpr.Op)) &&
+		(b.mysqlSpecialTypeInAst(astExpr.Left) || b.mysqlSpecialTypeInAst(astExpr.Right)) {
+		return b.bindWithRawMySQLSpecialTypes(func() (*Expr, error) {
+			if isNumericBinaryOp(astExpr.Op) && b.numericParamType == nil {
+				return b.bindNumericExprWithDefaultContext(astExpr, depth, b.defaultNumericOuterType())
+			}
+			return b.bindBinaryExprWithCurrentContext(astExpr, depth)
+		})
+	}
 	if isNumericBinaryOp(astExpr.Op) && b.numericParamType == nil {
-		return b.bindNumericExprWithContext(astExpr, depth, b.defaultNumericOuterType())
+		return b.bindNumericExprWithDefaultContext(astExpr, depth, b.defaultNumericOuterType())
 	}
 	return b.bindBinaryExprWithCurrentContext(astExpr, depth)
+}
+
+func isBitwiseBinaryOp(op tree.BinaryOp) bool {
+	switch op {
+	case tree.BIT_XOR, tree.BIT_OR, tree.BIT_AND, tree.LEFT_SHIFT, tree.RIGHT_SHIFT:
+		return true
+	default:
+		return false
+	}
 }
 
 func (b *baseBinder) bindBinaryExprWithCurrentContext(astExpr *tree.BinaryExpr, depth int32) (*Expr, error) {
@@ -745,10 +854,41 @@ func isNumericContextNode(astExpr tree.Expr) bool {
 	case *tree.UnaryExpr:
 		return expr.Op == tree.UNARY_PLUS || expr.Op == tree.UNARY_MINUS
 	case *tree.FuncExpr:
-		return numericAstFunctionName(expr) == "mod"
+		return isNumericContextFunction(numericAstFunctionName(expr))
+	case *tree.CaseExpr:
+		return true
 	default:
 		return false
 	}
+}
+
+func (b *baseBinder) isNumericContextNode(astExpr tree.Expr, depth int32) bool {
+	if isNumericContextNode(astExpr) {
+		return true
+	}
+	if paren, ok := astExpr.(*tree.ParenExpr); ok {
+		return b.isNumericContextNode(paren.Expr, depth)
+	}
+	functionExpr, ok := astExpr.(*tree.FuncExpr)
+	if !ok || b.numericParamType == nil || !b.numericFunctionTarget {
+		return false
+	}
+	_, ok = b.resolveNumericFunctionContext(
+		functionExpr, depth, b.numericAstColumnResolver(), b.numericParamType,
+	)
+	return ok
+}
+
+func (b *baseBinder) isGenericNumericFunctionRoot(astExpr tree.Expr, depth int32, target *Type) bool {
+	if paren, ok := astExpr.(*tree.ParenExpr); ok {
+		return b.isGenericNumericFunctionRoot(paren.Expr, depth, target)
+	}
+	functionExpr, ok := astExpr.(*tree.FuncExpr)
+	if !ok {
+		return false
+	}
+	_, ok = b.resolveNumericFunctionContext(functionExpr, depth, b.numericAstColumnResolver(), target)
+	return ok
 }
 
 func isNumericArithmeticRoot(astExpr tree.Expr) bool {
@@ -767,6 +907,23 @@ func isNumericArithmeticRoot(astExpr tree.Expr) bool {
 }
 
 func (b *baseBinder) bindNumericExprWithContext(astExpr tree.Expr, depth int32, outer *Type) (*Expr, error) {
+	return b.bindNumericExprWithContextMode(astExpr, depth, outer, true)
+}
+
+func (b *baseBinder) bindNumericExprWithDefaultContext(
+	astExpr tree.Expr,
+	depth int32,
+	outer *Type,
+) (*Expr, error) {
+	return b.bindNumericExprWithContextMode(astExpr, depth, outer, false)
+}
+
+func (b *baseBinder) bindNumericExprWithContextMode(
+	astExpr tree.Expr,
+	depth int32,
+	outer *Type,
+	functionTarget bool,
+) (*Expr, error) {
 	if b.numericParamType != nil {
 		return b.impl.BindExpr(astExpr, depth, false)
 	}
@@ -774,7 +931,7 @@ func (b *baseBinder) bindNumericExprWithContext(astExpr tree.Expr, depth int32, 
 		return b.bindNumericExprWithoutNewContext(astExpr, depth)
 	}
 
-	scan, err := b.numericAstTypes(astExpr, depth)
+	scan, err := b.numericAstTypesWithHint(astExpr, depth, outer)
 	if err != nil || !scan.hasParam || scan.incompatible {
 		if err != nil {
 			return nil, err
@@ -782,27 +939,18 @@ func (b *baseBinder) bindNumericExprWithContext(astExpr tree.Expr, depth int32, 
 		return b.bindNumericExprWithoutNewContext(astExpr, depth)
 	}
 
-	typesKnown := make([]types.Type, 0, len(scan.strong)+len(scan.weakDecimals))
-	for i := range scan.strong {
-		typesKnown = append(typesKnown, makeTypeByPlan2Type(scan.strong[i]))
-	}
-	var outerType *types.Type
-	if outer != nil {
-		typ := makeTypeByPlan2Type(*outer)
-		outerType = &typ
-	}
-	if len(scan.weakDecimals) > 0 && shouldActivateWeakDecimal(typesKnown, outerType) {
-		for i := range scan.weakDecimals {
-			typesKnown = append(typesKnown, makeTypeByPlan2Type(scan.weakDecimals[i]))
-		}
-	}
-	paramType, ok := function.InferNumericParameterType(typesKnown, outerType)
+	planType, ok := numericTypeFromAstScan(scan, outer)
 	if !ok {
 		return b.bindNumericExprWithoutNewContext(astExpr, depth)
 	}
-	planType := makePlan2Type(&paramType)
 	b.numericParamType = &planType
 	defer func() { b.numericParamType = nil }()
+	previousFunctionTarget := b.numericFunctionTarget
+	b.numericFunctionTarget = functionTarget
+	defer func() { b.numericFunctionTarget = previousFunctionTarget }()
+	previousSubqueryTarget := b.numericSubqueryTarget
+	b.numericSubqueryTarget = &planType
+	defer func() { b.numericSubqueryTarget = previousSubqueryTarget }()
 
 	return b.bindNumericExprWithCurrentContext(astExpr, depth)
 }
@@ -828,6 +976,7 @@ type numericAstTypeScan struct {
 	strong       []Type
 	weakDecimals []Type
 	hasParam     bool
+	hasUnknown   bool
 	incompatible bool
 }
 
@@ -835,6 +984,7 @@ func (s numericAstTypeScan) merge(other numericAstTypeScan) numericAstTypeScan {
 	s.strong = append(s.strong, other.strong...)
 	s.weakDecimals = append(s.weakDecimals, other.weakDecimals...)
 	s.hasParam = s.hasParam || other.hasParam
+	s.hasUnknown = s.hasUnknown || other.hasUnknown
 	s.incompatible = s.incompatible || other.incompatible
 	return s
 }
@@ -859,28 +1009,69 @@ func shouldActivateWeakDecimal(strong []types.Type, outer *types.Type) bool {
 	return outer != nil && (outer.Oid.IsInteger() || outer.Oid.IsDecimal() || outer.Oid == types.T_bit)
 }
 
-func (b *baseBinder) numericAstTypes(astExpr tree.Expr, depth int32) (numericAstTypeScan, error) {
+func (b *baseBinder) numericAstTypesWithHint(
+	astExpr tree.Expr,
+	depth int32,
+	hint *Type,
+) (numericAstTypeScan, error) {
+	return b.numericAstTypesInternalWithHint(astExpr, depth, b.numericAstColumnResolver(), hint)
+}
+
+func (b *baseBinder) numericAstColumnResolver() numericAstColumnResolver {
+	return func(name *tree.UnresolvedName) (numericAstTypeScan, bool) {
+		typ, ok := b.numericColumnType(name)
+		return numericAstTypedOperand(typ), ok
+	}
+}
+
+type numericAstColumnResolver func(*tree.UnresolvedName) (numericAstTypeScan, bool)
+
+func (b *baseBinder) numericAstTypesInternal(
+	astExpr tree.Expr,
+	depth int32,
+	resolveColumn numericAstColumnResolver,
+) (numericAstTypeScan, error) {
+	return b.numericAstTypesInternalWithHint(astExpr, depth, resolveColumn, nil)
+}
+
+func (b *baseBinder) numericAstTypesInternalWithHint(
+	astExpr tree.Expr,
+	depth int32,
+	resolveColumn numericAstColumnResolver,
+	hint *Type,
+) (numericAstTypeScan, error) {
 	switch expr := astExpr.(type) {
 	case *tree.ParamExpr:
 		return numericAstTypeScan{hasParam: true}, nil
+	case *tree.Subquery:
+		if expr.Exists {
+			return numericAstTypeScan{}, nil
+		}
+		scan, err := b.numericScalarSubqueryAstTypes(expr, depth)
+		// Keep scalar subqueries as deferred parameter-bearing operands even
+		// when their projection type cannot be determined statically. This
+		// preserves assignment-target propagation for expressions whose
+		// parameters are hidden behind unsupported projection shapes.
+		scan.hasParam = true
+		return scan, err
 	case *tree.ParenExpr:
-		return b.numericAstTypes(expr.Expr, depth)
+		return b.numericAstTypesInternalWithHint(expr.Expr, depth, resolveColumn, hint)
 	case *tree.BinaryExpr:
 		if !isNumericBinaryOp(expr.Op) {
 			return numericAstTypeScan{}, nil
 		}
-		left, err := b.numericAstTypes(expr.Left, depth)
+		left, err := b.numericAstTypesInternalWithHint(expr.Left, depth, resolveColumn, hint)
 		if err != nil {
 			return numericAstTypeScan{}, err
 		}
-		right, err := b.numericAstTypes(expr.Right, depth)
+		right, err := b.numericAstTypesInternalWithHint(expr.Right, depth, resolveColumn, hint)
 		if err != nil {
 			return numericAstTypeScan{}, err
 		}
 		return left.merge(right), nil
 	case *tree.UnaryExpr:
 		if expr.Op == tree.UNARY_PLUS || expr.Op == tree.UNARY_MINUS {
-			return b.numericAstTypes(expr.Expr, depth)
+			return b.numericAstTypesInternalWithHint(expr.Expr, depth, resolveColumn, hint)
 		}
 		return numericAstTypeScan{}, nil
 	case *tree.CastExpr:
@@ -899,26 +1090,545 @@ func (b *baseBinder) numericAstTypes(astExpr tree.Expr, depth int32) (numericAst
 		}
 		return numericAstTypedOperand(bound.Typ), nil
 	case *tree.FuncExpr:
-		if numericAstFunctionName(expr) != "mod" || len(expr.Exprs) != 2 {
+		name := numericAstFunctionName(expr)
+		indexes, ok := numericFunctionResultArgs(name, len(expr.Exprs))
+		if ok {
+			var scan numericAstTypeScan
+			for _, idx := range indexes {
+				value, err := b.numericAstTypesInternalWithHint(expr.Exprs[idx], depth, resolveColumn, hint)
+				if err != nil {
+					return numericAstTypeScan{}, err
+				}
+				scan = scan.merge(value)
+			}
+			return scan, nil
+		}
+		typ, known, err := b.numericAstStaticType(expr, depth, resolveColumn)
+		if err != nil || !known {
+			if err != nil {
+				return numericAstTypeScan{}, err
+			}
+			resolved, ok := b.resolveNumericFunctionContext(expr, depth, resolveColumn, hint)
+			if ok {
+				var scan numericAstTypeScan
+				if numericFunctionReturnIsStrong(resolved, hint) {
+					scan = numericAstTypedOperand(resolved.returnType)
+				}
+				for _, arg := range expr.Exprs {
+					argScan, scanErr := b.numericAstTypesInternalWithHint(arg, depth, resolveColumn, hint)
+					if scanErr != nil {
+						return numericAstTypeScan{}, scanErr
+					}
+					scan.hasParam = scan.hasParam || argScan.hasParam
+				}
+				return scan, nil
+			}
+			var scan numericAstTypeScan
+			for _, arg := range expr.Exprs {
+				argScan, scanErr := b.numericAstTypesInternalWithHint(arg, depth, resolveColumn, hint)
+				if scanErr != nil {
+					return numericAstTypeScan{}, scanErr
+				}
+				scan.hasParam = scan.hasParam || argScan.hasParam
+			}
+			return scan, nil
+		}
+		if !makeTypeByPlan2Type(typ).IsNumeric() {
 			return numericAstTypeScan{}, nil
 		}
-		left, err := b.numericAstTypes(expr.Exprs[0], depth)
-		if err != nil {
-			return numericAstTypeScan{}, err
+		return numericAstTypedOperand(typ), nil
+	case *tree.CaseExpr:
+		var scan numericAstTypeScan
+		for _, when := range expr.Whens {
+			if when == nil || when.Val == nil {
+				continue
+			}
+			value, err := b.numericAstTypesInternalWithHint(when.Val, depth, resolveColumn, hint)
+			if err != nil {
+				return numericAstTypeScan{}, err
+			}
+			scan = scan.merge(value)
 		}
-		right, err := b.numericAstTypes(expr.Exprs[1], depth)
-		if err != nil {
-			return numericAstTypeScan{}, err
+		if expr.Else != nil {
+			value, err := b.numericAstTypesInternalWithHint(expr.Else, depth, resolveColumn, hint)
+			if err != nil {
+				return numericAstTypeScan{}, err
+			}
+			scan = scan.merge(value)
 		}
-		return left.merge(right), nil
+		return scan, nil
 	case *tree.UnresolvedName:
-		if typ, ok := b.numericColumnType(expr); ok {
-			return numericAstTypedOperand(typ), nil
+		if resolveColumn != nil {
+			if scan, ok := resolveColumn(expr); ok {
+				return scan, nil
+			}
 		}
-		return numericAstTypeScan{}, nil
+		return numericAstTypeScan{hasUnknown: true}, nil
 	default:
 		return numericAstTypeScan{}, nil
 	}
+}
+
+func numericFunctionReturnIsStrong(resolved numericFunctionContext, hint *Type) bool {
+	for _, dynamic := range resolved.dynamic {
+		if !dynamic {
+			return true
+		}
+	}
+	if hint == nil {
+		return false
+	}
+	returnOid := types.T(resolved.returnType.Id)
+	hintOid := types.T(hint.Id)
+	return (returnOid == types.T_float32 || returnOid == types.T_float64) &&
+		hintOid != types.T_float32 && hintOid != types.T_float64
+}
+
+func (b *baseBinder) numericAstStaticType(
+	astExpr tree.Expr,
+	depth int32,
+	resolveColumn numericAstColumnResolver,
+) (Type, bool, error) {
+	switch expr := astExpr.(type) {
+	case *tree.ParenExpr:
+		return b.numericAstStaticType(expr.Expr, depth, resolveColumn)
+	case *tree.CastExpr:
+		typ, err := getTypeFromAst(b.GetContext(), expr.Type)
+		return typ, err == nil, err
+	case *tree.NumVal:
+		bound, err := b.bindNumVal(expr, Type{})
+		if err != nil {
+			return Type{}, false, err
+		}
+		return bound.Typ, true, nil
+	case *tree.BinaryExpr:
+		if !isNumericBinaryOp(expr.Op) {
+			return Type{}, false, nil
+		}
+		scan, err := b.numericAstTypesInternal(expr, depth, resolveColumn)
+		if err != nil || scan.incompatible || scan.hasUnknown ||
+			(scan.hasParam && len(scan.strong) == 0) {
+			return Type{}, false, err
+		}
+		typ, ok := numericTypeFromAstScan(scan, nil)
+		return typ, ok, nil
+	case *tree.UnaryExpr:
+		if expr.Op != tree.UNARY_PLUS && expr.Op != tree.UNARY_MINUS {
+			return Type{}, false, nil
+		}
+		scan, err := b.numericAstTypesInternal(expr, depth, resolveColumn)
+		if err != nil || scan.incompatible || scan.hasUnknown ||
+			(scan.hasParam && len(scan.strong) == 0) {
+			return Type{}, false, err
+		}
+		typ, ok := numericTypeFromAstScan(scan, nil)
+		return typ, ok, nil
+	case *tree.UnresolvedName:
+		if resolveColumn == nil {
+			return Type{}, false, nil
+		}
+		scan, ok := resolveColumn(expr)
+		if !ok || scan.incompatible || scan.hasParam || len(scan.strong) != 1 || len(scan.weakDecimals) != 0 {
+			return Type{}, false, nil
+		}
+		return scan.strong[0], true, nil
+	case *tree.Subquery:
+		if expr.Exists {
+			return Type{}, false, nil
+		}
+		scan, err := b.numericScalarSubqueryAstTypes(expr, depth)
+		if err != nil || scan.incompatible || scan.hasParam || len(scan.strong) != 1 || len(scan.weakDecimals) != 0 {
+			return Type{}, false, err
+		}
+		return scan.strong[0], true, nil
+	case *tree.FuncExpr:
+		name := numericAstFunctionName(expr)
+		if name == "" {
+			return Type{}, false, nil
+		}
+		argTypes := make([]types.Type, len(expr.Exprs))
+		for i, arg := range expr.Exprs {
+			typ, known, err := b.numericAstStaticType(arg, depth, resolveColumn)
+			if err != nil || !known {
+				return Type{}, false, err
+			}
+			argTypes[i] = makeTypeByPlan2Type(typ)
+		}
+		resolved, err := function.GetFunctionByName(b.GetContext(), name, argTypes)
+		if err != nil {
+			return Type{}, false, nil
+		}
+		ret := resolved.GetReturnType()
+		return makePlan2Type(&ret), true, nil
+	default:
+		return Type{}, false, nil
+	}
+}
+
+func numericTypeFromAstScan(scan numericAstTypeScan, outer *Type) (Type, bool) {
+	typesKnown := make([]types.Type, 0, len(scan.strong)+len(scan.weakDecimals))
+	for i := range scan.strong {
+		typesKnown = append(typesKnown, makeTypeByPlan2Type(scan.strong[i]))
+	}
+	var outerType *types.Type
+	if outer != nil {
+		typ := makeTypeByPlan2Type(*outer)
+		outerType = &typ
+	}
+	if len(scan.weakDecimals) > 0 && shouldActivateWeakDecimal(typesKnown, outerType) {
+		for i := range scan.weakDecimals {
+			typesKnown = append(typesKnown, makeTypeByPlan2Type(scan.weakDecimals[i]))
+		}
+	}
+	resolved, ok := function.InferNumericParameterType(typesKnown, outerType)
+	if !ok {
+		return Type{}, false
+	}
+	return makePlan2Type(&resolved), true
+}
+
+func (b *baseBinder) numericScalarSubqueryAstTypes(
+	subquery *tree.Subquery,
+	depth int32,
+) (numericAstTypeScan, error) {
+	var owner *tree.Select
+	switch selectStmt := subquery.Select.(type) {
+	case *tree.Select:
+		owner = selectStmt
+	case *tree.ParenSelect:
+		owner = selectStmt.Select
+	default:
+		return numericAstTypeScan{}, nil
+	}
+	return b.numericScalarSelectAstTypes(owner, owner.Select, depth, make(map[*tree.Select]bool), nil)
+}
+
+func (b *baseBinder) numericScalarSelectAstTypes(
+	owner *tree.Select,
+	stmt tree.SelectStatement,
+	depth int32,
+	visiting map[*tree.Select]bool,
+	ctes map[string]*tree.CTE,
+) (numericAstTypeScan, error) {
+	_, scans, ok, err := b.numericScalarStatementOutputs(owner, stmt, depth, visiting, ctes)
+	if err != nil {
+		return numericAstTypeScan{}, err
+	}
+	if !ok || len(scans) != 1 {
+		return numericAstTypeScan{}, nil
+	}
+	return scans[0], nil
+}
+
+type numericScalarSource struct {
+	alias string
+	name  string
+	cols  []string
+	types []numericAstTypeScan
+	known bool
+}
+
+func numericScalarVisibleCtes(owner *tree.Select, inherited map[string]*tree.CTE) map[string]*tree.CTE {
+	if owner == nil || owner.With == nil || len(owner.With.CTEs) == 0 {
+		return inherited
+	}
+	visible := make(map[string]*tree.CTE, len(inherited)+len(owner.With.CTEs))
+	for name, cte := range inherited {
+		visible[name] = cte
+	}
+	for _, cte := range owner.With.CTEs {
+		visible[strings.ToLower(string(cte.Name.Alias))] = cte
+	}
+	return visible
+}
+
+func numericScalarCteSource(cte *tree.CTE, existingCols tree.IdentifierList) (*tree.Select, tree.IdentifierList) {
+	if len(existingCols) == 0 {
+		existingCols = cte.Name.Cols
+	}
+	switch source := cte.Stmt.(type) {
+	case *tree.Select:
+		return source, existingCols
+	case *tree.ParenSelect:
+		return source.Select, existingCols
+	default:
+		return nil, existingCols
+	}
+}
+
+func (b *baseBinder) numericScalarSources(
+	owner *tree.Select,
+	clause *tree.SelectClause,
+	depth int32,
+	visiting map[*tree.Select]bool,
+	ctes map[string]*tree.CTE,
+) ([]numericScalarSource, bool) {
+	if clause.From == nil {
+		return nil, true
+	}
+	if len(clause.From.Tables) != 1 {
+		return nil, false
+	}
+	infos := collectNumericProjectionSources(clause.From.Tables[0], "", nil)
+	sources := make([]numericScalarSource, len(infos))
+	ctes = numericScalarVisibleCtes(owner, ctes)
+	for i := range infos {
+		sources[i].alias = strings.ToLower(infos[i].alias)
+		sources[i].name = strings.ToLower(infos[i].sourceName)
+		if infos[i].source == nil && infos[i].sourceSchema == "" {
+			if cte := ctes[strings.ToLower(infos[i].sourceName)]; cte != nil {
+				infos[i].source, infos[i].aliasCols = numericScalarCteSource(cte, infos[i].aliasCols)
+			} else {
+				infos[i].source, infos[i].aliasCols = numericProjectionCteSource(
+					owner, b.ctx, infos[i].sourceName, infos[i].aliasCols,
+				)
+			}
+		}
+		if infos[i].source != nil {
+			cols, scans, ok, err := b.numericScalarSelectOutputs(infos[i].source, depth, visiting, ctes)
+			if err != nil {
+				return nil, false
+			}
+			if !ok {
+				continue
+			}
+			sources[i].cols = cols
+			sources[i].types = scans
+			sources[i].known = true
+		} else if infos[i].sourceName != "" && b.builder != nil {
+			cols := numericPhysicalTableVisibleCols(b.builder, infos[i])
+			if cols == nil {
+				continue
+			}
+			for _, col := range cols {
+				sources[i].cols = append(sources[i].cols, strings.ToLower(col.Name))
+				sources[i].types = append(sources[i].types, numericAstTypedOperand(col.Typ))
+			}
+			sources[i].known = true
+		}
+		if !sources[i].known || len(infos[i].aliasCols) == 0 {
+			continue
+		}
+		if len(infos[i].aliasCols) != len(sources[i].cols) {
+			sources[i].known = false
+			continue
+		}
+		for pos := range infos[i].aliasCols {
+			sources[i].cols[pos] = strings.ToLower(string(infos[i].aliasCols[pos]))
+		}
+	}
+	return sources, true
+}
+
+func (b *baseBinder) numericScalarSelectOutputs(
+	owner *tree.Select,
+	depth int32,
+	visiting map[*tree.Select]bool,
+	ctes map[string]*tree.CTE,
+) ([]string, []numericAstTypeScan, bool, error) {
+	if visiting[owner] {
+		return nil, nil, false, nil
+	}
+	visiting[owner] = true
+	defer delete(visiting, owner)
+	return b.numericScalarStatementOutputs(owner, owner.Select, depth, visiting, ctes)
+}
+
+func (b *baseBinder) numericScalarStatementOutputs(
+	owner *tree.Select,
+	stmt tree.SelectStatement,
+	depth int32,
+	visiting map[*tree.Select]bool,
+	ctes map[string]*tree.CTE,
+) ([]string, []numericAstTypeScan, bool, error) {
+	switch selectStmt := stmt.(type) {
+	case *tree.SelectClause:
+		sources, sourcesKnown := b.numericScalarSources(owner, selectStmt, depth, visiting, ctes)
+		if !sourcesKnown {
+			sources = nil
+		}
+		cols := make([]string, 0, len(selectStmt.Exprs))
+		scans := make([]numericAstTypeScan, 0, len(selectStmt.Exprs))
+		for _, selectExpr := range selectStmt.Exprs {
+			switch expr := selectExpr.Expr.(type) {
+			case tree.UnqualifiedStar:
+				if !sourcesKnown {
+					return nil, nil, false, nil
+				}
+				starCols, starScans, ok := numericScalarUnqualifiedStarOutputs(selectStmt, sources)
+				if !ok {
+					return nil, nil, false, nil
+				}
+				cols = append(cols, starCols...)
+				scans = append(scans, starScans...)
+				continue
+			case *tree.UnresolvedName:
+				if expr.Star {
+					if !sourcesKnown {
+						return nil, nil, false, nil
+					}
+					starCols, starScans, ok := numericScalarQualifiedStarOutputs(sources, expr.ColName())
+					if !ok {
+						return nil, nil, false, nil
+					}
+					cols = append(cols, starCols...)
+					scans = append(scans, starScans...)
+					continue
+				}
+			}
+			col := ""
+			if selectExpr.As != nil && !selectExpr.As.Empty() {
+				col = strings.ToLower(selectExpr.As.Origin())
+			} else if name, ok := selectExpr.Expr.(*tree.UnresolvedName); ok {
+				col = strings.ToLower(name.ColName())
+			}
+			scan, err := b.numericAstTypesInternal(
+				selectExpr.Expr,
+				depth,
+				func(name *tree.UnresolvedName) (numericAstTypeScan, bool) {
+					return resolveNumericScalarColumn(sources, name)
+				},
+			)
+			if err != nil {
+				return nil, nil, false, err
+			}
+			cols = append(cols, col)
+			scans = append(scans, scan)
+		}
+		return cols, scans, true, nil
+	case *tree.ValuesClause:
+		if len(selectStmt.Rows) == 0 {
+			return nil, nil, false, nil
+		}
+		width := len(selectStmt.Rows[0])
+		cols := make([]string, width)
+		scans := make([]numericAstTypeScan, width)
+		for i := range cols {
+			cols[i] = fmt.Sprintf("column_%d", i)
+		}
+		for _, row := range selectStmt.Rows {
+			if len(row) != width {
+				return nil, nil, false, nil
+			}
+			for i, cell := range row {
+				scan, err := b.numericAstTypesInternal(cell, depth, nil)
+				if err != nil {
+					return nil, nil, false, err
+				}
+				scans[i] = scans[i].merge(scan)
+			}
+		}
+		return cols, scans, true, nil
+	case *tree.UnionClause:
+		leftCols, left, leftOK, err := b.numericScalarStatementOutputs(owner, selectStmt.Left, depth, visiting, ctes)
+		if err != nil || !leftOK {
+			return nil, nil, false, err
+		}
+		_, right, rightOK, err := b.numericScalarStatementOutputs(owner, selectStmt.Right, depth, visiting, ctes)
+		if err != nil || !rightOK || len(left) != len(right) {
+			return nil, nil, false, err
+		}
+		for i := range left {
+			left[i] = left[i].merge(right[i])
+		}
+		return leftCols, left, true, nil
+	case *tree.ParenSelect:
+		return b.numericScalarStatementOutputs(selectStmt.Select, selectStmt.Select.Select, depth, visiting, ctes)
+	default:
+		return nil, nil, false, nil
+	}
+}
+
+func numericScalarProjectionSources(sources []numericScalarSource) []numericProjectionSourceInfo {
+	projectionSources := make([]numericProjectionSourceInfo, len(sources))
+	for i := range sources {
+		projectionSources[i] = numericProjectionSourceInfo{
+			sourceName:  sources[i].name,
+			alias:       sources[i].alias,
+			outputNames: sources[i].cols,
+			outputKnown: sources[i].known,
+		}
+	}
+	return projectionSources
+}
+
+func numericScalarUnqualifiedStarOutputs(
+	clause *tree.SelectClause,
+	sources []numericScalarSource,
+) ([]string, []numericAstTypeScan, bool) {
+	if clause.From == nil || len(clause.From.Tables) != 1 {
+		return nil, nil, false
+	}
+	projectionSources := numericScalarProjectionSources(sources)
+	cursor := 0
+	outputs, ok := numericProjectionStarOutputs(clause.From.Tables[0], projectionSources, &cursor)
+	if !ok || cursor != len(sources) {
+		return nil, nil, false
+	}
+	return numericScalarScansFromStarOutputs(outputs, sources)
+}
+
+func numericScalarQualifiedStarOutputs(
+	sources []numericScalarSource,
+	qualifier string,
+) ([]string, []numericAstTypeScan, bool) {
+	source := uniqueNumericStarSource(numericScalarProjectionSources(sources), qualifier)
+	if source < 0 || source >= len(sources) || len(sources[source].cols) != len(sources[source].types) {
+		return nil, nil, false
+	}
+	return append([]string(nil), sources[source].cols...),
+		append([]numericAstTypeScan(nil), sources[source].types...), true
+}
+
+func numericScalarScansFromStarOutputs(
+	outputs []numericProjectionStarOutput,
+	sources []numericScalarSource,
+) ([]string, []numericAstTypeScan, bool) {
+	cols := make([]string, len(outputs))
+	scans := make([]numericAstTypeScan, len(outputs))
+	for i, output := range outputs {
+		if len(output.refs) == 0 {
+			return nil, nil, false
+		}
+		cols[i] = output.name
+		for _, ref := range output.refs {
+			if ref.source < 0 || ref.source >= len(sources) ||
+				ref.pos < 0 || ref.pos >= len(sources[ref.source].types) {
+				return nil, nil, false
+			}
+			scans[i] = scans[i].merge(sources[ref.source].types[ref.pos])
+		}
+	}
+	return cols, scans, true
+}
+
+func resolveNumericScalarColumn(
+	sources []numericScalarSource,
+	name *tree.UnresolvedName,
+) (numericAstTypeScan, bool) {
+	column := strings.ToLower(name.ColName())
+	table := strings.ToLower(name.TblName())
+	found := false
+	var result numericAstTypeScan
+	for _, source := range sources {
+		if table != "" && table != source.alias && table != source.name {
+			continue
+		}
+		if !source.known {
+			return numericAstTypeScan{}, false
+		}
+		for pos, candidate := range source.cols {
+			if candidate != column {
+				continue
+			}
+			if found || pos >= len(source.types) {
+				return numericAstTypeScan{}, false
+			}
+			result = source.types[pos]
+			found = true
+		}
+	}
+	return result, found
 }
 
 func numericAstFunctionName(astExpr *tree.FuncExpr) string {
@@ -927,6 +1637,154 @@ func numericAstFunctionName(astExpr *tree.FuncExpr) string {
 		return ""
 	}
 	return strings.ToLower(funcRef.ColName())
+}
+
+type numericFunctionContext struct {
+	returnType Type
+	argTypes   []Type
+	dynamic    []bool
+}
+
+func (b *baseBinder) resolveNumericFunctionContext(
+	expr *tree.FuncExpr,
+	depth int32,
+	resolveColumn numericAstColumnResolver,
+	hint *Type,
+) (numericFunctionContext, bool) {
+	return b.resolveNumericFunctionArgs(
+		numericAstFunctionName(expr), expr.Exprs, depth, resolveColumn, hint,
+	)
+}
+
+func (b *baseBinder) resolveNumericFunctionArgs(
+	name string,
+	args []tree.Expr,
+	depth int32,
+	resolveColumn numericAstColumnResolver,
+	hint *Type,
+) (numericFunctionContext, bool) {
+	name = strings.ToLower(name)
+	if !supportsGenericNumericFunctionContext(name) || hint == nil || function.GetFunctionIsAggregateByName(name) ||
+		function.GetFunctionIsWinFunByName(name) {
+		return numericFunctionContext{}, false
+	}
+
+	argTypes := make([]types.Type, len(args))
+	dynamic := make([]bool, len(args))
+	for i, arg := range args {
+		typ, known, err := b.numericAstStaticType(arg, depth, resolveColumn)
+		if err != nil {
+			return numericFunctionContext{}, false
+		}
+		if known {
+			argTypes[i] = makeTypeByPlan2Type(typ)
+			continue
+		}
+		argTypes[i] = makeTypeByPlan2Type(*hint)
+		dynamic[i] = true
+	}
+
+	resolved, err := function.GetFunctionByName(b.GetContext(), name, argTypes)
+	if err != nil || !resolved.GetReturnType().IsNumeric() {
+		return numericFunctionContext{}, false
+	}
+	if targets, shouldCast := resolved.ShouldDoImplicitTypeCast(); shouldCast {
+		if len(targets) != len(argTypes) {
+			return numericFunctionContext{}, false
+		}
+		argTypes = targets
+	}
+
+	returnType := resolved.GetReturnType()
+	context := numericFunctionContext{
+		returnType: makePlan2Type(&returnType),
+		argTypes:   make([]Type, len(argTypes)),
+		dynamic:    dynamic,
+	}
+	for i := range argTypes {
+		context.argTypes[i] = makePlan2Type(&argTypes[i])
+	}
+	return context, true
+}
+
+func supportsGenericNumericFunctionContext(name string) bool {
+	switch name {
+	// These functions' value arguments are in the same numeric domain as their
+	// result. A numeric return type alone is insufficient: FIELD, LENGTH and
+	// similar functions return numbers while their arguments belong to another
+	// domain.
+	case "abs", "ceil", "ceiling", "floor", "round", "truncate",
+		"sqrt", "power", "pow", "exp", "ln", "log", "log2", "log10":
+		return true
+	default:
+		return false
+	}
+}
+
+func isNumericContextFunction(name string) bool {
+	switch name {
+	case "+", "-", "*", "/", "%", "div", "^", "unary_plus", "unary_minus",
+		"mod", "if", "coalesce", "ifnull", "nullif":
+		return true
+	default:
+		return false
+	}
+}
+
+func numericFunctionResultArgs(name string, argCount int) ([]int, bool) {
+	switch name {
+	case "mod":
+		if argCount != 2 {
+			return nil, false
+		}
+		return []int{0, 1}, true
+	case "if":
+		if argCount != 3 {
+			return nil, false
+		}
+		return []int{1, 2}, true
+	case "coalesce", "ifnull":
+		if argCount == 0 {
+			return nil, false
+		}
+		indexes := make([]int, argCount)
+		for i := range indexes {
+			indexes[i] = i
+		}
+		return indexes, true
+	case "nullif":
+		if argCount != 2 {
+			return nil, false
+		}
+		return []int{0}, true
+	default:
+		return nil, false
+	}
+}
+
+func numericFunctionArgKeepsContext(name string, idx, argCount int) bool {
+	if name == "case" {
+		return idx%2 == 1 || idx == argCount-1
+	}
+	indexes, ok := numericFunctionResultArgs(name, argCount)
+	if !ok {
+		return false
+	}
+	for _, resultIdx := range indexes {
+		if idx == resultIdx {
+			return true
+		}
+	}
+	return false
+}
+
+func numericFunctionHasSelectiveContext(name string) bool {
+	switch name {
+	case "case", "if", "ifnull", "nullif":
+		return true
+	default:
+		return false
+	}
 }
 
 func (b *baseBinder) numericColumnType(astExpr *tree.UnresolvedName) (Type, bool) {
@@ -1258,6 +2116,7 @@ func (b *baseBinder) bindComparisonExpr(astExpr *tree.ComparisonExpr, depth int3
 
 	case tree.NOT_LIKE:
 		newExpr := tree.NewComparisonExpr(tree.LIKE, astExpr.Left, astExpr.Right)
+		newExpr.Escape = astExpr.Escape
 		return b.bindFuncExprImplByAstExpr("not", []tree.Expr{newExpr}, depth)
 
 	case tree.ILIKE:
@@ -1265,6 +2124,7 @@ func (b *baseBinder) bindComparisonExpr(astExpr *tree.ComparisonExpr, depth int3
 
 	case tree.NOT_ILIKE:
 		newExpr := tree.NewComparisonExpr(tree.ILIKE, astExpr.Left, astExpr.Right)
+		newExpr.Escape = astExpr.Escape
 		return b.bindFuncExprImplByAstExpr("not", []tree.Expr{newExpr}, depth)
 
 	case tree.IN:
@@ -1292,6 +2152,7 @@ func (b *baseBinder) bindComparisonExpr(astExpr *tree.ComparisonExpr, depth int3
 			}
 
 			if subquery := rightArg.GetSub(); subquery != nil {
+				leftArg = b.useStoredMySQLSpecialTypesForNumericSubquery(leftArg, rightArg)
 				if list := leftArg.GetList(); list != nil {
 					if len(list.List) != int(subquery.RowSize) {
 						return nil, moerr.NewNYIf(b.GetContext(), "subquery should return %d columns", len(list.List))
@@ -1338,6 +2199,7 @@ func (b *baseBinder) bindComparisonExpr(astExpr *tree.ComparisonExpr, depth int3
 			}
 
 			if subquery := rightArg.GetSub(); subquery != nil {
+				leftArg = b.useStoredMySQLSpecialTypesForNumericSubquery(leftArg, rightArg)
 				if list := leftArg.GetList(); list != nil {
 					if len(list.List) != int(subquery.RowSize) {
 						return nil, moerr.NewInvalidInputf(b.GetContext(), "subquery should return %d columns", len(list.List))
@@ -1386,6 +2248,7 @@ func (b *baseBinder) bindComparisonExpr(astExpr *tree.ComparisonExpr, depth int3
 		}
 
 		if subquery := expr.GetSub(); subquery != nil {
+			child = b.useStoredMySQLSpecialTypesForNumericSubquery(child, expr)
 			if list := child.GetList(); list != nil {
 				if len(list.List) != int(subquery.RowSize) {
 					return nil, moerr.NewInvalidInputf(b.GetContext(), "subquery should return %d columns", len(list.List))
@@ -1417,7 +2280,120 @@ func (b *baseBinder) bindComparisonExpr(astExpr *tree.ComparisonExpr, depth int3
 		}
 	}
 
-	return b.bindFuncExprImplByAstExpr(op, []tree.Expr{astExpr.Left, astExpr.Right}, depth)
+	args := []tree.Expr{astExpr.Left, astExpr.Right}
+	if (op == "like" || op == "ilike") && astExpr.Escape != nil {
+		args = append(args, astExpr.Escape)
+	}
+	if b.mysqlSpecialTypeNumericComparison(astExpr.Left, astExpr.Right) {
+		return b.bindWithRawMySQLSpecialTypes(func() (*Expr, error) {
+			return b.bindFuncExprImplByAstExpr(op, args, depth)
+		})
+	}
+	return b.bindFuncExprImplByAstExpr(op, args, depth)
+}
+
+func (b *baseBinder) bindWithRawMySQLSpecialTypes(bind func() (*Expr, error)) (*Expr, error) {
+	previous := b.bindRawMySQLSpecialType
+	b.bindRawMySQLSpecialType = true
+	defer func() { b.bindRawMySQLSpecialType = previous }()
+	return bind()
+}
+
+func (b *baseBinder) mysqlSpecialTypeNumericComparison(left, right tree.Expr) bool {
+	return (b.mysqlSpecialTypeAst(left) && b.mysqlSpecialTypeNumericContext(right)) ||
+		(b.mysqlSpecialTypeAst(right) && b.mysqlSpecialTypeNumericContext(left))
+}
+
+// mysqlSpecialTypeNumericContext reports AST expressions whose bound contract
+// is numeric. ENUM and SET are normally exposed as display strings, but MySQL
+// uses their stored ordinal/bitmap when compared with a numeric operand.
+func (b *baseBinder) mysqlSpecialTypeNumericContext(expr tree.Expr) bool {
+	switch value := unwrapParenExpr(expr).(type) {
+	case *tree.NumVal:
+		return mysqlSpecialTypeNumericLiteral(value)
+	case *tree.UnresolvedName:
+		typ, ok := b.numericColumnType(value)
+		return ok && makeTypeByPlan2Type(typ).IsNumeric()
+	case *tree.UnaryExpr:
+		return (value.Op == tree.UNARY_PLUS || value.Op == tree.UNARY_MINUS) &&
+			b.mysqlSpecialTypeNumericContext(value.Expr)
+	case *tree.BinaryExpr:
+		return isNumericBinaryOp(value.Op) || isBitwiseBinaryOp(value.Op)
+	case *tree.CastExpr:
+		typ, err := getTypeFromAst(b.GetContext(), value.Type)
+		return err == nil && makeTypeByPlan2Type(typ).IsNumeric()
+	case *tree.FuncExpr:
+		return supportsGenericNumericFunctionContext(strings.ToLower(numericAstFunctionName(value)))
+	case *tree.Tuple:
+		if len(value.Exprs) == 0 {
+			return false
+		}
+		for _, item := range value.Exprs {
+			if !b.mysqlSpecialTypeNumericContext(item) {
+				return false
+			}
+		}
+		return true
+	}
+	return false
+}
+
+func mysqlSpecialTypeInExprs(b *baseBinder, exprs []tree.Expr) bool {
+	for _, expr := range exprs {
+		if b.mysqlSpecialTypeInAst(expr) {
+			return true
+		}
+	}
+	return false
+}
+
+func (b *baseBinder) mysqlSpecialTypeAst(expr tree.Expr) bool {
+	name, ok := unwrapParenExpr(expr).(*tree.UnresolvedName)
+	if !ok {
+		return false
+	}
+	typ, ok := b.numericColumnType(name)
+	return ok && isEnumOrSetPlanType(&typ)
+}
+
+func (b *baseBinder) mysqlSpecialTypeInAst(expr tree.Expr) bool {
+	if b.mysqlSpecialTypeAst(expr) {
+		return true
+	}
+	switch value := unwrapParenExpr(expr).(type) {
+	case *tree.UnaryExpr:
+		return b.mysqlSpecialTypeInAst(value.Expr)
+	case *tree.BinaryExpr:
+		return b.mysqlSpecialTypeInAst(value.Left) || b.mysqlSpecialTypeInAst(value.Right)
+	case *tree.CastExpr:
+		return b.mysqlSpecialTypeInAst(value.Expr)
+	case *tree.FuncExpr:
+		return mysqlSpecialTypeInExprs(b, value.Exprs)
+	case *tree.Tuple:
+		return mysqlSpecialTypeInExprs(b, value.Exprs)
+	}
+	return false
+}
+
+func mysqlSpecialTypeNumericLiteral(expr tree.Expr) bool {
+	switch value := unwrapParenExpr(expr).(type) {
+	case *tree.NumVal:
+		switch value.ValType {
+		case tree.P_int64, tree.P_uint64, tree.P_float64:
+			return true
+		}
+	case *tree.Tuple:
+		if len(value.Exprs) == 0 {
+			return false
+		}
+		for _, item := range value.Exprs {
+			if !mysqlSpecialTypeNumericLiteral(item) {
+				return false
+			}
+		}
+		return true
+	}
+	return false
 }
 
 func (b *baseBinder) bindTupleInByAst(leftTuple *tree.Tuple, rightTuple *tree.Tuple, depth int32, isNot bool) (*plan.Expr, error) {
@@ -1494,8 +2470,22 @@ func (b *baseBinder) bindFuncExpr(astExpr *tree.FuncExpr, depth int32, isRoot bo
 		return nil, moerr.NewNYIf(b.GetContext(), "function expr '%v'", astExpr)
 	}
 	funcName := funcRef.ColName()
+	if strings.EqualFold(funcName, "grouping") {
+		return b.bindGroupingFuncExpr(astExpr)
+	}
 	if strings.EqualFold(funcName, "mod") && b.numericParamType == nil {
-		return b.bindNumericExprWithContext(astExpr, depth, b.defaultNumericOuterType())
+		return b.bindNumericExprWithDefaultContext(astExpr, depth, b.defaultNumericOuterType())
+	}
+	if supportsGenericNumericFunctionContext(strings.ToLower(funcName)) &&
+		mysqlSpecialTypeInExprs(b, astExpr.Exprs) {
+		return b.bindWithRawMySQLSpecialTypes(func() (*Expr, error) {
+			return b.bindFuncExprImplByAstExpr(funcName, astExpr.Exprs, depth)
+		})
+	}
+	if (strings.EqualFold(funcName, NamePercentileCont) || strings.EqualFold(funcName, NamePercentileDisc)) &&
+		astExpr.WindowSpec != nil {
+		return nil, moerr.NewNotSupported(b.GetContext(),
+			"ordered-set percentile window functions")
 	}
 
 	if function.GetFunctionIsAggregateByName(funcName) && astExpr.WindowSpec == nil {
@@ -1515,12 +2505,82 @@ func (b *baseBinder) bindFuncExpr(astExpr *tree.FuncExpr, depth int32, isRoot bo
 	return b.bindFuncExprImplByAstExpr(funcName, astExpr.Exprs, depth)
 }
 
+// bindGroupingFuncExpr binds GROUPING arguments directly to their registered
+// GROUP BY columns. A GROUPING argument must identify one complete GROUP BY
+// item; recursively binding a miss would incorrectly accept derived
+// expressions such as GROUPING(a+b) for GROUP BY a, b.
+func (b *baseBinder) bindGroupingFuncExpr(astExpr *tree.FuncExpr) (*plan.Expr, error) {
+	if b.ctx == nil {
+		return nil, moerr.NewSyntaxErrorf(b.GetContext(),
+			"Argument #1 of GROUPING function is not in GROUP BY")
+	}
+
+	args := make([]*plan.Expr, len(astExpr.Exprs))
+	for i, rawArg := range astExpr.Exprs {
+		qualifiedArg, err := b.ctx.qualifyColumnNames(cloneTreeExpr(rawArg), NoAlias)
+		if err != nil {
+			return nil, err
+		}
+		colPos, ok := lookupGroupByAst(b.ctx, qualifiedArg, windowExprAstKey(qualifiedArg))
+		if !ok {
+			return nil, moerr.NewSyntaxErrorf(b.GetContext(),
+				"Argument #%d of GROUPING function is not in GROUP BY", i+1)
+		}
+		if colPos < 0 || int(colPos) >= len(b.ctx.groups) {
+			return nil, moerr.NewInternalErrorf(b.GetContext(),
+				"GROUPING argument position out of range: %d", colPos)
+		}
+		args[i] = GetColExpr(b.ctx.groups[colPos].Typ, b.ctx.groupTag, colPos)
+	}
+
+	return BindFuncExprImplByPlanExpr(b.GetContext(), "grouping", args)
+}
+
+func isPreparedNumericAggregate(name string, argCount int) bool {
+	return argCount == 1 && (strings.EqualFold(name, "sum") || strings.EqualFold(name, "avg"))
+}
+
+// bindPreparedNumericAggregateFuncExpr gives prepared SUM/AVG arguments the
+// same static numeric context as prepared arithmetic. ParamRef remains TEXT for
+// transport and an explicit cast materializes the inferred computation type.
+// Non-parameter expressions stay on their original binding path, so ordinary
+// SUM/AVG over string columns continues to be rejected by aggregate overload
+// resolution.
+func (b *baseBinder) bindPreparedNumericAggregateFuncExpr(
+	name string,
+	astArgs []tree.Expr,
+	depth int32,
+) (*plan.Expr, error) {
+	if b.builder == nil || !b.builder.isPrepareStatement || !isPreparedNumericAggregate(name, len(astArgs)) {
+		return b.bindFuncExprImplByAstExpr(name, astArgs, depth)
+	}
+
+	arg, err := b.bindNumericExprWithContext(astArgs[0], depth, nil)
+	if err != nil {
+		return nil, err
+	}
+	return bindFuncExprAndConstFold(
+		b.GetContext(), b.builder.compCtx.GetProcess(), name, []*plan.Expr{arg},
+	)
+}
+
 func (b *baseBinder) bindFullTextMatchExpr(astExpr *tree.FullTextMatchExpr, depth int32, isRoot bool) (*Expr, error) {
 
 	args := make([]*Expr, 2+len(astExpr.KeyParts))
 
 	mode := int64(astExpr.Mode)
-	args[0] = makePlan2StringConstExprWithType(astExpr.Pattern, false)
+	pattern, err := b.impl.BindExpr(astExpr.Pattern, depth, false)
+	if err != nil {
+		return nil, err
+	}
+	if pattern.Typ.Id != int32(types.T_varchar) {
+		varcharTyp := types.T_varchar.ToType()
+		pattern, err = makePlan2CastExpr(b.GetContext(), pattern, makePlan2Type(&varcharTyp))
+		if err != nil {
+			return nil, err
+		}
+	}
+	args[0] = pattern
 	args[1] = makePlan2Int64ConstExprWithType(mode)
 	for i, k := range astExpr.KeyParts {
 		c, err := b.baseBindColRef(k.ColName, depth, isRoot)
@@ -1534,6 +2594,13 @@ func (b *baseBinder) bindFullTextMatchExpr(astExpr *tree.FullTextMatchExpr, dept
 }
 
 func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr, depth int32) (*plan.Expr, error) {
+	if (name == "utc_time" || name == "utc_timestamp") && len(astArgs) == 1 {
+		if _, ok := astArgs[0].(*tree.NumVal); !ok {
+			return nil, invalidUTCFunctionFSPError(b.GetContext(), name)
+		}
+	}
+	isIfNull := name == "ifnull"
+
 	// rewrite some ast Exprs before binding
 	switch name {
 	case "nullif":
@@ -1648,8 +2715,40 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 		args = []*Expr{serialExpr, idxExpr, typeExpr}
 	} else {
 		args = make([]*Expr, len(astArgs))
+		var functionContext numericFunctionContext
+		hasFunctionContext := false
+		if b.numericFunctionTarget {
+			functionContext, hasFunctionContext = b.resolveNumericFunctionArgs(
+				name, astArgs, depth, b.numericAstColumnResolver(), b.numericParamType,
+			)
+		}
 		for idx, arg := range astArgs {
+			paramType := b.numericParamType
+			subqueryTarget := b.numericSubqueryTarget
+			if paramType != nil && numericFunctionHasSelectiveContext(name) &&
+				!numericFunctionArgKeepsContext(name, idx, len(astArgs)) {
+				b.numericParamType = nil
+				b.numericSubqueryTarget = nil
+			} else if paramType != nil && hasFunctionContext {
+				if functionContext.dynamic[idx] &&
+					makeTypeByPlan2Type(functionContext.argTypes[idx]).IsNumeric() {
+					argTarget := functionContext.argTypes[idx]
+					b.numericParamType = &argTarget
+					b.numericSubqueryTarget = &argTarget
+				} else {
+					b.numericParamType = nil
+					b.numericSubqueryTarget = nil
+				}
+			} else if paramType != nil && !isNumericContextFunction(name) &&
+				!numericFunctionHasSelectiveContext(name) {
+				// A function outside the explicit domain-preserving metadata must
+				// resolve its arguments independently of the assignment target.
+				b.numericParamType = nil
+				b.numericSubqueryTarget = nil
+			}
 			expr, err := b.impl.BindExpr(arg, depth, false)
+			b.numericParamType = paramType
+			b.numericSubqueryTarget = subqueryTarget
 			if err != nil {
 				return nil, err
 			}
@@ -1664,7 +2763,7 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 			return nil, err
 		}
 	}
-
+	args = useStoredMySQLSpecialTypesForNumericContract(b.GetContext(), name, args)
 	//promote interval expr rewrite here
 	if name == "interval" {
 		if len(astArgs) == 2 {
@@ -1685,10 +2784,15 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 		}
 	}
 	if name == "name_const" {
-		if !validNameConstNameAst(astArgs) || !validNameConstValueAst(astArgs) {
+		if !validNameConstNameAst(astArgs) ||
+			!validNameConstValueAst(astArgs, b.allowCanonicalNameConstValueCast) {
 			return nil, moerr.NewInvalidArg(b.GetContext(), "NAME_CONST", "")
 		}
-		if err := validateNameConstArgs(b.GetContext(), args); err != nil {
+		if err := validateNameConstArgs(
+			b.GetContext(),
+			args,
+			b.allowCanonicalNameConstValueCast,
+		); err != nil {
 			return nil, err
 		}
 	}
@@ -1696,6 +2800,9 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 	if b.builder != nil {
 		e, err := bindFuncExprAndConstFold(b.GetContext(), b.builder.compCtx.GetProcess(), name, args)
 		if err == nil {
+			if isIfNull {
+				e.Typ.NotNullable = args[1].Typ.NotNullable || args[2].Typ.NotNullable
+			}
 			return e, nil
 		}
 		if !strings.Contains(err.Error(), "not supported") {
@@ -1706,6 +2813,9 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 		// first look for builtin func
 		builtinExpr, err := BindFuncExprImplByPlanExpr(b.GetContext(), name, args)
 		if err == nil {
+			if isIfNull {
+				builtinExpr.Typ.NotNullable = args[1].Typ.NotNullable || args[2].Typ.NotNullable
+			}
 			return builtinExpr, nil
 		}
 		if !strings.Contains(err.Error(), "not supported") {
@@ -1714,13 +2824,20 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 	}
 
 	// not a builtin func, look to resolve udf
+	if b.builder == nil {
+		return nil, moerr.NewInvalidInputf(
+			b.GetContext(),
+			"function '%s' is not allowed in this expression",
+			name,
+		)
+	}
 	cmpCtx := b.builder.compCtx
 	udf, err := cmpCtx.ResolveUdf(name, args)
 	if err != nil {
 		return nil, err
 	}
 
-	return bindFuncExprImplUdf(b, name, udf, astArgs, depth)
+	return bindFuncExprImplUdf(b, name, udf, astArgs, args, depth)
 }
 
 func (b *baseBinder) resolvePreparedNumericArgs(name string, args []*Expr) ([]*Expr, error) {
@@ -1752,26 +2869,27 @@ func (b *baseBinder) resolvePreparedNumericArgs(name string, args []*Expr) ([]*E
 	return args, nil
 }
 
-func bindFuncExprImplUdf(b *baseBinder, name string, udf *function.Udf, args []tree.Expr, depth int32) (*plan.Expr, error) {
+func bindFuncExprImplUdf(
+	b *baseBinder,
+	name string,
+	udf *function.Udf,
+	astArgs []tree.Expr,
+	boundArgs []*plan.Expr,
+	depth int32,
+) (*plan.Expr, error) {
 	if udf == nil {
 		return nil, moerr.NewNotSupportedf(b.GetContext(), "function '%s'", name)
 	}
 
 	switch udf.Language {
 	case string(tree.SQL):
-		sql := udf.Body
 		parserSQLMode := "PIPES_AS_CONCAT"
 		if udf.SQLMode != nil {
 			parserSQLMode = *udf.SQLMode
 		}
-		// replace sql with actual arg value
-		fmtctx := tree.NewFmtCtx(dialect.MYSQL, tree.WithQuoteString(true))
-		for i := 0; i < len(args); i++ {
-			args[i].Format(fmtctx)
-			sql = strings.Replace(sql, "$"+strconv.Itoa(i+1), fmtctx.String(), 1)
-			fmtctx.Reset()
-		}
-
+		sql, udfArgs := b.expandSQLUdfArguments(udf.Body, boundArgs, parserSQLMode)
+		restoreUdfArgs := b.pushSQLUdfArguments(udfArgs)
+		defer restoreUdfArgs()
 		// if does not contain SELECT, an expression. In order to pass the parser,
 		// make it start with a 'SELECT'.
 
@@ -1810,7 +2928,7 @@ func bindFuncExprImplUdf(b *baseBinder, name string, udf *function.Udf, args []t
 		}
 		return expr, nil
 	case string(tree.PYTHON):
-		expr, err := b.bindPythonUdf(udf, args, depth)
+		expr, err := b.bindPythonUdf(udf, astArgs, depth)
 		if err != nil {
 			return nil, err
 		}
@@ -1818,6 +2936,176 @@ func bindFuncExprImplUdf(b *baseBinder, name string, udf *function.Udf, args []t
 	default:
 		return nil, moerr.NewInvalidArg(b.GetContext(), "function language", udf.Language)
 	}
+}
+
+// expandSQLUdfArguments replaces each $n parameter with an identifier that is
+// provably absent from the original UDF body. The identifier is resolved from
+// sqlUdfArgs while the parsed body is bound, so a column argument keeps its
+// outer-query identity even when an inner table exposes a column with the same
+// name. Checking the entire body (including quotes and comments) is deliberately
+// conservative: absence from the raw text guarantees that no user-authored
+// identifier in the parsed tree can be captured by the marker.
+func (b *baseBinder) expandSQLUdfArguments(sql string, args []*plan.Expr, sqlMode string) (string, map[string]*plan.Expr) {
+	if len(args) == 0 {
+		return sql, nil
+	}
+
+	var callID uint64
+	if b.builder != nil {
+		b.builder.nextSQLUdfCallID++
+		callID = b.builder.nextSQLUdfCallID
+	}
+
+	markers := make(map[string]*plan.Expr, len(args))
+	markerByOrdinal := make(map[int]string, len(args))
+	foldedBody := strings.ToLower(sql)
+	markerForOrdinal := func(ordinal int) string {
+		if name, ok := markerByOrdinal[ordinal]; ok {
+			return "`" + name + "`"
+		}
+
+		baseName := fmt.Sprintf("__mo_sql_udf_%d_arg_%d", callID, ordinal)
+		name := baseName
+		for collisionID := uint64(1); strings.Contains(foldedBody, name); collisionID++ {
+			name = fmt.Sprintf("%s_%d", baseName, collisionID)
+		}
+		markerByOrdinal[ordinal] = name
+		markers[name] = args[ordinal-1]
+		return "`" + name + "`"
+	}
+	rewritten := replaceSQLUdfArgMarkers(sql, len(args), sqlMode, markerForOrdinal)
+	return rewritten, markers
+}
+
+func replaceSQLUdfArgMarkers(sql string, argCount int, sqlMode string, markerForOrdinal func(int) string) string {
+	scanner := mysqlparser.NewScannerWithSQLMode(
+		dialect.MYSQL,
+		sql,
+		mysqlparser.ParseSQLModeFlags(sqlMode),
+	)
+	defer mysqlparser.PutScanner(scanner)
+
+	var result strings.Builder
+	result.Grow(len(sql))
+	written := 0
+	for {
+		token, value := scanner.Scan()
+		if token == 0 || token == mysqlparser.LEX_ERROR {
+			break
+		}
+		if token != mysqlparser.ID || len(value) < 2 || value[0] != '$' {
+			continue
+		}
+
+		ordinal, err := strconv.Atoi(value[1:])
+		if err != nil || ordinal < 1 || ordinal > argCount {
+			continue
+		}
+
+		// ID tokens are returned byte-for-byte from the source, so their start is
+		// the scanner's current byte offset minus the token length.
+		start := scanner.Pos - len(value)
+		result.WriteString(sql[written:start])
+		result.WriteString(markerForOrdinal(ordinal))
+		written = scanner.Pos
+	}
+
+	result.WriteString(sql[written:])
+	return result.String()
+}
+
+func (b *baseBinder) pushSQLUdfArguments(args map[string]*plan.Expr) func() {
+	if b.ctx == nil || len(args) == 0 {
+		return func() {}
+	}
+
+	previous := b.ctx.sqlUdfArgs
+	b.ctx.sqlUdfArgs = args
+	return func() {
+		b.ctx.sqlUdfArgs = previous
+	}
+}
+
+func (b *baseBinder) bindSQLUdfArgument(name *tree.UnresolvedName) (*plan.Expr, bool) {
+	if b.ctx == nil || name.NumParts != 1 {
+		return nil, false
+	}
+
+	argName := name.ColName()
+	depth := int32(0)
+	for ctx := b.ctx; ctx != nil; ctx = ctx.parent {
+		if arg, ok := ctx.sqlUdfArgs[argName]; ok {
+			expr, correlated := correlateSQLUdfArgument(arg, depth)
+			if correlated {
+				for inner := b.ctx; inner != nil && inner != ctx; inner = inner.parent {
+					inner.isCorrelated = true
+				}
+			}
+			return expr, true
+		}
+		depth++
+	}
+	return nil, false
+}
+
+func correlateSQLUdfArgument(arg *plan.Expr, depth int32) (*plan.Expr, bool) {
+	expr := DeepCopyExpr(arg)
+	correlated := false
+
+	var rewrite func(*plan.Expr)
+	rewrite = func(current *plan.Expr) {
+		if current == nil {
+			return
+		}
+
+		switch item := current.Expr.(type) {
+		case *plan.Expr_Col:
+			if depth > 0 {
+				current.Expr = &plan.Expr_Corr{Corr: &plan.CorrColRef{
+					RelPos: item.Col.RelPos,
+					ColPos: item.Col.ColPos,
+					Depth:  depth,
+				}}
+				correlated = true
+			}
+		case *plan.Expr_Corr:
+			item.Corr.Depth += depth
+			correlated = true
+		case *plan.Expr_Lit:
+			rewrite(item.Lit.Src)
+		case *plan.Expr_F:
+			for _, child := range item.F.Args {
+				rewrite(child)
+			}
+		case *plan.Expr_W:
+			rewrite(item.W.WindowFunc)
+			for _, child := range item.W.PartitionBy {
+				rewrite(child)
+			}
+			for _, orderBy := range item.W.OrderBy {
+				if orderBy != nil {
+					rewrite(orderBy.Expr)
+				}
+			}
+			if item.W.Frame != nil {
+				if item.W.Frame.Start != nil {
+					rewrite(item.W.Frame.Start.Val)
+				}
+				if item.W.Frame.End != nil {
+					rewrite(item.W.Frame.End.Val)
+				}
+			}
+		case *plan.Expr_Sub:
+			rewrite(item.Sub.Child)
+		case *plan.Expr_List:
+			for _, child := range item.List.List {
+				rewrite(child)
+			}
+		}
+	}
+
+	rewrite(expr)
+	return expr, correlated
 }
 
 func (b *baseBinder) bindPythonUdf(udf *function.Udf, astArgs []tree.Expr, depth int32) (*plan.Expr, error) {
@@ -1855,6 +3143,11 @@ func bindFuncExprAndConstFold(ctx context.Context, proc *process.Process, name s
 	}
 
 	switch retExpr.GetF().GetFunc().GetObjName() {
+	case "nth_value":
+		if err := validateNthValueArgs(ctx, proc, retExpr.GetF().Args); err != nil {
+			return nil, err
+		}
+
 	case "+", "-", "*", "/", "div", "%", "mod", "unary_minus", "unary_plus", "unary_tilde", "cast", "serial", "serial_full":
 		if proc != nil {
 			tmpexpr, _ := ConstantFold(batch.EmptyForConstFoldBatch, DeepCopyExpr(retExpr), proc, false, true)
@@ -1998,6 +3291,50 @@ between_fallback:
 	return retExpr, nil
 }
 
+// validateNthValueArgs enforces MySQL's bind-time contract for NTH_VALUE:
+// the offset must be a constant positive integer. Folding first keeps valid
+// constant expressions, such as 1 + 1, compatible with MySQL.
+func validateNthValueArgs(ctx context.Context, proc *process.Process, args []*plan.Expr) error {
+	if len(args) != 2 || proc == nil {
+		return moerr.NewWrongArguments(ctx, "nth_value")
+	}
+
+	offset, err := ConstantFold(batch.EmptyForConstFoldBatch, args[1], proc, false, true)
+	if err != nil {
+		return err
+	}
+	args[1] = offset
+
+	lit := offset.GetLit()
+	if lit == nil || lit.Isnull || !types.T(offset.Typ.Id).IsInteger() || !isPositiveIntegerLiteral(lit) {
+		return moerr.NewWrongArguments(ctx, "nth_value")
+	}
+	return nil
+}
+
+func isPositiveIntegerLiteral(lit *plan.Literal) bool {
+	switch value := lit.Value.(type) {
+	case *plan.Literal_I8Val:
+		return value.I8Val > 0
+	case *plan.Literal_I16Val:
+		return value.I16Val > 0
+	case *plan.Literal_I32Val:
+		return value.I32Val > 0
+	case *plan.Literal_I64Val:
+		return value.I64Val > 0
+	case *plan.Literal_U8Val:
+		return value.U8Val > 0
+	case *plan.Literal_U16Val:
+		return value.U16Val > 0
+	case *plan.Literal_U32Val:
+		return value.U32Val > 0
+	case *plan.Literal_U64Val:
+		return value.U64Val > 0
+	default:
+		return false
+	}
+}
+
 func bindSerialFuncOverExprList(ctx context.Context, name string, args []*Expr) (*plan.Expr, bool, error) {
 	if name != function.SerialFunctionName && name != function.SerialFullFunctionName {
 		return nil, false, nil
@@ -2029,12 +3366,84 @@ func bindSerialFuncOverExprList(ctx context.Context, name string, args []*Expr) 
 	return args[0], true, nil
 }
 
+func validateApproxPercentileArgs(ctx context.Context, args []*Expr) error {
+	if len(args) != 2 {
+		return nil
+	}
+	percentile := args[1]
+	if percentile == nil || isNullExpr(percentile) || !rule.IsConstant(percentile, false) {
+		return moerr.NewInvalidInput(ctx,
+			"percentile argument of approx_percentile must be a non-null constant")
+	}
+	return nil
+}
+
+// validateOrderedPercentileArgs enforces the scalar MVP contract for the
+// ordered-set percentile aggregates. The aggregate executor consumes the
+// percentile as compile-time configuration, while the first argument is the
+// value expression ordered by WITHIN GROUP.
+func validateOrderedPercentileArgs(ctx context.Context, name string, args []*Expr) error {
+	if len(args) != 2 {
+		return moerr.NewInvalidInputf(ctx, "%s requires a value and a percentile argument", name)
+	}
+	percentile := args[1]
+	if percentile == nil || isNullExpr(percentile) || !rule.IsConstant(percentile, false) {
+		return moerr.NewInvalidInputf(ctx,
+			"percentile argument of %s must be a non-null constant", name)
+	}
+	return nil
+}
+
+// bindMixedInListComparison applies MySQL's REAL comparison semantics for a
+// string left operand and a numeric IN-list value. It is deliberately limited
+// to IN/NOT IN fallback comparisons: applying it to every comparison would
+// lose precision for numeric columns compared with string constants.
+func bindMixedInListComparison(ctx context.Context, operator string, left, right *Expr) (*plan.Expr, error) {
+	leftType := makeTypeByPlan2Expr(left)
+	rightType := makeTypeByPlan2Expr(right)
+	if leftType.Oid.IsMySQLString() && (rightType.IsNumeric() || rightType.Oid == types.T_bool) {
+		targetType := types.T_float64.ToType()
+		operands := []*Expr{left, right}
+		for i := range operands {
+			var err error
+			operands[i], err = appendCastBeforeExpr(ctx, operands[i], makePlan2Type(&targetType))
+			if err != nil {
+				return nil, err
+			}
+		}
+		left, right = operands[0], operands[1]
+	}
+	return BindFuncExprImplByPlanExpr(ctx, operator, []*Expr{left, right})
+}
+
 func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) (*plan.Expr, error) {
 	var err error
+	if name == NameApproxPercentile {
+		if err = validateApproxPercentileArgs(ctx, args); err != nil {
+			return nil, err
+		}
+	}
+	if name == NamePercentileCont || name == NamePercentileDisc {
+		if err = validateOrderedPercentileArgs(ctx, name, args); err != nil {
+			return nil, err
+		}
+	}
+
+	if (name == "utc_time" || name == "utc_timestamp") && len(args) == 1 {
+		if _, err := utcFunctionFSPFromPlanExpr(ctx, name, args[0]); err != nil {
+			return nil, err
+		}
+	}
 
 	// deal with some special function
 	if listExpr, ok, err := bindSerialFuncOverExprList(ctx, name, args); ok || err != nil {
 		return listExpr, err
+	}
+	if err := normalizeDecimalParamComparisonArgs(ctx, name, args); err != nil {
+		return nil, err
+	}
+	if err := normalizeTimeStringComparisonArgs(ctx, name, args); err != nil {
+		return nil, err
 	}
 
 	switch name {
@@ -2087,6 +3496,21 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 		args, err = resetDateFunction(ctx, args[0], args[1])
 		if err != nil {
 			return nil, err
+		}
+	case "uuid", "uuid_v7", "uuid_v1", "uuid_v6":
+		// uuid(interval 1 minute) generates an id whose embedded timestamp is
+		// the evaluation-time wall clock shifted by the interval; rewrite the
+		// INTERVAL expression to (count, unit) args like date_add does. The
+		// resulting (count, unit) overload is internal — reject direct
+		// multi-argument calls like uuid_v7(5, 3) so only the rewrite above
+		// can reach it.
+		if len(args) == 1 && args[0].Typ.Id == int32(types.T_interval) {
+			args, err = resetIntervalFunction(ctx, args[0])
+			if err != nil {
+				return nil, err
+			}
+		} else if len(args) > 1 {
+			return nil, moerr.NewInvalidArg(ctx, name+" function needs zero or one arg", len(args))
 		}
 	case "mo_win_truncate":
 		if len(args) != 2 {
@@ -2262,9 +3686,9 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 				return nil, err
 			}
 		}
-	case "like":
+	case "like", "ilike":
 		// sql 'select * from t where col like ?'  the ? Expr's type will be T_any
-		if len(args) != 2 {
+		if len(args) != 2 && len(args) != 3 {
 			return nil, moerr.NewInvalidArg(ctx, name+" function have invalid input args length", len(args))
 		}
 		if args[0].Typ.Id == int32(types.T_any) {
@@ -2272,6 +3696,9 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 		}
 		if args[1].Typ.Id == int32(types.T_any) {
 			args[1].Typ.Id = int32(types.T_varchar)
+		}
+		if len(args) == 3 && args[2].Typ.Id == int32(types.T_any) {
+			args[2].Typ.Id = int32(types.T_varchar)
 		}
 		if args[0].Typ.Id == int32(types.T_json) {
 			targetTp := types.T_varchar.ToType()
@@ -2421,7 +3848,7 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 			}
 			if name == "in" {
 				for _, expr := range orExprList {
-					tmpExpr, err := BindFuncExprImplByPlanExpr(ctx, "=", []*Expr{DeepCopyExpr(args[0]), expr})
+					tmpExpr, err := bindMixedInListComparison(ctx, "=", DeepCopyExpr(args[0]), expr)
 					if err != nil {
 						return nil, err
 					}
@@ -2430,7 +3857,7 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 				return combinePlanExprsBalanced(ctx, "or", expanded)
 			} else {
 				for _, expr := range orExprList {
-					tmpExpr, err := BindFuncExprImplByPlanExpr(ctx, "!=", []*Expr{DeepCopyExpr(args[0]), expr})
+					tmpExpr, err := bindMixedInListComparison(ctx, "!=", DeepCopyExpr(args[0]), expr)
 					if err != nil {
 						return nil, err
 					}
@@ -2451,11 +3878,20 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 		name = "power"
 	}
 
+	if name == "convert" {
+		if err := bindConvertUsingCharset(ctx, args); err != nil {
+			return nil, err
+		}
+	}
+
 	// get args(exprs) & types
 	argsLength := len(args)
 	argsType := make([]types.Type, argsLength)
 	for idx, expr := range args {
 		argsType[idx] = makeTypeByPlan2Expr(expr)
+	}
+	if err := normalizeNonConstantTemporalComparisonArgs(ctx, name, args, argsType); err != nil {
+		return nil, err
 	}
 
 	var funcID int64
@@ -2485,6 +3921,7 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 	funcID = fGet.GetEncodedOverloadID()
 	returnType = fGet.GetReturnType()
 	argsCastType, _ = fGet.ShouldDoImplicitTypeCast()
+	adjustControlFlowMetadata(name, args, argsType, &returnType, argsCastType)
 
 	// Optimization: avoid casting columns in comparisons to preserve index usage
 	switch name {
@@ -2654,6 +4091,9 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 		case *plan.Expr_Col:
 			if argsType[0].IsVarlen() && checkNoNeedCast(argsType[1], argsType[0], args[1]) {
 				argsCastType = []types.Type{argsType[0], argsType[0]}
+				if len(argsType) == 3 {
+					argsCastType = append(argsCastType, argsType[2])
+				}
 				fGet, err = function.GetFunctionByName(ctx, name, argsCastType)
 				if err != nil {
 					return nil, err
@@ -2689,6 +4129,27 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 					return nil, moerr.NewInvalidInput(ctx, name+" function have invalid input args type")
 				}
 			}
+		}
+
+	case "maketime":
+		// Hex and bit literals are represented as VARCHAR literals carrying
+		// IsBin. They are integral seconds, so they retain TIME(0) metadata even
+		// though the VARCHAR seconds overload normally advertises TIME(6).
+		if len(args) == 3 {
+			if literal := args[2].GetLit(); literal != nil && literal.IsBin {
+				returnType.Scale = 0
+			}
+		}
+
+	case "utc_time", "utc_timestamp":
+		// The overload receives only argument types, while the temporal result
+		// precision is determined by the literal FSP. Preserve it in the plan
+		// type's Width and Scale so views and the MySQL protocol expose
+		// TIME/DATETIME(fsp) correctly.
+		if len(args) == 1 {
+			fsp, _ := utcFunctionFSPFromPlanExpr(ctx, name, args[0])
+			returnType.Width = fsp
+			returnType.Scale = fsp
 		}
 
 	case "timestampadd":
@@ -2741,8 +4202,28 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 		}
 		for idx, castType := range argsCastType {
 			if !argsType[idx].Eq(castType) && castType.Oid != types.T_any {
+				// MAKETIME uses the scale on its VARCHAR seconds target only to
+				// derive the TIME return scale. Recasting an already-VARCHAR
+				// argument solely for that metadata clears Literal.IsBin, changing
+				// X'..'/B'..' from a binary number into ordinary text.
+				if name == "maketime" && idx == 2 &&
+					argsType[idx].Oid == types.T_varchar && castType.Oid == types.T_varchar &&
+					argsType[idx].Width == castType.Width {
+					continue
+				}
 				if argsType[idx].Oid == castType.Oid && castType.Oid.IsDecimal() && argsType[idx].Scale == castType.Scale {
 					continue
+				}
+				// A direct BIT-to-text cast preserves the BIT payload bytes. In the
+				// LEAST/GREATEST type lattice BIT is numeric, so stringify its
+				// unsigned value instead when the comparison target is text.
+				if (name == "least" || name == "greatest") && argsType[idx].Oid == types.T_bit &&
+					(castType.Oid == types.T_char || castType.Oid == types.T_varchar || castType.Oid == types.T_text) {
+					uint64Type := types.T_uint64.ToType()
+					args[idx], err = appendCastBeforeExpr(ctx, args[idx], makePlan2Type(&uint64Type))
+					if err != nil {
+						return nil, err
+					}
 				}
 				typ := makePlan2Type(&castType)
 				args[idx], err = appendCastBeforeExpr(ctx, args[idx], typ)
@@ -2765,6 +4246,534 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 		},
 		Typ: Typ,
 	}, nil
+}
+
+func bindConvertUsingCharset(ctx context.Context, args []*plan.Expr) error {
+	if len(args) != 2 {
+		return moerr.NewInvalidArg(ctx, "convert function needs two args", len(args))
+	}
+
+	charsetLiteral := args[1].GetLit()
+	if charsetLiteral == nil || charsetLiteral.Isnull {
+		return moerr.NewInvalidInput(ctx, "CONVERT USING requires a constant character set")
+	}
+
+	var charset uint32
+	switch strings.ToLower(charsetLiteral.GetSval()) {
+	case "binary":
+		charset = uint32(types.CharsetBinary)
+	case "utf8", "utf8mb3", "utf8mb4":
+		charset = uint32(types.CharsetUTF8)
+	default:
+		return moerr.NewInvalidInputf(ctx, "unsupported character set '%s' for CONVERT USING", charsetLiteral.GetSval())
+	}
+
+	// The parser lowers the USING name to a synthetic string literal. Record the
+	// selected charset on that argument so the overload's return-type callback
+	// can carry it into the bound result without inspecting expression values.
+	args[1].Typ.Charset = charset
+	return nil
+}
+
+// normalizeNonConstantTemporalComparisonArgs keeps both sides of equality and
+// ordering keys in one physical domain when neither side is a runtime
+// constant. Hash joins, shuffle keys, and runtime filters consume comparison
+// operands as keys instead of invoking the scalar comparison function, so raw
+// DATETIME and TIMESTAMP encodings cannot safely remain cross-typed there.
+// Column-versus-runtime-constant predicates stay cross-typed so storage can
+// see the raw column and apply the timezone-aware pruning path.
+func normalizeNonConstantTemporalComparisonArgs(
+	ctx context.Context,
+	name string,
+	args []*Expr,
+	argsType []types.Type,
+) error {
+	switch name {
+	case "=", "<", "<=", ">", ">=", "<>":
+	default:
+		return nil
+	}
+	if len(args) != 2 || len(argsType) != 2 ||
+		!((argsType[0].Oid == types.T_datetime && argsType[1].Oid == types.T_timestamp) ||
+			(argsType[0].Oid == types.T_timestamp && argsType[1].Oid == types.T_datetime)) ||
+		isRuntimeConstExpr(args[0]) || isRuntimeConstExpr(args[1]) {
+		return nil
+	}
+
+	datetimeIndex, timestampIndex := 0, 1
+	if argsType[0].Oid == types.T_timestamp {
+		datetimeIndex, timestampIndex = 1, 0
+	}
+	targetType := argsType[timestampIndex]
+	casted, err := appendCastBeforeExpr(ctx, args[datetimeIndex], makePlan2Type(&targetType))
+	if err != nil {
+		return err
+	}
+	args[datetimeIndex] = casted
+	argsType[datetimeIndex] = targetType
+	return nil
+}
+
+func invalidUTCFunctionFSPError(ctx context.Context, name string) error {
+	return moerr.NewInvalidInputf(ctx, "%s fractional seconds precision must be an integer literal between 0 and 6", strings.ToUpper(name))
+}
+
+func utcFunctionFSPFromPlanExpr(ctx context.Context, name string, expr *Expr) (int32, error) {
+	literal := expr.GetLit()
+	if literal == nil || literal.Isnull {
+		return 0, invalidUTCFunctionFSPError(ctx, name)
+	}
+	fsp, ok := literal.GetValue().(*plan.Literal_I64Val)
+	if !ok {
+		return 0, invalidUTCFunctionFSPError(ctx, name)
+	}
+	if fsp.I64Val < 0 {
+		return 0, moerr.NewInvalidArg(ctx, name, fmt.Sprintf("negative precision %d specified", fsp.I64Val))
+	}
+	if fsp.I64Val > 6 {
+		return 0, moerr.NewErrTooBigPrecision(ctx, fsp.I64Val, name, 6)
+	}
+	return int32(fsp.I64Val), nil
+}
+
+// adjustControlFlowMetadata keeps MySQL-visible metadata for conditional
+// expressions precise after overload selection.  The overload resolver only
+// sees types, whereas a literal branch has a narrower domain than its default
+// INT64 representation.  Keep this adjustment here, rather than in the
+// shared type-check helpers, so column/parameter expressions retain their
+// conservative runtime capacity and unrelated functions are unaffected.
+func adjustControlFlowMetadata(name string, args []*Expr, argTypes []types.Type, returnType *types.Type, argsCastType []types.Type) {
+	valueIndexes := controlFlowValueIndexes(name, len(args))
+	if len(valueIndexes) == 0 {
+		return
+	}
+
+	conservativeReturnType := *returnType
+	changed := false
+	switch {
+	case returnType.Oid == types.T_varchar:
+		changed = adjustControlFlowVarcharMetadata(args, argTypes, valueIndexes, returnType)
+	case returnType.Oid.IsDecimal():
+		changed = adjustControlFlowDecimalLiteralMetadata(args, argTypes, valueIndexes, returnType)
+	}
+
+	if !changed || len(argsCastType) != len(args) {
+		return
+	}
+
+	// VARCHAR width is character metadata, while normal casts enforce Width in
+	// bytes. Restore the overload's conservative target rather than its
+	// intermediate type-check target, which may already have been narrowed by a
+	// different value branch. Decimal widths describe the runtime decimal
+	// representation, so their existing cast synchronization remains safe.
+	if returnType.Oid == types.T_varchar {
+		for _, idx := range valueIndexes {
+			argsCastType[idx] = conservativeReturnType
+		}
+		return
+	}
+	if returnType.Oid.IsDecimal() {
+		for _, idx := range valueIndexes {
+			argsCastType[idx] = *returnType
+		}
+	}
+}
+
+func controlFlowValueIndexes(name string, argsLength int) []int {
+	valueIndexes := make([]int, 0, argsLength)
+	switch name {
+	case "if", "iff":
+		if argsLength == 3 {
+			valueIndexes = append(valueIndexes, 1, 2)
+		}
+	case "case":
+		for i := 1; i < argsLength; i += 2 {
+			valueIndexes = append(valueIndexes, i)
+		}
+		if argsLength%2 == 1 {
+			valueIndexes = append(valueIndexes, argsLength-1)
+		}
+	case "coalesce":
+		for i := 0; i < argsLength; i++ {
+			valueIndexes = append(valueIndexes, i)
+		}
+	}
+	return valueIndexes
+}
+
+// adjustControlFlowVarcharMetadata derives one bound across every value
+// branch. String/numeric/temporal subfamilies must not independently narrow a
+// shared return type: the widest proven display bound wins, and any unknown
+// relevant branch keeps the overload's conservative capacity.
+func adjustControlFlowVarcharMetadata(args []*Expr, argTypes []types.Type, valueIndexes []int, returnType *types.Type) bool {
+	hasString := false
+	hasConvertible := false
+	width := int32(0)
+	for _, idx := range valueIndexes {
+		if idx >= len(argTypes) {
+			return false
+		}
+		// NULL does not contribute a runtime display value.  Every other arm
+		// participates in the implicit VARCHAR cast selected by the overload,
+		// even when its type is outside the string/numeric/temporal families.
+		// Therefore only NULL may be ignored here; an unsupported display bound
+		// must retain the overload's conservative VARCHAR capacity.
+		if controlFlowNullExpr(args[idx]) {
+			continue
+		}
+		typ := argTypes[idx]
+		var (
+			candidate int32
+			known     bool
+		)
+		if typ.Oid.IsMySQLString() {
+			hasString = true
+			candidate, known = controlFlowStringWidth(args[idx], typ)
+		} else if typ.Oid.IsInteger() || typ.Oid.IsFloat() || typ.Oid.IsDecimal() {
+			hasConvertible = true
+			candidate, known = controlFlowStringWidth(args[idx], typ)
+		} else if temporalWidth, ok := temporalDisplayWidthForVarchar(typ); ok {
+			hasConvertible = true
+			candidate, known = temporalWidth, true
+		} else {
+			return false
+		}
+		if !known {
+			// Width zero is used both by exact empty literals and by types whose
+			// runtime display capacity is unknown (for example TEXT or FLOAT).
+			// Do not turn the latter into a narrow implicit cast target.
+			return false
+		}
+		if candidate > width {
+			width = candidate
+		}
+	}
+	if hasString && hasConvertible && width > 0 {
+		changed := returnType.Width != width
+		returnType.Width = width
+		return changed
+	}
+	return false
+}
+
+func controlFlowNullExpr(expr *Expr) bool {
+	// Only a direct NULL literal is neutral for MySQL conditional-expression
+	// metadata. A cast gives NULL a declared type, so CAST(NULL AS CHAR(N))
+	// must contribute CHAR(N)'s display width.
+	return isNullLiteralExpr(expr)
+}
+
+func temporalDisplayWidthForVarchar(typ types.Type) (int32, bool) {
+	switch typ.Oid {
+	case types.T_date:
+		return 10, true
+	case types.T_time:
+		// Time.String2 can format the complete MatrixOne TIME range, including
+		// its optional sign and a ten-digit hour field.  The scale determines
+		// the fractional suffix; this is a real upper bound, unlike a zero type
+		// width on variable-size values such as JSON.
+		width := int32(len(strconv.FormatInt(int64(types.MaxHourInTime), 10)) + 7)
+		if typ.Scale > 0 {
+			width += 1 + typ.Scale
+		}
+		return width, true
+	case types.T_datetime, types.T_timestamp:
+		if typ.Scale > 0 {
+			return 20 + typ.Scale, true
+		}
+		return 19, true
+	default:
+		return 0, false
+	}
+}
+
+func adjustControlFlowDecimalLiteralMetadata(args []*Expr, argTypes []types.Type, valueIndexes []int, returnType *types.Type) bool {
+	hasDecimal := false
+	hasIntegerLiteral := false
+	maxIntegral := int32(0)
+	maxScale := int32(0)
+
+	for _, idx := range valueIndexes {
+		if idx >= len(argTypes) {
+			return false
+		}
+		typ := argTypes[idx]
+		switch {
+		case typ.Oid.IsDecimal():
+			hasDecimal = true
+			integral := typ.Width - typ.Scale
+			if integral > maxIntegral {
+				maxIntegral = integral
+			}
+			if typ.Scale > maxScale {
+				maxScale = typ.Scale
+			}
+		case typ.Oid.IsInteger():
+			integral, literal := decimalIntegerWidth(args[idx], typ)
+			if integral > maxIntegral {
+				maxIntegral = integral
+			}
+			hasIntegerLiteral = hasIntegerLiteral || literal
+		}
+	}
+
+	if !hasDecimal || !hasIntegerLiteral {
+		return false
+	}
+	precision := maxIntegral + maxScale
+	// This is a metadata narrowing pass.  If another branch needs more room
+	// than the overload already selected, leave its conservative type intact.
+	if precision <= 0 || precision > returnType.Width {
+		return false
+	}
+	changed := returnType.Width != precision || returnType.Scale != maxScale
+	returnType.Width = precision
+	returnType.Scale = maxScale
+	return changed
+}
+
+func decimalIntegerWidth(expr *Expr, typ types.Type) (int32, bool) {
+	lit := expr.GetLit()
+	if lit == nil || lit.Isnull {
+		return integerMetadataWidth(typ.Oid), false
+	}
+
+	decimalDigits := func(value string) int32 {
+		value = strings.TrimPrefix(value, "-")
+		return int32(len(value))
+	}
+	switch value := lit.Value.(type) {
+	case *plan.Literal_I8Val:
+		return decimalDigits(strconv.FormatInt(int64(value.I8Val), 10)), true
+	case *plan.Literal_I16Val:
+		return decimalDigits(strconv.FormatInt(int64(value.I16Val), 10)), true
+	case *plan.Literal_I32Val:
+		return decimalDigits(strconv.FormatInt(int64(value.I32Val), 10)), true
+	case *plan.Literal_I64Val:
+		return decimalDigits(strconv.FormatInt(value.I64Val, 10)), true
+	case *plan.Literal_U8Val:
+		return int32(len(strconv.FormatUint(uint64(value.U8Val), 10))), true
+	case *plan.Literal_U16Val:
+		return int32(len(strconv.FormatUint(uint64(value.U16Val), 10))), true
+	case *plan.Literal_U32Val:
+		return int32(len(strconv.FormatUint(uint64(value.U32Val), 10))), true
+	case *plan.Literal_U64Val:
+		return int32(len(strconv.FormatUint(value.U64Val, 10))), true
+	default:
+		return integerMetadataWidth(typ.Oid), false
+	}
+}
+
+// controlFlowStringWidth reports a display bound only when it is safe to use
+// that bound as the target of an implicit cast.  A zero type width alone is not
+// a bound: TEXT/BLOB columns and default-width floating expressions use it to
+// mean that their runtime capacity is unknown.
+func controlFlowStringWidth(expr *Expr, typ types.Type) (int32, bool) {
+	if typ.Oid.IsMySQLString() {
+		if typ.Width > 0 || expr.GetLit() != nil {
+			return typ.Width, true
+		}
+		return 0, false
+	}
+	if typ.Oid.IsDecimal() {
+		if typ.Width <= 0 {
+			return 0, false
+		}
+		return decimalDisplayWidth(typ), true
+	}
+	if lit := expr.GetLit(); lit != nil && !lit.Isnull {
+		switch value := lit.Value.(type) {
+		case *plan.Literal_I8Val:
+			return signedIntegerLiteralWidth(int64(value.I8Val)), true
+		case *plan.Literal_I16Val:
+			return signedIntegerLiteralWidth(int64(value.I16Val)), true
+		case *plan.Literal_I32Val:
+			return signedIntegerLiteralWidth(int64(value.I32Val)), true
+		case *plan.Literal_I64Val:
+			return signedIntegerLiteralWidth(value.I64Val), true
+		case *plan.Literal_U8Val:
+			return int32(len(strconv.FormatUint(uint64(value.U8Val), 10))), true
+		case *plan.Literal_U16Val:
+			return int32(len(strconv.FormatUint(uint64(value.U16Val), 10))), true
+		case *plan.Literal_U32Val:
+			return int32(len(strconv.FormatUint(uint64(value.U32Val), 10))), true
+		case *plan.Literal_U64Val:
+			return int32(len(strconv.FormatUint(value.U64Val, 10))), true
+		}
+	}
+	if typ.Oid.IsInteger() {
+		width := integerMetadataWidth(typ.Oid)
+		if typ.Oid.IsSignedInt() {
+			width++
+		}
+		return width, true
+	}
+	return 0, false
+}
+
+// decimalDisplayWidth returns the maximum byte width of a DECIMAL value after
+// it is converted to a control-flow VARCHAR result. Decimal precision counts
+// only significant digits, so it excludes the optional sign, decimal point,
+// and (for DECIMAL(M, M)) the displayed leading zero.
+func decimalDisplayWidth(typ types.Type) int32 {
+	precision := typ.Width
+	if precision <= 0 {
+		return types.MaxVarcharLen
+	}
+
+	width := int64(precision) // significant digits
+	if typ.Scale > 0 {
+		width++ // decimal point
+		if typ.Scale >= precision {
+			width++ // leading zero before the decimal point
+		}
+	}
+	width++ // optional sign
+	if width > int64(types.MaxVarcharLen) {
+		return types.MaxVarcharLen
+	}
+	return int32(width)
+}
+
+func signedIntegerLiteralWidth(value int64) int32 {
+	width := int32(len(strconv.FormatInt(value, 10)))
+	if value >= 0 {
+		width++
+	}
+	return width
+}
+
+func integerMetadataWidth(oid types.T) int32 {
+	switch oid {
+	case types.T_int8, types.T_uint8:
+		return 3
+	case types.T_int16, types.T_uint16:
+		return 5
+	case types.T_int32, types.T_uint32:
+		return 10
+	case types.T_int64:
+		return 19
+	case types.T_uint64:
+		return 20
+	default:
+		return 0
+	}
+}
+
+// A direct prepared parameter in a binary comparison derives its type from
+// the other operand. Preserve that contract for DECIMAL before the generic
+// string/numeric cast rules see the parameter's transport type (TEXT). Real
+// string expressions continue through the ordinary MySQL coercion path.
+func normalizeDecimalParamComparisonArgs(ctx context.Context, name string, args []*Expr) error {
+	switch name {
+	case "=", "<=>", "!=", "<>", "<", "<=", ">", ">=":
+		if len(args) != 2 {
+			return nil
+		}
+	default:
+		return nil
+	}
+
+	for paramPos, peerPos := range []int{1, 0} {
+		if !isDirectDynamicParam(args[paramPos]) || !types.T(args[peerPos].Typ.Id).IsDecimal() {
+			continue
+		}
+		castExpr, err := appendCastBeforeExpr(ctx, args[paramPos], args[peerPos].Typ)
+		if err != nil {
+			return err
+		}
+		args[paramPos] = castExpr
+		return nil
+	}
+	return nil
+}
+
+// MySQL compares scalar TIME expressions to strings as text, but converts a
+// constant string or direct prepared parameter to TIME(scale) when the TIME
+// side is a column.
+func normalizeTimeStringComparisonArgs(ctx context.Context, name string, args []*Expr) error {
+	switch name {
+	case "=", "<=>", "!=", "<>", "<", "<=", ">", ">=":
+		if len(args) != 2 || !isTimeStringComparisonPair(args[0], args[1]) {
+			return nil
+		}
+		if isTimeColumnStringLiteralOrDirectParamPair(args[0], args[1]) {
+			return nil
+		}
+	case "between":
+		if len(args) != 3 || !allTimeOrCharacterString(args) {
+			return nil
+		}
+		if args[0].Typ.Id == int32(types.T_time) && args[0].GetCol() != nil &&
+			isTimeValueOrCharacterStringLiteralOrDirectParam(args[1]) &&
+			isTimeValueOrCharacterStringLiteralOrDirectParam(args[2]) {
+			return nil
+		}
+	default:
+		return nil
+	}
+
+	varchar := types.T_varchar.ToType()
+	varcharType := makePlan2Type(&varchar)
+	for i, arg := range args {
+		if arg.Typ.Id != int32(types.T_time) {
+			continue
+		}
+		castExpr, err := appendCastBeforeExpr(ctx, arg, varcharType)
+		if err != nil {
+			return err
+		}
+		args[i] = castExpr
+	}
+	return nil
+}
+
+func isTimeStringComparisonPair(left, right *Expr) bool {
+	return (left.Typ.Id == int32(types.T_time) && isCharacterStringType(right.Typ.Id)) ||
+		(right.Typ.Id == int32(types.T_time) && isCharacterStringType(left.Typ.Id))
+}
+
+func isTimeColumnStringLiteralOrDirectParamPair(left, right *Expr) bool {
+	return (left.Typ.Id == int32(types.T_time) && left.GetCol() != nil && isCharacterStringLiteralOrDirectParam(right)) ||
+		(right.Typ.Id == int32(types.T_time) && right.GetCol() != nil && isCharacterStringLiteralOrDirectParam(left))
+}
+
+func allTimeOrCharacterString(args []*Expr) bool {
+	hasTime := false
+	hasString := false
+	for _, arg := range args {
+		switch {
+		case arg.Typ.Id == int32(types.T_time):
+			hasTime = true
+		case isCharacterStringType(arg.Typ.Id):
+			hasString = true
+		default:
+			return false
+		}
+	}
+	return hasTime && hasString
+}
+
+func isCharacterStringLiteral(expr *Expr) bool {
+	return isCharacterStringType(expr.Typ.Id) && expr.GetLit() != nil
+}
+
+func isCharacterStringLiteralOrDirectParam(expr *Expr) bool {
+	return isCharacterStringLiteral(expr) ||
+		(isCharacterStringType(expr.Typ.Id) && isDirectDynamicParam(expr))
+}
+
+func isTimeValueOrCharacterStringLiteralOrDirectParam(expr *Expr) bool {
+	return expr.Typ.Id == int32(types.T_time) || isCharacterStringLiteralOrDirectParam(expr)
+}
+
+func isCharacterStringType(typeID int32) bool {
+	switch types.T(typeID) {
+	case types.T_char, types.T_varchar, types.T_text:
+		return true
+	default:
+		return false
+	}
 }
 
 func adjustJsonOrderingDynamicParamType(ctx context.Context, name string, args []*Expr) error {
@@ -2989,12 +4998,29 @@ func (b *baseBinder) GetContext() context.Context { return b.sysCtx }
 // --- util functions ----
 
 func appendCastBeforeExpr(ctx context.Context, expr *Expr, toType Type, isBin ...bool) (*Expr, error) {
+	return appendCastBeforeExprWithOverload(ctx, expr, toType, 0, isBin...)
+}
+
+func appendExplicitCastBeforeExpr(ctx context.Context, expr *Expr, toType Type) (*Expr, error) {
+	return appendCastBeforeExprWithOverload(ctx, expr, toType, 1)
+}
+
+func appendCastBeforeExprWithOverload(
+	ctx context.Context, expr *Expr, toType Type, overloadID int32, isBin ...bool,
+) (*Expr, error) {
+	expr, rewritten, err := rewriteMySQLSpecialTypeDisplayCast(ctx, expr, toType)
+	if err != nil {
+		return nil, err
+	}
+	if rewritten {
+		return expr, nil
+	}
 	toType.NotNullable = expr.Typ.NotNullable
 	argsType := []types.Type{
 		makeTypeByPlan2Expr(expr),
 		makeTypeByPlan2Type(toType),
 	}
-	fGet, err := function.GetFunctionByName(ctx, "cast", argsType)
+	fGet, err := function.GetFunctionByNameWithOverload(ctx, "cast", argsType, overloadID)
 	if err != nil {
 		return nil, err
 	}
@@ -3020,6 +5046,261 @@ func appendCastBeforeExpr(ctx context.Context, expr *Expr, toType Type, isBin ..
 		},
 		Typ: typ,
 	}, nil
+}
+
+func rewriteMySQLSpecialTypeDisplayCast(ctx context.Context, expr *Expr, toType Type) (*Expr, bool, error) {
+	if isSetDisplayValueExpr(expr) && types.T(toType.Id).IsInteger() && !isSetPlanType(&toType) {
+		// SET columns are wrapped with cast_set_index_to_value during column
+		// binding so ordinary projections expose their labels. Integer casts
+		// require the stored bitmap instead; casting the label is both incorrect
+		// and lossy for SET definitions that contain an empty member.
+		if bitmap, ok := storedSetBitmapExpr(expr); ok {
+			return bitmap, false, nil
+		}
+	}
+	if toType.Id != int32(types.T_json) {
+		return expr, false, nil
+	}
+	if isEnumOrSetPlanType(&expr.Typ) {
+		displayValue, err := makeEnumOrSetDisplayValue(ctx, expr)
+		if err != nil {
+			return nil, false, err
+		}
+		quoted, err := quoteEnumOrSetDisplayValueAsJSON(ctx, displayValue)
+		return quoted, err == nil, err
+	}
+	if isEnumOrSetDisplayValueExpr(expr) {
+		quoted, err := quoteEnumOrSetDisplayValueAsJSON(ctx, expr)
+		return quoted, err == nil, err
+	}
+	return expr, false, nil
+}
+
+func makeEnumOrSetDisplayValue(ctx context.Context, expr *Expr) (*Expr, error) {
+	if expr == nil || !isEnumOrSetPlanType(&expr.Typ) {
+		return expr, nil
+	}
+	indexToValueFun, _, _, err := mysqlSpecialTypeFuncNames(&expr.Typ)
+	if err != nil {
+		return nil, err
+	}
+	return BindFuncExprImplByPlanExpr(ctx, indexToValueFun, []*Expr{
+		makePlan2StringConstExprWithType(expr.Typ.Enumvalues),
+		expr,
+	})
+}
+
+func storedSetBitmapExpr(expr *Expr) (*Expr, bool) {
+	if !isSetDisplayValueExpr(expr) {
+		return expr, false
+	}
+	fn := expr.GetF()
+	if len(fn.Args) != 2 || fn.Args[1] == nil {
+		return expr, false
+	}
+	bitmap := DeepCopyExpr(fn.Args[1])
+	// The hidden projection is the physical uint64 representation, not a SQL
+	// SET value. Clear the member metadata so downstream assignment treats it
+	// as an ordinary bitmap and does not convert it back through SET semantics.
+	bitmap.Typ.Enumvalues = ""
+	return bitmap, true
+}
+
+// storedMySQLSpecialTypeExpr removes the presentation wrapper that column
+// binding adds for ENUM and SET.  The wrapper is appropriate for ordinary
+// string contexts, but numeric contracts must consume the stored ENUM ordinal
+// or SET bitmap.  Keep this narrowly structural: only the wrappers made by
+// makeEnumOrSetDisplayValue are unwrapped.
+func storedMySQLSpecialTypeExpr(expr *Expr) (*Expr, bool) {
+	if isSetDisplayValueExpr(expr) {
+		return storedSetBitmapExpr(expr)
+	}
+	if expr == nil {
+		return expr, false
+	}
+	fn := expr.GetF()
+	if fn == nil || fn.Func == nil || fn.Func.ObjName != moEnumCastIndexToValueFun || len(fn.Args) != 2 || fn.Args[1] == nil {
+		return expr, false
+	}
+	return DeepCopyExpr(fn.Args[1]), true
+}
+
+// useStoredMySQLSpecialTypesForNumericContract chooses ENUM/SET storage from
+// the function overload's bound operand contract, rather than from a small
+// collection of AST shapes.  This preserves display labels for string
+// functions such as LENGTH while allowing numeric consumers such as ABS,
+// comparisons against numeric columns, and IN lists to use MySQL ordinals.
+func useStoredMySQLSpecialTypesForNumericContract(ctx context.Context, name string, args []*Expr) []*Expr {
+	rawArgs := make([]*Expr, len(args))
+	hasSpecialArg := false
+	for i, arg := range args {
+		raw, unwrapped := storedMySQLSpecialTypeExpr(arg)
+		rawArgs[i] = raw
+		if !unwrapped {
+			continue
+		}
+		hasSpecialArg = true
+	}
+	if !hasSpecialArg {
+		return args
+	}
+
+	// The display-bound operands describe the contract selected for this SQL
+	// expression.  In particular, resolving a raw ENUM against a string can
+	// itself select a numeric comparison rule, so do not use the raw overload
+	// to decide whether the caller asked for numeric semantics.
+	displayTypes := make([]types.Type, len(args))
+	for i, arg := range args {
+		displayTypes[i] = makeTypeByPlan2Expr(arg)
+	}
+	resolved, err := function.GetFunctionByName(ctx, name, displayTypes)
+	if err != nil {
+		return useStoredMySQLSpecialTypesForNumericInList(name, args, rawArgs)
+	}
+	targets, shouldCast := resolved.ShouldDoImplicitTypeCast()
+	if !shouldCast || len(targets) != len(rawArgs) {
+		return useStoredMySQLSpecialTypesForNumericInList(name, args, rawArgs)
+	}
+	result := args
+	changed := false
+	for i, arg := range args {
+		if _, unwrapped := storedMySQLSpecialTypeExpr(arg); unwrapped && targets[i].IsNumeric() {
+			if !changed {
+				result = append([]*Expr(nil), args...)
+				changed = true
+			}
+			result[i] = rawArgs[i]
+		}
+	}
+	return result
+}
+
+// An IN list is represented as a plan.ExprList and is not assigned one scalar
+// cast target by the function registry.  Its already-bound member types are
+// therefore the operand contract: use the stored value only when every member
+// is numeric.  Mixed lists retain normal string semantics.
+func useStoredMySQLSpecialTypesForNumericInList(name string, args, rawArgs []*Expr) []*Expr {
+	if (name != "in" && name != "not_in" && name != "partition_in") || len(args) != 2 || args[1].GetList() == nil || len(args[1].GetList().List) == 0 {
+		return args
+	}
+	for _, member := range args[1].GetList().List {
+		if !makeTypeByPlan2Expr(member).IsNumeric() {
+			return args
+		}
+	}
+	result := append([]*Expr(nil), args...)
+	for i, arg := range args {
+		if _, unwrapped := storedMySQLSpecialTypeExpr(arg); unwrapped {
+			result[i] = rawArgs[i]
+		}
+	}
+	return result
+}
+
+// useStoredMySQLSpecialTypesForNumericSubquery applies the numeric operand
+// contract in both directions.  Subquery references expose only one scalar
+// type for single-column results, so tuple comparisons must inspect the
+// subquery projection position-by-position rather than the tuple type itself.
+func (b *baseBinder) useStoredMySQLSpecialTypesForNumericSubquery(left, subqueryExpr *Expr) *Expr {
+	projectList := b.subqueryProjectList(subqueryExpr)
+	if len(projectList) == 0 {
+		return left
+	}
+
+	left = useStoredMySQLSpecialTypeForNumericProjection(left, projectList)
+	for i, project := range projectList {
+		if !numericSubqueryOperandAt(left, i) {
+			continue
+		}
+		if raw, ok := storedMySQLSpecialTypeExpr(project); ok {
+			projectList[i] = raw
+		}
+	}
+	return left
+}
+
+func (b *baseBinder) subqueryProjectList(expr *Expr) []*Expr {
+	if b.builder == nil || expr == nil || expr.GetSub() == nil {
+		return nil
+	}
+	nodeID := expr.GetSub().NodeId
+	if nodeID < 0 || int(nodeID) >= len(b.builder.qry.Nodes) {
+		return nil
+	}
+	return b.builder.qry.Nodes[nodeID].ProjectList
+}
+
+func useStoredMySQLSpecialTypeForNumericProjection(left *Expr, projects []*Expr) *Expr {
+	if left == nil || len(projects) == 0 {
+		return left
+	}
+	if list := left.GetList(); list != nil {
+		if len(list.List) != len(projects) {
+			return left
+		}
+		var result []*Expr
+		for i, item := range list.List {
+			if !makeTypeByPlan2Expr(projects[i]).IsNumeric() {
+				continue
+			}
+			raw, ok := storedMySQLSpecialTypeExpr(item)
+			if !ok {
+				continue
+			}
+			if result == nil {
+				result = append([]*Expr(nil), list.List...)
+			}
+			result[i] = raw
+		}
+		if result == nil {
+			return left
+		}
+		return &Expr{Typ: left.Typ, Expr: &plan.Expr_List{List: &plan.ExprList{List: result}}}
+	}
+	if len(projects) == 1 && makeTypeByPlan2Expr(projects[0]).IsNumeric() {
+		if raw, ok := storedMySQLSpecialTypeExpr(left); ok {
+			return raw
+		}
+	}
+	return left
+}
+
+func numericSubqueryOperandAt(left *Expr, index int) bool {
+	if left == nil {
+		return false
+	}
+	if list := left.GetList(); list != nil {
+		return index < len(list.List) && makeTypeByPlan2Expr(list.List[index]).IsNumeric()
+	}
+	return index == 0 && makeTypeByPlan2Expr(left).IsNumeric()
+}
+
+func isSetDisplayValueExpr(expr *Expr) bool {
+	if expr == nil {
+		return false
+	}
+	fn := expr.GetF()
+	return fn != nil && fn.Func != nil && fn.Func.ObjName == moSetCastIndexToValueFun
+}
+
+func isEnumOrSetDisplayValueExpr(expr *Expr) bool {
+	if isSetDisplayValueExpr(expr) {
+		return true
+	}
+	if expr == nil {
+		return false
+	}
+	fn := expr.GetF()
+	return fn != nil && fn.Func != nil && fn.Func.ObjName == moEnumCastIndexToValueFun
+}
+
+func quoteEnumOrSetDisplayValueAsJSON(ctx context.Context, expr *Expr) (*Expr, error) {
+	quoted, err := BindFuncExprImplByPlanExpr(ctx, "json_quote", []*Expr{expr})
+	if err != nil {
+		return nil, err
+	}
+	quoted.Typ.NotNullable = expr.Typ.NotNullable
+	return quoted, nil
 }
 
 func resetDateFunctionArgs(ctx context.Context, dateExpr *Expr, intervalExpr *Expr) ([]*Expr, error) {
@@ -3210,9 +5491,7 @@ func resetDateFunction(ctx context.Context, dateExpr *Expr, intervalExpr *Expr) 
 		List: make([]*Expr, 2),
 	}
 	list.List[0] = intervalExpr
-	strType := &plan.Type{
-		Id: int32(types.T_char),
-	}
+	strType := makeGeneratedPlan2Type(types.T_char, 0, 0, false)
 	strExpr := &Expr{
 		Expr: &plan.Expr_Lit{
 			Lit: &Const{
@@ -3221,7 +5500,7 @@ func resetDateFunction(ctx context.Context, dateExpr *Expr, intervalExpr *Expr) 
 				},
 			},
 		},
-		Typ: *strType,
+		Typ: strType,
 	}
 	list.List[1] = strExpr
 	expr := &plan.Expr_List{
@@ -3411,7 +5690,7 @@ func handleTupleIn(ctx context.Context, name string, leftList *plan.Expr_List, r
 }
 
 func foldNameConstArgs(ctx context.Context, proc *process.Process, args []*plan.Expr) error {
-	if err := validateNameConstArgs(ctx, args); err != nil {
+	if err := validateNameConstArgs(ctx, args, false); err != nil {
 		return err
 	}
 
@@ -3427,19 +5706,24 @@ func foldNameConstArgs(ctx context.Context, proc *process.Process, args []*plan.
 	return nil
 }
 
-func validateNameConstArgs(ctx context.Context, args []*plan.Expr) error {
+func validateNameConstArgs(
+	ctx context.Context,
+	args []*plan.Expr,
+	allowCanonicalStringCast bool,
+) error {
 	if len(args) != 2 {
 		return moerr.NewInvalidArg(ctx, "NAME_CONST", len(args))
 	}
 
 	nameLit := args[0].GetLit()
-	if nameLit == nil || nameLit.Isnull || !validNameConstValueExpr(args[1]) {
+	if nameLit == nil || nameLit.Isnull ||
+		!validNameConstValueExpr(args[1], allowCanonicalStringCast) {
 		return moerr.NewInvalidArg(ctx, "NAME_CONST", "")
 	}
 	return nil
 }
 
-func validNameConstValueExpr(arg *plan.Expr) bool {
+func validNameConstValueExpr(arg *plan.Expr, allowCanonicalStringCast bool) bool {
 	if arg == nil {
 		return false
 	}
@@ -3447,6 +5731,9 @@ func validNameConstValueExpr(arg *plan.Expr) bool {
 		return true
 	}
 	if isDecimalLiteralCast(arg) {
+		return true
+	}
+	if allowCanonicalStringCast && isCanonicalStringLiteralCast(arg) {
 		return true
 	}
 	fn := arg.GetF()
@@ -3464,22 +5751,26 @@ func validNameConstNameAst(args []tree.Expr) bool {
 		return false
 	}
 	name := stripNameConstParens(args[0])
-	nameLit, ok := name.(*tree.NumVal)
-	return ok && validNameConstNameLiteral(nameLit)
+	if nameLit, ok := name.(*tree.NumVal); ok {
+		return validNameConstNameLiteral(nameLit)
+	}
+	return false
 }
 
-func validNameConstValueAst(args []tree.Expr) bool {
+func validNameConstValueAst(args []tree.Expr, allowCanonicalStringCast bool) bool {
 	if len(args) != 2 {
 		return false
 	}
-	return validNameConstLiteralValueAst(args[1])
+	return validNameConstLiteralValueAst(args[1], allowCanonicalStringCast)
 }
 
-func validNameConstLiteralValueAst(expr tree.Expr) bool {
+func validNameConstLiteralValueAst(expr tree.Expr, allowCanonicalStringCast bool) bool {
 	expr = stripNameConstParens(expr)
 	switch value := expr.(type) {
 	case *tree.NumVal:
 		return true
+	case *tree.CastExpr:
+		return allowCanonicalStringCast && isCanonicalStringLiteralCastAst(value)
 	case *tree.UnaryExpr:
 		if value.Op != tree.UNARY_PLUS && value.Op != tree.UNARY_MINUS {
 			return false
@@ -3489,6 +5780,32 @@ func validNameConstLiteralValueAst(expr tree.Expr) bool {
 	default:
 		return false
 	}
+}
+
+func isCanonicalStringLiteralCastAst(expr tree.Expr) bool {
+	castExpr, ok := stripNameConstParens(expr).(*tree.CastExpr)
+	if !ok {
+		return false
+	}
+	lit, ok := stripNameConstParens(castExpr.Expr).(*tree.NumVal)
+	if !ok || lit.ValType != tree.P_hexnum {
+		return false
+	}
+	target, ok := castExpr.Type.(*tree.T)
+	return ok && target.InternalType.Family == tree.StringFamily
+}
+
+func isCanonicalStringLiteralCast(expr *plan.Expr) bool {
+	if expr == nil || expr.GetF() == nil || expr.GetF().Func == nil {
+		return false
+	}
+	fn := expr.GetF()
+	if fn.Func.GetObjName() != "cast" || len(fn.Args) != 2 {
+		return false
+	}
+	return fn.Args[0].GetLit() != nil &&
+		fn.Args[0].GetLit().IsBin &&
+		types.T(expr.Typ.Id) == types.T_varchar
 }
 
 func stripNameConstParens(expr tree.Expr) tree.Expr {

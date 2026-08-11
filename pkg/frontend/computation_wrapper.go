@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"maps"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
@@ -65,6 +66,10 @@ type TxnComputationWrapper struct {
 	runResult *util2.RunResult
 
 	ifIsExeccute bool
+	// stmtBorrowed is true only when stmt is retained by PrepareStmt and this
+	// wrapper must not return it to the AST pool. The zero value intentionally
+	// means owned so ordinary wrappers preserve their existing lifecycle.
+	stmtBorrowed bool
 	uuid         uuid.UUID
 	//holds values of params in the PREPARE
 	paramVals []any
@@ -79,6 +84,21 @@ type TxnComputationWrapper struct {
 	// can contain statements with different inline overrides, so this metadata
 	// must travel with the wrapper rather than live at request scope.
 	remapDb map[string]string
+
+	// schedulingSQL preserves the raw per-statement fragment, including
+	// optimizer comments. sqlOfStmt is intentionally sanitized for logging and
+	// therefore cannot carry statement-scoped scheduling intent.
+	schedulingSQL string
+
+	// Prepared SQL keeps the lexical mode from PREPARE time. An empty value is
+	// a valid mode, so prepared execution tracks its presence separately.
+	preparedSchedulingSQLMode    string
+	hasPreparedSchedulingSQLMode bool
+	preparedSchedulingSQL        string
+
+	// protocolVersion is captured when plan is built. The session plan cache
+	// uses it instead of the version observed later when execution completes.
+	protocolVersion int64
 }
 
 func InitTxnComputationWrapper(
@@ -108,6 +128,31 @@ func (cwft *TxnComputationWrapper) GetRemapDb() map[string]string {
 	return cwft.remapDb
 }
 
+func (cwft *TxnComputationWrapper) SetSchedulingSQL(sql string) {
+	cwft.schedulingSQL = sql
+}
+
+func (cwft *TxnComputationWrapper) SchedulingSQL() string {
+	return cwft.schedulingSQL
+}
+
+func (cwft *TxnComputationWrapper) schedulingSQLOr(fallback string) string {
+	if cwft.schedulingSQL != "" {
+		return cwft.schedulingSQL
+	}
+	return fallback
+}
+
+func (cwft *TxnComputationWrapper) querySchedulingIntentForPreparedStatement(
+	sql string,
+) schedule.SchedulingIntent {
+	if cwft.hasPreparedSchedulingSQLMode {
+		return querySchedulingIntentForStatementWithSQLMode(
+			cwft.ses, sql, cwft.preparedSchedulingSQLMode)
+	}
+	return querySchedulingIntentForStatement(cwft.ses, sql)
+}
+
 func (cwft *TxnComputationWrapper) Plan() *plan.Plan {
 	return cwft.plan
 }
@@ -116,6 +161,7 @@ func (cwft *TxnComputationWrapper) ResetPlanAndStmt(stmt tree.Statement) {
 	cwft.plan = nil
 	cwft.freeStmt()
 	cwft.stmt = stmt
+	cwft.stmtBorrowed = false
 }
 
 func (cwft *TxnComputationWrapper) GetAst() tree.Statement {
@@ -128,12 +174,11 @@ func (cwft *TxnComputationWrapper) Free() {
 }
 
 func (cwft *TxnComputationWrapper) freeStmt() {
-	if cwft.stmt != nil {
-		if !cwft.ifIsExeccute {
-			cwft.stmt.Free()
-			cwft.stmt = nil
-		}
+	if cwft.stmt != nil && !cwft.stmtBorrowed {
+		cwft.stmt.Free()
 	}
+	cwft.stmt = nil
+	cwft.stmtBorrowed = false
 }
 
 func (cwft *TxnComputationWrapper) Clear() {
@@ -146,6 +191,10 @@ func (cwft *TxnComputationWrapper) Clear() {
 	cwft.prepareName = ""
 	cwft.binaryPrepare = false
 	cwft.remapDb = nil
+	cwft.schedulingSQL = ""
+	cwft.preparedSchedulingSQLMode = ""
+	cwft.hasPreparedSchedulingSQLMode = false
+	cwft.preparedSchedulingSQL = ""
 	cwft.schedulingTrace.Reset()
 }
 
@@ -222,6 +271,16 @@ func checkResultQueryPrivilege(proc *process.Process, p *plan.Plan, reqCtx conte
 	return checkPrivilege(sid, ids, reqCtx, ses)
 }
 
+func preparedStatementOwner(ctx context.Context, ses FeSession) (*Session, error) {
+	if owner, ok := ses.(*Session); ok {
+		return owner, nil
+	}
+	if backSes, ok := ses.(*backSession); ok && backSes.upstream != nil {
+		return backSes.upstream, nil
+	}
+	return nil, moerr.NewInternalError(ctx, "prepared statement session has no client owner")
+}
+
 // Compile build logical plan and then build physical plan `Compile` object
 func (cwft *TxnComputationWrapper) Compile(any any, fill func(*batch.Batch, *perfcounter.CounterSet) error) (_ interface{}, err error) {
 	var originSQL string
@@ -242,7 +301,14 @@ func (cwft *TxnComputationWrapper) Compile(any any, fill func(*batch.Batch, *per
 
 	cacheHit := cwft.plan != nil
 	if !cacheHit {
-		cwft.plan, err = buildPlan(execCtx.reqCtx, cwft.ses, cwft.ses.GetTxnCompileCtx(), cwft.stmt)
+		cwft.protocolVersion = currentProtocolVersion(cwft.proc)
+		cwft.plan, err = buildPlanWithPrepareMode(
+			execCtx.reqCtx,
+			cwft.ses,
+			cwft.ses.GetTxnCompileCtx(),
+			cwft.stmt,
+			execCtx.input.isPreparedExpr(),
+		)
 		if err != nil {
 			return nil, err
 		}
@@ -277,50 +343,74 @@ func (cwft *TxnComputationWrapper) Compile(any any, fill func(*batch.Batch, *per
 	}
 
 	if _, isTextProtExecute := cwft.stmt.(*tree.Execute); isTextProtExecute || execCtx.input.isBinaryProtExecute {
+		owner, ownerErr := preparedStatementOwner(execCtx.reqCtx, cwft.ses)
+		if ownerErr != nil {
+			return nil, ownerErr
+		}
 		var retComp *compile.Compile
 		var plan *plan.Plan
 		var stmt tree.Statement
 		var sql string
+		var stmtOwned bool
 		if isTextProtExecute {
 			executePlan := cwft.plan.GetDcl().GetExecute()
-			retComp, plan, stmt, sql, err = initExecuteStmtParam(execCtx, cwft.ses.(*Session), cwft, executePlan, executePlan.GetName())
+			retComp, plan, stmt, sql, stmtOwned, err = initExecuteStmtParamInSession(
+				execCtx, owner, cwft.ses, cwft, executePlan, executePlan.GetName())
 			if err != nil {
 				return nil, err
 			}
-			authStats, err := authenticatePreparedDDLOwnerStatement(execCtx.reqCtx, cwft.ses.(*Session), stmt, plan)
-			if err != nil {
-				return nil, err
+			if stmtOwned {
+				cwft.stmt.Free()
+				cwft.stmt = stmt
+				cwft.stmtBorrowed = false
 			}
-			stats.PermissionAuth.Add(&authStats)
-			authStats, err = checkResultQueryPrivilege(cwft.proc, plan, execCtx.reqCtx, cwft.ses.GetService(), cwft.ses.(*Session))
-			if err != nil {
-				return nil, err
+			if !cwft.ses.IsBackgroundSession() {
+				authStats, err := authenticatePreparedDDLOwnerStatement(execCtx.reqCtx, owner, stmt, plan)
+				if err != nil {
+					return nil, err
+				}
+				stats.PermissionAuth.Add(&authStats)
+				authStats, err = checkResultQueryPrivilege(cwft.proc, plan, execCtx.reqCtx, cwft.ses.GetService(), owner)
+				if err != nil {
+					return nil, err
+				}
+				stats.PermissionAuth.Add(&authStats)
 			}
-			stats.PermissionAuth.Add(&authStats)
 
 			cwft.plan = plan
-			cwft.stmt.Free()
-			// reset plan & stmt
-			cwft.stmt = stmt
+			if !stmtOwned {
+				cwft.stmt.Free()
+				cwft.stmt = stmt
+				cwft.stmtBorrowed = true
+			}
 		} else {
 			// binary protocol execute
-			retComp, plan, stmt, sql, err = initExecuteStmtParam(execCtx, cwft.ses.(*Session), cwft, nil, execCtx.input.stmtName)
+			retComp, plan, stmt, sql, stmtOwned, err = initExecuteStmtParamInSession(
+				execCtx, owner, cwft.ses, cwft, nil, execCtx.input.stmtName)
 			if err != nil {
 				return nil, err
 			}
 			if plan != nil {
 				cwft.plan = plan
 			}
-			if stmt != nil {
+			if stmt != nil && stmtOwned {
 				cwft.stmt = stmt
+				cwft.stmtBorrowed = false
 			}
-			authStats, err := authenticatePreparedDDLOwnerStatement(execCtx.reqCtx, cwft.ses.(*Session), cwft.stmt, cwft.plan)
-			if err != nil {
-				return nil, err
+			if !cwft.ses.IsBackgroundSession() {
+				authStats, err := authenticatePreparedDDLOwnerStatement(
+					execCtx.reqCtx, owner, stmt, cwft.plan)
+				if err != nil {
+					return nil, err
+				}
+				stats.PermissionAuth.Add(&authStats)
 			}
-			stats.PermissionAuth.Add(&authStats)
+			if stmt != nil && !stmtOwned {
+				cwft.stmt = stmt
+				cwft.stmtBorrowed = true
+			}
 		}
-		refreshProcessDivByZeroProfileForPreparedStmt(cwft.proc, stmt)
+		refreshProcessStmtProfileForPreparedStmt(cwft.proc, stmt)
 		originSQL = sql
 		cwft.ifIsExeccute = true
 
@@ -335,11 +425,17 @@ func (cwft *TxnComputationWrapper) Compile(any any, fill func(*batch.Batch, *per
 		}
 
 		if retComp == nil {
+			var schedulingSQLMode *string
+			if cwft.hasPreparedSchedulingSQLMode {
+				schedulingSQLMode = &cwft.preparedSchedulingSQLMode
+			}
 			cwft.compile, err = createCompile(
 				execCtx,
 				cwft.ses,
 				cwft.proc,
 				cwft.ses.GetSql(),
+				originSQL,
+				schedulingSQLMode,
 				cwft.stmt,
 				cwft.plan,
 				fill,
@@ -353,8 +449,18 @@ func (cwft *TxnComputationWrapper) Compile(any any, fill func(*batch.Batch, *per
 		} else {
 			// retComp
 			cwft.proc.ReplaceTopCtx(execCtx.reqCtx)
+			// originSQL is the prepared statement text here; the wrapper carries
+			// the outer EXECUTE fragment, which cannot contain the inner hint.
+			retComp.SetQuerySchedulingIntent(cwft.querySchedulingIntentForPreparedStatement(originSQL))
 			retComp.SetSchedulingTraceRecorder(&cwft.schedulingTrace)
-			retComp.Reset(cwft.proc, getStatementStartAt(execCtx.reqCtx), fill, cwft.ses.GetSql())
+			if err = retComp.Reset(
+				cwft.proc,
+				getStatementStartAt(execCtx.reqCtx),
+				compileOutputCallback(cwft.stmt, fill),
+				cwft.ses.GetSql(),
+			); err != nil {
+				return nil, err
+			}
 			cwft.compile = retComp
 		}
 
@@ -371,6 +477,8 @@ func (cwft *TxnComputationWrapper) Compile(any any, fill func(*batch.Batch, *per
 			cwft.ses,
 			cwft.proc,
 			execCtx.sqlOfStmt,
+			cwft.schedulingSQLOr(execCtx.sqlOfStmt),
+			nil,
 			cwft.stmt,
 			cwft.plan,
 			fill,
@@ -449,15 +557,16 @@ func (cwft *TxnComputationWrapper) RecordCompoundStmt(ctx context.Context, stats
 	return nil
 }
 
+// StatsCompositeSubStmtResource returns the legacy plan-statistics projection
+// for a composite child statement. The caller owns the returned value; it is
+// deliberately not merged into the authoritative resource root.
 func (cwft *TxnComputationWrapper) StatsCompositeSubStmtResource(ctx context.Context) (statsByte statistic.StatsArray) {
 	waitActiveCost := time.Duration(0)
 	if handler := cwft.ses.GetTxnHandler(); handler.InActiveTxn() {
-		txn := handler.GetTxn()
-		if txn != nil {
+		if txn := handler.GetTxn(); txn != nil {
 			waitActiveCost = txn.GetWaitActiveCost()
 		}
 	}
-
 	h := NewMarshalPlanHandlerCompositeSubStmt(ctx, cwft.plan, WithWaitActiveCost(waitActiveCost))
 	statsByte, _ = h.Stats(ctx, cwft.ses)
 	return statsByte
@@ -502,65 +611,258 @@ func getStatementStartAt(ctx context.Context) time.Time {
 }
 
 func CheckTableDefChange(catalogCache *cache.CatalogCache, tblKey *cache.TableChangeQuery) bool {
+	if catalogCache == nil {
+		return false
+	}
 	return catalogCache.HasNewerVersion(tblKey)
+}
+
+func preparePlanNeedsRebuild(schemaChanged, modeMismatch, protocolMismatch bool) bool {
+	return schemaChanged || modeMismatch || protocolMismatch
+}
+
+func rebuildPreparePlan(
+	execCtx *ExecCtx,
+	executionSes FeSession,
+	prepareStmt *PrepareStmt,
+	buildFn func(context.Context, FeSession, plan2.CompilerContext, tree.Statement) (*plan2.Plan, error),
+) (*plan2.Plan, error) {
+	innerStmt, owned, err := freshPreparedCloneStatement(execCtx.reqCtx, prepareStmt)
+	if err != nil {
+		return nil, err
+	}
+	if owned {
+		defer innerStmt.Free()
+	}
+	originPrepareStmt := &tree.PrepareStmt{
+		Name: tree.Identifier(prepareStmt.Name),
+		Stmt: innerStmt,
+	}
+	var newPlan *plan2.Plan
+	err = execCtx.withRootSQL(prepareStmt.Sql, func() (err error) {
+		compilerCtx := executionSes.GetTxnCompileCtx()
+		currentDatabase := compilerCtx.GetDatabase()
+		compilerCtx.SetDatabase(prepareStmt.defaultDatabase)
+		defer compilerCtx.SetDatabase(currentDatabase)
+		newPlan, err = buildFn(execCtx.reqCtx, executionSes, compilerCtx, originPrepareStmt)
+		return err
+	})
+	return newPlan, err
 }
 
 // initExecuteStmtParam replaces the plan of the EXECUTE by the plan generated by
 // the PREPARE and setups the params for the plan.
-func initExecuteStmtParam(execCtx *ExecCtx, ses *Session, cwft *TxnComputationWrapper, execPlan *plan.Execute, stmtName string) (*compile.Compile, *plan.Plan, tree.Statement, string, error) {
+func initExecuteStmtParam(execCtx *ExecCtx, ses *Session, cwft *TxnComputationWrapper, execPlan *plan.Execute, stmtName string) (*compile.Compile, *plan.Plan, tree.Statement, string, bool, error) {
+	return initExecuteStmtParamInSession(execCtx, ses, ses, cwft, execPlan, stmtName)
+}
+
+func initExecuteStmtParamInSession(
+	execCtx *ExecCtx,
+	owner *Session,
+	executionSes FeSession,
+	cwft *TxnComputationWrapper,
+	execPlan *plan.Execute,
+	stmtName string,
+) (*compile.Compile, *plan.Plan, tree.Statement, string, bool, error) {
+	return initExecuteStmtParamWithResolverInSession(
+		execCtx,
+		owner,
+		executionSes,
+		cwft,
+		execPlan,
+		stmtName,
+		executionSes.GetTxnCompileCtx().Resolve,
+	)
+}
+
+type preparedSchemaResolver func(
+	databaseName string,
+	tableName string,
+	snapshot *plan.Snapshot,
+) (*plan.ObjectRef, *plan.TableDef, error)
+
+func initExecuteStmtParamWithResolver(
+	execCtx *ExecCtx,
+	ses *Session,
+	cwft *TxnComputationWrapper,
+	execPlan *plan.Execute,
+	stmtName string,
+	resolve preparedSchemaResolver,
+) (*compile.Compile, *plan.Plan, tree.Statement, string, bool, error) {
+	return initExecuteStmtParamWithResolverInSession(execCtx, ses, ses, cwft, execPlan, stmtName, resolve)
+}
+
+func binaryProtocolPrepareParamKind(
+	mysqlType defines.MysqlType,
+	isUnsigned bool,
+	value []byte,
+) vector.PrepareParamKind {
+	switch mysqlType {
+	case defines.MYSQL_TYPE_TINY:
+		// The binary protocol has no usable Boolean parameter type. Go's
+		// database/sql MySQL driver sends bool values as signed TINY 0/1, while
+		// other clients can use TINY for integers. Preserve unsigned and other
+		// TINY values as integers and restore the driver's bool values.
+		if !isUnsigned && (bytes.Equal(value, []byte("0")) || bytes.Equal(value, []byte("1"))) {
+			return vector.PrepareParamBoolean
+		}
+		return vector.PrepareParamInteger
+	case defines.MYSQL_TYPE_SHORT, defines.MYSQL_TYPE_INT24,
+		defines.MYSQL_TYPE_LONG, defines.MYSQL_TYPE_LONGLONG, defines.MYSQL_TYPE_BIT,
+		defines.MYSQL_TYPE_YEAR:
+		return vector.PrepareParamInteger
+	case defines.MYSQL_TYPE_FLOAT, defines.MYSQL_TYPE_DOUBLE:
+		return vector.PrepareParamFloat
+	case defines.MYSQL_TYPE_DECIMAL, defines.MYSQL_TYPE_NEWDECIMAL:
+		return vector.PrepareParamDecimal
+	default:
+		return vector.PrepareParamNone
+	}
+}
+
+func initExecuteStmtParamWithResolverInSession(
+	execCtx *ExecCtx,
+	owner *Session,
+	executionSes FeSession,
+	cwft *TxnComputationWrapper,
+	execPlan *plan.Execute,
+	stmtName string,
+	resolve preparedSchemaResolver,
+) (*compile.Compile, *plan.Plan, tree.Statement, string, bool, error) {
 	reqCtx := execCtx.reqCtx
 	if execPlan != nil { // binary protocol, don't have to buildplan, execPlan is nil
 		stmtName = execPlan.GetName()
 	}
-	prepareStmt, err := ses.GetPrepareStmt(reqCtx, stmtName)
+	prepareStmt, err := owner.GetPrepareStmt(reqCtx, stmtName)
 	if err != nil {
-		return nil, nil, nil, "", err
+		return nil, nil, nil, "", false, err
 	}
 	originSQL := prepareStmt.Sql
 	preparePlan := prepareStmt.PreparePlan.GetDcl().GetPrepare()
+	currentNativeMode := owner.sqlModeHasMatrixOneNative()
+	currentOnlyFullGroupBy := owner.sqlModeHasOnlyFullGroupBy()
 
 	// TODO check if schema change, obj.Obj is zero all the time in 0.6
-	eng := ses.proc.Base.SessionInfo.StorageEngine
+	eng := cwft.proc.Base.SessionInfo.StorageEngine
 	catalogCache := eng.(*disttae.Engine).GetLatestCatalogCache()
 
-	var change bool
+	currentTempTableVersion := owner.GetTempTableVersion()
+	currentDDLVersion := owner.getDDLVersion()
+	change := prepareStmt.tempTableVersion != currentTempTableVersion ||
+		prepareStmt.ddlVersion != currentDDLVersion
+	var preparedMetadataTS timestamp.Timestamp
+	if catalogCache != nil {
+		preparedMetadataTS = catalogCache.GetPreparedMetadataTS()
+	}
+	validateSubscriptions := preparedSubscriptionsNeedValidation(
+		preparedMetadataTS, prepareStmt.Ts, prepareStmt.preparedMetadataCheckTS)
+	validateNamedSnapshots := preparedNamedSnapshotsNeedValidation(
+		preparePlan.GetSchemas(), preparedMetadataTS, prepareStmt.Ts, prepareStmt.preparedMetadataCheckTS)
+	if validateNamedSnapshots {
+		change = true
+	}
 	for _, obj := range preparePlan.GetSchemas() {
-		accountId := ses.GetAccountId()
-		if ShouldSwitchToSysAccount(obj.SchemaName, obj.ObjName) {
-			accountId = uint32(sysAccountID)
+		if obj.GetSubscriptionName() != "" && validateSubscriptions {
+			subscriptionChanged, err := preparedSubscriptionSchemaChanged(resolve, obj)
+			if err != nil {
+				return nil, nil, nil, "", false, err
+			}
+			if subscriptionChanged {
+				change = true
+				break
+			}
 		}
+		// A historical dependency is immutable at its captured snapshot. Newer
+		// versions of the current object must not invalidate that plan.
+		if plan2.IsSnapshotValid(obj.GetSnapshot()) {
+			continue
+		}
+		accountId := prepareSchemaAccountID(owner.GetAccountId(), obj)
 		tblKey := &cache.TableChangeQuery{
-			AccountId:  accountId,
-			DatabaseId: uint64(obj.Db),
-			Name:       obj.ObjName,
-			Version:    uint32(obj.Server),
-			TableId:    uint64(obj.Obj),
-			Ts:         prepareStmt.Ts,
+			AccountId:    accountId,
+			DatabaseId:   uint64(obj.Db),
+			DatabaseName: obj.SchemaName,
+			Name:         obj.ObjName,
+			Version:      uint32(obj.Server),
+			TableId:      uint64(obj.Obj),
+			Ts:           prepareStmt.Ts,
 		}
 
-		change = CheckTableDefChange(catalogCache, tblKey)
-		if change {
+		if CheckTableDefChange(catalogCache, tblKey) {
+			change = true
 			break
 		}
 	}
-
-	// rebuild plan when schema changed
-	if change {
-		originPrepareStmt := &tree.PrepareStmt{
-			Name: tree.Identifier(prepareStmt.Name),
-			Stmt: prepareStmt.PrepareStmt,
-		}
-		newPlan, err := buildPlan(reqCtx, ses, ses.GetTxnCompileCtx(), originPrepareStmt)
-		if err != nil {
-			return nil, nil, nil, "", err
-		}
-		preparePlan = newPlan.GetDcl().GetPrepare()
-		prepareStmt.PreparePlan = newPlan
-		prepareStmt.Ts = timestamp.Timestamp{PhysicalTime: time.Now().Unix()}
+	if !change && validateSubscriptions {
+		prepareStmt.preparedMetadataCheckTS = preparedMetadataTS
 	}
 
-	// Recreate the cached compile only when the schema changed. Without a
-	// schema change the cached compile is reused as-is: Compile.Reset clears
+	// These DDL plans cache catalog state that is not represented by a table
+	// schema version. CREATE PITR stores account/database/table IDs, while DROP
+	// DATABASE validates publication rows. Refresh them on every EXECUTE so a
+	// catalog change between PREPARE and EXECUTE cannot bypass validation or
+	// persist a stale object ID.
+	if preparedDDLNeedsCatalogRefresh(prepareStmt.PrepareStmt) {
+		change = true
+	}
+
+	// FK-sensitive plans also depend on the current foreign_key_checks session
+	// value, which does not invalidate prepared statements. Rebuild them for
+	// every EXECUTE so both enabled->disabled and disabled->enabled transitions
+	// observe the current setting.
+	fkSensitive := shouldRebuildPreparePlan(false, preparePlan.Plan)
+	modeMismatch := prepareStmt.NativeMode != currentNativeMode ||
+		prepareStmt.onlyFullGroupBySet && prepareStmt.OnlyFullGroupBy != currentOnlyFullGroupBy
+	protocolVersion := currentProtocolVersion(cwft.proc)
+	protocolMismatch := prepareStmt.protocolVersion != 0 &&
+		prepareStmt.protocolVersion != protocolVersion
+	needRebuild := preparePlanNeedsRebuild(change, modeMismatch, protocolMismatch) || fkSensitive
+
+	// Rebuild the plan when catalog schema, session temporary-table name
+	// resolution, FK-check state, protocol, or compatibility mode changed.
+	if needRebuild {
+		newPlan, err := rebuildPreparePlan(execCtx, executionSes, prepareStmt, buildPlan)
+		if err != nil {
+			return nil, nil, nil, "", false, err
+		}
+		prepareTs := currentTxnSnapshotTSForProcess(cwft.proc)
+		newPreparePlan := newPlan.GetDcl().GetPrepare()
+		var txnHaveDDL bool
+		switch prepareStmt.PrepareStmt.(type) {
+		case *tree.ExplainStmt, *tree.ExplainAnalyze, *tree.ExplainPhyPlan:
+			txnHaveDDL = sessionTxnHaveDDL(executionSes)
+		}
+		columns := getPreparedResultColumnsFromPlan(
+			prepareStmt.PrepareStmt, newPlan, txnHaveDDL)
+		resper := execCtx.resper
+		if executionSes.IsBackgroundSession() {
+			resper = owner.GetResponser()
+		}
+		newColDefData, err := resper.MysqlRrWr().MakeColumnDefData(reqCtx, columns)
+		if err != nil {
+			return nil, nil, nil, "", false, err
+		}
+
+		preparePlan = newPreparePlan
+		prepareStmt.PreparePlan = newPlan
+		prepareStmt.ColDefData = newColDefData
+		if execCtx.input != nil && execCtx.input.isBinaryProtExecute {
+			execCtx.prepareColDef = newColDefData
+		}
+		prepareStmt.NativeMode = currentNativeMode
+		prepareStmt.OnlyFullGroupBy = currentOnlyFullGroupBy
+		prepareStmt.onlyFullGroupBySet = true
+		prepareStmt.Ts = prepareTs
+		prepareStmt.tempTableVersion = currentTempTableVersion
+		prepareStmt.ddlVersion = currentDDLVersion
+		// The rebuilt plan has incorporated the metadata visible through this
+		// high-watermark. A later logtail event will advance it again.
+		prepareStmt.preparedMetadataCheckTS = preparedMetadataTS
+		prepareStmt.protocolVersion = protocolVersion
+	}
+
+	// Recreate the cached compile only when a plan dependency changed.
+	// Otherwise the cached compile is reused as-is: Compile.Reset clears
 	// the per-execution state, including the pipeline edges' terminal state
 	// (see Scope.resetForReuse), so reuse is safe and avoids the
 	// per-execution recompilation overhead that regressed TPCC. A nil cache
@@ -568,62 +870,280 @@ func initExecuteStmtParam(execCtx *ExecCtx, ses *Session, cwft *TxnComputationWr
 	// query); recompiling would fail with ErrCantCompileForPrepare on every
 	// execution, so leave it to the regular compile path (isPrepare=false).
 	// See: https://github.com/matrixorigin/matrixone/issues/25614
-	if change && prepareStmt.compile != nil {
+	if needRebuild && prepareStmt.compile != nil {
 		prepareStmt.compile.FreeOperator()
 		prepareStmt.compile.SetIsPrepare(false)
 		prepareStmt.compile.Release()
 		prepareStmt.compile = nil
 
-		if _, ok := preparePlan.Plan.Plan.(*plan.Plan_Query); ok && shouldCachePrepareCompile(preparePlan.Plan) {
-			// Prepare-time compiles are cached and must not retain a statement-owned trace.
-			// The execution path attaches the current wrapper trace after cache retrieval.
-			comp, err := createCompile(execCtx, ses, ses.proc, originSQL, prepareStmt.PrepareStmt, preparePlan.Plan, ses.GetOutputCallback(execCtx), true, nil)
-			if err != nil {
-				if !moerr.IsMoErrCode(err, moerr.ErrCantCompileForPrepare) {
-					return nil, nil, nil, "", err
+		executionIntent := querySchedulingIntentForStatementWithSQLMode(
+			owner, originSQL, prepareStmt.schedulingSQLMode)
+		if !executionSes.IsBackgroundSession() {
+			if _, ok := preparePlan.Plan.Plan.(*plan.Plan_Query); ok &&
+				shouldCachePrepareCompile(preparePlan.Plan) && !executionIntent.Explicit {
+				// Prepare-time compiles are cached and must not retain a statement-owned trace.
+				// The execution path attaches the current wrapper trace after cache retrieval.
+				comp, err := createCompile(execCtx, executionSes, cwft.proc, originSQL, originSQL, &prepareStmt.schedulingSQLMode, prepareStmt.PrepareStmt, preparePlan.Plan, owner.GetOutputCallback(execCtx), true, nil)
+				if err != nil {
+					if !moerr.IsMoErrCode(err, moerr.ErrCantCompileForPrepare) {
+						return nil, nil, nil, "", false, err
+					}
 				}
+				// do not save ap query now()
+				if comp != nil && !comp.IsTpQuery() {
+					comp.SetIsPrepare(false)
+					comp.Release()
+					comp = nil
+				}
+				prepareStmt.compile = comp
 			}
-			// do not save ap query now()
-			if comp != nil && !comp.IsTpQuery() {
-				comp.SetIsPrepare(false)
-				comp.Release()
-				comp = nil
-			}
-			prepareStmt.compile = comp
 		}
 	}
 	numParams := len(preparePlan.ParamTypes)
+	cwft.paramVals = nil
 	if prepareStmt.params != nil && prepareStmt.params.Length() > 0 { // use binary protocol
 		if prepareStmt.params.Length() != numParams {
-			return nil, nil, nil, originSQL, moerr.NewInvalidInput(reqCtx, "Incorrect arguments to EXECUTE")
+			return nil, nil, nil, originSQL, false, moerr.NewInvalidInput(reqCtx, "Incorrect arguments to EXECUTE")
 		}
-		cwft.proc.SetPrepareParams(prepareStmt.params)
+		paramCount := prepareStmt.params.Length()
+		var kinds []vector.PrepareParamKind
+		for i := 0; i < paramCount && i*2+1 < len(prepareStmt.ParamTypes); i++ {
+			mysqlType := defines.MysqlType(prepareStmt.ParamTypes[i*2])
+			isUnsigned := prepareStmt.ParamTypes[i*2+1]&0x80 != 0
+			kind := binaryProtocolPrepareParamKind(
+				mysqlType, isUnsigned, prepareStmt.params.GetRawBytesAt(i))
+			if kind != vector.PrepareParamNone {
+				if kinds == nil {
+					kinds = make([]vector.PrepareParamKind, paramCount)
+				}
+				kinds[i] = kind
+			}
+		}
+		if kinds == nil {
+			cwft.proc.SetPrepareParams(prepareStmt.params)
+		} else {
+			cwft.proc.SetPrepareParamsWithMeta(prepareStmt.params, nil, kinds)
+		}
+		cwft.paramVals, err = preparedParamValues(cwft.proc)
+		if err != nil {
+			return nil, nil, nil, originSQL, false, err
+		}
 	} else if execPlan != nil && len(execPlan.Args) > 0 {
 		if len(execPlan.Args) != numParams {
-			return nil, nil, nil, originSQL, moerr.NewInvalidInput(reqCtx, "Incorrect arguments to EXECUTE")
+			return nil, nil, nil, originSQL, false, moerr.NewInvalidInput(reqCtx, "Incorrect arguments to EXECUTE")
 		}
-		params := vector.NewVec(types.T_text.ToType())
-		paramVals := make([]any, numParams)
-		for i, arg := range execPlan.Args {
-			exprImpl := arg.Expr.(*plan.Expr_V)
-			param, err := cwft.proc.GetResolveVariableFunc()(exprImpl.V.Name, exprImpl.V.System, exprImpl.V.Global)
-			if err != nil {
-				return nil, nil, nil, originSQL, err
-			}
-			err = util.AppendAnyToStringVector(cwft.proc, param, params)
-			if err != nil {
-				return nil, nil, nil, originSQL, err
-			}
-			paramVals[i] = param
+		params, paramVals, paramIsBin, paramKinds, err := buildExecuteUserParams(cwft.proc, execPlan.Args)
+		if err != nil {
+			return nil, nil, nil, originSQL, false, err
 		}
-		cwft.proc.SetPrepareParams(params)
+		cwft.proc.SetOwnedPrepareParamsWithMeta(params, paramIsBin, paramKinds)
 		cwft.paramVals = paramVals
 	} else {
 		if numParams > 0 {
-			return nil, nil, nil, originSQL, moerr.NewInvalidInput(reqCtx, "Incorrect arguments to EXECUTE")
+			return nil, nil, nil, originSQL, false, moerr.NewInvalidInput(reqCtx, "Incorrect arguments to EXECUTE")
 		}
 	}
-	return prepareStmt.compile, preparePlan.Plan, prepareStmt.PrepareStmt, originSQL, nil
+	// A cached prepared Compile already owns a materialized worker topology.
+	// Explicit scheduling intent must be evaluated for this execution, so it
+	// cannot reuse a topology compiled under the prepare-time defaults. Keep a
+	// default cached topology dormant, though: prepared compiles already coexist
+	// with other statement compiles on the session process, and it may become
+	// reusable if a session-level scheduling override is later cleared.
+	cwft.preparedSchedulingSQLMode = prepareStmt.schedulingSQLMode
+	cwft.hasPreparedSchedulingSQLMode = true
+	cwft.preparedSchedulingSQL = originSQL
+	retComp := prepareStmt.compile
+	if executionSes.IsBackgroundSession() {
+		// A cached compile owns pipelines tied to the client process used at
+		// PREPARE time. A procedure executes with a distinct background process.
+		retComp = nil
+	}
+	if retComp != nil && querySchedulingIntentForStatementWithSQLMode(
+		owner, originSQL, prepareStmt.schedulingSQLMode).Explicit {
+		retComp = nil
+	}
+	executionStmt, owned, err := freshPreparedCloneStatement(reqCtx, prepareStmt)
+	if err != nil {
+		return nil, nil, nil, "", false, err
+	}
+	return retComp, preparePlan.Plan, executionStmt, originSQL, owned, nil
+}
+
+func prepareSchemaAccountID(currentAccountID uint32, obj *plan.ObjectRef) uint32 {
+	if obj.GetPubInfo() != nil {
+		return uint32(obj.GetPubInfo().GetTenantId())
+	}
+	if ShouldSwitchToSysAccount(obj.SchemaName, obj.ObjName) {
+		return uint32(sysAccountID)
+	}
+	return currentAccountID
+}
+
+func currentTxnSnapshotTS(ses *Session) timestamp.Timestamp {
+	if ses == nil || ses.GetProc() == nil {
+		return timestamp.Timestamp{}
+	}
+	return currentTxnSnapshotTSForProcess(ses.GetProc())
+}
+
+func currentTxnSnapshotTSForProcess(proc *process.Process) timestamp.Timestamp {
+	if proc == nil {
+		return timestamp.Timestamp{}
+	}
+	txnOperator := proc.GetTxnOperator()
+	if txnOperator == nil {
+		return timestamp.Timestamp{}
+	}
+	return txnOperator.SnapshotTS()
+}
+
+func preparedSubscriptionsNeedValidation(
+	metadataTS timestamp.Timestamp,
+	prepareTS timestamp.Timestamp,
+	checkedTS timestamp.Timestamp,
+) bool {
+	return metadataTS.Greater(checkedTS) && metadataTS.Greater(prepareTS)
+}
+
+func preparedNamedSnapshotsNeedValidation(
+	schemas []*plan.ObjectRef,
+	metadataTS timestamp.Timestamp,
+	prepareTS timestamp.Timestamp,
+	checkedTS timestamp.Timestamp,
+) bool {
+	if !preparedSubscriptionsNeedValidation(metadataTS, prepareTS, checkedTS) {
+		return false
+	}
+	for _, schema := range schemas {
+		if schema.GetSnapshot().GetExtraInfo().GetName() != "" {
+			return true
+		}
+	}
+	return false
+}
+
+func preparedSubscriptionSchemaChanged(resolve preparedSchemaResolver, expected *plan.ObjectRef) (bool, error) {
+	if expected.GetPubInfo() == nil {
+		return true, nil
+	}
+	currentRef, currentDef, err := resolve(
+		expected.GetSubscriptionName(),
+		expected.GetObjName(),
+		nil,
+	)
+	if err != nil {
+		return false, err
+	}
+	if currentRef == nil || currentDef == nil || currentRef.GetPubInfo() == nil {
+		return true, nil
+	}
+	expectedTenant := expected.GetPubInfo().GetTenantId()
+	if plan2.IsSnapshotValid(expected.GetSnapshot()) {
+		if currentRef.GetSubscriptionName() != expected.GetSubscriptionName() ||
+			currentRef.GetPubInfo().GetTenantId() != expectedTenant {
+			return true, nil
+		}
+		currentRef, currentDef, err = resolve(
+			expected.GetSubscriptionName(),
+			expected.GetObjName(),
+			expected.GetSnapshot(),
+		)
+		if err != nil {
+			return false, err
+		}
+		if currentRef == nil || currentDef == nil || currentRef.GetPubInfo() == nil {
+			return true, nil
+		}
+	}
+	return currentRef.GetSubscriptionName() != expected.GetSubscriptionName() ||
+		currentRef.GetPubInfo().GetTenantId() != expectedTenant ||
+		currentRef.GetSchemaName() != expected.GetSchemaName() ||
+		currentRef.GetObjName() != expected.GetObjName() ||
+		currentRef.GetObj() != expected.GetObj() ||
+		currentDef.GetDbId() != uint64(expected.GetDb()) ||
+		currentDef.GetTblId() != uint64(expected.GetObj()) ||
+		currentDef.GetVersion() != uint32(expected.GetServer()), nil
+}
+
+func preparedDDLNeedsCatalogRefresh(stmt tree.Statement) bool {
+	switch ddl := stmt.(type) {
+	case *tree.CreateDatabase:
+		return ddl.SubscriptionOption != nil
+	case *tree.CreatePitr, *tree.DropDatabase, *tree.CloneTable:
+		return true
+	default:
+		return false
+	}
+}
+
+func preparedParamValues(proc *process.Process) ([]any, error) {
+	params := proc.GetPrepareParams()
+	if params == nil || params.Length() == 0 {
+		return nil, nil
+	}
+	values := make([]any, params.Length())
+	for i := range values {
+		if params.IsNull(uint64(i)) {
+			continue
+		}
+		raw, err := proc.GetPrepareParamsAt(i)
+		if err != nil {
+			return nil, err
+		}
+		values[i] = plan2.ParamValue{Value: string(raw), IsBin: proc.GetPrepareParamIsBin(i)}
+	}
+	return values, nil
+}
+
+func buildExecuteUserParams(
+	proc *process.Process,
+	args []*plan.Expr,
+) (
+	params *vector.Vector,
+	paramVals []any,
+	paramIsBin []bool,
+	paramKinds []vector.PrepareParamKind,
+	err error,
+) {
+	params = vector.NewVec(types.T_text.ToType())
+	defer func() {
+		if err != nil {
+			params.Free(proc.Mp())
+		}
+	}()
+	paramVals = make([]any, len(args))
+	paramIsBin = make([]bool, len(args))
+	paramKinds = make([]vector.PrepareParamKind, len(args))
+	for i, arg := range args {
+		exprImpl := arg.Expr.(*plan.Expr_V)
+		var param any
+		param, err = proc.GetResolveVariableFunc()(exprImpl.V.Name, exprImpl.V.System, exprImpl.V.Global)
+		if err != nil {
+			return
+		}
+		resolveIsBin := proc.GetResolveVariableIsBinFunc()
+		if resolveIsBin != nil {
+			paramIsBin[i], err = resolveIsBin(exprImpl.V.Name, exprImpl.V.System, exprImpl.V.Global)
+			if err != nil {
+				return
+			}
+		}
+		resolveKind := proc.GetResolveVariablePrepareParamKindFunc()
+		if resolveKind != nil {
+			paramKinds[i], err = resolveKind(exprImpl.V.Name, exprImpl.V.System, exprImpl.V.Global)
+			if err != nil {
+				return
+			}
+		} else {
+			paramKinds[i] = prepareParamKindFromValue(param)
+		}
+		err = util.AppendAnyToStringVector(proc, param, params)
+		if err != nil {
+			return
+		}
+		paramVals[i] = plan2.ParamValue{Value: param, IsBin: paramIsBin[i]}
+	}
+	return
 }
 
 func shouldCachePrepareCompile(p *plan.Plan) bool {
@@ -634,7 +1154,26 @@ func shouldCachePrepareCompile(p *plan.Plan) bool {
 	if query == nil {
 		return true
 	}
+	for _, node := range query.GetNodes() {
+		if node != nil && node.GetExternScan() != nil && node.GetExternScan().GetIcebergScan() != nil {
+			// Iceberg tasks are resolved from an external snapshot while the
+			// pipeline is compiled. That snapshot is not covered by MatrixOne's
+			// schema-change timestamp, so a cached Compile would keep scanning the
+			// old snapshot across EXECUTE calls. If Iceberg planning moves to an
+			// execution-time operator in the future this restriction can be
+			// revisited without weakening the generic prepared-statement cache.
+			return false
+		}
+	}
 	return !query.GetHasForeignKeyAction()
+}
+
+func shouldRebuildPreparePlan(schemaChanged bool, p *plan.Plan) bool {
+	if schemaChanged || p == nil {
+		return schemaChanged
+	}
+	query := p.GetQuery()
+	return query != nil && query.GetHasForeignKeyAction()
 }
 
 func createCompile(
@@ -642,6 +1181,8 @@ func createCompile(
 	ses FeSession,
 	proc *process.Process,
 	originSQL string,
+	schedulingSQL string,
+	schedulingSQLMode *string,
 	stmt tree.Statement,
 	plan *plan2.Plan,
 	fill func(*batch.Batch, *perfcounter.CounterSet) error,
@@ -662,9 +1203,17 @@ func createCompile(
 
 	stats := statistic.StatsInfoFromContext(execCtx.reqCtx)
 	stats.CompileStart()
+	var compileIOStart int64
+	if stats != nil {
+		compileIOStart = atomic.LoadInt64(&stats.IOAccessTimeConsumption)
+	}
 	crs := new(perfcounter.CounterSet)
 	execCtx.reqCtx = perfcounter.AttachCompilePlanMarkKey(execCtx.reqCtx, crs)
 	defer func() {
+		if stats != nil {
+			compileIO := atomic.LoadInt64(&stats.IOAccessTimeConsumption) - compileIOStart
+			stats.AddCompileIOConsumption(time.Duration(compileIO))
+		}
 		stats.AddCompileS3Request(statistic.S3Request{
 			List:      crs.FileService.S3.List.Load(),
 			Head:      crs.FileService.S3.Head.Load(),
@@ -697,33 +1246,116 @@ func createCompile(
 		getStatementStartAt(execCtx.reqCtx),
 	)
 	retCompile.SetIsPrepare(isPrepare)
+	if schedulingSQL == "" {
+		schedulingSQL = originSQL
+	}
+	if schedulingSQLMode != nil {
+		retCompile.SetQuerySchedulingIntent(querySchedulingIntentForStatementWithSQLMode(
+			ses, schedulingSQL, *schedulingSQLMode))
+	} else {
+		retCompile.SetQuerySchedulingIntent(querySchedulingIntentForStatement(ses, schedulingSQL))
+	}
+	if resourceAttemptOwnerEligible(ses) {
+		retCompile.SetResourceAttemptOwnerEligible()
+	}
 	retCompile.SetSchedulingTraceRecorder(schedulingTrace)
+	forcePrepare := execCtx.input.isPreparedExpr()
 	retCompile.SetBuildPlanFunc(func(ctx context.Context) (*plan2.Plan, error) {
-		// No permission verification is required when retry execute buildPlan
-		plan, err := buildPlan(ctx, ses, ses.GetTxnCompileCtx(), stmt)
-		if err != nil {
-			return nil, err
-		}
-		if plan.IsPrepare {
-			_, _, err = plan2.ResetPreparePlan(ses.GetTxnCompileCtx(), plan)
-		}
-		return plan, err
+		return buildPlanForCompileRetry(
+			ctx, ses, ses.GetTxnCompileCtx(), stmt, forcePrepare)
 	})
 
-	if _, ok := stmt.(*tree.ExplainAnalyze); ok {
-		fill = func(bat *batch.Batch, crs *perfcounter.CounterSet) error { return nil }
-	}
-
-	if _, ok := stmt.(*tree.ExplainPhyPlan); ok {
-		fill = func(bat *batch.Batch, crs *perfcounter.CounterSet) error { return nil }
-	}
-
-	err = retCompile.Compile(execCtx.reqCtx, plan, fill)
+	err = retCompile.Compile(execCtx.reqCtx, plan, compileOutputCallback(stmt, fill))
 	if err != nil {
 		return
 	}
 	retCompile.SetOriginSQL(originSQL)
 	return
+}
+
+// EXPLAIN ANALYZE and EXPLAIN PHYPLAN execute the inner query only to collect
+// runtime data. Their result rows are constructed by the frontend after the
+// pipeline finishes, so inner-query batches must never reach the client output
+// callback. Apply the same rule both when compiling a fresh pipeline and when
+// resetting a cached prepared pipeline for another execution.
+func compileOutputCallback(
+	stmt tree.Statement,
+	fill func(*batch.Batch, *perfcounter.CounterSet) error,
+) func(*batch.Batch, *perfcounter.CounterSet) error {
+	switch stmt.(type) {
+	case *tree.ExplainAnalyze, *tree.ExplainPhyPlan:
+		return func(*batch.Batch, *perfcounter.CounterSet) error { return nil }
+	default:
+		return fill
+	}
+}
+
+func buildPlanForCompileRetry(
+	ctx context.Context,
+	ses FeSession,
+	compilerContext plan2.CompilerContext,
+	stmt tree.Statement,
+	forcePrepare bool,
+) (*plan2.Plan, error) {
+	// No permission verification is required when retry execute buildPlan.
+	retryPlan, err := buildPlanWithPrepareMode(
+		ctx, ses, compilerContext, stmt, forcePrepare)
+	if err != nil {
+		return nil, err
+	}
+	// Forced SET-expression plans were already normalized from the parser's
+	// global one-based ordinals. Generic prepared plans retain the existing
+	// compacting normalization path.
+	if retryPlan.IsPrepare && !forcePrepare {
+		_, _, err = plan2.ResetPreparePlan(compilerContext, retryPlan)
+	}
+	return retryPlan, err
+}
+
+func querySchedulingIntent(ses FeSession) schedule.SchedulingIntent {
+	intent := schedule.SchedulingIntent{
+		PoolFallback:      schedule.PoolFallbackLegacyCompatible,
+		EmptyWorkerPolicy: schedule.EmptyWorkerLocalFallback,
+		CurrentCNPolicy:   schedule.CurrentCNAllowed,
+		WorkerSet: schedule.WorkerSetPolicy{
+			Mode: schedule.WorkerSetAll,
+		},
+	}
+	if ses == nil {
+		return intent
+	}
+	if value, err := ses.GetSessionSysVar(queryMaxWorkers); err == nil {
+		var maxWorkers int
+		switch value := value.(type) {
+		case int64:
+			maxWorkers = int(value)
+		case uint64:
+			maxWorkers = int(value)
+		case int:
+			maxWorkers = value
+		}
+		if maxWorkers > 0 {
+			intent.Explicit = true
+			intent.WorkerSet.Mode = schedule.WorkerSetMax
+			intent.WorkerSet.MaxWorkers = maxWorkers
+		}
+	}
+	if value, err := ses.GetSessionSysVar(queryPoolStrict); err == nil {
+		if boolType, ok := gSysVarsDefs[queryPoolStrict].Type.(SystemVariableBoolType); ok && boolType.IsTrue(value) {
+			intent.Explicit = true
+			intent.PoolFallback = schedule.PoolFallbackStrict
+			intent.EmptyWorkerPolicy = schedule.EmptyWorkerFail
+		}
+	}
+	return intent
+}
+
+// Only the client statement owns retry-attempt cardinality. Back-exec SQL is
+// derived work under that statement's resource root and contributes resources,
+// but it must not claim the root's single attempt owner.
+func resourceAttemptOwnerEligible(ses FeSession) bool {
+	_, isBackExec := ses.(*backSession)
+	return !isBackExec && !ses.IsDerivedStmt()
 }
 
 func currentCNPipelineAddress(ses FeSession) string {

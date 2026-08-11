@@ -52,15 +52,9 @@ func initAllSupportedFunctions() {
 	}
 
 	for _, fn := range supportedWindowInNewFramework {
-		for _, ov := range fn.Overloads {
-			ov.aggFramework.aggRegister(encodeOverloadID(int32(fn.functionId), int32(ov.overloadId)))
-		}
 		allSupportedFunctions[fn.functionId] = fn
 	}
 	for _, fn := range supportedAggInNewFramework {
-		for _, ov := range fn.Overloads {
-			ov.aggFramework.aggRegister(encodeOverloadID(int32(fn.functionId), int32(ov.overloadId)))
-		}
 		allSupportedFunctions[fn.functionId] = fn
 	}
 }
@@ -99,6 +93,19 @@ func GetFunctionIsWinValueFunByName(name string) bool {
 	}
 	f := allSupportedFunctions[fid]
 	return f.isWindowValue()
+}
+
+func GetFunctionIsVolatileOrRealTimeRelatedByName(name string) bool {
+	fid, exists := getFunctionIdByNameWithoutErr(name)
+	if !exists {
+		return false
+	}
+	for _, ov := range allSupportedFunctions[fid].Overloads {
+		if ov.CannotFold() || ov.IsRealTimeRelated() {
+			return true
+		}
+	}
+	return false
 }
 
 func GetFunctionIsWinOrderFunById(overloadID int64) bool {
@@ -167,7 +174,9 @@ func GetFunctionByName(ctx context.Context, name string, args []types.Type) (r F
 		r.cannotRunInParallel = f.Overloads[r.overloadId].cannotParallel
 
 	case failedFunctionParametersWrong:
-		if f.isFunction() {
+		if check.invalidJSONArgumentIndex != 0 {
+			err = moerr.NewInvalidTypeForJSON(ctx, check.invalidJSONArgumentIndex, name)
+		} else if f.isFunction() {
 			err = moerr.NewInvalidArg(ctx, fmt.Sprintf("function %s", name), args)
 		} else {
 			err = moerr.NewInvalidArg(ctx, fmt.Sprintf("operator %s", name), args)
@@ -181,6 +190,26 @@ func GetFunctionByName(ctx context.Context, name string, args []types.Type) (r F
 	}
 
 	return r, err
+}
+
+// GetFunctionByNameWithOverload validates the arguments using the function's
+// normal type checker, then selects a specific overload. It is intended for
+// planner-only variants that must keep the same SQL function name and layout.
+func GetFunctionByNameWithOverload(
+	ctx context.Context, name string, args []types.Type, overloadID int32,
+) (r FuncGetResult, err error) {
+	r, err = GetFunctionByName(ctx, name, args)
+	if err != nil {
+		return r, err
+	}
+	f := allSupportedFunctions[r.fid]
+	if overloadID < 0 || int(overloadID) >= len(f.Overloads) {
+		return FuncGetResult{}, moerr.NewInvalidInputf(ctx, "function overload %s.%d not found", name, overloadID)
+	}
+	r.overloadId = overloadID
+	r.retType = f.Overloads[overloadID].retType(args)
+	r.cannotRunInParallel = f.Overloads[overloadID].cannotParallel
+	return r, nil
 }
 
 // RunFunctionDirectly runs a function directly without any protections.
@@ -199,9 +228,9 @@ func RunFunctionDirectly(proc *process.Process, overloadID int64, inputs []*vect
 
 	result := vector.NewFunctionResultWrapper(f.retType(inputTypes), mp)
 
-	fold := true
+	fold := !f.CannotFold() && !f.IsRealTimeRelated()
 	evaluateLength := length
-	if !f.CannotFold() && !f.IsRealTimeRelated() {
+	if fold {
 		for _, param := range inputs {
 			if !param.IsConst() {
 				fold = false
@@ -216,7 +245,7 @@ func RunFunctionDirectly(proc *process.Process, overloadID int64, inputs []*vect
 		result.Free()
 		return nil, err
 	}
-	exec, _, execFree := f.GetExecuteMethod()
+	exec, _, execFree, _ := f.GetExecuteMethod()
 	if err = exec(inputs, result, proc, evaluateLength, nil); err != nil {
 		result.Free()
 		if execFree != nil {
@@ -245,26 +274,106 @@ func GetAggFunctionNameByID(overloadID int64) string {
 	if !exist {
 		return "unknown function"
 	}
-	return f.aggFramework.str
+	return f.aggName
 }
 
-// DeduceNotNullable helps optimization sometimes.
-// deduce notNullable for function
-// for example, create table t1(c1 int not null, c2 int, c3 int not null ,c4 int);
-// sql select c1+1, abs(c2), cast(c3 as varchar(10)) from t1 where c1=c3;
-// we can deduce that c1+1, cast c3 and c1=c3 is notNullable, abs(c2) is nullable.
+// DeduceNotNullable reports whether a function result is guaranteed to be
+// non-NULL. STRICT functions normally preserve an all-non-NULL argument
+// guarantee, except for functions that can synthesize NULL from valid values.
 func DeduceNotNullable(overloadID int64, args []*plan.Expr) bool {
 	fid, _ := DecodeOverloadID(overloadID)
-	if allSupportedFunctions[fid].testFlag(plan.Function_PRODUCE_NO_NULL) {
+	switch fid {
+	case CASE:
+		if caseHasTemporalPromotion(args) {
+			return false
+		}
+		for _, arg := range args {
+			if !arg.Typ.NotNullable {
+				return false
+			}
+		}
+		return true
+	case COALESCE:
+		for _, arg := range args {
+			if arg.Typ.NotNullable {
+				return true
+			}
+		}
+		return false
+	case GREATEST, LEAST:
+		return false
+	// Value window functions can synthesize NULLs even when every input is
+	// NOT NULL. LAG/LEAD do so outside the partition unless an explicit,
+	// non-NULL default is present. FIRST_VALUE/LAST_VALUE can observe an empty
+	// frame, and NTH_VALUE can also miss the requested row. The frame is not
+	// available here, so keep those contracts conservative.
+	case FIRST_VALUE, LAST_VALUE, NTH_VALUE:
+		return false
+	case LAG, LEAD:
+		if len(args) != 3 {
+			return false
+		}
+		for _, arg := range args {
+			if !arg.Typ.NotNullable {
+				return false
+			}
+		}
+		return true
+	// These STRICT functions can synthesize NULL from non-NULL arguments.
+	// The UUID extractors do so for non-RFC-4122 variants, and
+	// uuid_extract_timestamp also for versions without a time source (e.g. v4).
+	case DIV, INTEGER_DIV, MOD,
+		JSON_EXTRACT, JSON_EXTRACT_STRING, JSON_EXTRACT_FLOAT64,
+		REGEXP_SUBSTR,
+		INET6_ATON, ELT, UNHEX, MAKEDATE,
+		UUID_EXTRACT_VERSION, UUID_EXTRACT_TIMESTAMP:
+		return false
+	}
+	if ProducesNoNull(overloadID) {
 		return true
 	}
-
 	for _, arg := range args {
 		if !arg.Typ.NotNullable {
 			return false
 		}
 	}
 	return true
+}
+
+func caseHasTemporalPromotion(args []*plan.Expr) bool {
+	for i := 1; i < len(args); i += 2 {
+		if isTemporalPromotion(args[i]) {
+			return true
+		}
+	}
+	// CASE arguments are condition/value pairs followed by ELSE. The ELSE
+	// expression is at the final even index and needs the same check.
+	if len(args)%2 == 1 && isTemporalPromotion(args[len(args)-1]) {
+		return true
+	}
+	return false
+}
+
+func isTemporalPromotion(arg *plan.Expr) bool {
+	fn := arg.GetF()
+	if fn == nil || fn.Func == nil || fn.Func.GetObjName() != "cast" || len(fn.Args) == 0 {
+		return false
+	}
+	source := types.T(fn.Args[0].Typ.Id)
+	target := types.T(arg.Typ.Id)
+	return source.IsDateRelate() && target.IsDateRelate() && source != target
+}
+
+// ProducesNoNull reports whether a function's contract guarantees a non-NULL
+// result independently of its argument values. This is stronger than
+// DeduceNotNullable: STRICT functions such as json_extract can still return
+// SQL NULL for non-NULL inputs when a requested value is absent.
+func ProducesNoNull(overloadID int64) bool {
+	fid, _ := DecodeOverloadID(overloadID)
+	return fid >= 0 &&
+		int(fid) < len(allSupportedFunctions) &&
+		int(fid) == allSupportedFunctions[fid].functionId &&
+		allSupportedFunctions[fid].testFlag(plan.Function_PRODUCE_NO_NULL)
 }
 
 type FuncGetResult struct {
@@ -306,6 +415,15 @@ func DecodeOverloadID(overloadID int64) (fid int32, oIndex int32) {
 	oIndex = int32(overloadID)
 	fid = int32(base >> 32)
 	return fid, oIndex
+}
+
+func IsUserLevelLockFunctionID(fid int32) bool {
+	switch fid {
+	case GET_LOCK, RELEASE_LOCK, IS_FREE_LOCK, IS_USED_LOCK, RELEASE_ALL_LOCKS:
+		return true
+	default:
+		return false
+	}
 }
 
 func getFunctionIdByName(ctx context.Context, name string) (int32, error) {
@@ -359,13 +477,10 @@ type executeFreeOfOverload func() error
 // in case we need it in the future.
 type executeResetOfOverload func() error
 
-type aggregationLogicOfOverload struct {
-	// agg related string for error message.
-	str string
-
-	// how to register the aggregation.
-	aggRegister func(overloadID int64)
-}
+// executeRetainedBytesOfOverload reports non-vector backing allocations kept
+// alive by a stateful function operator. It is optional: ordinary functions
+// whose complete retained state is represented by executor vectors omit it.
+type executeRetainedBytesOfOverload func() uint64
 
 // an overload of a function.
 // stores all information about execution logic.
@@ -390,13 +505,20 @@ type overload struct {
 
 	// the execution logic and free logic.
 	// NOTE: use either newOp or newOpWithFree.
-	newOpWithFree func() (executeLogicOfOverload, executeResetOfOverload, executeFreeOfOverload)
+	newOpWithFree func() (
+		executeLogicOfOverload,
+		executeResetOfOverload,
+		executeFreeOfOverload,
+		executeRetainedBytesOfOverload,
+	)
 
 	// in fact, the function framework does not directly run aggregate functions and window functions.
 	// we use two flags to mark whether function is one of them.
-	isAgg        bool
-	isWin        bool
-	aggFramework aggregationLogicOfOverload
+	isAgg bool
+	isWin bool
+
+	// aggName is used in aggregate-related error messages.
+	aggName string
 
 	// if true, overload was unable to run in parallel.
 	// For example,
@@ -427,14 +549,18 @@ func (ov *overload) CannotExecuteInParallel() bool {
 	return ov.cannotParallel
 }
 
-func (ov *overload) GetExecuteMethod() (executeLogicOfOverload, executeResetOfOverload, executeFreeOfOverload) {
+func (ov *overload) GetExecuteMethod() (
+	executeLogicOfOverload,
+	executeResetOfOverload,
+	executeFreeOfOverload,
+	executeRetainedBytesOfOverload,
+) {
 	if ov.newOpWithFree != nil {
-		fn, fnReset, fnFree := ov.newOpWithFree()
-		return fn, fnReset, fnFree
+		return ov.newOpWithFree()
 	}
 
 	fn := ov.newOp()
-	return fn, nil, nil
+	return fn, nil, nil, nil
 }
 
 func (ov *overload) GetReturnTypeMethod() func(parameters []types.Type) types.Type {
@@ -483,8 +609,9 @@ type checkResult struct {
 	status overloadCheckSituation
 
 	// if matched
-	idx       int
-	finalType []types.Type
+	idx                      int
+	finalType                []types.Type
+	invalidJSONArgumentIndex int
 }
 
 func newCheckResultWithSuccess(overloadId int) checkResult {
@@ -493,6 +620,13 @@ func newCheckResultWithSuccess(overloadId int) checkResult {
 
 func newCheckResultWithFailure(status overloadCheckSituation) checkResult {
 	return checkResult{status: status}
+}
+
+func newCheckResultWithInvalidJSONArgument(argumentIndex int) checkResult {
+	return checkResult{
+		status:                   failedFunctionParametersWrong,
+		invalidJSONArgumentIndex: argumentIndex,
+	}
 }
 
 func newCheckResultWithCast(overloadId int, castType []types.Type) checkResult {

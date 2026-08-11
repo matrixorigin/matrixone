@@ -76,3 +76,22 @@ func TestObjectStorageHTTPTraceDelegates(t *testing.T) {
 	require.ElementsMatch(t, []string{"delete", "exists", "list", "read", "stat", "write"}, upstream.calls)
 	require.Equal(t, []string{"one"}, listed)
 }
+
+func TestObjectStorageHTTPTraceCopyObject(t *testing.T) {
+	src := &testObjectCopyStorage{}
+	upstream := &testObjectCopyStorage{}
+	wrapped := newObjectStorageHTTPTrace(upstream)
+
+	copied, err := wrapped.CopyObject(context.Background(), src, "source", "destination")
+	require.NoError(t, err)
+	require.True(t, copied)
+	require.Same(t, src, upstream.src)
+	require.Equal(t, "source", upstream.srcKey)
+	require.Equal(t, "destination", upstream.dstKey)
+
+	copied, err = newObjectStorageHTTPTrace(dummyObjectStorage{}).CopyObject(
+		context.Background(), src, "source", "destination",
+	)
+	require.NoError(t, err)
+	require.False(t, copied)
+}

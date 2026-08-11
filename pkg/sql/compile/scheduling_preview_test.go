@@ -152,9 +152,9 @@ func TestLegacyEngineNodesPoolResolverPreservesCandidates(t *testing.T) {
 	require.Equal(t, schedule.CandidateSourceEngineNodes, resolved.resolution.DiscoverySource)
 	require.Equal(t, schedule.PoolResolutionLegacyEngineNodes, resolved.resolution.PoolResolution)
 	require.Equal(t, schedule.Workers{
-		{ID: "cn-a", Addr: "a:6001", Mcpu: 1},
-		{ID: "cn-b", Addr: "b:6001", Mcpu: 8, State: schedule.WorkerStateDraining},
-	}, resolved.workers)
+		{ID: "cn-a", Addr: "a:6001", Mcpu: 1, Route: schedule.WorkerRouteRemote},
+		{ID: "cn-b", Addr: "b:6001", Mcpu: 8, State: schedule.WorkerStateDraining, Route: schedule.WorkerRouteRemote},
+	}, resolved.pool.Workers)
 	require.Equal(t, 0, nodes[0].Mcpu)
 }
 

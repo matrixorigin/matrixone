@@ -39,6 +39,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/deletion"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	sqlutil "github.com/matrixorigin/matrixone/pkg/sql/util"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
@@ -86,8 +87,9 @@ type s3WriterDelegate struct {
 	deleteBatches []*batch.BatchSet
 	segmentMap    map[string]int32
 
-	action   actionType
-	isRemote bool
+	action             actionType
+	isRemote           bool
+	rejectZeroTemporal bool
 
 	updateCtxs     []*MultiUpdateCtx
 	updateCtxInfos map[string]*updateCtxInfo
@@ -142,6 +144,7 @@ func newS3Writer(
 		deleteBlockMap:      make([]map[types.Blockid]*deleteBlockData, tableCount),
 		insertFreeLists:     make([]*containers.BatchFreeList, tableCount),
 		isRemote:            update.IsRemote,
+		rejectZeroTemporal:  update.RejectZeroTemporal,
 	}
 	for i := range writer.insertFreeLists {
 		writer.insertFreeLists[i] = containers.NewBatchFreeList(nil, nil, true)
@@ -284,7 +287,9 @@ func (writer *s3WriterDelegate) append(
 		if tableType == UpdateMainTable {
 			if mainTableNullPkFilter {
 				var checked *batch.Batch
-				if checked, err = projBat.Clone(mp, false); err != nil {
+				// This validation copy leaves any allocation-accounted join owner;
+				// it is short-lived and never published back into that owner.
+				if checked, err = sqlutil.CopyBatch(projBat, proc); err != nil {
 					return
 				}
 				nulls := checked.Vecs[mainTablePkProjectIdx].GetNulls().GetBitmap().Clone()
@@ -319,7 +324,9 @@ func (writer *s3WriterDelegate) append(
 			// Clone because SelectColumns shares vectors, and ShrinkByMask
 			// modifies in-place.
 			var filtered *batch.Batch
-			if filtered, err = projBat.Clone(mp, false); err != nil {
+			// The sinker owns the filtered copy independently of the input
+			// pipeline, so cross the allocation ownership boundary explicitly.
+			if filtered, err = sqlutil.CopyBatch(projBat, proc); err != nil {
 				return
 			}
 			nullIdx := writer.sortIndexes[i]
@@ -329,6 +336,12 @@ func (writer *s3WriterDelegate) append(
 			nulls := filtered.Vecs[nullIdx].GetNulls().GetBitmap().Clone()
 			filtered.ShrinkByMask(nulls, true, 0)
 			if filtered.RowCount() > 0 {
+				if tableType == UpdateMainTable {
+					if err = checkZeroTemporalInStrictMode(writer.rejectZeroTemporal, proc, filtered); err != nil {
+						filtered.Clean(mp)
+						return
+					}
+				}
 				err = writer.insertSinkers[i].Write(proc.Ctx, filtered)
 			}
 			filtered.Clean(mp)
@@ -336,6 +349,12 @@ func (writer *s3WriterDelegate) append(
 				return
 			}
 			continue
+		}
+
+		if tableType == UpdateMainTable {
+			if err = checkZeroTemporalInStrictMode(writer.rejectZeroTemporal, proc, projBat); err != nil {
+				return
+			}
 		}
 
 		if err = writer.insertSinkers[i].Write(proc.Ctx, projBat); err != nil {
@@ -576,7 +595,9 @@ func (writer *s3WriterDelegate) sortAndSyncOneTable(
 		// When cleanBatchAfterUse is true, the batch is exclusively owned
 		// (cloned), so we can transfer it to the sinker without copying.
 		if cleanBatchAfterUse {
-			owned, writeErr := s3Writer.WriteOwned(writeCtx, bats[i])
+			owned, writeErr := process.MeasureFilesystemWait(analyzer, func() (bool, error) {
+				return s3Writer.WriteOwned(writeCtx, bats[i])
+			})
 			if writeErr != nil {
 				err = writeErr
 				return
@@ -591,7 +612,9 @@ func (writer *s3WriterDelegate) sortAndSyncOneTable(
 			bats[i] = nil
 			continue
 		}
-		if err = s3Writer.Write(writeCtx, bats[i]); err != nil {
+		if err = process.MeasureFilesystemWaitErr(analyzer, func() error {
+			return s3Writer.Write(writeCtx, bats[i])
+		}); err != nil {
 			return
 		}
 
@@ -601,13 +624,12 @@ func (writer *s3WriterDelegate) sortAndSyncOneTable(
 		bats[i] = nil
 	}
 
-	if _, err = s3Writer.Sync(writeCtx); err != nil {
+	if err = process.MeasureFilesystemWaitErr(analyzer, func() error {
+		_, syncErr := s3Writer.Sync(writeCtx)
+		return syncErr
+	}); err != nil {
 		return
 	}
-
-	analyzer.AddS3RequestCount(counterSet)
-	analyzer.AddFileServiceCacheInfo(counterSet)
-	analyzer.AddDiskIO(counterSet)
 
 	if blockInfoBat, err = s3Writer.FillBlockInfoBat(); err != nil {
 		return
@@ -695,7 +717,9 @@ func (writer *s3WriterDelegate) flushTailAndWriteToOutput(proc *process.Process,
 		if s3w == nil {
 			continue
 		}
-		stats, syncErr := s3w.Sync(writeCtx)
+		stats, syncErr := process.MeasureFilesystemWait(analyzer, func() ([]objectio.ObjectStats, error) {
+			return s3w.Sync(writeCtx)
+		})
 		if syncErr != nil {
 			return syncErr
 		}
@@ -714,9 +738,6 @@ func (writer *s3WriterDelegate) flushTailAndWriteToOutput(proc *process.Process,
 			return
 		}
 	}
-	analyzer.AddS3RequestCount(counterSet)
-	analyzer.AddFileServiceCacheInfo(counterSet)
-	analyzer.AddDiskIO(counterSet)
 
 	// Flush remaining deletes — always call sortAndSync so that accumulated
 	// deleteBatches are processed through prepareDeleteBatches into

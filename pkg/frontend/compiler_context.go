@@ -32,6 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/pubsub"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -92,6 +93,7 @@ func (tcc *TxnCompilerContext) SetExecCtx(execCtx *ExecCtx) {
 	tcc.mu.Lock()
 	defer tcc.mu.Unlock()
 	tcc.execCtx = execCtx
+	tcc.views = nil
 }
 
 func (tcc *TxnCompilerContext) GetViews() []string {
@@ -119,7 +121,22 @@ func (tcc *TxnCompilerContext) SetSnapshot(snapshot *plan2.Snapshot) {
 }
 
 func (tcc *TxnCompilerContext) InitExecuteStmtParam(execPlan *plan.Execute) (*plan.Plan, tree.Statement, error) {
-	_, p, st, _, err := initExecuteStmtParam(tcc.execCtx, tcc.execCtx.ses.(*Session), tcc.tcw.(*TxnComputationWrapper), execPlan, "")
+	owner, err := preparedStatementOwner(tcc.execCtx.reqCtx, tcc.execCtx.ses)
+	if err != nil {
+		return nil, nil, err
+	}
+	_, p, st, _, owned, err := initExecuteStmtParamInSession(
+		tcc.execCtx,
+		owner,
+		tcc.execCtx.ses,
+		tcc.tcw.(*TxnComputationWrapper),
+		execPlan,
+		"",
+	)
+	if owned && st != nil {
+		st.Free()
+		st = nil
+	}
 	return p, st, err
 }
 
@@ -196,7 +213,16 @@ func (tcc *TxnCompilerContext) DefaultDatabase() string {
 }
 
 func (tcc *TxnCompilerContext) GetRootSql() string {
-	return tcc.GetSession().GetSql()
+	tcc.mu.Lock()
+	execCtx := tcc.execCtx
+	if execCtx != nil && execCtx.rootSQLOverride != nil {
+		rootSQL := *execCtx.rootSQLOverride
+		tcc.mu.Unlock()
+		return rootSQL
+	}
+	ses := execCtx.ses
+	tcc.mu.Unlock()
+	return ses.GetSql()
 }
 
 func (tcc *TxnCompilerContext) GetAccountId() (uint32, error) {
@@ -396,6 +422,36 @@ func (tcc *TxnCompilerContext) getRelation(
 	return tempCtx, table, nil
 }
 
+func (tcc *TxnCompilerContext) recoverLegacyTinyText(
+	ctx context.Context,
+	dbName string,
+	tableDef *plan2.TableDef,
+	sub *plan.SubscriptionMeta,
+	snapshot *plan2.Snapshot,
+) error {
+	if tableDef.DbName == "" {
+		tableDef.DbName = dbName
+	}
+	return plan2.RecoverLegacyTinyText(ctx, tableDef, func(
+		_ context.Context,
+		sourceDB string,
+		sourceTable string,
+	) (*plan2.TableDef, error) {
+		if sourceDB == "" {
+			sourceDB = dbName
+		}
+		sourceCtx, relation, err := tcc.getRelation(sourceDB, sourceTable, sub, snapshot)
+		if err != nil || relation == nil {
+			return nil, err
+		}
+		sourceDef := plan2.CloneTableDefForPlan(relation.GetTableDef(sourceCtx), true)
+		if sourceDef.DbName == "" {
+			sourceDef.DbName = sourceDB
+		}
+		return sourceDef, nil
+	})
+}
+
 func (tcc *TxnCompilerContext) ensureDatabaseIsNotEmpty(dbName string, checkSub bool, snapshot *plan2.Snapshot) (string, *plan.SubscriptionMeta, error) {
 	start := time.Now()
 	defer func() {
@@ -443,7 +499,10 @@ func (tcc *TxnCompilerContext) ResolveById(tableId uint64, snapshot *plan2.Snaps
 		ObjName:    tableName,
 		Obj:        returnTableID,
 	}
-	tableDef := table.CopyTableDef(tempCtx)
+	tableDef := plan2.CloneTableDefForPlan(table.GetTableDef(tempCtx), true)
+	if err := tcc.recoverLegacyTinyText(tempCtx, dbName, tableDef, nil, snapshot); err != nil {
+		return nil, nil, err
+	}
 	return obj, tableDef, nil
 }
 
@@ -468,7 +527,10 @@ func (tcc *TxnCompilerContext) ResolveSubscriptionTableById(tableId uint64, subM
 		ObjName:    tableName,
 		Obj:        returnTableID,
 	}
-	tableDef := table.CopyTableDef(pubContext)
+	tableDef := plan2.CloneTableDefForPlan(table.GetTableDef(pubContext), true)
+	if err := tcc.recoverLegacyTinyText(pubContext, dbName, tableDef, subMeta, nil); err != nil {
+		return nil, nil, err
+	}
 	return obj, tableDef, nil
 }
 
@@ -514,7 +576,10 @@ func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string, snapshot
 	if table == nil {
 		return nil, nil, nil
 	}
-	tableDef := table.CopyTableDef(ctx)
+	tableDef := plan2.CloneTableDefForPlan(table.GetTableDef(ctx), true)
+	if err := tcc.recoverLegacyTinyText(ctx, dbName, tableDef, sub, snapshot); err != nil {
+		return nil, nil, err
+	}
 	tableDef.IsTemporary = isTmpTable
 
 	// convert
@@ -559,6 +624,7 @@ func (tcc *TxnCompilerContext) ResolveIndexTableByRef(
 	if ref.PubInfo != nil {
 		subMeta = &plan.SubscriptionMeta{
 			AccountId: ref.PubInfo.TenantId,
+			DbName:    ref.SchemaName,
 		}
 	}
 
@@ -585,7 +651,10 @@ func (tcc *TxnCompilerContext) ResolveIndexTableByRef(
 		PubInfo:          ref.PubInfo,
 	}
 
-	tableDef := table.CopyTableDef(ctx)
+	tableDef := plan2.CloneTableDefForPlan(table.GetTableDef(ctx), true)
+	if err := tcc.recoverLegacyTinyText(ctx, ref.SchemaName, tableDef, subMeta, snapshot); err != nil {
+		return nil, nil, err
+	}
 	if tableDef.IsTemporary {
 		tableDef.Name = tblName
 	}
@@ -765,14 +834,8 @@ func (tcc *TxnCompilerContext) ResolveVariable(varName string, isSystemVar, isGl
 
 	ctx := tcc.execCtx.reqCtx
 
-	if ctx.Value(defines.InSp{}) != nil && ctx.Value(defines.InSp{}).(bool) {
-		tmpScope := ctx.Value(defines.VarScopeKey{}).(*[]map[string]interface{})
-		for i := len(*tmpScope) - 1; i >= 0; i-- {
-			curScope := (*tmpScope)[i]
-			if val, ok := curScope[strings.ToLower(varName)]; ok {
-				return val, nil
-			}
-		}
+	if val, ok := resolveStoredProcedureVariable(ctx, varName); ok {
+		return val, nil
 	}
 
 	if isSystemVar {
@@ -795,6 +858,79 @@ func (tcc *TxnCompilerContext) ResolveVariable(varName string, isSystemVar, isGl
 	}
 
 	return
+}
+
+func (tcc *TxnCompilerContext) ResolveVariableIsBin(varName string, isSystemVar, _ bool) (bool, error) {
+	if _, ok := resolveStoredProcedureVariable(tcc.execCtx.reqCtx, varName); ok {
+		return false, nil
+	}
+	if isSystemVar {
+		return false, nil
+	}
+	udVar, err := tcc.GetSession().GetUserDefinedVar(varName)
+	if err != nil {
+		return false, err
+	}
+	return udVar.IsBin, nil
+}
+
+func (tcc *TxnCompilerContext) ResolveVariablePrepareParamKind(
+	varName string,
+	isSystemVar, isGlobalVar bool,
+) (vector.PrepareParamKind, error) {
+	if value, declaredType, hasDeclaredType, ok := resolveStoredProcedureVariableWithType(
+		tcc.execCtx.reqCtx, varName,
+	); ok {
+		if hasDeclaredType {
+			return prepareParamKindFromType(types.T(declaredType.Id)), nil
+		}
+		return prepareParamKindFromValue(value), nil
+	}
+	if isSystemVar {
+		value, err := tcc.ResolveVariable(varName, true, isGlobalVar)
+		if err != nil {
+			return vector.PrepareParamNone, err
+		}
+		return prepareParamKindFromValue(value), nil
+	}
+	udVar, err := tcc.GetSession().GetUserDefinedVar(varName)
+	if err != nil {
+		return vector.PrepareParamNone, err
+	}
+	return udVar.PrepareParamKind, nil
+}
+
+func resolveStoredProcedureVariable(ctx context.Context, varName string) (interface{}, bool) {
+	value, _, _, ok := resolveStoredProcedureVariableWithType(ctx, varName)
+	return value, ok
+}
+
+// resolveStoredProcedureVariableWithType resolves the value and its declared
+// type from the same lexical scope. A missing type in an inner scope must not
+// fall through to an outer declaration with the same name.
+func resolveStoredProcedureVariableWithType(
+	ctx context.Context, varName string,
+) (value interface{}, declaredType plan.Type, hasDeclaredType, ok bool) {
+	inSp, _ := ctx.Value(defines.InSp{}).(bool)
+	if !inSp {
+		return nil, plan.Type{}, false, false
+	}
+	tmpScope, ok := ctx.Value(defines.VarScopeKey{}).(*[]map[string]interface{})
+	if !ok {
+		return nil, plan.Type{}, false, false
+	}
+	typeScopes, hasTypeScopes := ctx.Value(defines.VarScopeTypeKey{}).(*[]map[string]plan.Type)
+	name := strings.ToLower(varName)
+	for i := len(*tmpScope) - 1; i >= 0; i-- {
+		if val, ok := (*tmpScope)[i][name]; ok {
+			if hasTypeScopes && typeScopes != nil && i < len(*typeScopes) {
+				typ, found := (*typeScopes)[i][name]
+				return val, typ, found, true
+			}
+			return val, plan.Type{}, false, true
+		}
+	}
+	return nil, plan.Type{}, false, false
 }
 
 func (tcc *TxnCompilerContext) ResolveAccountIds(accountNames []string) (accountIds []uint32, err error) {

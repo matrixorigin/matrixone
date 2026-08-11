@@ -21,7 +21,12 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
@@ -101,6 +106,24 @@ func updateRenameColumnInTableDef(
 		!strings.EqualFold(newColName, oldColName) {
 		return nil, moerr.NewErrDupFieldName(ctx.GetContext(), newColNameOrigin)
 	}
+	if err := requirePrefixIndexesRenameProtocol(
+		ctx, tableDef.Indexes, oldColName, newColName,
+	); err != nil {
+		return nil, err
+	}
+
+	// Pre-upgrade tables can have CHECK constraints only in Createsql. Recover
+	// them on the planner-owned table copy before rewriting the renamed column,
+	// so both COPY and INPLACE ALTER persist the structured definitions.
+	if err := recoverLegacyChecks(ctx, tableDef); err != nil {
+		return nil, err
+	}
+
+	if err := renameColumnInCheckConstraints(
+		ctx.GetContext(), tableDef.Checks, oldColName, newColNameOrigin,
+	); err != nil {
+		return nil, err
+	}
 
 	// update index key
 	indexAffected := false
@@ -108,8 +131,22 @@ func updateRenameColumnInTableDef(
 		for j, partCol := range indexInfo.Parts {
 			partCol = catalog.ResolveAlias(partCol)
 			if partCol == oldColName {
+				prefixMetadataAffected, err := renameIndexPrefixLengthMetadata(
+					indexInfo, oldColName, newColName,
+				)
+				if err != nil {
+					return nil, err
+				}
 				indexInfo.Parts[j] = newColName
 				indexAffected = true
+				if prefixMetadataAffected {
+					sqls = append(sqls, fmt.Sprintf(
+						"update `mo_catalog`.`mo_indexes` set algo_params = '%s' where table_id = %d and name = '%s' ; ",
+						sqlquote.EscapeString(indexInfo.IndexAlgoParams),
+						tableDef.TblId,
+						sqlquote.EscapeString(indexInfo.IndexName),
+					))
+				}
 				break
 			}
 		}
@@ -121,11 +158,17 @@ func updateRenameColumnInTableDef(
 	if indexAffected {
 		sqls = append(sqls, fmt.Sprintf(
 			indexFmt,
-			newColNameOrigin,
+			sqlquote.EscapeString(newColNameOrigin),
 			tableDef.TblId,
-			oldColNameOrigin,
+			sqlquote.EscapeString(oldColNameOrigin),
 		))
 	}
+
+	pluginAlterSQLs, err := handleAlterRenameColumnWithPluginHooks(tableDef, oldColName, newColName)
+	if err != nil {
+		return nil, err
+	}
+	sqls = append(sqls, pluginAlterSQLs...)
 
 	// update primary key
 	primaryKeyDef := tableDef.Pkey
@@ -144,9 +187,9 @@ func updateRenameColumnInTableDef(
 	if primaryKeyAffected {
 		sqls = append(sqls, fmt.Sprintf(
 			indexFmt,
-			catalog.CreateAlias(newColName),
+			sqlquote.EscapeString(catalog.CreateAlias(newColName)),
 			tableDef.TblId,
-			catalog.CreateAlias(oldColName),
+			sqlquote.EscapeString(catalog.CreateAlias(oldColName)),
 		))
 	}
 
@@ -165,6 +208,177 @@ func updateRenameColumnInTableDef(
 	}
 
 	return
+}
+
+func requirePrefixIndexesRenameProtocol(ctx CompilerContext, indexes []*plan.IndexDef, oldColName, newColName string) error {
+	for _, indexInfo := range indexes {
+		if indexInfo == nil {
+			continue
+		}
+		for _, partCol := range indexInfo.Parts {
+			if catalog.ResolveAlias(partCol) != oldColName {
+				continue
+			}
+			if err := requirePrefixIndexRenameProtocol(ctx, indexInfo, oldColName, newColName); err != nil {
+				return err
+			}
+			break
+		}
+	}
+	return nil
+}
+
+// requireCheckRenameProtocol prevents a new CN from sending CHECK metadata in
+// AlterTableRenameCol to an old TN whose generated request type cannot expose
+// the unknown protobuf field to its alter handler. During a rolling upgrade,
+// the deployment protocol version stays at the oldest live service, so v15
+// proves every receiver can persist the rewritten CHECK definitions.
+func requireCheckRenameProtocol(ctx CompilerContext, checks []*plan.CheckDef) error {
+	if len(checks) == 0 || ctx.GetProcess() == nil {
+		return nil
+	}
+	value, ok := moruntime.ServiceRuntime(ctx.GetProcess().GetService()).
+		GetGlobalVariables(moruntime.MOProtocolVersion)
+	version, valid := value.(int64)
+	if !ok || !valid || version < defines.MORPCVersion15 {
+		return moerr.NewNotSupported(
+			ctx.GetContext(),
+			"renaming a column in a table with CHECK constraints requires all services to support protocol version 15",
+		)
+	}
+	return nil
+}
+
+type renameCheckColumnVisitor struct {
+	oldName string
+	newName string
+	changed bool
+}
+
+func (v *renameCheckColumnVisitor) Enter(expr tree.Expr) (tree.Expr, bool) {
+	name, ok := expr.(*tree.UnresolvedName)
+	if !ok {
+		return expr, false
+	}
+	if name.NumParts == 1 && strings.EqualFold(name.ColName(), v.oldName) {
+		v.changed = true
+		return tree.NewUnresolvedColName(v.newName), true
+	}
+	return expr, true
+}
+
+func (v *renameCheckColumnVisitor) Exit(expr tree.Expr) (tree.Expr, bool) {
+	return expr, true
+}
+
+func renameColumnInCheckConstraints(
+	ctx context.Context,
+	checks []*plan.CheckDef,
+	oldName string,
+	newName string,
+) error {
+	rewritten := make([]string, len(checks))
+	for i, check := range checks {
+		if check == nil || check.OriginSql == "" {
+			continue
+		}
+		stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, "select "+check.OriginSql, 1)
+		if err != nil {
+			return err
+		}
+		selectStmt, ok := stmt.(*tree.Select)
+		if !ok {
+			stmt.Free()
+			return moerr.NewInternalError(ctx, "invalid CHECK constraint expression")
+		}
+		clause, ok := selectStmt.Select.(*tree.SelectClause)
+		if !ok || len(clause.Exprs) != 1 {
+			stmt.Free()
+			return moerr.NewInternalError(ctx, "invalid CHECK constraint expression")
+		}
+		visitor := &renameCheckColumnVisitor{oldName: oldName, newName: newName}
+		expr, ok := clause.Exprs[0].Expr.Accept(visitor)
+		if !ok {
+			stmt.Free()
+			return moerr.NewInternalError(ctx, "failed to rename CHECK constraint column")
+		}
+		if visitor.changed {
+			rewritten[i] = formatCheckConstraintExpr(expr)
+		}
+		stmt.Free()
+	}
+	for i, originSQL := range rewritten {
+		if originSQL != "" {
+			checks[i].OriginSql = originSQL
+		}
+	}
+	return nil
+}
+
+func requirePrefixIndexRenameProtocol(ctx CompilerContext, indexInfo *plan.IndexDef, oldColName, newColName string) error {
+	if !catalog.IsRegularIndexAlgo(indexInfo.IndexAlgo) || indexInfo.IndexAlgoParams == "" {
+		return nil
+	}
+	prefixLengths, err := catalog.IndexPrefixLengthsFromParamsWithError(indexInfo.IndexAlgoParams)
+	if err != nil {
+		return err
+	}
+	for prefixPart := range prefixLengths {
+		if strings.EqualFold(prefixPart, oldColName) {
+			return requirePrefixIndexV2Protocol(ctx.GetContext(), ctx.GetProcess(), newColName)
+		}
+	}
+	return nil
+}
+
+// renameIndexPrefixLengthMetadata rewrites the column-name keys in regular
+// index prefix metadata. Prefix lengths describe the physical hidden-index key,
+// so leaving an old logical column name behind causes later DML and reads to
+// disagree about whether the key is truncated.
+func renameIndexPrefixLengthMetadata(indexInfo *plan.IndexDef, oldColName, newColName string) (bool, error) {
+	if !catalog.IsRegularIndexAlgo(indexInfo.IndexAlgo) || indexInfo.IndexAlgoParams == "" {
+		return false, nil
+	}
+
+	prefixLengths, err := catalog.IndexPrefixLengthsFromParamsWithError(indexInfo.IndexAlgoParams)
+	if err != nil {
+		return false, err
+	}
+
+	oldPrefixName := oldColName
+	length, ok := prefixLengths[oldPrefixName]
+	if !ok {
+		for partName, partLength := range prefixLengths {
+			if strings.EqualFold(partName, oldColName) {
+				oldPrefixName = partName
+				length = partLength
+				ok = true
+				break
+			}
+		}
+	}
+	if !ok {
+		return false, nil
+	}
+
+	params, err := catalog.IndexParamsStringToMap(indexInfo.IndexAlgoParams)
+	if err != nil {
+		return false, err
+	}
+	sessionVars, err := catalog.IndexParamsSessionVars(indexInfo.IndexAlgoParams)
+	if err != nil {
+		return false, err
+	}
+	delete(prefixLengths, oldPrefixName)
+	prefixLengths[newColName] = length
+	if err := catalog.SetIndexPrefixLengthsInParamMap(params, prefixLengths); err != nil {
+		return false, err
+	}
+	indexInfo.IndexAlgoParams, err = catalog.IndexParamsMapToJsonStringWithSessionVars(params, sessionVars)
+	if err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 func addRenameContextToAlterCtx(
@@ -226,11 +440,21 @@ func AlterColumn(
 	if originalCol == nil || originalCol.Hidden {
 		return false, moerr.NewBadFieldError(ctx.GetContext(), spec.ColumnName.ColNameOrigin(), alterPlan.TableDef.Name)
 	}
+	if spec.OptionType == tree.AlterColumnOptionSetVisibility && spec.Visibility == tree.VISIBLE_TYPE_INVISIBLE {
+		return false, moerr.NewNotSupported(ctx.GetContext(), "invisible columns")
+	}
 
 	for i, col := range tableDef.Cols {
 		if strings.EqualFold(col.Name, originalCol.Name) {
 			colDef := DeepCopyColDef(col)
 			if spec.OptionType == tree.AlterColumnOptionSetDefault {
+				if colDef.Typ.AutoIncr {
+					return false, moerr.NewErrInvalidDefault(ctx.GetContext(), spec.ColumnName.ColNameOrigin())
+				}
+				if colDef.GeneratedCol != nil {
+					return false, moerr.NewInvalidInputf(ctx.GetContext(),
+						"generated column '%s' cannot have a default value", spec.ColumnName.ColNameOrigin())
+				}
 				tmpColumnDef := tree.NewColumnTableDef(spec.ColumnName, nil, []tree.ColumnAttribute{spec.DefaultExpr})
 				defer func() {
 					tmpColumnDef.Free()

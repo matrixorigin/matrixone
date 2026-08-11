@@ -23,6 +23,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
@@ -42,7 +43,7 @@ func (c AutoColumn) getInsertSQL() string {
 		values(%d, '%s', %d, %d, %d)`,
 		incrTableName,
 		c.TableID,
-		c.ColName,
+		sqlquote.EscapeString(c.ColName),
 		c.ColIndex,
 		c.Offset,
 		c.Step)
@@ -106,7 +107,7 @@ func (s *sqlStore) Allocate(
 	fetchSQL := fmt.Sprintf(`select offset, step from %s where table_id = %d and col_name = '%s' for update`,
 		incrTableName,
 		tableID,
-		colName)
+		sqlquote.EscapeString(colName))
 	opts := executor.Options{}.
 		WithDatabase(database).
 		WithTxn(txnOp).
@@ -177,7 +178,7 @@ func (s *sqlStore) Allocate(
 					incrTableName,
 					next,
 					tableID,
-					colName,
+					sqlquote.EscapeString(colName),
 					current)
 				start = time.Now()
 				res, err = te.Exec(sql, executor.StatementOption{}.WithDisableLog())
@@ -296,7 +297,7 @@ func (s *sqlStore) UpdateMinValue(
 			incrTableName,
 			minValue,
 			tableID,
-			col,
+			sqlquote.EscapeString(col),
 			minValue),
 		opts)
 	if err != nil {
@@ -306,12 +307,127 @@ func (s *sqlStore) UpdateMinValue(
 	return nil
 }
 
+func (s *sqlStore) SetOffset(
+	ctx context.Context,
+	tableID uint64,
+	colName string,
+	offset uint64,
+	txnOp client.TxnOperator,
+) error {
+	opts := executor.Options{}.
+		WithDatabase(database).
+		WithTxn(txnOp)
+	if txnOp == nil {
+		opts = opts.
+			WithWaitCommittedLogApplied().
+			WithEnableTrace().
+			WithDisableWaitPaused().
+			WithStatementOption(executor.StatementOption{}.WithDisableLog())
+	} else {
+		opts = opts.WithDisableIncrStatement()
+	}
+	res, err := s.exec.Exec(
+		ctx,
+		fmt.Sprintf(
+			"update %s set offset = %d where table_id = %d and col_name = '%s' and offset < %d",
+			incrTableName, offset, tableID, sqlquote.EscapeString(colName), offset,
+		),
+		opts,
+	)
+	if err != nil {
+		return err
+	}
+	defer res.Close()
+	return nil
+}
+
+// ForceSetOffset sets the offset and current name of an auto-increment column
+// to any value, bypassing the monotonic guard. Only called from service.SetOffset
+// during ALTER TABLE AUTO_INCREMENT, which holds an exclusive DDL lock.
+func (s *sqlStore) ForceSetOffset(
+	ctx context.Context,
+	tableID uint64,
+	colIndex int,
+	colName string,
+	offset uint64,
+	txnOp client.TxnOperator,
+) error {
+	opts := executor.Options{}.
+		WithDatabase(database).
+		WithTxn(txnOp)
+	if txnOp == nil {
+		opts = opts.
+			WithWaitCommittedLogApplied().
+			WithEnableTrace().
+			WithDisableWaitPaused().
+			WithStatementOption(executor.StatementOption{}.WithDisableLog())
+	} else {
+		opts = opts.WithDisableIncrStatement()
+	}
+	currentRes, err := s.exec.Exec(
+		ctx,
+		fmt.Sprintf(
+			"select col_name, offset from %s where table_id = %d and col_index = %d for update",
+			incrTableName, tableID, colIndex,
+		),
+		opts,
+	)
+	if err != nil {
+		return err
+	}
+	var (
+		currentNames   []string
+		currentOffsets []uint64
+	)
+	currentRes.ReadRows(func(_ int, cols []*vector.Vector) bool {
+		currentNames = append(currentNames, executor.GetStringRows(cols[0])...)
+		currentOffsets = append(currentOffsets, executor.GetFixedRows[uint64](cols[1])...)
+		return true
+	})
+	currentRes.Close()
+	if len(currentNames) != 1 || len(currentOffsets) != 1 {
+		return moerr.NewInternalErrorf(
+			ctx,
+			"incrservice: expected one auto-increment column at index %d for table %d, found %d rows",
+			colIndex,
+			tableID,
+			min(len(currentNames), len(currentOffsets)),
+		)
+	}
+	res, err := s.exec.Exec(
+		ctx,
+		fmt.Sprintf(
+			"update %s set col_name = '%s', offset = %d where table_id = %d and col_index = %d",
+			incrTableName, sqlquote.EscapeString(colName), offset, tableID, colIndex,
+		),
+		opts,
+	)
+	if err != nil {
+		return err
+	}
+	defer res.Close()
+	if res.AffectedRows != 1 && !(res.AffectedRows == 0 && currentNames[0] == colName && currentOffsets[0] == offset) {
+		return moerr.NewInternalErrorf(
+			ctx,
+			"incrservice: expected to reset one auto-increment column at index %d for table %d, updated %d rows",
+			colIndex,
+			tableID,
+			res.AffectedRows,
+		)
+	}
+	return nil
+}
+
 func (s *sqlStore) Delete(ctx context.Context, tableID uint64) error {
+	// This is lazy GC for a dropped table whose globally allocated ID is not
+	// reused. Commit durability is sufficient: no later operation depends on
+	// this CN observing the deletion immediately. In particular, do not wait
+	// for committed logtail visibility here, because service shutdown cancels
+	// and joins this worker and that wait does not observe the worker context.
 	opts := executor.Options{}.
 		WithDatabase(database).
 		WithEnableTrace().
 		WithDisableWaitPaused().
-		WithWaitCommittedLogApplied().
 		WithStatementOption(executor.StatementOption{}.WithDisableLog())
 
 	return s.exec.ExecTxn(ctx,
@@ -333,8 +449,8 @@ func (s *sqlStore) Delete(ctx context.Context, tableID uint64) error {
 				rowCount += rows
 				return true
 			})
+			res.Close()
 			if rowCount == 0 {
-				res.Close()
 				return nil
 			}
 			res, err = s.exec.Exec(

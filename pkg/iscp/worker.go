@@ -44,6 +44,7 @@ type Worker interface {
 }
 
 type worker struct {
+	exec        *ISCPTaskExecutor
 	cnUUID      string
 	cnEngine    engine.Engine
 	cnTxnClient client.TxnClient
@@ -88,8 +89,9 @@ func (g *workerAdmissionGate) seal(cancel context.CancelFunc) {
 	g.wg.Wait()
 }
 
-func NewWorker(cnUUID string, cnEngine engine.Engine, cnTxnClient client.TxnClient, mp *mpool.MPool) Worker {
+func NewWorker(exec *ISCPTaskExecutor, cnUUID string, cnEngine engine.Engine, cnTxnClient client.TxnClient, mp *mpool.MPool) Worker {
 	worker := &worker{
+		exec:        exec,
 		cnUUID:      cnUUID,
 		cnEngine:    cnEngine,
 		cnTxnClient: cnTxnClient,
@@ -144,11 +146,16 @@ func (w *worker) Submit(iteration *IterationContext) error {
 }
 
 func (w *worker) onItem(iterCtx *IterationContext) {
+	iterCtx = w.exec.filterFencedIteration(iterCtx)
+	if iterCtx == nil {
+		return
+	}
 	err := retry(
 		w.ctx,
 		func() error {
-			err := ExecuteIteration(
+			err := ExecuteIterationWithRuntime(
 				w.ctx,
+				w.exec,
 				w.cnUUID,
 				w.cnEngine,
 				w.cnTxnClient,

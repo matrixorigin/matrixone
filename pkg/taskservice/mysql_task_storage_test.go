@@ -706,7 +706,7 @@ func TestUpdateAsyncTaskInSqlMock(t *testing.T) {
 func TestDaemonTaskInSqlMock(t *testing.T) {
 	storage, mock := newMockStorage(t)
 	mock.ExpectExec(insertDaemonTask+"(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").
-		WithArgs("-", 4, []byte(nil), "{}", 0, sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg()).
+		WithArgs("-", 0, []byte(nil), "{}", 0, sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(1, 1))
 
 	affected, err := storage.AddDaemonTask(context.Background(), newDaemonTaskForTest(1, task.TaskStatus_Created, ""))
@@ -1405,6 +1405,11 @@ func TestBuildLimitAndOrderByClause(t *testing.T) {
 	c = newConditions(WithTaskStatusCond(task.TaskStatus_Created))
 	require.Equal(t, "", buildLimitClause(c))
 	require.Equal(t, " order by task_id", buildOrderByClause(c))
+
+	clause := buildDaemonTaskWhereClause(newConditions(
+		WithTaskExecutorCond(EQ, task.TaskCode_InitCdc),
+	))
+	require.Contains(t, clause, "task_metadata_executor=7")
 }
 
 func TestRunAddDaemonTaskBranches(t *testing.T) {
@@ -1537,6 +1542,38 @@ func TestRunUpdateDaemonTaskBranches(t *testing.T) {
 		require.Equal(t, 1, n)
 	})
 
+	t.Run("unassigned runner matches null", func(t *testing.T) {
+		n, err := m.RunUpdateDaemonTask(
+			ctx,
+			[]task.DaemonTask{d},
+			&mockSqlExecutor{
+				execFn: func(_ context.Context, query string, _ ...interface{}) (sql.Result, error) {
+					require.Contains(t, query, "(task_runner='' or task_runner is NULL)")
+					require.Contains(t, query, "task_status IN (8)")
+					return mockRowsAffectedResult{rows: 1}, nil
+				},
+			},
+			WithTaskRunnerCond(EQ, ""),
+			WithTaskStatusCond(task.TaskStatus_CancelRequested),
+		)
+		require.NoError(t, err)
+		require.Equal(t, 1, n)
+	})
+
+	t.Run("nil historical details", func(t *testing.T) {
+		nilDetails := d
+		nilDetails.Details = nil
+		n, err := m.RunUpdateDaemonTask(ctx, []task.DaemonTask{nilDetails}, &mockSqlExecutor{
+			execFn: func(_ context.Context, _ string, args ...interface{}) (sql.Result, error) {
+				require.Len(t, args, 12)
+				require.Nil(t, args[10])
+				return mockRowsAffectedResult{rows: 1}, nil
+			},
+		})
+		require.NoError(t, err)
+		require.Equal(t, 1, n)
+	})
+
 	t.Run("exec error", func(t *testing.T) {
 		_, err := m.RunUpdateDaemonTask(ctx, []task.DaemonTask{d}, &mockSqlExecutor{
 			execFn: func(context.Context, string, ...interface{}) (sql.Result, error) {
@@ -1554,6 +1591,41 @@ func TestRunUpdateDaemonTaskBranches(t *testing.T) {
 		})
 		require.Error(t, err)
 	})
+}
+
+func TestRunUpdateDaemonTaskStatusPreservesLease(t *testing.T) {
+	m := &mysqlTaskStorage{}
+	ctx := context.Background()
+	updateAt := time.Now()
+	cutoff := updateAt.Add(-time.Minute)
+
+	n, err := m.RunUpdateDaemonTaskStatus(
+		ctx,
+		1,
+		task.TaskStatus_Canceled,
+		updateAt,
+		updateAt,
+		&mockSqlExecutor{
+			execFn: func(_ context.Context, query string, args ...interface{}) (sql.Result, error) {
+				require.Contains(t, query, updateDaemonTaskStatus)
+				require.NotContains(t, query, "last_heartbeat=?")
+				require.Contains(t, query, "task_status IN (8)")
+				require.Contains(t, query, "task_runner='old-cn'")
+				require.Contains(t, query, "last_heartbeat<=")
+				require.Len(t, args, 4)
+				require.Equal(t, task.TaskStatus_Canceled, args[0])
+				require.Equal(t, updateAt, args[1])
+				require.Equal(t, updateAt, args[2])
+				require.Equal(t, uint64(1), args[3])
+				return mockRowsAffectedResult{rows: 1}, nil
+			},
+		},
+		WithTaskStatusCond(task.TaskStatus_CancelRequested),
+		WithTaskRunnerCond(EQ, "old-cn"),
+		WithLastHeartbeat(LE, cutoff.UnixNano()),
+	)
+	require.NoError(t, err)
+	require.Equal(t, 1, n)
 }
 
 func TestRunDeleteDaemonTaskBranches(t *testing.T) {
@@ -1830,6 +1902,29 @@ func TestUpdateCDCTaskBranchesInSqlMock(t *testing.T) {
 		mock.ExpectExec(updateDaemonTask).WillReturnResult(sqlmock.NewResult(0, 1))
 		mock.ExpectCommit()
 		n, err := storage.UpdateCDCTask(ctx, task.TaskStatus_PauseRequested, func(_ context.Context, _ task.TaskStatus, keyMap map[CDCTaskKey]struct{}, _ SqlExecutor) (int, error) {
+			keyMap[CDCTaskKey{
+				AccountId: uint64(catalog.System_Account),
+				TaskId:    d.Metadata.ID,
+			}] = struct{}{}
+			return 1, nil
+		})
+		require.NoError(t, err)
+		require.Equal(t, 2, n)
+		mock.ExpectClose()
+		require.NoError(t, storage.Close())
+	})
+
+	t.Run("resume running task for table error recovery", func(t *testing.T) {
+		storage, mock := newMockStorage(t)
+		d := base
+		d.ID = 1
+		d.TaskStatus = task.TaskStatus_Running
+
+		mock.ExpectBegin()
+		mock.ExpectQuery(selectDaemonTask + " order by task_id").WillReturnRows(newDaemonTaskRows(t, d))
+		mock.ExpectExec(updateDaemonTask).WillReturnResult(sqlmock.NewResult(0, 1))
+		mock.ExpectCommit()
+		n, err := storage.UpdateCDCTask(ctx, task.TaskStatus_ResumeRequested, func(_ context.Context, _ task.TaskStatus, keyMap map[CDCTaskKey]struct{}, _ SqlExecutor) (int, error) {
 			keyMap[CDCTaskKey{
 				AccountId: uint64(catalog.System_Account),
 				TaskId:    d.Metadata.ID,

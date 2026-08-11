@@ -33,7 +33,7 @@ func TestGpuSearchFloatAll(t *testing.T) {
 		}
 		bp := IvfPqBuildParams{NLists: 10, M: 4, BitsPerCode: 8, AddDataOnBuild: true}
 		// Create empty index
-		index, err := NewGpuIvfPqEmpty[int8](n_vectors, dimension, L2Expanded, bp, []int{deviceID}, 1, SingleGpu)
+		index, err := NewGpuIvfPqEmpty[float32, int8](n_vectors, dimension, L2Expanded, bp, []int{deviceID}, 1, SingleGpu)
 		if err != nil {
 			t.Fatalf("Failed to create IVF-PQ: %v", err)
 		}
@@ -46,7 +46,7 @@ func TestGpuSearchFloatAll(t *testing.T) {
 			t.Fatalf("TrainQuantizer failed: %v", err)
 		}
 
-		err = index.AddChunkFloat(dataset, n_vectors, nil)
+		err = index.AddChunkQuantize(dataset, n_vectors, nil)
 		if err != nil {
 			t.Fatalf("AddChunkFloat failed: %v", err)
 		}
@@ -56,7 +56,7 @@ func TestGpuSearchFloatAll(t *testing.T) {
 		for i := range queries {
 			queries[i] = float32(i % 10)
 		}
-		res, err := index.SearchFloat(queries, 2, dimension, 1, IvfPqSearchParams{NProbes: 1})
+		res, err := index.SearchQuantize(queries, 2, dimension, 1, IvfPqSearchParams{NProbes: 1})
 		if err != nil {
 			t.Fatalf("SearchFloat failed: %v", err)
 		}
@@ -69,7 +69,7 @@ func TestGpuSearchFloatAll(t *testing.T) {
 	t.Run("IVF-Flat", func(t *testing.T) {
 		dataset := make([]Float16, n_vectors*uint64(dimension))
 		bp := IvfFlatBuildParams{NLists: 10, AddDataOnBuild: true}
-		index, err := NewGpuIvfFlat[Float16](dataset, n_vectors, dimension, L2Expanded, bp, []int{deviceID}, 1, SingleGpu, nil)
+		index, err := NewGpuIvfFlat[float32, Float16](dataset, n_vectors, dimension, L2Expanded, bp, []int{deviceID}, 1, SingleGpu, nil)
 		if err != nil {
 			t.Fatalf("Failed to create IVF-Flat: %v", err)
 		}
@@ -78,7 +78,7 @@ func TestGpuSearchFloatAll(t *testing.T) {
 		index.Build()
 
 		queries := make([]float32, uint64(dimension))
-		res, err := index.SearchFloat(queries, 1, dimension, 1, IvfFlatSearchParams{NProbes: 1})
+		res, err := index.SearchQuantize(queries, 1, dimension, 1, IvfFlatSearchParams{NProbes: 1})
 		if err != nil {
 			t.Fatalf("SearchFloat failed: %v", err)
 		}
@@ -91,7 +91,7 @@ func TestGpuSearchFloatAll(t *testing.T) {
 	t.Run("CAGRA", func(t *testing.T) {
 		dataset := make([]float32, n_vectors*uint64(dimension))
 		bp := CagraBuildParams{IntermediateGraphDegree: 64, GraphDegree: 32, AttachDatasetOnBuild: true}
-		index, err := NewGpuCagra[float32](dataset, n_vectors, dimension, L2Expanded, bp, []int{deviceID}, 1, SingleGpu, nil)
+		index, err := NewGpuCagra[float32, float32](dataset, n_vectors, dimension, L2Expanded, bp, []int{deviceID}, 1, SingleGpu, nil)
 		if err != nil {
 			t.Fatalf("Failed to create CAGRA: %v", err)
 		}
@@ -100,7 +100,7 @@ func TestGpuSearchFloatAll(t *testing.T) {
 		index.Build()
 
 		queries := make([]float32, uint64(dimension))
-		res, err := index.SearchFloat(queries, 1, dimension, 1, CagraSearchParams{ItopkSize: 64, SearchWidth: 1})
+		res, err := index.SearchQuantize(queries, 1, dimension, 1, CagraSearchParams{ItopkSize: 64, SearchWidth: 1})
 		if err != nil {
 			t.Fatalf("SearchFloat failed: %v", err)
 		}
@@ -112,7 +112,7 @@ func TestGpuSearchFloatAll(t *testing.T) {
 	// 4. Test Brute-Force SearchFloat (with half)
 	t.Run("Brute-Force", func(t *testing.T) {
 		dataset := make([]Float16, n_vectors*uint64(dimension))
-		index, err := NewGpuBruteForce[Float16](dataset, n_vectors, dimension, L2Expanded, 1, deviceID)
+		index, err := NewGpuBruteForce[float32, Float16](dataset, n_vectors, dimension, L2Expanded, 1, deviceID)
 		if err != nil {
 			t.Fatalf("Failed to create Brute-Force: %v", err)
 		}
@@ -121,9 +121,9 @@ func TestGpuSearchFloatAll(t *testing.T) {
 		index.Build()
 
 		queries := make([]float32, uint64(dimension))
-		neighbors, _, err := index.SearchFloat(queries, 1, dimension, 1)
+		neighbors, _, err := index.SearchQuantize(queries, 1, dimension, 1)
 		if err != nil {
-			t.Fatalf("SearchFloat failed: %v", err)
+			t.Fatalf("SearchQuantize failed: %v", err)
 		}
 		if len(neighbors) != 1 {
 			t.Errorf("Expected 1 neighbor, got %d", len(neighbors))

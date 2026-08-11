@@ -1,0 +1,118 @@
+{
+  "source": "pyiceberg 0.8.1 transforms",
+  "bucket": [
+    {
+      "type": "int",
+      "num_buckets": 16,
+      "cases": [
+        {"input": "0", "expected": 12},
+        {"input": "1", "expected": 4},
+        {"input": "-1", "expected": 8},
+        {"input": "34", "expected": 3},
+        {"input": "-34", "expected": 13},
+        {"input": "123456789", "expected": 1}
+      ]
+    },
+    {
+      "type": "long",
+      "num_buckets": 16,
+      "cases": [
+        {"input": "0", "expected": 12},
+        {"input": "1", "expected": 4},
+        {"input": "-1", "expected": 8},
+        {"input": "34", "expected": 3},
+        {"input": "-34", "expected": 13},
+        {"input": "1234567890123456789", "expected": 1}
+      ]
+    },
+    {
+      "type": "string",
+      "num_buckets": 16,
+      "cases": [
+        {"input": "", "expected": 0},
+        {"input": "a", "expected": 2},
+        {"input": "abc", "expected": 10},
+        {"input": "MatrixOne", "expected": 9},
+        {"input": "iceberg", "expected": 9}
+      ]
+    },
+    {
+      "type": "binary",
+      "num_buckets": 16,
+      "cases": [
+        {"input_hex": "", "expected": 0},
+        {"input_hex": "61", "expected": 2},
+        {"input_hex": "616263", "expected": 10},
+        {"input_hex": "000102ff", "expected": 4}
+      ]
+    },
+    {
+      "type": "decimal",
+      "scale": 2,
+      "num_buckets": 16,
+      "cases": [
+        {"input": "0.00", "expected": 7},
+        {"input": "1.23", "expected": 1},
+        {"input": "-1.23", "expected": 5},
+        {"input": "12345.67", "expected": 3}
+      ]
+    }
+  ],
+  "truncate": [
+    {
+      "type": "int",
+      "width": 10,
+      "cases": [
+        {"input": "0", "expected": "0"},
+        {"input": "1", "expected": "0"},
+        {"input": "9", "expected": "0"},
+        {"input": "10", "expected": "10"},
+        {"input": "11", "expected": "10"},
+        {"input": "-1", "expected": "-10"},
+        {"input": "-9", "expected": "-10"},
+        {"input": "-10", "expected": "-10"},
+        {"input": "-11", "expected": "-20"},
+        {"input": "123456789", "expected": "123456780"}
+      ]
+    },
+    {
+      "type": "long",
+      "width": 10,
+      "cases": [
+        {"input": "0", "expected": "0"},
+        {"input": "1", "expected": "0"},
+        {"input": "9", "expected": "0"},
+        {"input": "10", "expected": "10"},
+        {"input": "11", "expected": "10"},
+        {"input": "-1", "expected": "-10"},
+        {"input": "-9", "expected": "-10"},
+        {"input": "-10", "expected": "-10"},
+        {"input": "-11", "expected": "-20"},
+        {"input": "1234567890123456789", "expected": "1234567890123456780"}
+      ]
+    },
+    {
+      "type": "string",
+      "width": 4,
+      "cases": [
+        {"input": "", "expected": ""},
+        {"input": "a", "expected": "a"},
+        {"input": "abcd", "expected": "abcd"},
+        {"input": "abcde", "expected": "abcd"},
+        {"input": "\u00e9clair", "expected": "\u00e9cla"},
+        {"input": "\u6570\u636e\u6e56", "expected": "\u6570\u636e\u6e56"}
+      ]
+    },
+    {
+      "type": "binary",
+      "width": 4,
+      "cases": [
+        {"input_hex": "", "expected_hex": ""},
+        {"input_hex": "61", "expected_hex": "61"},
+        {"input_hex": "61626364", "expected_hex": "61626364"},
+        {"input_hex": "6162636465", "expected_hex": "61626364"},
+        {"input_hex": "0001020304ff", "expected_hex": "00010203"}
+      ]
+    }
+  ]
+}

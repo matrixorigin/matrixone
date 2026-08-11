@@ -18,7 +18,14 @@ import (
 	"math"
 	"sync"
 
+	"go.uber.org/zap"
+
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+)
+
+var (
+	eventProxyBackendConnected    = logutil.Event{Name: "proxy.backend.connected", Message: "proxy connected to CN backend"}
+	eventProxyBackendDisconnected = logutil.Event{Name: "proxy.backend.disconnected", Message: "proxy disconnected from CN backend"}
 )
 
 // Tenant defines alias tenant name type of string.
@@ -233,25 +240,30 @@ func (m *connManager) selectOne(hash LabelHash, cns []*CNServer) *CNServer {
 func (m *connManager) connect(cn *CNServer, t *tunnel) {
 	m.Lock()
 	defer m.Unlock()
-	ci, ok := m.conns[cn.hash]
-	if !ok {
-		// This should not happen if selectOne was called first, but handle it gracefully.
-		m.conns[cn.hash] = newConnInfo(cn.reqLabel)
-		ci = m.conns[cn.hash]
-		ci.cnTunnels.add(cn.uuid, t)
-	} else {
-		// Remove one placeholder tunnel and add the real tunnel.
-		// The placeholder was added in selectOne to reserve the connection slot.
-		ci.cnTunnels.delOnePlaceholder(cn.uuid)
-		ci.cnTunnels.add(cn.uuid, t)
+	if t != nil {
+		ci, ok := m.conns[cn.hash]
+		if !ok {
+			// This should not happen if selectOne was called first, but handle it gracefully.
+			m.conns[cn.hash] = newConnInfo(cn.reqLabel)
+			ci = m.conns[cn.hash]
+			ci.cnTunnels.add(cn.uuid, t)
+		} else {
+			// Remove one placeholder tunnel and add the real tunnel.
+			// The placeholder was added in selectOne to reserve the connection slot.
+			ci.cnTunnels.delOnePlaceholder(cn.uuid)
+			ci.cnTunnels.add(cn.uuid, t)
+		}
+
+		if _, ok := m.cnTunnels[cn.uuid]; !ok {
+			m.cnTunnels[cn.uuid] = make(tunnelSet)
+		}
+		m.cnTunnels[cn.uuid][t] = struct{}{}
 	}
 	m.connIDServers[cn.connID] = cn
-
-	if _, ok := m.cnTunnels[cn.uuid]; !ok {
-		m.cnTunnels[cn.uuid] = make(tunnelSet)
-	}
-	m.cnTunnels[cn.uuid][t] = struct{}{}
-	logutil.Infof("connect to CN server %s, the conn ID is %d", cn.uuid, cn.connID)
+	eventProxyBackendConnected.DebugLazy(func() []zap.Field {
+		fields := logutil.StringFingerprintFields("cn", cn.uuid)
+		return append(fields, zap.Uint32("connection-id", cn.connID))
+	})
 }
 
 // selectOneFailed is called when a connection selected by selectOne fails to establish.
@@ -271,13 +283,49 @@ func (m *connManager) selectOneFailed(hash LabelHash, cnUUID string) {
 func (m *connManager) disconnect(cn *CNServer, t *tunnel) {
 	m.Lock()
 	defer m.Unlock()
-	ci, ok := m.conns[cn.hash]
-	if ok {
-		ci.cnTunnels.del(cn.uuid, t)
+	if t != nil {
+		ci, ok := m.conns[cn.hash]
+		if ok {
+			ci.cnTunnels.del(cn.uuid, t)
+		}
+		delete(m.cnTunnels[cn.uuid], t)
 	}
-	delete(m.cnTunnels[cn.uuid], t)
 	delete(m.connIDServers, cn.connID)
-	logutil.Infof("disconnect from CN server %s, the conn ID is %d", cn.uuid, cn.connID)
+	eventProxyBackendDisconnected.DebugLazy(func() []zap.Field {
+		fields := logutil.StringFingerprintFields("cn", cn.uuid)
+		return append(fields, zap.Uint32("connection-id", cn.connID))
+	})
+}
+
+// rebind moves an already-established backend from one tunnel generation to
+// another without changing the physical connection count. Unlike connect, it
+// must not consume a route-selection placeholder.
+func (m *connManager) rebind(cn *CNServer, old, next *tunnel) {
+	m.Lock()
+	defer m.Unlock()
+	if cn == nil || old == next {
+		return
+	}
+	if old != nil {
+		if ci, ok := m.conns[cn.hash]; ok {
+			ci.cnTunnels.del(cn.uuid, old)
+		}
+		if tunnels, ok := m.cnTunnels[cn.uuid]; ok {
+			delete(tunnels, old)
+		}
+	}
+	if next != nil {
+		ci, ok := m.conns[cn.hash]
+		if !ok {
+			ci = newConnInfo(cn.reqLabel)
+			m.conns[cn.hash] = ci
+		}
+		ci.cnTunnels.add(cn.uuid, next)
+		if m.cnTunnels[cn.uuid] == nil {
+			m.cnTunnels[cn.uuid] = make(tunnelSet)
+		}
+		m.cnTunnels[cn.uuid][next] = struct{}{}
+	}
 }
 
 // count returns the total connection count.

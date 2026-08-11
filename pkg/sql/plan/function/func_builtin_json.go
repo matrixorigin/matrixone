@@ -17,7 +17,6 @@ package function
 import (
 	"bytes"
 	"context"
-	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
@@ -268,12 +267,9 @@ func jsonLengthCheckFn(overloads []overload, inputs []types.Type) checkResult {
 
 type computeFn func([]byte, []*bytejson.Path) (bytejson.ByteJson, error)
 
-type computeJsonFn func([]byte, []*bytejson.Path, []bytejson.ByteJson) (bytejson.ByteJson, error)
+type computeExtractFn func([]byte, []*bytejson.Path) (bytejson.ByteJson, bool, error)
 
-func computeJson(json []byte, paths []*bytejson.Path) (bytejson.ByteJson, error) {
-	bj := types.DecodeJson(json)
-	return bj.Query(paths), nil
-}
+type computeJsonFn func([]byte, []*bytejson.Path, []bytejson.ByteJson) (bytejson.ByteJson, error)
 
 func computeString(json []byte, paths []*bytejson.Path) (bytejson.ByteJson, error) {
 	bj, err := types.ParseSliceToByteJson(json)
@@ -294,6 +290,36 @@ func computeStringSimple(json []byte, paths []*bytejson.Path) (bytejson.ByteJson
 		return bytejson.Null, err
 	}
 	return bj.QuerySimple(paths), nil
+}
+
+func computeJsonWithExists(json []byte, paths []*bytejson.Path) (bytejson.ByteJson, bool, error) {
+	bj := types.DecodeJson(json)
+	result, exists := bj.QueryWithExists(paths)
+	return result, exists, nil
+}
+
+func computeStringWithExists(json []byte, paths []*bytejson.Path) (bytejson.ByteJson, bool, error) {
+	bj, err := types.ParseSliceToByteJson(json)
+	if err != nil {
+		return bytejson.Null, false, err
+	}
+	result, exists := bj.QueryWithExists(paths)
+	return result, exists, nil
+}
+
+func computeJsonSimpleWithExists(json []byte, paths []*bytejson.Path) (bytejson.ByteJson, bool, error) {
+	bj := types.DecodeJson(json)
+	result, exists := bj.QuerySimpleWithExists(paths)
+	return result, exists, nil
+}
+
+func computeStringSimpleWithExists(json []byte, paths []*bytejson.Path) (bytejson.ByteJson, bool, error) {
+	bj, err := types.ParseSliceToByteJson(json)
+	if err != nil {
+		return bytejson.Null, false, err
+	}
+	result, exists := bj.QuerySimpleWithExists(paths)
+	return result, exists, nil
 }
 
 func (op *opBuiltInJsonContains) jsonContains(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
@@ -646,6 +672,9 @@ func jsonContainsScalar(target, candidate bytejson.ByteJson) bool {
 
 	if isJsonNumericType(target.Type) && isJsonNumericType(candidate.Type) {
 		return jsonContainsNumericEqual(target, candidate)
+	}
+	if cmp, ok := bytejson.CompareBinaryJSON(target, candidate); ok {
+		return cmp == 0
 	}
 	if target.Type != candidate.Type {
 		return false
@@ -1081,7 +1110,7 @@ func (op *opBuiltInJsonExtract) buildOnePath(paramWrappers []vector.FunctionPara
 
 func (op *opBuiltInJsonExtract) jsonExtract(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	var err error
-	var fn computeFn
+	var fn computeExtractFn
 
 	jsonVec := parameters[0]
 	jsonWrapper := vector.GenerateFunctionStrParameter(jsonVec)
@@ -1103,15 +1132,15 @@ func (op *opBuiltInJsonExtract) jsonExtract(parameters []*vector.Vector, result 
 
 	if op.simple {
 		if jsonVec.GetType().Oid == types.T_json {
-			fn = computeJsonSimple
+			fn = computeJsonSimpleWithExists
 		} else {
-			fn = computeStringSimple
+			fn = computeStringSimpleWithExists
 		}
 	} else {
 		if jsonVec.GetType().Oid == types.T_json {
-			fn = computeJson
+			fn = computeJsonWithExists
 		} else {
-			fn = computeString
+			fn = computeStringWithExists
 		}
 	}
 
@@ -1137,11 +1166,11 @@ func (op *opBuiltInJsonExtract) jsonExtract(parameters []*vector.Vector, result 
 			}
 			continue
 		} else {
-			out, err := fn(jsonBytes, paths)
+			out, exists, err := fn(jsonBytes, paths)
 			if err != nil {
 				return err
 			}
-			if out.IsNull() {
+			if !exists {
 				if err = rs.AppendBytes(nil, true); err != nil {
 					return err
 				}
@@ -1219,7 +1248,7 @@ func (op *opBuiltInJsonExtract) jsonExtractString(parameters []*vector.Vector, r
 				}
 			} else {
 				switch out.Type {
-				case bytejson.TpCodeString, bytejson.TpCodeDate, bytejson.TpCodeTime, bytejson.TpCodeDatetime, bytejson.TpCodeBlob:
+				case bytejson.TpCodeString, bytejson.TpCodeDate, bytejson.TpCodeTime, bytejson.TpCodeDatetime, bytejson.TpCodeBlob, bytejson.TpCodeOpaque, bytejson.TpCodeBit:
 					outstr, err := out.Unquote()
 					if err != nil {
 						return err
@@ -1945,7 +1974,12 @@ func (op *opBuiltInJsonArray) convertToAny(proc *process.Process, v *vector.Vect
 		if v.IsNull(uint64(row)) {
 			return nil, nil
 		}
-		return string(v.GetBytesAt(row)), nil
+		value := string(v.GetBytesAt(row))
+		kind := v.GetPrepareParamKindAt(row)
+		if kind == vector.PrepareParamNone {
+			return value, nil
+		}
+		return preparedTextToJSONValue(ctx, value, kind)
 	case types.T_json:
 		if v.IsNull(uint64(row)) {
 			return nil, nil
@@ -1992,10 +2026,7 @@ func (op *opBuiltInJsonArray) convertToAny(proc *process.Process, v *vector.Vect
 		if v.IsNull(uint64(row)) {
 			return nil, nil
 		}
-		data := v.GetBytesAt(row)
-		dst := make([]byte, base64.StdEncoding.EncodedLen(len(data)))
-		base64.StdEncoding.Encode(dst, data)
-		return newTypedByteJson(bytejson.TpCodeBlob, string(dst)), nil
+		return newTypedByteJson(bytejson.TpCodeOpaque, string(v.GetBytesAt(row))), nil
 	case types.T_decimal256:
 		if v.IsNull(uint64(row)) {
 			return nil, nil
@@ -2012,7 +2043,11 @@ func (op *opBuiltInJsonArray) convertToAny(proc *process.Process, v *vector.Vect
 		if v.IsNull(uint64(row)) {
 			return nil, nil
 		}
-		return newTypedByteJson(bytejson.TpCodeBlob, strconv.FormatUint(vector.GetFixedAtNoTypeCheck[uint64](v, row), 10)), nil
+		ctx := context.Background()
+		if proc != nil && proc.Ctx != nil {
+			ctx = proc.Ctx
+		}
+		return bitToJSON(vector.GetFixedAtNoTypeCheck[uint64](v, row), fromType.Width, ctx)
 	case types.T_enum:
 		if v.IsNull(uint64(row)) {
 			return nil, nil
@@ -2050,11 +2085,88 @@ func (op *opBuiltInJsonArray) convertToAny(proc *process.Process, v *vector.Vect
 			out[i] = x
 		}
 		return out, nil
+	case types.T_array_bf16:
+		if v.IsNull(uint64(row)) {
+			return nil, nil
+		}
+		arr := types.BytesToArray[types.BF16](v.GetBytesAt(row))
+		out := make([]any, len(arr))
+		for i, x := range arr {
+			out[i] = float64(x.ToFloat32())
+		}
+		return out, nil
+	case types.T_array_float16:
+		if v.IsNull(uint64(row)) {
+			return nil, nil
+		}
+		arr := types.BytesToArray[types.Float16](v.GetBytesAt(row))
+		out := make([]any, len(arr))
+		for i, x := range arr {
+			out[i] = float64(x.ToFloat32())
+		}
+		return out, nil
+	case types.T_array_int8:
+		if v.IsNull(uint64(row)) {
+			return nil, nil
+		}
+		arr := types.BytesToArray[int8](v.GetBytesAt(row))
+		out := make([]any, len(arr))
+		for i, x := range arr {
+			out[i] = float64(x)
+		}
+		return out, nil
+	case types.T_array_uint8:
+		if v.IsNull(uint64(row)) {
+			return nil, nil
+		}
+		arr := types.BytesToArray[uint8](v.GetBytesAt(row))
+		out := make([]any, len(arr))
+		for i, x := range arr {
+			out[i] = float64(x)
+		}
+		return out, nil
 	default:
 		if v.IsNull(uint64(row)) {
 			return nil, nil
 		}
 		return nil, moerr.NewInvalidInputf(ctx, "unsupported type for json_array: %v", fromType.String())
+	}
+}
+
+func preparedTextToJSONValue(
+	ctx context.Context,
+	value string,
+	kind vector.PrepareParamKind,
+) (any, error) {
+	switch kind {
+	case vector.PrepareParamInteger:
+		if signed, err := strconv.ParseInt(value, 10, 64); err == nil {
+			return signed, nil
+		}
+		if unsigned, err := strconv.ParseUint(value, 10, 64); err == nil {
+			return unsigned, nil
+		}
+		return nil, moerr.NewInvalidInputf(ctx, "invalid prepared integer JSON value %q", value)
+	case vector.PrepareParamFloat:
+		floating, err := strconv.ParseFloat(value, 64)
+		if err != nil {
+			return nil, moerr.NewInvalidInputf(ctx, "invalid prepared floating-point JSON value %q", value)
+		}
+		return finiteFloatToJSON(floating, ctx)
+	case vector.PrepareParamDecimal:
+		if len(value) == 0 || !json.Valid([]byte(value)) ||
+			(value[0] != '-' && (value[0] < '0' || value[0] > '9')) {
+			return nil, moerr.NewInvalidInputf(ctx, "invalid prepared decimal JSON value %q", value)
+		}
+		return newTypedByteJson(bytejson.TpCodeDecimal, value), nil
+	case vector.PrepareParamBoolean:
+		boolean, err := strconv.ParseBool(value)
+		if err != nil {
+			return nil, moerr.NewInvalidInputf(ctx, "invalid prepared boolean JSON value %q", value)
+		}
+		return boolean, nil
+	default:
+		return nil, moerr.NewInternalErrorf(ctx, "unsupported prepared parameter kind %d", kind)
 	}
 }
 
@@ -2120,7 +2232,7 @@ func (op *opBuiltInJsonObject) jsonObject(params []*vector.Vector, result vector
 					} else {
 						key = fmt.Sprint(v)
 					}
-				case bytejson.TpCodeDate, bytejson.TpCodeTime, bytejson.TpCodeDatetime, bytejson.TpCodeBlob:
+				case bytejson.TpCodeDate, bytejson.TpCodeTime, bytejson.TpCodeDatetime, bytejson.TpCodeBlob, bytejson.TpCodeOpaque, bytejson.TpCodeBit:
 					if bj, err := v.MarshalJSON(); err == nil && len(bj) >= 2 && bj[0] == '"' {
 						key = string(bj[1 : len(bj)-1])
 					} else {

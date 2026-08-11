@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -48,12 +49,14 @@ var (
 		InformationSchemaUserPrivilegesDDL,
 		InformationSchemaSchemataDDL,
 		InformationSchemaCharacterSetsDDL,
+		InformationSchemaCharacterSetsData,
 		InformationSchemaTriggersDDL,
 		InformationSchemaTablesDDL,
 		InformationSchemaPartitionsDDL,
 		InformationSchemaViewsDDL,
 		InformationSchemaStatisticsDDL,
 		InformationSchemaReferentialConstraintsDDL,
+		InformationSchemaCheckConstraintsDDL,
 		InformationSchemaEnginesDDL,
 		InformationSchemaRoutinesDDL,
 		InformationSchemaParametersDDL,
@@ -68,6 +71,25 @@ var (
 		informationSchemaKeywordsData,
 	}
 )
+
+func InitInformationSchemaSysTablesForProtocol(protocol int64) []string {
+	if protocol >= defines.MORPCVersion16 {
+		return InitInformationSchemaSysTables
+	}
+
+	sqls := make([]string, 0, len(InitInformationSchemaSysTables)-1)
+	for _, sql := range InitInformationSchemaSysTables {
+		switch sql {
+		case InformationSchemaCheckConstraintsDDL:
+			continue
+		case InformationSchemaTableConstraintsDDL:
+			sqls = append(sqls, InformationSchemaTableConstraintsLegacyDDL)
+		default:
+			sqls = append(sqls, sql)
+		}
+	}
+	return sqls
+}
 
 func InitSchema(ctx context.Context, txn executor.TxnExecutor) error {
 	if err := initMysqlTables(ctx, txn); err != nil {

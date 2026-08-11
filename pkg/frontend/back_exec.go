@@ -54,6 +54,11 @@ type backExec struct {
 	statsArray *statistic.StatsArray
 }
 
+type backgroundExecRowCount interface {
+	GetLastAffectedRows() int64
+	SetLastAffectedRows(int64)
+}
+
 func (back *backExec) init(ses FeSession, txnOp TxnOperator, db string, callBack outputCallBackFunc) {
 	back.backSes = newBackSession(ses, txnOp, db, callBack)
 	if back.statsArray != nil {
@@ -65,6 +70,14 @@ func (back *backExec) init(ses FeSession, txnOp TxnOperator, db string, callBack
 
 func (back *backExec) Service() string {
 	return back.backSes.GetService()
+}
+
+func (back *backExec) GetLastAffectedRows() int64 {
+	return back.backSes.lastAffectedRows
+}
+
+func (back *backExec) SetLastAffectedRows(rows int64) {
+	back.backSes.lastAffectedRows = rows
 }
 
 func (back *backExec) Close() {
@@ -94,6 +107,17 @@ func (back *backExec) GetExecStatsArray() statistic.StatsArray {
 
 var restoreSqlRegx = regexp.MustCompile("MO_TS.*=")
 
+func installBackExecStatsInfo(
+	ctx context.Context,
+	parseStart time.Time,
+	parseDuration time.Duration,
+) (context.Context, *statistic.StatsInfo) {
+	statsInfo := statistic.NewStatsInfo()
+	statsInfo.ParseStage.ParseStartTime = parseStart
+	statsInfo.ParseStage.ParseDuration = parseDuration
+	return statistic.ContextWithStatsInfo(ctx, statsInfo), statsInfo
+}
+
 func (back *backExec) Exec(ctx context.Context, sql string) (retErr error) {
 	return back.exec(ctx, sql, "", false)
 }
@@ -108,6 +132,11 @@ func (back *backExec) ExecWithSQLMode(ctx context.Context, sql string, sqlMode s
 func (back *backExec) exec(ctx context.Context, sql string, sqlMode string, useSQLMode bool) (retErr error) {
 	back.backSes.EnterFPrint(FPBackExecExec)
 	defer back.backSes.ExitFPrint(FPBackExecExec)
+	defer func() {
+		if retErr != nil {
+			back.SetLastAffectedRows(-1)
+		}
+	}()
 	if ctx == nil {
 		return moerr.NewInternalError(context.Background(), "context is nil")
 	}
@@ -366,6 +395,7 @@ func doComQueryInBack(
 		getPu(backSes.GetService()).GetTaskService())
 	proc.Base.Id = backSes.getNextProcessId()
 	proc.Base.Lim.Size = pu.SV.ProcessLimitationSize
+	proc.Base.Lim.SpillSize = pu.SV.ProcessLimitationSpillSize
 	proc.Base.Lim.BatchRows = pu.SV.ProcessLimitationBatchRows
 	proc.Base.Lim.MaxMsgSize = pu.SV.MaxMessageSize
 	proc.Base.Lim.PartitionRows = pu.SV.ProcessLimitationPartitionRows
@@ -378,8 +408,15 @@ func doComQueryInBack(
 		StorageEngine: pu.StorageEngine,
 		Buf:           backSes.buf,
 	}
+	proc.SetAffectedRows(backSes.lastAffectedRows)
+	bindBackExecSession(proc, backSes)
 	proc.SetStmtProfile(&backSes.stmtProfile)
 	proc.SetResolveVariableFunc(backSes.txnCompileCtx.ResolveVariable)
+	proc.SetResolveVariableIsBinFunc(backSes.txnCompileCtx.ResolveVariableIsBin)
+	proc.SetResolveVariablePrepareParamKindFunc(backSes.txnCompileCtx.ResolveVariablePrepareParamKind)
+	// backExec.Exec and ExecRestore reject multi-statement SQL before reaching
+	// this path, so one snapshot here covers the complete background statement.
+	refreshBackgroundStatementScopedSessionInfo(backSes, input, proc)
 	// Frontend back-exec — session-bound resolver. backSession is a
 	// frontend session without a client connection (NOT a system
 	// background task); all callers go through ses.GetBackgroundExec(...)
@@ -401,12 +438,13 @@ func doComQueryInBack(
 	execCtx.reqCtx, span = trace.Start(execCtx.reqCtx, "backExec.doComQueryInBack",
 		trace.WithKind(trace.SpanKindStatement))
 	defer span.End()
+	statsParentCtx := execCtx.reqCtx
 
-	// Instantiate StatsInfo to track SQL resource statistics
-	//statsInfo := new(statistic.StatsInfo)
-	statsInfo := statistic.NewStatsInfo()
-	statsInfo.ParseStage.ParseStartTime = beginInstant
-	execCtx.reqCtx = statistic.ContextWithStatsInfo(execCtx.reqCtx, statsInfo)
+	// Instantiate StatsInfo to track SQL resource statistics. Keep this
+	// parsing instance for the parse-error path; successful substatements get
+	// their own instances below so their phase accounting is not reused.
+	var parseStatsInfo *statistic.StatsInfo
+	execCtx.reqCtx, parseStatsInfo = installBackExecStatsInfo(statsParentCtx, beginInstant, 0)
 	execCtx.input = input
 
 	proc.Base.SessionInfo.User = userNameOnly
@@ -422,7 +460,7 @@ func doComQueryInBack(
 	ParseDuration := time.Since(beginInstant)
 
 	if err != nil {
-		statsInfo.ParseStage.ParseDuration = ParseDuration
+		parseStatsInfo.ParseStage.ParseDuration = ParseDuration
 
 		retErr = err
 		if _, ok := err.(*moerr.Error); !ok {
@@ -469,12 +507,20 @@ func doComQueryInBack(
 			}
 		}
 
-		statsInfo.Reset()
-		//average parse duration
-		statsInfo.ParseStage.ParseStartTime = beginInstant
-		statsInfo.ParseStage.ParseDuration = time.Duration(ParseDuration.Nanoseconds() / int64(len(cws)))
+		// Each successfully parsed substatement gets an independent StatsInfo.
+		// ContextWithStatsInfo preserves the parent context, including its
+		// resource.Root, while allowing compile and execution to claim this
+		// statement's phase resource exactly once.
+		execCtx.reqCtx, _ = installBackExecStatsInfo(
+			statsParentCtx,
+			beginInstant,
+			time.Duration(ParseDuration.Nanoseconds()/int64(len(cws))),
+		)
 
 		tenant := backSes.GetTenantNameWithStmt(stmt)
+		if backSes.upstream != nil {
+			removePrepareStmtForReplacement(backSes.upstream, stmt)
+		}
 
 		/*
 				if it is in an active or multi-statement transaction, we check the type of the statement.
@@ -509,9 +555,64 @@ func doComQueryInBack(
 		if err != nil {
 			return err
 		}
+		if _, ok := stmt.(*tree.CallStmt); ok {
+			if err = appendNestedCallResults(execCtx.reqCtx, backSes, execCtx.results); err != nil {
+				return err
+			}
+		}
+		backSes.lastAffectedRows = affectedRowsForStatement(execCtx)
 	} // end of for
 
 	return nil
+}
+
+func refreshBackgroundStatementScopedSessionInfo(backSes *backSession, input *UserInput, proc *process.Process) {
+	nativeMode := backSes.currentMatrixOneNativeMode()
+	if input != nil && input.useParserSQLMode {
+		nativeMode = mysql.HasMatrixOneNativeSQLMode(input.parserSQLMode)
+	}
+	backSes.effectiveMatrixOneNativeMode = nativeMode
+	backSes.hasEffectiveMatrixOneNativeMode = true
+	refreshStatementScopedSessionInfoWithNativeMode(nativeMode, proc)
+}
+
+func appendNestedCallResults(ctx context.Context, backSes *backSession, results []ExecResult) error {
+	for _, result := range results {
+		mrs, ok := result.(*MysqlResultSet)
+		if !ok {
+			return moerr.NewInternalError(ctx, "nested CALL returned an unsupported result type")
+		}
+		backSes.allResultSet = append(backSes.allResultSet, mrs)
+	}
+	return nil
+}
+
+func affectedRowsForStatement(execCtx *ExecCtx) int64 {
+	switch execCtx.stmt.StmtKind().OutputType() {
+	case tree.OUTPUT_RESULT_ROW:
+		return -1
+	case tree.OUTPUT_STATUS:
+		if execCtx.runResult != nil {
+			return int64(execCtx.runResult.AffectRows)
+		}
+	case tree.OUTPUT_UNDEFINED:
+		if _, ok := execCtx.stmt.(*tree.CallStmt); ok && execCtx.runResult != nil {
+			return int64(execCtx.runResult.AffectRows)
+		}
+	}
+	return 0
+}
+
+// bindBackExecSession preserves the caller's session scope for SQL executed by
+// a frontend background executor. The back session forwards temporary-table
+// aliases to its upstream session, while the upstream ID keeps physical table
+// names visible to the temporary-table GC as belonging to the active client.
+func bindBackExecSession(proc *process.Process, backSes *backSession) {
+	if backSes.upstream == nil {
+		return
+	}
+	proc.Session = backSes
+	proc.Base.SessionInfo.SessionId = backSes.upstream.GetSessId()
 }
 
 func executeStmtInBack(backSes *backSession,
@@ -566,10 +667,15 @@ func executeStmtInBack(backSes *backSession,
 	}
 
 	defer func() {
-		if c, ok := ret.(*compile.Compile); ok && statsArr != nil {
-			statsByte := execCtx.cw.StatsCompositeSubStmtResource(execCtx.reqCtx)
-			statsArr.Reset()
-			statsArr.Add(&statsByte)
+		if c, ok := ret.(*compile.Compile); ok {
+			// Preserve the historical BackgroundExec projection for engine-backed
+			// execution. This is return-only data; the authoritative statement
+			// resource root is sealed independently and must not ingest it again.
+			if statsArr != nil {
+				statsByte := execCtx.cw.StatsCompositeSubStmtResource(execCtx.reqCtx)
+				statsArr.Reset()
+				statsArr.Add(&statsByte)
+			}
 			c.Release()
 		}
 	}()
@@ -716,6 +822,9 @@ func backSesOutputCallback(handle FeSession, execCtx *ExecCtx, dataSet *batch.Ba
 	if handle == nil || dataSet == nil {
 		return nil
 	}
+	if execCtx != nil && isPerformStatement(execCtx.stmt) {
+		return nil
+	}
 
 	// uncomment this to enable backExec export data to CSV file.
 	//back := handle.(*backSession)
@@ -765,7 +874,13 @@ func executeSQLInBackgroundSession(reqCtx context.Context, bh BackgroundExec, sq
 // executeStmtInSameSession executes the statement in the same session.
 // To be clear, only for the select statement derived from the set_var statement
 // in an independent transaction
-func executeStmtInSameSession(ctx context.Context, ses *Session, execCtx *ExecCtx, stmt tree.Statement) error {
+func executeStmtInSameSession(
+	ctx context.Context,
+	ses *Session,
+	execCtx *ExecCtx,
+	stmt tree.Statement,
+	preparedExpression bool,
+) error {
 	ses.EnterFPrint(FPExecStmtInSameSession)
 	defer ses.ExitFPrint(FPExecStmtInSameSession)
 	switch stmt.(type) {
@@ -795,9 +910,12 @@ func executeStmtInSameSession(ctx context.Context, ses *Session, execCtx *ExecCt
 	prevDerivedStmt := ses.ReplaceDerivedStmt(true)
 	// inherit database
 	ses.SetDatabaseName(prevDB)
-	proc := ses.GetTxnCompileCtx().GetProcess()
+	proc := ses.proc
+	prepareParams := proc.DetachPrepareParams()
+	proc.BorrowPrepareParams(prepareParams)
 	//restore normal protocol and output callback
 	defer func() {
+		defer proc.RestorePrepareParams(prepareParams)
 		ses.ReplaceDerivedStmt(prevDerivedStmt)
 		//@todo we need to improve: make one session, one proc, one txnOperator
 		p := ses.GetTxnCompileCtx().GetProcess()
@@ -814,13 +932,21 @@ func executeStmtInSameSession(ctx context.Context, ses *Session, execCtx *ExecCt
 	ses.Debug(ctx, "query trace(ExecStmtInSameSession)",
 		logutil.ConnectionIdField(ses.GetConnectionID()))
 	//3. execute the statement
-	return doComQuery(ses, execCtx, &UserInput{stmt: stmt, isInternalInput: true})
+	return doComQuery(ses, execCtx, &UserInput{
+		stmt:                 stmt,
+		isInternalInput:      true,
+		isSetExpression:      true,
+		isPreparedExpression: preparedExpression,
+	})
 }
 
 // fakeDataSetFetcher2 gets the result set from the pipeline and save it in the session.
 // It will not send the result to the client.
 func fakeDataSetFetcher2(handle FeSession, execCtx *ExecCtx, dataSet *batch.Batch, _ *perfcounter.CounterSet) error {
 	if handle == nil || dataSet == nil {
+		return nil
+	}
+	if execCtx != nil && isPerformStatement(execCtx.stmt) {
 		return nil
 	}
 
@@ -851,8 +977,11 @@ func fillResultSet(ctx context.Context, dataSet *batch.Batch, ses FeSession, mrs
 
 // batchFetcher2 gets the result batches from the pipeline and save the origin batches in the session.
 // It will not send the result to the client.
-func batchFetcher2(handle FeSession, _ *ExecCtx, dataSet *batch.Batch, _ *perfcounter.CounterSet) error {
+func batchFetcher2(handle FeSession, execCtx *ExecCtx, dataSet *batch.Batch, _ *perfcounter.CounterSet) error {
 	if handle == nil {
+		return nil
+	}
+	if execCtx != nil && isPerformStatement(execCtx.stmt) {
 		return nil
 	}
 	back := handle.(*backSession)
@@ -865,8 +994,11 @@ func batchFetcher2(handle FeSession, _ *ExecCtx, dataSet *batch.Batch, _ *perfco
 
 // batchFetcher gets the result batches from the pipeline and save the origin batches in the session.
 // It will not send the result to the client.
-func batchFetcher(handle FeSession, _ *ExecCtx, dataSet *batch.Batch, _ *perfcounter.CounterSet) error {
+func batchFetcher(handle FeSession, execCtx *ExecCtx, dataSet *batch.Batch, _ *perfcounter.CounterSet) error {
 	if handle == nil {
+		return nil
+	}
+	if execCtx != nil && isPerformStatement(execCtx.stmt) {
 		return nil
 	}
 	ses := handle.(*Session)
@@ -893,7 +1025,13 @@ func getResultSet(ctx context.Context, bh BackgroundExec) ([]ExecResult, error) 
 
 type backSession struct {
 	feSessionImpl
-	//ep *ExportConfig
+	parentBackSession               *backSession
+	effectiveMatrixOneNativeMode    bool
+	hasEffectiveMatrixOneNativeMode bool
+	forcePessimisticRC              bool
+	// lastAffectedRows carries the previous statement's ROW_COUNT() value into
+	// the next process created by this background executor.
+	lastAffectedRows int64
 }
 
 func newBackSession(ses FeSession, txnOp TxnOperator, db string, callBack outputCallBackFunc) *backSession {
@@ -927,16 +1065,37 @@ func (backSes *backSession) initFeSes(
 	backSes.resultBatches = nil
 	backSes.derivedStmt = false
 	backSes.label = make(map[string]string)
-	backSes.timeZone = time.Local
+	backSes.timeZone = ses.GetTimeZone()
 	backSes.respr = defResper
 	backSes.service = ses.GetService()
+	if parent, ok := ses.(*backSession); ok {
+		backSes.parentBackSession = parent
+	}
 	return backSes
+}
+
+func (backSes *backSession) currentMatrixOneNativeMode() bool {
+	if backSes.parentBackSession != nil {
+		parent := backSes.parentBackSession
+		if parent.hasEffectiveMatrixOneNativeMode {
+			return parent.effectiveMatrixOneNativeMode
+		}
+		return parent.currentMatrixOneNativeMode()
+	}
+	if backSes.upstream != nil {
+		return backSes.upstream.sqlModeHasMatrixOneNative()
+	}
+	if backSes.hasEffectiveMatrixOneNativeMode {
+		return backSes.effectiveMatrixOneNativeMode
+	}
+	return false
 }
 
 func (backSes *backSession) InitBackExec(txnOp TxnOperator, db string, callBack outputCallBackFunc, opts ...*BackgroundExecOption) BackgroundExec {
 	if txnOp != nil {
 		be := &backExec{}
 		be.init(backSes, txnOp, db, callBack)
+		be.backSes.upstream = backSes.upstream
 		return be
 	} else if backSes.upstream != nil {
 		// XXXSP
@@ -1098,8 +1257,8 @@ func (backSes *backSession) GetLastInsertID() uint64 {
 func (backSes *backSession) SetShowStmtType(statement ShowStatementType) {
 }
 
-func (backSes *backSession) RemovePrepareStmt(name string) {
-
+func (backSes *backSession) RemovePrepareStmt(name string) bool {
+	return backSes.upstream != nil && backSes.upstream.RemovePrepareStmt(name)
 }
 
 func (backSes *backSession) CountPayload(i int) {
@@ -1107,7 +1266,10 @@ func (backSes *backSession) CountPayload(i int) {
 }
 
 func (backSes *backSession) GetPrepareStmt(ctx context.Context, name string) (*PrepareStmt, error) {
-	return nil, moerr.NewInternalError(ctx, "do not support prepare in background exec")
+	if backSes.upstream == nil {
+		return nil, moerr.NewInternalError(ctx, "do not support prepare in background exec without upstream session")
+	}
+	return backSes.upstream.GetPrepareStmt(ctx, name)
 }
 
 func (backSes *backSession) IsBackgroundSession() bool {
@@ -1193,7 +1355,9 @@ func (backSes *backSession) GetSessionSysVar(name string) (interface{}, error) {
 			return int64(0), nil
 		}
 		return int64(1), nil
-	case "mo_table_stats.force_update", "mo_table_stats.use_old_impl", "mo_table_stats.reset_update_time":
+	case "sql_mode":
+		return "", nil
+	case "foreign_key_checks", "mo_table_stats.force_update", "mo_table_stats.use_old_impl", "mo_table_stats.reset_update_time":
 		return backSes.upstream.GetSessionSysVar(name)
 	}
 	return nil, nil

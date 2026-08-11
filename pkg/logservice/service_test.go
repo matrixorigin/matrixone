@@ -418,6 +418,326 @@ func TestServiceHandleTNHeartbeat(t *testing.T) {
 	runServiceTest(t, true, true, fn)
 }
 
+func TestServicePollCommandsIsNonDestructiveAndDeduplicable(t *testing.T) {
+	fn := func(t *testing.T, s *Service) {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		activateCommandDelivery(t, ctx, s)
+
+		command := pb.ScheduleCommand{
+			UUID:        "uuid1",
+			ServiceType: pb.TNService,
+			ConfigChange: &pb.ConfigChange{
+				ChangeType: pb.StartReplica,
+				Replica: pb.Replica{
+					ShardID:   1,
+					ReplicaID: 2,
+				},
+			},
+		}
+		require.NoError(t,
+			s.store.addScheduleCommands(ctx, 1, []pb.ScheduleCommand{command}))
+
+		pollResp := s.handleGetScheduleCommands(ctx, pb.Request{
+			Method: pb.GET_SCHEDULE_COMMANDS,
+			ScheduleCommandQuery: &pb.ScheduleCommandQuery{
+				UUID:        "uuid1",
+				ServiceType: pb.TNService,
+			},
+		})
+		require.Equal(t, uint32(moerr.Ok), pollResp.ErrorCode)
+		require.Equal(t, []pb.ScheduleCommand{command}, pollResp.CommandBatch.Commands)
+		require.NotZero(t, pollResp.CommandBatch.BatchID)
+		require.True(t, ScheduleCommandBatchHasStableIDs(*pollResp.CommandBatch))
+
+		// A retry observes the same stable batch ID and does not mutate the RSM.
+		secondResp := s.handleGetScheduleCommands(ctx, pb.Request{
+			Method: pb.GET_SCHEDULE_COMMANDS,
+			ScheduleCommandQuery: &pb.ScheduleCommandQuery{
+				UUID:        "uuid1",
+				ServiceType: pb.TNService,
+			},
+		})
+		require.Equal(t, *pollResp.CommandBatch, *secondResp.CommandBatch)
+
+		// An upgraded heartbeat remains the delivery path; a heartbeat without
+		// the capability is intentionally handled as an admission-safe no-op.
+		heartbeatResp := s.handleTNHeartbeat(ctx, pb.Request{
+			Method: pb.TN_HEARTBEAT,
+			TNHeartbeat: &pb.TNStoreHeartbeat{
+				UUID:                        "uuid1",
+				CommandDeliveryAckSupported: true,
+			},
+		})
+		require.Equal(t, *pollResp.CommandBatch, *heartbeatResp.CommandBatch)
+		ackedResp := s.handleTNHeartbeat(ctx, pb.Request{
+			Method: pb.TN_HEARTBEAT,
+			TNHeartbeat: &pb.TNStoreHeartbeat{
+				UUID:                        "uuid1",
+				AckedCommandBatchID:         pollResp.CommandBatch.BatchID,
+				CommandDeliveryAckSupported: true,
+			},
+		})
+		require.Empty(t, ackedResp.CommandBatch.Commands)
+
+		afterDelivery := s.handleGetScheduleCommands(ctx, pb.Request{
+			Method: pb.GET_SCHEDULE_COMMANDS,
+			ScheduleCommandQuery: &pb.ScheduleCommandQuery{
+				UUID:        "uuid1",
+				ServiceType: pb.TNService,
+			},
+		})
+		require.Empty(t, afterDelivery.CommandBatch.Commands)
+	}
+	runServiceTest(t, true, true, fn)
+}
+
+func TestServiceRejectsInvalidScheduleCommandQueries(t *testing.T) {
+	fn := func(t *testing.T, s *Service) {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+
+		for _, req := range []pb.Request{
+			{Method: pb.GET_SCHEDULE_COMMANDS},
+			{
+				Method: pb.GET_SCHEDULE_COMMANDS,
+				ScheduleCommandQuery: &pb.ScheduleCommandQuery{
+					UUID:        "uuid1",
+					ServiceType: pb.LogService,
+				},
+			},
+		} {
+			resp := s.handleGetScheduleCommands(ctx, req)
+			require.NotEqual(t, uint32(moerr.Ok), resp.ErrorCode)
+		}
+		activateCommandDelivery(t, ctx, s)
+
+		command := pb.ScheduleCommand{
+			UUID:        "uuid1",
+			ServiceType: pb.CNService,
+		}
+		require.NoError(t,
+			s.store.addScheduleCommands(ctx, 1, []pb.ScheduleCommand{command}))
+		resp := s.handleGetScheduleCommands(ctx, pb.Request{
+			Method: pb.GET_SCHEDULE_COMMANDS,
+			ScheduleCommandQuery: &pb.ScheduleCommandQuery{
+				UUID:        "uuid1",
+				ServiceType: pb.TNService,
+			},
+		})
+		require.NotEqual(t, uint32(moerr.Ok), resp.ErrorCode)
+
+		// Validation happens after a read, not a consume. The intended service
+		// can still retrieve the batch after a wrong-type request.
+		resp = s.handleGetScheduleCommands(ctx, pb.Request{
+			Method: pb.GET_SCHEDULE_COMMANDS,
+			ScheduleCommandQuery: &pb.ScheduleCommandQuery{
+				UUID:        "uuid1",
+				ServiceType: pb.CNService,
+			},
+		})
+		require.Equal(t, uint32(moerr.Ok), resp.ErrorCode)
+		require.Equal(t, []pb.ScheduleCommand{command}, resp.CommandBatch.Commands)
+	}
+	runServiceTest(t, true, true, fn)
+}
+
+func TestServiceCommandDeliveryActivationWaitsForServiceCapabilities(t *testing.T) {
+	fn := func(t *testing.T, s *Service) {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+
+		sendCNHeartbeat := func(supported bool) pb.Response {
+			return s.handleCNHeartbeat(ctx, pb.Request{
+				Method: pb.CN_HEARTBEAT,
+				CNHeartbeat: &pb.CNStoreHeartbeat{
+					UUID:                        "cn-1",
+					CommandDeliveryAckSupported: supported,
+				},
+			})
+		}
+		sendTNHeartbeat := func(supported bool) pb.Response {
+			return s.handleTNHeartbeat(ctx, pb.Request{
+				Method: pb.TN_HEARTBEAT,
+				TNHeartbeat: &pb.TNStoreHeartbeat{
+					UUID:                        "tn-1",
+					CommandDeliveryAckSupported: supported,
+				},
+			})
+		}
+		sendLogHeartbeat := func() pb.Response {
+			logHeartbeat := s.store.getHeartbeatMessage()
+			return s.handleLogHeartbeat(ctx, pb.Request{
+				Method:       pb.LOG_HEARTBEAT,
+				LogHeartbeat: &logHeartbeat,
+			})
+		}
+		sendLegacyLogHeartbeat := func(supported bool) pb.Response {
+			return s.handleLogHeartbeat(ctx, pb.Request{
+				Method: pb.LOG_HEARTBEAT,
+				LogHeartbeat: &pb.LogStoreHeartbeat{
+					UUID:                     "legacy-log",
+					CommandDeliverySupported: supported,
+				},
+			})
+		}
+
+		require.Equal(t, uint32(moerr.Ok), sendCNHeartbeat(false).ErrorCode)
+		require.Equal(t, uint32(moerr.Ok), sendTNHeartbeat(false).ErrorCode)
+		require.Equal(t, uint32(moerr.Ok), sendLegacyLogHeartbeat(false).ErrorCode)
+		// HAKeeper/logservice may already be upgraded, but activation cannot
+		// begin while a current command target still advertises the old protocol.
+		require.False(t, advanceCommandDelivery(t, ctx, s))
+		first := sendLogHeartbeat()
+		require.Equal(t, uint32(moerr.Ok), first.ErrorCode)
+		require.False(t, s.store.commandDeliveryEnabled.Load())
+
+		require.Equal(t, uint32(moerr.Ok), sendCNHeartbeat(true).ErrorCode)
+		require.Equal(t, uint32(moerr.Ok), sendTNHeartbeat(true).ErrorCode)
+		require.False(t, advanceCommandDelivery(t, ctx, s))
+		delivery, err := s.store.getCommandDeliveryState(ctx)
+		require.NoError(t, err)
+		require.False(t, delivery.Preparing,
+			"a live legacy LogStore remains eligible for HAKeeper admission")
+		require.Equal(t, uint32(moerr.Ok), sendLegacyLogHeartbeat(true).ErrorCode)
+		require.False(t, advanceCommandDelivery(t, ctx, s))
+		delivery, err = s.store.getCommandDeliveryState(ctx)
+		require.NoError(t, err)
+		require.True(t, delivery.Preparing)
+		phaseOne := sendLogHeartbeat()
+		require.Equal(t, uint32(moerr.Ok), phaseOne.ErrorCode)
+		require.False(t, s.store.commandDeliveryEnabled.Load())
+
+		// Phase-one is a replicated cutover point. The capability observations
+		// above are intentionally insufficient; repeat them after the barrier.
+		require.Equal(t, uint32(moerr.Ok), sendCNHeartbeat(true).ErrorCode)
+		require.Equal(t, uint32(moerr.Ok), sendTNHeartbeat(true).ErrorCode)
+		require.True(t, advanceCommandDelivery(t, ctx, s))
+		phaseTwo := sendLogHeartbeat()
+		require.Equal(t, uint32(moerr.Ok), phaseTwo.ErrorCode)
+		require.True(t, s.store.commandDeliveryEnabled.Load())
+	}
+	runServiceTest(t, true, true, fn)
+}
+
+func TestServiceCommandDeliveryActivationWaitsForPendingHAKeeperAdmission(t *testing.T) {
+	fn := func(t *testing.T, s *Service) {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+
+		heartbeat := func(uuid string, supported bool) pb.Response {
+			message := pb.LogStoreHeartbeat{
+				UUID:                     uuid,
+				CommandDeliverySupported: supported,
+			}
+			if uuid == s.store.id() {
+				message = s.store.getHeartbeatMessage()
+			}
+			return s.handleLogHeartbeat(ctx, pb.Request{
+				Method:       pb.LOG_HEARTBEAT,
+				LogHeartbeat: &message,
+			})
+		}
+
+		require.Equal(t, uint32(moerr.Ok), heartbeat(s.store.id(), true).ErrorCode)
+		require.Equal(t, uint32(moerr.Ok), heartbeat("legacy", false).ErrorCode)
+		command := pb.ScheduleCommand{
+			UUID:        s.store.id(),
+			ServiceType: pb.LogService,
+			ConfigChange: &pb.ConfigChange{
+				ChangeType: pb.AddReplica,
+				Replica: pb.Replica{
+					UUID:    "legacy",
+					ShardID: hapkg.DefaultHAKeeperShardID,
+				},
+			},
+		}
+		require.NoError(t, s.store.addScheduleCommands(ctx, 1, []pb.ScheduleCommand{command}))
+
+		// The leader-side read prevents even proposing an update tag that the
+		// pending legacy member could later replay.
+		require.False(t, advanceCommandDelivery(t, ctx, s))
+		delivery, err := s.store.getCommandDeliveryState(ctx)
+		require.NoError(t, err)
+		require.False(t, delivery.Preparing)
+
+		require.Equal(t, uint32(moerr.Ok), heartbeat("legacy", true).ErrorCode)
+		response := heartbeat(s.store.id(), true)
+		require.Equal(t, uint32(moerr.Ok), response.ErrorCode)
+		require.Equal(t, []pb.ScheduleCommand{command}, response.CommandBatch.Commands)
+		require.False(t, advanceCommandDelivery(t, ctx, s))
+		delivery, err = s.store.getCommandDeliveryState(ctx)
+		require.NoError(t, err)
+		require.True(t, delivery.Preparing)
+	}
+	runServiceTest(t, true, true, fn)
+}
+
+func TestLogHeartbeatDoesNotDriveCommandDeliveryActivation(t *testing.T) {
+	fn := func(t *testing.T, s *Service) {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+
+		for range 2 {
+			heartbeat := s.store.getHeartbeatMessage()
+			resp := s.handleLogHeartbeat(ctx, pb.Request{
+				Method:       pb.LOG_HEARTBEAT,
+				LogHeartbeat: &heartbeat,
+			})
+			require.Equal(t, uint32(moerr.Ok), resp.ErrorCode)
+		}
+		delivery, err := s.store.getCommandDeliveryState(ctx)
+		require.NoError(t, err)
+		require.False(t, delivery.Preparing,
+			"the high-frequency heartbeat path must not propose activation")
+	}
+	runServiceTest(t, true, true, fn)
+}
+
+func advanceCommandDelivery(
+	t *testing.T,
+	ctx context.Context,
+	s *Service,
+) bool {
+	t.Helper()
+	state, err := s.store.getCheckerStateWithContext(ctx)
+	require.NoError(t, err)
+	enabled, err := s.store.tryEnableCommandDelivery(ctx, state)
+	require.NoError(t, err)
+	return enabled
+}
+
+func activateCommandDelivery(t *testing.T, ctx context.Context, s *Service) {
+	t.Helper()
+	// Seed the leader's capability view before the checker is allowed to enter
+	// phase one. Heartbeats only publish capability and advertise cached state;
+	// the checker owns activation progress.
+	logHeartbeat := s.store.getHeartbeatMessage()
+	priming := s.handleLogHeartbeat(ctx, pb.Request{
+		Method:       pb.LOG_HEARTBEAT,
+		LogHeartbeat: &logHeartbeat,
+	})
+	require.Equal(t, uint32(moerr.Ok), priming.ErrorCode)
+	require.False(t, s.store.commandDeliveryEnabled.Load())
+	for phase := 0; phase < 2; phase++ {
+		enabled := advanceCommandDelivery(t, ctx, s)
+		logHeartbeat = s.store.getHeartbeatMessage()
+		activation := s.handleLogHeartbeat(ctx, pb.Request{
+			Method:       pb.LOG_HEARTBEAT,
+			LogHeartbeat: &logHeartbeat,
+		})
+		require.Equal(t, uint32(moerr.Ok), activation.ErrorCode)
+		if phase == 0 {
+			require.False(t, enabled)
+			require.False(t, s.store.commandDeliveryEnabled.Load(),
+				"the first checker pass establishes the replicated upgrade barrier")
+		} else {
+			require.True(t, enabled)
+			require.True(t, s.store.commandDeliveryEnabled.Load())
+		}
+	}
+}
+
 func TestServiceHandleAppend(t *testing.T) {
 	fn := func(t *testing.T, s *Service) {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
@@ -844,7 +1164,6 @@ func TestGossipInSimulatedCluster(t *testing.T) {
 					info, ok := service.getShardInfo(context.Background(), shardID, false, false)
 					if !ok || info.LeaderID == 0 {
 						notReady++
-						wait()
 						continue
 					}
 					if shardID == 1 && info.Epoch != 0 {
@@ -855,6 +1174,7 @@ func TestGossipInSimulatedCluster(t *testing.T) {
 					break
 				}
 				require.True(t, retry < iterations-1)
+				wait()
 			}
 			require.True(t, cci != 0)
 			// all good now, add a replica to shard 1
@@ -886,7 +1206,6 @@ func TestGossipInSimulatedCluster(t *testing.T) {
 					info, ok := service.getShardInfo(context.Background(), 1, false, false)
 					if !ok || info.LeaderID == 0 || len(info.Replicas) != 4 {
 						notReady++
-						wait()
 						continue
 					}
 				}
@@ -894,6 +1213,7 @@ func TestGossipInSimulatedCluster(t *testing.T) {
 					break
 				}
 				require.True(t, retry < iterations-1)
+				wait()
 			}
 			// restart a service, watch how long will it take to get all required
 			// shard info
@@ -918,7 +1238,6 @@ func TestGossipInSimulatedCluster(t *testing.T) {
 					info, ok := service.getShardInfo(context.Background(), shardID, false, false)
 					if !ok || info.LeaderID == 0 {
 						notReady++
-						wait()
 						continue
 					}
 				}
@@ -926,6 +1245,7 @@ func TestGossipInSimulatedCluster(t *testing.T) {
 					break
 				}
 				require.True(t, retry < iterations-1)
+				wait()
 			}
 		},
 	)

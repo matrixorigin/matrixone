@@ -40,6 +40,40 @@ var _ = opBinaryFixedStrToFixedWithErrorCheck[bool, bool]
 var _ = opNoneParamToBytesWithErrorCheck
 var _ = opBinaryStrFixedToStrWithErrorCheck[bool]
 
+func appendRepeatedBytesResult(
+	rs *vector.FunctionResult[types.Varlena],
+	value []byte,
+	length int,
+) error {
+	if length == 0 {
+		return nil
+	}
+	return rs.AppendMultiBytes(value, false, length)
+}
+
+func appendRepeatedBytesResultWithSelection(
+	rs *vector.FunctionResult[types.Varlena],
+	value []byte,
+	length int,
+	selectList *FunctionSelectList,
+) error {
+	if selectList.IgnoreAllRow() {
+		rs.SetNullResult(uint64(length))
+		return nil
+	}
+	if err := appendRepeatedBytesResult(rs, value, length); err != nil {
+		return err
+	}
+	if !selectList.ShouldEvalAllRow() {
+		for row := uint64(0); row < uint64(length); row++ {
+			if selectList.Contains(row) {
+				rs.AddNullAt(row)
+			}
+		}
+	}
+	return nil
+}
+
 // I hope it can generate all functions according to some easy parameters.
 // not yet ok. and may change soon. plz use it carefully if you really need it.
 func generalFunctionTemplateFactor[T1 templateTp1, T2 templateTr1](
@@ -379,7 +413,7 @@ type templateDecOut interface {
 // For integer division (DIV): TIn=Decimal, TOut=int64.
 // The kernel receives (v1, v2, rs) slices where len==1 indicates a constant.
 // Scale values and null bitmap are provided for kernels that need them.
-func decimalBatchArith[TIn templateDec, TOut templateDecOut](parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int,
+func decimalBatchArith[TIn templateDec, TOut templateDecOut](parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int,
 	arithFn func(v1, v2 []TIn, rs []TOut, scale1, scale2 int32, rsnull *nulls.Nulls) error, selectList *FunctionSelectList) error {
 	result.UseOptFunctionParamFrame(2)
 	rs := vector.MustFunctionResult[TOut](result)
@@ -417,12 +451,15 @@ func decimalBatchArith[TIn templateDec, TOut templateDecOut](parameters []*vecto
 			return nil
 		}
 		if !selectList.ShouldEvalAllRow() {
-			for i := range selectList.SelectList {
+			for i := 0; i < length; i++ {
 				if selectList.Contains(uint64(i)) {
 					rsNull.Add(uint64(i))
 				}
 			}
 		}
+	}
+	if !hasEvaluableRows(rsNull, length) {
+		return nil
 	}
 
 	var v1, v2 []TIn
@@ -440,6 +477,9 @@ func decimalBatchArith[TIn templateDec, TOut templateDecOut](parameters []*vecto
 	}
 	err := arithFn(v1, v2, rss, scale1, scale2, rsNull)
 	if err != nil {
+		if moerr.IsMoErrCode(err, moerr.ErrInvalidInput) {
+			return moerr.NewOutOfRange(proc.Ctx, "DECIMAL", err.Error())
+		}
 		return err
 	}
 	// Only reset rsNull if the kernel didn't add any nulls (e.g., div-by-zero).
@@ -477,7 +517,7 @@ func opBinaryFixedFixedToFixed[
 		}
 		if !selectList.ShouldEvalAllRow() {
 			rsAnyNull = true
-			for i := range selectList.SelectList {
+			for i := 0; i < length; i++ {
 				if selectList.Contains(uint64(i)) {
 					rsNull.Add(uint64(i))
 				}
@@ -600,7 +640,7 @@ func opBinaryFixedFixedToFixedWithErrorCheck[
 		}
 		if !selectList.ShouldEvalAllRow() {
 			rsAnyNull = true
-			for i := range selectList.SelectList {
+			for i := 0; i < length; i++ {
 				if selectList.Contains(uint64(i)) {
 					rsNull.Add(uint64(i))
 				}
@@ -1050,7 +1090,7 @@ func opBinaryStrFixedToStrWithErrorCheck[
 
 	if selectList != nil {
 		if selectList.IgnoreAllRow() {
-			nulls.AddRange(rsNull, 0, uint64(length))
+			rs.SetNullResult(uint64(length))
 			return nil
 		}
 		if !selectList.ShouldEvalAllRow() {
@@ -1067,17 +1107,15 @@ func opBinaryStrFixedToStrWithErrorCheck[
 		v2, null2 := p2.GetValue(0)
 		ifNull := null1 || null2
 		if ifNull {
-			nulls.AddRange(rsNull, 0, uint64(length))
+			rs.SetNullResult(uint64(length))
 		} else {
 			r, err := resultFn(functionUtil.QuickBytesToStr(v1), v2)
 			if err != nil {
 				return err
 			}
-			rowCount := uint64(length)
-			for i := uint64(0); i < rowCount; i++ {
-				if err = rs.AppendMustBytesValue(functionUtil.QuickStrToBytes(r)); err != nil {
-					return err
-				}
+			if err = appendRepeatedBytesResult(
+				rs, functionUtil.QuickStrToBytes(r), length); err != nil {
+				return err
 			}
 		}
 		return nil
@@ -1086,7 +1124,7 @@ func opBinaryStrFixedToStrWithErrorCheck[
 	if c1 {
 		v1, null1 := p1.GetStrValue(0)
 		if null1 {
-			nulls.AddRange(rsNull, 0, uint64(length))
+			rs.SetNullResult(uint64(length))
 		} else {
 			if p2.WithAnyNullValue() || rsAnyNull {
 				nulls.Or(rsNull, parameters[1].GetNulls(), rsNull)
@@ -1094,6 +1132,9 @@ func opBinaryStrFixedToStrWithErrorCheck[
 				rv1 := functionUtil.QuickBytesToStr(v1)
 				for i := uint64(0); i < rowCount; i++ {
 					if rsNull.Contains(i) {
+						if err := rs.AppendMustNullForBytesResult(); err != nil {
+							return err
+						}
 						continue
 					}
 					v2, _ := p2.GetValue(i)
@@ -1126,13 +1167,16 @@ func opBinaryStrFixedToStrWithErrorCheck[
 	if c2 {
 		v2, null2 := p2.GetValue(0)
 		if null2 {
-			nulls.AddRange(rsNull, 0, uint64(length))
+			rs.SetNullResult(uint64(length))
 		} else {
 			if p1.WithAnyNullValue() || rsAnyNull {
 				nulls.Or(rsNull, parameters[0].GetNulls(), rsNull)
 				rowCount := uint64(length)
 				for i := uint64(0); i < rowCount; i++ {
 					if rsNull.Contains(i) {
+						if err := rs.AppendMustNullForBytesResult(); err != nil {
+							return err
+						}
 						continue
 					}
 					v1, _ := p1.GetStrValue(i)
@@ -1168,6 +1212,9 @@ func opBinaryStrFixedToStrWithErrorCheck[
 		rowCount := uint64(length)
 		for i := uint64(0); i < rowCount; i++ {
 			if rsNull.Contains(i) {
+				if err := rs.AppendMustNullForBytesResult(); err != nil {
+					return err
+				}
 				continue
 			}
 			v1, _ := p1.GetStrValue(i)
@@ -1369,7 +1416,7 @@ func specialTemplateForModFunction[
 		}
 		if !selectList.ShouldEvalAllRow() {
 			rsAnyNull = true
-			for i := range selectList.SelectList {
+			for i := 0; i < length; i++ {
 				if selectList.Contains(uint64(i)) {
 					rsNull.Add(uint64(i))
 				}
@@ -1445,14 +1492,21 @@ func specialTemplateForModFunction[
 		v2, null2 := p2.GetValue(0)
 		if null2 {
 			nulls.AddRange(rsNull, 0, uint64(length))
-		} else if v2 == 0 {
-			if checkDivisionByZeroBehavior(proc, selectList) {
-				return moerr.NewDivByZeroNoCtx()
-			}
-			nulls.AddRange(rsNull, 0, uint64(length))
 		} else {
-			if p1.WithAnyNullValue() || rsAnyNull {
+			if p1.WithAnyNullValue() {
 				nulls.Or(rsNull, parameters[0].GetNulls(), rsNull)
+			}
+			if !hasEvaluableRows(rsNull, length) {
+				return nil
+			}
+			if v2 == 0 {
+				if checkDivisionByZeroBehavior(proc, selectList) {
+					return moerr.NewDivByZeroNoCtx()
+				}
+				nulls.AddRange(rsNull, 0, uint64(length))
+				return nil
+			}
+			if p1.WithAnyNullValue() || rsAnyNull {
 				rowCount := uint64(length)
 				for i := uint64(0); i < rowCount; i++ {
 					if rsNull.Contains(i) {
@@ -1593,9 +1647,29 @@ func checkDivisionByZeroBehavior(proc *process.Process, selectList *FunctionSele
 	return false
 }
 
+// hasEvaluableRows reports whether at least one row in the current batch may
+// execute the arithmetic kernel. Input NULLs and selectList-masked rows must
+// already be merged into rsNull before calling it. The bitmap can retain bits
+// outside [0, length) when an expression executor is reused with a smaller
+// batch, so its total cardinality must not be used here.
+func hasEvaluableRows(rsNull *nulls.Nulls, length int) bool {
+	if length <= 0 {
+		return false
+	}
+	if rsNull.IsEmpty() {
+		return true
+	}
+	for i := 0; i < length; i++ {
+		if !rsNull.Contains(uint64(i)) {
+			return true
+		}
+	}
+	return false
+}
+
 func specialTemplateForDivFunction[
 	T constraints.Float, T2 constraints.Float | int64](parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int,
-	divFn func(v1, v2 T) T2, selectList *FunctionSelectList) error {
+	divFn func(v1, v2 T) (T2, error), selectList *FunctionSelectList) error {
 	result.UseOptFunctionParamFrame(2)
 	rs := vector.MustFunctionResult[T2](result)
 	p1 := vector.OptGetParamFromWrapper[T](rs, 0, parameters[0])
@@ -1614,7 +1688,7 @@ func specialTemplateForDivFunction[
 		}
 		if !selectList.ShouldEvalAllRow() {
 			rsAnyNull = true
-			for i := range selectList.SelectList {
+			for i := 0; i < length; i++ {
 				if selectList.Contains(uint64(i)) {
 					rsNull.Add(uint64(i))
 				}
@@ -1636,7 +1710,10 @@ func specialTemplateForDivFunction[
 				nulls.AddRange(rsNull, 0, uint64(length))
 				return nil
 			}
-			r := divFn(v1, v2)
+			r, err := divFn(v1, v2)
+			if err != nil {
+				return err
+			}
 			rowCount := uint64(length)
 			for i := uint64(0); i < rowCount; i++ {
 				rss[i] = r
@@ -1665,7 +1742,11 @@ func specialTemplateForDivFunction[
 						// Return NULL (MySQL 8.0 behavior)
 						rsNull.Add(i)
 					} else {
-						rss[i] = divFn(v1, v2)
+						r, err := divFn(v1, v2)
+						if err != nil {
+							return err
+						}
+						rss[i] = r
 					}
 				}
 			} else {
@@ -1679,7 +1760,11 @@ func specialTemplateForDivFunction[
 						// Return NULL (MySQL 8.0 behavior)
 						rsNull.Add(i)
 					} else {
-						rss[i] = divFn(v1, v2)
+						r, err := divFn(v1, v2)
+						if err != nil {
+							return err
+						}
+						rss[i] = r
 					}
 				}
 			}
@@ -1692,6 +1777,12 @@ func specialTemplateForDivFunction[
 		if null2 {
 			nulls.AddRange(rsNull, 0, uint64(length))
 		} else {
+			if p1.WithAnyNullValue() {
+				nulls.Or(rsNull, parameters[0].GetNulls(), rsNull)
+			}
+			if !hasEvaluableRows(rsNull, length) {
+				return nil
+			}
 			if v2 == 0 {
 				if checkDivisionByZeroBehavior(proc, selectList) {
 					return moerr.NewDivByZeroNoCtx()
@@ -1700,21 +1791,28 @@ func specialTemplateForDivFunction[
 				nulls.AddRange(rsNull, 0, uint64(length))
 				return nil
 			}
-			if p1.WithAnyNullValue() {
-				nulls.Or(rsNull, parameters[0].GetNulls(), rsNull)
+			if p1.WithAnyNullValue() || rsAnyNull {
 				rowCount := uint64(length)
 				for i := uint64(0); i < rowCount; i++ {
 					if rsNull.Contains(i) {
 						continue
 					}
 					v1, _ := p1.GetValue(i)
-					rss[i] = divFn(v1, v2)
+					r, err := divFn(v1, v2)
+					if err != nil {
+						return err
+					}
+					rss[i] = r
 				}
 			} else {
 				rowCount := uint64(length)
 				for i := uint64(0); i < rowCount; i++ {
 					v1, _ := p1.GetValue(i)
-					rss[i] = divFn(v1, v2)
+					r, err := divFn(v1, v2)
+					if err != nil {
+						return err
+					}
+					rss[i] = r
 				}
 			}
 		}
@@ -1739,7 +1837,11 @@ func specialTemplateForDivFunction[
 				// Return NULL (MySQL 8.0 behavior)
 				rsNull.Add(i)
 			} else {
-				rss[i] = divFn(v1, v2)
+				r, err := divFn(v1, v2)
+				if err != nil {
+					return err
+				}
+				rss[i] = r
 			}
 		}
 		return nil
@@ -1756,7 +1858,11 @@ func specialTemplateForDivFunction[
 			}
 			rsNull.Add(i)
 		} else {
-			rss[i] = divFn(v1, v2)
+			r, err := divFn(v1, v2)
+			if err != nil {
+				return err
+			}
+			rss[i] = r
 		}
 	}
 	return nil
@@ -2042,7 +2148,7 @@ func opBinaryBytesBytesToBytesWithErrorCheck(
 
 	if selectList != nil {
 		if selectList.IgnoreAllRow() {
-			nulls.AddRange(rsNull, 0, uint64(length))
+			rs.SetNullResult(uint64(length))
 			return nil
 		}
 		if !selectList.ShouldEvalAllRow() {
@@ -2059,17 +2165,14 @@ func opBinaryBytesBytesToBytesWithErrorCheck(
 		v2, null2 := p2.GetStrValue(0)
 		ifNull := null1 || null2
 		if ifNull {
-			nulls.AddRange(rsNull, 0, uint64(length))
+			rs.SetNullResult(uint64(length))
 		} else {
 			r, err := fn(v1, v2)
 			if err != nil {
 				return err
 			}
-			rowCount := uint64(length)
-			for i := uint64(0); i < rowCount; i++ {
-				if err = rs.AppendMustBytesValue(r); err != nil {
-					return err
-				}
+			if err = appendRepeatedBytesResult(rs, r, length); err != nil {
+				return err
 			}
 		}
 		return nil
@@ -2078,7 +2181,7 @@ func opBinaryBytesBytesToBytesWithErrorCheck(
 	if c1 {
 		v1, null1 := p1.GetStrValue(0)
 		if null1 {
-			nulls.AddRange(rsNull, 0, uint64(length))
+			rs.SetNullResult(uint64(length))
 		} else {
 			if p2.WithAnyNullValue() || rsAnyNull {
 				nulls.Or(rsNull, parameters[1].GetNulls(), rsNull)
@@ -2122,7 +2225,7 @@ func opBinaryBytesBytesToBytesWithErrorCheck(
 	if c2 {
 		v2, null2 := p2.GetStrValue(0)
 		if null2 {
-			nulls.AddRange(rsNull, 0, uint64(length))
+			rs.SetNullResult(uint64(length))
 		} else {
 			if p1.WithAnyNullValue() || rsAnyNull {
 				nulls.Or(rsNull, parameters[0].GetNulls(), rsNull)
@@ -2719,7 +2822,7 @@ func opUnaryBytesToBytes(
 
 	if selectList != nil {
 		if selectList.IgnoreAllRow() {
-			nulls.AddRange(rsNull, 0, uint64(length))
+			rs.SetNullResult(uint64(length))
 			return nil
 		}
 		if !selectList.ShouldEvalAllRow() {
@@ -2734,15 +2837,11 @@ func opUnaryBytesToBytes(
 	if c1 {
 		v1, null1 := p1.GetStrValue(0)
 		if null1 {
-			nulls.AddRange(rsNull, 0, uint64(length))
+			rs.SetNullResult(uint64(length))
 		} else {
 			r := resultFn(v1)
-
-			rowCount := uint64(length)
-			for i := uint64(0); i < rowCount; i++ {
-				if err := rs.AppendMustBytesValue(r); err != nil {
-					return err
-				}
+			if err := appendRepeatedBytesResult(rs, r, length); err != nil {
+				return err
 			}
 		}
 		return nil
@@ -2793,7 +2892,7 @@ func opUnaryBytesToStr(
 
 	if selectList != nil {
 		if selectList.IgnoreAllRow() {
-			nulls.AddRange(rsNull, 0, uint64(length))
+			rs.SetNullResult(uint64(length))
 			return nil
 		}
 		if !selectList.ShouldEvalAllRow() {
@@ -2808,15 +2907,12 @@ func opUnaryBytesToStr(
 	if c1 {
 		v1, null1 := p1.GetStrValue(0)
 		if null1 {
-			nulls.AddRange(rsNull, 0, uint64(length))
+			rs.SetNullResult(uint64(length))
 		} else {
 			r := resultFn(v1)
-
-			rowCount := uint64(length)
-			for i := uint64(0); i < rowCount; i++ {
-				if err := rs.AppendMustBytesValue(functionUtil.QuickStrToBytes(r)); err != nil {
-					return err
-				}
+			if err := appendRepeatedBytesResult(
+				rs, functionUtil.QuickStrToBytes(r), length); err != nil {
+				return err
 			}
 		}
 		return nil
@@ -2867,7 +2963,7 @@ func opUnaryStrToStr(
 
 	if selectList != nil {
 		if selectList.IgnoreAllRow() {
-			nulls.AddRange(rsNull, 0, uint64(length))
+			rs.SetNullResult(uint64(length))
 			return nil
 		}
 		if !selectList.ShouldEvalAllRow() {
@@ -2882,15 +2978,12 @@ func opUnaryStrToStr(
 	if c1 {
 		v1, null1 := p1.GetStrValue(0)
 		if null1 {
-			nulls.AddRange(rsNull, 0, uint64(length))
+			rs.SetNullResult(uint64(length))
 		} else {
 			r := resultFn(functionUtil.QuickBytesToStr(v1))
-
-			rowCount := uint64(length)
-			for i := uint64(0); i < rowCount; i++ {
-				if err := rs.AppendMustBytesValue(functionUtil.QuickStrToBytes(r)); err != nil {
-					return err
-				}
+			if err := appendRepeatedBytesResult(
+				rs, functionUtil.QuickStrToBytes(r), length); err != nil {
+				return err
 			}
 		}
 		return nil
@@ -2941,7 +3034,7 @@ func opUnaryFixedToStr[
 
 	if selectList != nil {
 		if selectList.IgnoreAllRow() {
-			nulls.AddRange(rsNull, 0, uint64(length))
+			rs.SetNullResult(uint64(length))
 			return nil
 		}
 		if !selectList.ShouldEvalAllRow() {
@@ -2956,16 +3049,12 @@ func opUnaryFixedToStr[
 	if c1 {
 		v1, null1 := p1.GetValue(0)
 		if null1 {
-			nulls.AddRange(rsNull, 0, uint64(length))
+			rs.SetNullResult(uint64(length))
 		} else {
 			rb := resultFn(v1)
 			r := functionUtil.QuickStrToBytes(rb)
-
-			rowCount := uint64(length)
-			for i := uint64(0); i < rowCount; i++ {
-				if err := rs.AppendMustBytesValue(r); err != nil {
-					return err
-				}
+			if err := appendRepeatedBytesResult(rs, r, length); err != nil {
+				return err
 			}
 		}
 		return nil
@@ -3004,6 +3093,64 @@ func opUnaryFixedToStr[
 	return nil
 }
 
+func opUnaryFixedToStrWithNullOnError[
+	T types.FixedSizeTExceptStrType](parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int,
+	resultFn func(v T) (string, error), selectList *FunctionSelectList) error {
+	result.UseOptFunctionParamFrame(1)
+	rs := vector.MustFunctionResult[types.Varlena](result)
+	p1 := vector.OptGetParamFromWrapper[T](rs, 0, parameters[0])
+
+	if parameters[0].IsConst() {
+		if length == 0 {
+			return nil
+		}
+		if selectList.IgnoreAllRow() {
+			rs.SetNullResult(uint64(length))
+			return nil
+		}
+		v, null := p1.GetValue(0)
+		if null {
+			rs.SetNullResult(uint64(length))
+			return nil
+		}
+		r, err := resultFn(v)
+		if err != nil {
+			rs.SetNullResult(uint64(length))
+			return nil
+		}
+		return appendRepeatedBytesResultWithSelection(
+			rs, functionUtil.QuickStrToBytes(r), length, selectList)
+	}
+
+	for i := uint64(0); i < uint64(length); i++ {
+		if selectList != nil && (selectList.IgnoreAllRow() || selectList.Contains(i)) {
+			if err := rs.AppendMustNullForBytesResult(); err != nil {
+				return err
+			}
+			continue
+		}
+
+		v, null := p1.GetValue(i)
+		if null {
+			if err := rs.AppendMustNullForBytesResult(); err != nil {
+				return err
+			}
+			continue
+		}
+		r, err := resultFn(v)
+		if err != nil {
+			if err = rs.AppendMustNullForBytesResult(); err != nil {
+				return err
+			}
+			continue
+		}
+		if err = rs.AppendMustBytesValue(functionUtil.QuickStrToBytes(r)); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func opUnaryFixedToStrWithErrorCheck[
 	T types.FixedSizeTExceptStrType](parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int,
 	resultFn func(v T) (string, error), selectList *FunctionSelectList) error {
@@ -3018,7 +3165,7 @@ func opUnaryFixedToStrWithErrorCheck[
 
 	if selectList != nil {
 		if selectList.IgnoreAllRow() {
-			nulls.AddRange(rsNull, 0, uint64(length))
+			rs.SetNullResult(uint64(length))
 			return nil
 		}
 		if !selectList.ShouldEvalAllRow() {
@@ -3033,19 +3180,15 @@ func opUnaryFixedToStrWithErrorCheck[
 	if c1 {
 		v1, null1 := p1.GetValue(0)
 		if null1 {
-			nulls.AddRange(rsNull, 0, uint64(length))
+			rs.SetNullResult(uint64(length))
 		} else {
 			rb, err := resultFn(v1)
 			if err != nil {
 				return err
 			}
 			r := functionUtil.QuickStrToBytes(rb)
-
-			rowCount := uint64(length)
-			for i := uint64(0); i < rowCount; i++ {
-				if err = rs.AppendMustBytesValue(r); err != nil {
-					return err
-				}
+			if err = appendRepeatedBytesResult(rs, r, length); err != nil {
+				return err
 			}
 		}
 		return nil
@@ -3104,7 +3247,7 @@ func opUnaryStrToBytesWithErrorCheck(
 
 	if selectList != nil {
 		if selectList.IgnoreAllRow() {
-			nulls.AddRange(rsNull, 0, uint64(length))
+			rs.SetNullResult(uint64(length))
 			return nil
 		}
 		if !selectList.ShouldEvalAllRow() {
@@ -3119,18 +3262,15 @@ func opUnaryStrToBytesWithErrorCheck(
 	if c1 {
 		v1, null1 := p1.GetStrValue(0)
 		if null1 {
-			nulls.AddRange(rsNull, 0, uint64(length))
+			rs.SetNullResult(uint64(length))
 		} else {
 			r, err := resultFn(functionUtil.QuickBytesToStr(v1))
 			if err != nil {
 				return err
 			}
 
-			rowCount := uint64(length)
-			for i := uint64(0); i < rowCount; i++ {
-				if err = rs.AppendMustBytesValue(r); err != nil {
-					return err
-				}
+			if err = appendRepeatedBytesResult(rs, r, length); err != nil {
+				return err
 			}
 		}
 		return nil
@@ -3187,7 +3327,7 @@ func opUnaryBytesToBytesWithErrorCheck(
 
 	if selectList != nil {
 		if selectList.IgnoreAllRow() {
-			nulls.AddRange(rsNull, 0, uint64(length))
+			rs.SetNullResult(uint64(length))
 			return nil
 		}
 		if !selectList.ShouldEvalAllRow() {
@@ -3202,18 +3342,15 @@ func opUnaryBytesToBytesWithErrorCheck(
 	if c1 {
 		v1, null1 := p1.GetStrValue(0)
 		if null1 {
-			nulls.AddRange(rsNull, 0, uint64(length))
+			rs.SetNullResult(uint64(length))
 		} else {
 			r, err := resultFn(v1)
 			if err != nil {
 				return err
 			}
 
-			rowCount := uint64(length)
-			for i := uint64(0); i < rowCount; i++ {
-				if err = rs.AppendMustBytesValue(r); err != nil {
-					return err
-				}
+			if err = appendRepeatedBytesResult(rs, r, length); err != nil {
+				return err
 			}
 		}
 		return nil
@@ -3270,7 +3407,7 @@ func opUnaryBytesToBytesWithNullOnError(
 
 	if selectList != nil {
 		if selectList.IgnoreAllRow() {
-			nulls.AddRange(rsNull, 0, uint64(length))
+			rs.SetNullResult(uint64(length))
 			return nil
 		}
 		if !selectList.ShouldEvalAllRow() {
@@ -3285,17 +3422,14 @@ func opUnaryBytesToBytesWithNullOnError(
 	if c1 {
 		v1, null1 := p1.GetStrValue(0)
 		if null1 {
-			nulls.AddRange(rsNull, 0, uint64(length))
+			rs.SetNullResult(uint64(length))
 		} else {
 			r, err := resultFn(v1)
 			if err != nil {
-				nulls.AddRange(rsNull, 0, uint64(length))
+				rs.SetNullResult(uint64(length))
 			} else {
-				rowCount := uint64(length)
-				for i := uint64(0); i < rowCount; i++ {
-					if err = rs.AppendMustBytesValue(r); err != nil {
-						return err
-					}
+				if err = appendRepeatedBytesResult(rs, r, length); err != nil {
+					return err
 				}
 			}
 		}
@@ -3359,7 +3493,7 @@ func opUnaryBytesToStrWithErrorCheck(
 
 	if selectList != nil {
 		if selectList.IgnoreAllRow() {
-			nulls.AddRange(rsNull, 0, uint64(length))
+			rs.SetNullResult(uint64(length))
 			return nil
 		}
 		if !selectList.ShouldEvalAllRow() {
@@ -3374,18 +3508,15 @@ func opUnaryBytesToStrWithErrorCheck(
 	if c1 {
 		v1, null1 := p1.GetStrValue(0)
 		if null1 {
-			nulls.AddRange(rsNull, 0, uint64(length))
+			rs.SetNullResult(uint64(length))
 		} else {
 			rb, err := resultFn(v1)
 			if err != nil {
 				return err
 			}
 			r := functionUtil.QuickStrToBytes(rb)
-			rowCount := uint64(length)
-			for i := uint64(0); i < rowCount; i++ {
-				if err = rs.AppendMustBytesValue(r); err != nil {
-					return err
-				}
+			if err = appendRepeatedBytesResult(rs, r, length); err != nil {
+				return err
 			}
 		}
 		return nil

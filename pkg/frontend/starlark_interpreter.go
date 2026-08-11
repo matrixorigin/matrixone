@@ -163,6 +163,7 @@ func (interpreter *Interpreter) ExecuteStarlark(spBody string, dbName string, bg
 		}
 	}
 
+	interpreter.setAffectedRows(interpreter.initialAffectedRows)
 	globals, err := starlark.ExecFileOptions(
 		&syntax.FileOptions{
 			While:           true,
@@ -228,6 +229,7 @@ func (si *starlarkInterpreter) moSql(thread *starlark.Thread, b *starlark.Builti
 
 	si.interp.bh.ClearExecResultSet()
 	err := si.interp.bh.Exec(si.interp.ctx, sql)
+	si.interp.recordAffectedRows()
 	if err != nil {
 		ret[1] = starlark.String(err.Error())
 		return starlark.NewList(ret), nil

@@ -138,6 +138,27 @@ func getSqlForAccountInfo(like *tree.ComparisonExpr, accId int64, needObjectCoun
 	return fmt.Sprintf(getAccountInfoFormatV2, dbCountFilter, tblCountFilter, objectCountExpr, clause)
 }
 
+func buildShowAccountsSQL(
+	account *TenantInfo,
+	sa *tree.ShowAccounts,
+	database string,
+) (sql string, needObjectCount bool) {
+	isSysTenant := account.IsSysTenant()
+	accountID := int64(account.GetTenantID())
+	like := sa.Like
+	if isSysTenant {
+		accountID = -1
+	} else {
+		// Non-system tenants can only inspect their own account. Preserve the
+		// existing behavior of ignoring a SHOW ACCOUNTS LIKE clause here.
+		like = nil
+	}
+	needObjectCount = isSysTenant &&
+		sa.Like == nil &&
+		database == mometric.MetricDBConst
+	return getSqlForAccountInfo(like, accountID, needObjectCount), needObjectCount
+}
+
 func buildAccountInfoClause(like *tree.ComparisonExpr, accId int64) string {
 	predicates := make([]string, 0, 2)
 	if like != nil {
@@ -229,7 +250,8 @@ func requestStorageUsage(ctx context.Context, ses *Session, accIds [][]int64) (r
 		return nil, tried, err
 	}
 
-	return result.Data.([]any)[0], tried, nil
+	response, err := ctl.GetFirstTNResponse(ctx, result)
+	return response, tried, err
 }
 
 func handleStorageUsageResponse_V2(
@@ -543,16 +565,12 @@ func doShowAccounts(ctx context.Context, ses *Session, sa *tree.ShowAccounts) (e
 	}
 
 	var needUpdateObjectCountMetric bool
-	if account.IsSysTenant() &&
-		sa.Like == nil &&
-		ses.GetTxnCompileCtx().GetDatabase() == mometric.MetricDBConst {
-		// storage usage cron task try to get storage usage for all accounts,
-		// adding an extra col to return object count val for all accounts.
-		needUpdateObjectCountMetric = true
-	}
-
 	if account.IsSysTenant() {
-		sql = getSqlForAccountInfo(sa.Like, -1, needUpdateObjectCountMetric)
+		sql, needUpdateObjectCountMetric = buildShowAccountsSQL(
+			account,
+			sa,
+			ses.GetTxnCompileCtx().GetDatabase(),
+		)
 		accInfosBatches, accIds, err = getAccountInfo(ctx, bh, sql, mp)
 		if err != nil {
 			return err
@@ -565,7 +583,11 @@ func doShowAccounts(ctx context.Context, ses *Session, sa *tree.ShowAccounts) (e
 		}
 		// switch to the sys account to get account info
 		newCtx := defines.AttachAccountId(ctx, uint32(sysAccountID))
-		sql = getSqlForAccountInfo(nil, int64(account.GetTenantID()), needUpdateObjectCountMetric)
+		sql, needUpdateObjectCountMetric = buildShowAccountsSQL(
+			account,
+			sa,
+			ses.GetTxnCompileCtx().GetDatabase(),
+		)
 		accInfosBatches, accIds, err = getAccountInfo(newCtx, bh, sql, mp)
 		if err != nil {
 			return err

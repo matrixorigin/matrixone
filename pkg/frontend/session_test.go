@@ -39,6 +39,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/toml"
@@ -110,6 +111,7 @@ func TestTxnHandler_NewTxn(t *testing.T) {
 		ctx := defines.AttachAccountId(context.TODO(), sysAccountID)
 		txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
 		txnOperator.EXPECT().Txn().Return(txn.TxnMeta{}).AnyTimes()
+		txnOperator.EXPECT().SnapshotTS().Return(timestamp.Timestamp{}).AnyTimes()
 		txnOperator.EXPECT().Rollback(gomock.Any()).Return(nil).AnyTimes()
 		txnOperator.EXPECT().Commit(gomock.Any()).Return(nil).AnyTimes()
 		txnOperator.EXPECT().SetFootPrints(gomock.Any(), gomock.Any()).Return().AnyTimes()
@@ -256,6 +258,7 @@ func TestTxnHandler_RollbackTxn(t *testing.T) {
 		txnOperator.EXPECT().ExitRunSqlWithToken(gomock.Any()).Return().AnyTimes()
 		wp := mock_frontend.NewMockWorkspace(ctrl)
 		wp.EXPECT().RollbackLastStatement(gomock.Any()).Return(moerr.NewInternalError(ctx, "rollback last stmt")).AnyTimes()
+		wp.EXPECT().GetHaveDDL().Return(false).AnyTimes()
 		txnOperator.EXPECT().GetWorkspace().Return(wp).AnyTimes()
 		txnClient := mock_frontend.NewMockTxnClient(ctrl)
 		eng := mock_frontend.NewMockEngine(ctrl)
@@ -628,6 +631,7 @@ func TestSession_Migrate(t *testing.T) {
 		txnClient.EXPECT().New(gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(func(any, any, ...any) (TxnOperator, error) {
 			txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
 			txnOperator.EXPECT().Txn().Return(txn.TxnMeta{}).AnyTimes()
+			txnOperator.EXPECT().SnapshotTS().Return(timestamp.Timestamp{}).AnyTimes()
 			txnOperator.EXPECT().Commit(gomock.Any()).Return(nil).AnyTimes()
 			txnOperator.EXPECT().Rollback(gomock.Any()).Return(nil).AnyTimes()
 			txnOperator.EXPECT().GetWorkspace().Return(newTestWorkspace()).AnyTimes()
@@ -692,17 +696,24 @@ func TestSession_Migrate(t *testing.T) {
 		InitServerLevelVars(sid)
 		SetSessionAlloc(sid, NewSessionAllocator(&config.ParameterUnit{SV: sv}))
 		s := genSession(ctrl, "d1", nil)
-		err := Migrate(s, &query.MigrateConnToRequest{
+		err := Migrate(context.Background(), s, &query.MigrateConnToRequest{
 			DB:               "d1",
 			LastAffectedRows: 7,
 			PrepareStmts: []*query.PrepareStmt{
 				{Name: "p1", SQL: `select ?`},
 				{Name: "p2", SQL: `select ?`},
+				{Name: "a-b", SQL: `select ?`},
+				{Name: "select", SQL: `select ?`},
+				{Name: "a`b", SQL: `select ?`},
+				{Name: "from", SQL: `select ?`},
 			},
 		})
 		assert.NoError(t, err)
 		assert.Equal(t, "d1", s.GetDatabaseName())
-		assert.Equal(t, 2, len(s.prepareStmts))
+		assert.Len(t, s.prepareStmts, 6)
+		for _, name := range []string{"a-b", "select", "a`b", "from"} {
+			assert.Contains(t, s.prepareStmts, name)
+		}
 		assert.Equal(t, int64(7), s.GetLastAffectedRows())
 		assert.Equal(t, int64(7), s.GetProc().GetAffectedRows())
 
@@ -724,6 +735,31 @@ func TestSession_Migrate(t *testing.T) {
 		assert.Equal(t, int64(0), s.GetProc().GetAffectedRows())
 	})
 
+	t.Run("reject user-level locks", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		bh := &backgroundExecTest{}
+		bh.init()
+
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
+		defer bhStub.Reset()
+
+		runtime.SetupServiceBasedRuntime(sid, runtime.DefaultRuntime())
+		InitServerLevelVars(sid)
+		SetSessionAlloc(sid, NewSessionAllocator(&config.ParameterUnit{SV: sv}))
+		s := genSession(ctrl, "d1", nil)
+		err := Migrate(context.Background(), s, &query.MigrateConnToRequest{
+			ConnID: 88,
+			DB:     "d1",
+			UserLevelLocks: []*query.UserLevelLock{
+				{Name: "restored_lock", Count: 2},
+			},
+		})
+		assert.ErrorContains(t, err, "cannot migrate connection while user-level locks are held")
+		assert.Empty(t, function.UserLevelLocksForMigration(s.proc))
+	})
+
 	t.Run("db dropped", func(t *testing.T) {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
@@ -738,9 +774,26 @@ func TestSession_Migrate(t *testing.T) {
 		InitServerLevelVars(sid)
 		SetSessionAlloc(sid, NewSessionAllocator(&config.ParameterUnit{SV: sv}))
 		s := genSession(ctrl, "d2", context.Canceled)
-		err := Migrate(s, &query.MigrateConnToRequest{DB: "d2"})
+		err := Migrate(context.Background(), s, &query.MigrateConnToRequest{DB: "d2"})
 		assert.Equal(t, "", s.GetDatabaseName())
 		assert.NoError(t, err)
+	})
+
+	t.Run("caller canceled", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		runtime.SetupServiceBasedRuntime(sid, runtime.DefaultRuntime())
+		InitServerLevelVars(sid)
+		SetSessionAlloc(sid, NewSessionAllocator(&config.ParameterUnit{SV: sv}))
+		s := genSession(ctrl, "d3", nil)
+		s.SetLastAffectedRows(9)
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+
+		err := Migrate(ctx, s, &query.MigrateConnToRequest{DB: "d3", LastAffectedRows: 3})
+		assert.ErrorIs(t, err, context.Canceled)
+		assert.Equal(t, int64(9), s.GetLastAffectedRows())
 	})
 }
 
@@ -938,15 +991,39 @@ func TestSessionTempTableMap(t *testing.T) {
 		tempTablesRev: make(map[string]string),
 	}
 
+	assert.Equal(t, uint64(0), ses.GetTempTableVersion())
 	ses.AddTempTable("db1", "alias", "real")
+	assert.Equal(t, uint64(1), ses.GetTempTableVersion())
+
+	// Replacing a mapping changes name resolution and removes the stale reverse
+	// mapping.
+	ses.AddTempTable("db1", "alias", "real2")
+	assert.Equal(t, uint64(2), ses.GetTempTableVersion())
+	ses.RemoveTempTableByRealName("real")
+	assert.Equal(t, uint64(2), ses.GetTempTableVersion())
 
 	name, ok := ses.GetTempTable("db1", "alias")
 	assert.True(t, ok)
-	assert.Equal(t, "real", name)
+	assert.Equal(t, "real2", name)
 
-	ses.RemoveTempTableByRealName("real")
+	// Re-registering the same mapping does not change name resolution.
+	ses.AddTempTable("db1", "alias", "real2")
+	assert.Equal(t, uint64(2), ses.GetTempTableVersion())
+
+	ses.RemoveTempTableByRealName("real2")
+	assert.Equal(t, uint64(3), ses.GetTempTableVersion())
 	_, ok = ses.GetTempTable("db1", "alias")
 	assert.False(t, ok)
+
+	// Removing an absent mapping does not change name resolution.
+	ses.RemoveTempTableByRealName("real2")
+	ses.RemoveTempTable("db1", "alias")
+	assert.Equal(t, uint64(3), ses.GetTempTableVersion())
+
+	ses.AddTempTable("db1", "alias", "real3")
+	assert.Equal(t, uint64(4), ses.GetTempTableVersion())
+	ses.RemoveTempTable("db1", "alias")
+	assert.Equal(t, uint64(5), ses.GetTempTableVersion())
 }
 
 func TestRemoveAllPrepareStmts(t *testing.T) {
@@ -964,6 +1041,45 @@ func TestRemoveAllPrepareStmts(t *testing.T) {
 	// safe to call again on an already-empty session
 	ses.RemoveAllPrepareStmts()
 	assert.Equal(t, 0, len(ses.prepareStmts))
+}
+
+func TestPrepareStmtNamesAreCaseInsensitive(t *testing.T) {
+	ctx := context.Background()
+	ses := &Session{prepareStmts: make(map[string]*PrepareStmt)}
+	prepared := &PrepareStmt{ParamTypes: []byte{1}}
+
+	require.NoError(t, ses.SetPrepareStmt(ctx, "MixedCase", prepared))
+	require.Contains(t, ses.prepareStmts, "mixedcase")
+
+	got, err := ses.GetPrepareStmt(ctx, "MIXEDCASE")
+	require.NoError(t, err)
+	require.Same(t, prepared, got)
+
+	replacement := &PrepareStmt{ParamTypes: []byte{2}}
+	require.NoError(t, ses.SetPrepareStmt(ctx, "mixedcase", replacement))
+	require.Nil(t, prepared.ParamTypes)
+	require.Len(t, ses.prepareStmts, 1)
+
+	require.True(t, ses.RemovePrepareStmt("mIxEdCaSe"))
+	require.Empty(t, ses.prepareStmts)
+	require.Nil(t, replacement.ParamTypes)
+}
+
+func TestRemovePrepareStmt(t *testing.T) {
+	ses := &Session{
+		prepareStmts: map[string]*PrepareStmt{
+			"s1": {Name: "s1"},
+			"s2": {Name: "s2"},
+		},
+	}
+
+	assert.True(t, ses.RemovePrepareStmt("s1"))
+	assert.NotContains(t, ses.prepareStmts, "s1")
+	assert.Contains(t, ses.prepareStmts, "s2")
+
+	assert.False(t, ses.RemovePrepareStmt("s1"))
+	assert.False(t, ses.RemovePrepareStmt("missing"))
+	assert.Contains(t, ses.prepareStmts, "s2")
 }
 
 func TestSession_Cleanup(t *testing.T) {

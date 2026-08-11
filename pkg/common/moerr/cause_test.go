@@ -71,6 +71,14 @@ var causeArray = []error{
 	CauseReadCache,
 	CauseRemoteCacheRead,
 
+	CauseIcebergConfig,
+	CauseIcebergCatalog,
+	CauseIcebergMetadata,
+	CauseIcebergPlanning,
+	CauseIcebergCredential,
+	CauseIcebergResidency,
+	CauseIcebergInternal,
+
 	CauseWorkspaceRSSCacheEvict,
 
 	CauseRegisterCdc,
@@ -90,6 +98,7 @@ var causeArray = []error{
 
 	CauseDoAllocate,
 	CauseDoUpdate,
+	CauseDoForceSetOffset,
 	CauseDestroyTables,
 	CauseAllocate,
 
@@ -148,6 +157,9 @@ var causeArray = []error{
 
 	CauseWaitRemoteRegsReady,
 
+	CauseMongoDBClientCleanup,
+	CauseMongoDBClientRetirement,
+
 	CauseIsAvailable,
 	CauseNewMessageSenderOnClient,
 	CauseWaitingTheStopResponse,
@@ -168,8 +180,6 @@ var causeArray = []error{
 	CauseTransferTaskToCN,
 	CauseTransferRequest2OtherCNs,
 	CauseDoUnsubscribeTable,
-
-	CauseKafkaSinkConnectorExecutor,
 
 	CauseResumeTaskHandle,
 	CauseRestartTaskHandle,
@@ -242,8 +252,6 @@ var causeArray = []error{
 	CauseShardingLocalReader,
 	CauseHakeeperIDGeneratorNew,
 	CauseHakeeperIDGeneratorNewIDByKey,
-
-	CauseDoTxnRequest,
 
 	CauseRetryWithIntervalAndTimeout,
 

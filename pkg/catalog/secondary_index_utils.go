@@ -113,18 +113,71 @@ const (
 	IntermediateGraphDegree = "intermediate_graph_degree"
 	GraphDegree             = "graph_degree"
 	ITopkSize               = "itopk_size"
-	IncludedColumns         = "included_columns"
+	// IncludedColumns persists INCLUDE metadata inside algo_params. Consumers
+	// prefer plan.IndexDef.IncludedColumns when present and fall back to this key
+	// for catalog-loaded definitions.
+	IncludedColumns = "included_columns"
 
 	// Index-defining build params, settable as CREATE INDEX options (parsed by
 	// each plugin's ParamsFromTree). Written into flat algo_params only when
 	// explicitly specified, read back by the build path (table functions /
 	// sync), and rendered by IndexParamsToStringList for SHOW CREATE.
-	IndexAlgoParamKmeansTrainPercent = "kmeans_train_percent"
-	IndexAlgoParamKmeansMaxIteration = "kmeans_max_iteration"
-	IndexAlgoParamMaxIndexCapacity   = "max_index_capacity"
+	IndexAlgoParamKmeansTrainPercent  = "kmeans_train_percent"
+	IndexAlgoParamKmeansMaxIteration  = "kmeans_max_iteration"
+	IndexAlgoParamMaxIndexCapacity    = "max_index_capacity"
+	IndexAlgoParamQuantizerTrainLimit = "quantizer_train_limit"
 
+	// IndexAlgoParamPrefixLengths is the legacy, delimiter-separated encoding.
+	// It remains readable for metadata written by older versions.
 	IndexAlgoParamPrefixLengths = "prefix_lengths"
+	// IndexAlgoParamPrefixLengthsV2 stores a JSON object in a string value.
+	// Unlike the legacy colon/comma-separated value, it can represent every
+	// legal quoted column name without ambiguity.
+	IndexAlgoParamPrefixLengthsV2 = "prefix_lengths_v2"
 )
+
+func ParseIncludeColumnsValue(raw string) ([]string, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil, nil
+	}
+
+	if strings.HasPrefix(raw, "[") {
+		var cols []string
+		if err := json.Unmarshal([]byte(raw), &cols); err == nil {
+			return cols, nil
+		}
+	}
+
+	parts := strings.Split(raw, ",")
+	cols := make([]string, 0, len(parts))
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		cols = append(cols, part)
+	}
+	if len(cols) == 0 {
+		return nil, nil
+	}
+	return cols, nil
+}
+
+// MarshalIncludeColumnsValue encodes INCLUDE column names without losing
+// commas or leading/trailing whitespace that are valid inside quoted SQL
+// identifiers. ParseIncludeColumnsValue retains support for the historical
+// comma-separated representation when catalog metadata is reloaded.
+func MarshalIncludeColumnsValue(cols []string) (string, error) {
+	if len(cols) == 0 {
+		return "", nil
+	}
+	encoded, err := json.Marshal(cols)
+	if err != nil {
+		return "", err
+	}
+	return string(encoded), nil
+}
 
 /* 1. ToString Functions */
 
@@ -219,17 +272,8 @@ func IndexParamsToStringList(indexParams string) (string, error) {
 		res += fmt.Sprintf(" %s = %s ", IndexAlgoParamMaxIndexCapacity, val)
 	}
 
-	if val, ok := result[IncludedColumns]; ok && len(val) > 0 {
-		raw := strings.Split(val, ",")
-		parts := make([]string, 0, len(raw))
-		for _, p := range raw {
-			if p = strings.TrimSpace(p); p != "" {
-				parts = append(parts, p)
-			}
-		}
-		if len(parts) > 0 {
-			res += " INCLUDE (" + strings.Join(parts, ", ") + ") "
-		}
+	if val, ok := result[IndexAlgoParamQuantizerTrainLimit]; ok {
+		res += fmt.Sprintf(" %s = %s ", IndexAlgoParamQuantizerTrainLimit, val)
 	}
 	return res, nil
 }
@@ -260,8 +304,8 @@ func IndexParamsMapToJsonString(res map[string]string) (string, error) {
 }
 
 func AddIndexPrefixLengthsToParams(indexParams string, keyParts []*tree.KeyPart) (string, error) {
-	prefixLengths := IndexPrefixLengthsToString(keyParts)
-	if prefixLengths == "" {
+	prefixLengths := indexPrefixLengthsFromKeyParts(keyParts)
+	if len(prefixLengths) == 0 {
 		return indexParams, nil
 	}
 
@@ -273,15 +317,17 @@ func AddIndexPrefixLengthsToParams(indexParams string, keyParts []*tree.KeyPart)
 		}
 		params = existing
 	}
-	params[IndexAlgoParamPrefixLengths] = prefixLengths
+	if err := SetIndexPrefixLengthsInParamMap(params, prefixLengths); err != nil {
+		return "", err
+	}
 	return IndexParamsMapToJsonString(params)
 }
 
+// IndexPrefixLengthsToString returns the legacy delimiter-separated encoding.
+// New catalog metadata must be written through AddIndexPrefixLengthsToParams
+// or SetIndexPrefixLengthsInParamMap so delimiter-bearing identifiers select
+// the lossless v2 representation.
 func IndexPrefixLengthsToString(keyParts []*tree.KeyPart) string {
-	if len(keyParts) == 0 {
-		return ""
-	}
-
 	prefixLengths := make(map[string]int, len(keyParts))
 	for _, keyPart := range keyParts {
 		if keyPart == nil || keyPart.ColName == nil || keyPart.Length <= 0 {
@@ -289,6 +335,21 @@ func IndexPrefixLengthsToString(keyParts []*tree.KeyPart) string {
 		}
 		prefixLengths[keyPart.ColName.ColName()] = keyPart.Length
 	}
+	return indexPrefixLengthsMapToLegacyString(prefixLengths)
+}
+
+func indexPrefixLengthsFromKeyParts(keyParts []*tree.KeyPart) map[string]int {
+	prefixLengths := make(map[string]int, len(keyParts))
+	for _, keyPart := range keyParts {
+		if keyPart == nil || keyPart.ColName == nil || keyPart.Length <= 0 {
+			continue
+		}
+		prefixLengths[keyPart.ColName.ColName()] = keyPart.Length
+	}
+	return prefixLengths
+}
+
+func indexPrefixLengthsMapToLegacyString(prefixLengths map[string]int) string {
 	if len(prefixLengths) == 0 {
 		return ""
 	}
@@ -304,6 +365,34 @@ func IndexPrefixLengthsToString(keyParts []*tree.KeyPart) string {
 		encoded = append(encoded, fmt.Sprintf("%s:%d", part, prefixLengths[part]))
 	}
 	return strings.Join(encoded, ",")
+}
+
+// SetIndexPrefixLengthsInParamMap writes prefix-length metadata to params.
+// Ordinary names keep the legacy representation for stable catalog output;
+// names containing a legacy delimiter use the lossless v2 representation.
+func SetIndexPrefixLengthsInParamMap(params map[string]string, prefixLengths map[string]int) error {
+	if params == nil {
+		return moerr.NewInvalidInputNoCtx("nil index params map")
+	}
+	delete(params, IndexAlgoParamPrefixLengths)
+	delete(params, IndexAlgoParamPrefixLengthsV2)
+	if len(prefixLengths) == 0 {
+		return nil
+	}
+
+	for part := range prefixLengths {
+		if strings.ContainsAny(part, ":,") {
+			encoded, err := json.Marshal(prefixLengths)
+			if err != nil {
+				return err
+			}
+			params[IndexAlgoParamPrefixLengthsV2] = string(encoded)
+			return nil
+		}
+	}
+
+	params[IndexAlgoParamPrefixLengths] = indexPrefixLengthsMapToLegacyString(prefixLengths)
+	return nil
 }
 
 func IndexPrefixLengthsFromParams(indexParams string) map[string]int {
@@ -323,11 +412,26 @@ func IndexPrefixLengthsFromParamsWithError(indexParams string) (map[string]int, 
 		return nil, err
 	}
 
+	if encoded, ok := params[IndexAlgoParamPrefixLengthsV2]; ok {
+		if encoded == "" {
+			return nil, nil
+		}
+		prefixLengths := make(map[string]int)
+		if err := json.Unmarshal([]byte(encoded), &prefixLengths); err != nil {
+			return nil, moerr.NewInvalidInputNoCtxf("invalid v2 index prefix lengths %q", encoded)
+		}
+		for part, length := range prefixLengths {
+			if part == "" || length <= 0 {
+				return nil, moerr.NewInvalidInputNoCtxf("invalid v2 index prefix length %q", encoded)
+			}
+		}
+		return prefixLengths, nil
+	}
+
 	encoded := params[IndexAlgoParamPrefixLengths]
 	if encoded == "" {
 		return nil, nil
 	}
-
 	prefixLengths := make(map[string]int)
 	for _, item := range strings.Split(encoded, ",") {
 		part, lengthText, ok := strings.Cut(item, ":")
@@ -420,7 +524,7 @@ func indexParamsToMap(def interface{}) (map[string]string, error) {
 		case tree.INDEX_TYPE_BTREE, tree.INDEX_TYPE_INVALID, tree.INDEX_TYPE_RTREE:
 			// do nothing
 		case tree.INDEX_TYPE_MASTER:
-			// do nothing
+		// do nothing
 		default:
 			// Vector algorithms (IVFFLAT / HNSW / CAGRA / IVFPQ) build their
 			// algo_params via the per-plugin plan hook BuildIndexParams; they

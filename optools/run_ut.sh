@@ -32,6 +32,7 @@ fi
 
 shopt -s expand_aliases
 source ./utilities.sh
+source ./ut_tools.bash
 go version
 
 BUILD_WKSP=$(dirname "$PWD") && cd $BUILD_WKSP
@@ -40,6 +41,8 @@ BUILD_WKSP=$(dirname "$PWD") && cd $BUILD_WKSP
 LOG="$G_TS-$TEST_TYPE.log"
 UT_TIMEOUT=${UT_TIMEOUT:-"15"}
 UT_PARALLEL=${UT_PARALLEL:-"1"}
+HEAVY_RACE_PARALLEL=${HEAVY_RACE_PARALLEL:-"3"}
+PLAN_RACE_SHARDS=${PLAN_RACE_SHARDS:-"8"}
 SCA_REPORT="$G_WKSP/$G_TS-SCA-Report.out"
 UT_REPORT="$G_WKSP/$G_TS-UT-Report.out"
 UT_FILTER="$G_WKSP/$G_TS-UT-Filter.out"
@@ -86,6 +89,25 @@ function logger(){
     logger_base "$level" "$msg" "$log"
 }
 
+function report_active_ut_cases(){
+    if [[ ! -s "${UT_REPORT}" ]]; then
+        logger "ERR" "No Go test JSON is available to identify active UT cases"
+        return 0
+    fi
+
+    logger "ERR" "Active or incomplete UT cases from ${UT_REPORT}:"
+    awk -f "${BUILD_WKSP}/optools/active_ut_cases.awk" "${UT_REPORT}" |
+        LC_ALL=C sort |
+        sed 's/^/[active_ut_cases] /'
+}
+
+function handle_ut_termination(){
+    trap - TERM
+    logger "ERR" "UT runner received SIGTERM; reporting work without terminal Go test events"
+    report_active_ut_cases
+    exit 143
+}
+
 function run_vet(){
     cd $BUILD_WKSP
     horiz_rule
@@ -100,6 +122,93 @@ function run_vet(){
 
 }
 
+function run_plan_race_shards(){
+    local plan_package=$1
+    local test_list="${G_WKSP}/${G_TS}-plan-race-tests.out"
+    local list_status=0
+    local shard_status=0
+    local test_name=""
+    local shard=0
+    local test_count=0
+    local -a shard_patterns
+    local -a shard_counts
+
+    if ! [[ "${PLAN_RACE_SHARDS}" =~ ^[1-9][0-9]*$ ]] ||
+        (( PLAN_RACE_SHARDS > 64 )); then
+        logger "ERR" "PLAN_RACE_SHARDS must be an integer from 1 through 64, got '${PLAN_RACE_SHARDS}'"
+        return 2
+    fi
+
+    # Listing does not run tests, so the process exits before race-detector
+    # state can accumulate. Use -race here so race-tagged tests are included.
+    LD_LIBRARY_PATH="${LD_LIBRARY_PATH}" \
+        CGO_CFLAGS="${CGO_CFLAGS}" \
+        CGO_LDFLAGS="${CGO_LDFLAGS}" \
+        go test ${GO_MODULE_MODE} -short -race -tags "${TAGS}" \
+        -list '^(Test|Fuzz|Example)' "${plan_package}" > "${test_list}"
+    list_status=$?
+    if (( list_status != 0 )); then
+        logger "ERR" "Failed to list tests for ${plan_package}"
+        tail -n 200 "${test_list}"
+        return "${list_status}"
+    fi
+
+    for (( shard = 0; shard < PLAN_RACE_SHARDS; shard++ )); do
+        shard_patterns[shard]='^('
+        shard_counts[shard]=0
+    done
+
+    while IFS= read -r test_name; do
+        case "${test_name}" in
+            Test*|Fuzz*|Example*) ;;
+            *) continue ;;
+        esac
+        shard=$(( test_count % PLAN_RACE_SHARDS ))
+        if (( shard_counts[shard] > 0 )); then
+            shard_patterns[shard]+='|'
+        fi
+        shard_patterns[shard]+="${test_name}"
+        shard_counts[shard]=$(( shard_counts[shard] + 1 ))
+        test_count=$(( test_count + 1 ))
+    done < "${test_list}"
+
+    if (( test_count == 0 )); then
+        logger "ERR" "No tests discovered for ${plan_package}"
+        return 2
+    fi
+
+    logger "INF" "Run ${test_count} tests in ${plan_package} across ${PLAN_RACE_SHARDS} fresh race-detector processes"
+    for (( shard = 0; shard < PLAN_RACE_SHARDS; shard++ )); do
+        if (( shard_counts[shard] == 0 )); then
+            continue
+        fi
+        shard_patterns[shard]+=')$'
+        logger "INF" "Run ${plan_package} race shard $(( shard + 1 ))/${PLAN_RACE_SHARDS} (${shard_counts[shard]} tests)"
+        LD_LIBRARY_PATH="${LD_LIBRARY_PATH}" \
+            CGO_CFLAGS="${CGO_CFLAGS}" \
+            CGO_LDFLAGS="${CGO_LDFLAGS}" \
+            go test ${GO_MODULE_MODE} -short -v -json -tags "${TAGS}" \
+            -p 1 -count=1 -timeout "${UT_TIMEOUT}m" -race \
+            -run "${shard_patterns[shard]}" "${plan_package}" >> "${UT_REPORT}"
+        if (( $? != 0 )); then
+            shard_status=1
+        fi
+    done
+
+    return "${shard_status}"
+}
+
+function remove_packages_from_scope(){
+    local scope=$1
+    shift
+    local package
+
+    for package in "$@"; do
+        scope=$(printf '%s\n' "${scope}" | grep -Fvx "${package}")
+    done
+    printf '%s\n' "${scope}"
+}
+
 function run_tests(){
     cd $BUILD_WKSP
     horiz_rule
@@ -109,6 +218,8 @@ function run_tests(){
     echo "#  COVERAGE REPORT: $CODE_COVERAGE"
     echo "#  UT TIMEOUT:      $UT_TIMEOUT"
     echo "#  UT PARALLEL:     $UT_PARALLEL"
+    echo "#  CLUSTER ADMISSION: process lifecycle"
+    echo "#  HEAVY RACE UT:   $HEAVY_RACE_PARALLEL"
     horiz_rule
 
     logger "INF" "Clean go test cache"
@@ -136,19 +247,103 @@ function run_tests(){
     fi
 
     if [[ $SKIP_TESTS == 'race' ]]; then
-        logger "INF" "Run UT without race check"
-        LD_LIBRARY_PATH="${LD_LIBRARY_PATH}" CGO_CFLAGS="${CGO_CFLAGS}" CGO_LDFLAGS="${CGO_LDFLAGS}" go test ${GO_MODULE_MODE} -short -v -json -tags "${TAGS}" -p ${UT_PARALLEL} -timeout "${UT_TIMEOUT}m"  $test_scope > $UT_REPORT
+        logger "INF" "Run UT packages with parallelism ${UT_PARALLEL} and process-lifecycle cluster admission"
+        LD_LIBRARY_PATH="${LD_LIBRARY_PATH}" CGO_CFLAGS="${CGO_CFLAGS}" CGO_LDFLAGS="${CGO_LDFLAGS}" go test ${GO_MODULE_MODE} -short -v -json -tags "${TAGS}" -p ${UT_PARALLEL} -timeout "${UT_TIMEOUT}m" $test_scope > $UT_REPORT
+        UT_TEST_STATUS=$?
     else
         logger "INF" "Run UT with race check"
-        LD_LIBRARY_PATH="${LD_LIBRARY_PATH}" CGO_CFLAGS="${CGO_CFLAGS}" CGO_LDFLAGS="${CGO_LDFLAGS}" go test ${GO_MODULE_MODE} -short -v -json -tags "${TAGS}" -p ${UT_PARALLEL} -timeout "${UT_TIMEOUT}m" -race $test_scope > $UT_REPORT
+        local plan_package
+        local serial_test_scope
+        local heavy_test_scope
+        local light_test_scope
+        local package
+        local package_status=0
+        local light_status=0
+        local serial_status=0
+        local heavy_status=0
+        local plan_status=0
+
+        if ! [[ "${HEAVY_RACE_PARALLEL}" =~ ^[1-9][0-9]*$ ]] ||
+            (( HEAVY_RACE_PARALLEL > 64 )); then
+            logger "ERR" "HEAVY_RACE_PARALLEL must be an integer from 1 through 64, got '${HEAVY_RACE_PARALLEL}'"
+            UT_TEST_STATUS=1
+            return 0
+        fi
+
+        if ! plan_package=$(go list ${GO_MODULE_MODE} ./pkg/sql/plan); then
+            logger "ERR" "Failed to resolve ./pkg/sql/plan"
+            UT_TEST_STATUS=1
+            return 0
+        fi
+
+        # These packages need exclusive runner access. NewTestService callers
+        # bind fixed ports, while the issues packages intentionally keep embedded
+        # clusters alive for most of their test processes.
+        if ! serial_test_scope=$(go list ${GO_MODULE_MODE} \
+            ./pkg/logservice \
+            ./pkg/vm/engine/tae/logstore \
+            ./pkg/vm/engine/tae/logstore/driver/logservicedriver \
+            ./pkg/tests/issues \
+            ./pkg/tests/issues/isolated); then
+            logger "ERR" "Failed to resolve serial race-test packages"
+            UT_TEST_STATUS=1
+            return 0
+        fi
+
+        if ! heavy_test_scope=$(go list ${GO_MODULE_MODE} \
+            ./pkg/sql/plan/function \
+            ./pkg/tests/dml \
+            ./pkg/tests/shard \
+            ./pkg/tests/partition \
+            ./pkg/tests/txnexecutor); then
+            logger "ERR" "Failed to resolve heavy race-test packages"
+            UT_TEST_STATUS=1
+            return 0
+        fi
+
+        light_test_scope=$(remove_packages_from_scope \
+            "${test_scope}" \
+            "${plan_package}" \
+            ${serial_test_scope} \
+            ${heavy_test_scope})
+
+        if [[ -n "${light_test_scope}" ]]; then
+            logger "INF" "Run light race-test packages with parallelism ${UT_PARALLEL}"
+            LD_LIBRARY_PATH="${LD_LIBRARY_PATH}" CGO_CFLAGS="${CGO_CFLAGS}" CGO_LDFLAGS="${CGO_LDFLAGS}" go test ${GO_MODULE_MODE} -short -v -json -tags "${TAGS}" -p ${UT_PARALLEL} -timeout "${UT_TIMEOUT}m" -race $light_test_scope > $UT_REPORT
+            light_status=$?
+        else
+            : > "${UT_REPORT}"
+        fi
+
+        logger "INF" "Run exclusive race-test packages serially"
+        for package in ${serial_test_scope}; do
+            logger "INF" "Run exclusive race-test package ${package}"
+            LD_LIBRARY_PATH="${LD_LIBRARY_PATH}" CGO_CFLAGS="${CGO_CFLAGS}" CGO_LDFLAGS="${CGO_LDFLAGS}" go test ${GO_MODULE_MODE} -short -v -json -tags "${TAGS}" -p 1 -timeout "${UT_TIMEOUT}m" -race "${package}" >> $UT_REPORT
+            package_status=$?
+            if (( package_status != 0 )); then
+                serial_status=1
+                logger "ERR" "Exclusive race-test package ${package} failed with status ${package_status}"
+            fi
+        done
+
+        logger "INF" "Run heavy race-test packages with parallelism ${HEAVY_RACE_PARALLEL}"
+        LD_LIBRARY_PATH="${LD_LIBRARY_PATH}" CGO_CFLAGS="${CGO_CFLAGS}" CGO_LDFLAGS="${CGO_LDFLAGS}" go test ${GO_MODULE_MODE} -short -v -json -tags "${TAGS}" -p ${HEAVY_RACE_PARALLEL} -timeout "${UT_TIMEOUT}m" -race $heavy_test_scope >> $UT_REPORT
+        heavy_status=$?
+
+        run_plan_race_shards "${plan_package}"
+        plan_status=$?
+
+        if (( light_status != 0 || serial_status != 0 || heavy_status != 0 || plan_status != 0 )); then
+            UT_TEST_STATUS=1
+        fi
     fi
 
     # run_ut.sh intentionally does not use errexit because post-processing must
     # still run after a failed package. Preserve go test's status explicitly so
     # a report-parser failure can never replace the authoritative test result.
-    UT_TEST_STATUS=$?
     if (( UT_TEST_STATUS != 0 )); then
         logger "ERR" "go test failed with status ${UT_TEST_STATUS}; raw report: ${UT_REPORT}"
+        report_active_ut_cases
     fi
 
     # The caller must continue into ut_summary even when go test failed.
@@ -164,7 +359,7 @@ function ut_summary(){
   # analyzer cannot parse a truncated/interleaved go test JSON stream.
   mkdir -p "${report_path}/failed/outputs"
 
-  if ! go install github.com/matrixorigin/go-ut-analysis@latest; then
+  if ! install_go_ut_analysis; then
     analysis_status=1
     logger "ERR" "failed to install go-ut-analysis"
   else
@@ -204,6 +399,7 @@ if [[ 'SCA' == $TEST_TYPE ]]; then
     horiz_rule
     run_vet
 elif [[ 'UT' == $TEST_TYPE ]]; then
+    trap handle_ut_termination TERM
     horiz_rule
     echo "# Running UT"
     horiz_rule

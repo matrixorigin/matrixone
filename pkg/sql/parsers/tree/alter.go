@@ -926,6 +926,7 @@ type AlterOptionAlterReIndex struct {
 	KmeansTrainPercent       int64
 	KmeansMaxIteration       int64
 	MaxIndexCapacity         int64
+	QuantizerTrainLimit      int64
 	IncludeColumns           []*UnresolvedName
 }
 
@@ -958,6 +959,7 @@ func NewAlterOptionAlterReIndex(name Identifier, option *IndexOption) *AlterOpti
 	a.KmeansTrainPercent = option.KmeansTrainPercent
 	a.KmeansMaxIteration = option.KmeansMaxIteration
 	a.MaxIndexCapacity = option.MaxIndexCapacity
+	a.QuantizerTrainLimit = option.QuantizerTrainLimit
 	a.IncludeColumns = option.IncludeColumns
 	return a
 }
@@ -1005,6 +1007,7 @@ func (node *AlterOptionAlterReIndex) Format(ctx *FmtCtx) {
 	writeInt("kmeans_train_percent", node.KmeansTrainPercent)
 	writeInt("kmeans_max_iteration", node.KmeansMaxIteration)
 	writeInt("max_index_capacity", node.MaxIndexCapacity)
+	writeInt("quantizer_train_limit", node.QuantizerTrainLimit)
 	if len(node.IncludeColumns) != 0 {
 		ctx.WriteString(" include (")
 		for i, c := range node.IncludeColumns {

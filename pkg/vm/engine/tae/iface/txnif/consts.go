@@ -27,9 +27,9 @@ type TxnState int32
 const (
 	TxnStateActive TxnState = iota
 	TxnStatePreparing
-	//TxnStatePrepared only for 2PC
+	// TxnStatePrepared is retained at its persisted numeric value for WAL compatibility.
 	TxnStatePrepared
-	//TxnStateCommittingFinished only for 2PC txn runs on coordinator
+	// TxnStateCommittingFinished is retained at its persisted numeric value for WAL compatibility.
 	TxnStateCommittingFinished
 	TxnStateRollbacking
 	//TxnStateCommitted , TxnStateRollbacked, and TxnStateUnknown are final states.

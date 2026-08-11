@@ -117,6 +117,36 @@ func extractRowFromVector(ctx context.Context, ses FeSession, vec *vector.Vector
 		} else {
 			row[i] = append([]float64(nil), arr...)
 		}
+	case types.T_array_bf16:
+		arr := vector.GetArrayAt[types.BF16](vec, rowIndex)
+		if safeRefSlice {
+			row[i] = arr
+		} else {
+			row[i] = append([]types.BF16(nil), arr...)
+		}
+	case types.T_array_float16:
+		arr := vector.GetArrayAt[types.Float16](vec, rowIndex)
+		if safeRefSlice {
+			row[i] = arr
+		} else {
+			row[i] = append([]types.Float16(nil), arr...)
+		}
+	case types.T_array_int8:
+		arr := vector.GetArrayAt[int8](vec, rowIndex)
+		if safeRefSlice {
+			row[i] = arr
+		} else {
+			row[i] = append([]int8(nil), arr...)
+		}
+	case types.T_array_uint8:
+		// vecuint8's element slice is []uint8, which is indistinguishable from a
+		// raw []byte (binary/varbinary) value once the column is mapped to
+		// MYSQL_TYPE_VARCHAR. Every value-based consumer of mrs.Data (GetString,
+		// the legacy row encoders, CSV export) would then treat it as raw bytes
+		// and emit corrupt output. Store the display string instead so it is
+		// unambiguous; the main SELECT path (extractRowFromVector2/GetStringBased)
+		// is oid-aware and renders directly from the vector, unaffected by this.
+		row[i] = types.ArrayToString[uint8](vector.GetArrayAt[uint8](vec, rowIndex))
 	case types.T_date:
 		row[i] = vector.GetFixedAtNoTypeCheck[types.Date](vec, rowIndex)
 	case types.T_datetime:
@@ -205,7 +235,7 @@ func extractRowFromVector2(ctx context.Context, ses FeSession, vec *vector.Vecto
 	case types.T_int16:
 		row[i] = colSlices.arrInt16[sliceIdx][rowIndex]
 	case types.T_year:
-		row[i] = types.MoYear(colSlices.arrInt16[sliceIdx][rowIndex])
+		row[i] = colSlices.arrYear[sliceIdx][rowIndex]
 	case types.T_uint16:
 		row[i] = colSlices.arrUint16[sliceIdx][rowIndex]
 	case types.T_int32:
@@ -247,6 +277,34 @@ func extractRowFromVector2(ctx context.Context, ses FeSession, vec *vector.Vecto
 			row[i] = arr
 		} else {
 			row[i] = append([]float64(nil), arr...)
+		}
+	case types.T_array_bf16:
+		arr := vector.GetArrayAt2[types.BF16](vec, colSlices.arrVarlena[sliceIdx], rowIndex)
+		if safeRefSlice {
+			row[i] = arr
+		} else {
+			row[i] = append([]types.BF16(nil), arr...)
+		}
+	case types.T_array_float16:
+		arr := vector.GetArrayAt2[types.Float16](vec, colSlices.arrVarlena[sliceIdx], rowIndex)
+		if safeRefSlice {
+			row[i] = arr
+		} else {
+			row[i] = append([]types.Float16(nil), arr...)
+		}
+	case types.T_array_int8:
+		arr := vector.GetArrayAt2[int8](vec, colSlices.arrVarlena[sliceIdx], rowIndex)
+		if safeRefSlice {
+			row[i] = arr
+		} else {
+			row[i] = append([]int8(nil), arr...)
+		}
+	case types.T_array_uint8:
+		arr := vector.GetArrayAt2[uint8](vec, colSlices.arrVarlena[sliceIdx], rowIndex)
+		if safeRefSlice {
+			row[i] = arr
+		} else {
+			row[i] = append([]uint8(nil), arr...)
 		}
 	case types.T_date:
 		row[i] = colSlices.arrDate[sliceIdx][rowIndex]
@@ -296,6 +354,7 @@ type ColumnSlices struct {
 	arrBool         [][]bool
 	arrInt8         [][]int8
 	arrInt16        [][]int16
+	arrYear         [][]types.MoYear
 	arrInt32        [][]int32
 	arrInt64        [][]int64
 	arrUint8        [][]uint8
@@ -330,6 +389,7 @@ func (slices *ColumnSlices) Close() {
 	slices.arrBool = nil
 	slices.arrInt8 = nil
 	slices.arrInt16 = nil
+	slices.arrYear = nil
 	slices.arrInt32 = nil
 	slices.arrInt64 = nil
 	slices.arrUint8 = nil
@@ -415,8 +475,10 @@ func (slices *ColumnSlices) GetUint64(r uint64, i uint64) (uint64, error) {
 		return uint64(slices.arrInt8[sliceIdx][r]), nil
 	case types.T_uint8:
 		return uint64(slices.arrUint8[sliceIdx][r]), nil
-	case types.T_int16, types.T_year:
+	case types.T_int16:
 		return uint64(slices.arrInt16[sliceIdx][r]), nil
+	case types.T_year:
+		return uint64(slices.arrYear[sliceIdx][r]), nil
 	case types.T_uint16:
 		return uint64(slices.arrUint16[sliceIdx][r]), nil
 	case types.T_int32:
@@ -447,8 +509,10 @@ func (slices *ColumnSlices) GetInt64(r uint64, i uint64) (int64, error) {
 		return int64(slices.arrInt8[sliceIdx][r]), nil
 	case types.T_uint8:
 		return int64(slices.arrUint8[sliceIdx][r]), nil
-	case types.T_int16, types.T_year:
+	case types.T_int16:
 		return int64(slices.arrInt16[sliceIdx][r]), nil
+	case types.T_year:
+		return int64(slices.arrYear[sliceIdx][r]), nil
 	case types.T_uint16:
 		return int64(slices.arrUint16[sliceIdx][r]), nil
 	case types.T_int32:
@@ -570,6 +634,14 @@ func (slices *ColumnSlices) GetStringBased(r uint64, i uint64) (string, error) {
 		return types.ArrayToString[float32](vector.GetArrayAt2[float32](vec, slices.arrVarlena[sliceIdx], int(r))), nil
 	case types.T_array_float64:
 		return types.ArrayToString[float64](vector.GetArrayAt2[float64](vec, slices.arrVarlena[sliceIdx], int(r))), nil
+	case types.T_array_bf16:
+		return types.ArrayToString[types.BF16](vector.GetArrayAt2[types.BF16](vec, slices.arrVarlena[sliceIdx], int(r))), nil
+	case types.T_array_float16:
+		return types.ArrayToString[types.Float16](vector.GetArrayAt2[types.Float16](vec, slices.arrVarlena[sliceIdx], int(r))), nil
+	case types.T_array_int8:
+		return types.ArrayToString[int8](vector.GetArrayAt2[int8](vec, slices.arrVarlena[sliceIdx], int(r))), nil
+	case types.T_array_uint8:
+		return types.ArrayToString[uint8](vector.GetArrayAt2[uint8](vec, slices.arrVarlena[sliceIdx], int(r))), nil
 	case types.T_Rowid:
 		return slices.arrRowid[sliceIdx][r].String(), nil
 	case types.T_Blockid:
@@ -742,8 +814,8 @@ func convertVectorToSlice(ctx context.Context, ses FeSession, vec *vector.Vector
 		colSlices.colIdx2SliceIdx[i] = len(colSlices.arrInt16)
 		colSlices.arrInt16 = append(colSlices.arrInt16, vector.ToSliceNoTypeCheck2[int16](vec))
 	case types.T_year:
-		colSlices.colIdx2SliceIdx[i] = len(colSlices.arrInt16)
-		colSlices.arrInt16 = append(colSlices.arrInt16, vector.ToSliceNoTypeCheck2[int16](vec))
+		colSlices.colIdx2SliceIdx[i] = len(colSlices.arrYear)
+		colSlices.arrYear = append(colSlices.arrYear, vector.ToSliceNoTypeCheck2[types.MoYear](vec))
 	case types.T_uint16:
 		colSlices.colIdx2SliceIdx[i] = len(colSlices.arrUint16)
 		colSlices.arrUint16 = append(colSlices.arrUint16, vector.ToSliceNoTypeCheck2[uint16](vec))
@@ -778,6 +850,9 @@ func convertVectorToSlice(ctx context.Context, ses FeSession, vec *vector.Vector
 		colSlices.colIdx2SliceIdx[i] = len(colSlices.arrVarlena)
 		colSlices.arrVarlena = append(colSlices.arrVarlena, vector.ToSliceNoTypeCheck2[types.Varlena](vec))
 	case types.T_array_float64:
+		colSlices.colIdx2SliceIdx[i] = len(colSlices.arrVarlena)
+		colSlices.arrVarlena = append(colSlices.arrVarlena, vector.ToSliceNoTypeCheck2[types.Varlena](vec))
+	case types.T_array_bf16, types.T_array_float16, types.T_array_int8, types.T_array_uint8:
 		colSlices.colIdx2SliceIdx[i] = len(colSlices.arrVarlena)
 		colSlices.arrVarlena = append(colSlices.arrVarlena, vector.ToSliceNoTypeCheck2[types.Varlena](vec))
 	case types.T_date:

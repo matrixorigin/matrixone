@@ -84,8 +84,10 @@ func TestShouldScheduleStalledCheckpointFlush(t *testing.T) {
 	assert.False(t, shouldScheduleStalledCheckpointFlush(intent, threshold))
 }
 
-func TestStalledCheckpointFlushAgeMatchesIntentOldAge(t *testing.T) {
-	assert.Equal(t, checkpointIntentOldAge, stalledCheckpointFlushAge)
+func TestStalledCheckpointFlushAgeFollowsFlushCadence(t *testing.T) {
+	assert.Equal(t, 20*time.Millisecond, deriveStalledCheckpointFlushAge(10*time.Millisecond))
+	assert.Equal(t, maxStalledCheckpointFlushAge, deriveStalledCheckpointFlushAge(time.Minute))
+	assert.Equal(t, maxStalledCheckpointFlushAge, deriveStalledCheckpointFlushAge(0))
 }
 
 func TestMakeStalledCheckpointFlushEntry(t *testing.T) {
@@ -119,9 +121,10 @@ func TestMakeStalledCheckpointFlushEntry(t *testing.T) {
 }
 
 func TestPickStalledCheckpointFlushEntryAlternatesWithNormal(t *testing.T) {
+	age := 10 * time.Millisecond
 	intent := NewCheckpointEntry("", types.BuildTS(2, 0), types.BuildTS(5, 0), ET_Incremental)
-	intent.bornTime = time.Now().Add(-stalledCheckpointFlushAge - time.Second)
-	flusher := &flushImpl{}
+	intent.bornTime = time.Now().Add(-age - time.Second)
+	flusher := &flushImpl{stalledCheckpointFlushAge: age}
 
 	assert.True(t, flusher.pickStalledCheckpointFlushEntry(intent))
 	assert.False(t, flusher.pickStalledCheckpointFlushEntry(intent))
@@ -187,6 +190,43 @@ func TestCheckpointBoundedScheduleDoesNotResetFlushDeadline(t *testing.T) {
 	assert.True(t, flushScheduleForce.resetFlushDeadline())
 }
 
+func TestCheckpointBoundedScanIncludesObjectsBeforeLastCheckpoint(t *testing.T) {
+	table := catalog.MockStaloneTableEntry(1, catalog.NewEmptySchema("test"))
+	beforeCheckpoint := catalog.NewStandaloneObject(table, types.BuildTS(1, 0), false)
+	afterCheckpoint := catalog.NewStandaloneObject(table, types.BuildTS(3, 0), false)
+	table.AddEntryLocked(beforeCheckpoint)
+	table.AddEntryLocked(afterCheckpoint)
+
+	lastCkp := types.BuildTS(2, 0)
+	end := types.BuildTS(4, 0)
+	var boundedObjects []*catalog.ObjectEntry
+	foreachAobjBefore(
+		context.Background(),
+		table,
+		end,
+		flushScheduleCheckpointBounded.objectScanLowerBound(lastCkp),
+		func(obj *catalog.ObjectEntry) {
+			boundedObjects = append(boundedObjects, obj)
+		},
+		func(*catalog.ObjectEntry) {},
+	)
+	assert.ElementsMatch(t, []*catalog.ObjectEntry{beforeCheckpoint, afterCheckpoint}, boundedObjects)
+	assert.Equal(t, types.TS{}, flushScheduleForce.objectScanLowerBound(lastCkp))
+
+	var cronObjects []*catalog.ObjectEntry
+	foreachAobjBefore(
+		context.Background(),
+		table,
+		end,
+		flushScheduleCron.objectScanLowerBound(lastCkp),
+		func(obj *catalog.ObjectEntry) {
+			cronObjects = append(cronObjects, obj)
+		},
+		func(*catalog.ObjectEntry) {},
+	)
+	assert.Equal(t, []*catalog.ObjectEntry{afterCheckpoint}, cronObjects)
+}
+
 func TestCheckpointBoundedFlushDoesNotResetTableDeadline(t *testing.T) {
 	flusher := &flushImpl{flushInterval: time.Hour}
 	table := catalog.MockStaloneTableEntry(1, catalog.NewEmptySchema("test"))
@@ -215,19 +255,21 @@ func TestCheckpointBoundedFlushDoesNotResetTableDeadline(t *testing.T) {
 }
 
 func TestTriggerJobFallsBackToNormalWhenBoundedEntryIsEmpty(t *testing.T) {
+	age := 10 * time.Millisecond
 	intentStart := types.BuildTS(2, 0)
 	intentEnd := types.BuildTS(5, 0)
 	intent := NewCheckpointEntry("", intentStart, intentEnd, ET_Incremental)
-	intent.bornTime = time.Now().Add(-stalledCheckpointFlushAge - time.Second)
+	intent.bornTime = time.Now().Add(-age - time.Second)
 
 	normal := newTestDirtyTreeEntry(types.BuildTS(1, 0), types.BuildTS(10, 0), 1)
 	sourcer := &triggerJobFallbackCollector{normal: normal}
 	scheduler := &triggerJobCheckpointScheduler{pending: intent}
 	queue := newFlushRequestQueue()
 	flusher := &flushImpl{
-		sourcer:            sourcer,
-		checkpointSchduler: scheduler,
-		flushRequestQ:      queue,
+		sourcer:                   sourcer,
+		checkpointSchduler:        scheduler,
+		flushRequestQ:             queue,
+		stalledCheckpointFlushAge: age,
 	}
 
 	flusher.triggerJob(context.Background())
@@ -246,18 +288,20 @@ func TestTriggerJobFallsBackToNormalWhenBoundedEntryIsEmpty(t *testing.T) {
 }
 
 func TestTriggerJobEnqueuesBoundedFlushWhenStalledCheckpointHasDirtyEntry(t *testing.T) {
+	age := 10 * time.Millisecond
 	intentStart := types.BuildTS(2, 0)
 	intentEnd := types.BuildTS(5, 0)
 	intent := NewCheckpointEntry("", intentStart, intentEnd, ET_Incremental)
-	intent.bornTime = time.Now().Add(-stalledCheckpointFlushAge - time.Second)
+	intent.bornTime = time.Now().Add(-age - time.Second)
 
 	sourcer := &triggerJobBoundedCollector{}
 	scheduler := &triggerJobCheckpointScheduler{pending: intent}
 	queue := newFlushRequestQueue()
 	flusher := &flushImpl{
-		sourcer:            sourcer,
-		checkpointSchduler: scheduler,
-		flushRequestQ:      queue,
+		sourcer:                   sourcer,
+		checkpointSchduler:        scheduler,
+		flushRequestQ:             queue,
+		stalledCheckpointFlushAge: age,
 	}
 
 	flusher.triggerJob(context.Background())
@@ -456,6 +500,9 @@ func (s *triggerJobCheckpointScheduler) MaxGlobalCheckpoint() *CheckpointEntry {
 	return nil
 }
 func (s *triggerJobCheckpointScheduler) MaxIncrementalCheckpoint() *CheckpointEntry {
+	return nil
+}
+func (s *triggerJobCheckpointScheduler) MaxCheckpoint() *CheckpointEntry {
 	return nil
 }
 func (s *triggerJobCheckpointScheduler) PendingIncrementalCheckpoint() *CheckpointEntry {

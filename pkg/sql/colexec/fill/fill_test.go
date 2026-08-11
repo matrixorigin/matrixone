@@ -18,8 +18,6 @@ import (
 	"bytes"
 	"testing"
 
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
-
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -43,7 +41,6 @@ func makeTestCases(t *testing.T) []fillTestCase {
 		{
 			proc: testutil.NewProcessWithMPool(t, "", mpool.MustNewZero()),
 			arg: &Fill{
-				AggIds:   []int32{function.MAX},
 				FillType: plan.Node_VALUE,
 				FillVal: []*plan.Expr{
 					{
@@ -70,7 +67,6 @@ func makeTestCases(t *testing.T) []fillTestCase {
 		{
 			proc: testutil.NewProcessWithMPool(t, "", mpool.MustNewZero()),
 			arg: &Fill{
-				AggIds:   []int32{function.MAX},
 				FillType: plan.Node_PREV,
 				FillVal: []*plan.Expr{
 					{
@@ -97,7 +93,6 @@ func makeTestCases(t *testing.T) []fillTestCase {
 		{
 			proc: testutil.NewProcessWithMPool(t, "", mpool.MustNewZero()),
 			arg: &Fill{
-				AggIds:   []int32{function.MAX},
 				FillType: plan.Node_NONE,
 				FillVal: []*plan.Expr{
 					{
@@ -125,7 +120,6 @@ func makeTestCases(t *testing.T) []fillTestCase {
 		{
 			proc: testutil.NewProcessWithMPool(t, "", mpool.MustNewZero()),
 			arg: &Fill{
-				AggIds:   []int32{function.MAX},
 				FillType: plan.Node_NEXT,
 				FillVal: []*plan.Expr{
 					{
@@ -152,7 +146,6 @@ func makeTestCases(t *testing.T) []fillTestCase {
 		{
 			proc: testutil.NewProcessWithMPool(t, "", mpool.MustNewZero()),
 			arg: &Fill{
-				AggIds:   []int32{function.MAX},
 				FillType: plan.Node_LINEAR,
 				FillVal: []*plan.Expr{
 					{
@@ -234,10 +227,10 @@ func TestProcessLinearDecimal128(t *testing.T) {
 	arg := &Fill{ColLen: 1, FillType: plan.Node_LINEAR}
 	ctr := &arg.ctr
 	ctr.bats = []*batch.Batch{bat}
-	ctr.doneIdx = make([]int, 1)
-	ctr.endBatch = make([]bool, 1)
+	ctr.linRun = make([][]fillCoord, 1)
+	ctr.linPre = []fillCoord{{seq: -1, row: -1}}
 
-	require.NoError(t, processLinearCol(ctr, arg, proc, 0, nil))
+	require.NoError(t, ctr.consumeLinear(arg, bat, 0, proc))
 	require.False(t, vec.IsNull(1))
 	require.Equal(t, types.Decimal128FromInt64(200), vector.GetFixedAtNoTypeCheck[types.Decimal128](vec, 1))
 }
@@ -1151,17 +1144,13 @@ func TestLinearFillValueUsesExpressionForNonDecimal128(t *testing.T) {
 	defer resultVec.Free(proc.Mp())
 
 	ctr := &container{
-		bats:   []*batch.Batch{input},
-		preIdx: 0,
-		preRow: 0,
-		curIdx: 0,
-		curRow: 2,
+		bats: []*batch.Batch{input},
 		exes: []colexec.ExpressionExecutor{
 			&fillStubExpressionExecutor{result: resultVec},
 		},
 	}
 
-	vec, owned, err := linearFillValue(ctr, proc, 0)
+	vec, owned, err := linearFillValue(ctr, proc, 0, input, 0, input, 2)
 	require.NoError(t, err)
 	require.False(t, owned)
 	require.Same(t, resultVec, vec)
@@ -1186,6 +1175,120 @@ func (s *fillStubExpressionExecutor) Free() {}
 
 func (s *fillStubExpressionExecutor) IsColumnExpr() bool {
 	return false
+}
+
+func TestConsumeNextStabilizesSelfAliasedVarlenSources(t *testing.T) {
+	mpool.EnableDebugPoisonOnFree()
+	defer mpool.DisableDebugPoisonOnFree()
+
+	varlenTypes := []types.Type{
+		types.T_char.ToType(), types.T_varchar.ToType(),
+		types.T_binary.ToType(), types.T_varbinary.ToType(),
+		types.T_json.ToType(), types.T_blob.ToType(), types.T_text.ToType(),
+		types.T_array_float32.ToType(), types.T_array_float64.ToType(),
+		types.T_array_bf16.ToType(), types.T_array_float16.ToType(),
+		types.T_array_int8.ToType(), types.T_array_uint8.ToType(),
+		types.T_datalink.ToType(),
+	}
+	for _, typ := range varlenTypes {
+		t.Run(typ.String(), func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			defer proc.Free()
+
+			const rows = 1001
+			payload := bytes.Repeat([]byte("b"), 256)
+			vec := vector.NewOffHeapVecWithType(typ)
+			require.NoError(t, vec.PreExtend(rows, proc.Mp()))
+			vec.SetLength(rows)
+			for i := 0; i < rows-1; i++ {
+				vec.SetNull(uint64(i))
+			}
+			require.NoError(t, vector.SetBytesAt(vec, rows-1, payload, proc.Mp()))
+
+			bat := batch.NewWithSize(1)
+			bat.SetVector(0, vec)
+			bat.SetRowCount(rows)
+			defer bat.Clean(proc.Mp())
+
+			ctr := &container{
+				bats:    []*batch.Batch{bat},
+				nextRun: make([][]fillCoord, 1),
+			}
+			ap := &Fill{ColLen: 1}
+
+			require.NoError(t, ctr.consumeNext(ap, bat, 0, proc))
+			require.Empty(t, ctr.nextRun[0])
+			for i := 0; i < rows; i++ {
+				require.False(t, vec.IsNull(uint64(i)))
+				require.Equal(t, payload, vec.GetBytesAt(i))
+			}
+		})
+	}
+}
+
+func TestConsumeNextReleasesSnapshotOnAllocationFailure(t *testing.T) {
+	mp, err := mpool.NewMPool("fill-next-snapshot-oom", mpool.MB, mpool.NoFixed)
+	require.NoError(t, err)
+	proc := testutil.NewProcessWithMPool(t, "", mp)
+	defer proc.Free()
+
+	vec := vector.NewOffHeapVecWithType(types.T_varchar.ToType())
+	require.NoError(t, vec.PreExtend(2, mp))
+	vec.SetLength(2)
+	vec.SetNull(0)
+	require.NoError(t, vector.SetBytesAt(vec, 1, bytes.Repeat([]byte("b"), 256), mp))
+
+	bat := batch.NewWithSize(1)
+	bat.SetVector(0, vec)
+	bat.SetRowCount(2)
+	defer bat.Clean(mp)
+
+	reserved, err := mp.Alloc(int(mp.Cap()-mp.CurrNB()), true)
+	require.NoError(t, err)
+	defer mp.Free(reserved)
+
+	ctr := &container{
+		bats:    []*batch.Batch{bat},
+		nextRun: make([][]fillCoord, 1),
+	}
+	err = ctr.consumeNext(&Fill{ColLen: 1}, bat, 0, proc)
+	require.ErrorContains(t, err, "mpool out of space")
+	require.Equal(t, mp.Cap(), mp.CurrNB())
+}
+
+func TestConsumeNextReleasesSnapshotOnWriteFailure(t *testing.T) {
+	mp, err := mpool.NewMPool("fill-next-write-error", 0, mpool.NoFixed)
+	require.NoError(t, err)
+	proc := testutil.NewProcessWithMPool(t, "", mp)
+	defer proc.Free()
+
+	payload := bytes.Repeat([]byte("b"), types.VarlenaInlineSize+1)
+	previousVec := vector.NewOffHeapVecWithType(types.T_varchar.ToType())
+	require.NoError(t, previousVec.PreExtend(1, mp))
+	previousVec.SetLength(1)
+	previousVec.SetNull(0)
+	previous := batch.NewWithSize(1)
+	previous.SetVector(0, previousVec)
+	previous.SetRowCount(1)
+
+	currentVec := vector.NewOffHeapVecWithType(types.T_varchar.ToType())
+	require.NoError(t, currentVec.PreExtend(2, mp))
+	currentVec.SetLength(2)
+	currentVec.SetNull(0)
+	require.NoError(t, vector.SetBytesAt(currentVec, 1, payload, mp))
+	current := batch.NewWithSize(1)
+	current.SetVector(0, currentVec)
+	current.SetRowCount(2)
+
+	ctr := &container{
+		bats:    []*batch.Batch{previous, current},
+		nextRun: [][]fillCoord{{{seq: 0, row: 1}}},
+	}
+	err = ctr.consumeNext(&Fill{ColLen: 1}, current, 1, proc)
+	require.ErrorContains(t, err, "vector idx out of range")
+	previous.Clean(mp)
+	current.Clean(mp)
+	require.Zero(t, mp.CurrNB())
 }
 
 func (s *fillStubExpressionExecutor) TypeName() string {

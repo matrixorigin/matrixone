@@ -41,12 +41,13 @@ const (
 	defaultRaftPort          = 32000
 	defaultGossipPort        = 32002
 
-	defaultGossipProbeInterval = 5 * time.Second
-	defaultHeartbeatInterval   = time.Second
-	defaultLogDBBufferSize     = 768 * 1024
-	defaultTruncateInterval    = 10 * time.Second
-	defaultMaxExportedSnapshot = 20
-	defaultMaxMessageSize      = 1024 * 1024 * 100
+	defaultGossipProbeInterval            = 5 * time.Second
+	defaultHeartbeatInterval              = time.Second
+	defaultHAKeeperBootstrapRetryInterval = time.Second
+	defaultLogDBBufferSize                = 768 * 1024
+	defaultTruncateInterval               = 10 * time.Second
+	defaultMaxExportedSnapshot            = 20
+	defaultMaxMessageSize                 = 1024 * 1024 * 100
 	// The default value for HAKeeper truncate interval.
 	defaultHAKeeperTruncateInterval = 2 * time.Hour
 
@@ -146,6 +147,9 @@ type Config struct {
 	// HAKeeperCheckInterval is the interval of how often HAKeeper should run
 	// cluster health checks.
 	HAKeeperCheckInterval toml.Duration `toml:"hakeeper-check-interval"`
+	// HAKeeperBootstrapRetryInterval is the retry backoff used when the initial
+	// HAKeeper cluster information cannot yet be proposed.
+	HAKeeperBootstrapRetryInterval toml.Duration `toml:"hakeeper-bootstrap-retry-interval"`
 	// TruncateInterval is the interval of how often log service should
 	// process truncate for regular shards.
 	TruncateInterval toml.Duration `toml:"truncate-interval"`
@@ -212,12 +216,23 @@ type Config struct {
 		InitHAKeeperMembers []string `toml:"init-hakeeper-members" user_setting:"advanced"`
 		// Restore structure is used when the cluster needs to restore data.
 		Restore struct {
+			// Enabled puts every initial LogService member into recovery mode.
+			// It must be set consistently on all initial HAKeeper members. Only
+			// the member with WALDataPath needs access to the recovery artifacts.
+			// TN services must remain stopped until WAL recovery completes.
+			Enabled bool `toml:"enabled"`
 			// FilePath is the path of the file, which contains the backup data.
 			// If is not set, nothing will be done for restore.
 			FilePath string `toml:"file-path"`
-			// Force means that we force to do restore even if RESTORED tag file
-			// already exists.
+			// Force is retained for restore configuration compatibility. HAKeeper
+			// ID watermarks are restored idempotently, and a completed WAL is never
+			// replayed into a non-empty Log shard even when Force is true.
 			Force bool `toml:"force"`
+			// WALDataPath is the path to the WAL data file extracted from damaged LogService.
+			// When set, LogService will replay WAL entries from this file during bootstrap.
+			// This is used for disaster recovery when the original LogService cluster is
+			// completely damaged but Raft logs can still be read offline.
+			WALDataPath string `toml:"wal-data-path"`
 		} `toml:"restore"`
 		// NonVotingLocality is the locality for non-voting replicas.
 		NonVotingLocality string `toml:"non-voting-locality" user_setting:"advanced"`
@@ -360,6 +375,11 @@ func (c *Config) Validate() error {
 	if c.GossipProbeInterval.Duration == 0 {
 		return moerr.NewBadConfigNoCtx("GossipProbeInterval not set")
 	}
+	if c.HAKeeperBootstrapRetryInterval.Duration == 0 {
+		c.HAKeeperBootstrapRetryInterval.Duration = defaultHAKeeperBootstrapRetryInterval
+	} else if c.HAKeeperBootstrapRetryInterval.Duration < 0 {
+		return moerr.NewBadConfigNoCtx("HAKeeperBootstrapRetryInterval not set")
+	}
 	if c.TruncateInterval.Duration == 0 {
 		return moerr.NewBadConfigNoCtx("TruncateInterval not set")
 	}
@@ -394,6 +414,19 @@ func (c *Config) Validate() error {
 			return moerr.NewBadConfigNoCtx("InitHAKeeperMembers does not match NumOfLogShardReplicas")
 		}
 	}
+	if c.BootstrapConfig.Restore.Enabled {
+		if _, ok := c.Bootstrapping(); !ok {
+			return moerr.NewBadConfigNoCtx("LogService recovery must run on an initial HAKeeper member")
+		}
+	}
+	if c.BootstrapConfig.Restore.WALDataPath != "" {
+		if !c.BootstrapConfig.Restore.Enabled {
+			return moerr.NewBadConfigNoCtx("WAL recovery requires restore.enabled on every initial HAKeeper member")
+		}
+		if c.BootstrapConfig.Restore.FilePath == "" {
+			return moerr.NewBadConfigNoCtx("HAKeeper restore file path is required for WAL recovery")
+		}
+	}
 
 	return nil
 }
@@ -414,30 +447,31 @@ func (c *Config) UpdateAddresses(
 func DefaultConfig() Config {
 	uid := "7c4dccb4-4d3c-41f8-b482-5251dc7a41bf"
 	return Config{
-		FS:                       vfs.Default,
-		DeploymentID:             defaultDeploymentID,
-		UUID:                     uid,
-		RTTMillisecond:           200,
-		DataDir:                  defaultDataDir,
-		SnapshotExportDir:        defaultSnapshotExportDir,
-		MaxExportedSnapshot:      defaultMaxExportedSnapshot,
-		ServiceAddress:           defaultServiceAddress,
-		RaftAddress:              defaultRaftAddress,
-		ServiceHost:              DefaultServiceHost,
-		UseTeeLogDB:              false,
-		LogDBBufferSize:          defaultLogDBBufferSize,
-		LogDBMaxLogFileSize:      defaultLogDBMaxLogFileSize,
-		GossipAddress:            defaultGossipAddress,
-		GossipSeedAddresses:      []string{DefaultGossipServiceAddress},
-		GossipProbeInterval:      toml.Duration{Duration: defaultGossipProbeInterval},
-		GossipAllowSelfAsSeed:    true,
-		HeartbeatInterval:        toml.Duration{Duration: defaultHeartbeatInterval},
-		HAKeeperTickInterval:     toml.Duration{Duration: time.Second / hakeeper.DefaultTickPerSecond},
-		HAKeeperCheckInterval:    toml.Duration{Duration: hakeeper.CheckDuration},
-		TruncateInterval:         toml.Duration{Duration: defaultTruncateInterval},
-		HAKeeperTruncateInterval: toml.Duration{Duration: defaultHAKeeperTruncateInterval},
-		IsNonVoting:              false,
-		MembershipImmovable:      true,
+		FS:                             vfs.Default,
+		DeploymentID:                   defaultDeploymentID,
+		UUID:                           uid,
+		RTTMillisecond:                 200,
+		DataDir:                        defaultDataDir,
+		SnapshotExportDir:              defaultSnapshotExportDir,
+		MaxExportedSnapshot:            defaultMaxExportedSnapshot,
+		ServiceAddress:                 defaultServiceAddress,
+		RaftAddress:                    defaultRaftAddress,
+		ServiceHost:                    DefaultServiceHost,
+		UseTeeLogDB:                    false,
+		LogDBBufferSize:                defaultLogDBBufferSize,
+		LogDBMaxLogFileSize:            defaultLogDBMaxLogFileSize,
+		GossipAddress:                  defaultGossipAddress,
+		GossipSeedAddresses:            []string{DefaultGossipServiceAddress},
+		GossipProbeInterval:            toml.Duration{Duration: defaultGossipProbeInterval},
+		GossipAllowSelfAsSeed:          true,
+		HeartbeatInterval:              toml.Duration{Duration: defaultHeartbeatInterval},
+		HAKeeperTickInterval:           toml.Duration{Duration: time.Second / hakeeper.DefaultTickPerSecond},
+		HAKeeperCheckInterval:          toml.Duration{Duration: hakeeper.CheckDuration},
+		HAKeeperBootstrapRetryInterval: toml.Duration{Duration: defaultHAKeeperBootstrapRetryInterval},
+		TruncateInterval:               toml.Duration{Duration: defaultTruncateInterval},
+		HAKeeperTruncateInterval:       toml.Duration{Duration: defaultHAKeeperTruncateInterval},
+		IsNonVoting:                    false,
+		MembershipImmovable:            true,
 		RPC: struct {
 			MaxMessageSize toml.ByteSize `toml:"max-message-size"`
 			EnableCompress bool          `toml:"enable-compress"`
@@ -455,8 +489,10 @@ func DefaultConfig() Config {
 			NumOfLogShardReplicas uint64   `toml:"num-of-log-shard-replicas"`
 			InitHAKeeperMembers   []string `toml:"init-hakeeper-members" user_setting:"advanced"`
 			Restore               struct {
-				FilePath string `toml:"file-path"`
-				Force    bool   `toml:"force"`
+				Enabled     bool   `toml:"enabled"`
+				FilePath    string `toml:"file-path"`
+				Force       bool   `toml:"force"`
+				WALDataPath string `toml:"wal-data-path"`
 			} `toml:"restore"`
 			NonVotingLocality string `toml:"non-voting-locality" user_setting:"advanced"`
 			StandbyEnabled    bool   `toml:"standby-enabled" user_setting:"advanced"`
@@ -467,8 +503,10 @@ func DefaultConfig() Config {
 			NumOfLogShardReplicas uint64
 			InitHAKeeperMembers   []string
 			Restore               struct {
-				FilePath string
-				Force    bool
+				Enabled     bool
+				FilePath    string
+				Force       bool
+				WALDataPath string
 			}
 			NonVotingLocality string
 			StandbyEnabled    bool
@@ -479,11 +517,15 @@ func DefaultConfig() Config {
 			NumOfLogShardReplicas: 1,
 			InitHAKeeperMembers:   []string{"131072:" + uid},
 			Restore: struct {
-				FilePath string
-				Force    bool
+				Enabled     bool
+				FilePath    string
+				Force       bool
+				WALDataPath string
 			}{
-				FilePath: defaultRestoreFilePath,
-				Force:    false,
+				Enabled:     false,
+				FilePath:    defaultRestoreFilePath,
+				Force:       false,
+				WALDataPath: "",
 			},
 			NonVotingLocality: "",
 			StandbyEnabled:    false,

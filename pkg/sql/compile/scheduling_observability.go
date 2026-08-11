@@ -46,6 +46,7 @@ func (c *Compile) recordQuerySchedulingMetrics(
 
 	metricv2.QueryScheduleWorkerHistogram.WithLabelValues("discovered").Observe(float64(placement.CandidateResolution.DiscoveredCount))
 	metricv2.QueryScheduleWorkerHistogram.WithLabelValues("candidate").Observe(float64(placement.ResolvedCandidateCount))
+	metricv2.QueryScheduleWorkerHistogram.WithLabelValues("eligible").Observe(float64(placement.EligibleCount))
 	metricv2.QueryScheduleWorkerHistogram.WithLabelValues("selected").Observe(float64(len(placement.Workers)))
 
 	for reason, count := range droppedWorkerReasonCounts(placement.Dropped) {

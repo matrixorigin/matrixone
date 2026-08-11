@@ -22,9 +22,16 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	icebergapi "github.com/matrixorigin/matrixone/pkg/iceberg/api"
+	icebergio "github.com/matrixorigin/matrixone/pkg/iceberg/io"
+	"github.com/matrixorigin/matrixone/pkg/iceberg/model"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/icebergwrite"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/insert"
+	sqliceberg "github.com/matrixorigin/matrixone/pkg/sql/iceberg"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/stage"
 	"github.com/matrixorigin/matrixone/pkg/vm"
@@ -41,6 +48,16 @@ func extWriteCreatesql(t *testing.T, pattern string) string {
 	raw, err := json.Marshal(&tree.ExternParam{ExParamConst: tree.ExParamConst{Option: opt}})
 	require.NoError(t, err)
 	return string(raw)
+}
+
+func icebergInsertCreatesql() string {
+	return sqliceberg.BuildCreateSQLEnvelope(model.TableMapping{
+		Namespace:  "sales",
+		TableName:  "orders",
+		DefaultRef: model.DefaultRefMain,
+		ReadMode:   model.ReadModeAppendOnly,
+		WriteMode:  "append_only",
+	}, "ksa_gold")
 }
 
 func TestIsExternalWriteInsert(t *testing.T) {
@@ -78,6 +95,660 @@ func TestIsExternalWriteInsert(t *testing.T) {
 			Createsql: extWriteCreatesql(t, "stage://s/p-%U.csv"),
 		},
 	}}))
+}
+
+func TestIcebergAppendInsertDispatchesBeforeExternalWrite(t *testing.T) {
+	restoreRuntimeVariableForTest(t, "", IcebergAppendCoordinatorFactoryRuntimeKey, icebergwrite.CoordinatorFactoryFunc(func(ctx context.Context, req icebergwrite.AppendRequest) (icebergwrite.Coordinator, error) {
+		return nil, nil
+	}))
+	node := &plan.Node{InsertCtx: &plan.InsertCtx{
+		TableDef: &plan.TableDef{
+			Name:      "gold_orders",
+			TableType: catalog.SystemExternalRel,
+			Createsql: icebergInsertCreatesql(),
+		},
+	}}
+	ok, err := isIcebergAppendInsert(context.Background(), node)
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.False(t, isExternalWriteInsert(node))
+
+	proc := &process.Process{}
+	proc.Base = &process.BaseProcess{}
+	proc.Ctx = defines.AttachAccountId(context.Background(), 42)
+	op, err := constructIcebergInsert(proc, node)
+	require.NoError(t, err)
+	writer, ok := op.(*icebergwrite.IcebergWrite)
+	require.True(t, ok)
+	require.Equal(t, "gold_orders", writer.Request.TableDef.Name)
+	require.Equal(t, uint32(42), writer.Request.AccountID)
+	require.Equal(t, "ksa_gold", writer.Request.CatalogName)
+	require.Equal(t, "sales", writer.Request.Namespace)
+	require.Equal(t, "orders", writer.Request.Table)
+	require.Equal(t, model.DefaultRefMain, writer.Request.DefaultRef)
+	require.Equal(t, icebergwrite.OperationAppend, writer.Request.Operation)
+	require.NotNil(t, writer.Factory)
+}
+
+func TestCompileIcebergInsertMergesParallelInputToSingleWriter(t *testing.T) {
+	restoreRuntimeVariableForTest(t, "", IcebergAppendCoordinatorFactoryRuntimeKey, icebergwrite.CoordinatorFactoryFunc(func(ctx context.Context, req icebergwrite.AppendRequest) (icebergwrite.Coordinator, error) {
+		return nil, nil
+	}))
+	proc := process.NewTopProcess(defines.AttachAccountId(context.Background(), 42), nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	c := NewCompile("127.0.0.1:6001", "db", "insert into gold_orders select * from src", "tenant", "uid", nil, proc, nil, false, nil, time.Unix(1, 0).UTC())
+	c.anal = &AnalyzeModule{isFirst: true}
+	node := &plan.Node{InsertCtx: &plan.InsertCtx{
+		TableDef: &plan.TableDef{
+			Name:      "gold_orders",
+			TableType: catalog.SystemExternalRel,
+			Createsql: icebergInsertCreatesql(),
+			Cols: []*plan.ColDef{
+				{Name: "id", Typ: plan.Type{Id: int32(types.T_int64), Width: 64}},
+			},
+		},
+	}}
+	input := []*Scope{
+		{Magic: Normal, NodeInfo: engine.Node{Addr: "127.0.0.1:6001", Mcpu: 10}, Proc: proc.NewNoContextChildProc(1)},
+	}
+
+	out, err := c.compileInsert(nil, node, input)
+	require.NoError(t, err)
+	require.Len(t, out, 1)
+	require.Len(t, out[0].PreScopes, 1)
+	require.IsType(t, &icebergwrite.IcebergWrite{}, out[0].RootOp)
+	require.Equal(t, vm.IcebergWrite, out[0].RootOp.OpType())
+	require.Equal(t, vm.Merge, out[0].RootOp.GetOperatorBase().GetChildren(0).OpType())
+}
+
+func TestIcebergInsertNeedsSingleWriterMergeUsesExecutionIdentity(t *testing.T) {
+	current := engine.Node{Id: "cn-local", Addr: "local:6001", Mcpu: 8}
+
+	require.False(t, icebergInsertNeedsSingleWriterMerge([]*Scope{{
+		NodeInfo: engine.Node{Id: "cn-local", Mcpu: 1},
+	}}, current))
+	require.True(t, icebergInsertNeedsSingleWriterMerge([]*Scope{{
+		NodeInfo: engine.Node{Id: "cn-local", Addr: "local:6001", Mcpu: 2},
+	}}, current))
+	require.True(t, icebergInsertNeedsSingleWriterMerge([]*Scope{{
+		NodeInfo: engine.Node{Id: "cn-remote", Addr: "remote:6001", Mcpu: 1},
+	}}, current))
+	require.True(t, icebergInsertNeedsSingleWriterMerge([]*Scope{
+		{NodeInfo: engine.Node{Id: "cn-local", Addr: "local:6001", Mcpu: 1}},
+		{NodeInfo: engine.Node{Id: "cn-remote", Addr: "remote:6001", Mcpu: 1}},
+	}, current))
+	require.False(t, icebergInsertNeedsSingleWriterMerge([]*Scope{nil}, current))
+}
+
+func TestIcebergDeleteIntentBuildsDeleteWriteRequest(t *testing.T) {
+	restoreRuntimeVariableForTest(t, "", IcebergAppendCoordinatorFactoryRuntimeKey, icebergwrite.CoordinatorFactoryFunc(func(ctx context.Context, req icebergwrite.AppendRequest) (icebergwrite.Coordinator, error) {
+		return nil, nil
+	}))
+	node := &plan.Node{
+		ExtraOptions: icebergapi.DMLDeletePlanExtraOptions,
+		InsertCtx: &plan.InsertCtx{
+			TableDef: &plan.TableDef{
+				Name:      "gold_orders",
+				TableType: catalog.SystemExternalRel,
+				Createsql: icebergInsertCreatesql(),
+				Cols: []*plan.ColDef{
+					{Name: "id", Typ: plan.Type{Id: int32(types.T_int64), Width: 64}},
+					{Name: icebergapi.DMLDataFilePathColumnName, Typ: plan.Type{Id: int32(types.T_varchar), Width: types.MaxVarcharLen}},
+					{Name: icebergapi.DMLRowOrdinalColumnName, Typ: plan.Type{Id: int32(types.T_int64), Width: 64}},
+				},
+			},
+		},
+	}
+	proc := &process.Process{}
+	proc.Base = &process.BaseProcess{}
+	proc.Ctx = defines.AttachAccountId(context.Background(), 42)
+	op, err := constructIcebergInsert(proc, node)
+	require.NoError(t, err)
+	writer, ok := op.(*icebergwrite.IcebergWrite)
+	require.True(t, ok)
+	require.Equal(t, uint32(42), writer.Request.AccountID)
+	require.Equal(t, icebergwrite.OperationDelete, writer.Request.Operation)
+	require.Equal(t, int32(1), writer.Request.DataFilePathColumnIndex)
+	require.Equal(t, int32(2), writer.Request.RowOrdinalColumnIndex)
+	require.Equal(t, []string{"id", icebergapi.DMLDataFilePathColumnName, icebergapi.DMLRowOrdinalColumnName}, writer.Request.Attrs)
+}
+
+func TestIcebergDeleteIntentKeepsHiddenDMLMetadataColumns(t *testing.T) {
+	restoreRuntimeVariableForTest(t, "", IcebergAppendCoordinatorFactoryRuntimeKey, icebergwrite.CoordinatorFactoryFunc(func(ctx context.Context, req icebergwrite.AppendRequest) (icebergwrite.Coordinator, error) {
+		return nil, nil
+	}))
+	node := &plan.Node{
+		ExtraOptions: icebergapi.DMLDeletePlanExtraOptions,
+		InsertCtx: &plan.InsertCtx{
+			TableDef: &plan.TableDef{
+				Name:      "gold_orders",
+				TableType: catalog.SystemExternalRel,
+				Createsql: icebergInsertCreatesql(),
+				Cols: []*plan.ColDef{
+					{Name: "id", Typ: plan.Type{Id: int32(types.T_int64), Width: 64}},
+					{Name: icebergapi.DMLDataFilePathColumnName, Hidden: true, Typ: plan.Type{Id: int32(types.T_varchar), Width: types.MaxVarcharLen}},
+					{Name: icebergapi.DMLRowOrdinalColumnName, Hidden: true, Typ: plan.Type{Id: int32(types.T_int64), Width: 64}},
+					{Name: catalog.Row_ID, Hidden: true, Typ: plan.Type{Id: int32(types.T_Rowid)}},
+				},
+			},
+		},
+	}
+	proc := &process.Process{}
+	proc.Base = &process.BaseProcess{}
+	proc.Ctx = defines.AttachAccountId(context.Background(), 42)
+	op, err := constructIcebergInsert(proc, node)
+	require.NoError(t, err)
+	writer, ok := op.(*icebergwrite.IcebergWrite)
+	require.True(t, ok)
+	require.Equal(t, int32(1), writer.Request.DataFilePathColumnIndex)
+	require.Equal(t, int32(2), writer.Request.RowOrdinalColumnIndex)
+	require.Equal(t, []string{"id", icebergapi.DMLDataFilePathColumnName, icebergapi.DMLRowOrdinalColumnName}, writer.Request.Attrs)
+}
+
+func TestIcebergUpdateIntentBuildsUpdateWriteRequest(t *testing.T) {
+	restoreRuntimeVariableForTest(t, "", IcebergAppendCoordinatorFactoryRuntimeKey, icebergwrite.CoordinatorFactoryFunc(func(ctx context.Context, req icebergwrite.AppendRequest) (icebergwrite.Coordinator, error) {
+		return nil, nil
+	}))
+	node := &plan.Node{
+		ExtraOptions: icebergapi.DMLUpdatePlanExtraOptions,
+		InsertCtx: &plan.InsertCtx{
+			TableDef: &plan.TableDef{
+				Name:      "gold_orders",
+				TableType: catalog.SystemExternalRel,
+				Createsql: icebergInsertCreatesql(),
+				Cols: []*plan.ColDef{
+					{Name: "id", Typ: plan.Type{Id: int32(types.T_int64), Width: 64}},
+					{Name: icebergapi.DMLDataFilePathColumnName, Typ: plan.Type{Id: int32(types.T_varchar), Width: types.MaxVarcharLen}},
+					{Name: icebergapi.DMLRowOrdinalColumnName, Typ: plan.Type{Id: int32(types.T_int64), Width: 64}},
+				},
+			},
+		},
+	}
+	proc := &process.Process{}
+	proc.Base = &process.BaseProcess{}
+	proc.Ctx = defines.AttachAccountId(context.Background(), 42)
+	op, err := constructIcebergInsert(proc, node)
+	require.NoError(t, err)
+	writer, ok := op.(*icebergwrite.IcebergWrite)
+	require.True(t, ok)
+	require.Equal(t, uint32(42), writer.Request.AccountID)
+	require.Equal(t, icebergwrite.OperationUpdate, writer.Request.Operation)
+	require.Equal(t, int32(1), writer.Request.DataFilePathColumnIndex)
+	require.Equal(t, int32(2), writer.Request.RowOrdinalColumnIndex)
+	require.Equal(t, []string{"id", icebergapi.DMLDataFilePathColumnName, icebergapi.DMLRowOrdinalColumnName}, writer.Request.Attrs)
+}
+
+func TestIcebergMergeIntentBuildsMergeWriteRequest(t *testing.T) {
+	restoreRuntimeVariableForTest(t, "", IcebergAppendCoordinatorFactoryRuntimeKey, icebergwrite.CoordinatorFactoryFunc(func(ctx context.Context, req icebergwrite.AppendRequest) (icebergwrite.Coordinator, error) {
+		return nil, nil
+	}))
+	node := &plan.Node{
+		ExtraOptions: icebergapi.DMLMergePlanExtraOptions,
+		InsertCtx: &plan.InsertCtx{
+			TableDef: &plan.TableDef{
+				Name:      "gold_orders",
+				TableType: catalog.SystemExternalRel,
+				Createsql: icebergInsertCreatesql(),
+				Cols: []*plan.ColDef{
+					{Name: "id", Typ: plan.Type{Id: int32(types.T_int64), Width: 64}},
+					{Name: "name", Typ: plan.Type{Id: int32(types.T_varchar), Width: types.MaxVarcharLen}},
+					{Name: icebergapi.DMLDataFilePathColumnName, Typ: plan.Type{Id: int32(types.T_varchar), Width: types.MaxVarcharLen}},
+					{Name: icebergapi.DMLRowOrdinalColumnName, Typ: plan.Type{Id: int32(types.T_int64), Width: 64}},
+					{Name: icebergapi.DMLMergeActionColumnName, Typ: plan.Type{Id: int32(types.T_varchar), Width: types.MaxVarcharLen}},
+				},
+			},
+		},
+	}
+	proc := &process.Process{}
+	proc.Base = &process.BaseProcess{}
+	proc.Ctx = defines.AttachAccountId(context.Background(), 42)
+	op, err := constructIcebergInsert(proc, node)
+	require.NoError(t, err)
+	writer, ok := op.(*icebergwrite.IcebergWrite)
+	require.True(t, ok)
+	require.Equal(t, uint32(42), writer.Request.AccountID)
+	require.Equal(t, icebergwrite.OperationMerge, writer.Request.Operation)
+	require.Equal(t, int32(2), writer.Request.DataFilePathColumnIndex)
+	require.Equal(t, int32(3), writer.Request.RowOrdinalColumnIndex)
+	require.Equal(t, int32(4), writer.Request.MergeActionColumnIndex)
+	require.Equal(t, []string{"id", "name", icebergapi.DMLDataFilePathColumnName, icebergapi.DMLRowOrdinalColumnName, icebergapi.DMLMergeActionColumnName}, writer.Request.Attrs)
+}
+
+func TestIcebergOverwriteIntentBuildsOverwriteWriteRequest(t *testing.T) {
+	restoreRuntimeVariableForTest(t, "", IcebergAppendCoordinatorFactoryRuntimeKey, icebergwrite.CoordinatorFactoryFunc(func(ctx context.Context, req icebergwrite.AppendRequest) (icebergwrite.Coordinator, error) {
+		return nil, nil
+	}))
+	node := &plan.Node{
+		ExtraOptions: icebergapi.DMLOverwritePlanExtraOptions,
+		InsertCtx: &plan.InsertCtx{
+			TableDef: &plan.TableDef{
+				Name:      "gold_orders",
+				TableType: catalog.SystemExternalRel,
+				Createsql: icebergInsertCreatesql(),
+				Cols: []*plan.ColDef{
+					{Name: "id", Typ: plan.Type{Id: int32(types.T_int64), Width: 64}},
+				},
+			},
+		},
+	}
+	proc := &process.Process{}
+	proc.Base = &process.BaseProcess{}
+	proc.Ctx = defines.AttachAccountId(context.Background(), 42)
+	op, err := constructIcebergInsert(proc, node)
+	require.NoError(t, err)
+	writer, ok := op.(*icebergwrite.IcebergWrite)
+	require.True(t, ok)
+	require.Equal(t, uint32(42), writer.Request.AccountID)
+	require.Equal(t, icebergwrite.OperationOverwrite, writer.Request.Operation)
+	require.Equal(t, int32(-1), writer.Request.DataFilePathColumnIndex)
+	require.Equal(t, int32(-1), writer.Request.RowOrdinalColumnIndex)
+	require.Equal(t, []string{"id"}, writer.Request.Attrs)
+}
+
+func TestIcebergPartitionOverwriteIntentBuildsOverwriteWriteRequest(t *testing.T) {
+	restoreRuntimeVariableForTest(t, "", IcebergAppendCoordinatorFactoryRuntimeKey, icebergwrite.CoordinatorFactoryFunc(func(ctx context.Context, req icebergwrite.AppendRequest) (icebergwrite.Coordinator, error) {
+		return nil, nil
+	}))
+	extraOptions, err := icebergapi.EncodeDMLOverwritePartitionPlanExtraOptions(map[string]any{
+		"region": "ksa",
+		"day":    int64(20260624),
+	})
+	require.NoError(t, err)
+	node := &plan.Node{
+		ExtraOptions: extraOptions,
+		InsertCtx: &plan.InsertCtx{
+			TableDef: &plan.TableDef{
+				Name:      "gold_orders",
+				TableType: catalog.SystemExternalRel,
+				Createsql: icebergInsertCreatesql(),
+				Cols: []*plan.ColDef{
+					{Name: "id", Typ: plan.Type{Id: int32(types.T_int64), Width: 64}},
+				},
+			},
+		},
+	}
+	proc := &process.Process{}
+	proc.Base = &process.BaseProcess{}
+	proc.Ctx = defines.AttachAccountId(context.Background(), 42)
+	op, err := constructIcebergInsert(proc, node)
+	require.NoError(t, err)
+	writer, ok := op.(*icebergwrite.IcebergWrite)
+	require.True(t, ok)
+	require.Equal(t, icebergwrite.OperationOverwrite, writer.Request.Operation)
+	require.Equal(t, "partition", writer.Request.DMLScan.OverwriteScope)
+	require.Equal(t, "ksa", writer.Request.DMLScan.OverwritePartition["region"])
+	require.Equal(t, int64(20260624), writer.Request.DMLScan.OverwritePartition["day"])
+}
+
+func TestIcebergWriteNeedsDMLScanMetadata(t *testing.T) {
+	require.True(t, icebergWriteNeedsDMLScanMetadata(icebergwrite.OperationDelete))
+	require.True(t, icebergWriteNeedsDMLScanMetadata(icebergwrite.OperationUpdate))
+	require.True(t, icebergWriteNeedsDMLScanMetadata(icebergwrite.OperationMerge))
+	require.False(t, icebergWriteNeedsDMLScanMetadata(icebergwrite.OperationOverwrite))
+	require.False(t, icebergWriteNeedsDMLScanMetadata(icebergwrite.OperationAppend))
+}
+
+func TestAttachIcebergDMLScanMetadataDefersCoordinatorAndOwnsObjectIO(t *testing.T) {
+	ctx := defines.AttachAccountId(context.Background(), 42)
+	objectIORef := registerCompileTestObjectIO(t)
+	require.True(t, icebergio.RetainObjectIORef(objectIORef), "simulate the target scan owner")
+	factoryCalls := 0
+	writer := icebergwrite.NewArgument(icebergwrite.AppendRequest{
+		Operation: icebergwrite.OperationOverwrite,
+	}).WithCoordinatorFactory(icebergwrite.CoordinatorFactoryFunc(func(context.Context, icebergwrite.AppendRequest) (icebergwrite.Coordinator, error) {
+		factoryCalls++
+		return nil, nil
+	}))
+
+	require.NoError(t, attachIcebergDMLScanMetadata(ctx, writer, icebergwrite.DMLScanMetadata{ObjectIORef: objectIORef}))
+	require.Zero(t, factoryCalls, "compile-time metadata attachment must not create execution state")
+	require.Nil(t, writer.Coordinator)
+
+	icebergio.ReleaseObjectIORef(objectIORef)
+	_, _, err := icebergio.ResolveObjectIORef(ctx, objectIORef, "s3://warehouse/orders/data/a.parquet")
+	require.NoError(t, err, "the sink retain must outlive the target scan owner")
+
+	proc := &process.Process{Ctx: ctx, Base: &process.BaseProcess{}}
+	require.NoError(t, writer.Prepare(proc))
+	writer.Reset(proc, false, nil)
+	require.NoError(t, writer.Prepare(proc))
+	require.Equal(t, 2, factoryCalls, "cached executions need independent coordinators")
+
+	writer.Free(proc, false, nil)
+	_, _, err = icebergio.ResolveObjectIORef(ctx, objectIORef, "s3://warehouse/orders/data/a.parquet")
+	require.Error(t, err, "Free must release the sink's independent ownership")
+}
+
+func TestIcebergDMLScanMetadataFromPlanIgnoresDeleteTasks(t *testing.T) {
+	metadata := icebergDMLScanMetadataFromPlan(&icebergapi.IcebergScanPlan{
+		Snapshot:    icebergapi.SnapshotPlan{SnapshotID: 30, SchemaID: 9, RefName: "main"},
+		ObjectIORef: "iceberg-object-io://test-ref",
+		DataTasks: []icebergapi.DataFileTask{
+			{DataFile: icebergapi.DataFile{FilePath: "s3://warehouse/gold/orders/data/a.parquet", SpecID: 3}},
+			{DataFile: icebergapi.DataFile{FilePath: "s3://warehouse/gold/orders/data/a.parquet", SpecID: 3}},
+			{DataFile: icebergapi.DataFile{FilePath: "s3://warehouse/gold/orders/data/b.parquet", SpecID: 4}},
+		},
+		DeleteTasks: []icebergapi.DeleteFileTask{{
+			DataFile:      icebergapi.DataFile{FilePath: "s3://warehouse/gold/orders/delete/pos-a.parquet"},
+			AppliesToPath: "s3://warehouse/gold/orders/data/a.parquet",
+		}},
+	})
+	require.Equal(t, int64(30), metadata.BaseSnapshotID)
+	require.Equal(t, 9, metadata.BaseSchemaID)
+	require.Equal(t, "main", metadata.Ref)
+	require.Equal(t, "iceberg-object-io://test-ref", metadata.ObjectIORef)
+	require.Len(t, metadata.DataFiles, 2)
+	require.Equal(t, "s3://warehouse/gold/orders/data/a.parquet", metadata.DataFiles[0].FilePath)
+	require.Equal(t, "s3://warehouse/gold/orders/data/b.parquet", metadata.DataFiles[1].FilePath)
+}
+
+func TestIcebergDeleteIntentCarriesCompiledScanMetadata(t *testing.T) {
+	scanNode := &plan.Node{
+		NodeType: plan.Node_EXTERNAL_SCAN,
+		ExternScan: &plan.ExternScan{
+			Type:        int32(plan.ExternType_ICEBERG_TB),
+			IcebergScan: &plan.IcebergScan{Namespace: "sales", Table: "orders"},
+		},
+	}
+	insertNode := &plan.Node{
+		NodeType:     plan.Node_INSERT,
+		Children:     []int32{0},
+		ExtraOptions: icebergapi.DMLDeletePlanExtraOptions,
+		InsertCtx: &plan.InsertCtx{
+			TableDef: &plan.TableDef{
+				Name:      "gold_orders",
+				TableType: catalog.SystemExternalRel,
+				Createsql: icebergInsertCreatesql(),
+				Cols: []*plan.ColDef{
+					{Name: "id", Typ: plan.Type{Id: int32(types.T_int64), Width: 64}},
+					{Name: icebergapi.DMLDataFilePathColumnName, Typ: plan.Type{Id: int32(types.T_varchar), Width: types.MaxVarcharLen}},
+					{Name: icebergapi.DMLRowOrdinalColumnName, Typ: plan.Type{Id: int32(types.T_int64), Width: 64}},
+				},
+			},
+		},
+	}
+	proc := &process.Process{}
+	proc.Base = &process.BaseProcess{}
+	proc.Ctx = defines.AttachAccountId(context.Background(), 42)
+	objectIORef := registerCompileTestObjectIO(t)
+	testCompile := &Compile{
+		proc: proc,
+		icebergScanPlans: map[int32]*icebergapi.IcebergScanPlan{
+			0: {
+				Snapshot:    icebergapi.SnapshotPlan{SnapshotID: 30, SchemaID: 9, RefName: "audit"},
+				ObjectIORef: objectIORef,
+				DataTasks: []icebergapi.DataFileTask{
+					{DataFile: icebergapi.DataFile{FilePath: "s3://warehouse/gold/orders/data/a.parquet", SpecID: 3}},
+					{DataFile: icebergapi.DataFile{FilePath: "s3://warehouse/gold/orders/data/a.parquet", SpecID: 3}},
+					{DataFile: icebergapi.DataFile{FilePath: "s3://warehouse/gold/orders/data/b.parquet", SpecID: 4}},
+				},
+			},
+		},
+	}
+	op, err := testCompile.constructIcebergInsert([]*plan.Node{scanNode, insertNode}, insertNode)
+	require.NoError(t, err)
+	writer, ok := op.(*icebergwrite.IcebergWrite)
+	require.True(t, ok)
+	require.Equal(t, uint32(42), writer.Request.AccountID)
+	require.Equal(t, int64(30), writer.Request.DMLScan.BaseSnapshotID)
+	require.Equal(t, 9, writer.Request.DMLScan.BaseSchemaID)
+	require.Equal(t, "audit", writer.Request.DMLScan.Ref)
+	require.Equal(t, objectIORef, writer.Request.DMLScan.ObjectIORef)
+	require.Len(t, writer.Request.DMLScan.DataFiles, 2)
+	require.Equal(t, "s3://warehouse/gold/orders/data/a.parquet", writer.Request.DMLScan.DataFiles[0].FilePath)
+	require.Equal(t, 4, writer.Request.DMLScan.DataFiles[1].SpecID)
+}
+
+func TestIcebergDeleteIntentAlignsMetadataIndexesWithInputProjection(t *testing.T) {
+	scanNode := &plan.Node{
+		NodeType: plan.Node_EXTERNAL_SCAN,
+		ExternScan: &plan.ExternScan{
+			Type:        int32(plan.ExternType_ICEBERG_TB),
+			IcebergScan: &plan.IcebergScan{Namespace: "sales", Table: "orders"},
+		},
+	}
+	projectNode := &plan.Node{
+		NodeType: plan.Node_PROJECT,
+		Children: []int32{0},
+		ProjectList: []*plan.Expr{
+			icebergDMLTestColExpr("id", types.T_int64),
+			icebergDMLTestColExpr(icebergapi.DMLDataFilePathColumnName, types.T_varchar),
+			icebergDMLTestColExpr(icebergapi.DMLRowOrdinalColumnName, types.T_int64),
+		},
+	}
+	insertNode := &plan.Node{
+		NodeType:     plan.Node_INSERT,
+		Children:     []int32{1},
+		ExtraOptions: icebergapi.DMLDeletePlanExtraOptions,
+		InsertCtx: &plan.InsertCtx{
+			TableDef: &plan.TableDef{
+				Name:      "gold_orders",
+				TableType: catalog.SystemExternalRel,
+				Createsql: icebergInsertCreatesql(),
+				Cols: []*plan.ColDef{
+					{Name: "id", Typ: plan.Type{Id: int32(types.T_int64), Width: 64}},
+					{Name: "d", Typ: plan.Type{Id: int32(types.T_date)}},
+					{Name: "payload", Typ: plan.Type{Id: int32(types.T_varchar), Width: types.MaxVarcharLen}},
+					{Name: icebergapi.DMLDataFilePathColumnName, Typ: plan.Type{Id: int32(types.T_varchar), Width: types.MaxVarcharLen}},
+					{Name: icebergapi.DMLRowOrdinalColumnName, Typ: plan.Type{Id: int32(types.T_int64), Width: 64}},
+				},
+			},
+		},
+	}
+	proc := &process.Process{}
+	proc.Base = &process.BaseProcess{}
+	proc.Ctx = defines.AttachAccountId(context.Background(), 42)
+	objectIORef := registerCompileTestObjectIO(t)
+	testCompile := &Compile{
+		proc: proc,
+		icebergScanPlans: map[int32]*icebergapi.IcebergScanPlan{
+			0: {
+				Snapshot:    icebergapi.SnapshotPlan{SnapshotID: 30, SchemaID: 9, RefName: "main"},
+				ObjectIORef: objectIORef,
+				DataTasks: []icebergapi.DataFileTask{
+					{DataFile: icebergapi.DataFile{FilePath: "s3://warehouse/gold/orders/data/a.parquet", SpecID: 3}},
+				},
+			},
+		},
+	}
+	op, err := testCompile.constructIcebergInsert([]*plan.Node{scanNode, projectNode, insertNode}, insertNode)
+	require.NoError(t, err)
+	writer, ok := op.(*icebergwrite.IcebergWrite)
+	require.True(t, ok)
+	require.Equal(t, []string{"id", icebergapi.DMLDataFilePathColumnName, icebergapi.DMLRowOrdinalColumnName}, writer.Request.Attrs)
+	require.Equal(t, int32(1), writer.Request.DataFilePathColumnIndex)
+	require.Equal(t, int32(2), writer.Request.RowOrdinalColumnIndex)
+}
+
+func TestIcebergMergeIntentCarriesCompiledScanMetadata(t *testing.T) {
+	scanNode := &plan.Node{
+		NodeType: plan.Node_EXTERNAL_SCAN,
+		ExternScan: &plan.ExternScan{
+			Type:        int32(plan.ExternType_ICEBERG_TB),
+			IcebergScan: &plan.IcebergScan{Namespace: "sales", Table: "orders"},
+		},
+	}
+	insertNode := &plan.Node{
+		NodeType:     plan.Node_INSERT,
+		Children:     []int32{0},
+		ExtraOptions: icebergapi.DMLMergePlanExtraOptions,
+		InsertCtx: &plan.InsertCtx{
+			TableDef: &plan.TableDef{
+				Name:      "gold_orders",
+				TableType: catalog.SystemExternalRel,
+				Createsql: icebergInsertCreatesql(),
+				Cols: []*plan.ColDef{
+					{Name: "id", Typ: plan.Type{Id: int32(types.T_int64), Width: 64}},
+					{Name: "name", Typ: plan.Type{Id: int32(types.T_varchar), Width: types.MaxVarcharLen}},
+					{Name: icebergapi.DMLDataFilePathColumnName, Typ: plan.Type{Id: int32(types.T_varchar), Width: types.MaxVarcharLen}},
+					{Name: icebergapi.DMLRowOrdinalColumnName, Typ: plan.Type{Id: int32(types.T_int64), Width: 64}},
+					{Name: icebergapi.DMLMergeActionColumnName, Typ: plan.Type{Id: int32(types.T_varchar), Width: types.MaxVarcharLen}},
+				},
+			},
+		},
+	}
+	proc := &process.Process{}
+	proc.Base = &process.BaseProcess{}
+	proc.Ctx = defines.AttachAccountId(context.Background(), 42)
+	objectIORef := registerCompileTestObjectIO(t)
+	testCompile := &Compile{
+		proc: proc,
+		icebergScanPlans: map[int32]*icebergapi.IcebergScanPlan{
+			0: {
+				Snapshot:    icebergapi.SnapshotPlan{SnapshotID: 30, SchemaID: 9, RefName: "audit"},
+				ObjectIORef: objectIORef,
+				DataTasks: []icebergapi.DataFileTask{
+					{DataFile: icebergapi.DataFile{FilePath: "s3://warehouse/gold/orders/data/a.parquet", SpecID: 3}},
+					{DataFile: icebergapi.DataFile{FilePath: "s3://warehouse/gold/orders/data/b.parquet", SpecID: 4}},
+				},
+			},
+		},
+	}
+	op, err := testCompile.constructIcebergInsert([]*plan.Node{scanNode, insertNode}, insertNode)
+	require.NoError(t, err)
+	writer, ok := op.(*icebergwrite.IcebergWrite)
+	require.True(t, ok)
+	require.Equal(t, icebergwrite.OperationMerge, writer.Request.Operation)
+	require.Equal(t, int64(30), writer.Request.DMLScan.BaseSnapshotID)
+	require.Equal(t, 9, writer.Request.DMLScan.BaseSchemaID)
+	require.Equal(t, "audit", writer.Request.DMLScan.Ref)
+	require.Equal(t, objectIORef, writer.Request.DMLScan.ObjectIORef)
+	require.Len(t, writer.Request.DMLScan.DataFiles, 2)
+}
+
+func TestIcebergMergeIntentSelectsTargetScanWhenSourceIsIceberg(t *testing.T) {
+	targetRef := &plan.ObjectRef{DbName: "iceberg_tier_a", ObjName: "dml_accounts", Obj: 1001}
+	sourceRef := &plan.ObjectRef{DbName: "iceberg_tier_a", ObjName: "dml_accounts_updates", Obj: 1002}
+	targetScanNode := &plan.Node{
+		NodeType: plan.Node_EXTERNAL_SCAN,
+		ObjRef:   targetRef,
+		ExternScan: &plan.ExternScan{
+			Type:        int32(plan.ExternType_ICEBERG_TB),
+			IcebergScan: &plan.IcebergScan{Namespace: "dml", Table: "accounts"},
+		},
+	}
+	sourceScanNode := &plan.Node{
+		NodeType: plan.Node_EXTERNAL_SCAN,
+		ObjRef:   sourceRef,
+		ExternScan: &plan.ExternScan{
+			Type:        int32(plan.ExternType_ICEBERG_TB),
+			IcebergScan: &plan.IcebergScan{Namespace: "dml", Table: "accounts_updates"},
+		},
+	}
+	joinNode := &plan.Node{
+		NodeType: plan.Node_JOIN,
+		Children: []int32{0, 1},
+	}
+	insertNode := &plan.Node{
+		NodeType:     plan.Node_INSERT,
+		ObjRef:       targetRef,
+		Children:     []int32{2},
+		ExtraOptions: icebergapi.DMLMergePlanExtraOptions,
+		InsertCtx: &plan.InsertCtx{
+			Ref: targetRef,
+			TableDef: &plan.TableDef{
+				Name:      "dml_accounts",
+				TableType: catalog.SystemExternalRel,
+				Createsql: icebergInsertCreatesql(),
+				Cols: []*plan.ColDef{
+					{Name: "account_id", Typ: plan.Type{Id: int32(types.T_int64), Width: 64}},
+					{Name: "balance", Typ: plan.Type{Id: int32(types.T_int64), Width: 64}},
+					{Name: icebergapi.DMLDataFilePathColumnName, Typ: plan.Type{Id: int32(types.T_varchar), Width: types.MaxVarcharLen}},
+					{Name: icebergapi.DMLRowOrdinalColumnName, Typ: plan.Type{Id: int32(types.T_int64), Width: 64}},
+					{Name: icebergapi.DMLMergeActionColumnName, Typ: plan.Type{Id: int32(types.T_varchar), Width: types.MaxVarcharLen}},
+				},
+			},
+		},
+	}
+	proc := &process.Process{}
+	proc.Base = &process.BaseProcess{}
+	proc.Ctx = defines.AttachAccountId(context.Background(), 42)
+	targetObjectIORef := registerCompileTestObjectIO(t)
+	sourceObjectIORef := registerCompileTestObjectIO(t)
+	testCompile := &Compile{
+		proc: proc,
+		icebergScanPlans: map[int32]*icebergapi.IcebergScanPlan{
+			0: {
+				Snapshot:    icebergapi.SnapshotPlan{SnapshotID: 30, SchemaID: 9, RefName: "main"},
+				ObjectIORef: targetObjectIORef,
+				DataTasks: []icebergapi.DataFileTask{
+					{DataFile: icebergapi.DataFile{FilePath: "s3://warehouse/dml/accounts/data/a.parquet", SpecID: 3}},
+				},
+			},
+			1: {
+				Snapshot:    icebergapi.SnapshotPlan{SnapshotID: 40, SchemaID: 9, RefName: "main"},
+				ObjectIORef: sourceObjectIORef,
+				DataTasks: []icebergapi.DataFileTask{
+					{DataFile: icebergapi.DataFile{FilePath: "s3://warehouse/dml/accounts_updates/data/b.parquet", SpecID: 3}},
+				},
+			},
+		},
+	}
+
+	op, err := testCompile.constructIcebergInsert([]*plan.Node{targetScanNode, sourceScanNode, joinNode, insertNode}, insertNode)
+	require.NoError(t, err)
+	writer, ok := op.(*icebergwrite.IcebergWrite)
+	require.True(t, ok)
+	require.Equal(t, icebergwrite.OperationMerge, writer.Request.Operation)
+	require.Equal(t, int64(30), writer.Request.DMLScan.BaseSnapshotID)
+	require.Equal(t, targetObjectIORef, writer.Request.DMLScan.ObjectIORef)
+	require.Len(t, writer.Request.DMLScan.DataFiles, 1)
+	require.Equal(t, "s3://warehouse/dml/accounts/data/a.parquet", writer.Request.DMLScan.DataFiles[0].FilePath)
+}
+
+func TestIcebergAppendInsertRejectsInvalidCoordinatorFactoryRuntime(t *testing.T) {
+	restoreRuntimeVariableForTest(t, "", IcebergAppendCoordinatorFactoryRuntimeKey, "not-a-factory")
+	node := &plan.Node{InsertCtx: &plan.InsertCtx{
+		TableDef: &plan.TableDef{
+			Name:      "gold_orders",
+			TableType: catalog.SystemExternalRel,
+			Createsql: icebergInsertCreatesql(),
+		},
+	}}
+	proc := &process.Process{}
+	proc.Base = &process.BaseProcess{}
+	proc.Ctx = context.Background()
+	_, err := constructIcebergInsert(proc, node)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "ICEBERG_CONFIG_INVALID")
+}
+
+func TestIcebergWriteDupOperatorDoesNotCopyFactoryRuntimeCoordinator(t *testing.T) {
+	coord := &compileTestIcebergCoordinator{}
+	factory := icebergwrite.CoordinatorFactoryFunc(func(context.Context, icebergwrite.AppendRequest) (icebergwrite.Coordinator, error) {
+		return &compileTestIcebergCoordinator{}, nil
+	})
+	src := icebergwrite.NewArgument(icebergwrite.AppendRequest{Operation: icebergwrite.OperationAppend}).
+		WithCoordinator(coord).
+		WithCoordinatorFactory(factory)
+
+	dup := dupOperator(src, 1, 2).(*icebergwrite.IcebergWrite)
+	require.Nil(t, dup.Coordinator)
+	require.NotNil(t, dup.Factory)
+	require.Equal(t, int32(1), dup.GetParalleID())
+	require.Equal(t, int32(2), dup.GetMaxParallel())
+
+	injected := icebergwrite.NewArgument(icebergwrite.AppendRequest{}).WithCoordinator(coord)
+	injectedDup := dupOperator(injected, 0, 1).(*icebergwrite.IcebergWrite)
+	require.Same(t, coord, injectedDup.Coordinator)
+}
+
+type compileTestIcebergCoordinator struct{}
+
+func (*compileTestIcebergCoordinator) Begin(context.Context, icebergwrite.AppendRequest) error {
+	return nil
+}
+
+func (*compileTestIcebergCoordinator) Append(context.Context, *batch.Batch) error { return nil }
+func (*compileTestIcebergCoordinator) Commit(context.Context) error               { return nil }
+func (*compileTestIcebergCoordinator) Abort(context.Context, error) error         { return nil }
+
+func icebergDMLTestColExpr(name string, typ types.T) *plan.Expr {
+	return &plan.Expr{
+		Typ: plan.Type{Id: int32(typ)},
+		Expr: &plan.Expr_Col{
+			Col: &plan.ColRef{Name: name},
+		},
+	}
 }
 
 // TestExternalInsertStmtTime ensures the writer evaluates WRITE_FILE_PATTERN

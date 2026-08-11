@@ -106,6 +106,46 @@ func TestGeneralBatchBuffer1(t *testing.T) {
 	require.Equal(t, int64(0), mp.CurrNB())
 }
 
+// TestNarrowArrayValue covers getNonNullValue + UpdateValue for the narrow
+// vector array types (vecbf16/vecf16/vecint8/vecuint8). Both switch on the
+// element type and previously listed only vecf32/vecf64, so a narrow array
+// panicked ("No Support" / "not supported"). All array types are varlen byte
+// storage, so the round-trip is read/update as raw bytes.
+func TestNarrowArrayValue(t *testing.T) {
+	mp := mpool.MustNewZero()
+
+	cases := []struct {
+		oid     types.T
+		initial []byte
+		updated []byte
+	}{
+		{types.T_array_float16,
+			types.ArrayToBytes(types.Float32ToFloat16Slice([]float32{1, 2, 3})),
+			types.ArrayToBytes(types.Float32ToFloat16Slice([]float32{4, 5, 6}))},
+		{types.T_array_bf16,
+			types.ArrayToBytes(types.Float32ToBF16Slice([]float32{1, 2, 3})),
+			types.ArrayToBytes(types.Float32ToBF16Slice([]float32{4, 5, 6}))},
+		{types.T_array_int8,
+			types.ArrayToBytes([]int8{1, 2, 3}), types.ArrayToBytes([]int8{4, 5, 6})},
+		{types.T_array_uint8,
+			types.ArrayToBytes([]uint8{1, 2, 3}), types.ArrayToBytes([]uint8{4, 5, 6})},
+	}
+
+	for _, c := range cases {
+		vec := vector.NewVec(types.New(c.oid, 3, 0))
+		require.NoError(t, vector.AppendBytes(vec, c.initial, false, mp))
+
+		// read back (was panic "No Support")
+		require.Equal(t, c.initial, getNonNullValue(vec, 0).([]byte), c.oid.String())
+
+		// update in place (was panic "not supported"), then read back the new value
+		UpdateValue(vec, 0, c.updated, false, mp)
+		require.Equal(t, c.updated, getNonNullValue(vec, 0).([]byte), c.oid.String())
+
+		vec.Free(mp)
+	}
+}
+
 func TestVectorsCopyToBatch(t *testing.T) {
 	var vecs Vectors
 	require.NoError(t, VectorsCopyToBatch(vecs, nil, nil))

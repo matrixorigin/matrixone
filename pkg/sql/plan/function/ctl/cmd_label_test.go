@@ -75,7 +75,3 @@ func TestIdentifyParser(t *testing.T) {
 		}
 	})
 }
-
-func TestHandleSetLabel(t *testing.T) {
-	// This case is tested in DebugUpdateCNLabel in clusterservice package.
-}

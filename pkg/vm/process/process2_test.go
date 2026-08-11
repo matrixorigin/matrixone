@@ -18,9 +18,14 @@ import (
 	"context"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestBuildPipelineContext(t *testing.T) {
@@ -54,6 +59,22 @@ func TestBuildPipelineContext(t *testing.T) {
 	// Cancel the context and check if it is canceled
 	proc.Cancel(nil)
 	assert.Error(t, proc.Ctx.Err())
+}
+
+func TestNewBatchFromSrcWithUntypedNull(t *testing.T) {
+	proc := NewTopProcess(context.Background(), mpool.MustNewZero(), nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	src := batch.NewWithSize(1)
+	src.Vecs[0] = vector.NewConstNull(types.T_any.ToType(), 1, proc.Mp())
+	src.SetRowCount(1)
+	defer src.Clean(proc.Mp())
+
+	dst, err := proc.NewBatchFromSrc(src, 1)
+	require.NoError(t, err)
+	defer dst.Clean(proc.Mp())
+	require.Equal(t, types.T_any, dst.Vecs[0].GetType().Oid)
+	require.NoError(t, dst.Vecs[0].UnionBatch(src.Vecs[0], 0, 1, nil, proc.Mp()))
+	require.Equal(t, 1, dst.Vecs[0].Length())
+	require.True(t, dst.Vecs[0].IsNull(0))
 }
 
 func TestGetTaskService(t *testing.T) {
@@ -125,4 +146,89 @@ func TestGetSpillFileServiceError(t *testing.T) {
 	}
 	_, err = proc.GetSpillFileService()
 	assert.NotNil(t, err)
+}
+
+func TestOwnedPrepareParamsLifecycle(t *testing.T) {
+	proc := &Process{Base: &BaseProcess{mp: mpool.MustNewZero()}}
+	newParams := func(value string) *vector.Vector {
+		params := vector.NewVec(types.T_text.ToType())
+		require.NoError(t, vector.AppendBytes(params, []byte(value), false, proc.Mp()))
+		return params
+	}
+
+	plain := newParams("plain")
+	proc.SetOwnedPrepareParamsWithMeta(
+		plain,
+		[]bool{false},
+		[]vector.PrepareParamKind{vector.PrepareParamNone},
+	)
+	require.Nil(t, proc.Base.prepareParamsIsBin, "default metadata must keep the zero-allocation path")
+
+	first := newParams("first")
+	proc.SetOwnedPrepareParamsWithMeta(
+		first,
+		[]bool{true},
+		[]vector.PrepareParamKind{vector.PrepareParamDecimal},
+	)
+	require.True(t, proc.GetPrepareParamIsBin(0))
+	require.Equal(t, vector.PrepareParamDecimal, proc.GetPrepareParamKind(0))
+	require.Zero(t, plain.Length(), "replacing owned default-metadata params must release them")
+	proc.SetPrepareParamsWithIsBin(first, []bool{false})
+	require.Equal(t, 1, first.Length(), "setting the same pointer must not release it")
+	require.True(t, proc.Base.prepareParamsOwned, "setting the same pointer must preserve ownership")
+
+	borrowed := newParams("borrowed")
+	proc.SetPrepareParams(borrowed)
+	require.Zero(t, first.Length())
+	require.Nil(t, first.GetData())
+	require.Equal(t, 1, borrowed.Length())
+	require.False(t, proc.Base.prepareParamsOwned)
+	require.Nil(t, proc.Base.prepareParamsIsBin)
+
+	second := newParams("second")
+	proc.SetOwnedPrepareParamsWithIsBin(second, []bool{true})
+	proc.Free()
+	require.Zero(t, second.Length())
+	require.Nil(t, second.GetData())
+	require.Nil(t, proc.GetPrepareParams())
+	require.Nil(t, proc.Base.prepareParamsIsBin)
+	require.False(t, proc.Base.prepareParamsOwned)
+	require.Equal(t, 1, borrowed.Length(), "Process must not release borrowed params")
+	borrowed.Free(proc.Mp())
+}
+
+func TestDetachAndRestorePrepareParams(t *testing.T) {
+	proc := &Process{Base: &BaseProcess{mp: mpool.MustNewZero()}}
+	params := vector.NewVec(types.T_text.ToType())
+	require.NoError(t, vector.AppendBytes(params, []byte("binary"), false, proc.Mp()))
+	proc.SetOwnedPrepareParamsWithIsBin(params, []bool{true})
+
+	state := proc.DetachPrepareParams()
+	require.Nil(t, proc.GetPrepareParams())
+	require.False(t, proc.GetPrepareParamIsBin(0))
+	require.Equal(t, 1, params.Length(), "detach must not release owned params")
+
+	proc.BorrowPrepareParams(state)
+	require.Same(t, params, proc.GetPrepareParams())
+	require.True(t, proc.GetPrepareParamIsBin(0))
+	require.False(t, proc.Base.prepareParamsOwned)
+
+	proc.Free()
+	require.Equal(t, 1, params.Length(), "transient Process.Free must not release borrowed params")
+
+	proc.RestorePrepareParams(state)
+	require.Same(t, params, proc.GetPrepareParams())
+	require.True(t, proc.GetPrepareParamIsBin(0))
+	require.True(t, proc.Base.prepareParamsOwned)
+
+	proc.Free()
+	require.Zero(t, params.Length())
+	require.Nil(t, params.GetData())
+}
+
+func TestGetPrepareParamsAtWithoutParams(t *testing.T) {
+	proc := &Process{Base: &BaseProcess{mp: mpool.MustNewZero()}}
+	value, err := proc.GetPrepareParamsAt(0)
+	require.Error(t, err)
+	require.Nil(t, value)
 }

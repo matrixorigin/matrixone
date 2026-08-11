@@ -15,16 +15,19 @@
 package dispatch
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/pSpool"
 
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 
 	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -48,6 +51,43 @@ var (
 	sendToAnyLocal  = sendToAnyLocalFunc
 	sendToAnyRemote = sendToAnyRemoteFunc
 )
+
+func prepareParamKindRemoteWireEnabled(proc *process.Process) bool {
+	if proc == nil {
+		return false
+	}
+	rt := moruntime.ServiceRuntime(proc.GetService())
+	if rt == nil {
+		return false
+	}
+	value, _ := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	version, ok := value.(int64)
+	return ok && version >= defines.MORPCVersion12
+}
+
+// marshalRemoteBatch keeps the stable Batch prefix unchanged and appends the
+// optional transient provenance trailer only after the shared protocol gate is
+// enabled. Older protocol sessions fail before writing rather than silently
+// dropping a materialized row's source category.
+func marshalRemoteBatch(proc *process.Process, bat *batch.Batch, buf *bytes.Buffer) ([]byte, error) {
+	if bat == nil {
+		return nil, moerr.NewInvalidInputNoCtx("cannot marshal a nil remote batch")
+	}
+	wireEnabled := prepareParamKindRemoteWireEnabled(proc)
+	if bat.HasPrepareParamKindMetadata() && !wireEnabled {
+		return nil, moerr.NewInvalidStateNoCtx(
+			"prepared parameter provenance requires MORPCVersion12 for remote dispatch")
+	}
+	if _, err := bat.MarshalBinaryWithBuffer(buf, true); err != nil {
+		return nil, err
+	}
+	if wireEnabled {
+		if err := bat.AppendPrepareParamKindMetadata(buf); err != nil {
+			return nil, err
+		}
+	}
+	return buf.Bytes(), nil
+}
 
 func (ctr *container) removeIdxReceiver(idx int) {
 	ctr.remoteReceivers = append(ctr.remoteReceivers[:idx], ctr.remoteReceivers[idx+1:]...)
@@ -82,7 +122,7 @@ func sendToAllRemoteFunc(bat *batch.Batch, ap *Dispatch, proc *process.Process) 
 	}
 
 	{ // send to remote regs
-		encodeData, errEncode := bat.MarshalBinaryWithBuffer(&ap.ctr.marshalBuf, true)
+		encodeData, errEncode := marshalRemoteBatch(proc, bat, &ap.ctr.marshalBuf)
 		if errEncode != nil {
 			return false, errEncode
 		}
@@ -135,7 +175,7 @@ func sendBatToIndex(ap *Dispatch, proc *process.Process, bat *batch.Batch, shuff
 		if shuffleIndex == batIndex {
 			if bat != nil && !bat.IsEmpty() {
 				receiverID := fmt.Sprintf("%s(ShuffleIdx=%d)", r.Uid.String(), shuffleIndex)
-				encodeData, errEncode := bat.MarshalBinaryWithBuffer(&ap.ctr.marshalBuf, true)
+				encodeData, errEncode := marshalRemoteBatch(proc, bat, &ap.ctr.marshalBuf)
 				if errEncode != nil {
 					err = errEncode
 					break
@@ -193,7 +233,7 @@ func sendBatToMultiMatchedReg(ap *Dispatch, proc *process.Process, bat *batch.Ba
 		if shuffleIndex%localRegsCnt == batIndex%localRegsCnt {
 			if bat != nil && !bat.IsEmpty() {
 				receiverID := fmt.Sprintf("%s(ShuffleIdx=%d)", r.Uid.String(), shuffleIndex)
-				encodeData, errEncode := bat.MarshalBinaryWithBuffer(&ap.ctr.marshalBuf, true)
+				encodeData, errEncode := marshalRemoteBatch(proc, bat, &ap.ctr.marshalBuf)
 				if errEncode != nil {
 					return errEncode
 				}
@@ -309,7 +349,7 @@ func sendToAnyRemoteFunc(bat *batch.Batch, ap *Dispatch, proc *process.Process) 
 	default:
 	}
 
-	encodeData, errEncode := bat.MarshalBinaryWithBuffer(&ap.ctr.marshalBuf, true)
+	encodeData, errEncode := marshalRemoteBatch(proc, bat, &ap.ctr.marshalBuf)
 	if errEncode != nil {
 		return false, errEncode
 	}
@@ -435,7 +475,23 @@ func sendBatchToClientSession(
 		}
 	}
 
-	// Send data (original logic unchanged)
+	var batchSequence uint64
+	batchSent := false
+	if wcs.ReserveBatch != nil {
+		batchSequence, err = wcs.ReserveBatch(ctx, uint64(len(encodeBatData)))
+		if err != nil {
+			return false, err
+		}
+		defer func() {
+			if !batchSent && wcs.RollbackBatch != nil {
+				wcs.RollbackBatch(batchSequence)
+			}
+		}()
+	}
+
+	// A logical batch uses one sequence number even when morpc fragmentation is
+	// required. The receiver acknowledges it only after all fragments have been
+	// reconstructed and handed to the local pipeline.
 	if len(encodeBatData) <= maxMessageSizeToMoRpc {
 		msg := cnclient.AcquireMessage()
 		{
@@ -443,10 +499,14 @@ func sendBatchToClientSession(
 			msg.Data = encodeBatData
 			msg.Cmd = pipeline.Method_BatchMessage
 			msg.Sid = pipeline.Status_Last
+			msg.BatchSequence = batchSequence
+			msg.AcceptedBatchCreditCount = wcs.BatchCredits
+			msg.AcceptedBatchCreditBytes = wcs.ByteCredits
 		}
 		if err = wcs.Cs.Write(ctx, msg); err != nil {
 			return false, err
 		}
+		batchSent = true
 		return false, nil
 	}
 
@@ -465,6 +525,9 @@ func sendBatchToClientSession(
 			msg.Data = encodeBatData[start:end]
 			msg.Cmd = pipeline.Method_BatchMessage
 			msg.Sid = sid
+			msg.BatchSequence = batchSequence
+			msg.AcceptedBatchCreditCount = wcs.BatchCredits
+			msg.AcceptedBatchCreditBytes = wcs.ByteCredits
 		}
 
 		if err = wcs.Cs.Write(ctx, msg); err != nil {
@@ -472,5 +535,6 @@ func sendBatchToClientSession(
 		}
 		start = end
 	}
+	batchSent = true
 	return false, nil
 }

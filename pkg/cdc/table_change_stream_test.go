@@ -42,6 +42,7 @@ import (
 	dto "github.com/prometheus/client_model/go"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"golang.org/x/sync/semaphore"
 )
 
 // Helper function to create a test stream with minimal setup
@@ -201,6 +202,76 @@ func readCounterValue(t *testing.T, counter prometheus.Counter) float64 {
 	var metric dto.Metric
 	require.NoError(t, counter.Write(&metric))
 	return metric.GetCounter().GetValue()
+}
+
+func TestTableChangeStream_InitialSnapshotLimiterSharedAcrossTables(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+
+	limiter := semaphore.NewWeighted(1)
+	stream1 := createTestStream(
+		mp,
+		&DbTableInfo{SourceDbName: "db", SourceTblName: "t1"},
+		WithInitialSnapshotLimiter(limiter),
+	)
+	stream2 := createTestStream(
+		mp,
+		&DbTableInfo{SourceDbName: "db", SourceTblName: "t2"},
+		WithInitialSnapshotLimiter(limiter),
+	)
+
+	release1, err := stream1.acquireInitialSnapshotSlot(context.Background())
+	require.NoError(t, err)
+
+	type acquireResult struct {
+		release func()
+		err     error
+	}
+	acquired := make(chan acquireResult, 1)
+	go func() {
+		release, acquireErr := stream2.acquireInitialSnapshotSlot(context.Background())
+		acquired <- acquireResult{release: release, err: acquireErr}
+	}()
+
+	select {
+	case result := <-acquired:
+		if result.release != nil {
+			result.release()
+		}
+		t.Fatal("second table acquired the initial snapshot slot before the first released it")
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	release1()
+	select {
+	case result := <-acquired:
+		require.NoError(t, result.err)
+		require.NotNil(t, result.release)
+		result.release()
+	case <-time.After(time.Second):
+		t.Fatal("second table did not acquire the released initial snapshot slot")
+	}
+}
+
+func TestTableChangeStream_InitialSnapshotLimiterSkippedAfterFirstSync(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+
+	limiter := semaphore.NewWeighted(1)
+	require.NoError(t, limiter.Acquire(context.Background(), 1))
+	defer limiter.Release(1)
+
+	stream := createTestStream(
+		mp,
+		&DbTableInfo{SourceDbName: "db", SourceTblName: "incremental"},
+		WithInitialSnapshotLimiter(limiter),
+	)
+	stream.initialSyncPending.Store(false)
+
+	release, err := stream.acquireInitialSnapshotSlot(context.Background())
+	require.NoError(t, err)
+	require.NotNil(t, release)
+	release()
 }
 
 func TestTableChangeStream_HandleSnapshotNoProgress_WarningAndReset(t *testing.T) {
@@ -376,6 +447,90 @@ func TestTableChangeStream_Run_DuplicateReader(t *testing.T) {
 	if runErr != nil {
 		require.ErrorIs(t, runErr, context.Canceled)
 	}
+}
+
+func TestTableChangeStreamCleanupDoesNotDeleteReplacedReader(t *testing.T) {
+	runningReaders := &sync.Map{}
+
+	key := "db1.t1"
+	oldStream := &TableChangeStream{
+		accountId:               1,
+		taskId:                  "task1",
+		tableInfo:               &DbTableInfo{SourceDbName: "db1", SourceTblName: "t1", SourceTblId: 1},
+		sinker:                  newTableStreamRecordingSinker(),
+		watermarkUpdater:        newWatermarkUpdaterStub(),
+		watermarkKey:            &WatermarkKey{AccountId: 1, TaskId: "task1", DBName: "db1", TableName: "t1"},
+		runningReaders:          runningReaders,
+		runningReaderKey:        key,
+		progressTracker:         nil,
+		watermarkStallThreshold: defaultWatermarkStallThreshold,
+	}
+	newStream := &TableChangeStream{
+		accountId:        1,
+		taskId:           "task1",
+		tableInfo:        &DbTableInfo{SourceDbName: "db1", SourceTblName: "t1", SourceTblId: 1},
+		sinker:           newTableStreamRecordingSinker(),
+		watermarkUpdater: newWatermarkUpdaterStub(),
+		watermarkKey:     &WatermarkKey{AccountId: 1, TaskId: "task1", DBName: "db1", TableName: "t1"},
+		runningReaders:   runningReaders,
+		runningReaderKey: key,
+	}
+	runningReaders.Store(key, oldStream)
+	runningReaders.Store(key, newStream)
+
+	oldStream.wg.Add(1)
+	oldStream.cleanup(context.Background())
+
+	stored, ok := runningReaders.Load(key)
+	require.True(t, ok, "replaced reader ownership should remain")
+	require.Same(t, newStream, stored, "old cleanup must not delete a newer reader")
+}
+
+func TestTableChangeStreamCleanupKeepsOwnershipUntilCloseFinishes(t *testing.T) {
+	runningReaders := &sync.Map{}
+
+	key := "db1.t1"
+	sinker := newBlockingCloseSinker()
+	stream := &TableChangeStream{
+		accountId:               1,
+		taskId:                  "task1",
+		tableInfo:               &DbTableInfo{SourceDbName: "db1", SourceTblName: "t1", SourceTblId: 1},
+		sinker:                  sinker,
+		watermarkUpdater:        newWatermarkUpdaterStub(),
+		watermarkKey:            &WatermarkKey{AccountId: 1, TaskId: "task1", DBName: "db1", TableName: "t1"},
+		runningReaders:          runningReaders,
+		runningReaderKey:        key,
+		progressTracker:         nil,
+		watermarkStallThreshold: defaultWatermarkStallThreshold,
+	}
+	runningReaders.Store(key, stream)
+
+	stream.wg.Add(1)
+	cleanupDone := make(chan struct{})
+	go func() {
+		stream.cleanup(context.Background())
+		close(cleanupDone)
+	}()
+
+	select {
+	case <-sinker.closeStarted:
+	case <-time.After(time.Second):
+		t.Fatal("expected cleanup to reach sinker close")
+	}
+
+	stored, ok := runningReaders.Load(key)
+	require.True(t, ok, "reader ownership should remain while cleanup is still closing")
+	require.Same(t, stream, stored, "old stream should keep ownership until cleanup finishes")
+
+	close(sinker.unblockClose)
+	select {
+	case <-cleanupDone:
+	case <-time.After(time.Second):
+		t.Fatal("cleanup did not finish after unblocking close")
+	}
+
+	_, ok = runningReaders.Load(key)
+	require.False(t, ok, "reader ownership should be removed after cleanup finishes")
 }
 
 // Integration: commit failure triggers EnsureCleanup rollback, then recovery succeeds
@@ -893,20 +1048,20 @@ func TestTableChangeStream_Run_ContextCancel(t *testing.T) {
 	h := newTableStreamHarness(t)
 	defer h.Close()
 
-	tail := createTestBatch(t, h.MP(), types.BuildTS(10, 0), []int32{1})
-	h.SetCollectBatches([]changeBatch{
-		{insert: tail, hint: engine.ChangesHandle_Tail_done},
-		{insert: nil, hint: engine.ChangesHandle_Tail_done},
+	ready := make(chan struct{})
+	h.SetCollectFactory(func(fromTs, toTs types.TS) (engine.ChangesHandle, error) {
+		return &blockingChangesHandle{ready: ready}, nil
 	})
 
 	ar := h.NewActiveRoutine()
 	errCh, done := h.RunStreamAsync(ar)
 
-	require.Eventually(t, func() bool {
-		return len(h.CollectCallsSnapshot()) > 0
-	}, time.Second, 10*time.Millisecond, "stream should begin collecting before cancellation")
-
-	opsBefore := h.Sinker().opsSnapshot()
+	select {
+	case <-ready:
+	case <-time.After(2 * time.Second):
+		t.Fatal("collector did not block before context cancellation")
+	}
+	require.Empty(t, h.Sinker().opsSnapshot(), "blocked collector should not produce sink operations")
 
 	h.Cancel()
 	done()
@@ -923,7 +1078,7 @@ func TestTableChangeStream_Run_ContextCancel(t *testing.T) {
 	}
 
 	require.False(t, h.Stream().GetRetryable(), "cancel should not mark stream retryable")
-	require.Equal(t, opsBefore, h.Sinker().opsSnapshot(), "cancel should not produce additional sink operations")
+	require.Empty(t, h.Sinker().opsSnapshot(), "cancel should not produce sink or cleanup operations")
 }
 
 // Test ActiveRoutine Pause
@@ -2451,6 +2606,28 @@ type tableStreamRecordingSinker struct {
 
 func newTableStreamRecordingSinker() *tableStreamRecordingSinker {
 	return &tableStreamRecordingSinker{recordingSinker: newRecordingSinker()}
+}
+
+type blockingCloseSinker struct {
+	*tableStreamRecordingSinker
+	closeStarted chan struct{}
+	unblockClose chan struct{}
+	closeOnce    sync.Once
+}
+
+func newBlockingCloseSinker() *blockingCloseSinker {
+	return &blockingCloseSinker{
+		tableStreamRecordingSinker: newTableStreamRecordingSinker(),
+		closeStarted:               make(chan struct{}),
+		unblockClose:               make(chan struct{}),
+	}
+}
+
+func (s *blockingCloseSinker) Close() {
+	s.closeOnce.Do(func() {
+		close(s.closeStarted)
+	})
+	<-s.unblockClose
 }
 
 func (s *tableStreamRecordingSinker) Sink(ctx context.Context, data *DecoderOutput) {

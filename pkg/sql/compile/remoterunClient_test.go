@@ -40,7 +40,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/value_scan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
-	"github.com/matrixorigin/matrixone/pkg/testutil/testengine"
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -168,6 +167,33 @@ func TestPipelineStreamReuseRuntimeGate(t *testing.T) {
 	require.False(t, pipelineStreamReuseEnabled(sid))
 	runtime.ServiceRuntime(sid).SetGlobalVariables(runtime.EnablePipelineStreamReuse, true)
 	require.True(t, pipelineStreamReuseEnabled(sid))
+}
+
+func TestMessageSenderBatchCreditProtocol(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	stream := mock_morpc.NewMockStream(ctrl)
+	stream.EXPECT().ID().Return(uint64(17))
+	stream.EXPECT().Send(gomock.Any(), gomock.Any()).DoAndReturn(
+		func(_ context.Context, request morpc.Message) error {
+			message := request.(*pipeline.Message)
+			require.Equal(t, pipeline.Method_PipelineBatchAck, message.GetCmd())
+			require.Equal(t, uint64(9), message.GetBatchAckSequence())
+			return nil
+		})
+
+	sender := &messageSenderOnClient{
+		ctx:              context.Background(),
+		streamSender:     stream,
+		requestFinishAck: true,
+		pendingBatchAck:  9,
+	}
+	request := &pipeline.Message{}
+	sender.requestStreamProtocols(request)
+	require.Equal(t, pipeline.StreamTeardownMode_FinishAck, request.GetRequestedTeardownMode())
+	require.Equal(t, pipelineBatchCreditCount, request.GetRequestedBatchCreditCount())
+	require.Equal(t, pipelineBatchCreditBytes, request.GetRequestedBatchCreditBytes())
+	require.NoError(t, sender.acknowledgeRemoteBatch())
+	require.Zero(t, sender.pendingBatchAck)
 }
 
 func TestNewMessageSenderOnClientReturnsErrorOnNilStream(t *testing.T) {
@@ -476,8 +502,7 @@ func TestRemoteRun(t *testing.T) {
 	proc.Base.TxnOperator = txnOp
 
 	sql := "insert into test_tbl values (1,1)"
-	e, _, _ := testengine.New(defines.AttachAccountId(context.Background(), catalog.System_Account))
-	c := NewCompile("test", "test", sql, "", "", e, proc, nil, false, nil, time.Now())
+	c := NewCompile("test", "test", sql, "", "", newStubEngine(), proc, nil, false, nil, time.Now())
 	c.anal = &AnalyzeModule{qry: &plan.Query{}}
 
 	// if the root operator is connector.
@@ -526,8 +551,7 @@ func TestRemoteRunFailureReleasesPendingRetainedDispatchAttach(t *testing.T) {
 	proc.Base.TxnClient = txnCli
 	proc.Base.TxnOperator = txnOp
 
-	e, _, _ := testengine.New(defines.AttachAccountId(context.Background(), catalog.System_Account))
-	c := NewCompile("local-cn:6002", "test", "select 1", "", "", e, proc, nil, false, nil, time.Now())
+	c := NewCompile("local-cn:6002", "test", "select 1", "", "", newStubEngine(), proc, nil, false, nil, time.Now())
 	c.anal = &AnalyzeModule{qry: &plan.Query{}}
 
 	uid := uuid.Must(uuid.NewV7())

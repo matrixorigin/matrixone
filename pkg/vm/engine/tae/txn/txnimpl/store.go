@@ -148,12 +148,27 @@ type txnStore struct {
 	writeOps   atomic.Uint32
 	tracer     *txnTracer
 
+	transferredTombstoneCleanupDeadline time.Time
+
 	isOffline bool
 
 	wait struct {
 		tailCollect sync.WaitGroup
 		cmdMarshal  sync.WaitGroup
 	}
+}
+
+func (store *txnStore) adoptTransferredTombstoneCleanupDeadline(deadline time.Time) time.Time {
+	if deadline.IsZero() {
+		deadline = time.Now().Add(transferredTombstoneCleanupTimeout)
+	}
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	if store.transferredTombstoneCleanupDeadline.IsZero() ||
+		deadline.Before(store.transferredTombstoneCleanupDeadline) {
+		store.transferredTombstoneCleanupDeadline = deadline
+	}
+	return store.transferredTombstoneCleanupDeadline
 }
 
 var TxnStoreFactory = func(
@@ -246,49 +261,22 @@ func (store *txnStore) LogTxnEntry(dbId uint64, tableId uint64, entry txnif.TxnE
 	return db.LogTxnEntry(tableId, entry, readedObject, readedTombstone)
 }
 
-func (store *txnStore) LogTxnState(sync bool) (logEntry entry.Entry, err error) {
-	cmd := txnbase.NewTxnStateCmd(
-		store.txn.GetID(),
-		store.txn.GetTxnState(false),
-		store.txn.GetCommitTS(),
-	)
-	// MarshalBinary already uses sync.Pool internally and handles copy
-	var buf []byte
-	if buf, err = cmd.MarshalBinary(); err != nil {
-		return
-	}
-	logEntry = entry.GetBase()
-	logEntry.SetType(IOET_WALEntry_TxnRecord)
-	if err = logEntry.SetPayload(buf); err != nil {
-		return
-	}
-	info := &entry.Info{
-		Group: wal.GroupC,
-	}
-	logEntry.SetInfo(info)
-	var lsn uint64
-	lsn, err = store.driver.AppendEntry(wal.GroupC, logEntry)
-	if err != nil {
-		return
-	}
-	if sync {
-		err = logEntry.WaitDone()
-	}
-	logutil.Debugf("LogTxnState LSN=%d, Size=%d", lsn, len(buf))
-	return
-}
-
 func (store *txnStore) Close() error {
 	var err error
-	for _, db := range store.dbs {
-		if err = db.Close(); err != nil {
-			break
+	for id, db := range store.dbs {
+		closeErr := db.Close()
+		err = combineTxnLifecycleErrors(err, closeErr)
+		if closeErr == nil {
+			delete(store.dbs, id)
 		}
 	}
-	store.dbs = nil
 	store.cmdMgr = nil
 	store.logs = nil
 	store.warChecker = nil
+	if len(store.dbs) != 0 {
+		return err
+	}
+	store.dbs = nil
 	return err
 }
 
@@ -706,6 +694,17 @@ func (store *txnStore) CreateObject(dbId, tid uint64, isTombstone bool) (obj han
 	return db.CreateObject(tid, isTombstone)
 }
 
+func (store *txnStore) CreateObjectWithOpt(dbId, tid uint64, isTombstone bool, opt *objectio.CreateObjOpt) (obj handle.Object, err error) {
+	if err = store.WantWrite("CreateObjectWithOpt"); err != nil {
+		return
+	}
+	var db *txnDB
+	if db, err = store.getOrSetDB(dbId); err != nil {
+		return
+	}
+	return db.CreateObjectWithOpt(tid, opt, isTombstone)
+}
+
 func (store *txnStore) CreateNonAppendableObject(dbId, tid uint64, isTombstone bool, opt *objectio.CreateObjOpt) (obj handle.Object, err error) {
 	if err = store.WantWrite("CreateNonAppendableObject"); err != nil {
 		return
@@ -782,8 +781,8 @@ func (store *txnStore) WaitWalAndTail(ctx context.Context) (err error) {
 	}
 	moprobe.WithRegion(ctx, moprobe.TxnStoreWaitWALFlush, func() {
 		for _, e := range store.logs {
-			if err = e.WaitDone(); err != nil {
-				break
+			if waitErr := e.WaitDone(); waitErr != nil && err == nil {
+				err = waitErr
 			}
 			e.Free()
 		}
@@ -941,9 +940,7 @@ func (store *txnStore) AddTxnEntry(entry txnif.TxnEntry) {
 func (store *txnStore) PrepareRollback() error {
 	var err error
 	for _, db := range store.dbs {
-		if err = db.PrepareRollback(); err != nil {
-			break
-		}
+		err = combineTxnLifecycleErrors(err, db.PrepareRollback())
 	}
 
 	return err

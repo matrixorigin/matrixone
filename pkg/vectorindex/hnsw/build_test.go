@@ -32,7 +32,20 @@ import (
 	usearch "github.com/unum-cloud/usearch/golang"
 )
 
-const MaxIndexCapacity = 100000
+const (
+	MaxIndexCapacity      = 100000
+	shortMaxIndexCapacity = 1000
+)
+
+// PR CI runs with -short -race. Two indexes at the smaller capacity still
+// exercise rollover, persistence, concurrent Add, and recall; non-short runs
+// retain the original production-scale capacity.
+func indexCapacityForBuildTest() int {
+	if testing.Short() {
+		return shortMaxIndexCapacity
+	}
+	return MaxIndexCapacity
+}
 
 func TestBuildMulti(t *testing.T) {
 	m := mpool.MustNewZero()
@@ -41,8 +54,9 @@ func TestBuildMulti(t *testing.T) {
 
 	ndim := 32
 	nthread := 8
-	total := 200000
-	nitem := total / nthread // vectorindex.MaxIndexCapacity
+	indexCapacity := indexCapacityForBuildTest()
+	total := 2 * indexCapacity
+	nitem := total / nthread
 
 	idxcfg := vectorindex.IndexConfig{Type: "hnsw", Usearch: usearch.DefaultConfig(uint(ndim))}
 	idxcfg.Usearch.Metric = usearch.L2sq
@@ -50,7 +64,7 @@ func TestBuildMulti(t *testing.T) {
 	idxcfg.Usearch.Connectivity = 48 // default 16
 	//idxcfg.Usearch.ExpansionAdd = 128   // default 128
 	//idxcfg.Usearch.ExpansionSearch = 30 // default 64
-	idxcfg.IndexCapacity = MaxIndexCapacity
+	idxcfg.IndexCapacity = int64(indexCapacity)
 	tblcfg := vectorindex.IndexTableConfig{DbName: "db", SrcTable: "src",
 		MetadataTable: "__secondary_meta", IndexTable: "__secondary_index",
 		ThreadsSearch: int64(nthread),
@@ -101,6 +115,12 @@ func TestBuildMulti(t *testing.T) {
 	_, err = build.ToInsertSql(time.Now().UnixMicro())
 	require.Nil(t, err)
 	indexes := build.GetIndexes()
+	require.Len(t, indexes, 2)
+	var indexed int64
+	for _, idx := range indexes {
+		indexed += idx.Len.Load()
+	}
+	require.Equal(t, int64(total), indexed)
 
 	fmt.Printf("model search\n")
 	// load index file and search
@@ -208,7 +228,7 @@ func runBuildSingleThread[T types.RealNumbers](t *testing.T) {
 
 	ndim := 32
 	nthread := 2
-	nitem := MaxIndexCapacity
+	nitem := indexCapacityForBuildTest()
 
 	idxcfg := vectorindex.IndexConfig{Type: "hnsw", Usearch: usearch.DefaultConfig(uint(ndim))}
 	idxcfg.Usearch.Metric = usearch.L2sq
@@ -224,7 +244,7 @@ func runBuildSingleThread[T types.RealNumbers](t *testing.T) {
 	idxcfg.Usearch.Connectivity = 48    // default 16
 	idxcfg.Usearch.ExpansionAdd = 128   // default 128
 	idxcfg.Usearch.ExpansionSearch = 30 // default 64
-	idxcfg.IndexCapacity = MaxIndexCapacity
+	idxcfg.IndexCapacity = int64(nitem)
 	tblcfg := vectorindex.IndexTableConfig{DbName: "db", SrcTable: "src",
 		MetadataTable: "__secondary_meta", IndexTable: "__secondary_index",
 		ThreadsSearch: 0,

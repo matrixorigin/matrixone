@@ -62,9 +62,7 @@ drop procedure test_while;
 -- @label:bvt
 drop procedure if exists test_repeat;
 create procedure test_repeat() 'begin declare p1 int default 10; declare v1 int default 5; repeat set v1 = v1 + 1; until v1 > p1 end repeat; select v1; end';
--- @bvt:issue#10477
 call test_repeat();
--- @bvt:issue
 drop procedure test_repeat;
 
 -- @case
@@ -109,6 +107,69 @@ set @id = 100;
 call test_inout_param(@id);
 select @id;
 drop procedure test_inout_param;
+
+-- @case
+-- @desc:declared DECIMAL type is retained across default, NULL, SET, IN, INOUT, and OUT assignments
+-- @label:bvt
+drop procedure if exists test_decimal_declared_type;
+set @decimal_io = '1.10';
+create procedure test_decimal_declared_type(in p1 decimal(10,2), inout io decimal(10,2), out ov decimal(10,2), out ocmp bool) 'begin declare v1 decimal(10,2) default 6; declare n1 decimal(10,2) default null; select v1 > p1 as default_cmp, n1 is null as null_default, v1 as default_value, p1 as in_value, io as inout_value; set v1 = 11; set io = io + 0.25; set ov = v1 + 1.3; set ocmp = v1 > p1; end';
+call test_decimal_declared_type(10, @decimal_io, @decimal_out, @decimal_cmp);
+select @decimal_io, @decimal_out, @decimal_cmp;
+drop procedure test_decimal_declared_type;
+
+-- @case
+-- @desc:PREPARE/EXECUTE inside a stored procedure (issue #25413)
+-- @label:bvt
+drop table if exists t_prepare_inside;
+create table t_prepare_inside (id int primary key, v int);
+insert into t_prepare_inside values (1, 10), (2, 20), (3, 30);
+drop procedure if exists test_prepare_literal;
+create procedure test_prepare_literal() 'begin prepare s from ''select sum(v) as prep_sum from t_prepare_inside''; execute s; deallocate prepare s; end';
+call test_prepare_literal();
+drop procedure test_prepare_literal;
+drop procedure if exists test_prepare_user_var;
+create procedure test_prepare_user_var() 'begin set @sql = ''select sum(v) as prep_sum from t_prepare_inside''; prepare s from @sql; execute s; deallocate prepare s; end';
+call test_prepare_user_var();
+drop procedure test_prepare_user_var;
+drop procedure if exists test_prepare_using;
+create procedure test_prepare_using() 'begin set @left_arg = 20; set @right_arg = 40; prepare s from ''select ? + ? as prep_sum''; execute s using @left_arg, @right_arg; end';
+call test_prepare_using();
+execute s using @left_arg, @right_arg;
+deallocate prepare s;
+drop procedure test_prepare_using;
+drop table t_prepare_inside;
+
+-- @case
+-- @desc:temporary table lifecycle inside a stored procedure
+-- @label:bvt
+drop procedure if exists test_temp_table_lifecycle;
+create procedure test_temp_table_lifecycle() 'begin create temporary table tmp_proc_lifecycle (id int primary key, v int); insert into tmp_proc_lifecycle select id, val from tbh1 where id <= 2; select sum(v) as tmp_sum from tmp_proc_lifecycle; drop table tmp_proc_lifecycle; end';
+call test_temp_table_lifecycle();
+drop procedure test_temp_table_lifecycle;
+
+-- @case
+-- @desc:temporary table created in a stored procedure remains bound to the caller session
+-- @label:bvt
+drop procedure if exists test_temp_table_session_binding;
+create procedure test_temp_table_session_binding() 'begin create temporary table tmp_proc_session (id int primary key, v int); insert into tmp_proc_session select id, val from tbh1 where id <= 2; end';
+call test_temp_table_session_binding();
+select sum(v) as tmp_sum from tmp_proc_session;
+drop table tmp_proc_session;
+drop procedure test_temp_table_session_binding;
+
+-- @case
+-- @desc:temporary table created in a nested stored procedure remains bound to the caller session
+-- @label:bvt
+drop procedure if exists test_nested_temp_table_outer;
+drop procedure if exists test_nested_temp_table_inner;
+create procedure test_nested_temp_table_inner() 'begin create temporary table tmp_nested_proc_session (id int primary key, v int); insert into tmp_nested_proc_session select id, val from tbh1 where id <= 2; end';
+create procedure test_nested_temp_table_outer() 'begin call test_nested_temp_table_inner(); end';
+call test_nested_temp_table_outer();
+select sum(v) as tmp_sum from tmp_nested_proc_session;
+drop table tmp_nested_proc_session;
+drop procedure test_nested_temp_table_outer;
+drop procedure test_nested_temp_table_inner;
 
 -- @case
 -- @desc:procedure parser SQL mode is retained after caller mode changes

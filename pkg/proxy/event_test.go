@@ -193,7 +193,10 @@ func runEventTest(t *testing.T,
 	err := st.RunNamedTask("test-event-handler", func(ctx context.Context) {
 		for {
 			select {
-			case e := <-tu2.reqC:
+			case e, ok := <-tu2.reqC:
+				if !ok {
+					return
+				}
 				err := cc2.HandleEvent(ctx, e, tu2.respC)
 				require.NoError(t, err)
 			case r := <-tu2.respC:
@@ -387,18 +390,17 @@ func TestQuitEvent(t *testing.T) {
 	sc2 := newMockServerConn(serverProxy2)
 	require.NotNil(t, sc2)
 
-	res := make(chan []byte)
+	eventHandled := make(chan error, 1)
 	st := stopper.NewStopper("test-event", stopper.WithLogger(tp.logger.RawLogger()))
 	defer st.Stop()
 	err := st.RunNamedTask("test-event-handler", func(ctx context.Context) {
 		for {
 			select {
-			case e := <-tu2.reqC:
-				_ = cc2.HandleEvent(ctx, e, tu2.respC)
-			case r := <-tu2.respC:
-				if len(r) > 0 {
-					res <- r
+			case e, ok := <-tu2.reqC:
+				if !ok {
+					return
 				}
+				eventHandled <- cc2.HandleEvent(ctx, e, tu2.respC)
 			case <-ctx.Done():
 				return
 			}
@@ -486,9 +488,15 @@ func TestQuitEvent(t *testing.T) {
 	barrierStart2 <- struct{}{}
 	barrierEnd2 <- struct{}{}
 
-	// wait for result
-	r := string(<-res)
-	require.Equal(t, "ok", r)
+	// A terminal QUIT can close reqC as soon as the packet is forwarded. Wait
+	// for HandleEvent itself rather than for the mock-only response to be
+	// forwarded by this loop after reqC closes.
+	select {
+	case err = <-eventHandled:
+		require.NoError(t, err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("quit event was not handled")
+	}
 
 	select {
 	case err = <-errChan:

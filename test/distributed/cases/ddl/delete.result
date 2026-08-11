@@ -90,6 +90,7 @@ select id, delete_flag, json_unquote(json_extract(answer,'$.document')) as doc
 from ca_comprehensive_dataset order by id;
 id    delete_flag    doc
 2    0    多层级专题.txt
+5    1    null
 6    1    ["多层级专题.txt", "a.txt"]
 11    1    true
 DROP TABLE IF EXISTS `ca_comprehensive_dataset`;

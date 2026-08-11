@@ -28,8 +28,6 @@ const (
 	StorageTAE = StorageType("TAE")
 	// StorageMEMKV MEMKV txn storage backend
 	StorageMEMKV = StorageType("MEMKV")
-	// StorageMEMKV MEM txn storage backend
-	StorageMEM = StorageType("MEM")
 )
 
 // Option store option

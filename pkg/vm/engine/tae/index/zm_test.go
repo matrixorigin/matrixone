@@ -16,6 +16,7 @@ package index
 
 import (
 	"bytes"
+	"math"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -386,6 +387,99 @@ func TestZoneMapAnyInConstNull(t *testing.T) {
 	require.Equal(t, 0, upper)
 }
 
+func TestZoneMapFloatNaNPruningContract(t *testing.T) {
+	t.Run("float32", func(t *testing.T) {
+		testZoneMapFloatNaNPruningContract(
+			t, types.T_float32, float32(math.NaN()))
+	})
+	t.Run("float64", func(t *testing.T) {
+		testZoneMapFloatNaNPruningContract(
+			t, types.T_float64, math.NaN())
+	})
+}
+
+func testZoneMapFloatNaNPruningContract[T ~float32 | ~float64](
+	t *testing.T,
+	oid types.T,
+	nan T,
+) {
+	t.Helper()
+	mp := mpool.MustNewZero()
+	defer func() {
+		require.Zero(t, mp.CurrNB())
+	}()
+
+	// New metadata ignores NaN regardless of its batch position.
+	for _, values := range [][]T{{nan, 7}, {7, nan}} {
+		input := newSortedFloatTestVector(t, mp, oid, values, false)
+		zm := NewZM(oid, 0)
+		require.NoError(t, BatchUpdateZM(zm, input))
+		input.Free(mp)
+		require.True(t, zm.IsInited())
+		require.Equal(t, T(7), zm.GetMin())
+		require.Equal(t, T(7), zm.GetMax())
+	}
+
+	allNaN := newSortedFloatTestVector(t, mp, oid, []T{nan, nan}, false)
+	allNaNZM := NewZM(oid, 0)
+	require.NoError(t, BatchUpdateZM(allNaNZM, allNaN))
+	allNaN.Free(mp)
+	require.False(t, allNaNZM.IsInited())
+
+	// A legacy [NaN, NaN] summary might have hidden ordinary values. It must
+	// disable every negative pruning decision, including the Bloom subrange
+	// and the sorted seek/quick-break predicates.
+	legacyPoisoned := NewZM(oid, 0)
+	UpdateZM(legacyPoisoned, types.EncodeValue(nan, oid))
+	keys := newSortedFloatTestVector(
+		t, mp, oid, []T{-100, 7, 100, 200}, true)
+	require.True(t, legacyPoisoned.AnyIn(keys))
+	lower, upper := legacyPoisoned.SubVecIn(keys)
+	require.Equal(t, 0, lower)
+	require.Equal(t, keys.Length(), upper)
+	seven := types.EncodeValue(T(7), oid)
+	require.True(t, legacyPoisoned.AnyGEByValue(seven))
+	require.True(t, legacyPoisoned.AnyLEByValue(seven))
+	keys.Free(mp)
+
+	// Current vectors use slices' total float order (NaN first). Zonemap
+	// binary searches must use the same order and narrow Bloom's window to the
+	// one ordinary candidate which can overlap [1, 9].
+	ordinary := NewZM(oid, 0)
+	UpdateZM(ordinary, types.EncodeValue(T(1), oid))
+	UpdateZM(ordinary, types.EncodeValue(T(9), oid))
+	sortedKeys := newSortedFloatTestVector(
+		t, mp, oid, []T{nan, -5, 7, 10}, true)
+	require.True(t, ordinary.AnyIn(sortedKeys))
+	lower, upper = ordinary.SubVecIn(sortedKeys)
+	require.Equal(t, 2, lower)
+	require.Equal(t, 3, upper)
+	sortedKeys.Free(mp)
+
+	onlyNaNKeys := newSortedFloatTestVector(
+		t, mp, oid, []T{nan, nan, nan, nan}, true)
+	require.False(t, ordinary.AnyIn(onlyNaNKeys))
+	onlyNaNKeys.Free(mp)
+}
+
+func newSortedFloatTestVector[T ~float32 | ~float64](
+	t *testing.T,
+	mp *mpool.MPool,
+	oid types.T,
+	values []T,
+	sortValues bool,
+) *vector.Vector {
+	t.Helper()
+	vec := vector.NewVec(oid.ToType())
+	for _, value := range values {
+		require.NoError(t, vector.AppendFixed(vec, value, false, mp))
+	}
+	if sortValues {
+		vec.InplaceSort()
+	}
+	return vec
+}
+
 func TestZMArray(t *testing.T) {
 	zm := NewZM(types.T_array_float32, 0)
 	zm.Update(types.ArrayToBytes[float32]([]float32{1, 1, 1}))
@@ -707,4 +801,41 @@ func BenchmarkUpdateZMVector(b *testing.B) {
 			BatchUpdateZM(zm, vec)
 		}
 	})
+}
+
+// ZM.getValue enumerated only vecf32/vecf64 and PANICS on its default, so a
+// bf16/f16/int8/uint8 vector ZM crashed the process. The user-visible symptom
+// was mo_table_col_max panicking on a table that merely CONTAINED such a column.
+//
+// Array ZMs are not inited by the normal update path (see TestZMArray), so this
+// drives getValue through GetMin/GetMax on a ZM whose buffers are set directly —
+// the shape a persisted/legacy inited array ZM takes.
+func TestZMNarrowVectorGetValue(t *testing.T) {
+	check := func(name string, oid types.T, payload []byte, want any) {
+		t.Helper()
+		zm := NewZM(oid, 0)
+		// updateMinString/updateMaxString also write the length header byte;
+		// copying into GetMinBuf() alone is a no-op on a fresh ZM (its length
+		// starts at 0). Payloads here are <= 30 bytes so nothing is truncated.
+		require.LessOrEqual(t, len(payload), 30, name+" payload fits the ZM buffer")
+		zm.updateMinString(payload)
+		zm.updateMaxString(payload)
+		zm.setInited()
+		require.NotPanics(t, func() {
+			require.Equal(t, want, zm.GetMin(), name+" min")
+			require.Equal(t, want, zm.GetMax(), name+" max")
+		}, name)
+	}
+
+	bf := types.Float32ToBF16Slice([]float32{1, 2, 3})
+	check("bf16", types.T_array_bf16, types.ArrayToBytes[types.BF16](bf), bf)
+
+	f16 := types.Float32ToFloat16Slice([]float32{1, 2, 3})
+	check("f16", types.T_array_float16, types.ArrayToBytes[types.Float16](f16), f16)
+
+	i8 := []int8{-1, 0, 7}
+	check("int8", types.T_array_int8, types.ArrayToBytes[int8](i8), i8)
+
+	u8 := []uint8{1, 128, 255}
+	check("uint8", types.T_array_uint8, types.ArrayToBytes[uint8](u8), u8)
 }

@@ -18,6 +18,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
+	"math"
 
 	sm "github.com/lni/dragonboat/v4/statemachine"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
@@ -31,6 +32,12 @@ var (
 const (
 	firstLogShardID uint64 = 1
 	headerSize             = pb.HeaderSize
+
+	walRecoveryLeaseHolderID uint64 = math.MaxUint64
+	walRecoveryBeginMarker   uint64 = 0x4d4f57414c424547 // "MOWALBEG"
+	walRecoveryEndMarker     uint64 = 0x4d4f57414c454e44 // "MOWALEND"
+	walRecoveryDigestSize           = 64
+	walRecoveryControlSize          = headerSize + 16 + walRecoveryDigestSize + 8
 )
 
 // used to indicate query types
@@ -39,6 +46,17 @@ type indexQuery struct{}
 type truncatedLsnQuery struct{}
 type leaseHistoryQuery struct{ lsn uint64 }
 type requiredLsnQuery struct{}
+type walRecoveryStateQuery struct{}
+
+type walRecoveryMarkerState struct {
+	Digest                string
+	EntryCount            uint64
+	CompletedEntries      uint64
+	BaseLSN               uint64
+	LastLSN               uint64
+	OriginalLeaseHolderID uint64
+	Complete              bool
+}
 
 func parseCmdTag(cmd []byte) pb.UpdateType {
 	return pb.UpdateType(binaryEnc.Uint32(cmd))
@@ -65,6 +83,40 @@ func getSetLeaseHolderCmd(leaseHolderID uint64) []byte {
 	binaryEnc.PutUint32(cmd, uint32(pb.LeaseHolderIDUpdate))
 	binaryEnc.PutUint64(cmd[headerSize:], leaseHolderID)
 	return cmd
+}
+
+func getWALRecoveryLeaseCmd(leaseHolderID, marker uint64, digest string, entryCount uint64) []byte {
+	if len(digest) != walRecoveryDigestSize {
+		panic("invalid WAL recovery digest")
+	}
+	cmd := make([]byte, walRecoveryControlSize)
+	binaryEnc.PutUint32(cmd, uint32(pb.LeaseHolderIDUpdate))
+	binaryEnc.PutUint64(cmd[headerSize:], leaseHolderID)
+	binaryEnc.PutUint64(cmd[headerSize+8:], marker)
+	copy(cmd[headerSize+16:], digest)
+	binaryEnc.PutUint64(cmd[headerSize+16+walRecoveryDigestSize:], entryCount)
+	return cmd
+}
+
+func getBeginWALRecoveryCmd(digest string, entryCount uint64) []byte {
+	return getWALRecoveryLeaseCmd(
+		walRecoveryLeaseHolderID, walRecoveryBeginMarker, digest, entryCount)
+}
+
+func getEndWALRecoveryCmd(digest string, entryCount uint64) []byte {
+	return getWALRecoveryLeaseCmd(0, walRecoveryEndMarker, digest, entryCount)
+}
+
+func isWALRecoveryLeaseCmd(cmd []byte, marker uint64) bool {
+	return len(cmd) == walRecoveryControlSize &&
+		parseCmdTag(cmd) == pb.LeaseHolderIDUpdate &&
+		binaryEnc.Uint64(cmd[headerSize+8:]) == marker
+}
+
+func parseWALRecoveryLeaseCmd(cmd []byte) (string, uint64) {
+	digest := string(cmd[headerSize+16 : headerSize+16+walRecoveryDigestSize])
+	entryCount := binaryEnc.Uint64(cmd[headerSize+16+walRecoveryDigestSize:])
+	return digest, entryCount
 }
 
 func getSetTruncatedLsnCmd(lsn uint64) []byte {
@@ -133,9 +185,66 @@ func (s *stateMachine) getLeaseHistory(lsn uint64) (uint64, uint64) {
 }
 
 func (s *stateMachine) handleSetLeaseHolderID(cmd []byte) sm.Result {
-	s.state.LeaseHolderID = parseLeaseHolderID(cmd)
+	leaseHolderID := parseLeaseHolderID(cmd)
+	if isWALRecoveryLeaseCmd(cmd, walRecoveryBeginMarker) {
+		digest, entryCount := parseWALRecoveryLeaseCmd(cmd)
+		if s.state.WALRecoveryDigest != "" &&
+			(s.state.WALRecoveryDigest != digest ||
+				s.state.WALRecoveryEntryCount != entryCount) {
+			return rejectedLeaseHolderResult(s.state.LeaseHolderID)
+		}
+		if s.state.WALRecoveryComplete {
+			return sm.Result{Value: s.state.Index}
+		}
+		if s.state.WALRecoveryDigest == "" {
+			s.state.WALRecoveryDigest = digest
+			s.state.WALRecoveryEntryCount = entryCount
+			s.state.WALRecoveryCompletedEntries = 0
+			s.state.WALRecoveryBaseLsn = s.state.Index
+			s.state.WALRecoveryLastLsn = s.state.Index
+			s.state.WALRecoveryOriginalLeaseHolderID = s.state.LeaseHolderID
+		}
+		if s.state.LeaseHolderID != walRecoveryLeaseHolderID {
+			s.state.LeaseHolderID = walRecoveryLeaseHolderID
+			s.state.LeaseHistory[s.state.Index] = s.state.LeaseHolderID
+		}
+		return sm.Result{Value: s.state.Index}
+	}
+	if isWALRecoveryLeaseCmd(cmd, walRecoveryEndMarker) {
+		digest, entryCount := parseWALRecoveryLeaseCmd(cmd)
+		if s.state.WALRecoveryDigest != digest ||
+			s.state.WALRecoveryEntryCount != entryCount ||
+			s.state.WALRecoveryCompletedEntries != entryCount {
+			return rejectedLeaseHolderResult(s.state.LeaseHolderID)
+		}
+		if s.state.WALRecoveryComplete {
+			return sm.Result{Value: s.state.Index}
+		}
+		if s.state.LeaseHolderID != walRecoveryLeaseHolderID {
+			return rejectedLeaseHolderResult(s.state.LeaseHolderID)
+		}
+		s.state.WALRecoveryComplete = true
+		if s.state.LeaseHolderID != s.state.WALRecoveryOriginalLeaseHolderID {
+			s.state.LeaseHolderID = s.state.WALRecoveryOriginalLeaseHolderID
+			s.state.LeaseHistory[s.state.Index] = s.state.LeaseHolderID
+		}
+		return sm.Result{Value: s.state.Index}
+	}
+	// MaxUint64 is reserved for the durable WAL recovery fence. A normal
+	// lease update must neither enter nor leave recovery mode.
+	if leaseHolderID == walRecoveryLeaseHolderID ||
+		s.state.LeaseHolderID == walRecoveryLeaseHolderID {
+		return rejectedLeaseHolderResult(s.state.LeaseHolderID)
+	}
+	s.state.LeaseHolderID = leaseHolderID
 	s.state.LeaseHistory[s.state.Index] = s.state.LeaseHolderID
 	return sm.Result{}
+}
+
+func rejectedLeaseHolderResult(leaseHolderID uint64) sm.Result {
+	data := make([]byte, 8)
+	binaryEnc.PutUint64(data, leaseHolderID)
+	return sm.Result{Data: data}
 }
 
 func (s *stateMachine) handleTruncateLsn(cmd []byte) sm.Result {
@@ -157,6 +266,15 @@ func (s *stateMachine) handleUserUpdate(cmd []byte) sm.Result {
 		data := make([]byte, 8)
 		binaryEnc.PutUint64(data, s.state.LeaseHolderID)
 		return sm.Result{Data: data}
+	}
+	if s.state.LeaseHolderID == walRecoveryLeaseHolderID {
+		if s.state.WALRecoveryDigest == "" ||
+			s.state.WALRecoveryComplete ||
+			s.state.WALRecoveryCompletedEntries >= s.state.WALRecoveryEntryCount {
+			return rejectedLeaseHolderResult(s.state.LeaseHolderID)
+		}
+		s.state.WALRecoveryCompletedEntries++
+		s.state.WALRecoveryLastLsn = s.state.Index
 	}
 	return sm.Result{Value: s.state.Index}
 }
@@ -213,6 +331,16 @@ func (s *stateMachine) Lookup(query interface{}) (interface{}, error) {
 		return lease, nil
 	} else if _, ok := query.(requiredLsnQuery); ok {
 		return s.state.RequiredLsn, nil
+	} else if _, ok := query.(walRecoveryStateQuery); ok {
+		return walRecoveryMarkerState{
+			Digest:                s.state.WALRecoveryDigest,
+			EntryCount:            s.state.WALRecoveryEntryCount,
+			CompletedEntries:      s.state.WALRecoveryCompletedEntries,
+			BaseLSN:               s.state.WALRecoveryBaseLsn,
+			LastLSN:               s.state.WALRecoveryLastLsn,
+			OriginalLeaseHolderID: s.state.WALRecoveryOriginalLeaseHolderID,
+			Complete:              s.state.WALRecoveryComplete,
+		}, nil
 	}
 	panic("unknown lookup command type")
 }

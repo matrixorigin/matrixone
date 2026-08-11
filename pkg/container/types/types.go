@@ -98,9 +98,46 @@ const (
 	// Array/Vector family
 	T_array_float32 T = 224 // In SQL , it is vecf32
 	T_array_float64 T = 225 // In SQL , it is vecf64
+	T_array_bf16    T = 226 // In SQL , it is vecbf16 (bfloat16)
+	T_array_float16 T = 227 // In SQL , it is vecf16  (IEEE fp16/half)
+	T_array_int8    T = 228 // In SQL , it is vecint8  (int8)
+	T_array_uint8   T = 229 // In SQL , it is vecuint8 (uint8)
 
 	//note: max value of uint8 is 255
 )
+
+// Canonical lowercase SQL type names for the array/vector types — the spelling
+// used in DDL and CAST (`col vecf32(4)`, `cast(x as vecint8(4))`) and recognized
+// by the parser keyword table. T.String() returns the uppercase display form;
+// these are the single source of truth for the lowercase SQL spelling.
+const (
+	ArrayFloat32SQLName = "vecf32"
+	ArrayFloat64SQLName = "vecf64"
+	ArrayBF16SQLName    = "vecbf16"
+	ArrayFloat16SQLName = "vecf16"
+	ArrayInt8SQLName    = "vecint8"
+	ArrayUint8SQLName   = "vecuint8"
+)
+
+// ArraySQLName returns the lowercase SQL type name for an array element type
+// (e.g. T_array_float32 -> "vecf32"), or "" if t is not an array/vector type.
+func (t T) ArraySQLName() string {
+	switch t {
+	case T_array_float32:
+		return ArrayFloat32SQLName
+	case T_array_float64:
+		return ArrayFloat64SQLName
+	case T_array_bf16:
+		return ArrayBF16SQLName
+	case T_array_float16:
+		return ArrayFloat16SQLName
+	case T_array_int8:
+		return ArrayInt8SQLName
+	case T_array_uint8:
+		return ArrayUint8SQLName
+	}
+	return ""
+}
 
 const (
 	TxnTsSize     = 12
@@ -113,9 +150,9 @@ const (
 type Type struct {
 	Oid T
 
-	// XXX Dummies.  T is uint8, make it 4 bytes aligned, otherwise, it may contain
-	// garbage data.  In theory these unused garbage should not be a problem, but
-	// it is.  Give it a name will zero fill it ...
+	// Charset originally existed only to keep T four-byte aligned and was always
+	// zero-filled. It now carries text collation identity; the two following
+	// bytes remain explicit padding so the serialized layout stays unchanged.
 	Charset uint8
 	notNull uint8
 	dummy2  uint8
@@ -126,6 +163,49 @@ type Type struct {
 	Width int32
 	// Scale means number of fractional digits for decimal, timestamp, float, etc.
 	Scale int32
+}
+
+const (
+	// CharsetLegacy is the zero value written before text collation metadata
+	// became meaningful. Text values with this identity keep the historical
+	// bytewise ordering so an upgrade cannot change results for existing data.
+	CharsetLegacy uint8 = 0
+	// CharsetBinary marks binary string types and opaque bytes carried in a
+	// text-shaped container.
+	CharsetBinary uint8 = 1
+	// CharsetUTF8MB4Bin is utf8/utf8mb4 text using the legacy binary
+	// collations' PAD SPACE ordering. It remains nonbinary in MySQL protocol
+	// metadata (collation 46 rather than binary charset 63).
+	CharsetUTF8MB4Bin uint8 = 2
+	// CharsetUTF8 is the explicit utf8mb4_general_ci text identity. It must not
+	// use zero: old catalog rows have zero in this formerly dummy field.
+	CharsetUTF8 uint8 = 3
+)
+
+// MergeStringCharset derives one collation identity for a value composed from
+// multiple MySQL strings. Binary bytes must never be reinterpreted as UTF-8;
+// binary-collated utf8mb4 and legacy text likewise retain their stronger
+// ordering identity when combined with default general-ci text.
+func MergeStringCharset(parameters []Type, fallback uint8) uint8 {
+	result := fallback
+	for _, parameter := range parameters {
+		if !parameter.Oid.IsMySQLString() {
+			continue
+		}
+		switch parameter.Charset {
+		case CharsetBinary:
+			result = CharsetBinary
+		case CharsetUTF8MB4Bin:
+			if result != CharsetBinary {
+				result = CharsetUTF8MB4Bin
+			}
+		case CharsetLegacy:
+			if result == CharsetUTF8 {
+				result = CharsetLegacy
+			}
+		}
+	}
+	return result
 }
 
 // ProtoSize is used by gogoproto.
@@ -365,6 +445,16 @@ type RealNumbers interface {
 	constraints.Float
 }
 
+// ArrayElement is the set of element types that can back a vector column.
+// It is used ONLY by the storage / serialization / accessor / display /
+// cast-plumbing layer (pure byte reinterpretation + formatting). All math
+// kernels stay on RealNumbers; narrow types reach them via a float32 bridge.
+// Do NOT widen RealNumbers to include these — int8 is not a float and
+// BF16/Float16 have no native arithmetic.
+type ArrayElement interface {
+	~float32 | ~float64 | BF16 | Float16 | int8 | uint8
+}
+
 type FixedSizeTExceptStrType interface {
 	bool | OrderedT | Decimal | TS | Rowid | Uuid | Blockid
 }
@@ -426,6 +516,10 @@ var Types = map[string]T{
 
 	"array float32": T_array_float32,
 	"array float64": T_array_float64,
+	"array bf16":    T_array_bf16,
+	"array float16": T_array_float16,
+	"array int8":    T_array_int8,
+	"array uint8":   T_array_uint8,
 }
 
 func New(oid T, width, scale int32) Type {
@@ -438,14 +532,27 @@ func New(oid T, width, scale int32) Type {
 	return typ
 }
 
+// NewWithCharset restores charset metadata carried by a plan type. Legacy text
+// plans must retain zero, while old plans for intrinsically binary OIDs still
+// need the OID-derived binary identity.
+func NewWithCharset(oid T, width, scale int32, charset uint8) Type {
+	typ := New(oid, width, scale)
+	if charset != CharsetLegacy || oid == T_char || oid == T_varchar || oid == T_text {
+		typ.Charset = charset
+	}
+	return typ
+}
+
 func CharsetType(oid T) uint8 {
 	switch oid {
 	case T_blob, T_varbinary, T_binary, T_geometry, T_geometry32:
 		// binary charset
-		return 1
+		return CharsetBinary
+	case T_char, T_varchar, T_text:
+		return CharsetUTF8
 	default:
-		// utf8 charset
-		return 0
+		// Charset is not meaningful for non-string types.
+		return CharsetLegacy
 	}
 }
 
@@ -571,6 +678,14 @@ func (t Type) DescString() string {
 		return fmt.Sprintf("VECF32(%d)", t.Width)
 	case T_array_float64:
 		return fmt.Sprintf("VECF64(%d)", t.Width)
+	case T_array_bf16:
+		return fmt.Sprintf("VECBF16(%d)", t.Width)
+	case T_array_float16:
+		return fmt.Sprintf("VECF16(%d)", t.Width)
+	case T_array_int8:
+		return fmt.Sprintf("VECINT8(%d)", t.Width)
+	case T_array_uint8:
+		return fmt.Sprintf("VECUINT8(%d)", t.Width)
 	}
 	return t.Oid.String()
 }
@@ -581,6 +696,14 @@ func (t Type) GetArrayElementSize() int {
 		return 4
 	case T_array_float64:
 		return 8
+	case T_array_bf16:
+		return 2
+	case T_array_float16:
+		return 2
+	case T_array_int8:
+		return 1
+	case T_array_uint8:
+		return 1
 	}
 	panic(moerr.NewInternalErrorNoCtx(fmt.Sprintf("unknown array type %d", t)))
 }
@@ -590,8 +713,12 @@ func (t Type) Eq(b Type) bool {
 	// XXX need to find out why these types have different size/width
 	case T_bool, T_uint8, T_uint16, T_uint32, T_uint64, T_uint128, T_int8, T_int16, T_int32, T_int64, T_int128:
 		return t.Oid == b.Oid
+	case T_char, T_varchar, T_text:
+		return t.Oid == b.Oid && t.Charset == b.Charset &&
+			t.Size == b.Size && t.Width == b.Width && t.Scale == b.Scale
 	default:
-		return t.Oid == b.Oid && t.Size == b.Size && t.Width == b.Width && t.Scale == b.Scale
+		return t.Oid == b.Oid && t.Size == b.Size &&
+			t.Width == b.Width && t.Scale == b.Scale
 	}
 }
 
@@ -653,7 +780,7 @@ func (t T) ToType() Type {
 	case T_varchar:
 		typ.Size = VarlenaSize
 		typ.Width = MaxVarcharLen
-	case T_array_float32, T_array_float64:
+	case T_array_float32, T_array_float64, T_array_bf16, T_array_float16, T_array_int8, T_array_uint8:
 		typ.Size = VarlenaSize
 		typ.Width = MaxArrayDimension
 	case T_binary:
@@ -670,6 +797,7 @@ func (t T) ToType() Type {
 	default:
 		panic("Unknown type")
 	}
+	typ.Charset = CharsetType(t)
 	return typ
 }
 
@@ -761,6 +889,14 @@ func (t T) String() string {
 		return "VECF32"
 	case T_array_float64:
 		return "VECF64"
+	case T_array_bf16:
+		return "VECBF16"
+	case T_array_float16:
+		return "VECF16"
+	case T_array_int8:
+		return "VECINT8"
+	case T_array_uint8:
+		return "VECUINT8"
 	case T_enum:
 		return "ENUM"
 	}
@@ -846,6 +982,14 @@ func (t T) OidString() string {
 		return "T_array_float32"
 	case T_array_float64:
 		return "T_array_float64"
+	case T_array_bf16:
+		return "T_array_bf16"
+	case T_array_float16:
+		return "T_array_float16"
+	case T_array_int8:
+		return "T_array_int8"
+	case T_array_uint8:
+		return "T_array_uint8"
 	}
 	return "unknown_type"
 }
@@ -879,7 +1023,7 @@ func (t T) TypeLen() int {
 		return 4
 	case T_float64:
 		return 8
-	case T_char, T_varchar, T_json, T_blob, T_text, T_binary, T_varbinary, T_array_float32, T_array_float64, T_datalink, T_geometry, T_geometry32:
+	case T_char, T_varchar, T_json, T_blob, T_text, T_binary, T_varbinary, T_array_float32, T_array_float64, T_array_bf16, T_array_float16, T_array_int8, T_array_uint8, T_datalink, T_geometry, T_geometry32:
 		return VarlenaSize
 	case T_decimal64:
 		return 8
@@ -934,7 +1078,7 @@ func (t T) FixedLength() int {
 		return RowidSize
 	case T_Blockid:
 		return BlockidSize
-	case T_char, T_varchar, T_blob, T_json, T_text, T_binary, T_varbinary, T_array_float32, T_array_float64, T_datalink, T_geometry, T_geometry32:
+	case T_char, T_varchar, T_blob, T_json, T_text, T_binary, T_varbinary, T_array_float32, T_array_float64, T_array_bf16, T_array_float16, T_array_int8, T_array_uint8, T_datalink, T_geometry, T_geometry32:
 		return -24
 	case T_enum:
 		return 2
@@ -1015,7 +1159,8 @@ func (t T) IsDateRelate() bool {
 }
 
 func (t T) IsArrayRelate() bool {
-	if t == T_array_float32 || t == T_array_float64 {
+	if t == T_array_float32 || t == T_array_float64 ||
+		t == T_array_bf16 || t == T_array_float16 || t == T_array_int8 || t == T_array_uint8 {
 		return true
 	}
 	return false

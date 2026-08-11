@@ -112,7 +112,7 @@ inline rmm::mr::device_memory_resource* worker_pool_mr(int device_id) {
         try {
             cudaSetDevice(device_id);
             auto base = std::make_shared<rmm::mr::cuda_memory_resource>();
-            // Initial pool = 10% of free GPU memory; max = unbounded — pool
+            // Initial pool = 2% of free GPU memory; max = unbounded — pool
             // grows by allocating more from the upstream as needed.
             // Kept small so a subsequent huge-index load (e.g. an IVF-PQ or
             // CAGRA index needing ≥¾ VRAM in a single allocation) can still
@@ -123,7 +123,7 @@ inline rmm::mr::device_memory_resource* worker_pool_mr(int device_id) {
             auto pool = std::make_shared<
                 rmm::mr::pool_memory_resource<rmm::mr::cuda_memory_resource>>(
                     base.get(),
-                    rmm::percent_of_free_device_memory(10));
+                    rmm::percent_of_free_device_memory(2));
             std::lock_guard<std::mutex> lk(keepalive_mu);
             keepalives.push_back(pool);   // pool outlives every device_uvector
             keepalives.push_back(base);   // base outlives the pool

@@ -21,6 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 )
 
@@ -37,17 +38,23 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 
 	if node.Limit != nil {
 		// can not push down over limit
-		cantPushdown = filters
+		cantPushdown = append(cantPushdown, filters...)
 		filters = nil
 	}
 
 	switch node.NodeType {
 	case plan.Node_AGG:
+		// Legacy positional aggregates have no global binding tags. Keep filters
+		// above them because tag-based replacement cannot address their outputs.
+		if len(node.BindingTags) < 2 {
+			return originalNodeID, filters
+		}
 		groupTag := node.BindingTags[0]
 		aggregateTag := node.BindingTags[1]
 
 		for _, filter := range filters {
-			if !containsTag(filter, aggregateTag) && !containGrouping(filter) {
+			if !containsTag(filter, aggregateTag) && !containGrouping(filter) &&
+				!referencesSyntheticGroupKey(filter, groupTag, len(node.GroupBy), node.GroupingFlag) {
 				canPushdown = append(canPushdown, replaceColRefs(filter, groupTag, node.GroupBy))
 			} else {
 				node.FilterList = append(node.FilterList, filter)
@@ -157,6 +164,28 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 		node.Children[0] = childID
 
 	case plan.Node_FILTER:
+		// IsEnd filters are terminal assertions/action selectors. Moving their
+		// predicates below joins can change both assertion scope and marker layout.
+		// Barrier filters are cardinality-changing semantic boundaries over a
+		// final DML row image. Unlike ASSERT they discard rows, but have the same
+		// non-reorderability requirement.
+		if node.IsEnd {
+			cantPushdown = append(cantPushdown, filters...)
+			return originalNodeID, cantPushdown
+		}
+		if node.FilterIsBarrier {
+			childID, cantPushdownChild := builder.pushdownFilters(node.Children[0], nil, separateNonEquiConds)
+			if len(cantPushdownChild) > 0 {
+				childID = builder.appendNode(&plan.Node{
+					NodeType:   plan.Node_FILTER,
+					Children:   []int32{childID},
+					FilterList: cantPushdownChild,
+				}, nil)
+			}
+			node.Children[0] = childID
+			cantPushdown = append(cantPushdown, filters...)
+			return originalNodeID, cantPushdown
+		}
 		canPushdown = filters
 		if !node.RollupFilter {
 			for _, filter := range node.FilterList {
@@ -178,7 +207,41 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 			nodeID = childID
 		}
 
+	case plan.Node_ASSERT:
+		// ASSERT is a row-preserving semantic boundary. Its predicates describe
+		// the row image at this exact point in the DML pipeline, so neither the
+		// assertion nor filters from its parent may cross it.
+		childID, cantPushdownChild := builder.pushdownFilters(node.Children[0], nil, separateNonEquiConds)
+		if len(cantPushdownChild) > 0 {
+			childID = builder.appendNode(&plan.Node{
+				NodeType:   plan.Node_FILTER,
+				Children:   []int32{childID},
+				FilterList: cantPushdownChild,
+			}, nil)
+		}
+		node.Children[0] = childID
+		cantPushdown = append(cantPushdown, filters...)
+
 	case plan.Node_JOIN:
+		if node.JoinType == plan.Node_DEDUP && node.OnDuplicateAction == plan.Node_UPDATE {
+			// DEDUP UPDATE mutates columns from its right input into the final row
+			// image. A predicate above it must observe that image; pushing it to
+			// either child would evaluate pre-update values or change conflict
+			// detection.
+			for i, child := range node.Children {
+				childID, cantPushdownChild := builder.pushdownFilters(child, nil, separateNonEquiConds)
+				if len(cantPushdownChild) > 0 {
+					childID = builder.appendNode(&plan.Node{
+						NodeType:   plan.Node_FILTER,
+						Children:   []int32{childID},
+						FilterList: cantPushdownChild,
+					}, nil)
+				}
+				node.Children[i] = childID
+			}
+			cantPushdown = append(cantPushdown, filters...)
+			break
+		}
 		// Record middle: processing JOIN node
 		builder.optimizationHistory = append(builder.optimizationHistory,
 			fmt.Sprintf("pushdownFilters:middle (nodeID: %d, JOIN, filters: %d, onList: %d)", nodeID, len(filters), len(node.OnList)))
@@ -357,6 +420,7 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 				if tryMark := filter.GetCol(); tryMark != nil {
 					if tryMark.RelPos == node.BindingTags[0] {
 						node.JoinType = plan.Node_SEMI
+						node.OnList = unwrapIsTrueFromMarkJoinEqualities(node.OnList, leftTags, rightTags, markTag)
 						node.BindingTags = nil
 						break
 					}
@@ -365,6 +429,7 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 					if tryMark := arg.GetCol(); tryMark != nil {
 						if tryMark.RelPos == node.BindingTags[0] {
 							node.JoinType = plan.Node_ANTI
+							node.OnList = unwrapIsTrueFromMarkJoinEqualities(node.OnList, leftTags, rightTags, markTag)
 							node.BindingTags = nil
 							break
 						}
@@ -511,6 +576,9 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 			break
 		}
 
+		if len(node.BindingTags) == 0 {
+			node.BindingTags = []int32{0}
+		}
 		projectTag := node.BindingTags[0]
 
 		for _, filter := range filters {
@@ -596,6 +664,93 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 	return nodeID, cantPushdown
 }
 
+func unwrapIsTrueFromMarkJoinEqualities(
+	conditions []*plan.Expr,
+	leftTags, rightTags map[int32]bool,
+	markTag int32,
+) []*plan.Expr {
+	for i, condition := range conditions {
+		isTrue := condition.GetF()
+		if isTrue == nil || isTrue.Func == nil || len(isTrue.Args) != 1 {
+			continue
+		}
+		funcID, _ := function.DecodeOverloadID(isTrue.Func.GetObj())
+		if funcID != function.ISTRUE {
+			continue
+		}
+
+		equality := isTrue.Args[0]
+		equalFunc := equality.GetF()
+		if equalFunc == nil || equalFunc.Func == nil || len(equalFunc.Args) != 2 || !IsEqualFunc(equalFunc.Func.GetObj()) {
+			continue
+		}
+
+		leftSide := getJoinSideWithOuterScope(equalFunc.Args[0], leftTags, rightTags, markTag)
+		rightSide := getJoinSideWithOuterScope(equalFunc.Args[1], leftTags, rightTags, markTag)
+		if leftSide == JoinSideLeft && rightSide == JoinSideRight ||
+			leftSide == JoinSideRight && rightSide == JoinSideLeft {
+			conditions[i] = equality
+		}
+	}
+
+	return conditions
+}
+
+// referencesSyntheticGroupKey reports whether expr cannot be rewritten below
+// an aggregate because it refers to a group-key position synthesized by that
+// aggregate branch. Invalid positions and expression variants that
+// replaceColRefs cannot safely rewrite are kept above the aggregate as well.
+func referencesSyntheticGroupKey(expr *plan.Expr, groupTag int32, groupCount int, groupingFlag []bool) bool {
+	if expr == nil {
+		return true
+	}
+
+	switch exprImpl := expr.Expr.(type) {
+	case *plan.Expr_F:
+		if exprImpl.F == nil {
+			return true
+		}
+		for _, arg := range exprImpl.F.Args {
+			if referencesSyntheticGroupKey(arg, groupTag, groupCount, groupingFlag) {
+				return true
+			}
+		}
+		return false
+
+	case *plan.Expr_W:
+		// replaceColRefs does not assign its rewritten WindowSpec children back.
+		// Keep windows with group output references above the aggregate.
+		return exprImpl.W == nil || containsTag(expr, groupTag)
+
+	case *plan.Expr_List:
+		// replaceColRefs does not recurse into Expr_List. Keep a list that
+		// contains any group output reference above the aggregate, including
+		// active keys, rather than pushing an expression with stale tags.
+		return exprImpl.List == nil || containsTag(expr, groupTag)
+
+	case *plan.Expr_Col:
+		if exprImpl.Col == nil || exprImpl.Col.RelPos != groupTag {
+			return exprImpl.Col == nil
+		}
+		colPos := exprImpl.Col.ColPos
+		if colPos < 0 || int(colPos) >= groupCount {
+			return true
+		}
+		return len(groupingFlag) > 0 &&
+			(int(colPos) >= len(groupingFlag) || !groupingFlag[colPos])
+
+	case *plan.Expr_Sub, *plan.Expr_Corr:
+		return true
+
+	case *plan.Expr_Lit, *plan.Expr_P, *plan.Expr_V, *plan.Expr_Raw,
+		*plan.Expr_T, *plan.Expr_Max, *plan.Expr_Vec, *plan.Expr_Fold:
+		return false
+
+	default:
+		return true
+	}
+}
+
 // order by limit can be pushed down to left child of left join
 func (builder *QueryBuilder) pushdownTopThroughLeftJoin(nodeID int32) {
 	if builder.optimizerHints != nil && builder.optimizerHints.pushDownTopThroughLeftJoin != 0 {
@@ -662,6 +817,16 @@ func (builder *QueryBuilder) pushdownLimitToTableScan(nodeID int32) {
 		if child.NodeType == plan.Node_TABLE_SCAN {
 			child.Limit, child.Offset = node.Limit, node.Offset
 			node.Limit, node.Offset = nil, nil
+		} else if node.Offset == nil &&
+			child.NodeType == plan.Node_FUNCTION_SCAN &&
+			child.TableDef != nil && child.TableDef.TblFunc != nil &&
+			child.TableDef.TblFunc.Name == "mo_check_constraints" {
+			// CHECK_CONSTRAINTS is a source function whose rows have no
+			// ordering contract.  A plain LIMIT can therefore be evaluated
+			// by the producer, but OFFSET (or a sort above it) must remain
+			// outside so that the result semantics are unchanged.
+			child.Limit = node.Limit
+			node.Limit = nil
 		}
 	}
 }

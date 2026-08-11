@@ -70,6 +70,12 @@ func (v *Vector) MarshalBinaryWithBufferV1(buf *bytes.Buffer) error {
 }
 
 func (v *Vector) UnmarshalBinaryV1(data []byte) error {
+	v.areaDisjoint = false
+	if v.allocationAccount != nil {
+		return allocationAccountInvalid(
+			"cannot install aliases in an accounted vector",
+		)
+	}
 	// read class
 	v.class = int(data[0])
 	data = data[1:]
@@ -116,6 +122,7 @@ func (v *Vector) UnmarshalBinaryV1(data []byte) error {
 
 	v.cantFreeData = true
 	v.cantFreeArea = true
+	v.allocationAccount = nil
 
 	return nil
 }

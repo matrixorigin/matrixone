@@ -308,6 +308,56 @@ func TestNonRecordingTracerKeepsRetiredControlledKindsDisabled(t *testing.T) {
 			require.Equal(t, rootSC, SpanFromContext(gotCtx).SpanContext())
 		})
 	}
+
+	gotCtx, gotSpan := tracer.Start(nil, "retired-controlled", WithKind(SpanKindStatement))
+	require.Equal(t, context.Background(), gotCtx)
+	require.IsType(t, NoopSpan{}, gotSpan)
+}
+
+func TestNonRecordingTracerRetiredKindOptionsUseGeneralPath(t *testing.T) {
+	tracer := NewNonRecordingTracer(&sequentialIDGenerator{})
+	ctx := context.Background()
+
+	t.Run("single custom option", func(t *testing.T) {
+		applied := false
+		option := spanOptionFunc(func(cfg *SpanConfig) {
+			applied = true
+			cfg.Kind = SpanKindStatement
+		})
+
+		gotCtx, gotSpan := tracer.Start(ctx, "retired-controlled", option)
+		require.True(t, applied)
+		require.Equal(t, ctx, gotCtx)
+		require.IsType(t, NoopSpan{}, gotSpan)
+	})
+
+	t.Run("additional option", func(t *testing.T) {
+		applied := false
+		option := spanOptionFunc(func(*SpanConfig) {
+			applied = true
+		})
+
+		gotCtx, gotSpan := tracer.Start(ctx, "retired-controlled",
+			WithKind(SpanKindStatement), option)
+		require.True(t, applied)
+		require.Equal(t, ctx, gotCtx)
+		require.IsType(t, NoopSpan{}, gotSpan)
+	})
+
+	t.Run("later non-retired kind wins", func(t *testing.T) {
+		gotCtx, gotSpan := tracer.Start(ctx, "non-retired",
+			WithKind(SpanKindStatement), WithKind(SpanKindSession))
+		require.IsType(t, &NonRecordingSpan{}, gotSpan)
+		require.Equal(t, SpanKindSession, gotSpan.SpanContext().Kind)
+		require.Equal(t, gotSpan.SpanContext(), SpanFromContext(gotCtx).SpanContext())
+	})
+
+	t.Run("later retired kind wins", func(t *testing.T) {
+		gotCtx, gotSpan := tracer.Start(ctx, "retired-controlled",
+			WithKind(SpanKindSession), WithKind(SpanKindStatement))
+		require.Equal(t, ctx, gotCtx)
+		require.IsType(t, NoopSpan{}, gotSpan)
+	})
 }
 
 func TestGenerateUsesNonRecordingTraceContext(t *testing.T) {
@@ -346,6 +396,36 @@ func BenchmarkNoopTracer_Start(b *testing.B) {
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
 		_, _ = tracer.Start(ctx, "benchmark", opts...)
+	}
+}
+
+func BenchmarkNonRecordingTracer_StartRetiredKind(b *testing.B) {
+	tracer := NewNonRecordingTracer(&sequentialIDGenerator{})
+	ctx := context.Background()
+	option := WithKind(SpanKindStatement)
+
+	b.ResetTimer()
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		_, _ = tracer.Start(ctx, "benchmark", option)
+	}
+}
+
+type benchmarkKindOption SpanKind
+
+func (k benchmarkKindOption) ApplySpanStart(cfg *SpanConfig) {
+	cfg.Kind = SpanKind(k)
+}
+
+func BenchmarkNonRecordingTracer_StartRetiredKindGeneralPath(b *testing.B) {
+	tracer := NewNonRecordingTracer(&sequentialIDGenerator{})
+	ctx := context.Background()
+	option := benchmarkKindOption(SpanKindStatement)
+
+	b.ResetTimer()
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		_, _ = tracer.Start(ctx, "benchmark", option)
 	}
 }
 

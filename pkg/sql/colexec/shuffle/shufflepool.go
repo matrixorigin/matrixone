@@ -15,183 +15,639 @@
 package shuffle
 
 import (
+	"context"
 	"sync"
+	"sync/atomic"
+	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"golang.org/x/sys/cpu"
 )
 
-type ShufflePool struct {
-	bucketNum    int32
-	maxHolders   int32
-	holders      int32
-	finished     int32
-	batchSets    []*batch.BatchSet
-	lock         sync.Mutex
-	locks        []sync.Mutex
-	fullBatchIdx []int
+const (
+	shuffleMemoryShardCount   = 64
+	shuffleBatchPoolShardSize = 2
+)
+
+type shuffleMemoryShard struct {
+	sync.Mutex
+	tracked map[*batch.Batch]int64
+	_       cpu.CacheLinePad
 }
 
-func NewShufflePool(bucketNum int32, maxHolders int32) *ShufflePool {
-	sp := &ShufflePool{bucketNum: bucketNum, maxHolders: maxHolders}
-	sp.holders = 0
-	sp.finished = 0
-	sp.batchSets = make([]*batch.BatchSet, sp.bucketNum)
+type shuffleBatchPoolShard struct {
+	sync.Mutex
+	batches [shuffleBatchPoolShardSize]*batch.Batch
+	count   int
+	_       cpu.CacheLinePad
+}
+
+type ShufflePool struct {
+	bucketNum  int32
+	maxHolders int32
+	drainAll   bool
+
+	holders    int32
+	finished   int32
+	stoppers   int32
+	consumers  int32
+	holderLock sync.Mutex
+	aborted    bool
+	abortErr   error
+	cleaned    bool
+	producers  map[int32]context.CancelCauseFunc
+
+	batchSets  []*batch.BatchSet
+	batchLocks []sync.Mutex
+	closed     []bool
+
+	// Recycle storage is sharded by the local holder bound, not by the global
+	// bucket count. This keeps lookup O(1), gives each concurrent holder two
+	// cache slots, and prevents one previously hot bucket from consuming the
+	// capacity needed to warm every other holder shard.
+	batchPools []shuffleBatchPoolShard
+
+	batchWaiters   []chan bool
+	endingWaiters  []chan bool
+	anyBatchWaiter chan struct{}
+	endingWaiter   chan struct{}
+	endingOnce     sync.Once
+
+	readyLimit         int
+	readyCount         int
+	readyLock          sync.Mutex
+	spaceWaiter        chan struct{}
+	bucketReadyCounts  []int
+	bucketSpaceWaiters []chan struct{}
+	readyBuckets       chan int32
+	finalCursor        atomic.Uint32
+
+	memoryShards [shuffleMemoryShardCount]shuffleMemoryShard
+	current      atomic.Int64
+	peak         atomic.Int64
+}
+
+func NewShufflePool(bucketNum int32, maxHolders int32, drainAll bool) *ShufflePool {
+	allBuckets := drainAll
+	readyLimit := max(2, int(maxHolders)*2)
+	batchPoolShards := max(1, int(maxHolders))
+	sp := &ShufflePool{
+		bucketNum:          bucketNum,
+		maxHolders:         maxHolders,
+		drainAll:           allBuckets,
+		batchSets:          make([]*batch.BatchSet, bucketNum),
+		batchLocks:         make([]sync.Mutex, bucketNum),
+		closed:             make([]bool, bucketNum),
+		batchWaiters:       make([]chan bool, bucketNum),
+		endingWaiters:      make([]chan bool, bucketNum),
+		batchPools:         make([]shuffleBatchPoolShard, batchPoolShards),
+		anyBatchWaiter:     make(chan struct{}, 1),
+		endingWaiter:       make(chan struct{}),
+		readyLimit:         readyLimit,
+		spaceWaiter:        make(chan struct{}),
+		bucketReadyCounts:  make([]int, bucketNum),
+		bucketSpaceWaiters: make([]chan struct{}, bucketNum),
+		producers:          make(map[int32]context.CancelCauseFunc),
+	}
+	if allBuckets {
+		sp.readyBuckets = make(chan int32, readyLimit)
+	}
 	for i := range sp.batchSets {
 		sp.batchSets[i] = batch.NewBatchSet(objectio.BlockMaxRows)
+		sp.batchWaiters[i] = make(chan bool, 1)
+		sp.endingWaiters[i] = make(chan bool, 1)
+		sp.bucketSpaceWaiters[i] = make(chan struct{})
 	}
-	sp.locks = make([]sync.Mutex, bucketNum)
-	sp.fullBatchIdx = make([]int, 0, bucketNum)
 	return sp
 }
 
-func (sp *ShufflePool) Hold() {
-	sp.lock.Lock()
-	defer sp.lock.Unlock()
+func (sp *ShufflePool) hold() bool {
+	sp.holderLock.Lock()
+	defer sp.holderLock.Unlock()
+	if sp.aborted || sp.cleaned {
+		return false
+	}
 	sp.holders++
 	if sp.holders > sp.maxHolders {
 		panic("shuffle pool too many holders!")
 	}
+	return true
 }
 
-func (sp *ShufflePool) Ending() bool {
-	sp.lock.Lock()
-	defer sp.lock.Unlock()
-	sp.finished++
-	if sp.finished > sp.maxHolders || sp.finished > sp.holders {
-		panic("shuffle pool too many finished!")
+func (sp *ShufflePool) stopWriting() {
+	sp.holderLock.Lock()
+	defer sp.holderLock.Unlock()
+	sp.stoppers++
+	if sp.stoppers > sp.holders || sp.stoppers > sp.maxHolders {
+		panic("shuffle pool too many stoppers!")
 	}
-	return sp.finished == sp.maxHolders
-}
-
-func (sp *ShufflePool) Reset(m *mpool.MPool, force bool) {
-	sp.lock.Lock()
-	defer sp.lock.Unlock()
-	if force {
-		logutil.Warnf("shuffle pool force reset, maxHolders %v, holders %v, finished %v", sp.maxHolders, sp.holders, sp.finished)
-		return
-	}
-	if sp.maxHolders != sp.holders || sp.maxHolders != sp.finished {
-		logutil.Errorf("shuffle pool reset with invalid state! maxHolders %v, holders %v, finished %v", sp.maxHolders, sp.holders, sp.finished)
-		panic("shuffle pool reset with invalid state! ")
-	}
-	for i := range sp.batchSets {
-		if sp.batchSets[i] != nil {
-			sp.batchSets[i].Clean(m)
-		}
-	}
-	sp.fullBatchIdx = sp.fullBatchIdx[:0]
-	sp.holders = 0
-	sp.finished = 0
-}
-
-func (sp *ShufflePool) Size() int64 {
-	var sz int64
-	for i := range sp.batchSets {
-		sp.locks[i].Lock()
-		bs := sp.batchSets[i]
-		if bs != nil {
-			for j := 0; j < bs.Length(); j++ {
-				if b := bs.Get(j); b != nil {
-					sz += int64(b.Allocated())
-				}
+	if sp.stoppers == sp.maxHolders {
+		for i := range sp.endingWaiters {
+			select {
+			case sp.endingWaiters[i] <- true:
+			default:
 			}
 		}
-		sp.locks[i].Unlock()
+		sp.signalEndLocked()
 	}
-	return sz
 }
 
-func (sp *ShufflePool) Print() { // only for debug
-	sp.lock.Lock()
-	defer sp.lock.Unlock()
-	logutil.Warnf("shuffle pool print, maxHolders %v, holders %v, finished %v", sp.maxHolders, sp.holders, sp.finished)
+func (sp *ShufflePool) terminalError() error {
+	sp.holderLock.Lock()
+	defer sp.holderLock.Unlock()
+	return sp.abortErr
+}
+
+func (sp *ShufflePool) registerProducer(bucket int32, cancel context.CancelCauseFunc) {
+	sp.holderLock.Lock()
+	sp.producers[bucket] = cancel
+	allConsumersClosed := sp.consumers == sp.maxHolders
+	sp.holderLock.Unlock()
+	if allConsumersClosed {
+		cancel(nil)
+	}
+}
+
+func (sp *ShufflePool) allStop() bool {
+	sp.holderLock.Lock()
+	defer sp.holderLock.Unlock()
+	return sp.aborted || sp.stoppers == sp.maxHolders
+}
+
+// release returns the pool peak only to the holder that owns final cleanup.
+func (sp *ShufflePool) release(m *mpool.MPool, failed bool) (int64, bool) {
+	sp.holderLock.Lock()
+	defer sp.holderLock.Unlock()
+	if failed {
+		sp.abortLocked(nil)
+	}
+	sp.finished++
+	if sp.finished > sp.holders {
+		panic("shuffle pool too many finished holders!")
+	}
+	if sp.finished != sp.holders || (!sp.aborted && sp.holders != sp.maxHolders) {
+		return 0, false
+	}
+	peak := sp.memoryPeak()
+	sp.cleanupLocked(m)
+	return peak, true
+}
+
+func (sp *ShufflePool) abort(m *mpool.MPool) {
+	sp.abortWithError(m, nil)
+}
+
+func (sp *ShufflePool) abortWithError(m *mpool.MPool, err error) {
+	sp.holderLock.Lock()
+	defer sp.holderLock.Unlock()
+	sp.abortLocked(err)
+	if sp.finished == sp.holders {
+		sp.cleanupLocked(m)
+	}
+}
+
+func (sp *ShufflePool) abortLocked(err error) {
+	if sp.abortErr == nil && err != nil {
+		sp.abortErr = err
+	}
+	if sp.aborted {
+		return
+	}
+	sp.aborted = true
+	for i := range sp.endingWaiters {
+		select {
+		case sp.endingWaiters[i] <- true:
+		default:
+		}
+	}
+	sp.signalEndLocked()
+}
+
+func (sp *ShufflePool) signalEndLocked() {
+	sp.endingOnce.Do(func() { close(sp.endingWaiter) })
+}
+
+func (sp *ShufflePool) cleanupLocked(m *mpool.MPool) {
+	if sp.cleaned {
+		return
+	}
+	sp.cleaned = true
 	for i := range sp.batchSets {
-		bat := sp.batchSets[i]
-		if bat == nil {
-			logutil.Infof("shuffle pool %p batches[%v] is nil", sp, i)
-		} else {
-			logutil.Infof("shuffle pool %p batches[%v] rowcnt %v", sp, i, bat.RowCount())
+		if !sp.aborted && sp.batchSets[i].RowCount() > 0 {
+			logutil.Warnf("shuffle pool reset, batch %v rowcnt %v, maybe something wrong!", i, sp.batchSets[i].RowCount())
+		}
+		for j := 0; j < sp.batchSets[i].Length(); j++ {
+			sp.forgetBatch(sp.batchSets[i].Get(j))
+		}
+		sp.batchSets[i].Clean(m)
+	}
+	sp.cleanBatchPool(m)
+}
+
+// closeConsumer permanently closes one fixed-bucket destination for this
+// generation. Producers skip subsequent rows for the bucket because its
+// downstream pipeline has declared that it needs no more input.
+func (sp *ShufflePool) closeConsumer(bucket int32, m *mpool.MPool) {
+	if sp.drainAll || bucket < 0 || bucket >= sp.bucketNum {
+		return
+	}
+
+	sp.batchLocks[bucket].Lock()
+	if sp.closed[bucket] {
+		sp.batchLocks[bucket].Unlock()
+		return
+	}
+	sp.closed[bucket] = true
+	ready := sp.batchSets[bucket].ReadyCount()
+	for i := 0; i < sp.batchSets[bucket].Length(); i++ {
+		sp.forgetBatch(sp.batchSets[bucket].Get(i))
+	}
+	sp.batchSets[bucket].Clean(m)
+	sp.batchSets[bucket] = batch.NewBatchSet(objectio.BlockMaxRows)
+	sp.batchLocks[bucket].Unlock()
+
+	if ready > 0 {
+		sp.releaseReady(bucket, ready)
+	}
+	select {
+	case sp.batchWaiters[bucket] <- true:
+	default:
+	}
+	select {
+	case sp.endingWaiters[bucket] <- true:
+	default:
+	}
+
+	sp.holderLock.Lock()
+	sp.consumers++
+	if sp.consumers > sp.maxHolders {
+		sp.holderLock.Unlock()
+		panic("shuffle pool too many closed consumers!")
+	}
+	var cancels []context.CancelCauseFunc
+	if sp.consumers == sp.maxHolders {
+		cancels = make([]context.CancelCauseFunc, 0, len(sp.producers))
+		for _, cancel := range sp.producers {
+			cancels = append(cancels, cancel)
+		}
+	}
+	sp.holderLock.Unlock()
+	for _, cancel := range cancels {
+		cancel(nil)
+	}
+}
+
+func (sp *ShufflePool) cleanBatchPool(m *mpool.MPool) {
+	for i := range sp.batchPools {
+		shard := &sp.batchPools[i]
+		shard.Lock()
+		pool := shard.batches
+		count := shard.count
+		clear(shard.batches[:count])
+		shard.count = 0
+		shard.Unlock()
+		for _, bat := range pool[:count] {
+			sp.forgetBatch(bat)
+			bat.Clean(m)
 		}
 	}
 }
 
-// shuffle operator is ending, release buf and sending remaining batches
-func (sp *ShufflePool) GetEndingBatch(proc *process.Process) *batch.Batch {
-	sp.lock.Lock()
-	defer sp.lock.Unlock()
-	if sp.finished < sp.maxHolders {
+func (sp *ShufflePool) putBatchToPool(buf *batch.Batch, m *mpool.MPool) {
+	sp.syncBatch(buf)
+	shard := sp.batchPoolShard(buf.ShuffleIDX)
+	shard.Lock()
+	if shard.count < len(shard.batches) {
+		shard.batches[shard.count] = buf
+		shard.count++
+		shard.Unlock()
+		return
+	}
+	shard.Unlock()
+	sp.forgetBatch(buf)
+	buf.Clean(m)
+}
+
+func (sp *ShufflePool) getBatchFromPool(bucket int32) *batch.Batch {
+	shard := sp.batchPoolShard(bucket)
+	shard.Lock()
+	if shard.count == 0 {
+		shard.Unlock()
 		return nil
 	}
-	for i := range sp.batchSets {
-		bat := sp.batchSets[i].Pop()
-		if bat != nil {
-			bat.ShuffleIDX = int32(i)
+	shard.count--
+	buf := shard.batches[shard.count]
+	shard.batches[shard.count] = nil
+	shard.Unlock()
+	return buf
+}
+
+func (sp *ShufflePool) batchPoolLength() int {
+	length := 0
+	for i := range sp.batchPools {
+		shard := &sp.batchPools[i]
+		shard.Lock()
+		length += shard.count
+		shard.Unlock()
+	}
+	return length
+}
+
+func (sp *ShufflePool) batchPoolShard(bucket int32) *shuffleBatchPoolShard {
+	if bucket < 0 {
+		bucket = 0
+	}
+	return &sp.batchPools[int(bucket)%len(sp.batchPools)]
+}
+
+func (sp *ShufflePool) discardBatch(buf *batch.Batch, m *mpool.MPool) {
+	if buf == nil {
+		return
+	}
+	sp.forgetBatch(buf)
+	buf.Clean(m)
+}
+
+func (sp *ShufflePool) syncBatch(buf *batch.Batch) {
+	shard := sp.memoryShard(buf)
+	shard.Lock()
+	allocated := int64(buf.Allocated())
+	if shard.tracked == nil {
+		shard.tracked = make(map[*batch.Batch]int64)
+	}
+	previous := shard.tracked[buf]
+	shard.tracked[buf] = allocated
+	shard.Unlock()
+	sp.addMemory(allocated - previous)
+}
+
+func (sp *ShufflePool) syncBatchSetFrom(bs *batch.BatchSet, start int) {
+	for i := start; i < bs.Length(); i++ {
+		sp.syncBatch(bs.Get(i))
+	}
+}
+
+func (sp *ShufflePool) forgetBatch(buf *batch.Batch) {
+	shard := sp.memoryShard(buf)
+	shard.Lock()
+	allocated, ok := shard.tracked[buf]
+	if ok {
+		delete(shard.tracked, buf)
+	}
+	shard.Unlock()
+	if ok {
+		sp.current.Add(-allocated)
+	}
+}
+
+func (sp *ShufflePool) memoryShard(buf *batch.Batch) *shuffleMemoryShard {
+	idx := (uintptr(unsafe.Pointer(buf)) >> 6) & (shuffleMemoryShardCount - 1)
+	return &sp.memoryShards[idx]
+}
+
+func (sp *ShufflePool) addMemory(delta int64) {
+	if delta == 0 {
+		return
+	}
+	current := sp.current.Add(delta)
+	for {
+		peak := sp.peak.Load()
+		if current <= peak || sp.peak.CompareAndSwap(peak, current) {
+			return
+		}
+	}
+}
+
+func (sp *ShufflePool) memoryPeak() int64 {
+	return sp.peak.Load()
+}
+
+func (sp *ShufflePool) reserveReady(bucket int32, count int) (<-chan struct{}, bool) {
+	if count == 0 {
+		return nil, true
+	}
+	sp.readyLock.Lock()
+	defer sp.readyLock.Unlock()
+	if !sp.drainAll {
+		// A fixed-bucket holder can only release batches from its own bucket.
+		// Bound each bucket independently so a hot bucket cannot consume the
+		// credits needed to publish work for every other holder.
+		const fixedBucketReadyLimit = 2
+		if sp.bucketReadyCounts[bucket]+count > fixedBucketReadyLimit {
+			return sp.bucketSpaceWaiters[bucket], false
+		}
+		sp.bucketReadyCounts[bucket] += count
+		sp.readyCount += count
+		return nil, true
+	}
+	if sp.readyCount+count > sp.readyLimit {
+		return sp.spaceWaiter, false
+	}
+	sp.readyCount += count
+	return nil, true
+}
+
+func (sp *ShufflePool) releaseReady(bucket int32, count int) {
+	if count == 0 {
+		return
+	}
+	sp.readyLock.Lock()
+	sp.readyCount -= count
+	if sp.readyCount < 0 {
+		sp.readyLock.Unlock()
+		panic("shuffle pool negative ready batch count")
+	}
+	if sp.drainAll {
+		close(sp.spaceWaiter)
+		sp.spaceWaiter = make(chan struct{})
+	} else {
+		sp.bucketReadyCounts[bucket] -= count
+		if sp.bucketReadyCounts[bucket] < 0 {
+			sp.readyLock.Unlock()
+			panic("shuffle pool negative bucket ready batch count")
+		}
+		close(sp.bucketSpaceWaiters[bucket])
+		sp.bucketSpaceWaiters[bucket] = make(chan struct{})
+	}
+	sp.readyLock.Unlock()
+}
+
+func (sp *ShufflePool) publishReady(bucket int32, count int) {
+	if count == 0 {
+		return
+	}
+	if sp.drainAll {
+		for range count {
+			sp.readyBuckets <- bucket
+			sp.notifyAnyBatch()
+		}
+		return
+	}
+	select {
+	case sp.batchWaiters[bucket] <- true:
+	default:
+	}
+}
+
+func (sp *ShufflePool) getFullBatch(shuffleIDX int32) *batch.Batch {
+	sp.batchLocks[shuffleIDX].Lock()
+	var bat *batch.Batch
+	if !sp.closed[shuffleIDX] && sp.batchSets[shuffleIDX].ReadyCount() > 0 {
+		bat = sp.batchSets[shuffleIDX].PopFront()
+		bat.ShuffleIDX = shuffleIDX
+	}
+	sp.batchLocks[shuffleIDX].Unlock()
+	if bat != nil {
+		sp.releaseReady(shuffleIDX, 1)
+	}
+	return bat
+}
+
+func (sp *ShufflePool) getAnyFullBatch() *batch.Batch {
+	if !sp.drainAll {
+		return nil
+	}
+	select {
+	case bucket := <-sp.readyBuckets:
+		select {
+		case <-sp.anyBatchWaiter:
+		default:
+		}
+		bat := sp.popReadyBatch(bucket)
+		if len(sp.readyBuckets) > 0 {
+			sp.notifyAnyBatch()
+		}
+		return bat
+	default:
+		return nil
+	}
+}
+
+func (sp *ShufflePool) popReadyBatch(bucket int32) *batch.Batch {
+	sp.batchLocks[bucket].Lock()
+	bat := sp.batchSets[bucket].PopFront()
+	if bat != nil {
+		bat.ShuffleIDX = bucket
+	}
+	sp.batchLocks[bucket].Unlock()
+	if bat == nil {
+		panic("shuffle pool ready queue is inconsistent")
+	}
+	sp.releaseReady(bucket, 1)
+	return bat
+}
+
+func (sp *ShufflePool) getLastBatch(shuffleIDX int32) *batch.Batch {
+	sp.batchLocks[shuffleIDX].Lock()
+	defer sp.batchLocks[shuffleIDX].Unlock()
+	if sp.closed[shuffleIDX] {
+		return nil
+	}
+	bat := sp.batchSets[shuffleIDX].Pop()
+	if bat != nil {
+		bat.ShuffleIDX = shuffleIDX
+	}
+	return bat
+}
+
+// getLastPartialBatch claims only a non-ready tail. Full batches remain owned
+// by their ready queue tokens, including tokens already claimed by a consumer.
+func (sp *ShufflePool) getLastPartialBatch(shuffleIDX int32) *batch.Batch {
+	sp.batchLocks[shuffleIDX].Lock()
+	defer sp.batchLocks[shuffleIDX].Unlock()
+	bs := sp.batchSets[shuffleIDX]
+	if bs.Length() == bs.ReadyCount() {
+		return nil
+	}
+	bat := bs.Pop()
+	bat.ShuffleIDX = shuffleIDX
+	return bat
+}
+
+func (sp *ShufflePool) getAnyLastBatch() *batch.Batch {
+	for {
+		idx := sp.finalCursor.Add(1) - 1
+		if idx >= uint32(sp.bucketNum) {
+			return nil
+		}
+		if bat := sp.getLastPartialBatch(int32(idx)); bat != nil {
 			return bat
 		}
 	}
-	return nil
 }
 
-// if there is full batch (>8192 rows) in pool, return it and put buf in the place to continue writing into pool
-func (sp *ShufflePool) GetFullBatch(proc *process.Process) *batch.Batch {
-	sp.lock.Lock()
-	defer sp.lock.Unlock()
-
-	length := len(sp.fullBatchIdx)
-	if length == 0 {
-		return nil
+func (sp *ShufflePool) waitAnyBatchOrEnd(proc *process.Process) {
+	select {
+	case <-sp.endingWaiter:
+	case <-proc.Ctx.Done():
+	case <-sp.anyBatchWaiter:
 	}
-	fullIdx := sp.fullBatchIdx[length-1]
-	sp.fullBatchIdx = sp.fullBatchIdx[:length-1]
-	sp.locks[fullIdx].Lock()
-	defer sp.locks[fullIdx].Unlock()
-
-	var bat *batch.Batch
-	if sp.batchSets[fullIdx].Length() > 1 {
-		bat = sp.batchSets[fullIdx].PopFront()
-		if bat != nil {
-			bat.ShuffleIDX = int32(fullIdx)
-		}
-	}
-	return bat
-
 }
 
-func (sp *ShufflePool) putBatchIntoShuffledPoolsBySels(srcBatch *batch.Batch, sels [][]int32, proc *process.Process) error {
-	var err error
-	for i := range sp.batchSets {
-		currentSels := sels[i]
-		if len(currentSels) > 0 {
-			sp.locks[i].Lock()
+func (sp *ShufflePool) notifyAnyBatch() {
+	select {
+	case sp.anyBatchWaiter <- struct{}{}:
+	default:
+	}
+}
 
-			_, err = sp.batchSets[i].Union(proc.Mp(), srcBatch, currentSels, nil)
-			if err != nil {
-				sp.locks[i].Unlock()
-				return err
+// tryWrite writes selections starting at bucket/offset. It never mutates the
+// blocked chunk, so the operator can safely retain and resume the child batch.
+func (sp *ShufflePool) tryWrite(
+	srcBatch *batch.Batch,
+	sels [][]int32,
+	startBucket int,
+	startOffset int,
+	proc *process.Process,
+) (nextBucket int, nextOffset int, wait <-chan struct{}, done bool, err error) {
+	for bucket := startBucket; bucket < len(sp.batchSets); bucket++ {
+		offset := 0
+		if bucket == startBucket {
+			offset = startOffset
+		}
+		current := sels[bucket]
+		for offset < len(current) {
+			end := min(offset+objectio.BlockMaxRows, len(current))
+			chunk := current[offset:end]
+			sp.batchLocks[bucket].Lock()
+			if sp.closed[bucket] {
+				sp.batchLocks[bucket].Unlock()
+				break
+			}
+			readyDelta := sp.batchSets[bucket].ReadyDeltaFor(srcBatch, len(chunk))
+			wait, ok := sp.reserveReady(int32(bucket), readyDelta)
+			if !ok {
+				sp.batchLocks[bucket].Unlock()
+				return bucket, offset, wait, false, nil
 			}
 
-			if sp.batchSets[i].Length() > 1 {
-				if sp.lock.TryLock() {
-					found := false
-					for _, j := range sp.fullBatchIdx {
-						if i == j {
-							//already in full batch index
-							found = true
-							break
-						}
-					}
-					if !found {
-						sp.fullBatchIdx = append(sp.fullBatchIdx, i)
-					}
-					sp.lock.Unlock()
-				}
+			batchSet := sp.batchSets[bucket]
+			oldReady := batchSet.ReadyCount()
+			oldLength := batchSet.Length()
+			buf := sp.getBatchFromPool(int32(bucket))
+			consumed, writeErr := batchSet.Union(proc.Mp(), srcBatch, chunk, buf)
+			if !consumed && buf != nil {
+				sp.putBatchToPool(buf, proc.Mp())
 			}
-			sp.locks[i].Unlock()
+			// Union can only grow the previous writable tail and append new
+			// batches. Full batches before that tail are immutable, so avoid
+			// rescanning the entire bucket after every chunk.
+			sp.syncBatchSetFrom(batchSet, max(0, oldLength-1))
+			actualDelta := batchSet.ReadyCount() - oldReady
+			if actualDelta < readyDelta {
+				sp.releaseReady(int32(bucket), readyDelta-actualDelta)
+			}
+			sp.batchLocks[bucket].Unlock()
+			sp.publishReady(int32(bucket), actualDelta)
+			if writeErr != nil {
+				return bucket, offset, nil, false, writeErr
+			}
+			offset = end
 		}
 	}
-	return nil
+	return len(sp.batchSets), 0, nil, true, nil
 }

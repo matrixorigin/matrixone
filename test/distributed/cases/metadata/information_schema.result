@@ -37,10 +37,20 @@ def    mo_catalog    mo_database    BASE TABLE    Tae
 def    mo_catalog    mo_feature_limit    BASE TABLE    Tae
 def    mo_catalog    mo_feature_registry    BASE TABLE    Tae
 def    mo_catalog    mo_foreign_keys    BASE TABLE    Tae
+def    mo_catalog    mo_iceberg_catalogs    BASE TABLE    Tae
+def    mo_catalog    mo_iceberg_maintenance_jobs    BASE TABLE    Tae
+def    mo_catalog    mo_iceberg_orphan_files    BASE TABLE    Tae
+def    mo_catalog    mo_iceberg_principal_map    BASE TABLE    Tae
+def    mo_catalog    mo_iceberg_publish_jobs    BASE TABLE    Tae
+def    mo_catalog    mo_iceberg_refs    BASE TABLE    Tae
+def    mo_catalog    mo_iceberg_residency_policy    BASE TABLE    Tae
+def    mo_catalog    mo_iceberg_tables    BASE TABLE    Tae
 def    mo_catalog    mo_index_update    BASE TABLE    Tae
 def    mo_catalog    mo_indexes    BASE TABLE    Tae
 def    mo_catalog    mo_iscp_log    BASE TABLE    Tae
 def    mo_catalog    mo_merge_settings    BASE TABLE    Tae
+def    mo_catalog    mo_mongodb_connections    BASE TABLE    Tae
+def    mo_catalog    mo_mongodb_tables    BASE TABLE    Tae
 def    mo_catalog    mo_mysql_compatibility_mode    BASE TABLE    Tae
 def    mo_catalog    mo_partition_metadata    BASE TABLE    Tae
 def    mo_catalog    mo_partition_tables    BASE TABLE    Tae
@@ -65,3 +75,77 @@ def    mo_catalog    mo_user    BASE TABLE    Tae
 def    mo_catalog    mo_user_defined_function    BASE TABLE    Tae
 def    mo_catalog    mo_user_grant    BASE TABLE    Tae
 def    mo_catalog    mo_version    BASE TABLE    Tae
+drop database if exists information_schema_data_type_case;
+create database information_schema_data_type_case;
+create table information_schema_data_type_case.type_probe (
+c_tiny tinyint,
+c_small smallint,
+c_int int,
+c_big bigint,
+c_tiny_unsigned tinyint unsigned,
+c_small_unsigned smallint unsigned,
+c_int_unsigned int unsigned,
+c_big_unsigned bigint unsigned,
+c_dec decimal(20, 6),
+c_float float,
+c_double double,
+c_bool bool,
+c_date date,
+c_time time,
+c_datetime datetime,
+c_timestamp timestamp,
+c_char char(8),
+c_varchar varchar(32),
+c_text text,
+c_binary binary(8),
+c_varbinary varbinary(32),
+c_blob blob,
+c_json json,
+c_enum enum('a', 'b'),
+c_set set('a', 'b')
+);
+select column_name, data_type
+from information_schema.columns
+where table_schema = 'information_schema_data_type_case'
+and table_name = 'type_probe'
+and column_name not like '__mo%'
+order by ordinal_position;
+column_name    data_type
+c_tiny    tinyint
+c_small    smallint
+c_int    int
+c_big    bigint
+c_tiny_unsigned    tinyint
+c_small_unsigned    smallint
+c_int_unsigned    int
+c_big_unsigned    bigint
+c_dec    decimal
+c_float    float
+c_double    double
+c_bool    tinyint
+c_date    date
+c_time    time
+c_datetime    datetime
+c_timestamp    timestamp
+c_char    char
+c_varchar    varchar
+c_text    text
+c_binary    binary
+c_varbinary    varbinary
+c_blob    blob
+c_json    json
+c_enum    enum
+c_set    set
+select column_name, data_type, column_type
+from information_schema.columns
+where table_schema = 'information_schema_data_type_case'
+and table_name = 'type_probe'
+and column_name in ('c_bool', 'c_tiny_unsigned', 'c_small_unsigned', 'c_int_unsigned', 'c_big_unsigned')
+order by ordinal_position;
+column_name    data_type    column_type
+c_tiny_unsigned    tinyint    TINYINT UNSIGNED(8)
+c_small_unsigned    smallint    SMALLINT UNSIGNED(16)
+c_int_unsigned    int    INT UNSIGNED(32)
+c_big_unsigned    bigint    BIGINT UNSIGNED(64)
+c_bool    tinyint    BOOL(0)
+drop database information_schema_data_type_case;

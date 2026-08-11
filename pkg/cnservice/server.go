@@ -43,6 +43,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
 	"github.com/matrixorigin/matrixone/pkg/gossip"
+	icebergapi "github.com/matrixorigin/matrixone/pkg/iceberg/api"
+	icebergcatalog "github.com/matrixorigin/matrixone/pkg/iceberg/catalog"
+	icebergmaintenance "github.com/matrixorigin/matrixone/pkg/iceberg/maintenance"
+	icebergwritecore "github.com/matrixorigin/matrixone/pkg/iceberg/write"
 	"github.com/matrixorigin/matrixone/pkg/incrservice"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
@@ -57,11 +61,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/shardservice"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/compile"
+	sqliceberg "github.com/matrixorigin/matrixone/pkg/sql/iceberg"
+	sqlmongodb "github.com/matrixorigin/matrixone/pkg/sql/mongodb"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
-	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage"
-
 	"github.com/matrixorigin/matrixone/pkg/txn/trace"
 	"github.com/matrixorigin/matrixone/pkg/udf"
 	"github.com/matrixorigin/matrixone/pkg/udf/pythonservice"
@@ -79,6 +83,7 @@ const (
 	rssCacheFamilyEvictTimeout   = 10 * time.Second
 	rssCacheAdmissionPressureTTL = 2 * time.Minute
 	rssCachePressureTargetOwner  = "cn-rss"
+	bootstrapRetryInterval       = 100 * time.Millisecond
 )
 
 var (
@@ -118,6 +123,12 @@ func NewService(
 
 	//set frontend parameters
 	cfg.Frontend.SetDefaultValues()
+	if err := cfg.Frontend.Iceberg.Validate(ctx); err != nil {
+		return nil, err
+	}
+	if err := cfg.Frontend.MongoDB.Validate(ctx); err != nil {
+		return nil, err
+	}
 	cfg.Frontend.SetMaxMessageSize(uint64(cfg.RPC.MaxMessageSize))
 
 	configKVMap, _ := dumpCnConfig(*cfg)
@@ -199,6 +210,7 @@ func NewService(
 	if err = srv.initMetadata(); err != nil {
 		return nil, err
 	}
+	srv.initTaskServiceHolder()
 
 	srv.responsePool = &sync.Pool{
 		New: func() any {
@@ -290,20 +302,124 @@ func NewService(
 	}
 	srv.pipelines.client = c
 
-	runtime.ServiceRuntime(cfg.UUID).SetGlobalVariables(runtime.PipelineClient, c)
-	runtime.ServiceRuntime(cfg.UUID).SetGlobalVariables(runtime.CNMemoryThrottler, srv.CNMemoryThrottler)
-
+	rt := runtime.ServiceRuntime(cfg.UUID)
+	rt.SetGlobalVariables("parameter-unit", pu)
+	rt.SetGlobalVariables(runtime.PipelineClient, c)
+	rt.SetGlobalVariables(runtime.CNMemoryThrottler, srv.CNMemoryThrottler)
+	if err := compile.RegisterDefaultIcebergScanPlanner(ctx, cfg.UUID, pu.SV.Iceberg); err != nil {
+		return nil, err
+	}
+	if err := srv.registerDefaultIcebergMaintenanceExecutor(ctx); err != nil {
+		return nil, err
+	}
+	// Start control-plane workers only after every schedule-command target is
+	// initialized and construction can no longer fail. In particular,
+	// task-service creation and gossip join must not race partially constructed
+	// service state or escape from a failed NewService call.
+	if err := srv.startCNStoreHeartbeat(); err != nil {
+		return nil, err
+	}
 	return srv, nil
 }
 
-func (s *service) Start() error {
-	s.initSqlWriterFactory()
+func (s *service) registerDefaultIcebergMaintenanceExecutor(ctx context.Context) error {
+	cfg, err := icebergapi.NewConfigFromParameters(ctx, s.cfg.Frontend.Iceberg)
+	if err != nil {
+		return err
+	}
+	restOptions := []icebergcatalog.RESTClientOption{
+		icebergcatalog.WithTokenProvider(compile.NewRuntimeIcebergTokenProvider(s.cfg.UUID)),
+	}
+	if compile.IcebergAllowPlainHTTPFromEnv() {
+		restOptions = append(restOptions, icebergcatalog.WithAllowPlainHTTP(true))
+	}
+	catalogFactory := icebergcatalog.NewFactory(
+		icebergcatalog.WithNativeRESTOptions(restOptions...),
+		icebergcatalog.WithAdapter(
+			icebergcatalog.AdapterIcebergGo,
+			icebergcatalog.UnsupportedAdapterFactory{Name: icebergcatalog.AdapterIcebergGo},
+		),
+	)
+	executor := sqliceberg.NewMaintenanceProcedureExecutorFromInternalSQLExecutor(
+		s.sqlExecutor,
+		sqliceberg.MaintenanceProcedureExecutorOptions{
+			Config:                    cfg,
+			Account:                   sqliceberg.AccountConfigForFeatureGate(cfg, 0),
+			CatalogFactory:            catalogFactory,
+			CommitVerifier:            icebergmaintenance.CatalogFactoryCommitVerifier{CatalogFactory: catalogFactory},
+			OrphanTTL:                 cfg.Write.OrphanTTL,
+			UseNativeRewriteManifests: true,
+			UseNativeRewriteDataFiles: true,
+			UseNativeExpireSnapshots:  true,
+		},
+	)
+	var tableCache icebergwritecore.TableCache
+	if rt := runtime.ServiceRuntime(s.cfg.UUID); rt != nil {
+		if value, ok := rt.GetGlobalVariables(icebergapi.CacheInvalidatorRuntimeKey); ok {
+			tableCache, _ = value.(icebergwritecore.TableCache)
+		}
+	}
+	cacheInvalidator := icebergwritecore.MetadataCacheInvalidator{Cache: tableCache}
+	dmlFactory := sqliceberg.NewDMLDeleteRuntimeCoordinatorFactoryFromInternalSQLExecutor(
+		s.sqlExecutor,
+		sqliceberg.DMLDeleteRuntimeCoordinatorFactoryOptions{
+			Config:           cfg,
+			Account:          sqliceberg.AccountConfigForFeatureGate(cfg, 0),
+			CatalogFactory:   catalogFactory,
+			CacheInvalidator: cacheInvalidator,
+		},
+	)
+	appendFactory := sqliceberg.NewAppendRuntimeCoordinatorFactoryFromInternalSQLExecutor(
+		s.sqlExecutor,
+		sqliceberg.AppendRuntimeCoordinatorFactoryOptions{
+			Config:           cfg,
+			Account:          sqliceberg.AccountConfigForFeatureGate(cfg, 0),
+			CatalogFactory:   catalogFactory,
+			CacheInvalidator: cacheInvalidator,
+		},
+	)
+	runtime.ServiceRuntime(s.cfg.UUID).SetGlobalVariables(
+		compile.IcebergAppendCoordinatorFactoryRuntimeKey,
+		sqliceberg.WriteRuntimeCoordinatorFactory{
+			Append: appendFactory,
+			DML:    dmlFactory,
+		},
+	)
+	runtime.ServiceRuntime(s.cfg.UUID).SetGlobalVariables(
+		frontend.IcebergMaintenanceCallExecutorRuntimeKey,
+		frontend.IcebergMaintenanceProcedureExecutor{Executor: executor},
+	)
+	return nil
+}
 
-	if err := s.queryService.Start(); err != nil {
+func (s *service) Start() (err error) {
+	s.lifecycleMu.Lock()
+	defer s.lifecycleMu.Unlock()
+	if s.lifecycle != serviceInitialized {
+		return moerr.NewInvalidStateNoCtx("CN service already started or closed")
+	}
+	s.lifecycle = serviceStarting
+	defer func() {
+		if err != nil {
+			s.lifecycle = serviceClosing
+			err = errors.Join(err, s.closeService())
+			s.lifecycle = serviceClosed
+			return
+		}
+		s.lifecycle = serviceStarted
+	}()
+
+	if err = s.bootstrap(); err != nil {
 		return err
 	}
 
-	err := s.runMoServer()
+	s.initSqlWriterFactory()
+
+	if err = s.queryService.Start(); err != nil {
+		return err
+	}
+
+	err = s.runMoServer()
 	if err != nil {
 		return err
 	}
@@ -318,47 +434,163 @@ func (s *service) Start() error {
 }
 
 func (s *service) Close() error {
-	defer logutil.LogClose(s.logger, "cnservice")()
+	s.lifecycleMu.Lock()
+	defer s.lifecycleMu.Unlock()
+	if s.lifecycle != serviceClosed {
+		s.lifecycle = serviceClosing
+	}
+	err := s.closeService()
+	s.lifecycle = serviceClosed
+	return err
+}
 
-	s.stopper.Stop()
-	if err := s.bootstrapService.Close(); err != nil {
-		return err
-	}
-	if err := s.stopFrontend(); err != nil {
-		return err
-	}
-	if err := s.stopTask(); err != nil {
-		return err
-	}
-	if err := s.stopRPCs(); err != nil {
-		return err
-	}
-	// stop I/O pipeline
-	ioutil.Stop(s.cfg.UUID)
+func (s *service) closeService() error {
+	s.closeOnce.Do(func() {
+		defer logutil.LogClose(s.logger, "cnservice")()
 
-	if s.gossipNode != nil {
-		if err := s.gossipNode.Leave(time.Second); err != nil {
-			return err
-		}
-	}
+		s.stopper.Stop()
 
-	if err := s.server.Close(); err != nil {
-		return err
+		s.closeErr = closeCNServiceSteps(
+			// Query commands can reach frontend, task, engine, lock, shard,
+			// auto-increment, and transaction state. Stop and drain this remote
+			// ingress before clearing any of those dependencies.
+			s.closeQueryService,
+			s.stopFrontend,
+			s.closeBootstrapService,
+			// Frontend shutdown stops accepting interactive work, while stopTask
+			// drains scheduled ingestion statements. Only after both producers have
+			// stopped may the MongoDB pool disconnect clients still leased by a
+			// MongoScan operator.
+			s.stopTask,
+			s.closeMongoDBRuntime,
+			s.closePipelineAdmission,
+			s.server.Close,
+			// Pipeline handlers and the auto-increment cleanup worker can issue
+			// transactions. Drain both before closing their transaction and RPC
+			// dependencies, while keeping the trace consumer alive for final events.
+			s.waitPipelineHandlers,
+			s.closeIncrService,
+			s.stopRPCs,
+			s.closeTxnTraceService,
+			func() error {
+				// stop I/O pipeline
+				ioutil.Stop(s.cfg.UUID)
+				return nil
+			},
+			func() error {
+				if s.gossipNode != nil {
+					return s.gossipNode.Leave(time.Second)
+				}
+				return nil
+			},
+			s.lockService.Close,
+			func() error {
+				if s.shardService != nil {
+					return s.shardService.Close()
+				}
+				return nil
+			},
+			func() error {
+				if s.pipelines.client != nil {
+					return s.pipelines.client.Close()
+				}
+				return nil
+			},
+		)
+	})
+	return s.closeErr
+}
+
+func (s *service) closePipelineAdmission() error {
+	s.pipelines.mu.Lock()
+	s.pipelines.closing = true
+	cancels := make([]context.CancelFunc, 0, len(s.pipelines.cancels))
+	for _, cancel := range s.pipelines.cancels {
+		cancels = append(cancels, cancel)
 	}
-	if err := s.lockService.Close(); err != nil {
-		return err
-	}
-	if s.shardService != nil {
-		if err := s.shardService.Close(); err != nil {
-			return err
-		}
-	}
-	if s.pipelines.client != nil {
-		if err := s.pipelines.client.Close(); err != nil {
-			return err
-		}
+	s.pipelines.mu.Unlock()
+	for _, cancel := range cancels {
+		cancel()
 	}
 	return nil
+}
+
+func (s *service) admitPipelineHandler(ctx context.Context) (context.Context, func(), bool) {
+	s.pipelines.mu.Lock()
+	if s.pipelines.closing {
+		s.pipelines.mu.Unlock()
+		return nil, nil, false
+	}
+	if s.pipelines.cancels == nil {
+		s.pipelines.cancels = make(map[uint64]context.CancelFunc)
+	}
+	s.pipelines.nextID++
+	id := s.pipelines.nextID
+	handlerCtx, cancel := context.WithCancel(ctx)
+	s.pipelines.cancels[id] = cancel
+	s.pipelines.wg.Add(1)
+	s.pipelines.mu.Unlock()
+
+	var once sync.Once
+	release := func() {
+		once.Do(func() {
+			cancel()
+			s.pipelines.mu.Lock()
+			delete(s.pipelines.cancels, id)
+			s.pipelines.mu.Unlock()
+			s.pipelines.wg.Done()
+		})
+	}
+	return handlerCtx, release, true
+}
+
+func (s *service) waitPipelineHandlers() error {
+	s.pipelines.wg.Wait()
+	return nil
+}
+
+func (s *service) closeBootstrapService() error {
+	if s.beforeBootstrapClose != nil {
+		s.beforeBootstrapClose()
+	}
+	s.bootstrapMu.Lock()
+	defer s.bootstrapMu.Unlock()
+	if s.bootstrapService == nil {
+		return nil
+	}
+	service := s.bootstrapService
+	s.bootstrapService = nil
+	return service.Close()
+}
+
+func (s *service) closeTxnTraceService() error {
+	if s.txnTraceService == nil {
+		return nil
+	}
+	service := s.txnTraceService
+	s.txnTraceService = nil
+	service.Close()
+	runtime.ServiceRuntime(s.cfg.UUID).CompareAndDeleteGlobalVariables(runtime.TxnTraceService, service)
+	return nil
+}
+
+func (s *service) closeIncrService() error {
+	if s.incrservice == nil {
+		return nil
+	}
+	service := s.incrservice
+	s.incrservice = nil
+	service.Close()
+	runtime.ServiceRuntime(s.cfg.UUID).CompareAndDeleteGlobalVariables(runtime.AutoIncrementService, service)
+	return nil
+}
+
+func closeCNServiceSteps(steps ...func() error) error {
+	var err error
+	for _, step := range steps {
+		err = errors.Join(err, step())
+	}
+	return err
 }
 
 // ID implements the frontend.BaseService interface.
@@ -377,7 +609,12 @@ func (s *service) SessionMgr() *queryservice.SessionManager {
 }
 
 func (s *service) CheckTenantUpgrade(_ context.Context, tenantID int64) error {
-	finalVersion := s.GetFinalVersion()
+	s.bootstrapMu.RLock()
+	defer s.bootstrapMu.RUnlock()
+	if s.bootstrapService == nil {
+		return moerr.NewInvalidStateNoCtx("bootstrap service is closed")
+	}
+	finalVersion := s.bootstrapService.GetFinalVersion()
 	tenantFetchFunc := func() (int32, string, error) {
 		return int32(tenantID), finalVersion, nil
 	}
@@ -391,6 +628,11 @@ func (s *service) CheckTenantUpgrade(_ context.Context, tenantID int64) error {
 
 // UpgradeTenant Manual command tenant upgrade entrance
 func (s *service) UpgradeTenant(ctx context.Context, tenantName string, retryCount uint32, isALLAccount bool) error {
+	s.bootstrapMu.RLock()
+	defer s.bootstrapMu.RUnlock()
+	if s.bootstrapService == nil {
+		return moerr.NewInvalidStateNoCtx("bootstrap service is closed")
+	}
 	ctx, cancel := context.WithTimeoutCause(ctx, time.Minute*120, moerr.CauseUpgradeTenant)
 	defer cancel()
 	if _, err := s.bootstrapService.UpgradeTenant(ctx, tenantName, retryCount, isALLAccount); err != nil {
@@ -400,53 +642,46 @@ func (s *service) UpgradeTenant(ctx context.Context, tenantName string, retryCou
 }
 
 func (s *service) GetFinalVersion() string {
+	s.bootstrapMu.RLock()
+	defer s.bootstrapMu.RUnlock()
+	if s.bootstrapService == nil {
+		return ""
+	}
 	return s.bootstrapService.GetFinalVersion()
 }
 
 func (s *service) stopFrontend() error {
 	defer logutil.LogClose(s.logger, "cnservice/frontend")()
 
-	if err := s.serverShutdown(true); err != nil {
-		return err
+	err := s.serverShutdown(true)
+	if s.cancelMoServerFunc != nil {
+		s.cancelMoServerFunc()
 	}
-	s.cancelMoServerFunc()
-	return nil
+	return err
 }
 
 func (s *service) stopRPCs() error {
+	var err error
 	if s._txnClient != nil {
-		if err := s._txnClient.Close(); err != nil {
-			return err
-		}
+		err = errors.Join(err, s._txnClient.Close())
 	}
 	if s._hakeeperClient != nil {
 		s.moCluster.Close()
-		if err := s._hakeeperClient.Close(); err != nil {
-			return err
-		}
+		err = errors.Join(err, s._hakeeperClient.Close())
 	}
 	if s._txnSender != nil {
-		if err := s._txnSender.Close(); err != nil {
-			return err
-		}
+		err = errors.Join(err, s._txnSender.Close())
 	}
 	if s.lockService != nil {
-		if err := s.lockService.Close(); err != nil {
-			return err
-		}
-	}
-	if s.queryService != nil {
-		if err := s.queryService.Close(); err != nil {
-			return err
-		}
+		err = errors.Join(err, s.lockService.Close())
 	}
 	if s.queryClient != nil {
-		if err := s.queryClient.Close(); err != nil {
-			return err
-		}
+		err = errors.Join(err, s.queryClient.Close())
 	}
-	s.timestampWaiter.Close()
-	return nil
+	if s.timestampWaiter != nil {
+		s.timestampWaiter.Close()
+	}
+	return err
 }
 
 func (s *service) acquireMessage() morpc.Message {
@@ -465,6 +700,26 @@ func (s *service) handleRequest(
 	value morpc.RPCMessage,
 	_ uint64,
 	cs morpc.ClientSession) error {
+	if s.pipelines.beforeAdmission != nil {
+		s.pipelines.beforeAdmission()
+	}
+	handlerCtx, release, admitted := s.admitPipelineHandler(ctx)
+	if !admitted {
+		if value.Cancel != nil {
+			value.Cancel()
+		}
+		return moerr.NewServiceUnavailableNoCtx("CN pipeline service is closing")
+	}
+	owned := true
+	cancelOwned := value.Cancel != nil
+	defer func() {
+		if owned {
+			release()
+		}
+		if cancelOwned {
+			value.Cancel()
+		}
+	}()
 
 	// the following comment is not related to my PR, but I suddenly saw this piece of code.
 	// so I wrote it, hoping it can help future developers understand what this is doing.
@@ -480,7 +735,11 @@ func (s *service) handleRequest(
 	}
 	switch msg.GetSid() {
 	case pipeline.Status_WaitingNext:
-		return handleWaitingNextMsg(ctx, req, cs)
+		transferred, err := handleWaitingNextMsg(ctx, value.Cancel, req, cs)
+		if transferred {
+			cancelOwned = false
+		}
+		return err
 	case pipeline.Status_Last:
 		if msg.IsPipelineMessage() { // only pipeline type need assemble msg now.
 			if err := handleAssemblePipeline(ctx, req, cs); err != nil {
@@ -490,13 +749,18 @@ func (s *service) handleRequest(
 	}
 
 	// start a goroutine to handle one received message.
+	owned = false
+	cancelOwned = false
 	go func() {
-		defer value.Cancel()
+		defer release()
+		if value.Cancel != nil {
+			defer value.Cancel()
+		}
 		s.pipelines.counter.Add(1)
 		defer s.pipelines.counter.Add(-1)
 
 		// there is no need to handle the return error, because the error will be logged in the function.
-		_ = s.requestHandler(ctx,
+		_ = s.requestHandler(handlerCtx,
 			s.pipelineServiceServiceAddr(),
 			req,
 			cs,
@@ -544,22 +808,12 @@ func (s *service) initEngine(
 			return err
 		}
 
-	case EngineMemory:
-		if err := s.initMemoryEngine(cancelMoServerCtx, pu); err != nil {
-			return err
-		}
-
-	case EngineNonDistributedMemory:
-		if err := s.initMemoryEngineNonDist(cancelMoServerCtx, pu); err != nil {
-			return err
-		}
-
 	default:
 		return moerr.NewInternalErrorf(ctx, "unknown engine type: %s", s.cfg.Engine.Type)
 
 	}
 
-	return s.bootstrap()
+	return nil
 }
 
 func (s *service) createMOServer(
@@ -604,9 +858,6 @@ func (s *service) getHAKeeperClient() (client logservice.CNHAKeeperClient, err e
 			ss.(*status.Server).SetHAKeeperClient(client)
 		}
 
-		if err = s.startCNStoreHeartbeat(); err != nil {
-			return
-		}
 	})
 	client = s._hakeeperClient
 	return
@@ -622,77 +873,10 @@ func (s *service) initClusterService() {
 }
 
 func (s *service) getTxnSender() (sender rpc.TxnSender, err error) {
-	// handleTemp is used to manipulate memorystorage stored for temporary table created by sessions.
-	// processing of temporary table is currently on local, so we need to add a WithLocalDispatch logic to service.
-	handleTemp := func(d metadata.TNShard) rpc.TxnRequestHandleFunc {
-		if d.Address != defines.TEMPORARY_TABLE_TN_ADDR {
-			return nil
-		}
-
-		// read, write, commit and rollback for temporary tables
-		return func(ctx context.Context, req *txn.TxnRequest, resp *txn.TxnResponse) (err error) {
-			storage, ok := ctx.Value(defines.TemporaryTN{}).(*memorystorage.Storage)
-			if !ok {
-				panic("tempStorage should never be nil")
-			}
-
-			resp.RequestID = req.RequestID
-			resp.Txn = &req.Txn
-			resp.Method = req.Method
-			resp.Flag = req.Flag
-
-			switch req.Method {
-			case txn.TxnMethod_Read:
-				res, err := storage.Read(
-					ctx,
-					req.Txn,
-					req.CNRequest.OpCode,
-					req.CNRequest.Payload,
-				)
-				if err != nil {
-					resp.TxnError = txn.WrapError(err, moerr.ErrTAERead)
-				} else {
-					payload, err := res.Read()
-					if err != nil {
-						panic(err)
-					}
-					resp.CNOpResponse = &txn.CNOpResponse{Payload: payload}
-					res.Release()
-				}
-			case txn.TxnMethod_Write:
-				payload, err := storage.Write(
-					ctx,
-					req.Txn,
-					req.CNRequest.OpCode,
-					req.CNRequest.Payload,
-				)
-				if err != nil {
-					resp.TxnError = txn.WrapError(err, moerr.ErrTAEWrite)
-				} else {
-					resp.CNOpResponse = &txn.CNOpResponse{Payload: payload}
-				}
-			case txn.TxnMethod_Commit:
-				_, err = storage.Commit(ctx, req.Txn, nil, nil)
-				if err == nil {
-					resp.Txn.Status = txn.TxnStatus_Committed
-				}
-			case txn.TxnMethod_Rollback:
-				err = storage.Rollback(ctx, req.Txn)
-				if err == nil {
-					resp.Txn.Status = txn.TxnStatus_Aborted
-				}
-			default:
-				return moerr.NewNotSupportedf(ctx, "unknown txn request method: %s", req.Method.String())
-			}
-			return err
-		}
-	}
-
 	s.initTxnSenderOnce.Do(func() {
 		sender, err = rpc.NewSender(
 			s.cfg.RPC,
 			runtime.ServiceRuntime(s.cfg.UUID),
-			rpc.WithSenderLocalDispatch(handleTemp),
 		)
 		if err != nil {
 			return
@@ -808,8 +992,13 @@ func (s *service) initLockService() {
 	cfg := s.getLockServiceConfig()
 	s.lockService = lockservice.NewLockService(
 		cfg,
-		lockservice.WithWait(func() {
-			<-s.hakeeperConnected
+		lockservice.WithWait(func(ctx context.Context) error {
+			select {
+			case <-s.hakeeperConnected:
+				return nil
+			case <-ctx.Done():
+				return ctx.Err()
+			}
 		}))
 	runtime.ServiceRuntime(s.cfg.UUID).SetGlobalVariables(runtime.LockService, s.lockService)
 	lockservice.SetLockServiceByServiceID(s.cfg.UUID, s.lockService)
@@ -881,6 +1070,8 @@ func (s *service) GetSQLExecutor() executor.SQLExecutor {
 }
 
 func (s *service) GetBootstrapService() bootstrap.Service {
+	s.bootstrapMu.RLock()
+	defer s.bootstrapMu.RUnlock()
 	return s.bootstrapService
 }
 
@@ -896,18 +1087,23 @@ func (s *service) GetClock() clock.Clock {
 }
 
 // put the waiting-next type msg into client session's cache and return directly
-func handleWaitingNextMsg(ctx context.Context, message morpc.Message, cs morpc.ClientSession) error {
+func handleWaitingNextMsg(
+	ctx context.Context,
+	cancel context.CancelFunc,
+	message morpc.Message,
+	cs morpc.ClientSession) (bool, error) {
 	msg, _ := message.(*pipeline.Message)
 	switch msg.GetCmd() {
 	case pipeline.Method_PipelineMessage:
 		var cache morpc.MessageCache
 		var err error
-		if cache, err = cs.CreateCache(ctx, message.GetID()); err != nil {
-			return err
+		cache, err = cs.CreateCacheWithCancel(ctx, message.GetID(), cancel)
+		if err != nil {
+			return false, err
 		}
-		return cache.Add(message)
+		return true, cache.Add(message)
 	default:
-		return moerr.NewInvalidInputNoCtx("only pipeline messages may be fragmented")
+		return false, moerr.NewInvalidInputNoCtx("only pipeline messages may be fragmented")
 	}
 }
 
@@ -933,7 +1129,9 @@ func handleAssemblePipeline(ctx context.Context, message morpc.Message, cs morpc
 		}
 		fragment, ok := cached.(*pipeline.Message)
 		if !ok || fragment.GetCmd() != finalMessage.GetCmd() ||
-			fragment.GetRequestedTeardownMode() != finalMessage.GetRequestedTeardownMode() {
+			fragment.GetRequestedTeardownMode() != finalMessage.GetRequestedTeardownMode() ||
+			fragment.GetRequestedBatchCreditCount() != finalMessage.GetRequestedBatchCreditCount() ||
+			fragment.GetRequestedBatchCreditBytes() != finalMessage.GetRequestedBatchCreditBytes() {
 			return moerr.NewInvalidInputNoCtx("inconsistent pipeline message fragments")
 		}
 		data = append(data, fragment.GetData()...)
@@ -955,6 +1153,69 @@ func (s *service) initInternalSQlExecutor(mp *mpool.MPool) {
 		s.pu.GetTaskService(),
 	)
 	runtime.ServiceRuntime(s.cfg.UUID).SetGlobalVariables(runtime.InternalSQLExecutor, s.sqlExecutor)
+	s.initMongoDBRuntime()
+}
+
+func (s *service) initMongoDBRuntime() {
+	parameters := s.pu.SV.MongoDB
+	allowedAccounts := make(map[uint32]struct{}, len(parameters.AllowedAccounts))
+	for _, accountID := range parameters.AllowedAccounts {
+		allowedAccounts[accountID] = struct{}{}
+	}
+	config := sqlmongodb.RuntimeConfig{
+		Enable: parameters.Enable, EnablePerAccount: parameters.EnablePerAccount,
+		AllowedAccounts: allowedAccounts, AllowLoopback: parameters.AllowLoopback,
+		AllowedHostSuffixes:    append([]string(nil), parameters.AllowedHostSuffixes...),
+		AllowedCIDRs:           append([]string(nil), parameters.AllowedCIDRs...),
+		ConnectTimeout:         parameters.ConnectTimeout.Duration,
+		ServerSelectionTimeout: parameters.ServerSelectionTimeout.Duration,
+		SocketTimeout:          parameters.SocketTimeout.Duration,
+		MaxPoolSize:            parameters.MaxPoolSize, MinPoolSize: parameters.MinPoolSize,
+		MaxConnecting: parameters.MaxConnecting, MaxCachedClients: parameters.MaxCachedClients,
+		BatchRows:     parameters.BatchRows,
+		MaxBatchBytes: parameters.MaxBatchBytes, MaxValueBytes: parameters.MaxValueBytes,
+		MaxScanRows: parameters.MaxScanRows, MaxScanBytes: parameters.MaxScanBytes,
+		MaxConversionErrors: parameters.MaxConversionErrors, MaxConversionErrorRate: parameters.MaxConversionErrorRate,
+		MaxSourceConcurrency: parameters.MaxSourceConcurrency,
+	}
+	pool := sqlmongodb.NewValidatedClientPool(
+		sqlmongodb.OfficialClientFactory{},
+		sqlmongodb.CatalogConnectionResolver{Executor: s.sqlExecutor},
+		config.MaxCachedClients,
+	)
+	retirements := sqlmongodb.NewClientRetirementQueue(
+		pool,
+		sqlmongodb.ClusterRemoteClientRetirer{Cluster: s.moCluster, QueryClient: s.queryClient},
+		sqlmongodb.DefaultClientRetirementQueueCapacity,
+	)
+	dependencies := &sqlmongodb.RuntimeDependencies{
+		Config:      config,
+		Connections: sqlmongodb.CatalogConnectionResolver{Executor: s.sqlExecutor},
+		Mappings:    sqlmongodb.CatalogMappingResolver{Executor: s.sqlExecutor},
+		Secrets:     sqlmongodb.EnvSecretResolver{},
+		Pool:        pool, Limiter: sqlmongodb.NewSourceLimiter(config.MaxSourceConcurrency),
+		Retirements: retirements,
+	}
+	runtime.ServiceRuntime(s.cfg.UUID).SetGlobalVariables(sqlmongodb.RuntimeDependenciesKey, dependencies)
+}
+
+func (s *service) closeMongoDBRuntime() error {
+	rt := runtime.ServiceRuntime(s.cfg.UUID)
+	value, ok := rt.GetGlobalVariables(sqlmongodb.RuntimeDependenciesKey)
+	if !ok {
+		return nil
+	}
+	dependencies, ok := value.(*sqlmongodb.RuntimeDependencies)
+	if !ok || dependencies == nil || dependencies.Pool == nil {
+		return nil
+	}
+	ctx, cancel := context.WithTimeoutCause(context.Background(), 10*time.Second, moerr.CauseShutdown)
+	defer cancel()
+	var err error
+	if dependencies.Retirements != nil {
+		err = dependencies.Retirements.Close(ctx)
+	}
+	return errors.Join(err, dependencies.Pool.Close(ctx))
 }
 
 func (s *service) initIncrService() {
@@ -980,21 +1241,26 @@ func (s *service) bootstrap() error {
 	s.initTxnTraceService()
 
 	rt := runtime.ServiceRuntime(s.cfg.UUID)
-	s.bootstrapService = bootstrap.NewService(
-		s.cfg.UUID,
-		&locker{hakeeperClient: s._hakeeperClient},
-		rt.Clock(),
-		s._txnClient,
-		s.sqlExecutor,
-		s.options.bootstrapOptions...,
-	)
+	s.bootstrapMu.Lock()
+	defer s.bootstrapMu.Unlock()
+	if s.bootstrapService == nil {
+		s.bootstrapService = bootstrap.NewService(
+			s.cfg.UUID,
+			&locker{hakeeperClient: s._hakeeperClient, requestID: s.cfg.UUID},
+			rt.Clock(),
+			s._txnClient,
+			s.sqlExecutor,
+			s.options.bootstrapOptions...,
+		)
+	}
 
 	ctx, cancel := context.WithTimeoutCause(context.Background(), time.Minute*5, moerr.CauseBootstrap)
 	ctx = context.WithValue(ctx, config.ParameterUnitKey, s.pu)
 	defer cancel()
 
-	// bootstrap cannot fail. We panic here to make sure the service can not start.
-	// If bootstrap failed, need clean all data to retry.
+	// Bootstrap owns retrying only the initialization phase after it has acquired
+	// the bootstrap privilege. Retrying this whole state machine can allocate a
+	// second lock ID after an uncertain allocation response.
 	if err := s.bootstrapService.Bootstrap(ctx); err != nil {
 		return handleBootstrapErr(ctx, err)
 	}
@@ -1003,6 +1269,11 @@ func (s *service) bootstrap() error {
 
 	if s.cfg.AutomaticUpgrade {
 		return s.stopper.RunTask(func(ctx context.Context) {
+			s.bootstrapMu.RLock()
+			defer s.bootstrapMu.RUnlock()
+			if s.bootstrapService == nil {
+				return
+			}
 			ctx, cancel := context.WithTimeoutCause(ctx, time.Minute*120, moerr.CauseBootstrap2)
 			defer cancel()
 			if err := s.bootstrapService.BootstrapUpgrade(ctx); err != nil {
@@ -1017,16 +1288,11 @@ func (s *service) bootstrap() error {
 	return nil
 }
 
-// handleBootstrapErr decides whether a bootstrap error should be returned
-// gracefully (for context cancellation during shutdown) or trigger a panic
-// (for real bootstrap failures).  Only context.Canceled is treated as a
-// graceful shutdown signal; DeadlineExceeded from the 5-minute bootstrap
-// timeout is a legitimate failure that should still panic.
+// handleBootstrapErr preserves the bootstrap context cause and returns the
+// failure to Start's caller. The caller owns rolling back the fully constructed
+// service before it returns the error.
 func handleBootstrapErr(ctx context.Context, err error) error {
-	if errors.Is(err, context.Canceled) {
-		return err
-	}
-	panic(moerr.AttachCause(ctx, err))
+	return moerr.AttachCause(ctx, err)
 }
 
 func (s *service) initTxnTraceService() {
@@ -1046,7 +1312,8 @@ func (s *service) initTxnTraceService() {
 	if err != nil {
 		panic(err)
 	}
-	rt.SetGlobalVariables(runtime.TxnTraceService, ts)
+	s.txnTraceService = ts
+	rt.SetGlobalVariables(runtime.TxnTraceService, s.txnTraceService)
 }
 
 // SaveProfile saves profile into etl fs
@@ -1112,12 +1379,21 @@ func SaveProfile(profilePath string, profileType string, etlFS fileservice.FileS
 
 type locker struct {
 	hakeeperClient logservice.CNHAKeeperClient
+	requestID      string
+}
+
+type idempotentKeyedIDAllocator interface {
+	AllocateIDByKeyWithRequestID(ctx context.Context, key string, batch uint64, requestID string) (uint64, error)
 }
 
 func (l *locker) Get(
 	ctx context.Context,
 	key string) (bool, error) {
-	v, err := l.hakeeperClient.AllocateIDByKeyWithBatch(ctx, key, 1)
+	allocator, ok := l.hakeeperClient.(idempotentKeyedIDAllocator)
+	if !ok {
+		return false, moerr.NewInternalError(ctx, "HAKeeper client does not support idempotent bootstrap lock allocation")
+	}
+	v, err := allocator.AllocateIDByKeyWithRequestID(ctx, key, 1, l.requestID)
 	if err != nil {
 		return false, err
 	}

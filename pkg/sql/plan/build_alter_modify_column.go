@@ -38,7 +38,8 @@ func updateNewColumnInTableDef(
 	if err != nil {
 		return false, err
 	}
-	if err = applyColumnAttributesToType(ctx, &nTy, nColSpec.Attributes); err != nil {
+	nTy.Charset = uint32(types.CharsetType(types.T(nTy.Id)))
+	if err = applyDefaultAndColumnAttributesToType(ctx, &nTy, tableDef.DefaultCharset, nColSpec.Attributes); err != nil {
 		return false, err
 	}
 
@@ -192,6 +193,13 @@ func checkChangeTypeCompatible(
 
 	oTy := types.T(origin.GetId())
 	nTy := types.T(to.GetId())
+	if nTy == types.T_json && !isSupportedDDLTargetJSONCast(oTy) {
+		return moerr.NewNotSupportedf(ctx,
+			"currently unsupport change from original type %v to %v ",
+			oTy.String(),
+			nTy.String(),
+		)
+	}
 	if supported := function.IfTypeCastSupported(oTy, nTy); !supported {
 		return moerr.NewNotSupportedf(ctx,
 			"currently unsupport change from original type %v to %v ",
@@ -200,6 +208,18 @@ func checkChangeTypeCompatible(
 		)
 	}
 	return nil
+}
+
+// DDL column rewrites intentionally keep the pre-CAST-to-JSON compatibility
+// gate. Expression CAST(... AS JSON) can admit more sources than ALTER TABLE
+// MODIFY, which still needs dedicated migration-path coverage before widening.
+func isSupportedDDLTargetJSONCast(source types.T) bool {
+	switch source {
+	case types.T_any, types.T_json, types.T_char, types.T_varchar, types.T_blob, types.T_text:
+		return true
+	default:
+		return false
+	}
 }
 
 // checkColumnForeignkeyConstraint check for table column foreign key dependencies, including

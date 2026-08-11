@@ -46,7 +46,6 @@ import (
 
 	"github.com/RoaringBitmap/roaring/v2"
 	hll "github.com/axiomhq/hyperloglog"
-	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/system"
@@ -233,7 +232,7 @@ var (
 	}
 )
 
-func NormalizeL2Array[T types.RealNumbers](parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+func NormalizeL2Array[T types.ArrayElement](parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	source := vector.GenerateFunctionStrParameter(parameters[0])
 	rs := vector.MustFunctionResult[types.Varlena](result)
 
@@ -290,11 +289,47 @@ func NormalizeL2Array[T types.RealNumbers](parameters []*vector.Vector, result v
 
 			*outArrayF64Ptr = outArrayF64
 			arrayF64Pool.Put(outArrayF64Ptr)
+		case types.T_array_bf16:
+			_ = appendNormalizedNarrowArray[types.BF16](rs, data)
+		case types.T_array_float16:
+			_ = appendNormalizedNarrowArray[types.Float16](rs, data)
+		case types.T_array_int8:
+			// A normalized vector is a unit vector, which cannot be represented in
+			// an integer element type (components round to 0/±1 and the norm is no
+			// longer 1), so int8/uint8 normalize_l2 widens the result to vecf32.
+			// The overload's retType is T_array_float32 to match (see list_builtIn).
+			_ = appendNormalizedIntArrayAsFloat32[int8](rs, data)
+		case types.T_array_uint8:
+			_ = appendNormalizedIntArrayAsFloat32[uint8](rs, data)
 		}
 
 	}
 
 	return nil
+}
+
+// appendNormalizedNarrowArray normalizes a bf16/f16 vector by upcasting to
+// float32, normalizing in float32, then narrowing back to T. bf16/f16 are
+// floating-point so they can hold a (near-)unit vector; int8/uint8 cannot and
+// use appendNormalizedIntArrayAsFloat32 instead.
+func appendNormalizedNarrowArray[T types.ArrayElement](rs *vector.FunctionResult[types.Varlena], data []byte) error {
+	in := types.ToFloat32Array[T](types.BytesToArray[T](data))
+	out := make([]float32, len(in))
+	_ = moarray.NormalizeL2(in, out)
+	return rs.AppendBytes(types.ArrayToBytes[T](types.FromFloat32Array[T](out)), false)
+}
+
+// appendNormalizedIntArrayAsFloat32 normalizes an integer-typed (int8/uint8)
+// vector and writes the result as float32. A unit vector cannot be represented
+// in an integer element type — narrowing back would round components to 0/±1 so
+// the norm is no longer 1 (e.g. normalize_l2([0,1,2,3]::vecuint8) would become
+// [0,0,1,1], whose norm is √2). Widening the result to vecf32 keeps the unit-norm
+// contract; the int8/uint8 overloads declare retType T_array_float32 to match.
+func appendNormalizedIntArrayAsFloat32[T types.ArrayElement](rs *vector.FunctionResult[types.Varlena], data []byte) error {
+	in := types.ToFloat32Array[T](types.BytesToArray[T](data))
+	out := make([]float32, len(in))
+	_ = moarray.NormalizeL2(in, out)
+	return rs.AppendBytes(types.ArrayToBytes[float32](out), false)
 }
 
 func L1NormArray[T types.RealNumbers](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
@@ -311,7 +346,7 @@ func L2NormArray[T types.RealNumbers](ivecs []*vector.Vector, result vector.Func
 	}, selectList)
 }
 
-func VectorDimsArray[T types.RealNumbers](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+func VectorDimsArray[T types.ArrayElement](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	return opUnaryBytesToFixed[int64](ivecs, result, proc, length, func(in []byte) (out int64) {
 		_in := types.BytesToArray[T](in)
 		return int64(len(_in))
@@ -634,6 +669,12 @@ func bitCountFromFloat[T constraints.Float](v T, proc *process.Process) (uint64,
 	if rounded >= ULLONG_MAX_DOUBLE {
 		return bitCountFromUint64(uint64(math.MaxUint64)), nil
 	}
+	// Converting a negative float directly to uint64 is undefined in Go (the
+	// result is implementation-specific: two's-complement on amd64, 0 on arm64),
+	// so route negatives through int64 first and reinterpret the bit pattern.
+	if rounded < 0 {
+		return bitCountFromSignedInt64Pattern(int64(rounded)), nil
+	}
 	return bitCountFromUint64(uint64(rounded)), nil
 }
 
@@ -811,9 +852,128 @@ func TimestampToDay(ivecs []*vector.Vector, result vector.FunctionResultWrapper,
 	}, selectList)
 }
 
+type dateExtractParts struct {
+	year  int32
+	month uint8
+	day   uint8
+	date  types.Date
+	valid bool
+}
+
+func parseDateExtractParts(value string) (dateExtractParts, bool) {
+	year, month, day, err := types.ParseDateCastComponents(value)
+	if err != nil {
+		return dateExtractParts{}, false
+	}
+
+	parts := dateExtractParts{year: year, month: month, day: day}
+	if types.ValidDate(year, month, day) {
+		parts.date = types.DateFromCalendar(year, month, day)
+		parts.valid = true
+		return parts, true
+	}
+	if types.ValidCalendarDate(year, month, day) {
+		parts.valid = true
+		return parts, true
+	}
+
+	// Preserve invalid-date behavior while allowing MySQL's incomplete dates.
+	if year > types.MaxDateYear || month > types.MaxMonthInYear || day > 31 ||
+		(year != 0 && month != 0 && day != 0) {
+		return dateExtractParts{}, false
+	}
+	if month != 0 && day != 0 {
+		if !types.ValidCalendarDate(year, month, day) {
+			return dateExtractParts{}, false
+		}
+	}
+	return parts, true
+}
+
+func dateStringToFixedWithNullOnError[T types.FixedSizeTExceptStrType](ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList, fn func(dateExtractParts) (T, bool)) error {
+	source := vector.GenerateFunctionStrParameter(ivecs[0])
+	rs := vector.MustFunctionResult[T](result)
+	for i := uint64(0); i < uint64(length); i++ {
+		if selectList != nil && (selectList.IgnoreAllRow() ||
+			(!selectList.ShouldEvalAllRow() && selectList.Contains(i))) {
+			if err := rs.Append(*new(T), true); err != nil {
+				return err
+			}
+			continue
+		}
+		value, null := source.GetStrValue(i)
+		if null {
+			if err := rs.Append(*new(T), true); err != nil {
+				return err
+			}
+			continue
+		}
+		parts, ok := parseDateExtractParts(functionUtil.QuickBytesToStr(value))
+		if !ok {
+			if err := rs.Append(*new(T), true); err != nil {
+				return err
+			}
+			continue
+		}
+		valueToAppend, valid := fn(parts)
+		if err := rs.Append(valueToAppend, !valid); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func dateStringToStringWithNullOnError(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList, fn func(dateExtractParts) (string, bool)) error {
+	source := vector.GenerateFunctionStrParameter(ivecs[0])
+	rs := vector.MustFunctionResult[types.Varlena](result)
+	for i := uint64(0); i < uint64(length); i++ {
+		if selectList != nil && (selectList.IgnoreAllRow() ||
+			(!selectList.ShouldEvalAllRow() && selectList.Contains(i))) {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+		value, null := source.GetStrValue(i)
+		if null {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+		parts, ok := parseDateExtractParts(functionUtil.QuickBytesToStr(value))
+		if !ok {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+		name, valid := fn(parts)
+		if !valid {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+		if err := rs.AppendBytes(functionUtil.QuickStrToBytes(name), false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func DateStringToDay(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return dateStringToFixedWithNullOnError(ivecs, result, proc, length, selectList, func(parts dateExtractParts) (uint8, bool) {
+		return parts.day, true
+	})
+}
+
 func DayOfYear(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return opUnaryFixedToFixed[types.Date, uint16](ivecs, result, proc, length, func(v types.Date) uint16 {
-		return v.DayOfYear()
+	return opUnaryFixedToFixedWithNullOnError[types.Date, uint16](ivecs, result, proc, length, func(v types.Date) (uint16, error) {
+		if v == types.ZeroDate {
+			return 0, moerr.NewInvalidInputNoCtx("zero date")
+		}
+		return v.DayOfYear(), nil
 	}, selectList)
 }
 
@@ -934,13 +1094,15 @@ func StAsWKB(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *
 // StAsGeoJSON renders a geometry as an RFC 7946 GeoJSON geometry object
 // (full coordinate precision).
 func StAsGeoJSON(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return opUnaryBytesToBytesWithErrorCheck(ivecs, result, proc, length, func(v []byte) ([]byte, error) {
-		g, err := decodeGeoGeometry(v)
-		if err != nil {
-			return nil, err
-		}
-		return functionUtil.QuickStrToBytes(geo.WriteGeoJSON(g, -1)), nil
-	}, selectList)
+	return opUnaryBytesToBytesWithErrorCheck(ivecs, result, proc, length, geometryToGeoJSONBytes, selectList)
+}
+
+func geometryToGeoJSONBytes(payload []byte) ([]byte, error) {
+	g, err := decodeGeoGeometry(payload)
+	if err != nil {
+		return nil, err
+	}
+	return functionUtil.QuickStrToBytes(geo.WriteGeoJSON(g, -1)), nil
 }
 
 // StGeomFromGeoJSON builds a geometry from a GeoJSON geometry object. Per
@@ -4141,94 +4303,179 @@ func ReadFromFileOffsetSize(Filepath string, fs fileservice.FileService, offset,
 	return r, nil
 }
 
+func readLoadFileContents(filePath string, proc *process.Process) ([]byte, error) {
+	r, err := ReadFromFile(filePath, proc.GetFileService())
+	if err != nil {
+		return nil, err
+	}
+	contents, readErr := io.ReadAll(io.LimitReader(r, int64(types.MaxBlobLen)+1))
+	closeErr := r.Close()
+	if readErr != nil {
+		return nil, readErr
+	}
+	if closeErr != nil {
+		return nil, closeErr
+	}
+	if len(contents) > types.MaxBlobLen {
+		return nil, moerr.NewInternalError(proc.Ctx, "Data too long for blob")
+	}
+	return contents, nil
+}
+
 // Too confused.
 func LoadFile(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	rs := vector.MustFunctionResult[types.Varlena](result)
+	if length == 0 {
+		return nil
+	}
+	if selectList.IgnoreAllRow() {
+		rs.SetNullResult(uint64(length))
+		return nil
+	}
+
 	ivec := vector.GenerateFunctionStrParameter(ivecs[0])
-	Filepath, null := ivec.GetStrValue(0)
-	if null {
-		if err := rs.AppendBytes(nil, true); err != nil {
+
+	if ivecs[0].IsConst() {
+		filePath, isNull := ivec.GetStrValue(0)
+		if isNull {
+			rs.SetNullResult(uint64(length))
+			return nil
+		}
+		contents, err := readLoadFileContents(string(filePath), proc)
+		if err != nil {
 			return err
 		}
-		return nil
-	}
-	fs := proc.GetFileService()
-	r, err := ReadFromFile(string(Filepath), fs)
-	if err != nil {
-		return err
-	}
-	defer r.Close()
-	ctx, err := io.ReadAll(r)
-	if err != nil {
-		return err
-	}
-
-	if len(ctx) > types.MaxBlobLen /*blob size*/ {
-		return moerr.NewInternalError(proc.Ctx, "Data too long for blob")
-	}
-	if len(ctx) == 0 {
-		if err = rs.AppendBytes(nil, true); err != nil {
-			return err
+		if len(contents) == 0 {
+			rs.SetNullResult(uint64(length))
+			return nil
 		}
-		return nil
+		return appendRepeatedBytesResultWithSelection(rs, contents, length, selectList)
 	}
-
-	if err = rs.AppendBytes(ctx, false); err != nil {
-		return err
-	}
-	return nil
-}
-
-// LoadFileDatalink reads a file from the file service and returns the content as a blob.
-func LoadFileDatalink(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	rs := vector.MustFunctionResult[types.Varlena](result)
-	filePathVec := vector.GenerateFunctionStrParameter(ivecs[0])
 
 	for i := uint64(0); i < uint64(length); i++ {
-		_filePath, null1 := filePathVec.GetStrValue(i)
-		if null1 {
+		if selectList.Contains(i) {
 			if err := rs.AppendBytes(nil, true); err != nil {
 				return err
 			}
 			continue
 		}
-		filePath := util.UnsafeBytesToString(_filePath)
-
-		dl, err := datalink.NewDatalink(filePath, proc)
+		filePath, isNull := ivec.GetStrValue(i)
+		if isNull {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+		contents, err := readLoadFileContents(string(filePath), proc)
 		if err != nil {
 			return err
 		}
-		size := dl.Size
-		if size < 0 {
-			etlFS, readPath, err := fileservice.GetForETL(proc.Ctx, proc.GetFileService(), dl.MoPath)
-			if err != nil {
-				return err
-			}
-			entry, err := etlFS.StatFile(proc.Ctx, readPath)
-			if err != nil {
-				return err
-			}
-			if dl.Offset > entry.Size {
-				return moerr.NewInternalError(proc.Ctx, "offset exceeds file size")
-			}
-			size = entry.Size - dl.Offset
+		if len(contents) == 0 {
+			err = rs.AppendBytes(nil, true)
+		} else {
+			err = rs.AppendBytes(contents, false)
 		}
-		if size > int64(types.MaxBlobLen) {
-			return moerr.NewInternalError(proc.Ctx, "Data too long for blob")
-		}
-		fileBytes, err := dl.GetBytes(proc)
 		if err != nil {
 			return err
 		}
+	}
+	return nil
+}
 
-		if len(fileBytes) == 0 {
-			if err = rs.AppendBytes(nil, true); err != nil {
-				return err
-			}
+func readLoadFileDatalinkContents(filePath string, proc *process.Process) ([]byte, error) {
+	dl, err := datalink.NewDatalink(filePath, proc)
+	if err != nil {
+		return nil, err
+	}
+	size := dl.Size
+	if size < 0 {
+		etlFS, readPath, err := fileservice.GetForETL(proc.Ctx, proc.GetFileService(), dl.MoPath)
+		if err != nil {
+			return nil, err
+		}
+		entry, err := etlFS.StatFile(proc.Ctx, readPath)
+		if err != nil {
+			return nil, err
+		}
+		if dl.Offset > entry.Size {
+			return nil, moerr.NewInternalError(proc.Ctx, "offset exceeds file size")
+		}
+		size = entry.Size - dl.Offset
+	}
+	if size > int64(types.MaxBlobLen) {
+		return nil, moerr.NewInternalError(proc.Ctx, "Data too long for blob")
+	}
+	r, err := dl.NewReadCloser(proc)
+	if err != nil {
+		return nil, err
+	}
+	contents, readErr := io.ReadAll(io.LimitReader(r, int64(types.MaxBlobLen)+1))
+	closeErr := r.Close()
+	if readErr != nil {
+		return nil, readErr
+	}
+	if closeErr != nil {
+		return nil, closeErr
+	}
+	if len(contents) > types.MaxBlobLen {
+		return nil, moerr.NewInternalError(proc.Ctx, "Data too long for blob")
+	}
+	return contents, nil
+}
+
+// LoadFileDatalink reads a file from the file service and returns the content as a blob.
+func LoadFileDatalink(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	rs := vector.MustFunctionResult[types.Varlena](result)
+	if length == 0 {
+		return nil
+	}
+	if selectList.IgnoreAllRow() {
+		rs.SetNullResult(uint64(length))
+		return nil
+	}
+
+	filePathVec := vector.GenerateFunctionStrParameter(ivecs[0])
+	if ivecs[0].IsConst() {
+		filePath, isNull := filePathVec.GetStrValue(0)
+		if isNull {
+			rs.SetNullResult(uint64(length))
 			return nil
 		}
+		contents, err := readLoadFileDatalinkContents(util.UnsafeBytesToString(filePath), proc)
+		if err != nil {
+			return err
+		}
+		if len(contents) == 0 {
+			rs.SetNullResult(uint64(length))
+			return nil
+		}
+		return appendRepeatedBytesResultWithSelection(rs, contents, length, selectList)
+	}
 
-		if err = rs.AppendBytes(fileBytes, false); err != nil {
+	for i := uint64(0); i < uint64(length); i++ {
+		if selectList.Contains(i) {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+		filePath, isNull := filePathVec.GetStrValue(i)
+		if isNull {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+		contents, err := readLoadFileDatalinkContents(util.UnsafeBytesToString(filePath), proc)
+		if err != nil {
+			return err
+		}
+		if len(contents) == 0 {
+			err = rs.AppendBytes(nil, true)
+		} else {
+			err = rs.AppendBytes(contents, false)
+		}
+		if err != nil {
 			return err
 		}
 	}
@@ -4545,10 +4792,9 @@ func DatetimeToHour(ivecs []*vector.Vector, result vector.FunctionResultWrapper,
 }
 
 func TimeToHour(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return opUnaryFixedToFixed[types.Time, uint8](ivecs, result, proc, length, func(v types.Time) uint8 {
+	return opUnaryFixedToFixed[types.Time, uint32](ivecs, result, proc, length, func(v types.Time) uint32 {
 		hour, _, _, _, _ := v.ClockFormat()
-		// HOUR function returns 0-23, so we need to take modulo 24
-		return uint8(hour % 24)
+		return uint32(hour)
 	}, selectList)
 }
 
@@ -4802,7 +5048,7 @@ func Inet6Aton(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc
 
 	if selectList != nil {
 		if selectList.IgnoreAllRow() {
-			nulls.AddRange(rsNull, 0, uint64(length))
+			rs.SetNullResult(uint64(length))
 			return nil
 		}
 		if !selectList.ShouldEvalAllRow() {
@@ -4818,13 +5064,13 @@ func Inet6Aton(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc
 	if c1 {
 		v1, null1 := p1.GetStrValue(0)
 		if null1 {
-			nulls.AddRange(rsNull, 0, uint64(length))
+			rs.SetNullResult(uint64(length))
 		} else {
 			ipStr := functionUtil.QuickBytesToStr(v1)
 			ip := net.ParseIP(ipStr)
 			if ip == nil {
 				// Invalid IP: return NULL for all rows
-				nulls.AddRange(rsNull, 0, uint64(length))
+				rs.SetNullResult(uint64(length))
 			} else {
 				var resultBytes []byte
 				if ip4 := ip.To4(); ip4 != nil {
@@ -4919,7 +5165,7 @@ func Inet6Ntoa(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc
 
 	if selectList != nil {
 		if selectList.IgnoreAllRow() {
-			nulls.AddRange(rsNull, 0, uint64(length))
+			rs.SetNullResult(uint64(length))
 			return nil
 		}
 		if !selectList.ShouldEvalAllRow() {
@@ -4935,7 +5181,7 @@ func Inet6Ntoa(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc
 	if c1 {
 		v1, null1 := p1.GetStrValue(0)
 		if null1 {
-			nulls.AddRange(rsNull, 0, uint64(length))
+			rs.SetNullResult(uint64(length))
 		} else {
 			var resultStr string
 			if len(v1) == 4 {
@@ -4953,7 +5199,7 @@ func Inet6Ntoa(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc
 				}
 			} else {
 				// Invalid length: return NULL for all rows
-				nulls.AddRange(rsNull, 0, uint64(length))
+				rs.SetNullResult(uint64(length))
 				return nil
 			}
 			rowCount := uint64(length)
@@ -5688,7 +5934,7 @@ func FromBase64(parameters []*vector.Vector, result vector.FunctionResultWrapper
 // VecFromBase64 decodes a base64-encoded string into a vector (vecf32 or vecf64).
 // The base64 payload must be the raw little-endian bytes of the vector elements,
 // as produced by to_base64(vecf32_col) or to_base64(vecf64_col).
-func VecFromBase64[T types.RealNumbers](parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+func VecFromBase64[T types.ArrayElement](parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	source := vector.GenerateFunctionStrParameter(parameters[0])
 	rs := vector.MustFunctionResult[types.Varlena](result)
 
@@ -5698,6 +5944,14 @@ func VecFromBase64[T types.RealNumbers](parameters []*vector.Vector, result vect
 		elemSize = 4
 	case float64:
 		elemSize = 8
+	case types.BF16, types.Float16:
+		elemSize = 2
+	case int8, uint8:
+		elemSize = 1
+	default:
+		// Guard: an unhandled element type would leave elemSize==0 and panic at
+		// the `n % elemSize` check below. Fail explicitly instead.
+		return moerr.NewInternalErrorNoCtx("vec_from_base64: unsupported vector element type")
 	}
 
 	// Pre-extend area: peek at the first non-null input to estimate per-row decoded size.
@@ -5731,11 +5985,11 @@ func VecFromBase64[T types.RealNumbers](parameters []*vector.Vector, result vect
 		}
 		n, err := base64.StdEncoding.Decode(buf, data)
 		if err != nil {
-			return moerr.NewInternalErrorNoCtxf("vecf%d_from_base64: invalid base64 input", elemSize*8)
+			return moerr.NewInternalErrorNoCtx("vec_from_base64: invalid base64 input")
 		}
 
 		if n%elemSize != 0 {
-			return moerr.NewInternalErrorNoCtxf("vecf%d_from_base64: decoded length %d is not a multiple of %d bytes", elemSize*8, n, elemSize)
+			return moerr.NewInternalErrorNoCtxf("vec_from_base64: decoded length %d is not a multiple of %d bytes", n, elemSize)
 		}
 
 		if err = rs.AppendBytes(buf[:n], false); err != nil {
@@ -5893,6 +6147,20 @@ func LengthUTF8(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pro
 
 func strLengthUTF8(xs []byte) uint64 {
 	return lengthutf8.CountUTF8CodePoints(xs)
+}
+
+func LengthBinary(
+	ivecs []*vector.Vector,
+	result vector.FunctionResultWrapper,
+	proc *process.Process,
+	length int,
+	selectList *FunctionSelectList,
+) error {
+	return opUnaryBytesToFixed[uint64](ivecs, result, proc, length, strLengthBinary, selectList)
+}
+
+func strLengthBinary(xs []byte) uint64 {
+	return uint64(len(xs))
 }
 
 func Ltrim(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
@@ -6384,6 +6652,28 @@ func DatetimeToQuarter(ivecs []*vector.Vector, result vector.FunctionResultWrapp
 	}, selectList)
 }
 
+func TimestampToQuarter(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return opUnaryFixedToFixed[types.Timestamp, uint8](ivecs, result, proc, length, func(v types.Timestamp) uint8 {
+		loc := proc.GetSessionInfo().TimeZone
+		if loc == nil {
+			loc = time.Local
+		}
+		return uint8(v.ToDatetime(loc).ToDate().Quarter())
+	}, selectList)
+}
+
+func DateStringToQuarter(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return dateStringToFixedWithNullOnError(ivecs, result, proc, length, selectList, func(parts dateExtractParts) (uint8, bool) {
+		if parts.month == 0 {
+			return 0, true
+		}
+		if parts.month > types.MaxMonthInYear {
+			return 0, false
+		}
+		return (parts.month-1)/3 + 1, true
+	})
+}
+
 // TODO: I will support template soon.
 func DateStringToMonth(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	//return opUnaryStrToFixedWithErrorCheck[uint8](ivecs, result, proc, length, func(v string) (uint8, error) {
@@ -6461,7 +6751,7 @@ func DateToWeek(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pro
 		}
 
 		date, null := dates.GetValue(i)
-		if null {
+		if null || date == types.ZeroDate {
 			if err := rs.Append(0, true); err != nil {
 				return err
 			}
@@ -6497,7 +6787,7 @@ func DatetimeToWeek(ivecs []*vector.Vector, result vector.FunctionResultWrapper,
 		}
 
 		dt, null := datetimes.GetValue(i)
-		if null {
+		if null || dt == types.ZeroDatetime {
 			if err := rs.Append(0, true); err != nil {
 				return err
 			}
@@ -6512,111 +6802,102 @@ func DatetimeToWeek(ivecs []*vector.Vector, result vector.FunctionResultWrapper,
 	return nil
 }
 
-// weekOfYearHelper calculates the week of year for a given date.
-// WEEKOFYEAR always returns the week number for the year that the date belongs to.
-func weekOfYearHelper(d types.Date) int64 {
-	// Get the year of the input date
-	dateYear := int32(d.Year())
-
-	// Find the Thursday of the calendar week containing this date
-	delta := 4 - int32(d.DayOfWeek())
-	if delta == 4 {
-		delta = -3 // Sunday
-	}
-	thursdayDate := types.Date(int32(d) + delta)
-	thursdayYear, _, _, thursdayYday := thursdayDate.Calendar(false)
-
-	// If Thursday is in a different year than the date, we need special handling
-	if thursdayYear != dateYear {
-		if thursdayYear > dateYear {
-			// Thursday is in the next year, so this date is at the end of the current year
-			// Count how many days of this week are in the current year
-			daysInCurrentYear := 0
-			weekStart := types.Date(int32(d) - delta) // Monday of the week
-			for i := int32(0); i < 7; i++ {
-				checkDate := types.Date(int32(weekStart) + i)
-				if checkDate.Year() == uint16(dateYear) {
-					daysInCurrentYear++
-				}
-			}
-			// If at least 4 days are in the current year, it's week 53 of current year
-			// Otherwise, it's week 1 of next year, but WEEKOFYEAR returns week for date's year
-			if daysInCurrentYear >= 4 {
-				return 53
-			}
-			// If less than 4 days, it's actually week 1 of next year,
-			// but WEEKOFYEAR should return week 53 for the date's year
-			return 53
-		} else {
-			// Thursday is in the previous year, so this date is at the start of the current year
-			// This should be week 1 of current year
-			return 1
-		}
-	}
-
-	// Thursday is in the same year as the date, calculate week normally
-	return int64((thursdayYday-1)/7 + 1)
-}
-
 // DateToWeekOfYear returns the calendar week of the date as a number in the range from 1 to 53.
 // WEEKOFYEAR(date) is equivalent to WEEK(date, 3) which uses ISO 8601 week calculation.
-// WEEKOFYEAR always returns the week number for the year that the date belongs to.
 func DateToWeekOfYear(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return opUnaryFixedToFixed[types.Date, int64](ivecs, result, proc, length, weekOfYearHelper, selectList)
+	return opUnaryFixedToFixedWithNullOnError[types.Date, int64](ivecs, result, proc, length, func(v types.Date) (int64, error) {
+		if v == types.ZeroDate {
+			return 0, moerr.NewInvalidInputNoCtx("zero date")
+		}
+		return int64(v.Week(3)), nil
+	}, selectList)
 }
 
 // DatetimeToWeekOfYear returns the calendar week of the datetime as a number in the range from 1 to 53.
 func DatetimeToWeekOfYear(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return opUnaryFixedToFixed[types.Datetime, int64](ivecs, result, proc, length, func(v types.Datetime) int64 {
-		return weekOfYearHelper(v.ToDate())
+	return opUnaryFixedToFixedWithNullOnError[types.Datetime, int64](ivecs, result, proc, length, func(v types.Datetime) (int64, error) {
+		if v == types.ZeroDatetime {
+			return 0, moerr.NewInvalidInputNoCtx("zero datetime")
+		}
+		return int64(v.ToDate().Week(3)), nil
 	}, selectList)
 }
 
 // TimestampToWeekOfYear returns the calendar week of the timestamp as a number in the range from 1 to 53.
 func TimestampToWeekOfYear(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return opUnaryFixedToFixed[types.Timestamp, int64](ivecs, result, proc, length, func(v types.Timestamp) int64 {
+	return opUnaryFixedToFixedWithNullOnError[types.Timestamp, int64](ivecs, result, proc, length, func(v types.Timestamp) (int64, error) {
+		if v == types.ZeroTimestamp {
+			return 0, moerr.NewInvalidInputNoCtx("zero timestamp")
+		}
 		loc := proc.GetSessionInfo().TimeZone
 		if loc == nil {
 			loc = time.Local
 		}
 		dt := v.ToDatetime(loc)
-		return weekOfYearHelper(dt.ToDate())
+		return int64(dt.ToDate().Week(3)), nil
 	}, selectList)
 }
 
+func DateStringToWeekOfYear(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return dateStringToFixedWithNullOnError(ivecs, result, proc, length, selectList, func(parts dateExtractParts) (int64, bool) {
+		if !parts.valid {
+			return 0, false
+		}
+		if parts.year == 0 {
+			return int64(types.WeekFromCalendar(parts.year, parts.month, parts.day, 3)), true
+		}
+		return int64(parts.date.Week(3)), true
+	})
+}
+
 func DateToWeekday(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return opUnaryFixedToFixed[types.Date, int64](ivecs, result, proc, length, func(v types.Date) int64 {
-		return int64(v.DayOfWeek2())
+	return opUnaryFixedToFixedWithNullOnError[types.Date, int64](ivecs, result, proc, length, func(v types.Date) (int64, error) {
+		if v == types.ZeroDate {
+			return 0, moerr.NewInvalidInputNoCtx("zero date")
+		}
+		return int64(v.DayOfWeek2()), nil
 	}, selectList)
 }
 
 func DatetimeToWeekday(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return opUnaryFixedToFixed[types.Datetime, int64](ivecs, result, proc, length, func(v types.Datetime) int64 {
-		return int64(v.ToDate().DayOfWeek2())
+	return opUnaryFixedToFixedWithNullOnError[types.Datetime, int64](ivecs, result, proc, length, func(v types.Datetime) (int64, error) {
+		if v == types.ZeroDatetime {
+			return 0, moerr.NewInvalidInputNoCtx("zero datetime")
+		}
+		return int64(v.ToDate().DayOfWeek2()), nil
 	}, selectList)
 }
 
 // DateToDayOfWeek returns the weekday index for date (1 = Sunday, 2 = Monday, ..., 7 = Saturday)
 func DateToDayOfWeek(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return opUnaryFixedToFixed[types.Date, int64](ivecs, result, proc, length, func(v types.Date) int64 {
+	return opUnaryFixedToFixedWithNullOnError[types.Date, int64](ivecs, result, proc, length, func(v types.Date) (int64, error) {
+		if v == types.ZeroDate {
+			return 0, moerr.NewInvalidInputNoCtx("zero date")
+		}
 		// DayOfWeek() returns 0=Sunday, 1=Monday, ..., 6=Saturday
 		// DAYOFWEEK needs: 1=Sunday, 2=Monday, ..., 7=Saturday
-		return int64(v.DayOfWeek()) + 1
+		return int64(v.DayOfWeek()) + 1, nil
 	}, selectList)
 }
 
 // DatetimeToDayOfWeek returns the weekday index for datetime (1 = Sunday, 2 = Monday, ..., 7 = Saturday)
 func DatetimeToDayOfWeek(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return opUnaryFixedToFixed[types.Datetime, int64](ivecs, result, proc, length, func(v types.Datetime) int64 {
+	return opUnaryFixedToFixedWithNullOnError[types.Datetime, int64](ivecs, result, proc, length, func(v types.Datetime) (int64, error) {
+		if v == types.ZeroDatetime {
+			return 0, moerr.NewInvalidInputNoCtx("zero datetime")
+		}
 		// DayOfWeek() returns 0=Sunday, 1=Monday, ..., 6=Saturday
 		// DAYOFWEEK needs: 1=Sunday, 2=Monday, ..., 7=Saturday
-		return int64(v.DayOfWeek()) + 1
+		return int64(v.DayOfWeek()) + 1, nil
 	}, selectList)
 }
 
 // TimestampToDayOfWeek returns the weekday index for timestamp (1 = Sunday, 2 = Monday, ..., 7 = Saturday)
 func TimestampToDayOfWeek(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return opUnaryFixedToFixed[types.Timestamp, int64](ivecs, result, proc, length, func(v types.Timestamp) int64 {
+	return opUnaryFixedToFixedWithNullOnError[types.Timestamp, int64](ivecs, result, proc, length, func(v types.Timestamp) (int64, error) {
+		if v == types.ZeroTimestamp {
+			return 0, moerr.NewInvalidInputNoCtx("zero timestamp")
+		}
 		loc := proc.GetSessionInfo().TimeZone
 		if loc == nil {
 			loc = time.Local
@@ -6624,31 +6905,40 @@ func TimestampToDayOfWeek(ivecs []*vector.Vector, result vector.FunctionResultWr
 		dt := v.ToDatetime(loc)
 		// DayOfWeek() returns 0=Sunday, 1=Monday, ..., 6=Saturday
 		// DAYOFWEEK needs: 1=Sunday, 2=Monday, ..., 7=Saturday
-		return int64(dt.DayOfWeek()) + 1
+		return int64(dt.DayOfWeek()) + 1, nil
 	}, selectList)
 }
 
 // DateToDayName returns the weekday name for date (e.g., "Sunday", "Monday", ...)
 func DateToDayName(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return opUnaryFixedToStr[types.Date](ivecs, result, proc, length, func(v types.Date) string {
+	return opUnaryFixedToStrWithNullOnError[types.Date](ivecs, result, proc, length, func(v types.Date) (string, error) {
+		if v == types.ZeroDate {
+			return "", moerr.NewInvalidInputNoCtx("zero date")
+		}
 		// DayOfWeek() returns 0=Sunday, 1=Monday, ..., 6=Saturday
 		// Use String() method to get the weekday name
-		return v.DayOfWeek().String()
+		return v.DayOfWeek().String(), nil
 	}, selectList)
 }
 
 // DatetimeToDayName returns the weekday name for datetime (e.g., "Sunday", "Monday", ...)
 func DatetimeToDayName(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return opUnaryFixedToStr[types.Datetime](ivecs, result, proc, length, func(v types.Datetime) string {
+	return opUnaryFixedToStrWithNullOnError[types.Datetime](ivecs, result, proc, length, func(v types.Datetime) (string, error) {
+		if v == types.ZeroDatetime {
+			return "", moerr.NewInvalidInputNoCtx("zero datetime")
+		}
 		// DayOfWeek() returns 0=Sunday, 1=Monday, ..., 6=Saturday
 		// Use String() method to get the weekday name
-		return v.DayOfWeek().String()
+		return v.DayOfWeek().String(), nil
 	}, selectList)
 }
 
 // TimestampToDayName returns the weekday name for timestamp (e.g., "Sunday", "Monday", ...)
 func TimestampToDayName(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return opUnaryFixedToStr[types.Timestamp](ivecs, result, proc, length, func(v types.Timestamp) string {
+	return opUnaryFixedToStrWithNullOnError[types.Timestamp](ivecs, result, proc, length, func(v types.Timestamp) (string, error) {
+		if v == types.ZeroTimestamp {
+			return "", moerr.NewInvalidInputNoCtx("zero timestamp")
+		}
 		loc := proc.GetSessionInfo().TimeZone
 		if loc == nil {
 			loc = time.Local
@@ -6656,37 +6946,58 @@ func TimestampToDayName(ivecs []*vector.Vector, result vector.FunctionResultWrap
 		dt := v.ToDatetime(loc)
 		// DayOfWeek() returns 0=Sunday, 1=Monday, ..., 6=Saturday
 		// Use String() method to get the weekday name
-		return dt.DayOfWeek().String()
+		return dt.DayOfWeek().String(), nil
 	}, selectList)
+}
+
+func DateStringToDayName(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return dateStringToStringWithNullOnError(ivecs, result, proc, length, selectList, func(parts dateExtractParts) (string, bool) {
+		if !parts.valid {
+			return "", false
+		}
+		if parts.year == 0 {
+			return types.DayOfWeekFromCalendar(parts.year, parts.month, parts.day).String(), true
+		}
+		return parts.date.DayOfWeek().String(), true
+	})
 }
 
 // DateToMonthName returns the month name for date (e.g., "January", "February", ...)
 func DateToMonthName(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return opUnaryFixedToStr[types.Date](ivecs, result, proc, length, func(v types.Date) string {
+	return opUnaryFixedToStrWithNullOnError[types.Date](ivecs, result, proc, length, func(v types.Date) (string, error) {
+		if v == types.ZeroDate {
+			return "", moerr.NewInvalidInputNoCtx("zero date")
+		}
 		// Month() returns 1-12
 		month := v.Month()
 		if month >= 1 && month <= 12 {
-			return MonthNames[month-1]
+			return MonthNames[month-1], nil
 		}
-		return ""
+		return "", nil
 	}, selectList)
 }
 
 // DatetimeToMonthName returns the month name for datetime (e.g., "January", "February", ...)
 func DatetimeToMonthName(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return opUnaryFixedToStr[types.Datetime](ivecs, result, proc, length, func(v types.Datetime) string {
+	return opUnaryFixedToStrWithNullOnError[types.Datetime](ivecs, result, proc, length, func(v types.Datetime) (string, error) {
+		if v == types.ZeroDatetime {
+			return "", moerr.NewInvalidInputNoCtx("zero datetime")
+		}
 		// Month() returns 1-12
 		month := v.Month()
 		if month >= 1 && month <= 12 {
-			return MonthNames[month-1]
+			return MonthNames[month-1], nil
 		}
-		return ""
+		return "", nil
 	}, selectList)
 }
 
 // TimestampToMonthName returns the month name for timestamp (e.g., "January", "February", ...)
 func TimestampToMonthName(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return opUnaryFixedToStr[types.Timestamp](ivecs, result, proc, length, func(v types.Timestamp) string {
+	return opUnaryFixedToStrWithNullOnError[types.Timestamp](ivecs, result, proc, length, func(v types.Timestamp) (string, error) {
+		if v == types.ZeroTimestamp {
+			return "", moerr.NewInvalidInputNoCtx("zero timestamp")
+		}
 		loc := proc.GetSessionInfo().TimeZone
 		if loc == nil {
 			loc = time.Local
@@ -6695,10 +7006,20 @@ func TimestampToMonthName(ivecs []*vector.Vector, result vector.FunctionResultWr
 		// Month() returns 1-12
 		month := dt.Month()
 		if month >= 1 && month <= 12 {
-			return MonthNames[month-1]
+			return MonthNames[month-1], nil
 		}
-		return ""
+		return "", nil
 	}, selectList)
+}
+
+func DateStringToMonthName(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return dateStringToStringWithNullOnError(ivecs, result, proc, length, selectList, func(parts dateExtractParts) (string, bool) {
+		month := parts.month
+		if month < 1 || month > 12 {
+			return "", false
+		}
+		return MonthNames[month-1], true
+	})
 }
 
 func FoundRows(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
@@ -6918,21 +7239,13 @@ func TriggerFaultPoint(ivecs []*vector.Vector, result vector.FunctionResultWrapp
 func UTCTimestamp(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	rs := vector.MustFunctionResult[types.Datetime](result)
 
-	// Get scale from parameter, default to 0 if not provided (matching MySQL behavior)
-	scale := int32(0)
-	if len(ivecs) == 1 && !ivecs[0].IsConstNull() && ivecs[0].Length() > 0 {
-		scale = int32(vector.MustFixedColWithTypeCheck[int64](ivecs[0])[0])
-		// Validate scale range: 0-6 (matching MySQL behavior)
-		if scale < 0 {
-			return moerr.NewInvalidArg(proc.Ctx, "utc_timestamp", fmt.Sprintf("negative precision %d specified", scale))
-		}
-		if scale > 6 {
-			return moerr.NewErrTooBigPrecision(proc.Ctx, scale, "utc_timestamp", 6)
-		}
+	scale, err := utcFunctionScale(ivecs, proc, "utc_timestamp")
+	if err != nil {
+		return err
 	}
 	rs.TempSetType(types.New(types.T_datetime, 0, scale))
 
-	resultValue := types.UTC().TruncateToScale(scale)
+	resultValue := types.UnixNanoToTimestamp(proc.GetUnixTime()).ToDatetime(time.UTC).TruncateToScale(scale)
 	for i := uint64(0); i < uint64(length); i++ {
 		if err := rs.Append(resultValue, false); err != nil {
 			return err
@@ -6978,9 +7291,57 @@ func Sleep[T uint64 | float64](ivecs []*vector.Vector, result vector.FunctionRes
 
 const userLevelLockTableID uint64 = 1 << 62
 
+const userLevelLockCloseTimeout = 5 * time.Second
+const userLevelLockDetachedCleanupAttemptTimeout = time.Second
+const userLevelLockDetachedCleanupInitialBackoff = 10 * time.Millisecond
+const userLevelLockDetachedCleanupMaxBackoff = time.Second
+const userLevelLockDetachedCleanupMaxEntries = 1024
+const userLevelLockDetachedCleanupOverflowShards = 16
+const userLevelLockDetachedCleanupMaxTxnIDsPerEntry = 2048
+const userLevelLockDetachedCleanupWorkers = 4
+const userLevelLockDetachedCleanupBacklog = 64
+const userLevelLockRetainedCleanupMaxEntries = userLevelLockDetachedCleanupMaxEntries
+
 type userLevelLockKey struct {
 	owner string
 	name  string
+}
+
+type detachedUserLevelLockCleanupKey struct {
+	serviceID string
+	owner     string
+	name      string
+	connID    uint64
+	kind      string
+}
+
+type detachedUserLevelLockCleanupEntry struct {
+	key     detachedUserLevelLockCleanupKey
+	ls      lockservice.LockService
+	txnIDs  [][]byte
+	queued  bool
+	running bool
+	backoff time.Duration
+}
+
+type detachedUserLevelLockCleanupRequest struct {
+	ls     lockservice.LockService
+	key    detachedUserLevelLockCleanupKey
+	txnIDs [][]byte
+}
+
+type retainedUserLevelLockCloseCleanup struct {
+	ls        lockservice.LockService
+	owners    []string
+	owner     string
+	sessionID string
+	connID    uint64
+}
+
+type UserLevelLockState struct {
+	Name   string
+	Count  uint64
+	TxnIDs [][]byte
 }
 
 var userLevelLocks = struct {
@@ -6991,58 +7352,179 @@ var userLevelLocks = struct {
 	counts map[userLevelLockKey]uint64
 	//owner -> lockername
 	byOwner map[string]map[string]struct{}
+	// txnIDs records the exact lockservice transaction IDs used by successful
+	// acquisitions. New-format user-lock txns are per-attempt, so release and
+	// migration must not reconstruct them from owner/name.
+	txnIDs map[userLevelLockKey][][]byte
+	// ownerSessions marks which session currently owns the local refcount state.
+	// It prevents an old migrated session from discarding refcounts already
+	// restored for a new session that intentionally keeps the same owner key.
+	ownerSessions          map[string]string
+	pendingCleanups        map[detachedUserLevelLockCleanupKey]detachedUserLevelLockCleanupRequest
+	retainedCloseCleanups  map[string]retainedUserLevelLockCloseCleanup
+	cleanupReservations    map[detachedUserLevelLockCleanupKey]uint64
+	retainedCleanupStarted bool
+	retainedCleanupGen     uint64
+	retainedCleanupDone    chan struct{}
 }{
-	counts:  make(map[userLevelLockKey]uint64),
-	byOwner: make(map[string]map[string]struct{}),
+	counts:                make(map[userLevelLockKey]uint64),
+	byOwner:               make(map[string]map[string]struct{}),
+	txnIDs:                make(map[userLevelLockKey][][]byte),
+	ownerSessions:         make(map[string]string),
+	pendingCleanups:       make(map[detachedUserLevelLockCleanupKey]detachedUserLevelLockCleanupRequest),
+	retainedCloseCleanups: make(map[string]retainedUserLevelLockCloseCleanup),
+	cleanupReservations:   make(map[detachedUserLevelLockCleanupKey]uint64),
+}
+
+var detachedUserLevelLockCleanups = struct {
+	sync.Mutex
+	entries        map[detachedUserLevelLockCleanupKey]*detachedUserLevelLockCleanupEntry
+	queue          chan detachedUserLevelLockCleanupKey
+	backlog        chan detachedUserLevelLockCleanupRequest
+	started        bool
+	backlogStarted bool
+}{
+	entries: make(map[detachedUserLevelLockCleanupKey]*detachedUserLevelLockCleanupEntry),
+	queue:   make(chan detachedUserLevelLockCleanupKey, userLevelLockDetachedCleanupMaxEntries),
+	backlog: make(chan detachedUserLevelLockCleanupRequest, userLevelLockDetachedCleanupBacklog),
 }
 
 func userLevelLockOwner(proc *process.Process) string {
 	if proc == nil || proc.GetSessionInfo() == nil {
 		return ""
 	}
+	owner, _ := proc.GetUserLevelLockIdentity()
+	if owner != "" {
+		return owner
+	}
+	return deriveUserLevelLockOwner(proc)
+}
+
+func deriveUserLevelLockOwner(proc *process.Process) string {
+	if proc == nil || proc.GetSessionInfo() == nil {
+		return ""
+	}
 	si := proc.GetSessionInfo()
-	if si.SessionId != uuid.Nil {
-		return si.SessionId.String()
+	if sessionID := si.SessionId.String(); sessionID != "" && sessionID != "00000000-0000-0000-0000-000000000000" {
+		return fmt.Sprintf("%s:%s", si.Account, sessionID)
 	}
-	if proc.GetLockService() != nil {
-		return fmt.Sprintf("%s:%d", proc.GetLockService().GetServiceID(), si.GetConnectionID())
+	if si.GetConnectionID() != 0 {
+		return fmt.Sprintf("%s:%d", si.Account, si.GetConnectionID())
 	}
-	return fmt.Sprintf("%d", si.GetConnectionID())
+	return si.Account
 }
 
 func userLevelLockConnectionID(proc *process.Process) uint64 {
 	if proc == nil || proc.GetSessionInfo() == nil {
 		return 0
 	}
+	owner, connID := proc.GetUserLevelLockIdentity()
+	if owner != "" {
+		return connID
+	}
 	return proc.GetSessionInfo().GetConnectionID()
+}
+
+func userLevelLockOwnerCandidates(proc *process.Process) []string {
+	owner := userLevelLockOwner(proc)
+	pinnedOwner, pinnedConnID := "", uint64(0)
+	if proc != nil {
+		pinnedOwner, pinnedConnID = proc.GetUserLevelLockIdentity()
+	}
+	candidates := make([]string, 0, 3)
+	add := func(v string) {
+		if v == "" {
+			return
+		}
+		for _, existing := range candidates {
+			if existing == v {
+				return
+			}
+		}
+		candidates = append(candidates, v)
+	}
+	add(owner)
+	if proc != nil && proc.GetSessionInfo() != nil {
+		si := proc.GetSessionInfo()
+		if sessionID := si.SessionId.String(); sessionID != "" && sessionID != "00000000-0000-0000-0000-000000000000" {
+			add(sessionID)
+			add(fmt.Sprintf("%s:%s", si.Account, sessionID))
+		}
+		connID := si.GetConnectionID()
+		if pinnedOwner != "" && pinnedConnID != 0 {
+			connID = pinnedConnID
+		}
+		if connID != 0 {
+			add(fmt.Sprintf("%s:%d", si.Account, connID))
+		}
+	}
+	return candidates
+}
+
+func ensureUserLevelLockIdentity(proc *process.Process) (string, uint64) {
+	if proc == nil || proc.GetSessionInfo() == nil {
+		return "", 0
+	}
+	owner, connID := proc.GetUserLevelLockIdentity()
+	if owner != "" {
+		return owner, connID
+	}
+
+	owner = deriveUserLevelLockOwner(proc)
+	connID = proc.GetSessionInfo().GetConnectionID()
+	return proc.PinUserLevelLockIdentity(owner, connID)
+}
+
+func userLevelLockSessionID(proc *process.Process) string {
+	if proc == nil || proc.GetSessionInfo() == nil {
+		return ""
+	}
+	return proc.GetSessionInfo().SessionId.String()
 }
 
 // maxUserLevelLockNameLength is the MySQL-compatible maximum length for
 // user-level lock names (GET_LOCK, RELEASE_LOCK, IS_FREE_LOCK, IS_USED_LOCK).
 const maxUserLevelLockNameLength = 64
 
-// normalizeUserLevelLockName validates and normalizes a MySQL user-level lock name.
-// It returns the normalized (lowercased) name, or an error if the name is empty or
-// exceeds maxUserLevelLockNameLength characters (MySQL enforces 64 characters, not bytes).
-func normalizeUserLevelLockName(name string) (string, error) {
+// validateUserLevelLockName validates a MySQL user-level lock name.
+// It normalizes casing so lock-name identity is case-insensitive.
+func validateUserLevelLockName(name string) (string, error) {
 	if len(name) == 0 {
 		return "", moerr.NewInternalErrorNoCtx("user-level lock name must not be empty")
 	}
 	if strings.IndexByte(name, 0) >= 0 {
 		return "", moerr.NewInternalErrorNoCtx("user-level lock name must not contain NUL bytes")
 	}
-	normalized := strings.ToLower(name)
-	if utf8.RuneCountInString(normalized) > maxUserLevelLockNameLength {
+	if utf8.RuneCountInString(name) > maxUserLevelLockNameLength {
 		return "", moerr.NewInternalErrorNoCtxf(
 			"user-level lock name exceeds maximum length of %d characters",
 			maxUserLevelLockNameLength,
 		)
 	}
-	return normalized, nil
+	return strings.ToLower(name), nil
 }
 
 func userLevelLockTxnID(owner string, connID uint64, name string) []byte {
 	return []byte(fmt.Sprintf("mo-user-level-lock\x00%s\x00%s\x00%d", owner, name, connID))
+}
+
+func userLevelLockAttemptTxnID(owner string, connID uint64, name string) []byte {
+	var attempt [16]byte
+	if _, err := rand.Read(attempt[:]); err != nil {
+		return []byte(fmt.Sprintf("mo-user-level-lock\x00%s\x00%s\x00%d\x00%d", owner, name, connID, time.Now().UnixNano()))
+	}
+	return []byte(fmt.Sprintf("mo-user-level-lock\x00%s\x00%s\x00%d\x00%s", owner, name, connID, hex.EncodeToString(attempt[:])))
+}
+
+func userLevelLockFailedAttemptCleanupKey(ls lockservice.LockService, owner string, connID uint64, name, kind string, txnID []byte) detachedUserLevelLockCleanupKey {
+	sum := sha256.Sum256(txnID)
+	return detachedUserLevelLockCleanupKey{
+		serviceID: ls.GetServiceID(),
+		owner:     owner,
+		name:      fmt.Sprintf("%s:%s", name, hex.EncodeToString(sum[:8])),
+		connID:    connID,
+		kind:      kind,
+	}
 }
 
 func userLevelLockTxnIDOld(owner, name string) []byte {
@@ -7054,15 +7536,27 @@ func userLevelLockProbeTxnID(owner string, connID uint64, name, probeType string
 }
 
 func userLevelLockConnectionIDFromTxnID(txnID []byte) (uint64, bool) {
+	return userLevelLockConnectionIDFromTxnIDWithFallback(txnID, 0, false)
+}
+
+func userLevelLockConnectionIDFromTxnIDWithFallback(txnID []byte, fallback uint64, hasFallback bool) (uint64, bool) {
 	// The user-level lock txnID format uses NUL as a field separator. Lock names
 	// are validated to reject NUL bytes, and owners are derived from session IDs
 	// / connection IDs, so splitting here is safe for supported inputs.
 	parts := strings.Split(string(txnID), "\x00")
-	if len(parts) < 3 || len(parts) > 4 || parts[0] != "mo-user-level-lock" {
+	if len(parts) < 3 || len(parts) > 5 || parts[0] != "mo-user-level-lock" {
 		return 0, false
 	}
 	if len(parts) == 3 {
-		return 0, false
+		ownerParts := strings.Split(parts[1], ":")
+		connID, err := strconv.ParseUint(ownerParts[len(ownerParts)-1], 10, 64)
+		if err != nil {
+			if hasFallback {
+				return fallback, true
+			}
+			return 0, false
+		}
+		return connID, true
 	}
 	connID, err := strconv.ParseUint(parts[3], 10, 64)
 	if err != nil {
@@ -7086,11 +7580,950 @@ func userLevelLockService(proc *process.Process) (lockservice.LockService, error
 	return proc.GetLockService(), nil
 }
 
-func unlockUserLevelLockTxnIDs(ctx context.Context, ls lockservice.LockService, owner string, connID uint64, name string) error {
-	if err := ls.Unlock(ctx, userLevelLockTxnID(owner, connID, name), timestamp.Timestamp{}); err != nil {
+type userLevelLockContextUnlocker interface {
+	UnlockWithContext(ctx context.Context, txnID []byte, commitTS timestamp.Timestamp, mutations ...lockpb.ExtraMutation) error
+}
+
+func unlockUserLevelLockTxnID(ctx context.Context, ls lockservice.LockService, txnID []byte) error {
+	if unlocker, ok := ls.(userLevelLockContextUnlocker); ok {
+		return unlocker.UnlockWithContext(ctx, txnID, timestamp.Timestamp{})
+	}
+	return ls.Unlock(ctx, txnID, timestamp.Timestamp{})
+}
+
+func unlockUserLevelLockTxnIDs(ctx context.Context, ls lockservice.LockService, txnIDs [][]byte) error {
+	for _, txnID := range txnIDs {
+		if len(txnID) == 0 {
+			continue
+		}
+		if err := unlockUserLevelLockTxnID(ctx, ls, txnID); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func cleanupFailedUserLevelLockTxn(
+	ctx context.Context,
+	ls lockservice.LockService,
+	key detachedUserLevelLockCleanupKey,
+	txnID []byte,
+) error {
+	if len(txnID) == 0 {
+		return nil
+	}
+	attemptCtx, cancel := userLevelLockCleanupAttemptContext(context.Background())
+	defer cancel()
+	if err := unlockUserLevelLockTxnID(attemptCtx, ls, txnID); err == nil {
+		releaseRetainedUserLevelLockTxnCleanupSlot(key)
+		return nil
+	}
+	if handoffDetachedUserLevelLockTxnCleanup(ctx, ls, key, [][]byte{txnID}) {
+		releaseRetainedUserLevelLockTxnCleanupSlot(key)
+		return nil
+	}
+	if retainDetachedUserLevelLockTxnCleanup(ls, key, [][]byte{txnID}) {
+		return nil
+	}
+	return moerr.NewInternalErrorNoCtxf("user-level lock cleanup retain failed for %s", key.name)
+}
+
+func userLevelLockTxnIDs(owner string, connID uint64, name string) [][]byte {
+	return [][]byte{
+		userLevelLockTxnID(owner, connID, name),
+		userLevelLockTxnIDOld(owner, name),
+	}
+}
+
+func userLevelLockTxnIDsForOwners(owners []string, connID uint64, name string) [][]byte {
+	txnIDs := make([][]byte, 0, len(owners)*2)
+	seen := make(map[string]struct{}, len(owners)*2)
+	for _, owner := range owners {
+		for _, txnID := range userLevelLockTxnIDs(owner, connID, name) {
+			key := string(txnID)
+			if _, ok := seen[key]; ok {
+				continue
+			}
+			txnIDs = append(txnIDs, txnID)
+			seen[key] = struct{}{}
+		}
+	}
+	return txnIDs
+}
+
+func cloneUserLevelLockTxnIDs(txnIDs [][]byte) [][]byte {
+	if len(txnIDs) == 0 {
+		return nil
+	}
+	cloned := make([][]byte, 0, len(txnIDs))
+	for _, txnID := range txnIDs {
+		if len(txnID) == 0 {
+			continue
+		}
+		cloned = append(cloned, append([]byte(nil), txnID...))
+	}
+	return cloned
+}
+
+func userLevelLockTxnIDsForState(owners []string, connID uint64, state UserLevelLockState) [][]byte {
+	if len(state.TxnIDs) > 0 {
+		return cloneUserLevelLockTxnIDs(state.TxnIDs)
+	}
+	return userLevelLockTxnIDsForOwners(owners, connID, state.Name)
+}
+
+func userLevelLockTxnIDsForRelease(owner string, connID uint64, name string, owners []string) [][]byte {
+	key := userLevelLockKey{owner: owner, name: name}
+	userLevelLocks.Lock()
+	txnIDs := cloneUserLevelLockTxnIDs(userLevelLocks.txnIDs[key])
+	userLevelLocks.Unlock()
+	if len(txnIDs) > 0 {
+		return txnIDs
+	}
+	return userLevelLockTxnIDsForOwners(owners, connID, name)
+}
+
+func unlockTrackedUserLevelLockByName(ctx context.Context, ls lockservice.LockService, owner string, owners []string, connID uint64, name string) error {
+	return unlockUserLevelLockTxnIDs(ctx, ls, userLevelLockTxnIDsForRelease(owner, connID, name, owners))
+}
+
+func userLevelLockCleanupAttemptContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return context.WithTimeout(ctx, userLevelLockDetachedCleanupAttemptTimeout)
+}
+
+func detachedUserLevelLockOverflowCleanupKey(key detachedUserLevelLockCleanupKey, shard uint64) detachedUserLevelLockCleanupKey {
+	return detachedUserLevelLockCleanupKey{
+		serviceID: key.serviceID,
+		owner:     key.serviceID,
+		name:      fmt.Sprintf("%s:%d", key.serviceID, shard),
+		connID:    shard,
+		kind:      "overflow",
+	}
+}
+
+func detachedUserLevelLockOverflowShard(key detachedUserLevelLockCleanupKey, txnIDs [][]byte) uint64 {
+	h := crc32.ChecksumIEEE([]byte(fmt.Sprintf("%s/%s/%s/%d/%s", key.serviceID, key.owner, key.name, key.connID, key.kind)))
+	for _, txnID := range txnIDs {
+		h = crc32.Update(h, crc32.IEEETable, txnID)
+	}
+	return uint64(h % userLevelLockDetachedCleanupOverflowShards)
+}
+
+func mergeDetachedUserLevelLockTxnIDs(entry *detachedUserLevelLockCleanupEntry, txnIDs [][]byte) bool {
+	if len(txnIDs) == 0 {
+		return true
+	}
+	seen := make(map[string]struct{}, len(entry.txnIDs))
+	for _, txnID := range entry.txnIDs {
+		if len(txnID) == 0 {
+			continue
+		}
+		seen[string(txnID)] = struct{}{}
+	}
+	for _, txnID := range txnIDs {
+		if len(txnID) == 0 {
+			continue
+		}
+		if _, ok := seen[string(txnID)]; ok {
+			continue
+		}
+		if len(entry.txnIDs) >= userLevelLockDetachedCleanupMaxTxnIDsPerEntry {
+			return false
+		}
+		entry.txnIDs = append(entry.txnIDs, append([]byte(nil), txnID...))
+		seen[string(txnID)] = struct{}{}
+	}
+	return true
+}
+
+func removeDetachedUserLevelLockTxnIDs(entry *detachedUserLevelLockCleanupEntry, txnIDs [][]byte) {
+	if len(txnIDs) == 0 || len(entry.txnIDs) == 0 {
+		return
+	}
+	done := make(map[string]struct{}, len(txnIDs))
+	for _, txnID := range txnIDs {
+		done[string(txnID)] = struct{}{}
+	}
+	dst := entry.txnIDs[:0]
+	for _, txnID := range entry.txnIDs {
+		if _, ok := done[string(txnID)]; ok {
+			continue
+		}
+		dst = append(dst, txnID)
+	}
+	for i := len(dst); i < len(entry.txnIDs); i++ {
+		entry.txnIDs[i] = nil
+	}
+	entry.txnIDs = dst
+}
+
+func enqueueDetachedUserLevelLockEntryLocked(entry *detachedUserLevelLockCleanupEntry) bool {
+	if entry.queued || entry.running || len(entry.txnIDs) == 0 {
+		return true
+	}
+	_ = enqueueDetachedUserLevelLockCleanupLocked(entry)
+	return true
+}
+
+func cloneDetachedUserLevelLockCleanupEntry(entry *detachedUserLevelLockCleanupEntry) *detachedUserLevelLockCleanupEntry {
+	if entry == nil {
+		return nil
+	}
+	clone := *entry
+	clone.txnIDs = append([][]byte(nil), entry.txnIDs...)
+	return &clone
+}
+
+func rememberDetachedUserLevelLockEntry(touched map[detachedUserLevelLockCleanupKey]*detachedUserLevelLockCleanupEntry, key detachedUserLevelLockCleanupKey) {
+	if _, ok := touched[key]; ok {
+		return
+	}
+	touched[key] = cloneDetachedUserLevelLockCleanupEntry(detachedUserLevelLockCleanups.entries[key])
+}
+
+func rollbackDetachedUserLevelLockEntriesLocked(touched map[detachedUserLevelLockCleanupKey]*detachedUserLevelLockCleanupEntry) {
+	for key, entry := range touched {
+		if entry == nil {
+			delete(detachedUserLevelLockCleanups.entries, key)
+			continue
+		}
+		current := detachedUserLevelLockCleanups.entries[key]
+		if current == nil {
+			detachedUserLevelLockCleanups.entries[key] = entry
+			continue
+		}
+		current.ls = entry.ls
+		current.txnIDs = cloneUserLevelLockTxnIDs(entry.txnIDs)
+		current.queued = entry.queued
+		current.running = entry.running
+		current.backoff = entry.backoff
+	}
+}
+
+func enqueueDetachedUserLevelLockTxnCleanupLocked(
+	ls lockservice.LockService,
+	key detachedUserLevelLockCleanupKey,
+	txnIDs [][]byte,
+	touched map[detachedUserLevelLockCleanupKey]*detachedUserLevelLockCleanupEntry,
+) (*detachedUserLevelLockCleanupEntry, bool) {
+	if entry, ok := detachedUserLevelLockCleanups.entries[key]; ok {
+		rememberDetachedUserLevelLockEntry(touched, key)
+		if mergeDetachedUserLevelLockTxnIDs(entry, txnIDs) {
+			return entry, true
+		}
+		shard := detachedUserLevelLockOverflowShard(key, txnIDs)
+		for i := uint64(0); i < userLevelLockDetachedCleanupOverflowShards; i++ {
+			overflowKey := detachedUserLevelLockOverflowCleanupKey(key, (shard+i)%userLevelLockDetachedCleanupOverflowShards)
+			if overflowKey == key {
+				continue
+			}
+			rememberDetachedUserLevelLockEntry(touched, overflowKey)
+			overflowEntry := detachedUserLevelLockCleanups.entries[overflowKey]
+			if overflowEntry == nil {
+				overflowEntry = &detachedUserLevelLockCleanupEntry{
+					key:     overflowKey,
+					ls:      ls,
+					backoff: userLevelLockDetachedCleanupInitialBackoff,
+				}
+				detachedUserLevelLockCleanups.entries[overflowKey] = overflowEntry
+			}
+			if mergeDetachedUserLevelLockTxnIDs(overflowEntry, txnIDs) {
+				return overflowEntry, true
+			}
+		}
+		return nil, false
+	}
+
+	if len(detachedUserLevelLockCleanups.entries) >= userLevelLockDetachedCleanupMaxEntries {
+		shard := detachedUserLevelLockOverflowShard(key, txnIDs)
+		for i := uint64(0); i < userLevelLockDetachedCleanupOverflowShards; i++ {
+			overflowKey := detachedUserLevelLockOverflowCleanupKey(key, (shard+i)%userLevelLockDetachedCleanupOverflowShards)
+			rememberDetachedUserLevelLockEntry(touched, overflowKey)
+			entry := detachedUserLevelLockCleanups.entries[overflowKey]
+			if entry == nil {
+				entry = &detachedUserLevelLockCleanupEntry{
+					key:     overflowKey,
+					ls:      ls,
+					backoff: userLevelLockDetachedCleanupInitialBackoff,
+				}
+				detachedUserLevelLockCleanups.entries[overflowKey] = entry
+			}
+			if mergeDetachedUserLevelLockTxnIDs(entry, txnIDs) {
+				return entry, true
+			}
+		}
+		return nil, false
+	}
+	if len(txnIDs) > userLevelLockDetachedCleanupMaxTxnIDsPerEntry {
+		return nil, false
+	}
+	rememberDetachedUserLevelLockEntry(touched, key)
+	entry := &detachedUserLevelLockCleanupEntry{
+		key:     key,
+		ls:      ls,
+		backoff: userLevelLockDetachedCleanupInitialBackoff,
+	}
+	detachedUserLevelLockCleanups.entries[key] = entry
+	if !mergeDetachedUserLevelLockTxnIDs(entry, txnIDs) {
+		return nil, false
+	}
+	return entry, true
+}
+
+func enqueueDetachedUserLevelLockTxnCleanup(ls lockservice.LockService, key detachedUserLevelLockCleanupKey, txnIDs [][]byte) bool {
+	if ls == nil || key.serviceID == "" || key.owner == "" || key.name == "" || len(txnIDs) == 0 {
+		return false
+	}
+	startDetachedUserLevelLockCleanupWorkers()
+
+	detachedUserLevelLockCleanups.Lock()
+	defer detachedUserLevelLockCleanups.Unlock()
+	touched := make(map[detachedUserLevelLockCleanupKey]*detachedUserLevelLockCleanupEntry)
+	entry, ok := enqueueDetachedUserLevelLockTxnCleanupLocked(ls, key, txnIDs, touched)
+	if !ok {
+		rollbackDetachedUserLevelLockEntriesLocked(touched)
+		return false
+	}
+	_ = enqueueDetachedUserLevelLockEntryLocked(entry)
+	return true
+}
+
+func handoffDetachedUserLevelLockTxnCleanup(ctx context.Context, ls lockservice.LockService, key detachedUserLevelLockCleanupKey, txnIDs [][]byte) bool {
+	if enqueueDetachedUserLevelLockTxnCleanup(ls, key, txnIDs) {
+		return true
+	}
+	if ls == nil || key.serviceID == "" || key.owner == "" || key.name == "" || len(txnIDs) == 0 {
+		return false
+	}
+	startDetachedUserLevelLockCleanupBacklogWorker()
+	req := detachedUserLevelLockCleanupRequest{
+		ls:     ls,
+		key:    key,
+		txnIDs: cloneUserLevelLockTxnIDs(txnIDs),
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return handoffDetachedUserLevelLockBacklogCleanups(ctx, []detachedUserLevelLockCleanupRequest{req})
+}
+
+func enqueueDetachedUserLevelLockCleanupLocked(entry *detachedUserLevelLockCleanupEntry) bool {
+	select {
+	case detachedUserLevelLockCleanups.queue <- entry.key:
+		entry.queued = true
+		return true
+	default:
+		return false
+	}
+}
+
+func userLevelLockCleanupChunks(owners []string, connID uint64, states []UserLevelLockState) [][][]byte {
+	var chunks [][][]byte
+	txnIDs := make([][]byte, 0, min(len(states)*len(owners)*2, userLevelLockDetachedCleanupMaxTxnIDsPerEntry))
+	for _, state := range states {
+		if state.Name == "" || state.Count == 0 {
+			continue
+		}
+		for _, txnID := range userLevelLockTxnIDsForState(owners, connID, state) {
+			if len(txnIDs) == userLevelLockDetachedCleanupMaxTxnIDsPerEntry {
+				chunks = append(chunks, txnIDs)
+				txnIDs = make([][]byte, 0, userLevelLockDetachedCleanupMaxTxnIDsPerEntry)
+			}
+			txnIDs = append(txnIDs, txnID)
+		}
+	}
+	if len(txnIDs) > 0 {
+		chunks = append(chunks, txnIDs)
+	}
+	return chunks
+}
+
+func enqueueDetachedUserLevelLockCleanups(ls lockservice.LockService, owners []string, connID uint64, states []UserLevelLockState) bool {
+	if ls == nil || len(owners) == 0 || owners[0] == "" || len(states) == 0 {
+		return false
+	}
+	owner := owners[0]
+	chunks := userLevelLockCleanupChunks(owners, connID, states)
+	if len(chunks) == 0 {
+		return false
+	}
+	startDetachedUserLevelLockCleanupWorkers()
+
+	detachedUserLevelLockCleanups.Lock()
+	defer detachedUserLevelLockCleanups.Unlock()
+	touched := make(map[detachedUserLevelLockCleanupKey]*detachedUserLevelLockCleanupEntry)
+	accepted := make([]*detachedUserLevelLockCleanupEntry, 0, len(chunks))
+	for i, chunk := range chunks {
+		entry, ok := enqueueDetachedUserLevelLockTxnCleanupLocked(
+			ls,
+			detachedUserLevelLockCleanupKey{
+				serviceID: ls.GetServiceID(),
+				owner:     owner,
+				name:      fmt.Sprintf("%s:%d", owner, i),
+				connID:    connID,
+				kind:      "session_close",
+			},
+			chunk,
+			touched,
+		)
+		if !ok {
+			rollbackDetachedUserLevelLockEntriesLocked(touched)
+			return false
+		}
+		accepted = append(accepted, entry)
+	}
+	for _, entry := range accepted {
+		_ = enqueueDetachedUserLevelLockEntryLocked(entry)
+	}
+	return true
+}
+
+func handoffDetachedUserLevelLockCleanups(ctx context.Context, ls lockservice.LockService, owners []string, connID uint64, states []UserLevelLockState) bool {
+	if enqueueDetachedUserLevelLockCleanups(ls, owners, connID, states) {
+		return true
+	}
+	if ls == nil || len(owners) == 0 || owners[0] == "" || len(states) == 0 {
+		return false
+	}
+	owner := owners[0]
+	chunks := userLevelLockCleanupChunks(owners, connID, states)
+	if len(chunks) == 0 {
+		return false
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	requests := make([]detachedUserLevelLockCleanupRequest, 0, len(chunks))
+	for i, chunk := range chunks {
+		requests = append(requests, detachedUserLevelLockCleanupRequest{
+			ls: ls,
+			key: detachedUserLevelLockCleanupKey{
+				serviceID: ls.GetServiceID(),
+				owner:     owner,
+				name:      fmt.Sprintf("%s:%d", owner, i),
+				connID:    connID,
+				kind:      "session_close",
+			},
+			txnIDs: cloneUserLevelLockTxnIDs(chunk),
+		})
+	}
+	startDetachedUserLevelLockCleanupBacklogWorker()
+	return handoffDetachedUserLevelLockBacklogCleanups(ctx, requests)
+}
+
+func handoffDetachedUserLevelLockBacklogCleanups(ctx context.Context, requests []detachedUserLevelLockCleanupRequest) bool {
+	if len(requests) == 0 {
+		return true
+	}
+	if len(requests) > userLevelLockDetachedCleanupBacklog {
+		return false
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	for {
+		detachedUserLevelLockCleanups.Lock()
+		if cap(detachedUserLevelLockCleanups.backlog)-len(detachedUserLevelLockCleanups.backlog) >= len(requests) {
+			for _, req := range requests {
+				detachedUserLevelLockCleanups.backlog <- req
+			}
+			detachedUserLevelLockCleanups.Unlock()
+			return true
+		}
+		detachedUserLevelLockCleanups.Unlock()
+
+		timer := time.NewTimer(userLevelLockDetachedCleanupInitialBackoff)
+		select {
+		case <-timer.C:
+		case <-ctx.Done():
+			if !timer.Stop() {
+				select {
+				case <-timer.C:
+				default:
+				}
+			}
+			return false
+		}
+	}
+}
+
+func retainedUserLevelLockCleanupEntryCountLocked() int {
+	count := len(userLevelLocks.pendingCleanups) + len(userLevelLocks.retainedCloseCleanups)
+	activeOwners := make(map[string]struct{}, len(userLevelLocks.byOwner))
+	for owner, names := range userLevelLocks.byOwner {
+		if len(names) == 0 {
+			continue
+		}
+		if _, retained := userLevelLocks.retainedCloseCleanups[owner]; retained {
+			continue
+		}
+		activeOwners[owner] = struct{}{}
+	}
+	count += len(activeOwners)
+	for key := range userLevelLocks.cleanupReservations {
+		if _, ok := userLevelLocks.pendingCleanups[key]; !ok {
+			if key.kind == "session_close" {
+				if _, active := activeOwners[key.owner]; active {
+					continue
+				}
+				if _, retained := userLevelLocks.retainedCloseCleanups[key.owner]; retained {
+					continue
+				}
+			}
+			count++
+		}
+	}
+	return count
+}
+
+func reserveRetainedUserLevelLockTxnCleanupSlot(ls lockservice.LockService, key detachedUserLevelLockCleanupKey) bool {
+	if ls == nil || key.serviceID == "" || key.owner == "" || key.name == "" {
+		return false
+	}
+	userLevelLocks.Lock()
+	if _, ok := userLevelLocks.pendingCleanups[key]; !ok && userLevelLocks.cleanupReservations[key] == 0 &&
+		retainedUserLevelLockCleanupEntryCountLocked() >= userLevelLockRetainedCleanupMaxEntries {
+		userLevelLocks.Unlock()
+		return false
+	}
+	userLevelLocks.cleanupReservations[key]++
+	userLevelLocks.Unlock()
+	return true
+}
+
+func releaseRetainedUserLevelLockTxnCleanupSlot(key detachedUserLevelLockCleanupKey) {
+	userLevelLocks.Lock()
+	if count := userLevelLocks.cleanupReservations[key]; count > 1 {
+		userLevelLocks.cleanupReservations[key] = count - 1
+	} else {
+		delete(userLevelLocks.cleanupReservations, key)
+	}
+	userLevelLocks.Unlock()
+}
+
+func consumeRetainedUserLevelLockTxnCleanupSlotLocked(key detachedUserLevelLockCleanupKey) bool {
+	count := userLevelLocks.cleanupReservations[key]
+	if count > 1 {
+		userLevelLocks.cleanupReservations[key] = count - 1
+		return true
+	}
+	if count == 1 {
+		delete(userLevelLocks.cleanupReservations, key)
+		return true
+	}
+	return false
+}
+
+func userLevelLockCloseCleanupKey(ls lockservice.LockService, owner string, connID uint64) detachedUserLevelLockCleanupKey {
+	return detachedUserLevelLockCleanupKey{
+		serviceID: ls.GetServiceID(),
+		owner:     owner,
+		name:      owner,
+		connID:    connID,
+		kind:      "session_close",
+	}
+}
+
+func reserveUserLevelLockCloseCleanupSlot(ls lockservice.LockService, owner string, connID uint64) bool {
+	if ls == nil || owner == "" {
+		return false
+	}
+	key := userLevelLockCloseCleanupKey(ls, owner, connID)
+	userLevelLocks.Lock()
+	if len(userLevelLocks.byOwner[owner]) > 0 || userLevelLocks.retainedCloseCleanups[owner].ls != nil {
+		userLevelLocks.Unlock()
+		return true
+	}
+	if userLevelLocks.cleanupReservations[key] == 0 && retainedUserLevelLockCleanupEntryCountLocked() >= userLevelLockRetainedCleanupMaxEntries {
+		userLevelLocks.Unlock()
+		return false
+	}
+	userLevelLocks.cleanupReservations[key]++
+	userLevelLocks.Unlock()
+	return true
+}
+
+func retainDetachedUserLevelLockTxnCleanup(ls lockservice.LockService, key detachedUserLevelLockCleanupKey, txnIDs [][]byte) bool {
+	if ls == nil || key.serviceID == "" || key.owner == "" || key.name == "" || len(txnIDs) == 0 {
+		return false
+	}
+	userLevelLocks.Lock()
+	req := userLevelLocks.pendingCleanups[key]
+	reserved := consumeRetainedUserLevelLockTxnCleanupSlotLocked(key)
+	if req.ls == nil {
+		if !reserved && retainedUserLevelLockCleanupEntryCountLocked() >= userLevelLockRetainedCleanupMaxEntries {
+			userLevelLocks.Unlock()
+			return false
+		}
+		req = detachedUserLevelLockCleanupRequest{ls: ls, key: key}
+	}
+	entry := &detachedUserLevelLockCleanupEntry{txnIDs: cloneUserLevelLockTxnIDs(req.txnIDs)}
+	if !mergeDetachedUserLevelLockTxnIDs(entry, txnIDs) {
+		if reserved {
+			userLevelLocks.cleanupReservations[key]++
+		}
+		userLevelLocks.Unlock()
+		return false
+	}
+	req.txnIDs = cloneUserLevelLockTxnIDs(entry.txnIDs)
+	userLevelLocks.pendingCleanups[key] = req
+	startRetainedUserLevelLockCleanupWorkerLocked()
+	userLevelLocks.Unlock()
+	return true
+}
+
+func retainUserLevelLockCloseCleanup(ls lockservice.LockService, owners []string, owner, sessionID string, connID uint64) bool {
+	if ls == nil || owner == "" || len(owners) == 0 {
+		return false
+	}
+	key := userLevelLockCloseCleanupKey(ls, owner, connID)
+	userLevelLocks.Lock()
+	if _, ok := userLevelLocks.retainedCloseCleanups[owner]; !ok {
+		// A real closing owner is already counted while it holds local locks; the
+		// first successful GET_LOCK reserves that active-owner slot before
+		// acquiring the synthetic transaction. Retaining close cleanup reuses that
+		// bounded slot instead of admitting an unbounded new close entry.
+		_ = consumeRetainedUserLevelLockTxnCleanupSlotLocked(key)
+	}
+	if _, ok := userLevelLocks.retainedCloseCleanups[owner]; !ok &&
+		len(userLevelLocks.byOwner[owner]) == 0 &&
+		retainedUserLevelLockCleanupEntryCountLocked() >= userLevelLockRetainedCleanupMaxEntries {
+		userLevelLocks.Unlock()
+		return false
+	}
+	userLevelLocks.retainedCloseCleanups[owner] = retainedUserLevelLockCloseCleanup{
+		ls:        ls,
+		owners:    append([]string(nil), owners...),
+		owner:     owner,
+		sessionID: sessionID,
+		connID:    connID,
+	}
+	startRetainedUserLevelLockCleanupWorkerLocked()
+	userLevelLocks.Unlock()
+	return true
+}
+
+func startRetainedUserLevelLockCleanupWorkerLocked() {
+	if userLevelLocks.retainedCleanupStarted {
+		return
+	}
+	userLevelLocks.retainedCleanupStarted = true
+	generation := userLevelLocks.retainedCleanupGen
+	done := make(chan struct{})
+	userLevelLocks.retainedCleanupDone = done
+	go runRetainedUserLevelLockCleanupWorker(generation, done)
+}
+
+func retainedUserLevelLockCleanupGenerationActive(generation uint64) bool {
+	userLevelLocks.Lock()
+	defer userLevelLocks.Unlock()
+	return userLevelLocks.retainedCleanupStarted &&
+		userLevelLocks.retainedCleanupGen == generation
+}
+
+func runRetainedUserLevelLockCleanupWorker(generation uint64, done chan struct{}) {
+	defer close(done)
+	backoff := userLevelLockDetachedCleanupInitialBackoff
+	for {
+		if !retainedUserLevelLockCleanupGenerationActive(generation) {
+			return
+		}
+		progress, remaining := runRetainedUserLevelLockCleanupPassForGeneration(&generation)
+		if !retainedUserLevelLockCleanupGenerationActive(generation) {
+			return
+		}
+		if !remaining {
+			userLevelLocks.Lock()
+			if userLevelLocks.retainedCleanupGen == generation &&
+				len(userLevelLocks.pendingCleanups) == 0 &&
+				len(userLevelLocks.retainedCloseCleanups) == 0 {
+				userLevelLocks.retainedCleanupStarted = false
+				if userLevelLocks.retainedCleanupDone == done {
+					userLevelLocks.retainedCleanupDone = nil
+				}
+				userLevelLocks.Unlock()
+				return
+			}
+			userLevelLocks.Unlock()
+		}
+		if progress {
+			backoff = userLevelLockDetachedCleanupInitialBackoff
+			continue
+		}
+		time.Sleep(backoff)
+		if backoff < userLevelLockDetachedCleanupMaxBackoff {
+			backoff *= 2
+			if backoff > userLevelLockDetachedCleanupMaxBackoff {
+				backoff = userLevelLockDetachedCleanupMaxBackoff
+			}
+		}
+	}
+}
+
+func runRetainedUserLevelLockCleanupPass() (bool, bool) {
+	return runRetainedUserLevelLockCleanupPassForGeneration(nil)
+}
+
+func runRetainedUserLevelLockCleanupPassForGeneration(generation *uint64) (bool, bool) {
+	progress := false
+	remaining := false
+
+	userLevelLocks.Lock()
+	if generation != nil && userLevelLocks.retainedCleanupGen != *generation {
+		userLevelLocks.Unlock()
+		return false, false
+	}
+	pending := make([]detachedUserLevelLockCleanupRequest, 0, len(userLevelLocks.pendingCleanups))
+	for _, req := range userLevelLocks.pendingCleanups {
+		pending = append(pending, detachedUserLevelLockCleanupRequest{
+			ls:     req.ls,
+			key:    req.key,
+			txnIDs: cloneUserLevelLockTxnIDs(req.txnIDs),
+		})
+	}
+	closeCleanups := make([]retainedUserLevelLockCloseCleanup, 0, len(userLevelLocks.retainedCloseCleanups))
+	for _, retained := range userLevelLocks.retainedCloseCleanups {
+		closeCleanups = append(closeCleanups, retainedUserLevelLockCloseCleanup{
+			ls:        retained.ls,
+			owners:    append([]string(nil), retained.owners...),
+			owner:     retained.owner,
+			sessionID: retained.sessionID,
+			connID:    retained.connID,
+		})
+	}
+	userLevelLocks.Unlock()
+
+	for _, req := range pending {
+		if generation != nil && !retainedUserLevelLockCleanupGenerationActive(*generation) {
+			return progress, false
+		}
+		attemptCtx, cancel := context.WithTimeout(context.Background(), userLevelLockDetachedCleanupAttemptTimeout)
+		err := unlockUserLevelLockTxnIDs(attemptCtx, req.ls, req.txnIDs)
+		cancel()
+		if err == nil {
+			userLevelLocks.Lock()
+			removeRetainedUserLevelLockPendingTxnIDsLocked(req.key, req.txnIDs)
+			userLevelLocks.Unlock()
+			progress = true
+			continue
+		}
+		handoffCtx, handoffCancel := context.WithTimeout(context.Background(), userLevelLockDetachedCleanupAttemptTimeout)
+		handoffOK := handoffDetachedUserLevelLockTxnCleanup(handoffCtx, req.ls, req.key, req.txnIDs)
+		handoffCancel()
+		if handoffOK {
+			userLevelLocks.Lock()
+			removeRetainedUserLevelLockPendingTxnIDsLocked(req.key, req.txnIDs)
+			userLevelLocks.Unlock()
+			progress = true
+			continue
+		}
+		remaining = true
+	}
+
+	for _, retained := range closeCleanups {
+		if generation != nil && !retainedUserLevelLockCleanupGenerationActive(*generation) {
+			return progress, false
+		}
+		states := userLevelLocksForOwnerSession(retained.owner, retained.sessionID)
+		if len(states) == 0 {
+			userLevelLocks.Lock()
+			delete(userLevelLocks.retainedCloseCleanups, retained.owner)
+			userLevelLocks.Unlock()
+			progress = true
+			continue
+		}
+		handoffCtx, handoffCancel := context.WithTimeout(context.Background(), userLevelLockDetachedCleanupAttemptTimeout)
+		handoffOK := handoffDetachedUserLevelLockCleanups(handoffCtx, retained.ls, retained.owners, retained.connID, states)
+		handoffCancel()
+		if handoffOK {
+			detachUserLevelLocksForOwner(retained.owner, retained.sessionID)
+			userLevelLocks.Lock()
+			delete(userLevelLocks.retainedCloseCleanups, retained.owner)
+			userLevelLocks.Unlock()
+			progress = true
+			continue
+		}
+		remaining = true
+	}
+	return progress, remaining
+}
+
+func removeRetainedUserLevelLockPendingTxnIDsLocked(key detachedUserLevelLockCleanupKey, txnIDs [][]byte) {
+	req := userLevelLocks.pendingCleanups[key]
+	if req.ls == nil {
+		return
+	}
+	entry := &detachedUserLevelLockCleanupEntry{txnIDs: cloneUserLevelLockTxnIDs(req.txnIDs)}
+	removeDetachedUserLevelLockTxnIDs(entry, txnIDs)
+	if len(entry.txnIDs) == 0 {
+		delete(userLevelLocks.pendingCleanups, key)
+		return
+	}
+	req.txnIDs = cloneUserLevelLockTxnIDs(entry.txnIDs)
+	userLevelLocks.pendingCleanups[key] = req
+}
+
+func startDetachedUserLevelLockCleanupWorkers() {
+	detachedUserLevelLockCleanups.Lock()
+	if detachedUserLevelLockCleanups.started {
+		detachedUserLevelLockCleanups.Unlock()
+		return
+	}
+	detachedUserLevelLockCleanups.started = true
+	queue := detachedUserLevelLockCleanups.queue
+	detachedUserLevelLockCleanups.Unlock()
+
+	for i := 0; i < userLevelLockDetachedCleanupWorkers; i++ {
+		go runDetachedUserLevelLockCleanupWorker(queue)
+	}
+}
+
+func startDetachedUserLevelLockCleanupBacklogWorker() {
+	detachedUserLevelLockCleanups.Lock()
+	if detachedUserLevelLockCleanups.backlogStarted {
+		detachedUserLevelLockCleanups.Unlock()
+		return
+	}
+	detachedUserLevelLockCleanups.backlogStarted = true
+	backlog := detachedUserLevelLockCleanups.backlog
+	detachedUserLevelLockCleanups.Unlock()
+
+	go runDetachedUserLevelLockCleanupBacklogWorker(backlog)
+}
+
+func runDetachedUserLevelLockCleanupBacklogWorker(backlog <-chan detachedUserLevelLockCleanupRequest) {
+	for req := range backlog {
+		backoff := userLevelLockDetachedCleanupInitialBackoff
+		for !enqueueDetachedUserLevelLockTxnCleanup(req.ls, req.key, req.txnIDs) {
+			time.Sleep(backoff)
+			if backoff < userLevelLockDetachedCleanupMaxBackoff {
+				backoff *= 2
+				if backoff > userLevelLockDetachedCleanupMaxBackoff {
+					backoff = userLevelLockDetachedCleanupMaxBackoff
+				}
+			}
+		}
+	}
+}
+
+func runDetachedUserLevelLockCleanupWorker(queue <-chan detachedUserLevelLockCleanupKey) {
+	for key := range queue {
+		runDetachedUserLevelLockCleanupAttempt(key)
+	}
+}
+
+func runDetachedUserLevelLockCleanupAttempt(key detachedUserLevelLockCleanupKey) {
+	detachedUserLevelLockCleanups.Lock()
+	entry := detachedUserLevelLockCleanups.entries[key]
+	if entry == nil {
+		detachedUserLevelLockCleanups.Unlock()
+		return
+	}
+	if entry.running {
+		entry.queued = false
+		detachedUserLevelLockCleanups.Unlock()
+		return
+	}
+	entry.queued = false
+	entry.running = true
+	backoff := entry.backoff
+	ls := entry.ls
+	txnIDs := append([][]byte(nil), entry.txnIDs...)
+	detachedUserLevelLockCleanups.Unlock()
+
+	attemptCtx, cancel := context.WithTimeout(context.Background(), userLevelLockDetachedCleanupAttemptTimeout)
+	processed := make([][]byte, 0, len(txnIDs))
+	var err error
+	for _, txnID := range txnIDs {
+		if len(txnID) == 0 {
+			continue
+		}
+		if err = unlockUserLevelLockTxnID(attemptCtx, ls, txnID); err != nil {
+			break
+		}
+		processed = append(processed, txnID)
+	}
+	cancel()
+
+	detachedUserLevelLockCleanups.Lock()
+	if detachedUserLevelLockCleanups.entries[key] != entry {
+		detachedUserLevelLockCleanups.Unlock()
+		return
+	}
+	removeDetachedUserLevelLockTxnIDs(entry, processed)
+	entry.running = false
+	if err == nil {
+		entry.backoff = userLevelLockDetachedCleanupInitialBackoff
+		if len(entry.txnIDs) == 0 {
+			delete(detachedUserLevelLockCleanups.entries, key)
+		} else {
+			_ = enqueueDetachedUserLevelLockEntryLocked(entry)
+		}
+		queueDetachedUserLevelLockCleanupLocked()
+		detachedUserLevelLockCleanups.Unlock()
+		return
+	}
+	detachedUserLevelLockCleanups.Unlock()
+
+	logutil.Warn(fmt.Sprintf(
+		"detached user-level lock cleanup failed: owner=%s lock=%s kind=%s err=%v",
+		key.owner,
+		key.name,
+		key.kind,
+		err,
+	))
+	time.Sleep(backoff)
+
+	detachedUserLevelLockCleanups.Lock()
+	if detachedUserLevelLockCleanups.entries[key] == entry && !entry.queued {
+		if entry.backoff < userLevelLockDetachedCleanupMaxBackoff {
+			entry.backoff *= 2
+			if entry.backoff > userLevelLockDetachedCleanupMaxBackoff {
+				entry.backoff = userLevelLockDetachedCleanupMaxBackoff
+			}
+		}
+		_ = enqueueDetachedUserLevelLockEntryLocked(entry)
+	}
+	queueDetachedUserLevelLockCleanupLocked()
+	detachedUserLevelLockCleanups.Unlock()
+}
+
+func queueDetachedUserLevelLockCleanupLocked() {
+	for _, entry := range detachedUserLevelLockCleanups.entries {
+		if entry.queued || entry.running {
+			continue
+		}
+		if !enqueueDetachedUserLevelLockCleanupLocked(entry) {
+			return
+		}
+	}
+}
+
+func unlockUserLevelLockProbe(ctx context.Context, ls lockservice.LockService, owner string, connID uint64, name, probeType string) error {
+	txnID := userLevelLockProbeTxnID(owner, connID, name, probeType)
+	attemptCtx, cancel := userLevelLockCleanupAttemptContext(ctx)
+	err := unlockUserLevelLockTxnID(attemptCtx, ls, txnID)
+	cancel()
+	if err == nil {
+		return nil
+	}
+	key := userLevelLockFailedAttemptCleanupKey(ls, owner, connID, name, "probe:"+probeType, txnID)
+	if handoffDetachedUserLevelLockTxnCleanup(
+		ctx,
+		ls,
+		key,
+		[][]byte{txnID},
+	) {
+		releaseRetainedUserLevelLockTxnCleanupSlot(key)
 		return err
 	}
-	return ls.Unlock(ctx, userLevelLockTxnIDOld(owner, name), timestamp.Timestamp{})
+	if !retainDetachedUserLevelLockTxnCleanup(ls, key, [][]byte{txnID}) {
+		return moerr.NewInternalErrorNoCtxf("user-level lock probe cleanup queue is full for %s", name)
+	}
+	return err
 }
 
 func userLevelLockOptions(policy lockpb.WaitPolicy) lockpb.LockOptions {
@@ -7122,12 +8555,26 @@ func userLevelLockConflictOrTimeout(err error) bool {
 		errors.Is(err, context.DeadlineExceeded)
 }
 
+func userLevelLockTimedOut(err error) bool {
+	return errors.Is(err, context.DeadlineExceeded)
+}
+
 func trackUserLevelLock(owner, name string) {
+	trackUserLevelLockForSession(owner, "", name, nil)
+}
+
+func trackUserLevelLockForSession(owner, sessionID, name string, txnIDs [][]byte) {
 	key := userLevelLockKey{owner: owner, name: name}
 	userLevelLocks.Lock()
 	defer userLevelLocks.Unlock()
 
+	if userLevelLocks.counts[key] == 0 && len(txnIDs) > 0 {
+		userLevelLocks.txnIDs[key] = cloneUserLevelLockTxnIDs(txnIDs)
+	}
 	userLevelLocks.counts[key]++
+	if sessionID != "" {
+		userLevelLocks.ownerSessions[owner] = sessionID
+	}
 	if userLevelLocks.byOwner[owner] == nil {
 		userLevelLocks.byOwner[owner] = make(map[string]struct{})
 	}
@@ -7154,10 +8601,12 @@ func untrackUserLevelLock(owner, name string) (uint64, bool) {
 		return count - 1, true
 	}
 	delete(userLevelLocks.counts, key)
+	delete(userLevelLocks.txnIDs, key)
 	if names := userLevelLocks.byOwner[owner]; names != nil {
 		delete(names, name)
 		if len(names) == 0 {
 			delete(userLevelLocks.byOwner, owner)
+			delete(userLevelLocks.ownerSessions, owner)
 		}
 	}
 	return 0, true
@@ -7173,10 +8622,12 @@ func untrackAllUserLevelLock(owner, name string) (uint64, bool) {
 		return 0, false
 	}
 	delete(userLevelLocks.counts, key)
+	delete(userLevelLocks.txnIDs, key)
 	if names := userLevelLocks.byOwner[owner]; names != nil {
 		delete(names, name)
 		if len(names) == 0 {
 			delete(userLevelLocks.byOwner, owner)
+			delete(userLevelLocks.ownerSessions, owner)
 		}
 	}
 	return count, true
@@ -7198,8 +8649,114 @@ func userLevelLocksForOwner(owner string) []string {
 	return result
 }
 
+func UserLevelLocksForMigration(proc *process.Process) []UserLevelLockState {
+	owner := userLevelLockOwner(proc)
+	return userLevelLocksForOwnerSession(owner, userLevelLockSessionID(proc))
+}
+
+func userLevelLocksForOwnerSession(owner, sessionID string) []UserLevelLockState {
+	userLevelLocks.Lock()
+	defer userLevelLocks.Unlock()
+
+	if current := userLevelLocks.ownerSessions[owner]; sessionID != "" && current != "" && current != sessionID {
+		return nil
+	}
+	names := userLevelLocks.byOwner[owner]
+	if len(names) == 0 {
+		return nil
+	}
+	result := make([]UserLevelLockState, 0, len(names))
+	for name := range names {
+		count := userLevelLocks.counts[userLevelLockKey{owner: owner, name: name}]
+		if count > 0 {
+			key := userLevelLockKey{owner: owner, name: name}
+			result = append(result, UserLevelLockState{
+				Name:   name,
+				Count:  count,
+				TxnIDs: cloneUserLevelLockTxnIDs(userLevelLocks.txnIDs[key]),
+			})
+		}
+	}
+	sort.Slice(result, func(i, j int) bool {
+		return result[i].Name < result[j].Name
+	})
+	return result
+}
+
+func RestoreUserLevelLocksFromMigration(proc *process.Process, states []UserLevelLockState) {
+	if len(states) == 0 {
+		return
+	}
+	owner, _ := ensureUserLevelLockIdentity(proc)
+	if owner == "" {
+		return
+	}
+	sessionID := userLevelLockSessionID(proc)
+	userLevelLocks.Lock()
+	defer userLevelLocks.Unlock()
+
+	if sessionID != "" {
+		userLevelLocks.ownerSessions[owner] = sessionID
+	}
+	for _, state := range states {
+		if state.Name == "" || state.Count == 0 {
+			continue
+		}
+		key := userLevelLockKey{owner: owner, name: state.Name}
+		userLevelLocks.counts[key] = state.Count
+		userLevelLocks.txnIDs[key] = cloneUserLevelLockTxnIDs(state.TxnIDs)
+		if userLevelLocks.byOwner[owner] == nil {
+			userLevelLocks.byOwner[owner] = make(map[string]struct{})
+		}
+		userLevelLocks.byOwner[owner][state.Name] = struct{}{}
+	}
+}
+
+func DiscardMigratedUserLevelLocks(proc *process.Process) {
+	owner := userLevelLockOwner(proc)
+	if owner == "" {
+		return
+	}
+	sessionID := userLevelLockSessionID(proc)
+	userLevelLocks.Lock()
+	defer userLevelLocks.Unlock()
+
+	if current := userLevelLocks.ownerSessions[owner]; sessionID != "" && current != "" && current != sessionID {
+		return
+	}
+	for name := range userLevelLocks.byOwner[owner] {
+		key := userLevelLockKey{owner: owner, name: name}
+		delete(userLevelLocks.counts, key)
+		delete(userLevelLocks.txnIDs, key)
+	}
+	delete(userLevelLocks.byOwner, owner)
+	delete(userLevelLocks.ownerSessions, owner)
+}
+
+func detachUserLevelLocksForOwner(owner, sessionID string) uint64 {
+	if owner == "" {
+		return 0
+	}
+	userLevelLocks.Lock()
+	defer userLevelLocks.Unlock()
+
+	if current := userLevelLocks.ownerSessions[owner]; sessionID != "" && current != "" && current != sessionID {
+		return 0
+	}
+	var detached uint64
+	for name := range userLevelLocks.byOwner[owner] {
+		key := userLevelLockKey{owner: owner, name: name}
+		detached += userLevelLocks.counts[key]
+		delete(userLevelLocks.counts, key)
+		delete(userLevelLocks.txnIDs, key)
+	}
+	delete(userLevelLocks.byOwner, owner)
+	delete(userLevelLocks.ownerSessions, owner)
+	return detached
+}
+
 func getUserLevelLock(name string, timeout float64, proc *process.Process) (int64, error) {
-	name, err := normalizeUserLevelLockName(name)
+	name, err := validateUserLevelLockName(name)
 	if err != nil {
 		return 0, err
 	}
@@ -7207,35 +8764,60 @@ func getUserLevelLock(name string, timeout float64, proc *process.Process) (int6
 	if err != nil {
 		return 0, err
 	}
-	//owner = sessionid or serviceid:connectionid  or  connectionid
-	owner := userLevelLockOwner(proc)
-	//connectionid
-	connID := userLevelLockConnectionID(proc)
+	// Pin the owner/txn identity for the lifetime of the frontend session.
+	// SessionInfo.ConnectionID may be changed by proxy restore or SET CONNECTION
+	// ID, but existing lock txns must remain releasable by this session.
+	owner, connID := ensureUserLevelLockIdentity(proc)
 	//owner+lockname -> count
 	//serviceid:connectionid + lockname -> count
 	if userLevelLockRefCount(owner, name) > 0 {
 		//count++
 		//owner -> lockname
-		trackUserLevelLock(owner, name)
+		trackUserLevelLockForSession(owner, userLevelLockSessionID(proc), name, nil)
 		return 1, nil
 	}
 
 	ctx, cancel, policy := userLevelLockContext(proc, timeout)
 	defer cancel()
 
+	txnID := userLevelLockAttemptTxnID(owner, connID, name)
+	closeCleanupKey := userLevelLockCloseCleanupKey(ls, owner, connID)
+	if !reserveUserLevelLockCloseCleanupSlot(ls, owner, connID) {
+		return 0, moerr.NewInternalErrorNoCtxf("user-level lock cleanup capacity is full for %s", name)
+	}
+	cleanupKey := userLevelLockFailedAttemptCleanupKey(ls, owner, connID, name, "get_lock_failed", txnID)
+	if !reserveRetainedUserLevelLockTxnCleanupSlot(ls, cleanupKey) {
+		releaseRetainedUserLevelLockTxnCleanupSlot(closeCleanupKey)
+		return 0, moerr.NewInternalErrorNoCtxf("user-level lock cleanup capacity is full for %s", name)
+	}
 	_, err = ls.Lock(
 		ctx,
 		userLevelLockTableID,
 		[][]byte{userLevelLockRow(proc, name)},
-		userLevelLockTxnID(owner, connID, name),
+		txnID,
 		userLevelLockOptions(policy))
 	if err != nil {
-		if userLevelLockConflictOrTimeout(err) {
+		cleanupErr := cleanupFailedUserLevelLockTxn(
+			ctx,
+			ls,
+			cleanupKey,
+			txnID,
+		)
+		releaseRetainedUserLevelLockTxnCleanupSlot(closeCleanupKey)
+		if cleanupErr != nil {
+			return 0, cleanupErr
+		}
+		if userLevelLockTimedOut(err) {
+			return 0, nil
+		}
+		if moerr.IsMoErrCode(err, moerr.ErrLockConflict) || errors.Is(err, lockservice.ErrLockConflict) {
 			return 0, nil
 		}
 		return 0, err
 	}
-	trackUserLevelLock(owner, name)
+	trackUserLevelLockForSession(owner, userLevelLockSessionID(proc), name, [][]byte{txnID})
+	releaseRetainedUserLevelLockTxnCleanupSlot(closeCleanupKey)
+	releaseRetainedUserLevelLockTxnCleanupSlot(cleanupKey)
 	return 1, nil
 }
 
@@ -7245,7 +8827,7 @@ func getUserLevelLock(name string, timeout float64, proc *process.Process) (int6
 //   - (0, false, nil): lock exists but is held by another session.
 //   - (0, true, nil):  lock does not exist (MySQL returns NULL).
 func releaseUserLevelLock(name string, proc *process.Process) (int64, bool, error) {
-	name, err := normalizeUserLevelLockName(name)
+	name, err := validateUserLevelLockName(name)
 	if err != nil {
 		return 0, false, err
 	}
@@ -7257,15 +8839,29 @@ func releaseUserLevelLock(name string, proc *process.Process) (int64, bool, erro
 	connID := userLevelLockConnectionID(proc)
 	count := userLevelLockRefCount(owner, name)
 	if count == 0 {
+		probeTxnID := userLevelLockProbeTxnID(owner, connID, name, "release")
+		probeCleanupKey := userLevelLockFailedAttemptCleanupKey(ls, owner, connID, name, "probe:release", probeTxnID)
+		if !reserveRetainedUserLevelLockTxnCleanupSlot(ls, probeCleanupKey) {
+			return 0, false, moerr.NewInternalErrorNoCtxf("user-level lock cleanup capacity is full for %s", name)
+		}
 		// Probe the lockservice to distinguish "lock does not exist" (NULL)
 		// from "lock exists but held by another session" (0).
 		_, probeErr := ls.Lock(
 			proc.Ctx,
 			userLevelLockTableID,
 			[][]byte{userLevelLockRow(proc, name)},
-			userLevelLockProbeTxnID(owner, connID, name, "release"),
+			probeTxnID,
 			userLevelLockOptions(lockpb.WaitPolicy_FastFail))
 		if probeErr != nil {
+			cleanupErr := cleanupFailedUserLevelLockTxn(
+				proc.Ctx,
+				ls,
+				probeCleanupKey,
+				probeTxnID,
+			)
+			if cleanupErr != nil {
+				return 0, false, cleanupErr
+			}
 			if userLevelLockConflictOrTimeout(probeErr) {
 				// Lock exists but is held by another session.
 				return 0, false, nil
@@ -7274,16 +8870,17 @@ func releaseUserLevelLock(name string, proc *process.Process) (int64, bool, erro
 		}
 		// Lock did not exist — we acquired it via the probe. Release it and
 		// return NULL to signal the lock was already free.
-		if err := ls.Unlock(proc.Ctx, userLevelLockProbeTxnID(owner, connID, name, "release"), timestamp.Timestamp{}); err != nil {
+		if err := unlockUserLevelLockProbe(proc.Ctx, ls, owner, connID, name, "release"); err != nil {
 			return 0, false, err
 		}
+		releaseRetainedUserLevelLockTxnCleanupSlot(probeCleanupKey)
 		return 0, true, nil
 	}
 	if count > 1 {
 		untrackUserLevelLock(owner, name)
 		return 1, false, nil
 	}
-	if err := unlockUserLevelLockTxnIDs(proc.Ctx, ls, owner, connID, name); err != nil {
+	if err := unlockTrackedUserLevelLockByName(proc.Ctx, ls, owner, userLevelLockOwnerCandidates(proc), connID, name); err != nil {
 		return 0, false, err
 	}
 	untrackUserLevelLock(owner, name)
@@ -7291,7 +8888,7 @@ func releaseUserLevelLock(name string, proc *process.Process) (int64, bool, erro
 }
 
 func isUserLevelLockFree(name string, proc *process.Process) (int64, error) {
-	name, err := normalizeUserLevelLockName(name)
+	name, err := validateUserLevelLockName(name)
 	if err != nil {
 		return 0, err
 	}
@@ -7301,26 +8898,41 @@ func isUserLevelLockFree(name string, proc *process.Process) (int64, error) {
 	}
 	owner := userLevelLockOwner(proc)
 	connID := userLevelLockConnectionID(proc)
+	probeTxnID := userLevelLockProbeTxnID(owner, connID, name, "is_free")
+	probeCleanupKey := userLevelLockFailedAttemptCleanupKey(ls, owner, connID, name, "probe:is_free", probeTxnID)
+	if !reserveRetainedUserLevelLockTxnCleanupSlot(ls, probeCleanupKey) {
+		return 0, moerr.NewInternalErrorNoCtxf("user-level lock cleanup capacity is full for %s", name)
+	}
 	_, err = ls.Lock(
 		proc.Ctx,
 		userLevelLockTableID,
 		[][]byte{userLevelLockRow(proc, name)},
-		userLevelLockProbeTxnID(owner, connID, name, "is_free"),
+		probeTxnID,
 		userLevelLockOptions(lockpb.WaitPolicy_FastFail))
 	if err != nil {
+		cleanupErr := cleanupFailedUserLevelLockTxn(
+			proc.Ctx,
+			ls,
+			probeCleanupKey,
+			probeTxnID,
+		)
+		if cleanupErr != nil {
+			return 0, cleanupErr
+		}
 		if userLevelLockConflictOrTimeout(err) {
 			return 0, nil
 		}
 		return 0, err
 	}
-	if err := ls.Unlock(proc.Ctx, userLevelLockProbeTxnID(owner, connID, name, "is_free"), timestamp.Timestamp{}); err != nil {
+	if err := unlockUserLevelLockProbe(proc.Ctx, ls, owner, connID, name, "is_free"); err != nil {
 		return 0, err
 	}
+	releaseRetainedUserLevelLockTxnCleanupSlot(probeCleanupKey)
 	return 1, nil
 }
 
 func isUserLevelLockUsed(name string, proc *process.Process) (uint64, bool, error) {
-	name, err := normalizeUserLevelLockName(name)
+	name, err := validateUserLevelLockName(name)
 	if err != nil {
 		return 0, false, err
 	}
@@ -7351,17 +8963,28 @@ func isUserLevelLockUsed(name string, proc *process.Process) (uint64, bool, erro
 }
 
 func releaseAllUserLevelLocks(proc *process.Process) (int64, error) {
+	if proc == nil {
+		return 0, nil
+	}
+	return releaseAllUserLevelLocksWithContext(proc.Ctx, proc)
+}
+
+func releaseAllUserLevelLocksWithContext(ctx context.Context, proc *process.Process) (int64, error) {
 	if proc == nil || proc.GetLockService() == nil {
 		return 0, nil
 	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	owner := userLevelLockOwner(proc)
 	connID := userLevelLockConnectionID(proc)
+	owners := userLevelLockOwnerCandidates(proc)
 	var released int64
 	for _, name := range userLevelLocksForOwner(owner) {
 		if userLevelLockRefCount(owner, name) == 0 {
 			continue
 		}
-		if err := unlockUserLevelLockTxnIDs(context.Background(), proc.GetLockService(), owner, connID, name); err != nil {
+		if err := unlockTrackedUserLevelLockByName(ctx, proc.GetLockService(), owner, owners, connID, name); err != nil {
 			logutil.Warn(fmt.Sprintf("releaseAllUserLevelLocks unlock failed: owner=%s lock=%s err=%v", owner, name, err))
 			return released, err
 		}
@@ -7374,6 +8997,62 @@ func releaseAllUserLevelLocks(proc *process.Process) (int64, error) {
 
 func ReleaseUserLevelLocks(proc *process.Process) {
 	_, _ = releaseAllUserLevelLocks(proc)
+}
+
+func ReleaseUserLevelLocksOnSessionClose(proc *process.Process) {
+	releaseUserLevelLocksOnSessionCloseWithTimeout(proc, userLevelLockCloseTimeout)
+}
+
+func releaseUserLevelLocksOnSessionCloseWithTimeout(proc *process.Process, timeout time.Duration) {
+	backoff := userLevelLockDetachedCleanupInitialBackoff
+	for {
+		ctx, cancel := context.WithTimeout(context.Background(), timeout)
+		_, err := releaseAllUserLevelLocksWithContext(ctx, proc)
+		cancel()
+		if err == nil {
+			return
+		}
+		owner := userLevelLockOwner(proc)
+		sessionID := userLevelLockSessionID(proc)
+		states := userLevelLocksForOwnerSession(owner, sessionID)
+		if len(states) == 0 {
+			return
+		}
+		connID := userLevelLockConnectionID(proc)
+		handoffCtx, handoffCancel := context.WithTimeout(context.Background(), timeout)
+		handoffOK := handoffDetachedUserLevelLockCleanups(handoffCtx, proc.GetLockService(), userLevelLockOwnerCandidates(proc), connID, states)
+		handoffCancel()
+		if handoffOK {
+			detached := detachUserLevelLocksForOwner(owner, sessionID)
+			logutil.Warn(fmt.Sprintf(
+				"ReleaseUserLevelLocksOnSessionClose transferred cleanup ownership after release failure: owner=%s locks=%d err=%v",
+				owner,
+				detached,
+				err,
+			))
+			return
+		}
+		if retainUserLevelLockCloseCleanup(proc.GetLockService(), userLevelLockOwnerCandidates(proc), owner, sessionID, connID) {
+			logutil.Warn(fmt.Sprintf(
+				"ReleaseUserLevelLocksOnSessionClose retained cleanup ownership for async retry after release failure: owner=%s err=%v",
+				owner,
+				err,
+			))
+			return
+		}
+		logutil.Warn(fmt.Sprintf(
+			"ReleaseUserLevelLocksOnSessionClose retained local cleanup state after release failure and will retry handoff: owner=%s err=%v",
+			owner,
+			err,
+		))
+		time.Sleep(backoff)
+		if backoff < userLevelLockDetachedCleanupMaxBackoff {
+			backoff *= 2
+			if backoff > userLevelLockDetachedCleanupMaxBackoff {
+				backoff = userLevelLockDetachedCleanupMaxBackoff
+			}
+		}
+	}
 }
 
 func GetLock(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
@@ -7737,6 +9416,12 @@ func LastDay(
 
 			year := dt.Year()
 			month := dt.Month()
+			if dt == types.ZeroDate || month == 0 {
+				if err := rs.AppendBytes(nil, true); err != nil {
+					return err
+				}
+				continue
+			}
 
 			lastDay := types.LastDay(int32(year), month)
 			resDt := types.DateFromCalendar(int32(year), month, lastDay)

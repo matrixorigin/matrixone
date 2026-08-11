@@ -297,6 +297,7 @@ func leastGreatestExecutorSupportsOid(oid types.T) bool {
 		types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_datalink,
 		types.T_binary, types.T_varbinary,
 		types.T_array_float32, types.T_array_float64,
+		types.T_array_bf16, types.T_array_float16, types.T_array_int8, types.T_array_uint8,
 		types.T_date, types.T_datetime, types.T_time, types.T_timestamp, types.T_year,
 		types.T_decimal64, types.T_decimal128, types.T_decimal256,
 		types.T_Rowid:
@@ -309,6 +310,19 @@ func leastGreatestExecutorSupportsOid(oid types.T) bool {
 func leastGreatestSameOidAlignedType(inputs []types.Type) (types.Type, bool) {
 	target := inputs[0]
 	switch target.Oid {
+	case types.T_char, types.T_varchar, types.T_text:
+		mergedCharset := types.MergeStringCharset(inputs, target.Charset)
+		for i := range inputs {
+			if inputs[i].Charset != mergedCharset {
+				// Aligning collation requires casts even when the OIDs already
+				// match. Reuse the conditional-string derivation so CHAR/VARCHAR
+				// widths widen normally while unbounded TEXT is never collapsed
+				// to the T_text/Width=255 TINYTEXT marker.
+				target = commonConditionalStringType(target, inputs)
+				return target, true
+			}
+		}
+		return types.Type{}, false
 	case types.T_decimal64, types.T_decimal128, types.T_decimal256:
 		if !leastGreatestMetadataDiffers(inputs) {
 			return types.Type{}, false
@@ -436,7 +450,7 @@ func leastGreatestJSONDateTemporalType(inputs []types.Type) (types.Type, bool) {
 			}
 		}
 	}
-	return types.T_varchar.ToType(), true
+	return leastGreatestMergedStringType(inputs, types.T_varchar), true
 }
 
 func leastGreatestDateTemporalMixedType(inputs []types.Type) (types.Type, bool) {
@@ -465,22 +479,24 @@ func leastGreatestDateTemporalMixedType(inputs []types.Type) (types.Type, bool) 
 			hasNumeric = true
 		}
 	}
+	var targetOID types.T
 	switch {
 	case allTemporal:
 		target := types.T_datetime.ToType()
 		target.Scale = leastGreatestTemporalMaxScale(inputs)
 		return target, true
 	case hasText:
-		return types.T_text.ToType(), true
+		targetOID = types.T_text
 	case hasNonBinary || hasNumeric:
-		return types.T_varchar.ToType(), true
+		targetOID = types.T_varchar
 	case hasBlob:
-		return types.T_blob.ToType(), true
+		targetOID = types.T_blob
 	case hasBinary:
-		return types.T_varbinary.ToType(), true
+		targetOID = types.T_varbinary
 	default:
 		return types.Type{}, false
 	}
+	return leastGreatestMergedStringType(inputs, targetOID), true
 }
 
 func leastGreatestJSONMixedType(inputs []types.Type) (types.Type, bool) {
@@ -499,9 +515,9 @@ func leastGreatestJSONMixedType(inputs []types.Type) (types.Type, bool) {
 		}
 	}
 	if hasText {
-		return types.T_text.ToType(), true
+		return leastGreatestMergedStringType(inputs, types.T_text), true
 	}
-	return types.T_varchar.ToType(), true
+	return leastGreatestMergedStringType(inputs, types.T_varchar), true
 }
 
 func leastGreatestCommonNumericOrYearType(inputs []types.Type) (types.Type, bool) {
@@ -540,22 +556,35 @@ func leastGreatestStringMixedType(inputs []types.Type) (types.Type, bool) {
 			hasNumeric = true
 		}
 	}
+	var targetOID types.T
 	switch {
 	case hasText:
-		return types.T_text.ToType(), true
+		targetOID = types.T_text
 	case hasNonBinary:
-		return types.T_varchar.ToType(), true
+		targetOID = types.T_varchar
 	case hasTemporal && hasNumeric:
-		return types.T_varchar.ToType(), true
+		targetOID = types.T_varchar
 	case hasBlob:
-		return types.T_blob.ToType(), true
+		targetOID = types.T_blob
 	case hasBinary:
-		return types.T_varbinary.ToType(), true
+		targetOID = types.T_varbinary
 	case hasTemporal:
-		return types.T_varchar.ToType(), true
+		targetOID = types.T_varchar
 	default:
 		return types.Type{}, false
 	}
+	return leastGreatestMergedStringType(inputs, targetOID), true
+}
+
+func leastGreatestMergedStringType(inputs []types.Type, targetOID types.T) types.Type {
+	target := targetOID.ToType()
+	// The common physical OID is only half of the string type. Preserve the
+	// strongest input collation before leastGreatestCastTypes copies this target
+	// to every applicable argument; the return-type callback receives the same
+	// target. Keep this derivation shared by every mixed-type resolver because
+	// JSON and date-bearing inputs dispatch before the ordinary string path.
+	target.Charset = types.MergeStringCharset(inputs, target.Charset)
+	return target
 }
 
 // leastGreatestCommonNumericType derives the common type used to compare a set
@@ -1447,6 +1476,58 @@ func leastFn(parameters []*vector.Vector,
 				return types.ArrayCompare[float64](_v1, _v2) < 0
 			})
 
+	case types.T_array_bf16:
+		return leastGreatestFnVarlen(
+			parameters,
+			result,
+			proc,
+			length,
+			selectList,
+			func(v1, v2 []byte) bool {
+				// CompareArrayElementFromBytes covers every element type;
+				// types.ArrayCompare is constrained to RealNumbers.
+				return types.CompareArrayElementFromBytes[types.BF16](v1, v2, false) < 0
+			})
+
+	case types.T_array_float16:
+		return leastGreatestFnVarlen(
+			parameters,
+			result,
+			proc,
+			length,
+			selectList,
+			func(v1, v2 []byte) bool {
+				// CompareArrayElementFromBytes covers every element type;
+				// types.ArrayCompare is constrained to RealNumbers.
+				return types.CompareArrayElementFromBytes[types.Float16](v1, v2, false) < 0
+			})
+
+	case types.T_array_int8:
+		return leastGreatestFnVarlen(
+			parameters,
+			result,
+			proc,
+			length,
+			selectList,
+			func(v1, v2 []byte) bool {
+				// CompareArrayElementFromBytes covers every element type;
+				// types.ArrayCompare is constrained to RealNumbers.
+				return types.CompareArrayElementFromBytes[int8](v1, v2, false) < 0
+			})
+
+	case types.T_array_uint8:
+		return leastGreatestFnVarlen(
+			parameters,
+			result,
+			proc,
+			length,
+			selectList,
+			func(v1, v2 []byte) bool {
+				// CompareArrayElementFromBytes covers every element type;
+				// types.ArrayCompare is constrained to RealNumbers.
+				return types.CompareArrayElementFromBytes[uint8](v1, v2, false) < 0
+			})
+
 	case types.T_date:
 		return leastGreatestFnFixed(
 			parameters,
@@ -1769,6 +1850,58 @@ func greatestFn(parameters []*vector.Vector,
 				_v1 := types.BytesToArray[float64](v1)
 				_v2 := types.BytesToArray[float64](v2)
 				return types.ArrayCompare[float64](_v1, _v2) > 0
+			})
+
+	case types.T_array_bf16:
+		return leastGreatestFnVarlen(
+			parameters,
+			result,
+			proc,
+			length,
+			selectList,
+			func(v1, v2 []byte) bool {
+				// CompareArrayElementFromBytes covers every element type;
+				// types.ArrayCompare is constrained to RealNumbers.
+				return types.CompareArrayElementFromBytes[types.BF16](v1, v2, false) > 0
+			})
+
+	case types.T_array_float16:
+		return leastGreatestFnVarlen(
+			parameters,
+			result,
+			proc,
+			length,
+			selectList,
+			func(v1, v2 []byte) bool {
+				// CompareArrayElementFromBytes covers every element type;
+				// types.ArrayCompare is constrained to RealNumbers.
+				return types.CompareArrayElementFromBytes[types.Float16](v1, v2, false) > 0
+			})
+
+	case types.T_array_int8:
+		return leastGreatestFnVarlen(
+			parameters,
+			result,
+			proc,
+			length,
+			selectList,
+			func(v1, v2 []byte) bool {
+				// CompareArrayElementFromBytes covers every element type;
+				// types.ArrayCompare is constrained to RealNumbers.
+				return types.CompareArrayElementFromBytes[int8](v1, v2, false) > 0
+			})
+
+	case types.T_array_uint8:
+		return leastGreatestFnVarlen(
+			parameters,
+			result,
+			proc,
+			length,
+			selectList,
+			func(v1, v2 []byte) bool {
+				// CompareArrayElementFromBytes covers every element type;
+				// types.ArrayCompare is constrained to RealNumbers.
+				return types.CompareArrayElementFromBytes[uint8](v1, v2, false) > 0
 			})
 
 	case types.T_date:

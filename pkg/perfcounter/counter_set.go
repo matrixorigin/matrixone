@@ -19,7 +19,8 @@ import (
 )
 
 type CounterSet struct {
-	FileService FileServiceCounterSet
+	FileService          FileServiceCounterSet
+	ProtocolOutputWaitNS atomic.Int64 // time blocked in physical client socket writes
 }
 
 type FileServiceCounterSet struct {
@@ -53,6 +54,8 @@ type FileServiceCounterSet struct {
 	ReadSize atomic.Int64
 	// S3ReadSize: actual bytes read from S3 (excluding rowid tombstone)
 	S3ReadSize atomic.Int64
+	// S3WriteSize: actual bytes accepted by object storage.
+	S3WriteSize atomic.Int64
 	// DiskReadSize: actual bytes read from disk cache (excluding rowid tombstone)
 	DiskReadSize atomic.Int64
 }
@@ -79,5 +82,7 @@ func (c *CounterSet) Reset() {
 	// FileService top-level
 	c.FileService.ReadSize.Store(0)
 	c.FileService.S3ReadSize.Store(0)
+	c.FileService.S3WriteSize.Store(0)
 	c.FileService.DiskReadSize.Store(0)
+	c.ProtocolOutputWaitNS.Store(0)
 }

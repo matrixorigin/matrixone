@@ -151,8 +151,203 @@ func (proc *Process) GetPrepareParams() *vector.Vector {
 	return proc.Base.prepareParams
 }
 
+// SetPrepareParams borrows prepareParams. The caller remains responsible for releasing it.
 func (proc *Process) SetPrepareParams(prepareParams *vector.Vector) {
+	proc.setPrepareParams(prepareParams, nil, false)
+}
+
+// SetPrepareParamsWithIsBin borrows prepareParams. The caller remains responsible for releasing it.
+func (proc *Process) SetPrepareParamsWithIsBin(prepareParams *vector.Vector, isBin []bool) {
+	proc.setPrepareParams(prepareParams, isBin, false)
+}
+
+// SetPrepareParamsWithMeta borrows prepareParams and carries per-parameter
+// string/binary and source conversion-kind provenance. The bool slice retains the
+// legacy binary section followed by three kind-bit sections, so existing remote
+// process serialization remains compatible without a protobuf change.
+func (proc *Process) SetPrepareParamsWithMeta(
+	prepareParams *vector.Vector,
+	isBin []bool,
+	kinds []vector.PrepareParamKind,
+) {
+	proc.setPrepareParams(prepareParams, prepareParamMetadata(prepareParams, isBin, kinds), false)
+}
+
+// SetOwnedPrepareParamsWithIsBin transfers prepareParams to proc. Replacing or freeing proc releases it.
+func (proc *Process) SetOwnedPrepareParamsWithIsBin(prepareParams *vector.Vector, isBin []bool) {
+	proc.setPrepareParams(prepareParams, isBin, true)
+}
+
+// SetOwnedPrepareParamsWithMeta transfers prepareParams to proc and preserves
+// the same metadata contract as SetPrepareParamsWithMeta.
+func (proc *Process) SetOwnedPrepareParamsWithMeta(
+	prepareParams *vector.Vector,
+	isBin []bool,
+	kinds []vector.PrepareParamKind,
+) {
+	proc.setPrepareParams(prepareParams, prepareParamMetadata(prepareParams, isBin, kinds), true)
+}
+
+func prepareParamMetadata(
+	prepareParams *vector.Vector,
+	isBin []bool,
+	kinds []vector.PrepareParamKind,
+) []bool {
+	paramCount := 0
+	if prepareParams != nil {
+		paramCount = prepareParams.Length()
+	}
+	if paramCount == 0 || (len(isBin) == 0 && len(kinds) == 0) {
+		return nil
+	}
+	hasMetadata := false
+	for i := 0; i < paramCount; i++ {
+		if (i < len(isBin) && isBin[i]) || (i < len(kinds) && kinds[i] != vector.PrepareParamNone) {
+			hasMetadata = true
+			break
+		}
+	}
+	if !hasMetadata {
+		return nil
+	}
+	metadata := make([]bool, paramCount*4)
+	copy(metadata[:paramCount], isBin)
+	for i := 0; i < paramCount && i < len(kinds); i++ {
+		metadata[paramCount+i] = kinds[i]&1 != 0
+		metadata[paramCount*2+i] = kinds[i]&2 != 0
+		metadata[paramCount*3+i] = kinds[i]&4 != 0
+	}
+	return metadata
+}
+
+// PrepareParamMetadataForRemote validates and adapts the packed prepare
+// parameter metadata at a process wire boundary. The first N entries are the
+// legacy binary flags; a complete extended payload has four N entries, with
+// the remaining three sections carrying PrepareParamKind bits. A receiver
+// below MORPCVersion12 may safely receive binary-only metadata, but must not
+// receive source-kind provenance that it would silently discard.
+func PrepareParamMetadataForRemote(
+	service string,
+	paramCount int,
+	metadata []bool,
+) ([]bool, error) {
+	if paramCount < 0 {
+		return nil, moerr.NewInvalidInputNoCtx("negative prepare parameter count")
+	}
+	if len(metadata) == 0 {
+		return nil, nil
+	}
+	if paramCount == 0 {
+		return nil, moerr.NewInvalidInputNoCtx("prepare parameter metadata without parameters")
+	}
+	if len(metadata) <= paramCount {
+		return append([]bool(nil), metadata...), nil
+	}
+	if len(metadata) != paramCount*4 {
+		return nil, moerr.NewInvalidInputNoCtxf(
+			"invalid prepare parameter metadata length %d for %d parameters",
+			len(metadata), paramCount)
+	}
+
+	hasKind := false
+	for i := 0; i < paramCount; i++ {
+		kind := vector.PrepareParamNone
+		if metadata[paramCount+i] {
+			kind |= vector.PrepareParamInteger
+		}
+		if metadata[paramCount*2+i] {
+			kind |= vector.PrepareParamFloat
+		}
+		if metadata[paramCount*3+i] {
+			kind |= vector.PrepareParamBoolean
+		}
+		if kind != vector.PrepareParamNone {
+			if kind > vector.PrepareParamBoolean {
+				return nil, moerr.NewInvalidInputNoCtxf(
+					"invalid prepare parameter kind %d at parameter %d", kind, i)
+			}
+			hasKind = true
+		}
+	}
+
+	if prepareParamProtocolVersion(service) < defines.MORPCVersion12 {
+		if hasKind {
+			return nil, moerr.NewNotSupportedNoCtxf(
+				"prepared-parameter source provenance requires MORPC protocol version %d",
+				defines.MORPCVersion12)
+		}
+		return append([]bool(nil), metadata[:paramCount]...), nil
+	}
+	return append([]bool(nil), metadata...), nil
+}
+
+func prepareParamProtocolVersion(service string) int64 {
+	rt := runtime.ServiceRuntime(service)
+	if rt == nil {
+		return defines.MORPCMinVersion
+	}
+	v, ok := rt.GetGlobalVariables(runtime.MOProtocolVersion)
+	if !ok {
+		return defines.MORPCMinVersion
+	}
+	switch version := v.(type) {
+	case int64:
+		return version
+	case int:
+		return int64(version)
+	case uint64:
+		return int64(version)
+	default:
+		return defines.MORPCMinVersion
+	}
+}
+
+func (proc *Process) setPrepareParams(prepareParams *vector.Vector, isBin []bool, owned bool) {
+	if proc.Base.prepareParams == prepareParams && proc.Base.prepareParamsOwned {
+		owned = true
+	}
+	if proc.Base.prepareParamsOwned && proc.Base.prepareParams != nil && proc.Base.prepareParams != prepareParams {
+		proc.Base.prepareParams.Free(proc.Mp())
+	}
 	proc.Base.prepareParams = prepareParams
+	proc.Base.prepareParamsIsBin = isBin
+	proc.Base.prepareParamsOwned = owned && prepareParams != nil
+}
+
+// PrepareParamsState keeps the complete prepare-parameter state while a
+// Compile that shares the Process is being released.
+type PrepareParamsState struct {
+	prepareParams *vector.Vector
+	isBin         []bool
+	owned         bool
+}
+
+// DetachPrepareParams removes the prepare-parameter state without releasing
+// the owned vector. The caller must restore the returned state so a later
+// Process.Free can release it.
+func (proc *Process) DetachPrepareParams() PrepareParamsState {
+	state := PrepareParamsState{
+		prepareParams: proc.Base.prepareParams,
+		isBin:         proc.Base.prepareParamsIsBin,
+		owned:         proc.Base.prepareParamsOwned,
+	}
+	proc.Base.prepareParams = nil
+	proc.Base.prepareParamsIsBin = nil
+	proc.Base.prepareParamsOwned = false
+	return state
+}
+
+// BorrowPrepareParams exposes detached prepare parameters without transferring
+// their ownership back to proc. It lets nested work use the parameters while
+// Process.Free releases only resources owned by that nested work.
+func (proc *Process) BorrowPrepareParams(state PrepareParamsState) {
+	proc.setPrepareParams(state.prepareParams, state.isBin, false)
+}
+
+// RestorePrepareParams restores state previously returned by
+// DetachPrepareParams.
+func (proc *Process) RestorePrepareParams(state PrepareParamsState) {
+	proc.setPrepareParams(state.prepareParams, state.isBin, state.owned)
 }
 
 func (proc *Process) OperatorOutofMemory(size int64) bool {
@@ -173,18 +368,46 @@ func (proc *Process) AllocVectorOfRows(typ types.Type, nele int, nsp *nulls.Null
 }
 
 func (proc *Process) NewBatchFromSrc(src *batch.Batch, preAllocSize int) (*batch.Batch, error) {
+	return proc.NewBatchFromSrcWithAllocation(src, preAllocSize, nil)
+}
+
+// NewBatchFromSrcWithAllocation creates an empty off-heap destination whose
+// first vector growth uses the supplied immutable allocation provenance.
+func (proc *Process) NewBatchFromSrcWithAllocation(
+	src *batch.Batch,
+	preAllocSize int,
+	selection *vector.AllocationAccountSelection,
+) (_ *batch.Batch, retErr error) {
+	if proc == nil || src == nil || preAllocSize < 0 {
+		return nil, mpool.ErrAllocationAccountInvalid
+	}
 	bat := batch.NewOffHeapWithSize(len(src.Vecs))
+	defer func() {
+		if retErr != nil {
+			bat.Clean(proc.Mp())
+		}
+	}()
 	bat.SetAttributes(src.Attrs)
 	bat.Recursive = src.Recursive
 	for i := range bat.Vecs {
-		v := vector.NewOffHeapVecWithType(*src.Vecs[i].GetType())
+		if src.Vecs[i] == nil {
+			return nil, mpool.ErrAllocationAccountInvalid
+		}
+		bat.Vecs[i] = vector.NewOffHeapVecWithType(*src.Vecs[i].GetType())
+	}
+	if selection != nil {
+		if err := bat.SetAllocationAccount(selection); err != nil {
+			return nil, err
+		}
+	}
+	for i := range bat.Vecs {
+		v := bat.Vecs[i]
 		if v.Capacity() < preAllocSize {
 			err := v.PreExtend(preAllocSize, proc.Mp())
 			if err != nil {
 				return nil, err
 			}
 		}
-		bat.Vecs[i] = v
 	}
 	return bat, nil
 }

@@ -42,8 +42,13 @@ type Future struct {
 	writtenC    chan error
 	waiting     atomic.Bool
 	releaseFunc func(*Future)
-	oneWay      bool
-	mu          struct {
+	sendRelease func(Message)
+	// responseRelease remains owned by the Future until Get receives the
+	// response. If the caller abandons an already-delivered response and closes
+	// the Future, clear returns it to its application pool.
+	responseRelease func(Message)
+	oneWay          bool
+	mu              struct {
 		sync.Mutex
 		notified bool
 		closed   bool
@@ -87,30 +92,59 @@ func (f *Future) Get() (Message, error) {
 	}
 }
 
-// Close closes the future.
+// Close closes the future. It must be called exactly once; the Future must not
+// be accessed again because Close may return it to an internal object pool.
 func (f *Future) Close() {
 	f.mu.Lock()
-	defer f.mu.Unlock()
-
-	f.mu.closed = true
-	if f.mu.cb != nil {
-		f.mu.cb()
+	if f.mu.closed {
+		f.mu.Unlock()
+		return
 	}
+	f.mu.closed = true
+	cb := f.mu.cb
+	f.mu.cb = nil
 	f.maybeReleaseLocked()
+	f.mu.Unlock()
+	if cb != nil {
+		cb()
+	}
 }
 
 func (f *Future) waitSendCompleted() error {
 	if f.oneWay {
 		panic("one way cannot call waitSendCompleted")
 	}
-	return <-f.writtenC
+	if f.sendRelease == nil && !f.send.internal {
+		return <-f.writtenC
+	}
+	select {
+	case err := <-f.writtenC:
+		return err
+	case <-f.send.Ctx.Done():
+		return f.send.Ctx.Err()
+	}
 }
 
 func (f *Future) messageSent(err error) {
 	if !f.oneWay && f.waiting.CompareAndSwap(false, true) {
+		if f.sendRelease != nil {
+			f.sendRelease(f.send.Message)
+		}
 		f.writtenC <- err
 		f.unRef()
 	}
+}
+
+func (f *Future) setSendRelease(release func(Message)) {
+	f.sendRelease = release
+}
+
+func (f *Future) setResponseRelease(release func(Message)) {
+	f.responseRelease = release
+}
+
+func (f *Future) clearSendRelease() {
+	f.sendRelease = nil
 }
 
 func (f *Future) maybeReleaseLocked() {
@@ -123,7 +157,10 @@ func (f *Future) maybeReleaseLocked() {
 func (f *Future) clear() {
 	for {
 		select {
-		case <-f.c:
+		case response := <-f.c:
+			if f.responseRelease != nil {
+				f.responseRelease(response)
+			}
 		case <-f.errC:
 		case <-f.writtenC:
 		default:
@@ -136,44 +173,38 @@ func (f *Future) getSendMessageID() uint64 {
 	return f.id
 }
 
-func (f *Future) done(response Message, cb func()) {
+func (f *Future) done(response Message, cb func()) bool {
 	f.mu.Lock()
-	defer f.mu.Unlock()
-
-	if f.mu.notified {
-		return
-	}
-
-	if !f.mu.closed && !f.timeout() {
-		if response.GetID() != f.getSendMessageID() {
-			return
+	if f.mu.notified || f.mu.closed || f.timeout() ||
+		response.GetID() != f.getSendMessageID() {
+		f.mu.Unlock()
+		if cb != nil {
+			cb()
 		}
-		f.mu.cb = cb
-		f.c <- response
-	} else if cb != nil {
-		cb()
+		return false
 	}
+	f.mu.cb = cb
+	f.c <- response
 	f.mu.notified = true
+	f.mu.Unlock()
+	return true
 }
 
-func (f *Future) error(id uint64, err error, cb func()) {
+func (f *Future) error(id uint64, err error, cb func()) bool {
 	f.mu.Lock()
-	defer f.mu.Unlock()
-
-	if f.mu.notified {
-		return
-	}
-
-	if !f.mu.closed && !f.timeout() {
-		if id != f.getSendMessageID() {
-			return
+	if f.mu.notified || f.mu.closed || f.timeout() ||
+		id != f.getSendMessageID() {
+		f.mu.Unlock()
+		if cb != nil {
+			cb()
 		}
-		f.mu.cb = cb
-		f.errC <- err
-	} else if cb != nil {
-		cb()
+		return false
 	}
+	f.mu.cb = cb
+	f.errC <- err
 	f.mu.notified = true
+	f.mu.Unlock()
+	return true
 }
 
 func (f *Future) ref() {
@@ -200,6 +231,8 @@ func (f *Future) reset() {
 	default:
 	}
 	f.send = RPCMessage{}
+	f.sendRelease = nil
+	f.responseRelease = nil
 	f.mu.cb = nil
 	f.id = 0
 }

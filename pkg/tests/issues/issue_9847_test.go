@@ -30,7 +30,7 @@ import (
 
 // Issue 9847: currval should reflect nextval used in non-SELECT statements.
 func TestIssue9847CurrvalAfterInsert(t *testing.T) {
-	embed.RunBaseClusterTests(
+	embed.RunBaseClusterTests(t,
 		func(c embed.Cluster) {
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second*60)
 			defer cancel()

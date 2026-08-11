@@ -21,6 +21,8 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	indexplugin "github.com/matrixorigin/matrixone/pkg/indexplugin"
+	catalogplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/catalog"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
@@ -157,6 +159,7 @@ func indexTableKeyTypeForSinglePart(col *ColDef, keyPart *tree.KeyPart) Type {
 		Width:      col.Typ.Width,
 		Scale:      col.Typ.Scale,
 		Enumvalues: col.Typ.Enumvalues,
+		Charset:    col.Typ.Charset,
 	}
 }
 
@@ -164,8 +167,9 @@ func indexTableKeyTypeForPrefix(colType Type) (Type, bool) {
 	switch colType.Id {
 	case int32(types.T_text):
 		return Type{
-			Id:    int32(types.T_varchar),
-			Width: types.MaxVarcharLen,
+			Id:      int32(types.T_varchar),
+			Width:   types.MaxVarcharLen,
+			Charset: colType.Charset,
 		}, true
 	case int32(types.T_blob):
 		return Type{
@@ -183,6 +187,10 @@ func indexColumnCheckKind(indexType tree.IndexType) string {
 		return "ivfflat"
 	case tree.INDEX_TYPE_HNSW:
 		return "hnsw"
+	case tree.INDEX_TYPE_CAGRA:
+		return "cagra"
+	case tree.INDEX_TYPE_IVFPQ:
+		return "ivfpq"
 	case tree.INDEX_TYPE_RTREE:
 		return "rtree"
 	default:
@@ -212,8 +220,17 @@ func checkIndexColumnSupportability(ctx context.Context, col *ColDef, keyPart *t
 		return moerr.NewNotSupported(ctx, fmt.Sprintf("DATALINK column '%s' cannot be in index", colName))
 	case int32(types.T_json):
 		return moerr.NewNotSupported(ctx, fmt.Sprintf("JSON column '%s' cannot be in index", colName))
-	case int32(types.T_array_float32), int32(types.T_array_float64):
-		if indexKind == "ivfflat" || indexKind == "hnsw" {
+	case int32(types.T_array_float32), int32(types.T_array_float64),
+		int32(types.T_array_float16), int32(types.T_array_bf16),
+		int32(types.T_array_int8), int32(types.T_array_uint8):
+		// A vector column is valid only as the key of a vector index, AND only if
+		// that algorithm supports this element type. Delegate to the plugin's
+		// catalog hook (SupportedVectorTypes) rather than hardcoding — each algo
+		// differs (ivfflat: f32/f64/f16/bf16/int8/uint8; cagra/ivfpq: f32/f16 only;
+		// hnsw: f32/f64). Non-vector index kinds (secondary/primary/unique/rtree)
+		// have no plugin, so the vector column is rejected.
+		if p, ok := indexplugin.Get(indexKind); ok &&
+			catalogplugin.SupportsVectorType(p.Catalog(), types.T(col.Typ.Id)) {
 			return nil
 		}
 		return moerr.NewNotSupported(ctx, fmt.Sprintf("VECTOR column '%s' cannot be in index", colName))

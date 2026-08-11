@@ -45,12 +45,13 @@ type Scanner struct {
 	sqlMode             SQLModeFlags
 	MysqlSpecialComment *Scanner
 
-	CommentFlag bool
-	Pos         int
-	Line        int
-	Col         int
-	PrePos      int
-	buf         string
+	CommentFlag          bool
+	Pos                  int
+	Line                 int
+	Col                  int
+	PrePos               int
+	buf                  string
+	executableCommentEnd int
 
 	strBuilder bytes.Buffer
 }
@@ -66,6 +67,7 @@ func (s *Scanner) reset(clearLargeOnly bool, oversized bool) {
 	s.Line = 0
 	s.Col = 0
 	s.PrePos = 0
+	s.executableCommentEnd = 0
 	s.sqlMode = 0
 
 	if clearLargeOnly {
@@ -266,6 +268,9 @@ func (s *Scanner) Scan() (int, string) {
 		case '/':
 			s.CommentFlag = false
 			s.inc()
+			if s.executableCommentEnd == 0 {
+				s.executableCommentEnd = s.Pos
+			}
 			return s.Scan()
 		default:
 			return s.stepBackOneChar(ch)
@@ -307,6 +312,14 @@ func (s *Scanner) Scan() (int, string) {
 	default:
 		return s.stepBackOneChar(ch)
 	}
+}
+
+// TakeExecutableCommentEnd returns the byte offset immediately after the first
+// executable-comment terminator scanned since the previous call.
+func (s *Scanner) TakeExecutableCommentEnd() int {
+	end := s.executableCommentEnd
+	s.executableCommentEnd = 0
+	return end
 }
 
 func (s *Scanner) isCollate() bool {
@@ -832,6 +845,12 @@ func (s *Scanner) scanIdentifier(isVariable bool) (int, string) {
 	keywordName := s.buf[start:s.Pos]
 	lower := strings.ToLower(keywordName)
 	if keywordID, found := keywords[lower]; found {
+		if lower == "within" {
+			if s.withinGroupPhraseAhead(s.Pos) {
+				return keywordID, keywordName
+			}
+			return ID, keywordName
+		}
 		// make transaction statements coexist with plsql
 		if lower == "begin" {
 			cur := s.Pos
@@ -856,6 +875,80 @@ func (s *Scanner) scanIdentifier(isVariable bool) (int, string) {
 		return ID, keywordName
 	}
 	return ID, keywordName
+}
+
+func (s *Scanner) withinGroupPhraseAhead(pos int) bool {
+	pos = s.skipBlankAndCommentsFrom(pos)
+	if !hasKeywordAt(s.buf, pos, "group") {
+		return false
+	}
+	pos += len("group")
+	pos = s.skipBlankAndCommentsFrom(pos)
+	return pos < len(s.buf) && s.buf[pos] == '('
+}
+
+func (s *Scanner) skipBlankAndCommentsFrom(pos int) int {
+	for {
+		for pos < len(s.buf) {
+			switch s.buf[pos] {
+			case ' ', '\n', '\r', '\t':
+				pos++
+				continue
+			}
+			break
+		}
+		if pos >= len(s.buf) {
+			return pos
+		}
+		switch {
+		case strings.HasPrefix(s.buf[pos:], "/*"):
+			end := strings.Index(s.buf[pos+2:], "*/")
+			if end < 0 {
+				return pos
+			}
+			pos += 2 + end + 2
+			continue
+		case strings.HasPrefix(s.buf[pos:], "//"):
+			pos = skipLineCommentFrom(s.buf, pos+2)
+			continue
+		case s.buf[pos] == '#':
+			pos = skipLineCommentFrom(s.buf, pos+1)
+			continue
+		case strings.HasPrefix(s.buf[pos:], "--") &&
+			(pos+2 == len(s.buf) || isMySQLDashCommentBlank(s.buf[pos+2])):
+			pos = skipLineCommentFrom(s.buf, pos+2)
+			continue
+		}
+		return pos
+	}
+}
+
+func hasKeywordAt(sql string, pos int, keyword string) bool {
+	if pos+len(keyword) > len(sql) {
+		return false
+	}
+	if !strings.EqualFold(sql[pos:pos+len(keyword)], keyword) {
+		return false
+	}
+	if pos+len(keyword) == len(sql) {
+		return true
+	}
+	next := uint16(sql[pos+len(keyword)])
+	return !isLetter(next) && !isDigit(next) && next != '@'
+}
+
+func skipLineCommentFrom(sql string, pos int) int {
+	for pos < len(sql) {
+		if sql[pos] == '\n' {
+			return pos + 1
+		}
+		pos++
+	}
+	return pos
+}
+
+func isMySQLDashCommentBlank(ch byte) bool {
+	return ch == ' ' || ch == '\n' || ch == '\r' || ch == '\t'
 }
 
 func (s *Scanner) scanBitLiteral() (int, string) {

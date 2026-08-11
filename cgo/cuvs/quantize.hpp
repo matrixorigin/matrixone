@@ -20,6 +20,7 @@
 #include <raft/core/host_mdarray.hpp>
 #include <raft/core/resources.hpp>
 #include <raft/core/copy.cuh>
+#include <raft/linalg/unary_op.cuh>
 #include <cuvs/preprocessing/quantize/scalar.hpp>
 #include <fstream>
 #include <string>
@@ -27,20 +28,13 @@
 #include <stdexcept>
 #include <cstdint>
 #include <cstring>
+#include <cmath>
+#include <limits>
 #include <algorithm>
 #include <type_traits>
 #include <cuda_fp16.h>
 
 namespace matrixone {
-
-#pragma pack(push, 1)
-struct file_header_t {
-    char magic[4];              // "MODF"
-    uint64_t count;             // 8 bytes
-    uint64_t dimension;         // 8 bytes
-    uint32_t data_type_size;    // 4 bytes
-};
-#pragma pack(pop)
 
 /**
  * @brief Helper to manage cuVS scalar quantizer lifecycle and operations.
@@ -99,19 +93,98 @@ public:
                 auto out_view = raft::make_device_matrix_view<int8_t, int64_t>(out_ptr, n_rows, n_cols);
                 cuvs::preprocessing::quantize::scalar::transform(res, *quantizer_, src_view, out_view);
             } else {
-                // T is uint8_t, but cuVS transform expects int8_t output
+                // T is uint8_t. cuVS scalar transform only emits int8 [-128,127];
+                // map it to uint8 [0,255] with a MONOTONIC +128 shift, NOT a raw
+                // cast (raft::copy would value-cast and wrap negatives: -1->255,
+                // -128->128, scrambling the L2 ordering for signed/zero-centered
+                // data). The shift is L2-invariant — base and query both pass through
+                // here, so the constant cancels in (a-b) — so uint8 recall matches int8.
                 auto chunk_device_int8 = raft::make_device_matrix<int8_t, int64_t>(res, n_rows, n_cols);
                 cuvs::preprocessing::quantize::scalar::transform(res, *quantizer_, src_view, chunk_device_int8.view());
-                auto out_view = raft::make_device_matrix_view<T, int64_t>(out_ptr, n_rows, n_cols);
-                raft::copy(res, out_view, chunk_device_int8.view());
+                raft::linalg::unaryOp(
+                    out_ptr, chunk_device_int8.data_handle(), n_rows * n_cols,
+                    [] __device__(int8_t v) { return static_cast<uint8_t>(static_cast<int>(v) + 128); },
+                    raft::resource::get_cuda_stream(res));
             }
         } else {
-            // For host pointers, we must use a temporary device buffer for the transform
+            // For host pointers, transform into a temporary device int8 buffer first.
             auto tmp_dev = raft::make_device_matrix<int8_t, int64_t>(res, n_rows, n_cols);
             cuvs::preprocessing::quantize::scalar::transform(res, *quantizer_, src_view, tmp_dev.view());
-            auto out_view = raft::make_host_matrix_view<T, int64_t>(out_ptr, n_rows, n_cols);
-            raft::copy(res, out_view, tmp_dev.view());
+            if constexpr (std::is_same_v<T, uint8_t>) {
+                // Monotonic int8->uint8 (+128) on device, then copy to host — see
+                // the device path above for why a raw cast is wrong.
+                auto tmp_u8 = raft::make_device_matrix<uint8_t, int64_t>(res, n_rows, n_cols);
+                raft::linalg::unaryOp(
+                    tmp_u8.data_handle(), tmp_dev.data_handle(), n_rows * n_cols,
+                    [] __device__(int8_t v) { return static_cast<uint8_t>(static_cast<int>(v) + 128); },
+                    raft::resource::get_cuda_stream(res));
+                auto out_view = raft::make_host_matrix_view<uint8_t, int64_t>(out_ptr, n_rows, n_cols);
+                raft::copy(res, out_view, tmp_u8.view());
+            } else {
+                auto out_view = raft::make_host_matrix_view<T, int64_t>(out_ptr, n_rows, n_cols);
+                raft::copy(res, out_view, tmp_dev.view());
+            }
             raft::resource::sync_stream(res);
+        }
+    }
+
+    /**
+     * @brief Host (CPU) equivalent of transform(): quantizes a chunk of
+     * SOURCE-typed (S) elements into 1-byte T entirely on the CPU.
+     *
+     * Scalar quantization is a pure per-element affine map from the trained
+     * [min_, max_] range, so once the quantizer is trained no GPU is needed.
+     * This is a bit-for-bit port of cuVS' device quantize_op
+     * (cuvs/preprocessing/quantize/detail/scalar.cuh): the scale/offset are
+     * computed in `double` (the op's default TempT), the inner clamp uses the
+     * source-type comparison, ties round via lroundf, and uint8 storage applies
+     * the same monotonic +128 shift as the device path. Producing identical
+     * bytes to transform() keeps a CPU-built base consistent with a
+     * GPU-quantized query at search time.
+     *
+     * @tparam T Target storage type (int8_t or uint8_t).
+     * @param src        Source elements, row-major, n_elements long.
+     * @param out        Destination (host), n_elements long.
+     * @param n_elements Number of scalar elements (rows * dimension).
+     */
+    template <typename T>
+    void transform_host(const S* src, T* out, size_t n_elements) const {
+        if (!quantizer_) throw std::runtime_error("Quantizer not trained");
+        static_assert(sizeof(T) == 1, "Quantization target must be 1-byte");
+
+        // cuVS maps the float interval onto the signed range [-128, 127];
+        // uint8 is the same int8 result shifted by +128 (see transform()).
+        constexpr int q_type_min = std::numeric_limits<int8_t>::min(); // -128
+        constexpr int q_type_max = std::numeric_limits<int8_t>::max(); //  127
+
+        const double dmin = static_cast<double>(quantizer_->min_);
+        const double dmax = static_cast<double>(quantizer_->max_);
+        const double scalar = (dmax > dmin)
+            ? (static_cast<double>(q_type_max - q_type_min) / (dmax - dmin))
+            : 1.0;
+        const double offset = static_cast<double>(q_type_min) - dmin * scalar;
+
+        // fp_lt() compares in the source type's float domain (half is cast to
+        // float; float compares natively) — replicate with a float compare.
+        const float fmin = static_cast<float>(quantizer_->min_);
+        const float fmax = static_cast<float>(quantizer_->max_);
+
+        for (size_t i = 0; i < n_elements; ++i) {
+            const float xf = static_cast<float>(src[i]);
+            int8_t q;
+            if (!(fmin < xf)) {
+                q = static_cast<int8_t>(q_type_min);
+            } else if (!(xf < fmax)) {
+                q = static_cast<int8_t>(q_type_max);
+            } else {
+                q = static_cast<int8_t>(
+                    std::lroundf(static_cast<float>(scalar * static_cast<double>(src[i]) + offset)));
+            }
+            if constexpr (std::is_same_v<T, uint8_t>) {
+                out[i] = static_cast<uint8_t>(static_cast<int>(q) + 128);
+            } else {
+                out[i] = static_cast<T>(q);
+            }
         }
     }
 
@@ -176,305 +249,5 @@ public:
 private:
     std::unique_ptr<quantizer_type> quantizer_;
 };
-
-namespace detail {
-
-static constexpr int64_t DEFAULT_CHUNK_SIZE = 16384;
-
-/**
- * @brief Internal helper to read a binary file into a raw pointer using chunking.
- */
-template <typename S>
-void load_matrix_raw_ptr(const raft::resources& res, const std::string& filename, const file_header_t& header, S* out_ptr, bool is_device_ptr) {
-    int64_t n_rows = static_cast<int64_t>(header.count);
-    int64_t n_cols = static_cast<int64_t>(header.dimension);
-
-    if (n_rows == 0 || n_cols == 0) return;
-
-    std::ifstream file(filename, std::ios::binary);
-    if (!file.is_open()) {
-        throw std::runtime_error("Failed to open file: " + filename);
-    }
-    file.seekg(sizeof(file_header_t));
-
-    if (!is_device_ptr) {
-        file.read(reinterpret_cast<char*>(out_ptr), n_rows * n_cols * sizeof(S));
-        if (file.gcount() != static_cast<std::streamsize>(n_rows * n_cols * sizeof(S))) {
-            throw std::runtime_error("Failed to read data content from: " + filename);
-        }
-    } else {
-        std::vector<S> chunk_host;
-        for (int64_t row_offset = 0; row_offset < n_rows; row_offset += DEFAULT_CHUNK_SIZE) {
-            int64_t current_chunk_rows = std::min(DEFAULT_CHUNK_SIZE, n_rows - row_offset);
-            size_t total_chunk_elements = current_chunk_rows * n_cols;
-            std::streamsize wanted = static_cast<std::streamsize>(total_chunk_elements * sizeof(S));
-            chunk_host.resize(total_chunk_elements);
-            file.read(reinterpret_cast<char*>(chunk_host.data()), wanted);
-            if (file.gcount() != wanted) {
-                throw std::runtime_error("Truncated read from: " + filename);
-            }
-            raft::copy(out_ptr + (row_offset * n_cols), chunk_host.data(), total_chunk_elements, raft::resource::get_cuda_stream(res));
-            // Sync per iteration: chunk_host is reused next iteration, and
-            // raft::copy H2D is async on the stream. Without this sync, the
-            // next file.read clobbers the host bytes before the prior DMA
-            // has consumed them — silent index corruption.
-            raft::resource::sync_stream(res);
-        }
-    }
-}
-
-/**
- * @brief Internal helper to perform chunked quantization or conversion from datafile to a raw pointer.
- */
-template <typename S, typename T, bool DoQuantize>
-void load_matrix_chunked_ptr(const raft::resources& res, const std::string& filename, const file_header_t& header, T* out_ptr, bool is_device_ptr) {
-    int64_t n_rows = static_cast<int64_t>(header.count);
-    int64_t n_cols = static_cast<int64_t>(header.dimension);
-    if (n_rows == 0 || n_cols == 0) return;
-
-    std::ifstream file(filename, std::ios::binary);
-    if (!file.is_open()) {
-        throw std::runtime_error("Failed to open file: " + filename);
-    }
-    file.seekg(sizeof(file_header_t));
-
-    scalar_quantizer_t<S> quantizer;
-    if constexpr (DoQuantize) {
-        int64_t n_train = std::min(n_rows, static_cast<int64_t>(500));
-        std::vector<S> train_host(n_train * n_cols);
-        std::streamsize train_wanted = static_cast<std::streamsize>(train_host.size() * sizeof(S));
-        file.read(reinterpret_cast<char*>(train_host.data()), train_wanted);
-        if (file.gcount() != train_wanted) {
-            throw std::runtime_error("Truncated training-set read from: " + filename);
-        }
-        auto train_device = raft::make_device_matrix<S, int64_t>(res, n_train, n_cols);
-        raft::copy(train_device.data_handle(), train_host.data(), train_host.size(), raft::resource::get_cuda_stream(res));
-        quantizer.train(res, train_device.view());
-        // train_host is about to go out of scope, but the H2D copy is async —
-        // sync now so the device read finishes before the host buffer is
-        // freed (otherwise UAF / corrupt training data).
-        raft::resource::sync_stream(res);
-        file.seekg(sizeof(file_header_t));
-    }
-
-    std::vector<S> chunk_host;
-    auto chunk_device_src = raft::make_device_matrix<S, int64_t>(res, DEFAULT_CHUNK_SIZE, n_cols);
-
-    for (int64_t row_offset = 0; row_offset < n_rows; row_offset += DEFAULT_CHUNK_SIZE) {
-        int64_t current_chunk_rows = std::min(DEFAULT_CHUNK_SIZE, n_rows - row_offset);
-        size_t total_chunk_elements = current_chunk_rows * n_cols;
-        std::streamsize wanted = static_cast<std::streamsize>(total_chunk_elements * sizeof(S));
-        chunk_host.resize(total_chunk_elements);
-        file.read(reinterpret_cast<char*>(chunk_host.data()), wanted);
-        if (file.gcount() != wanted) {
-            throw std::runtime_error("Truncated chunk read from: " + filename);
-        }
-        raft::copy(chunk_device_src.data_handle(), chunk_host.data(), total_chunk_elements, raft::resource::get_cuda_stream(res));
-
-        auto current_chunk_src_view = raft::make_device_matrix_view<const S, int64_t>(chunk_device_src.data_handle(), current_chunk_rows, n_cols);
-
-        if constexpr (DoQuantize) {
-            quantizer.template transform<T>(res, current_chunk_src_view, out_ptr + (row_offset * n_cols), is_device_ptr);
-        } else {
-            if (is_device_ptr) {
-                auto out_chunk_view = raft::make_device_matrix_view<T, int64_t>(out_ptr + (row_offset * n_cols), current_chunk_rows, n_cols);
-                raft::copy(res, out_chunk_view, current_chunk_src_view);
-            } else {
-                auto out_chunk_view = raft::make_host_matrix_view<T, int64_t>(out_ptr + (row_offset * n_cols), current_chunk_rows, n_cols);
-                raft::copy(res, out_chunk_view, current_chunk_src_view);
-            }
-        }
-        // Sync per iteration: chunk_host is reused, the H2D copy + transform
-        // are async on the stream. Without this sync, the next file.read
-        // clobbers chunk_host before the DMA has finished reading it.
-        raft::resource::sync_stream(res);
-    }
-}
-
-} // namespace detail
-
-/**
- * @brief Reads a binary file into a CUDA device matrix.
- */
-template <typename T>
-auto load_device_matrix(const raft::resources& res, const std::string& filename) {
-    std::ifstream file(filename, std::ios::binary);
-    if (!file.is_open()) throw std::runtime_error("Failed to open file: " + filename);
-
-    file_header_t header;
-    file.read(reinterpret_cast<char*>(&header), sizeof(file_header_t));
-    if (std::string(header.magic, 4) != "MODF") throw std::runtime_error("Invalid magic: " + filename);
-
-    auto matrix = raft::make_device_matrix<T, int64_t>(res, static_cast<int64_t>(header.count), static_cast<int64_t>(header.dimension));
-    if (header.data_type_size == sizeof(T)) {
-        detail::load_matrix_raw_ptr<T>(res, filename, header, matrix.data_handle(), true);
-    } else if (header.data_type_size == 4) {
-        if constexpr (sizeof(T) == 2) {
-            detail::load_matrix_chunked_ptr<float, T, false>(res, filename, header, matrix.data_handle(), true);
-        } else if constexpr (sizeof(T) == 1) {
-            detail::load_matrix_chunked_ptr<float, T, true>(res, filename, header, matrix.data_handle(), true);
-        } else {
-            throw std::runtime_error("Unsupported conversion from float to requested size");
-        }
-    } else if (header.data_type_size == 2) {
-        if constexpr (sizeof(T) == 1) {
-            detail::load_matrix_chunked_ptr<half, T, true>(res, filename, header, matrix.data_handle(), true);
-        } else if constexpr (sizeof(T) == 4) {
-            detail::load_matrix_chunked_ptr<half, T, false>(res, filename, header, matrix.data_handle(), true);
-        } else {
-            throw std::runtime_error("Unsupported conversion from half to requested size");
-        }
-    } else {
-        throw std::runtime_error("Type size mismatch and conversion not supported for source size: " + std::to_string(header.data_type_size));
-    }
-    return matrix;
-}
-
-/**
- * @brief Reads a binary file into a CUDA device matrix (overload).
- */
-template <typename T>
-void load_device_matrix(const raft::resources& res, const std::string& filename, raft::device_matrix<T, int64_t>& out_matrix, uint64_t& out_count, uint64_t& out_dimension) {
-    out_matrix = load_device_matrix<T>(res, filename);
-    out_count = static_cast<uint64_t>(out_matrix.extent(0));
-    out_dimension = static_cast<uint64_t>(out_matrix.extent(1));
-}
-
-/**
- * @brief Reads a binary file into a CUDA host matrix.
- */
-template <typename T>
-auto load_host_matrix(const std::string& filename) {
-    raft::resources res; 
-    std::ifstream file(filename, std::ios::binary);
-    if (!file.is_open()) throw std::runtime_error("Failed to open file: " + filename);
-
-    file_header_t header;
-    file.read(reinterpret_cast<char*>(&header), sizeof(file_header_t));
-    if (std::string(header.magic, 4) != "MODF") throw std::runtime_error("Invalid magic: " + filename);
-
-    auto matrix = raft::make_host_matrix<T, int64_t>(static_cast<int64_t>(header.count), static_cast<int64_t>(header.dimension));
-    if (header.data_type_size == sizeof(T)) {
-        detail::load_matrix_raw_ptr<T>(res, filename, header, matrix.data_handle(), false);
-    } else {
-        if (header.data_type_size == 4) {
-            if constexpr (sizeof(T) == 2) {
-                detail::load_matrix_chunked_ptr<float, T, false>(res, filename, header, matrix.data_handle(), false);
-            } else if constexpr (sizeof(T) == 1) {
-                detail::load_matrix_chunked_ptr<float, T, true>(res, filename, header, matrix.data_handle(), false);
-            } else {
-                throw std::runtime_error("Unsupported conversion from float to requested size");
-            }
-        } else if (header.data_type_size == 2) {
-            if constexpr (sizeof(T) == 1) {
-                detail::load_matrix_chunked_ptr<half, T, true>(res, filename, header, matrix.data_handle(), false);
-            } else if constexpr (sizeof(T) == 4) {
-                detail::load_matrix_chunked_ptr<half, T, false>(res, filename, header, matrix.data_handle(), false);
-            } else {
-                throw std::runtime_error("Unsupported conversion from half to requested size");
-            }
-        } else {
-            throw std::runtime_error("Unsupported conversion for host matrix");
-        }
-    }
-    return matrix;
-}
-
-/**
- * @brief Reads a binary file into a host vector.
- */
-template <typename T>
-void load_host_matrix(const std::string& filename, std::vector<T>& out_data, uint64_t& out_count, uint64_t& out_dimension) {
-    raft::resources res; 
-    std::ifstream file(filename, std::ios::binary);
-    if (!file.is_open()) throw std::runtime_error("Failed to open file: " + filename);
-
-    file_header_t header;
-    file.read(reinterpret_cast<char*>(&header), sizeof(file_header_t));
-    if (std::string(header.magic, 4) != "MODF") throw std::runtime_error("Invalid magic: " + filename);
-
-    out_count = header.count;
-    out_dimension = header.dimension;
-    out_data.resize(out_count * out_dimension);
-
-    if (header.data_type_size == sizeof(T)) {
-        detail::load_matrix_raw_ptr<T>(res, filename, header, out_data.data(), false);
-    } else {
-        if (header.data_type_size == 4) {
-            if constexpr (sizeof(T) == 2) {
-                detail::load_matrix_chunked_ptr<float, T, false>(res, filename, header, out_data.data(), false);
-            } else if constexpr (sizeof(T) == 1) {
-                detail::load_matrix_chunked_ptr<float, T, true>(res, filename, header, out_data.data(), false);
-            } else {
-                throw std::runtime_error("Unsupported conversion from float to requested size");
-            }
-        } else if (header.data_type_size == 2) {
-            if constexpr (sizeof(T) == 1) {
-                detail::load_matrix_chunked_ptr<half, T, true>(res, filename, header, out_data.data(), false);
-            } else if constexpr (sizeof(T) == 4) {
-                detail::load_matrix_chunked_ptr<half, T, false>(res, filename, header, out_data.data(), false);
-            } else {
-                throw std::runtime_error("Unsupported conversion from half to requested size");
-            }
-        } else {
-            throw std::runtime_error("Unsupported conversion for host matrix");
-        }
-    }
-}
-
-/**
- * @brief Saves a CUDA device matrix to a binary file in the "MODF" format using chunking.
- */
-template <typename T, typename Layout, typename IndexT>
-void save_device_matrix(const raft::resources& res, const std::string& filename, 
-                        raft::device_matrix_view<T, IndexT, Layout> matrix) {
-    std::ofstream file(filename, std::ios::binary);
-    if (!file.is_open()) throw std::runtime_error("Failed to open file for writing: " + filename);
-
-    file_header_t header;
-    std::memcpy(header.magic, "MODF", 4);
-    header.count = static_cast<uint64_t>(matrix.extent(0));
-    header.dimension = static_cast<uint64_t>(matrix.extent(1));
-    header.data_type_size = sizeof(std::remove_const_t<T>);
-    file.write(reinterpret_cast<const char*>(&header), sizeof(file_header_t));
-
-    int64_t n_rows = static_cast<int64_t>(header.count);
-    int64_t n_cols = static_cast<int64_t>(header.dimension);
-    std::vector<std::remove_const_t<T>> chunk_host;
-
-    for (int64_t row_offset = 0; row_offset < n_rows; row_offset += detail::DEFAULT_CHUNK_SIZE) {
-        int64_t current_chunk_rows = std::min(detail::DEFAULT_CHUNK_SIZE, n_rows - row_offset);
-        size_t total_chunk_elements = current_chunk_rows * n_cols;
-        chunk_host.resize(total_chunk_elements);
-        
-        auto src_chunk_view = raft::make_device_matrix_view<const T, int64_t>(matrix.data_handle() + (row_offset * n_cols), current_chunk_rows, n_cols);
-        auto host_chunk_view = raft::make_host_matrix_view<std::remove_const_t<T>, int64_t>(chunk_host.data(), current_chunk_rows, n_cols);
-        
-        raft::copy(res, host_chunk_view, src_chunk_view);
-        raft::resource::sync_stream(res);
-        file.write(reinterpret_cast<const char*>(chunk_host.data()), total_chunk_elements * sizeof(std::remove_const_t<T>));
-    }
-}
-
-/**
- * @brief Saves a host matrix to a binary file in the "MODF" format.
- */
-template <typename T, typename Layout, typename IndexT>
-void save_host_matrix(const std::string& filename, 
-                      raft::host_matrix_view<T, IndexT, Layout> matrix) {
-    std::ofstream file(filename, std::ios::binary);
-    if (!file.is_open()) throw std::runtime_error("Failed to open file for writing: " + filename);
-
-    file_header_t header;
-    std::memcpy(header.magic, "MODF", 4);
-    header.count = static_cast<uint64_t>(matrix.extent(0));
-    header.dimension = static_cast<uint64_t>(matrix.extent(1));
-    header.data_type_size = sizeof(std::remove_const_t<T>);
-    file.write(reinterpret_cast<const char*>(&header), sizeof(file_header_t));
-
-    if (matrix.size() > 0) {
-        file.write(reinterpret_cast<const char*>(matrix.data_handle()), matrix.size() * sizeof(std::remove_const_t<T>));
-    }
-}
 
 } // namespace matrixone

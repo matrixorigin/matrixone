@@ -315,7 +315,6 @@ func (h *Handle) handleRequests(
 				wr = h.apiEntryToWriteEntry(ctx, txnMeta, ae, true)
 				// Check if this is a soft delete object request
 				if wr.FileName != "" && isSoftDeleteEntry(wr.FileName) {
-					// Handle soft delete object separately
 					err = h.HandleSoftDeleteObject(ctx, txn, wr)
 					if err != nil {
 						return
@@ -405,6 +404,55 @@ func (h *Handle) handleRequests(
 	return
 }
 
+type autoIncrEpochRecorder interface {
+	SetAutoIncrEpoch(uint32) error
+}
+
+func setAutoIncrEpochDependency(rel handle.Relation, epoch uint32, known bool) error {
+	if !known {
+		epoch = 0
+	}
+	recorder, ok := rel.(autoIncrEpochRecorder)
+	if !ok {
+		return moerr.NewInternalErrorNoCtxf("relation %T cannot record AUTO_INCREMENT epoch", rel)
+	}
+	return recorder.SetAutoIncrEpoch(epoch)
+}
+
+// prepareWriteRelation is the single catalog-generation boundary for every TN
+// write entry. ExpectedEOB from database/relation resolution means that CN sent
+// a physical generation which is no longer visible; it must rebuild the plan.
+// Errors returned by an operation on an already resolved relation keep their
+// operation-specific meaning (for example, a missing soft-delete object).
+func (h *Handle) prepareWriteRelation(
+	ctx context.Context,
+	txn txnif.AsyncTxn,
+	req *cmd_util.WriteReq,
+) (handle.Relation, error) {
+	dbase, err := txn.GetDatabaseByID(req.DatabaseId)
+	if err != nil {
+		if moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
+			return nil, moerr.NewTxnNeedRetryWithDefChanged(ctx)
+		}
+		return nil, errors.Join(err, moerr.NewBadDB(ctx, fmt.Sprintf("%d-%s",
+			req.DatabaseId,
+			req.DatabaseName)))
+	}
+	rel, err := dbase.GetRelationByID(req.TableID)
+	if err != nil {
+		if moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
+			return nil, moerr.NewTxnNeedRetryWithDefChanged(ctx)
+		}
+		return nil, errors.Join(err, moerr.NewNoSuchTable(ctx,
+			fmt.Sprintf("%d-%s", req.DatabaseId, req.DatabaseName),
+			fmt.Sprintf("%d-%s", req.TableID, req.TableName)))
+	}
+	if err := setAutoIncrEpochDependency(rel, req.AutoIncrEpoch, req.AutoIncrEpochKnown); err != nil {
+		return nil, err
+	}
+	return rel, nil
+}
+
 //#endregion
 
 //#region Impl TxnStorage interface
@@ -423,14 +471,16 @@ func (h *Handle) apiEntryToWriteEntry(
 	}
 
 	req := &cmd_util.WriteReq{
-		Type:         cmd_util.EntryType(pe.EntryType),
-		DatabaseId:   pe.GetDatabaseId(),
-		TableID:      pe.GetTableId(),
-		DatabaseName: pe.GetDatabaseName(),
-		TableName:    pe.GetTableName(),
-		FileName:     pe.GetFileName(),
-		Batch:        moBat,
-		PkCheck:      cmd_util.PKCheckType(pe.GetPkCheckByTn()),
+		Type:               cmd_util.EntryType(pe.EntryType),
+		DatabaseId:         pe.GetDatabaseId(),
+		TableID:            pe.GetTableId(),
+		DatabaseName:       pe.GetDatabaseName(),
+		TableName:          pe.GetTableName(),
+		AutoIncrEpoch:      pe.GetAutoIncrEpoch(),
+		AutoIncrEpochKnown: pe.GetAutoIncrEpochKnown(),
+		FileName:           pe.GetFileName(),
+		Batch:              moBat,
+		PkCheck:            cmd_util.PKCheckType(pe.GetPkCheckByTn()),
 	}
 
 	// Handle soft delete object: parse ObjectID from batch and IsTombstone from FileName
@@ -569,11 +619,6 @@ func (h *Handle) HandleCommit(
 	if err != nil {
 		return
 	}
-	//if txn is 2PC ,need to set commit timestamp passed by coordinator.
-	if txn.Is2PC() {
-		txn.SetCommitTS(types.TimestampToTS(meta.GetCommitTS()))
-	}
-
 	v2.TxnBeforeCommitDurationHistogram.Observe(time.Since(start).Seconds())
 
 	err = txn.Commit(ctx)
@@ -604,10 +649,6 @@ func (h *Handle) HandleCommit(
 			bigDeleteTbls, hasDDL, err = h.handleRequests(ctx, txn, commitRequests, response, meta)
 			if err != nil && !moerr.IsMoErrCode(err, moerr.ErrTAENeedRetry) {
 				break
-			}
-			//if txn is 2PC ,need to set commit timestamp passed by coordinator.
-			if txn.Is2PC() {
-				txn.SetCommitTS(types.TimestampToTS(meta.GetCommitTS()))
 			}
 			err = txn.Commit(ctx)
 			cts = txn.GetCommitTS().ToTimestamp()
@@ -880,19 +921,8 @@ func (h *Handle) HandleWrite(
 		})
 	}()
 
-	dbase, err := txn.GetDatabaseByID(req.DatabaseId)
+	tb, err := h.prepareWriteRelation(ctx, txn, req)
 	if err != nil {
-		err = errors.Join(err, moerr.NewBadDB(ctx, fmt.Sprintf("%d-%s",
-			req.DatabaseId,
-			req.DatabaseName)))
-		return
-	}
-
-	tb, err := dbase.GetRelationByID(req.TableID)
-	if err != nil {
-		err = errors.Join(err, moerr.NewNoSuchTable(ctx,
-			fmt.Sprintf("%d-%s", req.DatabaseId, req.DatabaseName),
-			fmt.Sprintf("%d-%s", req.TableID, req.TableName)))
 		return
 	}
 
@@ -1113,15 +1143,9 @@ func (h *Handle) HandleSoftDeleteObject(
 	if req.ObjectID == nil {
 		return moerr.NewInternalErrorf(ctx, "ObjectID is nil for soft delete object request, FileName: %s", req.FileName)
 	}
-
-	dbase, err := txn.GetDatabaseByID(req.DatabaseId)
+	tb, err := h.prepareWriteRelation(ctx, txn, req)
 	if err != nil {
-		return moerr.NewInternalErrorf(ctx, "failed to get database %d: %v", req.DatabaseId, err)
-	}
-
-	tb, err := dbase.GetRelationByID(req.TableID)
-	if err != nil {
-		return moerr.NewInternalErrorf(ctx, "failed to get relation %d: %v", req.TableID, err)
+		return err
 	}
 
 	// objectio.ObjectId is a type alias for types.Objectid, so we can use it directly

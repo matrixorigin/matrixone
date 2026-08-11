@@ -18,6 +18,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
+	"net/url"
+	"strings"
 	"time"
 
 	"github.com/fagongzi/goetty/v2"
@@ -32,7 +35,12 @@ import (
 )
 
 var (
-	cnProxy goetty.Proxy
+	cnProxy                 goetty.Proxy
+	launchStartService      = startService
+	launchStartDynamic      = startDynamicCluster
+	launchNewProxy          = goetty.NewProxy
+	launchNewHAKeeperClient = logservice.NewCNHAKeeperClient
+	launchSleep             = time.Sleep
 )
 
 func startCluster(
@@ -50,7 +58,7 @@ func startCluster(
 	}
 
 	if cfg.Dynamic.Enable {
-		return startDynamicCluster(ctx, cfg, stopper, shutdownC)
+		return launchStartDynamic(ctx, cfg, stopper, shutdownC)
 	}
 
 	/*
@@ -67,7 +75,15 @@ func startCluster(
 	if err := startTNServiceCluster(ctx, cfg.TNServiceConfigsFiles, stopper, shutdownC); err != nil {
 		return err
 	}
-	if err := startCNServiceCluster(ctx, cfg.CNServiceConfigsFiles, stopper, shutdownC); err != nil {
+	proxyOwns6001 := false
+	if *withProxy {
+		var err error
+		proxyOwns6001, err = proxyServiceOwnsPort(cfg.ProxyServiceConfigsFiles, 6001)
+		if err != nil {
+			return err
+		}
+	}
+	if err := startCNServiceCluster(ctx, cfg.CNServiceConfigsFiles, stopper, shutdownC, proxyOwns6001); err != nil {
 		return err
 	}
 	if *withProxy {
@@ -98,7 +114,7 @@ func startLogServiceCluster(
 		if err := parseConfigFromFile(file, cfg); err != nil {
 			return err
 		}
-		if err := startService(ctx, cfg, stopper, shutdownC); err != nil {
+		if err := launchStartService(ctx, cfg, stopper, shutdownC); err != nil {
 			return err
 		}
 	}
@@ -122,7 +138,7 @@ func startTNServiceCluster(
 		if err := parseConfigFromFile(file, cfg); err != nil {
 			return err
 		}
-		if err := startService(ctx, cfg, stopper, shutdownC); err != nil {
+		if err := launchStartService(ctx, cfg, stopper, shutdownC); err != nil {
 			return err
 		}
 	}
@@ -134,6 +150,7 @@ func startCNServiceCluster(
 	files []string,
 	stopper *stopper.Stopper,
 	shutdownC chan struct{},
+	proxyOwns6001 ...bool,
 ) error {
 	if len(files) == 0 {
 		return moerr.NewBadConfig(context.Background(), "CN service config not set")
@@ -148,14 +165,15 @@ func startCNServiceCluster(
 			return err
 		}
 		upstreams = append(upstreams, fmt.Sprintf("127.0.0.1:%d", cfg.getCNServiceConfig().Frontend.Port))
-		if err := startService(ctx, cfg, stopper, shutdownC); err != nil {
+		if err := launchStartService(ctx, cfg, stopper, shutdownC); err != nil {
 			return err
 		}
 	}
 
-	if len(upstreams) > 1 {
-		// TODO: make configurable for 6001
-		cnProxy = goetty.NewProxy("0.0.0.0:6001", logutil.GetGlobalLogger().Named("mysql-proxy"))
+	owns6001 := len(proxyOwns6001) > 0 && proxyOwns6001[0]
+	if shouldStartBuiltinCNProxy(len(upstreams), *withProxy, owns6001) {
+		// Keep the legacy 6001 entrypoint when the configured Proxy does not own it.
+		cnProxy = launchNewProxy("0.0.0.0:6001", logutil.GetGlobalLogger().Named("mysql-proxy"))
 		for _, address := range upstreams {
 			cnProxy.AddUpStream(address, time.Second*10)
 		}
@@ -164,6 +182,49 @@ func startCNServiceCluster(
 		}
 	}
 	return nil
+}
+
+func shouldStartBuiltinCNProxy(upstreamCount int, proxyServiceEnabled bool, proxyOwns6001 ...bool) bool {
+	owns6001 := len(proxyOwns6001) > 0 && proxyOwns6001[0]
+	return upstreamCount > 1 && (!proxyServiceEnabled || !owns6001)
+}
+
+func proxyServiceOwnsPort(files []string, port int) (bool, error) {
+	for _, file := range files {
+		cfg := NewConfig()
+		if err := parseConfigFromFile(file, cfg); err != nil {
+			return false, err
+		}
+		proxyCfg := cfg.getProxyConfig()
+		proxyCfg.FillDefault()
+		configuredPort, err := proxyListenPort(proxyCfg.ListenAddress)
+		if err != nil {
+			return false, err
+		}
+		if configuredPort == fmt.Sprint(port) {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// proxyListenPort follows pkg/proxy's listener address contract. Unix
+// listeners have no TCP port and therefore cannot own the built-in 6001
+// endpoint; in that case the legacy TCP proxy remains enabled.
+func proxyListenPort(address string) (string, error) {
+	if !strings.Contains(address, "//") {
+		_, port, err := net.SplitHostPort(address)
+		return port, err
+	}
+	u, err := url.Parse(address)
+	if err != nil {
+		return "", err
+	}
+	if strings.EqualFold(u.Scheme, "unix") {
+		return "", nil
+	}
+	_, port, err := net.SplitHostPort(u.Host)
+	return port, err
 }
 
 func startProxyServiceCluster(
@@ -182,7 +243,7 @@ func startProxyServiceCluster(
 		if err := parseConfigFromFile(file, cfg); err != nil {
 			return err
 		}
-		if err := startService(ctx, cfg, stopper, shutdownC); err != nil {
+		if err := launchStartService(ctx, cfg, stopper, shutdownC); err != nil {
 			return err
 		}
 	}
@@ -205,7 +266,7 @@ func startPythonUdfServiceCluster(
 		if err := parseConfigFromFile(file, cfg); err != nil {
 			return err
 		}
-		if err := startService(ctx, cfg, stopper, shutdownC); err != nil {
+		if err := launchStartService(ctx, cfg, stopper, shutdownC); err != nil {
 			return err
 		}
 	}
@@ -219,7 +280,7 @@ func waitHAKeeperReady(
 	getClient := func() (logservice.CNHAKeeperClient, error) {
 		ctx, cancel := context.WithTimeoutCause(context.Background(), time.Second*5, moerr.CauseWaitHAKeeperReader1)
 		defer cancel()
-		client, err := logservice.NewCNHAKeeperClient(ctx, service, cfg)
+		client, err := launchNewHAKeeperClient(ctx, service, cfg)
 		if err != nil {
 			err = moerr.AttachCause(ctx, err)
 			logutil.Errorf("hakeeper not ready, err: %v", err)
@@ -239,7 +300,7 @@ func waitHAKeeperReady(
 			if err == nil {
 				return client, nil
 			}
-			time.Sleep(time.Second)
+			launchSleep(time.Second)
 		}
 	}
 }
@@ -258,7 +319,7 @@ func waitHAKeeperRunning(client logservice.CNHAKeeperClient) error {
 			state.State != logpb.HAKeeperRunning {
 			// not ready
 			logutil.Info("retry.wait.hakeeper.running")
-			time.Sleep(time.Second)
+			launchSleep(time.Second)
 			continue
 		}
 		return err
@@ -295,7 +356,7 @@ func waitAnyShardReady(client logservice.CNHAKeeperClient) error {
 			logutil.Info("wait.tn.ready.ready.completed")
 			return nil
 		}
-		time.Sleep(time.Second)
+		launchSleep(time.Second)
 	}
 }
 

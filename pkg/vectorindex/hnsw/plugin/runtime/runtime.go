@@ -93,6 +93,11 @@ func (CatalogHooks) SupportedVectorTypes() []types.T {
 // SupportedPrimaryKeyTypes: requires an int64 primary key.
 func (CatalogHooks) SupportedPrimaryKeyTypes() []types.T { return []types.T{types.T_int64} }
 
+// ValidQuantization: HNSW (usearch) validates quantization on its own
+// param-build path (ParamsFromTree), and REINDEX does not accept a quantization
+// change, so there is nothing to gate here.
+func (CatalogHooks) ValidQuantization(_, _ string) error { return nil }
+
 // SupportedIncludeColumnTypes: this index has no INCLUDE-column support.
 func (CatalogHooks) SupportedIncludeColumnTypes() []types.T { return nil }
 
@@ -148,7 +153,7 @@ func (CatalogHooks) ParamsFromTree(idx *tree.Index) (map[string]string, error) {
 	if len(idx.IndexOption.AlgoParamVectorOpType) > 0 {
 		opType := catalog.ToLower(idx.IndexOption.AlgoParamVectorOpType)
 		if _, ok := metric.OpTypeToUsearchMetric[opType]; !ok {
-			return nil, moerr.NewInternalErrorNoCtx(fmt.Sprintf("invalid op_type. '%s'", opType))
+			return nil, moerr.NewInvalidInputNoCtxf("invalid op_type. '%s'", opType)
 		}
 		res[catalog.IndexAlgoParamOpType] = idx.IndexOption.AlgoParamVectorOpType
 	} else {

@@ -179,6 +179,84 @@ func TestConnectorResetFallsBackToAbortWhenEndSignalCannotBeDelivered(t *testing
 	require.Same(t, process.ErrPipelineEndSignalDeliveryFailed, info)
 }
 
+func TestConnectorResetUndeliveredFallbackAbortWakesReceiver(t *testing.T) {
+	oldSignalSendTimeout := process.PipelineSignalSendTimeout
+	process.PipelineSignalSendTimeout = 10 * time.Millisecond
+	t.Cleanup(func() {
+		process.PipelineSignalSendTimeout = oldSignalSendTimeout
+	})
+
+	reg := process.NewPipelineEdge(1, 0)
+	reg.Ch2 <- process.NewPipelineSignalToDirectly(batch.EmptyBatch, nil, nil)
+
+	conn := &Connector{Reg: reg}
+	conn.Reset(nil, false, nil)
+
+	receiverCtx, cancelReceiver := context.WithCancel(context.Background())
+	defer cancelReceiver()
+	receiver := process.InitPipelineSignalReceiver(receiverCtx, []*process.WaitRegister{reg})
+
+	got, err := receiver.GetNextBatch(nil)
+	require.NoError(t, err)
+	require.Same(t, batch.EmptyBatch, got)
+
+	type result struct {
+		bat *batch.Batch
+		err error
+	}
+	resultCh := make(chan result, 1)
+	go func() {
+		got, err := receiver.GetNextBatch(nil)
+		resultCh <- result{bat: got, err: err}
+	}()
+
+	select {
+	case result := <-resultCh:
+		require.Nil(t, result.bat)
+		require.ErrorIs(t, result.err, process.ErrPipelineEndSignalDeliveryFailed)
+	case <-time.After(time.Second):
+		cancelReceiver()
+		<-resultCh
+		t.Fatal("receiver remained blocked after the fallback Abort failed to enter the full channel")
+	}
+}
+
+func TestConnectorResetPreservesRecordedTerminalError(t *testing.T) {
+	mp := mpool.MustNewZeroNoFixed()
+	t.Cleanup(func() {
+		mpool.DeleteMPool(mp)
+	})
+	srcMP := mpool.MustNewZeroNoFixed()
+	t.Cleanup(func() {
+		mpool.DeleteMPool(srcMP)
+	})
+	src := newConnectorSpoolTestBatch(t, srcMP, 1024)
+	t.Cleanup(func() {
+		src.Clean(srcMP)
+	})
+
+	sp := pSpool.InitMyPipelineSpool(mp, 1)
+	queryDone, err := sp.SendBatch(context.Background(), 0, src, nil)
+	require.NoError(t, err)
+	require.False(t, queryDone)
+
+	reg := process.NewPipelineEdge(1, 0)
+	reg.Ch2 <- process.NewPipelineSignalToGetFromSpool(sp, 0)
+	originalErr := moerr.NewDuplicateEntryNoCtx("1000000", "")
+	require.False(t, reg.TrySendError(originalErr))
+	require.ErrorIs(t, reg.Err(), originalErr)
+
+	conn := &Connector{Reg: reg}
+	conn.ctr.sp = sp
+	conn.Reset(nil, false, nil)
+
+	staleSignal := <-reg.Ch2
+	got, info := staleSignal.Action()
+	require.Nil(t, got)
+	require.ErrorIs(t, info, originalErr)
+	require.NotErrorIs(t, info, process.ErrPipelineEndSignalDeliveryFailed)
+}
+
 func TestConnectorResetUsesSharedTerminalSendBudget(t *testing.T) {
 	oldSignalSendTimeout := process.PipelineSignalSendTimeout
 	process.PipelineSignalSendTimeout = 200 * time.Millisecond
@@ -298,6 +376,130 @@ func TestConnectorResetEndPreservesQueuedSpoolBatchUntilDeferredCleanup(t *testi
 	conn.CleanupDeferredSpool()
 	require.Nil(t, conn.cleanupSpool)
 	require.Equal(t, int64(0), mp.CurrNB())
+}
+
+func TestConnectorAllocationClearFinalizesAbortedSpool(t *testing.T) {
+	testConnectorAllocationClearFinalizesSpool(t, true)
+}
+
+func TestConnectorAccountedDeferredCleanupReleasesReusableCache(t *testing.T) {
+	mp := mpool.MustNewZeroNoFixed()
+	t.Cleanup(func() {
+		mpool.DeleteMPool(mp)
+	})
+	srcMP := mpool.MustNewZeroNoFixed()
+	t.Cleanup(func() {
+		mpool.DeleteMPool(srcMP)
+	})
+	src := newConnectorSpoolTestBatch(t, srcMP, 1024)
+	t.Cleanup(func() {
+		src.Clean(srcMP)
+	})
+
+	sp := pSpool.InitMyPipelineSpool(mp, 1)
+	done, err := sp.SendBatch(context.Background(), 0, src, nil)
+	require.NoError(t, err)
+	require.False(t, done)
+	got, info := sp.ReceiveBatch(0)
+	require.NoError(t, info)
+	require.NotNil(t, got)
+	sp.ReleaseCurrent(0)
+	require.Positive(t, mp.CurrNB())
+
+	registry, err := mpool.NewAllocationAccountRegistry(1, 1)
+	require.NoError(t, err)
+	account, err := registry.Open(1 << 20)
+	require.NoError(t, err)
+	conn := &Connector{cleanupSpool: sp}
+	require.NoError(t, conn.SetAllocationAccount(account))
+	conn.CleanupDeferredSpool()
+	require.Same(t, sp, conn.cleanupSpool)
+	require.Zero(t, mp.CurrNB())
+	require.NoError(t, conn.ClearAllocationAccount(account))
+	_, _, err = registry.CompleteTerminal(account)
+	require.NoError(t, err)
+}
+
+func TestConnectorAllocationAccountContract(t *testing.T) {
+	registry, err := mpool.NewAllocationAccountRegistry(2, 1)
+	require.NoError(t, err)
+	first, err := registry.Open(1)
+	require.NoError(t, err)
+	second, err := registry.Open(1)
+	require.NoError(t, err)
+	conn := &Connector{}
+	require.False(t, conn.ActivatesAllocationAccountLifecycle())
+	require.ErrorIs(t, conn.SetAllocationAccount(nil), mpool.ErrAllocationAccountInvalid)
+	require.NoError(t, conn.SetAllocationAccount(first))
+	require.ErrorIs(t, conn.SetAllocationAccount(second), mpool.ErrAllocationAccountMismatch)
+	require.ErrorIs(t, conn.ClearAllocationAccount(second), mpool.ErrAllocationAccountMismatch)
+	conn.ctr.sp = &pSpool.PipelineSpool{}
+	require.ErrorIs(t, conn.ClearAllocationAccount(first), mpool.ErrAllocationAccountInvariant)
+	conn.ctr.sp = nil
+	require.NoError(t, conn.ClearAllocationAccount(first))
+	require.NoError(t, conn.ClearAllocationAccount(first))
+	_, _, err = registry.CompleteTerminal(first)
+	require.NoError(t, err)
+	_, _, err = registry.CompleteTerminal(second)
+	require.NoError(t, err)
+}
+
+func TestConnectorAllocationClearFinalizesTerminalSpoolPending(t *testing.T) {
+	testConnectorAllocationClearFinalizesSpool(t, false)
+}
+
+func testConnectorAllocationClearFinalizesSpool(t *testing.T, abort bool) {
+	mp := mpool.MustNewZeroNoFixed()
+	t.Cleanup(func() {
+		mpool.DeleteMPool(mp)
+	})
+	registry, err := mpool.NewAllocationAccountRegistry(1, 16)
+	require.NoError(t, err)
+	account, err := registry.Open(1 << 20)
+	require.NoError(t, err)
+	selection, err := vector.NewAllocationAccountSelection(
+		account,
+		1,
+		102,
+		103,
+		104,
+		105,
+	)
+	require.NoError(t, err)
+	src := batch.NewOffHeapWithSize(1)
+	require.NoError(t, src.SetAllocationAccount(selection))
+	src.SetVector(0, vector.NewOffHeapVecWithType(types.T_int64.ToType()))
+	require.NoError(t, vector.AppendFixed(src.Vecs[0], int64(1), false, mp))
+	src.SetRowCount(1)
+
+	sp := pSpool.InitMyPipelineSpool(mp, 1)
+	done, err := sp.SendBatch(context.Background(), 0, src, nil)
+	require.NoError(t, err)
+	require.False(t, done)
+	conn := &Connector{}
+	require.NoError(t, conn.SetAllocationAccount(account))
+	if abort {
+		got, info := sp.ReceiveBatch(0)
+		require.NoError(t, info)
+		require.NotNil(t, got)
+		conn.ctr.sp = sp
+		conn.Reg = process.NewPipelineEdge(1, 0)
+		conn.Reset(nil, true, moerr.NewInternalErrorNoCtx("pipeline failed"))
+		require.Same(t, sp, conn.cleanupSpool)
+		sp.ReleaseCurrent(0)
+	} else {
+		conn.cleanupSpool = sp
+		sp.ForceCleanupAfterTerminalSignal()
+	}
+	conn.CleanupDeferredSpool()
+	require.Same(t, sp, conn.cleanupSpool)
+	require.NoError(t, conn.ClearAllocationAccount(account))
+	require.Nil(t, conn.cleanupSpool)
+	src.Clean(mp)
+	snapshot := account.Seal()
+	require.Zero(t, snapshot.Used)
+	_, err = registry.Finalize(account)
+	require.NoError(t, err)
 }
 
 func newConnectorSpoolTestBatch(t *testing.T, mp *mpool.MPool, rows int) *batch.Batch {

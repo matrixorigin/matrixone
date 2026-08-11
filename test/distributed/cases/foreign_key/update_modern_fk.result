@@ -1,0 +1,368 @@
+drop database if exists update_modern_fk;
+create database update_modern_fk;
+use update_modern_fk;
+create table parent_single (
+id int primary key
+);
+create table child_single (
+id int primary key,
+parent_id int,
+note varchar(32),
+unique key uk_note(note),
+constraint fk_single foreign key (parent_id) references parent_single(id)
+);
+insert into parent_single values (1), (2), (3);
+insert into child_single values (10, 1, 'a'), (20, 2, null);
+update child_single set note = 'b' where id = 10;
+insert into child_single values (30, 1, 'a');
+delete from child_single where id = 30;
+update child_single set parent_id = 3 where id = 10;
+select * from child_single order by id;
+➤ id[4,32,0]  ¦  parent_id[4,32,0]  ¦  note[12,-1,0]  𝄀
+10  ¦  3  ¦  b  𝄀
+20  ¦  2  ¦  null
+update child_single set parent_id = 99 where id = 10;
+Cannot add or update a child row: a foreign key constraint fails
+select * from child_single order by id;
+➤ id[4,32,0]  ¦  parent_id[4,32,0]  ¦  note[12,-1,0]  𝄀
+10  ¦  3  ¦  b  𝄀
+20  ¦  2  ¦  null
+set foreign_key_checks = 0;
+update child_single set parent_id = 99 where id = 10;
+set foreign_key_checks = 1;
+update child_single set parent_id = parent_id where id = 10;
+update child_single set note = 'orphan' where id = 10;
+insert into child_single values (30, 1, 'orphan');
+Duplicate entry 'orphan' for key 'note'
+select * from child_single order by id;
+➤ id[4,32,0]  ¦  parent_id[4,32,0]  ¦  note[12,-1,0]  𝄀
+10  ¦  99  ¦  orphan  𝄀
+20  ¦  2  ¦  null
+update child_single set parent_id = 1 where id = 10;
+update child_single set parent_id = case id when 10 then 2 else 98 end;
+Cannot add or update a child row: a foreign key constraint fails
+select * from child_single order by id;
+➤ id[4,32,0]  ¦  parent_id[4,32,0]  ¦  note[12,-1,0]  𝄀
+10  ¦  1  ¦  orphan  𝄀
+20  ¦  2  ¦  null
+create table parent_composite (
+a int,
+b int,
+primary key (a, b)
+);
+create table child_composite (
+id int primary key,
+a int,
+b int,
+constraint fk_composite foreign key (a, b) references parent_composite(a, b)
+);
+insert into parent_composite values (1, 1), (2, 2);
+insert into child_composite values (1, 1, 1), (2, 2, 2), (3, null, null);
+update child_composite set a = null, b = 99 where id = 1;
+update child_composite set a = 99, b = null where id = 2;
+update child_composite set a = 1, b = 1 where id = 3;
+select * from child_composite order by id;
+➤ id[4,32,0]  ¦  a[4,32,0]  ¦  b[4,32,0]  𝄀
+1  ¦  null  ¦  99  𝄀
+2  ¦  99  ¦  null  𝄀
+3  ¦  1  ¦  1
+update child_composite set a = 98, b = 98 where id = 3;
+Cannot add or update a child row: a foreign key constraint fails
+select * from child_composite order by id;
+➤ id[4,32,0]  ¦  a[4,32,0]  ¦  b[4,32,0]  𝄀
+1  ¦  null  ¦  99  𝄀
+2  ¦  99  ¦  null  𝄀
+3  ¦  1  ¦  1
+create table self_ref (
+id int primary key,
+parent_id int,
+name varchar(32),
+constraint fk_self foreign key (parent_id) references self_ref(id)
+);
+insert into self_ref values (1, 1, 'root'), (2, 1, 'child');
+update self_ref set name = 'changed' where id = 2;
+update self_ref set parent_id = 2 where id = 2;
+set foreign_key_checks = 0;
+update self_ref set parent_id = 99 where id = 2;
+update self_ref set parent_id = 2 where id = 2;
+set foreign_key_checks = 1;
+update self_ref set parent_id = 99 where id = 2;
+Cannot add or update a child row: a foreign key constraint fails
+select * from self_ref order by id;
+➤ id[4,32,0]  ¦  parent_id[4,32,0]  ¦  name[12,-1,0]  𝄀
+1  ¦  1  ¦  root  𝄀
+2  ¦  2  ¦  changed
+create table parent_restrict (
+id int primary key
+);
+create table child_restrict (
+id int primary key,
+parent_id int,
+constraint fk_parent_restrict foreign key (parent_id)
+references parent_restrict(id) on update restrict
+);
+insert into parent_restrict values (1), (2);
+insert into child_restrict values (10, 1);
+update parent_restrict set id = id where id = 1;
+update parent_restrict set id = 11 where id = 1;
+Cannot delete or update a parent row: a foreign key constraint fails
+select * from parent_restrict order by id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+2
+select * from child_restrict order by id;
+➤ id[4,32,0]  ¦  parent_id[4,32,0]  𝄀
+10  ¦  1
+create table parent_cascade (
+id int primary key
+);
+create table child_cascade (
+id int primary key,
+parent_id int,
+note varchar(32),
+unique key uk_cascade_note(note),
+key idx_cascade_parent(parent_id),
+constraint fk_parent_cascade foreign key (parent_id)
+references parent_cascade(id) on update cascade
+);
+insert into parent_cascade values (1), (2);
+insert into child_cascade values (10, 1, 'a'), (20, 1, 'b'), (30, 2, 'c');
+update parent_cascade set id = 11 where id = 1;
+select row_count();
+➤ row_count()[-5,64,0]  𝄀
+1
+select * from parent_cascade order by id;
+➤ id[4,32,0]  𝄀
+2  𝄀
+11
+select * from child_cascade order by id;
+➤ id[4,32,0]  ¦  parent_id[4,32,0]  ¦  note[12,-1,0]  𝄀
+10  ¦  11  ¦  a  𝄀
+20  ¦  11  ¦  b  𝄀
+30  ¦  2  ¦  c
+update child_cascade set note = 'd' where id = 10;
+insert into child_cascade values (40, 11, 'a');
+select * from child_cascade order by id;
+➤ id[4,32,0]  ¦  parent_id[4,32,0]  ¦  note[12,-1,0]  𝄀
+10  ¦  11  ¦  d  𝄀
+20  ¦  11  ¦  b  𝄀
+30  ¦  2  ¦  c  𝄀
+40  ¦  11  ¦  a
+create table parent_set_null (
+id int primary key
+);
+create table child_set_null (
+id int primary key,
+parent_id int,
+key idx_set_null_parent(parent_id),
+constraint fk_parent_set_null foreign key (parent_id)
+references parent_set_null(id) on update set null
+);
+insert into parent_set_null values (1), (2);
+insert into child_set_null values (10, 1), (20, 1), (30, 2);
+update parent_set_null set id = 11 where id = 1;
+select * from parent_set_null order by id;
+➤ id[4,32,0]  𝄀
+2  𝄀
+11
+select * from child_set_null order by id;
+➤ id[4,32,0]  ¦  parent_id[4,32,0]  𝄀
+10  ¦  null  𝄀
+20  ¦  null  𝄀
+30  ¦  2
+create table parent_composite_action (
+a int,
+b int,
+primary key (a, b)
+);
+create table child_composite_action (
+id int primary key,
+a int,
+b int,
+generated_sum int as (a + b),
+key idx_composite_action(a, b),
+key idx_generated_sum(generated_sum),
+constraint fk_composite_action foreign key (a, b)
+references parent_composite_action(a, b) on update cascade
+);
+insert into parent_composite_action values (1, 2), (3, 4);
+insert into child_composite_action(id, a, b) values (10, 1, 2), (20, 3, 4);
+update parent_composite_action set a = 11, b = 12 where a = 1 and b = 2;
+not supported: parent foreign key action requires complete child update row closure
+select row_count();
+➤ row_count()[-5,64,0]  𝄀
+0
+select * from parent_composite_action order by a, b;
+➤ a[4,32,0]  ¦  b[4,32,0]  𝄀
+1  ¦  2  𝄀
+3  ¦  4
+select * from child_composite_action order by id;
+➤ id[4,32,0]  ¦  a[4,32,0]  ¦  b[4,32,0]  ¦  generated_sum[4,32,0]  𝄀
+10  ¦  1  ¦  2  ¦  3  𝄀
+20  ¦  3  ¦  4  ¦  7
+create table child_second_cascade (
+id int primary key,
+parent_id int,
+constraint fk_second_cascade foreign key (parent_id)
+references parent_cascade(id) on update cascade
+);
+insert into child_second_cascade values (1, 11), (2, 2);
+update parent_cascade set id = 111 where id = 11;
+select row_count();
+➤ row_count()[-5,64,0]  𝄀
+1
+select * from child_cascade order by id;
+➤ id[4,32,0]  ¦  parent_id[4,32,0]  ¦  note[12,-1,0]  𝄀
+10  ¦  111  ¦  d  𝄀
+20  ¦  111  ¦  b  𝄀
+30  ¦  2  ¦  c  𝄀
+40  ¦  111  ¦  a
+select * from child_second_cascade order by id;
+➤ id[4,32,0]  ¦  parent_id[4,32,0]  𝄀
+1  ¦  111  𝄀
+2  ¦  2
+set foreign_key_checks = 0;
+update parent_cascade set id = 22 where id = 2;
+set foreign_key_checks = 1;
+select * from parent_cascade order by id;
+➤ id[4,32,0]  𝄀
+22  𝄀
+111
+select * from child_cascade order by id;
+➤ id[4,32,0]  ¦  parent_id[4,32,0]  ¦  note[12,-1,0]  𝄀
+10  ¦  111  ¦  d  𝄀
+20  ¦  111  ¦  b  𝄀
+30  ¦  2  ¦  c  𝄀
+40  ¦  111  ¦  a
+create table parent_dual_a (
+id int primary key
+);
+create table parent_dual_b (
+id int primary key
+);
+create table child_dual_fk (
+x int,
+constraint fk_dual_a foreign key (x)
+references parent_dual_a(id) on update cascade,
+constraint fk_dual_b foreign key (x)
+references parent_dual_b(id)
+);
+insert into parent_dual_a values (1);
+insert into parent_dual_b values (1);
+insert into child_dual_fk values (1);
+update parent_dual_a set id = 2 where id = 1;
+not supported: parent foreign key action changing child column constrained by another foreign key
+select * from parent_dual_a order by id;
+➤ id[4,32,0]  𝄀
+1
+select * from child_dual_fk;
+➤ x[4,32,0]  𝄀
+1
+create table parent_generated_unique (
+id int primary key
+);
+create table child_generated_unique (
+id int primary key,
+parent_id int,
+u int generated always as (parent_id % 10) stored,
+unique key uk_generated_unique(u),
+constraint fk_generated_unique foreign key (parent_id)
+references parent_generated_unique(id) on update cascade
+);
+insert into parent_generated_unique values (1), (12);
+insert into child_generated_unique(id, parent_id) values (10, 1), (20, 12);
+update parent_generated_unique set id = 2 where id = 1;
+not supported: parent foreign key action requires complete child update row closure
+select * from parent_generated_unique order by id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+12
+select * from child_generated_unique order by id;
+➤ id[4,32,0]  ¦  parent_id[4,32,0]  ¦  u[4,32,0]  𝄀
+10  ¦  1  ¦  1  𝄀
+20  ¦  12  ¦  2
+set foreign_key_checks = 0;
+create table update_preinsert_index (
+a int not null auto_increment primary key,
+b varchar(25) not null,
+c datetime,
+key idx_b(b),
+key idx_c(c)
+);
+insert into update_preinsert_index(b, c)
+values ('a', '2020-09-08'), ('b', '2020-09-09');
+update update_preinsert_index set a = 90;
+Duplicate entry '90' for key 'a'
+set foreign_key_checks = 1;
+drop table update_preinsert_index;
+create table parent_lock_order (
+id int primary key
+);
+create table child_lock_order (
+id int primary key,
+parent_id int,
+constraint fk_lock_order foreign key (parent_id)
+references parent_lock_order(id) on update cascade
+);
+insert into parent_lock_order values (1);
+begin;
+update parent_lock_order set id = 2 where id = 1;
+use update_modern_fk;
+set session lock_wait_timeout = 1;
+begin;
+insert into child_lock_order values (10, 1);
+-- @regex("(?s)Lock wait timeout exceeded; try restarting transaction", true)
+Lock wait timeout exceeded; try restarting transaction
+rollback;
+commit;
+select * from parent_lock_order;
+➤ id[4,32,0]  𝄀
+2
+select * from child_lock_order;
+➤ id[4,32,0]  ¦  parent_id[4,32,0]
+drop table child_lock_order;
+drop table parent_lock_order;
+create table parent_nonunique_prefix (
+a int,
+b int,
+primary key (a, b)
+);
+create table child_nonunique_prefix (
+id int primary key,
+parent_a int,
+constraint fk_nonunique_prefix foreign key (parent_a)
+references parent_nonunique_prefix(a) on update cascade
+);
+insert into parent_nonunique_prefix values (1, 1), (1, 2);
+insert into child_nonunique_prefix values (10, 1);
+update parent_nonunique_prefix set a = b + 1 where a = 1;
+not supported: parent foreign key action has an ambiguous non-unique referenced-key mapping
+select * from parent_nonunique_prefix order by a, b;
+➤ a[4,32,0]  ¦  b[4,32,0]  𝄀
+1  ¦  1  𝄀
+1  ¦  2
+select * from child_nonunique_prefix order by id;
+➤ id[4,32,0]  ¦  parent_a[4,32,0]  𝄀
+10  ¦  1
+drop table child_nonunique_prefix;
+drop table parent_nonunique_prefix;
+drop table child_generated_unique;
+drop table parent_generated_unique;
+drop table child_dual_fk;
+drop table parent_dual_b;
+drop table parent_dual_a;
+drop table child_second_cascade;
+drop table child_composite_action;
+drop table parent_composite_action;
+drop table child_set_null;
+drop table parent_set_null;
+drop table child_cascade;
+drop table parent_cascade;
+drop table child_restrict;
+drop table parent_restrict;
+drop table self_ref;
+drop table child_composite;
+drop table parent_composite;
+drop table child_single;
+drop table parent_single;
+drop database update_modern_fk;

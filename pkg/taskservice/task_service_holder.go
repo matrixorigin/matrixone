@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"time"
 
 	"go.uber.org/zap"
 
@@ -93,6 +94,9 @@ func (h *taskServiceHolder) Create(command logservicepb.CreateTaskService) error
 
 	h.mu.Lock()
 	defer h.mu.Unlock()
+	if h.mu.closed {
+		return ErrNotReady
+	}
 	if h.mu.service != nil {
 		return nil
 	}
@@ -110,7 +114,7 @@ func (h *taskServiceHolder) Create(command logservicepb.CreateTaskService) error
 func (h *taskServiceHolder) Get() (TaskService, bool) {
 	h.mu.RLock()
 	defer h.mu.RUnlock()
-	if h.mu.service == nil {
+	if h.mu.closed || h.mu.service == nil {
 		return nil, false
 	}
 	return h.mu.service, true
@@ -323,6 +327,31 @@ func (s *refreshableTaskStorage) UpdateDaemonTask(ctx context.Context, tasks []t
 		err = ErrNotReady
 	} else if err = s.mu.store.PingContext(ctx); err == nil {
 		v, err = s.mu.store.UpdateDaemonTask(ctx, tasks, conditions...)
+	}
+	s.mu.RUnlock()
+	if err != nil {
+		s.maybeRefresh(lastAddress)
+	}
+	return v, err
+}
+
+func (s *refreshableTaskStorage) UpdateDaemonTaskStatus(
+	ctx context.Context,
+	taskID uint64,
+	status task.TaskStatus,
+	updateAt time.Time,
+	endAt time.Time,
+	conditions ...Condition,
+) (int, error) {
+	var v int
+	var err error
+	s.mu.RLock()
+	lastAddress := s.mu.lastAddress
+	if s.mu.store == nil {
+		err = ErrNotReady
+	} else if err = s.mu.store.PingContext(ctx); err == nil {
+		v, err = s.mu.store.UpdateDaemonTaskStatus(
+			ctx, taskID, status, updateAt, endAt, conditions...)
 	}
 	s.mu.RUnlock()
 	if err != nil {

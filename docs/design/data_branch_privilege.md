@@ -432,12 +432,17 @@ Output modes:
   only.
 - `OUTPUT FILE` produces a SQL file and must keep using
   `validateOutputDirPath`; it does not require table write privileges.
-- `OUTPUT AS table_name` is parsed today but not implemented by
-  `satisfyDiffOutputOpt`. The privilege fix must not leave this silent.
-  Return `not supported` explicitly in this change.
-  Implementation can check `stmt.OutputOpt != nil &&
-  stmt.OutputOpt.As.ObjectName != ""` in `validate` or at the start of
-  `satisfyDiffOutputOpt`.
+- `OUTPUT AS table_name` materializes an ordinary persistent physical table.
+  It is not a data-branch node and has no `mo_branch_metadata` row. The table
+  starts with `__mo_diff_source` and `__mo_diff_flag`, followed by the visible
+  source columns in the requested `COLUMNS` order. If a projected source column
+  already uses either metadata name, the generated metadata name receives a
+  numeric suffix.
+- `OUTPUT AS` additionally requires `CREATE TABLE`, `DatabaseAll`, or
+  `DatabaseOwnership` on the destination database. Its existing read
+  requirements for `target` and `base` remain unchanged.
+- The destination must be an ordinary table name; a destination snapshot is
+  invalid. An existing destination table is not overwritten or appended to.
 
 ### 6.6 `DATA BRANCH MERGE src INTO dst`
 
@@ -712,7 +717,8 @@ where table_deleted = false and table_id in (...)
 10. Remove DataBranch statements from the owner fallback allow-list.
 11. Remove `authenticatePickTablePrivileges` and `requirePickTablePrivilege`.
 12. Add delete-target branch metadata validation before executing DDL.
-13. Return `not supported` for `DATA BRANCH DIFF ... OUTPUT AS ...`.
+13. Materialize `DATA BRANCH DIFF ... OUTPUT AS ...` as an ordinary table and
+    require destination-database `CREATE TABLE` privilege.
 14. Add unit tests and BVT cases listed below.
 
 ## 9. Test Plan
@@ -744,7 +750,8 @@ Required unit tests:
 - `DIFF`:
   - read on only one side -> fail;
   - read on both sides -> pass.
-  - `OUTPUT AS` returns not supported explicitly.
+  - `OUTPUT AS` requires destination-database `CREATE TABLE`; with it, the
+    diff is materialized as an ordinary table.
 - `MERGE`:
   - missing source read -> fail;
   - missing destination read -> fail;
@@ -786,8 +793,8 @@ as long as the matrix is covered:
   created;
 - grant read on only one `DIFF` side and verify fail;
 - grant read on both `DIFF` sides and verify success;
-- verify unsupported `DIFF OUTPUT AS table_name` fails explicitly and does not
-  create the output table;
+- verify `DIFF OUTPUT AS table_name` requires destination-database `CREATE
+  TABLE`, does not overwrite an existing table, and creates no branch metadata;
 - test `MERGE` missing source read and missing destination write;
 - after failed `MERGE`, verify destination data is unchanged;
 - grant all `MERGE` privileges and verify success with no data conflict;
@@ -834,8 +841,10 @@ Expected behavior changes:
 Implement these decisions in this change:
 
 1. `DATA BRANCH DIFF OUTPUT AS table_name`
-   - Return `not supported` explicitly. The parser accepts it, but execution
-     does not implement it today.
+   - Materialize a persistent ordinary table with the diff source/flag columns
+     followed by the requested visible source columns. Require `CREATE TABLE`
+     on the destination database; do not allow a destination snapshot or
+     overwrite an existing table.
 2. Empty database created by `DATA BRANCH CREATE DATABASE`
    - Reject `DATA BRANCH DELETE DATABASE` if validation finds no active branch
      child tables. Current metadata is table-level only and cannot distinguish

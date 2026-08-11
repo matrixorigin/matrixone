@@ -44,10 +44,10 @@ test_table
 test_view
 /* cloud_nonuser */ show collation like 'utf8mb4_general_ci';
 Collation    Charset    Id    Default    Compiled    Sortlen    Pad_attribute
-utf8mb4_general_ci    utf8mb4    45        Yes    1    PAD SPACE
+utf8mb4_general_ci    utf8mb4    45    YES    Yes    1    PAD SPACE
 /* cloud_nonuser */ show collation like 'utf8mb4_general_ci%';
 Collation    Charset    Id    Default    Compiled    Sortlen    Pad_attribute
-utf8mb4_general_ci    utf8mb4    45        Yes    1    PAD SPACE
+utf8mb4_general_ci    utf8mb4    45    YES    Yes    1    PAD SPACE
 /* cloud_nonuser */ show index from test_table;
 Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
 /* cloud_nonuser */ values row(1,1), row(2,2), row(3,3) order by column_0 desc;
@@ -101,4 +101,7 @@ sleep(1)    col    seq    key    path    index    value    this
 select sleep(15);
 sleep(15)
 0
+select count(distinct statement_type) = 4 and count(*) = count(cast(json_unquote(json_extract(stats, '$[16]')) as bigint)) and min(cast(json_unquote(json_extract(stats, '$[16]')) as bigint)) = 1 and max(cast(json_unquote(json_extract(stats, '$[16]')) as bigint)) = 1 and max(cast(json_unquote(json_extract(stats, '$[11]')) as bigint) & 8) = 0 as ddl_accounting_ok from system.statement_info where account = 'bvt_query_type' and status = 'Success' and aggr_count = 0 and statement_type in ('Create Index','Create Table','Drop Database','Drop Table') and cast(json_unquote(json_extract(stats, '$[0]')) as bigint) = 6;
+ddl_accounting_ok
+1
 drop account if exists bvt_query_type;

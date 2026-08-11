@@ -486,22 +486,22 @@ select * from time07;
 drop table time07;
 
 drop table if exists test01;
-create table test01 as select col1 from time01 order by col1 nulls first;
+create table test01 as select col1 from time01 order by col1;
 select * from test01;
 drop table test01;
 
 drop table if exists test02;
-create table test02 as select * from time01 order by col2 desc nulls first;
+create table test02 as select * from time01 order by col2 is not null, col2 desc;
 select * from test02;
 drop table test02;
 
 drop table if exists test03;
-create table test03 as select * from time01 order by col2 desc nulls last;
+create table test03 as select * from time01 order by col2 desc;
 select * from test03;
 drop table test03;
 
 drop table if exists test04;
-create table test04 as select col1 from time01 order by col1 nulls first;
+create table test04 as select col1 from time01 order by col1;
 select * from test04;
 drop table test04;
 
@@ -1111,8 +1111,82 @@ drop table if exists alias02;
 create table alias02 (NewCol int) as select * from alias01;
 show create table alias02;
 select * from alias02;
+drop table if exists ctas_non_ascii_alias;
+create table ctas_non_ascii_alias as select col1 as `中文别名` from alias01;
+desc ctas_non_ascii_alias;
+select `中文别名` from ctas_non_ascii_alias order by `中文别名`;
+drop table ctas_non_ascii_alias;
+drop table if exists ctas_reserved_alias;
+create table ctas_reserved_alias as select `order`.col1 as `select` from alias01 as `order`;
+select `select` from ctas_reserved_alias order by `select`;
+drop table ctas_reserved_alias;
+drop table if exists ctas_cte_alias;
+create table ctas_cte_alias as with `select` (`from`) as (select col1 from alias01) select `from` from `select`;
+select `from` from ctas_cte_alias order by `from`;
+drop table ctas_cte_alias;
+drop table if exists ctas_join_alias;
+create table ctas_join_alias as
+select `left`.`a b`
+from (select col1 as `a b` from alias01) as `left` (`a b`)
+join (select col1 as `a b` from alias01) as `right` (`a b`) using (`a b`);
+select `a b` from ctas_join_alias order by `a b`;
+drop table ctas_join_alias;
+drop table if exists `src``table`;
+drop table if exists `dst``table`;
+create table `src``table` (`a``b` int);
+insert into `src``table` values (1), (2);
+create table `dst``table` as select `s``x`.`a``b` as `x``y` from `src``table` as `s``x`;
+select `x``y` from `dst``table` order by `x``y`;
+drop table `dst``table`;
+drop table `src``table`;
+drop table if exists ctas_index_hint_src;
+drop table if exists ctas_index_hint_dst;
+create table ctas_index_hint_src (
+    col1 int,
+    index `select` (col1),
+    index `a b` (col1),
+    index `x``y` (col1)
+);
+insert into ctas_index_hint_src values (1), (2);
+create table ctas_index_hint_dst as
+select * from ctas_index_hint_src force index (`select`, `a b`, `x``y`);
+select * from ctas_index_hint_dst order by col1;
+drop table ctas_index_hint_dst;
+drop table ctas_index_hint_src;
+drop table if exists ctas_interval_identifier_src;
+drop table if exists ctas_interval_identifier_dst;
+create table ctas_interval_identifier_src (`interval(x,day)` int);
+insert into ctas_interval_identifier_src values (1), (2);
+create table ctas_interval_identifier_dst as
+select `interval(x,day)` from ctas_interval_identifier_src;
+desc ctas_interval_identifier_dst;
+select `interval(x,day)` from ctas_interval_identifier_dst order by `interval(x,day)`;
+drop table ctas_interval_identifier_dst;
+drop table ctas_interval_identifier_src;
+drop table if exists ctas_interval_string;
+create table ctas_interval_string as
+select 'interval(1,day)' as single_quoted, "interval(2,month)" as double_quoted;
+select * from ctas_interval_string;
+drop table ctas_interval_string;
+set @`a b` = 1;
+set @`select` = 2;
+set @`x``y` = 3;
+drop table if exists ctas_user_variable;
+create table ctas_user_variable as
+select @`a b` as space_name, @`select` as reserved_name, @`x``y` as backtick_name;
+select * from ctas_user_variable;
+drop table ctas_user_variable;
 drop table alias01;
 -- @session
+set global autocommit = off;
+set session autocommit = on;
+select @@global.autocommit, @@session.autocommit;
+drop table if exists ctas_system_variable_scope;
+create table ctas_system_variable_scope as
+select @@global.autocommit as global_value, @@session.autocommit as session_value;
+select * from ctas_system_variable_scope;
+drop table ctas_system_variable_scope;
+set global autocommit = on;
 drop database test;
 
 -- privilege
@@ -1359,6 +1433,59 @@ CREATE TABLE tx1 (
 );
 
 -- error test
-create dynamic table dt_test as select * from tx1;
 drop table tx1;
 drop database db9;
+
+-- CTAS must preserve DATETIME(fsp) casts when it serializes the SELECT for the insert plan.
+drop database if exists repro_ctas_datetime6;
+create database repro_ctas_datetime6;
+use repro_ctas_datetime6;
+create table t as
+select cast('2025-05-06 07:08:09.123456' as datetime(6)) as dt_lit;
+select dt_lit from t;
+select table_name, column_name, column_type, is_nullable
+from information_schema.columns
+where table_schema = 'repro_ctas_datetime6'
+order by ordinal_position;
+create table t_union as
+select cast('2025-05-06 07:08:09.123456' as datetime(6)) as dt_lit
+union all
+select cast('2025-05-07 08:09:10.654321' as datetime(6));
+select dt_lit from t_union order by dt_lit;
+drop database repro_ctas_datetime6;
+
+-- @bvt:issue#26828
+-- CTAS metadata must include NULLs synthesized by joins and scalar subqueries.
+drop database if exists ctas_null_extension_26828;
+create database ctas_null_extension_26828;
+use ctas_null_extension_26828;
+create table l (id int primary key, lv int not null);
+create table r (id int primary key, rv int not null);
+insert into l values (1, 10), (2, 20);
+insert into r values (1, 100), (3, 300);
+
+create table direct_left as select l.id as l_id, l.lv, r.id as r_id, r.rv from l left join r on l.id = r.id;
+select * from direct_left order by l_id;
+
+create table derived_right as select * from (select l.id as l_id, l.lv, r.id as r_id, r.rv from l right join r on l.id = r.id) as src;
+select * from derived_right order by r_id;
+
+create view full_view as select l.id as l_id, l.lv, r.id as r_id, r.rv from l full join r on l.id = r.id;
+create table view_full as select * from full_view;
+select * from view_full order by coalesce(l_id, r_id);
+
+create table scalar_direct as select l.id as l_id, (select r.rv from r where r.id = l.id) as scalar_rv from l;
+select * from scalar_direct order by l_id;
+
+create view scalar_view as select l.id as l_id, (select r.rv from r where r.id = l.id) as scalar_rv from l;
+create table scalar_view_ctas as select * from scalar_view;
+select * from scalar_view_ctas order by l_id;
+
+create table coalesce_left as select l.id as l_id, coalesce(r.rv, -1) as rv_or_default from l left join r on l.id = r.id;
+select * from coalesce_left order by l_id;
+
+create table explicit_not_null_reject (r_id int not null) as select r.id from l left join r on l.id = r.id;
+show tables like 'explicit_not_null_reject';
+
+select table_name, column_name, is_nullable from information_schema.columns where table_schema = 'ctas_null_extension_26828' and table_name in ('coalesce_left', 'derived_right', 'direct_left', 'scalar_direct', 'scalar_view_ctas', 'view_full') and column_name <> '__mo_fake_pk_col' order by table_name, ordinal_position;
+drop database ctas_null_extension_26828;

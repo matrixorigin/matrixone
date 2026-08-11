@@ -17,6 +17,7 @@ package table_function
 import (
 	"context"
 	"math/rand"
+	goruntime "runtime"
 	"strings"
 	"testing"
 	"time"
@@ -60,6 +61,67 @@ func TestFulltextTopKLimitBounds(t *testing.T) {
 	require.Equal(t, 1, result.Batch.RowCount())
 	require.Empty(t, state.resbuf)
 	result.Batch.Clean(proc.Mp())
+}
+
+func TestFulltextResolveExecutionTarget(t *testing.T) {
+	proc := testutil.NewProc(t)
+
+	t.Run("direct call stays in current tenant", func(t *testing.T) {
+		state := &fulltextState{}
+		source, index, err := state.resolveExecutionTarget(proc, &TableFunction{}, "user_source", "user_index")
+		require.NoError(t, err)
+		require.Equal(t, "user_source", source)
+		require.Equal(t, "user_index", index)
+		require.Nil(t, state.publisherAccount)
+	})
+
+	t.Run("trusted refs select publisher and quote identifiers", func(t *testing.T) {
+		state := &fulltextState{}
+		tf := &TableFunction{
+			FulltextSourceRef: &plan.ObjectRef{
+				SchemaName: "pub`db", ObjName: "source`table", SubscriptionName: "sub_alias",
+				PubInfo: &plan.PubInfo{TenantId: 42},
+			},
+			FulltextIndexRef: &plan.ObjectRef{
+				SchemaName: "pub`db", ObjName: "index`table", SubscriptionName: "sub_alias",
+				PubInfo: &plan.PubInfo{TenantId: 42},
+			},
+		}
+		source, index, err := state.resolveExecutionTarget(proc, tf, "ignored", "ignored")
+		require.NoError(t, err)
+		require.Equal(t, "`pub``db`.`source``table`", source)
+		require.Equal(t, "`pub``db`.`index``table`", index)
+		require.Equal(t, uint32(42), *state.publisherAccount)
+		require.Equal(t, "pub`db", state.publisherDB)
+		require.Equal(t, uint32(42), *state.sqlProcess(proc).AccountIDOverride)
+	})
+
+	t.Run("incomplete or inconsistent refs are rejected", func(t *testing.T) {
+		valid := &plan.ObjectRef{
+			SchemaName: "publisher", ObjName: "source", SubscriptionName: "sub_alias",
+			PubInfo: &plan.PubInfo{TenantId: 42},
+		}
+		cases := []struct {
+			name  string
+			src   *plan.ObjectRef
+			index *plan.ObjectRef
+		}{
+			{name: "missing index", src: valid},
+			{name: "missing publisher", src: valid, index: &plan.ObjectRef{SchemaName: "publisher", ObjName: "index", SubscriptionName: "sub_alias"}},
+			{name: "different tenant", src: valid, index: &plan.ObjectRef{SchemaName: "publisher", ObjName: "index", SubscriptionName: "sub_alias", PubInfo: &plan.PubInfo{TenantId: 43}}},
+			{name: "different database", src: valid, index: &plan.ObjectRef{SchemaName: "other", ObjName: "index", SubscriptionName: "sub_alias", PubInfo: &plan.PubInfo{TenantId: 42}}},
+			{name: "different subscription", src: valid, index: &plan.ObjectRef{SchemaName: "publisher", ObjName: "index", SubscriptionName: "other_alias", PubInfo: &plan.PubInfo{TenantId: 42}}},
+		}
+		for _, tc := range cases {
+			t.Run(tc.name, func(t *testing.T) {
+				_, _, err := (&fulltextState{}).resolveExecutionTarget(proc, &TableFunction{
+					FulltextSourceRef: tc.src,
+					FulltextIndexRef:  tc.index,
+				}, "source", "index")
+				require.Error(t, err)
+			})
+		}
+	})
 }
 
 var (
@@ -385,7 +447,7 @@ func TestRunCountStarUsesCountOnlyForTFIDF(t *testing.T) {
 		return executor.Result{Mp: proc.Mp(), Batches: []*batch.Batch{makeCountOnlyBatchFT(proc)}}, nil
 	}
 
-	_, err := runCountStar(proc, s)
+	_, err := runCountStar(&fulltextState{}, proc, s)
 	require.NoError(t, err)
 	require.Equal(t, "SELECT COUNT(*) from idx_table where word = '__DocLen'", gotSQL)
 	require.Equal(t, int64(100), s.Nrow)
@@ -405,7 +467,7 @@ func TestRunCountStarUsesDedupedDocLenForBM25(t *testing.T) {
 		return executor.Result{Mp: proc.Mp(), Batches: []*batch.Batch{makeCountBatchFT(proc)}}, nil
 	}
 
-	_, err := runCountStar(proc, s)
+	_, err := runCountStar(&fulltextState{}, proc, s)
 	require.NoError(t, err)
 	require.Equal(t, "SELECT COUNT(*), AVG(pos) from (SELECT doc_id, MAX(pos) AS pos from idx_table where word = '__DocLen' GROUP BY doc_id) doc_len", gotSQL)
 	require.Equal(t, int64(100), s.Nrow)
@@ -1028,6 +1090,135 @@ func TestFullTextStartResetsStateForLaterRowsStreaming(t *testing.T) {
 	requireStateFreeReturns(t, st, tf, ut.proc)
 }
 
+func TestFullTextStartRejectsInvalidDynamicPatternAndResetsState(t *testing.T) {
+	tests := []struct {
+		name        string
+		mode        int64
+		valid       string
+		invalidNull bool
+		wantErr     string
+	}{
+		{
+			name:    "boolean empty",
+			mode:    int64(tree.FULLTEXT_BOOLEAN),
+			valid:   "+Matrix",
+			wantErr: "fulltext search pattern must not be empty",
+		},
+		{
+			name:        "boolean null",
+			mode:        int64(tree.FULLTEXT_BOOLEAN),
+			valid:       "+Matrix",
+			invalidNull: true,
+			wantErr:     "fulltext search pattern must not be NULL",
+		},
+		{
+			name:    "natural language empty",
+			mode:    int64(tree.FULLTEXT_NL),
+			valid:   "Matrix",
+			wantErr: "fulltext search pattern must not be empty",
+		},
+		{
+			name:        "natural language null",
+			mode:        int64(tree.FULLTEXT_NL),
+			valid:       "Matrix",
+			invalidNull: true,
+			wantErr:     "fulltext search pattern must not be NULL",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			ut := newFTTestCase(t, mpool.MustNewZero(), ftdefaultAttrs, fulltext.ALGO_TFIDF, uint64(0))
+			require.NoError(t, ut.arg.Prepare(ut.proc))
+
+			tf := ut.arg
+			tf.ctr.argVecs = makeMultiRowArgVecsFT(ut.proc,
+				fulltextInputRow{source: "src0", index: "idx0", pattern: test.valid, mode: test.mode},
+				fulltextInputRow{source: "src1", index: "idx1", patternNull: test.invalidNull, mode: test.mode},
+				fulltextInputRow{source: "src2", index: "idx2", pattern: test.valid, mode: test.mode},
+			)
+			st := tf.ctr.state.(*fulltextState)
+
+			prevRunSQL := ft_runSql
+			prevRunStreaming := ft_runSql_streaming
+			defer func() {
+				ft_runSql = prevRunSQL
+				ft_runSql_streaming = prevRunStreaming
+			}()
+
+			var gotSQL []string
+			ft_runSql = func(sqlproc *sqlexec.SqlProcess, sql string) (executor.Result, error) {
+				gotSQL = append(gotSQL, sql)
+				return executor.Result{Mp: sqlproc.Proc.Mp(), Batches: []*batch.Batch{makeCountOnlyBatchFT(sqlproc.Proc)}}, nil
+			}
+			ft_runSql_streaming = func(
+				ctx context.Context,
+				sqlproc *sqlexec.SqlProcess,
+				sql string,
+				ch chan executor.Result,
+				errChan chan error,
+			) (executor.Result, error) {
+				gotSQL = append(gotSQL, sql)
+				ch <- executor.Result{Mp: sqlproc.Proc.Mp(), Batches: []*batch.Batch{makeSmallTextBatchFT(sqlproc.Proc)}}
+				return executor.Result{}, nil
+			}
+
+			runValidRow := func(row int) {
+				t.Helper()
+				require.NoError(t, st.start(tf, ut.proc, row, nil))
+				result, err := st.call(tf, ut.proc)
+				require.NoError(t, err)
+				require.Equal(t, vm.ExecNext, result.Status)
+				result, err = st.call(tf, ut.proc)
+				require.NoError(t, err)
+				require.Equal(t, vm.ExecStop, result.Status)
+			}
+
+			runValidRow(0)
+
+			var invalidErr error
+			require.NotPanics(t, func() {
+				invalidErr = st.start(tf, ut.proc, 1, nil)
+			})
+			require.ErrorContains(t, invalidErr, test.wantErr)
+			require.False(t, st.streamingStarted)
+			require.Nil(t, st.sacc)
+
+			runValidRow(2)
+
+			require.Len(t, gotSQL, 4)
+			require.Contains(t, gotSQL[0], "idx0")
+			require.Contains(t, gotSQL[1], "idx0")
+			require.Contains(t, gotSQL[2], "idx2")
+			require.Contains(t, gotSQL[3], "idx2")
+
+			requireStateFreeReturns(t, st, tf, ut.proc)
+		})
+	}
+}
+
+func TestFullTextStartRejectsConstNullPattern(t *testing.T) {
+	ut := newFTTestCase(t, mpool.MustNewZero(), ftdefaultAttrs, fulltext.ALGO_TFIDF, uint64(0))
+	require.NoError(t, ut.arg.Prepare(ut.proc))
+
+	tf := ut.arg
+	tf.ctr.argVecs = makeMultiRowArgVecsFT(ut.proc,
+		fulltextInputRow{source: "src", index: "idx", pattern: "unused", mode: int64(tree.FULLTEXT_BOOLEAN)},
+	)
+	tf.ctr.argVecs[2] = vector.NewConstNull(types.T_varchar.ToType(), 1, ut.proc.Mp())
+	st := tf.ctr.state.(*fulltextState)
+
+	var err error
+	require.NotPanics(t, func() {
+		err = st.start(tf, ut.proc, 0, nil)
+	})
+	require.ErrorContains(t, err, "fulltext search pattern must not be NULL")
+	require.False(t, st.streamingStarted)
+	require.Nil(t, st.sacc)
+
+	requireStateFreeReturns(t, st, tf, ut.proc)
+}
+
 // create const input exprs
 func makeConstInputExprsFT() []*plan.Expr {
 	return makeConstInputExprsFTWithPattern("pattern", 0)
@@ -1089,10 +1280,11 @@ func makeConstInputExprsFTWithPattern(pattern string, mode int64) []*plan.Expr {
 }
 
 type fulltextInputRow struct {
-	source  string
-	index   string
-	pattern string
-	mode    int64
+	source      string
+	index       string
+	pattern     string
+	patternNull bool
+	mode        int64
 }
 
 func makeMultiRowArgVecsFT(proc *process.Process, rows ...fulltextInputRow) []*vector.Vector {
@@ -1104,7 +1296,7 @@ func makeMultiRowArgVecsFT(proc *process.Process, rows ...fulltextInputRow) []*v
 	for _, row := range rows {
 		vector.AppendBytes(srcVec, []byte(row.source), false, proc.Mp())
 		vector.AppendBytes(idxVec, []byte(row.index), false, proc.Mp())
-		vector.AppendBytes(patternVec, []byte(row.pattern), false, proc.Mp())
+		vector.AppendBytes(patternVec, []byte(row.pattern), row.patternNull, proc.Mp())
 		vector.AppendFixed[int64](modeVec, row.mode, false, proc.Mp())
 	}
 
@@ -1205,4 +1397,305 @@ func makeTextBatchFT(proc *process.Process) *batch.Batch {
 
 	bat.SetRowCount(nitem)
 	return bat
+}
+
+// TestSortTopKBoundedUnspills is the #25692 review regression for partition
+// thrash: agghtab is a hash map whose iteration order has no relation to pool
+// partitions, so scoring in map order made GetItem evict and re-materialize a
+// whole partition per DOCUMENT once partitions had spilled (one diagnostic
+// showed 120 whole-partition reloads for 120 reads). sort_topk now scores in
+// partition order; each spilled partition must be materialized a bounded
+// number of times — at most once per pass — regardless of map hash order.
+func TestSortTopKBoundedUnspills(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	s, err := fulltext.NewSearchAccum("src", "index", "pattern", 0, "", fulltext.ALGO_TFIDF)
+	require.NoError(t, err)
+	s.Nrow = 1000
+
+	const ndoc = 64
+	// dsize = Nkeywords; 4 items per partition; mem_limit of 2 partitions forces
+	// spilling during the build phase and keeps a tiny resident set for scoring.
+	dsize := uint64(s.Nkeywords)
+	st := &fulltextState{
+		agghtab:   make(map[any]uint64, ndoc),
+		aggcnt:    make([]int64, s.Nkeywords),
+		docLenMap: make(map[any]int32, ndoc),
+		mpool:     fulltext.NewFixedBytePool(proc, dsize, 4*dsize, 2*4*dsize),
+	}
+	defer st.mpool.Close()
+	st.aggcnt[0] = ndoc
+
+	for i := 0; i < ndoc; i++ {
+		addr, docvec, allocErr := st.mpool.NewItem()
+		require.NoError(t, allocErr)
+		docvec[0] = uint8(i%250 + 1)
+		st.agghtab[i] = addr
+		st.docLenMap[i] = int32(i + 1)
+	}
+
+	npart := st.mpool.NumPartitions()
+	require.Greater(t, npart, 4, "test must span many partitions")
+
+	before := st.mpool.Unspills()
+	require.NoError(t, sort_topk(st, proc, s, 8))
+	reloads := st.mpool.Unspills() - before
+
+	// Partition-ordered scoring touches each spilled partition at most once. The
+	// old map-order traversal produced up to ~ndoc reloads here.
+	require.LessOrEqualf(t, reloads, uint64(npart),
+		"top-K scoring must not thrash: %d unspills for %d partitions", reloads, npart)
+	require.Len(t, st.minheap, 8)
+}
+
+// TestEvaluateMultiBatchBoundedWork is the #25692 review regression for the
+// zero-LIMIT scoring path: call() re-enters evaluate for every 8K output
+// batch, so the partition-ordered traversal must be built ONCE per scoring
+// phase and drained across batches. Rebuilding it per batch costs O(N)
+// workspace per batch, O(N^2/8192) traversal work overall, and re-materializes
+// spilled partitions on every batch. Asserts (a) every doc is scored exactly
+// once across multiple batches, (b) a key added after the first batch is NOT
+// discovered (a per-batch rebuild would score it), and (c) unspill I/O stays
+// bounded by the partition count across ALL batches.
+func TestEvaluateMultiBatchBoundedWork(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	s, err := fulltext.NewSearchAccum("src", "index", "pattern", 0, "", fulltext.ALGO_TFIDF)
+	require.NoError(t, err)
+	s.Nrow = 100000
+
+	const ndoc = 20000
+	// 2048 items per partition (~10 partitions), resident set of 2 partitions so
+	// the build phase spills and scoring has to unspill.
+	dsize := uint64(s.Nkeywords)
+	st := &fulltextState{
+		agghtab:   make(map[any]uint64, ndoc),
+		aggcnt:    make([]int64, s.Nkeywords),
+		docLenMap: make(map[any]int32, ndoc),
+		docIDMap:  make(map[any]any),
+		mpool:     fulltext.NewFixedBytePool(proc, dsize, 2048*dsize, 2*2048*dsize),
+	}
+	defer st.mpool.Close()
+	st.aggcnt[0] = ndoc
+
+	for i := 0; i < ndoc; i++ {
+		addr, docvec, allocErr := st.mpool.NewItem()
+		require.NoError(t, allocErr)
+		docvec[0] = uint8(i%250 + 1)
+		st.agghtab[i] = addr
+		st.docLenMap[i] = int32(i%100 + 1)
+	}
+	require.Greater(t, st.mpool.NumPartitions(), 4, "test must span several partitions")
+
+	before := st.mpool.Unspills()
+	seen := make(map[any]struct{}, ndoc)
+	batches := 0
+	injected := false
+	for {
+		scoremap, evalErr := evaluate(st, proc, s)
+		require.NoError(t, evalErr)
+		if len(scoremap) == 0 {
+			break
+		}
+		batches++
+		require.LessOrEqual(t, len(scoremap), 8192)
+		for k := range scoremap {
+			_, dup := seen[k]
+			require.Falsef(t, dup, "doc %v scored twice", k)
+			seen[k] = struct{}{}
+		}
+		if !injected {
+			// Inject a doc AFTER the first batch. The traversal was snapshot at
+			// the first evaluate call; a per-batch rebuild (the regression) would
+			// pick this key up and score it, the build-once contract never sees it.
+			addr, allocErr := func() (uint64, error) {
+				a, docvec, e := st.mpool.NewItem()
+				if e == nil {
+					docvec[0] = 1
+				}
+				return a, e
+			}()
+			require.NoError(t, allocErr)
+			st.agghtab["injected"] = addr
+			st.docLenMap["injected"] = 1
+			injected = true
+		}
+	}
+
+	require.Len(t, seen, ndoc, "every original doc scored exactly once across batches")
+	require.GreaterOrEqual(t, batches, 3, "test must span multiple evaluate batches")
+	_, stillThere := st.agghtab["injected"]
+	require.True(t, stillThere,
+		"ordering must be built once: a key added after the first batch must not be re-discovered by a rebuild")
+	require.Len(t, st.agghtab, 1)
+
+	// Each spilled partition materialized at most once across ALL batches (+1 for
+	// the unspill the injected NewItem itself may trigger on the tail partition).
+	npart := st.mpool.NumPartitions()
+	reloads := st.mpool.Unspills() - before
+	require.LessOrEqualf(t, reloads, uint64(npart)+1,
+		"multi-batch scoring must not thrash: %d unspills for %d partitions across all batches", reloads, npart)
+}
+
+// TestEvaluateOrderingBudgetGated: the partition-ordered traversal retains
+// ~16 bytes per remaining document OUTSIDE the pool's accounting, so building
+// it must be gated on the pool's heap budget instead of allocated
+// unconditionally (#25692 review).
+func TestEvaluateOrderingBudgetGated(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	s, err := fulltext.NewSearchAccum("src", "index", "pattern", 0, "", fulltext.ALGO_TFIDF)
+	require.NoError(t, err)
+	s.Nrow = 1000
+
+	dsize := uint64(s.Nkeywords)
+	st := &fulltextState{
+		agghtab:   make(map[any]uint64, 8),
+		aggcnt:    make([]int64, s.Nkeywords),
+		docLenMap: make(map[any]int32, 8),
+		docIDMap:  make(map[any]any),
+		mpool:     fulltext.NewFixedBytePool(proc, dsize, 4*dsize, 2*4*dsize),
+	}
+	defer st.mpool.Close()
+	st.aggcnt[0] = 8
+	for i := 0; i < 8; i++ {
+		addr, docvec, allocErr := st.mpool.NewItem()
+		require.NoError(t, allocErr)
+		docvec[0] = uint8(i + 1)
+		st.agghtab[i] = addr
+		st.docLenMap[i] = int32(i + 1)
+	}
+
+	old := fulltext.HeapBudgetPct
+	fulltext.HeapBudgetPct = 0 // every allocation is over budget
+	defer func() { fulltext.HeapBudgetPct = old }()
+
+	_, err = evaluate(st, proc, s)
+	require.Error(t, err, "ordering workspace must be budget-gated")
+	require.Contains(t, err.Error(), "budget")
+}
+
+// measureTotalAlloc returns the bytes allocated while f runs (monotonic
+// TotalAlloc delta, immune to intervening GC).
+func measureTotalAlloc(f func()) uint64 {
+	goruntime.GC()
+	var before, after goruntime.MemStats
+	goruntime.ReadMemStats(&before)
+	f()
+	goruntime.ReadMemStats(&after)
+	return after.TotalAlloc - before.TotalAlloc
+}
+
+// TestScoreTraversalWorkspaceExact is the #25692 review regression for the
+// traversal workspace: the heap-budget admission estimate must match the real
+// peak allocation. The previous append-grown buckets admitted 16 B/key but
+// allocated ~5.6x that (growth reallocation, slack capacity, uncounted
+// headers). The flat-buffer constructor allocates exactly what
+// scoreTraversalEstimate admits.
+func TestScoreTraversalWorkspaceExact(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	s, err := fulltext.NewSearchAccum("src", "index", "pattern", 0, "", fulltext.ALGO_TFIDF)
+	require.NoError(t, err)
+	s.Nrow = 1000000
+
+	const ndoc = 200000
+	dsize := uint64(s.Nkeywords)
+	st := &fulltextState{
+		agghtab:   make(map[any]uint64, ndoc),
+		aggcnt:    make([]int64, s.Nkeywords),
+		docLenMap: make(map[any]int32, ndoc),
+		docIDMap:  make(map[any]any),
+		// production-shaped pool: default partition capacity, no forced spilling
+		mpool: fulltext.NewFixedBytePool(proc, dsize, 0, 0),
+	}
+	defer st.mpool.Close()
+	st.aggcnt[0] = ndoc
+	for i := 0; i < ndoc; i++ {
+		addr, docvec, allocErr := st.mpool.NewItem()
+		require.NoError(t, allocErr)
+		docvec[0] = 1
+		st.agghtab[i] = addr
+		st.docLenMap[i] = 1
+	}
+
+	est := scoreTraversalEstimate(len(st.agghtab), st.mpool.NumPartitions())
+
+	// Byte bound: the real allocation must not exceed the admitted estimate
+	// (modulo a small fixed slack for allocator rounding and test noise).
+	var keys []any
+	measured := measureTotalAlloc(func() {
+		var buildErr error
+		keys, buildErr = partitionOrderedKeys(proc, st.agghtab, st.mpool)
+		require.NoError(t, buildErr)
+	})
+	require.Len(t, keys, ndoc)
+	const slack = 256 << 10
+	require.LessOrEqualf(t, measured, est+uint64(slack),
+		"traversal allocated %d bytes but the budget only admitted %d", measured, est)
+
+	// Structural bound: constant number of allocations — no append growth chains.
+	allocs := testing.AllocsPerRun(3, func() {
+		k, buildErr := partitionOrderedKeys(proc, st.agghtab, st.mpool)
+		require.NoError(t, buildErr)
+		_ = k
+	})
+	require.LessOrEqualf(t, allocs, 8.0,
+		"traversal must preallocate exactly, got %.0f allocations", allocs)
+}
+
+// TestEvaluateSparseScoreBounded is the #25692 review regression for sparse
+// results: a query whose candidates mostly produce NO score (e.g. boolean
+// +required words filtering the aggregated union) previously accumulated every
+// processed candidate in an ungated O(N) keys slice within a single evaluate
+// call. Candidates must be freed and deleted as they are consumed, so the
+// all-filtered call allocates only the (budget-admitted) traversal plus O(1).
+func TestEvaluateSparseScoreBounded(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	s, err := fulltext.NewSearchAccum("src", "index", "pattern", 0, "", fulltext.ALGO_TFIDF)
+	require.NoError(t, err)
+	s.Nrow = 1000000
+
+	const ndoc = 200000
+	dsize := uint64(s.Nkeywords)
+	st := &fulltextState{
+		agghtab:   make(map[any]uint64, ndoc),
+		aggcnt:    make([]int64, s.Nkeywords),
+		docLenMap: make(map[any]int32, ndoc),
+		docIDMap:  make(map[any]any),
+		mpool:     fulltext.NewFixedBytePool(proc, dsize, 0, 0),
+	}
+	defer st.mpool.Close()
+	st.aggcnt[0] = ndoc
+	for i := 0; i < ndoc; i++ {
+		addr, docvec, allocErr := st.mpool.NewItem()
+		require.NoError(t, allocErr)
+		docvec[0] = 0 // keyword count 0 -> Eval yields no score for ANY candidate
+		st.agghtab[i] = addr
+		st.docLenMap[i] = 1
+	}
+
+	est := scoreTraversalEstimate(len(st.agghtab), st.mpool.NumPartitions())
+
+	var scoremap map[any]float32
+	measured := measureTotalAlloc(func() {
+		var evalErr error
+		scoremap, evalErr = evaluate(st, proc, s)
+		require.NoError(t, evalErr)
+	})
+
+	// All candidates filtered: no results, and every candidate was consumed and
+	// released immediately rather than accumulated.
+	require.Empty(t, scoremap)
+	require.Empty(t, st.agghtab, "candidates must be deleted as they are consumed")
+	require.Empty(t, st.docLenMap)
+	require.Empty(t, st.docIDMap)
+
+	// Memory bound: the whole all-filtered pass allocates the traversal plus
+	// small constants — NOT a second O(N) interface buffer (the old keys slice
+	// added ~20 MB at this size).
+	const slack = 2 << 20
+	require.LessOrEqualf(t, measured, est+uint64(slack),
+		"sparse evaluate allocated %d bytes; traversal estimate is %d", measured, est)
+
+	// Traversal fully drained: the next call returns an empty batch.
+	scoremap, err = evaluate(st, proc, s)
+	require.NoError(t, err)
+	require.Empty(t, scoremap)
 }

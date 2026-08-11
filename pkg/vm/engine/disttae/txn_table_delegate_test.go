@@ -16,30 +16,80 @@ package disttae
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/pb/shard"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
+
+func TestNormalizePKCheckErrorPreservesRollingRestart(t *testing.T) {
+	rollingRestart := moerr.NewRetryForCNRollingRestart()
+	joined := errors.Join(
+		moerr.NewReplicaNotFound("other replica"),
+		errors.New("replica read failed"),
+		rollingRestart,
+	)
+
+	err := normalizePKCheckError(joined)
+	require.Same(t, rollingRestart, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrRetryForCNRollingRestart))
+	require.Same(t, rollingRestart,
+		normalizePKCheckError(fmt.Errorf("wrapped: %w", rollingRestart)))
+
+	other := errors.New("other read failure")
+	require.Same(t, other, normalizePKCheckError(other))
+	joinedOther := errors.Join(other)
+	require.Same(t, joinedOther, normalizePKCheckError(joinedOther))
+}
 
 func TestTxnTableDelegate_CollectChanges(t *testing.T) {
 	table := &txnTableDelegate{}
+	require.False(t, table.IsPartitionedRelation())
 	table.combined.is = true
 	table.combined.tbl = newMockCombinedTxnTable()
+	require.True(t, table.IsPartitionedRelation())
 
-	assert.PanicsWithValue(t, "not implemented", func() {
-		table.CollectChanges(
-			context.Background(),
-			types.TS{},
-			types.TS{},
-			false,
-			&mpool.MPool{},
-		)
-	})
+	handle, err := table.CollectChanges(
+		context.Background(),
+		types.TS{},
+		types.TS{},
+		false,
+		&mpool.MPool{},
+	)
+	assert.NoError(t, err)
+	assert.NotNil(t, handle)
+	assert.NoError(t, handle.Close())
+}
+
+func TestTxnTableDelegateRejectsDelegatedSnapshotReads(t *testing.T) {
+	table := &txnTableDelegate{origin: &txnTable{tableId: 42}}
+	table.shard.is = true
+	table.shard.policy = shard.Policy_Hash
+	table.shard.tableID = 42
+
+	local, err := table.CanVisitSnapshotLocally()
+	require.NoError(t, err)
+	require.False(t, local)
+	require.ErrorContains(t, table.VisitSnapshotObjects(context.Background(), types.TS{}, func(objectio.ObjectStats, bool) error {
+		t.Fatal("delegated snapshot must not enumerate the origin relation")
+		return nil
+	}), "delegated snapshot")
+	_, err = table.HasSnapshotTombstones(context.Background(), 0, types.TS{})
+	require.ErrorContains(t, err, "delegated snapshot")
+
+	table.shard.policy = shard.Policy_Partition
+	local, err = table.CanVisitSnapshotLocally()
+	require.NoError(t, err)
+	require.True(t, local)
 }
 
 func TestTxnTableDelegate_MergeObjects(t *testing.T) {

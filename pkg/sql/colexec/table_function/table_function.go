@@ -123,6 +123,8 @@ func (tableFunction *TableFunction) OpType() vm.OpType {
 }
 
 func (tableFunction *TableFunction) Prepare(proc *process.Process) error {
+	tableFunction.cleanForPrepare(proc)
+
 	if tableFunction.OpAnalyzer == nil {
 		tableFunction.OpAnalyzer = process.NewAnalyzer(tableFunction.GetIdx(), tableFunction.IsFirst, tableFunction.IsLast, "tableFunction")
 	} else {
@@ -135,7 +137,7 @@ func (tableFunction *TableFunction) Prepare(proc *process.Process) error {
 	retSchema := make([]types.Type, len(tblArg.Rets))
 	for i := range tblArg.Rets {
 		typ := tblArg.Rets[i].Typ
-		retSchema[i] = types.New(types.T(typ.Id), typ.Width, typ.Scale)
+		retSchema[i] = types.NewWithCharset(types.T(typ.Id), typ.Width, typ.Scale, uint8(typ.Charset))
 	}
 	tblArg.ctr.retSchema = retSchema
 
@@ -166,6 +168,8 @@ func (tableFunction *TableFunction) Prepare(proc *process.Process) error {
 		tblArg.ctr.state, err = moTransactionsPrepare(proc, tblArg)
 	case "mo_cache":
 		tblArg.ctr.state, err = moCachePrepare(proc, tblArg)
+	case "mo_check_constraints":
+		tblArg.ctr.state, err = checkConstraintsPrepare(proc, tblArg)
 	case "fulltext_index_scan":
 		tblArg.ctr.state, err = fulltextIndexScanPrepare(proc, tblArg)
 	case "fulltext_index_tokenize":
@@ -204,6 +208,19 @@ func (tableFunction *TableFunction) Prepare(proc *process.Process) error {
 	}
 
 	return err
+}
+
+// cleanForPrepare releases resources that Prepare rebuilds. Optimized
+// generate_series state is injected by the compiler and must survive Prepare.
+func (tableFunction *TableFunction) cleanForPrepare(proc *process.Process) {
+	tableFunction.ctr.cleanExecutors()
+	if tableFunction.FuncName == "generate_series" && tableFunction.CanOpt {
+		return
+	}
+	if tableFunction.ctr.state != nil {
+		tableFunction.ctr.state.free(tableFunction, proc, false, nil)
+		tableFunction.ctr.state = nil
+	}
 }
 
 func (tableFunction *TableFunction) createResultBatch() *batch.Batch {

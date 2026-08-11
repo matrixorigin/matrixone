@@ -32,13 +32,16 @@ type Int64HashMapCell struct {
 type Int64HashMap struct {
 	mp *mpool.MPool
 
-	blockCellCnt    uint64
-	blockMaxElemCnt uint64
-	cellCntMask     uint64
+	blockCellCntBits uint8
+	cellCntMask      uint64
 
 	cellCnt uint64
 	elemCnt uint64
 	cells   [][]Int64HashMapCell
+	account *AllocationAccountSelection
+
+	version uint64
+	admit   ResizeAdmission
 }
 
 var (
@@ -46,50 +49,144 @@ var (
 	maxIntCellCntPerBlock uint64
 )
 
+func Int64HashMapInitialAllocationBytes() uint64 { return kInitialCellCnt * intCellSize }
+
 func init() {
 	intCellSize = uint64(unsafe.Sizeof(Int64HashMapCell{}))
 	maxIntCellCntPerBlock = maxBlockSize / intCellSize
 }
 
-func (ht *Int64HashMap) Free() {
-	for i, c := range ht.cells {
-		mpool.FreeSlice(ht.mp, c)
-		ht.cells[i] = nil
-	}
-	ht.cells = nil
+func (ht *Int64HashMap) blockCellCnt() uint64 {
+	return uint64(1) << ht.blockCellCntBits
 }
 
-func (ht *Int64HashMap) allocate(index int, ncells int) error {
-	if ht.cells[index] != nil {
-		panic("overwriting")
-	}
+func (ht *Int64HashMap) cellAt(index uint64) *Int64HashMapCell {
+	blockID := index >> ht.blockCellCntBits
+	cellID := index & (ht.blockCellCnt() - 1)
+	return &ht.cells[blockID][cellID]
+}
 
-	cell, err := mpool.MakeSlice[Int64HashMapCell](ncells, ht.mp, true)
-	if err != nil {
-		return err
+func (ht *Int64HashMap) Free() {
+	ht.freeCells(ht.cells)
+	ht.cells = nil
+	ht.account = nil
+}
+
+func (ht *Int64HashMap) freeCells(cells [][]Int64HashMapCell) {
+	for i, block := range cells {
+		freeHashTableCellSlice(ht.mp, block)
+		cells[i] = nil
 	}
-	ht.cells[index] = cell
-	return nil
+	freeHashTableDescriptorSlice(ht.mp, cells, ht.account)
+}
+
+func (ht *Int64HashMap) allocateCells(blockCount int, blockCellCnt uint64) ([][]Int64HashMapCell, error) {
+	cells, err := makeHashTableDescriptorSlice[[]Int64HashMapCell](
+		blockCount,
+		ht.mp,
+		ht.account,
+		ht.descriptorSite(),
+	)
+	if err != nil {
+		return nil, err
+	}
+	for i := range cells {
+		block, err := makeHashTableCellSlice[Int64HashMapCell](
+			int(blockCellCnt),
+			ht.mp,
+			ht.account,
+			ht.cellSite(),
+		)
+		if err != nil {
+			ht.freeCells(cells)
+			return nil, err
+		}
+		cells[i] = block
+	}
+	return cells, nil
+}
+
+func (ht *Int64HashMap) appendCells(
+	blockCount int,
+	blockCellCnt uint64,
+) ([][]Int64HashMapCell, error) {
+	cells, err := makeHashTableDescriptorSlice[[]Int64HashMapCell](
+		blockCount,
+		ht.mp,
+		ht.account,
+		ht.descriptorSite(),
+	)
+	if err != nil {
+		return nil, err
+	}
+	copy(cells, ht.cells)
+	for i := len(ht.cells); i < len(cells); i++ {
+		block, allocErr := makeHashTableCellSlice[Int64HashMapCell](
+			int(blockCellCnt),
+			ht.mp,
+			ht.account,
+			ht.cellSite(),
+		)
+		if allocErr != nil {
+			for j := len(ht.cells); j < i; j++ {
+				freeHashTableCellSlice(ht.mp, cells[j])
+				cells[j] = nil
+			}
+			freeHashTableDescriptorSlice(ht.mp, cells, ht.account)
+			return nil, allocErr
+		}
+		cells[i] = block
+	}
+	return cells, nil
 }
 
 func (ht *Int64HashMap) Init(mp *mpool.MPool) (err error) {
+	return ht.InitWithAllocation(mp, nil)
+}
+
+func (ht *Int64HashMap) InitWithAllocation(
+	mp *mpool.MPool,
+	account *AllocationAccountSelection,
+) (err error) {
+	if account != nil {
+		if err = account.validate(); err != nil {
+			return err
+		}
+	}
 	ht.mp = mp
-	ht.blockCellCnt = kInitialCellCnt
-	ht.blockMaxElemCnt = maxElemCnt(kInitialCellCnt, intCellSize)
+	ht.account = account
+	ht.blockCellCntBits = kInitialCellCntBits
 	ht.cellCntMask = kInitialCellCnt - 1
 	ht.elemCnt = 0
 	ht.cellCnt = kInitialCellCnt
+	ht.version = 0
 
-	ht.cells = make([][]Int64HashMapCell, 1)
-
-	if err = ht.allocate(0, int(ht.blockCellCnt)); err != nil {
+	if ht.cells, err = ht.allocateCells(1, ht.blockCellCnt()); err != nil {
+		ht.account = nil
 		return err
 	}
 
 	return
 }
 
+func (ht *Int64HashMap) cellSite() mpool.AllocationSite {
+	if ht.account == nil {
+		return 0
+	}
+	return ht.account.cellSite
+}
+
+func (ht *Int64HashMap) descriptorSite() mpool.AllocationSite {
+	if ht.account == nil {
+		return 0
+	}
+	return ht.account.descriptorSite
+}
+
 func (ht *Int64HashMap) InsertBatch(n int, hashes []uint64, keysPtr unsafe.Pointer, values []uint64) error {
+	if n <= 0 {
+		return nil
+	}
 	if err := ht.ResizeOnDemand(n); err != nil {
 		return err
 	}
@@ -111,6 +208,9 @@ func (ht *Int64HashMap) InsertBatch(n int, hashes []uint64, keysPtr unsafe.Point
 }
 
 func (ht *Int64HashMap) InsertBatchWithRing(n int, zValues []int64, hashes []uint64, keysPtr unsafe.Pointer, values []uint64) error {
+	if n <= 0 {
+		return nil
+	}
 	if err := ht.ResizeOnDemand(n); err != nil {
 		return err
 	}
@@ -147,9 +247,7 @@ func (ht *Int64HashMap) FindBatch(n int, hashes []uint64, keysPtr unsafe.Pointer
 
 func (ht *Int64HashMap) findCell(hash uint64) *Int64HashMapCell {
 	for idx := hash & ht.cellCntMask; true; idx = (idx + 1) & ht.cellCntMask {
-		blockId := idx / ht.blockCellCnt
-		cellId := idx % ht.blockCellCnt
-		cell := &ht.cells[blockId][cellId]
+		cell := ht.cellAt(idx)
 		if cell.Key == hash || cell.Mapped == 0 {
 			return cell
 		}
@@ -159,9 +257,7 @@ func (ht *Int64HashMap) findCell(hash uint64) *Int64HashMapCell {
 
 func (ht *Int64HashMap) findEmptyCell(hash uint64) *Int64HashMapCell {
 	for idx := hash & ht.cellCntMask; true; idx = (idx + 1) & ht.cellCntMask {
-		blockId := idx / ht.blockCellCnt
-		cellId := idx % ht.blockCellCnt
-		cell := &ht.cells[blockId][cellId]
+		cell := ht.cellAt(idx)
 		if cell.Mapped == 0 {
 			return cell
 		}
@@ -169,108 +265,138 @@ func (ht *Int64HashMap) findEmptyCell(hash uint64) *Int64HashMapCell {
 	return nil
 }
 
+func (ht *Int64HashMap) rehashInPlace(oldCellCnt uint64) {
+	// Start immediately after an old empty slot, which is a linear-probing
+	// cluster boundary. The load factor guarantees at least one such slot.
+	emptyIndex := uint64(0)
+	for emptyIndex < oldCellCnt && ht.cellAt(emptyIndex).Mapped != 0 {
+		emptyIndex++
+	}
+	if emptyIndex == oldCellCnt {
+		panic("cannot grow a full int64 hash map")
+	}
+
+	var emptyCell Int64HashMapCell
+	oldMask := oldCellCnt - 1
+	for offset := uint64(1); offset < oldCellCnt; offset++ {
+		index := (emptyIndex + offset) & oldMask
+		source := ht.cellAt(index)
+		if source.Mapped == 0 {
+			continue
+		}
+		cell := *source
+		*source = emptyCell
+		// Under the wider mask, a cell either moves into a newly allocated block
+		// or into a hole at/before its old position in this scan order. It cannot
+		// overwrite an unvisited old cell.
+		*ht.findEmptyCell(cell.Key) = cell
+	}
+}
+
+// SetResizeAdmission installs an optional memory admission callback. The
+// callback is called once for each growth, before any allocation or mutation.
+func (ht *Int64HashMap) SetResizeAdmission(admit ResizeAdmission) { ht.admit = admit }
+
+// PlanResize computes growth accounting without allocating or changing the map.
+func (ht *Int64HashMap) PlanResize(cnt uint64) ResizePlan {
+	return newResizePlan(ht.elemCnt, cnt, ht.cellCnt, ht.blockCellCnt(),
+		uint64(len(ht.cells)), intCellSize,
+		maxIntCellCntPerBlock, ht.version)
+}
+
 func (ht *Int64HashMap) ResizeOnDemand(cnt int) error {
-	targetCnt := ht.elemCnt + uint64(cnt)
-	if targetCnt <= uint64(len(ht.cells))*ht.blockMaxElemCnt {
+	additional := uint64(cnt)
+	if !resizeNeeded(ht.elemCnt, additional, ht.cellCnt, intCellSize) {
+		return nil
+	}
+	return ht.resizeOnDemand(additional)
+}
+
+func (ht *Int64HashMap) resizeOnDemand(additional uint64) error {
+	return ht.ResizeWithPlan(ht.PlanResize(additional))
+}
+
+// ResizeWithPlan applies a previously computed plan transactionally.
+func (ht *Int64HashMap) ResizeWithPlan(plan ResizePlan) error {
+	if plan.Invalid {
+		return ErrInvalidResizePlan
+	}
+	if plan.Noop {
+		return nil
+	}
+	if !plan.matches(ht.version, ht.cellCnt, ht.blockCellCnt(), uint64(len(ht.cells))) {
+		return ErrStaleResizePlan
+	}
+	var reservation ResizeReservation
+	if ht.admit != nil {
+		var err error
+		if reservation, err = ht.admit(plan); err != nil {
+			return err
+		}
+	}
+	committed := false
+	defer func() {
+		if reservation != nil && !committed {
+			reservation.Rollback()
+		}
+	}()
+
+	if plan.ReuseCurrentBlocks {
+		newCells, err := ht.appendCells(
+			int(plan.TargetBlockCount),
+			plan.TargetBlockCellCount,
+		)
+		if err != nil {
+			return err
+		}
+		oldCellCnt := ht.cellCnt
+		oldDescriptors := ht.cells
+		ht.cells = newCells
+		freeHashTableDescriptorSlice(ht.mp, oldDescriptors, ht.account)
+		ht.cellCnt = plan.TargetCellCount
+		ht.cellCntMask = ht.cellCnt - 1
+		ht.version++
+		ht.rehashInPlace(oldCellCnt)
+		if reservation != nil {
+			reservation.Commit(plan)
+		}
+		committed = true
 		return nil
 	}
 
-	newCellCnt := ht.cellCnt << 1
-	newMaxElemCnt := maxElemCnt(newCellCnt, intCellSize)
-	for newMaxElemCnt < targetCnt {
-		newCellCnt <<= 1
-		newMaxElemCnt = maxElemCnt(newCellCnt, intCellSize)
+	newCells, err := ht.allocateCells(int(plan.TargetBlockCount), plan.TargetBlockCellCount)
+	if err != nil {
+		return err
 	}
-
-	newAllocSize := int(newCellCnt * intCellSize)
-	if ht.blockCellCnt == maxIntCellCntPerBlock {
-		// double the blocks
-		oldBlockNum := len(ht.cells)
-		newBlockNum := newAllocSize / maxBlockSize
-
-		ht.cells = append(ht.cells, make([][]Int64HashMapCell, newBlockNum-oldBlockNum)...)
-		ht.cellCnt = ht.blockCellCnt * uint64(newBlockNum)
-		ht.cellCntMask = ht.cellCnt - 1
-
-		for i := oldBlockNum; i < newBlockNum; i++ {
-			if err := ht.allocate(i, int(ht.blockCellCnt)); err != nil {
-				return err
+	newMask := plan.TargetCellCount - 1
+	newBlockBits := powerOfTwoBits(plan.TargetBlockCellCount)
+	for i := range ht.cells {
+		for j := range ht.cells[i] {
+			old := ht.cells[i][j]
+			if old.Mapped == 0 {
+				continue
 			}
-		}
-
-		// rearrange the cells
-		var block []Int64HashMapCell
-		var emptyCell Int64HashMapCell
-
-		for i := 0; i < oldBlockNum; i++ {
-			block = ht.cells[i]
-			for j := uint64(0); j < ht.blockCellCnt; j++ {
-				cell := &block[j]
+			for idx := old.Key & newMask; ; idx = (idx + 1) & newMask {
+				cell := &newCells[idx>>newBlockBits][idx&(plan.TargetBlockCellCount-1)]
 				if cell.Mapped == 0 {
-					continue
+					*cell = old
+					break
 				}
-				newCell := ht.findCell(cell.Key)
-				if newCell != cell {
-					*newCell = *cell
-					*cell = emptyCell
-				}
-			}
-		}
-
-		block = ht.cells[oldBlockNum]
-		for j := uint64(0); j < ht.blockCellCnt; j++ {
-			cell := &block[j]
-			if cell.Mapped == 0 {
-				break
-			}
-			newCell := ht.findCell(cell.Key)
-			if newCell != cell {
-				*newCell = *cell
-				*cell = emptyCell
-			}
-		}
-	} else {
-		oldCells0 := ht.cells[0]
-		ht.cells[0] = nil
-		defer mpool.FreeSlice(ht.mp, oldCells0)
-
-		ht.cellCnt = newCellCnt
-		ht.cellCntMask = newCellCnt - 1
-
-		if newAllocSize <= maxBlockSize {
-			ht.blockCellCnt = newCellCnt
-			ht.blockMaxElemCnt = newMaxElemCnt
-
-			if err := ht.allocate(0, int(newCellCnt)); err != nil {
-				return err
-			}
-
-		} else {
-			ht.blockCellCnt = maxIntCellCntPerBlock
-			ht.blockMaxElemCnt = maxElemCnt(ht.blockCellCnt, intCellSize)
-
-			newBlockNum := newAllocSize / maxBlockSize
-			ht.cells = make([][]Int64HashMapCell, newBlockNum)
-			ht.cellCnt = ht.blockCellCnt * uint64(newBlockNum)
-			ht.cellCntMask = ht.cellCnt - 1
-
-			for i := 0; i < newBlockNum; i++ {
-				if err := ht.allocate(i, int(ht.blockCellCnt)); err != nil {
-					return err
-				}
-			}
-		}
-
-		// rearrange the cells
-		for i := range oldCells0 {
-			cell := &oldCells0[i]
-			if cell.Mapped != 0 {
-				newCell := ht.findEmptyCell(cell.Key)
-				*newCell = *cell
 			}
 		}
 	}
 
+	oldCells := ht.cells
+	ht.cells = newCells
+	ht.cellCnt = plan.TargetCellCount
+	ht.cellCntMask = newMask
+	ht.blockCellCntBits = newBlockBits
+	ht.version++
+	ht.freeCells(oldCells)
+	if reservation != nil {
+		reservation.Commit(plan)
+	}
+	committed = true
 	return nil
 }
 
@@ -283,8 +409,11 @@ func (ht *Int64HashMap) Size() int64 {
 	ret := int64(41)
 	for i := range ht.cells {
 		ret += int64(len(ht.cells[i]) * int(intCellSize))
-		// 16 is the len of ht.cells[i]
-		ret += 16
+	}
+	if ht.account != nil {
+		ret += int64(len(ht.cells)) * int64(unsafe.Sizeof([]Int64HashMapCell(nil)))
+	} else {
+		ret += int64(len(ht.cells)) * 16
 	}
 	return ret
 }
@@ -300,9 +429,7 @@ func (it *Int64HashMapIterator) Init(ht *Int64HashMap) {
 
 func (it *Int64HashMapIterator) Next() (cell *Int64HashMapCell, err error) {
 	for it.pos < it.table.cellCnt {
-		blockId := it.pos / it.table.blockCellCnt
-		cellId := it.pos % it.table.blockCellCnt
-		cell = &it.table.cells[blockId][cellId]
+		cell = it.table.cellAt(it.pos)
 		if cell.Mapped != 0 {
 			break
 		}

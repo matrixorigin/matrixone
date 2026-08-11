@@ -17,6 +17,7 @@ package merge
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/sql/internal/materialized"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -25,7 +26,15 @@ import (
 var _ vm.Operator = new(Merge)
 
 type container struct {
-	receiver *process.PipelineSignalReceiver
+	receiver             *process.PipelineSignalReceiver
+	materializedPosition int
+	materializedReleased bool
+	// Materialized readers return independent, caller-owned batches. Most
+	// consumers release those batches themselves, but pass-through and join
+	// pipelines may only release their derived output. Retain the latest batch
+	// so the next Call or teardown can idempotently reclaim any remaining vector
+	// storage without accumulating one handle per materialized input batch.
+	materializedBatch *batch.Batch
 }
 
 type Merge struct {
@@ -34,6 +43,9 @@ type Merge struct {
 	Partial  bool  // false means listening on all merge receivers
 	StartIDX int32 // if partial, listening on receivers[start:end]
 	EndIDX   int32
+
+	MaterializedSource   *materialized.Source
+	MaterializedReaderID int
 	vm.OperatorBase
 }
 
@@ -81,6 +93,14 @@ func (merge *Merge) Release() {
 }
 
 func (merge *Merge) Reset(proc *process.Process, pipelineFailed bool, err error) {
+	if merge.MaterializedSource != nil {
+		merge.cleanMaterializedBatch(proc)
+		if !merge.ctr.materializedReleased {
+			merge.MaterializedSource.ReleaseReader(merge.MaterializedReaderID)
+			merge.ctr.materializedReleased = true
+		}
+		return
+	}
 	if merge.ctr.receiver == nil {
 		_ = merge.Prepare(proc)
 	}
@@ -101,6 +121,20 @@ func (merge *Merge) Reset(proc *process.Process, pipelineFailed bool, err error)
 }
 
 func (merge *Merge) Free(proc *process.Process, pipelineFailed bool, err error) {
+	if merge.MaterializedSource != nil {
+		merge.cleanMaterializedBatch(proc)
+		if !merge.ctr.materializedReleased {
+			merge.MaterializedSource.ReleaseReader(merge.MaterializedReaderID)
+			merge.ctr.materializedReleased = true
+		}
+	}
+}
+
+func (merge *Merge) cleanMaterializedBatch(proc *process.Process) {
+	if merge.ctr.materializedBatch != nil {
+		merge.ctr.materializedBatch.Clean(proc.Mp())
+		merge.ctr.materializedBatch = nil
+	}
 }
 
 func (merge *Merge) ExecProjection(proc *process.Process, input *batch.Batch) (*batch.Batch, error) {

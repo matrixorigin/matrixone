@@ -47,6 +47,8 @@ func (s *leaseCancelReadTxnService) Start() error {
 	return nil
 }
 
+func (s *leaseCancelReadTxnService) CancelRecovery() {}
+
 func (s *leaseCancelReadTxnService) Close(bool) error {
 	return nil
 }
@@ -413,79 +415,6 @@ func TestHandleRollback(t *testing.T) {
 		req := service.NewTestRollbackRequest(service.NewTestTxn(1, 1, 1))
 		req.Txn.TNShards[0].ReplicaID = 2
 		assert.NoError(t, s.handleRollback(context.Background(), &req, &txn.TxnResponse{}))
-	})
-}
-
-func TestHandlePrepare(t *testing.T) {
-	runTNStoreTest(t, func(s *store) {
-		shard := newTestTNShard(1, 2, 3)
-		assert.NoError(t, s.StartTNReplica(shard))
-
-		req := service.NewTestPrepareRequest(service.NewTestTxn(1, 1, 1), 1)
-		req.PrepareRequest.TNShard.ReplicaID = 2
-		assert.NoError(t, s.handlePrepare(context.Background(), &req, &txn.TxnResponse{}))
-
-		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
-		defer cancel()
-		_, err := s.sender.Send(ctx, []txn.TxnRequest{req})
-		assert.NoError(t, err)
-	})
-}
-
-func TestHandleGetStatus(t *testing.T) {
-	runTNStoreTest(t, func(s *store) {
-		shard := newTestTNShard(1, 2, 3)
-		assert.NoError(t, s.StartTNReplica(shard))
-
-		req := service.NewTestGetStatusRequest(service.NewTestTxn(1, 1, 1), 1)
-		req.GetStatusRequest.TNShard.ReplicaID = 2
-		assert.NoError(t, s.handleGetStatus(context.Background(), &req, &txn.TxnResponse{}))
-
-		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
-		defer cancel()
-		_, err := s.sender.Send(ctx, []txn.TxnRequest{req})
-		assert.NoError(t, err)
-	})
-}
-
-func TestHandleCommitTNShard(t *testing.T) {
-	runTNStoreTest(t, func(s *store) {
-		shard := newTestTNShard(1, 2, 3)
-		assert.NoError(t, s.StartTNReplica(shard))
-
-		req := service.NewTestCommitShardRequest(service.NewTestTxn(1, 1, 1))
-		req.CommitTNShardRequest.TNShard.ReplicaID = 2
-		assert.NoError(t, s.handleCommitTNShard(context.Background(), &req, &txn.TxnResponse{}))
-
-		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
-		defer cancel()
-		_, err := s.sender.Send(ctx, []txn.TxnRequest{req})
-		assert.NoError(t, err)
-	})
-}
-
-func TestHandleRollbackTNShard(t *testing.T) {
-	runTNStoreTest(t, func(s *store) {
-		shard := newTestTNShard(1, 2, 3)
-		assert.NoError(t, s.StartTNReplica(shard))
-
-		req := service.NewTestRollbackShardRequest(service.NewTestTxn(1, 1, 1))
-		req.RollbackTNShardRequest.TNShard.ReplicaID = 2
-		assert.NoError(t, s.handleRollbackTNShard(context.Background(), &req, &txn.TxnResponse{}))
-
-		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
-		defer cancel()
-		_, err := s.sender.Send(ctx, []txn.TxnRequest{req})
-		assert.NoError(t, err)
-	})
-}
-
-func TestHandleTNShartnotFound(t *testing.T) {
-	runTNStoreTest(t, func(s *store) {
-		req := service.NewTestRollbackShardRequest(service.NewTestTxn(1, 1, 1))
-		resp := &txn.TxnResponse{}
-		assert.NoError(t, s.handleRollbackTNShard(context.Background(), &req, resp))
-		assert.Equal(t, uint32(moerr.ErrTNShardNotFound), resp.TxnError.Code)
 	})
 }
 

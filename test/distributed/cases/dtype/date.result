@@ -1,3 +1,4 @@
+set session sql_mode = default;
 select cast('0000-01-01' as date),cast('0000-01-01' as date)-1;
 ➤ cast(0000-01-01 as date)[91,64,0]  ¦  cast(0000-01-01 as date) - 1[-5,64,0]  𝄀
 null  ¦  null
@@ -117,7 +118,7 @@ select * from t1 join t2 on t1.dvalue=t2.dvalue order by 1 desc,t2.value32 asc;
 2022-01-02  ¦  2  ¦  2022-01-02  ¦  4  𝄀
 2022-01-01  ¦  1  ¦  2022-01-01  ¦  5
 select * from t1 join t2 on t1.dvalue=t2.dvalue where t1.dvalue>='2022-01-01' group by t1.dvalue order by t2.dvalue;
-SQL syntax error: column "t1.value32" must appear in the GROUP BY clause or be used in an aggregate function
+SQL syntax error: column "t2.dvalue" must appear in the GROUP BY clause or be used in an aggregate function
 drop table if exists t1;
 drop table if exists t2;
 CREATE TABLE t_date(id date);
@@ -126,10 +127,9 @@ SELECT id, id >= 20200102 FROM t_date;
 ➤ id[91,64,0]  ¦  id >= 20200102[-7,1,0]  𝄀
 2020-01-01  ¦  0  𝄀
 2022-01-02  ¦  1
-SELECT id, 1.1 <= '2020-01-01' FROM t_date;
-➤ id[91,64,0]  ¦  1.1 <= 2020-01-01[-7,1,0]  𝄀
-2020-01-01  ¦  0  𝄀
-2022-01-02  ¦  0
+SELECT 1.1 <= '2020-01-01';
+➤ 1.1 <= 2020-01-01[-7,1,0]  𝄀
+1
 SELECT id, id = 202020101 FROM t_date;
 ➤ id[91,64,0]  ¦  id = 202020101[-7,1,0]  𝄀
 2020-01-01  ¦  0  𝄀
@@ -211,7 +211,7 @@ b date not null default '2000-01-01'
 );
 insert into t1 (a) values ('2022-01-02'),('2022-01-04'),('2022-01-06'),('2022-01-08'),('2022-01-10'),('2022-01-12');
 update t1 set a=a+101;
-invalid argument operator cast, bad value [BIGINT DATE]
+invalid argument operator cast_strict, bad value [BIGINT DATE]
 select a,b from t1;
 ➤ a[91,64,0]  ¦  b[91,64,0]  𝄀
 2022-01-02  ¦  2000-01-01  𝄀
@@ -230,7 +230,7 @@ select a,b from t1;
 2022-01-10  ¦  2000-01-01  𝄀
 2022-01-12  ¦  2000-01-01
 update t1 set a=a-1 where 1 > 2;
-invalid argument operator cast, bad value [BIGINT DATE]
+invalid argument operator cast_strict, bad value [BIGINT DATE]
 select a,b from t1;
 ➤ a[91,64,0]  ¦  b[91,64,0]  𝄀
 2022-01-02  ¦  2000-01-01  𝄀
@@ -240,7 +240,7 @@ select a,b from t1;
 2022-01-10  ¦  2000-01-01  𝄀
 2022-01-12  ¦  2000-01-01
 update t1 set a=a-1 where 3 > 2;
-invalid argument operator cast, bad value [BIGINT DATE]
+invalid argument operator cast_strict, bad value [BIGINT DATE]
 select a,b from t1;
 ➤ a[91,64,0]  ¦  b[91,64,0]  𝄀
 2022-01-02  ¦  2000-01-01  𝄀

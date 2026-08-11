@@ -24,10 +24,20 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/cnservice"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/embed"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/tests/testutils"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/stretchr/testify/require"
 )
+
+func partitionLoadRowCount() int {
+	if testing.Short() {
+		// Four blocks retain multiple blocks in each hash partition, S3 writes,
+		// and unique-index maintenance without making PR CI load 100K rows twice.
+		return int(objectio.BlockMaxRows) * 4
+	}
+	return 100000
+}
 
 func TestLoadS3(t *testing.T) {
 	runPartitionClusterTest(
@@ -52,7 +62,7 @@ func TestLoadS3(t *testing.T) {
 				sql,
 			)
 
-			n := 100000
+			n := partitionLoadRowCount()
 			sql = fmt.Sprintf("load data infile '%s' into table %s fields terminated by ','", genLoadFile(t, n), t.Name())
 			testutils.ExecSQLWithReadResult(
 				t,
@@ -131,7 +141,7 @@ func TestLoadS3WithIndex(t *testing.T) {
 				sql,
 			)
 
-			n := 100000
+			n := partitionLoadRowCount()
 			sql = fmt.Sprintf("load data infile '%s' into table %s fields terminated by ','", genLoadFile(t, n), t.Name())
 			testutils.ExecSQLWithReadResult(
 				t,

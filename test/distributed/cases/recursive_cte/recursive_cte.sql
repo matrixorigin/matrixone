@@ -47,3 +47,19 @@ set cte_max_recursion_depth = 0;
 with recursive c as (select a from t_cte_depth union all select a+1 from c where a < 5) select count(*) from c;
 set cte_max_recursion_depth = 100;
 drop table if exists t_cte_depth;
+
+-- recursive CTE consumers can be independently rebound under explicit aliases
+with recursive seq(n) as (select 1 union all select n + 1 from seq where n < 3) select count(*) as pairs, sum(a.n + b.n) as checksum from seq as a cross join seq as b;
+
+-- a recursive member can reference an earlier non-recursive CTE in the same WITH clause
+with recursive limits(lo, hi) as (select 3, 9), seq(n) as (select lo from limits union all select n + 1 from seq, limits where n < hi) select count(*), sum(n), min(n), max(n) from seq;
+
+-- an empty preceding CTE terminates recursion after the anchor row
+with recursive empty_limit(lo, hi) as (select 3, 9 where false), seq(n) as (select 1 union all select n + 1 from seq, empty_limit where n < hi) select count(*), sum(n), min(n), max(n) from seq;
+
+-- keep the non-equality loop join when the empty CTE is table-backed
+drop table if exists t_empty_limits;
+create table t_empty_limits(lo int, hi int);
+with recursive empty_limit(lo, hi) as (select lo, hi from t_empty_limits), seq(n) as (select 1 union all select n + 1 from seq, empty_limit where n < hi) select count(*), sum(n), min(n), max(n) from seq;
+with recursive empty_limit(lo, hi) as (select lo, hi from t_empty_limits), seq(n) as (select 1 union all select n + 1 from seq join empty_limit on n = lo where n < hi) select count(*), sum(n), min(n), max(n) from seq;
+drop table t_empty_limits;

@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"math"
 	"slices"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -54,11 +55,68 @@ type TableEntry struct {
 	tableData data.Table
 	rows      atomic.Uint64
 
+	// latestKnownDMLPrepare is the greatest visibility timestamp of accepted
+	// epoch-aware DML. An AUTO_INCREMENT reset uses it to reject a snapshot
+	// that did not observe a later durable write.
+	latestKnownDMLPrepare atomic.Pointer[types.TS]
+	replayedPreparedDML   struct {
+		sync.Mutex
+		txns map[string]struct{}
+	}
+
 	// fullname is format as 'tenantID-tableName', the tenantID prefix is only used 'mo_catalog' database
 	fullName string
 
 	dataObjects      *ObjectList
 	tombstoneObjects *ObjectList
+}
+
+func (entry *TableEntry) RecordKnownDMLPrepare(ts types.TS) {
+	for old := entry.latestKnownDMLPrepare.Load(); old == nil || ts.GT(old); old = entry.latestKnownDMLPrepare.Load() {
+		candidate := ts
+		if entry.latestKnownDMLPrepare.CompareAndSwap(old, &candidate) {
+			return
+		}
+	}
+}
+
+func (entry *TableEntry) GetLatestKnownDMLPrepare() types.TS {
+	if ts := entry.latestKnownDMLPrepare.Load(); ts != nil {
+		return *ts
+	}
+	return types.TS{}
+}
+
+func (entry *TableEntry) RegisterReplayedPreparedDML(txnID string) {
+	entry.replayedPreparedDML.Lock()
+	defer entry.replayedPreparedDML.Unlock()
+	if entry.replayedPreparedDML.txns == nil {
+		entry.replayedPreparedDML.txns = make(map[string]struct{})
+	}
+	entry.replayedPreparedDML.txns[txnID] = struct{}{}
+}
+
+func (entry *TableEntry) ResolveReplayedPreparedDML(txnID string, visibilityTS *types.TS) {
+	entry.replayedPreparedDML.Lock()
+	defer entry.replayedPreparedDML.Unlock()
+	if _, ok := entry.replayedPreparedDML.txns[txnID]; !ok {
+		return
+	}
+	if visibilityTS != nil {
+		entry.RecordKnownDMLPrepare(*visibilityTS)
+	}
+	delete(entry.replayedPreparedDML.txns, txnID)
+}
+
+func (entry *TableEntry) ShouldRetryAutoIncrementAlter(startTS types.TS) bool {
+	entry.replayedPreparedDML.Lock()
+	unresolved := len(entry.replayedPreparedDML.txns) > 0
+	entry.replayedPreparedDML.Unlock()
+	if unresolved {
+		return true
+	}
+	latestDML := entry.GetLatestKnownDMLPrepare()
+	return latestDML.GT(&startTS)
 }
 
 func genTblFullName(tenantID uint32, name string) string {
@@ -140,35 +198,19 @@ func MockStaloneTableEntry(id uint64, schema *Schema) *TableEntry {
 }
 
 func (entry *TableEntry) GetSoftdeleteObjects(dedupedTS, collectTS types.TS) (objs []*ObjectEntry) {
-	// Wait for all the objects visible for collectTS to be committed
-	iter1 := entry.MakeDataObjectIt()
-	defer iter1.Release()
-	for ok := iter1.Last(); ok; ok = iter1.Prev() {
-		obj := iter1.Item()
-		needWait, txn := obj.GetLastMVCCNode().NeedWaitCommitting(collectTS)
-		if needWait {
-			txn.GetTxnState(true)
-		}
-		// Only Check TxnActive entries, they are placed at the tail of the list
-		if obj.IsCommitted() {
-			break
-		}
+	entry.WaitDataObjectCommitted(collectTS)
+	it := entry.MakeDataObjectIt()
+	defer it.Release()
+	groups := [...]ObjectListGroup{
+		ObjectListGroupAppendableDrop,
+		ObjectListGroupNonAppendableDrop,
 	}
-
-	// Collect committed deleted objects in the range of [dedupedTS, collectTS]
-	iter2 := entry.MakeDataObjectIt()
-	defer iter2.Release()
-	for ok := iter2.Last(); ok; ok = iter2.Prev() {
-		obj := iter2.Item()
-		if obj.IsCommitted() && obj.CreatedAt.LT(&dedupedTS) && obj.DeleteBefore(dedupedTS) {
-			// In committed zone, all the objects are sorted by max(CreatedAt, DeletedAt), so we can break here
-			break
-		}
-		// Scan Deleted(DeletedAt != MaxU64) & Deleting(DeletedAt = MaxU64) objects
-		if obj.DeletedAt.IsEmpty() {
-			continue
-		}
-		if obj.DeletedAt.GE(&dedupedTS) && obj.DeletedAt.LE(&collectTS) {
+	for _, group := range groups {
+		for ok := SeekObjectListGroup(&it, group, dedupedTS); ok; ok = it.Next() {
+			obj := it.Item()
+			if obj.ObjectListGroup() != group || obj.DeletedAt.GT(&collectTS) {
+				break
+			}
 			objs = append(objs, obj)
 		}
 	}
@@ -210,8 +252,19 @@ func (entry *TableEntry) getTombstoneObjectByID(id *types.Objectid) (obj *Object
 	return entry.tombstoneObjects.GetObjectByID(id)
 }
 
+func (entry *TableEntry) UpdateObjectCreateTS(id *types.Objectid, isTombstone bool, ts types.TS) error {
+	obj, err := entry.getObjectList(isTombstone).UpdateCreateTS(id, ts)
+	if err != nil {
+		return err
+	}
+	if obj.GetObjectData() != nil {
+		obj.GetObjectData().UpdateMeta(obj)
+	}
+	return nil
+}
+
 func (entry *TableEntry) MakeTombstoneObjectIt() btree.IterG[*ObjectEntry] {
-	return entry.tombstoneObjects.tree.Load().Iter()
+	return entry.tombstoneObjects.loadTree().Iter()
 }
 
 // committed visible object iterator
@@ -224,7 +277,7 @@ func (entry *TableEntry) WaitTombstoneObjectCommitted(ts types.TS) {
 }
 
 func (entry *TableEntry) MakeDataObjectIt() btree.IterG[*ObjectEntry] {
-	return entry.dataObjects.tree.Load().Iter()
+	return entry.dataObjects.loadTree().Iter()
 }
 
 func (entry *TableEntry) MakeDataVisibleObjectIt(txn txnif.TxnReader) *VisibleCommittedObjectIt {
@@ -252,28 +305,19 @@ func IsTableTailFlushed(table *TableEntry, start, end types.TS, isTombstone bool
 		table.WaitDataObjectCommitted(end)
 		it = table.MakeDataObjectIt()
 	}
-	earlybreak := false
-	// some entries shared the same timestamp with end, so we need to seek to the next one
-	key := &ObjectEntry{EntryMVCCNode: EntryMVCCNode{DeletedAt: end.Next()}}
-	var ok bool
-	if ok = it.Seek(key); !ok {
-		ok = it.Last()
+	if SeekObjectListGroupReverse(&it, ObjectListGroupAppendableCreate, end) {
+		return false, it.Item()
 	}
-	for ; ok; ok = it.Prev() {
-		if earlybreak {
+	for ok := SeekObjectListGroupReverse(&it, ObjectListGroupAppendableCreateWithDrop, end); ok; ok = it.Prev() {
+		obj := it.Item()
+		if obj.ObjectListGroup() != ObjectListGroupAppendableCreateWithDrop {
 			break
 		}
-		obj := it.Item()
-		if !obj.IsAppendable() || obj.IsDEntry() || obj.CreatedAt.GT(&end) {
-			continue
-		}
-		// check only appendable C entries
-		if obj.CreatedAt.LT(&start) {
-			earlybreak = true
-		}
-		// the C entry has no counterpart D entry or the D entry is not committed yet
-		if next := obj.GetNextVersion(); next == nil || !next.IsCommitted() {
+		if next := obj.GetNextVersion(); !next.IsCommitted() {
 			return false, obj
+		}
+		if obj.CreatedAt.LT(&start) {
+			break
 		}
 	}
 
@@ -288,8 +332,27 @@ func (entry *TableEntry) CreateObject(
 	entry.Lock()
 	defer entry.Unlock()
 	created = NewObjectEntry(entry, txn, *opts.Stats, dataFactory, opts.IsTombstone)
-	if entry.GetCatalog().mergeNotifier != nil && !opts.Stats.GetAppendable() {
-		entry.GetCatalog().mergeNotifier.OnCreateNonAppendObject(ToMergeTable(entry))
+	if !opts.Stats.GetAppendable() {
+		if notifier := entry.GetCatalog().getMergeNotifier(); notifier != nil {
+			notifier.OnCreateNonAppendObject(ToMergeTable(entry))
+		}
+	}
+	entry.AddEntryLocked(created)
+	return
+}
+
+func (entry *TableEntry) CreateCommittedObject(
+	ts types.TS,
+	opts *objectio.CreateObjOpt,
+	dataFactory ObjectDataFactory,
+) (created *ObjectEntry, err error) {
+	entry.Lock()
+	defer entry.Unlock()
+	created = NewCommittedObjectEntry(entry, ts, *opts.Stats, dataFactory, opts.IsTombstone)
+	if !opts.Stats.GetAppendable() {
+		if notifier := entry.GetCatalog().getMergeNotifier(); notifier != nil {
+			notifier.OnCreateNonAppendObject(ToMergeTable(entry))
+		}
 	}
 	entry.AddEntryLocked(created)
 	return
@@ -309,12 +372,11 @@ func (entry *TableEntry) AddEntryLocked(objectEntry *ObjectEntry) {
 	}
 }
 
-func (entry *TableEntry) UpdateReplayEntryTs(objectEntry *ObjectEntry, ts types.TS) {
+func (entry *TableEntry) UpdateReplayEntryTs(objectEntry *ObjectEntry, ts types.TS) *ObjectEntry {
 	if objectEntry.IsTombstone {
-		entry.tombstoneObjects.UpdateReplayTs(objectEntry.ID(), ts)
-	} else {
-		entry.dataObjects.UpdateReplayTs(objectEntry.ID(), ts)
+		return entry.tombstoneObjects.UpdateReplayTs(objectEntry, ts)
 	}
+	return entry.dataObjects.UpdateReplayTs(objectEntry, ts)
 }
 
 func (entry *TableEntry) deleteEntryLocked(objectEntry *ObjectEntry) error {
@@ -436,9 +498,9 @@ func (entry *TableEntry) ShowObjectList(isTombstone bool) string {
 
 func (entry *TableEntry) ObjectCnt(isTombstone bool) int {
 	if isTombstone {
-		return entry.tombstoneObjects.tree.Load().Len()
+		return entry.tombstoneObjects.loadTree().Len()
 	}
-	return entry.dataObjects.tree.Load().Len()
+	return entry.dataObjects.loadTree().Len()
 }
 
 func (entry *TableEntry) ObjectStats(level common.PPLevel, start, end int, isTombstone bool) (stat TableStat, w bytes.Buffer) {
@@ -603,22 +665,14 @@ func (entry *TableEntry) TryFindLastAppendableObject(isTombstone bool) (obj *Obj
 
 	// For Appendable objects:
 	// Deleting objects should be ignored, because they have been freezed, which is not valid for appending.
-	for ok := it.Last(); ok; ok = it.Prev() {
+	if SeekObjectListGroupReverse(&it, ObjectListGroupAppendableCreate, txnif.UncommitTS) {
 		itObj := it.Item()
-		// exclude non-appendable objects and D entries
-		if !itObj.IsAppendable() || itObj.IsDEntry() {
-			continue
-		}
-		// first serving appendable objects
-		if !itObj.HasDCounterpart() {
+		if itObj.ObjectListGroup() == ObjectListGroupAppendableCreate {
 			obj = itObj
-			break
 		}
-		// break when encountering the first C entry created before 10 min
-		if itObj.CreatedAt.Physical() < ago {
-			// too old
-			break
-		}
+	}
+	if obj != nil && obj.CreatedAt.Physical() < ago {
+		obj = nil
 	}
 	return obj
 }
@@ -757,8 +811,10 @@ func (entry *TableEntry) ApplyCommit(id string) (err error) {
 	entry.TableNode.schema.Store(schema)
 
 	// create table commit
-	if lastestNode.DeletedAt.IsEmpty() && entry.GetCatalog().mergeNotifier != nil {
-		entry.GetCatalog().mergeNotifier.OnCreateTableCommit(ToMergeTable(entry))
+	if lastestNode.DeletedAt.IsEmpty() {
+		if notifier := entry.GetCatalog().getMergeNotifier(); notifier != nil {
+			notifier.OnCreateTableCommit(ToMergeTable(entry))
+		}
 	}
 
 	return
@@ -817,9 +873,16 @@ func (entry *TableEntry) AlterTable(ctx context.Context, txn txnif.TxnReader, re
 	}
 	var node *MVCCNode[*TableMVCCNode]
 	isNewNode, node = entry.getOrSetUpdateNodeLocked(txn)
+	if !isNewNode && node.HasDropIntent() {
+		// A delete node may share immutable schemas with the previous MVCC
+		// version. Preserve copy-on-write if the same transaction later
+		// reaches this internal update path.
+		node.BaseNode = node.BaseNode.CloneData()
+	}
 
 	newSchema = node.BaseNode.Schema
 	if isNewNode {
+		checks := apipb.CloneExtra(newSchema.Extra).Checks
 		// Extra info(except seqnnum etc.) is meaningful to the previous version schema
 		// reset in new Schema
 		var hints []apipb.MergeHint
@@ -833,6 +896,10 @@ func (entry *TableEntry) AlterTable(ctx context.Context, txn txnif.TxnReader, re
 			BlockMaxRows:      newSchema.Extra.BlockMaxRows,
 			ObjectMaxBlocks:   newSchema.Extra.ObjectMaxBlocks,
 			Hints:             hints,
+			AutoIncrOffset:    newSchema.Extra.AutoIncrOffset,
+			AutoIncrEpoch:     newSchema.Extra.AutoIncrEpoch,
+			DefaultCharset:    newSchema.Extra.DefaultCharset,
+			Checks:            checks,
 		}
 
 	}

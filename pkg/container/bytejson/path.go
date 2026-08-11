@@ -68,6 +68,16 @@ func (p *Path) IsSimple() bool {
 	return true
 }
 
+func (p *Path) mayReturnMultiple() bool {
+	for _, sub := range p.paths {
+		if sub.tp == subPathDoubleStar || sub.tp == subPathKeyWildcard || sub.tp == subPathRange ||
+			(sub.tp == subPathIdx && sub.idx.num == subPathIdxALL) {
+			return true
+		}
+	}
+	return false
+}
+
 func (p *Path) popOneSubPath() (Path, subPath) {
 	lastPathIdx := len(p.paths) - 1
 	return Path{paths: p.paths[:lastPathIdx]}, p.paths[lastPathIdx]
@@ -379,7 +389,7 @@ func (pi subPathIndices) genIndex(cnt int) (int, int, bool) {
 func (pe subPathRangeExpr) genRange(cnt int) (ret [2]int) {
 	orig1, mdf1, _ := pe.start.genIndex(cnt)
 	orig2, mdf2, _ := pe.end.genIndex(cnt)
-	if orig1 > orig2 {
+	if orig1 > orig2 || orig2 < 0 || orig1 >= cnt {
 		ret[0], ret[1] = subPathIdxErr, subPathIdxErr
 		return
 	}

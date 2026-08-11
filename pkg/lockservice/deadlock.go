@@ -38,7 +38,7 @@ var (
 type detector struct {
 	logger            *log.MOLogger
 	c                 chan deadlockTxn
-	waitTxnsFetchFunc func(pb.WaitTxn, *waiters) (bool, error)
+	waitTxnsFetchFunc func(context.Context, pb.WaitTxn, *waiters) (bool, error)
 	waitTxnAbortFunc  func(pb.WaitTxn, error)
 	ignoreTxns        sync.Map // txnID -> any
 	stopper           *stopper.Stopper
@@ -56,7 +56,7 @@ type detector struct {
 // txn.
 func newDeadlockDetector(
 	logger *log.MOLogger,
-	waitTxnsFetchFunc func(pb.WaitTxn, *waiters) (bool, error),
+	waitTxnsFetchFunc func(context.Context, pb.WaitTxn, *waiters) (bool, error),
 	waitTxnAbortFunc func(pb.WaitTxn, error),
 ) *detector {
 	d := &detector{
@@ -82,6 +82,9 @@ func (d *detector) close() {
 	d.mu.closed = true
 	d.mu.Unlock()
 	d.stopper.Stop()
+	d.mu.Lock()
+	clear(d.mu.activeCheckTxn)
+	d.mu.Unlock()
 	close(d.c)
 }
 
@@ -141,13 +144,16 @@ func (d *detector) doCheck(ctx context.Context) {
 
 	w := &waiters{ignoreTxns: &d.ignoreTxns}
 	for {
+		if ctx.Err() != nil {
+			return
+		}
 		select {
 		case <-ctx.Done():
 			return
 		case txn := <-d.c:
 			v2.TxnDeadlockDetectorQueueDepthGauge.Set(float64(len(d.c)))
 			w.reset(txn)
-			hasDeadlock, deadlockTxn, err := d.checkDeadlock(w)
+			hasDeadlock, deadlockTxn, err := d.checkDeadlock(ctx, w)
 			if hasDeadlock {
 				if err == nil {
 					err = ErrDeadLockDetected
@@ -162,40 +168,68 @@ func (d *detector) doCheck(ctx context.Context) {
 	}
 }
 
-func (d *detector) checkDeadlock(w *waiters) (bool, pb.WaitTxn, error) {
+func (d *detector) checkDeadlock(ctx context.Context, w *waiters) (bool, pb.WaitTxn, error) {
 	for {
-		// find deadlock
-		txn := w.getCheckTargetTxn()
-		added, err := d.waitTxnsFetchFunc(txn, w)
-		if err != nil {
-			logCheckDeadLockFailed(d.logger, txn, w.root.startTxn(), err)
+		if err := ctx.Err(); err != nil {
 			return false, pb.WaitTxn{}, err
 		}
-		if !added {
-			logDeadLockFound(d.logger, w.deadlockNode().txn, printPathFromRoot(w.deadlockNode()))
-			return true, w.deadlockNode().txn, nil
+
+		current := w.current()
+		if !current.fetched {
+			txn := current.txn
+			added, err := d.waitTxnsFetchFunc(ctx, txn, w)
+			if err != nil {
+				logCheckDeadLockFailed(d.logger, txn, w.root.startTxn(), err)
+				return false, pb.WaitTxn{}, err
+			}
+			current.fetched = true
+			if !added {
+				return d.deadlockFound(w)
+			}
 		}
-		if !w.next() {
+
+		cycle, more := w.advance()
+		if cycle {
+			return d.deadlockFound(w)
+		}
+		if !more {
 			return false, pb.WaitTxn{}, nil
 		}
 	}
 }
 
+func (d *detector) deadlockFound(w *waiters) (bool, pb.WaitTxn, error) {
+	node := w.deadlockNode()
+	logDeadLockFound(d.logger, node.txn, printPathFromRoot(node))
+	return true, node.txn, nil
+}
+
+type txnVisitState uint8
+
+const (
+	txnWhite txnVisitState = iota
+	txnGray
+	txnBlack
+)
+
 type waiters struct {
 	ignoreTxns *sync.Map
 	root       *lockNode
-	waitTxns   []*lockNode
-	pos        int
+	stack      []*lockNode
+	states     map[string]txnVisitState
+	deadlock   *lockNode
 }
 
-func (w *waiters) getCheckTargetTxn() pb.WaitTxn {
-	return w.waitTxns[w.pos].txn
+func (w *waiters) current() *lockNode {
+	return w.stack[len(w.stack)-1]
 }
 
-// there are no next txn, if return false
-func (w *waiters) next() bool {
-	w.pos++
-	return !(w.pos == len(w.waitTxns))
+func (w *waiters) state(txn pb.WaitTxn) txnVisitState {
+	return w.states[util.UnsafeBytesToString(txn.TxnID)]
+}
+
+func (w *waiters) setState(txn pb.WaitTxn, state txnVisitState) {
+	w.states[util.UnsafeBytesToString(txn.TxnID)] = state
 }
 
 func (w *waiters) String() string {
@@ -204,10 +238,13 @@ func (w *waiters) String() string {
 
 func (w *waiters) add(txn pb.WaitTxn, waiterAddress string) bool {
 	txn.WaiterAddress = waiterAddress
-	if w.hasTxn(txn) {
-		node := w.waitTxns[w.pos].addChild(txn)
-		w.waitTxns = append(w.waitTxns, node)
+	state := w.state(txn)
+	if state == txnGray {
+		w.setDeadlock(w.current().addChild(txn))
 		return false
+	}
+	if state == txnBlack {
+		return true
 	}
 
 	v := util.UnsafeBytesToString(txn.TxnID)
@@ -215,40 +252,77 @@ func (w *waiters) add(txn pb.WaitTxn, waiterAddress string) bool {
 		return true
 	}
 
-	node := w.waitTxns[w.pos].addChild(txn)
-	w.waitTxns = append(w.waitTxns, node)
+	w.current().addChild(txn)
 	return true
 }
 
 func (w *waiters) reset(txn deadlockTxn) {
 	w.root = newLockNode(pb.WaitTxn{TxnID: txn.holdTxnID})
 	current := w.root.addChild(txn.waitTxn)
-	w.waitTxns = w.waitTxns[:0]
-	w.waitTxns = append(w.waitTxns, w.root)
-	w.waitTxns = append(w.waitTxns, current)
-	w.pos = 1
+	w.root.fetched = true
+	w.root.nextChild = len(w.root.children)
+	w.stack = w.stack[:0]
+	w.stack = append(w.stack, w.root, current)
+	if w.states == nil {
+		w.states = make(map[string]txnVisitState)
+	} else {
+		clear(w.states)
+	}
+	w.setState(w.root.txn, txnGray)
+	w.setState(current.txn, txnGray)
+	w.deadlock = nil
 }
 
 func (w *waiters) deadlockNode() *lockNode {
-	if len(w.waitTxns) > 0 {
-		return w.waitTxns[len(w.waitTxns)-1]
-	}
-	return nil
+	return w.deadlock
 }
 
-func (w *waiters) hasTxn(txn pb.WaitTxn) bool {
-	for i := 0; i < w.pos; i++ {
-		if bytes.Equal(w.waitTxns[i].txn.TxnID, txn.TxnID) {
-			return true
+func (w *waiters) setDeadlock(closing *lockNode) {
+	for i, node := range w.stack {
+		if !bytes.Equal(node.txn.TxnID, closing.txn.TxnID) {
+			continue
 		}
+
+		cycle := newLockNode(node.txn)
+		for _, node := range w.stack[i+1:] {
+			cycle = cycle.addChild(node.txn)
+		}
+		w.deadlock = cycle.addChild(closing.txn)
+		return
 	}
-	return false
+	w.deadlock = closing
+}
+
+func (w *waiters) advance() (bool, bool) {
+	for len(w.stack) > 0 {
+		current := w.current()
+		for current.nextChild < len(current.children) {
+			child := current.children[current.nextChild]
+			current.nextChild++
+			switch w.state(child.txn) {
+			case txnGray:
+				w.setDeadlock(child)
+				return true, false
+			case txnBlack:
+				continue
+			default:
+				w.setState(child.txn, txnGray)
+				w.stack = append(w.stack, child)
+				return false, true
+			}
+		}
+		w.setState(current.txn, txnBlack)
+		w.stack = w.stack[:len(w.stack)-1]
+	}
+	return false, false
 }
 
 type lockNode struct {
-	txn      pb.WaitTxn
-	children []*lockNode
-	parent   *lockNode
+	txn       pb.WaitTxn
+	children  []*lockNode
+	parent    *lockNode
+	fetched   bool
+	nextChild int
 }
 
 func newLockNode(txn pb.WaitTxn) *lockNode {

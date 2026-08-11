@@ -16,13 +16,17 @@ package cnservice
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
+	"github.com/matrixorigin/matrixone/pkg/frontend/databranchutils"
 	"github.com/matrixorigin/matrixone/pkg/iscp"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -31,7 +35,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
 	"github.com/matrixorigin/matrixone/pkg/proxy"
 	"github.com/matrixorigin/matrixone/pkg/publication"
-	moconnector "github.com/matrixorigin/matrixone/pkg/stream/connector"
+	"github.com/matrixorigin/matrixone/pkg/sql/compile"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/util"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
@@ -68,6 +72,9 @@ func (s *service) initTaskServiceHolder() {
 	}
 	s.task.Lock()
 	defer s.task.Unlock()
+	if s.task.holder != nil {
+		return
+	}
 	if s.task.storageFactory == nil {
 		s.task.holder = taskservice.NewTaskServiceHolder(
 			runtime.ServiceRuntime(s.cfg.UUID),
@@ -266,13 +273,11 @@ func (s *service) stopTask() error {
 		return nil
 	}
 
-	if err := s.task.holder.Close(); err != nil {
-		return err
-	}
+	err := s.task.holder.Close()
 	if s.task.runner != nil {
-		return s.task.runner.Stop()
+		err = errors.Join(err, s.task.runner.Stop())
 	}
-	return nil
+	return err
 }
 
 func (s *service) registerExecutorsLocked() {
@@ -306,9 +311,6 @@ func (s *service) registerExecutorsLocked() {
 	s.task.runner.RegisterExecutor(
 		task.TaskCode_MetricStorageUsage,
 		mometric.GetMetricStorageUsageExecutor(s.cfg.UUID, ieFactory))
-	// streaming connector task
-	s.task.runner.RegisterExecutor(task.TaskCode_ConnectorKafkaSink,
-		moconnector.KafkaSinkConnectorExecutor(s.logger, ts, ieFactory, s.task.runner.Attach))
 	s.task.runner.RegisterExecutor(task.TaskCode_MergeObject,
 		func(ctx context.Context, task task.Task) error {
 			metadata := task.GetMetadata()
@@ -380,4 +382,18 @@ func (s *service) registerExecutorsLocked() {
 		task.TaskCode_SQLTask,
 		taskservice.NewSQLTaskExecutor(ieFactory, ts, s.cfg.UUID).TaskExecutor(),
 	)
+	s.task.runner.RegisterExecutor(
+		task.TaskCode_DataBranchLineageGC,
+		compile.DataBranchLineageGCExecutor(s.sqlExecutor),
+	)
+	ctx := defines.AttachAccount(
+		context.Background(), catalog.System_Account, catalog.System_User, catalog.System_Role,
+	)
+	if err := ts.CreateCronTask(
+		ctx,
+		databranchutils.LineageGCTaskMetadata(),
+		databranchutils.LineageGCTaskCronExpr,
+	); err != nil {
+		s.logger.Error("failed to create data branch lineage GC task", zap.Error(err))
+	}
 }

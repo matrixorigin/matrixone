@@ -73,6 +73,55 @@ type routeSelectedConnector interface {
 	ConnectRouteSelected(c *CNServer, handshakeResp *frontend.Packet, t *tunnel) (ServerConn, []byte, error)
 }
 
+// contextConnector and contextRouteSelectedConnector keep Router source
+// compatibility while allowing connection phases that own transient memory to
+// propagate their lifecycle context through dial and backend authentication.
+type contextConnector interface {
+	ConnectContext(
+		ctx context.Context,
+		c *CNServer,
+		handshakeResp *frontend.Packet,
+		t *tunnel,
+	) (ServerConn, []byte, error)
+}
+
+type contextRouteSelectedConnector interface {
+	ConnectRouteSelectedContext(
+		ctx context.Context,
+		c *CNServer,
+		handshakeResp *frontend.Packet,
+		t *tunnel,
+	) (ServerConn, []byte, error)
+}
+
+func connectRouterWithContext(
+	ctx context.Context,
+	r Router,
+	cn *CNServer,
+	handshakeResp *frontend.Packet,
+	t *tunnel,
+	routeSelected bool,
+) (ServerConn, []byte, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if cause := operationContextCause(ctx); cause != nil {
+		return nil, nil, cause
+	}
+	if routeSelected {
+		if rr, ok := r.(contextRouteSelectedConnector); ok {
+			return rr.ConnectRouteSelectedContext(ctx, cn, handshakeResp, t)
+		}
+		if rr, ok := r.(routeSelectedConnector); ok {
+			return rr.ConnectRouteSelected(cn, handshakeResp, t)
+		}
+	}
+	if rr, ok := r.(contextConnector); ok {
+		return rr.ConnectContext(ctx, cn, handshakeResp, t)
+	}
+	return r.Connect(cn, handshakeResp, t)
+}
+
 // transferRouter is implemented by routers that want session transfer /
 // migration traffic to select a target CN without consuming a breaker-managed
 // recovery probe. The transfer path is control-plane traffic, not a new
@@ -85,7 +134,7 @@ type transferRouter interface {
 // backend connection is still eligible for a fresh client login. Cached reuse
 // must honor the same CN health policy as a new session route.
 type cacheReuseChecker interface {
-	CanReuseCachedCN(cn *CNServer) bool
+	CanReuseCachedCN(cn *CNServer, client clientInfo) bool
 }
 
 // RefreshableRouter is a router that can be refreshed to get latest route strategy
@@ -116,6 +165,10 @@ type router struct {
 	healthDisabled bool
 	// healthOpts are applied when the default health checker is built.
 	healthOpts []cnHealthOption
+
+	// sessionAllocator is shared by all client and backend protocol sessions
+	// owned by this Proxy instance.
+	sessionAllocator frontend.Allocator
 }
 
 type routeOption func(*router)
@@ -131,6 +184,12 @@ func withConnectTimeout(t time.Duration) routeOption {
 func withAuthTimeout(t time.Duration) routeOption {
 	return func(r *router) {
 		r.authTimeout = t
+	}
+}
+
+func withSessionAllocator(allocator frontend.Allocator) routeOption {
+	return func(r *router) {
+		r.sessionAllocator = allocator
 	}
 }
 
@@ -344,21 +403,67 @@ func (r *router) RouteForTransfer(
 	return s, nil
 }
 
-// CanReuseCachedCN implements cacheReuseChecker. Cached connections must only
-// be reused when the breaker is closed/absent; otherwise they would bypass the
-// new-session health gate.
-func (r *router) CanReuseCachedCN(cn *CNServer) bool {
+// CanReuseCachedCN implements cacheReuseChecker. Cached connections must pass
+// the same cluster-eligibility and health gates as a newly routed session.
+func (r *router) CanReuseCachedCN(cn *CNServer, client clientInfo) bool {
 	if cn == nil {
 		return true
 	}
-	return r.health.canReuseCachedCN(cn.uuid)
+	if !r.health.canReuseCachedCN(cn.uuid) || r.moCluster == nil {
+		return false
+	}
+
+	candidates := make([]metadata.CNService, 0)
+	r.moCluster.GetCNService(
+		clusterservice.NewSelector(),
+		func(service metadata.CNService) bool {
+			candidates = append(candidates, service)
+			return true
+		},
+	)
+	if len(candidates) == 0 {
+		return false
+	}
+
+	// Apply the exact fresh-session routing policy to the current metadata for
+	// all working CNs. The full snapshot is required because labeled and empty
+	// CNs form priority tiers: whether a cached fallback remains eligible can
+	// change when another CN is added or removed.
+	eligible := false
+	selector := client.labelInfo.genSelector(clusterservice.EQ_Globbing)
+	appendFn := func(service *metadata.CNService) {
+		if service.ServiceID == cn.uuid {
+			eligible = true
+		}
+	}
+	if client.isSuperTenant() {
+		if err := route.RouteForSuperTenantCandidates(
+			context.Background(), candidates, selector, client.username, nil, appendFn,
+		); err != nil {
+			return false
+		}
+	} else if err := route.RouteForCommonTenantCandidates(
+		context.Background(), candidates, selector, nil, appendFn,
+	); err != nil {
+		return false
+	}
+	return eligible
 }
 
 func (r *router) connect(
-	cn *CNServer, handshakeResp *frontend.Packet, t *tunnel, accountHealth bool,
+	ctx context.Context,
+	cn *CNServer,
+	handshakeResp *frontend.Packet,
+	t *tunnel,
+	accountHealth bool,
 ) (ServerConn, []byte, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	// Creates a server connection.
-	sc, err := newServerConn(cn, t, r.rebalancer, r.connectTimeout)
+	sc, err := newServerConnContext(
+		ctx, cn, t, r.rebalancer, r.connectTimeout, r.sessionAllocator,
+	)
 	if err != nil {
 		// Connection failed, remove the placeholder that was added in selectOne.
 		r.rebalancer.connManager.selectOneFailed(cn.hash, cn.uuid)
@@ -395,7 +500,13 @@ func (r *router) connect(
 				WithLabelValues(result).
 				Observe(time.Since(start).Seconds())
 		}()
-		resp, err := sc.HandleHandshake(handshakeResp, r.authTimeout)
+		var resp *frontend.Packet
+		var err error
+		if contextual, ok := sc.(contextHandshakeHandler); ok {
+			resp, err = contextual.HandleHandshakeContext(ctx, handshakeResp, r.authTimeout)
+		} else {
+			resp, err = sc.HandleHandshake(handshakeResp, r.authTimeout)
+		}
 		if err != nil {
 			result = "error"
 			if isTimeoutErr(err) {
@@ -435,7 +546,13 @@ func (r *router) connect(
 func (r *router) Connect(
 	cn *CNServer, handshakeResp *frontend.Packet, t *tunnel,
 ) (ServerConn, []byte, error) {
-	return r.connect(cn, handshakeResp, t, false)
+	return r.connect(context.Background(), cn, handshakeResp, t, false)
+}
+
+func (r *router) ConnectContext(
+	ctx context.Context, cn *CNServer, handshakeResp *frontend.Packet, t *tunnel,
+) (ServerConn, []byte, error) {
+	return r.connect(ctx, cn, handshakeResp, t, false)
 }
 
 // ConnectRouteSelected is used only for Route-selected new-session connects.
@@ -444,7 +561,13 @@ func (r *router) Connect(
 func (r *router) ConnectRouteSelected(
 	cn *CNServer, handshakeResp *frontend.Packet, t *tunnel,
 ) (ServerConn, []byte, error) {
-	return r.connect(cn, handshakeResp, t, true)
+	return r.connect(context.Background(), cn, handshakeResp, t, true)
+}
+
+func (r *router) ConnectRouteSelectedContext(
+	ctx context.Context, cn *CNServer, handshakeResp *frontend.Packet, t *tunnel,
+) (ServerConn, []byte, error) {
+	return r.connect(ctx, cn, handshakeResp, t, true)
 }
 
 // Refresh refreshes the router

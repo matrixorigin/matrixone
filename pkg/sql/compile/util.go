@@ -24,12 +24,15 @@ import (
 	"github.com/bytedance/sonic"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	indexplugin "github.com/matrixorigin/matrixone/pkg/indexplugin"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
+
+const moIndexesColumnList = "(id, table_id, database_id, name, type, algo, algo_table_type, algo_params, is_visible, hidden, comment, column_name, ordinal_position, options, index_table_name)"
 
 // resolveVariableOrDefault wraps proc.GetResolveVariableFunc() with a
 // nil-safe fallback to executor.DefaultResolveVariable (populated from
@@ -147,10 +150,6 @@ var (
 	updateMoMergeSettings                        = `update mo_catalog.mo_merge_settings set tid = %v where account_id = %v and tid = %v;`
 )
 
-var (
-	dropTableBeforeDropDatabase = "drop table if exists `%v`.`%v`;"
-)
-
 // genInsertIndexTableSql: Generate an insert statement for inserting data into the index table
 func genInsertIndexTableSql(originTableDef *plan.TableDef, indexDef *plan.IndexDef, DBName string, isUnique bool) (string, error) {
 	// insert data into index table
@@ -241,7 +240,9 @@ func genInsertIndexTableSqlForMasterIndex(originTableDef *plan.TableDef, indexDe
 // genInsertMOIndexesSql: Generate an insert statement for insert index metadata into `mo_catalog.mo_indexes`
 func genInsertMOIndexesSql(eg engine.Engine, proc *process.Process, databaseId string, tableId uint64, ct *engine.ConstraintDef, tableDef *plan.TableDef) (string, error) {
 	buffer := bytes.NewBuffer(make([]byte, 0, 1024))
-	buffer.WriteString("insert into mo_catalog.mo_indexes values")
+	buffer.WriteString("insert into mo_catalog.mo_indexes ")
+	buffer.WriteString(moIndexesColumnList)
+	buffer.WriteString(" values")
 
 	getOriginName := func(name string) string {
 		if idx, ok := tableDef.Name2ColIndex[name]; ok {
@@ -299,10 +300,14 @@ func genInsertMOIndexesSql(eg engine.Engine, proc *process.Process, databaseId s
 
 					//8. algorithm_params
 					var algorithm_params = indexDef.IndexAlgoParams
-					fmt.Fprintf(buffer, "'%s', ", algorithm_params)
+					fmt.Fprintf(buffer, "%s, ", sqlquote.String(algorithm_params))
 
 					// 9. index visible
-					fmt.Fprintf(buffer, "%d, ", INDEX_VISIBLE_YES)
+					visible := 0
+					if catalog.IsIndexVisible(indexDef) {
+						visible = INDEX_VISIBLE_YES
+					}
+					fmt.Fprintf(buffer, "%d, ", visible)
 
 					// 10. index vec_hidden
 					fmt.Fprintf(buffer, "%d, ", INDEX_HIDDEN_NO)

@@ -19,9 +19,34 @@ type Worker struct {
 	Addr  string
 	Mcpu  int
 	State WorkerState
+	Route WorkerRoute
 }
 
 type Workers []Worker
+
+// WorkerRoute makes execution locality explicit at the scheduling boundary.
+// Unknown exists only for legacy callers; new discovery adapters must mark
+// candidates Remote and the ingress worker Local.
+type WorkerRoute uint8
+
+const (
+	WorkerRouteUnknown WorkerRoute = iota
+	WorkerRouteLocal
+	WorkerRouteRemote
+)
+
+func (r WorkerRoute) String() string {
+	switch r {
+	case WorkerRouteUnknown:
+		return "unknown"
+	case WorkerRouteLocal:
+		return "local"
+	case WorkerRouteRemote:
+		return "remote"
+	default:
+		return "invalid"
+	}
+}
 
 type WorkerState uint8
 
@@ -70,5 +95,8 @@ func cloneWorkers(workers Workers) Workers {
 }
 
 func cloneDroppedWorkers(workers DroppedWorkers) DroppedWorkers {
+	if len(workers) == 0 {
+		return nil
+	}
 	return append(DroppedWorkers(nil), workers...)
 }

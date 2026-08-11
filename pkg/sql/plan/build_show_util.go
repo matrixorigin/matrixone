@@ -23,10 +23,13 @@ import (
 	"github.com/bytedance/sonic"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/partition"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	sqliceberg "github.com/matrixorigin/matrixone/pkg/sql/iceberg"
+	sqlmongodb "github.com/matrixorigin/matrixone/pkg/sql/mongodb"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 )
@@ -39,20 +42,51 @@ func ConstructCreateTableSQL(
 	useDbName bool,
 	cloneStmt *tree.CloneTable,
 ) (string, tree.Statement, error) {
+	return constructCreateTableSQL(ctx, tableDef, snapshot, useDbName, cloneStmt, true)
+}
 
+func constructCreateTableSQL(
+	ctx CompilerContext,
+	tableDef *plan.TableDef,
+	snapshot *Snapshot,
+	useDbName bool,
+	cloneStmt *tree.CloneTable,
+	includeChecks bool,
+) (string, tree.Statement, error) {
 	var err error
 	var createStr string
 	rewritePairs := make([]struct {
 		display string
 		rewrite string
 	}, 0)
-	checkDefs := extractTopLevelCheckDefs(tableDef)
+	var checkDefs []string
+	if includeChecks {
+		checkDefs = constructCheckDefs(tableDef)
+	}
+	var mongoEnvelope sqlmongodb.CreateSQLEnvelope
+	mongoColumns := make(map[string]sqlmongodb.ColumnMapping)
+	if tableDef.TableType == catalog.SystemExternalRel {
+		var isMongoDB bool
+		isMongoDB, err = IsMongoDBTableDef(ctx.GetContext(), tableDef)
+		if err != nil {
+			return "", nil, err
+		}
+		if isMongoDB {
+			mongoEnvelope, _, err = sqlmongodb.ParseCreateSQLEnvelope(ctx.GetContext(), tableDef.Createsql)
+			if err != nil {
+				return "", nil, err
+			}
+			for _, column := range mongoEnvelope.Columns {
+				mongoColumns[strings.ToLower(column.Name)] = column
+			}
+		}
+	}
 
 	tblName := tableDef.Name
 	schemaName := tableDef.DbName
-	dbTblName := fmt.Sprintf("`%s`", formatStr(tblName))
+	dbTblName := sqlquote.Ident(tblName)
 	if useDbName {
-		dbTblName = fmt.Sprintf("`%s`.`%s`", formatStr(schemaName), formatStr(tblName))
+		dbTblName = sqlquote.QualifiedIdent(schemaName, tblName)
 	}
 
 	if tableDef.TableType == catalog.SystemExternalRel {
@@ -68,6 +102,14 @@ func ConstructCreateTableSQL(
 	rowCount := 0
 	var pkDefs []string
 	isClusterTable := util.TableIsClusterTable(tableDef.TableType)
+	displayTableCharset := effectiveTableCharsetForShowCreate(tableDef)
+	columnTableCharset := displayTableCharset
+	if tableDef.TableType == catalog.SystemExternalRel {
+		// External-table grammar has no table charset option. Use a sentinel
+		// that makes every text column emit its own replay-safe collation instead
+		// of relying on a table clause that would make the DDL unparsable.
+		columnTableCharset = uint32(types.CharsetLegacy)
+	}
 
 	// col.Name -> col.OriginName
 	colNameToOriginName := make(map[string]string)
@@ -111,7 +153,8 @@ func ConstructCreateTableSQL(
 		} else {
 			typeStr = strings.ToLower(typeStr)
 		}
-		fmt.Fprintf(buf, "  `%s` %s", formatStr(colNameOrigin), typeStr)
+		fmt.Fprintf(buf, "  %s %s", sqlquote.Ident(colNameOrigin), typeStr)
+		appendTextCharsetForShowCreate(buf, col.Typ, columnTableCharset)
 
 		//-------------------------------------------------------------------------------------------------------------
 		if col.GeneratedCol != nil && col.GeneratedCol.Expr != nil {
@@ -152,6 +195,13 @@ func ConstructCreateTableSQL(
 		if col.Comment != "" {
 			buf.WriteString(" COMMENT '" + col.Comment + "'")
 		}
+		if mapping, ok := mongoColumns[strings.ToLower(col.Name)]; ok {
+			buf.WriteString(" MONGODB_PATH '")
+			buf.WriteString(formatStrInSingleQuotes(mapping.Path))
+			buf.WriteString("' MONGODB_CONVERT '")
+			buf.WriteString(formatStrInSingleQuotes(mapping.Conversion))
+			buf.WriteString("'")
+		}
 
 		createStr += buf.String()
 		rowCount++
@@ -170,9 +220,9 @@ func ConstructCreateTableSQL(
 		for i, def := range pkDefs {
 			def = colNameToOriginName[def]
 			if i == len(pkDefs)-1 {
-				pkStr += fmt.Sprintf("`%s`)", formatStr(def))
+				pkStr += fmt.Sprintf("%s)", sqlquote.Ident(def))
 			} else {
-				pkStr += fmt.Sprintf("`%s`,", formatStr(def))
+				pkStr += fmt.Sprintf("%s,", sqlquote.Ident(def))
 			}
 		}
 		if rowCount != 0 {
@@ -202,7 +252,7 @@ func ConstructCreateTableSQL(
 				indexStr += " FULLTEXT "
 
 				if len(indexdef.IndexName) > 0 {
-					indexStr += fmt.Sprintf("`%s`", formatStr(indexdef.IndexName))
+					indexStr += sqlquote.Ident(indexdef.IndexName)
 				}
 				indexStr += "("
 				i := 0
@@ -215,7 +265,7 @@ func ConstructCreateTableSQL(
 					}
 
 					part = colNameToOriginName[part]
-					indexStr += fmt.Sprintf("`%s`", formatStr(part))
+					indexStr += sqlquote.Ident(part)
 					i++
 				}
 
@@ -251,6 +301,9 @@ func ConstructCreateTableSQL(
 					}
 
 				}
+				if !catalog.IsIndexVisible(indexdef) {
+					indexStr += " INVISIBLE"
+				}
 
 			} else {
 				rewriteIndexStr := ""
@@ -264,8 +317,8 @@ func ConstructCreateTableSQL(
 					indexStr = "  KEY "
 					rewriteIndexStr = "  KEY "
 				}
-				indexStr += fmt.Sprintf("`%s` ", formatStr(indexdef.IndexName))
-				rewriteIndexStr += fmt.Sprintf("`%s` ", formatStr(indexdef.IndexName))
+				indexStr += fmt.Sprintf("%s ", sqlquote.Ident(indexdef.IndexName))
+				rewriteIndexStr += fmt.Sprintf("%s ", sqlquote.Ident(indexdef.IndexName))
 				if !catalog.IsNullIndexAlgo(indexdef.IndexAlgo) && !catalog.IsRTreeIndexAlgo(indexdef.IndexAlgo) {
 					indexStr += fmt.Sprintf("USING %s ", indexdef.IndexAlgo)
 				}
@@ -289,8 +342,8 @@ func ConstructCreateTableSQL(
 					}
 
 					originPart := colNameToOriginName[part]
-					indexStr += fmt.Sprintf("`%s`", formatStr(originPart))
-					rewriteIndexStr += fmt.Sprintf("`%s`", formatStr(originPart))
+					indexStr += sqlquote.Ident(originPart)
+					rewriteIndexStr += sqlquote.Ident(originPart)
 					if length, ok := prefixLengths[part]; ok {
 						prefixLength := fmt.Sprintf("(%d)", length)
 						indexStr += prefixLength
@@ -310,6 +363,17 @@ func ConstructCreateTableSQL(
 					indexStr += paramList
 					rewriteIndexStr += paramList
 				}
+				includedColumns, err := indexDefIncludedColumns(indexdef)
+				if err != nil {
+					return "", nil, err
+				}
+				includeList := indexIncludeColumnsToString(includedColumns, colNameToOriginName)
+				indexStr += includeList
+				rewriteIndexStr += includeList
+				if !catalog.IsIndexVisible(indexdef) {
+					indexStr += " INVISIBLE"
+					rewriteIndexStr += " INVISIBLE"
+				}
 				if indexStr != rewriteIndexStr {
 					rewritePairs = append(rewritePairs, struct {
 						display string
@@ -318,8 +382,8 @@ func ConstructCreateTableSQL(
 				}
 			}
 			if indexdef.Comment != "" {
-				indexdef.Comment = strings.Replace(indexdef.Comment, "'", "\\'", -1)
-				indexStr += fmt.Sprintf(" COMMENT '%s'", formatStr(indexdef.Comment))
+				formattedComment := formatStr(indexdef.Comment)
+				indexStr += fmt.Sprintf(" COMMENT '%s'", formattedComment)
 				if len(rewritePairs) > 0 && rewritePairs[len(rewritePairs)-1].display != rewritePairs[len(rewritePairs)-1].rewrite &&
 					strings.HasPrefix(indexStr, rewritePairs[len(rewritePairs)-1].display) {
 					rewritePairs[len(rewritePairs)-1] = struct {
@@ -327,7 +391,7 @@ func ConstructCreateTableSQL(
 						rewrite string
 					}{
 						display: indexStr,
-						rewrite: rewritePairs[len(rewritePairs)-1].rewrite + fmt.Sprintf(" COMMENT '%s'", formatStr(indexdef.Comment)),
+						rewrite: rewritePairs[len(rewritePairs)-1].rewrite + fmt.Sprintf(" COMMENT '%s'", formattedComment),
 					}
 				}
 			}
@@ -357,7 +421,15 @@ func ConstructCreateTableSQL(
 			if _, tempTableDef, err = ctx.Resolve(schemaName, fkDef.Name, snap); err != nil {
 				return err
 			}
-
+			if tempTableDef == nil {
+				enabled, resolveErr := IsForeignKeyChecksEnabled(ctx)
+				if resolveErr != nil {
+					return resolveErr
+				}
+				if !enabled {
+					return nil
+				}
+			}
 			fkDef = tempTableDef
 			return err
 		}
@@ -455,12 +527,17 @@ func ConstructCreateTableSQL(
 			createStr += ",\n"
 		}
 
-		fkRefDbTblName := fmt.Sprintf("`%s`", formatStr(fkTableDef.Name))
-		if cloneStmt != nil || tableDef.DbName != fkTableDef.DbName {
-			fkRefDbTblName = fmt.Sprintf("`%s`.`%s`", formatStr(fkTableDef.DbName), formatStr(fkTableDef.Name))
+		fkRefDbName := fkTableDef.DbName
+		if cloneStmt != nil && (cloneStmt.StmtType == tree.WithinAccCloneDB || cloneStmt.StmtType == tree.BetweenAccCloneDB) &&
+			cloneStmt.SrcTable.SchemaName.String() == fkTableDef.DbName {
+			fkRefDbName = schemaName
 		}
-		createStr += fmt.Sprintf("  CONSTRAINT `%s` FOREIGN KEY (`%s`) REFERENCES %s (`%s`) ON DELETE %s ON UPDATE %s",
-			formatStr(fk.Name), strings.Join(colOriginNames, "`,`"), fkRefDbTblName, strings.Join(fkColOriginNames, "`,`"), strings.ReplaceAll(fk.OnDelete.String(), "_", " "), strings.ReplaceAll(fk.OnUpdate.String(), "_", " "))
+		fkRefDbTblName := sqlquote.Ident(fkTableDef.Name)
+		if cloneStmt != nil || tableDef.DbName != fkTableDef.DbName {
+			fkRefDbTblName = sqlquote.QualifiedIdent(fkRefDbName, fkTableDef.Name)
+		}
+		createStr += fmt.Sprintf("  CONSTRAINT %s FOREIGN KEY (%s) REFERENCES %s (%s) ON DELETE %s ON UPDATE %s",
+			sqlquote.Ident(fk.Name), joinQuotedIdentifiers(colOriginNames), fkRefDbTblName, joinQuotedIdentifiers(fkColOriginNames), strings.ReplaceAll(fk.OnDelete.String(), "_", " "), strings.ReplaceAll(fk.OnUpdate.String(), "_", " "))
 	}
 
 	for _, checkDef := range checkDefs {
@@ -471,6 +548,9 @@ func ConstructCreateTableSQL(
 		createStr += "\n"
 	}
 	createStr += ")"
+	if tableDef.TableType != catalog.SystemExternalRel {
+		createStr += tableCharsetForShowCreate(ctx, displayTableCharset)
+	}
 
 	var comment string
 	var properties []*plan.Property // Collect non-system properties for PROPERTIES clause
@@ -563,20 +643,39 @@ func ConstructCreateTableSQL(
 			cbNames := util.SplitCompositeClusterByColumnName(tableDef.ClusterBy.Name)
 			for i, cbName := range cbNames {
 				if i != 0 {
-					clusterby += fmt.Sprintf(", `%s`", formatStr(cbName))
+					clusterby += fmt.Sprintf(", %s", sqlquote.Ident(cbName))
 				} else {
-					clusterby += fmt.Sprintf("`%s`", formatStr(cbName))
+					clusterby += sqlquote.Ident(cbName)
 				}
 			}
 		} else {
 			//single column cluster by
-			clusterby += fmt.Sprintf("`%s`", formatStr(tableDef.ClusterBy.Name))
+			clusterby += sqlquote.Ident(tableDef.ClusterBy.Name)
 		}
 		clusterby += ")"
 		createStr += clusterby
 	}
 
 	if tableDef.TableType == catalog.SystemExternalRel {
+		if env, found, parseErr := sqliceberg.ParseCreateSQLEnvelope(ctx.GetContext(), tableDef.Createsql); parseErr != nil {
+			return "", nil, parseErr
+		} else if found {
+			createStr += formatIcebergTableOptionsForShowCreate(env)
+			var stmt tree.Statement
+			if ctx != nil {
+				stmt, err = getRewriteSQLStmt(ctx, createStr)
+			}
+			return createStr, stmt, err
+		}
+		if len(mongoColumns) > 0 {
+			createStr += formatMongoDBTableOptionsForShowCreate(mongoEnvelope)
+			var stmt tree.Statement
+			if ctx != nil {
+				stmt, err = getRewriteSQLStmt(ctx, createStr)
+			}
+			return createStr, stmt, err
+		}
+
 		param := &tree.ExternParam{}
 		if err = json.Unmarshal([]byte(tableDef.Createsql), param); err != nil {
 			return "", nil, err
@@ -661,6 +760,105 @@ func ConstructCreateTableSQL(
 	return createStr, stmt, err
 }
 
+func appendTextCharsetForShowCreate(buf *bytes.Buffer, typ plan.Type, tableCharset uint32) {
+	switch types.T(typ.Id) {
+	case types.T_char, types.T_varchar, types.T_text:
+	default:
+		return
+	}
+
+	switch typ.Charset {
+	case uint32(types.CharsetLegacy):
+		// A migrated table default can coexist with a text column whose old
+		// catalog row still has no charset metadata. Preserve that column's
+		// historical bytewise ordering even when it cannot inherit the table
+		// display default.
+		if tableCharset != uint32(types.CharsetUTF8MB4Bin) {
+			buf.WriteString(" COLLATE utf8mb4_bin")
+		}
+	case uint32(types.CharsetUTF8MB4Bin):
+		buf.WriteString(" COLLATE utf8mb4_bin")
+	case uint32(types.CharsetBinary):
+		// Packed binary values can deliberately use a VARCHAR container. COLLATE
+		// binary is the lossless MO spelling for that representation; CHARACTER
+		// SET binary would instead change the physical type to VARBINARY/BLOB.
+		buf.WriteString(" COLLATE binary")
+	case uint32(types.CharsetUTF8):
+		if tableCharset != uint32(types.CharsetUTF8) {
+			buf.WriteString(" COLLATE utf8mb4_general_ci")
+		}
+	}
+}
+
+func effectiveTableCharsetForShowCreate(tableDef *plan.TableDef) uint32 {
+	if tableDef.DefaultCharset != uint32(types.CharsetLegacy) {
+		return tableDef.DefaultCharset
+	}
+	hasTextColumn := false
+	for _, col := range tableDef.Cols {
+		switch types.T(col.Typ.Id) {
+		case types.T_char, types.T_varchar, types.T_text:
+			hasTextColumn = true
+			if col.Typ.Charset == uint32(types.CharsetLegacy) {
+				// Legacy text was ordered bytewise before charset metadata became
+				// meaningful. There is no SQL spelling for CharsetLegacy, so use
+				// utf8mb4_bin as its replay-safe, nonbinary text identity. Using
+				// COLLATE binary here would incorrectly advertise VARCHAR as binary
+				// protocol data.
+				return uint32(types.CharsetUTF8MB4Bin)
+			}
+		}
+	}
+	if !hasTextColumn {
+		return tableDef.DefaultCharset
+	}
+	// Program-authored system definitions predate the table-default field but
+	// now carry explicit UTF-8 on every text column. Treat UTF-8 as their display
+	// default so SHOW CREATE stays concise. A genuinely legacy column above uses
+	// the bytewise display default, causing explicit general_ci peers to be shown.
+	return uint32(types.CharsetUTF8)
+}
+
+func tableCharsetForShowCreate(ctx CompilerContext, charset uint32) string {
+	switch charset {
+	case uint32(types.CharsetUTF8):
+		// collation_server is runtime-configurable. Spell general_ci whenever it
+		// differs from the effective runtime default. Callers such as CDC and
+		// table dump have no compiler context, so they must also spell it: an
+		// unknown target default is not safe to inherit during DDL replay.
+		if ctx == nil {
+			return " COLLATE=utf8mb4_general_ci"
+		}
+		serverCharset, err := tableDefaultCharset(ctx, nil)
+		if err == nil && serverCharset == uint32(types.CharsetUTF8) {
+			return ""
+		}
+		return " COLLATE=utf8mb4_general_ci"
+	case uint32(types.CharsetUTF8MB4Bin):
+		return " COLLATE=utf8mb4_bin"
+	case uint32(types.CharsetBinary):
+		return " CHARACTER SET=binary"
+	default:
+		return ""
+	}
+}
+
+func indexIncludeColumnsToString(includedColumns []string, colNameToOriginName map[string]string) string {
+	if len(includedColumns) == 0 {
+		return ""
+	}
+
+	names := make([]string, 0, len(includedColumns))
+	for _, colName := range includedColumns {
+		resolvedName := catalog.ResolveAlias(colName)
+		if originName := colNameToOriginName[resolvedName]; originName != "" {
+			resolvedName = originName
+		}
+		names = append(names, fmt.Sprintf("`%s`", formatStr(resolvedName)))
+	}
+	return fmt.Sprintf(" INCLUDE (%s)", strings.Join(names, ", "))
+}
+
 func extractTopLevelCheckDefs(tableDef *plan.TableDef) []string {
 	if tableDef == nil || tableDef.Createsql == "" || tableDef.TableType == catalog.SystemExternalRel {
 		return nil
@@ -683,6 +881,42 @@ func extractTopLevelCheckDefs(tableDef *plan.TableDef) []string {
 		}
 	}
 	return checks
+}
+
+func constructCheckDefs(tableDef *plan.TableDef) []string {
+	if tableDef == nil || tableDef.TableType == catalog.SystemExternalRel {
+		return nil
+	}
+	if len(tableDef.Checks) == 0 {
+		return extractTopLevelCheckDefs(tableDef)
+	}
+
+	checks := make([]string, 0, len(tableDef.Checks))
+	for _, check := range tableDef.Checks {
+		if check == nil || check.OriginSql == "" {
+			continue
+		}
+		checks = append(
+			checks,
+			fmt.Sprintf(
+				"CONSTRAINT `%s` CHECK (%s)",
+				formatStr(check.Name),
+				check.OriginSql,
+			),
+		)
+	}
+	if len(checks) == 0 {
+		return extractTopLevelCheckDefs(tableDef)
+	}
+	return checks
+}
+
+func joinQuotedIdentifiers(names []string) string {
+	quoted := make([]string, len(names))
+	for i, name := range names {
+		quoted[i] = sqlquote.Ident(name)
+	}
+	return strings.Join(quoted, ",")
 }
 
 func extractCreateTableDefsSection(createSQL string) (string, bool) {
@@ -740,10 +974,10 @@ func isTopLevelCheckDef(def string) bool {
 
 	trimmed := strings.TrimSpace(def)
 	upper := strings.ToUpper(trimmed)
-	if strings.HasPrefix(upper, "CHECK") {
+	if hasKeywordAt(upper, "CHECK", 0) {
 		return true
 	}
-	if !strings.HasPrefix(upper, "CONSTRAINT") {
+	if !hasKeywordAt(upper, "CONSTRAINT", 0) {
 		return false
 	}
 	return containsKeywordOutsideQuotes(trimmed, "CHECK")
@@ -785,7 +1019,7 @@ func hasKeywordAt(s string, keyword string, pos int) bool {
 }
 
 func isIdentChar(ch byte) bool {
-	return ch == '_' || ch >= '0' && ch <= '9' || ch >= 'A' && ch <= 'Z' || ch >= 'a' && ch <= 'z'
+	return ch == '_' || ch == '$' || ch >= '0' && ch <= '9' || ch >= 'A' && ch <= 'Z' || ch >= 'a' && ch <= 'z'
 }
 
 func findTopLevelByte(s string, target byte) int {
@@ -886,6 +1120,9 @@ func FormatColType(colType plan.Type) string {
 	typ := types.T(colType.Id).ToType()
 
 	ts := typ.String()
+	if typ.Oid == types.T_text && colType.Width == types.MaxTinyTextLen {
+		ts = "TINYTEXT"
+	}
 	// after decimal fix, remove this
 	if typ.Oid.IsDecimal() {
 		ts = "DECIMAL"
@@ -938,7 +1175,7 @@ func FormatColType(colType plan.Type) string {
 	case types.T_bit, types.T_char, types.T_varchar, types.T_binary, types.T_varbinary:
 		suffix = fmt.Sprintf("(%d)", colType.Width)
 
-	case types.T_array_float32, types.T_array_float64:
+	case types.T_array_float32, types.T_array_float64, types.T_array_bf16, types.T_array_float16, types.T_array_int8, types.T_array_uint8:
 		suffix = fmt.Sprintf("(%d)", colType.Width)
 
 	}
@@ -980,6 +1217,68 @@ func formatExternalTableOptionsForShowCreate(param *tree.ExternParam) string {
 		return formatS3ExternalOptionsForShowCreate(param)
 	}
 	return formatInfileExternalOptionsForShowCreate(param)
+}
+
+func formatIcebergTableOptionsForShowCreate(env sqliceberg.CreateSQLEnvelope) string {
+	options := []struct {
+		key   string
+		value string
+	}{
+		{key: "catalog", value: env.Catalog},
+		{key: "namespace", value: env.Namespace},
+		{key: "table", value: env.Table},
+		{key: "ref", value: env.DefaultRef},
+		{key: "read_mode", value: env.ReadMode},
+		{key: "write_mode", value: env.WriteMode},
+	}
+	var builder strings.Builder
+	builder.WriteString(" ENGINE = ICEBERG WITH (")
+	for i, option := range options {
+		if i > 0 {
+			builder.WriteString(", ")
+		}
+		builder.WriteString("\"")
+		builder.WriteString(option.key)
+		builder.WriteString("\" = '")
+		builder.WriteString(formatStrInSingleQuotes(option.value))
+		builder.WriteString("'")
+	}
+	builder.WriteString(")")
+	return builder.String()
+}
+
+func formatMongoDBTableOptionsForShowCreate(env sqlmongodb.CreateSQLEnvelope) string {
+	options := []struct {
+		key   string
+		value string
+	}{
+		{key: "connection", value: env.Connection},
+		{key: "database", value: env.Database},
+		{key: "collection", value: env.Collection},
+		{key: "schema_mode", value: env.SchemaMode},
+		{key: "conversion_mode", value: env.ConversionMode},
+		{key: "max_parallelism", value: fmt.Sprintf("%d", env.MaxParallelism)},
+	}
+	if env.SplitKey != "" {
+		options = append(options, struct {
+			key   string
+			value string
+		}{key: "split_key", value: env.SplitKey})
+	}
+	var builder strings.Builder
+	builder.WriteString(" ENGINE = MONGODB WITH (")
+	for i, option := range options {
+		if i > 0 {
+			builder.WriteString(", ")
+		}
+		builder.WriteString("\"")
+		builder.WriteString(option.key)
+		builder.WriteString("\" = '")
+		builder.WriteString(formatStrInSingleQuotes(option.value))
+		builder.WriteString("'")
+	}
+	builder.WriteString(")")
+	return builder.String()
 }
 
 func formatInfileExternalOptionsForShowCreate(param *tree.ExternParam) string {

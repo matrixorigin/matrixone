@@ -241,23 +241,27 @@ func (l *LocalFS) contentSize(fileSize int64) int64 {
 
 func (l *LocalFS) AllocateCacheData(ctx context.Context, size int) fscache.Data {
 	if l.memCache != nil {
-		l.memCache.cache.EnsureNBytes(withoutEventLogger(ctx), size)
+		ensureCacheDataCapacity(ctx, l.memCache.cache, DefaultCacheDataAllocator(), size)
 	}
 	return DefaultCacheDataAllocator().AllocateCacheData(ctx, size)
 }
 
 func (l *LocalFS) AllocateCacheDataWithHint(ctx context.Context, size int, hints malloc.Hints) fscache.Data {
 	if l.memCache != nil {
-		l.memCache.cache.EnsureNBytes(withoutEventLogger(ctx), size)
+		ensureCacheDataCapacity(ctx, l.memCache.cache, DefaultCacheDataAllocator(), size)
 	}
 	return DefaultCacheDataAllocator().AllocateCacheDataWithHint(ctx, size, hints)
 }
 
 func (l *LocalFS) CopyToCacheData(ctx context.Context, data []byte) fscache.Data {
 	if l.memCache != nil {
-		l.memCache.cache.EnsureNBytes(withoutEventLogger(ctx), len(data))
+		ensureCacheDataCapacity(ctx, l.memCache.cache, DefaultCacheDataAllocator(), len(data))
 	}
 	return DefaultCacheDataAllocator().CopyToCacheData(ctx, data)
+}
+
+func (l *LocalFS) BackingSize(size int) int {
+	return DefaultCacheDataAllocator().BackingSize(size)
 }
 
 func (l *LocalFS) initCaches(ctx context.Context, config CacheConfig) error {
@@ -269,6 +273,7 @@ func (l *LocalFS) initCaches(ctx context.Context, config CacheConfig) error {
 			return moerr.NewInternalError(ctx, "query client is nil")
 		}
 		l.remoteCache = NewRemoteCache(config.QueryClient, config.KeyRouterFactory)
+		l.remoteCache.setAllocator(l)
 		logutil.Info("fileservice: remote cache initialized",
 			zap.Any("fs-name", l.name),
 		)
@@ -447,6 +452,15 @@ func (l *LocalFS) write(ctx context.Context, vector IOVector) (bytesWritten int,
 }
 
 func (l *LocalFS) Read(ctx context.Context, vector *IOVector) (err error) {
+	// Cache updates are deferred below. Keep the merge generation active until
+	// those updates finish so a completed follower can reuse the leader output.
+	var finishMerge func()
+	defer func() {
+		if finishMerge != nil {
+			finishMerge()
+		}
+	}()
+
 	// Record diskIO IO and netwokIO(un memory IO) time Consumption
 	stats := statistic.StatsInfoFromContext(ctx)
 	ioStart := time.Now()
@@ -573,18 +587,25 @@ read_disk_cache:
 	if mayReadMemoryCache || mayReadDiskCache {
 		// may read caches, merge
 		startLock := time.Now()
-		done, wait := l.ioMerger.Merge(vector.ioMergeKey(), maxIOWaitDuration)
+		mergeKey := vector.ioMergeKey()
+		done, generation := l.ioMerger.merge(mergeKey)
 		if done != nil {
-			defer done()
+			finishMerge = done
 			stats.AddLocalFSReadIOMergerTimeConsumption(time.Since(startLock))
 		} else {
-			wait()
+			completed, waitErr := waitForIOGeneration(ctx, mergeKey, generation, maxIOWaitDuration)
 			stats.AddLocalFSReadIOMergerTimeConsumption(time.Since(startLock))
-			if mayReadMemoryCache {
-				goto read_memory_cache
-			} else {
+			if waitErr != nil {
+				return waitErr
+			}
+			if completed {
+				if mayReadMemoryCache {
+					goto read_memory_cache
+				}
 				goto read_disk_cache
 			}
+			// A timed-out follower must not rejoin the same generation forever.
+			// Fall through to its own bounded local read.
 		}
 	}
 

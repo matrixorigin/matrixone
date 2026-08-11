@@ -15,6 +15,7 @@
 package vector
 
 import (
+	"encoding/binary"
 	"errors"
 	"testing"
 	"unsafe"
@@ -24,6 +25,134 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/stretchr/testify/require"
 )
+
+func TestFunctionResultAllocationSurvivesVectorTransfer(t *testing.T) {
+	mp := mpool.MustNewZeroNoFixed()
+	registry, err := mpool.NewAllocationAccountRegistry(1, 16)
+	require.NoError(t, err)
+	account, err := registry.Open(1 << 20)
+	require.NoError(t, err)
+	selection, err := NewAllocationAccountSelection(account, 1, 1, 2, 3, 4)
+	require.NoError(t, err)
+	wrapper, err := NewFunctionResultWrapperWithAllocation(
+		types.T_int64.ToType(), mp, selection,
+	)
+	require.NoError(t, err)
+	require.NoError(t, wrapper.PreExtendAndReset(64))
+	transferred := wrapper.GetResultVector()
+	require.Same(t, selection, transferred.AllocationAccountSelection())
+	firstUsed := account.Snapshot().Used
+	require.Positive(t, firstUsed)
+
+	wrapper.SetResultVector(nil)
+	require.NoError(t, wrapper.PreExtendAndReset(64))
+	require.Same(t, selection, wrapper.GetResultVector().AllocationAccountSelection())
+	require.Greater(t, account.Snapshot().Used, firstUsed)
+
+	transferred.Free(mp)
+	wrapper.Free()
+	require.Zero(t, account.Snapshot().Used)
+}
+
+func TestFunctionResultAppendMultiBytesSharesPayload(t *testing.T) {
+	mp := mpool.MustNewZeroNoFixed()
+	wrapper := NewFunctionResultWrapper(types.T_varchar.ToType(), mp)
+	require.NoError(t, wrapper.PreExtendAndReset(3))
+	result := MustFunctionResult[types.Varlena](wrapper)
+	payload := []byte("non-inline-payload-shared-by-every-row")
+
+	require.NoError(t, result.AppendMultiBytes(payload, false, 3))
+	result.AddNullAt(1)
+
+	vec := result.GetResultVector()
+	require.Equal(t, 3, vec.Length())
+	require.Len(t, vec.GetArea(), len(payload))
+	require.False(t, vec.VarlenaAreaIsDisjoint())
+	require.Equal(t, payload, vec.GetBytesAt(0))
+	require.True(t, vec.IsNull(1))
+	require.Equal(t, payload, vec.GetBytesAt(2))
+
+	wrapper.Free()
+	require.Zero(t, mp.CurrNB())
+}
+
+func TestAppendByteJsonUsesStorageCompatibleTypeCodes(t *testing.T) {
+	mp := mpool.MustNewZeroNoFixed()
+	wrapper := NewFunctionResultWrapper(types.T_json.ToType(), mp)
+	require.NoError(t, wrapper.PreExtendAndReset(2))
+	result := MustFunctionResult[types.Varlena](wrapper)
+
+	newBinaryValue := func(tp bytejson.TpCode, payload []byte) bytejson.ByteJson {
+		data := binary.AppendUvarint(nil, uint64(len(payload)))
+		data = append(data, payload...)
+		return bytejson.ByteJson{Type: tp, Data: data}
+	}
+	opaque := newBinaryValue(bytejson.TpCodeOpaque, []byte{0x01})
+	bit := newBinaryValue(bytejson.TpCodeBit, []byte{0x02})
+	nested, err := bytejson.CreateByteJSON([]any{opaque, bit})
+	require.NoError(t, err)
+
+	require.NoError(t, result.AppendByteJson(opaque, false))
+	require.NoError(t, result.AppendByteJson(nested, false))
+
+	for row, value := range []bytejson.ByteJson{opaque, nested} {
+		want, err := value.Marshal()
+		require.NoError(t, err)
+		require.Equal(t, want, result.vec.GetBytesAt(row))
+	}
+
+	var stored bytejson.ByteJson
+	require.NoError(t, stored.Unmarshal(result.vec.GetBytesAt(1)))
+	require.Equal(t, bytejson.TpCodeBlob, stored.GetArrayElem(0).Type)
+	require.Equal(t, bytejson.TpCodeBlob, stored.GetArrayElem(1).Type)
+	require.Equal(t, "BIT", stored.GetArrayElem(1).TYPE())
+
+	wrapper.Free()
+	require.Equal(t, int64(0), mp.CurrNB())
+}
+
+func TestAppendByteJsonEncodedUsesStorageCompatibleTypeCodes(t *testing.T) {
+	mp := mpool.MustNewZeroNoFixed()
+	wrapper := NewFunctionResultWrapper(types.T_json.ToType(), mp)
+	require.NoError(t, wrapper.PreExtendAndReset(2))
+	result := MustFunctionResult[types.Varlena](wrapper)
+
+	newBinaryValue := func(tp bytejson.TpCode, payload []byte) bytejson.ByteJson {
+		data := binary.AppendUvarint(nil, uint64(len(payload)))
+		data = append(data, payload...)
+		return bytejson.ByteJson{Type: tp, Data: data}
+	}
+	opaque := newBinaryValue(bytejson.TpCodeOpaque, []byte{0x01})
+	bit := newBinaryValue(bytejson.TpCodeBit, []byte{0x02})
+	nested, err := bytejson.CreateByteJSON([]any{opaque, bit})
+	require.NoError(t, err)
+
+	builder := bytejson.NewMergePatchBuilder()
+	require.NoError(t, builder.BeginRow())
+	require.NoError(t, builder.Reset(opaque))
+	require.NoError(t, builder.Finalize())
+	require.NoError(t, result.AppendByteJsonEncoded(builder))
+
+	builder.Clear()
+	require.NoError(t, builder.BeginRow())
+	require.NoError(t, builder.Reset(nested))
+	require.NoError(t, builder.Finalize())
+	require.NoError(t, result.AppendByteJsonEncoded(builder))
+
+	var stored bytejson.ByteJson
+	require.NoError(t, stored.Unmarshal(result.vec.GetBytesAt(0)))
+	require.Equal(t, bytejson.TpCodeBlob, stored.Type)
+	require.Equal(t, `"AQ=="`, stored.String())
+
+	require.NoError(t, stored.Unmarshal(result.vec.GetBytesAt(1)))
+	require.Equal(t, bytejson.TpCodeBlob, stored.GetArrayElem(0).Type)
+	require.Equal(t, bytejson.TpCodeBlob, stored.GetArrayElem(1).Type)
+	require.Equal(t, "BIT", stored.GetArrayElem(1).TYPE())
+	require.Equal(t, `["AQ==", "Ag=="]`, stored.String())
+
+	wrapper.Free()
+	require.Equal(t, int64(0), mp.CurrNB())
+}
 
 type testByteJsonEncoder struct {
 	value bytejson.ByteJson

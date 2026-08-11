@@ -182,10 +182,15 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	logpb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
+	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	txnpb "github.com/matrixorigin/matrixone/pkg/pb/txn"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/version"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/stretchr/testify/require"
@@ -226,9 +231,6 @@ func TestEngineNodesExposesRuntimeStateToScheduler(t *testing.T) {
 			"drained-pipeline":  metadata.WorkState_Drained,
 			"unknown-pipeline":  metadata.WorkState_Unknown,
 		}, nodeWorkStates(nodes))
-		for _, node := range nodes {
-			require.True(t, node.HasMixedCommit)
-		}
 	})
 
 	t.Run("common tenant label route", func(t *testing.T) {
@@ -330,12 +332,9 @@ func TestEngineQueryCandidateProvidersSeparateInventoryAndPool(t *testing.T) {
 	require.ElementsMatch(t,
 		[]string{"app-working", "app-draining", "sys-working"},
 		queryCandidateServiceIDs(candidates))
-	for _, candidate := range candidates {
-		require.True(t, candidate.HasMixedCommit)
-	}
 
 	labels := map[string]string{"account": "app"}
-	nodes, err := e.ResolveQueryCandidatePool(
+	pool, err := e.ResolveQueryCandidatePool(
 		context.Background(),
 		candidates,
 		engine.QueryCandidatePoolRequest{
@@ -346,10 +345,7 @@ func TestEngineQueryCandidateProvidersSeparateInventoryAndPool(t *testing.T) {
 	require.NoError(t, err)
 	require.ElementsMatch(t,
 		[]string{"app-working:6001", "app-draining:6001"},
-		nodeAddresses(nodes))
-	for _, node := range nodes {
-		require.True(t, node.HasMixedCommit)
-	}
+		nodeAddresses(pool.Nodes))
 	require.Equal(t, map[string]string{"account": "app"}, labels)
 }
 
@@ -367,7 +363,247 @@ func TestEngineCandidateDiscoveryExcludesIncompatibleCNBeforePoolFallback(t *tes
 	nodes, err := e.Nodes(false, "app", "user", map[string]string{"account": "app"})
 	require.NoError(t, err)
 	require.Equal(t, []string{"fallback:6001"}, nodeAddresses(nodes))
-	require.True(t, nodes[0].HasMixedCommit)
+}
+
+func TestEngineQueryPoolResolutionSeparatesStrictAndLegacyFallback(t *testing.T) {
+	e := new(Engine)
+	candidates := engine.QueryCandidates{{
+		Service: metadata.CNService{
+			ServiceID:              "shared",
+			PipelineServiceAddress: "shared:6001",
+			WorkState:              metadata.WorkState_Working,
+		},
+		Mcpu: 4,
+	}}
+	request := engine.QueryCandidatePoolRequest{
+		Tenant:        "app",
+		CNLabel:       map[string]string{"account": "app"},
+		RequestedPool: "tenant-label:account=app",
+	}
+
+	legacy, err := e.ResolveQueryCandidatePool(context.Background(), candidates, request)
+	require.NoError(t, err)
+	require.Equal(t, engine.QueryPoolResolutionSharedUnlabeled, legacy.Resolution)
+	require.True(t, legacy.Fallback)
+	require.Equal(t, "shared-unlabeled", legacy.Identity)
+	require.Equal(t, []string{"shared:6001"}, nodeAddresses(legacy.Nodes))
+
+	request.FallbackPolicy = engine.QueryPoolFallbackStrict
+	strict, err := e.ResolveQueryCandidatePool(context.Background(), candidates, request)
+	require.NoError(t, err)
+	require.Equal(t, engine.QueryPoolResolutionNoMatch, strict.Resolution)
+	require.False(t, strict.Fallback)
+	require.Empty(t, strict.Nodes)
+	require.Equal(t, "tenant-label:account=app", strict.Identity)
+	require.Equal(t, "strict-rejected-shared-unlabeled", strict.FallbackReason)
+}
+
+func TestEngineQueryPoolStrictModeWithoutLabelSelectorFailsClosed(t *testing.T) {
+	tenantALabel := map[string]metadata.LabelList{
+		"account": {Labels: []string{"tenant-a"}},
+	}
+	tenantBLabel := map[string]metadata.LabelList{
+		"account": {Labels: []string{"tenant-b"}},
+	}
+	candidates := engine.QueryCandidates{
+		{Service: metadata.CNService{
+			ServiceID: "tenant-a", PipelineServiceAddress: "tenant-a:6001",
+			Labels: tenantALabel, WorkState: metadata.WorkState_Working,
+		}, Mcpu: 4},
+		{Service: metadata.CNService{
+			ServiceID: "tenant-b", PipelineServiceAddress: "tenant-b:6001",
+			Labels: tenantBLabel, WorkState: metadata.WorkState_Working,
+		}, Mcpu: 4},
+	}
+	request := engine.QueryCandidatePoolRequest{
+		Tenant:         "tenant-a",
+		RequestedPool:  "tenant:tenant-a",
+		FallbackPolicy: engine.QueryPoolFallbackStrict,
+	}
+
+	strict, err := new(Engine).ResolveQueryCandidatePool(context.Background(), candidates, request)
+	require.NoError(t, err)
+	require.Empty(t, strict.Nodes)
+	require.False(t, strict.Fallback)
+	require.Equal(t, engine.QueryPoolResolutionNoMatch, strict.Resolution)
+	require.Equal(t, request.RequestedPool, strict.Identity)
+	require.Equal(t, "strict-missing-label-selector", strict.FallbackReason)
+
+	request.FallbackPolicy = engine.QueryPoolFallbackLegacyCompatible
+	legacy, err := new(Engine).ResolveQueryCandidatePool(context.Background(), candidates, request)
+	require.NoError(t, err)
+	require.Equal(t, engine.QueryPoolResolutionAllCompatible, legacy.Resolution)
+	require.ElementsMatch(t,
+		[]string{"tenant-a:6001", "tenant-b:6001"},
+		nodeAddresses(legacy.Nodes))
+}
+
+func TestEngineQueryPoolResolutionCorrelatesCandidatesWithoutServiceID(t *testing.T) {
+	appLabels := map[string]metadata.LabelList{
+		"account": {Labels: []string{"app"}},
+	}
+	otherLabels := map[string]metadata.LabelList{
+		"account": {Labels: []string{"other"}},
+	}
+	candidates := engine.QueryCandidates{
+		{Service: metadata.CNService{
+			PipelineServiceAddress: "app:6001", Labels: appLabels,
+			WorkState: metadata.WorkState_Working,
+		}, Mcpu: 4},
+		{Service: metadata.CNService{
+			PipelineServiceAddress: "other:6001", Labels: otherLabels,
+			WorkState: metadata.WorkState_Working,
+		}, Mcpu: 8},
+		{Service: metadata.CNService{
+			PipelineServiceAddress: "app-draining:6001", Labels: appLabels,
+			WorkState: metadata.WorkState_Draining,
+		}, Mcpu: 2},
+	}
+
+	pool, err := new(Engine).ResolveQueryCandidatePool(
+		context.Background(), candidates, engine.QueryCandidatePoolRequest{
+			Tenant: "app", CNLabel: map[string]string{"account": "app"},
+		})
+	require.NoError(t, err)
+	require.Equal(t, []string{"app:6001", "app-draining:6001"}, nodeAddresses(pool.Nodes))
+	require.Equal(t, 4, pool.Nodes[0].Mcpu)
+	require.Equal(t, 2, pool.Nodes[1].Mcpu)
+}
+
+func TestEngineStrictPoolPreservesIneligibleExactMembersWithoutWidening(t *testing.T) {
+	candidates := engine.QueryCandidates{
+		{
+			Service: metadata.CNService{
+				ServiceID: "exact-draining", PipelineServiceAddress: "exact:6001",
+				Labels: map[string]metadata.LabelList{
+					"account": {Labels: []string{"app"}},
+				},
+				WorkState: metadata.WorkState_Draining,
+			},
+			Mcpu: 4,
+		},
+		{
+			Service: metadata.CNService{
+				ServiceID: "shared-working", PipelineServiceAddress: "shared:6001",
+				WorkState: metadata.WorkState_Working,
+			},
+			Mcpu: 4,
+		},
+	}
+
+	pool, err := new(Engine).ResolveQueryCandidatePool(
+		context.Background(), candidates, engine.QueryCandidatePoolRequest{
+			Tenant: "app", CNLabel: map[string]string{"account": "app"},
+			RequestedPool:  "tenant-label:account=app",
+			FallbackPolicy: engine.QueryPoolFallbackStrict,
+		})
+	require.NoError(t, err)
+	require.False(t, pool.Fallback)
+	require.Equal(t, engine.QueryPoolResolutionExactLabels, pool.Resolution)
+	require.Equal(t, []string{"exact:6001"}, nodeAddresses(pool.Nodes))
+	require.Equal(t, "strict-rejected-shared-unlabeled", pool.FallbackReason)
+}
+
+func TestEngineCandidateDiscoveryUsesPerCNReportedCPU(t *testing.T) {
+	valid := newEngineNodesCNStore("valid", "valid:6001", nil, metadata.WorkState_Working, version.CommitID)
+	valid.Resource = logpb.Resource{CPUTotal: 12}
+	missing := newEngineNodesCNStore("missing", "missing:6001", nil, metadata.WorkState_Working, version.CommitID)
+	overflow := newEngineNodesCNStore("overflow", "overflow:6001", nil, metadata.WorkState_Working, version.CommitID)
+	overflow.Resource = logpb.Resource{CPUTotal: ^uint64(0)}
+	e := newEngineWithClusterDetails(t, logpb.ClusterDetails{CNStores: []logpb.CNStore{valid, missing, overflow}})
+
+	candidates, err := e.DiscoverQueryCandidates(context.Background())
+	require.NoError(t, err)
+	require.Len(t, candidates, 3)
+	mcpu := make(map[string]int, len(candidates))
+	for _, candidate := range candidates {
+		mcpu[candidate.Service.ServiceID] = candidate.Mcpu
+	}
+	require.Equal(t, map[string]int{
+		"valid": 12, "missing": 1, "overflow": 1,
+	}, mcpu)
+}
+
+func TestEngineQueryPoolResolutionRejectsInvalidFallbackPolicy(t *testing.T) {
+	_, err := new(Engine).ResolveQueryCandidatePool(
+		context.Background(), nil, engine.QueryCandidatePoolRequest{
+			FallbackPolicy: engine.QueryPoolFallbackPolicy(99),
+		})
+	require.Error(t, err)
+}
+
+func TestPreparedBinarySchedulingExcludesMixedVersionCN(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		peerCommit string
+	}{
+		{name: "peer is older", peerCommit: "older-than-" + version.CommitID},
+		{name: "peer is newer", peerCommit: "newer-than-" + version.CommitID},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+			txnOp.EXPECT().Snapshot().Return(txnpb.CNTxnSnapshot{}, nil)
+			proc := testutil.NewProcess(t)
+			ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
+			proc.Ctx = ctx
+			proc.ReplaceTopCtx(ctx)
+			proc.Base.TxnOperator = txnOp
+			binaryValue := []byte{'A', 'B', 0, 0}
+			params := vector.NewVec(types.T_text.ToType())
+			require.NoError(t, vector.AppendBytes(params, binaryValue, false, proc.Mp()))
+			proc.SetOwnedPrepareParamsWithIsBin(params, []bool{true})
+			t.Cleanup(proc.Free)
+
+			e := newEngineWithClusterDetails(t, logpb.ClusterDetails{CNStores: []logpb.CNStore{
+				newEngineNodesCNStore("compatible-cn", "compatible:6001", nil, metadata.WorkState_Working, version.CommitID),
+				newEngineNodesCNStore("mixed-version-cn", "mixed-version:6001", nil, metadata.WorkState_Working, tc.peerCommit),
+			}})
+
+			candidates, err := e.DiscoverQueryCandidates(context.Background())
+			require.NoError(t, err)
+			require.Len(t, candidates, 1)
+			require.Equal(t, "compatible-cn", candidates[0].Service.ServiceID)
+			require.Equal(t, version.CommitID, candidates[0].Service.CommitID)
+
+			pool, err := e.ResolveQueryCandidatePool(
+				context.Background(), candidates, engine.QueryCandidatePoolRequest{})
+			require.NoError(t, err)
+			require.Equal(t, engine.QueryPoolResolutionAllCompatible, pool.Resolution)
+			require.False(t, pool.Fallback)
+			require.Equal(t, []string{"compatible:6001"}, nodeAddresses(pool.Nodes))
+
+			// Remote ProcessInfo is built only for the workers that survived
+			// discovery and pool resolution. This models the coordinator send
+			// boundary and proves that an incompatible worker never receives an
+			// is_bin field it might silently ignore.
+			deliveries := make(map[string]pipeline.ProcessInfo, len(pool.Nodes))
+			for _, node := range pool.Nodes {
+				info, buildErr := proc.BuildProcessInfo("select ?")
+				require.NoError(t, buildErr)
+				payload, marshalErr := info.Marshal()
+				require.NoError(t, marshalErr)
+				decoded := pipeline.ProcessInfo{}
+				require.NoError(t, decoded.Unmarshal(payload))
+				deliveries[node.Addr] = decoded
+			}
+			require.NotContains(t, deliveries, "mixed-version:6001")
+			delivered, ok := deliveries["compatible:6001"]
+			require.True(t, ok)
+			require.Equal(t, []bool{true}, delivered.PrepareParams.IsBin)
+
+			decodedParams, err := vector.NewVecWithDataCopy(
+				types.T_text.ToType(),
+				int(delivered.PrepareParams.Length),
+				delivered.PrepareParams.Data,
+				delivered.PrepareParams.Area,
+				proc.Mp(),
+			)
+			require.NoError(t, err)
+			require.Equal(t, binaryValue, decodedParams.GetRawBytesAt(0))
+			decodedParams.Free(proc.Mp())
+		})
+	}
 }
 
 func TestEngineCandidateDiscoveryMarksOldCommitOutsideWorkingSet(t *testing.T) {
@@ -384,13 +620,11 @@ func TestEngineCandidateDiscoveryMarksOldCommitOutsideWorkingSet(t *testing.T) {
 			candidates, err := e.DiscoverQueryCandidates(context.Background())
 			require.NoError(t, err)
 			require.Len(t, candidates, 1)
-			require.True(t, candidates[0].HasMixedCommit)
 
-			nodes, err := e.ResolveQueryCandidatePool(
+			pool, err := e.ResolveQueryCandidatePool(
 				context.Background(), candidates, engine.QueryCandidatePoolRequest{})
 			require.NoError(t, err)
-			require.Len(t, nodes, 1)
-			require.True(t, nodes[0].HasMixedCommit)
+			require.Len(t, pool.Nodes, 1)
 		})
 	}
 }

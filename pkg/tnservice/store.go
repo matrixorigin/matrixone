@@ -17,8 +17,8 @@ package tnservice
 import (
 	"context"
 	"errors"
-	"github.com/matrixorigin/matrixone/pkg/queryservice/client"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"go.uber.org/zap"
@@ -39,6 +39,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/queryservice"
+	"github.com/matrixorigin/matrixone/pkg/queryservice/client"
 	"github.com/matrixorigin/matrixone/pkg/shardservice"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
@@ -113,6 +114,17 @@ type store struct {
 	replicas            *sync.Map
 	stopper             *stopper.Stopper
 	shutdownC           chan struct{}
+	heartbeatInFlight   atomic.Bool
+	commandPollNeeded   atomic.Bool
+	commandPollWakeup   chan struct{}
+	commandMu           sync.Mutex
+	shutdownAckMu       sync.Mutex
+	lastCommandBatchID  uint64
+	ackedCommandBatchID atomic.Uint64
+	appliedCommandIDs   map[logservice.ScheduleCommandIdentity]struct{}
+	shutdownBatchID     atomic.Uint64
+	lastCommandHash     [32]byte
+	legacyDedupeArmed   bool
 
 	options struct {
 		logServiceClientFactory func(metadata.TNShard) (logservice.Client, error)
@@ -234,20 +246,21 @@ func (s *store) Start() error {
 		}
 	}
 	s.rt.SubLogger(runtime.SystemInit).Info("dn heartbeat task started")
-	return s.stopper.RunTask(s.heartbeatTask)
+	return s.stopper.RunTask(s.controlTask)
 }
 
 func (s *store) Close() error {
+	// Reject new replica calls and cancel active start contexts before waiting
+	// for store tasks. Storage remains open until the RPC server drains below.
+	s.replicas.Range(func(_, value any) bool {
+		r := value.(*replica)
+		r.cancelStart(false)
+		return true
+	})
 	s.stopper.Stop()
 	s.moCluster.Close()
 
 	var err error
-	// Reject new replica calls and cancel active call contexts before waiting
-	// for the RPC server to drain. Storage remains open until the drain ends.
-	s.replicas.Range(func(_, value any) bool {
-		value.(*replica).cancelStart(false)
-		return true
-	})
 	if s.queryService != nil {
 		err = errors.Join(err, s.queryService.Close())
 	}
@@ -333,9 +346,7 @@ func (s *store) createReplicaLocked(shard metadata.TNShard) error {
 	}
 
 	err := s.stopper.RunTask(func(stopperCtx context.Context) {
-		stopCancelPropagation := context.AfterFunc(stopperCtx, func() {
-			r.cancelStart(false)
-		})
+		stopCancelPropagation := propagateReplicaStopperCancellation(stopperCtx, r)
 		defer stopCancelPropagation()
 
 		for {
@@ -403,6 +414,15 @@ func (s *store) createReplicaLocked(shard metadata.TNShard) error {
 	return nil
 }
 
+func propagateReplicaStopperCancellation(
+	stopperCtx context.Context,
+	r *replica,
+) func() bool {
+	return context.AfterFunc(stopperCtx, func() {
+		r.cancelStart(false)
+	})
+}
+
 func waitCreateRetry(stopperCtx, createCtx context.Context) error {
 	timer := time.NewTimer(retryCreateStorageInterval)
 	defer timer.Stop()
@@ -418,8 +438,6 @@ func waitCreateRetry(stopperCtx, createCtx context.Context) error {
 
 func (s *store) removeReplicaLocked(tnShardID uint64) error {
 	if r := s.getReplica(tnShardID); r != nil {
-		r.cancelStart(true)
-		r.waitStartCompleted()
 		err := r.close(true)
 		s.replicas.CompareAndDelete(tnShardID, r)
 		s.removeTNShardLocked(tnShardID)

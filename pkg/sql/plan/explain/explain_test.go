@@ -28,7 +28,61 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
+	"github.com/stretchr/testify/require"
 )
+
+func TestGetNodeBasicInfoApplyType(t *testing.T) {
+	tests := []struct {
+		name      string
+		applyType plan2.Node_ApplyType
+		want      string
+	}{
+		{name: "cross", applyType: plan2.Node_CROSSAPPLY, want: "CROSS APPLY"},
+		{name: "outer", applyType: plan2.Node_OUTERAPPLY, want: "OUTER APPLY"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			node := &plan2.Node{NodeType: plan2.Node_APPLY, ApplyType: test.applyType}
+			got, err := NewNodeDescriptionImpl(node).GetNodeBasicInfo(
+				context.Background(),
+				&ExplainOptions{Format: EXPLAIN_FORMAT_TEXT},
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got != test.want {
+				t.Fatalf("expected %q, got %q", test.want, got)
+			}
+		})
+	}
+}
+
+func TestAssertConditionExplainLabel(t *testing.T) {
+	node := &plan2.Node{
+		NodeType:   plan2.Node_ASSERT,
+		FilterList: []*plan2.Expr{plan.MakePlan2BoolConstExprWithType(true)},
+	}
+	got, err := NewNodeDescriptionImpl(node).GetFilterConditionInfo(
+		context.Background(),
+		&ExplainOptions{Format: EXPLAIN_FORMAT_TEXT},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(got, "Assert Cond: ") {
+		t.Fatalf("expected Assert Cond label, got %q", got)
+	}
+	labels, err := NewMarshalNodeImpl(node).GetNodeLabels(
+		context.Background(),
+		&ExplainOptions{Format: EXPLAIN_FORMAT_TEXT},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(labels) != 1 || labels[0].Name != Label_Assert {
+		t.Fatalf("expected one Assert label without duplicate Filter conditions, got %#v", labels)
+	}
+}
 
 func TestSingleSql(t *testing.T) {
 	// input := "explain verbose SELECT N_REGIONKEY + 2 as a, N_REGIONKEY/2, N_REGIONKEY* N_NATIONKEY, N_REGIONKEY % N_NATIONKEY, N_REGIONKEY - N_NATIONKEY FROM NATION WHERE -N_NATIONKEY < -20"
@@ -64,7 +118,7 @@ func TestBasicSqlExplain(t *testing.T) {
 		"explain SELECT N_NAME, N_REGIONKEY FROM NATION WHERE N_REGIONKEY > 0 AND N_NAME LIKE '%AA' ORDER BY N_NAME DESC, N_REGIONKEY limit 10",
 		"explain SELECT N_NAME, N_REGIONKEY FROM NATION WHERE N_REGIONKEY > 0 AND N_NAME LIKE '%AA' ORDER BY N_NAME DESC, N_REGIONKEY LIMIT 10 offset 20",
 		"explain verbose select case when p_type like 'PROMO%' then l_extendedprice * (1 - l_discount) when p_type like 'PRX%' then l_extendedprice * (2 - l_discount) else 0 end from lineitem,part where l_shipdate < date '1996-04-01' + interval '1' month",
-		"explain verbose select column_2 from (values row(0, 1, cast('[3, 4, 5]' as vecf32(3))))",
+		"explain verbose select column_2 from (values row(0, 1, cast('[3, 4, 5]' as vecf32(3)))) as v",
 	}
 	mockOptimizer := plan.NewMockOptimizer(false)
 	runTestShouldPass(mockOptimizer, t, sqls)
@@ -630,8 +684,8 @@ func TestAnalyzeInfoDescribeImpl_GetDescription_ReadSize(t *testing.T) {
 				"OutputSize=",
 				" ReadSize=", // Format: ReadSize=total|s3|disk
 				"|",          // Check for pipe separator
-				"MemorySize=",
 				"inputBlocks=10",
+				" MemorySize=",
 			},
 			wantNotContains: []string{
 				" S3ReadSize=",
@@ -819,4 +873,223 @@ func TestPositionFunctionExplain(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestLikeWithEscapeExplain(t *testing.T) {
+	ctx := context.Background()
+	options := NewExplainDefaultOptions()
+	literal := func(s string) *plan2.Expr {
+		return &plan2.Expr{
+			Typ: plan2.Type{Id: int32(types.T_varchar)},
+			Expr: &plan2.Expr_Lit{Lit: &plan2.Literal{
+				Value: &plan2.Literal_Sval{Sval: s},
+			}},
+		}
+	}
+	operator := func(name string) *plan2.Expr {
+		registered, err := function.GetFunctionByName(ctx, name, []types.Type{
+			types.T_varchar.ToType(),
+			types.T_varchar.ToType(),
+			types.T_varchar.ToType(),
+		})
+		if err != nil {
+			t.Fatalf("resolve %s: %v", name, err)
+		}
+		return &plan2.Expr{
+			Typ: plan2.Type{Id: int32(types.T_bool)},
+			Expr: &plan2.Expr_F{F: &plan2.Function{
+				Func: &plan2.ObjectRef{Obj: registered.GetEncodedOverloadID(), ObjName: name},
+				Args: []*plan2.Expr{literal("a_b"), literal("a!_b"), literal("!")},
+			}},
+		}
+	}
+	not := func(arg *plan2.Expr) *plan2.Expr {
+		registered, err := function.GetFunctionByName(ctx, "not", []types.Type{types.T_bool.ToType()})
+		if err != nil {
+			t.Fatalf("resolve not: %v", err)
+		}
+		return &plan2.Expr{
+			Typ: plan2.Type{Id: int32(types.T_bool)},
+			Expr: &plan2.Expr_F{F: &plan2.Function{
+				Func: &plan2.ObjectRef{Obj: registered.GetEncodedOverloadID(), ObjName: "not"},
+				Args: []*plan2.Expr{arg},
+			}},
+		}
+	}
+
+	tests := []struct {
+		name string
+		expr *plan2.Expr
+		want string
+	}{
+		{name: "like", expr: operator("like"), want: "('a_b' like 'a!_b' ESCAPE '!')"},
+		{name: "ilike", expr: operator("ilike"), want: "('a_b' ilike 'a!_b' ESCAPE '!')"},
+		{name: "not like", expr: not(operator("like")), want: "(not ('a_b' like 'a!_b' ESCAPE '!'))"},
+		{name: "not ilike", expr: not(operator("ilike")), want: "(not ('a_b' ilike 'a!_b' ESCAPE '!'))"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			buf := bytes.NewBuffer(nil)
+			err := describeExpr(ctx, tt.expr, options, buf)
+			if err != nil {
+				t.Fatalf("describeExpr() error = %v", err)
+			}
+			if got := buf.String(); got != tt.want {
+				t.Fatalf("describeExpr() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestExplainOrderedGroupConcat(t *testing.T) {
+	ctx := context.Background()
+	registered, err := function.GetFunctionByName(
+		ctx,
+		"group_concat",
+		[]types.Type{types.T_varchar.ToType()},
+	)
+	if err != nil {
+		t.Fatalf("resolve group_concat: %v", err)
+	}
+	ordinaryID := registered.GetEncodedOverloadID()
+	for _, test := range []struct {
+		name string
+		id   int64
+		want string
+	}{
+		{
+			name: "ordinary",
+			id:   ordinaryID,
+			want: "group_concat(tw.v ORDER BY tw.k DESC NULLS FIRST SEPARATOR '~')",
+		},
+		{
+			name: "distinct",
+			id:   int64(uint64(ordinaryID) | function.Distinct),
+			want: "group_concat(DISTINCT tw.v ORDER BY tw.k DESC NULLS FIRST SEPARATOR '~')",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			fn := &plan2.Function{
+				Func: &plan2.ObjectRef{
+					ObjName: "group_concat",
+					Obj:     test.id,
+				},
+				Args: []*plan2.Expr{
+					{
+						Typ:  plan2.Type{Id: int32(types.T_varchar)},
+						Expr: &plan2.Expr_Col{Col: &plan2.ColRef{Name: "tw.v"}},
+					},
+					{
+						Typ:  plan2.Type{Id: int32(types.T_int64)},
+						Expr: &plan2.Expr_Col{Col: &plan2.ColRef{Name: "tw.k"}},
+					},
+				},
+				AggConfigType: plan2.AggregateConfigType_AGG_CONFIG_GROUP_CONCAT_ORDER,
+				AggConfig: []byte{
+					1,
+					0, 0, 0, 1,
+					0, 0, 0, 1,
+					byte(plan2.OrderBySpec_DESC | plan2.OrderBySpec_NULLS_FIRST),
+					0, 0, 0, 1,
+					'~',
+				},
+			}
+			buf := bytes.NewBuffer(nil)
+			err := explainOrderedGroupConcat(ctx, fn, &ExplainOptions{}, buf)
+			if err != nil {
+				t.Fatalf("explainOrderedGroupConcat() error = %v", err)
+			}
+			if got := buf.String(); got != test.want {
+				t.Fatalf("explainOrderedGroupConcat() = %q, want %q", got, test.want)
+			}
+		})
+	}
+
+	t.Run("invalid config", func(t *testing.T) {
+		err := explainOrderedGroupConcat(
+			ctx,
+			&plan2.Function{
+				Func:      &plan2.ObjectRef{ObjName: "group_concat", Obj: ordinaryID},
+				AggConfig: []byte{1},
+			},
+			&ExplainOptions{},
+			bytes.NewBuffer(nil),
+		)
+		if err == nil {
+			t.Fatal("expected invalid ordered group_concat config")
+		}
+	})
+
+	t.Run("order argument out of range", func(t *testing.T) {
+		err := explainOrderedGroupConcat(
+			ctx,
+			&plan2.Function{
+				Func: &plan2.ObjectRef{ObjName: "group_concat", Obj: ordinaryID},
+				AggConfig: []byte{
+					1,
+					0, 0, 0, 1,
+					0, 0, 0, 1,
+					byte(plan2.OrderBySpec_ASC),
+					0, 0, 0, 0,
+				},
+			},
+			&ExplainOptions{},
+			bytes.NewBuffer(nil),
+		)
+		if err == nil {
+			t.Fatal("expected invalid ordered group_concat argument index")
+		}
+	})
+}
+
+func TestExplainOrderedPercentile(t *testing.T) {
+	ctx := context.Background()
+	value := &plan2.Expr{
+		Typ:  plan2.Type{Id: int32(types.T_int64)},
+		Expr: &plan2.Expr_Col{Col: &plan2.ColRef{Name: "tw.v"}},
+	}
+	percentile := plan.MakePlan2Float64ConstExprWithType(0.95)
+
+	for _, tc := range []struct {
+		name string
+		fn   string
+		desc byte
+		want string
+	}{
+		{name: "ascending continuous", fn: "percentile_cont", want: "percentile_cont(0.95) WITHIN GROUP (ORDER BY tw.v ASC)"},
+		{name: "descending discrete", fn: "percentile_disc", desc: 1, want: "percentile_disc(0.95) WITHIN GROUP (ORDER BY tw.v DESC)"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			registered, err := function.GetFunctionByName(ctx, tc.fn,
+				[]types.Type{types.T_int64.ToType(), types.T_float64.ToType()})
+			require.NoError(t, err)
+			fn := &plan2.Function{
+				Func: &plan2.ObjectRef{Obj: registered.GetEncodedOverloadID(), ObjName: tc.fn},
+				Args: []*plan2.Expr{value, percentile}, AggConfig: []byte{tc.desc},
+			}
+			buf := bytes.NewBuffer(nil)
+			require.NoError(t, explainOrderedPercentile(ctx, fn, &ExplainOptions{}, buf))
+			require.Equal(t, tc.want, buf.String())
+
+			// Exercise the normal EXPLAIN dispatcher as well as the formatter
+			// helper. Ordered percentiles are STANDARD_FUNCTIONs with a special
+			// WITHIN GROUP rendering.
+			expr := &plan2.Expr{
+				Typ:  plan2.Type{Id: int32(types.T_float64)},
+				Expr: &plan2.Expr_F{F: fn},
+			}
+			buf.Reset()
+			require.NoError(t, describeExpr(ctx, expr, &ExplainOptions{}, buf))
+			require.Equal(t, tc.want, buf.String())
+		})
+	}
+
+	t.Run("invalid argument count", func(t *testing.T) {
+		err := explainOrderedPercentile(ctx, &plan2.Function{
+			Func: &plan2.ObjectRef{ObjName: "percentile_cont"},
+			Args: []*plan2.Expr{value},
+		}, &ExplainOptions{}, bytes.NewBuffer(nil))
+		require.Error(t, err)
+	})
 }

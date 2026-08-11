@@ -7,49 +7,55 @@ SHOW CHARSET LIKE 'utf8%';
 Charset    Description    Default collation    Maxlen
 SHOW CHARACTER SET WHERE Charset = 'utf8mb4';
 Charset    Description    Default collation    Maxlen
+SELECT CHARACTER_SET_NAME, DEFAULT_COLLATE_NAME, MAXLEN
+FROM information_schema.CHARACTER_SETS
+ORDER BY CHARACTER_SET_NAME;
+character_set_name    default_collate_name    maxlen
+binary    binary    1
+utf8    utf8_bin    4
+utf8mb4    utf8mb4_bin    4
 SHOW COLLATION;
 Collation    Charset    Id    Default    Compiled    Sortlen    Pad_attribute
 binary    binary    63    YES    Yes    1    NO PAD
-utf8_bin    utf8    83    YES    Yes    1    NO PAD
-utf8_general_ci    utf8    33        Yes    1    PAD SPACE
-utf8_unicode_ci    utf8    192        Yes    1    PAD SPACE
-utf8mb4_0900_ai_ci    utf8mb4    255        Yes    0    NO PAD
-utf8mb4_0900_bin    utf8mb4    309        Yes    1    NO PAD
-utf8mb4_bin    utf8mb4    46    YES    Yes    1    NO PAD
-utf8mb4_de_pb_0900_ai_ci    utf8mb4    256        Yes    0    NO PAD
-utf8mb4_general_ci    utf8mb4    45        Yes    1    PAD SPACE
-utf8mb4_is_0900_ai_ci    utf8mb4    257        Yes    0    NO PAD
-utf8mb4_lv_0900_ai_ci    utf8mb4    258        Yes    0    NO PAD
-utf8mb4_unicode_ci    utf8mb4    224        Yes    1    PAD SPACE
+utf8_bin    utf8    83        Yes    1    PAD SPACE
+utf8_general_ci    utf8    33    YES    Yes    1    PAD SPACE
+utf8mb4_bin    utf8mb4    46        Yes    1    PAD SPACE
+utf8mb4_general_ci    utf8mb4    45    YES    Yes    1    PAD SPACE
 SHOW COLLATION LIKE 'utf8mb4%';
 Collation    Charset    Id    Default    Compiled    Sortlen    Pad_attribute
-utf8mb4_0900_ai_ci    utf8mb4    255        Yes    0    NO PAD
-utf8mb4_0900_bin    utf8mb4    309        Yes    1    NO PAD
-utf8mb4_bin    utf8mb4    46    YES    Yes    1    NO PAD
-utf8mb4_de_pb_0900_ai_ci    utf8mb4    256        Yes    0    NO PAD
-utf8mb4_general_ci    utf8mb4    45        Yes    1    PAD SPACE
-utf8mb4_is_0900_ai_ci    utf8mb4    257        Yes    0    NO PAD
-utf8mb4_lv_0900_ai_ci    utf8mb4    258        Yes    0    NO PAD
-utf8mb4_unicode_ci    utf8mb4    224        Yes    1    PAD SPACE
+utf8mb4_bin    utf8mb4    46        Yes    1    PAD SPACE
+utf8mb4_general_ci    utf8mb4    45    YES    Yes    1    PAD SPACE
 SHOW COLLATION WHERE Charset = 'utf8mb4';
 Collation    Charset    Id    Default    Compiled    Sortlen    Pad_attribute
-utf8mb4_0900_ai_ci    utf8mb4    255        Yes    0    NO PAD
-utf8mb4_0900_bin    utf8mb4    309        Yes    1    NO PAD
-utf8mb4_bin    utf8mb4    46    YES    Yes    1    NO PAD
-utf8mb4_de_pb_0900_ai_ci    utf8mb4    256        Yes    0    NO PAD
-utf8mb4_general_ci    utf8mb4    45        Yes    1    PAD SPACE
-utf8mb4_is_0900_ai_ci    utf8mb4    257        Yes    0    NO PAD
-utf8mb4_lv_0900_ai_ci    utf8mb4    258        Yes    0    NO PAD
-utf8mb4_unicode_ci    utf8mb4    224        Yes    1    PAD SPACE
+utf8mb4_bin    utf8mb4    46        Yes    1    PAD SPACE
+utf8mb4_general_ci    utf8mb4    45    YES    Yes    1    PAD SPACE
 SHOW COLLATION WHERE Collation = 'utf8mb4_bin';
 Collation    Charset    Id    Default    Compiled    Sortlen    Pad_attribute
-utf8mb4_bin    utf8mb4    46    YES    Yes    1    NO PAD
+utf8mb4_bin    utf8mb4    46        Yes    1    PAD SPACE
 SHOW COLLATION WHERE Charset = 'utf8mb4' AND Collation LIKE '%bin%';
 Collation    Charset    Id    Default    Compiled    Sortlen    Pad_attribute
-utf8mb4_0900_bin    utf8mb4    309        Yes    1    NO PAD
-utf8mb4_bin    utf8mb4    46    YES    Yes    1    NO PAD
+utf8mb4_bin    utf8mb4    46        Yes    1    PAD SPACE
 CREATE DATABASE charset_test;
 USE charset_test;
+CREATE TABLE charset_metadata_repro (
+c_char CHAR(8),
+c_varchar VARCHAR(128),
+c_text TEXT
+);
+SELECT c.data_type, c.character_set_name,
+c.character_maximum_length, c.character_octet_length, cs.maxlen
+FROM information_schema.columns c
+LEFT JOIN information_schema.character_sets cs
+ON c.character_set_name = cs.character_set_name
+WHERE c.table_schema = 'charset_test'
+AND c.table_name = 'charset_metadata_repro'
+AND c.column_name IN ('c_char', 'c_varchar', 'c_text')
+ORDER BY c.ordinal_position;
+data_type    character_set_name    character_maximum_length    character_octet_length    maxlen
+char    utf8    8    32    4
+varchar    utf8    128    512    4
+text    utf8    0    0    4
+DROP TABLE charset_metadata_repro;
 DROP DATABASE IF EXISTS charset_test_utf8;
 CREATE DATABASE charset_test_utf8 CHARACTER SET utf8;
 SHOW CREATE DATABASE charset_test_utf8;
@@ -91,7 +97,7 @@ name VARCHAR(100)
 ) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin;
 SHOW CREATE TABLE t_utf8mb4_bin;
 Table    Create Table
-t_utf8mb4_bin    CREATE TABLE `t_utf8mb4_bin` (\n  `id` int NOT NULL,\n  `name` varchar(100) DEFAULT NULL,\n  PRIMARY KEY (`id`)\n)
+t_utf8mb4_bin    CREATE TABLE `t_utf8mb4_bin` (\n  `id` int NOT NULL,\n  `name` varchar(100) COLLATE utf8mb4_bin DEFAULT NULL,\n  PRIMARY KEY (`id`)\n) COLLATE=utf8mb4_bin
 CREATE TABLE t_utf8mb4_general_ci (
 id INT PRIMARY KEY,
 name VARCHAR(100)
@@ -103,9 +109,7 @@ CREATE TABLE t_utf8mb4_unicode_ci (
 id INT PRIMARY KEY,
 name VARCHAR(100)
 ) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
-SHOW CREATE TABLE t_utf8mb4_unicode_ci;
-Table    Create Table
-t_utf8mb4_unicode_ci    CREATE TABLE `t_utf8mb4_unicode_ci` (\n  `id` int NOT NULL,\n  `name` varchar(100) DEFAULT NULL,\n  PRIMARY KEY (`id`)\n)
+invalid input: unsupported collation 'utf8mb4_unicode_ci'; replace it with 'utf8mb4_general_ci' when restoring legacy MatrixOne DDL
 CREATE TABLE t_column_charset (
 id INT PRIMARY KEY,
 name_default VARCHAR(100),
@@ -116,7 +120,7 @@ name_utf8mb4_general VARCHAR(100) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_
 );
 SHOW CREATE TABLE t_column_charset;
 Table    Create Table
-t_column_charset    CREATE TABLE `t_column_charset` (\n  `id` int NOT NULL,\n  `name_default` varchar(100) DEFAULT NULL,\n  `name_utf8` varchar(100) DEFAULT NULL,\n  `name_utf8mb4` varchar(100) DEFAULT NULL,\n  `name_utf8mb4_bin` varchar(100) DEFAULT NULL,\n  `name_utf8mb4_general` varchar(100) DEFAULT NULL,\n  PRIMARY KEY (`id`)\n)
+t_column_charset    CREATE TABLE `t_column_charset` (\n  `id` int NOT NULL,\n  `name_default` varchar(100) DEFAULT NULL,\n  `name_utf8` varchar(100) DEFAULT NULL,\n  `name_utf8mb4` varchar(100) DEFAULT NULL,\n  `name_utf8mb4_bin` varchar(100) COLLATE utf8mb4_bin DEFAULT NULL,\n  `name_utf8mb4_general` varchar(100) DEFAULT NULL,\n  PRIMARY KEY (`id`)\n)
 DESC t_column_charset;
 Field    Type    Null    Key    Default    Extra    Comment
 id    INT(32)    NO    PRI    null        
@@ -487,15 +491,13 @@ SHOW CREATE TABLE t_alter;
 Table    Create Table
 t_alter    CREATE TABLE `t_alter` (\n  `id` int NOT NULL,\n  `name` varchar(100) DEFAULT NULL,\n  PRIMARY KEY (`id`)\n)
 ALTER TABLE t_alter MODIFY COLUMN name VARCHAR(100) CHARACTER SET utf8mb4;
-not supported: unsupport column definition <nil>
 SHOW CREATE TABLE t_alter;
 Table    Create Table
 t_alter    CREATE TABLE `t_alter` (\n  `id` int NOT NULL,\n  `name` varchar(100) DEFAULT NULL,\n  PRIMARY KEY (`id`)\n)
 ALTER TABLE t_alter MODIFY COLUMN name VARCHAR(100) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin;
-not supported: unsupport column definition <nil>
 SHOW CREATE TABLE t_alter;
 Table    Create Table
-t_alter    CREATE TABLE `t_alter` (\n  `id` int NOT NULL,\n  `name` varchar(100) DEFAULT NULL,\n  PRIMARY KEY (`id`)\n)
+t_alter    CREATE TABLE `t_alter` (\n  `id` int NOT NULL,\n  `name` varchar(100) COLLATE utf8mb4_bin DEFAULT NULL,\n  PRIMARY KEY (`id`)\n)
 CREATE TABLE t_index_ci (
 id INT PRIMARY KEY,
 name VARCHAR(100),
@@ -622,6 +624,130 @@ INSERT INTO t_minmax_bin VALUES (1, 'Apple'), (2, 'apple'), (3, 'APPLE');
 SELECT MIN(name) as min_name, MAX(name) as max_name FROM t_minmax_bin;
 min_name    max_name
 APPLE    apple
+CREATE TABLE t_minmax_bin_pad (
+name VARCHAR(100)
+) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin;
+INSERT INTO t_minmax_bin_pad VALUES ('a '), (CONCAT('a', CHAR(0)));
+SELECT HEX(MIN(name)) AS min_name, HEX(MAX(name)) AS max_name
+FROM t_minmax_bin_pad;
+min_name    max_name
+6120    6100
+CREATE TABLE t_minmax_cast_ci (
+name VARCHAR(100)
+) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci;
+INSERT INTO t_minmax_cast_ci VALUES ('a'), ('B');
+SELECT MIN(CAST(name AS CHAR)) as min_name, MAX(CAST(name AS CHAR)) as max_name
+FROM t_minmax_cast_ci;
+min_name    max_name
+a    B
+CREATE TABLE t_minmax_derived_bin (
+name VARCHAR(100),
+wide_name VARCHAR(200)
+) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin;
+INSERT INTO t_minmax_derived_bin VALUES ('a', 'a'), ('B', 'B');
+SELECT MIN(CONVERT(name USING binary)) AS min_binary,
+MAX(CONVERT(name USING binary)) AS max_binary
+FROM t_minmax_derived_bin;
+min_binary    max_binary
+B    a
+SELECT MIN(CONVERT(name USING utf8mb4)) AS min_utf8,
+MAX(CONVERT(name USING utf8mb4)) AS max_utf8
+FROM t_minmax_derived_bin;
+min_utf8    max_utf8
+a    B
+SELECT MIN(SUBSTRING(name, 1)) AS min_substring,
+MAX(SUBSTRING(name, 1)) AS max_substring
+FROM t_minmax_derived_bin;
+min_substring    max_substring
+B    a
+SELECT MIN(CASE WHEN name IS NOT NULL THEN name ELSE wide_name END) AS min_case,
+MAX(CASE WHEN name IS NOT NULL THEN name ELSE wide_name END) AS max_case
+FROM t_minmax_derived_bin;
+min_case    max_case
+B    a
+SELECT MIN(COALESCE(name, wide_name)) AS min_coalesce,
+MAX(COALESCE(name, wide_name)) AS max_coalesce
+FROM t_minmax_derived_bin;
+min_coalesce    max_coalesce
+B    a
+SELECT MIN(IF(name IS NOT NULL, name, wide_name)) AS min_if,
+MAX(IF(name IS NOT NULL, name, wide_name)) AS max_if
+FROM t_minmax_derived_bin;
+min_if    max_if
+B    a
+CREATE TABLE t_minmax_least_greatest_bin (
+varchar_name VARCHAR(100),
+text_name TEXT
+) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin;
+INSERT INTO t_minmax_least_greatest_bin VALUES ('a', 'a'), ('B', 'B');
+SELECT MIN(LEAST(varchar_name, text_name)) AS min_least,
+MAX(GREATEST(text_name, varchar_name)) AS max_greatest
+FROM t_minmax_least_greatest_bin;
+min_least    max_greatest
+B    a
+CREATE TABLE t_minmax_json_least_greatest_bin (
+varchar_name VARCHAR(100),
+json_name JSON
+) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin;
+INSERT INTO t_minmax_json_least_greatest_bin VALUES
+('a', JSON_EXTRACT('"a"', '$')), ('B', JSON_EXTRACT('"B"', '$'));
+SELECT MIN(LEAST(varchar_name, json_name)) AS min_json_least,
+MAX(GREATEST(json_name, varchar_name)) AS max_json_greatest
+FROM t_minmax_json_least_greatest_bin;
+min_json_least    max_json_greatest
+B    a
+SELECT MIN(x) AS min_union, MAX(x) AS max_union
+FROM (
+SELECT name AS x FROM t_minmax_cast_ci
+UNION ALL
+SELECT NULL AS x
+) AS u;
+min_union    max_union
+a    B
+SELECT MIN(x) AS min_derived_null_union, MAX(x) AS max_derived_null_union
+FROM (
+SELECT name AS x FROM t_minmax_cast_ci
+UNION ALL
+SELECT x FROM (SELECT NULL AS x) AS n
+) AS u;
+min_derived_null_union    max_derived_null_union
+a    B
+WITH n AS (SELECT NULL AS x)
+SELECT MIN(x) AS min_cte_null_union, MAX(x) AS max_cte_null_union
+FROM (
+SELECT name AS x FROM t_minmax_cast_ci
+UNION ALL
+SELECT x FROM n
+) AS u;
+min_cte_null_union    max_cte_null_union
+a    B
+SELECT MIN(binary_gc) AS min_binary_gc, MAX(binary_gc) AS max_binary_gc,
+MIN(bin_gc) AS min_bin_gc, MAX(bin_gc) AS max_bin_gc
+FROM (
+SELECT GROUP_CONCAT(CONVERT(name USING binary)) AS binary_gc,
+GROUP_CONCAT(name) AS bin_gc
+FROM t_minmax_derived_bin
+GROUP BY name
+) AS g;
+min_binary_gc    max_binary_gc    min_bin_gc    max_bin_gc
+B    a    B    a
+CREATE TABLE t_binary_default_general_columns (
+id INT,
+create_col VARCHAR(100) CHARACTER SET utf8mb4,
+modify_col VARCHAR(100) COLLATE utf8mb4_bin
+) CHARACTER SET binary;
+ALTER TABLE t_binary_default_general_columns
+ADD COLUMN add_col VARCHAR(100) COLLATE utf8mb4_general_ci;
+ALTER TABLE t_binary_default_general_columns
+MODIFY COLUMN modify_col VARCHAR(100) COLLATE utf8mb4_general_ci;
+INSERT INTO t_binary_default_general_columns VALUES
+(1, 'a', 'a', 'a'), (2, 'B', 'B', 'B');
+SELECT MIN(create_col) AS min_create, MAX(create_col) AS max_create,
+MIN(add_col) AS min_add, MAX(add_col) AS max_add,
+MIN(modify_col) AS min_modify, MAX(modify_col) AS max_modify
+FROM t_binary_default_general_columns;
+min_create    max_create    min_add    max_add    min_modify    max_modify
+a    B    a    B    a    B
 SELECT CAST('test' AS CHAR CHARACTER SET utf8mb4);
 SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 36 near " CHARACTER SET utf8mb4);";
 SELECT CAST('你好' AS CHAR(10) CHARACTER SET utf8mb4);

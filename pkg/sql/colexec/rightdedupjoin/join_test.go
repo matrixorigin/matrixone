@@ -18,12 +18,13 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"os"
 	"testing"
 
 	"github.com/golang/mock/gomock"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/hashtable"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
@@ -102,6 +103,7 @@ func runRightDedupCase(t *testing.T, buildVals, probeVals []int32, pessimistic, 
 		JoinMapTag:        curTag,
 	}
 	arg.AppendChild(colexec.NewMockOperator().WithBatchs([]*batch.Batch{probeBat}))
+	installTestAllocation(t, arg, buildArg)
 
 	require.NoError(t, buildArg.Prepare(proc))
 	require.NoError(t, arg.Prepare(proc))
@@ -152,6 +154,13 @@ func TestRightDedupDuplicateTracking(t *testing.T) {
 func runRightDedupSpilledEmptyBuild(t *testing.T, pessimistic, duplicateAcrossBatches bool) {
 	proc, ctrl := newRightDedupTestProcess(t, pessimistic)
 	defer ctrl.Finish()
+	budget := process.MustNewHashBuildBudget(64<<20, 64<<20)
+	generation, err := budget.OpenGeneration(1)
+	require.NoError(t, err)
+	registry, err := mpool.NewAllocationAccountRegistry(1, 1<<20)
+	require.NoError(t, err)
+	account, err := registry.OpenWithController(64<<20, generation)
+	require.NoError(t, err)
 	typ := types.T_int32.ToType()
 	tag++
 	curTag := tag
@@ -169,6 +178,7 @@ func runRightDedupSpilledEmptyBuild(t *testing.T, pessimistic, duplicateAcrossBa
 		JoinMapTag:        curTag,
 		SpillThreshold:    1,
 	}
+	require.NoError(t, arg.SetAllocationAccount(account))
 
 	probeValues := [][]int32{{1}, {2}}
 	if duplicateAcrossBatches {
@@ -184,15 +194,16 @@ func runRightDedupSpilledEmptyBuild(t *testing.T, pessimistic, duplicateAcrossBa
 	arg.AppendChild(colexec.NewMockOperator().WithBatchs(probeBatches))
 
 	jm := message.NewJoinMap(message.GroupSels{}, nil, nil, nil, nil, proc.Mp())
-	jm.Spilled = true
-	jm.SpillBuildFds = make([]*os.File, spillutil.SpillNumBuckets)
 	jm.IncRef(1)
+	require.NoError(t, jm.SetSpillBuildPayload(message.SpillBuildPayload{
+		Files:     make([]*message.SpillFile, spillutil.SpillNumBuckets),
+		BudgetRef: generation,
+	}))
 	message.SendMessage(message.JoinMapMsg{
-		JoinMapPtr: jm,
+		Result:     message.NewJoinMapResult(jm),
 		IsShuffle:  true,
 		ShuffleIdx: 0,
 		Tag:        curTag,
-		Spilled:    true,
 	}, proc.GetMessageBoard())
 
 	require.NoError(t, arg.Prepare(proc))
@@ -217,6 +228,9 @@ func runRightDedupSpilledEmptyBuild(t *testing.T, pessimistic, duplicateAcrossBa
 	}
 
 	arg.Free(proc, false, nil)
+	require.Zero(t, account.Snapshot().Used)
+	_, _, err = registry.CompleteTerminal(account)
+	require.NoError(t, err)
 	proc.Free()
 	require.Equal(t, int64(0), proc.Mp().CurrNB())
 }
@@ -241,6 +255,7 @@ func TestRightDedupResetAndPrepareRetry(t *testing.T) {
 		Conditions:        [][]*plan.Expr{{valid}, {valid}},
 		UpdateColExprList: []*plan.Expr{valid, invalid},
 	}
+	installTestAllocation(t, arg)
 
 	require.Error(t, arg.Prepare(proc))
 	require.Nil(t, arg.ctr.vecs)
@@ -265,6 +280,7 @@ func TestRightDedupEmptyMapUsesEvaluatedKeyType(t *testing.T) {
 		LeftTypes:  []types.Type{types.T_int32.ToType()},
 		Conditions: [][]*plan.Expr{{newExpr(0, varcharTyp)}, {newExpr(0, varcharTyp)}},
 	}
+	installTestAllocation(t, arg)
 	jm, err := arg.newEmptyJoinMap(proc)
 	require.NoError(t, err)
 	require.NoError(t, jm.PreAlloc(2))
@@ -275,6 +291,73 @@ func TestRightDedupEmptyMapUsesEvaluatedKeyType(t *testing.T) {
 	jm.Free()
 	keys.Free(proc.Mp())
 	proc.Free()
+}
+
+func TestRightDedupEmptyBuildProbeMapHonorsHashBuildBudget(t *testing.T) {
+	proc, ctrl := newRightDedupTestProcess(t, false)
+	defer ctrl.Finish()
+
+	initialBytes := hashtable.Int64HashMapInitialAllocationBytes()
+	proc.Base.Lim.Size = int64(initialBytes)
+	budget, err := proc.GetHashBuildBudget()
+	require.NoError(t, err)
+
+	const rows = 2_048
+	values := make([]int32, rows)
+	for i := range values {
+		values[i] = int32(i)
+	}
+	probe := batch.NewWithSize(1)
+	probe.Vecs[0] = testutil.MakeInt32Vector(values, nil, proc.Mp())
+	probe.SetRowCount(rows)
+	probeSource := colexec.NewMockOperator().WithBatchs([]*batch.Batch{probe})
+
+	typ := types.T_int32.ToType()
+	tag++
+	arg := &RightDedupJoin{
+		LeftTypes:         []types.Type{typ},
+		RightTypes:        []types.Type{typ},
+		Conditions:        [][]*plan.Expr{{newExpr(0, typ)}, {newExpr(0, typ)}},
+		Result:            []colexec.ResultPos{{Rel: 0, Pos: 0}},
+		OnDuplicateAction: plan.Node_FAIL,
+		DedupColName:      "pk",
+		DedupColTypes:     []plan.Type{{Id: int32(types.T_int32)}},
+		JoinMapTag:        tag,
+	}
+	registry, err := mpool.NewAllocationAccountRegistry(1, 64)
+	require.NoError(t, err)
+	account, err := registry.OpenWithController(initialBytes, budget)
+	require.NoError(t, err)
+	require.NoError(t, arg.SetAllocationAccount(account))
+	arg.AppendChild(probeSource)
+	var callErr error
+	t.Cleanup(func() {
+		arg.Free(proc, true, callErr)
+		require.Zero(t, budget.Used())
+		require.Zero(t, budget.SpillDiskUsed())
+		require.Zero(t, budget.SpillFDUsed())
+		probeSource.Free(proc, true, callErr)
+		proc.Free()
+		require.Zero(t, proc.Mp().CurrNB())
+	})
+	message.SendJoinMapResult(
+		message.NewJoinMapResult(nil),
+		arg.JoinMapTag,
+		false,
+		0,
+		proc.GetMessageBoard(),
+	)
+
+	require.NoError(t, arg.Prepare(proc))
+	_, callErr = arg.Call(proc)
+	require.Error(t, callErr)
+	require.True(t, moerr.IsMoErrCode(callErr, moerr.ErrOOM), callErr)
+	require.NotErrorIs(t, callErr, process.ErrHashBuildBudgetAdmission)
+	require.NotContains(t, callErr.Error(), "convert go error")
+	require.NotContains(t, callErr.Error(), process.ErrHashBuildBudgetAdmission.Error())
+	require.Contains(t, callErr.Error(), "hash build memory budget exceeded")
+	require.Zero(t, budget.Used(),
+		"failed probe-map construction must roll back its physical allocation")
 }
 
 var (
@@ -472,7 +555,7 @@ func newTestCase(t *testing.T, flgs []bool, ts []types.Type, rp []int32, cs [][]
 	//	},
 	//})
 	tag++
-	return joinTestCase{
+	tc := joinTestCase{
 		types:  ts,
 		flgs:   flgs,
 		proc:   proc,
@@ -504,6 +587,8 @@ func newTestCase(t *testing.T, flgs []bool, ts []types.Type, rp []int32, cs [][]
 			JoinMapRefCnt:    1,
 		},
 	}
+	installTestAllocation(t, tc.arg, tc.barg)
+	return tc
 }
 
 func resetChildren(arg *RightDedupJoin, m *mpool.MPool) {

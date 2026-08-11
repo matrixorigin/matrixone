@@ -91,6 +91,95 @@ func TestGetWaitingList(t *testing.T) {
 	)
 }
 
+func TestRemoteWaitingListRequiresConfirmedHolder(t *testing.T) {
+	runLockServiceTests(
+		t,
+		[]string{"s1", "s2"},
+		func(_ *lockTableAllocator, services []*service) {
+			owner := services[0]
+			source := services[1]
+			tableID := uint64(1)
+			row := []byte{1}
+			holderTxnID := []byte("holder")
+			waiterTxnID := []byte("waiter")
+			options := newTestRowExclusiveOptions()
+
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+
+			_, err := owner.Lock(ctx, tableID, [][]byte{row}, holderTxnID, options)
+			require.NoError(t, err)
+
+			waiterDone := make(chan error, 1)
+			go func() {
+				_, err := source.Lock(ctx, tableID, [][]byte{row}, waiterTxnID, options)
+				waiterDone <- err
+			}()
+			waitWaiters(t, owner, tableID, row, 1)
+
+			released := false
+			defer func() {
+				if released {
+					return
+				}
+				cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), time.Second)
+				defer cleanupCancel()
+				_ = owner.Unlock(cleanupCtx, holderTxnID, timestamp.Timestamp{})
+				select {
+				case <-waiterDone:
+				case <-cleanupCtx.Done():
+				}
+			}()
+
+			remoteTable, err := source.getLockTable(ctx, 0, tableID)
+			require.NoError(t, err)
+			require.IsType(t, &remoteLockTable{}, remoteTable)
+
+			// A failed remote response records the requested row locally so
+			// transaction cleanup can conservatively unlock it. That record is
+			// uncertain: the owner still has this transaction in its waiter queue.
+			waiterTxn := source.activeTxnHolder.getActiveTxn(waiterTxnID, false, "")
+			require.NotNil(t, waiterTxn)
+			waiterTxn.Lock()
+			err = waiterTxn.lockAddedForCleanup(
+				remoteTable.getBind().Group,
+				remoteTable.getBind(),
+				[][]byte{row},
+				source.logger,
+			)
+			waiterTxn.Unlock()
+			require.NoError(t, err)
+
+			ok, waiting, err := source.GetWaitingList(ctx, waiterTxnID)
+			require.NoError(t, err)
+			require.True(t, ok)
+			require.Empty(t, waiting,
+				"an uncertain local lock record must not make a waiter depend on itself")
+
+			var confirmedHolderWaiters []pb.WaitTxn
+			err = remoteTable.getLock(
+				ctx,
+				row,
+				pb.WaitTxn{TxnID: holderTxnID},
+				func(lock Lock) {
+					lock.waiters.iter(func(w *waiter) bool {
+						confirmedHolderWaiters = append(confirmedHolderWaiters, w.txn)
+						return true
+					})
+				},
+			)
+			require.NoError(t, err)
+			require.Len(t, confirmedHolderWaiters, 1)
+			require.Equal(t, waiterTxnID, confirmedHolderWaiters[0].TxnID)
+
+			require.NoError(t, owner.Unlock(ctx, holderTxnID, timestamp.Timestamp{}))
+			released = true
+			require.NoError(t, <-waiterDone)
+			require.NoError(t, source.Unlock(ctx, waiterTxnID, timestamp.Timestamp{}))
+		},
+	)
+}
+
 func TestGetLockHolder(t *testing.T) {
 	runLockServiceTests(
 		t,
@@ -442,9 +531,10 @@ func (l *getLockHolderTestTable) unlock(
 }
 
 func (l *getLockHolderTestTable) getLock(
+	_ context.Context,
 	key []byte,
 	txn pb.WaitTxn,
-	fn func(Lock)) {
+	fn func(Lock)) error {
 	panic("unexpected getLock")
 }
 

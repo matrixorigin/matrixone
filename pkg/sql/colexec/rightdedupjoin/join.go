@@ -16,19 +16,19 @@ package rightdedupjoin
 
 import (
 	"bytes"
-	"strings"
-	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
-	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/spillutil"
+	"github.com/matrixorigin/matrixone/pkg/util/resource"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -46,6 +46,9 @@ func (rightDedupJoin *RightDedupJoin) OpType() vm.OpType {
 }
 
 func (rightDedupJoin *RightDedupJoin) Prepare(proc *process.Process) (err error) {
+	if rightDedupJoin.allocationAccount == nil {
+		return mpool.ErrAllocationAccountInvalid
+	}
 	if rightDedupJoin.OpAnalyzer == nil {
 		rightDedupJoin.OpAnalyzer = process.NewAnalyzer(rightDedupJoin.GetIdx(), rightDedupJoin.IsFirst, rightDedupJoin.IsLast, "dedup join")
 	} else {
@@ -57,13 +60,21 @@ func (rightDedupJoin *RightDedupJoin) Prepare(proc *process.Process) (err error)
 	newUpdateExecs := len(rightDedupJoin.ctr.exprExecs) == 0 && len(rightDedupJoin.UpdateColExprList) > 0
 	var evalExecs, updateExecs []colexec.ExpressionExecutor
 	if newEvalVectors {
-		evalExecs, err = colexec.NewExpressionExecutorsFromPlanExpressions(proc, rightDedupJoin.Conditions[0])
+		evalExecs, err = hashbuild.NewExpressionExecutors(
+			proc,
+			rightDedupJoin.Conditions[0],
+			rightDedupJoin.allocationAccount,
+		)
 		if err != nil {
 			return err
 		}
 	}
 	if newUpdateExecs {
-		updateExecs, err = colexec.NewExpressionExecutorsFromPlanExpressions(proc, rightDedupJoin.UpdateColExprList)
+		updateExecs, err = hashbuild.NewExpressionExecutors(
+			proc,
+			rightDedupJoin.UpdateColExprList,
+			rightDedupJoin.allocationAccount,
+		)
 		if err != nil {
 			for _, exec := range evalExecs {
 				exec.Free()
@@ -97,7 +108,7 @@ func (rightDedupJoin *RightDedupJoin) Call(proc *process.Process) (vm.CallResult
 		case Build:
 			err = rightDedupJoin.build(analyzer, proc)
 			if err != nil {
-				return result, err
+				return result, hashbuild.TerminalBudgetError(proc.Ctx, err)
 			}
 			if ctr.mp == nil && ctr.spillEngine == nil {
 				ctr.state = End
@@ -111,7 +122,7 @@ func (rightDedupJoin *RightDedupJoin) Call(proc *process.Process) (vm.CallResult
 				var readErr error
 				bat, readErr = ctr.spillEngine.NextProbeBatch(proc)
 				if readErr != nil {
-					return result, readErr
+					return result, hashbuild.TerminalBudgetError(proc.Ctx, readErr)
 				}
 				if bat == nil {
 					ctr.spillEngine.FinishBucket()
@@ -124,7 +135,7 @@ func (rightDedupJoin *RightDedupJoin) Call(proc *process.Process) (vm.CallResult
 			} else {
 				input, err = vm.ChildrenCall(rightDedupJoin.GetChildren(0), proc, analyzer)
 				if err != nil {
-					return result, err
+					return result, hashbuild.TerminalBudgetError(proc.Ctx, err)
 				}
 				bat = input.Batch
 				if bat == nil {
@@ -139,14 +150,14 @@ func (rightDedupJoin *RightDedupJoin) Call(proc *process.Process) (vm.CallResult
 				continue
 			}
 			if err := ctr.probe(bat, rightDedupJoin, proc, analyzer, &result); err != nil {
-				return result, err
+				return result, hashbuild.TerminalBudgetError(proc.Ctx, err)
 			}
 			return result, nil
 		case Finalize:
 			if ctr.spillEngine != nil {
 				// Clear previous bucket state before advancing.
 				ctr.cleanHashMap()
-				ctr.matched = nil
+				ctr.cleanBitmap(proc)
 				ctr.groupCount = 0
 				ctr.buildGroupCount = 0
 				var initErr error
@@ -158,18 +169,23 @@ func (rightDedupJoin *RightDedupJoin) Call(proc *process.Process) (vm.CallResult
 							ctr.groupCount = jm.GetGroupCount()
 							ctr.buildGroupCount = ctr.groupCount
 							if !proc.GetTxnOperator().Txn().IsPessimistic() && ctr.buildGroupCount > 0 {
-								ctr.matched = &bitmap.Bitmap{}
-								ctr.matched.InitWithSize(int64(ctr.buildGroupCount))
+								ctr.matched, initErr = colexec.NewAccountedBitmap(
+									int64(ctr.buildGroupCount),
+									proc.Mp(),
+									rightDedupJoin.allocationAccount,
+									hashbuild.HashBuildAllocationOwner,
+									rightDedupJoinAllocationSiteMatched,
+								)
 							}
 						case spillutil.BucketEmptyBuild:
 							ctr.mp, initErr = rightDedupJoin.newEmptyJoinMap(proc)
 						}
 					})
 				if bktErr != nil {
-					return result, bktErr
+					return result, hashbuild.TerminalBudgetError(proc.Ctx, bktErr)
 				}
 				if initErr != nil {
-					return result, initErr
+					return result, hashbuild.TerminalBudgetError(proc.Ctx, initErr)
 				}
 				if ok {
 					ctr.state = Probe
@@ -191,9 +207,9 @@ func (rightDedupJoin *RightDedupJoin) Call(proc *process.Process) (vm.CallResult
 
 func (rightDedupJoin *RightDedupJoin) build(analyzer process.Analyzer, proc *process.Process) (err error) {
 	ctr := &rightDedupJoin.ctr
-	start := time.Now()
-	defer analyzer.WaitStop(start)
-	ctr.mp, err = message.ReceiveJoinMap(rightDedupJoin.JoinMapTag, rightDedupJoin.IsShuffle, rightDedupJoin.ShuffleIdx, proc.GetMessageBoard(), proc.Ctx)
+	ctr.mp, err = process.MeasureWait(analyzer, resource.WaitOther, func() (*message.JoinMap, error) {
+		return message.ReceiveJoinMap(rightDedupJoin.JoinMapTag, rightDedupJoin.IsShuffle, rightDedupJoin.ShuffleIdx, proc.GetMessageBoard(), proc.Ctx)
+	})
 	if err != nil {
 		return
 	}
@@ -207,12 +223,33 @@ func (rightDedupJoin *RightDedupJoin) build(analyzer process.Analyzer, proc *pro
 	} else {
 		// Handle spilled build side.
 		if ctr.mp.IsSpilled() {
-			engine := spillutil.NewSpillEngine(spillutil.SpillEngineConfig{
+			payload, budget, takeErr := spillutil.TakeSpillBuildPayload(proc, ctr.mp)
+			if takeErr != nil {
+				return takeErr
+			}
+			if rightDedupJoin.allocationAccount == nil {
+				_ = payload.Close()
+				ctr.mp.Free()
+				ctr.mp = nil
+				return mpool.ErrAllocationAccountInvalid
+			}
+			engine, engineErr := spillutil.NewSpillEngine(spillutil.SpillEngineConfig{
 				BuildKeyExprs:           rightDedupJoin.Conditions[1],
+				ProbeKeyExprs:           rightDedupJoin.Conditions[0],
 				SpillThreshold:          ctr.spillThreshold,
 				NeedsProbeForEmptyBuild: true,
-			})
-			engine.InitFromSpilledMap(ctr.mp.TakeSpillBuildFds())
+				MergeProbeBatches:       true,
+				Budget:                  budget,
+			}, rightDedupJoin.allocationAccount, hashbuild.HashBuildAllocationOwner)
+			if engineErr != nil {
+				_ = payload.Close()
+				ctr.mp.Free()
+				ctr.mp = nil
+				ctr.cleanEvalVectors()
+				return engineErr
+			}
+			engine.InitFromSpilledFiles(payload.Files)
+			ctr.spillEngine = engine
 			if err := engine.ScatterProbeTable(proc,
 				func() (*batch.Batch, error) {
 					input, err := vm.ChildrenCall(rightDedupJoin.GetChildren(0), proc, analyzer)
@@ -229,18 +266,27 @@ func (rightDedupJoin *RightDedupJoin) build(analyzer process.Analyzer, proc *pro
 				ctr.mp.Free()
 				ctr.mp = nil
 				engine.Cleanup(proc)
+				ctr.spillEngine = nil
 				return err
 			}
 			ctr.mp.Free()
-			ctr.spillEngine = engine
 			ctr.mp = nil
 			return
 		}
 		ctr.groupCount = ctr.mp.GetGroupCount()
 		ctr.buildGroupCount = ctr.groupCount
-		if !proc.GetTxnOperator().Txn().IsPessimistic() {
-			ctr.matched = &bitmap.Bitmap{}
-			ctr.matched.InitWithSize(int64(ctr.buildGroupCount))
+		if !proc.GetTxnOperator().Txn().IsPessimistic() &&
+			ctr.buildGroupCount > 0 {
+			ctr.matched, err = colexec.NewAccountedBitmap(
+				int64(ctr.buildGroupCount),
+				proc.Mp(),
+				rightDedupJoin.allocationAccount,
+				hashbuild.HashBuildAllocationOwner,
+				rightDedupJoinAllocationSiteMatched,
+			)
+			if err != nil {
+				return err
+			}
 		}
 	}
 
@@ -258,23 +304,14 @@ func (rightDedupJoin *RightDedupJoin) newEmptyJoinMap(proc *process.Process) (*m
 		keyWidth += width
 	}
 
-	var (
-		intHashMap *hashmap.IntHashMap
-		strHashMap *hashmap.StrHashMap
-		err        error
+	if rightDedupJoin.allocationAccount == nil {
+		return nil, mpool.ErrAllocationAccountInvalid
+	}
+	return hashbuild.NewAccountedEmptyJoinMap(
+		keyWidth,
+		rightDedupJoin.allocationAccount,
+		proc.Mp(),
 	)
-	if keyWidth <= 8 {
-		intHashMap, err = hashmap.NewIntHashMap(false, proc.Mp())
-	} else {
-		strHashMap, err = hashmap.NewStrHashMap(false, proc.Mp())
-	}
-	if err != nil {
-		return nil, err
-	}
-
-	jm := message.NewJoinMap(message.GroupSels{}, intHashMap, strHashMap, nil, nil, proc.Mp())
-	jm.IncRef(1)
-	return jm, nil
 }
 
 func (ctr *container) probe(bat *batch.Batch, ap *RightDedupJoin, proc *process.Process, analyzer process.Analyzer, result *vm.CallResult) error {
@@ -336,14 +373,16 @@ func (ctr *container) probe(bat *batch.Batch, ap *RightDedupJoin, proc *process.
 						}
 
 						if len(rowStr) == 0 {
-							rowStr = ctr.vecs[0].RowToString(i + k)
+							rowStr, err = colexec.FormatDedupKey(ctr.vecs[0], i+k, ap.DedupColTypes)
+							if err != nil {
+								return err
+							}
 						}
 					} else {
-						rowItems, err := types.StringifyTuple(ctr.vecs[0].GetBytesAt(i+k), ap.DedupColTypes)
+						rowStr, err = colexec.FormatDedupKey(ctr.vecs[0], i+k, ap.DedupColTypes)
 						if err != nil {
 							return err
 						}
-						rowStr = "(" + strings.Join(rowItems, ",") + ")"
 					}
 					return moerr.NewDuplicateEntry(proc.Ctx, rowStr, ap.DedupColName)
 				}
@@ -363,16 +402,8 @@ func (ctr *container) probe(bat *batch.Batch, ap *RightDedupJoin, proc *process.
 		}
 	}
 
-	ctr.resetResultBatch()
-	if ctr.resultBatch == nil {
-		ctr.resultBatch = batch.NewOffHeapWithSize(len(ap.Result))
-		for i, rp := range ap.Result {
-			if rp.Rel == 0 {
-				ctr.resultBatch.Vecs[i] = vector.NewOffHeapVecWithType(ap.LeftTypes[rp.Pos])
-			} else {
-				ctr.resultBatch.Vecs[i] = vector.NewOffHeapVecWithType(ap.RightTypes[rp.Pos])
-			}
-		}
+	if err := ap.resetResultBatch(); err != nil {
+		return err
 	}
 
 	for i, rp := range ap.Result {

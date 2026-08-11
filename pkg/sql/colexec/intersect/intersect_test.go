@@ -81,6 +81,44 @@ func TestIntersect(t *testing.T) {
 	require.Equal(t, int64(0), c.proc.Mp().CurrNB())
 }
 
+func TestAuditIntersectFreeReleasesBuildState(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	c := newIntersectTestCase(proc)
+	setProcForTest(proc, c.arg)
+
+	cleaned := false
+	t.Cleanup(func() {
+		if cleaned {
+			return
+		}
+		for _, child := range c.arg.Children {
+			child.Free(proc, true, nil)
+		}
+		c.arg.Free(proc, true, nil)
+		proc.Free()
+	})
+
+	require.NoError(t, c.arg.Prepare(proc))
+	_, err := vm.Exec(c.arg, proc)
+	require.NoError(t, err)
+	require.NotNil(t, c.arg.ctr.hashTable)
+	require.NotEmpty(t, c.arg.ctr.cnts)
+
+	for _, child := range c.arg.Children {
+		child.Free(proc, true, nil)
+	}
+	c.arg.Children = nil
+	c.arg.Free(proc, true, nil)
+	c.arg.Free(proc, true, nil)
+	proc.Free()
+	cleaned = true
+
+	require.Nil(t, c.arg.ctr.hashTable)
+	require.Nil(t, c.arg.ctr.cnts)
+	require.Nil(t, c.arg.ctr.buf)
+	require.Equal(t, int64(0), proc.Mp().CurrNB())
+}
+
 func newIntersectTestCase(proc *process.Process) intersectTestCase {
 	arg := new(Intersect)
 	arg.OperatorBase.OperatorInfo = vm.OperatorInfo{

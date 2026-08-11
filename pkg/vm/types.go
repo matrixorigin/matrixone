@@ -63,7 +63,7 @@ const (
 	Deletion
 	Insert
 	External
-	Source
+	_ // reserved: former Source opcode; keep later wire values stable
 	MultiUpdate
 	PartitionInsert
 	PartitionDelete
@@ -97,13 +97,19 @@ const (
 	LockOp
 
 	Shuffle
-	ShuffleV2
+	_ // reserved: former ShuffleV2 opcode; keep later wire values stable
 
 	Sample
 	ProductL2
 	Mock
 	Apply
 	PostDml
+	IcebergWrite
+	TableClone
+	MongoScan
+	// OpTypeEnd is the exclusive upper bound for executable operator types.
+	// New operator types must be added before it.
+	OpTypeEnd
 )
 
 var OperatorToStrMap map[OpType]string
@@ -131,6 +137,8 @@ func init() {
 		HashJoin:                "HashJoin",
 		LoopJoin:                "LoopJoin",
 		IndexJoin:               "IndexJoin",
+		DedupJoin:               "DedupJoin",
+		RightDedupJoin:          "RightDedupJoin",
 		IndexBuild:              "IndexBuild",
 		Merge:                   "Merge",
 		MergeTop:                "MergeTop",
@@ -144,7 +152,10 @@ func init() {
 		Deletion:                "Deletion",
 		Insert:                  "Insert",
 		External:                "External",
-		Source:                  "Source",
+		MultiUpdate:             "MultiUpdate",
+		PartitionInsert:         "PartitionInsert",
+		PartitionDelete:         "PartitionDelete",
+		PartitionMultiUpdate:    "PartitionMultiUpdate",
 		Minus:                   "Minus",
 		Intersect:               "Intersect",
 		IntersectAll:            "IntersectAll",
@@ -167,6 +178,9 @@ func init() {
 		Mock:                    "Mock",
 		Apply:                   "Apply",
 		PostDml:                 "PostDml",
+		IcebergWrite:            "IcebergWrite",
+		TableClone:              "TableClone",
+		MongoScan:               "MongoScan",
 	}
 
 	// Initialize StrToOperatorMap
@@ -188,6 +202,7 @@ func init() {
 	MajorOpMap = map[string]bool{
 		OperatorToStrMap[TableScan]: true,
 		OperatorToStrMap[External]:  true,
+		OperatorToStrMap[MongoScan]: true,
 		OperatorToStrMap[Order]:     true,
 		OperatorToStrMap[Window]:    true,
 		OperatorToStrMap[Group]:     true,
@@ -364,8 +379,8 @@ func Exec(op Operator, proc *process.Process) (CallResult, error) {
 
 func ChildrenCall(op Operator, proc *process.Process, anal process.Analyzer) (CallResult, error) {
 	beforeChildrenCall := time.Now()
+	defer anal.ChildrenCallStop(beforeChildrenCall)
 	result, err := Exec(op, proc)
-	anal.ChildrenCallStop(beforeChildrenCall)
 	if err == nil {
 		anal.Input(result.Batch)
 	}

@@ -22,46 +22,82 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice/fscache"
 )
 
+// Bytes is a reference-counted byte buffer, optionally backed by an
+// allocator. Misuse is detected and panics: use after the last Release,
+// releasing more times than retained, and retaining an already-released
+// object are all programming errors.
 type Bytes struct {
 	bytes       []byte
 	deallocator malloc.Deallocator
-	deallocated uint32
-	_refs       atomic.Int32
-	refs        *atomic.Int32
+	refs        atomic.Int32
+}
+
+func NewBytes(data []byte) *Bytes {
+	b := &Bytes{
+		bytes: data,
+	}
+	b.refs.Store(1)
+	return b
 }
 
 func (b *Bytes) Size() int64 {
+	if b.refs.Load() <= 0 {
+		panic("Bytes.Size: use after free")
+	}
 	return int64(len(b.bytes))
 }
 
+func (b *Bytes) Capacity() int64 {
+	if b.refs.Load() <= 0 {
+		panic("Bytes.Capacity: use after free")
+	}
+	return int64(cap(b.bytes))
+}
+
 func (b *Bytes) Bytes() []byte {
+	if b.refs.Load() <= 0 {
+		panic("Bytes.Bytes: use after free")
+	}
 	return b.bytes
 }
 
 func (b *Bytes) Slice(length int) fscache.Data {
+	if b.refs.Load() <= 0 {
+		panic("Bytes.Slice: use after free")
+	}
 	b.bytes = b.bytes[:length]
 	return b
 }
 
+// Retain increments the reference count. It refuses to resurrect a released
+// object: incrementing is only possible while the observed count is positive,
+// so a Release that wins the 1 -> 0 transition is final.
 func (b *Bytes) Retain() {
-	if b.refs != nil {
-		b.refs.Add(1)
+	for {
+		n := b.refs.Load()
+		if n <= 0 {
+			panic("Bytes.Retain: use after free")
+		}
+		if b.refs.CompareAndSwap(n, n+1) {
+			return
+		}
 	}
 }
 
+// Release decrements the reference count. The caller that drops the count to
+// zero deallocates; further Release or Retain calls panic.
 func (b *Bytes) Release() {
-	if b.refs != nil {
-		if n := b.refs.Add(-1); n == 0 {
-			if b.deallocator != nil &&
-				atomic.CompareAndSwapUint32(&b.deallocated, 0, 1) {
-				b.deallocator.Deallocate()
-			}
-		}
-	} else {
-		if b.deallocator != nil &&
-			atomic.CompareAndSwapUint32(&b.deallocated, 0, 1) {
+	n := b.refs.Add(-1)
+	if n == 0 {
+		// Last reference: no other goroutine may legally touch b anymore
+		// (Retain from zero panics), so plain writes are safe here.
+		b.bytes = nil
+		if b.deallocator != nil {
 			b.deallocator.Deallocate()
+			b.deallocator = nil
 		}
+	} else if n < 0 {
+		panic("Bytes.Release: double free")
 	}
 }
 
@@ -80,8 +116,7 @@ func (b *bytesAllocator) allocateCacheData(size int, hints malloc.Hints) fscache
 		bytes:       slice,
 		deallocator: dec,
 	}
-	bytes._refs.Store(1)
-	bytes.refs = &bytes._refs
+	bytes.refs.Store(1)
 	return bytes
 }
 
@@ -99,6 +134,17 @@ func (b *bytesAllocator) CopyToCacheData(ctx context.Context, data []byte) fscac
 	return ret
 }
 
+func (b *bytesAllocator) BackingSize(size int) int {
+	backingSize, err := malloc.BackingSize(b.allocator, uint64(size))
+	if err != nil {
+		panic(err)
+	}
+	if uint64(int(backingSize)) != backingSize {
+		panic("cache backing size overflows int")
+	}
+	return int(backingSize)
+}
+
 type cacheCapacityGuardedAllocator struct {
 	cache     fscache.DataCache
 	allocator CacheDataAllocator
@@ -107,16 +153,29 @@ type cacheCapacityGuardedAllocator struct {
 var _ CacheDataAllocator = cacheCapacityGuardedAllocator{}
 
 func (c cacheCapacityGuardedAllocator) AllocateCacheData(ctx context.Context, size int) fscache.Data {
-	c.cache.EnsureNBytes(withoutEventLogger(ctx), size)
+	ensureCacheDataCapacity(ctx, c.cache, c.allocator, size)
 	return c.allocator.AllocateCacheData(ctx, size)
 }
 
 func (c cacheCapacityGuardedAllocator) AllocateCacheDataWithHint(ctx context.Context, size int, hints malloc.Hints) fscache.Data {
-	c.cache.EnsureNBytes(withoutEventLogger(ctx), size)
+	ensureCacheDataCapacity(ctx, c.cache, c.allocator, size)
 	return c.allocator.AllocateCacheDataWithHint(ctx, size, hints)
 }
 
 func (c cacheCapacityGuardedAllocator) CopyToCacheData(ctx context.Context, data []byte) fscache.Data {
-	c.cache.EnsureNBytes(withoutEventLogger(ctx), len(data))
+	ensureCacheDataCapacity(ctx, c.cache, c.allocator, len(data))
 	return c.allocator.CopyToCacheData(ctx, data)
+}
+
+func (c cacheCapacityGuardedAllocator) BackingSize(size int) int {
+	return c.allocator.BackingSize(size)
+}
+
+func ensureCacheDataCapacity(
+	ctx context.Context,
+	cache fscache.DataCache,
+	allocator CacheDataAllocator,
+	size int,
+) {
+	cache.EnsureNBytes(withoutEventLogger(ctx), allocator.BackingSize(size))
 }

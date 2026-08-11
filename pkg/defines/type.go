@@ -255,12 +255,7 @@ type LogicalIdKey struct{}
 // CarryOnCtxKeys defines keys needed to be serialized when pass context through net
 var CarryOnCtxKeys = []any{TenantIDKey{}, UserIDKey{}, RoleIDKey{}}
 
-// TemporaryTN use TemporaryTN to get temporary storage from Context
-type TemporaryTN struct{}
-
 type IsMoLogger struct{}
-
-type SourceScanResKey struct{}
 
 type IgnoreForeignKey struct{}
 
@@ -271,6 +266,10 @@ type BgKey struct{}
 
 // Sp variable scope
 type VarScopeKey struct{}
+
+// Sp variable declared SQL type scope. It is kept parallel to VarScopeKey so
+// runtime values do not have to encode SQL type metadata such as DECIMAL scale.
+type VarScopeTypeKey struct{}
 
 // Determine if it is a stored procedure
 type InSp struct{}

@@ -1,0 +1,108 @@
+// Copyright 2026 Matrix Origin
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package frontend
+
+import (
+	"context"
+	"testing"
+
+	"github.com/golang/mock/gomock"
+	"github.com/stretchr/testify/require"
+
+	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
+)
+
+func TestCloneDatabaseSourceBranchTableCount(t *testing.T) {
+	source := cloneDatabaseSource{
+		srcTblInfos: []*tableInfo{
+			{tblName: "regular"},
+			{tblName: "foreign_key"},
+			{tblName: "view", typ: view},
+		},
+	}
+
+	require.Equal(t, int64(2), source.branchTableCount())
+}
+
+func TestLockDataBranchCloneDatabaseSourcesSkipsSourcesWithoutTables(t *testing.T) {
+	ctx := context.WithValue(context.Background(), dataBranchCloneLockCtxKey{}, true)
+	for _, source := range []cloneDatabaseSource{
+		{},
+		{srcTblInfos: []*tableInfo{{tblName: "view", typ: view}}},
+	} {
+		require.NoError(t, lockDataBranchCloneDatabaseSources(ctx, nil, nil, source))
+	}
+}
+
+func TestCloneFkTableOrder(t *testing.T) {
+	t.Run("acyclic dependencies retain topological order", func(t *testing.T) {
+		parent := genKey("db", "parent")
+		child := genKey("db", "child")
+		order, hasCycle := cloneFkTableOrder(map[string][]string{
+			child: {parent},
+		})
+
+		require.False(t, hasCycle)
+		require.Equal(t, []string{parent, child}, order)
+	})
+
+	t.Run("cyclic dependencies use deterministic forward-reference order", func(t *testing.T) {
+		a := genKey("db", "a")
+		b := genKey("db", "b")
+		order, hasCycle := cloneFkTableOrder(map[string][]string{
+			a: {b},
+			b: {a},
+		})
+
+		require.True(t, hasCycle)
+		require.Equal(t, []string{a, b}, order)
+	})
+}
+
+func TestCloneSnapshotTxnOperator(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	outerTxn := mock_frontend.NewMockTxnOperator(ctrl)
+	branchTxn := mock_frontend.NewMockTxnOperator(ctrl)
+	ses := newFeatureLimitTestSession(t)
+	ses.proc.Base.TxnOperator = outerTxn
+
+	t.Run("normal clone keeps frontend transaction", func(t *testing.T) {
+		bh := ses.InitBackExec(branchTxn, "", fakeDataSetFetcher2)
+		require.Same(t, outerTxn, cloneSnapshotTxnOperator(ses, bh))
+	})
+
+	t.Run("data branch uses owning background transaction", func(t *testing.T) {
+		bh := ses.InitBackExec(branchTxn, "", fakeDataSetFetcher2, &BackgroundExecOption{
+			forcePessimisticRC: true,
+		})
+		require.Same(t, branchTxn, cloneSnapshotTxnOperator(ses, bh))
+	})
+}
+
+func TestDataBranchCloneLockProcessUsesOwningBackgroundTxn(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	outerTxn := mock_frontend.NewMockTxnOperator(ctrl)
+	branchTxn := mock_frontend.NewMockTxnOperator(ctrl)
+	ses := newFeatureLimitTestSession(t)
+	ses.proc.Base.TxnOperator = outerTxn
+	bh := ses.InitBackExec(branchTxn, "", fakeDataSetFetcher2, &BackgroundExecOption{
+		forcePessimisticRC: true,
+	})
+
+	lockProc := newDataBranchCloneLockProcess(context.Background(), ses, bh)
+	defer lockProc.Free()
+	require.Same(t, branchTxn, lockProc.GetTxnOperator())
+	require.Same(t, outerTxn, ses.proc.GetTxnOperator())
+}

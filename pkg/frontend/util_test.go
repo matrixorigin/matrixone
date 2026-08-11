@@ -17,8 +17,10 @@ package frontend
 import (
 	"container/list"
 	"context"
-	"encoding/binary"
+	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"math"
 	"sort"
 	"strings"
@@ -50,14 +52,200 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/util/resource"
 	"github.com/matrixorigin/matrixone/pkg/util/toml"
+	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
+	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/memoryengine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 func init() {
 	testutil.SetupAutoIncrService("")
+}
+
+type accountingMysqlWriter struct {
+	testMysqlWriter
+	bytes         int64
+	packets       int64
+	calls         int
+	outputTracker *responseOutputWaitTracker
+}
+
+func TestLogStatementStringStatusErrorAccounting(t *testing.T) {
+	const service = "test-statement-status-error-accounting"
+	InitServerLevelVars(service)
+	setPu(service, config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil))
+
+	for _, tc := range []struct {
+		name string
+		err  error
+	}{
+		{name: "nil error"},
+		{name: "direct EOF", err: io.EOF},
+		{name: "wrapped EOF", err: fmt.Errorf("client stream closed: %w", io.EOF)},
+		{name: "unexpected EOF", err: io.ErrUnexpectedEOF},
+		{name: "ordinary error", err: errors.New("statement failed")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			writer := &accountingMysqlWriter{}
+			ses := NewSession(context.Background(), service, writer, nil)
+			defer ses.Close()
+
+			require.NotPanics(t, func() {
+				logStatementStringStatus(
+					context.Background(), ses, "select 1", fail, tc.err)
+			})
+			require.Equal(t, 1, writer.calls,
+				"error logging must not skip statement accounting")
+		})
+	}
+}
+
+func (w *accountingMysqlWriter) CalculateOutTrafficBytes(reset bool) (int64, int64) {
+	w.calls++
+	bytes, packets := w.bytes, w.packets
+	if reset {
+		w.bytes = 0
+		w.packets = 0
+	}
+	return bytes, packets
+}
+
+func (w *accountingMysqlWriter) setResponseOutputWaitTracker(tracker *responseOutputWaitTracker) {
+	w.outputTracker = tracker
+}
+
+func TestFailedStatementSealsAfterTerminalResponse(t *testing.T) {
+	provider := motrace.GetTracerProvider()
+	wasEnabled := provider.IsEnable()
+	provider.SetEnable(true)
+	defer provider.SetEnable(wasEnabled)
+
+	ctx := context.Background()
+	writer := &accountingMysqlWriter{}
+	ses := &Session{feSessionImpl: feSessionImpl{respr: NewMysqlResp(writer)}}
+	root := resource.NewRoot(resource.ConnExternal)
+	ctx = resource.ContextWithRoot(ctx, root)
+	statsInfo := statistic.NewStatsInfo()
+	statsInfo.ParseStage.ParseDuration = 7 * time.Nanosecond
+	ctx = statistic.ContextWithStatsInfo(ctx, statsInfo)
+	require.True(t, root.MergeExecution(resource.ExecutionSummary{
+		Usage:        resource.Usage{ExclusiveActiveNS: 10},
+		AttemptCount: 1,
+	}))
+	stmt := motrace.NewStatementInfo()
+	stmt.RequestAt = time.Now()
+	stmt.SetResourceRoot(root)
+	memoryPool := mpool.MustNew("statement-resource-test")
+	defer mpool.DeleteMPool(memoryPool)
+	retained, allocErr := memoryPool.Alloc(32, true)
+	require.NoError(t, allocErr)
+	defer memoryPool.Free(retained)
+	stmt.SetResourceMemoryPoolEpoch(memoryPool, memoryPool.StartResourcePeakEpoch())
+	allocation, allocErr := memoryPool.Alloc(64, true)
+	require.NoError(t, allocErr)
+	memoryPool.Free(allocation)
+	ses.SetTStmt(stmt)
+
+	writer.bytes = 99
+	writer.packets = 9
+	ses.beginResponseAccounting()
+	require.Equal(t, 1, writer.calls)
+	require.NotNil(t, writer.outputTracker)
+	writer.outputTracker.totalNS.Add(13)
+	execErr := moerr.NewInternalErrorNoCtx("failed")
+	require.True(t, ses.deferStatementCompletion(execErr))
+	require.Same(t, stmt, ses.GetStmtInfo())
+
+	writer.bytes = 17
+	writer.packets = 1
+	ses.finishResponseAccounting(ctx, execErr, true)
+	require.Nil(t, ses.GetStmtInfo())
+	require.Equal(t, 2, writer.calls)
+	require.Nil(t, writer.outputTracker)
+	summary := root.PreResponseSummary()
+	require.Equal(t, uint64(17), summary.Usage.ExclusiveActiveNS)
+	require.Equal(t, uint64(17), summary.Usage.ClientEgressBytes)
+	require.Equal(t, uint64(1), summary.OutputPacketCount)
+	require.Equal(t, uint64(13), summary.Usage.WaitNS[resource.WaitOutput])
+	require.Equal(t, uint64(96), summary.Memory.MaxDomainPeakLiveBytes)
+	require.Zero(t, summary.MissingMemoryDomainCount)
+	withoutCU := statistic.FromResourceSummary(summary, 0)
+	cuCfg := config.NewOBCUConfig()
+	cuCfg.SetDefaultValues()
+	projected := statistic.FromResourceSummary(
+		summary,
+		motrace.CalculateCUWithCfg(withoutCU, int64(stmt.Duration), cuCfg),
+	)
+	var persisted statistic.StatsArray
+	require.NoError(t, json.Unmarshal(projected.ToJsonString(), &persisted))
+	require.Equal(t, float64(statistic.StatsArrayVersion6), persisted.GetVersion())
+	require.Equal(t, float64(17), persisted.GetTimeConsumed())
+	require.Equal(t, float64(96), persisted.GetMemorySize())
+	require.Equal(t, float64(17), persisted.GetOutTrafficBytes())
+	require.Equal(t, float64(1), persisted.GetOutPacketCount())
+	require.Equal(t, float64(1), persisted.GetAttemptCount())
+	require.Zero(t, persisted.GetQualityFlags())
+	require.GreaterOrEqual(t, persisted.GetCU(), float64(0))
+}
+
+func TestStatementlessRequestConsumesResponseCounters(t *testing.T) {
+	writer := &accountingMysqlWriter{bytes: 23, packets: 2}
+	ses := &Session{feSessionImpl: feSessionImpl{respr: NewMysqlResp(writer)}}
+
+	ses.beginResponseAccounting()
+	require.Equal(t, 1, writer.calls)
+	writer.bytes = 7
+	writer.packets = 1
+	ses.finishResponseAccounting(context.Background(), nil, false)
+
+	require.Equal(t, 2, writer.calls)
+	require.Nil(t, writer.outputTracker)
+	require.Zero(t, writer.bytes)
+	require.Zero(t, writer.packets)
+}
+
+func TestResponseOutputCounterRotatesAcrossStatements(t *testing.T) {
+	writer := &accountingMysqlWriter{}
+	ses := &Session{feSessionImpl: feSessionImpl{respr: NewMysqlResp(writer)}}
+	ses.beginResponseAccounting()
+
+	first := writer.outputTracker
+	require.NotNil(t, first)
+	first.totalNS.Add(11)
+	first.operatorNS.Add(3)
+	firstRoot := resource.NewRoot(resource.ConnExternal)
+	var operatorUsage resource.Usage
+	operatorUsage.WaitNS[resource.WaitOutput] = 3
+	require.True(t, firstRoot.MergeExecution(resource.ExecutionSummary{Usage: operatorUsage}))
+	firstCtx := resource.ContextWithRoot(context.Background(), firstRoot)
+	finishStatementAccounting(firstCtx, ses, nil)
+	require.Equal(t, uint64(11), firstRoot.PreResponseSummary().Usage.WaitNS[resource.WaitOutput])
+
+	second := writer.outputTracker
+	require.NotNil(t, second)
+	require.NotSame(t, first, second)
+	second.totalNS.Add(17)
+	secondRoot := resource.NewRoot(resource.ConnExternal)
+	secondCtx := resource.ContextWithRoot(context.Background(), secondRoot)
+	ses.finishResponseAccounting(secondCtx, nil, false)
+	require.Equal(t, uint64(17), secondRoot.PreResponseSummary().Usage.WaitNS[resource.WaitOutput])
+	require.Nil(t, writer.outputTracker)
+}
+
+func TestDerivedStatementLeavesParentResponseAccountingOpen(t *testing.T) {
+	writer := &accountingMysqlWriter{bytes: 23, packets: 2}
+	ses := &Session{feSessionImpl: feSessionImpl{respr: NewMysqlResp(writer)}}
+	ses.ReplaceDerivedStmt(true)
+
+	ctx := resource.ContextWithRoot(context.Background(), resource.NewRoot(resource.ConnExternal))
+	finishStatementAccounting(ctx, ses, nil)
+
+	require.Zero(t, writer.calls)
+	require.Equal(t, int64(23), writer.bytes)
+	require.Equal(t, int64(2), writer.packets)
 }
 
 type testColumnWithoutDecimalScale struct {
@@ -498,6 +686,43 @@ func TestGetSimpleExprValue(t *testing.T) {
 	})
 }
 
+func TestUserInputPreparedExpressionIsExplicit(t *testing.T) {
+	ordinary := &UserInput{stmt: &tree.Select{}}
+	prepared := &UserInput{
+		stmt:                 &tree.Select{},
+		isInternalInput:      true,
+		isSetExpression:      true,
+		isPreparedExpression: true,
+	}
+	direct := &UserInput{
+		stmt:            &tree.Select{},
+		isInternalInput: true,
+		isSetExpression: true,
+	}
+
+	require.False(t, ordinary.isPreparedExpr())
+	require.True(t, prepared.isPreparedExpr())
+	require.True(t, ordinary.canUsePlanCache())
+	require.False(t, direct.canUsePlanCache())
+	require.False(t, prepared.canUsePlanCache())
+}
+
+func TestBindSetVariableResultExprUsesPreparedModeForDecimalParam(t *testing.T) {
+	ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
+	stmt, err := parsers.ParseOne(
+		ctx, dialect.MYSQL, "select cast(? as decimal(10, 2)) from dual", 1)
+	require.NoError(t, err)
+	selectStmt := stmt.(*tree.Select)
+	expr := selectStmt.Select.(*tree.SelectClause).Exprs[0].Expr
+
+	_, err = bindSetVariableResultExpr(expr, plan.NewEmptyCompilerContext(), false)
+	require.ErrorContains(t, err, "only prepare statement can use ? expr")
+
+	bound, err := bindSetVariableResultExpr(expr, plan.NewEmptyCompilerContext(), true)
+	require.NoError(t, err)
+	require.NotNil(t, bound)
+}
+
 func TestGetExprValue(t *testing.T) {
 	ctx := defines.AttachAccountId(context.TODO(), sysAccountID)
 	catalog.SetupDefines("")
@@ -600,15 +825,7 @@ func TestGetExprValue(t *testing.T) {
 		table.EXPECT().TableDefs(gomock.Any()).Return(defs, nil).AnyTimes()
 		table.EXPECT().GetEngineType().Return(engine.Disttae).AnyTimes()
 
-		var ranges memoryengine.ShardIdSlice
-		id := make([]byte, 8)
-		binary.LittleEndian.PutUint64(id, 1)
-		ranges.Append(id)
-
-		relData := &memoryengine.MemRelationData{
-			Shards: ranges,
-		}
-		table.EXPECT().Ranges(gomock.Any(), gomock.Any()).Return(relData, nil).AnyTimes()
+		table.EXPECT().Ranges(gomock.Any(), gomock.Any()).Return(readutil.BuildEmptyRelData(), nil).AnyTimes()
 		//table.EXPECT().NewReader(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(nil, moerr.NewInvalidInputNoCtx("new reader failed")).AnyTimes()
 
 		eng.EXPECT().Database(gomock.Any(), gomock.Any(), gomock.Any()).Return(db, nil).AnyTimes()
@@ -1070,7 +1287,7 @@ func (t testErr) Error() string {
 func Test_isErrorRollbackWholeTxn(t *testing.T) {
 	assert.Equal(t, false, isErrorRollbackWholeTxn(nil))
 	assert.Equal(t, false, isErrorRollbackWholeTxn(&testError{}))
-	assert.Equal(t, false, isErrorRollbackWholeTxn(moerr.NewLockWaitTimeoutNoCtx()))
+	assert.Equal(t, true, isErrorRollbackWholeTxn(moerr.NewLockWaitTimeoutNoCtx()))
 	assert.Equal(t, true, isErrorRollbackWholeTxn(moerr.NewRetryForCNRollingRestart()))
 	assert.Equal(t, true, isErrorRollbackWholeTxn(moerr.NewDeadLockDetectedNoCtx()))
 	assert.Equal(t, true, isErrorRollbackWholeTxn(moerr.NewLockTableBindChangedNoCtx()))
@@ -1082,6 +1299,16 @@ func Test_isErrorRollbackWholeTxn(t *testing.T) {
 	assert.Equal(t, true, isErrorRollbackWholeTxn(moerr.NewBackendClosedNoCtx()))
 	assert.Equal(t, true, isErrorRollbackWholeTxn(moerr.NewNoAvailableBackendNoCtx()))
 	assert.Equal(t, true, isErrorRollbackWholeTxn(moerr.NewBackendCannotConnectNoCtx("test")))
+}
+
+func TestNewErrorRollbackWholeTxnCoversEveryCode(t *testing.T) {
+	for code := range errCodeRollbackWholeTxn {
+		err := newErrorRollbackWholeTxn(code)
+		require.True(t, isErrorRollbackWholeTxn(err), "error code %d", code)
+		moErr, ok := err.(*moerr.Error)
+		require.True(t, ok, "error code %d returned %T", code, err)
+		require.Equal(t, code, moErr.ErrorCode())
+	}
 }
 
 func TestUserInput_getSqlSourceType(t *testing.T) {
@@ -1199,6 +1426,33 @@ func TestTopsort(t *testing.T) {
 		_, err := g.sort()
 		cvey.So(err, cvey.ShouldNotBeNil)
 	})
+}
+
+func TestNormalizeViewDependencyKeyForRestoreTopology(t *testing.T) {
+	snapshot := &plan.Snapshot{
+		TS: &timestamp.Timestamp{PhysicalTime: 42, LogicalTime: 7},
+	}
+	key, err := plan.FormatViewDependencyKey(
+		"db",
+		"source_view",
+		snapshot,
+	)
+	require.NoError(t, err)
+
+	normalized, err := normalizeViewDependencyKey(key)
+	require.NoError(t, err)
+	require.Equal(t, genKey("db", "source_view"), normalized)
+
+	ordinary := genKey("db", "view@snapshot=x")
+	normalized, err = normalizeViewDependencyKey(ordinary)
+	require.NoError(t, err)
+	require.Equal(t, ordinary, normalized)
+
+	key, err = plan.FormatViewDependencyKey("db#part", "view#part", nil)
+	require.NoError(t, err)
+	normalized, err = normalizeViewDependencyKey(key)
+	require.NoError(t, err)
+	require.Equal(t, genKey("db#part", "view#part"), normalized)
 }
 
 func Test_convertRowsIntoBatch(t *testing.T) {
@@ -1571,6 +1825,299 @@ func Test_setMysqlColumnTypeMetadataDecimalLength(t *testing.T) {
 
 			require.Equal(t, tt.length, col.Length())
 			require.Equal(t, uint8(tt.typ.Scale), col.Decimal())
+		})
+	}
+}
+
+func TestColDef2MysqlColumnStringMetadata(t *testing.T) {
+	cases := []struct {
+		name      string
+		typ       types.Type
+		mysqlType defines.MysqlType
+		charset   uint16
+		length    uint32
+		flags     uint16
+	}{
+		{
+			name:      "varchar length is encoded in utf8mb3 bytes",
+			typ:       types.New(types.T_varchar, 128, 0),
+			mysqlType: defines.MYSQL_TYPE_VAR_STRING,
+			charset:   charsetVarchar,
+			length:    384,
+		},
+		{
+			name:      "char length is encoded in utf8mb3 bytes",
+			typ:       types.New(types.T_char, 128, 0),
+			mysqlType: defines.MYSQL_TYPE_STRING,
+			charset:   charsetVarchar,
+			length:    384,
+		},
+		{
+			name:      "maximum varchar length is encoded in utf8mb3 bytes",
+			typ:       types.New(types.T_varchar, types.MaxVarcharLen, 0),
+			mysqlType: defines.MYSQL_TYPE_VAR_STRING,
+			charset:   charsetVarchar,
+			length:    types.MaxVarcharLen * charsetVarcharMaxBytesPerCharacter,
+		},
+		{
+			name:      "varbinary length stays in bytes",
+			typ:       types.New(types.T_varbinary, 128, 0),
+			mysqlType: defines.MYSQL_TYPE_VARCHAR,
+			charset:   charsetBinary,
+			length:    128,
+			flags:     uint16(defines.BINARY_FLAG),
+		},
+		{
+			name:      "binary length stays in bytes",
+			typ:       types.New(types.T_binary, 128, 0),
+			mysqlType: defines.MYSQL_TYPE_VARCHAR,
+			charset:   charsetBinary,
+			length:    128,
+			flags:     uint16(defines.BINARY_FLAG),
+		},
+		{
+			name:      "unknown varchar width stays unbounded",
+			typ:       types.New(types.T_varchar, -1, 0),
+			mysqlType: defines.MYSQL_TYPE_VAR_STRING,
+			charset:   charsetVarchar,
+			length:    math.MaxUint32,
+		},
+		{
+			name:      "unspecified varchar width stays unbounded",
+			typ:       types.New(types.T_varchar, 0, 0),
+			mysqlType: defines.MYSQL_TYPE_VAR_STRING,
+			charset:   charsetVarchar,
+			length:    math.MaxUint32,
+		},
+		{
+			name:      "varchar byte length saturates instead of wrapping",
+			typ:       types.New(types.T_varchar, math.MaxInt32, 0),
+			mysqlType: defines.MYSQL_TYPE_VAR_STRING,
+			charset:   charsetVarchar,
+			length:    math.MaxUint32,
+		},
+		{
+			name:      "unknown varbinary width stays unbounded",
+			typ:       types.New(types.T_varbinary, -1, 0),
+			mysqlType: defines.MYSQL_TYPE_VARCHAR,
+			charset:   charsetBinary,
+			length:    math.MaxUint32,
+			flags:     uint16(defines.BINARY_FLAG),
+		},
+		{
+			name:      "zero varbinary width stays zero",
+			typ:       types.New(types.T_varbinary, 0, 0),
+			mysqlType: defines.MYSQL_TYPE_VARCHAR,
+			charset:   charsetBinary,
+			length:    0,
+			flags:     uint16(defines.BINARY_FLAG),
+		},
+	}
+
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			col, err := colDef2MysqlColumn(context.Background(), &plan2.ColDef{
+				Name: "c",
+				Typ: plan2.Type{
+					Id:    int32(tt.typ.Oid),
+					Width: tt.typ.Width,
+					Scale: tt.typ.Scale,
+				},
+			})
+			require.NoError(t, err)
+			require.Equal(t, tt.mysqlType, col.ColumnType())
+			require.Equal(t, tt.charset, col.Charset())
+			require.Equal(t, tt.length, col.Length())
+			require.Equal(t, tt.flags, col.Flag())
+
+			proto := &MysqlProtocolImpl{io: NewIOPackage(true)}
+			packet := proto.makeColumnDefinition41Payload(col, int(COM_QUERY))
+			pos := HeaderOffset
+			for range 6 {
+				_, next, ok := proto.readStringLenEnc(packet, pos)
+				require.True(t, ok)
+				pos = next
+			}
+			fixedLength, next, ok := proto.io.ReadUint8(packet, pos)
+			require.True(t, ok)
+			require.Equal(t, uint8(0x0c), fixedLength)
+			packetCharset, next, ok := proto.io.ReadUint16(packet, next)
+			require.True(t, ok)
+			require.Equal(t, tt.charset, packetCharset)
+			packetLength, next, ok := proto.io.ReadUint32(packet, next)
+			require.True(t, ok)
+			require.Equal(t, tt.length, packetLength)
+			packetType, next, ok := proto.io.ReadUint8(packet, next)
+			require.True(t, ok)
+			require.Equal(t, uint8(tt.mysqlType), packetType)
+			packetFlags, _, ok := proto.io.ReadUint16(packet, next)
+			require.True(t, ok)
+			require.Equal(t, tt.flags, packetFlags)
+		})
+	}
+}
+
+func TestColDef2MysqlColumnConstraintFlags(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		col  *plan2.ColDef
+		want uint16
+	}{
+		{
+			name: "primary and auto increment",
+			col: &plan2.ColDef{
+				Name: "id",
+				Typ: plan2.Type{
+					Id:          int32(types.T_int32),
+					NotNullable: true,
+					AutoIncr:    true,
+				},
+				NotNull: true,
+				Primary: true,
+			},
+			want: uint16(defines.NOT_NULL_FLAG | defines.PRI_KEY_FLAG | defines.AUTO_INCREMENT_FLAG),
+		},
+		{
+			name: "unique",
+			col: &plan2.ColDef{
+				Name:    "uk",
+				Typ:     plan2.Type{Id: int32(types.T_int32), NotNullable: true},
+				NotNull: true,
+				Unique:  true,
+			},
+			want: uint16(defines.NOT_NULL_FLAG | defines.UNIQUE_KEY_FLAG),
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			col, err := colDef2MysqlColumn(context.Background(), tc.col)
+			require.NoError(t, err)
+			require.Equal(t, tc.want, col.Flag())
+
+			proto := &MysqlProtocolImpl{io: NewIOPackage(true)}
+			packet := proto.makeColumnDefinition41Payload(col, int(COM_QUERY))
+			pos := HeaderOffset
+			for range 6 {
+				_, next, ok := proto.readStringLenEnc(packet, pos)
+				require.True(t, ok)
+				pos = next
+			}
+			_, pos, ok := proto.io.ReadUint8(packet, pos)
+			require.True(t, ok)
+			flagsPos := pos + 2 + 4 + 1
+			flags, _, ok := proto.io.ReadUint16(packet, flagsPos)
+			require.True(t, ok)
+			require.Equal(t, tc.want, flags)
+		})
+	}
+}
+
+func Test_setMysqlColumnTypeMetadataFloatingPointDecimals(t *testing.T) {
+	cases := []struct {
+		name     string
+		typ      types.Type
+		decimals uint8
+	}{
+		{
+			name:     "float without display scale",
+			typ:      types.New(types.T_float32, 0, -1),
+			decimals: mysqlDecimalNotSpecified,
+		},
+		{
+			name:     "double without display scale",
+			typ:      types.New(types.T_float64, 0, -1),
+			decimals: mysqlDecimalNotSpecified,
+		},
+		{
+			name:     "computed double without display width",
+			typ:      types.T_float64.ToType(),
+			decimals: mysqlDecimalNotSpecified,
+		},
+		{
+			name:     "float with explicit zero display scale",
+			typ:      types.New(types.T_float32, 6, 0),
+			decimals: 0,
+		},
+		{
+			name:     "double with explicit display scale",
+			typ:      types.New(types.T_float64, 8, 3),
+			decimals: 3,
+		},
+	}
+
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			col := new(MysqlColumn)
+
+			setMysqlColumnTypeMetadata(col, tt.typ)
+
+			require.Equal(t, tt.decimals, col.Decimal())
+		})
+	}
+}
+
+func Test_setMysqlColumnTypeInfoPreservesTextCollation(t *testing.T) {
+	testCases := []struct {
+		name        string
+		typ         types.Type
+		wantCharset uint16
+	}{
+		{
+			name:        "varchar utf8mb4_bin",
+			typ:         types.NewWithCharset(types.T_varchar, 32, 0, types.CharsetUTF8MB4Bin),
+			wantCharset: uint16(utf8mb4BinCollationID),
+		},
+		{
+			name:        "char utf8mb4_bin",
+			typ:         types.NewWithCharset(types.T_char, 32, 0, types.CharsetUTF8MB4Bin),
+			wantCharset: uint16(utf8mb4BinCollationID),
+		},
+		{
+			name:        "text utf8mb4_bin",
+			typ:         types.NewWithCharset(types.T_text, 32, 0, types.CharsetUTF8MB4Bin),
+			wantCharset: uint16(utf8mb4BinCollationID),
+		},
+		{
+			name:        "packed binary varchar",
+			typ:         types.NewWithCharset(types.T_varchar, 32, 0, types.CharsetBinary),
+			wantCharset: charsetBinary,
+		},
+		{
+			name:        "varbinary",
+			typ:         types.New(types.T_varbinary, 32, 0),
+			wantCharset: charsetBinary,
+		},
+		{
+			name:        "binary",
+			typ:         types.New(types.T_binary, 32, 0),
+			wantCharset: charsetBinary,
+		},
+		{
+			name:        "varchar utf8mb4 general ci",
+			typ:         types.New(types.T_varchar, 32, 0),
+			wantCharset: uint16(Utf8mb4CollationID),
+		},
+		{
+			name:        "char utf8mb4 general ci",
+			typ:         types.New(types.T_char, 32, 0),
+			wantCharset: uint16(Utf8mb4CollationID),
+		},
+		{
+			name:        "text utf8mb4 general ci",
+			typ:         types.New(types.T_text, 32, 0),
+			wantCharset: uint16(Utf8mb4CollationID),
+		},
+		{
+			name:        "legacy varchar",
+			typ:         types.NewWithCharset(types.T_varchar, 32, 0, types.CharsetLegacy),
+			wantCharset: charsetVarchar,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			col := new(MysqlColumn)
+			require.NoError(t, setMysqlColumnTypeInfo(context.Background(), tc.typ, col))
+			require.Equal(t, tc.wantCharset, col.Charset())
 		})
 	}
 }

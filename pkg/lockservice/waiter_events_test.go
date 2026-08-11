@@ -15,6 +15,8 @@
 package lockservice
 
 import (
+	"context"
+	"sync"
 	"testing"
 	"time"
 
@@ -39,6 +41,55 @@ func TestWaiterEventsRemoveBlockedWaiter(t *testing.T) {
 	require.Equal(t, int32(1), w.refCount.Load())
 }
 
+func TestWaiterEventsTimeoutDoesNotSendToFullOwnEventChannel(t *testing.T) {
+	logger := getLogger("")
+	events := &waiterEvents{
+		logger:       logger,
+		eventC:       make(chan *lockContext, 1),
+		checkOrphanC: make(chan checkOrphan, 1),
+	}
+	events.eventC <- &lockContext{} // make the consumer's own queue full
+
+	// Use a raw waiter rather than the reuse pool: this test exercises check()
+	// directly and must not return a pooled object outside RunReuseTests.
+	w := newWaiter()
+	w.txn = pb.WaitTxn{TxnID: []byte("waiter")}
+	w.beforeSwapStatusAdjustFunc = func() {}
+	require.Equal(t, int32(1), w.ref("test", logger))
+	w.setStatus(blocking)
+	w.startWait()
+	w.waitAt.Store(time.Now().Add(-time.Second))
+	w.lockWaitTimeout = time.Millisecond
+	w.lockWaitTimeoutErr = ErrLockTimeout
+	conflictKey := []byte{1}
+	w.conflictKey.Store(&conflictKey)
+
+	resultC := make(chan error, 1)
+	c := &lockContext{
+		txn: &activeTxn{RWMutex: &sync.RWMutex{}},
+		w:   w,
+		lockFunc: func(c *lockContext, _ bool) {
+			resultC <- c.w.wait(context.Background(), logger).err
+		},
+	}
+	w.event = event{c: c, eventC: events.eventC}
+	events.addToLazyCheckDeadlockC(w)
+
+	checked := make(chan struct{})
+	go func() {
+		events.check(time.Hour)
+		close(checked)
+	}()
+	select {
+	case <-checked:
+	case <-time.After(time.Second):
+		t.Fatal("waiterEvents.check blocked sending to its own full event channel")
+	}
+	require.ErrorIs(t, <-resultC, ErrLockTimeout)
+	require.Len(t, events.eventC, 1)
+	require.Equal(t, int32(1), w.refCount.Load())
+}
+
 func TestWaiterEventsCloseDropsBlockedWaiters(t *testing.T) {
 	logger := getLogger("")
 	events := newWaiterEvents(0, nil, nil, time.Second, nil, logger)
@@ -58,4 +109,23 @@ func TestWaiterEventsCloseDropsBlockedWaiters(t *testing.T) {
 
 	events.removeBlockedWaiter(w)
 	require.Equal(t, int32(1), w.refCount.Load())
+}
+
+func TestWaiterEventsCloseDrainsAdmittedContextsWithoutWorkers(t *testing.T) {
+	events := newWaiterEvents(0, nil, nil, time.Second, nil, getLogger(""))
+	handled := make(chan struct{}, 1)
+	events.eventC <- &lockContext{
+		txn: &activeTxn{RWMutex: &sync.RWMutex{}},
+		lockFunc: func(_ *lockContext, _ bool) {
+			handled <- struct{}{}
+		},
+	}
+
+	events.close()
+
+	select {
+	case <-handled:
+	default:
+		t.Fatal("waiter events close left an admitted lock context unhandled")
+	}
 }

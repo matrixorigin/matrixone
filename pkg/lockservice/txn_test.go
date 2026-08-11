@@ -68,7 +68,7 @@ func (l *retryableUnlockTestTable) unlockWithContext(
 	return nil
 }
 
-func (l *retryableUnlockTestTable) getLock([]byte, pb.WaitTxn, func(Lock)) {
+func (l *retryableUnlockTestTable) getLock(context.Context, []byte, pb.WaitTxn, func(Lock)) error {
 	panic("unexpected getLock")
 }
 
@@ -110,6 +110,42 @@ func TestLockAdded(t *testing.T) {
 	})
 }
 
+func TestCleanupOnlyLockStateTransitions(t *testing.T) {
+	reuse.RunReuseTests(func() {
+		id := []byte("t1")
+		bind := pb.LockTable{Group: 0, Table: 1}
+		logger := getLogger("")
+		txn := newActiveTxn(id, string(id), newFixedSlicePool(8), "")
+		defer reuse.Free(txn, nil)
+
+		key1 := []byte("k1")
+		key2 := []byte("k2")
+		require.NoError(t, txn.lockAddedForCleanup(
+			bind.Group, bind, [][]byte{key1}, logger))
+
+		holder := txn.getHoldLocksLocked(bind.Group)
+		require.Contains(t, holder.tableKeys, bind.Table,
+			"cleanup-only locks must remain available to transaction close")
+		require.Contains(t, holder.uncertainLockKeys[bind.Table], string(key1))
+
+		// A successful retry promotes the row to a confirmed holder.
+		require.NoError(t, txn.lockAdded(
+			bind.Group, bind, [][]byte{key1}, logger))
+		require.Nil(t, holder.uncertainLockKeys)
+
+		// A later failed retry must not downgrade a row already confirmed held.
+		require.NoError(t, txn.lockAddedForCleanup(
+			bind.Group, bind, [][]byte{key1, key2}, logger))
+		require.NotContains(t, holder.uncertainLockKeys[bind.Table], string(key1))
+		require.Contains(t, holder.uncertainLockKeys[bind.Table], string(key2))
+
+		txn.lockRemoved(bind.Group, bind.Table, map[string]struct{}{
+			string(key2): {},
+		})
+		require.Nil(t, holder.uncertainLockKeys)
+	})
+}
+
 func TestLockAddedThatShouldFail(t *testing.T) {
 	reuse.RunReuseTests(func() {
 		id := []byte("t1")
@@ -130,7 +166,8 @@ func TestLockTableBindTouchedTracksFenceIntentOnly(t *testing.T) {
 		defer reuse.Free(txn, nil)
 
 		bind := pb.LockTable{Group: 0, Table: 1, ServiceID: "s1", Version: 1}
-		txn.lockTableBindTouched(bind)
+		assert.True(t, txn.lockTableBindTouched(bind))
+		assert.False(t, txn.lockTableBindTouched(bind))
 
 		h := txn.getHoldLocksLocked(bind.Group)
 		assert.Empty(t, h.tableBinds)
@@ -138,7 +175,7 @@ func TestLockTableBindTouchedTracksFenceIntentOnly(t *testing.T) {
 
 		refs := make(map[uint32]map[uint64]uint64)
 		txn.incLockTableRef(refs, bind.ServiceID)
-		assert.Empty(t, refs)
+		assert.Equal(t, uint64(1), refs[bind.Group][bind.Table])
 
 		changed := bind
 		changed.Version++
@@ -205,7 +242,8 @@ func TestFetchWhoWaitingMeSkipsInactiveWaiters(t *testing.T) {
 		})
 
 		var waitingTxnIDs [][]byte
-		ok := txn.fetchWhoWaitingMe(
+		ok, err := txn.fetchWhoWaitingMe(
+			context.Background(),
 			"origin",
 			holderID,
 			func(waitTxn pb.WaitTxn, waiterAddress string) bool {
@@ -213,13 +251,14 @@ func TestFetchWhoWaitingMeSkipsInactiveWaiters(t *testing.T) {
 				assert.Equal(t, bind.ServiceID, waiterAddress)
 				return true
 			},
-			func(group uint32, table uint64) (lockTable, error) {
+			func(_ context.Context, group uint32, table uint64) (lockTable, error) {
 				assert.Equal(t, bind.Group, group)
 				assert.Equal(t, bind.Table, table)
 				return lt, nil
 			},
 		)
 
+		assert.NoError(t, err)
 		assert.True(t, ok)
 		assert.Equal(t, [][]byte{[]byte("blocking")}, waitingTxnIDs)
 	})
@@ -307,5 +346,31 @@ func TestCloseWithoutFreeWithContextRetriesOnlyFailedTables(t *testing.T) {
 		require.Equal(t, 1, tables[1].calls, "successful tables must not be replayed")
 		require.Equal(t, 2, tables[2].calls)
 		require.Empty(t, txn.lockHolders)
+	})
+}
+
+func TestCloseWithoutFreeWithContextReturnsCanceledLookup(t *testing.T) {
+	reuse.RunReuseTests(func() {
+		id := []byte("canceled-lookup")
+		txn := newActiveTxn(id, string(id), newFixedSlicePool(2), "")
+		defer reuse.Free(txn, nil)
+
+		bind := pb.LockTable{Group: 0, Table: 1}
+		require.NoError(t, txn.lockAdded(0, bind, [][]byte{[]byte("k1")}, getLogger("")))
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+
+		err := txn.closeWithoutFreeWithContext(
+			ctx,
+			id,
+			timestamp.Timestamp{},
+			func(uint32, uint64) (lockTable, error) {
+				return nil, ctx.Err()
+			},
+			getLogger(""),
+		)
+		require.ErrorIs(t, err, context.Canceled)
+		require.Contains(t, txn.getHoldLocksLocked(0).tableKeys, bind.Table,
+			"canceled cleanup must retain the table for a later retry")
 	})
 }

@@ -12,7 +12,8 @@ select field('', ' ', NULL, '\r', '\n');
 select field('', '', '\r', '\n');
 
 
-select field(1, '1', 1, 'true');
+select field(1, '1', 1);
+select field(1, 'true');
 
 
 select field(1, 1, 2, 3-2);

@@ -21,6 +21,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
 	"github.com/stretchr/testify/assert"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -111,6 +112,57 @@ func Test_fixedTypeCastRule1(t *testing.T) {
 			require.Equal(t, in.want[0], t1, msg)
 			require.Equal(t, in.want[1], t2, msg)
 		}
+	}
+}
+
+func TestComparisonTypeCastRulePreservesTextCharset(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		left     types.Type
+		right    types.Type
+		leftOut  uint8
+		rightOut uint8
+		hasCast  bool
+	}{
+		{
+			name:     "legacy column and default parameter",
+			left:     types.NewWithCharset(types.T_varchar, 12, 0, types.CharsetLegacy),
+			right:    types.T_varchar.ToType(),
+			leftOut:  types.CharsetLegacy,
+			rightOut: types.CharsetLegacy,
+			hasCast:  true,
+		},
+		{
+			name:     "utf8mb4 bin column and default literal",
+			left:     types.NewWithCharset(types.T_varchar, 12, 0, types.CharsetUTF8MB4Bin),
+			right:    types.T_varchar.ToType(),
+			leftOut:  types.CharsetUTF8MB4Bin,
+			rightOut: types.CharsetUTF8MB4Bin,
+			hasCast:  true,
+		},
+		{
+			name:     "legacy column and opaque binary value share byte domain",
+			left:     types.NewWithCharset(types.T_varchar, 12, 0, types.CharsetLegacy),
+			right:    types.NewWithCharset(types.T_varchar, 12, 0, types.CharsetBinary),
+			leftOut:  types.CharsetLegacy,
+			rightOut: types.CharsetBinary,
+			hasCast:  false,
+		},
+		{
+			name:     "ordinary general ci operands",
+			left:     types.T_varchar.ToType(),
+			right:    types.T_text.ToType(),
+			leftOut:  types.CharsetUTF8,
+			rightOut: types.CharsetUTF8,
+			hasCast:  true,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			hasCast, left, right := comparisonTypeCastRule(test.left, test.right)
+			require.Equal(t, test.hasCast, hasCast)
+			require.Equal(t, test.leftOut, left.Charset)
+			require.Equal(t, test.rightOut, right.Charset)
+		})
 	}
 }
 
@@ -275,6 +327,34 @@ func Test_GetFunctionByName(t *testing.T) {
 			name: "internal_numeric_scale", args: []types.Type{types.T_char.ToType(), types.T_int64.ToType()},
 			shouldErr: true,
 		},
+		{
+			name: "char_length", args: []types.Type{types.T_binary.ToType()},
+			shouldErr:  false,
+			requireFid: LENGTH_UTF8, requireOid: 3,
+			shouldCast: false,
+			requireRet: types.T_uint64.ToType(),
+		},
+		{
+			name: "char_length", args: []types.Type{types.T_varbinary.ToType()},
+			shouldErr:  false,
+			requireFid: LENGTH_UTF8, requireOid: 4,
+			shouldCast: false,
+			requireRet: types.T_uint64.ToType(),
+		},
+		{
+			name: "char_length", args: []types.Type{types.T_blob.ToType()},
+			shouldErr:  false,
+			requireFid: LENGTH_UTF8, requireOid: 5,
+			shouldCast: false,
+			requireRet: types.T_uint64.ToType(),
+		},
+		{
+			name: "character_length", args: []types.Type{types.T_varbinary.ToType()},
+			shouldErr:  false,
+			requireFid: LENGTH_UTF8, requireOid: 4,
+			shouldCast: false,
+			requireRet: types.T_uint64.ToType(),
+		},
 
 		{
 			name: "iff", args: []types.Type{types.T_bool.ToType(), types.T_any.ToType(), types.T_int64.ToType()},
@@ -354,6 +434,541 @@ func Test_GetFunctionByName(t *testing.T) {
 	}
 }
 
+func TestMakeTimeReturnScale(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	integerResult, err := GetFunctionByName(proc.Ctx, "maketime", []types.Type{
+		types.T_int64.ToType(),
+		types.T_int64.ToType(),
+		types.T_int64.ToType(),
+	})
+	require.NoError(t, err)
+	require.Equal(t, types.T_time.ToType(), integerResult.retType)
+
+	fractionalResult, err := GetFunctionByName(proc.Ctx, "maketime", []types.Type{
+		types.T_int64.ToType(),
+		types.T_int64.ToType(),
+		types.New(types.T_decimal128, 20, 6),
+	})
+	require.NoError(t, err)
+	require.True(t, fractionalResult.needCast)
+	require.Equal(t, types.T_varchar, fractionalResult.targetTypes[2].Oid)
+	require.Equal(t, int32(6), fractionalResult.targetTypes[2].Scale)
+	require.Equal(t, types.T_time.ToTypeWithScale(6), fractionalResult.retType)
+
+	defaultFloatResult, err := GetFunctionByName(proc.Ctx, "maketime", []types.Type{
+		types.T_int64.ToType(),
+		types.T_int64.ToType(),
+		{Oid: types.T_float64, Size: 8, Scale: -1},
+	})
+	require.NoError(t, err)
+	require.Equal(t, types.T_time.ToTypeWithScale(6), defaultFloatResult.retType)
+}
+
+func TestMakeTimeDecimalHourMinuteUseExactOverloads(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	decimalType := types.New(types.T_decimal128, 30, 20)
+	decimal256Type := types.New(types.T_decimal256, 65, 30)
+
+	tests := []struct {
+		inputs []types.Type
+		args   []types.T
+	}{
+		{[]types.Type{decimalType, types.T_int64.ToType(), types.T_int64.ToType()}, []types.T{types.T_decimal128, types.T_float64, types.T_float64}},
+		{[]types.Type{decimalType, types.T_varchar.ToType(), types.T_int64.ToType()}, []types.T{types.T_decimal128, types.T_varchar, types.T_float64}},
+		{[]types.Type{decimalType, decimalType, types.T_int64.ToType()}, []types.T{types.T_decimal128, types.T_decimal128, types.T_float64}},
+		{[]types.Type{decimalType, types.T_int64.ToType(), types.T_varchar.ToType()}, []types.T{types.T_decimal128, types.T_float64, types.T_varchar}},
+		{[]types.Type{decimalType, types.T_varchar.ToType(), types.T_varchar.ToType()}, []types.T{types.T_decimal128, types.T_varchar, types.T_varchar}},
+		{[]types.Type{types.T_int64.ToType(), decimalType, types.T_int64.ToType()}, []types.T{types.T_float64, types.T_decimal128, types.T_float64}},
+		{[]types.Type{types.T_varchar.ToType(), decimalType, types.T_int64.ToType()}, []types.T{types.T_varchar, types.T_decimal128, types.T_float64}},
+		{[]types.Type{types.T_int64.ToType(), decimalType, types.T_varchar.ToType()}, []types.T{types.T_float64, types.T_decimal128, types.T_varchar}},
+		{[]types.Type{types.T_varchar.ToType(), decimalType, types.T_varchar.ToType()}, []types.T{types.T_varchar, types.T_decimal128, types.T_varchar}},
+		{[]types.Type{decimalType, decimalType, types.New(types.T_decimal128, 20, 6)}, []types.T{types.T_decimal128, types.T_decimal128, types.T_varchar}},
+		{[]types.Type{decimal256Type, types.T_int64.ToType(), types.T_int64.ToType()}, []types.T{types.T_decimal256, types.T_float64, types.T_float64}},
+		{[]types.Type{types.T_int64.ToType(), decimal256Type, types.T_int64.ToType()}, []types.T{types.T_float64, types.T_decimal256, types.T_float64}},
+		{[]types.Type{decimal256Type, decimalType, types.T_varchar.ToType()}, []types.T{types.T_decimal256, types.T_decimal128, types.T_varchar}},
+		{[]types.Type{decimalType, decimal256Type, types.T_varchar.ToType()}, []types.T{types.T_decimal128, types.T_decimal256, types.T_varchar}},
+		{[]types.Type{decimal256Type, decimal256Type, types.T_varchar.ToType()}, []types.T{types.T_decimal256, types.T_decimal256, types.T_varchar}},
+	}
+
+	for _, test := range tests {
+		result, err := GetFunctionByName(proc.Ctx, "maketime", test.inputs)
+		require.NoError(t, err)
+		require.True(t, result.needCast)
+		selected, err := GetFunctionById(proc.Ctx, result.GetEncodedOverloadID())
+		require.NoError(t, err)
+		require.Equal(t, test.args, selected.args)
+	}
+}
+
+func TestMakeTimeDecimal256OverloadMatrix(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	decimal128Type := types.New(types.T_decimal128, 30, 20)
+	decimal256Type := types.New(types.T_decimal256, 65, 30)
+	type typeChoice struct {
+		input  types.Type
+		target types.T
+	}
+	hourMinuteChoices := []typeChoice{
+		{types.T_int64.ToType(), types.T_float64},
+		{types.T_varchar.ToType(), types.T_varchar},
+		{decimal128Type, types.T_decimal128},
+		{decimal256Type, types.T_decimal256},
+	}
+	secondChoices := []typeChoice{
+		{types.T_int64.ToType(), types.T_float64},
+		{types.T_varchar.ToType(), types.T_varchar},
+	}
+
+	for _, hour := range hourMinuteChoices {
+		for _, minute := range hourMinuteChoices {
+			if hour.target != types.T_decimal256 && minute.target != types.T_decimal256 {
+				continue
+			}
+			for _, second := range secondChoices {
+				result, err := GetFunctionByName(proc.Ctx, "maketime", []types.Type{hour.input, minute.input, second.input})
+				require.NoError(t, err)
+				selected, err := GetFunctionById(proc.Ctx, result.GetEncodedOverloadID())
+				require.NoError(t, err)
+				require.Equal(t, []types.T{hour.target, minute.target, second.target}, selected.args)
+			}
+		}
+	}
+}
+
+func TestMakeTimeStringSecondUsesExactOverload(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	result, err := GetFunctionByName(proc.Ctx, "maketime", []types.Type{
+		types.T_int64.ToType(),
+		types.T_int64.ToType(),
+		types.T_varchar.ToType(),
+	})
+	require.NoError(t, err)
+	require.True(t, result.needCast)
+	require.Len(t, result.targetTypes, 3)
+	require.Equal(t, types.T_float64, result.targetTypes[0].Oid)
+	require.Equal(t, types.T_float64, result.targetTypes[1].Oid)
+	require.Equal(t, types.T_varchar, result.targetTypes[2].Oid)
+	require.Equal(t, int32(-1), result.targetTypes[2].Scale)
+	require.Equal(t, types.T_time.ToTypeWithScale(6), result.retType)
+}
+
+func TestSerialFunctionsReturnBinaryVarchar(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	inputs := []types.Type{types.T_int64.ToType(), types.T_varchar.ToType()}
+
+	for _, name := range []string{SerialFunctionName, SerialFullFunctionName} {
+		t.Run(name, func(t *testing.T) {
+			result, err := GetFunctionByName(proc.Ctx, name, inputs)
+			require.NoError(t, err)
+			require.Equal(t, types.T_varchar, result.GetReturnType().Oid)
+			require.Equal(t, types.CharsetBinary, result.GetReturnType().Charset)
+		})
+	}
+}
+
+func TestConcatFunctionsPreserveStringCollation(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	general := types.T_varchar.ToType()
+	legacy := types.NewWithCharset(types.T_varchar, 32, 0, types.CharsetLegacy)
+	utf8mb4Bin := types.NewWithCharset(types.T_varchar, 32, 0, types.CharsetUTF8MB4Bin)
+	opaqueBinary := types.NewWithCharset(types.T_varchar, 32, 0, types.CharsetBinary)
+
+	testCases := []struct {
+		name        string
+		function    string
+		inputs      []types.Type
+		wantOID     types.T
+		wantCharset uint8
+	}{
+		{
+			name:        "concat keeps legacy byte ordering",
+			function:    "concat",
+			inputs:      []types.Type{general, legacy},
+			wantOID:     types.T_varchar,
+			wantCharset: types.CharsetLegacy,
+		},
+		{
+			name:        "concat keeps utf8mb4 bin",
+			function:    "concat",
+			inputs:      []types.Type{general, utf8mb4Bin},
+			wantOID:     types.T_varchar,
+			wantCharset: types.CharsetUTF8MB4Bin,
+		},
+		{
+			name:        "concat ws keeps utf8mb4 bin",
+			function:    "concat_ws",
+			inputs:      []types.Type{general, utf8mb4Bin, utf8mb4Bin},
+			wantOID:     types.T_varchar,
+			wantCharset: types.CharsetUTF8MB4Bin,
+		},
+		{
+			name:        "opaque binary dominates utf8mb4 bin",
+			function:    "concat",
+			inputs:      []types.Type{utf8mb4Bin, opaqueBinary},
+			wantOID:     types.T_varchar,
+			wantCharset: types.CharsetBinary,
+		},
+		{
+			name:        "binary string keeps blob result",
+			function:    "concat",
+			inputs:      []types.Type{general, types.T_varbinary.ToType()},
+			wantOID:     types.T_blob,
+			wantCharset: types.T_blob.ToType().Charset,
+		},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			result, err := GetFunctionByName(proc.Ctx, testCase.function, testCase.inputs)
+			require.NoError(t, err)
+			require.Equal(t, testCase.wantOID, result.GetReturnType().Oid)
+			require.Equal(t, testCase.wantCharset, result.GetReturnType().Charset)
+		})
+	}
+}
+
+func TestConditionalStringFunctionsPreserveCommonCollation(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	condition := types.T_bool.ToType()
+	binNarrow := types.NewWithCharset(types.T_varchar, 10, 0, types.CharsetUTF8MB4Bin)
+	binWide := types.NewWithCharset(types.T_varchar, 80, 0, types.CharsetUTF8MB4Bin)
+	generalWide := types.NewWithCharset(types.T_varchar, 80, 0, types.CharsetUTF8)
+
+	tests := []struct {
+		name        string
+		function    string
+		inputs      []types.Type
+		wantCharset uint8
+		wantWidth   int32
+	}{
+		{
+			name:        "case keeps matching utf8mb4 bin branches",
+			function:    "case",
+			inputs:      []types.Type{condition, binNarrow, binNarrow},
+			wantCharset: types.CharsetUTF8MB4Bin,
+			wantWidth:   10,
+		},
+		{
+			name:        "case merges branch widths",
+			function:    "case",
+			inputs:      []types.Type{condition, binNarrow, binWide},
+			wantCharset: types.CharsetUTF8MB4Bin,
+			wantWidth:   80,
+		},
+		{
+			name:        "if merges branch widths",
+			function:    "if",
+			inputs:      []types.Type{condition, binNarrow, binWide},
+			wantCharset: types.CharsetUTF8MB4Bin,
+			wantWidth:   80,
+		},
+		{
+			name:        "coalesce merges argument widths",
+			function:    "coalesce",
+			inputs:      []types.Type{binNarrow, binWide},
+			wantCharset: types.CharsetUTF8MB4Bin,
+			wantWidth:   80,
+		},
+		{
+			name:        "binary collation dominates general ci",
+			function:    "coalesce",
+			inputs:      []types.Type{generalWide, binNarrow},
+			wantCharset: types.CharsetUTF8MB4Bin,
+			wantWidth:   80,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			result, err := GetFunctionByName(proc.Ctx, test.function, test.inputs)
+			require.NoError(t, err)
+			require.Equal(t, types.T_varchar, result.GetReturnType().Oid)
+			require.Equal(t, test.wantCharset, result.GetReturnType().Charset)
+			require.Equal(t, test.wantWidth, result.GetReturnType().Width)
+
+			castTypes, shouldCast := result.ShouldDoImplicitTypeCast()
+			if shouldCast {
+				for i, typ := range castTypes {
+					if test.inputs[i].Oid == types.T_bool {
+						continue
+					}
+					require.Equal(t, test.wantCharset, typ.Charset)
+					require.Equal(t, test.wantWidth, typ.Width)
+				}
+			}
+		})
+	}
+}
+
+func TestMinConditionalStringsUsesPropagatedBinaryCollation(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	narrowType := types.NewWithCharset(types.T_varchar, 10, 0, types.CharsetUTF8MB4Bin)
+	wideType := types.NewWithCharset(types.T_varchar, 80, 0, types.CharsetUTF8MB4Bin)
+	narrow := vector.NewVec(narrowType)
+	defer narrow.Free(proc.Mp())
+	wide := vector.NewVec(wideType)
+	defer wide.Free(proc.Mp())
+	for _, value := range []string{"a", "B"} {
+		require.NoError(t, vector.AppendBytes(narrow, []byte(value), false, proc.Mp()))
+		require.NoError(t, vector.AppendBytes(wide, []byte(value), false, proc.Mp()))
+	}
+	condition, err := vector.NewConstFixed(types.T_bool.ToType(), true, 2, proc.Mp())
+	require.NoError(t, err)
+	defer condition.Free(proc.Mp())
+
+	assertBinaryMin := func(t *testing.T, values *vector.Vector) {
+		require.Equal(t, types.CharsetUTF8MB4Bin, values.GetType().Charset)
+		require.Equal(t, int32(80), values.GetType().Width)
+		minExec, err := aggexec.MakeAgg(proc.Mp(), aggexec.AggIdOfMin, false, *values.GetType())
+		require.NoError(t, err)
+		defer minExec.Free()
+		require.NoError(t, minExec.GroupGrow(1))
+		require.NoError(t, minExec.BulkFill(0, []*vector.Vector{values}))
+		results, err := minExec.Flush()
+		require.NoError(t, err)
+		require.Len(t, results, 1)
+		defer results[0].Free(proc.Mp())
+		require.Equal(t, "B", string(results[0].GetBytesAt(0)))
+	}
+
+	tests := []struct {
+		name   string
+		inputs []*vector.Vector
+	}{
+		{name: "case", inputs: []*vector.Vector{condition, narrow, wide}},
+		{name: "if", inputs: []*vector.Vector{condition, narrow, wide}},
+		{name: "coalesce", inputs: []*vector.Vector{narrow, wide}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			inputTypes := make([]types.Type, len(test.inputs))
+			for i := range test.inputs {
+				inputTypes[i] = *test.inputs[i].GetType()
+			}
+			resolved, err := GetFunctionByName(proc.Ctx, test.name, inputTypes)
+			require.NoError(t, err)
+			values, err := RunFunctionDirectly(
+				proc, resolved.GetEncodedOverloadID(), test.inputs, 2)
+			require.NoError(t, err)
+			defer values.Free(proc.Mp())
+			assertBinaryMin(t, values)
+		})
+	}
+}
+
+func TestDerivedStringFunctionsPreserveSourceCollation(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	general := types.T_varchar.ToType()
+	binaryCollation := types.NewWithCharset(types.T_varchar, 32, 0, types.CharsetUTF8MB4Bin)
+	integer := types.T_int64.ToType()
+
+	tests := []struct {
+		name       string
+		inputs     []types.Type
+		wantSource int
+	}{
+		{name: "left", inputs: []types.Type{binaryCollation, integer}, wantSource: 0},
+		{name: "right", inputs: []types.Type{binaryCollation, integer}, wantSource: 0},
+		{name: "substring", inputs: []types.Type{binaryCollation, integer}, wantSource: 0},
+		{name: "replace", inputs: []types.Type{binaryCollation, general, general}, wantSource: 0},
+		{name: "ltrim", inputs: []types.Type{binaryCollation}, wantSource: 0},
+		{name: "rtrim", inputs: []types.Type{binaryCollation}, wantSource: 0},
+		{name: "trim", inputs: []types.Type{general, general, binaryCollation}, wantSource: 2},
+		{name: "elt", inputs: []types.Type{integer, binaryCollation, general}, wantSource: 1},
+		{name: "make_set", inputs: []types.Type{integer, binaryCollation, general}, wantSource: 1},
+		{name: "export_set", inputs: []types.Type{integer, binaryCollation, general}, wantSource: 1},
+		{name: "quote", inputs: []types.Type{binaryCollation}, wantSource: 0},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			result, err := GetFunctionByName(proc.Ctx, test.name, test.inputs)
+			require.NoError(t, err)
+			require.Equal(t, test.inputs[test.wantSource].Charset, result.GetReturnType().Charset)
+		})
+	}
+}
+
+func TestMinConvertUsingAndSubstringUseDerivedCollation(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	inputType := types.NewWithCharset(types.T_varchar, 10, 0, types.CharsetUTF8MB4Bin)
+	input := vector.NewVec(inputType)
+	defer input.Free(proc.Mp())
+	require.NoError(t, vector.AppendBytes(input, []byte("a"), false, proc.Mp()))
+	require.NoError(t, vector.AppendBytes(input, []byte("B"), false, proc.Mp()))
+
+	assertMin := func(t *testing.T, values *vector.Vector, expected string) {
+		minExec, err := aggexec.MakeAgg(proc.Mp(), aggexec.AggIdOfMin, false, *values.GetType())
+		require.NoError(t, err)
+		defer minExec.Free()
+		require.NoError(t, minExec.GroupGrow(1))
+		require.NoError(t, minExec.BulkFill(0, []*vector.Vector{values}))
+		results, err := minExec.Flush()
+		require.NoError(t, err)
+		require.Len(t, results, 1)
+		defer results[0].Free(proc.Mp())
+		require.Equal(t, expected, string(results[0].GetBytesAt(0)))
+	}
+
+	for _, test := range []struct {
+		name        string
+		charset     uint8
+		expectedMin string
+	}{
+		{name: "binary", charset: types.CharsetBinary, expectedMin: "B"},
+		{name: "utf8mb4", charset: types.CharsetUTF8, expectedMin: "a"},
+	} {
+		t.Run("convert_"+test.name, func(t *testing.T) {
+			charsetType := types.NewWithCharset(types.T_varchar, int32(len(test.name)), 0, test.charset)
+			charset, err := vector.NewConstBytes(charsetType, []byte(test.name), 2, proc.Mp())
+			require.NoError(t, err)
+			defer charset.Free(proc.Mp())
+			convert, err := GetFunctionByName(proc.Ctx, "convert", []types.Type{inputType, charsetType})
+			require.NoError(t, err)
+			converted, err := RunFunctionDirectly(
+				proc, convert.GetEncodedOverloadID(), []*vector.Vector{input, charset}, 2)
+			require.NoError(t, err)
+			defer converted.Free(proc.Mp())
+			require.Equal(t, test.charset, converted.GetType().Charset)
+			assertMin(t, converted, test.expectedMin)
+		})
+	}
+
+	t.Run("substring_utf8mb4_bin", func(t *testing.T) {
+		position, err := vector.NewConstFixed(types.T_int64.ToType(), int64(1), 2, proc.Mp())
+		require.NoError(t, err)
+		defer position.Free(proc.Mp())
+		substring, err := GetFunctionByName(proc.Ctx, "substring", []types.Type{inputType, types.T_int64.ToType()})
+		require.NoError(t, err)
+		values, err := RunFunctionDirectly(
+			proc, substring.GetEncodedOverloadID(), []*vector.Vector{input, position}, 2)
+		require.NoError(t, err)
+		defer values.Free(proc.Mp())
+		require.Equal(t, types.CharsetUTF8MB4Bin, values.GetType().Charset)
+		assertMin(t, values, "B")
+	})
+}
+
+func TestMinConcatUsesPropagatedBinaryCollation(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	inputType := types.NewWithCharset(types.T_varchar, 10, 0, types.CharsetUTF8MB4Bin)
+	input := vector.NewVec(inputType)
+	defer input.Free(proc.Mp())
+	require.NoError(t, vector.AppendBytes(input, []byte("a"), false, proc.Mp()))
+	require.NoError(t, vector.AppendBytes(input, []byte("B"), false, proc.Mp()))
+
+	concat, err := GetFunctionByName(proc.Ctx, "concat", []types.Type{inputType, inputType})
+	require.NoError(t, err)
+	concatenated, err := RunFunctionDirectly(
+		proc, concat.GetEncodedOverloadID(), []*vector.Vector{input, input}, 2)
+	require.NoError(t, err)
+	defer concatenated.Free(proc.Mp())
+	require.Equal(t, types.CharsetUTF8MB4Bin, concatenated.GetType().Charset)
+
+	minExec, err := aggexec.MakeAgg(
+		proc.Mp(), aggexec.AggIdOfMin, false, *concatenated.GetType())
+	require.NoError(t, err)
+	defer minExec.Free()
+	require.NoError(t, minExec.GroupGrow(1))
+	require.NoError(t, minExec.BulkFill(0, []*vector.Vector{concatenated}))
+
+	results, err := minExec.Flush()
+	require.NoError(t, err)
+	require.Len(t, results, 1)
+	defer results[0].Free(proc.Mp())
+	require.Equal(t, "BB", string(results[0].GetBytesAt(0)))
+}
+
+func TestMakeTimeStringArgumentTargets(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defaultFloat := types.T_float64.ToType()
+	defaultFloat.Scale = -1
+	scaledFloat := types.T_float64.ToTypeWithScale(1)
+
+	tests := []struct {
+		name         string
+		inputs       []types.Type
+		overloadArgs []types.T
+		needCast     bool
+		targets      []types.Type
+		returnType   types.Type
+	}{
+		{
+			name: "varchar hour and minute with double second",
+			inputs: []types.Type{
+				types.T_varchar.ToType(), types.T_varchar.ToType(), defaultFloat,
+			},
+			overloadArgs: []types.T{types.T_varchar, types.T_varchar, types.T_float64},
+			returnType:   types.T_time.ToTypeWithScale(6),
+		},
+		{
+			name: "all varchar",
+			inputs: []types.Type{
+				types.T_varchar.ToType(), types.T_varchar.ToType(), types.T_varchar.ToType(),
+			},
+			overloadArgs: []types.T{types.T_varchar, types.T_varchar, types.T_varchar},
+			needCast:     true,
+			targets: []types.Type{
+				types.T_varchar.ToType(), types.T_varchar.ToType(), types.T_varchar.ToTypeWithScale(-1),
+			},
+			returnType: types.T_time.ToTypeWithScale(6),
+		},
+		{
+			name: "only hour is varchar",
+			inputs: []types.Type{
+				types.T_varchar.ToType(), scaledFloat, scaledFloat,
+			},
+			overloadArgs: []types.T{types.T_varchar, types.T_float64, types.T_float64},
+			returnType:   types.T_time.ToTypeWithScale(1),
+		},
+		{
+			name: "only minute is varchar",
+			inputs: []types.Type{
+				scaledFloat, types.T_varchar.ToType(), scaledFloat,
+			},
+			overloadArgs: []types.T{types.T_float64, types.T_varchar, types.T_float64},
+			returnType:   types.T_time.ToTypeWithScale(1),
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			result, err := GetFunctionByName(proc.Ctx, "maketime", test.inputs)
+			require.NoError(t, err)
+			require.Equal(t, test.needCast, result.needCast)
+			require.Equal(t, test.targets, result.targetTypes)
+			require.Equal(t, test.returnType, result.retType)
+
+			selected, err := GetFunctionById(proc.Ctx, result.GetEncodedOverloadID())
+			require.NoError(t, err)
+			require.Equal(t, test.overloadArgs, selected.args)
+		})
+	}
+}
+
+func TestMakeTimeBinaryArgumentsUseNumericOverloads(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	binaryTypes := []types.T{types.T_binary, types.T_varbinary, types.T_blob}
+
+	for _, binaryType := range binaryTypes {
+		for position := range 3 {
+			inputs := []types.Type{
+				types.T_int64.ToType(),
+				types.T_int64.ToType(),
+				types.T_int64.ToType(),
+			}
+			inputs[position] = binaryType.ToType()
+
+			result, err := GetFunctionByName(proc.Ctx, "maketime", inputs)
+			require.NoError(t, err)
+			require.True(t, result.needCast)
+			require.Equal(t, types.T_int64, result.targetTypes[position].Oid)
+		}
+	}
+}
+
 func TestGetFunctionByNameAESDecryptReturnsBlob(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	tests := []struct {
@@ -407,6 +1022,121 @@ func TestGetFunctionByNameAESDecryptReturnsBlob(t *testing.T) {
 func TestGetFunctionIsWinfunByName(t *testing.T) {
 	assert.Equal(t, true, GetFunctionIsWinFunByName("rank"))
 	assert.Equal(t, false, GetFunctionIsWinFunByName("floor"))
+}
+
+func TestGetFunctionIsVolatileOrRealTimeRelatedByName(t *testing.T) {
+	assert.True(t, GetFunctionIsVolatileOrRealTimeRelatedByName("rand"))
+	assert.True(t, GetFunctionIsVolatileOrRealTimeRelatedByName("uuid"))
+	assert.True(t, GetFunctionIsVolatileOrRealTimeRelatedByName("now"))
+	assert.True(t, GetFunctionIsVolatileOrRealTimeRelatedByName("current_timestamp"))
+	assert.False(t, GetFunctionIsVolatileOrRealTimeRelatedByName("abs"))
+	assert.False(t, GetFunctionIsVolatileOrRealTimeRelatedByName("unknown_function"))
+}
+
+func TestProducesNoNullUsesFunctionContract(t *testing.T) {
+	require.True(t, ProducesNoNull(EncodeOverloadID(ISNULL, 0)))
+	for _, fid := range []int32{JSON_EXTRACT, JSON_EXTRACT_STRING, JSON_EXTRACT_FLOAT64} {
+		require.False(t, ProducesNoNull(EncodeOverloadID(fid, 0)),
+			"STRICT only describes NULL-input propagation; JSON extractors can still return SQL NULL")
+	}
+	require.False(t, ProducesNoNull(-1))
+}
+
+func TestDeduceNotNullableKeepsNullSynthesizingFunctionsNullable(t *testing.T) {
+	notNull := &plan.Expr{Typ: plan.Type{NotNullable: true}}
+
+	for _, tt := range []struct {
+		name     string
+		fid      int32
+		argCount int
+	}{
+		{name: "division by zero", fid: DIV, argCount: 2},
+		{name: "integer division by zero", fid: INTEGER_DIV, argCount: 2},
+		{name: "modulo by zero", fid: MOD, argCount: 2},
+		{name: "missing JSON path", fid: JSON_EXTRACT, argCount: 2},
+		{name: "JSON string extractor", fid: JSON_EXTRACT_STRING, argCount: 2},
+		{name: "JSON float64 extractor", fid: JSON_EXTRACT_FLOAT64, argCount: 2},
+		{name: "regexp without a match", fid: REGEXP_SUBSTR, argCount: 2},
+		{name: "invalid IPv6 address", fid: INET6_ATON, argCount: 1},
+		{name: "out of range elt index", fid: ELT, argCount: 3},
+		{name: "invalid hex input", fid: UNHEX, argCount: 1},
+		{name: "invalid day of year", fid: MAKEDATE, argCount: 2},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			args := make([]*plan.Expr, tt.argCount)
+			for i := range args {
+				args[i] = notNull
+			}
+			require.False(t, DeduceNotNullable(EncodeOverloadID(tt.fid, 0), args))
+		})
+	}
+}
+
+func TestDeduceNotNullablePreservesArgumentDependentContracts(t *testing.T) {
+	notNull := &plan.Expr{Typ: plan.Type{NotNullable: true}}
+	nullable := &plan.Expr{Typ: plan.Type{NotNullable: false}}
+
+	for _, tt := range []struct {
+		name     string
+		fid      int32
+		argCount int
+	}{
+		{name: "equality", fid: EQUAL, argCount: 2},
+		{name: "addition", fid: PLUS, argCount: 2},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			args := make([]*plan.Expr, tt.argCount)
+			for i := range args {
+				args[i] = notNull
+			}
+			require.True(t, DeduceNotNullable(EncodeOverloadID(tt.fid, 0), args))
+
+			args[0] = nullable
+			require.False(t, DeduceNotNullable(EncodeOverloadID(tt.fid, 0), args))
+		})
+	}
+}
+
+func TestDeduceNotNullablePreservesExplicitContracts(t *testing.T) {
+	notNull := &plan.Expr{Typ: plan.Type{NotNullable: true}}
+	nullable := &plan.Expr{Typ: plan.Type{NotNullable: false}}
+
+	require.True(t, DeduceNotNullable(EncodeOverloadID(CASE, 0), []*plan.Expr{notNull, notNull, notNull}))
+	require.True(t, DeduceNotNullable(EncodeOverloadID(COALESCE, 0), []*plan.Expr{nullable, notNull}))
+	require.True(t, DeduceNotNullable(EncodeOverloadID(ISNULL, 0), []*plan.Expr{nullable}))
+}
+
+func TestDeduceNotNullableForWindowFunctions(t *testing.T) {
+	notNull := &plan.Expr{Typ: plan.Type{NotNullable: true}}
+	nullable := &plan.Expr{Typ: plan.Type{NotNullable: false}}
+
+	for _, tt := range []struct {
+		name string
+		fid  int32
+		args []*plan.Expr
+		want bool
+	}{
+		{name: "lag without default", fid: LAG, args: []*plan.Expr{notNull}},
+		{name: "lag with offset only", fid: LAG, args: []*plan.Expr{notNull, notNull}},
+		{name: "lag with non-null default", fid: LAG, args: []*plan.Expr{notNull, notNull, notNull}, want: true},
+		{name: "lag with nullable default", fid: LAG, args: []*plan.Expr{notNull, notNull, nullable}},
+		{name: "lead without default", fid: LEAD, args: []*plan.Expr{notNull}},
+		{name: "lead with non-null default", fid: LEAD, args: []*plan.Expr{notNull, notNull, notNull}, want: true},
+		{name: "first value can see empty frame", fid: FIRST_VALUE, args: []*plan.Expr{notNull}},
+		{name: "last value can see empty frame", fid: LAST_VALUE, args: []*plan.Expr{notNull}},
+		{name: "nth value can miss requested row", fid: NTH_VALUE, args: []*plan.Expr{notNull, notNull}},
+		{name: "row number is non-null", fid: ROW_NUMBER, want: true},
+		{name: "rank is non-null", fid: RANK, want: true},
+		{name: "dense rank is non-null", fid: DENSE_RANK, want: true},
+		{name: "percent rank is non-null", fid: PERCENT_RANK, want: true},
+		{name: "ntile with non-null bucket count", fid: NTILE, args: []*plan.Expr{notNull}, want: true},
+		{name: "ntile with nullable bucket count", fid: NTILE, args: []*plan.Expr{nullable}},
+		{name: "cume dist is non-null", fid: CUME_DIST, want: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			require.Equal(t, tt.want, DeduceNotNullable(EncodeOverloadID(tt.fid, 0), tt.args))
+		})
+	}
 }
 
 func TestUserLevelLockBuiltinRegistration(t *testing.T) {

@@ -37,7 +37,21 @@ type TableCloneCtx struct {
 	SrcCtx       context.Context
 	ScanSnapshot *plan.Snapshot
 
-	SrcAutoIncrOffsets map[int32]uint64
+	RequestedAutoIncrOffset uint64
+	// Source allocator state is keyed by lower-cased destination column name.
+	// COPY can reorder destination columns, so source indexes are not stable here.
+	SrcAutoIncrMaxValues map[string]uint64
+	SrcAutoIncrOffsets   map[string]uint64
+
+	// IndexAutoIncrStates uses the same lower-cased index key as dstIdxRel
+	// (partition.index.type for partitioned tables). Each hidden table owns an
+	// independent allocator and must be reconciled after its objects are cloned.
+	IndexAutoIncrStates map[string]AutoIncrementState
+}
+
+type AutoIncrementState struct {
+	MaxValues map[string]uint64
+	Offsets   map[string]uint64
 }
 
 type TableClone struct {

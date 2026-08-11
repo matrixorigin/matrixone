@@ -156,7 +156,8 @@ func New(typ types.Type, desc, nullsLast bool) Compare {
 			vs:          make([]*vector.Vector, 2),
 			isConstNull: make([]bool, 2),
 		}
-	case types.T_array_float32, types.T_array_float64:
+	case types.T_array_float32, types.T_array_float64,
+		types.T_array_bf16, types.T_array_float16, types.T_array_int8, types.T_array_uint8:
 		//NOTE: Used by merge_order, merge_top, top agg operators.
 		return &arrayCompare{
 			desc:        desc,
@@ -229,8 +230,10 @@ func (c *compare[T]) Set(idx int, vec *vector.Vector) {
 }
 
 func (c *compare[T]) Compare(veci, vecj int, vi, vj int64) int {
-	n0 := c.isConstNull[veci] || c.ns[veci].Contains(uint64(vi))
-	n1 := c.isConstNull[vecj] || c.ns[vecj].Contains(uint64(vj))
+	n0 := c.isConstNull[veci] || c.ns[veci].Contains(uint64(vi)) ||
+		c.gs[veci].Contains(uint64(vi))
+	n1 := c.isConstNull[vecj] || c.ns[vecj].Contains(uint64(vj)) ||
+		c.gs[vecj].Contains(uint64(vj))
 	cmp := nullsCompare(n0, n1, c.nullsLast)
 	if cmp != 0 {
 		return cmp - nullsCompareFlag
@@ -238,7 +241,11 @@ func (c *compare[T]) Compare(veci, vecj int, vi, vj int64) int {
 	return c.cmp(c.xs[veci][vi], c.xs[vecj][vj])
 }
 
-func (c *compare[T]) Copy(vecSrc, vecDst int, src, dst int64, _ *process.Process) error {
+func (c *compare[T]) Copy(vecSrc, vecDst int, src, dst int64, proc *process.Process) error {
+	if c.gs[vecSrc].Contains(uint64(src)) ||
+		c.gs[vecDst].Contains(uint64(dst)) {
+		return c.vs[vecDst].Copy(c.vs[vecSrc], dst, src, proc.Mp())
+	}
 	if c.isConstNull[vecSrc] || c.ns[vecSrc].Contains(uint64(src)) {
 		nulls.Add(c.ns[vecDst], uint64(dst))
 	} else {

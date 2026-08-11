@@ -21,6 +21,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestLoop1(t *testing.T) {
@@ -37,6 +38,68 @@ func TestLoop1(t *testing.T) {
 		q1 <- i
 	}
 	loop.Stop()
+}
+
+func TestSafeQueueStopIsIdempotent(t *testing.T) {
+	queue := NewSafeQueue(1, 1, func(...any) {})
+	queue.Start()
+
+	require.NotPanics(t, func() {
+		queue.Stop()
+		queue.Stop()
+	})
+
+	_, err := queue.Enqueue("after stop")
+	require.ErrorIs(t, err, ErrClose)
+}
+
+func TestSafeQueueRejectsEnqueueAfterStopBegins(t *testing.T) {
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	queue := NewSafeQueue(1, 1, func(...any) {
+		close(entered)
+		<-release
+	})
+	queue.Start()
+	_, err := queue.Enqueue("in flight")
+	require.NoError(t, err)
+	<-entered
+
+	stopped := make(chan struct{})
+	go func() {
+		queue.Stop()
+		close(stopped)
+	}()
+	require.Eventually(t, func() bool {
+		return queue.state.Load() >= ReceiverStopped
+	}, 10*time.Second, time.Millisecond)
+
+	_, err = queue.Enqueue("after stop begins")
+	require.ErrorIs(t, err, ErrClose)
+	close(release)
+	select {
+	case <-stopped:
+	case <-time.After(10 * time.Second):
+		t.Fatal("queue stop did not finish")
+	}
+}
+
+func TestSafeQueueWithoutHandlerStops(t *testing.T) {
+	queue := NewSafeQueue(1, 1, nil)
+	queue.Start()
+	_, err := queue.Enqueue("discarded")
+	require.NoError(t, err)
+
+	done := make(chan struct{})
+	go func() {
+		queue.Stop()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("queue with nil handler did not stop")
+	}
 }
 
 func TestNewNonBlockingQueue(t *testing.T) {

@@ -16,6 +16,8 @@ package compile
 
 import (
 	"context"
+	"fmt"
+	"sync"
 	"testing"
 	"time"
 
@@ -36,18 +38,166 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/buffer"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	plan2 "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
+	"github.com/matrixorigin/matrixone/pkg/sql/features"
+	sqlmongodb "github.com/matrixorigin/matrixone/pkg/sql/mongodb"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	hnswruntime "github.com/matrixorigin/matrixone/pkg/vectorindex/hnsw/plugin/runtime"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
+
+type mongoDBMappingTestExecutor struct {
+	results map[string]executor.Result
+	sqls    []string
+}
+
+func (e *mongoDBMappingTestExecutor) Exec(
+	_ context.Context,
+	sql string,
+	_ executor.Options,
+) (executor.Result, error) {
+	e.sqls = append(e.sqls, sql)
+	return e.results[sql], nil
+}
+
+func (*mongoDBMappingTestExecutor) ExecTxn(
+	context.Context,
+	func(executor.TxnExecutor) error,
+	executor.Options,
+) error {
+	return nil
+}
+
+func newMongoDBMappingTestCompile(
+	t *testing.T,
+	ctrl *gomock.Controller,
+	exec executor.SQLExecutor,
+) (*Compile, *mock_frontend.MockDatabase, *mock_frontend.MockRelation) {
+	t.Helper()
+	proc := testutil.NewProcess(t)
+	ctx := defines.AttachAccountId(context.Background(), 7)
+	proc.Ctx = ctx
+	proc.ReplaceTopCtx(ctx)
+	moruntime.ServiceRuntime(proc.GetService()).SetGlobalVariables(moruntime.InternalSQLExecutor, exec)
+	return &Compile{proc: proc, pn: &plan2.Plan{}},
+		mock_frontend.NewMockDatabase(ctrl), mock_frontend.NewMockRelation(ctrl)
+}
+
+func TestRequireCheckRenameProtocol(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	c := &Compile{proc: proc}
+	rt := moruntime.ServiceRuntime(proc.GetService())
+	original, hadOriginal := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	defer func() {
+		if hadOriginal {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, original)
+		} else {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+		}
+	}()
+
+	checks := []*plan2.CheckDef{{OriginSql: "`renamed_col` > 0"}}
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion14)
+	require.ErrorContains(t, c.requireCheckRenameProtocol(checks), "protocol version 15")
+	require.NoError(t, c.requireCheckRenameProtocol(nil))
+
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion15)
+	require.NoError(t, c.requireCheckRenameProtocol(checks))
+}
+
+func mongoDBConnectionResult(t *testing.T, proc *process.Process, connectionID, disabled uint64) executor.Result {
+	t.Helper()
+	columnTypes := make([]types.Type, 18)
+	for i := range columnTypes {
+		columnTypes[i] = types.T_uint64.ToType()
+	}
+	result := executor.NewMemResult(columnTypes, proc.Mp())
+	result.NewBatchWithRowCount(1)
+	require.NoError(t, executor.AppendFixedRows(result, 1, []uint64{connectionID}))
+	require.NoError(t, executor.AppendFixedRows(result, 17, []uint64{disabled}))
+	return result.GetResult()
+}
+
+func TestMongoDBTableMappingDDLValidationAndPersistence(t *testing.T) {
+	mapping := sqlmongodb.TableMapping{
+		Connection: "source", Database: "telemetry", Collection: "events",
+		SchemaMode: sqlmongodb.SchemaExplicit, Conversion: sqlmongodb.ConversionStrict,
+		Columns: []sqlmongodb.ColumnMapping{{
+			Name: "value", Path: "value", TypeID: int32(types.T_int64), Conversion: sqlmongodb.ConversionStrict,
+		}},
+	}
+
+	t.Run("insert mapping", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		exec := &mongoDBMappingTestExecutor{results: make(map[string]executor.Result)}
+		c, db, rel := newMongoDBMappingTestCompile(t, ctrl, exec)
+		db.EXPECT().GetDatabaseId(gomock.Any()).Return("8")
+		rel.EXPECT().GetTableID(gomock.Any()).Return(uint64(9))
+		lookupSQL := sqlmongodb.GetConnectionByNameForUpdateSQL(7, mapping.Connection)
+		exec.results[lookupSQL] = mongoDBConnectionResult(t, c.proc, 42, 0)
+		qry := &plan2.CreateTable{TableDef: &plan2.TableDef{
+			FeatureFlag: features.MongoDBExternal,
+			Createsql:   sqlmongodb.BuildCreateSQLEnvelope(mapping),
+		}}
+
+		require.NoError(t, c.maybeInsertMongoDBTableMapping(db, rel, qry))
+		require.Len(t, exec.sqls, 2)
+		require.Equal(t, lookupSQL, exec.sqls[0])
+		require.Contains(t, exec.sqls[1], "insert into mo_catalog."+sqlmongodb.TableMappings)
+		require.Contains(t, exec.sqls[1], "values (7,8,9,42")
+		require.Zero(t, c.proc.Mp().CurrNB())
+	})
+
+	t.Run("typed insert requires envelope", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		exec := &mongoDBMappingTestExecutor{}
+		c, _, _ := newMongoDBMappingTestCompile(t, ctrl, exec)
+		qry := &plan2.CreateTable{TableDef: &plan2.TableDef{FeatureFlag: features.MongoDBExternal}}
+
+		err := c.maybeInsertMongoDBTableMapping(nil, nil, qry)
+		require.ErrorContains(t, err, "missing its catalog envelope")
+		require.Empty(t, exec.sqls)
+	})
+
+	t.Run("typed insert rejects malformed envelope", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		exec := &mongoDBMappingTestExecutor{}
+		c, _, _ := newMongoDBMappingTestCompile(t, ctrl, exec)
+		qry := &plan2.CreateTable{TableDef: &plan2.TableDef{
+			FeatureFlag: features.MongoDBExternal,
+			Createsql:   "/* MO_MONGODB: version=2",
+		}}
+
+		err := c.maybeInsertMongoDBTableMapping(nil, nil, qry)
+		require.ErrorContains(t, err, "envelope is not closed")
+		require.Empty(t, exec.sqls)
+	})
+
+	t.Run("delete mapping", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		exec := &mongoDBMappingTestExecutor{}
+		c, db, rel := newMongoDBMappingTestCompile(t, ctrl, exec)
+		db.EXPECT().GetDatabaseId(gomock.Any()).Return("8")
+		rel.EXPECT().GetTableID(gomock.Any()).Return(uint64(9))
+		tableDef := &plan2.TableDef{
+			TableType:   catalog.SystemExternalRel,
+			FeatureFlag: features.MongoDBExternal,
+			Createsql:   sqlmongodb.BuildCreateSQLEnvelope(mapping),
+		}
+
+		require.NoError(t, c.maybeDeleteMongoDBTableMapping(db, rel, tableDef))
+		require.Equal(t, []string{sqlmongodb.DeleteTableMappingSQL(7, 8, 9)}, exec.sqls)
+	})
+}
 
 func TestConvertDBEOBToNoSuchTable(t *testing.T) {
 	err := convertDBEOBToNoSuchTable(context.Background(), moerr.GetOkExpectedEOB(), "db1", "t2")
@@ -59,6 +209,27 @@ func TestConvertDBEOBToNoSuchTablePassThrough(t *testing.T) {
 	want := moerr.NewBadDB(context.Background(), "db1")
 	got := convertDBEOBToNoSuchTable(context.Background(), want, "db1", "t2")
 	require.Same(t, want, got)
+}
+
+func TestIsMissingCCPRMetadataTable(t *testing.T) {
+	tableName := catalog.MO_CCPR_TABLES
+
+	require.True(t, isMissingCCPRMetadataTable(
+		moerr.NewNoSuchTableNoCtx(catalog.MO_CATALOG, tableName),
+		tableName,
+	))
+	require.True(t, isMissingCCPRMetadataTable(
+		moerr.NewParseErrorNoCtx(fmt.Sprintf("table %q does not exist", tableName)),
+		tableName,
+	))
+	require.False(t, isMissingCCPRMetadataTable(
+		moerr.NewParseErrorNoCtx(`table "another_table" does not exist`),
+		tableName,
+	))
+	require.False(t, isMissingCCPRMetadataTable(
+		moerr.NewInternalErrorNoCtx("ccpr metadata query failed"),
+		tableName,
+	))
 }
 
 func TestTableScopedDDLDatabaseEOBMapsToNoSuchTable(t *testing.T) {
@@ -191,6 +362,23 @@ func TestTableScopedDDLDatabaseEOBMapsToNoSuchTable(t *testing.T) {
 			Table:    "t2",
 		})
 		require.True(t, moerr.IsMoErrCode(err, moerr.ErrNoSuchTable))
+	})
+
+	t.Run("TemporaryPlanDoesNotFallThroughToPermanentTable", func(t *testing.T) {
+		c := newCompileWithStubEngine(t, newStubEngine(), "drop temporary table t2")
+		c.proc.Session = &testInternalExecutorSession{}
+		s := &Scope{}
+		qry := &plan2.DropTable{
+			Database: "db1",
+			Table:    "t2",
+			TableDef: &plan2.TableDef{IsTemporary: true},
+		}
+
+		err := s.dropTableSingle(c, qry)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrNoSuchTable))
+
+		qry.IfExists = true
+		require.NoError(t, s.dropTableSingle(c, qry))
 	})
 }
 func Test_lockIndexTable(t *testing.T) {
@@ -497,6 +685,94 @@ func TestScope_CreateTable(t *testing.T) {
 		c := NewCompile("test", "test", sql, "", "", eng, proc, nil, false, nil, time.Now())
 		assert.Error(t, s.CreateTable(c))
 	})
+}
+
+func TestScopeCreateTemporaryTableRestoresCachedPlanOnError(t *testing.T) {
+	stubs := gostub.New()
+	defer stubs.Reset()
+	stubs.Stub(&engine.PlanDefsToExeDefs, func(_ *plan2.TableDef) ([]engine.TableDef, *api.SchemaExtra, error) {
+		return nil, nil, moerr.NewInternalErrorNoCtx("stop after temporary names are rewritten")
+	})
+
+	indexTable := &plan2.TableDef{
+		Name: "idx_table", TableType: catalog.SystemOrdinaryRel, TblId: 42,
+	}
+	index := &plan2.IndexDef{IndexTableName: indexTable.Name}
+	createTable := &plan2.CreateTable{
+		Database: "test", Temporary: true,
+		TableDef:    &plan2.TableDef{Name: "temporary_table", Indexes: []*plan2.IndexDef{index}},
+		IndexTables: []*plan2.TableDef{indexTable},
+	}
+	s := &Scope{Plan: &plan2.Plan{Plan: &plan2.Plan_Ddl{Ddl: &plan2.DataDefinition{
+		Definition: &plan2.DataDefinition_CreateTable{CreateTable: createTable},
+	}}}}
+	proc := testutil.NewProcess(t)
+	proc.Session = &testInternalExecutorSession{}
+	c := NewCompile("test", "test", "create temporary table temporary_table (a int)", "", "", nil, proc, nil, false, nil, time.Now())
+
+	require.Error(t, s.CreateTable(c))
+	require.Equal(t, "temporary_table", createTable.TableDef.Name)
+	require.Equal(t, "idx_table", indexTable.Name)
+	require.Equal(t, catalog.SystemOrdinaryRel, indexTable.TableType)
+	require.False(t, indexTable.IsTemporary)
+	require.Equal(t, uint64(42), indexTable.TblId)
+	require.Equal(t, "idx_table", index.IndexTableName)
+}
+
+type trackingTempTableSession struct {
+	tables map[string]string
+}
+
+func (s *trackingTempTableSession) GetTempTable(dbName, alias string) (string, bool) {
+	realName, ok := s.tables[dbName+"."+alias]
+	return realName, ok
+}
+
+func (s *trackingTempTableSession) AddTempTable(dbName, alias, realName string) {
+	s.tables[dbName+"."+alias] = realName
+}
+
+func (s *trackingTempTableSession) RemoveTempTable(dbName, alias string) {
+	delete(s.tables, dbName+"."+alias)
+}
+
+func (s *trackingTempTableSession) RemoveTempTableByRealName(string) {}
+
+func (s *trackingTempTableSession) GetSqlModeNoAutoValueOnZero() (bool, bool) {
+	return false, false
+}
+
+func TestScopeCreateTemporaryTableRollsBackAliasAfterLateFailure(t *testing.T) {
+	stubs := gostub.New()
+	defer stubs.Reset()
+	stubs.Stub(&engine.PlanDefsToExeDefs, func(_ *plan2.TableDef) ([]engine.TableDef, *api.SchemaExtra, error) {
+		return nil, &api.SchemaExtra{}, nil
+	})
+	stubs.Stub(&lockMoDatabase, func(*Compile, string, lock.LockMode) error { return nil })
+	stubs.Stub(&lockMoTable, func(*Compile, string, string, lock.LockMode) error { return nil })
+	stubs.Stub(&checkIndexInitializable, func(string, string) bool { return false })
+	stubs.Stub(&maybeCreateAutoIncrement, func(
+		context.Context, string, engine.Database, *plan2.TableDef, client.TxnOperator, func() string,
+	) error {
+		return moerr.NewInternalErrorNoCtx("late failure")
+	})
+
+	createTable := &plan2.CreateTable{
+		Database: "test", Temporary: true, TableDef: &plan2.TableDef{Name: "temporary_table"},
+	}
+	s := &Scope{Plan: &plan2.Plan{Plan: &plan2.Plan_Ddl{Ddl: &plan2.DataDefinition{
+		Definition: &plan2.DataDefinition_CreateTable{CreateTable: createTable},
+	}}}}
+	proc := testutil.NewProcess(t)
+	session := &trackingTempTableSession{tables: make(map[string]string)}
+	proc.Session = session
+	eng := newStubEngine()
+	eng.dbs["test"] = newStubDatabase("test")
+	c := NewCompile("test", "test", "create temporary table temporary_table (a int)", "", "", eng, proc, nil, false, nil, time.Now())
+
+	require.Error(t, s.CreateTable(c))
+	_, exists := session.GetTempTable("test", "temporary_table")
+	require.False(t, exists)
 }
 
 func TestScope_CreateView(t *testing.T) {
@@ -811,6 +1087,97 @@ func Test_getSqlForCheckPitrDup(t *testing.T) {
 	assert.Contains(t, getSqlForCheckPitrDup(mk(int32(tree.PITRLEVELTABLE), false)), "table_name = 'tb'")
 }
 
+func TestPitrInternalSQLEscapesStringLiterals(t *testing.T) {
+	assert.Contains(
+		t,
+		getSqlForCheckPitrExists("pi'tr\\name", 7),
+		"pitr_name = 'pi''tr\\\\name'",
+	)
+
+	p := &plan2.CreatePitr{
+		Level:            int32(tree.PITRLEVELTABLE),
+		CurrentAccountId: 1,
+		DatabaseName:     "db'name",
+		TableName:        "tb\\name",
+	}
+	sql := getSqlForCheckPitrDup(p)
+	assert.Contains(t, sql, "database_name = 'db''name'")
+	assert.Contains(t, sql, "table_name = 'tb\\\\name'")
+}
+
+func TestPreparePitrPublicationSerializesCopyAlter(t *testing.T) {
+	var publicationLock sync.Mutex
+	currentTableID := uint64(1)
+	copyHasLock := make(chan struct{})
+	releaseCopy := make(chan struct{})
+	copyDone := make(chan struct{})
+
+	go func() {
+		publicationLock.Lock()
+		close(copyHasLock)
+		<-releaseCopy
+		currentTableID = 2
+		publicationLock.Unlock()
+		close(copyDone)
+	}()
+	<-copyHasLock
+
+	pitrTriedLock := make(chan struct{})
+	pitrResult := make(chan uint64, 1)
+	pitrErr := make(chan error, 1)
+	go func() {
+		objectID, err := preparePitrPublication(
+			func() error {
+				close(pitrTriedLock)
+				publicationLock.Lock()
+				return nil
+			},
+			func() error { return nil },
+			func() (uint64, error) { return currentTableID, nil },
+		)
+		if err != nil {
+			pitrErr <- err
+			return
+		}
+		pitrResult <- objectID
+	}()
+	<-pitrTriedLock
+
+	select {
+	case objectID := <-pitrResult:
+		publicationLock.Unlock()
+		t.Fatalf("PITR resolved table ID %d before COPY ALTER released the publication barrier", objectID)
+	default:
+	}
+
+	close(releaseCopy)
+	<-copyDone
+	select {
+	case err := <-pitrErr:
+		t.Fatal(err)
+	case objectID := <-pitrResult:
+		require.Equal(t, uint64(2), objectID)
+		publicationLock.Unlock()
+	}
+}
+
+func TestResolveCurrentPitrObjectIDRefreshesPlannedTableID(t *testing.T) {
+	eng := newStubEngine()
+	db := newStubDatabase("db")
+	db.rels["tbl"] = newStubRelation("tbl")
+	eng.dbs["db"] = db
+	c := &Compile{e: eng, proc: testutil.NewProc(t)}
+
+	objectID, err := c.resolveCurrentPitrObjectID(&plan2.CreatePitr{
+		Level:        int32(tree.PITRLEVELTABLE),
+		DatabaseName: "db",
+		TableName:    "tbl",
+		TableId:      99,
+	})
+	require.NoError(t, err)
+	require.Equal(t, uint64(1), objectID)
+}
+
 func TestCheckSysMoCatalogPitrResult(t *testing.T) {
 	mp := mpool.MustNewZero()
 	ctx := context.Background()
@@ -963,6 +1330,21 @@ func Test_toHours(t *testing.T) {
 			t.Fatalf("toHours(%d,%q)=%d, want %d", c.val, c.unit, got, c.want)
 		}
 	}
+}
+
+func TestPitrGranularitySqlEscapesStringLiterals(t *testing.T) {
+	dbWithAccount := getPitrDatabaseGranularitySql("db'name", 7, true)
+	require.Contains(t, dbWithAccount, "lower(database_name) = 'db''name'")
+	require.Contains(t, dbWithAccount, "account_id = 7")
+
+	dbWithoutAccount := getPitrDatabaseGranularitySql("db\\name", 7, false)
+	require.Contains(t, dbWithoutAccount, "lower(database_name) = 'db\\\\name'")
+	require.NotContains(t, dbWithoutAccount, "account_id")
+
+	tbl := getPitrTableGranularitySql("db'name", "tbl\\name", 9)
+	require.Contains(t, tbl, "lower(database_name)='db''name'")
+	require.Contains(t, tbl, "lower(table_name)='tbl\\\\name'")
+	require.Contains(t, tbl, "account_id = 9")
 }
 
 // TestDropDatabase_SnapshotAdvance verifies that DropDatabase safely advances
@@ -1459,6 +1841,47 @@ func TestRemoveFkeysRelationshipsSkipsDeletedParentTableIds(t *testing.T) {
 	c := NewCompile("test", "test", "drop database acc_test02", "", "", eng, proc, nil, false, nil, time.Now())
 	s := &Scope{}
 	require.NoError(t, s.removeFkeysRelationships(c, "acc_test02"))
+}
+
+func TestAddChildTableIDToDistinctParents(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	parentOne := mock_frontend.NewMockRelation(ctrl)
+	duplicateParentOne := mock_frontend.NewMockRelation(ctrl)
+	parentTwo := mock_frontend.NewMockRelation(ctrl)
+	parentOne.EXPECT().GetTableID(gomock.Any()).Return(uint64(10)).Times(1)
+	duplicateParentOne.EXPECT().GetTableID(gomock.Any()).Return(uint64(10)).Times(1)
+	parentTwo.EXPECT().GetTableID(gomock.Any()).Return(uint64(20)).Times(1)
+
+	constraintFor := func() *engine.ConstraintDef {
+		return &engine.ConstraintDef{Cts: []engine.Constraint{
+			&engine.RefChildTableDef{Tables: []uint64{1}},
+		}}
+	}
+	getConstraintDef := gostub.Stub(&GetConstraintDef, func(_ context.Context, relation engine.Relation) (*engine.ConstraintDef, error) {
+		switch relation {
+		case parentOne, parentTwo:
+			return constraintFor(), nil
+		default:
+			t.Fatalf("unexpected parent relation")
+			return nil, nil
+		}
+	})
+	defer getConstraintDef.Reset()
+
+	assertRefChild := func(_ context.Context, constraint *engine.ConstraintDef) error {
+		require.Equal(t, []uint64{1, 77}, canonicalRefChildTableIDs(constraint))
+		return nil
+	}
+	parentOne.EXPECT().UpdateConstraint(gomock.Any(), gomock.Any()).DoAndReturn(assertRefChild).Times(1)
+	parentTwo.EXPECT().UpdateConstraint(gomock.Any(), gomock.Any()).DoAndReturn(assertRefChild).Times(1)
+
+	require.NoError(t, addChildTableIDToDistinctParents(
+		context.Background(),
+		[]engine.Relation{parentOne, duplicateParentOne, parentTwo},
+		77,
+	))
 }
 
 func TestMissingTablePredicates(t *testing.T) {

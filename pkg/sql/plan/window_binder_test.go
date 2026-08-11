@@ -19,6 +19,7 @@ import (
 	"strconv"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
@@ -29,9 +30,10 @@ import (
 )
 
 type stubWindowBinder struct {
-	bindExprFunc       func(tree.Expr, int32, bool) (*planpb.Expr, error)
-	bindFuncExprFunc   func(string, []tree.Expr, int32) (*planpb.Expr, error)
-	makeFrameValueFunc func(tree.Expr, *planpb.Type) (*planpb.Expr, error)
+	bindExprFunc                   func(tree.Expr, int32, bool) (*planpb.Expr, error)
+	bindFuncExprFunc               func(string, []tree.Expr, int32) (*planpb.Expr, error)
+	bindPreparedRowsFrameBoundFunc func(tree.Expr) (*planpb.Expr, error)
+	makeFrameValueFunc             func(tree.Expr, *planpb.Type) (*planpb.Expr, error)
 }
 
 func (b *stubWindowBinder) BindExpr(expr tree.Expr, depth int32, isRoot bool) (*planpb.Expr, error) {
@@ -40,6 +42,14 @@ func (b *stubWindowBinder) BindExpr(expr tree.Expr, depth int32, isRoot bool) (*
 
 func (b *stubWindowBinder) bindFuncExprImplByAstExpr(name string, args []tree.Expr, depth int32) (*planpb.Expr, error) {
 	return b.bindFuncExprFunc(name, args, depth)
+}
+
+func (b *stubWindowBinder) bindPreparedNumericAggregateFuncExpr(name string, args []tree.Expr, depth int32) (*planpb.Expr, error) {
+	return b.bindFuncExprImplByAstExpr(name, args, depth)
+}
+
+func (b *stubWindowBinder) bindPreparedRowsFrameBound(expr tree.Expr) (*planpb.Expr, error) {
+	return b.bindPreparedRowsFrameBoundFunc(expr)
 }
 
 func (b *stubWindowBinder) makeFrameConstValue(expr tree.Expr, typ *planpb.Type) (*planpb.Expr, error) {
@@ -151,6 +161,202 @@ func testWindowValidationBinder() *stubWindowBinder {
 			return makePlan2Int64ConstExprWithType(1), nil
 		},
 	}
+}
+
+const preparedWindowFrameSQL = "select sum(n_nationkey) over (order by n_nationkey rows between ? preceding and ? following) from nation"
+
+func TestPreparedWindowFrameMarkers(t *testing.T) {
+	optimizer := NewMockOptimizer(false)
+	stmts, err := parsers.Parse(optimizer.CurrentContext().GetContext(), dialect.MYSQL, preparedWindowFrameSQL, 1)
+	require.NoError(t, err)
+
+	queryPlan, err := BuildPlan(optimizer.CurrentContext(), stmts[0], true)
+	require.NoError(t, err)
+	window := firstWindowSpec(t, queryPlan)
+	requirePreparedRowsFrameParam(t, window.Frame.Start.Val, 1)
+	requirePreparedRowsFrameParam(t, window.Frame.End.Val, 2)
+}
+
+func TestNthValueRequiresConstantPositiveOffset(t *testing.T) {
+	ctx := NewMockCompilerContext(true)
+	tests := []struct {
+		name    string
+		sql     string
+		wantErr bool
+	}{
+		{
+			name: "constant positive expression",
+			sql:  "select nth_value(a, 1 + 1) over (order by a) from select_test.bind_select",
+		},
+		{
+			name:    "zero offset",
+			sql:     "select nth_value(a, 0) over (order by a) from select_test.bind_select",
+			wantErr: true,
+		},
+		{
+			name:    "column offset",
+			sql:     "select nth_value(a, a - 1) over (order by a) from select_test.bind_select",
+			wantErr: true,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, tc.sql, 1)
+			require.NoError(t, err)
+
+			_, err = BuildPlan(ctx, stmt, false)
+			if !tc.wantErr {
+				require.NoError(t, err)
+				return
+			}
+
+			require.Error(t, err)
+			require.Equal(t, "Incorrect arguments to nth_value", err.Error())
+			moErr, ok := err.(*moerr.Error)
+			require.True(t, ok)
+			require.Equal(t, moerr.ER_WRONG_ARGUMENTS, moErr.MySQLCode())
+			require.Equal(t, moerr.MySQLDefaultSqlState, moErr.SqlState())
+		})
+	}
+}
+
+func TestPreparedWindowRangeFrameMarkersAreUnsupported(t *testing.T) {
+	optimizer := NewMockOptimizer(false)
+	stmts, err := parsers.Parse(
+		optimizer.CurrentContext().GetContext(),
+		dialect.MYSQL,
+		"select sum(n_nationkey) over (order by n_nationkey range between ? preceding and ? following) from nation",
+		1,
+	)
+	require.NoError(t, err)
+
+	_, err = BuildPlan(optimizer.CurrentContext(), stmts[0], true)
+	require.ErrorContains(t, err, "prepared parameter markers in RANGE window frames")
+}
+
+func TestPreparedWindowIntervalFrameMarkersAreUnsupported(t *testing.T) {
+	for _, frameType := range []string{"rows", "range"} {
+		t.Run(frameType, func(t *testing.T) {
+			optimizer := NewMockOptimizer(false)
+			stmts, err := parsers.Parse(
+				optimizer.CurrentContext().GetContext(),
+				dialect.MYSQL,
+				"select sum(n_nationkey) over (order by n_nationkey "+frameType+" between interval ? day preceding and current row) from nation",
+				1,
+			)
+			require.NoError(t, err)
+
+			_, err = BuildPlan(optimizer.CurrentContext(), stmts[0], true)
+			require.ErrorContains(t, err, "prepared parameter markers in interval window frames")
+		})
+	}
+}
+
+func TestPreparedWindowNestedIntervalFrameMarkersAreUnsupported(t *testing.T) {
+	for _, frameType := range []string{"rows", "range"} {
+		t.Run(frameType, func(t *testing.T) {
+			optimizer := NewMockOptimizer(false)
+			stmts, err := parsers.Parse(
+				optimizer.CurrentContext().GetContext(),
+				dialect.MYSQL,
+				"select sum(n_nationkey) over (order by n_nationkey "+frameType+" between interval (? + 1) day preceding and current row) from nation",
+				1,
+			)
+			require.NoError(t, err)
+
+			_, err = BuildPlan(optimizer.CurrentContext(), stmts[0], true)
+			require.ErrorContains(t, err, "prepared parameter markers in interval window frames")
+		})
+	}
+}
+
+func TestHasWindowFrameParamTraversesExpressionForms(t *testing.T) {
+	param := func() tree.Expr { return tree.NewParamExpr(1) }
+	literal := func() tree.Expr { return testNumVal(1) }
+	tests := []struct {
+		name string
+		expr tree.Expr
+	}{
+		{
+			name: "binary",
+			expr: tree.NewBinaryExpr(tree.PLUS, param(), literal()),
+		},
+		{
+			name: "comparison",
+			expr: tree.NewComparisonExpr(tree.EQUAL, literal(), param()),
+		},
+		{
+			name: "boolean",
+			expr: tree.NewAndExpr(literal(), tree.NewNotExpr(param())),
+		},
+		{
+			name: "case",
+			expr: tree.NewCaseExpr(nil, []*tree.When{tree.NewWhen(literal(), param())}, literal()),
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			require.True(t, hasWindowFrameParam(tc.expr))
+		})
+	}
+}
+
+func TestHasWindowFrameParamRejectsExpressionFormsWithoutParameters(t *testing.T) {
+	literal := func() tree.Expr { return testNumVal(1) }
+	tests := []struct {
+		name string
+		expr tree.Expr
+	}{
+		{name: "literal", expr: literal()},
+		{name: "binary", expr: tree.NewBinaryExpr(tree.PLUS, literal(), literal())},
+		{name: "unary", expr: &tree.UnaryExpr{Expr: literal()}},
+		{name: "comparison", expr: tree.NewComparisonExpr(tree.EQUAL, literal(), literal())},
+		{name: "boolean", expr: tree.NewAndExpr(literal(), tree.NewNotExpr(literal()))},
+		{name: "xor", expr: &tree.XorExpr{Left: literal(), Right: literal()}},
+		{name: "or", expr: &tree.OrExpr{Left: literal(), Right: literal()}},
+		{name: "is-null", expr: &tree.IsNullExpr{Expr: literal()}},
+		{name: "paren", expr: &tree.ParenExpr{Expr: literal()}},
+		{name: "tuple", expr: &tree.Tuple{Exprs: tree.Exprs{literal(), literal()}}},
+		{name: "interval", expr: &tree.IntervalExpr{Expr: literal()}},
+		{name: "default", expr: &tree.DefaultVal{Expr: literal()}},
+		{name: "variable", expr: &tree.VarExpr{Expr: literal()}},
+		{name: "case", expr: tree.NewCaseExpr(nil, []*tree.When{tree.NewWhen(literal(), literal())}, literal())},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			require.False(t, hasWindowFrameParam(tc.expr))
+		})
+	}
+
+	require.False(t, isPreparedWindowIntervalBound(testScalarFuncExpr("interval", literal())))
+}
+
+func firstWindowSpec(t *testing.T, queryPlan *planpb.Plan) *planpb.WindowSpec {
+	t.Helper()
+	for _, node := range queryPlan.GetQuery().Nodes {
+		for _, window := range node.WinSpecList {
+			if window.GetW() != nil {
+				return window.GetW()
+			}
+		}
+	}
+	require.Fail(t, "expected window spec in query plan")
+	return nil
+}
+
+func requirePreparedRowsFrameParam(t *testing.T, expr *planpb.Expr, pos int32) {
+	t.Helper()
+	require.Equal(t, int32(types.T_uint64), expr.Typ.Id)
+	cast := expr.GetF()
+	require.NotNil(t, cast)
+	require.Equal(t, "cast", cast.Func.ObjName)
+	require.NotEmpty(t, cast.Args)
+	param := cast.Args[0].GetP()
+	require.NotNil(t, param)
+	require.Equal(t, pos, param.Pos)
 }
 
 func TestProjectionAndHavingBinderBindExprOnWindowAlias(t *testing.T) {
@@ -598,6 +804,38 @@ func TestBindWindowFuncExprValidationAndHelpers(t *testing.T) {
 
 		_, err := bindWindowFuncExpr(binder, ctx, "sum", testRangeWindowExpr(), 0, true)
 		require.Error(t, err)
+	})
+
+	t.Run("range frame without offsets accepts non-numeric order by", func(t *testing.T) {
+		binder := &stubWindowBinder{
+			bindExprFunc: func(tree.Expr, int32, bool) (*planpb.Expr, error) {
+				return makePlan2StringConstExprWithType("x"), nil
+			},
+			bindFuncExprFunc: func(string, []tree.Expr, int32) (*planpb.Expr, error) {
+				return makePlan2Int64ConstExprWithType(1), nil
+			},
+			makeFrameValueFunc: func(tree.Expr, *planpb.Type) (*planpb.Expr, error) {
+				return makePlan2Int64ConstExprWithType(1), nil
+			},
+		}
+		ctx := &BindContext{windowTag: 9, windowByAst: make(map[string]int32)}
+		ws := testRangeWindowExpr().WindowSpec
+		ws.Frame.Start.Expr = nil
+		ws.Frame.Start.UnBounded = true
+		ws.Frame.End = &tree.FrameBound{Type: tree.CurrentRow}
+
+		expr, err := bindWindowFuncExpr(
+			binder,
+			ctx,
+			"sum",
+			testWindowFuncExpr("sum", tree.FUNC_TYPE_DEFAULT, ws, testNumVal(1)),
+			0,
+			true,
+		)
+		require.NoError(t, err)
+		require.NotNil(t, expr)
+		require.Len(t, ctx.windows, 1)
+		require.Equal(t, planpb.FrameClause_RANGE, ctx.windows[0].GetW().Frame.Type)
 	})
 
 	t.Run("buildWindowColRefExpr keeps tag and column", func(t *testing.T) {

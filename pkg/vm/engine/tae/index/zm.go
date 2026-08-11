@@ -16,6 +16,7 @@ package index
 
 import (
 	"bytes"
+	"cmp"
 	"encoding/hex"
 	"fmt"
 	"math"
@@ -377,6 +378,27 @@ func (zm ZM) IsInited() bool {
 	return len(zm) == ZMSize && zm[62]&0x80 != 0
 }
 
+// hasNaNBound identifies legacy floating-point zonemaps whose min/max summary
+// cannot safely prove absence. Older writers could publish [NaN, NaN] for a
+// batch beginning with NaN even when the batch also contained ordinary
+// values. Such metadata is indistinguishable from an all-NaN batch, so the
+// runtime-IN pruning chain must fail open.
+func (zm ZM) hasNaNBound() bool {
+	if !zm.IsInited() {
+		return false
+	}
+	switch zm.GetType() {
+	case types.T_float32:
+		return math.IsNaN(float64(types.DecodeFloat32(zm.GetMinBuf()))) ||
+			math.IsNaN(float64(types.DecodeFloat32(zm.GetMaxBuf())))
+	case types.T_float64:
+		return math.IsNaN(types.DecodeFloat64(zm.GetMinBuf())) ||
+			math.IsNaN(types.DecodeFloat64(zm.GetMaxBuf()))
+	default:
+		return false
+	}
+}
+
 func (zm ZM) Reset() {
 	if len(zm) == ZMSize {
 		zm[62] &= 0x7f
@@ -449,6 +471,17 @@ func (zm ZM) getValue(buf []byte) any {
 		return types.BytesToArray[float32](buf)
 	case types.T_array_float64:
 		return types.BytesToArray[float64](buf)
+	// Narrow vector element types. Omitting them made MO_TABLE_COL_MAX panic on
+	// a table that merely CONTAINS a bf16/f16/int8/uint8 vector column, without
+	// the query touching it.
+	case types.T_array_bf16:
+		return types.BytesToArray[types.BF16](buf)
+	case types.T_array_float16:
+		return types.BytesToArray[types.Float16](buf)
+	case types.T_array_int8:
+		return types.BytesToArray[int8](buf)
+	case types.T_array_uint8:
+		return types.BytesToArray[uint8](buf)
 	}
 	panic(fmt.Sprintf("unsupported type: %v", zm.GetType()))
 }
@@ -533,6 +566,9 @@ func (zm ZM) AnyGEByValue(k []byte) bool {
 	if !zm.IsInited() {
 		return false
 	}
+	if zm.hasNaNBound() {
+		return true
+	}
 	if !zm.IsString() || len(k) < 31 {
 		return compute.Compare(zm.GetMaxBuf(), k, zm.GetType(), 0, 0) >= 0
 	}
@@ -545,6 +581,9 @@ func (zm ZM) AnyGEByValue(k []byte) bool {
 func (zm ZM) AnyLEByValue(k []byte) bool {
 	if !zm.IsInited() {
 		return false
+	}
+	if zm.hasNaNBound() {
+		return true
 	}
 	if !zm.IsString() || len(k) < 31 {
 		return compute.Compare(zm.GetMinBuf(), k, zm.GetType(), 0, 0) <= 0
@@ -756,6 +795,12 @@ func (zm ZM) SubVecIn(vec *vector.Vector) (int, int) {
 	if vec.Length() <= 3 {
 		return 0, vec.Length()
 	}
+	if !zm.IsInited() {
+		return 0, 0
+	}
+	if zm.hasNaNBound() {
+		return 0, vec.Length()
+	}
 	switch vec.GetType().Oid {
 	case types.T_bool:
 		col := vector.MustFixedColNoTypeCheck[bool](vec)
@@ -868,10 +913,10 @@ func (zm ZM) SubVecIn(vec *vector.Vector) (int, int) {
 		col := vector.MustFixedColNoTypeCheck[float32](vec)
 		minVal, maxVal := types.DecodeFloat32(zm.GetMinBuf()), types.DecodeFloat32(zm.GetMaxBuf())
 		lowerBound := sort.Search(len(col), func(i int) bool {
-			return minVal <= col[i]
+			return cmp.Compare(minVal, col[i]) <= 0
 		})
 		upperBound := sort.Search(len(col), func(i int) bool {
-			return maxVal < col[i]
+			return cmp.Compare(maxVal, col[i]) < 0
 		})
 		return lowerBound, upperBound
 
@@ -879,10 +924,10 @@ func (zm ZM) SubVecIn(vec *vector.Vector) (int, int) {
 		col := vector.MustFixedColNoTypeCheck[float64](vec)
 		minVal, maxVal := types.DecodeFloat64(zm.GetMinBuf()), types.DecodeFloat64(zm.GetMaxBuf())
 		lowerBound := sort.Search(len(col), func(i int) bool {
-			return minVal <= col[i]
+			return cmp.Compare(minVal, col[i]) <= 0
 		})
 		upperBound := sort.Search(len(col), func(i int) bool {
-			return maxVal < col[i]
+			return cmp.Compare(maxVal, col[i]) < 0
 		})
 		return lowerBound, upperBound
 
@@ -1052,6 +1097,12 @@ func (zm ZM) AnyIn(vec *vector.Vector) bool {
 	if vec.GetNulls().Any() {
 		return zm.anyInNullableVec(vec)
 	}
+	if !zm.IsInited() {
+		return false
+	}
+	if zm.hasNaNBound() {
+		return true
+	}
 	switch vec.GetType().Oid {
 	case types.T_bool:
 		col := vector.MustFixedColNoTypeCheck[bool](vec)
@@ -1147,19 +1198,21 @@ func (zm ZM) AnyIn(vec *vector.Vector) bool {
 		col := vector.MustFixedColNoTypeCheck[float32](vec)
 		minVal, maxVal := types.DecodeFloat32(zm.GetMinBuf()), types.DecodeFloat32(zm.GetMaxBuf())
 		lowerBound := sort.Search(len(col), func(i int) bool {
-			return minVal <= col[i]
+			return cmp.Compare(minVal, col[i]) <= 0
 		})
 
-		return lowerBound < len(col) && maxVal >= col[lowerBound]
+		return lowerBound < len(col) &&
+			cmp.Compare(maxVal, col[lowerBound]) >= 0
 
 	case types.T_float64:
 		col := vector.MustFixedColNoTypeCheck[float64](vec)
 		minVal, maxVal := types.DecodeFloat64(zm.GetMinBuf()), types.DecodeFloat64(zm.GetMaxBuf())
 		lowerBound := sort.Search(len(col), func(i int) bool {
-			return minVal <= col[i]
+			return cmp.Compare(minVal, col[i]) <= 0
 		})
 
-		return lowerBound < len(col) && maxVal >= col[lowerBound]
+		return lowerBound < len(col) &&
+			cmp.Compare(maxVal, col[lowerBound]) >= 0
 
 	case types.T_date:
 		col := vector.MustFixedColNoTypeCheck[types.Date](vec)

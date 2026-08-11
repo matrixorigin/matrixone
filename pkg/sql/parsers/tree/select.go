@@ -27,6 +27,7 @@ type SelectStatement interface {
 // Select represents a SelectStatement with an ORDER and/or LIMIT.
 type Select struct {
 	statementImpl
+	IsPerform      bool
 	Select         SelectStatement
 	RewriteOption  *RewriteOption
 	TimeWindow     *TimeWindow
@@ -39,6 +40,9 @@ type Select struct {
 }
 
 func (node *Select) Format(ctx *FmtCtx) {
+	if node.IsPerform {
+		ctx.WriteString("perform ")
+	}
 	if node.With != nil {
 		node.With.Format(ctx)
 		ctx.WriteByte(' ')
@@ -70,8 +74,13 @@ func (node *Select) Format(ctx *FmtCtx) {
 	}
 }
 
-func (node *Select) GetStatementType() string { return "Select" }
-func (node *Select) GetQueryType() string     { return QueryTypeDQL }
+func (node *Select) GetStatementType() string {
+	if node.IsPerform {
+		return "Perform"
+	}
+	return "Select"
+}
+func (node *Select) GetQueryType() string { return QueryTypeDQL }
 
 func NewSelect(s SelectStatement, o OrderBy, l *Limit) *Select {
 	return &Select{
@@ -106,6 +115,7 @@ type Rewrite struct {
 type TimeWindow struct {
 	Interval *Interval
 	Sliding  *Sliding
+	GapFill  bool
 	Fill     *Fill
 }
 
@@ -114,6 +124,9 @@ func (node *TimeWindow) Format(ctx *FmtCtx) {
 	if node.Sliding != nil {
 		ctx.WriteByte(' ')
 		node.Sliding.Format(ctx)
+	}
+	if node.GapFill {
+		ctx.WriteString(" gapfill(partition)")
 	}
 	if node.Fill != nil {
 		ctx.WriteByte(' ')
@@ -394,6 +407,14 @@ type SelectClause struct {
 	GroupBy  *GroupByClause
 	Having   *Where
 	Option   uint64
+	// OrderByOriginalExprs is planner-internal metadata for a generated
+	// projection whose derived-table columns must retain the original output
+	// expression categories for ORDER BY duplicate-name resolution.
+	OrderByOriginalExprs []Expr
+	// OrderBySourceProbes is shared with generated grouping-set branches. Once
+	// their real FROM scope is bound, it tells the outer ORDER BY whether a
+	// potentially shadowed name denotes a source column or an output alias.
+	OrderBySourceProbes map[string]*GroupingSetOrderSourceProbe
 }
 
 func (node *SelectClause) Format(ctx *FmtCtx) {
@@ -494,7 +515,7 @@ func (node *SelectExpr) Format(ctx *FmtCtx) {
 	node.Expr.Format(ctx)
 	if node.As != nil && !node.As.Empty() {
 		ctx.WriteString(" as ")
-		ctx.WriteString(node.As.Origin())
+		ctx.WriteIdentifier(Identifier(node.As.Origin()))
 	}
 }
 
@@ -503,11 +524,57 @@ type GroupByClause struct {
 	GroupByExprsList []Exprs
 	GroupingSet      Exprs
 	Apart            bool
-	Cube             bool
-	Rollup           bool
+	// The next four fields are planner-internal metadata for generated
+	// grouping-set branches. They keep hidden ORDER BY expressions and bound
+	// output identity in the original FROM scope.
+	GroupingSetOrderHiddenCount  int
+	GroupingSetOrderAliases      map[string][]Expr
+	GroupingSetOrderSourceProbes map[string]*GroupingSetOrderSourceProbe
+	PreserveOrderSemanticKeys    bool
+	Cube                         bool
+	GroupingSets                 bool
+	Rollup                       bool
+}
+
+// GroupingSetOrderSourceProbe defers an otherwise unknowable name-resolution
+// choice until a generated branch has bound its real FROM scope.
+type GroupingSetOrderSourceProbe struct {
+	FallbackName string
+	Resolved     bool
+	SourceFound  bool
 }
 
 func (node *GroupByClause) Format(ctx *FmtCtx) {
+	if node.Apart {
+		if len(node.GroupingSet) == 0 {
+			return
+		}
+		ctx.WriteString("group by ")
+		node.GroupingSet.Format(ctx)
+		return
+	}
+	if node.Cube {
+		ctx.WriteString("group by cube(")
+		if len(node.GroupByExprsList) > 0 {
+			node.GroupByExprsList[0].Format(ctx)
+		}
+		ctx.WriteByte(')')
+		return
+	}
+	if node.GroupingSets {
+		ctx.WriteString("group by grouping sets (")
+		for i, list := range node.GroupByExprsList {
+			if i > 0 {
+				ctx.WriteString(", ")
+			}
+			ctx.WriteByte('(')
+			list.Format(ctx)
+			ctx.WriteByte(')')
+		}
+		ctx.WriteByte(')')
+		return
+	}
+
 	prefix := "group by "
 	for _, list := range node.GroupByExprsList {
 		for _, n := range list {
@@ -515,9 +582,6 @@ func (node *GroupByClause) Format(ctx *FmtCtx) {
 			n.Format(ctx)
 			prefix = ", "
 		}
-	}
-	if node.Cube {
-		ctx.WriteString("with cube")
 	}
 	if node.Rollup {
 		ctx.WriteString(" with rollup")
@@ -692,7 +756,7 @@ type AliasClause struct {
 
 func (node *AliasClause) Format(ctx *FmtCtx) {
 	if node.Alias != "" {
-		ctx.WriteString(string(node.Alias))
+		ctx.WriteIdentifier(node.Alias)
 	}
 	if node.Cols != nil {
 		ctx.WriteByte('(')
@@ -827,7 +891,7 @@ func (node *IndexHint) Format(ctx *FmtCtx) {
 			if i > 0 {
 				ctx.WriteString(", ")
 			}
-			ctx.WriteString(value)
+			ctx.WriteIdentifier(Identifier(value))
 		}
 	}
 	ctx.WriteString(")")

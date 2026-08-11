@@ -15,12 +15,17 @@
 package frontend
 
 import (
+	"context"
+	"errors"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/util"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
+	"go.starlark.net/starlark"
 )
 
 func Test_mysqlResp(t *testing.T) {
@@ -112,6 +117,8 @@ func TestRecordLastAffectedRows(t *testing.T) {
 		{"select -> -1", &tree.Select{}, 4, -1},
 		// DDL is a status statement but affects no rows.
 		{"ddl -> 0", &tree.CreateTable{}, 0, 0},
+		// CALL propagates the final statement's affected rows from the procedure.
+		{"call", &tree.CallStmt{}, 6, 6},
 	}
 	for _, c := range cases {
 		ses := &Session{}
@@ -127,4 +134,185 @@ func TestRecordLastAffectedRows(t *testing.T) {
 		require.Equal(t, c.want, proc.GetAffectedRows(), "%s: proc", c.name)
 		require.Equal(t, c.want, ses.GetLastAffectedRows(), "%s: session", c.name)
 	}
+}
+
+func TestAffectedRowsForBackgroundStatement(t *testing.T) {
+	cases := []struct {
+		name   string
+		stmt   tree.Statement
+		result *util.RunResult
+		want   int64
+	}{
+		{"insert", &tree.Insert{}, &util.RunResult{AffectRows: 5}, 5},
+		{"select", &tree.Select{}, nil, -1},
+		{"ddl", &tree.CreateTable{}, &util.RunResult{}, 0},
+		{"call", &tree.CallStmt{}, &util.RunResult{AffectRows: 3}, 3},
+		{"call without result", &tree.CallStmt{}, nil, 0},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			execCtx := &ExecCtx{stmt: c.stmt, runResult: c.result}
+			require.Equal(t, c.want, affectedRowsForStatement(execCtx))
+		})
+	}
+}
+
+func TestInterpreterBackgroundAffectedRows(t *testing.T) {
+	back := &backExec{backSes: &backSession{}}
+	interpreter := &Interpreter{bh: back}
+
+	interpreter.setAffectedRows(7)
+	require.Equal(t, int64(7), interpreter.lastAffectedRows)
+	require.Equal(t, int64(7), back.GetLastAffectedRows())
+
+	back.SetLastAffectedRows(-1)
+	interpreter.recordAffectedRows()
+	require.Equal(t, int64(-1), interpreter.lastAffectedRows)
+}
+
+type evalCondBackgroundExec struct {
+	BackgroundExec
+	rows       int64
+	result     []interface{}
+	execResult []interface{}
+	execErr    error
+}
+
+func (e *evalCondBackgroundExec) ClearExecResultSet() {
+	e.result = nil
+}
+
+func (e *evalCondBackgroundExec) Exec(context.Context, string) error {
+	e.rows = -1
+	if e.execErr == nil {
+		if e.execResult != nil {
+			e.result = e.execResult
+		} else {
+			e.result = []interface{}{&evalCondResult{value: 1}}
+		}
+	}
+	return e.execErr
+}
+
+func (e *evalCondBackgroundExec) GetExecResultSet() []interface{} {
+	return e.result
+}
+
+func (e *evalCondBackgroundExec) GetLastAffectedRows() int64 {
+	return e.rows
+}
+
+func (e *evalCondBackgroundExec) SetLastAffectedRows(rows int64) {
+	e.rows = rows
+}
+
+type evalCondResult struct {
+	ExecResult
+	value int64
+}
+
+func (e *evalCondResult) GetRowCount() uint64 {
+	return 1
+}
+
+func (e *evalCondResult) GetColumnCount() uint64 {
+	return 1
+}
+
+func (e *evalCondResult) GetString(context.Context, uint64, uint64) (string, error) {
+	return "1", nil
+}
+
+func (e *evalCondResult) GetInt64(context.Context, uint64, uint64) (int64, error) {
+	return e.value, nil
+}
+
+func TestEvalCondRestoresAffectedRows(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		execErr error
+	}{
+		{name: "success"},
+		{name: "failure", execErr: errors.New("condition failed")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			back := &evalCondBackgroundExec{execErr: tc.execErr}
+			varScope := []map[string]interface{}{}
+			interpreter := &Interpreter{
+				ctx:              context.Background(),
+				bh:               back,
+				varScope:         &varScope,
+				lastAffectedRows: 7,
+			}
+			back.SetLastAffectedRows(7)
+
+			cond, err := interpreter.EvalCond("1 = 1")
+			if tc.execErr != nil {
+				require.ErrorIs(t, err, tc.execErr)
+			} else {
+				require.NoError(t, err)
+				require.Equal(t, 1, cond)
+			}
+			require.Equal(t, int64(7), interpreter.lastAffectedRows)
+			require.Equal(t, int64(7), back.GetLastAffectedRows())
+		})
+	}
+}
+
+func TestStarlarkSQLRecordsAffectedRows(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		execErr error
+	}{
+		{name: "success"},
+		{name: "failure", execErr: errors.New("sql failed")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			back := &evalCondBackgroundExec{execErr: tc.execErr}
+			interpreter := &Interpreter{
+				ctx:              context.Background(),
+				bh:               back,
+				lastAffectedRows: 7,
+			}
+			si := &starlarkInterpreter{interp: interpreter}
+
+			value, err := si.moSql(nil, nil, starlark.Tuple{starlark.String("select 1")}, nil)
+			require.NoError(t, err)
+			require.NotNil(t, value)
+			require.Equal(t, int64(-1), interpreter.lastAffectedRows)
+		})
+	}
+}
+
+func TestNestedCallResultsRemainOrdered(t *testing.T) {
+	first := &MysqlResultSet{}
+	second := &MysqlResultSet{}
+	first.AddRow([]interface{}{10})
+	second.AddRow([]interface{}{20})
+	backSes := &backSession{}
+	require.NoError(t, appendNestedCallResults(
+		context.Background(),
+		backSes,
+		[]ExecResult{first, second},
+	))
+	require.Equal(t, []*MysqlResultSet{first, second}, backSes.allResultSet)
+	require.Error(t, appendNestedCallResults(
+		context.Background(),
+		backSes,
+		[]ExecResult{&evalCondResult{}},
+	))
+
+	back := &evalCondBackgroundExec{execResult: []interface{}{first, second}}
+	varScope := []map[string]interface{}{{}}
+	interpreter := &Interpreter{
+		ctx:      context.Background(),
+		bh:       back,
+		varScope: &varScope,
+		fmtctx:   tree.NewFmtCtx(dialect.MYSQL),
+	}
+	stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, "select 1", 1)
+	require.NoError(t, err)
+	_, err = interpreter.interpret(stmt)
+	require.NoError(t, err)
+	require.Equal(t, []ExecResult{first, second}, interpreter.result)
 }

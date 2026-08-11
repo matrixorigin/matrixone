@@ -1,0 +1,83 @@
+[
+  {
+    "id": "ICE-TEST-131",
+    "case_id": "ICE-TEST-131_sandbox_rest_compatibility_vending",
+    "name": "sandbox-rest-compatibility-vending",
+    "catalog": "${MO_ICEBERG_TIER_C_CATALOG_URI}",
+    "namespace": "${MO_ICEBERG_TIER_C_NAMESPACE}",
+    "table": "${MO_ICEBERG_TIER_C_TABLE}",
+    "ref": "main",
+    "comparison_mode": "ordered",
+    "engines": [
+      {
+        "name": "mo",
+        "command_env": "MO_ICEBERG_TIER_C_MO_SQL_CMD",
+        "sql": "select count(*) as c from ${MO_ICEBERG_TIER_C_MO_TABLE}"
+      },
+      {
+        "name": "official",
+        "command_env": "MO_ICEBERG_TIER_C_OFFICIAL_SQL_CMD",
+        "sql": "select count(*) as c from ${MO_ICEBERG_TIER_C_OFFICIAL_TABLE}"
+      }
+    ]
+  },
+  {
+    "id": "ICE-TEST-132",
+    "case_id": "ICE-TEST-132_remote_signing_append_poc",
+    "name": "remote-signing-append-poc",
+    "catalog": "${MO_ICEBERG_TIER_C_CATALOG_URI}",
+    "namespace": "${MO_ICEBERG_TIER_C_NAMESPACE}",
+    "table": "${MO_ICEBERG_TIER_C_APPEND_TABLE}",
+    "ref": "main",
+    "comparison_mode": "ordered",
+    "engines": [
+      {
+        "name": "mo",
+        "command_env": "MO_ICEBERG_TIER_C_MO_SQL_CMD",
+        "actions": [
+          "${MO_ICEBERG_TIER_C_REMOTE_SIGNING_APPEND_SQL}"
+        ],
+        "sql": "${MO_ICEBERG_TIER_C_REMOTE_SIGNING_MO_VERIFY_SQL}"
+      },
+      {
+        "name": "official",
+        "command_env": "MO_ICEBERG_TIER_C_OFFICIAL_SQL_CMD",
+        "sql": "${MO_ICEBERG_TIER_C_REMOTE_SIGNING_OFFICIAL_VERIFY_SQL}"
+      }
+    ]
+  },
+  {
+    "id": "ICE-TEST-133",
+    "case_id": "ICE-TEST-133_server_planning_negotiation",
+    "name": "server-planning-negotiation",
+    "catalog": "${MO_ICEBERG_TIER_C_CATALOG_URI}",
+    "namespace": "${MO_ICEBERG_TIER_C_NAMESPACE}",
+    "table": "${MO_ICEBERG_TIER_C_TABLE}",
+    "ref": "main",
+    "comparison_mode": "ordered",
+    "engines": [
+      {
+        "name": "mo",
+        "command_env": "MO_ICEBERG_TIER_C_MO_SQL_CMD",
+        "sql": "${MO_ICEBERG_TIER_C_SERVER_PLANNING_SQL}"
+      }
+    ]
+  },
+  {
+    "id": "ICE-TEST-134",
+    "case_id": "ICE-TEST-134_capability_negotiation_record",
+    "name": "capability-negotiation-record",
+    "catalog": "${MO_ICEBERG_TIER_C_CATALOG_URI}",
+    "namespace": "${MO_ICEBERG_TIER_C_NAMESPACE}",
+    "table": "${MO_ICEBERG_TIER_C_TABLE}",
+    "ref": "main",
+    "comparison_mode": "ordered",
+    "engines": [
+      {
+        "name": "mo",
+        "command_env": "MO_ICEBERG_TIER_C_MO_SQL_CMD",
+        "sql": "${MO_ICEBERG_TIER_C_CAPABILITY_SQL}"
+      }
+    ]
+  }
+]

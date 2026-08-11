@@ -16,7 +16,6 @@ package rpc
 
 import (
 	"context"
-	"fmt"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -27,7 +26,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
-	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -48,8 +46,6 @@ type CmdType int32
 
 const (
 	CmdPreCommitWrite CmdType = iota
-	CmdPrepare
-	CmdCommitting
 	CmdCommit
 	CmdRollback
 )
@@ -74,29 +70,7 @@ func (h *mockHandle) HandleClose(ctx context.Context) error {
 }
 
 func (h *mockHandle) HandleCommit(ctx context.Context, meta *txn.TxnMeta, response *txn.TxnResponse, req *txn.TxnCommitRequest) (timestamp.Timestamp, error) {
-	//2PC
-	if len(meta.TNShards) > 1 && meta.CommitTS.IsEmpty() {
-		meta.CommitTS = meta.PreparedTS.Next()
-	}
 	return h.Handle.HandleCommit(ctx, *meta, response, req)
-}
-
-func (h *mockHandle) HandleCommitting(ctx context.Context, meta *txn.TxnMeta) error {
-	//meta.CommitTS = h.eng.GetTAE(context.TODO()).TxnMgr.TsAlloc.Alloc().ToTimestamp()
-	if meta.PreparedTS.IsEmpty() {
-		return moerr.NewInternalError(ctx, "PreparedTS is empty")
-	}
-	meta.CommitTS = meta.PreparedTS.Next()
-	return h.Handle.HandleCommitting(ctx, *meta)
-}
-
-func (h *mockHandle) HandlePrepare(ctx context.Context, meta *txn.TxnMeta) error {
-	pts, err := h.Handle.HandlePrepare(ctx, *meta)
-	if err != nil {
-		return err
-	}
-	meta.PreparedTS = pts
-	return nil
 }
 
 func (h *mockHandle) HandleRollback(ctx context.Context, meta *txn.TxnMeta) error {
@@ -125,14 +99,6 @@ func (h *mockHandle) handleCmds(
 			}
 			if err = h.Handle.HandlePreCommitWrite(ctx, *txn,
 				&cmd, new(api.TNStringResponse)); err != nil {
-				return
-			}
-		case CmdPrepare:
-			if err = h.HandlePrepare(ctx, txn); err != nil {
-				return
-			}
-		case CmdCommitting:
-			if err = h.HandleCommitting(ctx, txn); err != nil {
 				return
 			}
 		case CmdCommit:
@@ -173,26 +139,6 @@ func mock1PCTxn(db *db.DB) *txn.TxnMeta {
 	txnMeta := &txn.TxnMeta{}
 	txnMeta.ID = db.TxnMgr.IdAlloc.Alloc()
 	txnMeta.SnapshotTS = db.TxnMgr.Now().ToTimestamp()
-	return txnMeta
-}
-
-func mockTNShard(id uint64) metadata.TNShard {
-	return metadata.TNShard{
-		TNShardRecord: metadata.TNShardRecord{
-			ShardID:    id,
-			LogShardID: id,
-		},
-		ReplicaID: id,
-		Address:   fmt.Sprintf("dn-%d", id),
-	}
-}
-
-func mock2PCTxn(db *db.DB) *txn.TxnMeta {
-	txnMeta := &txn.TxnMeta{}
-	txnMeta.ID = db.TxnMgr.IdAlloc.Alloc()
-	txnMeta.SnapshotTS = db.TxnMgr.Now().ToTimestamp()
-	txnMeta.TNShards = append(txnMeta.TNShards, mockTNShard(1))
-	txnMeta.TNShards = append(txnMeta.TNShards, mockTNShard(2))
 	return txnMeta
 }
 

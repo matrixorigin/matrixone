@@ -16,6 +16,7 @@ package main
 
 import (
 	"os"
+	"strings"
 
 	dashboard "github.com/matrixorigin/matrixone/cmd/mo-dashboard"
 	debug "github.com/matrixorigin/matrixone/cmd/mo-debug"
@@ -38,7 +39,46 @@ func main() {
 	rootCmd.AddCommand(object.PrepareCommand())
 	rootCmd.AddCommand(ckp.PrepareCommand())
 
+	rootCmd.SetArgs(normalizeLegacyRemoteS3Args(os.Args[1:]))
 	if err := rootCmd.Execute(); err != nil {
 		os.Exit(1)
 	}
+}
+
+// normalizeLegacyRemoteS3Args keeps ckp invocations from before --remote-s3
+// was introduced working without changing the local S3FS selector semantics of
+// a bare --s3 flag.
+func normalizeLegacyRemoteS3Args(args []string) []string {
+	normalized := append([]string(nil), args...)
+	if len(normalized) == 0 || normalized[0] != "ckp" {
+		return normalized
+	}
+
+	for i := 1; i < len(normalized); i++ {
+		switch {
+		case normalized[i] == "--s3" &&
+			i+1 < len(normalized) &&
+			looksLikeRemoteS3Arguments(normalized[i+1]):
+			normalized[i] = "--remote-s3"
+			i++
+		case strings.HasPrefix(normalized[i], "--s3=") &&
+			looksLikeRemoteS3Arguments(strings.TrimPrefix(normalized[i], "--s3=")):
+			normalized[i] = "--remote-s3=" + strings.TrimPrefix(normalized[i], "--s3=")
+		}
+	}
+
+	return normalized
+}
+
+func looksLikeRemoteS3Arguments(value string) bool {
+	for _, option := range strings.Split(value, ",") {
+		key, optionValue, ok := strings.Cut(strings.TrimSpace(option), "=")
+		if !ok || optionValue == "" {
+			continue
+		}
+		if strings.EqualFold(strings.TrimSpace(key), "bucket") {
+			return true
+		}
+	}
+	return false
 }

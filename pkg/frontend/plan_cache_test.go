@@ -15,8 +15,13 @@
 package frontend
 
 import (
+	"context"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/config"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/stretchr/testify/require"
@@ -67,6 +72,61 @@ func Test_LRU(t *testing.T) {
 	require.True(t, pc.isCached("4"))
 	require.True(t, pc.isCached("2"))
 	require.False(t, pc.isCached("3"))
+}
+
+func Test_DuplicateKeyReplacesCachedPlan(t *testing.T) {
+	pc := newPlanCache(2)
+	oldStmt := &trackedStatement{}
+	newStmt := &trackedStatement{}
+	oldPlan := &plan.Plan{}
+	newPlan := &plan.Plan{}
+
+	pc.cache("A", []tree.Statement{oldStmt}, []*plan.Plan{oldPlan})
+	pc.cache("A", []tree.Statement{newStmt}, []*plan.Plan{newPlan})
+	invalidStmt := &trackedStatement{}
+	pc.cache("A", []tree.Statement{invalidStmt}, []*plan.Plan{nil})
+	pc.cache("B", nil, nil)
+
+	require.True(t, pc.isCached("A"))
+	require.True(t, pc.isCached("B"))
+	require.Len(t, pc.cachePool, 2)
+	require.Equal(t, 2, pc.lruList.Len())
+	require.Equal(t, 1, oldStmt.freed)
+	require.Zero(t, newStmt.freed)
+	require.Equal(t, 1, invalidStmt.freed)
+	require.Same(t, newStmt, pc.get("A").stmts[0])
+	require.Same(t, newPlan, pc.get("A").plans[0])
+
+	pc.clean()
+	require.Equal(t, 1, oldStmt.freed)
+	require.Equal(t, 1, newStmt.freed)
+}
+
+func Test_DuplicateKeyRefreshesLRU(t *testing.T) {
+	pc := newPlanCache(2)
+	firstA := &trackedStatement{}
+	secondA := &trackedStatement{}
+	b := &trackedStatement{}
+	c := &trackedStatement{}
+
+	pc.cache("A", []tree.Statement{firstA}, []*plan.Plan{{}})
+	pc.cache("B", []tree.Statement{b}, []*plan.Plan{{}})
+	pc.cache("A", []tree.Statement{secondA}, []*plan.Plan{{}})
+	pc.cache("C", []tree.Statement{c}, []*plan.Plan{{}})
+
+	require.True(t, pc.isCached("A"))
+	require.False(t, pc.isCached("B"))
+	require.True(t, pc.isCached("C"))
+	require.Len(t, pc.cachePool, 2)
+	require.Equal(t, 2, pc.lruList.Len())
+	require.Equal(t, 1, firstA.freed)
+	require.Equal(t, 1, b.freed)
+	require.Zero(t, secondA.freed)
+	require.Zero(t, c.freed)
+
+	pc.clean()
+	require.Equal(t, 1, secondA.freed)
+	require.Equal(t, 1, c.freed)
 }
 
 func Test_CleanCache(t *testing.T) {
@@ -185,4 +245,77 @@ func Test_SessionAccessorsWithNilPlanCache(t *testing.T) {
 	require.False(t, ses.isCached("x"))
 	require.NotPanics(t, func() { ses.cleanCache() })
 	require.NotPanics(t, func() { ses.releasePlanCache() })
+}
+
+func TestSessionSQLModePresenceChangeClearsPlanCache(t *testing.T) {
+	ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
+	setPu("", config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil))
+
+	ses := NewSession(ctx, "", &testMysqlWriter{}, nil)
+	require.NoError(t, ses.SetSessionSysVar(ctx, "sql_mode", "STRICT_TRANS_TABLES"))
+	stmt := &trackedStatement{}
+	ses.cachePlan("cached-sql", []tree.Statement{stmt}, []*plan.Plan{{}})
+	require.True(t, ses.isCached("cached-sql"))
+	require.NoError(t, ses.SetSessionSysVar(ctx, "sql_mode", "STRICT_TRANS_TABLES"))
+	require.True(t, ses.isCached("cached-sql"))
+	require.Zero(t, stmt.freed)
+
+	require.NoError(t, ses.SetSessionSysVar(ctx, "sql_mode", "STRICT_TRANS_TABLES,ONLY_FULL_GROUP_BY"))
+	require.False(t, ses.isCached("cached-sql"))
+	require.Equal(t, 1, stmt.freed)
+
+	stmt = &trackedStatement{}
+	ses.cachePlan("cached-sql", []tree.Statement{stmt}, []*plan.Plan{{}})
+	require.NoError(t, ses.SetSessionSysVar(ctx, "SQL_MODE", "STRICT_TRANS_TABLES,MATRIXONE_NATIVE"))
+	require.False(t, ses.isCached("cached-sql"))
+	require.Equal(t, 1, stmt.freed)
+}
+
+func TestSessionProtocolVersionChangeInvalidatesPlanCache(t *testing.T) {
+	ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
+	setPu("", config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil))
+	rt := moruntime.ServiceRuntime("")
+	defer rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+
+	for _, test := range []struct {
+		name string
+		from int64
+		to   int64
+	}{
+		{name: "existing upgrade", from: defines.MORPCVersion4, to: defines.MORPCVersion5},
+		{name: "existing rollback", from: defines.MORPCVersion5, to: defines.MORPCVersion4},
+		{name: "upgrade", from: defines.MORPCVersion7, to: defines.MORPCVersion8},
+		{name: "rollback", from: defines.MORPCVersion8, to: defines.MORPCVersion7},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, test.from)
+			ses := NewSession(ctx, "", &testMysqlWriter{}, nil)
+			stmt := &trackedStatement{}
+			ses.cachePlan("cached-sql", []tree.Statement{stmt}, []*plan.Plan{{}})
+			require.NotNil(t, ses.getCachedPlan("cached-sql"))
+
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, test.to)
+			require.Nil(t, ses.getCachedPlan("cached-sql"))
+			require.False(t, ses.isCached("cached-sql"))
+			require.Equal(t, 1, stmt.freed)
+		})
+	}
+}
+
+func TestSessionSQLModePresenceMatcherUsesExactToken(t *testing.T) {
+	has, ok := sqlModeHasMatrixOneNativeValue("STRICT_TRANS_TABLES, MATRIXONE_NATIVE")
+	require.True(t, ok)
+	require.True(t, has)
+
+	has, ok = sqlModeHasMatrixOneNativeValue("STRICT_TRANS_TABLES, MATRIXONE_NATIVE_EXTRA")
+	require.True(t, ok)
+	require.False(t, has)
+
+	has, ok = sqlModeHasOnlyFullGroupByValue("STRICT_TRANS_TABLES, ONLY_FULL_GROUP_BY")
+	require.True(t, ok)
+	require.True(t, has)
+
+	has, ok = sqlModeHasOnlyFullGroupByValue("STRICT_TRANS_TABLES, ONLY_FULL_GROUP_BY_EXTRA")
+	require.True(t, ok)
+	require.False(t, has)
 }

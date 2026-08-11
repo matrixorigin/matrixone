@@ -57,3 +57,9 @@ func TestResponseSize(t *testing.T) {
 	t.Log("final segment size:", curr.ProtoSize())
 	require.Equal(t, curr.ProtoSize(), maxMessageSize)
 }
+
+func TestSegmentedResponseSizeLimit(t *testing.T) {
+	require.NoError(t, validateSegmentedResponseSize(0))
+	require.NoError(t, validateSegmentedResponseSize(math.MaxInt32))
+	require.Error(t, validateSegmentedResponseSize(math.MaxInt32+1))
+}

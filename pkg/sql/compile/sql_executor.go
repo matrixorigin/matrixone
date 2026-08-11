@@ -42,6 +42,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/udf"
 	"github.com/matrixorigin/matrixone/pkg/util"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"go.uber.org/zap"
@@ -66,6 +67,12 @@ func ensureExecutorContext(ctx context.Context) context.Context {
 		return context.Background()
 	}
 	return ctx
+}
+
+func newInternalStatementContext(parent context.Context) context.Context {
+	return statistic.ContextWithStatsInfo(
+		ensureExecutorContext(parent),
+		statistic.NewStatsInfo())
 }
 
 // NewSQLExecutor returns a internal used sql service. It can execute sql in current CN.
@@ -284,6 +291,14 @@ func (exec *txnExecutor) Exec(
 	sql string,
 	statementOption executor.StatementOption,
 ) (executor.Result, error) {
+	parentCtx := exec.ctx
+	exec.ctx = newInternalStatementContext(parentCtx)
+	defer func() {
+		// The fresh StatsInfo is statement-owned. Do not retain it in a
+		// long-lived transaction executor or build an unbounded context chain.
+		exec.ctx = parentCtx
+	}()
+
 	// NOTE: This code is to restore tenantID information in the Context when temporarily switching tenants
 	// so that it can be restored to its original state after completing the task.
 	var originCtx context.Context
@@ -395,6 +410,7 @@ func (exec *txnExecutor) Exec(
 	// background paths set resolvers too (idxcron's task.Metadata,
 	// ProcessInitSQL's executor.DefaultResolveVariable).
 	proc.Base.IsFrontend = exec.opts.IsFrontend()
+	applyExecutorLockWaitTimeout(proc, exec.opts)
 
 	prepared := false
 	if statementOption.HasParams() {
@@ -518,26 +534,28 @@ func (exec *txnExecutor) Exec(
 				// the bat is valid only in current method. So we need copy data.
 				// FIXME: add a custom streaming apply handler to consume readed data. Now
 				// our current internal sql will never read too much data.
-				rows, err := bat.Clone(exec.s.mp, streaming)
+				// Internal executor results outlive Compile.Run. Keep the
+				// existing physical clone mode, but end statement allocation
+				// ownership before returning or publishing the batch.
+				rows, err := cloneInternalExecutorResultBatch(
+					bat,
+					exec.s.mp,
+					streaming,
+				)
 				if err != nil {
 					return err
 				}
 				if streaming {
 					stream_result := executor.NewResult(exec.s.mp)
-					for len(stream_chan) == cap(stream_chan) {
-						select {
-						case <-proc.Ctx.Done():
-							err_chan <- moerr.NewInternalError(proc.Ctx, "context cancelled")
-							return moerr.NewInternalError(proc.Ctx, "context cancelled")
-						case <-exec.ctx.Done():
-							err_chan <- exec.ctx.Err()
-							return exec.ctx.Err()
-						default:
-							time.Sleep(1 * time.Millisecond)
-						}
-					}
 					stream_result.Batches = []*batch.Batch{rows}
-					stream_chan <- stream_result
+					if err := publishInternalExecutorStreamResult(
+						proc.Ctx,
+						exec.ctx,
+						stream_chan,
+						stream_result,
+					); err != nil {
+						return err
+					}
 				} else {
 					batches = append(batches, rows)
 				}
@@ -583,6 +601,39 @@ func (exec *txnExecutor) Exec(
 	return result, nil
 }
 
+func cloneInternalExecutorResultBatch(
+	bat *batch.Batch,
+	mp *mpool.MPool,
+	streaming bool,
+) (*batch.Batch, error) {
+	return bat.CloneWithoutAllocationAccount(mp, streaming)
+}
+
+// publishInternalExecutorStreamResult transfers result ownership only after a
+// successful send. Cancellation keeps ownership here and closes the result.
+func publishInternalExecutorStreamResult(
+	procCtx context.Context,
+	execCtx context.Context,
+	streamChan chan executor.Result,
+	result executor.Result,
+) error {
+	select {
+	case streamChan <- result:
+		return nil
+	default:
+	}
+	select {
+	case streamChan <- result:
+		return nil
+	case <-procCtx.Done():
+		result.Close()
+		return moerr.NewInternalError(procCtx, "context cancelled")
+	case <-execCtx.Done():
+		result.Close()
+		return execCtx.Err()
+	}
+}
+
 func (exec *txnExecutor) LockTable(table string) error {
 	txnOp := exec.opts.Txn()
 	ctx := exec.ctx
@@ -609,12 +660,35 @@ func (exec *txnExecutor) LockTable(table string) error {
 		exec.s.taskservice,
 	)
 	proc.Base.IsFrontend = exec.opts.IsFrontend()
+	applyExecutorLockWaitTimeout(proc, exec.opts)
 	proc.Base.SessionInfo.TimeZone = exec.opts.GetTimeZone()
 	proc.Base.SessionInfo.Buf = exec.s.buf
 	defer func() {
 		proc.Free()
 	}()
 	return doLockTable(exec.s.eng, proc, rel, false)
+}
+
+// applyExecutorLockWaitTimeout copies a per-execution background budget into
+// SessionInfo, whose background lock-timeout precedence is above the default
+// variable resolver. LockWaitTimeoutSet preserves an explicit zero so reusing
+// a transaction does not resurrect its stale timeout. SessionInfo stores whole
+// seconds, so positive fractions are rounded up rather than becoming zero.
+func applyExecutorLockWaitTimeout(proc *process.Process, opts executor.Options) {
+	if proc == nil || !opts.HasLockWaitTimeout() {
+		return
+	}
+	timeout := opts.LockWaitTimeout()
+	proc.Base.SessionInfo.LockWaitTimeoutSet = true
+	if timeout <= 0 {
+		proc.Base.SessionInfo.LockWaitTimeout = 0
+		return
+	}
+	seconds := int64(timeout / time.Second)
+	if timeout%time.Second != 0 {
+		seconds++
+	}
+	proc.Base.SessionInfo.LockWaitTimeout = seconds
 }
 
 func (exec *txnExecutor) Txn() client.TxnOperator {

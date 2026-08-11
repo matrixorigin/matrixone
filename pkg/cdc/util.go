@@ -173,6 +173,17 @@ func extractRowFromVector(ctx context.Context, vec *vector.Vector, i int, row []
 		//|   �?   @  @@                  |
 		//+------------------------------+
 		row[i] = vector.GetArrayAt[float32](vec, rowIndex)
+	// Narrow vector element types — kept separate from T_varchar for the same
+	// raw-binary reason noted above. Without these, CDC on a table with a
+	// bf16/f16/int8/uint8 vector column fails permanently on the first row.
+	case types.T_array_bf16:
+		row[i] = vector.GetArrayAt[types.BF16](vec, rowIndex)
+	case types.T_array_float16:
+		row[i] = vector.GetArrayAt[types.Float16](vec, rowIndex)
+	case types.T_array_int8:
+		row[i] = vector.GetArrayAt[int8](vec, rowIndex)
+	case types.T_array_uint8:
+		row[i] = vector.GetArrayAt[uint8](vec, rowIndex)
 	case types.T_array_float64:
 		row[i] = vector.GetArrayAt[float64](vec, rowIndex)
 	case types.T_date:
@@ -304,6 +315,29 @@ func convertColIntoSql(
 		sqlBuff = appendByte(sqlBuff, '\'')
 	case types.T_array_float64:
 		value := data.([]float64)
+		sqlBuff = appendByte(sqlBuff, '\'')
+		sqlBuff = appendString(sqlBuff, types.ArrayToString(value))
+		sqlBuff = appendByte(sqlBuff, '\'')
+	// Narrow vector element types — ArrayToString is generic over
+	// types.ArrayElement, so each decodes to its own slice type and formats the
+	// same way. Quoted like the f32/f64 cases.
+	case types.T_array_bf16:
+		value := data.([]types.BF16)
+		sqlBuff = appendByte(sqlBuff, '\'')
+		sqlBuff = appendString(sqlBuff, types.ArrayToString(value))
+		sqlBuff = appendByte(sqlBuff, '\'')
+	case types.T_array_float16:
+		value := data.([]types.Float16)
+		sqlBuff = appendByte(sqlBuff, '\'')
+		sqlBuff = appendString(sqlBuff, types.ArrayToString(value))
+		sqlBuff = appendByte(sqlBuff, '\'')
+	case types.T_array_int8:
+		value := data.([]int8)
+		sqlBuff = appendByte(sqlBuff, '\'')
+		sqlBuff = appendString(sqlBuff, types.ArrayToString(value))
+		sqlBuff = appendByte(sqlBuff, '\'')
+	case types.T_array_uint8:
+		value := data.([]uint8)
 		sqlBuff = appendByte(sqlBuff, '\'')
 		sqlBuff = appendString(sqlBuff, types.ArrayToString(value))
 		sqlBuff = appendByte(sqlBuff, '\'')

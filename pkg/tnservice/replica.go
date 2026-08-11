@@ -35,6 +35,7 @@ type replica struct {
 	logger       *log.MOLogger
 	shard        metadata.TNShard
 	service      service.TxnService
+	serviceC     chan struct{}
 	startedC     chan struct{}
 	createCtx    context.Context
 	cancelCreate context.CancelFunc
@@ -81,6 +82,7 @@ func newReplica(shard metadata.TNShard, rt runtime.Runtime) *replica {
 		rt:           rt,
 		shard:        shard,
 		logger:       rt.Logger().With(util.TxnTNShardField(shard)),
+		serviceC:     make(chan struct{}),
 		startedC:     make(chan struct{}),
 		createCtx:    ctx,
 		cancelCreate: cancel,
@@ -114,6 +116,7 @@ func (r *replica) startReserved(txnService service.TxnService) error {
 	}
 	r.service = txnService
 	r.mu.Unlock()
+	close(r.serviceC)
 
 	err := txnService.Start()
 	r.finishStart(err)
@@ -166,7 +169,6 @@ func (r *replica) closeOnceFn() error {
 	if !starting {
 		return nil
 	}
-
 	r.waitStartCompleted()
 	r.mu.Lock()
 	for r.mu.activeCalls > 0 {
@@ -201,18 +203,7 @@ func (r *replica) handleLocalRequest(ctx context.Context, request *txn.TxnReques
 	defer lease.release()
 	prepareResponse(request, response)
 
-	switch request.Method {
-	case txn.TxnMethod_GetStatus:
-		return lease.service.GetStatus(lease.ctx, request, response)
-	case txn.TxnMethod_Prepare:
-		return lease.service.Prepare(lease.ctx, request, response)
-	case txn.TxnMethod_CommitTNShard:
-		return lease.service.CommitTNShard(lease.ctx, request, response)
-	case txn.TxnMethod_RollbackTNShard:
-		return lease.service.RollbackTNShard(lease.ctx, request, response)
-	default:
-		return moerr.NewNotSupportedf(lease.ctx, "unknown txn request method: %s", request.Method.String())
-	}
+	return moerr.NewNotSupportedf(lease.ctx, "unknown txn request method: %s", request.Method.String())
 }
 
 func (r *replica) waitStarted(ctx context.Context) error {

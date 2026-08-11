@@ -114,6 +114,33 @@ func TestTypeMarshalAndUnmarshal(t *testing.T) {
 	require.Equal(t, typ, ret)
 }
 
+func TestTextCharsetIdentitiesDistinguishLegacyMetadata(t *testing.T) {
+	require.Equal(t, uint8(0), CharsetLegacy)
+	require.NotEqual(t, CharsetLegacy, CharsetUTF8)
+
+	require.Equal(t, CharsetUTF8, New(T_varchar, 32, 0).Charset)
+	require.Equal(t, CharsetUTF8, T_varchar.ToType().Charset)
+	require.Equal(t, CharsetLegacy,
+		NewWithCharset(T_varchar, 32, 0, CharsetLegacy).Charset)
+	// A zero charset on an intrinsically binary OID is an old plan, not a
+	// request to reinterpret the value as text.
+	require.Equal(t, CharsetBinary,
+		NewWithCharset(T_varbinary, 32, 0, CharsetLegacy).Charset)
+	require.Equal(t, CharsetLegacy, CharsetType(T_int64))
+}
+
+func TestMergeStringCharset(t *testing.T) {
+	general := T_varchar.ToType()
+	legacy := NewWithCharset(T_text, 32, 0, CharsetLegacy)
+	utf8mb4Bin := NewWithCharset(T_varchar, 32, 0, CharsetUTF8MB4Bin)
+	opaqueBinary := NewWithCharset(T_varchar, 32, 0, CharsetBinary)
+
+	require.Equal(t, CharsetUTF8, MergeStringCharset([]Type{general, T_int64.ToType()}, CharsetUTF8))
+	require.Equal(t, CharsetLegacy, MergeStringCharset([]Type{general, legacy}, CharsetUTF8))
+	require.Equal(t, CharsetUTF8MB4Bin, MergeStringCharset([]Type{legacy, utf8mb4Bin}, CharsetUTF8))
+	require.Equal(t, CharsetBinary, MergeStringCharset([]Type{utf8mb4Bin, opaqueBinary}, CharsetUTF8))
+}
+
 func TestType_String(t *testing.T) {
 	myType := T_int64.ToType()
 	require.Equal(t, "BIGINT", myType.String())
@@ -123,6 +150,17 @@ func TestType_Eq(t *testing.T) {
 	myType := T_int64.ToType()
 	myType1 := T_int64.ToType()
 	require.True(t, myType.Eq(myType1))
+
+	utf8 := New(T_varchar, 32, 0)
+	binary := NewWithCharset(T_varchar, 32, 0, CharsetBinary)
+	binaryCollation := NewWithCharset(T_varchar, 32, 0, CharsetUTF8MB4Bin)
+	require.False(t, utf8.Eq(binary))
+	require.False(t, utf8.Eq(binaryCollation))
+	require.False(t, binary.Eq(binaryCollation))
+
+	legacyVarbinary := New(T_varbinary, 32, 0)
+	legacyVarbinary.Charset = CharsetUTF8
+	require.True(t, legacyVarbinary.Eq(New(T_varbinary, 32, 0)))
 }
 
 func TestT_ToType(t *testing.T) {
@@ -422,4 +460,22 @@ func BenchmarkTypesCompare(b *testing.B) {
 			rowid_1_1291_1291.Compare(&rowid_1_1291_1036)
 		}
 	})
+}
+
+func TestArraySQLName(t *testing.T) {
+	// every array/vector type maps to its lowercase SQL name.
+	arrayTypes := []T{T_array_float32, T_array_float64, T_array_bf16, T_array_float16, T_array_int8, T_array_uint8}
+	wantNames := []string{"vecf32", "vecf64", "vecbf16", "vecf16", "vecint8", "vecuint8"}
+	for i, at := range arrayTypes {
+		require.Equal(t, wantNames[i], at.ArraySQLName())
+	}
+
+	// constants stay in sync with the method (and with the literal spellings).
+	require.Equal(t, ArrayFloat32SQLName, T_array_float32.ArraySQLName())
+	require.Equal(t, ArrayInt8SQLName, T_array_int8.ArraySQLName())
+	require.Equal(t, "vecbf16", ArrayBF16SQLName)
+
+	// non-array types -> "".
+	require.Equal(t, "", T_int32.ArraySQLName())
+	require.Equal(t, "", T_varchar.ArraySQLName())
 }

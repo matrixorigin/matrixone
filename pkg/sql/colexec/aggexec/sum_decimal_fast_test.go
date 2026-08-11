@@ -489,6 +489,52 @@ func TestSumDecimal64Fast_BatchMerge(t *testing.T) {
 	exec2.Free()
 }
 
+func TestSumDecimal64Fast_BatchMergeAcrossChunks(t *testing.T) {
+	mp, _ := mpool.NewMPool("test", 0, mpool.NoFixed)
+	defer mp.Free(nil)
+
+	param := types.New(types.T_decimal64, 15, 2)
+	values := []types.Decimal64{10, 20, 30, 40}
+	vec := vector.NewVec(param)
+	defer vec.Free(mp)
+	for _, value := range values {
+		require.NoError(t, vector.AppendFixed(vec, value, false, mp))
+	}
+
+	src := newSumDecimal64FastExec(mp, true, AggIdOfSum, false, param)
+	require.NoError(t, src.GroupGrow(AggBatchSize+2))
+	require.NoError(t, src.BatchFill(0, []uint64{
+		AggBatchSize - 1,
+		AggBatchSize,
+		AggBatchSize + 1,
+		AggBatchSize + 2,
+	}, []*vector.Vector{vec}))
+
+	dst := newSumDecimal64FastExec(mp, true, AggIdOfSum, false, param)
+	require.NoError(t, dst.GroupGrow(AggBatchSize+2))
+	require.NoError(t, dst.BatchMerge(src, AggBatchSize-2, []uint64{
+		1,
+		GroupNotMatched,
+		AggBatchSize + 1,
+		AggBatchSize + 2,
+	}))
+
+	vecs, err := dst.Flush()
+	require.NoError(t, err)
+	defer func() {
+		for _, result := range vecs {
+			result.Free(mp)
+		}
+	}()
+
+	require.Equal(t, uint64(10), vector.GetFixedAtNoTypeCheck[types.Decimal128](vecs[0], 0).B0_63)
+	require.Equal(t, uint64(30), vector.GetFixedAtNoTypeCheck[types.Decimal128](vecs[1], 0).B0_63)
+	require.Equal(t, uint64(40), vector.GetFixedAtNoTypeCheck[types.Decimal128](vecs[1], 1).B0_63)
+
+	dst.Free()
+	src.Free()
+}
+
 func TestSumDecimal64Fast_AVG(t *testing.T) {
 	mp, _ := mpool.NewMPool("test", 0, mpool.NoFixed)
 	defer mp.Free(nil)

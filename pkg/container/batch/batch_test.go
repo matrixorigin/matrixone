@@ -16,9 +16,9 @@ package batch
 
 import (
 	"bytes"
+	"fmt"
+	"io"
 	"testing"
-
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -52,6 +52,17 @@ func TestBatchMarshalAndUnmarshal(t *testing.T) {
 	for _, tc := range tcs {
 		data, err := tc.bat.MarshalBinary()
 		require.NoError(t, err)
+		size, err := tc.bat.MarshalBinarySize()
+		require.NoError(t, err)
+		require.Equal(t, len(data), size)
+		var streamed bytes.Buffer
+		require.NoError(t, tc.bat.MarshalBinaryTo(&streamed))
+		require.Equal(t, data, streamed.Bytes())
+		require.ErrorIs(
+			t,
+			tc.bat.MarshalBinaryTo(shortBatchMarshalWriter{}),
+			io.ErrShortWrite,
+		)
 
 		rbat := new(Batch)
 		err = rbat.UnmarshalBinary(data)
@@ -86,6 +97,166 @@ func TestBatchMarshalAndUnmarshal(t *testing.T) {
 	}
 }
 
+func TestBatchWindowCleansPreparedParamMetadataAfterPartialFailure(t *testing.T) {
+	const (
+		rows    = 128
+		poolCap = int64(1 << 20)
+	)
+	dataMP := mpool.MustNew(t.Name() + "-data")
+	firstOwner, err := mpool.NewMPool(t.Name()+"-first", 0, mpool.NoLock)
+	require.NoError(t, err)
+	secondOwner, err := mpool.NewMPool(t.Name()+"-second", poolCap, mpool.NoLock)
+	require.NoError(t, err)
+	defer mpool.DeleteMPool(dataMP)
+	defer mpool.DeleteMPool(firstOwner)
+	defer mpool.DeleteMPool(secondOwner)
+
+	source := NewWithSize(2)
+	source.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+	source.Vecs[1] = vector.NewVec(types.T_int64.ToType())
+	kinds := make([]vector.PrepareParamKind, rows)
+	for row := range kinds {
+		if row%2 == 0 {
+			kinds[row] = vector.PrepareParamInteger
+		} else {
+			kinds[row] = vector.PrepareParamFloat
+		}
+	}
+	for _, vec := range source.Vecs {
+		require.NoError(t, vector.AppendFixedList(vec, make([]int64, rows), nil, dataMP))
+	}
+	require.NoError(t, source.Vecs[0].SetPrepareParamKindsWithMP(kinds, firstOwner))
+	require.NoError(t, source.Vecs[1].SetPrepareParamKindsWithMP(kinds, secondOwner))
+	source.SetRowCount(rows)
+	firstBaseline := firstOwner.CurrNB()
+	secondBaseline := secondOwner.CurrNB()
+	fill, err := secondOwner.Alloc(int(poolCap-secondOwner.CurrNB()), true)
+	require.NoError(t, err)
+	defer func() {
+		secondOwner.Free(fill)
+		source.Clean(dataMP)
+		require.Zero(t, dataMP.CurrNB())
+		require.Zero(t, firstOwner.CurrNB())
+		require.Zero(t, secondOwner.CurrNB())
+	}()
+
+	var window *Batch
+	require.NotPanics(t, func() {
+		window, err = source.Window(0, rows)
+	})
+	require.Nil(t, window)
+	require.Error(t, err)
+	require.Equal(t, firstBaseline, firstOwner.CurrNB(),
+		"the successfully-created prefix window must release its sidecar")
+
+	secondOwner.Free(fill)
+	fill = nil
+	window, err = source.Window(0, rows)
+	require.NoError(t, err)
+	require.NotNil(t, window)
+	window.Clean(nil)
+	require.Equal(t, firstBaseline, firstOwner.CurrNB())
+	require.Equal(t, secondBaseline, secondOwner.CurrNB())
+}
+
+func TestBatchWindowBroadcastsScalarConstants(t *testing.T) {
+	mp := mpool.MustNewZero()
+	source := NewWithSize(3)
+	source.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+	require.NoError(t, vector.AppendFixedList(
+		source.Vecs[0], []int64{10, 20, 30, 40}, nil, mp,
+	))
+	var err error
+	source.Vecs[1], err = vector.NewConstFixed(
+		types.T_int64.ToType(), int64(7), 1, mp,
+	)
+	require.NoError(t, err)
+	source.Vecs[1].SetPrepareParamKind(vector.PrepareParamInteger)
+	source.Vecs[2] = vector.NewConstNull(types.T_int64.ToType(), 1, mp)
+	source.SetRowCount(4)
+	defer func() {
+		source.Clean(mp)
+		require.Zero(t, mp.CurrNB())
+	}()
+
+	_, err = source.Vecs[1].Window(2, 4)
+	require.Error(t, err, "standalone vector windows retain physical bounds")
+
+	window, err := source.Window(2, 4)
+	require.NoError(t, err)
+	require.Equal(t, 2, window.RowCount())
+	require.Equal(t, []int64{30, 40}, vector.MustFixedColWithTypeCheck[int64](window.Vecs[0]))
+	require.True(t, window.Vecs[1].IsConst())
+	require.Equal(t, 2, window.Vecs[1].Length())
+	require.Equal(t, int64(7), vector.GetFixedAtWithTypeCheck[int64](window.Vecs[1], 1))
+	require.Equal(t, vector.PrepareParamInteger, window.Vecs[1].GetPrepareParamKindAt(1))
+	require.True(t, window.Vecs[2].IsConstNull())
+	require.Equal(t, 2, window.Vecs[2].Length())
+	window.Clean(nil)
+}
+
+func TestBatchWindowRejectsMissingRowMetadata(t *testing.T) {
+	mp := mpool.MustNewZero()
+	provenance, err := vector.NewConstFixed(
+		types.T_int64.ToType(), int64(1), 2, mp,
+	)
+	require.NoError(t, err)
+	require.NoError(t, provenance.SetPrepareParamKindsWithMP(
+		[]vector.PrepareParamKind{
+			vector.PrepareParamInteger,
+			vector.PrepareParamFloat,
+		},
+		mp,
+	))
+	for _, vec := range []*vector.Vector{
+		vector.NewVec(types.T_int64.ToType()),
+		vector.NewConstNull(types.T_int64.ToType(), 0, mp),
+		vector.NewRollupConst(types.T_int64.ToType(), 1, mp),
+		provenance,
+	} {
+		if !vec.IsConst() {
+			require.NoError(t, vector.AppendFixed(vec, int64(1), false, mp))
+		}
+		source := NewWithSize(1)
+		source.Vecs[0] = vec
+		source.SetRowCount(4)
+		window, err := source.Window(0, 4)
+		require.Error(t, err)
+		require.Nil(t, window)
+		source.Clean(mp)
+	}
+	require.Zero(t, mp.CurrNB())
+}
+
+type shortBatchMarshalWriter struct{}
+
+func (shortBatchMarshalWriter) Write(value []byte) (int, error) {
+	return len(value) - 1, nil
+}
+
+type mpoolTrackingReader struct {
+	reader    *bytes.Reader
+	mp        *mpool.MPool
+	maxCurrNB int64
+}
+
+func (r *mpoolTrackingReader) Read(value []byte) (int, error) {
+	if current := r.mp.CurrNB(); current > r.maxCurrNB {
+		r.maxCurrNB = current
+	}
+	return r.reader.Read(value)
+}
+
+func TestMarshalBinarySizeRejectsInvalidBatch(t *testing.T) {
+	var nilBatch *Batch
+	_, err := nilBatch.MarshalBinarySize()
+	require.Error(t, err)
+
+	invalid := NewWithSize(1)
+	_, err = invalid.MarshalBinarySize()
+	require.Error(t, err)
+}
+
 func TestBatch(t *testing.T) {
 	for _, tc := range tcs {
 		data, err := types.Encode(tc.bat)
@@ -97,6 +268,335 @@ func TestBatch(t *testing.T) {
 			require.Equal(t, vector.MustFixedColWithTypeCheck[int8](tc.bat.Vecs[i]), vector.MustFixedColWithTypeCheck[int8](vec))
 		}
 	}
+}
+
+// TestBatchUnmarshalWithAnyMpRejectsTruncatedData verifies that every truncated
+// prefix of a valid batch encoding is rejected without panicking. Mutation
+// protected: deleting any boundary check makes a truncated valid MarshalBinary
+// encoding panic or return nil.
+func TestBatchUnmarshalWithAnyMpRejectsTruncatedData(t *testing.T) {
+	mp := mpool.MustNewZero()
+
+	source := NewWithSize(1)
+	source.Attrs = []string{"value"}
+	source.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+	require.NoError(t, vector.AppendFixed(source.Vecs[0], int64(42), false, mp))
+	source.SetRowCount(1)
+
+	data, err := source.MarshalBinary()
+	require.NoError(t, err)
+	source.Clean(mp)
+
+	for end := len(data) - 1; end >= 0; end-- {
+		target := new(Batch)
+		var unmarshalErr error
+		require.NotPanics(t, func() {
+			unmarshalErr = target.UnmarshalBinaryWithAnyMp(data[:end], mp)
+		}, "truncated at %d bytes", end)
+		require.Error(t, unmarshalErr, "truncated at %d bytes", end)
+
+		require.NoError(t, target.UnmarshalBinaryWithAnyMp(data, mp), "reuse after truncation at %d bytes", end)
+		target.Clean(mp)
+	}
+
+	require.Equal(t, int64(0), mp.CurrNB())
+
+	vectorEnd := 16 + int(types.DecodeUint32(data[12:16]))
+	t.Run("malformed_vector_framing", func(t *testing.T) {
+		for _, mutate := range []func([]byte){
+			func(corrupted []byte) {
+				zero := uint32(0)
+				copy(corrupted[12:16], types.EncodeUint32(&zero))
+			},
+			func(corrupted []byte) {
+				oversized := uint32(len(data))
+				dataLenOffset := 16 + 1 + types.TSize + 4
+				copy(corrupted[dataLenOffset:dataLenOffset+4], types.EncodeUint32(&oversized))
+			},
+		} {
+			corrupted := append([]byte(nil), data...)
+			mutate(corrupted)
+			target := NewOffHeapEmpty()
+			var unmarshalErr error
+			require.NotPanics(t, func() {
+				unmarshalErr = target.UnmarshalBinaryWithAnyMp(corrupted, mp)
+			})
+			require.Error(t, unmarshalErr)
+			target.Clean(mp)
+			require.Equal(t, int64(0), mp.CurrNB())
+		}
+	})
+	t.Run("undersized_fixed_vector_payload", func(t *testing.T) {
+		corrupted := append([]byte(nil), data...)
+		rowCount := int64(2)
+		vectorLength := uint32(2)
+		copy(corrupted[:8], types.EncodeInt64(&rowCount))
+		vectorLengthOffset := 16 + 1 + types.TSize
+		copy(corrupted[vectorLengthOffset:vectorLengthOffset+4], types.EncodeUint32(&vectorLength))
+
+		target := NewOffHeapEmpty()
+		var unmarshalErr error
+		require.NotPanics(t, func() {
+			unmarshalErr = target.UnmarshalBinaryWithAnyMp(corrupted, mp)
+		})
+		require.Error(t, unmarshalErr)
+		target.Clean(mp)
+		require.Equal(t, int64(0), mp.CurrNB())
+	})
+	t.Run("forged_fixed_vector_type_size", func(t *testing.T) {
+		corrupted := append([]byte(nil), data...)
+		rowCount := int64(2)
+		vectorLength := uint32(2)
+		forgedTypeSize := int32(1)
+		copy(corrupted[:8], types.EncodeInt64(&rowCount))
+		vectorLengthOffset := 16 + 1 + types.TSize
+		copy(corrupted[vectorLengthOffset:vectorLengthOffset+4], types.EncodeUint32(&vectorLength))
+		vectorTypeSizeOffset := 16 + 1 + 4
+		copy(corrupted[vectorTypeSizeOffset:vectorTypeSizeOffset+4], types.EncodeInt32(&forgedTypeSize))
+
+		target := NewOffHeapEmpty()
+		var unmarshalErr error
+		require.NotPanics(t, func() {
+			unmarshalErr = target.UnmarshalBinaryWithAnyMp(corrupted, mp)
+		})
+		require.Error(t, unmarshalErr)
+		target.Clean(mp)
+		require.Equal(t, int64(0), mp.CurrNB())
+	})
+	t.Run("invalid_null_bitmap_metadata", func(t *testing.T) {
+		source := NewWithSize(1)
+		source.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+		require.NoError(t, vector.AppendFixed(source.Vecs[0], int64(0), true, mp))
+		source.SetRowCount(1)
+		corrupted, err := source.MarshalBinary()
+		require.NoError(t, err)
+		source.Clean(mp)
+
+		vectorDataOffset := 16
+		dataLenOffset := vectorDataOffset + 1 + types.TSize + 4
+		dataLen := int(types.DecodeUint32(corrupted[dataLenOffset : dataLenOffset+4]))
+		areaLenOffset := dataLenOffset + 4 + dataLen
+		areaLen := int(types.DecodeUint32(corrupted[areaLenOffset : areaLenOffset+4]))
+		nspDataOffset := areaLenOffset + 4 + areaLen + 4
+		bitmapLen := uint64(64)
+		bitmapDataLen := uint64(0)
+		copy(corrupted[nspDataOffset+8:nspDataOffset+16], types.EncodeUint64(&bitmapLen))
+		copy(corrupted[nspDataOffset+16:nspDataOffset+24], types.EncodeUint64(&bitmapDataLen))
+
+		target := NewOffHeapEmpty()
+		var unmarshalErr error
+		require.NotPanics(t, func() {
+			unmarshalErr = target.UnmarshalBinaryWithAnyMp(corrupted, mp)
+		})
+		require.Error(t, unmarshalErr)
+		target.Clean(mp)
+		require.Equal(t, int64(0), mp.CurrNB())
+	})
+	t.Run("varlen_offsets_must_stay_within_area", func(t *testing.T) {
+		source := NewWithSize(1)
+		source.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
+		require.NoError(t, vector.AppendBytes(source.Vecs[0], bytes.Repeat([]byte("x"), types.VarlenaInlineSize+1), false, mp))
+		source.SetRowCount(1)
+		corrupted, err := source.MarshalBinary()
+		require.NoError(t, err)
+		source.Clean(mp)
+
+		vectorDataOffset := 16
+		varlenaOffset := vectorDataOffset + 1 + types.TSize + 4 + 4
+		invalidAreaOffset := uint32(len(corrupted))
+		copy(corrupted[varlenaOffset+4:varlenaOffset+8], types.EncodeUint32(&invalidAreaOffset))
+
+		target := NewOffHeapEmpty()
+		var unmarshalErr error
+		require.NotPanics(t, func() {
+			unmarshalErr = target.UnmarshalBinaryWithAnyMp(corrupted, mp)
+		})
+		require.Error(t, unmarshalErr)
+		target.Clean(mp)
+		require.Equal(t, int64(0), mp.CurrNB())
+	})
+	t.Run("preallocated_nil_vector", func(t *testing.T) {
+		target := NewWithSize(1)
+		var unmarshalErr error
+		require.NotPanics(t, func() {
+			unmarshalErr = target.UnmarshalBinaryWithAnyMp(data[:vectorEnd], mp)
+		})
+		require.Error(t, unmarshalErr)
+
+		require.NoError(t, target.UnmarshalBinaryWithAnyMp(data, mp))
+		target.Clean(mp)
+		require.Equal(t, int64(0), mp.CurrNB())
+	})
+
+	t.Run("owned_vector", func(t *testing.T) {
+		target := NewOffHeapWithSize(1)
+		target.Vecs[0] = vector.NewOffHeapVecWithType(types.T_int64.ToType())
+		require.NoError(t, vector.AppendFixed(target.Vecs[0], int64(-1), false, mp))
+		require.Positive(t, mp.CurrNB())
+
+		require.Error(t, target.UnmarshalBinaryWithAnyMp(data[:vectorEnd], mp))
+		require.NoError(t, target.UnmarshalBinaryWithAnyMp(data, mp))
+		target.Clean(mp)
+		require.Equal(t, int64(0), mp.CurrNB())
+	})
+}
+
+func TestBatchUnmarshalPreservesIndependentRowCount(t *testing.T) {
+	mp := mpool.MustNewZero()
+	source := NewWithSize(1)
+	source.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+	source.SetRowCount(1)
+	encoded, err := source.MarshalBinary()
+	require.NoError(t, err)
+	source.Clean(mp)
+
+	target := NewOffHeapEmpty()
+	require.NoError(t, target.UnmarshalBinaryWithAnyMp(encoded, mp))
+	require.Equal(t, 1, target.RowCount())
+	require.Zero(t, target.Vecs[0].Length())
+	target.Clean(mp)
+	require.Equal(t, int64(0), mp.CurrNB())
+}
+
+func TestBatchUnmarshalPreservesShortNonEmptyVector(t *testing.T) {
+	mp := mpool.MustNewZero()
+	source := NewWithSize(1)
+	source.Vecs[0] = vector.NewVec(types.T_binary.ToType())
+	require.NoError(t, vector.AppendBytes(source.Vecs[0], []byte("object stats"), false, mp))
+	source.SetRowCount(6)
+	encoded, err := source.MarshalBinary()
+	require.NoError(t, err)
+	source.Clean(mp)
+
+	target := NewOffHeapEmpty()
+	require.NoError(t, target.UnmarshalBinaryWithAnyMp(encoded, mp))
+	require.Equal(t, 6, target.RowCount())
+	require.Equal(t, 1, target.Vecs[0].Length())
+	require.Equal(t, []byte("object stats"), target.Vecs[0].GetBytesAt(0))
+	target.Clean(mp)
+	require.Equal(t, int64(0), mp.CurrNB())
+}
+
+func TestBatchUnmarshalRetainsRowCountWhenVectorCountChanges(t *testing.T) {
+	mp := mpool.MustNewZero()
+	source := NewWithSize(2)
+	for i := range source.Vecs {
+		source.Vecs[i] = vector.NewVec(types.T_int64.ToType())
+		require.NoError(t, vector.AppendFixed(source.Vecs[i], int64(i+1), false, mp))
+	}
+	source.SetRowCount(1)
+	encoded, err := source.MarshalBinary()
+	require.NoError(t, err)
+	source.Clean(mp)
+
+	target := NewOffHeapWithSize(1)
+	target.Vecs[0] = vector.NewOffHeapVecWithType(types.T_int64.ToType())
+	require.NoError(t, vector.AppendFixed(target.Vecs[0], int64(-1), false, mp))
+
+	require.NoError(t, target.UnmarshalBinaryWithAnyMp(encoded, mp))
+	require.Equal(t, 1, target.RowCount())
+	require.Len(t, target.Vecs, 2)
+	require.Equal(t, int64(1), vector.GetFixedAtWithTypeCheck[int64](target.Vecs[0], 0))
+	require.Equal(t, int64(2), vector.GetFixedAtWithTypeCheck[int64](target.Vecs[1], 0))
+	target.Clean(mp)
+	require.Equal(t, int64(0), mp.CurrNB())
+}
+
+func TestBatchUnmarshalRejectsOwnedVectorCountChangeWithoutMpool(t *testing.T) {
+	mp := mpool.MustNewZero()
+	source := NewWithSize(2)
+	for i := range source.Vecs {
+		source.Vecs[i] = vector.NewVec(types.T_int64.ToType())
+		require.NoError(t, vector.AppendFixed(source.Vecs[i], int64(i+1), false, mp))
+	}
+	source.SetRowCount(1)
+	encoded, err := source.MarshalBinary()
+	require.NoError(t, err)
+	source.Clean(mp)
+
+	target := NewWithSize(1)
+	target.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+	require.NoError(t, vector.AppendFixed(target.Vecs[0], int64(-1), false, mp))
+	t.Cleanup(func() {
+		target.Clean(mp)
+		require.Equal(t, int64(0), mp.CurrNB())
+	})
+
+	var unmarshalErr error
+	require.NotPanics(t, func() {
+		unmarshalErr = target.UnmarshalBinary(encoded)
+	})
+	require.Error(t, unmarshalErr)
+}
+
+func TestBatchUnmarshalSeparatesAliasedReuseVectors(t *testing.T) {
+	for _, columnCount := range []int{2, 3, 64, 65} {
+		t.Run(fmt.Sprintf("%d_columns", columnCount), func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			source := NewWithSize(columnCount)
+			for i := range source.Vecs {
+				source.Vecs[i] = vector.NewVec(types.T_int64.ToType())
+				require.NoError(t, vector.AppendFixed(source.Vecs[i], int64(i+1), false, mp))
+			}
+			source.SetRowCount(1)
+			encoded, err := source.MarshalBinary()
+			require.NoError(t, err)
+			source.Clean(mp)
+
+			target := NewOffHeapWithSize(columnCount)
+			shared := vector.NewOffHeapVecWithType(types.T_int64.ToType())
+			require.NoError(t, vector.AppendFixed(shared, int64(-1), false, mp))
+			for i := range target.Vecs {
+				target.Vecs[i] = shared
+			}
+			t.Cleanup(func() {
+				target.Clean(mp)
+				require.Equal(t, int64(0), mp.CurrNB())
+			})
+
+			require.NoError(t, target.UnmarshalBinaryWithAnyMp(encoded, mp))
+			for i := range target.Vecs {
+				require.Equal(t, int64(i+1), vector.GetFixedAtWithTypeCheck[int64](target.Vecs[i], 0))
+				if i > 0 {
+					require.NotSame(t, target.Vecs[i-1], target.Vecs[i])
+				}
+			}
+		})
+	}
+}
+
+func TestBatchUnmarshalSeparatesBorrowedAliasedReuseVectorsWithoutMpool(t *testing.T) {
+	mp := mpool.MustNewZero()
+	source := NewWithSize(2)
+	for i := range source.Vecs {
+		source.Vecs[i] = vector.NewVec(types.T_int64.ToType())
+		require.NoError(t, vector.AppendFixed(source.Vecs[i], int64(i+1), false, mp))
+	}
+	source.SetRowCount(1)
+	encoded, err := source.MarshalBinary()
+	require.NoError(t, err)
+	source.Clean(mp)
+
+	seed := vector.NewVec(types.T_int64.ToType())
+	require.NoError(t, vector.AppendFixed(seed, int64(-1), false, mp))
+	seedData, err := seed.MarshalBinary()
+	require.NoError(t, err)
+	seed.Free(mp)
+	require.Equal(t, int64(0), mp.CurrNB())
+
+	shared := vector.NewVecFromReuse()
+	require.NoError(t, shared.UnmarshalBinary(seedData))
+	target := NewWithSize(2)
+	target.Vecs[0] = shared
+	target.Vecs[1] = shared
+	t.Cleanup(func() {
+		target.Clean(nil)
+	})
+
+	require.NoError(t, target.UnmarshalBinary(encoded))
+	require.NotSame(t, target.Vecs[0], target.Vecs[1])
+	require.Equal(t, int64(1), vector.GetFixedAtWithTypeCheck[int64](target.Vecs[0], 0))
+	require.Equal(t, int64(2), vector.GetFixedAtWithTypeCheck[int64](target.Vecs[1], 0))
 }
 
 func TestBatchShrink(t *testing.T) {
@@ -155,7 +655,6 @@ func newBatch(ts []types.Type, rows int) *Batch {
 	}
 
 	bat.ExtraBuf = []byte("extra buf")
-	aggexec.RegisterGroupConcatAgg(0, ",")
 	bat.Attrs = []string{"1"}
 	return bat
 }
@@ -189,6 +688,290 @@ func TestBatch_UnionOne(t *testing.T) {
 	row1 = vector.MustFixedColNoTypeCheck[int32](bat1.Vecs[1])
 	row2 = vector.MustFixedColNoTypeCheck[int32](bat2.Vecs[1])
 	require.Equal(t, row1, row2)
+}
+
+func TestClonePreservesPrepareParamKind(t *testing.T) {
+	mp := mpool.MustNewZero()
+	source := NewWithSize(1)
+	source.Vecs[0] = vector.NewVec(types.T_text.ToType())
+	require.NoError(t, vector.AppendBytes(source.Vecs[0], []byte("5"), false, mp))
+	source.Vecs[0].SetPrepareParamKind(vector.PrepareParamDecimal)
+	source.SetRowCount(1)
+	defer source.Clean(mp)
+
+	cloned, err := source.Dup(mp)
+	require.NoError(t, err)
+	defer cloned.Clean(mp)
+	require.Equal(t, vector.PrepareParamDecimal, cloned.Vecs[0].GetPrepareParamKind())
+}
+
+func TestPrepareParamKindTransportRoundTripAndReuse(t *testing.T) {
+	mp := mpool.MustNewZero()
+	source := NewWithSize(1)
+	source.Vecs[0] = vector.NewVec(types.T_text.ToType())
+	require.NoError(t, vector.AppendBytes(source.Vecs[0], []byte("5"), false, mp))
+	require.NoError(t, vector.AppendBytes(source.Vecs[0], []byte("5"), false, mp))
+	source.Vecs[0].SetPrepareParamKinds([]vector.PrepareParamKind{
+		vector.PrepareParamFloat,
+		vector.PrepareParamNone,
+	})
+	source.SetRowCount(2)
+	defer source.Clean(mp)
+
+	legacy, err := source.MarshalBinary()
+	require.NoError(t, err)
+	var wire bytes.Buffer
+	encoded, err := source.MarshalBinaryWithPrepareParamKinds(&wire, true)
+	require.NoError(t, err)
+	require.Equal(t, wire.Bytes(), encoded)
+	require.Greater(t, len(encoded), len(legacy))
+	require.Equal(t, legacy, encoded[:len(legacy)])
+
+	decoded := NewOffHeapEmpty()
+	require.NoError(t, decoded.UnmarshalBinaryWithPrepareParamKinds(encoded, mp))
+	require.Equal(t, vector.PrepareParamFloat, decoded.Vecs[0].GetPrepareParamKindAt(0))
+	require.Equal(t, vector.PrepareParamNone, decoded.Vecs[0].GetPrepareParamKindAt(1))
+
+	// Reusing the receiver with a legacy payload must clear the previous
+	// sidecar rather than leaking the first generation's provenance.
+	require.NoError(t, decoded.UnmarshalBinaryWithPrepareParamKinds(legacy, mp))
+	require.Equal(t, vector.PrepareParamNone, decoded.Vecs[0].GetPrepareParamKindAt(0))
+	decoded.Clean(mp)
+}
+
+func TestPrepareParamKindTransportRejectsMalformedTrailer(t *testing.T) {
+	mp := mpool.MustNewZero()
+	bat := NewWithSize(1)
+	bat.Vecs[0] = vector.NewVec(types.T_text.ToType())
+	require.NoError(t, vector.AppendBytes(bat.Vecs[0], []byte("5"), false, mp))
+	bat.Vecs[0].SetPrepareParamKind(vector.PrepareParamFloat)
+	bat.SetRowCount(1)
+	defer bat.Clean(mp)
+	var wire bytes.Buffer
+	encoded, err := bat.MarshalBinaryWithPrepareParamKinds(&wire, true)
+	require.NoError(t, err)
+	for _, malformed := range [][]byte{
+		encoded[:len(encoded)-1],
+		append(append([]byte(nil), encoded...), 0),
+	} {
+		reused := NewOffHeapEmpty()
+		require.Error(t, reused.UnmarshalBinaryWithPrepareParamKinds(malformed, mp))
+		reused.Clean(mp)
+	}
+}
+
+func TestPrepareParamKindTransportRejectsMismatchedCountsBeforeAllocation(t *testing.T) {
+	mp := mpool.MustNewZero()
+	source := NewWithSize(1)
+	source.Vecs[0] = vector.NewVec(types.T_text.ToType())
+	require.NoError(t, vector.AppendBytes(source.Vecs[0], []byte("5"), false, mp))
+	source.Vecs[0].SetPrepareParamKind(vector.PrepareParamFloat)
+	source.SetRowCount(1)
+	defer source.Clean(mp)
+	var wire bytes.Buffer
+	encoded, err := source.MarshalBinaryWithPrepareParamKinds(&wire, true)
+	require.NoError(t, err)
+	prefixLen, err := stableBatchPayloadLength(encoded)
+	require.NoError(t, err)
+
+	for _, nVecs := range []int32{0, 2} {
+		malformed := append([]byte(nil), encoded...)
+		copy(malformed[prefixLen+4:prefixLen+8], types.EncodeInt32(&nVecs))
+		reused := NewOffHeapEmpty()
+		require.ErrorContains(t, reused.UnmarshalBinaryWithPrepareParamKinds(malformed, mp),
+			"vector count mismatch")
+		reused.Clean(mp)
+	}
+
+	heterogeneous := NewWithSize(1)
+	heterogeneous.Vecs[0] = vector.NewVec(types.T_text.ToType())
+	for range 2 {
+		require.NoError(t, vector.AppendBytes(heterogeneous.Vecs[0], []byte("5"), false, mp))
+	}
+	heterogeneous.Vecs[0].SetPrepareParamKinds([]vector.PrepareParamKind{
+		vector.PrepareParamFloat,
+		vector.PrepareParamNone,
+	})
+	heterogeneous.SetRowCount(2)
+	defer heterogeneous.Clean(mp)
+	wire.Reset()
+	heterogeneousEncoded, err := heterogeneous.MarshalBinaryWithPrepareParamKinds(&wire, true)
+	require.NoError(t, err)
+	heterogeneousPrefix, err := stableBatchPayloadLength(heterogeneousEncoded)
+	require.NoError(t, err)
+	// PPB header (16 bytes) + mode byte precede the rows count.
+	rowCountOffset := heterogeneousPrefix + 17
+	malformed := append([]byte(nil), heterogeneousEncoded...)
+	amplified := int32(prepareParamKindBatchMaxRows)
+	copy(malformed[rowCountOffset:rowCountOffset+4], types.EncodeInt32(&amplified))
+	reused := NewOffHeapEmpty()
+	require.ErrorContains(t, reused.UnmarshalBinaryWithPrepareParamKinds(malformed, mp),
+		"row count mismatch")
+	reused.Clean(mp)
+}
+
+func TestPrepareParamKindStreamingRejectsTruncatedRowsBeforeAllocation(t *testing.T) {
+	sourceMP := mpool.MustNewZero()
+	source := NewWithSize(1)
+	source.Vecs[0] = vector.NewConstNull(
+		types.T_int8.ToType(),
+		int(prepareParamKindBatchMaxRows),
+		sourceMP,
+	)
+	source.SetRowCount(int(prepareParamKindBatchMaxRows))
+	stable, err := source.MarshalBinary()
+	require.NoError(t, err)
+	source.Clean(sourceMP)
+	require.Zero(t, sourceMP.CurrNB())
+
+	var trailer bytes.Buffer
+	trailer.Write([]byte{
+		prepareParamKindBatchMagic0,
+		prepareParamKindBatchMagic1,
+		prepareParamKindBatchMagic2,
+		prepareParamKindBatchVersion,
+	})
+	nVecs := int32(1)
+	trailer.Write(types.EncodeInt32(&nVecs))
+	rowCount := int64(prepareParamKindBatchMaxRows)
+	trailer.Write(types.EncodeInt64(&rowCount))
+	trailer.WriteByte(prepareParamKindBatchModeRows)
+	count := prepareParamKindBatchMaxRows
+	trailer.Write(types.EncodeInt32(&count))
+	trailer.WriteByte(byte(vector.PrepareParamFloat))
+	trailerLen := uint32(trailer.Len() + 4)
+	trailer.Write(types.EncodeUint32(&trailerLen))
+
+	wire := append(append([]byte(nil), stable...), trailer.Bytes()...)
+	mp := mpool.MustNewZero()
+	reader := &mpoolTrackingReader{
+		reader: bytes.NewReader(wire),
+		mp:     mp,
+	}
+	target := NewOffHeapEmpty()
+	err = target.UnmarshalFromReaderWithPrepareParamKinds(reader, int64(len(wire)), mp)
+	require.ErrorIs(t, err, io.ErrUnexpectedEOF)
+	require.Equal(t, int(prepareParamKindBatchMaxRows), target.Vecs[0].Length())
+	require.Empty(t, target.Vecs[0].GetPrepareParamKinds())
+	require.Equal(t, mp.CurrNB(), reader.maxCurrNB,
+		"truncated row metadata must not transiently amplify the MPool")
+	target.Clean(mp)
+	require.Zero(t, mp.CurrNB())
+}
+
+func makePrepareParamKindStreamingWire(t *testing.T) (encoded, legacy []byte) {
+	t.Helper()
+	mp := mpool.MustNewZero()
+	source := NewWithSize(2)
+	source.Vecs[0] = vector.NewVec(types.T_text.ToType())
+	source.Vecs[1] = vector.NewVec(types.T_int64.ToType())
+	for i, value := range []string{"1.5", "plain", "9.5"} {
+		require.NoError(t, vector.AppendBytes(source.Vecs[0], []byte(value), false, mp))
+		require.NoError(t, vector.AppendFixed(source.Vecs[1], int64(i+1), false, mp))
+	}
+	require.NoError(t, source.Vecs[0].SetPrepareParamKindsWithMP([]vector.PrepareParamKind{
+		vector.PrepareParamFloat,
+		vector.PrepareParamNone,
+		vector.PrepareParamDecimal,
+	}, mp))
+	source.SetRowCount(3)
+
+	legacy, err := source.MarshalBinary()
+	require.NoError(t, err)
+	var wire bytes.Buffer
+	encoded, err = source.MarshalBinaryWithPrepareParamKinds(&wire, true)
+	require.NoError(t, err)
+	encoded = append([]byte(nil), encoded...)
+	source.Clean(mp)
+	require.Zero(t, mp.CurrNB())
+	return encoded, legacy
+}
+
+func TestPrepareParamKindStreamingRoundTrip(t *testing.T) {
+	encoded, legacy := makePrepareParamKindStreamingWire(t)
+	require.Greater(t, len(encoded), len(legacy))
+	require.Equal(t, legacy, encoded[:len(legacy)],
+		"the streaming extension must not change the stable Batch prefix")
+
+	mp := mpool.MustNewZero()
+	target := NewOffHeapEmpty()
+	require.NoError(t, target.UnmarshalFromReaderWithPrepareParamKinds(
+		bytes.NewReader(encoded), int64(len(encoded)), mp))
+	require.Equal(t, 3, target.RowCount())
+	require.Equal(t, []vector.PrepareParamKind{
+		vector.PrepareParamFloat,
+		vector.PrepareParamNone,
+		vector.PrepareParamDecimal,
+	}, target.Vecs[0].GetPrepareParamKinds())
+	require.Equal(t, int64(3), vector.GetFixedAtWithTypeCheck[int64](target.Vecs[1], 2))
+	require.False(t, target.Vecs[1].HasPrepareParamKind())
+	target.Clean(mp)
+	require.Zero(t, mp.CurrNB())
+}
+
+func TestPrepareParamKindStreamingReservesRemainingRecordsAndFooter(t *testing.T) {
+	encoded, legacy := makePrepareParamKindStreamingWire(t)
+	// Header + first rows mode + count + three row kinds ends immediately
+	// before the second vector's mode byte.
+	firstRowsEnd := len(legacy) + 4 + 4 + 8 + 1 + 4 + 3
+	require.Less(t, firstRowsEnd, len(encoded))
+
+	t.Run("valid multi-vector record", func(t *testing.T) {
+		mp := mpool.MustNewZero()
+		target := NewOffHeapEmpty()
+		require.NoError(t, target.UnmarshalFromReaderWithPrepareParamKinds(
+			bytes.NewReader(encoded), int64(len(encoded)), mp))
+		require.Equal(t, vector.PrepareParamDecimal, target.Vecs[0].GetPrepareParamKindAt(2))
+		target.Clean(mp)
+		require.Zero(t, mp.CurrNB())
+	})
+
+	for _, tc := range []struct {
+		name string
+		wire []byte
+	}{
+		{name: "missing remaining vector record and footer", wire: encoded[:firstRowsEnd]},
+		{name: "footer short by one byte", wire: encoded[:len(encoded)-1]},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			reader := &mpoolTrackingReader{reader: bytes.NewReader(tc.wire), mp: mp}
+			target := NewOffHeapEmpty()
+			err := target.UnmarshalFromReaderWithPrepareParamKinds(reader, int64(len(tc.wire)), mp)
+			require.ErrorIs(t, err, io.ErrUnexpectedEOF)
+			require.Empty(t, target.Vecs[0].GetPrepareParamKinds())
+			require.Equal(t, mp.CurrNB(), reader.maxCurrNB,
+				"framing rejection must happen before row metadata allocation")
+			target.Clean(mp)
+			require.Zero(t, mp.CurrNB())
+		})
+	}
+}
+
+func TestPrepareParamKindStreamingMalformedReuseClearsMetadata(t *testing.T) {
+	encoded, legacy := makePrepareParamKindStreamingWire(t)
+	secondModeOffset := len(legacy) + 4 + 4 + 8 + 1 + 4 + 3
+	malformed := append([]byte(nil), encoded...)
+	malformed[secondModeOffset] = 0xff
+
+	mp := mpool.MustNewZero()
+	target := NewOffHeapEmpty()
+	require.NoError(t, target.UnmarshalFromReaderWithPrepareParamKinds(
+		bytes.NewReader(encoded), int64(len(encoded)), mp))
+	require.NotEmpty(t, target.Vecs[0].GetPrepareParamKinds())
+
+	require.ErrorContains(t, target.UnmarshalFromReaderWithPrepareParamKinds(
+		bytes.NewReader(malformed), int64(len(malformed)), mp),
+		"invalid prepared parameter metadata mode")
+	require.Empty(t, target.Vecs[0].GetPrepareParamKinds())
+	require.Equal(t, vector.PrepareParamNone, target.Vecs[0].GetPrepareParamKindAt(0))
+
+	require.NoError(t, target.UnmarshalFromReaderWithPrepareParamKinds(
+		bytes.NewReader(legacy), int64(len(legacy)), mp))
+	require.Empty(t, target.Vecs[0].GetPrepareParamKinds())
+	require.Equal(t, vector.PrepareParamNone, target.Vecs[0].GetPrepareParamKindAt(2))
+	target.Clean(mp)
+	require.Zero(t, mp.CurrNB())
 }
 
 // TestBatchUnmarshalWithAnyMp_Bug23156 tests the fix for bug #23156

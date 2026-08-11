@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -92,9 +93,20 @@ type ExpressionExecutor interface {
 }
 
 func NewExpressionExecutorsFromPlanExpressions(proc *process.Process, planExprs []*plan.Expr) (executors []ExpressionExecutor, err error) {
+	return NewExpressionExecutorsFromPlanExpressionsWithAllocation(proc, planExprs, nil)
+}
+
+// NewExpressionExecutorsFromPlanExpressionsWithAllocation builds a complete
+// expression tree whose owned MPool vectors use one immutable allocation
+// selection. Borrowed input vectors remain owned and charged by their source.
+func NewExpressionExecutorsFromPlanExpressionsWithAllocation(
+	proc *process.Process,
+	planExprs []*plan.Expr,
+	selection *vector.AllocationAccountSelection,
+) (executors []ExpressionExecutor, err error) {
 	executors = make([]ExpressionExecutor, len(planExprs))
 	for i := range executors {
-		executors[i], err = NewExpressionExecutor(proc, planExprs[i])
+		executors[i], err = NewExpressionExecutorWithAllocation(proc, planExprs[i], selection)
 		if err != nil {
 			for j := 0; j < i; j++ {
 				executors[j].Free()
@@ -106,28 +118,46 @@ func NewExpressionExecutorsFromPlanExpressions(proc *process.Process, planExprs 
 }
 
 func NewExpressionExecutor(proc *process.Process, planExpr *plan.Expr) (ExpressionExecutor, error) {
+	return NewExpressionExecutorWithAllocation(proc, planExpr, nil)
+}
+
+func NewExpressionExecutorWithAllocation(
+	proc *process.Process,
+	planExpr *plan.Expr,
+	selection *vector.AllocationAccountSelection,
+) (ExpressionExecutor, error) {
 	switch t := planExpr.Expr.(type) {
 	case *plan.Expr_Lit:
-		typ := types.New(types.T(planExpr.Typ.Id), planExpr.Typ.Width, planExpr.Typ.Scale)
-		vec, err := generateConstExpressionExecutor(proc, typ, t.Lit)
+		typ := types.NewWithCharset(
+			types.T(planExpr.Typ.Id), planExpr.Typ.Width, planExpr.Typ.Scale, uint8(planExpr.Typ.Charset),
+		)
+		vec, err := generateConstExpressionExecutor(proc, typ, t.Lit, selection)
 		if err != nil {
 			return nil, err
 		}
 		return NewFixedVectorExpressionExecutor(proc.Mp(), false, vec), nil
 
 	case *plan.Expr_T:
-		typ := types.New(types.T(planExpr.Typ.Id), planExpr.Typ.Width, planExpr.Typ.Scale)
-		vec := vector.NewConstNull(typ, 1, proc.Mp())
+		typ := types.NewWithCharset(
+			types.T(planExpr.Typ.Id), planExpr.Typ.Width, planExpr.Typ.Scale, uint8(planExpr.Typ.Charset),
+		)
+		vec, err := newExpressionConstNull(typ, 1, selection)
+		if err != nil {
+			return nil, err
+		}
 		return NewFixedVectorExpressionExecutor(proc.Mp(), false, vec), nil
 
 	case *plan.Expr_Col:
-		typ := types.New(types.T(planExpr.Typ.Id), planExpr.Typ.Width, planExpr.Typ.Scale)
+		typ := types.NewWithCharset(
+			types.T(planExpr.Typ.Id), planExpr.Typ.Width, planExpr.Typ.Scale, uint8(planExpr.Typ.Charset),
+		)
 		ce := NewColumnExpressionExecutor()
 		*ce = ColumnExpressionExecutor{
-			mp:       proc.Mp(),
-			relIndex: int(t.Col.RelPos),
-			colIndex: int(t.Col.ColPos),
-			typ:      typ,
+			mp:         proc.Mp(),
+			relIndex:   int(t.Col.RelPos),
+			colIndex:   int(t.Col.ColPos),
+			typ:        typ,
+			allocation: selection,
 		}
 		// [issue#19574]
 		// if < 0, it's special for agg or others.
@@ -137,18 +167,25 @@ func NewExpressionExecutor(proc *process.Process, planExpr *plan.Expr) (Expressi
 		return ce, nil
 
 	case *plan.Expr_P:
-		typ := types.New(types.T(planExpr.Typ.Id), planExpr.Typ.Width, planExpr.Typ.Scale)
-		return NewParamExpressionExecutor(proc.Mp(), int(t.P.Pos), typ), nil
+		typ := types.NewWithCharset(
+			types.T(planExpr.Typ.Id), planExpr.Typ.Width, planExpr.Typ.Scale, uint8(planExpr.Typ.Charset),
+		)
+		executor := NewParamExpressionExecutor(proc.Mp(), int(t.P.Pos), typ)
+		executor.allocation = selection
+		return executor, nil
 
 	case *plan.Expr_V:
-		typ := types.New(types.T(planExpr.Typ.Id), planExpr.Typ.Width, planExpr.Typ.Scale)
+		typ := types.NewWithCharset(
+			types.T(planExpr.Typ.Id), planExpr.Typ.Width, planExpr.Typ.Scale, uint8(planExpr.Typ.Charset),
+		)
 		ve := NewVarExpressionExecutor()
 		*ve = VarExpressionExecutor{
-			mp:     proc.Mp(),
-			name:   t.V.Name,
-			system: t.V.System,
-			global: t.V.Global,
-			typ:    typ,
+			mp:         proc.Mp(),
+			name:       t.V.Name,
+			system:     t.V.System,
+			global:     t.V.Global,
+			typ:        typ,
+			allocation: selection,
 		}
 		return ve, nil
 
@@ -156,6 +193,7 @@ func NewExpressionExecutor(proc *process.Process, planExpr *plan.Expr) (Expressi
 		vec := vector.NewVec(types.T_any.ToType())
 		err := vec.UnmarshalBinary(t.Vec.Data)
 		if err != nil {
+			vec.Free(proc.Mp())
 			return nil, err
 		}
 		return NewFixedVectorExpressionExecutor(proc.Mp(), true, vec), nil
@@ -163,10 +201,15 @@ func NewExpressionExecutor(proc *process.Process, planExpr *plan.Expr) (Expressi
 	case *plan.Expr_List:
 		executor := NewListExpressionExecutor()
 		resultVecTyp := t.List.List[0].GetTyp()
-		typ := types.New(types.T(resultVecTyp.Id), resultVecTyp.Width, resultVecTyp.Scale)
-		executor.Init(proc, typ, len(t.List.List))
+		typ := types.NewWithCharset(
+			types.T(resultVecTyp.Id), resultVecTyp.Width, resultVecTyp.Scale, uint8(resultVecTyp.Charset),
+		)
+		if err := executor.init(proc, typ, len(t.List.List), selection); err != nil {
+			executor.Free()
+			return nil, err
+		}
 		for i := range executor.parameterExecutor {
-			subExecutor, paramErr := NewExpressionExecutor(proc, t.List.List[i])
+			subExecutor, paramErr := NewExpressionExecutorWithAllocation(proc, t.List.List[i], selection)
 			if paramErr != nil {
 				executor.Free()
 				return nil, paramErr
@@ -192,17 +235,19 @@ func NewExpressionExecutor(proc *process.Process, planExpr *plan.Expr) (Expressi
 			executor.overloadID = overloadID
 			executor.volatile, executor.timeDependent = overload.CannotFold(), overload.IsRealTimeRelated()
 			executor.fid, _ = function.DecodeOverloadID(overloadID)
-			executor.evalFn, executor.resetFn, executor.freeFn = overload.GetExecuteMethod()
+			executor.evalFn, executor.resetFn, executor.freeFn, executor.retainedBytesFn = overload.GetExecuteMethod()
 		}
-		typ := types.New(types.T(planExpr.Typ.Id), planExpr.Typ.Width, planExpr.Typ.Scale)
+		typ := types.NewWithCharset(
+			types.T(planExpr.Typ.Id), planExpr.Typ.Width, planExpr.Typ.Scale, uint8(planExpr.Typ.Charset),
+		)
 
-		if err = executor.Init(proc, len(t.F.Args), typ); err != nil {
+		if err = executor.init(proc, len(t.F.Args), typ, selection); err != nil {
 			executor.Free()
 			return nil, err
 		}
 
 		for i := range executor.parameterExecutor {
-			subExecutor, paramErr := NewExpressionExecutor(proc, t.F.Args[i])
+			subExecutor, paramErr := NewExpressionExecutorWithAllocation(proc, t.F.Args[i], selection)
 			if paramErr != nil {
 				executor.Free()
 				return nil, paramErr
@@ -213,6 +258,66 @@ func NewExpressionExecutor(proc *process.Process, planExpr *plan.Expr) (Expressi
 	}
 
 	return nil, moerr.NewNYI(proc.Ctx, fmt.Sprintf("unsupported expression executor for %v now", planExpr))
+}
+
+func newExpressionOffHeapVector(
+	typ types.Type,
+	selection *vector.AllocationAccountSelection,
+) (*vector.Vector, error) {
+	if selection == nil {
+		return vector.NewOffHeapVecWithType(typ), nil
+	}
+	return vector.NewOffHeapVecWithTypeAndAllocation(typ, selection)
+}
+
+func newExpressionConstNull(
+	typ types.Type,
+	length int,
+	selection *vector.AllocationAccountSelection,
+) (*vector.Vector, error) {
+	if selection == nil {
+		return vector.NewConstNull(typ, length, nil), nil
+	}
+	return vector.NewConstNullWithAllocation(typ, length, selection)
+}
+
+func newExpressionConstFixed[T any](
+	typ types.Type,
+	value T,
+	length int,
+	mp *mpool.MPool,
+	selection *vector.AllocationAccountSelection,
+) (*vector.Vector, error) {
+	if selection == nil {
+		return vector.NewConstFixed(typ, value, length, mp)
+	}
+	return vector.NewConstFixedWithAllocation(typ, value, length, mp, selection)
+}
+
+func newExpressionConstBytes(
+	typ types.Type,
+	value []byte,
+	length int,
+	mp *mpool.MPool,
+	selection *vector.AllocationAccountSelection,
+) (*vector.Vector, error) {
+	if selection == nil {
+		return vector.NewConstBytes(typ, value, length, mp)
+	}
+	return vector.NewConstBytesWithAllocation(typ, value, length, mp, selection)
+}
+
+func newExpressionConstArray[T types.ArrayElement](
+	typ types.Type,
+	value []T,
+	length int,
+	mp *mpool.MPool,
+	selection *vector.AllocationAccountSelection,
+) (*vector.Vector, error) {
+	if selection == nil {
+		return vector.NewConstArray(typ, value, length, mp)
+	}
+	return vector.NewConstArrayWithAllocation(typ, value, length, mp, selection)
 }
 
 // FixedVectorExpressionExecutor
@@ -230,7 +335,8 @@ type FixedVectorExpressionExecutor struct {
 }
 
 type FunctionExpressionExecutor struct {
-	m *mpool.MPool
+	m          *mpool.MPool
+	allocation *vector.AllocationAccountSelection
 	// resultType is the declared function return type. Some built-ins refine
 	// result metadata (for example temporal scale or decimal width/scale) at
 	// runtime, so reusable result vectors must start each evaluation from this
@@ -256,14 +362,19 @@ type FunctionExpressionExecutor struct {
 
 	resultVector vector.FunctionResultWrapper
 	// parameters related
-	parameterResults  []*vector.Vector
-	parameterExecutor []ExpressionExecutor
+	parameterResults    []*vector.Vector
+	parameterExecutor   []ExpressionExecutor
+	flowControlKind     vector.PrepareParamKind
+	flowControlKindSeen bool
+	flowControlKinds    []vector.PrepareParamKind
+	iffNullResults      [2]*vector.Vector
 }
 
 type ColumnExpressionExecutor struct {
-	mp       *mpool.MPool
-	relIndex int
-	colIndex int
+	mp         *mpool.MPool
+	allocation *vector.AllocationAccountSelection
+	relIndex   int
+	colIndex   int
 
 	// result type.
 	typ types.Type
@@ -282,8 +393,9 @@ func (expr *ColumnExpressionExecutor) GetColIndex() int {
 }
 
 type ParamExpressionExecutor struct {
-	mp   *mpool.MPool
-	null *vector.Vector
+	mp         *mpool.MPool
+	allocation *vector.AllocationAccountSelection
+	null       *vector.Vector
 	// maskedNull is separate from null/vec because it is not a resolved
 	// parameter value and must never participate in the folded-value cache.
 	maskedNull *vector.Vector
@@ -291,26 +403,28 @@ type ParamExpressionExecutor struct {
 	pos        int
 	typ        types.Type
 
-	folded bool
+	folded     bool
+	foldedNull bool
 }
 
 func (expr *ParamExpressionExecutor) Eval(proc *process.Process, batches []*batch.Batch, selectList []bool) (*vector.Vector, error) {
 	if noRowsSelected(selectList, expressionRowCount(batches)) {
 		if expr.maskedNull == nil {
-			expr.maskedNull = vector.NewConstNull(expr.typ, 1, proc.GetMPool())
+			var err error
+			expr.maskedNull, err = newExpressionConstNull(expr.typ, 1, expr.allocation)
+			if err != nil {
+				return nil, err
+			}
 		}
 		return expr.maskedNull, nil
 	}
 	if expr.folded {
-		if expr.null != nil {
+		if expr.foldedNull {
 			return expr.null, nil
 		}
-		if expr.vec != nil {
-			return expr.vec, nil
-		}
+		return expr.vec, nil
 	}
 
-	expr.folded = true
 	val, err := proc.GetPrepareParamsAt(expr.pos)
 	if err != nil {
 		return nil, err
@@ -318,15 +432,28 @@ func (expr *ParamExpressionExecutor) Eval(proc *process.Process, batches []*batc
 
 	if val == nil {
 		if expr.null == nil {
-			expr.null = vector.NewConstNull(expr.typ, 1, proc.GetMPool())
+			expr.null, err = newExpressionConstNull(expr.typ, 1, expr.allocation)
+			if err != nil {
+				return nil, err
+			}
 		}
+		expr.folded = true
+		expr.foldedNull = true
 		return expr.null, nil
 	}
 
 	if expr.vec == nil {
-		expr.vec, err = vector.NewConstBytes(expr.typ, val, 1, proc.Mp())
+		expr.vec, err = newExpressionConstBytes(
+			expr.typ, val, 1, proc.Mp(), expr.allocation,
+		)
 	} else {
 		err = vector.SetConstBytes(expr.vec, val, 1, proc.GetMPool())
+	}
+	if err == nil {
+		expr.vec.SetIsBin(proc.GetPrepareParamIsBin(expr.pos))
+		expr.vec.SetPrepareParamKind(proc.GetPrepareParamKind(expr.pos))
+		expr.folded = true
+		expr.foldedNull = false
 	}
 	return expr.vec, err
 }
@@ -338,9 +465,11 @@ func (expr *ParamExpressionExecutor) EvalWithoutResultReusing(proc *process.Proc
 	}
 	if vec == expr.null {
 		expr.null = nil
-		return vec, nil
+	} else {
+		expr.vec = nil
 	}
-	expr.vec = nil
+	expr.folded = false
+	expr.foldedNull = false
 	return vec, nil
 }
 
@@ -369,8 +498,9 @@ func (expr *ParamExpressionExecutor) IsColumnExpr() bool {
 }
 
 type VarExpressionExecutor struct {
-	mp   *mpool.MPool
-	null *vector.Vector
+	mp         *mpool.MPool
+	allocation *vector.AllocationAccountSelection
+	null       *vector.Vector
 	// maskedNull lets a skipped variable avoid the resolver without changing
 	// the value cache used by a later selected evaluation.
 	maskedNull *vector.Vector
@@ -385,7 +515,11 @@ type VarExpressionExecutor struct {
 func (expr *VarExpressionExecutor) Eval(proc *process.Process, batches []*batch.Batch, selectList []bool) (*vector.Vector, error) {
 	if noRowsSelected(selectList, expressionRowCount(batches)) {
 		if expr.maskedNull == nil {
-			expr.maskedNull = vector.NewConstNull(expr.typ, 1, proc.GetMPool())
+			var err error
+			expr.maskedNull, err = newExpressionConstNull(expr.typ, 1, expr.allocation)
+			if err != nil {
+				return nil, err
+			}
 		}
 		return expr.maskedNull, nil
 	}
@@ -397,16 +531,38 @@ func (expr *VarExpressionExecutor) Eval(proc *process.Process, batches []*batch.
 	if err != nil {
 		return nil, err
 	}
+	isBin := false
+	if resolveIsBin := proc.GetResolveVariableIsBinFunc(); resolveIsBin != nil {
+		isBin, err = resolveIsBin(expr.name, expr.system, expr.global)
+		if err != nil {
+			return nil, err
+		}
+	}
+	prepareParamKind := vector.PrepareParamNone
+	if resolveKind := proc.GetResolveVariablePrepareParamKindFunc(); resolveKind != nil {
+		prepareParamKind, err = resolveKind(expr.name, expr.system, expr.global)
+		if err != nil {
+			return nil, err
+		}
+	}
 
 	if val == nil {
 		if expr.null == nil {
-			expr.null, err = util.GenVectorByVarValue(proc, expr.typ, nil)
+			expr.null, err = util.GenVectorByVarValueWithAllocation(
+				proc, expr.typ, nil, expr.allocation,
+			)
+		}
+		if err == nil {
+			expr.null.SetIsBin(isBin)
+			expr.null.SetPrepareParamKind(prepareParamKind)
 		}
 		return expr.null, err
 	}
 
 	if expr.vec == nil {
-		expr.vec, err = util.GenVectorByVarValue(proc, expr.typ, val)
+		expr.vec, err = util.GenVectorByVarValueWithAllocation(
+			proc, expr.typ, val, expr.allocation,
+		)
 	} else {
 		switch v := val.(type) {
 		case []byte:
@@ -416,6 +572,10 @@ func (expr *VarExpressionExecutor) Eval(proc *process.Process, batches []*batch.
 		default:
 			err = vector.SetConstBytes(expr.vec, util2.UnsafeStringToBytes(fmt.Sprintf("%v", v)), 1, proc.GetMPool())
 		}
+	}
+	if err == nil {
+		expr.vec.SetIsBin(isBin)
+		expr.vec.SetPrepareParamKind(prepareParamKind)
 	}
 	return expr.vec, err
 }
@@ -457,7 +617,8 @@ func (expr *VarExpressionExecutor) IsColumnExpr() bool {
 }
 
 type ListExpressionExecutor struct {
-	mp *mpool.MPool
+	mp         *mpool.MPool
+	allocation *vector.AllocationAccountSelection
 
 	typ               types.Type
 	resultVector      *vector.Vector
@@ -467,11 +628,17 @@ type ListExpressionExecutor struct {
 func (expr *ListExpressionExecutor) Eval(proc *process.Process, batches []*batch.Batch, selectList []bool) (*vector.Vector, error) {
 
 	if expr.resultVector == nil {
-		expr.resultVector = vector.NewOffHeapVecWithType(expr.typ)
+		var err error
+		expr.resultVector, err = newExpressionOffHeapVector(expr.typ, expr.allocation)
+		if err != nil {
+			return nil, err
+		}
 	} else {
 		expr.resultVector.CleanOnlyData()
 	}
-	expr.resultVector.PreExtend(len(expr.parameterExecutor), proc.Mp())
+	if err := expr.resultVector.PreExtend(len(expr.parameterExecutor), proc.Mp()); err != nil {
+		return nil, err
+	}
 	for i := range expr.parameterExecutor {
 		vec, err := expr.parameterExecutor[i].Eval(proc, batches, selectList)
 		if err != nil {
@@ -500,7 +667,9 @@ func (expr *ListExpressionExecutor) Free() {
 		return
 	}
 	for _, e := range expr.parameterExecutor {
-		e.Free()
+		if e != nil {
+			e.Free()
+		}
 	}
 	if expr.resultVector != nil {
 		expr.resultVector.Free(expr.mp)
@@ -514,12 +683,26 @@ func (expr *ListExpressionExecutor) IsColumnExpr() bool {
 }
 
 func (expr *ListExpressionExecutor) Init(proc *process.Process, typ types.Type, parameterNum int) {
+	if err := expr.init(proc, typ, parameterNum, nil); err != nil {
+		panic(err)
+	}
+}
+
+func (expr *ListExpressionExecutor) init(
+	proc *process.Process,
+	typ types.Type,
+	parameterNum int,
+	selection *vector.AllocationAccountSelection,
+) error {
 	m := proc.Mp()
 
 	expr.typ = typ
 	expr.mp = m
+	expr.allocation = selection
 	expr.parameterExecutor = make([]ExpressionExecutor, parameterNum)
-	expr.resultVector = vector.NewOffHeapVecWithType(typ)
+	var err error
+	expr.resultVector, err = newExpressionOffHeapVector(typ, selection)
+	return err
 }
 
 func (expr *ListExpressionExecutor) SetParameter(index int, executor ExpressionExecutor) {
@@ -536,14 +719,24 @@ func (expr *FunctionExpressionExecutor) Init(
 	proc *process.Process,
 	parameterNum int,
 	retType types.Type) (err error) {
+	return expr.init(proc, parameterNum, retType, nil)
+}
+
+func (expr *FunctionExpressionExecutor) init(
+	proc *process.Process,
+	parameterNum int,
+	retType types.Type,
+	selection *vector.AllocationAccountSelection,
+) (err error) {
 	m := proc.Mp()
 
 	expr.m = m
+	expr.allocation = selection
 	expr.resultType = retType
 	expr.parameterResults = make([]*vector.Vector, parameterNum)
 	expr.parameterExecutor = make([]ExpressionExecutor, parameterNum)
 
-	expr.resultVector = vector.NewFunctionResultWrapper(retType, m)
+	expr.resultVector, err = vector.NewFunctionResultWrapperWithAllocation(retType, m, selection)
 	return err
 }
 
@@ -565,6 +758,7 @@ func expressionRowCount(batches []*batch.Batch) int {
 }
 
 func (expr *FunctionExpressionExecutor) EvalIff(proc *process.Process, batches []*batch.Batch, selectList []bool) (err error) {
+	expr.resetFlowControlPrepareParamKind()
 	expr.parameterResults[0], err = expr.parameterExecutor[0].Eval(proc, batches, selectList)
 	if err != nil {
 		return err
@@ -574,12 +768,12 @@ func (expr *FunctionExpressionExecutor) EvalIff(proc *process.Process, batches [
 		expr.selectList1 = make([]bool, rowCount)
 		expr.selectList2 = make([]bool, rowCount)
 	}
+
 	trueBranch := expr.selectList1[:rowCount]
 	falseBranch := expr.selectList2[:rowCount]
+	mode := function.CompatibilityModeFromProcess(proc)
 
-	bs := vector.GenerateFunctionFixedTypeParameter[bool](expr.parameterResults[0])
 	for i := 0; i < rowCount; i++ {
-		b, null := bs.GetValue(uint64(i))
 		if selectList != nil {
 			trueBranch[i] = selectList[i]
 			falseBranch[i] = selectList[i]
@@ -587,21 +781,156 @@ func (expr *FunctionExpressionExecutor) EvalIff(proc *process.Process, batches [
 			trueBranch[i] = true
 			falseBranch[i] = true
 		}
-		if !null && b {
+		if !trueBranch[i] {
+			continue
+		}
+		truth, err := function.IffConditionTruthyAt(expr.parameterResults[0], uint64(i), mode)
+		if err != nil {
+			return err
+		}
+		if truth {
 			falseBranch[i] = false
 		} else {
 			trueBranch[i] = false
 		}
 	}
-	expr.parameterResults[1], err = expr.parameterExecutor[1].Eval(proc, batches, trueBranch)
-	if err != nil {
-		return err
+
+	if hasSelectedRows(trueBranch) {
+		expr.parameterResults[1], err = expr.parameterExecutor[1].Eval(proc, batches, trueBranch)
+		if err != nil {
+			return err
+		}
+		expr.observeFlowControlPrepareParamKind(expr.parameterResults[1], trueBranch)
+	} else {
+		expr.parameterResults[1], err = expr.iffNullResult(0, rowCount)
+		if err != nil {
+			return err
+		}
 	}
-	expr.parameterResults[2], err = expr.parameterExecutor[2].Eval(proc, batches, falseBranch)
+	if hasSelectedRows(falseBranch) {
+		expr.parameterResults[2], err = expr.parameterExecutor[2].Eval(proc, batches, falseBranch)
+		if err != nil {
+			return err
+		}
+		expr.observeFlowControlPrepareParamKind(expr.parameterResults[2], falseBranch)
+		return nil
+	}
+	expr.parameterResults[2], err = expr.iffNullResult(1, rowCount)
 	return err
 }
 
+func hasSelectedRows(selectList []bool) bool {
+	for _, selected := range selectList {
+		if selected {
+			return true
+		}
+	}
+	return false
+}
+
+func (expr *FunctionExpressionExecutor) resetFlowControlPrepareParamKind() {
+	expr.flowControlKind = vector.PrepareParamNone
+	expr.flowControlKindSeen = false
+	if expr.flowControlKinds != nil {
+		expr.flowControlKinds = expr.flowControlKinds[:0]
+	}
+}
+
+func (expr *FunctionExpressionExecutor) ensureFlowControlPrepareParamRows(rows int) {
+	if rows <= len(expr.flowControlKinds) {
+		return
+	}
+	old := len(expr.flowControlKinds)
+	if rows <= cap(expr.flowControlKinds) {
+		expr.flowControlKinds = expr.flowControlKinds[:rows]
+		clear(expr.flowControlKinds[old:])
+		return
+	}
+	expr.flowControlKinds = append(expr.flowControlKinds, make([]vector.PrepareParamKind, rows-old)...)
+}
+
+// observeFlowControlPrepareParamKind inspects only rows that can reach one
+// IF/CASE/COALESCE arm. Column executors intentionally return their full input
+// vector even under a row mask, so checking value.AllNull() would incorrectly
+// observe non-NULL values from inactive rows.
+func (expr *FunctionExpressionExecutor) observeFlowControlPrepareParamKind(
+	value *vector.Vector,
+	selection []bool,
+) {
+	if value == nil || value.Length() == 0 {
+		return
+	}
+	for row, selected := range selection {
+		if selected && (value.IsConst() || row < value.Length()) &&
+			!value.IsNull(uint64(row)) {
+			kind := value.GetPrepareParamKindAt(row)
+			if !expr.flowControlKindSeen {
+				expr.flowControlKind = kind
+				expr.flowControlKindSeen = true
+			} else if len(expr.flowControlKinds) == 0 && expr.flowControlKind != kind {
+				expr.ensureFlowControlPrepareParamRows(len(selection))
+				for i := range expr.flowControlKinds {
+					expr.flowControlKinds[i] = expr.flowControlKind
+				}
+				expr.flowControlKind = vector.PrepareParamNone
+			}
+			if len(expr.flowControlKinds) > 0 {
+				expr.flowControlKinds[row] = kind
+			}
+		}
+	}
+}
+
+func (expr *FunctionExpressionExecutor) applyFlowControlPrepareParamKinds(
+	result *vector.Vector,
+	rows int,
+	mp *mpool.MPool,
+) error {
+	if result == nil || rows <= 0 {
+		return nil
+	}
+	if len(expr.flowControlKinds) == 0 {
+		if expr.flowControlKindSeen {
+			result.SetPrepareParamKind(expr.flowControlKind)
+		}
+		return nil
+	}
+	expr.ensureFlowControlPrepareParamRows(rows)
+	if err := result.SetPrepareParamKindsWithMP(expr.flowControlKinds[:rows], mp); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (expr *FunctionExpressionExecutor) getFlowControlPrepareParamKind() vector.PrepareParamKind {
+	if !expr.flowControlKindSeen {
+		return vector.PrepareParamNone
+	}
+	return expr.flowControlKind
+}
+
+func (expr *FunctionExpressionExecutor) iffNullResult(index, length int) (*vector.Vector, error) {
+	typ := expr.resultType
+	result := expr.iffNullResults[index]
+	if result == nil || *result.GetType() != typ {
+		if result != nil {
+			result.Free(expr.m)
+			expr.iffNullResults[index] = nil
+		}
+		var err error
+		result, err = newExpressionConstNull(typ, length, expr.allocation)
+		if err != nil {
+			return nil, err
+		}
+		expr.iffNullResults[index] = result
+	} else {
+		result.SetLength(length)
+	}
+	return result, nil
+}
+
 func (expr *FunctionExpressionExecutor) EvalCase(proc *process.Process, batches []*batch.Batch, selectList []bool) (err error) {
+	expr.resetFlowControlPrepareParamKind()
 	rowCount := expressionRowCount(batches)
 	if len(expr.selectList1) < rowCount {
 		expr.selectList1 = make([]bool, rowCount)
@@ -637,12 +966,16 @@ func (expr *FunctionExpressionExecutor) EvalCase(proc *process.Process, batches 
 			if err != nil {
 				return err
 			}
+			expr.observeFlowControlPrepareParamKind(expr.parameterResults[i+1], selectedBranch)
+		} else {
+			expr.observeFlowControlPrepareParamKind(expr.parameterResults[i], remaining)
 		}
 	}
 	return err
 }
 
 func (expr *FunctionExpressionExecutor) EvalCoalesce(proc *process.Process, batches []*batch.Batch, selectList []bool) (err error) {
+	expr.resetFlowControlPrepareParamKind()
 	rowCount := expressionRowCount(batches)
 	if len(expr.selectList1) < rowCount {
 		expr.selectList1 = make([]bool, rowCount)
@@ -663,6 +996,7 @@ func (expr *FunctionExpressionExecutor) EvalCoalesce(proc *process.Process, batc
 		if err != nil {
 			return err
 		}
+		expr.observeFlowControlPrepareParamKind(expr.parameterResults[i], remaining)
 		for row := range remaining {
 			if remaining[row] && !expr.parameterResults[i].IsNull(uint64(row)) {
 				remaining[row] = false
@@ -729,7 +1063,13 @@ func (expr *FunctionExpressionExecutor) evalSelectedRows(
 		if rowAligned && !parameter.IsConst() {
 			selected := expr.selectedParameterVectors[i]
 			if selected == nil {
-				selected = vector.NewOffHeapVecWithType(*parameter.GetType())
+				var err error
+				selected, err = newExpressionOffHeapVector(
+					*parameter.GetType(), expr.allocation,
+				)
+				if err != nil {
+					return nil, err
+				}
 				expr.selectedParameterVectors[i] = selected
 			} else {
 				selected.Reset(*parameter.GetType())
@@ -749,7 +1089,13 @@ func (expr *FunctionExpressionExecutor) evalSelectedRows(
 		return nil, err
 	}
 	if expr.selectedResult == nil {
-		expr.selectedResult = vector.NewFunctionResultWrapper(expr.resultType, expr.m)
+		var err error
+		expr.selectedResult, err = vector.NewFunctionResultWrapperWithAllocation(
+			expr.resultType, expr.m, expr.allocation,
+		)
+		if err != nil {
+			return nil, err
+		}
 	}
 	expr.resetResultType(expr.selectedResult)
 	if err := expr.selectedResult.PreExtendAndReset(selectedCount); err != nil {
@@ -763,13 +1109,23 @@ func (expr *FunctionExpressionExecutor) evalSelectedRows(
 	selectedResult := expr.selectedResult.GetResultVector()
 	runtimeType := *selectedResult.GetType()
 	runtimeIsBin := selectedResult.GetIsBin()
+	runtimePrepareParamKind := selectedResult.GetPrepareParamKind()
+	if expr.fid == function.IFF || expr.fid == function.CASE || expr.fid == function.COALESCE {
+		runtimePrepareParamKind = expr.getFlowControlPrepareParamKind()
+	}
 
 	result := expr.resultVector.GetResultVector()
 	result.SetType(runtimeType)
 	result.SetIsBin(runtimeIsBin)
 	result.ResetWithSameType()
 	if expr.selectedNullResult == nil {
-		expr.selectedNullResult = vector.NewConstNull(runtimeType, 1, expr.m)
+		var err error
+		expr.selectedNullResult, err = newExpressionConstNull(
+			runtimeType, 1, expr.allocation,
+		)
+		if err != nil {
+			return nil, err
+		}
 	} else {
 		expr.selectedNullResult.SetType(runtimeType)
 		expr.selectedNullResult.SetLength(1)
@@ -784,6 +1140,18 @@ func (expr *FunctionExpressionExecutor) evalSelectedRows(
 			selectedRow++
 		} else if err := result.UnionOne(expr.selectedNullResult, 0, proc.Mp()); err != nil {
 			return nil, err
+		}
+	}
+	if expr.fid == function.IFF || expr.fid == function.CASE || expr.fid == function.COALESCE {
+		if err := expr.applyFlowControlPrepareParamKinds(result, rowCount, proc.Mp()); err != nil {
+			return nil, err
+		}
+	} else {
+		// A selected function result may already carry exact row provenance
+		// from a type-preserving materialization. Keep that sidecar; the scalar
+		// summary is only the compatibility fallback for uniform results.
+		if len(result.GetPrepareParamKinds()) == 0 {
+			result.SetPrepareParamKind(runtimePrepareParamKind)
 		}
 	}
 	return result, nil
@@ -876,6 +1244,12 @@ func (expr *FunctionExpressionExecutor) Eval(proc *process.Process, batches []*b
 		expr.parameterResults, expr.resultVector, proc, rowCount, &expr.selectList); err != nil {
 		return nil, err
 	}
+	if expr.fid == function.IFF || expr.fid == function.CASE || expr.fid == function.COALESCE {
+		if err := expr.applyFlowControlPrepareParamKinds(
+			expr.resultVector.GetResultVector(), rowCount, proc.Mp()); err != nil {
+			return nil, err
+		}
+	}
 
 	return expr.resultVector.GetResultVector(), nil
 }
@@ -900,6 +1274,7 @@ func (expr *FunctionExpressionExecutor) Free() {
 		expr.resultVector.Free()
 		expr.resultVector = nil
 	}
+	expr.freeIffNullResults()
 	if expr.selectedResult != nil {
 		expr.selectedResult.Free()
 		expr.selectedResult = nil
@@ -950,19 +1325,27 @@ func (expr *ColumnExpressionExecutor) Eval(_ *process.Process, batches []*batch.
 
 	vec := batches[relIndex].Vecs[expr.colIndex]
 	if vec.IsConstNull() {
-		vec = expr.getConstNullVec(expr.typ, vec.Length())
+		var err error
+		vec, err = expr.getConstNullVec(expr.typ, vec.Length())
+		if err != nil {
+			return nil, err
+		}
 	}
 	return vec, nil
 }
 
-func (expr *ColumnExpressionExecutor) getConstNullVec(typ types.Type, length int) *vector.Vector {
+func (expr *ColumnExpressionExecutor) getConstNullVec(typ types.Type, length int) (*vector.Vector, error) {
 	if expr.nullVecCache != nil {
 		expr.nullVecCache.SetType(typ)
 		expr.nullVecCache.SetLength(length)
 	} else {
-		expr.nullVecCache = vector.NewConstNull(typ, length, expr.mp)
+		var err error
+		expr.nullVecCache, err = newExpressionConstNull(typ, length, expr.allocation)
+		if err != nil {
+			return nil, err
+		}
 	}
-	return expr.nullVecCache
+	return expr.nullVecCache, nil
 }
 
 func (expr *ColumnExpressionExecutor) EvalWithoutResultReusing(proc *process.Process, batches []*batch.Batch, _ []bool) (*vector.Vector, error) {
@@ -1019,103 +1402,125 @@ func (expr *FixedVectorExpressionExecutor) IsColumnExpr() bool {
 	return false
 }
 
-func generateConstExpressionExecutor(proc *process.Process, typ types.Type, con *plan.Literal) (vec *vector.Vector, err error) {
+func generateConstExpressionExecutor(
+	proc *process.Process,
+	typ types.Type,
+	con *plan.Literal,
+	selection *vector.AllocationAccountSelection,
+) (vec *vector.Vector, err error) {
 	if con.GetIsnull() {
-		vec = vector.NewConstNull(typ, 1, proc.Mp())
+		vec, err = newExpressionConstNull(typ, 1, selection)
 	} else {
 		switch val := con.GetValue().(type) {
 		case *plan.Literal_Bval:
-			vec, err = vector.NewConstFixed(constBType, val.Bval, 1, proc.Mp())
+			vec, err = newExpressionConstFixed(constBType, val.Bval, 1, proc.Mp(), selection)
 		case *plan.Literal_I8Val:
-			vec, err = vector.NewConstFixed(constI8Type, int8(val.I8Val), 1, proc.Mp())
+			vec, err = newExpressionConstFixed(constI8Type, int8(val.I8Val), 1, proc.Mp(), selection)
 		case *plan.Literal_I16Val:
-			vec, err = vector.NewConstFixed(constI16Type, int16(val.I16Val), 1, proc.Mp())
+			vec, err = newExpressionConstFixed(constI16Type, int16(val.I16Val), 1, proc.Mp(), selection)
 		case *plan.Literal_I32Val:
-			vec, err = vector.NewConstFixed(constI32Type, val.I32Val, 1, proc.Mp())
+			vec, err = newExpressionConstFixed(constI32Type, val.I32Val, 1, proc.Mp(), selection)
 		case *plan.Literal_I64Val:
-			vec, err = vector.NewConstFixed(constI64Type, val.I64Val, 1, proc.Mp())
+			vec, err = newExpressionConstFixed(constI64Type, val.I64Val, 1, proc.Mp(), selection)
 		case *plan.Literal_U8Val:
-			vec, err = vector.NewConstFixed(constU8Type, uint8(val.U8Val), 1, proc.Mp())
+			vec, err = newExpressionConstFixed(constU8Type, uint8(val.U8Val), 1, proc.Mp(), selection)
 		case *plan.Literal_U16Val:
-			vec, err = vector.NewConstFixed(constU16Type, uint16(val.U16Val), 1, proc.Mp())
+			vec, err = newExpressionConstFixed(constU16Type, uint16(val.U16Val), 1, proc.Mp(), selection)
 		case *plan.Literal_U32Val:
-			vec, err = vector.NewConstFixed(constU32Type, val.U32Val, 1, proc.Mp())
+			vec, err = newExpressionConstFixed(constU32Type, val.U32Val, 1, proc.Mp(), selection)
 		case *plan.Literal_U64Val:
-			vec, err = vector.NewConstFixed(constU64Type, val.U64Val, 1, proc.Mp())
+			if typ.Oid == types.T_bit {
+				vec, err = newExpressionConstFixed(typ, val.U64Val, 1, proc.Mp(), selection)
+			} else {
+				vec, err = newExpressionConstFixed(constU64Type, val.U64Val, 1, proc.Mp(), selection)
+			}
 		case *plan.Literal_Fval:
-			vec, err = vector.NewConstFixed(constFType, val.Fval, 1, proc.Mp())
+			vec, err = newExpressionConstFixed(constFType, val.Fval, 1, proc.Mp(), selection)
 		case *plan.Literal_Dval:
-			vec, err = vector.NewConstFixed(constDType, val.Dval, 1, proc.Mp())
+			vec, err = newExpressionConstFixed(constDType, val.Dval, 1, proc.Mp(), selection)
 		case *plan.Literal_Dateval:
-			vec, err = vector.NewConstFixed(constDateType, types.Date(val.Dateval), 1, proc.Mp())
+			vec, err = newExpressionConstFixed(constDateType, types.Date(val.Dateval), 1, proc.Mp(), selection)
 		case *plan.Literal_Timeval:
-			vec, err = vector.NewConstFixed(typ, types.Time(val.Timeval), 1, proc.Mp())
+			vec, err = newExpressionConstFixed(typ, types.Time(val.Timeval), 1, proc.Mp(), selection)
 		case *plan.Literal_Datetimeval:
-			vec, err = vector.NewConstFixed(typ, types.Datetime(val.Datetimeval), 1, proc.Mp())
+			vec, err = newExpressionConstFixed(typ, types.Datetime(val.Datetimeval), 1, proc.Mp(), selection)
 		case *plan.Literal_Decimal64Val:
 			cd64 := val.Decimal64Val
 			d64 := types.Decimal64(cd64.A)
-			vec, err = vector.NewConstFixed(typ, d64, 1, proc.Mp())
+			vec, err = newExpressionConstFixed(typ, d64, 1, proc.Mp(), selection)
 		case *plan.Literal_Decimal128Val:
 			cd128 := val.Decimal128Val
 			d128 := types.Decimal128{B0_63: uint64(cd128.A), B64_127: uint64(cd128.B)}
-			vec, err = vector.NewConstFixed(typ, d128, 1, proc.Mp())
+			vec, err = newExpressionConstFixed(typ, d128, 1, proc.Mp(), selection)
 		case *plan.Literal_Timestampval:
 			scale := typ.Scale
 			if scale < 0 || scale > 6 {
-				return nil, moerr.NewErrTooBigPrecision(proc.Ctx, scale, "TIMESTAMP", 6)
+				return nil, moerr.NewErrTooBigPrecision(proc.Ctx, int64(scale), "TIMESTAMP", 6)
 			}
-			vec, err = vector.NewConstFixed(constTimestampTypes[scale], types.Timestamp(val.Timestampval), 1, proc.Mp())
+			vec, err = newExpressionConstFixed(constTimestampTypes[scale], types.Timestamp(val.Timestampval), 1, proc.Mp(), selection)
 		case *plan.Literal_Sval:
 			sval := val.Sval
 			// Distinguish binary with non-binary string.
 			if typ.Oid == types.T_binary || typ.Oid == types.T_varbinary || typ.Oid == types.T_blob {
-				vec, err = vector.NewConstBytes(constBinType, []byte(sval), 1, proc.Mp())
+				vec, err = newExpressionConstBytes(constBinType, []byte(sval), 1, proc.Mp(), selection)
 			} else if typ.Oid == types.T_geometry {
-				vec, err = vector.NewConstBytes(typ, []byte(sval), 1, proc.Mp())
+				vec, err = newExpressionConstBytes(typ, []byte(sval), 1, proc.Mp(), selection)
 			} else if typ.Oid == types.T_array_float32 {
 				array, err1 := types.StringToArray[float32](sval)
 				if err1 != nil {
 					return nil, err1
 				}
-				vec, err = vector.NewConstArray(typ, array, 1, proc.Mp())
+				vec, err = newExpressionConstArray(typ, array, 1, proc.Mp(), selection)
 			} else if typ.Oid == types.T_array_float64 {
 				array, err1 := types.StringToArray[float64](sval)
 				if err1 != nil {
 					return nil, err1
 				}
-				vec, err = vector.NewConstArray(typ, array, 1, proc.Mp())
+				vec, err = newExpressionConstArray(typ, array, 1, proc.Mp(), selection)
 			} else if typ.Oid == types.T_datalink {
 				_, _, err1 := datalink.ParseDatalink(sval, proc)
 				if err1 != nil {
 					return nil, err1
 				}
-				vec, err = vector.NewConstBytes(constBinType, []byte(sval), 1, proc.Mp())
+				vec, err = newExpressionConstBytes(constBinType, []byte(sval), 1, proc.Mp(), selection)
 			} else {
-				vec, err = vector.NewConstBytes(constSType, []byte(sval), 1, proc.Mp())
+				vec, err = newExpressionConstBytes(constSType, []byte(sval), 1, proc.Mp(), selection)
 			}
 		case *plan.Literal_Defaultval:
 			defaultVal := val.Defaultval
-			vec, err = vector.NewConstFixed(constBType, defaultVal, 1, proc.Mp())
+			vec, err = newExpressionConstFixed(constBType, defaultVal, 1, proc.Mp(), selection)
 		case *plan.Literal_EnumVal:
-			vec, err = vector.NewConstFixed(constEnumType, types.Enum(val.EnumVal), 1, proc.Mp())
+			vec, err = newExpressionConstFixed(constEnumType, types.Enum(val.EnumVal), 1, proc.Mp(), selection)
 		case *plan.Literal_VecVal:
-			if typ.Oid == types.T_array_float32 {
-				vec, err = vector.NewConstArray(typ, types.BytesToArray[float32]([]byte(val.VecVal)), 1, proc.Mp())
-			} else if typ.Oid == types.T_array_float64 {
-				vec, err = vector.NewConstArray(typ, types.BytesToArray[float64]([]byte(val.VecVal)), 1, proc.Mp())
+			switch typ.Oid {
+			case types.T_array_float32:
+				vec, err = newExpressionConstArray(typ, types.BytesToArray[float32]([]byte(val.VecVal)), 1, proc.Mp(), selection)
+			case types.T_array_float64:
+				vec, err = newExpressionConstArray(typ, types.BytesToArray[float64]([]byte(val.VecVal)), 1, proc.Mp(), selection)
+			case types.T_array_bf16:
+				vec, err = newExpressionConstArray(typ, types.BytesToArray[types.BF16]([]byte(val.VecVal)), 1, proc.Mp(), selection)
+			case types.T_array_float16:
+				vec, err = newExpressionConstArray(typ, types.BytesToArray[types.Float16]([]byte(val.VecVal)), 1, proc.Mp(), selection)
+			case types.T_array_int8:
+				vec, err = newExpressionConstArray(typ, types.BytesToArray[int8]([]byte(val.VecVal)), 1, proc.Mp(), selection)
+			case types.T_array_uint8:
+				vec, err = newExpressionConstArray(typ, types.BytesToArray[uint8]([]byte(val.VecVal)), 1, proc.Mp(), selection)
 			}
 		default:
 			return nil, moerr.NewNYI(proc.Ctx, fmt.Sprintf("const expression %v", con.GetValue()))
 		}
-		vec.SetIsBin(con.IsBin)
+		if err == nil {
+			vec.SetIsBin(con.IsBin)
+		}
 	}
 	return vec, err
 }
 
 func GenerateConstListExpressionExecutor(proc *process.Process, exprs []*plan.Expr) (*vector.Vector, error) {
 	lenList := len(exprs)
-	vec, err := proc.AllocVectorOfRows(types.New(types.T(exprs[0].Typ.Id), exprs[0].Typ.Width, exprs[0].Typ.Scale), lenList, nil)
+	vec, err := proc.AllocVectorOfRows(types.NewWithCharset(
+		types.T(exprs[0].Typ.Id), exprs[0].Typ.Width, exprs[0].Typ.Scale, uint8(exprs[0].Typ.Charset),
+	), lenList, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -1184,7 +1589,7 @@ func GenerateConstListExpressionExecutor(proc *process.Process, exprs []*plan.Ex
 			case *plan.Literal_Timestampval:
 				scale := expr.Typ.Scale
 				if scale < 0 || scale > 6 {
-					return nil, moerr.NewErrTooBigPrecision(proc.Ctx, scale, "TIMESTAMP", 6)
+					return nil, moerr.NewErrTooBigPrecision(proc.Ctx, int64(scale), "TIMESTAMP", 6)
 				}
 				veccol := vector.MustFixedColNoTypeCheck[types.Timestamp](vec)
 				veccol[i] = types.Timestamp(val.Timestampval)
@@ -1326,7 +1731,7 @@ func getConstZM(
 		v := val.Timestampval
 		scale := typ.Scale
 		if scale < 0 || scale > 6 {
-			err = moerr.NewErrTooBigPrecision(proc.Ctx, scale, "TIMESTAMP", 6)
+			err = moerr.NewErrTooBigPrecision(proc.Ctx, int64(scale), "TIMESTAMP", 6)
 			return
 		}
 		zm = index.NewZM(constTimestampTypes[0].Oid, scale)
@@ -1573,6 +1978,9 @@ func GetExprZoneMap(
 				if f() {
 					return zms[expr.AuxId]
 				}
+				if foldTemporalComparisonZoneMap(proc, args, zms, expr.AuxId, ">") {
+					return zms[expr.AuxId]
+				}
 				if res, ok = zms[args[0].AuxId].AnyGT(zms[args[1].AuxId]); !ok {
 					zms[expr.AuxId].Reset()
 				} else {
@@ -1585,6 +1993,9 @@ func GetExprZoneMap(
 					return zms[expr.AuxId]
 				}
 				if f() {
+					return zms[expr.AuxId]
+				}
+				if foldTemporalComparisonZoneMap(proc, args, zms, expr.AuxId, "<") {
 					return zms[expr.AuxId]
 				}
 				if res, ok = zms[args[0].AuxId].AnyLT(zms[args[1].AuxId]); !ok {
@@ -1601,6 +2012,9 @@ func GetExprZoneMap(
 				if f() {
 					return zms[expr.AuxId]
 				}
+				if foldTemporalComparisonZoneMap(proc, args, zms, expr.AuxId, ">=") {
+					return zms[expr.AuxId]
+				}
 				if res, ok = zms[args[0].AuxId].AnyGE(zms[args[1].AuxId]); !ok {
 					zms[expr.AuxId].Reset()
 				} else {
@@ -1613,6 +2027,9 @@ func GetExprZoneMap(
 					return zms[expr.AuxId]
 				}
 				if f() {
+					return zms[expr.AuxId]
+				}
+				if foldTemporalComparisonZoneMap(proc, args, zms, expr.AuxId, "<=") {
 					return zms[expr.AuxId]
 				}
 				if res, ok = zms[args[0].AuxId].AnyLE(zms[args[1].AuxId]); !ok {
@@ -1629,6 +2046,9 @@ func GetExprZoneMap(
 				if f() {
 					return zms[expr.AuxId]
 				}
+				if foldTemporalComparisonZoneMap(proc, args, zms, expr.AuxId, "=") {
+					return zms[expr.AuxId]
+				}
 				if res, ok = zms[args[0].AuxId].Intersect(zms[args[1].AuxId]); !ok {
 					zms[expr.AuxId].Reset()
 				} else {
@@ -1643,6 +2063,9 @@ func GetExprZoneMap(
 				if f() {
 					return zms[expr.AuxId]
 				}
+				if foldTemporalComparisonZoneMap(proc, args, zms, expr.AuxId, "!=") {
+					return zms[expr.AuxId]
+				}
 				if res, ok = anyNotEqualZoneMap(zms[args[0].AuxId], zms[args[1].AuxId]); !ok {
 					zms[expr.AuxId].Reset()
 				} else {
@@ -1655,6 +2078,9 @@ func GetExprZoneMap(
 					return zms[expr.AuxId]
 				}
 				if f() {
+					return zms[expr.AuxId]
+				}
+				if foldTemporalBetweenZoneMap(proc, args, zms, expr.AuxId) {
 					return zms[expr.AuxId]
 				}
 				if res, ok = zms[args[0].AuxId].AnyBetween(zms[args[1].AuxId], zms[args[2].AuxId]); !ok {
@@ -1729,8 +2155,10 @@ func GetExprZoneMap(
 						ivecs[i] = vecs[arg.AuxId]
 					}
 				}
-				fn, _, fnFree := overload.GetExecuteMethod()
-				typ := types.New(types.T(expr.Typ.Id), expr.Typ.Width, expr.Typ.Scale)
+				fn, _, fnFree, _ := overload.GetExecuteMethod()
+				typ := types.NewWithCharset(
+					types.T(expr.Typ.Id), expr.Typ.Width, expr.Typ.Scale, uint8(expr.Typ.Charset),
+				)
 
 				result := vector.NewFunctionResultWrapper(typ, proc.Mp())
 				if err = result.PreExtendAndReset(2); err != nil {
@@ -1882,6 +2310,204 @@ func anyNotEqualZoneMap(lhs, rhs objectio.ZoneMap) (bool, bool) {
 		return false, true
 	}
 	return true, true
+}
+
+// foldTemporalComparisonZoneMap evaluates a mixed DATETIME/TIMESTAMP
+// comparison against min/max metadata without changing the logical predicate.
+// DATETIME is interpreted in the session time zone, exactly like the execution
+// comparator.  If that conversion is not order-preserving over a zonemap range
+// (for example, the range intersects a DST fold or gap), the result is reset to
+// unknown so the block is conservatively retained for residual evaluation.
+func foldTemporalComparisonZoneMap(
+	proc *process.Process,
+	args []*plan.Expr,
+	zms []objectio.ZoneMap,
+	auxID int32,
+	op string,
+) bool {
+	lhs := zms[args[0].AuxId]
+	rhs := zms[args[1].AuxId]
+	if !lhs.IsInited() || !rhs.IsInited() ||
+		!isDatetimeTimestampZoneMapPair(lhs, rhs) {
+		return false
+	}
+
+	result, ok := temporalZoneMapComparison(lhs, rhs, proc.GetSessionInfo().TimeZone, op)
+	if !ok {
+		zms[auxID].Reset()
+		return true
+	}
+	zms[auxID] = index.SetBool(zms[auxID], result)
+	return true
+}
+
+func temporalZoneMapComparison(
+	lhs, rhs objectio.ZoneMap,
+	zone *time.Location,
+	op string,
+) (bool, bool) {
+	if !lhs.IsInited() || !rhs.IsInited() {
+		return false, false
+	}
+	if lhs.GetType() == rhs.GetType() {
+		switch op {
+		case ">":
+			return lhs.AnyGT(rhs)
+		case ">=":
+			return lhs.AnyGE(rhs)
+		case "<":
+			return lhs.AnyLT(rhs)
+		case "<=":
+			return lhs.AnyLE(rhs)
+		case "=":
+			return lhs.Intersect(rhs)
+		case "!=":
+			return anyNotEqualZoneMap(lhs, rhs)
+		default:
+			return false, false
+		}
+	}
+	if !isDatetimeTimestampZoneMapPair(lhs, rhs) {
+		return false, false
+	}
+
+	timestampScale := lhs.GetScale()
+	if rhs.GetType() == types.T_timestamp {
+		timestampScale = rhs.GetScale()
+	}
+	lhsTimestamp, lhsOK := temporalZoneMapAsTimestampRange(lhs, zone, timestampScale)
+	rhsTimestamp, rhsOK := temporalZoneMapAsTimestampRange(rhs, zone, timestampScale)
+	if !lhsOK || !rhsOK {
+		return false, false
+	}
+	switch op {
+	case ">":
+		return lhsTimestamp.max > rhsTimestamp.min, true
+	case ">=":
+		return lhsTimestamp.max >= rhsTimestamp.min, true
+	case "<":
+		return lhsTimestamp.min < rhsTimestamp.max, true
+	case "<=":
+		return lhsTimestamp.min <= rhsTimestamp.max, true
+	case "=":
+		return lhsTimestamp.max >= rhsTimestamp.min && lhsTimestamp.min <= rhsTimestamp.max, true
+	case "!=":
+		return lhsTimestamp.min != lhsTimestamp.max ||
+			rhsTimestamp.min != rhsTimestamp.max ||
+			lhsTimestamp.min != rhsTimestamp.min, true
+	default:
+		return false, false
+	}
+}
+
+func foldTemporalBetweenZoneMap(
+	proc *process.Process,
+	args []*plan.Expr,
+	zms []objectio.ZoneMap,
+	auxID int32,
+) bool {
+	if len(args) != 3 {
+		return false
+	}
+	hasDatetime, hasTimestamp := false, false
+	for _, arg := range args {
+		zm := zms[arg.AuxId]
+		if !zm.IsInited() {
+			return false
+		}
+		switch zm.GetType() {
+		case types.T_datetime:
+			hasDatetime = true
+		case types.T_timestamp:
+			hasTimestamp = true
+		default:
+			return false
+		}
+	}
+	if !hasDatetime || !hasTimestamp {
+		return false
+	}
+
+	zone := proc.GetSessionInfo().TimeZone
+	valueZM := zms[args[0].AuxId]
+	lowerZM := zms[args[1].AuxId]
+	upperZM := zms[args[2].AuxId]
+	if valueZM.GetType() == types.T_datetime &&
+		lowerZM.GetType() == types.T_timestamp &&
+		upperZM.GetType() == types.T_timestamp {
+		timestampScale := lowerZM.GetScale()
+		valueRange, valueOK := temporalZoneMapAsTimestampRange(valueZM, zone, timestampScale)
+		lowerRange, lowerOK := temporalZoneMapAsTimestampRange(lowerZM, zone, timestampScale)
+		upperRange, upperOK := temporalZoneMapAsTimestampRange(upperZM, zone, timestampScale)
+		if !valueOK || !lowerOK || !upperOK {
+			zms[auxID].Reset()
+		} else {
+			result := valueRange.max >= lowerRange.min && valueRange.min <= upperRange.max
+			zms[auxID] = index.SetBool(zms[auxID], result)
+		}
+		return true
+	}
+
+	lowerResult, lowerOK := temporalZoneMapComparison(
+		valueZM, lowerZM, zone, ">=",
+	)
+	upperResult, upperOK := temporalZoneMapComparison(
+		valueZM, upperZM, zone, "<=",
+	)
+	if lowerOK && !lowerResult || upperOK && !upperResult {
+		zms[auxID] = index.SetBool(zms[auxID], false)
+	} else if lowerOK && upperOK {
+		zms[auxID] = index.SetBool(zms[auxID], true)
+	} else {
+		zms[auxID].Reset()
+	}
+	return true
+}
+
+func isDatetimeTimestampZoneMapPair(lhs, rhs objectio.ZoneMap) bool {
+	return lhs.GetType() == types.T_datetime && rhs.GetType() == types.T_timestamp ||
+		lhs.GetType() == types.T_timestamp && rhs.GetType() == types.T_datetime
+}
+
+type temporalTimestampRange struct {
+	min types.Timestamp
+	max types.Timestamp
+}
+
+func temporalZoneMapAsTimestampRange(
+	zm objectio.ZoneMap,
+	zone *time.Location,
+	timestampScale int32,
+) (temporalTimestampRange, bool) {
+	if zm.GetType() == types.T_timestamp {
+		minValue, minOK := zm.GetMin().(types.Timestamp)
+		maxValue, maxOK := zm.GetMax().(types.Timestamp)
+		return temporalTimestampRange{min: minValue, max: maxValue}, minOK && maxOK
+	}
+	if zm.GetType() != types.T_datetime {
+		return temporalTimestampRange{}, false
+	}
+
+	minValue, minOK := zm.GetMin().(types.Datetime)
+	maxValue, maxOK := zm.GetMax().(types.Datetime)
+	if !minOK || !maxOK {
+		return temporalTimestampRange{}, false
+	}
+
+	var minTimestamp, maxTimestamp types.Timestamp
+	if isSingleValueZoneMap(zm) {
+		minTimestamp = minValue.ToTimestamp(zone).TruncateToScale(timestampScale)
+		maxTimestamp = minTimestamp
+	} else {
+		var ok bool
+		minTimestamp, maxTimestamp, ok = types.DatetimeRangeToTimestampRange(minValue, maxValue, zone)
+		if !ok {
+			return temporalTimestampRange{}, false
+		}
+		minTimestamp = minTimestamp.TruncateToScale(timestampScale)
+		maxTimestamp = maxTimestamp.TruncateToScale(timestampScale)
+	}
+	return temporalTimestampRange{min: minTimestamp, max: maxTimestamp}, true
 }
 
 func isSingleValueZoneMap(zm objectio.ZoneMap) bool {
@@ -2051,7 +2677,9 @@ func MakeEvalVector(proc *process.Process, expressions []*plan.Expr) (ev ExprEva
 	ev.Vec = make([]*vector.Vector, len(ev.Executor))
 	ev.Typ = make([]types.Type, len(ev.Executor))
 	for i, expr := range expressions {
-		ev.Typ[i] = types.New(types.T(expr.Typ.Id), expr.Typ.Width, expr.Typ.Scale)
+		ev.Typ[i] = types.NewWithCharset(
+			types.T(expr.Typ.Id), expr.Typ.Width, expr.Typ.Scale, uint8(expr.Typ.Charset),
+		)
 	}
 	return
 }

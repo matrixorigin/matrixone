@@ -1,0 +1,40 @@
+-- @suit
+-- @case
+-- @desc: regression test for issue #23157
+-- @label:bvt
+drop table if exists issue_23157;
+create table issue_23157 (
+    md5_id varchar(255) primary key,
+    content_type varchar(255),
+    question_vector vecf64(3)
+);
+
+insert into issue_23157 values
+    ('ref', '',  '[1,0,0]'),
+    ('a1',  'a', '[1,0,0]'),
+    ('a2',  'a', '[0,1,0]'),
+    ('b1',  'b', '[1,0,0]'),
+    ('b2',  'b', '[1,0,0]');
+
+select content_type,
+       count(*) as count,
+       avg(cosine_similarity(
+           question_vector,
+           (select question_vector
+              from issue_23157
+             where md5_id = (
+                 select md5_id
+                   from issue_23157
+                  where question_vector is not null
+                    and content_type = ''
+                  limit 1)))) as avg_similarity
+  from issue_23157
+ where question_vector is not null
+   and content_type is not null
+   and content_type != ''
+ group by content_type
+having avg_similarity > 0.6
+ order by avg_similarity desc
+ limit 10;
+
+drop table issue_23157;

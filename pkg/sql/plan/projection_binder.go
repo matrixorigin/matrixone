@@ -41,9 +41,9 @@ func (b *ProjectionBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool)
 		return makeTimeWindowProjectionExpr(b.GetContext(), b.ctx, astExpr, colPos)
 	}
 
-	if colPos, ok := b.ctx.groupByAst[astStr]; ok {
+	if colPos, ok := lookupGroupByAst(b.ctx, astExpr, astStr); ok {
 		return &plan.Expr{
-			Typ: b.ctx.groups[colPos].Typ,
+			Typ: b.ctx.groupOutputType(colPos),
 			Expr: &plan.Expr_Col{
 				Col: &plan.ColRef{
 					RelPos: b.ctx.groupTag,
@@ -89,11 +89,43 @@ func (b *ProjectionBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool)
 		}, nil
 	}
 
+	// A numeric assignment target only shapes an expression that is bound fresh
+	// here. Group-by / aggregate / window / time-window / sample projections
+	// resolve to an already-computed column above, so the numeric context must
+	// be checked after those lookups to avoid re-binding a grouped expression
+	// against the raw scan columns.
+	if b.numericTargetType != nil {
+		target := b.numericTargetType
+		b.numericTargetType = nil
+		defer func() { b.numericTargetType = target }()
+		_, isBareColumn := unwrapParenExpr(astExpr).(*tree.UnresolvedName)
+		if isBareColumn && isEnumOrSetPlanType(target) {
+			previousTarget := b.mysqlSpecialTargetType
+			b.mysqlSpecialTargetType = target
+			defer func() { b.mysqlSpecialTargetType = previousTarget }()
+		}
+		if subquery, ok := scalarSubqueryExpr(astExpr); ok && !subquery.Exists {
+			previousSubqueryTarget := b.numericSubqueryTarget
+			b.numericSubqueryTarget = target
+			defer func() { b.numericSubqueryTarget = previousSubqueryTarget }()
+			return b.baseBindExpr(astExpr, depth, isRoot)
+		}
+		return b.bindNumericExprWithContext(astExpr, depth, target)
+	}
+
 	return b.baseBindExpr(astExpr, depth, isRoot)
 }
 
 func (b *ProjectionBinder) BindColRef(astExpr *tree.UnresolvedName, depth int32, isRoot bool) (*plan.Expr, error) {
-	return b.baseBindColRef(astExpr, depth, isRoot)
+	boundColCount := len(b.boundCols)
+	expr, err := b.baseBindColRef(astExpr, depth, isRoot)
+	if depth > 0 && b.havingBinder != nil && b.havingBinder.insideAgg {
+		// A correlated reference from a scalar subquery used as an aggregate
+		// argument belongs to that aggregate input. Do not classify it as a
+		// bare projection column for ONLY_FULL_GROUP_BY validation.
+		b.boundCols = b.boundCols[:boundColCount]
+	}
+	return expr, err
 }
 
 func (b *ProjectionBinder) BindAggFunc(funcName string, astExpr *tree.FuncExpr, depth int32, isRoot bool) (*plan.Expr, error) {

@@ -23,6 +23,42 @@ services:
     networks:
       - mo-minio-network
 
+  nessie:
+    image: ghcr.io/projectnessie/nessie:latest
+    container_name: mo-nessie-local
+    platform: ${DOCKER_PLATFORM:-linux/amd64}
+    ports:
+      - "19120:19120"
+      - "19121:19121"
+    environment:
+      QUARKUS_HTTP_HOST: 0.0.0.0
+      QUARKUS_HTTP_PORT: 19120
+      QUARKUS_MANAGEMENT_PORT: 19121
+      NESSIE_CATALOG_DEFAULT_WAREHOUSE: warehouse
+      NESSIE_CATALOG_WAREHOUSES_WAREHOUSE_LOCATION: s3://mo-iceberg/warehouse
+      NESSIE_CATALOG_SERVICE_S3_DEFAULT_OPTIONS_ENDPOINT: http://minio:9000
+      NESSIE_CATALOG_SERVICE_S3_DEFAULT_OPTIONS_EXTERNAL_ENDPOINT: http://127.0.0.1:9000
+      NESSIE_CATALOG_SERVICE_S3_DEFAULT_OPTIONS_REGION: us-east-1
+      NESSIE_CATALOG_SERVICE_S3_DEFAULT_OPTIONS_AUTH_TYPE: STATIC
+      NESSIE_CATALOG_SERVICE_S3_DEFAULT_OPTIONS_ACCESS_KEY: urn:nessie-secret:quarkus:s3default
+      NESSIE_CATALOG_SERVICE_S3_DEFAULT_OPTIONS_PATH_STYLE_ACCESS: "true"
+      S3DEFAULT_NAME: minio
+      S3DEFAULT_SECRET: minio123
+      AWS_ACCESS_KEY_ID: minio
+      AWS_SECRET_ACCESS_KEY: minio123
+      AWS_REGION: us-east-1
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          timeout 5s bash -c 'exec 3<>/dev/tcp/127.0.0.1/19120; printf "GET /iceberg/v1/config HTTP/1.0\r\nHost: localhost\r\n\r\n" >&3; grep -q "200 OK" <&3' || exit 1
+      interval: 1s
+      timeout: 5s
+      retries: 30
+    restart: unless-stopped
+    networks:
+      - mo-minio-network
+
   # Create default buckets via mc client
   createbuckets:
     image: minio/mc:RELEASE.2023-10-30T18-43-32Z
@@ -35,7 +71,9 @@ services:
       /bin/sh -c "
       /usr/bin/mc alias set myminio http://minio:9000 minio minio123;
       /usr/bin/mc mb myminio/mo-test || true;
+      /usr/bin/mc mb myminio/mo-iceberg || true;
       /usr/bin/mc anonymous set public myminio/mo-test;
+      /usr/bin/mc anonymous set public myminio/mo-iceberg;
       exit 0;
       "
     networks:

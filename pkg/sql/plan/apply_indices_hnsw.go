@@ -41,6 +41,13 @@ type hnswIndexContext struct {
 	nThread      int64
 }
 
+func buildHnswTableFuncArgs(tblCfgStr string, vecLitArg *plan.Expr) []*plan.Expr {
+	return []*plan.Expr{
+		makePlan2StringConstExprWithType(tblCfgStr),
+		DeepCopyExpr(vecLitArg),
+	}
+}
+
 func (builder *QueryBuilder) prepareHnswIndexContext(vecCtx *vectorSortContext, multiTableIndex *MultiTableIndex) (*hnswIndexContext, error) {
 	if vecCtx == nil || multiTableIndex == nil {
 		return nil, nil
@@ -81,6 +88,9 @@ func (builder *QueryBuilder) prepareHnswIndexContext(vecCtx *vectorSortContext, 
 		return nil, nil
 	}
 
+	if len(idxDef.Parts) == 0 {
+		return nil, nil
+	}
 	keyPart := idxDef.Parts[0]
 	partPos := vecCtx.scanNode.TableDef.Name2ColIndex[keyPart]
 	var vecLitArg *plan.Expr
@@ -160,23 +170,9 @@ func (builder *QueryBuilder) applyIndicesForSortUsingHnsw(nodeID int32, vecCtx *
 			},
 			Cols: DeepCopyColDefList(hnswplan.HNSWSearchColDefs),
 		},
-		BindingTags: []int32{tableFuncTag},
-		Children:    vectorSearchProviderChildren(vecCtx),
-		TblFuncExprList: []*plan.Expr{
-			{
-				Typ: plan.Type{
-					Id: int32(types.T_varchar),
-				},
-				Expr: &plan.Expr_Lit{
-					Lit: &plan.Literal{
-						Value: &plan.Literal_Sval{
-							Sval: tblCfgStr,
-						},
-					},
-				},
-			},
-			DeepCopyExpr(hnswCtx.vecLitArg),
-		},
+		BindingTags:     []int32{tableFuncTag},
+		Children:        vectorSearchProviderChildren(vecCtx),
+		TblFuncExprList: buildHnswTableFuncArgs(tblCfgStr, hnswCtx.vecLitArg),
 	}
 	tableFuncNodeID := builder.appendNode(tableFuncNode, ctx)
 
@@ -305,7 +301,10 @@ func (builder *QueryBuilder) getArgsFromDistFn(distFnExpr *plan.Function, partPo
 	}
 
 	distFnArgs := distFnExpr.Args
-	if distFnArgs[0].Typ.GetId() != int32(types.T_array_float32) && distFnArgs[0].Typ.GetId() != int32(types.T_array_float64) {
+	// Accept any vector element type (f32/f64 and the narrow bf16/f16/int8/uint8),
+	// so a direct ivf index on a narrow-base column also pushes down rather than
+	// brute-forcing.
+	if !types.T(distFnArgs[0].Typ.GetId()).IsArrayRelate() {
 		return
 	}
 
@@ -352,8 +351,10 @@ func (builder *QueryBuilder) getArgsFromDistFnForJoin(
 	}
 
 	distFnArgs := distFnExpr.Args
-	if distFnArgs[0].Typ.GetId() != int32(types.T_array_float32) &&
-		distFnArgs[0].Typ.GetId() != int32(types.T_array_float64) {
+	// Accept any vector element type (f32/f64 and the narrow bf16/f16/int8/uint8),
+	// mirroring the direct-match getArgsFromDistFn, so IVFFLAT/HNSW vector JOINs on a
+	// narrow-base column also push down rather than brute-forcing.
+	if !types.T(distFnArgs[0].Typ.GetId()).IsArrayRelate() {
 		return
 	}
 

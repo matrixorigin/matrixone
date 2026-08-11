@@ -16,6 +16,7 @@ package lockservice
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -139,7 +140,16 @@ type LockService interface {
 // whose final response was not received by CN. It must not release the txn's
 // locks until the allocator proves that the txn cannot still be committing.
 // The optional completion callback is invoked exactly once after terminal
-// lock cleanup.
+// lock cleanup. The callback may re-enter LockService.Close, but it must not
+// perform unbounded blocking work. Lockservice bounds callbacks that have been
+// accepted but have not returned; saturation is reported before callback
+// ownership transfers to lockservice. A nil return transfers callback
+// ownership; on error the caller retains it even when lock cleanup was safely
+// scheduled without a callback. Such a scheduled error carries a terminal
+// signal retrievable with UnknownCommitResolutionDone, allowing the caller to
+// retain its own admission until cleanup finishes. Immediately before
+// invocation, execution transfers back to external code; Close does not join
+// the callback body.
 //
 // This is deliberately separate from LockService: callers that only perform
 // regular lock operations do not need to implement the exceptional protocol.
@@ -150,6 +160,27 @@ type UnknownCommitResolver interface {
 		commitSequence uint64,
 		onResolved func(),
 	) error
+}
+
+// UnknownCommitResolutionScheduledError reports that lock cleanup was
+// scheduled but the supplied completion callback was not accepted. The caller
+// retains callback ownership and can wait for ResolutionDone before invoking
+// it itself. This preserves transaction admission until terminal cleanup
+// without adding callback work beyond lockservice's bound.
+type UnknownCommitResolutionScheduledError interface {
+	error
+	ResolutionDone() <-chan struct{}
+}
+
+// UnknownCommitResolutionDone extracts the terminal cleanup signal carried by
+// an UnknownCommitResolutionScheduledError, including through wrapped errors.
+func UnknownCommitResolutionDone(err error) (<-chan struct{}, bool) {
+	var scheduled UnknownCommitResolutionScheduledError
+	if !errors.As(err, &scheduled) {
+		return nil, false
+	}
+	done := scheduled.ResolutionDone()
+	return done, done != nil
 }
 
 // CommitSequenceProvider allocates a source-CN-local sequence for Commit
@@ -195,7 +226,7 @@ type lockTable interface {
 	// Unlock release a set of locks, if txn was committed, commitTS is not empty
 	unlock(txn *activeTxn, ls *cowSlice, commitTS timestamp.Timestamp, mutations ...pb.ExtraMutation)
 	// getLock get a lock
-	getLock(key []byte, txn pb.WaitTxn, fn func(Lock))
+	getLock(ctx context.Context, key []byte, txn pb.WaitTxn, fn func(Lock)) error
 	// getLockHolder returns the current holder if the lock is actively held.
 	getLockHolder(ctx context.Context, key []byte) (pb.WaitTxn, bool, error)
 	// getBind returns lock table binding

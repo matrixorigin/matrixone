@@ -672,6 +672,26 @@ execute s using @maxint;
 18446744073709551615.5
 deallocate prepare s;
 drop table prepare_bit_numeric;
+drop table if exists prepare_bit64_signed;
+create table prepare_bit64_signed (b bit(64));
+insert into prepare_bit64_signed values (-6109877384019645241);
+select hex(b), cast(b as unsigned) from prepare_bit64_signed;
+➤ hex(b)[12,-1,0]  ¦  cast(b as unsigned)[-5,64,0]  𝄀
+AB355AE40850ECC7  ¦  12336866689689906375
+truncate table prepare_bit64_signed;
+insert into prepare_bit64_signed values ('-6109877384019645241');
+-- @regex("(data out of range|data too long)", true)
+Data truncation: data out of range: data type bit(64), value -6109877384019645241
+drop table if exists prepare_bit63_signed;
+create table prepare_bit63_signed (b bit(63));
+insert into prepare_bit63_signed values (-1);
+-- @regex("data out of range", true)
+Data truncation: data out of range: data type int63, value -1
+select count(*) from prepare_bit63_signed;
+➤ count(*)[-5,64,0]  𝄀
+0
+drop table prepare_bit64_signed;
+drop table prepare_bit63_signed;
 CREATE DATABASE mocloud_meta;
 PREPARE mo_stmt_id_1 FROM SELECT SCHEMA_NAME from Information_schema.SCHEMATA where SCHEMA_NAME LIKE ? ORDER BY SCHEMA_NAME=? DESC,SCHEMA_NAME limit 1;
 SET @dbname1 = 'mocloud_meta%';
@@ -712,4 +732,110 @@ SELECT * FROM replace_prepare ORDER BY a;
 DEALLOCATE PREPARE rp2;
 drop table if exists replace_prepare;
 drop table if exists replace_prepare_src;
+drop table if exists prepared_window_frame;
+create table prepared_window_frame(id int primary key, n int);
+insert into prepared_window_frame values (1,10),(2,20),(3,30);
+prepare prepared_rows_frame from 'select id, sum(n) over (order by id rows between ? preceding and ? following) from prepared_window_frame order by id';
+set @before = 1, @after = 1;
+execute prepared_rows_frame using @before, @after;
+➤ id[4,32,0]  ¦  sum(n) over (order by id rows between ? preceding and ? following)[-5,64,0]  𝄀
+1  ¦  30  𝄀
+2  ¦  60  𝄀
+3  ¦  50
+set @before = 0, @after = 0;
+execute prepared_rows_frame using @before, @after;
+➤ id[4,32,0]  ¦  sum(n) over (order by id rows between ? preceding and ? following)[-5,64,0]  𝄀
+1  ¦  10  𝄀
+2  ¦  20  𝄀
+3  ¦  30
+deallocate prepare prepared_rows_frame;
+drop table prepared_window_frame;
+
+set @input = 41;
+prepare prepared_set_literal from 'set @prepared_literal = 41 + 1';
+execute prepared_set_literal;
+select @prepared_literal;
+➤ @prepared_literal[12,0,0]  𝄀
+42
+prepare prepared_set_param from 'set @prepared_param = ? + 1';
+execute prepared_set_param using @input;
+select @prepared_param;
+➤ @prepared_param[12,0,0]  𝄀
+42
+set @input = 9;
+execute prepared_set_param using @input;
+select @prepared_param;
+➤ @prepared_param[12,0,0]  𝄀
+10
+deallocate prepare prepared_set_literal;
+deallocate prepare prepared_set_param;
+drop table if exists prepared_set_values;
+create table prepared_set_values(v int);
+insert into prepared_set_values values (1), (2);
+set @prepared_a = 99, @prepared_b = 'before';
+prepare prepared_set_multi from 'set @prepared_a = ? + 1, @prepared_b = concat(?, "-text")';
+set @prepared_input_a = 41, @prepared_input_b = 'first';
+execute prepared_set_multi using @prepared_input_a, @prepared_input_b;
+select @prepared_a, @prepared_b;
+➤ @prepared_a[12,0,0]  ¦  @prepared_b[12,0,0]  𝄀
+42  ¦  first-text
+set @prepared_input_a = 9, @prepared_input_b = null;
+execute prepared_set_multi using @prepared_input_a, @prepared_input_b;
+select @prepared_a, @prepared_b;
+➤ @prepared_a[12,0,0]  ¦  @prepared_b[12,0,0]  𝄀
+10  ¦  NULL
+set @prepared_visibility_a = 5, @prepared_visibility_b = 0, @prepared_visibility_input = 41;
+prepare prepared_set_visibility from 'set @prepared_visibility_a = ?, @prepared_visibility_b = @prepared_visibility_a + 1';
+execute prepared_set_visibility using @prepared_visibility_input;
+select @prepared_visibility_a, @prepared_visibility_b;
+➤ @prepared_visibility_a[12,0,0]  ¦  @prepared_visibility_b[12,0,0]  𝄀
+41  ¦  42
+set @prepared_self_ref = 5;
+prepare prepared_set_self_ref from 'set @prepared_self_ref = ?, @prepared_self_ref = @prepared_self_ref + 1';
+execute prepared_set_self_ref using @prepared_visibility_input;
+select @prepared_self_ref;
+➤ @prepared_self_ref[12,0,0]  𝄀
+42
+prepare prepared_set_self_ref_error from 'set @prepared_self_ref = ?, @prepared_self_ref = @prepared_self_ref + 1, @prepared_b = (select v from prepared_set_values)';
+set @prepared_self_ref = 5, @prepared_b = 'unchanged';
+execute prepared_set_self_ref_error using @prepared_visibility_input;
+Subquery returns more than 1 row
+select @prepared_self_ref, @prepared_b;
+➤ @prepared_self_ref[12,0,0]  ¦  @prepared_b[12,0,0]  𝄀
+5  ¦  unchanged
+set @prepared_a = 77, @prepared_b = 'stable';
+execute prepared_set_multi using @prepared_input_a;
+invalid input: Incorrect arguments to EXECUTE
+select @prepared_a, @prepared_b;
+➤ @prepared_a[12,0,0]  ¦  @prepared_b[12,0,0]  𝄀
+77  ¦  stable
+prepare prepared_set_error from 'set @prepared_a = ?, @prepared_b = (select v from prepared_set_values)';
+set @prepared_a = 88, @prepared_b = 'unchanged';
+execute prepared_set_error using @prepared_input_a;
+Subquery returns more than 1 row
+select @prepared_a, @prepared_b;
+➤ @prepared_a[12,0,0]  ¦  @prepared_b[12,0,0]  𝄀
+88  ¦  unchanged
+prepare prepared_set_reserved_error from 'set @names = ?, @prepared_reserved_failure = (select v from prepared_set_values)';
+set @names = 'names-before', @character_set_client = 'client-before', @character_set_connection = 'connection-before', @character_set_results = 'results-before', @prepared_reserved_input = 'mutated';
+execute prepared_set_reserved_error using @prepared_reserved_input;
+Subquery returns more than 1 row
+select @names, @character_set_client, @character_set_connection, @character_set_results;
+➤ @names[12,0,0]  ¦  @character_set_client[12,0,0]  ¦  @character_set_connection[12,0,0]  ¦  @character_set_results[12,0,0]  𝄀
+names-before  ¦  client-before  ¦  connection-before  ¦  results-before
+prepare prepared_set_system_error from 'set @prepared_a = ?, transaction_isolation = ?';
+set @prepared_input_a = 7, @prepared_input_b = 'INVALID', @prepared_a = 88, @prepared_isolation_before = @@transaction_isolation;
+execute prepared_set_system_error using @prepared_input_a, @prepared_input_b;
+not supported: prepared multi-assignment SET supports user variables only
+select @prepared_a, @@transaction_isolation = @prepared_isolation_before;
+➤ @prepared_a[12,0,0]  ¦  @@transaction_isolation = @prepared_isolation_before[1,0,0]  𝄀
+88  ¦  1
+deallocate prepare prepared_set_multi;
+deallocate prepare prepared_set_visibility;
+deallocate prepare prepared_set_self_ref;
+deallocate prepare prepared_set_self_ref_error;
+deallocate prepare prepared_set_error;
+deallocate prepare prepared_set_reserved_error;
+deallocate prepare prepared_set_system_error;
+drop table prepared_set_values;
 SET TIME_ZONE = "SYSTEM";

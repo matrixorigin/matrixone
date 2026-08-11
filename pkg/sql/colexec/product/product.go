@@ -16,11 +16,12 @@ package product
 
 import (
 	"bytes"
-	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/util/resource"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -38,6 +39,9 @@ func (product *Product) OpType() vm.OpType {
 }
 
 func (product *Product) Prepare(proc *process.Process) error {
+	if product.allocationAccount == nil || product.resultAllocation == nil {
+		return mpool.ErrAllocationAccountInvalid
+	}
 	if product.OpAnalyzer == nil {
 		product.OpAnalyzer = process.NewAnalyzer(product.GetIdx(), product.IsFirst, product.IsLast, "cross join")
 	} else {
@@ -67,6 +71,10 @@ func (product *Product) Call(proc *process.Process) (vm.CallResult, error) {
 					ctr.state = End
 					continue
 				}
+				if ctr.inBat.Last() {
+					ctr.inBat = nil
+					return result, nil
+				}
 				if ctr.inBat.IsEmpty() {
 					ctr.inBat = nil
 					continue
@@ -89,24 +97,38 @@ func (product *Product) Call(proc *process.Process) (vm.CallResult, error) {
 					ctr.state = End
 					continue
 				}
+				if ctr.inBat.Last() {
+					ctr.inBat = nil
+					return result, nil
+				}
 				if ctr.inBat.IsEmpty() {
 					ctr.inBat = nil
 					continue
 				}
 			}
-			if ctr.bat == nil {
+			if ctr.mp == nil {
 				ctr.inBat = nil
 				continue
 			}
 
 			if ctr.rbat == nil {
+				buildBat := ctr.firstBuildBatch()
+				if buildBat == nil {
+					ctr.inBat = nil
+					continue
+				}
 				ctr.rbat = batch.NewOffHeapWithSize(len(product.Result))
 				for i, rp := range product.Result {
 					if rp.Rel == 0 {
 						ctr.rbat.Vecs[i] = vector.NewOffHeapVecWithType(*ctr.inBat.Vecs[rp.Pos].GetType())
 					} else {
-						ctr.rbat.Vecs[i] = vector.NewOffHeapVecWithType(*ctr.bat.Vecs[rp.Pos].GetType())
+						ctr.rbat.Vecs[i] = vector.NewOffHeapVecWithType(*buildBat.Vecs[rp.Pos].GetType())
 					}
+				}
+				if err := ctr.rbat.SetAllocationAccount(product.resultAllocation); err != nil {
+					ctr.rbat.Clean(proc.Mp())
+					ctr.rbat = nil
+					return result, err
 				}
 			} else {
 				ctr.rbat.CleanOnlyData()
@@ -128,57 +150,72 @@ func (product *Product) Call(proc *process.Process) (vm.CallResult, error) {
 
 func (product *Product) build(proc *process.Process, analyzer process.Analyzer) error {
 	ctr := &product.ctr
-	start := time.Now()
-	defer analyzer.WaitStop(start)
-	mp, err := message.ReceiveJoinMap(product.JoinMapTag, false, 0, proc.GetMessageBoard(), proc.Ctx)
+	mp, err := process.MeasureWait(analyzer, resource.WaitOther, func() (*message.JoinMap, error) {
+		return message.ReceiveJoinMap(product.JoinMapTag, false, 0, proc.GetMessageBoard(), proc.Ctx)
+	})
 	if err != nil {
 		return err
 	}
 	if mp == nil {
 		return nil
 	}
-	batches := mp.GetBatches()
-
-	//maybe optimize this in the future
-	for i := range batches {
-		ctr.bat, err = ctr.bat.AppendWithCopy(proc.Ctx, proc.Mp(), batches[i])
-		if err != nil {
-			return err
-		}
-	}
-	mp.Free()
+	ctr.mp = mp
 	return nil
 }
 
 func (ctr *container) probe(ap *Product, proc *process.Process, result *vm.CallResult) error {
 	count := ctr.inBat.RowCount()
-	count2 := ctr.bat.RowCount()
-	var i, j int
-	for j = ctr.probeIdx; j < count2; j++ {
-		for i = 0; i < count; i++ {
-			for k, rp := range ap.Result {
-				if rp.Rel == 0 {
-					if err := ctr.rbat.Vecs[k].UnionOne(ctr.inBat.Vecs[rp.Pos], int64(i), proc.Mp()); err != nil {
-						return err
-					}
-				} else {
-					if err := ctr.rbat.Vecs[k].UnionOne(ctr.bat.Vecs[rp.Pos], int64(j), proc.Mp()); err != nil {
-						return err
+	batches := ctr.mp.GetBatches()
+	for ctr.buildBatIdx < len(batches) {
+		buildBat := batches[ctr.buildBatIdx]
+		if buildBat == nil || buildBat.RowCount() == 0 {
+			ctr.buildBatIdx++
+			ctr.buildRowIdx = 0
+			continue
+		}
+		for row := ctr.buildRowIdx; row < buildBat.RowCount(); row++ {
+			for probeRow := 0; probeRow < count; probeRow++ {
+				for k, rp := range ap.Result {
+					if rp.Rel == 0 {
+						if err := ctr.rbat.Vecs[k].UnionOne(ctr.inBat.Vecs[rp.Pos], int64(probeRow), proc.Mp()); err != nil {
+							return err
+						}
+					} else {
+						if err := ctr.rbat.Vecs[k].UnionOne(buildBat.Vecs[rp.Pos], int64(row), proc.Mp()); err != nil {
+							return err
+						}
 					}
 				}
 			}
+			ctr.rbat.AddRowCount(count)
+			ctr.buildRowIdx = row + 1
+			if ctr.rbat.RowCount() >= colexec.DefaultBatchSize {
+				if ctr.buildRowIdx == buildBat.RowCount() {
+					ctr.buildBatIdx++
+					ctr.buildRowIdx = 0
+				}
+				result.Batch = ctr.rbat
+				return nil
+			}
 		}
-		if ctr.rbat.Vecs[0].Length() >= colexec.DefaultBatchSize {
-			result.Batch = ctr.rbat
-			ctr.rbat.SetRowCount(ctr.rbat.Vecs[0].Length())
-			ctr.probeIdx = j + 1
-			return nil
-		}
+		ctr.buildBatIdx++
+		ctr.buildRowIdx = 0
 	}
-	// ctr.rbat.AddRowCount(count * count2)
-	ctr.probeIdx = 0
-	ctr.rbat.SetRowCount(ctr.rbat.Vecs[0].Length())
+	ctr.buildBatIdx = 0
+	ctr.buildRowIdx = 0
 	result.Batch = ctr.rbat
 	ctr.inBat = nil
+	return nil
+}
+
+func (ctr *container) firstBuildBatch() *batch.Batch {
+	if ctr.mp == nil {
+		return nil
+	}
+	for _, bat := range ctr.mp.GetBatches() {
+		if bat != nil && bat.RowCount() > 0 {
+			return bat
+		}
+	}
 	return nil
 }

@@ -335,7 +335,11 @@ func buildInsertIndexMetaBatch(tableId uint64, databaseId uint64, ct *engine.Con
 						return nil, err
 					}
 
-					err = vector.AppendFixed(vec_visible, int8(1), false, proc.Mp())
+					visible := int8(0)
+					if catalog.IsIndexVisible(index) {
+						visible = 1
+					}
+					err = vector.AppendFixed(vec_visible, visible, false, proc.Mp())
 					if err != nil {
 						return nil, err
 					}
@@ -452,7 +456,7 @@ func buildInsertIndexMetaBatch(tableId uint64, databaseId uint64, ct *engine.Con
 	if err != nil {
 		return nil, err
 	}
-	bat.Vecs[12] = vecPrikey
+	bat.Vecs[15] = vecPrikey
 
 	bat.SetRowCount(bat.GetVector(0).Length())
 	return bat, nil

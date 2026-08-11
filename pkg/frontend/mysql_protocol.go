@@ -45,7 +45,6 @@ import (
 	planPb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/proxy"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
-	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -77,6 +76,7 @@ const defaultSaltReadTimeout = time.Millisecond * 200
 
 const charsetBinary = 0x3f
 const charsetVarchar = 0x21
+const charsetVarcharMaxBytesPerCharacter = 3
 const boolColumnLength = 1
 
 func init() {
@@ -367,7 +367,7 @@ func (mp *MysqlProtocolImpl) GetBool(id PropertyID) bool {
 }
 
 func (mp *MysqlProtocolImpl) Write(execCtx *ExecCtx, crs *perfcounter.CounterSet, bat *batch.Batch) error {
-	n := bat.Vecs[0].Length()
+	n := bat.RowCount()
 	//TODO: remove this MRS here
 	//Create a new temporary result set per pipeline thread.
 	mrs := MysqlResultSet{}
@@ -421,7 +421,7 @@ func (mp *MysqlProtocolImpl) Write(execCtx *ExecCtx, crs *perfcounter.CounterSet
 			ses.AppendData(row2)
 		}
 	} else {
-		if err = mp.WriteResultSetRow2(&mrs, colSlices, uint64(n)); err != nil {
+		if err = mp.writeResultSetRow2(&mrs, colSlices, uint64(n), crs); err != nil {
 			execCtx.ses.Error(execCtx.reqCtx,
 				"Flush error",
 				zap.Error(err))
@@ -461,6 +461,13 @@ func (mp *MysqlProtocolImpl) WriteEOFIFAndNoFlush(warnings uint16, status uint16
 
 func (mp *MysqlProtocolImpl) WriteEOFOrOK(warnings uint16, status uint16) error {
 	return mp.sendEOFOrOkPacket(warnings, status)
+}
+
+func (mp *MysqlProtocolImpl) WriteEOFOrOKWithAffectedRows(affectedRows uint64, warnings uint16, status uint16) error {
+	if mp.capability&CLIENT_DEPRECATE_EOF != 0 {
+		return mp.sendOKPacketWithEof(affectedRows, 0, status, warnings, "")
+	}
+	return mp.sendEOFPacket(warnings, status)
 }
 
 func (mp *MysqlProtocolImpl) WriteERR(errorCode uint16, sqlState, errorMessage string) error {
@@ -574,46 +581,15 @@ func (mp *MysqlProtocolImpl) SetUserName(s string) {
 	mp.username.Store(s)
 }
 
-const defaultTcp4PackageSize = 1<<14 - 66
-
-// CalculateOutTrafficBytes calculate the bytes of the last out traffic, the number of mysql packets
-// return 0 value, if the connection is closed.
-//
-// packet cnt has 3 part:
-// 1st part: flush op cnt.
-// 2nd part: upload part, calculation = payload / 16KiB
-//
-// 3rd part
-// [mo 2.0]
-// 3.1: response part, calculation = sendByte / (16KiB - 66B)
-//   - use net.Listener raw api.
-//   - discard ioCopyBufferSize logic.
-//
-// 3.2: output csv
-//   - fill with ExportDataDefaultFlushSize size, do once flush.
-//
-// [mo 1.2, 1.1.*]
-// 3rd part: response part, calculation = sendByte / 4KiB
-//   - ioCopyBufferSize currently is 4096 Byte, which is the option for goetty_buf.ByteBuf, set by goetty_buf.WithIOCopyBufferSize(...).
-//     goetty_buf.ByteBuf.WriteTo(...) will call by io.CopyBuffer(...) if do Conn.Flush().
-//   - If ioCopyBufferSize is changed, you should see the calling of goetty.NewApplicationWithListenAddress(...) in NewMOServer()
+// CalculateOutTrafficBytes returns bytes accepted by the connection writer and
+// completed MySQL protocol packets. It does not estimate TCP/TLS overhead.
 func (mp *MysqlProtocolImpl) CalculateOutTrafficBytes(reset bool) (bytes int64, packets int64) {
 	ses := mp.GetSession()
 	if ses == nil {
 		return 0, 0
 	}
-	// Case 1: send data as ResultSet
-	resultSetPart := int64(ses.GetOutputBytes())
-	// Case 2: send data as CSV
-	csvPart := ses.writeCsvBytes.Load()
-	bytes = resultSetPart + csvPart
-	tcpPkgCnt := ses.GetFlushPacketCnt()
-	packets = tcpPkgCnt /*1st part*/ +
-		int64(len(ses.sql)>>14) + int64(ses.payloadCounter>>14) + /*2nd part*/
-		resultSetPart/defaultTcp4PackageSize /*3rd part(3.1)*/
-	if csvPart > 0 {
-		packets += int64((csvPart >> 20) / getPu(ses.GetService()).SV.ExportDataDefaultFlushSize) /*3rd part (3.2)*/
-	}
+	bytes = int64(ses.GetOutputBytes())
+	packets = ses.GetFlushPacketCnt()
 	if reset {
 		ses.ResetPacketCounter()
 	}
@@ -694,7 +670,7 @@ func (mp *MysqlProtocolImpl) SendPrepareResponse(ctx context.Context, stmt *Prep
 	}
 	paramTypes := dcPrepare.Prepare.ParamTypes
 	numParams := len(paramTypes)
-	columns := plan2.GetResultColumnsFromPlan(dcPrepare.Prepare.Plan)
+	columns := getPreparedResultColumns(stmt, sessionTxnHaveDDL(mp.GetSession()))
 	numColumns := len(columns)
 
 	var data []byte
@@ -723,6 +699,7 @@ func (mp *MysqlProtocolImpl) SendPrepareResponse(ctx context.Context, stmt *Prep
 		if err != nil {
 			return err
 		}
+		setCharacter(column)
 
 		_, err = mp.SendColumnDefinitionPacket(ctx, column, cmd)
 		if err != nil {
@@ -2118,7 +2095,7 @@ Error information includes several elements: an error code, SQLSTATE value, and 
 */
 func (mp *MysqlProtocolImpl) sendErrPacket(errorCode uint16, sqlState, errorMessage string) error {
 	if mp.ses != nil {
-		mp.ses.GetErrInfo().push(errorCode, errorMessage)
+		mp.ses.appendErrorDiagnostic(errorCode, errorMessage)
 	}
 	errPkt := mp.makeErrPayload(errorCode, sqlState, errorMessage)
 	return mp.writePackets(errPkt)
@@ -2164,7 +2141,19 @@ func setColLength(column *MysqlColumn, width int32) {
 	column.length = column.columnType.GetLength(width)
 }
 
-func setColFlag(column *MysqlColumn) {
+func setColFlag(column *MysqlColumn, col *planPb.ColDef) {
+	if col == nil {
+		return
+	}
+	if col.NotNull || col.Typ.NotNullable {
+		column.flag |= uint16(defines.NOT_NULL_FLAG)
+	}
+	if col.Primary {
+		column.flag |= uint16(defines.PRI_KEY_FLAG)
+	}
+	if col.Unique {
+		column.flag |= uint16(defines.UNIQUE_KEY_FLAG)
+	}
 	if column.auto_incr {
 		column.flag |= uint16(defines.AUTO_INCREMENT_FLAG)
 	}
@@ -3544,6 +3533,15 @@ func (mp *MysqlProtocolImpl) WriteResultSetRow(mrs *MysqlResultSet, cnt uint64) 
 }
 
 func (mp *MysqlProtocolImpl) WriteResultSetRow2(mrs *MysqlResultSet, colSlices *ColumnSlices, cnt uint64) error {
+	return mp.writeResultSetRow2(mrs, colSlices, cnt, nil)
+}
+
+func (mp *MysqlProtocolImpl) writeResultSetRow2(
+	mrs *MysqlResultSet,
+	colSlices *ColumnSlices,
+	cnt uint64,
+	counter *perfcounter.CounterSet,
+) error {
 	if cnt == 0 {
 		return nil
 	}
@@ -3556,25 +3554,30 @@ func (mp *MysqlProtocolImpl) WriteResultSetRow2(mrs *MysqlResultSet, colSlices *
 	// XXX now we known COM_QUERY will use textRow, COM_STMT_EXECUTE use binaryRow
 	useBinaryRow := cmd == COM_STMT_EXECUTE
 
-	//make rows into the batch
-	for i := uint64(0); i < cnt; i++ {
-		//begin1 := time.Now()
-		if useBinaryRow {
-			err = mp.appendResultSetBinaryRow2(mrs, colSlices, i)
-		} else {
-			err = mp.appendResultSetTextRow2(mrs, colSlices, i)
-		}
-		if err != nil {
-			//ERR_Packet in case of error
-			err1 := mp.sendErrPacket(moerr.ER_UNKNOWN_ERROR, DefaultMySQLState, err.Error())
-			if err1 != nil {
-				return err1
+	writeRows := func() error {
+		//make rows into the batch
+		for i := uint64(0); i < cnt; i++ {
+			//begin1 := time.Now()
+			if useBinaryRow {
+				err = mp.appendResultSetBinaryRow2(mrs, colSlices, i)
+			} else {
+				err = mp.appendResultSetTextRow2(mrs, colSlices, i)
 			}
-			return err
+			if err != nil {
+				//ERR_Packet in case of error
+				err1 := mp.sendErrPacket(moerr.ER_UNKNOWN_ERROR, DefaultMySQLState, err.Error())
+				if err1 != nil {
+					return err1
+				}
+				return err
+			}
 		}
+		return nil
 	}
-
-	return err
+	if counter != nil {
+		return mp.tcpConn.withOutputCounter(counter, writeRows)
+	}
+	return writeRows()
 }
 
 func (mp *MysqlProtocolImpl) WriteColumnDefBytes(payload []byte) error {
@@ -3583,6 +3586,10 @@ func (mp *MysqlProtocolImpl) WriteColumnDefBytes(payload []byte) error {
 
 func (mp *MysqlProtocolImpl) UseConn(conn net.Conn) {
 	mp.tcpConn.UseConn(conn)
+}
+
+func (mp *MysqlProtocolImpl) setResponseOutputWaitTracker(tracker *responseOutputWaitTracker) {
+	mp.tcpConn.setResponseOutputWaitTracker(tracker)
 }
 
 func (mp *MysqlProtocolImpl) beginPacket() error {
@@ -3624,6 +3631,9 @@ func (mp *MysqlProtocolImpl) flush() error {
 }
 
 func (mp *MysqlProtocolImpl) appendDatetime(dt types.Datetime) error {
+	if dt == types.ZeroDatetime {
+		return mp.append(0)
+	}
 	if dt.MicroSec() != 0 {
 		err := mp.append(11)
 		if err != nil {
@@ -3739,7 +3749,7 @@ func (mp *MysqlProtocolImpl) appendTime(t types.Time) error {
 }
 
 func (mp *MysqlProtocolImpl) appendDate(value types.Date) error {
-	if int32(value) == 0 {
+	if value == types.ZeroDate {
 		err := mp.append(0)
 		if err != nil {
 			return err
@@ -3784,6 +3794,16 @@ func (mp *MysqlProtocolImpl) sendResultSetTextRow(mrs *MysqlResultSet, r uint64)
 	return nil
 }
 
+func (mp *MysqlProtocolImpl) sendResultSetBinaryRow(mrs *MysqlResultSet, r uint64) error {
+	if err := mp.appendResultSetBinaryRow(mrs, r); err != nil {
+		if err1 := mp.sendErrPacket(moerr.ER_UNKNOWN_ERROR, DefaultMySQLState, err.Error()); err1 != nil {
+			return err1
+		}
+		return err
+	}
+	return nil
+}
+
 // the server send the result set of execution the client
 // the routine follows the article: https://dev.mysql.com/doc/internals/en/com-query-response.html
 func (mp *MysqlProtocolImpl) sendResultSet(ctx context.Context, set ResultSet, cmd int, warnings, status uint16) error {
@@ -3802,10 +3822,19 @@ func (mp *MysqlProtocolImpl) sendResultSet(ctx context.Context, set ResultSet, c
 		return err
 	}
 
-	//One or more ProtocolText::ResultsetRow packets, each containing column_count values
-	for i := uint64(0); i < mysqlRS.GetRowCount(); i++ {
-		if err = mp.sendResultSetTextRow(mysqlRS, i); err != nil {
-			return err
+	// COM_QUERY returns text rows, while COM_STMT_EXECUTE returns binary rows.
+	// Metadata and row encoding must describe the same command response.
+	if CommandType(cmd) == COM_STMT_EXECUTE {
+		for i := uint64(0); i < mysqlRS.GetRowCount(); i++ {
+			if err = mp.sendResultSetBinaryRow(mysqlRS, i); err != nil {
+				return err
+			}
+		}
+	} else {
+		for i := uint64(0); i < mysqlRS.GetRowCount(); i++ {
+			if err = mp.sendResultSetTextRow(mysqlRS, i); err != nil {
+				return err
+			}
 		}
 	}
 
@@ -3866,12 +3895,17 @@ func (mp *MysqlProtocolImpl) receiveExtraInfo(rs *Conn) {
 		mp.ses.Debugf(mp.ctx, "failed to set deadline for salt updating: %v", err)
 		return
 	}
+	defer func() {
+		if err := rs.RawConn().SetReadDeadline(time.Time{}); err != nil {
+			mp.ses.Debugf(mp.ctx, "failed to clear deadline for salt updating: %v", err)
+		}
+	}()
 	var i proxy.ExtraInfo
 	reader := bufio.NewReader(rs.RawConn())
 	if err := i.Decode(reader); err != nil {
 		// If the error is timeout, we treat it as normal case and do not update extra info.
 		if err, ok := err.(net.Error); ok && err.Timeout() {
-			mp.ses.Error(mp.ctx, "cannot get salt, maybe not use proxy",
+			mp.ses.Debug(mp.ctx, "cannot get salt, maybe not use proxy",
 				zap.Error(err))
 		} else {
 			mp.ses.Error(mp.ctx, "failed to get extra info",
@@ -3975,14 +4009,10 @@ func GetPassWord(pwd string) ([]byte, error) {
 	return pwdByte, nil
 }
 
-// formatDateForMySQL formats a Date value for MySQL protocol, handling zero date (0000-00-00)
-// MySQL uses 0000-00-00 as zero date for minimum overflow cases (e.g., TIMESTAMPADD(DAY, -1, '0001-01-01'))
-// MatrixOne's Date(0) represents 0001-01-01, so we format it as "0000-00-00" for MySQL compatibility
+// formatDateForMySQL formats a Date value for MySQL protocol, including the
+// dedicated MySQL zero-date sentinel.
 func formatDateForMySQL(d types.Date) string {
-	// Check if this is a zero date (Date(0) = 0001-01-01)
-	// MySQL uses 0000-00-00 as zero date for minimum overflow cases
-	// For MySQL compatibility, format Date(0) as "0000-00-00"
-	if d == types.Date(0) {
+	if d == types.ZeroDate {
 		return "0000-00-00"
 	}
 	return d.String()

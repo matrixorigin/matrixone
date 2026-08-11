@@ -76,9 +76,10 @@ func (l *localLockTable) newLockContext(
 	c.cb = cb
 	c.result = pb.Result{LockedOn: bind}
 	c.createAt = time.Now()
-	if opts.async {
-		c.lockWaitDeadline, c.lockWaitTimeoutErr = getAsyncLockWaitDeadline(c.createAt, opts)
-	}
+	// Compute the deadline for both sync and async paths. Once an absolute
+	// LockWaitDeadline crosses a service/RPC boundary it is authoritative; no
+	// later hop may restart it from the rounded relative timeout.
+	c.lockWaitDeadline, c.lockWaitTimeoutErr = getLockWaitDeadline(c.createAt, opts)
 	return c
 }
 
@@ -116,12 +117,15 @@ func (c *lockContext) getLockWaitTimeoutErr() error {
 	return ErrLockTimeout
 }
 
-func getAsyncLockWaitDeadline(createAt time.Time, opts LockOptions) (time.Time, error) {
+func getLockWaitDeadline(createAt time.Time, opts LockOptions) (time.Time, error) {
 	var (
 		deadline time.Time
 		err      error
 	)
-	if opts.LockWaitTimeout > 0 {
+	if opts.LockWaitDeadline > 0 {
+		deadline = time.Unix(0, opts.LockWaitDeadline)
+		err = ErrLockTimeout
+	} else if opts.LockWaitTimeout > 0 {
 		deadline = createAt.Add(time.Duration(opts.LockWaitTimeout) * time.Second)
 		err = ErrLockTimeout
 	}
@@ -203,8 +207,16 @@ func (mw *waiterEvents) start() {
 }
 
 func (mw *waiterEvents) close() {
-	mw.stopper.Stop()
+	// Seal event admission before stopping workers. Every notification accepted
+	// before this close remains readable from the buffered channel; workers
+	// drain those contexts to their normal terminal callback instead of leaving
+	// pooled lock contexts and response ownership stranded.
 	close(mw.eventC)
+	mw.stopper.Stop()
+	// A zero-worker instance is useful in tests, and cancellation can win a
+	// worker select after admission is sealed. The Close owner is the final
+	// drain owner for either case.
+	mw.drainEvents()
 	mw.mu.Lock()
 	for _, w := range mw.mu.blockedWaiters {
 		w.close("waiterEvents close", mw.logger)
@@ -292,12 +304,17 @@ func (mw *waiterEvents) handle(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
+			// close seals eventC before canceling the worker context, so this
+			// finite drain terminates. Keeping the normal loop fair is
+			// important: a continuously non-empty event queue must not starve
+			// timeout, orphan, or deadlock checks.
+			mw.drainEvents()
 			return
-		case c := <-mw.eventC:
-			txn := c.txn
-			txn.Lock()
-			c.doLock()
-			txn.Unlock()
+		case c, ok := <-mw.eventC:
+			if !ok {
+				return
+			}
+			mw.handleEvent(c)
 		case v := <-mw.checkOrphanC:
 			mw.checkOrphan(v)
 		case <-mw.checkC:
@@ -313,14 +330,28 @@ func (mw *waiterEvents) handle(ctx context.Context) {
 	}
 }
 
+func (mw *waiterEvents) handleEvent(c *lockContext) {
+	txn := c.txn
+	txn.Lock()
+	c.doLock()
+	txn.Unlock()
+}
+
+func (mw *waiterEvents) drainEvents() {
+	for c := range mw.eventC {
+		mw.handleEvent(c)
+	}
+}
+
 func (mw *waiterEvents) check(timeout time.Duration) {
 	mw.mu.Lock()
-	defer mw.mu.Unlock()
 	if len(mw.mu.blockedWaiters) == 0 {
+		mw.mu.Unlock()
 		return
 	}
 
 	now := time.Now()
+	var timedOut []*lockContext
 	newBlockedWaiters := mw.mu.blockedWaiters[:0]
 	for i, w := range mw.mu.blockedWaiters {
 		// remove if not in blocking state
@@ -358,7 +389,9 @@ func (mw *waiterEvents) check(timeout time.Duration) {
 					zap.Duration("wait", wait),
 					zap.Duration("timeout", w.lockWaitTimeout))
 			}
-			w.notify(notifyValue{err: err}, mw.logger)
+			if w.notifyWithoutEvent(notifyValue{err: err}, mw.logger) && w.event.c != nil {
+				timedOut = append(timedOut, w.event.c)
+			}
 			w.close("waiterEvents check timeout", mw.logger)
 			mw.mu.blockedWaiters[i] = nil
 			continue
@@ -370,6 +403,17 @@ func (mw *waiterEvents) check(timeout time.Duration) {
 		newBlockedWaiters = append(newBlockedWaiters, w)
 	}
 	mw.mu.blockedWaiters = newBlockedWaiters
+	mw.mu.Unlock()
+
+	// Complete timed-out async waits outside mw.mu. doLock removes the waiter
+	// from the checker and may acquire mw.mu again, and it also takes txn locks;
+	// neither is safe while the checker mutex is held.
+	for _, c := range timedOut {
+		txn := c.txn
+		txn.Lock()
+		c.doLock()
+		txn.Unlock()
+	}
 }
 
 func (mw *waiterEvents) addToDeadlockCheck(w *waiter) error {
@@ -386,7 +430,7 @@ func (mw *waiterEvents) checkOrphan(v checkOrphan) {
 		return
 	}
 
-	if v.wait >= waitTooLong {
+	if v.logWaitTooLong {
 		lockDetail := ""
 		v.lt.mu.RLock()
 		lock, ok := v.lt.mu.store.Get(v.key)
@@ -461,16 +505,22 @@ func (mw *waiterEvents) addToOrphanCheck(
 	wait time.Duration,
 ) {
 	ck := *w.conflictKey.Load()
+	logWaitTooLong := wait >= waitTooLong && w.waitTooLongLogged.CompareAndSwap(false, true)
 	v := checkOrphan{
-		wait: wait,
-		key:  ck,
-		lt:   w.lt.Load(),
-		txn:  w.txn,
+		wait:           wait,
+		key:            ck,
+		lt:             w.lt.Load(),
+		txn:            w.txn,
+		logWaitTooLong: logWaitTooLong,
 	}
 
 	select {
 	case mw.checkOrphanC <- v:
 	default:
+		if logWaitTooLong {
+			// The warning was not queued. Let a later check retry it.
+			w.waitTooLongLogged.Store(false)
+		}
 	}
 }
 
@@ -479,4 +529,7 @@ type checkOrphan struct {
 	key  []byte
 	lt   *localLockTable
 	txn  pb.WaitTxn
+	// logWaitTooLong controls only the diagnostic; every event still performs
+	// the orphan check regardless of this flag.
+	logWaitTooLong bool
 }

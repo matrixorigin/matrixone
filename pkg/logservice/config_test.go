@@ -16,6 +16,7 @@ package logservice
 
 import (
 	"testing"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/stretchr/testify/assert"
@@ -129,11 +130,29 @@ func TestConfigCanBeValidated(t *testing.T) {
 	c6.GossipProbeInterval.Duration = 0
 	err = c6.Validate()
 	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrBadConfig))
+
+	c7 := c
+	c7.HAKeeperBootstrapRetryInterval.Duration = -time.Second
+	err = c7.Validate()
+	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrBadConfig))
+}
+
+func TestHAKeeperBootstrapRetryIntervalDefault(t *testing.T) {
+	cfg := DefaultConfig()
+	assert.Equal(t, time.Second, cfg.HAKeeperBootstrapRetryInterval.Duration)
+
+	cfg.HAKeeperBootstrapRetryInterval.Duration = 0
+	assert.NoError(t, cfg.Validate())
+	assert.Equal(t, time.Second, cfg.HAKeeperBootstrapRetryInterval.Duration)
 }
 
 func TestBootstrapConfigCanBeValidated(t *testing.T) {
 	c := getTestConfig()
 	assert.NoError(t, c.Validate())
+	nonBootstrapRecovery := c
+	nonBootstrapRecovery.BootstrapConfig.Restore.WALDataPath = "/recovery/wal_data.bin"
+	err := nonBootstrapRecovery.Validate()
+	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrBadConfig))
 
 	c.BootstrapConfig.BootstrapCluster = true
 	c.BootstrapConfig.NumOfLogShards = 3
@@ -144,7 +163,7 @@ func TestBootstrapConfigCanBeValidated(t *testing.T) {
 
 	c1 := c
 	c1.BootstrapConfig.NumOfLogShards = 0
-	err := c1.Validate()
+	err = c1.Validate()
 	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrBadConfig))
 
 	c2 := c
@@ -160,6 +179,32 @@ func TestBootstrapConfigCanBeValidated(t *testing.T) {
 	c4 := c
 	c4.BootstrapConfig.NumOfLogShardReplicas = 2
 	err = c4.Validate()
+	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrBadConfig))
+
+	nonCoordinator := c
+	nonCoordinator.UUID = "9c4dccb4-4d3c-41f8-b482-5251dc7a41bf"
+	nonCoordinator.BootstrapConfig.Restore.Enabled = true
+	assert.NoError(t, nonCoordinator.Validate())
+
+	nonMember := nonCoordinator
+	nonMember.UUID = "9c4dccb4-4d3c-41f8-b482-5251dc7a41be"
+	err = nonMember.Validate()
+	require.ErrorContains(t, err, "initial HAKeeper member")
+
+	recovery := c
+	recovery.UUID = "9c4dccb4-4d3c-41f8-b482-5251dc7a41bf"
+	recovery.BootstrapConfig.Restore.FilePath = "/recovery/hakeeper_backup.data"
+	recovery.BootstrapConfig.Restore.WALDataPath = "/recovery/wal_data.bin"
+	recovery.BootstrapConfig.Restore.Enabled = true
+	assert.NoError(t, recovery.Validate())
+
+	recovery.BootstrapConfig.Restore.FilePath = ""
+	err = recovery.Validate()
+	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrBadConfig))
+
+	recovery.BootstrapConfig.Restore.FilePath = "/recovery/hakeeper_backup.data"
+	recovery.UUID = "9c4dccb4-4d3c-41f8-b482-5251dc7a41be"
+	err = recovery.Validate()
 	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrBadConfig))
 }
 

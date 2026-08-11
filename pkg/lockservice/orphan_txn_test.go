@@ -865,7 +865,7 @@ func TestOrphanTxnHolderCanBeRelease(t *testing.T) {
 			require.NoError(t, s2.Unlock(ctx, txn2, timestamp.Timestamp{}))
 			close(ch)
 
-			v, err := s1.getLockTable(0, table)
+			v, err := s1.getLockTable(context.Background(), 0, table)
 			require.NoError(t, err)
 			lt := v.(*localLockTable)
 
@@ -1005,7 +1005,7 @@ func TestValidTxnCheckErrorThenConfirmedInactive(t *testing.T) {
 		},
 		func(pb.WaitTxn) (bool, error) {
 			if checks.Add(1) == 1 {
-				return false, moerr.NewBackendClosedNoCtx()
+				return false, morpc.ErrBackendCreateTimeout
 			}
 			return false, nil
 		},

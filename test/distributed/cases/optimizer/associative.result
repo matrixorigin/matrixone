@@ -131,16 +131,11 @@ Project  𝄀
   ->  Aggregate  𝄀
         Aggregate Functions: sum(lineitem.l_extendedprice)  𝄀
         ->  Filter  𝄀
-              Filter Cond: (cast(lineitem.l_quantity AS DECIMAL128(38, 2)) < 0.2 * avg(lineitem.l_quantity))
+              Filter Cond: (cast(lineitem.l_quantity AS DECIMAL128(38, 2)) < (0.2 * avg(lineitem.l_quantity)))
               -- HINT: Cast expression may prevent index usage  𝄀
               ->  Join  𝄀
-                    Join Type: RIGHT  𝄀
-                    Join Cond: (lineitem.l_partkey = part.p_partkey)  𝄀
-                    ->  Project  𝄀
-                          ->  Aggregate  𝄀
-                                Group Key: lineitem.l_partkey shuffle: range(lineitem.l_partkey)  𝄀
-                                Aggregate Functions: avg(lineitem.l_quantity)  𝄀
-                                ->  Table Scan on associative.lineitem  𝄀
+                    Join Type: LEFT  𝄀
+                    Join Cond: (part.p_partkey = lineitem.l_partkey)  𝄀
                     ->  Join  𝄀
                           Join Type: INNER   hashOnPK  𝄀
                           Join Cond: (lineitem.l_partkey = part.p_partkey)  𝄀
@@ -148,7 +143,18 @@ Project  𝄀
                           ->  Table Scan on associative.lineitem  𝄀
                                 Runtime Filter Probe: lineitem.l_partkey  𝄀
                           ->  Table Scan on associative.part  𝄀
-                                Filter Cond: (part.p_container = 'LG BAG'), (part.p_brand = 'Brand#54')
+                                Filter Cond: (part.p_container = 'LG BAG'), (part.p_brand = 'Brand#54')  𝄀
+                    ->  Aggregate  𝄀
+                          Group Key: lineitem.l_partkey  𝄀
+                          Aggregate Functions: avg(lineitem.l_quantity)  𝄀
+                          ->  Join  𝄀
+                                Join Type: SEMI   hashOnPK  𝄀
+                                Join Cond: (lineitem.l_partkey = part.p_partkey)  𝄀
+                                Runtime Filter Build: #[-1,0]  𝄀
+                                ->  Table Scan on associative.lineitem  𝄀
+                                      Runtime Filter Probe: lineitem.l_partkey  𝄀
+                                ->  Table Scan on associative.part  𝄀
+                                      Filter Cond: (part.p_container = 'LG BAG'), (part.p_brand = 'Brand#54')
 select table_cnt, json_extract(ndv_map, '$.l_partkey') partk from table_stats("associative.lineitem", 'patch', '{"ndv_map": {"l_partkey": 1840290, "l_quantity": 50}}') g;
 ➤ table_cnt[8,54,0]  ¦  partk[-1,2147483647,0]  𝄀
 6.00037902E8  ¦  1840290
@@ -174,22 +180,57 @@ Project  𝄀
   ->  Aggregate  𝄀
         Aggregate Functions: sum(lineitem.l_extendedprice)  𝄀
         ->  Filter  𝄀
-              Filter Cond: (cast(lineitem.l_quantity AS DECIMAL128(38, 2)) < 0.2 * avg(lineitem.l_quantity))
+              Filter Cond: (cast(lineitem.l_quantity AS DECIMAL128(38, 2)) < (0.2 * avg(lineitem.l_quantity)))
               -- HINT: Cast expression may prevent index usage  𝄀
               ->  Join  𝄀
-                    Join Type: RIGHT  𝄀
-                    Join Cond: (lineitem.l_partkey = part.p_partkey)  𝄀
-                    ->  Project  𝄀
-                          ->  Aggregate  𝄀
-                                Group Key: lineitem.l_partkey  𝄀
-                                Aggregate Functions: avg(lineitem.l_quantity)  𝄀
-                                ->  Table Scan on associative.lineitem  𝄀
+                    Join Type: LEFT  𝄀
+                    Join Cond: (part.p_partkey = lineitem.l_partkey)  𝄀
                     ->  Join  𝄀
                           Join Type: INNER   hashOnPK  𝄀
                           Join Cond: (lineitem.l_partkey = part.p_partkey)  𝄀
                           ->  Table Scan on associative.lineitem  𝄀
                           ->  Table Scan on associative.part  𝄀
-                                Filter Cond: (part.p_container = 'LG BAG'), (part.p_brand = 'Brand#54')
+                                Filter Cond: (part.p_container = 'LG BAG'), (part.p_brand = 'Brand#54')  𝄀
+                    ->  Aggregate  𝄀
+                          Group Key: lineitem.l_partkey  𝄀
+                          Aggregate Functions: avg(lineitem.l_quantity)  𝄀
+                          ->  Join  𝄀
+                                Join Type: SEMI   hashOnPK  𝄀
+                                Join Cond: (lineitem.l_partkey = part.p_partkey)  𝄀
+                                ->  Table Scan on associative.lineitem  𝄀
+                                ->  Table Scan on associative.part  𝄀
+                                      Filter Cond: (part.p_container = 'LG BAG'), (part.p_brand = 'Brand#54')
+insert into part values
+(1, 'part 1', 'MFGR#1', 'Brand#54', 'TYPE 1', 1, 'LG BAG', 1.00, 'comment'),
+(2, 'part 2', 'MFGR#1', 'Brand#54', 'TYPE 1', 1, 'LG BAG', 1.00, 'comment'),
+(3, 'part 3', 'MFGR#1', 'Brand#10', 'TYPE 1', 1, 'LG BAG', 1.00, 'comment');
+insert into lineitem values
+(1, 1, 1, 1, 1.00, 70.00, 0.00, 0.00, 'N', 'O', '1995-01-01', '1995-01-02', '1995-01-03', 'NONE', 'AIR', 'comment'),
+(2, 1, 1, 1, 10.00, 10.00, 0.00, 0.00, 'N', 'O', '1995-01-01', '1995-01-02', '1995-01-03', 'NONE', 'AIR', 'comment'),
+(3, 1, 1, 1, 10.00, 10.00, 0.00, 0.00, 'N', 'O', '1995-01-01', '1995-01-02', '1995-01-03', 'NONE', 'AIR', 'comment'),
+(4, 2, 1, 1, 2.00, 140.00, 0.00, 0.00, 'N', 'O', '1995-01-01', '1995-01-02', '1995-01-03', 'NONE', 'AIR', 'comment'),
+(5, 2, 1, 1, 20.00, 10.00, 0.00, 0.00, 'N', 'O', '1995-01-01', '1995-01-02', '1995-01-03', 'NONE', 'AIR', 'comment'),
+(6, 3, 1, 1, 1.00, 700.00, 0.00, 0.00, 'N', 'O', '1995-01-01', '1995-01-02', '1995-01-03', 'NONE', 'AIR', 'comment'),
+(7, 3, 1, 1, 10.00, 10.00, 0.00, 0.00, 'N', 'O', '1995-01-01', '1995-01-02', '1995-01-03', 'NONE', 'AIR', 'comment');
+select
+sum(l_extendedprice) / 7.0 as avg_yearly
+from
+lineitem,
+part
+where
+p_partkey = l_partkey
+and p_brand = 'Brand#54'
+and p_container = 'LG BAG'
+and l_quantity < (
+select
+0.2 * avg(l_quantity)
+from
+lineitem
+where
+l_partkey = p_partkey
+);
+➤ avg_yearly[3,38,8]  𝄀
+30.00000000
 drop table if exists associative.lineitem;
 drop table if exists associative.part;
 drop table if exists associative.file;

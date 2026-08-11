@@ -161,6 +161,66 @@ func TestTimeWin(t *testing.T) {
 	}
 }
 
+func TestTimeWinApproxPercentileEndpointConfigs(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		config string
+		want   float64
+	}{
+		{name: "lower endpoint", config: "0", want: 1},
+		{name: "upper endpoint", config: "1", want: 1000},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+			input := testutil.MakeInt32Vector([]int32{1, 4, 5, 1000}, nil, proc.Mp())
+			arg := &TimeWin{
+				Types: []types.Type{types.T_int32.ToType()},
+				Aggs: []aggexec.AggFuncExecExpression{
+					aggexec.MakeAggFunctionExpression(
+						aggexec.AggIdOfApproxPercentile,
+						false,
+						[]*plan.Expr{newExpression(1)},
+						[]byte(tc.config)),
+				},
+			}
+
+			aggs, err := makeAggExecutors(arg, proc, false)
+			require.NoError(t, err)
+			require.Len(t, aggs, 1)
+			require.NoError(t, aggs[0].GroupGrow(1))
+			require.NoError(t, aggs[0].BatchFill(0, []uint64{1, 1, 1, 1}, []*vector.Vector{input}))
+			results, err := aggs[0].Flush()
+			require.NoError(t, err)
+			require.Equal(t, []float64{tc.want}, vector.MustFixedColWithTypeCheck[float64](results[0]))
+
+			results[0].Free(proc.Mp())
+			aggs[0].Free()
+			input.Free(proc.Mp())
+			proc.Free()
+			require.Equal(t, int64(0), proc.Mp().CurrNB())
+		})
+	}
+}
+
+func TestTimeWinApproxPercentileRejectsInvalidExecutorConfig(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	arg := &TimeWin{
+		Types: []types.Type{types.T_int32.ToType()},
+		Aggs: []aggexec.AggFuncExecExpression{
+			aggexec.MakeAggFunctionExpression(
+				aggexec.AggIdOfApproxPercentile,
+				false,
+				[]*plan.Expr{newExpression(1)},
+				[]byte("1.01")),
+		},
+	}
+
+	_, err := makeAggExecutors(arg, proc, false)
+	require.ErrorContains(t, err, "percentile must be in [0,1]")
+	proc.Free()
+	require.Equal(t, int64(0), proc.Mp().CurrNB())
+}
+
 // TestTimeWinSplitDistinctResultAndReplace verifies the complete non-final
 // flush transition: split physical results are materialized as one logical
 // batch, and the flushed DISTINCT executor is freed before its replacement is
@@ -191,16 +251,20 @@ func TestTimeWinSplitDistinctResultAndReplace(t *testing.T) {
 	arg.ctr.status = flush
 	arg.ctr.colCnt = 1
 	arg.ctr.aggs = []aggexec.AggFuncExec{agg}
+	arg.ctr.wStart = make([]types.Datetime, rows)
+	arg.ctr.wEnd = make([]types.Datetime, rows)
 	result, err := arg.Call(proc)
 	require.NoError(t, err)
 	require.NotNil(t, result.Batch)
+	require.Empty(t, arg.ctr.wStart)
+	require.Empty(t, arg.ctr.wEnd)
 	resultValues := vector.MustFixedColWithTypeCheck[int64](result.Batch.Vecs[0])
 	require.Len(t, resultValues, rows)
 	for _, idx := range []int{0, aggexec.AggBatchSize - 1, aggexec.AggBatchSize, rows - 1} {
 		require.Equal(t, int64(values[idx]), resultValues[idx], "row %d", idx)
 	}
 
-	require.Equal(t, int32(nextWindow), arg.ctr.status)
+	require.Equal(t, int32(resumeAfterFlush), arg.ctr.status)
 	require.Len(t, arg.ctr.aggs, 1)
 	require.NotSame(t, agg, arg.ctr.aggs[0])
 
@@ -209,10 +273,14 @@ func TestTimeWinSplitDistinctResultAndReplace(t *testing.T) {
 	// released when the second replacement is installed.
 	require.NoError(t, arg.ctr.aggs[0].Fill(0, 0, []*vector.Vector{input}))
 	arg.ctr.status = flush
+	arg.ctr.wStart = make([]types.Datetime, maxTimeWindowRows+1)
+	arg.ctr.wEnd = make([]types.Datetime, maxTimeWindowRows+1)
 	secondResult, err := arg.Call(proc)
 	require.NoError(t, err)
 	require.NotNil(t, secondResult.Batch)
 	require.Equal(t, []int64{1}, vector.MustFixedColWithTypeCheck[int64](secondResult.Batch.Vecs[0]))
+	require.Empty(t, arg.ctr.wStart)
+	require.Empty(t, arg.ctr.wEnd)
 
 	arg.Free(proc, false, nil)
 	input.Free(proc.Mp())
@@ -273,6 +341,23 @@ func newExpression(pos int32) *plan.Expr {
 func makeInterval() types.Datetime {
 	t, _ := calcDatetime(5, 2)
 	return t
+}
+
+func TestFirstWindowKeepsZeroDatetimeDistinctFromEpoch(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	ts := vector.NewVec(types.T_datetime.ToType())
+	require.NoError(t, vector.AppendFixedList(ts, []types.Datetime{types.ZeroDatetime}, nil, proc.Mp()))
+	ts.SetLength(1)
+	defer ts.Free(proc.Mp())
+
+	window := &TimeWin{Interval: types.Datetime(types.MicroSecsPerSec), Sliding: types.Datetime(types.MicroSecsPerSec)}
+	ctr := container{tsVec: []*vector.Vector{ts}}
+	require.NoError(t, ctr.firstWindow(window))
+
+	require.Equal(t, types.ZeroDatetime, ctr.left)
+	require.Equal(t, types.ZeroDatetime, ctr.right)
+	require.Equal(t, types.ZeroDatetime, ctr.nextLeft)
+	require.Equal(t, types.ZeroDatetime, ctr.nextRight)
 }
 
 // singleAggInfo is the basic information of single column agg.

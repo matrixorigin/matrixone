@@ -151,6 +151,9 @@ func (t *TableEntry) getCandidate() (iter []*IterationContext, minFromTS types.T
 		if sinker.dropAt != 0 {
 			continue
 		}
+		if t.exec != nil && t.exec.IsJobFenced(NewJobRuntimeKey(t.accountID, t.tableID, sinker.jobName, sinker.jobID)) {
+			continue
+		}
 		candidates = append(candidates, sinker)
 	}
 	iterations := make([]*IterationContext, 0, len(candidates))
@@ -257,8 +260,8 @@ func (t *TableEntry) tryFlushWatermark(
 	txn client.TxnOperator,
 	threshold time.Duration,
 ) (flushCount int) {
-	t.mu.RLock()
-	defer t.mu.RUnlock()
+	t.mu.Lock()
+	defer t.mu.Unlock()
 	for _, jobEntry := range t.jobs {
 		needFlush, err := jobEntry.tryFlushWatermark(ctx, txn, threshold)
 		if needFlush && err == nil {

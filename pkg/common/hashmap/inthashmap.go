@@ -19,6 +19,7 @@ import (
 	"io"
 	"unsafe"
 
+	"github.com/matrixorigin/matrixone/pkg/common/hashmap/keycodec"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/hashtable"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -31,8 +32,16 @@ func init() {
 }
 
 func NewIntHashMap(hasNull bool, memPool *mpool.MPool) (*IntHashMap, error) {
+	return NewIntHashMapWithAllocation(hasNull, memPool, nil)
+}
+
+func NewIntHashMapWithAllocation(
+	hasNull bool,
+	memPool *mpool.MPool,
+	allocation *hashtable.AllocationAccountSelection,
+) (*IntHashMap, error) {
 	mp := &hashtable.Int64HashMap{}
-	if err := mp.Init(memPool); err != nil {
+	if err := mp.InitWithAllocation(memPool, allocation); err != nil {
 		return nil, err
 	}
 	return &IntHashMap{
@@ -48,6 +57,16 @@ func (m *IntHashMap) NewIterator() *intHashMapIterator {
 	}
 }
 
+// SetRejectNaN makes FLOAT NaN keys non-matching, as required by SQL join
+// equality. It must be selected before inserting the first row.
+func (m *IntHashMap) SetRejectNaN() error {
+	if m == nil || m.rows != 0 {
+		return mpool.ErrAllocationAccountInvalid
+	}
+	m.rejectNaN = true
+	return nil
+}
+
 func (m *IntHashMap) HasNull() bool {
 	return m.hasNull
 }
@@ -57,7 +76,11 @@ func (m *IntHashMap) Free() {
 }
 
 func (m *IntHashMap) PreAlloc(n uint64) error {
-	return m.hashMap.ResizeOnDemand(int(n))
+	return m.hashMap.ResizeWithPlan(m.hashMap.PlanResize(n))
+}
+
+func (m *IntHashMap) SetResizeAdmission(admit hashtable.ResizeAdmission) {
+	m.hashMap.SetResizeAdmission(admit)
 }
 
 func (m *IntHashMap) GroupCount() uint64 {
@@ -92,15 +115,243 @@ func (itr *intHashMapIterator) encodeHashKeys(vecs []*vector.Vector, start, coun
 		case 2:
 			fillKeys[uint16](itr, vec, 2, start, count)
 		case 4:
-			fillKeys[uint32](itr, vec, 4, start, count)
+			if vec.GetType().Oid == types.T_float32 {
+				fillFloat32Keys(itr, vec, start, count)
+			} else {
+				fillKeys[uint32](itr, vec, 4, start, count)
+			}
 		case 8:
-			fillKeys[uint64](itr, vec, 8, start, count)
+			if vec.GetType().Oid == types.T_float64 {
+				fillFloat64Keys(itr, vec, start, count)
+			} else {
+				fillKeys[uint64](itr, vec, 8, start, count)
+			}
 		default:
 			if !vec.IsConst() && vec.GetArea() == nil {
 				fillVarlenaKey(itr, vec, start, count)
 			} else {
 				fillStrKey(itr, vec, start, count)
 			}
+		}
+	}
+}
+
+func fillFloat32Keys(itr *intHashMapIterator, vec *vector.Vector, start, n int) {
+	keys := itr.keys
+	keyOffs := itr.keyOffs
+	if vec.IsConstNull() {
+		if itr.mp.hasNull {
+			for i := 0; i < n; i++ {
+				*(*int8)(unsafe.Add(unsafe.Pointer(&keys[i]), keyOffs[i])) = 1
+				keyOffs[i]++
+			}
+		} else {
+			for i := 0; i < n; i++ {
+				itr.zValues[i] = 0
+			}
+		}
+		return
+	}
+
+	values := vector.MustFixedColNoTypeCheck[float32](vec)
+	scale := vec.GetType().Scale
+	if vec.IsConst() {
+		var bits uint32
+		if scale > 0 {
+			bits = keycodec.NewFloat32Codec(scale).CanonicalBits(values[0])
+		} else {
+			bits = keycodec.CanonicalFloat32Bits(values[0])
+		}
+		if itr.mp.hasNull {
+			for i := 0; i < n; i++ {
+				*(*int8)(unsafe.Add(unsafe.Pointer(&keys[i]), keyOffs[i])) = 0
+				*(*uint32)(unsafe.Add(unsafe.Pointer(&keys[i]), keyOffs[i]+1)) = bits
+			}
+			uint32AddScalar(1+uint32(types.T_float32.TypeLen()), keyOffs[:n], keyOffs[:n])
+		} else {
+			for i := 0; i < n; i++ {
+				*(*uint32)(unsafe.Add(unsafe.Pointer(&keys[i]), keyOffs[i])) = bits
+			}
+			uint32AddScalar(uint32(types.T_float32.TypeLen()), keyOffs[:n], keyOffs[:n])
+		}
+		return
+	}
+	if scale <= 0 {
+		fillUnscaledFloat32Keys(itr, vec, values, start, n)
+		return
+	}
+	codec := keycodec.NewFloat32Codec(scale)
+	if !vec.GetNulls().Any() {
+		if itr.mp.hasNull {
+			for i := 0; i < n; i++ {
+				*(*int8)(unsafe.Add(unsafe.Pointer(&keys[i]), keyOffs[i])) = 0
+				*(*uint32)(unsafe.Add(unsafe.Pointer(&keys[i]), keyOffs[i]+1)) =
+					codec.CanonicalBits(values[i+start])
+			}
+			uint32AddScalar(1+uint32(types.T_float32.TypeLen()), keyOffs[:n], keyOffs[:n])
+		} else {
+			for i := 0; i < n; i++ {
+				*(*uint32)(unsafe.Add(unsafe.Pointer(&keys[i]), keyOffs[i])) =
+					codec.CanonicalBits(values[i+start])
+			}
+			uint32AddScalar(uint32(types.T_float32.TypeLen()), keyOffs[:n], keyOffs[:n])
+		}
+		return
+	}
+
+	nsp := vec.GetNulls()
+	if itr.mp.hasNull {
+		for i := 0; i < n; i++ {
+			if nsp.Contains(uint64(i + start)) {
+				*(*int8)(unsafe.Add(unsafe.Pointer(&keys[i]), keyOffs[i])) = 1
+				keyOffs[i]++
+			} else {
+				*(*int8)(unsafe.Add(unsafe.Pointer(&keys[i]), keyOffs[i])) = 0
+				*(*uint32)(unsafe.Add(unsafe.Pointer(&keys[i]), keyOffs[i]+1)) =
+					codec.CanonicalBits(values[i+start])
+				keyOffs[i] += 1 + uint32(types.T_float32.TypeLen())
+			}
+		}
+	} else {
+		for i := 0; i < n; i++ {
+			if nsp.Contains(uint64(i + start)) {
+				itr.zValues[i] = 0
+				continue
+			}
+			*(*uint32)(unsafe.Add(unsafe.Pointer(&keys[i]), keyOffs[i])) =
+				codec.CanonicalBits(values[i+start])
+			keyOffs[i] += uint32(types.T_float32.TypeLen())
+		}
+	}
+}
+
+func fillUnscaledFloat32Keys(
+	itr *intHashMapIterator,
+	vec *vector.Vector,
+	values []float32,
+	start, n int,
+) {
+	keys := itr.keys
+	keyOffs := itr.keyOffs
+	if !vec.GetNulls().Any() {
+		if itr.mp.hasNull {
+			for i := 0; i < n; i++ {
+				*(*int8)(unsafe.Add(unsafe.Pointer(&keys[i]), keyOffs[i])) = 0
+				*(*uint32)(unsafe.Add(unsafe.Pointer(&keys[i]), keyOffs[i]+1)) =
+					keycodec.CanonicalFloat32Bits(values[i+start])
+			}
+			uint32AddScalar(1+uint32(types.T_float32.TypeLen()), keyOffs[:n], keyOffs[:n])
+		} else {
+			for i := 0; i < n; i++ {
+				*(*uint32)(unsafe.Add(unsafe.Pointer(&keys[i]), keyOffs[i])) =
+					keycodec.CanonicalFloat32Bits(values[i+start])
+			}
+			uint32AddScalar(uint32(types.T_float32.TypeLen()), keyOffs[:n], keyOffs[:n])
+		}
+		return
+	}
+
+	nsp := vec.GetNulls()
+	if itr.mp.hasNull {
+		for i := 0; i < n; i++ {
+			if nsp.Contains(uint64(i + start)) {
+				*(*int8)(unsafe.Add(unsafe.Pointer(&keys[i]), keyOffs[i])) = 1
+				keyOffs[i]++
+			} else {
+				*(*int8)(unsafe.Add(unsafe.Pointer(&keys[i]), keyOffs[i])) = 0
+				*(*uint32)(unsafe.Add(unsafe.Pointer(&keys[i]), keyOffs[i]+1)) =
+					keycodec.CanonicalFloat32Bits(values[i+start])
+				keyOffs[i] += 1 + uint32(types.T_float32.TypeLen())
+			}
+		}
+	} else {
+		for i := 0; i < n; i++ {
+			if nsp.Contains(uint64(i + start)) {
+				itr.zValues[i] = 0
+				continue
+			}
+			*(*uint32)(unsafe.Add(unsafe.Pointer(&keys[i]), keyOffs[i])) =
+				keycodec.CanonicalFloat32Bits(values[i+start])
+			keyOffs[i] += uint32(types.T_float32.TypeLen())
+		}
+	}
+}
+
+func fillFloat64Keys(itr *intHashMapIterator, vec *vector.Vector, start, n int) {
+	keys := itr.keys
+	keyOffs := itr.keyOffs
+	if vec.IsConstNull() {
+		if itr.mp.hasNull {
+			for i := 0; i < n; i++ {
+				*(*int8)(unsafe.Add(unsafe.Pointer(&keys[i]), keyOffs[i])) = 1
+				keyOffs[i]++
+			}
+		} else {
+			for i := 0; i < n; i++ {
+				itr.zValues[i] = 0
+			}
+		}
+		return
+	}
+
+	values := vector.MustFixedColNoTypeCheck[float64](vec)
+	if vec.IsConst() {
+		bits := keycodec.CanonicalFloat64Bits(values[0])
+		if itr.mp.hasNull {
+			for i := 0; i < n; i++ {
+				*(*int8)(unsafe.Add(unsafe.Pointer(&keys[i]), keyOffs[i])) = 0
+				*(*uint64)(unsafe.Add(unsafe.Pointer(&keys[i]), keyOffs[i]+1)) = bits
+			}
+			uint32AddScalar(1+uint32(types.T_float64.TypeLen()), keyOffs[:n], keyOffs[:n])
+		} else {
+			for i := 0; i < n; i++ {
+				*(*uint64)(unsafe.Add(unsafe.Pointer(&keys[i]), keyOffs[i])) = bits
+			}
+			uint32AddScalar(uint32(types.T_float64.TypeLen()), keyOffs[:n], keyOffs[:n])
+		}
+		return
+	}
+
+	if !vec.GetNulls().Any() {
+		if itr.mp.hasNull {
+			for i := 0; i < n; i++ {
+				*(*int8)(unsafe.Add(unsafe.Pointer(&keys[i]), keyOffs[i])) = 0
+				*(*uint64)(unsafe.Add(unsafe.Pointer(&keys[i]), keyOffs[i]+1)) =
+					keycodec.CanonicalFloat64Bits(values[i+start])
+			}
+			uint32AddScalar(1+uint32(types.T_float64.TypeLen()), keyOffs[:n], keyOffs[:n])
+		} else {
+			for i := 0; i < n; i++ {
+				*(*uint64)(unsafe.Add(unsafe.Pointer(&keys[i]), keyOffs[i])) =
+					keycodec.CanonicalFloat64Bits(values[i+start])
+			}
+			uint32AddScalar(uint32(types.T_float64.TypeLen()), keyOffs[:n], keyOffs[:n])
+		}
+		return
+	}
+
+	nsp := vec.GetNulls()
+	if itr.mp.hasNull {
+		for i := 0; i < n; i++ {
+			if nsp.Contains(uint64(i + start)) {
+				*(*int8)(unsafe.Add(unsafe.Pointer(&keys[i]), keyOffs[i])) = 1
+				keyOffs[i]++
+			} else {
+				*(*int8)(unsafe.Add(unsafe.Pointer(&keys[i]), keyOffs[i])) = 0
+				*(*uint64)(unsafe.Add(unsafe.Pointer(&keys[i]), keyOffs[i]+1)) =
+					keycodec.CanonicalFloat64Bits(values[i+start])
+				keyOffs[i] += 1 + uint32(types.T_float64.TypeLen())
+			}
+		}
+	} else {
+		for i := 0; i < n; i++ {
+			if nsp.Contains(uint64(i + start)) {
+				itr.zValues[i] = 0
+				continue
+			}
+			*(*uint64)(unsafe.Add(unsafe.Pointer(&keys[i]), keyOffs[i])) =
+				keycodec.CanonicalFloat64Bits(values[i+start])
+			keyOffs[i] += uint32(types.T_float64.TypeLen())
 		}
 	}
 }
@@ -305,15 +556,17 @@ func (m *IntHashMap) UnmarshalBinary(data []byte, mp *mpool.MPool) error {
 func (m *IntHashMap) WriteTo(w io.Writer) (int64, error) {
 	var n int64
 
-	// Serialize hasNull (1 byte)
+	// Historical payloads used 0/1 for hasNull. Bit one extends that byte with
+	// the join-only NaN admission contract while keeping old payloads readable.
+	flags := byte(0)
 	if m.hasNull {
-		if _, err := w.Write([]byte{1}); err != nil {
-			return 0, err
-		}
-	} else {
-		if _, err := w.Write([]byte{0}); err != nil {
-			return 0, err
-		}
+		flags |= 1
+	}
+	if m.rejectNaN {
+		flags |= 2
+	}
+	if _, err := w.Write([]byte{flags}); err != nil {
+		return 0, err
 	}
 	n++
 
@@ -338,14 +591,18 @@ func (m *IntHashMap) WriteTo(w io.Writer) (int64, error) {
 func (m *IntHashMap) UnmarshalFrom(r io.Reader, mp *mpool.MPool) (int64, error) {
 	var n int64
 
-	// Deserialize hasNull
+	// Deserialize key-domain flags.
 	b := make([]byte, 1)
 	rn, err := io.ReadFull(r, b)
 	if err != nil {
 		return 0, err
 	}
 	n += int64(rn)
-	m.hasNull = b[0] == 1
+	if b[0]&^byte(3) != 0 {
+		return 0, mpool.ErrAllocationAccountInvalid
+	}
+	m.hasNull = b[0]&1 != 0
+	m.rejectNaN = b[0]&2 != 0
 
 	// Deserialize rows
 	rowsData := make([]byte, 8)

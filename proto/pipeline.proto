@@ -35,6 +35,7 @@ enum Method {
   StopSending = 4;
   PipelineStreamFinish = 5;
   PipelineStreamFinishAck = 6;
+  PipelineBatchAck = 7;
 }
 
 // StreamTeardownMode negotiates whether a completed logical pipeline stream can
@@ -53,6 +54,7 @@ enum Status {
 }
 
 message Message {
+  option (gogoproto.goproto_stringer) = false;
   Status sid = 1;
   Method cmd = 2;
   bytes err = 3;
@@ -65,6 +67,12 @@ message Message {
   string debugMsg = 10;
   StreamTeardownMode requested_teardown_mode = 11;
   StreamTeardownMode accepted_teardown_mode = 12;
+  uint32 requested_batch_credit_count = 13;
+  uint64 requested_batch_credit_bytes = 14;
+  uint32 accepted_batch_credit_count = 15;
+  uint64 accepted_batch_credit_bytes = 16;
+  uint64 batch_sequence = 17;
+  uint64 batch_ack_sequence = 18;
 }
 
 message Connector {
@@ -82,6 +90,7 @@ message Shuffle {
   repeated int64 shuffle_ranges_int64 = 7;
   plan.RuntimeFilterSpec runtimeFilterSpec = 8;
   plan.Expr ShuffleExpr = 9;
+  bool drain_all_buckets = 10;
 }
 
 message Dispatch {
@@ -116,6 +125,7 @@ message Aggregate {
   bool dist = 2;
   repeated plan.Expr expr = 3;
   bytes config = 4;
+  plan.AggregateConfigType config_type = 5;
 }
 
 message Group {
@@ -130,6 +140,8 @@ message Group {
   repeated uint32 PartialResultTypes = 9;
   repeated bool grouping_flag = 10;
   int64 spill_mem = 11;
+  // Positions in exprs used for physical hash/equality. Empty means all exprs.
+  repeated int32 group_by_hash_key = 12;
 }
 
 message Insert {
@@ -160,6 +172,7 @@ message MultiUpdate {
   uint64 affected_rows = 1;
   uint32 Action = 2;
   repeated plan.UpdateCtx update_ctx_list = 3;
+  bool reject_zero_temporal = 4;
 }
 
 message Array {
@@ -200,6 +213,7 @@ message PreInsert {
   plan.Expr cluster_by_expr = 9;
   bool is_old_update = 10;
   bool is_new_update = 11;
+  bool reject_zero_temporal = 12;
 }
 
 message PostDml {
@@ -249,6 +263,7 @@ message FuzzyFilter {
   plan.Type PkTyp = 3 [(gogoproto.nullable) = false];
   int32 BuildIdx = 4;
   bool IfInsertFromUnique = 5;
+  plan.RuntimeFilterSpec runtime_filter_spec = 6;
 }
 
 message HashJoin {
@@ -357,6 +372,8 @@ message TableFunction {
   bool is_single = 6;
   plan.IndexReaderParam index_reader_param = 7;
   repeated plan.RuntimeFilterSpec runtime_filter_probe_list = 8;
+  plan.ObjectRef fulltext_source_ref = 9;
+  plan.ObjectRef fulltext_index_ref = 10;
 }
 
 message ExternalName2ColIndex {
@@ -376,7 +393,74 @@ message parquet_row_group_shard {
   int64 bytes = 5;
 }
 
+message IcebergDataFileTask {
+  option (gogoproto.goproto_stringer) = false;
+  string file_path = 1;
+  string file_format = 2;
+  int64 file_size = 3;
+  int64 record_count = 4;
+  int32 partition_spec_id = 5;
+  map<string, string> partition_values = 6;
+  repeated int64 split_offsets = 7;
+  int32 row_group_start = 8;
+  int32 row_group_end = 9;
+  string credential_scope = 10;
+  int64 content_sequence_number = 11;
+  int64 file_sequence_number = 12;
+  bool has_residual_filter = 13;
+  string residual_filter_hash = 14;
+}
+
+message IcebergDeleteFileTask {
+  option (gogoproto.goproto_stringer) = false;
+  string delete_type = 1;
+  string delete_file_path = 2;
+  string referenced_data_file = 3;
+  repeated int32 equality_field_ids = 4;
+  int32 delete_schema_id = 5;
+  int32 partition_spec_id = 6;
+  int64 sequence_number = 7;
+  string credential_scope = 8;
+}
+
+message IcebergColumnMapping {
+  int32 mo_col_index = 1;
+  int32 iceberg_field_id = 2;
+  string snapshot_field_name = 3;
+  string current_field_name = 4;
+  plan.Type mo_type = 5;
+  bool required = 6;
+  bool is_hidden = 7;
+  bool default_null_fill = 8;
+  string parquet_path_hint = 9;
+}
+
+message IcebergSnapshotRuntime {
+  int64 snapshot_id = 1;
+  int32 schema_id = 2;
+  repeated int32 partition_spec_ids = 3;
+  string metadata_location_hash = 4;
+  string manifest_list_hash = 5;
+  string ref_name = 6;
+  string planning_mode = 7;
+}
+
+message IcebergPlanningStats {
+  int64 metadata_bytes = 1;
+  int64 manifest_list_bytes = 2;
+  int64 manifest_bytes = 3;
+  int64 manifests_selected = 4;
+  int64 manifests_pruned = 5;
+  int64 data_files_selected = 6;
+  int64 data_files_pruned = 7;
+  int64 data_file_bytes_selected = 8;
+  int64 data_file_bytes_pruned = 9;
+  int64 planning_cache_hits = 10;
+  int64 planning_cache_miss = 11;
+}
+
 message ExternalScan {
+  option (gogoproto.goproto_stringer) = false;
   repeated plan.ExternAttr attrs = 1 [(gogoproto.nullable) = false];
   repeated int64 file_size = 2;
   repeated file_offset file_offset_total = 3;
@@ -390,12 +474,16 @@ message ExternalScan {
   bool parallel_load = 11;
   bool load_empty_numeric_as_zero = 12;
   repeated parquet_row_group_shard parquet_row_group_shards = 13;
-}
-
-message StreamScan {
-  plan.TableDef tbl_def = 1;
-  int64 offset = 2;
-  int64 limit = 3;
+  repeated IcebergDataFileTask iceberg_data_tasks = 14;
+  repeated IcebergDeleteFileTask iceberg_delete_tasks = 15;
+  repeated IcebergColumnMapping iceberg_columns = 16;
+  IcebergSnapshotRuntime iceberg_snapshot = 17;
+  string iceberg_object_io_ref = 18;
+  repeated int32 iceberg_hidden_read_columns = 19;
+  bool need_row_ordinal = 20;
+  IcebergPlanningStats iceberg_planning_stats = 21;
+  int64 iceberg_delete_max_memory_bytes = 22;
+  bool iceberg_delete_spill_enabled = 23;
 }
 
 message TableScan {
@@ -448,6 +536,7 @@ message SampleFunc {
 }
 
 message Instruction {
+  option (gogoproto.goproto_stringer) = false;
   // Op specified the operator code of an instruction.
   int32 op = 1;
   // Idx specified the anaylze information index.
@@ -485,7 +574,8 @@ message Instruction {
   LockOp lock_op = 33;
   Shuffle shuffle = 34;
   Merge merge = 35;
-  StreamScan stream_scan = 36;
+  reserved 36; // former stream_scan
+  reserved "stream_scan";
   PreInsertSecondaryIndex pre_insert_secondary_index = 37;
   SampleFunc sample_func = 38;
   FuzzyFilter fuzzy_filter = 39;
@@ -505,6 +595,10 @@ message Instruction {
   MultiUpdate multi_update = 52;
   PostDml post_dml = 53;
   int64 spill_mem = 54;
+  plan.MongoScan mongodb_scan = 55;
+  // FILTER only: execute assertion expressions for their error side effect and
+  // pass the input batch through without building a selection vector.
+  bool filter_is_assert = 56;
 }
 
 message AnalysisList {
@@ -543,6 +637,7 @@ message ProcessLimitation {
   int64 batch_size = 3;
   int64 partition_rows = 4;
   int64 reader_size = 5;
+  int64 spill_size = 6;
 }
 
 message PrepareParamInfo {
@@ -550,6 +645,7 @@ message PrepareParamInfo {
   bytes data = 2;
   bytes area = 3;
   repeated bool nulls = 4;
+  repeated bool is_bin = 5;
 }
 
 message ProcessInfo {
@@ -563,6 +659,20 @@ message ProcessInfo {
   SessionLoggerInfo session_logger = 8 [(gogoproto.nullable) = false];
   PrepareParamInfo prepare_params = 9 [(gogoproto.nullable) = false];
   int64 affected_rows = 10;
+  // Planned PipelineMessage RPCs per target CN for statement-level remote
+  // MessageBoard and resource-account terminal ownership.
+  map<string, uint32> remote_fragment_counts = 11;
+  // Unique physical execution attempt. Unlike the SQL statement ID, this
+  // changes across retries and prepared-statement executions.
+  bytes remote_execution_id = 12;
+  // Statement-level INSERT IGNORE semantics used by casts in remote pipelines.
+  // Absent in messages from older CNs, which safely decodes as false.
+  bool statement_runtime_ignore = 13;
+  // Snapshot against which this execution generation's plan was bound. It is
+  // immutable for the generation even when RC lock handling advances the
+  // transaction snapshot. Absent on older senders, receivers fall back to the
+  // transaction snapshot for rolling-upgrade compatibility.
+  timestamp.Timestamp plan_snapshot_ts = 14;
 }
 
 message SessionInfo {
@@ -576,6 +686,10 @@ message SessionInfo {
   string account = 8;
   repeated string query_id = 9;
   int64 lock_wait_timeout = 10;
+  bool lock_wait_timeout_set = 11;
+  bool matrixone_native_mode = 12;
+  bool explicit_zero_temporal_cast_returns_null = 13;
+  string sql_mode = 14;
 }
 
 message SessionLoggerInfo {
@@ -595,6 +709,7 @@ message SessionLoggerInfo {
 }
 
 message Pipeline {
+  option (gogoproto.goproto_stringer) = false;
   enum PipelineType {
     Merge = 0;
     Normal = 1;

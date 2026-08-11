@@ -78,8 +78,8 @@ id    body    title
 4    遠東兒童中文是針對6到9歲的小朋友精心設計的中文學習教材，共三冊，目前已出版一、二冊。    遠東兒童中文
 select *, match(body, title) against('遠東兒童中文' in natural language mode) as score from src;
 id    body    title    score
-4    遠東兒童中文是針對6到9歲的小朋友精心設計的中文學習教材，共三冊，目前已出版一、二冊。    遠東兒童中文    1.4499049
-5    每冊均採用近百張全幅彩圖及照片，生動活潑、自然真實，加深兒童學習印象，洋溢學習樂趣。    遠東兒童中文    0.72495246
+4    遠東兒童中文是針對6到9歲的小朋友精心設計的中文學習教材，共三冊，目前已出版一、二冊。    遠東兒童中文    1.9542363
+5    每冊均採用近百張全幅彩圖及照片，生動活潑、自然真實，加深兒童學習印象，洋溢學習樂趣。    遠東兒童中文    0.97711813
 select *, match(body) against('遠東兒童中文' in natural language mode) as score from src;
 id    body    title    score
 4    遠東兒童中文是針對6到9歲的小朋友精心設計的中文學習教材，共三冊，目前已出版一、二冊。    遠東兒童中文    1.8211576
@@ -125,8 +125,8 @@ select * from src where match(body, title) against('"blue is red"' in boolean mo
 id    body    title
 select src.*, match(body, title) against('blue') from src;
 id    body    title    MATCH (body, title) AGAINST (blue)
-2    sky is blue    no limit    0.36247623
-3    blue is not red    colorful    0.36247623
+2    sky is blue    no limit    0.48855907
+3    blue is not red    colorful    0.48855907
 select count(*) from src where match(title, body) against('red');
 count(*)
 2
@@ -185,8 +185,8 @@ id    body    title
 4    遠東兒童中文是針對6到9歲的小朋友精心設計的中文學習教材，共三冊，目前已出版一、二冊。    遠東兒童中文
 select *, match(body, title) against('遠東兒童中文' in natural language mode) as score from src;
 id    body    title    score
-4    遠東兒童中文是針對6到9歲的小朋友精心設計的中文學習教材，共三冊，目前已出版一、二冊。    遠東兒童中文    1.4499049
-5    每冊均採用近百張全幅彩圖及照片，生動活潑、自然真實，加深兒童學習印象，洋溢學習樂趣。    遠東兒童中文    0.72495246
+4    遠東兒童中文是針對6到9歲的小朋友精心設計的中文學習教材，共三冊，目前已出版一、二冊。    遠東兒童中文    1.9542363
+5    每冊均採用近百張全幅彩圖及照片，生動活潑、自然真實，加深兒童學習印象，洋溢學習樂趣。    遠東兒童中文    0.97711813
 select *, match(body) against('遠東兒童中文' in natural language mode) as score from src;
 id    body    title    score
 4    遠東兒童中文是針對6到9歲的小朋友精心設計的中文學習教材，共三冊，目前已出版一、二冊。    遠東兒童中文    1.8211576
@@ -219,8 +219,8 @@ id    body    title
 3    blue is not red    colorful
 select src.*, match(body, title) against('blue') from src;
 id    body    title    MATCH (body, title) AGAINST (blue)
-2    sky is blue    no limit    0.36247623
-3    blue is not red    colorful    0.36247623
+2    sky is blue    no limit    0.48855907
+3    blue is not red    colorful    0.48855907
 select count(*) from src where match(title, body) against('red');
 count(*)
 2
@@ -366,8 +366,8 @@ id    body    title
 4    遠東兒童中文是針對6到9歲的小朋友精心設計的中文學習教材，共三冊，目前已出版一、二冊。    遠東兒童中文
 select *, match(body, title) against('遠東兒童中文' in natural language mode) as score from src;
 id    body    title    score
-4    遠東兒童中文是針對6到9歲的小朋友精心設計的中文學習教材，共三冊，目前已出版一、二冊。    遠東兒童中文    1.4499049
-5    每冊均採用近百張全幅彩圖及照片，生動活潑、自然真實，加深兒童學習印象，洋溢學習樂趣。    遠東兒童中文    0.72495246
+4    遠東兒童中文是針對6到9歲的小朋友精心設計的中文學習教材，共三冊，目前已出版一、二冊。    遠東兒童中文    1.9542363
+5    每冊均採用近百張全幅彩圖及照片，生動活潑、自然真實，加深兒童學習印象，洋溢學習樂趣。    遠東兒童中文    0.97711813
 select * from src where match(body, title) against('+red blue' in boolean mode);
 id    body    title
 3    blue is not red    colorful
@@ -397,8 +397,8 @@ id    body    title
 3    blue is not red    colorful
 select src.*, match(body, title) against('blue') from src;
 id    body    title    MATCH (body, title) AGAINST (blue)
-2    sky is blue    no limit    0.36247623
-3    blue is not red    colorful    0.36247623
+2    sky is blue    no limit    0.48855907
+3    blue is not red    colorful    0.48855907
 select count(*) from src where match(title, body) against('red');
 count(*)
 2
@@ -424,6 +424,7 @@ id    body    title
 insert into src (id, body) values (11, 'color is brown');
 select * from src where match(body, title) against('brown');
 id    body    title
+11    color is brown    null
 update src set title='a good title' where id=11;
 select * from src where match(body, title) against('brown');
 id    body    title
@@ -577,6 +578,64 @@ id
 select id from src where match(body) against('+读书会 +提效 +社群 +案例 +运营' IN BOOLEAN MODE);
 id
 1
+prepare ft_stmt from 'select id from src where match(body) against(? IN BOOLEAN MODE) order by id';
+set @q = '+读书会 +提效 +社群 +案例 +运营';
+execute ft_stmt using @q;
+id
+1
+set @q = '';
+execute ft_stmt using @q;
+invalid input: fulltext search pattern must not be empty
+set @q = '+读书会';
+execute ft_stmt using @q;
+id
+1
+set @q = null;
+execute ft_stmt using @q;
+invalid input: fulltext search pattern must not be NULL
+set @q = '+读书会 +提效 +社群 +案例 +运营';
+execute ft_stmt using @q;
+id
+1
+deallocate prepare ft_stmt;
+prepare ft_nl_stmt from 'select id from src where match(body) against(? IN NATURAL LANGUAGE MODE) order by id';
+set @q = '肥胖的原因都是因为摄入脂肪多导致的吗';
+execute ft_nl_stmt using @q;
+id
+2
+set @q = '';
+execute ft_nl_stmt using @q;
+invalid input: fulltext search pattern must not be empty
+set @q = '肥胖的原因都是因为摄入脂肪多导致的吗';
+execute ft_nl_stmt using @q;
+id
+2
+set @q = null;
+execute ft_nl_stmt using @q;
+invalid input: fulltext search pattern must not be NULL
+set @q = '肥胖的原因都是因为摄入脂肪多导致的吗';
+execute ft_nl_stmt using @q;
+id
+2
+deallocate prepare ft_nl_stmt;
+prepare ft_qe_stmt from 'select id from src where match(body) against(? WITH QUERY EXPANSION) order by id';
+set @q = '肥胖的原因都是因为摄入脂肪多导致的吗';
+execute ft_qe_stmt using @q;
+internal error: Query Expansion mode not supported
+deallocate prepare ft_qe_stmt;
+prepare ft_multi_stmt from 'select id from src where match(body) against(? IN BOOLEAN MODE) and match(body) against(? IN BOOLEAN MODE) order by id';
+set @q1 = '+读书会';
+set @q2 = '+社群';
+execute ft_multi_stmt using @q1, @q2;
+id
+1
+deallocate prepare ft_multi_stmt;
+prepare ft_mixed_stmt from 'select id from src where match(body) against(''+读书会'' IN BOOLEAN MODE) and match(body) against(? IN BOOLEAN MODE) order by id';
+set @q = '+运营';
+execute ft_mixed_stmt using @q;
+id
+1
+deallocate prepare ft_mixed_stmt;
 select id from src where match(body) against('肥胖的原因都是因为摄入fat多导致的吗' IN NATURAL LANGUAGE MODE);
 id
 3

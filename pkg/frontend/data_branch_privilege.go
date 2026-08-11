@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/frontend/databranchutils"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
@@ -219,6 +220,19 @@ func authenticateDataBranchDiff(
 	stats.Add(&delta)
 	if err != nil {
 		return stats, err
+	}
+	if stmt.OutputOpt != nil && stmt.OutputOpt.As.ObjectName != "" {
+		outputDBName, err := branchDatabaseName(ctx, ses, stmt.OutputOpt.As.SchemaName.String())
+		if err != nil {
+			return stats, err
+		}
+		delta, err = requireAllBranchPrivileges(ctx, ses, []branchPrivilegeRequirement{
+			branchCreateTableRequirement(outputDBName),
+		})
+		stats.Add(&delta)
+		if err != nil {
+			return stats, err
+		}
 	}
 	return stats, nil
 }
@@ -743,9 +757,10 @@ func validateActiveBranchChildTableIDs(
 		}
 
 		sql := fmt.Sprintf(
-			"select table_id from %s.%s where table_deleted = false and table_id in (%s)",
+			"select table_id from %s.%s where table_deleted = false and level != '%s' and table_id in (%s)",
 			catalog.MO_CATALOG,
 			catalog.MO_BRANCH_METADATA,
+			databranchutils.AlterLineageLevel,
 			formatUintList(idList[start:end]),
 		)
 		sqlRet, err := runSql(sysCtx, ses, bh, sql, nil, nil)

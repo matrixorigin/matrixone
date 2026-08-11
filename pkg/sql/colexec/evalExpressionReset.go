@@ -60,6 +60,10 @@ type functionInformationForEval struct {
 		selectList *function.FunctionSelectList) error
 	resetFn func() error
 	freeFn  func() error
+
+	// retainedBytesFn reports stateful function backing allocations which are
+	// not represented by the executor's owned vectors.
+	retainedBytesFn func() uint64
 }
 
 func (fI *functionInformationForEval) reset() {
@@ -80,7 +84,7 @@ func (fI *functionInformationForEval) reset() {
 	if fI.evalFn != nil {
 		// we can set the context nil here since this function will never return an error.
 		overload, _ := function.GetFunctionById(context.TODO(), fI.overloadID)
-		fI.evalFn, fI.resetFn, fI.freeFn = overload.GetExecuteMethod()
+		fI.evalFn, fI.resetFn, fI.freeFn, fI.retainedBytesFn = overload.GetExecuteMethod()
 	}
 }
 
@@ -89,6 +93,7 @@ func (expr *FunctionExpressionExecutor) ResetForNextQuery() {
 	expr.folded.reset(expr.m)
 	// reset the function information.
 	expr.functionInformationForEval.reset()
+	expr.freeIffNullResults()
 
 	// reset its parameters.
 	for i, param := range expr.parameterExecutor {
@@ -98,6 +103,15 @@ func (expr *FunctionExpressionExecutor) ResetForNextQuery() {
 
 		expr.parameterResults[i] = nil
 		param.ResetForNextQuery()
+	}
+}
+
+func (expr *FunctionExpressionExecutor) freeIffNullResults() {
+	for i, result := range expr.iffNullResults {
+		if result != nil {
+			result.Free(expr.m)
+			expr.iffNullResults[i] = nil
+		}
 	}
 }
 
@@ -155,10 +169,13 @@ func (expr *FunctionExpressionExecutor) tryFoldFlowControl(
 		if err != nil || !folded {
 			return folded, err
 		}
-		condition := vector.GenerateFunctionFixedTypeParameter[bool](expr.parameterResults[0])
-		value, isNull := condition.GetValue(0)
+		value, err := function.IffConditionTruthyAt(
+			expr.parameterResults[0], 0, function.CompatibilityModeFromProcess(proc))
+		if err != nil {
+			return false, err
+		}
 		selected := 2
-		if !isNull && value {
+		if value {
 			selected = 1
 		}
 		return expr.tryFoldParameter(proc, atRuntime, selected)
@@ -309,6 +326,7 @@ func (expr *ParamExpressionExecutor) ResetForNextQuery() {
 		expr.vec.CleanOnlyData()
 	}
 	expr.folded = false
+	expr.foldedNull = false
 }
 
 func (expr *VarExpressionExecutor) ResetForNextQuery() {

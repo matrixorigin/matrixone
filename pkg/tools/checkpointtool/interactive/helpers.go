@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
 )
 
@@ -65,4 +66,111 @@ func formatSize(bytes uint32) string {
 		exp++
 	}
 	return fmt.Sprintf("%.1f%cB", float64(bytes)/float64(div), "KMGTPE"[exp])
+}
+
+func parseSize(s string) uint32 {
+	var val float64
+	var unit string
+	fmt.Sscanf(s, "%f%s", &val, &unit)
+	switch unit {
+	case "KB":
+		return uint32(val * 1024)
+	case "MB":
+		return uint32(val * 1024 * 1024)
+	case "GB":
+		return uint32(val * 1024 * 1024 * 1024)
+	case "B":
+		return uint32(val)
+	default:
+		return uint32(val)
+	}
+}
+
+func expandObjectStats(value any) []any {
+	data, ok := value.([]byte)
+	if !ok || len(data) != objectio.ObjectStatsLen {
+		return []any{"", "", "", "", ""}
+	}
+
+	var stats objectio.ObjectStats
+	stats.UnMarshal(data)
+
+	flags := ""
+	if stats.GetAppendable() {
+		flags += "A"
+	}
+	if stats.GetSorted() {
+		flags += "S"
+	}
+	if stats.GetCNCreated() {
+		flags += "C"
+	}
+	if flags == "" {
+		flags = "-"
+	}
+
+	return []any{
+		stats.ObjectName().String(),
+		flags,
+		stats.Rows(),
+		formatSize(stats.OriginSize()),
+		formatSize(stats.Size()),
+	}
+}
+
+func ckpDataOverview(rows [][]string) string {
+	if len(rows) == 0 {
+		return "No data"
+	}
+
+	type objStats struct {
+		rows  uint32
+		osize uint32
+		csize uint32
+	}
+	dataObjs := make(map[string]*objStats)
+	tombObjs := make(map[string]*objStats)
+
+	for _, row := range rows {
+		if len(row) < 9 {
+			continue
+		}
+		objType := row[3]
+		objName := row[4]
+		rowsStr := row[6]
+		osize := parseSize(row[7])
+		csize := parseSize(row[8])
+
+		var rowCount uint32
+		fmt.Sscanf(rowsStr, "%d", &rowCount)
+
+		if objType == "1" {
+			if _, exists := dataObjs[objName]; !exists {
+				dataObjs[objName] = &objStats{rows: rowCount, osize: osize, csize: csize}
+			}
+		} else if objType == "2" {
+			if _, exists := tombObjs[objName]; !exists {
+				tombObjs[objName] = &objStats{rows: rowCount, osize: osize, csize: csize}
+			}
+		}
+	}
+
+	var totalRows, totalDeletes, totalOsize, totalCsize uint32
+	for _, s := range dataObjs {
+		totalRows += s.rows
+		totalOsize += s.osize
+		totalCsize += s.csize
+	}
+	for _, s := range tombObjs {
+		totalDeletes += s.rows
+	}
+
+	ratio := float64(0)
+	if totalOsize > 0 {
+		ratio = float64(totalCsize) / float64(totalOsize) * 100
+	}
+
+	return fmt.Sprintf("%d ranges │ %d data objs │ %d tomb objs │ %d rows │ %d deletes │ osize: %s │ csize: %s │ ratio: %.1f%%",
+		len(rows), len(dataObjs), len(tombObjs), totalRows, totalDeletes,
+		formatSize(totalOsize), formatSize(totalCsize), ratio)
 }

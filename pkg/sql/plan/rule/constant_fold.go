@@ -147,6 +147,7 @@ func (r *ConstantFold) constantFold(expr *plan.Expr, proc *process.Process) *pla
 			if cannotFold {
 				return expr
 			}
+			isSerialized := ContainsSerializedLiteral(exprList)
 
 			vec, err := colexec.GenerateConstListExpressionExecutor(proc, exprList)
 			if err != nil {
@@ -168,8 +169,9 @@ func (r *ConstantFold) constantFold(expr *plan.Expr, proc *process.Process) *pla
 				Typ: expr.Typ,
 				Expr: &plan.Expr_Vec{
 					Vec: &plan.LiteralVec{
-						Len:  int32(vec.Length()),
-						Data: data,
+						Len:          int32(vec.Length()),
+						Data:         data,
+						IsSerialized: isSerialized,
 					},
 				},
 			}
@@ -193,6 +195,9 @@ func (r *ConstantFold) constantFold(expr *plan.Expr, proc *process.Process) *pla
 	for i := range fn.Args {
 		fn.Args[i] = r.constantFold(fn.Args[i], proc)
 		isVec = isVec || fn.Args[i].GetVec() != nil
+	}
+	if r.isPrepared && isSqlModeDependentTemporalCast(fn) {
+		return expr
 	}
 	if f.IsAgg() || f.IsWin() {
 		return expr
@@ -234,6 +239,8 @@ func (r *ConstantFold) constantFold(expr *plan.Expr, proc *process.Process) *pla
 	if c == nil {
 		return expr
 	}
+
+	MarkFoldedLiteralSerialized(overloadID, fn.Args, c)
 
 	if f.IsRealTimeRelated() {
 		c.Src = &plan.Expr{
@@ -440,7 +447,8 @@ func GetConstantValue(vec *vector.Vector, transAll bool, row uint64) *plan.Liter
 		decimalValue.A = int64(vector.MustFixedColNoTypeCheck[types.Decimal128](vec)[row].B0_63)
 		decimalValue.B = int64(vector.MustFixedColNoTypeCheck[types.Decimal128](vec)[row].B64_127)
 		return &plan.Literal{Value: &plan.Literal_Decimal128Val{Decimal128Val: decimalValue}}
-	case types.T_array_float32, types.T_array_float64:
+	case types.T_array_float32, types.T_array_float64,
+		types.T_array_bf16, types.T_array_float16, types.T_array_int8, types.T_array_uint8:
 		data := vec.GetStringAt(int(row))
 		return &plan.Literal{
 			Value: &plan.Literal_VecVal{
@@ -577,7 +585,8 @@ func GetConstantValue2(proc *process.Process, expr *plan.Expr, vec *vector.Vecto
 				err = vector.AppendBytes(vec, nil, false, proc.Mp())
 				return false, err
 			}
-		case types.T_array_float32, types.T_array_float64:
+		case types.T_array_float32, types.T_array_float64,
+			types.T_array_bf16, types.T_array_float16, types.T_array_int8, types.T_array_uint8:
 			if val, ok := cExpr.Lit.Value.(*plan.Literal_VecVal); ok {
 				val := val.VecVal
 				err = vector.AppendBytes(vec, []byte(val), false, proc.Mp())
@@ -624,7 +633,7 @@ func GetConstantValue2(proc *process.Process, expr *plan.Expr, vec *vector.Vecto
 			}
 		case types.T_enum:
 			if val, ok := cExpr.Lit.Value.(*plan.Literal_EnumVal); ok {
-				val := val.EnumVal
+				val := types.Enum(val.EnumVal)
 				err = vector.AppendFixed(vec, val, false, proc.GetMPool())
 				return true, err
 			} else {
@@ -655,6 +664,73 @@ func GetConstantValue2(proc *process.Process, expr *plan.Expr, vec *vector.Vecto
 	} else {
 		err = vector.AppendBytes(vec, nil, true, proc.Mp())
 		return false, err
+	}
+}
+
+// MarkFoldedLiteralSerialized preserves tuple-encoding provenance across
+// constant folding. A direct serial result always acquires provenance. An
+// outer function retains it only when its output bytes exactly match a marked
+// input literal, which covers representation-preserving casts and selectors
+// without incorrectly marking transformed values. IsBin remains reserved for
+// SQL hex and bit literal execution semantics.
+func MarkFoldedLiteralSerialized(overloadID int64, args []*plan.Expr, literal *plan.Literal) {
+	if literal == nil || literal.Isnull {
+		return
+	}
+
+	canonicalOverloadID := overloadID & function.DistinctMask
+	if canonicalOverloadID == function.SerialFunctionEncodeID ||
+		canonicalOverloadID == function.SerialFullFunctionEncodeID {
+		literal.IsSerialized = true
+		return
+	}
+
+	result, ok := literal.Value.(*plan.Literal_Sval)
+	if !ok {
+		return
+	}
+	for _, arg := range args {
+		input := arg.GetLit()
+		if input == nil || !input.IsSerialized {
+			continue
+		}
+		if serialized, ok := input.Value.(*plan.Literal_Sval); ok &&
+			serialized.Sval == result.Sval {
+			literal.IsSerialized = true
+			return
+		}
+	}
+}
+
+// ContainsSerializedLiteral reports whether folding a literal list into a
+// LiteralVec must retain tuple-encoding provenance for diagnostic consumers.
+func ContainsSerializedLiteral(exprs []*plan.Expr) bool {
+	for _, expr := range exprs {
+		if literal := expr.GetLit(); literal != nil && literal.IsSerialized {
+			return true
+		}
+	}
+	return false
+}
+
+func isSqlModeDependentTemporalCast(fn *plan.Function) bool {
+	functionID, _ := function.DecodeOverloadID(fn.Func.GetObj())
+	if functionID != function.CAST || len(fn.Args) != 2 {
+		return false
+	}
+
+	switch types.T(fn.Args[0].Typ.Id) {
+	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary,
+		types.T_blob, types.T_text, types.T_datalink:
+	default:
+		return false
+	}
+
+	switch types.T(fn.Args[1].Typ.Id) {
+	case types.T_date, types.T_datetime, types.T_timestamp:
+		return true
+	default:
+		return false
 	}
 }
 

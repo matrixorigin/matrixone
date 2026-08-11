@@ -103,7 +103,7 @@ func validatePartitionValue(strVal, colName string, colType tree.HivePartColType
 	if typ == types.T_any {
 		return nil
 	}
-	vec := vector.NewVec(types.New(typ, colType.Width, colType.Scale))
+	vec := vector.NewVec(types.NewWithCharset(typ, colType.Width, colType.Scale, uint8(colType.Charset)))
 	col := &plan.ColDef{
 		Name: colName,
 		Typ: plan.Type{
@@ -111,6 +111,7 @@ func validatePartitionValue(strVal, colName string, colType tree.HivePartColType
 			Width:       colType.Width,
 			Scale:       colType.Scale,
 			Enumvalues:  colType.Enumvalues,
+			Charset:     colType.Charset,
 			NotNullable: !colType.NullAbility,
 		},
 		Default: &plan.Default{NullAbility: colType.NullAbility},
@@ -362,7 +363,9 @@ func fillConstantVector(
 		}
 		return vector.SetConstFixed(vec, v, rowCount, mp)
 
-	case types.T_array_float32, types.T_array_float64:
+	case types.T_array_float32, types.T_array_float64,
+		types.T_array_bf16, types.T_array_float16,
+		types.T_array_int8, types.T_array_uint8:
 		return moerr.NewNotSupportedf(proc.Ctx,
 			"unsupported partition column type VECTOR for col=%s, path=%s", col.Name, filePath)
 

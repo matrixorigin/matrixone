@@ -45,8 +45,10 @@ func (c arrayCompare) Copy(vecSrc, vecDst int, src, dst int64, proc *process.Pro
 }
 
 func (c arrayCompare) Compare(veci, vecj int, vi, vj int64) int {
-	n0 := c.isConstNull[veci] || c.vs[veci].GetNulls().Contains(uint64(vi))
-	n1 := c.isConstNull[vecj] || c.vs[vecj].GetNulls().Contains(uint64(vj))
+	n0 := c.isConstNull[veci] || c.vs[veci].GetNulls().Contains(uint64(vi)) ||
+		c.vs[veci].GetGrouping().Contains(uint64(vi))
+	n1 := c.isConstNull[vecj] || c.vs[vecj].GetNulls().Contains(uint64(vj)) ||
+		c.vs[vecj].GetGrouping().Contains(uint64(vj))
 	cmp := nullsCompare(n0, n1, c.nullsLast)
 	if cmp != 0 {
 		return cmp - nullsCompareFlag
@@ -59,6 +61,14 @@ func (c arrayCompare) Compare(veci, vecj int, vi, vj int64) int {
 		return types.CompareArrayFromBytes[float32](_x, _y, c.desc)
 	case types.T_array_float64:
 		return types.CompareArrayFromBytes[float64](_x, _y, c.desc)
+	case types.T_array_bf16:
+		return types.CompareArrayElementFromBytes[types.BF16](_x, _y, c.desc)
+	case types.T_array_float16:
+		return types.CompareArrayElementFromBytes[types.Float16](_x, _y, c.desc)
+	case types.T_array_int8:
+		return types.CompareArrayElementFromBytes[int8](_x, _y, c.desc)
+	case types.T_array_uint8:
+		return types.CompareArrayElementFromBytes[uint8](_x, _y, c.desc)
 	default:
 		panic("Compare Not supported")
 	}

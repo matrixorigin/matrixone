@@ -17,6 +17,7 @@ package output
 import (
 	"bytes"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -26,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/util/resource"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -128,6 +130,30 @@ func TestOutput(t *testing.T) {
 		tc.proc.Free()
 		require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
 	}
+}
+
+func TestOutputCallbackCPUIsNotOutputWait(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	arg := &Output{
+		Func: func(_ *batch.Batch, _ *perfcounter.CounterSet) error {
+			time.Sleep(time.Millisecond)
+			return nil
+		},
+	}
+	require.NoError(t, arg.Prepare(proc))
+	bat := newBatch([]types.Type{types.T_int8.ToType()}, proc, 1)
+	resetChildren(arg, []*batch.Batch{bat})
+
+	_, err := vm.Exec(arg, proc)
+	require.NoError(t, err)
+	delta := arg.OpAnalyzer.GetOpStats().ResourceDelta()
+	require.Zero(t, delta.Usage.WaitNS[resource.WaitOutput])
+	require.Positive(t, delta.Usage.ExclusiveActiveNS)
+
+	arg.GetChildren(0).Free(proc, false, nil)
+	arg.Free(proc, false, nil)
+	proc.Free()
+	require.Zero(t, proc.Mp().CurrNB())
 }
 
 // create a new block based on the type information

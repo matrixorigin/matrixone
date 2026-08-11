@@ -61,6 +61,98 @@ from t force index for order by(idx_a_b_c_id)
 order by a,b,c,id
 limit 8;
 
+-- Regression #26814: equality-fixed leading index parts are order-neutral, so
+-- ORDER BY may consume the remaining suffix. Both scoped ORDER force and plain
+-- FORCE must keep the named access; the latter also owns scan selection when
+-- the index cannot provide order.
+-- @separator:table
+-- @regex("Index Table Scan.*idx_a_b_c_id",true)
+explain select id,a,b,c
+from t force index for order by(idx_a_b_c_id)
+where a = 'g02' and b between 1 and 8
+order by b,c,id;
+
+select id,a,b,c
+from t force index for order by(idx_a_b_c_id)
+where a = 'g02' and b between 1 and 8
+order by b,c,id;
+
+-- @separator:table
+-- @regex("Index Table Scan.*idx_a_b_c_id",true)
+-- @regex("Join Type: INDEX",true)
+explain select id,status,b,c
+from t force index(idx_a_b_c_id)
+where a = 'g02' and b between 1 and 8
+order by b desc,c desc,id desc
+limit 4;
+
+select id,status,b,c
+from t force index(idx_a_b_c_id)
+where a = 'g02' and b between 1 and 8
+order by b desc,c desc,id desc
+limit 4;
+
+-- IN and range predicates leave multiple leading values, so the Sort remains;
+-- plain FORCE still constrains access to the named index.
+-- @separator:table
+-- @regex("Index Table Scan.*idx_a_b_c_id",true)
+-- @regex("Sort",true)
+-- @regex("Index Reader Param",false)
+explain select id,a,b
+from t force index(idx_a_b_c_id)
+where a in ('g01','g02')
+order by b,id;
+
+select id,a,b
+from t force index(idx_a_b_c_id)
+where a in ('g01','g02')
+order by b,id;
+
+-- @separator:table
+-- @regex("Index Table Scan.*idx_a_b_c_id",true)
+-- @regex("Sort",true)
+explain select id,a,b
+from t force index(idx_a_b_c_id)
+where a between 'g01' and 'g02'
+order by b,id;
+
+select count(*) as range_rows, count(distinct id) as range_ids
+from (
+  select id
+  from t force index(idx_a_b_c_id)
+  where a between 'g01' and 'g02'
+  order by b,id
+) forced_range;
+
+-- Omitting an unconstrained middle part is not order-compatible. Plain FORCE
+-- keeps idx_a_b_c_id plus Sort, while ORDER-scoped FORCE does not become a scan
+-- force and ordinary optimization remains unchanged.
+-- @separator:table
+-- @regex("Index Table Scan.*idx_a_b_c_id",true)
+-- @regex("Sort",true)
+explain select id,a,c
+from t force index(idx_a_b_c_id)
+where a = 'g02'
+order by c,id;
+
+select id,a,c
+from t force index(idx_a_b_c_id)
+where a = 'g02'
+order by c,id;
+
+-- @separator:table
+-- @regex("Index Table Scan.*idx_a_b_c_id",false)
+explain select id,a,c
+from t force index for order by(idx_a_b_c_id)
+where a = 'g02'
+order by c,id;
+
+-- @separator:table
+-- @regex("Index Table Scan",false)
+explain select id,a,c
+from t
+order by c,id;
+
 -- @separator:table
 -- @regex("Index Table Scan.*idx_a_b_c_id",true)
 explain select a,count(*)

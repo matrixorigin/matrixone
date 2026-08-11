@@ -44,11 +44,10 @@ import (
 type Nodes []Node
 
 type Node struct {
-	Mcpu           int
-	Id             string             `json:"id"`
-	Addr           string             `json:"address"`
-	WorkState      metadata.WorkState `json:"-"`
-	HasMixedCommit bool               `json:"-"`
+	Mcpu      int
+	Id        string             `json:"id"`
+	Addr      string             `json:"address"`
+	WorkState metadata.WorkState `json:"-"`
 	//TODO::change RelData to Tombstoner, since only Tombstones ned to be serialized.
 	Data  RelData
 	CNCNT int32 // number of all cns
@@ -56,12 +55,11 @@ type Node struct {
 }
 
 // QueryCandidate is a CN discovered before tenant and label pool resolution.
-// Service keeps the control-plane metadata needed by pool policy; Mcpu keeps
-// the legacy execution-capacity value until a real resource model replaces it.
+// Service keeps the control-plane metadata needed by pool policy; Mcpu is the
+// CN-advertised CPU capacity normalized to at least one.
 type QueryCandidate struct {
-	Service        metadata.CNService
-	Mcpu           int
-	HasMixedCommit bool
+	Service metadata.CNService
+	Mcpu    int
 }
 
 type QueryCandidates []QueryCandidate
@@ -70,10 +68,44 @@ type QueryCandidates []QueryCandidate
 // resolve the allowed CN pool. It deliberately contains no worker-selection
 // policy such as subset size or ranking.
 type QueryCandidatePoolRequest struct {
-	IsInternal bool
-	Tenant     string
-	Username   string
-	CNLabel    map[string]string
+	IsInternal     bool
+	Tenant         string
+	Username       string
+	CNLabel        map[string]string
+	RequestedPool  string
+	FallbackPolicy QueryPoolFallbackPolicy
+}
+
+type QueryPoolFallbackPolicy uint8
+
+const (
+	QueryPoolFallbackLegacyCompatible QueryPoolFallbackPolicy = iota
+	QueryPoolFallbackStrict
+)
+
+func (p QueryPoolFallbackPolicy) Valid() bool {
+	return p == QueryPoolFallbackLegacyCompatible || p == QueryPoolFallbackStrict
+}
+
+type QueryPoolResolution string
+
+const (
+	QueryPoolResolutionUnspecified      QueryPoolResolution = "unspecified"
+	QueryPoolResolutionAllCompatible    QueryPoolResolution = "all-compatible"
+	QueryPoolResolutionExactLabels      QueryPoolResolution = "exact-labels"
+	QueryPoolResolutionNonAccountLabels QueryPoolResolution = "non-account-labels"
+	QueryPoolResolutionSharedUnlabeled  QueryPoolResolution = "shared-unlabeled"
+	QueryPoolResolutionPrivilegedAny    QueryPoolResolution = "privileged-any"
+	QueryPoolResolutionNoMatch          QueryPoolResolution = "no-match"
+)
+
+type ResolvedQueryPool struct {
+	Nodes             Nodes
+	RequestedIdentity string
+	Identity          string
+	Resolution        QueryPoolResolution
+	Fallback          bool
+	FallbackReason    string
 }
 
 // QueryCandidateDiscoverer is an optional engine capability. Implementations
@@ -86,7 +118,7 @@ type QueryCandidateDiscoverer interface {
 // tenant and label policy to an already-discovered candidate snapshot.
 // Implementations must treat candidates and request.CNLabel as read-only.
 type QueryCandidatePoolResolver interface {
-	ResolveQueryCandidatePool(context.Context, QueryCandidates, QueryCandidatePoolRequest) (Nodes, error)
+	ResolveQueryCandidatePool(context.Context, QueryCandidates, QueryCandidatePoolRequest) (ResolvedQueryPool, error)
 }
 
 func PlanDefToCstrDef(tableDef *plan.TableDef) *ConstraintDef {
@@ -152,7 +184,11 @@ var PlanDefsToExeDefs = func(tableDef *plan.TableDef) ([]TableDef, *api.SchemaEx
 		exeDefs = append(exeDefs, propDef)
 	}
 	extra := &api.SchemaExtra{
-		FeatureFlag: tableDef.FeatureFlag,
+		FeatureFlag:    tableDef.FeatureFlag,
+		AutoIncrOffset: tableDef.AutoIncrOffset,
+		AutoIncrEpoch:  tableDef.AutoIncrEpoch,
+		Checks:         tableDef.Checks,
+		DefaultCharset: tableDef.DefaultCharset,
 	}
 	propDef.Properties = append(
 		propDef.Properties,
@@ -206,11 +242,14 @@ func PlanColsToExeCols(planCols []*plan.ColDef) []TableDef {
 			alg = compress.Lz4
 		}
 		colTyp := col.GetTyp()
+		exeTyp := types.NewWithCharset(
+			types.T(colTyp.GetId()), colTyp.GetWidth(), colTyp.GetScale(), uint8(colTyp.GetCharset()),
+		)
 		exeCols[i] = &AttributeDef{
 			Attr: Attribute{
 				Name:          col.GetOriginCaseName(),
 				Alg:           alg,
-				Type:          types.New(types.T(colTyp.GetId()), colTyp.GetWidth(), colTyp.GetScale()),
+				Type:          exeTyp,
 				Default:       planCols[i].GetDefault(),
 				OnUpdate:      planCols[i].GetOnUpdate(),
 				GeneratedCol:  col.GetGeneratedCol(),
@@ -491,96 +530,112 @@ const (
 type EngineType int8
 
 const (
-	Disttae EngineType = iota
-	Memory
-	UNKNOWN
+	Disttae EngineType = 0
+	UNKNOWN EngineType = 2
 )
 
 func (def *ConstraintDef) MarshalBinary() (data []byte, err error) {
-	buf := bytes.NewBuffer(make([]byte, 0))
+	data = make([]byte, 0, def.marshalSize())
 	for _, ct := range def.Cts {
 		switch def := ct.(type) {
 		case *IndexDef:
-			if err := binary.Write(buf, binary.BigEndian, Index); err != nil {
-				return nil, err
-			}
-			if err := binary.Write(buf, binary.BigEndian, uint64(len(def.Indexes))); err != nil {
-				return nil, err
-			}
-
+			data = append(data, byte(Index))
+			data = appendConstraintUint64(data, uint64(len(def.Indexes)))
 			for _, indexdef := range def.Indexes {
-				bytes, err := indexdef.Marshal()
+				data, err = appendConstraintProto(data, indexdef)
 				if err != nil {
 					return nil, err
 				}
-				if err := binary.Write(buf, binary.BigEndian, uint64(len(bytes))); err != nil {
-					return nil, err
-				}
-				buf.Write(bytes)
 			}
 		case *RefChildTableDef:
-			if err := binary.Write(buf, binary.BigEndian, RefChildTable); err != nil {
-				return nil, err
-			}
-			if err := binary.Write(buf, binary.BigEndian, uint64(len(def.Tables))); err != nil {
-				return nil, err
-			}
+			data = append(data, byte(RefChildTable))
+			data = appendConstraintUint64(data, uint64(len(def.Tables)))
 			for _, tblId := range def.Tables {
-				if err := binary.Write(buf, binary.BigEndian, tblId); err != nil {
-					return nil, err
-				}
+				data = appendConstraintUint64(data, tblId)
 			}
 
 		case *ForeignKeyDef:
-			if err := binary.Write(buf, binary.BigEndian, ForeignKey); err != nil {
-				return nil, err
-			}
-			if err := binary.Write(buf, binary.BigEndian, uint64(len(def.Fkeys))); err != nil {
-				return nil, err
-			}
+			data = append(data, byte(ForeignKey))
+			data = appendConstraintUint64(data, uint64(len(def.Fkeys)))
 			for _, fk := range def.Fkeys {
-				bytes, err := fk.Marshal()
+				data, err = appendConstraintProto(data, fk)
 				if err != nil {
 					return nil, err
 				}
-
-				if err := binary.Write(buf, binary.BigEndian, uint64(len(bytes))); err != nil {
-					return nil, err
-				}
-				buf.Write(bytes)
 			}
 		case *PrimaryKeyDef:
-			if err := binary.Write(buf, binary.BigEndian, PrimaryKey); err != nil {
-				return nil, err
-			}
-			bytes, err := def.Pkey.Marshal()
+			data = append(data, byte(PrimaryKey))
+			data, err = appendConstraintProto(data, def.Pkey)
 			if err != nil {
 				return nil, err
 			}
-			if err := binary.Write(buf, binary.BigEndian, uint64((len(bytes)))); err != nil {
-				return nil, err
-			}
-			buf.Write(bytes)
 		case *StreamConfigsDef:
-			if err := binary.Write(buf, binary.BigEndian, StreamConfig); err != nil {
-				return nil, err
-			}
-			if err := binary.Write(buf, binary.BigEndian, uint64(len(def.Configs))); err != nil {
-				return nil, err
-			}
+			data = append(data, byte(StreamConfig))
+			data = appendConstraintUint64(data, uint64(len(def.Configs)))
 			for _, c := range def.Configs {
-				bytes, err := c.Marshal()
+				data, err = appendConstraintProto(data, c)
 				if err != nil {
 					return nil, err
 				}
-				if err := binary.Write(buf, binary.BigEndian, uint64(len(bytes))); err != nil {
-					return nil, err
-				}
-				buf.Write(bytes)
 			}
 		}
 	}
-	return buf.Bytes(), nil
+	return data, nil
+}
+
+type constraintProtoMarshaler interface {
+	ProtoSize() int
+	MarshalTo([]byte) (int, error)
+}
+
+func (def *ConstraintDef) marshalSize() int {
+	size := 0
+	for _, ct := range def.Cts {
+		switch def := ct.(type) {
+		case *IndexDef:
+			size += 1 + 8
+			for _, indexdef := range def.Indexes {
+				size += 8 + indexdef.ProtoSize()
+			}
+		case *RefChildTableDef:
+			size += 1 + 8 + 8*len(def.Tables)
+		case *ForeignKeyDef:
+			size += 1 + 8
+			for _, fk := range def.Fkeys {
+				size += 8 + fk.ProtoSize()
+			}
+		case *PrimaryKeyDef:
+			size += 1 + 8 + def.Pkey.ProtoSize()
+		case *StreamConfigsDef:
+			size += 1 + 8
+			for _, config := range def.Configs {
+				size += 8 + config.ProtoSize()
+			}
+		}
+	}
+	return size
+}
+
+func appendConstraintUint64(data []byte, value uint64) []byte {
+	start := len(data)
+	data = append(data, 0, 0, 0, 0, 0, 0, 0, 0)
+	binary.BigEndian.PutUint64(data[start:], value)
+	return data
+}
+
+func appendConstraintProto(data []byte, message constraintProtoMarshaler) ([]byte, error) {
+	size := message.ProtoSize()
+	data = appendConstraintUint64(data, uint64(size))
+	start := len(data)
+	data = data[:start+size]
+	written, err := message.MarshalTo(data[start:])
+	if err != nil {
+		return nil, err
+	}
+	if written != size {
+		return nil, moerr.NewInternalErrorNoCtx("constraint protobuf size mismatch")
+	}
+	return data, nil
 }
 
 func (def *ConstraintDef) UnmarshalBinary(data []byte) error {
@@ -853,10 +908,9 @@ type Tombstoner interface {
 type RelDataType uint8
 
 const (
-	RelDataEmpty RelDataType = iota
-	RelDataShardIDList
-	RelDataBlockList
-	RelDataObjList
+	RelDataEmpty     RelDataType = 0
+	RelDataBlockList RelDataType = 2
+	RelDataObjList   RelDataType = 3
 )
 
 type RelData interface {
@@ -873,14 +927,6 @@ type RelData interface {
 	BuildEmptyRelData(preAllocSize int) RelData
 	DataCnt() int
 
-	// specified interface
-
-	// for memory engine shard id list
-	GetShardIDList() []uint64
-	GetShardID(i int) uint64
-	SetShardID(i int, id uint64)
-	AppendShardID(id uint64)
-
 	// for block info list
 	Split(i int) []RelData
 	GetBlockInfoSlice() objectio.BlockInfoSlice
@@ -888,22 +934,6 @@ type RelData interface {
 	SetBlockInfo(i int, blk *objectio.BlockInfo)
 	AppendBlockInfo(blk *objectio.BlockInfo)
 	AppendBlockInfoSlice(objectio.BlockInfoSlice)
-}
-
-// ForRangeShardID [begin, end)
-func ForRangeShardID(
-	begin, end int,
-	relData RelData,
-	onShardID func(shardID uint64) (bool, error)) error {
-	slice := relData.GetShardIDList()
-
-	for idx := begin; idx < end; idx++ {
-		if ok, err := onShardID(slice[idx]); !ok || err != nil {
-			return err
-		}
-	}
-
-	return nil
 }
 
 // ForRangeBlockInfo [begin, end)
@@ -1234,7 +1264,8 @@ type Engine interface {
 		expr *plan.Expr,
 		def *plan.TableDef,
 		relData RelData,
-		num int) ([]Reader, error)
+		num int,
+		filterHint ...FilterHint) ([]Reader, error)
 
 	// Get database name & table name by table id
 	GetNameById(ctx context.Context, op client.TxnOperator, tableId uint64) (dbName string, tblName string, err error)
@@ -1273,6 +1304,25 @@ type CatalogCacheGCer interface {
 
 type Hints struct {
 	CommitOrRollbackTimeout time.Duration
+}
+
+// AutoIncrEpochFenceSupporter is implemented by transaction workspaces whose
+// target TN snapshot can prove that every target enforces AUTO_INCREMENT
+// allocator epochs.
+type AutoIncrEpochFenceSupporter interface {
+	SupportsAutoIncrEpochFence() bool
+}
+
+// SupportsAutoIncrEpochFence fails closed for legacy and unknown workspaces.
+func SupportsAutoIncrEpochFence(workspace client.Workspace) bool {
+	supporter, ok := workspace.(AutoIncrEpochFenceSupporter)
+	return ok && supporter.SupportsAutoIncrEpochFence()
+}
+
+// TxnSupportsAutoIncrEpochFence fails closed when the transaction or its
+// workspace cannot prove that every target TN enforces allocator epochs.
+func TxnSupportsAutoIncrEpochFence(txn client.TxnOperator) bool {
+	return txn != nil && SupportsAutoIncrEpochFence(txn.GetWorkspace())
 }
 
 // EntireEngine is a wrapper for Engine to support temporary table
@@ -1401,8 +1451,8 @@ func GetPrefetchOnSubscribed() (bool, []*regexp.Regexp) {
 // MembershipFilter is a membership filter over the indexed primary-key values
 // (fulltext calls this PK doc_id) used to prune an index scan to the candidate
 // rows that pass the surrounding relational predicate. It is implemented in
-// pkg/common/docfilter by an exact bitset (cbitmap / CRoaring) for integer PKs
-// and by a CBloomFilter (approximate) for non-integer PKs.
+// pkg/common/docfilter by an exact set (dense cbitmap / sparse Sorted64) for
+// integer PKs and by a CBloomFilter (approximate) for non-integer PKs.
 //
 // This is the CONSUMER (probe) view, so it deliberately omits Share() — a plain
 // *bloomfilter.CBloomFilter satisfies it directly. The PRODUCER superset is

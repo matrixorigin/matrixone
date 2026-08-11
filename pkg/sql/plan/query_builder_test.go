@@ -16,19 +16,29 @@ package plan
 
 import (
 	"context"
+	"encoding/binary"
 	"encoding/json"
+	"fmt"
 	"math"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/iceberg/model"
+	lockpb "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/features"
+	sqliceberg "github.com/matrixorigin/matrixone/pkg/sql/iceberg"
+	sqlmongodb "github.com/matrixorigin/matrixone/pkg/sql/mongodb"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -133,6 +143,102 @@ func TestChooseRowCarrier(t *testing.T) {
 			makeExpr(types.T_int32, 0),
 		}
 		require.Equal(t, 1, chooseUnionRowCarrier(left, right, 2))
+	})
+}
+
+func TestLegacySourceTableFailsClosed(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	mock.ctxt.dbs["db"] = true
+	mock.ctxt.objects["src"] = &plan.ObjectRef{DbName: "db", ObjName: "src", Obj: 42}
+	mock.ctxt.tables["src"] = &plan.TableDef{
+		Name:      "src",
+		TableType: catalog.SystemSourceRel,
+		Cols:      []*plan.ColDef{{Name: "id", Typ: plan.Type{Id: int32(types.T_int64)}}},
+	}
+
+	_, err := runOneStmt(mock, t, "select * from db.src")
+	require.ErrorContains(t, err, "not supported: source table db.src")
+}
+
+func TestMongoDBExternalScanPruningKeepsResidualColumnsAndPlansPushdown(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	mock.ctxt.dbs["telemetry_source"] = true
+	mock.ctxt.objects["events_external"] = &plan.ObjectRef{DbName: "telemetry_source", ObjName: "events_external", Obj: 42}
+	mapping := sqlmongodb.TableMapping{
+		Connection: "telemetry_source", Database: "telemetry", Collection: "events",
+		SchemaMode: sqlmongodb.SchemaExplicit, Conversion: sqlmongodb.ConversionStrict, MaxParallelism: 1,
+		Columns: []sqlmongodb.ColumnMapping{
+			{Name: "device_id", Path: "device_id", TypeID: int32(types.T_varchar), Width: 20, Conversion: sqlmongodb.ConversionStrict},
+			{Name: "ts", Path: "ts", TypeID: int32(types.T_datetime), Scale: 3, Conversion: sqlmongodb.ConversionTryNull},
+		},
+	}
+	mock.ctxt.tables["events_external"] = &plan.TableDef{
+		Name: "events_external", TableType: catalog.SystemExternalRel,
+		FeatureFlag: features.MongoDBExternal,
+		Createsql:   sqlmongodb.BuildCreateSQLEnvelope(mapping),
+		Cols: []*plan.ColDef{
+			{Name: "device_id", Typ: plan.Type{Id: int32(types.T_varchar), Width: 20}},
+			{Name: "ts", Typ: plan.Type{Id: int32(types.T_datetime), Scale: 3}},
+		},
+	}
+
+	logicPlan, err := runOneStmt(mock, t,
+		"select count(*) from telemetry_source.events_external where ts >= '2026-07-27 10:55:00' and ts < '2026-07-27 11:02:00'")
+	require.NoError(t, err)
+	var scanNode *plan.Node
+	for _, node := range logicPlan.GetQuery().Nodes {
+		if node.NodeType == plan.Node_EXTERNAL_SCAN {
+			scanNode = node
+			break
+		}
+	}
+	require.NotNil(t, scanNode)
+	require.Len(t, scanNode.TableDef.Cols, 1)
+	require.Equal(t, "ts", scanNode.TableDef.Cols[0].Name)
+	require.Len(t, scanNode.FilterList, 2)
+	require.NotNil(t, scanNode.ExternScan.MongodbScan.PushedPredicate)
+	require.Equal(t, plan.MongoPredicateOp_MONGO_PREDICATE_AND, scanNode.ExternScan.MongodbScan.PushedPredicate.Op)
+	require.Equal(t, "mo-residual:ff", scanNode.ExternScan.MongodbScan.ResidualFilterDigest)
+}
+
+func TestMongoDBExternalScanRejectsInvalidCatalogState(t *testing.T) {
+	newMock := func(createSQL string) *MockOptimizer {
+		mock := NewMockOptimizer(false)
+		mock.ctxt.dbs["telemetry_source"] = true
+		mock.ctxt.objects["events_external"] = &plan.ObjectRef{
+			DbName: "telemetry_source", ObjName: "events_external", Obj: 42,
+		}
+		mock.ctxt.tables["events_external"] = &plan.TableDef{
+			Name: "events_external", TableType: catalog.SystemExternalRel,
+			FeatureFlag: features.MongoDBExternal,
+			Createsql:   createSQL,
+			Cols: []*plan.ColDef{{
+				Name: "value", Typ: plan.Type{Id: int32(types.T_int64)},
+			}},
+		}
+		return mock
+	}
+	mapping := sqlmongodb.TableMapping{
+		Connection: "telemetry_source", Database: "telemetry", Collection: "events",
+		SchemaMode: sqlmongodb.SchemaExplicit, Conversion: sqlmongodb.ConversionStrict,
+		Columns: []sqlmongodb.ColumnMapping{{
+			Name: "value", Path: "value", TypeID: int32(types.T_int64), Conversion: sqlmongodb.ConversionStrict,
+		}},
+	}
+
+	t.Run("malformed envelope", func(t *testing.T) {
+		mock := newMock("/* MO_MONGODB: version=2")
+		_, err := runOneStmt(mock, t, "select value from telemetry_source.events_external")
+		require.ErrorContains(t, err, "envelope is not closed")
+	})
+
+	t.Run("prepared scan", func(t *testing.T) {
+		mock := newMock(sqlmongodb.BuildCreateSQLEnvelope(mapping))
+		stmts, err := parsers.Parse(mock.ctxt.GetContext(), dialect.MYSQL,
+			"select value from telemetry_source.events_external", 1)
+		require.NoError(t, err)
+		_, err = BuildPlan(&mock.ctxt, stmts[0], true)
+		require.ErrorContains(t, err, "prepared MongoDB external scans")
 	})
 }
 
@@ -309,7 +415,7 @@ func TestBuildTable_AlterView(t *testing.T) {
 	tb.SchemaName = "db"
 	tb.ObjectName = "v"
 	bc := NewBindContext(qb, nil)
-	_, err = qb.buildTable(tb, bc, -1, nil)
+	_, err = qb.buildTable(tb, bc, nil)
 	assert.Error(t, err)
 }
 
@@ -415,7 +521,7 @@ func buildViewForSQLModeTest(t *testing.T, viewName string, viewData ViewData) (
 	tableName := &tree.TableName{}
 	tableName.SchemaName = "db"
 	tableName.ObjectName = tree.Identifier(viewName)
-	nodeID, err := builder.buildTable(tableName, bindCtx, -1, nil)
+	nodeID, err := builder.buildTable(tableName, bindCtx, nil)
 	require.NoError(t, err)
 	require.Equal(t, plan.Node_PROJECT, builder.qry.Nodes[nodeID].NodeType)
 	require.Len(t, builder.qry.Nodes[nodeID].ProjectList, 1)
@@ -488,7 +594,7 @@ func TestTempTableAliasBindingUsesOriginName(t *testing.T) {
 	tb := &tree.TableName{}
 	tb.SchemaName = "db"
 	tb.ObjectName = "t1"
-	nodeID, err := qb.buildTable(&tree.AliasedTableExpr{Expr: tb}, bc, -1, nil)
+	nodeID, err := qb.buildTable(&tree.AliasedTableExpr{Expr: tb}, bc, nil)
 	require.NoError(t, err)
 
 	_, ok := bc.bindingByTable["t1"]
@@ -547,7 +653,7 @@ var rightCases = []Kase{
 		"",
 	},
 	{
-		"with \n\tc as (\n\t\tselect * from cte_test2.vt1\n\t)\nselect \n\t*\nfrom\n\t(\n\t\tselect * from c\n\t\tunion all\n\t\tselect * from cte_test2.vv1\n\t)",
+		"with \n\tc as (\n\t\tselect * from cte_test2.vt1\n\t)\nselect \n\t*\nfrom\n\t(\n\t\tselect * from c\n\t\tunion all\n\t\tselect * from cte_test2.vv1\n\t) u",
 		"",
 	},
 	{
@@ -603,6 +709,20 @@ func TestWrongCases(t *testing.T) {
 		_, err := runOneStmt(mock, t, kase.sql)
 		require.Error(t, err, kase.comment, kase.sql)
 	}
+}
+
+func TestMissingBaseTableUsesNoSuchTableError(t *testing.T) {
+	testutil.NewProc(t)
+	mock := NewMockOptimizer(false)
+
+	_, err := runOneStmt(mock, t, "select * from mo_odbc_missing_state")
+	require.Error(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrNoSuchTable), err)
+
+	moErr, ok := err.(*moerr.Error)
+	require.True(t, ok)
+	require.Equal(t, moerr.ER_NO_SUCH_TABLE, moErr.MySQLCode())
+	require.Equal(t, `SQL parser error: table "mo_odbc_missing_state" does not exist`, moErr.Error())
 }
 
 func TestDefaultBigStats(t *testing.T) {
@@ -754,6 +874,1482 @@ func TestQueryBuilder_bindGroupByOrdinalPosition(t *testing.T) {
 	require.Equal(t, int64(1), funcExpr.F.Args[1].Expr.(*plan.Expr_Lit).Lit.Value.(*plan.Literal_I64Val).I64Val)
 }
 
+func TestQueryBuilderBuildRollupOrderByGroupingExpression(t *testing.T) {
+	stmts, err := parsers.Parse(
+		context.TODO(),
+		dialect.MYSQL,
+		`select grouping(a) as grouping_a, grouping(b) as grouping_b, count(*)
+		from select_test.bind_select
+		group by a, b with rollup
+		order by GROUPING(A), GROUPING(B)`,
+		1,
+	)
+	require.NoError(t, err)
+
+	queryPlan, err := BuildPlan(NewMockCompilerContext(true), stmts[0], false)
+	require.NoError(t, err)
+
+	query := queryPlan.GetQuery()
+	require.NotEmpty(t, query.Steps)
+	rootNode := query.Nodes[query.Steps[len(query.Steps)-1]]
+	require.Equal(t, plan.Node_PROJECT, rootNode.NodeType)
+	require.Len(t, rootNode.ProjectList, 3)
+
+	var sortNode *plan.Node
+	for _, node := range query.Nodes {
+		if node.NodeType == plan.Node_SORT {
+			sortNode = node
+			break
+		}
+	}
+	require.NotNil(t, sortNode)
+	require.Len(t, sortNode.OrderBy, 2)
+	require.Equal(t, int32(3), sortNode.OrderBy[0].Expr.GetCol().ColPos)
+	require.Equal(t, int32(4), sortNode.OrderBy[1].Expr.GetCol().ColPos)
+	require.Len(t, query.Nodes[sortNode.Children[0]].ProjectList, 5)
+}
+
+func TestQueryBuilderBuildRollupWithGroupingFunctionExpressions(t *testing.T) {
+	tests := []struct {
+		name string
+		sql  string
+	}{
+		{
+			name: "grouping expressions match case-insensitively",
+			sql: `select year(o.a) as order_year,
+		month(o.a) as order_month,
+		o.b,
+		count(*) as total_sales,
+		grouping(YEAR(O.A)) as year_grouping,
+		grouping(MONTH(O.A)) as month_grouping,
+		grouping(O.B) as city_grouping
+		from select_test.bind_select as o
+		group by year(o.a), month(o.a), o.b with rollup
+		order by order_year, order_month, o.b`,
+		},
+		{
+			name: "group by expressions match case-insensitively",
+			sql: `select grouping(year(o.a)), grouping(month(o.a)), grouping(o.b), count(*)
+		from select_test.bind_select as o
+		group by YEAR(O.A), MONTH(O.A), O.B with rollup`,
+		},
+		{
+			name: "database-qualified grouping argument matches unqualified group by",
+			sql: `select grouping(select_test.bind_select.a), count(*)
+		from select_test.bind_select
+		group by a with rollup`,
+		},
+		{
+			name: "unqualified grouping argument matches database-qualified group by",
+			sql: `select grouping(a), count(*)
+		from select_test.bind_select
+		group by select_test.bind_select.a with rollup`,
+		},
+		{
+			name: "nested expression matches across qualification depth",
+			sql: `select grouping(year(select_test.bind_select.a)), count(*)
+		from select_test.bind_select
+		group by year(a) with rollup`,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			stmts, err := parsers.Parse(context.TODO(), dialect.MYSQL, test.sql, 1)
+			require.NoError(t, err)
+
+			queryPlan, err := BuildPlan(NewMockCompilerContext(true), stmts[0], false)
+			require.NoError(t, err)
+			require.NotNil(t, queryPlan.GetQuery())
+		})
+	}
+
+	stmts, err := parsers.Parse(
+		context.TODO(), dialect.MYSQL,
+		`select grouping(if(o.a = 1, 'x', 'same')), count(*)
+		from select_test.bind_select as o
+		group by IF(O.A = 1, 'X', 'same') with rollup`, 1,
+	)
+	require.NoError(t, err)
+	_, err = BuildPlan(NewMockCompilerContext(true), stmts[0], false)
+	require.Error(t, err, "string literal case must remain significant in grouping-expression matching")
+}
+
+func TestQueryBuilderBuildRollupRejectsNonGroupByGroupingArguments(t *testing.T) {
+	tests := []struct {
+		name          string
+		sql           string
+		errorContains string
+	}{
+		{
+			name: "select derived from separate group items",
+			sql: `select grouping(a+b), count(*)
+				from select_test.bind_select
+				group by a, b with rollup`,
+			errorContains: "Argument #1 of GROUPING function is not in GROUP BY",
+		},
+		{
+			name: "second argument is not a group item",
+			sql: `select grouping(a+1, b+1), count(*)
+				from select_test.bind_select
+				group by a+1, b with rollup`,
+			errorContains: "Argument #2 of GROUPING function is not in GROUP BY",
+		},
+		{
+			name: "aggregate argument",
+			sql: `select grouping(sum(a)), count(*)
+				from select_test.bind_select
+				group by a with rollup`,
+			errorContains: "Argument #1 of GROUPING function is not in GROUP BY",
+		},
+		{
+			name: "having",
+			sql: `select count(*)
+				from select_test.bind_select
+				group by a, b with rollup
+				having grouping(a+b) = 0`,
+			errorContains: "Argument #1 of GROUPING function is not in GROUP BY",
+		},
+		{
+			name: "order by",
+			sql: `select count(*)
+				from select_test.bind_select
+				group by a, b with rollup
+				order by grouping(a+b)`,
+			errorContains: "Argument #1 of GROUPING function is not in GROUP BY",
+		},
+		{
+			name: "same column name from a different relation",
+			sql: `select grouping(t1.a), count(*)
+				from select_test.bind_select as t1, select_test.bind_select as t2
+				group by t2.a with rollup`,
+			errorContains: "Argument #1 of GROUPING function is not in GROUP BY",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			stmts, err := parsers.Parse(context.TODO(), dialect.MYSQL, test.sql, 1)
+			require.NoError(t, err)
+
+			_, err = BuildPlan(NewMockCompilerContext(true), stmts[0], false)
+			require.ErrorContains(t, err, test.errorContains)
+		})
+	}
+
+	stmts, err := parsers.Parse(
+		context.TODO(), dialect.MYSQL,
+		`select grouping(a+1, b), count(*)
+		from select_test.bind_select
+		group by a+1, b with rollup`, 1,
+	)
+	require.NoError(t, err)
+	_, err = BuildPlan(NewMockCompilerContext(true), stmts[0], false)
+	require.NoError(t, err)
+}
+
+func TestQueryBuilderBuildRollupOrderByWrappedGroupingColumns(t *testing.T) {
+	stmts, err := parsers.Parse(
+		context.TODO(),
+		dialect.MYSQL,
+		`select coalesce(a, -1), coalesce(b, -1), count(*), grouping(a), grouping(b)
+		from select_test.bind_select
+		group by a, b with rollup
+		order by grouping(a), a, grouping(b), b`,
+		1,
+	)
+	require.NoError(t, err)
+
+	queryPlan, err := BuildPlan(NewMockCompilerContext(true), stmts[0], false)
+	require.NoError(t, err)
+
+	query := queryPlan.GetQuery()
+	require.NotEmpty(t, query.Steps)
+	rootNode := query.Nodes[query.Steps[len(query.Steps)-1]]
+	require.Equal(t, plan.Node_PROJECT, rootNode.NodeType)
+	require.Len(t, rootNode.ProjectList, 5)
+	require.Len(t, query.Headings, 5)
+
+	var sortNode *plan.Node
+	for _, node := range query.Nodes {
+		if node.NodeType == plan.Node_SORT {
+			sortNode = node
+			break
+		}
+	}
+	require.NotNil(t, sortNode)
+	require.Len(t, sortNode.OrderBy, 4)
+	for i, orderBy := range sortNode.OrderBy {
+		require.Equal(t, int32(5+i), orderBy.Expr.GetCol().ColPos)
+	}
+	require.Len(t, query.Nodes[sortNode.Children[0]].ProjectList, 9)
+}
+
+func TestQueryBuilderBuildRollupOrderByWrappedGroupingColumnResolution(t *testing.T) {
+	testCases := []struct {
+		name             string
+		sql              string
+		wantOrderColumns []int32
+		wantProjectLen   int
+	}{
+		{
+			name: "select alias takes precedence",
+			sql: `select coalesce(a, -1) as a, count(*), grouping(a)
+				from select_test.bind_select
+				group by a with rollup
+				order by a, grouping(a)`,
+			wantOrderColumns: []int32{0, 3},
+			wantProjectLen:   4,
+		},
+		{
+			name: "selected expression is reused",
+			sql: `select coalesce(a, -1), count(*), grouping(a)
+				from select_test.bind_select
+				group by a with rollup
+				order by coalesce(a, -1), grouping(a)`,
+			wantOrderColumns: []int32{0, 3},
+			wantProjectLen:   4,
+		},
+		{
+			name: "aliased selected expression is reused",
+			sql: `select a + 0 as adjusted_a, count(*), grouping(a)
+				from select_test.bind_select
+				group by a with rollup
+				order by a + 0, grouping(a)`,
+			wantOrderColumns: []int32{0, 3},
+			wantProjectLen:   4,
+		},
+		{
+			name: "selected column is reused and wrapped column is hidden",
+			sql: `select a, coalesce(b, -1), count(*), grouping(b)
+				from select_test.bind_select
+				group by a, b with rollup
+				order by a, grouping(b), b`,
+			wantOrderColumns: []int32{0, 4, 5},
+			wantProjectLen:   6,
+		},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			stmts, err := parsers.Parse(context.TODO(), dialect.MYSQL, testCase.sql, 1)
+			require.NoError(t, err)
+
+			queryPlan, err := BuildPlan(NewMockCompilerContext(true), stmts[0], false)
+			require.NoError(t, err)
+
+			var sortNode *plan.Node
+			for _, node := range queryPlan.GetQuery().Nodes {
+				if node.NodeType == plan.Node_SORT {
+					sortNode = node
+					break
+				}
+			}
+			require.NotNil(t, sortNode)
+			require.Len(t, sortNode.OrderBy, len(testCase.wantOrderColumns))
+			for i, wantColPos := range testCase.wantOrderColumns {
+				require.Equal(t, wantColPos, sortNode.OrderBy[i].Expr.GetCol().ColPos)
+			}
+			require.Len(t, queryPlan.GetQuery().Nodes[sortNode.Children[0]].ProjectList, testCase.wantProjectLen)
+		})
+	}
+}
+
+func TestQueryBuilderBuildRollupOrderByLiteralCaseDifference(t *testing.T) {
+	stmts, err := parsers.Parse(
+		context.TODO(),
+		dialect.MYSQL,
+		`select concat(cast(a as char), 'X') as marker, a, count(*)
+		from select_test.bind_select
+		group by a with rollup
+		order by concat(cast(a as char), 'x')`,
+		1,
+	)
+	require.NoError(t, err)
+
+	queryPlan, err := BuildPlan(NewMockCompilerContext(true), stmts[0], false)
+	require.NoError(t, err)
+
+	var sortNode *plan.Node
+	for _, node := range queryPlan.GetQuery().Nodes {
+		if node.NodeType == plan.Node_SORT {
+			sortNode = node
+			break
+		}
+	}
+	require.NotNil(t, sortNode)
+	require.Len(t, sortNode.OrderBy, 1)
+	orderFunc := sortNode.OrderBy[0].Expr.GetF()
+	require.NotNil(t, orderFunc)
+	require.Equal(t, "concat", orderFunc.Func.ObjName)
+	require.Len(t, orderFunc.Args, 2)
+	literal := orderFunc.Args[1].GetLit()
+	require.NotNil(t, literal)
+	require.Equal(t, "x", literal.GetSval())
+	require.Len(t, queryPlan.GetQuery().Nodes[sortNode.Children[0]].ProjectList, 3)
+}
+
+func TestQueryBuilderBuildGroupingSetOrderByIdentifierCaseDifference(t *testing.T) {
+	for _, groupBy := range []string{
+		"a with rollup",
+		"cube(a)",
+		"grouping sets ((a), ())",
+	} {
+		t.Run(groupBy, func(t *testing.T) {
+			stmts, err := parsers.Parse(
+				context.TODO(),
+				dialect.MYSQL,
+				fmt.Sprintf(`select abs(a), count(*)
+					from select_test.bind_select
+					group by %s
+					order by abs(A), grouping(a)`, groupBy),
+				1,
+			)
+			require.NoError(t, err)
+
+			queryPlan, err := BuildPlan(NewMockCompilerContext(true), stmts[0], false)
+			require.NoError(t, err)
+
+			var sortNode *plan.Node
+			for _, node := range queryPlan.GetQuery().Nodes {
+				if node.NodeType == plan.Node_SORT {
+					sortNode = node
+					break
+				}
+			}
+			require.NotNil(t, sortNode)
+			require.Len(t, sortNode.OrderBy, 2)
+			require.Equal(t, int32(0), sortNode.OrderBy[0].Expr.GetCol().ColPos)
+		})
+	}
+}
+
+func TestQueryBuilderBuildRollupOrderByCorrelatedScalarSubquery(t *testing.T) {
+	stmts, err := parsers.Parse(
+		context.TODO(),
+		dialect.MYSQL,
+		`select coalesce(a, -1), count(*)
+		from select_test.bind_select
+		group by a with rollup
+		order by (select a)`,
+		1,
+	)
+	require.NoError(t, err)
+
+	queryPlan, err := BuildPlan(NewMockCompilerContext(true), stmts[0], false)
+	require.NoError(t, err)
+
+	var sortNode *plan.Node
+	for _, node := range queryPlan.GetQuery().Nodes {
+		if node.NodeType == plan.Node_SORT {
+			sortNode = node
+			break
+		}
+	}
+	require.NotNil(t, sortNode)
+	require.Len(t, sortNode.OrderBy, 1)
+	require.Equal(t, int32(2), sortNode.OrderBy[0].Expr.GetCol().ColPos)
+	require.Len(t, queryPlan.GetQuery().Nodes[sortNode.Children[0]].ProjectList, 3)
+}
+
+func TestQueryBuilderBuildGroupingSetOrderByWrappedGroupingColumns(t *testing.T) {
+	for _, groupBy := range []string{
+		"a, b with rollup",
+		"cube(a, b)",
+		"grouping sets ((a, b), (a), ())",
+	} {
+		t.Run(groupBy, func(t *testing.T) {
+			stmts, err := parsers.Parse(
+				context.TODO(),
+				dialect.MYSQL,
+				fmt.Sprintf(`select coalesce(a, -1), coalesce(b, -1), count(*), grouping(a), grouping(b)
+					from select_test.bind_select
+					group by %s
+					order by grouping(a), a, grouping(b), b`, groupBy),
+				1,
+			)
+			require.NoError(t, err)
+
+			_, err = BuildPlan(NewMockCompilerContext(true), stmts[0], false)
+			require.NoError(t, err)
+		})
+	}
+}
+
+func TestQueryBuilderBuildDistinctRollupRejectsUnselectedGroupingColumnOrder(t *testing.T) {
+	stmts, err := parsers.Parse(
+		context.TODO(),
+		dialect.MYSQL,
+		`select distinct coalesce(a, -1), grouping(a)
+		from select_test.bind_select
+		group by a with rollup
+		order by a`,
+		1,
+	)
+	require.NoError(t, err)
+
+	_, err = BuildPlan(NewMockCompilerContext(true), stmts[0], false)
+	require.Error(t, err)
+}
+
+func TestQueryBuilderBuildRollupOrderByGroupingExpressionWithStar(t *testing.T) {
+	testCases := []struct {
+		name       string
+		selectList string
+	}{
+		{name: "star", selectList: "*"},
+		{name: "qualified star", selectList: "t.*"},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			stmts, err := parsers.Parse(
+				context.TODO(),
+				dialect.MYSQL,
+				fmt.Sprintf(`select %s from select_test.bind_select as t
+				group by a, b, c with rollup order by grouping(a)`, testCase.selectList),
+				1,
+			)
+			require.NoError(t, err)
+
+			queryPlan, err := BuildPlan(NewMockCompilerContext(true), stmts[0], false)
+			require.NoError(t, err)
+
+			query := queryPlan.GetQuery()
+			rootNode := query.Nodes[query.Steps[len(query.Steps)-1]]
+			require.Equal(t, plan.Node_PROJECT, rootNode.NodeType)
+			require.Len(t, rootNode.ProjectList, 3)
+			require.Len(t, query.Headings, 3)
+
+			var sortNode *plan.Node
+			for _, node := range query.Nodes {
+				if node.NodeType == plan.Node_SORT {
+					sortNode = node
+					break
+				}
+			}
+			require.NotNil(t, sortNode)
+			require.Len(t, query.Nodes[sortNode.Children[0]].ProjectList, 4)
+		})
+	}
+}
+
+func TestQueryBuilderBuildRollupOrderByGroupingExpressionUsesSourceColumn(t *testing.T) {
+	stmts, err := parsers.Parse(
+		context.TODO(),
+		dialect.MYSQL,
+		`select 100 as b, grouping(a) as grouping_a, count(*)
+		from select_test.bind_select
+		group by a, b with rollup
+		order by grouping(a) + b`,
+		1,
+	)
+	require.NoError(t, err)
+
+	queryPlan, err := BuildPlan(NewMockCompilerContext(true), stmts[0], false)
+	require.NoError(t, err)
+
+	foundHiddenProject := false
+	for _, node := range queryPlan.GetQuery().Nodes {
+		if node.NodeType != plan.Node_PROJECT || len(node.ProjectList) != 4 {
+			continue
+		}
+		hiddenFunc := node.ProjectList[3].GetF()
+		if hiddenFunc == nil || hiddenFunc.Func.ObjName != "+" {
+			continue
+		}
+		foundHiddenProject = true
+		require.Len(t, hiddenFunc.Args, 2)
+		require.False(t, planExprContainsInt64Literal(hiddenFunc.Args[1], 100),
+			"a source column inside ORDER BY must win over the select alias")
+	}
+	require.True(t, foundHiddenProject)
+}
+
+func TestQueryBuilderBuildGroupingSetNestedOrderUsesSourcePrecedence(t *testing.T) {
+	for _, groupBy := range []string{"a, b with rollup", "cube(a, b)"} {
+		t.Run(groupBy, func(t *testing.T) {
+			stmts, err := parsers.Parse(
+				context.TODO(),
+				dialect.MYSQL,
+				fmt.Sprintf(`select b as a, a as source_a, count(*)
+					from select_test.bind_select
+					group by %s
+					order by a + 0`, groupBy),
+				1,
+			)
+			require.NoError(t, err)
+
+			queryPlan, err := BuildPlan(NewMockCompilerContext(true), stmts[0], false)
+			require.NoError(t, err)
+
+			matchedBranches := 0
+			for _, node := range queryPlan.GetQuery().Nodes {
+				if node.NodeType != plan.Node_PROJECT || len(node.ProjectList) != 4 {
+					continue
+				}
+				hidden := node.ProjectList[3].GetF()
+				if hidden == nil || hidden.Func == nil || hidden.Func.ObjName != "+" {
+					continue
+				}
+				require.Len(t, hidden.Args, 2)
+				hiddenSourceKey, keyErr := projectExprKey(hidden.Args[0])
+				require.NoError(t, keyErr)
+				selectedSourceKey, keyErr := projectExprKey(node.ProjectList[1])
+				require.NoError(t, keyErr)
+				aliasSourceKey, keyErr := projectExprKey(node.ProjectList[0])
+				require.NoError(t, keyErr)
+				require.Equal(t, selectedSourceKey, hiddenSourceKey,
+					"nested ORDER BY a must use source a")
+				require.NotEqual(t, aliasSourceKey, hiddenSourceKey,
+					"nested ORDER BY a must not expand output alias a=b")
+				matchedBranches++
+			}
+			require.Positive(t, matchedBranches)
+		})
+	}
+}
+
+func TestQueryBuilderBuildGroupingSetWindowNestedOrderUsesBranchSemantics(t *testing.T) {
+	for _, testCase := range []struct {
+		name          string
+		selectSQL     string
+		groupBy       string
+		orderBy       string
+		selectedPos   int
+		shadowedPos   int
+		wantOrderFunc string
+		wantBranches  int
+	}{
+		{
+			name:          "rollup source shadows output alias",
+			selectSQL:     "b as a, a as source_a, count(*), count(*) over() as window_count",
+			groupBy:       "a, b with rollup",
+			orderBy:       "a + 0",
+			selectedPos:   1,
+			shadowedPos:   0,
+			wantOrderFunc: "+",
+			wantBranches:  3,
+		},
+		{
+			name:          "cube source shadows output alias",
+			selectSQL:     "b as a, a as source_a, count(*), count(*) over() as window_count",
+			groupBy:       "cube(a, b)",
+			orderBy:       "a + 0",
+			selectedPos:   1,
+			shadowedPos:   0,
+			wantOrderFunc: "+",
+			wantBranches:  4,
+		},
+		{
+			name:          "window order keeps nonwindow sibling in source scope",
+			selectSQL:     "b as a, a as source_a, count(*)",
+			groupBy:       "a, b with rollup",
+			orderBy:       "row_number() over () + (a + 0)",
+			selectedPos:   1,
+			shadowedPos:   0,
+			wantOrderFunc: "+",
+			wantBranches:  3,
+		},
+		{
+			name:          "repeated source projections still shadow window alias",
+			selectSQL:     "row_number() over () as a, a as source_a, a as source_a_copy, count(*)",
+			groupBy:       "a with rollup",
+			orderBy:       "a + 0",
+			selectedPos:   0,
+			shadowedPos:   -1,
+			wantOrderFunc: "+",
+			wantBranches:  2,
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			stmts, err := parsers.Parse(
+				context.TODO(),
+				dialect.MYSQL,
+				fmt.Sprintf(`select %s from select_test.bind_select
+					group by %s order by %s`, testCase.selectSQL, testCase.groupBy, testCase.orderBy),
+				1,
+			)
+			require.NoError(t, err)
+
+			queryPlan, err := BuildPlan(NewMockCompilerContext(true), stmts[0], false)
+			require.NoError(t, err)
+
+			matchedBranches := 0
+			for _, node := range queryPlan.GetQuery().Nodes {
+				if node.NodeType != plan.Node_PROJECT || len(node.ProjectList) <= testCase.selectedPos {
+					continue
+				}
+				selectedKey, keyErr := projectExprKey(node.ProjectList[testCase.selectedPos])
+				require.NoError(t, keyErr)
+				for _, candidate := range node.ProjectList[testCase.selectedPos+1:] {
+					orderFunc := candidate.GetF()
+					if orderFunc == nil || orderFunc.Func == nil || orderFunc.Func.ObjName != testCase.wantOrderFunc || len(orderFunc.Args) != 2 {
+						continue
+					}
+					orderSourceKey, sourceErr := projectExprKey(orderFunc.Args[0])
+					require.NoError(t, sourceErr)
+					if orderSourceKey != selectedKey {
+						continue
+					}
+					if testCase.shadowedPos >= 0 {
+						shadowedKey, shadowErr := projectExprKey(node.ProjectList[testCase.shadowedPos])
+						require.NoError(t, shadowErr)
+						require.NotEqual(t, shadowedKey, orderSourceKey,
+							"nested ORDER BY name must not expand the shadowing output alias")
+					}
+					matchedBranches++
+				}
+			}
+			require.Equal(t, testCase.wantBranches, matchedBranches,
+				"the ORDER BY expression must be bound in each grouping-set source scope")
+		})
+	}
+}
+
+func TestQueryBuilderBuildGroupingSetWindowKeepsOuterOrderReferences(t *testing.T) {
+	for _, sql := range []string{
+		`select count(*), row_number() over () as window_rank
+		from select_test.bind_select group by a with rollup order by window_rank + 0`,
+		`select count(*), row_number() over () as window_rank
+		from select_test.bind_select group by a with rollup order by row_number() over () is null`,
+		`select count(*), row_number() over () as window_rank
+		from select_test.bind_select group by a with rollup order by row_number() over () between 1 and 2`,
+		`select -a as expression_alias, count(*), row_number() over () as window_rank
+		from select_test.bind_select group by a with rollup order by expression_alias + 0`,
+		`select a as duplicate_alias, a as duplicate_alias, count(*), row_number() over () as window_rank
+		from select_test.bind_select group by a with rollup order by duplicate_alias`,
+		`select a as duplicate_alias, a as duplicate_alias, count(*), row_number() over () as window_rank
+		from select_test.bind_select group by a with rollup order by duplicate_alias + 0`,
+		`select a as duplicate_alias, bind_select.a as duplicate_alias, count(*), row_number() over () as window_rank
+		from select_test.bind_select group by a with rollup order by duplicate_alias`,
+		`select a as duplicate_alias, a as duplicate_alias, count(*), row_number() over () as window_rank
+		from select_test.bind_select group by cube(a, b) order by duplicate_alias`,
+		`select -a as duplicate_alias, b + 0 as duplicate_alias, count(*), row_number() over () as window_rank
+		from select_test.bind_select group by a, b with rollup order by duplicate_alias`,
+		`select -a as duplicate_alias, b + 0 as duplicate_alias, count(*), row_number() over () as window_rank
+		from select_test.bind_select group by a, b with rollup order by duplicate_alias + 0`,
+		`select count(*), row_number() over () as window_rank
+		from select_test.bind_select group by cube(a) order by window_rank`,
+		`select count(*), row_number() over () as window_rank
+		from select_test.bind_select group by a with rollup order by 1`,
+	} {
+		stmts, err := parsers.Parse(context.TODO(), dialect.MYSQL, sql, 1)
+		require.NoError(t, err)
+		_, err = BuildPlan(NewMockCompilerContext(true), stmts[0], false)
+		require.NoError(t, err)
+	}
+}
+
+func TestQueryBuilderBuildGroupingSetWindowRewritesAliasFallbackPredicates(t *testing.T) {
+	for _, groupBy := range []string{"a with rollup", "cube(a)"} {
+		for _, testCase := range []struct {
+			orderBy string
+			astType tree.Expr
+		}{
+			{"expression_alias is null", &tree.IsNullExpr{}},
+			{"expression_alias is not null", &tree.IsNotNullExpr{}},
+			{"expression_alias is true", &tree.IsTrueExpr{}},
+			{"expression_alias is not true", &tree.IsNotTrueExpr{}},
+			{"expression_alias is false", &tree.IsFalseExpr{}},
+			{"expression_alias is not false", &tree.IsNotFalseExpr{}},
+			{"expression_alias is unknown", &tree.IsUnknownExpr{}},
+			{"expression_alias is not unknown", &tree.IsNotUnknownExpr{}},
+			{"expression_alias between -3 and -1", &tree.RangeCond{}},
+			{"bit_cast(unhex(hex(expression_alias)) as bigint)", &tree.BitCastExpr{}},
+			{"serial_extract(serial(expression_alias), 0 as bigint)", &tree.SerialExtractExpr{}},
+		} {
+			t.Run(groupBy+"/"+testCase.orderBy, func(t *testing.T) {
+				stmts, err := parsers.Parse(
+					context.TODO(),
+					dialect.MYSQL,
+					fmt.Sprintf(`select -a as expression_alias, count(*), row_number() over () as window_rank
+						from select_test.bind_select group by %s order by %s`, groupBy, testCase.orderBy),
+					1,
+				)
+				require.NoError(t, err)
+				selectStmt := stmts[0].(*tree.Select)
+				require.IsType(t, testCase.astType, selectStmt.OrderBy[0].Expr)
+
+				_, err = BuildPlan(NewMockCompilerContext(true), stmts[0], false)
+				require.NoError(t, err)
+			})
+		}
+	}
+}
+
+func TestQueryBuilderBuildGroupingSetWindowRejectsDifferentSourceAliases(t *testing.T) {
+	for _, groupBy := range []string{"a, b with rollup", "cube(a, b)"} {
+		for _, orderBy := range []string{"duplicate_alias", "duplicate_alias + 0"} {
+			stmts, err := parsers.Parse(
+				context.TODO(),
+				dialect.MYSQL,
+				fmt.Sprintf(`select a as duplicate_alias, b as duplicate_alias, count(*), row_number() over () as window_rank
+				from select_test.bind_select group by %s order by %s`, groupBy, orderBy),
+				1,
+			)
+			require.NoError(t, err)
+
+			_, err = BuildPlan(NewMockCompilerContext(true), stmts[0], false)
+			require.ErrorContains(t, err, "Column 'duplicate_alias' in order clause is ambiguous",
+				"group by %s order by %s", groupBy, orderBy)
+		}
+	}
+}
+
+func TestQueryBuilderBuildGroupingSetWindowMatchesUngroupedSourceResolution(t *testing.T) {
+	for _, groupBy := range []string{"b with rollup", "cube(b)"} {
+		for _, windowExpr := range []string{"", ", row_number() over () as window_rank"} {
+			selectSQL := fmt.Sprintf(`select b as a, count(*)%s from select_test.bind_select
+			group by %s order by a + 0`, windowExpr, groupBy)
+			stmts, err := parsers.Parse(context.TODO(), dialect.MYSQL, selectSQL, 1)
+			require.NoError(t, err)
+			_, err = BuildPlan(NewMockCompilerContext(true), stmts[0], false)
+			require.ErrorContains(t, err, `column "bind_select.a" must appear in the GROUP BY clause`)
+		}
+	}
+}
+
+func TestRewriteRollupWindowOrderDistinguishesSourceFromWindowAlias(t *testing.T) {
+	for _, testCase := range []struct {
+		name              string
+		selectSQL         string
+		groupBy           string
+		orderBy           string
+		wantProbeFallback string
+	}{
+		{
+			name:      "selected source shadows window alias",
+			selectSQL: "row_number() over () as a, a as source_a, count(*)",
+			groupBy:   "a with rollup",
+			orderBy:   "a + 0",
+		},
+		{
+			name:      "grouped source shadows window alias without source projection",
+			selectSQL: "row_number() over () as a, count(*)",
+			groupBy:   "a with rollup",
+			orderBy:   "a + 0",
+		},
+		{
+			name:              "missing source keeps window alias",
+			selectSQL:         "row_number() over () as a, count(*)",
+			groupBy:           "b with rollup",
+			orderBy:           "a + 0",
+			wantProbeFallback: "a",
+		},
+		{
+			name:              "expression alias fallback reuses outer output",
+			selectSQL:         "rand() as x, count(*), row_number() over () as window_rank",
+			groupBy:           "a with rollup",
+			orderBy:           "x + 0",
+			wantProbeFallback: "x",
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			stmts, err := parsers.Parse(
+				context.TODO(),
+				dialect.MYSQL,
+				fmt.Sprintf(`select %s from select_test.bind_select
+					group by %s order by %s`, testCase.selectSQL, testCase.groupBy, testCase.orderBy),
+				1,
+			)
+			require.NoError(t, err)
+
+			selectStmt := stmts[0].(*tree.Select)
+			selectClause := selectStmt.Select.(*tree.SelectClause)
+			selectClause.GroupBy.GroupByExprsList = append(selectClause.GroupBy.GroupByExprsList, nil)
+			rewritten, hasWindow := rewriteRollupWindowSelect(
+				selectClause,
+				selectStmt.OrderBy,
+				selectStmt.Limit,
+				selectStmt.RankOption,
+			)
+			require.True(t, hasWindow)
+			require.NotNil(t, rewritten)
+			require.Len(t, rewritten.OrderBy, 1)
+
+			orderName, ok := unwrapParenExpr(rewritten.OrderBy[0].Expr).(*tree.UnresolvedName)
+			if !ok {
+				binary, binaryOK := unwrapParenExpr(rewritten.OrderBy[0].Expr).(*tree.BinaryExpr)
+				require.True(t, binaryOK)
+				orderName, ok = unwrapParenExpr(binary.Left).(*tree.UnresolvedName)
+			}
+			require.True(t, ok)
+			require.True(t, strings.HasPrefix(orderName.ColNameOrigin(), rollupWindowInternalAliasPrefix))
+			if testCase.wantProbeFallback != "" {
+				outerClause := rewritten.Select.(*tree.SelectClause)
+				probe := outerClause.OrderBySourceProbes[orderName.ColName()]
+				require.NotNil(t, probe)
+				require.Equal(t, testCase.wantProbeFallback, probe.FallbackName)
+				probe.Resolved = true
+				require.NoError(t, resolveRollupWindowOrderSourceProbes(
+					context.TODO(), rewritten.OrderBy, outerClause.OrderBySourceProbes,
+				))
+				binary := unwrapParenExpr(rewritten.OrderBy[0].Expr).(*tree.BinaryExpr)
+				fallbackName := unwrapParenExpr(binary.Left).(*tree.UnresolvedName)
+				require.Equal(t, testCase.wantProbeFallback, fallbackName.ColName())
+			} else {
+				outerClause := rewritten.Select.(*tree.SelectClause)
+				require.Empty(t, outerClause.OrderBySourceProbes)
+			}
+		})
+	}
+}
+
+func TestQueryBuilderBuildGroupingSetNestedOrderFallsBackToAlias(t *testing.T) {
+	stmts, err := parsers.Parse(
+		context.TODO(),
+		dialect.MYSQL,
+		`select -a as x, count(*)
+		from select_test.bind_select
+		group by a with rollup
+		order by x + 0`,
+		1,
+	)
+	require.NoError(t, err)
+
+	queryPlan, err := BuildPlan(NewMockCompilerContext(true), stmts[0], false)
+	require.NoError(t, err)
+
+	matchedBranches := 0
+	for _, node := range queryPlan.GetQuery().Nodes {
+		if node.NodeType != plan.Node_PROJECT || len(node.ProjectList) != 3 {
+			continue
+		}
+		hidden := node.ProjectList[2].GetF()
+		if hidden == nil || hidden.Func == nil || hidden.Func.ObjName != "+" {
+			continue
+		}
+		hiddenAliasKey, keyErr := projectExprKey(hidden.Args[0])
+		require.NoError(t, keyErr)
+		selectedAliasKey, keyErr := projectExprKey(node.ProjectList[0])
+		require.NoError(t, keyErr)
+		require.Equal(t, selectedAliasKey, hiddenAliasKey)
+		matchedBranches++
+	}
+	require.Positive(t, matchedBranches)
+}
+
+func TestQueryBuilderBuildDistinctGroupingSetNestedOrderUsesProjectedSource(t *testing.T) {
+	for _, testCase := range []struct {
+		name      string
+		selectSQL string
+		wantError bool
+	}{
+		{
+			name:      "selected source is available",
+			selectSQL: "select distinct b as a, a as source_a, count(*)",
+		},
+		{
+			name:      "unselected source does not fall back to alias",
+			selectSQL: "select distinct b as a, count(*)",
+			wantError: true,
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			stmts, err := parsers.Parse(
+				context.TODO(),
+				dialect.MYSQL,
+				fmt.Sprintf(`%s from select_test.bind_select
+					group by a, b with rollup order by a + 0`, testCase.selectSQL),
+				1,
+			)
+			require.NoError(t, err)
+
+			_, err = BuildPlan(NewMockCompilerContext(true), stmts[0], false)
+			if testCase.wantError {
+				require.ErrorContains(t, err, "for SELECT DISTINCT, ORDER BY expressions must appear in select list")
+			} else {
+				require.NoError(t, err)
+			}
+		})
+	}
+}
+
+func TestQueryBuilderBuildGroupingSetDuplicateOrderAliases(t *testing.T) {
+	for _, sql := range []string{
+		`select -a as x, b + 0 as x, count(*) from select_test.bind_select
+		group by a, b with rollup order by x`,
+		`select a as x, b + 0 as x, count(*) from select_test.bind_select
+		group by a, b with rollup order by x`,
+		`select a as x, a as x, count(*) from select_test.bind_select
+		group by a with rollup order by x`,
+		`select a as x, select_test.bind_select.a as x, count(*) from select_test.bind_select
+		group by a with rollup order by x + 0`,
+		`select a, a, count(*) from select_test.bind_select
+		group by a with rollup order by a`,
+		`select distinct a as x, a as x, count(*) from select_test.bind_select
+		group by a with rollup order by x`,
+	} {
+		stmts, err := parsers.Parse(context.TODO(), dialect.MYSQL, sql, 1)
+		require.NoError(t, err)
+		_, err = BuildPlan(NewMockCompilerContext(true), stmts[0], false)
+		require.NoError(t, err)
+	}
+
+	stmts, err := parsers.Parse(
+		context.TODO(), dialect.MYSQL,
+		`select a as x, b as x, count(*) from select_test.bind_select
+		group by a, b with rollup order by x`, 1,
+	)
+	require.NoError(t, err)
+	_, err = BuildPlan(NewMockCompilerContext(true), stmts[0], false)
+	require.ErrorContains(t, err, "Column 'x' in order clause is ambiguous")
+
+	stmts, err = parsers.Parse(
+		context.TODO(), dialect.MYSQL,
+		`select t1.a, t2.a, count(*)
+		from select_test.bind_select as t1, select_test.bind_select as t2
+		group by t1.a, t2.a with rollup order by a`, 1,
+	)
+	require.NoError(t, err)
+	_, err = BuildPlan(NewMockCompilerContext(true), stmts[0], false)
+	require.ErrorContains(t, err, "Column 'a' in order clause is ambiguous")
+}
+
+func planExprContainsInt64Literal(expr *plan.Expr, expected int64) bool {
+	if literal := expr.GetLit(); literal != nil && literal.GetI64Val() == expected {
+		return true
+	}
+	if function := expr.GetF(); function != nil {
+		for _, arg := range function.Args {
+			if planExprContainsInt64Literal(arg, expected) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func TestQueryBuilderBuildRollupOrderByGroupingExpressionIsReentrant(t *testing.T) {
+	for _, isPrepare := range []bool{false, true} {
+		t.Run(fmt.Sprintf("prepare=%t", isPrepare), func(t *testing.T) {
+			stmts, err := parsers.Parse(
+				context.TODO(),
+				dialect.MYSQL,
+				`select grouping(a), count(*) from select_test.bind_select
+				group by a with rollup order by grouping(a) + 1`,
+				1,
+			)
+			require.NoError(t, err)
+
+			selectStmt := stmts[0].(*tree.Select)
+			orderExpr := tree.String(selectStmt.OrderBy[0].Expr, dialect.MYSQL)
+			firstNodeCount := 0
+			for buildIndex := range 2 {
+				queryPlan, buildErr := BuildPlan(NewMockCompilerContext(true), stmts[0], isPrepare)
+				require.NoError(t, buildErr)
+				require.NotNil(t, queryPlan.GetQuery())
+				require.Equal(t, orderExpr, tree.String(selectStmt.OrderBy[0].Expr, dialect.MYSQL))
+				if buildIndex == 0 {
+					firstNodeCount = len(queryPlan.GetQuery().Nodes)
+				} else {
+					require.Len(t, queryPlan.GetQuery().Nodes, firstNodeCount)
+				}
+			}
+		})
+	}
+}
+
+func TestQueryBuilderBuildRollupOrderByQualifiedGroupingColumn(t *testing.T) {
+	stmts, err := parsers.Parse(
+		context.TODO(),
+		dialect.MYSQL,
+		`select grouping(a) as grouping_a, count(*)
+		from select_test.bind_select as t
+		group by a with rollup
+		order by grouping(a)`,
+		1,
+	)
+	require.NoError(t, err)
+
+	selectStmt := stmts[0].(*tree.Select)
+	selectClause := selectStmt.Select.(*tree.SelectClause)
+	orderFunc := selectStmt.OrderBy[0].Expr.(*tree.FuncExpr)
+	orderFunc.Exprs[0] = tree.NewUnresolvedName(tree.NewCStr("t", 0), tree.NewCStr("a", 0))
+
+	queryPlan, err := BuildPlan(NewMockCompilerContext(true), stmts[0], false)
+	require.NoError(t, err)
+
+	query := queryPlan.GetQuery()
+	rootNode := query.Nodes[query.Steps[len(query.Steps)-1]]
+	require.Equal(t, plan.Node_PROJECT, rootNode.NodeType)
+	require.Len(t, rootNode.ProjectList, len(selectClause.Exprs))
+	require.Len(t, query.Headings, len(selectClause.Exprs))
+
+	var sortNode *plan.Node
+	for _, node := range query.Nodes {
+		if node.NodeType == plan.Node_SORT {
+			sortNode = node
+			break
+		}
+	}
+	require.NotNil(t, sortNode)
+	require.Len(t, sortNode.OrderBy, 1)
+	require.Equal(t, int32(2), sortNode.OrderBy[0].Expr.GetCol().ColPos)
+	require.Len(t, query.Nodes[sortNode.Children[0]].ProjectList, 3)
+}
+
+func TestQueryBuilderBuildRollupOrderByGroupingExpressionIgnoresAliasShadowing(t *testing.T) {
+	stmts, err := parsers.Parse(
+		context.TODO(),
+		dialect.MYSQL,
+		`select grouping(a) as b, grouping(b) as grouping_b, count(*)
+		from select_test.bind_select
+		group by a, b with rollup
+		order by grouping(b)`,
+		1,
+	)
+	require.NoError(t, err)
+
+	queryPlan, err := BuildPlan(NewMockCompilerContext(true), stmts[0], false)
+	require.NoError(t, err)
+
+	query := queryPlan.GetQuery()
+	var sortNode *plan.Node
+	for _, node := range query.Nodes {
+		if node.NodeType == plan.Node_SORT {
+			sortNode = node
+			break
+		}
+	}
+	require.NotNil(t, sortNode)
+	require.Len(t, sortNode.OrderBy, 1)
+	require.NotNil(t, sortNode.OrderBy[0].Expr.GetCol())
+	require.Equal(t, int32(3), sortNode.OrderBy[0].Expr.GetCol().ColPos)
+	require.Len(t, query.Nodes[sortNode.Children[0]].ProjectList, 4)
+}
+
+func TestQueryBuilderBuildRollupOrderByGroupingBinaryExpression(t *testing.T) {
+	stmts, err := parsers.Parse(
+		context.TODO(),
+		dialect.MYSQL,
+		`select grouping(a) + 0 as ga, count(*)
+		from select_test.bind_select
+		group by a with rollup
+		order by grouping(a) + 0`,
+		1,
+	)
+	require.NoError(t, err)
+
+	queryPlan, err := BuildPlan(NewMockCompilerContext(true), stmts[0], false)
+	require.NoError(t, err)
+
+	query := queryPlan.GetQuery()
+	var sortNode *plan.Node
+	for _, node := range query.Nodes {
+		if node.NodeType == plan.Node_SORT {
+			sortNode = node
+			break
+		}
+	}
+	require.NotNil(t, sortNode)
+	require.Len(t, sortNode.OrderBy, 1)
+	require.NotNil(t, sortNode.OrderBy[0].Expr.GetCol())
+	require.Equal(t, int32(2), sortNode.OrderBy[0].Expr.GetCol().ColPos)
+	require.Len(t, query.Nodes[sortNode.Children[0]].ProjectList, 3)
+}
+
+func TestQueryBuilderBuildRollupOrderByNestedGroupingExpression(t *testing.T) {
+	stmts, err := parsers.Parse(
+		context.TODO(),
+		dialect.MYSQL,
+		`select if(grouping(a), 1, 0) as ga, count(*)
+		from select_test.bind_select
+		group by a with rollup
+		order by if(grouping(a), 1, 0)`,
+		1,
+	)
+	require.NoError(t, err)
+
+	queryPlan, err := BuildPlan(NewMockCompilerContext(true), stmts[0], false)
+	require.NoError(t, err)
+
+	query := queryPlan.GetQuery()
+	var sortNode *plan.Node
+	for _, node := range query.Nodes {
+		if node.NodeType == plan.Node_SORT {
+			sortNode = node
+			break
+		}
+	}
+	require.NotNil(t, sortNode)
+	require.Len(t, sortNode.OrderBy, 1)
+	require.NotNil(t, sortNode.OrderBy[0].Expr.GetCol())
+	require.Equal(t, int32(2), sortNode.OrderBy[0].Expr.GetCol().ColPos)
+	require.Len(t, query.Nodes[sortNode.Children[0]].ProjectList, 3)
+}
+
+func TestQueryBuilderBuildRollupOrderByAmbiguousGroupingColumn(t *testing.T) {
+	stmts, err := parsers.Parse(
+		context.TODO(),
+		dialect.MYSQL,
+		`select count(*)
+		from select_test.bind_select as t1, select_test.bind_select as t2
+		group by t1.a, t2.a with rollup
+		order by grouping(a)`,
+		1,
+	)
+	require.NoError(t, err)
+
+	_, err = BuildPlan(NewMockCompilerContext(true), stmts[0], false)
+	require.Error(t, err)
+}
+
+func TestAppendGroupingSetOrderByProjects(t *testing.T) {
+	stmts, err := parsers.Parse(
+		context.TODO(),
+		dialect.MYSQL,
+		`select grouping(a, b) as grouping_ab, count(*) as row_count
+		from select_test.bind_select
+		group by a, b with rollup
+		order by grouping(a, b) desc, 2, grouping(a)`,
+		1,
+	)
+	require.NoError(t, err)
+
+	selectStmt := stmts[0].(*tree.Select)
+	selectClause := selectStmt.Select.(*tree.SelectClause)
+	branchExprs, rewrittenOrderBy, orderResolve, err := prepareGroupingSetOrderByProjects(nil, selectStmt.OrderBy, selectClause.Exprs, false)
+	require.NoError(t, err)
+	require.Len(t, branchExprs, 4)
+	require.Len(t, selectClause.Exprs, 2)
+
+	// Hidden grouping keys are tracked positionally (k-th appended hidden column)
+	// and resolved to an absolute ordinal later against the star-expanded width.
+	// grouping(a, b) -> 0th hidden, ordinal 2 passes through, grouping(a) -> 1st hidden.
+	require.Equal(t, []int{0, -1, 1}, orderResolve.hiddenIdx)
+	require.Equal(t, tree.Descending, selectStmt.OrderBy[0].Direction)
+
+	existingPos, ok := rewrittenOrderBy[1].Expr.(*tree.NumVal)
+	require.True(t, ok)
+	pos, ok := existingPos.Int64()
+	require.True(t, ok)
+	require.Equal(t, int64(2), pos)
+}
+
+func TestAppendGroupingSetOrderByProjectsIgnoresAliasShadowing(t *testing.T) {
+	stmts, err := parsers.Parse(
+		context.TODO(),
+		dialect.MYSQL,
+		`select grouping(a) as b, grouping(b) as grouping_b, count(*)
+		from select_test.bind_select
+		group by a, b with rollup
+		order by grouping(b)`,
+		1,
+	)
+	require.NoError(t, err)
+
+	selectStmt := stmts[0].(*tree.Select)
+	selectClause := selectStmt.Select.(*tree.SelectClause)
+	branchExprs, _, orderResolve, err := prepareGroupingSetOrderByProjects(nil, selectStmt.OrderBy, selectClause.Exprs, false)
+	require.NoError(t, err)
+	require.Len(t, branchExprs, 4)
+
+	// grouping(b) -> 0th appended hidden key (visible len 3, hidden at tail).
+	require.Equal(t, []int{0}, orderResolve.hiddenIdx)
+}
+
+func TestAppendGroupingSetOrderByProjectsDefersAmbiguousColumnToBinder(t *testing.T) {
+	stmts, err := parsers.Parse(
+		context.TODO(),
+		dialect.MYSQL,
+		`select grouping(a) as grouping_a, count(*)
+		from select_test.bind_select as t1, select_test.bind_select as t2
+		group by t1.a, t2.a with rollup
+		order by grouping(a)`,
+		1,
+	)
+	require.NoError(t, err)
+
+	selectStmt := stmts[0].(*tree.Select)
+	selectClause := selectStmt.Select.(*tree.SelectClause)
+	branchExprs, _, orderResolve, err := prepareGroupingSetOrderByProjects(nil, selectStmt.OrderBy, selectClause.Exprs, false)
+	require.NoError(t, err)
+	require.Len(t, branchExprs, 3)
+
+	require.Equal(t, []int{0}, orderResolve.hiddenIdx)
+}
+
+func TestAppendGroupingSetOrderByProjectsSupportsGroupAlias(t *testing.T) {
+	stmts, err := parsers.Parse(
+		context.TODO(),
+		dialect.MYSQL,
+		`select a as group_a, grouping(a) as grouping_a, count(*)
+		from select_test.bind_select
+		group by group_a with rollup
+		order by grouping(a)`,
+		1,
+	)
+	require.NoError(t, err)
+
+	selectStmt := stmts[0].(*tree.Select)
+	selectClause := selectStmt.Select.(*tree.SelectClause)
+	branchExprs, _, orderResolve, err := prepareGroupingSetOrderByProjects(nil, selectStmt.OrderBy, selectClause.Exprs, false)
+	require.NoError(t, err)
+	require.Len(t, branchExprs, 4)
+
+	require.Equal(t, []int{0}, orderResolve.hiddenIdx)
+}
+
+// For SELECT DISTINCT, a grouping-related ORDER BY expression is deferred until
+// the generated branch has real table bindings and a star-expanded projection.
+// No hidden key is injected, so DISTINCT semantics are preserved.
+func TestAppendGroupingSetOrderByProjectsDistinctReusesVisibleProjection(t *testing.T) {
+	stmts, err := parsers.Parse(
+		context.TODO(),
+		dialect.MYSQL,
+		`select distinct grouping(a), count(*)
+		from select_test.bind_select
+		group by a with rollup
+		order by grouping(a)`,
+		1,
+	)
+	require.NoError(t, err)
+
+	selectStmt := stmts[0].(*tree.Select)
+	selectClause := selectStmt.Select.(*tree.SelectClause)
+	branchExprs, rewrittenOrderBy, orderResolve, err := prepareGroupingSetOrderByProjects(nil, selectStmt.OrderBy, selectClause.Exprs, true)
+	require.NoError(t, err)
+	// No hidden order key appended: the branch list stays equal to the select list.
+	require.Len(t, branchExprs, len(selectClause.Exprs))
+	require.Equal(t, []int{-1}, orderResolve.hiddenIdx)
+	require.Equal(t, []bool{true}, orderResolve.bindDistinct)
+	require.Equal(t,
+		tree.String(selectStmt.OrderBy[0].Expr, dialect.MYSQL),
+		tree.String(rewrittenOrderBy[0].Expr, dialect.MYSQL))
+}
+
+// For SELECT DISTINCT, an ORDER BY expression that is not a visible select-list
+// expression is also deferred; the bound DISTINCT path below rejects it with
+// the same error as ordinary ORDER BY instead of injecting a hidden key.
+func TestAppendGroupingSetOrderByProjectsDistinctRejectsHiddenKey(t *testing.T) {
+	stmts, err := parsers.Parse(
+		context.TODO(),
+		dialect.MYSQL,
+		`select distinct grouping(a)
+		from select_test.bind_select
+		group by a with rollup
+		order by grouping(a) + a`,
+		1,
+	)
+	require.NoError(t, err)
+
+	selectStmt := stmts[0].(*tree.Select)
+	selectClause := selectStmt.Select.(*tree.SelectClause)
+	branchExprs, _, orderResolve, err := prepareGroupingSetOrderByProjects(nil, selectStmt.OrderBy, selectClause.Exprs, true)
+	require.NoError(t, err)
+	require.Len(t, branchExprs, len(selectClause.Exprs))
+	require.Equal(t, []int{-1}, orderResolve.hiddenIdx)
+	require.Equal(t, []bool{true}, orderResolve.bindDistinct)
+}
+
+// End-to-end guard: the DISTINCT rejection must also fire through the full plan
+// builder, confirming selectClause.Distinct is propagated into the rewrite.
+func TestQueryBuilderBuildRollupOrderByGroupingExpressionDistinctRejectsHiddenKey(t *testing.T) {
+	stmts, err := parsers.Parse(
+		context.TODO(),
+		dialect.MYSQL,
+		`select distinct grouping(a)
+		from select_test.bind_select
+		group by a with rollup
+		order by grouping(a) + a`,
+		1,
+	)
+	require.NoError(t, err)
+
+	_, err = BuildPlan(NewMockCompilerContext(true), stmts[0], false)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "for SELECT DISTINCT, ORDER BY expressions must appear in select list")
+}
+
+// End-to-end: for SELECT DISTINCT, an ORDER BY expression that differs from the
+// select-list expression only by function-name case or by outer parentheses is
+// a valid visible-projection match and must not be rejected.
+func TestQueryBuilderBuildRollupOrderByGroupingExpressionDistinctAcceptsEquivalent(t *testing.T) {
+	testCases := []struct {
+		name string
+		sql  string
+	}{
+		{
+			name: "function name case",
+			sql: `select distinct GROUPING(A)
+				from select_test.bind_select
+				group by a with rollup
+				order by grouping(a)`,
+		},
+		{
+			name: "outer parens",
+			sql: `select distinct grouping(a)
+				from select_test.bind_select
+				group by a with rollup
+				order by (grouping(a))`,
+		},
+	}
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			stmts, err := parsers.Parse(context.TODO(), dialect.MYSQL, testCase.sql, 1)
+			require.NoError(t, err)
+
+			_, err = BuildPlan(NewMockCompilerContext(true), stmts[0], false)
+			require.NoError(t, err)
+		})
+	}
+}
+
+// For SELECT DISTINCT, qualifiers on names outside GROUPING() must be preserved
+// so that e.g. t1.b and t2.b are not matched as the same expression.
+func TestQueryBuilderBuildRollupOrderByGroupingExpressionDistinctPreservesOuterQualifiers(t *testing.T) {
+	// t1.b vs t2.b — the ORDER BY expression is NOT the visible select-list
+	// expression, so DISTINCT must reject it.
+	sql := `select distinct grouping(a) + t1.b
+		from (select a, b from select_test.bind_select) as t1,
+		     (select b from select_test.bind_select) as t2
+		group by t1.a, t1.b, t2.b with rollup
+		order by grouping(a) + t2.b`
+	stmts, err := parsers.Parse(context.TODO(), dialect.MYSQL, sql, 1)
+	require.NoError(t, err)
+
+	_, err = BuildPlan(NewMockCompilerContext(true), stmts[0], false)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "for SELECT DISTINCT, ORDER BY expressions must appear in select list")
+}
+
+func TestAppendGroupingSetOrderByNestedProjects(t *testing.T) {
+	testCases := []struct {
+		name            string
+		sql             string
+		expectRewritten bool
+	}{
+		{
+			name: "mixed case grouping",
+			sql: `select if(GROUPING(A), 'X', 'x') as grouping_a, count(*)
+			from select_test.bind_select
+			group by a with rollup
+			order by IF(grouping(a), 'X', 'x')`,
+			expectRewritten: true,
+		},
+		{
+			name: "different literal case",
+			sql: `select if(grouping(a), 'X', 'same') as grouping_a, count(*)
+			from select_test.bind_select
+			group by a with rollup
+			order by if(grouping(a), 'x', 'same')`,
+			expectRewritten: true,
+		},
+		{
+			name: "ordinary expression",
+			sql: `select a + 0 as adjusted_a, count(*)
+			from select_test.bind_select
+			group by a with rollup
+			order by a + 0`,
+			expectRewritten: false,
+		},
+		{
+			name: "ambiguous grouping column",
+			sql: `select if(grouping(a), 1, 0) as grouping_a, count(*)
+			from select_test.bind_select as t1, select_test.bind_select as t2
+			group by t1.a, t2.a with rollup
+			order by if(grouping(a), 1, 0)`,
+			expectRewritten: true,
+		},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			stmts, err := parsers.Parse(context.TODO(), dialect.MYSQL, testCase.sql, 1)
+			require.NoError(t, err)
+
+			selectStmt := stmts[0].(*tree.Select)
+			selectClause := selectStmt.Select.(*tree.SelectClause)
+			selectExprBefore := tree.String(selectClause.Exprs[0].Expr, dialect.MYSQL)
+			orderExprBefore := tree.String(selectStmt.OrderBy[0].Expr, dialect.MYSQL)
+			_, _, orderResolve, err := prepareGroupingSetOrderByProjects(nil, selectStmt.OrderBy, selectClause.Exprs, false)
+			require.NoError(t, err)
+
+			// A recognized grouping key is appended as a hidden column (idx >= 0);
+			// an ordinary expression is left for the binder (idx == -1).
+			require.Equal(t, testCase.expectRewritten, orderResolve.hiddenIdx[0] >= 0)
+			require.Equal(t, selectExprBefore, tree.String(selectClause.Exprs[0].Expr, dialect.MYSQL))
+			require.Equal(t, orderExprBefore, tree.String(selectStmt.OrderBy[0].Expr, dialect.MYSQL))
+		})
+	}
+}
+
+func TestAppendGroupingSetOrderByVisibleMatchUsesSourcePrecedence(t *testing.T) {
+	stmts, err := parsers.Parse(
+		context.TODO(),
+		dialect.MYSQL,
+		`select b as a, a + 0 as source_a, count(*)
+		from select_test.bind_select
+		group by a, b with rollup
+		order by a + 0`,
+		1,
+	)
+	require.NoError(t, err)
+
+	selectStmt := stmts[0].(*tree.Select)
+	selectClause := selectStmt.Select.(*tree.SelectClause)
+	_, _, orderResolve, err := prepareGroupingSetOrderByProjects(
+		nil,
+		selectStmt.OrderBy,
+		selectClause.Exprs,
+		false,
+	)
+	require.NoError(t, err)
+	require.True(t, orderResolve.bindVisible[0],
+		"a nested ORDER BY name must resolve to the source expression a")
+}
+
+func TestAppendGroupingSetOrderByKeepsSafeExpressionAboveUnion(t *testing.T) {
+	stmts, err := parsers.Parse(
+		context.TODO(),
+		dialect.MYSQL,
+		`select a, count(*)
+		from select_test.bind_select
+		group by a with rollup
+		order by a + 0`,
+		1,
+	)
+	require.NoError(t, err)
+
+	selectStmt := stmts[0].(*tree.Select)
+	selectClause := selectStmt.Select.(*tree.SelectClause)
+	branchExprs, _, orderResolve, err := prepareGroupingSetOrderByProjects(
+		nil,
+		selectStmt.OrderBy,
+		selectClause.Exprs,
+		false,
+	)
+	require.NoError(t, err)
+	require.Len(t, branchExprs, len(selectClause.Exprs))
+	require.Equal(t, []int{-1}, orderResolve.hiddenIdx)
+}
+
+func TestAppendGroupingSetOrderByNestedQualifiedProject(t *testing.T) {
+	stmts, err := parsers.Parse(
+		context.TODO(),
+		dialect.MYSQL,
+		`select if(grouping(a), 1, 0) as grouping_a, count(*)
+		from select_test.bind_select as t
+		group by a with rollup
+		order by if(grouping(a), 1, 0)`,
+		1,
+	)
+	require.NoError(t, err)
+
+	selectStmt := stmts[0].(*tree.Select)
+	selectClause := selectStmt.Select.(*tree.SelectClause)
+	orderFunc := selectStmt.OrderBy[0].Expr.(*tree.FuncExpr)
+	groupingFunc := orderFunc.Exprs[0].(*tree.FuncExpr)
+	groupingFunc.Exprs[0] = tree.NewUnresolvedName(tree.NewCStr("t", 0), tree.NewCStr("a", 0))
+	branchExprs, _, orderResolve, err := prepareGroupingSetOrderByProjects(nil, selectStmt.OrderBy, selectClause.Exprs, false)
+	require.NoError(t, err)
+	require.Len(t, branchExprs, 3)
+
+	require.Equal(t, []int{0}, orderResolve.hiddenIdx)
+}
+
 func TestQueryBuilder_bindHaving(t *testing.T) {
 	builder, bindCtx := genBuilderAndCtx()
 
@@ -771,6 +2367,45 @@ func TestQueryBuilder_bindHaving(t *testing.T) {
 	funcExpr0, ok := boundHavingList[0].Expr.(*plan.Expr_F)
 	require.True(t, ok)
 	require.Equal(t, ">", funcExpr0.F.Func.ObjName)
+}
+
+func TestGroupingExtensionBindersUseGroupOutputNullability(t *testing.T) {
+	builder, bindCtx := genBuilderAndCtx()
+	for _, typ := range bindCtx.bindings[0].types {
+		typ.NotNullable = true
+	}
+
+	stmts, err := parsers.Parse(context.TODO(), dialect.MYSQL, "select a, b from select_test.bind_select group by grouping sets ((a, b), (a))", 1)
+	require.NoError(t, err)
+	selectClause := stmts[0].(*tree.Select).Select.(*tree.SelectClause)
+
+	_, err = builder.bindGroupBy(bindCtx, selectClause.GroupBy, nil, nil, nil)
+	require.NoError(t, err)
+	require.Len(t, bindCtx.groupingFlag, 2)
+	bindCtx.groupingFlag[1] = false
+
+	for _, test := range []struct {
+		name            string
+		col             string
+		wantNotNullable bool
+	}{
+		{name: "active key", col: "a", wantNotNullable: true},
+		{name: "inactive key", col: "b", wantNotNullable: false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			colName := tree.NewUnresolvedName(tree.NewCStr("bind_select", 0), tree.NewCStr(test.col, 0))
+
+			havingExpr, err := NewHavingBinder(builder, bindCtx).BindExpr(colName, 0, false)
+			require.NoError(t, err)
+			require.Equal(t, test.wantNotNullable, havingExpr.Typ.NotNullable)
+
+			projectionBinder := NewProjectionBinder(builder, bindCtx, NewHavingBinder(builder, bindCtx))
+			correlatedExpr, err := projectionBinder.baseBindColRef(colName, 1, false)
+			require.NoError(t, err)
+			require.NotNil(t, correlatedExpr.GetCorr())
+			require.Equal(t, test.wantNotNullable, correlatedExpr.Typ.NotNullable)
+		})
+	}
 }
 
 func TestQueryBuilder_bindProjection(t *testing.T) {
@@ -1284,8 +2919,12 @@ func TestQueryBuilder_bindOrderByNullDistinctRejectsFollowingMissingSelectExpr(t
 }
 
 func bindDistinctOrderByForTest(sql string) (*QueryBuilder, *BindContext, []*plan.OrderBySpec, int, error) {
+	return bindOrderByForTest(sql, true)
+}
+
+func bindOrderByForTest(sql string, distinct bool) (*QueryBuilder, *BindContext, []*plan.OrderBySpec, int, error) {
 	builder, bindCtx := genBuilderAndCtx()
-	return bindDistinctOrderByWithTestContext(sql, builder, bindCtx)
+	return bindOrderByWithTestContext(sql, builder, bindCtx, distinct)
 }
 
 func bindDistinctOrderByWithTestContext(
@@ -1293,7 +2932,16 @@ func bindDistinctOrderByWithTestContext(
 	builder *QueryBuilder,
 	bindCtx *BindContext,
 ) (*QueryBuilder, *BindContext, []*plan.OrderBySpec, int, error) {
-	bindCtx.isDistinct = true
+	return bindOrderByWithTestContext(sql, builder, bindCtx, true)
+}
+
+func bindOrderByWithTestContext(
+	sql string,
+	builder *QueryBuilder,
+	bindCtx *BindContext,
+	distinct bool,
+) (*QueryBuilder, *BindContext, []*plan.OrderBySpec, int, error) {
+	bindCtx.isDistinct = distinct
 	bindCtx.projectTag = builder.genNewBindTag()
 
 	stmts, err := parsers.Parse(context.TODO(), dialect.MYSQL, sql, 1)
@@ -1334,6 +2982,227 @@ func bindDistinctOrderByWithTestContext(
 
 	boundOrderBys, err := builder.bindOrderBy(bindCtx, selectStmt.OrderBy, projectionBinder, selectClause.Exprs)
 	return builder, bindCtx, boundOrderBys, resultLen, err
+}
+
+func TestQueryBuilder_bindOrderByExpressionAliasPrecedence(t *testing.T) {
+	for _, testCase := range []struct {
+		name string
+		sql  string
+	}{
+		{
+			name: "unary expression",
+			sql:  "select a, -a as a from select_test.bind_select order by a",
+		},
+		{
+			name: "binary expression",
+			sql:  "select a, b + 0 as a from select_test.bind_select order by a",
+		},
+		{
+			name: "constant expression",
+			sql:  "select a, 20 as a from select_test.bind_select order by a",
+		},
+		{
+			name: "parenthesized root name",
+			sql:  "select a, -a as a from select_test.bind_select order by (a)",
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			_, bindCtx, boundOrderBys, _, err := bindOrderByForTest(testCase.sql, false)
+			require.NoError(t, err)
+			require.Len(t, boundOrderBys, 1)
+			col := boundOrderBys[0].Expr.GetCol()
+			require.NotNil(t, col)
+			require.Equal(t, bindCtx.projectTag, col.RelPos)
+			require.Equal(t, int32(1), col.ColPos,
+				"a top-level ORDER BY name must select the explicit expression alias")
+		})
+	}
+
+	t.Run("name inside expression prefers source column", func(t *testing.T) {
+		_, bindCtx, boundOrderBys, _, err := bindOrderByForTest(
+			"select a, -a as a from select_test.bind_select order by a + 0",
+			false,
+		)
+		require.NoError(t, err)
+		require.Len(t, boundOrderBys, 1)
+		orderCol := boundOrderBys[0].Expr.GetCol()
+		require.NotNil(t, orderCol)
+		require.Equal(t, bindCtx.projectTag, orderCol.RelPos)
+		require.GreaterOrEqual(t, int(orderCol.ColPos), 2)
+
+		derived := bindCtx.projects[orderCol.ColPos].GetF()
+		require.NotNil(t, derived)
+		require.Equal(t, "+", derived.Func.ObjName)
+		require.NotNil(t, derived.Args[0].GetCol(),
+			"a nested ORDER BY name must bind to the source column, not expand the alias")
+	})
+
+	t.Run("name inside expression falls back to noncolliding alias", func(t *testing.T) {
+		_, _, boundOrderBys, _, err := bindOrderByForTest(
+			"select a, -a as neg from select_test.bind_select order by neg + 0",
+			false,
+		)
+		require.NoError(t, err)
+		require.Len(t, boundOrderBys, 1)
+		require.NotNil(t, boundOrderBys[0].Expr.GetCol())
+	})
+
+	t.Run("qualified source name bypasses alias", func(t *testing.T) {
+		_, bindCtx, boundOrderBys, _, err := bindOrderByForTest(
+			"select a, -a as a from select_test.bind_select order by bind_select.a",
+			false,
+		)
+		require.NoError(t, err)
+		require.Len(t, boundOrderBys, 1)
+		col := boundOrderBys[0].Expr.GetCol()
+		require.NotNil(t, col)
+		require.Equal(t, bindCtx.projectTag, col.RelPos)
+		require.Equal(t, int32(0), col.ColPos)
+	})
+
+	for _, testCase := range []struct {
+		name string
+		sql  string
+	}{
+		{
+			name: "bare column alias collides with selected column",
+			sql:  "select a, b as a from select_test.bind_select order by a",
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			_, _, _, _, err := bindOrderByForTest(testCase.sql, false)
+			require.Error(t, err)
+			require.Contains(t, err.Error(), "in order clause is ambiguous")
+		})
+	}
+
+	for _, testCase := range []struct {
+		name      string
+		sql       string
+		expectPos int32
+	}{
+		{
+			name:      "same source column repeated under output name",
+			sql:       "select a, a as a from select_test.bind_select order by a",
+			expectPos: 1,
+		},
+		{
+			name:      "same direct alias repeated",
+			sql:       "select a as x, a as x from select_test.bind_select order by x",
+			expectPos: 0,
+		},
+		{
+			name:      "duplicate expression aliases use first item",
+			sql:       "select -a as x, b + 0 as x from select_test.bind_select order by x",
+			expectPos: 0,
+		},
+		{
+			name:      "expression alias supersedes preceding direct candidate",
+			sql:       "select a as x, -b as x from select_test.bind_select order by x",
+			expectPos: 1,
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			_, bindCtx, boundOrderBys, _, err := bindOrderByForTest(testCase.sql, false)
+			require.NoError(t, err)
+			require.Len(t, boundOrderBys, 1)
+			col := boundOrderBys[0].Expr.GetCol()
+			require.NotNil(t, col)
+			require.Equal(t, bindCtx.projectTag, col.RelPos)
+			require.Equal(t, testCase.expectPos, col.ColPos)
+		})
+	}
+
+	t.Run("nested duplicate expression aliases use first item", func(t *testing.T) {
+		_, _, boundOrderBys, _, err := bindOrderByForTest(
+			"select -a as x, b + 0 as x from select_test.bind_select order by x + 1",
+			false,
+		)
+		require.NoError(t, err)
+		require.Len(t, boundOrderBys, 1)
+	})
+
+	t.Run("nested different direct aliases remain ambiguous", func(t *testing.T) {
+		_, _, _, _, err := bindOrderByForTest(
+			"select a as x, b as x from select_test.bind_select order by x + 1",
+			false,
+		)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "in order clause is ambiguous")
+	})
+
+	t.Run("different direct aliases become ambiguous before a later expression", func(t *testing.T) {
+		_, _, _, _, err := bindOrderByForTest(
+			"select a as x, b as x, -a as x from select_test.bind_select order by x",
+			false,
+		)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "in order clause is ambiguous")
+	})
+
+	t.Run("function name is not an alias reference", func(t *testing.T) {
+		_, _, boundOrderBys, _, err := bindOrderByForTest(
+			"select a as abs, b as abs from select_test.bind_select order by abs(a)",
+			false,
+		)
+		require.NoError(t, err)
+		require.Len(t, boundOrderBys, 1)
+	})
+}
+
+func TestQueryBuilder_bindOrderByDistinctExpressionAliasPrecedence(t *testing.T) {
+	for _, sql := range []string{
+		"select distinct a, -a as a from select_test.bind_select order by a",
+		"select distinct a, 20 as a from select_test.bind_select order by (a)",
+	} {
+		_, bindCtx, boundOrderBys, _, err := bindOrderByForTest(sql, true)
+		require.NoError(t, err)
+		require.Len(t, boundOrderBys, 1)
+		col := boundOrderBys[0].Expr.GetCol()
+		require.NotNil(t, col)
+		require.Equal(t, bindCtx.projectTag, col.RelPos)
+		require.Equal(t, int32(1), col.ColPos)
+	}
+
+	_, bindCtx, boundOrderBys, _, err := bindOrderByForTest(
+		"select distinct a, -a as a from select_test.bind_select order by a + 0",
+		true,
+	)
+	require.NoError(t, err)
+	require.Len(t, boundOrderBys, 1)
+	derived := boundOrderBys[0].Expr.GetF()
+	require.NotNil(t, derived)
+	require.Equal(t, "+", derived.Func.ObjName)
+	col := derived.Args[0].GetCol()
+	require.NotNil(t, col)
+	require.Equal(t, bindCtx.projectTag, col.RelPos)
+	require.Equal(t, int32(0), col.ColPos,
+		"a nested DISTINCT ORDER BY name must bind to the selected source column")
+
+	_, _, _, _, err = bindOrderByForTest(
+		"select distinct a, b as a from select_test.bind_select order by a",
+		true,
+	)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "in order clause is ambiguous")
+
+	_, bindCtx, boundOrderBys, _, err = bindOrderByForTest(
+		"select distinct -a as x, b + 0 as x from select_test.bind_select order by x",
+		true,
+	)
+	require.NoError(t, err)
+	require.Len(t, boundOrderBys, 1)
+	require.Equal(t, bindCtx.projectTag, boundOrderBys[0].Expr.GetCol().RelPos)
+	require.Equal(t, int32(0), boundOrderBys[0].Expr.GetCol().ColPos)
+
+	_, bindCtx, boundOrderBys, _, err = bindOrderByForTest(
+		"select distinct a as x, -b as x from select_test.bind_select order by x",
+		true,
+	)
+	require.NoError(t, err)
+	require.Len(t, boundOrderBys, 1)
+	require.Equal(t, bindCtx.projectTag, boundOrderBys[0].Expr.GetCol().RelPos)
+	require.Equal(t, int32(1), boundOrderBys[0].Expr.GetCol().ColPos)
 }
 
 func TestQueryBuilder_bindOrderByDistinctDerivedSelectedColumns(t *testing.T) {
@@ -1613,6 +3482,53 @@ func TestQueryBuilder_buildSetOperationOrderByNull(t *testing.T) {
 	}
 }
 
+func TestGroupConcatOrderByIsBoundPerAggregate(t *testing.T) {
+	logicPlan, err := runOneStmt(
+		NewMockOptimizer(true),
+		t,
+		"select group_concat(n_name order by n_nationkey desc separator '|'), "+
+			"group_concat(n_name order by n_regionkey asc) from nation",
+	)
+	require.NoError(t, err)
+
+	var aggNode *plan.Node
+	for _, node := range logicPlan.GetQuery().Nodes {
+		if node.NodeType == plan.Node_AGG {
+			aggNode = node
+			break
+		}
+	}
+	require.NotNil(t, aggNode)
+	require.Len(t, aggNode.AggList, 2)
+	require.Empty(t, collectReachableSortNodes(logicPlan.GetQuery()))
+
+	expectedFlags := []byte{
+		byte(plan.OrderBySpec_DESC),
+		byte(plan.OrderBySpec_ASC),
+	}
+	for i, agg := range aggNode.AggList {
+		fn := agg.GetF()
+		args := fn.Args
+		require.Len(t, args, 2)
+		require.NotNil(t, args[0].GetCol())
+		require.NotNil(t, args[1].GetCol())
+
+		require.Equal(
+			t,
+			plan.AggregateConfigType_AGG_CONFIG_GROUP_CONCAT_ORDER,
+			fn.AggConfigType,
+		)
+		config := fn.AggConfig
+		require.Equal(t, groupConcatOrderConfigVersion, config[0])
+		pos := 1
+		require.Equal(t, uint32(1), binary.BigEndian.Uint32(config[pos:pos+4]))
+		pos += 4
+		require.Equal(t, uint32(1), binary.BigEndian.Uint32(config[pos:pos+4]))
+		pos += 4
+		require.Equal(t, expectedFlags[i], config[pos])
+	}
+}
+
 func collectReachableSortNodes(query *plan.Query) []*plan.Node {
 	if query == nil || len(query.Steps) == 0 {
 		return nil
@@ -1647,6 +3563,291 @@ func collectReachableSortNodes(query *plan.Query) []*plan.Node {
 	}
 
 	return sortNodes
+}
+
+type icebergTestCompilerContext struct {
+	*MockCompilerContext
+	proc *process.Process
+}
+
+func (c *icebergTestCompilerContext) GetProcess() *process.Process {
+	return c.proc
+}
+
+func newIcebergTestCompilerContext(t *testing.T, loc *time.Location) *icebergTestCompilerContext {
+	t.Helper()
+	if loc == nil {
+		loc = time.UTC
+	}
+	base := NewMockCompilerContext(true)
+	base.objects["gold_orders"] = &plan.ObjectRef{
+		DbName:  "tpch",
+		ObjName: "gold_orders",
+		Obj:     4242,
+	}
+	base.tables["gold_orders"] = &plan.TableDef{
+		Name:      "gold_orders",
+		TableType: catalog.SystemExternalRel,
+		Createsql: sqliceberg.BuildCreateSQLEnvelope(model.TableMapping{
+			Namespace:  "sales",
+			TableName:  "orders",
+			DefaultRef: model.DefaultRefMain,
+			ReadMode:   model.ReadModeAppendOnly,
+			WriteMode:  model.WriteModeReadOnly,
+		}, "ksa_gold"),
+		Cols: []*plan.ColDef{
+			{
+				Name:    "id",
+				Typ:     plan.Type{Id: int32(types.T_int64), Width: 64, Table: "gold_orders"},
+				Default: &plan.Default{NullAbility: true},
+			},
+		},
+		Pkey: &plan.PrimaryKeyDef{},
+	}
+	base.objects["dim_orders"] = &plan.ObjectRef{
+		DbName:  "tpch",
+		ObjName: "dim_orders",
+		Obj:     4343,
+	}
+	base.tables["dim_orders"] = &plan.TableDef{
+		Name:      "dim_orders",
+		TableType: catalog.SystemOrdinaryRel,
+		Cols: []*plan.ColDef{
+			{
+				Name:    "id",
+				Typ:     plan.Type{Id: int32(types.T_int64), Width: 64, Table: "dim_orders"},
+				Default: &plan.Default{NullAbility: true},
+			},
+		},
+		Pkey: &plan.PrimaryKeyDef{},
+	}
+	proc := testutil.NewProc(t)
+	proc.Base.SessionInfo.TimeZone = loc
+	return &icebergTestCompilerContext{
+		MockCompilerContext: base,
+		proc:                proc,
+	}
+}
+
+func buildIcebergTestPlan(t *testing.T, ctx CompilerContext, sql string) (*Plan, error) {
+	t.Helper()
+	stmts, err := parsers.Parse(ctx.GetContext(), dialect.MYSQL, sql, 1)
+	require.NoError(t, err)
+	return BuildPlan(ctx, stmts[0], false)
+}
+
+func mustMarshalLegacyExternParam(t *testing.T, param *tree.ExternParam) string {
+	t.Helper()
+	data, err := json.Marshal(param)
+	require.NoError(t, err)
+	return string(data)
+}
+
+func requireIcebergScan(t *testing.T, p *Plan) *plan.IcebergScan {
+	t.Helper()
+	require.NotNil(t, p)
+	require.NotNil(t, p.GetQuery())
+	for _, node := range p.GetQuery().Nodes {
+		if node.GetExternScan().GetIcebergScan() != nil {
+			return node.GetExternScan().GetIcebergScan()
+		}
+	}
+	t.Fatalf("expected an Iceberg external scan")
+	return nil
+}
+
+func TestQueryBuilderLegacyExternalTableNotDispatchedAsIceberg(t *testing.T) {
+	ctx := NewMockCompilerContext(true)
+	ctx.objects["legacy_orders"] = &plan.ObjectRef{
+		DbName:  "tpch",
+		ObjName: "legacy_orders",
+		Obj:     4343,
+	}
+	ctx.tables["legacy_orders"] = &plan.TableDef{
+		Name:      "legacy_orders",
+		TableType: catalog.SystemExternalRel,
+		Createsql: mustMarshalLegacyExternParam(t, &tree.ExternParam{
+			ExParamConst: tree.ExParamConst{
+				ScanType: tree.INFILE,
+				Filepath: "/data/legacy/orders/*.parquet",
+				Format:   tree.PARQUET,
+				Option:   []string{"format", "parquet"},
+			},
+		}),
+		Cols: []*plan.ColDef{
+			{
+				Name:    "id",
+				Typ:     plan.Type{Id: int32(types.T_int64), Width: 64, Table: "legacy_orders"},
+				Default: &plan.Default{NullAbility: true},
+			},
+		},
+	}
+
+	p, err := buildIcebergTestPlan(t, ctx, "select id from legacy_orders")
+	require.NoError(t, err)
+
+	foundExternal := false
+	for _, node := range p.GetQuery().GetNodes() {
+		if node.GetNodeType() != plan.Node_EXTERNAL_SCAN {
+			continue
+		}
+		foundExternal = true
+		require.NotNil(t, node.GetExternScan())
+		require.Equal(t, int32(plan.ExternType_EXTERNAL_TB), node.GetExternScan().GetType())
+		require.Nil(t, node.GetExternScan().GetIcebergScan())
+	}
+	require.True(t, foundExternal, "expected a legacy external scan")
+}
+
+func TestQueryBuilderExternalFilepathIdentitySurvivesColumnPruning(t *testing.T) {
+	ctx := NewMockCompilerContext(true)
+	ctx.objects["pruned_external"] = &plan.ObjectRef{
+		DbName:  "tpch",
+		ObjName: "pruned_external",
+		Obj:     4344,
+	}
+	ctx.tables["pruned_external"] = &plan.TableDef{
+		Name:      "pruned_external",
+		TableType: catalog.SystemExternalRel,
+		Createsql: mustMarshalLegacyExternParam(t, &tree.ExternParam{
+			ExParamConst: tree.ExParamConst{
+				ScanType: tree.INFILE,
+				Filepath: "/data/mixed/*",
+				Format:   tree.CSV,
+				Option:   []string{"format", "csv"},
+			},
+		}),
+		Cols: []*plan.ColDef{
+			{ColId: 1, Name: "a", Typ: plan.Type{Id: int32(types.T_varchar), Table: "pruned_external"}},
+			{ColId: 2, Name: "b", Typ: plan.Type{Id: int32(types.T_varchar), Table: "pruned_external"}},
+		},
+	}
+
+	p, err := buildIcebergTestPlan(t, ctx,
+		"select a from pruned_external where __mo_filepath like '%/csv/%'")
+	require.NoError(t, err)
+
+	var scan *plan.Node
+	for _, node := range p.GetQuery().GetNodes() {
+		if node.GetNodeType() == plan.Node_EXTERNAL_SCAN {
+			scan = node
+			break
+		}
+	}
+	require.NotNil(t, scan)
+	require.Len(t, scan.TableDef.Cols, 2)
+	require.Equal(t, "a", scan.TableDef.Cols[0].Name)
+	require.Equal(t, catalog.ExternalFilePath, scan.TableDef.Cols[1].Name)
+	require.Equal(t, catalog.ExternalFilePathColId, scan.TableDef.Cols[1].ColId)
+	require.Equal(t, int32(1), scan.ExternScan.TbColToDataCol["b"],
+		"file-field positions stay in their original coordinate space")
+	require.Len(t, scan.FilterList, 1)
+	require.True(t, isFileLevelFilter(scan, scan.FilterList[0]),
+		"the remapped filepath predicate must remain eligible for file pruning")
+}
+
+func TestQueryBuilderIcebergPersistentMappingCurrentSnapshot(t *testing.T) {
+	ctx := newIcebergTestCompilerContext(t, time.UTC)
+
+	p, err := buildIcebergTestPlan(t, ctx, "select id from gold_orders")
+	require.NoError(t, err)
+
+	scan := requireIcebergScan(t, p)
+	require.Equal(t, uint64(4242), scan.MappingId)
+	require.Equal(t, "sales", scan.Namespace)
+	require.Equal(t, "orders", scan.Table)
+	require.Equal(t, "main", scan.Ref)
+	require.Zero(t, scan.SnapshotId)
+	require.Zero(t, scan.TimestampAsOf)
+	require.Equal(t, "append_only", scan.ReadMode)
+}
+
+func TestQueryBuilderIcebergComposesWithProjectionFilterJoinAggregate(t *testing.T) {
+	ctx := newIcebergTestCompilerContext(t, time.UTC)
+
+	p, err := buildIcebergTestPlan(t, ctx,
+		"select g.id, count(d.id) from gold_orders g join dim_orders d on g.id = d.id where g.id > 10 group by g.id")
+	require.NoError(t, err)
+
+	query := p.GetQuery()
+	require.NotNil(t, query)
+	var hasIcebergScan, hasJoin, hasFilter, hasAgg, hasProject bool
+	for _, node := range query.GetNodes() {
+		switch node.GetNodeType() {
+		case plan.Node_EXTERNAL_SCAN:
+			if node.GetExternScan().GetIcebergScan() != nil {
+				hasIcebergScan = true
+			}
+		case plan.Node_JOIN:
+			hasJoin = true
+		case plan.Node_FILTER:
+			hasFilter = true
+		case plan.Node_AGG:
+			hasAgg = true
+		case plan.Node_PROJECT:
+			hasProject = true
+		}
+	}
+	require.True(t, hasIcebergScan, "expected Iceberg persistent mapping scan")
+	require.True(t, hasJoin, "expected join with ordinary table")
+	require.True(t, hasFilter, "expected SQL filter to remain in MO plan")
+	require.True(t, hasAgg, "expected aggregate over Iceberg scan")
+	require.True(t, hasProject, "expected projection over Iceberg scan")
+}
+
+func TestQueryBuilderIcebergTimeTravelSnapshot(t *testing.T) {
+	ctx := newIcebergTestCompilerContext(t, time.UTC)
+
+	p, err := buildIcebergTestPlan(t, ctx, "select id from gold_orders for iceberg snapshot 78124581230123")
+	require.NoError(t, err)
+
+	scan := requireIcebergScan(t, p)
+	require.Equal(t, int64(78124581230123), scan.SnapshotId)
+	require.Zero(t, scan.TimestampAsOf)
+	require.Equal(t, "main", scan.Ref)
+}
+
+func TestQueryBuilderIcebergTimeTravelTimestampUsesSessionTimezone(t *testing.T) {
+	loc := time.FixedZone("KSA", 3*60*60)
+	ctx := newIcebergTestCompilerContext(t, loc)
+
+	p, err := buildIcebergTestPlan(t, ctx, "select id from gold_orders for iceberg timestamp as of timestamp '2026-06-01 00:00:00'")
+	require.NoError(t, err)
+
+	ts, err := types.ParseTimestamp(loc, "2026-06-01 00:00:00", 6)
+	require.NoError(t, err)
+	expectedMS := (int64(ts) - int64(types.UnixToTimestamp(0))) / 1000
+	scan := requireIcebergScan(t, p)
+	require.Zero(t, scan.SnapshotId)
+	require.Equal(t, expectedMS, scan.TimestampAsOf)
+}
+
+func TestQueryBuilderIcebergNamedRef(t *testing.T) {
+	ctx := newIcebergTestCompilerContext(t, time.UTC)
+
+	p, err := buildIcebergTestPlan(t, ctx, "select id from gold_orders for iceberg ref audit_branch")
+	require.NoError(t, err)
+
+	scan := requireIcebergScan(t, p)
+	require.Zero(t, scan.SnapshotId)
+	require.Zero(t, scan.TimestampAsOf)
+	require.Equal(t, "audit_branch", scan.Ref)
+}
+
+func TestQueryBuilderIcebergTimeTravelRejectsNativeSnapshotMix(t *testing.T) {
+	ctx := newIcebergTestCompilerContext(t, time.UTC)
+
+	_, err := buildIcebergTestPlan(t, ctx, "select id from gold_orders {timestamp = '2026-06-01 00:00:00'} for iceberg snapshot 1")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "cannot combine MO snapshot hint with FOR ICEBERG time travel")
+}
+
+func TestQueryBuilderIcebergTimeTravelRequiresIcebergTable(t *testing.T) {
+	ctx := NewMockCompilerContext(true)
+
+	_, err := buildIcebergTestPlan(t, ctx, "select n_name from nation for iceberg snapshot 1")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "FOR ICEBERG requires an Iceberg external table")
 }
 
 func TestQueryBuilder_bindOrderByEnum(t *testing.T) {
@@ -1877,6 +4078,38 @@ func TestQueryBuilder_bindValues(t *testing.T) {
 	assert.Equal(t, 1, len(selectList))
 }
 
+func TestQueryBuilderBuildValuesAndTableSubqueries(t *testing.T) {
+	for _, sql := range []string{
+		"select (values row(1))",
+		"select 1 where 2 > any (values row(1), row(3))",
+		"select a from vt1 where a = any (table vt1)",
+		"select a from vt1 where a in (table vt1)",
+		"select a from vt1 where a in (values row(1), row(2))",
+		"select a from vt1 where exists (table vt1)",
+		"select a from vt1 where exists (values row(1))",
+		"select a from vt1 where a = any (table vt1 order by a desc limit 1)",
+		"select a from vt1 where a = any (table vt1 union values row(1))",
+		"select a from vt1 where a = any (table vt1 union all values row(1))",
+		"select a from vt1 where a = any (values row(1) union table vt1)",
+		"select a from vt1 where a = any ((table vt1 order by a desc limit 1) union values row(1))",
+		"select a from vt1 where a = any ((values row(1), row(2) order by column_0 desc limit 1) union table vt1)",
+		"select a from vt1 where a = any (table vt1 intersect values row(1))",
+		"select a from vt1 where a = any (values row(1) except table vt1)",
+		"select a from vt1 where a = any (values row(1) union values row(2) intersect table vt1)",
+		"select count(*) from (table vt1 union all values row(1)) as u",
+		"select 1 where 2 > any (values row(1) union select 3)",
+		"select 1 where 2 > any (values row(1), row(3) order by column_0 limit 1)",
+	} {
+		t.Run(sql, func(t *testing.T) {
+			stmts, err := parsers.Parse(context.TODO(), dialect.MYSQL, sql, 1)
+			require.NoError(t, err)
+
+			_, err = BuildPlan(NewMockCompilerContext(true), stmts[0], false)
+			require.NoError(t, err)
+		})
+	}
+}
+
 func TestQueryBuilder_appendWhereNode(t *testing.T) {
 	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
 	bindCtx := NewBindContext(builder, nil)
@@ -1959,7 +4192,7 @@ func TestQueryBuilder_appendWindowNode(t *testing.T) {
 	stmts, _ := parsers.Parse(context.TODO(), dialect.MYSQL, "select a, lag(a) over (order by a) as prev_a from select_test.bind_select group by a having prev_a > 0", 1)
 	selectClause := stmts[0].(*tree.Select).Select.(*tree.SelectClause)
 
-	nodeID, selectList, _, notCacheable, _, havingBinder, boundHavingList, err := builder.bindSelectClause(bindCtx, selectClause, nil, nil, nil, true)
+	nodeID, selectList, _, notCacheable, _, havingBinder, boundHavingList, err := builder.bindSelectClause(bindCtx, selectClause, nil, nil, nil, lockpb.LockMode_Exclusive, true)
 	require.NoError(t, err)
 	require.Equal(t, 1, len(boundHavingList))
 	require.Len(t, bindCtx.windows, 1)
@@ -2012,7 +4245,7 @@ func TestSplitWindowDependentHavingFilters_WithSubqueryChild(t *testing.T) {
 	require.NoError(t, err)
 
 	selectClause := stmts[0].(*tree.Select).Select.(*tree.SelectClause)
-	_, _, _, _, _, _, boundHavingList, err := builder.bindSelectClause(bindCtx, selectClause, nil, nil, nil, true)
+	_, _, _, _, _, _, boundHavingList, err := builder.bindSelectClause(bindCtx, selectClause, nil, nil, nil, lockpb.LockMode_Exclusive, true)
 	require.NoError(t, err)
 	require.Len(t, boundHavingList, 1)
 	require.IsType(t, &plan.Expr_Sub{}, boundHavingList[0].Expr)
@@ -2030,7 +4263,7 @@ func TestQueryBuilder_appendProjectionNode(t *testing.T) {
 	stmts, _ := parsers.Parse(context.TODO(), dialect.MYSQL, "select a from select_test.bind_select", 1)
 	selectClause := stmts[0].(*tree.Select).Select.(*tree.SelectClause)
 
-	nodeID, selectList, _, notCacheable, _, _, _, _ := builder.bindSelectClause(bindCtx, selectClause, nil, nil, nil, true)
+	nodeID, selectList, _, notCacheable, _, _, _, _ := builder.bindSelectClause(bindCtx, selectClause, nil, nil, nil, lockpb.LockMode_Exclusive, true)
 
 	havingBinder := NewHavingBinder(builder, bindCtx)
 	projectionBinder := NewProjectionBinder(builder, bindCtx, havingBinder)
@@ -2097,7 +4330,7 @@ func TestQueryBuilder_appendResultProjectionNode(t *testing.T) {
 	orderList := stmts[0].(*tree.Select).OrderBy
 
 	// bind select clause
-	nodeID, selectList, _, notCacheable, _, havingBinder, _, _ := builder.bindSelectClause(bindCtx, selectClause, nil, nil, nil, true)
+	nodeID, selectList, _, notCacheable, _, havingBinder, _, _ := builder.bindSelectClause(bindCtx, selectClause, nil, nil, nil, lockpb.LockMode_Exclusive, true)
 	// bind projection
 	projectionBinder := NewProjectionBinder(builder, bindCtx, havingBinder)
 	resultLen, notCacheable, _ := builder.bindProjection(bindCtx, projectionBinder, selectList, notCacheable)
@@ -2398,7 +4631,7 @@ func TestParseRankOption(t *testing.T) {
 		rankOption, err := parseRankOption(options, ctx)
 		require.Error(t, err)
 		require.Nil(t, rankOption)
-		require.Contains(t, err.Error(), "mode must be 'pre', 'post', 'force', or 'auto'")
+		require.Contains(t, err.Error(), "mode must be 'pre', 'post', 'force', 'auto', or 'include'")
 		require.Contains(t, err.Error(), "invalid")
 	})
 
@@ -2410,6 +4643,26 @@ func TestParseRankOption(t *testing.T) {
 		require.NoError(t, err)
 		require.NotNil(t, rankOption)
 		require.Equal(t, "force", rankOption.Mode)
+	})
+
+	t.Run("valid mode include", func(t *testing.T) {
+		options := map[string]string{
+			"mode": "include",
+		}
+		rankOption, err := parseRankOption(options, ctx)
+		require.NoError(t, err)
+		require.NotNil(t, rankOption)
+		require.Equal(t, "include", rankOption.Mode)
+	})
+
+	t.Run("valid mode auto", func(t *testing.T) {
+		options := map[string]string{
+			"mode": "auto",
+		}
+		rankOption, err := parseRankOption(options, ctx)
+		require.NoError(t, err)
+		require.NotNil(t, rankOption)
+		require.Equal(t, "auto", rankOption.Mode)
 	})
 
 	t.Run("empty options map", func(t *testing.T) {
@@ -2579,6 +4832,49 @@ func TestBaseBinder_bindComparisonExpr(t *testing.T) {
 			},
 		},
 		{
+			name:      "LIKE ESCAPE: a LIKE 'test#%' ESCAPE '#'",
+			sql:       "a LIKE 'test#%' ESCAPE '#'",
+			expectErr: false,
+			checkFunc: func(t *testing.T, expr *plan.Expr, err error) {
+				require.NoError(t, err)
+				require.NotNil(t, expr)
+				funcExpr, ok := expr.Expr.(*plan.Expr_F)
+				require.True(t, ok)
+				require.Equal(t, "like", funcExpr.F.Func.ObjName)
+				require.Len(t, funcExpr.F.Args, 3)
+			},
+		},
+		{
+			name:      "LIKE ESCAPE prepared parameters",
+			sql:       "a LIKE ? ESCAPE ?",
+			expectErr: false,
+			setupFunc: func() (*QueryBuilder, *BindContext) {
+				builder, bindCtx := genBuilderAndCtx()
+				builder.isPrepareStatement = true
+				return builder, bindCtx
+			},
+			checkFunc: func(t *testing.T, expr *plan.Expr, err error) {
+				require.NoError(t, err)
+				funcExpr := expr.GetF()
+				require.NotNil(t, funcExpr)
+				require.Equal(t, "like", funcExpr.Func.ObjName)
+				require.Len(t, funcExpr.Args, 3)
+				paramPos := func(arg *plan.Expr) int32 {
+					if param := arg.GetP(); param != nil {
+						return param.Pos
+					}
+					castExpr := arg.GetF()
+					require.NotNil(t, castExpr)
+					require.Equal(t, "cast", castExpr.Func.ObjName)
+					require.NotEmpty(t, castExpr.Args)
+					require.NotNil(t, castExpr.Args[0].GetP())
+					return castExpr.Args[0].GetP().Pos
+				}
+				require.Equal(t, int32(1), paramPos(funcExpr.Args[1]))
+				require.Equal(t, int32(2), paramPos(funcExpr.Args[2]))
+			},
+		},
+		{
 			name:      "NOT_LIKE: a NOT LIKE 'test%'",
 			sql:       "a NOT LIKE 'test%'",
 			expectErr: false,
@@ -2589,6 +4885,22 @@ func TestBaseBinder_bindComparisonExpr(t *testing.T) {
 				funcExpr, ok := expr.Expr.(*plan.Expr_F)
 				require.True(t, ok)
 				require.Equal(t, "not", funcExpr.F.Func.ObjName)
+			},
+		},
+		{
+			name:      "NOT LIKE ESCAPE: a NOT LIKE 'test#%' ESCAPE '#'",
+			sql:       "a NOT LIKE 'test#%' ESCAPE '#'",
+			expectErr: false,
+			checkFunc: func(t *testing.T, expr *plan.Expr, err error) {
+				require.NoError(t, err)
+				notExpr := expr.GetF()
+				require.NotNil(t, notExpr)
+				require.Equal(t, "not", notExpr.Func.ObjName)
+				require.Len(t, notExpr.Args, 1)
+				likeExpr := notExpr.Args[0].GetF()
+				require.NotNil(t, likeExpr)
+				require.Equal(t, "like", likeExpr.Func.ObjName)
+				require.Len(t, likeExpr.Args, 3)
 			},
 		},
 		// Note: ILIKE requires string types, but 'a' column is BIGINT in genBuilderAndCtx
@@ -3522,4 +5834,813 @@ func TestBaseBinder_baseBindExpr(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestAppendGroupingSetOrderByProjectsOrdinalWithinVisibleLen verifies that a
+// positional ORDER BY reference within the visible select list passes through,
+// while a grouping key is tracked as a hidden column.
+func TestAppendGroupingSetOrderByProjectsOrdinalWithinVisibleLen(t *testing.T) {
+	stmts, err := parsers.Parse(
+		context.TODO(),
+		dialect.MYSQL,
+		`select a, count(*)
+		from select_test.bind_select
+		group by a with rollup
+		order by 2, grouping(a)`,
+		1,
+	)
+	require.NoError(t, err)
+
+	selectStmt := stmts[0].(*tree.Select)
+	selectClause := selectStmt.Select.(*tree.SelectClause)
+	branchExprs, rewrittenOrderBy, orderResolve, err := prepareGroupingSetOrderByProjects(nil, selectStmt.OrderBy, selectClause.Exprs, false)
+	require.NoError(t, err)
+	// visible: [a, count(*)] + hidden: [grouping(a)] = 3
+	require.Len(t, branchExprs, 3)
+
+	// First ORDER BY: ordinal 2 -> passes through; second: grouping(a) -> 0th hidden.
+	require.Equal(t, []int{-1, 0}, orderResolve.hiddenIdx)
+	existingPos, ok := rewrittenOrderBy[0].Expr.(*tree.NumVal)
+	require.True(t, ok)
+	pos, ok := existingPos.Int64()
+	require.True(t, ok)
+	require.Equal(t, int64(2), pos)
+}
+
+// TestAppendGroupingSetOrderByProjectsOrdinalOneWithinVisibleLen verifies that
+// ordinal 1 within a 2-column visible select list is accepted.
+func TestAppendGroupingSetOrderByProjectsOrdinalOneWithinVisibleLen(t *testing.T) {
+	stmts, err := parsers.Parse(
+		context.TODO(),
+		dialect.MYSQL,
+		`select a, count(*)
+		from select_test.bind_select
+		group by a with rollup
+		order by 1, grouping(a)`,
+		1,
+	)
+	require.NoError(t, err)
+
+	selectStmt := stmts[0].(*tree.Select)
+	selectClause := selectStmt.Select.(*tree.SelectClause)
+	branchExprs, _, orderResolve, err := prepareGroupingSetOrderByProjects(nil, selectStmt.OrderBy, selectClause.Exprs, false)
+	require.NoError(t, err)
+	require.Len(t, branchExprs, 3)
+	require.Equal(t, []int{-1, 0}, orderResolve.hiddenIdx)
+}
+
+// TestGroupingSetOrderByOrdinalStarExpansion is an end-to-end guard for the
+// star-expansion contract in the grouping-set ORDER BY path:
+//   - positional ORDER BY references are validated against the *visible*,
+//     star-expanded select list, not the raw AST list nor the hidden-expanded
+//     projection; and
+//   - a grouping() sort key resolves to its hidden projection column, not to a
+//     visible column, even when '*' widens the visible list.
+//
+// bind_select has columns (a, b, c), so `*, count(*)` yields 4 visible columns.
+func TestGroupingSetOrderByOrdinalStarExpansion(t *testing.T) {
+	mock := NewMockOptimizer(false)
+
+	// Valid visible ordinals (3 -> c, 4 -> count(*)) must be accepted even though
+	// the raw AST select list has only 2 entries.
+	pass := []string{
+		"select *, count(*) from select_test.bind_select group by a, b, c with rollup order by 3, grouping(a)",
+		"select *, count(*) from select_test.bind_select group by a, b, c with rollup order by 4",
+	}
+	for _, sql := range pass {
+		_, err := runOneStmt(mock, t, sql)
+		require.NoError(t, err, "sql=%s", sql)
+	}
+
+	// Ordinal 5 addresses a hidden grouping key (visible width is 4) and must be
+	// rejected; ordinal 6 is out of range entirely.
+	fail := []string{
+		"select *, count(*) from select_test.bind_select group by a, b, c with rollup order by 5, grouping(a)",
+		"select *, count(*) from select_test.bind_select group by a, b, c with rollup order by 6",
+	}
+	for _, sql := range fail {
+		_, err := runOneStmt(mock, t, sql)
+		require.Error(t, err, "sql=%s", sql)
+		require.Contains(t, err.Error(), "is not in select list", "sql=%s", sql)
+	}
+}
+
+// TestGroupingSetOrderByGroupingResolvesHiddenColumnWithStar verifies Bug 2: a
+// grouping() ORDER BY key must sort by the appended hidden projection column,
+// not by a visible column shifted in by '*' expansion.
+func TestGroupingSetOrderByGroupingResolvesHiddenColumnWithStar(t *testing.T) {
+	mock := NewMockOptimizer(false)
+
+	starPlan, err := runOneStmt(mock, t,
+		"select *, count(*) from select_test.bind_select group by a, b, c with rollup order by grouping(a)")
+	require.NoError(t, err)
+	starSort := firstSortColPos(t, starPlan)
+
+	// Without '*' the visible list is [a, b, c, count(*)] and the hidden
+	// grouping(a) column lands right after it. With '*' the visible list is the
+	// same width, so the hidden column position must be identical.
+	explicitPlan, err := runOneStmt(mock, t,
+		"select a, b, c, count(*) from select_test.bind_select group by a, b, c with rollup order by grouping(a)")
+	require.NoError(t, err)
+	explicitSort := firstSortColPos(t, explicitPlan)
+
+	require.Equal(t, explicitSort, starSort,
+		"grouping(a) must resolve to the same hidden column with and without '*'")
+	// The hidden grouping column sits past the 4 visible columns (0-based >= 4).
+	require.GreaterOrEqual(t, starSort, int32(4))
+}
+
+// firstSortColPos returns the ColPos of the first ORDER BY key of the first SORT
+// node in the plan, failing the test if the key is not a plain column reference.
+func firstSortColPos(t *testing.T, p *Plan) int32 {
+	for _, n := range p.GetQuery().Nodes {
+		if n.NodeType == plan.Node_SORT {
+			require.NotEmpty(t, n.OrderBy)
+			col := n.OrderBy[0].Expr.GetCol()
+			require.NotNil(t, col, "first sort key is not a column reference")
+			return col.ColPos
+		}
+	}
+	t.Fatal("no SORT node in plan")
+	return -1
+}
+
+// TestGroupingSetDistinctOrderByStarExpansion verifies that on the DISTINCT
+// grouping-set path a grouping() ORDER BY key matching a visible select item
+// resolves to that item's star-expanded position, not its raw AST index.
+// bind_select has columns (a, b, c), so `*, grouping(a)` yields 4 visible
+// columns and grouping(a) must sort by 0-based ColPos 3 — the same position as
+// in the explicit-column spelling.
+func TestGroupingSetDistinctOrderByStarExpansion(t *testing.T) {
+	mock := NewMockOptimizer(false)
+
+	starPlan, err := runOneStmt(mock, t,
+		"select distinct *, grouping(a) as ga from select_test.bind_select group by a, b, c with rollup order by grouping(a)")
+	require.NoError(t, err)
+	starSort := firstSortColPos(t, starPlan)
+
+	explicitPlan, err := runOneStmt(mock, t,
+		"select distinct a, b, c, grouping(a) as ga from select_test.bind_select group by a, b, c with rollup order by grouping(a)")
+	require.NoError(t, err)
+	explicitSort := firstSortColPos(t, explicitPlan)
+
+	require.Equal(t, explicitSort, starSort,
+		"DISTINCT grouping(a) must resolve to the same visible column with and without '*'")
+	require.Equal(t, int32(3), starSort)
+}
+
+// TestGroupingSetDistinctOrderByAliasShadowing verifies clause-correct alias
+// semantics when matching a DISTINCT ORDER BY expression against the visible
+// select list. Nested names prefer source columns over aliases, matching the
+// ordinary distinctOrderBinder.
+func TestGroupingSetDistinctOrderByAliasShadowing(t *testing.T) {
+	mock := NewMockOptimizer(false)
+
+	p, err := runOneStmt(mock, t,
+		"select distinct a as b, grouping(a) + b from select_test.bind_select group by a, b with rollup order by grouping(a) + b")
+	require.NoError(t, err)
+	require.Equal(t, int32(1), firstSortColPos(t, p))
+
+	// Sanity: without shadowing the same shape must still be accepted, sorting
+	// by the matched visible column (0-based ColPos 1).
+	p, err = runOneStmt(mock, t,
+		"select distinct a, grouping(a) + b from select_test.bind_select group by a, b with rollup order by grouping(a) + b")
+	require.NoError(t, err)
+	require.Equal(t, int32(1), firstSortColPos(t, p))
+}
+
+func TestGroupingSetDistinctOrderAliasResolutionParity(t *testing.T) {
+	mock := NewMockOptimizer(true)
+
+	_, err := runOneStmt(mock, t,
+		"select distinct grouping(a), abs(b) as b from select_test.bind_select "+
+			"group by a, b with rollup order by grouping(a) + b")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "for SELECT DISTINCT, ORDER BY expressions must appear in select list")
+
+	p, err := runOneStmt(mock, t,
+		"select distinct grouping(a), abs(b) as x, -abs(b) as x from select_test.bind_select "+
+			"group by a, b with rollup order by grouping(a) + x")
+	require.NoError(t, err)
+	require.True(t, hasAggAboveUnionAll(p))
+}
+
+// TestGroupingSetDistinctOrderByBetweenStars verifies that a DISTINCT ORDER BY
+// grouping() key matching a visible item that sits BETWEEN two star expansions
+// (t1.*, grouping(a), t2.*) resolves through the bound visible projection.
+// t1 (bind_select) expands to 3 columns (a, b, c), so grouping(a) as ga lands
+// at 0-based ColPos 3.
+func TestGroupingSetDistinctOrderByBetweenStars(t *testing.T) {
+	mock := NewMockOptimizer(false)
+
+	p, err := runOneStmt(mock, t,
+		"select distinct t1.*, grouping(a) as ga, t2.* from select_test.bind_select as t1, nation as t2 group by a, b, c, n_nationkey, n_name, n_regionkey, n_comment with rollup order by grouping(a)")
+	require.NoError(t, err)
+	require.Equal(t, int32(3), firstSortColPos(t, p))
+}
+
+func TestGroupingSetDistinctOrderByBoundIdentity(t *testing.T) {
+	mock := NewMockOptimizer(false)
+
+	// The unqualified b in ORDER BY resolves unambiguously to t1.b and therefore
+	// matches the selected bound expression grouping(a) + t1.b.
+	p, err := runOneStmt(mock, t,
+		"select distinct grouping(a) + t1.b from select_test.bind_select as t1 group by t1.a, t1.b with rollup order by grouping(a) + b")
+	require.NoError(t, err)
+	require.Equal(t, int32(0), firstSortColPos(t, p))
+
+	// An unqualified GROUPING argument is ambiguous across self-join inputs and
+	// must fail instead of being text-matched to either visible grouping bit.
+	_, err = runOneStmt(mock, t,
+		"select distinct grouping(a) from select_test.bind_select as t1, select_test.bind_select as t2 group by t1.a, t2.a with rollup order by grouping(a)")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "ambiguous")
+}
+
+func TestQualifyBoundGroupingOrderExprPreservesRelationIdentity(t *testing.T) {
+	_, bindCtx := genBuilderAndCtx()
+	t1 := bindCtx.bindings[0]
+	t1.table = "t1"
+	t1.tag = 1
+	t2 := *t1
+	t2.table = "t2"
+	t2.tag = 2
+	bindCtx.bindings = []*Binding{t1, &t2}
+	bindCtx.bindingByTable = map[string]*Binding{"t1": t1, "t2": &t2}
+	bindCtx.bindingByTag = map[int32]*Binding{1: t1, 2: &t2}
+	bindCtx.bindingByCol = map[string]*Binding{}
+
+	makeGrouping := func(table string) tree.Expr {
+		stmts, err := parsers.Parse(context.TODO(), dialect.MYSQL, "select grouping(a)", 1)
+		require.NoError(t, err)
+		expr := stmts[0].(*tree.Select).Select.(*tree.SelectClause).Exprs[0].Expr
+		funcExpr := expr.(*tree.FuncExpr)
+		funcExpr.Exprs[0] = tree.NewUnresolvedName(tree.NewCStr(table, 0), tree.NewCStr("a", 0))
+		return funcExpr
+	}
+
+	t1Expr, err := qualifyBoundGroupingOrderExpr(context.TODO(), bindCtx, makeGrouping("t1"))
+	require.NoError(t, err)
+	t2Expr, err := qualifyBoundGroupingOrderExpr(context.TODO(), bindCtx, makeGrouping("t2"))
+	require.NoError(t, err)
+	require.NotEqual(t, tree.String(t1Expr, dialect.MYSQL), tree.String(t2Expr, dialect.MYSQL))
+	require.Equal(t, "grouping(t1.a)", tree.String(t1Expr, dialect.MYSQL))
+	require.Equal(t, "grouping(t2.a)", tree.String(t2Expr, dialect.MYSQL))
+}
+
+func hasNodeType(p *Plan, nt plan.Node_NodeType) bool {
+	for _, n := range p.GetQuery().Nodes {
+		if n.NodeType == nt {
+			return true
+		}
+	}
+	return false
+}
+
+// hasAggAboveUnionAll reports whether an AGG node was appended after the last
+// UNION ALL, i.e. a whole-result de-duplication step sits above the grouping-set
+// union chain (the DISTINCT node is rewritten to AGG). Nodes are in append order,
+// with the union built before any top-level DISTINCT.
+func hasAggAboveUnionAll(p *Plan) bool {
+	nodes := p.GetQuery().Nodes
+	lastUnion := -1
+	for i, n := range nodes {
+		if n.NodeType == plan.Node_UNION_ALL {
+			lastUnion = i
+		}
+	}
+	if lastUnion < 0 {
+		return false
+	}
+	for _, n := range nodes[lastUnion+1:] {
+		if n.NodeType == plan.Node_AGG {
+			return true
+		}
+	}
+	return false
+}
+
+// TestGroupingSetDistinctGlobalDedup verifies that SELECT DISTINCT over a
+// grouping-set (ROLLUP) expansion de-duplicates the whole result: the branches
+// are stitched with UNION ALL (so every ROLLUP super-aggregate / grand-total row
+// survives) and a single DISTINCT step (rewritten to AGG) sits above the union.
+// The non-distinct form has no such de-dup step.
+func TestGroupingSetDistinctGlobalDedup(t *testing.T) {
+	mock := NewMockOptimizer(false)
+
+	distinctPlan, err := runOneStmt(mock, t,
+		"select distinct a, grouping(a) as ga from select_test.bind_select group by a, b with rollup")
+	require.NoError(t, err)
+	require.True(t, hasNodeType(distinctPlan, plan.Node_UNION_ALL),
+		"DISTINCT grouping-set must keep UNION ALL so ROLLUP rows survive")
+	require.True(t, hasAggAboveUnionAll(distinctPlan),
+		"DISTINCT grouping-set must de-duplicate the whole result above the union")
+
+	allPlan, err := runOneStmt(mock, t,
+		"select a, grouping(a) as ga from select_test.bind_select group by a, b with rollup")
+	require.NoError(t, err)
+	require.True(t, hasNodeType(allPlan, plan.Node_UNION_ALL),
+		"non-distinct grouping-set keeps UNION ALL")
+	require.False(t, hasAggAboveUnionAll(allPlan),
+		"non-distinct grouping-set has no whole-result de-dup above the union")
+}
+
+func groupingSetUnionLeaves(nodes []*plan.Node, nodeID int32) []int32 {
+	node := nodes[nodeID]
+	if node.NodeType != plan.Node_UNION_ALL {
+		return []int32{nodeID}
+	}
+	leaves := groupingSetUnionLeaves(nodes, node.Children[0])
+	return append(leaves, groupingSetUnionLeaves(nodes, node.Children[1])...)
+}
+
+func countAggInSingleChildBranch(nodes []*plan.Node, nodeID int32) int {
+	count := 0
+	for {
+		node := nodes[nodeID]
+		if node.NodeType == plan.Node_AGG {
+			count++
+		}
+		if len(node.Children) != 1 {
+			return count
+		}
+		nodeID = node.Children[0]
+	}
+}
+
+func TestGroupingSetDistinctKeepsBranchDedup(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	for _, test := range []struct {
+		name       string
+		groupBy    string
+		wantLeaves int
+	}{
+		{name: "rollup", groupBy: "a, b, c with rollup", wantLeaves: 4},
+		{name: "cube", groupBy: "cube(a, b, c)", wantLeaves: 8},
+		{name: "grouping sets", groupBy: "grouping sets ((a, b), (a), ())", wantLeaves: 3},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			p, err := runOneStmt(mock, t,
+				"select distinct 1 from select_test.bind_select group by "+test.groupBy)
+			require.NoError(t, err)
+			require.True(t, hasAggAboveUnionAll(p),
+				"global DISTINCT must remain above the grouping-set union")
+
+			nodes := p.GetQuery().Nodes
+			lastUnion := int32(-1)
+			for i, node := range nodes {
+				if node.NodeType == plan.Node_UNION_ALL {
+					lastUnion = int32(i)
+				}
+			}
+			require.NotEqual(t, int32(-1), lastUnion)
+
+			leaves := groupingSetUnionLeaves(nodes, lastUnion)
+			require.Len(t, leaves, test.wantLeaves)
+			for _, leaf := range leaves {
+				require.GreaterOrEqual(t, countAggInSingleChildBranch(nodes, leaf), 2,
+					"each branch must keep grouping aggregation and local DISTINCT")
+			}
+		})
+	}
+}
+
+func TestGroupingSetDistinctMaterializesVolatileProjectionOnce(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	tests := []struct {
+		name         string
+		groupBy      string
+		wantNextvals int
+	}{
+		{name: "rollup", groupBy: "a with rollup", wantNextvals: 2},
+		{name: "cube", groupBy: "cube(a, b)", wantNextvals: 4},
+		{name: "grouping sets", groupBy: "grouping sets ((a, b), (a), ())", wantNextvals: 3},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			p, err := runOneStmt(mock, t,
+				"select distinct nextval('grouping_distinct_seq') "+
+					"from select_test.bind_select group by "+test.groupBy)
+			require.NoError(t, err)
+
+			nextvals := 0
+			var countNextvals func(*plan.Expr)
+			countNextvals = func(expr *plan.Expr) {
+				if expr == nil {
+					return
+				}
+				if fn := expr.GetF(); fn != nil {
+					if fn.Func != nil && strings.EqualFold(fn.Func.ObjName, "nextval") {
+						nextvals++
+					}
+					for _, arg := range fn.Args {
+						countNextvals(arg)
+					}
+				}
+			}
+			for _, node := range p.GetQuery().Nodes {
+				for _, project := range node.ProjectList {
+					countNextvals(project)
+				}
+			}
+			require.Equal(t, test.wantNextvals, nextvals)
+		})
+	}
+}
+
+func TestGroupingSetDistinctOrderByHiddenKeyAfterDedup(t *testing.T) {
+	mock := NewMockOptimizer(true)
+
+	p, err := runOneStmt(mock, t,
+		"select distinct a from select_test.bind_select group by a, b with rollup order by rand()")
+	require.NoError(t, err)
+
+	nodes := p.GetQuery().Nodes
+	lastUnion := -1
+	for i, node := range nodes {
+		if node.NodeType == plan.Node_UNION_ALL {
+			lastUnion = i
+		}
+	}
+	require.NotEqual(t, -1, lastUnion)
+
+	distinctGroup := -1
+	for i := lastUnion + 1; i < len(nodes); i++ {
+		if nodes[i].NodeType == plan.Node_AGG {
+			distinctGroup = i
+			break
+		}
+	}
+	require.NotEqual(t, -1, distinctGroup)
+	require.Len(t, nodes[distinctGroup].GroupBy, 1,
+		"the hidden random order key must not enter the visible DISTINCT tuple")
+
+	hasOrderProject := false
+	for i := distinctGroup + 1; i < len(nodes); i++ {
+		if nodes[i].NodeType == plan.Node_PROJECT && len(nodes[i].ProjectList) == 2 {
+			hasOrderProject = true
+			break
+		}
+	}
+	require.True(t, hasOrderProject, "the hidden random key must be projected after DISTINCT")
+}
+
+func TestGroupingSetDistinctDerivedGroupingOrder(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	for _, testCase := range []struct {
+		name    string
+		groupBy string
+	}{
+		{name: "rollup", groupBy: "a, b with rollup"},
+		{name: "cube", groupBy: "cube(a, b)"},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			p, err := runOneStmt(mock, t,
+				"select distinct grouping(a) as ga, b from select_test.bind_select "+
+					"group by "+testCase.groupBy+" order by grouping(a) + cast(b as int)")
+			require.NoError(t, err)
+			require.True(t, hasAggAboveUnionAll(p))
+		})
+	}
+
+	_, err := runOneStmt(mock, t,
+		"select distinct b from select_test.bind_select group by a, b with rollup order by grouping(a) + b")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "for SELECT DISTINCT, ORDER BY expressions must appear in select list")
+}
+
+func TestGroupingSetDistinctListGroupingOrder(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	for _, testCase := range []struct {
+		name    string
+		groupBy string
+		orderBy string
+	}{
+		{
+			name:    "rollup in",
+			groupBy: "a, b with rollup",
+			orderBy: "grouping(a) + (b in (1, 2))",
+		},
+		{
+			name:    "rollup not in",
+			groupBy: "a, b with rollup",
+			orderBy: "grouping(a) + (b not in (1, 2))",
+		},
+		{
+			name:    "cube",
+			groupBy: "cube(a, b)",
+			orderBy: "grouping(a) + (b in (1, 2))",
+		},
+		{
+			name:    "grouping sets",
+			groupBy: "grouping sets ((a, b), (a), ())",
+			orderBy: "grouping(a) + (b in (1, 2))",
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			p, err := runOneStmt(mock, t,
+				"select distinct grouping(a), b from select_test.bind_select "+
+					"group by "+testCase.groupBy+" order by "+testCase.orderBy)
+			require.NoError(t, err)
+			require.True(t, hasAggAboveUnionAll(p))
+		})
+	}
+
+	_, err := runOneStmt(mock, t,
+		"select distinct grouping(a), b from select_test.bind_select "+
+			"group by a, b with rollup order by grouping(a) + (b in (a, 2))")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "for SELECT DISTINCT, ORDER BY expressions must appear in select list")
+}
+
+func TestRemapGroupingSetDistinctOrderExprList(t *testing.T) {
+	builder, branchCtx := genBuilderAndCtx()
+	unionCtx := NewBindContext(builder, nil)
+	unionCtx.projectTag = builder.GenNewBindTag()
+
+	intType := plan.Type{Id: int32(types.T_int64)}
+	selected := GetColExpr(intType, 1, 1)
+	unionCtx.projects = []*plan.Expr{DeepCopyExpr(selected)}
+	selectedKey, err := projectExprKey(selected)
+	require.NoError(t, err)
+	branchCtx.projectByExpr[selectedKey] = 0
+
+	listExpr := &plan.Expr{
+		Typ: plan.Type{Id: int32(types.T_tuple)},
+		Expr: &plan.Expr_List{List: &plan.ExprList{List: []*plan.Expr{
+			DeepCopyExpr(selected),
+			makePlan2Int64ConstExprWithType(2),
+		}}},
+	}
+	remapped, err := remapGroupingSetDistinctOrderExpr(
+		context.Background(), listExpr, branchCtx, unionCtx, 1, true)
+	require.NoError(t, err)
+	require.Equal(t, unionCtx.projectTag, remapped.GetList().List[0].GetCol().RelPos)
+	require.Equal(t, int32(0), remapped.GetList().List[0].GetCol().ColPos)
+	require.NotSame(t, listExpr, remapped)
+
+	vectorExpr := &plan.Expr{
+		Typ:  intType,
+		Expr: &plan.Expr_Vec{Vec: &plan.LiteralVec{Len: 2}},
+	}
+	remappedVector, err := remapGroupingSetDistinctOrderExpr(
+		context.Background(), vectorExpr, branchCtx, unionCtx, 1, false)
+	require.NoError(t, err)
+	require.NotSame(t, vectorExpr, remappedVector)
+
+	unselectedList := DeepCopyExpr(listExpr)
+	unselectedList.GetList().List[0] = GetColExpr(intType, 1, 0)
+	_, err = remapGroupingSetDistinctOrderExpr(
+		context.Background(), unselectedList, branchCtx, unionCtx, 1, false)
+	require.Error(t, err)
+
+	nilList := &plan.Expr{
+		Typ:  plan.Type{Id: int32(types.T_tuple)},
+		Expr: &plan.Expr_List{},
+	}
+	_, err = remapGroupingSetDistinctOrderExpr(
+		context.Background(), nilList, branchCtx, unionCtx, 1, false)
+	require.Error(t, err)
+}
+
+func TestGroupingSetDistinctOrderProjectionBoundaries(t *testing.T) {
+	mock := NewMockOptimizer(true)
+
+	_, err := runOneStmt(mock, t,
+		"select distinct grouping(a) + b from select_test.bind_select "+
+			"group by a, b with rollup order by (grouping(a) + b) + 1")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "for SELECT DISTINCT, ORDER BY expressions must appear in select list")
+
+	p, err := runOneStmt(mock, t,
+		"select distinct grouping(a), abs(b) as x from select_test.bind_select "+
+			"group by a, b with rollup order by grouping(a) + x")
+	require.NoError(t, err)
+	require.True(t, hasAggAboveUnionAll(p))
+
+	_, err = runOneStmt(mock, t,
+		"select distinct grouping(a), abs(b) from select_test.bind_select "+
+			"group by a, b with rollup order by grouping(a) + abs(b)")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "for SELECT DISTINCT, ORDER BY expressions must appear in select list")
+
+	_, err = runOneStmt(mock, t,
+		"select distinct grouping(a), abs(b) as x from select_test.bind_select "+
+			"group by a, b with rollup order by grouping(a) + abs(b) + x")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "for SELECT DISTINCT, ORDER BY expressions must appear in select list")
+}
+
+func TestGroupingSetDistinctOrderAliasIdentity(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	queries := []string{
+		"select distinct grouping(a), abs(b) as x, abs(b) as y " +
+			"from select_test.bind_select group by a, b with rollup order by grouping(a) + y",
+		"select distinct grouping(a), abs(b) as x " +
+			"from select_test.bind_select group by a, b with rollup order by grouping(a) + nullif(x, 0)",
+		"select distinct grouping(a), abs(b) as x " +
+			"from select_test.bind_select group by a, b with rollup " +
+			"order by grouping(a) + ((x, x + 1) in ((1, 2), (2, 3)))",
+	}
+	for _, query := range queries {
+		p, err := runOneStmt(mock, t, query)
+		require.NoError(t, err, query)
+		require.True(t, hasAggAboveUnionAll(p), query)
+	}
+}
+
+func TestGroupingSetDistinctOrderKeepsNestedVolatileCall(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	p, err := runOneStmt(mock, t,
+		"select distinct grouping(a), rand() as r from select_test.bind_select "+
+			"group by a, b with rollup order by grouping(a) + rand()")
+	require.NoError(t, err)
+
+	containsRand := func(expr *plan.Expr) bool {
+		var visit func(*plan.Expr) bool
+		visit = func(current *plan.Expr) bool {
+			if current == nil {
+				return false
+			}
+			if fn := current.GetF(); fn != nil {
+				if fn.Func != nil && strings.EqualFold(fn.Func.ObjName, "rand") {
+					return true
+				}
+				for _, arg := range fn.Args {
+					if visit(arg) {
+						return true
+					}
+				}
+			}
+			return false
+		}
+		return visit(expr)
+	}
+
+	foundOrderProjection := false
+	for _, node := range p.GetQuery().Nodes {
+		if node.NodeType != plan.Node_PROJECT || len(node.ProjectList) != 3 {
+			continue
+		}
+		if containsRand(node.ProjectList[2]) {
+			foundOrderProjection = true
+			require.Nil(t, node.ProjectList[2].GetCol(),
+				"the nested volatile call must not reuse the RAND select output")
+			break
+		}
+	}
+	require.True(t, foundOrderProjection)
+}
+
+func TestGroupingSetDistinctVectorProjects(t *testing.T) {
+	for _, typ := range []types.T{
+		types.T_array_float32,
+		types.T_array_float64,
+		types.T_array_bf16,
+		types.T_array_float16,
+		types.T_array_int8,
+		types.T_array_uint8,
+	} {
+		t.Run(typ.String(), func(t *testing.T) {
+			mock := NewMockOptimizer(true)
+			vectorCol := mock.ctxt.tables["bind_select"].Cols[0]
+			vectorCol.Name = "v"
+			vectorCol.OriginName = "v"
+			vectorCol.Typ = plan.Type{Id: int32(typ), Width: 3}
+			for _, groupBy := range []string{"v with rollup", "cube(v)"} {
+				_, err := runOneStmt(mock, t,
+					"select distinct v from select_test.bind_select group by "+groupBy)
+				require.NoError(t, err)
+			}
+		})
+	}
+}
+
+func TestGroupingSetDistinctBinaryProjects(t *testing.T) {
+	for _, typ := range []types.T{types.T_binary, types.T_varbinary} {
+		t.Run(typ.String(), func(t *testing.T) {
+			mock := NewMockOptimizer(true)
+			binaryCol := mock.ctxt.tables["bind_select"].Cols[0]
+			binaryCol.Name = "v"
+			binaryCol.OriginName = "v"
+			binaryCol.Typ = plan.Type{Id: int32(typ), Width: 8}
+
+			p, err := runOneStmt(mock, t,
+				"select distinct v from select_test.bind_select group by v with rollup")
+			require.NoError(t, err)
+
+			foundNormalization := false
+			for _, node := range p.GetQuery().Nodes {
+				if node.NodeType != plan.Node_PROJECT || len(node.Children) != 1 ||
+					p.GetQuery().Nodes[node.Children[0]].NodeType != plan.Node_UNION_ALL {
+					continue
+				}
+				foundNormalization = true
+				require.NotEmpty(t, node.ProjectList)
+				require.Equal(t, int32(typ), node.ProjectList[0].Typ.Id)
+				require.Equal(t, int32(8), node.ProjectList[0].Typ.Width)
+			}
+			require.True(t, foundNormalization)
+		})
+	}
+}
+
+func TestIffVectorCommonType(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	for _, query := range []string{
+		"select if(false, cast('[0,0]' as vecf32(2)), cast('[1.0000000001,2]' as vecf64(2)))",
+		"select if(false, cast('[1.0000000001,2]' as vecf64(2)), cast('[0,0]' as vecf32(2)))",
+	} {
+		p, err := runOneStmt(mock, t, query)
+		require.NoError(t, err)
+		root := p.GetQuery().Nodes[p.GetQuery().Steps[0]]
+		require.Equal(t, int32(types.T_array_float64), root.ProjectList[0].Typ.Id)
+		require.Equal(t, int32(2), root.ProjectList[0].Typ.Width)
+	}
+
+	_, err := runOneStmt(mock, t,
+		"select if(false, cast('[1,2]' as vecf32(2)), cast('[3,4,5]' as vecf32(3)))")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "invalid argument function if")
+
+	vectorTypes := []struct {
+		name    string
+		literal string
+	}{
+		{name: "vecf32", literal: "[1,2]"},
+		{name: "vecf64", literal: "[1.0000000001,2]"},
+		{name: "vecbf16", literal: "[1,2]"},
+		{name: "vecf16", literal: "[1,2]"},
+		{name: "vecint8", literal: "[-128,127]"},
+		{name: "vecuint8", literal: "[0,255]"},
+	}
+	for i := 0; i < len(vectorTypes); i++ {
+		for j := i + 1; j < len(vectorTypes); j++ {
+			for _, branches := range [][2]int{{i, j}, {j, i}} {
+				left, right := vectorTypes[branches[0]], vectorTypes[branches[1]]
+				p, err := runOneStmt(mock, t,
+					fmt.Sprintf("select if(false, cast('%s' as %s(2)), cast('%s' as %s(2)))",
+						left.literal, left.name, right.literal, right.name))
+				if (left.name == "vecf32" && right.name == "vecf64") ||
+					(left.name == "vecf64" && right.name == "vecf32") {
+					require.NoError(t, err)
+					root := p.GetQuery().Nodes[p.GetQuery().Steps[0]]
+					require.Equal(t, int32(types.T_array_float64), root.ProjectList[0].Typ.Id)
+					continue
+				}
+				require.Error(t, err)
+				require.Contains(t, err.Error(), "invalid argument function if")
+			}
+		}
+	}
+}
+
+func TestNormalizeGroupingSetDistinctProjectsTypedNull(t *testing.T) {
+	builder, bindCtx := genBuilderAndCtx()
+	for _, typ := range []types.T{
+		types.T_int64,
+		types.T_varchar,
+		types.T_binary,
+		types.T_varbinary,
+		types.T_decimal128,
+		types.T_date,
+		types.T_uuid,
+		types.T_array_float32,
+		types.T_array_float64,
+		types.T_array_bf16,
+		types.T_array_float16,
+		types.T_array_int8,
+		types.T_array_uint8,
+	} {
+		t.Run(typ.String(), func(t *testing.T) {
+			project := GetColExpr(
+				plan.Type{Id: int32(typ), NotNullable: false},
+				bindCtx.projectTag,
+				0,
+			)
+			normalized, err := normalizeGroupingSetDistinctProjects(
+				builder.GetContext(),
+				[]*plan.Expr{project},
+				[]*plan.Expr{project},
+			)
+			require.NoError(t, err)
+			require.Len(t, normalized, 1)
+
+			ifExpr := normalized[0].GetF()
+			require.NotNil(t, ifExpr)
+			require.Equal(t, "if", ifExpr.Func.ObjName)
+			require.Len(t, ifExpr.Args, 3)
+			nullLiteral := ifExpr.Args[1].GetLit()
+			require.NotNil(t, nullLiteral)
+			require.True(t, nullLiteral.Isnull)
+			require.Equal(t, int32(typ), ifExpr.Args[1].Typ.Id)
+			require.Equal(t, int32(typ), normalized[0].Typ.Id)
+		})
+	}
+
+	mock := NewMockOptimizer(true)
+	_, err := runOneStmt(mock, t,
+		"select distinct snapshot_id from mo_catalog.mo_snapshots group by snapshot_id with rollup")
+	require.NoError(t, err, "UUID grouping-set DISTINCT must build without an ANY-to-UUID cast")
 }

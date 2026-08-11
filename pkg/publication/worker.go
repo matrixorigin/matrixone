@@ -533,6 +533,7 @@ func (w *worker) onItem(taskCtx *TaskContext) {
 
 	err := retryPublication(
 		w.ctx,
+		"mark-iteration-running",
 		func() error {
 			// Ensure ccpr state is set to pending before executing iteration
 			if err := w.updateIterationState(w.ctx, taskCtx.TaskID, IterationStateRunning); err != nil {
@@ -543,12 +544,9 @@ func (w *worker) onItem(taskCtx *TaskContext) {
 		executorRetryOpt,
 	)
 	if err != nil {
-		logutil.Error(
-			"Publication-Task update iteration state to running failed",
-			zap.String("taskID", taskCtx.TaskID),
-			zap.Uint64("lsn", taskCtx.LSN),
-			zap.Error(err),
-		)
+		eventPublicationIterationStateUpdateFailed.ErrorLazy(func() []zap.Field {
+			return append([]zap.Field{zap.Uint64("lsn", taskCtx.LSN)}, append(logutil.StringFingerprintFields("task-id", taskCtx.TaskID), logutil.ErrorFingerprintFields("error", err)...)...)
+		})
 		return
 	}
 	err = ExecuteIteration(

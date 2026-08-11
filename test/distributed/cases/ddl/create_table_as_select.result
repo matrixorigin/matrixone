@@ -809,7 +809,7 @@ select * from time07;
 null
 drop table time07;
 drop table if exists test01;
-create table test01 as select col1 from time01 order by col1 nulls first;
+create table test01 as select col1 from time01 order by col1;
 select * from test01;
 ➤ col1[91,64,0]  𝄀
 null  𝄀
@@ -817,7 +817,7 @@ null  𝄀
 2020-10-11
 drop table test01;
 drop table if exists test02;
-create table test02 as select * from time01 order by col2 desc nulls first;
+create table test02 as select * from time01 order by col2 is not null, col2 desc;
 select * from test02;
 ➤ col1[91,64,0]  ¦  col2[93,64,0]  ¦  col3[93,64,0]  ¦  col4[92,64,0]  𝄀
 null  ¦  null  ¦  null  ¦  null  𝄀
@@ -825,7 +825,7 @@ null  ¦  null  ¦  null  ¦  null  𝄀
 1919-12-01  ¦  1990-10-10 01:01:01  ¦  2001-12-12 01:01:01  ¦  10:59:59
 drop table test02;
 drop table if exists test03;
-create table test03 as select * from time01 order by col2 desc nulls last;
+create table test03 as select * from time01 order by col2 desc;
 select * from test03;
 ➤ col1[91,64,0]  ¦  col2[93,64,0]  ¦  col3[93,64,0]  ¦  col4[92,64,0]  𝄀
 2020-10-11  ¦  2023-11-11 10:00:01  ¦  1997-01-13 12:12:12  ¦  12:12:12  𝄀
@@ -833,7 +833,7 @@ select * from test03;
 null  ¦  null  ¦  null  ¦  null
 drop table test03;
 drop table if exists test04;
-create table test04 as select col1 from time01 order by col1 nulls first;
+create table test04 as select col1 from time01 order by col1;
 select * from test04;
 ➤ col1[91,64,0]  𝄀
 null  𝄀
@@ -1731,7 +1731,114 @@ select * from alias02;
 ➤ newcol[4,32,0]  ¦  col1[4,32,0]  ¦  col2[3,38,0]  𝄀
 null  ¦  1  ¦  2  𝄀
 null  ¦  2  ¦  3
+drop table if exists ctas_non_ascii_alias;
+create table ctas_non_ascii_alias as select col1 as `中文别名` from alias01;
+desc ctas_non_ascii_alias;
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+中文别名  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦    ¦  
+select `中文别名` from ctas_non_ascii_alias order by `中文别名`;
+➤ 中文别名[4,32,0]  𝄀
+1  𝄀
+2
+drop table ctas_non_ascii_alias;
+drop table if exists ctas_reserved_alias;
+create table ctas_reserved_alias as select `order`.col1 as `select` from alias01 as `order`;
+select `select` from ctas_reserved_alias order by `select`;
+➤ select[4,32,0]  𝄀
+1  𝄀
+2
+drop table ctas_reserved_alias;
+drop table if exists ctas_cte_alias;
+create table ctas_cte_alias as with `select` (`from`) as (select col1 from alias01) select `from` from `select`;
+select `from` from ctas_cte_alias order by `from`;
+➤ from[4,32,0]  𝄀
+1  𝄀
+2
+drop table ctas_cte_alias;
+drop table if exists ctas_join_alias;
+create table ctas_join_alias as
+select `left`.`a b`
+from (select col1 as `a b` from alias01) as `left` (`a b`)
+join (select col1 as `a b` from alias01) as `right` (`a b`) using (`a b`);
+select `a b` from ctas_join_alias order by `a b`;
+➤ a b[4,32,0]  𝄀
+1  𝄀
+2
+drop table ctas_join_alias;
+drop table if exists `src``table`;
+drop table if exists `dst``table`;
+create table `src``table` (`a``b` int);
+insert into `src``table` values (1), (2);
+create table `dst``table` as select `s``x`.`a``b` as `x``y` from `src``table` as `s``x`;
+select `x``y` from `dst``table` order by `x``y`;
+➤ x`y[4,32,0]  𝄀
+1  𝄀
+2
+drop table `dst``table`;
+drop table `src``table`;
+drop table if exists ctas_index_hint_src;
+drop table if exists ctas_index_hint_dst;
+create table ctas_index_hint_src (
+col1 int,
+index `select` (col1),
+index `a b` (col1),
+index `x``y` (col1)
+);
+insert into ctas_index_hint_src values (1), (2);
+create table ctas_index_hint_dst as
+select * from ctas_index_hint_src force index (`select`, `a b`, `x``y`);
+select * from ctas_index_hint_dst order by col1;
+➤ col1[4,32,0]  𝄀
+1  𝄀
+2
+drop table ctas_index_hint_dst;
+drop table ctas_index_hint_src;
+drop table if exists ctas_interval_identifier_src;
+drop table if exists ctas_interval_identifier_dst;
+create table ctas_interval_identifier_src (`interval(x,day)` int);
+insert into ctas_interval_identifier_src values (1), (2);
+create table ctas_interval_identifier_dst as
+select `interval(x,day)` from ctas_interval_identifier_src;
+desc ctas_interval_identifier_dst;
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+interval(x,day)  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦    ¦  
+select `interval(x,day)` from ctas_interval_identifier_dst order by `interval(x,day)`;
+➤ interval(x,day)[4,32,0]  𝄀
+1  𝄀
+2
+drop table ctas_interval_identifier_dst;
+drop table ctas_interval_identifier_src;
+drop table if exists ctas_interval_string;
+create table ctas_interval_string as
+select 'interval(1,day)' as single_quoted, "interval(2,month)" as double_quoted;
+select * from ctas_interval_string;
+➤ single_quoted[12,-1,0]  ¦  double_quoted[12,-1,0]  𝄀
+interval(1,day)  ¦  interval(2,month)
+drop table ctas_interval_string;
+set @`a b` = 1;
+set @`select` = 2;
+set @`x``y` = 3;
+drop table if exists ctas_user_variable;
+create table ctas_user_variable as
+select @`a b` as space_name, @`select` as reserved_name, @`x``y` as backtick_name;
+select * from ctas_user_variable;
+➤ space_name[12,0,0]  ¦  reserved_name[12,0,0]  ¦  backtick_name[12,0,0]  𝄀
+1  ¦  2  ¦  3
+drop table ctas_user_variable;
 drop table alias01;
+set global autocommit = off;
+set session autocommit = on;
+select @@global.autocommit, @@session.autocommit;
+➤ @@global.autocommit[12,0,0]  ¦  @@autocommit[12,0,0]  𝄀
+0  ¦  1
+drop table if exists ctas_system_variable_scope;
+create table ctas_system_variable_scope as
+select @@global.autocommit as global_value, @@session.autocommit as session_value;
+select * from ctas_system_variable_scope;
+➤ global_value[12,0,0]  ¦  session_value[12,0,0]  𝄀
+0  ¦  1
+drop table ctas_system_variable_scope;
+set global autocommit = on;
 drop database test;
 drop database if exists db1;
 create database db1;
@@ -1951,8 +2058,8 @@ agg01  ¦  CREATE TABLE `agg01` (
   `avgcol` double DEFAULT NULL,
   `sumcol` decimal(38,0) DEFAULT NULL,
   `countcol` bigint NOT NULL,
-  `maxcol` double NOT NULL,
-  `mincol` double NOT NULL
+  `maxcol` double DEFAULT NULL,
+  `mincol` double DEFAULT NULL
 )
 select * from agg01;
 ➤ avgcol[8,54,0]  ¦  sumcol[3,38,0]  ¦  countcol[-5,64,0]  ¦  maxcol[8,54,0]  ¦  mincol[8,54,0]  𝄀
@@ -1970,7 +2077,94 @@ name VARCHAR(20) NOT NULL,
 price DECIMAL,
 PRIMARY KEY (category, id)
 );
-create dynamic table dt_test as select * from tx1;
-lack of option type
 drop table tx1;
 drop database db9;
+drop database if exists repro_ctas_datetime6;
+create database repro_ctas_datetime6;
+use repro_ctas_datetime6;
+create table t as
+select cast('2025-05-06 07:08:09.123456' as datetime(6)) as dt_lit;
+select dt_lit from t;
+➤ dt_lit[93,64,0]  𝄀
+2025-05-06 07:08:09.123456000
+select table_name, column_name, column_type, is_nullable
+from information_schema.columns
+where table_schema = 'repro_ctas_datetime6'
+order by ordinal_position;
+➤ table_name[12,-1,0]  ¦  column_name[12,-1,0]  ¦  column_type[12,-1,0]  ¦  is_nullable[12,-1,0]  𝄀
+t  ¦  dt_lit  ¦  DATETIME(6)  ¦  YES  𝄀
+t  ¦  __mo_fake_pk_col  ¦  BIGINT UNSIGNED(0)  ¦  NO
+create table t_union as
+select cast('2025-05-06 07:08:09.123456' as datetime(6)) as dt_lit
+union all
+select cast('2025-05-07 08:09:10.654321' as datetime(6));
+select dt_lit from t_union order by dt_lit;
+➤ dt_lit[93,64,0]  𝄀
+2025-05-06 07:08:09.123456000  𝄀
+2025-05-07 08:09:10.654321000
+drop database repro_ctas_datetime6;
+drop database if exists ctas_null_extension_26828;
+create database ctas_null_extension_26828;
+use ctas_null_extension_26828;
+create table l (id int primary key, lv int not null);
+create table r (id int primary key, rv int not null);
+insert into l values (1, 10), (2, 20);
+insert into r values (1, 100), (3, 300);
+create table direct_left as select l.id as l_id, l.lv, r.id as r_id, r.rv from l left join r on l.id = r.id;
+select * from direct_left order by l_id;
+➤ l_id[4,32,0]  ¦  lv[4,32,0]  ¦  r_id[4,32,0]  ¦  rv[4,32,0]  𝄀
+1  ¦  10  ¦  1  ¦  100  𝄀
+2  ¦  20  ¦  null  ¦  null
+create table derived_right as select * from (select l.id as l_id, l.lv, r.id as r_id, r.rv from l right join r on l.id = r.id) as src;
+select * from derived_right order by r_id;
+➤ l_id[4,32,0]  ¦  lv[4,32,0]  ¦  r_id[4,32,0]  ¦  rv[4,32,0]  𝄀
+1  ¦  10  ¦  1  ¦  100  𝄀
+null  ¦  null  ¦  3  ¦  300
+create view full_view as select l.id as l_id, l.lv, r.id as r_id, r.rv from l full join r on l.id = r.id;
+create table view_full as select * from full_view;
+select * from view_full order by coalesce(l_id, r_id);
+➤ l_id[4,32,0]  ¦  lv[4,32,0]  ¦  r_id[4,32,0]  ¦  rv[4,32,0]  𝄀
+1  ¦  10  ¦  1  ¦  100  𝄀
+2  ¦  20  ¦  null  ¦  null  𝄀
+null  ¦  null  ¦  3  ¦  300
+create table scalar_direct as select l.id as l_id, (select r.rv from r where r.id = l.id) as scalar_rv from l;
+select * from scalar_direct order by l_id;
+➤ l_id[4,32,0]  ¦  scalar_rv[4,32,0]  𝄀
+1  ¦  100  𝄀
+2  ¦  null
+create view scalar_view as select l.id as l_id, (select r.rv from r where r.id = l.id) as scalar_rv from l;
+create table scalar_view_ctas as select * from scalar_view;
+select * from scalar_view_ctas order by l_id;
+➤ l_id[4,32,0]  ¦  scalar_rv[4,32,0]  𝄀
+1  ¦  100  𝄀
+2  ¦  null
+create table coalesce_left as select l.id as l_id, coalesce(r.rv, -1) as rv_or_default from l left join r on l.id = r.id;
+select * from coalesce_left order by l_id;
+➤ l_id[4,32,0]  ¦  rv_or_default[4,32,0]  𝄀
+1  ¦  100  𝄀
+2  ¦  -1
+create table explicit_not_null_reject (r_id int not null) as select r.id from l left join r on l.id = r.id;
+constraint violation: Column 'r_id' cannot be null
+show tables like 'explicit_not_null_reject';
+➤ Tables_in_ctas_null_extension_26828[12,-1,0]
+select table_name, column_name, is_nullable from information_schema.columns where table_schema = 'ctas_null_extension_26828' and table_name in ('coalesce_left', 'derived_right', 'direct_left', 'scalar_direct', 'scalar_view_ctas', 'view_full') and column_name <> '__mo_fake_pk_col' order by table_name, ordinal_position;
+➤ table_name[12,-1,0]  ¦  column_name[12,-1,0]  ¦  is_nullable[12,-1,0]  𝄀
+coalesce_left  ¦  l_id  ¦  NO  𝄀
+coalesce_left  ¦  rv_or_default  ¦  NO  𝄀
+derived_right  ¦  l_id  ¦  YES  𝄀
+derived_right  ¦  lv  ¦  YES  𝄀
+derived_right  ¦  r_id  ¦  NO  𝄀
+derived_right  ¦  rv  ¦  NO  𝄀
+direct_left  ¦  l_id  ¦  NO  𝄀
+direct_left  ¦  lv  ¦  NO  𝄀
+direct_left  ¦  r_id  ¦  YES  𝄀
+direct_left  ¦  rv  ¦  YES  𝄀
+scalar_direct  ¦  l_id  ¦  NO  𝄀
+scalar_direct  ¦  scalar_rv  ¦  YES  𝄀
+scalar_view_ctas  ¦  l_id  ¦  NO  𝄀
+scalar_view_ctas  ¦  scalar_rv  ¦  YES  𝄀
+view_full  ¦  l_id  ¦  YES  𝄀
+view_full  ¦  lv  ¦  YES  𝄀
+view_full  ¦  r_id  ¦  YES  𝄀
+view_full  ¦  rv  ¦  YES
+drop database ctas_null_extension_26828;

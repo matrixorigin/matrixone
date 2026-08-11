@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -30,6 +31,7 @@ import (
 	"github.com/lni/vfs"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
@@ -62,6 +64,58 @@ func TestNodeHostConfig(t *testing.T) {
 	assert.Equal(t, cfg.DeploymentID, nhConfig.DeploymentID)
 	assert.Equal(t, cfg.DataDir, nhConfig.NodeHostDir)
 	assert.True(t, nhConfig.AddressByNodeHostID)
+}
+
+func TestCommandDeliveryTargetsReadyFiltersExpiredStores(t *testing.T) {
+	store := &store{cfg: DefaultConfig()}
+	store.cfg.HAKeeperConfig.TickPerSecond = 1
+	store.cfg.HAKeeperConfig.CNStoreTimeout = toml.Duration{Duration: 10 * time.Second}
+	store.cfg.HAKeeperConfig.TNStoreTimeout = toml.Duration{Duration: 10 * time.Second}
+	state := &pb.CheckerState{
+		Tick: 20,
+		CNState: pb.CNState{Stores: map[string]pb.CNStoreInfo{
+			"cn-live": {Tick: 20},
+			"cn-dead": {Tick: 1},
+		}},
+		TNState: pb.TNState{Stores: map[string]pb.TNStoreInfo{
+			"tn-live": {Tick: 20},
+			"tn-dead": {Tick: 1},
+		}},
+	}
+
+	delivery := hakeeper.CommandDeliveryState{
+		CNReady: map[string]bool{"cn-live": true},
+		TNReady: map[string]bool{"tn-live": true},
+	}
+	require.True(t, store.commandDeliveryTargetsReady(delivery, state))
+
+	delivery.CNReady["cn-live"] = false
+	require.False(t, store.commandDeliveryTargetsReady(delivery, state))
+	delivery.CNReady["cn-live"] = true
+	delivery.TNReady["tn-live"] = false
+	require.False(t, store.commandDeliveryTargetsReady(delivery, state))
+}
+
+func TestCommandDeliveryLogStoresReadyFiltersExpiredStores(t *testing.T) {
+	store := &store{cfg: DefaultConfig()}
+	store.cfg.HAKeeperConfig.TickPerSecond = 1
+	store.cfg.HAKeeperConfig.LogStoreTimeout = toml.Duration{Duration: 10 * time.Second}
+	state := &pb.CheckerState{
+		Tick: 20,
+		LogState: pb.LogState{Stores: map[string]pb.LogStoreInfo{
+			"log-live": {
+				Tick:                     20,
+				CommandDeliverySupported: true,
+			},
+			"log-dead": {Tick: 1},
+		}},
+	}
+
+	require.True(t, store.commandDeliveryLogStoresReady(state))
+	live := state.LogState.Stores["log-live"]
+	live.CommandDeliverySupported = false
+	state.LogState.Stores["log-live"] = live
+	require.False(t, store.commandDeliveryLogStoresReady(state))
 }
 
 func TestRaftConfig(t *testing.T) {
@@ -448,7 +502,11 @@ func TestTickerForTaskSchedule(t *testing.T) {
 		defer tickerCancel()
 
 		//do task schedule background
-		go store.tickerForTaskSchedule(tickerCxt, time.Millisecond*10)
+		go store.tickerForTaskSchedule(
+			tickerCxt,
+			time.Millisecond*10,
+			store.getCheckerStateFromLeader,
+		)
 
 		// making hakeeper state proceeds to running before test task schedule
 		proceedHAKeeperToRunning(t, store)
@@ -485,6 +543,81 @@ func TestTickerForTaskSchedule(t *testing.T) {
 	}
 
 	runHakeeperTaskServiceTest(t, fn)
+}
+
+func TestStoreCloseWaitsForTaskScheduleTicker(t *testing.T) {
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	var enteredOnce atomic.Bool
+	var releaseOnce sync.Once
+	releaseTicker := func() {
+		releaseOnce.Do(func() { close(release) })
+	}
+
+	store := &store{
+		cfg: Config{
+			HAKeeperCheckInterval: toml.Duration{Duration: time.Millisecond},
+		},
+		stopper:       stopper.NewStopper("log-store-test"),
+		tickerStopper: stopper.NewStopper("hakeeper-ticker-test"),
+	}
+	defer store.stopper.Stop()
+	defer store.tickerStopper.Stop()
+	defer releaseTicker()
+
+	require.NoError(t, store.startTaskScheduleTicker(func() (*pb.CheckerState, uint64) {
+		if enteredOnce.CompareAndSwap(false, true) {
+			close(entered)
+		}
+		<-release
+		return nil, 0
+	}))
+
+	select {
+	case <-entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("task schedule ticker did not enter checker state lookup")
+	}
+
+	closeResult := make(chan error, 1)
+	go func() {
+		closeResult <- store.close()
+	}()
+
+	deadline := time.NewTimer(5 * time.Second)
+	defer deadline.Stop()
+	probeTicker := time.NewTicker(time.Millisecond)
+	defer probeTicker.Stop()
+	for {
+		err := store.tickerStopper.RunNamedTask(
+			"close-admission-probe",
+			func(context.Context) {},
+		)
+		if err != nil {
+			require.ErrorIs(t, err, stopper.ErrUnavailable)
+			break
+		}
+		select {
+		case <-probeTicker.C:
+		case <-deadline.C:
+			t.Fatal("store close did not stop ticker task admission")
+		}
+	}
+
+	select {
+	case err := <-closeResult:
+		require.NoError(t, err)
+		t.Fatal("store close returned while task schedule ticker was still running")
+	default:
+	}
+
+	releaseTicker()
+	select {
+	case err := <-closeResult:
+		require.NoError(t, err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("store close did not return after task schedule ticker exited")
+	}
 }
 
 func TestHAKeeperTick(t *testing.T) {
