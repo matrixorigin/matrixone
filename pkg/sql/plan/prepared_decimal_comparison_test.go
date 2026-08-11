@@ -21,6 +21,7 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/stretchr/testify/require"
 )
@@ -390,6 +391,33 @@ func TestFillExactDecimalComparisonLeavesOtherParamsForRuntimeTyping(t *testing.
 	require.NotNil(t, prepared.GetQuery().Nodes[0].ProjectList[0].GetP())
 	require.True(t, planExprContainsPreparedDecimalParam(
 		findPreparedDecimalComparisonInPlan(prepared, "=")))
+}
+
+func TestFillExactDecimalComparisonPreservesFloatProtocolDomain(t *testing.T) {
+	ctx := context.Background()
+	decimalType := types.New(types.T_decimal128, 20, 4)
+	comparison, err := BindFuncExprImplByPlanExpr(ctx, "=", []*planpb.Expr{
+		makePreparedDecimalComparisonColumn(decimalType), makePreparedDecimalComparisonParam(0),
+	})
+	require.NoError(t, err)
+	prepared := &planpb.Plan{Plan: &planpb.Plan_Query{Query: &planpb.Query{
+		Steps: []int32{0},
+		Nodes: []*planpb.Node{{
+			NodeType:   planpb.Node_FILTER,
+			FilterList: []*planpb.Expr{comparison},
+		}},
+	}}}
+
+	filled, err := FillExactDecimalComparisonParamsInPlan(ctx, prepared, []any{
+		ParamValue{Value: "9007199254740992", Kind: vector.PrepareParamFloat},
+	})
+	require.NoError(t, err)
+	rewritten := findPreparedDecimalComparisonInPlan(filled, "=")
+	require.NotNil(t, rewritten)
+	for _, arg := range rewritten.GetF().Args {
+		require.Equal(t, int32(types.T_float64), arg.Typ.Id)
+	}
+	require.False(t, planExprContainsPreparedDecimalParam(rewritten))
 }
 
 func TestDecimalScalarSubqueryPreservesConstantAndParamDomain(t *testing.T) {

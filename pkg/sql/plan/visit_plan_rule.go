@@ -544,7 +544,11 @@ func (rule *ResetParamRefRule) preparedDecimalComparisonValue(expr *plan.Expr) (
 	}
 	stringValue, ok := literal.Value.(*plan.Literal_Sval)
 	if !ok {
-		return nil, false, nil
+		// Binary-protocol numeric parameters already carry their coercion
+		// domain in the literal type.  Replace the planner-injected DECIMAL
+		// cast with that typed value so the enclosing comparison can be rebound
+		// in the protocol value's native domain (for example, FLOAT64).
+		return raw, true, nil
 	}
 	numericValue, ok := function.GetNumericStringPrefix(stringValue.Sval)
 	if !ok {

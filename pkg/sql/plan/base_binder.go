@@ -769,7 +769,9 @@ func (b *baseBinder) bindRangeCond(astExpr *tree.RangeCond, depth int32, isRoot 
 			if err != nil {
 				return nil, err
 			}
-			if types.T(from.Typ.Id).IsMySQLString() && types.T(to.Typ.Id).IsMySQLString() {
+			fromType, toType := types.T(from.Typ.Id), types.T(to.Typ.Id)
+			if fromType.IsMySQLString() && (toType.IsMySQLString() || toType.ToType().IsNumeric()) ||
+				toType.IsMySQLString() && fromType.ToType().IsNumeric() {
 				lowerOp, upperOp, logical := ">=", "<=", "and"
 				if astExpr.Not {
 					lowerOp, upperOp, logical = "<", ">", "or"
@@ -777,7 +779,24 @@ func (b *baseBinder) bindRangeCond(astExpr *tree.RangeCond, depth int32, isRoot 
 				// BETWEEN selects one common coercion domain for all three
 				// operands. Only two prepared TEXT endpoints are exact; mixing a
 				// runtime parameter with a literal/foldable endpoint uses REAL.
-				exact := isDirectDynamicParam(from) && isDirectDynamicParam(to)
+				exact := fromType.IsMySQLString() && toType.IsMySQLString() &&
+					isDirectDynamicParam(from) && isDirectDynamicParam(to)
+				if !exact {
+					floatType := types.T_float64.ToType()
+					target := makePlan2Type(&floatType)
+					left, err = appendCastBeforeExpr(b.GetContext(), left, target)
+					if err != nil {
+						return nil, err
+					}
+					from, err = appendCastBeforeExpr(b.GetContext(), from, target)
+					if err != nil {
+						return nil, err
+					}
+					to, err = appendCastBeforeExpr(b.GetContext(), to, target)
+					if err != nil {
+						return nil, err
+					}
+				}
 				lower, err := bindMixedInListComparison(
 					b.GetContext(), lowerOp, DeepCopyExpr(left), from, exact)
 				if err != nil {
@@ -2203,6 +2222,10 @@ func (b *baseBinder) bindComparisonExpr(astExpr *tree.ComparisonExpr, depth int3
 			}
 
 			if subquery := rightArg.GetSub(); subquery != nil {
+				leftArg, err = b.normalizeDecimalSubqueryProducer("=", leftArg, rightArg)
+				if err != nil {
+					return nil, err
+				}
 				leftArg = b.useStoredMySQLSpecialTypesForNumericSubquery(leftArg, rightArg)
 				if list := leftArg.GetList(); list != nil {
 					if len(list.List) != int(subquery.RowSize) {
@@ -2250,6 +2273,10 @@ func (b *baseBinder) bindComparisonExpr(astExpr *tree.ComparisonExpr, depth int3
 			}
 
 			if subquery := rightArg.GetSub(); subquery != nil {
+				leftArg, err = b.normalizeDecimalSubqueryProducer("=", leftArg, rightArg)
+				if err != nil {
+					return nil, err
+				}
 				leftArg = b.useStoredMySQLSpecialTypesForNumericSubquery(leftArg, rightArg)
 				if list := leftArg.GetList(); list != nil {
 					if len(list.List) != int(subquery.RowSize) {
@@ -2299,6 +2326,10 @@ func (b *baseBinder) bindComparisonExpr(astExpr *tree.ComparisonExpr, depth int3
 		}
 
 		if subquery := expr.GetSub(); subquery != nil {
+			child, err = b.normalizeDecimalSubqueryProducer(op, child, expr)
+			if err != nil {
+				return nil, err
+			}
 			child = b.useStoredMySQLSpecialTypesForNumericSubquery(child, expr)
 			if list := child.GetList(); list != nil {
 				if len(list.List) != int(subquery.RowSize) {
@@ -2405,6 +2436,29 @@ func (b *baseBinder) bindDecimalScalarSubqueryComparison(
 		return bindCurrentArgs()
 	}
 	return nil, false, nil
+}
+
+func (b *baseBinder) normalizeDecimalSubqueryProducer(op string, child, subExpr *Expr) (*Expr, error) {
+	if !types.T(child.Typ.Id).IsDecimal() {
+		return child, nil
+	}
+	projects := b.subqueryProjectList(subExpr)
+	if len(projects) != 1 || !types.T(projects[0].Typ.Id).IsMySQLString() {
+		return child, nil
+	}
+	args := []*Expr{child, projects[0]}
+	foldDecimalComparisonStringConstants(b.builder.compCtx.GetProcess(), op, args)
+	if err := normalizeDecimalStringLiteralComparisonArgs(b.GetContext(), op, args); err != nil {
+		return nil, err
+	}
+	if err := normalizeDecimalParamComparisonArgs(b.GetContext(), op, args); err != nil {
+		return nil, err
+	}
+	if types.T(args[1].Typ.Id).IsDecimal() {
+		projects[0] = args[1]
+		subExpr.Typ = args[1].Typ
+	}
+	return args[0], nil
 }
 
 func (b *baseBinder) bindWithRawMySQLSpecialTypes(bind func() (*Expr, error)) (*Expr, error) {
@@ -4665,8 +4719,17 @@ func controlFlowDecimalLiteralMetadata(expr *Expr) (int32, int32, bool) {
 	if !ok {
 		return 0, 0, false
 	}
-	_, width, scale, ok := canonicalExactDecimalString(value)
-	return width, scale, ok
+	// The implicit literal cast already carries the physical coefficient's
+	// width and scale. Keep that scale unchanged when narrowing control-flow
+	// metadata; recomputing a canonical scale would require rescaling the
+	// coefficient as well (for example, 2.0 is stored as 20 at scale 1).
+	width := decimalLiteralPrecision(value)
+	if strings.ContainsAny(value, "eE") {
+		if _, naturalWidth, _, ok := canonicalExactDecimalString(value); ok {
+			width = naturalWidth
+		}
+	}
+	return width, expr.Typ.Scale, true
 }
 
 func decimalIntegerWidth(expr *Expr, typ types.Type) (int32, bool) {
@@ -4931,7 +4994,7 @@ func decimalStringLiteralValue(expr *Expr) (string, bool) {
 	}
 	if literal := expr.GetLit(); literal != nil {
 		value, ok := literal.Value.(*plan.Literal_Sval)
-		if !ok || literal.Isnull {
+		if !ok || literal.Isnull || literal.IsBin && !isCharacterStringType(expr.Typ.Id) {
 			return "", false
 		}
 		return value.Sval, true

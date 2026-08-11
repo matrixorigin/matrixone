@@ -23,6 +23,7 @@ import (
 	"math"
 	"path"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -3227,6 +3228,7 @@ func PlanHasExactDecimalComparisonParam(ctx context.Context, preparePlan *Plan) 
 type ParamValue struct {
 	Value any
 	IsBin bool
+	Kind  vector.PrepareParamKind
 }
 
 func replaceParamVals(ctx context.Context, plan0 *Plan, paramVals []any) error {
@@ -3244,9 +3246,11 @@ func makePrepareParamExprs(paramVals []any) []*Expr {
 	params := make([]*Expr, len(paramVals))
 	for i, val := range paramVals {
 		isBin := false
+		kind := vector.PrepareParamNone
 		if param, ok := val.(ParamValue); ok {
 			val = param.Value
 			isBin = param.IsBin
+			kind = param.Kind
 		}
 		if val == nil {
 			pc := &plan.Literal{
@@ -3259,8 +3263,28 @@ func makePrepareParamExprs(paramVals []any) []*Expr {
 				},
 			}
 		} else {
+			text := fmt.Sprintf("%v", val)
+			switch kind {
+			case vector.PrepareParamFloat:
+				if value, err := strconv.ParseFloat(text, 64); err == nil {
+					params[i] = makePlan2Float64ConstExprWithType(value)
+					continue
+				}
+			case vector.PrepareParamInteger:
+				if value, err := strconv.ParseInt(text, 10, 64); err == nil {
+					params[i] = makePlan2Int64ConstExprWithType(value)
+					continue
+				}
+				if value, err := strconv.ParseUint(text, 10, 64); err == nil {
+					params[i] = makePlan2Uint64ConstExprWithType(value)
+					continue
+				}
+			case vector.PrepareParamBoolean:
+				params[i] = makePlan2BoolConstExprWithType(text == "1" || strings.EqualFold(text, "true"))
+				continue
+			}
 			pc := &plan.Literal{IsBin: isBin}
-			pc.Value = &plan.Literal_Sval{Sval: fmt.Sprintf("%v", val)}
+			pc.Value = &plan.Literal_Sval{Sval: text}
 			params[i] = &plan.Expr{
 				Expr: &plan.Expr_Lit{
 					Lit: pc,

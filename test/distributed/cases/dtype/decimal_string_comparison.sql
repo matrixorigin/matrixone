@@ -76,6 +76,14 @@ SELECT GROUP_CONCAT(id ORDER BY id) AS embedded_space_prefix_ids
 FROM numeric_prefix_values WHERE d = '1 2';
 SELECT GROUP_CONCAT(id ORDER BY id) AS scientific_notation_ids
 FROM numeric_prefix_values WHERE d = '1e2';
+CREATE TABLE binary_literal_values (id INT PRIMARY KEY, d DECIMAL(10,0));
+INSERT INTO binary_literal_values VALUES (1, 9), (2, 57);
+SELECT GROUP_CONCAT(id ORDER BY id) AS raw_hex_bytes_ids
+FROM binary_literal_values WHERE d = x'393030373139393235343734303939322e30303031';
+SELECT GROUP_CONCAT(id ORDER BY id) AS raw_bit_bytes_ids
+FROM binary_literal_values WHERE d = b'111001';
+SELECT GROUP_CONCAT(id ORDER BY id) AS binary_character_text_ids
+FROM binary_literal_values WHERE d = _binary'9';
 
 SELECT GROUP_CONCAT(id ORDER BY id) AS zero_large_exponent_ids
 FROM numeric_prefix_values WHERE d = '0e10000';
@@ -222,6 +230,20 @@ SELECT GROUP_CONCAT(id ORDER BY id) AS cast_not_between_ids
 FROM boundary_values
 WHERE d128 NOT BETWEEN CAST('9007199254740992.00005' AS CHAR)
                    AND CAST('9007199254740992.99995' AS CHAR);
+
+SELECT GROUP_CONCAT(id ORDER BY id) AS mixed_numeric_between_ids
+FROM boundary_values
+WHERE d128 BETWEEN '9007199254740992.00005' AND 9007199254740992.99995;
+SELECT GROUP_CONCAT(id ORDER BY id) AS mixed_numeric_not_between_ids
+FROM boundary_values
+WHERE d128 NOT BETWEEN '9007199254740992.00005' AND 9007199254740992.99995;
+
+SELECT GROUP_CONCAT(id ORDER BY id) AS quantified_any_concat_ids
+FROM boundary_values
+WHERE d128 = ANY(SELECT CONCAT('9007199254740992.000', '1'));
+SELECT GROUP_CONCAT(id ORDER BY id) AS quantified_not_in_concat_ids
+FROM boundary_values
+WHERE d128 NOT IN (SELECT CONCAT('9007199254740992.000', '1'));
 
 CREATE TABLE scalar_runtime_strings AS
 SELECT s FROM runtime_strings;

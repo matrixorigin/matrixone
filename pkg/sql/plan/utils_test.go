@@ -24,6 +24,7 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -219,6 +220,15 @@ func TestFillValuesOfParamsInPlanDoesNotMutatePreparedPlan(t *testing.T) {
 		require.NotSame(t, source, copiedLiteral.GetSrc())
 		require.NotNil(t, binaryLiteral.GetLit().GetSrc().GetP())
 	}
+}
+
+func TestMakePrepareParamExprsPreservesNumericProtocolKind(t *testing.T) {
+	params := makePrepareParamExprs([]any{
+		ParamValue{Value: "9007199254740992", Kind: vector.PrepareParamFloat},
+		ParamValue{Value: "9007199254740992", Kind: vector.PrepareParamInteger},
+	})
+	require.IsType(t, &plan.Literal_Dval{}, params[0].GetLit().GetValue())
+	require.IsType(t, &plan.Literal_I64Val{}, params[1].GetLit().GetValue())
 }
 
 func TestFillValuesOfParamsInPlanRejectsControlStatements(t *testing.T) {

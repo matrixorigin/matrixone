@@ -560,8 +560,8 @@ func TestBuildExecuteUserParamsHonorsStoredProcedureScope(t *testing.T) {
 		vector.PrepareParamNone,
 	}, paramKinds)
 	require.Equal(t, []any{
-		plan2.ParamValue{Value: int64(10), IsBin: false},
-		plan2.ParamValue{Value: int64(20), IsBin: false},
+		plan2.ParamValue{Value: int64(10), IsBin: false, Kind: vector.PrepareParamInteger},
+		plan2.ParamValue{Value: int64(20), IsBin: false, Kind: vector.PrepareParamInteger},
 		plan2.ParamValue{Value: "session-binary", IsBin: true},
 	}, paramVals)
 	require.Equal(t, "10", params.GetStringAt(0))

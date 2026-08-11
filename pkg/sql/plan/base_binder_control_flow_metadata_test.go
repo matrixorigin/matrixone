@@ -742,6 +742,29 @@ func TestDecimalLiteralMetadataPrecision(t *testing.T) {
 	require.Equal(t, int32(1), expr.Typ.Scale)
 }
 
+func TestControlFlowDecimalLiteralKeepsPhysicalScale(t *testing.T) {
+	for _, test := range []struct {
+		sql   string
+		width int32
+		scale int32
+	}{
+		{sql: "select if(1, 2.0, 3.0)", width: 2, scale: 1},
+		{sql: "select case when 1 then 2.0 else 3.0 end", width: 2, scale: 1},
+		{sql: "select coalesce(2.50, 3.50)", width: 3, scale: 2},
+	} {
+		t.Run(test.sql, func(t *testing.T) {
+			stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, test.sql, 1)
+			require.NoError(t, err)
+			pl, err := BuildPlan(NewMockCompilerContext(true), stmt, false)
+			require.NoError(t, err)
+			query := pl.GetQuery()
+			expr := query.Nodes[query.Steps[len(query.Steps)-1]].ProjectList[0]
+			require.Equal(t, test.width, expr.Typ.Width)
+			require.Equal(t, test.scale, expr.Typ.Scale)
+		})
+	}
+}
+
 func TestOrdinaryDecimalLiteralKeepsLegacyMetadata(t *testing.T) {
 	stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, "select 9.5", 1)
 	require.NoError(t, err)

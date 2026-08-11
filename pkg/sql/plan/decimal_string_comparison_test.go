@@ -257,6 +257,11 @@ func TestDecimalNonExactStringExpressionsKeepGenericCoercion(t *testing.T) {
 	}{
 		{name: "non-numeric literal", expr: makePlan2StringConstExprWithType("not-a-number")},
 		{name: "null literal", expr: MakePlan2NullTextConstExprWithType("")},
+		{name: "raw binary literal", expr: &planpb.Expr{
+			Typ: planpb.Type{Id: int32(types.T_varbinary)},
+			Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{
+				IsBin: true, Value: &planpb.Literal_Sval{Sval: "9007199254740992.0001"}}},
+		}},
 		{name: "varchar column", expr: &planpb.Expr{
 			Typ:  planpb.Type{Id: int32(types.T_varchar)},
 			Expr: &planpb.Expr_Col{Col: &planpb.ColRef{RelPos: 0, ColPos: 1}},

@@ -277,10 +277,10 @@ PREPARE p_mixed_not_between FROM
 SET @lo = '9007199254740992.00005';
 EXECUTE p_mixed_between USING @lo;
 ➤ GROUP_CONCAT(id order by id separator ,)[12,0,0]  𝄀
-2,3,4,5,6
+2,3,4,5
 EXECUTE p_mixed_not_between USING @lo;
 ➤ GROUP_CONCAT(id order by id separator ,)[12,0,0]  𝄀
-null
+6
 DEALLOCATE PREPARE p_mixed_between;
 DEALLOCATE PREPARE p_mixed_not_between;
 PREPARE p_scalar FROM
