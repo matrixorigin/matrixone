@@ -2628,15 +2628,9 @@ func pkCommitTSMatchedInRange(
 		return false, false
 	}
 	timestamps := vector.MustFixedColWithTypeCheck[types.TS](commitTSVec)
-	var aborts []bool
-	if abortVec != nil && !abortVec.IsConstNull() {
-		if abortVec.GetType().Oid != types.T_bool {
-			return false, false
-		}
-		aborts = vector.MustFixedColWithTypeCheck[bool](abortVec)
-		if len(aborts) != len(timestamps) {
-			return false, false
-		}
+	abortColumn, err := ioutil.ValidateTombstoneAbortColumn(len(timestamps), abortVec)
+	if err != nil {
+		return false, false
 	}
 	for _, sel := range sels {
 		if sel < 0 || int(sel) >= len(timestamps) {
@@ -2645,11 +2639,8 @@ func pkCommitTSMatchedInRange(
 		if commitTSVec.IsNull(uint64(sel)) {
 			return false, false
 		}
-		if aborts != nil {
-			if abortVec.IsNull(uint64(sel)) {
-				return false, false
-			}
-			if aborts[sel] {
+		if abortColumn.IsPresent() {
+			if abortColumn.IsAborted(int(sel)) {
 				continue
 			}
 		}

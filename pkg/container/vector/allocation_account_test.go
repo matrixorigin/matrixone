@@ -762,6 +762,23 @@ func TestWindowPreservesGroupingProvenance(t *testing.T) {
 	require.Zero(t, mp.CurrNB())
 }
 
+func TestWindowPreservesOffsetConstNull(t *testing.T) {
+	mp := mpool.MustNewZero()
+	source, err := NewConstFixed(
+		types.T_int64.ToType(), int64(7), 4, mp,
+	)
+	require.NoError(t, err)
+	source.SetNull(0)
+
+	window, err := source.Window(2, 4)
+	require.NoError(t, err)
+	require.True(t, window.IsConstNull())
+	require.Equal(t, 2, window.Length())
+	window.Free(mp)
+	source.Free(mp)
+	require.Zero(t, mp.CurrNB())
+}
+
 func TestAccountedWindowOwnsRangeBitmaps(t *testing.T) {
 	state := newTestVectorAllocationAccount(t, 1<<20, 16)
 	mp := mpool.MustNewZero()
