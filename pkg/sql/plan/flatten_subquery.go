@@ -372,7 +372,7 @@ func (builder *QueryBuilder) flattenSubquery(
 			builder.normalizeDirectCorrelatedScalarProjection(subID, subCtx)
 	}
 
-	subID, preds, err := builder.pullupCorrelatedPredicates(subID, subCtx)
+	subID, preds, err := builder.pullupCorrelatedPredicates(subID, subCtx, subquery.Typ, true)
 	if err != nil {
 		return 0, nil, err
 	}
@@ -1685,7 +1685,12 @@ func replaceGroupTagRefs(expr *plan.Expr, groupTag int32, groupBy []*plan.Expr) 
 	return expr
 }
 
-func (builder *QueryBuilder) pullupCorrelatedPredicates(nodeID int32, ctx *BindContext) (int32, []*plan.Expr, error) {
+func (builder *QueryBuilder) pullupCorrelatedPredicates(
+	nodeID int32,
+	ctx *BindContext,
+	subqueryType plan.SubqueryRef_Type,
+	isSubqueryRoot bool,
+) (int32, []*plan.Expr, error) {
 	node := builder.qry.Nodes[nodeID]
 
 	var preds []*plan.Expr
@@ -1693,7 +1698,11 @@ func (builder *QueryBuilder) pullupCorrelatedPredicates(nodeID int32, ctx *BindC
 
 	var subPreds []*plan.Expr
 	for i, childID := range node.Children {
-		node.Children[i], subPreds, err = builder.pullupCorrelatedPredicates(childID, ctx)
+		childIsSubqueryRoot := isSubqueryRoot && len(node.Children) == 1 &&
+			node.Limit == nil && node.Offset == nil &&
+			(node.NodeType == plan.Node_PROJECT || node.NodeType == plan.Node_SORT)
+		node.Children[i], subPreds, err = builder.pullupCorrelatedPredicates(
+			childID, ctx, subqueryType, childIsSubqueryRoot)
 		if err != nil {
 			return 0, nil, err
 		}
@@ -1735,7 +1744,415 @@ func (builder *QueryBuilder) pullupCorrelatedPredicates(nodeID int32, ctx *BindC
 		}
 	}
 
+	if len(preds) > 0 && (node.Limit != nil || node.Offset != nil) {
+		nodeID, err = builder.rewriteCorrelatedPagination(
+			nodeID, node, preds, ctx, subqueryType, isSubqueryRoot)
+		if err != nil {
+			return 0, nil, err
+		}
+	}
+
 	return nodeID, preds, err
+}
+
+// rewriteCorrelatedPagination preserves the evaluation boundary of LIMIT and
+// OFFSET while decorrelating an equality-correlated subquery. Before predicate
+// pull-up, pagination runs once for every outer correlation key. After pull-up,
+// a plain LIMIT on the right input would run once globally and silently remove
+// rows belonging to other keys.
+//
+// Rewrite the pagination as ROW_NUMBER over the inner equality keys, then keep
+// the requested row-number interval. Predicates that cannot define stable
+// inner partitions are rejected instead of being executed with global limit
+// semantics. In particular, a non-equality predicate may select a different
+// set for two outer rows that share every equality key.
+func (builder *QueryBuilder) rewriteCorrelatedPagination(
+	nodeID int32,
+	node *plan.Node,
+	preds []*plan.Expr,
+	ctx *BindContext,
+	subqueryType plan.SubqueryRef_Type,
+	isSubqueryRoot bool,
+) (int32, error) {
+	limit, literal := getLiteralUint64(node.Limit)
+	if !literal {
+		return 0, moerr.NewNYI(builder.GetContext(), "dynamic LIMIT in correlated subquery")
+	}
+	if limit == 0 {
+		// An empty right input is empty for every correlation key, so the global
+		// zero-row plan already has the same scalar and existential semantics.
+		return nodeID, nil
+	}
+
+	offset := uint64(0)
+	if node.Offset != nil {
+		var ok bool
+		offset, ok = getLiteralUint64(node.Offset)
+		if !ok {
+			return 0, moerr.NewNYI(builder.GetContext(), "dynamic OFFSET in correlated subquery")
+		}
+	}
+	if offset > math.MaxInt64 || limit > uint64(math.MaxInt64)-offset {
+		return 0, moerr.NewNYI(builder.GetContext(), "correlated LIMIT or OFFSET larger than INT64_MAX")
+	}
+	if node.RankOption != nil {
+		return 0, moerr.NewNYI(builder.GetContext(), "correlated LIMIT with BY RANK")
+	}
+	if offset == 0 && isSubqueryRoot {
+		switch subqueryType {
+		case plan.SubqueryRef_EXISTS, plan.SubqueryRef_NOT_EXISTS:
+			// A positive LIMIT and its ordering cannot change whether the
+			// complete existential input is empty.  The semantic root can be
+			// below transparent PROJECT/SORT wrappers, so remove the complete
+			// pagination boundary before validating or copying its ORDER BY.
+			node.Limit = nil
+			node.Offset = nil
+			if node.NodeType == plan.Node_SORT {
+				if len(node.Children) != 1 {
+					return 0, moerr.NewInternalError(builder.GetContext(), "correlated LIMIT sort must have one child")
+				}
+				return node.Children[0], nil
+			}
+			node.OrderBy = nil
+			return nodeID, nil
+		}
+	}
+	for _, orderBy := range node.OrderBy {
+		if orderBy != nil && builder.hasCorrColThroughProjection(orderBy.Expr, node.Children) {
+			return 0, moerr.NewNYI(builder.GetContext(), "correlated columns in ORDER BY with LIMIT")
+		}
+	}
+	for _, pred := range preds {
+		if !allCorrColsAtDepthOne(pred) {
+			if subqueryType == plan.SubqueryRef_SCALAR {
+				// Preserve the established deep-scalar rejection below, including
+				// its public diagnostic, instead of partially rewriting its limit.
+				return nodeID, nil
+			}
+			return 0, moerr.NewNYI(builder.GetContext(), "deeply correlated LIMIT")
+		}
+	}
+
+	partitionBy, ok := correlatedPaginationPartitionKeys(preds)
+	if !ok {
+		return 0, moerr.NewNYI(builder.GetContext(), "correlated LIMIT with non-equality predicates")
+	}
+	if len(partitionBy) == 0 {
+		// Correlated predicates depending only on the outer row do not change
+		// the right-side set, so its pagination is legitimately global.
+		return nodeID, nil
+	}
+	for _, key := range partitionBy {
+		if !correlatedPaginationPartitionTypeSupported(types.T(key.Typ.Id)) {
+			return 0, moerr.NewNYIf(builder.GetContext(),
+				"correlated LIMIT partition key type %s", makeTypeByPlan2Expr(key))
+		}
+	}
+
+	inputID := nodeID
+	if node.NodeType == plan.Node_SORT {
+		if len(node.Children) != 1 {
+			return 0, moerr.NewInternalError(builder.GetContext(), "correlated LIMIT sort must have one child")
+		}
+		inputID = node.Children[0]
+	}
+	orderBy := DeepCopyOrderBySpecList(node.OrderBy)
+	node.Limit = nil
+	node.Offset = nil
+
+	windowTag := builder.genNewBindTag()
+	partitionOrder := make([]*plan.OrderBySpec, len(partitionBy))
+	for i, key := range partitionBy {
+		partitionOrder[i] = &plan.OrderBySpec{
+			Expr: DeepCopyExpr(key),
+			Flag: plan.OrderBySpec_INTERNAL,
+		}
+	}
+	partitionID := builder.appendNode(&plan.Node{
+		NodeType:    plan.Node_PARTITION,
+		Children:    []int32{inputID},
+		OrderBy:     partitionOrder,
+		BindingTags: []int32{windowTag},
+	}, ctx)
+
+	rowNumberFunc, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "row_number", nil)
+	if err != nil {
+		return 0, err
+	}
+	rowNumberExpr := &plan.Expr{
+		Typ: rowNumberFunc.Typ,
+		Expr: &plan.Expr_W{W: &plan.WindowSpec{
+			WindowFunc:  rowNumberFunc,
+			Name:        "row_number",
+			PartitionBy: DeepCopyExprList(partitionBy),
+			OrderBy:     orderBy,
+			Frame: &plan.FrameClause{
+				Type: plan.FrameClause_ROWS,
+				Start: &plan.FrameBound{
+					Type:      plan.FrameBound_PRECEDING,
+					UnBounded: true,
+				},
+				End: &plan.FrameBound{
+					Type:      plan.FrameBound_FOLLOWING,
+					UnBounded: true,
+				},
+			},
+		}},
+	}
+	rowNumberCol := GetColExpr(rowNumberFunc.Typ, windowTag, 0)
+	upperBound := makePlan2Int64ConstExprWithType(int64(offset + limit))
+	rowFilter, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "<=", []*plan.Expr{
+		DeepCopyExpr(rowNumberCol),
+		upperBound,
+	})
+	if err != nil {
+		return 0, err
+	}
+	if offset > 0 {
+		lowerBound := makePlan2Int64ConstExprWithType(int64(offset))
+		afterOffset, bindErr := BindFuncExprImplByPlanExpr(builder.GetContext(), ">", []*plan.Expr{
+			DeepCopyExpr(rowNumberCol),
+			lowerBound,
+		})
+		if bindErr != nil {
+			return 0, bindErr
+		}
+		rowFilter, err = BindFuncExprImplByPlanExpr(builder.GetContext(), "and", []*plan.Expr{
+			afterOffset,
+			rowFilter,
+		})
+		if err != nil {
+			return 0, err
+		}
+	}
+
+	return builder.appendNode(&plan.Node{
+		NodeType:    plan.Node_WINDOW,
+		Children:    []int32{partitionID},
+		WinSpecList: []*plan.Expr{rowNumberExpr},
+		WindowIdx:   0,
+		BindingTags: []int32{windowTag},
+		FilterList:  []*plan.Expr{rowFilter},
+	}, ctx), nil
+}
+
+func (builder *QueryBuilder) hasCorrColThroughProjection(expr *plan.Expr, inputIDs []int32) bool {
+	return builder.hasCorrColThroughProjectionImpl(expr, inputIDs, make(map[[2]int32]bool))
+}
+
+func (builder *QueryBuilder) hasCorrColThroughProjectionImpl(
+	expr *plan.Expr,
+	inputIDs []int32,
+	resolving map[[2]int32]bool,
+) bool {
+	if expr == nil {
+		return false
+	}
+
+	switch item := expr.Expr.(type) {
+	case *plan.Expr_Corr:
+		return true
+	case *plan.Expr_Col:
+		if item.Col == nil {
+			return false
+		}
+		key := [2]int32{item.Col.RelPos, item.Col.ColPos}
+		if resolving[key] {
+			return false
+		}
+		projected, children, ok := builder.findProjectedExpr(inputIDs, item.Col)
+		if !ok {
+			return false
+		}
+		resolving[key] = true
+		hasCorr := builder.hasCorrColThroughProjectionImpl(projected, children, resolving)
+		delete(resolving, key)
+		return hasCorr
+	case *plan.Expr_F:
+		for _, arg := range item.F.Args {
+			if builder.hasCorrColThroughProjectionImpl(arg, inputIDs, resolving) {
+				return true
+			}
+		}
+	case *plan.Expr_List:
+		for _, arg := range item.List.List {
+			if builder.hasCorrColThroughProjectionImpl(arg, inputIDs, resolving) {
+				return true
+			}
+		}
+	case *plan.Expr_W:
+		if item.W == nil {
+			return false
+		}
+		if builder.hasCorrColThroughProjectionImpl(item.W.WindowFunc, inputIDs, resolving) {
+			return true
+		}
+		for _, partitionBy := range item.W.PartitionBy {
+			if builder.hasCorrColThroughProjectionImpl(partitionBy, inputIDs, resolving) {
+				return true
+			}
+		}
+		for _, orderBy := range item.W.OrderBy {
+			if orderBy != nil && builder.hasCorrColThroughProjectionImpl(orderBy.Expr, inputIDs, resolving) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func (builder *QueryBuilder) findProjectedExpr(
+	inputIDs []int32,
+	col *plan.ColRef,
+) (*plan.Expr, []int32, bool) {
+	visited := make(map[int32]bool)
+	var find func(int32) (*plan.Expr, []int32, bool)
+	find = func(nodeID int32) (*plan.Expr, []int32, bool) {
+		if nodeID < 0 || int(nodeID) >= len(builder.qry.Nodes) || visited[nodeID] {
+			return nil, nil, false
+		}
+		visited[nodeID] = true
+		node := builder.qry.Nodes[nodeID]
+		if node.NodeType == plan.Node_PROJECT && len(node.BindingTags) > 0 &&
+			node.BindingTags[0] == col.RelPos {
+			if col.ColPos < 0 || int(col.ColPos) >= len(node.ProjectList) {
+				return nil, nil, false
+			}
+			return node.ProjectList[col.ColPos], node.Children, true
+		}
+		for _, childID := range node.Children {
+			if expr, children, ok := find(childID); ok {
+				return expr, children, true
+			}
+		}
+		return nil, nil, false
+	}
+	for _, inputID := range inputIDs {
+		if expr, children, ok := find(inputID); ok {
+			return expr, children, true
+		}
+	}
+	return nil, nil, false
+}
+
+func correlatedPaginationPartitionKeys(preds []*plan.Expr) ([]*plan.Expr, bool) {
+	keys := make([]*plan.Expr, 0, len(preds))
+	for _, pred := range preds {
+		if !collectCorrelatedPaginationPartitionKeys(pred, &keys) {
+			return nil, false
+		}
+	}
+	return keys, true
+}
+
+func collectCorrelatedPaginationPartitionKeys(expr *plan.Expr, keys *[]*plan.Expr) bool {
+	if expr == nil || !hasCorrCol(expr) {
+		return true
+	}
+
+	fn := expr.GetF()
+	if fn != nil && fn.Func != nil && fn.Func.ObjName == "and" {
+		for _, arg := range fn.Args {
+			if !collectCorrelatedPaginationPartitionKeys(arg, keys) {
+				return false
+			}
+		}
+		return true
+	}
+
+	if fn != nil && fn.Func != nil &&
+		(fn.Func.ObjName == "=" || fn.Func.ObjName == "<=>") && len(fn.Args) == 2 {
+		leftCorr := hasCorrCol(fn.Args[0])
+		rightCorr := hasCorrCol(fn.Args[1])
+		if leftCorr != rightCorr {
+			outerExpr := fn.Args[0]
+			innerExpr := fn.Args[1]
+			if rightCorr {
+				outerExpr, innerExpr = innerExpr, outerExpr
+			}
+			if exprHasColRef(outerExpr) || !allCorrColsAtDepthOne(outerExpr) {
+				return false
+			}
+			if exprHasColRef(innerExpr) {
+				*keys = append(*keys, DeepCopyExpr(innerExpr))
+			}
+			return true
+		}
+	}
+
+	// A predicate depending only on outer columns does not change which inner
+	// rows belong to an equality partition; the eventual join still applies it.
+	return !exprHasColRef(expr) && allCorrColsAtDepthOne(expr)
+}
+
+func exprHasColRef(expr *plan.Expr) bool {
+	if expr == nil {
+		return false
+	}
+	switch item := expr.Expr.(type) {
+	case *plan.Expr_Col:
+		return true
+	case *plan.Expr_F:
+		for _, arg := range item.F.Args {
+			if exprHasColRef(arg) {
+				return true
+			}
+		}
+	case *plan.Expr_List:
+		for _, arg := range item.List.List {
+			if exprHasColRef(arg) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func allCorrColsAtDepthOne(expr *plan.Expr) bool {
+	if expr == nil {
+		return true
+	}
+	switch item := expr.Expr.(type) {
+	case *plan.Expr_Corr:
+		return item.Corr != nil && item.Corr.Depth == 1
+	case *plan.Expr_F:
+		for _, arg := range item.F.Args {
+			if !allCorrColsAtDepthOne(arg) {
+				return false
+			}
+		}
+	case *plan.Expr_List:
+		for _, arg := range item.List.List {
+			if !allCorrColsAtDepthOne(arg) {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+// Node_PARTITION builds pkg/compare comparators for these types. Keep this
+// list aligned with compare.New so an otherwise valid equality key cannot
+// reach the partition operator with a nil comparator.
+func correlatedPaginationPartitionTypeSupported(typ types.T) bool {
+	switch typ {
+	case types.T_bool, types.T_bit,
+		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
+		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
+		types.T_float32, types.T_float64,
+		types.T_date, types.T_datetime, types.T_time, types.T_timestamp,
+		types.T_decimal64, types.T_decimal128, types.T_decimal256,
+		types.T_TS, types.T_Rowid, types.T_Blockid, types.T_uuid,
+		types.T_enum, types.T_year,
+		types.T_char, types.T_varchar, types.T_blob, types.T_binary,
+		types.T_varbinary, types.T_json, types.T_text, types.T_datalink,
+		types.T_geometry,
+		types.T_array_float32, types.T_array_float64, types.T_array_bf16,
+		types.T_array_float16, types.T_array_int8, types.T_array_uint8:
+		return true
+	default:
+		return false
+	}
 }
 
 func (builder *QueryBuilder) pullupThroughAgg(ctx *BindContext, node *plan.Node, tag int32, expr *plan.Expr) *plan.Expr {
