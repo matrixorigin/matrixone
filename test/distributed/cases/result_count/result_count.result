@@ -13,17 +13,17 @@ create table t1(a int, b varchar);
 update t1 set b='xx' where a=5;
 update t1 set b='yy' where a=1;
 select * from t1;
-a    b
-3    c
-4    d
-5    xx
-1    yy
-1    yy
+➤ a[4,32,0]  ¦  b[12,49151,0]  𝄀
+3  ¦  c  𝄀
+4  ¦  d  𝄀
+5  ¦  xx  𝄀
+1  ¦  yy  𝄀
+1  ¦  yy
 select * from t1 limit 3;
-a    b
-3    c
-4    d
-5    xx
+➤ a[4,32,0]  ¦  b[12,49151,0]  𝄀
+3  ¦  c  𝄀
+4  ¦  d  𝄀
+5  ¦  xx
 delete from t1 where a=5;
 delete from t1 where a=1;
 create view v1 as select * from t1;
@@ -32,35 +32,36 @@ set @a=1;
 prepare s1 from "select * from t1 where a>?";
 prepare s2 from "select * from t1 where a=?";
 execute s1 using @a;
-a    b
-3    c
-4    d
+[unknown result because it is related to issue#9525]
 execute s2 using @a;
-a    b
+[unknown result because it is related to issue#9525]
 deallocate prepare s2;
 deallocate prepare s2;
 Unknown prepared statement handler (s2) given to DEALLOCATE PREPARE
 show databases like 'mysql';
-Database
+➤ Database[12,3750,0]  𝄀
 mysql
 show tables;
-Tables_in_db1
-t1
-v1
+➤ Tables_in_db1[12,3750,0]  𝄀
+t1  𝄀
+v1  𝄀
 v2
 show create database db1;
-Database    Create Database
-db1    CREATE DATABASE `db1`
+➤ Database[12,2,0]  ¦  Create Database[12,15,0]  𝄀
+db1  ¦  CREATE DATABASE `db1`
 show create view v1;
-View    Create View    character_set_client    collation_connection
-v1    create view v1 as select * from t1;    utf8mb4    utf8mb4_general_ci
+➤ View[12,1,0]  ¦  Create View[12,41,0]  ¦  character_set_client[12,5,0]  ¦  collation_connection[12,13,0]  𝄀
+v1  ¦  create view `v1` as select `t1`.`a`, `t1`.`b` from `t1`  ¦  utf8mb4  ¦  utf8mb4_general_ci
 show create table t1;
-Table    Create Table
-t1    CREATE TABLE `t1` (\n  `a` int DEFAULT NULL,\n  `b` varchar(65535) DEFAULT NULL\n)
+➤ Table[12,1,0]  ¦  Create Table[12,59,0]  𝄀
+t1  ¦  CREATE TABLE `t1` (
+  `a` int DEFAULT NULL,
+  `b` varchar(65535) DEFAULT NULL
+)
 show columns from t1;
-Field    Type    Null    Key    Default    Extra    Comment
-a    INT(32)    YES        null        
-b    VARCHAR(65535)    YES        null        
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+a  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+b  ¦  VARCHAR(65535)  ¦  YES  ¦    ¦  null  ¦    ¦  
 drop view v1;
 drop table t1;
 drop view v2;
@@ -81,17 +82,17 @@ insert into t2 values (1, 'a'),(1, 'b'),(3, 'c'),(4,'d'),(5,'e');
 update t2 set b='xx' where a=5;
 update t2 set b='yy' where a=1;
 select * from t2;
-a    b
-3    c
-4    d
-5    xx
-1    yy
-1    yy
+➤ a[4,32,0]  ¦  b[12,49151,0]  𝄀
+3  ¦  c  𝄀
+4  ¦  d  𝄀
+5  ¦  xx  𝄀
+1  ¦  yy  𝄀
+1  ¦  yy
 select * from t2 limit 3;
-a    b
-3    c
-4    d
-5    xx
+➤ a[4,32,0]  ¦  b[12,49151,0]  𝄀
+3  ¦  c  𝄀
+4  ¦  d  𝄀
+5  ¦  xx
 delete from t2 where a=5;
 delete from t2 where a=1;
 commit;
@@ -103,38 +104,38 @@ drop database db2;
 /* cloud_user */ update t2 set b='xx' where a=5;
 /* cloud_user */ update t2 set b='yy' where a=1;
 /* cloud_user */ select * from t2;
-a    b
-3    c
-4    d
-5    xx
-1    yy
-1    yy
+➤ a[4,32,0]  ¦  b[12,49151,0]  𝄀
+3  ¦  c  𝄀
+4  ¦  d  𝄀
+5  ¦  xx  𝄀
+1  ¦  yy  𝄀
+1  ¦  yy
 /* cloud_user */ select * from t2 limit 3;
-a    b
-3    c
-4    d
-5    xx
+➤ a[4,32,0]  ¦  b[12,49151,0]  𝄀
+3  ¦  c  𝄀
+4  ¦  d  𝄀
+5  ¦  xx
 /* cloud_user */ delete from t2 where a=5;
 /* cloud_user */ delete from t2 where a=1;
 /* cloud_user */ drop database db2;
 select 1;
-1
+➤ 1[-5,64,0]  𝄀
 1
 select 1 union select 2;
-1
-2
+➤ 1[-5,64,0]  𝄀
+2  𝄀
 1
 values row(1,1), row(2,2), row(3,3) order by column_0 desc;
-column_0    column_1
-3    3
-2    2
-1    1
+➤ column_0[-5,64,0]  ¦  column_1[-5,64,0]  𝄀
+3  ¦  3  𝄀
+2  ¦  2  𝄀
+1  ¦  1
 WITH cte1 AS (SELECT 1),cte2 AS (SELECT 2) SELECT * FROM cte1 join cte2;
-1    2
-1    2
+➤ 1[-5,64,0]  ¦  2[-5,64,0]  𝄀
+1  ¦  2
 select * from unnest('{"a":1}') as f;
-col    seq    key    path    index    value    this
-UNNEST_DEFAULT    0    a    $.a    null    1    {"a": 1}
+➤ col[12,49151,0]  ¦  seq[4,32,0]  ¦  key[12,49151,0]  ¦  path[12,49151,0]  ¦  index[4,32,0]  ¦  value[-1,2147483647,0]  ¦  this[-1,2147483647,0]  𝄀
+UNNEST_DEFAULT  ¦  0  ¦  a  ¦  $.a  ¦  null  ¦  1  ¦  {"a": 1}
 use system;
 /* cloud_user */create account bvt_result_count_test_case2 admin_name 'test_account' identified by '111';
 /* cloud_user */drop account bvt_result_count_test_case2;

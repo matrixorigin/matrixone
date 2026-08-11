@@ -9,2416 +9,2430 @@ col6 text
 );
 set save_query_result = on;
 show create table test_table;
-Table    Create Table
-test_table    CREATE TABLE `test_table` (\n  `col1` int DEFAULT NULL,\n  `col2` float DEFAULT NULL,\n  `col3` bool DEFAULT NULL,\n  `col4` date DEFAULT NULL,\n  `col5` varchar(255) DEFAULT NULL,\n  `col6` text DEFAULT NULL\n)
+➤ Table[12,7,0]  ¦  Create Table[12,153,0]  𝄀
+test_table  ¦  CREATE TABLE `test_table` (
+  `col1` int DEFAULT NULL,
+  `col2` float DEFAULT NULL,
+  `col3` bool DEFAULT NULL,
+  `col4` date DEFAULT NULL,
+  `col5` varchar(255) DEFAULT NULL,
+  `col6` text DEFAULT NULL
+)
 select * from result_scan(last_query_id()) as u;
-table    create table
-test_table    CREATE TABLE `test_table` (\n  `col1` int DEFAULT NULL,\n  `col2` float DEFAULT NULL,\n  `col3` bool DEFAULT NULL,\n  `col4` date DEFAULT NULL,\n  `col5` varchar(255) DEFAULT NULL,\n  `col6` text DEFAULT NULL\n)
+➤ Table[12,7,0]  ¦  Create Table[12,153,0]  𝄀
+test_table  ¦  CREATE TABLE `test_table` (
+  `col1` int DEFAULT NULL,
+  `col2` float DEFAULT NULL,
+  `col3` bool DEFAULT NULL,
+  `col4` date DEFAULT NULL,
+  `col5` varchar(255) DEFAULT NULL,
+  `col6` text DEFAULT NULL
+)
 show tables;
-Tables_in_save_query_result
+➤ Tables_in_save_query_result[12,3750,0]  𝄀
 test_table
 select * from result_scan(last_query_id()) as u;
-tables_in_save_query_result
+➤ Tables_in_save_query_result[12,3750,0]  𝄀
 test_table
 show databases like "mysql";
-Database
+➤ Database[12,3750,0]  𝄀
 mysql
 select * from result_scan(last_query_id()) as u;
-database
+➤ Database[12,3750,0]  𝄀
 mysql
 load data infile '$resources/load_data/test_1.csv' into table test_table fields terminated by ',';
 /* save_result */select * from test_table;
-col1    col2    col3    col4    col5    col6
-0    0.1    1    1982-03-24    varchar_0    text_0
-1    1.1    0    1982-07-31    varchar_1    text_1
-2    2.1    1    2002-04-13    varchar_2    text_2
-3    3.1    0    2019-09-29    varchar_3    text_3
-4    4.1    1    1996-08-20    varchar_4    text_4
-5    5.1    0    2008-10-13    varchar_5    text_5
-6    6.1    1    2002-03-05    varchar_6    text_6
-7    7.1    0    1993-11-07    varchar_7    text_7
-8    8.1    1    1994-01-08    varchar_8    text_8
-9    9.1    0    1999-09-17    varchar_9    text_9
-10    10.1    1    2003-09-28    varchar_10    text_10
-11    11.1    0    1984-01-22    varchar_11    text_11
-12    12.1    1    1994-02-10    varchar_12    text_12
-13    13.1    0    1994-12-02    varchar_13    text_13
-14    14.1    1    2013-01-19    varchar_14    text_14
-15    15.1    0    2002-09-29    varchar_15    text_15
-16    16.1    1    2001-12-07    varchar_16    text_16
-17    17.1    0    1989-03-11    varchar_17    text_17
-18    18.1    1    2019-11-04    varchar_18    text_18
-19    19.1    0    2002-08-15    varchar_19    text_19
-20    20.1    1    1995-12-20    varchar_20    text_20
-21    21.1    0    2018-08-03    varchar_21    text_21
-22    22.1    1    1998-03-10    varchar_22    text_22
-23    23.1    0    2022-04-08    varchar_23    text_23
-24    24.1    1    1989-04-27    varchar_24    text_24
-25    25.1    0    2009-03-14    varchar_25    text_25
-26    26.1    1    2019-03-27    varchar_26    text_26
-27    27.1    0    1983-10-28    varchar_27    text_27
-28    28.1    1    1993-07-19    varchar_28    text_28
-29    29.1    0    1986-09-11    varchar_29    text_29
-30    30.1    1    1992-08-19    varchar_30    text_30
-31    31.1    0    1981-08-07    varchar_31    text_31
-32    32.1    1    1984-03-25    varchar_32    text_32
-33    33.1    0    2001-09-05    varchar_33    text_33
-34    34.1    1    2022-03-17    varchar_34    text_34
-35    35.1    0    2008-06-24    varchar_35    text_35
-36    36.1    1    1987-11-23    varchar_36    text_36
-37    37.1    0    2008-11-10    varchar_37    text_37
-38    38.1    1    1986-01-29    varchar_38    text_38
-39    39.1    0    1985-02-27    varchar_39    text_39
-40    40.1    1    2016-11-28    varchar_40    text_40
-41    41.1    0    1991-02-11    varchar_41    text_41
-42    42.1    1    2019-01-08    varchar_42    text_42
-43    43.1    0    2009-05-01    varchar_43    text_43
-44    44.1    1    1986-11-15    varchar_44    text_44
-45    45.1    0    2000-07-22    varchar_45    text_45
-46    46.1    1    2002-09-07    varchar_46    text_46
-47    47.1    0    1987-09-23    varchar_47    text_47
-48    48.1    1    1985-10-25    varchar_48    text_48
-49    49.1    0    1988-10-06    varchar_49    text_49
+➤ col1[4,32,0]  ¦  col2[7,23,31]  ¦  col3[-7,1,0]  ¦  col4[91,64,0]  ¦  col5[12,191,0]  ¦  col6[12,0,0]  𝄀
+0  ¦  0.1  ¦  1  ¦  1982-03-24  ¦  varchar_0  ¦  text_0  𝄀
+1  ¦  1.1  ¦  0  ¦  1982-07-31  ¦  varchar_1  ¦  text_1  𝄀
+2  ¦  2.1  ¦  1  ¦  2002-04-13  ¦  varchar_2  ¦  text_2  𝄀
+3  ¦  3.1  ¦  0  ¦  2019-09-29  ¦  varchar_3  ¦  text_3  𝄀
+4  ¦  4.1  ¦  1  ¦  1996-08-20  ¦  varchar_4  ¦  text_4  𝄀
+5  ¦  5.1  ¦  0  ¦  2008-10-13  ¦  varchar_5  ¦  text_5  𝄀
+6  ¦  6.1  ¦  1  ¦  2002-03-05  ¦  varchar_6  ¦  text_6  𝄀
+7  ¦  7.1  ¦  0  ¦  1993-11-07  ¦  varchar_7  ¦  text_7  𝄀
+8  ¦  8.1  ¦  1  ¦  1994-01-08  ¦  varchar_8  ¦  text_8  𝄀
+9  ¦  9.1  ¦  0  ¦  1999-09-17  ¦  varchar_9  ¦  text_9  𝄀
+10  ¦  10.1  ¦  1  ¦  2003-09-28  ¦  varchar_10  ¦  text_10  𝄀
+11  ¦  11.1  ¦  0  ¦  1984-01-22  ¦  varchar_11  ¦  text_11  𝄀
+12  ¦  12.1  ¦  1  ¦  1994-02-10  ¦  varchar_12  ¦  text_12  𝄀
+13  ¦  13.1  ¦  0  ¦  1994-12-02  ¦  varchar_13  ¦  text_13  𝄀
+14  ¦  14.1  ¦  1  ¦  2013-01-19  ¦  varchar_14  ¦  text_14  𝄀
+15  ¦  15.1  ¦  0  ¦  2002-09-29  ¦  varchar_15  ¦  text_15  𝄀
+16  ¦  16.1  ¦  1  ¦  2001-12-07  ¦  varchar_16  ¦  text_16  𝄀
+17  ¦  17.1  ¦  0  ¦  1989-03-11  ¦  varchar_17  ¦  text_17  𝄀
+18  ¦  18.1  ¦  1  ¦  2019-11-04  ¦  varchar_18  ¦  text_18  𝄀
+19  ¦  19.1  ¦  0  ¦  2002-08-15  ¦  varchar_19  ¦  text_19  𝄀
+20  ¦  20.1  ¦  1  ¦  1995-12-20  ¦  varchar_20  ¦  text_20  𝄀
+21  ¦  21.1  ¦  0  ¦  2018-08-03  ¦  varchar_21  ¦  text_21  𝄀
+22  ¦  22.1  ¦  1  ¦  1998-03-10  ¦  varchar_22  ¦  text_22  𝄀
+23  ¦  23.1  ¦  0  ¦  2022-04-08  ¦  varchar_23  ¦  text_23  𝄀
+24  ¦  24.1  ¦  1  ¦  1989-04-27  ¦  varchar_24  ¦  text_24  𝄀
+25  ¦  25.1  ¦  0  ¦  2009-03-14  ¦  varchar_25  ¦  text_25  𝄀
+26  ¦  26.1  ¦  1  ¦  2019-03-27  ¦  varchar_26  ¦  text_26  𝄀
+27  ¦  27.1  ¦  0  ¦  1983-10-28  ¦  varchar_27  ¦  text_27  𝄀
+28  ¦  28.1  ¦  1  ¦  1993-07-19  ¦  varchar_28  ¦  text_28  𝄀
+29  ¦  29.1  ¦  0  ¦  1986-09-11  ¦  varchar_29  ¦  text_29  𝄀
+30  ¦  30.1  ¦  1  ¦  1992-08-19  ¦  varchar_30  ¦  text_30  𝄀
+31  ¦  31.1  ¦  0  ¦  1981-08-07  ¦  varchar_31  ¦  text_31  𝄀
+32  ¦  32.1  ¦  1  ¦  1984-03-25  ¦  varchar_32  ¦  text_32  𝄀
+33  ¦  33.1  ¦  0  ¦  2001-09-05  ¦  varchar_33  ¦  text_33  𝄀
+34  ¦  34.1  ¦  1  ¦  2022-03-17  ¦  varchar_34  ¦  text_34  𝄀
+35  ¦  35.1  ¦  0  ¦  2008-06-24  ¦  varchar_35  ¦  text_35  𝄀
+36  ¦  36.1  ¦  1  ¦  1987-11-23  ¦  varchar_36  ¦  text_36  𝄀
+37  ¦  37.1  ¦  0  ¦  2008-11-10  ¦  varchar_37  ¦  text_37  𝄀
+38  ¦  38.1  ¦  1  ¦  1986-01-29  ¦  varchar_38  ¦  text_38  𝄀
+39  ¦  39.1  ¦  0  ¦  1985-02-27  ¦  varchar_39  ¦  text_39  𝄀
+40  ¦  40.1  ¦  1  ¦  2016-11-28  ¦  varchar_40  ¦  text_40  𝄀
+41  ¦  41.1  ¦  0  ¦  1991-02-11  ¦  varchar_41  ¦  text_41  𝄀
+42  ¦  42.1  ¦  1  ¦  2019-01-08  ¦  varchar_42  ¦  text_42  𝄀
+43  ¦  43.1  ¦  0  ¦  2009-05-01  ¦  varchar_43  ¦  text_43  𝄀
+44  ¦  44.1  ¦  1  ¦  1986-11-15  ¦  varchar_44  ¦  text_44  𝄀
+45  ¦  45.1  ¦  0  ¦  2000-07-22  ¦  varchar_45  ¦  text_45  𝄀
+46  ¦  46.1  ¦  1  ¦  2002-09-07  ¦  varchar_46  ¦  text_46  𝄀
+47  ¦  47.1  ¦  0  ¦  1987-09-23  ¦  varchar_47  ¦  text_47  𝄀
+48  ¦  48.1  ¦  1  ¦  1985-10-25  ¦  varchar_48  ¦  text_48  𝄀
+49  ¦  49.1  ¦  0  ¦  1988-10-06  ¦  varchar_49  ¦  text_49
 select * from result_scan(last_query_id()) as u;
-col1    col2    col3    col4    col5    col6
-0    0.1    1    1982-03-24    varchar_0    text_0
-1    1.1    0    1982-07-31    varchar_1    text_1
-2    2.1    1    2002-04-13    varchar_2    text_2
-3    3.1    0    2019-09-29    varchar_3    text_3
-4    4.1    1    1996-08-20    varchar_4    text_4
-5    5.1    0    2008-10-13    varchar_5    text_5
-6    6.1    1    2002-03-05    varchar_6    text_6
-7    7.1    0    1993-11-07    varchar_7    text_7
-8    8.1    1    1994-01-08    varchar_8    text_8
-9    9.1    0    1999-09-17    varchar_9    text_9
-10    10.1    1    2003-09-28    varchar_10    text_10
-11    11.1    0    1984-01-22    varchar_11    text_11
-12    12.1    1    1994-02-10    varchar_12    text_12
-13    13.1    0    1994-12-02    varchar_13    text_13
-14    14.1    1    2013-01-19    varchar_14    text_14
-15    15.1    0    2002-09-29    varchar_15    text_15
-16    16.1    1    2001-12-07    varchar_16    text_16
-17    17.1    0    1989-03-11    varchar_17    text_17
-18    18.1    1    2019-11-04    varchar_18    text_18
-19    19.1    0    2002-08-15    varchar_19    text_19
-20    20.1    1    1995-12-20    varchar_20    text_20
-21    21.1    0    2018-08-03    varchar_21    text_21
-22    22.1    1    1998-03-10    varchar_22    text_22
-23    23.1    0    2022-04-08    varchar_23    text_23
-24    24.1    1    1989-04-27    varchar_24    text_24
-25    25.1    0    2009-03-14    varchar_25    text_25
-26    26.1    1    2019-03-27    varchar_26    text_26
-27    27.1    0    1983-10-28    varchar_27    text_27
-28    28.1    1    1993-07-19    varchar_28    text_28
-29    29.1    0    1986-09-11    varchar_29    text_29
-30    30.1    1    1992-08-19    varchar_30    text_30
-31    31.1    0    1981-08-07    varchar_31    text_31
-32    32.1    1    1984-03-25    varchar_32    text_32
-33    33.1    0    2001-09-05    varchar_33    text_33
-34    34.1    1    2022-03-17    varchar_34    text_34
-35    35.1    0    2008-06-24    varchar_35    text_35
-36    36.1    1    1987-11-23    varchar_36    text_36
-37    37.1    0    2008-11-10    varchar_37    text_37
-38    38.1    1    1986-01-29    varchar_38    text_38
-39    39.1    0    1985-02-27    varchar_39    text_39
-40    40.1    1    2016-11-28    varchar_40    text_40
-41    41.1    0    1991-02-11    varchar_41    text_41
-42    42.1    1    2019-01-08    varchar_42    text_42
-43    43.1    0    2009-05-01    varchar_43    text_43
-44    44.1    1    1986-11-15    varchar_44    text_44
-45    45.1    0    2000-07-22    varchar_45    text_45
-46    46.1    1    2002-09-07    varchar_46    text_46
-47    47.1    0    1987-09-23    varchar_47    text_47
-48    48.1    1    1985-10-25    varchar_48    text_48
-49    49.1    0    1988-10-06    varchar_49    text_49
+➤ col1[4,32,0]  ¦  col2[7,23,31]  ¦  col3[-7,1,0]  ¦  col4[91,64,0]  ¦  col5[12,191,0]  ¦  col6[12,0,0]  𝄀
+0  ¦  0.1  ¦  1  ¦  1982-03-24  ¦  varchar_0  ¦  text_0  𝄀
+1  ¦  1.1  ¦  0  ¦  1982-07-31  ¦  varchar_1  ¦  text_1  𝄀
+2  ¦  2.1  ¦  1  ¦  2002-04-13  ¦  varchar_2  ¦  text_2  𝄀
+3  ¦  3.1  ¦  0  ¦  2019-09-29  ¦  varchar_3  ¦  text_3  𝄀
+4  ¦  4.1  ¦  1  ¦  1996-08-20  ¦  varchar_4  ¦  text_4  𝄀
+5  ¦  5.1  ¦  0  ¦  2008-10-13  ¦  varchar_5  ¦  text_5  𝄀
+6  ¦  6.1  ¦  1  ¦  2002-03-05  ¦  varchar_6  ¦  text_6  𝄀
+7  ¦  7.1  ¦  0  ¦  1993-11-07  ¦  varchar_7  ¦  text_7  𝄀
+8  ¦  8.1  ¦  1  ¦  1994-01-08  ¦  varchar_8  ¦  text_8  𝄀
+9  ¦  9.1  ¦  0  ¦  1999-09-17  ¦  varchar_9  ¦  text_9  𝄀
+10  ¦  10.1  ¦  1  ¦  2003-09-28  ¦  varchar_10  ¦  text_10  𝄀
+11  ¦  11.1  ¦  0  ¦  1984-01-22  ¦  varchar_11  ¦  text_11  𝄀
+12  ¦  12.1  ¦  1  ¦  1994-02-10  ¦  varchar_12  ¦  text_12  𝄀
+13  ¦  13.1  ¦  0  ¦  1994-12-02  ¦  varchar_13  ¦  text_13  𝄀
+14  ¦  14.1  ¦  1  ¦  2013-01-19  ¦  varchar_14  ¦  text_14  𝄀
+15  ¦  15.1  ¦  0  ¦  2002-09-29  ¦  varchar_15  ¦  text_15  𝄀
+16  ¦  16.1  ¦  1  ¦  2001-12-07  ¦  varchar_16  ¦  text_16  𝄀
+17  ¦  17.1  ¦  0  ¦  1989-03-11  ¦  varchar_17  ¦  text_17  𝄀
+18  ¦  18.1  ¦  1  ¦  2019-11-04  ¦  varchar_18  ¦  text_18  𝄀
+19  ¦  19.1  ¦  0  ¦  2002-08-15  ¦  varchar_19  ¦  text_19  𝄀
+20  ¦  20.1  ¦  1  ¦  1995-12-20  ¦  varchar_20  ¦  text_20  𝄀
+21  ¦  21.1  ¦  0  ¦  2018-08-03  ¦  varchar_21  ¦  text_21  𝄀
+22  ¦  22.1  ¦  1  ¦  1998-03-10  ¦  varchar_22  ¦  text_22  𝄀
+23  ¦  23.1  ¦  0  ¦  2022-04-08  ¦  varchar_23  ¦  text_23  𝄀
+24  ¦  24.1  ¦  1  ¦  1989-04-27  ¦  varchar_24  ¦  text_24  𝄀
+25  ¦  25.1  ¦  0  ¦  2009-03-14  ¦  varchar_25  ¦  text_25  𝄀
+26  ¦  26.1  ¦  1  ¦  2019-03-27  ¦  varchar_26  ¦  text_26  𝄀
+27  ¦  27.1  ¦  0  ¦  1983-10-28  ¦  varchar_27  ¦  text_27  𝄀
+28  ¦  28.1  ¦  1  ¦  1993-07-19  ¦  varchar_28  ¦  text_28  𝄀
+29  ¦  29.1  ¦  0  ¦  1986-09-11  ¦  varchar_29  ¦  text_29  𝄀
+30  ¦  30.1  ¦  1  ¦  1992-08-19  ¦  varchar_30  ¦  text_30  𝄀
+31  ¦  31.1  ¦  0  ¦  1981-08-07  ¦  varchar_31  ¦  text_31  𝄀
+32  ¦  32.1  ¦  1  ¦  1984-03-25  ¦  varchar_32  ¦  text_32  𝄀
+33  ¦  33.1  ¦  0  ¦  2001-09-05  ¦  varchar_33  ¦  text_33  𝄀
+34  ¦  34.1  ¦  1  ¦  2022-03-17  ¦  varchar_34  ¦  text_34  𝄀
+35  ¦  35.1  ¦  0  ¦  2008-06-24  ¦  varchar_35  ¦  text_35  𝄀
+36  ¦  36.1  ¦  1  ¦  1987-11-23  ¦  varchar_36  ¦  text_36  𝄀
+37  ¦  37.1  ¦  0  ¦  2008-11-10  ¦  varchar_37  ¦  text_37  𝄀
+38  ¦  38.1  ¦  1  ¦  1986-01-29  ¦  varchar_38  ¦  text_38  𝄀
+39  ¦  39.1  ¦  0  ¦  1985-02-27  ¦  varchar_39  ¦  text_39  𝄀
+40  ¦  40.1  ¦  1  ¦  2016-11-28  ¦  varchar_40  ¦  text_40  𝄀
+41  ¦  41.1  ¦  0  ¦  1991-02-11  ¦  varchar_41  ¦  text_41  𝄀
+42  ¦  42.1  ¦  1  ¦  2019-01-08  ¦  varchar_42  ¦  text_42  𝄀
+43  ¦  43.1  ¦  0  ¦  2009-05-01  ¦  varchar_43  ¦  text_43  𝄀
+44  ¦  44.1  ¦  1  ¦  1986-11-15  ¦  varchar_44  ¦  text_44  𝄀
+45  ¦  45.1  ¦  0  ¦  2000-07-22  ¦  varchar_45  ¦  text_45  𝄀
+46  ¦  46.1  ¦  1  ¦  2002-09-07  ¦  varchar_46  ¦  text_46  𝄀
+47  ¦  47.1  ¦  0  ¦  1987-09-23  ¦  varchar_47  ¦  text_47  𝄀
+48  ¦  48.1  ¦  1  ¦  1985-10-25  ¦  varchar_48  ¦  text_48  𝄀
+49  ¦  49.1  ¦  0  ¦  1988-10-06  ¦  varchar_49  ¦  text_49
 /* save_result */select col1 from test_table;
-col1
-0
-1
-2
-3
-4
-5
-6
-7
-8
-9
-10
-11
-12
-13
-14
-15
-16
-17
-18
-19
-20
-21
-22
-23
-24
-25
-26
-27
-28
-29
-30
-31
-32
-33
-34
-35
-36
-37
-38
-39
-40
-41
-42
-43
-44
-45
-46
-47
-48
+➤ col1[4,32,0]  𝄀
+0  𝄀
+1  𝄀
+2  𝄀
+3  𝄀
+4  𝄀
+5  𝄀
+6  𝄀
+7  𝄀
+8  𝄀
+9  𝄀
+10  𝄀
+11  𝄀
+12  𝄀
+13  𝄀
+14  𝄀
+15  𝄀
+16  𝄀
+17  𝄀
+18  𝄀
+19  𝄀
+20  𝄀
+21  𝄀
+22  𝄀
+23  𝄀
+24  𝄀
+25  𝄀
+26  𝄀
+27  𝄀
+28  𝄀
+29  𝄀
+30  𝄀
+31  𝄀
+32  𝄀
+33  𝄀
+34  𝄀
+35  𝄀
+36  𝄀
+37  𝄀
+38  𝄀
+39  𝄀
+40  𝄀
+41  𝄀
+42  𝄀
+43  𝄀
+44  𝄀
+45  𝄀
+46  𝄀
+47  𝄀
+48  𝄀
 49
 select * from result_scan(last_query_id()) as u;
-col1
-0
-1
-2
-3
-4
-5
-6
-7
-8
-9
-10
-11
-12
-13
-14
-15
-16
-17
-18
-19
-20
-21
-22
-23
-24
-25
-26
-27
-28
-29
-30
-31
-32
-33
-34
-35
-36
-37
-38
-39
-40
-41
-42
-43
-44
-45
-46
-47
-48
+➤ col1[4,32,0]  𝄀
+0  𝄀
+1  𝄀
+2  𝄀
+3  𝄀
+4  𝄀
+5  𝄀
+6  𝄀
+7  𝄀
+8  𝄀
+9  𝄀
+10  𝄀
+11  𝄀
+12  𝄀
+13  𝄀
+14  𝄀
+15  𝄀
+16  𝄀
+17  𝄀
+18  𝄀
+19  𝄀
+20  𝄀
+21  𝄀
+22  𝄀
+23  𝄀
+24  𝄀
+25  𝄀
+26  𝄀
+27  𝄀
+28  𝄀
+29  𝄀
+30  𝄀
+31  𝄀
+32  𝄀
+33  𝄀
+34  𝄀
+35  𝄀
+36  𝄀
+37  𝄀
+38  𝄀
+39  𝄀
+40  𝄀
+41  𝄀
+42  𝄀
+43  𝄀
+44  𝄀
+45  𝄀
+46  𝄀
+47  𝄀
+48  𝄀
 49
 /* save_result */select * from test_table where col1 > 30;
-col1    col2    col3    col4    col5    col6
-31    31.1    0    1981-08-07    varchar_31    text_31
-32    32.1    1    1984-03-25    varchar_32    text_32
-33    33.1    0    2001-09-05    varchar_33    text_33
-34    34.1    1    2022-03-17    varchar_34    text_34
-35    35.1    0    2008-06-24    varchar_35    text_35
-36    36.1    1    1987-11-23    varchar_36    text_36
-37    37.1    0    2008-11-10    varchar_37    text_37
-38    38.1    1    1986-01-29    varchar_38    text_38
-39    39.1    0    1985-02-27    varchar_39    text_39
-40    40.1    1    2016-11-28    varchar_40    text_40
-41    41.1    0    1991-02-11    varchar_41    text_41
-42    42.1    1    2019-01-08    varchar_42    text_42
-43    43.1    0    2009-05-01    varchar_43    text_43
-44    44.1    1    1986-11-15    varchar_44    text_44
-45    45.1    0    2000-07-22    varchar_45    text_45
-46    46.1    1    2002-09-07    varchar_46    text_46
-47    47.1    0    1987-09-23    varchar_47    text_47
-48    48.1    1    1985-10-25    varchar_48    text_48
-49    49.1    0    1988-10-06    varchar_49    text_49
+➤ col1[4,32,0]  ¦  col2[7,23,31]  ¦  col3[-7,1,0]  ¦  col4[91,64,0]  ¦  col5[12,191,0]  ¦  col6[12,0,0]  𝄀
+31  ¦  31.1  ¦  0  ¦  1981-08-07  ¦  varchar_31  ¦  text_31  𝄀
+32  ¦  32.1  ¦  1  ¦  1984-03-25  ¦  varchar_32  ¦  text_32  𝄀
+33  ¦  33.1  ¦  0  ¦  2001-09-05  ¦  varchar_33  ¦  text_33  𝄀
+34  ¦  34.1  ¦  1  ¦  2022-03-17  ¦  varchar_34  ¦  text_34  𝄀
+35  ¦  35.1  ¦  0  ¦  2008-06-24  ¦  varchar_35  ¦  text_35  𝄀
+36  ¦  36.1  ¦  1  ¦  1987-11-23  ¦  varchar_36  ¦  text_36  𝄀
+37  ¦  37.1  ¦  0  ¦  2008-11-10  ¦  varchar_37  ¦  text_37  𝄀
+38  ¦  38.1  ¦  1  ¦  1986-01-29  ¦  varchar_38  ¦  text_38  𝄀
+39  ¦  39.1  ¦  0  ¦  1985-02-27  ¦  varchar_39  ¦  text_39  𝄀
+40  ¦  40.1  ¦  1  ¦  2016-11-28  ¦  varchar_40  ¦  text_40  𝄀
+41  ¦  41.1  ¦  0  ¦  1991-02-11  ¦  varchar_41  ¦  text_41  𝄀
+42  ¦  42.1  ¦  1  ¦  2019-01-08  ¦  varchar_42  ¦  text_42  𝄀
+43  ¦  43.1  ¦  0  ¦  2009-05-01  ¦  varchar_43  ¦  text_43  𝄀
+44  ¦  44.1  ¦  1  ¦  1986-11-15  ¦  varchar_44  ¦  text_44  𝄀
+45  ¦  45.1  ¦  0  ¦  2000-07-22  ¦  varchar_45  ¦  text_45  𝄀
+46  ¦  46.1  ¦  1  ¦  2002-09-07  ¦  varchar_46  ¦  text_46  𝄀
+47  ¦  47.1  ¦  0  ¦  1987-09-23  ¦  varchar_47  ¦  text_47  𝄀
+48  ¦  48.1  ¦  1  ¦  1985-10-25  ¦  varchar_48  ¦  text_48  𝄀
+49  ¦  49.1  ¦  0  ¦  1988-10-06  ¦  varchar_49  ¦  text_49
 select * from result_scan(last_query_id()) as u;
-col1    col2    col3    col4    col5    col6
-31    31.1    0    1981-08-07    varchar_31    text_31
-32    32.1    1    1984-03-25    varchar_32    text_32
-33    33.1    0    2001-09-05    varchar_33    text_33
-34    34.1    1    2022-03-17    varchar_34    text_34
-35    35.1    0    2008-06-24    varchar_35    text_35
-36    36.1    1    1987-11-23    varchar_36    text_36
-37    37.1    0    2008-11-10    varchar_37    text_37
-38    38.1    1    1986-01-29    varchar_38    text_38
-39    39.1    0    1985-02-27    varchar_39    text_39
-40    40.1    1    2016-11-28    varchar_40    text_40
-41    41.1    0    1991-02-11    varchar_41    text_41
-42    42.1    1    2019-01-08    varchar_42    text_42
-43    43.1    0    2009-05-01    varchar_43    text_43
-44    44.1    1    1986-11-15    varchar_44    text_44
-45    45.1    0    2000-07-22    varchar_45    text_45
-46    46.1    1    2002-09-07    varchar_46    text_46
-47    47.1    0    1987-09-23    varchar_47    text_47
-48    48.1    1    1985-10-25    varchar_48    text_48
-49    49.1    0    1988-10-06    varchar_49    text_49
+➤ col1[4,32,0]  ¦  col2[7,23,31]  ¦  col3[-7,1,0]  ¦  col4[91,64,0]  ¦  col5[12,191,0]  ¦  col6[12,0,0]  𝄀
+31  ¦  31.1  ¦  0  ¦  1981-08-07  ¦  varchar_31  ¦  text_31  𝄀
+32  ¦  32.1  ¦  1  ¦  1984-03-25  ¦  varchar_32  ¦  text_32  𝄀
+33  ¦  33.1  ¦  0  ¦  2001-09-05  ¦  varchar_33  ¦  text_33  𝄀
+34  ¦  34.1  ¦  1  ¦  2022-03-17  ¦  varchar_34  ¦  text_34  𝄀
+35  ¦  35.1  ¦  0  ¦  2008-06-24  ¦  varchar_35  ¦  text_35  𝄀
+36  ¦  36.1  ¦  1  ¦  1987-11-23  ¦  varchar_36  ¦  text_36  𝄀
+37  ¦  37.1  ¦  0  ¦  2008-11-10  ¦  varchar_37  ¦  text_37  𝄀
+38  ¦  38.1  ¦  1  ¦  1986-01-29  ¦  varchar_38  ¦  text_38  𝄀
+39  ¦  39.1  ¦  0  ¦  1985-02-27  ¦  varchar_39  ¦  text_39  𝄀
+40  ¦  40.1  ¦  1  ¦  2016-11-28  ¦  varchar_40  ¦  text_40  𝄀
+41  ¦  41.1  ¦  0  ¦  1991-02-11  ¦  varchar_41  ¦  text_41  𝄀
+42  ¦  42.1  ¦  1  ¦  2019-01-08  ¦  varchar_42  ¦  text_42  𝄀
+43  ¦  43.1  ¦  0  ¦  2009-05-01  ¦  varchar_43  ¦  text_43  𝄀
+44  ¦  44.1  ¦  1  ¦  1986-11-15  ¦  varchar_44  ¦  text_44  𝄀
+45  ¦  45.1  ¦  0  ¦  2000-07-22  ¦  varchar_45  ¦  text_45  𝄀
+46  ¦  46.1  ¦  1  ¦  2002-09-07  ¦  varchar_46  ¦  text_46  𝄀
+47  ¦  47.1  ¦  0  ¦  1987-09-23  ¦  varchar_47  ¦  text_47  𝄀
+48  ¦  48.1  ¦  1  ¦  1985-10-25  ¦  varchar_48  ¦  text_48  𝄀
+49  ¦  49.1  ¦  0  ¦  1988-10-06  ¦  varchar_49  ¦  text_49
 /* save_result */select * from test_table where col1 < 10;
-col1    col2    col3    col4    col5    col6
-0    0.1    1    1982-03-24    varchar_0    text_0
-1    1.1    0    1982-07-31    varchar_1    text_1
-2    2.1    1    2002-04-13    varchar_2    text_2
-3    3.1    0    2019-09-29    varchar_3    text_3
-4    4.1    1    1996-08-20    varchar_4    text_4
-5    5.1    0    2008-10-13    varchar_5    text_5
-6    6.1    1    2002-03-05    varchar_6    text_6
-7    7.1    0    1993-11-07    varchar_7    text_7
-8    8.1    1    1994-01-08    varchar_8    text_8
-9    9.1    0    1999-09-17    varchar_9    text_9
+➤ col1[4,32,0]  ¦  col2[7,23,31]  ¦  col3[-7,1,0]  ¦  col4[91,64,0]  ¦  col5[12,191,0]  ¦  col6[12,0,0]  𝄀
+0  ¦  0.1  ¦  1  ¦  1982-03-24  ¦  varchar_0  ¦  text_0  𝄀
+1  ¦  1.1  ¦  0  ¦  1982-07-31  ¦  varchar_1  ¦  text_1  𝄀
+2  ¦  2.1  ¦  1  ¦  2002-04-13  ¦  varchar_2  ¦  text_2  𝄀
+3  ¦  3.1  ¦  0  ¦  2019-09-29  ¦  varchar_3  ¦  text_3  𝄀
+4  ¦  4.1  ¦  1  ¦  1996-08-20  ¦  varchar_4  ¦  text_4  𝄀
+5  ¦  5.1  ¦  0  ¦  2008-10-13  ¦  varchar_5  ¦  text_5  𝄀
+6  ¦  6.1  ¦  1  ¦  2002-03-05  ¦  varchar_6  ¦  text_6  𝄀
+7  ¦  7.1  ¦  0  ¦  1993-11-07  ¦  varchar_7  ¦  text_7  𝄀
+8  ¦  8.1  ¦  1  ¦  1994-01-08  ¦  varchar_8  ¦  text_8  𝄀
+9  ¦  9.1  ¦  0  ¦  1999-09-17  ¦  varchar_9  ¦  text_9
 select * from result_scan(last_query_id()) as u;
-col1    col2    col3    col4    col5    col6
-0    0.1    1    1982-03-24    varchar_0    text_0
-1    1.1    0    1982-07-31    varchar_1    text_1
-2    2.1    1    2002-04-13    varchar_2    text_2
-3    3.1    0    2019-09-29    varchar_3    text_3
-4    4.1    1    1996-08-20    varchar_4    text_4
-5    5.1    0    2008-10-13    varchar_5    text_5
-6    6.1    1    2002-03-05    varchar_6    text_6
-7    7.1    0    1993-11-07    varchar_7    text_7
-8    8.1    1    1994-01-08    varchar_8    text_8
-9    9.1    0    1999-09-17    varchar_9    text_9
+➤ col1[4,32,0]  ¦  col2[7,23,31]  ¦  col3[-7,1,0]  ¦  col4[91,64,0]  ¦  col5[12,191,0]  ¦  col6[12,0,0]  𝄀
+0  ¦  0.1  ¦  1  ¦  1982-03-24  ¦  varchar_0  ¦  text_0  𝄀
+1  ¦  1.1  ¦  0  ¦  1982-07-31  ¦  varchar_1  ¦  text_1  𝄀
+2  ¦  2.1  ¦  1  ¦  2002-04-13  ¦  varchar_2  ¦  text_2  𝄀
+3  ¦  3.1  ¦  0  ¦  2019-09-29  ¦  varchar_3  ¦  text_3  𝄀
+4  ¦  4.1  ¦  1  ¦  1996-08-20  ¦  varchar_4  ¦  text_4  𝄀
+5  ¦  5.1  ¦  0  ¦  2008-10-13  ¦  varchar_5  ¦  text_5  𝄀
+6  ¦  6.1  ¦  1  ¦  2002-03-05  ¦  varchar_6  ¦  text_6  𝄀
+7  ¦  7.1  ¦  0  ¦  1993-11-07  ¦  varchar_7  ¦  text_7  𝄀
+8  ¦  8.1  ¦  1  ¦  1994-01-08  ¦  varchar_8  ¦  text_8  𝄀
+9  ¦  9.1  ¦  0  ¦  1999-09-17  ¦  varchar_9  ¦  text_9
 /* save_result */select * from test_table where col1 = 10;
-col1    col2    col3    col4    col5    col6
-10    10.1    1    2003-09-28    varchar_10    text_10
+➤ col1[4,32,0]  ¦  col2[7,23,31]  ¦  col3[-7,1,0]  ¦  col4[91,64,0]  ¦  col5[12,191,0]  ¦  col6[12,0,0]  𝄀
+10  ¦  10.1  ¦  1  ¦  2003-09-28  ¦  varchar_10  ¦  text_10
 select * from result_scan(last_query_id()) as u;
-col1    col2    col3    col4    col5    col6
-10    10.1    1    2003-09-28    varchar_10    text_10
+➤ col1[4,32,0]  ¦  col2[7,23,31]  ¦  col3[-7,1,0]  ¦  col4[91,64,0]  ¦  col5[12,191,0]  ¦  col6[12,0,0]  𝄀
+10  ¦  10.1  ¦  1  ¦  2003-09-28  ¦  varchar_10  ¦  text_10
 /* save_result */select * from test_table limit 1;
-col1    col2    col3    col4    col5    col6
-0    0.1    1    1982-03-24    varchar_0    text_0
+➤ col1[4,32,0]  ¦  col2[7,23,31]  ¦  col3[-7,1,0]  ¦  col4[91,64,0]  ¦  col5[12,191,0]  ¦  col6[12,0,0]  𝄀
+0  ¦  0.1  ¦  1  ¦  1982-03-24  ¦  varchar_0  ¦  text_0
 select * from result_scan(last_query_id()) as u;
-col1    col2    col3    col4    col5    col6
-0    0.1    1    1982-03-24    varchar_0    text_0
+➤ col1[4,32,0]  ¦  col2[7,23,31]  ¦  col3[-7,1,0]  ¦  col4[91,64,0]  ¦  col5[12,191,0]  ¦  col6[12,0,0]  𝄀
+0  ¦  0.1  ¦  1  ¦  1982-03-24  ¦  varchar_0  ¦  text_0
 /* save_result */select * from test_table order by col1 asc;
-col1    col2    col3    col4    col5    col6
-0    0.1    1    1982-03-24    varchar_0    text_0
-1    1.1    0    1982-07-31    varchar_1    text_1
-2    2.1    1    2002-04-13    varchar_2    text_2
-3    3.1    0    2019-09-29    varchar_3    text_3
-4    4.1    1    1996-08-20    varchar_4    text_4
-5    5.1    0    2008-10-13    varchar_5    text_5
-6    6.1    1    2002-03-05    varchar_6    text_6
-7    7.1    0    1993-11-07    varchar_7    text_7
-8    8.1    1    1994-01-08    varchar_8    text_8
-9    9.1    0    1999-09-17    varchar_9    text_9
-10    10.1    1    2003-09-28    varchar_10    text_10
-11    11.1    0    1984-01-22    varchar_11    text_11
-12    12.1    1    1994-02-10    varchar_12    text_12
-13    13.1    0    1994-12-02    varchar_13    text_13
-14    14.1    1    2013-01-19    varchar_14    text_14
-15    15.1    0    2002-09-29    varchar_15    text_15
-16    16.1    1    2001-12-07    varchar_16    text_16
-17    17.1    0    1989-03-11    varchar_17    text_17
-18    18.1    1    2019-11-04    varchar_18    text_18
-19    19.1    0    2002-08-15    varchar_19    text_19
-20    20.1    1    1995-12-20    varchar_20    text_20
-21    21.1    0    2018-08-03    varchar_21    text_21
-22    22.1    1    1998-03-10    varchar_22    text_22
-23    23.1    0    2022-04-08    varchar_23    text_23
-24    24.1    1    1989-04-27    varchar_24    text_24
-25    25.1    0    2009-03-14    varchar_25    text_25
-26    26.1    1    2019-03-27    varchar_26    text_26
-27    27.1    0    1983-10-28    varchar_27    text_27
-28    28.1    1    1993-07-19    varchar_28    text_28
-29    29.1    0    1986-09-11    varchar_29    text_29
-30    30.1    1    1992-08-19    varchar_30    text_30
-31    31.1    0    1981-08-07    varchar_31    text_31
-32    32.1    1    1984-03-25    varchar_32    text_32
-33    33.1    0    2001-09-05    varchar_33    text_33
-34    34.1    1    2022-03-17    varchar_34    text_34
-35    35.1    0    2008-06-24    varchar_35    text_35
-36    36.1    1    1987-11-23    varchar_36    text_36
-37    37.1    0    2008-11-10    varchar_37    text_37
-38    38.1    1    1986-01-29    varchar_38    text_38
-39    39.1    0    1985-02-27    varchar_39    text_39
-40    40.1    1    2016-11-28    varchar_40    text_40
-41    41.1    0    1991-02-11    varchar_41    text_41
-42    42.1    1    2019-01-08    varchar_42    text_42
-43    43.1    0    2009-05-01    varchar_43    text_43
-44    44.1    1    1986-11-15    varchar_44    text_44
-45    45.1    0    2000-07-22    varchar_45    text_45
-46    46.1    1    2002-09-07    varchar_46    text_46
-47    47.1    0    1987-09-23    varchar_47    text_47
-48    48.1    1    1985-10-25    varchar_48    text_48
-49    49.1    0    1988-10-06    varchar_49    text_49
+➤ col1[4,32,0]  ¦  col2[7,23,31]  ¦  col3[-7,1,0]  ¦  col4[91,64,0]  ¦  col5[12,191,0]  ¦  col6[12,0,0]  𝄀
+0  ¦  0.1  ¦  1  ¦  1982-03-24  ¦  varchar_0  ¦  text_0  𝄀
+1  ¦  1.1  ¦  0  ¦  1982-07-31  ¦  varchar_1  ¦  text_1  𝄀
+2  ¦  2.1  ¦  1  ¦  2002-04-13  ¦  varchar_2  ¦  text_2  𝄀
+3  ¦  3.1  ¦  0  ¦  2019-09-29  ¦  varchar_3  ¦  text_3  𝄀
+4  ¦  4.1  ¦  1  ¦  1996-08-20  ¦  varchar_4  ¦  text_4  𝄀
+5  ¦  5.1  ¦  0  ¦  2008-10-13  ¦  varchar_5  ¦  text_5  𝄀
+6  ¦  6.1  ¦  1  ¦  2002-03-05  ¦  varchar_6  ¦  text_6  𝄀
+7  ¦  7.1  ¦  0  ¦  1993-11-07  ¦  varchar_7  ¦  text_7  𝄀
+8  ¦  8.1  ¦  1  ¦  1994-01-08  ¦  varchar_8  ¦  text_8  𝄀
+9  ¦  9.1  ¦  0  ¦  1999-09-17  ¦  varchar_9  ¦  text_9  𝄀
+10  ¦  10.1  ¦  1  ¦  2003-09-28  ¦  varchar_10  ¦  text_10  𝄀
+11  ¦  11.1  ¦  0  ¦  1984-01-22  ¦  varchar_11  ¦  text_11  𝄀
+12  ¦  12.1  ¦  1  ¦  1994-02-10  ¦  varchar_12  ¦  text_12  𝄀
+13  ¦  13.1  ¦  0  ¦  1994-12-02  ¦  varchar_13  ¦  text_13  𝄀
+14  ¦  14.1  ¦  1  ¦  2013-01-19  ¦  varchar_14  ¦  text_14  𝄀
+15  ¦  15.1  ¦  0  ¦  2002-09-29  ¦  varchar_15  ¦  text_15  𝄀
+16  ¦  16.1  ¦  1  ¦  2001-12-07  ¦  varchar_16  ¦  text_16  𝄀
+17  ¦  17.1  ¦  0  ¦  1989-03-11  ¦  varchar_17  ¦  text_17  𝄀
+18  ¦  18.1  ¦  1  ¦  2019-11-04  ¦  varchar_18  ¦  text_18  𝄀
+19  ¦  19.1  ¦  0  ¦  2002-08-15  ¦  varchar_19  ¦  text_19  𝄀
+20  ¦  20.1  ¦  1  ¦  1995-12-20  ¦  varchar_20  ¦  text_20  𝄀
+21  ¦  21.1  ¦  0  ¦  2018-08-03  ¦  varchar_21  ¦  text_21  𝄀
+22  ¦  22.1  ¦  1  ¦  1998-03-10  ¦  varchar_22  ¦  text_22  𝄀
+23  ¦  23.1  ¦  0  ¦  2022-04-08  ¦  varchar_23  ¦  text_23  𝄀
+24  ¦  24.1  ¦  1  ¦  1989-04-27  ¦  varchar_24  ¦  text_24  𝄀
+25  ¦  25.1  ¦  0  ¦  2009-03-14  ¦  varchar_25  ¦  text_25  𝄀
+26  ¦  26.1  ¦  1  ¦  2019-03-27  ¦  varchar_26  ¦  text_26  𝄀
+27  ¦  27.1  ¦  0  ¦  1983-10-28  ¦  varchar_27  ¦  text_27  𝄀
+28  ¦  28.1  ¦  1  ¦  1993-07-19  ¦  varchar_28  ¦  text_28  𝄀
+29  ¦  29.1  ¦  0  ¦  1986-09-11  ¦  varchar_29  ¦  text_29  𝄀
+30  ¦  30.1  ¦  1  ¦  1992-08-19  ¦  varchar_30  ¦  text_30  𝄀
+31  ¦  31.1  ¦  0  ¦  1981-08-07  ¦  varchar_31  ¦  text_31  𝄀
+32  ¦  32.1  ¦  1  ¦  1984-03-25  ¦  varchar_32  ¦  text_32  𝄀
+33  ¦  33.1  ¦  0  ¦  2001-09-05  ¦  varchar_33  ¦  text_33  𝄀
+34  ¦  34.1  ¦  1  ¦  2022-03-17  ¦  varchar_34  ¦  text_34  𝄀
+35  ¦  35.1  ¦  0  ¦  2008-06-24  ¦  varchar_35  ¦  text_35  𝄀
+36  ¦  36.1  ¦  1  ¦  1987-11-23  ¦  varchar_36  ¦  text_36  𝄀
+37  ¦  37.1  ¦  0  ¦  2008-11-10  ¦  varchar_37  ¦  text_37  𝄀
+38  ¦  38.1  ¦  1  ¦  1986-01-29  ¦  varchar_38  ¦  text_38  𝄀
+39  ¦  39.1  ¦  0  ¦  1985-02-27  ¦  varchar_39  ¦  text_39  𝄀
+40  ¦  40.1  ¦  1  ¦  2016-11-28  ¦  varchar_40  ¦  text_40  𝄀
+41  ¦  41.1  ¦  0  ¦  1991-02-11  ¦  varchar_41  ¦  text_41  𝄀
+42  ¦  42.1  ¦  1  ¦  2019-01-08  ¦  varchar_42  ¦  text_42  𝄀
+43  ¦  43.1  ¦  0  ¦  2009-05-01  ¦  varchar_43  ¦  text_43  𝄀
+44  ¦  44.1  ¦  1  ¦  1986-11-15  ¦  varchar_44  ¦  text_44  𝄀
+45  ¦  45.1  ¦  0  ¦  2000-07-22  ¦  varchar_45  ¦  text_45  𝄀
+46  ¦  46.1  ¦  1  ¦  2002-09-07  ¦  varchar_46  ¦  text_46  𝄀
+47  ¦  47.1  ¦  0  ¦  1987-09-23  ¦  varchar_47  ¦  text_47  𝄀
+48  ¦  48.1  ¦  1  ¦  1985-10-25  ¦  varchar_48  ¦  text_48  𝄀
+49  ¦  49.1  ¦  0  ¦  1988-10-06  ¦  varchar_49  ¦  text_49
 select * from result_scan(last_query_id()) as u;
-col1    col2    col3    col4    col5    col6
-0    0.1    1    1982-03-24    varchar_0    text_0
-1    1.1    0    1982-07-31    varchar_1    text_1
-2    2.1    1    2002-04-13    varchar_2    text_2
-3    3.1    0    2019-09-29    varchar_3    text_3
-4    4.1    1    1996-08-20    varchar_4    text_4
-5    5.1    0    2008-10-13    varchar_5    text_5
-6    6.1    1    2002-03-05    varchar_6    text_6
-7    7.1    0    1993-11-07    varchar_7    text_7
-8    8.1    1    1994-01-08    varchar_8    text_8
-9    9.1    0    1999-09-17    varchar_9    text_9
-10    10.1    1    2003-09-28    varchar_10    text_10
-11    11.1    0    1984-01-22    varchar_11    text_11
-12    12.1    1    1994-02-10    varchar_12    text_12
-13    13.1    0    1994-12-02    varchar_13    text_13
-14    14.1    1    2013-01-19    varchar_14    text_14
-15    15.1    0    2002-09-29    varchar_15    text_15
-16    16.1    1    2001-12-07    varchar_16    text_16
-17    17.1    0    1989-03-11    varchar_17    text_17
-18    18.1    1    2019-11-04    varchar_18    text_18
-19    19.1    0    2002-08-15    varchar_19    text_19
-20    20.1    1    1995-12-20    varchar_20    text_20
-21    21.1    0    2018-08-03    varchar_21    text_21
-22    22.1    1    1998-03-10    varchar_22    text_22
-23    23.1    0    2022-04-08    varchar_23    text_23
-24    24.1    1    1989-04-27    varchar_24    text_24
-25    25.1    0    2009-03-14    varchar_25    text_25
-26    26.1    1    2019-03-27    varchar_26    text_26
-27    27.1    0    1983-10-28    varchar_27    text_27
-28    28.1    1    1993-07-19    varchar_28    text_28
-29    29.1    0    1986-09-11    varchar_29    text_29
-30    30.1    1    1992-08-19    varchar_30    text_30
-31    31.1    0    1981-08-07    varchar_31    text_31
-32    32.1    1    1984-03-25    varchar_32    text_32
-33    33.1    0    2001-09-05    varchar_33    text_33
-34    34.1    1    2022-03-17    varchar_34    text_34
-35    35.1    0    2008-06-24    varchar_35    text_35
-36    36.1    1    1987-11-23    varchar_36    text_36
-37    37.1    0    2008-11-10    varchar_37    text_37
-38    38.1    1    1986-01-29    varchar_38    text_38
-39    39.1    0    1985-02-27    varchar_39    text_39
-40    40.1    1    2016-11-28    varchar_40    text_40
-41    41.1    0    1991-02-11    varchar_41    text_41
-42    42.1    1    2019-01-08    varchar_42    text_42
-43    43.1    0    2009-05-01    varchar_43    text_43
-44    44.1    1    1986-11-15    varchar_44    text_44
-45    45.1    0    2000-07-22    varchar_45    text_45
-46    46.1    1    2002-09-07    varchar_46    text_46
-47    47.1    0    1987-09-23    varchar_47    text_47
-48    48.1    1    1985-10-25    varchar_48    text_48
-49    49.1    0    1988-10-06    varchar_49    text_49
+➤ col1[4,32,0]  ¦  col2[7,23,31]  ¦  col3[-7,1,0]  ¦  col4[91,64,0]  ¦  col5[12,191,0]  ¦  col6[12,0,0]  𝄀
+0  ¦  0.1  ¦  1  ¦  1982-03-24  ¦  varchar_0  ¦  text_0  𝄀
+1  ¦  1.1  ¦  0  ¦  1982-07-31  ¦  varchar_1  ¦  text_1  𝄀
+2  ¦  2.1  ¦  1  ¦  2002-04-13  ¦  varchar_2  ¦  text_2  𝄀
+3  ¦  3.1  ¦  0  ¦  2019-09-29  ¦  varchar_3  ¦  text_3  𝄀
+4  ¦  4.1  ¦  1  ¦  1996-08-20  ¦  varchar_4  ¦  text_4  𝄀
+5  ¦  5.1  ¦  0  ¦  2008-10-13  ¦  varchar_5  ¦  text_5  𝄀
+6  ¦  6.1  ¦  1  ¦  2002-03-05  ¦  varchar_6  ¦  text_6  𝄀
+7  ¦  7.1  ¦  0  ¦  1993-11-07  ¦  varchar_7  ¦  text_7  𝄀
+8  ¦  8.1  ¦  1  ¦  1994-01-08  ¦  varchar_8  ¦  text_8  𝄀
+9  ¦  9.1  ¦  0  ¦  1999-09-17  ¦  varchar_9  ¦  text_9  𝄀
+10  ¦  10.1  ¦  1  ¦  2003-09-28  ¦  varchar_10  ¦  text_10  𝄀
+11  ¦  11.1  ¦  0  ¦  1984-01-22  ¦  varchar_11  ¦  text_11  𝄀
+12  ¦  12.1  ¦  1  ¦  1994-02-10  ¦  varchar_12  ¦  text_12  𝄀
+13  ¦  13.1  ¦  0  ¦  1994-12-02  ¦  varchar_13  ¦  text_13  𝄀
+14  ¦  14.1  ¦  1  ¦  2013-01-19  ¦  varchar_14  ¦  text_14  𝄀
+15  ¦  15.1  ¦  0  ¦  2002-09-29  ¦  varchar_15  ¦  text_15  𝄀
+16  ¦  16.1  ¦  1  ¦  2001-12-07  ¦  varchar_16  ¦  text_16  𝄀
+17  ¦  17.1  ¦  0  ¦  1989-03-11  ¦  varchar_17  ¦  text_17  𝄀
+18  ¦  18.1  ¦  1  ¦  2019-11-04  ¦  varchar_18  ¦  text_18  𝄀
+19  ¦  19.1  ¦  0  ¦  2002-08-15  ¦  varchar_19  ¦  text_19  𝄀
+20  ¦  20.1  ¦  1  ¦  1995-12-20  ¦  varchar_20  ¦  text_20  𝄀
+21  ¦  21.1  ¦  0  ¦  2018-08-03  ¦  varchar_21  ¦  text_21  𝄀
+22  ¦  22.1  ¦  1  ¦  1998-03-10  ¦  varchar_22  ¦  text_22  𝄀
+23  ¦  23.1  ¦  0  ¦  2022-04-08  ¦  varchar_23  ¦  text_23  𝄀
+24  ¦  24.1  ¦  1  ¦  1989-04-27  ¦  varchar_24  ¦  text_24  𝄀
+25  ¦  25.1  ¦  0  ¦  2009-03-14  ¦  varchar_25  ¦  text_25  𝄀
+26  ¦  26.1  ¦  1  ¦  2019-03-27  ¦  varchar_26  ¦  text_26  𝄀
+27  ¦  27.1  ¦  0  ¦  1983-10-28  ¦  varchar_27  ¦  text_27  𝄀
+28  ¦  28.1  ¦  1  ¦  1993-07-19  ¦  varchar_28  ¦  text_28  𝄀
+29  ¦  29.1  ¦  0  ¦  1986-09-11  ¦  varchar_29  ¦  text_29  𝄀
+30  ¦  30.1  ¦  1  ¦  1992-08-19  ¦  varchar_30  ¦  text_30  𝄀
+31  ¦  31.1  ¦  0  ¦  1981-08-07  ¦  varchar_31  ¦  text_31  𝄀
+32  ¦  32.1  ¦  1  ¦  1984-03-25  ¦  varchar_32  ¦  text_32  𝄀
+33  ¦  33.1  ¦  0  ¦  2001-09-05  ¦  varchar_33  ¦  text_33  𝄀
+34  ¦  34.1  ¦  1  ¦  2022-03-17  ¦  varchar_34  ¦  text_34  𝄀
+35  ¦  35.1  ¦  0  ¦  2008-06-24  ¦  varchar_35  ¦  text_35  𝄀
+36  ¦  36.1  ¦  1  ¦  1987-11-23  ¦  varchar_36  ¦  text_36  𝄀
+37  ¦  37.1  ¦  0  ¦  2008-11-10  ¦  varchar_37  ¦  text_37  𝄀
+38  ¦  38.1  ¦  1  ¦  1986-01-29  ¦  varchar_38  ¦  text_38  𝄀
+39  ¦  39.1  ¦  0  ¦  1985-02-27  ¦  varchar_39  ¦  text_39  𝄀
+40  ¦  40.1  ¦  1  ¦  2016-11-28  ¦  varchar_40  ¦  text_40  𝄀
+41  ¦  41.1  ¦  0  ¦  1991-02-11  ¦  varchar_41  ¦  text_41  𝄀
+42  ¦  42.1  ¦  1  ¦  2019-01-08  ¦  varchar_42  ¦  text_42  𝄀
+43  ¦  43.1  ¦  0  ¦  2009-05-01  ¦  varchar_43  ¦  text_43  𝄀
+44  ¦  44.1  ¦  1  ¦  1986-11-15  ¦  varchar_44  ¦  text_44  𝄀
+45  ¦  45.1  ¦  0  ¦  2000-07-22  ¦  varchar_45  ¦  text_45  𝄀
+46  ¦  46.1  ¦  1  ¦  2002-09-07  ¦  varchar_46  ¦  text_46  𝄀
+47  ¦  47.1  ¦  0  ¦  1987-09-23  ¦  varchar_47  ¦  text_47  𝄀
+48  ¦  48.1  ¦  1  ¦  1985-10-25  ¦  varchar_48  ¦  text_48  𝄀
+49  ¦  49.1  ¦  0  ¦  1988-10-06  ¦  varchar_49  ¦  text_49
 /* save_result */select t1.col1,t2.col1 from test_table t1  left join test_table t2 on t1.col1=t2.col1;
-col1    col1
-0    0
-1    1
-2    2
-3    3
-4    4
-5    5
-6    6
-7    7
-8    8
-9    9
-10    10
-11    11
-12    12
-13    13
-14    14
-15    15
-16    16
-17    17
-18    18
-19    19
-20    20
-21    21
-22    22
-23    23
-24    24
-25    25
-26    26
-27    27
-28    28
-29    29
-30    30
-31    31
-32    32
-33    33
-34    34
-35    35
-36    36
-37    37
-38    38
-39    39
-40    40
-41    41
-42    42
-43    43
-44    44
-45    45
-46    46
-47    47
-48    48
-49    49
+➤ col1[4,32,0]  ¦  col1[4,32,0]  𝄀
+0  ¦  0  𝄀
+1  ¦  1  𝄀
+2  ¦  2  𝄀
+3  ¦  3  𝄀
+4  ¦  4  𝄀
+5  ¦  5  𝄀
+6  ¦  6  𝄀
+7  ¦  7  𝄀
+8  ¦  8  𝄀
+9  ¦  9  𝄀
+10  ¦  10  𝄀
+11  ¦  11  𝄀
+12  ¦  12  𝄀
+13  ¦  13  𝄀
+14  ¦  14  𝄀
+15  ¦  15  𝄀
+16  ¦  16  𝄀
+17  ¦  17  𝄀
+18  ¦  18  𝄀
+19  ¦  19  𝄀
+20  ¦  20  𝄀
+21  ¦  21  𝄀
+22  ¦  22  𝄀
+23  ¦  23  𝄀
+24  ¦  24  𝄀
+25  ¦  25  𝄀
+26  ¦  26  𝄀
+27  ¦  27  𝄀
+28  ¦  28  𝄀
+29  ¦  29  𝄀
+30  ¦  30  𝄀
+31  ¦  31  𝄀
+32  ¦  32  𝄀
+33  ¦  33  𝄀
+34  ¦  34  𝄀
+35  ¦  35  𝄀
+36  ¦  36  𝄀
+37  ¦  37  𝄀
+38  ¦  38  𝄀
+39  ¦  39  𝄀
+40  ¦  40  𝄀
+41  ¦  41  𝄀
+42  ¦  42  𝄀
+43  ¦  43  𝄀
+44  ¦  44  𝄀
+45  ¦  45  𝄀
+46  ¦  46  𝄀
+47  ¦  47  𝄀
+48  ¦  48  𝄀
+49  ¦  49
 select * from result_scan(last_query_id()) as u;
-col1_0    col1_1
-0    0
-1    1
-2    2
-3    3
-4    4
-5    5
-6    6
-7    7
-8    8
-9    9
-10    10
-11    11
-12    12
-13    13
-14    14
-15    15
-16    16
-17    17
-18    18
-19    19
-20    20
-21    21
-22    22
-23    23
-24    24
-25    25
-26    26
-27    27
-28    28
-29    29
-30    30
-31    31
-32    32
-33    33
-34    34
-35    35
-36    36
-37    37
-38    38
-39    39
-40    40
-41    41
-42    42
-43    43
-44    44
-45    45
-46    46
-47    47
-48    48
-49    49
+➤ col1_0[4,32,0]  ¦  col1_1[4,32,0]  𝄀
+0  ¦  0  𝄀
+1  ¦  1  𝄀
+2  ¦  2  𝄀
+3  ¦  3  𝄀
+4  ¦  4  𝄀
+5  ¦  5  𝄀
+6  ¦  6  𝄀
+7  ¦  7  𝄀
+8  ¦  8  𝄀
+9  ¦  9  𝄀
+10  ¦  10  𝄀
+11  ¦  11  𝄀
+12  ¦  12  𝄀
+13  ¦  13  𝄀
+14  ¦  14  𝄀
+15  ¦  15  𝄀
+16  ¦  16  𝄀
+17  ¦  17  𝄀
+18  ¦  18  𝄀
+19  ¦  19  𝄀
+20  ¦  20  𝄀
+21  ¦  21  𝄀
+22  ¦  22  𝄀
+23  ¦  23  𝄀
+24  ¦  24  𝄀
+25  ¦  25  𝄀
+26  ¦  26  𝄀
+27  ¦  27  𝄀
+28  ¦  28  𝄀
+29  ¦  29  𝄀
+30  ¦  30  𝄀
+31  ¦  31  𝄀
+32  ¦  32  𝄀
+33  ¦  33  𝄀
+34  ¦  34  𝄀
+35  ¦  35  𝄀
+36  ¦  36  𝄀
+37  ¦  37  𝄀
+38  ¦  38  𝄀
+39  ¦  39  𝄀
+40  ¦  40  𝄀
+41  ¦  41  𝄀
+42  ¦  42  𝄀
+43  ¦  43  𝄀
+44  ¦  44  𝄀
+45  ¦  45  𝄀
+46  ¦  46  𝄀
+47  ¦  47  𝄀
+48  ¦  48  𝄀
+49  ¦  49
 /* save_result */select t1.col1,t2.col1 from test_table t1  right join test_table t2 on t1.col1=t2.col1;
-col1    col1
-0    0
-1    1
-2    2
-3    3
-4    4
-5    5
-6    6
-7    7
-8    8
-9    9
-10    10
-11    11
-12    12
-13    13
-14    14
-15    15
-16    16
-17    17
-18    18
-19    19
-20    20
-21    21
-22    22
-23    23
-24    24
-25    25
-26    26
-27    27
-28    28
-29    29
-30    30
-31    31
-32    32
-33    33
-34    34
-35    35
-36    36
-37    37
-38    38
-39    39
-40    40
-41    41
-42    42
-43    43
-44    44
-45    45
-46    46
-47    47
-48    48
-49    49
+➤ col1[4,32,0]  ¦  col1[4,32,0]  𝄀
+0  ¦  0  𝄀
+1  ¦  1  𝄀
+2  ¦  2  𝄀
+3  ¦  3  𝄀
+4  ¦  4  𝄀
+5  ¦  5  𝄀
+6  ¦  6  𝄀
+7  ¦  7  𝄀
+8  ¦  8  𝄀
+9  ¦  9  𝄀
+10  ¦  10  𝄀
+11  ¦  11  𝄀
+12  ¦  12  𝄀
+13  ¦  13  𝄀
+14  ¦  14  𝄀
+15  ¦  15  𝄀
+16  ¦  16  𝄀
+17  ¦  17  𝄀
+18  ¦  18  𝄀
+19  ¦  19  𝄀
+20  ¦  20  𝄀
+21  ¦  21  𝄀
+22  ¦  22  𝄀
+23  ¦  23  𝄀
+24  ¦  24  𝄀
+25  ¦  25  𝄀
+26  ¦  26  𝄀
+27  ¦  27  𝄀
+28  ¦  28  𝄀
+29  ¦  29  𝄀
+30  ¦  30  𝄀
+31  ¦  31  𝄀
+32  ¦  32  𝄀
+33  ¦  33  𝄀
+34  ¦  34  𝄀
+35  ¦  35  𝄀
+36  ¦  36  𝄀
+37  ¦  37  𝄀
+38  ¦  38  𝄀
+39  ¦  39  𝄀
+40  ¦  40  𝄀
+41  ¦  41  𝄀
+42  ¦  42  𝄀
+43  ¦  43  𝄀
+44  ¦  44  𝄀
+45  ¦  45  𝄀
+46  ¦  46  𝄀
+47  ¦  47  𝄀
+48  ¦  48  𝄀
+49  ¦  49
 select * from result_scan(last_query_id()) as u;
-col1_0    col1_1
-0    0
-1    1
-2    2
-3    3
-4    4
-5    5
-6    6
-7    7
-8    8
-9    9
-10    10
-11    11
-12    12
-13    13
-14    14
-15    15
-16    16
-17    17
-18    18
-19    19
-20    20
-21    21
-22    22
-23    23
-24    24
-25    25
-26    26
-27    27
-28    28
-29    29
-30    30
-31    31
-32    32
-33    33
-34    34
-35    35
-36    36
-37    37
-38    38
-39    39
-40    40
-41    41
-42    42
-43    43
-44    44
-45    45
-46    46
-47    47
-48    48
-49    49
+➤ col1_0[4,32,0]  ¦  col1_1[4,32,0]  𝄀
+0  ¦  0  𝄀
+1  ¦  1  𝄀
+2  ¦  2  𝄀
+3  ¦  3  𝄀
+4  ¦  4  𝄀
+5  ¦  5  𝄀
+6  ¦  6  𝄀
+7  ¦  7  𝄀
+8  ¦  8  𝄀
+9  ¦  9  𝄀
+10  ¦  10  𝄀
+11  ¦  11  𝄀
+12  ¦  12  𝄀
+13  ¦  13  𝄀
+14  ¦  14  𝄀
+15  ¦  15  𝄀
+16  ¦  16  𝄀
+17  ¦  17  𝄀
+18  ¦  18  𝄀
+19  ¦  19  𝄀
+20  ¦  20  𝄀
+21  ¦  21  𝄀
+22  ¦  22  𝄀
+23  ¦  23  𝄀
+24  ¦  24  𝄀
+25  ¦  25  𝄀
+26  ¦  26  𝄀
+27  ¦  27  𝄀
+28  ¦  28  𝄀
+29  ¦  29  𝄀
+30  ¦  30  𝄀
+31  ¦  31  𝄀
+32  ¦  32  𝄀
+33  ¦  33  𝄀
+34  ¦  34  𝄀
+35  ¦  35  𝄀
+36  ¦  36  𝄀
+37  ¦  37  𝄀
+38  ¦  38  𝄀
+39  ¦  39  𝄀
+40  ¦  40  𝄀
+41  ¦  41  𝄀
+42  ¦  42  𝄀
+43  ¦  43  𝄀
+44  ¦  44  𝄀
+45  ¦  45  𝄀
+46  ¦  46  𝄀
+47  ¦  47  𝄀
+48  ¦  48  𝄀
+49  ¦  49
 /* save_result */select * from test_table union select * from test_table;
-col1    col2    col3    col4    col5    col6
-0    0.1    1    1982-03-24    varchar_0    text_0
-1    1.1    0    1982-07-31    varchar_1    text_1
-2    2.1    1    2002-04-13    varchar_2    text_2
-3    3.1    0    2019-09-29    varchar_3    text_3
-4    4.1    1    1996-08-20    varchar_4    text_4
-5    5.1    0    2008-10-13    varchar_5    text_5
-6    6.1    1    2002-03-05    varchar_6    text_6
-7    7.1    0    1993-11-07    varchar_7    text_7
-8    8.1    1    1994-01-08    varchar_8    text_8
-9    9.1    0    1999-09-17    varchar_9    text_9
-10    10.1    1    2003-09-28    varchar_10    text_10
-11    11.1    0    1984-01-22    varchar_11    text_11
-12    12.1    1    1994-02-10    varchar_12    text_12
-13    13.1    0    1994-12-02    varchar_13    text_13
-14    14.1    1    2013-01-19    varchar_14    text_14
-15    15.1    0    2002-09-29    varchar_15    text_15
-16    16.1    1    2001-12-07    varchar_16    text_16
-17    17.1    0    1989-03-11    varchar_17    text_17
-18    18.1    1    2019-11-04    varchar_18    text_18
-19    19.1    0    2002-08-15    varchar_19    text_19
-20    20.1    1    1995-12-20    varchar_20    text_20
-21    21.1    0    2018-08-03    varchar_21    text_21
-22    22.1    1    1998-03-10    varchar_22    text_22
-23    23.1    0    2022-04-08    varchar_23    text_23
-24    24.1    1    1989-04-27    varchar_24    text_24
-25    25.1    0    2009-03-14    varchar_25    text_25
-26    26.1    1    2019-03-27    varchar_26    text_26
-27    27.1    0    1983-10-28    varchar_27    text_27
-28    28.1    1    1993-07-19    varchar_28    text_28
-29    29.1    0    1986-09-11    varchar_29    text_29
-30    30.1    1    1992-08-19    varchar_30    text_30
-31    31.1    0    1981-08-07    varchar_31    text_31
-32    32.1    1    1984-03-25    varchar_32    text_32
-33    33.1    0    2001-09-05    varchar_33    text_33
-34    34.1    1    2022-03-17    varchar_34    text_34
-35    35.1    0    2008-06-24    varchar_35    text_35
-36    36.1    1    1987-11-23    varchar_36    text_36
-37    37.1    0    2008-11-10    varchar_37    text_37
-38    38.1    1    1986-01-29    varchar_38    text_38
-39    39.1    0    1985-02-27    varchar_39    text_39
-40    40.1    1    2016-11-28    varchar_40    text_40
-41    41.1    0    1991-02-11    varchar_41    text_41
-42    42.1    1    2019-01-08    varchar_42    text_42
-43    43.1    0    2009-05-01    varchar_43    text_43
-44    44.1    1    1986-11-15    varchar_44    text_44
-45    45.1    0    2000-07-22    varchar_45    text_45
-46    46.1    1    2002-09-07    varchar_46    text_46
-47    47.1    0    1987-09-23    varchar_47    text_47
-48    48.1    1    1985-10-25    varchar_48    text_48
-49    49.1    0    1988-10-06    varchar_49    text_49
+➤ col1[4,32,0]  ¦  col2[7,23,31]  ¦  col3[-7,1,0]  ¦  col4[91,64,0]  ¦  col5[12,191,0]  ¦  col6[12,0,0]  𝄀
+0  ¦  0.1  ¦  1  ¦  1982-03-24  ¦  varchar_0  ¦  text_0  𝄀
+1  ¦  1.1  ¦  0  ¦  1982-07-31  ¦  varchar_1  ¦  text_1  𝄀
+2  ¦  2.1  ¦  1  ¦  2002-04-13  ¦  varchar_2  ¦  text_2  𝄀
+3  ¦  3.1  ¦  0  ¦  2019-09-29  ¦  varchar_3  ¦  text_3  𝄀
+4  ¦  4.1  ¦  1  ¦  1996-08-20  ¦  varchar_4  ¦  text_4  𝄀
+5  ¦  5.1  ¦  0  ¦  2008-10-13  ¦  varchar_5  ¦  text_5  𝄀
+6  ¦  6.1  ¦  1  ¦  2002-03-05  ¦  varchar_6  ¦  text_6  𝄀
+7  ¦  7.1  ¦  0  ¦  1993-11-07  ¦  varchar_7  ¦  text_7  𝄀
+8  ¦  8.1  ¦  1  ¦  1994-01-08  ¦  varchar_8  ¦  text_8  𝄀
+9  ¦  9.1  ¦  0  ¦  1999-09-17  ¦  varchar_9  ¦  text_9  𝄀
+10  ¦  10.1  ¦  1  ¦  2003-09-28  ¦  varchar_10  ¦  text_10  𝄀
+11  ¦  11.1  ¦  0  ¦  1984-01-22  ¦  varchar_11  ¦  text_11  𝄀
+12  ¦  12.1  ¦  1  ¦  1994-02-10  ¦  varchar_12  ¦  text_12  𝄀
+13  ¦  13.1  ¦  0  ¦  1994-12-02  ¦  varchar_13  ¦  text_13  𝄀
+14  ¦  14.1  ¦  1  ¦  2013-01-19  ¦  varchar_14  ¦  text_14  𝄀
+15  ¦  15.1  ¦  0  ¦  2002-09-29  ¦  varchar_15  ¦  text_15  𝄀
+16  ¦  16.1  ¦  1  ¦  2001-12-07  ¦  varchar_16  ¦  text_16  𝄀
+17  ¦  17.1  ¦  0  ¦  1989-03-11  ¦  varchar_17  ¦  text_17  𝄀
+18  ¦  18.1  ¦  1  ¦  2019-11-04  ¦  varchar_18  ¦  text_18  𝄀
+19  ¦  19.1  ¦  0  ¦  2002-08-15  ¦  varchar_19  ¦  text_19  𝄀
+20  ¦  20.1  ¦  1  ¦  1995-12-20  ¦  varchar_20  ¦  text_20  𝄀
+21  ¦  21.1  ¦  0  ¦  2018-08-03  ¦  varchar_21  ¦  text_21  𝄀
+22  ¦  22.1  ¦  1  ¦  1998-03-10  ¦  varchar_22  ¦  text_22  𝄀
+23  ¦  23.1  ¦  0  ¦  2022-04-08  ¦  varchar_23  ¦  text_23  𝄀
+24  ¦  24.1  ¦  1  ¦  1989-04-27  ¦  varchar_24  ¦  text_24  𝄀
+25  ¦  25.1  ¦  0  ¦  2009-03-14  ¦  varchar_25  ¦  text_25  𝄀
+26  ¦  26.1  ¦  1  ¦  2019-03-27  ¦  varchar_26  ¦  text_26  𝄀
+27  ¦  27.1  ¦  0  ¦  1983-10-28  ¦  varchar_27  ¦  text_27  𝄀
+28  ¦  28.1  ¦  1  ¦  1993-07-19  ¦  varchar_28  ¦  text_28  𝄀
+29  ¦  29.1  ¦  0  ¦  1986-09-11  ¦  varchar_29  ¦  text_29  𝄀
+30  ¦  30.1  ¦  1  ¦  1992-08-19  ¦  varchar_30  ¦  text_30  𝄀
+31  ¦  31.1  ¦  0  ¦  1981-08-07  ¦  varchar_31  ¦  text_31  𝄀
+32  ¦  32.1  ¦  1  ¦  1984-03-25  ¦  varchar_32  ¦  text_32  𝄀
+33  ¦  33.1  ¦  0  ¦  2001-09-05  ¦  varchar_33  ¦  text_33  𝄀
+34  ¦  34.1  ¦  1  ¦  2022-03-17  ¦  varchar_34  ¦  text_34  𝄀
+35  ¦  35.1  ¦  0  ¦  2008-06-24  ¦  varchar_35  ¦  text_35  𝄀
+36  ¦  36.1  ¦  1  ¦  1987-11-23  ¦  varchar_36  ¦  text_36  𝄀
+37  ¦  37.1  ¦  0  ¦  2008-11-10  ¦  varchar_37  ¦  text_37  𝄀
+38  ¦  38.1  ¦  1  ¦  1986-01-29  ¦  varchar_38  ¦  text_38  𝄀
+39  ¦  39.1  ¦  0  ¦  1985-02-27  ¦  varchar_39  ¦  text_39  𝄀
+40  ¦  40.1  ¦  1  ¦  2016-11-28  ¦  varchar_40  ¦  text_40  𝄀
+41  ¦  41.1  ¦  0  ¦  1991-02-11  ¦  varchar_41  ¦  text_41  𝄀
+42  ¦  42.1  ¦  1  ¦  2019-01-08  ¦  varchar_42  ¦  text_42  𝄀
+43  ¦  43.1  ¦  0  ¦  2009-05-01  ¦  varchar_43  ¦  text_43  𝄀
+44  ¦  44.1  ¦  1  ¦  1986-11-15  ¦  varchar_44  ¦  text_44  𝄀
+45  ¦  45.1  ¦  0  ¦  2000-07-22  ¦  varchar_45  ¦  text_45  𝄀
+46  ¦  46.1  ¦  1  ¦  2002-09-07  ¦  varchar_46  ¦  text_46  𝄀
+47  ¦  47.1  ¦  0  ¦  1987-09-23  ¦  varchar_47  ¦  text_47  𝄀
+48  ¦  48.1  ¦  1  ¦  1985-10-25  ¦  varchar_48  ¦  text_48  𝄀
+49  ¦  49.1  ¦  0  ¦  1988-10-06  ¦  varchar_49  ¦  text_49
 select * from result_scan(last_query_id()) as u;
-col1    col2    col3    col4    col5    col6
-0    0.1    1    1982-03-24    varchar_0    text_0
-1    1.1    0    1982-07-31    varchar_1    text_1
-2    2.1    1    2002-04-13    varchar_2    text_2
-3    3.1    0    2019-09-29    varchar_3    text_3
-4    4.1    1    1996-08-20    varchar_4    text_4
-5    5.1    0    2008-10-13    varchar_5    text_5
-6    6.1    1    2002-03-05    varchar_6    text_6
-7    7.1    0    1993-11-07    varchar_7    text_7
-8    8.1    1    1994-01-08    varchar_8    text_8
-9    9.1    0    1999-09-17    varchar_9    text_9
-10    10.1    1    2003-09-28    varchar_10    text_10
-11    11.1    0    1984-01-22    varchar_11    text_11
-12    12.1    1    1994-02-10    varchar_12    text_12
-13    13.1    0    1994-12-02    varchar_13    text_13
-14    14.1    1    2013-01-19    varchar_14    text_14
-15    15.1    0    2002-09-29    varchar_15    text_15
-16    16.1    1    2001-12-07    varchar_16    text_16
-17    17.1    0    1989-03-11    varchar_17    text_17
-18    18.1    1    2019-11-04    varchar_18    text_18
-19    19.1    0    2002-08-15    varchar_19    text_19
-20    20.1    1    1995-12-20    varchar_20    text_20
-21    21.1    0    2018-08-03    varchar_21    text_21
-22    22.1    1    1998-03-10    varchar_22    text_22
-23    23.1    0    2022-04-08    varchar_23    text_23
-24    24.1    1    1989-04-27    varchar_24    text_24
-25    25.1    0    2009-03-14    varchar_25    text_25
-26    26.1    1    2019-03-27    varchar_26    text_26
-27    27.1    0    1983-10-28    varchar_27    text_27
-28    28.1    1    1993-07-19    varchar_28    text_28
-29    29.1    0    1986-09-11    varchar_29    text_29
-30    30.1    1    1992-08-19    varchar_30    text_30
-31    31.1    0    1981-08-07    varchar_31    text_31
-32    32.1    1    1984-03-25    varchar_32    text_32
-33    33.1    0    2001-09-05    varchar_33    text_33
-34    34.1    1    2022-03-17    varchar_34    text_34
-35    35.1    0    2008-06-24    varchar_35    text_35
-36    36.1    1    1987-11-23    varchar_36    text_36
-37    37.1    0    2008-11-10    varchar_37    text_37
-38    38.1    1    1986-01-29    varchar_38    text_38
-39    39.1    0    1985-02-27    varchar_39    text_39
-40    40.1    1    2016-11-28    varchar_40    text_40
-41    41.1    0    1991-02-11    varchar_41    text_41
-42    42.1    1    2019-01-08    varchar_42    text_42
-43    43.1    0    2009-05-01    varchar_43    text_43
-44    44.1    1    1986-11-15    varchar_44    text_44
-45    45.1    0    2000-07-22    varchar_45    text_45
-46    46.1    1    2002-09-07    varchar_46    text_46
-47    47.1    0    1987-09-23    varchar_47    text_47
-48    48.1    1    1985-10-25    varchar_48    text_48
-49    49.1    0    1988-10-06    varchar_49    text_49
+➤ col1[4,32,0]  ¦  col2[7,23,31]  ¦  col3[-7,1,0]  ¦  col4[91,64,0]  ¦  col5[12,191,0]  ¦  col6[12,0,0]  𝄀
+0  ¦  0.1  ¦  1  ¦  1982-03-24  ¦  varchar_0  ¦  text_0  𝄀
+1  ¦  1.1  ¦  0  ¦  1982-07-31  ¦  varchar_1  ¦  text_1  𝄀
+2  ¦  2.1  ¦  1  ¦  2002-04-13  ¦  varchar_2  ¦  text_2  𝄀
+3  ¦  3.1  ¦  0  ¦  2019-09-29  ¦  varchar_3  ¦  text_3  𝄀
+4  ¦  4.1  ¦  1  ¦  1996-08-20  ¦  varchar_4  ¦  text_4  𝄀
+5  ¦  5.1  ¦  0  ¦  2008-10-13  ¦  varchar_5  ¦  text_5  𝄀
+6  ¦  6.1  ¦  1  ¦  2002-03-05  ¦  varchar_6  ¦  text_6  𝄀
+7  ¦  7.1  ¦  0  ¦  1993-11-07  ¦  varchar_7  ¦  text_7  𝄀
+8  ¦  8.1  ¦  1  ¦  1994-01-08  ¦  varchar_8  ¦  text_8  𝄀
+9  ¦  9.1  ¦  0  ¦  1999-09-17  ¦  varchar_9  ¦  text_9  𝄀
+10  ¦  10.1  ¦  1  ¦  2003-09-28  ¦  varchar_10  ¦  text_10  𝄀
+11  ¦  11.1  ¦  0  ¦  1984-01-22  ¦  varchar_11  ¦  text_11  𝄀
+12  ¦  12.1  ¦  1  ¦  1994-02-10  ¦  varchar_12  ¦  text_12  𝄀
+13  ¦  13.1  ¦  0  ¦  1994-12-02  ¦  varchar_13  ¦  text_13  𝄀
+14  ¦  14.1  ¦  1  ¦  2013-01-19  ¦  varchar_14  ¦  text_14  𝄀
+15  ¦  15.1  ¦  0  ¦  2002-09-29  ¦  varchar_15  ¦  text_15  𝄀
+16  ¦  16.1  ¦  1  ¦  2001-12-07  ¦  varchar_16  ¦  text_16  𝄀
+17  ¦  17.1  ¦  0  ¦  1989-03-11  ¦  varchar_17  ¦  text_17  𝄀
+18  ¦  18.1  ¦  1  ¦  2019-11-04  ¦  varchar_18  ¦  text_18  𝄀
+19  ¦  19.1  ¦  0  ¦  2002-08-15  ¦  varchar_19  ¦  text_19  𝄀
+20  ¦  20.1  ¦  1  ¦  1995-12-20  ¦  varchar_20  ¦  text_20  𝄀
+21  ¦  21.1  ¦  0  ¦  2018-08-03  ¦  varchar_21  ¦  text_21  𝄀
+22  ¦  22.1  ¦  1  ¦  1998-03-10  ¦  varchar_22  ¦  text_22  𝄀
+23  ¦  23.1  ¦  0  ¦  2022-04-08  ¦  varchar_23  ¦  text_23  𝄀
+24  ¦  24.1  ¦  1  ¦  1989-04-27  ¦  varchar_24  ¦  text_24  𝄀
+25  ¦  25.1  ¦  0  ¦  2009-03-14  ¦  varchar_25  ¦  text_25  𝄀
+26  ¦  26.1  ¦  1  ¦  2019-03-27  ¦  varchar_26  ¦  text_26  𝄀
+27  ¦  27.1  ¦  0  ¦  1983-10-28  ¦  varchar_27  ¦  text_27  𝄀
+28  ¦  28.1  ¦  1  ¦  1993-07-19  ¦  varchar_28  ¦  text_28  𝄀
+29  ¦  29.1  ¦  0  ¦  1986-09-11  ¦  varchar_29  ¦  text_29  𝄀
+30  ¦  30.1  ¦  1  ¦  1992-08-19  ¦  varchar_30  ¦  text_30  𝄀
+31  ¦  31.1  ¦  0  ¦  1981-08-07  ¦  varchar_31  ¦  text_31  𝄀
+32  ¦  32.1  ¦  1  ¦  1984-03-25  ¦  varchar_32  ¦  text_32  𝄀
+33  ¦  33.1  ¦  0  ¦  2001-09-05  ¦  varchar_33  ¦  text_33  𝄀
+34  ¦  34.1  ¦  1  ¦  2022-03-17  ¦  varchar_34  ¦  text_34  𝄀
+35  ¦  35.1  ¦  0  ¦  2008-06-24  ¦  varchar_35  ¦  text_35  𝄀
+36  ¦  36.1  ¦  1  ¦  1987-11-23  ¦  varchar_36  ¦  text_36  𝄀
+37  ¦  37.1  ¦  0  ¦  2008-11-10  ¦  varchar_37  ¦  text_37  𝄀
+38  ¦  38.1  ¦  1  ¦  1986-01-29  ¦  varchar_38  ¦  text_38  𝄀
+39  ¦  39.1  ¦  0  ¦  1985-02-27  ¦  varchar_39  ¦  text_39  𝄀
+40  ¦  40.1  ¦  1  ¦  2016-11-28  ¦  varchar_40  ¦  text_40  𝄀
+41  ¦  41.1  ¦  0  ¦  1991-02-11  ¦  varchar_41  ¦  text_41  𝄀
+42  ¦  42.1  ¦  1  ¦  2019-01-08  ¦  varchar_42  ¦  text_42  𝄀
+43  ¦  43.1  ¦  0  ¦  2009-05-01  ¦  varchar_43  ¦  text_43  𝄀
+44  ¦  44.1  ¦  1  ¦  1986-11-15  ¦  varchar_44  ¦  text_44  𝄀
+45  ¦  45.1  ¦  0  ¦  2000-07-22  ¦  varchar_45  ¦  text_45  𝄀
+46  ¦  46.1  ¦  1  ¦  2002-09-07  ¦  varchar_46  ¦  text_46  𝄀
+47  ¦  47.1  ¦  0  ¦  1987-09-23  ¦  varchar_47  ¦  text_47  𝄀
+48  ¦  48.1  ¦  1  ¦  1985-10-25  ¦  varchar_48  ¦  text_48  𝄀
+49  ¦  49.1  ¦  0  ¦  1988-10-06  ¦  varchar_49  ¦  text_49
 /* save_result */SELECT col1 FROM test_table where col1 < 30 MINUS SELECT col1  FROM test_table where col1 < 20;
-col1
-20
-21
-22
-23
-24
-25
-26
-27
-28
+➤ col1[4,32,0]  𝄀
+20  𝄀
+21  𝄀
+22  𝄀
+23  𝄀
+24  𝄀
+25  𝄀
+26  𝄀
+27  𝄀
+28  𝄀
 29
 select * from result_scan(last_query_id()) as u;
-col1
-20
-21
-22
-23
-24
-25
-26
-27
-28
+➤ col1[4,32,0]  𝄀
+20  𝄀
+21  𝄀
+22  𝄀
+23  𝄀
+24  𝄀
+25  𝄀
+26  𝄀
+27  𝄀
+28  𝄀
 29
 create view test_view as select * from test_table;
 show tables;
-Tables_in_save_query_result
-test_table
+➤ Tables_in_save_query_result[12,3750,0]  𝄀
+test_table  𝄀
 test_view
 select * from result_scan(last_query_id()) as u;
-tables_in_save_query_result
-test_table
+➤ Tables_in_save_query_result[12,3750,0]  𝄀
+test_table  𝄀
 test_view
 show create view test_view;
-View    Create View    character_set_client    collation_connection
-test_view    create view test_view as select * from test_table;    utf8mb4    utf8mb4_general_ci
+➤ View[12,6,0]  ¦  Create View[12,132,0]  ¦  character_set_client[12,5,0]  ¦  collation_connection[12,13,0]  𝄀
+test_view  ¦  create view `test_view` as select `test_table`.`col1`, `test_table`.`col2`, `test_table`.`col3`, `test_table`.`col4`, `test_table`.`col5`, `test_table`.`col6` from `test_table`  ¦  utf8mb4  ¦  utf8mb4_general_ci
 select * from result_scan(last_query_id()) as u;
-view    create view    character_set_client    collation_connection
-test_view    create view test_view as select * from test_table;    utf8mb4    utf8mb4_general_ci
+➤ View[12,6,0]  ¦  Create View[12,132,0]  ¦  character_set_client[12,5,0]  ¦  collation_connection[12,13,0]  𝄀
+test_view  ¦  create view `test_view` as select `test_table`.`col1`, `test_table`.`col2`, `test_table`.`col3`, `test_table`.`col4`, `test_table`.`col5`, `test_table`.`col6` from `test_table`  ¦  utf8mb4  ¦  utf8mb4_general_ci
 /* save_result */select * from test_view;
-col1    col2    col3    col4    col5    col6
-0    0.1    1    1982-03-24    varchar_0    text_0
-1    1.1    0    1982-07-31    varchar_1    text_1
-2    2.1    1    2002-04-13    varchar_2    text_2
-3    3.1    0    2019-09-29    varchar_3    text_3
-4    4.1    1    1996-08-20    varchar_4    text_4
-5    5.1    0    2008-10-13    varchar_5    text_5
-6    6.1    1    2002-03-05    varchar_6    text_6
-7    7.1    0    1993-11-07    varchar_7    text_7
-8    8.1    1    1994-01-08    varchar_8    text_8
-9    9.1    0    1999-09-17    varchar_9    text_9
-10    10.1    1    2003-09-28    varchar_10    text_10
-11    11.1    0    1984-01-22    varchar_11    text_11
-12    12.1    1    1994-02-10    varchar_12    text_12
-13    13.1    0    1994-12-02    varchar_13    text_13
-14    14.1    1    2013-01-19    varchar_14    text_14
-15    15.1    0    2002-09-29    varchar_15    text_15
-16    16.1    1    2001-12-07    varchar_16    text_16
-17    17.1    0    1989-03-11    varchar_17    text_17
-18    18.1    1    2019-11-04    varchar_18    text_18
-19    19.1    0    2002-08-15    varchar_19    text_19
-20    20.1    1    1995-12-20    varchar_20    text_20
-21    21.1    0    2018-08-03    varchar_21    text_21
-22    22.1    1    1998-03-10    varchar_22    text_22
-23    23.1    0    2022-04-08    varchar_23    text_23
-24    24.1    1    1989-04-27    varchar_24    text_24
-25    25.1    0    2009-03-14    varchar_25    text_25
-26    26.1    1    2019-03-27    varchar_26    text_26
-27    27.1    0    1983-10-28    varchar_27    text_27
-28    28.1    1    1993-07-19    varchar_28    text_28
-29    29.1    0    1986-09-11    varchar_29    text_29
-30    30.1    1    1992-08-19    varchar_30    text_30
-31    31.1    0    1981-08-07    varchar_31    text_31
-32    32.1    1    1984-03-25    varchar_32    text_32
-33    33.1    0    2001-09-05    varchar_33    text_33
-34    34.1    1    2022-03-17    varchar_34    text_34
-35    35.1    0    2008-06-24    varchar_35    text_35
-36    36.1    1    1987-11-23    varchar_36    text_36
-37    37.1    0    2008-11-10    varchar_37    text_37
-38    38.1    1    1986-01-29    varchar_38    text_38
-39    39.1    0    1985-02-27    varchar_39    text_39
-40    40.1    1    2016-11-28    varchar_40    text_40
-41    41.1    0    1991-02-11    varchar_41    text_41
-42    42.1    1    2019-01-08    varchar_42    text_42
-43    43.1    0    2009-05-01    varchar_43    text_43
-44    44.1    1    1986-11-15    varchar_44    text_44
-45    45.1    0    2000-07-22    varchar_45    text_45
-46    46.1    1    2002-09-07    varchar_46    text_46
-47    47.1    0    1987-09-23    varchar_47    text_47
-48    48.1    1    1985-10-25    varchar_48    text_48
-49    49.1    0    1988-10-06    varchar_49    text_49
+➤ col1[4,32,0]  ¦  col2[7,23,31]  ¦  col3[-7,1,0]  ¦  col4[91,64,0]  ¦  col5[12,191,0]  ¦  col6[12,0,0]  𝄀
+0  ¦  0.1  ¦  1  ¦  1982-03-24  ¦  varchar_0  ¦  text_0  𝄀
+1  ¦  1.1  ¦  0  ¦  1982-07-31  ¦  varchar_1  ¦  text_1  𝄀
+2  ¦  2.1  ¦  1  ¦  2002-04-13  ¦  varchar_2  ¦  text_2  𝄀
+3  ¦  3.1  ¦  0  ¦  2019-09-29  ¦  varchar_3  ¦  text_3  𝄀
+4  ¦  4.1  ¦  1  ¦  1996-08-20  ¦  varchar_4  ¦  text_4  𝄀
+5  ¦  5.1  ¦  0  ¦  2008-10-13  ¦  varchar_5  ¦  text_5  𝄀
+6  ¦  6.1  ¦  1  ¦  2002-03-05  ¦  varchar_6  ¦  text_6  𝄀
+7  ¦  7.1  ¦  0  ¦  1993-11-07  ¦  varchar_7  ¦  text_7  𝄀
+8  ¦  8.1  ¦  1  ¦  1994-01-08  ¦  varchar_8  ¦  text_8  𝄀
+9  ¦  9.1  ¦  0  ¦  1999-09-17  ¦  varchar_9  ¦  text_9  𝄀
+10  ¦  10.1  ¦  1  ¦  2003-09-28  ¦  varchar_10  ¦  text_10  𝄀
+11  ¦  11.1  ¦  0  ¦  1984-01-22  ¦  varchar_11  ¦  text_11  𝄀
+12  ¦  12.1  ¦  1  ¦  1994-02-10  ¦  varchar_12  ¦  text_12  𝄀
+13  ¦  13.1  ¦  0  ¦  1994-12-02  ¦  varchar_13  ¦  text_13  𝄀
+14  ¦  14.1  ¦  1  ¦  2013-01-19  ¦  varchar_14  ¦  text_14  𝄀
+15  ¦  15.1  ¦  0  ¦  2002-09-29  ¦  varchar_15  ¦  text_15  𝄀
+16  ¦  16.1  ¦  1  ¦  2001-12-07  ¦  varchar_16  ¦  text_16  𝄀
+17  ¦  17.1  ¦  0  ¦  1989-03-11  ¦  varchar_17  ¦  text_17  𝄀
+18  ¦  18.1  ¦  1  ¦  2019-11-04  ¦  varchar_18  ¦  text_18  𝄀
+19  ¦  19.1  ¦  0  ¦  2002-08-15  ¦  varchar_19  ¦  text_19  𝄀
+20  ¦  20.1  ¦  1  ¦  1995-12-20  ¦  varchar_20  ¦  text_20  𝄀
+21  ¦  21.1  ¦  0  ¦  2018-08-03  ¦  varchar_21  ¦  text_21  𝄀
+22  ¦  22.1  ¦  1  ¦  1998-03-10  ¦  varchar_22  ¦  text_22  𝄀
+23  ¦  23.1  ¦  0  ¦  2022-04-08  ¦  varchar_23  ¦  text_23  𝄀
+24  ¦  24.1  ¦  1  ¦  1989-04-27  ¦  varchar_24  ¦  text_24  𝄀
+25  ¦  25.1  ¦  0  ¦  2009-03-14  ¦  varchar_25  ¦  text_25  𝄀
+26  ¦  26.1  ¦  1  ¦  2019-03-27  ¦  varchar_26  ¦  text_26  𝄀
+27  ¦  27.1  ¦  0  ¦  1983-10-28  ¦  varchar_27  ¦  text_27  𝄀
+28  ¦  28.1  ¦  1  ¦  1993-07-19  ¦  varchar_28  ¦  text_28  𝄀
+29  ¦  29.1  ¦  0  ¦  1986-09-11  ¦  varchar_29  ¦  text_29  𝄀
+30  ¦  30.1  ¦  1  ¦  1992-08-19  ¦  varchar_30  ¦  text_30  𝄀
+31  ¦  31.1  ¦  0  ¦  1981-08-07  ¦  varchar_31  ¦  text_31  𝄀
+32  ¦  32.1  ¦  1  ¦  1984-03-25  ¦  varchar_32  ¦  text_32  𝄀
+33  ¦  33.1  ¦  0  ¦  2001-09-05  ¦  varchar_33  ¦  text_33  𝄀
+34  ¦  34.1  ¦  1  ¦  2022-03-17  ¦  varchar_34  ¦  text_34  𝄀
+35  ¦  35.1  ¦  0  ¦  2008-06-24  ¦  varchar_35  ¦  text_35  𝄀
+36  ¦  36.1  ¦  1  ¦  1987-11-23  ¦  varchar_36  ¦  text_36  𝄀
+37  ¦  37.1  ¦  0  ¦  2008-11-10  ¦  varchar_37  ¦  text_37  𝄀
+38  ¦  38.1  ¦  1  ¦  1986-01-29  ¦  varchar_38  ¦  text_38  𝄀
+39  ¦  39.1  ¦  0  ¦  1985-02-27  ¦  varchar_39  ¦  text_39  𝄀
+40  ¦  40.1  ¦  1  ¦  2016-11-28  ¦  varchar_40  ¦  text_40  𝄀
+41  ¦  41.1  ¦  0  ¦  1991-02-11  ¦  varchar_41  ¦  text_41  𝄀
+42  ¦  42.1  ¦  1  ¦  2019-01-08  ¦  varchar_42  ¦  text_42  𝄀
+43  ¦  43.1  ¦  0  ¦  2009-05-01  ¦  varchar_43  ¦  text_43  𝄀
+44  ¦  44.1  ¦  1  ¦  1986-11-15  ¦  varchar_44  ¦  text_44  𝄀
+45  ¦  45.1  ¦  0  ¦  2000-07-22  ¦  varchar_45  ¦  text_45  𝄀
+46  ¦  46.1  ¦  1  ¦  2002-09-07  ¦  varchar_46  ¦  text_46  𝄀
+47  ¦  47.1  ¦  0  ¦  1987-09-23  ¦  varchar_47  ¦  text_47  𝄀
+48  ¦  48.1  ¦  1  ¦  1985-10-25  ¦  varchar_48  ¦  text_48  𝄀
+49  ¦  49.1  ¦  0  ¦  1988-10-06  ¦  varchar_49  ¦  text_49
 select * from result_scan(last_query_id()) as u;
-col1    col2    col3    col4    col5    col6
-0    0.1    1    1982-03-24    varchar_0    text_0
-1    1.1    0    1982-07-31    varchar_1    text_1
-2    2.1    1    2002-04-13    varchar_2    text_2
-3    3.1    0    2019-09-29    varchar_3    text_3
-4    4.1    1    1996-08-20    varchar_4    text_4
-5    5.1    0    2008-10-13    varchar_5    text_5
-6    6.1    1    2002-03-05    varchar_6    text_6
-7    7.1    0    1993-11-07    varchar_7    text_7
-8    8.1    1    1994-01-08    varchar_8    text_8
-9    9.1    0    1999-09-17    varchar_9    text_9
-10    10.1    1    2003-09-28    varchar_10    text_10
-11    11.1    0    1984-01-22    varchar_11    text_11
-12    12.1    1    1994-02-10    varchar_12    text_12
-13    13.1    0    1994-12-02    varchar_13    text_13
-14    14.1    1    2013-01-19    varchar_14    text_14
-15    15.1    0    2002-09-29    varchar_15    text_15
-16    16.1    1    2001-12-07    varchar_16    text_16
-17    17.1    0    1989-03-11    varchar_17    text_17
-18    18.1    1    2019-11-04    varchar_18    text_18
-19    19.1    0    2002-08-15    varchar_19    text_19
-20    20.1    1    1995-12-20    varchar_20    text_20
-21    21.1    0    2018-08-03    varchar_21    text_21
-22    22.1    1    1998-03-10    varchar_22    text_22
-23    23.1    0    2022-04-08    varchar_23    text_23
-24    24.1    1    1989-04-27    varchar_24    text_24
-25    25.1    0    2009-03-14    varchar_25    text_25
-26    26.1    1    2019-03-27    varchar_26    text_26
-27    27.1    0    1983-10-28    varchar_27    text_27
-28    28.1    1    1993-07-19    varchar_28    text_28
-29    29.1    0    1986-09-11    varchar_29    text_29
-30    30.1    1    1992-08-19    varchar_30    text_30
-31    31.1    0    1981-08-07    varchar_31    text_31
-32    32.1    1    1984-03-25    varchar_32    text_32
-33    33.1    0    2001-09-05    varchar_33    text_33
-34    34.1    1    2022-03-17    varchar_34    text_34
-35    35.1    0    2008-06-24    varchar_35    text_35
-36    36.1    1    1987-11-23    varchar_36    text_36
-37    37.1    0    2008-11-10    varchar_37    text_37
-38    38.1    1    1986-01-29    varchar_38    text_38
-39    39.1    0    1985-02-27    varchar_39    text_39
-40    40.1    1    2016-11-28    varchar_40    text_40
-41    41.1    0    1991-02-11    varchar_41    text_41
-42    42.1    1    2019-01-08    varchar_42    text_42
-43    43.1    0    2009-05-01    varchar_43    text_43
-44    44.1    1    1986-11-15    varchar_44    text_44
-45    45.1    0    2000-07-22    varchar_45    text_45
-46    46.1    1    2002-09-07    varchar_46    text_46
-47    47.1    0    1987-09-23    varchar_47    text_47
-48    48.1    1    1985-10-25    varchar_48    text_48
-49    49.1    0    1988-10-06    varchar_49    text_49
+➤ col1[4,32,0]  ¦  col2[7,23,31]  ¦  col3[-7,1,0]  ¦  col4[91,64,0]  ¦  col5[12,191,0]  ¦  col6[12,0,0]  𝄀
+0  ¦  0.1  ¦  1  ¦  1982-03-24  ¦  varchar_0  ¦  text_0  𝄀
+1  ¦  1.1  ¦  0  ¦  1982-07-31  ¦  varchar_1  ¦  text_1  𝄀
+2  ¦  2.1  ¦  1  ¦  2002-04-13  ¦  varchar_2  ¦  text_2  𝄀
+3  ¦  3.1  ¦  0  ¦  2019-09-29  ¦  varchar_3  ¦  text_3  𝄀
+4  ¦  4.1  ¦  1  ¦  1996-08-20  ¦  varchar_4  ¦  text_4  𝄀
+5  ¦  5.1  ¦  0  ¦  2008-10-13  ¦  varchar_5  ¦  text_5  𝄀
+6  ¦  6.1  ¦  1  ¦  2002-03-05  ¦  varchar_6  ¦  text_6  𝄀
+7  ¦  7.1  ¦  0  ¦  1993-11-07  ¦  varchar_7  ¦  text_7  𝄀
+8  ¦  8.1  ¦  1  ¦  1994-01-08  ¦  varchar_8  ¦  text_8  𝄀
+9  ¦  9.1  ¦  0  ¦  1999-09-17  ¦  varchar_9  ¦  text_9  𝄀
+10  ¦  10.1  ¦  1  ¦  2003-09-28  ¦  varchar_10  ¦  text_10  𝄀
+11  ¦  11.1  ¦  0  ¦  1984-01-22  ¦  varchar_11  ¦  text_11  𝄀
+12  ¦  12.1  ¦  1  ¦  1994-02-10  ¦  varchar_12  ¦  text_12  𝄀
+13  ¦  13.1  ¦  0  ¦  1994-12-02  ¦  varchar_13  ¦  text_13  𝄀
+14  ¦  14.1  ¦  1  ¦  2013-01-19  ¦  varchar_14  ¦  text_14  𝄀
+15  ¦  15.1  ¦  0  ¦  2002-09-29  ¦  varchar_15  ¦  text_15  𝄀
+16  ¦  16.1  ¦  1  ¦  2001-12-07  ¦  varchar_16  ¦  text_16  𝄀
+17  ¦  17.1  ¦  0  ¦  1989-03-11  ¦  varchar_17  ¦  text_17  𝄀
+18  ¦  18.1  ¦  1  ¦  2019-11-04  ¦  varchar_18  ¦  text_18  𝄀
+19  ¦  19.1  ¦  0  ¦  2002-08-15  ¦  varchar_19  ¦  text_19  𝄀
+20  ¦  20.1  ¦  1  ¦  1995-12-20  ¦  varchar_20  ¦  text_20  𝄀
+21  ¦  21.1  ¦  0  ¦  2018-08-03  ¦  varchar_21  ¦  text_21  𝄀
+22  ¦  22.1  ¦  1  ¦  1998-03-10  ¦  varchar_22  ¦  text_22  𝄀
+23  ¦  23.1  ¦  0  ¦  2022-04-08  ¦  varchar_23  ¦  text_23  𝄀
+24  ¦  24.1  ¦  1  ¦  1989-04-27  ¦  varchar_24  ¦  text_24  𝄀
+25  ¦  25.1  ¦  0  ¦  2009-03-14  ¦  varchar_25  ¦  text_25  𝄀
+26  ¦  26.1  ¦  1  ¦  2019-03-27  ¦  varchar_26  ¦  text_26  𝄀
+27  ¦  27.1  ¦  0  ¦  1983-10-28  ¦  varchar_27  ¦  text_27  𝄀
+28  ¦  28.1  ¦  1  ¦  1993-07-19  ¦  varchar_28  ¦  text_28  𝄀
+29  ¦  29.1  ¦  0  ¦  1986-09-11  ¦  varchar_29  ¦  text_29  𝄀
+30  ¦  30.1  ¦  1  ¦  1992-08-19  ¦  varchar_30  ¦  text_30  𝄀
+31  ¦  31.1  ¦  0  ¦  1981-08-07  ¦  varchar_31  ¦  text_31  𝄀
+32  ¦  32.1  ¦  1  ¦  1984-03-25  ¦  varchar_32  ¦  text_32  𝄀
+33  ¦  33.1  ¦  0  ¦  2001-09-05  ¦  varchar_33  ¦  text_33  𝄀
+34  ¦  34.1  ¦  1  ¦  2022-03-17  ¦  varchar_34  ¦  text_34  𝄀
+35  ¦  35.1  ¦  0  ¦  2008-06-24  ¦  varchar_35  ¦  text_35  𝄀
+36  ¦  36.1  ¦  1  ¦  1987-11-23  ¦  varchar_36  ¦  text_36  𝄀
+37  ¦  37.1  ¦  0  ¦  2008-11-10  ¦  varchar_37  ¦  text_37  𝄀
+38  ¦  38.1  ¦  1  ¦  1986-01-29  ¦  varchar_38  ¦  text_38  𝄀
+39  ¦  39.1  ¦  0  ¦  1985-02-27  ¦  varchar_39  ¦  text_39  𝄀
+40  ¦  40.1  ¦  1  ¦  2016-11-28  ¦  varchar_40  ¦  text_40  𝄀
+41  ¦  41.1  ¦  0  ¦  1991-02-11  ¦  varchar_41  ¦  text_41  𝄀
+42  ¦  42.1  ¦  1  ¦  2019-01-08  ¦  varchar_42  ¦  text_42  𝄀
+43  ¦  43.1  ¦  0  ¦  2009-05-01  ¦  varchar_43  ¦  text_43  𝄀
+44  ¦  44.1  ¦  1  ¦  1986-11-15  ¦  varchar_44  ¦  text_44  𝄀
+45  ¦  45.1  ¦  0  ¦  2000-07-22  ¦  varchar_45  ¦  text_45  𝄀
+46  ¦  46.1  ¦  1  ¦  2002-09-07  ¦  varchar_46  ¦  text_46  𝄀
+47  ¦  47.1  ¦  0  ¦  1987-09-23  ¦  varchar_47  ¦  text_47  𝄀
+48  ¦  48.1  ¦  1  ¦  1985-10-25  ¦  varchar_48  ¦  text_48  𝄀
+49  ¦  49.1  ¦  0  ¦  1988-10-06  ¦  varchar_49  ¦  text_49
 /* save_result */select col1 from test_view;
-col1
-0
-1
-2
-3
-4
-5
-6
-7
-8
-9
-10
-11
-12
-13
-14
-15
-16
-17
-18
-19
-20
-21
-22
-23
-24
-25
-26
-27
-28
-29
-30
-31
-32
-33
-34
-35
-36
-37
-38
-39
-40
-41
-42
-43
-44
-45
-46
-47
-48
+➤ col1[4,32,0]  𝄀
+0  𝄀
+1  𝄀
+2  𝄀
+3  𝄀
+4  𝄀
+5  𝄀
+6  𝄀
+7  𝄀
+8  𝄀
+9  𝄀
+10  𝄀
+11  𝄀
+12  𝄀
+13  𝄀
+14  𝄀
+15  𝄀
+16  𝄀
+17  𝄀
+18  𝄀
+19  𝄀
+20  𝄀
+21  𝄀
+22  𝄀
+23  𝄀
+24  𝄀
+25  𝄀
+26  𝄀
+27  𝄀
+28  𝄀
+29  𝄀
+30  𝄀
+31  𝄀
+32  𝄀
+33  𝄀
+34  𝄀
+35  𝄀
+36  𝄀
+37  𝄀
+38  𝄀
+39  𝄀
+40  𝄀
+41  𝄀
+42  𝄀
+43  𝄀
+44  𝄀
+45  𝄀
+46  𝄀
+47  𝄀
+48  𝄀
 49
 select * from result_scan(last_query_id()) as u;
-col1
-0
-1
-2
-3
-4
-5
-6
-7
-8
-9
-10
-11
-12
-13
-14
-15
-16
-17
-18
-19
-20
-21
-22
-23
-24
-25
-26
-27
-28
-29
-30
-31
-32
-33
-34
-35
-36
-37
-38
-39
-40
-41
-42
-43
-44
-45
-46
-47
-48
+➤ col1[4,32,0]  𝄀
+0  𝄀
+1  𝄀
+2  𝄀
+3  𝄀
+4  𝄀
+5  𝄀
+6  𝄀
+7  𝄀
+8  𝄀
+9  𝄀
+10  𝄀
+11  𝄀
+12  𝄀
+13  𝄀
+14  𝄀
+15  𝄀
+16  𝄀
+17  𝄀
+18  𝄀
+19  𝄀
+20  𝄀
+21  𝄀
+22  𝄀
+23  𝄀
+24  𝄀
+25  𝄀
+26  𝄀
+27  𝄀
+28  𝄀
+29  𝄀
+30  𝄀
+31  𝄀
+32  𝄀
+33  𝄀
+34  𝄀
+35  𝄀
+36  𝄀
+37  𝄀
+38  𝄀
+39  𝄀
+40  𝄀
+41  𝄀
+42  𝄀
+43  𝄀
+44  𝄀
+45  𝄀
+46  𝄀
+47  𝄀
+48  𝄀
 49
 /* save_result */select * from test_view where col1 > 30;
-col1    col2    col3    col4    col5    col6
-31    31.1    0    1981-08-07    varchar_31    text_31
-32    32.1    1    1984-03-25    varchar_32    text_32
-33    33.1    0    2001-09-05    varchar_33    text_33
-34    34.1    1    2022-03-17    varchar_34    text_34
-35    35.1    0    2008-06-24    varchar_35    text_35
-36    36.1    1    1987-11-23    varchar_36    text_36
-37    37.1    0    2008-11-10    varchar_37    text_37
-38    38.1    1    1986-01-29    varchar_38    text_38
-39    39.1    0    1985-02-27    varchar_39    text_39
-40    40.1    1    2016-11-28    varchar_40    text_40
-41    41.1    0    1991-02-11    varchar_41    text_41
-42    42.1    1    2019-01-08    varchar_42    text_42
-43    43.1    0    2009-05-01    varchar_43    text_43
-44    44.1    1    1986-11-15    varchar_44    text_44
-45    45.1    0    2000-07-22    varchar_45    text_45
-46    46.1    1    2002-09-07    varchar_46    text_46
-47    47.1    0    1987-09-23    varchar_47    text_47
-48    48.1    1    1985-10-25    varchar_48    text_48
-49    49.1    0    1988-10-06    varchar_49    text_49
+➤ col1[4,32,0]  ¦  col2[7,23,31]  ¦  col3[-7,1,0]  ¦  col4[91,64,0]  ¦  col5[12,191,0]  ¦  col6[12,0,0]  𝄀
+31  ¦  31.1  ¦  0  ¦  1981-08-07  ¦  varchar_31  ¦  text_31  𝄀
+32  ¦  32.1  ¦  1  ¦  1984-03-25  ¦  varchar_32  ¦  text_32  𝄀
+33  ¦  33.1  ¦  0  ¦  2001-09-05  ¦  varchar_33  ¦  text_33  𝄀
+34  ¦  34.1  ¦  1  ¦  2022-03-17  ¦  varchar_34  ¦  text_34  𝄀
+35  ¦  35.1  ¦  0  ¦  2008-06-24  ¦  varchar_35  ¦  text_35  𝄀
+36  ¦  36.1  ¦  1  ¦  1987-11-23  ¦  varchar_36  ¦  text_36  𝄀
+37  ¦  37.1  ¦  0  ¦  2008-11-10  ¦  varchar_37  ¦  text_37  𝄀
+38  ¦  38.1  ¦  1  ¦  1986-01-29  ¦  varchar_38  ¦  text_38  𝄀
+39  ¦  39.1  ¦  0  ¦  1985-02-27  ¦  varchar_39  ¦  text_39  𝄀
+40  ¦  40.1  ¦  1  ¦  2016-11-28  ¦  varchar_40  ¦  text_40  𝄀
+41  ¦  41.1  ¦  0  ¦  1991-02-11  ¦  varchar_41  ¦  text_41  𝄀
+42  ¦  42.1  ¦  1  ¦  2019-01-08  ¦  varchar_42  ¦  text_42  𝄀
+43  ¦  43.1  ¦  0  ¦  2009-05-01  ¦  varchar_43  ¦  text_43  𝄀
+44  ¦  44.1  ¦  1  ¦  1986-11-15  ¦  varchar_44  ¦  text_44  𝄀
+45  ¦  45.1  ¦  0  ¦  2000-07-22  ¦  varchar_45  ¦  text_45  𝄀
+46  ¦  46.1  ¦  1  ¦  2002-09-07  ¦  varchar_46  ¦  text_46  𝄀
+47  ¦  47.1  ¦  0  ¦  1987-09-23  ¦  varchar_47  ¦  text_47  𝄀
+48  ¦  48.1  ¦  1  ¦  1985-10-25  ¦  varchar_48  ¦  text_48  𝄀
+49  ¦  49.1  ¦  0  ¦  1988-10-06  ¦  varchar_49  ¦  text_49
 select * from result_scan(last_query_id()) as u;
-col1    col2    col3    col4    col5    col6
-31    31.1    0    1981-08-07    varchar_31    text_31
-32    32.1    1    1984-03-25    varchar_32    text_32
-33    33.1    0    2001-09-05    varchar_33    text_33
-34    34.1    1    2022-03-17    varchar_34    text_34
-35    35.1    0    2008-06-24    varchar_35    text_35
-36    36.1    1    1987-11-23    varchar_36    text_36
-37    37.1    0    2008-11-10    varchar_37    text_37
-38    38.1    1    1986-01-29    varchar_38    text_38
-39    39.1    0    1985-02-27    varchar_39    text_39
-40    40.1    1    2016-11-28    varchar_40    text_40
-41    41.1    0    1991-02-11    varchar_41    text_41
-42    42.1    1    2019-01-08    varchar_42    text_42
-43    43.1    0    2009-05-01    varchar_43    text_43
-44    44.1    1    1986-11-15    varchar_44    text_44
-45    45.1    0    2000-07-22    varchar_45    text_45
-46    46.1    1    2002-09-07    varchar_46    text_46
-47    47.1    0    1987-09-23    varchar_47    text_47
-48    48.1    1    1985-10-25    varchar_48    text_48
-49    49.1    0    1988-10-06    varchar_49    text_49
+➤ col1[4,32,0]  ¦  col2[7,23,31]  ¦  col3[-7,1,0]  ¦  col4[91,64,0]  ¦  col5[12,191,0]  ¦  col6[12,0,0]  𝄀
+31  ¦  31.1  ¦  0  ¦  1981-08-07  ¦  varchar_31  ¦  text_31  𝄀
+32  ¦  32.1  ¦  1  ¦  1984-03-25  ¦  varchar_32  ¦  text_32  𝄀
+33  ¦  33.1  ¦  0  ¦  2001-09-05  ¦  varchar_33  ¦  text_33  𝄀
+34  ¦  34.1  ¦  1  ¦  2022-03-17  ¦  varchar_34  ¦  text_34  𝄀
+35  ¦  35.1  ¦  0  ¦  2008-06-24  ¦  varchar_35  ¦  text_35  𝄀
+36  ¦  36.1  ¦  1  ¦  1987-11-23  ¦  varchar_36  ¦  text_36  𝄀
+37  ¦  37.1  ¦  0  ¦  2008-11-10  ¦  varchar_37  ¦  text_37  𝄀
+38  ¦  38.1  ¦  1  ¦  1986-01-29  ¦  varchar_38  ¦  text_38  𝄀
+39  ¦  39.1  ¦  0  ¦  1985-02-27  ¦  varchar_39  ¦  text_39  𝄀
+40  ¦  40.1  ¦  1  ¦  2016-11-28  ¦  varchar_40  ¦  text_40  𝄀
+41  ¦  41.1  ¦  0  ¦  1991-02-11  ¦  varchar_41  ¦  text_41  𝄀
+42  ¦  42.1  ¦  1  ¦  2019-01-08  ¦  varchar_42  ¦  text_42  𝄀
+43  ¦  43.1  ¦  0  ¦  2009-05-01  ¦  varchar_43  ¦  text_43  𝄀
+44  ¦  44.1  ¦  1  ¦  1986-11-15  ¦  varchar_44  ¦  text_44  𝄀
+45  ¦  45.1  ¦  0  ¦  2000-07-22  ¦  varchar_45  ¦  text_45  𝄀
+46  ¦  46.1  ¦  1  ¦  2002-09-07  ¦  varchar_46  ¦  text_46  𝄀
+47  ¦  47.1  ¦  0  ¦  1987-09-23  ¦  varchar_47  ¦  text_47  𝄀
+48  ¦  48.1  ¦  1  ¦  1985-10-25  ¦  varchar_48  ¦  text_48  𝄀
+49  ¦  49.1  ¦  0  ¦  1988-10-06  ¦  varchar_49  ¦  text_49
 /* save_result */select * from test_view where col1 < 10;
-col1    col2    col3    col4    col5    col6
-0    0.1    1    1982-03-24    varchar_0    text_0
-1    1.1    0    1982-07-31    varchar_1    text_1
-2    2.1    1    2002-04-13    varchar_2    text_2
-3    3.1    0    2019-09-29    varchar_3    text_3
-4    4.1    1    1996-08-20    varchar_4    text_4
-5    5.1    0    2008-10-13    varchar_5    text_5
-6    6.1    1    2002-03-05    varchar_6    text_6
-7    7.1    0    1993-11-07    varchar_7    text_7
-8    8.1    1    1994-01-08    varchar_8    text_8
-9    9.1    0    1999-09-17    varchar_9    text_9
+➤ col1[4,32,0]  ¦  col2[7,23,31]  ¦  col3[-7,1,0]  ¦  col4[91,64,0]  ¦  col5[12,191,0]  ¦  col6[12,0,0]  𝄀
+0  ¦  0.1  ¦  1  ¦  1982-03-24  ¦  varchar_0  ¦  text_0  𝄀
+1  ¦  1.1  ¦  0  ¦  1982-07-31  ¦  varchar_1  ¦  text_1  𝄀
+2  ¦  2.1  ¦  1  ¦  2002-04-13  ¦  varchar_2  ¦  text_2  𝄀
+3  ¦  3.1  ¦  0  ¦  2019-09-29  ¦  varchar_3  ¦  text_3  𝄀
+4  ¦  4.1  ¦  1  ¦  1996-08-20  ¦  varchar_4  ¦  text_4  𝄀
+5  ¦  5.1  ¦  0  ¦  2008-10-13  ¦  varchar_5  ¦  text_5  𝄀
+6  ¦  6.1  ¦  1  ¦  2002-03-05  ¦  varchar_6  ¦  text_6  𝄀
+7  ¦  7.1  ¦  0  ¦  1993-11-07  ¦  varchar_7  ¦  text_7  𝄀
+8  ¦  8.1  ¦  1  ¦  1994-01-08  ¦  varchar_8  ¦  text_8  𝄀
+9  ¦  9.1  ¦  0  ¦  1999-09-17  ¦  varchar_9  ¦  text_9
 select * from result_scan(last_query_id()) as u;
-col1    col2    col3    col4    col5    col6
-0    0.1    1    1982-03-24    varchar_0    text_0
-1    1.1    0    1982-07-31    varchar_1    text_1
-2    2.1    1    2002-04-13    varchar_2    text_2
-3    3.1    0    2019-09-29    varchar_3    text_3
-4    4.1    1    1996-08-20    varchar_4    text_4
-5    5.1    0    2008-10-13    varchar_5    text_5
-6    6.1    1    2002-03-05    varchar_6    text_6
-7    7.1    0    1993-11-07    varchar_7    text_7
-8    8.1    1    1994-01-08    varchar_8    text_8
-9    9.1    0    1999-09-17    varchar_9    text_9
+➤ col1[4,32,0]  ¦  col2[7,23,31]  ¦  col3[-7,1,0]  ¦  col4[91,64,0]  ¦  col5[12,191,0]  ¦  col6[12,0,0]  𝄀
+0  ¦  0.1  ¦  1  ¦  1982-03-24  ¦  varchar_0  ¦  text_0  𝄀
+1  ¦  1.1  ¦  0  ¦  1982-07-31  ¦  varchar_1  ¦  text_1  𝄀
+2  ¦  2.1  ¦  1  ¦  2002-04-13  ¦  varchar_2  ¦  text_2  𝄀
+3  ¦  3.1  ¦  0  ¦  2019-09-29  ¦  varchar_3  ¦  text_3  𝄀
+4  ¦  4.1  ¦  1  ¦  1996-08-20  ¦  varchar_4  ¦  text_4  𝄀
+5  ¦  5.1  ¦  0  ¦  2008-10-13  ¦  varchar_5  ¦  text_5  𝄀
+6  ¦  6.1  ¦  1  ¦  2002-03-05  ¦  varchar_6  ¦  text_6  𝄀
+7  ¦  7.1  ¦  0  ¦  1993-11-07  ¦  varchar_7  ¦  text_7  𝄀
+8  ¦  8.1  ¦  1  ¦  1994-01-08  ¦  varchar_8  ¦  text_8  𝄀
+9  ¦  9.1  ¦  0  ¦  1999-09-17  ¦  varchar_9  ¦  text_9
 /* save_result */select * from test_view where col1 = 10;
-col1    col2    col3    col4    col5    col6
-10    10.1    1    2003-09-28    varchar_10    text_10
+➤ col1[4,32,0]  ¦  col2[7,23,31]  ¦  col3[-7,1,0]  ¦  col4[91,64,0]  ¦  col5[12,191,0]  ¦  col6[12,0,0]  𝄀
+10  ¦  10.1  ¦  1  ¦  2003-09-28  ¦  varchar_10  ¦  text_10
 select * from result_scan(last_query_id()) as u;
-col1    col2    col3    col4    col5    col6
-10    10.1    1    2003-09-28    varchar_10    text_10
+➤ col1[4,32,0]  ¦  col2[7,23,31]  ¦  col3[-7,1,0]  ¦  col4[91,64,0]  ¦  col5[12,191,0]  ¦  col6[12,0,0]  𝄀
+10  ¦  10.1  ¦  1  ¦  2003-09-28  ¦  varchar_10  ¦  text_10
 /* save_result */select * from test_view limit 1;
-col1    col2    col3    col4    col5    col6
-0    0.1    1    1982-03-24    varchar_0    text_0
+➤ col1[4,32,0]  ¦  col2[7,23,31]  ¦  col3[-7,1,0]  ¦  col4[91,64,0]  ¦  col5[12,191,0]  ¦  col6[12,0,0]  𝄀
+0  ¦  0.1  ¦  1  ¦  1982-03-24  ¦  varchar_0  ¦  text_0
 select * from result_scan(last_query_id()) as u;
-col1    col2    col3    col4    col5    col6
-0    0.1    1    1982-03-24    varchar_0    text_0
+➤ col1[4,32,0]  ¦  col2[7,23,31]  ¦  col3[-7,1,0]  ¦  col4[91,64,0]  ¦  col5[12,191,0]  ¦  col6[12,0,0]  𝄀
+0  ¦  0.1  ¦  1  ¦  1982-03-24  ¦  varchar_0  ¦  text_0
 /* save_result */select * from test_view order by col1 asc;
-col1    col2    col3    col4    col5    col6
-0    0.1    1    1982-03-24    varchar_0    text_0
-1    1.1    0    1982-07-31    varchar_1    text_1
-2    2.1    1    2002-04-13    varchar_2    text_2
-3    3.1    0    2019-09-29    varchar_3    text_3
-4    4.1    1    1996-08-20    varchar_4    text_4
-5    5.1    0    2008-10-13    varchar_5    text_5
-6    6.1    1    2002-03-05    varchar_6    text_6
-7    7.1    0    1993-11-07    varchar_7    text_7
-8    8.1    1    1994-01-08    varchar_8    text_8
-9    9.1    0    1999-09-17    varchar_9    text_9
-10    10.1    1    2003-09-28    varchar_10    text_10
-11    11.1    0    1984-01-22    varchar_11    text_11
-12    12.1    1    1994-02-10    varchar_12    text_12
-13    13.1    0    1994-12-02    varchar_13    text_13
-14    14.1    1    2013-01-19    varchar_14    text_14
-15    15.1    0    2002-09-29    varchar_15    text_15
-16    16.1    1    2001-12-07    varchar_16    text_16
-17    17.1    0    1989-03-11    varchar_17    text_17
-18    18.1    1    2019-11-04    varchar_18    text_18
-19    19.1    0    2002-08-15    varchar_19    text_19
-20    20.1    1    1995-12-20    varchar_20    text_20
-21    21.1    0    2018-08-03    varchar_21    text_21
-22    22.1    1    1998-03-10    varchar_22    text_22
-23    23.1    0    2022-04-08    varchar_23    text_23
-24    24.1    1    1989-04-27    varchar_24    text_24
-25    25.1    0    2009-03-14    varchar_25    text_25
-26    26.1    1    2019-03-27    varchar_26    text_26
-27    27.1    0    1983-10-28    varchar_27    text_27
-28    28.1    1    1993-07-19    varchar_28    text_28
-29    29.1    0    1986-09-11    varchar_29    text_29
-30    30.1    1    1992-08-19    varchar_30    text_30
-31    31.1    0    1981-08-07    varchar_31    text_31
-32    32.1    1    1984-03-25    varchar_32    text_32
-33    33.1    0    2001-09-05    varchar_33    text_33
-34    34.1    1    2022-03-17    varchar_34    text_34
-35    35.1    0    2008-06-24    varchar_35    text_35
-36    36.1    1    1987-11-23    varchar_36    text_36
-37    37.1    0    2008-11-10    varchar_37    text_37
-38    38.1    1    1986-01-29    varchar_38    text_38
-39    39.1    0    1985-02-27    varchar_39    text_39
-40    40.1    1    2016-11-28    varchar_40    text_40
-41    41.1    0    1991-02-11    varchar_41    text_41
-42    42.1    1    2019-01-08    varchar_42    text_42
-43    43.1    0    2009-05-01    varchar_43    text_43
-44    44.1    1    1986-11-15    varchar_44    text_44
-45    45.1    0    2000-07-22    varchar_45    text_45
-46    46.1    1    2002-09-07    varchar_46    text_46
-47    47.1    0    1987-09-23    varchar_47    text_47
-48    48.1    1    1985-10-25    varchar_48    text_48
-49    49.1    0    1988-10-06    varchar_49    text_49
+➤ col1[4,32,0]  ¦  col2[7,23,31]  ¦  col3[-7,1,0]  ¦  col4[91,64,0]  ¦  col5[12,191,0]  ¦  col6[12,0,0]  𝄀
+0  ¦  0.1  ¦  1  ¦  1982-03-24  ¦  varchar_0  ¦  text_0  𝄀
+1  ¦  1.1  ¦  0  ¦  1982-07-31  ¦  varchar_1  ¦  text_1  𝄀
+2  ¦  2.1  ¦  1  ¦  2002-04-13  ¦  varchar_2  ¦  text_2  𝄀
+3  ¦  3.1  ¦  0  ¦  2019-09-29  ¦  varchar_3  ¦  text_3  𝄀
+4  ¦  4.1  ¦  1  ¦  1996-08-20  ¦  varchar_4  ¦  text_4  𝄀
+5  ¦  5.1  ¦  0  ¦  2008-10-13  ¦  varchar_5  ¦  text_5  𝄀
+6  ¦  6.1  ¦  1  ¦  2002-03-05  ¦  varchar_6  ¦  text_6  𝄀
+7  ¦  7.1  ¦  0  ¦  1993-11-07  ¦  varchar_7  ¦  text_7  𝄀
+8  ¦  8.1  ¦  1  ¦  1994-01-08  ¦  varchar_8  ¦  text_8  𝄀
+9  ¦  9.1  ¦  0  ¦  1999-09-17  ¦  varchar_9  ¦  text_9  𝄀
+10  ¦  10.1  ¦  1  ¦  2003-09-28  ¦  varchar_10  ¦  text_10  𝄀
+11  ¦  11.1  ¦  0  ¦  1984-01-22  ¦  varchar_11  ¦  text_11  𝄀
+12  ¦  12.1  ¦  1  ¦  1994-02-10  ¦  varchar_12  ¦  text_12  𝄀
+13  ¦  13.1  ¦  0  ¦  1994-12-02  ¦  varchar_13  ¦  text_13  𝄀
+14  ¦  14.1  ¦  1  ¦  2013-01-19  ¦  varchar_14  ¦  text_14  𝄀
+15  ¦  15.1  ¦  0  ¦  2002-09-29  ¦  varchar_15  ¦  text_15  𝄀
+16  ¦  16.1  ¦  1  ¦  2001-12-07  ¦  varchar_16  ¦  text_16  𝄀
+17  ¦  17.1  ¦  0  ¦  1989-03-11  ¦  varchar_17  ¦  text_17  𝄀
+18  ¦  18.1  ¦  1  ¦  2019-11-04  ¦  varchar_18  ¦  text_18  𝄀
+19  ¦  19.1  ¦  0  ¦  2002-08-15  ¦  varchar_19  ¦  text_19  𝄀
+20  ¦  20.1  ¦  1  ¦  1995-12-20  ¦  varchar_20  ¦  text_20  𝄀
+21  ¦  21.1  ¦  0  ¦  2018-08-03  ¦  varchar_21  ¦  text_21  𝄀
+22  ¦  22.1  ¦  1  ¦  1998-03-10  ¦  varchar_22  ¦  text_22  𝄀
+23  ¦  23.1  ¦  0  ¦  2022-04-08  ¦  varchar_23  ¦  text_23  𝄀
+24  ¦  24.1  ¦  1  ¦  1989-04-27  ¦  varchar_24  ¦  text_24  𝄀
+25  ¦  25.1  ¦  0  ¦  2009-03-14  ¦  varchar_25  ¦  text_25  𝄀
+26  ¦  26.1  ¦  1  ¦  2019-03-27  ¦  varchar_26  ¦  text_26  𝄀
+27  ¦  27.1  ¦  0  ¦  1983-10-28  ¦  varchar_27  ¦  text_27  𝄀
+28  ¦  28.1  ¦  1  ¦  1993-07-19  ¦  varchar_28  ¦  text_28  𝄀
+29  ¦  29.1  ¦  0  ¦  1986-09-11  ¦  varchar_29  ¦  text_29  𝄀
+30  ¦  30.1  ¦  1  ¦  1992-08-19  ¦  varchar_30  ¦  text_30  𝄀
+31  ¦  31.1  ¦  0  ¦  1981-08-07  ¦  varchar_31  ¦  text_31  𝄀
+32  ¦  32.1  ¦  1  ¦  1984-03-25  ¦  varchar_32  ¦  text_32  𝄀
+33  ¦  33.1  ¦  0  ¦  2001-09-05  ¦  varchar_33  ¦  text_33  𝄀
+34  ¦  34.1  ¦  1  ¦  2022-03-17  ¦  varchar_34  ¦  text_34  𝄀
+35  ¦  35.1  ¦  0  ¦  2008-06-24  ¦  varchar_35  ¦  text_35  𝄀
+36  ¦  36.1  ¦  1  ¦  1987-11-23  ¦  varchar_36  ¦  text_36  𝄀
+37  ¦  37.1  ¦  0  ¦  2008-11-10  ¦  varchar_37  ¦  text_37  𝄀
+38  ¦  38.1  ¦  1  ¦  1986-01-29  ¦  varchar_38  ¦  text_38  𝄀
+39  ¦  39.1  ¦  0  ¦  1985-02-27  ¦  varchar_39  ¦  text_39  𝄀
+40  ¦  40.1  ¦  1  ¦  2016-11-28  ¦  varchar_40  ¦  text_40  𝄀
+41  ¦  41.1  ¦  0  ¦  1991-02-11  ¦  varchar_41  ¦  text_41  𝄀
+42  ¦  42.1  ¦  1  ¦  2019-01-08  ¦  varchar_42  ¦  text_42  𝄀
+43  ¦  43.1  ¦  0  ¦  2009-05-01  ¦  varchar_43  ¦  text_43  𝄀
+44  ¦  44.1  ¦  1  ¦  1986-11-15  ¦  varchar_44  ¦  text_44  𝄀
+45  ¦  45.1  ¦  0  ¦  2000-07-22  ¦  varchar_45  ¦  text_45  𝄀
+46  ¦  46.1  ¦  1  ¦  2002-09-07  ¦  varchar_46  ¦  text_46  𝄀
+47  ¦  47.1  ¦  0  ¦  1987-09-23  ¦  varchar_47  ¦  text_47  𝄀
+48  ¦  48.1  ¦  1  ¦  1985-10-25  ¦  varchar_48  ¦  text_48  𝄀
+49  ¦  49.1  ¦  0  ¦  1988-10-06  ¦  varchar_49  ¦  text_49
 select * from result_scan(last_query_id()) as u;
-col1    col2    col3    col4    col5    col6
-0    0.1    1    1982-03-24    varchar_0    text_0
-1    1.1    0    1982-07-31    varchar_1    text_1
-2    2.1    1    2002-04-13    varchar_2    text_2
-3    3.1    0    2019-09-29    varchar_3    text_3
-4    4.1    1    1996-08-20    varchar_4    text_4
-5    5.1    0    2008-10-13    varchar_5    text_5
-6    6.1    1    2002-03-05    varchar_6    text_6
-7    7.1    0    1993-11-07    varchar_7    text_7
-8    8.1    1    1994-01-08    varchar_8    text_8
-9    9.1    0    1999-09-17    varchar_9    text_9
-10    10.1    1    2003-09-28    varchar_10    text_10
-11    11.1    0    1984-01-22    varchar_11    text_11
-12    12.1    1    1994-02-10    varchar_12    text_12
-13    13.1    0    1994-12-02    varchar_13    text_13
-14    14.1    1    2013-01-19    varchar_14    text_14
-15    15.1    0    2002-09-29    varchar_15    text_15
-16    16.1    1    2001-12-07    varchar_16    text_16
-17    17.1    0    1989-03-11    varchar_17    text_17
-18    18.1    1    2019-11-04    varchar_18    text_18
-19    19.1    0    2002-08-15    varchar_19    text_19
-20    20.1    1    1995-12-20    varchar_20    text_20
-21    21.1    0    2018-08-03    varchar_21    text_21
-22    22.1    1    1998-03-10    varchar_22    text_22
-23    23.1    0    2022-04-08    varchar_23    text_23
-24    24.1    1    1989-04-27    varchar_24    text_24
-25    25.1    0    2009-03-14    varchar_25    text_25
-26    26.1    1    2019-03-27    varchar_26    text_26
-27    27.1    0    1983-10-28    varchar_27    text_27
-28    28.1    1    1993-07-19    varchar_28    text_28
-29    29.1    0    1986-09-11    varchar_29    text_29
-30    30.1    1    1992-08-19    varchar_30    text_30
-31    31.1    0    1981-08-07    varchar_31    text_31
-32    32.1    1    1984-03-25    varchar_32    text_32
-33    33.1    0    2001-09-05    varchar_33    text_33
-34    34.1    1    2022-03-17    varchar_34    text_34
-35    35.1    0    2008-06-24    varchar_35    text_35
-36    36.1    1    1987-11-23    varchar_36    text_36
-37    37.1    0    2008-11-10    varchar_37    text_37
-38    38.1    1    1986-01-29    varchar_38    text_38
-39    39.1    0    1985-02-27    varchar_39    text_39
-40    40.1    1    2016-11-28    varchar_40    text_40
-41    41.1    0    1991-02-11    varchar_41    text_41
-42    42.1    1    2019-01-08    varchar_42    text_42
-43    43.1    0    2009-05-01    varchar_43    text_43
-44    44.1    1    1986-11-15    varchar_44    text_44
-45    45.1    0    2000-07-22    varchar_45    text_45
-46    46.1    1    2002-09-07    varchar_46    text_46
-47    47.1    0    1987-09-23    varchar_47    text_47
-48    48.1    1    1985-10-25    varchar_48    text_48
-49    49.1    0    1988-10-06    varchar_49    text_49
+➤ col1[4,32,0]  ¦  col2[7,23,31]  ¦  col3[-7,1,0]  ¦  col4[91,64,0]  ¦  col5[12,191,0]  ¦  col6[12,0,0]  𝄀
+0  ¦  0.1  ¦  1  ¦  1982-03-24  ¦  varchar_0  ¦  text_0  𝄀
+1  ¦  1.1  ¦  0  ¦  1982-07-31  ¦  varchar_1  ¦  text_1  𝄀
+2  ¦  2.1  ¦  1  ¦  2002-04-13  ¦  varchar_2  ¦  text_2  𝄀
+3  ¦  3.1  ¦  0  ¦  2019-09-29  ¦  varchar_3  ¦  text_3  𝄀
+4  ¦  4.1  ¦  1  ¦  1996-08-20  ¦  varchar_4  ¦  text_4  𝄀
+5  ¦  5.1  ¦  0  ¦  2008-10-13  ¦  varchar_5  ¦  text_5  𝄀
+6  ¦  6.1  ¦  1  ¦  2002-03-05  ¦  varchar_6  ¦  text_6  𝄀
+7  ¦  7.1  ¦  0  ¦  1993-11-07  ¦  varchar_7  ¦  text_7  𝄀
+8  ¦  8.1  ¦  1  ¦  1994-01-08  ¦  varchar_8  ¦  text_8  𝄀
+9  ¦  9.1  ¦  0  ¦  1999-09-17  ¦  varchar_9  ¦  text_9  𝄀
+10  ¦  10.1  ¦  1  ¦  2003-09-28  ¦  varchar_10  ¦  text_10  𝄀
+11  ¦  11.1  ¦  0  ¦  1984-01-22  ¦  varchar_11  ¦  text_11  𝄀
+12  ¦  12.1  ¦  1  ¦  1994-02-10  ¦  varchar_12  ¦  text_12  𝄀
+13  ¦  13.1  ¦  0  ¦  1994-12-02  ¦  varchar_13  ¦  text_13  𝄀
+14  ¦  14.1  ¦  1  ¦  2013-01-19  ¦  varchar_14  ¦  text_14  𝄀
+15  ¦  15.1  ¦  0  ¦  2002-09-29  ¦  varchar_15  ¦  text_15  𝄀
+16  ¦  16.1  ¦  1  ¦  2001-12-07  ¦  varchar_16  ¦  text_16  𝄀
+17  ¦  17.1  ¦  0  ¦  1989-03-11  ¦  varchar_17  ¦  text_17  𝄀
+18  ¦  18.1  ¦  1  ¦  2019-11-04  ¦  varchar_18  ¦  text_18  𝄀
+19  ¦  19.1  ¦  0  ¦  2002-08-15  ¦  varchar_19  ¦  text_19  𝄀
+20  ¦  20.1  ¦  1  ¦  1995-12-20  ¦  varchar_20  ¦  text_20  𝄀
+21  ¦  21.1  ¦  0  ¦  2018-08-03  ¦  varchar_21  ¦  text_21  𝄀
+22  ¦  22.1  ¦  1  ¦  1998-03-10  ¦  varchar_22  ¦  text_22  𝄀
+23  ¦  23.1  ¦  0  ¦  2022-04-08  ¦  varchar_23  ¦  text_23  𝄀
+24  ¦  24.1  ¦  1  ¦  1989-04-27  ¦  varchar_24  ¦  text_24  𝄀
+25  ¦  25.1  ¦  0  ¦  2009-03-14  ¦  varchar_25  ¦  text_25  𝄀
+26  ¦  26.1  ¦  1  ¦  2019-03-27  ¦  varchar_26  ¦  text_26  𝄀
+27  ¦  27.1  ¦  0  ¦  1983-10-28  ¦  varchar_27  ¦  text_27  𝄀
+28  ¦  28.1  ¦  1  ¦  1993-07-19  ¦  varchar_28  ¦  text_28  𝄀
+29  ¦  29.1  ¦  0  ¦  1986-09-11  ¦  varchar_29  ¦  text_29  𝄀
+30  ¦  30.1  ¦  1  ¦  1992-08-19  ¦  varchar_30  ¦  text_30  𝄀
+31  ¦  31.1  ¦  0  ¦  1981-08-07  ¦  varchar_31  ¦  text_31  𝄀
+32  ¦  32.1  ¦  1  ¦  1984-03-25  ¦  varchar_32  ¦  text_32  𝄀
+33  ¦  33.1  ¦  0  ¦  2001-09-05  ¦  varchar_33  ¦  text_33  𝄀
+34  ¦  34.1  ¦  1  ¦  2022-03-17  ¦  varchar_34  ¦  text_34  𝄀
+35  ¦  35.1  ¦  0  ¦  2008-06-24  ¦  varchar_35  ¦  text_35  𝄀
+36  ¦  36.1  ¦  1  ¦  1987-11-23  ¦  varchar_36  ¦  text_36  𝄀
+37  ¦  37.1  ¦  0  ¦  2008-11-10  ¦  varchar_37  ¦  text_37  𝄀
+38  ¦  38.1  ¦  1  ¦  1986-01-29  ¦  varchar_38  ¦  text_38  𝄀
+39  ¦  39.1  ¦  0  ¦  1985-02-27  ¦  varchar_39  ¦  text_39  𝄀
+40  ¦  40.1  ¦  1  ¦  2016-11-28  ¦  varchar_40  ¦  text_40  𝄀
+41  ¦  41.1  ¦  0  ¦  1991-02-11  ¦  varchar_41  ¦  text_41  𝄀
+42  ¦  42.1  ¦  1  ¦  2019-01-08  ¦  varchar_42  ¦  text_42  𝄀
+43  ¦  43.1  ¦  0  ¦  2009-05-01  ¦  varchar_43  ¦  text_43  𝄀
+44  ¦  44.1  ¦  1  ¦  1986-11-15  ¦  varchar_44  ¦  text_44  𝄀
+45  ¦  45.1  ¦  0  ¦  2000-07-22  ¦  varchar_45  ¦  text_45  𝄀
+46  ¦  46.1  ¦  1  ¦  2002-09-07  ¦  varchar_46  ¦  text_46  𝄀
+47  ¦  47.1  ¦  0  ¦  1987-09-23  ¦  varchar_47  ¦  text_47  𝄀
+48  ¦  48.1  ¦  1  ¦  1985-10-25  ¦  varchar_48  ¦  text_48  𝄀
+49  ¦  49.1  ¦  0  ¦  1988-10-06  ¦  varchar_49  ¦  text_49
 /* save_result */select t1.col1,t2.col1 from test_view t1  left join test_view t2 on t1.col1=t2.col1;
-col1    col1
-0    0
-1    1
-2    2
-3    3
-4    4
-5    5
-6    6
-7    7
-8    8
-9    9
-10    10
-11    11
-12    12
-13    13
-14    14
-15    15
-16    16
-17    17
-18    18
-19    19
-20    20
-21    21
-22    22
-23    23
-24    24
-25    25
-26    26
-27    27
-28    28
-29    29
-30    30
-31    31
-32    32
-33    33
-34    34
-35    35
-36    36
-37    37
-38    38
-39    39
-40    40
-41    41
-42    42
-43    43
-44    44
-45    45
-46    46
-47    47
-48    48
-49    49
+➤ col1[4,32,0]  ¦  col1[4,32,0]  𝄀
+0  ¦  0  𝄀
+1  ¦  1  𝄀
+2  ¦  2  𝄀
+3  ¦  3  𝄀
+4  ¦  4  𝄀
+5  ¦  5  𝄀
+6  ¦  6  𝄀
+7  ¦  7  𝄀
+8  ¦  8  𝄀
+9  ¦  9  𝄀
+10  ¦  10  𝄀
+11  ¦  11  𝄀
+12  ¦  12  𝄀
+13  ¦  13  𝄀
+14  ¦  14  𝄀
+15  ¦  15  𝄀
+16  ¦  16  𝄀
+17  ¦  17  𝄀
+18  ¦  18  𝄀
+19  ¦  19  𝄀
+20  ¦  20  𝄀
+21  ¦  21  𝄀
+22  ¦  22  𝄀
+23  ¦  23  𝄀
+24  ¦  24  𝄀
+25  ¦  25  𝄀
+26  ¦  26  𝄀
+27  ¦  27  𝄀
+28  ¦  28  𝄀
+29  ¦  29  𝄀
+30  ¦  30  𝄀
+31  ¦  31  𝄀
+32  ¦  32  𝄀
+33  ¦  33  𝄀
+34  ¦  34  𝄀
+35  ¦  35  𝄀
+36  ¦  36  𝄀
+37  ¦  37  𝄀
+38  ¦  38  𝄀
+39  ¦  39  𝄀
+40  ¦  40  𝄀
+41  ¦  41  𝄀
+42  ¦  42  𝄀
+43  ¦  43  𝄀
+44  ¦  44  𝄀
+45  ¦  45  𝄀
+46  ¦  46  𝄀
+47  ¦  47  𝄀
+48  ¦  48  𝄀
+49  ¦  49
 select * from result_scan(last_query_id()) as u;
-col1_0    col1_1
-0    0
-1    1
-2    2
-3    3
-4    4
-5    5
-6    6
-7    7
-8    8
-9    9
-10    10
-11    11
-12    12
-13    13
-14    14
-15    15
-16    16
-17    17
-18    18
-19    19
-20    20
-21    21
-22    22
-23    23
-24    24
-25    25
-26    26
-27    27
-28    28
-29    29
-30    30
-31    31
-32    32
-33    33
-34    34
-35    35
-36    36
-37    37
-38    38
-39    39
-40    40
-41    41
-42    42
-43    43
-44    44
-45    45
-46    46
-47    47
-48    48
-49    49
+➤ col1_0[4,32,0]  ¦  col1_1[4,32,0]  𝄀
+0  ¦  0  𝄀
+1  ¦  1  𝄀
+2  ¦  2  𝄀
+3  ¦  3  𝄀
+4  ¦  4  𝄀
+5  ¦  5  𝄀
+6  ¦  6  𝄀
+7  ¦  7  𝄀
+8  ¦  8  𝄀
+9  ¦  9  𝄀
+10  ¦  10  𝄀
+11  ¦  11  𝄀
+12  ¦  12  𝄀
+13  ¦  13  𝄀
+14  ¦  14  𝄀
+15  ¦  15  𝄀
+16  ¦  16  𝄀
+17  ¦  17  𝄀
+18  ¦  18  𝄀
+19  ¦  19  𝄀
+20  ¦  20  𝄀
+21  ¦  21  𝄀
+22  ¦  22  𝄀
+23  ¦  23  𝄀
+24  ¦  24  𝄀
+25  ¦  25  𝄀
+26  ¦  26  𝄀
+27  ¦  27  𝄀
+28  ¦  28  𝄀
+29  ¦  29  𝄀
+30  ¦  30  𝄀
+31  ¦  31  𝄀
+32  ¦  32  𝄀
+33  ¦  33  𝄀
+34  ¦  34  𝄀
+35  ¦  35  𝄀
+36  ¦  36  𝄀
+37  ¦  37  𝄀
+38  ¦  38  𝄀
+39  ¦  39  𝄀
+40  ¦  40  𝄀
+41  ¦  41  𝄀
+42  ¦  42  𝄀
+43  ¦  43  𝄀
+44  ¦  44  𝄀
+45  ¦  45  𝄀
+46  ¦  46  𝄀
+47  ¦  47  𝄀
+48  ¦  48  𝄀
+49  ¦  49
 /* save_result */select t1.col1,t2.col1 from test_view t1  right join test_view t2 on t1.col1=t2.col1;
-col1    col1
-0    0
-1    1
-2    2
-3    3
-4    4
-5    5
-6    6
-7    7
-8    8
-9    9
-10    10
-11    11
-12    12
-13    13
-14    14
-15    15
-16    16
-17    17
-18    18
-19    19
-20    20
-21    21
-22    22
-23    23
-24    24
-25    25
-26    26
-27    27
-28    28
-29    29
-30    30
-31    31
-32    32
-33    33
-34    34
-35    35
-36    36
-37    37
-38    38
-39    39
-40    40
-41    41
-42    42
-43    43
-44    44
-45    45
-46    46
-47    47
-48    48
-49    49
+➤ col1[4,32,0]  ¦  col1[4,32,0]  𝄀
+0  ¦  0  𝄀
+1  ¦  1  𝄀
+2  ¦  2  𝄀
+3  ¦  3  𝄀
+4  ¦  4  𝄀
+5  ¦  5  𝄀
+6  ¦  6  𝄀
+7  ¦  7  𝄀
+8  ¦  8  𝄀
+9  ¦  9  𝄀
+10  ¦  10  𝄀
+11  ¦  11  𝄀
+12  ¦  12  𝄀
+13  ¦  13  𝄀
+14  ¦  14  𝄀
+15  ¦  15  𝄀
+16  ¦  16  𝄀
+17  ¦  17  𝄀
+18  ¦  18  𝄀
+19  ¦  19  𝄀
+20  ¦  20  𝄀
+21  ¦  21  𝄀
+22  ¦  22  𝄀
+23  ¦  23  𝄀
+24  ¦  24  𝄀
+25  ¦  25  𝄀
+26  ¦  26  𝄀
+27  ¦  27  𝄀
+28  ¦  28  𝄀
+29  ¦  29  𝄀
+30  ¦  30  𝄀
+31  ¦  31  𝄀
+32  ¦  32  𝄀
+33  ¦  33  𝄀
+34  ¦  34  𝄀
+35  ¦  35  𝄀
+36  ¦  36  𝄀
+37  ¦  37  𝄀
+38  ¦  38  𝄀
+39  ¦  39  𝄀
+40  ¦  40  𝄀
+41  ¦  41  𝄀
+42  ¦  42  𝄀
+43  ¦  43  𝄀
+44  ¦  44  𝄀
+45  ¦  45  𝄀
+46  ¦  46  𝄀
+47  ¦  47  𝄀
+48  ¦  48  𝄀
+49  ¦  49
 select * from result_scan(last_query_id()) as u;
-col1_0    col1_1
-0    0
-1    1
-2    2
-3    3
-4    4
-5    5
-6    6
-7    7
-8    8
-9    9
-10    10
-11    11
-12    12
-13    13
-14    14
-15    15
-16    16
-17    17
-18    18
-19    19
-20    20
-21    21
-22    22
-23    23
-24    24
-25    25
-26    26
-27    27
-28    28
-29    29
-30    30
-31    31
-32    32
-33    33
-34    34
-35    35
-36    36
-37    37
-38    38
-39    39
-40    40
-41    41
-42    42
-43    43
-44    44
-45    45
-46    46
-47    47
-48    48
-49    49
+➤ col1_0[4,32,0]  ¦  col1_1[4,32,0]  𝄀
+0  ¦  0  𝄀
+1  ¦  1  𝄀
+2  ¦  2  𝄀
+3  ¦  3  𝄀
+4  ¦  4  𝄀
+5  ¦  5  𝄀
+6  ¦  6  𝄀
+7  ¦  7  𝄀
+8  ¦  8  𝄀
+9  ¦  9  𝄀
+10  ¦  10  𝄀
+11  ¦  11  𝄀
+12  ¦  12  𝄀
+13  ¦  13  𝄀
+14  ¦  14  𝄀
+15  ¦  15  𝄀
+16  ¦  16  𝄀
+17  ¦  17  𝄀
+18  ¦  18  𝄀
+19  ¦  19  𝄀
+20  ¦  20  𝄀
+21  ¦  21  𝄀
+22  ¦  22  𝄀
+23  ¦  23  𝄀
+24  ¦  24  𝄀
+25  ¦  25  𝄀
+26  ¦  26  𝄀
+27  ¦  27  𝄀
+28  ¦  28  𝄀
+29  ¦  29  𝄀
+30  ¦  30  𝄀
+31  ¦  31  𝄀
+32  ¦  32  𝄀
+33  ¦  33  𝄀
+34  ¦  34  𝄀
+35  ¦  35  𝄀
+36  ¦  36  𝄀
+37  ¦  37  𝄀
+38  ¦  38  𝄀
+39  ¦  39  𝄀
+40  ¦  40  𝄀
+41  ¦  41  𝄀
+42  ¦  42  𝄀
+43  ¦  43  𝄀
+44  ¦  44  𝄀
+45  ¦  45  𝄀
+46  ¦  46  𝄀
+47  ¦  47  𝄀
+48  ¦  48  𝄀
+49  ¦  49
 /* save_result */select * from test_view union select * from test_view;
-col1    col2    col3    col4    col5    col6
-0    0.1    1    1982-03-24    varchar_0    text_0
-1    1.1    0    1982-07-31    varchar_1    text_1
-2    2.1    1    2002-04-13    varchar_2    text_2
-3    3.1    0    2019-09-29    varchar_3    text_3
-4    4.1    1    1996-08-20    varchar_4    text_4
-5    5.1    0    2008-10-13    varchar_5    text_5
-6    6.1    1    2002-03-05    varchar_6    text_6
-7    7.1    0    1993-11-07    varchar_7    text_7
-8    8.1    1    1994-01-08    varchar_8    text_8
-9    9.1    0    1999-09-17    varchar_9    text_9
-10    10.1    1    2003-09-28    varchar_10    text_10
-11    11.1    0    1984-01-22    varchar_11    text_11
-12    12.1    1    1994-02-10    varchar_12    text_12
-13    13.1    0    1994-12-02    varchar_13    text_13
-14    14.1    1    2013-01-19    varchar_14    text_14
-15    15.1    0    2002-09-29    varchar_15    text_15
-16    16.1    1    2001-12-07    varchar_16    text_16
-17    17.1    0    1989-03-11    varchar_17    text_17
-18    18.1    1    2019-11-04    varchar_18    text_18
-19    19.1    0    2002-08-15    varchar_19    text_19
-20    20.1    1    1995-12-20    varchar_20    text_20
-21    21.1    0    2018-08-03    varchar_21    text_21
-22    22.1    1    1998-03-10    varchar_22    text_22
-23    23.1    0    2022-04-08    varchar_23    text_23
-24    24.1    1    1989-04-27    varchar_24    text_24
-25    25.1    0    2009-03-14    varchar_25    text_25
-26    26.1    1    2019-03-27    varchar_26    text_26
-27    27.1    0    1983-10-28    varchar_27    text_27
-28    28.1    1    1993-07-19    varchar_28    text_28
-29    29.1    0    1986-09-11    varchar_29    text_29
-30    30.1    1    1992-08-19    varchar_30    text_30
-31    31.1    0    1981-08-07    varchar_31    text_31
-32    32.1    1    1984-03-25    varchar_32    text_32
-33    33.1    0    2001-09-05    varchar_33    text_33
-34    34.1    1    2022-03-17    varchar_34    text_34
-35    35.1    0    2008-06-24    varchar_35    text_35
-36    36.1    1    1987-11-23    varchar_36    text_36
-37    37.1    0    2008-11-10    varchar_37    text_37
-38    38.1    1    1986-01-29    varchar_38    text_38
-39    39.1    0    1985-02-27    varchar_39    text_39
-40    40.1    1    2016-11-28    varchar_40    text_40
-41    41.1    0    1991-02-11    varchar_41    text_41
-42    42.1    1    2019-01-08    varchar_42    text_42
-43    43.1    0    2009-05-01    varchar_43    text_43
-44    44.1    1    1986-11-15    varchar_44    text_44
-45    45.1    0    2000-07-22    varchar_45    text_45
-46    46.1    1    2002-09-07    varchar_46    text_46
-47    47.1    0    1987-09-23    varchar_47    text_47
-48    48.1    1    1985-10-25    varchar_48    text_48
-49    49.1    0    1988-10-06    varchar_49    text_49
+➤ col1[4,32,0]  ¦  col2[7,23,31]  ¦  col3[-7,1,0]  ¦  col4[91,64,0]  ¦  col5[12,191,0]  ¦  col6[12,0,0]  𝄀
+0  ¦  0.1  ¦  1  ¦  1982-03-24  ¦  varchar_0  ¦  text_0  𝄀
+1  ¦  1.1  ¦  0  ¦  1982-07-31  ¦  varchar_1  ¦  text_1  𝄀
+2  ¦  2.1  ¦  1  ¦  2002-04-13  ¦  varchar_2  ¦  text_2  𝄀
+3  ¦  3.1  ¦  0  ¦  2019-09-29  ¦  varchar_3  ¦  text_3  𝄀
+4  ¦  4.1  ¦  1  ¦  1996-08-20  ¦  varchar_4  ¦  text_4  𝄀
+5  ¦  5.1  ¦  0  ¦  2008-10-13  ¦  varchar_5  ¦  text_5  𝄀
+6  ¦  6.1  ¦  1  ¦  2002-03-05  ¦  varchar_6  ¦  text_6  𝄀
+7  ¦  7.1  ¦  0  ¦  1993-11-07  ¦  varchar_7  ¦  text_7  𝄀
+8  ¦  8.1  ¦  1  ¦  1994-01-08  ¦  varchar_8  ¦  text_8  𝄀
+9  ¦  9.1  ¦  0  ¦  1999-09-17  ¦  varchar_9  ¦  text_9  𝄀
+10  ¦  10.1  ¦  1  ¦  2003-09-28  ¦  varchar_10  ¦  text_10  𝄀
+11  ¦  11.1  ¦  0  ¦  1984-01-22  ¦  varchar_11  ¦  text_11  𝄀
+12  ¦  12.1  ¦  1  ¦  1994-02-10  ¦  varchar_12  ¦  text_12  𝄀
+13  ¦  13.1  ¦  0  ¦  1994-12-02  ¦  varchar_13  ¦  text_13  𝄀
+14  ¦  14.1  ¦  1  ¦  2013-01-19  ¦  varchar_14  ¦  text_14  𝄀
+15  ¦  15.1  ¦  0  ¦  2002-09-29  ¦  varchar_15  ¦  text_15  𝄀
+16  ¦  16.1  ¦  1  ¦  2001-12-07  ¦  varchar_16  ¦  text_16  𝄀
+17  ¦  17.1  ¦  0  ¦  1989-03-11  ¦  varchar_17  ¦  text_17  𝄀
+18  ¦  18.1  ¦  1  ¦  2019-11-04  ¦  varchar_18  ¦  text_18  𝄀
+19  ¦  19.1  ¦  0  ¦  2002-08-15  ¦  varchar_19  ¦  text_19  𝄀
+20  ¦  20.1  ¦  1  ¦  1995-12-20  ¦  varchar_20  ¦  text_20  𝄀
+21  ¦  21.1  ¦  0  ¦  2018-08-03  ¦  varchar_21  ¦  text_21  𝄀
+22  ¦  22.1  ¦  1  ¦  1998-03-10  ¦  varchar_22  ¦  text_22  𝄀
+23  ¦  23.1  ¦  0  ¦  2022-04-08  ¦  varchar_23  ¦  text_23  𝄀
+24  ¦  24.1  ¦  1  ¦  1989-04-27  ¦  varchar_24  ¦  text_24  𝄀
+25  ¦  25.1  ¦  0  ¦  2009-03-14  ¦  varchar_25  ¦  text_25  𝄀
+26  ¦  26.1  ¦  1  ¦  2019-03-27  ¦  varchar_26  ¦  text_26  𝄀
+27  ¦  27.1  ¦  0  ¦  1983-10-28  ¦  varchar_27  ¦  text_27  𝄀
+28  ¦  28.1  ¦  1  ¦  1993-07-19  ¦  varchar_28  ¦  text_28  𝄀
+29  ¦  29.1  ¦  0  ¦  1986-09-11  ¦  varchar_29  ¦  text_29  𝄀
+30  ¦  30.1  ¦  1  ¦  1992-08-19  ¦  varchar_30  ¦  text_30  𝄀
+31  ¦  31.1  ¦  0  ¦  1981-08-07  ¦  varchar_31  ¦  text_31  𝄀
+32  ¦  32.1  ¦  1  ¦  1984-03-25  ¦  varchar_32  ¦  text_32  𝄀
+33  ¦  33.1  ¦  0  ¦  2001-09-05  ¦  varchar_33  ¦  text_33  𝄀
+34  ¦  34.1  ¦  1  ¦  2022-03-17  ¦  varchar_34  ¦  text_34  𝄀
+35  ¦  35.1  ¦  0  ¦  2008-06-24  ¦  varchar_35  ¦  text_35  𝄀
+36  ¦  36.1  ¦  1  ¦  1987-11-23  ¦  varchar_36  ¦  text_36  𝄀
+37  ¦  37.1  ¦  0  ¦  2008-11-10  ¦  varchar_37  ¦  text_37  𝄀
+38  ¦  38.1  ¦  1  ¦  1986-01-29  ¦  varchar_38  ¦  text_38  𝄀
+39  ¦  39.1  ¦  0  ¦  1985-02-27  ¦  varchar_39  ¦  text_39  𝄀
+40  ¦  40.1  ¦  1  ¦  2016-11-28  ¦  varchar_40  ¦  text_40  𝄀
+41  ¦  41.1  ¦  0  ¦  1991-02-11  ¦  varchar_41  ¦  text_41  𝄀
+42  ¦  42.1  ¦  1  ¦  2019-01-08  ¦  varchar_42  ¦  text_42  𝄀
+43  ¦  43.1  ¦  0  ¦  2009-05-01  ¦  varchar_43  ¦  text_43  𝄀
+44  ¦  44.1  ¦  1  ¦  1986-11-15  ¦  varchar_44  ¦  text_44  𝄀
+45  ¦  45.1  ¦  0  ¦  2000-07-22  ¦  varchar_45  ¦  text_45  𝄀
+46  ¦  46.1  ¦  1  ¦  2002-09-07  ¦  varchar_46  ¦  text_46  𝄀
+47  ¦  47.1  ¦  0  ¦  1987-09-23  ¦  varchar_47  ¦  text_47  𝄀
+48  ¦  48.1  ¦  1  ¦  1985-10-25  ¦  varchar_48  ¦  text_48  𝄀
+49  ¦  49.1  ¦  0  ¦  1988-10-06  ¦  varchar_49  ¦  text_49
 select * from result_scan(last_query_id()) as u;
-col1    col2    col3    col4    col5    col6
-0    0.1    1    1982-03-24    varchar_0    text_0
-1    1.1    0    1982-07-31    varchar_1    text_1
-2    2.1    1    2002-04-13    varchar_2    text_2
-3    3.1    0    2019-09-29    varchar_3    text_3
-4    4.1    1    1996-08-20    varchar_4    text_4
-5    5.1    0    2008-10-13    varchar_5    text_5
-6    6.1    1    2002-03-05    varchar_6    text_6
-7    7.1    0    1993-11-07    varchar_7    text_7
-8    8.1    1    1994-01-08    varchar_8    text_8
-9    9.1    0    1999-09-17    varchar_9    text_9
-10    10.1    1    2003-09-28    varchar_10    text_10
-11    11.1    0    1984-01-22    varchar_11    text_11
-12    12.1    1    1994-02-10    varchar_12    text_12
-13    13.1    0    1994-12-02    varchar_13    text_13
-14    14.1    1    2013-01-19    varchar_14    text_14
-15    15.1    0    2002-09-29    varchar_15    text_15
-16    16.1    1    2001-12-07    varchar_16    text_16
-17    17.1    0    1989-03-11    varchar_17    text_17
-18    18.1    1    2019-11-04    varchar_18    text_18
-19    19.1    0    2002-08-15    varchar_19    text_19
-20    20.1    1    1995-12-20    varchar_20    text_20
-21    21.1    0    2018-08-03    varchar_21    text_21
-22    22.1    1    1998-03-10    varchar_22    text_22
-23    23.1    0    2022-04-08    varchar_23    text_23
-24    24.1    1    1989-04-27    varchar_24    text_24
-25    25.1    0    2009-03-14    varchar_25    text_25
-26    26.1    1    2019-03-27    varchar_26    text_26
-27    27.1    0    1983-10-28    varchar_27    text_27
-28    28.1    1    1993-07-19    varchar_28    text_28
-29    29.1    0    1986-09-11    varchar_29    text_29
-30    30.1    1    1992-08-19    varchar_30    text_30
-31    31.1    0    1981-08-07    varchar_31    text_31
-32    32.1    1    1984-03-25    varchar_32    text_32
-33    33.1    0    2001-09-05    varchar_33    text_33
-34    34.1    1    2022-03-17    varchar_34    text_34
-35    35.1    0    2008-06-24    varchar_35    text_35
-36    36.1    1    1987-11-23    varchar_36    text_36
-37    37.1    0    2008-11-10    varchar_37    text_37
-38    38.1    1    1986-01-29    varchar_38    text_38
-39    39.1    0    1985-02-27    varchar_39    text_39
-40    40.1    1    2016-11-28    varchar_40    text_40
-41    41.1    0    1991-02-11    varchar_41    text_41
-42    42.1    1    2019-01-08    varchar_42    text_42
-43    43.1    0    2009-05-01    varchar_43    text_43
-44    44.1    1    1986-11-15    varchar_44    text_44
-45    45.1    0    2000-07-22    varchar_45    text_45
-46    46.1    1    2002-09-07    varchar_46    text_46
-47    47.1    0    1987-09-23    varchar_47    text_47
-48    48.1    1    1985-10-25    varchar_48    text_48
-49    49.1    0    1988-10-06    varchar_49    text_49
+➤ col1[4,32,0]  ¦  col2[7,23,31]  ¦  col3[-7,1,0]  ¦  col4[91,64,0]  ¦  col5[12,191,0]  ¦  col6[12,0,0]  𝄀
+0  ¦  0.1  ¦  1  ¦  1982-03-24  ¦  varchar_0  ¦  text_0  𝄀
+1  ¦  1.1  ¦  0  ¦  1982-07-31  ¦  varchar_1  ¦  text_1  𝄀
+2  ¦  2.1  ¦  1  ¦  2002-04-13  ¦  varchar_2  ¦  text_2  𝄀
+3  ¦  3.1  ¦  0  ¦  2019-09-29  ¦  varchar_3  ¦  text_3  𝄀
+4  ¦  4.1  ¦  1  ¦  1996-08-20  ¦  varchar_4  ¦  text_4  𝄀
+5  ¦  5.1  ¦  0  ¦  2008-10-13  ¦  varchar_5  ¦  text_5  𝄀
+6  ¦  6.1  ¦  1  ¦  2002-03-05  ¦  varchar_6  ¦  text_6  𝄀
+7  ¦  7.1  ¦  0  ¦  1993-11-07  ¦  varchar_7  ¦  text_7  𝄀
+8  ¦  8.1  ¦  1  ¦  1994-01-08  ¦  varchar_8  ¦  text_8  𝄀
+9  ¦  9.1  ¦  0  ¦  1999-09-17  ¦  varchar_9  ¦  text_9  𝄀
+10  ¦  10.1  ¦  1  ¦  2003-09-28  ¦  varchar_10  ¦  text_10  𝄀
+11  ¦  11.1  ¦  0  ¦  1984-01-22  ¦  varchar_11  ¦  text_11  𝄀
+12  ¦  12.1  ¦  1  ¦  1994-02-10  ¦  varchar_12  ¦  text_12  𝄀
+13  ¦  13.1  ¦  0  ¦  1994-12-02  ¦  varchar_13  ¦  text_13  𝄀
+14  ¦  14.1  ¦  1  ¦  2013-01-19  ¦  varchar_14  ¦  text_14  𝄀
+15  ¦  15.1  ¦  0  ¦  2002-09-29  ¦  varchar_15  ¦  text_15  𝄀
+16  ¦  16.1  ¦  1  ¦  2001-12-07  ¦  varchar_16  ¦  text_16  𝄀
+17  ¦  17.1  ¦  0  ¦  1989-03-11  ¦  varchar_17  ¦  text_17  𝄀
+18  ¦  18.1  ¦  1  ¦  2019-11-04  ¦  varchar_18  ¦  text_18  𝄀
+19  ¦  19.1  ¦  0  ¦  2002-08-15  ¦  varchar_19  ¦  text_19  𝄀
+20  ¦  20.1  ¦  1  ¦  1995-12-20  ¦  varchar_20  ¦  text_20  𝄀
+21  ¦  21.1  ¦  0  ¦  2018-08-03  ¦  varchar_21  ¦  text_21  𝄀
+22  ¦  22.1  ¦  1  ¦  1998-03-10  ¦  varchar_22  ¦  text_22  𝄀
+23  ¦  23.1  ¦  0  ¦  2022-04-08  ¦  varchar_23  ¦  text_23  𝄀
+24  ¦  24.1  ¦  1  ¦  1989-04-27  ¦  varchar_24  ¦  text_24  𝄀
+25  ¦  25.1  ¦  0  ¦  2009-03-14  ¦  varchar_25  ¦  text_25  𝄀
+26  ¦  26.1  ¦  1  ¦  2019-03-27  ¦  varchar_26  ¦  text_26  𝄀
+27  ¦  27.1  ¦  0  ¦  1983-10-28  ¦  varchar_27  ¦  text_27  𝄀
+28  ¦  28.1  ¦  1  ¦  1993-07-19  ¦  varchar_28  ¦  text_28  𝄀
+29  ¦  29.1  ¦  0  ¦  1986-09-11  ¦  varchar_29  ¦  text_29  𝄀
+30  ¦  30.1  ¦  1  ¦  1992-08-19  ¦  varchar_30  ¦  text_30  𝄀
+31  ¦  31.1  ¦  0  ¦  1981-08-07  ¦  varchar_31  ¦  text_31  𝄀
+32  ¦  32.1  ¦  1  ¦  1984-03-25  ¦  varchar_32  ¦  text_32  𝄀
+33  ¦  33.1  ¦  0  ¦  2001-09-05  ¦  varchar_33  ¦  text_33  𝄀
+34  ¦  34.1  ¦  1  ¦  2022-03-17  ¦  varchar_34  ¦  text_34  𝄀
+35  ¦  35.1  ¦  0  ¦  2008-06-24  ¦  varchar_35  ¦  text_35  𝄀
+36  ¦  36.1  ¦  1  ¦  1987-11-23  ¦  varchar_36  ¦  text_36  𝄀
+37  ¦  37.1  ¦  0  ¦  2008-11-10  ¦  varchar_37  ¦  text_37  𝄀
+38  ¦  38.1  ¦  1  ¦  1986-01-29  ¦  varchar_38  ¦  text_38  𝄀
+39  ¦  39.1  ¦  0  ¦  1985-02-27  ¦  varchar_39  ¦  text_39  𝄀
+40  ¦  40.1  ¦  1  ¦  2016-11-28  ¦  varchar_40  ¦  text_40  𝄀
+41  ¦  41.1  ¦  0  ¦  1991-02-11  ¦  varchar_41  ¦  text_41  𝄀
+42  ¦  42.1  ¦  1  ¦  2019-01-08  ¦  varchar_42  ¦  text_42  𝄀
+43  ¦  43.1  ¦  0  ¦  2009-05-01  ¦  varchar_43  ¦  text_43  𝄀
+44  ¦  44.1  ¦  1  ¦  1986-11-15  ¦  varchar_44  ¦  text_44  𝄀
+45  ¦  45.1  ¦  0  ¦  2000-07-22  ¦  varchar_45  ¦  text_45  𝄀
+46  ¦  46.1  ¦  1  ¦  2002-09-07  ¦  varchar_46  ¦  text_46  𝄀
+47  ¦  47.1  ¦  0  ¦  1987-09-23  ¦  varchar_47  ¦  text_47  𝄀
+48  ¦  48.1  ¦  1  ¦  1985-10-25  ¦  varchar_48  ¦  text_48  𝄀
+49  ¦  49.1  ¦  0  ¦  1988-10-06  ¦  varchar_49  ¦  text_49
 /* save_result */SELECT col1 FROM test_view where col1 < 30 MINUS SELECT col1  FROM test_view where col1 < 20;
-col1
-20
-21
-22
-23
-24
-25
-26
-27
-28
+➤ col1[4,32,0]  𝄀
+20  𝄀
+21  𝄀
+22  𝄀
+23  𝄀
+24  𝄀
+25  𝄀
+26  𝄀
+27  𝄀
+28  𝄀
 29
 select * from result_scan(last_query_id()) as u;
-col1
-20
-21
-22
-23
-24
-25
-26
-27
-28
+➤ col1[4,32,0]  𝄀
+20  𝄀
+21  𝄀
+22  𝄀
+23  𝄀
+24  𝄀
+25  𝄀
+26  𝄀
+27  𝄀
+28  𝄀
 29
 begin;
 /* save_result */select * from test_table;
-col1    col2    col3    col4    col5    col6
-0    0.1    1    1982-03-24    varchar_0    text_0
-1    1.1    0    1982-07-31    varchar_1    text_1
-2    2.1    1    2002-04-13    varchar_2    text_2
-3    3.1    0    2019-09-29    varchar_3    text_3
-4    4.1    1    1996-08-20    varchar_4    text_4
-5    5.1    0    2008-10-13    varchar_5    text_5
-6    6.1    1    2002-03-05    varchar_6    text_6
-7    7.1    0    1993-11-07    varchar_7    text_7
-8    8.1    1    1994-01-08    varchar_8    text_8
-9    9.1    0    1999-09-17    varchar_9    text_9
-10    10.1    1    2003-09-28    varchar_10    text_10
-11    11.1    0    1984-01-22    varchar_11    text_11
-12    12.1    1    1994-02-10    varchar_12    text_12
-13    13.1    0    1994-12-02    varchar_13    text_13
-14    14.1    1    2013-01-19    varchar_14    text_14
-15    15.1    0    2002-09-29    varchar_15    text_15
-16    16.1    1    2001-12-07    varchar_16    text_16
-17    17.1    0    1989-03-11    varchar_17    text_17
-18    18.1    1    2019-11-04    varchar_18    text_18
-19    19.1    0    2002-08-15    varchar_19    text_19
-20    20.1    1    1995-12-20    varchar_20    text_20
-21    21.1    0    2018-08-03    varchar_21    text_21
-22    22.1    1    1998-03-10    varchar_22    text_22
-23    23.1    0    2022-04-08    varchar_23    text_23
-24    24.1    1    1989-04-27    varchar_24    text_24
-25    25.1    0    2009-03-14    varchar_25    text_25
-26    26.1    1    2019-03-27    varchar_26    text_26
-27    27.1    0    1983-10-28    varchar_27    text_27
-28    28.1    1    1993-07-19    varchar_28    text_28
-29    29.1    0    1986-09-11    varchar_29    text_29
-30    30.1    1    1992-08-19    varchar_30    text_30
-31    31.1    0    1981-08-07    varchar_31    text_31
-32    32.1    1    1984-03-25    varchar_32    text_32
-33    33.1    0    2001-09-05    varchar_33    text_33
-34    34.1    1    2022-03-17    varchar_34    text_34
-35    35.1    0    2008-06-24    varchar_35    text_35
-36    36.1    1    1987-11-23    varchar_36    text_36
-37    37.1    0    2008-11-10    varchar_37    text_37
-38    38.1    1    1986-01-29    varchar_38    text_38
-39    39.1    0    1985-02-27    varchar_39    text_39
-40    40.1    1    2016-11-28    varchar_40    text_40
-41    41.1    0    1991-02-11    varchar_41    text_41
-42    42.1    1    2019-01-08    varchar_42    text_42
-43    43.1    0    2009-05-01    varchar_43    text_43
-44    44.1    1    1986-11-15    varchar_44    text_44
-45    45.1    0    2000-07-22    varchar_45    text_45
-46    46.1    1    2002-09-07    varchar_46    text_46
-47    47.1    0    1987-09-23    varchar_47    text_47
-48    48.1    1    1985-10-25    varchar_48    text_48
-49    49.1    0    1988-10-06    varchar_49    text_49
+➤ col1[4,32,0]  ¦  col2[7,23,31]  ¦  col3[-7,1,0]  ¦  col4[91,64,0]  ¦  col5[12,191,0]  ¦  col6[12,0,0]  𝄀
+0  ¦  0.1  ¦  1  ¦  1982-03-24  ¦  varchar_0  ¦  text_0  𝄀
+1  ¦  1.1  ¦  0  ¦  1982-07-31  ¦  varchar_1  ¦  text_1  𝄀
+2  ¦  2.1  ¦  1  ¦  2002-04-13  ¦  varchar_2  ¦  text_2  𝄀
+3  ¦  3.1  ¦  0  ¦  2019-09-29  ¦  varchar_3  ¦  text_3  𝄀
+4  ¦  4.1  ¦  1  ¦  1996-08-20  ¦  varchar_4  ¦  text_4  𝄀
+5  ¦  5.1  ¦  0  ¦  2008-10-13  ¦  varchar_5  ¦  text_5  𝄀
+6  ¦  6.1  ¦  1  ¦  2002-03-05  ¦  varchar_6  ¦  text_6  𝄀
+7  ¦  7.1  ¦  0  ¦  1993-11-07  ¦  varchar_7  ¦  text_7  𝄀
+8  ¦  8.1  ¦  1  ¦  1994-01-08  ¦  varchar_8  ¦  text_8  𝄀
+9  ¦  9.1  ¦  0  ¦  1999-09-17  ¦  varchar_9  ¦  text_9  𝄀
+10  ¦  10.1  ¦  1  ¦  2003-09-28  ¦  varchar_10  ¦  text_10  𝄀
+11  ¦  11.1  ¦  0  ¦  1984-01-22  ¦  varchar_11  ¦  text_11  𝄀
+12  ¦  12.1  ¦  1  ¦  1994-02-10  ¦  varchar_12  ¦  text_12  𝄀
+13  ¦  13.1  ¦  0  ¦  1994-12-02  ¦  varchar_13  ¦  text_13  𝄀
+14  ¦  14.1  ¦  1  ¦  2013-01-19  ¦  varchar_14  ¦  text_14  𝄀
+15  ¦  15.1  ¦  0  ¦  2002-09-29  ¦  varchar_15  ¦  text_15  𝄀
+16  ¦  16.1  ¦  1  ¦  2001-12-07  ¦  varchar_16  ¦  text_16  𝄀
+17  ¦  17.1  ¦  0  ¦  1989-03-11  ¦  varchar_17  ¦  text_17  𝄀
+18  ¦  18.1  ¦  1  ¦  2019-11-04  ¦  varchar_18  ¦  text_18  𝄀
+19  ¦  19.1  ¦  0  ¦  2002-08-15  ¦  varchar_19  ¦  text_19  𝄀
+20  ¦  20.1  ¦  1  ¦  1995-12-20  ¦  varchar_20  ¦  text_20  𝄀
+21  ¦  21.1  ¦  0  ¦  2018-08-03  ¦  varchar_21  ¦  text_21  𝄀
+22  ¦  22.1  ¦  1  ¦  1998-03-10  ¦  varchar_22  ¦  text_22  𝄀
+23  ¦  23.1  ¦  0  ¦  2022-04-08  ¦  varchar_23  ¦  text_23  𝄀
+24  ¦  24.1  ¦  1  ¦  1989-04-27  ¦  varchar_24  ¦  text_24  𝄀
+25  ¦  25.1  ¦  0  ¦  2009-03-14  ¦  varchar_25  ¦  text_25  𝄀
+26  ¦  26.1  ¦  1  ¦  2019-03-27  ¦  varchar_26  ¦  text_26  𝄀
+27  ¦  27.1  ¦  0  ¦  1983-10-28  ¦  varchar_27  ¦  text_27  𝄀
+28  ¦  28.1  ¦  1  ¦  1993-07-19  ¦  varchar_28  ¦  text_28  𝄀
+29  ¦  29.1  ¦  0  ¦  1986-09-11  ¦  varchar_29  ¦  text_29  𝄀
+30  ¦  30.1  ¦  1  ¦  1992-08-19  ¦  varchar_30  ¦  text_30  𝄀
+31  ¦  31.1  ¦  0  ¦  1981-08-07  ¦  varchar_31  ¦  text_31  𝄀
+32  ¦  32.1  ¦  1  ¦  1984-03-25  ¦  varchar_32  ¦  text_32  𝄀
+33  ¦  33.1  ¦  0  ¦  2001-09-05  ¦  varchar_33  ¦  text_33  𝄀
+34  ¦  34.1  ¦  1  ¦  2022-03-17  ¦  varchar_34  ¦  text_34  𝄀
+35  ¦  35.1  ¦  0  ¦  2008-06-24  ¦  varchar_35  ¦  text_35  𝄀
+36  ¦  36.1  ¦  1  ¦  1987-11-23  ¦  varchar_36  ¦  text_36  𝄀
+37  ¦  37.1  ¦  0  ¦  2008-11-10  ¦  varchar_37  ¦  text_37  𝄀
+38  ¦  38.1  ¦  1  ¦  1986-01-29  ¦  varchar_38  ¦  text_38  𝄀
+39  ¦  39.1  ¦  0  ¦  1985-02-27  ¦  varchar_39  ¦  text_39  𝄀
+40  ¦  40.1  ¦  1  ¦  2016-11-28  ¦  varchar_40  ¦  text_40  𝄀
+41  ¦  41.1  ¦  0  ¦  1991-02-11  ¦  varchar_41  ¦  text_41  𝄀
+42  ¦  42.1  ¦  1  ¦  2019-01-08  ¦  varchar_42  ¦  text_42  𝄀
+43  ¦  43.1  ¦  0  ¦  2009-05-01  ¦  varchar_43  ¦  text_43  𝄀
+44  ¦  44.1  ¦  1  ¦  1986-11-15  ¦  varchar_44  ¦  text_44  𝄀
+45  ¦  45.1  ¦  0  ¦  2000-07-22  ¦  varchar_45  ¦  text_45  𝄀
+46  ¦  46.1  ¦  1  ¦  2002-09-07  ¦  varchar_46  ¦  text_46  𝄀
+47  ¦  47.1  ¦  0  ¦  1987-09-23  ¦  varchar_47  ¦  text_47  𝄀
+48  ¦  48.1  ¦  1  ¦  1985-10-25  ¦  varchar_48  ¦  text_48  𝄀
+49  ¦  49.1  ¦  0  ¦  1988-10-06  ¦  varchar_49  ¦  text_49
 select * from result_scan(last_query_id()) as u;
-col1    col2    col3    col4    col5    col6
-0    0.1    1    1982-03-24    varchar_0    text_0
-1    1.1    0    1982-07-31    varchar_1    text_1
-2    2.1    1    2002-04-13    varchar_2    text_2
-3    3.1    0    2019-09-29    varchar_3    text_3
-4    4.1    1    1996-08-20    varchar_4    text_4
-5    5.1    0    2008-10-13    varchar_5    text_5
-6    6.1    1    2002-03-05    varchar_6    text_6
-7    7.1    0    1993-11-07    varchar_7    text_7
-8    8.1    1    1994-01-08    varchar_8    text_8
-9    9.1    0    1999-09-17    varchar_9    text_9
-10    10.1    1    2003-09-28    varchar_10    text_10
-11    11.1    0    1984-01-22    varchar_11    text_11
-12    12.1    1    1994-02-10    varchar_12    text_12
-13    13.1    0    1994-12-02    varchar_13    text_13
-14    14.1    1    2013-01-19    varchar_14    text_14
-15    15.1    0    2002-09-29    varchar_15    text_15
-16    16.1    1    2001-12-07    varchar_16    text_16
-17    17.1    0    1989-03-11    varchar_17    text_17
-18    18.1    1    2019-11-04    varchar_18    text_18
-19    19.1    0    2002-08-15    varchar_19    text_19
-20    20.1    1    1995-12-20    varchar_20    text_20
-21    21.1    0    2018-08-03    varchar_21    text_21
-22    22.1    1    1998-03-10    varchar_22    text_22
-23    23.1    0    2022-04-08    varchar_23    text_23
-24    24.1    1    1989-04-27    varchar_24    text_24
-25    25.1    0    2009-03-14    varchar_25    text_25
-26    26.1    1    2019-03-27    varchar_26    text_26
-27    27.1    0    1983-10-28    varchar_27    text_27
-28    28.1    1    1993-07-19    varchar_28    text_28
-29    29.1    0    1986-09-11    varchar_29    text_29
-30    30.1    1    1992-08-19    varchar_30    text_30
-31    31.1    0    1981-08-07    varchar_31    text_31
-32    32.1    1    1984-03-25    varchar_32    text_32
-33    33.1    0    2001-09-05    varchar_33    text_33
-34    34.1    1    2022-03-17    varchar_34    text_34
-35    35.1    0    2008-06-24    varchar_35    text_35
-36    36.1    1    1987-11-23    varchar_36    text_36
-37    37.1    0    2008-11-10    varchar_37    text_37
-38    38.1    1    1986-01-29    varchar_38    text_38
-39    39.1    0    1985-02-27    varchar_39    text_39
-40    40.1    1    2016-11-28    varchar_40    text_40
-41    41.1    0    1991-02-11    varchar_41    text_41
-42    42.1    1    2019-01-08    varchar_42    text_42
-43    43.1    0    2009-05-01    varchar_43    text_43
-44    44.1    1    1986-11-15    varchar_44    text_44
-45    45.1    0    2000-07-22    varchar_45    text_45
-46    46.1    1    2002-09-07    varchar_46    text_46
-47    47.1    0    1987-09-23    varchar_47    text_47
-48    48.1    1    1985-10-25    varchar_48    text_48
-49    49.1    0    1988-10-06    varchar_49    text_49
+➤ col1[4,32,0]  ¦  col2[7,23,31]  ¦  col3[-7,1,0]  ¦  col4[91,64,0]  ¦  col5[12,191,0]  ¦  col6[12,0,0]  𝄀
+0  ¦  0.1  ¦  1  ¦  1982-03-24  ¦  varchar_0  ¦  text_0  𝄀
+1  ¦  1.1  ¦  0  ¦  1982-07-31  ¦  varchar_1  ¦  text_1  𝄀
+2  ¦  2.1  ¦  1  ¦  2002-04-13  ¦  varchar_2  ¦  text_2  𝄀
+3  ¦  3.1  ¦  0  ¦  2019-09-29  ¦  varchar_3  ¦  text_3  𝄀
+4  ¦  4.1  ¦  1  ¦  1996-08-20  ¦  varchar_4  ¦  text_4  𝄀
+5  ¦  5.1  ¦  0  ¦  2008-10-13  ¦  varchar_5  ¦  text_5  𝄀
+6  ¦  6.1  ¦  1  ¦  2002-03-05  ¦  varchar_6  ¦  text_6  𝄀
+7  ¦  7.1  ¦  0  ¦  1993-11-07  ¦  varchar_7  ¦  text_7  𝄀
+8  ¦  8.1  ¦  1  ¦  1994-01-08  ¦  varchar_8  ¦  text_8  𝄀
+9  ¦  9.1  ¦  0  ¦  1999-09-17  ¦  varchar_9  ¦  text_9  𝄀
+10  ¦  10.1  ¦  1  ¦  2003-09-28  ¦  varchar_10  ¦  text_10  𝄀
+11  ¦  11.1  ¦  0  ¦  1984-01-22  ¦  varchar_11  ¦  text_11  𝄀
+12  ¦  12.1  ¦  1  ¦  1994-02-10  ¦  varchar_12  ¦  text_12  𝄀
+13  ¦  13.1  ¦  0  ¦  1994-12-02  ¦  varchar_13  ¦  text_13  𝄀
+14  ¦  14.1  ¦  1  ¦  2013-01-19  ¦  varchar_14  ¦  text_14  𝄀
+15  ¦  15.1  ¦  0  ¦  2002-09-29  ¦  varchar_15  ¦  text_15  𝄀
+16  ¦  16.1  ¦  1  ¦  2001-12-07  ¦  varchar_16  ¦  text_16  𝄀
+17  ¦  17.1  ¦  0  ¦  1989-03-11  ¦  varchar_17  ¦  text_17  𝄀
+18  ¦  18.1  ¦  1  ¦  2019-11-04  ¦  varchar_18  ¦  text_18  𝄀
+19  ¦  19.1  ¦  0  ¦  2002-08-15  ¦  varchar_19  ¦  text_19  𝄀
+20  ¦  20.1  ¦  1  ¦  1995-12-20  ¦  varchar_20  ¦  text_20  𝄀
+21  ¦  21.1  ¦  0  ¦  2018-08-03  ¦  varchar_21  ¦  text_21  𝄀
+22  ¦  22.1  ¦  1  ¦  1998-03-10  ¦  varchar_22  ¦  text_22  𝄀
+23  ¦  23.1  ¦  0  ¦  2022-04-08  ¦  varchar_23  ¦  text_23  𝄀
+24  ¦  24.1  ¦  1  ¦  1989-04-27  ¦  varchar_24  ¦  text_24  𝄀
+25  ¦  25.1  ¦  0  ¦  2009-03-14  ¦  varchar_25  ¦  text_25  𝄀
+26  ¦  26.1  ¦  1  ¦  2019-03-27  ¦  varchar_26  ¦  text_26  𝄀
+27  ¦  27.1  ¦  0  ¦  1983-10-28  ¦  varchar_27  ¦  text_27  𝄀
+28  ¦  28.1  ¦  1  ¦  1993-07-19  ¦  varchar_28  ¦  text_28  𝄀
+29  ¦  29.1  ¦  0  ¦  1986-09-11  ¦  varchar_29  ¦  text_29  𝄀
+30  ¦  30.1  ¦  1  ¦  1992-08-19  ¦  varchar_30  ¦  text_30  𝄀
+31  ¦  31.1  ¦  0  ¦  1981-08-07  ¦  varchar_31  ¦  text_31  𝄀
+32  ¦  32.1  ¦  1  ¦  1984-03-25  ¦  varchar_32  ¦  text_32  𝄀
+33  ¦  33.1  ¦  0  ¦  2001-09-05  ¦  varchar_33  ¦  text_33  𝄀
+34  ¦  34.1  ¦  1  ¦  2022-03-17  ¦  varchar_34  ¦  text_34  𝄀
+35  ¦  35.1  ¦  0  ¦  2008-06-24  ¦  varchar_35  ¦  text_35  𝄀
+36  ¦  36.1  ¦  1  ¦  1987-11-23  ¦  varchar_36  ¦  text_36  𝄀
+37  ¦  37.1  ¦  0  ¦  2008-11-10  ¦  varchar_37  ¦  text_37  𝄀
+38  ¦  38.1  ¦  1  ¦  1986-01-29  ¦  varchar_38  ¦  text_38  𝄀
+39  ¦  39.1  ¦  0  ¦  1985-02-27  ¦  varchar_39  ¦  text_39  𝄀
+40  ¦  40.1  ¦  1  ¦  2016-11-28  ¦  varchar_40  ¦  text_40  𝄀
+41  ¦  41.1  ¦  0  ¦  1991-02-11  ¦  varchar_41  ¦  text_41  𝄀
+42  ¦  42.1  ¦  1  ¦  2019-01-08  ¦  varchar_42  ¦  text_42  𝄀
+43  ¦  43.1  ¦  0  ¦  2009-05-01  ¦  varchar_43  ¦  text_43  𝄀
+44  ¦  44.1  ¦  1  ¦  1986-11-15  ¦  varchar_44  ¦  text_44  𝄀
+45  ¦  45.1  ¦  0  ¦  2000-07-22  ¦  varchar_45  ¦  text_45  𝄀
+46  ¦  46.1  ¦  1  ¦  2002-09-07  ¦  varchar_46  ¦  text_46  𝄀
+47  ¦  47.1  ¦  0  ¦  1987-09-23  ¦  varchar_47  ¦  text_47  𝄀
+48  ¦  48.1  ¦  1  ¦  1985-10-25  ¦  varchar_48  ¦  text_48  𝄀
+49  ¦  49.1  ¦  0  ¦  1988-10-06  ¦  varchar_49  ¦  text_49
 /* save_result */select col1 from test_table;
-col1
-0
-1
-2
-3
-4
-5
-6
-7
-8
-9
-10
-11
-12
-13
-14
-15
-16
-17
-18
-19
-20
-21
-22
-23
-24
-25
-26
-27
-28
-29
-30
-31
-32
-33
-34
-35
-36
-37
-38
-39
-40
-41
-42
-43
-44
-45
-46
-47
-48
+➤ col1[4,32,0]  𝄀
+0  𝄀
+1  𝄀
+2  𝄀
+3  𝄀
+4  𝄀
+5  𝄀
+6  𝄀
+7  𝄀
+8  𝄀
+9  𝄀
+10  𝄀
+11  𝄀
+12  𝄀
+13  𝄀
+14  𝄀
+15  𝄀
+16  𝄀
+17  𝄀
+18  𝄀
+19  𝄀
+20  𝄀
+21  𝄀
+22  𝄀
+23  𝄀
+24  𝄀
+25  𝄀
+26  𝄀
+27  𝄀
+28  𝄀
+29  𝄀
+30  𝄀
+31  𝄀
+32  𝄀
+33  𝄀
+34  𝄀
+35  𝄀
+36  𝄀
+37  𝄀
+38  𝄀
+39  𝄀
+40  𝄀
+41  𝄀
+42  𝄀
+43  𝄀
+44  𝄀
+45  𝄀
+46  𝄀
+47  𝄀
+48  𝄀
 49
 select * from result_scan(last_query_id()) as u;
-col1
-0
-1
-2
-3
-4
-5
-6
-7
-8
-9
-10
-11
-12
-13
-14
-15
-16
-17
-18
-19
-20
-21
-22
-23
-24
-25
-26
-27
-28
-29
-30
-31
-32
-33
-34
-35
-36
-37
-38
-39
-40
-41
-42
-43
-44
-45
-46
-47
-48
+➤ col1[4,32,0]  𝄀
+0  𝄀
+1  𝄀
+2  𝄀
+3  𝄀
+4  𝄀
+5  𝄀
+6  𝄀
+7  𝄀
+8  𝄀
+9  𝄀
+10  𝄀
+11  𝄀
+12  𝄀
+13  𝄀
+14  𝄀
+15  𝄀
+16  𝄀
+17  𝄀
+18  𝄀
+19  𝄀
+20  𝄀
+21  𝄀
+22  𝄀
+23  𝄀
+24  𝄀
+25  𝄀
+26  𝄀
+27  𝄀
+28  𝄀
+29  𝄀
+30  𝄀
+31  𝄀
+32  𝄀
+33  𝄀
+34  𝄀
+35  𝄀
+36  𝄀
+37  𝄀
+38  𝄀
+39  𝄀
+40  𝄀
+41  𝄀
+42  𝄀
+43  𝄀
+44  𝄀
+45  𝄀
+46  𝄀
+47  𝄀
+48  𝄀
 49
 /* save_result */select * from test_table where col1 > 30;
-col1    col2    col3    col4    col5    col6
-31    31.1    0    1981-08-07    varchar_31    text_31
-32    32.1    1    1984-03-25    varchar_32    text_32
-33    33.1    0    2001-09-05    varchar_33    text_33
-34    34.1    1    2022-03-17    varchar_34    text_34
-35    35.1    0    2008-06-24    varchar_35    text_35
-36    36.1    1    1987-11-23    varchar_36    text_36
-37    37.1    0    2008-11-10    varchar_37    text_37
-38    38.1    1    1986-01-29    varchar_38    text_38
-39    39.1    0    1985-02-27    varchar_39    text_39
-40    40.1    1    2016-11-28    varchar_40    text_40
-41    41.1    0    1991-02-11    varchar_41    text_41
-42    42.1    1    2019-01-08    varchar_42    text_42
-43    43.1    0    2009-05-01    varchar_43    text_43
-44    44.1    1    1986-11-15    varchar_44    text_44
-45    45.1    0    2000-07-22    varchar_45    text_45
-46    46.1    1    2002-09-07    varchar_46    text_46
-47    47.1    0    1987-09-23    varchar_47    text_47
-48    48.1    1    1985-10-25    varchar_48    text_48
-49    49.1    0    1988-10-06    varchar_49    text_49
+➤ col1[4,32,0]  ¦  col2[7,23,31]  ¦  col3[-7,1,0]  ¦  col4[91,64,0]  ¦  col5[12,191,0]  ¦  col6[12,0,0]  𝄀
+31  ¦  31.1  ¦  0  ¦  1981-08-07  ¦  varchar_31  ¦  text_31  𝄀
+32  ¦  32.1  ¦  1  ¦  1984-03-25  ¦  varchar_32  ¦  text_32  𝄀
+33  ¦  33.1  ¦  0  ¦  2001-09-05  ¦  varchar_33  ¦  text_33  𝄀
+34  ¦  34.1  ¦  1  ¦  2022-03-17  ¦  varchar_34  ¦  text_34  𝄀
+35  ¦  35.1  ¦  0  ¦  2008-06-24  ¦  varchar_35  ¦  text_35  𝄀
+36  ¦  36.1  ¦  1  ¦  1987-11-23  ¦  varchar_36  ¦  text_36  𝄀
+37  ¦  37.1  ¦  0  ¦  2008-11-10  ¦  varchar_37  ¦  text_37  𝄀
+38  ¦  38.1  ¦  1  ¦  1986-01-29  ¦  varchar_38  ¦  text_38  𝄀
+39  ¦  39.1  ¦  0  ¦  1985-02-27  ¦  varchar_39  ¦  text_39  𝄀
+40  ¦  40.1  ¦  1  ¦  2016-11-28  ¦  varchar_40  ¦  text_40  𝄀
+41  ¦  41.1  ¦  0  ¦  1991-02-11  ¦  varchar_41  ¦  text_41  𝄀
+42  ¦  42.1  ¦  1  ¦  2019-01-08  ¦  varchar_42  ¦  text_42  𝄀
+43  ¦  43.1  ¦  0  ¦  2009-05-01  ¦  varchar_43  ¦  text_43  𝄀
+44  ¦  44.1  ¦  1  ¦  1986-11-15  ¦  varchar_44  ¦  text_44  𝄀
+45  ¦  45.1  ¦  0  ¦  2000-07-22  ¦  varchar_45  ¦  text_45  𝄀
+46  ¦  46.1  ¦  1  ¦  2002-09-07  ¦  varchar_46  ¦  text_46  𝄀
+47  ¦  47.1  ¦  0  ¦  1987-09-23  ¦  varchar_47  ¦  text_47  𝄀
+48  ¦  48.1  ¦  1  ¦  1985-10-25  ¦  varchar_48  ¦  text_48  𝄀
+49  ¦  49.1  ¦  0  ¦  1988-10-06  ¦  varchar_49  ¦  text_49
 select * from result_scan(last_query_id()) as u;
-col1    col2    col3    col4    col5    col6
-31    31.1    0    1981-08-07    varchar_31    text_31
-32    32.1    1    1984-03-25    varchar_32    text_32
-33    33.1    0    2001-09-05    varchar_33    text_33
-34    34.1    1    2022-03-17    varchar_34    text_34
-35    35.1    0    2008-06-24    varchar_35    text_35
-36    36.1    1    1987-11-23    varchar_36    text_36
-37    37.1    0    2008-11-10    varchar_37    text_37
-38    38.1    1    1986-01-29    varchar_38    text_38
-39    39.1    0    1985-02-27    varchar_39    text_39
-40    40.1    1    2016-11-28    varchar_40    text_40
-41    41.1    0    1991-02-11    varchar_41    text_41
-42    42.1    1    2019-01-08    varchar_42    text_42
-43    43.1    0    2009-05-01    varchar_43    text_43
-44    44.1    1    1986-11-15    varchar_44    text_44
-45    45.1    0    2000-07-22    varchar_45    text_45
-46    46.1    1    2002-09-07    varchar_46    text_46
-47    47.1    0    1987-09-23    varchar_47    text_47
-48    48.1    1    1985-10-25    varchar_48    text_48
-49    49.1    0    1988-10-06    varchar_49    text_49
+➤ col1[4,32,0]  ¦  col2[7,23,31]  ¦  col3[-7,1,0]  ¦  col4[91,64,0]  ¦  col5[12,191,0]  ¦  col6[12,0,0]  𝄀
+31  ¦  31.1  ¦  0  ¦  1981-08-07  ¦  varchar_31  ¦  text_31  𝄀
+32  ¦  32.1  ¦  1  ¦  1984-03-25  ¦  varchar_32  ¦  text_32  𝄀
+33  ¦  33.1  ¦  0  ¦  2001-09-05  ¦  varchar_33  ¦  text_33  𝄀
+34  ¦  34.1  ¦  1  ¦  2022-03-17  ¦  varchar_34  ¦  text_34  𝄀
+35  ¦  35.1  ¦  0  ¦  2008-06-24  ¦  varchar_35  ¦  text_35  𝄀
+36  ¦  36.1  ¦  1  ¦  1987-11-23  ¦  varchar_36  ¦  text_36  𝄀
+37  ¦  37.1  ¦  0  ¦  2008-11-10  ¦  varchar_37  ¦  text_37  𝄀
+38  ¦  38.1  ¦  1  ¦  1986-01-29  ¦  varchar_38  ¦  text_38  𝄀
+39  ¦  39.1  ¦  0  ¦  1985-02-27  ¦  varchar_39  ¦  text_39  𝄀
+40  ¦  40.1  ¦  1  ¦  2016-11-28  ¦  varchar_40  ¦  text_40  𝄀
+41  ¦  41.1  ¦  0  ¦  1991-02-11  ¦  varchar_41  ¦  text_41  𝄀
+42  ¦  42.1  ¦  1  ¦  2019-01-08  ¦  varchar_42  ¦  text_42  𝄀
+43  ¦  43.1  ¦  0  ¦  2009-05-01  ¦  varchar_43  ¦  text_43  𝄀
+44  ¦  44.1  ¦  1  ¦  1986-11-15  ¦  varchar_44  ¦  text_44  𝄀
+45  ¦  45.1  ¦  0  ¦  2000-07-22  ¦  varchar_45  ¦  text_45  𝄀
+46  ¦  46.1  ¦  1  ¦  2002-09-07  ¦  varchar_46  ¦  text_46  𝄀
+47  ¦  47.1  ¦  0  ¦  1987-09-23  ¦  varchar_47  ¦  text_47  𝄀
+48  ¦  48.1  ¦  1  ¦  1985-10-25  ¦  varchar_48  ¦  text_48  𝄀
+49  ¦  49.1  ¦  0  ¦  1988-10-06  ¦  varchar_49  ¦  text_49
 /* save_result */select * from test_table where col1 < 10;
-col1    col2    col3    col4    col5    col6
-0    0.1    1    1982-03-24    varchar_0    text_0
-1    1.1    0    1982-07-31    varchar_1    text_1
-2    2.1    1    2002-04-13    varchar_2    text_2
-3    3.1    0    2019-09-29    varchar_3    text_3
-4    4.1    1    1996-08-20    varchar_4    text_4
-5    5.1    0    2008-10-13    varchar_5    text_5
-6    6.1    1    2002-03-05    varchar_6    text_6
-7    7.1    0    1993-11-07    varchar_7    text_7
-8    8.1    1    1994-01-08    varchar_8    text_8
-9    9.1    0    1999-09-17    varchar_9    text_9
+➤ col1[4,32,0]  ¦  col2[7,23,31]  ¦  col3[-7,1,0]  ¦  col4[91,64,0]  ¦  col5[12,191,0]  ¦  col6[12,0,0]  𝄀
+0  ¦  0.1  ¦  1  ¦  1982-03-24  ¦  varchar_0  ¦  text_0  𝄀
+1  ¦  1.1  ¦  0  ¦  1982-07-31  ¦  varchar_1  ¦  text_1  𝄀
+2  ¦  2.1  ¦  1  ¦  2002-04-13  ¦  varchar_2  ¦  text_2  𝄀
+3  ¦  3.1  ¦  0  ¦  2019-09-29  ¦  varchar_3  ¦  text_3  𝄀
+4  ¦  4.1  ¦  1  ¦  1996-08-20  ¦  varchar_4  ¦  text_4  𝄀
+5  ¦  5.1  ¦  0  ¦  2008-10-13  ¦  varchar_5  ¦  text_5  𝄀
+6  ¦  6.1  ¦  1  ¦  2002-03-05  ¦  varchar_6  ¦  text_6  𝄀
+7  ¦  7.1  ¦  0  ¦  1993-11-07  ¦  varchar_7  ¦  text_7  𝄀
+8  ¦  8.1  ¦  1  ¦  1994-01-08  ¦  varchar_8  ¦  text_8  𝄀
+9  ¦  9.1  ¦  0  ¦  1999-09-17  ¦  varchar_9  ¦  text_9
 select * from result_scan(last_query_id()) as u;
-col1    col2    col3    col4    col5    col6
-0    0.1    1    1982-03-24    varchar_0    text_0
-1    1.1    0    1982-07-31    varchar_1    text_1
-2    2.1    1    2002-04-13    varchar_2    text_2
-3    3.1    0    2019-09-29    varchar_3    text_3
-4    4.1    1    1996-08-20    varchar_4    text_4
-5    5.1    0    2008-10-13    varchar_5    text_5
-6    6.1    1    2002-03-05    varchar_6    text_6
-7    7.1    0    1993-11-07    varchar_7    text_7
-8    8.1    1    1994-01-08    varchar_8    text_8
-9    9.1    0    1999-09-17    varchar_9    text_9
+➤ col1[4,32,0]  ¦  col2[7,23,31]  ¦  col3[-7,1,0]  ¦  col4[91,64,0]  ¦  col5[12,191,0]  ¦  col6[12,0,0]  𝄀
+0  ¦  0.1  ¦  1  ¦  1982-03-24  ¦  varchar_0  ¦  text_0  𝄀
+1  ¦  1.1  ¦  0  ¦  1982-07-31  ¦  varchar_1  ¦  text_1  𝄀
+2  ¦  2.1  ¦  1  ¦  2002-04-13  ¦  varchar_2  ¦  text_2  𝄀
+3  ¦  3.1  ¦  0  ¦  2019-09-29  ¦  varchar_3  ¦  text_3  𝄀
+4  ¦  4.1  ¦  1  ¦  1996-08-20  ¦  varchar_4  ¦  text_4  𝄀
+5  ¦  5.1  ¦  0  ¦  2008-10-13  ¦  varchar_5  ¦  text_5  𝄀
+6  ¦  6.1  ¦  1  ¦  2002-03-05  ¦  varchar_6  ¦  text_6  𝄀
+7  ¦  7.1  ¦  0  ¦  1993-11-07  ¦  varchar_7  ¦  text_7  𝄀
+8  ¦  8.1  ¦  1  ¦  1994-01-08  ¦  varchar_8  ¦  text_8  𝄀
+9  ¦  9.1  ¦  0  ¦  1999-09-17  ¦  varchar_9  ¦  text_9
 /* save_result */select * from test_table where col1 = 10;
-col1    col2    col3    col4    col5    col6
-10    10.1    1    2003-09-28    varchar_10    text_10
+➤ col1[4,32,0]  ¦  col2[7,23,31]  ¦  col3[-7,1,0]  ¦  col4[91,64,0]  ¦  col5[12,191,0]  ¦  col6[12,0,0]  𝄀
+10  ¦  10.1  ¦  1  ¦  2003-09-28  ¦  varchar_10  ¦  text_10
 select * from result_scan(last_query_id()) as u;
-col1    col2    col3    col4    col5    col6
-10    10.1    1    2003-09-28    varchar_10    text_10
+➤ col1[4,32,0]  ¦  col2[7,23,31]  ¦  col3[-7,1,0]  ¦  col4[91,64,0]  ¦  col5[12,191,0]  ¦  col6[12,0,0]  𝄀
+10  ¦  10.1  ¦  1  ¦  2003-09-28  ¦  varchar_10  ¦  text_10
 /* save_result */select * from test_table limit 1;
-col1    col2    col3    col4    col5    col6
-0    0.1    1    1982-03-24    varchar_0    text_0
+➤ col1[4,32,0]  ¦  col2[7,23,31]  ¦  col3[-7,1,0]  ¦  col4[91,64,0]  ¦  col5[12,191,0]  ¦  col6[12,0,0]  𝄀
+0  ¦  0.1  ¦  1  ¦  1982-03-24  ¦  varchar_0  ¦  text_0
 select * from result_scan(last_query_id()) as u;
-col1    col2    col3    col4    col5    col6
-0    0.1    1    1982-03-24    varchar_0    text_0
+➤ col1[4,32,0]  ¦  col2[7,23,31]  ¦  col3[-7,1,0]  ¦  col4[91,64,0]  ¦  col5[12,191,0]  ¦  col6[12,0,0]  𝄀
+0  ¦  0.1  ¦  1  ¦  1982-03-24  ¦  varchar_0  ¦  text_0
 /* save_result */select * from test_table order by col1 asc;
-col1    col2    col3    col4    col5    col6
-0    0.1    1    1982-03-24    varchar_0    text_0
-1    1.1    0    1982-07-31    varchar_1    text_1
-2    2.1    1    2002-04-13    varchar_2    text_2
-3    3.1    0    2019-09-29    varchar_3    text_3
-4    4.1    1    1996-08-20    varchar_4    text_4
-5    5.1    0    2008-10-13    varchar_5    text_5
-6    6.1    1    2002-03-05    varchar_6    text_6
-7    7.1    0    1993-11-07    varchar_7    text_7
-8    8.1    1    1994-01-08    varchar_8    text_8
-9    9.1    0    1999-09-17    varchar_9    text_9
-10    10.1    1    2003-09-28    varchar_10    text_10
-11    11.1    0    1984-01-22    varchar_11    text_11
-12    12.1    1    1994-02-10    varchar_12    text_12
-13    13.1    0    1994-12-02    varchar_13    text_13
-14    14.1    1    2013-01-19    varchar_14    text_14
-15    15.1    0    2002-09-29    varchar_15    text_15
-16    16.1    1    2001-12-07    varchar_16    text_16
-17    17.1    0    1989-03-11    varchar_17    text_17
-18    18.1    1    2019-11-04    varchar_18    text_18
-19    19.1    0    2002-08-15    varchar_19    text_19
-20    20.1    1    1995-12-20    varchar_20    text_20
-21    21.1    0    2018-08-03    varchar_21    text_21
-22    22.1    1    1998-03-10    varchar_22    text_22
-23    23.1    0    2022-04-08    varchar_23    text_23
-24    24.1    1    1989-04-27    varchar_24    text_24
-25    25.1    0    2009-03-14    varchar_25    text_25
-26    26.1    1    2019-03-27    varchar_26    text_26
-27    27.1    0    1983-10-28    varchar_27    text_27
-28    28.1    1    1993-07-19    varchar_28    text_28
-29    29.1    0    1986-09-11    varchar_29    text_29
-30    30.1    1    1992-08-19    varchar_30    text_30
-31    31.1    0    1981-08-07    varchar_31    text_31
-32    32.1    1    1984-03-25    varchar_32    text_32
-33    33.1    0    2001-09-05    varchar_33    text_33
-34    34.1    1    2022-03-17    varchar_34    text_34
-35    35.1    0    2008-06-24    varchar_35    text_35
-36    36.1    1    1987-11-23    varchar_36    text_36
-37    37.1    0    2008-11-10    varchar_37    text_37
-38    38.1    1    1986-01-29    varchar_38    text_38
-39    39.1    0    1985-02-27    varchar_39    text_39
-40    40.1    1    2016-11-28    varchar_40    text_40
-41    41.1    0    1991-02-11    varchar_41    text_41
-42    42.1    1    2019-01-08    varchar_42    text_42
-43    43.1    0    2009-05-01    varchar_43    text_43
-44    44.1    1    1986-11-15    varchar_44    text_44
-45    45.1    0    2000-07-22    varchar_45    text_45
-46    46.1    1    2002-09-07    varchar_46    text_46
-47    47.1    0    1987-09-23    varchar_47    text_47
-48    48.1    1    1985-10-25    varchar_48    text_48
-49    49.1    0    1988-10-06    varchar_49    text_49
+➤ col1[4,32,0]  ¦  col2[7,23,31]  ¦  col3[-7,1,0]  ¦  col4[91,64,0]  ¦  col5[12,191,0]  ¦  col6[12,0,0]  𝄀
+0  ¦  0.1  ¦  1  ¦  1982-03-24  ¦  varchar_0  ¦  text_0  𝄀
+1  ¦  1.1  ¦  0  ¦  1982-07-31  ¦  varchar_1  ¦  text_1  𝄀
+2  ¦  2.1  ¦  1  ¦  2002-04-13  ¦  varchar_2  ¦  text_2  𝄀
+3  ¦  3.1  ¦  0  ¦  2019-09-29  ¦  varchar_3  ¦  text_3  𝄀
+4  ¦  4.1  ¦  1  ¦  1996-08-20  ¦  varchar_4  ¦  text_4  𝄀
+5  ¦  5.1  ¦  0  ¦  2008-10-13  ¦  varchar_5  ¦  text_5  𝄀
+6  ¦  6.1  ¦  1  ¦  2002-03-05  ¦  varchar_6  ¦  text_6  𝄀
+7  ¦  7.1  ¦  0  ¦  1993-11-07  ¦  varchar_7  ¦  text_7  𝄀
+8  ¦  8.1  ¦  1  ¦  1994-01-08  ¦  varchar_8  ¦  text_8  𝄀
+9  ¦  9.1  ¦  0  ¦  1999-09-17  ¦  varchar_9  ¦  text_9  𝄀
+10  ¦  10.1  ¦  1  ¦  2003-09-28  ¦  varchar_10  ¦  text_10  𝄀
+11  ¦  11.1  ¦  0  ¦  1984-01-22  ¦  varchar_11  ¦  text_11  𝄀
+12  ¦  12.1  ¦  1  ¦  1994-02-10  ¦  varchar_12  ¦  text_12  𝄀
+13  ¦  13.1  ¦  0  ¦  1994-12-02  ¦  varchar_13  ¦  text_13  𝄀
+14  ¦  14.1  ¦  1  ¦  2013-01-19  ¦  varchar_14  ¦  text_14  𝄀
+15  ¦  15.1  ¦  0  ¦  2002-09-29  ¦  varchar_15  ¦  text_15  𝄀
+16  ¦  16.1  ¦  1  ¦  2001-12-07  ¦  varchar_16  ¦  text_16  𝄀
+17  ¦  17.1  ¦  0  ¦  1989-03-11  ¦  varchar_17  ¦  text_17  𝄀
+18  ¦  18.1  ¦  1  ¦  2019-11-04  ¦  varchar_18  ¦  text_18  𝄀
+19  ¦  19.1  ¦  0  ¦  2002-08-15  ¦  varchar_19  ¦  text_19  𝄀
+20  ¦  20.1  ¦  1  ¦  1995-12-20  ¦  varchar_20  ¦  text_20  𝄀
+21  ¦  21.1  ¦  0  ¦  2018-08-03  ¦  varchar_21  ¦  text_21  𝄀
+22  ¦  22.1  ¦  1  ¦  1998-03-10  ¦  varchar_22  ¦  text_22  𝄀
+23  ¦  23.1  ¦  0  ¦  2022-04-08  ¦  varchar_23  ¦  text_23  𝄀
+24  ¦  24.1  ¦  1  ¦  1989-04-27  ¦  varchar_24  ¦  text_24  𝄀
+25  ¦  25.1  ¦  0  ¦  2009-03-14  ¦  varchar_25  ¦  text_25  𝄀
+26  ¦  26.1  ¦  1  ¦  2019-03-27  ¦  varchar_26  ¦  text_26  𝄀
+27  ¦  27.1  ¦  0  ¦  1983-10-28  ¦  varchar_27  ¦  text_27  𝄀
+28  ¦  28.1  ¦  1  ¦  1993-07-19  ¦  varchar_28  ¦  text_28  𝄀
+29  ¦  29.1  ¦  0  ¦  1986-09-11  ¦  varchar_29  ¦  text_29  𝄀
+30  ¦  30.1  ¦  1  ¦  1992-08-19  ¦  varchar_30  ¦  text_30  𝄀
+31  ¦  31.1  ¦  0  ¦  1981-08-07  ¦  varchar_31  ¦  text_31  𝄀
+32  ¦  32.1  ¦  1  ¦  1984-03-25  ¦  varchar_32  ¦  text_32  𝄀
+33  ¦  33.1  ¦  0  ¦  2001-09-05  ¦  varchar_33  ¦  text_33  𝄀
+34  ¦  34.1  ¦  1  ¦  2022-03-17  ¦  varchar_34  ¦  text_34  𝄀
+35  ¦  35.1  ¦  0  ¦  2008-06-24  ¦  varchar_35  ¦  text_35  𝄀
+36  ¦  36.1  ¦  1  ¦  1987-11-23  ¦  varchar_36  ¦  text_36  𝄀
+37  ¦  37.1  ¦  0  ¦  2008-11-10  ¦  varchar_37  ¦  text_37  𝄀
+38  ¦  38.1  ¦  1  ¦  1986-01-29  ¦  varchar_38  ¦  text_38  𝄀
+39  ¦  39.1  ¦  0  ¦  1985-02-27  ¦  varchar_39  ¦  text_39  𝄀
+40  ¦  40.1  ¦  1  ¦  2016-11-28  ¦  varchar_40  ¦  text_40  𝄀
+41  ¦  41.1  ¦  0  ¦  1991-02-11  ¦  varchar_41  ¦  text_41  𝄀
+42  ¦  42.1  ¦  1  ¦  2019-01-08  ¦  varchar_42  ¦  text_42  𝄀
+43  ¦  43.1  ¦  0  ¦  2009-05-01  ¦  varchar_43  ¦  text_43  𝄀
+44  ¦  44.1  ¦  1  ¦  1986-11-15  ¦  varchar_44  ¦  text_44  𝄀
+45  ¦  45.1  ¦  0  ¦  2000-07-22  ¦  varchar_45  ¦  text_45  𝄀
+46  ¦  46.1  ¦  1  ¦  2002-09-07  ¦  varchar_46  ¦  text_46  𝄀
+47  ¦  47.1  ¦  0  ¦  1987-09-23  ¦  varchar_47  ¦  text_47  𝄀
+48  ¦  48.1  ¦  1  ¦  1985-10-25  ¦  varchar_48  ¦  text_48  𝄀
+49  ¦  49.1  ¦  0  ¦  1988-10-06  ¦  varchar_49  ¦  text_49
 select * from result_scan(last_query_id()) as u;
-col1    col2    col3    col4    col5    col6
-0    0.1    1    1982-03-24    varchar_0    text_0
-1    1.1    0    1982-07-31    varchar_1    text_1
-2    2.1    1    2002-04-13    varchar_2    text_2
-3    3.1    0    2019-09-29    varchar_3    text_3
-4    4.1    1    1996-08-20    varchar_4    text_4
-5    5.1    0    2008-10-13    varchar_5    text_5
-6    6.1    1    2002-03-05    varchar_6    text_6
-7    7.1    0    1993-11-07    varchar_7    text_7
-8    8.1    1    1994-01-08    varchar_8    text_8
-9    9.1    0    1999-09-17    varchar_9    text_9
-10    10.1    1    2003-09-28    varchar_10    text_10
-11    11.1    0    1984-01-22    varchar_11    text_11
-12    12.1    1    1994-02-10    varchar_12    text_12
-13    13.1    0    1994-12-02    varchar_13    text_13
-14    14.1    1    2013-01-19    varchar_14    text_14
-15    15.1    0    2002-09-29    varchar_15    text_15
-16    16.1    1    2001-12-07    varchar_16    text_16
-17    17.1    0    1989-03-11    varchar_17    text_17
-18    18.1    1    2019-11-04    varchar_18    text_18
-19    19.1    0    2002-08-15    varchar_19    text_19
-20    20.1    1    1995-12-20    varchar_20    text_20
-21    21.1    0    2018-08-03    varchar_21    text_21
-22    22.1    1    1998-03-10    varchar_22    text_22
-23    23.1    0    2022-04-08    varchar_23    text_23
-24    24.1    1    1989-04-27    varchar_24    text_24
-25    25.1    0    2009-03-14    varchar_25    text_25
-26    26.1    1    2019-03-27    varchar_26    text_26
-27    27.1    0    1983-10-28    varchar_27    text_27
-28    28.1    1    1993-07-19    varchar_28    text_28
-29    29.1    0    1986-09-11    varchar_29    text_29
-30    30.1    1    1992-08-19    varchar_30    text_30
-31    31.1    0    1981-08-07    varchar_31    text_31
-32    32.1    1    1984-03-25    varchar_32    text_32
-33    33.1    0    2001-09-05    varchar_33    text_33
-34    34.1    1    2022-03-17    varchar_34    text_34
-35    35.1    0    2008-06-24    varchar_35    text_35
-36    36.1    1    1987-11-23    varchar_36    text_36
-37    37.1    0    2008-11-10    varchar_37    text_37
-38    38.1    1    1986-01-29    varchar_38    text_38
-39    39.1    0    1985-02-27    varchar_39    text_39
-40    40.1    1    2016-11-28    varchar_40    text_40
-41    41.1    0    1991-02-11    varchar_41    text_41
-42    42.1    1    2019-01-08    varchar_42    text_42
-43    43.1    0    2009-05-01    varchar_43    text_43
-44    44.1    1    1986-11-15    varchar_44    text_44
-45    45.1    0    2000-07-22    varchar_45    text_45
-46    46.1    1    2002-09-07    varchar_46    text_46
-47    47.1    0    1987-09-23    varchar_47    text_47
-48    48.1    1    1985-10-25    varchar_48    text_48
-49    49.1    0    1988-10-06    varchar_49    text_49
+➤ col1[4,32,0]  ¦  col2[7,23,31]  ¦  col3[-7,1,0]  ¦  col4[91,64,0]  ¦  col5[12,191,0]  ¦  col6[12,0,0]  𝄀
+0  ¦  0.1  ¦  1  ¦  1982-03-24  ¦  varchar_0  ¦  text_0  𝄀
+1  ¦  1.1  ¦  0  ¦  1982-07-31  ¦  varchar_1  ¦  text_1  𝄀
+2  ¦  2.1  ¦  1  ¦  2002-04-13  ¦  varchar_2  ¦  text_2  𝄀
+3  ¦  3.1  ¦  0  ¦  2019-09-29  ¦  varchar_3  ¦  text_3  𝄀
+4  ¦  4.1  ¦  1  ¦  1996-08-20  ¦  varchar_4  ¦  text_4  𝄀
+5  ¦  5.1  ¦  0  ¦  2008-10-13  ¦  varchar_5  ¦  text_5  𝄀
+6  ¦  6.1  ¦  1  ¦  2002-03-05  ¦  varchar_6  ¦  text_6  𝄀
+7  ¦  7.1  ¦  0  ¦  1993-11-07  ¦  varchar_7  ¦  text_7  𝄀
+8  ¦  8.1  ¦  1  ¦  1994-01-08  ¦  varchar_8  ¦  text_8  𝄀
+9  ¦  9.1  ¦  0  ¦  1999-09-17  ¦  varchar_9  ¦  text_9  𝄀
+10  ¦  10.1  ¦  1  ¦  2003-09-28  ¦  varchar_10  ¦  text_10  𝄀
+11  ¦  11.1  ¦  0  ¦  1984-01-22  ¦  varchar_11  ¦  text_11  𝄀
+12  ¦  12.1  ¦  1  ¦  1994-02-10  ¦  varchar_12  ¦  text_12  𝄀
+13  ¦  13.1  ¦  0  ¦  1994-12-02  ¦  varchar_13  ¦  text_13  𝄀
+14  ¦  14.1  ¦  1  ¦  2013-01-19  ¦  varchar_14  ¦  text_14  𝄀
+15  ¦  15.1  ¦  0  ¦  2002-09-29  ¦  varchar_15  ¦  text_15  𝄀
+16  ¦  16.1  ¦  1  ¦  2001-12-07  ¦  varchar_16  ¦  text_16  𝄀
+17  ¦  17.1  ¦  0  ¦  1989-03-11  ¦  varchar_17  ¦  text_17  𝄀
+18  ¦  18.1  ¦  1  ¦  2019-11-04  ¦  varchar_18  ¦  text_18  𝄀
+19  ¦  19.1  ¦  0  ¦  2002-08-15  ¦  varchar_19  ¦  text_19  𝄀
+20  ¦  20.1  ¦  1  ¦  1995-12-20  ¦  varchar_20  ¦  text_20  𝄀
+21  ¦  21.1  ¦  0  ¦  2018-08-03  ¦  varchar_21  ¦  text_21  𝄀
+22  ¦  22.1  ¦  1  ¦  1998-03-10  ¦  varchar_22  ¦  text_22  𝄀
+23  ¦  23.1  ¦  0  ¦  2022-04-08  ¦  varchar_23  ¦  text_23  𝄀
+24  ¦  24.1  ¦  1  ¦  1989-04-27  ¦  varchar_24  ¦  text_24  𝄀
+25  ¦  25.1  ¦  0  ¦  2009-03-14  ¦  varchar_25  ¦  text_25  𝄀
+26  ¦  26.1  ¦  1  ¦  2019-03-27  ¦  varchar_26  ¦  text_26  𝄀
+27  ¦  27.1  ¦  0  ¦  1983-10-28  ¦  varchar_27  ¦  text_27  𝄀
+28  ¦  28.1  ¦  1  ¦  1993-07-19  ¦  varchar_28  ¦  text_28  𝄀
+29  ¦  29.1  ¦  0  ¦  1986-09-11  ¦  varchar_29  ¦  text_29  𝄀
+30  ¦  30.1  ¦  1  ¦  1992-08-19  ¦  varchar_30  ¦  text_30  𝄀
+31  ¦  31.1  ¦  0  ¦  1981-08-07  ¦  varchar_31  ¦  text_31  𝄀
+32  ¦  32.1  ¦  1  ¦  1984-03-25  ¦  varchar_32  ¦  text_32  𝄀
+33  ¦  33.1  ¦  0  ¦  2001-09-05  ¦  varchar_33  ¦  text_33  𝄀
+34  ¦  34.1  ¦  1  ¦  2022-03-17  ¦  varchar_34  ¦  text_34  𝄀
+35  ¦  35.1  ¦  0  ¦  2008-06-24  ¦  varchar_35  ¦  text_35  𝄀
+36  ¦  36.1  ¦  1  ¦  1987-11-23  ¦  varchar_36  ¦  text_36  𝄀
+37  ¦  37.1  ¦  0  ¦  2008-11-10  ¦  varchar_37  ¦  text_37  𝄀
+38  ¦  38.1  ¦  1  ¦  1986-01-29  ¦  varchar_38  ¦  text_38  𝄀
+39  ¦  39.1  ¦  0  ¦  1985-02-27  ¦  varchar_39  ¦  text_39  𝄀
+40  ¦  40.1  ¦  1  ¦  2016-11-28  ¦  varchar_40  ¦  text_40  𝄀
+41  ¦  41.1  ¦  0  ¦  1991-02-11  ¦  varchar_41  ¦  text_41  𝄀
+42  ¦  42.1  ¦  1  ¦  2019-01-08  ¦  varchar_42  ¦  text_42  𝄀
+43  ¦  43.1  ¦  0  ¦  2009-05-01  ¦  varchar_43  ¦  text_43  𝄀
+44  ¦  44.1  ¦  1  ¦  1986-11-15  ¦  varchar_44  ¦  text_44  𝄀
+45  ¦  45.1  ¦  0  ¦  2000-07-22  ¦  varchar_45  ¦  text_45  𝄀
+46  ¦  46.1  ¦  1  ¦  2002-09-07  ¦  varchar_46  ¦  text_46  𝄀
+47  ¦  47.1  ¦  0  ¦  1987-09-23  ¦  varchar_47  ¦  text_47  𝄀
+48  ¦  48.1  ¦  1  ¦  1985-10-25  ¦  varchar_48  ¦  text_48  𝄀
+49  ¦  49.1  ¦  0  ¦  1988-10-06  ¦  varchar_49  ¦  text_49
 /* save_result */select t1.col1,t2.col1 from test_table t1  left join test_table t2 on t1.col1=t2.col1;
-col1    col1
-0    0
-1    1
-2    2
-3    3
-4    4
-5    5
-6    6
-7    7
-8    8
-9    9
-10    10
-11    11
-12    12
-13    13
-14    14
-15    15
-16    16
-17    17
-18    18
-19    19
-20    20
-21    21
-22    22
-23    23
-24    24
-25    25
-26    26
-27    27
-28    28
-29    29
-30    30
-31    31
-32    32
-33    33
-34    34
-35    35
-36    36
-37    37
-38    38
-39    39
-40    40
-41    41
-42    42
-43    43
-44    44
-45    45
-46    46
-47    47
-48    48
-49    49
+➤ col1[4,32,0]  ¦  col1[4,32,0]  𝄀
+0  ¦  0  𝄀
+1  ¦  1  𝄀
+2  ¦  2  𝄀
+3  ¦  3  𝄀
+4  ¦  4  𝄀
+5  ¦  5  𝄀
+6  ¦  6  𝄀
+7  ¦  7  𝄀
+8  ¦  8  𝄀
+9  ¦  9  𝄀
+10  ¦  10  𝄀
+11  ¦  11  𝄀
+12  ¦  12  𝄀
+13  ¦  13  𝄀
+14  ¦  14  𝄀
+15  ¦  15  𝄀
+16  ¦  16  𝄀
+17  ¦  17  𝄀
+18  ¦  18  𝄀
+19  ¦  19  𝄀
+20  ¦  20  𝄀
+21  ¦  21  𝄀
+22  ¦  22  𝄀
+23  ¦  23  𝄀
+24  ¦  24  𝄀
+25  ¦  25  𝄀
+26  ¦  26  𝄀
+27  ¦  27  𝄀
+28  ¦  28  𝄀
+29  ¦  29  𝄀
+30  ¦  30  𝄀
+31  ¦  31  𝄀
+32  ¦  32  𝄀
+33  ¦  33  𝄀
+34  ¦  34  𝄀
+35  ¦  35  𝄀
+36  ¦  36  𝄀
+37  ¦  37  𝄀
+38  ¦  38  𝄀
+39  ¦  39  𝄀
+40  ¦  40  𝄀
+41  ¦  41  𝄀
+42  ¦  42  𝄀
+43  ¦  43  𝄀
+44  ¦  44  𝄀
+45  ¦  45  𝄀
+46  ¦  46  𝄀
+47  ¦  47  𝄀
+48  ¦  48  𝄀
+49  ¦  49
 select * from result_scan(last_query_id()) as u;
-col1_0    col1_1
-0    0
-1    1
-2    2
-3    3
-4    4
-5    5
-6    6
-7    7
-8    8
-9    9
-10    10
-11    11
-12    12
-13    13
-14    14
-15    15
-16    16
-17    17
-18    18
-19    19
-20    20
-21    21
-22    22
-23    23
-24    24
-25    25
-26    26
-27    27
-28    28
-29    29
-30    30
-31    31
-32    32
-33    33
-34    34
-35    35
-36    36
-37    37
-38    38
-39    39
-40    40
-41    41
-42    42
-43    43
-44    44
-45    45
-46    46
-47    47
-48    48
-49    49
+➤ col1_0[4,32,0]  ¦  col1_1[4,32,0]  𝄀
+0  ¦  0  𝄀
+1  ¦  1  𝄀
+2  ¦  2  𝄀
+3  ¦  3  𝄀
+4  ¦  4  𝄀
+5  ¦  5  𝄀
+6  ¦  6  𝄀
+7  ¦  7  𝄀
+8  ¦  8  𝄀
+9  ¦  9  𝄀
+10  ¦  10  𝄀
+11  ¦  11  𝄀
+12  ¦  12  𝄀
+13  ¦  13  𝄀
+14  ¦  14  𝄀
+15  ¦  15  𝄀
+16  ¦  16  𝄀
+17  ¦  17  𝄀
+18  ¦  18  𝄀
+19  ¦  19  𝄀
+20  ¦  20  𝄀
+21  ¦  21  𝄀
+22  ¦  22  𝄀
+23  ¦  23  𝄀
+24  ¦  24  𝄀
+25  ¦  25  𝄀
+26  ¦  26  𝄀
+27  ¦  27  𝄀
+28  ¦  28  𝄀
+29  ¦  29  𝄀
+30  ¦  30  𝄀
+31  ¦  31  𝄀
+32  ¦  32  𝄀
+33  ¦  33  𝄀
+34  ¦  34  𝄀
+35  ¦  35  𝄀
+36  ¦  36  𝄀
+37  ¦  37  𝄀
+38  ¦  38  𝄀
+39  ¦  39  𝄀
+40  ¦  40  𝄀
+41  ¦  41  𝄀
+42  ¦  42  𝄀
+43  ¦  43  𝄀
+44  ¦  44  𝄀
+45  ¦  45  𝄀
+46  ¦  46  𝄀
+47  ¦  47  𝄀
+48  ¦  48  𝄀
+49  ¦  49
 /* save_result */select t1.col1,t2.col1 from test_table t1  right join test_table t2 on t1.col1=t2.col1;
-col1    col1
-0    0
-1    1
-2    2
-3    3
-4    4
-5    5
-6    6
-7    7
-8    8
-9    9
-10    10
-11    11
-12    12
-13    13
-14    14
-15    15
-16    16
-17    17
-18    18
-19    19
-20    20
-21    21
-22    22
-23    23
-24    24
-25    25
-26    26
-27    27
-28    28
-29    29
-30    30
-31    31
-32    32
-33    33
-34    34
-35    35
-36    36
-37    37
-38    38
-39    39
-40    40
-41    41
-42    42
-43    43
-44    44
-45    45
-46    46
-47    47
-48    48
-49    49
+➤ col1[4,32,0]  ¦  col1[4,32,0]  𝄀
+0  ¦  0  𝄀
+1  ¦  1  𝄀
+2  ¦  2  𝄀
+3  ¦  3  𝄀
+4  ¦  4  𝄀
+5  ¦  5  𝄀
+6  ¦  6  𝄀
+7  ¦  7  𝄀
+8  ¦  8  𝄀
+9  ¦  9  𝄀
+10  ¦  10  𝄀
+11  ¦  11  𝄀
+12  ¦  12  𝄀
+13  ¦  13  𝄀
+14  ¦  14  𝄀
+15  ¦  15  𝄀
+16  ¦  16  𝄀
+17  ¦  17  𝄀
+18  ¦  18  𝄀
+19  ¦  19  𝄀
+20  ¦  20  𝄀
+21  ¦  21  𝄀
+22  ¦  22  𝄀
+23  ¦  23  𝄀
+24  ¦  24  𝄀
+25  ¦  25  𝄀
+26  ¦  26  𝄀
+27  ¦  27  𝄀
+28  ¦  28  𝄀
+29  ¦  29  𝄀
+30  ¦  30  𝄀
+31  ¦  31  𝄀
+32  ¦  32  𝄀
+33  ¦  33  𝄀
+34  ¦  34  𝄀
+35  ¦  35  𝄀
+36  ¦  36  𝄀
+37  ¦  37  𝄀
+38  ¦  38  𝄀
+39  ¦  39  𝄀
+40  ¦  40  𝄀
+41  ¦  41  𝄀
+42  ¦  42  𝄀
+43  ¦  43  𝄀
+44  ¦  44  𝄀
+45  ¦  45  𝄀
+46  ¦  46  𝄀
+47  ¦  47  𝄀
+48  ¦  48  𝄀
+49  ¦  49
 select * from result_scan(last_query_id()) as u;
-col1_0    col1_1
-0    0
-1    1
-2    2
-3    3
-4    4
-5    5
-6    6
-7    7
-8    8
-9    9
-10    10
-11    11
-12    12
-13    13
-14    14
-15    15
-16    16
-17    17
-18    18
-19    19
-20    20
-21    21
-22    22
-23    23
-24    24
-25    25
-26    26
-27    27
-28    28
-29    29
-30    30
-31    31
-32    32
-33    33
-34    34
-35    35
-36    36
-37    37
-38    38
-39    39
-40    40
-41    41
-42    42
-43    43
-44    44
-45    45
-46    46
-47    47
-48    48
-49    49
+➤ col1_0[4,32,0]  ¦  col1_1[4,32,0]  𝄀
+0  ¦  0  𝄀
+1  ¦  1  𝄀
+2  ¦  2  𝄀
+3  ¦  3  𝄀
+4  ¦  4  𝄀
+5  ¦  5  𝄀
+6  ¦  6  𝄀
+7  ¦  7  𝄀
+8  ¦  8  𝄀
+9  ¦  9  𝄀
+10  ¦  10  𝄀
+11  ¦  11  𝄀
+12  ¦  12  𝄀
+13  ¦  13  𝄀
+14  ¦  14  𝄀
+15  ¦  15  𝄀
+16  ¦  16  𝄀
+17  ¦  17  𝄀
+18  ¦  18  𝄀
+19  ¦  19  𝄀
+20  ¦  20  𝄀
+21  ¦  21  𝄀
+22  ¦  22  𝄀
+23  ¦  23  𝄀
+24  ¦  24  𝄀
+25  ¦  25  𝄀
+26  ¦  26  𝄀
+27  ¦  27  𝄀
+28  ¦  28  𝄀
+29  ¦  29  𝄀
+30  ¦  30  𝄀
+31  ¦  31  𝄀
+32  ¦  32  𝄀
+33  ¦  33  𝄀
+34  ¦  34  𝄀
+35  ¦  35  𝄀
+36  ¦  36  𝄀
+37  ¦  37  𝄀
+38  ¦  38  𝄀
+39  ¦  39  𝄀
+40  ¦  40  𝄀
+41  ¦  41  𝄀
+42  ¦  42  𝄀
+43  ¦  43  𝄀
+44  ¦  44  𝄀
+45  ¦  45  𝄀
+46  ¦  46  𝄀
+47  ¦  47  𝄀
+48  ¦  48  𝄀
+49  ¦  49
 /* save_result */select * from test_table union select * from test_table;
-col1    col2    col3    col4    col5    col6
-0    0.1    1    1982-03-24    varchar_0    text_0
-1    1.1    0    1982-07-31    varchar_1    text_1
-2    2.1    1    2002-04-13    varchar_2    text_2
-3    3.1    0    2019-09-29    varchar_3    text_3
-4    4.1    1    1996-08-20    varchar_4    text_4
-5    5.1    0    2008-10-13    varchar_5    text_5
-6    6.1    1    2002-03-05    varchar_6    text_6
-7    7.1    0    1993-11-07    varchar_7    text_7
-8    8.1    1    1994-01-08    varchar_8    text_8
-9    9.1    0    1999-09-17    varchar_9    text_9
-10    10.1    1    2003-09-28    varchar_10    text_10
-11    11.1    0    1984-01-22    varchar_11    text_11
-12    12.1    1    1994-02-10    varchar_12    text_12
-13    13.1    0    1994-12-02    varchar_13    text_13
-14    14.1    1    2013-01-19    varchar_14    text_14
-15    15.1    0    2002-09-29    varchar_15    text_15
-16    16.1    1    2001-12-07    varchar_16    text_16
-17    17.1    0    1989-03-11    varchar_17    text_17
-18    18.1    1    2019-11-04    varchar_18    text_18
-19    19.1    0    2002-08-15    varchar_19    text_19
-20    20.1    1    1995-12-20    varchar_20    text_20
-21    21.1    0    2018-08-03    varchar_21    text_21
-22    22.1    1    1998-03-10    varchar_22    text_22
-23    23.1    0    2022-04-08    varchar_23    text_23
-24    24.1    1    1989-04-27    varchar_24    text_24
-25    25.1    0    2009-03-14    varchar_25    text_25
-26    26.1    1    2019-03-27    varchar_26    text_26
-27    27.1    0    1983-10-28    varchar_27    text_27
-28    28.1    1    1993-07-19    varchar_28    text_28
-29    29.1    0    1986-09-11    varchar_29    text_29
-30    30.1    1    1992-08-19    varchar_30    text_30
-31    31.1    0    1981-08-07    varchar_31    text_31
-32    32.1    1    1984-03-25    varchar_32    text_32
-33    33.1    0    2001-09-05    varchar_33    text_33
-34    34.1    1    2022-03-17    varchar_34    text_34
-35    35.1    0    2008-06-24    varchar_35    text_35
-36    36.1    1    1987-11-23    varchar_36    text_36
-37    37.1    0    2008-11-10    varchar_37    text_37
-38    38.1    1    1986-01-29    varchar_38    text_38
-39    39.1    0    1985-02-27    varchar_39    text_39
-40    40.1    1    2016-11-28    varchar_40    text_40
-41    41.1    0    1991-02-11    varchar_41    text_41
-42    42.1    1    2019-01-08    varchar_42    text_42
-43    43.1    0    2009-05-01    varchar_43    text_43
-44    44.1    1    1986-11-15    varchar_44    text_44
-45    45.1    0    2000-07-22    varchar_45    text_45
-46    46.1    1    2002-09-07    varchar_46    text_46
-47    47.1    0    1987-09-23    varchar_47    text_47
-48    48.1    1    1985-10-25    varchar_48    text_48
-49    49.1    0    1988-10-06    varchar_49    text_49
+➤ col1[4,32,0]  ¦  col2[7,23,31]  ¦  col3[-7,1,0]  ¦  col4[91,64,0]  ¦  col5[12,191,0]  ¦  col6[12,0,0]  𝄀
+0  ¦  0.1  ¦  1  ¦  1982-03-24  ¦  varchar_0  ¦  text_0  𝄀
+1  ¦  1.1  ¦  0  ¦  1982-07-31  ¦  varchar_1  ¦  text_1  𝄀
+2  ¦  2.1  ¦  1  ¦  2002-04-13  ¦  varchar_2  ¦  text_2  𝄀
+3  ¦  3.1  ¦  0  ¦  2019-09-29  ¦  varchar_3  ¦  text_3  𝄀
+4  ¦  4.1  ¦  1  ¦  1996-08-20  ¦  varchar_4  ¦  text_4  𝄀
+5  ¦  5.1  ¦  0  ¦  2008-10-13  ¦  varchar_5  ¦  text_5  𝄀
+6  ¦  6.1  ¦  1  ¦  2002-03-05  ¦  varchar_6  ¦  text_6  𝄀
+7  ¦  7.1  ¦  0  ¦  1993-11-07  ¦  varchar_7  ¦  text_7  𝄀
+8  ¦  8.1  ¦  1  ¦  1994-01-08  ¦  varchar_8  ¦  text_8  𝄀
+9  ¦  9.1  ¦  0  ¦  1999-09-17  ¦  varchar_9  ¦  text_9  𝄀
+10  ¦  10.1  ¦  1  ¦  2003-09-28  ¦  varchar_10  ¦  text_10  𝄀
+11  ¦  11.1  ¦  0  ¦  1984-01-22  ¦  varchar_11  ¦  text_11  𝄀
+12  ¦  12.1  ¦  1  ¦  1994-02-10  ¦  varchar_12  ¦  text_12  𝄀
+13  ¦  13.1  ¦  0  ¦  1994-12-02  ¦  varchar_13  ¦  text_13  𝄀
+14  ¦  14.1  ¦  1  ¦  2013-01-19  ¦  varchar_14  ¦  text_14  𝄀
+15  ¦  15.1  ¦  0  ¦  2002-09-29  ¦  varchar_15  ¦  text_15  𝄀
+16  ¦  16.1  ¦  1  ¦  2001-12-07  ¦  varchar_16  ¦  text_16  𝄀
+17  ¦  17.1  ¦  0  ¦  1989-03-11  ¦  varchar_17  ¦  text_17  𝄀
+18  ¦  18.1  ¦  1  ¦  2019-11-04  ¦  varchar_18  ¦  text_18  𝄀
+19  ¦  19.1  ¦  0  ¦  2002-08-15  ¦  varchar_19  ¦  text_19  𝄀
+20  ¦  20.1  ¦  1  ¦  1995-12-20  ¦  varchar_20  ¦  text_20  𝄀
+21  ¦  21.1  ¦  0  ¦  2018-08-03  ¦  varchar_21  ¦  text_21  𝄀
+22  ¦  22.1  ¦  1  ¦  1998-03-10  ¦  varchar_22  ¦  text_22  𝄀
+23  ¦  23.1  ¦  0  ¦  2022-04-08  ¦  varchar_23  ¦  text_23  𝄀
+24  ¦  24.1  ¦  1  ¦  1989-04-27  ¦  varchar_24  ¦  text_24  𝄀
+25  ¦  25.1  ¦  0  ¦  2009-03-14  ¦  varchar_25  ¦  text_25  𝄀
+26  ¦  26.1  ¦  1  ¦  2019-03-27  ¦  varchar_26  ¦  text_26  𝄀
+27  ¦  27.1  ¦  0  ¦  1983-10-28  ¦  varchar_27  ¦  text_27  𝄀
+28  ¦  28.1  ¦  1  ¦  1993-07-19  ¦  varchar_28  ¦  text_28  𝄀
+29  ¦  29.1  ¦  0  ¦  1986-09-11  ¦  varchar_29  ¦  text_29  𝄀
+30  ¦  30.1  ¦  1  ¦  1992-08-19  ¦  varchar_30  ¦  text_30  𝄀
+31  ¦  31.1  ¦  0  ¦  1981-08-07  ¦  varchar_31  ¦  text_31  𝄀
+32  ¦  32.1  ¦  1  ¦  1984-03-25  ¦  varchar_32  ¦  text_32  𝄀
+33  ¦  33.1  ¦  0  ¦  2001-09-05  ¦  varchar_33  ¦  text_33  𝄀
+34  ¦  34.1  ¦  1  ¦  2022-03-17  ¦  varchar_34  ¦  text_34  𝄀
+35  ¦  35.1  ¦  0  ¦  2008-06-24  ¦  varchar_35  ¦  text_35  𝄀
+36  ¦  36.1  ¦  1  ¦  1987-11-23  ¦  varchar_36  ¦  text_36  𝄀
+37  ¦  37.1  ¦  0  ¦  2008-11-10  ¦  varchar_37  ¦  text_37  𝄀
+38  ¦  38.1  ¦  1  ¦  1986-01-29  ¦  varchar_38  ¦  text_38  𝄀
+39  ¦  39.1  ¦  0  ¦  1985-02-27  ¦  varchar_39  ¦  text_39  𝄀
+40  ¦  40.1  ¦  1  ¦  2016-11-28  ¦  varchar_40  ¦  text_40  𝄀
+41  ¦  41.1  ¦  0  ¦  1991-02-11  ¦  varchar_41  ¦  text_41  𝄀
+42  ¦  42.1  ¦  1  ¦  2019-01-08  ¦  varchar_42  ¦  text_42  𝄀
+43  ¦  43.1  ¦  0  ¦  2009-05-01  ¦  varchar_43  ¦  text_43  𝄀
+44  ¦  44.1  ¦  1  ¦  1986-11-15  ¦  varchar_44  ¦  text_44  𝄀
+45  ¦  45.1  ¦  0  ¦  2000-07-22  ¦  varchar_45  ¦  text_45  𝄀
+46  ¦  46.1  ¦  1  ¦  2002-09-07  ¦  varchar_46  ¦  text_46  𝄀
+47  ¦  47.1  ¦  0  ¦  1987-09-23  ¦  varchar_47  ¦  text_47  𝄀
+48  ¦  48.1  ¦  1  ¦  1985-10-25  ¦  varchar_48  ¦  text_48  𝄀
+49  ¦  49.1  ¦  0  ¦  1988-10-06  ¦  varchar_49  ¦  text_49
 select * from result_scan(last_query_id()) as u;
-col1    col2    col3    col4    col5    col6
-0    0.1    1    1982-03-24    varchar_0    text_0
-1    1.1    0    1982-07-31    varchar_1    text_1
-2    2.1    1    2002-04-13    varchar_2    text_2
-3    3.1    0    2019-09-29    varchar_3    text_3
-4    4.1    1    1996-08-20    varchar_4    text_4
-5    5.1    0    2008-10-13    varchar_5    text_5
-6    6.1    1    2002-03-05    varchar_6    text_6
-7    7.1    0    1993-11-07    varchar_7    text_7
-8    8.1    1    1994-01-08    varchar_8    text_8
-9    9.1    0    1999-09-17    varchar_9    text_9
-10    10.1    1    2003-09-28    varchar_10    text_10
-11    11.1    0    1984-01-22    varchar_11    text_11
-12    12.1    1    1994-02-10    varchar_12    text_12
-13    13.1    0    1994-12-02    varchar_13    text_13
-14    14.1    1    2013-01-19    varchar_14    text_14
-15    15.1    0    2002-09-29    varchar_15    text_15
-16    16.1    1    2001-12-07    varchar_16    text_16
-17    17.1    0    1989-03-11    varchar_17    text_17
-18    18.1    1    2019-11-04    varchar_18    text_18
-19    19.1    0    2002-08-15    varchar_19    text_19
-20    20.1    1    1995-12-20    varchar_20    text_20
-21    21.1    0    2018-08-03    varchar_21    text_21
-22    22.1    1    1998-03-10    varchar_22    text_22
-23    23.1    0    2022-04-08    varchar_23    text_23
-24    24.1    1    1989-04-27    varchar_24    text_24
-25    25.1    0    2009-03-14    varchar_25    text_25
-26    26.1    1    2019-03-27    varchar_26    text_26
-27    27.1    0    1983-10-28    varchar_27    text_27
-28    28.1    1    1993-07-19    varchar_28    text_28
-29    29.1    0    1986-09-11    varchar_29    text_29
-30    30.1    1    1992-08-19    varchar_30    text_30
-31    31.1    0    1981-08-07    varchar_31    text_31
-32    32.1    1    1984-03-25    varchar_32    text_32
-33    33.1    0    2001-09-05    varchar_33    text_33
-34    34.1    1    2022-03-17    varchar_34    text_34
-35    35.1    0    2008-06-24    varchar_35    text_35
-36    36.1    1    1987-11-23    varchar_36    text_36
-37    37.1    0    2008-11-10    varchar_37    text_37
-38    38.1    1    1986-01-29    varchar_38    text_38
-39    39.1    0    1985-02-27    varchar_39    text_39
-40    40.1    1    2016-11-28    varchar_40    text_40
-41    41.1    0    1991-02-11    varchar_41    text_41
-42    42.1    1    2019-01-08    varchar_42    text_42
-43    43.1    0    2009-05-01    varchar_43    text_43
-44    44.1    1    1986-11-15    varchar_44    text_44
-45    45.1    0    2000-07-22    varchar_45    text_45
-46    46.1    1    2002-09-07    varchar_46    text_46
-47    47.1    0    1987-09-23    varchar_47    text_47
-48    48.1    1    1985-10-25    varchar_48    text_48
-49    49.1    0    1988-10-06    varchar_49    text_49
+➤ col1[4,32,0]  ¦  col2[7,23,31]  ¦  col3[-7,1,0]  ¦  col4[91,64,0]  ¦  col5[12,191,0]  ¦  col6[12,0,0]  𝄀
+0  ¦  0.1  ¦  1  ¦  1982-03-24  ¦  varchar_0  ¦  text_0  𝄀
+1  ¦  1.1  ¦  0  ¦  1982-07-31  ¦  varchar_1  ¦  text_1  𝄀
+2  ¦  2.1  ¦  1  ¦  2002-04-13  ¦  varchar_2  ¦  text_2  𝄀
+3  ¦  3.1  ¦  0  ¦  2019-09-29  ¦  varchar_3  ¦  text_3  𝄀
+4  ¦  4.1  ¦  1  ¦  1996-08-20  ¦  varchar_4  ¦  text_4  𝄀
+5  ¦  5.1  ¦  0  ¦  2008-10-13  ¦  varchar_5  ¦  text_5  𝄀
+6  ¦  6.1  ¦  1  ¦  2002-03-05  ¦  varchar_6  ¦  text_6  𝄀
+7  ¦  7.1  ¦  0  ¦  1993-11-07  ¦  varchar_7  ¦  text_7  𝄀
+8  ¦  8.1  ¦  1  ¦  1994-01-08  ¦  varchar_8  ¦  text_8  𝄀
+9  ¦  9.1  ¦  0  ¦  1999-09-17  ¦  varchar_9  ¦  text_9  𝄀
+10  ¦  10.1  ¦  1  ¦  2003-09-28  ¦  varchar_10  ¦  text_10  𝄀
+11  ¦  11.1  ¦  0  ¦  1984-01-22  ¦  varchar_11  ¦  text_11  𝄀
+12  ¦  12.1  ¦  1  ¦  1994-02-10  ¦  varchar_12  ¦  text_12  𝄀
+13  ¦  13.1  ¦  0  ¦  1994-12-02  ¦  varchar_13  ¦  text_13  𝄀
+14  ¦  14.1  ¦  1  ¦  2013-01-19  ¦  varchar_14  ¦  text_14  𝄀
+15  ¦  15.1  ¦  0  ¦  2002-09-29  ¦  varchar_15  ¦  text_15  𝄀
+16  ¦  16.1  ¦  1  ¦  2001-12-07  ¦  varchar_16  ¦  text_16  𝄀
+17  ¦  17.1  ¦  0  ¦  1989-03-11  ¦  varchar_17  ¦  text_17  𝄀
+18  ¦  18.1  ¦  1  ¦  2019-11-04  ¦  varchar_18  ¦  text_18  𝄀
+19  ¦  19.1  ¦  0  ¦  2002-08-15  ¦  varchar_19  ¦  text_19  𝄀
+20  ¦  20.1  ¦  1  ¦  1995-12-20  ¦  varchar_20  ¦  text_20  𝄀
+21  ¦  21.1  ¦  0  ¦  2018-08-03  ¦  varchar_21  ¦  text_21  𝄀
+22  ¦  22.1  ¦  1  ¦  1998-03-10  ¦  varchar_22  ¦  text_22  𝄀
+23  ¦  23.1  ¦  0  ¦  2022-04-08  ¦  varchar_23  ¦  text_23  𝄀
+24  ¦  24.1  ¦  1  ¦  1989-04-27  ¦  varchar_24  ¦  text_24  𝄀
+25  ¦  25.1  ¦  0  ¦  2009-03-14  ¦  varchar_25  ¦  text_25  𝄀
+26  ¦  26.1  ¦  1  ¦  2019-03-27  ¦  varchar_26  ¦  text_26  𝄀
+27  ¦  27.1  ¦  0  ¦  1983-10-28  ¦  varchar_27  ¦  text_27  𝄀
+28  ¦  28.1  ¦  1  ¦  1993-07-19  ¦  varchar_28  ¦  text_28  𝄀
+29  ¦  29.1  ¦  0  ¦  1986-09-11  ¦  varchar_29  ¦  text_29  𝄀
+30  ¦  30.1  ¦  1  ¦  1992-08-19  ¦  varchar_30  ¦  text_30  𝄀
+31  ¦  31.1  ¦  0  ¦  1981-08-07  ¦  varchar_31  ¦  text_31  𝄀
+32  ¦  32.1  ¦  1  ¦  1984-03-25  ¦  varchar_32  ¦  text_32  𝄀
+33  ¦  33.1  ¦  0  ¦  2001-09-05  ¦  varchar_33  ¦  text_33  𝄀
+34  ¦  34.1  ¦  1  ¦  2022-03-17  ¦  varchar_34  ¦  text_34  𝄀
+35  ¦  35.1  ¦  0  ¦  2008-06-24  ¦  varchar_35  ¦  text_35  𝄀
+36  ¦  36.1  ¦  1  ¦  1987-11-23  ¦  varchar_36  ¦  text_36  𝄀
+37  ¦  37.1  ¦  0  ¦  2008-11-10  ¦  varchar_37  ¦  text_37  𝄀
+38  ¦  38.1  ¦  1  ¦  1986-01-29  ¦  varchar_38  ¦  text_38  𝄀
+39  ¦  39.1  ¦  0  ¦  1985-02-27  ¦  varchar_39  ¦  text_39  𝄀
+40  ¦  40.1  ¦  1  ¦  2016-11-28  ¦  varchar_40  ¦  text_40  𝄀
+41  ¦  41.1  ¦  0  ¦  1991-02-11  ¦  varchar_41  ¦  text_41  𝄀
+42  ¦  42.1  ¦  1  ¦  2019-01-08  ¦  varchar_42  ¦  text_42  𝄀
+43  ¦  43.1  ¦  0  ¦  2009-05-01  ¦  varchar_43  ¦  text_43  𝄀
+44  ¦  44.1  ¦  1  ¦  1986-11-15  ¦  varchar_44  ¦  text_44  𝄀
+45  ¦  45.1  ¦  0  ¦  2000-07-22  ¦  varchar_45  ¦  text_45  𝄀
+46  ¦  46.1  ¦  1  ¦  2002-09-07  ¦  varchar_46  ¦  text_46  𝄀
+47  ¦  47.1  ¦  0  ¦  1987-09-23  ¦  varchar_47  ¦  text_47  𝄀
+48  ¦  48.1  ¦  1  ¦  1985-10-25  ¦  varchar_48  ¦  text_48  𝄀
+49  ¦  49.1  ¦  0  ¦  1988-10-06  ¦  varchar_49  ¦  text_49
 /* save_result */SELECT col1 FROM test_view where col1 < 30 MINUS SELECT col1  FROM test_view where col1 < 20;
-col1
-20
-21
-22
-23
-24
-25
-26
-27
-28
+➤ col1[4,32,0]  𝄀
+20  𝄀
+21  𝄀
+22  𝄀
+23  𝄀
+24  𝄀
+25  𝄀
+26  𝄀
+27  𝄀
+28  𝄀
 29
 select * from result_scan(last_query_id()) as u;
-col1
-20
-21
-22
-23
-24
-25
-26
-27
-28
+➤ col1[4,32,0]  𝄀
+20  𝄀
+21  𝄀
+22  𝄀
+23  𝄀
+24  𝄀
+25  𝄀
+26  𝄀
+27  𝄀
+28  𝄀
 29
 rollback;
 begin;
 /* save_result */select * from test_table;
-col1    col2    col3    col4    col5    col6
-0    0.1    1    1982-03-24    varchar_0    text_0
-1    1.1    0    1982-07-31    varchar_1    text_1
-2    2.1    1    2002-04-13    varchar_2    text_2
-3    3.1    0    2019-09-29    varchar_3    text_3
-4    4.1    1    1996-08-20    varchar_4    text_4
-5    5.1    0    2008-10-13    varchar_5    text_5
-6    6.1    1    2002-03-05    varchar_6    text_6
-7    7.1    0    1993-11-07    varchar_7    text_7
-8    8.1    1    1994-01-08    varchar_8    text_8
-9    9.1    0    1999-09-17    varchar_9    text_9
-10    10.1    1    2003-09-28    varchar_10    text_10
-11    11.1    0    1984-01-22    varchar_11    text_11
-12    12.1    1    1994-02-10    varchar_12    text_12
-13    13.1    0    1994-12-02    varchar_13    text_13
-14    14.1    1    2013-01-19    varchar_14    text_14
-15    15.1    0    2002-09-29    varchar_15    text_15
-16    16.1    1    2001-12-07    varchar_16    text_16
-17    17.1    0    1989-03-11    varchar_17    text_17
-18    18.1    1    2019-11-04    varchar_18    text_18
-19    19.1    0    2002-08-15    varchar_19    text_19
-20    20.1    1    1995-12-20    varchar_20    text_20
-21    21.1    0    2018-08-03    varchar_21    text_21
-22    22.1    1    1998-03-10    varchar_22    text_22
-23    23.1    0    2022-04-08    varchar_23    text_23
-24    24.1    1    1989-04-27    varchar_24    text_24
-25    25.1    0    2009-03-14    varchar_25    text_25
-26    26.1    1    2019-03-27    varchar_26    text_26
-27    27.1    0    1983-10-28    varchar_27    text_27
-28    28.1    1    1993-07-19    varchar_28    text_28
-29    29.1    0    1986-09-11    varchar_29    text_29
-30    30.1    1    1992-08-19    varchar_30    text_30
-31    31.1    0    1981-08-07    varchar_31    text_31
-32    32.1    1    1984-03-25    varchar_32    text_32
-33    33.1    0    2001-09-05    varchar_33    text_33
-34    34.1    1    2022-03-17    varchar_34    text_34
-35    35.1    0    2008-06-24    varchar_35    text_35
-36    36.1    1    1987-11-23    varchar_36    text_36
-37    37.1    0    2008-11-10    varchar_37    text_37
-38    38.1    1    1986-01-29    varchar_38    text_38
-39    39.1    0    1985-02-27    varchar_39    text_39
-40    40.1    1    2016-11-28    varchar_40    text_40
-41    41.1    0    1991-02-11    varchar_41    text_41
-42    42.1    1    2019-01-08    varchar_42    text_42
-43    43.1    0    2009-05-01    varchar_43    text_43
-44    44.1    1    1986-11-15    varchar_44    text_44
-45    45.1    0    2000-07-22    varchar_45    text_45
-46    46.1    1    2002-09-07    varchar_46    text_46
-47    47.1    0    1987-09-23    varchar_47    text_47
-48    48.1    1    1985-10-25    varchar_48    text_48
-49    49.1    0    1988-10-06    varchar_49    text_49
+➤ col1[4,32,0]  ¦  col2[7,23,31]  ¦  col3[-7,1,0]  ¦  col4[91,64,0]  ¦  col5[12,191,0]  ¦  col6[12,0,0]  𝄀
+0  ¦  0.1  ¦  1  ¦  1982-03-24  ¦  varchar_0  ¦  text_0  𝄀
+1  ¦  1.1  ¦  0  ¦  1982-07-31  ¦  varchar_1  ¦  text_1  𝄀
+2  ¦  2.1  ¦  1  ¦  2002-04-13  ¦  varchar_2  ¦  text_2  𝄀
+3  ¦  3.1  ¦  0  ¦  2019-09-29  ¦  varchar_3  ¦  text_3  𝄀
+4  ¦  4.1  ¦  1  ¦  1996-08-20  ¦  varchar_4  ¦  text_4  𝄀
+5  ¦  5.1  ¦  0  ¦  2008-10-13  ¦  varchar_5  ¦  text_5  𝄀
+6  ¦  6.1  ¦  1  ¦  2002-03-05  ¦  varchar_6  ¦  text_6  𝄀
+7  ¦  7.1  ¦  0  ¦  1993-11-07  ¦  varchar_7  ¦  text_7  𝄀
+8  ¦  8.1  ¦  1  ¦  1994-01-08  ¦  varchar_8  ¦  text_8  𝄀
+9  ¦  9.1  ¦  0  ¦  1999-09-17  ¦  varchar_9  ¦  text_9  𝄀
+10  ¦  10.1  ¦  1  ¦  2003-09-28  ¦  varchar_10  ¦  text_10  𝄀
+11  ¦  11.1  ¦  0  ¦  1984-01-22  ¦  varchar_11  ¦  text_11  𝄀
+12  ¦  12.1  ¦  1  ¦  1994-02-10  ¦  varchar_12  ¦  text_12  𝄀
+13  ¦  13.1  ¦  0  ¦  1994-12-02  ¦  varchar_13  ¦  text_13  𝄀
+14  ¦  14.1  ¦  1  ¦  2013-01-19  ¦  varchar_14  ¦  text_14  𝄀
+15  ¦  15.1  ¦  0  ¦  2002-09-29  ¦  varchar_15  ¦  text_15  𝄀
+16  ¦  16.1  ¦  1  ¦  2001-12-07  ¦  varchar_16  ¦  text_16  𝄀
+17  ¦  17.1  ¦  0  ¦  1989-03-11  ¦  varchar_17  ¦  text_17  𝄀
+18  ¦  18.1  ¦  1  ¦  2019-11-04  ¦  varchar_18  ¦  text_18  𝄀
+19  ¦  19.1  ¦  0  ¦  2002-08-15  ¦  varchar_19  ¦  text_19  𝄀
+20  ¦  20.1  ¦  1  ¦  1995-12-20  ¦  varchar_20  ¦  text_20  𝄀
+21  ¦  21.1  ¦  0  ¦  2018-08-03  ¦  varchar_21  ¦  text_21  𝄀
+22  ¦  22.1  ¦  1  ¦  1998-03-10  ¦  varchar_22  ¦  text_22  𝄀
+23  ¦  23.1  ¦  0  ¦  2022-04-08  ¦  varchar_23  ¦  text_23  𝄀
+24  ¦  24.1  ¦  1  ¦  1989-04-27  ¦  varchar_24  ¦  text_24  𝄀
+25  ¦  25.1  ¦  0  ¦  2009-03-14  ¦  varchar_25  ¦  text_25  𝄀
+26  ¦  26.1  ¦  1  ¦  2019-03-27  ¦  varchar_26  ¦  text_26  𝄀
+27  ¦  27.1  ¦  0  ¦  1983-10-28  ¦  varchar_27  ¦  text_27  𝄀
+28  ¦  28.1  ¦  1  ¦  1993-07-19  ¦  varchar_28  ¦  text_28  𝄀
+29  ¦  29.1  ¦  0  ¦  1986-09-11  ¦  varchar_29  ¦  text_29  𝄀
+30  ¦  30.1  ¦  1  ¦  1992-08-19  ¦  varchar_30  ¦  text_30  𝄀
+31  ¦  31.1  ¦  0  ¦  1981-08-07  ¦  varchar_31  ¦  text_31  𝄀
+32  ¦  32.1  ¦  1  ¦  1984-03-25  ¦  varchar_32  ¦  text_32  𝄀
+33  ¦  33.1  ¦  0  ¦  2001-09-05  ¦  varchar_33  ¦  text_33  𝄀
+34  ¦  34.1  ¦  1  ¦  2022-03-17  ¦  varchar_34  ¦  text_34  𝄀
+35  ¦  35.1  ¦  0  ¦  2008-06-24  ¦  varchar_35  ¦  text_35  𝄀
+36  ¦  36.1  ¦  1  ¦  1987-11-23  ¦  varchar_36  ¦  text_36  𝄀
+37  ¦  37.1  ¦  0  ¦  2008-11-10  ¦  varchar_37  ¦  text_37  𝄀
+38  ¦  38.1  ¦  1  ¦  1986-01-29  ¦  varchar_38  ¦  text_38  𝄀
+39  ¦  39.1  ¦  0  ¦  1985-02-27  ¦  varchar_39  ¦  text_39  𝄀
+40  ¦  40.1  ¦  1  ¦  2016-11-28  ¦  varchar_40  ¦  text_40  𝄀
+41  ¦  41.1  ¦  0  ¦  1991-02-11  ¦  varchar_41  ¦  text_41  𝄀
+42  ¦  42.1  ¦  1  ¦  2019-01-08  ¦  varchar_42  ¦  text_42  𝄀
+43  ¦  43.1  ¦  0  ¦  2009-05-01  ¦  varchar_43  ¦  text_43  𝄀
+44  ¦  44.1  ¦  1  ¦  1986-11-15  ¦  varchar_44  ¦  text_44  𝄀
+45  ¦  45.1  ¦  0  ¦  2000-07-22  ¦  varchar_45  ¦  text_45  𝄀
+46  ¦  46.1  ¦  1  ¦  2002-09-07  ¦  varchar_46  ¦  text_46  𝄀
+47  ¦  47.1  ¦  0  ¦  1987-09-23  ¦  varchar_47  ¦  text_47  𝄀
+48  ¦  48.1  ¦  1  ¦  1985-10-25  ¦  varchar_48  ¦  text_48  𝄀
+49  ¦  49.1  ¦  0  ¦  1988-10-06  ¦  varchar_49  ¦  text_49
 rollback;
 select * from result_scan(last_query_id(-2)) as u;
-col1    col2    col3    col4    col5    col6
-0    0.1    1    1982-03-24    varchar_0    text_0
-1    1.1    0    1982-07-31    varchar_1    text_1
-2    2.1    1    2002-04-13    varchar_2    text_2
-3    3.1    0    2019-09-29    varchar_3    text_3
-4    4.1    1    1996-08-20    varchar_4    text_4
-5    5.1    0    2008-10-13    varchar_5    text_5
-6    6.1    1    2002-03-05    varchar_6    text_6
-7    7.1    0    1993-11-07    varchar_7    text_7
-8    8.1    1    1994-01-08    varchar_8    text_8
-9    9.1    0    1999-09-17    varchar_9    text_9
-10    10.1    1    2003-09-28    varchar_10    text_10
-11    11.1    0    1984-01-22    varchar_11    text_11
-12    12.1    1    1994-02-10    varchar_12    text_12
-13    13.1    0    1994-12-02    varchar_13    text_13
-14    14.1    1    2013-01-19    varchar_14    text_14
-15    15.1    0    2002-09-29    varchar_15    text_15
-16    16.1    1    2001-12-07    varchar_16    text_16
-17    17.1    0    1989-03-11    varchar_17    text_17
-18    18.1    1    2019-11-04    varchar_18    text_18
-19    19.1    0    2002-08-15    varchar_19    text_19
-20    20.1    1    1995-12-20    varchar_20    text_20
-21    21.1    0    2018-08-03    varchar_21    text_21
-22    22.1    1    1998-03-10    varchar_22    text_22
-23    23.1    0    2022-04-08    varchar_23    text_23
-24    24.1    1    1989-04-27    varchar_24    text_24
-25    25.1    0    2009-03-14    varchar_25    text_25
-26    26.1    1    2019-03-27    varchar_26    text_26
-27    27.1    0    1983-10-28    varchar_27    text_27
-28    28.1    1    1993-07-19    varchar_28    text_28
-29    29.1    0    1986-09-11    varchar_29    text_29
-30    30.1    1    1992-08-19    varchar_30    text_30
-31    31.1    0    1981-08-07    varchar_31    text_31
-32    32.1    1    1984-03-25    varchar_32    text_32
-33    33.1    0    2001-09-05    varchar_33    text_33
-34    34.1    1    2022-03-17    varchar_34    text_34
-35    35.1    0    2008-06-24    varchar_35    text_35
-36    36.1    1    1987-11-23    varchar_36    text_36
-37    37.1    0    2008-11-10    varchar_37    text_37
-38    38.1    1    1986-01-29    varchar_38    text_38
-39    39.1    0    1985-02-27    varchar_39    text_39
-40    40.1    1    2016-11-28    varchar_40    text_40
-41    41.1    0    1991-02-11    varchar_41    text_41
-42    42.1    1    2019-01-08    varchar_42    text_42
-43    43.1    0    2009-05-01    varchar_43    text_43
-44    44.1    1    1986-11-15    varchar_44    text_44
-45    45.1    0    2000-07-22    varchar_45    text_45
-46    46.1    1    2002-09-07    varchar_46    text_46
-47    47.1    0    1987-09-23    varchar_47    text_47
-48    48.1    1    1985-10-25    varchar_48    text_48
-49    49.1    0    1988-10-06    varchar_49    text_49
+➤ col1[4,32,0]  ¦  col2[7,23,31]  ¦  col3[-7,1,0]  ¦  col4[91,64,0]  ¦  col5[12,191,0]  ¦  col6[12,0,0]  𝄀
+0  ¦  0.1  ¦  1  ¦  1982-03-24  ¦  varchar_0  ¦  text_0  𝄀
+1  ¦  1.1  ¦  0  ¦  1982-07-31  ¦  varchar_1  ¦  text_1  𝄀
+2  ¦  2.1  ¦  1  ¦  2002-04-13  ¦  varchar_2  ¦  text_2  𝄀
+3  ¦  3.1  ¦  0  ¦  2019-09-29  ¦  varchar_3  ¦  text_3  𝄀
+4  ¦  4.1  ¦  1  ¦  1996-08-20  ¦  varchar_4  ¦  text_4  𝄀
+5  ¦  5.1  ¦  0  ¦  2008-10-13  ¦  varchar_5  ¦  text_5  𝄀
+6  ¦  6.1  ¦  1  ¦  2002-03-05  ¦  varchar_6  ¦  text_6  𝄀
+7  ¦  7.1  ¦  0  ¦  1993-11-07  ¦  varchar_7  ¦  text_7  𝄀
+8  ¦  8.1  ¦  1  ¦  1994-01-08  ¦  varchar_8  ¦  text_8  𝄀
+9  ¦  9.1  ¦  0  ¦  1999-09-17  ¦  varchar_9  ¦  text_9  𝄀
+10  ¦  10.1  ¦  1  ¦  2003-09-28  ¦  varchar_10  ¦  text_10  𝄀
+11  ¦  11.1  ¦  0  ¦  1984-01-22  ¦  varchar_11  ¦  text_11  𝄀
+12  ¦  12.1  ¦  1  ¦  1994-02-10  ¦  varchar_12  ¦  text_12  𝄀
+13  ¦  13.1  ¦  0  ¦  1994-12-02  ¦  varchar_13  ¦  text_13  𝄀
+14  ¦  14.1  ¦  1  ¦  2013-01-19  ¦  varchar_14  ¦  text_14  𝄀
+15  ¦  15.1  ¦  0  ¦  2002-09-29  ¦  varchar_15  ¦  text_15  𝄀
+16  ¦  16.1  ¦  1  ¦  2001-12-07  ¦  varchar_16  ¦  text_16  𝄀
+17  ¦  17.1  ¦  0  ¦  1989-03-11  ¦  varchar_17  ¦  text_17  𝄀
+18  ¦  18.1  ¦  1  ¦  2019-11-04  ¦  varchar_18  ¦  text_18  𝄀
+19  ¦  19.1  ¦  0  ¦  2002-08-15  ¦  varchar_19  ¦  text_19  𝄀
+20  ¦  20.1  ¦  1  ¦  1995-12-20  ¦  varchar_20  ¦  text_20  𝄀
+21  ¦  21.1  ¦  0  ¦  2018-08-03  ¦  varchar_21  ¦  text_21  𝄀
+22  ¦  22.1  ¦  1  ¦  1998-03-10  ¦  varchar_22  ¦  text_22  𝄀
+23  ¦  23.1  ¦  0  ¦  2022-04-08  ¦  varchar_23  ¦  text_23  𝄀
+24  ¦  24.1  ¦  1  ¦  1989-04-27  ¦  varchar_24  ¦  text_24  𝄀
+25  ¦  25.1  ¦  0  ¦  2009-03-14  ¦  varchar_25  ¦  text_25  𝄀
+26  ¦  26.1  ¦  1  ¦  2019-03-27  ¦  varchar_26  ¦  text_26  𝄀
+27  ¦  27.1  ¦  0  ¦  1983-10-28  ¦  varchar_27  ¦  text_27  𝄀
+28  ¦  28.1  ¦  1  ¦  1993-07-19  ¦  varchar_28  ¦  text_28  𝄀
+29  ¦  29.1  ¦  0  ¦  1986-09-11  ¦  varchar_29  ¦  text_29  𝄀
+30  ¦  30.1  ¦  1  ¦  1992-08-19  ¦  varchar_30  ¦  text_30  𝄀
+31  ¦  31.1  ¦  0  ¦  1981-08-07  ¦  varchar_31  ¦  text_31  𝄀
+32  ¦  32.1  ¦  1  ¦  1984-03-25  ¦  varchar_32  ¦  text_32  𝄀
+33  ¦  33.1  ¦  0  ¦  2001-09-05  ¦  varchar_33  ¦  text_33  𝄀
+34  ¦  34.1  ¦  1  ¦  2022-03-17  ¦  varchar_34  ¦  text_34  𝄀
+35  ¦  35.1  ¦  0  ¦  2008-06-24  ¦  varchar_35  ¦  text_35  𝄀
+36  ¦  36.1  ¦  1  ¦  1987-11-23  ¦  varchar_36  ¦  text_36  𝄀
+37  ¦  37.1  ¦  0  ¦  2008-11-10  ¦  varchar_37  ¦  text_37  𝄀
+38  ¦  38.1  ¦  1  ¦  1986-01-29  ¦  varchar_38  ¦  text_38  𝄀
+39  ¦  39.1  ¦  0  ¦  1985-02-27  ¦  varchar_39  ¦  text_39  𝄀
+40  ¦  40.1  ¦  1  ¦  2016-11-28  ¦  varchar_40  ¦  text_40  𝄀
+41  ¦  41.1  ¦  0  ¦  1991-02-11  ¦  varchar_41  ¦  text_41  𝄀
+42  ¦  42.1  ¦  1  ¦  2019-01-08  ¦  varchar_42  ¦  text_42  𝄀
+43  ¦  43.1  ¦  0  ¦  2009-05-01  ¦  varchar_43  ¦  text_43  𝄀
+44  ¦  44.1  ¦  1  ¦  1986-11-15  ¦  varchar_44  ¦  text_44  𝄀
+45  ¦  45.1  ¦  0  ¦  2000-07-22  ¦  varchar_45  ¦  text_45  𝄀
+46  ¦  46.1  ¦  1  ¦  2002-09-07  ¦  varchar_46  ¦  text_46  𝄀
+47  ¦  47.1  ¦  0  ¦  1987-09-23  ¦  varchar_47  ¦  text_47  𝄀
+48  ¦  48.1  ¦  1  ¦  1985-10-25  ¦  varchar_48  ¦  text_48  𝄀
+49  ¦  49.1  ¦  0  ¦  1988-10-06  ¦  varchar_49  ¦  text_49
 set @xxx=10;
 prepare s1 from select * from test_table where col1<?;
 execute s1 using @xxx;
-col1    col2    col3    col4    col5    col6
-0    0.1    1    1982-03-24    varchar_0    text_0
-1    1.1    0    1982-07-31    varchar_1    text_1
-2    2.1    1    2002-04-13    varchar_2    text_2
-3    3.1    0    2019-09-29    varchar_3    text_3
-4    4.1    1    1996-08-20    varchar_4    text_4
-5    5.1    0    2008-10-13    varchar_5    text_5
-6    6.1    1    2002-03-05    varchar_6    text_6
-7    7.1    0    1993-11-07    varchar_7    text_7
-8    8.1    1    1994-01-08    varchar_8    text_8
-9    9.1    0    1999-09-17    varchar_9    text_9
+➤ col1[4,32,0]  ¦  col2[7,23,31]  ¦  col3[-7,1,0]  ¦  col4[91,64,0]  ¦  col5[12,191,0]  ¦  col6[12,0,0]  𝄀
+0  ¦  0.1  ¦  1  ¦  1982-03-24  ¦  varchar_0  ¦  text_0  𝄀
+1  ¦  1.1  ¦  0  ¦  1982-07-31  ¦  varchar_1  ¦  text_1  𝄀
+2  ¦  2.1  ¦  1  ¦  2002-04-13  ¦  varchar_2  ¦  text_2  𝄀
+3  ¦  3.1  ¦  0  ¦  2019-09-29  ¦  varchar_3  ¦  text_3  𝄀
+4  ¦  4.1  ¦  1  ¦  1996-08-20  ¦  varchar_4  ¦  text_4  𝄀
+5  ¦  5.1  ¦  0  ¦  2008-10-13  ¦  varchar_5  ¦  text_5  𝄀
+6  ¦  6.1  ¦  1  ¦  2002-03-05  ¦  varchar_6  ¦  text_6  𝄀
+7  ¦  7.1  ¦  0  ¦  1993-11-07  ¦  varchar_7  ¦  text_7  𝄀
+8  ¦  8.1  ¦  1  ¦  1994-01-08  ¦  varchar_8  ¦  text_8  𝄀
+9  ¦  9.1  ¦  0  ¦  1999-09-17  ¦  varchar_9  ¦  text_9
 select * from result_scan(last_query_id(-1)) as u;
-col1    col2    col3    col4    col5    col6
-0    0.1    1    1982-03-24    varchar_0    text_0
-1    1.1    0    1982-07-31    varchar_1    text_1
-2    2.1    1    2002-04-13    varchar_2    text_2
-3    3.1    0    2019-09-29    varchar_3    text_3
-4    4.1    1    1996-08-20    varchar_4    text_4
-5    5.1    0    2008-10-13    varchar_5    text_5
-6    6.1    1    2002-03-05    varchar_6    text_6
-7    7.1    0    1993-11-07    varchar_7    text_7
-8    8.1    1    1994-01-08    varchar_8    text_8
-9    9.1    0    1999-09-17    varchar_9    text_9
+➤ col1[4,32,0]  ¦  col2[7,23,31]  ¦  col3[-7,1,0]  ¦  col4[91,64,0]  ¦  col5[12,191,0]  ¦  col6[12,0,0]  𝄀
+0  ¦  0.1  ¦  1  ¦  1982-03-24  ¦  varchar_0  ¦  text_0  𝄀
+1  ¦  1.1  ¦  0  ¦  1982-07-31  ¦  varchar_1  ¦  text_1  𝄀
+2  ¦  2.1  ¦  1  ¦  2002-04-13  ¦  varchar_2  ¦  text_2  𝄀
+3  ¦  3.1  ¦  0  ¦  2019-09-29  ¦  varchar_3  ¦  text_3  𝄀
+4  ¦  4.1  ¦  1  ¦  1996-08-20  ¦  varchar_4  ¦  text_4  𝄀
+5  ¦  5.1  ¦  0  ¦  2008-10-13  ¦  varchar_5  ¦  text_5  𝄀
+6  ¦  6.1  ¦  1  ¦  2002-03-05  ¦  varchar_6  ¦  text_6  𝄀
+7  ¦  7.1  ¦  0  ¦  1993-11-07  ¦  varchar_7  ¦  text_7  𝄀
+8  ¦  8.1  ¦  1  ¦  1994-01-08  ¦  varchar_8  ¦  text_8  𝄀
+9  ¦  9.1  ¦  0  ¦  1999-09-17  ¦  varchar_9  ¦  text_9
 deallocate prepare s1;
 set save_query_result = off;
 /* save_result */select * from test_table;
-col1    col2    col3    col4    col5    col6
-0    0.1    1    1982-03-24    varchar_0    text_0
-1    1.1    0    1982-07-31    varchar_1    text_1
-2    2.1    1    2002-04-13    varchar_2    text_2
-3    3.1    0    2019-09-29    varchar_3    text_3
-4    4.1    1    1996-08-20    varchar_4    text_4
-5    5.1    0    2008-10-13    varchar_5    text_5
-6    6.1    1    2002-03-05    varchar_6    text_6
-7    7.1    0    1993-11-07    varchar_7    text_7
-8    8.1    1    1994-01-08    varchar_8    text_8
-9    9.1    0    1999-09-17    varchar_9    text_9
-10    10.1    1    2003-09-28    varchar_10    text_10
-11    11.1    0    1984-01-22    varchar_11    text_11
-12    12.1    1    1994-02-10    varchar_12    text_12
-13    13.1    0    1994-12-02    varchar_13    text_13
-14    14.1    1    2013-01-19    varchar_14    text_14
-15    15.1    0    2002-09-29    varchar_15    text_15
-16    16.1    1    2001-12-07    varchar_16    text_16
-17    17.1    0    1989-03-11    varchar_17    text_17
-18    18.1    1    2019-11-04    varchar_18    text_18
-19    19.1    0    2002-08-15    varchar_19    text_19
-20    20.1    1    1995-12-20    varchar_20    text_20
-21    21.1    0    2018-08-03    varchar_21    text_21
-22    22.1    1    1998-03-10    varchar_22    text_22
-23    23.1    0    2022-04-08    varchar_23    text_23
-24    24.1    1    1989-04-27    varchar_24    text_24
-25    25.1    0    2009-03-14    varchar_25    text_25
-26    26.1    1    2019-03-27    varchar_26    text_26
-27    27.1    0    1983-10-28    varchar_27    text_27
-28    28.1    1    1993-07-19    varchar_28    text_28
-29    29.1    0    1986-09-11    varchar_29    text_29
-30    30.1    1    1992-08-19    varchar_30    text_30
-31    31.1    0    1981-08-07    varchar_31    text_31
-32    32.1    1    1984-03-25    varchar_32    text_32
-33    33.1    0    2001-09-05    varchar_33    text_33
-34    34.1    1    2022-03-17    varchar_34    text_34
-35    35.1    0    2008-06-24    varchar_35    text_35
-36    36.1    1    1987-11-23    varchar_36    text_36
-37    37.1    0    2008-11-10    varchar_37    text_37
-38    38.1    1    1986-01-29    varchar_38    text_38
-39    39.1    0    1985-02-27    varchar_39    text_39
-40    40.1    1    2016-11-28    varchar_40    text_40
-41    41.1    0    1991-02-11    varchar_41    text_41
-42    42.1    1    2019-01-08    varchar_42    text_42
-43    43.1    0    2009-05-01    varchar_43    text_43
-44    44.1    1    1986-11-15    varchar_44    text_44
-45    45.1    0    2000-07-22    varchar_45    text_45
-46    46.1    1    2002-09-07    varchar_46    text_46
-47    47.1    0    1987-09-23    varchar_47    text_47
-48    48.1    1    1985-10-25    varchar_48    text_48
-49    49.1    0    1988-10-06    varchar_49    text_49
+➤ col1[4,32,0]  ¦  col2[7,23,31]  ¦  col3[-7,1,0]  ¦  col4[91,64,0]  ¦  col5[12,191,0]  ¦  col6[12,0,0]  𝄀
+0  ¦  0.1  ¦  1  ¦  1982-03-24  ¦  varchar_0  ¦  text_0  𝄀
+1  ¦  1.1  ¦  0  ¦  1982-07-31  ¦  varchar_1  ¦  text_1  𝄀
+2  ¦  2.1  ¦  1  ¦  2002-04-13  ¦  varchar_2  ¦  text_2  𝄀
+3  ¦  3.1  ¦  0  ¦  2019-09-29  ¦  varchar_3  ¦  text_3  𝄀
+4  ¦  4.1  ¦  1  ¦  1996-08-20  ¦  varchar_4  ¦  text_4  𝄀
+5  ¦  5.1  ¦  0  ¦  2008-10-13  ¦  varchar_5  ¦  text_5  𝄀
+6  ¦  6.1  ¦  1  ¦  2002-03-05  ¦  varchar_6  ¦  text_6  𝄀
+7  ¦  7.1  ¦  0  ¦  1993-11-07  ¦  varchar_7  ¦  text_7  𝄀
+8  ¦  8.1  ¦  1  ¦  1994-01-08  ¦  varchar_8  ¦  text_8  𝄀
+9  ¦  9.1  ¦  0  ¦  1999-09-17  ¦  varchar_9  ¦  text_9  𝄀
+10  ¦  10.1  ¦  1  ¦  2003-09-28  ¦  varchar_10  ¦  text_10  𝄀
+11  ¦  11.1  ¦  0  ¦  1984-01-22  ¦  varchar_11  ¦  text_11  𝄀
+12  ¦  12.1  ¦  1  ¦  1994-02-10  ¦  varchar_12  ¦  text_12  𝄀
+13  ¦  13.1  ¦  0  ¦  1994-12-02  ¦  varchar_13  ¦  text_13  𝄀
+14  ¦  14.1  ¦  1  ¦  2013-01-19  ¦  varchar_14  ¦  text_14  𝄀
+15  ¦  15.1  ¦  0  ¦  2002-09-29  ¦  varchar_15  ¦  text_15  𝄀
+16  ¦  16.1  ¦  1  ¦  2001-12-07  ¦  varchar_16  ¦  text_16  𝄀
+17  ¦  17.1  ¦  0  ¦  1989-03-11  ¦  varchar_17  ¦  text_17  𝄀
+18  ¦  18.1  ¦  1  ¦  2019-11-04  ¦  varchar_18  ¦  text_18  𝄀
+19  ¦  19.1  ¦  0  ¦  2002-08-15  ¦  varchar_19  ¦  text_19  𝄀
+20  ¦  20.1  ¦  1  ¦  1995-12-20  ¦  varchar_20  ¦  text_20  𝄀
+21  ¦  21.1  ¦  0  ¦  2018-08-03  ¦  varchar_21  ¦  text_21  𝄀
+22  ¦  22.1  ¦  1  ¦  1998-03-10  ¦  varchar_22  ¦  text_22  𝄀
+23  ¦  23.1  ¦  0  ¦  2022-04-08  ¦  varchar_23  ¦  text_23  𝄀
+24  ¦  24.1  ¦  1  ¦  1989-04-27  ¦  varchar_24  ¦  text_24  𝄀
+25  ¦  25.1  ¦  0  ¦  2009-03-14  ¦  varchar_25  ¦  text_25  𝄀
+26  ¦  26.1  ¦  1  ¦  2019-03-27  ¦  varchar_26  ¦  text_26  𝄀
+27  ¦  27.1  ¦  0  ¦  1983-10-28  ¦  varchar_27  ¦  text_27  𝄀
+28  ¦  28.1  ¦  1  ¦  1993-07-19  ¦  varchar_28  ¦  text_28  𝄀
+29  ¦  29.1  ¦  0  ¦  1986-09-11  ¦  varchar_29  ¦  text_29  𝄀
+30  ¦  30.1  ¦  1  ¦  1992-08-19  ¦  varchar_30  ¦  text_30  𝄀
+31  ¦  31.1  ¦  0  ¦  1981-08-07  ¦  varchar_31  ¦  text_31  𝄀
+32  ¦  32.1  ¦  1  ¦  1984-03-25  ¦  varchar_32  ¦  text_32  𝄀
+33  ¦  33.1  ¦  0  ¦  2001-09-05  ¦  varchar_33  ¦  text_33  𝄀
+34  ¦  34.1  ¦  1  ¦  2022-03-17  ¦  varchar_34  ¦  text_34  𝄀
+35  ¦  35.1  ¦  0  ¦  2008-06-24  ¦  varchar_35  ¦  text_35  𝄀
+36  ¦  36.1  ¦  1  ¦  1987-11-23  ¦  varchar_36  ¦  text_36  𝄀
+37  ¦  37.1  ¦  0  ¦  2008-11-10  ¦  varchar_37  ¦  text_37  𝄀
+38  ¦  38.1  ¦  1  ¦  1986-01-29  ¦  varchar_38  ¦  text_38  𝄀
+39  ¦  39.1  ¦  0  ¦  1985-02-27  ¦  varchar_39  ¦  text_39  𝄀
+40  ¦  40.1  ¦  1  ¦  2016-11-28  ¦  varchar_40  ¦  text_40  𝄀
+41  ¦  41.1  ¦  0  ¦  1991-02-11  ¦  varchar_41  ¦  text_41  𝄀
+42  ¦  42.1  ¦  1  ¦  2019-01-08  ¦  varchar_42  ¦  text_42  𝄀
+43  ¦  43.1  ¦  0  ¦  2009-05-01  ¦  varchar_43  ¦  text_43  𝄀
+44  ¦  44.1  ¦  1  ¦  1986-11-15  ¦  varchar_44  ¦  text_44  𝄀
+45  ¦  45.1  ¦  0  ¦  2000-07-22  ¦  varchar_45  ¦  text_45  𝄀
+46  ¦  46.1  ¦  1  ¦  2002-09-07  ¦  varchar_46  ¦  text_46  𝄀
+47  ¦  47.1  ¦  0  ¦  1987-09-23  ¦  varchar_47  ¦  text_47  𝄀
+48  ¦  48.1  ¦  1  ¦  1985-10-25  ¦  varchar_48  ¦  text_48  𝄀
+49  ¦  49.1  ¦  0  ¦  1988-10-06  ¦  varchar_49  ¦  text_49
 select * from result_scan(last_query_id()) as u;
 no configure: save query result
 set save_query_result = on;
 drop table if exists t1;
 create table t1(a int);
 show columns from t1;
-Field    Type    Null    Key    Default    Extra    Comment
-a    INT(32)    YES        null        
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+a  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦    ¦  
 select * from result_scan(last_query_id()) as t;
-field    type    null    key    default    extra    comment
-a    INT(32)    YES        null        
+➤ Field[12,192,0]  ¦  Type[12,49151,0]  ¦  Null[12,2,0]  ¦  Key[12,2,0]  ¦  Default[12,49151,0]  ¦  Extra[12,49151,0]  ¦  Comment[12,1536,0]  𝄀
+a  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦    ¦  
 create account if not exists acc_save ADMIN_NAME 'admin' IDENTIFIED BY '123456';
 drop database if exists database02;
 create database database02;
@@ -2428,40 +2442,54 @@ insert into table03 values ('1', 'database');
 insert into table03 values ('a', 'data warehouse');
 create publication publication02 database database02 account acc_save;
 show publications;
-publication    database    tables    sub_account    subscribed_accounts    create_time    update_time    comments
-publication02    database02    *    acc_save        2024-07-29 16:20:05    null    
+➤ publication[12,0,0]  ¦  database[12,0,0]  ¦  tables[1111,0,0]  ¦  sub_account[1111,0,0]  ¦  subscribed_accounts[1111,0,0]  ¦  create_time[93,0,0]  ¦  update_time[93,0,0]  ¦  comments[1111,0,0]  𝄀
+publication02  ¦  database02  ¦  *  ¦  acc_save  ¦    ¦  2026-08-11 20:36:01  ¦  null  ¦  
 create database sub_database02 from sys publication publication02;
 show subscriptions;
-pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
-publication02    sys    database02    *        2024-07-29 16:20:05    sub_database02    2024-07-29 16:20:06    0
+➤ pub_name[12,0,0]  ¦  pub_account[12,0,0]  ¦  pub_database[12,0,0]  ¦  pub_tables[1111,0,0]  ¦  pub_comment[1111,0,0]  ¦  pub_time[93,0,0]  ¦  sub_name[12,0,0]  ¦  sub_time[93,0,0]  ¦  status[-6,0,0]  𝄀
+publication02  ¦  sys  ¦  database02  ¦  *  ¦    ¦  2026-08-11 20:36:01  ¦  sub_database02  ¦  2026-08-11 20:36:01  ¦  0
 show subscriptions all;
-pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
-publication02    sys    database02    *        2024-07-29 16:20:05    sub_database02    2024-07-29 16:20:06    0
+➤ pub_name[12,0,0]  ¦  pub_account[12,0,0]  ¦  pub_database[12,0,0]  ¦  pub_tables[1111,0,0]  ¦  pub_comment[1111,0,0]  ¦  pub_time[93,0,0]  ¦  sub_name[12,0,0]  ¦  sub_time[93,0,0]  ¦  status[-6,0,0]  𝄀
+publication02  ¦  sys  ¦  database02  ¦  *  ¦    ¦  2026-08-11 20:36:01  ¦  sub_database02  ¦  2026-08-11 20:36:01  ¦  0
 show subscriptions;
-pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
+➤ pub_name[12,0,0]  ¦  pub_account[12,0,0]  ¦  pub_database[12,0,0]  ¦  pub_tables[1111,0,0]  ¦  pub_comment[1111,0,0]  ¦  pub_time[93,0,0]  ¦  sub_name[12,0,0]  ¦  sub_time[93,0,0]  ¦  status[-6,0,0]
 show subscriptions all;
-pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
+➤ pub_name[12,0,0]  ¦  pub_account[12,0,0]  ¦  pub_database[12,0,0]  ¦  pub_tables[1111,0,0]  ¦  pub_comment[1111,0,0]  ¦  pub_time[93,0,0]  ¦  sub_name[12,0,0]  ¦  sub_time[93,0,0]  ¦  status[-6,0,0]
 drop publication publication02;
 drop database if exists database02;
 drop account acc_save;
 create account if not exists acc_save ADMIN_NAME 'admin' IDENTIFIED BY '123456';
 set save_query_result = on;
 show accounts;
-account_name    admin_name    created_time    status    suspended_time    db_count    tbl_count    size    snapshot_size    comments
-acc_save    admin    2024-11-21 07:19:49    open    null    5    65    0.0    0.0    
-sys    root    2024-11-20 02:01:42    open    null    7    101    25.940501    0.0    system account
+-- @regex("acc_save", true)
+-- @regex("root", true)
+➤ account_name[12,225,0]  ¦  admin_name[12,225,0]  ¦  created_time[93,64,0]  ¦  status[12,225,0]  ¦  suspended_time[93,64,0]  ¦  db_count[-5,64,0]  ¦  tbl_count[-5,64,0]  ¦  size[8,53,31]  ¦  snapshot_size[8,53,31]  ¦  comments[12,192,0]  𝄀
+acc_save  ¦  admin  ¦  2026-08-11 12:36:01  ¦  open  ¦  null  ¦  5  ¦  78  ¦  0.0  ¦  0.0  ¦    𝄀
+sys  ¦  root  ¦  2026-08-11 12:31:27  ¦  open  ¦  null  ¦  8  ¦  137  ¦  3.314943  ¦  0.0  ¦  system account  𝄀
+acc01  ¦  test_account  ¦  2026-08-11 12:32:56  ¦  open  ¦  null  ¦  5  ¦  78  ¦  0.105733  ¦  0.0  ¦    𝄀
+acc02  ¦  test_account  ¦  2026-08-11 12:32:57  ¦  open  ¦  null  ¦  5  ¦  78  ¦  0.106256  ¦  0.0  ¦    𝄀
+acc03  ¦  test_account  ¦  2026-08-11 12:32:57  ¦  open  ¦  null  ¦  5  ¦  78  ¦  0.110542  ¦  0.0  ¦  
 select * from result_scan(last_query_id()) as t;
-account_name    admin_name    created_time    status    suspended_time    db_count    tbl_count    size    snapshot_size    comments
-acc_save    admin    2024-11-21 07:19:49    open    null    5    65    0.0    0.0    
-sys    root    2024-11-20 02:01:42    open    null    7    101    25.940501    0.0    system account
+-- @regex("acc_save", true)
+-- @regex("root", true)
+➤ account_name[12,-1,0]  ¦  admin_name[12,-1,0]  ¦  created_time[93,64,0]  ¦  status[12,-1,0]  ¦  suspended_time[93,64,0]  ¦  db_count[-5,64,0]  ¦  tbl_count[-5,64,0]  ¦  size[8,53,31]  ¦  snapshot_size[8,53,31]  ¦  comments[12,-1,0]  𝄀
+acc_save  ¦  admin  ¦  2026-08-11 12:36:01  ¦  open  ¦  null  ¦  5  ¦  78  ¦  0.0  ¦  0.0  ¦    𝄀
+sys  ¦  root  ¦  2026-08-11 12:31:27  ¦  open  ¦  null  ¦  8  ¦  137  ¦  3.314943  ¦  0.0  ¦  system account  𝄀
+acc01  ¦  test_account  ¦  2026-08-11 12:32:56  ¦  open  ¦  null  ¦  5  ¦  78  ¦  0.105733  ¦  0.0  ¦    𝄀
+acc02  ¦  test_account  ¦  2026-08-11 12:32:57  ¦  open  ¦  null  ¦  5  ¦  78  ¦  0.106256  ¦  0.0  ¦    𝄀
+acc03  ¦  test_account  ¦  2026-08-11 12:32:57  ¦  open  ¦  null  ¦  5  ¦  78  ¦  0.110542  ¦  0.0  ¦  
 set save_query_result = off;
 set save_query_result = on;
 show accounts;
-account_name    admin_name    created_time    status    suspended_time    db_count    tbl_count    size    snapshot_size    comments
-acc_save    admin    2024-11-21 07:19:49    open    null    5    65    0.0    0.0    
+-- @regex("acc_save", true)
+-- @regex("root", false)
+➤ account_name[12,225,0]  ¦  admin_name[12,225,0]  ¦  created_time[93,64,0]  ¦  status[12,225,0]  ¦  suspended_time[93,64,0]  ¦  db_count[-5,64,0]  ¦  tbl_count[-5,64,0]  ¦  size[8,53,31]  ¦  snapshot_size[8,53,31]  ¦  comments[12,192,0]  𝄀
+acc_save  ¦  admin  ¦  2026-08-11 12:36:01  ¦  open  ¦  null  ¦  5  ¦  78  ¦  0.105733  ¦  0.0  ¦  
 select * from result_scan(last_query_id()) as t;
-account_name    admin_name    created_time    status    suspended_time    db_count    tbl_count    size    snapshot_size    comments
-acc_save    admin    2024-11-21 07:19:49    open    null    5    65    0.0    0.0    
+-- @regex("acc_save", true)
+-- @regex("root", false)
+➤ account_name[12,-1,0]  ¦  admin_name[12,-1,0]  ¦  created_time[93,64,0]  ¦  status[12,-1,0]  ¦  suspended_time[93,64,0]  ¦  db_count[-5,64,0]  ¦  tbl_count[-5,64,0]  ¦  size[8,53,31]  ¦  snapshot_size[8,53,31]  ¦  comments[12,-1,0]  𝄀
+acc_save  ¦  admin  ¦  2026-08-11 12:36:01  ¦  open  ¦  null  ¦  5  ¦  78  ¦  0.105733  ¦  0.0  ¦  
 set save_query_result = off;
 drop account acc_save;
 set save_query_result = off;
