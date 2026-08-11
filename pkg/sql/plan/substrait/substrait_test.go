@@ -254,6 +254,25 @@ func TestFetchAcceptsBoundUint64AndPreservesAbsentCount(t *testing.T) {
 	require.Nil(t, fetch.CountMode)
 }
 
+func TestFetchFallsBackForBoundUint64OutsideSubstraitRange(t *testing.T) {
+	query := boundSQLQuery(t, "select a from select_test.bind_select limit 18446744073709551615")
+	var limit *planpb.Expr
+	for _, node := range query.Nodes {
+		if node != nil && node.Limit != nil {
+			limit = node.Limit
+			break
+		}
+	}
+	require.NotNil(t, limit)
+	require.Equal(t, uint64(math.MaxUint64), limit.GetLit().GetU64Val())
+
+	_, err := Export(query)
+	require.True(t, IsNotEligible(err))
+	reason, ok := NotEligibleReason(err)
+	require.True(t, ok)
+	require.Equal(t, EligibilityExpression, reason)
+}
+
 func TestPlannerModAliasUsesExactSemanticRegistry(t *testing.T) {
 	q := scanQuery()
 	q.Nodes = append(q.Nodes, &planpb.Node{NodeId: 1, NodeType: planpb.Node_PROJECT, Children: []int32{0}, ProjectList: []*planpb.Expr{fn("mod", i64Type(), col(0), i64(2))}})
@@ -2006,6 +2025,7 @@ func TestNonnegativeIntegerLiteralForms(t *testing.T) {
 	require.ErrorContains(t, err, "non-negative")
 	_, err = nonnegativeIntLiteral(&planpb.Expr{Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{Value: &planpb.Literal_U64Val{U64Val: math.MaxInt64 + 1}}}}, 0)
 	require.ErrorContains(t, err, "signed integer range")
+	require.True(t, IsNotEligible(err))
 }
 
 func TestExporterValidationGuards(t *testing.T) {

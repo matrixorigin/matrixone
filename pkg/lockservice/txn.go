@@ -19,6 +19,7 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
@@ -56,6 +57,15 @@ type activeTxn struct {
 	remoteService  string
 	deadlockFound  bool
 	bindChanged    bool
+	// exclusivePending keeps a RunExclusiveLock transaction visible to the
+	// remote orphan protocol from before its lock request can publish a holder
+	// until callback ownership is installed. No callback runs in this state, so
+	// bind-change fencing does not need to join it.
+	exclusivePending bool
+	// exclusiveActivity is the lock-free remote liveness projection of
+	// exclusivePending || ownership != nil. The holder shard keeps this pooled
+	// object alive while a remote CheckActiveTxn reads it.
+	exclusiveActivity atomic.Bool
 	// ownership is installed only for the optional exclusive-callback API.
 	// Ordinary transactions retain their existing allocation and hot path.
 	ownership *exclusiveLockOwnership
@@ -509,6 +519,8 @@ func (txn *activeTxn) reset() {
 	txn.remoteService = ""
 	txn.deadlockFound = false
 	txn.bindChanged = false
+	txn.exclusivePending = false
+	txn.exclusiveActivity.Store(false)
 	txn.ownership = nil
 }
 

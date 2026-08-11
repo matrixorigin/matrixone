@@ -464,6 +464,9 @@ func (e *exporter) fetch(input *spb.Rel, n *planpb.Node) (*spb.Rel, error) {
 	if n.Limit != nil {
 		count, err := nonnegativeIntLiteral(n.Limit, 0)
 		if err != nil {
+			if IsNotEligible(err) {
+				return nil, err
+			}
 			return nil, moerr.NewInternalErrorNoCtxf("substrait: limit: %v", err)
 		}
 		fetch.CountMode = &spb.FetchRel_Count{Count: count}
@@ -471,6 +474,9 @@ func (e *exporter) fetch(input *spb.Rel, n *planpb.Node) (*spb.Rel, error) {
 	if n.Offset != nil {
 		offset, err := nonnegativeIntLiteral(n.Offset, 0)
 		if err != nil {
+			if IsNotEligible(err) {
+				return nil, err
+			}
 			return nil, moerr.NewInternalErrorNoCtxf("substrait: offset: %v", err)
 		}
 		fetch.OffsetMode = &spb.FetchRel_Offset{Offset: offset}
@@ -1069,7 +1075,11 @@ func nonnegativeIntLiteral(x *planpb.Expr, absent int64) (int64, error) {
 		v = n.I64Val
 	case *planpb.Literal_U64Val:
 		if n.U64Val > math.MaxInt64 {
-			return 0, moerr.NewInternalErrorNoCtxf("must fit the Substrait signed integer range")
+			return 0, notEligiblef(
+				EligibilityExpression,
+				"fetch value %d exceeds the Substrait signed integer range",
+				n.U64Val,
+			)
 		}
 		v = int64(n.U64Val)
 	default:

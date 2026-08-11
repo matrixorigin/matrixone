@@ -1175,14 +1175,14 @@ func TestHandleCheckActiveTxn(t *testing.T) {
 	)
 }
 
-func TestHandleCheckActiveTxnKeepsOnlyUnknownCommitCleanupActive(t *testing.T) {
+func TestHandleCheckActiveTxnKeepsOnlyAuthoritativeInternalActivityActive(t *testing.T) {
 	runLockServiceTests(
 		t,
 		[]string{"s1"},
 		func(_ *lockTableAllocator, services []*service) {
 			s := services[0]
 			txnID := []byte("txn1")
-			s.activeTxnHolder.getActiveTxn(txnID, true, "")
+			txn := s.activeTxnHolder.getActiveTxn(txnID, true, "")
 
 			req := &pb.Request{
 				Method: pb.Method_CheckActiveTxn,
@@ -1198,6 +1198,20 @@ func TestHandleCheckActiveTxnKeepsOnlyUnknownCommitCleanupActive(t *testing.T) {
 			require.True(t, resp.CheckActiveTxn.Valid)
 			require.False(t, resp.CheckActiveTxn.Active)
 			releaseResponse(resp)
+
+			txn.Lock()
+			txn.exclusivePending = true
+			txn.exclusiveActivity.Store(true)
+			txn.Unlock()
+			resp = acquireResponse()
+			s.handleCheckActiveTxn(context.Background(), nil, req, resp, cs)
+			require.True(t, resp.CheckActiveTxn.Valid)
+			require.True(t, resp.CheckActiveTxn.Active)
+			releaseResponse(resp)
+			txn.Lock()
+			txn.exclusivePending = false
+			txn.exclusiveActivity.Store(false)
+			txn.Unlock()
 
 			s.unknownCommitResolver.mu.Lock()
 			s.unknownCommitResolver.mu.pending[string(txnID)] = unknownCommitTxn{id: txnID}

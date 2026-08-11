@@ -307,10 +307,10 @@ func (s *service) Lock(
 }
 
 // RunExclusiveLock holds one exclusive row lock while fn performs an external
-// mutation that must not overlap across lock-table owners. The lazy ownership
-// record lets bind-change fencing cancel and join fn before the binding can be
-// transferred. Service shutdown uses the same cancel-and-join boundary before
-// lock tables are removed.
+// mutation that must not overlap across lock-table owners. Synthetic activity
+// is published before the remote holder can become visible, then callback
+// ownership is kept inside the exact allocator bind generation that granted
+// the lock. Bind loss and service shutdown cancel and join fn before release.
 func (s *service) RunExclusiveLock(
 	ctx context.Context,
 	tableID uint64,
@@ -332,38 +332,26 @@ func (s *service) RunExclusiveLock(
 
 	lockCtx, cancelServiceClose := contextWithServiceClose(ctx, serviceCtx)
 	defer cancelServiceClose()
-	_, lockErr := s.Lock(lockCtx, tableID, [][]byte{row}, txnID, pb.LockOptions{
-		Granularity: pb.Granularity_Row,
-		Mode:        pb.LockMode_Exclusive,
-		Policy:      pb.WaitPolicy_Wait,
-	})
-	if lockErr != nil {
-		cleanupCtx, cancel := context.WithTimeout(context.Background(), defaultRPCTimeout)
-		cleanupErr := s.unlockWithContext(cleanupCtx, txnID, timestamp.Timestamp{})
-		cancel()
-		return errors.Join(lockErr, cleanupErr)
-	}
 
-	txn := s.activeTxnHolder.getActiveTxn(txnID, false, "")
-	if txn == nil {
-		cleanupCtx, cancel := context.WithTimeout(context.Background(), defaultRPCTimeout)
-		cleanupErr := s.unlockWithContext(cleanupCtx, txnID, timestamp.Timestamp{})
-		cancel()
-		return errors.Join(moerr.NewInternalErrorNoCtx("lockservice: exclusive lock owner disappeared"), cleanupErr)
-	}
+	txn := s.activeTxnHolder.getActiveTxn(txnID, true, "")
 	txn.Lock()
-	if !bytes.Equal(txn.txnID, txnID) || txn.deadlockFound || txn.bindChanged || txn.ownership != nil {
+	if !bytes.Equal(txn.txnID, txnID) || txn.deadlockFound || txn.bindChanged ||
+		txn.exclusivePending || txn.ownership != nil || len(txn.lockHolders) != 0 ||
+		len(txn.blockedWaiters) != 0 {
 		txn.Unlock()
-		cleanupCtx, cancel := context.WithTimeout(context.Background(), defaultRPCTimeout)
-		cleanupErr := s.unlockWithContext(cleanupCtx, txnID, timestamp.Timestamp{})
-		cancel()
-		return errors.Join(moerr.NewInternalErrorNoCtx("lockservice: exclusive lock ownership is invalid"), cleanupErr)
+		return moerr.NewInternalErrorNoCtx("lockservice: exclusive lock ownership is invalid")
 	}
-	callbackCtx, cancelCallback := context.WithCancelCause(lockCtx)
-	ownership := &exclusiveLockOwnership{ctx: callbackCtx, cancel: cancelCallback, done: make(chan struct{})}
-	txn.ownership = ownership
+	// Publish synthetic liveness before Lock can create a remote holder. A bind
+	// fence in this pending state has no callback to join and makes Lock fail.
+	txn.exclusivePending = true
+	txn.exclusiveActivity.Store(true)
 	txn.Unlock()
 
+	var callbackCtx context.Context
+	var cancelCallback context.CancelCauseFunc
+	var ownership *exclusiveLockOwnership
+	var stopRenewal context.CancelFunc
+	var renewalDone chan error
 	finished := false
 	var ownershipCause error
 	finishOwnership := func() {
@@ -371,31 +359,147 @@ func (s *service) RunExclusiveLock(
 			return
 		}
 		finished = true
-		ownershipCause = context.Cause(callbackCtx)
-		close(ownership.done)
-		txn.Lock()
-		if txn.ownership == ownership {
-			txn.ownership = nil
+		if callbackCtx != nil {
+			ownershipCause = context.Cause(callbackCtx)
 		}
-		cancelCallback(context.Canceled)
+		if ownership != nil {
+			close(ownership.done)
+		}
+		txn.Lock()
+		if bytes.Equal(txn.txnID, txnID) {
+			txn.exclusivePending = false
+			if txn.ownership == ownership {
+				txn.ownership = nil
+			}
+		}
+		if cancelCallback != nil {
+			cancelCallback(context.Canceled)
+		}
 		txn.Unlock()
 	}
 	defer func() {
-		// This defer is also the panic path: ownership fencing must never retain
-		// a callback wait after an upper statement boundary recovers a panic.
+		// This is also the panic path. Stop the bind-renewal task before
+		// publishing callback completion, then release the lock with a bounded
+		// cleanup context.
+		if stopRenewal != nil {
+			stopRenewal()
+			<-renewalDone
+			stopRenewal = nil
+		}
 		finishOwnership()
 		cleanupCtx, cancel := context.WithTimeout(context.Background(), defaultRPCTimeout)
 		unlockErr := s.unlockWithContext(cleanupCtx, txnID, timestamp.Timestamp{})
 		cancel()
+		if unlockErr != nil {
+			// Successful unlock removes the holder before resetting its pooled
+			// transaction. A failed cleanup restores it; only then stop reporting
+			// synthetic liveness so ordinary orphan recovery can retry the release.
+			s.activeTxnHolder.clearExclusiveLockActivity(txnID)
+		}
 		resultErr = errors.Join(resultErr, unlockErr)
 	}()
 
+	_, lockErr := s.Lock(lockCtx, tableID, [][]byte{row}, txnID, pb.LockOptions{
+		Granularity: pb.Granularity_Row,
+		Mode:        pb.LockMode_Exclusive,
+		Policy:      pb.WaitPolicy_Wait,
+	})
+	if lockErr != nil {
+		return lockErr
+	}
+
+	txn.Lock()
+	binds := txn.lockTableBindsLocked()
+	if !bytes.Equal(txn.txnID, txnID) || txn.deadlockFound || txn.bindChanged ||
+		!txn.exclusivePending || txn.ownership != nil || len(binds) != 1 {
+		txn.Unlock()
+		return moerr.NewInternalErrorNoCtx("lockservice: exclusive lock ownership is invalid")
+	}
+	bind := binds[0]
+	callbackCtx, cancelCallback = context.WithCancelCause(lockCtx)
+	ownership = &exclusiveLockOwnership{ctx: callbackCtx, cancel: cancelCallback, done: make(chan struct{})}
+	txn.exclusivePending = false
+	txn.ownership = ownership
+	txn.Unlock()
+
+	// Establish the allocator lease before entering external code. A periodic
+	// renewal keeps that exact owner generation from being invalidated while fn
+	// is running; a changed generation cancels fn and is joined below.
+	if err := s.renewExclusiveLockBind(callbackCtx, bind); err != nil {
+		cancelCallback(err)
+		return err
+	}
+	// Renewal outlives callback cancellation: caller/service cancellation asks
+	// fn to stop, but the bind must remain non-transferable until fn has actually
+	// returned. The defer below is the sole owner that stops this context.
+	renewalCtx, cancelRenewal := context.WithCancel(context.Background())
+	stopRenewal = cancelRenewal
+	renewalDone = make(chan error, 1)
+	go func() {
+		timer := time.NewTimer(s.exclusiveBindRenewInterval())
+		defer timer.Stop()
+		for {
+			select {
+			case <-renewalCtx.Done():
+				renewalDone <- nil
+				return
+			case <-timer.C:
+				if err := s.renewExclusiveLockBind(renewalCtx, bind); err != nil {
+					cancelCallback(err)
+					renewalDone <- err
+					return
+				}
+				timer.Reset(s.exclusiveBindRenewInterval())
+			}
+		}
+	}()
+
 	resultErr = fn(callbackCtx)
+	stopRenewal()
+	<-renewalDone
+	stopRenewal = nil
 	finishOwnership()
 	if resultErr == nil && ownershipCause != nil {
 		resultErr = ownershipCause
 	}
 	return resultErr
+}
+
+func (s *service) exclusiveBindRenewInterval() time.Duration {
+	interval := s.cfg.KeepBindDuration.Duration
+	if maximum := s.cfg.KeepBindTimeout.Duration / 4; maximum > 0 &&
+		(interval <= 0 || interval > maximum) {
+		interval = maximum
+	}
+	if interval <= 0 {
+		interval = time.Millisecond
+	}
+	return interval
+}
+
+func (s *service) renewExclusiveLockBind(ctx context.Context, bind pb.LockTable) error {
+	renewCtx, cancel := context.WithTimeoutCause(
+		ctx,
+		s.exclusiveBindRenewInterval(),
+		moerr.CauseGetLockTableBind,
+	)
+	defer cancel()
+	fresh, _, err := getLockTableBindWithContext(
+		renewCtx,
+		s.remote.client,
+		bind.Group,
+		bind.Table,
+		bind.OriginTable,
+		bind.ServiceID,
+		bind.Sharding,
+	)
+	if err != nil {
+		return err
+	}
+	if !fresh.Valid || bind.Changed(fresh) {
+		return ErrLockTableBindChanged
+	}
+	return nil
 }
 
 // applyLockWaitTimeoutCeiling bounds missing or oversized wait budgets and
@@ -1792,6 +1896,8 @@ type activeTxnHolder interface {
 	incLockTableRef(m map[uint32]map[uint64]uint64, serviceID string)
 	getActiveTxn(txnID []byte, create bool, remoteService string) *activeTxn
 	hasActiveTxn(txnID []byte) bool
+	hasExclusiveLockActivity(txnID []byte) bool
+	clearExclusiveLockActivity(txnID []byte)
 	deleteActiveTxn(txnID []byte) *activeTxn
 	restoreActiveTxn(txn *activeTxn) bool
 	fenceByBindChanged(bind pb.LockTable) int
@@ -1929,6 +2035,29 @@ func (h *mapBasedTxnHolder) hasActiveTxn(txnID []byte) bool {
 	_, ok := shard.txns[txnKey]
 	shard.RUnlock()
 	return ok
+}
+
+// hasExclusiveLockActivity reports only the synthetic transactions owned by
+// RunExclusiveLock. Holding shard.RLock keeps the pooled activeTxn alive while
+// the atomic projection avoids taking the transaction mutex in an RPC handler.
+func (h *mapBasedTxnHolder) hasExclusiveLockActivity(txnID []byte) bool {
+	txnKey := util.UnsafeBytesToString(txnID)
+	shard := h.getActiveTxnShard(txnKey)
+	shard.RLock()
+	entry, ok := shard.txns[txnKey]
+	active := ok && entry.txn.exclusiveActivity.Load()
+	shard.RUnlock()
+	return active
+}
+
+func (h *mapBasedTxnHolder) clearExclusiveLockActivity(txnID []byte) {
+	txnKey := util.UnsafeBytesToString(txnID)
+	shard := h.getActiveTxnShard(txnKey)
+	shard.Lock()
+	if entry, ok := shard.txns[txnKey]; ok {
+		entry.txn.exclusiveActivity.Store(false)
+	}
+	shard.Unlock()
 }
 
 func (h *mapBasedTxnHolder) empty() bool {

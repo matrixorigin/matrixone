@@ -1516,6 +1516,146 @@ func TestRunExclusiveLockSerializesAcrossServices(t *testing.T) {
 	})
 }
 
+func TestRunExclusiveLockFencesRemoteOwnerOrphanAndRebind(t *testing.T) {
+	runLockServiceTests(t, []string{"exclusive-origin", "exclusive-owner"}, func(alloc *lockTableAllocator, services []*service) {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		const tableID uint64 = 1<<62 + 1
+		row := []byte("remote-journal")
+		owner := services[1]
+		origin := services[0]
+
+		// Pre-bind the table to the other CN so the first callback's holder is
+		// remote. Releasing this warm-up transaction preserves the table bind.
+		_, err := owner.Lock(ctx, tableID, [][]byte{[]byte("warm-up")}, []byte("bind-owner"), newTestRowExclusiveOptions())
+		require.NoError(t, err)
+		require.NoError(t, owner.Unlock(ctx, []byte("bind-owner"), timestamp.Timestamp{}))
+		bind := alloc.GetLatest(0, tableID)
+		require.Equal(t, owner.serviceID, bind.ServiceID)
+		ownerBinds := alloc.getServiceBinds(owner.serviceID)
+		require.NotNil(t, ownerBinds)
+		staleGeneration, _ := ownerBinds.timeoutSnapshot(time.Now(), 0)
+
+		firstEntered := make(chan struct{})
+		allowFirst := make(chan struct{})
+		firstDone := make(chan error, 1)
+		go func() {
+			firstDone <- origin.RunExclusiveLock(ctx, tableID, row, []byte("remote-exclusive"), func(callbackCtx context.Context) error {
+				close(firstEntered)
+				select {
+				case <-allowFirst:
+					return nil
+				case <-callbackCtx.Done():
+					return context.Cause(callbackCtx)
+				}
+			})
+		}()
+		select {
+		case <-firstEntered:
+		case <-ctx.Done():
+			t.Fatal("remote exclusive callback did not start")
+		}
+
+		// Initial callback admission renewed the exact owner generation. A stale
+		// timeout validation therefore cannot invalidate and transfer the bind.
+		require.False(t, alloc.disableTableBindsAtGeneration(ownerBinds, staleGeneration))
+		require.Equal(t, bind, alloc.GetLatest(0, tableID))
+
+		secondEntered := make(chan struct{})
+		secondDone := make(chan error, 1)
+		go func() {
+			secondDone <- owner.RunExclusiveLock(ctx, tableID, row, []byte("owner-exclusive"), func(context.Context) error {
+				close(secondEntered)
+				return nil
+			})
+		}()
+		waitWaiters(t, owner, tableID, row, 1)
+
+		// Exercise the exact owner-side orphan path. The synthetic transaction
+		// is not in TxnIterFunc, but its callback ownership is authoritative.
+		local := owner.tableGroups.get(0, tableID).(*localLockTable)
+		owner.activeTxnHolder.keepRemoteLockBindActive(origin.serviceID, local.bind)
+		owner.events.checkOrphan(checkOrphan{
+			wait: waitTooLong,
+			key:  row,
+			lt:   local,
+			txn:  pb.WaitTxn{TxnID: []byte("owner-exclusive"), CreatedOn: owner.serviceID},
+		})
+		holder, ok, err := local.getLockHolder(ctx, row)
+		require.NoError(t, err)
+		require.True(t, ok)
+		require.Equal(t, []byte("remote-exclusive"), holder.TxnID)
+		select {
+		case <-secondEntered:
+			t.Fatal("remote owner orphan cleanup overlapped exclusive callbacks")
+		default:
+		}
+
+		close(allowFirst)
+		require.NoError(t, <-firstDone)
+		select {
+		case <-secondEntered:
+		case <-ctx.Done():
+			t.Fatal("owner callback did not start after remote release")
+		}
+		require.NoError(t, <-secondDone)
+	})
+}
+
+func TestRunExclusiveLockDoesNotEnterAfterBindRenewalFailure(t *testing.T) {
+	runLockServiceTests(t, []string{"exclusive-renew-failure"}, func(_ *lockTableAllocator, services []*service) {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		service := services[0]
+		const tableID uint64 = 1<<62 + 1
+		row := []byte("journal")
+
+		_, err := service.Lock(ctx, tableID, [][]byte{[]byte("warm-up")}, []byte("bind-owner"), newTestRowExclusiveOptions())
+		require.NoError(t, err)
+		require.NoError(t, service.Unlock(ctx, []byte("bind-owner"), timestamp.Timestamp{}))
+		service.remote.client = &failOnceSendClient{
+			Client: service.remote.client,
+			method: pb.Method_GetBind,
+			err:    moerr.NewBackendClosedNoCtx(),
+		}
+
+		entered := false
+		err = service.RunExclusiveLock(ctx, tableID, row, []byte("renew-failed"), func(context.Context) error {
+			entered = true
+			return nil
+		})
+		require.Error(t, err)
+		require.False(t, entered)
+		require.NoError(t, service.RunExclusiveLock(ctx, tableID, row, []byte("renew-retried"), func(context.Context) error {
+			return nil
+		}))
+	})
+}
+
+func TestRunExclusiveLockRejectsExistingTxnWithoutReleasingIt(t *testing.T) {
+	runLockServiceTests(t, []string{"exclusive-existing"}, func(_ *lockTableAllocator, services []*service) {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		service := services[0]
+		const tableID uint64 = 1<<62 + 1
+		txnID := []byte("existing-txn")
+		heldRow := []byte("held")
+
+		_, err := service.Lock(ctx, tableID, [][]byte{heldRow}, txnID, newTestRowExclusiveOptions())
+		require.NoError(t, err)
+		err = service.RunExclusiveLock(ctx, tableID, []byte("journal"), txnID, func(context.Context) error {
+			t.Fatal("callback entered with an existing transaction")
+			return nil
+		})
+		require.ErrorContains(t, err, "ownership is invalid")
+		holder, ok, err := service.tableGroups.get(0, tableID).getLockHolder(ctx, heldRow)
+		require.NoError(t, err)
+		require.True(t, ok)
+		require.Equal(t, txnID, holder.TxnID)
+		require.NoError(t, service.Unlock(ctx, txnID, timestamp.Timestamp{}))
+	})
+}
+
 func TestRunExclusiveLockCancelsAndJoinsFencedOwnership(t *testing.T) {
 	runLockServiceTests(t, []string{"exclusive-fence"}, func(_ *lockTableAllocator, services []*service) {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
