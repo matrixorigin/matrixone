@@ -137,12 +137,28 @@ func (m *MockCompilerContext) ResolveVariable(varName string, isSystemVar, isGlo
 
 	vars["foreign_key_checks"] = int64(1)
 	vars["sort_spill_mem"] = int64(0)
+	vars["lower_case_table_names"] = int64(1)
+
+	// Vector-index build/search variables (resolved by the hnsw/ivf/ivfpq/cagra
+	// plugin DDL and search paths).
+	vars["cagra_threads_build"] = int64(1)
+	vars["cagra_threads_search"] = int64(1)
+	vars["cagra_batch_window"] = int64(0)
+	vars["ivfpq_threads_build"] = int64(1)
+	vars["ivfpq_threads_search"] = int64(1)
+	vars["ivfpq_batch_window"] = int64(0)
+	vars["hnsw_threads_build"] = int64(1)
+	vars["hnsw_threads_search"] = int64(1)
+	vars["ivf_threads_build"] = int64(1)
+	vars["ivf_threads_search"] = int64(1)
+	vars["gpu_multi_simulation"] = int64(0)
+	vars["probe_limit"] = int64(20)
 
 	if result, ok := vars[varName]; ok {
 		return result, nil
 	}
 
-	return nil, moerr.NewInternalError(m.ctx, "var not found")
+	return nil, moerr.NewInternalErrorf(m.ctx, "var not found: %s", varName)
 }
 
 type col struct {
