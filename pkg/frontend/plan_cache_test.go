@@ -211,6 +211,21 @@ func TestSessionReleasePlanCache(t *testing.T) {
 	require.Equal(t, 1, second.freed)
 }
 
+func TestSessionUserVariableAssignmentClearsPlanCache(t *testing.T) {
+	pc := newPlanCache(2)
+	stmt := &trackedStatement{}
+	pc.cache("select @v + 0", []tree.Statement{stmt}, []*plan.Plan{{}})
+
+	ses := &Session{
+		planCache:       pc,
+		userDefinedVars: make(map[string]*UserDefinedVar),
+	}
+	require.True(t, ses.isCached("select @v + 0"))
+	require.NoError(t, ses.SetUserDefinedVar("v", int64(1), "set @v = 1"))
+	require.False(t, ses.isCached("select @v + 0"))
+	require.Equal(t, 1, stmt.freed)
+}
+
 func TestFreeStmtsSkipsNil(t *testing.T) {
 	good := &trackedStatement{}
 	stmts := []tree.Statement{nil, good, nil}

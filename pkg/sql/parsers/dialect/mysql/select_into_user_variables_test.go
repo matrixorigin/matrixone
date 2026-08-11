@@ -95,8 +95,47 @@ func TestSelectIntoUserVariablesParse(t *testing.T) {
 func TestSelectIntoUserVariablesRejectsMisplacedUnionInto(t *testing.T) {
 	testCases := []string{
 		"select 1 into @bad_non_last union select 1",
+		"select 1 into outfile '/tmp/mo_bad_non_last_outfile' union select 1",
 		"select 1 union (select 1 into @bad_middle) union select 1",
 		"select 1 union (select 1 into @bad_middle) into @bad_terminal",
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase, func(t *testing.T) {
+			_, err := ParseOne(context.Background(), testCase, 1)
+			require.Error(t, err)
+			require.Contains(t, err.Error(), tree.MisplacedIntoClauseMessage)
+		})
+	}
+}
+
+func TestSelectIntoUserVariablesRejectsNestedInto(t *testing.T) {
+	testCases := []string{
+		"select (select 1 into @bad_scalar)",
+		"select * from (select 1 into @bad_derived) as d",
+		"with d as (select 1 into @bad_cte) select * from d",
+		"select exists(select 1 into @bad_exists)",
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase, func(t *testing.T) {
+			_, err := ParseOne(context.Background(), testCase, 1)
+			require.Error(t, err)
+			require.Contains(t, err.Error(), tree.MisplacedIntoClauseMessage)
+		})
+	}
+}
+
+func TestSelectIntoUserVariablesRejectsPerformInto(t *testing.T) {
+	_, err := ParseOne(context.Background(), "perform select 1 into @bad_perform", 1)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), tree.PerformIntoClauseMessage)
+}
+
+func TestSelectIntoUserVariablesRejectsMixedIntoActions(t *testing.T) {
+	testCases := []string{
+		"select 1 into @bad_user_outfile into outfile '/tmp/mo_bad_user_outfile'",
+		"select 1 into outfile '/tmp/mo_bad_outfile_user' into @bad_outfile_user",
 	}
 
 	for _, testCase := range testCases {

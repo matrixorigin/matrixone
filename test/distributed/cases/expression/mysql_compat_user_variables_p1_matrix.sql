@@ -87,4 +87,37 @@ set @uv_p1_bad_middle = 0;
 select 1 union (select 1 into @uv_p1_bad_middle) union select 1;
 select @uv_p1_bad_middle;
 
+-- Matrix G: INTO in subqueries or PERFORM has no single execution owner in
+-- MatrixOne's current SELECT-INTO implementation, so reject it explicitly
+-- instead of accepting and silently leaving the variable unchanged.
+set @uv_p1_bad_scalar = 0;
+-- @regex("Misplaced INTO clause|INTO is not allowed|syntax error", true)
+select (select 1 into @uv_p1_bad_scalar);
+select @uv_p1_bad_scalar;
+
+set @uv_p1_bad_derived = 0;
+-- @regex("Misplaced INTO clause|INTO is not allowed|syntax error", true)
+select * from (select 1 into @uv_p1_bad_derived) as d;
+select @uv_p1_bad_derived;
+
+set @uv_p1_bad_cte = 0;
+-- @regex("Misplaced INTO clause|INTO is not allowed|syntax error", true)
+with d as (select 1 into @uv_p1_bad_cte) select * from d;
+select @uv_p1_bad_cte;
+
+set @uv_p1_bad_exists = 0;
+-- @regex("Misplaced INTO clause|INTO is not allowed|syntax error", true)
+select exists(select 1 into @uv_p1_bad_exists);
+select @uv_p1_bad_exists;
+
+set @uv_p1_bad_perform = 0;
+-- @regex("INTO is not allowed with PERFORM statements|syntax error", true)
+perform select 1 into @uv_p1_bad_perform;
+select @uv_p1_bad_perform;
+
+set @uv_p1_bad_mixed = 0;
+-- @regex("Misplaced INTO clause|INTO is not allowed|syntax error", true)
+select 1 into @uv_p1_bad_mixed into outfile '/tmp/mo_uv_p1_bad_mixed';
+select @uv_p1_bad_mixed;
+
 drop database mysql_compat_user_variables_p1_matrix;

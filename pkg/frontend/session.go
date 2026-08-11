@@ -401,7 +401,6 @@ func (ses *Session) setUserDefinedVarWithTypeAndKind(
 		typ = inferUserDefinedVarType(value)
 	}
 	ses.mu.Lock()
-	defer ses.mu.Unlock()
 	ses.userDefinedVars[strings.ToLower(name)] = &UserDefinedVar{
 		Value:            value,
 		Sql:              sql,
@@ -409,6 +408,10 @@ func (ses *Session) setUserDefinedVarWithTypeAndKind(
 		Type:             typ,
 		PrepareParamKind: kind,
 	}
+	ses.mu.Unlock()
+	// User-variable references are typed at bind time. A later assignment can
+	// change that type, so cached plans containing @vars must be rebound.
+	ses.cleanCache()
 	return nil
 }
 
@@ -806,6 +809,23 @@ func (e *errInfo) snapshot() errInfo {
 
 func (e errInfo) length() int {
 	return len(e.codes)
+}
+
+func (e errInfo) warningCount() uint16 {
+	count := 0
+	for i := range e.codes {
+		level := "Error"
+		if i < len(e.levels) && e.levels[i] != "" {
+			level = e.levels[i]
+		}
+		if !strings.EqualFold(level, "Error") {
+			count++
+			if count >= int(^uint16(0)) {
+				return ^uint16(0)
+			}
+		}
+	}
+	return uint16(count)
 }
 
 func NewSession(
@@ -2059,11 +2079,12 @@ func (ses *Session) SetNewResponse(category int, affectedRows uint64, cmd int, d
 	// If the stmt has next stmt, should add SERVER_MORE_RESULTS_EXISTS to the server status.
 	var resp *Response
 	serverStatus := ses.GetTxnHandler().GetServerStatus()
+	warnings := ses.diagnosticsSnapshot().warningCount()
 	if !isLastStmt {
-		resp = NewResponse(category, affectedRows, 0, 0,
+		resp = NewResponse(category, affectedRows, 0, warnings,
 			serverStatus|SERVER_MORE_RESULTS_EXISTS, cmd, d)
 	} else {
-		resp = NewResponse(category, affectedRows, 0, 0, serverStatus, cmd, d)
+		resp = NewResponse(category, affectedRows, 0, warnings, serverStatus, cmd, d)
 	}
 	return resp
 }

@@ -717,6 +717,125 @@ func TestVarExpressionExecutorTypedJSONAndUUID(t *testing.T) {
 	require.Equal(t, uuid, vector.MustFixedColNoTypeCheck[types.Uuid](vec)[0])
 }
 
+func TestVarExpressionExecutorReencodesTypedArraysOnReuse(t *testing.T) {
+	testCases := []struct {
+		name   string
+		typ    types.Type
+		first  any
+		second any
+		check  func(t *testing.T, vec *vector.Vector, second bool)
+	}{
+		{
+			name:   "vecf32",
+			typ:    types.New(types.T_array_float32, 3, 0),
+			first:  []float32{1, 2, 3},
+			second: []float32{4, 5, 6},
+			check: func(t *testing.T, vec *vector.Vector, second bool) {
+				want := []float32{1, 2, 3}
+				if second {
+					want = []float32{4, 5, 6}
+				}
+				require.Equal(t, want, vector.GetArrayAt[float32](vec, 0))
+			},
+		},
+		{
+			name:   "vecf64",
+			typ:    types.New(types.T_array_float64, 3, 0),
+			first:  []float64{1, 2, 3},
+			second: []float64{4, 5, 6},
+			check: func(t *testing.T, vec *vector.Vector, second bool) {
+				want := []float64{1, 2, 3}
+				if second {
+					want = []float64{4, 5, 6}
+				}
+				require.Equal(t, want, vector.GetArrayAt[float64](vec, 0))
+			},
+		},
+		{
+			name:   "vecbf16",
+			typ:    types.New(types.T_array_bf16, 3, 0),
+			first:  types.Float32ToBF16Slice([]float32{1, 2, 3}),
+			second: types.Float32ToBF16Slice([]float32{4, 5, 6}),
+			check: func(t *testing.T, vec *vector.Vector, second bool) {
+				want := []float32{1, 2, 3}
+				if second {
+					want = []float32{4, 5, 6}
+				}
+				require.Equal(t, want, types.BF16ToFloat32Slice(vector.GetArrayAt[types.BF16](vec, 0)))
+			},
+		},
+		{
+			name:   "vecf16",
+			typ:    types.New(types.T_array_float16, 3, 0),
+			first:  types.Float32ToFloat16Slice([]float32{1, 2, 3}),
+			second: types.Float32ToFloat16Slice([]float32{4, 5, 6}),
+			check: func(t *testing.T, vec *vector.Vector, second bool) {
+				want := []float32{1, 2, 3}
+				if second {
+					want = []float32{4, 5, 6}
+				}
+				require.Equal(t, want, types.Float16ToFloat32Slice(vector.GetArrayAt[types.Float16](vec, 0)))
+			},
+		},
+		{
+			name:   "vecint8",
+			typ:    types.New(types.T_array_int8, 3, 0),
+			first:  []int8{1, 2, 3},
+			second: []int8{4, 5, 6},
+			check: func(t *testing.T, vec *vector.Vector, second bool) {
+				want := []int8{1, 2, 3}
+				if second {
+					want = []int8{4, 5, 6}
+				}
+				require.Equal(t, want, vector.GetArrayAt[int8](vec, 0))
+			},
+		},
+		{
+			name:   "vecuint8",
+			typ:    types.New(types.T_array_uint8, 3, 0),
+			first:  []uint8{1, 128, 255},
+			second: []uint8{4, 5, 6},
+			check: func(t *testing.T, vec *vector.Vector, second bool) {
+				want := []uint8{1, 128, 255}
+				if second {
+					want = []uint8{4, 5, 6}
+				}
+				require.Equal(t, want, vector.GetArrayAt[uint8](vec, 0))
+			},
+		},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			value := testCase.first
+			proc.SetResolveVariableFunc(func(string, bool, bool) (interface{}, error) {
+				return value, nil
+			})
+			expr := &plan.Expr{
+				Expr: &plan.Expr_V{V: &plan.VarRef{Name: testCase.name}},
+				Typ: plan.Type{
+					Id:    int32(testCase.typ.Oid),
+					Width: testCase.typ.Width,
+					Scale: testCase.typ.Scale,
+				},
+			}
+			executor, err := NewExpressionExecutor(proc, expr)
+			require.NoError(t, err)
+			t.Cleanup(executor.Free)
+
+			vec, err := executor.Eval(proc, nil, nil)
+			require.NoError(t, err)
+			testCase.check(t, vec, false)
+
+			value = testCase.second
+			vec, err = executor.Eval(proc, nil, nil)
+			require.NoError(t, err)
+			testCase.check(t, vec, true)
+		})
+	}
+}
+
 func TestVarExpressionExecutorPreservesProtocolMetadataOnReuse(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	value := "AB\x00\x00"

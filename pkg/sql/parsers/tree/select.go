@@ -503,6 +503,7 @@ func SelectIntoVariables(stmt SelectStatement) []*VarExpr {
 }
 
 const MisplacedIntoClauseMessage = "Misplaced INTO clause, INTO is not allowed inside subqueries, and must be placed at end of UNION clauses."
+const PerformIntoClauseMessage = "INTO is not allowed with PERFORM statements."
 
 func SelectIntoVariablesForTopLevel(stmt SelectStatement) (vars []*VarExpr, deprecated bool, err string) {
 	return selectIntoVariablesForTopLevel(stmt, false)
@@ -524,7 +525,7 @@ func selectIntoVariablesForTopLevel(stmt SelectStatement, insideUnion bool) (var
 	case *ParenSelect:
 		return selectIntoVariablesForTopLevel(node.Select, insideUnion)
 	case *UnionClause:
-		if selectTreeHasInto(node.Left) {
+		if selectTreeHasInto(node.Left) || selectTreeHasExport(node.Left) {
 			return nil, false, MisplacedIntoClauseMessage
 		}
 		vars, deprecated, err = selectIntoVariablesForTopLevel(node.Right, true)
@@ -538,6 +539,269 @@ func selectIntoVariablesForTopLevel(stmt SelectStatement, insideUnion bool) (var
 	default:
 		return nil, false, ""
 	}
+}
+
+func SelectIntoActionConflict(stmt SelectStatement, suffix *SelectInto) bool {
+	actions := 0
+	if vars, _, _ := SelectIntoVariablesForTopLevel(stmt); len(vars) > 0 {
+		actions++
+	}
+	if SelectIntoExport(stmt) != nil {
+		actions++
+	}
+	if suffix != nil {
+		if len(suffix.UserVars) > 0 {
+			actions++
+		}
+		if suffix.Export != nil {
+			actions++
+		}
+	}
+	return actions > 1
+}
+
+func ValidateSelectIntoPlacement(stmt *Select) string {
+	if stmt == nil {
+		return ""
+	}
+	if stmt.IsPerform && (len(stmt.IntoVars) > 0 || selectTreeHasInto(stmt.Select)) {
+		return PerformIntoClauseMessage
+	}
+	if withHasInto(stmt.With) || selectStatementHasNestedInto(stmt.Select) {
+		return MisplacedIntoClauseMessage
+	}
+	return ""
+}
+
+func withHasInto(with *With) bool {
+	if with == nil {
+		return false
+	}
+	for _, cte := range with.CTEs {
+		if cte != nil && statementHasInto(cte.Stmt) {
+			return true
+		}
+	}
+	return false
+}
+
+func statementHasInto(stmt Statement) bool {
+	switch node := stmt.(type) {
+	case *Select:
+		return len(node.IntoVars) > 0 || node.Ep != nil ||
+			withHasInto(node.With) || selectTreeHasInto(node.Select) ||
+			selectTreeHasExport(node.Select) || selectStatementHasNestedInto(node.Select)
+	default:
+		return false
+	}
+}
+
+func selectStatementHasNestedInto(stmt SelectStatement) bool {
+	switch node := stmt.(type) {
+	case *Select:
+		return withHasInto(node.With) || selectStatementHasNestedInto(node.Select)
+	case *SelectClause:
+		if selectExprsHaveInto(node.Exprs) {
+			return true
+		}
+		if node.From != nil && tableExprsHaveInto(node.From.Tables) {
+			return true
+		}
+		if node.Where != nil && exprHasNestedInto(node.Where.Expr) {
+			return true
+		}
+		if node.Having != nil && exprHasNestedInto(node.Having.Expr) {
+			return true
+		}
+		if groupByHasInto(node.GroupBy) {
+			return true
+		}
+		return false
+	case *ParenSelect:
+		return selectStatementHasNestedInto(node.Select)
+	case *UnionClause:
+		return selectStatementHasNestedInto(node.Left) || selectStatementHasNestedInto(node.Right)
+	default:
+		return false
+	}
+}
+
+func selectExprsHaveInto(exprs SelectExprs) bool {
+	for _, expr := range exprs {
+		if exprHasNestedInto(expr.Expr) {
+			return true
+		}
+	}
+	return false
+}
+
+func tableExprsHaveInto(exprs TableExprs) bool {
+	for _, expr := range exprs {
+		if tableExprHasInto(expr) {
+			return true
+		}
+	}
+	return false
+}
+
+func tableExprHasInto(expr TableExpr) bool {
+	switch node := expr.(type) {
+	case nil:
+		return false
+	case *Subquery:
+		return selectStatementHasInto(node.Select)
+	case *AliasedTableExpr:
+		return tableExprHasInto(node.Expr)
+	case *ParenTableExpr:
+		return tableExprHasInto(node.Expr)
+	case *JoinTableExpr:
+		return tableExprHasInto(node.Left) || tableExprHasInto(node.Right) || joinCondHasInto(node.Cond)
+	case *ApplyTableExpr:
+		return tableExprHasInto(node.Left) || tableExprHasInto(node.Right)
+	case *StatementSource:
+		return statementHasInto(node.Statement)
+	case SelectStatement:
+		return selectStatementHasInto(node)
+	default:
+		return false
+	}
+}
+
+func joinCondHasInto(cond JoinCond) bool {
+	switch node := cond.(type) {
+	case nil:
+		return false
+	case *OnJoinCond:
+		return exprHasNestedInto(node.Expr)
+	default:
+		return false
+	}
+}
+
+func groupByHasInto(groupBy *GroupByClause) bool {
+	if groupBy == nil {
+		return false
+	}
+	for _, exprs := range groupBy.GroupByExprsList {
+		if exprsHaveInto(exprs) {
+			return true
+		}
+	}
+	return exprsHaveInto(groupBy.GroupingSet)
+}
+
+func orderByHasInto(orderBy OrderBy) bool {
+	for _, order := range orderBy {
+		if order != nil && exprHasNestedInto(order.Expr) {
+			return true
+		}
+	}
+	return false
+}
+
+func exprsHaveInto(exprs Exprs) bool {
+	for _, expr := range exprs {
+		if exprHasNestedInto(expr) {
+			return true
+		}
+	}
+	return false
+}
+
+func exprHasNestedInto(expr Expr) bool {
+	switch node := expr.(type) {
+	case nil:
+		return false
+	case *Subquery:
+		return selectStatementHasInto(node.Select)
+	case *ParenExpr:
+		return exprHasNestedInto(node.Expr)
+	case *BinaryExpr:
+		return exprHasNestedInto(node.Left) || exprHasNestedInto(node.Right)
+	case *UnaryExpr:
+		return exprHasNestedInto(node.Expr)
+	case *ComparisonExpr:
+		return exprHasNestedInto(node.Left) || exprHasNestedInto(node.Right) || exprHasNestedInto(node.Escape)
+	case *AndExpr:
+		return exprHasNestedInto(node.Left) || exprHasNestedInto(node.Right)
+	case *XorExpr:
+		return exprHasNestedInto(node.Left) || exprHasNestedInto(node.Right)
+	case *OrExpr:
+		return exprHasNestedInto(node.Left) || exprHasNestedInto(node.Right)
+	case *NotExpr:
+		return exprHasNestedInto(node.Expr)
+	case *IsNullExpr:
+		return exprHasNestedInto(node.Expr)
+	case *IsNotNullExpr:
+		return exprHasNestedInto(node.Expr)
+	case *IsUnknownExpr:
+		return exprHasNestedInto(node.Expr)
+	case *IsNotUnknownExpr:
+		return exprHasNestedInto(node.Expr)
+	case *IsTrueExpr:
+		return exprHasNestedInto(node.Expr)
+	case *IsNotTrueExpr:
+		return exprHasNestedInto(node.Expr)
+	case *IsFalseExpr:
+		return exprHasNestedInto(node.Expr)
+	case *IsNotFalseExpr:
+		return exprHasNestedInto(node.Expr)
+	case *FuncExpr:
+		if exprsHaveInto(node.Exprs) || orderByHasInto(node.OrderBy) {
+			return true
+		}
+		if node.WindowSpec != nil {
+			return exprsHaveInto(node.WindowSpec.PartitionBy) ||
+				orderByHasInto(node.WindowSpec.OrderBy) ||
+				frameHasInto(node.WindowSpec.Frame)
+		}
+		return false
+	case *SerialExtractExpr:
+		return exprHasNestedInto(node.SerialExpr) || exprHasNestedInto(node.IndexExpr)
+	case *CastExpr:
+		return exprHasNestedInto(node.Expr)
+	case *BitCastExpr:
+		return exprHasNestedInto(node.Expr)
+	case *Tuple:
+		return exprsHaveInto(node.Exprs)
+	case *RangeCond:
+		return exprHasNestedInto(node.Left) || exprHasNestedInto(node.From) || exprHasNestedInto(node.To)
+	case *CaseExpr:
+		if exprHasNestedInto(node.Expr) || exprHasNestedInto(node.Else) {
+			return true
+		}
+		for _, when := range node.Whens {
+			if when != nil && (exprHasNestedInto(when.Cond) || exprHasNestedInto(when.Val)) {
+				return true
+			}
+		}
+		return false
+	case *IntervalExpr:
+		return exprHasNestedInto(node.Expr)
+	case *DefaultVal:
+		return exprHasNestedInto(node.Expr)
+	case *UpdateVal:
+		return false
+	case *FullTextMatchExpr:
+		return exprHasNestedInto(node.Pattern)
+	default:
+		return false
+	}
+}
+
+func frameHasInto(frame *FrameClause) bool {
+	if frame == nil {
+		return false
+	}
+	return frameBoundHasInto(frame.Start) || frameBoundHasInto(frame.End)
+}
+
+func frameBoundHasInto(bound *FrameBound) bool {
+	return bound != nil && exprHasNestedInto(bound.Expr)
+}
+
+func selectStatementHasInto(stmt SelectStatement) bool {
+	return selectTreeHasInto(stmt) || selectTreeHasExport(stmt) || selectStatementHasNestedInto(stmt)
 }
 
 func selectTreeHasInto(stmt SelectStatement) bool {
@@ -556,10 +820,43 @@ func selectTreeHasInto(stmt SelectStatement) bool {
 }
 
 func SelectIntoExport(stmt SelectStatement) *ExportParam {
-	if clause, ok := stmt.(*SelectClause); ok {
-		return clause.IntoExport
+	return selectIntoExportForTopLevel(stmt)
+}
+
+func selectIntoExportForTopLevel(stmt SelectStatement) *ExportParam {
+	switch node := stmt.(type) {
+	case *Select:
+		if node.Ep != nil {
+			return node.Ep
+		}
+		return selectIntoExportForTopLevel(node.Select)
+	case *SelectClause:
+		return node.IntoExport
+	case *ParenSelect:
+		return selectIntoExportForTopLevel(node.Select)
+	case *UnionClause:
+		if selectTreeHasExport(node.Left) {
+			return nil
+		}
+		return selectIntoExportForTopLevel(node.Right)
+	default:
+		return nil
 	}
-	return nil
+}
+
+func selectTreeHasExport(stmt SelectStatement) bool {
+	switch node := stmt.(type) {
+	case *Select:
+		return node.Ep != nil || selectTreeHasExport(node.Select)
+	case *SelectClause:
+		return node.IntoExport != nil
+	case *ParenSelect:
+		return selectTreeHasExport(node.Select)
+	case *UnionClause:
+		return selectTreeHasExport(node.Left) || selectTreeHasExport(node.Right)
+	default:
+		return false
+	}
 }
 
 func SelectIntoExportOr(stmt SelectStatement, fallback *ExportParam) *ExportParam {

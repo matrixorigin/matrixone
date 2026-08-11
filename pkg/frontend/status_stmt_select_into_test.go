@@ -102,6 +102,12 @@ func TestExecuteStatusStmtSelectIntoAssignsUserVariable(t *testing.T) {
 }
 
 func TestExecuteStatusStmtSelectIntoRejectsInvalidOrFailedExecution(t *testing.T) {
+	t.Run("perform into", func(t *testing.T) {
+		stmt := &tree.Select{IsPerform: true, IntoVars: []*tree.VarExpr{{Name: "out"}}}
+		ses, execCtx := newSelectIntoStatusTestContext(stmt, &statusStmtTestRunner{result: &util.RunResult{}})
+		require.ErrorContains(t, executeStatusStmt(ses, execCtx), tree.PerformIntoClauseMessage)
+	})
+
 	t.Run("arity mismatch", func(t *testing.T) {
 		stmt := &tree.Select{IntoVars: []*tree.VarExpr{{Name: "out"}, {Name: "other"}}}
 		ses, execCtx := newSelectIntoStatusTestContext(stmt, &statusStmtTestRunner{result: &util.RunResult{}})

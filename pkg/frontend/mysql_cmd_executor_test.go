@@ -211,6 +211,43 @@ func TestResetDiagnosticsForStatementLifecycle(t *testing.T) {
 	require.Equal(t, uint16(1001), ses.diagnosticsSnapshot().codes[0])
 }
 
+func TestShowErrorsFiltersWarningDiagnostics(t *testing.T) {
+	ses := &Session{
+		feSessionImpl: feSessionImpl{mrs: &MysqlResultSet{}},
+		errInfo:       &errInfo{maxCnt: MoDefaultErrorCount},
+	}
+	ses.appendErrorDiagnostic(1064, "syntax error")
+	ses.appendWarningDiagnostic(1329, "No data")
+
+	execCtx := &ExecCtx{reqCtx: context.Background(), stmt: &tree.ShowErrors{}}
+	require.NoError(t, doShowErrors(ses, execCtx))
+	require.Equal(t, uint64(1), ses.GetMysqlResultSet().GetRowCount())
+	level, err := ses.GetMysqlResultSet().GetString(context.Background(), 0, 0)
+	require.NoError(t, err)
+	require.Equal(t, "Error", level)
+	code, err := ses.GetMysqlResultSet().GetString(context.Background(), 0, 1)
+	require.NoError(t, err)
+	require.Equal(t, "1064", code)
+
+	ses.SetMysqlResultSet(&MysqlResultSet{})
+	execCtx.stmt = &tree.ShowWarnings{}
+	require.NoError(t, doShowErrors(ses, execCtx))
+	require.Equal(t, uint64(2), ses.GetMysqlResultSet().GetRowCount())
+	level, err = ses.GetMysqlResultSet().GetString(context.Background(), 0, 0)
+	require.NoError(t, err)
+	require.Equal(t, "Warning", level)
+}
+
+func TestSetNewResponseIncludesWarningDiagnostics(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	ses := newTestSession(t, ctrl)
+	defer ses.Close()
+	ses.appendWarningDiagnostic(1329, "No data")
+
+	resp := ses.SetNewResponse(OkResponse, 0, int(COM_QUERY), "", true)
+	require.Equal(t, uint16(1), resp.warnings)
+}
+
 func TestRecordStatementResetsDivByZeroErrorMode(t *testing.T) {
 	ctx := context.Background()
 	setPu("", config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil))

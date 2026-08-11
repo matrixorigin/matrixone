@@ -41,6 +41,9 @@ func executeStatusStmt(ses *Session, execCtx *ExecCtx) (err error) {
 	ep := ses.GetExportConfig()
 	switch st := execCtx.stmt.(type) {
 	case *tree.Select:
+		if st.IsPerform && len(st.IntoVars) > 0 {
+			return moerr.NewSyntaxError(execCtx.reqCtx, tree.PerformIntoClauseMessage)
+		}
 		if st.IsPerform {
 			queryResultFinalized := false
 			defer func() {

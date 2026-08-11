@@ -562,11 +562,13 @@ func (expr *VarExpressionExecutor) Eval(proc *process.Process, batches []*batch.
 		expr.vec, err = util.GenVectorByVarValueWithAllocation(
 			proc, expr.typ, val, expr.allocation,
 		)
-	} else if !expr.typ.IsVarlen() || expr.typ.Oid == types.T_json {
-		// Fixed-width user-variable values (including DECIMAL), and JSON values,
-		// are stored as text on the frontend session. Reusing the old varlena
-		// update path would either reinterpret a fixed vector's backing memory as
-		// a Varlena or skip JSON's binary encoding.
+	} else if !expr.typ.IsVarlen() || expr.typ.Oid == types.T_json || expr.typ.Oid.IsArrayRelate() {
+		// Fixed-width user-variable values (including DECIMAL), JSON values, and
+		// array/vector values need typed reconstruction on every evaluation.
+		// Reusing the generic varlena update path would either reinterpret a
+		// fixed vector's backing memory as a Varlena, skip JSON's binary
+		// encoding, or replace array element bytes with display text such as
+		// "[1 2 3]".
 		expr.vec.Free(expr.mp)
 		expr.vec, err = util.GenVectorByVarValueWithAllocation(
 			proc, expr.typ, val, expr.allocation,
