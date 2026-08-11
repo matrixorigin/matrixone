@@ -18,6 +18,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/sql/mongodb"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/util/sysview"
@@ -33,6 +34,8 @@ var tenantUpgEntries = []versions.UpgradeEntry{
 	upgradeInformationSchemaReferentialConstraints(),
 	populateInformationSchemaCharacterSets(),
 	upgradeInformationSchemaColumns(),
+	upgradeInformationSchemaCheckConstraints(),
+	upgradeInformationSchemaTableConstraints(),
 }
 
 // Keep this as a separate upgrade entry so tenants that already completed
@@ -119,6 +122,34 @@ func upgradeInformationSchemaReferentialConstraints() versions.UpgradeEntry {
 		UpgSql:    sysview.InformationSchemaReferentialConstraintsDDL,
 		CheckFunc: checkViewDefinition("REFERENTIAL_CONSTRAINTS", sysview.InformationSchemaReferentialConstraintsDDL),
 		PreSql:    fmt.Sprintf("DROP VIEW IF EXISTS %s.%s;", sysview.InformationDBConst, "REFERENTIAL_CONSTRAINTS"),
+	}
+}
+
+func upgradeInformationSchemaCheckConstraints() versions.UpgradeEntry {
+	return versions.UpgradeEntry{
+		Schema:                  sysview.InformationDBConst,
+		TableName:               "CHECK_CONSTRAINTS",
+		UpgType:                 versions.CREATE_VIEW,
+		UpgSql:                  sysview.InformationSchemaCheckConstraintsDDL,
+		RequiredProtocolVersion: defines.MORPCVersion16,
+		CheckFunc: checkViewDefinition("CHECK_CONSTRAINTS",
+			sysview.InformationSchemaCheckConstraintsDDL),
+		PreSql: fmt.Sprintf("DROP VIEW IF EXISTS %s.%s;",
+			sysview.InformationDBConst, "CHECK_CONSTRAINTS"),
+	}
+}
+
+func upgradeInformationSchemaTableConstraints() versions.UpgradeEntry {
+	return versions.UpgradeEntry{
+		Schema:                  sysview.InformationDBConst,
+		TableName:               "TABLE_CONSTRAINTS",
+		UpgType:                 versions.MODIFY_VIEW,
+		UpgSql:                  sysview.InformationSchemaTableConstraintsDDL,
+		RequiredProtocolVersion: defines.MORPCVersion16,
+		CheckFunc: checkViewDefinition("TABLE_CONSTRAINTS",
+			sysview.InformationSchemaTableConstraintsDDL),
+		PreSql: fmt.Sprintf("DROP VIEW IF EXISTS %s.%s;",
+			sysview.InformationDBConst, "TABLE_CONSTRAINTS"),
 	}
 }
 

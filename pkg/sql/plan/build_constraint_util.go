@@ -104,6 +104,29 @@ func appendCheckConstraintPlan(
 	colName2Idx map[string]int32,
 	ignoreMode bool,
 ) (int32, error) {
+	return appendCheckConstraintPlanWithColLookup(
+		builder,
+		bindCtx,
+		tableDef,
+		lastNodeID,
+		inputTag,
+		func(colName string) (int32, bool) {
+			colPos, ok := colName2Idx[tableDef.Name+"."+colName]
+			return colPos, ok
+		},
+		ignoreMode,
+	)
+}
+
+func appendCheckConstraintPlanWithColLookup(
+	builder *QueryBuilder,
+	bindCtx *BindContext,
+	tableDef *TableDef,
+	lastNodeID int32,
+	inputTag int32,
+	lookupColPos func(string) (int32, bool),
+	ignoreMode bool,
+) (int32, error) {
 	if len(tableDef.Checks) == 0 {
 		return lastNodeID, nil
 	}
@@ -116,7 +139,7 @@ func appendCheckConstraintPlan(
 		if col.Name == catalog.Row_ID {
 			continue
 		}
-		colPos, ok := colName2Idx[tableDef.Name+"."+col.Name]
+		colPos, ok := lookupColPos(col.Name)
 		if !ok {
 			return 0, moerr.NewInternalErrorf(
 				builder.GetContext(),
@@ -166,11 +189,16 @@ func appendCheckConstraintPlan(
 		filterList = append(filterList, assertExpr)
 	}
 
+	nodeType := plan.Node_ASSERT
+	if ignoreMode {
+		nodeType = plan.Node_FILTER
+	}
 	return builder.appendNode(&plan.Node{
-		NodeType:    plan.Node_FILTER,
-		Children:    []int32{lastNodeID},
-		FilterList:  filterList,
-		ProjectList: getProjectionByLastNodeIfAvailable(builder, lastNodeID),
+		NodeType:        nodeType,
+		Children:        []int32{lastNodeID},
+		FilterList:      filterList,
+		ProjectList:     getProjectionByLastNodeIfAvailable(builder, lastNodeID),
+		FilterIsBarrier: ignoreMode,
 	}, bindCtx), nil
 }
 
@@ -178,13 +206,46 @@ func requireCheckConstraintProtocol(ctx context.Context, proc *process.Process) 
 	if proc == nil {
 		return nil
 	}
-	value, ok := moruntime.ServiceRuntime(proc.GetService()).
-		GetGlobalVariables(moruntime.MOProtocolVersion)
+	rt := moruntime.ServiceRuntime(proc.GetService())
+	if rt == nil {
+		return moerr.NewNotSupported(
+			ctx,
+			"CHECK constraints require all CNs to support protocol version 7",
+		)
+	}
+	value, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
 	version, valid := value.(int64)
 	if !ok || !valid || version < defines.MORPCVersion7 {
 		return moerr.NewNotSupported(
 			ctx,
 			"CHECK constraints require all CNs to support protocol version 7",
+		)
+	}
+	return nil
+}
+
+// requireInformationSchemaCheckConstraintsProtocol protects the persisted
+// information_schema views that reference mo_check_constraints.  A rolling
+// upgrade may leave an older CN in the same version-offset window; the view
+// must not be installed until the deployment-wide protocol rollout has made
+// the table-function contract available to every receiver.
+func requireInformationSchemaCheckConstraintsProtocol(ctx context.Context, proc *process.Process) error {
+	if proc == nil {
+		return nil
+	}
+	rt := moruntime.ServiceRuntime(proc.GetService())
+	if rt == nil {
+		return moerr.NewNotSupported(
+			ctx,
+			"information_schema CHECK_CONSTRAINTS requires all CNs to support protocol version 16",
+		)
+	}
+	value, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	version, valid := value.(int64)
+	if !ok || !valid || version < defines.MORPCVersion16 {
+		return moerr.NewNotSupported(
+			ctx,
+			"information_schema CHECK_CONSTRAINTS requires all CNs to support protocol version 16",
 		)
 	}
 	return nil

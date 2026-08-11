@@ -370,7 +370,7 @@ func (n *Bitmap) RemoveRange(start, end uint64) {
 	count := 0
 	i, j := start>>6, (end-1)>>6
 	if i == j {
-		mask := (^uint64(0) << uint(start&0x3F)) & (^uint64(0) >> (uint(-end) % 0x3F))
+		mask := (^uint64(0) << uint(start&0x3F)) & (^uint64(0) >> (uint(-end) & 0x3F))
 		count = bits.OnesCount64(n.data[i] & mask)
 		n.data[i] &= ^mask
 		n.count -= int64(count)

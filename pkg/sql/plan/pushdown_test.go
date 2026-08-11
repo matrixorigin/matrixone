@@ -38,6 +38,123 @@ func (c *fixedProcessCompilerContext) GetProcess() *process.Process {
 	return c.proc
 }
 
+func TestAssertIsFilterPushdownBoundary(t *testing.T) {
+	ctx := NewMockCompilerContext(true)
+	builder := NewQueryBuilder(plan.Query_UPDATE, ctx, false, false)
+	tag := builder.GenNewBindTag()
+	boolType := Type{Id: int32(types.T_bool)}
+	assertExpr := &plan.Expr{
+		Typ:  boolType,
+		Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: tag, ColPos: 0}},
+	}
+	parentFilter := DeepCopyExpr(assertExpr)
+	builder.qry.Nodes = []*plan.Node{
+		{
+			NodeType:    plan.Node_TABLE_SCAN,
+			BindingTags: []int32{tag},
+			ProjectList: []*plan.Expr{DeepCopyExpr(assertExpr)},
+		},
+		{
+			NodeType:   plan.Node_ASSERT,
+			Children:   []int32{0},
+			FilterList: []*plan.Expr{assertExpr},
+			Limit:      MakePlan2Uint64ConstExprWithType(1),
+		},
+	}
+
+	nodeID, cantPushdown := builder.pushdownFilters(1, []*plan.Expr{parentFilter}, false)
+	require.Equal(t, int32(1), nodeID)
+	require.Equal(t, []*plan.Expr{parentFilter}, cantPushdown)
+	require.Equal(t, []*plan.Expr{assertExpr}, builder.qry.Nodes[1].FilterList)
+	require.Empty(t, builder.qry.Nodes[0].FilterList)
+}
+
+func TestBarrierFilterIsFilterPushdownBoundary(t *testing.T) {
+	ctx := NewMockCompilerContext(true)
+	builder := NewQueryBuilder(plan.Query_UPDATE, ctx, false, false)
+	tag := builder.GenNewBindTag()
+	boolType := Type{Id: int32(types.T_bool)}
+	barrierExpr := &plan.Expr{
+		Typ:  boolType,
+		Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: tag, ColPos: 0}},
+	}
+	parentFilter := DeepCopyExpr(barrierExpr)
+	builder.qry.Nodes = []*plan.Node{
+		{
+			NodeType:    plan.Node_PRE_INSERT,
+			BindingTags: []int32{tag},
+			ProjectList: []*plan.Expr{DeepCopyExpr(barrierExpr)},
+		},
+		{
+			NodeType:        plan.Node_FILTER,
+			Children:        []int32{0},
+			FilterList:      []*plan.Expr{barrierExpr},
+			FilterIsBarrier: true,
+			Limit:           MakePlan2Uint64ConstExprWithType(1),
+		},
+	}
+
+	nodeID, cantPushdown := builder.pushdownFilters(1, []*plan.Expr{parentFilter}, false)
+	require.Equal(t, int32(1), nodeID)
+	require.Equal(t, []*plan.Expr{parentFilter}, cantPushdown)
+	require.Equal(t, []*plan.Expr{barrierExpr}, builder.qry.Nodes[1].FilterList)
+	require.Empty(t, builder.qry.Nodes[0].FilterList)
+}
+
+func TestDedupUpdateIsFilterPushdownBoundary(t *testing.T) {
+	ctx := NewMockCompilerContext(true)
+	builder := NewQueryBuilder(plan.Query_UPDATE, ctx, false, false)
+	leftTag := builder.GenNewBindTag()
+	rightTag := builder.GenNewBindTag()
+	boolType := Type{Id: int32(types.T_bool)}
+	leftFilter := &plan.Expr{
+		Typ:  boolType,
+		Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: leftTag, ColPos: 0}},
+	}
+	rightFilter := &plan.Expr{
+		Typ:  boolType,
+		Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: rightTag, ColPos: 0}},
+	}
+	bothFilter, err := BindFuncExprImplByPlanExpr(ctx.GetContext(), "and", []*plan.Expr{
+		DeepCopyExpr(leftFilter), DeepCopyExpr(rightFilter),
+	})
+	require.NoError(t, err)
+	constantFilter := MakePlan2BoolConstExprWithType(false)
+	externalFilters := []*plan.Expr{leftFilter, rightFilter, bothFilter, constantFilter}
+	builder.qry.Nodes = []*plan.Node{
+		{NodeType: plan.Node_TABLE_SCAN, BindingTags: []int32{leftTag}},
+		{NodeType: plan.Node_TABLE_SCAN, BindingTags: []int32{rightTag}},
+		{
+			NodeType:          plan.Node_JOIN,
+			JoinType:          plan.Node_DEDUP,
+			OnDuplicateAction: plan.Node_UPDATE,
+			Children:          []int32{0, 1},
+		},
+	}
+
+	nodeID, cantPushdown := builder.pushdownFilters(2, externalFilters, false)
+	require.Equal(t, int32(2), nodeID)
+	require.Equal(t, externalFilters, cantPushdown)
+	require.Empty(t, builder.qry.Nodes[0].FilterList)
+	require.Empty(t, builder.qry.Nodes[1].FilterList)
+
+	control := NewQueryBuilder(plan.Query_UPDATE, ctx, false, false)
+	control.qry.Nodes = []*plan.Node{
+		{NodeType: plan.Node_TABLE_SCAN, BindingTags: []int32{leftTag}},
+		{NodeType: plan.Node_TABLE_SCAN, BindingTags: []int32{rightTag}},
+		{
+			NodeType:          plan.Node_JOIN,
+			JoinType:          plan.Node_DEDUP,
+			OnDuplicateAction: plan.Node_IGNORE,
+			Children:          []int32{0, 1},
+		},
+	}
+	_, cantPushdown = control.pushdownFilters(2, []*plan.Expr{DeepCopyExpr(rightFilter)}, false)
+	require.Empty(t, cantPushdown)
+	require.Len(t, control.qry.Nodes[1].FilterList, 1,
+		"non-mutating DEDUP actions must retain their existing one-side pushdown")
+}
+
 func setupLeftJoinBase(t *testing.T) (*MockCompilerContext, *QueryBuilder, *plan.Expr, *plan.Expr, *plan.Expr) {
 	t.Helper()
 

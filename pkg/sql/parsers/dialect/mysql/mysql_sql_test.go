@@ -98,6 +98,53 @@ func TestSetNamesAssignmentKind(t *testing.T) {
 	}
 }
 
+func TestSetTransactionScope(t *testing.T) {
+	tests := []struct {
+		sql   string
+		scope tree.TransactionScope
+	}{
+		{sql: "set transaction isolation level read committed", scope: tree.TransactionScopeNext},
+		{sql: "set session transaction isolation level read committed", scope: tree.TransactionScopeSession},
+		{sql: "set global transaction isolation level read committed", scope: tree.TransactionScopeGlobal},
+	}
+
+	for _, test := range tests {
+		t.Run(test.sql, func(t *testing.T) {
+			stmt, err := ParseOne(context.Background(), test.sql, 1)
+			require.NoError(t, err)
+			setTxn, ok := stmt.(*tree.SetTransaction)
+			require.True(t, ok)
+			require.Equal(t, test.scope, setTxn.Scope)
+		})
+	}
+}
+
+func TestSetTransactionIsolationVariableScope(t *testing.T) {
+	tests := []struct {
+		sql   string
+		scope tree.TransactionScope
+	}{
+		{sql: "set transaction_isolation = 'READ-COMMITTED'", scope: tree.TransactionScopeSession},
+		{sql: "set session transaction_isolation = 'READ-COMMITTED'", scope: tree.TransactionScopeSession},
+		{sql: "set local transaction_isolation = 'READ-COMMITTED'", scope: tree.TransactionScopeSession},
+		{sql: "set global transaction_isolation = 'READ-COMMITTED'", scope: tree.TransactionScopeGlobal},
+		{sql: "set @@transaction_isolation = 'READ-COMMITTED'", scope: tree.TransactionScopeNext},
+		{sql: "set @@session.transaction_isolation = 'READ-COMMITTED'", scope: tree.TransactionScopeSession},
+		{sql: "set @@global.transaction_isolation = 'READ-COMMITTED'", scope: tree.TransactionScopeGlobal},
+	}
+
+	for _, test := range tests {
+		t.Run(test.sql, func(t *testing.T) {
+			stmt, err := ParseOne(context.Background(), test.sql, 1)
+			require.NoError(t, err)
+			setVar, ok := stmt.(*tree.SetVar)
+			require.True(t, ok)
+			require.Len(t, setVar.Assignments, 1)
+			require.Equal(t, test.scope, setVar.Assignments[0].TxnScope)
+		})
+	}
+}
+
 func TestDropFunctionIfExists(t *testing.T) {
 	tests := []struct {
 		sql      string
@@ -119,6 +166,17 @@ func TestDropFunctionIfExists(t *testing.T) {
 			require.Equal(t, test.sql, tree.String(stmt, dialect.MYSQL))
 		})
 	}
+}
+
+func TestGroupingAcceptsExpressions(t *testing.T) {
+	const sql = "select grouping(year(o.order_date), c.city) from orders as o, customers as c group by year(o.order_date), c.city with rollup"
+	const formatted = "select grouping(year(o.order_date), c.city) from orders as o cross join customers as c group by year(o.order_date), c.city with rollup"
+
+	stmt, err := ParseOne(context.Background(), sql, 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+
+	require.Equal(t, formatted, tree.String(stmt, dialect.MYSQL))
 }
 
 func TestQuantifiedTableSubqueryParse(t *testing.T) {
@@ -4108,11 +4166,11 @@ var (
 		},
 		{
 			input:  "set session transaction isolation level read committed , read write , isolation level read committed , read only;",
-			output: "set transaction isolation level read committed , read write , isolation level read committed , read only",
+			output: "set session transaction isolation level read committed , read write , isolation level read committed , read only",
 		},
 		{
 			input:  "set session transaction isolation level read committed , isolation level read uncommitted , isolation level repeatable read , isolation level serializable;",
-			output: "set transaction isolation level read committed , isolation level read uncommitted , isolation level repeatable read , isolation level serializable",
+			output: "set session transaction isolation level read committed , isolation level read uncommitted , isolation level repeatable read , isolation level serializable",
 		},
 		{
 			input:  "create table t1(a int) STORAGE DISK;",

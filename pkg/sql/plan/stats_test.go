@@ -53,6 +53,26 @@ func TestCalcBlockSelectivityUsingShuffleRangeBareColumn(t *testing.T) {
 	})
 }
 
+func TestAssertStatsInheritChildWithoutSelectivityDiscount(t *testing.T) {
+	builder := NewQueryBuilder(planpb.Query_UPDATE, &MockCompilerContext{ctx: context.Background()}, false, false)
+	childStats := &planpb.Stats{
+		TableCnt:    1000,
+		Outcnt:      750,
+		Cost:        1234,
+		Selectivity: 0.75,
+		BlockNum:    9,
+	}
+	builder.qry.Nodes = []*planpb.Node{
+		{NodeType: planpb.Node_TABLE_SCAN, Stats: childStats},
+		{NodeType: planpb.Node_ASSERT, Children: []int32{0}},
+	}
+
+	ReCalcNodeStats(1, builder, false, false, false)
+
+	require.Equal(t, childStats, builder.qry.Nodes[1].Stats)
+	require.NotSame(t, childStats, builder.qry.Nodes[1].Stats)
+}
+
 func TestSafeStatsRatiosAvoidNonFiniteSelectivity(t *testing.T) {
 	t.Run("limit never increases cardinality", func(t *testing.T) {
 		builder := NewQueryBuilder(planpb.Query_SELECT, &MockCompilerContext{ctx: context.Background()}, false, false)

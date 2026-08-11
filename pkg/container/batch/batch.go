@@ -1836,13 +1836,20 @@ func (bat *Batch) Allocated() int {
 }
 
 func (bat *Batch) Window(start, end int) (*Batch, error) {
+	if bat == nil || start < 0 || end < start || end > bat.RowCount() {
+		return nil, moerr.NewInvalidInputNoCtx("invalid batch window")
+	}
 	b := NewWithSize(len(bat.Vecs))
 	var err error
 	b.Attrs = bat.Attrs
 	b.offHeap = bat.offHeap
 	b.allocationAccount = bat.allocationAccount
 	for i, vec := range bat.Vecs {
-		b.Vecs[i], err = vec.Window(start, end)
+		if vec == nil {
+			b.Clean(nil)
+			return nil, moerr.NewInvalidInputNoCtx("invalid batch vector")
+		}
+		b.Vecs[i], err = vec.WindowByLogicalRows(start, end)
 		if err != nil {
 			// Plain vector windows borrow data/area and keep any provenance
 			// sidecar's physical MPool owner internally, so nil is the correct
@@ -1881,7 +1888,9 @@ func (bat *Batch) WindowWithAllocation(
 			return nil, mpool.ErrAllocationAccountInvalid
 		}
 		var err error
-		b.Vecs[i], err = vec.WindowWithAllocation(start, end, mp, selection)
+		b.Vecs[i], err = vec.WindowByLogicalRowsWithAllocation(
+			start, end, mp, selection,
+		)
 		if err != nil {
 			b.Clean(mp)
 			return nil, err
