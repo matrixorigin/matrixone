@@ -15908,7 +15908,7 @@ yydefault:
 //line mysql_sql.y:2717
 		{
 			yyLOCAL = &tree.SetTransaction{
-				Global:        false,
+				Scope:         tree.TransactionScopeNext,
 				CharacterList: yyDollar[3].transactionCharacteristicListUnion(),
 			}
 		}
@@ -15919,7 +15919,7 @@ yydefault:
 //line mysql_sql.y:2724
 		{
 			yyLOCAL = &tree.SetTransaction{
-				Global:        true,
+				Scope:         tree.TransactionScopeGlobal,
 				CharacterList: yyDollar[4].transactionCharacteristicListUnion(),
 			}
 		}
@@ -15930,7 +15930,7 @@ yydefault:
 //line mysql_sql.y:2731
 		{
 			yyLOCAL = &tree.SetTransaction{
-				Global:        false,
+				Scope:         tree.TransactionScopeSession,
 				CharacterList: yyDollar[4].transactionCharacteristicListUnion(),
 			}
 		}
@@ -16159,9 +16159,10 @@ yydefault:
 //line mysql_sql.y:2911
 		{
 			yyLOCAL = &tree.VarAssignmentExpr{
-				System: true,
-				Name:   yyDollar[1].str,
-				Value:  yyDollar[3].exprUnion(),
+				System:   true,
+				TxnScope: tree.TransactionScopeSession,
+				Name:     yyDollar[1].str,
+				Value:    yyDollar[3].exprUnion(),
 			}
 		}
 		yyVAL.union = yyLOCAL
@@ -16171,10 +16172,11 @@ yydefault:
 //line mysql_sql.y:2919
 		{
 			yyLOCAL = &tree.VarAssignmentExpr{
-				System: true,
-				Global: true,
-				Name:   yyDollar[2].str,
-				Value:  yyDollar[4].exprUnion(),
+				System:   true,
+				Global:   true,
+				TxnScope: tree.TransactionScopeGlobal,
+				Name:     yyDollar[2].str,
+				Value:    yyDollar[4].exprUnion(),
 			}
 		}
 		yyVAL.union = yyLOCAL
@@ -16184,10 +16186,11 @@ yydefault:
 //line mysql_sql.y:2928
 		{
 			yyLOCAL = &tree.VarAssignmentExpr{
-				System: true,
-				Global: true,
-				Name:   yyDollar[2].str,
-				Value:  yyDollar[4].exprUnion(),
+				System:   true,
+				Global:   true,
+				TxnScope: tree.TransactionScopeGlobal,
+				Name:     yyDollar[2].str,
+				Value:    yyDollar[4].exprUnion(),
 			}
 		}
 		yyVAL.union = yyLOCAL
@@ -16197,9 +16200,10 @@ yydefault:
 //line mysql_sql.y:2937
 		{
 			yyLOCAL = &tree.VarAssignmentExpr{
-				System: true,
-				Name:   yyDollar[2].str,
-				Value:  yyDollar[4].exprUnion(),
+				System:   true,
+				TxnScope: tree.TransactionScopeSession,
+				Name:     yyDollar[2].str,
+				Value:    yyDollar[4].exprUnion(),
 			}
 		}
 		yyVAL.union = yyLOCAL
@@ -16209,9 +16213,10 @@ yydefault:
 //line mysql_sql.y:2945
 		{
 			yyLOCAL = &tree.VarAssignmentExpr{
-				System: true,
-				Name:   yyDollar[2].str,
-				Value:  yyDollar[4].exprUnion(),
+				System:   true,
+				TxnScope: tree.TransactionScopeSession,
+				Name:     yyDollar[2].str,
+				Value:    yyDollar[4].exprUnion(),
 			}
 		}
 		yyVAL.union = yyLOCAL
@@ -16249,19 +16254,24 @@ yydefault:
 		{
 			v := strings.ToLower(yyDollar[1].str)
 			var isGlobal bool
+			txnScope := tree.TransactionScopeNext
 			if strings.HasPrefix(v, "global.") {
 				isGlobal = true
+				txnScope = tree.TransactionScopeGlobal
 				v = strings.TrimPrefix(v, "global.")
 			} else if strings.HasPrefix(v, "session.") {
+				txnScope = tree.TransactionScopeSession
 				v = strings.TrimPrefix(v, "session.")
 			} else if strings.HasPrefix(v, "local.") {
+				txnScope = tree.TransactionScopeSession
 				v = strings.TrimPrefix(v, "local.")
 			}
 			yyLOCAL = &tree.VarAssignmentExpr{
-				System: true,
-				Global: isGlobal,
-				Name:   v,
-				Value:  yyDollar[3].exprUnion(),
+				System:   true,
+				Global:   isGlobal,
+				TxnScope: txnScope,
+				Name:     v,
+				Value:    yyDollar[3].exprUnion(),
 			}
 		}
 		yyVAL.union = yyLOCAL

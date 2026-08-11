@@ -141,14 +141,14 @@ func TestOrderedSetPercentileRemoteProtocolValidation(t *testing.T) {
 		plan.AggregateConfigType_AGG_CONFIG_NONE,
 	)}
 
-	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion14)
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion15)
 	require.ErrorContains(
 		t,
 		validateRemoteAggregateProtocol(proc, percentile),
-		"requires MORPC protocol version 15",
+		"requires MORPC protocol version 16",
 	)
 
-	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion15)
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion16)
 	require.NoError(t, validateRemoteAggregateProtocol(proc, percentile))
 }
 
@@ -219,11 +219,11 @@ func TestOrderedSetPercentileMergeGroupRemoteProtocolValidation(t *testing.T) {
 		plan.AggregateConfigType_AGG_CONFIG_NONE,
 	)}
 
-	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion14)
-	_, _, err := convertToPipelineInstruction(merge, proc, &scopeContext{}, 1)
-	require.ErrorContains(t, err, "requires MORPC protocol version 15")
-
 	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion15)
+	_, _, err := convertToPipelineInstruction(merge, proc, &scopeContext{}, 1)
+	require.ErrorContains(t, err, "requires MORPC protocol version 16")
+
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion16)
 	_, _, err = convertToPipelineInstruction(merge, proc, &scopeContext{}, 1)
 	require.NoError(t, err)
 }

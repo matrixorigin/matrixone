@@ -744,6 +744,7 @@ a    b    c    d
 2    ac    1981-02-20    1600.00
 3    ad    1981-02-22    500.00
 alter table t1 alter column b set invisible;
+not supported: invisible columns
 show index from t1;
 Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
 t1    0    a    1    a    A    0    NULL    NULL                        YES    a
