@@ -1210,8 +1210,13 @@ func TestHandleCheckActiveTxnKeepsOnlyAuthoritativeInternalActivityActive(t *tes
 			releaseResponse(resp)
 			txn.Lock()
 			txn.exclusivePending = false
-			txn.exclusiveActivity.Store(false)
 			txn.Unlock()
+			s.activeTxnHolder.clearExclusiveLockActivity(txnID)
+			resp = acquireResponse()
+			s.handleCheckActiveTxn(context.Background(), nil, req, resp, cs)
+			require.True(t, resp.CheckActiveTxn.Valid)
+			require.False(t, resp.CheckActiveTxn.Active)
+			releaseResponse(resp)
 
 			s.unknownCommitResolver.mu.Lock()
 			s.unknownCommitResolver.mu.pending[string(txnID)] = unknownCommitTxn{id: txnID}

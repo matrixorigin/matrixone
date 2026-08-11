@@ -105,7 +105,7 @@ func newActiveTxn(
 	return txn
 }
 
-func (txn activeTxn) TypeName() string {
+func (txn *activeTxn) TypeName() string {
 	return "lockservice.activeTxn"
 }
 
