@@ -107,7 +107,7 @@ func (c *CCPRTxnCache) WriteObject(ctx context.Context, objectName string, txnID
 	txnIDCopy := append([]byte(nil), txnID...)
 	for {
 		c.mu.Lock()
-		isNewFile, err, deleteDone := c.writeObjectLocked(
+		isNewFile, deleteDone, err := c.writeObjectLocked(
 			ctx, objectName, txnIDCopy)
 		c.mu.Unlock()
 		if deleteDone == nil {
@@ -127,16 +127,16 @@ func (c *CCPRTxnCache) writeObjectLocked(
 	ctx context.Context,
 	objectName string,
 	txnIDCopy []byte,
-) (isNewFile bool, err error, deleteDone <-chan struct{}) {
+) (isNewFile bool, deleteDone <-chan struct{}, err error) {
 	if c.fs == nil {
-		return false, moerr.NewInternalError(
-			ctx, "fileservice is nil in CCPRTxnCache"), nil
+		return false, nil, moerr.NewInternalError(
+			ctx, "fileservice is nil in CCPRTxnCache")
 	}
 
 	// Check if object already exists in cache
 	if entry, exists := c.items.Get(ItemEntry{objectName: objectName}); exists {
 		if entry.deleteDone != nil {
-			return false, nil, entry.deleteDone
+			return false, entry.deleteDone, nil
 		}
 		// Object exists in cache, add txnID if not already present
 		for _, id := range entry.txnIDs {
@@ -157,8 +157,8 @@ func (c *CCPRTxnCache) writeObjectLocked(
 		return false, nil, nil
 	}
 	if !moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
-		return false, moerr.NewInternalErrorf(
-			ctx, "failed to stat object in fileservice: %v", err), nil
+		return false, nil, moerr.NewInternalErrorf(
+			ctx, "failed to stat object in fileservice: %v", err)
 	}
 
 	// File does not exist, mark as writing and register txnID
