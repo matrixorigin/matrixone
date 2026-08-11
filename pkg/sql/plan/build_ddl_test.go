@@ -1043,6 +1043,147 @@ func TestBuildCreateViewPreservesDefaultKinds(t *testing.T) {
 	require.Equal(t, "uuid", cols[2].GetDefault().GetExpr().GetF().GetFunc().GetObjName())
 }
 
+func TestGroupingExtensionsExposeNullableKeysInViewAndCTAS(t *testing.T) {
+	newContext := func(rootSQL string) *rootSQLCompilerContext {
+		ctx := NewMockCompilerContext(false)
+		for _, name := range []string{"n_nationkey", "n_regionkey"} {
+			col := ctx.tables["nation"].Cols[ctx.tables["nation"].Name2ColIndex[name]]
+			col.Typ.NotNullable = true
+			col.Default = &plan.Default{NullAbility: false}
+		}
+		return &rootSQLCompilerContext{MockCompilerContext: ctx, rootSQL: rootSQL}
+	}
+
+	for _, test := range []struct {
+		name     string
+		groupBy  string
+		nullable []bool
+	}{
+		{
+			name:     "ordinary group by preserves source nullability",
+			groupBy:  "n_nationkey, n_regionkey",
+			nullable: []bool{false, false},
+		},
+		{
+			name:     "rollup",
+			groupBy:  "n_nationkey, n_regionkey with rollup",
+			nullable: []bool{true, true},
+		},
+		{
+			name:     "cube",
+			groupBy:  "cube(n_nationkey, n_regionkey)",
+			nullable: []bool{true, true},
+		},
+		{
+			name:     "grouping sets",
+			groupBy:  "grouping sets ((n_nationkey, n_regionkey), (n_nationkey), ())",
+			nullable: []bool{true, true},
+		},
+		{
+			name:     "grouping sets preserve keys active in every branch",
+			groupBy:  "grouping sets ((n_nationkey, n_regionkey), (n_nationkey))",
+			nullable: []bool{false, true},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			rootSQL := "create view grouping_extension_view as select n_nationkey, n_regionkey, count(*) as cnt from nation group by " + test.groupBy
+			stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, rootSQL, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+
+			viewPlan, err := BuildPlan(newContext(rootSQL), stmt, false)
+			require.NoError(t, err)
+			viewCols := viewPlan.GetDdl().GetCreateView().GetTableDef().GetCols()
+			require.Len(t, viewCols, 3)
+			for i, wantNullable := range test.nullable {
+				require.Equal(t, wantNullable, viewCols[i].GetDefault().GetNullAbility(), viewCols[i].GetName())
+			}
+		})
+	}
+
+	for _, test := range []struct {
+		name     string
+		groupBy  string
+		nullable []bool
+	}{
+		{
+			name:     "rollup",
+			groupBy:  "n_nationkey, n_regionkey with rollup",
+			nullable: []bool{true, true},
+		},
+		{
+			name:     "grouping sets preserve keys active in every branch",
+			groupBy:  "grouping sets ((n_nationkey, n_regionkey), (n_nationkey))",
+			nullable: []bool{false, true},
+		},
+	} {
+		t.Run("CTAS "+test.name, func(t *testing.T) {
+			ctasSQL := "create table grouping_extension_ctas as select n_nationkey, n_regionkey, count(*) as cnt from nation group by " + test.groupBy
+			stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, ctasSQL, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+
+			ctasPlan, err := BuildPlan(newContext(ctasSQL), stmt, false)
+			require.NoError(t, err)
+			ctasCols := ctasPlan.GetDdl().GetCreateTable().GetTableDef().GetCols()
+			require.GreaterOrEqual(t, len(ctasCols), 3)
+			for i, wantNullable := range test.nullable {
+				require.Equal(t, wantNullable, ctasCols[i].GetDefault().GetNullAbility(), ctasCols[i].GetName())
+			}
+		})
+	}
+}
+
+func TestGroupingExtensionQueryOutputKeysAreNullable(t *testing.T) {
+	for _, test := range []struct {
+		name        string
+		groupBy     string
+		notNullable []bool
+	}{
+		{
+			name:        "ordinary group by preserves source nullability",
+			groupBy:     "n_nationkey, n_regionkey",
+			notNullable: []bool{true, true},
+		},
+		{
+			name:        "rollup",
+			groupBy:     "n_nationkey, n_regionkey with rollup",
+			notNullable: []bool{false, false},
+		},
+		{
+			name:        "cube",
+			groupBy:     "cube(n_nationkey, n_regionkey)",
+			notNullable: []bool{false, false},
+		},
+		{
+			name:        "grouping sets",
+			groupBy:     "grouping sets ((n_nationkey, n_regionkey), (n_nationkey), ())",
+			notNullable: []bool{false, false},
+		},
+		{
+			name:        "grouping sets preserve keys active in every branch",
+			groupBy:     "grouping sets ((n_nationkey, n_regionkey), (n_nationkey))",
+			notNullable: []bool{true, false},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			opt := NewMockOptimizer(false)
+			ctx := opt.CurrentContext().(*MockCompilerContext)
+			for _, name := range []string{"n_nationkey", "n_regionkey"} {
+				ctx.tables["nation"].Cols[ctx.tables["nation"].Name2ColIndex[name]].Typ.NotNullable = true
+			}
+
+			queryPlan, err := runOneStmt(opt, t, "select n_nationkey, n_regionkey, count(*) as cnt from nation group by "+test.groupBy)
+			require.NoError(t, err)
+			query := queryPlan.GetQuery()
+			rootNode := query.Nodes[query.Steps[0]]
+			for i, wantNotNullable := range test.notNullable {
+				require.Equal(t, wantNotNullable, rootNode.ProjectList[i].Typ.NotNullable)
+			}
+		})
+	}
+}
+
 func TestBuildCTASFromViewUsesIndependentExecutableDefault(t *testing.T) {
 	ctx := NewMockCompilerContext(false)
 	sourceCol := ctx.tables["nation"].Cols[0]
