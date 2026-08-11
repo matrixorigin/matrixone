@@ -326,6 +326,75 @@ SELECT * FROM multi_update_auto_b ORDER BY id;
 DROP TABLE multi_update_auto_a;
 DROP TABLE multi_update_auto_b;
 
+DROP TABLE IF EXISTS multi_update_eval_empty;
+DROP TABLE IF EXISTS multi_update_eval_sibling;
+CREATE TABLE multi_update_eval_empty (id INT PRIMARY KEY, v INT);
+CREATE TABLE multi_update_eval_sibling (id INT PRIMARY KEY, v INT);
+INSERT INTO multi_update_eval_sibling VALUES (1, 0), (2, 0);
+UPDATE multi_update_eval_empty a
+RIGHT JOIN multi_update_eval_sibling b ON a.id = b.id
+SET a.v = 'not-an-int', b.v = 9;
+SELECT ROW_COUNT();
+SELECT * FROM multi_update_eval_sibling ORDER BY id;
+UPDATE multi_update_eval_sibling SET v = 0;
+PREPARE multi_update_eval_stmt FROM
+    'UPDATE multi_update_eval_empty a RIGHT JOIN multi_update_eval_sibling b ON a.id = b.id SET a.v = ?, b.v = ?';
+SET @multi_update_bad = 'still-not-an-int';
+SET @multi_update_good = 10;
+EXECUTE multi_update_eval_stmt USING @multi_update_bad, @multi_update_good;
+SET @multi_update_good = 11;
+EXECUTE multi_update_eval_stmt USING @multi_update_bad, @multi_update_good;
+DEALLOCATE PREPARE multi_update_eval_stmt;
+SELECT * FROM multi_update_eval_sibling ORDER BY id;
+DROP TABLE multi_update_eval_empty;
+DROP TABLE multi_update_eval_sibling;
+
+DROP TABLE IF EXISTS multi_update_eval_target;
+DROP TABLE IF EXISTS multi_update_eval_check_target;
+DROP TABLE IF EXISTS multi_update_eval_source;
+DROP TABLE IF EXISTS multi_update_eval_check_source;
+DROP TABLE IF EXISTS multi_update_eval_sibling;
+CREATE TABLE multi_update_eval_target (id INT PRIMARY KEY, v INT NOT NULL);
+CREATE TABLE multi_update_eval_check_target (
+    id INT PRIMARY KEY,
+    v INT,
+    CONSTRAINT positive_v CHECK (v > 0)
+);
+CREATE TABLE multi_update_eval_source (id INT PRIMARY KEY, nv VARCHAR(32));
+CREATE TABLE multi_update_eval_check_source (id INT PRIMARY KEY, nv VARCHAR(32));
+CREATE TABLE multi_update_eval_sibling (id INT PRIMARY KEY, v INT);
+INSERT INTO multi_update_eval_target VALUES (1, 0);
+INSERT INTO multi_update_eval_check_target VALUES (1, 1);
+INSERT INTO multi_update_eval_source VALUES (1, '5'), (2, 'not-an-int');
+INSERT INTO multi_update_eval_check_source VALUES (1, '5'), (2, '5');
+INSERT INTO multi_update_eval_sibling VALUES (1, 0), (2, 0);
+UPDATE multi_update_eval_target a
+JOIN multi_update_eval_source s ON a.id = 1
+JOIN multi_update_eval_sibling b ON b.id = s.id
+SET a.v = s.nv, b.v = b.v + 1;
+SELECT ROW_COUNT();
+SELECT * FROM multi_update_eval_target;
+SELECT * FROM multi_update_eval_sibling ORDER BY id;
+--error
+UPDATE multi_update_eval_target a
+JOIN multi_update_eval_source s ON a.id = 1 AND s.id = 1
+JOIN multi_update_eval_sibling b ON b.id = s.id
+SET a.v = NULL, b.v = b.v + 1;
+SELECT * FROM multi_update_eval_target;
+SELECT * FROM multi_update_eval_sibling ORDER BY id;
+UPDATE multi_update_eval_check_target a
+JOIN multi_update_eval_check_source s ON a.id = 1
+JOIN multi_update_eval_sibling b ON b.id = s.id
+SET a.v = s.nv, b.v = b.v + 1;
+SELECT ROW_COUNT();
+SELECT * FROM multi_update_eval_check_target;
+SELECT * FROM multi_update_eval_sibling ORDER BY id;
+DROP TABLE multi_update_eval_target;
+DROP TABLE multi_update_eval_check_target;
+DROP TABLE multi_update_eval_source;
+DROP TABLE multi_update_eval_check_source;
+DROP TABLE multi_update_eval_sibling;
+
 DROP TABLE IF EXISTS multi_update_repeated_alias;
 CREATE TABLE multi_update_repeated_alias (id INT PRIMARY KEY, x INT, y INT);
 INSERT INTO multi_update_repeated_alias VALUES (1, 0, 0), (2, 0, 0);

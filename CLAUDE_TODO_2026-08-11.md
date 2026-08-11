@@ -37,3 +37,19 @@
 | route control | 两个不同物理表 target | modern planner 正常规划/执行 |
 | wire | 新版本 sender/receiver | target selector 和 target-aware dedup 完整 round-trip |
 | wire | 任一端低于最低版本 | 在远程执行前确定性拒绝，不消费 AUTO_INCREMENT、不写错 target |
+
+## Review 修复：selected target 之前禁止赋值与 CHECK 副作用
+
+### 新增不变量
+
+- **求值隔离**：可能报错的赋值、DEFAULT、类型转换、on-update 和 generated 表达式，只能在对应 target 的最终 selected candidate（active 且 row_number=1）上求值；inactive/loser candidate 不得影响 sibling target。
+- **CHECK 选择一致性**：CHECK、FK、index、PRE_INSERT 与物理 writer 必须复用同一个 `active AND row_number=1` 语义，不能各自重建不完整 eligibility。
+- **单 target outer join**：未命中的 target 用 Rowid eligibility 做惰性求值保护，同时保留后续物理过滤；没有候选行时与空表 UPDATE 一样是 no-op。
+
+### 实施与回归
+
+1. 将 multi-target row-number 选择下推到 assignment projection 之前，并用惰性 `if(selected, new, old)` 包住 target-local 新值；保留 writer 的最终物理过滤。
+2. 对 single-target nullable join 用 `isnotnull(Rowid)` 保护赋值求值；对 generated/on-update/default/cast 做同一 selected guard。
+3. CHECK 直接复用 `buildTargetSelectedExpr` 的完整条件。
+4. 增加 inactive 非法 cast、dedup loser 非法 cast、dedup loser CHECK violation 以及合法 sibling target 的白盒/BVT 对照。
+5. 运行 planner/colexec/compile owning tests、相关 BVT、build/vet/SCA、完整 diff 自审；再次 merge 最新 `mo/main` 后正常 push。

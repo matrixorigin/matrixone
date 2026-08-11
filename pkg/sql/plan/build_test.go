@@ -2591,6 +2591,7 @@ func TestMultiTargetUpdateUsesIndependentModernSelectors(t *testing.T) {
 	query := logicPlan.GetQuery()
 	var multiUpdate *plan.Node
 	rowNumberWindows := 0
+	guardedAssignmentProjects := 0
 	for _, node := range query.Nodes {
 		if node.NodeType == plan.Node_WINDOW {
 			for _, specExpr := range node.WinSpecList {
@@ -2604,9 +2605,19 @@ func TestMultiTargetUpdateUsesIndependentModernSelectors(t *testing.T) {
 		if node.NodeType == plan.Node_MULTI_UPDATE {
 			multiUpdate = node
 		}
+		if node.NodeType == plan.Node_PROJECT && len(node.Children) == 1 &&
+			query.Nodes[node.Children[0]].NodeType == plan.Node_WINDOW {
+			for _, expr := range node.ProjectList {
+				if expr.GetF() != nil && expr.GetF().GetFunc().GetObjName() == "if" {
+					guardedAssignmentProjects++
+				}
+			}
+		}
 	}
 	require.NotNil(t, multiUpdate)
 	require.Equal(t, 2, rowNumberWindows)
+	require.GreaterOrEqual(t, guardedAssignmentProjects, 2,
+		"target-local assignments must be lazily evaluated above the target row-number windows")
 
 	mainCtxs := make(map[string]*plan.UpdateCtx)
 	for _, updateCtx := range multiUpdate.UpdateCtxList {
@@ -4525,6 +4536,27 @@ func TestCheckConstraintWithChildForeignKey(t *testing.T) {
 		}
 		require.True(t, guarded,
 			"CHECK must pass rows whose nullable update target has no Rowid")
+	})
+
+	t.Run("multi target check uses the complete selected candidate", func(t *testing.T) {
+		query := build("UPDATE emp e JOIN dept d ON e.deptno = d.deptno " +
+			"SET e.deptno = e.deptno + 1, d.loc = e.ename")
+		guarded := false
+		for _, node := range query.Nodes {
+			if node.NodeType != plan.Node_ASSERT {
+				continue
+			}
+			for _, expr := range node.FilterList {
+				if exprContainsFunction(expr, "_check_constraint_assert") &&
+					exprContainsFunction(expr, "or") &&
+					exprContainsFunction(expr, "and") &&
+					exprContainsFunction(expr, "=") {
+					guarded = true
+				}
+			}
+		}
+		require.True(t, guarded,
+			"CHECK eligibility must include both target active and row_number = 1")
 	})
 
 	t.Run("on duplicate key update", func(t *testing.T) {

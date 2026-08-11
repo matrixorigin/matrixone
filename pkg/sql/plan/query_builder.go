@@ -2980,7 +2980,11 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 		var selectorRefs [3][2]int32
 		if node.PreInsertCtx.HasTargetSelector {
 			selectorInput := builder.qry.Nodes[node.Children[0]]
-			for selectorInput.NodeType == plan.Node_PRE_INSERT && len(selectorInput.BindingTags) == 0 {
+			// Target-aware UPDATE can place pass-through ASSERT/FILTER nodes and
+			// another PRE_INSERT between this operator and the project that owns
+			// the selector columns. Walk through any single-child node without an
+			// output binding instead of assuming only nested PRE_INSERT can occur.
+			for len(selectorInput.BindingTags) == 0 {
 				if len(selectorInput.Children) != 1 {
 					return nil, moerr.NewInternalError(builder.GetContext(), "invalid PRE_INSERT target selector input")
 				}
