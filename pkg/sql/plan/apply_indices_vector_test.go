@@ -275,6 +275,102 @@ func TestReplaceDistFnInExpr_UnfoldedCastMatches(t *testing.T) {
 	require.Equal(t, int32(1), col.ColPos)
 }
 
+// foldedVecExpr builds a constant-folded vector literal (raw element bytes in VecVal) of the type.
+func foldedVecExpr(typ types.T, raw []byte) *plan.Expr {
+	return &plan.Expr{
+		Typ:  plan.Type{Id: int32(typ)},
+		Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_VecVal{VecVal: string(raw)}}},
+	}
+}
+
+// castTextVecExpr builds an unfolded cast('<text>' as vec<typ>) expression.
+func castTextVecExpr(typ types.T, text string) *plan.Expr {
+	return &plan.Expr{
+		Typ: plan.Type{Id: int32(typ)},
+		Expr: &plan.Expr_F{F: &plan.Function{
+			Func: &ObjectRef{ObjName: "cast"},
+			Args: []*plan.Expr{{
+				Typ:  plan.Type{Id: int32(types.T_varchar)},
+				Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_Sval{Sval: text}}},
+			}},
+		}},
+	}
+}
+
+// TestVecFloatKey_Uint8ByteExactNoNaNCollision: two distinct folded vecuint8 vectors whose 4 raw bytes
+// happen to be distinct float32 NaN payloads must produce distinct keys. Decoding as float32 (the old
+// behavior) canonicalized both to "[NaN]" and made a distance to one silently rewrite to the other.
+func TestVecFloatKey_Uint8ByteExactNoNaNCollision(t *testing.T) {
+	a := foldedVecExpr(types.T_array_uint8, types.ArrayToBytes([]uint8{0, 0, 192, 127}))
+	b := foldedVecExpr(types.T_array_uint8, types.ArrayToBytes([]uint8{1, 0, 192, 127}))
+	ka, oka := vecFloatKey(a, types.T_array_uint8)
+	kb, okb := vecFloatKey(b, types.T_array_uint8)
+	require.True(t, oka)
+	require.True(t, okb)
+	require.NotEqual(t, ka, kb, "distinct uint8 vectors must not collide (byte-exact key, not float32 NaN)")
+	// Documents the old collision: interpreted as float32 both canonicalize to the same NaN string.
+	na := types.ArrayToString(types.BytesToArray[float32](types.ArrayToBytes([]uint8{0, 0, 192, 127})))
+	nb := types.ArrayToString(types.BytesToArray[float32](types.ArrayToBytes([]uint8{1, 0, 192, 127})))
+	require.Equal(t, na, nb, "sanity: as float32 both were [NaN] — the bug the byte-exact key fixes")
+}
+
+// TestVecFloatKey_NarrowTextVsFoldedMatch: a folded vecuint8 vector and an unfolded
+// cast('[...]' as vecuint8) of the same values must yield the same key (so the rewrite still fires).
+func TestVecFloatKey_NarrowTextVsFoldedMatch(t *testing.T) {
+	folded := foldedVecExpr(types.T_array_uint8, types.ArrayToBytes([]uint8{1, 2, 3}))
+	unfolded := castTextVecExpr(types.T_array_uint8, "[1, 2, 3]")
+	kf, okf := vecFloatKey(folded, types.T_array_uint8)
+	ku, oku := vecFloatKey(unfolded, types.T_array_uint8)
+	require.True(t, okf)
+	require.True(t, oku)
+	require.Equal(t, kf, ku, "unfolded uint8 text must match the folded uint8 vector")
+}
+
+// TestReplaceDistFnInExpr_Uint8DifferentVectorNotRewritten: the end-to-end #P1 repro — a SELECT-side
+// distance to a DIFFERENT vecuint8 vector than the ORDER BY key must stay a distance, not become score.
+func TestReplaceDistFnInExpr_Uint8DifferentVectorNotRewritten(t *testing.T) {
+	const scanTag, tfTag, partPos int32 = 11, 22, 1
+	vecLit := foldedVecExpr(types.T_array_uint8, types.ArrayToBytes([]uint8{0, 0, 192, 127}))  // ORDER BY key
+	other := foldedVecExpr(types.T_array_uint8, types.ArrayToBytes([]uint8{1, 0, 192, 127}))   // SELECT vector
+	distFn := &plan.Expr{
+		Typ: plan.Type{Id: int32(types.T_float64)},
+		Expr: &plan.Expr_F{F: &plan.Function{
+			Func: &ObjectRef{ObjName: "l2_distance"},
+			Args: []*plan.Expr{
+				{Typ: plan.Type{Id: int32(types.T_array_uint8)}, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: scanTag, ColPos: partPos, Name: "vec"}}},
+				other,
+			},
+		}},
+	}
+	out := replaceDistFnInExpr(distFn, scanTag, partPos, "l2_distance", vecLit, tfTag, plan.Type{Id: int32(types.T_float64)})
+	require.NotNil(t, out.GetF(), "distance to a DIFFERENT uint8 vector must stay a distance, not the index score")
+	require.Equal(t, "l2_distance", out.GetF().Func.ObjName)
+}
+
+// TestReplaceDistFnInExpr_EmptyCastFailSafeNoPanic: the #P2 repro — an unfolded cast('' as vecf32)
+// SELECT distance must not panic the planner; it is unparseable, so it stays a distance (fail-safe).
+func TestReplaceDistFnInExpr_EmptyCastFailSafeNoPanic(t *testing.T) {
+	const scanTag, tfTag, partPos int32 = 11, 22, 1
+	vecLit := foldedVecExpr(types.T_array_float32, types.ArrayToBytes([]float32{0.1, 0.2, 0.3}))
+	for _, bad := range []string{"", "   ", "\t"} {
+		distFn := &plan.Expr{
+			Typ: plan.Type{Id: int32(types.T_float64)},
+			Expr: &plan.Expr_F{F: &plan.Function{
+				Func: &ObjectRef{ObjName: "l2_distance"},
+				Args: []*plan.Expr{
+					{Typ: plan.Type{Id: int32(types.T_array_float32)}, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: scanTag, ColPos: partPos, Name: "vec"}}},
+					castTextVecExpr(types.T_array_float32, bad),
+				},
+			}},
+		}
+		require.NotPanics(t, func() {
+			out := replaceDistFnInExpr(distFn, scanTag, partPos, "l2_distance", vecLit, tfTag, plan.Type{Id: int32(types.T_float64)})
+			require.NotNil(t, out.GetF(), "empty/whitespace cast is unparseable -> stays a distance")
+			require.Equal(t, "l2_distance", out.GetF().Func.ObjName)
+		}, "malformed textual literal %q must fail safe, not panic", bad)
+	}
+}
+
 func TestReplaceDistFnInExpr_NoMatch(t *testing.T) {
 	const scanTag int32 = 11
 	const tfTag int32 = 22

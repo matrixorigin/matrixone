@@ -974,16 +974,17 @@ func replaceDistFnInExpr(
 // vector column and use the index's metric) is computed against the SAME query vector as vecLitArg —
 // the vector the index/ORDER BY search key uses. The query vector is the arg that is NOT the base-scan
 // column. A distance on a DIFFERENT vector must NOT be rewritten to this index's score (it would
-// silently report the wrong distance — 1 != 2). The comparison is a pure, executor-free parse: both
-// the folded vecLitArg (VecVal) and the possibly-unfolded SELECT-side cast('[...]') are parsed to the
-// index element precision and canonicalized, so format differences (fold-normalized text vs the raw
-// literal) don't matter. A non-constant (param) query vector yields no key and is left alone (fail-safe).
+// silently report the wrong distance — 1 != 2). The comparison is a pure, executor-free parse done at
+// the ACTUAL vector element type (vecLitArg.Typ): both the folded vecLitArg (VecVal) and the
+// possibly-unfolded SELECT-side cast('[...]') resolve to the same canonical byte encoding, so format
+// differences don't matter while distinct vectors never collide. A non-constant (param) query vector
+// yields no key and is left alone (fail-safe).
 func sameQueryVector(fn *plan.Function, scanBindingTag, partPos int32, vecLitArg *plan.Expr) bool {
 	if fn == nil || len(fn.Args) != 2 || vecLitArg == nil {
 		return false
 	}
-	isF64 := vecLitArg.Typ.GetId() == int32(types.T_array_float64)
-	litKey, ok := vecFloatKey(vecLitArg, isF64)
+	elemType := types.T(vecLitArg.Typ.GetId())
+	litKey, ok := vecFloatKey(vecLitArg, elemType)
 	if !ok {
 		return false
 	}
@@ -992,23 +993,24 @@ func sameQueryVector(fn *plan.Function, scanBindingTag, partPos int32, vecLitArg
 	if c := fn.Args[0].GetCol(); c == nil || c.RelPos != scanBindingTag || c.ColPos != partPos {
 		vecArg = fn.Args[0]
 	}
-	argKey, ok := vecFloatKey(vecArg, isF64)
+	argKey, ok := vecFloatKey(vecArg, elemType)
 	return ok && argKey == litKey
 }
 
-// vecFloatKey parses a vector-literal expression into a canonical key so two references to the same
-// query vector compare equal regardless of how each is encoded. It unwraps a CAST, then reads the
-// vector value in whichever form the literal carries:
-//   - a constant-folded vector literal stores the RAW element bytes in VecVal (constant_fold.go uses
-//     vec.GetStringAt) — decoded with BytesToArray;
-//   - an unfolded textual literal (e.g. the inner string of cast('[...]' as vecf32)) stores the
-//     "[...]" text in Sval — decoded with StringToArrayV2.
+// vecFloatKey parses a vector-literal expression into a canonical BYTE key so two references to the
+// same query vector compare equal regardless of how each is encoded, decoding at the ACTUAL element
+// type (elemType) rather than treating every non-f64 vector as float32. It unwraps a CAST, then:
+//   - a constant-folded vector literal already stores the raw element bytes in VecVal; those bytes ARE
+//     the canonical type-exact key and are compared directly (decoding narrow/int bytes as float32
+//     collapses distinct vectors onto a shared NaN string — e.g. vecuint8 [0,0,192,127] and
+//     [1,0,192,127] both become "[NaN]");
+//   - an unfolded textual literal (the inner "[...]" of cast('[...]' as vec<T>)) is parsed at elemType
+//     via the length-checked StringToArrayToBytes (returns an error — never panics — on empty /
+//     whitespace / malformed input) and re-encoded to the same byte form.
 //
-// Both are decoded at the index element precision (float32/float64) and re-stringified, so the folded
-// ORDER BY vector and the raw SELECT-side cast('[...]') of the same vector yield the same key, while a
-// genuinely different vector does not. Returns ok=false for a non-constant (e.g. param) or unparseable
-// argument (fail-safe: no rewrite).
-func vecFloatKey(e *plan.Expr, isF64 bool) (string, bool) {
+// Returns ok=false for a non-constant (param), unsupported-type, or unparseable argument (fail-safe:
+// no rewrite).
+func vecFloatKey(e *plan.Expr, elemType types.T) (string, bool) {
 	for e != nil {
 		if f := e.GetF(); f != nil && f.Func.ObjName == "cast" && len(f.Args) >= 1 {
 			e = f.Args[0]
@@ -1020,35 +1022,71 @@ func vecFloatKey(e *plan.Expr, isF64 bool) (string, bool) {
 	if lit == nil {
 		return "", false
 	}
-	// Folded vector literal: raw element bytes in VecVal. Guard the length against the element size
-	// so a malformed literal yields no key (fail-safe: no rewrite) rather than panicking BytesToArray.
+	elemSize := vecElemByteSize(elemType)
+	if elemSize == 0 {
+		return "", false
+	}
+	// Folded vector literal: the raw element bytes are the canonical, type-exact key. Guard the length
+	// against the element size so a malformed literal yields no key (fail-safe) rather than a bad decode.
 	if raw := lit.GetVecVal(); raw != "" {
-		if isF64 {
-			if len(raw)%8 != 0 {
-				return "", false
-			}
-			return types.ArrayToString(types.BytesToArray[float64]([]byte(raw))), true
-		}
-		if len(raw)%4 != 0 {
+		if len(raw)%elemSize != 0 {
 			return "", false
 		}
-		return types.ArrayToString(types.BytesToArray[float32]([]byte(raw))), true
+		return raw, true
 	}
-	// Unfolded textual literal: "[...]" text in Sval.
+	// Unfolded textual literal: "[...]" text in Sval, parsed at elemType into the same byte form.
 	sv, ok := lit.Value.(*plan.Literal_Sval)
 	if !ok {
 		return "", false
 	}
-	if isF64 {
-		a, err := types.StringToArrayV2[float64](sv.Sval)
-		if err != nil {
-			return "", false
-		}
-		return types.ArrayToString(a), true
-	}
-	a, err := types.StringToArrayV2[float32](sv.Sval)
-	if err != nil {
+	b, ok := vecTextToBytes(elemType, sv.Sval)
+	if !ok {
 		return "", false
 	}
-	return types.ArrayToString(a), true
+	return string(b), true
+}
+
+// vecElemByteSize returns the byte width of a single element of a vector array type, or 0 for a
+// non-vector / unsupported type (fail-safe: callers treat 0 as "no key").
+func vecElemByteSize(t types.T) int {
+	switch t {
+	case types.T_array_float32:
+		return 4
+	case types.T_array_float64:
+		return 8
+	case types.T_array_bf16, types.T_array_float16:
+		return 2
+	case types.T_array_int8, types.T_array_uint8:
+		return 1
+	default:
+		return 0
+	}
+}
+
+// vecTextToBytes parses an unfolded "[...]" literal at the given vector element type into the folded
+// byte encoding, using the length-checked StringToArrayToBytes (returns an error — never panics — on
+// empty/whitespace/malformed input). ok=false on any parse failure (fail-safe: no rewrite).
+func vecTextToBytes(t types.T, s string) ([]byte, bool) {
+	var b []byte
+	var err error
+	switch t {
+	case types.T_array_float32:
+		b, err = types.StringToArrayToBytes[float32](s)
+	case types.T_array_float64:
+		b, err = types.StringToArrayToBytes[float64](s)
+	case types.T_array_bf16:
+		b, err = types.StringToArrayToBytes[types.BF16](s)
+	case types.T_array_float16:
+		b, err = types.StringToArrayToBytes[types.Float16](s)
+	case types.T_array_int8:
+		b, err = types.StringToArrayToBytes[int8](s)
+	case types.T_array_uint8:
+		b, err = types.StringToArrayToBytes[uint8](s)
+	default:
+		return nil, false
+	}
+	if err != nil {
+		return nil, false
+	}
+	return b, true
 }
