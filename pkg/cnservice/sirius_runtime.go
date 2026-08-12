@@ -55,7 +55,7 @@ func (s *service) startSiriusRuntime(ctx context.Context) error {
 	if !config.Enabled {
 		return nil
 	}
-	if s.options.siriusLeases == nil || !s.options.siriusLeases.Ready() || !s.options.siriusLeases.Protected() || s.options.siriusAuditor == nil {
+	if s.options.siriusLeases == nil || !s.options.siriusLeases.DurableReady() || s.options.siriusAuditor == nil {
 		return siriusInternalErrorf("substrait: enabled Sirius runtime requires replayed GC-protected lease dependencies")
 	}
 	flightTLS, err := loadSiriusClientTLS(config)

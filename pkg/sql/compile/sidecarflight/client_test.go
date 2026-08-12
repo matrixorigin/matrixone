@@ -76,6 +76,7 @@ type testFlightServer struct {
 	blockDoGet          chan struct{}
 	doGetOnce           sync.Once
 	cancelFailures      atomic.Int32
+	deadlineUnixMS      atomic.Int64
 }
 
 func TestInternalErrorfUsesMoerrAndPreservesCause(t *testing.T) {
@@ -152,12 +153,12 @@ func TestRuntimeAndExecutionRejectInvalidStates(t *testing.T) {
 	}
 
 	var nilRuntime *Runtime
-	_, err := nilRuntime.Prepare(context.Background(), 1, make([]byte, 16), []byte("plan"), nil, nil, testFlightRelease)
+	_, err := nilRuntime.Prepare(context.Background(), 1, make([]byte, 16), []byte("plan"), nil, nil, testFlightDeadline(), testFlightRelease)
 	require.ErrorContains(t, err, "nil runtime")
 	runtime := &Runtime{config: Config{RequestTimeout: time.Second}, stopped: true}
-	_, err = runtime.Prepare(context.Background(), 0, nil, nil, nil, nil, testFlightRelease)
+	_, err = runtime.Prepare(context.Background(), 0, nil, nil, nil, nil, testFlightDeadline(), testFlightRelease)
 	require.ErrorContains(t, err, "query identity")
-	_, err = runtime.Prepare(context.Background(), 1, make([]byte, 16), []byte("plan"), nil, nil, testFlightRelease)
+	_, err = runtime.Prepare(context.Background(), 1, make([]byte, 16), []byte("plan"), nil, nil, testFlightDeadline(), testFlightRelease)
 	require.ErrorContains(t, err, "runtime is stopping")
 
 	var nilExecution *Execution
@@ -186,11 +187,39 @@ func TestPrepareRejectsUnsafeFlightInfo(t *testing.T) {
 				config: Config{MaxBatchBytes: 1 << 20, RequestTimeout: time.Second, CleanupTimeout: time.Second},
 				conn:   testFlightConnection(t, server), executions: make(map[*Execution]struct{}),
 			}
-			_, err := runtime.Prepare(context.Background(), 1, make([]byte, 16), []byte("plan"), typesOut, headings, testFlightRelease)
+			_, err := runtime.Prepare(context.Background(), 1, make([]byte, 16), []byte("plan"), typesOut, headings, testFlightDeadline(), testFlightRelease)
 			require.ErrorContains(t, err, tc.want)
 			require.Equal(t, int32(1), server.cancels.Load())
 		})
 	}
+}
+
+func TestPrepareClampsDeadlineToLeaseSafetyCeiling(t *testing.T) {
+	server := &testFlightServer{
+		schema: mustHex(t, fixtureSchemaHex), ticket: make([]byte, ticketBytes), hash: make([]byte, sha256.Size),
+	}
+	runtime := &Runtime{
+		config: Config{MaxBatchBytes: 1 << 20, RequestTimeout: time.Minute, CleanupTimeout: time.Second},
+		conn:   testFlightConnection(t, server), executions: make(map[*Execution]struct{}),
+	}
+	copy(runtime.capabilityHash[:], server.hash)
+	typesOut, headings := fixtureOutputShape()
+	ceiling := time.Now().Add(10 * time.Second).Truncate(time.Millisecond)
+	execution, err := runtime.Prepare(
+		context.Background(), 1, make([]byte, 16), []byte("plan"), typesOut, headings,
+		ceiling, testFlightRelease,
+	)
+	require.NoError(t, err)
+	require.Equal(t, ceiling.UnixMilli(), server.deadlineUnixMS.Load())
+	require.NoError(t, execution.Cleanup(context.Background()))
+
+	var releases atomic.Int32
+	_, err = runtime.Prepare(
+		context.Background(), 1, make([]byte, 16), []byte("plan"), typesOut, headings,
+		time.Now().Add(-time.Second), func(context.Context) error { releases.Add(1); return nil },
+	)
+	require.ErrorContains(t, err, "lease-safe execution deadline has expired")
+	require.Equal(t, int32(1), releases.Load())
 }
 
 func TestFlightFallbackClassificationAndWireMessages(t *testing.T) {
@@ -227,7 +256,7 @@ func TestExecutionStreamsOneOwnedBatchAndCancelsOnWriterFailure(t *testing.T) {
 	copy(runtime.capabilityHash[:], server.hash)
 	typesOut, headings := fixtureOutputShape()
 
-	execution, err := runtime.Prepare(context.Background(), 1, make([]byte, 16), []byte("plan"), typesOut, headings, testFlightRelease)
+	execution, err := runtime.Prepare(context.Background(), 1, make([]byte, 16), []byte("plan"), typesOut, headings, testFlightDeadline(), testFlightRelease)
 	require.NoError(t, err)
 	mp := mpool.MustNewZero()
 	rows := 0
@@ -240,7 +269,7 @@ func TestExecutionStreamsOneOwnedBatchAndCancelsOnWriterFailure(t *testing.T) {
 	require.Equal(t, int64(0), mp.CurrNB())
 	require.Equal(t, int32(0), server.cancels.Load())
 
-	execution, err = runtime.Prepare(context.Background(), 1, make([]byte, 16), []byte("plan"), typesOut, headings, testFlightRelease)
+	execution, err = runtime.Prepare(context.Background(), 1, make([]byte, 16), []byte("plan"), typesOut, headings, testFlightDeadline(), testFlightRelease)
 	require.NoError(t, err)
 	writerErr := errors.New("client disconnected")
 	runErr := execution.Run(context.Background(), mp, nil, func(*batch.Batch, *perfcounter.CounterSet) error {
@@ -266,13 +295,13 @@ func TestPrepareCancelsByIdempotencyWhenTicketIsUnknown(t *testing.T) {
 	copy(runtime.capabilityHash[:], server.hash)
 	typesOut, headings := fixtureOutputShape()
 
-	_, err := runtime.Prepare(context.Background(), 1, make([]byte, 16), []byte("plan"), typesOut, headings, testFlightRelease)
+	_, err := runtime.Prepare(context.Background(), 1, make([]byte, 16), []byte("plan"), typesOut, headings, testFlightDeadline(), testFlightRelease)
 	require.ErrorContains(t, err, "malformed endpoint ticket")
 	require.False(t, IsQuiescenceUnknown(err))
 	require.Equal(t, int32(1), server.cancelByIdempotency.Load())
 
 	server.cancelErr = status.Error(codes.Unavailable, "cleanup unavailable")
-	_, err = runtime.Prepare(context.Background(), 1, make([]byte, 16), []byte("plan"), typesOut, headings, testFlightRelease)
+	_, err = runtime.Prepare(context.Background(), 1, make([]byte, 16), []byte("plan"), typesOut, headings, testFlightDeadline(), testFlightRelease)
 	require.True(t, IsQuiescenceUnknown(err))
 	require.False(t, IsPreVisibilityFallback(err))
 }
@@ -292,6 +321,7 @@ func TestAmbiguousPrepareCleanupIsRetriedUntilLeaseRelease(t *testing.T) {
 
 	_, err := runtime.Prepare(
 		context.Background(), 1, make([]byte, 16), []byte("plan"), typesOut, headings,
+		testFlightDeadline(),
 		func(context.Context) error {
 			releaseAttempts.Add(1)
 			return nil
@@ -319,6 +349,7 @@ func TestExecutionRetriesFailedCancellationAndPartialLeaseRelease(t *testing.T) 
 	var releaseAttempts atomic.Int32
 	execution, err := runtime.Prepare(
 		context.Background(), 1, make([]byte, 16), []byte("plan"), typesOut, headings,
+		testFlightDeadline(),
 		func(context.Context) error {
 			if releaseAttempts.Add(1) == 1 {
 				return errors.New("second lease unregister failed")
@@ -353,6 +384,7 @@ func TestRequestDeadlineCancelsStalledDoGet(t *testing.T) {
 	var released atomic.Int32
 	execution, err := runtime.Prepare(
 		context.Background(), 1, make([]byte, 16), []byte("plan"), typesOut, headings,
+		testFlightDeadline(),
 		func(context.Context) error { released.Add(1); return nil },
 	)
 	require.NoError(t, err)
@@ -405,7 +437,7 @@ func TestRuntimeCloseCancelsAndJoinsInflightPreparation(t *testing.T) {
 	typesOut, headings := fixtureOutputShape()
 	prepareDone := make(chan error, 1)
 	go func() {
-		_, err := runtime.Prepare(context.Background(), 1, make([]byte, 16), []byte("plan"), typesOut, headings, testFlightRelease)
+		_, err := runtime.Prepare(context.Background(), 1, make([]byte, 16), []byte("plan"), typesOut, headings, testFlightDeadline(), testFlightRelease)
 		prepareDone <- err
 	}()
 	<-server.prepareStarted
@@ -427,7 +459,7 @@ func TestConcurrentRuntimeCloseWaitsForQuiescence(t *testing.T) {
 	}
 	copy(runtime.capabilityHash[:], server.hash)
 	typesOut, headings := fixtureOutputShape()
-	_, err := runtime.Prepare(context.Background(), 1, make([]byte, 16), []byte("plan"), typesOut, headings, testFlightRelease)
+	_, err := runtime.Prepare(context.Background(), 1, make([]byte, 16), []byte("plan"), typesOut, headings, testFlightDeadline(), testFlightRelease)
 	require.NoError(t, err)
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
@@ -458,7 +490,7 @@ func TestContextCancellationReachesSidecarWhileWriterIsBlocked(t *testing.T) {
 	}
 	copy(runtime.capabilityHash[:], server.hash)
 	typesOut, headings := fixtureOutputShape()
-	execution, err := runtime.Prepare(context.Background(), 1, make([]byte, 16), []byte("plan"), typesOut, headings, testFlightRelease)
+	execution, err := runtime.Prepare(context.Background(), 1, make([]byte, 16), []byte("plan"), typesOut, headings, testFlightDeadline(), testFlightRelease)
 	require.NoError(t, err)
 
 	runCtx, cancelRun := context.WithCancel(context.Background())
@@ -579,6 +611,7 @@ func testGetFlightInfo(service any, ctx context.Context, decode func(any) error,
 		len(command.Plan) == 0 || len(command.QueryID) != 16 || len(command.IdempotencyKey) != sha256.Size || command.AccountID == 0 {
 		return nil, status.Error(codes.InvalidArgument, "malformed ExecuteSubstrait command")
 	}
+	server.deadlineUnixMS.Store(int64(command.DeadlineUnixMS))
 	if server.prepareStarted != nil {
 		server.prepareOnce.Do(func() { close(server.prepareStarted) })
 	}
@@ -672,6 +705,8 @@ func runtimeExecutionCount(runtime *Runtime) int {
 }
 
 func testFlightRelease(context.Context) error { return nil }
+
+func testFlightDeadline() time.Time { return time.Now().Add(time.Hour) }
 
 func testTLSFlightServer(t *testing.T, implementation *testFlightServer) (string, *tls.Config) {
 	t.Helper()

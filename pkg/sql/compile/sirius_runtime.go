@@ -64,7 +64,7 @@ type SiriusRuntime struct {
 }
 
 func (r *SiriusRuntime) Validate() error {
-	if r == nil || r.Flight == nil || r.Leases == nil || !r.Leases.Ready() || !r.Leases.Protected() ||
+	if r == nil || r.Flight == nil || r.Leases == nil || !r.Leases.DurableReady() ||
 		r.Resolver == nil || len(r.AuthorizedClientSPKIHash) != 32 || r.DataDir == "" ||
 		r.LeaseTTL <= 0 || r.LeaseTTL > substrait.MaxLeaseTTL || r.CleanupTimeout <= 0 {
 		return moerr.NewInternalErrorNoCtx("substrait: incomplete CN Sirius runtime")
@@ -159,6 +159,9 @@ func (c *Compile) tryCompileSiriusRead(ctx context.Context, queryPlan *planpb.Pl
 		runtime.DataDir, runtime.LeaseTTL, runtime.Leases,
 	)
 	if err != nil {
+		if readPlan != nil {
+			return false, errors.Join(err, runtime.recoverAdmittedRead(ctx, uint64(accountID), queryID, readPlan))
+		}
 		if substrait.IsNotEligible(err) {
 			return false, nil
 		}
@@ -166,6 +169,7 @@ func (c *Compile) tryCompileSiriusRead(ctx context.Context, queryPlan *planpb.Pl
 	}
 	execution, prepareErr := runtime.Flight.Prepare(
 		ctx, uint64(accountID), queryID, readPlan.Plan, readPlan.OutputTypes, readPlan.Headings,
+		readPlan.LeaseExpiresAt.Add(-runtime.CleanupTimeout),
 		func(releaseCtx context.Context) error {
 			return readPlan.Release(releaseCtx, runtime.Leases)
 		},
@@ -178,6 +182,30 @@ func (c *Compile) tryCompileSiriusRead(ctx context.Context, queryPlan *planpb.Pl
 	}
 	c.siriusRead = newSiriusReadOwner(execution, runtime)
 	return true, nil
+}
+
+// recoverAdmittedRead handles an operational failure after admission but
+// before any Flight request exists. It first attempts bounded synchronous
+// release. If any release fails, durable ownership transfers to Flight's
+// identity-based reconciliation worker, which retries idempotent release.
+func (r *SiriusRuntime) recoverAdmittedRead(ctx context.Context, accountID uint64, queryID []byte, plan *SiriusReadPlan) error {
+	if r == nil || r.Flight == nil || plan == nil {
+		return moerr.NewInternalErrorNoCtx("substrait: cannot recover admitted read without a runtime owner")
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), r.CleanupTimeout)
+	releaseErr := plan.Release(cleanupCtx, r.Leases)
+	cancel()
+	if releaseErr == nil {
+		return nil
+	}
+	readRefs := cloneReadRefs(plan.ReadRefs)
+	reconcileErr := r.Flight.Reconcile(accountID, append([]byte(nil), queryID...), func(releaseCtx context.Context) error {
+		return releaseReadRefs(releaseCtx, r.Leases, readRefs)
+	})
+	return errors.Join(releaseErr, reconcileErr)
 }
 
 func cloneReadRefs(readRefs [][]byte) [][]byte {

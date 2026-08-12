@@ -520,11 +520,15 @@ func (c *SiriusConfig) validate() error {
 	if c.CleanupTimeout.Duration == 0 {
 		c.CleanupTimeout.Duration = 30 * time.Second
 	}
-	if c.LeaseTTL.Duration == 0 {
-		c.LeaseTTL.Duration = c.RequestTimeout.Duration + c.CleanupTimeout.Duration
-	}
 	if c.MaxBatchBytes > 512<<20 || c.RequestTimeout.Duration <= 0 || c.CleanupTimeout.Duration <= 0 ||
-		c.LeaseTTL.Duration <= c.RequestTimeout.Duration || c.LeaseTTL.Duration > substrait.MaxLeaseTTL {
+		c.RequestTimeout.Duration > time.Duration(1<<63-1)-c.CleanupTimeout.Duration {
+		return moerr.NewBadConfigNoCtx("invalid Sirius transport limits")
+	}
+	minimumLeaseTTL := c.RequestTimeout.Duration + c.CleanupTimeout.Duration
+	if c.LeaseTTL.Duration == 0 {
+		c.LeaseTTL.Duration = minimumLeaseTTL
+	}
+	if c.LeaseTTL.Duration < minimumLeaseTTL || c.LeaseTTL.Duration > substrait.MaxLeaseTTL {
 		return moerr.NewBadConfigNoCtx("invalid Sirius transport limits")
 	}
 	for _, setting := range []struct{ name, value string }{

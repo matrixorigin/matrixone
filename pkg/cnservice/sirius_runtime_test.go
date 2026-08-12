@@ -44,6 +44,18 @@ import (
 
 type siriusTestProtector struct{}
 
+type siriusTestJournal struct{}
+
+func (siriusTestJournal) StoreIfCapacity(_ context.Context, leases []*substrait.Lease, _ int) (int, error) {
+	return len(leases), nil
+}
+func (siriusTestJournal) Active(context.Context, *substrait.Lease) (bool, error) { return true, nil }
+func (siriusTestJournal) MarkReleased(context.Context, []byte) error             { return nil }
+func (siriusTestJournal) Delete(context.Context, []byte) error                   { return nil }
+func (siriusTestJournal) Load(context.Context, func(*substrait.Lease) error) error {
+	return nil
+}
+
 type siriusTestFlightService interface{}
 
 type siriusTestFlightAction struct {
@@ -112,6 +124,10 @@ func TestSiriusConfigIsOptInAndFailClosed(t *testing.T) {
 
 	enabled.LeaseTTL.Duration = enabled.RequestTimeout.Duration
 	require.ErrorContains(t, enabled.validate(), "invalid Sirius transport limits")
+	enabled.RequestTimeout.Duration = time.Duration(1 << 62)
+	enabled.CleanupTimeout.Duration = time.Duration(1 << 62)
+	enabled.LeaseTTL.Duration = substrait.MaxLeaseTTL
+	require.ErrorContains(t, enabled.validate(), "invalid Sirius transport limits")
 }
 
 func TestSiriusTLSLoadersAndStartupCleanup(t *testing.T) {
@@ -144,7 +160,8 @@ func TestSiriusTLSLoadersAndStartupCleanup(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, spkiHash, actualHash)
 
-	leases := substrait.NewLeaseManager(1, siriusTestProtector{})
+	leases := substrait.NewPersistentLeaseManager(1, siriusTestProtector{}, siriusTestJournal{})
+	require.NoError(t, leases.Replay(context.Background()))
 	auditor := substrait.ResolveAuditFunc(func(context.Context, substrait.ResolveAuditEvent) error { return nil })
 	s := &service{cfg: &Config{UUID: "sirius-startup-test", Sirius: config}}
 	WithSiriusReadDependencies(leases, auditor)(s)

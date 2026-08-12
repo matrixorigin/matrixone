@@ -102,6 +102,14 @@ func Export(q *planpb.Query) (*Candidate, error) {
 	if q.StmtType != planpb.Query_SELECT || len(q.Steps) == 0 || len(q.BackgroundQueries) != 0 {
 		return nil, notEligiblef(EligibilityPlanShape, "a SELECT query root is required")
 	}
+	// Adaptive rank selection inspects the complete MO node array, including
+	// nodes outside the final reachable tree. Reject it at the same whole-plan
+	// boundary instead of letting export silently bypass that compile decision.
+	for nodeID, node := range q.Nodes {
+		if node != nil && node.RankOption != nil {
+			return nil, notEligiblef(EligibilityOperator, "node %d carries unsupported rank semantics", nodeID)
+		}
+	}
 	c := &Candidate{query: q}
 	e := exporter{query: q, readValues: make(map[int32][]byte), validateOnly: true}
 	for step, rootID := range q.Steps {
@@ -201,6 +209,9 @@ func (e *exporter) node(id int32) (*spb.Rel, error) {
 	n := e.query.Nodes[id]
 	if n == nil || n.NodeId != id {
 		return nil, moerr.NewInternalErrorNoCtxf("substrait: node %d is missing or misindexed", id)
+	}
+	if n.NodeType != planpb.Node_SORT && len(n.OrderBy) != 0 {
+		return nil, notEligiblef(EligibilityOperator, "node %d carries sort semantics outside a SORT node", id)
 	}
 	var rel *spb.Rel
 	var err error
@@ -569,6 +580,9 @@ func (e *exporter) read(n *planpb.Node) (*spb.Rel, error) {
 	if n.TableDef.IsTemporary || n.ScanSnapshot != nil || n.ObjRef.Snapshot != nil || n.ObjRef.PubInfo != nil || (n.TableDef.TableType != "" && n.TableDef.TableType != "r") {
 		return nil, notEligiblef(EligibilityPlanShape, "node %d is not a persistent TAE table scan", n.NodeId)
 	}
+	if n.IndexScanInfo.ProtoSize() != 0 || n.IndexReaderParam != nil {
+		return nil, notEligiblef(EligibilityOperator, "node %d carries unsupported index scan semantics", n.NodeId)
+	}
 	schema, err := namedStruct(n.TableDef)
 	if err != nil {
 		return nil, err
@@ -716,8 +730,12 @@ func (e *exporter) sort(n *planpb.Node) (*spb.Rel, error) {
 	}
 	sorts := make([]*spb.SortField, len(n.OrderBy))
 	for i, order := range n.OrderBy {
-		if order == nil {
+		if order == nil || order.Expr == nil {
 			return nil, moerr.NewInternalErrorNoCtxf("substrait: malformed sort at %d", i)
+		}
+		switch types.T(order.Expr.Typ.Id) {
+		case types.T_float32, types.T_float64:
+			return nil, notEligiblef(EligibilityOperator, "floating-point sort at %d has no Sirius ordering equivalence", i)
 		}
 		if order.Collation != "" || int32(order.Flag)&int32(planpb.OrderBySpec_UNIQUE) != 0 {
 			return nil, notEligiblef(EligibilityOperator, "unsupported sort at %d", i)

@@ -24,6 +24,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"math"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"path"
@@ -300,6 +301,61 @@ func TestSortPreservesMatrixOneNullOrdering(t *testing.T) {
 			require.Equal(t, tc.want, plan.Relations[0].GetRoot().Input.GetSort().Sorts[0].GetDirection())
 		})
 	}
+}
+
+func TestExportRejectsUnserializedOrderingAndScanMetadata(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(*planpb.Query)
+		want   string
+	}{
+		{name: "order outside sort", mutate: func(q *planpb.Query) {
+			q.Nodes = append(q.Nodes, &planpb.Node{NodeId: 1, NodeType: planpb.Node_PROJECT, Children: []int32{0}, ProjectList: []*planpb.Expr{col(0)}, OrderBy: []*planpb.OrderBySpec{{Expr: col(0)}}})
+			q.Steps[0] = 1
+		}, want: "sort semantics outside a SORT node"},
+		{name: "index scan", mutate: func(q *planpb.Query) {
+			q.Nodes[0].IndexScanInfo = planpb.IndexScanInfo{IsIndexScan: true, IndexName: "idx_a"}
+		}, want: "index scan semantics"},
+		{name: "index reader", mutate: func(q *planpb.Query) {
+			q.Nodes[0].IndexReaderParam = &planpb.IndexReaderParam{Limit: u64(1)}
+		}, want: "index scan semantics"},
+		{name: "rank", mutate: func(q *planpb.Query) {
+			q.Nodes = append(q.Nodes, &planpb.Node{NodeId: 1, NodeType: planpb.Node_PROJECT, RankOption: &planpb.RankOption{Mode: "pre"}})
+		}, want: "rank semantics"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			q := scanQuery()
+			test.mutate(q)
+			_, err := Export(q)
+			require.ErrorContains(t, err, test.want)
+			require.True(t, IsNotEligible(err))
+		})
+	}
+}
+
+func TestExportRejectsFloatSortButRetainsFloatTransport(t *testing.T) {
+	q := scanQuery()
+	q.Nodes[0].TableDef.Cols[0].Typ = planpb.Type{Id: int32(types.T_float64)}
+	q.Nodes[0].ProjectList = []*planpb.Expr{{Typ: planpb.Type{Id: int32(types.T_float64)}, Expr: &planpb.Expr_Col{Col: &planpb.ColRef{RelPos: 0, ColPos: 0}}}}
+	q.Nodes = append(q.Nodes, &planpb.Node{
+		NodeId: 1, NodeType: planpb.Node_PROJECT, Children: []int32{0},
+		ProjectList: []*planpb.Expr{{Typ: planpb.Type{Id: int32(types.T_float64)}, Expr: &planpb.Expr_Col{Col: &planpb.ColRef{RelPos: 0, ColPos: 0}}}},
+	})
+	q.Steps[0] = 1
+	candidate, err := Export(q)
+	require.NoError(t, err)
+	_, err = candidate.Build(map[int32][]byte{0: {1}})
+	require.NoError(t, err)
+
+	q.Nodes = append(q.Nodes, &planpb.Node{
+		NodeId: 2, NodeType: planpb.Node_SORT, Children: []int32{1},
+		OrderBy: []*planpb.OrderBySpec{{Expr: &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_float64)}, Expr: &planpb.Expr_Col{Col: &planpb.ColRef{RelPos: 0, ColPos: 0}}}}},
+	})
+	q.Steps[0] = 2
+	_, err = Export(q)
+	require.ErrorContains(t, err, "floating-point sort")
+	require.True(t, IsNotEligible(err))
 }
 
 func TestBoundImplicitSortExportsAsAscending(t *testing.T) {
@@ -1120,6 +1176,29 @@ func TestAdmissionPublishesOnlyProtectedSnapshot(t *testing.T) {
 	require.True(t, ok)
 }
 
+func TestAdmissionStartsTTLAfterSnapshotPreparation(t *testing.T) {
+	candidate, err := Export(scanQuery())
+	require.NoError(t, err)
+	read := candidate.Reads()[0]
+	clock := time.Unix(1_700_000_000, 0)
+	provider := &fakeProvider{facts: SnapshotFacts{Manifest: []byte("manifest"), CanonicalSchema: read.Schema}}
+	provider.onPrepare = func() { clock = clock.Add(30 * time.Second) }
+	manager := NewLeaseManager(1, new(fakeProtector))
+	manager.now = func() time.Time { return clock }
+
+	admitted, err := AdmitReads(context.Background(), AdmissionRequest{
+		Candidate: candidate, Provider: provider, Leases: manager, AccountID: 1,
+		QueryID: []byte("q"), SnapshotTS: make([]byte, 12), AuthorizedClientSPKIHash: testClientSPKIHash(),
+		TTL: time.Minute, ReadOnly: true, Random: bytes.NewReader(bytes.Repeat([]byte{7}, 32)),
+	})
+	require.NoError(t, err)
+	require.Equal(t, clock.Add(time.Minute), admitted.ExpiresAt)
+	require.Len(t, admitted.ReadRefs, 1)
+	readWire, err := UnmarshalTaeRead(admitted.Wires[0], uint64(clock.UnixMilli()))
+	require.NoError(t, err)
+	require.Equal(t, uint64(admitted.ExpiresAt.UnixMilli()), readWire.ExpiresAtUnixMS)
+}
+
 func TestAdmissionRejectsUnsafeSnapshotWithoutLease(t *testing.T) {
 	c, err := Export(scanQuery())
 	require.NoError(t, err)
@@ -1796,7 +1875,13 @@ func TestResolveHandlerRejectsInvalidRequests(t *testing.T) {
 }
 
 func TestResolverServerLifecycle(t *testing.T) {
-	leases := NewLeaseManager(1, new(fakeProtector))
+	nondurable := NewLeaseManager(1, new(fakeProtector))
+	require.False(t, nondurable.DurableReady())
+	_, err := NewResolverServer("127.0.0.1:0", &tls.Config{}, nondurable, acceptResolveAudit())
+	require.ErrorContains(t, err, "replayed lease manager")
+	leases := NewPersistentLeaseManager(1, new(fakeProtector), new(fakeLeaseJournal))
+	require.NoError(t, leases.Replay(context.Background()))
+	require.True(t, leases.DurableReady())
 	validTLS := &tls.Config{
 		MinVersion:   tls.VersionTLS10,
 		ClientAuth:   tls.RequireAndVerifyClientCert,
@@ -1804,7 +1889,7 @@ func TestResolverServerLifecycle(t *testing.T) {
 		Certificates: []tls.Certificate{{Certificate: [][]byte{{1}}}},
 	}
 	auditor := acceptResolveAudit()
-	_, err := NewResolverServer("", validTLS, leases, auditor)
+	_, err = NewResolverServer("", validTLS, leases, auditor)
 	require.Error(t, err)
 	_, err = NewResolverServer("127.0.0.1:0", nil, leases, auditor)
 	require.Error(t, err)
@@ -1828,6 +1913,19 @@ func TestResolverServerLifecycle(t *testing.T) {
 	require.NoError(t, server.Close(ctx))
 	require.NoError(t, server.Close(ctx))
 	require.ErrorContains(t, server.Start(), "closed")
+
+	forced, err := NewResolverServer("127.0.0.1:0", validTLS, leases, auditor)
+	require.NoError(t, err)
+	require.NoError(t, forced.Start())
+	address := forced.listener.Addr().String()
+	expired, cancelExpired := context.WithCancel(context.Background())
+	cancelExpired()
+	require.ErrorIs(t, forced.Close(expired), context.Canceled)
+	connection, dialErr := net.DialTimeout("tcp", address, 50*time.Millisecond)
+	if connection != nil {
+		require.NoError(t, connection.Close())
+	}
+	require.Error(t, dialErr)
 }
 
 func TestFileServiceLeaseJournalValidationAndAuthority(t *testing.T) {

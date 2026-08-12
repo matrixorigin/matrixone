@@ -178,6 +178,7 @@ func (r *Runtime) Prepare(
 	queryID, plan []byte,
 	outputTypes []planpb.Type,
 	headings []string,
+	deadlineCeiling time.Time,
 	release func(context.Context) error,
 ) (*Execution, error) {
 	if r == nil {
@@ -193,9 +194,21 @@ func (r *Runtime) Prepare(
 		primary := internalErrorf("sidecar flight: query identity and Substrait plan are required")
 		return nil, r.failBeforeVisibility(ctx, primary, release)
 	}
-	deadline := time.Now().Add(r.config.RequestTimeout)
+	if deadlineCeiling.IsZero() {
+		primary := internalErrorf("sidecar flight: lease-safe execution deadline is required")
+		return nil, r.failBeforeVisibility(ctx, primary, release)
+	}
+	now := time.Now()
+	deadline := now.Add(r.config.RequestTimeout)
 	if callerDeadline, ok := ctx.Deadline(); ok && callerDeadline.Before(deadline) {
 		deadline = callerDeadline
+	}
+	if deadlineCeiling.Before(deadline) {
+		deadline = deadlineCeiling
+	}
+	if !deadline.After(now) {
+		primary := internalErrorf("sidecar flight: lease-safe execution deadline has expired")
+		return nil, r.failBeforeVisibility(ctx, primary, release)
 	}
 	prepareCtx, cancelPrepare := context.WithDeadline(ctx, deadline)
 	preparing := &preparation{cancel: cancelPrepare, done: make(chan struct{})}

@@ -16,8 +16,11 @@ package compile
 
 import (
 	"context"
+	"strings"
 	"testing"
+	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/substrait"
@@ -75,4 +78,31 @@ func TestSiriusOffloadContextIsExplicit(t *testing.T) {
 	require.False(t, siriusStatementEligible(&tree.Select{IsPerform: true}))
 	require.False(t, siriusStatementEligible(&tree.Select{Ep: &tree.ExportParam{}}))
 	require.False(t, siriusStatementEligible(&tree.ExplainAnalyze{}))
+}
+
+func TestBuildSiriusReadPlanReturnsAdmittedOwnerOnBuildFailure(t *testing.T) {
+	query := &planpb.Query{
+		StmtType: planpb.Query_SELECT, Steps: []int32{0}, Headings: []string{strings.Repeat("h", substrait.MaxPlanBytes)},
+		Nodes: []*planpb.Node{{
+			NodeId: 0, NodeType: planpb.Node_TABLE_SCAN,
+			ObjRef: &planpb.ObjectRef{Db: 7, Obj: 42, ObjName: "t"},
+			TableDef: &planpb.TableDef{TblId: 42, Version: 3, Name: "t", TableType: "r", Cols: []*planpb.ColDef{{
+				Name: "a", ColId: 11, Seqnum: 5, Typ: planpb.Type{Id: int32(types.T_int64)},
+			}}},
+		}},
+	}
+	candidate, err := substrait.Export(query)
+	require.NoError(t, err)
+	readRef := []byte("admitted-read-ref")
+	expires := time.Now().Add(time.Minute)
+	plan, err := buildSiriusReadPlan(context.Background(), candidate, query.Headings, &substrait.AdmittedReads{
+		Wires: map[int32][]byte{0: {1}}, ReadRefs: [][]byte{readRef}, ExpiresAt: expires,
+	})
+	require.ErrorContains(t, err, "build admitted plan")
+	require.NotNil(t, plan)
+	require.Empty(t, plan.Plan)
+	require.Equal(t, [][]byte{readRef}, plan.ReadRefs)
+	require.Equal(t, expires, plan.LeaseExpiresAt)
+	readRef[0] = 'x'
+	require.Equal(t, byte('a'), plan.ReadRefs[0][0])
 }
