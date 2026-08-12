@@ -552,8 +552,9 @@ closed; its ownership inventory, fault/lifecycle matrix, terminal-zero checks,
 and resident benchmark are recorded in
 `docs/design/evidence/25866_m4_mergeorder_baseline.md`. The independent Top
 slice is also locally closed and recorded in
-`docs/design/evidence/25866_m4_top_baseline.md`. Fill remains the final M4
-follow-up slice.
+`docs/design/evidence/25866_m4_top_baseline.md`. The final independent Fill
+slice is also locally closed and recorded in
+`docs/design/evidence/25866_m4_fill_baseline.md`.
 
 Top:
 
@@ -578,6 +579,15 @@ Fill:
 - replace raw marshal buffers with accounted buffers;
 - assign disk/FD ownership to input/output/next files;
 - preserve its forward/reverse replay semantics under cancellation and error.
+
+Local result: retained batches, coordinates, endpoint values, replay batches,
+and partition-key payloads use the Fill owner; a 1,024-batch structural bound
+closes pointer metadata; streaming serialization removes the whole-record
+buffer and borrowed child batches remove the spill-time payload duplicate;
+each input/output/next file owns admitted FD and disk tokens. Exact pressure
+spills retained progress and streams the rejected child only after memory has
+been released. The resident benchmark improved 1.62%, and lifecycle/fault
+tests close memory, disk, and FD ownership at zero.
 
 All three must retain stable result ordering and prepared-value provenance.
 
