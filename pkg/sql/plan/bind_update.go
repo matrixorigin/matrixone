@@ -522,11 +522,10 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 			selectNode.ProjectList = append(selectNode.ProjectList, selectNode.ProjectList[oldPos])
 			selectNode.ProjectList[oldPos] = genExpr
 			if isMultiTargetUpdate {
-				targetSelected, buildErr := builder.buildTargetSelectedExpr(
-					selectNodeTag,
+				targetSelected, buildErr := builder.buildTargetSelectedBelowAssignmentProject(
 					selectNode,
+					oldColName2Idx[alias+"."+catalog.Row_ID],
 					targetRowNumberPos[i],
-					targetActivePos[i],
 				)
 				if buildErr != nil {
 					return 0, buildErr

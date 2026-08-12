@@ -3285,6 +3285,16 @@ func TestUpdateFallbackGeneratedColumnMultiTableNonFirstHasGenerated(t *testing.
 	}
 }
 
+func TestMultiTargetUpdateGeneratedColumnGuardUsesProjectInput(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	setMockGeneratedColumn(t, mock, "dept", "dname", "loc")
+
+	logicPlan, err := runOneStmt(mock, t,
+		"UPDATE emp, dept SET emp.comm = 1, dept.loc = 'modern-gen' WHERE emp.deptno = dept.deptno")
+	require.NoError(t, err)
+	require.True(t, queryContainsStringLiteral(logicPlan.GetQuery(), "modern-gen"))
+}
+
 func TestUpdateFallbackGeneratedColumnChainAfterOptimize(t *testing.T) {
 	mock := NewMockOptimizer(true)
 	forceLegacyMultiTargetUpdateRoute(mock)
