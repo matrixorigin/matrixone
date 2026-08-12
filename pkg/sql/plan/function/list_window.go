@@ -104,7 +104,7 @@ var supportedWindowInNewFramework = []FuncNew{
 		class:      plan.Function_WIN_ORDER,
 		layout:     STANDARD_FUNCTION,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
-			if len(inputs) == 1 {
+			if len(inputs) == 1 && inputs[0].Oid.IsInteger() {
 				return newCheckResultWithSuccess(0)
 			}
 			return newCheckResultWithFailure(failedFunctionParametersWrong)
