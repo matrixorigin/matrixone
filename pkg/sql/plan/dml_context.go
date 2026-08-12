@@ -332,6 +332,9 @@ func (dmlCtx *DMLContext) resolveSingleTable(
 	if tableDef == nil {
 		return moerr.NewNoSuchTable(ctx.GetContext(), dbName, tblName)
 	}
+	if err := validateTableIndexDefinitions(tableDef); err != nil {
+		return err
+	}
 
 	// External tables are not handled by the modern DML binder. Writable ones
 	// (WRITE_FILE_PATTERN) defer to the legacy planner, whose buildInsert /

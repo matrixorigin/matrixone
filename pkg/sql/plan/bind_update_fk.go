@@ -321,6 +321,9 @@ func (builder *QueryBuilder) appendUpdateParentForeignKeyChecks(
 				childTableID,
 			)
 		}
+		if err := validateTableIndexDefinitions(childTableDef); err != nil {
+			return 0, 0, err
+		}
 
 		for _, fk := range childTableDef.Fkeys {
 			referencesCurrentTable := fk.ForeignTbl == tableDef.TblId ||

@@ -533,6 +533,9 @@ func setTableExprToDmlTableInfo(ctx CompilerContext, tbl tree.TableExpr, tblInfo
 	if tableDef == nil {
 		return moerr.NewNoSuchTable(ctx.GetContext(), dbName, tblName)
 	}
+	if err := validateTableIndexDefinitions(tableDef); err != nil {
+		return err
+	}
 
 	if err := checkTableType(ctx.GetContext(), tableDef, tblInfo.typ); err != nil {
 		return err
