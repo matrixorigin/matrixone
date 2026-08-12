@@ -2592,9 +2592,9 @@ func TestPreparedNumericFunctionBinaryProtocolMetadata(t *testing.T) {
 		resultType     defines.MysqlType
 		resultDecimals uint8
 	}{
-		{name: "sum", sql: "select sum(?) as result", resultType: defines.MYSQL_TYPE_DOUBLE, resultDecimals: mysqlDecimalNotSpecified},
-		{name: "avg", sql: "select avg(?) as result", resultType: defines.MYSQL_TYPE_DOUBLE, resultDecimals: mysqlDecimalNotSpecified},
-		{name: "window sum", sql: "select sum(?) over () as result", resultType: defines.MYSQL_TYPE_DOUBLE, resultDecimals: mysqlDecimalNotSpecified},
+		{name: "sum", sql: "select sum(?) as result", resultType: defines.MYSQL_TYPE_DECIMAL, resultDecimals: 30},
+		{name: "avg", sql: "select avg(?) as result", resultType: defines.MYSQL_TYPE_DECIMAL, resultDecimals: 30},
+		{name: "window sum", sql: "select sum(?) over () as result", resultType: defines.MYSQL_TYPE_DECIMAL, resultDecimals: 30},
 		{name: "ntile", sql: "select ntile(?) over () as result", resultType: defines.MYSQL_TYPE_LONGLONG},
 	}
 	for _, test := range tests {

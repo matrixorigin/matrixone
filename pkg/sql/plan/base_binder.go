@@ -2848,7 +2848,19 @@ func (b *baseBinder) bindPreparedNumericFuncExpr(
 		return b.bindFuncExprImplByAstExpr(name, astArgs, depth)
 	}
 
-	arg, err := b.bindNumericExprWithContext(astArgs[0], depth, target)
+	var arg *plan.Expr
+	var err error
+	if target != nil {
+		// Functions such as NTILE define a mandatory argument domain. Do not let
+		// the generic exact-parameter fallback replace that positive type evidence
+		// with the runtime DECIMAL marker.
+		previous := b.numericParamType
+		b.numericParamType = target
+		arg, err = b.impl.BindExpr(astArgs[0], depth, false)
+		b.numericParamType = previous
+	} else {
+		arg, err = b.bindNumericExprWithContext(astArgs[0], depth, nil)
+	}
 	if err != nil {
 		return nil, err
 	}
