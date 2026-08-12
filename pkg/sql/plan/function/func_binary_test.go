@@ -13178,6 +13178,104 @@ func TestMoWinTruncateKeepsZeroDatetimeDistinctFromEpoch(t *testing.T) {
 	require.Equal(t, types.DatetimeEpoch, got[1])
 }
 
+func TestMoWinTruncatePropagatesNull(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	values := vector.NewVec(types.T_datetime.ToType())
+	require.NoError(t, vector.AppendFixedList(
+		values,
+		[]types.Datetime{types.DatetimeEpoch, types.DatetimeEpoch, types.DatetimeEpoch + types.MicroSecsPerSec},
+		[]bool{false, true, false},
+		proc.Mp(),
+	))
+	values.SetLength(3)
+	defer values.Free(proc.Mp())
+
+	diff, err := vector.NewConstFixed(types.T_int64.ToType(), int64(1), 3, proc.Mp())
+	require.NoError(t, err)
+	defer diff.Free(proc.Mp())
+	unit, err := vector.NewConstFixed(types.T_int64.ToType(), int64(types.Second), 3, proc.Mp())
+	require.NoError(t, err)
+	defer unit.Free(proc.Mp())
+
+	result := vector.NewFunctionResultWrapper(types.T_datetime.ToType(), proc.Mp())
+	defer result.Free()
+	require.NoError(t, result.PreExtendAndReset(3))
+	require.NoError(t, Truncate([]*vector.Vector{values, diff, unit}, result, proc, 3, nil))
+
+	got := result.GetResultVector()
+	require.False(t, got.IsNull(0))
+	require.True(t, got.IsNull(1))
+	require.False(t, got.IsNull(2))
+	require.Equal(t, []types.Datetime{
+		types.DatetimeEpoch,
+		0,
+		types.DatetimeEpoch + types.MicroSecsPerSec,
+	}, vector.MustFixedColNoTypeCheck[types.Datetime](got))
+}
+
+func TestMoWinTruncateRejectsNonPositiveInterval(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	values := vector.NewVec(types.T_datetime.ToType())
+	require.NoError(t, vector.AppendFixed(values, types.DatetimeEpoch, false, proc.Mp()))
+	defer values.Free(proc.Mp())
+
+	diff, err := vector.NewConstFixed(types.T_int64.ToType(), int64(0), 1, proc.Mp())
+	require.NoError(t, err)
+	defer diff.Free(proc.Mp())
+	unit, err := vector.NewConstFixed(types.T_int64.ToType(), int64(types.Minute), 1, proc.Mp())
+	require.NoError(t, err)
+	defer unit.Free(proc.Mp())
+
+	result := vector.NewFunctionResultWrapper(types.T_datetime.ToType(), proc.Mp())
+	defer result.Free()
+	require.NoError(t, result.PreExtendAndReset(1))
+	require.ErrorContains(t, Truncate([]*vector.Vector{values, diff, unit}, result, proc, 1, nil), "time window interval must be greater than zero")
+}
+
+func TestMoWinDivisorRejectsNonPositiveIntervalAndSliding(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	newConst := func(v int64) *vector.Vector {
+		vec, err := vector.NewConstFixed(types.T_int64.ToType(), v, 1, proc.Mp())
+		require.NoError(t, err)
+		return vec
+	}
+	minute := newConst(int64(types.Minute))
+	defer minute.Free(proc.Mp())
+
+	for _, tc := range []struct {
+		name     string
+		interval int64
+		sliding  int64
+		wantErr  string
+	}{
+		{
+			name:     "zero interval",
+			interval: 0,
+			sliding:  1,
+			wantErr:  "time window interval must be greater than zero",
+		},
+		{
+			name:     "zero sliding",
+			interval: 5,
+			sliding:  0,
+			wantErr:  "time window sliding value must be greater than zero",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			interval := newConst(tc.interval)
+			defer interval.Free(proc.Mp())
+			sliding := newConst(tc.sliding)
+			defer sliding.Free(proc.Mp())
+
+			result := vector.NewFunctionResultWrapper(types.T_int64.ToType(), proc.Mp())
+			defer result.Free()
+			require.NoError(t, result.PreExtendAndReset(1))
+			require.ErrorContains(t, Divisor([]*vector.Vector{interval, minute, sliding, minute}, result, proc, 1, nil), tc.wantErr)
+		})
+	}
+}
+
 func TestDateTruncCheckRejectsInvalidArguments(t *testing.T) {
 	overloads := allSupportedFunctions[DATE_TRUNC].Overloads
 
