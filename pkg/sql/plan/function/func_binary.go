@@ -1716,7 +1716,10 @@ func Truncate(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc 
 	for i := uint64(0); i < uint64(length); i++ {
 		v, null := ivec.GetValue(i)
 		if null {
-			return moerr.NewNotSupported(proc.Ctx, "now args of MO_WIN_TRUNCATE can not be NULL")
+			if err = rs.Append(types.Datetime(0), true); err != nil {
+				return err
+			}
+			continue
 		}
 		// ZeroDatetime is a distinct MySQL zero-date sentinel, not the
 		// 0001-01-01 epoch. It is a valid time-window grouping key but cannot

@@ -13107,6 +13107,41 @@ func TestMoWinTruncateKeepsZeroDatetimeDistinctFromEpoch(t *testing.T) {
 	require.Equal(t, types.DatetimeEpoch, got[1])
 }
 
+func TestMoWinTruncatePropagatesNull(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	values := vector.NewVec(types.T_datetime.ToType())
+	require.NoError(t, vector.AppendFixedList(
+		values,
+		[]types.Datetime{types.DatetimeEpoch, types.DatetimeEpoch, types.DatetimeEpoch + types.MicroSecsPerSec},
+		[]bool{false, true, false},
+		proc.Mp(),
+	))
+	values.SetLength(3)
+	defer values.Free(proc.Mp())
+
+	diff, err := vector.NewConstFixed(types.T_int64.ToType(), int64(1), 3, proc.Mp())
+	require.NoError(t, err)
+	defer diff.Free(proc.Mp())
+	unit, err := vector.NewConstFixed(types.T_int64.ToType(), int64(types.Second), 3, proc.Mp())
+	require.NoError(t, err)
+	defer unit.Free(proc.Mp())
+
+	result := vector.NewFunctionResultWrapper(types.T_datetime.ToType(), proc.Mp())
+	defer result.Free()
+	require.NoError(t, result.PreExtendAndReset(3))
+	require.NoError(t, Truncate([]*vector.Vector{values, diff, unit}, result, proc, 3, nil))
+
+	got := result.GetResultVector()
+	require.False(t, got.IsNull(0))
+	require.True(t, got.IsNull(1))
+	require.False(t, got.IsNull(2))
+	require.Equal(t, []types.Datetime{
+		types.DatetimeEpoch,
+		0,
+		types.DatetimeEpoch + types.MicroSecsPerSec,
+	}, vector.MustFixedColNoTypeCheck[types.Datetime](got))
+}
+
 func TestDateTruncCheckRejectsInvalidArguments(t *testing.T) {
 	overloads := allSupportedFunctions[DATE_TRUNC].Overloads
 
