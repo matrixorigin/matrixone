@@ -557,6 +557,21 @@ func canonicalizeBackupTombstone(
 	if err != nil {
 		return nil, err
 	}
+	commitVec := data.Vecs[commitPos]
+	if commitVec.IsConst() {
+		// BlockWriter's metadata builder scans fixed-width backing bytes and
+		// cannot consume a logical N-row constant backed by one physical value.
+		// Materialize only this hidden column before transferring ownership.
+		materialized := vector.NewVec(*commitVec.GetType())
+		if err = materialized.UnionBatch(
+			commitVec, 0, commitVec.Length(), nil, common.DebugAllocator,
+		); err != nil {
+			materialized.Free(common.DebugAllocator)
+			return nil, err
+		}
+		commitVec.Free(common.DebugAllocator)
+		data.Vecs[commitPos] = materialized
+	}
 	result := batch.NewWithSize(len(objectio.TombstoneSeqnums_DN_Created))
 	result.Vecs[objectio.TombstoneAttr_Rowid_Idx] = data.Vecs[objectio.TombstoneAttr_Rowid_Idx]
 	result.Vecs[objectio.TombstoneAttr_PK_Idx] = data.Vecs[objectio.TombstoneAttr_PK_Idx]

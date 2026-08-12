@@ -1,0 +1,284 @@
+// Copyright 2026 Matrix Origin
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package tables
+
+import (
+	"context"
+	"testing"
+
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/dbutils"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
+	"github.com/stretchr/testify/require"
+)
+
+func TestPersistedNodeReadsLegacyBackupTombstone(t *testing.T) {
+	ctx := context.Background()
+	fs := testutil.NewSharedFS()
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+
+	smallPool := containers.NewVectorPool("legacy-tombstone-small", 4, containers.WithMPool(mp))
+	transientPool := containers.NewVectorPool("legacy-tombstone-transient", 4, containers.WithMPool(mp))
+	defer smallPool.Destory()
+	defer transientPool.Destory()
+	rt := dbutils.NewRuntime(
+		dbutils.WithRuntimeObjectFS(fs),
+		dbutils.WithRuntimeSmallPool(smallPool),
+		dbutils.WithRuntimeTransientPool(transientPool),
+	)
+
+	targetObject := objectio.NewObjectid()
+	input := batch.NewWithSize(3)
+	input.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
+	input.Vecs[1] = vector.NewVec(types.T_int32.ToType())
+	input.Vecs[2] = vector.NewVec(types.T_TS.ToType())
+	for row, commitTS := range []types.TS{types.BuildTS(10, 0), types.BuildTS(20, 0)} {
+		require.NoError(t, vector.AppendFixed(
+			input.Vecs[0],
+			types.NewRowIDWithObjectIDBlkNumAndRowID(targetObject, 0, uint32(row+1)),
+			false,
+			mp,
+		))
+		require.NoError(t, vector.AppendFixed(input.Vecs[1], int32(row+1), false, mp))
+		require.NoError(t, vector.AppendFixed(input.Vecs[2], commitTS, false, mp))
+	}
+	input.SetRowCount(2)
+	defer input.Clean(mp)
+
+	name := objectio.BuildObjectName(objectio.NewSegmentid(), 0)
+	writer, err := ioutil.NewBlockWriter(fs, name.String())
+	require.NoError(t, err)
+	writer.SetTombstone()
+	writer.SetPrimaryKeyWithType(
+		uint16(objectio.TombstonePrimaryKeyIdx),
+		index.HBF,
+		index.ObjectPrefixFn,
+		index.BlockPrefixFn,
+	)
+	_, err = writer.WriteBatch(input)
+	require.NoError(t, err)
+	blocks, extent, err := writer.Sync(ctx)
+	require.NoError(t, err)
+	require.Len(t, blocks, 1)
+	require.Equal(t, uint16(3), blocks[0].GetMetaColumnCount())
+	require.Equal(t, uint16(2), blocks[0].GetMaxSeqnum())
+
+	stats := objectio.NewObjectStats()
+	require.NoError(t, objectio.SetObjectStatsObjectName(stats, name))
+	require.NoError(t, objectio.SetObjectStatsExtent(stats, extent))
+	require.NoError(t, objectio.SetObjectStatsRowCnt(stats, uint32(input.RowCount())))
+	require.NoError(t, objectio.SetObjectStatsBlkCnt(stats, uint32(len(blocks))))
+	require.NoError(t, objectio.SetObjectStatsSize(stats, extent.End()))
+
+	c := catalog.MockCatalog(nil)
+	defer c.Close()
+	db, err := c.CreateDBEntry("db", "", "", nil)
+	require.NoError(t, err)
+	table, err := db.CreateTableEntry(catalog.MockSchema(1, 0), nil, nil)
+	require.NoError(t, err)
+	entry, err := table.CreateCommittedObject(
+		types.BuildTS(10, 0),
+		&objectio.CreateObjOpt{Stats: stats, IsTombstone: true},
+		NewDataFactory(rt, "").MakeObjectFactory(),
+	)
+	require.NoError(t, err)
+
+	t.Run("scan preserves per-row commit timestamps", func(t *testing.T) {
+		var result *containers.Batch
+		err := entry.GetObjectData().Scan(
+			ctx,
+			&result,
+			nil,
+			table.GetLastestSchema(true),
+			0,
+			objectio.TombstoneColumns_TN_Created,
+			mp,
+		)
+		require.NoError(t, err)
+		if result != nil {
+			defer result.Close()
+		}
+		require.NotNil(t, result)
+		require.Equal(t, 2, result.Length())
+		require.Equal(t, types.BuildTS(10, 0), result.GetVectorByName(objectio.TombstoneAttr_CommitTs_Attr).Get(0))
+		require.Equal(t, types.BuildTS(20, 0), result.GetVectorByName(objectio.TombstoneAttr_CommitTs_Attr).Get(1))
+	})
+
+	t.Run("zero-copy scan transfers the compatibility reload lease", func(t *testing.T) {
+		var result *containers.Batch
+		err := entry.GetObjectData().Scan(
+			WithScanNoCopy(ctx),
+			&result,
+			nil,
+			table.GetLastestSchema(true),
+			0,
+			objectio.TombstoneColumns_TN_Created,
+			mp,
+		)
+		require.NoError(t, err)
+		require.NotNil(t, result)
+		require.NotNil(t, result.DataRelease)
+		require.Equal(t, types.BuildTS(10, 0), result.GetVectorByName(objectio.TombstoneAttr_CommitTs_Attr).Get(0))
+		require.Equal(t, types.BuildTS(20, 0), result.GetVectorByName(objectio.TombstoneAttr_CommitTs_Attr).Get(1))
+		result.Close()
+		require.Nil(t, result.DataRelease)
+	})
+
+	t.Run("range collection uses physical commit timestamp", func(t *testing.T) {
+		var result *containers.Batch
+		err := entry.GetObjectData().CollectObjectTombstoneInRange(
+			ctx,
+			types.BuildTS(5, 0),
+			types.BuildTS(15, 0),
+			&targetObject,
+			&result,
+			mp,
+			transientPool,
+		)
+		require.NoError(t, err)
+		if result != nil {
+			defer result.Close()
+		}
+		require.NotNil(t, result)
+		require.Equal(t, 1, result.Length())
+		require.Equal(t, int32(1), result.GetVectorByName(objectio.TombstoneAttr_PK_Attr).Get(0))
+		require.Equal(t, types.BuildTS(10, 0), result.GetVectorByName(objectio.TombstoneAttr_CommitTs_Attr).Get(0))
+	})
+}
+
+func TestPersistedNodeReadsCNCreatedTombstone(t *testing.T) {
+	ctx := context.Background()
+	fs := testutil.NewSharedFS()
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+
+	smallPool := containers.NewVectorPool("cn-tombstone-small", 4, containers.WithMPool(mp))
+	transientPool := containers.NewVectorPool("cn-tombstone-transient", 4, containers.WithMPool(mp))
+	defer smallPool.Destory()
+	defer transientPool.Destory()
+	rt := dbutils.NewRuntime(
+		dbutils.WithRuntimeObjectFS(fs),
+		dbutils.WithRuntimeSmallPool(smallPool),
+		dbutils.WithRuntimeTransientPool(transientPool),
+	)
+
+	targetObject := objectio.NewObjectid()
+	input := batch.NewWithSize(len(objectio.TombstoneSeqnums_CN_Created))
+	input.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
+	input.Vecs[1] = vector.NewVec(types.T_int32.ToType())
+	for row := range 2 {
+		require.NoError(t, vector.AppendFixed(
+			input.Vecs[0],
+			types.NewRowIDWithObjectIDBlkNumAndRowID(targetObject, 0, uint32(row+1)),
+			false,
+			mp,
+		))
+		require.NoError(t, vector.AppendFixed(input.Vecs[1], int32(row+1), false, mp))
+	}
+	input.SetRowCount(2)
+	defer input.Clean(mp)
+
+	name := objectio.BuildObjectName(objectio.NewSegmentid(), 0)
+	writer, err := ioutil.NewBlockWriterNew(
+		fs,
+		name,
+		0,
+		objectio.TombstoneSeqnums_CN_Created,
+		true,
+	)
+	require.NoError(t, err)
+	writer.SetTombstone()
+	writer.SetPrimaryKeyWithType(
+		uint16(objectio.TombstonePrimaryKeyIdx),
+		index.HBF,
+		index.ObjectPrefixFn,
+		index.BlockPrefixFn,
+	)
+	_, err = writer.WriteBatch(input)
+	require.NoError(t, err)
+	blocks, _, err := writer.Sync(ctx)
+	require.NoError(t, err)
+	require.Len(t, blocks, 1)
+	require.Equal(t, uint16(2), blocks[0].GetMetaColumnCount())
+
+	stats := writer.GetObjectStats(objectio.WithCNCreated())
+	require.True(t, stats.GetCNCreated())
+	createdAt := types.BuildTS(10, 0)
+	c := catalog.MockCatalog(nil)
+	defer c.Close()
+	db, err := c.CreateDBEntry("db", "", "", nil)
+	require.NoError(t, err)
+	table, err := db.CreateTableEntry(catalog.MockSchema(1, 0), nil, nil)
+	require.NoError(t, err)
+	entry, err := table.CreateCommittedObject(
+		createdAt,
+		&objectio.CreateObjOpt{Stats: &stats, IsTombstone: true},
+		NewDataFactory(rt, "").MakeObjectFactory(),
+	)
+	require.NoError(t, err)
+
+	t.Run("scan derives commit timestamp from object creation", func(t *testing.T) {
+		var result *containers.Batch
+		err := entry.GetObjectData().Scan(
+			ctx,
+			&result,
+			nil,
+			table.GetLastestSchema(true),
+			0,
+			objectio.TombstoneColumns_TN_Created,
+			mp,
+		)
+		require.NoError(t, err)
+		if result != nil {
+			defer result.Close()
+		}
+		require.NotNil(t, result)
+		require.Equal(t, 2, result.Length())
+		for row := range result.Length() {
+			require.Equal(t, createdAt, result.GetVectorByName(objectio.TombstoneAttr_CommitTs_Attr).Get(row))
+		}
+	})
+
+	t.Run("range collection uses object creation timestamp", func(t *testing.T) {
+		var result *containers.Batch
+		err := entry.GetObjectData().CollectObjectTombstoneInRange(
+			ctx,
+			types.BuildTS(5, 0),
+			types.BuildTS(15, 0),
+			&targetObject,
+			&result,
+			mp,
+			transientPool,
+		)
+		require.NoError(t, err)
+		if result != nil {
+			defer result.Close()
+		}
+		require.NotNil(t, result)
+		require.Equal(t, 2, result.Length())
+		for row := range result.Length() {
+			require.Equal(t, createdAt, result.GetVectorByName(objectio.TombstoneAttr_CommitTs_Attr).Get(row))
+		}
+	})
+}

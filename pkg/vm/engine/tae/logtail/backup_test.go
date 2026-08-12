@@ -28,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/ckputil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/stretchr/testify/require"
 )
 
@@ -115,7 +116,9 @@ func TestCanonicalizeBackupTombstone(t *testing.T) {
 	}
 }
 
-func TestVisibleAppendableRowsBroadcastsConstantCommitTS(t *testing.T) {
+func TestBackupTombstoneWriterBroadcastsConstantCommitTS(t *testing.T) {
+	ctx := context.Background()
+	fs := testutil.NewSharedFS()
 	input := newBackupTombstoneTestBatch(t, types.T_int64, []types.T{types.T_TS})
 	input.Vecs[2].Free(common.DebugAllocator)
 	commitTS := types.BuildTS(10, 0)
@@ -137,13 +140,48 @@ func TestVisibleAppendableRowsBroadcastsConstantCommitTS(t *testing.T) {
 	require.Equal(t, []int64{0, 1, 2}, visibleRows)
 
 	input.Shrink(visibleRows, false)
-	result, err := canonicalizeBackupTombstone(context.Background(), input, layout)
+	result, err := canonicalizeBackupTombstone(ctx, input, layout)
 	require.NoError(t, err)
 	defer result.Clean(common.DebugAllocator)
 	require.Equal(t, 3, result.RowCount())
+	require.False(t, result.Vecs[objectio.TombstoneAttr_NA_CommitTs_Idx].IsConst())
 	for row := range result.RowCount() {
 		require.Equal(t, commitTS, vector.GetFixedAtNoTypeCheck[types.TS](
 			result.Vecs[objectio.TombstoneAttr_NA_CommitTs_Idx], row))
+	}
+
+	objectID := objectio.NewObjectid()
+	name := objectio.BuildObjectNameWithObjectID(&objectID)
+	writer, err := ioutil.NewBlockWriterNew(
+		fs,
+		name,
+		0,
+		objectio.TombstoneSeqnums_DN_Created,
+		true,
+	)
+	require.NoError(t, err)
+	_, err = writer.WriteBatch(result)
+	require.NoError(t, err)
+	blocks, extent, err := writer.Sync(ctx)
+	require.NoError(t, err)
+	require.Len(t, blocks, 1)
+
+	location := objectio.BuildLocation(name, extent, blocks[0].GetRows(), blocks[0].GetID())
+	loaded := containers.NewVectors(len(objectio.TombstoneSeqnums_DN_Created))
+	_, release, err := ioutil.ReadDeletes(
+		ctx,
+		location,
+		fs,
+		false,
+		loaded,
+		ptrTo(types.T_int64.ToType()),
+	)
+	require.NoError(t, err)
+	defer release()
+	validated, err := ioutil.ValidateTombstoneCommitTSColumn(3, &loaded[2])
+	require.NoError(t, err)
+	for row := range 3 {
+		require.Equal(t, commitTS, validated.At(row))
 	}
 }
 
