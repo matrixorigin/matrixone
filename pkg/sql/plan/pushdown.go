@@ -865,6 +865,14 @@ func (builder *QueryBuilder) pushdownVectorIndexTopToTableScan(nodeID int32) {
 		return
 	}
 
+	// The ORDER BY column indexes the child project's list, but the two can disagree:
+	// pruning a derived table's projection (`select count(*) from (<top-k>) t`) empties
+	// the list while the sort keeps its pre-pruning ColPos. This runs on the final plan,
+	// after applyIndices, and the entries-table gate that would reject such a shape is
+	// below — so check before dereferencing rather than panicking the CN.
+	if orderCol.ColPos < 0 || int(orderCol.ColPos) >= len(projNode.ProjectList) {
+		return
+	}
 	orderFunc := projNode.ProjectList[orderCol.ColPos]
 	if metric.DistFuncOpTypes[orderFunc.GetF().GetFunc().GetObjName()] == "" {
 		return

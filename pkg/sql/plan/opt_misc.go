@@ -358,9 +358,18 @@ func replaceColumnsForColRefList(cols []plan.ColRef, projMap map[[2]int32]*plan.
 	for i := range cols {
 		mapID := [2]int32{cols[i].RelPos, cols[i].ColPos}
 		if projExpr, ok := projMap[mapID]; ok {
-			newCol := projExpr.Expr.(*plan.Expr_Col).Col
-			cols[i].RelPos = newCol.RelPos
-			cols[i].ColPos = newCol.ColPos
+			// A []plan.ColRef can only hold a column, so a mapping to any other
+			// expression form (a CTE projecting `id+1`, a cast) has nowhere to go here.
+			// Assert-and-panic would take down the CN; leaving the ref alone keeps the
+			// list valid. Vector rewrites publish such maps into idxColMap, which
+			// applyIndices then applies to every ancestor including nodes carrying
+			// UpdateCtxList / DedupJoinCtx.OldColList.
+			colExpr, isCol := projExpr.Expr.(*plan.Expr_Col)
+			if !isCol || colExpr.Col == nil {
+				continue
+			}
+			cols[i].RelPos = colExpr.Col.RelPos
+			cols[i].ColPos = colExpr.Col.ColPos
 		}
 	}
 }

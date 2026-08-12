@@ -1273,7 +1273,7 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfflat(nodeID int32, vecCt
 		if scanNode.RankOption == nil {
 			scanNode.RankOption = vecCtx.rankOption
 		}
-		if projNode.RankOption == nil {
+		if projNode != nil && projNode.RankOption == nil {
 			projNode.RankOption = vecCtx.rankOption
 		}
 	}
@@ -1291,8 +1291,14 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfflat(nodeID int32, vecCt
 			includeAwareColumns = nil
 		}
 	}
-	requiredCols := collectRequiredColumns(projNode, childNode, scanNode, orderExpr, ivfCtx.partPos, ivfCtx.origFuncName, ivfCtx.vecLitArg)
-	projectedCols := collectProjectedColumns(projNode, childNode, scanNode, ivfCtx.partPos, ivfCtx.origFuncName, ivfCtx.vecLitArg)
+	// Both maps exist only to decide (and populate) an index-only scan, which needs the
+	// PROJECT above the Top-K. Sort-anchored rewrites have no project, so skip the
+	// DeepCopy walks over the whole projection instead of building maps nothing reads.
+	var requiredCols, projectedCols map[string]struct{}
+	if projNode != nil {
+		requiredCols = collectRequiredColumns(projNode, childNode, scanNode, orderExpr, ivfCtx.partPos, ivfCtx.origFuncName, ivfCtx.vecLitArg)
+		projectedCols = collectProjectedColumns(projNode, childNode, scanNode, ivfCtx.partPos, ivfCtx.origFuncName, ivfCtx.vecLitArg)
+	}
 	coveragePushdown, _ := splitFiltersByVectorIndexCoverage(newFilterList, scanNode, includeAwareColumns, ivfCtx.partPos)
 	timeZone := time.UTC
 	if proc := builder.compCtx.GetProcess(); proc != nil && proc.GetSessionInfo() != nil && proc.GetSessionInfo().TimeZone != nil {
@@ -1327,7 +1333,13 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfflat(nodeID int32, vecCt
 		// original relational plan until the deployment-wide protocol gate rises.
 		return nodeID, nil
 	}
-	canIndexOnly := canDoIndexOnlyScan(requiredCols, scanNode.TableDef, includeAwareColumns) && len(remainingFilters) == 0
+	// requiredCols is derived from the PROJECT above the Top-K. When the rewrite is
+	// anchored at the sort instead (the Top-K feeds an outer ORDER BY or a join), that
+	// project is not ours to read: the consumers live above and may reference any scan
+	// column, so an index-only scan could drop a column still in use. Keep the base scan
+	// in that shape — the ANN rewrite itself is the win; index-only is an extra.
+	canIndexOnly := projNode != nil &&
+		canDoIndexOnlyScan(requiredCols, scanNode.TableDef, includeAwareColumns) && len(remainingFilters) == 0
 	tableFuncIncludeColumns := make([]string, 0, len(includeAwareColumns))
 	if canIndexOnly {
 		for _, col := range includeAwareColumns {
@@ -1757,8 +1769,10 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfflat(nodeID int32, vecCt
 	{
 		scanTag := scanNode.BindingTags[0]
 		scoreColType := tableFuncNode.TableDef.Cols[1].Typ // table function's score column
-		replaceDistFnExprsWithScoreCol(projNode.ProjectList, scanTag,
-			ivfCtx.partPos, ivfCtx.origFuncName, ivfCtx.vecLitArg, tableFuncTag, scoreColType)
+		if projNode != nil {
+			replaceDistFnExprsWithScoreCol(projNode.ProjectList, scanTag,
+				ivfCtx.partPos, ivfCtx.origFuncName, ivfCtx.vecLitArg, tableFuncTag, scoreColType)
+		}
 		if childNode != nil {
 			replaceDistFnExprsWithScoreCol(childNode.ProjectList, scanTag,
 				ivfCtx.partPos, ivfCtx.origFuncName, ivfCtx.vecLitArg, tableFuncTag, scoreColType)
@@ -1792,39 +1806,16 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfflat(nodeID int32, vecCt
 		SpillMem:   builder.sortSpillMem,
 	}, ctx)
 
-	projNode.Children[0] = sortByID
-
+	// Anchored at the PROJECT above the Top-K, or at the Top-K sort itself when a
+	// consumer (outer ORDER BY, join) sits between it and any project. Under an
+	// index-only scan the pass-through columns are additionally rewritten to the table
+	// function's outputs, since the base scan is gone.
+	var scanRemap map[[2]int32]*plan.Expr
 	if canIndexOnly {
-		scanToTFMap := buildIvfScanToTableFuncMap(tableFuncTag, tableFuncIncludeColumns, scanNode)
-		if childNode != nil {
-			sortIdx := orderExpr.GetCol().ColPos
-			projMap := make(map[[2]int32]*plan.Expr)
-			for i, proj := range childNode.ProjectList {
-				if i == int(sortIdx) {
-					projMap[[2]int32{childNode.BindingTags[0], int32(i)}] = DeepCopyExpr(orderByScore[0].Expr)
-					continue
-				}
-				projMap[[2]int32{childNode.BindingTags[0], int32(i)}] = replaceColumnsForExpr(DeepCopyExpr(proj), scanToTFMap)
-			}
-			replaceColumnsForNode(projNode, projMap)
-		} else {
-			replaceColumnsForNode(projNode, scanToTFMap)
-		}
-	} else if childNode != nil {
-		sortIdx := orderExpr.GetCol().ColPos
-		projMap := make(map[[2]int32]*plan.Expr)
-		for i, proj := range childNode.ProjectList {
-			if i == int(sortIdx) {
-				projMap[[2]int32{childNode.BindingTags[0], int32(i)}] = DeepCopyExpr(orderByScore[0].Expr)
-			} else {
-				projMap[[2]int32{childNode.BindingTags[0], int32(i)}] = proj
-			}
-		}
-
-		replaceColumnsForNode(projNode, projMap)
+		scanRemap = buildIvfScanToTableFuncMap(tableFuncTag, tableFuncIncludeColumns, scanNode)
 	}
-
-	return nodeID, nil
+	remap := vectorRemapForChildProject(childNode, orderExpr, orderByScore[0].Expr, scanRemap)
+	return builder.spliceVectorRewrite(vecCtx, nodeID, sortByID, remap, idxColMap), nil
 }
 
 func (builder *QueryBuilder) buildPkExprFromNode(nodeID int32, pkType plan.Type, pkName string) *plan.Expr {
