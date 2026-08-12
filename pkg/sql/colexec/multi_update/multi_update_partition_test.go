@@ -125,6 +125,74 @@ func TestClonePartitionTargetContextsDisablesSecondSelectionPass(t *testing.T) {
 	}
 }
 
+func TestPartitionS3TargetSelectionUsesMemoryAdmission(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		available int64
+		wantErr   bool
+	}{
+		{name: "granted", available: 1 << 20},
+		{name: "rejected", available: 1, wantErr: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			mp := proc.Mp()
+			const rowCount = 4096
+			rowIDs := make([]types.Rowid, rowCount)
+			rowNumbers := make([]int64, rowCount)
+			active := make([]bool, rowCount)
+			for i := range rowCount {
+				rowIDs[i] = types.BuildTestRowid(1, int64(i))
+				rowNumbers[i] = 1
+				active[i] = true
+			}
+			input := batch.NewWithSize(3)
+			input.Vecs[0] = testutil.MakeRowIdVector(rowIDs, nil, mp)
+			input.Vecs[1] = testutil.NewInt64Vector(
+				rowCount, types.T_int64.ToType(), mp, false, nil, rowNumbers)
+			input.Vecs[2] = testutil.NewBoolVector(
+				rowCount, types.T_bool.ToType(), mp, false, nil, active)
+			input.SetRowCount(rowCount)
+			defer input.Clean(mp)
+
+			seen, err := hashmap.NewStrHashMap(false, mp)
+			require.NoError(t, err)
+			throttler := &testSeenRowsThrottler{available: tc.available}
+			raw := &MultiUpdate{
+				Action: UpdateWriteS3,
+				ctr: container{
+					seenTargetRows: map[uint64]*hashmap.StrHashMap{42: seen},
+					seenRowsRSC:    throttler,
+				},
+			}
+			raw.addAffectedRowsFunc = raw.doAddAffectedRows
+			op := &PartitionMultiUpdate{raw: raw}
+			target := &partitionUpdateTarget{tableID: 42, contexts: []*MultiUpdateCtx{{
+				TableDef:           &plan.TableDef{TblId: 42, FeatureFlag: features.Partitioned},
+				DeleteCols:         []int{0, 0, 1, 2},
+				DedupByTargetRowID: true,
+			}}}
+
+			filtered, owned, err := op.selectPartitionTargetRows(proc, target, input)
+			if tc.wantErr {
+				require.Error(t, err)
+				require.Nil(t, filtered)
+				require.False(t, owned)
+				require.Zero(t, throttler.acquired)
+			} else {
+				require.NoError(t, err)
+				require.True(t, owned)
+				filtered.Clean(mp)
+				require.Positive(t, throttler.acquired)
+				require.Equal(t, throttler.acquired, raw.ctr.seenRowsGrant)
+			}
+
+			raw.freeSeenTargetRows()
+			require.Equal(t, throttler.acquired, throttler.released)
+		})
+	}
+}
+
 func TestResetMultiUpdateCtxsClassifiesTemporaryIndexTables(t *testing.T) {
 	uniqueName := "__mo_tmp_018f1f767b9d7f35b2d99b8d7774bde8_db_" +
 		catalog.UniqueIndexTableNamePrefix + "0198fa2b-7cc8-7ed1-b7ae-a3d9c29e75fd"

@@ -289,6 +289,7 @@ func (op *PartitionMultiUpdate) selectPartitionTargetRows(
 	target *partitionUpdateTarget,
 	input *batch.Batch,
 ) (*batch.Batch, bool, error) {
+	seenSizeBefore := op.raw.seenTargetRowsSize()
 	filtered, owned, duplicateRows, err := filterTargetRows(
 		proc,
 		target.contexts[0],
@@ -297,6 +298,15 @@ func (op *PartitionMultiUpdate) selectPartitionTargetRows(
 	)
 	if err != nil {
 		return nil, false, err
+	}
+	if op.raw.Action == UpdateWriteS3 {
+		seenIncrement := op.raw.seenTargetRowsSize() - seenSizeBefore
+		if err = op.raw.admitSeenTargetRowsGrowth(seenIncrement); err != nil {
+			if owned {
+				filtered.Clean(proc.Mp())
+			}
+			return nil, false, err
+		}
 	}
 	op.raw.addAffectedRowsFunc(duplicateRows)
 	return filtered, owned, nil
