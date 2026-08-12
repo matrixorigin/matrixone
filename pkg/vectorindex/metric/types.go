@@ -217,10 +217,27 @@ func MaxFloat[T types.RealNumbers]() T {
 	}
 }
 
+// DistanceTransformHnsw converts a raw usearch distance to the value MO's SQL distance
+// function named by the QUERY returns, so an index-served score and a brute-force score
+// are the same number. Every conversion is monotonic and the caller applies it after the
+// result heap is ordered, so ranking is unaffected.
+//
+// usearch is the only backend needing this HERE: the Go CPU kernels already return MO's
+// convention (InnerProduct returns -a·b), and cuVS output is negated inside cgo/cuvs
+// (index_base.hpp search path, distance.hpp / distance_c.cpp pairwise) before it reaches
+// Go. (Note: the gpu-tagged pairwise wait in gpu.go negates IP a SECOND time on top of
+// the cgo flip — a separate, pre-existing GPU-only defect, not something this transform
+// compensates for.) Within usearch only inner product differs — its IP metric is 1 - a·b against MO's
+// -a·b, so an untranslated score is exactly 1 too high; ordering stays correct, which is
+// why only a value comparison catches it. usearch.Cosine is already 1 - cos_sim, exactly
+// what cosine_distance returns, and L2sq is the same squared distance MO computes.
 func DistanceTransformHnsw(dist float64, origMetricType MetricType, metricType usearch.Metric) float64 {
 	if origMetricType == Metric_L2Distance && metricType == usearch.L2sq {
 		// metric is l2sq but origin is l2_distance
 		return math.Sqrt(dist)
+	}
+	if metricType == usearch.InnerProduct {
+		return dist - 1
 	}
 	return dist
 }
