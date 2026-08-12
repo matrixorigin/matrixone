@@ -236,6 +236,30 @@ func TestPreparedDecimalComparisonPlannerReplacementAndReuse(t *testing.T) {
 	}
 }
 
+func TestPlanDetectsRuntimeDecimalDomainsThatRequireFullRebuild(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	decimalType := types.New(types.T_decimal128, 20, 4)
+	mock.ctxt.tables["part"].Cols[7].Typ = makePlan2Type(&decimalType)
+
+	queries := []string{
+		"select p_partkey from part where p_retailprice in (?, 9007199254740992.0001)",
+		"select p_partkey from part where p_retailprice = ? or p_retailprice = 9007199254740992.0001",
+		"select p_partkey from part where ? in (p_retailprice, ?)",
+		"select p_partkey from part where p_retailprice between ? and 9007199254740993",
+		"select p_partkey from part where (p_retailprice, p_partkey) in ((?, 3), (?, 5))",
+	}
+	for _, query := range queries {
+		t.Run(query, func(t *testing.T) {
+			logicPlan, err := runOneStmt(mock, t, "prepare decimal_runtime_domain from '"+query+"'")
+			require.NoError(t, err)
+			hasRuntimeDomain, err := PlanHasExactDecimalComparisonParam(
+				context.Background(), logicPlan.GetDcl().GetPrepare().Plan)
+			require.NoError(t, err)
+			require.True(t, hasRuntimeDomain)
+		})
+	}
+}
+
 func TestPreparedDecimalComparisonUsesActualStringValueDomain(t *testing.T) {
 	mock := NewMockOptimizer(false)
 	decimalType := types.New(types.T_decimal128, 20, 4)
@@ -538,8 +562,8 @@ func TestDecimalBetweenAndNotBetweenUseOneSourceDomain(t *testing.T) {
 	}{
 		{name: "prepared_between", predicate: "p_retailprice between ? and ?", prepared: true, expectExact: true, expectedID: types.T_decimal128},
 		{name: "prepared_not_between", predicate: "p_retailprice not between ? and ?", prepared: true, expectExact: true, expectedID: types.T_decimal128},
-		{name: "mixed_prepared_literal_between", predicate: "p_retailprice between ? and '9007199254740992.99995'", prepared: true, expectedID: types.T_float64},
-		{name: "mixed_prepared_literal_not_between", predicate: "p_retailprice not between ? and '9007199254740992.99995'", prepared: true, expectedID: types.T_float64},
+		{name: "mixed_prepared_literal_between", predicate: "p_retailprice between ? and '9007199254740992.99995'", prepared: true, expectExact: true, expectedID: types.T_float64},
+		{name: "mixed_prepared_literal_not_between", predicate: "p_retailprice not between ? and '9007199254740992.99995'", prepared: true, expectExact: true, expectedID: types.T_float64},
 		{name: "literal_between", predicate: "p_retailprice between '9007199254740992.00005' and '9007199254740992.99995'", expectedID: types.T_float64},
 		{name: "literal_not_between", predicate: "p_retailprice not between '9007199254740992.00005' and '9007199254740992.99995'", expectedID: types.T_float64},
 		{name: "cast_between", predicate: "p_retailprice between cast('9007199254740992.00005' as char) and cast('9007199254740992.99995' as char)", expectedID: types.T_float64},

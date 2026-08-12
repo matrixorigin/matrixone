@@ -3258,15 +3258,7 @@ func makePrepareParamExprs(paramVals []any) []*Expr {
 			kind = param.Kind
 		}
 		if val == nil {
-			pc := &plan.Literal{
-				Isnull: true,
-				Value:  &plan.Literal_Sval{Sval: ""},
-			}
-			params[i] = &plan.Expr{
-				Expr: &plan.Expr_Lit{
-					Lit: pc,
-				},
-			}
+			params[i] = makePlan2NullConstExprWithType()
 		} else {
 			text := fmt.Sprintf("%v", val)
 			switch kind {
@@ -3288,13 +3280,7 @@ func makePrepareParamExprs(paramVals []any) []*Expr {
 				params[i] = makePlan2BoolConstExprWithType(text == "1" || strings.EqualFold(text, "true"))
 				continue
 			}
-			pc := &plan.Literal{IsBin: isBin}
-			pc.Value = &plan.Literal_Sval{Sval: text}
-			params[i] = &plan.Expr{
-				Expr: &plan.Expr_Lit{
-					Lit: pc,
-				},
-			}
+			params[i] = makePlan2StringConstExprWithType(text, isBin)
 		}
 	}
 	return params

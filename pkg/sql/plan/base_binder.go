@@ -58,6 +58,14 @@ var kAlwaysFalseExpr = &plan.Expr{
 
 var exactDecimalListGroupID atomic.Int32
 
+type prepareRuntimeParamsKey struct{}
+
+// WithPrepareRuntimeParams marks an execution-time prepared-plan rebuild. In
+// that rebuild ParamExpr nodes bind the values already installed on Process.
+func WithPrepareRuntimeParams(ctx context.Context) context.Context {
+	return context.WithValue(ctx, prepareRuntimeParamsKey{}, true)
+}
+
 func nextExactDecimalListGroupID() int32 {
 	id := exactDecimalListGroupID.Add(-1)
 	if id == 0 {
@@ -365,6 +373,52 @@ func unwrapParenExpr(astExpr tree.Expr) tree.Expr {
 }
 
 func (b *baseBinder) baseBindParam(astExpr *tree.ParamExpr, depth int32, isRoot bool) (expr *plan.Expr, err error) {
+	// EXECUTE may rebuild a parameter-sensitive prepared statement after the
+	// protocol values have been installed on the process. Bind those values now
+	// so overload resolution, constant-list construction, and index planning all
+	// observe the same runtime type domain. The initial PREPARE has no parameter
+	// vector and keeps the ParamRef below.
+	materialize := false
+	if ctx := b.GetContext(); ctx != nil {
+		materialize, _ = ctx.Value(prepareRuntimeParamsKey{}).(bool)
+	}
+	if materialize && b.builder != nil && b.builder.compCtx != nil {
+		proc := b.builder.compCtx.GetProcess()
+		if proc != nil {
+			params := proc.GetPrepareParams()
+			// Parser ordinals are one-based. Plan ParamRefs are normalized to
+			// zero-based positions only after binding.
+			pos := int(astExpr.Offset) - 1
+			if params != nil && pos >= 0 && pos < params.Length() {
+				var value any
+				if !params.IsNull(uint64(pos)) {
+					raw, getErr := proc.GetPrepareParamsAt(pos)
+					if getErr != nil {
+						return nil, getErr
+					}
+					value = string(raw)
+				}
+				expr = makePrepareParamExprs([]any{ParamValue{
+					Value: value,
+					IsBin: proc.GetPrepareParamIsBin(pos),
+					Kind:  proc.GetPrepareParamKind(pos),
+				}})[0]
+				// Preserve prepared-parameter provenance after materialization. The
+				// concrete literal type carries the protocol source kind, while this
+				// marker lets multi-operand coercion distinguish it from SQL text.
+				expr.ExactDecimalParam = true
+				if b.numericParamType != nil {
+					cast, castErr := appendCastBeforeExpr(b.GetContext(), expr, *b.numericParamType)
+					if castErr != nil {
+						return nil, castErr
+					}
+					cast.ExactDecimalParam = true
+					return cast, nil
+				}
+				return expr, nil
+			}
+		}
+	}
 	typ := types.T_text.ToType()
 	param := &Expr{
 		Typ: makePlan2Type(&typ),
@@ -771,6 +825,29 @@ func (b *baseBinder) bindRangeCond(astExpr *tree.RangeCond, depth int32, isRoot 
 		if err != nil {
 			return nil, err
 		}
+		// A materialized parameter on the left still belongs to one prepared
+		// BETWEEN domain. Inspect DECIMAL endpoints before the legacy branch that
+		// only recognizes a DECIMAL left operand.
+		if left.ExactDecimalParam && !types.T(left.Typ.Id).IsDecimal() {
+			from, bindErr := b.impl.BindExpr(astExpr.From, depth, false)
+			if bindErr != nil {
+				return nil, bindErr
+			}
+			to, bindErr := b.impl.BindExpr(astExpr.To, depth, false)
+			if bindErr != nil {
+				return nil, bindErr
+			}
+			if types.T(from.Typ.Id).IsDecimal() || types.T(to.Typ.Id).IsDecimal() {
+				operands := []*plan.Expr{left, from, to}
+				normalized, normalizeErr := normalizePreparedDecimalRange(b.GetContext(), operands)
+				if normalizeErr != nil {
+					return nil, normalizeErr
+				}
+				if normalized {
+					return bindPreparedRangeOperands(b.GetContext(), astExpr.Not, operands)
+				}
+			}
+		}
 		if types.T(left.Typ.Id).IsDecimal() {
 			from, err := b.impl.BindExpr(astExpr.From, depth, false)
 			if err != nil {
@@ -779,6 +856,16 @@ func (b *baseBinder) bindRangeCond(astExpr *tree.RangeCond, depth int32, isRoot 
 			to, err := b.impl.BindExpr(astExpr.To, depth, false)
 			if err != nil {
 				return nil, err
+			}
+			if left.ExactDecimalParam || from.ExactDecimalParam || to.ExactDecimalParam {
+				operands := []*plan.Expr{left, from, to}
+				normalized, normalizeErr := normalizePreparedDecimalRange(b.GetContext(), operands)
+				if normalizeErr != nil {
+					return nil, normalizeErr
+				}
+				if normalized {
+					return bindPreparedRangeOperands(b.GetContext(), astExpr.Not, operands)
+				}
 			}
 			fromType, toType := types.T(from.Typ.Id), types.T(to.Typ.Id)
 			if fromType.IsMySQLString() && (toType.IsMySQLString() || toType.ToType().IsNumeric()) ||
@@ -842,6 +929,69 @@ func (b *baseBinder) bindRangeCond(astExpr *tree.RangeCond, depth int32, isRoot 
 		}
 	}
 	return bind()
+}
+
+func normalizePreparedDecimalRange(ctx context.Context, operands []*plan.Expr) (bool, error) {
+	hasDecimal := false
+	hasRuntime := false
+	useReal := false
+	for _, operand := range operands {
+		typ := types.T(operand.Typ.Id)
+		hasDecimal = hasDecimal || typ.IsDecimal()
+		if operand.ExactDecimalParam {
+			hasRuntime = true
+			useReal = useReal || typ == types.T_float32 || typ == types.T_float64
+		}
+	}
+	if !hasDecimal || !hasRuntime {
+		return false, nil
+	}
+
+	if !useReal {
+		for i, operand := range operands {
+			if !operand.ExactDecimalParam || !types.T(operand.Typ.Id).IsMySQLString() {
+				continue
+			}
+			literal := operand.GetLit()
+			if literal == nil || literal.Isnull || literal.IsBin {
+				useReal = true
+				break
+			}
+			decimal, exact, err := makePlan2ExactDecimalStringExprWithType(ctx, literal.GetSval())
+			if err != nil {
+				return false, err
+			}
+			if !exact {
+				useReal = true
+				break
+			}
+			decimal.ExactDecimalParam = true
+			operands[i] = decimal
+		}
+	}
+	if useReal {
+		floatType := types.T_float64.ToType()
+		target := makePlan2Type(&floatType)
+		for i := range operands {
+			cast, err := appendCastBeforeExpr(ctx, operands[i], target)
+			if err != nil {
+				return false, err
+			}
+			operands[i] = cast
+		}
+	}
+	return true, nil
+}
+
+func bindPreparedRangeOperands(ctx context.Context, not bool, operands []*plan.Expr) (*plan.Expr, error) {
+	between, err := BindFuncExprImplByPlanExpr(ctx, "between", operands)
+	if err != nil {
+		return nil, err
+	}
+	if !not {
+		return between, nil
+	}
+	return BindFuncExprImplByPlanExpr(ctx, "not", []*plan.Expr{between})
 }
 
 func (b *baseBinder) bindUnaryExpr(astExpr *tree.UnaryExpr, depth int32, isRoot bool) (*Expr, error) {
@@ -3965,11 +4115,61 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 		//if all the expr in the in list can safely cast to left type, we call it safe
 		if rightList := args[1].GetList(); rightList != nil {
 			exactSingleComparison := len(rightList.List) == 1
-			leftIsPreparedParam := isDirectDynamicParam(args[0])
+			leftIsPreparedParam := isDirectDynamicParam(args[0]) || args[0].ExactDecimalParam
 			preparedListParams := 0
+			if leftIsPreparedParam {
+				preparedListParams++
+			}
 			for _, item := range rightList.List {
 				if isDirectDynamicParam(item) || item.ExactDecimalParam {
 					preparedListParams++
+				}
+			}
+			// MySQL chooses the left runtime numeric parameter's REAL domain for
+			// the complete IN predicate when a runtime string peer is present. Do
+			// this before list packing so the vector and expanded comparisons share
+			// one physical type.
+			leftTypeID := types.T(args[0].Typ.Id)
+			leftRuntimeNumeric := args[0].ExactDecimalParam &&
+				(leftTypeID.ToType().IsNumeric() || leftTypeID == types.T_bool)
+			useRuntimeLeftReal := leftRuntimeNumeric &&
+				(leftTypeID == types.T_float32 || leftTypeID == types.T_float64)
+			if leftRuntimeNumeric && !useRuntimeLeftReal {
+				for _, item := range rightList.List {
+					if item.ExactDecimalParam && types.T(item.Typ.Id).IsMySQLString() {
+						useRuntimeLeftReal = true
+						break
+					}
+				}
+			}
+			if !leftIsPreparedParam && len(rightList.List) > 1 {
+				hasRuntimeFloat := false
+				hasOtherRuntime := false
+				for _, item := range rightList.List {
+					if !item.ExactDecimalParam {
+						continue
+					}
+					itemType := types.T(item.Typ.Id)
+					if itemType == types.T_float32 || itemType == types.T_float64 {
+						hasRuntimeFloat = true
+					} else {
+						hasOtherRuntime = true
+					}
+				}
+				useRuntimeLeftReal = hasRuntimeFloat && hasOtherRuntime
+			}
+			if useRuntimeLeftReal {
+				floatType := types.T_float64.ToType()
+				target := makePlan2Type(&floatType)
+				args[0], err = appendCastBeforeExpr(ctx, args[0], target)
+				if err != nil {
+					return nil, err
+				}
+				for i := range rightList.List {
+					rightList.List[i], err = appendCastBeforeExpr(ctx, rightList.List[i], target)
+					if err != nil {
+						return nil, err
+					}
 				}
 			}
 			groupID := int32(0)
@@ -6026,6 +6226,38 @@ func intervalUnitIsDayOrLarger(intervalExpr *Expr) bool {
 }
 
 func handleTupleIn(ctx context.Context, name string, leftList *plan.Expr_List, rightList *plan.ExprList) (*plan.Expr, error) {
+	// Row comparison selects a domain per tuple position. Materialized protocol
+	// values paired with a DECIMAL position must enter that domain before the
+	// tuple is expanded into scalar equalities; otherwise a FLOAT parameter can
+	// use a broad scalar DOUBLE comparison and match the wrong tuple row.
+	for position := range leftList.List.List {
+		hasDecimal := types.T(leftList.List.List[position].Typ.Id).IsDecimal()
+		for _, candidate := range rightList.List {
+			rightTuple := candidate.GetList()
+			if rightTuple != nil && position < len(rightTuple.List) {
+				hasDecimal = hasDecimal || types.T(rightTuple.List[position].Typ.Id).IsDecimal()
+			}
+		}
+		if !hasDecimal {
+			continue
+		}
+		var err error
+		leftList.List.List[position], err = normalizeTuplePreparedDecimalValue(ctx, leftList.List.List[position])
+		if err != nil {
+			return nil, err
+		}
+		for _, candidate := range rightList.List {
+			rightTuple := candidate.GetList()
+			if rightTuple == nil || position >= len(rightTuple.List) {
+				continue
+			}
+			rightTuple.List[position], err = normalizeTuplePreparedDecimalValue(ctx, rightTuple.List[position])
+			if err != nil {
+				return nil, err
+			}
+		}
+	}
+
 	candidates := make([]*plan.Expr, 0, len(rightList.List))
 
 	for _, rightVal := range rightList.List {
@@ -6065,6 +6297,42 @@ func handleTupleIn(ctx context.Context, name string, leftList *plan.Expr_List, r
 		return BindFuncExprImplByPlanExpr(ctx, "not", []*plan.Expr{newExpr})
 	}
 	return newExpr, nil
+}
+
+func normalizeTuplePreparedDecimalValue(ctx context.Context, expr *plan.Expr) (*plan.Expr, error) {
+	if expr == nil || !expr.ExactDecimalParam || types.T(expr.Typ.Id).IsDecimal() {
+		return expr, nil
+	}
+	literal := expr.GetLit()
+	if literal == nil || literal.Isnull || literal.IsBin {
+		return expr, nil
+	}
+	var value string
+	switch typed := literal.Value.(type) {
+	case *plan.Literal_Sval:
+		value = typed.Sval
+	case *plan.Literal_I64Val:
+		value = strconv.FormatInt(typed.I64Val, 10)
+	case *plan.Literal_U64Val:
+		value = strconv.FormatUint(typed.U64Val, 10)
+	case *plan.Literal_Dval:
+		value = strconv.FormatFloat(typed.Dval, 'g', -1, 64)
+	case *plan.Literal_Fval:
+		value = strconv.FormatFloat(float64(typed.Fval), 'g', -1, 32)
+	case *plan.Literal_Bval:
+		value = "0"
+		if typed.Bval {
+			value = "1"
+		}
+	default:
+		return expr, nil
+	}
+	decimal, exact, err := makePlan2ExactDecimalStringExprWithType(ctx, value)
+	if err != nil || !exact {
+		return expr, err
+	}
+	decimal.ExactDecimalParam = true
+	return decimal, nil
 }
 
 func foldNameConstArgs(ctx context.Context, proc *process.Process, args []*plan.Expr) error {

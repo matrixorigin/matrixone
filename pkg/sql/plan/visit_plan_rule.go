@@ -845,6 +845,10 @@ func (rule *findDecimalComparisonParamRule) ApplyExpr(expr *plan.Expr) (*plan.Ex
 					return expr, nil
 				}
 			}
+			if planExprHasParamRef(expr) && planExprHasDecimalType(expr) {
+				rule.found = true
+				return expr, nil
+			}
 		}
 		for _, arg := range fn.Args {
 			if _, err := rule.ApplyExpr(arg); err != nil {
@@ -869,6 +873,54 @@ func (rule *findDecimalComparisonParamRule) ApplyExpr(expr *plan.Expr) (*plan.Ex
 		}
 	}
 	return expr, nil
+}
+
+func planExprHasParamRef(expr *plan.Expr) bool {
+	if expr == nil {
+		return false
+	}
+	if expr.GetP() != nil {
+		return true
+	}
+	if fn := expr.GetF(); fn != nil {
+		for _, arg := range fn.Args {
+			if planExprHasParamRef(arg) {
+				return true
+			}
+		}
+	}
+	if list := expr.GetList(); list != nil {
+		for _, item := range list.List {
+			if planExprHasParamRef(item) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func planExprHasDecimalType(expr *plan.Expr) bool {
+	if expr == nil {
+		return false
+	}
+	if types.T(expr.Typ.Id).IsDecimal() {
+		return true
+	}
+	if fn := expr.GetF(); fn != nil {
+		for _, arg := range fn.Args {
+			if planExprHasDecimalType(arg) {
+				return true
+			}
+		}
+	}
+	if list := expr.GetList(); list != nil {
+		for _, item := range list.List {
+			if planExprHasDecimalType(item) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func applyWindowExpr(e *plan.Expr, apply func(*plan.Expr) (*plan.Expr, error)) (*plan.Expr, error) {

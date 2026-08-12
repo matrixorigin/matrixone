@@ -302,10 +302,19 @@ func (cwft *TxnComputationWrapper) Compile(any any, fill func(*batch.Batch, *per
 	cacheHit := cwft.plan != nil
 	if !cacheHit {
 		cwft.protocolVersion = currentProtocolVersion(cwft.proc)
+		buildCtx := execCtx.reqCtx
+		compilerCtx := cwft.ses.GetTxnCompileCtx()
+		var restoreCompilerCtx context.Context
+		if execCtx.input.isPreparedExpr() {
+			buildCtx = plan2.WithPrepareRuntimeParams(buildCtx)
+			restoreCompilerCtx = compilerCtx.GetContext()
+			compilerCtx.SetContext(plan2.WithPrepareRuntimeParams(restoreCompilerCtx))
+			defer compilerCtx.SetContext(restoreCompilerCtx)
+		}
 		cwft.plan, err = buildPlanWithPrepareMode(
-			execCtx.reqCtx,
+			buildCtx,
 			cwft.ses,
-			cwft.ses.GetTxnCompileCtx(),
+			compilerCtx,
 			cwft.stmt,
 			execCtx.input.isPreparedExpr(),
 		)
@@ -313,22 +322,6 @@ func (cwft *TxnComputationWrapper) Compile(any any, fill func(*batch.Batch, *per
 			return nil, err
 		}
 	}
-	// Prepared SET expressions execute through a synthetic SELECT rather than
-	// the outer EXECUTE plan. Specialize that freshly built query with the same
-	// exact DECIMAL parameter rule before it is compiled; otherwise the nested
-	// evaluation silently falls back to the prepare-time DECIMAL cast.
-	if execCtx.input.isPreparedExpr() {
-		paramVals, valueErr := preparedParamValues(cwft.proc)
-		if valueErr != nil {
-			return nil, valueErr
-		}
-		cwft.plan, err = materializePreparedExpressionExactDecimalParams(
-			execCtx.reqCtx, cwft.plan, paramVals)
-		if err != nil {
-			return nil, err
-		}
-	}
-
 	if cwft.ses != nil && cwft.ses.GetTenantInfo() != nil && !cwft.ses.IsBackgroundSession() {
 		var accId uint32
 		accId, err = defines.GetAccountId(execCtx.reqCtx)
@@ -506,18 +499,6 @@ func (cwft *TxnComputationWrapper) Compile(any any, fill func(*batch.Batch, *per
 	}
 
 	return cwft.compile, err
-}
-
-func materializePreparedExpressionExactDecimalParams(
-	ctx context.Context,
-	executionPlan *plan2.Plan,
-	paramVals []any,
-) (*plan2.Plan, error) {
-	hasExact, err := plan2.PlanHasExactDecimalComparisonParam(ctx, executionPlan)
-	if err != nil || !hasExact {
-		return executionPlan, err
-	}
-	return plan2.FillExactDecimalComparisonParamsInPlan(ctx, executionPlan, paramVals)
 }
 
 func authenticatePreparedDDLOwnerStatement(reqCtx context.Context, ses *Session, stmt tree.Statement, p *plan.Plan) (statistic.StatsArray, error) {
@@ -991,10 +972,27 @@ func initExecuteStmtParamWithResolverInSession(
 		prepareStmt.exactDecimalComparisonParamsSet = true
 	}
 	if prepareStmt.exactDecimalComparisonParams {
-		executionPlan, err = plan2.FillExactDecimalComparisonParamsInPlan(reqCtx, executionPlan, cwft.paramVals)
+		// Parameter source kinds participate in DECIMAL coercion. Rebuild from
+		// the saved AST after installing the runtime values so every derived
+		// predicate (including index prefix filters) and every constant vector is
+		// produced in one consistent domain. Rewriting an already optimized plan
+		// leaves stale index conditions and can mix DECIMAL physical widths.
+		var rebuilt *plan2.Plan
+		rebuilt, err = rebuildPreparePlan(
+			execCtx,
+			executionSes,
+			prepareStmt,
+			func(ctx context.Context, ses FeSession, compilerCtx plan2.CompilerContext, stmt tree.Statement) (*plan2.Plan, error) {
+				originalCtx := compilerCtx.GetContext()
+				compilerCtx.SetContext(plan2.WithPrepareRuntimeParams(originalCtx))
+				defer compilerCtx.SetContext(originalCtx)
+				return buildPlan(plan2.WithPrepareRuntimeParams(ctx), ses, compilerCtx, stmt)
+			},
+		)
 		if err != nil {
 			return nil, nil, nil, originSQL, false, err
 		}
+		executionPlan = rebuilt.GetDcl().GetPrepare().Plan
 	}
 	// A cached prepared Compile already owns a materialized worker topology.
 	// Explicit scheduling intent must be evaluated for this execution, so it
