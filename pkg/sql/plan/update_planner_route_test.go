@@ -33,6 +33,57 @@ import (
 	planutil "github.com/matrixorigin/matrixone/pkg/sql/util"
 )
 
+func TestBuildIrregularUpdateTargetProjectionUsesTargetLocalLayout(t *testing.T) {
+	tableDef := &planpb.TableDef{
+		Cols: []*planpb.ColDef{
+			{Name: "id", Typ: planpb.Type{Id: 1}},
+			{Name: "body", Typ: planpb.Type{Id: 2}},
+			{Name: catalog.Row_ID, Typ: planpb.Type{Id: 3}},
+		},
+		Pkey:          &planpb.PrimaryKeyDef{PkeyColName: "id"},
+		Name2ColIndex: map[string]int32{"id": 0, "body": 1, catalog.Row_ID: 2},
+	}
+	finalProjList := make([]*planpb.Expr, 7)
+	for i := range finalProjList {
+		finalProjList[i] = &planpb.Expr{Typ: planpb.Type{Id: int32(i + 10)}}
+	}
+	finalColName2Idx := map[string]int32{
+		"f.id":                3,
+		"f.body":              4,
+		"f." + catalog.Row_ID: 5,
+	}
+
+	projectList, deletePkPos := buildIrregularUpdateTargetProjection(
+		"f", tableDef, 99, finalProjList, finalColName2Idx, 6)
+	require.Len(t, projectList, 4)
+	require.Equal(t, int32(3), deletePkPos)
+	for localPos, globalPos := range []int32{3, 4, 5, 6} {
+		col := projectList[localPos].GetCol()
+		require.NotNil(t, col)
+		require.Equal(t, int32(99), col.RelPos)
+		require.Equal(t, globalPos, col.ColPos)
+	}
+
+	projectList, deletePkPos = buildIrregularUpdateTargetProjection(
+		"f", tableDef, 99, finalProjList, finalColName2Idx, 3)
+	require.Len(t, projectList, 3)
+	require.Equal(t, int32(0), deletePkPos)
+}
+
+func TestUpdateTargetScanProtectionSurvivesSpecialGuardSuspension(t *testing.T) {
+	builder := &QueryBuilder{
+		protectedScans:    map[int32]int{7: 1},
+		updateTargetScans: map[int32]struct{}{8: {}},
+	}
+	require.True(t, builder.isScanProtected(7))
+	require.True(t, builder.isScanProtected(8))
+
+	restore := builder.suspendScanProtection(8)
+	require.True(t, builder.isScanProtected(8))
+	restore()
+	require.True(t, builder.isScanProtected(8))
+}
+
 func TestClassifyUpdatePlannerError(t *testing.T) {
 	ctx := context.Background()
 	baseErr := moerr.NewUnsupportedDML(ctx, "multi-table update")

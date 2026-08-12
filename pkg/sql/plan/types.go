@@ -240,6 +240,7 @@ type QueryBuilder struct {
 	ctxByNode                   []*BindContext
 	nameByColRef                map[[2]int32]string
 	protectedScans              map[int32]int
+	updateTargetScans           map[int32]struct{}
 	projectSpecialGuards        map[int32]*specialIndexGuard
 	setBitmapByDisplayNode      map[[2]int32]int32
 	indexHintsByScan            map[int32]*indexHintSet
@@ -266,13 +267,8 @@ type QueryBuilder struct {
 	isRestoreByTs          bool
 	isSkipResolveTableDef  bool
 	skipStats              bool
-	isInsertIgnore         bool // INSERT IGNORE: over-length CHAR/VARCHAR writes are truncated instead of rejected
-	// Multi-target UPDATE selectors and per-target dedup currently depend on
-	// the original target scan bindings. Regular-index rewrites can replace
-	// those scans and bypass the target-local IGNORE/dedup boundary.
-	skipIndexRewritesForMultiTargetUpdate bool
-
-	deleteNode map[uint64]int32 //delete node in this query. key is tableId, value is the nodeId of sinkScan node in the delete plan
+	isInsertIgnore         bool             // INSERT IGNORE: over-length CHAR/VARCHAR writes are truncated instead of rejected
+	deleteNode             map[uint64]int32 //delete node in this query. key is tableId, value is the nodeId of sinkScan node in the delete plan
 
 	// spill memory for aggregate function
 	aggSpillMem int64

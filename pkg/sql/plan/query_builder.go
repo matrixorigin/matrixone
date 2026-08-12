@@ -3320,12 +3320,10 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		clear(colRefCnt)
 		builder.countColRefs(rootID, colRefCnt)
 		builder.prepareSpecialIndexGuards(rootID)
-		if !builder.skipIndexRewritesForMultiTargetUpdate {
-			idxColMap := make(map[[2]int32]*plan.Expr)
-			rootID, err = builder.applyForceIndexHints(rootID, nil, colRefCnt, idxColMap)
-			if err == nil {
-				rootID, err = builder.applyIndices(rootID, colRefCnt, idxColMap)
-			}
+		idxColMap := make(map[[2]int32]*plan.Expr)
+		rootID, err = builder.applyForceIndexHints(rootID, nil, colRefCnt, idxColMap)
+		if err == nil {
+			rootID, err = builder.applyIndices(rootID, colRefCnt, idxColMap)
 		}
 		builder.resetSpecialIndexGuards()
 		if err != nil {

@@ -307,6 +307,76 @@ DROP TABLE multi_update_fulltext_target;
 DROP TABLE multi_update_fulltext_source;
 DROP TABLE multi_update_fulltext_plain;
 
+-- A non-leading FULLTEXT target must consume its own target-local final row
+-- image, rather than interpreting the leading target's columns as its input.
+DROP TABLE IF EXISTS multi_update_irregular_plain;
+DROP TABLE IF EXISTS multi_update_irregular_fulltext;
+CREATE TABLE multi_update_irregular_plain (id INT PRIMARY KEY, v INT);
+CREATE TABLE multi_update_irregular_fulltext (id INT PRIMARY KEY, body TEXT);
+CREATE FULLTEXT INDEX idx_multi_update_irregular_fulltext
+    ON multi_update_irregular_fulltext(body);
+INSERT INTO multi_update_irregular_plain VALUES (1, 0);
+INSERT INTO multi_update_irregular_fulltext VALUES (1, 'oldf');
+UPDATE multi_update_irregular_plain p
+JOIN multi_update_irregular_fulltext f ON p.id = f.id
+SET p.v = 7, f.body = 'newf';
+SELECT * FROM multi_update_irregular_plain;
+SELECT * FROM multi_update_irregular_fulltext;
+SELECT COUNT(*) FROM multi_update_irregular_fulltext
+WHERE MATCH(body) AGAINST('newf' IN NATURAL LANGUAGE MODE);
+SELECT COUNT(*) FROM multi_update_irregular_fulltext
+WHERE MATCH(body) AGAINST('oldf' IN NATURAL LANGUAGE MODE);
+DROP TABLE multi_update_irregular_plain;
+DROP TABLE multi_update_irregular_fulltext;
+
+-- Index rewrites remain enabled for read-only sources in a multi-target UPDATE.
+DROP TABLE IF EXISTS multi_update_match_a;
+DROP TABLE IF EXISTS multi_update_match_b;
+DROP TABLE IF EXISTS multi_update_match_docs;
+CREATE TABLE multi_update_match_a (id INT PRIMARY KEY, v INT);
+CREATE TABLE multi_update_match_b (id INT PRIMARY KEY, v INT);
+CREATE TABLE multi_update_match_docs (id INT PRIMARY KEY, body TEXT);
+CREATE FULLTEXT INDEX idx_multi_update_match_docs ON multi_update_match_docs(body);
+INSERT INTO multi_update_match_a VALUES (1, 0), (2, 0);
+INSERT INTO multi_update_match_b VALUES (1, 0), (2, 0);
+INSERT INTO multi_update_match_docs VALUES (1, 'needle'), (2, 'haystack');
+UPDATE multi_update_match_a a
+JOIN multi_update_match_b b ON a.id = b.id
+JOIN multi_update_match_docs d ON d.id = a.id
+SET a.v = 1, b.v = 2
+WHERE MATCH(d.body) AGAINST('needle' IN NATURAL LANGUAGE MODE);
+SELECT * FROM multi_update_match_a ORDER BY id;
+SELECT * FROM multi_update_match_b ORDER BY id;
+DROP TABLE multi_update_match_a;
+DROP TABLE multi_update_match_b;
+DROP TABLE multi_update_match_docs;
+
+-- MASTER maintenance deletes by the immutable old PK when the PK changes.
+DROP TABLE IF EXISTS multi_update_master_pk;
+CREATE TABLE multi_update_master_pk (
+    id VARCHAR(30) PRIMARY KEY,
+    a VARCHAR(30),
+    b VARCHAR(30)
+);
+CREATE INDEX idx_multi_update_master_pk USING MASTER ON multi_update_master_pk(a, b);
+INSERT INTO multi_update_master_pk VALUES ('1', 'alpha', 'one');
+UPDATE multi_update_master_pk SET id = '2' WHERE id = '1';
+UPDATE multi_update_master_pk SET id = '3' WHERE id = '2';
+SET @multi_update_master_table = (
+    SELECT DISTINCT index_table_name
+    FROM mo_catalog.mo_indexes
+    WHERE name = 'idx_multi_update_master_pk'
+);
+SET @multi_update_master_sql = CONCAT(
+    'SELECT __mo_index_pri_col, COUNT(*) FROM `',
+    @multi_update_master_table,
+    '` GROUP BY __mo_index_pri_col ORDER BY __mo_index_pri_col'
+);
+PREPARE multi_update_master_stmt FROM @multi_update_master_sql;
+EXECUTE multi_update_master_stmt;
+DEALLOCATE PREPARE multi_update_master_stmt;
+DROP TABLE multi_update_master_pk;
+
 DROP TABLE IF EXISTS multi_update_auto_a;
 DROP TABLE IF EXISTS multi_update_auto_b;
 CREATE TABLE multi_update_auto_a (id INT AUTO_INCREMENT PRIMARY KEY, v INT);

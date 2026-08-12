@@ -266,7 +266,20 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 	}
 	isMultiTargetUpdate := updatedTargetCount > 1
 	if isMultiTargetUpdate {
-		builder.skipIndexRewritesForMultiTargetUpdate = true
+		if builder.updateTargetScans == nil {
+			builder.updateTargetScans = make(map[int32]struct{})
+		}
+		for i, alias := range dmlCtx.aliases {
+			if len(dmlCtx.updateCol2Expr[i]) == 0 {
+				continue
+			}
+			rowIDPos := oldColName2Idx[alias+"."+catalog.Row_ID]
+			if col := selectNode.ProjectList[rowIDPos].GetCol(); col != nil {
+				if scanID, ok := builder.tag2NodeID[col.RelPos]; ok {
+					builder.updateTargetScans[scanID] = struct{}{}
+				}
+			}
+		}
 	}
 	targetActivePos := make([]int32, len(dmlCtx.aliases))
 	targetRowNumberPos := make([]int32, len(dmlCtx.aliases))
@@ -1263,6 +1276,7 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 	var finalProjList []*plan.Expr
 	targetRowNumberFinalPos := make([]int32, len(dmlCtx.aliases))
 	targetUpdateCtxIdx := make([]int32, len(dmlCtx.aliases))
+	targetOldPkFinalPos := make([]int32, len(dmlCtx.aliases))
 
 	finalProjNode := &plan.Node{
 		NodeType:    plan.Node_PROJECT,
@@ -1335,6 +1349,7 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 				},
 			})
 		}
+		targetOldPkFinalPos[i] = oldPkPos
 		if isMultiTargetUpdate {
 			targetRowNumberFinalPos[i] = int32(len(finalProjList))
 			rowNumberPos := targetRowNumberPos[i]
@@ -1605,28 +1620,62 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 	// base-table MULTI_UPDATE. Their stale entries are deleted by the immutable
 	// old PK and rebuilt after createQuery from this materialized step. Async
 	// indexes are deliberately absent and remain CDC-only.
+	irregularBaseStep := int32(-1)
+	for _, indexes := range inlineIrregularIndexes {
+		if len(indexes) > 0 {
+			globalSinkID := appendSinkNodeWithTag(builder, bindCtx, lastNodeID, finalProjTag)
+			irregularBaseStep = builder.appendStep(globalSinkID)
+			lastNodeID = builder.appendTaggedSinkScan(bindCtx, irregularBaseStep, finalProjTag)
+			break
+		}
+	}
 	for i, indexes := range inlineIrregularIndexes {
 		if len(indexes) == 0 {
 			continue
 		}
 		alias := dmlCtx.aliases[i]
-		pkPos := finalColName2Idx[alias+"."+dmlCtx.tableDefs[i].Pkey.PkeyColName]
+		tableDef := dmlCtx.tableDefs[i]
+		localProjTag := builder.genNewBindTag()
+		localProjList, deletePkPos := buildIrregularUpdateTargetProjection(
+			alias, tableDef, finalProjTag, finalProjList, finalColName2Idx, targetOldPkFinalPos[i])
 		rowNumberPos := int32(-1)
 		activePos := int32(-1)
 		if isMultiTargetUpdate {
-			rowNumberPos = targetRowNumberFinalPos[i]
+			rowNumberPos = int32(len(localProjList))
+			globalRowNumberPos := targetRowNumberFinalPos[i]
+			localProjList = append(localProjList, &plan.Expr{
+				Typ: finalProjList[globalRowNumberPos].Typ,
+				Expr: &plan.Expr_Col{Col: &plan.ColRef{
+					RelPos: finalProjTag,
+					ColPos: globalRowNumberPos,
+				}},
+			})
 			activePos = rowNumberPos + 1
+			localProjList = append(localProjList, &plan.Expr{
+				Typ: finalProjList[globalRowNumberPos+1].Typ,
+				Expr: &plan.Expr_Col{Col: &plan.ColRef{
+					RelPos: finalProjTag,
+					ColPos: globalRowNumberPos + 1,
+				}},
+			})
 		}
-		lastNodeID, err = builder.appendOnDupIrregularMaintSource(
+		localSourceID := builder.appendTaggedSinkScan(bindCtx, irregularBaseStep, finalProjTag)
+		localProjID := builder.appendNode(&plan.Node{
+			NodeType:    plan.Node_PROJECT,
+			Children:    []int32{localSourceID},
+			ProjectList: localProjList,
+			BindingTags: []int32{localProjTag},
+		}, bindCtx)
+		_, err = builder.appendOnDupIrregularMaintSource(
 			bindCtx,
-			lastNodeID,
-			finalProjTag,
-			pkPos,
-			finalProjList[pkPos].Typ,
+			localProjID,
+			localProjTag,
+			deletePkPos,
+			localProjList[deletePkPos].Typ,
 			rowNumberPos,
 			activePos,
 			indexes,
-			dmlCtx.tableDefs[i],
+			tableDef,
 			dmlCtx.objRefs[i],
 		)
 		if err != nil {
@@ -1665,6 +1714,41 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 	lastNodeID = builder.appendNode(dmlNode, bindCtx)
 
 	return lastNodeID, err
+}
+
+func buildIrregularUpdateTargetProjection(
+	alias string,
+	tableDef *plan.TableDef,
+	finalProjTag int32,
+	finalProjList []*plan.Expr,
+	finalColName2Idx map[string]int32,
+	oldPkGlobalPos int32,
+) ([]*plan.Expr, int32) {
+	localProjList := make([]*plan.Expr, 0, len(tableDef.Cols)+1)
+	for _, colDef := range tableDef.Cols {
+		globalPos := finalColName2Idx[alias+"."+colDef.Name]
+		localProjList = append(localProjList, &plan.Expr{
+			Typ: finalProjList[globalPos].Typ,
+			Expr: &plan.Expr_Col{Col: &plan.ColRef{
+				RelPos: finalProjTag,
+				ColPos: globalPos,
+			}},
+		})
+	}
+
+	newPkGlobalPos := finalColName2Idx[alias+"."+tableDef.Pkey.PkeyColName]
+	deletePkPos := int32(tableDef.Name2ColIndex[tableDef.Pkey.PkeyColName])
+	if oldPkGlobalPos != newPkGlobalPos {
+		deletePkPos = int32(len(localProjList))
+		localProjList = append(localProjList, &plan.Expr{
+			Typ: finalProjList[oldPkGlobalPos].Typ,
+			Expr: &plan.Expr_Col{Col: &plan.ColRef{
+				RelPos: finalProjTag,
+				ColPos: oldPkGlobalPos,
+			}},
+		})
+	}
+	return localProjList, deletePkPos
 }
 
 // rejectRepeatedPhysicalUpdateTargets keeps the first-stage multi-target
