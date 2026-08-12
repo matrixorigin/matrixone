@@ -1491,13 +1491,9 @@ func buildCreateView(stmt *tree.CreateView, ctx CompilerContext) (*Plan, error) 
 		if !ok || clause.From == nil || len(clause.From.Tables) != 1 {
 			return nil, moerr.NewNotSupported(ctx.GetContext(), "materialized view requires exactly one base table")
 		}
-		aliased, ok := clause.From.Tables[0].(*tree.AliasedTableExpr)
-		if !ok {
-			return nil, moerr.NewNotSupported(ctx.GetContext(), "materialized view requires exactly one base table")
-		}
-		source, ok := aliased.Expr.(*tree.TableName)
-		if !ok {
-			return nil, moerr.NewNotSupported(ctx.GetContext(), "materialized view requires exactly one base table")
+		source := materializedViewSourceTable(clause.From.Tables[0])
+		if source == nil {
+			return nil, moerr.NewNotSupportedf(ctx.GetContext(), "materialized view requires exactly one base table (table=%T)", clause.From.Tables[0])
 		}
 		sourceDB := string(source.SchemaName)
 		if sourceDB == "" {
@@ -1505,6 +1501,24 @@ func buildCreateView(stmt *tree.CreateView, ctx CompilerContext) (*Plan, error) 
 		}
 		createView.TableDef.ViewSql = nil
 		createView.TableDef.TableType = catalog.SystemMaterializedRel
+		// A materialized view is stored as a physical ordinary table. Views do
+		// not normally need a primary key, so add the same fake key used by an
+		// ordinary CREATE TABLE without an explicit key.
+		fakePK := &ColDef{
+			ColId:   uint64(len(createView.TableDef.Cols)),
+			Name:    catalog.FakePrimaryKeyColName,
+			Hidden:  true,
+			Typ:     Type{Id: int32(types.T_uint64), AutoIncr: true},
+			Default: &plan.Default{NullAbility: false},
+			NotNull: true,
+			Primary: true,
+			Comment: materializedViewMarkerComment,
+		}
+		createView.TableDef.Cols = append(createView.TableDef.Cols, fakePK)
+		createView.TableDef.Pkey = &PrimaryKeyDef{
+			Names:       []string{catalog.FakePrimaryKeyColName},
+			PkeyColName: catalog.FakePrimaryKeyColName,
+		}
 		for _, def := range createView.TableDef.Defs {
 			props := def.GetProperties()
 			if props == nil {
@@ -1516,6 +1530,7 @@ func buildCreateView(stmt *tree.CreateView, ctx CompilerContext) (*Plan, error) 
 				}
 			}
 			props.Properties = append(props.Properties,
+				&plan.Property{Key: "mv_materialized", Value: "true"},
 				&plan.Property{Key: "mv_source_database", Value: sourceDB},
 				&plan.Property{Key: "mv_source_table", Value: string(source.ObjectName)},
 				&plan.Property{Key: "mv_source_sql", Value: tree.String(source, dialect.MYSQL)},
@@ -1534,6 +1549,57 @@ func buildCreateView(stmt *tree.CreateView, ctx CompilerContext) (*Plan, error) 
 			},
 		},
 	}, nil
+}
+
+// IsMaterializedViewTableDef identifies the dedicated materialized relation
+// kind (and its persisted properties for compatibility with older plans).
+func IsMaterializedViewTableDef(def *plan.TableDef) bool {
+	if def == nil {
+		return false
+	}
+	if def.GetTableType() == catalog.SystemMaterializedRel {
+		return true
+	}
+	for _, col := range def.GetCols() {
+		if col.GetComment() == materializedViewMarkerComment {
+			return true
+		}
+	}
+	for _, item := range def.GetDefs() {
+		props := item.GetProperties()
+		if props == nil {
+			continue
+		}
+		for _, prop := range props.GetProperties() {
+			if prop.GetKey() == "mv_materialized" && prop.GetValue() == "true" {
+				return true
+			}
+			if prop.GetKey() == catalog.SystemRelAttr_CreateSQL && strings.Contains(prop.GetValue(), "mv_materialized") {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+const materializedViewMarkerComment = "matrixone materialized view"
+
+func materializedViewSourceTable(expr tree.TableExpr) *tree.TableName {
+	switch table := expr.(type) {
+	case *tree.TableName:
+		return table
+	case *tree.AliasedTableExpr:
+		return materializedViewSourceTable(table.Expr)
+	case *tree.ParenTableExpr:
+		return materializedViewSourceTable(table.Expr)
+	case *tree.JoinTableExpr:
+		if table.Right == nil && table.Cond == nil {
+			return materializedViewSourceTable(table.Left)
+		}
+		return nil
+	default:
+		return nil
+	}
 }
 
 func buildSequenceTableDef(stmt *tree.CreateSequence, ctx CompilerContext, cs *plan.CreateSequence) error {
@@ -4730,7 +4796,7 @@ func buildDropView(stmt *tree.DropView, ctx CompilerContext) (*Plan, error) {
 			return nil, moerr.NewBadView(ctx.GetContext(), dropTable.Database, dropTable.Table)
 		}
 	} else {
-		if stmt.Materialized && tableDef.TableType != catalog.SystemMaterializedRel {
+		if stmt.Materialized && !IsMaterializedViewTableDef(tableDef) {
 			return nil, moerr.NewBadView(ctx.GetContext(), dropTable.Database, dropTable.Table)
 		}
 		if !stmt.Materialized && tableDef.ViewSql == nil {

@@ -172,6 +172,11 @@ type DDLOwnerRoleIDKey struct{}
 type NodeIDKey struct{}
 type InternalExecutorKey struct{}
 
+// MaterializedViewRefreshKey marks SQL issued by the MV consumer while it
+// replaces the physical result table. It is deliberately context-scoped so
+// ordinary users cannot write through the MV DML path.
+type MaterializedViewRefreshKey struct{}
+
 func IsInternalExecutor(ctx context.Context) bool {
 	if v := ctx.Value(InternalExecutorKey{}); v != nil {
 		return v.(bool)

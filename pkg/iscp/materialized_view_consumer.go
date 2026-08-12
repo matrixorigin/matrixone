@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -82,13 +83,9 @@ func (c *MaterializedViewConsumer) Consume(ctx context.Context, r DataRetriever)
 		r.GetAccountID(), 24*time.Hour, nil, nil,
 		func(sqlproc *sqlexec.SqlProcess, _ any) error {
 			sqlctx := sqlproc.SqlCtx
-			res, err := ExecWithResult(sqlproc.GetContext(), "use `"+c.jobID.DBName+"`", sqlctx.GetService(), sqlctx.Txn())
-			if err != nil {
-				return err
-			}
-			res.Close()
+			refreshCtx := context.WithValue(sqlproc.GetContext(), defines.MaterializedViewRefreshKey{}, true)
 			deleteSQL := fmt.Sprintf("delete from `%s`.`%s`", c.info.DBName, c.info.TableName)
-			res, err = ExecWithResult(sqlproc.GetContext(), deleteSQL, sqlctx.GetService(), sqlctx.Txn())
+			res, err := ExecWithResult(refreshCtx, deleteSQL, sqlctx.GetService(), sqlctx.Txn())
 			if err != nil {
 				return err
 			}
@@ -97,23 +94,45 @@ func (c *MaterializedViewConsumer) Consume(ctx context.Context, r DataRetriever)
 			if !ok {
 				return fmt.Errorf("materialized view retriever does not expose iteration boundary")
 			}
-			refreshSQL, err := materializedViewRefreshAt(c.info.RefreshSQL, c.info.SourceSQL, boundary.GetToTS())
+			refreshSQL, err := materializedViewRefreshAtInDatabase(c.info.RefreshSQL, c.info.SourceSQL, c.jobID.DBName, boundary.GetToTS())
 			if err != nil {
 				return err
 			}
 			insertSQL := fmt.Sprintf("insert into `%s`.`%s` %s", c.info.DBName, c.info.TableName, refreshSQL)
-			res, err = ExecWithResult(sqlproc.GetContext(), insertSQL, sqlctx.GetService(), sqlctx.Txn())
+			if len(c.info.Columns) > 0 {
+				columns := make([]string, 0, len(c.info.Columns)+1)
+				selectColumns := make([]string, 0, len(c.info.Columns))
+				for _, column := range c.info.Columns {
+					quoted := "`" + strings.ReplaceAll(column, "`", "``") + "`"
+					columns = append(columns, quoted)
+					selectColumns = append(selectColumns, quoted)
+				}
+				columns = append(columns, "`__mo_fake_pk_col`")
+				insertSQL = fmt.Sprintf("insert into `%s`.`%s` (%s) select %s, row_number() over () from (%s) as `__mo_mv_refresh`", c.info.DBName, c.info.TableName, strings.Join(columns, ","), strings.Join(selectColumns, ","), refreshSQL)
+			}
+			res, err = ExecWithResult(refreshCtx, insertSQL, sqlctx.GetService(), sqlctx.Txn())
 			if err != nil {
 				return err
 			}
 			res.Close()
-			return r.UpdateWatermark(sqlproc.GetContext(), sqlctx.GetService(), sqlctx.Txn())
+			return r.UpdateWatermark(refreshCtx, sqlctx.GetService(), sqlctx.Txn())
 		})
 }
 
 func materializedViewRefreshAt(query, source string, ts types.TS) (string, error) {
 	needle := "from " + source
 	replacement := fmt.Sprintf("from %s{MO_TS = '%s'}", source, ts.ToString())
+	refresh := strings.Replace(query, needle, replacement, 1)
+	if refresh == query {
+		return "", fmt.Errorf("materialized view source %q not found in refresh query", source)
+	}
+	return refresh, nil
+}
+
+func materializedViewRefreshAtInDatabase(query, source, database string, ts types.TS) (string, error) {
+	needle := "from " + source
+	qualified := fmt.Sprintf("`%s`.`%s`", database, source)
+	replacement := fmt.Sprintf("from %s{MO_TS = '%s'}", qualified, ts.ToString())
 	refresh := strings.Replace(query, needle, replacement, 1)
 	if refresh == query {
 		return "", fmt.Errorf("materialized view source %q not found in refresh query", source)

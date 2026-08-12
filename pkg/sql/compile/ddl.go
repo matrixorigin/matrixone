@@ -2530,7 +2530,7 @@ func (s *Scope) CreateView(c *Compile) error {
 		)
 		return err
 	}
-	if qry.GetTableDef().GetTableType() == catalog.SystemMaterializedRel {
+	if plan2.IsMaterializedViewTableDef(qry.GetTableDef()) {
 		var sourceDB, sourceTable, sourceSQL, refreshSQL string
 		for _, def := range qry.GetTableDef().GetDefs() {
 			props := def.GetProperties()
@@ -2553,9 +2553,15 @@ func (s *Scope) CreateView(c *Compile) error {
 		if sourceDB == "" || sourceTable == "" || sourceSQL == "" || refreshSQL == "" {
 			return moerr.NewInternalError(c.proc.Ctx, "incomplete materialized view definition")
 		}
+		columns := make([]string, 0, len(qry.GetTableDef().GetCols()))
+		for _, col := range qry.GetTableDef().GetCols() {
+			if !col.GetHidden() {
+				columns = append(columns, col.GetName())
+			}
+		}
 		spec := &iscp.JobSpec{ConsumerInfo: iscp.ConsumerInfo{
 			ConsumerType: int8(iscp.ConsumerType_MaterializedView),
-			DBName:       dbName, TableName: viewName, RefreshSQL: refreshSQL, SourceSQL: sourceSQL,
+			DBName:       dbName, TableName: viewName, Columns: columns, RefreshSQL: refreshSQL, SourceSQL: sourceSQL,
 		}}
 		job := &iscp.JobID{DBName: sourceDB, TableName: sourceTable, JobName: "materialized_view_" + dbName + "_" + viewName}
 		if _, err = CreateCdcTask(c, spec, job, false); err != nil {
@@ -3750,7 +3756,7 @@ func (s *Scope) dropTableSingle(c *Compile, qry *plan.DropTable) error {
 	}
 
 	// Unregister the source-table ISCP job before deleting its materialized result.
-	if qry.GetTableDef().GetTableType() == catalog.SystemMaterializedRel {
+	if plan2.IsMaterializedViewTableDef(qry.GetTableDef()) {
 		var sourceDB, sourceTable string
 		for _, def := range qry.GetTableDef().GetDefs() {
 			if props := def.GetProperties(); props != nil {

@@ -20,6 +20,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	indexplugin "github.com/matrixorigin/matrixone/pkg/indexplugin"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -73,6 +74,9 @@ func buildTableUpdate(stmt *tree.Update, ctx CompilerContext, isPrepareStmt bool
 	// bindUpdate bails to it) rather than silently corrupting the index. Treat an index whose
 	// async-ness cannot be determined as synchronous (fail safe).
 	for i, tableDef := range tblInfo.tableDefs {
+		if IsMaterializedViewTableDef(tableDef) && ctx.GetContext().Value(defines.MaterializedViewRefreshKey{}) == nil {
+			return nil, moerr.NewUnsupportedDML(ctx.GetContext(), "update materialized view")
+		}
 		if tableDef.Pkey == nil || len(tblInfo.updateKeys[i]) == 0 {
 			continue
 		}
