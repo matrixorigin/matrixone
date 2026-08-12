@@ -70,7 +70,7 @@ func RequireViewMetadataRevalidation(ctx context.Context, sqlExecutor executor.S
 	}
 	inserted.Close()
 	markers, err := sqlExecutor.Exec(callCtx, fmt.Sprintf(
-		"insert into %s.%s (account_id,%s) select a.account_id,0,0,0,'%s','%s',0,0,0,0,0,"+
+		"insert into %s.%s (%s) select a.account_id,0,0,0,'%s','%s',0,0,0,0,0,"+
 			"'','','','','%s','',0,null,0,1 from %s.%s a where a.account_id<>0 and not exists "+
 			"(select 1 from %s.%s d where d.account_id=a.account_id and d.target_relation_id=0 "+
 			"and d.dependency_ordinal=0)",

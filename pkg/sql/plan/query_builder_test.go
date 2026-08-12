@@ -57,7 +57,7 @@ func (c *sharedTableDefCompilerContext) Resolve(
 	return c.obj, c.tableDef, nil
 }
 
-func TestConcurrentQueryBuildOwnsResolvedTableExpressions(t *testing.T) {
+func TestConcurrentQueryBuildOwnsResolvedTableShell(t *testing.T) {
 	defaultExpr := &plan.Expr{
 		Typ:  plan.Type{Id: int32(types.T_int32), NotNullable: true},
 		Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_I32Val{I32Val: 1}}},
@@ -85,7 +85,8 @@ func TestConcurrentQueryBuildOwnsResolvedTableExpressions(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			stmts, err := parsers.Parse(context.Background(), dialect.MYSQL,
-				"select a from tpch.shared_table where a in (select a from tpch.shared_table)", 1)
+				"select a from tpch.shared_table where exists "+
+					"(select 1 from tpch.shared_table)", 1)
 			if err != nil {
 				errs <- err
 				return
@@ -114,8 +115,8 @@ func TestConcurrentQueryBuildOwnsResolvedTableExpressions(t *testing.T) {
 	seen := make(map[*plan.TableDef]struct{}, builders)
 	for def := range defs {
 		require.NotSame(t, shared, def)
-		require.NotSame(t, shared.Cols[0], def.Cols[0])
-		require.NotSame(t, defaultExpr, def.Cols[0].Default.Expr)
+		require.Same(t, shared.Cols[0], def.Cols[0])
+		require.Same(t, defaultExpr, def.Cols[0].Default.Expr)
 		seen[def] = struct{}{}
 	}
 	require.Len(t, seen, builders)

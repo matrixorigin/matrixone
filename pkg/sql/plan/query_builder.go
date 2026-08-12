@@ -10128,11 +10128,10 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, t
 		if tableDef == nil {
 			return 0, moerr.NewNoSuchTablef(builder.GetContext(), "SQL parser error: table %q does not exist", table)
 		}
-		// Compiler contexts may cache catalog TableDefs and return the same
-		// object to concurrent query builds. Planning mutates column expressions
-		// (nullability, NDV and rewrites), so take ownership of the complete
-		// schema graph before making any planner-local changes.
-		tableDef = DeepCopyTableDef(tableDef, true)
+		// Compiler contexts return immutable catalog metadata. Own the planner
+		// shell and column slice, which are replaced locally, without copying the
+		// immutable column definitions, indexes, constraints, or expressions.
+		tableDef = CloneTableDefForPlan(tableDef, true)
 
 		tableDef.Name2ColIndex = map[string]int32{}
 		var tbColToDataCol map[string]int32 = make(map[string]int32, 0)

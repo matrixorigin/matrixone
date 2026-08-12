@@ -1,0 +1,171 @@
+// Copyright 2026 Matrix Origin
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package issues
+
+import (
+	"context"
+	"database/sql"
+	"fmt"
+	"strings"
+	"testing"
+	"time"
+
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/embed"
+	"github.com/matrixorigin/matrixone/pkg/sql/compile"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	"github.com/stretchr/testify/require"
+)
+
+func TestViewMetadataRevalidationTenantMarkerExecutesAgainstCatalog(t *testing.T) {
+	embed.RunBaseClusterTests(t, func(c embed.Cluster) {
+		cn, err := c.GetCNService(0)
+		require.NoError(t, err)
+		port := cn.GetServiceConfig().CN.Frontend.Port
+		db, err := sql.Open("mysql", fmt.Sprintf("dump:111@tcp(127.0.0.1:%d)/", port))
+		require.NoError(t, err)
+		defer db.Close()
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+		defer cancel()
+
+		const account = "view_metadata_marker_account"
+		execSQLRequire(t, ctx, db, "set role moadmin")
+		execSQLMaybe(t, ctx, db, "drop account if exists `"+account+"`")
+		execSQLRequire(t, ctx, db,
+			"create account `"+account+"` admin_name 'admin' identified by '111'")
+		defer func() {
+			cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cleanupCancel()
+			execSQLMaybe(t, cleanupCtx, db, "drop account if exists `"+account+"`")
+		}()
+
+		value, ok := moruntime.ServiceRuntime(cn.ServiceID()).
+			GetGlobalVariables(moruntime.InternalSQLExecutor)
+		require.True(t, ok)
+		sqlExecutor, ok := value.(executor.SQLExecutor)
+		require.True(t, ok)
+		require.NoError(t, compile.RequireViewMetadataRevalidation(ctx, sqlExecutor))
+
+		var status string
+		require.NoError(t, db.QueryRowContext(ctx,
+			"select d.source_relation_kind from mo_catalog.mo_view_dependencies d "+
+				"join mo_catalog.mo_account a on d.account_id=a.account_id "+
+				"where a.account_name=? and d.target_relation_id=0 and d.dependency_ordinal=0",
+			account).Scan(&status))
+		require.Equal(t, "REVALIDATE_REQUIRED", status)
+	})
+}
+
+func TestAccountPITRInvalidatesSubscriberViewMetadata(t *testing.T) {
+	embed.RunBaseClusterTests(t, func(c embed.Cluster) {
+		cn, err := c.GetCNService(0)
+		require.NoError(t, err)
+		port := cn.GetServiceConfig().CN.Frontend.Port
+		sysDB, err := sql.Open("mysql", fmt.Sprintf("dump:111@tcp(127.0.0.1:%d)/", port))
+		require.NoError(t, err)
+		defer sysDB.Close()
+		ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+		defer cancel()
+
+		const (
+			publisher   = "view_metadata_pitr_publisher"
+			subscriber  = "view_metadata_pitr_subscriber"
+			publishedDB = "view_metadata_pitr_source"
+			subDB       = "view_metadata_pitr_subscription"
+			localDB     = "view_metadata_pitr_local"
+			publication = "view_metadata_pitr_publication"
+			pitr        = "view_metadata_pitr"
+		)
+		cleanup := func() {
+			cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cleanupCancel()
+			execSQLMaybe(t, cleanupCtx, sysDB, "drop account if exists `"+subscriber+"`")
+			execSQLMaybe(t, cleanupCtx, sysDB, "drop account if exists `"+publisher+"`")
+		}
+		cleanup()
+		defer cleanup()
+
+		execSQLRequire(t, ctx, sysDB,
+			"create account `"+publisher+"` admin_name 'admin' identified by '111'")
+		execSQLRequire(t, ctx, sysDB,
+			"create account `"+subscriber+"` admin_name 'admin' identified by '111'")
+		publisherDB, err := sql.Open("mysql", fmt.Sprintf(
+			"%s#admin#accountadmin:111@tcp(127.0.0.1:%d)/", publisher, port))
+		require.NoError(t, err)
+		defer publisherDB.Close()
+		subscriberDB, err := sql.Open("mysql", fmt.Sprintf(
+			"%s#admin#accountadmin:111@tcp(127.0.0.1:%d)/", subscriber, port))
+		require.NoError(t, err)
+		defer subscriberDB.Close()
+
+		execSQLRequire(t, ctx, publisherDB, "create pitr "+pitr+" for account range 1 'h'")
+		execSQLRequire(t, ctx, publisherDB, "create database `"+publishedDB+"`")
+		execSQLRequire(t, ctx, publisherDB,
+			"create table `"+publishedDB+"`.source_table (value int)")
+		var slept int
+		require.NoError(t, publisherDB.QueryRowContext(ctx, "select sleep(1)").Scan(&slept))
+		var restoreAt string
+		require.NoError(t, publisherDB.QueryRowContext(ctx,
+			"select cast(current_timestamp as char)").Scan(&restoreAt))
+
+		execSQLRequire(t, ctx, publisherDB,
+			"create publication `"+publication+"` database `"+publishedDB+"` account `"+subscriber+"`")
+		execSQLRequire(t, ctx, subscriberDB,
+			"create database `"+subDB+"` from `"+publisher+"` publication `"+publication+"`")
+		execSQLRequire(t, ctx, subscriberDB, "create database `"+localDB+"`")
+		execSQLRequire(t, ctx, subscriberDB,
+			"create view `"+localDB+"`.subscriber_view as select value from `"+subDB+"`.source_table")
+		execSQLRequire(t, ctx, publisherDB,
+			"alter table `"+publishedDB+"`.source_table modify value bigint")
+		require.Eventually(t, func() bool {
+			return strings.EqualFold("BIGINT",
+				viewColumnType(t, ctx, subscriberDB, localDB, "subscriber_view"))
+		}, 30*time.Second, 500*time.Millisecond)
+
+		execSQLRequire(t, ctx, publisherDB, "restore from pitr "+pitr+" '"+restoreAt+"'")
+		require.True(t, strings.EqualFold("INT",
+			viewColumnType(t, ctx, publisherDB, publishedDB, "source_table")))
+		require.Eventually(t, func() bool {
+			return viewRefreshStatus(t, ctx, subscriberDB, localDB, "subscriber_view") == "PENDING"
+		}, 30*time.Second, 500*time.Millisecond)
+	})
+}
+
+func viewRefreshStatus(t *testing.T, ctx context.Context, db *sql.DB, database, view string) string {
+	t.Helper()
+	var status string
+	err := db.QueryRowContext(ctx,
+		"select r.status from mo_catalog.mo_view_refresh r join mo_catalog.mo_tables t "+
+			"on r.account_id=t.account_id and r.target_relation_id=t.rel_id "+
+			"where t.reldatabase=? and t.relname=?",
+		database, view).Scan(&status)
+	if err != nil {
+		return ""
+	}
+	return status
+}
+
+func viewColumnType(t *testing.T, ctx context.Context, db *sql.DB, database, view string) string {
+	t.Helper()
+	var columnType string
+	err := db.QueryRowContext(ctx,
+		"select data_type from information_schema.columns "+
+			"where table_schema=? and table_name=? and column_name='value'",
+		database, view).Scan(&columnType)
+	if err != nil {
+		return ""
+	}
+	return columnType
+}
