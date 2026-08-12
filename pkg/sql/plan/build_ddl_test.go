@@ -51,6 +51,23 @@ type rootSQLCompilerContext struct {
 	calls   int
 }
 
+type viewReplacementCompilerContext struct {
+	*rootSQLCompilerContext
+	building bool
+	database string
+	view     string
+}
+
+func (c *viewReplacementCompilerContext) SetBuildingAlterView(building bool, database, view string) {
+	c.building = building
+	c.database = database
+	c.view = view
+}
+
+func (c *viewReplacementCompilerContext) GetBuildingAlterView() (bool, string, string) {
+	return c.building, c.database, c.view
+}
+
 type autoIncrementOffsetCompilerContext struct {
 	*MockCompilerContext
 	offset int64
@@ -591,6 +608,60 @@ func TestBuildAlterRenameColumnRecoversLegacyChecks(t *testing.T) {
 func (c *rootSQLCompilerContext) GetRootSql() string {
 	c.calls++
 	return c.rootSQL
+}
+
+func TestBuildCreateOrReplaceViewRejectsRecursiveDefinition(t *testing.T) {
+	newViewDef := func(t *testing.T, sql string) *plan.TableDef {
+		t.Helper()
+		viewData, err := json.Marshal(ViewData{
+			Stmt:            sql,
+			DefaultDatabase: "tpch",
+			SecurityType:    "DEFINER",
+		})
+		require.NoError(t, err)
+		return &plan.TableDef{
+			TableType: catalog.SystemViewRel,
+			ViewSql:   &plan.ViewDef{View: string(viewData)},
+		}
+	}
+
+	for _, test := range []struct {
+		name string
+		sql  string
+	}{
+		{
+			name: "direct reference",
+			sql:  "create or replace view v as select n_nationkey from v",
+		},
+		{
+			name: "indirect reference",
+			sql:  "create or replace view v as select n_nationkey from v2",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			mock := NewMockCompilerContext(false)
+			mock.tables["v"] = newViewDef(t, "create view v as select n_nationkey from nation")
+			mock.tables["v2"] = newViewDef(t, "create view v2 as select n_nationkey from v")
+			mock.objects["v"] = &plan.ObjectRef{SchemaName: "tpch", ObjName: "v"}
+			mock.objects["v2"] = &plan.ObjectRef{SchemaName: "tpch", ObjName: "v2"}
+			ctx := &viewReplacementCompilerContext{
+				rootSQLCompilerContext: &rootSQLCompilerContext{
+					MockCompilerContext: mock,
+					rootSQL:             test.sql,
+				},
+			}
+
+			stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, test.sql, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+
+			_, err = BuildPlan(ctx, stmt, false)
+			require.EqualError(t, err, "internal error: there is a recursive reference to the view v")
+			require.False(t, ctx.building)
+			require.Empty(t, ctx.database)
+			require.Empty(t, ctx.view)
+		})
+	}
 }
 
 func TestBuildCreateTableCheckConstraints(t *testing.T) {

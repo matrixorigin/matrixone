@@ -25,5 +25,29 @@ select * from v1;
 a    b
 2    22
 3    33
+create or replace view v1 as select * from v1;
+internal error: there is a recursive reference to the view v1
+select * from v1;
+a    b
+2    22
+3    33
+create view v2 as select * from v1;
+create or replace view v1 as select * from v2;
+internal error: there is a recursive reference to the view v1
+select * from v1;
+a    b
+2    22
+3    33
+drop view v2;
+drop database if exists replace_view_dep;
+create database replace_view_dep;
+create view replace_view_dep.v3 as select * from replace_view.v1;
+create or replace view replace_view.v1 as select * from replace_view_dep.v3;
+internal error: there is a recursive reference to the view v1
+select * from v1;
+a    b
+2    22
+3    33
+drop database replace_view_dep;
 drop table t1;
 drop view v1;
