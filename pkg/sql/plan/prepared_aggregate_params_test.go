@@ -336,6 +336,35 @@ func TestPreparedScalarAggregateSubqueryRuntimeTypes(t *testing.T) {
 	t.Fatal("flattened scalar aggregate join not found")
 }
 
+func TestPreparedDistinctAggregateRuntimeTypes(t *testing.T) {
+	prepare := buildPreparedAggregatePlan(t,
+		"select sum(distinct ? + n_nationkey) + 1 from nation")
+	specialized, err := FillValuesOfParamsInPlan(context.Background(), prepare.Plan, []any{
+		ParamValue{Value: float64(0.5), RuntimeType: types.T_float64},
+	})
+	require.NoError(t, err)
+
+	query := specialized.GetQuery()
+	for nodeID, node := range query.Nodes {
+		if node.NodeType != planpb.Node_AGG || len(node.AggList) != 1 || len(node.ProjectList) != 1 {
+			continue
+		}
+		require.Equal(t, node.AggList[0].Typ, node.ProjectList[0].Typ,
+			"DISTINCT aggregate wrapper must use the rebound physical result type")
+		foundParent := false
+		for _, parent := range query.Nodes {
+			if len(parent.Children) == 1 && parent.Children[0] == int32(nodeID) && len(parent.ProjectList) == 1 {
+				foundParent = true
+				require.Equal(t, node.ProjectList[0].Typ, parent.ProjectList[0].Typ,
+					"DISTINCT aggregate consumer must use the producer generation")
+			}
+		}
+		require.True(t, foundParent, "DISTINCT aggregate consumer not found")
+		return
+	}
+	t.Fatal("DISTINCT aggregate node not found")
+}
+
 func TestPreparedNumericAggregateDoesNotCoerceStrings(t *testing.T) {
 	tests := []string{
 		"select sum(n_name) from nation",

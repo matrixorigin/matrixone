@@ -3290,6 +3290,18 @@ func containsPreparedDynamicNumericParam(expr *Expr) bool {
 		return true
 	}
 	if fn := expr.GetF(); fn != nil {
+		if supportsPreparedProjectionNumericCastRecovery(fn.Func.GetObjName()) {
+			for _, arg := range fn.Args {
+				cast := arg.GetF()
+				if cast == nil || cast.Func.GetObjName() != "cast" || len(cast.Args) == 0 || cast.Args[0].GetP() == nil {
+					continue
+				}
+				_, overload := function.DecodeOverloadID(cast.Func.GetObj())
+				if overload == 0 && !bytes.Equal(cast.AggConfig, []byte(preparedSpecializedNumericCastMarker)) {
+					return true
+				}
+			}
+		}
 		if isPreparedDynamicNumericCast(expr) &&
 			len(fn.Args) > 0 && fn.Args[0].GetP() != nil {
 			return true
@@ -3495,6 +3507,7 @@ func refreshPreparedTypeLineage(ctx context.Context, plan0 *Plan, paramRule *Res
 	visitor := NewVisitPlan(plan0, nil)
 	subqueryRoots := newSubqueryRootRule()
 	visited := make(map[int32]struct{})
+	generation := 0
 	var visit func(int32) error
 	visit = func(id int32) error {
 		if _, ok := visited[id]; ok {
@@ -3520,8 +3533,10 @@ func refreshPreparedTypeLineage(ctx context.Context, plan0 *Plan, paramRule *Res
 				return err
 			}
 		}
-		if err := visitor.exploreNode(ctx, paramRule, node, id); err != nil {
-			return err
+		if generation == 0 {
+			if err := visitor.exploreNode(ctx, paramRule, node, id); err != nil {
+				return err
+			}
 		}
 		// Parameter specialization can change aggregate/window producers.
 		// Refresh logical consumers only after that new producer generation
@@ -3538,13 +3553,32 @@ func refreshPreparedTypeLineage(ctx context.Context, plan0 *Plan, paramRule *Res
 			if err := visitor.exploreNode(ctx, localRule, node, id); err != nil {
 				return err
 			}
+			// Aggregate DISTINCT rewrites can materialize a result ColRef in the
+			// same node whose physical layout is determined by the freshly rebound
+			// AggList. Re-apply the local generation to the node output boundary
+			// explicitly before a parent records or consumes it.
+			for i := range node.ProjectList {
+				var err error
+				node.ProjectList[i], err = localRule.ApplyExpr(node.ProjectList[i])
+				if err != nil {
+					return err
+				}
+			}
 		}
 		recordPreparedNodeOutputTypes(rule.types, node)
 		return nil
 	}
-	for _, root := range query.Steps {
-		if err := visit(root); err != nil {
-			return err
+	// Some optimizer rewrites expose a producer through a materialized ColRef
+	// in the same node (notably DISTINCT SUM). The first bottom-up pass rebuilds
+	// the producer; the second starts from that physical output and closes its
+	// parent consumers. Param specialization is memoized, so the convergence
+	// pass changes types only and never duplicates value substitution.
+	for generation = 0; generation < 2; generation++ {
+		clear(visited)
+		for _, root := range query.Steps {
+			if err := visit(root); err != nil {
+				return err
+			}
 		}
 	}
 	return nil

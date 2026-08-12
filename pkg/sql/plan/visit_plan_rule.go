@@ -461,6 +461,7 @@ func (rule *preparedTypeLineageRule) ApplyExpr(e *plan.Expr) (*plan.Expr, error)
 		if fn := rewritten.GetF(); fn != nil {
 			fn.AggConfig = bytes.Clone(impl.F.AggConfig)
 			fn.AggConfigType = impl.F.AggConfigType
+			fn.Func.Obj = int64(uint64(fn.Func.Obj) | (uint64(impl.F.Func.Obj) & planfunction.Distinct))
 		}
 		return rewritten, nil
 	case *plan.Expr_List:
@@ -530,6 +531,25 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 	var err error
 	switch exprImpl := e.Expr.(type) {
 	case *plan.Expr_F:
+		// Optimizer projection folding can inline a derived-table marker as an
+		// implicit CAST(? AS <prepare-time type>) beneath a numeric consumer.
+		// Recover that dynamic boundary here, where the parent domain proves the
+		// cast is contextual. Root assignment casts and explicit SQL CASTs are
+		// intentionally excluded.
+		if supportsPreparedProjectionNumericCastRecovery(exprImpl.F.Func.GetObjName()) {
+			for _, arg := range exprImpl.F.Args {
+				fn := arg.GetF()
+				if fn == nil || fn.Func.GetObjName() != "cast" || len(fn.Args) == 0 || fn.Args[0].GetP() == nil {
+					continue
+				}
+				_, overload := planfunction.DecodeOverloadID(fn.Func.GetObj())
+				if overload == 0 {
+					arg.Typ.Table = preparedDynamicNumericTypeMarker
+					fn.Args[0].Typ.Table = preparedDynamicNumericTypeMarker
+					markPreparedDynamicNumericCast(arg)
+				}
+			}
+		}
 		needResetFunction := false
 		dynamicParamPos := int32(-1)
 		var dynamicParamExpr *plan.Expr
@@ -579,21 +599,21 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 					// frontend boundary. Numeric consumers alone interpret BOOL
 					// as MySQL integer 0/1 through their generated cast.
 					intType := types.T_int64.ToType()
-					return makePlan2CastExpr(rule.ctx, dynamicParamExpr,
+					return makePreparedSpecializedParamCast(rule.ctx, dynamicParamExpr,
 						makePlan2Type(&intType))
 				case types.T_float32:
 					parsed, parseErr := parsePreparedFloat(value, 32)
 					if parseErr != nil {
 						return nil, parseErr
 					}
-					return makePlan2CastExpr(rule.ctx, dynamicParamExpr,
+					return makePreparedSpecializedParamCast(rule.ctx, dynamicParamExpr,
 						MakePlan2Float32ConstExprWithType(float32(parsed)).Typ)
 				case types.T_float64:
 					parsed, parseErr := parsePreparedFloat(value, 64)
 					if parseErr != nil {
 						return nil, parseErr
 					}
-					return makePlan2CastExpr(rule.ctx, dynamicParamExpr,
+					return makePreparedSpecializedParamCast(rule.ctx, dynamicParamExpr,
 						MakePlan2Float64ConstExprWithType(parsed).Typ)
 				}
 				if runtimeType.IsMySQLString() {
@@ -601,7 +621,7 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 					if parseErr != nil {
 						return nil, parseErr
 					}
-					return makePlan2CastExpr(rule.ctx, dynamicParamExpr,
+					return makePreparedSpecializedParamCast(rule.ctx, dynamicParamExpr,
 						MakePlan2Float64ConstExprWithType(parsed).Typ)
 				}
 				if runtimeType.IsInteger() || runtimeType == types.T_bit {
@@ -609,14 +629,14 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 					if makeErr != nil {
 						return nil, makeErr
 					}
-					return makePlan2CastExpr(rule.ctx, dynamicParamExpr, typed.Typ)
+					return makePreparedSpecializedParamCast(rule.ctx, dynamicParamExpr, typed.Typ)
 				}
 				if runtimeType.IsDecimal() {
 					typed, makeErr := makePlan2DecimalExprWithType(rule.ctx, value, param.GetLit().GetIsBin())
 					if makeErr != nil {
 						return nil, makeErr
 					}
-					return makePlan2CastExpr(rule.ctx, dynamicParamExpr, typed.Typ)
+					return makePreparedSpecializedParamCast(rule.ctx, dynamicParamExpr, typed.Typ)
 				}
 			}
 			if dynamicParamPos < 0 {
@@ -661,6 +681,8 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 			if rewrittenFn != nil {
 				rewrittenFn.AggConfig = bytes.Clone(exprImpl.F.AggConfig)
 				rewrittenFn.AggConfigType = exprImpl.F.AggConfigType
+				rewrittenFn.Func.Obj = int64(uint64(rewrittenFn.Func.Obj) |
+					(uint64(exprImpl.F.Func.Obj) & planfunction.Distinct))
 			}
 			return rewritten, nil
 		}
@@ -672,7 +694,14 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 			return nil, moerr.NewInternalErrorf(context.TODO(), "get prepare params error, index %d not exists", int(exprImpl.P.Pos))
 		}
 		if rule.preserveParamRefs {
-			return e, nil
+			// Bare markers can produce columns behind derived-table and CTE
+			// boundaries. Start their lineage generation from the EXECUTE type;
+			// downstream ColRefs and overloads are refreshed bottom-up.
+			target := rule.params[int(exprImpl.P.Pos)].Typ
+			if target.Id == 0 || samePreparedNumericShape(e.Typ, target) {
+				return e, nil
+			}
+			return makePreparedSpecializedParamCast(rule.ctx, e, target)
 		}
 		return &plan.Expr{
 			Typ:  e.Typ,
@@ -689,6 +718,17 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 	default:
 		return e, nil
 	}
+}
+
+func makePreparedSpecializedParamCast(ctx context.Context, param *plan.Expr, target plan.Type) (*plan.Expr, error) {
+	cast, err := makePlan2CastExpr(ctx, param, target)
+	if err != nil {
+		return nil, err
+	}
+	if fn := cast.GetF(); fn != nil {
+		fn.AggConfig = []byte(preparedSpecializedNumericCastMarker)
+	}
+	return cast, nil
 }
 
 func restorePreparedNumericLiteralType(ctx context.Context, expr *plan.Expr) (*plan.Expr, error) {

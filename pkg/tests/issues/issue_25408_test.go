@@ -58,6 +58,39 @@ func TestIssue25408PreparedNestedExactAndStringDomains(t *testing.T) {
 		mustExec(t, ctx, conn, "insert into n values (1), (2), (3)")
 
 		for _, query := range []string{
+			"select x + 1 from (select ? as x) d",
+			"with d as (select ? as x) select x + 1 from d",
+			"select x + 1 from (select x from (select ? as x) d1) d2",
+		} {
+			t.Run(query, func(t *testing.T) {
+				stmt, prepareErr := conn.PrepareContext(ctx, query)
+				require.NoError(t, prepareErr)
+				defer stmt.Close()
+				for _, execution := range []struct {
+					arg  any
+					want string
+				}{{int64(2), "3"}, {float64(2.5), "3.5"}, {int64(2), "3"}} {
+					var got string
+					require.NoError(t, stmt.QueryRowContext(ctx, execution.arg).Scan(&got))
+					require.Equal(t, execution.want, got)
+				}
+			})
+		}
+		mustExec(t, ctx, conn, "set @derived_param = 2.5")
+		mustExec(t, ctx, conn,
+			"prepare derived_text from 'select x + 1 from (select ? as x) d'")
+		requireIssue25408Scalar(t, ctx, conn, "3.5", "execute derived_text using @derived_param")
+		mustExec(t, ctx, conn, "deallocate prepare derived_text")
+		derivedCTAS, prepareErr := conn.PrepareContext(ctx,
+			"create table derived_ctas as select x + 1 as v from (select ? as x) d")
+		require.NoError(t, prepareErr)
+		defer derivedCTAS.Close()
+		_, execErr := derivedCTAS.ExecContext(ctx, float64(2.5))
+		require.NoError(t, execErr)
+		requireIssue25408Scalar(t, ctx, conn, "3.5", "select v from derived_ctas")
+		requireIssue25408Scalar(t, ctx, conn, "double", "select data_type from information_schema.columns where table_schema = database() and table_name = 'derived_ctas' and column_name = 'v'")
+
+		for _, query := range []string{
 			"select (select sum(? + 1) from n) + 1",
 			"select sum(? + 1) + 1 from n",
 			"select sum(? + 1) over () + 1 from n limit 1",
@@ -76,6 +109,42 @@ func TestIssue25408PreparedNestedExactAndStringDomains(t *testing.T) {
 				}
 			})
 		}
+		mustExec(t, ctx, conn, "set @distinct_param = 0.5")
+		mustExec(t, ctx, conn,
+			"prepare distinct_text from 'select (select sum(distinct ? + a) from n) + 1'")
+		requireIssue25408Scalar(t, ctx, conn, "8.5", "execute distinct_text using @distinct_param")
+		mustExec(t, ctx, conn, "deallocate prepare distinct_text")
+		for _, query := range []string{
+			"select sum(distinct ? + a) + 1 from n",
+			"select (select sum(distinct ? + a) from n) + 1",
+		} {
+			t.Run(query, func(t *testing.T) {
+				stmt, prepareErr := conn.PrepareContext(ctx, query)
+				require.NoError(t, prepareErr)
+				defer stmt.Close()
+				for _, execution := range []struct {
+					arg  any
+					want string
+				}{{int64(1), "10"}, {float64(0.5), "8.5"}, {int64(1), "10"}} {
+					var got string
+					require.NoError(t, stmt.QueryRowContext(ctx, execution.arg).Scan(&got))
+					require.Equal(t, execution.want, got)
+				}
+			})
+		}
+		t.Run("symmetric aggregate comparison", func(t *testing.T) {
+			for _, query := range []string{
+				"select count(*) from n where a < (select avg(? + a) from n)",
+				"select count(*) from n where (select avg(? + a) from n) > a",
+			} {
+				stmt, prepareErr := conn.PrepareContext(ctx, query)
+				require.NoError(t, prepareErr)
+				defer stmt.Close()
+				var got string
+				require.NoError(t, stmt.QueryRowContext(ctx, float64(0.5)).Scan(&got))
+				require.Equal(t, "2", got)
+			}
+		})
 		mustExec(t, ctx, conn, "create table aggregate_sink(id int, v double)")
 		mustExec(t, ctx, conn, "insert into aggregate_sink values (2, 8.5)")
 		t.Run("approximate comparison domain", func(t *testing.T) {

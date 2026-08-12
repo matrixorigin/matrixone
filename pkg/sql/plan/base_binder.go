@@ -1188,7 +1188,18 @@ func (b *baseBinder) numericAstTypesInternalWithHint(
 		if !makeTypeByPlan2Type(typ).IsNumeric() {
 			return numericAstTypeScan{}, nil
 		}
-		return numericAstTypedOperand(typ), nil
+		scan := numericAstTypedOperand(typ)
+		if isPreparedNumericAggregate(name, len(expr.Exprs)) {
+			for _, arg := range expr.Exprs {
+				argScan, scanErr := b.numericAstTypesInternalWithHint(arg, depth, resolveColumn, hint)
+				if scanErr != nil {
+					return numericAstTypeScan{}, scanErr
+				}
+				scan.hasParam = scan.hasParam || argScan.hasParam
+				scan.dynamicCandidate = scan.dynamicCandidate || argScan.dynamicCandidate
+			}
+		}
+		return scan, nil
 	case *tree.CaseExpr:
 		var scan numericAstTypeScan
 		for _, when := range expr.Whens {
@@ -1367,8 +1378,9 @@ func isPreparedDynamicNumericType(typ Type) bool {
 }
 
 const (
-	preparedDynamicNumericTypeMarker = "__mo_prepared_dynamic_numeric"
-	preparedDynamicNumericCastMarker = preparedDynamicNumericTypeMarker
+	preparedDynamicNumericTypeMarker     = "__mo_prepared_dynamic_numeric"
+	preparedDynamicNumericCastMarker     = preparedDynamicNumericTypeMarker
+	preparedSpecializedNumericCastMarker = "__mo_prepared_specialized_numeric"
 )
 
 func markPreparedDynamicNumericCast(expr *Expr) {
@@ -1404,7 +1416,15 @@ func (b *baseBinder) numericScalarSubqueryAstTypes(
 	default:
 		return numericAstTypeScan{}, nil
 	}
-	return b.numericScalarSelectAstTypes(owner, owner.Select, depth, make(map[*tree.Select]bool), nil)
+	scan, err := b.numericScalarSelectAstTypes(owner, owner.Select, depth, make(map[*tree.Select]bool), nil)
+	if err == nil && scan.hasParam && scan.hasExactOperand() {
+		// Aggregates such as SUM/AVG can otherwise expose only their exact
+		// prepare-time return type and lose the dynamic origin of an argument.
+		// Preserve that origin so comparison binding is symmetric across the
+		// scalar-subquery boundary.
+		scan.dynamicCandidate = true
+	}
+	return scan, err
 }
 
 func (b *baseBinder) numericScalarSelectAstTypes(
@@ -1865,6 +1885,10 @@ func isNumericContextFunction(name string) bool {
 	default:
 		return false
 	}
+}
+
+func supportsPreparedProjectionNumericCastRecovery(name string) bool {
+	return isNumericContextFunction(name) && name != "greatest" && name != "least"
 }
 
 func numericFunctionResultArgs(name string, argCount int) ([]int, bool) {
@@ -2452,6 +2476,13 @@ func (b *baseBinder) bindPreparedDynamicComparison(
 	if !leftDynamic && !rightDynamic {
 		return nil, false, nil
 	}
+	if rightDynamic && !leftDynamic {
+		// Normalize the single-dynamic case before choosing its numeric domain.
+		// This makes scalar aggregate comparisons structurally symmetric instead
+		// of relying on a late argument swap after the right side was bound under
+		// a different prepare-time context.
+		return b.bindPreparedDynamicComparison(commuteComparisonOperator(op), rightAst, leftAst, depth)
+	}
 	if leftDynamic && rightDynamic {
 		leftExpr, err := b.bindNumericExprWithDefaultContext(leftAst, depth, nil)
 		if err != nil {
@@ -2466,10 +2497,6 @@ func (b *baseBinder) bindPreparedDynamicComparison(
 	}
 	otherScan := rightScan
 	dynamicAst, otherAst := leftAst, rightAst
-	if rightDynamic {
-		otherScan = leftScan
-		dynamicAst, otherAst = rightAst, leftAst
-	}
 	if _, bareParam := unwrapParenExpr(dynamicAst).(*tree.ParamExpr); bareParam && len(otherScan.strong) > 0 {
 		// A typed column/expression already supplies a stable comparison domain.
 		// Keep the existing binder path (notably DECIMAL column comparisons)
@@ -2485,11 +2512,11 @@ func (b *baseBinder) bindPreparedDynamicComparison(
 		return nil, false, nil
 	}
 	var dynamicOuter *Type
-	if otherType, ok := numericTypeFromAstScan(otherScan, nil); ok &&
-		makeTypeByPlan2Type(otherType).IsFloat() {
-		// An approximate operand determines the whole comparison domain. Feed
-		// that positive type evidence into scalar subquery/aggregate binding so
-		// it does not retain the prepare-time DECIMAL256 fallback.
+	if otherType, ok := numericTypeFromAstScan(otherScan, nil); ok {
+		// A positively proven numeric peer determines the comparison domain on
+		// either side. Feed the same evidence into a scalar subquery/aggregate
+		// before binding it; otherwise a right-hand dynamic aggregate retains the
+		// DECIMAL256 fallback while the commuted form inherits the peer type.
 		dynamicOuter = &otherType
 	}
 	dynamicExpr, err := b.bindNumericExprWithDefaultContext(dynamicAst, depth, dynamicOuter)
@@ -2510,11 +2537,23 @@ func (b *baseBinder) bindPreparedDynamicComparison(
 	otherExpr.Typ.Table = preparedDynamicNumericTypeMarker
 	markPreparedDynamicNumericCast(otherExpr)
 	args := []*Expr{dynamicExpr, otherExpr}
-	if rightDynamic {
-		args[0], args[1] = args[1], args[0]
-	}
 	expr, err := BindFuncExprImplByPlanExpr(b.GetContext(), op, args)
 	return expr, true, err
+}
+
+func commuteComparisonOperator(op string) string {
+	switch op {
+	case "<":
+		return ">"
+	case "<=":
+		return ">="
+	case ">":
+		return "<"
+	case ">=":
+		return "<="
+	default:
+		return op
+	}
 }
 
 func (b *baseBinder) bindWithRawMySQLSpecialTypes(bind func() (*Expr, error)) (*Expr, error) {
