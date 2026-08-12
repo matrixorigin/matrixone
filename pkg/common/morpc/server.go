@@ -318,10 +318,6 @@ func (s *server) startWriteLoop(cs *clientSession) error {
 		responses := make([]*Future, 0, s.options.batchSendSize)
 		needClose := make([]*Future, 0, s.options.batchSendSize)
 		fetch := func() bool {
-			defer func() {
-				cs.metrics.sendingQueueSizeGauge.Set(float64(len(cs.c)))
-			}()
-
 			for i := 0; i < len(responses); i++ {
 				responses[i] = nil
 			}
@@ -345,6 +341,7 @@ func (s *server) startWriteLoop(cs *clientSession) error {
 						return true
 					case resp, ok := <-cs.c:
 						if ok {
+							cs.changeQueueDepth(-1)
 							responses = append(responses, resp)
 						}
 					}
@@ -358,6 +355,7 @@ func (s *server) startWriteLoop(cs *clientSession) error {
 						return true
 					case resp, ok := <-cs.c:
 						if ok {
+							cs.changeQueueDepth(-1)
 							responses = append(responses, resp)
 						}
 					default:
@@ -502,7 +500,7 @@ func (s *server) startWriteLoop(cs *clientSession) error {
 
 func (s *server) closeClientSession(cs *clientSession) {
 	s.sessions.Delete(cs.conn.ID())
-	s.metrics.sessionSizeGauge.Set(float64(s.getSessionCount()))
+	s.metrics.setSessionSize(s.getSessionCount())
 	if err := cs.Close(); err != nil {
 		s.logger.Error("close client session failed",
 			zap.Error(err))
@@ -522,7 +520,7 @@ func (s *server) getSession(rs goetty.IOSession) (*clientSession, error) {
 		return v.(*clientSession), nil
 	}
 
-	s.metrics.sessionSizeGauge.Set(float64(s.getSessionCount()))
+	s.metrics.setSessionSize(s.getSessionCount())
 	rs.Ref()
 	if err := s.startWriteLoop(cs); err != nil {
 		s.closeClientSession(cs)
@@ -654,7 +652,11 @@ type clientSession struct {
 	messageCacheScanHook    func()
 	closedC                 chan struct{}
 	disconnectedC           chan struct{}
-	mu                      struct {
+	queueMetricMu           struct {
+		sync.Mutex
+		depth int
+	}
+	mu struct {
 		sync.RWMutex
 		closed bool
 		caches map[uint64]cacheWithContext
@@ -742,6 +744,7 @@ func (cs *clientSession) cleanSend() {
 			if !ok {
 				return
 			}
+			cs.changeQueueDepth(-1)
 			cs.releaseMessage(f.send)
 			f.messageSent(backendClosed)
 			if f.oneWay {
@@ -807,9 +810,13 @@ func (cs *clientSession) send(msg RPCMessage) (*Future, error) {
 	if !f.oneWay {
 		f.ref()
 	}
+	cs.queueMetricMu.Lock()
 	select {
 	case cs.c <- f:
+		cs.changeQueueDepthLocked(1)
+		cs.queueMetricMu.Unlock()
 	case <-msg.Ctx.Done():
+		cs.queueMetricMu.Unlock()
 		cs.releaseMessage(msg)
 		f.Close()
 		if !f.oneWay {
@@ -817,8 +824,24 @@ func (cs *clientSession) send(msg RPCMessage) (*Future, error) {
 		}
 		return nil, msg.Ctx.Err()
 	}
-	cs.metrics.sendingQueueSizeGauge.Set(float64(len(cs.c)))
 	return f, nil
+}
+
+func (cs *clientSession) changeQueueDepth(delta int) {
+	cs.queueMetricMu.Lock()
+	defer cs.queueMetricMu.Unlock()
+	cs.changeQueueDepthLocked(delta)
+}
+
+func (cs *clientSession) changeQueueDepthLocked(delta int) {
+	depth := cs.queueMetricMu.depth + delta
+	if depth < 0 {
+		panic("negative MORPC server sending queue depth")
+	}
+	cs.queueMetricMu.depth = depth
+	if cs.metrics != nil {
+		cs.metrics.sendingQueueSizeGauge.Add(float64(delta))
+	}
 }
 
 // assignStreamSequence runs in the single server write loop after a response

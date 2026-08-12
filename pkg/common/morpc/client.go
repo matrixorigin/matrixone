@@ -1940,7 +1940,7 @@ func (c *client) updatePoolSizeMetricsLocked() {
 	for _, backends := range c.mu.backends {
 		n += len(backends)
 	}
-	c.metrics.poolSizeGauge.Set(float64(n))
+	c.metrics.setBackendPoolSize(n)
 }
 
 func isErrBackendCreating(err error) bool {

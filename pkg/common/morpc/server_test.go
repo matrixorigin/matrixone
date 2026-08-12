@@ -29,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
@@ -282,7 +283,12 @@ func TestClientSessionWriteReturnsWhenSendQueueFullAndContextExpires(t *testing.
 		func(Message) { released++ },
 	)
 	cs.c = make(chan *Future, 1)
-	cs.c <- newFuture(nil)
+	queued := newFuture(nil)
+	enqueueClientSessionFutureForTest(cs, queued)
+	defer func() {
+		<-cs.c
+		cs.changeQueueDepth(-1)
+	}()
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond*100)
 	defer cancel()
@@ -318,11 +324,36 @@ func TestClientSessionCleanSendReleasesQueuedMessages(t *testing.T) {
 		Message: newTestMessage(1),
 		oneWay:  true,
 	})
-	cs.c <- f
+	enqueueClientSessionFutureForTest(cs, f)
 
 	cs.cleanSend()
 	require.Equal(t, 1, released)
 	require.Equal(t, 1, futureReleased)
+}
+
+func TestServerQueueMetricAggregatesAcrossSessionsAndCloseDrain(t *testing.T) {
+	m := newServerMetrics(t.Name())
+	newSession := func() *clientSession {
+		return newClientSession(
+			m,
+			nil,
+			newTestCodec(),
+			func() *Future { return newFuture(nil) },
+			nil,
+		)
+	}
+	cs1 := newSession()
+	cs2 := newSession()
+
+	require.NoError(t, cs1.AsyncWrite(newTestMessage(1)))
+	require.NoError(t, cs1.AsyncWrite(newTestMessage(2)))
+	require.NoError(t, cs2.AsyncWrite(newTestMessage(3)))
+	require.Equal(t, float64(3), testutil.ToFloat64(m.sendingQueueSizeGauge))
+
+	cs1.cleanSend()
+	require.Equal(t, float64(1), testutil.ToFloat64(m.sendingQueueSizeGauge))
+	cs2.cleanSend()
+	require.Equal(t, float64(0), testutil.ToFloat64(m.sendingQueueSizeGauge))
 }
 
 func TestStartWriteLoopClosesOneWayFuturesOnWriteFailures(t *testing.T) {
@@ -352,7 +383,7 @@ func TestStartWriteLoopClosesOneWayFuturesOnWriteFailures(t *testing.T) {
 			Message: newTestMessage(1),
 			oneWay:  true,
 		})
-		cs.c <- f
+		enqueueClientSessionFutureForTest(cs, f)
 
 		require.NoError(t, s.startWriteLoop(cs))
 		require.Eventually(t, func() bool {
@@ -405,9 +436,9 @@ func TestStartWriteLoopCompletesBatchOnWriteFailure(t *testing.T) {
 	f1 := newSyncFuture(1)
 	f2 := newSyncFuture(2)
 	f3 := newSyncFuture(3)
-	cs.c <- f1
-	cs.c <- f2
-	cs.c <- f3
+	enqueueClientSessionFutureForTest(cs, f1)
+	enqueueClientSessionFutureForTest(cs, f2)
+	enqueueClientSessionFutureForTest(cs, f3)
 
 	require.NoError(t, s.startWriteLoop(cs))
 	for _, f := range []*Future{f1, f2, f3} {
@@ -469,8 +500,8 @@ func TestStartWriteLoopFlushFailureOnlyCompletesWrittenFutures(t *testing.T) {
 		f.Close()
 		return f
 	}
-	cs.c <- newResponse(1)
-	cs.c <- newResponse(2)
+	enqueueClientSessionFutureForTest(cs, newResponse(1))
+	enqueueClientSessionFutureForTest(cs, newResponse(2))
 
 	require.NoError(t, s.startWriteLoop(cs))
 	for range 2 {
@@ -518,8 +549,8 @@ func TestStartWriteLoopUsesEarliestBatchDeadline(t *testing.T) {
 		t.Cleanup(f.Close)
 		return f
 	}
-	cs.c <- newResponse(1, 3*time.Second)
-	cs.c <- newResponse(2, time.Second)
+	enqueueClientSessionFutureForTest(cs, newResponse(1, 3*time.Second))
+	enqueueClientSessionFutureForTest(cs, newResponse(2, time.Second))
 
 	require.NoError(t, s.startWriteLoop(cs))
 	select {
@@ -588,6 +619,15 @@ func newTestIOSession(writeErr, flushErr error) *testIOSession {
 		writeErrAt = 1
 	}
 	return newTestIOSessionWithWriteErrorAt(writeErrAt, writeErr, flushErr)
+}
+
+// enqueueClientSessionFutureForTest mirrors the production publication order:
+// queue accounting commits before a receiver is allowed to decrement it.
+func enqueueClientSessionFutureForTest(cs *clientSession, f *Future) {
+	cs.queueMetricMu.Lock()
+	defer cs.queueMetricMu.Unlock()
+	cs.c <- f
+	cs.changeQueueDepthLocked(1)
 }
 
 func newTestIOSessionWithWriteErrorAt(writeErrAt int32, writeErr, flushErr error) *testIOSession {
@@ -796,7 +836,7 @@ func TestAssignStreamSequenceProgressesWhileCloseWaitsOnFullQueue(t *testing.T) 
 		Message: newTestMessage(10),
 		oneWay:  true,
 	})
-	cs.c <- queued
+	enqueueClientSessionFutureForTest(cs, queued)
 
 	senderDone := make(chan error, 1)
 	go func() {
