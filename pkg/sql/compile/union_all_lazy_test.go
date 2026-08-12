@@ -23,8 +23,11 @@ import (
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/filter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/merge"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/offset"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/order"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/projection"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/unionall"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
@@ -109,6 +112,51 @@ func TestCompileLimitKeepsUnionConcurrentBelowBlockingOperator(t *testing.T) {
 	require.False(t, root.LazyPreScopes)
 	require.Zero(t, unionOp.SequentialBranches)
 	require.False(t, mergeOp.Partial)
+
+	freeLazyUnionAllTestScope(c, root)
+}
+
+func TestCompileLimitEnablesLazyUnionThroughUnaryStreamingOperators(t *testing.T) {
+	streamingOperators := []struct {
+		name string
+		new  func() vm.Operator
+	}{
+		{name: "projection", new: func() vm.Operator { return projection.NewArgument() }},
+		{name: "filter", new: func() vm.Operator { return filter.NewArgument() }},
+		{name: "offset", new: func() vm.Operator { return offset.NewArgument() }},
+	}
+
+	for _, test := range streamingOperators {
+		t.Run(test.name, func(t *testing.T) {
+			c := newLazyUnionAllTestCompile(t)
+			root := c.compileUnionAll(
+				&planpb.Node{},
+				[]*Scope{newLazyUnionAllLeaf(c, colexec.NewMockOperator())},
+				[]*Scope{newLazyUnionAllLeaf(c, colexec.NewMockOperator())},
+			)[0]
+			root.setRootOperator(test.new())
+
+			enableLazyUnionAllForLimit([]*Scope{root})
+			require.True(t, root.LazyPreScopes)
+
+			freeLazyUnionAllTestScope(c, root)
+		})
+	}
+}
+
+func TestCompileLimitKeepsUnionConcurrentBelowNonUnaryStreamingOperator(t *testing.T) {
+	c := newLazyUnionAllTestCompile(t)
+	root := c.compileUnionAll(
+		&planpb.Node{},
+		[]*Scope{newLazyUnionAllLeaf(c, colexec.NewMockOperator())},
+		[]*Scope{newLazyUnionAllLeaf(c, colexec.NewMockOperator())},
+	)[0]
+	wrapper := projection.NewArgument()
+	root.setRootOperator(wrapper)
+	wrapper.AppendChild(colexec.NewMockOperator())
+
+	enableLazyUnionAllForLimit([]*Scope{root})
+	require.False(t, root.LazyPreScopes)
 
 	freeLazyUnionAllTestScope(c, root)
 }
