@@ -1208,8 +1208,9 @@ func createCompile(
 		schedulingSQL = originSQL
 	}
 	crs := new(perfcounter.CounterSet)
-	compileCtx := compileStatementContext(execCtx.reqCtx, schedulingSQL, stmt, crs)
-	execCtx.reqCtx = compileCtx
+	var compileCtx context.Context
+	execCtx.reqCtx, compileCtx = compileStatementContexts(
+		execCtx.reqCtx, schedulingSQL, stmt, crs)
 	proc.ReplaceTopCtx(compileCtx)
 	proc.Base.FileService = pu.FileService
 
@@ -1286,17 +1287,17 @@ func createCompile(
 	return
 }
 
-func compileStatementContext(
+func compileStatementContexts(
 	ctx context.Context,
 	sql string,
 	stmt tree.Statement,
 	crs *perfcounter.CounterSet,
-) context.Context {
-	ctx = perfcounter.AttachCompilePlanMarkKey(ctx, crs)
+) (requestCtx, compileCtx context.Context) {
+	requestCtx = perfcounter.AttachCompilePlanMarkKey(ctx, crs)
 	if siriusStatementSelected(sql, stmt) {
-		return compile.WithSiriusOffload(ctx)
+		return requestCtx, compile.WithSiriusOffload(requestCtx)
 	}
-	return ctx
+	return requestCtx, requestCtx
 }
 
 func siriusStatementSelected(sql string, stmt tree.Statement) bool {

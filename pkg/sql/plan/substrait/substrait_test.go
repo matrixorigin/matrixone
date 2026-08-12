@@ -224,6 +224,57 @@ func TestAggregateSortFetchLowering(t *testing.T) {
 	require.NotNil(t, fetch.Input.GetSort().Input.GetAggregate())
 }
 
+func TestAggregateProjectionDefinesExportedWidth(t *testing.T) {
+	q := scanQuery()
+	q.Nodes = append(q.Nodes, &planpb.Node{
+		NodeId: 1, NodeType: planpb.Node_AGG, Children: []int32{0},
+		GroupBy:     []*planpb.Expr{col(0)},
+		AggList:     []*planpb.Expr{fn("min", i64Type(), col(0))},
+		ProjectList: []*planpb.Expr{col(1)},
+	})
+	q.Steps[0] = 1
+	q.Headings = []string{"minimum"}
+
+	candidate, err := Export(q)
+	require.NoError(t, err)
+	require.Equal(t, []planpb.Type{i64Type()}, candidate.OutputTypes())
+	wire, err := candidate.Build(map[int32][]byte{0: {1}})
+	require.NoError(t, err)
+	plan := new(spb.Plan)
+	require.NoError(t, proto.Unmarshal(wire, plan))
+	require.Equal(t, []int32{2}, plan.Relations[0].GetRoot().Input.GetProject().Common.GetEmit().OutputMapping)
+}
+
+func TestOuterJoinOutputTypesNullExtendOnlyMissingSide(t *testing.T) {
+	required := i64Type()
+	required.NotNullable = true
+	for _, test := range []struct {
+		name     string
+		joinType planpb.Node_JoinType
+		want     []bool
+	}{
+		{name: "left", joinType: planpb.Node_LEFT, want: []bool{true, false}},
+		{name: "right", joinType: planpb.Node_RIGHT, want: []bool{false, true}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			q := scanQuery()
+			q.Nodes[0].TableDef.Cols[0].Typ = required
+			q.Nodes = append(q.Nodes, &planpb.Node{
+				NodeId: 1, NodeType: planpb.Node_JOIN, JoinType: test.joinType,
+				Children: []int32{0, 0},
+			})
+			q.Steps[0] = 1
+			q.Headings = []string{"left", "right"}
+
+			candidate, err := Export(q)
+			require.NoError(t, err)
+			got := candidate.OutputTypes()
+			require.Len(t, got, 2)
+			require.Equal(t, test.want, []bool{got[0].NotNullable, got[1].NotNullable})
+		})
+	}
+}
+
 func TestSortPreservesMatrixOneNullOrdering(t *testing.T) {
 	for _, tc := range []struct {
 		name string

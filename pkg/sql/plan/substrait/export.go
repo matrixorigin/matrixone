@@ -272,6 +272,9 @@ func (e *exporter) nodeWidth(id int32) (int, error) {
 	case planpb.Node_PROJECT:
 		return len(n.ProjectList), nil
 	case planpb.Node_AGG:
+		if len(n.ProjectList) > 0 {
+			return len(n.ProjectList), nil
+		}
 		return len(n.GroupBy) + len(n.AggList), nil
 	case planpb.Node_JOIN:
 		if len(n.Children) != 2 {
@@ -378,6 +381,16 @@ func (e *exporter) outputTypes(id int32) ([]planpb.Type, error) {
 		}
 		if n.JoinType == planpb.Node_SEMI || n.JoinType == planpb.Node_ANTI {
 			return right, nil
+		}
+		switch n.JoinType {
+		case planpb.Node_LEFT:
+			for i := range right {
+				right[i].NotNullable = false
+			}
+		case planpb.Node_RIGHT:
+			for i := range left {
+				left[i].NotNullable = false
+			}
 		}
 		return append(left, right...), nil
 	case planpb.Node_SINK_SCAN:

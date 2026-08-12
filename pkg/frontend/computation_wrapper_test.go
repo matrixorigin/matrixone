@@ -1126,27 +1126,37 @@ func TestInitExecuteStmtParamBypassesCachedTopologyForPreparedSiriusExecution(t 
 	}
 }
 
-func TestCompileStatementContextPreservesCompilePlanCounter(t *testing.T) {
+func TestCompileStatementContextsPreserveCounterWithoutLeakingSelection(t *testing.T) {
 	for _, test := range []struct {
-		name string
-		sql  string
+		name          string
+		sql           string
+		separateChild bool
 	}{
-		{name: "selected", sql: "/*+ SIDECAR */ select 1"},
+		{name: "selected", sql: "/*+ SIDECAR */ select 1", separateChild: true},
 		{name: "unselected", sql: "select 1"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			counter := new(perfcounter.CounterSet)
-			ctx := compileStatementContext(context.Background(), test.sql, &tree.Select{}, counter)
+			requestCtx, compileCtx := compileStatementContexts(
+				context.Background(), test.sql, &tree.Select{}, counter)
 
-			attached, ok := ctx.Value(perfcounter.CompilePlanMarkKey{}).(*perfcounter.CounterSet)
+			attached, ok := compileCtx.Value(perfcounter.CompilePlanMarkKey{}).(*perfcounter.CounterSet)
 			require.True(t, ok)
 			require.Same(t, counter, attached)
-			perfcounter.Update(ctx, func(set *perfcounter.CounterSet) {
+			require.Equal(t, test.separateChild, requestCtx != compileCtx)
+			perfcounter.Update(compileCtx, func(set *perfcounter.CounterSet) {
 				set.FileService.S3.Get.Add(1)
 			})
 			require.Equal(t, int64(1), counter.FileService.S3.Get.Load())
 		})
 	}
+
+	requestCtx, _ := compileStatementContexts(
+		context.Background(), "/*+ SIDECAR */ select 1", &tree.Select{}, new(perfcounter.CounterSet))
+	requestCtx, unselectedCompileCtx := compileStatementContexts(
+		requestCtx, "select 2", &tree.Select{}, new(perfcounter.CounterSet))
+	require.True(t, requestCtx == unselectedCompileCtx,
+		"the selected statement's Sirius marker must not enter its sibling's request context")
 }
 
 func TestRebuildPreparePlanUsesPreparedRootSQL(t *testing.T) {
