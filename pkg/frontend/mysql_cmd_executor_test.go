@@ -7786,6 +7786,34 @@ func TestCheckModifyValidatesCatalogDependencies(t *testing.T) {
 			require.Equal(t, testCase.expectedChanged, changed)
 		})
 	}
+
+	t.Run("subscription uses logical database", func(t *testing.T) {
+		subscriptionDependency := &plan.ObjectRef{
+			SchemaName:       "publisher_physical_db",
+			SubscriptionName: "subscriber_alias",
+			ObjName:          "scanless_view",
+			Server:           3,
+			Obj:              20,
+		}
+		subscriptionPlan := &plan.Plan{
+			Plan: &plan.Plan_Query{
+				Query: &plan.Query{CatalogDependencies: []*plan.ObjectRef{subscriptionDependency}},
+			},
+		}
+
+		changed, err := checkModify(subscriptionPlan, func(
+			databaseName string,
+			tableName string,
+			gotSnapshot *plan.Snapshot,
+		) (*plan.ObjectRef, *plan.TableDef, error) {
+			require.Equal(t, "subscriber_alias", databaseName)
+			require.Equal(t, "scanless_view", tableName)
+			require.Nil(t, gotSnapshot)
+			return nil, &plan.TableDef{Version: 3, TblId: 20}, nil
+		})
+		require.NoError(t, err)
+		require.False(t, changed)
+	})
 }
 
 // testMysqlWriterWithError is a test mysql writer that can return error from ParseSendLongData

@@ -85,6 +85,57 @@ func TestIssue26882ComQueryCacheTracksViewIdentity(t *testing.T) {
 		var mysqlErr *mysql.MySQLError
 		require.ErrorAs(t, err, &mysqlErr)
 		require.Equal(t, uint16(1146), mysqlErr.Number)
+
+		const (
+			publisherAccount  = "issue_26882_publisher"
+			subscriberAccount = "issue_26882_subscriber"
+			publishedDB       = "issue_26882_published"
+			subscriptionDB    = "issue_26882_subscription"
+			publicationName   = "issue_26882_publication"
+		)
+		cleanupAccounts := func() {
+			cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cleanupCancel()
+			_, _ = ddl.ExecContext(cleanupCtx, "drop account if exists `"+subscriberAccount+"`")
+			_, _ = ddl.ExecContext(cleanupCtx, "drop account if exists `"+publisherAccount+"`")
+		}
+		cleanupAccounts()
+		defer cleanupAccounts()
+
+		mustExec(t, ctx, ddl,
+			"create account `"+publisherAccount+"` admin_name 'admin' identified by '111'")
+		mustExec(t, ctx, ddl,
+			"create account `"+subscriberAccount+"` admin_name 'admin' identified by '111'")
+
+		publisherDB, err := sql.Open("mysql", fmt.Sprintf(
+			"%s#admin#accountadmin:111@tcp(127.0.0.1:%d)/", publisherAccount, port,
+		))
+		require.NoError(t, err)
+		defer publisherDB.Close()
+		execSQLRequire(t, ctx, publisherDB, "create database `"+publishedDB+"`")
+		execSQLRequire(t, ctx, publisherDB,
+			"create view `"+publishedDB+"`.scanless_view as select 1 as value")
+		execSQLRequire(t, ctx, publisherDB,
+			"create publication `"+publicationName+"` database `"+publishedDB+"` account `"+subscriberAccount+"`")
+
+		subscriberDB, err := sql.Open("mysql", fmt.Sprintf(
+			"%s#admin#accountadmin:111@tcp(127.0.0.1:%d)/", subscriberAccount, port,
+		))
+		require.NoError(t, err)
+		defer subscriberDB.Close()
+		execSQLRequire(t, ctx, subscriberDB,
+			"create database `"+subscriptionDB+"` from `"+publisherAccount+"` publication `"+publicationName+"`")
+		subscriptionReader, err := subscriberDB.Conn(ctx)
+		require.NoError(t, err)
+		defer subscriptionReader.Close()
+		mustExec(t, ctx, subscriptionReader, "use `"+subscriptionDB+"`")
+
+		const subscriptionSQL = "select * from scanless_view"
+		for range 2 {
+			columns, values = queryIssue26882Row(t, ctx, subscriptionReader, subscriptionSQL)
+			require.Equal(t, []string{"value"}, columns)
+			require.Equal(t, []string{"1"}, values)
+		}
 	})
 }
 
