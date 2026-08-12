@@ -598,6 +598,9 @@ func buildShowColumns(stmt *tree.ShowColumns, ctx CompilerContext) (*Plan, error
 		}
 		if tableDef.Indexes != nil {
 			for _, indexDef := range tableDef.Indexes {
+				if indexDef == nil {
+					continue
+				}
 				name := colNameToOriginName[indexDef.Parts[0]]
 				if indexDef.Unique {
 					if isPrimaryKey(tableDef, indexDef.Parts) {
