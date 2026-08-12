@@ -501,6 +501,25 @@ func TestRuntimePreparedDecimalCommonTypeUsesStableDomain(t *testing.T) {
 	}
 }
 
+func TestRuntimePreparedDecimalCommonTypePreserves65IntegralDigits(t *testing.T) {
+	ctx := context.Background()
+	peer := types.New(types.T_decimal64, 10, 2)
+	for _, width := range []int32{63, 64, 65} {
+		t.Run(fmt.Sprintf("width_%d", width), func(t *testing.T) {
+			param := makeRuntimeNumericPreparedParam(0, 2, width, 0)
+			for _, name := range []string{"coalesce", "greatest", "least"} {
+				expr, err := BindFuncExprImplByPlanExpr(ctx, name, []*planpb.Expr{
+					DeepCopyExpr(param), makePreparedDecimalComparisonColumn(peer),
+				})
+				require.NoError(t, err)
+				require.Equal(t, int32(types.T_decimal256), expr.Typ.Id)
+				require.Equal(t, width+peer.Scale, expr.Typ.Width)
+				require.Equal(t, peer.Scale, expr.Typ.Scale)
+			}
+		})
+	}
+}
+
 func TestRuntimePreparedDecimalCommonTypeUsesAvailablePhysicalDomain(t *testing.T) {
 	peer := types.New(types.T_decimal128, 38, 10)
 	tests := []struct {
@@ -518,7 +537,7 @@ func TestRuntimePreparedDecimalCommonTypeUsesAvailablePhysicalDomain(t *testing.
 		{
 			name:      "large incomplete exponent uses remaining integral digits",
 			param:     makeRuntimeNumericPreparedParam(0, 2, 65, 0),
-			wantWidth: 65,
+			wantWidth: 75,
 			wantScale: 10,
 		},
 		{

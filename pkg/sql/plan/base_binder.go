@@ -4883,14 +4883,13 @@ func decimalParamCommonTypeResolutionTypes(
 	}
 	if hasParam {
 		// Preserve the peer scale and give a runtime numeric-prefix parameter all
-		// remaining MySQL DECIMAL integral digits when that parameter itself would
-		// exceed precision 65 after adopting the peer scale. Wider peer combinations
-		// can still use MatrixOne's Decimal256 width 76; they must not narrow merely
-		// because a prepared parameter is present.
-		availableIntegral := max(int32(65)-maxScale, 0)
+		// remaining Decimal256 integral digits. The parameter payload itself follows
+		// MySQL's 65-digit DECIMAL domain, but combining it with a peer scale may use
+		// MatrixOne's wider 76-digit physical representation without losing value.
+		availableIntegral := max(int32(76)-maxScale, 0)
 		for i, typ := range resolutionTypes {
 			if !isUnresolvedPreparedNumericParam(args[i], argsType[i]) || !typ.Oid.IsDecimal() ||
-				typ.Width-typ.Scale+maxScale <= 65 {
+				typ.Width-typ.Scale+maxScale <= 76 {
 				continue
 			}
 			integral := min(typ.Width-typ.Scale, availableIntegral)

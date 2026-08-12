@@ -6923,6 +6923,26 @@ func parseMySQLDecimal256Prefix(s string, width, scale int32) (types.Decimal256,
 	if mysqlDecimalPrefixUnderflows(prefix, scale) {
 		return types.Decimal256{}, nil
 	}
+	if width > 65 {
+		// MySQL first converts an overflowing numeric prefix in its 65-digit
+		// DECIMAL input domain, then adopts the wider common-expression scale.
+		// Clamping directly in the Decimal256 result domain would incorrectly
+		// fill the newly introduced fractional digits with nines.
+		inputIntegralWidth := min(width-scale, int32(65))
+		if inputIntegralWidth <= 0 {
+			return clampDecimal256Value(len(prefix) > 0 && prefix[0] == '-', width, scale)
+		}
+		result, clampErr := clampDecimal256Value(
+			len(prefix) > 0 && prefix[0] == '-', inputIntegralWidth, 0)
+		if clampErr != nil {
+			return types.Decimal256{}, clampErr
+		}
+		result, scaleErr := result.Scale(scale)
+		if scaleErr != nil {
+			return types.Decimal256{}, scaleErr
+		}
+		return result, nil
+	}
 	return clampDecimal256Value(len(prefix) > 0 && prefix[0] == '-', width, scale)
 }
 
@@ -7183,7 +7203,7 @@ func strToDecimal256(
 }
 
 func clampDecimal256Value(negative bool, width, scale int32) (types.Decimal256, error) {
-	if width <= 0 || scale < 0 || scale > width || width > 65 {
+	if width <= 0 || scale < 0 || scale > width || width > 76 {
 		return types.Decimal256{}, moerr.NewInvalidInputNoCtxf("invalid Decimal256(%d,%d)", width, scale)
 	}
 	digits := strings.Repeat("9", int(width))

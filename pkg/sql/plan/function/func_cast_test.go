@@ -4651,6 +4651,17 @@ func TestMySQLDecimalPrefix(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, maximum, clamped)
 
+	wideClamped, err := parseMySQLDecimal256Prefix("1e100tail", 75, 10)
+	require.NoError(t, err)
+	wideMaximum, err := types.ParseDecimal256(strings.Repeat("9", 65)+".0000000000", 75, 10)
+	require.NoError(t, err)
+	require.Equal(t, wideMaximum, wideClamped)
+	wideClamped, err = parseMySQLDecimal256Prefix("1e100tail", 76, 30)
+	require.NoError(t, err)
+	wideMaximum, err = types.ParseDecimal256(strings.Repeat("9", 46)+"."+strings.Repeat("0", 30), 76, 30)
+	require.NoError(t, err)
+	require.Equal(t, wideMaximum, wideClamped)
+
 	uppercase, err := parseMySQLDecimal256Prefix("1E2tail", 65, 30)
 	require.NoError(t, err)
 	wantUppercase, err := types.ParseDecimal256("100", 65, 30)

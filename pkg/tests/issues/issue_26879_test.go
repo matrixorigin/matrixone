@@ -18,6 +18,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -91,7 +92,7 @@ func TestIssue26879PreparedDecimalRuntimeDomains(t *testing.T) {
 		assertRow("9007199254740993e0tail", "DECIMAL", []string{"9007199254740993.0000000000", "9007199254740993.0000000000", "2.0000000000"})
 		assertRow("123456789012345678901234567890123456", "DECIMAL", []string{"123456789012345678901234567890123456.0000000000", "123456789012345678901234567890123456.0000000000", "2.0000000000"})
 		assertRow("1e35", "DECIMAL", []string{"100000000000000000000000000000000000.0000000000", "100000000000000000000000000000000000.0000000000", "2.0000000000"})
-		assertRow("1e100tail", "DECIMAL", []string{"9999999999999999999999999999999999999999999999999999999.9999999999", "9999999999999999999999999999999999999999999999999999999.9999999999", "2.0000000000"})
+		assertRow("1e100tail", "DECIMAL", []string{"99999999999999999999999999999999999999999999999999999999999999999.0000000000", "99999999999999999999999999999999999999999999999999999999999999999.0000000000", "2.0000000000"})
 		assertRow("1E2tail", "DECIMAL", []string{"100.0000000000", "100.0000000000", "2.0000000000"})
 		assertRow("1e-2147483648tail", "DECIMAL", []string{"0.000000000000000000000000000000", "2.000000000000000000000000000000", "0.000000000000000000000000000000"})
 		assertRow("1e-31", "DECIMAL", []string{"0.000000000000000000000000000000", "2.000000000000000000000000000000", "0.000000000000000000000000000000"})
@@ -126,7 +127,7 @@ func TestIssue26879PreparedDecimalRuntimeDomains(t *testing.T) {
 		require.NoError(t, err)
 		defer conn.ExecContext(context.Background(), "deallocate prepare issue26879_sql") //nolint:errcheck
 
-		assertSQLPrepareType := func(value string, wantType string, wantPrecision, wantScale int64) {
+		assertSQLPrepareType := func(value string, wantType string, wantPrecision, wantScale int64) [3]string {
 			t.Helper()
 			_, setErr := conn.ExecContext(ctx, "set @issue26879_p=?", value)
 			require.NoError(t, setErr)
@@ -150,9 +151,29 @@ func TestIssue26879PreparedDecimalRuntimeDomains(t *testing.T) {
 			require.NoError(t, rows.Scan(&values[0], &values[1], &values[2]))
 			require.False(t, rows.Next())
 			require.NoError(t, rows.Err())
+			return values
 		}
 		assertSQLPrepareType("1.234567", "DECIMAL", 14, 6)
 		assertSQLPrepareType("1e100", "DOUBLE", 0, 0)
+		for _, value := range []string{
+			"999999999999999999999999999999999999999999999999999999999999999",
+			"9999999999999999999999999999999999999999999999999999999999999999",
+			"99999999999999999999999999999999999999999999999999999999999999999",
+			"1e62",
+			"1e63",
+		} {
+			want := value
+			if value == "1e62" {
+				want = "1" + strings.Repeat("0", 62)
+			} else if value == "1e63" {
+				want = "1" + strings.Repeat("0", 63)
+			}
+			precision := int64(len(want) + 2)
+			values := assertSQLPrepareType(value, "DECIMAL", precision, 2)
+			require.Equal(t, want+".00", values[0])
+			require.Equal(t, want+".00", values[1])
+			require.Equal(t, "2.00", values[2])
+		}
 
 		_, err = conn.ExecContext(ctx,
 			"prepare issue26879_set from 'set @issue26879_out = coalesce(?, cast(2 as decimal(10,2)))'")

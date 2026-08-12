@@ -1033,14 +1033,14 @@ func (mp *MysqlProtocolImpl) ParseExecuteData(ctx context.Context, proc *process
 				err = util.SetAnyToStringVector(proc, val, stmt.params, i)
 
 			case defines.MYSQL_TYPE_NEWDECIMAL:
-				// use string for decimal.  Not tested
 				val, newPos, ok := mp.readStringLenEnc(data, pos)
 				if !ok {
 					return moerr.NewInvalidInput(ctx, "mysql protocol error, malformed packet")
 
 				}
 				pos = newPos
-				err = util.SetAnyToStringVector(proc, val, stmt.params, i)
+				err = util.SetAnyToStringVector(
+					proc, normalizePreparedDecimalPayload([]byte(val)), stmt.params, i)
 
 			default:
 				return moerr.NewInternalError(ctx, "unsupport parameter type")

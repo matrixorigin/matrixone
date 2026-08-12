@@ -361,6 +361,8 @@ func TestNativeDecimalPreparedParamBindingUsesPayloadDomain(t *testing.T) {
 		{value: "1E+35", wantWidth: 36},
 		{value: "1E-31", wantWidth: 30, wantScale: 30},
 		{value: "1E-40", wantWidth: 30, wantScale: 30},
+		{value: "  123456789012345678901234567890123456", wantWidth: 36},
+		{value: "\t123456789012345678901234567890123456", wantWidth: 36},
 		{value: "-12.3400", wantWidth: 6, wantScale: 4},
 		{value: "0.001", wantWidth: 3, wantScale: 3},
 		{value: "000123", wantWidth: 3},
@@ -373,6 +375,44 @@ func TestNativeDecimalPreparedParamBindingUsesPayloadDomain(t *testing.T) {
 			require.Equal(t, types.T_decimal256, binding.Oid)
 			require.Equal(t, test.wantWidth, binding.Width)
 			require.Equal(t, test.wantScale, binding.Scale)
+		})
+	}
+}
+
+func TestNormalizePreparedDecimalPayload(t *testing.T) {
+	for _, test := range []struct {
+		input string
+		want  string
+	}{
+		{input: "1e+35", want: "1e+35"},
+		{input: "1E+35", want: "1e+35"},
+		{input: "1E-30", want: "1e-30"},
+		{input: "  123", want: "123"},
+		{input: "\t123", want: "123"},
+		{input: "\v\f\r\n-1E+1", want: "-1e+1"},
+	} {
+		t.Run(test.input, func(t *testing.T) {
+			require.Equal(t, test.want, string(normalizePreparedDecimalPayload([]byte(test.input))))
+		})
+	}
+}
+
+func TestNormalizedPreparedDecimalPayloadExecutes(t *testing.T) {
+	for _, test := range []struct {
+		input string
+		typ   types.Type
+		want  string
+	}{
+		{input: "1E+1", typ: types.New(types.T_decimal256, 2, 0), want: "10"},
+		{input: "1E+35", typ: types.New(types.T_decimal256, 36, 0), want: "100000000000000000000000000000000000"},
+		{input: "1E-30", typ: types.New(types.T_decimal256, 30, 30), want: "0.000000000000000000000000000001"},
+		{input: "  123456789012345678901234567890123456", typ: types.New(types.T_decimal256, 36, 0), want: "123456789012345678901234567890123456"},
+		{input: "\t123456789012345678901234567890123456", typ: types.New(types.T_decimal256, 36, 0), want: "123456789012345678901234567890123456"},
+	} {
+		t.Run(test.input, func(t *testing.T) {
+			value, err := getDecimal256FromRowValue(normalizePreparedDecimalPayload([]byte(test.input)), test.typ)
+			require.NoError(t, err)
+			require.Equal(t, test.want, value.Format(test.typ.Scale))
 		})
 	}
 }

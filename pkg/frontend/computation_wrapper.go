@@ -742,6 +742,7 @@ func preparedParamBindingType(kind vector.PrepareParamKind, value []byte) types.
 	case vector.PrepareParamFloat:
 		return types.T_float64.ToType()
 	case vector.PrepareParamDecimal:
+		value = normalizePreparedDecimalPayload(value)
 		width, scale := preparedNativeDecimalDomain(value)
 		integral := max(width-scale, 0)
 		scale = min(scale, 30)
@@ -764,6 +765,31 @@ func preparedParamBindingType(kind vector.PrepareParamKind, value []byte) types.
 		binding.Width = max(min(integral, 65-binding.Scale)+binding.Scale, 1)
 	}
 	return binding
+}
+
+// normalizePreparedDecimalPayload applies the MySQL numeric lexical rules that
+// types.ParseDecimal256 does not yet accept directly. It is allocation-free for
+// already canonical payloads, which are the common binary-protocol case.
+func normalizePreparedDecimalPayload(value []byte) []byte {
+	start := 0
+	for start < len(value) && isPreparedNumericSpace(value[start]) {
+		start++
+	}
+	normalized := value[start:]
+	for i, ch := range normalized {
+		if ch != 'E' {
+			continue
+		}
+		copyValue := append([]byte(nil), normalized...)
+		copyValue[i] = 'e'
+		for j := i + 1; j < len(copyValue); j++ {
+			if copyValue[j] == 'E' {
+				copyValue[j] = 'e'
+			}
+		}
+		return copyValue
+	}
+	return normalized
 }
 
 // preparedNativeDecimalDomain preserves the lexical scale carried by a native
