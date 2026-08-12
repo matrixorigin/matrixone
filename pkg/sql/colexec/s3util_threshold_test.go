@@ -137,17 +137,18 @@ func TestCNS3DataWriterChunkedColumnProtocolGateIsLive(t *testing.T) {
 		return dataMeta.GetBlockMeta(0).MustGetColumn(0).Location().Alg()
 	}
 
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion15)
+	// The latest pre-feature protocol must remain on the legacy extent format.
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion17)
 	enabledAfterConstruction := NewCNS3DataWriterForService(
 		serviceID, proc.Mp(), fs, tableDef, -1, true,
 	)
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion16)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion18)
 	require.Equal(t, uint8(compress.Lz4Chunked), writeAndColumnAlgorithm(enabledAfterConstruction))
 
 	disabledAfterConstruction := NewCNS3DataWriterForService(
 		serviceID, proc.Mp(), fs, tableDef, -1, true,
 	)
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion15)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion17)
 	require.Equal(t, uint8(compress.Lz4), writeAndColumnAlgorithm(disabledAfterConstruction))
 
 	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion16)

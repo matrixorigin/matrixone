@@ -280,16 +280,27 @@ func genAsSelectCols(ctx CompilerContext, stmt *tree.Select, isPrepareStmt bool)
 	if rootId, err = builder.bindSelect(stmt, bindCtx, true); err != nil {
 		return nil, nil, err
 	}
+	outputColumnProvenance := make([]OutputColumnProvenance, len(bindCtx.headings))
+	for i := range outputColumnProvenance {
+		outputColumnProvenance[i] = bindCtx.outputColumnProvenanceForProject(int32(i))
+	}
 	builder.qry.Steps = append(builder.qry.Steps, rootId)
-	rootNode := builder.qry.Nodes[rootId]
+	// CTAS metadata must reflect the final query output: outer joins and scalar
+	// subqueries can synthesize NULLs even when their source columns are NOT NULL.
+	query, err := builder.createQuery()
+	if err != nil {
+		return nil, nil, err
+	}
+	rootNode := query.Nodes[query.Steps[len(query.Steps)-1]]
 
 	cols := make([]*plan.ColDef, len(rootNode.ProjectList))
 	for i, expr := range rootNode.ProjectList {
-		typ := &expr.Typ
-		provenance := bindCtx.outputColumnProvenanceForProject(int32(i))
+		typ := expr.Typ
+		provenance := outputColumnProvenance[i]
 		if provenance.State == ProvenanceSingleSource && provenance.Source != nil {
 			if isEnumOrSetPlanType(&provenance.Source.Metadata.Typ) {
-				typ = &provenance.Source.Metadata.Typ
+				typ = provenance.Source.Metadata.Typ
+				typ.NotNullable = expr.Typ.NotNullable
 			}
 		}
 		nullAbility := ctasExprCanBeNull(expr)
@@ -302,14 +313,14 @@ func genAsSelectCols(ctx CompilerContext, stmt *tree.Select, isPrepareStmt bool)
 					defaultDef.NullAbility = nullAbility
 					if defaultDef.Expr == nil && defaultDef.OriginString != "" {
 						defaultDef, err = buildCTASDefaultFromOrigin(
-							ctx, *typ, nullAbility, defaultDef.OriginString)
+							ctx, typ, nullAbility, defaultDef.OriginString)
 						if err != nil {
 							return nil, nil, err
 						}
 					}
 				}
 			case CTASDefaultUseTypeDefault:
-				defaultDef, err = buildCTASDefaultForView(ctx, *typ, nullAbility)
+				defaultDef, err = buildCTASDefaultForView(ctx, typ, nullAbility)
 				if err != nil {
 					return nil, nil, err
 				}
@@ -319,11 +330,11 @@ func genAsSelectCols(ctx CompilerContext, stmt *tree.Select, isPrepareStmt bool)
 		cols[i] = &plan.ColDef{
 			Name:    strings.ToLower(bindCtx.headings[i]),
 			Alg:     plan.CompressType_Lz4,
-			Typ:     *typ,
+			Typ:     typ,
 			Default: defaultDef,
 		}
 	}
-	return cols, builder.qry, nil
+	return cols, query, nil
 }
 
 func buildCTASDefaultForView(ctx CompilerContext, typ plan.Type, nullAbility bool) (*plan.Default, error) {
@@ -2485,7 +2496,6 @@ func buildFullTextIndexTable(createTable *plan.CreateTable, indexInfos []*tree.F
 		if err != nil {
 			return err
 		}
-		setIndexDefsVisibility(idxDefs, indexInfo.IndexOption)
 		createTable.IndexTables = append(createTable.IndexTables, tblDefs...)
 		createTable.TableDef.Indexes = append(createTable.TableDef.Indexes, idxDefs...)
 	}
@@ -2596,7 +2606,6 @@ func buildUniqueIndexTable(createTable *plan.CreateTable, indexInfos []*tree.Uni
 		indexDef.IndexTableName = indexTableName
 		indexDef.Parts = indexParts
 		indexDef.TableExist = true
-		setIndexDefVisibility(indexDef, indexInfo.IndexOption)
 		if indexInfo.IndexOption != nil {
 			indexDef.Comment = indexInfo.IndexOption.Comment
 		} else {
@@ -2679,23 +2688,11 @@ func buildSecondaryIndexDef(createTable *plan.CreateTable, indexInfos []*tree.In
 		if err != nil {
 			return err
 		}
-		setIndexDefsVisibility(indexDef, indexInfo.IndexOption)
 		createTable.IndexTables = append(createTable.IndexTables, tableDef...)
 		createTable.TableDef.Indexes = append(createTable.TableDef.Indexes, indexDef...)
 
 	}
 	return nil
-}
-
-func setIndexDefsVisibility(indexDefs []*plan.IndexDef, option *tree.IndexOption) {
-	for _, indexDef := range indexDefs {
-		setIndexDefVisibility(indexDef, option)
-	}
-}
-
-func setIndexDefVisibility(indexDef *plan.IndexDef, option *tree.IndexOption) {
-	visible := option == nil || option.Visible != tree.VISIBLE_TYPE_INVISIBLE
-	catalog.SetIndexVisibility(indexDef, visible)
 }
 
 func checkSpatialIndexColumnSupport(ctx CompilerContext, indexInfo *tree.Index, colMap map[string]*ColDef) error {
@@ -3161,7 +3158,6 @@ func CreateIndexDef(ctx planplugin.CompilerContext, indexInfo *tree.Index,
 
 	indexDef.Unique = isUnique
 	indexDef.TableExist = true
-	setIndexDefVisibility(indexDef, indexInfo.IndexOption)
 
 	// Algorithm related fields
 	indexDef.IndexAlgo = indexInfo.KeyType.ToString()

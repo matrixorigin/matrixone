@@ -114,6 +114,14 @@ type FileSinker interface {
 	Close() error
 }
 
+// activeObjectNamer exposes the object name reserved by a FileSinker for its
+// current Sync attempt. A Sync error is commit-ambiguous: the object may have
+// reached storage even though valid publishable stats were not returned. The
+// enclosing Sinker captures this name before Reset or Close discards it.
+type activeObjectNamer interface {
+	ActiveObjectName() string
+}
+
 var _ FileSinker = new(FSinkerImpl)
 
 type FSinkerImpl struct {
@@ -188,6 +196,13 @@ func (s *FSinkerImpl) Reset() {
 		// s.writer.Reset
 		s.writer = nil
 	}
+}
+
+func (s *FSinkerImpl) ActiveObjectName() string {
+	if s.writer == nil {
+		return ""
+	}
+	return s.writer.GetName().String()
 }
 
 func (s *FSinkerImpl) Close() error {
@@ -403,6 +418,7 @@ type Sinker struct {
 		inMemStats          sinkerStats
 		inMemory            []*batch.Batch
 		persisted           []objectio.ObjectStats
+		unpublished         []string
 		inMemorySize        int
 		memorySizeThreshold int
 	}
@@ -499,7 +515,7 @@ func DeleteUnpublishedObjects(
 		)
 		err := fs.Delete(deleteCtx, unique[start:end]...)
 		cancel()
-		if err != nil {
+		if err != nil && !moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
 			return len(unique), errors.Join(
 				moerr.NewInternalErrorf(
 					ctx, "delete unpublished objects [%d:%d]", start, end),
@@ -510,11 +526,12 @@ func DeleteUnpublishedObjects(
 	return len(unique), nil
 }
 
-// DeletePersisted deletes every object that this sinker has successfully
-// persisted but has not transferred out of its lifecycle yet. Callers use it
-// when a larger operation aborts after one or more spills. The tracked object
-// references are retained when deletion fails so the caller may retry.
-func (sinker *Sinker) DeletePersisted(ctx context.Context) (int, error) {
+// DeletePersisted deletes every object that this sinker has persisted, or may
+// have persisted after a commit-ambiguous Sync error, but has not transferred
+// out of its lifecycle yet. It returns the exact ownership snapshot on both
+// success and failure. The tracked references are retained when deletion fails
+// so the caller may retry or hand them off before closing the sinker.
+func (sinker *Sinker) DeletePersisted(ctx context.Context) ([]string, error) {
 	if sinker.pipe.enabled && sinker.pipe.result != nil {
 		// A failed pipeline may still have successful sibling writes. Wait for
 		// all of them before taking the ownership snapshot.
@@ -522,7 +539,9 @@ func (sinker *Sinker) DeletePersisted(ctx context.Context) (int, error) {
 	}
 
 	files := make([]string, 0,
-		len(sinker.staged.persisted)+len(sinker.result.persisted))
+		len(sinker.staged.persisted)+len(sinker.result.persisted)+
+			len(sinker.staged.unpublished))
+	files = append(files, sinker.staged.unpublished...)
 	appendStats := func(stats []objectio.ObjectStats) {
 		for i := range stats {
 			files = append(files, stats[i].ObjectName().String())
@@ -533,21 +552,25 @@ func (sinker *Sinker) DeletePersisted(ctx context.Context) (int, error) {
 	if sinker.pipe.result != nil {
 		sinker.pipe.result.mu.RLock()
 		appendStats(sinker.pipe.result.persisted)
+		files = append(files, sinker.pipe.result.unpublished...)
 		sinker.pipe.result.mu.RUnlock()
 	}
-	count, err := DeleteUnpublishedObjects(ctx, sinker.fs, files...)
+	files = normalizeUnpublishedObjectNames(files)
+	_, err := DeleteUnpublishedObjects(ctx, sinker.fs, files...)
 	if err != nil {
-		return count, err
+		return files, err
 	}
 
 	sinker.staged.persisted = sinker.staged.persisted[:0]
 	sinker.result.persisted = sinker.result.persisted[:0]
+	sinker.staged.unpublished = sinker.staged.unpublished[:0]
 	if sinker.pipe.result != nil {
 		sinker.pipe.result.mu.Lock()
 		sinker.pipe.result.persisted = sinker.pipe.result.persisted[:0]
+		sinker.pipe.result.unpublished = sinker.pipe.result.unpublished[:0]
 		sinker.pipe.result.mu.Unlock()
 	}
-	return count, nil
+	return files, nil
 }
 
 func (sinker *Sinker) fetchBuffer() (*batch.Batch, error) {
@@ -775,10 +798,21 @@ func (sinker *Sinker) syncFileSinker(ctx context.Context, fSinker FileSinker) er
 	stats, err := fSinker.Sync(ctx)
 	atomic.AddInt64(&sinker.timing.syncNs, int64(time.Since(syncStart)))
 	if err != nil {
+		if name := activeFileSinkerObjectName(fSinker); name != "" {
+			sinker.staged.unpublished = append(sinker.staged.unpublished, name)
+		}
 		return err
 	}
 	sinker.staged.persisted = append(sinker.staged.persisted, *stats)
 	return nil
+}
+
+func activeFileSinkerObjectName(sinker FileSinker) string {
+	namer, ok := sinker.(activeObjectNamer)
+	if !ok {
+		return ""
+	}
+	return namer.ActiveObjectName()
 }
 
 // trySpillMergeSortStreaming merge-sorts staged data and streams each full
@@ -1177,6 +1211,7 @@ func (sinker *Sinker) Close() error {
 	}
 	sinker.result.tail = nil
 	sinker.staged.persisted = nil
+	sinker.staged.unpublished = nil
 	if sinker.fSinker.executor != nil {
 		sinker.fSinker.executor.Close()
 		sinker.fSinker.executor = nil

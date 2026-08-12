@@ -16,7 +16,9 @@ package publication
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -25,50 +27,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
-
-// ---- tombstoneFSinkerWithName ----
-
-func TestTombstoneFSinkerWithName_SyncNilWriter(t *testing.T) {
-	s := &tombstoneFSinkerWithName{}
-	stats, err := s.Sync(context.Background())
-	assert.NoError(t, err)
-	assert.Nil(t, stats)
-}
-
-func TestTombstoneFSinkerWithName_ResetNilWriter(t *testing.T) {
-	s := &tombstoneFSinkerWithName{}
-	s.Reset() // should not panic
-}
-
-func TestTombstoneFSinkerWithName_Close(t *testing.T) {
-	s := &tombstoneFSinkerWithName{}
-	err := s.Close()
-	assert.NoError(t, err)
-}
-
-// ---- newTombstoneFSinkerFactoryWithName ----
-
-func TestNewTombstoneFSinkerFactoryWithName(t *testing.T) {
-	mp, err := mpool.NewMPool("test", 0, mpool.NoFixed)
-	require.NoError(t, err)
-	defer mp.Free(nil)
-
-	segid := objectio.NewSegmentid()
-	objName := objectio.BuildObjectName(segid, 0)
-	factory := newTombstoneFSinkerFactoryWithName(objName, objectio.HiddenColumnSelection_None)
-	assert.NotNil(t, factory)
-
-	sinker := factory(mp, nil)
-	assert.NotNil(t, sinker)
-
-	ts, ok := sinker.(*tombstoneFSinkerWithName)
-	assert.True(t, ok)
-	assert.Equal(t, objName, ts.objectName)
-}
 
 // ---- FilterObject TTL checker ----
 
@@ -183,7 +147,8 @@ func TestGetObjectFromUpstreamWithWorker_ContextCanceled(t *testing.T) {
 func TestFilterAppendableObject_TTLExpired(t *testing.T) {
 	var stats objectio.ObjectStats
 	_, err := filterAppendableObject(
-		context.Background(), &stats, types.TS{}, nil, nil, false, nil, nil, "", "", nil,
+		context.Background(), &stats, types.TS{}, nil, nil, false, nil, nil,
+		"", "", nil,
 		func() bool { return false },
 	)
 	assert.ErrorIs(t, err, ErrSyncProtectionTTLExpired)
@@ -202,7 +167,8 @@ func TestFilterAppendableObject_GetObjectError(t *testing.T) {
 
 	var stats objectio.ObjectStats
 	_, err := filterAppendableObject(
-		context.Background(), &stats, types.TS{}, nil, nil, false, nil, nil, "", "", nil, nil,
+		context.Background(), &stats, types.TS{}, nil, nil, false, nil, nil,
+		"", "", nil, nil,
 	)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "failed to get object from upstream")
@@ -230,7 +196,8 @@ func TestFilterAppendableObject_TTLExpiredAfterGetObject(t *testing.T) {
 
 	var stats objectio.ObjectStats
 	_, err := filterAppendableObject(
-		context.Background(), &stats, types.TS{}, nil, nil, false, nil, nil, "", "", nil, ttl,
+		context.Background(), &stats, types.TS{}, nil, nil, false, nil, nil,
+		"", "", nil, ttl,
 	)
 	assert.ErrorIs(t, err, ErrSyncProtectionTTLExpired)
 }
@@ -240,7 +207,8 @@ func TestFilterAppendableObject_TTLExpiredAfterGetObject(t *testing.T) {
 func TestFilterNonAppendableObject_TTLExpired(t *testing.T) {
 	var stats objectio.ObjectStats
 	_, err := filterNonAppendableObject(
-		context.Background(), &stats, types.TS{}, nil, nil, false, nil, nil, nil, "", "", nil, nil, nil,
+		context.Background(), &stats, types.TS{}, nil, nil, false, nil, nil,
+		nil, "", "", nil, nil, nil, nil,
 		func() bool { return false },
 	)
 	assert.ErrorIs(t, err, ErrSyncProtectionTTLExpired)
@@ -259,7 +227,8 @@ func TestFilterNonAppendableObject_GetObjectError(t *testing.T) {
 
 	var stats objectio.ObjectStats
 	_, err := filterNonAppendableObject(
-		context.Background(), &stats, types.TS{}, nil, nil, false, nil, nil, nil, "", "", nil, nil, nil, nil,
+		context.Background(), &stats, types.TS{}, nil, nil, false, nil, nil,
+		nil, "", "", nil, nil, nil, nil, nil,
 	)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "failed to get object from upstream")
@@ -287,7 +256,8 @@ func TestFilterNonAppendableObject_TTLExpiredAfterGetObject(t *testing.T) {
 
 	var stats objectio.ObjectStats
 	_, err := filterNonAppendableObject(
-		context.Background(), &stats, types.TS{}, nil, nil, false, nil, nil, nil, "", "", nil, nil, nil, ttl,
+		context.Background(), &stats, types.TS{}, nil, nil, false, nil, nil,
+		nil, "", "", nil, nil, nil, nil, ttl,
 	)
 	assert.ErrorIs(t, err, ErrSyncProtectionTTLExpired)
 }
@@ -368,9 +338,189 @@ func TestRewriteNonAppendableTombstoneWithSinker_ContentTooSmall(t *testing.T) {
 	amap := NewAObjectMap()
 	_, err = rewriteNonAppendableTombstoneWithSinker(
 		context.Background(), []byte("short"), &stats, nil, mp, amap,
+		nil, nil, nil,
 	)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "object content too small")
+}
+
+type publicationPersistThenErrorFS struct {
+	fileservice.FileService
+	persisted         string
+	failObjectDeletes bool
+	objectDeletes     int
+}
+
+func (fs *publicationPersistThenErrorFS) Write(
+	ctx context.Context,
+	vector fileservice.IOVector,
+) error {
+	if err := fs.FileService.Write(ctx, vector); err != nil {
+		return err
+	}
+	if strings.HasPrefix(vector.FilePath, "gc/") {
+		return nil
+	}
+	fs.persisted = vector.FilePath
+	return errors.New("injected publication post-persist sync failure")
+}
+
+func (fs *publicationPersistThenErrorFS) Delete(
+	ctx context.Context,
+	paths ...string,
+) error {
+	if fs.failObjectDeletes {
+		for _, path := range paths {
+			if !strings.HasPrefix(path, "gc/") {
+				fs.objectDeletes++
+				return errors.New("injected publication object delete failure")
+			}
+		}
+	}
+	for _, path := range paths {
+		if !strings.HasPrefix(path, "gc/") {
+			fs.objectDeletes++
+		}
+	}
+	return fs.FileService.Delete(ctx, paths...)
+}
+
+func TestRewriteNonAppendableTombstoneSyncErrorHandsOffCleanup(t *testing.T) {
+	ctx := context.Background()
+	mp, err := mpool.NewMPool("test", 0, mpool.NoFixed)
+	require.NoError(t, err)
+	defer mp.Free(nil)
+
+	sourceFS, err := fileservice.NewMemoryFS(
+		"source", fileservice.DisabledCacheConfig, nil)
+	require.NoError(t, err)
+	writer := ioutil.ConstructTombstoneWriter(
+		objectio.HiddenColumnSelection_None, sourceFS)
+	bat := batch.NewWithSize(2)
+	bat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
+	bat.Vecs[1] = vector.NewVec(types.T_int32.ToType())
+	dataObjectID := objectio.NewObjectid()
+	row := types.NewRowIDWithObjectIDBlkNumAndRowID(dataObjectID, 0, 0)
+	require.NoError(t, vector.AppendFixed(bat.Vecs[0], row, false, mp))
+	require.NoError(t, vector.AppendFixed(bat.Vecs[1], int32(1), false, mp))
+	bat.SetRowCount(1)
+	defer bat.Clean(mp)
+	_, err = writer.WriteBatch(bat)
+	require.NoError(t, err)
+	_, _, err = writer.Sync(ctx)
+	require.NoError(t, err)
+	stats := writer.GetObjectStats()
+
+	read := &fileservice.IOVector{
+		FilePath: stats.ObjectName().String(),
+		Entries:  []fileservice.IOEntry{{Offset: 0, Size: -1}},
+	}
+	require.NoError(t, sourceFS.Read(ctx, read))
+	objectContent := append([]byte(nil), read.Entries[0].Data...)
+	read.Release()
+
+	targetBase, err := fileservice.NewMemoryFS(
+		"target", fileservice.DisabledCacheConfig, nil)
+	require.NoError(t, err)
+	targetFS := &publicationPersistThenErrorFS{
+		FileService:       targetBase,
+		failObjectDeletes: true,
+	}
+	var registered string
+	cache := &mockCCPRTxnCacheWriterCB2{
+		writeObjectFn: func(_ context.Context, objectName string, _ []byte) (bool, error) {
+			registered = objectName
+			return true, nil
+		},
+	}
+	_, err = rewriteNonAppendableTombstoneWithSinker(
+		ctx, objectContent, &stats, targetFS, mp, NewAObjectMap(), cache,
+		[]byte("txn"), testCCPRObjectCleanupOwner())
+	require.ErrorContains(t, err, "injected publication post-persist sync failure")
+	require.NotEmpty(t, targetFS.persisted)
+	require.Equal(t, 1, targetFS.objectDeletes,
+		"the caller must attempt exact-name cleanup before handing it off")
+	_, err = targetBase.StatFile(ctx, targetFS.persisted)
+	require.NoError(t, err, "Sync failed after the object reached storage")
+	require.Equal(t, targetFS.persisted, registered,
+		"the transaction owner must be registered before the ambiguous write")
+	require.NotEqual(t, stats.ObjectName().String(), registered,
+		"each rewrite attempt must use a generation-unique object name")
+}
+
+func TestCCPRTombstoneSinkerOwnsEveryUniqueSpill(t *testing.T) {
+	ctx := context.Background()
+	mp, err := mpool.NewMPool("ccpr-multi-spill", 0, mpool.NoFixed)
+	require.NoError(t, err)
+	fs, err := fileservice.NewMemoryFS(
+		"target", fileservice.DisabledCacheConfig, nil)
+	require.NoError(t, err)
+	var registered, written []string
+	cache := &mockCCPRTxnCacheWriterCB2{
+		writeObjectFn: func(
+			_ context.Context, name string, _ []byte,
+		) (bool, error) {
+			registered = append(registered, name)
+			return true, nil
+		},
+		onFileWrittenFn: func(name string) {
+			written = append(written, name)
+		},
+	}
+	pkType := types.T_int32.ToType()
+	attrs, attrTypes := objectio.GetTombstoneSchema(
+		pkType, objectio.HiddenColumnSelection_None)
+	sinker := ioutil.NewSinker(
+		objectio.TombstonePrimaryKeyIdx,
+		attrs,
+		attrTypes,
+		newCCPRTombstoneFileSinkerFactory(
+			cache, []byte("txn"), testCCPRObjectCleanupOwner(),
+			objectio.HiddenColumnSelection_None),
+		mp,
+		fs,
+		ioutil.WithMemorySizeThreshold(1),
+		ioutil.WithTailSizeCap(0),
+	)
+	t.Cleanup(func() {
+		require.NoError(t, sinker.Close())
+		mp.Free(nil)
+	})
+
+	for i := 0; i < 2; i++ {
+		bat := batch.NewWithSize(2)
+		bat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
+		bat.Vecs[1] = vector.NewVec(pkType)
+		objectID := objectio.NewObjectid()
+		rowID := types.NewRowIDWithObjectIDBlkNumAndRowID(objectID, 0, 0)
+		require.NoError(t, vector.AppendFixed(bat.Vecs[0], rowID, false, mp))
+		require.NoError(t, vector.AppendFixed(bat.Vecs[1], int32(i), false, mp))
+		bat.SetRowCount(1)
+		require.NoError(t, sinker.Write(ctx, bat))
+		bat.Clean(mp)
+	}
+	require.NoError(t, sinker.Sync(ctx))
+	persisted, tail := sinker.GetResult()
+	require.Len(t, persisted, 2)
+	require.Empty(t, tail)
+	require.Equal(t, registered, written)
+	require.Len(t, registered, 2)
+	require.NotEqual(t, registered[0], registered[1],
+		"each spill must have a generation-unique cleanup identity")
+	require.Equal(t, persisted[0].ObjectName().String(), registered[0])
+	require.Equal(t, persisted[1].ObjectName().String(), registered[1])
+}
+
+func testCCPRObjectCleanupOwner() *CCPRObjectCleanupOwner {
+	return &CCPRObjectCleanupOwner{
+		DBID:                1,
+		TableID:             2,
+		TNShardID:           3,
+		SyncProtectionJobID: "job",
+		SyncProtectionValidTS: func() int64 {
+			return time.Now().Add(time.Hour).UnixNano()
+		},
+	}
 }
 
 // ---- FilterObject dispatches to appendable vs non-appendable ----
