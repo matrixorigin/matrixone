@@ -358,10 +358,14 @@ drop table t1;
 
 set time_zone="+00:00";
 create table ts_cast_time(id int primary key, event_ts timestamp(6));
-insert into ts_cast_time values (1, '2024-02-29 12:34:56.123456'), (2, null);
-select id, cast(event_ts as time(6)) as event_time from ts_cast_time order by id;
+insert into ts_cast_time values
+    (1, '2024-02-29 12:34:56.123456'),
+    (2, null),
+    (3, cast(date_add(cast(concat(cast(current_date() as char), ' 03:04:05.654321') as datetime(6)), interval 1 day) as timestamp(6))),
+    (4, cast(concat(cast(current_date() as char), ' 20:04:05.654321') as timestamp(6)));
+select id, cast(event_ts as time(6)) as event_time6, cast(event_ts as time(3)) as event_time3 from ts_cast_time order by id;
 set time_zone="+08:00";
-select id, cast(event_ts as time(6)) as event_time from ts_cast_time order by id;
+select id, cast(event_ts as time(6)) as event_time6, cast(event_ts as time(3)) as event_time3 from ts_cast_time order by id;
 select cast(cast('2024-02-29 12:34:56.123456' as timestamp(6)) as time(6)) as literal_time;
 drop table ts_cast_time;
 set time_zone='SYSTEM';

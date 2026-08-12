@@ -4118,10 +4118,19 @@ func timestampToTime(
 		if null {
 			to.AppendMustNull()
 		} else {
-			to.AppendMustValue(v.ToDatetime(zone).ToTime(totype.Scale))
+			to.AppendMustValue(timestampToSessionClockTime(v, zone, totype.Scale))
 		}
 	}
 	return nil
+}
+
+func timestampToSessionClockTime(v types.Timestamp, zone *time.Location, scale int32) types.Time {
+	dt := v.ToDatetime(zone)
+	if dt == types.ZeroDatetime {
+		return 0
+	}
+	timeOfDay := int64(dt) - int64(dt.ToDate().ToDatetime())
+	return types.Time(timeOfDay).TruncateToScale(scale)
 }
 
 func dateToTimestamp(
