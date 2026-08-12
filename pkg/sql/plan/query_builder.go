@@ -7447,6 +7447,11 @@ func (builder *QueryBuilder) bindGroupBy(
 				ctx.groupingFlag[i] = true
 			}
 		}
+
+		// GROUPING() is meaningful only for grouping extensions. Apart marks an
+		// internally expanded ROLLUP/CUBE/GROUPING SETS branch; GroupingSets also
+		// covers the single-set form, which does not need branch expansion.
+		ctx.groupingFuncAllowed = clause.Apart || clause.Cube || clause.GroupingSets || clause.Rollup
 	}
 
 	if astTimeWindow != nil {
@@ -9553,6 +9558,14 @@ func (builder *QueryBuilder) bindView(
 			viewCtx.headings[i] = string(colName)
 		}
 	}
+	// Expanding a view removes the view catalog object from the executable
+	// scan nodes. Preserve that object's identity so every plan consumer,
+	// including the ordinary COM_QUERY cache, can validate the complete
+	// catalog dependency closure before reusing the expanded plan.
+	builder.qry.CatalogDependencies = appendPrepareSchemas(
+		builder.qry.CatalogDependencies,
+		prepareSchemaRefWithSnapshot(obj, tableDef, snapshot),
+	)
 	ctx.recordViews([]string{viewDependencyKey})
 	ctx.recordViews(viewCtx.views)
 	return
