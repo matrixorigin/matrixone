@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"maps"
+	"slices"
 	"sync/atomic"
 	"time"
 
@@ -740,7 +741,11 @@ func preparedParamBindingType(kind vector.PrepareParamKind, value []byte) types.
 	case vector.PrepareParamFloat:
 		return types.T_float64.ToType()
 	case vector.PrepareParamDecimal:
-		return types.New(types.T_decimal256, 65, 30)
+		width, scale := preparedNativeDecimalDomain(value)
+		integral := max(width-scale, 0)
+		scale = min(scale, 30)
+		return types.New(types.T_decimal256,
+			max(min(integral, 65-scale)+scale, 1), scale)
 	case vector.PrepareParamBoolean:
 		return types.T_bool.ToType()
 	}
@@ -758,6 +763,59 @@ func preparedParamBindingType(kind vector.PrepareParamKind, value []byte) types.
 		binding.Width = max(min(integral, 65-binding.Scale)+binding.Scale, 1)
 	}
 	return binding
+}
+
+// preparedNativeDecimalDomain preserves the lexical scale carried by a native
+// DECIMAL/NEWDECIMAL payload. Unlike generic text numeric-prefix conversion,
+// trailing fractional zeroes are part of the client's exact DECIMAL domain.
+func preparedNativeDecimalDomain(value []byte) (width, scale int32) {
+	const capDigits = int64(77)
+	i := 0
+	if i < len(value) && (value[i] == '+' || value[i] == '-') {
+		i++
+	}
+	digits := int64(0)
+	firstNonZero := int64(-1)
+	for i < len(value) && value[i] >= '0' && value[i] <= '9' {
+		if value[i] != '0' && firstNonZero < 0 {
+			firstNonZero = digits
+		}
+		digits = min(digits+1, capDigits)
+		i++
+	}
+	decimalPos := digits
+	if i < len(value) && value[i] == '.' {
+		i++
+		for i < len(value) && value[i] >= '0' && value[i] <= '9' {
+			if value[i] != '0' && firstNonZero < 0 {
+				firstNonZero = digits
+			}
+			digits = min(digits+1, capDigits)
+			i++
+		}
+	}
+	exponent := int64(0)
+	if i < len(value) && (value[i] == 'e' || value[i] == 'E') {
+		i++
+		negative := false
+		if i < len(value) && (value[i] == '+' || value[i] == '-') {
+			negative = value[i] == '-'
+			i++
+		}
+		for i < len(value) && value[i] >= '0' && value[i] <= '9' {
+			exponent = min(exponent*10+int64(value[i]-'0'), capDigits)
+			i++
+		}
+		if negative {
+			exponent = -exponent
+		}
+	}
+	integral := int64(0)
+	if firstNonZero >= 0 {
+		integral = max(decimalPos+exponent-firstNonZero, 0)
+	}
+	scale64 := max(digits-decimalPos-exponent, 0)
+	return int32(max(min(integral+scale64, capDigits), 1)), int32(min(scale64, capDigits))
 }
 
 // preparedNumericTextDomain scans only the numeric prefix and caps all counts
@@ -930,8 +988,28 @@ type preparedExecuteParamState struct {
 	paramVals    []any
 	paramIsBin   []bool
 	paramKinds   []vector.PrepareParamKind
+	paramTypes   []byte
 	bindingTypes []types.Type
 	owned        bool
+}
+
+func (state *preparedExecuteParamState) bindingTypesFor(dependencies []bool, count int) []types.Type {
+	if state == nil || state.params == nil {
+		return nil
+	}
+	bindingTypes := preparedParamBindingTypes(state.params, state.paramKinds, dependencies, count)
+	for i := 0; i < count && i*2+1 < len(state.paramTypes); i++ {
+		if bindingTypes == nil || i >= len(state.paramKinds) ||
+			state.paramKinds[i] != vector.PrepareParamInteger {
+			continue
+		}
+		if state.paramTypes[i*2+1]&0x80 != 0 {
+			bindingTypes[i] = types.T_uint64.ToType()
+		} else {
+			bindingTypes[i] = types.T_int64.ToType()
+		}
+	}
+	return bindingTypes
 }
 
 func (state *preparedExecuteParamState) apply(proc *process.Process) {
@@ -996,6 +1074,7 @@ func initPreparedExecuteParams(
 			params:       prepareStmt.params,
 			paramVals:    preparedParamValues(prepareStmt.params, nil),
 			paramKinds:   kinds,
+			paramTypes:   prepareStmt.ParamTypes,
 			bindingTypes: bindingTypes,
 		}, nil
 	} else if execPlan != nil && len(execPlan.Args) > 0 {
@@ -1139,17 +1218,43 @@ func initExecuteStmtParamWithResolverInSession(
 	// parameter category changed.
 	if needRebuild {
 		compilerCtx := executionSes.GetTxnCompileCtx()
-		compilerCtx.setPreparedParamBindingTypes(preparedParamBindingTypesAtDependencies(
-			paramBindingTypes, prepareStmt.paramBindingDependencies))
-		newPlan, err := func() (*plan.Plan, error) {
+		rebuildWithBindingTypes := func(bindingTypes []types.Type, dependencies []bool) (*plan.Plan, error) {
+			compilerCtx.setPreparedParamBindingTypes(preparedParamBindingTypesAtDependencies(
+				bindingTypes, dependencies))
 			defer compilerCtx.setPreparedParamBindingTypes(nil)
 			return rebuildPreparePlan(execCtx, executionSes, prepareStmt, buildPlan)
-		}()
+		}
+		newPlan, err := rebuildWithBindingTypes(paramBindingTypes, prepareStmt.paramBindingDependencies)
 		if err != nil {
 			return nil, nil, nil, "", false, err
 		}
-		prepareTs := currentTxnSnapshotTSForProcess(cwft.proc)
 		newPreparePlan := newPlan.GetDcl().GetPrepare()
+		newDependencies := plan2.PreparedParamCommonTypeDependencies(
+			newPreparePlan.Plan, len(newPreparePlan.ParamTypes))
+		convergedBindingTypes := paramState.bindingTypesFor(
+			newDependencies, len(newPreparePlan.ParamTypes))
+		if !preparedParamBindingTypesEqualAtDependencies(
+			paramBindingTypes, convergedBindingTypes, newDependencies, len(newPreparePlan.ParamTypes)) {
+			newPlan, err = rebuildWithBindingTypes(convergedBindingTypes, newDependencies)
+			if err != nil {
+				return nil, nil, nil, "", false, err
+			}
+			newPreparePlan = newPlan.GetDcl().GetPrepare()
+			finalDependencies := plan2.PreparedParamCommonTypeDependencies(
+				newPreparePlan.Plan, len(newPreparePlan.ParamTypes))
+			finalBindingTypes := paramState.bindingTypesFor(
+				finalDependencies, len(newPreparePlan.ParamTypes))
+			if !slices.Equal(newDependencies, finalDependencies) ||
+				!preparedParamBindingTypesEqualAtDependencies(
+					convergedBindingTypes, finalBindingTypes, finalDependencies, len(newPreparePlan.ParamTypes)) {
+				return nil, nil, nil, "", false, moerr.NewInternalError(
+					reqCtx, "prepared parameter dependencies did not converge after schema rebuild")
+			}
+			newDependencies = finalDependencies
+			convergedBindingTypes = finalBindingTypes
+		}
+		paramBindingTypes = convergedBindingTypes
+		prepareTs := currentTxnSnapshotTSForProcess(cwft.proc)
 		var txnHaveDDL bool
 		switch prepareStmt.PrepareStmt.(type) {
 		case *tree.ExplainStmt, *tree.ExplainAnalyze, *tree.ExplainPhyPlan:
@@ -1183,8 +1288,7 @@ func initExecuteStmtParamWithResolverInSession(
 		prepareStmt.preparedMetadataCheckTS = preparedMetadataTS
 		prepareStmt.protocolVersion = protocolVersion
 		prepareStmt.paramBindingTypes = clonePreparedParamBindingTypes(paramBindingTypes)
-		prepareStmt.paramBindingDependencies = plan2.PreparedParamCommonTypeDependencies(
-			newPreparePlan.Plan, len(newPreparePlan.ParamTypes))
+		prepareStmt.paramBindingDependencies = newDependencies
 		prepareStmt.paramBindingDependenciesSet = true
 	}
 

@@ -184,5 +184,47 @@ func TestIssue26879PreparedDecimalRuntimeDomains(t *testing.T) {
 		var ctasValue string
 		require.NoError(t, conn.QueryRowContext(ctx, "select x from issue26879.ctas").Scan(&ctasValue))
 		require.Equal(t, "1e+100", ctasValue)
+
+		for _, query := range []string{
+			"create table issue26879.schema_change(v varchar(32))",
+			"insert into issue26879.schema_change values ('2')",
+			"prepare issue26879_schema from 'select coalesce(?,v),greatest(?,v),least(?,v) from issue26879.schema_change'",
+			"set @issue26879_schema_p = '1e100'",
+			"alter table issue26879.schema_change modify v decimal(10,2)",
+		} {
+			_, err = conn.ExecContext(ctx, query)
+			require.NoError(t, err)
+		}
+		defer conn.ExecContext(context.Background(), "deallocate prepare issue26879_schema") //nolint:errcheck
+		rows, err := conn.QueryContext(ctx,
+			"execute issue26879_schema using @issue26879_schema_p,@issue26879_schema_p,@issue26879_schema_p")
+		require.NoError(t, err)
+		defer rows.Close()
+		columnTypes, err := rows.ColumnTypes()
+		require.NoError(t, err)
+		for _, columnType := range columnTypes {
+			require.Equal(t, "DOUBLE", columnType.DatabaseTypeName())
+		}
+		require.True(t, rows.Next())
+		var schemaValues [3]string
+		require.NoError(t, rows.Scan(&schemaValues[0], &schemaValues[1], &schemaValues[2]))
+		require.Equal(t, [3]string{"1e+100", "1e+100", "2"}, schemaValues)
+		require.False(t, rows.Next())
+		require.NoError(t, rows.Err())
+
+		_, err = conn.ExecContext(ctx, "create table issue26879.com_schema_change(v varchar(32))")
+		require.NoError(t, err)
+		_, err = conn.ExecContext(ctx, "insert into issue26879.com_schema_change values ('2')")
+		require.NoError(t, err)
+		comSchemaStmt, err := conn.PrepareContext(ctx,
+			"select coalesce(?,v),greatest(?,v),least(?,v) from issue26879.com_schema_change")
+		require.NoError(t, err)
+		defer comSchemaStmt.Close()
+		_, err = conn.ExecContext(ctx, "alter table issue26879.com_schema_change modify v decimal(10,2)")
+		require.NoError(t, err)
+		var comSchemaValues [3]string
+		require.NoError(t, comSchemaStmt.QueryRowContext(ctx, "1e100", "1e100", "1e100").Scan(
+			&comSchemaValues[0], &comSchemaValues[1], &comSchemaValues[2]))
+		require.Equal(t, [3]string{"1e+100", "1e+100", "2"}, comSchemaValues)
 	})
 }

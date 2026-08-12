@@ -351,6 +351,32 @@ func TestPreparedParamBindingType(t *testing.T) {
 	}
 }
 
+func TestNativeDecimalPreparedParamBindingUsesPayloadDomain(t *testing.T) {
+	tests := []struct {
+		value     string
+		wantWidth int32
+		wantScale int32
+	}{
+		{value: "123456789012345678901234567890123456", wantWidth: 36},
+		{value: "1E+35", wantWidth: 36},
+		{value: "1E-31", wantWidth: 30, wantScale: 30},
+		{value: "1E-40", wantWidth: 30, wantScale: 30},
+		{value: "-12.3400", wantWidth: 6, wantScale: 4},
+		{value: "0.001", wantWidth: 3, wantScale: 3},
+		{value: "000123", wantWidth: 3},
+		{value: "0.00", wantWidth: 2, wantScale: 2},
+		{value: "0", wantWidth: 1},
+	}
+	for _, test := range tests {
+		t.Run(test.value, func(t *testing.T) {
+			binding := preparedParamBindingType(vector.PrepareParamDecimal, []byte(test.value))
+			require.Equal(t, types.T_decimal256, binding.Oid)
+			require.Equal(t, test.wantWidth, binding.Width)
+			require.Equal(t, test.wantScale, binding.Scale)
+		})
+	}
+}
+
 func TestPreparedNumericTextDomainIsBoundedAndClassified(t *testing.T) {
 	tests := []struct {
 		value           string
@@ -503,6 +529,43 @@ func TestInitExecuteStmtParamRebuildsForRuntimeBindingCategory(t *testing.T) {
 	require.Equal(t, []types.Type{types.T_float64.ToType()}, prepareStmt.paramBindingTypes)
 	_, found = ses.GetTxnCompileCtx().ResolvePreparedParamBindingType(0)
 	require.False(t, found, "failed rebuild must clear temporary binding hints")
+}
+
+func TestInitExecuteStmtParamUsesNativeDecimalPayloadDomain(t *testing.T) {
+	ses, prepareStmt, cw, execCtx := newPreparedExecuteEnvForSQL(
+		t, 117, "select coalesce(?, cast(2 as decimal(10,2)))")
+	defer func() {
+		cw.proc.SetPrepareParams(nil)
+		prepareStmt.Close()
+	}()
+
+	prepareStmt.params = vector.NewVec(types.T_text.ToType())
+	prepareStmt.ParamTypes = []byte{byte(defines.MYSQL_TYPE_NEWDECIMAL), 0}
+	tests := []struct {
+		value     string
+		wantWidth int32
+		wantScale int32
+	}{
+		{value: "123456789012345678901234567890123456", wantWidth: 38, wantScale: 2},
+		{value: "1E+35", wantWidth: 38, wantScale: 2},
+		{value: "1E-31", wantWidth: 38, wantScale: 30},
+		{value: "1E-40", wantWidth: 38, wantScale: 30},
+	}
+	for _, test := range tests {
+		t.Run(test.value, func(t *testing.T) {
+			prepareStmt.params.CleanOnlyData()
+			require.NoError(t, vector.AppendBytes(
+				prepareStmt.params, []byte(test.value), false, cw.proc.Mp()))
+			_, queryPlan, _, _, _, err := initExecuteStmtParam(
+				execCtx, ses, cw, nil, prepareStmt.Name)
+			require.NoError(t, err)
+			columns := plan2.GetResultColumnsFromPlan(queryPlan)
+			require.Len(t, columns, 1)
+			require.Equal(t, int32(types.T_decimal256), columns[0].Typ.Id)
+			require.Equal(t, test.wantWidth, columns[0].Typ.Width)
+			require.Equal(t, test.wantScale, columns[0].Typ.Scale)
+		})
+	}
 }
 
 func TestInitExecuteStmtParamRebuildsDCLForTextUserVariable(t *testing.T) {
