@@ -519,30 +519,104 @@ func (c *Compile) isRetryErr(err error) bool {
 }
 
 type scopeRunResult struct {
-	err error
-	ctx context.Context
+	err      error
+	ctx      context.Context
+	queryCtx context.Context
 }
 
 func newScopeRunResult(err error, scope *Scope) scopeRunResult {
-	result := scopeRunResult{err: err}
-	if scope != nil && scope.Proc != nil {
-		result.ctx = scope.Proc.Ctx
+	if scope == nil {
+		return scopeRunResult{err: err}
 	}
+	return newScopeRunResultForProcess(err, scope.Proc)
+}
+
+func newScopeRunResultForProcess(err error, proc *process.Process) scopeRunResult {
+	result := scopeRunResult{err: err}
+	if proc == nil {
+		return result
+	}
+	result.ctx = proc.Ctx
+	result.queryCtx = scopeRunQueryContext(proc)
 	return result
 }
 
+func scopeRunQueryContext(proc *process.Process) context.Context {
+	if proc == nil || proc.Base == nil {
+		return nil
+	}
+	queryCtx, _ := process.GetQueryCtxFromProc(proc)
+	if queryCtx != nil {
+		return queryCtx
+	}
+	return proc.GetTopContext()
+}
+
+func isScopeCancellationError(err error) bool {
+	if err == nil {
+		return false
+	}
+	// errors.Join must not turn a substantive execution failure into
+	// cancellation fallout merely because one of its siblings is a context
+	// error. Every leaf has to be cancellation-shaped before it is safe to
+	// suppress or replace the result.
+	if joined, ok := err.(interface{ Unwrap() []error }); ok {
+		children := joined.Unwrap()
+		if len(children) == 0 {
+			return false
+		}
+		for _, child := range children {
+			if !isScopeCancellationError(child) {
+				return false
+			}
+		}
+		return true
+	}
+	if wrapped, ok := err.(interface{ Unwrap() error }); ok {
+		if child := wrapped.Unwrap(); child != nil {
+			return isScopeCancellationError(child)
+		}
+	}
+	return errors.Is(err, context.Canceled) ||
+		errors.Is(err, context.DeadlineExceeded) ||
+		moerr.IsMoErrCode(err, moerr.ErrQueryInterrupted)
+}
+
+// normalizeScopeRunError distinguishes a substantive execution failure from
+// cancellation fallout.  A child pipeline canceled by a successfully finished
+// consumer is secondary and may be ignored, while a real error carried as the
+// pipeline cancel cause must survive.  Query-level cancellation remains owned
+// by the query context and is reported by Compile.Run.
+func normalizeScopeRunError(
+	err error,
+	pipelineCtx context.Context,
+	queryCtx context.Context,
+) (error, bool) {
+	if err == nil || !isScopeCancellationError(err) ||
+		pipelineCtx == nil || pipelineCtx.Err() == nil {
+		return err, false
+	}
+	// A context-shaped error is secondary only when it was derived from this
+	// pipeline's cancellation.  Preserve an independent operator timeout that
+	// merely raced a different pipeline cancellation.
+	if !errors.Is(err, pipelineCtx.Err()) &&
+		!moerr.IsMoErrCode(err, moerr.ErrQueryInterrupted) {
+		return err, false
+	}
+
+	if cause := context.Cause(pipelineCtx); cause != nil {
+		err = cause
+	}
+	if isScopeCancellationError(err) && queryCtx != nil && queryCtx.Err() == nil {
+		return nil, true
+	}
+	return err, true
+}
+
 func (r scopeRunResult) resolveCancelCause() (scopeRunResult, bool) {
-	if r.err == nil || r.ctx == nil ||
-		(!errors.Is(r.err, context.Canceled) &&
-			!errors.Is(r.err, context.DeadlineExceeded) &&
-			!moerr.IsMoErrCode(r.err, moerr.ErrQueryInterrupted)) {
-		return r, false
-	}
-	if cause := context.Cause(r.ctx); cause != nil {
-		r.err = cause
-		return r, true
-	}
-	return r, false
+	var normalized bool
+	r.err, normalized = normalizeScopeRunError(r.err, r.ctx, r.queryCtx)
+	return r, normalized
 }
 
 // preferPrimaryScopeResult keeps cleanup fallout from masking the execution
