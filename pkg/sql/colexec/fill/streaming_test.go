@@ -719,6 +719,69 @@ func TestFillLinearLongGapSpillsPendingSuffix(t *testing.T) {
 	require.Equal(t, int64(0), proc.Mp().CurrNB())
 }
 
+func TestFillLinearDecimal256SpillMatchesGapLength(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		values   []int64
+		nulls    map[int]bool
+		expected []int64
+	}{
+		{
+			name:     "single gap uses the same exact type contract",
+			values:   []int64{100, 0, 120},
+			nulls:    map[int]bool{1: true},
+			expected: []int64{100, 110, 120},
+		},
+		{
+			name:     "multiple gaps preserve every position",
+			values:   []int64{100, 0, 0, 130},
+			nulls:    map[int]bool{1: true, 2: true},
+			expected: []int64{100, 110, 120, 130},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+			typ := types.New(types.T_decimal256, 65, 0)
+			bats := make([]*batch.Batch, 0, len(test.values))
+			for row, value := range test.values {
+				vec := vector.NewVec(typ)
+				require.NoError(t, vector.AppendFixed(
+					vec, types.Decimal256FromInt64(value), test.nulls[row], proc.Mp()))
+				bat := batch.NewWithSize(1)
+				bat.SetVector(0, vec)
+				bat.SetRowCount(1)
+				bats = append(bats, bat)
+			}
+
+			arg := &Fill{ColLen: 1, FillType: plan.Node_LINEAR, SpillThreshold: 1}
+			arg.AppendChild(colexec.NewMockOperator().WithBatchs(bats))
+			require.NoError(t, arg.Prepare(proc))
+
+			var actual []types.Decimal256
+			for {
+				result, err := arg.Call(proc)
+				require.NoError(t, err)
+				if result.Batch == nil {
+					break
+				}
+				actual = append(actual,
+					vector.MustFixedColNoTypeCheck[types.Decimal256](result.Batch.Vecs[0])...)
+			}
+			require.Len(t, actual, len(test.expected))
+			for row, expected := range test.expected {
+				require.Equal(t, types.Decimal256FromInt64(expected), actual[row])
+			}
+
+			arg.Free(proc, false, nil)
+			for _, bat := range bats {
+				bat.Clean(proc.Mp())
+			}
+			proc.Free()
+			require.Equal(t, int64(0), proc.Mp().CurrNB())
+		})
+	}
+}
+
 func TestFillLinearConsecutiveSpillsPreserveSegmentEntry(t *testing.T) {
 	t.Run("single decimal column", func(t *testing.T) {
 		proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())

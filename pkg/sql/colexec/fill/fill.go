@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"math/bits"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -605,6 +606,21 @@ func linearFillValue(ctr *container, proc *process.Process, idx int, preBatch *b
 		}
 		return result, true, nil
 	}
+	if preVec.GetType().Oid == types.T_decimal256 && curVec.GetType().Oid == types.T_decimal256 {
+		result := vector.NewVec(*preVec.GetType())
+		left := vector.GetFixedAtNoTypeCheck[types.Decimal256](preVec, preRow)
+		right := vector.GetFixedAtNoTypeCheck[types.Decimal256](curVec, curRow)
+		value, err := linearExactValue256(left, right, 1, 2)
+		if err != nil {
+			result.Free(proc.Mp())
+			return nil, false, err
+		}
+		if err = vector.AppendFixed(result, value, false, proc.Mp()); err != nil {
+			result.Free(proc.Mp())
+			return nil, false, err
+		}
+		return result, true, nil
+	}
 
 	b := batch.NewWithSize(2)
 	b.Vecs[0] = vector.NewVec(*preVec.GetType())
@@ -624,7 +640,7 @@ func linearFillValue(ctr *container, proc *process.Process, idx int, preBatch *b
 }
 
 // setLinearInterpolatedValue writes the value at step/total between the two
-// endpoints. Exact numeric types use a 256-bit weighted sum, which both avoids
+// endpoints. Exact numeric types use a widened weighted sum, which both avoids
 // endpoint arithmetic overflow and rounds once at the destination scale.
 // Floating-point types use a stable convex form when the endpoints have
 // opposite signs, avoiding overflow in right-left.
@@ -685,6 +701,15 @@ func setLinearInterpolatedValue(
 		value, calcErr := linearExactValue(
 			vector.GetFixedAtNoTypeCheck[types.Decimal128](leftVec, leftRow),
 			vector.GetFixedAtNoTypeCheck[types.Decimal128](rightVec, rightRow),
+			step, total)
+		if calcErr != nil {
+			return calcErr
+		}
+		err = vector.SetFixedAtNoTypeCheck(dst, dstRow, value)
+	case types.T_decimal256:
+		value, calcErr := linearExactValue256(
+			vector.GetFixedAtNoTypeCheck[types.Decimal256](leftVec, leftRow),
+			vector.GetFixedAtNoTypeCheck[types.Decimal256](rightVec, rightRow),
 			step, total)
 		if calcErr != nil {
 			return calcErr
@@ -823,6 +848,122 @@ func multiplyDecimal128ByUint64(value types.Decimal128, factor uint64) (types.De
 		return types.Decimal256{}, err
 	}
 	if negative {
+		result = result.Minus()
+	}
+	return result, nil
+}
+
+func linearExactValue256(left, right types.Decimal256, step, total uint64) (types.Decimal256, error) {
+	if step == 0 || step >= total {
+		return types.Decimal256{}, moerr.NewInternalErrorNoCtxf(
+			"invalid exact linear interpolation position %d/%d", step, total)
+	}
+
+	// A Decimal256 endpoint multiplied by a uint64 position needs at most 320
+	// bits. Keep that exact intermediate on the stack: using Decimal256 directly
+	// can overflow before division even though the final convex value is valid.
+	leftTerm, leftNegative := multiplyDecimal256Magnitude(left, total-step)
+	rightTerm, rightNegative := multiplyDecimal256Magnitude(right, step)
+	var numerator linearUint320
+	negative := leftNegative
+	if leftNegative == rightNegative {
+		var overflow bool
+		numerator, overflow = leftTerm.add(rightTerm)
+		if overflow {
+			return types.Decimal256{}, moerr.NewInternalErrorNoCtx(
+				"linear interpolation intermediate exceeds 320 bits")
+		}
+	} else if leftTerm.compare(rightTerm) >= 0 {
+		numerator = leftTerm.sub(rightTerm)
+	} else {
+		numerator = rightTerm.sub(leftTerm)
+		negative = rightNegative
+	}
+	value, remainder := numerator.div(total)
+	if remainder >= total-remainder {
+		var overflow bool
+		value, overflow = value.add(linearUint320{1})
+		if overflow {
+			return types.Decimal256{}, moerr.NewInternalErrorNoCtx(
+				"linear interpolation rounded result exceeds 320 bits")
+		}
+	}
+	return value.decimal256(negative)
+}
+
+// linearUint320 is an unsigned little-endian integer used only for the exact
+// Decimal256 weighted sum. Five limbs are sufficient for 256 bits × uint64.
+type linearUint320 [5]uint64
+
+func multiplyDecimal256Magnitude(value types.Decimal256, factor uint64) (linearUint320, bool) {
+	negative := value.Sign()
+	if negative {
+		value = value.Minus()
+	}
+	input := [...]uint64{value.B0_63, value.B64_127, value.B128_191, value.B192_255}
+	var result linearUint320
+	var carry uint64
+	for i, limb := range input {
+		hi, lo := bits.Mul64(limb, factor)
+		var loCarry uint64
+		result[i], loCarry = bits.Add64(lo, carry, 0)
+		carry, _ = bits.Add64(hi, 0, loCarry)
+	}
+	result[4] = carry
+	return result, negative
+}
+
+func (value linearUint320) add(other linearUint320) (linearUint320, bool) {
+	var result linearUint320
+	var carry uint64
+	for i := range result {
+		result[i], carry = bits.Add64(value[i], other[i], carry)
+	}
+	return result, carry != 0
+}
+
+func (value linearUint320) sub(other linearUint320) linearUint320 {
+	var result linearUint320
+	var borrow uint64
+	for i := range result {
+		result[i], borrow = bits.Sub64(value[i], other[i], borrow)
+	}
+	return result
+}
+
+func (value linearUint320) compare(other linearUint320) int {
+	for i := len(value) - 1; i >= 0; i-- {
+		if value[i] < other[i] {
+			return -1
+		}
+		if value[i] > other[i] {
+			return 1
+		}
+	}
+	return 0
+}
+
+func (value linearUint320) div(divisor uint64) (linearUint320, uint64) {
+	var quotient linearUint320
+	var remainder uint64
+	for i := len(value) - 1; i >= 0; i-- {
+		quotient[i], remainder = bits.Div64(remainder, value[i], divisor)
+	}
+	return quotient, remainder
+}
+
+func (value linearUint320) decimal256(negative bool) (types.Decimal256, error) {
+	if value[4] != 0 || (!negative && value[3]>>63 != 0) ||
+		(negative && value[3] > uint64(1)<<63) ||
+		(negative && value[3] == uint64(1)<<63 && (value[2] != 0 || value[1] != 0 || value[0] != 0)) {
+		return types.Decimal256{}, moerr.NewInternalErrorNoCtx(
+			"linear interpolation result exceeds decimal256")
+	}
+	result := types.Decimal256{
+		B0_63: value[0], B64_127: value[1],
+		B128_191: value[2], B192_255: value[3],
+	}
+	if negative && (value[0] != 0 || value[1] != 0 || value[2] != 0 || value[3] != 0) {
 		result = result.Minus()
 	}
 	return result, nil
@@ -989,6 +1130,8 @@ func appendValue(v, w *vector.Vector, j int, proc *process.Process) error {
 		err = vector.AppendFixed(v, vector.GetFixedAtNoTypeCheck[types.Decimal64](w, j), false, proc.Mp())
 	case types.T_decimal128:
 		err = vector.AppendFixed(v, vector.GetFixedAtNoTypeCheck[types.Decimal128](w, j), false, proc.Mp())
+	case types.T_decimal256:
+		err = vector.AppendFixed(v, vector.GetFixedAtNoTypeCheck[types.Decimal256](w, j), false, proc.Mp())
 	case types.T_uuid:
 		err = vector.AppendFixed(v, vector.GetFixedAtNoTypeCheck[types.Uuid](w, j), false, proc.Mp())
 	case types.T_TS:
@@ -1051,6 +1194,8 @@ func setValue(v, w *vector.Vector, i, j int, proc *process.Process) error {
 		err = vector.SetFixedAtNoTypeCheck(v, i, vector.GetFixedAtNoTypeCheck[types.Decimal64](w, j))
 	case types.T_decimal128:
 		err = setDecimal128Value(v, w, i, j)
+	case types.T_decimal256:
+		err = vector.SetFixedAtNoTypeCheck(v, i, vector.GetFixedAtNoTypeCheck[types.Decimal256](w, j))
 	case types.T_uuid:
 		err = vector.SetFixedAtNoTypeCheck(v, i, vector.GetFixedAtNoTypeCheck[types.Uuid](w, j))
 	case types.T_TS:
