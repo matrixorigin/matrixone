@@ -96,6 +96,36 @@ func newWorkspaceObjectBatchForTest(
 	return bat
 }
 
+func TestWorkspaceEntryViewObjectStatsUsesColumnCardinality(t *testing.T) {
+	proc := testutil.NewProc(t)
+	objectID := types.Objectid{1}
+	stats := objectio.NewObjectStatsWithObjectID(
+		&objectID, false, false, false)
+	require.NoError(t, objectio.SetObjectStatsBlkCnt(stats, 2))
+
+	bat := batch.New([]string{
+		catalog.BlockMeta_BlockInfo,
+		catalog.ObjectMeta_ObjectStats,
+	})
+	bat.SetVector(0, vector.NewVec(types.T_varchar.ToType()))
+	bat.SetVector(1, vector.NewVec(types.T_varchar.ToType()))
+	for range 2 {
+		require.NoError(t, vector.AppendBytes(
+			bat.Vecs[0], []byte("block-info"), false, proc.Mp()))
+	}
+	require.NoError(t, vector.AppendBytes(
+		bat.Vecs[1], stats.Marshal(), false, proc.Mp()))
+	bat.SetRowCount(2)
+	defer bat.Clean(proc.Mp())
+
+	view := workspaceEntryView{Entry: Entry{bat: bat}}
+	var actual []objectio.ObjectStats
+	require.True(t, view.forEachVisibleObjectStats(func(stats objectio.ObjectStats) {
+		actual = append(actual, stats)
+	}))
+	require.Equal(t, []objectio.ObjectStats{*stats}, actual)
+}
+
 func TestTxnWorkspaceDumpScopeUsesStatementAttemptOwnership(t *testing.T) {
 	proc := testutil.NewProc(t)
 	workspace := newTxnWorkspace()
@@ -128,37 +158,167 @@ func TestTxnWorkspaceDumpScopeRejectsInvalidKind(t *testing.T) {
 	require.ErrorContains(t, err, "scope is invalid")
 }
 
-func TestTxnWorkspaceAdjustAttemptPreservesPrefixAndOrdersWriteScope(t *testing.T) {
+func TestTxnWorkspaceCommitOrderCoversEntireStatement(t *testing.T) {
 	proc := testutil.NewProc(t)
 	workspace := newTxnWorkspace()
+	workspace.publishReadView()
+	firstScope := workspace.beginWriteAttempt()
 	workspace.append(Entry{
-		typ: INSERT, accountId: 1, databaseId: 2, tableId: 3,
+		typ: INSERT, accountId: 1, databaseId: 2, tableId: 100,
 		bat: newInt64BatchForTest(t, proc, []string{"pk"}, []int64{1}),
 	})
-	mark := workspace.beginWriteAttempt()
+	require.NoError(t, workspace.adjustAttempt(firstScope))
+
+	// Catalog metadata can be produced by an internal SQL write scope after
+	// the physical user-table mutation. It must nevertheless precede that
+	// mutation in the TN precommit stream for the same statement.
+	secondScope := workspace.beginWriteAttempt()
 	workspace.append(Entry{
-		typ: INSERT, accountId: 1, databaseId: 2, tableId: 3,
-		bat: newInt64BatchForTest(t, proc, []string{"pk"}, []int64{2}),
+		typ: INSERT, accountId: 1, databaseId: catalog.MO_CATALOG_ID,
+		tableId: catalog.MO_TABLES_ID,
+		bat:     newInt64BatchForTest(t, proc, []string{"pk"}, []int64{2}),
 	})
 	workspace.append(Entry{
-		typ: DELETE, accountId: 1, databaseId: 2, tableId: 3,
+		typ: DELETE, accountId: 1, databaseId: 2, tableId: 100,
 		bat: newInt64BatchForTest(t, proc, []string{"pk"}, []int64{3}),
 	})
 
-	require.NoError(t, workspace.adjustAttempt(mark))
+	require.NoError(t, workspace.adjustAttempt(secondScope))
 	entries, err := workspace.commitEntries()
 	require.NoError(t, err)
 	require.Len(t, entries.entries, 3)
-	require.Equal(t, INSERT, entries.entries[0].typ)
+	require.Equal(t, uint64(catalog.MO_CATALOG_ID), entries.entries[0].databaseId)
 	require.Equal(t, DELETE, entries.entries[1].typ)
 	require.Equal(t, INSERT, entries.entries[2].typ)
 	entries.Close()
 	require.NoError(t, workspace.close(proc.Mp()))
 }
 
-func TestTxnWorkspaceNestedWriteAttemptsShareOutermostCommitRoot(t *testing.T) {
+func TestTxnWorkspaceCommitOrderDoesNotCrossStatementBoundary(t *testing.T) {
 	proc := testutil.NewProc(t)
 	workspace := newTxnWorkspace()
+	workspace.publishReadView()
+	firstScope := workspace.beginWriteAttempt()
+	firstID := workspace.append(Entry{
+		typ: INSERT, accountId: 1, databaseId: 2, tableId: 100,
+		bat: newInt64BatchForTest(t, proc, []string{"pk"}, []int64{1}),
+	})
+	require.NoError(t, workspace.adjustAttempt(firstScope))
+	// A new ordinary Compile advances the protocol-order epoch. The second
+	// Compile's catalog mutation must not move before the first Compile's user
+	// mutation even if both belong to the same transaction.
+	workspace.publishReadView()
+
+	secondScope := workspace.beginWriteAttempt()
+	secondID := workspace.append(Entry{
+		typ: DELETE, accountId: 1, databaseId: catalog.MO_CATALOG_ID,
+		tableId: catalog.MO_TABLES_ID,
+		bat:     newInt64BatchForTest(t, proc, []string{"pk"}, []int64{2}),
+	})
+	require.NoError(t, workspace.adjustAttempt(secondScope))
+
+	entries, err := workspace.commitEntries()
+	require.NoError(t, err)
+	require.Len(t, entries.entries, 2)
+	require.Equal(t, firstID, entries.entries[0].workspaceMutationID)
+	require.Equal(t, secondID, entries.entries[1].workspaceMutationID)
+	entries.Close()
+	require.NoError(t, workspace.close(proc.Mp()))
+}
+
+func TestTxnWorkspaceLaterStatementRewriteUsesCurrentCommitOrder(t *testing.T) {
+	proc := testutil.NewProc(t)
+	workspace := newTxnWorkspace()
+
+	workspace.publishReadView()
+	original := newInt64BatchForTest(
+		t, proc, []string{"old_pk"}, []int64{1})
+	sourceID := workspace.append(Entry{
+		typ: INSERT, accountId: 1, databaseId: 2, tableId: 100,
+		tableName: "old", bat: original,
+	})
+	_, err := workspace.advanceStatement()
+	require.NoError(t, err)
+
+	// ALTER of a table created earlier in the transaction recreates catalog
+	// metadata and rewrites the old table data in one later Compile. The
+	// replacement must belong to this Compile's commit epoch; retaining the
+	// source epoch would send table data to TN before the recreated relation.
+	workspace.publishReadView()
+	catalogID := workspace.append(Entry{
+		typ: INSERT, accountId: 1, databaseId: catalog.MO_CATALOG_ID,
+		tableId: catalog.MO_TABLES_ID,
+		bat:     newInt64BatchForTest(t, proc, []string{"pk"}, []int64{2}),
+	})
+	replacement := newInt64BatchForTest(
+		t, proc, []string{"new_pk"}, []int64{1})
+	results, err := workspace.rewriteMutations([]workspaceMutationRewrite{{
+		mutationID: sourceID,
+		oldBat:     original,
+		entry: Entry{
+			typ: INSERT, accountId: 1, databaseId: 2, tableId: 100,
+			tableName: "new", bat: replacement,
+		},
+	}})
+	require.NoError(t, err)
+	require.Len(t, results, 1)
+
+	workspace.mu.RLock()
+	require.Equal(t, workspace.commitEpoch,
+		workspace.mutations[results[0].targetID].commitOrder[0])
+	require.NotEqual(t,
+		workspace.mutations[sourceID].commitOrder,
+		workspace.mutations[results[0].targetID].commitOrder)
+	workspace.mu.RUnlock()
+
+	entries, err := workspace.commitEntries()
+	require.NoError(t, err)
+	require.Len(t, entries.entries, 2)
+	require.Equal(t, catalogID, entries.entries[0].workspaceMutationID)
+	require.Equal(t, results[0].targetID,
+		entries.entries[1].workspaceMutationID)
+	entries.Close()
+	require.NoError(t, workspace.close(proc.Mp()))
+}
+
+func TestTxnWorkspaceSameStatementRewriteRetainsCommitOrder(t *testing.T) {
+	proc := testutil.NewProc(t)
+	workspace := newTxnWorkspace()
+	workspace.publishReadView()
+
+	original := newInt64BatchForTest(
+		t, proc, []string{"old_pk"}, []int64{1})
+	sourceID := workspace.append(Entry{
+		typ: INSERT, accountId: 1, databaseId: 2, tableId: 100,
+		tableName: "old", bat: original,
+	})
+	workspace.mu.RLock()
+	sourceOrder := slices.Clone(workspace.mutations[sourceID].commitOrder)
+	workspace.mu.RUnlock()
+
+	replacement := newInt64BatchForTest(
+		t, proc, []string{"new_pk"}, []int64{1})
+	results, err := workspace.rewriteMutations([]workspaceMutationRewrite{{
+		mutationID: sourceID,
+		oldBat:     original,
+		entry: Entry{
+			typ: INSERT, accountId: 1, databaseId: 2, tableId: 100,
+			tableName: "new", bat: replacement,
+		},
+	}})
+	require.NoError(t, err)
+	require.Len(t, results, 1)
+	workspace.mu.RLock()
+	require.Equal(t, sourceOrder,
+		workspace.mutations[results[0].targetID].commitOrder)
+	workspace.mu.RUnlock()
+	require.NoError(t, workspace.close(proc.Mp()))
+}
+
+func TestTxnWorkspaceNestedWriteAttemptsShareStatementCommitOrder(t *testing.T) {
+	proc := testutil.NewProc(t)
+	workspace := newTxnWorkspace()
+	workspace.publishReadView()
 	outer := workspace.beginWriteAttempt()
 	outerInsertID := workspace.append(Entry{
 		typ: INSERT, accountId: 1, databaseId: 2, tableId: 100,
@@ -182,6 +342,33 @@ func TestTxnWorkspaceNestedWriteAttemptsShareOutermostCommitRoot(t *testing.T) {
 	require.Equal(t, innerDeleteID, entries.entries[0].workspaceMutationID)
 	require.Equal(t, outerDeleteID, entries.entries[1].workspaceMutationID)
 	require.Equal(t, outerInsertID, entries.entries[2].workspaceMutationID)
+	entries.Close()
+	require.NoError(t, workspace.close(proc.Mp()))
+}
+
+func TestTxnWorkspaceInternalReadViewKeepsCompileCommitEpoch(t *testing.T) {
+	proc := testutil.NewProc(t)
+	workspace := newTxnWorkspace()
+	workspace.publishReadView()
+	outerID := workspace.append(Entry{
+		typ: INSERT, accountId: 1, databaseId: 2, tableId: 100,
+		bat: newInt64BatchForTest(t, proc, []string{"pk"}, []int64{1}),
+	})
+
+	// Internal SQL captures the current view rather than publishing a new one.
+	// Its later catalog write therefore shares the outer Compile's epoch.
+	workspace.currentReadView()
+	internalID := workspace.append(Entry{
+		typ: INSERT, accountId: 1, databaseId: catalog.MO_CATALOG_ID,
+		tableId: catalog.MO_TABLES_ID,
+		bat:     newInt64BatchForTest(t, proc, []string{"pk"}, []int64{2}),
+	})
+
+	entries, err := workspace.commitEntries()
+	require.NoError(t, err)
+	require.Len(t, entries.entries, 2)
+	require.Equal(t, internalID, entries.entries[0].workspaceMutationID)
+	require.Equal(t, outerID, entries.entries[1].workspaceMutationID)
 	entries.Close()
 	require.NoError(t, workspace.close(proc.Mp()))
 }
@@ -519,6 +706,12 @@ func TestTxnWorkspaceObjectDeletesUseExactTableReadView(t *testing.T) {
 		firstBlock:  {4, 5},
 		secondBlock: {6},
 	}, deletes)
+	count, err := workspace.tableObjectDeleteCount(current, 1, 2, 3)
+	require.NoError(t, err)
+	require.Equal(t, uint64(3), count)
+	count, err = workspace.tableObjectDeleteCount(firstView, 1, 2, 3)
+	require.NoError(t, err)
+	require.Equal(t, uint64(2), count)
 
 	for _, identity := range []struct {
 		accountID  uint32
@@ -537,6 +730,14 @@ func TestTxnWorkspaceObjectDeletesUseExactTableReadView(t *testing.T) {
 		)
 		require.NoError(t, err)
 		require.Empty(t, deletes)
+		count, err = workspace.tableObjectDeleteCount(
+			current,
+			identity.accountID,
+			identity.databaseID,
+			identity.tableID,
+		)
+		require.NoError(t, err)
+		require.Zero(t, count)
 	}
 }
 

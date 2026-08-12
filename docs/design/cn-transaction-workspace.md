@@ -33,13 +33,16 @@ Payload lease。
 - `WriteMark`：执行开始时记录的
   `(StatementID, AttemptID, MaxMutationID, WriteScopeID)`；`WriteScopeID` 只用于
   Journal 校验嵌套执行的完成顺序，不暴露 mutation 位置。
-- 最外层 write scope 是提交顺序分组边界。内部 SQL 创建的嵌套 scope 与外层共享同一提交根，
-  并按 LIFO 完成；这样保持旧 `Adjust(writeOffset)` 对整个后缀统一整理的语义，又不重新排列
-  已经发布的 mutation。
+- 普通 Compile 发布的 protocol-order epoch 是提交顺序分组边界。它不等于 StatementID：
+  StatementID 只负责 attempt rollback/visibility；同一普通 Compile 内即使顺序打开多个 write scope
+  或执行内部 SQL（例如先产生用户表对象写，再写入 `mo_tables` 元数据），仍继承同一 epoch 并统一
+  遵守 catalog 优先和 mutation type 降序。内部 SQL 只捕获当前 ReadView，不得推进 epoch；write
+  scope 只按 LIFO 校验执行所有权，不参与提交排序。
 - 正常推进 Statement 边界前必须关闭该 Attempt 的全部 write scope；否则边界发布失败，且
   mutation transition、RC boundary 和 payload 状态均不得变化。rollback/retry 按 Attempt
   整体废弃未完成 scope，新 Attempt 不继承旧 scope。
-- statement 状态：running、completed、rolled-back。
+- attempt 状态：open、completed、rolled-back。Journal 只保留当前 Attempt；正常完成的
+  Attempt 不作为可增长历史继续驻留，事务级资源由独立索引维护。
 - frontend statement execution 是否已开始、当前 execution 是否已经推进过边界；这些调用时序守卫
   与 Statement/Attempt 身份属于同一个状态机。
 - RC statement snapshot、最近完成 transfer 的 snapshot，以及下一边界是否需要 transfer。
@@ -59,30 +62,34 @@ StatementID 推进和 RC 边界发布必须在同一个 Workspace 临界区内�
 merge、spill 或 snapshot 更新尚可能失败时提前清空恢复状态。
 
 LOAD TABLE 文件也必须由创建它的 Attempt 精确登记。statement rollback 只清理失败 Attempt 的
-文件；成功 statement 的文件继续由已完成 Attempt 持有，供 transaction rollback 清理。物理删除
-成功后才移除 Journal 中的所有权，删除失败时必须保留所有权以便后续 transaction cleanup 重试。
-Journal 在保留 Attempt 精确归属的同时维护 transaction 级 LOAD 文件顺序与引用计数索引；全量清理、
-存在性检查和删除不得扫描完整 Attempt 历史，且两层状态必须由同一 Journal 操作原子更新。
+文件；正常完成边界后，文件由 Journal 的 transaction 级顺序与引用计数索引继续持有，供
+transaction rollback 清理，不保留完整的已完成 Attempt 对象。物理删除成功后才移除 Journal 中的
+所有权，删除失败时必须保留所有权以便后续 transaction cleanup 重试。全量清理、存在性检查和
+删除不得扫描完整 Attempt 历史，Attempt 归属与 transaction 级索引必须由同一 Journal 操作原子更新。
 克隆事务的对象保护状态只能在 Journal 中已经不存在该文件 owner 后移除。`Transaction` 不得再
 持有平行的 statement ID、statement execution guard 或 LOAD 文件集合。
 
 ### 3.2 WorkspaceReadView
 
-`WorkspaceReadView` 是不可变值，包含：
+`WorkspaceReadView` 是不可变逻辑 token，包含：
 
 - Workspace 身份；
 - 发布 revision；
 - 最大可见 `MutationID`。
 
-ReadView 不暴露物理数组位置。Workspace 校验视图属于自己，随后由 TableOverlay 解析
-可见 mutation。零值只表示“没有事务内 mutation 可见”，不得被静默替换成当前视图。
-生产调用方需要该语义时必须显式使用 `NoWorkspaceReadView()`，使 committed-only、远程 shard
-读取和漏传视图在代码审查时可以区分。
+ReadView 提供稳定字段的构造器和 getter，供 Workspace owner、诊断与跨模块传递使用；opaque
+表示调用方不得把字段解释成物理数组位置、据此自行推导可见性，或绕过 Workspace 解析 mutation。
+Workspace 校验视图属于自己，随后通过统一索引解析可见 mutation。
 
-ReadView 的使用期限是创建它的 statement execution。Reader、LocalDataSource、Ranges、transfer
-和 CommitBuilder 必须在该 execution 结束前关闭其 Payload lease；调用方不得把 ReadView 或由它
-取得的裸 Batch 保存到后续 statement。过期视图引用的 generation 已被回收时必须明确报错，不能
-静默读取最新 generation。
+零值与 `NoWorkspaceReadView()` 在运行时是同一个值，只表示“没有事务内 mutation 可见”，不得被
+静默替换成当前视图。生产调用方必须使用 `NoWorkspaceReadView()` 表达这个意图，使
+committed-only、远程 shard 和漏传视图能够在源码与代码审查中区分；这不是运行时额外状态。
+
+`EndStatement` 原子推进最小可读 revision，使本次 execution 发布的 ReadView 不能再获取新的
+Payload lease。此前已经通过该 ReadView 得到的 `workspaceEntrySet` 持有 generation lease，仍可安全
+使用到 owner 调用 `Close`；延迟关闭只会延迟物理回收，不得产生悬空指针。Reader、
+LocalDataSource、Ranges、transfer 和 CommitBuilder 必须持有受控 EntrySet/lease，不能持有未受保护
+的裸 Batch，也不能用过期 ReadView 重新解析或静默改读最新 generation。
 
 ### 3.3 TableOverlay
 
@@ -93,7 +100,14 @@ TableOverlay 的 key 是完整 `(accountID, databaseID, tableID)`。它是所有
 - rowid/block tombstone mutation；
 - uncommitted data/tombstone object；
 - PK candidate；
-- mutation active/revision 状态。
+- 表级 active mutation、PK、delete 与 object owner 索引，以及当前 execution 所需的 retired ID
+  历史。
+
+Mutation 的 `active`、`createdRevision`、`retiredRevision` 和不可变 commit order 由 Workspace
+全局 mutation registry 唯一持有。全局 `activeMutations` 是 commit 和 transaction-wide current
+state 的有序索引；TableOverlay 只保存稳定 MutationID 的表级 membership/current/history 索引，
+不得复制 mutation 的可见性状态或成为第二事实源。发布和退休必须在同一个 Workspace 临界区内
+同时更新全局 registry、全局 active 索引与相关 TableOverlay。
 
 Mutation 发布时一次性从 payload 提取不可变分类事实，Overlay 据此维护 PK candidate、内存
 compaction、BlockMeta 和按物理形态分类的 delete mutation 索引。CN transfer 通过 delete
@@ -102,11 +116,11 @@ compaction、BlockMeta 和按物理形态分类的 delete mutation 索引。CN t
 MutationID；active/revision、generation 和 selection 仍在读取时由统一 ReadView 路径校验，因此
 spill、rewrite、rollback 不会留下可见性错误。
 
-当前态 mutation 索引必须同时维护 MutationID membership 与不可变 TN commit order。发布和退休
-在同一 Workspace 临界区内原子更新两者，当前 Reader、LocalDataSource、compactor 和
-CommitBuilder 直接按索引顺序遍历，不得在每次读取时复制全量集合再排序。历史 ReadView 需要合并
-active 与 retired revision 时，允许在该 statement execution 的不可变快照范围内恢复 commit order；
-该成本不能回流到最新 revision 的热路径。
+全局和表级当前态 mutation 索引必须同时维护 MutationID membership 与不可变 TN commit order。
+当前 Reader、LocalDataSource 和 compactor 按表级 active 索引顺序遍历；CommitBuilder 按全局
+`activeMutations` 顺序遍历。索引可以生成本次消费所拥有的 ID/Entry 快照，但不得为每次读取重新
+扫描 mutation 历史并排序。历史 ReadView 需要合并 active 与 retired revision 时，允许在该
+statement execution 的有限历史范围内恢复 commit order；该成本不能回流到最新 revision 的热路径。
 
 当前 statement execution 内已经发布的 ReadView 使用不可变的 statement-scoped 索引历史；只处理
 当前 workspace 状态的 memory compaction、BlockMeta compaction 和 CN transfer delete planning
@@ -184,13 +198,20 @@ spill 使用三阶段协议：
 
 ### 3.6 CommitBuilder
 
-CommitBuilder 从各 TableOverlay 的 active mutation 构建现有 TN commit request：
+CommitBuilder 从 Workspace 全局有序 `activeMutations` 构建现有 TN commit request，不逐个扫描
+TableOverlay。构造时在同一个 Workspace 读锁临界区内捕获最新逻辑 ReadView、按 commit order
+复制 active MutationID，并 pin 全部可见 Payload generation；锁释放后的 Build 只消费这份冻结的
+`workspaceEntrySet`，不再读取可变 Workspace 状态。Builder 是该 EntrySet 的 owner，所有成功和
+失败路径都必须 `Close`。
+
+构建过程必须满足：
 
 - 使用显式 commit order，不依赖 slice index；
 - 新逻辑 mutation 在创建时一次性获得不可变顺序
-  `(write-scope-root, catalog-rank, descending-type-rank, ordinal-in-class)`；
+  `(protocol-order-epoch, catalog-rank, descending-type-rank, append-ordinal)`；
   `Adjust` 只校验 WriteMark 和嵌套 scope，不得事后改写顺序。write scope 之前的 mutation 因此
-  始终保留在前缀，scope 内仍保持 catalog 优先、mutation type 降序及同类追加顺序；
+  不形成独立排序前缀；整个普通 Compile 及其内部 SQL 保持 catalog 优先、mutation type 降序及
+  同类追加顺序，而不同普通 Compile 之间绝不重排；
 - commit order 属于逻辑 mutation 而不是物理 payload 或追加时刻。一对一 rewrite 原位继承；
   一对多 rewrite 在原位置下生成稳定的层级子序，嵌套 rewrite 继续细分该子序；没有逻辑来源的
   新 mutation 才追加到提交序列末尾。这样 catalog 的相邻协议项不会因 transfer、spill 或
@@ -201,38 +222,132 @@ CommitBuilder 从各 TableOverlay 的 active mutation 构建现有 TN commit req
 - 只通过 Payload lease 读取物理内容；
 - build 完成前 Payload 不得释放。
 
+### 3.7 并发、锁与资源所有权
+
+Workspace 的逻辑状态与物理 Payload 分层加锁：
+
+1. `Transaction` 锁保护事务编排、table cache 和 Workspace 之外的事务状态；同时需要时先取得
+   `Transaction` 锁，再进入 Workspace。
+2. `txnWorkspace.mu` 是 StatementJournal、mutation registry、TableOverlay、DDL Overlay、revision、
+   current-state 索引和 usage accounting 的唯一逻辑状态锁。一次发布、退休、边界推进或 rollback
+   的所有可见性变化必须在这个临界区内原子完成。
+3. `PayloadStore.mu` 只保护 PayloadID、generation、pin、selection、状态转换和 reclaimable 集合。
+   Workspace 在持有 `txnWorkspace.mu` 时可以进入 PayloadStore；PayloadStore 不得反向调用或获取
+   Workspace 锁。lease `Close` 只进入 PayloadStore，因此可以在 Workspace 锁外独立释放。
+
+外部 IO、物理对象删除、ALTER 恢复回调和 Batch `Clean` 不得在 Workspace 或 PayloadStore 锁内
+执行。需要跨锁和 IO 的操作必须显式转移 owner：
+
+| 资源 | 稳态 owner | 临时 owner | 完成边界 |
+| --- | --- | --- | --- |
+| mutation 可见性与 commit order | Workspace registry + active 索引 | 无 | 同一 Workspace 临界区内发布/退休 |
+| 表级 current/history membership | TableOverlay | 无 | 同一 Workspace 临界区内发布/退休/边界回收 |
+| 表级读取结果 | 无 | statement-scoped EntrySet | EntrySet `Close` |
+| Payload generation | PayloadStore | generation lease / EntrySet | lease `Close` 后才可 reclaim |
+| spill source 与未发布对象 | Workspace mutation + PayloadStore generation | `workspaceSpillAttempt` | 原子 publish 或 abort 后 `Close` |
+| attempt rollback mutation、回调和 LOAD 文件 | StatementJournal | `workspaceRollback` | 锁外 GC、`RunActions`、文件清理与 `Close` |
+| commit 输入 | Workspace active 索引 + PayloadStore | `workspaceCommitBuilder` | Build 返回后 `Close` |
+
+任何临时 owner 都必须在错误、取消和 retry 路径释放；不得用超时回收或 finalizer 替代明确的
+`Close`。逻辑状态已经发布而外部 IO 尚未完成时，必须通过 generation/attempt 身份重新校验，不能
+凭裸指针或先前数组位置继续提交结果。
+
+### 3.8 复杂度与性能契约
+
+定义：`A` 为事务当前 active mutation 数，`A_t` 为目标表 active mutation 数，`C` 为某个当前态
+候选索引（例如 PK、compaction、BlockMeta 或 object delete）的 active mutation 数，`H` 为已退休历史，
+`R_b` 为自上一 execution 边界以来的 reclaim 候选，`T` 为事务触及的 TableOverlay 数，
+`A_attempt` 为当前 Attempt 拥有的 mutation、DDL、object delete、undo 和外部资源总数。
+
+- 当前表读取为 `O(A_t)`；PK、compaction、BlockMeta 和 object-delete 等当前态候选解析为 `O(C)`。
+  两类路径都不得依赖 `H`，也不得扫描与本次语义无关的 mutation。
+- CommitBuilder 冻结输入为 `O(A)`；ordered set 插入/移除为 `O(log A)`，快照为 `O(A)`，不得重新
+  扫描或排序 `H`。
+- active mutation 计数和 RC 当前边界读取为 `O(1)`。
+- `EndStatement` 的逻辑 metadata 回收只处理 `O(R_b + A_attempt + T)`；其中 `T` 只用于清空各
+  Overlay 的 execution-scoped retired ID journal。Payload 回收只处理已进入 reclaimable 集合的
+  generation，不扫描全部 Payload 历史。
+- statement rollback 与 retry 只与 `A_attempt` 成正比，不得随已完成 Statement/Attempt 数增长。
+- LOAD 文件存在性与引用计数更新为 `O(1)`；实际清理只与本次选择的文件数成正比。
+
+benchmark 的稳定基线不是固定 `ns/op`，而是输入维度不变性：以下 benchmark 分别以
+0/1,000/10,000 条无关历史比较热路径，增加 `H` 时对应操作的工作量和分配不得线性增长；
+`BenchmarkOrderedMutationSetSnapshot` 单独验证快照只随 `A` 线性增长。
+
+- `BenchmarkTxnWorkspaceCurrentStateIgnoresRetiredHistory`
+- `BenchmarkTxnWorkspaceObjectDeleteSnapshotIgnoresRetiredHistory`
+- `BenchmarkWorkspacePayloadReclaimIgnoresUnrelatedHistory`
+- `BenchmarkTxnWorkspaceRCBoundaryStateIgnoresHistory`
+- `BenchmarkTxnWorkspaceLoadFileRemovalIgnoresAttemptHistory`
+- `BenchmarkOrderedMutationSetSnapshot`
+
 ## 4. 模块边界
 
-- `pkg/txn/client`：只定义 opaque ReadView/WriteMark 与 Workspace 生命周期接口。
+- `pkg/txn/client`：定义逻辑 ReadView/WriteMark 值、构造器、只读 getter 与 Workspace 生命周期接口。
+  这些 getter 只用于传递、归属校验和诊断；调用方不得自行解释可见性。
 - `pkg/vm/engine/disttae`：拥有 Journal、Overlay、PayloadStore、CommitBuilder。
 - `pkg/sql/compile`：捕获并向 Scope 传播 ReadView/WriteMark，不解释内部字段。
 - Reader/LocalDataSource/Ranges/transfer：只接受 ReadView，通过 Relation/TableOverlay 查询。
 - TN 协议保持不变；重构仅改变 CN 内部组织与构建方式。
 
+公开 API 与内部状态机的对应关系：
+
+| 公开 API | owner 内部动作 | 不承担的职责 |
+| --- | --- | --- |
+| `StartStatement` | `StatementJournal.beginExecution`，打开 frontend execution guard | 不推进 StatementID，不发布 ReadView |
+| `IncrStatementID` | 合并/必要 spill，原子完成 Journal attempt transition 与 RC boundary publication | 不结束 frontend execution，不回收该 execution 的 ReadView |
+| `PublishReadView` | 推进 protocol-order epoch，并将当前 revision 与 MutationID frontier 发布为普通 Compile 边界 | 不改变 StatementID |
+| `CurrentReadView` | 捕获当前 revision/frontier，供内部 SQL 或隔离 Workspace 使用，并继承当前 epoch | 不发布普通 Compile 边界、不推进 epoch |
+| `BeginWriteAttempt` / `Adjust` | 打开/关闭 LIFO write scope，返回/校验稳定 WriteMark | 不按物理 offset 重排 mutation |
+| `RollbackLastStatement` | rollback 当前 Attempt，返回锁外清理资源并把 Journal 标记为 retry pending | 不直接创建下一 Attempt |
+| retry 后的 `IncrStatementID` | 保持 StatementID、递增 AttemptID，创建下一 open Attempt | 不重复清理上一 Attempt |
+| `EndStatement` | 关闭 execution guard、使本次 ReadView 不能再新 pin、回收未 pin 的 retired 状态 | 不等同于 Statement 完成；已 pin lease 继续有效 |
+
 ## 5. 生命周期
 
 ```text
-StartStatement
-  -> PublishReadView / CaptureCurrentReadView
+frontend execution
+  -> StartStatement
+  -> IncrStatementID(commit=false)
+       -> merge / spill if required
+       -> advance previous Attempt and RC boundary atomically
+  -> PublishReadView                         // ordinary statement compile
+     or CurrentReadView                      // internal SQL / isolated workspace
   -> BeginWriteAttempt
-  -> append mutations
-  -> Adjust(WriteMark)
-  -> close all ReadView payload leases
+  -> append / rewrite mutations
+  -> Adjust(WriteMark)                       // close LIFO write scope
+  -> readers / EntrySets release their leases
   -> EndStatement
-  -> reclaim unpinned retired generations not protected by rewrite rollback
+       -> expire this execution's ReadViews for new resolution
+       -> reclaim unpinned retired metadata/generations
 
-retry
-  -> RollbackAttempt(StatementID, AttemptID)
-  -> retire payload / GC unpublished objects
-  -> Begin next AttemptID of same StatementID
+retry after failed execution
+  -> cancel and wait for running scopes
+  -> RollbackLastStatement
+       -> retire failed Attempt state
+       -> transfer rollback entries/actions/LOAD files to workspaceRollback
+       -> perform object/file IO and callbacks outside Workspace lock
+  -> IncrStatementID(commit=false)
+       -> keep StatementID, increment AttemptID, open retry Attempt
 
 commit
-  -> finalize current statement
-  -> spill if required
-  -> CommitBuilder
+  -> finalize current statement boundary and spill if required
+  -> create CommitBuilder from global activeMutations
+       -> atomically freeze commit order and pin payload generations
+  -> encode existing TN precommit request without reading mutable Workspace
+  -> CommitBuilder.Close
+       -> release the frozen EntrySet and payload leases
   -> TN commit
-  -> release leases and payloads
+  -> FinalizeCommit / FinalizeCommitWithUnknownResult releases CN-local state
 ```
+
+CommitBuilder 只活到现有 TN precommit request 编码完成：protobuf request 已拥有编码后的数据，随后
+不再依赖 Workspace payload。它必须在请求交给 TxnOperator 提交前释放冻结 EntrySet；TN commit 和
+最终 CN 状态释放不由 Builder 持有 lease。
+
+`EndStatement` 是 execution 生命周期边界，不是 mutation 提交边界。正常路径应尽早关闭 Reader、
+EntrySet 和 CommitBuilder；即使 owner 延迟 `Close` 到 `EndStatement` 之后，既有 lease 仍保持物理内容
+有效，但不得再使用旧 ReadView 获取新的 lease。
 
 ## 6. 删除条件
 
@@ -264,3 +379,11 @@ commit
 - object owner 和 ObjectName 引用历史增长、当前 active 引用固定时，object-delete compaction 与
   clone GC 只遍历 active owner/reference；rewrite、spill、rollback 和 retire 后当前态索引与不可变
   mutation 历史必须同时正确。
+- `EndStatement` 后旧 ReadView 新解析必须失败，而边界前已经 pin 的 EntrySet 必须可读取到 `Close`；
+  `Close` 后 retired generation 才允许回收。
+- CommitBuilder 构造与并发 rewrite/spill/rollback 之间必须得到单一冻结视图，Build 期间不得重新读取
+  Workspace 或观察半发布状态；成功、错误和取消路径都必须释放 lease。
+- 锁顺序和 owner 转移必须通过并发/故障注入测试验证：Workspace/PayloadStore 锁内无外部 IO，
+  rollback 回调逆序且锁外执行，spill publish 前重新校验 generation/Attempt。
+- 上述复杂度契约对应的 benchmark 必须保留 history-dimension 对照；性能评审以复杂度退化和分配增长
+  为门禁，不用单机绝对 `ns/op` 代替语义判断。

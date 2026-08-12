@@ -347,6 +347,63 @@ func TestBigS3WorkspaceIterMissingData(t *testing.T) {
 	require.Equal(t, 1, outBatch.Vecs[0].Length())
 }
 
+func TestLocalDatasourceFiltersSelectedWorkspaceInsertRows(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+
+	txnOp, closeFunc := client.NewTestTxnOperator(ctx)
+	defer closeFunc()
+
+	m := mpool.MustNewZero()
+	txn := &Transaction{op: txnOp, workspace: newTxnWorkspace()}
+	defer func() { require.NoError(t, txn.workspace.close(m)) }()
+	txnOp.AddWorkspace(txn)
+
+	oid := types.NewObjectid()
+	blk := types.NewBlockidWithObjectID(&oid, 0)
+	rowIDs, err := objectio.ConstructRowidColumn(&blk, 0, 3, m)
+	require.NoError(t, err)
+	values := vector.NewVec(types.T_int32.ToType())
+	for _, value := range []int32{1, 2, 3} {
+		require.NoError(t, vector.AppendFixed(values, value, false, m))
+	}
+
+	insert := batch.NewWithSize(2)
+	insert.SetAttributes([]string{catalog.Row_ID, "value"})
+	insert.Vecs[0] = rowIDs
+	insert.Vecs[1] = values
+	insert.SetRowCount(3)
+	mutationID := txn.appendWorkspaceEntryLocked(Entry{
+		typ: INSERT, databaseId: 11, tableId: 22, bat: insert,
+	})
+	require.NoError(t, txn.workspace.addMutationSelections(mutationID, []int64{0}))
+
+	readView := txn.workspace.currentReadView()
+	workspaceEntries, err := txn.workspace.tableEntries(readView, 0, 11, 22)
+	require.NoError(t, err)
+	defer workspaceEntries.Close()
+
+	ls := &LocalDisttaeDataSource{
+		ctx:              ctx,
+		readView:         readView,
+		workspaceEntries: workspaceEntries,
+		table: &txnTable{
+			db:      &txnDatabase{databaseId: 11, op: txnOp},
+			tableId: 22,
+		},
+		memPKFilter: &readutil.MemPKFilter{},
+	}
+	outBatch := batch.NewWithSize(1)
+	outBatch.Vecs[0] = vector.NewVec(types.T_int32.ToType())
+	defer outBatch.Clean(m)
+
+	require.NoError(t, ls.filterInMemUnCommittedInserts(
+		ctx, []uint16{0}, -1, m, outBatch))
+	require.Equal(t, 2, outBatch.RowCount())
+	require.Equal(t, []int32{2, 3},
+		vector.MustFixedColWithTypeCheck[int32](outBatch.Vecs[0]))
+}
+
 func TestLocalDatasourceWorkspaceDeleteEntriesSortsWithoutMutatingBatch(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute*5)
 	defer cancel()

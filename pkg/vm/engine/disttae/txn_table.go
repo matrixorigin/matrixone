@@ -781,12 +781,22 @@ func (tbl *txnTable) StarCount(ctx context.Context) (uint64, error) {
 		tbl.db.databaseId,
 		tbl.tableId,
 		func(entry workspaceEntryView) {
-			if entry.typ == DELETE && entry.bat != nil && !entry.bat.IsEmpty() {
+			if entry.typ == DELETE && entry.visibleRowCount() != 0 {
 				hasUncommittedTombstones = true
 			}
 		}); err != nil {
 		return 0, err
 	}
+	pendingObjectDeletes, err := tbl.getTxn().workspace.tableObjectDeleteCount(
+		readView,
+		tbl.accountId,
+		tbl.db.databaseId,
+		tbl.tableId,
+	)
+	if err != nil {
+		return 0, err
+	}
+	hasUncommittedTombstones = hasUncommittedTombstones || pendingObjectDeletes != 0
 
 	// Get committed row count from PartitionState.
 	// This already accounts for committed inserts minus committed tombstones.
@@ -807,18 +817,18 @@ func (tbl *txnTable) StarCount(ctx context.Context) (uint64, error) {
 				return
 			}
 
-			// Persisted inserts have ObjectStats in column 1 (one row per object; batch may have multiple objects).
-			// In-memory inserts have raw data rows.
-			if len(entry.bat.Attrs) >= 2 && entry.bat.Attrs[1] == catalog.ObjectMeta_ObjectStats {
-				vec := entry.bat.Vecs[1]
-				for i := 0; i < vec.Length(); i++ {
-					var stats objectio.ObjectStats
-					stats.UnMarshal(vec.GetBytesAt(i))
-					uncommittedInserts += uint64(stats.Rows())
-				}
-			} else {
-				uncommittedInserts += uint64(entry.bat.RowCount())
+			// Persisted inserts carry one ObjectStats value per object, while
+			// in-memory inserts carry one batch row per logical row. Always count
+			// through the pinned entry view: transaction-local DELETEs retire raw
+			// INSERT rows by publishing selections on that exact payload generation.
+			// Counting Batch.RowCount directly would resurrect those hidden rows in
+			// COUNT(*) even though normal readers correctly exclude them.
+			if entry.forEachVisibleObjectStats(func(stats objectio.ObjectStats) {
+				uncommittedInserts += uint64(stats.Rows())
+			}) {
+				return
 			}
+			uncommittedInserts += uint64(entry.visibleRowCount())
 		}); err != nil {
 		return 0, err
 	}
@@ -837,24 +847,25 @@ func (tbl *txnTable) StarCount(ctx context.Context) (uint64, error) {
 	// 2. Persisted: tombstone objects on S3, need visibility check because
 	//    after transfer, both old (pointing to deleted objects) and new
 	//    (pointing to new objects) tombstone entries exist in workspace.
-	uncommittedDeletes := uint64(0)
-	inMemoryDeletes := uint64(0)
+	// Pending object deletes target transaction-local CN objects. They are
+	// represented by the table overlay rather than ordinary DELETE mutations,
+	// so COUNT(*) must subtract them explicitly before object rewrite/commit.
+	uncommittedDeletes := pendingObjectDeletes
 	if err := tbl.getTxn().ForEachTableMutation(
 		readView,
 		tbl.accountId,
 		tbl.db.databaseId,
 		tbl.tableId,
 		func(entry workspaceEntryView) {
-			if entry.typ != DELETE || entry.bat == nil || entry.bat.IsEmpty() {
+			if entry.typ != DELETE || entry.visibleRowCount() == 0 {
 				return
 			}
 
 			if entry.fileName == "" {
 				// In-memory tombstones: direct count without visibility check.
 				// Transfer updates rowids in-place, so all rowids point to visible objects.
-				count := uint64(entry.bat.RowCount())
+				count := uint64(entry.visibleRowCount())
 				uncommittedDeletes += count
-				inMemoryDeletes += count
 			}
 			// Persisted tombstones are handled separately below
 		}); err != nil {
@@ -1401,22 +1412,13 @@ func (tbl *txnTable) collectUnCommittedObjStats(
 		tbl.db.databaseId,
 		tbl.tableId,
 		func(entry workspaceEntryView) {
-			stats := objectio.ObjectStats{}
 			if entry.typ != typ ||
 				entry.bat == nil ||
 				entry.bat.IsEmpty() {
 				return
 			}
 
-			// Data and tombstone write batches do not have to place object stats
-			// at the same column offset.
-			statsIdx := slices.Index(entry.bat.Attrs, catalog.ObjectMeta_ObjectStats)
-			if statsIdx == -1 {
-				return
-			}
-
-			entry.forEachVisibleRow(func(i int) {
-				stats.UnMarshal(entry.bat.Vecs[statsIdx].GetBytesAt(i))
+			entry.forEachVisibleObjectStats(func(stats objectio.ObjectStats) {
 				unCommittedObjects = append(unCommittedObjects, stats)
 				unCommittedObjNames[*stats.ObjectShortName()] = struct{}{}
 			})
@@ -2142,7 +2144,6 @@ func (tbl *txnTable) rewriteObjectByDeletion(
 	if len(stats) != 0 {
 		fileName = stats[0].ObjectLocation().String()
 	}
-
 	ret, err := bat.Dup(proc.Mp())
 
 	return ret, fileName, err

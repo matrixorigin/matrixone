@@ -730,6 +730,19 @@ func (ls *LocalDisttaeDataSource) filterInMemUnCommittedInserts(
 			})
 		}
 
+		// A later statement can delete only part of an in-memory INSERT batch.
+		// Those logical deletes belong to the pinned payload generation carried
+		// by entry, so merge them into the same row-position mask used by PK and
+		// bloom filters before converting rowids to source-batch offsets.
+		if len(entry.selections) != 0 {
+			if skipMask.IsEmpty() {
+				skipMask = objectio.GetReusableBitmap()
+			}
+			for _, row := range entry.selections {
+				skipMask.Add(uint64(row))
+			}
+		}
+
 		offsets = readutil.RowIdsToOffset(retainedRowIds, skipMask)
 		skipMask.Release()
 

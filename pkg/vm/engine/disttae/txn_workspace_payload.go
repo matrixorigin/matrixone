@@ -1017,6 +1017,10 @@ func (s *workspacePayloadStore) close(mp *mpool.MPool) error {
 	return nil
 }
 
+// workspacePayloadLease pins one exact physical generation. Logical retirement
+// and EndStatement may proceed while the lease is live, but the Batch and its
+// selection set remain valid until Close. The owner must call Close on every
+// path and must not use the lease afterwards.
 type workspacePayloadLease struct {
 	store      *workspacePayloadStore
 	payloadID  workspacePayloadID
@@ -1089,12 +1093,20 @@ func (v *workspaceEntryView) forEachVisibleObjectStats(fn func(objectio.ObjectSt
 		return false
 	}
 	vec := v.bat.Vecs[statsIdx]
-	v.forEachVisibleRow(func(row int) {
+	// Object metadata batches are deliberately ragged: BlockInfo contains one
+	// value per block, while ObjectStats contains one value per object and the
+	// batch row count follows BlockInfo. Object stats therefore have their own
+	// cardinality and must never be indexed by Batch.RowCount.
+	for row := range vec.Length() {
 		fn(objectio.ObjectStats(vec.GetBytesAt(row)))
-	})
+	}
 	return true
 }
 
+// workspaceEntrySet owns a consistent collection of logical entry views and
+// their payload leases. Callers may consume it after txnWorkspace.mu is
+// released, but must Close it on every path and must not retain any view or
+// Batch after Close.
 type workspaceEntrySet struct {
 	entries []workspaceEntryView
 	closed  bool

@@ -118,6 +118,10 @@ func (u *workspaceUsage) sub(other workspaceUsage) {
 	u.inMemoryDeleteRows -= other.inMemoryDeleteRows
 }
 
+// workspaceMutation is the logical visibility record for one published write.
+// Its stable ID and commit order survive payload merge, spill and rewrite.
+// The global mutation registry is the authority for active and revision
+// visibility; tableOverlay contains only derived, table-local indexes.
 type workspaceMutation struct {
 	id              workspaceMutationID
 	statementID     uint64
@@ -230,6 +234,10 @@ type workspaceOverlayKey struct {
 	tableID    uint64
 }
 
+// tableOverlay owns the derived current-state and statement-history indexes for
+// one exact account/database/table key. It stores stable mutation IDs rather
+// than payload positions. All fields are protected by txnWorkspace.mu; logical
+// visibility remains authoritative in txnWorkspace.mutations.
 type tableOverlay struct {
 	// retiredMutations is the history needed only by ReadViews published by
 	// the currently executing statement. EndStatement expires those views and
@@ -498,13 +506,15 @@ func (a *workspaceSpillAttempt) Close() {
 	}
 }
 
+// statementAttempt is the sole statement-rollback owner for one
+// StatementID/AttemptID pair. Physical replacements transfer mutation
+// membership within this owner; a retry creates a new AttemptID instead of
+// reopening or reusing the rolled-back attempt.
 type statementAttempt struct {
-	statementID       uint64
-	attemptID         uint64
-	commitRoot        uint64
-	nextCommitOrdinal uint64
-	nextWriteScopeID  uint64
-	writeScopes       []uint64
+	statementID      uint64
+	attemptID        uint64
+	nextWriteScopeID uint64
+	writeScopes      []uint64
 	// mutations owns the active physical representatives of logical writes
 	// created by this attempt. Physical rewrite/spill publication transfers
 	// membership from retired source IDs to their replacement IDs, so rollback
@@ -620,6 +630,9 @@ type rcBoundaryPublication struct {
 	pendingTransfer   bool
 }
 
+// workspaceBoundaryPublication is an all-or-nothing logical boundary plan.
+// Validation covers both statement identity and the optional RC snapshot
+// transition before either component is applied under txnWorkspace.mu.
 type workspaceBoundaryPublication struct {
 	advanceStatement bool
 	rc               *rcBoundaryPublication
@@ -1112,9 +1125,15 @@ func (j *statementJournal) rollbackCurrent() statementAttempt {
 
 var nextWorkspaceID atomic.Uint64
 
-// txnWorkspace is the single owner of logical mutations and table overlays.
-// Its identifiers remain stable when physical payloads are merged, spilled or
+// txnWorkspace is the single CN owner of logical mutation visibility,
+// statement-attempt state, table overlays and transaction-local DDL. Its
+// identifiers remain stable when physical payloads are merged, spilled or
 // released; no caller observes an internal slice position.
+//
+// mu protects every logical owner and index in this type. PayloadStore has its
+// own lock and may be entered while mu is held; it must never call back into
+// txnWorkspace. Batch cleanup and external I/O run only after workspace and
+// payload-store locks have been released.
 type txnWorkspace struct {
 	mu sync.RWMutex
 
@@ -1123,9 +1142,15 @@ type txnWorkspace struct {
 	revision                uint64
 	minimumReadableRevision uint64
 
-	nextMutationID       workspaceMutationID
-	nextObjectDeleteID   workspaceObjectDeleteID
-	nextCommitRoot       uint64
+	nextMutationID     workspaceMutationID
+	nextObjectDeleteID workspaceObjectDeleteID
+	// commitEpoch is the protocol-order boundary last published by an ordinary
+	// Compile. Internal SQL captures CurrentReadView and therefore inherits the
+	// caller's epoch. This is deliberately independent of StatementID: one
+	// frontend statement can advance attempt ownership before its Compile and
+	// can execute several internal SQL write scopes that must still be ordered
+	// as one TN precommit suffix.
+	commitEpoch          uint64
 	activeMutations      *orderedMutationSet
 	activePKCandidates   *orderedMutationSet
 	activeCompactions    *orderedMutationSet
@@ -1514,6 +1539,12 @@ func classifyWorkspaceMutation(
 func (w *txnWorkspace) publishReadView() client.WorkspaceReadView {
 	w.mu.Lock()
 	defer w.mu.Unlock()
+	// This is the logical equivalent of the former snapshotWriteOffset
+	// frontier. Only ordinary Compile creation calls PublishReadView; internal
+	// SQL calls CurrentReadView and must not split the caller's protocol-order
+	// group. Advancing before capturing the view makes all mutations published
+	// by this Compile share one immutable commit epoch.
+	w.commitEpoch++
 	w.published = client.NewWorkspaceReadView(
 		w.id,
 		w.revision,
@@ -1790,11 +1821,6 @@ func (w *txnWorkspace) beginWriteAttempt() client.WorkspaceWriteMark {
 	defer w.mu.Unlock()
 	attempt := w.journal.current
 	attempt.nextWriteScopeID++
-	if len(attempt.writeScopes) == 0 {
-		w.nextCommitRoot++
-		attempt.commitRoot = w.nextCommitRoot
-		attempt.nextCommitOrdinal = 0
-	}
 	attempt.writeScopes = append(attempt.writeScopes, attempt.nextWriteScopeID)
 	return client.NewWorkspaceWriteMark(
 		w.id,
@@ -1822,10 +1848,6 @@ func (w *txnWorkspace) adjustAttempt(mark client.WorkspaceWriteMark) error {
 			"workspace write scopes must complete in nesting order")
 	}
 	attempt.writeScopes = attempt.writeScopes[:len(attempt.writeScopes)-1]
-	if len(attempt.writeScopes) == 0 {
-		attempt.commitRoot = 0
-		attempt.nextCommitOrdinal = 0
-	}
 	return nil
 }
 
@@ -1841,6 +1863,9 @@ func (w *txnWorkspace) beginStatementExecution() error {
 	return w.journal.beginExecution()
 }
 
+// endStatementExecution expires the current execution's ReadViews and detaches
+// reclaimable payloads while holding the logical workspace lock. It returns
+// Batches to be cleaned by Transaction after the lock has been released.
 func (w *txnWorkspace) endStatementExecution() ([]*batch.Batch, error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -2113,16 +2138,64 @@ func (w *txnWorkspace) tableObjectDeletes(
 ) (map[types.Blockid][]int64, error) {
 	w.mu.RLock()
 	defer w.mu.RUnlock()
+	result := make(map[types.Blockid][]int64)
+	err := w.forEachTableObjectDeleteLocked(
+		view,
+		workspaceOverlayKey{
+			accountID:  accountID,
+			databaseID: databaseID,
+			tableID:    tableID,
+		},
+		func(objectDelete *workspaceObjectDelete) {
+			result[objectDelete.blockID] = append(
+				result[objectDelete.blockID], objectDelete.offsets...)
+		},
+	)
+	return result, err
+}
+
+// tableObjectDeleteCount returns the number of logical row deletes against
+// transaction-local objects for one exact table and ReadView. These deletes
+// are not ordinary DELETE mutations because their source objects must be
+// rewritten before commit, but they still participate in reads and aggregate
+// counts before that rewrite happens.
+func (w *txnWorkspace) tableObjectDeleteCount(
+	view client.WorkspaceReadView,
+	accountID uint32,
+	databaseID uint64,
+	tableID uint64,
+) (uint64, error) {
+	w.mu.RLock()
+	defer w.mu.RUnlock()
+	var count uint64
+	err := w.forEachTableObjectDeleteLocked(
+		view,
+		workspaceOverlayKey{
+			accountID:  accountID,
+			databaseID: databaseID,
+			tableID:    tableID,
+		},
+		func(objectDelete *workspaceObjectDelete) {
+			count += uint64(len(objectDelete.offsets))
+		},
+	)
+	return count, err
+}
+
+// forEachTableObjectDeleteLocked is the single visibility implementation for
+// pending object deletes. Callers must hold txnWorkspace.mu for reading or
+// writing; the callback must not re-enter the workspace.
+func (w *txnWorkspace) forEachTableObjectDeleteLocked(
+	view client.WorkspaceReadView,
+	key workspaceOverlayKey,
+	fn func(*workspaceObjectDelete),
+) error {
 	if err := w.validateReadViewLocked(view); err != nil {
-		return nil, err
+		return err
 	}
-	overlay := w.overlays[workspaceOverlayKey{
-		accountID:  accountID,
-		databaseID: databaseID,
-		tableID:    tableID,
-	}]
+	overlay := w.overlays[key]
 	if overlay == nil {
-		return nil, nil
+		return nil
 	}
 	deleteIDs := make([]workspaceObjectDeleteID, 0,
 		len(overlay.activePendingObjectDeletes)+len(overlay.retiredObjectDeletes))
@@ -2131,16 +2204,14 @@ func (w *txnWorkspace) tableObjectDeletes(
 	}
 	deleteIDs = append(deleteIDs, overlay.retiredObjectDeletes...)
 	slices.Sort(deleteIDs)
-	result := make(map[types.Blockid][]int64)
 	for _, deleteID := range deleteIDs {
 		objectDelete := w.objectDeletes[deleteID]
 		if !objectDeleteVisibleAt(objectDelete, view) {
 			continue
 		}
-		result[objectDelete.blockID] = append(
-			result[objectDelete.blockID], objectDelete.offsets...)
+		fn(objectDelete)
 	}
-	return result, nil
+	return nil
 }
 
 // hasTableTombstones reports whether one exact table has any transaction-local
@@ -2168,12 +2239,12 @@ func (w *txnWorkspace) hasTableTombstones(
 		}
 	}
 
-	objectDeletes, err := w.tableObjectDeletes(
+	objectDeleteCount, err := w.tableObjectDeleteCount(
 		view, accountID, databaseID, tableID)
 	if err != nil {
 		return false, err
 	}
-	return len(objectDeletes) != 0, nil
+	return objectDeleteCount != 0, nil
 }
 
 func (w *txnWorkspace) snapshotObjectDeletes() workspaceObjectDeleteSnapshot {
@@ -2287,21 +2358,17 @@ func (w *txnWorkspace) appendMutationLocked(
 }
 
 // nextMutationCommitOrderLocked assigns a complete, immutable protocol
-// position at publication time. The root preserves outermost write-scope
-// order. Nested internal SQL shares its parent's root so the outer Adjust
-// contract still covers the complete suffix. The two class components
-// reproduce the established protocol ordering inside one write scope (catalog
-// before user entries, then descending mutation type), and the ordinal
-// preserves append order inside one class.
+// position at publication time. commitEpoch is advanced only when an ordinary
+// Compile publishes a read view. Internal SQL and sequential write scopes
+// inherit that epoch, so catalog mutations they produce after a user-table
+// mutation can still precede it in the TN protocol stream. StatementID remains
+// solely a rollback/visibility owner and is intentionally not reused as this
+// protocol boundary. The final component preserves publication order within
+// one class without exposing a physical slice position or requiring Adjust to
+// rewrite an already published key.
 func (w *txnWorkspace) nextMutationCommitOrderLocked(
 	entry Entry,
 ) workspaceCommitOrder {
-	attempt := w.journal.current
-	if attempt.commitRoot == 0 {
-		w.nextCommitRoot++
-		attempt.commitRoot = w.nextCommitRoot
-	}
-	attempt.nextCommitOrdinal++
 	catalogRank := uint64(1)
 	if entry.isCatalog() {
 		catalogRank = 0
@@ -2311,10 +2378,10 @@ func (w *txnWorkspace) nextMutationCommitOrderLocked(
 	}
 	typeRank := uint64(^uint32(0) - uint32(entry.typ))
 	return workspaceCommitOrder{
-		attempt.commitRoot,
+		w.commitEpoch,
 		catalogRank,
 		typeRank,
-		attempt.nextCommitOrdinal,
+		uint64(w.nextMutationID) + 1,
 	}
 }
 
@@ -2342,11 +2409,12 @@ func (w *txnWorkspace) appendMutationAtCommitOrderLocked(
 	return id
 }
 
-// publishMutationAtCommitOrderLocked publishes physical workspace state
-// without assigning statement rollback ownership. It is intentionally used
-// only when replacing an already-owned logical mutation (spill publication or
-// rollback restoration). Ordinary logical writes must use
-// appendMutationAtCommitOrderLocked so the current attempt owns them.
+// publishMutationAtCommitOrderLocked publishes one logical mutation into the
+// global registry and every derived active/table index as one transition under
+// txnWorkspace.mu. The payload generation and immutable index facts must have
+// been prepared before entry. This method deliberately does not assign
+// statement rollback ownership: replacements use it to preserve existing
+// ownership, while ordinary writes use appendMutationAtCommitOrderLocked.
 func (w *txnWorkspace) publishMutationAtCommitOrderLocked(
 	entry Entry,
 	payloadID workspacePayloadID,
@@ -2416,11 +2484,11 @@ func (w *txnWorkspace) publishMutationAtCommitOrderLocked(
 	return m.id
 }
 
-// retireMutationStateLocked is the only logical active-to-retired state
-// transition for workspace mutations. Payload publication must already have
-// succeeded before this method is called. Keeping the active cardinality in
-// the same transition prevents statement-boundary accounting from degrading
-// into a scan over the complete transaction history.
+// retireMutationStateLocked is the only logical active-to-retired transition
+// for workspace mutations. The caller holds txnWorkspace.mu and any replacement
+// payload publication has already succeeded. The method removes the mutation
+// from every global and table-local current-state index at one revision while
+// retaining the immutable record for ReadViews that can still resolve it.
 func (w *txnWorkspace) retireMutationStateLocked(
 	mutation *workspaceMutation,
 	revision uint64,
@@ -2807,6 +2875,13 @@ func (w *txnWorkspace) replaceMemory(
 // replacements. It is deliberately different from replacing a physical
 // generation: metadata may change, so an old read view must retain the old
 // Entry as well as the old Batch.
+//
+// A replacement created by the same statement attempt is a physical rewrite
+// of that statement's logical write and retains its immutable commit order. A
+// later statement rewriting an older mutation is a new logical write owned by
+// the current attempt (for example, ALTER of a table created earlier in the
+// transaction). It must receive the current protocol order so recreated
+// catalog metadata is sent to TN before the rewritten table data.
 func (w *txnWorkspace) rewriteMutations(
 	rewrites []workspaceMutationRewrite,
 ) ([]workspaceMutationRewriteResult, error) {
@@ -2914,14 +2989,13 @@ func (w *txnWorkspace) rewriteMutations(
 				[]workspaceMutationID{targetID},
 			)
 		} else {
-			targetID = w.appendMutationAtCommitOrderLocked(
+			targetID = w.appendMutationLocked(
 				entry,
 				payloadIDs[idx],
 				indexData,
 				newRevision,
 				w.journal.current.statementID,
 				w.journal.current.attemptID,
-				sourceCommitOrder,
 			)
 		}
 		results[idx] = workspaceMutationRewriteResult{
@@ -3196,6 +3270,9 @@ func (w *txnWorkspace) transitionMutationsAtBoundary(
 	return result, nil
 }
 
+// publishBoundaryLocked validates the complete boundary before applying its
+// infallible state changes, preventing a statement and its RC cursor from
+// advancing independently.
 func (w *txnWorkspace) publishBoundaryLocked(boundary workspaceBoundaryPublication) error {
 	if err := w.validateBoundaryPublicationLocked(boundary); err != nil {
 		return err

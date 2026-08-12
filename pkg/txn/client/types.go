@@ -337,7 +337,7 @@ type WorkspaceWriteMark struct {
 
 // NewWorkspaceWriteMark creates an opaque mark owned by one concrete
 // workspace write scope. Callers may carry the mark but must not interpret its
-// fields as physical workspace positions.
+// fields as physical workspace positions or commit-order boundaries.
 func NewWorkspaceWriteMark(
 	workspaceID, statementID, attemptID, maxMutationID, writeScopeID uint64,
 ) WorkspaceWriteMark {
@@ -359,19 +359,24 @@ func (m WorkspaceWriteMark) WriteScopeID() uint64  { return m.writeScopeID }
 type Workspace interface {
 	Readonly() bool
 
-	// StartStatement tag a statement is running
+	// StartStatement opens the frontend execution guard for one statement. It
+	// does not advance the logical StatementID or publish a read boundary.
 	StartStatement()
-	// EndStatement tag end a statement is completed
+	// EndStatement closes the frontend execution guard and expires read views
+	// published by that execution. Already pinned workspace entries remain valid
+	// until their owner closes them.
 	EndStatement()
 
-	// IncrStatementID incr the execute statement id. It maintains the statement id, first statement is 1,
-	// second is 2, and so on. If in rc mode, snapshot will updated to latest applied commit ts from dn. And
-	// workspace will update snapshot data for later read request.
+	// IncrStatementID publishes the next logical statement-attempt boundary after
+	// completing required merge, spill and RC snapshot work. A normal boundary
+	// advances StatementID; a retry keeps StatementID and advances AttemptID.
 	IncrStatementID(ctx context.Context, commit bool) error
 	// AdvanceSnapshot advances an RC transaction's snapshot and transfers its
 	// tombstones to the newly visible objects before returning.
 	AdvanceSnapshot(ctx context.Context, ts timestamp.Timestamp) error
-	// RollbackLastStatement rollback the last statement.
+	// RollbackLastStatement removes only the current statement attempt and
+	// restores transaction-local state changed by that attempt. The following
+	// IncrStatementID opens the replacement retry attempt.
 	RollbackLastStatement(ctx context.Context) error
 
 	// PublishReadView advances the public statement boundary to all mutations
