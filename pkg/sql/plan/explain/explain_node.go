@@ -142,7 +142,11 @@ func (ndesc *NodeDescribeImpl) GetNodeBasicInfo(ctx context.Context, options *Ex
 	case plan.Node_LOCK_OP:
 		pname = "Lock"
 	case plan.Node_APPLY:
-		pname = "CROSS APPLY"
+		if ndesc.Node.ApplyType == plan.Node_OUTERAPPLY {
+			pname = "OUTER APPLY"
+		} else {
+			pname = "CROSS APPLY"
+		}
 	case plan.Node_MULTI_UPDATE:
 		pname = "Multi Update"
 	case plan.Node_POSTDML:
@@ -365,6 +369,13 @@ func (ndesc *NodeDescribeImpl) GetExtraInfo(ctx context.Context, options *Explai
 			return nil, err
 		}
 		lines = append(lines, groupByInfo)
+		if len(ndesc.Node.GroupByHashKey) > 0 {
+			hashKeyInfo, err := ndesc.getGroupByHashKeyInfo(ctx, options)
+			if err != nil {
+				return nil, err
+			}
+			lines = append(lines, hashKeyInfo)
+		}
 	}
 	if ndesc.Node.NodeType == plan.Node_TIME_WINDOW && ndesc.Node.GapFillMode == plan.Node_GAP_FILL_PARTITION {
 		lines = append(lines, "Gap Fill: Partition")
@@ -757,7 +768,11 @@ func (ndesc *NodeDescribeImpl) GetDedupJoinCtxInfo(ctx context.Context, options 
 }
 func (ndesc *NodeDescribeImpl) GetFilterConditionInfo(ctx context.Context, options *ExplainOptions) (string, error) {
 	buf := bytes.NewBuffer(make([]byte, 0, 512))
-	buf.WriteString("Filter Cond: ")
+	if ndesc.Node.NodeType == plan.Node_ASSERT {
+		buf.WriteString("Assert Cond: ")
+	} else {
+		buf.WriteString("Filter Cond: ")
+	}
 	if options.Format == EXPLAIN_FORMAT_TEXT {
 		first := true
 		for _, v := range ndesc.Node.FilterList {
@@ -809,7 +824,7 @@ func (ndesc *NodeDescribeImpl) GetBlockFilterConditionInfo(ctx context.Context, 
 }
 
 func (ndesc *NodeDescribeImpl) GetRuntimeFilteProbeInfo(ctx context.Context, options *ExplainOptions) (string, error) {
-	if ndesc.Node.NodeType == plan.Node_JOIN && ndesc.Node.Stats.HashmapStats.Shuffle {
+	if !hasRuntimeFilterProbeExpr(ndesc.Node.RuntimeFilterProbeList) {
 		return "", nil
 	}
 	buf := bytes.NewBuffer(make([]byte, 0, 300))
@@ -817,6 +832,11 @@ func (ndesc *NodeDescribeImpl) GetRuntimeFilteProbeInfo(ctx context.Context, opt
 	if options.Format == EXPLAIN_FORMAT_TEXT {
 		first := true
 		for _, v := range ndesc.Node.RuntimeFilterProbeList {
+			if v == nil || v.Expr == nil {
+				// Expression-less specs are control or transport markers, not
+				// predicates that EXPLAIN can render.
+				continue
+			}
 			if !first {
 				buf.WriteString(", ")
 			}
@@ -838,7 +858,7 @@ func (ndesc *NodeDescribeImpl) GetRuntimeFilteProbeInfo(ctx context.Context, opt
 }
 
 func (ndesc *NodeDescribeImpl) GetRuntimeFilterBuildInfo(ctx context.Context, options *ExplainOptions) (string, error) {
-	if ndesc.Node.NodeType == plan.Node_JOIN && ndesc.Node.Stats.HashmapStats.Shuffle {
+	if !hasRuntimeFilterBuildExpr(ndesc.Node.RuntimeFilterBuildList) {
 		return "", nil
 	}
 	buf := bytes.NewBuffer(make([]byte, 0, 300))
@@ -846,11 +866,15 @@ func (ndesc *NodeDescribeImpl) GetRuntimeFilterBuildInfo(ctx context.Context, op
 	if options.Format == EXPLAIN_FORMAT_TEXT {
 		first := true
 		for _, v := range ndesc.Node.RuntimeFilterBuildList {
+			expr := runtimeFilterBuildExpr(v)
+			if expr == nil {
+				continue
+			}
 			if !first {
 				buf.WriteString(", ")
 			}
 			first = false
-			err := describeExpr(ctx, v.Expr, options, buf)
+			err := describeExpr(ctx, expr, options, buf)
 			if err != nil {
 				return "", err
 			}
@@ -861,6 +885,34 @@ func (ndesc *NodeDescribeImpl) GetRuntimeFilterBuildInfo(ctx context.Context, op
 		return "", moerr.NewNYI(ctx, "explain format dot")
 	}
 	return buf.String(), nil
+}
+
+func hasRuntimeFilterProbeExpr(specs []*plan.RuntimeFilterSpec) bool {
+	for _, spec := range specs {
+		if spec != nil && spec.Expr != nil {
+			return true
+		}
+	}
+	return false
+}
+
+func hasRuntimeFilterBuildExpr(specs []*plan.RuntimeFilterSpec) bool {
+	for _, spec := range specs {
+		if runtimeFilterBuildExpr(spec) != nil {
+			return true
+		}
+	}
+	return false
+}
+
+func runtimeFilterBuildExpr(spec *plan.RuntimeFilterSpec) *plan.Expr {
+	if spec == nil {
+		return nil
+	}
+	if spec.BuildExpr != nil {
+		return spec.BuildExpr
+	}
+	return spec.Expr
 }
 
 func (ndesc *NodeDescribeImpl) GetSendMessageInfo(ctx context.Context, options *ExplainOptions) (string, error) {
@@ -955,6 +1007,23 @@ func (ndesc *NodeDescribeImpl) GetGroupByInfo(ctx context.Context, options *Expl
 
 		if ndesc.Node.Stats.HashmapStats.ShuffleMethod == plan.ShuffleMethod_Reuse {
 			buf.WriteString(" shuffle: REUSE")
+		}
+	}
+	return buf.String(), nil
+}
+
+func (ndesc *NodeDescribeImpl) getGroupByHashKeyInfo(ctx context.Context, options *ExplainOptions) (string, error) {
+	buf := bytes.NewBuffer(make([]byte, 0, 100))
+	buf.WriteString("Hash Key: ")
+	for i, idx := range ndesc.Node.GroupByHashKey {
+		if i > 0 {
+			buf.WriteString(", ")
+		}
+		if idx < 0 || int(idx) >= len(ndesc.Node.GroupBy) {
+			return "", moerr.NewInternalErrorf(ctx, "invalid group-by hash key index %d", idx)
+		}
+		if err := describeExpr(ctx, ndesc.Node.GroupBy[idx], options, buf); err != nil {
+			return "", err
 		}
 	}
 	return buf.String(), nil
@@ -1214,7 +1283,7 @@ func (a AnalyzeInfoDescribeImpl) GetDescription(ctx context.Context, options *Ex
 	case plan.Node_SORT:
 		majorStr = "sort"
 		minorStr = "mergesort"
-	case plan.Node_FILTER:
+	case plan.Node_FILTER, plan.Node_ASSERT:
 		majorStr = ""
 		minorStr = "filter"
 	}

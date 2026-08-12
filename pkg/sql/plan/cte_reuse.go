@@ -151,7 +151,7 @@ func samePlanType(left, right planpb.Type) bool {
 	return left.Id == right.Id && left.NotNullable == right.NotNullable &&
 		left.AutoIncr == right.AutoIncr && left.Width == right.Width &&
 		left.Scale == right.Scale && left.Table == right.Table &&
-		left.Enumvalues == right.Enumvalues
+		left.Enumvalues == right.Enumvalues && left.Charset == right.Charset
 }
 
 func (builder *QueryBuilder) cteSubtreeIsDeterministic(nodeID int32, seen map[int32]bool) bool {
@@ -211,7 +211,23 @@ func (builder *QueryBuilder) cteSubtreeIsDeterministic(nodeID int32, seen map[in
 		node.RuntimeFilterBuildList,
 	} {
 		for _, filter := range filterList {
-			if filter == nil || filter.Expr == nil || !exprCanRemoveProject(filter.Expr) {
+			if filter == nil ||
+				(filter.Expr == nil && filter.BuildExpr == nil) {
+				return false
+			}
+			if filter.Expr != nil && filter.BuildExpr != nil &&
+				!exprStructuralEqual(filter.Expr, filter.BuildExpr) {
+				// During rollout, metadata-independent RAW_V1 can carry the
+				// same expression in both fields. Only a divergent dual layout
+				// is contradictory.
+				return false
+			}
+			if filter.Expr != nil &&
+				!exprCanRemoveProject(filter.Expr) {
+				return false
+			}
+			if filter.BuildExpr != nil &&
+				!exprCanRemoveProject(filter.BuildExpr) {
 				return false
 			}
 		}

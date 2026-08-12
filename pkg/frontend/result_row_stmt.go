@@ -23,8 +23,10 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/explain"
@@ -52,10 +54,27 @@ func GetExplainColumn(ctx context.Context, explainColName string) ([]*plan2.ColD
 }
 
 func getPreparedResultColumns(stmt *PrepareStmt, txnHaveDDL bool) []*plan2.ColDef {
-	dcPrepare := stmt.PreparePlan.GetDcl().GetPrepare()
-	if _, ok := stmt.PrepareStmt.(*tree.ExplainStmt); ok {
-		if query := dcPrepare.GetPlan().GetQuery(); query != nil {
-			title := plan2.GetPlanTitle(query, txnHaveDDL)
+	return getPreparedResultColumnsFromPlan(stmt.PrepareStmt, stmt.PreparePlan, txnHaveDDL)
+}
+
+func getPreparedResultColumnsFromPlan(stmt tree.Statement, preparedPlan *plan2.Plan, txnHaveDDL bool) []*plan2.ColDef {
+	plan := preparedPlan.GetDcl().GetPrepare().GetPlan()
+	return getPreparedResultColumnsFor(stmt, plan, txnHaveDDL)
+}
+
+func getPreparedResultColumnsFor(stmt tree.Statement, plan *plan.Plan, txnHaveDDL bool) []*plan2.ColDef {
+	if isPerformStatement(stmt) {
+		return nil
+	}
+	if query := plan.GetQuery(); query != nil {
+		var title string
+		switch stmt.(type) {
+		case *tree.ExplainStmt, *tree.ExplainAnalyze:
+			title = plan2.GetPlanTitle(query, txnHaveDDL)
+		case *tree.ExplainPhyPlan:
+			title = plan2.GetPhyPlanTitle(query, txnHaveDDL)
+		}
+		if title != "" {
 			return []*plan2.ColDef{{
 				Typ:        plan2.Type{Id: int32(types.T_varchar)},
 				Name:       title,
@@ -63,7 +82,7 @@ func getPreparedResultColumns(stmt *PrepareStmt, txnHaveDDL bool) []*plan2.ColDe
 			}}
 		}
 	}
-	return plan2.GetResultColumnsFromPlan(dcPrepare.GetPlan())
+	return plan2.GetResultColumnsFromPlan(plan)
 }
 
 func sessionTxnHaveDDL(ses FeSession) bool {
@@ -98,6 +117,42 @@ func executeResultRowStmt(ses *Session, execCtx *ExecCtx) (err error) {
 	var colDefs []*plan2.ColDef
 	ses.EnterFPrint(FPResultRowStmt)
 	defer ses.ExitFPrint(FPResultRowStmt)
+	if execCtx.stmt.StmtKind().RespType() == tree.RESP_DEFERRED_RESULT_ROW {
+		if execCtx.returning == nil || execCtx.returning.spool == nil {
+			return moerr.NewInternalError(execCtx.reqCtx, "DML RETURNING spool is not initialized")
+		}
+		columns, err = execCtx.cw.GetColumns(execCtx.reqCtx)
+		if err != nil {
+			return err
+		}
+		colDefs = plan2.GetResultColumnsFromPlan(execCtx.cw.Plan())
+		if len(columns) != len(colDefs) {
+			return moerr.NewInternalError(execCtx.reqCtx, "DML RETURNING metadata does not match projection")
+		}
+		ses.rs = &plan.ResultColDef{ResultCols: colDefs}
+		execCtx.returning.columns = columns
+		if execCtx.runResult, err = execCtx.runner.Run(0); err != nil {
+			return err
+		}
+		execCtx.returning.affectedRows = execCtx.runResult.AffectRows
+		if got := execCtx.returning.spool.RowCount(); got != execCtx.runResult.AffectRows {
+			return moerr.NewInternalErrorf(execCtx.reqCtx,
+				"DML RETURNING row count %d does not match affected rows %d", got, execCtx.runResult.AffectRows)
+		}
+		if canSaveQueryResult(execCtx.reqCtx, ses) {
+			saver := &QueryResult{}
+			execCtx.returning.stagedSaver = saver
+			if err = execCtx.returning.spool.Replay(execCtx.reqCtx, func(bat *batch.Batch, crs *perfcounter.CounterSet) error {
+				return saver.Stage(execCtx, crs, bat)
+			}); err != nil {
+				return err
+			}
+			if err = saver.FinishStage(execCtx); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
 	switch statement := execCtx.stmt.(type) {
 	case *tree.Select:
 
@@ -410,7 +465,7 @@ func (resper *MysqlResp) respPrebuildResultRow(ses *Session,
 		return nil
 	}
 	mer := NewMysqlExecutionResult(0, 0, 0, 0, ses.GetMysqlResultSet())
-	res := ses.SetNewResponse(ResultResponse, 0, int(COM_QUERY), mer, execCtx.isLastStmt)
+	res := ses.SetNewResponse(ResultResponse, 0, int(ses.GetCmd()), mer, execCtx.isLastStmt)
 	if err := resper.mysqlRrWr.WriteResponse(execCtx.reqCtx, res); err != nil {
 		return moerr.NewInternalErrorf(execCtx.reqCtx, "routine send response failed, error: %v ", err)
 	}

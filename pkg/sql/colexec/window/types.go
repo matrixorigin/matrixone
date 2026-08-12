@@ -18,7 +18,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
@@ -31,6 +30,7 @@ var _ vm.Operator = new(Window)
 const (
 	receive = iota
 	eval
+	emit
 	done
 	receiveAll
 )
@@ -50,8 +50,10 @@ type container struct {
 	os      []int64 // Sorted partitions
 	aggVecs []colexec.ExprEvalVector
 
-	vec  *vector.Vector
-	rBat *batch.Batch
+	prepareParamKind aggexec.PrepareParamKindStates
+
+	emitOffset int
+	rBat       *batch.Batch
 
 	runtimeFrames []*plan.FrameClause
 }
@@ -101,7 +103,9 @@ func (window *Window) Release() {
 func (window *Window) Reset(proc *process.Process, pipelineFailed bool, err error) {
 	ctr := &window.ctr
 
+	ctr.cleanOutput(proc.Mp())
 	ctr.resetParam()
+	ctr.prepareParamKind.Reset(nil)
 	ctr.resetVectors()
 	// Release aggregators here too: on an error exit from Call the normal
 	// freeAggFun() at the end of the eval loop is skipped, so batAggs would
@@ -111,16 +115,12 @@ func (window *Window) Reset(proc *process.Process, pipelineFailed bool, err erro
 	if ctr.bat != nil {
 		ctr.bat.CleanOnlyData()
 	}
-	// It needs to free, because the result of agg eval is not reuse the vector
-	if ctr.vec != nil {
-		ctr.vec.Free(proc.Mp())
-		ctr.vec = nil
-	}
 }
 
 func (window *Window) Free(proc *process.Process, pipelineFailed bool, err error) {
 	ctr := &window.ctr
 
+	ctr.cleanOutput(proc.Mp())
 	ctr.runtimeFrames = nil
 	// Free aggregators before the batch so an error exit from Call (which skips
 	// the normal freeAggFun()) does not leak their mpool-held state.
@@ -128,6 +128,7 @@ func (window *Window) Free(proc *process.Process, pipelineFailed bool, err error
 	ctr.freeBatch(proc.Mp())
 	ctr.freeExes()
 	ctr.freeVector(proc.Mp())
+	ctr.prepareParamKind.Reset(nil)
 }
 
 func (window *Window) ExecProjection(proc *process.Process, input *batch.Batch) (*batch.Batch, error) {
@@ -136,12 +137,24 @@ func (window *Window) ExecProjection(proc *process.Process, input *batch.Batch) 
 
 func (ctr *container) resetParam() {
 	ctr.status = receive
+	ctr.emitOffset = 0
 	ctr.desc = nil
 	ctr.nullsLast = nil
 	ctr.sels = nil
 	ctr.ps = nil
 	ctr.os = nil
 	ctr.runtimeFrames = nil
+}
+
+// cleanOutput releases the batch returned by the previous Call. Input-column
+// vectors in rBat are borrowed windows into ctr.bat; the appended window-result
+// vector is owned by rBat. The pipeline contract keeps a returned batch valid
+// until the next Call or Reset, so this is the earliest safe release point.
+func (ctr *container) cleanOutput(mp *mpool.MPool) {
+	if ctr.rBat != nil {
+		ctr.rBat.Clean(mp)
+		ctr.rBat = nil
+	}
 }
 
 func (ctr *container) resetVectors() {
@@ -198,7 +211,4 @@ func (ctr *container) freeVector(mp *mpool.MPool) {
 		}
 	}
 
-	if ctr.vec != nil {
-		ctr.vec.Free(mp)
-	}
 }

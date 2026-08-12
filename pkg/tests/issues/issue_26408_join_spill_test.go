@@ -86,6 +86,7 @@ func TestIssue26408JoinSpillSQLRegression(t *testing.T) {
 		}()
 		execJoinSpillSQL(t, ctx, conn, "use `"+dbName+"`")
 		execJoinSpillSQL(t, ctx, conn, "set @@max_dop = 1")
+		defer resetOptimizerHintsOnCN(t, port)
 		execJoinSpillSQL(t, ctx, conn, `set session optimizer_hints = "forceOneCN=1"`)
 
 		execJoinSpillSQL(t, ctx, conn, "create table probe_keys (k bigint not null, payload bigint not null) cluster by k")
@@ -176,12 +177,6 @@ func joinSpillRegressionRows(t *testing.T) int64 {
 	return rows
 }
 
-func execJoinSpillSQL(t *testing.T, ctx context.Context, conn *sql.Conn, statement string) {
-	t.Helper()
-	_, err := conn.ExecContext(ctx, statement)
-	require.NoErrorf(t, err, "exec failed: %s", statement)
-}
-
 func queryJoinSpillResult(
 	t *testing.T,
 	ctx context.Context,
@@ -193,56 +188,4 @@ func queryJoinSpillResult(
 	err := conn.QueryRowContext(ctx, query).Scan(&result.count, &result.probeSum, &result.buildSum)
 	require.NoErrorf(t, err, "query failed: %s", query)
 	return result
-}
-
-func queryJoinSpillText(t *testing.T, ctx context.Context, conn *sql.Conn, query string) string {
-	t.Helper()
-	rows, err := conn.QueryContext(ctx, query)
-	require.NoErrorf(t, err, "query failed: %s", query)
-	defer rows.Close()
-
-	var lines []string
-	for rows.Next() {
-		var line string
-		require.NoError(t, rows.Scan(&line))
-		lines = append(lines, line)
-	}
-	require.NoError(t, rows.Err())
-	return strings.Join(lines, "\n")
-}
-
-func patchJoinSpillStats(
-	t *testing.T,
-	ctx context.Context,
-	conn *sql.Conn,
-	dbName string,
-	tableName string,
-	tableCount int64,
-) {
-	t.Helper()
-	stats := fmt.Sprintf(`{
-		"table_cnt": %d,
-		"block_number": 2048,
-		"accurate_object_number": 128,
-		"approx_object_number": 128,
-		"ndv_map": {"k": %d},
-		"min_val_map": {"k": 1},
-		"max_val_map": {"k": 20000000},
-		"shuffle_range_map": {
-			"k": {
-				"overlap": 0.1,
-				"uniform": 1,
-				"result": [1, 5000000, 10000000, 15000000, 20000000]
-			}
-		}
-	}`, tableCount, tableCount)
-	var patched float64
-	err := conn.QueryRowContext(
-		ctx,
-		"select table_cnt from table_stats(?, 'patch', ?) g",
-		dbName+"."+tableName,
-		stats,
-	).Scan(&patched)
-	require.NoError(t, err)
-	require.Equal(t, float64(tableCount), patched)
 }

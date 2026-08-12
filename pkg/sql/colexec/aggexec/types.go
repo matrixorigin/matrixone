@@ -67,6 +67,23 @@ func (ag *AggFuncExecExpression) GetAggID() int64 {
 	return ag.aggID
 }
 
+// PreservesFirstArgPrepareParamKind reports aggregates whose result is one of
+// the first argument's original values without a semantic type conversion.
+// Source conversion provenance may cross these materialization boundaries.
+func (ag *AggFuncExecExpression) PreservesFirstArgPrepareParamKind() bool {
+	switch ag.aggID {
+	case AggIdOfMin, AggIdOfMax, AggIdOfAny, AggIdOfMaxBy, AggIdOfMaxByNonNull,
+		WinIdOfFirstValue, WinIdOfLastValue, WinIdOfNthValue:
+		return true
+	case WinIdOfLag, WinIdOfLead:
+		// With no explicit default, LAG/LEAD return the first argument or NULL.
+		// A default expression can introduce a different source category.
+		return len(ag.argExpressions) < 3
+	default:
+		return false
+	}
+}
+
 func (ag *AggFuncExecExpression) IsDistinct() bool {
 	return ag.isDistinct
 }
@@ -177,6 +194,26 @@ type AggFuncExec interface {
 	Free()
 }
 
+// PrepareParamKindStateAccessor is an optional capability implemented by the
+// aggregate state backed executors.  It exposes the provenance of the value
+// vector without widening AggFuncExec (value-window and other non-serializable
+// executors do not have a chunk state to expose).  Group spill/partial codecs
+// use this capability to carry the winner category alongside the packed state
+// rows.
+type PrepareParamKindStateAccessor interface {
+	PrepareParamKindsForChunk(chunk int) []vector.PrepareParamKind
+	PrepareParamKindsForSelection(flags [][]uint8) []vector.PrepareParamKind
+	// Row counts let transient provenance decoders validate an exact record
+	// before allocating its row payload. They are intentionally separate from
+	// the optional payload accessors because uniform states do not allocate.
+	PrepareParamKindRowCountForChunk(chunk int) int
+	PrepareParamKindRowCountFlat() int
+	PrepareParamKindSummaryForChunk(chunk int) (vector.PrepareParamKind, bool)
+	PrepareParamKindSummaryForSelection(flags [][]uint8) (vector.PrepareParamKind, bool)
+	RestorePrepareParamKindsForChunk(chunk int, kinds []vector.PrepareParamKind, mp *mpool.MPool) error
+	RestorePrepareParamKindsFlat(kinds []vector.PrepareParamKind, mp *mpool.MPool) error
+}
+
 // indicate who implements the AggFuncExec interface.
 var (
 	_ AggFuncExec = &groupConcatExec{}
@@ -188,7 +225,27 @@ func MakeAgg(
 	aggID int64, isDistinct bool,
 	param ...types.Type,
 ) (AggFuncExec, error) {
-	exec, ok, err := makeSpecialAggExec(mg, aggID, isDistinct, param...)
+	return makeAgg(mg, aggID, isDistinct, false, param...)
+}
+
+// MakeAggWithLegacyTextMinMax is used only while decoding a remote pipeline
+// during the MORPC v10 -> v11 rollout. It preserves the old bytewise text
+// MIN/MAX comparator without changing the argument or result type metadata.
+func MakeAggWithLegacyTextMinMax(
+	mg *mpool.MPool,
+	aggID int64, isDistinct bool,
+	param ...types.Type,
+) (AggFuncExec, error) {
+	return makeAgg(mg, aggID, isDistinct, true, param...)
+}
+
+func makeAgg(
+	mg *mpool.MPool,
+	aggID int64, isDistinct bool,
+	legacyTextMinMax bool,
+	param ...types.Type,
+) (AggFuncExec, error) {
+	exec, ok, err := makeSpecialAggExec(mg, aggID, isDistinct, legacyTextMinMax, param...)
 	if err != nil {
 		return nil, err
 	}
@@ -201,7 +258,7 @@ func MakeAgg(
 
 func makeSpecialAggExec(
 	mp *mpool.MPool,
-	id int64, isDistinct bool, params ...types.Type,
+	id int64, isDistinct bool, legacyTextMinMax bool, params ...types.Type,
 ) (AggFuncExec, bool, error) {
 	if id == AggIdOfMaxBy && len(params) != 3 {
 		return nil, true, moerr.NewInternalErrorNoCtx("max_by requires value, order, and tie arguments")
@@ -231,9 +288,9 @@ func makeSpecialAggExec(
 	case AggIdOfAny:
 		return makeAnyValueExec(mp, id, params[0]), true, nil
 	case AggIdOfMin:
-		return makeMinMaxExec(mp, id, true, params[0]), true, nil
+		return makeMinMaxExecWithLegacyText(mp, id, true, params[0], legacyTextMinMax), true, nil
 	case AggIdOfMax:
-		return makeMinMaxExec(mp, id, false, params[0]), true, nil
+		return makeMinMaxExecWithLegacyText(mp, id, false, params[0], legacyTextMinMax), true, nil
 	case AggIdOfMaxBy:
 		return makeMaxByExec(mp, id, false, params), true, nil
 	case AggIdOfMaxByNonNull:
@@ -259,6 +316,18 @@ func makeSpecialAggExec(
 		return makeHllMerge(mp, id, params[0]), true, nil
 	case AggIdOfApproxPercentile:
 		exec, err := makeApproxPercentile(mp, id, isDistinct, params[0])
+		return exec, true, err
+	case AggIdOfPercentileCont:
+		if len(params) != 1 {
+			return nil, true, moerr.NewInternalErrorNoCtx("percentile_cont requires one value argument")
+		}
+		exec, err := makeOrderedPercentileExec(mp, id, isDistinct, params[0], orderedPercentileContinuous)
+		return exec, true, err
+	case AggIdOfPercentileDisc:
+		if len(params) != 1 {
+			return nil, true, moerr.NewInternalErrorNoCtx("percentile_disc requires one value argument")
+		}
+		exec, err := makeOrderedPercentileExec(mp, id, isDistinct, params[0], orderedPercentileDiscrete)
 		return exec, true, err
 	case AggIdOfJsonArrayAgg:
 		exec, err := makeJsonArrayAgg(mp, id, isDistinct, params)

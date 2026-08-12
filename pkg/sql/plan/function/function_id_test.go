@@ -15,8 +15,10 @@
 package function
 
 import (
+	"context"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
 	"github.com/stretchr/testify/require"
 )
@@ -65,6 +67,8 @@ func TestAggregateExecutorIDs(t *testing.T) {
 		{"hll_add_agg", HLL_ADD_AGG, aggexec.AggIdOfHllAdd},
 		{"hll_merge_agg", HLL_MERGE_AGG, aggexec.AggIdOfHllMerge},
 		{"approx_percentile", APPROX_PERCENTILE, aggexec.AggIdOfApproxPercentile},
+		{"percentile_cont", PERCENTILE_CONT, aggexec.AggIdOfPercentileCont},
+		{"percentile_disc", PERCENTILE_DISC, aggexec.AggIdOfPercentileDisc},
 	}
 
 	for _, test := range tests {
@@ -76,6 +80,61 @@ func TestAggregateExecutorIDs(t *testing.T) {
 				test.executorID)
 		})
 	}
+}
+
+func TestInOverloadWireIDsRemainAppendOnly(t *testing.T) {
+	// GetFunctionByName encodes the matched slice index, and remote executors
+	// decode that index directly. These pre-existing mappings are therefore a
+	// wire contract even when overload.overloadId contains a different value.
+	existing := []types.T{
+		types.T_uint8,
+		types.T_uint16,
+		types.T_uint32,
+		types.T_uint64,
+		types.T_int8,
+		types.T_int16,
+		types.T_int32,
+		types.T_int64,
+		types.T_float32,
+		types.T_float64,
+		types.T_decimal64,
+		types.T_decimal128,
+		types.T_decimal256,
+		types.T_varchar,
+		types.T_char,
+		types.T_date,
+		types.T_datetime,
+		types.T_bool,
+		types.T_timestamp,
+		types.T_blob,
+		types.T_uuid,
+		types.T_text,
+		types.T_time,
+		types.T_binary,
+		types.T_varbinary,
+		types.T_year,
+		types.T_array_float32,
+		types.T_array_float64,
+	}
+	for want, oid := range existing {
+		result, err := GetFunctionByName(
+			context.Background(),
+			InFunctionName,
+			[]types.Type{oid.ToType(), oid.ToType()},
+		)
+		require.NoError(t, err, oid.String())
+		_, got := DecodeOverloadID(result.GetEncodedOverloadID())
+		require.Equal(t, int32(want), got, oid.String())
+	}
+
+	enumResult, err := GetFunctionByName(
+		context.Background(),
+		InFunctionName,
+		[]types.Type{types.T_enum.ToType(), types.T_enum.ToType()},
+	)
+	require.NoError(t, err)
+	_, enumIndex := DecodeOverloadID(enumResult.GetEncodedOverloadID())
+	require.Equal(t, int32(len(existing)), enumIndex)
 }
 
 // all fixed function ids defined at 2024-12-12
@@ -673,9 +732,16 @@ var predefinedFunids = map[int]int{
 	MAX_BY:                        559,
 	MAX_BY_NON_NULL:               560,
 	CHECK_CONSTRAINT_ASSERT:       561,
+	UUID_V1:                       562,
+	UUID_V4:                       563,
+	UUID_V6:                       564,
+	UUID_EXTRACT_VERSION:          565,
+	UUID_EXTRACT_TIMESTAMP:        566,
+	PERCENTILE_CONT:               567,
+	PERCENTILE_DISC:               568,
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
-	FUNCTION_END_NUMBER: 562,
+	FUNCTION_END_NUMBER: 569,
 }
 
 func Test_funids(t *testing.T) {

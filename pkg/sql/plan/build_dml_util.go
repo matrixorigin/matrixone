@@ -17,6 +17,7 @@ package plan
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -35,6 +36,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	lockpb "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/internal/materialized"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
@@ -90,6 +92,11 @@ type dmlPlanCtx struct {
 	sourceStep int32
 	sourceTag  int32
 	isMulti    bool
+	// selfReferCascadeRootStep keeps the immutable statement-owned row set used
+	// both to fold root-to-root UPDATE CASCADE changes and to exclude those rows
+	// from the separate cascade writer.
+	selfReferCascadeRootStep    int32
+	hasSelfReferCascadeRootStep bool
 	// needAggFilter drives two behaviours: an any_value aggregation for dedup
 	// and an isnotnull(row_id) filter for join-target NULL-row protection. After
 	// an upstream row_number() window handles the dedup (dedupByRowNumber) only
@@ -113,6 +120,7 @@ type dmlPlanCtx struct {
 	// Recursive child actions still build their normal delete/update branches.
 	skipTargetDelete               bool
 	preserveUpdateSourceProjection bool
+	ignoreCheckConstraint          bool
 }
 
 // information of deleteNode, which is about the deleted table
@@ -279,7 +287,6 @@ func buildUpdatePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 		}
 		newCols = append(newCols, col)
 	}
-	updatePlanCtx.tableDef.Cols = newCols
 	insertColLength := len(updatePlanCtx.insertColPos) + 1
 	projectList := make([]*Expr, insertColLength)
 	for i, idx := range updatePlanCtx.insertColPos {
@@ -297,6 +304,7 @@ func buildUpdatePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 			},
 		}
 	}
+	updatePlanCtx.tableDef.Cols = newCols
 	projectList[insertColLength-1] = &plan.Expr{
 		Typ: lastNode.ProjectList[oldRowIdPos].Typ,
 		Expr: &plan.Expr_Col{
@@ -341,6 +349,295 @@ func buildUpdatePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 		updatePlanCtx.updateColLength, sourceStep, addAffectedRows, updatePlanCtx.isFkRecursionCall, updatePlanCtx.updatePkCol,
 		updatePlanCtx.pkFilterExprs, partitionExpr, ifExistAutoPkCol, ifNeedCheckPkDup, indexSourceColTypes, fuzzymessage, nil, nil,
 		updatePlanCtx.updateColPosMap, nil)
+}
+
+// appendSelfReferOnUpdateCascadeRoots folds self-referencing CASCADE changes
+// between rows owned by the same UPDATE statement into that statement's source.
+// The separate FK action anti-joins the complete root row set, so every root row
+// has exactly one writer even when it references another root rather than itself.
+func appendSelfReferOnUpdateCascadeRoots(
+	builder *QueryBuilder,
+	bindCtx *BindContext,
+	updatePlanCtx *dmlPlanCtx,
+	lastNodeID int32,
+) (int32, error) {
+	if updatePlanCtx.isFkRecursionCall || updatePlanCtx.updateColLength == 0 {
+		return lastNodeID, nil
+	}
+	tableDef := updatePlanCtx.tableDef
+	if tableDef == nil || len(tableDef.Fkeys) == 0 {
+		return lastNodeID, nil
+	}
+
+	colByID := make(map[uint64]*ColDef, len(tableDef.Cols))
+	colPosByName := make(map[string]int32, len(tableDef.Cols))
+	for pos, col := range tableDef.Cols {
+		colByID[col.ColId] = col
+		colPosByName[col.Name] = int32(pos)
+	}
+	explicitlyUpdated := make(map[string]struct{}, len(updatePlanCtx.updateColPosMap))
+	baseUpdatePos := make(map[string]int, len(updatePlanCtx.updateColPosMap))
+	for name, pos := range updatePlanCtx.updateColPosMap {
+		explicitlyUpdated[name] = struct{}{}
+		baseUpdatePos[name] = pos
+	}
+
+	var cascades []*ForeignKeyDef
+	for _, fk := range tableDef.Fkeys {
+		if fk.ForeignTbl != 0 || fk.OnUpdate != plan.ForeignKeyDef_CASCADE {
+			continue
+		}
+		if len(fk.Cols) == 0 || len(fk.Cols) != len(fk.ForeignCols) {
+			return 0, moerr.NewInternalError(
+				builder.GetContext(), "invalid self-referencing ON UPDATE CASCADE columns")
+		}
+
+		affected := false
+		for _, parentColID := range fk.ForeignCols {
+			parentCol := colByID[parentColID]
+			if parentCol != nil {
+				_, affected = baseUpdatePos[parentCol.Name]
+			}
+			if affected {
+				break
+			}
+		}
+		if affected {
+			cascades = append(cascades, fk)
+		}
+	}
+	if len(cascades) == 0 {
+		return lastNodeID, nil
+	}
+
+	// Materialize the deduplicated root set once. Every right side below reads
+	// this immutable image, while the left side accumulates derived child values.
+	rootSinkID := appendSinkNode(builder, bindCtx, lastNodeID)
+	builder.qry.Nodes[rootSinkID].ExtraOptions = materialized.CTESinkOption
+	rootStep := builder.appendStep(rootSinkID)
+	updatePlanCtx.selfReferCascadeRootStep = rootStep
+	updatePlanCtx.hasSelfReferCascadeRootStep = true
+
+	leftNodeID := appendSinkScanNode(builder, bindCtx, rootStep)
+
+	for _, fk := range cascades {
+		leftProject := getProjectionByLastNode(builder, leftNodeID)
+		rightProject := builder.qry.Nodes[rootSinkID].ProjectList
+		type derivedCascadeCol struct {
+			child           *ColDef
+			parent          *ColDef
+			childSourcePos  int
+			parentSourcePos int
+		}
+		derivedCols := make([]derivedCascadeCol, 0, len(fk.Cols))
+		for i, childColID := range fk.Cols {
+			childCol := colByID[childColID]
+			parentCol := colByID[fk.ForeignCols[i]]
+			if childCol == nil || parentCol == nil {
+				return 0, moerr.NewInternalError(
+					builder.GetContext(), "invalid self-referencing ON UPDATE CASCADE columns")
+			}
+			if _, updatedByStatement := explicitlyUpdated[childCol.Name]; updatedByStatement {
+				continue
+			}
+			childSourcePos := int(colPosByName[childCol.Name])
+			if pos, alreadyDerived := updatePlanCtx.updateColPosMap[childCol.Name]; alreadyDerived {
+				childSourcePos = pos
+			}
+			parentSourcePos, updated := baseUpdatePos[parentCol.Name]
+			if !updated {
+				parentSourcePos = int(colPosByName[parentCol.Name])
+			}
+			if childSourcePos < 0 || childSourcePos >= len(leftProject) ||
+				parentSourcePos < 0 || parentSourcePos >= len(rightProject) {
+				return 0, moerr.NewInternalError(
+					builder.GetContext(), "self-referencing ON UPDATE CASCADE source is incomplete")
+			}
+			derivedCols = append(derivedCols, derivedCascadeCol{
+				child: childCol, parent: parentCol,
+				childSourcePos: childSourcePos, parentSourcePos: parentSourcePos,
+			})
+		}
+
+		if len(derivedCols) == 0 {
+			continue
+		}
+		rightNodeID := appendSinkScanNode(builder, bindCtx, rootStep)
+		rootMatch, err := bindSelfReferForeignKeyMatch(
+			builder, tableDef, []*ForeignKeyDef{fk}, 1, 0)
+		if err != nil {
+			return 0, err
+		}
+		rootRowIDPos, ok := colPosByName[catalog.Row_ID]
+		if !ok || int(rootRowIDPos) >= len(rightProject) {
+			return 0, moerr.NewInternalError(
+				builder.GetContext(), "self-referencing ON UPDATE CASCADE root rowid is unavailable")
+		}
+
+		// JOIN result construction supports column references only. Carry a
+		// nullable right-row marker and the matched parent's new values through
+		// the JOIN, then evaluate IF expressions in a PROJECT over its single
+		// output batch.
+		joinProject := DeepCopyExprList(leftProject)
+		rightMarkerPos := int32(len(joinProject))
+		markerType := rightProject[rootRowIDPos].Typ
+		markerType.NotNullable = false
+		joinProject = append(joinProject, &Expr{
+			Typ: markerType,
+			Expr: &plan.Expr_Col{Col: &plan.ColRef{
+				RelPos: 1, ColPos: rootRowIDPos, Name: catalog.Row_ID,
+			}},
+		})
+		parentValuePos := make([]int32, len(derivedCols))
+		for i, derived := range derivedCols {
+			parentValuePos[i] = int32(len(joinProject))
+			parentType := rightProject[derived.parentSourcePos].Typ
+			parentType.NotNullable = false
+			joinProject = append(joinProject, &Expr{
+				Typ: parentType,
+				Expr: &plan.Expr_Col{Col: &plan.ColRef{
+					RelPos: 1, ColPos: int32(derived.parentSourcePos), Name: derived.parent.Name,
+				}},
+			})
+		}
+		joinNodeID := builder.appendNode(&Node{
+			NodeType:    plan.Node_JOIN,
+			Children:    []int32{leftNodeID, rightNodeID},
+			JoinType:    plan.Node_LEFT,
+			OnList:      []*Expr{rootMatch},
+			ProjectList: joinProject,
+		}, bindCtx)
+
+		projectList := getProjectionByLastNode(builder, joinNodeID)[:len(leftProject)]
+		matchedRoot := &Expr{
+			Typ: markerType,
+			Expr: &plan.Expr_Col{Col: &plan.ColRef{
+				RelPos: 0, ColPos: rightMarkerPos, Name: catalog.Row_ID,
+			}},
+		}
+		matchedRoot, err = BindFuncExprImplByPlanExpr(
+			builder.GetContext(), "isnotnull", []*Expr{matchedRoot})
+		if err != nil {
+			return 0, err
+		}
+		for i, derived := range derivedCols {
+			newParent := &Expr{
+				Typ: joinProject[parentValuePos[i]].Typ,
+				Expr: &plan.Expr_Col{Col: &plan.ColRef{
+					RelPos: 0, ColPos: parentValuePos[i], Name: derived.parent.Name,
+				}},
+			}
+			currentChild := &Expr{
+				Typ: leftProject[derived.childSourcePos].Typ,
+				Expr: &plan.Expr_Col{Col: &plan.ColRef{
+					RelPos: 0, ColPos: int32(derived.childSourcePos), Name: derived.child.Name,
+				}},
+			}
+			updatedChild, bindErr := BindFuncExprImplByPlanExpr(
+				builder.GetContext(), "if",
+				[]*Expr{DeepCopyExpr(matchedRoot), newParent, currentChild})
+			if bindErr != nil {
+				return 0, bindErr
+			}
+			updatePlanCtx.updateColPosMap[derived.child.Name] = len(projectList)
+			updatePlanCtx.updateColLength++
+			projectList = append(projectList, updatedChild)
+			if tableDef.Pkey != nil {
+				for _, pkName := range tableDef.Pkey.Names {
+					if pkName == derived.child.Name {
+						updatePlanCtx.updatePkCol = true
+						break
+					}
+				}
+			}
+		}
+		leftNodeID = builder.appendNode(&Node{
+			NodeType: plan.Node_PROJECT, Children: []int32{joinNodeID}, ProjectList: projectList,
+		}, bindCtx)
+	}
+
+	visiblePos := 0
+	for oldPos, col := range tableDef.Cols {
+		if col.Hidden && col.Name != catalog.FakePrimaryKeyColName {
+			continue
+		}
+		if pos, updated := updatePlanCtx.updateColPosMap[col.Name]; updated {
+			updatePlanCtx.insertColPos[visiblePos] = pos
+		} else {
+			updatePlanCtx.insertColPos[visiblePos] = oldPos
+		}
+		visiblePos++
+	}
+	return leftNodeID, nil
+}
+
+// bindSelfReferForeignKeyMatch returns an OR across foreign keys, with each
+// composite key represented as an AND. parentRel exposes referenced columns;
+// childRel exposes referencing columns.
+func bindSelfReferForeignKeyMatch(
+	builder *QueryBuilder,
+	tableDef *TableDef,
+	fks []*ForeignKeyDef,
+	parentRel int32,
+	childRel int32,
+) (*Expr, error) {
+	colPosByID := make(map[uint64]int32, len(tableDef.Cols))
+	for pos, col := range tableDef.Cols {
+		colPosByID[col.ColId] = int32(pos)
+	}
+	var anyEdge *Expr
+	for _, fk := range fks {
+		if len(fk.Cols) == 0 || len(fk.Cols) != len(fk.ForeignCols) {
+			return nil, moerr.NewInternalError(
+				builder.GetContext(), "invalid self-referencing cascade columns")
+		}
+		var edge *Expr
+		for i, childColID := range fk.Cols {
+			childPos, childOK := colPosByID[childColID]
+			parentPos, parentOK := colPosByID[fk.ForeignCols[i]]
+			if !childOK || !parentOK {
+				return nil, moerr.NewInternalError(
+					builder.GetContext(), "self-referencing foreign key column mapping is incomplete")
+			}
+			parentCol := tableDef.Cols[parentPos]
+			childCol := tableDef.Cols[childPos]
+			parentExpr := &Expr{Typ: parentCol.Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{
+				RelPos: parentRel, ColPos: parentPos, Name: parentCol.Name,
+			}}}
+			childExpr := &Expr{Typ: childCol.Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{
+				RelPos: childRel, ColPos: childPos, Name: childCol.Name,
+			}}}
+			part, err := BindFuncExprImplByPlanExpr(
+				builder.GetContext(), "=", []*Expr{parentExpr, childExpr})
+			if err != nil {
+				return nil, err
+			}
+			if edge == nil {
+				edge = part
+			} else {
+				edge, err = BindFuncExprImplByPlanExpr(
+					builder.GetContext(), "and", []*Expr{edge, part})
+				if err != nil {
+					return nil, err
+				}
+			}
+		}
+		if anyEdge == nil {
+			anyEdge = edge
+		} else {
+			var err error
+			anyEdge, err = BindFuncExprImplByPlanExpr(
+				builder.GetContext(), "or", []*Expr{anyEdge, edge})
+			if err != nil {
+				return nil, err
+			}
+		}
+	}
+	if anyEdge == nil {
+		return nil, moerr.NewInternalError(
+			builder.GetContext(), "self-referencing cascade has no edges")
+	}
+	return anyEdge, nil
 }
 
 func getStepByNodeId(builder *QueryBuilder, nodeId int32) int {
@@ -562,21 +859,7 @@ func appendRecursiveCascadeLockNode(
 		}
 	}
 
-	slices.SortStableFunc(lockTargets, func(left, right *plan.LockTarget) int {
-		if left.TableId < right.TableId {
-			return -1
-		}
-		if left.TableId > right.TableId {
-			return 1
-		}
-		if !left.LockTable && right.LockTable {
-			return -1
-		}
-		if left.LockTable && !right.LockTable {
-			return 1
-		}
-		return 0
-	})
+	sortForeignKeyLockTargets(lockTargets, map[uint64]struct{}{delCtx.tableDef.TblId: {}})
 	if len(lockProject) > len(rowProject) {
 		sourceNodeID = builder.appendNode(&plan.Node{
 			NodeType: plan.Node_PROJECT, Children: []int32{sourceNodeID},
@@ -815,6 +1098,9 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 				if err != nil {
 					return err
 				}
+			}
+			if err := validateTableIndexDefinitions(childTableDef); err != nil {
+				return err
 			}
 			childPosMap := make(map[string]int32)
 			childTypMap := make(map[string]*plan.Type)
@@ -1212,8 +1498,67 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 				}
 			}
 
+			combinedSelfCascade := make(map[*plan.ForeignKeyDef]struct{})
+			if !isUpdate && childTableDef.TblId == delCtx.tableDef.TblId {
+				selfCascadeFks := make([]*plan.ForeignKeyDef, 0, len(childTableDef.Fkeys))
+				for _, fk := range childTableDef.Fkeys {
+					if fk.ForeignTbl == 0 && fk.OnDelete == plan.ForeignKeyDef_CASCADE {
+						selfCascadeFks = append(selfCascadeFks, fk)
+						combinedSelfCascade[fk] = struct{}{}
+					}
+				}
+				if len(selfCascadeFks) > 0 && !delCtx.isFkRecursionCall {
+					if childRowIdPos < 0 || delCtx.rowIdPos < 0 {
+						return moerr.NewInternalError(
+							builder.GetContext(), "self-referencing ON DELETE CASCADE rowid is unavailable")
+					}
+					cascadeRootTag := delCtx.sourceTag
+					if cascadeRootTag == 0 && delCtx.skipTargetDelete {
+						if delCtx.sourceStep < 0 || int(delCtx.sourceStep) >= len(builder.qry.Steps) {
+							return moerr.NewInternalError(
+								builder.GetContext(), "self-referencing cascade root source is unavailable")
+						}
+						rootSink := builder.qry.Nodes[builder.qry.Steps[delCtx.sourceStep]]
+						if len(rootSink.BindingTags) > 0 {
+							cascadeRootTag = rootSink.BindingTags[0]
+						} else {
+							// Modern REPLACE materializes its full old-row image through
+							// an untagged shared sink. Re-expose that positional image
+							// under one fresh tag for the pre-createQuery cascade graph.
+							cascadeRootTag = builder.genNewBindTag()
+						}
+					}
+					lastNodeId, err = appendSelfReferCascadeSource(
+						builder, bindCtx, childObjRef, childTableDef, selfCascadeFks,
+						delCtx.sourceStep, cascadeRootTag, int32(delCtx.rowIdPos))
+					if err != nil {
+						return err
+					}
+					builder.qry.HasForeignKeyAction = true
+					newSourceStep := builder.appendStep(lastNodeId)
+
+					allDelTableIDs := map[uint64]struct{}{childTableDef.TblId: {}}
+					upPlanCtx := getDmlPlanCtx()
+					upPlanCtx.objRef = childObjRef
+					upPlanCtx.tableDef = childTableDef
+					upPlanCtx.rowIdPos = childRowIdPos
+					upPlanCtx.sourceStep = newSourceStep
+					upPlanCtx.allDelTableIDs = allDelTableIDs
+					upPlanCtx.isFkRecursionCall = true
+
+					err = buildDeletePlans(ctx, builder, bindCtx, upPlanCtx)
+					putDmlPlanCtx(upPlanCtx)
+					if err != nil {
+						return err
+					}
+				}
+			}
+
 			for _, fk := range childTableDef.Fkeys {
 				if _, ok := combinedSetNull[fk]; ok {
+					continue
+				}
+				if _, ok := combinedSelfCascade[fk]; ok {
 					continue
 				}
 				//child table fk self refer
@@ -1241,7 +1586,6 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 					leftConds := make([]*Expr, len(fk.Cols))
 					parentActionTag := parentRelPos
 					var parentActionProjection []*Expr
-					parentActionStep := int32(-1)
 					if delCtx.skipTargetDelete {
 						parentActionTag = builder.genNewBindTag()
 						projectionLen := len(fk.Cols)
@@ -1389,7 +1733,7 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 							builder.preserveSinkProjection = make(map[int32]struct{})
 						}
 						builder.preserveSinkProjection[parentSinkID] = struct{}{}
-						parentActionStep = builder.appendStep(parentSinkID)
+						parentActionStep := builder.appendStep(parentSinkID)
 						lastNodeId = appendSinkScanNodeWithTag(builder, bindCtx, parentActionStep, parentActionTag)
 						builder.positionalSinkScans[lastNodeId] = struct{}{}
 					}
@@ -1631,6 +1975,12 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 						}
 
 					case plan.ForeignKeyDef_CASCADE:
+						// A self-reference is expanded to its complete descendant set by
+						// the root action. Do not expand that same edge again while building
+						// the resulting child delete/update plan.
+						if fkSelfReferCond && delCtx.isFkRecursionCall {
+							break
+						}
 						rightId := builder.appendNode(&plan.Node{
 							NodeType:    plan.Node_TABLE_SCAN,
 							Stats:       &plan.Stats{},
@@ -1640,113 +1990,113 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 							BindingTags: childBindingTags,
 						}, bindCtx)
 
-						// Legacy DELETE keeps the existing self-reference guard. Modern
-						// REPLACE owns the target-row delete in MULTI_UPDATE, so its old-row
-						// action path must explicitly collect self-referencing descendants.
-						if !fkSelfReferCond || delCtx.skipTargetDelete {
-							builder.qry.HasForeignKeyAction = true
-							if isUpdate {
-								// update stmt get plan : sink_scan -> join[f1 inner join c1 on f1.id = c1.fid, get c1.* & update cols] -> sink   then + updatePlans
-								joinProjection := childForJoinProject
-								joinProjection = append(joinProjection, updateChildColExpr...)
-								lastNodeId = builder.appendNode(&plan.Node{
-									NodeType:    plan.Node_JOIN,
-									Children:    []int32{lastNodeId, rightId},
-									JoinType:    plan.Node_INNER,
-									OnList:      joinConds,
-									ProjectList: joinProjection,
-								}, bindCtx)
-								lastNodeId = appendAggNodeForFkJoin(builder, bindCtx, lastNodeId)
-								newSourceStep := builder.appendStep(lastNodeId)
-
-								upPlanCtx := getDmlPlanCtx()
-								upPlanCtx.objRef = childObjRef
-								upPlanCtx.tableDef = CloneTableDefForPlan(childTableDef, true)
-								upPlanCtx.updateColLength = len(rightConds)
-								upPlanCtx.isMulti = false
-								upPlanCtx.rowIdPos = childRowIdPos
-								upPlanCtx.sourceStep = newSourceStep
-								upPlanCtx.beginIdx = 0
-								upPlanCtx.updateColPosMap = updateChildColPosMap
-								upPlanCtx.insertColPos = insertColPos
-								upPlanCtx.allDelTableIDs = map[uint64]struct{}{}
-								upPlanCtx.isFkRecursionCall = true
-								upPlanCtx.updatePkCol = updatePk
-
-								err = buildUpdatePlans(ctx, builder, bindCtx, upPlanCtx, false)
-								putDmlPlanCtx(upPlanCtx)
+						// Self-referencing actions use the same child join as ordinary foreign
+						// keys. DELETE additionally expands the direct matches into the full
+						// descendant set below.
+						builder.qry.HasForeignKeyAction = true
+						if isUpdate {
+							// update stmt get plan : sink_scan -> join[f1 inner join c1 on f1.id = c1.fid, get c1.* & update cols] -> sink   then + updatePlans
+							joinProjection := childForJoinProject
+							joinProjection = append(joinProjection, updateChildColExpr...)
+							lastNodeId = builder.appendNode(&plan.Node{
+								NodeType:    plan.Node_JOIN,
+								Children:    []int32{lastNodeId, rightId},
+								JoinType:    plan.Node_INNER,
+								OnList:      joinConds,
+								ProjectList: joinProjection,
+							}, bindCtx)
+							if fkSelfReferCond {
+								if childRowIdPos < 0 || delCtx.rowIdPos < 0 {
+									return moerr.NewInternalError(
+										builder.GetContext(), "self-referencing ON UPDATE CASCADE rowid is unavailable")
+								}
+								rootStep := delCtx.sourceStep
+								rootTag := delCtx.sourceTag
+								if delCtx.hasSelfReferCascadeRootStep {
+									rootStep = delCtx.selfReferCascadeRootStep
+									rootTag = 0
+								}
+								lastNodeId, err = appendExcludeSelfReferCascadeRoots(
+									builder, bindCtx, lastNodeId, childScanTag, int32(childRowIdPos),
+									rootStep, rootTag, int32(delCtx.rowIdPos))
 								if err != nil {
 									return err
 								}
+							}
+							lastNodeId = appendAggNodeForFkJoin(builder, bindCtx, lastNodeId)
+							newSourceStep := builder.appendStep(lastNodeId)
+
+							upPlanCtx := getDmlPlanCtx()
+							upPlanCtx.objRef = childObjRef
+							upPlanCtx.tableDef = CloneTableDefForPlan(childTableDef, true)
+							upPlanCtx.updateColLength = len(rightConds)
+							upPlanCtx.isMulti = false
+							upPlanCtx.rowIdPos = childRowIdPos
+							upPlanCtx.sourceStep = newSourceStep
+							upPlanCtx.beginIdx = 0
+							upPlanCtx.updateColPosMap = updateChildColPosMap
+							upPlanCtx.insertColPos = insertColPos
+							upPlanCtx.allDelTableIDs = map[uint64]struct{}{}
+							upPlanCtx.isFkRecursionCall = true
+							upPlanCtx.updatePkCol = updatePk
+
+							err = buildUpdatePlans(ctx, builder, bindCtx, upPlanCtx, false)
+							putDmlPlanCtx(upPlanCtx)
+							if err != nil {
+								return err
+							}
+						} else {
+							// delete stmt get plan : sink_scan -> join[f1 inner join c1 on f1.id = c1.fid, get c1.*] -> sink   then + deletePlans
+							childActionTag := int32(0)
+							if delCtx.sourceTag != 0 || delCtx.skipTargetDelete {
+								// The join projects child-table columns unchanged, so retain
+								// their tag for sink remapping instead of inventing an alias
+								// that JOIN cannot map back to its inputs.
+								childActionTag = childScanTag
+							}
+							lastNodeId = builder.appendNode(&plan.Node{
+								NodeType:    plan.Node_JOIN,
+								Children:    []int32{lastNodeId, rightId},
+								JoinType:    plan.Node_INNER,
+								OnList:      joinConds,
+								ProjectList: childForJoinProject,
+								BindingTags: func() []int32 {
+									if childActionTag == 0 {
+										return nil
+									}
+									return []int32{childActionTag}
+								}(),
+							}, bindCtx)
+							if childActionTag != 0 {
+								lastNodeId = appendSinkNodeWithTag(builder, bindCtx, lastNodeId, childActionTag)
+								if builder.preserveSinkProjection == nil {
+									builder.preserveSinkProjection = make(map[int32]struct{})
+								}
+								builder.preserveSinkProjection[lastNodeId] = struct{}{}
 							} else {
-								// delete stmt get plan : sink_scan -> join[f1 inner join c1 on f1.id = c1.fid, get c1.*] -> sink   then + deletePlans
-								childActionTag := int32(0)
-								if delCtx.sourceTag != 0 || delCtx.skipTargetDelete {
-									// The join projects child-table columns unchanged, so retain
-									// their tag for sink remapping instead of inventing an alias
-									// that JOIN cannot map back to its inputs.
-									childActionTag = childScanTag
-								}
-								lastNodeId = builder.appendNode(&plan.Node{
-									NodeType:    plan.Node_JOIN,
-									Children:    []int32{lastNodeId, rightId},
-									JoinType:    plan.Node_INNER,
-									OnList:      joinConds,
-									ProjectList: childForJoinProject,
-									BindingTags: func() []int32 {
-										if childActionTag == 0 {
-											return nil
-										}
-										return []int32{childActionTag}
-									}(),
-								}, bindCtx)
-								if fkSelfReferCond && delCtx.skipTargetDelete {
-									lastNodeId, err = appendExcludeReplaceOldRows(
-										builder, bindCtx, lastNodeId,
-										childScanTag, int32(childRowIdPos),
-										parentActionStep, parentActionTag, int32(len(fk.Cols)))
-									if err != nil {
-										return err
-									}
-									lastNodeId, err = appendSelfReferCascadeSource(
-										builder, bindCtx, lastNodeId,
-										childObjRef, childTableDef, fk, childPosMap,
-										parentActionStep, parentActionTag, int32(len(fk.Cols)))
-									if err != nil {
-										return err
-									}
-									childActionTag = 0
-								} else if childActionTag != 0 {
-									lastNodeId = appendSinkNodeWithTag(builder, bindCtx, lastNodeId, childActionTag)
-									if builder.preserveSinkProjection == nil {
-										builder.preserveSinkProjection = make(map[int32]struct{})
-									}
-									builder.preserveSinkProjection[lastNodeId] = struct{}{}
-								} else {
-									lastNodeId = appendSinkNode(builder, bindCtx, lastNodeId)
-								}
-								newSourceStep := builder.appendStep(lastNodeId)
+								lastNodeId = appendSinkNode(builder, bindCtx, lastNodeId)
+							}
+							newSourceStep := builder.appendStep(lastNodeId)
 
-								//make deletePlans
-								allDelTableIDs := make(map[uint64]struct{})
-								allDelTableIDs[childTableDef.TblId] = struct{}{}
-								upPlanCtx := getDmlPlanCtx()
-								upPlanCtx.objRef = childObjRef
-								upPlanCtx.tableDef = childTableDef
-								upPlanCtx.updateColLength = 0
-								upPlanCtx.isMulti = false
-								upPlanCtx.rowIdPos = childRowIdPos
-								upPlanCtx.sourceStep = newSourceStep
-								upPlanCtx.sourceTag = childActionTag
-								upPlanCtx.beginIdx = 0
-								upPlanCtx.allDelTableIDs = allDelTableIDs
-								upPlanCtx.isFkRecursionCall = true
+							//make deletePlans
+							allDelTableIDs := make(map[uint64]struct{})
+							allDelTableIDs[childTableDef.TblId] = struct{}{}
+							upPlanCtx := getDmlPlanCtx()
+							upPlanCtx.objRef = childObjRef
+							upPlanCtx.tableDef = childTableDef
+							upPlanCtx.updateColLength = 0
+							upPlanCtx.isMulti = false
+							upPlanCtx.rowIdPos = childRowIdPos
+							upPlanCtx.sourceStep = newSourceStep
+							upPlanCtx.sourceTag = childActionTag
+							upPlanCtx.beginIdx = 0
+							upPlanCtx.allDelTableIDs = allDelTableIDs
+							upPlanCtx.isFkRecursionCall = true
 
-								err := buildDeletePlans(ctx, builder, bindCtx, upPlanCtx)
-								putDmlPlanCtx(upPlanCtx)
-								if err != nil {
-									return err
-								}
+							err := buildDeletePlans(ctx, builder, bindCtx, upPlanCtx)
+							putDmlPlanCtx(upPlanCtx)
+							if err != nil {
+								return err
 							}
 						}
 					}
@@ -1759,9 +2109,10 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 	return nil
 }
 
-// appendExcludeReplaceOldRows keeps cascade DELETE ownership disjoint from the
-// old rows deleted by the main REPLACE MULTI_UPDATE.
-func appendExcludeReplaceOldRows(
+// appendExcludeSelfReferCascadeRoots keeps a recursive cascade source disjoint
+// from the statement's root rows. It prevents duplicate ownership of those rows
+// and terminates cycles that lead back to a root.
+func appendExcludeSelfReferCascadeRoots(
 	builder *QueryBuilder,
 	bindCtx *BindContext,
 	inputNodeID int32,
@@ -1771,6 +2122,12 @@ func appendExcludeReplaceOldRows(
 	oldRowsSourceTag int32,
 	oldRowIDPos int32,
 ) (int32, error) {
+	if oldRowsSourceTag == 0 {
+		return appendExcludeSelfReferCascadeRootsLocal(
+			builder, bindCtx, inputNodeID, candidateRowIDPos,
+			oldRowsSourceStep, oldRowIDPos)
+	}
+
 	inputProject := builder.qry.Nodes[inputNodeID].ProjectList
 	if candidateRowIDPos < 0 || int(candidateRowIDPos) >= len(inputProject) ||
 		oldRowsSourceStep < 0 || int(oldRowsSourceStep) >= len(builder.qry.Steps) {
@@ -1783,8 +2140,8 @@ func appendExcludeReplaceOldRows(
 		ProjectList: DeepCopyExprList(inputProject),
 		BindingTags: []int32{candidateTag},
 	}, bindCtx)
-	oldRowsScanID := appendSinkScanNodeWithTag(
-		builder, bindCtx, oldRowsSourceStep, oldRowsSourceTag)
+	oldRowsScanID := builder.appendTaggedSinkScan(
+		bindCtx, oldRowsSourceStep, oldRowsSourceTag)
 	oldRowsTag := builder.genNewBindTag()
 	oldRowsScanID = builder.appendNode(&Node{
 		NodeType:    plan.Node_PROJECT,
@@ -1824,12 +2181,72 @@ func appendExcludeReplaceOldRows(
 	if err != nil {
 		return 0, err
 	}
+	// This filter owns the complete descendant row image handed to the delete
+	// pipeline. If it is folded into the MARK join, sink-column preservation sees
+	// a join with no pre-remap projection and can prune columns used only by DELETE.
 	return builder.appendNode(&Node{
-		NodeType:    plan.Node_FILTER,
-		Children:    []int32{markJoinID},
-		FilterList:  []*Expr{notOwnedByReplace},
-		ProjectList: getProjectionByLastNodeWithTag(builder, inputNodeID, candidateTag),
-		BindingTags: []int32{candidateTag},
+		NodeType:        plan.Node_FILTER,
+		Children:        []int32{markJoinID},
+		FilterList:      []*Expr{notOwnedByReplace},
+		ProjectList:     getProjectionByLastNodeWithTag(builder, inputNodeID, candidateTag),
+		BindingTags:     []int32{candidateTag},
+		FilterIsBarrier: true,
+	}, bindCtx), nil
+}
+
+// appendExcludeSelfReferCascadeRootsLocal is the post-createQuery variant used
+// by legacy DELETE. Its nodes are appended after global column tags have already
+// been remapped, so join expressions must address the left and right input
+// batches directly as relation positions 0 and 1.
+func appendExcludeSelfReferCascadeRootsLocal(
+	builder *QueryBuilder,
+	bindCtx *BindContext,
+	inputNodeID int32,
+	candidateRowIDPos int32,
+	oldRowsSourceStep int32,
+	oldRowIDPos int32,
+) (int32, error) {
+	inputProject := builder.qry.Nodes[inputNodeID].ProjectList
+	if candidateRowIDPos < 0 || int(candidateRowIDPos) >= len(inputProject) ||
+		oldRowsSourceStep < 0 || int(oldRowsSourceStep) >= len(builder.qry.Steps) {
+		return 0, moerr.NewInternalErrorf(
+			builder.GetContext(), "self-referencing cascade old-row source is incomplete")
+	}
+	oldRowsScanID := appendSinkScanNode(builder, bindCtx, oldRowsSourceStep)
+	oldRowsProject := builder.qry.Nodes[oldRowsScanID].ProjectList
+	if oldRowIDPos < 0 || int(oldRowIDPos) >= len(oldRowsProject) {
+		return 0, moerr.NewInternalErrorf(
+			builder.GetContext(), "self-referencing cascade old rowid is unavailable")
+	}
+
+	candidateRowID := &Expr{
+		Typ: inputProject[candidateRowIDPos].Typ,
+		Expr: &plan.Expr_Col{Col: &plan.ColRef{
+			RelPos: 0,
+			ColPos: candidateRowIDPos,
+			Name:   catalog.Row_ID,
+		}},
+	}
+	oldRowID := &Expr{
+		Typ: oldRowsProject[oldRowIDPos].Typ,
+		Expr: &plan.Expr_Col{Col: &plan.ColRef{
+			RelPos: 1,
+			ColPos: oldRowIDPos,
+			Name:   catalog.Row_ID,
+		}},
+	}
+	rowIDEqual, err := BindFuncExprImplByPlanExpr(
+		builder.GetContext(), "=", []*Expr{candidateRowID, oldRowID})
+	if err != nil {
+		return 0, err
+	}
+
+	return builder.appendNode(&Node{
+		NodeType:    plan.Node_JOIN,
+		Children:    []int32{inputNodeID, oldRowsScanID},
+		JoinType:    plan.Node_ANTI,
+		OnList:      []*Expr{rowIDEqual},
+		ProjectList: getProjectionByLastNode(builder, inputNodeID),
 	}, bindCtx), nil
 }
 
@@ -1870,31 +2287,63 @@ func appendAggNodeForFkJoin(builder *QueryBuilder, bindCtx *BindContext, lastNod
 	return lastNodeId
 }
 
-// appendSelfReferCascadeSource expands the directly matched child rows into the
-// complete descendant set for a self-referencing ON DELETE CASCADE. The
-// Every recursion level excludes the complete main-REPLACE old-row set, which
-// also prevents a valid FK cycle from revisiting a replaced row. The final
-// aggregate removes duplicate row images produced by converging paths.
+// appendSelfReferCascadeSource computes one fixpoint across every applicable
+// self-referencing ON DELETE CASCADE edge. Statement roots seed the fixpoint;
+// the recursive member uses an OR-of-edges predicate, so a path may switch
+// foreign keys at every level. UNION DISTINCT deduplicates by the complete row
+// image (including rowid), terminating cycles and converging paths. Roots are
+// removed once, after the fixpoint, before delete ownership is handed off.
 func appendSelfReferCascadeSource(
 	builder *QueryBuilder,
 	bindCtx *BindContext,
-	initialNodeID int32,
 	childObjRef *ObjectRef,
 	childTableDef *TableDef,
-	fk *ForeignKeyDef,
-	childPosMap map[string]int32,
+	fks []*ForeignKeyDef,
 	oldRowsSourceStep int32,
 	oldRowsSourceTag int32,
 	oldRowIDPos int32,
 ) (int32, error) {
+	if oldRowsSourceStep < 0 || int(oldRowsSourceStep) >= len(builder.qry.Steps) {
+		return 0, moerr.NewInternalError(
+			builder.GetContext(), "self-referencing cascade root source is unavailable")
+	}
+	if oldRowsSourceTag == 0 {
+		return appendSelfReferCascadeSourceLocal(
+			builder, bindCtx, childObjRef, childTableDef, fks,
+			oldRowsSourceStep, oldRowIDPos)
+	}
+
+	rowIDPos := int32(-1)
+	for pos, col := range childTableDef.Cols {
+		if col.Name == catalog.Row_ID {
+			rowIDPos = int32(pos)
+			break
+		}
+	}
+	if rowIDPos < 0 {
+		return 0, moerr.NewInternalError(
+			builder.GetContext(), "self-referencing cascade rowid is unavailable")
+	}
+	rootScanID := builder.appendTaggedSinkScan(
+		bindCtx, oldRowsSourceStep, oldRowsSourceTag)
+	rootSnapshotSinkID := appendSinkNodeWithTag(
+		builder, bindCtx, rootScanID, oldRowsSourceTag)
+	builder.qry.Nodes[rootSnapshotSinkID].ExtraOptions = materialized.CTESinkOption
+	if builder.preserveSinkProjection == nil {
+		builder.preserveSinkProjection = make(map[int32]struct{})
+	}
+	builder.preserveSinkProjection[rootSnapshotSinkID] = struct{}{}
+	rootSnapshotStep := builder.appendStep(rootSnapshotSinkID)
+	rootScanID = builder.appendTaggedSinkScan(
+		bindCtx, rootSnapshotStep, oldRowsSourceTag)
 	cteTag := builder.genNewBindTag()
-	initialNodeID = builder.appendNode(&Node{
+	anchorNodeID := builder.appendNode(&Node{
 		NodeType:    plan.Node_PROJECT,
-		Children:    []int32{initialNodeID},
-		ProjectList: DeepCopyExprList(builder.qry.Nodes[initialNodeID].ProjectList),
+		Children:    []int32{rootScanID},
+		ProjectList: getProjectionByLastNodeWithTag(builder, rootScanID, oldRowsSourceTag),
 		BindingTags: []int32{cteTag},
 	}, bindCtx)
-	initialSinkID := appendSinkNodeWithTag(builder, bindCtx, initialNodeID, cteTag)
+	initialSinkID := appendSinkNodeWithTag(builder, bindCtx, anchorNodeID, cteTag)
 	if builder.preserveSinkProjection == nil {
 		builder.preserveSinkProjection = make(map[int32]struct{})
 	}
@@ -1909,90 +2358,42 @@ func appendSelfReferCascadeSource(
 		TableDef:    CloneTableDefForPlan(childTableDef, true),
 	}, bindCtx)
 
-	descendantTag := builder.genNewBindTag()
-	descendantJoinProject := make([]*Expr, len(childTableDef.Cols))
+	recursiveDescendantTag := builder.genNewBindTag()
+	recursiveDescendantProject := make([]*Expr, len(childTableDef.Cols))
 	for i, col := range childTableDef.Cols {
-		descendantJoinProject[i] = &Expr{
+		recursiveDescendantProject[i] = &Expr{
 			Typ: col.Typ,
 			Expr: &plan.Expr_Col{Col: &plan.ColRef{
-				RelPos: descendantTag,
+				RelPos: recursiveDescendantTag,
 				ColPos: int32(i),
 				Name:   col.Name,
 			}},
 		}
 	}
-	descendantScanID := builder.appendNode(&Node{
+	recursiveDescendantScanID := builder.appendNode(&Node{
 		NodeType:    plan.Node_TABLE_SCAN,
 		Stats:       &plan.Stats{},
 		ObjRef:      childObjRef,
 		TableDef:    CloneTableDefForPlan(childTableDef, true),
-		BindingTags: []int32{descendantTag},
+		BindingTags: []int32{recursiveDescendantTag},
 	}, bindCtx)
-
-	recursiveConds := make([]*Expr, len(fk.Cols))
-	for i, childColID := range fk.Cols {
-		childName := ""
-		parentName := ""
-		for _, col := range childTableDef.Cols {
-			if col.ColId == childColID {
-				childName = col.Name
-			}
-			if col.ColId == fk.ForeignCols[i] {
-				parentName = col.Name
-			}
-		}
-		childPos, childOK := childPosMap[childName]
-		parentPos, parentOK := childPosMap[parentName]
-		if !childOK || !parentOK {
-			return 0, moerr.NewInternalErrorf(
-				builder.GetContext(), "self-referencing foreign key column mapping is incomplete")
-		}
-		leftExpr := &Expr{
-			Typ: childTableDef.Cols[parentPos].Typ,
-			Expr: &plan.Expr_Col{Col: &plan.ColRef{
-				RelPos: cteTag,
-				ColPos: parentPos,
-				Name:   parentName,
-			}},
-		}
-		rightExpr := &Expr{
-			Typ: childTableDef.Cols[childPos].Typ,
-			Expr: &plan.Expr_Col{Col: &plan.ColRef{
-				RelPos: descendantTag,
-				ColPos: childPos,
-				Name:   childName,
-			}},
-		}
-		cond, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*Expr{leftExpr, rightExpr})
-		if err != nil {
-			return 0, err
-		}
-		recursiveConds[i] = cond
-	}
-	rowIDPos, rowIDOK := childPosMap[catalog.Row_ID]
-	if !rowIDOK {
-		return 0, moerr.NewInternalErrorf(
-			builder.GetContext(), "self-referencing cascade rowid is unavailable")
-	}
-	recursiveJoinID := builder.appendNode(&Node{
-		NodeType:    plan.Node_JOIN,
-		Children:    []int32{recursiveScanID, descendantScanID},
-		JoinType:    plan.Node_INNER,
-		OnList:      recursiveConds,
-		ProjectList: descendantJoinProject,
-	}, bindCtx)
-	var err error
-	recursiveJoinID, err = appendExcludeReplaceOldRows(
-		builder, bindCtx, recursiveJoinID,
-		descendantTag, rowIDPos,
-		oldRowsSourceStep, oldRowsSourceTag, oldRowIDPos)
+	recursiveMatch, err := bindSelfReferForeignKeyMatch(
+		builder, childTableDef, fks, cteTag, recursiveDescendantTag)
 	if err != nil {
 		return 0, err
 	}
+	recursiveJoinID := builder.appendNode(&Node{
+		NodeType:    plan.Node_JOIN,
+		Children:    []int32{recursiveScanID, recursiveDescendantScanID},
+		JoinType:    plan.Node_INNER,
+		OnList:      []*Expr{recursiveMatch},
+		ProjectList: recursiveDescendantProject,
+	}, bindCtx)
 	recursiveJoinID = builder.appendNode(&Node{
-		NodeType:    plan.Node_PROJECT,
-		Children:    []int32{recursiveJoinID},
-		ProjectList: DeepCopyExprList(descendantJoinProject),
+		NodeType: plan.Node_PROJECT,
+		Children: []int32{recursiveJoinID},
+		ProjectList: getProjectionByLastNodeWithTag(
+			builder, recursiveJoinID, recursiveDescendantTag),
 		BindingTags: []int32{cteTag},
 	}, bindCtx)
 	recursiveSinkID := appendSinkNodeWithTag(builder, bindCtx, recursiveJoinID, cteTag)
@@ -2006,8 +2407,9 @@ func appendSelfReferCascadeSource(
 			initialSourceStep,
 			recursiveSourceStep,
 		},
-		ProjectList: getProjectionByLastNodeWithTag(builder, initialSinkID, cteTag),
-		BindingTags: []int32{cteTag},
+		ProjectList:            getProjectionByLastNodeWithTag(builder, initialSinkID, cteTag),
+		BindingTags:            []int32{cteTag},
+		RecursiveUnionDistinct: true,
 	}, bindCtx)
 	cteSourceStep := int32(len(builder.qry.Steps))
 	builder.qry.Nodes[recursiveScanID].SourceStep[0] = cteSourceStep
@@ -2016,16 +2418,124 @@ func appendSelfReferCascadeSource(
 	builder.preserveSinkProjection[cteSinkID] = struct{}{}
 	cteSourceStep = builder.appendStep(cteSinkID)
 
-	lastNodeID := appendSinkScanNodeWithTag(builder, bindCtx, cteSourceStep, cteTag)
+	lastNodeID := builder.appendTaggedSinkScan(bindCtx, cteSourceStep, cteTag)
 	if builder.preserveScanProjection == nil {
 		builder.preserveScanProjection = make(map[int32]struct{})
 	}
 	builder.preserveScanProjection[lastNodeID] = struct{}{}
-	lastNodeID = builder.appendNode(&Node{
-		NodeType:    plan.Node_PROJECT,
-		Children:    []int32{lastNodeID},
-		ProjectList: DeepCopyExprList(builder.qry.Nodes[lastNodeID].ProjectList[:len(childTableDef.Cols)]),
+	lastNodeID, err = appendExcludeSelfReferCascadeRoots(
+		builder, bindCtx, lastNodeID, cteTag, rowIDPos,
+		rootSnapshotStep, oldRowsSourceTag, oldRowIDPos)
+	if err != nil {
+		return 0, err
+	}
+	// RECURSIVE_CTE uses UNION DISTINCT over the complete row image (including
+	// rowid), so the closure is already deduplicated. Keeping the tagged image
+	// intact here also lets pre-createQuery REPLACE consumers request only the
+	// columns their delete/index branches actually need.
+	lastNodeID = appendSinkNodeWithTag(builder, bindCtx, lastNodeID, cteTag)
+	builder.preserveSinkProjection[lastNodeID] = struct{}{}
+	return lastNodeID, nil
+}
+
+// appendSelfReferCascadeSourceLocal builds the legacy DELETE recursive branch
+// after createQuery has already remapped the main query. Every expression uses
+// execution-local input positions; no later global-tag remap is available.
+func appendSelfReferCascadeSourceLocal(
+	builder *QueryBuilder,
+	bindCtx *BindContext,
+	childObjRef *ObjectRef,
+	childTableDef *TableDef,
+	fks []*ForeignKeyDef,
+	oldRowsSourceStep int32,
+	oldRowIDPos int32,
+) (int32, error) {
+	rootSourceScanID := appendSinkScanNode(builder, bindCtx, oldRowsSourceStep)
+	rootSnapshotSinkID := appendSinkNode(builder, bindCtx, rootSourceScanID)
+	builder.qry.Nodes[rootSnapshotSinkID].ExtraOptions = materialized.CTESinkOption
+	rootSnapshotStep := builder.appendStep(rootSnapshotSinkID)
+	rootScanID := appendSinkScanNode(builder, bindCtx, rootSnapshotStep)
+	descendantProject := make([]*Expr, len(childTableDef.Cols))
+	for i, col := range childTableDef.Cols {
+		descendantProject[i] = &Expr{
+			Typ: col.Typ,
+			Expr: &plan.Expr_Col{Col: &plan.ColRef{
+				RelPos: 0,
+				ColPos: int32(i),
+				Name:   col.Name,
+			}},
+		}
+	}
+	rowIDPos := int32(-1)
+	for pos, col := range childTableDef.Cols {
+		if col.Name == catalog.Row_ID {
+			rowIDPos = int32(pos)
+			break
+		}
+	}
+	if rowIDPos < 0 {
+		return 0, moerr.NewInternalError(
+			builder.GetContext(), "self-referencing cascade rowid is unavailable")
+	}
+	initialNodeID := rootScanID
+	initialSinkID := appendSinkNode(builder, bindCtx, initialNodeID)
+	initialSourceStep := builder.appendStep(initialSinkID)
+
+	recursiveScanID := builder.appendNode(&Node{
+		NodeType:   plan.Node_RECURSIVE_SCAN,
+		SourceStep: []int32{initialSourceStep},
+		ProjectList: getProjectionByLastNode(
+			builder, initialSinkID),
+		TableDef: CloneTableDefForPlan(childTableDef, true),
 	}, bindCtx)
+
+	recursiveDescendantScanID := builder.appendNode(&Node{
+		NodeType:    plan.Node_TABLE_SCAN,
+		Stats:       &plan.Stats{},
+		ObjRef:      childObjRef,
+		TableDef:    CloneTableDefForPlan(childTableDef, true),
+		ProjectList: DeepCopyExprList(descendantProject),
+	}, bindCtx)
+
+	recursiveMatch, err := bindSelfReferForeignKeyMatch(
+		builder, childTableDef, fks, 0, 1)
+	if err != nil {
+		return 0, err
+	}
+
+	recursiveJoinID := builder.appendNode(&Node{
+		NodeType:    plan.Node_JOIN,
+		Children:    []int32{recursiveScanID, recursiveDescendantScanID},
+		JoinType:    plan.Node_INNER,
+		OnList:      []*Expr{recursiveMatch},
+		ProjectList: getProjectionByLastNodeForRightJoin(builder, recursiveDescendantScanID),
+	}, bindCtx)
+	recursiveSinkID := appendSinkNode(builder, bindCtx, recursiveJoinID)
+	builder.qry.Nodes[recursiveSinkID].RecursiveCte = true
+	recursiveSourceStep := builder.appendStep(recursiveSinkID)
+
+	cteScanID := builder.appendNode(&Node{
+		NodeType: plan.Node_RECURSIVE_CTE,
+		SourceStep: []int32{
+			initialSourceStep,
+			recursiveSourceStep,
+		},
+		ProjectList:            getProjectionByLastNode(builder, initialSinkID),
+		RecursiveUnionDistinct: true,
+	}, bindCtx)
+	cteSourceStep := int32(len(builder.qry.Steps))
+	builder.qry.Nodes[recursiveScanID].SourceStep[0] = cteSourceStep
+	cteSinkID := appendSinkNode(builder, bindCtx, cteScanID)
+	builder.qry.Nodes[cteSinkID].RecursiveSink = true
+	cteSourceStep = builder.appendStep(cteSinkID)
+
+	lastNodeID := appendSinkScanNode(builder, bindCtx, cteSourceStep)
+	lastNodeID, err = appendExcludeSelfReferCascadeRootsLocal(
+		builder, bindCtx, lastNodeID, rowIDPos,
+		rootSnapshotStep, oldRowIDPos)
+	if err != nil {
+		return 0, err
+	}
 	return appendAggNodeForFkJoin(builder, bindCtx, lastNodeID), nil
 }
 
@@ -2147,7 +2657,9 @@ func makeOneInsertPlan(
 
 	// if table have fk. then append join node & filter node
 	// sink_scan -> join -> filter
-	if err = appendForeignConstrantPlan(builder, bindCtx, tableDef, objRef, sourceStep, isFkRecursionCall); err != nil {
+	if err = appendForeignConstrantPlan(
+		builder, bindCtx, tableDef, objRef, sourceStep, isFkRecursionCall, updateColLength > 0,
+	); err != nil {
 		return err
 	}
 
@@ -2381,6 +2893,10 @@ func getProjectionByLastNodeWithTag(builder *QueryBuilder, lastNodeId, tag int32
 	if projLength == 0 {
 		return getProjectionByLastNodeWithTag(builder, lastNode.Children[0], tag)
 	}
+	projectionTag := tag
+	if len(lastNode.BindingTags) > 0 {
+		projectionTag = lastNode.BindingTags[0]
+	}
 	projection := make([]*Expr, len(lastNode.ProjectList))
 	for i, expr := range lastNode.ProjectList {
 		name := ""
@@ -2391,7 +2907,7 @@ func getProjectionByLastNodeWithTag(builder *QueryBuilder, lastNodeId, tag int32
 			Typ: expr.Typ,
 			Expr: &plan.Expr_Col{
 				Col: &plan.ColRef{
-					RelPos: lastNode.BindingTags[0],
+					RelPos: projectionTag,
 					ColPos: int32(i),
 					Name:   name,
 				},
@@ -3367,6 +3883,11 @@ func appendPreInsertPlan(
 
 	var useColumns []int32
 	idxDef := tableDef.Indexes[indexIdx]
+	if catalog.IsRegularIndexAlgo(idxDef.IndexAlgo) {
+		if err := validateRegularIndexPrefixMetadata(idxDef); err != nil {
+			return 0, err
+		}
+	}
 	colsMap := make(map[string]int)
 	prefixLengths, err := catalog.IndexPrefixLengthsFromParamsWithError(idxDef.IndexAlgoParams)
 	if err != nil {
@@ -3398,10 +3919,7 @@ func appendPreInsertPlan(
 	if len(idxDef.Parts) == 1 || isSpatialIndexDef(idxDef) {
 		ukType = builder.qry.Nodes[lastNodeId].ProjectList[useColumns[0]].Typ
 	} else {
-		ukType = Type{
-			Id:    int32(types.T_varchar),
-			Width: types.MaxVarcharLen,
-		}
+		ukType = makeHiddenColTyp()
 	}
 	var preinsertUkProjection []*Expr
 	preinsertUkProjection = append(preinsertUkProjection, &plan.Expr{
@@ -3543,15 +4061,13 @@ func appendDeleteIndexTablePlan(
 	}
 
 	leftscan := &plan.Node{
-		NodeType:               plan.Node_TABLE_SCAN,
-		Stats:                  &plan.Stats{},
-		ObjRef:                 uniqueObjRef,
-		TableDef:               uniqueTableDef,
-		ProjectList:            scanNodeProject,
-		RuntimeFilterProbeList: []*plan.RuntimeFilterSpec{MakeRuntimeFilter(rfTag, false, 0, probeExpr, false)},
+		NodeType:    plan.Node_TABLE_SCAN,
+		Stats:       &plan.Stats{},
+		ObjRef:      uniqueObjRef,
+		TableDef:    uniqueTableDef,
+		ProjectList: scanNodeProject,
 	}
 	leftId := builder.appendNode(leftscan, bindCtx)
-	leftscan.Stats.ForceOneCN = true //to avoid bugs ,maybe refactor in the future
 
 	// append projection
 	projectList = append(projectList, &plan.Expr{
@@ -3643,13 +4159,28 @@ func appendDeleteIndexTablePlan(
 	joinConds = []*Expr{condExpr}
 
 	buildExpr := &plan.Expr{
-		Typ: pkTyp,
+		Typ: condExpr.GetF().Args[1].Typ,
 		Expr: &plan.Expr_Col{
 			Col: &plan.ColRef{
 				RelPos: 0,
 				ColPos: 0,
 			},
 		},
+	}
+	probeSpec, buildSpec, hasRuntimeFilter := builder.makeExactRuntimeFilterPair(
+		rfTag,
+		false,
+		GetInFilterCardLimitOnPK(
+			builder.compCtx.GetProcess().GetService(),
+			builder.qry.Nodes[leftId].Stats.TableCnt,
+		),
+		probeExpr,
+		buildExpr,
+		false,
+	)
+	if hasRuntimeFilter {
+		leftscan.RuntimeFilterProbeList = []*plan.RuntimeFilterSpec{probeSpec}
+		leftscan.Stats.ForceOneCN = true
 	}
 
 	/*
@@ -3691,17 +4222,21 @@ func appendDeleteIndexTablePlan(
 		While secondary indexes don't store NULL values, they DO need RIGHT JOIN to handle
 		new inserts that don't yet exist in the index table.
 	*/
-	sid := builder.compCtx.GetProcess().GetService()
-	lastNodeId = builder.appendNode(&plan.Node{
-		NodeType:               plan.Node_JOIN,
-		Children:               []int32{leftId, lastNodeId},
-		JoinType:               plan.Node_RIGHT,
-		IsRightJoin:            true,
-		OnList:                 joinConds,
-		ProjectList:            projectList,
-		RuntimeFilterBuildList: []*plan.RuntimeFilterSpec{MakeRuntimeFilter(rfTag, false, GetInFilterCardLimitOnPK(sid, builder.qry.Nodes[leftId].Stats.TableCnt), buildExpr, false)},
-	}, bindCtx)
-	recalcStatsByRuntimeFilter(builder.qry.Nodes[leftId], builder.qry.Nodes[lastNodeId], builder)
+	joinNode := &plan.Node{
+		NodeType:    plan.Node_JOIN,
+		Children:    []int32{leftId, lastNodeId},
+		JoinType:    plan.Node_RIGHT,
+		IsRightJoin: true,
+		OnList:      joinConds,
+		ProjectList: projectList,
+	}
+	if hasRuntimeFilter {
+		joinNode.RuntimeFilterBuildList = []*plan.RuntimeFilterSpec{buildSpec}
+	}
+	lastNodeId = builder.appendNode(joinNode, bindCtx)
+	if hasRuntimeFilter {
+		recalcStatsByRuntimeFilter(builder.qry.Nodes[leftId], joinNode, builder)
+	}
 	return lastNodeId, nil
 }
 
@@ -4245,6 +4780,38 @@ func makePreUpdateDeletePlan(
 		lastNodeId = builder.appendNode(filterNode, bindCtx)
 	}
 
+	lastNodeId, cascadeErr := appendSelfReferOnUpdateCascadeRoots(
+		builder, bindCtx, delCtx, lastNodeId)
+	if cascadeErr != nil {
+		return -1, cascadeErr
+	}
+
+	if delCtx.updateColLength > 0 {
+		checkedLastNodeID, err := appendCheckConstraintPlanWithColLookup(
+			builder,
+			bindCtx,
+			delCtx.tableDef,
+			lastNodeId,
+			0,
+			func(colName string) (int32, bool) {
+				if colPos, updated := delCtx.updateColPosMap[colName]; updated {
+					return int32(colPos), true
+				}
+				for colPos, col := range delCtx.tableDef.Cols {
+					if col.Name == colName {
+						return int32(colPos), true
+					}
+				}
+				return 0, false
+			},
+			delCtx.ignoreCheckConstraint,
+		)
+		if err != nil {
+			return -1, err
+		}
+		lastNodeId = checkedLastNodeID
+	}
+
 	// lastNodeId = appendSinkNode(builder, bindCtx, lastNodeId)
 	// nextSourceStep := builder.appendStep(lastNodeId)
 
@@ -4419,6 +4986,7 @@ type sinkScanMeta struct {
 	step           int
 	nodeId         int32
 	sinkNodeId     int32
+	sourceIdx      int
 	preNodeId      int32
 	preNodeIsUnion bool //if preNode is Union, one sinkScan to one sink is fine
 	recursive      bool
@@ -4436,7 +5004,7 @@ func reduceSinkSinkScanNodes(qry *Query) {
 	}
 
 	// merge one sink to one sinkScan
-	pointToNodeMap := make(map[int32][]int32)
+	pointToNodeMap := make(map[int32][]*sinkScanMeta)
 	for sinkNodeId, meta := range sinks {
 		if len(meta.scans) == 1 && !meta.scans[0].preNodeIsUnion && !meta.scans[0].recursive {
 			// one sink to one sinkScan
@@ -4445,13 +5013,7 @@ func reduceSinkSinkScanNodes(qry *Query) {
 			sinkScanPreNode.Children = sinkNode.Children
 			delete(stepMaps, meta.step)
 		} else {
-			for _, scanMeta := range meta.scans {
-				if _, ok := pointToNodeMap[sinkNodeId]; !ok {
-					pointToNodeMap[sinkNodeId] = []int32{scanMeta.nodeId}
-				} else {
-					pointToNodeMap[sinkNodeId] = append(pointToNodeMap[sinkNodeId], scanMeta.nodeId)
-				}
-			}
+			pointToNodeMap[sinkNodeId] = append(pointToNodeMap[sinkNodeId], meta.scans...)
 		}
 	}
 
@@ -4468,13 +5030,9 @@ func reduceSinkSinkScanNodes(qry *Query) {
 			nodeId := stepMaps[key]
 			newStepIdx := len(newSteps)
 			newSteps = append(newSteps, nodeId)
-			if sinkScanNodeIds, ok := pointToNodeMap[nodeId]; ok {
-				for _, sinkScanNodeId := range sinkScanNodeIds {
-					if len(qry.Nodes[sinkScanNodeId].SourceStep) > 1 {
-						qry.Nodes[sinkScanNodeId].SourceStep[0] = int32(newStepIdx)
-					} else {
-						qry.Nodes[sinkScanNodeId].SourceStep = []int32{int32(newStepIdx)}
-					}
+			if scanMetas, ok := pointToNodeMap[nodeId]; ok {
+				for _, scanMeta := range scanMetas {
+					qry.Nodes[scanMeta.nodeId].SourceStep[scanMeta.sourceIdx] = int32(newStepIdx)
 				}
 			}
 		}
@@ -4500,23 +5058,26 @@ func collectSinkAndSinkScanMeta(
 			sinks[nodeId].step = oldStep
 		}
 	} else if node.NodeType == plan.Node_SINK_SCAN || node.NodeType == plan.Node_RECURSIVE_CTE || node.NodeType == plan.Node_RECURSIVE_SCAN {
-		sinkNodeId := qry.Steps[node.SourceStep[0]]
-		if _, ok := sinks[sinkNodeId]; !ok {
-			sinks[sinkNodeId] = &sinkMeta{
-				step:  -1,
-				scans: make([]*sinkScanMeta, 0, len(qry.Steps)),
+		for sourceIdx, sourceStep := range node.SourceStep {
+			sinkNodeId := qry.Steps[sourceStep]
+			if _, ok := sinks[sinkNodeId]; !ok {
+				sinks[sinkNodeId] = &sinkMeta{
+					step:  -1,
+					scans: make([]*sinkScanMeta, 0, len(qry.Steps)),
+				}
 			}
-		}
 
-		meta := &sinkScanMeta{
-			step:           oldStep,
-			nodeId:         nodeId,
-			sinkNodeId:     sinkNodeId,
-			preNodeId:      preNodeId,
-			preNodeIsUnion: qry.Nodes[preNodeId].NodeType == plan.Node_UNION,
-			recursive:      len(node.SourceStep) > 1 || node.NodeType == plan.Node_RECURSIVE_CTE,
+			meta := &sinkScanMeta{
+				step:           oldStep,
+				nodeId:         nodeId,
+				sinkNodeId:     sinkNodeId,
+				sourceIdx:      sourceIdx,
+				preNodeId:      preNodeId,
+				preNodeIsUnion: qry.Nodes[preNodeId].NodeType == plan.Node_UNION,
+				recursive:      len(node.SourceStep) > 1 || node.NodeType == plan.Node_RECURSIVE_CTE,
+			}
+			sinks[sinkNodeId].scans = append(sinks[sinkNodeId].scans, meta)
 		}
-		sinks[sinkNodeId].scans = append(sinks[sinkNodeId].scans, meta)
 	}
 
 	for _, childId := range node.Children {
@@ -4598,18 +5159,49 @@ type FkReferKey struct {
 
 // FkReferDef holds the definition & details of the foreign key
 type FkReferDef struct {
-	Db       string //fk database name
-	Tbl      string //fk table name
-	Name     string //fk constraint name
-	Col      string //fk column name, letter case: lower
-	ReferCol string //referenced column name, letter case: lower
-	OnDelete string //on delete action
-	OnUpdate string //on update action
+	Db                  string //fk database name
+	Tbl                 string //fk table name
+	Name                string //fk constraint name
+	Col                 string //fk column name, letter case: lower
+	ReferCol            string //referenced column name, letter case: lower
+	OnDelete            string //on delete action
+	OnUpdate            string //on update action
+	ReferencedIndexName string
+	OnDeleteOrigin      string
+	OnUpdateOrigin      string
 }
 
 func (fk FkReferDef) String() string {
 	return fmt.Sprintf("%s.%s %s %s => %s",
 		fk.Db, fk.Tbl, fk.Name, fk.Col, fk.ReferCol)
+}
+
+type foreignKeyCatalogLayout uint8
+
+const (
+	foreignKeyCatalogLegacy foreignKeyCatalogLayout = iota
+	foreignKeyCatalogExtended
+)
+
+// resolveForeignKeyCatalogLayout negotiates the tenant-local catalog shape.
+// Tenant upgrades are asynchronous and add the metadata columns one at a time,
+// so the extended layout is usable only after all three columns are visible.
+// Legacy reads and explicit 16-column inserts remain valid during every earlier
+// state, including a partially applied migration.
+func resolveForeignKeyCatalogLayout(ctx CompilerContext) (foreignKeyCatalogLayout, error) {
+	_, tableDef, err := ctx.Resolve(catalog.MO_CATALOG, catalog.MOForeignKeys, nil)
+	if err != nil {
+		return foreignKeyCatalogLegacy, err
+	}
+	if tableDef == nil {
+		return foreignKeyCatalogLegacy, nil
+	}
+	for _, column := range []string{"referenced_index_name", "on_delete_origin", "on_update_origin"} {
+		if FindColumn(tableDef.Cols, column) == nil {
+			return foreignKeyCatalogLegacy, nil
+		}
+	}
+	return foreignKeyCatalogExtended, nil
 }
 
 // quoteSQLStringLiteral emits a literal that MatrixOne's MySQL scanner reads
@@ -4626,6 +5218,17 @@ func quoteSQLStringLiteral(s string) string {
 // GetSqlForFkReferredTo returns the query that retrieves the fk relationships
 // that refer to the table
 func GetSqlForFkReferredTo(db, table string) string {
+	return getSqlForFkReferredToWithCatalogLayout(db, table, foreignKeyCatalogExtended)
+}
+
+func getSqlForFkReferredToWithCatalogLayout(db, table string, layout foreignKeyCatalogLayout) string {
+	metadataColumns := ""
+	if layout == foreignKeyCatalogExtended {
+		metadataColumns =
+			", referenced_index_name, " +
+				"on_delete_origin, " +
+				"on_update_origin"
+	}
 	return fmt.Sprintf(
 		"select "+
 			"db_name, "+
@@ -4634,25 +5237,35 @@ func GetSqlForFkReferredTo(db, table string) string {
 			"column_name, "+
 			"refer_column_name, "+
 			"on_delete, "+
-			"on_update "+
-			"from "+
+			"on_update"+
+			metadataColumns+
+			" from "+
 			"`mo_catalog`.`mo_foreign_keys` "+
 			"where "+
 			"refer_db_name = %s and refer_table_name = %s "+
 			" and "+
 			"(db_name != %s or db_name = %s and table_name != %s) "+
-			"order by db_name, table_name, constraint_name;",
+			"order by db_name, table_name, constraint_name, constraint_id;",
 		quoteSQLStringLiteral(db), quoteSQLStringLiteral(table),
 		quoteSQLStringLiteral(db), quoteSQLStringLiteral(db), quoteSQLStringLiteral(table))
 }
 
 // GetFkReferredTo returns the foreign key relationships that refer to the table
 func GetFkReferredTo(ctx CompilerContext, db, table string) (map[FkReferKey]map[string][]*FkReferDef, error) {
+	ret, _, err := getFkReferredToWithCatalogLayout(ctx, db, table)
+	return ret, err
+}
+
+func getFkReferredToWithCatalogLayout(ctx CompilerContext, db, table string) (map[FkReferKey]map[string][]*FkReferDef, foreignKeyCatalogLayout, error) {
 	//exclude fk self reference
-	sql := GetSqlForFkReferredTo(db, table)
+	layout, err := resolveForeignKeyCatalogLayout(ctx)
+	if err != nil {
+		return nil, foreignKeyCatalogLegacy, err
+	}
+	sql := getSqlForFkReferredToWithCatalogLayout(db, table, layout)
 	res, err := runSql(ctx, sql)
 	if err != nil {
-		return nil, err
+		return nil, layout, err
 	}
 	defer res.Close()
 	ret := make(map[FkReferKey]map[string][]*FkReferDef)
@@ -4663,6 +5276,9 @@ func GetFkReferredTo(ctx CompilerContext, db, table string) (map[FkReferKey]map[
 	const referColIdx = 4
 	const deleteIdx = 5
 	const updateIdx = 6
+	const referencedIndexIdx = 7
+	const deleteOriginIdx = 8
+	const updateOriginIdx = 9
 	if res.Batches != nil {
 		for _, batch := range res.Batches {
 			if batch != nil &&
@@ -4678,6 +5294,14 @@ func GetFkReferredTo(ctx CompilerContext, db, table string) (map[FkReferKey]map[
 						OnDelete: string(batch.Vecs[deleteIdx].GetBytesAt(i)),
 						OnUpdate: string(batch.Vecs[updateIdx].GetBytesAt(i)),
 					}
+					if layout == foreignKeyCatalogExtended {
+						fk.ReferencedIndexName = string(batch.Vecs[referencedIndexIdx].GetBytesAt(i))
+						fk.OnDeleteOrigin = string(batch.Vecs[deleteOriginIdx].GetBytesAt(i))
+						fk.OnUpdateOrigin = string(batch.Vecs[updateOriginIdx].GetBytesAt(i))
+					} else {
+						fk.OnDeleteOrigin = legacyForeignKeyActionOrigin(fk.OnDelete)
+						fk.OnUpdateOrigin = legacyForeignKeyActionOrigin(fk.OnUpdate)
+					}
 					key := FkReferKey{Db: fk.Db, Tbl: fk.Tbl}
 					var constraint map[string][]*FkReferDef
 					var ok bool
@@ -4690,7 +5314,16 @@ func GetFkReferredTo(ctx CompilerContext, db, table string) (map[FkReferKey]map[
 			}
 		}
 	}
-	return ret, nil
+	return ret, layout, nil
+}
+
+func legacyForeignKeyActionOrigin(action string) string {
+	switch strings.ToUpper(strings.ReplaceAll(strings.TrimSpace(action), " ", "_")) {
+	case plan.ForeignKeyDef_RESTRICT.String(), plan.ForeignKeyDef_NO_ACTION.String():
+		return plan.ForeignKeyDef_ACTION_ORIGIN_LEGACY_AMBIGUOUS.String()
+	default:
+		return plan.ForeignKeyDef_ACTION_ORIGIN_EXPLICIT.String()
+	}
 }
 
 func convertIntoReferAction(s string) plan.ForeignKeyDef_RefAction {
@@ -4716,17 +5349,41 @@ func convertIntoReferAction(s string) plan.ForeignKeyDef_RefAction {
 	}
 }
 
+func convertIntoReferActionOrigin(s string) plan.ForeignKeyDef_RefActionOrigin {
+	switch strings.ToUpper(strings.TrimSpace(s)) {
+	case plan.ForeignKeyDef_ACTION_ORIGIN_DEFAULT.String():
+		return plan.ForeignKeyDef_ACTION_ORIGIN_DEFAULT
+	case plan.ForeignKeyDef_ACTION_ORIGIN_LEGACY_AMBIGUOUS.String():
+		return plan.ForeignKeyDef_ACTION_ORIGIN_LEGACY_AMBIGUOUS
+	default:
+		return plan.ForeignKeyDef_ACTION_ORIGIN_EXPLICIT
+	}
+}
+
 // getSqlForAddFk returns the insert sql that adds a fk relationship
 // into the mo_foreign_keys table
 func getSqlForAddFk(db, table string, data *FkData) string {
-	row := make([]string, 16)
+	return getSqlForAddFkWithCatalogLayout(db, table, data, foreignKeyCatalogExtended)
+}
+
+func getSqlForAddFkWithCatalogLayout(db, table string, data *FkData, layout foreignKeyCatalogLayout) string {
+	columnCount := 16
+	columns := "constraint_name, constraint_id, db_name, db_id, table_name, table_id, column_name, column_id, refer_db_name, refer_db_id, refer_table_name, refer_table_id, refer_column_name, refer_column_id, on_delete, on_update"
+	if layout == foreignKeyCatalogExtended {
+		columnCount = 19
+		columns += ", referenced_index_name, on_delete_origin, on_update_origin"
+	}
+	row := make([]string, columnCount)
 	rows := 0
 	sb := strings.Builder{}
-	sb.WriteString("insert into `mo_catalog`.`mo_foreign_keys`  ")
+	sb.WriteString("insert into `mo_catalog`.`mo_foreign_keys` (")
+	sb.WriteString(columns)
+	sb.WriteByte(')')
 	sb.WriteString(" values ")
 	for childIdx, childCol := range data.Cols.Cols {
 		row[0] = data.Def.Name
-		row[1] = "0"
+		// constraint_id preserves the declaration order of composite foreign-key columns.
+		row[1] = strconv.Itoa(childIdx + 1)
 		row[2] = db
 		row[3] = "0"
 		row[4] = table
@@ -4741,6 +5398,17 @@ func getSqlForAddFk(db, table string, data *FkData) string {
 		row[13] = "0"
 		row[14] = data.Def.OnDelete.String()
 		row[15] = data.Def.OnUpdate.String()
+		if layout == foreignKeyCatalogExtended {
+			row[16] = data.Def.ReferencedIndexName
+			row[17] = data.Def.OnDeleteOrigin.String()
+			row[18] = data.Def.OnUpdateOrigin.String()
+		}
+		if data.Def.OnDeleteOrigin == plan.ForeignKeyDef_ACTION_ORIGIN_DEFAULT {
+			row[14] = plan.ForeignKeyDef_NO_ACTION.String()
+		}
+		if data.Def.OnUpdateOrigin == plan.ForeignKeyDef_ACTION_ORIGIN_DEFAULT {
+			row[15] = plan.ForeignKeyDef_NO_ACTION.String()
+		}
 		{
 			if rows > 0 {
 				sb.WriteByte(',')
@@ -4757,6 +5425,16 @@ func getSqlForAddFk(db, table string, data *FkData) string {
 		}
 	}
 	return sb.String()
+}
+
+func getSqlForUpdateFkReferencedIndex(db, table, constraintName, referencedIndexName string) string {
+	return fmt.Sprintf(
+		"update `mo_catalog`.`mo_foreign_keys` set referenced_index_name = %s where db_name = %s and table_name = %s and constraint_name = %s",
+		quoteSQLStringLiteral(referencedIndexName),
+		quoteSQLStringLiteral(db),
+		quoteSQLStringLiteral(table),
+		quoteSQLStringLiteral(constraintName),
+	)
 }
 
 // getSqlForDeleteTable returns the delete sql that deletes all the fk relationships from mo_foreign_keys
@@ -6088,15 +6766,13 @@ func buildDeleteRowsFullTextIndex(ctx CompilerContext, builder *QueryBuilder, bi
 		}
 
 		idxScanNode := &plan.Node{
-			NodeType:               plan.Node_TABLE_SCAN,
-			Stats:                  &plan.Stats{},
-			ObjRef:                 indexObjRef,
-			TableDef:               newIndexTableDef,
-			ProjectList:            scanNodeProject,
-			RuntimeFilterProbeList: []*plan.RuntimeFilterSpec{MakeRuntimeFilter(rfTag, false, 0, probeExpr, true)},
+			NodeType:    plan.Node_TABLE_SCAN,
+			Stats:       &plan.Stats{},
+			ObjRef:      indexObjRef,
+			TableDef:    newIndexTableDef,
+			ProjectList: scanNodeProject,
 		}
 		idxScanId := builder.appendNode(idxScanNode, bindCtx)
-		idxScanNode.Stats.ForceOneCN = true
 
 		var leftExpr = &plan.Expr{
 			Typ: scanNodeProject[1].Typ,
@@ -6157,7 +6833,7 @@ func buildDeleteRowsFullTextIndex(ctx CompilerContext, builder *QueryBuilder, bi
 		)
 
 		rfBuildExpr := &plan.Expr{
-			Typ: orgPkType,
+			Typ: joinCond.GetF().Args[1].Typ,
 			Expr: &plan.Expr_Col{
 				Col: &plan.ColRef{
 					RelPos: 0,
@@ -6167,14 +6843,27 @@ func buildDeleteRowsFullTextIndex(ctx CompilerContext, builder *QueryBuilder, bi
 		}
 
 		sid := builder.compCtx.GetProcess().GetService()
-		lastNodeId = builder.appendNode(&plan.Node{
-			NodeType:               plan.Node_JOIN,
-			JoinType:               plan.Node_INNER,
-			Children:               []int32{idxScanId, lastNodeId},
-			OnList:                 []*Expr{joinCond},
-			ProjectList:            projectList,
-			RuntimeFilterBuildList: []*plan.RuntimeFilterSpec{MakeRuntimeFilter(rfTag, false, GetInFilterCardLimit(sid), rfBuildExpr, true)},
-		}, bindCtx)
+		probeSpec, buildSpec, hasRuntimeFilter := builder.makeExactRuntimeFilterPair(
+			rfTag,
+			false,
+			GetInFilterCardLimit(sid),
+			probeExpr,
+			rfBuildExpr,
+			true,
+		)
+		joinNode := &plan.Node{
+			NodeType:    plan.Node_JOIN,
+			JoinType:    plan.Node_INNER,
+			Children:    []int32{idxScanId, lastNodeId},
+			OnList:      []*Expr{joinCond},
+			ProjectList: projectList,
+		}
+		if hasRuntimeFilter {
+			idxScanNode.RuntimeFilterProbeList = []*plan.RuntimeFilterSpec{probeSpec}
+			idxScanNode.Stats.ForceOneCN = true
+			joinNode.RuntimeFilterBuildList = []*plan.RuntimeFilterSpec{buildSpec}
+		}
+		lastNodeId = builder.appendNode(joinNode, bindCtx)
 
 		deleteIdx := 0
 		retPkPos := deleteIdx + 2

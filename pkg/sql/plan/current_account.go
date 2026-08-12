@@ -36,10 +36,7 @@ func (builder *QueryBuilder) buildCurrentAccount(tbl *tree.TableFunction, ctx *B
 			Cols: []*plan.ColDef{
 				{
 					Name: "account_name",
-					Typ: plan.Type{
-						Id:    int32(types.T_varchar),
-						Width: types.MaxVarcharLen,
-					},
+					Typ:  makeGeneratedPlan2Type(types.T_varchar, types.MaxVarcharLen, 0, false),
 				},
 				{
 					Name: "account_id",
@@ -50,10 +47,7 @@ func (builder *QueryBuilder) buildCurrentAccount(tbl *tree.TableFunction, ctx *B
 				},
 				{
 					Name: "user_name",
-					Typ: plan.Type{
-						Id:    int32(types.T_varchar),
-						Width: types.MaxVarcharLen,
-					},
+					Typ:  makeGeneratedPlan2Type(types.T_varchar, types.MaxVarcharLen, 0, false),
 				},
 				{
 					Name: "user_id",
@@ -64,10 +58,7 @@ func (builder *QueryBuilder) buildCurrentAccount(tbl *tree.TableFunction, ctx *B
 				},
 				{
 					Name: "role_name",
-					Typ: plan.Type{
-						Id:    int32(types.T_varchar),
-						Width: types.MaxVarcharLen,
-					},
+					Typ:  makeGeneratedPlan2Type(types.T_varchar, types.MaxVarcharLen, 0, false),
 				},
 				{
 					Name: "role_id",

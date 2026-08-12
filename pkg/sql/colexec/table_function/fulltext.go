@@ -23,6 +23,7 @@ import (
 	"github.com/bytedance/sonic"
 	"github.com/matrixorigin/matrixone/pkg/common/docfilter"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -64,6 +65,8 @@ type fulltextState struct {
 	minheap          vectorindex.SearchResultHeap
 	resbuf           []*vectorindex.SearchResultAnyKey
 	ranking          bool
+	publisherAccount *uint32
+	publisherDB      string
 
 	// Partition-ordered traversal of agghtab for the zero-LIMIT scoring path.
 	// Built ONCE per scoring phase (aggregation is complete before the first
@@ -116,6 +119,47 @@ func (u *fulltextState) resetRowState(proc *process.Process) {
 	u.scoreKeys = nil
 	u.scorePos = 0
 	u.scoreOrdered = false
+	u.publisherAccount = nil
+	u.publisherDB = ""
+}
+
+func (u *fulltextState) sqlProcess(proc *process.Process) *sqlexec.SqlProcess {
+	sqlProc := sqlexec.NewSqlProcess(proc)
+	if u.publisherAccount != nil {
+		sqlProc.WithExecutionIdentity(*u.publisherAccount, u.publisherDB)
+	}
+	return sqlProc
+}
+
+func (u *fulltextState) resolveExecutionTarget(
+	proc *process.Process,
+	tf *TableFunction,
+	sourceTable string,
+	indexTable string,
+) (string, string, error) {
+	sourceRef, indexRef := tf.FulltextSourceRef, tf.FulltextIndexRef
+	if sourceRef == nil && indexRef == nil {
+		return sourceTable, indexTable, nil
+	}
+	if sourceRef == nil || indexRef == nil {
+		return "", "", moerr.NewInternalError(proc.Ctx, "incomplete trusted fulltext table references")
+	}
+	if sourceRef.PubInfo == nil || indexRef.PubInfo == nil {
+		return "", "", moerr.NewInternalError(proc.Ctx, "trusted fulltext table references require publisher identity")
+	}
+	if sourceRef.PubInfo.TenantId < 0 ||
+		sourceRef.PubInfo.TenantId != indexRef.PubInfo.TenantId ||
+		sourceRef.SchemaName == "" || sourceRef.SchemaName != indexRef.SchemaName ||
+		sourceRef.ObjName == "" || indexRef.ObjName == "" ||
+		sourceRef.SubscriptionName == "" || sourceRef.SubscriptionName != indexRef.SubscriptionName {
+		return "", "", moerr.NewInternalError(proc.Ctx, "inconsistent trusted fulltext table references")
+	}
+
+	accountID := uint32(sourceRef.PubInfo.TenantId)
+	u.publisherAccount = &accountID
+	u.publisherDB = sourceRef.SchemaName
+	return sqlquote.QualifiedIdent(sourceRef.SchemaName, sourceRef.ObjName),
+		sqlquote.QualifiedIdent(indexRef.SchemaName, indexRef.ObjName), nil
 }
 
 func (u *fulltextState) free(tf *TableFunction, proc *process.Process, pipelineFailed bool, err error) {
@@ -344,6 +388,11 @@ func (u *fulltextState) start(tf *TableFunction, proc *process.Process, nthRow i
 	}
 	index_table := v.GetStringAt(nthRow)
 
+	source_table, index_table, err := u.resolveExecutionTarget(proc, tf, source_table, index_table)
+	if err != nil {
+		return err
+	}
+
 	v = tf.ctr.argVecs[2]
 	if v.GetType().Oid != types.T_varchar {
 		return moerr.NewInvalidInput(proc.Ctx, fmt.Sprintf("Third argument (pattern) must be string, but got %s", v.GetType().String()))
@@ -405,7 +454,7 @@ func runWordStats(
 		return
 	}
 
-	sqlProc := sqlexec.NewSqlProcess(proc)
+	sqlProc := u.sqlProcess(proc)
 	// Attach the membership filter for reader-level doc_id filtering on the fulltext index table.
 	if len(u.fulltextMembershipFilter) > 0 {
 		sqlProc.FulltextMembershipFilter = u.fulltextMembershipFilter
@@ -816,14 +865,14 @@ func groupby(u *fulltextState, proc *process.Process, s *fulltext.SearchAccum) (
 }
 
 // Run SQL to get number of records in source table
-func runCountStar(proc *process.Process, s *fulltext.SearchAccum) (executor.Result, error) {
+func runCountStar(u *fulltextState, proc *process.Process, s *fulltext.SearchAccum) (executor.Result, error) {
 	sqlFmt := countstar_sql
 	if s.ScoreAlgo == fulltext.ALGO_BM25 {
 		sqlFmt = countstar_avg_sql
 	}
 	sql := fmt.Sprintf(sqlFmt, s.TblName, fulltext.DOC_LEN_WORD)
 
-	res, err := ft_runSql(sqlexec.NewSqlProcess(proc), sql)
+	res, err := ft_runSql(u.sqlProcess(proc), sql)
 	if err != nil {
 		return executor.Result{}, err
 	}
@@ -889,7 +938,7 @@ func fulltextIndexMatch(
 		u.aggcnt = make([]int64, s.Nkeywords)
 
 		// count(*) to get number of records in source table
-		res, err := runCountStar(proc, s)
+		res, err := runCountStar(u, proc, s)
 		if err != nil {
 			return err
 		}
@@ -999,10 +1048,13 @@ func waitFulltextMembershipFilter(proc *process.Process, specs []*plan.RuntimeFi
 	// this zero-copy path, and tying its release to a specific mpool would be a
 	// cross-pool free hazard if the deserialization ever became owning.
 
-	// docfilter picks and tags the doc_id filter structure (exact bitset for
-	// integer PKs, CBloomFilter otherwise); the reader's docfilter.New
-	// reconstructs it. The caller need not know which structure is used.
-	payload, err := docfilter.Build(keyvec)
+	// docfilter picks and tags the doc_id filter structure (exact set for integer
+	// PKs, CBloomFilter otherwise); the reader reconstructs it at the allocation
+	// site. The caller need not know which structure is used.
+	payload, err := docfilter.BuildWithMemoryAdmission(
+		keyvec,
+		docfilter.AdmissionForService(proc.GetService()),
+	)
 	if err != nil {
 		return nil, err
 	}

@@ -1233,11 +1233,13 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 		if len(node.GroupBy) > 0 {
 			incnt := childStats.Outcnt
 			outcnt := 1.0
-			for _, groupby := range node.GroupBy {
+			for i, groupby := range node.GroupBy {
 				ndv := getExprNdv(groupby, builder)
 				if ndv > 1 {
 					groupby.Ndv = ndv
-					outcnt *= ndv
+					if isPhysicalGroupByKey(node, i) {
+						outcnt *= ndv
+					}
 				}
 			}
 			if outcnt > incnt {
@@ -1367,6 +1369,10 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 		node.Stats.Cost = childStats.Cost
 		node.Stats.Selectivity = 0.05
 		node.Stats.BlockNum = childStats.BlockNum
+
+	case plan.Node_ASSERT:
+		// ASSERT validates rows without changing cardinality or ordering.
+		node.Stats = DeepCopyStats(childStats)
 
 	case plan.Node_FUNCTION_SCAN:
 		if !computeFunctionScan(node.TableDef.TblFunc.Name, node.TblFuncExprList, node.Stats) {

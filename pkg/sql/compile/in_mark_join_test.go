@@ -21,6 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashjoin"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopjoin"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
@@ -268,6 +269,130 @@ func TestCompileBroadcastCompositeMarkExpressionsUseHashJoin(t *testing.T) {
 			require.False(t, key.Typ.NotNullable,
 				"operator construction must not mutate the reusable plan")
 		}
+	}
+}
+
+func TestCompileNullableNotExistsAntiJoinUsesHashJoin(t *testing.T) {
+	compilerCtx := plan2.NewMockCompilerContext(true)
+	statements, err := mysql.Parse(
+		compilerCtx.GetContext(),
+		`select n.n_nationkey
+		from tpch.nation n
+		where not exists (
+			select 1 from tpch.region r where r.r_comment = n.n_comment
+		)`,
+		1,
+	)
+	require.NoError(t, err)
+	require.Len(t, statements, 1)
+
+	logicPlan, err := plan2.BuildPlan(compilerCtx, statements[0], false)
+	require.NoError(t, err)
+	query := logicPlan.GetQuery()
+	require.NotNil(t, query)
+
+	var anti *plan.Node
+	for _, node := range query.Nodes {
+		if node.NodeType == plan.Node_JOIN && node.JoinType == plan.Node_ANTI {
+			anti = node
+			break
+		}
+	}
+	require.NotNil(t, anti)
+	require.Len(t, anti.Children, 2)
+	require.NotNil(t, anti.Stats)
+	anti.Stats.HashmapStats.Shuffle = false
+	anti.SendMsgList = []plan.MsgHeader{{
+		MsgType: int32(message.MsgJoinMap),
+		MsgTag:  1,
+	}}
+
+	left := query.Nodes[anti.Children[0]]
+	right := query.Nodes[anti.Children[1]]
+	c := newCompileForShuffleJoinTest(t, engine.Nodes{{Addr: "cn1:6001", Mcpu: 1}})
+	probe := newShuffleJoinTestScope(t, c.cnList[0], 1)
+	build := newShuffleJoinTestScope(t, c.cnList[0], 1)
+
+	result := c.compileJoin(anti, left, right, []*Scope{probe}, []*Scope{build})
+
+	require.Len(t, result, 1)
+	op, ok := result[0].RootOp.(*hashjoin.HashJoin)
+	require.True(t, ok, "compiled %T, want HashJoin", result[0].RootOp)
+	require.Equal(t, plan.Node_ANTI, op.JoinType)
+	require.Len(t, op.EqConds[0], 1)
+	require.Len(t, op.EqConds[1], 1)
+}
+
+func TestCompileBroadcastMarkJoinSelectsPhysicalOperator(t *testing.T) {
+	tests := []struct {
+		name       string
+		conditions []*plan.Expr
+		left       *plan.Node
+		right      *plan.Node
+		wantHash   bool
+	}{
+		{
+			name:       "single nullable equality uses hash join",
+			conditions: []*plan.Expr{makeMarkJoinTestCondition(t, "=", 0, false)},
+			left:       &plan.Node{ProjectList: []*plan.Expr{makeMarkJoinTestColumn(0, 0, false)}},
+			right:      &plan.Node{ProjectList: []*plan.Expr{makeMarkJoinTestColumn(1, 0, false)}},
+			wantHash:   true,
+		},
+		{
+			name: "partially nullable composite equality uses loop join",
+			conditions: []*plan.Expr{
+				makeMarkJoinTestCondition(t, "=", 0, true),
+				makeMarkJoinTestCondition(t, "=", 1, false),
+			},
+			left: &plan.Node{ProjectList: []*plan.Expr{
+				makeMarkJoinTestColumn(0, 0, true),
+				makeMarkJoinTestColumn(0, 1, false),
+			}},
+			right: &plan.Node{ProjectList: []*plan.Expr{
+				makeMarkJoinTestColumn(1, 0, true),
+				makeMarkJoinTestColumn(1, 1, false),
+			}},
+			wantHash: false,
+		},
+		{
+			name: "equality plus residual uses loop join",
+			conditions: []*plan.Expr{
+				makeMarkJoinTestCondition(t, "=", 0, true),
+				makeMarkJoinTestCondition(t, "<", 1, true),
+			},
+			left: &plan.Node{ProjectList: []*plan.Expr{
+				makeMarkJoinTestColumn(0, 0, true),
+				makeMarkJoinTestColumn(0, 1, true),
+			}},
+			right: &plan.Node{ProjectList: []*plan.Expr{
+				makeMarkJoinTestColumn(1, 0, true),
+				makeMarkJoinTestColumn(1, 1, true),
+			}},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			node := newShuffleJoinTestNode(1)
+			node.JoinType = plan.Node_MARK
+			node.Stats.HashmapStats.Shuffle = false
+			node.OnList = tt.conditions
+			c := newCompileForShuffleJoinTest(t, engine.Nodes{{Addr: "cn1:6001", Mcpu: 1}})
+			probe := newShuffleJoinTestScope(t, c.cnList[0], 1)
+			build := newShuffleJoinTestScope(t, c.cnList[0], 1)
+
+			result := c.compileJoin(node, tt.left, tt.right, []*Scope{probe}, []*Scope{build})
+			require.Len(t, result, 1)
+			if tt.wantHash {
+				op, ok := result[0].RootOp.(*hashjoin.HashJoin)
+				require.True(t, ok, "compiled %T, want HashJoin", result[0].RootOp)
+				require.Equal(t, plan.Node_MARK, op.JoinType)
+				return
+			}
+			op, ok := result[0].RootOp.(*loopjoin.LoopJoin)
+			require.True(t, ok, "compiled %T, want LoopJoin", result[0].RootOp)
+			require.Equal(t, plan.Node_MARK, op.JoinType)
+		})
 	}
 }
 

@@ -65,6 +65,57 @@ func TestGetSqlForFkReferredToEscapesStringLiterals(t *testing.T) {
 	require.Contains(t, sql, "table_name != 'quote\\'src'")
 }
 
+func TestForeignKeyCatalogLayoutIsExtendedOnlyAfterAllColumnsExist(t *testing.T) {
+	ctx := NewEmptyCompilerContext()
+	ctx.tables[catalog.MOForeignKeys] = &TableDef{
+		Name: catalog.MOForeignKeys,
+		Cols: []*ColDef{{Name: "referenced_index_name"}, {Name: "on_delete_origin"}},
+	}
+	layout, err := resolveForeignKeyCatalogLayout(ctx)
+	require.NoError(t, err)
+	require.Equal(t, foreignKeyCatalogLegacy, layout)
+
+	ctx.tables[catalog.MOForeignKeys].Cols = append(ctx.tables[catalog.MOForeignKeys].Cols,
+		&ColDef{Name: "on_update_origin"})
+	layout, err = resolveForeignKeyCatalogLayout(ctx)
+	require.NoError(t, err)
+	require.Equal(t, foreignKeyCatalogExtended, layout)
+}
+
+func TestLegacyForeignKeyCatalogSQLAvoidsNewColumns(t *testing.T) {
+	readSQL := getSqlForFkReferredToWithCatalogLayout("parent_db", "parent", foreignKeyCatalogLegacy)
+	require.NotContains(t, readSQL, "referenced_index_name")
+	require.NotContains(t, readSQL, "on_delete_origin")
+	require.Contains(t, readSQL, "on_update from `mo_catalog`.`mo_foreign_keys`")
+
+	fkData := &FkData{
+		Def: &plan.ForeignKeyDef{
+			Name:           "fk_child_parent",
+			OnDelete:       plan.ForeignKeyDef_RESTRICT,
+			OnUpdate:       plan.ForeignKeyDef_RESTRICT,
+			OnDeleteOrigin: plan.ForeignKeyDef_ACTION_ORIGIN_EXPLICIT,
+			OnUpdateOrigin: plan.ForeignKeyDef_ACTION_ORIGIN_EXPLICIT,
+		},
+		Cols:            &plan.FkColName{Cols: []string{"parent_id"}},
+		ColsReferred:    &plan.FkColName{Cols: []string{"id"}},
+		ParentDbName:    "parent_db",
+		ParentTableName: "parent",
+	}
+	insertSQL := getSqlForAddFkWithCatalogLayout("child_db", "child", fkData, foreignKeyCatalogLegacy)
+	require.NotContains(t, insertSQL, "referenced_index_name")
+	require.NotContains(t, insertSQL, "on_delete_origin")
+	require.Contains(t, insertSQL, "on_delete, on_update) values")
+}
+
+func TestLegacyForeignKeyActionOriginIsConservative(t *testing.T) {
+	require.Equal(t, plan.ForeignKeyDef_ACTION_ORIGIN_LEGACY_AMBIGUOUS.String(),
+		legacyForeignKeyActionOrigin("RESTRICT"))
+	require.Equal(t, plan.ForeignKeyDef_ACTION_ORIGIN_LEGACY_AMBIGUOUS.String(),
+		legacyForeignKeyActionOrigin("NO ACTION"))
+	require.Equal(t, plan.ForeignKeyDef_ACTION_ORIGIN_EXPLICIT.String(),
+		legacyForeignKeyActionOrigin("CASCADE"))
+}
+
 func TestGetSqlForAddFkEscapesStringLiterals(t *testing.T) {
 	fkData := &FkData{
 		Def: &plan.ForeignKeyDef{
@@ -86,6 +137,51 @@ func TestGetSqlForAddFkEscapesStringLiterals(t *testing.T) {
 	require.Contains(t, sql, "'parent\\\\db'")
 	require.Contains(t, sql, "'parent\\'table'")
 	require.Contains(t, sql, "'parent\\'col'")
+}
+
+func TestGetSqlForAddFkRecordsCompositeColumnOrder(t *testing.T) {
+	fkData := &FkData{
+		Def:  &plan.ForeignKeyDef{Name: "fk_child_parent"},
+		Cols: &plan.FkColName{Cols: []string{"child_first", "child_second"}},
+		ColsReferred: &plan.FkColName{Cols: []string{
+			"parent_first", "parent_second",
+		}},
+		ParentDbName:    "parent_db",
+		ParentTableName: "parent",
+	}
+
+	sql := getSqlForAddFk("child_db", "child", fkData)
+	require.Contains(t, sql, "('fk_child_parent','1','child_db','0','child','0','child_first'")
+	require.Contains(t, sql, "('fk_child_parent','2','child_db','0','child','0','child_second'")
+	require.Contains(t, GetSqlForFkReferredTo("parent_db", "parent"),
+		"order by db_name, table_name, constraint_name, constraint_id")
+}
+
+func TestGetSqlForAddFkStoresDefaultActionsAsNoAction(t *testing.T) {
+	fkData := &FkData{
+		Def: &plan.ForeignKeyDef{
+			Name:           "fk_default_action",
+			OnDelete:       plan.ForeignKeyDef_RESTRICT,
+			OnUpdate:       plan.ForeignKeyDef_RESTRICT,
+			OnDeleteOrigin: plan.ForeignKeyDef_ACTION_ORIGIN_DEFAULT,
+			OnUpdateOrigin: plan.ForeignKeyDef_ACTION_ORIGIN_DEFAULT,
+		},
+		Cols:            &plan.FkColName{Cols: []string{"child_id"}},
+		ColsReferred:    &plan.FkColName{Cols: []string{"parent_id"}},
+		ParentDbName:    "parent_db",
+		ParentTableName: "parent",
+	}
+
+	sql := getSqlForAddFk("child_db", "child", fkData)
+	require.Contains(t, sql, "'NO_ACTION','NO_ACTION'")
+	require.Contains(t, sql, "'ACTION_ORIGIN_DEFAULT','ACTION_ORIGIN_DEFAULT'")
+}
+
+func TestGetSqlForUpdateFkReferencedIndexEscapesCatalogValues(t *testing.T) {
+	require.Equal(t,
+		"update `mo_catalog`.`mo_foreign_keys` set referenced_index_name = 'uk\\'parent' where db_name = 'child\\'db' and table_name = 'child\\\\table' and constraint_name = 'fk\\'child'",
+		getSqlForUpdateFkReferencedIndex("child'db", `child\table`, "fk'child", "uk'parent"),
+	)
 }
 
 func TestGetSqlForCheckHasDBRefersToEscapesStringLiterals(t *testing.T) {
@@ -130,9 +226,9 @@ func TestGetSqlForAddFkEscapesCatalogValues(t *testing.T) {
 	}
 
 	require.Equal(t,
-		"insert into `mo_catalog`.`mo_foreign_keys`   values "+
-			"('fk\\\\name\\'one','0','child\\'db\\\\part','0','child\\\\table\\'name','0','child\\\\col\\'name','0','parent\\\\db\\'name','0','parent\\\\table\\'name','0','parent\\\\col\\'name','0','CASCADE','RESTRICT'),"+
-			"('fk\\\\name\\'one','0','child\\'db\\\\part','0','child\\\\table\\'name','0','child_col_two','0','parent\\\\db\\'name','0','parent\\\\table\\'name','0','parent_col_two','0','CASCADE','RESTRICT')",
+		"insert into `mo_catalog`.`mo_foreign_keys` (constraint_name, constraint_id, db_name, db_id, table_name, table_id, column_name, column_id, refer_db_name, refer_db_id, refer_table_name, refer_table_id, refer_column_name, refer_column_id, on_delete, on_update, referenced_index_name, on_delete_origin, on_update_origin) values "+
+			"('fk\\\\name\\'one','1','child\\'db\\\\part','0','child\\\\table\\'name','0','child\\\\col\\'name','0','parent\\\\db\\'name','0','parent\\\\table\\'name','0','parent\\\\col\\'name','0','CASCADE','RESTRICT','','ACTION_ORIGIN_EXPLICIT','ACTION_ORIGIN_EXPLICIT'),"+
+			"('fk\\\\name\\'one','2','child\\'db\\\\part','0','child\\\\table\\'name','0','child_col_two','0','parent\\\\db\\'name','0','parent\\\\table\\'name','0','parent_col_two','0','CASCADE','RESTRICT','','ACTION_ORIGIN_EXPLICIT','ACTION_ORIGIN_EXPLICIT')",
 		getSqlForAddFk(`child'db\part`, `child\table'name`, fk),
 	)
 }
@@ -278,6 +374,66 @@ func TestMakeInsertValueConstExprBinaryHexPadding(t *testing.T) {
 			}
 			require.NoError(t, err)
 			require.Equal(t, string(tc.expected), expr.GetLit().GetSval())
+		})
+	}
+}
+
+func TestMakeInsertValueConstExprBitIgnoreTruncates(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	colType := types.New(types.T_bit, 4, 0)
+	numVal := tree.NewNumVal("0b11111", "0b11111", false, tree.P_bit)
+
+	_, err := MakeInsertValueConstExpr(proc, numVal, &colType, false)
+	require.Error(t, err)
+
+	expr, err := MakeInsertValueConstExpr(proc, numVal, &colType, true)
+	require.NoError(t, err)
+	require.Equal(t, uint64(15), expr.GetLit().GetU64Val())
+}
+
+func TestMakeInsertIgnoreMySQLSpecialTypeConstExpr(t *testing.T) {
+	ctx := context.Background()
+	tests := []struct {
+		name     string
+		target   plan.Type
+		value    *tree.NumVal
+		wantType types.T
+		wantEnum uint32
+		wantSet  uint64
+	}{
+		{
+			name:     "invalid enum becomes error member",
+			target:   plan.Type{Id: int32(types.T_enum), Enumvalues: "a,b,"},
+			value:    tree.NewNumVal("bad", "bad", false, tree.P_char),
+			wantType: types.T_enum,
+		},
+		{
+			name:     "invalid set member is dropped",
+			target:   plan.Type{Id: int32(types.T_uint64), Enumvalues: "x,y,z"},
+			value:    tree.NewNumVal("x,bad", "x,bad", false, tree.P_char),
+			wantType: types.T_uint64,
+			wantSet:  1,
+		},
+		{
+			name:     "invalid year becomes zero",
+			target:   plan.Type{Id: int32(types.T_year)},
+			value:    tree.NewNumVal(int64(2156), "2156", false, tree.P_int64),
+			wantType: types.T_year,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			expr, handled, err := makeInsertIgnoreMySQLSpecialTypeConstExpr(ctx, tt.value, tt.target)
+			require.NoError(t, err)
+			require.True(t, handled)
+			require.Equal(t, int32(tt.wantType), expr.Typ.Id)
+			if tt.wantType == types.T_enum {
+				require.Equal(t, tt.wantEnum, expr.GetLit().GetEnumVal())
+			}
+			if tt.wantType == types.T_uint64 {
+				require.Equal(t, tt.wantSet, expr.GetLit().GetU64Val())
+			}
 		})
 	}
 }

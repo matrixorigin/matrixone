@@ -30,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/rule"
 	"github.com/smartystreets/goconvey/convey"
 )
@@ -518,6 +519,256 @@ func TestEnumToJSONQuotesDisplayValueDuringBinding(t *testing.T) {
 	}
 }
 
+func TestEnumAndSetKeepStoredValuesInExpressionContexts(t *testing.T) {
+	tests := []struct {
+		name        string
+		typ         plan.Type
+		sql         string
+		wantDisplay bool
+	}{
+		{
+			name: "enum numeric arithmetic",
+			typ:  plan.Type{Id: int32(types.T_enum), Enumvalues: "a,b,"},
+			sql:  "select n_name + 0 from nation",
+		},
+		{
+			name: "enum numeric unary minus",
+			typ:  plan.Type{Id: int32(types.T_enum), Enumvalues: "a,b,"},
+			sql:  "select -n_name from nation",
+		},
+		{
+			name: "set bitwise unary complement",
+			typ:  plan.Type{Id: int32(types.T_uint64), Enumvalues: "x,y,z"},
+			sql:  "select ~n_name from nation",
+		},
+		{
+			name: "enum numeric comparison",
+			typ:  plan.Type{Id: int32(types.T_enum), Enumvalues: "a,b,"},
+			sql:  "select n_name = 1 from nation",
+		},
+		{
+			name: "enum numeric in list",
+			typ:  plan.Type{Id: int32(types.T_enum), Enumvalues: "a,b,"},
+			sql:  "select n_name in (1, 2) from nation",
+		},
+		{
+			name: "enum explicit numeric cast",
+			typ:  plan.Type{Id: int32(types.T_enum), Enumvalues: "a,b,"},
+			sql:  "select cast(n_name as signed) from nation",
+		},
+		{
+			name: "enum numeric function",
+			typ:  plan.Type{Id: int32(types.T_enum), Enumvalues: "a,b,"},
+			sql:  "select abs(n_name) from nation",
+		},
+		{
+			name: "enum numeric column comparison",
+			typ:  plan.Type{Id: int32(types.T_enum), Enumvalues: "a,b,"},
+			sql:  "select n_name = n_regionkey from nation",
+		},
+		{
+			name: "enum numeric between",
+			typ:  plan.Type{Id: int32(types.T_enum), Enumvalues: "a,b,"},
+			sql:  "select n_name between n_regionkey and 2 from nation",
+		},
+		{
+			name: "enum non-literal numeric in list",
+			typ:  plan.Type{Id: int32(types.T_enum), Enumvalues: "a,b,"},
+			sql:  "select n_name in (n_regionkey) from nation",
+		},
+		{
+			name: "enum unary numeric comparison",
+			typ:  plan.Type{Id: int32(types.T_enum), Enumvalues: "a,b,"},
+			sql:  "select n_name = +1 from nation",
+		},
+		{
+			name:        "enum mixed string and numeric in list",
+			typ:         plan.Type{Id: int32(types.T_enum), Enumvalues: "a,b,"},
+			sql:         "select n_name in ('a', 2) from nation",
+			wantDisplay: true,
+		},
+		{
+			name:        "enum string function",
+			typ:         plan.Type{Id: int32(types.T_enum), Enumvalues: "a,b,"},
+			sql:         "select length(n_name) from nation",
+			wantDisplay: true,
+		},
+		{
+			name:        "enum coalesce",
+			typ:         plan.Type{Id: int32(types.T_enum), Enumvalues: "a,b,"},
+			sql:         "select coalesce(null, n_name) from nation",
+			wantDisplay: true,
+		},
+		{
+			name: "set numeric arithmetic",
+			typ:  plan.Type{Id: int32(types.T_uint64), Enumvalues: "x,y,z"},
+			sql:  "select n_name + 0 from nation",
+		},
+		{
+			name: "set bitwise operation",
+			typ:  plan.Type{Id: int32(types.T_uint64), Enumvalues: "x,y,z"},
+			sql:  "select n_name & 1 from nation",
+		},
+		{
+			name: "set explicit numeric cast",
+			typ:  plan.Type{Id: int32(types.T_uint64), Enumvalues: "x,y,z"},
+			sql:  "select cast(n_name as signed) from nation",
+		},
+		{
+			name: "set numeric function",
+			typ:  plan.Type{Id: int32(types.T_uint64), Enumvalues: "x,y,z"},
+			sql:  "select abs(n_name) from nation",
+		},
+		{
+			name: "set numeric column comparison",
+			typ:  plan.Type{Id: int32(types.T_uint64), Enumvalues: "x,y,z"},
+			sql:  "select n_name = n_regionkey from nation",
+		},
+		{
+			name: "set numeric between",
+			typ:  plan.Type{Id: int32(types.T_uint64), Enumvalues: "x,y,z"},
+			sql:  "select n_name between n_regionkey and 5 from nation",
+		},
+		{
+			name: "set non-literal numeric in list",
+			typ:  plan.Type{Id: int32(types.T_uint64), Enumvalues: "x,y,z"},
+			sql:  "select n_name in (n_regionkey) from nation",
+		},
+		{
+			name: "set unary numeric comparison",
+			typ:  plan.Type{Id: int32(types.T_uint64), Enumvalues: "x,y,z"},
+			sql:  "select n_name = +1 from nation",
+		},
+		{
+			name:        "enum string comparison",
+			typ:         plan.Type{Id: int32(types.T_enum), Enumvalues: "a,b,"},
+			sql:         "select n_name = 'a' from nation",
+			wantDisplay: true,
+		},
+		{
+			name:        "set string comparison",
+			typ:         plan.Type{Id: int32(types.T_uint64), Enumvalues: "x,y,z"},
+			sql:         "select n_name = 'x,z' from nation",
+			wantDisplay: true,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			mock := NewMockOptimizer(false)
+			mock.ctxt.tables["nation"].Cols[1].Typ = tc.typ
+
+			pl, err := runOneExprStmt(mock, t, tc.sql)
+			require.NoError(t, err)
+			require.Equal(t, tc.wantDisplay, containsEnumOrSetDisplayValue(pl.GetQuery().Nodes[1].ProjectList[0]))
+		})
+	}
+}
+
+func TestEnumAndSetNumericContractsUseStoredValues(t *testing.T) {
+	tests := []struct {
+		name        string
+		typ         plan.Type
+		sql         string
+		wantDisplay bool
+	}{
+		{
+			name: "enum explicit numeric cast",
+			typ:  plan.Type{Id: int32(types.T_enum), Enumvalues: "a,b,"},
+			sql:  "select cast(n_name as signed) from nation",
+		},
+		{
+			name: "enum numeric function",
+			typ:  plan.Type{Id: int32(types.T_enum), Enumvalues: "a,b,"},
+			sql:  "select abs(n_name) from nation",
+		},
+		{
+			name: "enum numeric column comparison",
+			typ:  plan.Type{Id: int32(types.T_enum), Enumvalues: "a,b,"},
+			sql:  "select n_name = n_nationkey from nation",
+		},
+		{
+			name: "enum between numeric bounds",
+			typ:  plan.Type{Id: int32(types.T_enum), Enumvalues: "a,b,"},
+			sql:  "select n_name between 1 and 2 from nation",
+		},
+		{
+			name: "enum in numeric column list",
+			typ:  plan.Type{Id: int32(types.T_enum), Enumvalues: "a,b,"},
+			sql:  "select n_name in (n_nationkey) from nation",
+		},
+		{
+			name: "enum comparison unary numeric literal",
+			typ:  plan.Type{Id: int32(types.T_enum), Enumvalues: "a,b,"},
+			sql:  "select n_name = +1 from nation",
+		},
+		{
+			name:        "enum explicit string cast control",
+			typ:         plan.Type{Id: int32(types.T_enum), Enumvalues: "a,b,"},
+			sql:         "select cast(n_name as char) from nation",
+			wantDisplay: true,
+		},
+		{
+			name:        "enum string comparison control",
+			typ:         plan.Type{Id: int32(types.T_enum), Enumvalues: "a,b,"},
+			sql:         "select n_name = 'a' from nation",
+			wantDisplay: true,
+		},
+		{
+			name: "set numeric function",
+			typ:  plan.Type{Id: int32(types.T_uint64), Enumvalues: "x,y,z"},
+			sql:  "select abs(n_name) from nation",
+		},
+		{
+			name:        "set string function control",
+			typ:         plan.Type{Id: int32(types.T_uint64), Enumvalues: "x,y,z"},
+			sql:         "select length(n_name) from nation",
+			wantDisplay: true,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			mock := NewMockOptimizer(false)
+			mock.ctxt.tables["nation"].Cols[1].Typ = tc.typ
+
+			pl, err := runOneExprStmt(mock, t, tc.sql)
+			require.NoError(t, err)
+			require.Equal(t, tc.wantDisplay, containsEnumOrSetDisplayValue(pl.GetQuery().Nodes[1].ProjectList[0]))
+		})
+	}
+}
+
+func TestIsBitwiseBinaryOp(t *testing.T) {
+	for _, op := range []tree.BinaryOp{
+		tree.BIT_XOR,
+		tree.BIT_OR,
+		tree.BIT_AND,
+		tree.LEFT_SHIFT,
+		tree.RIGHT_SHIFT,
+	} {
+		require.True(t, isBitwiseBinaryOp(op))
+	}
+	require.False(t, isBitwiseBinaryOp(tree.PLUS))
+}
+
+func containsEnumOrSetDisplayValue(expr *plan.Expr) bool {
+	if expr == nil {
+		return false
+	}
+	if isEnumOrSetDisplayValueExpr(expr) {
+		return true
+	}
+	if fn := expr.GetF(); fn != nil {
+		for _, arg := range fn.Args {
+			if containsEnumOrSetDisplayValue(arg) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func TestEnumDisplayValueToJSONUsesJSONQuoteInPlannerCasts(t *testing.T) {
 	ctx := NewMockCompilerContext(true).GetContext()
 	displayExpr := &plan.Expr{
@@ -544,6 +795,32 @@ func TestEnumDisplayValueToJSONUsesJSONQuoteInPlannerCasts(t *testing.T) {
 	require.Equal(t, "json_quote", expr.GetF().Func.ObjName)
 }
 
+func TestRawMySQLSpecialTypeToJSONUsesDisplayValue(t *testing.T) {
+	ctx := NewMockCompilerContext(true).GetContext()
+	for _, typ := range []plan.Type{
+		{Id: int32(types.T_enum), Enumvalues: "a,b,"},
+		{Id: int32(types.T_uint64), Enumvalues: "x,y,z"},
+	} {
+		raw := &plan.Expr{
+			Typ: typ,
+			Expr: &plan.Expr_Col{Col: &plan.ColRef{
+				RelPos: 1,
+				ColPos: 2,
+				Name:   "special",
+			}},
+		}
+
+		got, rewritten, err := rewriteMySQLSpecialTypeDisplayCast(
+			ctx, raw, plan.Type{Id: int32(types.T_json)},
+		)
+		require.NoError(t, err)
+		require.True(t, rewritten)
+		require.Equal(t, "json_quote", got.GetF().Func.ObjName)
+		require.Len(t, got.GetF().Args, 1)
+		require.True(t, isEnumOrSetDisplayValueExpr(got.GetF().Args[0]))
+	}
+}
+
 func TestSetDisplayValueToJSONUsesJSONQuoteInPlannerCasts(t *testing.T) {
 	ctx := NewMockCompilerContext(true).GetContext()
 	displayExpr := &plan.Expr{
@@ -565,6 +842,37 @@ func TestSetDisplayValueToJSONUsesJSONQuoteInPlannerCasts(t *testing.T) {
 	expr, err = forceCastExpr2(ctx, DeepCopyExpr(displayExpr), types.T_json.ToType(), &plan.Expr{Typ: jsonType})
 	require.NoError(t, err)
 	require.Equal(t, "json_quote", expr.GetF().Func.ObjName)
+}
+
+func TestSetDisplayValueNumericCastUsesStoredBitmap(t *testing.T) {
+	raw := &plan.Expr{
+		Typ: plan.Type{Id: int32(types.T_uint64), Enumvalues: ",a"},
+		Expr: &plan.Expr_Col{Col: &plan.ColRef{
+			RelPos: 1,
+			ColPos: 2,
+		}},
+	}
+	displayExpr := &plan.Expr{
+		Typ: plan.Type{Id: int32(types.T_varchar)},
+		Expr: &plan.Expr_F{F: &plan.Function{
+			Func: &plan.ObjectRef{ObjName: moSetCastIndexToValueFun},
+			Args: []*plan.Expr{{}, raw},
+		}},
+	}
+
+	for _, target := range []plan.Type{
+		{Id: int32(types.T_int64)},
+		{Id: int32(types.T_uint64)},
+	} {
+		got, rewritten, err := rewriteMySQLSpecialTypeDisplayCast(
+			NewMockCompilerContext(true).GetContext(), displayExpr, target,
+		)
+		require.NoError(t, err)
+		require.False(t, rewritten)
+		require.Equal(t, raw.GetCol(), got.GetCol())
+		require.Empty(t, got.Typ.Enumvalues)
+		require.NotSame(t, raw, got)
+	}
 }
 
 func TestJSONSourceCastsAreNotSkipped(t *testing.T) {

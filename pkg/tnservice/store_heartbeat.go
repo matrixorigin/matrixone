@@ -21,10 +21,17 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/logservice"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 )
+
+var tnCommandPollFailed = logutil.Event{
+	Name:    "tn.schedule-command.poll.failed",
+	Message: "failed to poll tn schedule commands",
+}
 
 func (s *store) heartbeatTask(ctx context.Context) {
 	if s.cfg.HAKeeper.HeatbeatInterval.Duration == 0 {
@@ -53,6 +60,107 @@ func (s *store) heartbeatTask(ctx context.Context) {
 	}
 }
 
+func (s *store) controlTask(ctx context.Context) {
+	s.commandPollWakeup = make(chan struct{}, 1)
+	commandDone := make(chan struct{})
+	go func() {
+		defer close(commandDone)
+		s.commandTask(ctx)
+	}()
+	s.heartbeatTask(ctx)
+	<-commandDone
+}
+
+func (s *store) commandTask(ctx context.Context) {
+	client, ok := s.hakeeperClient.(logservice.ScheduleCommandHAKeeperClient)
+	if !ok {
+		return
+	}
+	poll := func() {
+		// Keep the normal heartbeat as the primary delivery path. This read is
+		// issued while that RPC is in flight, or after a failed/deadline heartbeat
+		// until one succeeds; healthy clusters do not receive duplicate proposals.
+		start := time.Now()
+		defer func() {
+			v2.TNCommandPollHistogram.Observe(time.Since(start).Seconds())
+		}()
+		ctx2, cancel := context.WithTimeout(ctx, logservice.ScheduleCommandPollTimeout)
+		defer cancel()
+		batch, err := client.GetScheduleCommands(ctx2, logservicepb.TNService)
+		if err != nil {
+			if ctx.Err() == nil {
+				v2.TNCommandPollFailureCounter.Inc()
+				tnCommandPollFailed.Error(
+					zap.String("uuid", s.cfg.UUID),
+					zap.Error(err))
+			}
+			return
+		}
+		if ctx2.Err() != nil {
+			return
+		}
+		s.handlePolledCommandBatch(ctx, batch)
+	}
+
+	active := func() bool {
+		return s.heartbeatInFlight.Load() || s.commandPollNeeded.Load()
+	}
+	timer := time.NewTimer(time.Hour)
+	if !timer.Stop() {
+		<-timer.C
+	}
+	defer timer.Stop()
+	var timerC <-chan time.Time
+	arm := func(delay time.Duration) {
+		timer.Reset(delay)
+		timerC = timer.C
+	}
+	disarm := func() {
+		if timerC != nil && !timer.Stop() {
+			select {
+			case <-timer.C:
+			default:
+			}
+		}
+		timerC = nil
+	}
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-s.commandPollWakeup:
+			if !active() {
+				disarm()
+			} else if timerC == nil {
+				arm(logservice.ScheduleCommandInitialPollDelay(s.cfg.UUID))
+			}
+		case <-timerC:
+			timerC = nil
+			if !active() {
+				continue
+			}
+			pollStarted := time.Now()
+			poll()
+			if active() {
+				// Pull delivery has no server-side wakeup. Keep a start-to-start
+				// cadence so RPC latency cannot silently extend the discovery bound.
+				delay := logservice.ScheduleCommandPollInterval - time.Since(pollStarted)
+				if delay < 0 {
+					delay = 0
+				}
+				arm(delay)
+			}
+		}
+	}
+}
+
+func (s *store) notifyCommandPoll() {
+	select {
+	case s.commandPollWakeup <- struct{}{}:
+	default:
+	}
+}
+
 func (s *store) heartbeat(ctx context.Context) {
 	start := time.Now()
 	defer func() {
@@ -61,15 +169,48 @@ func (s *store) heartbeat(ctx context.Context) {
 	ctx2, cancel := context.WithTimeoutCause(ctx, s.cfg.HAKeeper.HeatbeatTimeout.Duration, moerr.CauseTnServiceHeartbeat)
 	defer cancel()
 
+	hb := s.getHeartbeatMessage()
+
+	s.heartbeatInFlight.Store(true)
+	s.notifyCommandPoll()
+	cb, err := s.hakeeperClient.SendTNHeartbeat(ctx2, hb)
+	s.heartbeatInFlight.Store(false)
+	if err != nil {
+		s.commandPollNeeded.Store(true)
+		s.notifyCommandPoll()
+		err = moerr.AttachCause(ctx2, err)
+		v2.TNHeartbeatFailureCounter.Inc()
+		s.rt.Logger().Error("failed to send tn heartbeat", zap.Error(err))
+		return
+	}
+	if ctx2.Err() != nil {
+		s.commandPollNeeded.Store(true)
+		s.notifyCommandPoll()
+		return
+	}
+	s.commandPollNeeded.Store(false)
+	s.notifyCommandPoll()
+
+	s.config.DecrCount()
+	s.handleHeartbeatResponse(hb.AckedCommandBatchID, cb)
+	if s.shutdownBatchID.Load() != 0 {
+		s.acknowledgeShutdown(ctx)
+	}
+}
+
+func (s *store) getHeartbeatMessage() logservicepb.TNStoreHeartbeat {
 	hb := logservicepb.TNStoreHeartbeat{
-		UUID:                 s.cfg.UUID,
-		ServiceAddress:       s.txnServiceServiceAddr(),
-		Shards:               s.getTNShardInfo(),
-		TaskServiceCreated:   s.taskServiceCreated(),
-		LogtailServerAddress: s.logtailServiceServiceAddr(),
-		LockServiceAddress:   s.lockServiceServiceAddr(),
-		ShardServiceAddress:  s.shardServiceServiceAddr(),
-		ConfigData:           s.config.GetData(),
+		UUID:                        s.cfg.UUID,
+		ServiceAddress:              s.txnServiceServiceAddr(),
+		Shards:                      s.getTNShardInfo(),
+		TaskServiceCreated:          s.taskServiceCreated(),
+		LogtailServerAddress:        s.logtailServiceServiceAddr(),
+		LockServiceAddress:          s.lockServiceServiceAddr(),
+		ShardServiceAddress:         s.shardServiceServiceAddr(),
+		ConfigData:                  s.config.GetData(),
+		AutoIncrEpochFenceSupported: true,
+		AckedCommandBatchID:         s.ackedCommandBatchID.Load(),
+		CommandDeliveryAckSupported: true,
 		// if the replayed LSN is 0, then it is the master TN.
 		ReplayedLsn: 0,
 	}
@@ -77,20 +218,183 @@ func (s *store) heartbeat(ctx context.Context) {
 	if s.queryService != nil {
 		hb.QueryAddress = s.queryServiceServiceAddr()
 	}
-
-	cb, err := s.hakeeperClient.SendTNHeartbeat(ctx2, hb)
-	if err != nil {
-		err = moerr.AttachCause(ctx2, err)
-		v2.TNHeartbeatFailureCounter.Inc()
-		s.rt.Logger().Error("failed to send tn heartbeat", zap.Error(err))
-		return
-	}
-
-	s.config.DecrCount()
-	s.handleCommands(cb.Commands)
+	return hb
 }
 
 func (s *store) handleCommands(cmds []logservicepb.ScheduleCommand) {
+	s.commandMu.Lock()
+	defer s.commandMu.Unlock()
+	s.handleCommandsLocked(cmds)
+}
+
+func (s *store) handleCommandBatch(batch logservicepb.CommandBatch) {
+	s.commandMu.Lock()
+	defer s.commandMu.Unlock()
+	s.handleCommandBatchLocked(batch)
+}
+
+func (s *store) handleCommandBatchLocked(batch logservicepb.CommandBatch) {
+	if len(batch.Commands) == 0 {
+		return
+	}
+	if batch.BatchID == 0 {
+		s.appliedCommandIDs = nil
+		fingerprint := logservice.ScheduleCommandBatchFingerprint(batch)
+		if s.legacyDedupeArmed && fingerprint == s.lastCommandHash {
+			s.legacyDedupeArmed = false
+			s.handleRetryableCommandsLocked(batch.Commands)
+			return
+		}
+		s.legacyDedupeArmed = false
+		s.handleCommandsLocked(batch.Commands)
+		return
+	} else {
+		if batch.BatchID < s.lastCommandBatchID {
+			return
+		}
+		if batch.BatchID == s.lastCommandBatchID {
+			s.handleRetryableCommandsLocked(batch.Commands)
+			return
+		}
+	}
+	commands, applied, ok := logservice.FilterUnappliedScheduleCommands(
+		batch,
+		s.appliedCommandIDs,
+	)
+	if !ok {
+		s.rt.Logger().Error("received acknowledged schedule-command batch without stable command IDs",
+			zap.Uint64("batch-id", batch.BatchID))
+		return
+	}
+	shutdown := batch.BatchID != 0 && hasShutdownCommand(batch.Commands)
+	if shutdown {
+		// Shutdown is the one command whose side effect prevents a later
+		// heartbeat from carrying its acknowledgement. Apply the rest of the
+		// batch now, but defer process termination until HAKeeper has committed
+		// the exact batch acknowledgement.
+		s.handleNonShutdownCommandsLocked(commands)
+	} else {
+		s.handleCommandsLocked(commands)
+	}
+	s.appliedCommandIDs = applied
+	if batch.BatchID != 0 {
+		s.lastCommandBatchID = batch.BatchID
+		s.ackedCommandBatchID.Store(batch.BatchID)
+		s.lastCommandHash = logservice.ScheduleCommandBatchFingerprint(batch)
+		s.legacyDedupeArmed = true
+	}
+	if shutdown {
+		s.shutdownBatchID.Store(batch.BatchID)
+	}
+}
+
+func hasShutdownCommand(cmds []logservicepb.ScheduleCommand) bool {
+	for i := range cmds {
+		if cmds[i].GetShutdownStore() != nil {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *store) handleNonShutdownCommandsLocked(cmds []logservicepb.ScheduleCommand) {
+	for i := range cmds {
+		if cmds[i].GetShutdownStore() != nil {
+			if cmds[i].ServiceType != logservicepb.TNService {
+				s.rt.Logger().Fatal("received invalid command", zap.String("command", cmds[i].LogString()))
+			}
+			s.rt.Logger().Debug(
+				"deferring shutdown schedule command until acknowledgement",
+				zap.String("command", cmds[i].LogString()),
+			)
+			continue
+		}
+		s.handleCommandsLocked(cmds[i : i+1])
+	}
+}
+
+func (s *store) handlePolledCommandBatch(ctx context.Context, batch logservicepb.CommandBatch) {
+	s.handleCommandBatch(batch)
+	if s.shutdownBatchID.Load() != 0 {
+		s.acknowledgeShutdown(ctx)
+	}
+}
+
+// handleHeartbeatResponse records commands before using the response as proof
+// that an acknowledgement was committed. A stale acknowledgement cannot
+// complete a newer shutdown generation, and a response that still contains a
+// shutdown command explicitly proves that HAKeeper retained it.
+func (s *store) handleHeartbeatResponse(
+	sentAck uint64,
+	batch logservicepb.CommandBatch,
+) {
+	s.commandMu.Lock()
+	defer s.commandMu.Unlock()
+	if sentAck != 0 && sentAck == s.lastCommandBatchID &&
+		(batch.BatchID == 0 || batch.BatchID == sentAck) {
+		s.appliedCommandIDs = nil
+	}
+	s.handleCommandBatchLocked(batch)
+	for {
+		pending := s.shutdownBatchID.Load()
+		if pending == 0 || sentAck < pending || hasShutdownCommand(batch.Commands) {
+			return
+		}
+		if s.shutdownBatchID.CompareAndSwap(pending, 0) {
+			s.handleShutdownStore(logservicepb.ScheduleCommand{})
+			return
+		}
+	}
+}
+
+// acknowledgeShutdown uses the existing heartbeat protocol to close the
+// terminal command's delivery loop before terminating the process. It is only
+// called for ShutdownStore, so ordinary heartbeat and command paths pay no
+// extra RPC cost. Poll and heartbeat delivery can race; serialize this rare
+// path so only one acknowledgement attempt is active.
+func (s *store) acknowledgeShutdown(ctx context.Context) {
+	s.shutdownAckMu.Lock()
+	defer s.shutdownAckMu.Unlock()
+
+	ctx2, cancel := context.WithTimeoutCause(
+		ctx,
+		s.cfg.HAKeeper.HeatbeatTimeout.Duration,
+		moerr.CauseTnServiceHeartbeat,
+	)
+	defer cancel()
+	for s.shutdownBatchID.Load() != 0 {
+		hb := s.getHeartbeatMessage()
+		batch, err := s.hakeeperClient.SendTNHeartbeat(ctx2, hb)
+		if err != nil {
+			s.commandPollNeeded.Store(true)
+			if ctx.Err() == nil {
+				err = moerr.AttachCause(ctx2, err)
+				v2.TNHeartbeatFailureCounter.Inc()
+				s.rt.Logger().Error(
+					"failed to acknowledge tn shutdown command",
+					zap.Uint64("batch-id", hb.AckedCommandBatchID),
+					zap.Error(err),
+				)
+			}
+			return
+		}
+		if ctx2.Err() != nil {
+			s.commandPollNeeded.Store(true)
+			return
+		}
+		s.handleHeartbeatResponse(hb.AckedCommandBatchID, batch)
+	}
+}
+
+func (s *store) handleRetryableCommandsLocked(cmds []logservicepb.ScheduleCommand) {
+	for i := range cmds {
+		if logservice.IsRetryableScheduleCommand(cmds[i]) {
+			s.handleCommandsLocked(cmds[i : i+1])
+		}
+	}
+}
+
+func (s *store) handleCommandsLocked(cmds []logservicepb.ScheduleCommand) {
 	for _, cmd := range cmds {
 		if cmd.ServiceType != logservicepb.TNService {
 			s.rt.Logger().Fatal("received invalid command", zap.String("command", cmd.LogString()))

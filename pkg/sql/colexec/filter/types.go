@@ -31,6 +31,7 @@ type Filter struct {
 	FilterExprs        []*plan.Expr
 	RuntimeFilterExprs []*plan.Expr
 	IsEnd              bool
+	IsAssert           bool
 
 	vm.OperatorBase
 }

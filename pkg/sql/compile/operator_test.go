@@ -19,7 +19,6 @@ import (
 	"math"
 	"testing"
 
-	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -27,9 +26,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/apply"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dedupjoin"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/deletion"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/filter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashjoin"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/insert"
@@ -67,6 +68,48 @@ func TestDupOperator(t *testing.T) {
 		0,
 		0,
 	)
+
+	assertFilter := filter.NewArgument()
+	defer assertFilter.Release()
+	assertFilter.IsAssert = true
+	duplicatedFilter := dupOperator(assertFilter, 0, 1).(*filter.Filter)
+	defer duplicatedFilter.Release()
+	require.True(t, duplicatedFilter.IsAssert)
+}
+
+func TestConstructRestrictForCheckConstraintNodes(t *testing.T) {
+	assertExpr := &plan.Expr{Expr: &plan.Expr_F{F: &plan.Function{
+		Func: &plan.ObjectRef{ObjName: "_check_constraint_assert"},
+	}}}
+	boolExpr := plan2.MakePlan2BoolConstExprWithType(true)
+	for _, testCase := range []struct {
+		node         *plan.Node
+		wantFastPath bool
+	}{
+		{node: &plan.Node{NodeType: plan.Node_ASSERT, FilterList: []*plan.Expr{assertExpr}}, wantFastPath: true},
+		{node: &plan.Node{NodeType: plan.Node_ASSERT, FilterList: []*plan.Expr{boolExpr}}},
+		{node: &plan.Node{NodeType: plan.Node_FILTER, FilterList: []*plan.Expr{boolExpr}, FilterIsBarrier: true}},
+	} {
+		node := testCase.node
+		op := constructRestrict(node, plan2.DeepCopyExprList(node.FilterList))
+		require.Len(t, op.FilterExprs, len(node.FilterList))
+		require.False(t, op.IsEnd,
+			"CHECK operators must return their surviving batch to downstream DML")
+		require.Equal(t, testCase.wantFastPath, op.IsAssert)
+	}
+}
+
+func TestIdentityProjectionOfChild(t *testing.T) {
+	identity := []*plan.Expr{
+		{Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 0, ColPos: 0}}},
+		{Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 0, ColPos: 1}}},
+	}
+	child := []*plan.Expr{{}, {}}
+	require.True(t, isIdentityProjectionOfChild(identity, child))
+	require.False(t, isIdentityProjectionOfChild(identity[:1], child))
+	nonIdentity := plan2.DeepCopyExprList(identity)
+	nonIdentity[1].GetCol().ColPos = 0
+	require.False(t, isIdentityProjectionOfChild(nonIdentity, child))
 }
 
 func TestJoinHashBuildTopologyPinsSpillToSingleConsumer(t *testing.T) {
@@ -89,6 +132,90 @@ func TestJoinHashBuildTopologyPinsSpillToSingleConsumer(t *testing.T) {
 			shuffle.Release()
 		})
 	}
+}
+
+func TestConstructFuzzyFilterUsesFinalizedBuildSide(t *testing.T) {
+	newNodes := func(side plan.Node_FuzzyBuildSide, tableCost, sinkCost float64) (
+		*plan.Node, *plan.Node, *plan.Node, *plan.RuntimeFilterSpec,
+	) {
+		typ := plan.Type{Id: int32(types.T_int64)}
+		spec := &plan.RuntimeFilterSpec{
+			Tag:         1,
+			BuildExpr:   &plan.Expr{Typ: typ},
+			KeyEncoding: plan.RuntimeFilterKeyEncoding_RUNTIME_FILTER_KEY_RAW_V1,
+		}
+		node := &plan.Node{
+			NodeType:       plan.Node_FUZZY_FILTER,
+			FuzzyBuildSide: side,
+			TableDef: &plan.TableDef{
+				Cols: []*plan.ColDef{{Name: "id", Typ: typ}},
+				Pkey: &plan.PrimaryKeyDef{PkeyColName: "id"},
+			},
+			RuntimeFilterBuildList: []*plan.RuntimeFilterSpec{spec},
+		}
+		tableScan := &plan.Node{
+			NodeType: plan.Node_TABLE_SCAN,
+			Stats:    &plan.Stats{Cost: tableCost},
+			RuntimeFilterProbeList: []*plan.RuntimeFilterSpec{{
+				Tag: 1, Expr: &plan.Expr{Typ: typ},
+			}},
+		}
+		sinkScan := &plan.Node{
+			NodeType: plan.Node_SINK_SCAN,
+			Stats:    &plan.Stats{Cost: sinkCost},
+		}
+		return node, tableScan, sinkScan, spec
+	}
+
+	t.Run("sink decision survives rewritten cost ratio", func(t *testing.T) {
+		node, tableScan, sinkScan, spec := newNodes(
+			plan.Node_FUZZY_BUILD_SIDE_SINK, 8_192, 1_000_000)
+		op := constructFuzzyFilter(node, tableScan, sinkScan)
+		defer op.Release()
+
+		require.Equal(t, 1, op.BuildIdx)
+		require.Same(t, spec, op.RuntimeFilterSpec)
+		require.Len(t, node.RuntimeFilterBuildList, 1)
+		require.Len(t, tableScan.RuntimeFilterProbeList, 1)
+	})
+
+	t.Run("table decision overrides later cost drift", func(t *testing.T) {
+		node, tableScan, sinkScan, _ := newNodes(
+			plan.Node_FUZZY_BUILD_SIDE_TABLE, 1_000_000, 1)
+		op := constructFuzzyFilter(node, tableScan, sinkScan)
+		defer op.Release()
+
+		require.Equal(t, 0, op.BuildIdx)
+		require.Nil(t, op.RuntimeFilterSpec)
+		require.Empty(t, node.RuntimeFilterBuildList)
+		require.Empty(t, tableScan.RuntimeFilterProbeList)
+	})
+
+	t.Run("uses projected exact float identity type", func(t *testing.T) {
+		node, tableScan, sinkScan, _ := newNodes(
+			plan.Node_FUZZY_BUILD_SIDE_SINK, 10, 10)
+		node.TableDef.Cols[0].Typ = plan.Type{Id: int32(types.T_float64)}
+		identityType := plan.Type{Id: int32(types.T_varchar)}
+		tableScan.ProjectList = []*plan.Expr{{Typ: identityType}}
+		sinkScan.ProjectList = []*plan.Expr{{Typ: identityType}}
+
+		op := constructFuzzyFilter(node, tableScan, sinkScan)
+		defer op.Release()
+
+		require.Equal(t, identityType, op.PkTyp)
+	})
+
+	t.Run("uses table projection when sink projection is absent", func(t *testing.T) {
+		node, tableScan, sinkScan, _ := newNodes(
+			plan.Node_FUZZY_BUILD_SIDE_TABLE, 10, 10)
+		identityType := plan.Type{Id: int32(types.T_varchar)}
+		tableScan.ProjectList = []*plan.Expr{{Typ: identityType}}
+
+		op := constructFuzzyFilter(node, tableScan, sinkScan)
+		defer op.Release()
+
+		require.Equal(t, identityType, op.PkTyp)
+	})
 }
 
 func TestConstructAggregateConfigIncludesGroupConcatMaxLen(t *testing.T) {
@@ -132,6 +259,68 @@ func TestConstructAggregateConfigPreservesOrderedGroupConcatArgs(t *testing.T) {
 
 	require.Equal(t, []*plan.Expr{valueArg, orderArg}, args)
 	require.Equal(t, aggexec.EncodeGroupConcatOrderedConfig(planConfig, 5), config)
+}
+
+func TestConstructAggregateConfigOrderedPercentile(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+
+	value := &plan.Expr{Typ: plan.Type{Id: int32(types.T_int64)}}
+	percentile := plan2.MakePlan2Float64ConstExprWithType(0.95)
+	args, config := constructAggregateConfig(&plan.Function{
+		Func:      &plan.ObjectRef{ObjName: plan2.NamePercentileCont},
+		Args:      []*plan.Expr{value, percentile},
+		AggConfig: []byte{1},
+	}, proc)
+
+	require.Equal(t, []*plan.Expr{value}, args)
+	require.Equal(t, aggexec.EncodeOrderedPercentileConfig([]byte("0.95"), true), config)
+
+	args, config = constructAggregateConfig(&plan.Function{
+		Func:      &plan.ObjectRef{ObjName: plan2.NamePercentileDisc},
+		Args:      []*plan.Expr{value, plan2.MakePlan2Float64ConstExprWithType(0)},
+		AggConfig: []byte{0},
+	}, proc)
+	require.Equal(t, []*plan.Expr{value}, args)
+	require.Equal(t, aggexec.EncodeOrderedPercentileConfig([]byte("0"), false), config)
+}
+
+func TestConstructAggregateConfigOrderedPercentileRejectsInvalidInput(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+
+	value := &plan.Expr{Typ: plan.Type{Id: int32(types.T_int64)}}
+	percentile := plan2.MakePlan2Float64ConstExprWithType(0.5)
+	percentileColumn := &plan.Expr{
+		Typ:  plan.Type{Id: int32(types.T_float64)},
+		Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 1}},
+	}
+
+	for _, fn := range []string{plan2.NamePercentileCont, plan2.NamePercentileDisc} {
+		t.Run(fn+" wrong argument count", func(t *testing.T) {
+			require.Panics(t, func() {
+				constructAggregateConfig(&plan.Function{
+					Func: &plan.ObjectRef{ObjName: fn},
+					Args: []*plan.Expr{value},
+				}, proc)
+			})
+		})
+		t.Run(fn+" nonconstant percentile", func(t *testing.T) {
+			require.Panics(t, func() {
+				constructAggregateConfig(&plan.Function{
+					Func: &plan.ObjectRef{ObjName: fn},
+					Args: []*plan.Expr{value, percentileColumn},
+				}, proc)
+			})
+		})
+	}
+
+	args, config := constructAggregateConfig(&plan.Function{
+		Func: &plan.ObjectRef{ObjName: plan2.NamePercentileCont},
+		Args: []*plan.Expr{value, percentile},
+	}, proc)
+	require.Equal(t, []*plan.Expr{value}, args)
+	require.Equal(t, aggexec.EncodeOrderedPercentileConfig([]byte("0.5"), false), config)
 }
 
 func TestDupHashBuildPreservesNullTracking(t *testing.T) {
@@ -541,21 +730,21 @@ func TestDupOperatorDedupJoinSharesMailboxOnlyWithinGeneration(t *testing.T) {
 	require.NotSame(t, dup1.Mailbox, nextGeneration.Mailbox)
 }
 
-func TestDupOperatorHashJoinSharesChannelOnlyWithinGeneration(t *testing.T) {
+func TestDupOperatorHashJoinSharesMailboxOnlyWithinGeneration(t *testing.T) {
 	op := hashjoin.NewArgument()
-	staleChannel := make(chan *bitmap.Bitmap, 2)
-	close(staleChannel)
-	op.Channel = staleChannel
+	staleMailbox := hashjoin.NewBitmapMailbox(2)
+	staleMailbox.SealAndDrain(mpool.MustNewZero())
+	op.Mailbox = staleMailbox
 
 	dupCtx := newOperatorDupContext()
 	dup1 := dupOperatorWithContext(op, 0, 2, dupCtx).(*hashjoin.HashJoin)
 	dup2 := dupOperatorWithContext(op, 1, 2, dupCtx).(*hashjoin.HashJoin)
 
-	require.Equal(t, staleChannel, op.Channel, "duplicating must not mutate the reusable template")
-	require.NotEqual(t, staleChannel, dup1.Channel, "a stale closed template channel must not enter a new execution")
-	require.Equal(t, dup1.Channel, dup2.Channel)
+	require.Same(t, staleMailbox, op.Mailbox, "duplicating must not mutate the reusable template")
+	require.NotSame(t, staleMailbox, dup1.Mailbox, "a stale template mailbox must not enter a new execution")
+	require.Same(t, dup1.Mailbox, dup2.Mailbox)
 	nextGeneration := dupOperatorWithContext(op, 0, 2, newOperatorDupContext()).(*hashjoin.HashJoin)
-	require.NotEqual(t, dup1.Channel, nextGeneration.Channel)
+	require.NotSame(t, dup1.Mailbox, nextGeneration.Mailbox)
 }
 
 func TestDupOperatorAssignsSharedShuffleConsumerIndex(t *testing.T) {
@@ -716,6 +905,43 @@ func TestGetPercentileConfig(t *testing.T) {
 		require.Equal(t, "1", string(cfg))
 	})
 
+	for _, tc := range []struct {
+		name   string
+		newVec func() (*vector.Vector, error)
+		want   string
+	}{
+		{name: "bit", newVec: func() (*vector.Vector, error) {
+			return vector.NewConstFixed(types.T_bit.ToType(), uint64(1), 1, mp)
+		}, want: "1"},
+		{name: "int8", newVec: func() (*vector.Vector, error) {
+			return vector.NewConstFixed(types.T_int8.ToType(), int8(0), 1, mp)
+		}, want: "0"},
+		{name: "int16", newVec: func() (*vector.Vector, error) {
+			return vector.NewConstFixed(types.T_int16.ToType(), int16(1), 1, mp)
+		}, want: "1"},
+		{name: "uint8", newVec: func() (*vector.Vector, error) {
+			return vector.NewConstFixed(types.T_uint8.ToType(), uint8(1), 1, mp)
+		}, want: "1"},
+		{name: "uint16", newVec: func() (*vector.Vector, error) {
+			return vector.NewConstFixed(types.T_uint16.ToType(), uint16(1), 1, mp)
+		}, want: "1"},
+		{name: "uint32", newVec: func() (*vector.Vector, error) {
+			return vector.NewConstFixed(types.T_uint32.ToType(), uint32(1), 1, mp)
+		}, want: "1"},
+		{name: "uint64", newVec: func() (*vector.Vector, error) {
+			return vector.NewConstFixed(types.T_uint64.ToType(), uint64(1), 1, mp)
+		}, want: "1"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			vec, err := tc.newVec()
+			require.NoError(t, err)
+			defer vec.Free(mp)
+			cfg, err := getPercentileConfig(vec)
+			require.NoError(t, err)
+			require.Equal(t, tc.want, string(cfg))
+		})
+	}
+
 	t.Run("decimal64 preserves exact text", func(t *testing.T) {
 		typ := types.New(types.T_decimal64, 10, 6)
 		value, err := types.ParseDecimal64("0.123456", typ.Width, typ.Scale)
@@ -812,6 +1038,23 @@ func TestValidateApproxPercentileExpr(t *testing.T) {
 	require.Error(t, validateApproxPercentileExpr(parameter))
 }
 
+func TestValidateOrderedPercentileExpr(t *testing.T) {
+	column := &plan.Expr{
+		Typ:  plan.Type{Id: int32(types.T_float64)},
+		Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 1}},
+	}
+	parameter := &plan.Expr{
+		Typ:  plan.Type{Id: int32(types.T_float64)},
+		Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: 0}},
+	}
+	literal := plan2.MakePlan2Float64ConstExprWithType(0.5)
+
+	require.Error(t, validateOrderedPercentileExpr(nil, plan2.NamePercentileCont))
+	require.Error(t, validateOrderedPercentileExpr(column, plan2.NamePercentileCont))
+	require.Error(t, validateOrderedPercentileExpr(parameter, plan2.NamePercentileDisc))
+	require.NoError(t, validateOrderedPercentileExpr(literal, plan2.NamePercentileCont))
+}
+
 func makeTimeWindowIntervalExpr(value int64, unit string) *plan.Expr {
 	return &plan.Expr{
 		Expr: &plan.Expr_List{
@@ -847,9 +1090,24 @@ func TestDupOperatorTableFunctionPreservesProbeState(t *testing.T) {
 		Limit:        plan2.MakePlan2Uint64ConstExprWithType(7),
 		OrigFuncName: "l2_distance",
 	}
+	op.FulltextSourceRef = &plan.ObjectRef{SchemaName: "publisher", ObjName: "source", PubInfo: &plan.PubInfo{TenantId: 42}}
+	op.FulltextIndexRef = &plan.ObjectRef{SchemaName: "publisher", ObjName: "index", PubInfo: &plan.PubInfo{TenantId: 42}}
 
 	dup := dupOperator(op, 0, 1).(*table_function.TableFunction)
 	require.Equal(t, op.RuntimeFilterSpecs, dup.RuntimeFilterSpecs)
 	require.Equal(t, uint64(7), dup.IndexReaderParam.GetLimit().GetLit().GetU64Val())
 	require.Equal(t, "l2_distance", dup.IndexReaderParam.GetOrigFuncName())
+	require.Equal(t, op.FulltextSourceRef, dup.FulltextSourceRef)
+	require.Equal(t, op.FulltextIndexRef, dup.FulltextIndexRef)
+}
+
+func TestDupOperatorApplyPreservesFulltextReferences(t *testing.T) {
+	tableFunction := table_function.NewArgument()
+	tableFunction.FulltextSourceRef = &plan.ObjectRef{SchemaName: "publisher", ObjName: "source", PubInfo: &plan.PubInfo{TenantId: 42}}
+	tableFunction.FulltextIndexRef = &plan.ObjectRef{SchemaName: "publisher", ObjName: "index", PubInfo: &plan.PubInfo{TenantId: 42}}
+	op := &apply.Apply{TableFunction: tableFunction}
+
+	dup := dupOperator(op, 0, 1).(*apply.Apply)
+	require.Equal(t, tableFunction.FulltextSourceRef, dup.TableFunction.FulltextSourceRef)
+	require.Equal(t, tableFunction.FulltextIndexRef, dup.TableFunction.FulltextIndexRef)
 }

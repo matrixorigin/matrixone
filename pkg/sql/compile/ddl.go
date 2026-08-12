@@ -530,7 +530,13 @@ func reindexSpecifiedParams(stmt tree.Statement, indexName string) map[string]st
 	return m
 }
 
-func (s *Scope) AlterTableInplace(c *Compile) error {
+func (s *Scope) AlterTableInplace(c *Compile) (err error) {
+	cleanup := newAlterAutoIncrementResetCleanup(c)
+	defer cleanup.finish(&err)
+	return s.alterTableInplace(c, cleanup)
+}
+
+func (s *Scope) alterTableInplace(c *Compile, cleanup *alterAutoIncrementResetCleanup) error {
 	qry := s.Plan.GetDdl().GetAlterTable()
 	dbName := qry.Database
 	if dbName == "" {
@@ -1124,6 +1130,23 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 				did, tid,
 				act.AlterComment.NewComment,
 			))
+		case *plan.AlterTable_Action_AlterAutoIncrement:
+			targetTableDef := qry.GetCopyTableDef()
+			if targetTableDef == nil {
+				targetTableDef = qry.GetTableDef()
+			}
+			if err := c.appendAlterAutoIncrementReqs(
+				dbName,
+				qry.GetTableDef(),
+				targetTableDef,
+				did,
+				tid,
+				act.AlterAutoIncrement.NewOffset,
+				cleanup,
+				&reqs,
+			); err != nil {
+				return err
+			}
 		case *plan.AlterTable_Action_AlterName:
 			reqs = append(reqs, api.NewRenameTableReq(
 				did, tid,
@@ -1132,11 +1155,15 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 			))
 		case *plan.AlterTable_Action_AlterRenameColumn:
 			hasDefReplace = true
-			reqs = append(reqs, api.NewRenameColumnReq(
+			if err := c.requireCheckRenameProtocol(qry.GetCopyTableDef().GetChecks()); err != nil {
+				return err
+			}
+			reqs = append(reqs, api.NewRenameColumnReqWithChecks(
 				did, tid,
 				act.AlterRenameColumn.OldName, // origin name
 				act.AlterRenameColumn.NewName, // origin name
 				uint32(act.AlterRenameColumn.SequenceNum),
+				qry.GetCopyTableDef().GetChecks(),
 			))
 
 		case *plan.AlterTable_Action_AlterReplaceDef:
@@ -1547,12 +1574,15 @@ func (s *Scope) CreateTable(c *Compile) error {
 			}
 			dedupFkName.Insert(fkey.Name)
 			newDef := &plan.ForeignKeyDef{
-				Name:        fkey.Name,
-				Cols:        make([]uint64, len(fkey.Cols)),
-				ForeignTbl:  fkey.ForeignTbl,
-				ForeignCols: make([]uint64, len(fkey.ForeignCols)),
-				OnDelete:    fkey.OnDelete,
-				OnUpdate:    fkey.OnUpdate,
+				Name:                fkey.Name,
+				Cols:                make([]uint64, len(fkey.Cols)),
+				ForeignTbl:          fkey.ForeignTbl,
+				ForeignCols:         make([]uint64, len(fkey.ForeignCols)),
+				OnDelete:            fkey.OnDelete,
+				OnUpdate:            fkey.OnUpdate,
+				ReferencedIndexName: fkey.ReferencedIndexName,
+				OnDeleteOrigin:      fkey.OnDeleteOrigin,
+				OnUpdateOrigin:      fkey.OnUpdateOrigin,
 			}
 			copy(newDef.ForeignCols, fkey.ForeignCols)
 
@@ -1595,7 +1625,13 @@ func (s *Scope) CreateTable(c *Compile) error {
 			return err
 		}
 
-		//2. need to append TableId to parent's TableDef.RefChildTbls
+		//2. append the child table ID to each distinct parent's RefChildTbls.
+		// A table can define several foreign keys to one parent. Updating that
+		// parent once per foreign key repeatedly rewrites its whole constraint
+		// definition, while one child-table ID is sufficient for the relation.
+		parentRelations := make([]engine.Relation, 0, len(fkTables))
+		hasSelfReference := false
+		ignoreForeignKey, _ := c.proc.Ctx.Value(defines.IgnoreForeignKey{}).(bool)
 		for i, fkTableName := range fkTables {
 			fkDbName := fkDbs[i]
 			if session != nil {
@@ -1605,17 +1641,11 @@ func (s *Scope) CreateTable(c *Compile) error {
 			}
 			fkey := qry.GetTableDef().Fkeys[i]
 			if fkey.ForeignTbl == 0 {
-				//fk self refer
-				//add current table to parent's children table
-				err = AddChildTblIdToParentTable(c.proc.Ctx, newRelation, 0)
-				if err != nil {
-					c.proc.Info(c.proc.Ctx, "createTable",
-						zap.String("databaseName", c.db),
-						zap.String("tableName", qry.GetTableDef().GetName()),
-						zap.Error(err),
-					)
-					return err
-				}
+				// A self-reference is represented by the sentinel table ID 0.
+				hasSelfReference = true
+				continue
+			}
+			if ignoreForeignKey {
 				continue
 			}
 			fkDbSource, err := c.e.Database(c.proc.Ctx, fkDbName, c.proc.GetTxnOperator())
@@ -1636,8 +1666,11 @@ func (s *Scope) CreateTable(c *Compile) error {
 				)
 				return err
 			}
-			//add current table to parent's children table
-			err = AddChildTblIdToParentTable(c.proc.Ctx, fkRelation, tblId)
+			parentRelations = append(parentRelations, fkRelation)
+		}
+
+		if hasSelfReference {
+			err = AddChildTblIdToParentTable(c.proc.Ctx, newRelation, 0)
 			if err != nil {
 				c.proc.Info(c.proc.Ctx, "createTable",
 					zap.String("databaseName", c.db),
@@ -1646,6 +1679,15 @@ func (s *Scope) CreateTable(c *Compile) error {
 				)
 				return err
 			}
+		}
+
+		if err = addChildTableIDToDistinctParents(c.proc.Ctx, parentRelations, tblId); err != nil {
+			c.proc.Info(c.proc.Ctx, "createTable",
+				zap.String("databaseName", c.db),
+				zap.String("tableName", qry.GetTableDef().GetName()),
+				zap.Error(err),
+			)
+			return err
 		}
 	}
 
@@ -1687,12 +1729,15 @@ func (s *Scope) CreateTable(c *Compile) error {
 		for _, info := range fkRefersToMe {
 			//update foreignCols in fk
 			newDef := &plan.ForeignKeyDef{
-				Name:        info.Def.Name,
-				Cols:        make([]uint64, len(info.Def.Cols)),
-				ForeignTbl:  tblId,
-				ForeignCols: make([]uint64, len(info.Def.ForeignCols)),
-				OnDelete:    info.Def.OnDelete,
-				OnUpdate:    info.Def.OnUpdate,
+				Name:                info.Def.Name,
+				Cols:                make([]uint64, len(info.Def.Cols)),
+				ForeignTbl:          tblId,
+				ForeignCols:         make([]uint64, len(info.Def.ForeignCols)),
+				OnDelete:            info.Def.OnDelete,
+				OnUpdate:            info.Def.OnUpdate,
+				ReferencedIndexName: info.Def.ReferencedIndexName,
+				OnDeleteOrigin:      info.Def.OnDeleteOrigin,
+				OnUpdateOrigin:      info.Def.OnUpdateOrigin,
 			}
 			//child table column ids of the child table
 			copy(newDef.Cols, info.Def.Cols)
@@ -2161,10 +2206,16 @@ func icebergCreateSQLFromPlanTableDef(tableDef *plan.TableDef) string {
 }
 
 func (c *Compile) maybeInsertMongoDBTableMapping(dbSource engine.Database, rel engine.Relation, qry *plan.CreateTable) error {
+	if qry == nil || qry.GetTableDef() == nil || !features.IsMongoDBExternal(qry.GetTableDef().FeatureFlag) {
+		return nil
+	}
 	createSQL := icebergCreateSQLFromPlanTableDef(qry.GetTableDef())
 	env, found, err := sqlmongodb.ParseCreateSQLEnvelope(c.proc.Ctx, createSQL)
-	if err != nil || !found {
+	if err != nil {
 		return err
+	}
+	if !found {
+		return moerr.NewInternalError(c.proc.Ctx, "typed MongoDB table plan is missing its catalog envelope")
 	}
 	accountID, err := defines.GetAccountId(c.proc.Ctx)
 	if err != nil {
@@ -2226,9 +2277,8 @@ func (c *Compile) lookupMongoDBConnectionID(accountID uint32, name string) (uint
 }
 
 func (c *Compile) maybeDeleteMongoDBTableMapping(dbSource engine.Database, rel engine.Relation, tableDef *plan.TableDef) error {
-	createSQL := icebergCreateSQLFromPlanTableDef(tableDef)
-	_, found, err := sqlmongodb.ParseCreateSQLEnvelope(c.proc.Ctx, createSQL)
-	if err != nil || !found {
+	isMongoDB, err := plan2.IsMongoDBTableDef(c.proc.Ctx, tableDef)
+	if err != nil || !isMongoDB {
 		return err
 	}
 	accountID, err := defines.GetAccountId(c.proc.Ctx)
@@ -3028,6 +3078,25 @@ func AddChildTblIdToParentTable(ctx context.Context, fkRelation engine.Relation,
 	}
 	addRefChildTableIDs(oldCt, []uint64{tblId})
 	return fkRelation.UpdateConstraint(ctx, oldCt)
+}
+
+func addChildTableIDToDistinctParents(
+	ctx context.Context,
+	parentRelations []engine.Relation,
+	childTableID uint64,
+) error {
+	updatedParents := make(map[uint64]struct{}, len(parentRelations))
+	for _, parentRelation := range parentRelations {
+		parentTableID := parentRelation.GetTableID(ctx)
+		if _, alreadyUpdated := updatedParents[parentTableID]; alreadyUpdated {
+			continue
+		}
+		if err := AddChildTblIdToParentTable(ctx, parentRelation, childTableID); err != nil {
+			return err
+		}
+		updatedParents[parentTableID] = struct{}{}
+	}
+	return nil
 }
 
 func canonicalRefChildTableIDs(constraintDef *engine.ConstraintDef) []uint64 {
@@ -4807,6 +4876,134 @@ func maybeResetAutoIncrement(
 	return nil
 }
 
+// requireCheckRenameProtocol is the sender-side safety boundary for the v15
+// AlterTableRenameCol.checks field. Planner checks provide an earlier error,
+// while this check prevents a synthesized or cached plan from sending required
+// CHECK metadata to a receiver whose alter handler cannot apply it.
+func (c *Compile) requireCheckRenameProtocol(checks []*plan.CheckDef) error {
+	if len(checks) == 0 {
+		return nil
+	}
+	value, ok := moruntime.ServiceRuntime(c.proc.GetService()).
+		GetGlobalVariables(moruntime.MOProtocolVersion)
+	version, valid := value.(int64)
+	if !ok || !valid || version < defines.MORPCVersion15 {
+		return moerr.NewNotSupported(
+			c.proc.Ctx,
+			"renaming a column in a table with CHECK constraints requires all services to support protocol version 15",
+		)
+	}
+	return nil
+}
+
+func (c *Compile) getAlterAutoIncrementOffset(
+	dbName string,
+	tblName string,
+	colName string,
+	requestedOffset uint64,
+) (uint64, error) {
+	colIdent := sqlquote.Ident(colName)
+	sql := fmt.Sprintf(
+		"select cast(coalesce(max(case when %s > 0 then %s else 0 end), 0) as unsigned) from %s",
+		colIdent,
+		colIdent,
+		sqlquote.QualifiedIdent(dbName, tblName),
+	)
+	res, err := c.runSqlWithResultAndOptions(
+		sql,
+		NoAccountId,
+		executor.StatementOption{}.WithDisableLog(),
+	)
+	if err != nil {
+		return 0, err
+	}
+	defer res.Close()
+
+	maxStored := uint64(0)
+	res.ReadRows(func(rows int, cols []*vector.Vector) bool {
+		if rows == 0 || len(cols) == 0 || cols[0].IsNull(0) {
+			return false
+		}
+		maxStored = executor.GetFixedRows[uint64](cols[0])[0]
+		return false
+	})
+	return max(requestedOffset, maxStored), nil
+}
+
+func (c *Compile) appendAlterAutoIncrementReqs(
+	dbName string,
+	tableDef *plan.TableDef,
+	targetTableDef *plan.TableDef,
+	did uint64,
+	tid uint64,
+	requestedOffset uint64,
+	cleanup *alterAutoIncrementResetCleanup,
+	reqs *[]*api.AlterTableReq,
+) error {
+	if c.proc.Ctx != nil {
+		if err := c.proc.Ctx.Err(); err != nil {
+			return err
+		}
+	}
+	if !engine.TxnSupportsAutoIncrEpochFence(c.proc.GetTxnOperator()) {
+		return moerr.NewNotSupported(
+			c.proc.Ctx,
+			"AUTO_INCREMENT allocator reset requires epoch fencing on every TN service",
+		)
+	}
+
+	svc := incrservice.GetAutoIncrementService(c.proc.GetService())
+	for _, col := range incrservice.GetUserAutoColumnFromDef(tableDef) {
+		targetCol := plan2.FindColumnByColId(
+			targetTableDef.Cols,
+			tableDef.Cols[col.ColIndex].ColId,
+		)
+		if targetCol == nil || !targetCol.Typ.AutoIncr {
+			return moerr.NewInternalErrorNoCtxf(
+				"AUTO_INCREMENT column %q is missing from final table definition",
+				col.ColName,
+			)
+		}
+		offset, err := c.getAlterAutoIncrementOffset(
+			dbName,
+			tableDef.Name,
+			col.ColName,
+			requestedOffset,
+		)
+		if err != nil {
+			return err
+		}
+		if err := incrservice.ValidateAutoColumnOffset(
+			c.proc.Ctx,
+			types.T(targetCol.Typ.Id),
+			offset,
+		); err != nil {
+			return err
+		}
+		if err = svc.SetOffset(
+			c.proc.Ctx,
+			tid,
+			col.ColIndex,
+			targetCol.Name,
+			offset,
+			c.proc.GetTxnOperator(),
+		); err != nil {
+			return err
+		}
+		cleanup.track(tid)
+		if c.proc.Ctx != nil {
+			if err := c.proc.Ctx.Err(); err != nil {
+				return err
+			}
+		}
+		// disttae assigns the next catalog epoch when applying this request.
+		// Do not refresh relation metadata after allocation and substitute a
+		// different allocator generation.
+		*reqs = append(*reqs, api.NewUpdateAutoIncrementReq(did, tid, offset, 0))
+	}
+	return nil
+}
+
 func getRelFromMoCatalog(c *Compile, tblName string) (engine.Relation, error) {
 	dbSource, err := c.e.Database(c.proc.Ctx, catalog.MO_CATALOG, c.proc.GetTxnOperator())
 	if err != nil {
@@ -5999,7 +6196,6 @@ func (opts *CDCCreateTaskOptions) handleLevel(
 	if patterTupples, err = CDCParsePitrGranularity(
 		ctx, level, tables,
 	); err != nil {
-		err = moerr.NewInternalErrorf(ctx, "invalid level: %s", level)
 		return
 	}
 
@@ -6219,7 +6415,6 @@ func (opts *CDCCreateTaskOptions) handleFrequency(
 	if patterTupples, err = CDCParsePitrGranularity(
 		ctx, level, tables,
 	); err != nil {
-		err = moerr.NewInternalErrorf(ctx, "invalid level: %s", level)
 		return
 	}
 

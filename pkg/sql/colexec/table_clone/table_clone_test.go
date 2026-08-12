@@ -26,11 +26,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
+	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 func TestTableCloneOperatorMetadata(t *testing.T) {
@@ -47,13 +49,49 @@ func TestTableCloneOperatorMetadata(t *testing.T) {
 
 type autoIncrementTestRelation struct {
 	engine.Relation
-	tableID uint64
-	name    string
-	def     *plan.TableDef
+	tableID  uint64
+	dbID     uint64
+	name     string
+	def      *plan.TableDef
+	reqs     []*api.AlterTableReq
+	alterErr error
+}
+
+type tableCloneAutoIncrEpochWorkspace struct {
+	client.Workspace
+	supported bool
+}
+
+func (w tableCloneAutoIncrEpochWorkspace) SupportsAutoIncrEpochFence() bool {
+	return w.supported
+}
+
+func newTableCloneAutoIncrProcess(t *testing.T, supported bool) *process.Process {
+	proc := testutil.NewProcess(t)
+	ctrl := gomock.NewController(t)
+	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+	txnOp.EXPECT().GetWorkspace().Return(
+		tableCloneAutoIncrEpochWorkspace{supported: supported},
+	).AnyTimes()
+	proc.Base.TxnOperator = txnOp
+	return proc
 }
 
 func (r *autoIncrementTestRelation) GetTableID(context.Context) uint64 {
 	return r.tableID
+}
+
+func (r *autoIncrementTestRelation) GetDBID(context.Context) uint64 {
+	return r.dbID
+}
+
+func (r *autoIncrementTestRelation) AlterTable(
+	_ context.Context,
+	_ *engine.ConstraintDef,
+	reqs []*api.AlterTableReq,
+) error {
+	r.reqs = append(r.reqs, reqs...)
+	return r.alterErr
 }
 
 func (r *autoIncrementTestRelation) GetTableDef(context.Context) *plan.TableDef {
@@ -80,7 +118,7 @@ func TestUpdateDstAutoIncrColumnsReconcilesAllSafeBounds(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			proc := testutil.NewProcess(t)
+			proc := newTableCloneAutoIncrProcess(t, true)
 			ctrl := gomock.NewController(t)
 			incrSvc := mock_frontend.NewMockAutoIncrementService(ctrl)
 			proc.Base.IncrService = incrSvc
@@ -103,15 +141,29 @@ func TestUpdateDstAutoIncrColumnsReconcilesAllSafeBounds(t *testing.T) {
 			}
 
 			incrSvc.EXPECT().SetOffset(
-				gomock.Any(), def.TblId, "id", tt.want, gomock.Any(),
+				gomock.Any(), def.TblId, 0, "id", tt.want, gomock.Any(),
 			)
 			require.NoError(t, tc.updateDstAutoIncrColumns(proc.Ctx, proc))
 		})
 	}
 }
 
+func TestUpdateDstAutoIncrColumnsRejectsLegacyTN(t *testing.T) {
+	proc := newTableCloneAutoIncrProcess(t, false)
+	ctrl := gomock.NewController(t)
+	incrSvc := mock_frontend.NewMockAutoIncrementService(ctrl)
+	incrSvc.EXPECT().SetOffset(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Times(0)
+	proc.Base.IncrService = incrSvc
+	tc := &TableClone{
+		Ctx: &TableCloneCtx{SrcAutoIncrMaxValues: map[string]uint64{"id": 1}},
+	}
+
+	err := tc.updateDstAutoIncrColumns(proc.Ctx, proc)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported), err)
+}
+
 func TestUpdateDstAutoIncrColumnsKeepsHiddenAllocatorIndependent(t *testing.T) {
-	proc := testutil.NewProcess(t)
+	proc := newTableCloneAutoIncrProcess(t, true)
 	ctrl := gomock.NewController(t)
 	incrSvc := mock_frontend.NewMockAutoIncrementService(ctrl)
 	proc.Base.IncrService = incrSvc
@@ -133,18 +185,23 @@ func TestUpdateDstAutoIncrColumnsKeepsHiddenAllocatorIndependent(t *testing.T) {
 				"__mo_fake_pk_col": 40,
 			},
 		},
-		dstMasterRel: &autoIncrementTestRelation{tableID: def.TblId, def: def},
+		dstMasterRel: &autoIncrementTestRelation{tableID: def.TblId, dbID: 7, def: def},
 	}
+	rel := tc.dstMasterRel.(*autoIncrementTestRelation)
 
 	gomock.InOrder(
-		incrSvc.EXPECT().SetOffset(gomock.Any(), def.TblId, "id", uint64(999), gomock.Any()),
-		incrSvc.EXPECT().SetOffset(gomock.Any(), def.TblId, "__mo_fake_pk_col", uint64(40), gomock.Any()),
+		incrSvc.EXPECT().SetOffset(gomock.Any(), def.TblId, 0, "id", uint64(999), gomock.Any()),
+		incrSvc.EXPECT().SetOffset(gomock.Any(), def.TblId, 1, "__mo_fake_pk_col", uint64(40), gomock.Any()),
 	)
 	require.NoError(t, tc.updateDstAutoIncrColumns(proc.Ctx, proc))
+	require.Equal(t, []*api.AlterTableReq{
+		api.NewUpdateAutoIncrementReq(7, def.TblId, 999, 0),
+		api.NewUpdateAutoIncrementReq(7, def.TblId, 40, 0),
+	}, rel.reqs)
 }
 
 func TestUpdateDstAutoIncrColumnsReconcilesClonedIndexAllocator(t *testing.T) {
-	proc := testutil.NewProcess(t)
+	proc := newTableCloneAutoIncrProcess(t, true)
 	ctrl := gomock.NewController(t)
 	incrSvc := mock_frontend.NewMockAutoIncrementService(ctrl)
 	proc.Base.IncrService = incrSvc
@@ -178,16 +235,24 @@ func TestUpdateDstAutoIncrColumnsReconcilesClonedIndexAllocator(t *testing.T) {
 			},
 		},
 		dstIdxRel: map[string]engine.Relation{
-			"ftidx.":    &autoIncrementTestRelation{tableID: 84, name: def.Name, def: def},
-			"p0.ftidx.": &autoIncrementTestRelation{tableID: 85, name: def.Name, def: def},
-			"p1.ftidx.": &autoIncrementTestRelation{tableID: 86, name: def.Name, def: def},
+			"ftidx.":    &autoIncrementTestRelation{tableID: 84, dbID: 8, name: def.Name, def: def},
+			"p0.ftidx.": &autoIncrementTestRelation{tableID: 85, dbID: 8, name: def.Name, def: def},
+			"p1.ftidx.": &autoIncrementTestRelation{tableID: 86, dbID: 8, name: def.Name, def: def},
 		},
 	}
 
-	incrSvc.EXPECT().SetOffset(gomock.Any(), uint64(84), "__mo_fake_pk_col", uint64(200), gomock.Any())
-	incrSvc.EXPECT().SetOffset(gomock.Any(), uint64(85), "__mo_fake_pk_col", uint64(300), gomock.Any())
-	incrSvc.EXPECT().SetOffset(gomock.Any(), uint64(86), "__mo_fake_pk_col", uint64(400), gomock.Any())
+	incrSvc.EXPECT().SetOffset(gomock.Any(), uint64(84), 0, "__mo_fake_pk_col", uint64(200), gomock.Any())
+	incrSvc.EXPECT().SetOffset(gomock.Any(), uint64(85), 0, "__mo_fake_pk_col", uint64(300), gomock.Any())
+	incrSvc.EXPECT().SetOffset(gomock.Any(), uint64(86), 0, "__mo_fake_pk_col", uint64(400), gomock.Any())
 	require.NoError(t, tc.updateDstAutoIncrColumns(proc.Ctx, proc))
+	for key, wantOffset := range map[string]uint64{
+		"ftidx.": 200, "p0.ftidx.": 300, "p1.ftidx.": 400,
+	} {
+		rel := tc.dstIdxRel[key].(*autoIncrementTestRelation)
+		require.Equal(t, []*api.AlterTableReq{
+			api.NewUpdateAutoIncrementReq(8, rel.tableID, wantOffset, 0),
+		}, rel.reqs)
+	}
 }
 
 func TestUpdateDstAutoIncrColumnsRejectsOutOfRangeOffset(t *testing.T) {
@@ -208,7 +273,7 @@ func TestUpdateDstAutoIncrColumnsRejectsOutOfRangeOffset(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			proc := testutil.NewProcess(t)
+			proc := newTableCloneAutoIncrProcess(t, true)
 			ctrl := gomock.NewController(t)
 			incrSvc := mock_frontend.NewMockAutoIncrementService(ctrl)
 			proc.Base.IncrService = incrSvc
@@ -230,8 +295,8 @@ func TestUpdateDstAutoIncrColumnsRejectsOutOfRangeOffset(t *testing.T) {
 
 			if !tt.wantErr {
 				incrSvc.EXPECT().SetOffset(
-					gomock.Any(), def.TblId, "id", tt.value, gomock.Any(),
-				).DoAndReturn(func(context.Context, uint64, string, uint64, client.TxnOperator) error {
+					gomock.Any(), def.TblId, 0, "id", tt.value, gomock.Any(),
+				).DoAndReturn(func(context.Context, uint64, int, string, uint64, client.TxnOperator) error {
 					return nil
 				})
 			}

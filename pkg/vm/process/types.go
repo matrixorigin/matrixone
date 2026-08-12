@@ -41,6 +41,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/partitionservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	qclient "github.com/matrixorigin/matrixone/pkg/queryservice/client"
 	"github.com/matrixorigin/matrixone/pkg/stage"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
@@ -362,26 +363,27 @@ type BaseProcess struct {
 	// statement in the same session, used by the ROW_COUNT() builtin.
 	// It follows MySQL semantics: -1 after a result-set statement (e.g. SELECT),
 	// 0 after DDL, and the affected row count after DML.
-	AffectedRows             *int64
-	LoadLocalReader          *io.PipeReader
-	Aicm                     *defines.AutoIncrCacheManager
-	resolveVariableFunc      func(varName string, isSystemVar, isGlobalVar bool) (interface{}, error)
-	resolveVariableIsBinFunc func(varName string, isSystemVar, isGlobalVar bool) (bool, error)
-	prepareParams            *vector.Vector
-	prepareParamsIsBin       []bool
-	prepareParamsOwned       bool
-	QueryClient              qclient.QueryClient
-	Hakeeper                 logservice.CNHAKeeperClient
-	UdfService               udf.Service
-	WaitPolicy               lock.WaitPolicy
-	messageBoard             *message.MessageBoard
-	hashBuildBudgetMu        sync.Mutex
-	hashBuildBudget          *HashBuildBudgetGeneration
-	cteMemoryBudgetMu        sync.Mutex
-	cteMemoryBudget          *CTEMemoryBudget
-	logger                   *log.MOLogger
-	TxnOperator              client.TxnOperator
-	CloneTxnOperator         client.TxnOperator
+	AffectedRows                        *int64
+	LoadLocalReader                     *io.PipeReader
+	Aicm                                *defines.AutoIncrCacheManager
+	resolveVariableFunc                 func(varName string, isSystemVar, isGlobalVar bool) (interface{}, error)
+	resolveVariableIsBinFunc            func(varName string, isSystemVar, isGlobalVar bool) (bool, error)
+	resolveVariablePrepareParamKindFunc func(varName string, isSystemVar, isGlobalVar bool) (vector.PrepareParamKind, error)
+	prepareParams                       *vector.Vector
+	prepareParamsIsBin                  []bool
+	prepareParamsOwned                  bool
+	QueryClient                         qclient.QueryClient
+	Hakeeper                            logservice.CNHAKeeperClient
+	UdfService                          udf.Service
+	WaitPolicy                          lock.WaitPolicy
+	messageBoard                        *message.MessageBoard
+	hashBuildBudgetMu                   sync.Mutex
+	hashBuildBudget                     *HashBuildBudgetGeneration
+	cteMemoryBudgetMu                   sync.Mutex
+	cteMemoryBudget                     *CTEMemoryBudget
+	logger                              *log.MOLogger
+	TxnOperator                         client.TxnOperator
+	CloneTxnOperator                    client.TxnOperator
 	// userLevelLockIdentity is session-scoped rather than statement-scoped.
 	// SessionInfo is rebuilt before every statement, so keeping this identity
 	// there would lose the synthetic transaction owner while locks are held.
@@ -431,6 +433,15 @@ type Process struct {
 	Base *BaseProcess
 	Reg  Register
 
+	// planSnapshotTS is the snapshot against which this execution generation's
+	// plan was bound. Unlike the transaction snapshot, it must not advance while
+	// RC lock handling refreshes visibility. It belongs to Process rather than
+	// shared BaseProcess so nested or overlapping pipeline generations cannot
+	// overwrite each other's definition-fence reference point. Child processes
+	// share this immutable object, keeping the per-pipeline footprint to one
+	// pointer rather than one protobuf timestamp.
+	planSnapshotTS *timestamp.Timestamp
+
 	// Ctx and Cancel are pipeline's context and cancel function.
 	// Every pipeline has its own context, and the lifecycle of the pipeline is controlled by the context.
 	Ctx     context.Context
@@ -448,11 +459,15 @@ type sqlHelper interface {
 // WrapCs record information about pipeline's remote receiver.
 type WrapCs struct {
 	sync.RWMutex
-	ReceiverDone bool
-	MsgId        uint64
-	Uid          uuid.UUID
-	Cs           morpc.ClientSession
-	Err          chan error
+	ReceiverDone  bool
+	MsgId         uint64
+	Uid           uuid.UUID
+	Cs            morpc.ClientSession
+	Err           chan error
+	ReserveBatch  func(context.Context, uint64) (uint64, error)
+	RollbackBatch func(uint64)
+	BatchCredits  uint32
+	ByteCredits   uint64
 }
 
 // RemotePipelineInformationChannel used to deliver remote receiver pipeline's information.
@@ -518,7 +533,7 @@ func (proc *Process) SetFileService(fs fileservice.FileService) {
 }
 
 func (proc *Process) GetPrepareParamsAt(i int) ([]byte, error) {
-	if i < 0 || i >= proc.Base.prepareParams.Length() {
+	if proc.Base.prepareParams == nil || i < 0 || i >= proc.Base.prepareParams.Length() {
 		return nil, moerr.NewInternalErrorf(proc.Ctx, "get prepare params error, index %d not exists", i)
 	}
 	if proc.Base.prepareParams.IsNull(uint64(i)) {
@@ -530,7 +545,31 @@ func (proc *Process) GetPrepareParamsAt(i int) ([]byte, error) {
 }
 
 func (proc *Process) GetPrepareParamIsBin(i int) bool {
-	return i >= 0 && i < len(proc.Base.prepareParamsIsBin) && proc.Base.prepareParamsIsBin[i]
+	return proc.getPrepareParamMeta(i, 0)
+}
+
+func (proc *Process) GetPrepareParamKind(i int) vector.PrepareParamKind {
+	var kind vector.PrepareParamKind
+	if proc.getPrepareParamMeta(i, 1) {
+		kind |= 1
+	}
+	if proc.getPrepareParamMeta(i, 2) {
+		kind |= 2
+	}
+	if proc.getPrepareParamMeta(i, 3) {
+		kind |= 4
+	}
+	return kind
+}
+
+func (proc *Process) getPrepareParamMeta(i, section int) bool {
+	paramCount := 0
+	if proc.Base.prepareParams != nil {
+		paramCount = proc.Base.prepareParams.Length()
+	}
+	offset := section*paramCount + i
+	return section >= 0 && i >= 0 && i < paramCount && offset < len(proc.Base.prepareParamsIsBin) &&
+		proc.Base.prepareParamsIsBin[offset]
 }
 
 // SetIncrStatementDisabled marks this process (and every child process
@@ -560,6 +599,19 @@ func (proc *Process) SetResolveVariableIsBinFunc(f func(varName string, isSystem
 
 func (proc *Process) GetResolveVariableIsBinFunc() func(varName string, isSystemVar, isGlobalVar bool) (bool, error) {
 	return proc.Base.resolveVariableIsBinFunc
+}
+
+func (proc *Process) SetResolveVariablePrepareParamKindFunc(
+	f func(varName string, isSystemVar, isGlobalVar bool) (vector.PrepareParamKind, error),
+) {
+	proc.Base.resolveVariablePrepareParamKindFunc = f
+}
+
+func (proc *Process) GetResolveVariablePrepareParamKindFunc() func(
+	varName string,
+	isSystemVar, isGlobalVar bool,
+) (vector.PrepareParamKind, error) {
+	return proc.Base.resolveVariablePrepareParamKindFunc
 }
 
 func (proc *Process) SetLastInsertID(num uint64) {
@@ -610,6 +662,37 @@ func (proc *Process) GetCloneTxnOperator() client.TxnOperator {
 
 func (proc *Process) GetTxnOperator() client.TxnOperator {
 	return proc.Base.TxnOperator
+}
+
+// SetPlanSnapshotTS binds this process to the snapshot used to build its plan.
+// Child pipeline processes inherit the immutable binding pointer.
+func (proc *Process) SetPlanSnapshotTS(ts timestamp.Timestamp) {
+	proc.planSnapshotTS = &ts
+}
+
+// ClearPlanSnapshotTS removes the plan binding. Lock callers without a plan
+// then retain the legacy transaction-snapshot behavior.
+func (proc *Process) ClearPlanSnapshotTS() {
+	proc.planSnapshotTS = nil
+}
+
+// GetPlanSnapshotTS returns the immutable plan snapshot for this execution
+// generation and whether one was bound.
+func (proc *Process) GetPlanSnapshotTS() (timestamp.Timestamp, bool) {
+	if proc.planSnapshotTS == nil {
+		return timestamp.Timestamp{}, false
+	}
+	return *proc.planSnapshotTS, true
+}
+
+// CopyPlanSnapshotFrom propagates one execution generation's binding to a
+// child or reused pipeline process without exposing the presence bit.
+func (proc *Process) CopyPlanSnapshotFrom(parent *Process) {
+	if parent == nil {
+		proc.ClearPlanSnapshotTS()
+		return
+	}
+	proc.planSnapshotTS = parent.planSnapshotTS
 }
 
 func (proc *Process) GetBaseProcessRunningStatus() bool {

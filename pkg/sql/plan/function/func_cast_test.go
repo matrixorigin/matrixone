@@ -96,6 +96,214 @@ func TestStringToFloat32DefaultCompatibilityRange(t *testing.T) {
 	require.True(t, succeed, info)
 }
 
+func TestCastEnumToNumericTypes(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	source := []types.Enum{1, 3, 0}
+	nulls := []bool{false, false, true}
+
+	for _, tc := range []struct {
+		name   string
+		target types.Type
+		zero   any
+		want   any
+	}{
+		{"int8", types.T_int8.ToType(), []int8{}, []int8{1, 3, 0}},
+		{"int16", types.T_int16.ToType(), []int16{}, []int16{1, 3, 0}},
+		{"int32", types.T_int32.ToType(), []int32{}, []int32{1, 3, 0}},
+		{"int64", types.T_int64.ToType(), []int64{}, []int64{1, 3, 0}},
+		{"uint8", types.T_uint8.ToType(), []uint8{}, []uint8{1, 3, 0}},
+		{"uint16", types.T_uint16.ToType(), []uint16{}, []uint16{1, 3, 0}},
+		{"uint32", types.T_uint32.ToType(), []uint32{}, []uint32{1, 3, 0}},
+		{"uint64", types.T_uint64.ToType(), []uint64{}, []uint64{1, 3, 0}},
+		{"float32", types.T_float32.ToType(), []float32{}, []float32{1, 3, 0}},
+		{"float64", types.T_float64.ToType(), []float64{}, []float64{1, 3, 0}},
+		{"decimal64", types.New(types.T_decimal64, 18, 0), []types.Decimal64{}, []types.Decimal64{1, 3, 0}},
+		{"decimal128", types.New(types.T_decimal128, 38, 0), []types.Decimal128{}, []types.Decimal128{{B0_63: 1}, {B0_63: 3}, {}}},
+		{"decimal256", types.New(types.T_decimal256, 65, 0), []types.Decimal256{}, []types.Decimal256{{B0_63: 1}, {B0_63: 3}, {}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			testCase := NewFunctionTestCase(proc,
+				[]FunctionTestInput{
+					NewFunctionTestInput(types.T_enum.ToType(), source, nulls),
+					NewFunctionTestInput(tc.target, tc.zero, nil),
+				},
+				NewFunctionTestResult(tc.target, false, tc.want, nulls),
+				NewCast,
+			)
+			succeed, info := testCase.Run()
+			require.True(t, succeed, info)
+		})
+	}
+}
+
+func TestSignedIntegerToBit64PreservesBitPattern(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	bit64 := types.New(types.T_bit, 64, 0)
+
+	for _, tc := range []struct {
+		name  string
+		input FunctionTestInput
+	}{
+		{"int8", NewFunctionTestInput(types.T_int8.ToType(), []int8{-1}, nil)},
+		{"int16", NewFunctionTestInput(types.T_int16.ToType(), []int16{-1}, nil)},
+		{"int32", NewFunctionTestInput(types.T_int32.ToType(), []int32{-1}, nil)},
+		{"int64", NewFunctionTestInput(types.T_int64.ToType(), []int64{-1}, nil)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tcc := NewFunctionTestCase(proc,
+				[]FunctionTestInput{tc.input, NewFunctionTestInput(bit64, []uint64{}, nil)},
+				NewFunctionTestResult(bit64, false, []uint64{math.MaxUint64}, nil), NewCast)
+			succeed, info := tcc.Run()
+			require.True(t, succeed, info)
+		})
+	}
+}
+
+func TestPreparedTypedTextToBit(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	bit64 := types.New(types.T_bit, 64, 0)
+	bit63 := types.New(types.T_bit, 63, 0)
+	bit3 := types.New(types.T_bit, 3, 0)
+
+	run := func(
+		name string,
+		kind vector.PrepareParamKind,
+		input []string,
+		bitType types.Type,
+		want []uint64,
+		wantError bool,
+	) {
+		t.Helper()
+		t.Run(name, func(t *testing.T) {
+			tcc := NewFunctionTestCase(proc,
+				[]FunctionTestInput{
+					NewFunctionTestInput(types.T_varchar.ToType(), input, nil),
+					NewFunctionTestInput(bitType, []uint64{}, nil),
+				},
+				NewFunctionTestResult(bitType, wantError, want, nil), NewCast)
+			tcc.parameters[0].SetPrepareParamKind(kind)
+			succeed, info := tcc.Run()
+			require.True(t, succeed, info)
+		})
+	}
+
+	run("integer bit64", vector.PrepareParamInteger, []string{
+		"-9223372036854775808", "-6109877384019645241", "-1",
+		"5", "2024", "9223372036854775807", "18446744073709551615",
+	}, bit64, []uint64{
+		uint64(1) << 63, 12336866689689906375, math.MaxUint64,
+		5, 2024, math.MaxInt64, math.MaxUint64,
+	}, false)
+	run("float rounds", vector.PrepareParamFloat, []string{"5", "5.6"}, bit64, []uint64{5, 6}, false)
+	run("decimal truncates", vector.PrepareParamDecimal,
+		[]string{"5.9", "18446744073709551615.9"}, bit64,
+		[]uint64{5, math.MaxUint64}, false)
+	run("decimal signed zero", vector.PrepareParamDecimal,
+		[]string{"-0.0", "+0.0"}, bit64, []uint64{0, 0}, false)
+	run("boolean", vector.PrepareParamBoolean,
+		[]string{"true", "false"}, bit64, []uint64{1, 0}, false)
+	run("string bytes", vector.PrepareParamNone, []string{"5"}, bit64, []uint64{53}, false)
+	mixed := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{"5", "5"}, nil),
+			NewFunctionTestInput(bit64, []uint64{}, nil),
+		},
+		NewFunctionTestResult(bit64, false, []uint64{5, 53}, nil), NewCast)
+	mixed.parameters[0].SetPrepareParamKinds([]vector.PrepareParamKind{
+		vector.PrepareParamInteger, vector.PrepareParamNone,
+	})
+	succeed, info := mixed.Run()
+	require.True(t, succeed, info)
+	run("negative string rejected", vector.PrepareParamNone,
+		[]string{"-6109877384019645241"}, bit64, nil, true)
+	run("narrow integer rejected", vector.PrepareParamInteger, []string{"-1"}, bit63, nil, true)
+	run("integer width checked", vector.PrepareParamInteger, []string{"8"}, bit3, nil, true)
+	run("negative float rejected", vector.PrepareParamFloat, []string{"-1"}, bit64, nil, true)
+	run("negative decimal rejected", vector.PrepareParamDecimal, []string{"-1.5"}, bit64, nil, true)
+	run("malformed decimal rejected", vector.PrepareParamDecimal, []string{"5.9junk"}, bit64, nil, true)
+}
+
+func TestInsertIgnoreCastsSpecialValues(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	proc.SetStmtProfile(&process.StmtProfile{})
+	proc.GetStmtProfile().SetStatementRuntimeProfile("Insert", "DML", true)
+	bit3 := types.New(types.T_bit, 3, 0)
+	bit4 := types.New(types.T_bit, 4, 0)
+	bit64 := types.New(types.T_bit, 64, 0)
+
+	runBitCast := func(name string, input FunctionTestInput, target types.Type, want uint64) {
+		t.Helper()
+		t.Run(name, func(t *testing.T) {
+			tcc := NewFunctionTestCase(proc,
+				[]FunctionTestInput{input, NewFunctionTestInput(target, []uint64{}, nil)},
+				NewFunctionTestResult(target, false, []uint64{want}, nil), NewCast)
+			succeed, info := tcc.Run()
+			require.True(t, succeed, info)
+		})
+	}
+
+	runBitCast("int8 saturates", NewFunctionTestInput(types.T_int8.ToType(), []int8{31}, nil), bit4, 15)
+	runBitCast("int16 saturates", NewFunctionTestInput(types.T_int16.ToType(), []int16{31}, nil), bit4, 15)
+	runBitCast("int32 saturates", NewFunctionTestInput(types.T_int32.ToType(), []int32{31}, nil), bit4, 15)
+	runBitCast("int64 saturates", NewFunctionTestInput(types.T_int64.ToType(), []int64{31}, nil), bit4, 15)
+	runBitCast("uint8 saturates", NewFunctionTestInput(types.T_uint8.ToType(), []uint8{31}, nil), bit4, 15)
+	runBitCast("uint16 saturates", NewFunctionTestInput(types.T_uint16.ToType(), []uint16{31}, nil), bit4, 15)
+	runBitCast("uint32 saturates", NewFunctionTestInput(types.T_uint32.ToType(), []uint32{31}, nil), bit4, 15)
+	runBitCast("uint64 saturates", NewFunctionTestInput(types.T_uint64.ToType(), []uint64{31}, nil), bit4, 15)
+	runBitCast("float32 saturates", NewFunctionTestInput(types.T_float32.ToType(), []float32{31}, nil), bit4, 15)
+	runBitCast("float64 bit64 upper bound saturates", NewFunctionTestInput(types.T_float64.ToType(), []float64{math.Exp2(64)}, nil), bit64, math.MaxUint64)
+	runBitCast("decimal64 saturates", NewFunctionTestInput(types.New(types.T_decimal64, 10, 0), []types.Decimal64{31}, nil), bit4, 15)
+	runBitCast("decimal128 saturates", NewFunctionTestInput(types.New(types.T_decimal128, 20, 0), []types.Decimal128{{B0_63: 31}}, nil), bit4, 15)
+	runBitCast("decimal256 saturates", NewFunctionTestInput(types.New(types.T_decimal256, 40, 0), []types.Decimal256{{B0_63: 31}}, nil), bit4, 15)
+
+	runPreparedNumericBitCast := func(
+		name string,
+		kind vector.PrepareParamKind,
+		value string,
+		want uint64,
+	) {
+		t.Helper()
+		t.Run(name, func(t *testing.T) {
+			input := NewFunctionTestInput(types.T_varchar.ToType(), []string{value}, nil)
+			tcc := NewFunctionTestCase(proc,
+				[]FunctionTestInput{input, NewFunctionTestInput(bit3, []uint64{}, nil)},
+				NewFunctionTestResult(bit3, false, []uint64{want}, nil), NewCast)
+			tcc.parameters[0].SetPrepareParamKind(kind)
+			succeed, info := tcc.Run()
+			require.True(t, succeed, info)
+		})
+	}
+
+	runPreparedNumericBitCast("prepared integer positive saturates", vector.PrepareParamInteger, "8", 7)
+	runPreparedNumericBitCast("prepared integer negative becomes zero", vector.PrepareParamInteger, "-1", 0)
+	runPreparedNumericBitCast("prepared unsigned maximum saturates", vector.PrepareParamInteger, "18446744073709551615", 7)
+	runPreparedNumericBitCast("prepared float rounds before saturation", vector.PrepareParamFloat, "7.6", 7)
+	runPreparedNumericBitCast("prepared float negative becomes zero", vector.PrepareParamFloat, "-1", 0)
+	runPreparedNumericBitCast("prepared decimal truncates before saturation", vector.PrepareParamDecimal, "8.9", 7)
+
+	runYearCast := func(name string, input FunctionTestInput) {
+		t.Helper()
+		t.Run(name, func(t *testing.T) {
+			year := types.T_year.ToType()
+			tcc := NewFunctionTestCase(proc,
+				[]FunctionTestInput{input, NewFunctionTestInput(year, []types.MoYear{}, nil)},
+				NewFunctionTestResult(year, false, []types.MoYear{0}, nil), NewCast)
+			require.NoError(t, tcc.result.PreExtendAndReset(1))
+			result, err := tcc.DebugRun()
+			require.NoError(t, err)
+			got, isNull := vector.GenerateFunctionFixedTypeParameter[types.MoYear](result).GetValue(0)
+			require.False(t, isNull)
+			require.Equal(t, types.MoYear(0), got)
+		})
+	}
+
+	runYearCast("integer invalid year becomes zero", NewFunctionTestInput(types.T_int64.ToType(), []int64{2156}, nil))
+	runYearCast("string invalid year becomes zero", NewFunctionTestInput(types.T_varchar.ToType(), []string{"2156"}, nil))
+	runYearCast("decimal64 invalid year becomes zero", NewFunctionTestInput(types.New(types.T_decimal64, 10, 0), []types.Decimal64{2156}, nil))
+	runYearCast("decimal128 invalid year becomes zero", NewFunctionTestInput(types.New(types.T_decimal128, 20, 0), []types.Decimal128{{B0_63: 2156}}, nil))
+	runYearCast("decimal256 invalid year becomes zero", NewFunctionTestInput(types.New(types.T_decimal256, 40, 0), []types.Decimal256{{B0_63: 2156}}, nil))
+}
+
 func TestStringToFixedFloat32PreservesSourcePrecision(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	targetType := types.New(types.T_float32, 5, 2)

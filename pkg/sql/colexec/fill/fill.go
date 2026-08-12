@@ -361,10 +361,31 @@ func (ctr *container) consumeNext(ap *Fill, bat *batch.Batch, seq int, proc *pro
 				ctr.nextRun[c] = append(ctr.nextRun[c], fillCoord{seq: seq, row: r})
 				continue
 			}
-			for _, cd := range ctr.nextRun[c] {
-				if err := setValue(ctr.batAt(cd.seq).Vecs[c], vec, cd.row, r, proc); err != nil {
+			run := ctr.nextRun[c]
+			src, srcRow := vec, r
+			var snapshot *vector.Vector
+			// A run ending in the current batch writes back into vec itself. Keep
+			// one stable, mpool-accounted copy of the non-inline source while the
+			// destination area grows; all rows in this run share that source.
+			if len(run) > 0 && run[len(run)-1].seq == seq && vec.GetType().IsVarlen() &&
+				len(vec.GetBytesAt(r)) > types.VarlenaInlineSize {
+				snapshot = vector.NewOffHeapVecWithType(*vec.GetType())
+				if err := appendValue(snapshot, vec, r, proc); err != nil {
+					snapshot.Free(proc.Mp())
 					return err
 				}
+				src, srcRow = snapshot, 0
+			}
+			for _, cd := range run {
+				if err := setValue(ctr.batAt(cd.seq).Vecs[c], src, cd.row, srcRow, proc); err != nil {
+					if snapshot != nil {
+						snapshot.Free(proc.Mp())
+					}
+					return err
+				}
+			}
+			if snapshot != nil {
+				snapshot.Free(proc.Mp())
 			}
 			ctr.nextRun[c] = ctr.nextRun[c][:0]
 		}

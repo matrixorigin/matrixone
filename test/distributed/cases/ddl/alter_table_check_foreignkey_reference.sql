@@ -254,12 +254,11 @@ INSERT INTO emp VALUES (7902,'FORD','ANALYST',7566,'1981-12-03',3000,NULL,20);
 INSERT INTO emp VALUES (7934,'MILLER','CLERK',7782,'1982-01-23',1300,NULL,10);
 
 
+--ERROR 1067 (HY000): Invalid default value for 'deptno'
 alter table dept ALTER COLUMN deptno SET DEFAULT 10;
---success
 desc dept;
 
 alter table dept ALTER COLUMN deptno SET INVISIBLE;
---success
 desc dept;
 
 alter table dept ALTER COLUMN deptno drop default;

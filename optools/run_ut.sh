@@ -32,6 +32,7 @@ fi
 
 shopt -s expand_aliases
 source ./utilities.sh
+source ./ut_tools.bash
 go version
 
 BUILD_WKSP=$(dirname "$PWD") && cd $BUILD_WKSP
@@ -86,6 +87,25 @@ function logger(){
     local msg=$2
     local log=$LOG
     logger_base "$level" "$msg" "$log"
+}
+
+function report_active_ut_cases(){
+    if [[ ! -s "${UT_REPORT}" ]]; then
+        logger "ERR" "No Go test JSON is available to identify active UT cases"
+        return 0
+    fi
+
+    logger "ERR" "Active or incomplete UT cases from ${UT_REPORT}:"
+    awk -f "${BUILD_WKSP}/optools/active_ut_cases.awk" "${UT_REPORT}" |
+        LC_ALL=C sort |
+        sed 's/^/[active_ut_cases] /'
+}
+
+function handle_ut_termination(){
+    trap - TERM
+    logger "ERR" "UT runner received SIGTERM; reporting work without terminal Go test events"
+    report_active_ut_cases
+    exit 143
 }
 
 function run_vet(){
@@ -178,6 +198,17 @@ function run_plan_race_shards(){
     return "${shard_status}"
 }
 
+function remove_packages_from_scope(){
+    local scope=$1
+    shift
+    local package
+
+    for package in "$@"; do
+        scope=$(printf '%s\n' "${scope}" | grep -Fvx "${package}")
+    done
+    printf '%s\n' "${scope}"
+}
+
 function run_tests(){
     cd $BUILD_WKSP
     horiz_rule
@@ -187,6 +218,7 @@ function run_tests(){
     echo "#  COVERAGE REPORT: $CODE_COVERAGE"
     echo "#  UT TIMEOUT:      $UT_TIMEOUT"
     echo "#  UT PARALLEL:     $UT_PARALLEL"
+    echo "#  CLUSTER ADMISSION: process lifecycle"
     echo "#  HEAVY RACE UT:   $HEAVY_RACE_PARALLEL"
     horiz_rule
 
@@ -215,8 +247,8 @@ function run_tests(){
     fi
 
     if [[ $SKIP_TESTS == 'race' ]]; then
-        logger "INF" "Run UT without race check"
-        LD_LIBRARY_PATH="${LD_LIBRARY_PATH}" CGO_CFLAGS="${CGO_CFLAGS}" CGO_LDFLAGS="${CGO_LDFLAGS}" go test ${GO_MODULE_MODE} -short -v -json -tags "${TAGS}" -p ${UT_PARALLEL} -timeout "${UT_TIMEOUT}m"  $test_scope > $UT_REPORT
+        logger "INF" "Run UT packages with parallelism ${UT_PARALLEL} and process-lifecycle cluster admission"
+        LD_LIBRARY_PATH="${LD_LIBRARY_PATH}" CGO_CFLAGS="${CGO_CFLAGS}" CGO_LDFLAGS="${CGO_LDFLAGS}" go test ${GO_MODULE_MODE} -short -v -json -tags "${TAGS}" -p ${UT_PARALLEL} -timeout "${UT_TIMEOUT}m" $test_scope > $UT_REPORT
         UT_TEST_STATUS=$?
     else
         logger "INF" "Run UT with race check"
@@ -225,6 +257,7 @@ function run_tests(){
         local heavy_test_scope
         local light_test_scope
         local package
+        local package_status=0
         local light_status=0
         local serial_status=0
         local heavy_status=0
@@ -244,13 +277,14 @@ function run_tests(){
         fi
 
         # These packages need exclusive runner access. NewTestService callers
-        # bind fixed ports, while the issues package runs multiple embedded
-        # services whose race builds can starve under package-level concurrency.
+        # bind fixed ports, while the issues packages intentionally keep embedded
+        # clusters alive for most of their test processes.
         if ! serial_test_scope=$(go list ${GO_MODULE_MODE} \
             ./pkg/logservice \
             ./pkg/vm/engine/tae/logstore \
             ./pkg/vm/engine/tae/logstore/driver/logservicedriver \
-            ./pkg/tests/issues); then
+            ./pkg/tests/issues \
+            ./pkg/tests/issues/isolated); then
             logger "ERR" "Failed to resolve serial race-test packages"
             UT_TEST_STATUS=1
             return 0
@@ -267,10 +301,11 @@ function run_tests(){
             return 0
         fi
 
-        light_test_scope="${test_scope}"
-        for package in "${plan_package}" ${serial_test_scope} ${heavy_test_scope}; do
-            light_test_scope=$(printf '%s\n' "${light_test_scope}" | grep -Fvx "${package}")
-        done
+        light_test_scope=$(remove_packages_from_scope \
+            "${test_scope}" \
+            "${plan_package}" \
+            ${serial_test_scope} \
+            ${heavy_test_scope})
 
         if [[ -n "${light_test_scope}" ]]; then
             logger "INF" "Run light race-test packages with parallelism ${UT_PARALLEL}"
@@ -281,8 +316,15 @@ function run_tests(){
         fi
 
         logger "INF" "Run exclusive race-test packages serially"
-        LD_LIBRARY_PATH="${LD_LIBRARY_PATH}" CGO_CFLAGS="${CGO_CFLAGS}" CGO_LDFLAGS="${CGO_LDFLAGS}" go test ${GO_MODULE_MODE} -short -v -json -tags "${TAGS}" -p 1 -timeout "${UT_TIMEOUT}m" -race $serial_test_scope >> $UT_REPORT
-        serial_status=$?
+        for package in ${serial_test_scope}; do
+            logger "INF" "Run exclusive race-test package ${package}"
+            LD_LIBRARY_PATH="${LD_LIBRARY_PATH}" CGO_CFLAGS="${CGO_CFLAGS}" CGO_LDFLAGS="${CGO_LDFLAGS}" go test ${GO_MODULE_MODE} -short -v -json -tags "${TAGS}" -p 1 -timeout "${UT_TIMEOUT}m" -race "${package}" >> $UT_REPORT
+            package_status=$?
+            if (( package_status != 0 )); then
+                serial_status=1
+                logger "ERR" "Exclusive race-test package ${package} failed with status ${package_status}"
+            fi
+        done
 
         logger "INF" "Run heavy race-test packages with parallelism ${HEAVY_RACE_PARALLEL}"
         LD_LIBRARY_PATH="${LD_LIBRARY_PATH}" CGO_CFLAGS="${CGO_CFLAGS}" CGO_LDFLAGS="${CGO_LDFLAGS}" go test ${GO_MODULE_MODE} -short -v -json -tags "${TAGS}" -p ${HEAVY_RACE_PARALLEL} -timeout "${UT_TIMEOUT}m" -race $heavy_test_scope >> $UT_REPORT
@@ -301,6 +343,7 @@ function run_tests(){
     # a report-parser failure can never replace the authoritative test result.
     if (( UT_TEST_STATUS != 0 )); then
         logger "ERR" "go test failed with status ${UT_TEST_STATUS}; raw report: ${UT_REPORT}"
+        report_active_ut_cases
     fi
 
     # The caller must continue into ut_summary even when go test failed.
@@ -316,7 +359,7 @@ function ut_summary(){
   # analyzer cannot parse a truncated/interleaved go test JSON stream.
   mkdir -p "${report_path}/failed/outputs"
 
-  if ! go install github.com/matrixorigin/go-ut-analysis@latest; then
+  if ! install_go_ut_analysis; then
     analysis_status=1
     logger "ERR" "failed to install go-ut-analysis"
   else
@@ -356,6 +399,7 @@ if [[ 'SCA' == $TEST_TYPE ]]; then
     horiz_rule
     run_vet
 elif [[ 'UT' == $TEST_TYPE ]]; then
+    trap handle_ut_termination TERM
     horiz_rule
     echo "# Running UT"
     horiz_rule

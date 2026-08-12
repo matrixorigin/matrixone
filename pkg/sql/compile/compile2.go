@@ -17,12 +17,15 @@ package compile
 import (
 	"context"
 	"encoding/hex"
+	"errors"
 	"math"
 	gotrace "runtime/trace"
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	commonutil "github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -69,6 +72,11 @@ func (c *Compile) Compile(
 
 	// clear the clone txn operator to avoid reuse.
 	c.proc.ResetCloneTxnOperator()
+
+	// Bind a new plan to the transaction snapshot before any pipeline or
+	// pre-pipeline lock can advance an RC transaction's mutable snapshot. A
+	// normal data retry reuses the same plan and therefore keeps its binding.
+	c.bindPlanSnapshotForCompile()
 
 	// statistical information record and trace.
 	compileStart := time.Now()
@@ -256,22 +264,62 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 	var attemptRemoteWait time.Duration
 	attemptScopes := runC.scopes
 	attemptAnal := runC.anal
+	sinkAttemptOpen := false
 	var coordinatorPhaseStart time.Time
 	var coordinatorPhaseBase time.Duration
+	var allocationAttempt *statementAllocationAttempt
+	finishAllocationAttempt := func() error {
+		if allocationAttempt == nil {
+			return nil
+		}
+		attempt := allocationAttempt
+		allocationAttempt = nil
+		if runC != nil && runC.allocationAttempt == attempt {
+			runC.allocationAttempt = nil
+		}
+		_, finishErr := attempt.finish()
+		return finishErr
+	}
+	finishCurrentAttempt := func(retried bool) {
+		if !attemptOpen {
+			return
+		}
+		if !coordinatorPhaseStart.IsZero() {
+			attemptPreRunWall = coordinatorPhaseBase + time.Since(coordinatorPhaseStart)
+		} else if attemptPreRunWall == 0 {
+			attemptPreRunWall = time.Since(attemptStart)
+		}
+		resourceRecorder.finishAttempt(
+			uint64(retryTimes), attemptStart, attemptPreRunWall, attemptRemoteWait, stats,
+			attemptScopes, attemptAnal, c.addr, retried,
+		)
+		attemptOpen = false
+	}
+	abortSinkAttempt := func(cause error) error {
+		if !sinkAttemptOpen || c.resultSink == nil {
+			return cause
+		}
+		sinkAttemptOpen = false
+		return errors.Join(cause, c.resultSink.AbortAttempt(c.executionGeneration, cause))
+	}
+	if c.resultSink != nil {
+		c.executionGeneration = 0
+		runC.executionGeneration = 0
+		if err = c.resultSink.BeginAttempt(execTopContext, 0, c.proc); err != nil {
+			finishCurrentAttempt(false)
+			return nil, err
+		}
+		sinkAttemptOpen = true
+	}
 	defer func() {
 		if recovered := recover(); recovered != nil {
-			if attemptOpen {
-				if !coordinatorPhaseStart.IsZero() {
-					attemptPreRunWall = coordinatorPhaseBase + time.Since(coordinatorPhaseStart)
-				} else if attemptPreRunWall == 0 {
-					attemptPreRunWall = time.Since(attemptStart)
-				}
-				resourceRecorder.finishAttempt(
-					uint64(retryTimes), attemptStart, attemptPreRunWall, attemptRemoteWait, stats,
-					attemptScopes, attemptAnal, c.addr, false,
-				)
-				attemptOpen = false
+			var panicErr error = moerr.NewInternalError(execTopContext, "panic while executing DML RETURNING")
+			if c.resultSink != nil {
+				panicErr = errors.Join(panicErr, c.cancelAndWaitRunningSQL(&attemptRemoteWait))
 			}
+			panicErr = joinAllocationLifecycleErrors(panicErr, finishAllocationAttempt())
+			err = abortSinkAttempt(panicErr)
+			finishCurrentAttempt(false)
 			panic(recovered)
 		}
 	}()
@@ -288,7 +336,30 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 		// Before compile.runOnce, Reset the 'StatsInfo' execution related resources in context
 
 		// running.
-		if err = runC.prePipelineInitializer(); err == nil {
+		if runC.remoteFragmentCounts == nil {
+			runC.remoteFragmentCounts = collectRemoteFragmentCounts(runC.scopes, runC.addr)
+		}
+		// A retry is a new physical execution generation. Reusing the previous
+		// ID could attach late RPCs from the failed generation to the new
+		// generation's shared board and terminal-account group.
+		if len(runC.remoteFragmentCounts) > 0 {
+			runC.remoteExecutionID = newRemoteExecutionID()
+		} else {
+			runC.remoteExecutionID = uuid.Nil
+		}
+		exporter := func(snapshot mpool.AllocationAccountTerminalSnapshot) {
+			if resourceRecorder != nil {
+				resourceRecorder.recordAllocationAccountTerminal(snapshot)
+			}
+		}
+		err = runC.ensureAllocationAccountLifecycle(exporter)
+		if err == nil {
+			allocationAttempt, err = runC.beginAllocationAccountAttempt()
+		}
+		if err == nil {
+			err = runC.prePipelineInitializer()
+		}
+		if err == nil {
 			preRunWall = carriedPreRunWall + time.Since(preRunOnceStart)
 			attemptPreRunWall = preRunWall
 			runC.MessageBoard.BeforeRunonce()
@@ -315,9 +386,27 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 		attemptPreRunWall = preRunWall
 		coordinatorPhaseStart = time.Time{}
 		coordinatorPhaseBase = 0
+		if terminalErr := finishAllocationAttempt(); terminalErr != nil {
+			err = joinAllocationLifecycleErrors(err, terminalErr)
+			err = abortSinkAttempt(err)
+			resourceRecorder.finishAttempt(
+				uint64(retryTimes), attemptStart, preRunWall, attemptRemoteWait, stats,
+				attemptScopes, attemptAnal, c.addr, false,
+			)
+			attemptOpen = false
+			return nil, err
+		}
 
 		c.fatalLog(retryTimes, err)
 		if !c.canRetry(err) {
+			// runOnce may return after a local or coordinator branch fails while a
+			// remote branch is still unwinding. Quiesce every producer before the
+			// attempt-owned sink releases its file and reservations; a generation
+			// check is a safety net for late callbacks, not a substitute for the
+			// pipeline ownership barrier.
+			if c.resultSink != nil {
+				err = errors.Join(err, c.cancelAndWaitRunningSQL(&attemptRemoteWait))
+			}
 			if c.proc.GetTxnOperator().Txn().IsRCIsolation() &&
 				moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry) {
 				orphan, e := c.proc.Base.LockService.IsOrphanTxn(
@@ -342,6 +431,7 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 				attemptScopes, attemptAnal, c.addr, false,
 			)
 			attemptOpen = false
+			err = abortSinkAttempt(err)
 			return nil, err
 		}
 		defChanged := moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged)
@@ -376,13 +466,21 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 		coordinatorPhaseBase = 0
 		attemptPreRunWall = preRunWall + transitionWall
 		if transitionErr != nil {
-			err = transitionErr
+			err = abortSinkAttempt(transitionErr)
 			resourceRecorder.finishAttempt(
 				uint64(retryTimes), attemptStart, attemptPreRunWall, attemptRemoteWait, stats,
 				attemptScopes, attemptAnal, c.addr, false,
 			)
 			attemptOpen = false
 			return nil, err
+		}
+		if c.resultSink != nil {
+			if abortErr := c.resultSink.AbortAttempt(c.executionGeneration, err); abortErr != nil {
+				err = errors.Join(err, abortErr)
+				finishCurrentAttempt(false)
+				return nil, err
+			}
+			sinkAttemptOpen = false
 		}
 		resourceRecorder.finishAttempt(
 			uint64(retryTimes), attemptStart, attemptPreRunWall, attemptRemoteWait, stats,
@@ -396,6 +494,7 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 
 		retryTimes++
 		c.retryTimes = retryTimes
+		c.executionGeneration = uint64(retryTimes)
 		attemptStart = time.Now()
 		attemptOpen = true
 		attemptPreRunWall = 0
@@ -420,8 +519,16 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 			return nil, err
 		}
 		runC = nextRunC
+		runC.executionGeneration = c.executionGeneration
 		attemptScopes = runC.scopes
 		attemptAnal = runC.anal
+		if c.resultSink != nil {
+			if err = c.resultSink.BeginAttempt(execTopContext, c.executionGeneration, c.proc); err != nil {
+				finishCurrentAttempt(false)
+				return nil, err
+			}
+			sinkAttemptOpen = true
+		}
 
 		// rebuild context for the retry.
 		runC.InitPipelineContextToRetryQuery()
@@ -443,6 +550,12 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 	}
 	if txnOperator != nil {
 		err = txnOperator.GetWorkspace().Adjust(writeOffset)
+		if err != nil {
+			err = joinAllocationLifecycleErrors(err, finishAllocationAttempt())
+			err = abortSinkAttempt(err)
+			finishCurrentAttempt(false)
+			return nil, err
+		}
 	}
 
 	// Keep the attempt open through plan analysis. Adjust can fail and analysis
@@ -450,6 +563,20 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 	// outcome. The panic defer above remains the single terminal owner until
 	// this call returns.
 	c.AnalyzeExecPlan(runC, queryResult, stats, isExplainPhyPlan, option)
+	if terminalErr := finishAllocationAttempt(); terminalErr != nil {
+		err = joinAllocationLifecycleErrors(err, terminalErr)
+		err = abortSinkAttempt(err)
+		finishCurrentAttempt(false)
+		return nil, err
+	}
+	if c.resultSink != nil {
+		if err = c.resultSink.SealAttempt(c.executionGeneration); err != nil {
+			err = abortSinkAttempt(err)
+			finishCurrentAttempt(false)
+			return nil, err
+		}
+		sinkAttemptOpen = false
+	}
 
 	resourceRecorder.finishAttempt(
 		uint64(retryTimes), attemptStart, attemptPreRunWall, attemptRemoteWait, stats,
@@ -666,7 +793,29 @@ func rewriteAutoModeInTableExpr(expr tree.TableExpr) bool {
 func (c *Compile) prepareRetryTransition(remoteWait *time.Duration) error {
 	v2.TxnStatementRetryCounter.Inc()
 	c.proc.GetTxnOperator().GetWorkspace().IncrSQLCount()
+	if err := c.cancelAndWaitRunningSQL(remoteWait); err != nil {
+		return err
+	}
 
+	topContext := c.proc.GetTopContext()
+	// clear the workspace of the failed statement
+	if e := c.proc.GetTxnOperator().GetWorkspace().RollbackLastStatement(topContext); e != nil {
+		return e
+	}
+
+	// increase the statement id
+	if e := c.proc.GetTxnOperator().GetWorkspace().IncrStatementID(topContext, false); e != nil {
+		return e
+	}
+
+	// clear PostDmlSqlList
+	c.proc.GetPostDmlSqlList().Clear()
+	// clear stage cache
+	c.proc.GetStageCache().Clear()
+	return nil
+}
+
+func (c *Compile) cancelAndWaitRunningSQL(remoteWait *time.Duration) error {
 	topContext := c.proc.GetTopContext()
 	if txnOp := c.proc.GetTxnOperator(); txnOp != nil {
 		if coordinator, ok := txnOp.(runSQLCoordinatorWithSQL); ok {
@@ -687,21 +836,6 @@ func (c *Compile) prepareRetryTransition(remoteWait *time.Duration) error {
 			}
 		}
 	}
-
-	// clear the workspace of the failed statement
-	if e := c.proc.GetTxnOperator().GetWorkspace().RollbackLastStatement(topContext); e != nil {
-		return e
-	}
-
-	// increase the statement id
-	if e := c.proc.GetTxnOperator().GetWorkspace().IncrStatementID(topContext, false); e != nil {
-		return e
-	}
-
-	// clear PostDmlSqlList
-	c.proc.GetPostDmlSqlList().Clear()
-	// clear stage cache
-	c.proc.GetStageCache().Clear()
 	return nil
 }
 
@@ -732,6 +866,10 @@ func (c *Compile) buildRetryCompile(defChanged bool) (*Compile, error) {
 
 	var e error
 	runC := NewCompile(c.addr, c.db, c.sql, c.tenant, c.uid, c.e, c.proc, c.stmt, c.isInternal, c.cnLabel, c.startAt)
+	runC.reusePlanSnapshot = !defChanged
+	runC.resultSink = c.resultSink
+	runC.executionGeneration = c.executionGeneration
+	c.copyAllocationAccountLifecycleTo(runC)
 	runC.SetQuerySchedulingIntent(c.querySchedulingIntent)
 	runC.SetSchedulingTraceRecorder(c.schedulingTrace)
 	runC.SetOriginSQL(c.originSQL)

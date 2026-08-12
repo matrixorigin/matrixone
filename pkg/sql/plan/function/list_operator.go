@@ -20,7 +20,43 @@ import (
 )
 
 func comparisonTypeCastRule(left, right types.Type) (bool, types.Type, types.Type) {
-	return fixedTypeCastRule1(left, right)
+	if isDatetimeTimestampComparison(left, right) {
+		return false, left, right
+	}
+	hasCast, castLeft, castRight := fixedTypeCastRule1(left, right)
+	if !isCollatedTextType(castLeft.Oid) || !isCollatedTextType(castRight.Oid) {
+		return hasCast, castLeft, castRight
+	}
+
+	// A comparison must use one collation domain, but rebuilding VARCHAR/TEXT
+	// through ToType would otherwise promote legacy catalog columns to the new
+	// general_ci default. Besides changing their bytewise semantics, that wraps
+	// an indexed column in CAST and makes the predicate ineligible for an index
+	// lookup. Derive the common identity from the original operands so the
+	// stronger binary/legacy identity is retained and only the other operand is
+	// coerced when necessary.
+	charset := types.MergeStringCharset([]types.Type{left, right}, castLeft.Charset)
+	if (left.Charset == types.CharsetLegacy && right.Charset == types.CharsetBinary) ||
+		(left.Charset == types.CharsetBinary && right.Charset == types.CharsetLegacy) {
+		// Legacy text and opaque binary text are both raw, NO PAD byte domains.
+		// If their physical types already match, no collation cast is needed at
+		// all. This keeps internal serialized predicates eligible for index and
+		// filter-domain rewrites without reinterpreting either operand as UTF-8.
+		if !hasCast {
+			return false, left, right
+		}
+		// A physical CHAR/VARCHAR/TEXT conversion is still required for unlike
+		// OIDs; use the legacy identity for that common bytewise target.
+		charset = types.CharsetLegacy
+	}
+	castLeft.Charset = charset
+	castRight.Charset = charset
+	return hasCast || left.Charset != charset || right.Charset != charset, castLeft, castRight
+}
+
+func isDatetimeTimestampComparison(left, right types.Type) bool {
+	return left.Oid == types.T_datetime && right.Oid == types.T_timestamp ||
+		left.Oid == types.T_timestamp && right.Oid == types.T_datetime
 }
 
 var supportedOperators = []FuncNew{
@@ -83,7 +119,7 @@ var supportedOperators = []FuncNew{
 		layout:     COMPARISON_OPERATOR,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
 			if len(inputs) == 2 {
-				has, t1, t2 := comparisonTypeCastRule(inputs[0], inputs[1])
+				has, t1, t2 := fixedTypeCastRule1(inputs[0], inputs[1])
 				if has {
 					if equalAndNotEqualOperatorSupports(t1, t2) {
 						if t1.Oid == t2.Oid && t1.Oid.IsDecimal() {
@@ -1131,6 +1167,19 @@ var supportedOperators = []FuncNew{
 			// 		return newOpOperatorStrIn().operatorIn
 			// 	},
 			// },
+			// Keep new overloads append-only. The encoded function ID stores
+			// this slice index, not overload.overloadId, so insertion before an
+			// existing entry changes the plan wire contract.
+			{
+				overloadId: 101,
+				args:       []types.T{types.T_enum, types.T_enum},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_bool.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return newOpOperatorFixedIn[types.Enum]().operatorIn
+				},
+			},
 		},
 	},
 
@@ -2432,9 +2481,7 @@ var supportedOperators = []FuncNew{
 		Overloads: []overload{
 			{
 				overloadId: 0,
-				retType: func(parameters []types.Type) types.Type {
-					return parameters[1]
-				},
+				retType:    caseReturnType,
 				newOp: func() executeLogicOfOverload {
 					return caseFn
 				},
@@ -2454,7 +2501,7 @@ var supportedOperators = []FuncNew{
 				overloadId: 0,
 				args:       []types.T{types.T_varchar},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_varchar.ToType()
+					return coalesceStringReturnType(types.T_varchar, parameters)
 				},
 				newOp: func() executeLogicOfOverload {
 					return CoalesceStr
@@ -2464,7 +2511,7 @@ var supportedOperators = []FuncNew{
 				overloadId: 1,
 				args:       []types.T{types.T_char},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_char.ToType()
+					return coalesceStringReturnType(types.T_char, parameters)
 				},
 				newOp: func() executeLogicOfOverload {
 					return CoalesceStr
@@ -2685,7 +2732,7 @@ var supportedOperators = []FuncNew{
 				overloadId: 22,
 				args:       []types.T{types.T_text},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_text.ToType()
+					return coalesceStringReturnType(types.T_text, parameters)
 				},
 				newOp: func() executeLogicOfOverload {
 					return CoalesceStr
@@ -2798,7 +2845,7 @@ var supportedOperators = []FuncNew{
 		class:      plan.Function_STRICT,
 		layout:     CAST_EXPRESSION,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
-			// cast_strict is internal assignment conversion. Character targets
+			// cast_strict is internal assignment conversion. String targets
 			// reject over-width values; temporal targets preserve zero sentinels
 			// so the write boundary can apply the statement's SQL-mode policy.
 			if len(inputs) == 2 && isStrictAssignmentCastTarget(inputs[1].Oid) {
@@ -2823,13 +2870,13 @@ var supportedOperators = []FuncNew{
 	},
 
 	// operator `cast_assign`
-	// Used by DML assignment paths (INSERT/UPDATE projection) for CHAR/VARCHAR
+	// Used by DML assignment paths (INSERT/UPDATE projection) for width-constrained strings
 	// targets. Unlike `cast_strict` (which always rejects over-length writes),
 	// `cast_assign` honors `sql_mode` at runtime: strict mode rejects (1406),
-	// non-strict mode truncates. Over-length that is only trailing spaces is
-	// accepted (truncated) even in strict mode, matching MySQL. The overload is
-	// marked volatile so it is not constant-folded, letting prepared statements
-	// resolve sql_mode at execution time rather than at prepare time.
+	// non-strict mode truncates. For CHAR/VARCHAR only, excess trailing spaces
+	// are accepted in strict mode too. The overload is marked volatile so it is
+	// not constant-folded, letting prepared statements resolve sql_mode at
+	// execution time rather than at prepare time.
 	{
 		functionId: CAST_ASSIGN,
 		class:      plan.Function_STRICT,
@@ -2859,7 +2906,7 @@ var supportedOperators = []FuncNew{
 
 	// operator `cast_ignore`
 	// Used by INSERT IGNORE and UPDATE IGNORE assignment paths. It always
-	// truncates over-width CHAR/VARCHAR values and records warning 1265.
+	// truncates over-width string values and records warning 1265.
 	{
 		functionId: CAST_IGNORE,
 		class:      plan.Function_STRICT,
@@ -3351,7 +3398,7 @@ var supportedOperators = []FuncNew{
 
 func isStrictAssignmentCastTarget(target types.T) bool {
 	switch target {
-	case types.T_char, types.T_varchar, types.T_date, types.T_datetime, types.T_timestamp:
+	case types.T_char, types.T_varchar, types.T_text, types.T_date, types.T_datetime, types.T_timestamp:
 		return true
 	default:
 		return false

@@ -262,7 +262,7 @@ func (builder *QueryBuilder) directScanWithVectorIndex(node *plan.Node) *plan.No
 		// from drifting back into hardcoded algo lists like the previous
 		// IsIvfIndexAlgo || IsHnswIndexAlgo gate, which silently
 		// excluded CAGRA / IVF-PQ from the join-through path.
-		if indexplugin.IsVectorIndexAlgo(idx.IndexAlgo) {
+		if idx != nil && indexplugin.IsVectorIndexAlgo(idx.IndexAlgo) {
 			return node
 		}
 	}
@@ -460,7 +460,7 @@ func tableScanHasSingleRowFilter(node *plan.Node) bool {
 		}
 	}
 	for _, idx := range node.TableDef.Indexes {
-		if idx.Unique && filterListHasConstEqualityOnCols(node.FilterList, node.TableDef, tag, idx.Parts) {
+		if idx != nil && idx.Unique && filterListHasConstEqualityOnCols(node.FilterList, node.TableDef, tag, idx.Parts) {
 			return true
 		}
 	}

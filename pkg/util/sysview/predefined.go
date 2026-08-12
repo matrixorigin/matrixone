@@ -155,20 +155,21 @@ var (
 // `information_schema` database
 // They are all Tenant level system tables/system views
 var (
-	InformationSchemaKeyColumnUsageDDL = "CREATE TABLE information_schema.KEY_COLUMN_USAGE (" +
-		"CONSTRAINT_CATALOG varchar(64)," +
-		"CONSTRAINT_SCHEMA varchar(64)," +
-		"CONSTRAINT_NAME varchar(64)," +
-		"TABLE_CATALOG varchar(64)," +
-		"TABLE_SCHEMA varchar(64)," +
-		"TABLE_NAME varchar(64)," +
-		"COLUMN_NAME varchar(64)," +
-		"ORDINAL_POSITION int unsigned," +
-		"POSITION_IN_UNIQUE_CONSTRAINT int unsigned," +
-		"REFERENCED_TABLE_SCHEMA varchar(64)," +
-		"REFERENCED_TABLE_NAME varchar(64)," +
-		"REFERENCED_COLUMN_NAME varchar(64)" +
-		")"
+	InformationSchemaKeyColumnUsageDDL = "CREATE VIEW information_schema.KEY_COLUMN_USAGE AS " +
+		"SELECT " +
+		"CAST('def' AS varchar(64)) AS CONSTRAINT_CATALOG, " +
+		"CAST(fk.db_name AS varchar(64)) AS CONSTRAINT_SCHEMA, " +
+		"CAST(fk.constraint_name AS varchar(64)) AS CONSTRAINT_NAME, " +
+		"CAST('def' AS varchar(64)) AS TABLE_CATALOG, " +
+		"CAST(fk.db_name AS varchar(64)) AS TABLE_SCHEMA, " +
+		"CAST(fk.table_name AS varchar(64)) AS TABLE_NAME, " +
+		"CAST(fk.column_name AS varchar(64)) AS COLUMN_NAME, " +
+		"CAST(fk.constraint_id AS int unsigned) AS ORDINAL_POSITION, " +
+		"CAST(fk.constraint_id AS int unsigned) AS POSITION_IN_UNIQUE_CONSTRAINT, " +
+		"CAST(fk.refer_db_name AS varchar(64)) AS REFERENCED_TABLE_SCHEMA, " +
+		"CAST(fk.refer_table_name AS varchar(64)) AS REFERENCED_TABLE_NAME, " +
+		"CAST(fk.refer_column_name AS varchar(64)) AS REFERENCED_COLUMN_NAME " +
+		"FROM mo_catalog.mo_foreign_keys fk"
 
 	InformationSchemaColumnsDDL = fmt.Sprintf("CREATE VIEW information_schema.COLUMNS AS select "+
 		"'def' as TABLE_CATALOG,"+
@@ -178,11 +179,12 @@ var (
 		"mc.attnum AS ORDINAL_POSITION,"+
 		"mo_show_visible_bin(mc.att_default,1) as COLUMN_DEFAULT,"+
 		"(case when mc.attnotnull != 0 then 'NO' else 'YES' end) as IS_NULLABLE,"+
-		"(case when length(mc.attr_enum) > 0 then "+
+		"lower(case when length(mc.attr_enum) > 0 then "+
 		"  (case when mo_show_visible_bin(mc.atttyp,2) = 'GEOMETRY' then "+
 		"    upper(case when upper(split_part(mc.attr_enum, ';', 1)) like 'SRID=%%' then 'GEOMETRY' else split_part(mc.attr_enum, ';', 1) end) "+
 		"  else upper(split_part(mo_show_visible_bin_enum(mc.atttyp, mc.attr_enum), '(', 1)) end) "+
-		" else mo_show_visible_bin(mc.atttyp,2) end) as DATA_TYPE,"+
+		" else (case when upper(mo_show_visible_bin(mc.atttyp,2)) = 'BOOL' then 'TINYINT' "+
+		"  else split_part(mo_show_visible_bin(mc.atttyp,2), ' ', 1) end) end) as DATA_TYPE,"+
 		"internal_char_length(mc.atttyp) AS CHARACTER_MAXIMUM_LENGTH,"+
 		"internal_char_size(mc.atttyp) AS CHARACTER_OCTET_LENGTH,"+
 		"internal_numeric_precision(mc.atttyp) AS NUMERIC_PRECISION,"+
@@ -252,6 +254,11 @@ var (
 		"DESCRIPTION varchar(2048)," +
 		"MAXLEN int unsigned" +
 		")"
+
+	InformationSchemaCharacterSetsData = "INSERT INTO information_schema.CHARACTER_SETS VALUES " +
+		"('binary','binary','Binary pseudo charset',1)," +
+		"('utf8','utf8_bin','UTF-8 Unicode',4)," +
+		"('utf8mb4','utf8mb4_bin','UTF-8 Unicode',4)"
 
 	InformationSchemaTriggersDDL = "CREATE TABLE information_schema.TRIGGERS (" +
 		"TRIGGER_CATALOG varchar(64)," +
@@ -403,20 +410,34 @@ var (
 		"where `tbl`.`account_id` = current_account_id() and %s", catalog.NonTemporaryTableSQLPredicate("tbl"))
 
 	InformationSchemaReferentialConstraintsDDL = "CREATE VIEW information_schema.REFERENTIAL_CONSTRAINTS AS " +
-		"SELECT DISTINCT " +
+		"SELECT " +
 		"'def' AS CONSTRAINT_CATALOG, " +
 		"fk.db_name AS CONSTRAINT_SCHEMA, " +
 		"fk.constraint_name AS CONSTRAINT_NAME, " +
 		"'def' AS UNIQUE_CONSTRAINT_CATALOG, " +
 		"fk.refer_db_name AS UNIQUE_CONSTRAINT_SCHEMA, " +
-		"idx.type AS UNIQUE_CONSTRAINT_NAME," +
+		"fk.referenced_index_name AS UNIQUE_CONSTRAINT_NAME," +
 		"'NONE' AS MATCH_OPTION, " +
-		"fk.on_update AS UPDATE_RULE, " +
-		"fk.on_delete AS DELETE_RULE, " +
+		"replace(fk.on_update, '_', ' ') AS UPDATE_RULE, " +
+		"replace(fk.on_delete, '_', ' ') AS DELETE_RULE, " +
 		"fk.table_name AS TABLE_NAME, " +
 		"fk.refer_table_name AS REFERENCED_TABLE_NAME " +
-		"FROM mo_catalog.mo_foreign_keys fk " +
-		"JOIN mo_catalog.mo_indexes idx ON (fk.refer_column_name = idx.column_name)"
+		"FROM (" +
+		"SELECT db_name, table_name, constraint_name, refer_db_name, refer_table_name, on_update, on_delete, referenced_index_name " +
+		"FROM mo_catalog.mo_foreign_keys " +
+		"GROUP BY db_name, table_name, constraint_name, refer_db_name, refer_table_name, on_update, on_delete, referenced_index_name" +
+		") fk"
+
+	// CHECK_CONSTRAINTS is backed by a table function because CHECK metadata is
+	// stored in the serialized SchemaExtra of each table.  The function decodes
+	// that metadata at query time and applies the current tenant's visibility.
+	InformationSchemaCheckConstraintsDDL = "CREATE VIEW information_schema.CHECK_CONSTRAINTS AS " +
+		"SELECT " +
+		"cc.constraint_catalog AS CONSTRAINT_CATALOG, " +
+		"cc.constraint_schema AS CONSTRAINT_SCHEMA, " +
+		"cc.constraint_name AS CONSTRAINT_NAME, " +
+		"cc.check_clause AS CHECK_CLAUSE " +
+		"FROM mo_check_constraints() cc"
 
 	InformationSchemaEnginesDDL = "CREATE TABLE information_schema.ENGINES (" +
 		"ENGINE varchar(64)," +
@@ -523,6 +544,26 @@ var (
 		")"
 
 	InformationSchemaTableConstraintsDDL = fmt.Sprintf("CREATE VIEW information_schema.TABLE_CONSTRAINTS AS SELECT "+
+		"'def' AS CONSTRAINT_CATALOG, "+
+		"tbl.reldatabase AS CONSTRAINT_SCHEMA, "+
+		"idx.name AS CONSTRAINT_NAME, "+
+		"tbl.reldatabase AS TABLE_SCHEMA, "+
+		"tbl.relname AS TABLE_NAME, "+
+		"idx.type AS CONSTRAINT_TYPE, "+
+		"'YES' AS ENFORCED "+
+		"FROM mo_catalog.mo_indexes idx "+
+		"join mo_catalog.mo_tables tbl on idx.table_id = tbl.rel_id "+
+		"where %s UNION ALL "+
+		"SELECT cc.constraint_catalog AS CONSTRAINT_CATALOG, "+
+		"cc.constraint_schema AS CONSTRAINT_SCHEMA, "+
+		"cc.constraint_name AS CONSTRAINT_NAME, "+
+		"cc.constraint_schema AS TABLE_SCHEMA, "+
+		"cc.table_name AS TABLE_NAME, "+
+		"cc.constraint_type AS CONSTRAINT_TYPE, "+
+		"cc.enforced AS ENFORCED "+
+		"FROM mo_check_constraints() cc", catalog.NonTemporaryTableSQLPredicate("tbl"))
+
+	InformationSchemaTableConstraintsLegacyDDL = fmt.Sprintf("CREATE VIEW information_schema.TABLE_CONSTRAINTS AS SELECT "+
 		"'def' AS CONSTRAINT_CATALOG, "+
 		"tbl.reldatabase AS CONSTRAINT_SCHEMA, "+
 		"idx.name AS CONSTRAINT_NAME, "+

@@ -17,6 +17,7 @@ package frontend
 import (
 	"context"
 	"fmt"
+	"math"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -908,9 +909,10 @@ func (h *closeTrackingBranchHashmap) Close() error {
 }
 
 type capturedBatch struct {
-	kind string
-	side int
-	rows [][]any
+	kind       string
+	side       int
+	rows       [][]any
+	fromUpdate bool
 }
 
 func TestRunLCAProbeWithReaderFallback_EarlyReturns(t *testing.T) {
@@ -1075,6 +1077,9 @@ func newTestBranchTableStuff(ctrl *gomock.Controller) tableStuff {
 	}
 	tblStuff.def.pkKind = normalKind
 	tblStuff.def.visibleIdxes = []int{0, 1}
+	tblStuff.def.writableIdxes = []int{0, 1}
+	tblStuff.def.commonVisibleIdxes = []int{0, 1}
+	tblStuff.def.commonWritableIdxes = []int{0, 1}
 	tblStuff.def.pkColIdx = 0
 	tblStuff.def.pkColIdxes = []int{0}
 	tblStuff.retPool = &retBatchList{}
@@ -1163,12 +1168,39 @@ func TestLCAProbeColumnLayoutUsesLineageResolvedRename(t *testing.T) {
 	require.Equal(t, []int{0, 1}, layout.targetIdxes)
 }
 
-func TestDataBranchHistoricalProbeStuffUsesEndpointRenameMapping(t *testing.T) {
+func TestLCAProbeColumnLayoutKeepsHistoricalNameAfterEndpointRename(t *testing.T) {
+	lcaDef := &plan.TableDef{Cols: []*plan.ColDef{
+		{Name: "id_new", ColId: 1, Seqnum: 0, Typ: plan.Type{Id: int32(types.T_int64)}},
+	}}
+	targetDef := &plan.TableDef{Cols: []*plan.ColDef{
+		{Name: "id", ColId: 1, Seqnum: 0, Typ: plan.Type{Id: int32(types.T_int64)}},
+	}}
+
+	layout, err := lcaProbeColumnLayout(
+		lcaDef,
+		targetDef,
+		[]string{"id"},
+		[]types.Type{types.T_int64.ToType()},
+		nil,
+		[]string{"id"},
+	)
+
+	require.NoError(t, err)
+	require.Equal(t, []string{"id"}, layout.attrs)
+	require.Equal(t, []int{0}, layout.targetIdxes)
+	pkNames, err := layout.columnNamesForTargetIndexes([]int{0})
+	require.NoError(t, err)
+	require.Equal(t, []string{"id"}, pkNames)
+}
+
+func TestDataBranchHistoricalProbeStuffMapsOnlyBaseEndpointNames(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	targetRel := mock_frontend.NewMockRelation(ctrl)
 	baseRel := mock_frontend.NewMockRelation(ctrl)
+	historicalTargetRel := mock_frontend.NewMockRelation(ctrl)
 	targetRel.EXPECT().GetTableID(gomock.Any()).Return(uint64(2)).AnyTimes()
 	baseRel.EXPECT().GetTableID(gomock.Any()).Return(uint64(3)).AnyTimes()
+	historicalTargetRel.EXPECT().GetTableID(gomock.Any()).Return(uint64(4)).AnyTimes()
 	tblStuff := tableStuff{tarRel: targetRel, baseRel: baseRel}
 	tblStuff.def.baseColNames = []string{"a", "base_name"}
 	tblStuff.def.lcaColNames = []string{"a", "ancestor_name"}
@@ -1178,6 +1210,12 @@ func TestDataBranchHistoricalProbeStuffUsesEndpointRenameMapping(t *testing.T) {
 
 	baseProbe := dataBranchHistoricalProbeStuff(context.Background(), tblStuff, baseRel)
 	require.Equal(t, []string{"a", "base_name"}, baseProbe.def.lcaColNames)
+
+	historicalTargetProbe := dataBranchHistoricalProbeStuff(
+		context.Background(), tblStuff, historicalTargetRel,
+	)
+	require.Nil(t, historicalTargetProbe.def.lcaColNames)
+	require.Same(t, targetRel, historicalTargetProbe.tarRel)
 }
 
 func TestLCAProbeColumnLayoutExcludesIncompatibleTargetOnlyColumn(t *testing.T) {
@@ -1392,6 +1430,45 @@ func decodeCapturedRows(t *testing.T, bat *batch.Batch, colTypes []types.Type) [
 func TestHandleDelsOnLCA_SQLPaths(t *testing.T) {
 	ses := newValidateSession(t)
 
+	t.Run("uses historical primary key name after LCA endpoint rename", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		tblStuff := newTestBranchTableStuff(ctrl)
+		tblStuff.lcaRel = mock_frontend.NewMockRelation(ctrl)
+		tblStuff.def.lcaColNames = []string{"id", "name", "hidden"}
+		lcaDef := newTestBranchTableDef("lca_tbl", "name")
+		lcaDef.Cols[0].Name = "id_new"
+		lcaDef.Pkey.Names = []string{"id_new"}
+		lcaDef.Pkey.PkeyColName = "id_new"
+		tblStuff.lcaRel.(*mock_frontend.MockRelation).EXPECT().
+			GetTableDef(gomock.Any()).Return(lcaDef).AnyTimes()
+		tblStuff.lcaRel.(*mock_frontend.MockRelation).EXPECT().
+			GetTableID(gomock.Any()).Return(uint64(75)).AnyTimes()
+
+		wantErr := moerr.NewInternalErrorNoCtx("stop after sql capture")
+		bh := mock_frontend.NewMockBackgroundExec(ctrl)
+		bh.EXPECT().Exec(gomock.Any(), gomock.Any()).
+			DoAndReturn(func(_ context.Context, sql string) error {
+				require.Contains(t, sql, "lca.`id`")
+				require.NotContains(t, sql, "lca.`id_new`")
+				return wantErr
+			}).
+			Times(1)
+
+		tBat := batch.NewWithSize(1)
+		tBat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+		require.NoError(t, vector.AppendFixed(tBat.Vecs[0], int64(1), false, ses.proc.Mp()))
+		tBat.SetRowCount(1)
+		defer tBat.Clean(ses.proc.Mp())
+
+		_, err := handleDelsOnLCA(
+			context.Background(), ses, bh, tBat, tblStuff,
+			types.BuildTS(10, 0).ToTimestamp(),
+		)
+		require.ErrorIs(t, err, wantErr)
+	})
+
 	t.Run("quotes primary key identifiers in generated join", func(t *testing.T) {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
@@ -1434,6 +1511,48 @@ func TestHandleDelsOnLCA_SQLPaths(t *testing.T) {
 			bh,
 			tBat,
 			tblStuff,
+			types.BuildTS(10, 0).ToTimestamp(),
+		)
+		require.ErrorIs(t, err, wantErr)
+	})
+
+	t.Run("float primary key join matches NaN explicitly", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		tblStuff := newTestBranchTableStuff(ctrl)
+		tblStuff.lcaRel = mock_frontend.NewMockRelation(ctrl)
+		tblStuff.def.colTypes[0] = types.T_float64.ToType()
+		targetDef := tblStuff.tarRel.GetTableDef(context.Background())
+		targetDef.Cols[0].Typ = plan.Type{Id: int32(types.T_float64)}
+		baseDef := tblStuff.baseRel.GetTableDef(context.Background())
+		baseDef.Cols[0].Typ = plan.Type{Id: int32(types.T_float64)}
+		lcaDef := newTestBranchTableDef("lca_tbl", "name")
+		lcaDef.Cols[0].Typ = plan.Type{Id: int32(types.T_float64)}
+		tblStuff.lcaRel.(*mock_frontend.MockRelation).EXPECT().GetTableDef(gomock.Any()).Return(lcaDef).AnyTimes()
+		tblStuff.lcaRel.(*mock_frontend.MockRelation).EXPECT().GetTableID(gomock.Any()).Return(uint64(76)).AnyTimes()
+
+		wantErr := moerr.NewInternalErrorNoCtx("stop after sql capture")
+		bh := mock_frontend.NewMockBackgroundExec(ctrl)
+		bh.EXPECT().Exec(gomock.Any(), gomock.Any()).
+			DoAndReturn(func(_ context.Context, sql string) error {
+				require.Contains(t, sql,
+					"values row(0,bit_cast(unhex('010000000000f87f') as double)),row(1,cast(1.25 as double))")
+				right := "cast(pks.`__mo_data_branch_pk_0` as DOUBLE)"
+				require.Contains(t, sql, dataBranchSQLKeyEqual("lca.`id`", right, types.T_float64.ToType()))
+				return wantErr
+			}).
+			Times(1)
+
+		tBat := batch.NewWithSize(1)
+		tBat.Vecs[0] = vector.NewVec(types.T_float64.ToType())
+		require.NoError(t, vector.AppendFixed(tBat.Vecs[0], math.NaN(), false, ses.proc.Mp()))
+		require.NoError(t, vector.AppendFixed(tBat.Vecs[0], 1.25, false, ses.proc.Mp()))
+		tBat.SetRowCount(2)
+		defer tBat.Clean(ses.proc.Mp())
+
+		_, err := handleDelsOnLCA(
+			context.Background(), ses, bh, tBat, tblStuff,
 			types.BuildTS(10, 0).ToTimestamp(),
 		)
 		require.ErrorIs(t, err, wantErr)
@@ -1708,6 +1827,7 @@ func TestHandleDelsOnLCA_SQLPaths(t *testing.T) {
 
 		tblStuff := newTestBranchTableStuff(ctrl)
 		tblStuff.lcaRel = mock_frontend.NewMockRelation(ctrl)
+		tblStuff.def.pkKind = fakeKind
 		lcaDef := newTestBranchTableDef("lca_tbl", "name")
 		lcaDef.Pkey = &plan.PrimaryKeyDef{
 			Names:       []string{"__mo_fake_pk_col"},
@@ -1747,12 +1867,72 @@ func TestHandleDelsOnLCA_SQLPaths(t *testing.T) {
 		require.ErrorIs(t, err, wantErr)
 	})
 
+	t.Run("fake pk sql builder uses the hidden key type", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		tblStuff := newTestBranchTableStuff(ctrl)
+		tblStuff.lcaRel = mock_frontend.NewMockRelation(ctrl)
+		tblStuff.def.pkKind = fakeKind
+		tblStuff.def.colNames = []string{"f", "note", catalog.FakePrimaryKeyColName}
+		tblStuff.def.colTypes = []types.Type{
+			types.T_float64.ToType(),
+			types.T_varchar.ToType(),
+			types.T_uint64.ToType(),
+		}
+		tblStuff.def.visibleIdxes = []int{0, 1}
+		tblStuff.def.writableIdxes = []int{0, 1}
+		tblStuff.def.pkColIdx = 2
+		tblStuff.def.pkColIdxes = []int{0, 1}
+
+		targetDef := tblStuff.tarRel.GetTableDef(context.Background())
+		targetDef.Cols = []*plan.ColDef{
+			{Name: "f", ColId: 1, Typ: plan.Type{Id: int32(types.T_float64)}},
+			{Name: "note", ColId: 2, Typ: plan.Type{Id: int32(types.T_varchar)}},
+			{Name: catalog.FakePrimaryKeyColName, ColId: 3, Hidden: true, Typ: plan.Type{Id: int32(types.T_uint64)}},
+		}
+		targetDef.Pkey = &plan.PrimaryKeyDef{
+			Names:       []string{catalog.FakePrimaryKeyColName},
+			PkeyColName: catalog.FakePrimaryKeyColName,
+		}
+		lcaDef := &plan.TableDef{
+			DbName: "db1",
+			Name:   "lca_tbl",
+			Cols:   targetDef.Cols,
+			Pkey:   targetDef.Pkey,
+		}
+		tblStuff.lcaRel.(*mock_frontend.MockRelation).EXPECT().GetTableDef(gomock.Any()).Return(lcaDef).AnyTimes()
+		tblStuff.lcaRel.(*mock_frontend.MockRelation).EXPECT().GetTableID(gomock.Any()).Return(uint64(81)).AnyTimes()
+
+		wantErr := moerr.NewInternalErrorNoCtx("stop after sql capture")
+		bh := mock_frontend.NewMockBackgroundExec(ctrl)
+		bh.EXPECT().Exec(gomock.Any(), gomock.Any()).DoAndReturn(func(_ context.Context, sql string) error {
+			require.Contains(t, sql,
+				"lca.`__mo_fake_pk_col` = cast(pks.`__mo_data_branch_pk_0` as BIGINT UNSIGNED)")
+			require.NotContains(t, sql, "serial(lca.`__mo_fake_pk_col`)")
+			return wantErr
+		}).Times(1)
+
+		tBat := batch.NewWithSize(1)
+		tBat.Vecs[0] = vector.NewVec(types.T_uint64.ToType())
+		require.NoError(t, vector.AppendFixed(tBat.Vecs[0], uint64(42), false, ses.proc.Mp()))
+		tBat.SetRowCount(1)
+		defer tBat.Clean(ses.proc.Mp())
+
+		_, err := handleDelsOnLCA(
+			context.Background(), ses, bh, tBat, tblStuff,
+			types.BuildTS(10, 0).ToTimestamp(),
+		)
+		require.ErrorIs(t, err, wantErr)
+	})
+
 	t.Run("composite pk sql builder propagates non recoverable error", func(t *testing.T) {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
 
 		tblStuff := newTestBranchTableStuff(ctrl)
 		tblStuff.lcaRel = mock_frontend.NewMockRelation(ctrl)
+		tblStuff.def.pkKind = compositeKind
 		lcaDef := newTestBranchTableDef("lca_tbl", "name")
 		lcaDef.Pkey = &plan.PrimaryKeyDef{
 			Names:       []string{"id", "name"},
@@ -1907,7 +2087,9 @@ func TestHashDiff_NoLCABoundedUpdateKeepsLatestRow(t *testing.T) {
 			rows := decodeCapturedRows(t, w.batch, tblStuff.def.colTypes)
 			mu.Lock()
 			if len(rows) > 0 {
-				got = append(got, capturedBatch{kind: w.kind, side: w.side, rows: rows})
+				got = append(got, capturedBatch{
+					kind: w.kind, side: w.side, rows: rows, fromUpdate: w.fromUpdate,
+				})
 			}
 			mu.Unlock()
 			tblStuff.retPool.releaseRetBatch(w.batch, false)
@@ -1925,9 +2107,11 @@ func TestHashDiff_NoLCABoundedUpdateKeepsLatestRow(t *testing.T) {
 	require.Len(t, got, 2)
 	require.Equal(t, diffDelete, got[0].kind)
 	require.Equal(t, diffSideBase, got[0].side)
+	require.True(t, got[0].fromUpdate)
 	require.Equal(t, [][]any{{int64(1), "destination", "h1"}}, got[0].rows)
 	require.Equal(t, diffInsert, got[1].kind)
 	require.Equal(t, diffSideTarget, got[1].side)
+	require.True(t, got[1].fromUpdate)
 	require.Equal(t, [][]any{{int64(1), "bounded", "h1"}}, got[1].rows)
 }
 
@@ -2551,6 +2735,17 @@ func TestAppendLCAProbeValue(t *testing.T) {
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "unexpected LCA probe type conversion")
 	})
+
+	t.Run("rejects set display label instead of guessing its bitmap", func(t *testing.T) {
+		src := vector.NewVec(types.T_varchar.ToType())
+		dst := vector.NewVec(types.T_uint64.ToType())
+		defer src.Free(mp)
+		defer dst.Free(mp)
+
+		require.NoError(t, vector.AppendBytes(src, []byte("2"), false, mp))
+		err := appendLCAProbeValue(dst, src, 0, "", mp)
+		require.ErrorContains(t, err, "unexpected LCA probe type conversion")
+	})
 }
 
 func TestValidateLeadingRowID(t *testing.T) {
@@ -2884,6 +3079,29 @@ func TestDataBranchSourceColToTargetIdxAllowsCopyAlterIdentityReassignment(t *te
 	}
 
 	mapping, err := dataBranchSourceColToTargetIdx(sourceDef, targetDef, []string{"a", "b"}, nil)
+	require.NoError(t, err)
+	require.Equal(t, []int{0, 1}, mapping)
+}
+
+func TestDataBranchSourceColToTargetIdxPreservesRenamedPrimaryKeyIdentity(t *testing.T) {
+	sourceDef := &plan.TableDef{
+		Cols: []*plan.ColDef{
+			{Name: "id", ColId: 1, Seqnum: 0, Typ: plan.Type{Id: int32(types.T_int64)}},
+			{Name: "payload", ColId: 2, Seqnum: 1, Typ: plan.Type{Id: int32(types.T_int64)}},
+		},
+		Pkey: &plan.PrimaryKeyDef{PkeyColName: "id", Names: []string{"id"}},
+	}
+	targetDef := &plan.TableDef{
+		Cols: []*plan.ColDef{
+			{Name: "id_new", ColId: 1, Seqnum: 0, Typ: plan.Type{Id: int32(types.T_int64)}},
+			{Name: "payload", ColId: 2, Seqnum: 1, Typ: plan.Type{Id: int32(types.T_int64)}},
+		},
+		Pkey: &plan.PrimaryKeyDef{PkeyColName: "id_new", Names: []string{"id_new"}},
+	}
+
+	mapping, err := dataBranchSourceColToTargetIdx(
+		sourceDef, targetDef, []string{"id_new", "payload"}, nil,
+	)
 	require.NoError(t, err)
 	require.Equal(t, []int{0, 1}, mapping)
 }

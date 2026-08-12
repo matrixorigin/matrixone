@@ -27,7 +27,6 @@ import (
 	"github.com/gogo/protobuf/proto"
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
-	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -130,14 +129,14 @@ func mergeReceiverChannelBufferSize(s *Scope) int {
 
 type operatorDupContext struct {
 	shufflePools       map[*shuffle.Shuffle]*shuffle.ShufflePool
-	hashJoinChannels   map[*hashjoin.HashJoin]chan *bitmap.Bitmap
+	hashJoinMailboxes  map[*hashjoin.HashJoin]*hashjoin.BitmapMailbox
 	dedupJoinMailboxes map[*dedupjoin.DedupJoin]*dedupjoin.WorkerJoinMailbox
 }
 
 func newOperatorDupContext() *operatorDupContext {
 	return &operatorDupContext{
 		shufflePools:       make(map[*shuffle.Shuffle]*shuffle.ShufflePool),
-		hashJoinChannels:   make(map[*hashjoin.HashJoin]chan *bitmap.Bitmap),
+		hashJoinMailboxes:  make(map[*hashjoin.HashJoin]*hashjoin.BitmapMailbox),
 		dedupJoinMailboxes: make(map[*dedupjoin.DedupJoin]*dedupjoin.WorkerJoinMailbox),
 	}
 }
@@ -205,6 +204,7 @@ func dupOperatorWithContext(sourceOp vm.Operator, index int, maxParallel int, du
 		op.SpillMem = t.SpillMem
 		op.GroupingFlag = t.GroupingFlag
 		op.GroupBy = t.GroupBy
+		op.GroupByHashKey = t.GroupByHashKey
 		op.Aggs = t.Aggs
 		op.ProjectList = t.ProjectList
 		op.SetInfo(&info)
@@ -230,12 +230,12 @@ func dupOperatorWithContext(sourceOp vm.Operator, index int, maxParallel int, du
 		op.CanSkipProbe = t.CanSkipProbe
 		op.IsShuffle = t.IsShuffle
 		if !t.IsShuffle {
-			channel := dupCtx.hashJoinChannels[t]
-			if channel == nil {
-				channel = make(chan *bitmap.Bitmap, maxParallel)
-				dupCtx.hashJoinChannels[t] = channel
+			mailbox := dupCtx.hashJoinMailboxes[t]
+			if mailbox == nil {
+				mailbox = hashjoin.NewBitmapMailbox(maxParallel)
+				dupCtx.hashJoinMailboxes[t] = mailbox
 			}
-			op.Channel = channel
+			op.Mailbox = mailbox
 			op.NumCPU = uint64(maxParallel)
 			op.IsMerger = (index == 0)
 		}
@@ -314,6 +314,7 @@ func dupOperatorWithContext(sourceOp vm.Operator, index int, maxParallel int, du
 		op := filter.NewArgument()
 		op.FilterExprs = t.FilterExprs
 		op.RuntimeFilterExprs = t.RuntimeFilterExprs
+		op.IsAssert = t.IsAssert
 		op.SetInfo(&info)
 		return op
 	case vm.Top:
@@ -385,6 +386,8 @@ func dupOperatorWithContext(sourceOp vm.Operator, index int, maxParallel int, du
 		op.Limit = t.Limit
 		op.RuntimeFilterSpecs = t.RuntimeFilterSpecs
 		op.IndexReaderParam = t.IndexReaderParam
+		op.FulltextSourceRef = t.FulltextSourceRef
+		op.FulltextIndexRef = t.FulltextIndexRef
 		op.SetInfo(&info)
 		if op.FuncName == "generate_series" {
 			op.GenerateSeriesCtrNumState(t.OffsetTotal[index][0], t.OffsetTotal[index][1], t.GetGenerateSeriesCtrNumStateStep(), t.OffsetTotal[index][0])
@@ -555,6 +558,8 @@ func dupOperatorWithContext(sourceOp vm.Operator, index int, maxParallel int, du
 		op.PkName = t.PkName
 		op.PkTyp = t.PkTyp
 		op.BuildIdx = t.BuildIdx
+		op.IfInsertFromUnique = t.IfInsertFromUnique
+		op.RuntimeFilterSpec = plan2.DeepCopyRuntimeFilterSpec(t.RuntimeFilterSpec)
 		op.SetInfo(&info)
 		return op
 	case vm.TableScan:
@@ -587,6 +592,8 @@ func dupOperatorWithContext(sourceOp vm.Operator, index int, maxParallel int, du
 		op.TableFunction.Limit = t.TableFunction.Limit
 		op.TableFunction.RuntimeFilterSpecs = t.TableFunction.RuntimeFilterSpecs
 		op.TableFunction.IndexReaderParam = t.TableFunction.IndexReaderParam
+		op.TableFunction.FulltextSourceRef = t.TableFunction.FulltextSourceRef
+		op.TableFunction.FulltextIndexRef = t.TableFunction.FulltextIndexRef
 		op.TableFunction.SetInfo(&info)
 		op.SetInfo(&info)
 		return op
@@ -674,7 +681,21 @@ func constructRestrict(node *plan.Node, filterExprs []*plan.Expr) *filter.Filter
 	op := filter.NewArgument()
 	op.FilterExprs = filterExprs
 	op.IsEnd = node.IsEnd
+	op.IsAssert = node.NodeType == plan.Node_ASSERT && isAssertExpressionList(filterExprs)
 	return op
+}
+
+func isAssertExpressionList(exprs []*plan.Expr) bool {
+	if len(exprs) == 0 {
+		return false
+	}
+	for _, expr := range exprs {
+		function := expr.GetF()
+		if function == nil || function.GetFunc().GetObjName() != "_check_constraint_assert" {
+			return false
+		}
+	}
+	return true
 }
 
 func constructDeletion(
@@ -715,13 +736,28 @@ func constructFuzzyFilter(node, tableScan, sinkScan *plan.Node) *fuzzyfilter.Fuz
 			}
 		}
 	}
+	// The fuzzy-filter children may project a key identity expression whose
+	// type differs from the stored column. FLOAT/DOUBLE primary keys use
+	// serial(...) bytes, and the operator must allocate/hash that actual type.
+	if len(sinkScan.ProjectList) > 0 {
+		pkTyp = sinkScan.ProjectList[0].Typ
+	} else if len(tableScan.ProjectList) > 0 {
+		pkTyp = tableScan.ProjectList[0].Typ
+	}
 
 	op := fuzzyfilter.NewArgument()
 	op.PkName = pkName
 	op.PkTyp = pkTyp
 	op.IfInsertFromUnique = node.IfInsertFromUnique
 
-	if (tableScan.Stats.Cost / sinkScan.Stats.Cost) < 0.3 {
+	costRatio := tableScan.Stats.Cost / sinkScan.Stats.Cost
+	buildOnTable := node.FuzzyBuildSide ==
+		plan.Node_FUZZY_BUILD_SIDE_TABLE ||
+		(node.FuzzyBuildSide ==
+			plan.Node_FUZZY_BUILD_SIDE_UNSPECIFIED &&
+			!math.IsNaN(costRatio) &&
+			costRatio < 0.3)
+	if buildOnTable {
 		// build on tableScan, because the existing data is significantly less than the data to be inserted
 		// this will happend
 		op.BuildIdx = 0
@@ -896,6 +932,7 @@ func constructMultiUpdate(
 			PartitionCols:      partitionCols,
 			SkipInsertOnNullPk: updateCtx.SkipInsertOnNullPk,
 			InsertPkColIdx:     int(updateCtx.InsertPkColIdx),
+			IgnoreAffectedRows: updateCtx.IgnoreAffectedRows,
 		}
 	}
 	arg.Action = action
@@ -1317,6 +1354,8 @@ func constructTableFunction(node *plan.Node, qry *plan.Query) *table_function.Ta
 	arg.FuncName = node.TableDef.TblFunc.Name
 	arg.Params = node.TableDef.TblFunc.Param
 	arg.IsSingle = node.TableDef.TblFunc.IsSingle
+	arg.FulltextSourceRef = node.TableDef.TblFunc.FulltextSourceRef
+	arg.FulltextIndexRef = node.TableDef.TblFunc.FulltextIndexRef
 	arg.Limit = node.Limit
 	// probe side runtime filter specs
 	arg.RuntimeFilterSpecs = node.RuntimeFilterProbeList
@@ -1561,7 +1600,9 @@ func constructTimeWindow(_ context.Context, node *plan.Node, proc *process.Proce
 		aggregationExpressions = append(
 			aggregationExpressions,
 			aggexec.MakeAggFunctionExpression(functionID, isDistinct, args, cfg))
-		typs = append(typs, types.New(types.T(e.Typ.Id), e.Typ.Width, e.Typ.Scale))
+		typs = append(typs, types.NewWithCharset(
+			types.T(e.Typ.Id), e.Typ.Width, e.Typ.Scale, uint8(e.Typ.Charset),
+		))
 	}
 	wStart := layout.WStartSlot != plan2.TimeWindowSlotNone
 	wEnd := layout.WEndSlot != plan2.TimeWindowSlotNone
@@ -1676,7 +1717,9 @@ func constructGroup(_ context.Context, node, childNode *plan.Node, needEval bool
 
 	typs := make([]types.Type, len(childNode.ProjectList))
 	for i, e := range childNode.ProjectList {
-		typs[i] = types.New(types.T(e.Typ.Id), e.Typ.Width, e.Typ.Scale)
+		typs[i] = types.NewWithCharset(
+			types.T(e.Typ.Id), e.Typ.Width, e.Typ.Scale, uint8(e.Typ.Charset),
+		)
 	}
 
 	arg := group.NewArgument()
@@ -1685,6 +1728,7 @@ func constructGroup(_ context.Context, node, childNode *plan.Node, needEval bool
 	arg.SpillMem = node.SpillMem
 	arg.GroupingFlag = node.GroupingFlag
 	arg.GroupBy = node.GroupBy
+	arg.GroupByHashKey = node.GroupByHashKey
 	return arg
 }
 
@@ -1734,6 +1778,27 @@ func constructAggregateConfig(f *plan.Function, proc *process.Process) ([]*plan.
 			}
 			return args[:len(args)-1], config
 		}
+
+	case plan2.NamePercentileCont, plan2.NamePercentileDisc:
+		if len(args) != 2 {
+			panic(moerr.NewInvalidInputNoCtxf(
+				"%s requires a value and percentile argument", f.Func.ObjName))
+		}
+		configExpr := args[1]
+		if err := validateOrderedPercentileExpr(configExpr, f.Func.ObjName); err != nil {
+			panic(err)
+		}
+		vec, free, err := colexec.GetReadonlyResultFromNoColumnExpression(proc, configExpr)
+		if err != nil {
+			panic(err)
+		}
+		defer free()
+		percentile, err := getPercentileConfigNamed(vec, f.Func.ObjName)
+		if err != nil {
+			panic(err)
+		}
+		descending := len(f.AggConfig) > 0 && f.AggConfig[0] != 0
+		return args[:1], aggexec.EncodeOrderedPercentileConfig(percentile, descending)
 	}
 	return args, nil
 }
@@ -1942,6 +2007,7 @@ func constructMergeGroup(node *plan.Node, aggs []aggexec.AggFuncExecExpression) 
 	// group node and then merge them
 	arg.SpillMem = node.SpillMem
 	arg.Aggs = aggs
+	arg.GroupByHashKey = node.GroupByHashKey
 	return arg
 }
 
@@ -2594,20 +2660,46 @@ func validateApproxPercentileExpr(expr *plan.Expr) error {
 	return nil
 }
 
-// getPercentileConfig extracts the percentile value from a vector for approx_percentile.
+func validateOrderedPercentileExpr(expr *plan.Expr, name string) error {
+	if expr == nil || !rule.IsConstant(expr, false) {
+		return moerr.NewInvalidInputNoCtxf(
+			"percentile argument of %s must be a constant", name)
+	}
+	return nil
+}
+
+// getPercentileConfig extracts the percentile value from a vector for
+// approx_percentile. Keep this wrapper for existing callers while the named
+// helper gives ordered-set aggregates accurate diagnostics.
 func getPercentileConfig(vec *vector.Vector) ([]byte, error) {
+	return getPercentileConfigNamed(vec, "approx_percentile")
+}
+
+func getPercentileConfigNamed(vec *vector.Vector, functionName string) ([]byte, error) {
 	if vec == nil || !vec.IsConst() {
-		return nil, moerr.NewInvalidInputNoCtx(
-			"percentile argument of approx_percentile must be a constant")
+		return nil, moerr.NewInvalidInputNoCtxf(
+			"percentile argument of %s must be a constant", functionName)
 	}
 	if vec.Length() == 0 || vec.IsConstNull() {
-		return nil, moerr.NewInvalidInputNoCtx(
-			"percentile argument of approx_percentile cannot be NULL")
+		return nil, moerr.NewInvalidInputNoCtxf(
+			"percentile argument of %s cannot be NULL", functionName)
 	}
 
 	var p float64
 	var config string
 	switch vec.GetType().Oid {
+	case types.T_bit:
+		v := vector.MustFixedColWithTypeCheck[uint64](vec)[0]
+		p = float64(v)
+		config = strconv.FormatUint(v, 10)
+	case types.T_int8:
+		v := vector.MustFixedColWithTypeCheck[int8](vec)[0]
+		p = float64(v)
+		config = strconv.FormatInt(int64(v), 10)
+	case types.T_int16:
+		v := vector.MustFixedColWithTypeCheck[int16](vec)[0]
+		p = float64(v)
+		config = strconv.FormatInt(int64(v), 10)
 	case types.T_float64:
 		p = vector.MustFixedColWithTypeCheck[float64](vec)[0]
 		config = strconv.FormatFloat(p, 'f', -1, 64)
@@ -2622,6 +2714,22 @@ func getPercentileConfig(vec *vector.Vector) ([]byte, error) {
 		v := vector.MustFixedColWithTypeCheck[int32](vec)[0]
 		p = float64(v)
 		config = strconv.FormatInt(int64(v), 10)
+	case types.T_uint8:
+		v := vector.MustFixedColWithTypeCheck[uint8](vec)[0]
+		p = float64(v)
+		config = strconv.FormatUint(uint64(v), 10)
+	case types.T_uint16:
+		v := vector.MustFixedColWithTypeCheck[uint16](vec)[0]
+		p = float64(v)
+		config = strconv.FormatUint(uint64(v), 10)
+	case types.T_uint32:
+		v := vector.MustFixedColWithTypeCheck[uint32](vec)[0]
+		p = float64(v)
+		config = strconv.FormatUint(uint64(v), 10)
+	case types.T_uint64:
+		v := vector.MustFixedColWithTypeCheck[uint64](vec)[0]
+		p = float64(v)
+		config = strconv.FormatUint(v, 10)
 	case types.T_decimal64:
 		d := vector.MustFixedColWithTypeCheck[types.Decimal64](vec)[0]
 		p = types.Decimal64ToFloat64(d, vec.GetType().Scale)
@@ -2632,16 +2740,16 @@ func getPercentileConfig(vec *vector.Vector) ([]byte, error) {
 		config = d.Format(vec.GetType().Scale)
 	default:
 		return nil, moerr.NewInvalidInputNoCtxf(
-			"unsupported percentile type %s for approx_percentile", vec.GetType().String())
+			"unsupported percentile type %s for %s", vec.GetType().String(), functionName)
 	}
 	if math.IsNaN(p) || math.IsInf(p, 0) || p < 0 || p > 1 {
 		return nil, moerr.NewInvalidInputNoCtxf(
-			"percentile argument of approx_percentile must be finite and in [0,1], got %v", p)
+			"percentile argument of %s must be finite and in [0,1], got %v", functionName, p)
 	}
 	exact, ok := new(big.Rat).SetString(config)
 	if !ok || exact.Sign() < 0 || exact.Cmp(big.NewRat(1, 1)) > 0 {
 		return nil, moerr.NewInvalidInputNoCtxf(
-			"percentile argument of approx_percentile must be in [0,1], got %s", config)
+			"percentile argument of %s must be in [0,1], got %s", functionName, config)
 	}
 	return []byte(config), nil
 }

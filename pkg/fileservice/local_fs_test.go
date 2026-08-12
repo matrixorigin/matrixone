@@ -23,8 +23,10 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"sync"
 	"syscall"
 	"testing"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/fileservice/fscache"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
@@ -32,6 +34,23 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+type localBlockingDataCache struct {
+	fscache.DataCache
+	updateStarted chan struct{}
+	releaseUpdate chan struct{}
+	once          sync.Once
+}
+
+func (c *localBlockingDataCache) Set(ctx context.Context, key fscache.CacheKey, data fscache.Data) error {
+	c.once.Do(func() { close(c.updateStarted) })
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-c.releaseUpdate:
+	}
+	return c.DataCache.Set(ctx, key, data)
+}
 
 func TestLocalFSStatFileReturnsNonNotExistError(t *testing.T) {
 	ctx := context.Background()
@@ -42,6 +61,106 @@ func TestLocalFSStatFileReturnsNonNotExistError(t *testing.T) {
 
 	_, err = fs.StatFile(ctx, "file/child")
 	require.ErrorIs(t, err, syscall.ENOTDIR)
+}
+
+func TestLocalFSMergeWaitHasBoundedFallback(t *testing.T) {
+	ctx := context.Background()
+	originalMaxWait := maxIOWaitDuration
+	maxIOWaitDuration = 5 * time.Millisecond
+	t.Cleanup(func() { maxIOWaitDuration = originalMaxWait })
+
+	local, err := NewLocalFS(ctx, "local", t.TempDir(), DisabledCacheConfig, nil)
+	require.NoError(t, err)
+	require.NoError(t, local.Write(ctx, IOVector{
+		FilePath: "foo",
+		Entries:  []IOEntry{{Size: 3, Data: []byte("foo")}},
+		Policy:   SkipAllCache,
+	}))
+
+	vector := &IOVector{
+		FilePath: "foo",
+		Entries:  []IOEntry{{Offset: 0, Size: 3}},
+	}
+	t.Cleanup(vector.Release)
+	finishMerge, waitMerge := local.ioMerger.Merge(vector.ioMergeKey(), maxIOWaitDuration)
+	require.NotNil(t, finishMerge)
+	require.Nil(t, waitMerge)
+	releaseMerge := sync.OnceFunc(finishMerge)
+	t.Cleanup(releaseMerge)
+
+	readDone := make(chan error, 1)
+	go func() { readDone <- local.Read(context.Background(), vector) }()
+	select {
+	case err := <-readDone:
+		require.NoError(t, err)
+	case <-time.After(time.Second):
+		releaseMerge()
+		select {
+		case <-readDone:
+		case <-time.After(time.Second):
+			t.Fatal("local follower did not terminate after merge release")
+		}
+		t.Fatal("local follower rejoined a timed-out merge generation")
+	}
+	require.Equal(t, []byte("foo"), vector.Entries[0].Data)
+}
+
+func TestLocalFSMergeCompletesAfterCacheUpdate(t *testing.T) {
+	ctx := context.Background()
+	local, err := NewLocalFS(ctx, "local", t.TempDir(), CacheConfig{
+		MemoryCapacity: ptrTo(toml.ByteSize(1 << 20)),
+	}, nil)
+	require.NoError(t, err)
+	require.NoError(t, local.Write(ctx, IOVector{
+		FilePath: "foo",
+		Entries:  []IOEntry{{Size: 3, Data: []byte("foo")}},
+		Policy:   SkipAllCache,
+	}))
+
+	cache := &localBlockingDataCache{
+		DataCache:     local.memCache.cache,
+		updateStarted: make(chan struct{}),
+		releaseUpdate: make(chan struct{}),
+	}
+	local.memCache.cache = cache
+	releaseUpdate := sync.OnceFunc(func() { close(cache.releaseUpdate) })
+	readCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	var wg sync.WaitGroup
+	vector := &IOVector{
+		FilePath: "foo",
+		Policy:   SkipFullFilePreloads,
+		Entries: []IOEntry{{
+			Offset:      0,
+			Size:        3,
+			ToCacheData: CacheOriginalData,
+		}},
+	}
+	t.Cleanup(func() {
+		cancel()
+		releaseUpdate()
+		wg.Wait()
+		vector.Release()
+	})
+
+	readDone := make(chan error, 1)
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		readDone <- local.Read(readCtx, vector)
+	}()
+	select {
+	case <-cache.updateStarted:
+	case <-readCtx.Done():
+		t.Fatalf("cache update did not start: %v", readCtx.Err())
+	}
+	require.True(t, local.ioMerger.IsMerging(vector.ioMergeKey()))
+	releaseUpdate()
+	select {
+	case err := <-readDone:
+		require.NoError(t, err)
+	case <-readCtx.Done():
+		t.Fatalf("local read did not finish: %v", readCtx.Err())
+	}
 }
 
 func TestLocalFS(t *testing.T) {
@@ -176,6 +295,36 @@ func BenchmarkLocalFS(b *testing.B) {
 		assert.Nil(b, err)
 		return fs
 	})
+}
+
+func BenchmarkLocalFSAllocateCacheData(b *testing.B) {
+	ctx := context.Background()
+	fs, err := NewLocalFS(
+		ctx,
+		"local",
+		b.TempDir(),
+		CacheConfig{MemoryCapacity: ptrTo[toml.ByteSize](128 * 1024)},
+		nil,
+	)
+	assert.NoError(b, err)
+	b.Cleanup(func() { fs.Close(ctx) })
+
+	benchmarkFileServiceAllocateCacheData(b, fs.AllocateCacheData, 42, 1)
+}
+
+func BenchmarkLocalFSAllocateCacheDataHighCardinality(b *testing.B) {
+	ctx := context.Background()
+	fs, err := NewLocalFS(
+		ctx,
+		"local",
+		b.TempDir(),
+		CacheConfig{MemoryCapacity: ptrTo[toml.ByteSize](128 * 1024)},
+		nil,
+	)
+	assert.NoError(b, err)
+	b.Cleanup(func() { fs.Close(ctx) })
+
+	benchmarkFileServiceAllocateCacheData(b, fs.AllocateCacheData, 1, 1024)
 }
 
 func TestLocalFSWithDiskCache(t *testing.T) {

@@ -938,7 +938,6 @@ func (s *service) GetConfig() Config {
 }
 
 func (s *service) Close() error {
-	var resolvedCallbacks []func()
 	s.stopOnce.Do(func() {
 		// Seal every public mutation and bind-publication path first. Add and
 		// Wait are serialized by lifecycle: once closing is visible, no new
@@ -949,6 +948,9 @@ func (s *service) Close() error {
 			s.lifecycle.cancel()
 		}
 		s.lifecycle.Unlock()
+		if s.unknownCommitResolver != nil {
+			s.unknownCommitResolver.callbacks.seal()
+		}
 
 		// Stop producers before their consumers and dependencies. Inbound RPC
 		// handlers, service background tasks, and keeper tasks can all use lock
@@ -971,19 +973,18 @@ func (s *service) Close() error {
 		s.events.close()
 		s.activeTxnHolder.close()
 		if s.unknownCommitResolver != nil {
-			resolvedCallbacks = s.unknownCommitResolver.takeResolvedCallbacks()
+			// The resolver task is joined and callback admission is sealed. Drain
+			// every remaining reservation by transferring invocation out of service
+			// ownership before releasing the RPC transport. External callback bodies
+			// are non-blocking by contract and are never a Close wait dependency.
+			for _, txn := range s.unknownCommitResolver.takeResolvedTxns() {
+				txn.complete()
+			}
 		}
 		clientErr := s.remote.client.Close()
 		close(s.fetchWhoWaitingListC)
 		s.closeErr = errors.Join(serverErr, keeperErr, clientErr)
 	})
-	// User callbacks are outside sync.Once and after complete component
-	// teardown. A callback may safely re-enter Close without deadlocking on the
-	// in-progress Once, and a blocked callback cannot strand other concurrent
-	// Close callers inside component cleanup.
-	for _, callback := range resolvedCallbacks {
-		callback()
-	}
 	return s.closeErr
 }
 
@@ -1307,6 +1308,11 @@ func (s *service) handleBindChanged(newBind pb.LockTable) {
 
 	s.bindChangeMu.Lock()
 	defer s.bindChangeMu.Unlock()
+
+	current := s.tableGroups.get(newBind.Group, newBind.Table)
+	if current != nil && !current.getBind().Changed(newBind) {
+		return
+	}
 
 	new := s.createLockTableByBind(newBind)
 	s.tableGroups.set(newBind.Group, newBind.Table, new)
@@ -1714,6 +1720,9 @@ type mapBasedTxnHolder struct {
 	serviceID string
 	logger    *log.MOLogger
 	fsp       *fixedSlicePool
+	// beforeFenceTxnLock is a test-only phase hook for holder/transaction lock
+	// interleavings.
+	beforeFenceTxnLock func(*activeTxn)
 	// validTxn returns an authoritative liveness result only when err is nil.
 	// Any error means the remote transaction state is unknown; transport
 	// reachability is not evidence that the transaction is inactive.
@@ -1874,12 +1883,43 @@ func (h *mapBasedTxnHolder) fenceByBindChanged(bind pb.LockTable) int {
 	for i := range h.activeTxns {
 		shard := &h.activeTxns[i]
 		shard.RLock()
-		for _, entry := range shard.txns {
-			if entry.txn.fenceByBindChanged(bind, h.logger) {
-				n++
-			}
+		txnKeys := make([]string, 0, len(shard.txns))
+		for txnKey := range shard.txns {
+			txnKeys = append(txnKeys, txnKey)
 		}
 		shard.RUnlock()
+
+		for _, txnKey := range txnKeys {
+			for {
+				shard.RLock()
+				entry, ok := shard.txns[txnKey]
+				if !ok {
+					shard.RUnlock()
+					break
+				}
+				if h.beforeFenceTxnLock != nil {
+					h.beforeFenceTxnLock(entry.txn)
+				}
+
+				// Unknown-commit cleanup holds txn.Lock while releasing owner
+				// locks, then removes the transaction from this shard. Never
+				// wait for txn.Lock while retaining shard.RLock: doing so
+				// reverses that order and deadlocks both cleanup paths. TryLock
+				// keeps the pooled transaction alive under shard.RLock; on
+				// contention, release the shard so cleanup can make progress.
+				if !entry.txn.TryLock() {
+					shard.RUnlock()
+					time.Sleep(time.Millisecond)
+					continue
+				}
+				if entry.txn.fenceByBindChangedLocked(bind, h.logger) {
+					n++
+				}
+				entry.txn.Unlock()
+				shard.RUnlock()
+				break
+			}
+		}
 	}
 	return n
 }

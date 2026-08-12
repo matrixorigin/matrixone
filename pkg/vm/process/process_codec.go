@@ -19,6 +19,7 @@ import (
 	"math"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -63,6 +64,13 @@ func (proc *Process) BuildProcessInfo(
 		// Carry ROW_COUNT() state so it is correct when an expression that reads
 		// it (e.g. row_count() in a projection) is pushed down to a remote CN.
 		procInfo.AffectedRows = proc.GetAffectedRows()
+		// Assignment casts can run in a remote scan scope. Carry INSERT IGNORE
+		// semantics with the process so those casts take the same adjustment
+		// path as they do on the coordinating CN.
+		procInfo.StatementRuntimeIgnore = proc.GetStmtProfile().GetStatementIgnore()
+		if planSnapshotTS, ok := proc.GetPlanSnapshotTS(); ok {
+			procInfo.PlanSnapshotTs = &planSnapshotTS
+		}
 		snapshot, err := proc.GetTxnOperator().Snapshot()
 		if err != nil {
 			return procInfo, err
@@ -80,7 +88,15 @@ func (proc *Process) BuildProcessInfo(
 			for i := range procInfo.PrepareParams.Nulls {
 				procInfo.PrepareParams.Nulls[i] = vec.GetNulls().Contains(uint64(i))
 			}
-			procInfo.PrepareParams.IsBin = append(procInfo.PrepareParams.IsBin, proc.Base.prepareParamsIsBin...)
+			metadata, err := PrepareParamMetadataForRemote(
+				proc.GetService(),
+				vec.Length(),
+				proc.Base.prepareParamsIsBin,
+			)
+			if err != nil {
+				return procInfo, err
+			}
+			procInfo.PrepareParams.IsBin = metadata
 		}
 	}
 	{ // session info
@@ -200,6 +216,18 @@ func (c *codecService) Decode(
 	ctx context.Context,
 	value pipeline.ProcessInfo,
 ) (*Process, error) {
+	service := ""
+	if c.lockService != nil {
+		service = c.lockService.GetConfig().ServiceID
+	}
+	prepareParamMetadata, err := PrepareParamMetadataForRemote(
+		service,
+		int(value.PrepareParams.Length),
+		value.PrepareParams.IsBin,
+	)
+	if err != nil {
+		return nil, err
+	}
 	txnOp, err := c.txnClient.NewWithSnapshot(ctx, value.Snapshot)
 	if err != nil {
 		return nil, err
@@ -230,7 +258,13 @@ func (c *codecService) Decode(
 	proc.Base.Lim = ConvertToProcessLimitation(value.Lim)
 	proc.Base.SessionInfo = sessionInfo
 	proc.Base.SessionInfo.StorageEngine = c.engine
+	if value.PlanSnapshotTs != nil {
+		proc.SetPlanSnapshotTS(*value.PlanSnapshotTs)
+	}
 	proc.SetAffectedRows(value.AffectedRows)
+	stmtProfile := NewStmtProfile(uuid.Nil, uuid.Nil)
+	stmtProfile.SetStatementRuntimeProfile("", "", value.StatementRuntimeIgnore)
+	proc.Base.StmtProfile = stmtProfile
 	if value.PrepareParams.Length > 0 {
 		prepareParams, err := vector.NewVecWithDataCopy(
 			types.T_text.ToType(),
@@ -248,7 +282,7 @@ func (c *codecService) Decode(
 				prepareParams.GetNulls().Add(uint64(i))
 			}
 		}
-		proc.SetOwnedPrepareParamsWithIsBin(prepareParams, append([]bool(nil), value.PrepareParams.IsBin...))
+		proc.SetOwnedPrepareParamsWithIsBin(prepareParams, prepareParamMetadata)
 	}
 	return proc, nil
 }

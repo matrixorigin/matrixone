@@ -60,6 +60,10 @@ type functionInformationForEval struct {
 		selectList *function.FunctionSelectList) error
 	resetFn func() error
 	freeFn  func() error
+
+	// retainedBytesFn reports stateful function backing allocations which are
+	// not represented by the executor's owned vectors.
+	retainedBytesFn func() uint64
 }
 
 func (fI *functionInformationForEval) reset() {
@@ -80,7 +84,7 @@ func (fI *functionInformationForEval) reset() {
 	if fI.evalFn != nil {
 		// we can set the context nil here since this function will never return an error.
 		overload, _ := function.GetFunctionById(context.TODO(), fI.overloadID)
-		fI.evalFn, fI.resetFn, fI.freeFn = overload.GetExecuteMethod()
+		fI.evalFn, fI.resetFn, fI.freeFn, fI.retainedBytesFn = overload.GetExecuteMethod()
 	}
 }
 
@@ -322,6 +326,7 @@ func (expr *ParamExpressionExecutor) ResetForNextQuery() {
 		expr.vec.CleanOnlyData()
 	}
 	expr.folded = false
+	expr.foldedNull = false
 }
 
 func (expr *VarExpressionExecutor) ResetForNextQuery() {

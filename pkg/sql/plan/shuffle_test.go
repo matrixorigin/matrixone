@@ -524,6 +524,730 @@ func TestDetermineShuffleForJoinNDVGuard(t *testing.T) {
 	require.False(t, lowNDVJoin.Stats.HashmapStats.Shuffle)
 }
 
+func TestDetermineShuffleForGroupByCanUseDependentHighNDVColumn(t *testing.T) {
+	child := &plan.Node{
+		NodeType: plan.Node_TABLE_SCAN,
+		Stats: &plan.Stats{
+			Outcnt:       3_000_000,
+			HashmapStats: &plan.HashMapStats{},
+		},
+	}
+	groupBy := make([]*plan.Expr, 3)
+	for i, ndv := range []float64{1_000, 2_000, 100_000} {
+		groupBy[i] = &plan.Expr{
+			Typ:  plan.Type{Id: int32(types.T_int64)},
+			Ndv:  ndv,
+			Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 1, ColPos: int32(i)}},
+		}
+	}
+	agg := &plan.Node{
+		NodeType:       plan.Node_AGG,
+		Children:       []int32{0},
+		GroupBy:        groupBy,
+		GroupByHashKey: []int32{0, 1},
+		Stats: &plan.Stats{
+			Outcnt:      3_000_000,
+			Selectivity: 1,
+			HashmapStats: &plan.HashMapStats{
+				HashmapSize: 3_000_000,
+			},
+		},
+	}
+	builder := &QueryBuilder{qry: &plan.Query{Nodes: []*plan.Node{child, agg}}}
+
+	determineShuffleForGroupBy(agg, builder)
+
+	require.True(t, agg.Stats.HashmapStats.Shuffle)
+	require.Equal(t, int32(2), agg.Stats.HashmapStats.ShuffleColIdx,
+		"a logical group column determined by the physical key remains a safe distribution key")
+}
+
+func TestDetermineShuffleForJoinFindsEligibleConditionAcrossPredicateOrder(t *testing.T) {
+	joinTypes := []plan.Node_JoinType{
+		plan.Node_INNER,
+		plan.Node_ANTI,
+		plan.Node_SEMI,
+		plan.Node_LEFT,
+		plan.Node_RIGHT,
+		plan.Node_OUTER,
+		plan.Node_MARK,
+	}
+
+	for _, joinType := range joinTypes {
+		for _, afterRemap := range []bool{false, true} {
+			for _, highFirst := range []bool{false, true} {
+				name := fmt.Sprintf("%s/after-remap=%t/high-first=%t", joinType, afterRemap, highFirst)
+				t.Run(name, func(t *testing.T) {
+					leftRel, rightRel := int32(10), int32(20)
+					if afterRemap {
+						leftRel, rightRel = 0, 1
+					}
+					low := makeShuffleJoinEquality(t, types.T_int64, 64, leftRel, rightRel, 0)
+					high := makeShuffleJoinEquality(t, types.T_int64, 100_000, leftRel, rightRel, 1)
+					conditions := []*plan.Expr{low, high}
+					wantIdx := int32(1)
+					if highFirst {
+						conditions = []*plan.Expr{high, low}
+						wantIdx = 0
+					}
+
+					left := makeShuffleJoinTestChild(10, 10_000_000)
+					right := makeShuffleJoinTestChild(20, 3_000_000)
+					node := &plan.Node{
+						NodeType: plan.Node_JOIN,
+						JoinType: joinType,
+						Children: []int32{0, 1},
+						OnList:   conditions,
+						Stats: &plan.Stats{HashmapStats: &plan.HashMapStats{
+							HashmapSize: 3_000_000,
+						}},
+					}
+
+					determineShuffleForJoinWithColRefMode(
+						node,
+						&QueryBuilder{qry: &plan.Query{Nodes: []*plan.Node{left, right}}},
+						afterRemap,
+					)
+
+					require.True(t, node.Stats.HashmapStats.Shuffle)
+					require.Equal(t, wantIdx, node.Stats.HashmapStats.ShuffleColIdx)
+					require.Equal(t, float64(100_000), node.OnList[wantIdx].Ndv)
+				})
+			}
+		}
+	}
+}
+
+func TestDetermineShuffleForJoinCandidateFallbacks(t *testing.T) {
+	sameSide := makeShuffleJoinEquality(t, types.T_int64, 200_000, 10, 20, 0)
+	sameSide.GetF().Args[1].GetCol().RelPos = 10
+
+	tests := []struct {
+		name        string
+		candidates  []*plan.Expr
+		wantShuffle bool
+		wantNDV     float64
+	}{
+		{
+			name: "unsupported first does not hide supported key",
+			candidates: []*plan.Expr{
+				makeShuffleJoinEquality(t, types.T_float32, 200_000, 10, 20, 0),
+				makeShuffleJoinEquality(t, types.T_int64, 100_000, 10, 20, 1),
+			},
+			wantShuffle: true,
+			wantNDV:     100_000,
+		},
+		{
+			name: "same-side equality does not hide join key",
+			candidates: []*plan.Expr{
+				sameSide,
+				makeShuffleJoinEquality(t, types.T_int64, 100_000, 10, 20, 1),
+			},
+			wantShuffle: true,
+			wantNDV:     100_000,
+		},
+		{
+			name: "supported expression key remains eligible",
+			candidates: []*plan.Expr{
+				makeShuffleJoinEquality(t, types.T_int64, 64, 10, 20, 0),
+				makeShuffleJoinSerialEquality(t, 100_000, 10, 20, 1),
+			},
+			wantShuffle: true,
+			wantNDV:     100_000,
+		},
+		{
+			name: "unknown first preserves existing eligible choice",
+			candidates: []*plan.Expr{
+				makeShuffleJoinEquality(t, types.T_int64, -1, 10, 20, 0),
+				makeShuffleJoinEquality(t, types.T_int64, 100_000, 10, 20, 1),
+			},
+			wantShuffle: true,
+			wantNDV:     -1,
+		},
+		{
+			name: "unknown remains eligible when known candidates are low",
+			candidates: []*plan.Expr{
+				makeShuffleJoinEquality(t, types.T_int64, 64, 10, 20, 0),
+				makeShuffleJoinEquality(t, types.T_int64, -1, 10, 20, 1),
+			},
+			wantShuffle: true,
+			wantNDV:     -1,
+		},
+		{
+			name: "NDV threshold is inclusive",
+			candidates: []*plan.Expr{
+				makeShuffleJoinEquality(t, types.T_int64, ShuffleThreshHoldOfNDV, 10, 20, 0),
+			},
+			wantShuffle: true,
+			wantNDV:     ShuffleThreshHoldOfNDV,
+		},
+		{
+			name: "candidate immediately below NDV threshold does not hide eligible key",
+			candidates: []*plan.Expr{
+				makeShuffleJoinEquality(t, types.T_int64, ShuffleThreshHoldOfNDV-1, 10, 20, 0),
+				makeShuffleJoinEquality(t, types.T_int64, ShuffleThreshHoldOfNDV, 10, 20, 1),
+			},
+			wantShuffle: true,
+			wantNDV:     ShuffleThreshHoldOfNDV,
+		},
+		{
+			name: "all known candidates are low cardinality",
+			candidates: []*plan.Expr{
+				makeShuffleJoinEquality(t, types.T_int64, 64, 10, 20, 0),
+				makeShuffleJoinEquality(t, types.T_int64, 1_000, 10, 20, 1),
+			},
+			wantNDV: 64,
+		},
+		{
+			name: "all candidates use unsupported types",
+			candidates: []*plan.Expr{
+				makeShuffleJoinEquality(t, types.T_float32, 100_000, 10, 20, 0),
+				makeShuffleJoinEquality(t, types.T_float64, 200_000, 10, 20, 1),
+			},
+			wantNDV: -1,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			node := &plan.Node{
+				NodeType: plan.Node_JOIN,
+				JoinType: plan.Node_INNER,
+				Children: []int32{0, 1},
+				OnList:   tt.candidates,
+				Stats: &plan.Stats{HashmapStats: &plan.HashMapStats{
+					HashmapSize: 3_000_000,
+				}},
+			}
+			builder := &QueryBuilder{qry: &plan.Query{Nodes: []*plan.Node{
+				makeShuffleJoinTestChild(10, 10_000_000),
+				makeShuffleJoinTestChild(20, 3_000_000),
+			}}}
+
+			determineShuffleForJoin(node, builder)
+
+			require.Equal(t, tt.wantShuffle, node.Stats.HashmapStats.Shuffle)
+			if tt.wantNDV < 0 && !tt.wantShuffle {
+				require.Equal(t, int32(-1), node.Stats.HashmapStats.ShuffleColIdx)
+				return
+			}
+			require.NotEqual(t, int32(-1), node.Stats.HashmapStats.ShuffleColIdx)
+			require.Equal(t, tt.wantNDV, node.OnList[node.Stats.HashmapStats.ShuffleColIdx].Ndv)
+		})
+	}
+}
+
+func TestDetermineShuffleForJoinPreservesReusableFirstCondition(t *testing.T) {
+	left := makeShuffleJoinTestChild(10, 10_000_000)
+	left.NodeType = plan.Node_AGG
+	left.GroupBy = []*plan.Expr{
+		{
+			Typ:  plan.Type{Id: int32(types.T_int64), NotNullable: true},
+			Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 100, ColPos: 0}},
+		},
+		{},
+	}
+	left.Stats.HashmapStats = &plan.HashMapStats{
+		Shuffle:       true,
+		ShuffleColIdx: 0,
+		ShuffleType:   plan.ShuffleType_Range,
+		HashmapSize:   3_000_000,
+		ShuffleColMin: 0,
+		ShuffleColMax: 1_000_000,
+	}
+	right := makeShuffleJoinTestChild(20, 3_000_000)
+	node := &plan.Node{
+		NodeType: plan.Node_JOIN,
+		JoinType: plan.Node_INNER,
+		Children: []int32{0, 1},
+		OnList: []*plan.Expr{
+			makeShuffleJoinEquality(t, types.T_int64, 64, 10, 20, 0),
+			makeShuffleJoinEquality(t, types.T_int64, 100_000, 10, 20, 1),
+		},
+		Stats: &plan.Stats{HashmapStats: &plan.HashMapStats{
+			HashmapSize: 3_000_000,
+		}},
+	}
+	builder := &QueryBuilder{
+		qry:       &plan.Query{Nodes: []*plan.Node{left, right}},
+		tag2Table: map[int32]*plan.TableDef{100: {}},
+	}
+
+	determineShuffleForJoin(node, builder)
+
+	require.True(t, node.Stats.HashmapStats.Shuffle)
+	require.Equal(t, int32(0), node.Stats.HashmapStats.ShuffleColIdx)
+	require.Equal(t, plan.ShuffleMethod_Reuse, node.Stats.HashmapStats.ShuffleMethod)
+}
+
+func TestDetermineShuffleForJoinReuseMatchesChildPartition(t *testing.T) {
+	tests := []struct {
+		name      string
+		childIdx  int32
+		childType plan.ShuffleType
+		wantIdx   int32
+	}{
+		{
+			name:      "reuse preserves hash partitioning",
+			childIdx:  0,
+			childType: plan.ShuffleType_Hash,
+			wantIdx:   0,
+		},
+		{
+			name:      "only the actual child shuffle key is reusable",
+			childIdx:  1,
+			childType: plan.ShuffleType_Range,
+			wantIdx:   1,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			left := makeShuffleJoinTestChild(10, 10_000_000)
+			left.NodeType = plan.Node_AGG
+			left.GroupBy = []*plan.Expr{
+				{
+					Typ:  plan.Type{Id: int32(types.T_int64), NotNullable: true},
+					Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 100, ColPos: 0}},
+				},
+				{
+					Typ:  plan.Type{Id: int32(types.T_int64), NotNullable: true},
+					Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 100, ColPos: 1}},
+				},
+			}
+			left.Stats.HashmapStats = &plan.HashMapStats{
+				Shuffle:               true,
+				ShuffleColIdx:         tt.childIdx,
+				ShuffleType:           tt.childType,
+				ShuffleTypeForMultiCN: plan.ShuffleTypeForMultiCN_Hybrid,
+				HashmapSize:           9_000_000,
+				ShuffleColMin:         10,
+				ShuffleColMax:         1_000_000,
+				Ranges:                []float64{100, 1_000},
+				Nullcnt:               7,
+			}
+			node := &plan.Node{
+				NodeType: plan.Node_JOIN,
+				JoinType: plan.Node_INNER,
+				Children: []int32{0, 1},
+				OnList: []*plan.Expr{
+					makeShuffleJoinEquality(t, types.T_int64, 64, 10, 20, 0),
+					makeShuffleJoinEquality(t, types.T_int64, 100_000, 10, 20, 1),
+				},
+				Stats: &plan.Stats{HashmapStats: &plan.HashMapStats{
+					HashmapSize: 3_000_000,
+				}},
+			}
+			builder := &QueryBuilder{
+				qry: &plan.Query{Nodes: []*plan.Node{
+					left,
+					makeShuffleJoinTestChild(20, 3_000_000),
+				}},
+				tag2Table: map[int32]*plan.TableDef{100: {}},
+			}
+
+			determineShuffleForJoin(node, builder)
+
+			require.True(t, node.Stats.HashmapStats.Shuffle)
+			require.Equal(t, tt.wantIdx, node.Stats.HashmapStats.ShuffleColIdx)
+			require.Equal(t, plan.ShuffleMethod_Reuse, node.Stats.HashmapStats.ShuffleMethod)
+			require.Equal(t, tt.childType, node.Stats.HashmapStats.ShuffleType)
+			require.Equal(t, plan.ShuffleTypeForMultiCN_Hybrid, node.Stats.HashmapStats.ShuffleTypeForMultiCN)
+			require.Equal(t, float64(3_000_000), node.Stats.HashmapStats.HashmapSize,
+				"reuse must not replace the join build cardinality with the aggregate cardinality")
+		})
+	}
+}
+
+func TestDetermineShuffleForJoinReprovesReuseAcrossRealRemap(t *testing.T) {
+	builder, join, agg := makeShuffleJoinRealRemapFixture(t)
+
+	// The normal optimizer pass proves that the low-NDV first condition reuses
+	// the aggregate's existing partitioning.
+	determineShuffleForJoin(join, builder)
+	require.True(t, join.Stats.HashmapStats.Shuffle)
+	require.Equal(t, int32(0), join.Stats.HashmapStats.ShuffleColIdx)
+	require.Equal(t, plan.ShuffleMethod_Reuse, join.Stats.HashmapStats.ShuffleMethod)
+
+	// Exercise the same remapping routine used by createQuery. In particular,
+	// aggregate BindingTags disappear and join inputs become local RelPos 0/1.
+	_, err := builder.remapAllColRefs(
+		join.NodeId,
+		0,
+		make(map[[2]int32]int),
+		make(map[[2]int32]bool),
+		make(map[[2]int32]int),
+	)
+	require.NoError(t, err)
+	require.Empty(t, agg.BindingTags)
+	require.Len(t, agg.ProjectList, 2)
+	require.Equal(t, int32(-1), agg.ProjectList[0].GetCol().RelPos)
+	require.Equal(t, int32(0), agg.ProjectList[0].GetCol().ColPos)
+	require.Equal(t, int32(0), join.OnList[0].GetF().Args[0].GetCol().RelPos)
+	require.Equal(t, int32(1), join.OnList[0].GetF().Args[1].GetCol().RelPos)
+
+	// The late DML pass must re-prove reuse through the remapped aggregate
+	// output, not inherit the previous generation's method blindly.
+	determineShuffleForJoinWithColRefMode(join, builder, true)
+	require.True(t, join.Stats.HashmapStats.Shuffle)
+	require.Equal(t, int32(0), join.Stats.HashmapStats.ShuffleColIdx)
+	require.Equal(t, plan.ShuffleMethod_Reuse, join.Stats.HashmapStats.ShuffleMethod)
+	require.Equal(t, plan.ShuffleType_Range, join.Stats.HashmapStats.ShuffleType)
+
+	// Simulate a later planner generation changing the aggregate partition key
+	// to a third group key. The first join key is now low and non-reusable, so the
+	// second key wins. Its strategy must be clean Normal/Hash state; carrying the
+	// old key's Reuse would make compile skip the probe shuffle incorrectly.
+	agg.Stats.HashmapStats.ShuffleColIdx = 2
+	determineShuffleForJoinWithColRefMode(join, builder, true)
+	require.True(t, join.Stats.HashmapStats.Shuffle)
+	require.Equal(t, int32(1), join.Stats.HashmapStats.ShuffleColIdx)
+	require.Equal(t, plan.ShuffleMethod_Normal, join.Stats.HashmapStats.ShuffleMethod)
+	require.Equal(t, plan.ShuffleType_Hash, join.Stats.HashmapStats.ShuffleType)
+	require.Equal(t, plan.ShuffleTypeForMultiCN_Simple, join.Stats.HashmapStats.ShuffleTypeForMultiCN)
+	require.Zero(t, join.Stats.HashmapStats.ShuffleColMin)
+	require.Zero(t, join.Stats.HashmapStats.ShuffleColMax)
+	require.Zero(t, join.Stats.HashmapStats.Nullcnt)
+	require.Nil(t, join.Stats.HashmapStats.Ranges)
+}
+
+func TestDetermineShuffleForJoinNormalizesReversedConditionAfterRemap(t *testing.T) {
+	condition := makeShuffleJoinEquality(t, types.T_int64, 100_000, 1, 0, 0)
+	node := &plan.Node{
+		NodeType: plan.Node_JOIN,
+		JoinType: plan.Node_INNER,
+		Children: []int32{0, 1},
+		OnList:   []*plan.Expr{condition},
+		Stats: &plan.Stats{HashmapStats: &plan.HashMapStats{
+			HashmapSize: 3_000_000,
+		}},
+	}
+	builder := &QueryBuilder{qry: &plan.Query{Nodes: []*plan.Node{
+		makeShuffleJoinTestChild(10, 10_000_000),
+		makeShuffleJoinTestChild(20, 3_000_000),
+	}}}
+
+	determineShuffleForJoinWithColRefMode(node, builder, true)
+
+	require.True(t, node.Stats.HashmapStats.Shuffle)
+	require.Equal(t, int32(0), condition.GetF().Args[0].GetCol().RelPos)
+	require.Equal(t, int32(1), condition.GetF().Args[1].GetCol().RelPos)
+}
+
+func TestDetermineShuffleForJoinSkipsCandidateRejectedByFinalRecheck(t *testing.T) {
+	tests := []struct {
+		name            string
+		expressionFirst bool
+		hashmapSize     float64
+		wantIdx         int32
+		wantType        plan.ShuffleType
+		wantMethod      plan.ShuffleMethod
+	}{
+		{
+			name:        "reusable range key remains first choice",
+			hashmapSize: threshHoldForHashShuffle - 1,
+			wantIdx:     0,
+			wantType:    plan.ShuffleType_Range,
+			wantMethod:  plan.ShuffleMethod_Reuse,
+		},
+		{
+			name:            "rejected hash key does not hide reusable range key",
+			expressionFirst: true,
+			hashmapSize:     threshHoldForHashShuffle - 1,
+			wantIdx:         1,
+			wantType:        plan.ShuffleType_Range,
+			wantMethod:      plan.ShuffleMethod_Reuse,
+		},
+		{
+			name:            "hash threshold is inclusive",
+			expressionFirst: true,
+			hashmapSize:     threshHoldForHashShuffle,
+			wantIdx:         0,
+			wantType:        plan.ShuffleType_Hash,
+			wantMethod:      plan.ShuffleMethod_Normal,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			expressionKey := makeShuffleJoinSerialEquality(t, 100_000, 10, 20, 0)
+			reusableKey := makeShuffleJoinEquality(t, types.T_int64, 100_000, 10, 20, 1)
+			conditions := []*plan.Expr{reusableKey, expressionKey}
+			if tt.expressionFirst {
+				conditions = []*plan.Expr{expressionKey, reusableKey}
+			}
+
+			left := makeShuffleJoinTestChild(10, 10_000_000)
+			left.NodeType = plan.Node_AGG
+			left.GroupBy = []*plan.Expr{
+				{
+					Typ:  plan.Type{Id: int32(types.T_int64), NotNullable: true},
+					Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 100, ColPos: 0}},
+				},
+				{
+					Typ:  plan.Type{Id: int32(types.T_int64), NotNullable: true},
+					Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 100, ColPos: 1}},
+				},
+			}
+			left.Stats.HashmapStats = &plan.HashMapStats{
+				Shuffle:       true,
+				ShuffleColIdx: 1,
+				ShuffleType:   plan.ShuffleType_Range,
+				HashmapSize:   3_000_000,
+				ShuffleColMin: 0,
+				ShuffleColMax: 1_000_000,
+			}
+			right := makeShuffleJoinTestChild(20, 3_000_000)
+			node := &plan.Node{
+				NodeType: plan.Node_JOIN,
+				JoinType: plan.Node_INNER,
+				Children: []int32{0, 1},
+				OnList:   conditions,
+				Stats: &plan.Stats{HashmapStats: &plan.HashMapStats{
+					// The expression key is forced to hash shuffle and therefore
+					// rejected below the 2 MiB hash threshold. The reusable range
+					// key after it must still be considered.
+					HashmapSize: tt.hashmapSize,
+				}},
+			}
+			builder := &QueryBuilder{
+				qry:       &plan.Query{Nodes: []*plan.Node{left, right}},
+				tag2Table: map[int32]*plan.TableDef{100: {}},
+			}
+
+			determineShuffleForJoin(node, builder)
+
+			require.True(t, node.Stats.HashmapStats.Shuffle)
+			require.Equal(t, tt.wantIdx, node.Stats.HashmapStats.ShuffleColIdx)
+			require.Equal(t, tt.wantType, node.Stats.HashmapStats.ShuffleType)
+			require.Equal(t, tt.wantMethod, node.Stats.HashmapStats.ShuffleMethod)
+		})
+	}
+}
+
+func TestSelectShuffleJoinConditionAdversarialPermutations(t *testing.T) {
+	unsupported := makeShuffleJoinEquality(t, types.T_float64, 100_000, 10, 20, 0)
+	knownLow := makeShuffleJoinEquality(t, types.T_int64, ShuffleThreshHoldOfNDV-1, 10, 20, 1)
+	rejectedExpression := makeShuffleJoinSerialEquality(t, 100_000, 10, 20, 2)
+	reusable := makeShuffleJoinEquality(t, types.T_int64, 100_000, 10, 20, 3)
+
+	left := makeShuffleJoinTestChild(10, 10_000_000)
+	left.NodeType = plan.Node_AGG
+	left.GroupBy = []*plan.Expr{
+		{},
+		{},
+		{},
+		{
+			Typ:  plan.Type{Id: int32(types.T_int64), NotNullable: true},
+			Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 100, ColPos: 3}},
+		},
+	}
+	left.Stats.HashmapStats = &plan.HashMapStats{
+		Shuffle:       true,
+		ShuffleColIdx: 3,
+		ShuffleType:   plan.ShuffleType_Range,
+		HashmapSize:   3_000_000,
+		ShuffleColMin: 0,
+		ShuffleColMax: 1_000_000,
+	}
+	right := makeShuffleJoinTestChild(20, 3_000_000)
+	builder := &QueryBuilder{
+		qry:       &plan.Query{Nodes: []*plan.Node{left, right}},
+		tag2Table: map[int32]*plan.TableDef{100: {}},
+	}
+	leftTags := map[int32]bool{10: true}
+	rightTags := map[int32]bool{20: true}
+
+	permutationCount := 0
+	var checkPermutations func([]*plan.Expr, int)
+	checkPermutations = func(conditions []*plan.Expr, next int) {
+		if next == len(conditions) {
+			permutationCount++
+			node := &plan.Node{
+				NodeType: plan.Node_JOIN,
+				JoinType: plan.Node_INNER,
+				Children: []int32{0, 1},
+				Stats: &plan.Stats{HashmapStats: &plan.HashMapStats{
+					HashmapSize: threshHoldForHashShuffle - 1,
+				}},
+			}
+
+			idx, _ := selectShuffleJoinCondition(node, builder, conditions, leftTags, rightTags, false, nil)
+
+			require.NotEqual(t, -1, idx)
+			require.Same(t, reusable, conditions[idx])
+			return
+		}
+
+		for i := next; i < len(conditions); i++ {
+			permutation := append([]*plan.Expr(nil), conditions...)
+			permutation[next], permutation[i] = permutation[i], permutation[next]
+			checkPermutations(permutation, next+1)
+		}
+	}
+
+	checkPermutations([]*plan.Expr{unsupported, knownLow, rejectedExpression, reusable}, 0)
+	require.Equal(t, 24, permutationCount)
+}
+
+func makeShuffleJoinEquality(
+	t *testing.T,
+	keyType types.T,
+	ndv float64,
+	leftRel, rightRel, colPos int32,
+) *plan.Expr {
+	t.Helper()
+
+	typ := keyType.ToType()
+	equal, err := function.GetFunctionByName(context.Background(), "=", []types.Type{typ, typ})
+	require.NoError(t, err)
+
+	return &plan.Expr{
+		Typ: plan.Type{Id: int32(types.T_bool), NotNullable: true},
+		Ndv: ndv,
+		Expr: &plan.Expr_F{F: &plan.Function{
+			Func: &plan.ObjectRef{Obj: equal.GetEncodedOverloadID(), ObjName: "="},
+			Args: []*plan.Expr{
+				{
+					Typ: plan.Type{Id: int32(keyType), NotNullable: true},
+					Expr: &plan.Expr_Col{Col: &plan.ColRef{
+						RelPos: leftRel,
+						ColPos: colPos,
+					}},
+				},
+				{
+					Typ: plan.Type{Id: int32(keyType), NotNullable: true},
+					Expr: &plan.Expr_Col{Col: &plan.ColRef{
+						RelPos: rightRel,
+						ColPos: colPos,
+					}},
+				},
+			},
+		}},
+	}
+}
+
+func makeShuffleJoinSerialEquality(
+	t *testing.T,
+	ndv float64,
+	leftRel, rightRel, colPos int32,
+) *plan.Expr {
+	t.Helper()
+
+	condition := makeShuffleJoinEquality(t, types.T_varchar, ndv, leftRel, rightRel, colPos)
+	for i, arg := range condition.GetF().Args {
+		condition.GetF().Args[i] = &plan.Expr{
+			Typ: arg.Typ,
+			Expr: &plan.Expr_F{F: &plan.Function{
+				Func: &plan.ObjectRef{ObjName: "serial"},
+				Args: []*plan.Expr{arg},
+			}},
+		}
+	}
+	return condition
+}
+
+func makeShuffleJoinTestChild(bindingTag int32, outcnt float64) *plan.Node {
+	return &plan.Node{
+		NodeType:    plan.Node_TABLE_SCAN,
+		BindingTags: []int32{bindingTag},
+		ProjectList: []*plan.Expr{
+			makeMarkShuffleColumn(true, bindingTag, 0),
+			makeMarkShuffleColumn(true, bindingTag, 1),
+		},
+		Stats: &plan.Stats{Outcnt: outcnt, HashmapStats: &plan.HashMapStats{}},
+	}
+}
+
+func makeShuffleJoinRealRemapFixture(t *testing.T) (*QueryBuilder, *plan.Node, *plan.Node) {
+	t.Helper()
+
+	intType := plan.Type{Id: int32(types.T_int64), NotNullable: true}
+	makeTableDef := func(id uint64, prefix string) *plan.TableDef {
+		return &plan.TableDef{
+			TblId: id,
+			Cols: []*plan.ColDef{
+				{Name: prefix + "_a", Typ: intType},
+				{Name: prefix + "_b", Typ: intType},
+				{Name: prefix + "_c", Typ: intType},
+			},
+		}
+	}
+
+	leftTable := makeTableDef(1, "left")
+	leftScan := &plan.Node{
+		NodeId:      0,
+		NodeType:    plan.Node_TABLE_SCAN,
+		BindingTags: []int32{100},
+		TableDef:    leftTable,
+		Stats: &plan.Stats{
+			Outcnt:       10_000_000,
+			HashmapStats: &plan.HashMapStats{},
+		},
+	}
+	agg := &plan.Node{
+		NodeId:      1,
+		NodeType:    plan.Node_AGG,
+		Children:    []int32{0},
+		BindingTags: []int32{10, 11},
+		GroupBy: []*plan.Expr{
+			{Typ: intType, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 100, ColPos: 0}}},
+			{Typ: intType, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 100, ColPos: 1}}},
+			{Typ: intType, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 100, ColPos: 2}}},
+		},
+		Stats: &plan.Stats{
+			Outcnt: 10_000_000,
+			HashmapStats: &plan.HashMapStats{
+				Shuffle:               true,
+				ShuffleColIdx:         0,
+				ShuffleType:           plan.ShuffleType_Range,
+				ShuffleTypeForMultiCN: plan.ShuffleTypeForMultiCN_Hybrid,
+				HashmapSize:           9_000_000,
+				ShuffleColMin:         10,
+				ShuffleColMax:         1_000_000,
+				Ranges:                []float64{100, 1_000},
+				Nullcnt:               7,
+			},
+		},
+	}
+
+	rightTable := makeTableDef(2, "right")
+	rightScan := &plan.Node{
+		NodeId:      2,
+		NodeType:    plan.Node_TABLE_SCAN,
+		BindingTags: []int32{20},
+		TableDef:    rightTable,
+		Stats: &plan.Stats{
+			Outcnt:       3_000_000,
+			HashmapStats: &plan.HashMapStats{},
+		},
+	}
+	join := &plan.Node{
+		NodeId:   3,
+		NodeType: plan.Node_JOIN,
+		JoinType: plan.Node_INNER,
+		Children: []int32{1, 2},
+		OnList: []*plan.Expr{
+			makeShuffleJoinEquality(t, types.T_int64, 64, 10, 20, 0),
+			makeShuffleJoinEquality(t, types.T_int64, 100_000, 10, 20, 1),
+		},
+		Stats: &plan.Stats{HashmapStats: &plan.HashMapStats{
+			HashmapSize: 3_000_000,
+		}},
+	}
+	builder := &QueryBuilder{
+		qry: &plan.Query{
+			Nodes: []*plan.Node{leftScan, agg, rightScan, join},
+			Steps: []int32{join.NodeId},
+		},
+		tag2Table: map[int32]*plan.TableDef{
+			100: leftTable,
+			20:  rightTable,
+		},
+	}
+	return builder, join, agg
+}
+
 func TestDetermineShuffleForLatePlanStep(t *testing.T) {
 	// IVF maintenance also contains internal scans without binding tags. The
 	// post-createQuery shuffle pass must recognize its local RelPos 0/1 join

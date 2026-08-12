@@ -85,8 +85,24 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 	if err != nil {
 		return 0, err
 	}
-	if err = validateUpdateTargetSubqueries(builder.compCtx, stmt, dmlCtx.objRefs, dmlCtx.tableDefs); err != nil {
+	targetAliases := make([]string, len(dmlCtx.tableDefs))
+	for i, updateCol2Expr := range dmlCtx.updateCol2Expr {
+		if len(updateCol2Expr) > 0 {
+			targetAliases[i] = dmlCtx.aliases[i]
+		}
+	}
+	if err = validateUpdateTargetSubqueries(
+		builder.compCtx, stmt, dmlCtx.objRefs, dmlCtx.tableDefs, targetAliases,
+	); err != nil {
 		return 0, err
+	}
+	if stmt.HasReturning() {
+		if len(dmlCtx.tableDefs) != 1 {
+			return 0, returningNotSupported(builder, "multi-table UPDATE")
+		}
+		if err = validateReturningTarget(builder, dmlCtx.tableDefs[0], dmlCtx.objRefs[0]); err != nil {
+			return 0, err
+		}
 	}
 	onDuplicateAction := plan.Node_FAIL
 	if stmt.Ignore {
@@ -107,6 +123,9 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 		}
 
 		tableDef := dmlCtx.tableDefs[i]
+		if err := validateTableRegularIndexPrefixMetadata(tableDef); err != nil {
+			return 0, err
+		}
 		colOffsets[i] = int32(len(selectList))
 		useColInPartExpr := make(map[string]bool)
 
@@ -123,6 +142,11 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 		inlineIrregularIndexes[i], legacyIrregularRoute, err = classifyIrregularIndexesForUpdate(
 			builder.GetContext(), tableDef, dmlCtx.updateCol2Expr[i])
 		if err != nil {
+			if stmt.HasReturning() {
+				if feature := returningUpdatePlannerFeature(err); feature != "" {
+					return 0, returningNotSupported(builder, feature)
+				}
+			}
 			return 0, err
 		}
 		if legacyIrregularRoute {
@@ -131,38 +155,10 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 				moerr.NewUnsupportedDML(builder.GetContext(), "update vector/full-text index"),
 			)
 		}
-
 		validIndexes, _ := getValidIndexes(tableDef)
 		tableDef.Indexes = validIndexes
 
-		var pkAndUkCols = make(map[string]bool)
-
-		if tableDef.Name == catalog.MO_PUBS || tableDef.Name == catalog.MO_SUBS {
-			for _, colName := range tableDef.Pkey.Names {
-				pkAndUkCols[colName] = true
-			}
-		}
-
-		for _, idxDef := range tableDef.Indexes {
-			if !idxDef.Unique {
-				continue
-			}
-
-			if tableDef.Name == catalog.MO_PUBS || tableDef.Name == catalog.MO_SUBS {
-				for _, colName := range idxDef.Parts {
-					pkAndUkCols[catalog.ResolveAlias(colName)] = true
-				}
-			}
-		}
-
 		for colName, updateExpr := range dmlCtx.updateCol2Expr[i] {
-			if pkAndUkCols[colName] {
-				return 0, newLegacyUpdatePlannerRouteError(
-					updateRouteReasonPubSubKey,
-					moerr.NewUnsupportedDML(builder.compCtx.GetContext(), "update pk/uk on pub/sub table"),
-				)
-			}
-
 			// Check: cannot update a generated column (unless SET gen_col = DEFAULT)
 			isGenCol := false
 			for _, colDef := range tableDef.Cols {
@@ -189,13 +185,6 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 			for _, colDef := range tableDef.Cols {
 				if colDef.Name == colName {
 					if isEnumOrSetPlanType(&colDef.Typ) {
-						if colDef.Typ.AutoIncr {
-							return 0, newLegacyUpdatePlannerRouteError(
-								updateRouteReasonAutoIncrement,
-								moerr.NewUnsupportedDML(builder.compCtx.GetContext(), "auto_increment default value"),
-							)
-						}
-
 						updateExpr, err = wrapAstExprForMySQLSpecialType(builder.GetContext(), colDef.Typ, updateExpr)
 						if err != nil {
 							return 0, err
@@ -403,7 +392,12 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 	if err != nil {
 		return 0, err
 	}
-	if updateMayDependOnForeignKeys(dmlCtx, newColName2Idx) {
+	mayDependOnForeignKeys, err := builder.updateMayDependOnForeignKeys(
+		bindCtx, dmlCtx, newColName2Idx)
+	if err != nil {
+		return 0, err
+	}
+	if mayDependOnForeignKeys {
 		// The plan shape and planner route depend on foreign_key_checks.
 		// Preserve that dependency even while checks are disabled so prepared
 		// and generic plan caches rebuild after either session-state transition.
@@ -414,7 +408,7 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 			if updateAutoIncrCols[i] &&
 				len(affectedUpdateChildFks(tableDef, dmlCtx.aliases[i], newColName2Idx)) > 0 {
 				return 0, newLegacyUpdatePlannerRouteError(
-					updateRouteReasonAutoIncrement,
+					updateRouteReasonAutoIncrementFK,
 					moerr.NewUnsupportedDML(
 						builder.compCtx.GetContext(),
 						"auto_increment foreign key update",
@@ -422,19 +416,6 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 				)
 			}
 		}
-	}
-
-	lastNodeID, selectNodeTag, selectNode, err = builder.appendUpdateForeignKeyChecks(
-		bindCtx,
-		dmlCtx,
-		lastNodeID,
-		selectNodeTag,
-		oldColName2Idx,
-		newColName2Idx,
-		fkChecksEnabled,
-	)
-	if err != nil {
-		return 0, err
 	}
 
 	for i, tableDef := range dmlCtx.tableDefs {
@@ -451,6 +432,74 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 				},
 			}, bindCtx)
 		}
+	}
+
+	for i, tableDef := range dmlCtx.tableDefs {
+		if len(dmlCtx.updateCol2Expr[i]) == 0 || len(tableDef.Checks) == 0 {
+			continue
+		}
+		// resolveSingleTable accepts only TableName/AliasedTableExpr here. Joined
+		// UPDATE targets (including nullable outer-join sides) are routed to
+		// buildTableUpdate, whose per-target row-id filter runs before its CHECK.
+		// Therefore every row reaching this modern path is target-eligible and no
+		// extra row-id predicate is needed on this hot path.
+		alias := dmlCtx.aliases[i]
+		lastNodeID, err = appendCheckConstraintPlanWithColLookup(
+			builder,
+			bindCtx,
+			tableDef,
+			lastNodeID,
+			selectNodeTag,
+			func(colName string) (int32, bool) {
+				qualifiedName := alias + "." + colName
+				if colPos, updated := newColName2Idx[qualifiedName]; updated {
+					return colPos, true
+				}
+				colPos, found := oldColName2Idx[qualifiedName]
+				return colPos, found
+			},
+			stmt.Ignore,
+		)
+		if err != nil {
+			return 0, err
+		}
+	}
+
+	lastNodeID, selectNodeTag, selectNode, err = builder.appendUpdateForeignKeyChecks(
+		bindCtx,
+		dmlCtx,
+		lastNodeID,
+		selectNodeTag,
+		selectNode,
+		oldColName2Idx,
+		newColName2Idx,
+	)
+	if err != nil {
+		return 0, err
+	}
+
+	if stmt.HasReturning() {
+		tableDef := dmlCtx.tableDefs[0]
+		alias := dmlCtx.aliases[0]
+		colPos := make(map[string]int32, len(tableDef.Cols))
+		for _, col := range tableDef.Cols {
+			qualifiedName := alias + "." + col.Name
+			pos, ok := oldColName2Idx[qualifiedName]
+			if !ok {
+				return 0, moerr.NewInternalErrorf(
+					builder.GetContext(), "DML RETURNING cannot locate old image column %s", col.Name,
+				)
+			}
+			if newPos, ok := newColName2Idx[qualifiedName]; ok {
+				pos = newPos
+			}
+			colPos[strings.ToLower(col.Name)] = pos
+		}
+		lastNodeID = builder.materializeReturningSource(
+			bindCtx, lastNodeID, selectNodeTag, tableDef, dmlCtx.objRefs[0], tableDef.Name, alias, colPos,
+		)
+		selectNode = builder.qry.Nodes[lastNodeID]
+		selectNodeTag = selectNode.BindingTags[0]
 	}
 
 	idxScanNodes := make([][]*plan.Node, len(dmlCtx.tableDefs))
@@ -1402,6 +1451,19 @@ func (builder *QueryBuilder) appendRowNumberDedupNode(
 	selectNodeTag int32,
 	partitionColPositions []int32,
 ) (int32, *plan.Node, int32, error) {
+	return builder.appendRowNumberGuardNode(
+		bindCtx, lastNodeID, selectNode, selectNodeTag, partitionColPositions, "", "")
+}
+
+func (builder *QueryBuilder) appendRowNumberGuardNode(
+	bindCtx *BindContext,
+	lastNodeID int32,
+	selectNode *plan.Node,
+	selectNodeTag int32,
+	partitionColPositions []int32,
+	duplicateErrorMessage string,
+	duplicateErrorType string,
+) (int32, *plan.Node, int32, error) {
 	partitionByExprs := make([]*plan.Expr, 0, len(partitionColPositions))
 	childColExpr := func(pos int32) *plan.Expr {
 		e := selectNode.ProjectList[pos]
@@ -1514,10 +1576,25 @@ func (builder *QueryBuilder) appendRowNumberDedupNode(
 	if err != nil {
 		return 0, nil, 0, err
 	}
+	guardExpr := keepFirstRowExpr
+	if duplicateErrorType != "" {
+		guardExpr, err = BindFuncExprImplByPlanExpr(
+			builder.GetContext(),
+			"assert",
+			[]*plan.Expr{
+				keepFirstRowExpr,
+				makePlan2StringConstExprWithType(duplicateErrorMessage),
+				makePlan2StringConstExprWithType(duplicateErrorType),
+			},
+		)
+		if err != nil {
+			return 0, nil, 0, err
+		}
+	}
 	lastNodeID = builder.appendNode(&plan.Node{
 		NodeType:   plan.Node_FILTER,
 		Children:   []int32{lastNodeID},
-		FilterList: []*plan.Expr{keepFirstRowExpr},
+		FilterList: []*plan.Expr{guardExpr},
 	}, bindCtx)
 
 	projectList := make([]*plan.Expr, len(selectNode.ProjectList))

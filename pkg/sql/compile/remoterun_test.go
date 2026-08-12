@@ -28,6 +28,7 @@ import (
 	"github.com/golang/mock/gomock"
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/hashmap/keycodec"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	mock_morpc "github.com/matrixorigin/matrixone/pkg/common/morpc/mock_morpc"
@@ -77,11 +78,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/productl2"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/projection"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/rightdedupjoin"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/runtimefilter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/shuffle"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_function"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/top"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/value_scan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
+	planfunction "github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm"
@@ -142,8 +145,41 @@ func Test_EncodeProcessInfo(t *testing.T) {
 		SqlHelper:      nil,
 	}
 
-	_, err := encodeProcessInfo(proc, "")
+	remoteExecutionID := uuid.New()
+	data, err := encodeProcessInfo(proc, "", map[string]uint32{
+		"cn-a:6001": 2,
+		"cn-b:6001": 1,
+	}, remoteExecutionID)
 	require.Nil(t, err)
+	restored := new(pipeline.ProcessInfo)
+	require.NoError(t, restored.Unmarshal(data))
+	require.Equal(t, map[string]uint32{
+		"cn-a:6001": 2,
+		"cn-b:6001": 1,
+	}, restored.RemoteFragmentCounts)
+	restoredExecutionID, err := uuid.FromBytes(restored.RemoteExecutionId)
+	require.NoError(t, err)
+	require.Equal(t, remoteExecutionID, restoredExecutionID)
+}
+
+func TestGenerateProcessHelperRejectsIncompleteRemoteLifecycleMetadata(t *testing.T) {
+	tests := []pipeline.ProcessInfo{
+		{RemoteFragmentCounts: map[string]uint32{"cn-a:6001": 1}},
+		{RemoteExecutionId: func() []byte {
+			id := uuid.New()
+			return id[:]
+		}()},
+		{
+			RemoteFragmentCounts: map[string]uint32{"cn-a:6001": 1},
+			RemoteExecutionId:    []byte{1},
+		},
+	}
+	for i := range tests {
+		data, err := tests[i].Marshal()
+		require.NoError(t, err)
+		_, err = generateProcessHelper(context.Background(), data, nil)
+		require.Error(t, err)
+	}
 }
 
 func Test_refactorScope(t *testing.T) {
@@ -358,6 +394,22 @@ func TestRemoteRunOperatorCodecRoundTrip(t *testing.T) {
 		defer restored.Release()
 		require.IsType(t, &intersectall.IntersectAll{}, restored)
 		require.Equal(t, vm.IntersectAll, restored.OpType())
+	})
+
+	t.Run("GroupByHashKey", func(t *testing.T) {
+		original := group.NewArgument()
+		original.GroupByHashKey = []int32{0, 2}
+		restored := roundTrip(t, original)
+		defer restored.Release()
+		require.Equal(t, original.GroupByHashKey, restored.(*group.Group).GroupByHashKey)
+	})
+
+	t.Run("MergeGroupByHashKey", func(t *testing.T) {
+		original := group.NewArgumentMergeGroup()
+		original.GroupByHashKey = []int32{1}
+		restored := roundTrip(t, original)
+		defer restored.Release()
+		require.Equal(t, original.GroupByHashKey, restored.(*group.MergeGroup).GroupByHashKey)
 	})
 
 	t.Run("SharedTableLock", func(t *testing.T) {
@@ -589,29 +641,174 @@ func Test_DMLOperatorSerializationRoundtrip(t *testing.T) {
 	proc := &process.Process{}
 	proc.Base = &process.BaseProcess{}
 
-	t.Run("FuzzyFilter_BuildIdx", func(t *testing.T) {
+	t.Run("FuzzyFilter_RuntimeFilterPairContract", func(t *testing.T) {
+		probeType := &planpb.Type{
+			Id:    int32(types.T_decimal64),
+			Width: 18,
+			Scale: 2,
+		}
 		op := &fuzzyfilter.FuzzyFilter{
-			N:        42.5,
-			PkName:   "pk",
-			BuildIdx: 7,
+			N:                  42.5,
+			PkName:             "pk",
+			PkTyp:              *probeType,
+			BuildIdx:           1,
+			IfInsertFromUnique: true,
+			RuntimeFilterSpec: &planpb.RuntimeFilterSpec{
+				Tag:        40,
+				UpperLimit: 128,
+				BuildExpr: &planpb.Expr{
+					Typ: *probeType,
+					Expr: &planpb.Expr_Col{
+						Col: &planpb.ColRef{ColPos: 0},
+					},
+				},
+				KeyEncoding: planpb.RuntimeFilterKeyEncoding_RUNTIME_FILTER_KEY_RAW_V1,
+				ProbeType:   probeType,
+			},
 		}
 		_, pipeInstr, err := convertToPipelineInstruction(op, proc, ctx, 1)
 		require.NoError(t, err)
-		require.Equal(t, int32(7), pipeInstr.FuzzyFilter.BuildIdx)
+		require.Equal(t, int32(1), pipeInstr.FuzzyFilter.BuildIdx)
+		require.Equal(t, op.RuntimeFilterSpec, pipeInstr.FuzzyFilter.RuntimeFilterSpec)
 
-		restored, err := convertToVmOperator(pipeInstr, ctx, nil)
+		wireBytes, err := pipeInstr.Marshal()
+		require.NoError(t, err)
+		wireInstr := new(pipeline.Instruction)
+		require.NoError(t, wireInstr.Unmarshal(wireBytes))
+
+		restored, err := convertToVmOperator(wireInstr, ctx, nil)
 		require.NoError(t, err)
 		restoredOp := restored.(*fuzzyfilter.FuzzyFilter)
-		require.Equal(t, 7, restoredOp.BuildIdx)
+		require.Equal(t, 1, restoredOp.BuildIdx)
 		require.Equal(t, "pk", restoredOp.PkName)
+		require.True(t, restoredOp.IfInsertFromUnique)
+		require.Equal(t, op.RuntimeFilterSpec, restoredOp.RuntimeFilterSpec)
+		require.NotSame(t, op.RuntimeFilterSpec, restoredOp.RuntimeFilterSpec)
+		require.NotSame(t,
+			op.RuntimeFilterSpec.ProbeType,
+			restoredOp.RuntimeFilterSpec.ProbeType)
+		require.Equal(t, keycodec.ExactRuntimeFilterRaw,
+			runtimefilter.ExactKeyEncoding(
+				restoredOp.RuntimeFilterSpec,
+				types.New(types.T_decimal64, 18, 2),
+			))
+	})
+
+	t.Run("HashBuild_RuntimeFilterPairContract", func(t *testing.T) {
+		probeType := &planpb.Type{
+			Id:    int32(types.T_varchar),
+			Width: types.MaxVarcharLen,
+		}
+		componentType := planpb.Type{
+			Id:    int32(types.T_decimal64),
+			Width: 18,
+			Scale: 2,
+		}
+		buildExpr := &planpb.Expr{
+			Typ: *probeType,
+			Expr: &planpb.Expr_F{F: &planpb.Function{
+				Func: &planpb.ObjectRef{
+					ObjName: planfunction.SerialFullFunctionName,
+					Obj:     planfunction.SerialFullFunctionEncodeID,
+				},
+				Args: []*planpb.Expr{{
+					Typ: componentType,
+					Expr: &planpb.Expr_Col{
+						Col: &planpb.ColRef{ColPos: 0},
+					},
+				}},
+			}},
+		}
+		op := hashbuild.NewArgument()
+		defer op.Release()
+		op.RuntimeFilterSpec = &planpb.RuntimeFilterSpec{
+			Tag:                    41,
+			UpperLimit:             128,
+			MatchPrefix:            true,
+			BuildExpr:              buildExpr,
+			KeyEncoding:            planpb.RuntimeFilterKeyEncoding_RUNTIME_FILTER_KEY_SERIAL_FULL_V1,
+			ProbeType:              probeType,
+			KeyComponentProbeTypes: []planpb.Type{componentType},
+		}
+
+		_, pipeInstr, err := convertToPipelineInstruction(op, proc, ctx, 1)
+		require.NoError(t, err)
+		require.Equal(t, op.RuntimeFilterSpec, pipeInstr.HashBuild.RuntimeFilterSpec)
+
+		wireBytes, err := pipeInstr.Marshal()
+		require.NoError(t, err)
+		wireInstr := new(pipeline.Instruction)
+		require.NoError(t, wireInstr.Unmarshal(wireBytes))
+		require.NotSame(t, op.RuntimeFilterSpec, wireInstr.HashBuild.RuntimeFilterSpec)
+		require.NotSame(t, op.RuntimeFilterSpec.ProbeType,
+			wireInstr.HashBuild.RuntimeFilterSpec.ProbeType)
+
+		restored, err := convertToVmOperator(wireInstr, ctx, nil)
+		require.NoError(t, err)
+		restoredOp := restored.(*hashbuild.HashBuild)
+		defer restoredOp.Release()
+		require.Equal(t, op.RuntimeFilterSpec, restoredOp.RuntimeFilterSpec)
+		require.Equal(t,
+			planpb.RuntimeFilterKeyEncoding_RUNTIME_FILTER_KEY_SERIAL_FULL_V1,
+			restoredOp.RuntimeFilterSpec.GetKeyEncoding())
+		require.Equal(t, probeType, restoredOp.RuntimeFilterSpec.GetProbeType())
+		require.Nil(t, restoredOp.RuntimeFilterSpec.GetExpr())
+		require.Equal(t, *probeType,
+			restoredOp.RuntimeFilterSpec.GetBuildExpr().Typ)
+		require.Equal(t, []planpb.Type{componentType},
+			restoredOp.RuntimeFilterSpec.GetKeyComponentProbeTypes())
+		require.True(t, restoredOp.RuntimeFilterSpec.GetMatchPrefix())
+	})
+
+	t.Run("HashBuild_LegacyRuntimeFilterHasNoImplicitContract", func(t *testing.T) {
+		op := hashbuild.NewArgument()
+		defer op.Release()
+		op.RuntimeFilterSpec = &planpb.RuntimeFilterSpec{
+			Tag:        42,
+			UpperLimit: 128,
+			Expr: &planpb.Expr{Typ: planpb.Type{
+				Id: int32(types.T_decimal64), Width: 18, Scale: 3,
+			}},
+		}
+
+		_, pipeInstr, err := convertToPipelineInstruction(op, proc, ctx, 1)
+		require.NoError(t, err)
+		wireBytes, err := pipeInstr.Marshal()
+		require.NoError(t, err)
+		wireInstr := new(pipeline.Instruction)
+		require.NoError(t, wireInstr.Unmarshal(wireBytes))
+
+		spec := wireInstr.HashBuild.GetRuntimeFilterSpec()
+		require.NotNil(t, spec)
+		require.Nil(t, spec.ProbeType)
+		require.Equal(t,
+			planpb.RuntimeFilterKeyEncoding_RUNTIME_FILTER_KEY_UNSPECIFIED,
+			spec.KeyEncoding)
 	})
 
 	t.Run("TableFunction_IndexReaderParam", func(t *testing.T) {
 		limit := plan.MakePlan2Int64ConstExprWithType(17)
 		op := &table_function.TableFunction{
 			FuncName: "ivf_search",
+			FulltextSourceRef: &planpb.ObjectRef{
+				SchemaName: "publisher", ObjName: "source", SubscriptionName: "subscriber_alias",
+				PubInfo: &planpb.PubInfo{TenantId: 42},
+			},
+			FulltextIndexRef: &planpb.ObjectRef{
+				SchemaName: "publisher", ObjName: "index", SubscriptionName: "subscriber_alias",
+				PubInfo: &planpb.PubInfo{TenantId: 42},
+			},
 			RuntimeFilterSpecs: []*planpb.RuntimeFilterSpec{
-				{Tag: 42, MatchPrefix: true, UpperLimit: 128, NotOnPk: true},
+				{
+					Tag:         42,
+					MatchPrefix: true,
+					UpperLimit:  128,
+					NotOnPk:     true,
+					KeyEncoding: planpb.RuntimeFilterKeyEncoding_RUNTIME_FILTER_KEY_FLOAT_ZERO_CLOSED_V1,
+					ProbeType: &planpb.Type{
+						Id: int32(types.T_float64),
+					},
+				},
 			},
 			IndexReaderParam: &planpb.IndexReaderParam{
 				PartitionCnCnt: 2,
@@ -624,11 +821,17 @@ func Test_DMLOperatorSerializationRoundtrip(t *testing.T) {
 		require.Equal(t, int32(2), pipeInstr.TableFunction.GetIndexReaderParam().GetPartitionCnCnt())
 		require.Equal(t, int32(1), pipeInstr.TableFunction.GetIndexReaderParam().GetPartitionCnIdx())
 		require.Equal(t, int64(17), pipeInstr.TableFunction.GetIndexReaderParam().GetLimit().GetLit().GetI64Val())
+		require.Equal(t, op.FulltextSourceRef, pipeInstr.TableFunction.FulltextSourceRef)
+		require.Equal(t, op.FulltextIndexRef, pipeInstr.TableFunction.FulltextIndexRef)
 		require.Len(t, pipeInstr.TableFunction.GetRuntimeFilterProbeList(), 1)
 		require.Equal(t, int32(42), pipeInstr.TableFunction.GetRuntimeFilterProbeList()[0].GetTag())
 		require.True(t, pipeInstr.TableFunction.GetRuntimeFilterProbeList()[0].GetMatchPrefix())
 		require.Equal(t, int32(128), pipeInstr.TableFunction.GetRuntimeFilterProbeList()[0].GetUpperLimit())
 		require.True(t, pipeInstr.TableFunction.GetRuntimeFilterProbeList()[0].GetNotOnPk())
+		require.Equal(t, planpb.RuntimeFilterKeyEncoding_RUNTIME_FILTER_KEY_FLOAT_ZERO_CLOSED_V1,
+			pipeInstr.TableFunction.GetRuntimeFilterProbeList()[0].GetKeyEncoding())
+		require.Equal(t, int32(types.T_float64),
+			pipeInstr.TableFunction.GetRuntimeFilterProbeList()[0].GetProbeType().GetId())
 
 		wireBytes, err := pipeInstr.Marshal()
 		require.NoError(t, err)
@@ -636,6 +839,8 @@ func Test_DMLOperatorSerializationRoundtrip(t *testing.T) {
 		require.NoError(t, wireInstr.Unmarshal(wireBytes))
 		require.NotSame(t, pipeInstr.TableFunction.IndexReaderParam, wireInstr.TableFunction.IndexReaderParam)
 		require.NotSame(t, pipeInstr.TableFunction.RuntimeFilterProbeList[0], wireInstr.TableFunction.RuntimeFilterProbeList[0])
+		require.NotSame(t, pipeInstr.TableFunction.FulltextSourceRef, wireInstr.TableFunction.FulltextSourceRef)
+		require.NotSame(t, pipeInstr.TableFunction.FulltextIndexRef, wireInstr.TableFunction.FulltextIndexRef)
 
 		restored, err := convertToVmOperator(wireInstr, ctx, nil)
 		require.NoError(t, err)
@@ -643,11 +848,46 @@ func Test_DMLOperatorSerializationRoundtrip(t *testing.T) {
 		require.Equal(t, int32(2), restoredOp.IndexReaderParam.GetPartitionCnCnt())
 		require.Equal(t, int32(1), restoredOp.IndexReaderParam.GetPartitionCnIdx())
 		require.Equal(t, int64(17), restoredOp.IndexReaderParam.GetLimit().GetLit().GetI64Val())
+		require.Equal(t, op.FulltextSourceRef, restoredOp.FulltextSourceRef)
+		require.Equal(t, op.FulltextIndexRef, restoredOp.FulltextIndexRef)
 		require.Len(t, restoredOp.RuntimeFilterSpecs, 1)
 		require.Equal(t, int32(42), restoredOp.RuntimeFilterSpecs[0].GetTag())
 		require.True(t, restoredOp.RuntimeFilterSpecs[0].GetMatchPrefix())
 		require.Equal(t, int32(128), restoredOp.RuntimeFilterSpecs[0].GetUpperLimit())
 		require.True(t, restoredOp.RuntimeFilterSpecs[0].GetNotOnPk())
+		require.Equal(t, planpb.RuntimeFilterKeyEncoding_RUNTIME_FILTER_KEY_FLOAT_ZERO_CLOSED_V1,
+			restoredOp.RuntimeFilterSpecs[0].GetKeyEncoding())
+		require.Equal(t, int32(types.T_float64),
+			restoredOp.RuntimeFilterSpecs[0].GetProbeType().GetId())
+	})
+
+	t.Run("Apply_FulltextReferences", func(t *testing.T) {
+		sourceRef := &planpb.ObjectRef{
+			SchemaName: "publisher", ObjName: "source", SubscriptionName: "subscriber_alias",
+			PubInfo: &planpb.PubInfo{TenantId: 42},
+		}
+		indexRef := &planpb.ObjectRef{
+			SchemaName: "publisher", ObjName: "index", SubscriptionName: "subscriber_alias",
+			PubInfo: &planpb.PubInfo{TenantId: 42},
+		}
+		op := &apply.Apply{TableFunction: &table_function.TableFunction{
+			FuncName:          "fulltext_index_scan",
+			FulltextSourceRef: sourceRef,
+			FulltextIndexRef:  indexRef,
+		}}
+
+		_, pipeInstr, err := convertToPipelineInstruction(op, proc, ctx, 1)
+		require.NoError(t, err)
+		wireBytes, err := pipeInstr.Marshal()
+		require.NoError(t, err)
+		wireInstr := new(pipeline.Instruction)
+		require.NoError(t, wireInstr.Unmarshal(wireBytes))
+
+		restored, err := convertToVmOperator(wireInstr, ctx, nil)
+		require.NoError(t, err)
+		restoredOp := restored.(*apply.Apply)
+		require.Equal(t, sourceRef, restoredOp.TableFunction.FulltextSourceRef)
+		require.Equal(t, indexRef, restoredOp.TableFunction.FulltextIndexRef)
 	})
 
 	t.Run("TableFunction_Limit", func(t *testing.T) {
@@ -716,8 +956,9 @@ func Test_DMLOperatorSerializationRoundtrip(t *testing.T) {
 		op := &multi_update.MultiUpdate{
 			MultiUpdateCtx: []*multi_update.MultiUpdateCtx{
 				{
-					ObjRef:   &plan.ObjectRef{ObjName: "t1"},
-					TableDef: &plan.TableDef{Name: "t1"},
+					ObjRef:             &plan.ObjectRef{ObjName: "t1"},
+					TableDef:           &plan.TableDef{Name: "t1"},
+					IgnoreAffectedRows: true,
 				},
 			},
 			Action:                multi_update.UpdateWriteTable,
@@ -727,12 +968,16 @@ func Test_DMLOperatorSerializationRoundtrip(t *testing.T) {
 		require.NoError(t, err)
 		require.True(t, pipeInstr.MultiUpdate.UpdateCtxList[0].CountDeleteAffectRows,
 			"serialized UpdateCtx must carry CountDeleteAffectRows")
+		require.True(t, pipeInstr.MultiUpdate.UpdateCtxList[0].IgnoreAffectedRows,
+			"serialized UpdateCtx must carry IgnoreAffectedRows")
 
 		restored, err := convertToVmOperator(pipeInstr, ctx, nil)
 		require.NoError(t, err)
 		restoredOp := restored.(*multi_update.MultiUpdate)
 		require.True(t, restoredOp.CountDeleteAffectRows,
 			"CountDeleteAffectRows must survive the remote pipeline round-trip")
+		require.True(t, restoredOp.MultiUpdateCtx[0].IgnoreAffectedRows,
+			"IgnoreAffectedRows must survive the remote pipeline round-trip")
 	})
 
 	t.Run("MultiUpdate_RejectZeroTemporal", func(t *testing.T) {
@@ -1027,6 +1272,27 @@ func Test_decodeBatch(t *testing.T) {
 	require.Nil(t, err)
 }
 
+func Test_decodeBatchPreservesPrepareParamKindTransportTrailer(t *testing.T) {
+	mp := mpool.MustNewZero()
+	bat := batch.NewWithSize(1)
+	bat.Vecs[0] = vector.NewVec(types.T_text.ToType())
+	require.NoError(t, vector.AppendBytes(bat.Vecs[0], []byte("5"), false, mp))
+	require.NoError(t, vector.AppendBytes(bat.Vecs[0], []byte("5"), false, mp))
+	bat.Vecs[0].SetPrepareParamKinds([]vector.PrepareParamKind{
+		vector.PrepareParamFloat,
+		vector.PrepareParamNone,
+	})
+	bat.SetRowCount(2)
+	data, err := bat.MarshalBinaryWithPrepareParamKinds(&bytes.Buffer{}, true)
+	require.NoError(t, err)
+	decoded, err := decodeBatch(mp, data)
+	require.NoError(t, err)
+	require.Equal(t, vector.PrepareParamFloat, decoded.Vecs[0].GetPrepareParamKindAt(0))
+	require.Equal(t, vector.PrepareParamNone, decoded.Vecs[0].GetPrepareParamKindAt(1))
+	bat.Clean(mp)
+	decoded.Clean(mp)
+}
+
 func Test_GetProcByUuid(t *testing.T) {
 	_ = colexec.NewServer("")
 
@@ -1259,13 +1525,14 @@ func TestHandlePrepareDoneNotifyObservesMessageCancellationAfterAttach(t *testin
 	session := mock_morpc.NewMockClientSession(ctrl)
 	session.EXPECT().SessionCtx().Return(context.Background()).AnyTimes()
 	receiver := &messageReceiverOnServer{
-		messageCtx:    messageCtx,
-		connectionCtx: context.Background(),
-		messageId:     7,
-		messageTyp:    pipeline.Method_PrepareDoneNotifyMessage,
-		messageUuid:   uid,
-		clientSession: session,
-		colexecServer: server,
+		messageCtx:      messageCtx,
+		connectionCtx:   context.Background(),
+		messageId:       7,
+		messageTyp:      pipeline.Method_PrepareDoneNotifyMessage,
+		messageUuid:     uid,
+		clientSession:   session,
+		colexecServer:   server,
+		streamLifecycle: &pipelineStreamLifecycle{batchFlow: newPipelineBatchFlow(2, 1024)},
 	}
 
 	done := make(chan error, 1)
@@ -1278,6 +1545,14 @@ func TestHandlePrepareDoneNotifyObservesMessageCancellationAfterAttach(t *testin
 	case attached = <-notifyCh:
 		require.NotNil(t, attached)
 		require.Equal(t, uid, attached.Uid)
+		require.Equal(t, uint32(2), attached.BatchCredits)
+		require.Equal(t, uint64(1024), attached.ByteCredits)
+		require.NotNil(t, attached.ReserveBatch)
+		require.NotNil(t, attached.RollbackBatch)
+		seq, err := attached.ReserveBatch(context.Background(), 10)
+		require.NoError(t, err)
+		require.Equal(t, uint64(1), seq)
+		attached.RollbackBatch(seq)
 	case <-time.After(time.Second):
 		t.Fatal("prepare-done notify did not attach to the published receiver")
 	}
@@ -2605,7 +2880,7 @@ func Test_prepareRemoteRunSendingData(t *testing.T) {
 		Proc:   proc,
 		RootOp: connector.NewArgument(),
 	}
-	_, withoutOut, _, _, err := prepareRemoteRunSendingData("", s1, proc)
+	_, withoutOut, _, _, err := prepareRemoteRunSendingData("", s1, proc, nil, uuid.Nil)
 	require.NoError(t, err)
 	require.False(t, withoutOut)
 	require.NotNil(t, s1.RootOp)
@@ -2619,7 +2894,7 @@ func Test_prepareRemoteRunSendingData(t *testing.T) {
 	}
 	s2.RootOp.AppendChild(value_scan.NewArgument())
 	originChild := s2.RootOp.GetOperatorBase().GetChildren(0)
-	_, withoutOut, _, _, err = prepareRemoteRunSendingData("", s2, proc)
+	_, withoutOut, _, _, err = prepareRemoteRunSendingData("", s2, proc, nil, uuid.Nil)
 	require.NoError(t, err)
 	require.False(t, withoutOut)
 	require.Equal(t, 1, s2.RootOp.GetOperatorBase().NumChildren())
@@ -2632,7 +2907,7 @@ func Test_prepareRemoteRunSendingData(t *testing.T) {
 		RootOp: value_scan.NewArgument(),
 	}
 	s3.RootOp.AppendChild(value_scan.NewArgument())
-	_, withoutOut, _, _, err = prepareRemoteRunSendingData("", s3, proc)
+	_, withoutOut, _, _, err = prepareRemoteRunSendingData("", s3, proc, nil, uuid.Nil)
 	require.NoError(t, err)
 	require.True(t, withoutOut)
 }
@@ -2660,7 +2935,7 @@ func TestPrepareRemoteRunSendingDataKeepsConnectorChildTableFunctionParams(t *te
 		RootOp: conn,
 	}
 
-	scopeData, withoutOut, _, _, err := prepareRemoteRunSendingData("", s, proc)
+	scopeData, withoutOut, _, _, err := prepareRemoteRunSendingData("", s, proc, nil, uuid.Nil)
 	require.NoError(t, err)
 	require.False(t, withoutOut)
 
@@ -2942,16 +3217,20 @@ func TestReceiveMsgAndForward_ReturnsOnBlockedReceiverCancel(t *testing.T) {
 	}
 }
 
-func TestReceiveMsgAndForward_ReturnsOnReceiverTerminal(t *testing.T) {
+func TestReceiveMsgAndForward_AcknowledgesBatchOnReceiverTerminal(t *testing.T) {
 	forwardReg := process.NewPipelineEdge(1, 0)
 	require.True(t, forwardReg.Abort(moerr.NewInternalErrorNoCtx("receiver terminal")))
 
+	stream := &fakeStreamSender{}
 	sender := &messageSenderOnClient{
-		ctx:       context.Background(),
-		mp:        mpool.MustNewZero(),
-		receiveCh: make(chan morpc.Message, 1),
+		ctx:          context.Background(),
+		mp:           mpool.MustNewZero(),
+		streamSender: stream,
+		receiveCh:    make(chan morpc.Message, 1),
 	}
-	sender.receiveCh <- makeRemoteBatchMessage(t, batch.NewWithSize(0))
+	message := makeRemoteBatchMessage(t, batch.NewWithSize(0)).(*pipeline.Message)
+	message.BatchSequence = 5
+	sender.receiveCh <- message
 
 	done := make(chan error, 1)
 	go func() {
@@ -2961,12 +3240,17 @@ func TestReceiveMsgAndForward_ReturnsOnReceiverTerminal(t *testing.T) {
 	select {
 	case err := <-done:
 		require.NoError(t, err)
+		require.Zero(t, sender.pendingBatchAck)
+		require.Len(t, stream.sent, 1)
+		ack := stream.sent[0].(*pipeline.Message)
+		require.Equal(t, pipeline.Method_PipelineBatchAck, ack.GetCmd())
+		require.Equal(t, uint64(5), ack.GetBatchAckSequence())
 	case <-time.After(time.Second):
 		require.Fail(t, "receiveMsgAndForward did not unblock after receiver terminal")
 	}
 }
 
-func TestReceiveMessageFromCnServerIfConnector_ReturnsOnReceiverTerminal(t *testing.T) {
+func TestReceiveMessageFromCnServerIfConnector_AcknowledgesBatchOnReceiverTerminal(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	proc.BuildPipelineContext(context.Background())
 
@@ -2977,12 +3261,16 @@ func TestReceiveMessageFromCnServerIfConnector_ReturnsOnReceiverTerminal(t *test
 		RootOp: connector.NewArgument().WithReg(reg),
 	}
 
+	stream := &fakeStreamSender{}
 	sender := &messageSenderOnClient{
-		ctx:       context.Background(),
-		mp:        proc.Mp(),
-		receiveCh: make(chan morpc.Message, 1),
+		ctx:          context.Background(),
+		mp:           proc.Mp(),
+		streamSender: stream,
+		receiveCh:    make(chan morpc.Message, 1),
 	}
-	sender.receiveCh <- makeRemoteBatchMessage(t, batch.NewWithSize(0))
+	message := makeRemoteBatchMessage(t, batch.NewWithSize(0)).(*pipeline.Message)
+	message.BatchSequence = 7
+	sender.receiveCh <- message
 
 	done := make(chan error, 1)
 	go func() {
@@ -2992,9 +3280,45 @@ func TestReceiveMessageFromCnServerIfConnector_ReturnsOnReceiverTerminal(t *test
 	select {
 	case err := <-done:
 		require.NoError(t, err)
+		require.Zero(t, sender.pendingBatchAck)
+		require.Len(t, stream.sent, 1)
+		ack := stream.sent[0].(*pipeline.Message)
+		require.Equal(t, pipeline.Method_PipelineBatchAck, ack.GetCmd())
+		require.Equal(t, uint64(7), ack.GetBatchAckSequence())
 	case <-time.After(time.Second):
 		require.Fail(t, "receiveMessageFromCnServerIfConnector did not unblock after receiver terminal")
 	}
+}
+
+func TestReceiveMessageFromCnServerIfDispatch_AcknowledgesBatchOnReceiverTerminal(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	reg := process.NewPipelineEdge(1, 0)
+	require.True(t, reg.Abort(moerr.NewInternalErrorNoCtx("receiver terminal")))
+
+	d := dispatch.NewArgument()
+	d.LocalRegs = []*process.WaitRegister{reg}
+	d.FuncId = dispatch.SendToAllLocalFunc
+	s := &Scope{Proc: proc, RootOp: d}
+
+	stream := &fakeStreamSender{}
+	sender := &messageSenderOnClient{
+		ctx:          context.Background(),
+		mp:           proc.Mp(),
+		streamSender: stream,
+		receiveCh:    make(chan morpc.Message, 1),
+	}
+	dataBat := batch.NewWithSize(0)
+	dataBat.SetRowCount(1)
+	message := makeRemoteBatchMessage(t, dataBat).(*pipeline.Message)
+	message.BatchSequence = 11
+	sender.receiveCh <- message
+
+	require.NoError(t, receiveMessageFromCnServerIfDispatch(s, sender))
+	require.Zero(t, sender.pendingBatchAck)
+	require.Len(t, stream.sent, 1)
+	ack := stream.sent[0].(*pipeline.Message)
+	require.Equal(t, pipeline.Method_PipelineBatchAck, ack.GetCmd())
+	require.Equal(t, uint64(11), ack.GetBatchAckSequence())
 }
 
 func TestReceiveMsgAndForward_NilReceiverReturnsError(t *testing.T) {
@@ -3348,52 +3672,72 @@ func newDispatchSrcScopeForTest(proc *process.Process, addr string, localBuckets
 //	send unit, so checkPipelineStandaloneExecutableAtRemote returns true and the whole
 //	group is really executed at the remote CN.
 func TestGroupShuffleBucketsByCNIfNeeded(t *testing.T) {
-	c := NewMockCompile(t)
-	c.cnList = engine.Nodes{
-		engine.Node{Addr: "cn1:6001", Mcpu: 2},
-		engine.Node{Addr: "cn2:6001", Mcpu: 2},
-	}
-	c.addr = "cn1:6001"
-	c.anal = &AnalyzeModule{qry: &plan.Query{}}
-	c.proc.Base.TxnOperator = fakeTxnOperator{}
-	proc := c.proc
+	for _, test := range []struct {
+		name      string
+		localOnly bool
+	}{
+		{name: "mixed local and remote shuffle targets"},
+		{name: "local-only shuffle targets", localOnly: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			c := NewMockCompile(t)
+			c.cnList = engine.Nodes{
+				engine.Node{Addr: "cn1:6001", Mcpu: 2},
+				engine.Node{Addr: "cn2:6001", Mcpu: 2},
+			}
+			c.addr = "cn1:6001"
+			c.anal = &AnalyzeModule{qry: &plan.Query{}}
+			c.proc.Base.TxnOperator = fakeTxnOperator{}
+			proc := c.proc
 
-	// dop=2, 2 CN -> bucketNum=4. buckets[0,1] on cn1, buckets[2,3] on cn2.
-	addrs := []string{"cn1:6001", "cn1:6001", "cn2:6001", "cn2:6001"}
-	buckets := make([]*Scope, 4)
-	for i := range buckets {
-		buckets[i] = &Scope{
-			Magic:    Remote,
-			NodeInfo: engine.Node{Addr: addrs[i], Mcpu: 1},
-			Proc:     proc.NewContextChildProc(1),
-		}
-		buckets[i].setRootOperator(merge.NewArgument())
-	}
+			// dop=2, 2 CN -> bucketNum=4. buckets[0,1] on cn1, buckets[2,3] on cn2.
+			addrs := []string{"cn1:6001", "cn1:6001", "cn2:6001", "cn2:6001"}
+			buckets := make([]*Scope, 4)
+			for i := range buckets {
+				buckets[i] = &Scope{
+					Magic:    Remote,
+					NodeInfo: engine.Node{Addr: addrs[i], Mcpu: 1},
+					Proc:     proc.NewContextChildProc(1),
+				}
+				buckets[i].setRootOperator(merge.NewArgument())
+			}
 
-	// each CN's dispatch source is attached to that CN's first bucket (like compile.go:4500).
-	srcCN1 := newDispatchSrcScopeForTest(proc, "cn1:6001",
-		[]*Scope{buckets[0], buckets[1]}, []*Scope{buckets[2], buckets[3]})
-	buckets[0].PreScopes = append(buckets[0].PreScopes, srcCN1)
-	srcCN2 := newDispatchSrcScopeForTest(proc, "cn2:6001",
-		[]*Scope{buckets[2], buckets[3]}, []*Scope{buckets[0], buckets[1]})
-	buckets[2].PreScopes = append(buckets[2].PreScopes, srcCN2)
+			// each CN's dispatch source is attached to that CN's first bucket (like compile.go:4500).
+			srcCN1 := newDispatchSrcScopeForTest(proc, "cn1:6001",
+				[]*Scope{buckets[0], buckets[1]}, []*Scope{buckets[2], buckets[3]})
+			buckets[0].PreScopes = append(buckets[0].PreScopes, srcCN1)
+			srcCN2 := newDispatchSrcScopeForTest(proc, "cn2:6001",
+				[]*Scope{buckets[2], buckets[3]}, []*Scope{buckets[0], buckets[1]})
+			buckets[2].PreScopes = append(buckets[2].PreScopes, srcCN2)
 
-	// before regrouping: the dispatch-carrying buckets are wrongly judged not standalone.
-	require.False(t, checkPipelineStandaloneExecutableAtRemote(buckets[0]))
-	require.False(t, checkPipelineStandaloneExecutableAtRemote(buckets[2]))
+			if test.localOnly {
+				// A remote CN can own a shuffle source whose targets are all local
+				// receiver buckets on that CN. RemoteRegs is empty, but the source
+				// still cannot be sent as a separate tree because its LocalRegs
+				// belong to sibling bucket trees.
+				for _, source := range []*Scope{srcCN1, srcCN2} {
+					source.RootOp.(*dispatch.Dispatch).RemoteRegs = nil
+				}
+			}
 
-	// after regrouping: one per-CN container each, all standalone-executable at remote.
-	grouped := c.groupShuffleBucketsByCNIfNeeded(buckets)
-	require.Equal(t, 2, len(grouped))
-	for _, container := range grouped {
-		require.Equal(t, Remote, container.Magic)
-		require.True(t, checkPipelineStandaloneExecutableAtRemote(container))
+			// before regrouping: the dispatch-carrying buckets are wrongly judged not standalone.
+			require.False(t, checkPipelineStandaloneExecutableAtRemote(buckets[0]))
+			require.False(t, checkPipelineStandaloneExecutableAtRemote(buckets[2]))
+
+			// after regrouping: one per-CN container each, all standalone-executable at remote.
+			grouped := c.groupShuffleBucketsByCNIfNeeded(buckets)
+			require.Equal(t, 2, len(grouped))
+			for _, container := range grouped {
+				require.Equal(t, Remote, container.Magic)
+				require.True(t, checkPipelineStandaloneExecutableAtRemote(container))
+			}
+		})
 	}
 }
 
 // TestGroupShuffleBucketsByCNIfNeeded_Gating verifies the regrouping is a no-op when
-// there is no cross-CN shuffle dispatch (single CN, or no dispatch), so non-shuffle /
-// single-CN inserts are completely unaffected.
+// there is no out-of-tree local receiver dependency, so non-shuffle inserts are
+// completely unaffected.
 func TestGroupShuffleBucketsByCNIfNeeded_Gating(t *testing.T) {
 	c := NewMockCompile(t)
 	c.cnList = engine.Nodes{

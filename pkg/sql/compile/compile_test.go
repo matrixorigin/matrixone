@@ -136,6 +136,137 @@ func TestCompileRunPreservesBinaryPrepareParamAcrossRetries(t *testing.T) {
 	require.Zero(t, params.Length())
 	require.Nil(t, params.GetData())
 	require.Nil(t, params.GetArea())
+	c.Release()
+	proc.Free()
+	proc.GetSessionInfo().Buf.Free()
+}
+
+type retryRecordingResultSink struct {
+	events []string
+	rows   map[uint64]int
+}
+
+type generationCheckingResultSink struct {
+	activeGeneration uint64
+	events           []string
+}
+
+func (s *generationCheckingResultSink) BeginAttempt(_ context.Context, generation uint64, _ *process.Process) error {
+	s.activeGeneration = generation
+	s.events = append(s.events, fmt.Sprintf("begin:%d", generation))
+	return nil
+}
+
+func (s *generationCheckingResultSink) Write(generation uint64, bat *batch.Batch, _ *perfcounter.CounterSet) error {
+	if bat == nil {
+		return nil
+	}
+	s.events = append(s.events, fmt.Sprintf("write:%d", generation))
+	if generation != s.activeGeneration {
+		return moerr.NewInternalErrorNoCtx(fmt.Sprintf("result sink generation mismatch: active=%d write=%d", s.activeGeneration, generation))
+	}
+	return nil
+}
+
+func (s *generationCheckingResultSink) SealAttempt(generation uint64) error {
+	s.events = append(s.events, fmt.Sprintf("seal:%d", generation))
+	return nil
+}
+
+func (s *generationCheckingResultSink) AbortAttempt(generation uint64, _ error) error {
+	s.events = append(s.events, fmt.Sprintf("abort:%d", generation))
+	return nil
+}
+
+func (s *retryRecordingResultSink) BeginAttempt(_ context.Context, generation uint64, _ *process.Process) error {
+	s.events = append(s.events, fmt.Sprintf("begin:%d", generation))
+	if s.rows == nil {
+		s.rows = make(map[uint64]int)
+	}
+	return nil
+}
+
+func (s *retryRecordingResultSink) Write(generation uint64, bat *batch.Batch, _ *perfcounter.CounterSet) error {
+	if bat == nil {
+		return nil
+	}
+	s.events = append(s.events, fmt.Sprintf("write:%d", generation))
+	s.rows[generation] += bat.RowCount()
+	if generation < 2 {
+		return moerr.NewTxnNeedRetryNoCtx()
+	}
+	return nil
+}
+
+func (s *retryRecordingResultSink) SealAttempt(generation uint64) error {
+	s.events = append(s.events, fmt.Sprintf("seal:%d", generation))
+	return nil
+}
+
+func (s *retryRecordingResultSink) AbortAttempt(generation uint64, _ error) error {
+	s.events = append(s.events, fmt.Sprintf("abort:%d", generation))
+	delete(s.rows, generation)
+	return nil
+}
+
+func TestResultWriterCapturesExecutionGeneration(t *testing.T) {
+	sink := &retryRecordingResultSink{rows: make(map[uint64]int)}
+	c := &Compile{resultSink: sink, executionGeneration: 3}
+	writer := c.resultWriter()
+	c.executionGeneration = 4
+	require.NoError(t, writer(batch.EmptyBatch, nil))
+	require.Equal(t, []string{"write:3"}, sink.events)
+}
+
+func TestCompileResultSinkDiscardsRetriedGenerations(t *testing.T) {
+	ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
+	proc := testutil.NewProcess(t)
+	proc.GetSessionInfo().Buf = buffer.New()
+	proc.SetResolveVariableFunc(func(string, bool, bool) (interface{}, error) {
+		return "STRICT_TRANS_TABLES", nil
+	})
+	compilerCtx := plan2.NewEmptyCompilerContext()
+	compilerCtx.SetContext(ctx)
+	stmts, err := mysql.Parse(ctx, "select 1", 1)
+	require.NoError(t, err)
+	query, err := plan2.NewPrepareOptimizer(compilerCtx).Optimize(stmts[0], false)
+	require.NoError(t, err)
+	pn := &plan.Plan{Plan: &plan.Plan_Query{Query: query}}
+
+	ctrl := gomock.NewController(t)
+	txnCli, txnOp := newTestTxnClientAndOpWithIsolation(ctrl, txn.TxnIsolation_RC)
+	proc.Base.TxnClient = txnCli
+	proc.Base.TxnOperator = txnOp
+	proc.Ctx = ctx
+	proc.ReplaceTopCtx(ctx)
+
+	c := NewCompile("test", "test", "select 1", "", "", newStubEngine(), proc, stmts[0], false, nil, time.Now())
+	require.NoError(t, c.Compile(ctx, pn, func(*batch.Batch, *perfcounter.CounterSet) error {
+		return errors.New("streaming callback must not be used when ResultSink is installed")
+	}))
+	sink := &retryRecordingResultSink{}
+	c.SetResultSink(sink)
+	_, err = c.Run(0)
+	require.NoError(t, err)
+	require.Equal(t, []string{
+		"begin:0", "write:0", "abort:0",
+		"begin:1", "write:1", "abort:1",
+		"begin:2", "write:2", "seal:2",
+	}, sink.events)
+	require.Equal(t, map[uint64]int{2: 1}, sink.rows)
+	require.Equal(t, uint64(2), c.executionGeneration)
+
+	// Compile.Reset is the prepared-statement reuse boundary. The next execution
+	// must rebuild its output callback for generation zero even when the previous
+	// execution succeeded after retries on a later generation.
+	nextSink := &generationCheckingResultSink{}
+	c.SetResultSink(nextSink)
+	require.NoError(t, c.Reset(proc, time.Now(), func(*batch.Batch, *perfcounter.CounterSet) error {
+		return errors.New("streaming callback must not be used when ResultSink is installed")
+	}, "select 1"))
+	_, err = c.Run(0)
+	require.NoError(t, err)
+	require.Equal(t, []string{"begin:0", "write:0", "seal:0"}, nextSink.events)
 
 	c.Release()
 	proc.Free()
@@ -328,20 +459,24 @@ func TestConstructLockOpPreservesSharedTableMode(t *testing.T) {
 	}
 }
 
-func TestValidateReplaceParentTxnMode(t *testing.T) {
+func TestValidateForeignKeyParentTxnMode(t *testing.T) {
 	ctx := context.Background()
 	query := &plan.Query{DetectSqls: []string{"REPLACE_PARENT_LOCK:select 1 for update"}}
 
-	require.NoError(t, validateReplaceParentTxnMode(ctx, query, true))
-	require.ErrorContains(t, validateReplaceParentTxnMode(ctx, query, false),
+	require.NoError(t, validateForeignKeyParentTxnMode(ctx, query, true))
+	require.ErrorContains(t, validateForeignKeyParentTxnMode(ctx, query, false),
 		"optimistic transaction mode")
 	query.DetectSqls = []string{"REPLACE_PARENT_PLAN:"}
-	require.NoError(t, validateReplaceParentTxnMode(ctx, query, true))
-	require.ErrorContains(t, validateReplaceParentTxnMode(ctx, query, false),
+	require.NoError(t, validateForeignKeyParentTxnMode(ctx, query, true))
+	require.ErrorContains(t, validateForeignKeyParentTxnMode(ctx, query, false),
 		"optimistic transaction mode")
-	require.NoError(t, validateReplaceParentTxnMode(ctx,
+	query.DetectSqls = []string{"UPDATE_PARENT_PLAN:"}
+	require.NoError(t, validateForeignKeyParentTxnMode(ctx, query, true))
+	require.ErrorContains(t, validateForeignKeyParentTxnMode(ctx, query, false),
+		"UPDATE on a referenced parent table")
+	require.NoError(t, validateForeignKeyParentTxnMode(ctx,
 		&plan.Query{DetectSqls: []string{"select true"}}, false))
-	require.NoError(t, validateReplaceParentTxnMode(ctx, nil, false))
+	require.NoError(t, validateForeignKeyParentTxnMode(ctx, nil, false))
 }
 
 func TestLockTableLocksAllPrePipelineTargets(t *testing.T) {
@@ -412,18 +547,26 @@ func TestLockTableLocksAllPrePipelineTargets(t *testing.T) {
 		},
 	)
 }
-func newTestTxnClientAndOp(ctrl *gomock.Controller) (client.TxnClient, client.TxnOperator) {
-	return newTestTxnClientAndOpWithIsolation(ctrl, txn.TxnIsolation_SI)
+func newTestTxnClientAndOp(
+	ctrl *gomock.Controller,
+	workspaces ...client.Workspace,
+) (client.TxnClient, client.TxnOperator) {
+	return newTestTxnClientAndOpWithIsolation(ctrl, txn.TxnIsolation_SI, workspaces...)
 }
 
 func newTestTxnClientAndOpWithIsolation(
 	ctrl *gomock.Controller,
 	isolation txn.TxnIsolation,
+	workspaces ...client.Workspace,
 ) (client.TxnClient, client.TxnOperator) {
 	txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
+	workspace := client.Workspace(&Ws{})
+	if len(workspaces) > 0 {
+		workspace = workspaces[0]
+	}
 	txnOperator.EXPECT().Commit(gomock.Any()).Return(nil).AnyTimes()
 	txnOperator.EXPECT().Rollback(gomock.Any()).Return(nil).AnyTimes()
-	txnOperator.EXPECT().GetWorkspace().Return(&Ws{}).AnyTimes()
+	txnOperator.EXPECT().GetWorkspace().Return(workspace).AnyTimes()
 	txnOperator.EXPECT().Txn().Return(txn.TxnMeta{Isolation: isolation}).AnyTimes()
 	txnOperator.EXPECT().TxnOptions().Return(txn.TxnOptions{}).AnyTimes()
 	txnOperator.EXPECT().NextSequence().Return(uint64(0)).AnyTimes()
@@ -435,6 +578,52 @@ func newTestTxnClientAndOpWithIsolation(
 	txnClient := mock_frontend.NewMockTxnClient(ctrl)
 	txnClient.EXPECT().New(gomock.Any(), gomock.Any()).Return(txnOperator, nil).AnyTimes()
 	return txnClient, txnOperator
+}
+
+func TestPlanSnapshotGenerationCaptureAndScopeReuse(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
+	currentSnapshot := timestamp.Timestamp{PhysicalTime: 10}
+	txnOperator.EXPECT().Txn().DoAndReturn(func() txn.TxnMeta {
+		return txn.TxnMeta{SnapshotTS: currentSnapshot}
+	}).AnyTimes()
+
+	proc := testutil.NewProcess(t)
+	proc.Base.TxnOperator = txnOperator
+	c := &Compile{proc: proc}
+	c.capturePlanSnapshot()
+
+	child := proc.NewNoContextChildProc(0)
+	got, ok := child.GetPlanSnapshotTS()
+	require.True(t, ok)
+	require.Equal(t, currentSnapshot, got)
+
+	// Prepared scope reuse is a new execution generation. Refresh both the top
+	// process and every retained pipeline process before locks can run.
+	currentSnapshot = timestamp.Timestamp{PhysicalTime: 20}
+	c.capturePlanSnapshot()
+	scope := &Scope{Proc: child}
+	require.NoError(t, scope.resetForReuse(c))
+	got, ok = child.GetPlanSnapshotTS()
+	require.True(t, ok)
+	require.Equal(t, currentSnapshot, got)
+
+	// A data-only retry recompiles pipelines from the same logical plan. It
+	// retains the original binding even after the transaction snapshot moves.
+	currentSnapshot = timestamp.Timestamp{PhysicalTime: 30}
+	c.reusePlanSnapshot = true
+	c.bindPlanSnapshotForCompile()
+	got, ok = proc.GetPlanSnapshotTS()
+	require.True(t, ok)
+	require.Equal(t, timestamp.Timestamp{PhysicalTime: 20}, got)
+
+	// A definition-change retry rebuilds the logical plan and starts a new plan
+	// generation at the transaction's refreshed snapshot.
+	c.reusePlanSnapshot = false
+	c.bindPlanSnapshotForCompile()
+	got, ok = proc.GetPlanSnapshotTS()
+	require.True(t, ok)
+	require.Equal(t, currentSnapshot, got)
 }
 
 var (
@@ -734,6 +923,63 @@ func TestCompileShuffleGroupGatesOrderedAggregateByProtocolVersion(t *testing.T)
 		"legacy shuffle aggregates remain safe on protocol v5")
 }
 
+func TestCompileShuffleGroupGatesOrderedSetPercentileByProtocolVersion(t *testing.T) {
+	c := newCompileForShuffleGroupTest(t)
+	aggNode, _ := newShuffleGroupTestNodes(16)
+	aggNode.AggList = []*plan.Expr{{
+		Expr: &plan.Expr_F{F: &plan.Function{
+			Func: &plan.ObjectRef{
+				ObjName: plan2.NamePercentileCont,
+			},
+			Args: []*plan.Expr{
+				aggNode.GroupBy[0],
+				plan2.MakePlan2Float64ConstExprWithType(0.5),
+			},
+		}},
+	}}
+	rt := runtime.ServiceRuntime(c.proc.GetService())
+	defer rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCLatestVersion)
+
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion16)
+	require.False(t, c.supportsRemoteOrderedSetAggregates())
+	require.False(t, c.canCompileShuffleGroup(aggNode),
+		"mixed-version clusters must keep ordered-set percentile aggregates local")
+
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion17)
+	require.True(t, c.supportsRemoteOrderedSetAggregates())
+	require.True(t, c.canCompileShuffleGroup(aggNode))
+}
+
+func TestCompileOrderedSetPercentileUsesSingleStageForNonShuffleMerge(t *testing.T) {
+	c := newCompileForShuffleGroupTest(t)
+	aggNode, nodes := newShuffleGroupTestNodes(16)
+	aggNode.Stats.HashmapStats = nil
+	aggNode.AggList = []*plan.Expr{{
+		Expr: &plan.Expr_F{F: &plan.Function{
+			Func: &plan.ObjectRef{
+				ObjName: plan2.NamePercentileCont,
+			},
+			Args: []*plan.Expr{
+				aggNode.GroupBy[0],
+				plan2.MakePlan2Float64ConstExprWithType(0.5),
+			},
+		}},
+	}}
+	scope1 := newShuffleGroupInputScope(t, 1)
+	scope2 := newShuffleGroupInputScope(t, 1)
+
+	require.True(t, hasOrderedSetPercentile(aggNode))
+	result := c.compileOrderedAggregateSingleStage(aggNode, []*Scope{scope1, scope2}, nodes)
+
+	require.Len(t, result, 1)
+	groupOp, ok := result[0].RootOp.(*group.Group)
+	require.True(t, ok)
+	require.True(t, groupOp.NeedEval)
+	require.Len(t, result[0].PreScopes, 2)
+	require.Contains(t, result[0].PreScopes, scope1)
+	require.Contains(t, result[0].PreScopes, scope2)
+}
+
 func TestCompileShuffleGroupUsesDistributedPathWhenInputScopesNotSingle(t *testing.T) {
 	c := newCompileForShuffleGroupTest(t)
 	aggNode, nodes := newShuffleGroupTestNodes(16)
@@ -842,6 +1088,62 @@ func TestCompileShuffleJoinKeepsReusableLocalShuffle(t *testing.T) {
 
 	require.Len(t, result, 1,
 		"reusing an existing probe partition must keep the single local fast path")
+}
+
+func TestCompileLocalShuffleJoinOnlySkipsProvenProbeShuffle(t *testing.T) {
+	const dop = int32(4)
+	tests := []struct {
+		name             string
+		method           plan.ShuffleMethod
+		shuffleType      plan.ShuffleType
+		wantProbeShuffle bool
+	}{
+		{
+			name:             "normal strategy repartitions probe",
+			method:           plan.ShuffleMethod_Normal,
+			wantProbeShuffle: true,
+		},
+		{
+			name:             "normal range strategy repartitions probe",
+			method:           plan.ShuffleMethod_Normal,
+			shuffleType:      plan.ShuffleType_Range,
+			wantProbeShuffle: true,
+		},
+		{
+			name:   "proved reuse keeps probe partition",
+			method: plan.ShuffleMethod_Reuse,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cn := engine.Node{Addr: "cn1:6001", Mcpu: int(dop)}
+			c := newCompileForShuffleJoinTest(t, engine.Nodes{cn})
+			node := newShuffleJoinTestNode(dop)
+			node.Stats.HashmapStats.ShuffleMethod = tt.method
+			node.Stats.HashmapStats.ShuffleType = tt.shuffleType
+			left := &plan.Node{Stats: &plan.Stats{Dop: dop}}
+			right := &plan.Node{Stats: &plan.Stats{Dop: dop}}
+			probe := newShuffleJoinTestScope(t, cn, int(dop))
+			build := newShuffleJoinTestScope(t, cn, int(dop))
+			originalProbeRoot := probe.RootOp
+
+			result := c.compileLocalShuffleJoin(
+				node, left, right, []*Scope{probe}, []*Scope{build},
+			)
+
+			require.Len(t, result, 1)
+			probeInput := result[0].RootOp.GetOperatorBase().GetChildren(0)
+			if tt.wantProbeShuffle {
+				require.IsType(t, &shuffle.Shuffle{}, probeInput)
+				probeShuffle := probeInput.(*shuffle.Shuffle)
+				require.Equal(t, int32(tt.shuffleType), probeShuffle.ShuffleType)
+				require.Same(t, originalProbeRoot, probeInput.GetOperatorBase().GetChildren(0))
+			} else {
+				require.Same(t, originalProbeRoot, probeInput)
+			}
+		})
+	}
 }
 
 func TestCompileShuffleJoinDistributesSinkScanHashbuild(t *testing.T) {
@@ -1016,6 +1318,23 @@ func newShuffleGroupInputScope(t *testing.T, mcpu int) *Scope {
 	scope.Proc = testutil.NewProcess(t)
 	scope.setRootOperator(colexec.NewMockOperator())
 	return scope
+}
+
+func TestCompilePreInsertUkMergesParallelMultiKeyIgnoreInput(t *testing.T) {
+	c := NewMockCompile(t)
+	c.anal = &AnalyzeModule{}
+	input := newScope(Merge)
+	input.NodeInfo = engine.Node{Addr: "127.0.0.1:18000", Mcpu: 4}
+	input.Proc = c.proc.NewNoContextChildProc(0)
+	input.setRootOperator(colexec.NewMockOperator())
+
+	node := &plan.Node{PreInsertUkCtx: &plan.PreInsertUkCtx{InsertIgnoreMultiDedup: true}}
+	result := c.compilePreInsertUk(node, []*Scope{input})
+
+	require.Len(t, result, 1)
+	require.NotSame(t, input, result[0])
+	require.Equal(t, 1, result[0].NodeInfo.Mcpu)
+	require.Contains(t, result[0].PreScopes, input)
 }
 
 func newShuffleGroupTestNodes(dop int32) (*plan.Node, []*plan.Node) {

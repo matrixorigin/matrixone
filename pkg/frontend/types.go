@@ -37,6 +37,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	pbtxn "github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/compile"
 	"github.com/matrixorigin/matrixone/pkg/sql/models"
@@ -298,12 +299,16 @@ type PrepareStmt struct {
 	PreparePlan     *plan.Plan
 	PrepareStmt     tree.Statement
 	NativeMode      bool
-	ParamTypes      []byte
-	ColDefData      [][]byte
-	IsCloudNonuser  bool
-	proc            *process.Process
-	remapDb         map[string]string
-	defaultDatabase string
+	OnlyFullGroupBy bool
+	// onlyFullGroupBySet distinguishes a captured disabled mode from legacy or
+	// minimal in-memory fixtures that predate this plan dependency.
+	onlyFullGroupBySet bool
+	ParamTypes         []byte
+	ColDefData         [][]byte
+	IsCloudNonuser     bool
+	proc               *process.Process
+	remapDb            map[string]string
+	defaultDatabase    string
 
 	params              *vector.Vector
 	getFromSendLongData map[int]struct{}
@@ -928,6 +933,7 @@ type ExecCtx struct {
 	resper            Responser
 	results           []ExecResult
 	prepareColDef     [][]byte
+	returning         *returningState
 	isIssue3482       bool
 	// remapDb is the effective database remap (role/session/inline merged) for
 	// this statement. It is applied at the AST level to qualified references by
@@ -952,6 +958,10 @@ func (execCtx *ExecCtx) withRootSQL(rootSQL string, fn func() error) error {
 }
 
 func (execCtx *ExecCtx) Close() {
+	if execCtx.returning != nil {
+		_ = execCtx.returning.Close(execCtx)
+		execCtx.returning = nil
+	}
 	execCtx.reqCtx = nil
 	execCtx.prepareStmt = nil
 	execCtx.runResult = nil
@@ -1359,7 +1369,9 @@ func (ses *feSessionImpl) GetResultBatches() []*batch.Batch {
 }
 
 func (ses *feSessionImpl) AppendResultBatch(bat *batch.Batch) error {
-	copied, err := bat.Dup(ses.pool)
+	// Result batches belong to the session and can remain reachable after the
+	// producing statement has sealed its allocation account.
+	copied, err := bat.DupWithoutAllocationAccount(ses.pool)
 	if err != nil {
 		return err
 	}
@@ -1381,9 +1393,23 @@ func (ses *feSessionImpl) GetGlobalSysVar(name string) (interface{}, error) {
 
 	// If global vars have not been initialized, fall back to default.
 	if ses.gSysVars == nil {
-		return gSysVarsDefs[name].Default, nil
+		if isTransactionIsolationSystemVariable(name) {
+			if value, ok := serviceTxnIsolationSystemValue(ses.service); ok {
+				return value, nil
+			}
+		}
+		return gSysVarsDefs[canonicalSystemVariableName(name)].Default, nil
 	}
-	return ses.gSysVars.Get(name), nil
+	value := ses.gSysVars.Get(name)
+	if isTransactionIsolationSystemVariable(name) {
+		normalized, _, err := normalizeTxnIsolationSystemValue(
+			context.Background(), ses.service, value)
+		if err != nil {
+			return nil, err
+		}
+		return normalized, nil
+	}
+	return value, nil
 }
 
 func (ses *Session) SetGlobalSysVar(ctx context.Context, name string, val interface{}) (err error) {
@@ -1424,6 +1450,11 @@ func (ses *Session) SetGlobalSysVar(ctx context.Context, name string, val interf
 	if val, err = def.GetType().Convert(val); err != nil {
 		return err
 	}
+	if isTransactionIsolationSystemVariable(name) {
+		if _, err = txnIsolationFromSystemValue(ctx, val); err != nil {
+			return err
+		}
+	}
 
 	if name == "wait_timeout" || name == "interactive_timeout" {
 		if err = validateTimeoutLimits(ctx, ses, name, val); err != nil {
@@ -1441,10 +1472,15 @@ func (ses *Session) SetGlobalSysVar(ctx context.Context, name string, val interf
 	}
 
 	// save to table first
-	if err = doSetGlobalSystemVariable(ctx, ses, name, val); err != nil {
+	canonicalName := canonicalSystemVariableName(name)
+	persistNames := []string{canonicalName}
+	if isTransactionIsolationSystemVariable(name) {
+		persistNames = append(persistNames, transactionIsolationSystemVariableAlias)
+	}
+	if err = doSetGlobalSystemVariables(ctx, ses, persistNames, val); err != nil {
 		return
 	}
-	ses.gSysVars.Set(name, val)
+	ses.gSysVars.Set(canonicalName, val)
 	return
 }
 
@@ -1462,7 +1498,12 @@ func (ses *Session) GetSessionSysVar(name string) (interface{}, error) {
 	// when ses.sesSysVars is nil
 	// in this scenario, use Default value in gSysVarsDefs
 	if ses.sesSysVars == nil {
-		return gSysVarsDefs[name].Default, nil
+		if isTransactionIsolationSystemVariable(name) {
+			if value, ok := serviceTxnIsolationSystemValue(ses.service); ok {
+				return value, nil
+			}
+		}
+		return gSysVarsDefs[canonicalSystemVariableName(name)].Default, nil
 	}
 	// sesSysVars is a clone of gSysVars (the per-account catalog
 	// snapshot from mo_mysql_compatibility_mode). Sysvars added to
@@ -1476,16 +1517,26 @@ func (ses *Session) GetSessionSysVar(name string) (interface{}, error) {
 	// vector-index sysvars (ivf_threads_build, kmeans_train_percent,
 	// …) and trip BuildIdxcronMetadata or similar nil-rejecting paths.
 	if v := ses.sesSysVars.Get(name); v != nil {
+		if isTransactionIsolationSystemVariable(name) {
+			normalized, _, err := normalizeTxnIsolationSystemValue(
+				context.Background(), ses.service, v)
+			if err != nil {
+				return nil, err
+			}
+			return normalized, nil
+		}
 		return v, nil
 	}
-	return gSysVarsDefs[name].Default, nil
+	return gSysVarsDefs[canonicalSystemVariableName(name)].Default, nil
 }
 
 func (ses *Session) SetSessionSysVar(ctx context.Context, name string, val interface{}) (err error) {
 	name = strings.ToLower(name)
 	oldMatrixOneNative := false
+	oldOnlyFullGroupBy := false
 	if name == "sql_mode" {
 		oldMatrixOneNative = ses.sqlModeHasMatrixOneNative()
+		oldOnlyFullGroupBy = ses.sqlModeHasOnlyFullGroupBy()
 	}
 
 	def, ok := gSysVarsDefs[name]
@@ -1503,6 +1554,14 @@ func (ses *Session) SetSessionSysVar(ctx context.Context, name string, val inter
 
 	if val, err = def.GetType().Convert(val); err != nil {
 		return
+	}
+
+	var txnIsolation pbtxn.TxnIsolation
+	setTxnIsolation := isTransactionIsolationSystemVariable(name)
+	if setTxnIsolation {
+		if txnIsolation, err = txnIsolationFromSystemValue(ctx, val); err != nil {
+			return err
+		}
 	}
 
 	if name == "wait_timeout" || name == "interactive_timeout" {
@@ -1530,13 +1589,19 @@ func (ses *Session) SetSessionSysVar(ctx context.Context, name string, val inter
 		ses.sesSysVars = ses.gSysVars.Clone()
 	}
 
+	canonicalName := canonicalSystemVariableName(name)
 	if def.UpdateSessVar != nil {
-		err = def.UpdateSessVar(ctx, ses, ses.sesSysVars, name, val)
+		err = def.UpdateSessVar(ctx, ses, ses.sesSysVars, canonicalName, val)
 	} else {
-		ses.sesSysVars.Set(name, val)
+		ses.sesSysVars.Set(canonicalName, val)
 	}
 	if err == nil && name == "sql_mode" {
-		ses.updateSqlModeCaches(oldMatrixOneNative, val)
+		ses.updateSqlModeCaches(oldMatrixOneNative, oldOnlyFullGroupBy, val)
+	}
+	if err == nil && setTxnIsolation {
+		if txnHandler := ses.GetTxnHandler(); txnHandler != nil {
+			txnHandler.setSessionTxnIsolation(txnIsolation)
+		}
 	}
 
 	// Update rewriteEnabled cache when enable_remap_hint is changed
@@ -1797,6 +1862,16 @@ type MysqlPayloadWriter interface {
 // BinaryWriter write batch into fileservice
 type BinaryWriter interface {
 	MediaWriter
+}
+
+// StagedBinaryWriter keeps query-result data invisible until Publish writes
+// the metadata marker. DML RETURNING stages before database commit and
+// publishes only after commit succeeds.
+type StagedBinaryWriter interface {
+	Stage(*ExecCtx, *perfcounter.CounterSet, *batch.Batch) error
+	FinishStage(*ExecCtx) error
+	Publish(*ExecCtx) error
+	Abort(*ExecCtx) error
 }
 
 // CsvWriter write batch into csv file

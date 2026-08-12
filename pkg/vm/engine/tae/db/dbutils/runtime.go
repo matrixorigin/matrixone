@@ -16,11 +16,14 @@ package dbutils
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"sync"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/util/metric/stats"
@@ -171,6 +174,26 @@ type Runtime struct {
 	// This is set by the DB when DiskCleaner is initialized.
 	// Returns nil if validation succeeds, or an error if the protection is invalid/expired.
 	SyncProtectionValidator func(jobID string, prepareTS int64) error
+
+	// UnpublishedObjectCleaner installs a durable cleanup owner before a TN
+	// transaction writes an object that is not catalog-visible yet.
+	UnpublishedObjectCleaner UnpublishedObjectCleaner
+}
+
+// UnpublishedObjectCleaner is the write-ahead ownership boundary for objects
+// created while a transaction is preparing. Prepare must finish before the
+// object write starts. Finish is called after the object is either published
+// or physically deleted; Abandon makes the durable owner eligible to retry.
+type UnpublishedObjectCleaner interface {
+	Prepare(
+		context.Context,
+		uint64,
+		uint64,
+		bool,
+		string,
+	) (marker string, err error)
+	Finish(context.Context, string, string) error
+	Abandon(string)
 }
 
 func NewRuntime(opts ...RuntimeOption) *Runtime {
@@ -194,10 +217,28 @@ func (r *Runtime) fillDefaults() {
 }
 
 func (r *Runtime) SID() string {
-	if r == nil {
+	if r == nil || r.Options == nil {
 		return ""
 	}
 	return r.Options.SID
+}
+
+// PersistedAObjectAbortSupported reports whether every reader in the current
+// rollout understands appendable objects with the persisted abort column.
+// Deployment keeps MOProtocolVersion at the oldest live service during a
+// rolling upgrade, so writers must retain the legacy layout until version 10 is
+// active.
+func (r *Runtime) PersistedAObjectAbortSupported() bool {
+	serviceRuntime := runtime.ServiceRuntime(r.SID())
+	if serviceRuntime == nil {
+		return false
+	}
+	value, ok := serviceRuntime.GetGlobalVariables(runtime.MOProtocolVersion)
+	if !ok {
+		return false
+	}
+	version, ok := value.(int64)
+	return ok && version >= defines.MORPCVersion10
 }
 
 func (r *Runtime) PoolUsageReport() {

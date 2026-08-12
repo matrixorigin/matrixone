@@ -26,6 +26,15 @@ import (
 // 3. >= > < <=
 // 4. Mod
 func fixedTypeCastRule1(s1, s2 types.Type) (bool, types.Type, types.Type) {
+	// MySQL evaluates ENUM by its 1-based index in numeric contexts.  Treat it
+	// as uint16 while selecting binary arithmetic and numeric comparison rules;
+	// the later cast still starts from T_enum and preserves NULL handling.
+	if s1.Oid == types.T_enum {
+		s1 = types.T_uint16.ToType()
+	}
+	if s2.Oid == types.T_enum {
+		s2 = types.T_uint16.ToType()
+	}
 	check := fixedBinaryCastRule1[s1.Oid][s2.Oid]
 	if check.cast {
 		t1, t2 := check.left.ToType(), check.right.ToType()
@@ -192,9 +201,19 @@ func fixedTypeMatch(overloads []overload, inputs []types.Type) checkResult {
 		} else {
 			castType[i] = ov.args[i].ToType()
 			SetTargetScaleFromSource(&inputs[i], &castType[i])
+			if isCollatedTextType(inputs[i].Oid) && isCollatedTextType(castType[i].Oid) {
+				// CHAR/VARCHAR/TEXT conversions change the storage shape, not the
+				// collation. Retaining it here prevents an implicit overload cast
+				// from erasing metadata before a derived-string return callback runs.
+				castType[i].Charset = inputs[i].Charset
+			}
 		}
 	}
 	return newCheckResultWithCast(minIndex, castType)
+}
+
+func isCollatedTextType(oid types.T) bool {
+	return oid == types.T_char || oid == types.T_varchar || oid == types.T_text
 }
 
 // a fixed type match method without any type convert. (const null exception)
@@ -2452,11 +2471,20 @@ func initFixed3() {
 		{
 			from: types.T_enum,
 			toList: []toRule{
+				{toType: types.T_int8, preferLevel: 2},
+				{toType: types.T_int16, preferLevel: 2},
+				{toType: types.T_int32, preferLevel: 2},
+				{toType: types.T_int64, preferLevel: 2},
 				{toType: types.T_uint16, preferLevel: 1},
 				{toType: types.T_uint8, preferLevel: 2},
 				{toType: types.T_uint32, preferLevel: 2},
 				{toType: types.T_uint64, preferLevel: 2},
 				{toType: types.T_uint128, preferLevel: 2},
+				{toType: types.T_float32, preferLevel: 2},
+				{toType: types.T_float64, preferLevel: 2},
+				{toType: types.T_decimal64, preferLevel: 2},
+				{toType: types.T_decimal128, preferLevel: 2},
+				{toType: types.T_decimal256, preferLevel: 2},
 				{toType: types.T_char, preferLevel: 2},
 				{toType: types.T_varchar, preferLevel: 2},
 				{toType: types.T_binary, preferLevel: 2},

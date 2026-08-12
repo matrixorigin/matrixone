@@ -28,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fulltext"
 	"github.com/matrixorigin/matrixone/pkg/util/gpumode"
@@ -1045,6 +1046,23 @@ type SystemVariables struct {
 	mutationGeneration uint64
 }
 
+const (
+	transactionIsolationSystemVariable      = "transaction_isolation"
+	transactionIsolationSystemVariableAlias = "tx_isolation"
+)
+
+func canonicalSystemVariableName(name string) string {
+	name = strings.ToLower(name)
+	if name == transactionIsolationSystemVariableAlias {
+		return transactionIsolationSystemVariable
+	}
+	return name
+}
+
+func isTransactionIsolationSystemVariable(name string) bool {
+	return canonicalSystemVariableName(name) == transactionIsolationSystemVariable
+}
+
 func (sv *SystemVariables) getMutationGeneration() uint64 {
 	sv.mu.Lock()
 	defer sv.mu.Unlock()
@@ -1076,15 +1094,27 @@ func (sv *SystemVariables) Clone() *SystemVariables {
 func (sv *SystemVariables) Get(name string) interface{} {
 	sv.mu.Lock()
 	defer sv.mu.Unlock()
-	name = strings.ToLower(name)
-	return sv.mp[name]
+	name = canonicalSystemVariableName(name)
+	value, ok := sv.mp[name]
+	if !ok && name == transactionIsolationSystemVariable {
+		// Accept an in-memory snapshot produced by an older node that only
+		// populated the legacy alias. Catalog loading normalizes this state, but
+		// the fallback also keeps rolling upgrades and tests deterministic.
+		return sv.mp[transactionIsolationSystemVariableAlias]
+	}
+	return value
 }
 
 func (sv *SystemVariables) Set(name string, value interface{}) {
 	sv.mu.Lock()
 	defer sv.mu.Unlock()
-	name = strings.ToLower(name)
+	name = canonicalSystemVariableName(name)
 	sv.mp[name] = value
+	if name == transactionIsolationSystemVariable {
+		// Keep SHOW-style map iteration and any legacy direct lookup coherent
+		// while all semantic reads resolve through the canonical name.
+		sv.mp[transactionIsolationSystemVariableAlias] = value
+	}
 	sv.mutationGeneration++
 }
 
@@ -1273,7 +1303,8 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Dynamic:           true,
 		SetVarHintApplies: false,
 		Type:              InitSystemVariableStringType("collation_server"),
-		Default:           "utf8mb4_bin",
+		// This is also the fallback inherited by an unqualified CREATE TABLE.
+		Default: "utf8mb4_general_ci",
 	},
 	"license": {
 		Name:              "license",
@@ -4265,9 +4296,42 @@ func valueIsBoolTrue(value interface{}) (bool, error) {
 }
 
 type UserDefinedVar struct {
-	Value interface{}
-	Sql   string
-	IsBin bool
+	Value            interface{}
+	Sql              string
+	IsBin            bool
+	PrepareParamKind vector.PrepareParamKind
+}
+
+func prepareParamKindFromType(oid types.T) vector.PrepareParamKind {
+	switch oid {
+	case types.T_bit, types.T_int8, types.T_int16, types.T_int32, types.T_int64,
+		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
+		types.T_year:
+		return vector.PrepareParamInteger
+	case types.T_float32, types.T_float64:
+		return vector.PrepareParamFloat
+	case types.T_decimal64, types.T_decimal128, types.T_decimal256:
+		return vector.PrepareParamDecimal
+	case types.T_bool:
+		return vector.PrepareParamBoolean
+	default:
+		return vector.PrepareParamNone
+	}
+}
+
+func prepareParamKindFromValue(value any) vector.PrepareParamKind {
+	switch value.(type) {
+	case int, int8, int16, int32, int64, uint, uint8, uint16, uint32, uint64, types.MoYear:
+		return vector.PrepareParamInteger
+	case float32, float64:
+		return vector.PrepareParamFloat
+	case types.Decimal64, types.Decimal128, types.Decimal256:
+		return vector.PrepareParamDecimal
+	case bool:
+		return vector.PrepareParamBoolean
+	default:
+		return vector.PrepareParamNone
+	}
 }
 
 func autocommitValue(ses FeSession) (bool, error) {

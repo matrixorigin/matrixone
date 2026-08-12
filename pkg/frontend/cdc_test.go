@@ -887,6 +887,7 @@ type captureExecContextIE struct {
 	affectedRows     uint64
 	hasAffectedRows  bool
 	catalogState     string
+	catalogErrMsg    string
 	catalogStateRows uint64
 	queryErr         error
 }
@@ -912,9 +913,10 @@ func (e *captureExecContextIE) ExecWithStatus(ctx context.Context, sql string, o
 func (e *captureExecContextIE) Query(ctx context.Context, sql string, options ie.SessionOverrideOptions) ie.InternalExecResult {
 	e.querySQL = sql
 	return &cdcStateQueryResult{
-		err:   e.queryErr,
-		state: e.catalogState,
-		rows:  e.catalogStateRows,
+		err:    e.queryErr,
+		state:  e.catalogState,
+		errMsg: e.catalogErrMsg,
+		rows:   e.catalogStateRows,
 	}
 }
 
@@ -957,9 +959,10 @@ func (e *nilQueryResultIE) Query(ctx context.Context, sql string, options ie.Ses
 }
 
 type cdcStateQueryResult struct {
-	err   error
-	state string
-	rows  uint64
+	err    error
+	state  string
+	errMsg string
+	rows   uint64
 }
 
 func (r *cdcStateQueryResult) Error() error {
@@ -967,7 +970,7 @@ func (r *cdcStateQueryResult) Error() error {
 }
 
 func (r *cdcStateQueryResult) ColumnCount() uint64 {
-	return 1
+	return 2
 }
 
 func (r *cdcStateQueryResult) Column(ctx context.Context, u uint64) (string, uint8, bool, error) {
@@ -979,11 +982,14 @@ func (r *cdcStateQueryResult) RowCount() uint64 {
 }
 
 func (r *cdcStateQueryResult) Row(ctx context.Context, u uint64) ([]interface{}, error) {
-	return []interface{}{r.state}, nil
+	return []interface{}{r.state, r.errMsg}, nil
 }
 
 func (r *cdcStateQueryResult) Value(ctx context.Context, u uint64, u2 uint64) (interface{}, error) {
-	return r.state, nil
+	if u2 == 0 {
+		return r.state, nil
+	}
+	return r.errMsg, nil
 }
 
 func (r *cdcStateQueryResult) GetUint64(ctx context.Context, u uint64, u2 uint64) (uint64, error) {
@@ -995,7 +1001,10 @@ func (r *cdcStateQueryResult) GetFloat64(ctx context.Context, u uint64, u2 uint6
 }
 
 func (r *cdcStateQueryResult) GetString(ctx context.Context, u uint64, u2 uint64) (string, error) {
-	return r.state, nil
+	if u2 == 0 {
+		return r.state, nil
+	}
+	return r.errMsg, nil
 }
 
 const (
@@ -1491,17 +1500,13 @@ func Test_updateCdcTask_resume(t *testing.T) {
 	mock.ExpectQuery(sql20).WillReturnRows(
 		sqlmock.NewRows([]string{"task_id"}).AddRow("taskID-1"))
 
-	sql21 := "UPDATE `mo_catalog`.`mo_cdc_task` SET state = .* WHERE 1=1 AND account_id = 0 AND task_name = 'task1'"
+	sql21 := "UPDATE `mo_catalog`.`mo_cdc_task` SET state = .* WHERE 1=1 AND account_id = 0 AND task_name = 'task1' AND state <> .*"
 	mock.ExpectPrepare(sql21)
 
-	sql22 := "UPDATE `mo_catalog`.`mo_cdc_task` SET state = .* WHERE 1=1 AND account_id = 0 AND task_name = 'task1'"
-	mock.ExpectExec(sql22).WillReturnResult(sqlmock.NewResult(1, 1))
-
-	sql23 := "DELETE FROM `mo_catalog`.`mo_cdc_watermark` WHERE account_id = 0 AND task_id = 'taskID-1'"
-	mock.ExpectExec(sql23).WillReturnResult(sqlmock.NewResult(1, 1))
-
-	sql24 := "DELETE FROM `mo_catalog`.`mo_cdc_task` WHERE account_id = 0 AND task_name = 'task1'"
-	mock.ExpectExec(sql24).WillReturnResult(sqlmock.NewResult(1, 1))
+	sql22 := "UPDATE `mo_catalog`.`mo_cdc_task` SET state = .* WHERE 1=1 AND account_id = 0 AND task_name = 'task1' AND state <> .*"
+	mock.ExpectExec(sql22).
+		WithArgs(cdc.CDCState_Running, cdc.CDCState_Failed).
+		WillReturnResult(sqlmock.NewResult(0, 0))
 
 	genSqlIdx := func(sql string) int {
 		mSql20, err := regexp.MatchString(sql20, sql)
@@ -1510,17 +1515,12 @@ func Test_updateCdcTask_resume(t *testing.T) {
 		assert.NoError(t, err)
 		mSql22, err := regexp.MatchString(sql22, sql)
 		assert.NoError(t, err)
-		mSql24, err := regexp.MatchString(sql24, sql)
-		assert.NoError(t, err)
-
 		if mSql20 {
 			return mSqlIdx20
 		} else if mSql21 {
 			return mSqlIdx21
 		} else if mSql22 {
 			return mSqlIdx22
-		} else if mSql24 {
-			return mSqlIdx24
 		}
 
 		return -1
@@ -1551,8 +1551,10 @@ func Test_updateCdcTask_resume(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := onPreUpdateCDCTasks(tt.args.ctx, tt.args.targetStatus, tt.args.taskKeyMap, tt.args.tx, tt.args.accountId, tt.args.taskName, false)
+			affected, err := onPreUpdateCDCTasks(tt.args.ctx, tt.args.targetStatus, tt.args.taskKeyMap, tt.args.tx, tt.args.accountId, tt.args.taskName, false)
 			assert.NoError(t, err, "updateCdcTask(%v, %v, %v, %v, %v, %v)", tt.args.ctx, tt.args.targetStatus, tt.args.taskKeyMap, tt.args.tx, tt.args.accountId, tt.args.taskName)
+			assert.Equal(t, 1, affected, "the failed catalog row must remain unchanged while the daemon request is admitted")
+			assert.NoError(t, mock.ExpectationsWereMet())
 		})
 	}
 }
@@ -2795,6 +2797,27 @@ func TestCDCTaskUpdateErrMsgAlreadyInTargetStateAllowsZeroAffectedRows(t *testin
 	require.Contains(t, capture.querySQL, "SELECT state")
 }
 
+func TestCDCTaskUpdateErrMsgRejectsTargetStateWithStaleError(t *testing.T) {
+	capture := &captureExecContextIE{
+		affectedRows:     0,
+		hasAffectedRows:  true,
+		catalogState:     cdc.CDCState_Running,
+		catalogErrMsg:    "permanent table error",
+		catalogStateRows: 1,
+	}
+	executor := &CDCTaskExecutor{
+		spec: &task.CreateCdcDetails{
+			TaskId:   "task1",
+			Accounts: []*task.Account{{Id: 1}},
+		},
+		ie: capture,
+	}
+
+	err := executor.updateErrMsg(context.Background(), "")
+	require.ErrorContains(t, err, "conflicting catalog err_msg")
+	require.Contains(t, capture.querySQL, "SELECT state, err_msg")
+}
+
 func TestExecCDCSQLWithAffectedRowsPropagatesExecError(t *testing.T) {
 	capture := &captureExecContextIE{
 		execErr: errors.New("exec failed"),
@@ -2808,6 +2831,7 @@ func TestExecCDCSQLWithAffectedRowsPropagatesExecError(t *testing.T) {
 		"task1",
 		cdc.CDCState_Failed,
 		cdc.CDCState_Running,
+		nil,
 	)
 	require.ErrorContains(t, err, "exec failed")
 	require.Equal(t, "update cdc task", capture.execSQL)
@@ -2827,6 +2851,7 @@ func TestExecCDCSQLWithAffectedRowsRejectsUnexpectedRowCount(t *testing.T) {
 		"task1",
 		cdc.CDCState_Failed,
 		cdc.CDCState_Running,
+		nil,
 	)
 	require.ErrorContains(t, err, "affected 2 rows")
 	require.Empty(t, capture.querySQL)
@@ -2843,6 +2868,7 @@ func TestExecCDCSQLWithAffectedRowsFallsBackWithoutStatus(t *testing.T) {
 		"task1",
 		cdc.CDCState_Failed,
 		cdc.CDCState_Running,
+		nil,
 	))
 	require.Equal(t, "update cdc task", capture.execSQL)
 }
@@ -2876,6 +2902,7 @@ func TestValidateCDCStateTransitionResultReportsQueryFailures(t *testing.T) {
 				"task1",
 				cdc.CDCState_Running,
 				cdc.CDCState_Failed,
+				nil,
 			)
 			require.ErrorContains(t, err, tt.errContains)
 		})
@@ -2883,12 +2910,15 @@ func TestValidateCDCStateTransitionResultReportsQueryFailures(t *testing.T) {
 }
 
 type cdcCatalogStateExecutor struct {
-	mu           sync.Mutex
-	state        string
-	currentState string
-	targetState  string
-	execSQL      string
-	querySQL     string
+	mu                 sync.Mutex
+	state              string
+	errMsg             string
+	currentState       string
+	targetState        string
+	execSQL            string
+	execSQLs           []string
+	querySQL           string
+	tableErrorsCleared bool
 }
 
 func (e *cdcCatalogStateExecutor) Exec(ctx context.Context, sql string, options ie.SessionOverrideOptions) error {
@@ -2900,10 +2930,24 @@ func (e *cdcCatalogStateExecutor) ExecWithStatus(ctx context.Context, sql string
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	e.execSQL = sql
+	e.execSQLs = append(e.execSQLs, sql)
+	if strings.Contains(sql, "UPDATE `mo_catalog`.`mo_cdc_watermark` SET err_msg = ''") {
+		e.tableErrorsCleared = true
+	}
+	if !strings.Contains(sql, "UPDATE `mo_catalog`.`mo_cdc_task` SET state =") {
+		return ie.InternalExecStatus{AffectedRows: 1}, nil
+	}
 	if e.state != e.currentState {
 		return ie.InternalExecStatus{AffectedRows: 0}, nil
 	}
 	e.state = e.targetState
+	const errMsgPrefix = "err_msg = '"
+	if start := strings.Index(sql, errMsgPrefix); start >= 0 {
+		remaining := sql[start+len(errMsgPrefix):]
+		if end := strings.Index(remaining, "' WHERE"); end >= 0 {
+			e.errMsg = strings.ReplaceAll(remaining[:end], "''", "'")
+		}
+	}
 	return ie.InternalExecStatus{AffectedRows: 1}, nil
 }
 
@@ -2912,8 +2956,9 @@ func (e *cdcCatalogStateExecutor) Query(ctx context.Context, sql string, options
 	defer e.mu.Unlock()
 	e.querySQL = sql
 	return &cdcStateQueryResult{
-		state: e.state,
-		rows:  1,
+		state:  e.state,
+		errMsg: e.errMsg,
+		rows:   1,
 	}
 }
 
@@ -2930,6 +2975,31 @@ func (e *cdcCatalogStateExecutor) getState() string {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	return e.state
+}
+
+func (e *cdcCatalogStateExecutor) setTransition(currentState, targetState string) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.currentState = currentState
+	e.targetState = targetState
+}
+
+func (e *cdcCatalogStateExecutor) getErrMsg() string {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.errMsg
+}
+
+func (e *cdcCatalogStateExecutor) tableErrorsAreCleared() bool {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.tableErrorsCleared
+}
+
+func (e *cdcCatalogStateExecutor) capturedExecSQLs() []string {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return append([]string(nil), e.execSQLs...)
 }
 
 func TestCDCStateTransitionDoesNotOverwriteConcurrentCatalogState(t *testing.T) {
@@ -5203,7 +5273,9 @@ func TestCDCCreateTaskOptions_handleLevel(t *testing.T) {
 	}
 	level := cdc.CDCPitrGranularity_Table
 	err = opts.handleLevel(context.Background(), nil, req, level)
-	assert.Error(t, err)
+	require.EqualError(t, err,
+		"internal error: one db/table: db1.t1 can't be used as multi sources in a cdc task")
+	require.NotContains(t, err.Error(), "invalid level")
 }
 
 func TestCDCCreateTaskOptions_handleFrequency(t *testing.T) {
@@ -5218,7 +5290,9 @@ func TestCDCCreateTaskOptions_handleFrequency(t *testing.T) {
 	err = opts.handleFrequency(context.Background(), nil, req, level, "abc")
 	assert.Error(t, err)
 	err = opts.handleFrequency(context.Background(), nil, req, level, "1h")
-	assert.Error(t, err)
+	require.EqualError(t, err,
+		"internal error: one db/table: db1.t1 can't be used as multi sources in a cdc task")
+	require.NotContains(t, err.Error(), "invalid level")
 }
 
 func TestIsValidFrequency(t *testing.T) {

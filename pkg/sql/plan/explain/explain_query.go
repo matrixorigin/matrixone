@@ -37,6 +37,7 @@ const (
 	Label_Scan_Columns              = "Scan columns"
 	Label_List_Expression           = "List of expressions"
 	Label_Grouping_Keys             = "Grouping keys"
+	Label_Grouping_Hash_Keys        = "Grouping hash keys"
 	Label_Agg_Functions             = "Aggregate functions"
 	Label_Filter_Conditions         = "Filter conditions"
 	Label_Block_Filter_Conditions   = "Block Filter conditions"
@@ -560,7 +561,12 @@ func explainStep(ctx context.Context, step *plan.Node, nodes []*plan.Node, setti
 						sinkScan = childNode
 					}
 				}
-				if (tableScan.Stats.Cost / sinkScan.Stats.Cost) < 0.5 {
+				buildOnTable := step.FuzzyBuildSide ==
+					plan.Node_FUZZY_BUILD_SIDE_TABLE ||
+					(step.FuzzyBuildSide ==
+						plan.Node_FUZZY_BUILD_SIDE_UNSPECIFIED &&
+						(tableScan.Stats.Cost/sinkScan.Stats.Cost) < 0.3)
+				if buildOnTable {
 					buf.WriteString("TableScan")
 					if step.IfInsertFromUnique {
 						buf.WriteString(" (InsertFromUnique)")

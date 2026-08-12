@@ -47,13 +47,27 @@ const (
 	spillWrBufSize  = 64 * 1024   // 64 KiB write buffer per spill bucket
 )
 
+func hasInactiveGroupingColumn(flags []bool) bool {
+	for _, flag := range flags {
+		if !flag {
+			return true
+		}
+	}
+	return false
+}
+
 func (group *Group) Prepare(proc *process.Process) (err error) {
 	group.diagnosticsLogged = false
 	group.ctr.state = vm.Build
 	if group.ctr.mp != nil {
 		group.ctr.free()
 	}
+	group.ctr.prepareParamKind.Reset(group.Aggs)
+	group.ctr.aggExprs = group.Aggs
+	group.ctr.prepareParamKindWireV1 = prepareParamKindWireV1Enabled(proc) &&
+		hasPrepareParamKindPreservingAgg(group.Aggs)
 	group.ctr.mp = mpool.MustNewNoLock("group_mpool")
+	group.ctr.legacyTextMinMax = useLegacyTextMinMaxForRemote(proc)
 
 	// debug,
 	// group.ctr.mp.EnableDetailRecording()
@@ -67,6 +81,13 @@ func (group *Group) Prepare(proc *process.Process) (err error) {
 	// before preparing aggregate executors so the first execution behaves the
 	// same as a reused prepared operator.
 	group.ctr.setSpillMem(group.SpillMem, group.Aggs)
+	group.ctr.setGroupByHashKey(group.GroupByHashKey)
+	if len(group.GroupByHashKey) > 0 && hasInactiveGroupingColumn(group.GroupingFlag) {
+		return moerr.NewInternalErrorNoCtx("group-by hash key cannot be used with grouping sets")
+	}
+	if err = group.ctr.validateGroupByHashKey(len(group.GroupBy)); err != nil {
+		return err
+	}
 
 	if err = group.prepareGroupAndAggArg(proc); err != nil {
 		return err
@@ -85,7 +106,16 @@ func (group *Group) prepareGroupAndAggArg(proc *process.Process) (err error) {
 	} else {
 		// calculate the key width and key nullable, and hash table type.
 		group.ctr.keyWidth, group.ctr.keyNullable = 0, false
-		for _, expr := range group.GroupBy {
+		hashKeyCount := len(group.GroupBy)
+		if len(group.GroupByHashKey) > 0 {
+			hashKeyCount = len(group.GroupByHashKey)
+		}
+		for i := 0; i < hashKeyCount; i++ {
+			exprIdx := i
+			if len(group.GroupByHashKey) > 0 {
+				exprIdx = int(group.GroupByHashKey[i])
+			}
+			expr := group.GroupBy[exprIdx]
 			group.ctr.keyNullable = group.ctr.keyNullable || (!expr.Typ.NotNullable)
 			if expr.Typ.Id == int32(types.T_tuple) {
 				return moerr.NewInternalErrorNoCtx("tuple is not supported as group by column")
@@ -279,6 +309,14 @@ func (group *Group) Call(proc *process.Process) (vm.CallResult, error) {
 			}
 		}
 
+		if group.ctr.inputDone {
+			// EOF and cancellation can arrive in the same child call. Observe
+			// cancellation before flushing or reloading spill state.
+			if err, isCancel = vm.CancelCheck(proc); isCancel {
+				return vm.CancelResult, err
+			}
+		}
+
 		// spilling -- spill whatever left in memory, and load first spilled bucket.
 		if group.ctr.isSpilling() {
 			if bytes, rows, err := group.ctr.spillDataToDisk(proc, group.OpAnalyzer, nil); err != nil {
@@ -313,6 +351,14 @@ func (group *Group) buildOneBatch(proc *process.Process, bat *batch.Batch) (bool
 	if err = group.evaluateGroupByAndAggArgs(proc, bat); err != nil {
 		return false, err
 	}
+	for i := range group.Aggs {
+		if i < len(group.ctr.aggArgEvaluate) && len(group.ctr.aggArgEvaluate[i].Vec) > 0 {
+			arg := group.ctr.aggArgEvaluate[i].Vec[0]
+			if arg.Length() > 0 && !arg.AllNull() {
+				group.ctr.prepareParamKind.Observe(i, arg.GetPrepareParamKind())
+			}
+		}
+	}
 
 	// without group by, there is only one group.
 	if group.ctr.mtyp == H0 {
@@ -332,6 +378,7 @@ func (group *Group) buildOneBatch(proc *process.Process, bat *batch.Batch) (bool
 			}
 		}
 		hashBytesBefore := group.ctr.hr.Hash.Size()
+		hashKeyVecs := group.ctr.hashKeyVectors(group.ctr.groupByEvaluate.Vec)
 
 		// here is a strange loop.   our hash table exposed something called
 		// hashmap.UnitLimit -- which limits per iteration insert mini batch size.
@@ -342,7 +389,7 @@ func (group *Group) buildOneBatch(proc *process.Process, bat *batch.Batch) (bool
 			originGroupCount := group.ctr.hr.Hash.GroupCount()
 
 			// insert the mini batch into the hash table.
-			vals, _, err := group.ctr.hr.Itr.Insert(i, n, group.ctr.groupByEvaluate.Vec)
+			vals, _, err := group.ctr.hr.Itr.Insert(i, n, hashKeyVecs)
 			if err != nil {
 				return false, err
 			}
@@ -539,6 +586,14 @@ func (ctr *container) appendGroupByBatch(
 }
 
 func (group *Group) outputOneBatch(proc *process.Process) (vm.CallResult, error) {
+	// Build can switch directly to Eval and publish in the same Call. The
+	// Call-entry check therefore does not cover cancellation that arrives while
+	// the child batch is being built. Observe it at the output work-unit boundary
+	// before advancing result ownership.
+	if err, canceled := vm.CancelCheck(proc); canceled {
+		return vm.CancelResult, err
+	}
+
 	if group.NeedEval {
 		return group.ctr.outputOneBatchFinal(proc, group.OpAnalyzer, group.Aggs)
 	} else {
@@ -584,8 +639,23 @@ func (group *Group) getNextIntermediateResult(proc *process.Process) (vm.CallRes
 	buf.Write(types.EncodeBool(&group.ctr.keyNullable))
 	nAggs := int32(len(group.ctr.aggList))
 	buf.Write(types.EncodeInt32(&nAggs))
-	for _, ag := range group.ctr.aggList {
-		ag.SaveIntermediateResultOfChunk(curr, &buf)
+	prepareParamKinds := make([][]vector.PrepareParamKind, len(group.ctr.aggList))
+	prepareParamKindSummaries := make([]prepareParamKindSummary, len(group.ctr.aggList))
+	for i, ag := range group.ctr.aggList {
+		if err := ag.SaveIntermediateResultOfChunk(curr, &buf); err != nil {
+			return vm.CancelResult, false, err
+		}
+		if accessor, ok := ag.(aggexec.PrepareParamKindStateAccessor); ok {
+			prepareParamKinds[i] = accessor.PrepareParamKindsForChunk(curr)
+			prepareParamKindSummaries[i].kind, prepareParamKindSummaries[i].seen =
+				accessor.PrepareParamKindSummaryForChunk(curr)
+		}
+	}
+	if group.ctr.prepareParamKindWireV1 {
+		if err := writePrepareParamKindTrailer(proc.Ctx, &buf, group.Aggs,
+			&group.ctr.prepareParamKind, prepareParamKinds, prepareParamKindSummaries); err != nil {
+			return vm.CancelResult, false, err
+		}
 	}
 	batch.ExtraBuf = buf.Bytes()
 

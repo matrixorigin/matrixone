@@ -60,6 +60,91 @@ func TestDebug(t *testing.T) {
 	}
 }
 
+func TestSetNamesAssignmentKind(t *testing.T) {
+	tests := []struct {
+		name     string
+		sql      string
+		setNames bool
+		system   bool
+	}{
+		{name: "set names syntax", sql: "set names 'utf8mb4'", setNames: true},
+		{name: "reserved user variable", sql: "set @names = 'utf8mb4'"},
+		{name: "optimizer hints system variable", sql: "set optimizer_hints = ''", system: true},
+		{name: "optimizer hints user variable", sql: "set @optimizer_hints = ''"},
+		{name: "clear privilege cache system variable", sql: "set clear_privilege_cache = 1", system: true},
+		{name: "clear privilege cache user variable", sql: "set @clear_privilege_cache = 1"},
+		{name: "enable privilege cache system variable", sql: "set enable_privilege_cache = 1", system: true},
+		{name: "enable privilege cache user variable", sql: "set @enable_privilege_cache = 1"},
+		{name: "runtime filter limit system variable", sql: "set runtime_filter_limit_in = 1", system: true},
+		{name: "runtime filter limit user variable", sql: "set @runtime_filter_limit_in = 1"},
+		{name: "runtime filter bloom system variable", sql: "set runtime_filter_limit_bloom_filter = 1", system: true},
+		{name: "runtime filter bloom user variable", sql: "set @runtime_filter_limit_bloom_filter = 1"},
+		{name: "disable aggregate statement system variable", sql: "set disable_agg_statement = 1", system: true},
+		{name: "disable aggregate statement user variable", sql: "set @disable_agg_statement = 1"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			stmt, err := ParseOne(context.Background(), test.sql, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+
+			setVar, ok := stmt.(*tree.SetVar)
+			require.True(t, ok)
+			require.Len(t, setVar.Assignments, 1)
+			require.Equal(t, test.setNames, setVar.Assignments[0].SetNames)
+			require.Equal(t, test.system, setVar.Assignments[0].System)
+		})
+	}
+}
+
+func TestSetTransactionScope(t *testing.T) {
+	tests := []struct {
+		sql   string
+		scope tree.TransactionScope
+	}{
+		{sql: "set transaction isolation level read committed", scope: tree.TransactionScopeNext},
+		{sql: "set session transaction isolation level read committed", scope: tree.TransactionScopeSession},
+		{sql: "set global transaction isolation level read committed", scope: tree.TransactionScopeGlobal},
+	}
+
+	for _, test := range tests {
+		t.Run(test.sql, func(t *testing.T) {
+			stmt, err := ParseOne(context.Background(), test.sql, 1)
+			require.NoError(t, err)
+			setTxn, ok := stmt.(*tree.SetTransaction)
+			require.True(t, ok)
+			require.Equal(t, test.scope, setTxn.Scope)
+		})
+	}
+}
+
+func TestSetTransactionIsolationVariableScope(t *testing.T) {
+	tests := []struct {
+		sql   string
+		scope tree.TransactionScope
+	}{
+		{sql: "set transaction_isolation = 'READ-COMMITTED'", scope: tree.TransactionScopeSession},
+		{sql: "set session transaction_isolation = 'READ-COMMITTED'", scope: tree.TransactionScopeSession},
+		{sql: "set local transaction_isolation = 'READ-COMMITTED'", scope: tree.TransactionScopeSession},
+		{sql: "set global transaction_isolation = 'READ-COMMITTED'", scope: tree.TransactionScopeGlobal},
+		{sql: "set @@transaction_isolation = 'READ-COMMITTED'", scope: tree.TransactionScopeNext},
+		{sql: "set @@session.transaction_isolation = 'READ-COMMITTED'", scope: tree.TransactionScopeSession},
+		{sql: "set @@global.transaction_isolation = 'READ-COMMITTED'", scope: tree.TransactionScopeGlobal},
+	}
+
+	for _, test := range tests {
+		t.Run(test.sql, func(t *testing.T) {
+			stmt, err := ParseOne(context.Background(), test.sql, 1)
+			require.NoError(t, err)
+			setVar, ok := stmt.(*tree.SetVar)
+			require.True(t, ok)
+			require.Len(t, setVar.Assignments, 1)
+			require.Equal(t, test.scope, setVar.Assignments[0].TxnScope)
+		})
+	}
+}
+
 func TestDropFunctionIfExists(t *testing.T) {
 	tests := []struct {
 		sql      string
@@ -81,6 +166,17 @@ func TestDropFunctionIfExists(t *testing.T) {
 			require.Equal(t, test.sql, tree.String(stmt, dialect.MYSQL))
 		})
 	}
+}
+
+func TestGroupingAcceptsExpressions(t *testing.T) {
+	const sql = "select grouping(year(o.order_date), c.city) from orders as o, customers as c group by year(o.order_date), c.city with rollup"
+	const formatted = "select grouping(year(o.order_date), c.city) from orders as o cross join customers as c group by year(o.order_date), c.city with rollup"
+
+	stmt, err := ParseOne(context.Background(), sql, 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+
+	require.Equal(t, formatted, tree.String(stmt, dialect.MYSQL))
 }
 
 func TestQuantifiedTableSubqueryParse(t *testing.T) {
@@ -111,6 +207,39 @@ func TestQuantifiedTableSubqueryParse(t *testing.T) {
 			parenSelect := subquery.Select.(*tree.ParenSelect)
 
 			require.Equal(t, test.want, tree.String(parenSelect.Select, dialect.MYSQL))
+		})
+	}
+}
+
+func TestSelectSharedLockParse(t *testing.T) {
+	tests := []struct {
+		name string
+		sql  string
+		want string
+	}{
+		{
+			name: "for share",
+			sql:  "SELECT id FROM t WHERE id = '1' FOR SHARE",
+			want: "select id from t where id = 1 for share",
+		},
+		{
+			name: "lock in share mode",
+			sql:  "SELECT id FROM t WHERE id = '1' LOCK IN SHARE MODE",
+			want: "select id from t where id = 1 for share",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			stmt, err := ParseOne(context.Background(), test.sql, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+
+			selectStmt, ok := stmt.(*tree.Select)
+			require.True(t, ok)
+			require.NotNil(t, selectStmt.SelectLockInfo)
+			require.Equal(t, tree.SelectLockForShare, selectStmt.SelectLockInfo.LockType)
+			require.Equal(t, test.want, tree.String(stmt, dialect.MYSQL))
 		})
 	}
 }
@@ -183,6 +312,30 @@ func TestSQLModeParserModes(t *testing.T) {
 		require.Len(t, fn.Exprs, 2)
 		_, ok = fn.Exprs[1].(*tree.UnaryExpr)
 		require.True(t, ok)
+	})
+
+	t.Run("PIPES_AS_CONCAT works as an unparenthesized LIKE pattern", func(t *testing.T) {
+		stmt, err := ParseOneWithSQLMode(
+			context.Background(),
+			`select 'Jack' like '%'||?||'%'`,
+			1,
+			"PIPES_AS_CONCAT",
+		)
+		require.NoError(t, err)
+		defer stmt.Free()
+
+		likeExpr, ok := firstSelectExpr(t, stmt).(*tree.ComparisonExpr)
+		require.True(t, ok)
+		require.Equal(t, tree.LIKE, likeExpr.Op)
+		outerConcat, ok := likeExpr.Right.(*tree.FuncExpr)
+		require.True(t, ok)
+		require.Equal(t, "concat", outerConcat.Func.FunctionReference.(*tree.UnresolvedName).ColName())
+		require.Len(t, outerConcat.Exprs, 2)
+		innerConcat, ok := outerConcat.Exprs[0].(*tree.FuncExpr)
+		require.True(t, ok)
+		require.Equal(t, "concat", innerConcat.Func.FunctionReference.(*tree.UnresolvedName).ColName())
+		require.Len(t, innerConcat.Exprs, 2)
+		require.IsType(t, &tree.ParamExpr{}, innerConcat.Exprs[1])
 	})
 
 	t.Run("session parser mode does not inject PIPES_AS_CONCAT", func(t *testing.T) {
@@ -769,6 +922,157 @@ func TestDataBranchCreateTablePreservesQuotedApostropheIdentifier(t *testing.T) 
 	require.True(t, ok)
 	require.Equal(t, tree.Identifier("quote'dst"), branchStmt.CreateTable.Table.ObjectName)
 	require.Equal(t, tree.Identifier("quote'src"), branchStmt.SrcTable.ObjectName)
+}
+
+func TestDataBranchStatementFormatRoundTrip(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		sql  string
+		want string
+	}{
+		{
+			name: "create table",
+			sql:  "data branch create table `dst``table` from `src``table` to account `acc``name`",
+			want: "data branch create table `dst``table` from `src``table` to account `acc``name`",
+		},
+		{
+			name: "delete table",
+			sql:  "data branch delete table `db``name`.`table``name`",
+			want: "data branch delete table `db``name`.`table``name`",
+		},
+		{
+			name: "create database",
+			sql:  "data branch create database `dst``db` from `src``db`{snapshot='snap''one'} to account `acc``name`",
+			want: "data branch create database `dst``db` from `src``db`{snapshot = 'snap''one'} to account `acc``name`",
+		},
+		{
+			name: "delete database",
+			sql:  "data branch delete database `db``name`",
+			want: "data branch delete database `db``name`",
+		},
+		{
+			name: "diff output as",
+			sql:  "data branch diff `db`.`target`{snapshot='target snap'} against `db`.`base`{snapshot='base snap'} columns (`id`, `select`) output as `out`.`result`",
+			want: "data branch diff `db`.`target`{snapshot = 'target snap'} against `db`.`base`{snapshot = 'base snap'} columns (`id`, `select`) output as `out`.`result`",
+		},
+		{
+			name: "diff output empty file",
+			sql:  "data branch diff target against base output file ''",
+			want: "data branch diff `target` against `base` output file ''",
+		},
+		{
+			name: "diff output file",
+			sql:  "data branch diff target against base output file '/tmp/branch''s/'",
+			want: "data branch diff `target` against `base` output file '/tmp/branch''s/'",
+		},
+		{
+			name: "diff output zero limit",
+			sql:  "data branch diff target against base output limit 0",
+			want: "data branch diff `target` against `base` output limit 0",
+		},
+		{
+			name: "diff output count",
+			sql:  "data branch diff target against base output count",
+			want: "data branch diff `target` against `base` output count",
+		},
+		{
+			name: "diff output summary",
+			sql:  "data branch diff target against base output summary",
+			want: "data branch diff `target` against `base` output summary",
+		},
+		{
+			name: "merge default conflict behavior",
+			sql:  "data branch merge src into dst",
+			want: "data branch merge `src` into `dst`",
+		},
+		{
+			name: "merge explicit conflict behavior",
+			sql:  "data branch merge src into dst when conflict skip",
+			want: "data branch merge `src` into `dst` when conflict skip",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			stmt, err := ParseOne(context.Background(), test.sql, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+
+			formatted := tree.String(stmt, dialect.MYSQL)
+			require.Equal(t, test.want, formatted)
+
+			reparsed, err := ParseOne(context.Background(), formatted, 1)
+			require.NoError(t, err)
+			defer reparsed.Free()
+			require.IsType(t, stmt, reparsed)
+			require.Equal(t, formatted, tree.String(reparsed, dialect.MYSQL))
+		})
+	}
+}
+
+func TestDataBranchPickFormatRoundTrip(t *testing.T) {
+	for _, test := range []struct {
+		name         string
+		sql          string
+		want         string
+		wantSrcDB    tree.Identifier
+		wantSrc      tree.Identifier
+		wantDst      tree.Identifier
+		wantFrom     string
+		wantTo       string
+		wantKeys     bool
+		wantConflict int
+	}{
+		{
+			name:         "quoted tables",
+			sql:          "data branch pick `select`.`src``table` into `dst``table` keys (1) when conflict skip",
+			want:         "data branch pick `select`.`src``table` into `dst``table` keys (1) when conflict skip",
+			wantSrcDB:    tree.Identifier("select"),
+			wantSrc:      tree.Identifier("src`table"),
+			wantDst:      tree.Identifier("dst`table"),
+			wantKeys:     true,
+			wantConflict: tree.CONFLICT_SKIP,
+		},
+		{
+			name:         "string snapshots",
+			sql:          "data branch pick src into dst between snapshot 'snap one' and 'snap''two' when conflict accept",
+			want:         "data branch pick `src` into `dst` between snapshot 'snap one' and 'snap''two' when conflict accept",
+			wantSrc:      tree.Identifier("src"),
+			wantDst:      tree.Identifier("dst"),
+			wantFrom:     "snap one",
+			wantTo:       "snap'two",
+			wantConflict: tree.CONFLICT_ACCEPT,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			stmt, err := ParseOne(context.Background(), test.sql, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+
+			formatted := tree.String(stmt, dialect.MYSQL)
+			require.Equal(t, test.want, formatted)
+
+			reparsed, err := ParseOne(context.Background(), formatted, 1)
+			require.NoError(t, err)
+			defer reparsed.Free()
+
+			pick, ok := reparsed.(*tree.DataBranchPick)
+			require.True(t, ok)
+			require.Equal(t, test.wantSrcDB, pick.SrcTable.SchemaName)
+			require.Equal(t, test.wantSrc, pick.SrcTable.ObjectName)
+			require.Equal(t, test.wantDst, pick.DstTable.ObjectName)
+			require.Equal(t, test.wantFrom, pick.BetweenFrom)
+			require.Equal(t, test.wantTo, pick.BetweenTo)
+			if test.wantKeys {
+				require.NotNil(t, pick.Keys)
+				require.Equal(t, tree.PickKeysValues, pick.Keys.Type)
+				require.Len(t, pick.Keys.KeyExprs, 1)
+			} else {
+				require.Nil(t, pick.Keys)
+			}
+			require.NotNil(t, pick.ConflictOpt)
+			require.Equal(t, test.wantConflict, pick.ConflictOpt.Opt)
+			require.Equal(t, formatted, tree.String(reparsed, dialect.MYSQL))
+		})
+	}
 }
 
 func TestDataBranchDiffOutputModes(t *testing.T) {
@@ -3856,11 +4160,11 @@ var (
 		},
 		{
 			input:  "set session transaction isolation level read committed , read write , isolation level read committed , read only;",
-			output: "set transaction isolation level read committed , read write , isolation level read committed , read only",
+			output: "set session transaction isolation level read committed , read write , isolation level read committed , read only",
 		},
 		{
 			input:  "set session transaction isolation level read committed , isolation level read uncommitted , isolation level repeatable read , isolation level serializable;",
-			output: "set transaction isolation level read committed , isolation level read uncommitted , isolation level repeatable read , isolation level serializable",
+			output: "set session transaction isolation level read committed , isolation level read uncommitted , isolation level repeatable read , isolation level serializable",
 		},
 		{
 			input:  "create table t1(a int) STORAGE DISK;",
@@ -4546,6 +4850,167 @@ func TestGroupConcatDeparseRoundTrip(t *testing.T) {
 		roundTripped.Format(roundTripFmtCtx)
 		require.Equal(t, formatted, roundTripFmtCtx.String())
 	}
+}
+
+func TestOrderedSetAggregateDeparseRoundTrip(t *testing.T) {
+	for _, sql := range []string{
+		"select group_concat(v) within group (order by k desc) from t",
+		"select group_concat(v) within /* ordered-set */ group (order by k desc) from t",
+		"select percentile_cont(0.95) within group (order by v) from t",
+		"select percentile_cont(0.95) within /* ordered-set */ group (order by v) from t",
+		"select percentile_disc(1) within group (order by v desc) from t",
+	} {
+		ast, err := ParseOne(context.Background(), sql, 1)
+		require.NoError(t, err, sql)
+
+		fmtCtx := tree.NewFmtCtx(dialect.MYSQL, tree.WithQuoteString(true))
+		ast.Format(fmtCtx)
+		formatted := fmtCtx.String()
+		roundTripped, err := ParseOne(context.Background(), formatted, 1)
+		require.NoError(t, err, formatted)
+		roundTripFmtCtx := tree.NewFmtCtx(dialect.MYSQL, tree.WithQuoteString(true))
+		roundTripped.Format(roundTripFmtCtx)
+		require.Equal(t, formatted, roundTripFmtCtx.String())
+		require.Contains(t, strings.ToLower(formatted), "within group (order by")
+	}
+}
+
+func TestGroupConcatRejectsDoubleOrderBy(t *testing.T) {
+	_, err := ParseOne(context.Background(),
+		"select group_concat(v order by v) within group (order by k) from t", 1)
+	require.ErrorContains(t, err, "group_concat cannot use both ORDER BY and WITHIN GROUP ORDER BY")
+}
+
+func TestWithinRemainsIdentifierCompatible(t *testing.T) {
+	for _, sql := range []string{
+		"select within from t",
+		"select 1 as within group by 1",
+		"create table t (within int)",
+	} {
+		_, err := ParseOne(context.Background(), sql, 1)
+		require.NoError(t, err, sql)
+	}
+}
+
+func TestOrderedSetPercentileWithoutWithinGroupParses(t *testing.T) {
+	for _, sql := range []string{
+		"select percentile_cont(0.95) from t",
+		"select percentile_disc(0.95) from t",
+	} {
+		stmt, err := ParseOne(context.Background(), sql, 1)
+		require.NoError(t, err, sql)
+		selectStmt, ok := stmt.(*tree.Select)
+		require.True(t, ok, sql)
+		selectClause, ok := selectStmt.Select.(*tree.SelectClause)
+		require.True(t, ok, sql)
+		fn, ok := selectClause.Exprs[0].Expr.(*tree.FuncExpr)
+		require.True(t, ok, sql)
+		require.False(t, fn.WithinGroup, sql)
+		require.Nil(t, fn.OrderBy, sql)
+	}
+}
+
+func TestGroupingExtensionsDeparseRoundTrip(t *testing.T) {
+	tests := []struct {
+		name             string
+		input            string
+		want             string
+		wantCube         bool
+		wantGroupingSets bool
+		wantRollup       bool
+		wantSetWidths    []int
+	}{
+		{
+			name:          "single-column cube",
+			input:         "select count(*) from src group by cube(g)",
+			want:          "select count(*) from src group by cube(g)",
+			wantCube:      true,
+			wantSetWidths: []int{1},
+		},
+		{
+			name:          "multi-column cube",
+			input:         "select count(*) from src group by cube(g, h)",
+			want:          "select count(*) from src group by cube(g, h)",
+			wantCube:      true,
+			wantSetWidths: []int{2},
+		},
+		{
+			name:             "single grouping set",
+			input:            "select count(*) from src group by grouping sets ((g))",
+			want:             "select count(*) from src group by grouping sets ((g))",
+			wantGroupingSets: true,
+			wantSetWidths:    []int{1},
+		},
+		{
+			name:             "multiple grouping sets including empty set",
+			input:            "select count(*) from src group by grouping sets ((g, h), (g), ())",
+			want:             "select count(*) from src group by grouping sets ((g, h), (g), ())",
+			wantGroupingSets: true,
+			wantSetWidths:    []int{2, 1, 0},
+		},
+		{
+			name:          "rollup control",
+			input:         "select count(*) from src group by rollup(g, h)",
+			want:          "select count(*) from src group by g, h with rollup",
+			wantRollup:    true,
+			wantSetWidths: []int{2},
+		},
+	}
+
+	groupByOf := func(t *testing.T, stmt tree.Statement) *tree.GroupByClause {
+		t.Helper()
+		selectStmt, ok := stmt.(*tree.Select)
+		require.True(t, ok, "expected *tree.Select, got %T", stmt)
+		selectClause, ok := selectStmt.Select.(*tree.SelectClause)
+		require.True(t, ok, "expected *tree.SelectClause, got %T", selectStmt.Select)
+		require.NotNil(t, selectClause.GroupBy)
+		return selectClause.GroupBy
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			stmt, err := ParseOne(context.Background(), test.input, 1)
+			require.NoError(t, err)
+			t.Cleanup(stmt.Free)
+
+			formatted := tree.String(stmt, dialect.MYSQL)
+			require.Equal(t, test.want, formatted)
+
+			roundTripped, err := ParseOne(context.Background(), formatted, 1)
+			require.NoError(t, err, formatted)
+			t.Cleanup(roundTripped.Free)
+
+			groupBy := groupByOf(t, roundTripped)
+			require.Equal(t, test.wantCube, groupBy.Cube)
+			require.Equal(t, test.wantGroupingSets, groupBy.GroupingSets)
+			require.Equal(t, test.wantRollup, groupBy.Rollup)
+			require.Len(t, groupBy.GroupByExprsList, len(test.wantSetWidths))
+			for i, width := range test.wantSetWidths {
+				require.Len(t, groupBy.GroupByExprsList[i], width)
+			}
+		})
+	}
+}
+
+func TestApartGroupingSetDeparse(t *testing.T) {
+	stmt, err := ParseOne(context.Background(), "select count(*) from src group by grouping sets ((g), ())", 1)
+	require.NoError(t, err)
+	t.Cleanup(stmt.Free)
+
+	selectStmt, ok := stmt.(*tree.Select)
+	require.True(t, ok, "expected *tree.Select, got %T", stmt)
+	selectClause, ok := selectStmt.Select.(*tree.SelectClause)
+	require.True(t, ok, "expected *tree.SelectClause, got %T", selectStmt.Select)
+	groupBy := selectClause.GroupBy
+	require.NotNil(t, groupBy)
+
+	groupBy.Apart = true
+	groupBy.GroupingSets = false
+	groupBy.GroupingSet = groupBy.GroupByExprsList[0]
+	require.Equal(t, "group by g", tree.String(groupBy, dialect.MYSQL))
+
+	groupBy.GroupingSet = groupBy.GroupByExprsList[1]
+	require.Empty(t, tree.String(groupBy, dialect.MYSQL))
 }
 
 // TestFullTextMatchDeparseRoundTrip is the #24823 regression on the DEFAULT tree.String path

@@ -17,6 +17,7 @@ package hashjoin
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -48,6 +49,15 @@ const (
 	psBatchRow
 )
 
+const hashJoinAllocationSiteMatchedRows mpool.AllocationSite = 80
+
+const (
+	hashJoinAllocationSiteResultData mpool.AllocationSite = iota + 102
+	hashJoinAllocationSiteResultArea
+	hashJoinAllocationSiteResultNulls
+	hashJoinAllocationSiteResultGrouping
+)
+
 type container struct {
 	state       int
 	itr         hashmap.Iterator
@@ -73,16 +83,16 @@ type container struct {
 	probeState probeState
 
 	// Pre-computed per-query flags — avoid method calls in per-row probe loop.
-	probeHashOnPK      bool // HashOnPK || mp.HashOnUnique()
-	probeEmitUnmatched bool // EmitUnmatchedProbe()
-	probeRightSemiAnti bool // !IsRightSemi() && !IsAnti()
-	probeRightJoin     bool
-	probeSingle        bool
-	probeLeftSingle    bool
-	probeLeftSemi      bool
-	probeLeftAnti      bool
-	probeMark          bool
-	buildHasNullKey    bool
+	probeHashOnPK          bool // HashOnPK || mp.HashOnUnique()
+	probeEmitUnmatched     bool // EmitUnmatchedProbe()
+	probeRightSemiAnti     bool // !IsRightSemi() && !IsAnti()
+	probeTrackBuildMatches bool // EmitUnmatchedBuild()
+	probeSingle            bool
+	probeLeftSingle        bool
+	probeLeftSemi          bool
+	probeLeftAnti          bool
+	probeMark              bool
+	buildHasNullKey        bool
 
 	nonEqCondExec colexec.ExpressionExecutor
 
@@ -104,13 +114,9 @@ type container struct {
 	maxAllocSize int64
 
 	// spill support
-	spillEngine    *spillutil.SpillEngine
-	spillThreshold int64
-	// Non-nil only for spilled joins, where probe expressions are part of the
-	// shared HashBuild/spill working set. Resident probe expressions remain
-	// under normal process/mpool accounting; this is not a general query budget.
-	probeExpressionLease *hashbuild.ExpressionMemoryLease
-	probeBucketActive    bool // true while reading probe batches from a bucket
+	spillEngine       *spillutil.SpillEngine
+	spillThreshold    int64
+	probeBucketActive bool // true while reading probe batches from a bucket
 }
 
 type HashJoin struct {
@@ -125,7 +131,7 @@ type HashJoin struct {
 	NonEqCond  *plan.Expr
 	EqConds    [][]*plan.Expr
 
-	Channel chan *bitmap.Bitmap
+	Mailbox *BitmapMailbox
 	NumCPU  uint64
 
 	HashOnPK     bool
@@ -138,8 +144,66 @@ type HashJoin struct {
 	RuntimeFilterSpecs []*plan.RuntimeFilterSpec
 	JoinMapTag         int32
 	SpillThreshold     int64
+	allocationAccount  *mpool.AllocationAccount
+	resultAllocation   *vector.AllocationAccountSelection
+	// recursiveProbe is derived from the operator tree during Prepare. An empty
+	// build must still drain a recursive probe until its round marker.
+	recursiveProbe bool
 
 	vm.OperatorBase
+}
+
+func (hashJoin *HashJoin) SetAllocationAccount(
+	account *mpool.AllocationAccount,
+) error {
+	if account == nil || account.Handle() == 0 {
+		return mpool.ErrAllocationAccountInvalid
+	}
+	if hashJoin.allocationAccount != nil &&
+		hashJoin.allocationAccount != account {
+		return mpool.ErrAllocationAccountMismatch
+	}
+	if hashJoin.allocationAccount == account {
+		return nil
+	}
+	selection, err := vector.NewAllocationAccountSelection(
+		account,
+		hashbuild.HashBuildAllocationOwner,
+		hashJoinAllocationSiteResultData,
+		hashJoinAllocationSiteResultArea,
+		hashJoinAllocationSiteResultNulls,
+		hashJoinAllocationSiteResultGrouping,
+	)
+	if err != nil {
+		return err
+	}
+	hashJoin.allocationAccount = account
+	hashJoin.resultAllocation = selection
+	return nil
+}
+
+func (hashJoin *HashJoin) ClearAllocationAccount(
+	account *mpool.AllocationAccount,
+) error {
+	if hashJoin.allocationAccount == nil {
+		return nil
+	}
+	if hashJoin.allocationAccount != account {
+		return mpool.ErrAllocationAccountMismatch
+	}
+	if hashJoin.ctr.mp != nil || hashJoin.ctr.spillEngine != nil ||
+		len(hashJoin.ctr.eqCondExecs) != 0 ||
+		hashJoin.ctr.nonEqCondExec != nil ||
+		hashJoin.ctr.rightRowsMatched != nil ||
+		hashJoin.ctr.resBat != nil {
+		return mpool.ErrAllocationAccountInvariant
+	}
+	if hashJoin.NumCPU > 1 && !hashJoin.Mailbox.Terminal() {
+		return mpool.ErrAllocationAccountInvariant
+	}
+	hashJoin.allocationAccount = nil
+	hashJoin.resultAllocation = nil
+	return nil
 }
 
 func (hashJoin *HashJoin) GetOperatorBase() *vm.OperatorBase {
@@ -191,22 +255,23 @@ func (hashJoin *HashJoin) ExecProjection(proc *process.Process, input *batch.Bat
 
 func (hashJoin *HashJoin) Reset(proc *process.Process, pipelineFailed bool, err error) {
 	ctr := &hashJoin.ctr
+	hashmap.IteratorClearOwner(ctr.itr)
 	ctr.itr = nil
 	if !ctr.bitmapSynced && hashJoin.NumCPU > 1 && !hashJoin.IsMerger {
-		hashJoin.Channel <- nil
+		hashJoin.Mailbox.Send(nil)
 	}
-	// SpillEngine borrows the probe executor lease. End that borrow before the
-	// join frees the executors and releases their reservation.
+	if hashJoin.NumCPU > 1 && hashJoin.IsMerger {
+		hashJoin.Mailbox.SealAndDrain(proc.Mp())
+	}
 	ctr.cleanBucketBatches(proc)
-	if ctr.probeExpressionLease != nil {
-		ctr.cleanEqCondExecutors()
-		ctr.releaseProbeExpressionLease()
-	} else {
-		ctr.resetEqCondExecutors()
-	}
+	ctr.cleanEqCondExecutors()
 	ctr.cleanHashMap()
-	ctr.resetNonEqCondExecutor()
-	ctr.rightRowsMatched = nil
+	ctr.cleanNonEqCondExecutor()
+	if ctr.resBat != nil {
+		ctr.resBat.Clean(proc.GetMPool())
+		ctr.resBat = nil
+	}
+	ctr.freeRightRowsMatched(proc)
 	ctr.rightMatchedIter = nil
 	ctr.skipProbe = false
 	ctr.bitmapSynced = false
@@ -216,7 +281,6 @@ func (hashJoin *HashJoin) Reset(proc *process.Process, pipelineFailed bool, err 
 	ctr.state = Build
 	ctr.probeState = psNextBatch
 	ctr.lastIdx = 0
-
 	if hashJoin.OpAnalyzer != nil {
 		hashJoin.OpAnalyzer.Alloc(ctr.maxAllocSize)
 	}
@@ -229,15 +293,8 @@ func (hashJoin *HashJoin) Free(proc *process.Process, pipelineFailed bool, err e
 	ctr.cleanBatch(proc)
 	ctr.cleanBucketBatches(proc)
 	ctr.cleanEqCondExecutors()
-	ctr.releaseProbeExpressionLease()
 	ctr.cleanHashMap()
 	ctr.cleanNonEqCondExecutor()
-}
-
-func (ctr *container) resetNonEqCondExecutor() {
-	if ctr.nonEqCondExec != nil {
-		ctr.nonEqCondExec.ResetForNextQuery()
-	}
 }
 
 func (ctr *container) cleanNonEqCondExecutor() {
@@ -259,9 +316,12 @@ func (ctr *container) cleanBatch(proc *process.Process) {
 			ctr.joinBats[i] = nil
 		}
 	}
-	if ctr.rightRowsMatched != nil {
-		ctr.rightRowsMatched = nil
-	}
+	ctr.freeRightRowsMatched(proc)
+}
+
+func (ctr *container) freeRightRowsMatched(proc *process.Process) {
+	colexec.FreeAccountedBitmap(ctr.rightRowsMatched, proc.Mp())
+	ctr.rightRowsMatched = nil
 }
 
 func (ctr *container) cleanBucketBatches(proc *process.Process) {
@@ -273,6 +333,8 @@ func (ctr *container) cleanBucketBatches(proc *process.Process) {
 }
 
 func (ctr *container) cleanHashMap() {
+	hashmap.IteratorClearOwner(ctr.itr)
+	ctr.itr = nil
 	if ctr.mp != nil {
 		ctr.mp.Free()
 		ctr.mp = nil
@@ -287,21 +349,6 @@ func (ctr *container) cleanEqCondExecutors() {
 	}
 	ctr.eqCondExecs = nil
 	ctr.eqCondVecs = nil
-}
-
-func (ctr *container) resetEqCondExecutors() {
-	for i := range ctr.eqCondExecs {
-		if ctr.eqCondExecs[i] != nil {
-			ctr.eqCondExecs[i].ResetForNextQuery()
-		}
-	}
-}
-
-func (ctr *container) releaseProbeExpressionLease() {
-	if ctr.probeExpressionLease != nil {
-		ctr.probeExpressionLease.Release()
-		ctr.probeExpressionLease = nil
-	}
 }
 
 func (hashJoin *HashJoin) IsInner() bool {

@@ -228,9 +228,9 @@ func RunFunctionDirectly(proc *process.Process, overloadID int64, inputs []*vect
 
 	result := vector.NewFunctionResultWrapper(f.retType(inputTypes), mp)
 
-	fold := true
+	fold := !f.CannotFold() && !f.IsRealTimeRelated()
 	evaluateLength := length
-	if !f.CannotFold() && !f.IsRealTimeRelated() {
+	if fold {
 		for _, param := range inputs {
 			if !param.IsConst() {
 				fold = false
@@ -245,7 +245,7 @@ func RunFunctionDirectly(proc *process.Process, overloadID int64, inputs []*vect
 		result.Free()
 		return nil, err
 	}
-	exec, _, execFree := f.GetExecuteMethod()
+	exec, _, execFree, _ := f.GetExecuteMethod()
 	if err = exec(inputs, result, proc, evaluateLength, nil); err != nil {
 		result.Free()
 		if execFree != nil {
@@ -277,11 +277,9 @@ func GetAggFunctionNameByID(overloadID int64) string {
 	return f.aggName
 }
 
-// DeduceNotNullable helps optimization sometimes.
-// deduce notNullable for function
-// for example, create table t1(c1 int not null, c2 int, c3 int not null ,c4 int);
-// sql select c1+1, abs(c2), cast(c3 as varchar(10)) from t1 where c1=c3;
-// we can deduce that c1+1, cast c3 and c1=c3 is notNullable, abs(c2) is nullable.
+// DeduceNotNullable reports whether a function result is guaranteed to be
+// non-NULL. STRICT functions normally preserve an all-non-NULL argument
+// guarantee, except for functions that can synthesize NULL from valid values.
 func DeduceNotNullable(overloadID int64, args []*plan.Expr) bool {
 	fid, _ := DecodeOverloadID(overloadID)
 	switch fid {
@@ -289,6 +287,12 @@ func DeduceNotNullable(overloadID int64, args []*plan.Expr) bool {
 		if caseHasTemporalPromotion(args) {
 			return false
 		}
+		for _, arg := range args {
+			if !arg.Typ.NotNullable {
+				return false
+			}
+		}
+		return true
 	case COALESCE:
 		for _, arg := range args {
 			if arg.Typ.NotNullable {
@@ -309,11 +313,25 @@ func DeduceNotNullable(overloadID int64, args []*plan.Expr) bool {
 		if len(args) != 3 {
 			return false
 		}
+		for _, arg := range args {
+			if !arg.Typ.NotNullable {
+				return false
+			}
+		}
+		return true
+	// These STRICT functions can synthesize NULL from non-NULL arguments.
+	// The UUID extractors do so for non-RFC-4122 variants, and
+	// uuid_extract_timestamp also for versions without a time source (e.g. v4).
+	case DIV, INTEGER_DIV, MOD,
+		JSON_EXTRACT, JSON_EXTRACT_STRING, JSON_EXTRACT_FLOAT64,
+		REGEXP_SUBSTR,
+		INET6_ATON, ELT, UNHEX, MAKEDATE,
+		UUID_EXTRACT_VERSION, UUID_EXTRACT_TIMESTAMP:
+		return false
 	}
-	if allSupportedFunctions[fid].testFlag(plan.Function_PRODUCE_NO_NULL) {
+	if ProducesNoNull(overloadID) {
 		return true
 	}
-
 	for _, arg := range args {
 		if !arg.Typ.NotNullable {
 			return false
@@ -459,6 +477,11 @@ type executeFreeOfOverload func() error
 // in case we need it in the future.
 type executeResetOfOverload func() error
 
+// executeRetainedBytesOfOverload reports non-vector backing allocations kept
+// alive by a stateful function operator. It is optional: ordinary functions
+// whose complete retained state is represented by executor vectors omit it.
+type executeRetainedBytesOfOverload func() uint64
+
 // an overload of a function.
 // stores all information about execution logic.
 type overload struct {
@@ -482,7 +505,12 @@ type overload struct {
 
 	// the execution logic and free logic.
 	// NOTE: use either newOp or newOpWithFree.
-	newOpWithFree func() (executeLogicOfOverload, executeResetOfOverload, executeFreeOfOverload)
+	newOpWithFree func() (
+		executeLogicOfOverload,
+		executeResetOfOverload,
+		executeFreeOfOverload,
+		executeRetainedBytesOfOverload,
+	)
 
 	// in fact, the function framework does not directly run aggregate functions and window functions.
 	// we use two flags to mark whether function is one of them.
@@ -521,14 +549,18 @@ func (ov *overload) CannotExecuteInParallel() bool {
 	return ov.cannotParallel
 }
 
-func (ov *overload) GetExecuteMethod() (executeLogicOfOverload, executeResetOfOverload, executeFreeOfOverload) {
+func (ov *overload) GetExecuteMethod() (
+	executeLogicOfOverload,
+	executeResetOfOverload,
+	executeFreeOfOverload,
+	executeRetainedBytesOfOverload,
+) {
 	if ov.newOpWithFree != nil {
-		fn, fnReset, fnFree := ov.newOpWithFree()
-		return fn, fnReset, fnFree
+		return ov.newOpWithFree()
 	}
 
 	fn := ov.newOp()
-	return fn, nil, nil
+	return fn, nil, nil, nil
 }
 
 func (ov *overload) GetReturnTypeMethod() func(parameters []types.Type) types.Type {

@@ -85,6 +85,30 @@ func TestMergeUsageOverflowSaturates(t *testing.T) {
 	}
 }
 
+func TestAllocationAccountTotalsMergeAndFailureQuality(t *testing.T) {
+	var valid AllocationAccountTotals
+	if quality := valid.AddGeneration(10, 0, true); quality != 0 {
+		t.Fatalf("valid generation quality = %v", quality)
+	}
+	var failed AllocationAccountTotals
+	quality := failed.AddGeneration(20, 5, false)
+	if quality&QualityInvariantFailure == 0 ||
+		quality&QualityNonZeroLiveAtSeal == 0 {
+		t.Fatalf("failure quality = %v", quality)
+	}
+
+	quality = MergeAllocationAccountTotals(&valid, failed)
+	if valid.GenerationCount != 2 || valid.ValidGenerationCount != 1 ||
+		valid.FailedGenerationCount != 1 || valid.MaxGenerationPeak != 20 ||
+		valid.SumGenerationPeak != 30 || valid.LiveBytesAtTerminal != 5 {
+		t.Fatalf("merged allocation totals = %+v", valid)
+	}
+	if quality&QualityInvariantFailure == 0 ||
+		quality&QualityNonZeroLiveAtSeal == 0 {
+		t.Fatalf("merge quality = %v", quality)
+	}
+}
+
 func TestLocalRecorder(t *testing.T) {
 	var recorder LocalRecorder
 	recorder.AddActiveInterval(100, 10, 20)

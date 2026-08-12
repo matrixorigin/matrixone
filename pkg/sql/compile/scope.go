@@ -268,7 +268,7 @@ func (s *Scope) resetForReuse(c *Compile) (err error) {
 
 	if err = vm.HandleAllOp(s.RootOp, func(parentOp vm.Operator, op vm.Operator) error {
 		if op.OpType() == vm.Output {
-			op.(*output.Output).Func = c.fill
+			op.(*output.Output).Func = c.resultWriter()
 		}
 		return nil
 	}); err != nil {
@@ -286,6 +286,7 @@ func (s *Scope) resetForReuse(c *Compile) (err error) {
 	// state so the edges can carry the next execution's signals.
 	// See: https://github.com/matrixorigin/matrixone/issues/25614
 	if s.Proc != nil {
+		s.Proc.CopyPlanSnapshotFrom(c.proc)
 		for _, reg := range s.Proc.Reg.MergeReceivers {
 			reg.ResetTerminalStateForReuse()
 		}
@@ -751,6 +752,10 @@ func buildLoadParallelRun(s *Scope, c *Compile) (*Scope, error) {
 			return nil, err
 		}
 	}
+	if err := c.attachRuntimeAllocationOwners(ss); err != nil {
+		s.discardParallelGeneration(ms)
+		return nil, err
+	}
 	return ms, nil
 }
 
@@ -801,6 +806,10 @@ func buildScanParallelRun(s *Scope, c *Compile) (*Scope, error) {
 			node:         s.DataSource.node,
 			RecvMsgList:  recvMsgList,
 		}
+	}
+	if err := c.attachRuntimeAllocationOwners(ss); err != nil {
+		s.discardParallelGeneration(ms)
+		return nil, err
 	}
 
 	return ms, nil
@@ -1192,9 +1201,7 @@ func (s *Scope) sendNotifyMessageWithFactoryAndWait(
 					message := cnclient.AcquireMessage()
 					message.SetID(sender.streamSender.ID())
 					message.SetMessageType(pbpipeline.Method_PrepareDoneNotifyMessage)
-					if sender.requestFinishAck {
-						message.RequestedTeardownMode = pbpipeline.StreamTeardownMode_FinishAck
-					}
+					sender.requestStreamProtocols(message)
 					message.NeedNotReply = false
 					message.Uuid = uuid
 
@@ -1314,8 +1321,16 @@ func receiveMsgAndForward(sender *messageSenderOnClient, forwardReg *process.Wai
 		}
 
 		var receiverDone bool
-		if receiverDone, err = forwardRemoteBatchWithContext(sender, forwardReg, bat, sender.mp); err != nil || receiverDone {
+		if receiverDone, err = forwardRemoteBatchWithContext(sender, forwardReg, bat, sender.mp); err != nil {
 			return err
+		}
+		// A stopped receiver intentionally discarded the decoded batch, but the
+		// remote sender still owns its credit until this ACK is sent.
+		if err = sender.acknowledgeRemoteBatch(); err != nil {
+			return err
+		}
+		if receiverDone {
+			return nil
 		}
 	}
 }
@@ -1501,6 +1516,23 @@ func (s *Scope) buildReaders(c *Compile) (readers []engine.Reader, err error) {
 		if s.DataSource.AccountId != nil {
 			ctx = defines.AttachAccountId(ctx, uint32(s.DataSource.AccountId.GetTenantId()))
 		}
+		hint := engine.FilterHint{}
+		if tableDef := s.DataSource.TableDef; tableDef != nil {
+			switch {
+			case tableDef.TableType == catalog.SystemSI_IVFFLAT_TblType_Entries:
+				hint.MembershipFilterBytes = s.DataSource.MembershipFilterBytes
+				if len(hint.MembershipFilterBytes) == 0 {
+					hint.MembershipFilterBytes, _ = c.proc.Ctx.Value(
+						defines.IvfMembershipFilter{}).([]byte)
+				}
+			case catalog.IsFullTextIndexTableType(tableDef.TableType, tableDef.Name):
+				hint.MembershipFilterBytes = s.DataSource.MembershipFilterBytes
+				if len(hint.MembershipFilterBytes) == 0 {
+					hint.MembershipFilterBytes, _ = c.proc.Ctx.Value(
+						defines.FulltextMembershipFilter{}).([]byte)
+				}
+			}
+		}
 
 		readers, err = c.e.BuildBlockReaders(
 			ctx,
@@ -1509,7 +1541,8 @@ func (s *Scope) buildReaders(c *Compile) (readers []engine.Reader, err error) {
 			s.DataSource.FilterExpr,
 			s.DataSource.TableDef,
 			s.NodeInfo.Data,
-			s.NodeInfo.Mcpu)
+			s.NodeInfo.Mcpu,
+			hint)
 		if err != nil {
 			return
 		}

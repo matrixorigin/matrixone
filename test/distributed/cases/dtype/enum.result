@@ -55,7 +55,7 @@ enum01  ¦  CREATE TABLE `enum01` (
 )
 select table_name, COLUMN_NAME, data_type, is_nullable from information_schema.columns where table_name like 'enum01' and COLUMN_NAME not like '__mo%';
 ➤ table_name[12,-1,0]  ¦  COLUMN_NAME[12,-1,0]  ¦  data_type[12,-1,0]  ¦  is_nullable[12,-1,0]  𝄀
-enum01  ¦  col1  ¦  ENUM  ¦  YES
+enum01  ¦  col1  ¦  enum  ¦  YES
 select * from enum01;
 ➤ col1[12,-1,0]  𝄀
 red
@@ -75,7 +75,7 @@ show columns from enum03;
 no such table enum.enum03
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'enum02' and COLUMN_NAME not like '__mo%';
 ➤ table_name[12,-1,0]  ¦  COLUMN_NAME[12,-1,0]  ¦  data_type[12,-1,0]  ¦  is_nullable[12,-1,0]  𝄀
-enum02  ¦  col1  ¦  ENUM  ¦  YES
+enum02  ¦  col1  ¦  enum  ¦  YES
 drop table enum02;
 drop table if exists enum03;
 create table enum03 (col1 enum('ejwuijfew', 'ewrwrewretr', 'werwre') not null);
@@ -135,12 +135,12 @@ create table enum05 (a int,b enum('4','3','2','1'));
 insert into enum05 values(1,1);
 select * from enum05;
 ➤ a[4,32,0]  ¦  b[12,-1,0]  𝄀
-1  ¦  1
+1  ¦  4
 insert into enum05 values(2,'1');
 select * from enum05;
 ➤ a[4,32,0]  ¦  b[12,-1,0]  𝄀
-1  ¦  1  𝄀
-2  ¦  4
+1  ¦  4  𝄀
+2  ¦  1
 drop table enum05;
 drop table if exists pri01;
 create table pri01 (col1 enum('qy4iujd3wi4fu4h3f', '323242r34df432432', '32e3ewfdewrew'));
@@ -190,8 +190,8 @@ col1  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 col2  ¦  ENUM('数据库','数据库系统','数据库管理系统')  ¦  YES  ¦    ¦  null  ¦    ¦  
 select table_name, COLUMN_NAME, data_type, is_nullable from information_schema.columns where table_name like 'pri02' and COLUMN_NAME not like '__mo%';
 ➤ table_name[12,-1,0]  ¦  COLUMN_NAME[12,-1,0]  ¦  data_type[12,-1,0]  ¦  is_nullable[12,-1,0]  𝄀
-pri02  ¦  col1  ¦  INT  ¦  YES  𝄀
-pri02  ¦  col2  ¦  ENUM  ¦  YES
+pri02  ¦  col1  ¦  int  ¦  YES  𝄀
+pri02  ¦  col2  ¦  enum  ¦  YES
 drop table pri02;
 drop table if exists pri03;
 create table pri03 (col1 int, col2 enum('数据库', '数据库系统', '数据库管理系统'));
@@ -215,8 +215,8 @@ col1  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 col2  ¦  ENUM('数据库','数据库系统','数据库管理系统')  ¦  YES  ¦    ¦  null  ¦    ¦  
 select table_name, COLUMN_NAME, data_type, is_nullable from information_schema.columns where table_name like 'pri03' and COLUMN_NAME not like '__mo%';
 ➤ table_name[12,-1,0]  ¦  COLUMN_NAME[12,-1,0]  ¦  data_type[12,-1,0]  ¦  is_nullable[12,-1,0]  𝄀
-pri03  ¦  col1  ¦  INT  ¦  YES  𝄀
-pri03  ¦  col2  ¦  ENUM  ¦  YES
+pri03  ¦  col1  ¦  int  ¦  YES  𝄀
+pri03  ¦  col2  ¦  enum  ¦  YES
 drop table pri03;
 drop table if exists pri04;
 create table pri04 (col1 int, col2 enum('database', 'database management', 'database management system'));
@@ -243,8 +243,8 @@ select * from pri04 where col2 = 'database';
 1  ¦  database
 select table_name, COLUMN_NAME, data_type, is_nullable from information_schema.columns where table_name like 'pri04' and COLUMN_NAME not like '__mo%';
 ➤ table_name[12,-1,0]  ¦  COLUMN_NAME[12,-1,0]  ¦  data_type[12,-1,0]  ¦  is_nullable[12,-1,0]  𝄀
-pri04  ¦  col1  ¦  INT  ¦  YES  𝄀
-pri04  ¦  col2  ¦  ENUM  ¦  YES
+pri04  ¦  col1  ¦  int  ¦  YES  𝄀
+pri04  ¦  col2  ¦  enum  ¦  YES
 drop table pri04;
 drop table if exists enum_idx01;
 create table enum_idx01 (id varchar(191) primary key, role enum('a','b','c'), index idx_role(role));
@@ -327,22 +327,102 @@ show columns from insert01;
 id  ¦  INT(32)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
 order_number  ¦  VARCHAR(20)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 status  ¦  ENUM('Pending','Processing','Completed','Cancelled')  ¦  YES  ¦    ¦  null  ¦    ¦  
+select id, status + 0, status = 1, status = 'Pending' from insert01 order by id;
+➤ id[4,32,0]  ¦  status + 0[-5,64,0]  ¦  status = 1[-7,1,0]  ¦  status = Pending[-7,1,0]  𝄀
+1  ¦  1  ¦  1  ¦  1  𝄀
+2  ¦  2  ¦  0  ¦  0  𝄀
+3  ¦  3  ¦  0  ¦  0  𝄀
+4  ¦  4  ¦  0  ¦  0
+select id from insert01 where status = 3 order by id;
+➤ id[4,32,0]  𝄀
+3
+select id from insert01 where status in (1, 4) order by id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+4
+select id from insert01 where status in ('Pending', 4) order by id;
+➤ id[4,32,0]  𝄀
+1
 delete from insert01 where status=3;
-invalid argument cast to int, bad value Pending
 update insert01 set status='Pending' where status=2;
-invalid argument cast to int, bad value Pending
 select * from insert01;
 ➤ id[4,32,0]  ¦  order_number[12,-1,0]  ¦  status[12,-1,0]  𝄀
 1  ¦  111  ¦  Pending  𝄀
-2  ¦  222  ¦  Processing  𝄀
-3  ¦  333  ¦  Completed  𝄀
-4  ¦  444  ¦  Cancelled
+4  ¦  444  ¦  Cancelled  𝄀
+2  ¦  222  ¦  Pending
 select * from insert01 where status=4;
-invalid argument cast to int, bad value Pending
+➤ id[4,32,0]  ¦  order_number[12,-1,0]  ¦  status[12,-1,0]  𝄀
+4  ¦  444  ¦  Cancelled
 select * from insert01 where status in ('Pending',4);
 ➤ id[4,32,0]  ¦  order_number[12,-1,0]  ¦  status[12,-1,0]  𝄀
-1  ¦  111  ¦  Pending
+1  ¦  111  ¦  Pending  𝄀
+2  ¦  222  ¦  Pending
 drop table insert01;
+drop table if exists mysql_compat_special_numeric_context;
+create table mysql_compat_special_numeric_context (
+id int primary key,
+e enum('a', 'b', ''),
+s set('x', 'y', 'z'),
+i int
+);
+insert into mysql_compat_special_numeric_context values
+(1, 'a', 'x,z', 1),
+(2, 'b', 'y', 2),
+(3, '', '', 3);
+select id, cast(e as signed), abs(e), e = i, e between 1 and 2,
+e in (i), e = +1, e = 'a'
+from mysql_compat_special_numeric_context order by id;
+➤ id[4,32,0]  ¦  cast(e as signed)[-5,64,0]  ¦  abs(e)[-5,64,0]  ¦  e = i[-7,1,0]  ¦  e between 1 and 2[-7,1,0]  ¦  e in (i)[-7,1,0]  ¦  e = +1[-7,1,0]  ¦  e = a[-7,1,0]  𝄀
+1  ¦  1  ¦  1  ¦  1  ¦  1  ¦  1  ¦  1  ¦  1  𝄀
+2  ¦  2  ¦  2  ¦  1  ¦  1  ¦  1  ¦  0  ¦  0  𝄀
+3  ¦  3  ¦  3  ¦  1  ¦  0  ¦  1  ¦  0  ¦  0
+select id, cast(s as signed), abs(s), s = i, s between 1 and 5,
+s in (i), s = +5, s = 'x,z'
+from mysql_compat_special_numeric_context order by id;
+➤ id[4,32,0]  ¦  cast(s as signed)[-5,64,0]  ¦  abs(s)[-5,64,0]  ¦  s = i[-7,1,0]  ¦  s between 1 and 5[-7,1,0]  ¦  s in (i)[-7,1,0]  ¦  s = +5[-7,1,0]  ¦  s = x,z[-7,1,0]  𝄀
+1  ¦  5  ¦  5  ¦  0  ¦  1  ¦  0  ¦  1  ¦  1  𝄀
+2  ¦  2  ¦  2  ¦  1  ¦  1  ¦  1  ¦  0  ¦  0  𝄀
+3  ¦  0  ¦  0  ¦  0  ¦  0  ¦  0  ¦  0  ¦  0
+drop table mysql_compat_special_numeric_context;
+drop table if exists mysql_compat_special_ignore;
+create table mysql_compat_special_ignore (
+id int primary key,
+y year,
+b bit(4),
+e enum('a', 'b', ''),
+s set('x', 'y', 'z')
+);
+set session sql_mode = 'STRICT_TRANS_TABLES';
+insert ignore into mysql_compat_special_ignore values (1, 2156, b'11111', 'bad', 'x,bad');
+select id, y, y + 0, bin(b + 0), e, e + 0, s, s + 0
+from mysql_compat_special_ignore order by id;
+➤ id[4,32,0]  ¦  y[91,65535,0]  ¦  y + 0[-5,64,0]  ¦  bin(b + 0)[12,-1,0]  ¦  e[12,-1,0]  ¦  e + 0[-5,64,0]  ¦  s[12,-1,0]  ¦  s + 0[3,38,0]  𝄀
+1  ¦  2000-01-01  ¦  0  ¦  1111  ¦    ¦  0  ¦  x  ¦  1
+insert ignore into mysql_compat_special_ignore values
+(2, '2156', b'10000', 9, 'bad'),
+(3, 2024, b'0011', 'a', 'x,z'),
+(4, 2024, b'0000', '', '');
+select id, y + 0, bin(b + 0), e, e + 0, s, s + 0
+from mysql_compat_special_ignore order by id;
+➤ id[4,32,0]  ¦  y + 0[-5,64,0]  ¦  bin(b + 0)[12,-1,0]  ¦  e[12,-1,0]  ¦  e + 0[-5,64,0]  ¦  s[12,-1,0]  ¦  s + 0[3,38,0]  𝄀
+1  ¦  0  ¦  1111  ¦    ¦  0  ¦  x  ¦  1  𝄀
+2  ¦  0  ¦  1111  ¦    ¦  0  ¦    ¦  0  𝄀
+3  ¦  2024  ¦  11  ¦  a  ¦  1  ¦  x,z  ¦  5  𝄀
+4  ¦  2024  ¦  0  ¦    ¦  3  ¦    ¦  0
+select id, e, e + 0, e = '', length(e)
+from mysql_compat_special_ignore order by id;
+➤ id[4,32,0]  ¦  e[12,-1,0]  ¦  e + 0[-5,64,0]  ¦  e = [-7,1,0]  ¦  length(e)[-5,64,0]  𝄀
+1  ¦    ¦  0  ¦  1  ¦  0  𝄀
+2  ¦    ¦  0  ¦  1  ¦  0  𝄀
+3  ¦  a  ¦  1  ¦  0  ¦  1  𝄀
+4  ¦    ¦  3  ¦  1  ¦  0
+insert into mysql_compat_special_ignore values (5, 2156, b'11111', 'bad', 'x,bad');
+invalid input: data too long, type width = 4, val = 11111
+select count(*) from mysql_compat_special_ignore;
+➤ count(*)[-5,64,0]  𝄀
+4
+set session sql_mode = '';
+drop table mysql_compat_special_ignore;
 drop table if exists default01;
 create table default01 (`col1` enum('T', 'E') not null default 'T');
 desc default01;
@@ -541,7 +621,7 @@ select min(col1), min(col2) from builtin01;
 ➤ min(col1)[12,-1,0]  ¦  min(col2)[12,-1,0]  𝄀
   云原生数据库    ¦   database
 select group_concat(col1,col2) from builtin01;
-➤ group_concat(col1, col2, ,)[12,0,0]  𝄀
+➤ group_concat(col1, col2 separator ,)[12,0,0]  𝄀
   云原生数据库   database,存储引擎 TAEengine ,database systemengine 
 drop table builtin01;
 drop table if exists agg01;
@@ -626,4 +706,69 @@ low  ¦  1  𝄀
 medium  ¦  2  𝄀
 high  ¦  3  𝄀
 critical  ¦  4
+with c as (select id, val from test_enum_order) select id, val from c order by val;
+➤ id[4,32,0]  ¦  val[12,-1,0]  𝄀
+1  ¦  low  𝄀
+2  ¦  medium  𝄀
+3  ¦  high  𝄀
+4  ¦  critical
+select id, val from (select id, val from test_enum_order) d order by val desc;
+➤ id[4,32,0]  ¦  val[12,-1,0]  𝄀
+4  ¦  critical  𝄀
+3  ¦  high  𝄀
+2  ¦  medium  𝄀
+1  ¦  low
+select id, val from (select id, val from (select id, val from test_enum_order) d1) d2 order by val;
+➤ id[4,32,0]  ¦  val[12,-1,0]  𝄀
+1  ¦  low  𝄀
+2  ¦  medium  𝄀
+3  ¦  high  𝄀
+4  ¦  critical
+select id, val from test_enum_order where id <= 2
+union all
+select id, val from test_enum_order where id > 2
+order by val;
+➤ id[4,32,0]  ¦  val[12,-1,0]  𝄀
+1  ¦  low  𝄀
+2  ¦  medium  𝄀
+3  ¦  high  𝄀
+4  ¦  critical
+with c as (select id, val from test_enum_order)
+select id, val, row_number() over (order by val desc) as rn from c order by rn;
+➤ id[4,32,0]  ¦  val[12,-1,0]  ¦  rn[-5,64,0]  𝄀
+4  ¦  critical  ¦  1  𝄀
+3  ¦  high  ¦  2  𝄀
+2  ¦  medium  ¦  3  𝄀
+1  ¦  low  ¦  4
+select val from test_enum_order group by val order by val;
+➤ val[12,-1,0]  𝄀
+low  𝄀
+medium  𝄀
+high  𝄀
+critical
+select val from (select val from test_enum_order group by val) d order by val;
+➤ val[12,-1,0]  𝄀
+low  𝄀
+medium  𝄀
+high  𝄀
+critical
+select val, row_number() over (order by val) as rn
+from test_enum_order group by val order by rn;
+➤ val[12,-1,0]  ¦  rn[-5,64,0]  𝄀
+low  ¦  1  𝄀
+medium  ¦  2  𝄀
+high  ¦  3  𝄀
+critical  ¦  4
+select group_concat(val order by val separator '|') as ordered_values
+from (select val from test_enum_order) d;
+➤ ordered_values[12,0,0]  𝄀
+low|medium|high|critical
+select id, cast(val as char) as lexical_val
+from (select id, val from test_enum_order) d
+order by lexical_val, id;
+➤ id[4,32,0]  ¦  lexical_val[12,-1,0]  𝄀
+4  ¦  critical  𝄀
+3  ¦  high  𝄀
+1  ¦  low  𝄀
+2  ¦  medium
 drop table test_enum_order;

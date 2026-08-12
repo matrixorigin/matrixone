@@ -68,6 +68,179 @@ type releaseTrackingData struct {
 	outstanding *atomic.Int32
 }
 
+func TestAppendableVisibilityFiltersAbortFromMaterializeAndSearch(t *testing.T) {
+	ctx := context.Background()
+	fs := testutil.NewSharedFS()
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+
+	input := batch.NewWithSize(3)
+	input.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
+	input.Vecs[1] = vector.NewVec(types.T_TS.ToType())
+	input.Vecs[2] = vector.NewVec(types.T_bool.ToType())
+	defer input.Clean(mp)
+	for _, row := range []struct {
+		key     string
+		commit  types.TS
+		aborted bool
+	}{
+		{key: "live", commit: types.BuildTS(5, 0)},
+		{key: "aborted", commit: types.BuildTS(6, 0), aborted: true},
+		{key: "future", commit: types.BuildTS(20, 0)},
+	} {
+		require.NoError(t, vector.AppendBytes(input.Vecs[0], []byte(row.key), false, mp))
+		require.NoError(t, vector.AppendFixed(input.Vecs[1], row.commit, false, mp))
+		require.NoError(t, vector.AppendFixed(input.Vecs[2], row.aborted, false, mp))
+	}
+	input.SetRowCount(3)
+
+	writer := ConstructWriter(
+		0,
+		[]uint16{0, objectio.SEQNUM_COMMITTS, objectio.SEQNUM_ABORT},
+		-1,
+		false,
+		false,
+		fs,
+	)
+	writer.SetAppendable()
+	_, err := writer.WriteBatch(input)
+	require.NoError(t, err)
+	_, _, err = writer.Sync(ctx)
+	require.NoError(t, err)
+	stats := writer.GetObjectStats(objectio.WithAppendable())
+	location := stats.ObjectLocation()
+	snapshot := types.BuildTS(10, 0)
+
+	destination := vector.NewVec(types.T_varchar.ToType())
+	defer destination.Free(mp)
+	deleteMask, _, err := LoadColumnsDataInto(
+		ctx,
+		[]uint16{0},
+		[]types.Type{types.T_varchar.ToType()},
+		fs,
+		location,
+		[]*vector.Vector{destination},
+		nil,
+		&snapshot,
+		mp,
+		fileservice.Policy(0),
+	)
+	require.NoError(t, err)
+	defer deleteMask.Release()
+	require.True(t, deleteMask.Contains(1), "aborted row must be hidden from full scans")
+	require.True(t, deleteMask.Contains(2), "future row must be hidden from full scans")
+	require.False(t, deleteMask.Contains(0))
+
+	search := objectio.NewReadFilterSearch(
+		types.T_varchar,
+		[][]byte{[]byte("live"), []byte("aborted"), []byte("future")},
+	)
+	sels, _, err := LoadColumnDataBySearch(
+		ctx,
+		0,
+		types.T_varchar.ToType(),
+		fs,
+		location,
+		search,
+		false,
+		&snapshot,
+		mp,
+		fileservice.Policy(0),
+	)
+	require.NoError(t, err)
+	require.Equal(t, []int64{0}, sels, "cached search must return only live visible rows")
+}
+
+func TestReadDeletesSupportsLegacyTombstoneWithoutAbortColumn(t *testing.T) {
+	ctx := context.Background()
+	fs := testutil.NewSharedFS()
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+
+	input := batch.NewWithSize(3)
+	input.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
+	input.Vecs[1] = vector.NewVec(types.T_int32.ToType())
+	input.Vecs[2] = vector.NewVec(types.T_TS.ToType())
+	defer input.Clean(mp)
+	blockID := types.Blockid{}
+	for offset := uint32(1); offset <= 2; offset++ {
+		require.NoError(t, vector.AppendFixed(input.Vecs[0], types.NewRowid(&blockID, offset), false, mp))
+		require.NoError(t, vector.AppendFixed(input.Vecs[1], int32(offset), false, mp))
+		require.NoError(t, vector.AppendFixed(input.Vecs[2], types.BuildTS(1, 0), false, mp))
+	}
+	input.SetRowCount(2)
+
+	writer := ConstructTombstoneWriter(objectio.HiddenColumnSelection_CommitTS, fs)
+	_, err := writer.WriteBatch(input)
+	require.NoError(t, err)
+	blocks, _, err := writer.Sync(ctx)
+	require.NoError(t, err)
+	require.Len(t, blocks, 1)
+
+	location := objectio.BuildLocation(
+		writer.GetName(),
+		blocks[0].GetExtent(),
+		uint32(input.RowCount()),
+		blocks[0].GetID(),
+	)
+	cacheVectors := containers.NewVectors(3)
+	_, release, err := ReadDeletes(ctx, location, fs, false, cacheVectors, nil)
+	require.NoError(t, err)
+	defer release()
+	require.Equal(t, 2, cacheVectors[0].Length())
+	require.Equal(t, 2, cacheVectors[1].Length())
+	require.Equal(t, 2, cacheVectors[2].Length())
+	require.True(t, cacheVectors[2].IsConstNull())
+	abortColumn, err := ValidateTombstoneAbortColumn(2, &cacheVectors[2])
+	require.NoError(t, err)
+	require.False(t, abortColumn.IsPresent())
+}
+
+func TestReadDeletesRejectsMalformedAbortColumn(t *testing.T) {
+	ctx := context.Background()
+	fs := testutil.NewSharedFS()
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+
+	input := batch.NewWithSize(3)
+	input.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
+	input.Vecs[1] = vector.NewVec(types.T_TS.ToType())
+	input.Vecs[2] = vector.NewVec(types.T_bool.ToType())
+	defer input.Clean(mp)
+	blockID := types.Blockid{}
+	for offset := uint32(1); offset <= 3; offset++ {
+		require.NoError(t, vector.AppendFixed(input.Vecs[0], types.NewRowid(&blockID, offset), false, mp))
+		require.NoError(t, vector.AppendFixed(input.Vecs[1], types.BuildTS(1, 0), false, mp))
+	}
+	require.NoError(t, vector.AppendFixed(input.Vecs[2], false, false, mp))
+	input.SetRowCount(3)
+
+	writer := ConstructWriter(
+		0,
+		[]uint16{0, objectio.SEQNUM_COMMITTS, objectio.SEQNUM_ABORT},
+		-1,
+		false,
+		false,
+		fs,
+	)
+	_, err := writer.WriteBatch(input)
+	require.NoError(t, err)
+	blocks, _, err := writer.Sync(ctx)
+	require.NoError(t, err)
+	require.Len(t, blocks, 1)
+
+	location := objectio.BuildLocation(
+		writer.GetName(),
+		blocks[0].GetExtent(),
+		uint32(input.RowCount()),
+		blocks[0].GetID(),
+	)
+	cacheVectors := containers.NewVectors(3)
+	_, release, err := ReadDeletes(ctx, location, fs, false, cacheVectors, nil)
+	require.Error(t, err)
+	require.Nil(t, release)
+}
+
 func (d *releaseTrackingData) Slice(length int) fscache.Data {
 	d.Data = d.Data.Slice(length)
 	return d

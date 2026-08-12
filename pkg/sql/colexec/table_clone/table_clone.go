@@ -30,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/incrservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/partition"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/features"
@@ -479,6 +480,12 @@ func (tc *TableClone) updateDstAutoIncrColumns(
 		len(tc.Ctx.IndexAutoIncrStates) == 0 {
 		return nil
 	}
+	if !engine.TxnSupportsAutoIncrEpochFence(proc.GetTxnOperator()) {
+		return moerr.NewNotSupported(
+			dstCtx,
+			"AUTO_INCREMENT allocator reset requires epoch fencing on every TN service",
+		)
+	}
 
 	if tc.Ctx.SrcAutoIncrMaxValues != nil || tc.Ctx.SrcAutoIncrOffsets != nil {
 		if err := updateRelationAutoIncrement(
@@ -521,17 +528,29 @@ func updateRelationAutoIncrement(
 	var typs []types.Type
 	_, typs, _, _, _ = colexec.GetSequmsAttrsSortKeyIdxFromTableDef(def)
 	tableID := rel.GetTableID(ctx)
+	databaseID := rel.GetDBID(ctx)
+	epochReqs := make([]*api.AlterTableReq, 0)
 	setOffset := func(col incrservice.AutoColumn, offset uint64) error {
 		if err := incrservice.ValidateAutoColumnOffset(ctx, typs[col.ColIndex].Oid, offset); err != nil {
 			return err
 		}
-		return proc.GetIncrService().SetOffset(
+		if err := proc.GetIncrService().SetOffset(
 			ctx,
 			tableID,
+			col.ColIndex,
 			col.ColName,
 			offset,
 			proc.GetTxnOperator(),
-		)
+		); err != nil {
+			return err
+		}
+		epochReqs = append(epochReqs, api.NewUpdateAutoIncrementReq(
+			databaseID,
+			tableID,
+			offset,
+			0,
+		))
+		return nil
 	}
 
 	if !separateUserColumns {
@@ -541,7 +560,10 @@ func updateRelationAutoIncrement(
 				return err
 			}
 		}
-		return nil
+		if len(epochReqs) == 0 {
+			return nil
+		}
+		return rel.AlterTable(ctx, nil, epochReqs)
 	}
 
 	for _, col := range incrservice.GetUserAutoColumnFromDef(def) {
@@ -560,7 +582,10 @@ func updateRelationAutoIncrement(
 			return err
 		}
 	}
-	return nil
+	if len(epochReqs) == 0 {
+		return nil
+	}
+	return rel.AlterTable(ctx, nil, epochReqs)
 }
 
 func (tc *TableClone) Release() {

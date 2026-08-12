@@ -1,5 +1,14 @@
 # Concurrency And Lifecycle Reasoning
 
+## Contents
+
+1. Start From Invariants
+2. Build The State And Ownership Model
+3. Draw The Wait-For Graph
+4. Close The Generation Boundary
+5. Derive The Test Matrix
+6. Validate The Closure
+
 Use this reference when a diff changes shared state, cancellation, close/terminal
 operations, retry/restart, pooling, callbacks, or asynchronous cleanup. Derive
 tests from the model below; do not copy a fixed list of cases.

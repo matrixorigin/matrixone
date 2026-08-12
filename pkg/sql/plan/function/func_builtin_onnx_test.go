@@ -282,6 +282,14 @@ func TestOnnxRunSelectList(t *testing.T) {
 	}
 }
 
+func TestOnnxRunZeroRows(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	result := vector.NewFunctionResultWrapper(types.T_json.ToType(), proc.Mp())
+	require.NoError(t, result.PreExtendAndReset(0))
+	require.NoError(t, newOpOnnxRun().onnxRun(nil, result, proc, 0, nil))
+	require.Zero(t, result.GetResultVector().Length())
+}
+
 // TestOnnxRunRegistration covers the list_builtIn.go registration: overload
 // lookup, return type, and the newOpWithFree lifecycle closures.
 func TestOnnxRunRegistration(t *testing.T) {
@@ -295,10 +303,11 @@ func TestOnnxRunRegistration(t *testing.T) {
 		require.Equal(t, types.T_json,
 			ov.retType([]types.Type{types.T_varbinary.ToType()}).Oid)
 
-		evalFn, resetFn, freeFn := ov.GetExecuteMethod()
+		evalFn, resetFn, freeFn, retainedBytesFn := ov.GetExecuteMethod()
 		require.NotNil(t, evalFn)
 		require.NotNil(t, resetFn)
 		require.NotNil(t, freeFn)
+		require.Nil(t, retainedBytesFn)
 
 		// Drive one evaluation through the registered closure (the model is
 		// varbinary bytes; the datalink overload accepts them too via the

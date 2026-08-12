@@ -37,6 +37,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -313,17 +314,33 @@ func (ses *Session) InitSystemVariables(ctx context.Context, bh BackgroundExec) 
 	if sv, err = GSysVarsMgr.Get(ses.GetTenantInfo().TenantID, ses, ctx, bh); err != nil {
 		return
 	}
+	sessionVars := sv.Clone()
+	transactionIsolationValue := sessionVars.Get(transactionIsolationSystemVariable)
+	if transactionIsolationValue == nil {
+		transactionIsolationValue = gSysVarsDefs[transactionIsolationSystemVariable].Default
+	}
+	normalizedTransactionIsolation, transactionIsolation, err :=
+		normalizeTxnIsolationSystemValue(ctx, ses.service, transactionIsolationValue)
+	if err != nil {
+		return err
+	}
+	sessionVars.Set(transactionIsolationSystemVariable, normalizedTransactionIsolation)
+
 	ses.mu.Lock()
-	defer ses.mu.Unlock()
 	ses.gSysVars = sv
-	ses.sesSysVars = ses.gSysVars.Clone()
+	ses.sesSysVars = sessionVars
+	txnHandler := ses.txnHandler
+	ses.mu.Unlock()
 	atomic.StoreInt32(&ses.sqlModeNoAutoValueOnZero, -1)
 
 	// Initialize rewriteEnabled cache
-	if v := ses.sesSysVars.Get("enable_remap_hint"); v != nil {
+	if v := sessionVars.Get("enable_remap_hint"); v != nil {
 		if on, convErr := valueIsBoolTrue(v); convErr == nil {
 			ses.rewriteEnabled.Store(on)
 		}
+	}
+	if txnHandler != nil {
+		txnHandler.setSessionTxnIsolation(transactionIsolation)
 	}
 	return
 }
@@ -367,9 +384,24 @@ func (ses *Session) SetUserDefinedVar(name string, value interface{}, sql string
 }
 
 func (ses *Session) setUserDefinedVar(name string, value interface{}, sql string, isBin bool) error {
+	return ses.setUserDefinedVarWithKind(name, value, sql, isBin, prepareParamKindFromValue(value))
+}
+
+func (ses *Session) setUserDefinedVarWithKind(
+	name string,
+	value interface{},
+	sql string,
+	isBin bool,
+	kind vector.PrepareParamKind,
+) error {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
-	ses.userDefinedVars[strings.ToLower(name)] = &UserDefinedVar{Value: value, Sql: sql, IsBin: isBin}
+	ses.userDefinedVars[strings.ToLower(name)] = &UserDefinedVar{
+		Value:            value,
+		Sql:              sql,
+		IsBin:            isBin,
+		PrepareParamKind: kind,
+	}
 	return nil
 }
 
@@ -693,13 +725,29 @@ func (ses *Session) sqlModeHasMatrixOneNative() bool {
 	return ok && has
 }
 
-func (ses *Session) updateSqlModeCaches(oldNative bool, val interface{}) {
+func (ses *Session) sqlModeHasOnlyFullGroupBy() bool {
+	if ses == nil {
+		return false
+	}
+	value, err := ses.GetSessionSysVar("sql_mode")
+	if err != nil {
+		return false
+	}
+	has, ok := sqlModeHasOnlyFullGroupByValue(value)
+	return ok && has
+}
+
+func (ses *Session) updateSqlModeCaches(oldNative, oldOnlyFullGroupBy bool, val interface{}) {
 	ses.updateSqlModeNoAutoValueOnZero(val)
 	newNative, ok := sqlModeHasMatrixOneNativeValue(val)
 	if !ok {
 		return
 	}
-	if oldNative != newNative {
+	newOnlyFullGroupBy, ok := sqlModeHasOnlyFullGroupByValue(val)
+	if !ok {
+		return
+	}
+	if oldNative != newNative || oldOnlyFullGroupBy != newOnlyFullGroupBy {
 		ses.cleanCache()
 	}
 }
@@ -1902,6 +1950,19 @@ func (ses *Session) getGlobalSysVars(ctx context.Context, bh BackgroundExec) (gS
 	for name, sysVar := range gSysVarsDefs {
 		gSysVars[name] = sysVar.Default
 	}
+	// The SQL compatibility defaults must describe the isolation that the txn
+	// client will actually use when no SET GLOBAL override has been persisted.
+	// Pessimistic deployments default to RC while optimistic deployments use SI.
+	// Catalog values below still win, so SET GLOBAL remains account scoped and
+	// is inherited by subsequently initialized sessions.
+	if value, ok := serviceTxnIsolationSystemValue(ses.service); ok {
+		gSysVars[transactionIsolationSystemVariable] = value
+		gSysVars[transactionIsolationSystemVariableAlias] = value
+	}
+	var canonicalIsolationValue interface{}
+	var aliasIsolationValue interface{}
+	var hasCanonicalIsolation bool
+	var hasAliasIsolation bool
 
 	for _, execResult := range execResults {
 		for i := uint64(0); i < execResult.GetRowCount(); i++ {
@@ -1912,6 +1973,7 @@ func (ses *Session) getGlobalSysVars(ctx context.Context, bh BackgroundExec) (gS
 			if varValue, err = execResult.GetString(tenantCtx, i, 1); err != nil {
 				return
 			}
+			varName = strings.ToLower(varName)
 
 			// overwrite with the values from table `mo_mysql_compatibility`
 			if sv, ok := gSysVarsDefs[varName]; ok {
@@ -1919,9 +1981,38 @@ func (ses *Session) getGlobalSysVars(ctx context.Context, bh BackgroundExec) (gS
 				if val, err = sv.GetType().ConvertFromString(varValue); err != nil {
 					return
 				}
+				if isTransactionIsolationSystemVariable(varName) {
+					if varName == transactionIsolationSystemVariable {
+						canonicalIsolationValue = val
+						hasCanonicalIsolation = true
+					} else {
+						aliasIsolationValue = val
+						hasAliasIsolation = true
+					}
+					continue
+				}
 				gSysVars[varName] = val
 			}
 		}
+	}
+
+	// New writes are canonical. Preserve compatibility with old catalogs that
+	// contain only tx_isolation, while making a canonical row authoritative if
+	// both forms happen to exist.
+	var catalogIsolationValue interface{}
+	if hasCanonicalIsolation {
+		catalogIsolationValue = canonicalIsolationValue
+	} else if hasAliasIsolation {
+		catalogIsolationValue = aliasIsolationValue
+	}
+	if catalogIsolationValue != nil {
+		normalized, _, normalizeErr := normalizeTxnIsolationSystemValue(
+			tenantCtx, ses.service, catalogIsolationValue)
+		if normalizeErr != nil {
+			return nil, normalizeErr
+		}
+		gSysVars[transactionIsolationSystemVariable] = normalized
+		gSysVars[transactionIsolationSystemVariableAlias] = normalized
 	}
 
 	return

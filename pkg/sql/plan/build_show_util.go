@@ -66,12 +66,16 @@ func constructCreateTableSQL(
 	var mongoEnvelope sqlmongodb.CreateSQLEnvelope
 	mongoColumns := make(map[string]sqlmongodb.ColumnMapping)
 	if tableDef.TableType == catalog.SystemExternalRel {
-		var found bool
-		mongoEnvelope, found, err = sqlmongodb.ParseCreateSQLEnvelope(ctx.GetContext(), tableDef.Createsql)
+		var isMongoDB bool
+		isMongoDB, err = IsMongoDBTableDef(ctx.GetContext(), tableDef)
 		if err != nil {
 			return "", nil, err
 		}
-		if found {
+		if isMongoDB {
+			mongoEnvelope, _, err = sqlmongodb.ParseCreateSQLEnvelope(ctx.GetContext(), tableDef.Createsql)
+			if err != nil {
+				return "", nil, err
+			}
 			for _, column := range mongoEnvelope.Columns {
 				mongoColumns[strings.ToLower(column.Name)] = column
 			}
@@ -98,6 +102,14 @@ func constructCreateTableSQL(
 	rowCount := 0
 	var pkDefs []string
 	isClusterTable := util.TableIsClusterTable(tableDef.TableType)
+	displayTableCharset := effectiveTableCharsetForShowCreate(tableDef)
+	columnTableCharset := displayTableCharset
+	if tableDef.TableType == catalog.SystemExternalRel {
+		// External-table grammar has no table charset option. Use a sentinel
+		// that makes every text column emit its own replay-safe collation instead
+		// of relying on a table clause that would make the DDL unparsable.
+		columnTableCharset = uint32(types.CharsetLegacy)
+	}
 
 	// col.Name -> col.OriginName
 	colNameToOriginName := make(map[string]string)
@@ -142,6 +154,7 @@ func constructCreateTableSQL(
 			typeStr = strings.ToLower(typeStr)
 		}
 		fmt.Fprintf(buf, "  %s %s", sqlquote.Ident(colNameOrigin), typeStr)
+		appendTextCharsetForShowCreate(buf, col.Typ, columnTableCharset)
 
 		//-------------------------------------------------------------------------------------------------------------
 		if col.GeneratedCol != nil && col.GeneratedCol.Expr != nil {
@@ -224,6 +237,9 @@ func constructCreateTableSQL(
 		indexNames := make(map[string]bool)
 
 		for _, indexdef := range tableDef.Indexes {
+			if indexdef == nil {
+				continue
+			}
 			// Index Name can be empty string when CREATE TABLE with index
 			// avoid duplicate only work when index name is not empty
 			if len(indexdef.IndexName) > 0 {
@@ -528,6 +544,9 @@ func constructCreateTableSQL(
 		createStr += "\n"
 	}
 	createStr += ")"
+	if tableDef.TableType != catalog.SystemExternalRel {
+		createStr += tableCharsetForShowCreate(ctx, displayTableCharset)
+	}
 
 	var comment string
 	var properties []*plan.Property // Collect non-system properties for PROPERTIES clause
@@ -735,6 +754,89 @@ func constructCreateTableSQL(
 		stmt, err = getRewriteSQLStmt(ctx, rewriteStr)
 	}
 	return createStr, stmt, err
+}
+
+func appendTextCharsetForShowCreate(buf *bytes.Buffer, typ plan.Type, tableCharset uint32) {
+	switch types.T(typ.Id) {
+	case types.T_char, types.T_varchar, types.T_text:
+	default:
+		return
+	}
+
+	switch typ.Charset {
+	case uint32(types.CharsetLegacy):
+		// A migrated table default can coexist with a text column whose old
+		// catalog row still has no charset metadata. Preserve that column's
+		// historical bytewise ordering even when it cannot inherit the table
+		// display default.
+		if tableCharset != uint32(types.CharsetUTF8MB4Bin) {
+			buf.WriteString(" COLLATE utf8mb4_bin")
+		}
+	case uint32(types.CharsetUTF8MB4Bin):
+		buf.WriteString(" COLLATE utf8mb4_bin")
+	case uint32(types.CharsetBinary):
+		// Packed binary values can deliberately use a VARCHAR container. COLLATE
+		// binary is the lossless MO spelling for that representation; CHARACTER
+		// SET binary would instead change the physical type to VARBINARY/BLOB.
+		buf.WriteString(" COLLATE binary")
+	case uint32(types.CharsetUTF8):
+		if tableCharset != uint32(types.CharsetUTF8) {
+			buf.WriteString(" COLLATE utf8mb4_general_ci")
+		}
+	}
+}
+
+func effectiveTableCharsetForShowCreate(tableDef *plan.TableDef) uint32 {
+	if tableDef.DefaultCharset != uint32(types.CharsetLegacy) {
+		return tableDef.DefaultCharset
+	}
+	hasTextColumn := false
+	for _, col := range tableDef.Cols {
+		switch types.T(col.Typ.Id) {
+		case types.T_char, types.T_varchar, types.T_text:
+			hasTextColumn = true
+			if col.Typ.Charset == uint32(types.CharsetLegacy) {
+				// Legacy text was ordered bytewise before charset metadata became
+				// meaningful. There is no SQL spelling for CharsetLegacy, so use
+				// utf8mb4_bin as its replay-safe, nonbinary text identity. Using
+				// COLLATE binary here would incorrectly advertise VARCHAR as binary
+				// protocol data.
+				return uint32(types.CharsetUTF8MB4Bin)
+			}
+		}
+	}
+	if !hasTextColumn {
+		return tableDef.DefaultCharset
+	}
+	// Program-authored system definitions predate the table-default field but
+	// now carry explicit UTF-8 on every text column. Treat UTF-8 as their display
+	// default so SHOW CREATE stays concise. A genuinely legacy column above uses
+	// the bytewise display default, causing explicit general_ci peers to be shown.
+	return uint32(types.CharsetUTF8)
+}
+
+func tableCharsetForShowCreate(ctx CompilerContext, charset uint32) string {
+	switch charset {
+	case uint32(types.CharsetUTF8):
+		// collation_server is runtime-configurable. Spell general_ci whenever it
+		// differs from the effective runtime default. Callers such as CDC and
+		// table dump have no compiler context, so they must also spell it: an
+		// unknown target default is not safe to inherit during DDL replay.
+		if ctx == nil {
+			return " COLLATE=utf8mb4_general_ci"
+		}
+		serverCharset, err := tableDefaultCharset(ctx, nil)
+		if err == nil && serverCharset == uint32(types.CharsetUTF8) {
+			return ""
+		}
+		return " COLLATE=utf8mb4_general_ci"
+	case uint32(types.CharsetUTF8MB4Bin):
+		return " COLLATE=utf8mb4_bin"
+	case uint32(types.CharsetBinary):
+		return " CHARACTER SET=binary"
+	default:
+		return ""
+	}
 }
 
 func indexIncludeColumnsToString(includedColumns []string, colNameToOriginName map[string]string) string {
@@ -1014,6 +1116,9 @@ func FormatColType(colType plan.Type) string {
 	typ := types.T(colType.Id).ToType()
 
 	ts := typ.String()
+	if typ.Oid == types.T_text && colType.Width == types.MaxTinyTextLen {
+		ts = "TINYTEXT"
+	}
 	// after decimal fix, remove this
 	if typ.Oid.IsDecimal() {
 		ts = "DECIMAL"

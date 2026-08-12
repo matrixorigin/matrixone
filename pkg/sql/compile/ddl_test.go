@@ -38,18 +38,166 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/buffer"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	plan2 "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
+	"github.com/matrixorigin/matrixone/pkg/sql/features"
+	sqlmongodb "github.com/matrixorigin/matrixone/pkg/sql/mongodb"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	hnswruntime "github.com/matrixorigin/matrixone/pkg/vectorindex/hnsw/plugin/runtime"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
+
+type mongoDBMappingTestExecutor struct {
+	results map[string]executor.Result
+	sqls    []string
+}
+
+func (e *mongoDBMappingTestExecutor) Exec(
+	_ context.Context,
+	sql string,
+	_ executor.Options,
+) (executor.Result, error) {
+	e.sqls = append(e.sqls, sql)
+	return e.results[sql], nil
+}
+
+func (*mongoDBMappingTestExecutor) ExecTxn(
+	context.Context,
+	func(executor.TxnExecutor) error,
+	executor.Options,
+) error {
+	return nil
+}
+
+func newMongoDBMappingTestCompile(
+	t *testing.T,
+	ctrl *gomock.Controller,
+	exec executor.SQLExecutor,
+) (*Compile, *mock_frontend.MockDatabase, *mock_frontend.MockRelation) {
+	t.Helper()
+	proc := testutil.NewProcess(t)
+	ctx := defines.AttachAccountId(context.Background(), 7)
+	proc.Ctx = ctx
+	proc.ReplaceTopCtx(ctx)
+	moruntime.ServiceRuntime(proc.GetService()).SetGlobalVariables(moruntime.InternalSQLExecutor, exec)
+	return &Compile{proc: proc, pn: &plan2.Plan{}},
+		mock_frontend.NewMockDatabase(ctrl), mock_frontend.NewMockRelation(ctrl)
+}
+
+func TestRequireCheckRenameProtocol(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	c := &Compile{proc: proc}
+	rt := moruntime.ServiceRuntime(proc.GetService())
+	original, hadOriginal := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	defer func() {
+		if hadOriginal {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, original)
+		} else {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+		}
+	}()
+
+	checks := []*plan2.CheckDef{{OriginSql: "`renamed_col` > 0"}}
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion14)
+	require.ErrorContains(t, c.requireCheckRenameProtocol(checks), "protocol version 15")
+	require.NoError(t, c.requireCheckRenameProtocol(nil))
+
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion15)
+	require.NoError(t, c.requireCheckRenameProtocol(checks))
+}
+
+func mongoDBConnectionResult(t *testing.T, proc *process.Process, connectionID, disabled uint64) executor.Result {
+	t.Helper()
+	columnTypes := make([]types.Type, 18)
+	for i := range columnTypes {
+		columnTypes[i] = types.T_uint64.ToType()
+	}
+	result := executor.NewMemResult(columnTypes, proc.Mp())
+	result.NewBatchWithRowCount(1)
+	require.NoError(t, executor.AppendFixedRows(result, 1, []uint64{connectionID}))
+	require.NoError(t, executor.AppendFixedRows(result, 17, []uint64{disabled}))
+	return result.GetResult()
+}
+
+func TestMongoDBTableMappingDDLValidationAndPersistence(t *testing.T) {
+	mapping := sqlmongodb.TableMapping{
+		Connection: "source", Database: "telemetry", Collection: "events",
+		SchemaMode: sqlmongodb.SchemaExplicit, Conversion: sqlmongodb.ConversionStrict,
+		Columns: []sqlmongodb.ColumnMapping{{
+			Name: "value", Path: "value", TypeID: int32(types.T_int64), Conversion: sqlmongodb.ConversionStrict,
+		}},
+	}
+
+	t.Run("insert mapping", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		exec := &mongoDBMappingTestExecutor{results: make(map[string]executor.Result)}
+		c, db, rel := newMongoDBMappingTestCompile(t, ctrl, exec)
+		db.EXPECT().GetDatabaseId(gomock.Any()).Return("8")
+		rel.EXPECT().GetTableID(gomock.Any()).Return(uint64(9))
+		lookupSQL := sqlmongodb.GetConnectionByNameForUpdateSQL(7, mapping.Connection)
+		exec.results[lookupSQL] = mongoDBConnectionResult(t, c.proc, 42, 0)
+		qry := &plan2.CreateTable{TableDef: &plan2.TableDef{
+			FeatureFlag: features.MongoDBExternal,
+			Createsql:   sqlmongodb.BuildCreateSQLEnvelope(mapping),
+		}}
+
+		require.NoError(t, c.maybeInsertMongoDBTableMapping(db, rel, qry))
+		require.Len(t, exec.sqls, 2)
+		require.Equal(t, lookupSQL, exec.sqls[0])
+		require.Contains(t, exec.sqls[1], "insert into mo_catalog."+sqlmongodb.TableMappings)
+		require.Contains(t, exec.sqls[1], "values (7,8,9,42")
+		require.Zero(t, c.proc.Mp().CurrNB())
+	})
+
+	t.Run("typed insert requires envelope", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		exec := &mongoDBMappingTestExecutor{}
+		c, _, _ := newMongoDBMappingTestCompile(t, ctrl, exec)
+		qry := &plan2.CreateTable{TableDef: &plan2.TableDef{FeatureFlag: features.MongoDBExternal}}
+
+		err := c.maybeInsertMongoDBTableMapping(nil, nil, qry)
+		require.ErrorContains(t, err, "missing its catalog envelope")
+		require.Empty(t, exec.sqls)
+	})
+
+	t.Run("typed insert rejects malformed envelope", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		exec := &mongoDBMappingTestExecutor{}
+		c, _, _ := newMongoDBMappingTestCompile(t, ctrl, exec)
+		qry := &plan2.CreateTable{TableDef: &plan2.TableDef{
+			FeatureFlag: features.MongoDBExternal,
+			Createsql:   "/* MO_MONGODB: version=2",
+		}}
+
+		err := c.maybeInsertMongoDBTableMapping(nil, nil, qry)
+		require.ErrorContains(t, err, "envelope is not closed")
+		require.Empty(t, exec.sqls)
+	})
+
+	t.Run("delete mapping", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		exec := &mongoDBMappingTestExecutor{}
+		c, db, rel := newMongoDBMappingTestCompile(t, ctrl, exec)
+		db.EXPECT().GetDatabaseId(gomock.Any()).Return("8")
+		rel.EXPECT().GetTableID(gomock.Any()).Return(uint64(9))
+		tableDef := &plan2.TableDef{
+			TableType:   catalog.SystemExternalRel,
+			FeatureFlag: features.MongoDBExternal,
+			Createsql:   sqlmongodb.BuildCreateSQLEnvelope(mapping),
+		}
+
+		require.NoError(t, c.maybeDeleteMongoDBTableMapping(db, rel, tableDef))
+		require.Equal(t, []string{sqlmongodb.DeleteTableMappingSQL(7, 8, 9)}, exec.sqls)
+	})
+}
 
 func TestConvertDBEOBToNoSuchTable(t *testing.T) {
 	err := convertDBEOBToNoSuchTable(context.Background(), moerr.GetOkExpectedEOB(), "db1", "t2")
@@ -1693,6 +1841,47 @@ func TestRemoveFkeysRelationshipsSkipsDeletedParentTableIds(t *testing.T) {
 	c := NewCompile("test", "test", "drop database acc_test02", "", "", eng, proc, nil, false, nil, time.Now())
 	s := &Scope{}
 	require.NoError(t, s.removeFkeysRelationships(c, "acc_test02"))
+}
+
+func TestAddChildTableIDToDistinctParents(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	parentOne := mock_frontend.NewMockRelation(ctrl)
+	duplicateParentOne := mock_frontend.NewMockRelation(ctrl)
+	parentTwo := mock_frontend.NewMockRelation(ctrl)
+	parentOne.EXPECT().GetTableID(gomock.Any()).Return(uint64(10)).Times(1)
+	duplicateParentOne.EXPECT().GetTableID(gomock.Any()).Return(uint64(10)).Times(1)
+	parentTwo.EXPECT().GetTableID(gomock.Any()).Return(uint64(20)).Times(1)
+
+	constraintFor := func() *engine.ConstraintDef {
+		return &engine.ConstraintDef{Cts: []engine.Constraint{
+			&engine.RefChildTableDef{Tables: []uint64{1}},
+		}}
+	}
+	getConstraintDef := gostub.Stub(&GetConstraintDef, func(_ context.Context, relation engine.Relation) (*engine.ConstraintDef, error) {
+		switch relation {
+		case parentOne, parentTwo:
+			return constraintFor(), nil
+		default:
+			t.Fatalf("unexpected parent relation")
+			return nil, nil
+		}
+	})
+	defer getConstraintDef.Reset()
+
+	assertRefChild := func(_ context.Context, constraint *engine.ConstraintDef) error {
+		require.Equal(t, []uint64{1, 77}, canonicalRefChildTableIDs(constraint))
+		return nil
+	}
+	parentOne.EXPECT().UpdateConstraint(gomock.Any(), gomock.Any()).DoAndReturn(assertRefChild).Times(1)
+	parentTwo.EXPECT().UpdateConstraint(gomock.Any(), gomock.Any()).DoAndReturn(assertRefChild).Times(1)
+
+	require.NoError(t, addChildTableIDToDistinctParents(
+		context.Background(),
+		[]engine.Relation{parentOne, duplicateParentOne, parentTwo},
+		77,
+	))
 }
 
 func TestMissingTablePredicates(t *testing.T) {

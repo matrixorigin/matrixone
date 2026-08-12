@@ -1459,6 +1459,7 @@ func ConstantFold(bat *batch.Batch, expr *plan.Expr, proc *process.Process, varA
 		if cannotFold || !foldInExpr {
 			return expr, nil
 		}
+		isSerialized := rule.ContainsSerializedLiteral(exprList)
 
 		vec, err := colexec.GenerateConstListExpressionExecutor(proc, exprList)
 		if err != nil {
@@ -1479,8 +1480,9 @@ func ConstantFold(bat *batch.Batch, expr *plan.Expr, proc *process.Process, varA
 			Typ: expr.Typ,
 			Expr: &plan.Expr_Vec{
 				Vec: &plan.LiteralVec{
-					Len:  int32(vec.Length()),
-					Data: data,
+					Len:          int32(vec.Length()),
+					Data:         data,
+					IsSerialized: isSerialized,
 				},
 			},
 		}, nil
@@ -1537,7 +1539,12 @@ func ConstantFold(bat *batch.Batch, expr *plan.Expr, proc *process.Process, varA
 		}
 
 		return &plan.Expr{
-			Typ: plan.Type{Id: int32(vec.GetType().Oid), Scale: vec.GetType().Scale, Width: vec.GetType().Width},
+			Typ: plan.Type{
+				Id:      int32(vec.GetType().Oid),
+				Scale:   vec.GetType().Scale,
+				Width:   vec.GetType().Width,
+				Charset: uint32(vec.GetType().Charset),
+			},
 			Expr: &plan.Expr_Vec{
 				Vec: &plan.LiteralVec{
 					Len:  int32(vec.Length()),
@@ -1550,6 +1557,7 @@ func ConstantFold(bat *batch.Batch, expr *plan.Expr, proc *process.Process, varA
 	if c == nil {
 		return expr, nil
 	}
+	rule.MarkFoldedLiteralSerialized(overloadID, fn.Args, c)
 	ec := &plan.Expr_Lit{
 		Lit: c,
 	}
@@ -2562,7 +2570,7 @@ func ResetAuxIdForExpr(expr *plan.Expr) {
 // }
 
 func ExprType2Type(typ *plan.Type) types.Type {
-	return types.New(types.T(typ.Id), typ.Width, typ.Scale)
+	return types.NewWithCharset(types.T(typ.Id), typ.Width, typ.Scale, uint8(typ.Charset))
 }
 
 func PkColByTableDef(tblDef *plan.TableDef) *plan.ColDef {

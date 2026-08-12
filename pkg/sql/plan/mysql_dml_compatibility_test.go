@@ -26,12 +26,16 @@ import (
 )
 
 func buildMySQLDMLCompatibilityPlan(t *testing.T, sql string) (*Plan, error) {
+	return buildMySQLDMLCompatibilityPlanWithPrepare(t, sql, false)
+}
+
+func buildMySQLDMLCompatibilityPlanWithPrepare(t *testing.T, sql string, isPrepareStmt bool) (*Plan, error) {
 	t.Helper()
 	ctx := NewMockCompilerContext(true)
 	stmt, err := parsers.ParseOne(ctx.GetContext(), dialect.MYSQL, sql, 1)
 	require.NoError(t, err)
 	defer stmt.Free()
-	return BuildPlan(ctx, stmt, false)
+	return BuildPlan(ctx, stmt, isPrepareStmt)
 }
 
 func buildMySQLDMLCompatibilityPlanWithSQLMode(t *testing.T, sql, sqlMode string) (*Plan, error) {
@@ -45,13 +49,123 @@ func buildMySQLDMLCompatibilityPlanWithSQLMode(t *testing.T, sql, sqlMode string
 }
 
 func requireMySQLDMLCompatibilityError(t *testing.T, sql string, code uint16, message string) {
+	requireMySQLDMLCompatibilityErrorWithPrepare(t, sql, false, code, message)
+}
+
+func requireMySQLDMLCompatibilityErrorWithPrepare(t *testing.T, sql string, isPrepareStmt bool, code uint16, message string) {
 	t.Helper()
-	_, err := buildMySQLDMLCompatibilityPlan(t, sql)
+	_, err := buildMySQLDMLCompatibilityPlanWithPrepare(t, sql, isPrepareStmt)
 	require.Error(t, err)
 	moErr, ok := err.(*moerr.Error)
 	require.True(t, ok, "unexpected error type %T: %v", err, err)
 	require.Equal(t, code, moErr.MySQLCode())
 	require.Equal(t, message, moErr.Error())
+}
+
+func TestSingleTableDMLRejectsLimitOffsetBeforePlanning(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		sql           string
+		isPrepareStmt bool
+		verb          string
+	}{
+		{
+			name: "update offset keyword",
+			sql:  "UPDATE nation SET n_name = 'x' ORDER BY n_nationkey LIMIT 1 OFFSET 1",
+			verb: "UPDATE",
+		},
+		{
+			name: "update comma offset",
+			sql:  "UPDATE nation SET n_name = 'x' ORDER BY n_nationkey LIMIT 1, 1",
+			verb: "UPDATE",
+		},
+		{
+			name: "delete offset keyword",
+			sql:  "DELETE FROM nation ORDER BY n_nationkey LIMIT 1 OFFSET 1",
+			verb: "DELETE",
+		},
+		{
+			name: "delete comma offset",
+			sql:  "DELETE FROM nation ORDER BY n_nationkey LIMIT 1, 1",
+			verb: "DELETE",
+		},
+		{
+			name:          "prepared update offset",
+			sql:           "UPDATE nation SET n_name = 'x' ORDER BY n_nationkey LIMIT ? OFFSET ?",
+			isPrepareStmt: true,
+			verb:          "UPDATE",
+		},
+		{
+			name:          "prepared delete comma offset",
+			sql:           "DELETE FROM nation ORDER BY n_nationkey LIMIT ?, ?",
+			isPrepareStmt: true,
+			verb:          "DELETE",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			requireMySQLDMLCompatibilityErrorWithPrepare(
+				t,
+				tc.sql,
+				tc.isPrepareStmt,
+				moerr.ER_PARSE_ERROR,
+				"SQL parser error: "+tc.verb+" does not support LIMIT with OFFSET",
+			)
+		})
+	}
+}
+
+func TestSingleTableDMLAcceptsCountOnlyLimit(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		sql           string
+		isPrepareStmt bool
+	}{
+		{name: "update literal", sql: "UPDATE nation SET n_name = 'x' ORDER BY n_nationkey LIMIT 1"},
+		{name: "delete literal", sql: "DELETE FROM nation ORDER BY n_nationkey LIMIT 1"},
+		{name: "update zero", sql: "UPDATE nation SET n_name = 'x' ORDER BY n_nationkey LIMIT 0"},
+		{name: "delete zero", sql: "DELETE FROM nation ORDER BY n_nationkey LIMIT 0"},
+		{name: "prepared update", sql: "UPDATE nation SET n_name = 'x' ORDER BY n_nationkey LIMIT ?", isPrepareStmt: true},
+		{name: "prepared delete", sql: "DELETE FROM nation ORDER BY n_nationkey LIMIT ?", isPrepareStmt: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			plan, err := buildMySQLDMLCompatibilityPlanWithPrepare(t, tc.sql, tc.isPrepareStmt)
+			require.NoError(t, err)
+			require.NotNil(t, plan)
+		})
+	}
+}
+
+func TestSingleTableDMLLimitControlsKeepExistingErrors(t *testing.T) {
+	_, err := buildMySQLDMLCompatibilityPlan(
+		t,
+		"UPDATE nation SET n_name = 'x' ORDER BY n_nationkey LIMIT -1",
+	)
+	require.EqualError(t, err, "SQL syntax error: LIMIT must be a non-negative integer")
+
+	_, err = buildMySQLDMLCompatibilityPlan(
+		t,
+		"DELETE FROM nation ORDER BY missing_col LIMIT 1",
+	)
+	require.EqualError(t, err, "invalid input: column missing_col does not exist")
+}
+
+func requireMySQLUpdateTargetSubqueryCompatible(t *testing.T, sql string) {
+	t.Helper()
+	ctx := NewMockCompilerContext(true)
+	stmt, err := parsers.ParseOne(ctx.GetContext(), dialect.MYSQL, sql, 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+	updateStmt, ok := stmt.(*tree.Update)
+	require.True(t, ok)
+	tblInfo, err := getUpdateTableInfo(ctx, updateStmt)
+	require.NoError(t, err)
+	targetAliases := make([]string, len(tblInfo.tableDefs))
+	for alias, idx := range tblInfo.alias {
+		targetAliases[idx] = alias
+	}
+	require.NoError(t, validateUpdateTargetSubqueries(
+		ctx, updateStmt, tblInfo.objRef, tblInfo.tableDefs, targetAliases,
+	))
 }
 
 func TestMultiTableUpdateRejectsOrderByAndLimit(t *testing.T) {
@@ -108,6 +222,12 @@ func TestUpdateRejectsDirectTargetTableSubqueries(t *testing.T) {
 		"UPDATE nation SET n_name = 'x' WHERE EXISTS (SELECT 1 FROM region ORDER BY (SELECT max(n_nationkey) FROM nation))",
 		"UPDATE nation SET n_name = 'x' WHERE EXISTS (SELECT 1 FROM region GROUP BY r_regionkey HAVING EXISTS (SELECT 1 FROM nation))",
 		"UPDATE nation SET n_name = 'x' WHERE EXISTS (SELECT 1 FROM region JOIN nation ON region.r_regionkey = nation.n_regionkey)",
+		"UPDATE nation AS dst SET n_name = (SELECT max(dst.n_name) FROM nation AS dst)",
+		"UPDATE nation AS dst SET n_name = (SELECT max(src.n_name) FROM nation AS src WHERE EXISTS (SELECT 1 FROM nation AS dst ORDER BY dst.n_nationkey))",
+		"UPDATE nation AS dst SET n_name = ((SELECT max(src.n_name) FROM nation AS src WHERE src.n_nationkey <= dst.n_nationkey) UNION ALL (SELECT max(other.n_name) FROM nation AS other))",
+		"UPDATE nation AS dst SET n_name = (SELECT max(src.n_name) FROM nation AS src JOIN nation2 AS dst ON dst.n_nationkey = src.n_nationkey)",
+		"UPDATE nation AS dst JOIN nation AS src ON dst.n_nationkey = src.n_nationkey SET dst.n_name = (SELECT max(inner_n.n_name) FROM nation AS inner_n WHERE inner_n.n_regionkey = src.n_regionkey)",
+		"UPDATE nation AS src SET n_name = (SELECT max(inner_n.n_name) FROM nation AS inner_n, region AS src CROSS APPLY generate_series(src.r_regionkey, src.r_regionkey) AS g)",
 	}
 	for _, sql := range tests {
 		requireMySQLDMLCompatibilityError(
@@ -154,6 +274,37 @@ func TestMySQLDMLCompatibilityHelpers(t *testing.T) {
 	require.True(t, (mysqlDMLTarget{schema: "tpch", name: "nation"}).matches(nil, nil, "TPCH", "NATION"))
 	require.False(t, (mysqlDMLTarget{schema: "tpch", name: "nation"}).matches(nil, nil, "tpch", "region"))
 
+	qualifiedTargets := make(map[mysqlDMLTarget]map[string]struct{})
+	firstSameNameTarget := mysqlDMLTarget{objID: 1, schema: "db1", name: "same_name"}
+	secondSameNameTarget := mysqlDMLTarget{objID: 2, schema: "db2", name: "same_name"}
+	mysqlAddTargetQualifier(qualifiedTargets, firstSameNameTarget, "first_alias")
+	mysqlAddTargetQualifier(qualifiedTargets, secondSameNameTarget, "second_alias")
+	require.Equal(t, map[string]struct{}{"first_alias": {}}, qualifiedTargets[firstSameNameTarget])
+	require.Equal(t, map[string]struct{}{"second_alias": {}}, qualifiedTargets[secondSameNameTarget])
+
+	outerQualifiers := map[string]struct{}{"dst": {}}
+	outerColumn := func() tree.Expr {
+		return tree.NewUnresolvedName(tree.NewCStr("dst", 1), tree.NewCStr("n_nationkey", 1))
+	}
+	otherColumn := func() tree.Expr {
+		return tree.NewUnresolvedName(tree.NewCStr("src", 1), tree.NewCStr("n_nationkey", 1))
+	}
+	selectWrapper := &tree.Select{Select: &tree.SelectClause{}}
+	require.False(t, mysqlSelectWrapperReferencesOuterQualifier(selectWrapper, outerQualifiers, nil))
+	selectWrapper.TimeWindow = &tree.TimeWindow{Interval: &tree.Interval{Val: outerColumn()}}
+	require.True(t, mysqlSelectWrapperReferencesOuterQualifier(selectWrapper, outerQualifiers, nil))
+	selectWrapper.TimeWindow = &tree.TimeWindow{
+		Interval: &tree.Interval{Val: otherColumn()},
+		Sliding:  &tree.Sliding{Val: outerColumn()},
+	}
+	require.True(t, mysqlSelectWrapperReferencesOuterQualifier(selectWrapper, outerQualifiers, nil))
+	selectWrapper.TimeWindow = &tree.TimeWindow{
+		Interval: &tree.Interval{Val: otherColumn()},
+		Sliding:  &tree.Sliding{Val: otherColumn()},
+		Fill:     &tree.Fill{Val: outerColumn()},
+	}
+	require.True(t, mysqlSelectWrapperReferencesOuterQualifier(selectWrapper, outerQualifiers, nil))
+
 	inherited := map[string]struct{}{"outer": {}}
 	visibleCTEs := mysqlCTENames(&tree.With{CTEs: []*tree.CTE{
 		nil,
@@ -196,10 +347,32 @@ func TestMySQLDMLCompatibilityAllowsLegalShapes(t *testing.T) {
 		"UPDATE nation SET n_name = 'x' WHERE n_regionkey IN (SELECT r_regionkey FROM region)",
 		"UPDATE nation SET n_name = 'x' WHERE n_nationkey IN (SELECT n_nationkey FROM (SELECT n_nationkey FROM nation) AS materialized_nation)",
 		"UPDATE nation AS dst JOIN nation AS src ON dst.n_nationkey = src.n_nationkey SET dst.n_name = src.n_name",
+		"UPDATE nation SET n_name = (SELECT max(src.n_name) FROM nation AS src WHERE src.n_nationkey <= nation.n_nationkey)",
+		"UPDATE nation AS dst SET n_name = (SELECT max(src.n_name) FROM nation AS src WHERE src.n_nationkey <= dst.n_nationkey)",
+		"UPDATE nation AS dst SET n_name = (SELECT max(src.n_name) FROM nation AS src WHERE EXISTS (SELECT 1 FROM region WHERE src.n_regionkey = dst.n_regionkey))",
+		"UPDATE nation AS dst SET n_name = (SELECT max(src.n_name) FROM nation AS src ORDER BY dst.n_nationkey LIMIT 1)",
+		"UPDATE nation AS dst SET n_name = (SELECT max(src.n_name) FROM nation AS src JOIN region AS r ON r.r_regionkey = dst.n_regionkey, nation2 AS dst)",
+		"UPDATE nation AS dst SET n_name = (SELECT max(src.n_name) FROM nation AS src CROSS APPLY generate_series(dst.n_nationkey, dst.n_nationkey) AS g)",
 		"DELETE FROM nation WHERE n_nationkey IN (SELECT n_nationkey FROM (SELECT n_nationkey FROM nation) AS materialized_nation)",
 	}
 	for _, sql := range tests {
 		_, err := buildMySQLDMLCompatibilityPlan(t, sql)
 		require.NoError(t, err, sql)
 	}
+}
+
+func TestUpdateTargetCompatibilityAllowsNestedJoinCorrelation(t *testing.T) {
+	requireMySQLUpdateTargetSubqueryCompatible(t, `
+		UPDATE nation AS dst
+		SET n_name = (
+			SELECT max(src.n_name)
+			FROM nation AS src
+			JOIN region AS r
+				ON EXISTS (
+					SELECT 1
+					FROM nation AS nested_src
+					WHERE nested_src.n_regionkey = dst.n_regionkey
+				)
+		)`,
+	)
 }

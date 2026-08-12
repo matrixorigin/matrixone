@@ -19,13 +19,16 @@ import (
 	"math"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -132,6 +135,41 @@ func Test_BuiltIn_CurrentSessionInfo(t *testing.T) {
 		succeed, info := tcc.Run()
 		require.True(t, succeed, tc.info, info)
 	}
+}
+
+func TestBuiltInInternalCharSizeUsesEncodedWidth(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	typesToEncode := []types.Type{
+		types.New(types.T_char, 8, 0),
+		types.New(types.T_varchar, 128, 0),
+		types.New(types.T_text, 0, 0),
+		types.New(types.T_binary, 8, 0),
+		types.New(types.T_varbinary, 128, 0),
+		types.New(types.T_blob, 0, 0),
+		types.T_int32.ToType(),
+	}
+	encoded := make([]string, len(typesToEncode))
+	for i := range typesToEncode {
+		data, err := typesToEncode[i].Marshal()
+		require.NoError(t, err)
+		encoded[i] = string(data)
+	}
+
+	tc := NewFunctionTestCase(
+		proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_varchar.ToType(), encoded, nil),
+		},
+		NewFunctionTestResult(
+			types.T_int64.ToType(),
+			false,
+			[]int64{32, 512, 0, 8, 128, 0, 0},
+			[]bool{false, false, false, false, false, false, true},
+		),
+		builtInInternalCharSize,
+	)
+	ok, info := tc.Run()
+	require.True(t, ok, info)
 }
 
 func TestBuiltInNameConst(t *testing.T) {
@@ -1586,6 +1624,81 @@ func TestSerialExtractUUID(t *testing.T) {
 	}
 }
 
+func TestSerialExtractEnumAndYear(t *testing.T) {
+	t.Run("enum", func(t *testing.T) {
+		testSerialExtractNamedType(
+			t,
+			types.T_enum.ToType(),
+			[]types.Enum{1, 3},
+			func(ps *types.Packer, value types.Enum) {
+				ps.EncodeEnum(value)
+			},
+		)
+	})
+
+	t.Run("year", func(t *testing.T) {
+		testSerialExtractNamedType(
+			t,
+			types.T_year.ToType(),
+			[]types.MoYear{2024, 2026},
+			func(ps *types.Packer, value types.MoYear) {
+				ps.EncodeMoYear(value)
+			},
+		)
+	})
+}
+
+func testSerialExtractNamedType[T types.Enum | types.MoYear](
+	t *testing.T,
+	typ types.Type,
+	values []T,
+	encode func(*types.Packer, T),
+) {
+	t.Helper()
+
+	serialized := make([]string, len(values))
+	for i, value := range values {
+		ps := types.NewPacker()
+		encode(ps, value)
+		serialized[i] = string(ps.Bytes())
+		ps.Close()
+	}
+
+	indexInputs := []struct {
+		name  string
+		input FunctionTestInput
+	}{
+		{
+			name:  "constant index",
+			input: NewFunctionTestConstInput(types.T_int64.ToType(), []int64{0, 0}, nil),
+		},
+		{
+			name:  "row index",
+			input: NewFunctionTestInput(types.T_int64.ToType(), []int64{0, 0}, nil),
+		},
+	}
+
+	for _, tt := range indexInputs {
+		t.Run(tt.name, func(t *testing.T) {
+			testCase := NewFunctionTestCase(
+				testutil.NewProcess(t),
+				[]FunctionTestInput{
+					NewFunctionTestInput(types.T_varchar.ToType(), serialized, nil),
+					tt.input,
+					NewFunctionTestInput(typ, make([]T, len(values)), nil),
+				},
+				NewFunctionTestResult(typ, false, values, nil),
+				builtInSerialExtract,
+			)
+			require.NoError(t, testCase.result.PreExtendAndReset(testCase.fnLength))
+			result, err := testCase.DebugRun()
+			require.NoError(t, err)
+			require.Equal(t, typ.Oid, result.GetType().Oid)
+			require.Equal(t, values, vector.MustFixedColWithTypeCheck[T](result))
+		})
+	}
+}
+
 func Test_BuiltIn_Math(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	{
@@ -2174,6 +2287,291 @@ func TestBuiltInSysdate_ScaleValidation(t *testing.T) {
 		require.Contains(t, err.Error(), "sysdate")
 		require.Contains(t, err.Error(), "Maximum is 6")
 	})
+}
+
+func TestBuiltInUUIDVersionGenerators(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	cases := []struct {
+		name    string
+		fn      executeLogicOfOverload
+		version uuid.Version
+	}{
+		{"uuid/uuid_v7", builtInUUID, 7},
+		{"uuid_v1", builtInUUIDV1, 1},
+		{"uuid_v4", builtInUUIDV4, 4},
+		{"uuid_v6", builtInUUIDV6, 6},
+	}
+	const rows = 8
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			result := vector.NewFunctionResultWrapper(types.T_uuid.ToType(), proc.Mp())
+			defer result.Free()
+			require.NoError(t, result.PreExtendAndReset(rows))
+			require.NoError(t, c.fn(nil, result, proc, rows, nil))
+
+			rv := result.GetResultVector()
+			require.Equal(t, rows, rv.Length())
+			seen := make(map[types.Uuid]bool, rows)
+			for i := 0; i < rows; i++ {
+				v := vector.GetFixedAtNoTypeCheck[types.Uuid](rv, i)
+				u := uuid.UUID(v)
+				require.Equal(t, c.version, u.Version())
+				require.Equal(t, uuid.RFC4122, u.Variant())
+				require.False(t, seen[v], "duplicate uuid generated")
+				seen[v] = true
+			}
+		})
+	}
+}
+
+func TestBuiltInUUIDBoundary(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	proc.Base.SessionInfo.TimeZone = time.UTC
+
+	dt, err := types.ParseDatetime("2026-01-02 03:04:05.678", 6)
+	require.NoError(t, err)
+
+	// that instant as 100ns intervals since the UUID Gregorian epoch 1582-10-15
+	const wantTs = int64(139866158456780000)
+	cases := []struct {
+		version int
+		want    string
+	}{
+		{7, "019b7ca9-8f2e-7000-8000-000000000000"},
+		{6, "1f0e787b-2ea3-64e0-8000-000000000000"},
+		{1, "b2ea34e0-e787-11f0-8000-000000000000"},
+	}
+	for _, c := range cases {
+		t.Run(fmt.Sprintf("v%d", c.version), func(t *testing.T) {
+			tc := tcTemp{
+				info: "boundary uuid is deterministic, null passes through",
+				inputs: []FunctionTestInput{
+					NewFunctionTestInput(types.T_datetime.ToType(),
+						[]types.Datetime{dt, dt},
+						[]bool{false, true}),
+				},
+				expect: NewFunctionTestResult(types.T_uuid.ToType(), false,
+					[]types.Uuid{mustParseUuid(t, c.want), {}},
+					[]bool{false, true}),
+			}
+			tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, fEvalFn(makeBuiltInUUIDBoundary(c.version)))
+			succeed, info := tcc.Run()
+			require.True(t, succeed, tc.info, info)
+
+			// cross-check the pinned value against an independent decoder:
+			// google/uuid's Time() for v1/v7 (RFC-correct there), our explicit
+			// RFC field decode for v6 (google's v6 layout is non-standard)
+			u := uuid.UUID(mustParseUuid(t, c.want))
+			require.Equal(t, uuid.Version(c.version), u.Version())
+			require.Equal(t, uuid.RFC4122, u.Variant())
+			if c.version == 6 {
+				require.Equal(t, wantTs, rfcV6DecodeTime(mustParseUuid(t, c.want)))
+			} else {
+				require.Equal(t, uuid.Time(wantTs), u.Time())
+			}
+		})
+	}
+
+	// v7 and v6 boundaries sort below any UUID generated after that instant
+	gen7, err := uuid.NewV7()
+	require.NoError(t, err)
+	require.True(t, strings.Compare(cases[0].want, gen7.String()) < 0)
+	gen6, err := newRFCUUIDV6()
+	require.NoError(t, err)
+	require.True(t, strings.Compare(cases[1].want, gen6.String()) < 0)
+}
+
+func TestBuiltInUUIDShifted(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	proc.Base.SessionInfo.TimeZone = time.UTC
+
+	const rows = 4
+	for _, version := range []int{1, 6, 7} {
+		t.Run(fmt.Sprintf("v%d", version), func(t *testing.T) {
+			result := vector.NewFunctionResultWrapper(types.T_uuid.ToType(), proc.Mp())
+			defer result.Free()
+			require.NoError(t, result.PreExtendAndReset(rows))
+
+			nums := testutil.NewInt64Vector(rows, types.T_int64.ToType(), proc.Mp(), false, nil, []int64{1, 1, 1, 1})
+			units := testutil.NewInt64Vector(rows, types.T_int64.ToType(), proc.Mp(), false, nil,
+				[]int64{int64(types.Hour), int64(types.Hour), int64(types.Hour), int64(types.Hour)})
+			defer nums.Free(proc.Mp())
+			defer units.Free(proc.Mp())
+
+			before := time.Now()
+			require.NoError(t, makeBuiltInUUIDShifted(version)([]*vector.Vector{nums, units}, result, proc, rows, nil))
+			after := time.Now()
+
+			rv := result.GetResultVector()
+			seen := make(map[types.Uuid]bool, rows)
+			for i := 0; i < rows; i++ {
+				u := uuid.UUID(vector.GetFixedAtNoTypeCheck[types.Uuid](rv, i))
+				require.Equal(t, uuid.Version(version), u.Version())
+				require.Equal(t, uuid.RFC4122, u.Variant())
+				require.False(t, seen[types.Uuid(u)], "duplicate shifted uuid")
+				seen[types.Uuid(u)] = true
+
+				// embedded timestamp must be ~1 hour ahead of the wall clock
+				var got time.Time
+				if version == 6 {
+					rel := rfcV6DecodeTime(types.Uuid(u)) - 12219292800*10_000_000
+					got = time.Unix(rel/10_000_000, rel%10_000_000*100)
+				} else {
+					sec, nsec := u.Time().UnixTime()
+					got = time.Unix(sec, nsec)
+				}
+				require.WithinDuration(t, before.Add(time.Hour), got, time.Minute+after.Sub(before))
+			}
+		})
+	}
+
+	// extreme interval counts yield NULL, like date_add: math.MaxInt64 is the
+	// binder's invalid-interval marker, and math.MinInt64 would overflow
+	// JudgeIntervalNumOverflow's negation and wrap in interval arithmetic
+	for _, c := range []struct {
+		num  int64
+		unit types.IntervalType
+	}{
+		{math.MaxInt64, types.Hour},
+		{math.MinInt64, types.Second},
+		{math.MinInt64, types.MicroSecond},
+	} {
+		result := vector.NewFunctionResultWrapper(types.T_uuid.ToType(), proc.Mp())
+		require.NoError(t, result.PreExtendAndReset(1))
+		nums := testutil.NewInt64Vector(1, types.T_int64.ToType(), proc.Mp(), false, nil, []int64{c.num})
+		units := testutil.NewInt64Vector(1, types.T_int64.ToType(), proc.Mp(), false, nil, []int64{int64(c.unit)})
+		require.NoError(t, makeBuiltInUUIDShifted(7)([]*vector.Vector{nums, units}, result, proc, 1, nil))
+		require.True(t, result.GetResultVector().GetNulls().Contains(0), "num=%d unit=%d", c.num, c.unit)
+		nums.Free(proc.Mp())
+		units.Free(proc.Mp())
+		result.Free()
+	}
+}
+
+func TestUUIDExtractNullableDeduction(t *testing.T) {
+	notNullUuid := &plan.Expr{Typ: plan.Type{Id: int32(types.T_uuid), NotNullable: true}}
+	// the extractors synthesize NULL from non-NULL UUIDs (v4 timestamps,
+	// non-RFC variants), so the planner must keep their results nullable
+	for _, fid := range []int32{UUID_EXTRACT_VERSION, UUID_EXTRACT_TIMESTAMP} {
+		require.False(t, DeduceNotNullable(encodeOverloadID(fid, 0), []*plan.Expr{notNullUuid}))
+	}
+	// control: a plain strict function still deduces NOT NULL from NOT NULL args
+	require.True(t, DeduceNotNullable(encodeOverloadID(int32(IS_UUID), 0), []*plan.Expr{
+		{Typ: plan.Type{Id: int32(types.T_varchar), NotNullable: true}},
+	}))
+}
+
+func TestUUIDShiftDSTSemantics(t *testing.T) {
+	loc, err := time.LoadLocation("America/New_York")
+	require.NoError(t, err)
+	cases := []struct {
+		name      string
+		base      time.Time
+		num       int64
+		unit      types.IntervalType
+		want      time.Time
+		wantDelta time.Duration
+	}{
+		// spring-forward (2026-03-08, EST -> EDT): same local wall clock, so
+		// the absolute delta is one hour shorter than the nominal month
+		{"forward-month", time.Date(2026, 3, 1, 10, 30, 0, 0, loc), 1, types.Month,
+			time.Date(2026, 4, 1, 10, 30, 0, 0, loc), 31*24*time.Hour - time.Hour},
+		// fall-back (2026-11-01, EDT -> EST): one hour longer
+		{"backward-month", time.Date(2026, 10, 15, 10, 30, 0, 0, loc), 1, types.Month,
+			time.Date(2026, 11, 15, 10, 30, 0, 0, loc), 31*24*time.Hour + time.Hour},
+		// negative shift back across the fall transition
+		{"negative-month", time.Date(2026, 11, 15, 10, 30, 0, 0, loc), -1, types.Month,
+			time.Date(2026, 10, 15, 10, 30, 0, 0, loc), -(31*24*time.Hour + time.Hour)},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			require.Equal(t, c.wantDelta, c.want.Sub(c.base))
+			got, ok := addIntervalInZone(c.base, c.num, c.unit, loc)
+			require.True(t, ok)
+			require.True(t, got.Equal(c.want), "got %v want %v", got, c.want)
+			// the shifted instant round-trips through every version's timestamp field
+			for _, version := range []int{1, 6, 7} {
+				var u types.Uuid
+				if version == 7 {
+					u[6] = 0x70
+				}
+				u[8] = 0x80
+				require.True(t, setUUIDTimestamp(&u, version, got))
+				require.True(t, uuidEmbeddedTime(u, version).Equal(got), "v%d roundtrip", version)
+			}
+		})
+	}
+}
+
+func TestBuiltInUUIDExtract(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	// the boundary pins for 2026-01-02 03:04:05.678 UTC (see TestBuiltInUUIDBoundary)
+	v7 := mustParseUuid(t, "019b7ca9-8f2e-7000-8000-000000000000")
+	v1 := mustParseUuid(t, "b2ea34e0-e787-11f0-8000-000000000000")
+	v6 := mustParseUuid(t, "1f0e787b-2ea3-64e0-8000-000000000000")
+	v4 := mustParseUuid(t, "788b2cf7-aa3a-4b87-867b-e40ca351c179")
+	// externally constructed control: the standard UUIDv6 example from
+	// RFC 9562 appendix A.4, timestamp 2022-02-22 14:22:22 -05:00
+	rfc := mustParseUuid(t, "1ec9414c-232a-6b00-b3c8-9f6bdeced846")
+	var zero types.Uuid // NCS variant: both functions return NULL
+
+	inputs := []FunctionTestInput{
+		NewFunctionTestInput(types.T_uuid.ToType(),
+			[]types.Uuid{v7, v1, v6, rfc, v4, zero, zero},
+			[]bool{false, false, false, false, false, false, true}),
+	}
+
+	{
+		tc := tcTemp{
+			info:   "uuid_extract_version",
+			inputs: inputs,
+			expect: NewFunctionTestResult(types.T_int16.ToType(), false,
+				[]int16{7, 1, 6, 6, 4, 0, 0},
+				[]bool{false, false, false, false, false, true, true}),
+		}
+		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, builtInUUIDExtractVersion)
+		succeed, info := tcc.Run()
+		require.True(t, succeed, tc.info, info)
+	}
+
+	{
+		want := types.FromClockUTC(2026, 1, 2, 3, 4, 5, 678000)
+		wantRfc := types.FromClockUTC(2022, 2, 22, 19, 22, 22, 0)
+		tc := tcTemp{
+			info:   "uuid_extract_timestamp",
+			inputs: inputs,
+			expect: NewFunctionTestResult(types.T_timestamp.ToType(), false,
+				[]types.Timestamp{want, want, want, wantRfc, 0, 0, 0},
+				[]bool{false, false, false, false, true, true, true}),
+		}
+		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, builtInUUIDExtractTimestamp)
+		succeed, info := tcc.Run()
+		require.True(t, succeed, tc.info, info)
+	}
+}
+
+func TestUUIDFunctionRegistrations(t *testing.T) {
+	for _, fid := range []int{UUID, UUID_V1, UUID_V4, UUID_V6, UUID_EXTRACT_VERSION, UUID_EXTRACT_TIMESTAMP} {
+		f := allSupportedFunctions[fid]
+		require.Equal(t, fid, f.functionId)
+		require.NotEmpty(t, f.Overloads)
+		for _, ov := range f.Overloads {
+			argTs := make([]types.Type, len(ov.args))
+			for i, a := range ov.args {
+				argTs[i] = a.ToType()
+			}
+			rt := ov.retType(argTs)
+			require.NotEqual(t, types.T_any, rt.Oid)
+			require.NotNil(t, ov.newOp())
+		}
+	}
+}
+
+func mustParseUuid(t *testing.T, s string) types.Uuid {
+	u, err := uuid.Parse(s)
+	require.NoError(t, err)
+	return types.Uuid(u)
 }
 
 func TestBuiltInUUIDFunctions(t *testing.T) {

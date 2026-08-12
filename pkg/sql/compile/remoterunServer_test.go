@@ -26,14 +26,17 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	mock_morpc "github.com/matrixorigin/matrixone/pkg/common/morpc/mock_morpc"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
@@ -235,18 +238,21 @@ func TestNewCompile_CreatesCorrectStructure(t *testing.T) {
 			storeEngine: mockEngine,
 		},
 		procBuildHelper: processHelper{
-			id:           "test-proc-id",
-			accountId:    catalog.System_Account,
-			unixTime:     time.Now().Unix(),
-			affectedRows: 42,
-			txnClient:    txnClient,
-			txnOperator:  txnOperator,
+			id:                     "test-proc-id",
+			accountId:              catalog.System_Account,
+			unixTime:               time.Now().Unix(),
+			affectedRows:           42,
+			statementRuntimeIgnore: true,
+			planSnapshotTS:         timestamp.Timestamp{PhysicalTime: 123, LogicalTime: 4},
+			hasPlanSnapshotTS:      true,
+			txnClient:              txnClient,
+			txnOperator:            txnOperator,
 			prepareParams: pipeline.PrepareParamInfo{
 				Length: 2,
 				Data:   append([]byte(nil), params.GetData()...),
 				Area:   append([]byte(nil), params.GetArea()...),
 				Nulls:  []bool{false, false},
-				IsBin:  []bool{true, false},
+				IsBin:  []bool{true, false, false, false, false, true, false, false},
 			},
 		},
 		messageAcquirer: func() morpc.Message {
@@ -264,7 +270,13 @@ func TestNewCompile_CreatesCorrectStructure(t *testing.T) {
 	require.Equal(t, "text", compile.proc.GetPrepareParams().GetStringAt(1))
 	require.True(t, compile.proc.GetPrepareParamIsBin(0))
 	require.False(t, compile.proc.GetPrepareParamIsBin(1))
+	require.Equal(t, vector.PrepareParamNone, compile.proc.GetPrepareParamKind(0))
+	require.Equal(t, vector.PrepareParamFloat, compile.proc.GetPrepareParamKind(1))
 	require.Equal(t, int64(42), compile.proc.GetAffectedRows())
+	require.True(t, compile.proc.GetStmtProfile().GetStatementIgnore())
+	planSnapshot, ok := compile.proc.GetPlanSnapshotTS()
+	require.True(t, ok)
+	require.Equal(t, timestamp.Timestamp{PhysicalTime: 123, LogicalTime: 4}, planSnapshot)
 	require.NotNil(t, compile.fill, "fill callback should be set")
 	remoteParams := compile.proc.GetPrepareParams()
 	require.NotPanics(t, compile.Release)
@@ -342,10 +354,12 @@ func TestGenerateProcessHelper_WithSnapshot(t *testing.T) {
 	t.Cleanup(func() { params.Free(proc.Mp()) })
 
 	procInfo := &pipeline.ProcessInfo{
-		Id:           "test-proc-id",
-		AccountId:    catalog.System_Account,
-		UnixTime:     time.Now().Unix(),
-		AffectedRows: 42,
+		Id:                     "test-proc-id",
+		AccountId:              catalog.System_Account,
+		UnixTime:               time.Now().Unix(),
+		AffectedRows:           42,
+		StatementRuntimeIgnore: true,
+		PlanSnapshotTs:         &timestamp.Timestamp{PhysicalTime: 123, LogicalTime: 4},
 		Snapshot: txn.CNTxnSnapshot{
 			Txn: txn.TxnMeta{
 				ID: []byte("test-txn-id"),
@@ -371,6 +385,9 @@ func TestGenerateProcessHelper_WithSnapshot(t *testing.T) {
 	require.Equal(t, procInfo.PrepareParams.Data, helper.prepareParams.Data)
 	require.Equal(t, procInfo.PrepareParams.Area, helper.prepareParams.Area)
 	require.Equal(t, int64(42), helper.affectedRows)
+	require.True(t, helper.statementRuntimeIgnore)
+	require.True(t, helper.hasPlanSnapshotTS)
+	require.Equal(t, *procInfo.PlanSnapshotTs, helper.planSnapshotTS)
 	require.NotNil(t, helper.txnOperator, "txnOperator should be created from snapshot")
 	// Verify that rebuilt txnOperator has nil workspace (key point for remote run)
 	require.Nil(t, helper.txnOperator.GetWorkspace(), "rebuilt txnOperator should have nil workspace initially")
@@ -534,4 +551,209 @@ func TestCnServerMessageHandlerWaitObservesConnectionClose(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("wait did not observe connection close")
 	}
+}
+
+func TestHandlePipelineStopSendingAbortsOutstandingBatchFlow(t *testing.T) {
+	server := colexec.NewServer("")
+	session := &lifecycleTestSession{ctx: context.Background()}
+	flow := newPipelineBatchFlow(1, 1024)
+	lifecycle, err := registerPipelineStreamLifecycle(session, 400, flow)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		lifecycle.remove()
+		server.RemoveRelatedPipeline(session, 400)
+	})
+
+	seq, err := flow.reserve(context.Background(), context.Background(), 10)
+	require.NoError(t, err)
+	drainStarted := make(chan struct{})
+	drainDone := make(chan error, 1)
+	go func() {
+		close(drainStarted)
+		drainDone <- flow.waitUntilDrained(context.Background(), context.Background(), nil)
+	}()
+	<-drainStarted
+
+	receiver := &messageReceiverOnServer{
+		messageCtx:    context.Background(),
+		messageId:     400,
+		messageTyp:    pipeline.Method_StopSending,
+		clientSession: session,
+		colexecServer: server,
+	}
+	require.NoError(t, handlePipelineMessage(receiver))
+
+	select {
+	case err = <-drainDone:
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrQueryInterrupted), err)
+	case <-time.After(time.Second):
+		t.Fatal("StopSending did not release the terminal-response drain barrier")
+	}
+	require.NoError(t, handlePipelineBatchAck(
+		&pipeline.Message{Id: 400, BatchAckSequence: seq}, session),
+		"a concurrently flushed ACK must remain harmless after StopSending")
+	require.Zero(t, session.closeCalls)
+}
+
+func TestPipelineStopBeforeLifecycleRegistrationIsReconciled(t *testing.T) {
+	server := colexec.NewServer("")
+	sessionCtx, closeSession := context.WithCancel(context.Background())
+	session := &lifecycleTestSession{ctx: sessionCtx}
+	const streamID = 405
+	t.Cleanup(func() {
+		server.RemoveRelatedPipeline(session, streamID)
+		closeSession()
+	})
+
+	stopReceiver := &messageReceiverOnServer{
+		messageCtx:    context.Background(),
+		messageId:     streamID,
+		messageTyp:    pipeline.Method_StopSending,
+		clientSession: session,
+		colexecServer: server,
+	}
+	require.NoError(t, handlePipelineMessage(stopReceiver))
+	require.True(t, server.HasPendingPipelineCancellation(session, streamID))
+
+	flow := newPipelineBatchFlow(1, 1024)
+	lifecycle, err := registerPipelineStreamLifecycle(session, streamID, flow)
+	require.NoError(t, err)
+	t.Cleanup(lifecycle.remove)
+
+	// Model the failure mode directly: the lifecycle is now published, and an
+	// outstanding batch appears before the pre-registration Stop is reconciled.
+	seq, err := flow.reserve(context.Background(), context.Background(), 10)
+	require.NoError(t, err)
+	pipelineReceiver := &messageReceiverOnServer{
+		messageCtx:      context.Background(),
+		messageId:       streamID,
+		clientSession:   session,
+		streamLifecycle: lifecycle,
+		colexecServer:   server,
+	}
+	pipelineReceiver.abortBatchFlowForPendingStop()
+
+	err = flow.waitUntilDrained(context.Background(), context.Background(), nil)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrQueryInterrupted), err)
+	_, err = flow.reserve(context.Background(), context.Background(), 1)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrQueryInterrupted), err)
+	require.NoError(t, flow.acknowledge(seq), "a late ACK must be harmless after reconciliation")
+
+	dispatchReceiver := &process.WrapCs{
+		MsgId: streamID,
+		Uid:   uuid.Must(uuid.NewV7()),
+		Cs:    session,
+		Err:   make(chan error, 1),
+	}
+	server.RecordDispatchPipeline(session, streamID, dispatchReceiver)
+	require.False(t, dispatchReceiver.ReceiverDone,
+		"lifecycle cancellation must not change dispatch ReceiverDone semantics")
+	require.False(t, server.HasPendingPipelineCancellation(session, streamID),
+		"dispatch registration must retain its existing stale-tombstone cleanup")
+}
+
+func TestMessageReceiverSendBatchUsesNegotiatedCredits(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	session := mock_morpc.NewMockClientSession(ctrl)
+	flow := newPipelineBatchFlow(2, 1024)
+	lifecycle := &pipelineStreamLifecycle{batchFlow: flow}
+	var sent *pipeline.Message
+	session.EXPECT().Write(gomock.Any(), gomock.Any()).DoAndReturn(
+		func(_ context.Context, message any) error {
+			sent = message.(*pipeline.Message)
+			return nil
+		})
+
+	receiver := &messageReceiverOnServer{
+		messageCtx:      context.Background(),
+		connectionCtx:   context.Background(),
+		messageId:       401,
+		clientSession:   session,
+		messageAcquirer: func() morpc.Message { return &pipeline.Message{} },
+		maxMessageSize:  1 << 20,
+		streamLifecycle: lifecycle,
+	}
+	require.NoError(t, receiver.sendBatch(batch.NewWithSize(0)))
+	require.NotNil(t, sent)
+	require.Equal(t, uint64(1), sent.GetBatchSequence())
+	require.Equal(t, uint32(2), sent.GetAcceptedBatchCreditCount())
+	require.Equal(t, uint64(1024), sent.GetAcceptedBatchCreditBytes())
+
+	flow.mu.Lock()
+	require.Len(t, flow.pending, 1)
+	flow.mu.Unlock()
+	require.NoError(t, flow.acknowledge(sent.GetBatchSequence()))
+}
+
+func TestMessageReceiverSendFragmentedBatchRollsBackCreditOnWriteFailure(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	session := mock_morpc.NewMockClientSession(ctrl)
+	wantErr := errors.New("write fragment")
+	flow := newPipelineBatchFlow(2, 1024)
+	bat := batch.NewWithSize(0)
+	data, err := bat.MarshalBinary()
+	require.NoError(t, err)
+	require.Greater(t, len(data), 1)
+	writes := 0
+	session.EXPECT().Write(gomock.Any(), gomock.Any()).DoAndReturn(
+		func(_ context.Context, message any) error {
+			writes++
+			msg := message.(*pipeline.Message)
+			require.Equal(t, uint64(1), msg.GetBatchSequence())
+			if writes == 2 {
+				return wantErr
+			}
+			return nil
+		}).Times(2)
+
+	receiver := &messageReceiverOnServer{
+		messageCtx:      context.Background(),
+		connectionCtx:   context.Background(),
+		messageId:       402,
+		clientSession:   session,
+		messageAcquirer: func() morpc.Message { return &pipeline.Message{} },
+		maxMessageSize:  len(data) - 1,
+		streamLifecycle: &pipelineStreamLifecycle{batchFlow: flow},
+	}
+	err = receiver.sendBatch(bat)
+	require.ErrorIs(t, err, wantErr)
+	require.Equal(t, 2, writes)
+	flow.mu.Lock()
+	require.Empty(t, flow.pending)
+	require.Zero(t, flow.bytes)
+	flow.mu.Unlock()
+}
+
+func TestMessageReceiverSendFragmentedBatchKeepsCreditUntilAck(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	session := mock_morpc.NewMockClientSession(ctrl)
+	flow := newPipelineBatchFlow(2, 1024)
+	bat := batch.NewWithSize(0)
+	data, err := bat.MarshalBinary()
+	require.NoError(t, err)
+	require.Greater(t, len(data), 1)
+	writes := 0
+	session.EXPECT().Write(gomock.Any(), gomock.Any()).DoAndReturn(
+		func(_ context.Context, message any) error {
+			writes++
+			msg := message.(*pipeline.Message)
+			require.Equal(t, uint64(1), msg.GetBatchSequence())
+			return nil
+		}).Times(2)
+
+	receiver := &messageReceiverOnServer{
+		messageCtx:      context.Background(),
+		connectionCtx:   context.Background(),
+		messageId:       403,
+		clientSession:   session,
+		messageAcquirer: func() morpc.Message { return &pipeline.Message{} },
+		maxMessageSize:  len(data) - 1,
+		streamLifecycle: &pipelineStreamLifecycle{batchFlow: flow},
+	}
+	require.NoError(t, receiver.sendBatch(bat))
+	require.Equal(t, 2, writes)
+	flow.mu.Lock()
+	require.Len(t, flow.pending, 1)
+	flow.mu.Unlock()
+	require.NoError(t, flow.acknowledge(1))
 }

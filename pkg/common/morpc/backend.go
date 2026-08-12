@@ -44,6 +44,12 @@ var (
 	backendClosed   = moerr.NewBackendClosedNoCtx()
 	backendDraining = moerr.NewInvalidStateNoCtx("backend is draining")
 	messageSkipped  = moerr.NewInvalidStateNoCtx("request is skipped")
+
+	// Cancellation releases a shared manager worker before goetty's legacy,
+	// timeout-bounded Connect necessarily returns. Retain the same process-wide
+	// bound for those lower-level attempts so rapid invalidation cannot turn
+	// prompt worker cancellation into unbounded dial goroutines.
+	goettyContextCreateSlots = make(chan struct{}, backendCreateWorkerCount)
 )
 
 // WithBackendLogger set the backend logger
@@ -122,9 +128,10 @@ func WithBackendReadTimeout(value time.Duration) BackendOption {
 	}
 }
 
-// WithBackendLivenessProbe verifies peer liveness over a transport independent
-// from this backend. A successful probe turns a read inactivity timeout into a
-// request-level wait instead of resetting the shared data connection.
+// WithBackendLivenessProbe observes peer liveness over a transport independent
+// from this backend. When unary data traffic stalls, the current data generation
+// is drained without discarding pending requests; probe failures remain
+// inconclusive because the data connection can still make progress.
 func WithBackendLivenessProbe(value func(context.Context, string) error) BackendOption {
 	return func(rb *remoteBackend) {
 		rb.options.livenessProbe = value
@@ -234,9 +241,8 @@ type remoteBackend struct {
 		id             uint64
 		lastActiveTime atomic.Value //time.Time
 		unavailable    atomic.Bool
-		// draining seals new pool admission after data transport inactivity was
-		// confirmed against a healthy independent control connection. Existing
-		// Futures remain owned by this backend and may still complete.
+		// draining seals new pool admission after data transport inactivity.
+		// Existing Futures remain owned by this backend and may still complete.
 		draining atomic.Bool
 	}
 
@@ -1329,16 +1335,6 @@ func (rb *remoteBackend) keepDataConnectionAfterProbe(
 		return true
 	}
 
-	timeout := rb.options.readTimeout / 5
-	if timeout <= 0 || timeout > internalTimeout {
-		timeout = internalTimeout
-	}
-	probeCtx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
-	if err := rb.options.livenessProbe(probeCtx, rb.remote); err != nil {
-		rb.metrics.observeBackendError(rb.remote, "liveness-probe", err)
-		return false
-	}
 	rb.stateMu.Lock()
 	if rb.stateMu.state != stateRunning {
 		rb.stateMu.Unlock()
@@ -1348,16 +1344,31 @@ func (rb *remoteBackend) keepDataConnectionAfterProbe(
 		rb.atomic.draining.CompareAndSwap(false, true)
 	rb.stateMu.Unlock()
 	if startedDraining {
-		// A pong proves that the peer is alive, not that this data TCP can make
-		// progress. Seal it from new pool admission, preserve existing requests,
-		// and let the client publish a fresh data generation on next demand.
+		// Response inactivity is enough to stop admitting new work to this data
+		// generation, but not enough to fail requests that can still complete.
+		// Preserve them while the client publishes a fresh generation on demand.
 		rb.logger.Debug(
-			"data backend draining after independent liveness probe",
+			"data backend draining after response inactivity",
 			rb.logFields()...,
 		)
 		rb.mu.Lock()
 		rb.finishDrainingLocked()
 		rb.mu.Unlock()
+	}
+
+	timeout := rb.options.readTimeout / 5
+	if timeout <= 0 || timeout > internalTimeout {
+		timeout = internalTimeout
+	}
+	probeCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	if err := rb.options.livenessProbe(probeCtx, rb.remote); err != nil {
+		rb.metrics.observeBackendError(rb.remote, "liveness-probe", err)
+		// The control transport is independent from this data connection. Its
+		// failure is therefore inconclusive: the peer may still return a valid
+		// slow response on the data connection. Leave reset and Future failure to
+		// a terminal data error or the client's bounded generation lifecycle.
+		return true
 	}
 	return true
 }
@@ -1470,6 +1481,8 @@ type goettyBasedBackendFactory struct {
 	options []BackendOption
 }
 
+var _ ContextBackendFactory = (*goettyBasedBackendFactory)(nil)
+
 func NewGoettyBasedBackendFactory(codec Codec, options ...BackendOption) BackendFactory {
 	return &goettyBasedBackendFactory{
 		codec:   codec,
@@ -1480,8 +1493,85 @@ func NewGoettyBasedBackendFactory(codec Codec, options ...BackendOption) Backend
 func (bf *goettyBasedBackendFactory) Create(
 	remote string,
 	extraOptions ...BackendOption) (Backend, error) {
-	opts := append(bf.options, extraOptions...)
+	opts := make([]BackendOption, 0, len(bf.options)+len(extraOptions))
+	opts = append(opts, bf.options...)
+	opts = append(opts, extraOptions...)
 	return NewRemoteBackend(remote, bf.codec, opts...)
+}
+
+// CreateWithContext adapts goetty's timeout-bounded legacy Connect API to the
+// contextual factory contract. Cancellation returns the shared factory worker
+// immediately. The bounded connect attempt retains ownership of its result and
+// closes a late Backend before it can escape into a replacement generation.
+func (bf *goettyBasedBackendFactory) CreateWithContext(
+	ctx context.Context,
+	remote string,
+	extraOptions ...BackendOption,
+) (Backend, error) {
+	return boundedBackendCreate(ctx, goettyContextCreateSlots, func() (Backend, error) {
+		return bf.Create(remote, extraOptions...)
+	})
+}
+
+func boundedBackendCreate(
+	ctx context.Context,
+	slots chan struct{},
+	create func() (Backend, error),
+) (Backend, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	select {
+	case slots <- struct{}{}:
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+	resultC := make(chan backendCreateResult)
+	go func() {
+		defer func() { <-slots }()
+		backend, err := create()
+		transferBackendCreateResult(
+			ctx,
+			resultC,
+			backendCreateResult{backend: backend, err: err},
+		)
+	}()
+
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case result := <-resultC:
+		if err := ctx.Err(); err != nil {
+			if result.backend != nil {
+				result.backend.Close()
+			}
+			return nil, err
+		}
+		return result.backend, result.err
+	}
+}
+
+type backendCreateResult struct {
+	backend Backend
+	err     error
+}
+
+// transferBackendCreateResult is the ownership linearization point for a
+// completed legacy create. An unbuffered transfer gives the Backend to exactly
+// one live receiver; if cancellation wins instead, the producer remains its
+// owner and destroys it before releasing the shared create slot.
+func transferBackendCreateResult(
+	ctx context.Context,
+	resultC chan<- backendCreateResult,
+	result backendCreateResult,
+) {
+	select {
+	case resultC <- result:
+	case <-ctx.Done():
+		if result.backend != nil {
+			result.backend.Close()
+		}
+	}
 }
 
 type stream struct {

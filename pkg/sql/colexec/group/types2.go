@@ -21,6 +21,7 @@ import (
 	"os"
 
 	"github.com/matrixorigin/matrixone/pkg/common"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/common/system"
@@ -63,8 +64,9 @@ type Group struct {
 	SpillMem int64
 
 	// group-by column.
-	GroupBy      []*plan.Expr
-	GroupingFlag []bool
+	GroupBy        []*plan.Expr
+	GroupingFlag   []bool
+	GroupByHashKey []int32
 
 	Aggs []aggexec.AggFuncExecExpression
 
@@ -124,9 +126,15 @@ type container struct {
 	// group by columns
 	groupByTypes   []types.Type
 	groupByBatches []*batch.Batch
+	groupByHashKey []int32
+	hashKeyVecs    []*vector.Vector
 
 	// aggs, which holds the intermediate state of agg functions.
-	aggList []aggexec.AggFuncExec
+	aggList                []aggexec.AggFuncExec
+	aggExprs               []aggexec.AggFuncExecExpression
+	prepareParamKind       aggexec.PrepareParamKindStates
+	prepareParamKindWireV1 bool
+	legacyTextMinMax       bool
 
 	// spill, agglist to load spilled data.
 	spillMem        int64
@@ -141,6 +149,7 @@ type container struct {
 	spillReader          *bufio.Reader // reused across loadSpilledData calls
 	spillGbBatch         *batch.Batch  // reused staging batch across spillDataToDisk calls
 	spillBuf             *bytes.Buffer // reused write buffer across spillDataToDisk calls
+	spillGbPayload       *bytes.Buffer // transient group-key provenance payload
 	spillNonEmptyBuckets []int         // reused list of non-empty bucket indices
 	spillBucketRowIds    [][]int32     // per-bucket row index lists, reused across batches
 
@@ -159,7 +168,8 @@ func (ctr *container) setSpillMem(m int64, aggs []aggexec.AggFuncExecExpression)
 	// We simply cannot spill distinct agg at this moment.
 	for _, ag := range aggs {
 		if ag.IsDistinct() {
-			if ag.GetConfigType() == plan.AggregateConfigType_AGG_CONFIG_GROUP_CONCAT_ORDER {
+			if ag.GetConfigType() == plan.AggregateConfigType_AGG_CONFIG_GROUP_CONCAT_ORDER &&
+				aggexec.HasGroupConcatOrder(ag.GetExtraConfig()) {
 				continue
 			}
 			// Set to TiB, effectively disabling spill for distinct agg.
@@ -245,6 +255,9 @@ func (ctr *container) free() {
 
 	ctr.freeGroupByBatches()
 	ctr.freeAggList()
+	ctr.prepareParamKind.Reset(nil)
+	ctr.aggExprs = nil
+	ctr.prepareParamKindWireV1 = false
 	ctr.freeSpillAggList()
 	ctr.freeSpillBkts()
 	if ctr.spillGbBatch != nil {
@@ -252,6 +265,7 @@ func (ctr *container) free() {
 		ctr.spillGbBatch = nil
 	}
 	ctr.spillBuf = nil
+	ctr.spillGbPayload = nil
 	ctr.spillReader = nil
 	ctr.spillHashCodes = nil
 	ctr.spillChunkFlags = nil
@@ -259,6 +273,8 @@ func (ctr *container) free() {
 	ctr.spillNonEmptyBuckets = nil
 	ctr.spillBucketRowIds = nil
 	ctr.spillHashPreAllocSize = 0
+	ctr.groupByHashKey = nil
+	ctr.hashKeyVecs = nil
 
 	mpool.DeleteMPool(ctr.mp)
 	ctr.mp = nil
@@ -283,6 +299,43 @@ func (ctr *container) resetForSpill() {
 
 	ctr.freeAggList()
 	ctr.freeSpillAggList()
+}
+
+func (ctr *container) setGroupByHashKey(hashKey []int32) {
+	ctr.groupByHashKey = hashKey
+	ctr.hashKeyVecs = ctr.hashKeyVecs[:0]
+}
+
+func (ctr *container) validateGroupByHashKey(groupByCount int) error {
+	if len(ctr.groupByHashKey) == 0 {
+		return nil
+	}
+	if len(ctr.groupByHashKey) >= groupByCount {
+		return moerr.NewInternalErrorNoCtx("group-by hash key must be a strict subset of group-by columns")
+	}
+	previous := int32(-1)
+	for _, idx := range ctr.groupByHashKey {
+		if idx <= previous || idx < 0 || int(idx) >= groupByCount {
+			return moerr.NewInternalErrorNoCtxf("invalid group-by hash key index %d", idx)
+		}
+		previous = idx
+	}
+	return nil
+}
+
+func (ctr *container) hashKeyVectors(vs []*vector.Vector) []*vector.Vector {
+	if len(ctr.groupByHashKey) == 0 {
+		return vs
+	}
+	if cap(ctr.hashKeyVecs) < len(ctr.groupByHashKey) {
+		ctr.hashKeyVecs = make([]*vector.Vector, len(ctr.groupByHashKey))
+	} else {
+		ctr.hashKeyVecs = ctr.hashKeyVecs[:len(ctr.groupByHashKey)]
+	}
+	for i, idx := range ctr.groupByHashKey {
+		ctr.hashKeyVecs[i] = vs[idx]
+	}
+	return ctr.hashKeyVecs
 }
 
 func (group *Group) evaluateGroupByAndAggArgs(proc *process.Process, bat *batch.Batch) (err error) {
@@ -423,6 +476,8 @@ type MergeGroup struct {
 	SpillMem int64
 
 	Aggs []aggexec.AggFuncExecExpression
+
+	GroupByHashKey []int32
 
 	PartialResults     []any
 	PartialResultTypes []types.T

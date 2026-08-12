@@ -17,8 +17,8 @@ package tnservice
 import (
 	"context"
 	"errors"
-	"github.com/matrixorigin/matrixone/pkg/queryservice/client"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"go.uber.org/zap"
@@ -39,6 +39,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/queryservice"
+	"github.com/matrixorigin/matrixone/pkg/queryservice/client"
 	"github.com/matrixorigin/matrixone/pkg/shardservice"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
@@ -113,6 +114,17 @@ type store struct {
 	replicas            *sync.Map
 	stopper             *stopper.Stopper
 	shutdownC           chan struct{}
+	heartbeatInFlight   atomic.Bool
+	commandPollNeeded   atomic.Bool
+	commandPollWakeup   chan struct{}
+	commandMu           sync.Mutex
+	shutdownAckMu       sync.Mutex
+	lastCommandBatchID  uint64
+	ackedCommandBatchID atomic.Uint64
+	appliedCommandIDs   map[logservice.ScheduleCommandIdentity]struct{}
+	shutdownBatchID     atomic.Uint64
+	lastCommandHash     [32]byte
+	legacyDedupeArmed   bool
 
 	options struct {
 		logServiceClientFactory func(metadata.TNShard) (logservice.Client, error)
@@ -234,7 +246,7 @@ func (s *store) Start() error {
 		}
 	}
 	s.rt.SubLogger(runtime.SystemInit).Info("dn heartbeat task started")
-	return s.stopper.RunTask(s.heartbeatTask)
+	return s.stopper.RunTask(s.controlTask)
 }
 
 func (s *store) Close() error {

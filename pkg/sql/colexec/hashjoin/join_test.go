@@ -61,6 +61,7 @@ func TestHashJoinPrepareFailureCanRetry(t *testing.T) {
 		EqConds:   [][]*plan.Expr{{valid}, {valid}},
 		NonEqCond: invalid,
 	}
+	installTestAllocation(t, arg)
 
 	require.Error(t, arg.Prepare(proc))
 	require.Nil(t, arg.ctr.eqCondVecs)
@@ -224,6 +225,83 @@ func TestJoin(t *testing.T) {
 		tc.proc.Free()
 		require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
 	}
+}
+
+type recursiveHashJoinProbe struct {
+	*colexec.MockOperator
+}
+
+func (source *recursiveHashJoinProbe) OpType() vm.OpType {
+	return vm.MergeRecursive
+}
+
+func TestHashJoinPassesRecursiveMarkerWithEmptyBuild(t *testing.T) {
+	typ := types.T_int32.ToType()
+	conditions := [][]*plan.Expr{{newExpr(0, typ)}, {newExpr(0, typ)}}
+	tc := newTestCase(t, []bool{false}, []types.Type{typ}, []colexec.ResultPos{
+		colexec.NewResultPos(0, 0),
+	}, conditions)
+	marker := colexec.MakeMockBatchs(tc.proc.Mp())
+	marker.SetLast()
+	probeCalls := 0
+	probe := &recursiveHashJoinProbe{MockOperator: colexec.NewMockOperator().
+		WithBatchs([]*batch.Batch{colexec.MakeMockBatchs(tc.proc.Mp()), marker}).
+		WithBatchCallback(func(int) { probeCalls++ })}
+	tc.arg.Children = nil
+	tc.arg.AppendChild(probe)
+	resetHashBuildChildrenWithBatch(tc.barg, batch.EmptyBatch)
+	defer func() {
+		tc.arg.Free(tc.proc, false, nil)
+		tc.barg.Free(tc.proc, false, nil)
+		probe.Free(tc.proc, false, nil)
+		tc.proc.Free()
+		tc.cancel()
+	}()
+
+	require.NoError(t, tc.arg.Prepare(tc.proc))
+	require.NoError(t, tc.barg.Prepare(tc.proc))
+	res, err := vm.Exec(tc.barg, tc.proc)
+	require.NoError(t, err)
+	require.Nil(t, res.Batch)
+	res, err = vm.Exec(tc.arg, tc.proc)
+	require.NoError(t, err)
+	require.Same(t, marker, res.Batch)
+	require.Equal(t, 2, probeCalls)
+}
+
+func TestHashJoinPrepareRecomputesRecursiveProbeForFastPath(t *testing.T) {
+	typ := types.T_int32.ToType()
+	conditions := [][]*plan.Expr{{newExpr(0, typ)}, {newExpr(0, typ)}}
+	tc := newTestCase(t, []bool{false}, []types.Type{typ}, []colexec.ResultPos{
+		colexec.NewResultPos(0, 0),
+	}, conditions)
+	probeCalls := 0
+	probe := colexec.NewMockOperator().
+		WithBatchs([]*batch.Batch{colexec.MakeMockBatchs(tc.proc.Mp())}).
+		WithBatchCallback(func(int) { probeCalls++ })
+	tc.arg.Children = nil
+	tc.arg.AppendChild(probe)
+	// Model a reused operator whose previous generation had a recursive probe.
+	tc.arg.recursiveProbe = true
+	resetHashBuildChildrenWithBatch(tc.barg, batch.EmptyBatch)
+	defer func() {
+		tc.arg.Free(tc.proc, false, nil)
+		tc.barg.Free(tc.proc, false, nil)
+		probe.Free(tc.proc, false, nil)
+		tc.proc.Free()
+		tc.cancel()
+	}()
+
+	require.NoError(t, tc.arg.Prepare(tc.proc))
+	require.False(t, tc.arg.recursiveProbe)
+	require.NoError(t, tc.barg.Prepare(tc.proc))
+	res, err := vm.Exec(tc.barg, tc.proc)
+	require.NoError(t, err)
+	require.Nil(t, res.Batch)
+	res, err = vm.Exec(tc.arg, tc.proc)
+	require.NoError(t, err)
+	require.Nil(t, res.Batch)
+	require.Zero(t, probeCalls)
 }
 
 func TestHashJoinPropagatesUnmatchedOutputOOM(t *testing.T) {
@@ -786,9 +864,9 @@ func TestHashJoinSingleRejectsDuplicateMatchesAcrossWorkers(t *testing.T) {
 		JoinType: plan.Node_SINGLE,
 		NumCPU:   2,
 		IsMerger: true,
-		Channel:  make(chan *bitmap.Bitmap, 1),
+		Mailbox:  NewBitmapMailbox(2),
 	}
-	hashJoin.Channel <- remoteMatches
+	require.True(t, hashJoin.Mailbox.Send(remoteMatches))
 	ctr := container{rightRowsMatched: localMatches, probeSingle: true}
 
 	err := ctr.syncBitmap(hashJoin, proc)
@@ -820,14 +898,14 @@ func TestHashJoinMergerSyncBitmapAborted(t *testing.T) {
 		IsRightJoin: true,
 		NumCPU:      3,
 		IsMerger:    true,
-		Channel:     make(chan *bitmap.Bitmap, 3),
+		Mailbox:     NewBitmapMailbox(3),
 		ResultCols:  []colexec.ResultPos{colexec.NewResultPos(1, 0)},
 		RightTypes:  []types.Type{types.T_int32.ToType()},
 	}
 	// Worker A was torn down before syncing (its Reset sends nil); worker B
 	// synced normally and its bitmap lands after the abort marker.
-	hashJoin.Channel <- nil
-	hashJoin.Channel <- staleMatches
+	require.True(t, hashJoin.Mailbox.Send(nil))
+	require.True(t, hashJoin.Mailbox.Send(staleMatches))
 	hashJoin.ctr.state = SyncBitmap
 	hashJoin.ctr.rightRowsMatched = matched
 	hashJoin.ctr.rightBats = []*batch.Batch{rightBat}
@@ -836,13 +914,13 @@ func TestHashJoinMergerSyncBitmapAborted(t *testing.T) {
 	require.NoError(t, err)
 	require.Nil(t, result.Batch)
 	require.Equal(t, vm.ExecStop, result.Status)
-	// Worker B's bitmap must not be left behind in the shared channel.
-	require.Empty(t, hashJoin.Channel)
+	// Worker B's bitmap must not be left behind in the shared mailbox.
+	require.Empty(t, hashJoin.Mailbox.ch)
 
 	// The merger already synced this generation, so Reset must not push the
 	// nil abort marker either.
 	hashJoin.Reset(proc, false, nil)
-	require.Empty(t, hashJoin.Channel)
+	require.Empty(t, hashJoin.Mailbox.ch)
 
 	// Next generation over the same operator and channel: a clean sync must
 	// only observe this generation's bitmaps.
@@ -856,8 +934,9 @@ func TestHashJoinMergerSyncBitmapAborted(t *testing.T) {
 	workerMatches2.InitWithSize(4)
 	workerMatches2.Add(2)
 
-	hashJoin.Channel <- workerMatches1
-	hashJoin.Channel <- workerMatches2
+	hashJoin.Mailbox = NewBitmapMailbox(3)
+	require.True(t, hashJoin.Mailbox.Send(workerMatches1))
+	require.True(t, hashJoin.Mailbox.Send(workerMatches2))
 	hashJoin.ctr.state = SyncBitmap
 	hashJoin.ctr.rightRowsMatched = matched2
 	hashJoin.ctr.rightBats = []*batch.Batch{rightBat}
@@ -896,11 +975,11 @@ func TestHashJoinMergerFinalizeEmitsUnmatchedBuildRows(t *testing.T) {
 		IsRightJoin: true,
 		NumCPU:      2,
 		IsMerger:    true,
-		Channel:     make(chan *bitmap.Bitmap, 2),
+		Mailbox:     NewBitmapMailbox(2),
 		ResultCols:  []colexec.ResultPos{colexec.NewResultPos(1, 0)},
 		RightTypes:  []types.Type{types.T_int32.ToType()},
 	}
-	hashJoin.Channel <- remoteMatches
+	require.True(t, hashJoin.Mailbox.Send(remoteMatches))
 	hashJoin.ctr.state = SyncBitmap
 	hashJoin.ctr.rightRowsMatched = matched
 	hashJoin.ctr.rightBats = []*batch.Batch{rightBat}
@@ -921,6 +1000,99 @@ func TestHashJoinMergerFinalizeEmitsUnmatchedBuildRows(t *testing.T) {
 	hashJoin.Free(proc, false, nil)
 	proc.Free()
 	require.Equal(t, int64(0), proc.Mp().CurrNB())
+}
+
+func TestHashJoinTracksBuildMatchesWhenFullOuterIsNotRightOriented(t *testing.T) {
+	type joinedRow struct {
+		left      int32
+		right     int32
+		leftNull  bool
+		rightNull bool
+	}
+
+	want := []joinedRow{
+		{left: 1, rightNull: true},
+		{left: 2, right: 2},
+		{left: 4, rightNull: true},
+		{leftNull: true, right: 3},
+	}
+
+	for _, test := range []struct {
+		name        string
+		hashOnPK    bool
+		useResidual bool
+	}{
+		{name: "non-unique build without residual"},
+		{name: "non-unique build with residual", useResidual: true},
+		{name: "unique build without residual", hashOnPK: true},
+		{name: "unique build with residual", hashOnPK: true, useResidual: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			typ := types.T_int32.ToType()
+			tc := newTestCase(t,
+				[]bool{true},
+				[]types.Type{typ},
+				[]colexec.ResultPos{
+					colexec.NewResultPos(0, 0),
+					colexec.NewResultPos(1, 0),
+				},
+				[][]*plan.Expr{{newExpr(0, typ)}, {newExpr(0, typ)}},
+			)
+			defer func() {
+				tc.arg.Reset(tc.proc, false, nil)
+				tc.barg.Reset(tc.proc, false, nil)
+				tc.arg.Free(tc.proc, false, nil)
+				tc.barg.Free(tc.proc, false, nil)
+				tc.proc.Free()
+				tc.cancel()
+				require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
+			}()
+			tc.arg.JoinType = plan.Node_OUTER
+			tc.arg.IsRightJoin = false
+			tc.arg.HashOnPK = test.hashOnPK
+			tc.barg.HashOnPK = test.hashOnPK
+			if !test.useResidual {
+				tc.arg.NonEqCond = nil
+			}
+
+			resetChildrenWithBatch(tc.arg, makeInt32Batch(tc.proc, []int32{1, 2, 4}))
+			resetHashBuildChildrenWithBatch(tc.barg, makeInt32Batch(tc.proc, []int32{2, 3}))
+
+			require.NoError(t, tc.arg.Prepare(tc.proc))
+			require.NoError(t, tc.barg.Prepare(tc.proc))
+			buildResult, err := vm.Exec(tc.barg, tc.proc)
+			require.NoError(t, err)
+			require.Nil(t, buildResult.Batch)
+
+			var got []joinedRow
+			for {
+				result, err := vm.Exec(tc.arg, tc.proc)
+				require.NoError(t, err)
+				if result.Batch != nil {
+					left := vector.MustFixedColWithTypeCheck[int32](result.Batch.Vecs[0])
+					right := vector.MustFixedColWithTypeCheck[int32](result.Batch.Vecs[1])
+					for row := 0; row < result.Batch.RowCount(); row++ {
+						joined := joinedRow{
+							leftNull:  result.Batch.Vecs[0].GetNulls().Contains(uint64(row)),
+							rightNull: result.Batch.Vecs[1].GetNulls().Contains(uint64(row)),
+						}
+						if !joined.leftNull {
+							joined.left = left[row]
+						}
+						if !joined.rightNull {
+							joined.right = right[row]
+						}
+						got = append(got, joined)
+					}
+				}
+				if result.Status == vm.ExecStop {
+					break
+				}
+			}
+
+			require.ElementsMatch(t, want, got)
+		})
+	}
 }
 
 func makeInt32Batch(proc *process.Process, values []int32) *batch.Batch {
@@ -1049,7 +1221,7 @@ func newTestCaseWithMPool(
 		resultBatch.Vecs[i] = bat.Vecs[rp[i].Pos]
 	}
 	tag++
-	return joinTestCase{
+	tc := joinTestCase{
 		types:  ts,
 		flgs:   flgs,
 		proc:   proc,
@@ -1088,6 +1260,8 @@ func newTestCaseWithMPool(
 		},
 		resultBatch: resultBatch,
 	}
+	installTestAllocation(t, tc.arg, tc.barg)
+	return tc
 }
 
 func resetChildren(arg *HashJoin, m *mpool.MPool) {

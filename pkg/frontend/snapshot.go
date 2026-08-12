@@ -34,6 +34,8 @@ import (
 	indexplugin "github.com/matrixorigin/matrixone/pkg/indexplugin"
 	pbplan "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	icebergsql "github.com/matrixorigin/matrixone/pkg/sql/iceberg"
+	sqlmongodb "github.com/matrixorigin/matrixone/pkg/sql/mongodb"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
@@ -89,49 +91,80 @@ var (
 
 	skipDbs = []string{"mysql", "system", "system_metrics", "mo_task", "mo_debug", "information_schema", moCatalog}
 
-	needSkipTablesInMocatalog = map[string]int8{
-		"mo_database":         1,
-		"mo_tables":           1,
-		"mo_columns":          1,
-		"mo_table_partitions": 1,
-		"mo_foreign_keys":     1,
-		"mo_indexes":          1,
-		"mo_account":          1,
+	// systemCatalogRestorePolicies is the ownership boundary for mo_catalog
+	// restore semantics. Most catalog tables are either rebuilt by normal DDL or
+	// can be copied verbatim. Tables containing object IDs must opt into a
+	// post-copy transform instead of relying on incidental physical-ID equality.
+	systemCatalogRestorePolicies = map[string]systemCatalogRestorePolicy{
+		"mo_database":         systemCatalogRestoreSkip,
+		"mo_tables":           systemCatalogRestoreSkip,
+		"mo_columns":          systemCatalogRestoreSkip,
+		"mo_table_partitions": systemCatalogRestoreSkip,
+		"mo_foreign_keys":     systemCatalogRestoreSkip,
+		"mo_indexes":          systemCatalogRestoreSkip,
+		"mo_account":          systemCatalogRestoreSkip,
 
-		catalog.MOVersionTable:       1,
-		catalog.MOUpgradeTable:       1,
-		catalog.MOUpgradeTenantTable: 1,
-		catalog.MOAutoIncrTable:      1,
+		catalog.MOVersionTable:       systemCatalogRestoreSkip,
+		catalog.MOUpgradeTable:       systemCatalogRestoreSkip,
+		catalog.MOUpgradeTenantTable: systemCatalogRestoreSkip,
+		catalog.MOAutoIncrTable:      systemCatalogRestoreSkip,
 
-		"mo_user":                     0,
-		"mo_role":                     0,
-		"mo_user_grant":               0,
-		"mo_role_grant":               0,
-		"mo_role_privs":               0,
-		"mo_role_rule":                0,
-		"mo_user_defined_function":    0,
-		"mo_stored_procedure":         0,
-		"mo_mysql_compatibility_mode": 1,
-		"mo_stages":                   0,
-		catalog.MO_PUBS:               1,
-		catalog.MO_SUBS:               1,
-		catalog.MO_ISCP_LOG:           1,
-		catalog.MO_CCPR_LOG:           1,
-		catalog.MO_CCPR_TABLES:        1,
-		catalog.MO_CCPR_DBS:           1,
+		"mo_user":                       systemCatalogRestoreCopy,
+		"mo_role":                       systemCatalogRestoreCopy,
+		"mo_user_grant":                 systemCatalogRestoreCopy,
+		"mo_role_grant":                 systemCatalogRestoreCopy,
+		"mo_role_privs":                 systemCatalogRestoreCopyThenTransform,
+		"mo_role_rule":                  systemCatalogRestoreCopy,
+		"mo_user_defined_function":      systemCatalogRestoreCopy,
+		"mo_stored_procedure":           systemCatalogRestoreCopy,
+		"mo_mysql_compatibility_mode":   systemCatalogRestoreSkip,
+		"mo_stages":                     systemCatalogRestoreCopy,
+		catalog.MO_PUBS:                 systemCatalogRestoreSkip,
+		catalog.MO_SUBS:                 systemCatalogRestoreSkip,
+		catalog.MOShards:                systemCatalogRestoreCopy,
+		catalog.MOShardsMetadata:        systemCatalogRestoreCopy,
+		catalog.MO_CDC_TASK:             systemCatalogRestoreCopy,
+		catalog.MO_CDC_WATERMARK:        systemCatalogRestoreCopy,
+		catalog.MO_TABLE_STATS:          systemCatalogRestoreCopy,
+		catalog.MO_ACCOUNT_LOCK:         systemCatalogRestoreCopy,
+		catalog.MO_MERGE_SETTINGS:       systemCatalogRestoreCopy,
+		catalog.MO_ISCP_LOG:             systemCatalogRestoreSkip,
+		catalog.MO_INDEX_UPDATE:         systemCatalogRestoreCopy,
+		catalog.MO_BRANCH_METADATA:      systemCatalogRestoreCopy,
+		catalog.MO_FEATURE_LIMIT:        systemCatalogRestoreCopy,
+		catalog.MO_FEATURE_REGISTRY:     systemCatalogRestoreCopy,
+		catalog.MO_CCPR_LOG:             systemCatalogRestoreSkip,
+		catalog.MO_CCPR_TABLES:          systemCatalogRestoreSkip,
+		catalog.MO_CCPR_DBS:             systemCatalogRestoreSkip,
+		icebergsql.TableCatalogs:        systemCatalogRestoreCopy,
+		icebergsql.TablePrincipalMap:    systemCatalogRestoreCopy,
+		icebergsql.TableResidencyPolicy: systemCatalogRestoreCopy,
+		icebergsql.TableTables:          systemCatalogRestoreCopy,
+		icebergsql.TableRefs:            systemCatalogRestoreCopy,
+		icebergsql.TablePublishJobs:     systemCatalogRestoreCopy,
+		icebergsql.TableOrphanFiles:     systemCatalogRestoreCopy,
+		icebergsql.TableMaintenanceJobs: systemCatalogRestoreCopy,
+		sqlmongodb.TableConnections:     systemCatalogRestoreCopy,
 
-		"mo_sessions":       1,
-		"mo_configurations": 1,
-		"mo_locks":          1,
-		"mo_variables":      1,
-		"mo_transactions":   1,
-		"mo_cache":          1,
+		"mo_sessions":       systemCatalogRestoreSkip,
+		"mo_configurations": systemCatalogRestoreSkip,
+		"mo_locks":          systemCatalogRestoreSkip,
+		"mo_variables":      systemCatalogRestoreSkip,
+		"mo_transactions":   systemCatalogRestoreSkip,
+		"mo_cache":          systemCatalogRestoreSkip,
 
-		catalog.MO_SNAPSHOTS: 1,
-		catalog.MO_PITR:      1,
+		catalog.MO_SNAPSHOTS: systemCatalogRestoreSkip,
+		catalog.MO_PITR:      systemCatalogRestoreSkip,
 
-		catalog.MOPartitionMetadata: 1,
-		catalog.MOPartitionTables:   1,
+		catalog.MOPartitionMetadata: systemCatalogRestoreSkip,
+		catalog.MOPartitionTables:   systemCatalogRestoreSkip,
+
+		// MongoDB external tables are deliberately skipped by bulk restore.
+		// Their table-ID keyed mappings must follow the same policy; cloning a
+		// historical row without its external table creates an orphan that can
+		// permanently block DROP MONGODB CONNECTION. Snapshot and PITR share this
+		// system-table policy.
+		sqlmongodb.TableMappings: systemCatalogRestoreSkip,
 	}
 )
 
@@ -204,18 +237,20 @@ type accountRecord struct {
 }
 
 type subDbRestoreRecord struct {
-	dbName     string
-	Account    uint32
-	createSql  string
-	snapshotTs int64
+	dbName        string
+	sourceAccount uint32
+	targetAccount uint32
+	createSql     string
+	snapshotTs    int64
 }
 
-func NewSubDbRestoreRecord(dbName string, account uint32, createSql string, spTs int64) *subDbRestoreRecord {
+func NewSubDbRestoreRecord(dbName string, sourceAccount, targetAccount uint32, createSql string, spTs int64) *subDbRestoreRecord {
 	return &subDbRestoreRecord{
-		dbName:     dbName,
-		Account:    account,
-		createSql:  createSql,
-		snapshotTs: spTs,
+		dbName:        dbName,
+		sourceAccount: sourceAccount,
+		targetAccount: targetAccount,
+		createSql:     createSql,
+		snapshotTs:    spTs,
 	}
 }
 
@@ -671,20 +706,8 @@ func doRestoreSnapshot(ctx context.Context, ses *Session, stmt *tree.RestoreSnap
 	if stmt.Level == tree.RESTORELEVELCLUSTER {
 		ctx = context.WithValue(ctx, tree.CloneLevelCtxKey{}, tree.RestoreCloneLevelCluster)
 
-		// restore cluster
-		subDbToRestore := make(map[string]*subDbRestoreRecord)
-		if err = restoreToCluster(ctx, ses, bh, snapshotName, snapshot.ts, subDbToRestore, &retiredMongoDBAccountIDs); err != nil {
+		if err = restoreToCluster(ctx, ses, bh, snapshotName, snapshot.ts, &retiredMongoDBAccountIDs); err != nil {
 			return
-		}
-
-		if err = restorePubsWithSnapshotName(ctx, ses.GetService(), bh, snapshotName, snapshot.ts); err != nil {
-			return
-		}
-
-		for _, subDb := range subDbToRestore {
-			if err = restoreToSubDb(ctx, ses.GetService(), bh, snapshotName, subDb); err != nil {
-				return
-			}
 		}
 		getLogger(ses.GetService()).Debug(fmt.Sprintf("[%s]restore cluster success", snapshotName))
 		return
@@ -812,6 +835,12 @@ func doRestoreSnapshot(ctx context.Context, ses *Session, stmt *tree.RestoreSnap
 			ctx, ses, bh, snapshotName, viewMap, toAccountId, sortedView, false,
 		); err != nil {
 			return
+		}
+	}
+
+	if stmt.Level == tree.RESTORELEVELACCOUNT {
+		if err = restoreSystemCatalogsAfterObjects(ctx, ses.GetService(), bh, snapshot.ts, restoreAccount, toAccountId); err != nil {
+			return stats, err
 		}
 	}
 
@@ -1180,7 +1209,7 @@ func restoreToDatabaseOrTable(
 		// if restore to cluster, and the db is sub, append the sub db to restore list
 		getLogger(sid).Debug(fmt.Sprintf("[%s] append sub db to restore list: %v, at restore cluster account %d", snapshotName, dbName, toAccountId))
 		key := genKey(fmt.Sprint(restoreAccount), dbName)
-		subDbToRestore[key] = NewSubDbRestoreRecord(dbName, restoreAccount, createDbSql, snapshotTs)
+		subDbToRestore[key] = NewSubDbRestoreRecord(dbName, restoreAccount, toAccountId, createDbSql, snapshotTs)
 		return
 	}
 
@@ -1354,17 +1383,21 @@ func restoreToSubDb(
 	subDb *subDbRestoreRecord) (err error) {
 	getLogger(sid).Debug(fmt.Sprintf("[%s] start to restore sub db: %v", snapshotName, subDb.dbName))
 
-	toCtx := defines.AttachAccountId(ctx, subDb.Account)
-
+	// Subscription metadata at the restore timestamp belongs to the source
+	// account, while CREATE DATABASE must run in the (possibly re-created)
+	// target account. Keeping both identities avoids assuming account IDs survive
+	// a cluster restore.
+	sourceCtx := defines.AttachAccountId(ctx, subDb.sourceAccount)
 	var isPubExist bool
-	isPubExist, _ = checkPubExistOrNot(toCtx, sid, bh, snapshotName, subDb.dbName, subDb.snapshotTs)
+	isPubExist, _ = checkPubExistOrNot(sourceCtx, sid, bh, snapshotName, subDb.dbName, subDb.snapshotTs)
 	if !isPubExist {
 		getLogger(sid).Debug(fmt.Sprintf("[%s] skip restore db: %v, no publication", snapshotName, subDb.dbName))
 		return
 	}
 
-	getLogger(sid).Debug(fmt.Sprintf("[%s] account %d start to create sub db: %v, create db sql: %s", snapshotName, subDb.Account, subDb.dbName, subDb.createSql))
-	if err = bh.Exec(toCtx, subDb.createSql); err != nil {
+	targetCtx := defines.AttachAccountId(ctx, subDb.targetAccount)
+	getLogger(sid).Debug(fmt.Sprintf("[%s] account %d start to create sub db: %v, create db sql: %s", snapshotName, subDb.targetAccount, subDb.dbName, subDb.createSql))
+	if err = bh.Exec(targetCtx, subDb.createSql); err != nil {
 		return
 	}
 
@@ -1656,11 +1689,12 @@ func needSkipDb(dbName string) bool {
 
 func needSkipTable(accountId uint32, dbName string, tblName string) bool {
 	if accountId == sysAccountID {
-		return dbName == moCatalog && needSkipTablesInMocatalog[tblName] == 1
+		policy, registered := systemCatalogRestorePolicies[tblName]
+		return dbName == moCatalog && registered && policy == systemCatalogRestoreSkip
 	} else {
 		if dbName == moCatalog {
-			if needSkip, ok := needSkipTablesInMocatalog[tblName]; ok {
-				return needSkip == 1
+			if policy, ok := systemCatalogRestorePolicies[tblName]; ok {
+				return policy == systemCatalogRestoreSkip
 			} else {
 				return true
 			}
@@ -1671,9 +1705,11 @@ func needSkipTable(accountId uint32, dbName string, tblName string) bool {
 
 func needSkipSystemTable(accountId uint32, tblinfo *tableInfo) bool {
 	if accountId == sysAccountID {
-		return tblinfo.dbName == moCatalog && needSkipTablesInMocatalog[tblinfo.tblName] == 1
+		policy, registered := systemCatalogRestorePolicies[tblinfo.tblName]
+		return tblinfo.dbName == moCatalog && registered && policy == systemCatalogRestoreSkip
 	} else {
-		return tblinfo.dbName == moCatalog && (tblinfo.typ == clusterTable || needSkipTablesInMocatalog[tblinfo.tblName] == 1)
+		policy, registered := systemCatalogRestorePolicies[tblinfo.tblName]
+		return tblinfo.dbName == moCatalog && (tblinfo.typ == clusterTable || registered && policy == systemCatalogRestoreSkip)
 	}
 }
 
@@ -2587,11 +2623,12 @@ func restoreToCluster(ctx context.Context,
 	bh BackgroundExec,
 	snapshotName string,
 	snapshotTs int64,
-	subDbToRestore map[string]*subDbRestoreRecord,
 	retiredMongoDBAccountIDs *[]uint32,
 ) (err error) {
 	getLogger(ses.GetService()).Debug(fmt.Sprintf("[%s] start to restore cluster, restore timestamp: %d", snapshotName, snapshotTs))
 
+	subDbToRestore := make(map[string]*subDbRestoreRecord)
+	catalogRestores := make([]catalogRestoreAccountPair, 0)
 	var isRestoreToCluster bool
 	var isNeedToCleanToDatabase bool
 	// drop account which not in snapshot
@@ -2663,6 +2700,10 @@ func restoreToCluster(ctx context.Context,
 		if err = restoreAccountUsingClusterSnapshotToNew(ctx, ses, bh, snapshotName, snapshotTs, account, uint64(newAccountId), subDbToRestore, isRestoreToCluster, isNeedToCleanToDatabase); err != nil {
 			return err
 		}
+		catalogRestores = append(catalogRestores, catalogRestoreAccountPair{
+			sourceAccount: uint32(account.accountId),
+			targetAccount: newAccountId,
+		})
 		markMongoDBAccountForRetirement(retiredMongoDBAccountIDs, newAccountId)
 
 		getLogger(ses.GetService()).Debug(fmt.Sprintf("[%s] restore account: %v, account id: %d success", snapshotName, account.accountName, account.accountId))
@@ -2696,9 +2737,38 @@ func restoreToCluster(ctx context.Context,
 		if err != nil {
 			return err
 		}
+		catalogRestores = append(catalogRestores, catalogRestoreAccountPair{
+			sourceAccount: uint32(account.accountId),
+			targetAccount: newAccountId,
+		})
 	}
 
-	return err
+	// Publications and subscription databases form a cluster-wide dependency
+	// phase: a subscription can only be created after its publication exists.
+	// Identity-bearing catalogs must run after this phase so their source object
+	// IDs can be rebound to every restored target object, including subscriptions.
+	if err = restorePubsWithSnapshotName(ctx, ses.GetService(), bh, snapshotName, snapshotTs); err != nil {
+		return err
+	}
+	for _, subDb := range subDbToRestore {
+		if err = restoreToSubDb(ctx, ses.GetService(), bh, snapshotName, subDb); err != nil {
+			return err
+		}
+	}
+	for _, account := range catalogRestores {
+		if err = restoreSystemCatalogsAfterObjects(
+			ctx,
+			ses.GetService(),
+			bh,
+			snapshotTs,
+			account.sourceAccount,
+			account.targetAccount,
+		); err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
 
 func restoreToAccountUsingCluster(
@@ -2948,6 +3018,19 @@ func restoreAccountUsingClusterSnapshotToNew(ctx context.Context,
 		}
 	}
 
+	if !isRestoreCluster {
+		if err = restoreSystemCatalogsAfterObjects(
+			ctx,
+			ses.GetService(),
+			bh,
+			snapshotTs,
+			uint32(fromAccount),
+			uint32(toAccountId),
+		); err != nil {
+			return err
+		}
+	}
+
 	// checks if the given context has been canceled.
 	if err = CancelCheck(ctx); err != nil {
 		return err
@@ -3176,7 +3259,7 @@ func restorePubsWithSnapshotName(
 		return
 	}
 
-	return createPubs(ctx, sid, bh, snapshotName, pubInfos)
+	return createPubs(ctx, sid, bh, snapshotName, restoreTs, pubInfos)
 }
 
 // createPub create pub after the database is created
@@ -3185,25 +3268,66 @@ func createPubs(
 	sid string,
 	bh BackgroundExec,
 	snapshotName string,
+	snapshotTs int64,
 	pubInfos []*pubsub.PubInfo,
 ) (err error) {
-	// restore pub to toAccount
-	var ast []tree.Statement
-	defer func() {
-		for _, s := range ast {
-			s.Free()
-		}
-	}()
+	if len(pubInfos) == 0 {
+		return nil
+	}
+	_, targetAccounts, err := getAccounts(ctx, bh, false)
+	if err != nil {
+		return err
+	}
+	principalMaps := make(map[catalogRestoreAccountPair]*catalogRestorePrincipalIdentityMap)
 
 	for _, pubInfo := range pubInfos {
-		toCtx := defines.AttachAccount(ctx, pubInfo.PubAccountId, pubInfo.Owner, pubInfo.Creator)
+		targetAccount, ok := targetAccounts[pubInfo.PubAccountName]
+		if !ok || targetAccount == nil || targetAccount.Id < 0 {
+			return moerr.NewInternalErrorf(
+				ctx,
+				"cannot restore publication %s: target account %s does not exist",
+				pubInfo.PubName,
+				pubInfo.PubAccountName,
+			)
+		}
+		accountPair := catalogRestoreAccountPair{
+			sourceAccount: pubInfo.PubAccountId,
+			targetAccount: uint32(targetAccount.Id),
+		}
+		principalMap, ok := principalMaps[accountPair]
+		if !ok {
+			principalMap, err = loadCatalogRestorePrincipalIdentityMap(&systemCatalogRestoreContext{
+				ctx:           ctx,
+				sid:           sid,
+				bh:            bh,
+				snapshotTS:    snapshotTs,
+				sourceAccount: accountPair.sourceAccount,
+				targetAccount: accountPair.targetAccount,
+			})
+			if err != nil {
+				return err
+			}
+			principalMaps[accountPair] = principalMap
+		}
+		var identity publicationRestoreIdentity
+		identity, err = resolvePublicationRestoreIdentity(ctx, pubInfo, targetAccounts, principalMap)
+		if err != nil {
+			return err
+		}
+		toCtx := defines.AttachAccount(ctx, identity.accountID, identity.userID, identity.roleID)
 		getLogger(sid).Debug(fmt.Sprintf("[%s] create pub: create pub sql: %s", snapshotName, pubInfo.GetCreateSql()))
+		var ast []tree.Statement
 		ast, err = mysql.Parse(toCtx, pubInfo.GetCreateSql(), 1)
 		if err != nil {
 			return
 		}
 
-		if err = createPublication(toCtx, bh, ast[0].(*tree.CreatePublication)); err != nil {
+		// The CREATE statement carries the stable database name. createPublication
+		// resolves it inside the target tenant and persists the current database
+		// ID, so the historical PubInfo.DbId must not be replayed.
+		err = createPublication(toCtx, bh, ast[0].(*tree.CreatePublication))
+		freeStatements(ast)
+		if err != nil {
 			return
 		}
 	}

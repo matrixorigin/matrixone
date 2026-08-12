@@ -38,6 +38,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/pubsub"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -1537,13 +1538,6 @@ const (
 					and rp.privilege_id in (%s)
 					and rp.privilege_level = "%s";`
 
-	getUserRolesExpectPublicRoleFormat = `select role.role_id, role.role_name 
-				from mo_catalog.mo_role role, mo_catalog.mo_user_grant mg 
-				where role.role_id = mg.role_id 
-					and role.role_id != %d  
-					and mg.user_id = %d 
-					order by role.created_time asc limit 1;`
-
 	checkUdfArgs = `select args,function_id,body from mo_catalog.mo_user_defined_function where name = "%s" and db = "%s" order by function_id;`
 
 	checkUdfWithDb = `select function_id,body from mo_catalog.mo_user_defined_function where db = "%s" order by function_id;`
@@ -2095,10 +2089,6 @@ func privilegeTypeListSQL(objTyp objectType, privId PrivilegeType, includeSysSco
 		parts = append(parts, fmt.Sprintf("%d", p))
 	}
 	return strings.Join(parts, ",")
-}
-
-func getSqlForgetUserRolesExpectPublicRole(pRoleId int, userId uint32) string {
-	return fmt.Sprintf(getUserRolesExpectPublicRoleFormat, pRoleId, userId)
 }
 
 func getTableColumnDefSql(accountId uint64, dbName, tableName string) (string, error) {
@@ -3566,61 +3556,21 @@ func doAlterAccount(ctx context.Context, ses *Session, aa *alterAccount) (err er
 	return err
 }
 
-// doSetSecondaryRoleAll validates user role metadata before enabling all secondary roles.
-// The current primary role must not change; SET SECONDARY ROLE ALL only affects secondary roles.
-func doSetSecondaryRoleAll(ctx context.Context, ses *Session) (err error) {
-	var sql string
-	var userId uint32
-
-	account := ses.GetTenantInfo()
-	// get current user_id
-	userId = account.GetUserID()
-
-	// step1:get all roles expect public
-	bh := ses.GetBackgroundExec(ctx)
-	defer bh.Close()
-
-	err = bh.Exec(ctx, "begin;")
-	defer func() {
-		err = finishTxn(ctx, bh, err)
-	}()
-	if err != nil {
-		return err
-	}
-
-	sql = getSqlForgetUserRolesExpectPublicRole(publicRoleID, userId)
-	bh.ClearExecResultSet()
-	err = bh.Exec(ctx, sql)
-	if err != nil {
-		return err
-	}
-
-	_, err = getResultSet(ctx, bh)
-	return err
-}
-
-// doSwitchRole accomplishes the Use Role and Use Secondary Role statement
+// doSwitchRole changes the session's sole active role.
 func doSwitchRole(ctx context.Context, ses *Session, sr *tree.SetRole) (err error) {
 	var sql string
 	var erArray []ExecResult
 	var roleId int64
 
+	if sr.SecondaryRole {
+		// Keep MySQL-compatible syntax accepted, but secondary roles are not
+		// active in MatrixOne. A session always has exactly one active role.
+		return nil
+	}
+
 	account := ses.GetTenantInfo()
 
-	if sr.SecondaryRole {
-		// use secondary role all or none
-		switch sr.SecondaryRoleType {
-		case tree.SecondaryRoleTypeAll:
-			if err = doSetSecondaryRoleAll(ctx, ses); err != nil {
-				return err
-			}
-			account.SetUseSecondaryRole(true)
-			ses.InvalidatePrivilegeCache()
-		case tree.SecondaryRoleTypeNone:
-			account.SetUseSecondaryRole(false)
-			ses.InvalidatePrivilegeCache()
-		}
-	} else if sr.Role != nil {
+	if sr.Role != nil {
 		err = normalizeNameOfRole(ctx, sr.Role)
 		if err != nil {
 			return err
@@ -6885,6 +6835,80 @@ func (pota privilegeTipsArray) String() string {
 	return b.String()
 }
 
+func firstColumnChildIndex(expr *plan.Expr) (int32, bool) {
+	if expr == nil {
+		return 0, false
+	}
+	if col := expr.GetCol(); col != nil {
+		return col.RelPos, true
+	}
+	if function := expr.GetF(); function != nil {
+		for _, arg := range function.Args {
+			if childIndex, ok := firstColumnChildIndex(arg); ok {
+				return childIndex, true
+			}
+		}
+	}
+	return 0, false
+}
+
+// insertDedupTargetScans returns the TABLE_SCAN nodes used only to probe an
+// INSERT target for duplicate keys. The INSERT/REPLACE binders set
+// DedupColName for these internal joins. A SQL-visible DEDUP JOIN uses the
+// same node type and defaults to FAIL, but has no DedupColName; it must retain
+// its SELECT privilege checks. During final plan remapping, BindingTags are
+// removed and DEDUP condition column RelPos values become physical child
+// indexes. The first operand remains the target side even if recursive-plan
+// optimization swaps children, so use that child index rather than stale tags
+// or IsRightJoin.
+func insertDedupTargetScans(q *plan.Query) map[int32]struct{} {
+	if q == nil || q.StmtType != plan.Query_INSERT {
+		return nil
+	}
+
+	scans := make(map[int32]struct{})
+	var collect func(int32, map[int32]struct{})
+	collect = func(nodeID int32, visited map[int32]struct{}) {
+		if nodeID < 0 || int(nodeID) >= len(q.Nodes) {
+			return
+		}
+		if _, ok := visited[nodeID]; ok {
+			return
+		}
+		visited[nodeID] = struct{}{}
+
+		node := q.Nodes[nodeID]
+		if node == nil {
+			return
+		}
+		if node.NodeType == plan.Node_TABLE_SCAN {
+			scans[nodeID] = struct{}{}
+			return
+		}
+		for _, childID := range node.Children {
+			collect(childID, visited)
+		}
+	}
+
+	for _, node := range q.Nodes {
+		if node == nil || node.NodeType != plan.Node_JOIN ||
+			node.JoinType != plan.Node_DEDUP || len(node.Children) != 2 ||
+			node.DedupColName == "" ||
+			(node.OnDuplicateAction != plan.Node_FAIL && node.OnDuplicateAction != plan.Node_IGNORE) {
+			continue
+		}
+		if len(node.OnList) == 0 || node.OnList[0].GetF() == nil || len(node.OnList[0].GetF().Args) == 0 {
+			continue
+		}
+		targetChild, ok := firstColumnChildIndex(node.OnList[0].GetF().Args[0])
+		if !ok || targetChild < 0 || int(targetChild) >= len(node.Children) {
+			continue
+		}
+		collect(node.Children[targetChild], make(map[int32]struct{}))
+	}
+	return scans
+}
+
 // extractPrivilegeTipsFromPlan extracts the privilege tips from the plan
 func extractPrivilegeTipsFromPlan(p *plan2.Plan) privilegeTipsArray {
 	// NOTE: the pts may be nil when the plan does operate any table.
@@ -6895,6 +6919,7 @@ func extractPrivilegeTipsFromPlan(p *plan2.Plan) privilegeTipsArray {
 
 	if p.GetQuery() != nil { // select,insert select, update, delete
 		q := p.GetQuery()
+		insertDedupScans := insertDedupTargetScans(q)
 
 		// lastNode := q.Nodes[len(q.Nodes)-1]
 		var t PrivilegeType
@@ -6930,8 +6955,11 @@ func extractPrivilegeTipsFromPlan(p *plan2.Plan) privilegeTipsArray {
 			}
 		}
 
-		for _, node := range q.Nodes {
+		for nodeID, node := range q.Nodes {
 			if node.NodeType == plan.Node_TABLE_SCAN {
+				if _, ok := insertDedupScans[int32(nodeID)]; ok {
+					continue
+				}
 				if node.ObjRef != nil {
 					if node.TableDef != nil && node.TableDef.TableType == catalog.SystemClusterRel {
 						clusterTable = true
@@ -10137,7 +10165,7 @@ func InitGeneralTenant(ctx context.Context, bh BackgroundExec, ses *Session, ca 
 		if rtnErr != nil {
 			return rtnErr
 		}
-		rtnErr = createTablesInInformationSchemaOfGeneralTenant(newTenantCtx, bh)
+		rtnErr = createTablesInInformationSchemaOfGeneralTenant(newTenantCtx, bh, ses.GetService())
 		if rtnErr != nil {
 			return rtnErr
 		}
@@ -10446,7 +10474,7 @@ func createTablesInSystemOfGeneralTenant(ctx context.Context, bh BackgroundExec,
 }
 
 // createTablesInInformationSchemaOfGeneralTenant creates the database information_schema and the views or tables.
-func createTablesInInformationSchemaOfGeneralTenant(ctx context.Context, bh BackgroundExec) error {
+func createTablesInInformationSchemaOfGeneralTenant(ctx context.Context, bh BackgroundExec, service string) error {
 	start := time.Now()
 	defer func() {
 		v2.CreateTablesInInfoSchemaDurationHistogram.Observe(time.Since(start).Seconds())
@@ -10457,10 +10485,11 @@ func createTablesInInformationSchemaOfGeneralTenant(ctx context.Context, bh Back
 	// TODO: when we have the auto_increment column, we need new strategy.
 
 	var err error
-	sqls := make([]string, 0, len(sysview.InitInformationSchemaSysTables)+len(sysview.InitMysqlSysTables)+4)
+	informationSchemaTables := sysview.InitInformationSchemaSysTablesForProtocol(protocolVersionForTenantInitialization(service))
+	sqls := make([]string, 0, len(informationSchemaTables)+len(sysview.InitMysqlSysTables)+4)
 
 	sqls = append(sqls, "use information_schema;")
-	sqls = append(sqls, sysview.InitInformationSchemaSysTables...)
+	sqls = append(sqls, informationSchemaTables...)
 	sqls = append(sqls, "use mysql;")
 	sqls = append(sqls, sysview.InitMysqlSysTables...)
 
@@ -10472,6 +10501,22 @@ func createTablesInInformationSchemaOfGeneralTenant(ctx context.Context, bh Back
 		}
 	}
 	return err
+}
+
+func protocolVersionForTenantInitialization(service string) int64 {
+	rt := moruntime.ServiceRuntime(service)
+	if rt == nil {
+		return defines.MORPCMinVersion
+	}
+	value, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	if !ok {
+		return defines.MORPCMinVersion
+	}
+	version, ok := value.(int64)
+	if !ok {
+		return defines.MORPCMinVersion
+	}
+	return version
 }
 
 // createSubscription insert records into mo_subs of To-All-Publications
@@ -11162,10 +11207,14 @@ func InitProcedure(ctx context.Context, ses *Session, tenant *TenantInfo, cp *tr
 			return moerr.NewInvalidInput(ctx, "mo, mo.*, out_* are reserved and cannot be used as a procedure argument name")
 		}
 
+		argType, ok := cp.Args[i].(*tree.ProcedureArgDecl).Type.(*tree.T)
+		if !ok {
+			return moerr.NewInternalError(ctx, "unknown stored procedure argument type")
+		}
 		argList[i] = tree.ProcedureArgForMarshal{
 			ArgName:   curName,
 			Name:      cp.Args[i].(*tree.ProcedureArgDecl).Name,
-			Type:      cp.Args[i].(*tree.ProcedureArgDecl).Type,
+			Type:      argType,
 			InOutType: cp.Args[i].(*tree.ProcedureArgDecl).InOutType,
 		}
 	}
@@ -11531,8 +11580,10 @@ func doInterpretCall(
 	var argList []tree.ProcedureArgForMarshal
 	// execute related
 	var varScope [](map[string]interface{})
+	var varTypeScope [](map[string]plan.Type)
 	var argsMap map[string]tree.Expr
 	var argsAttr map[string]tree.InOutArgType
+	var argsType map[string]plan.Type
 
 	// a database must be selected or specified as qualifier when create a function
 	if call.Name.HasNoNameQualifier() {
@@ -11604,13 +11655,20 @@ func doInterpretCall(
 	fmtctx := tree.NewFmtCtx(dialect.MYSQL, tree.WithQuoteString(true))
 	argsAttr = make(map[string]tree.InOutArgType)
 	argsMap = make(map[string]tree.Expr) // map arg to param
+	argsType = make(map[string]plan.Type)
 
 	// build argsAttr and argsMap
 	ses.Info(ctx, "Interpret procedure call length:"+strconv.Itoa(len(argList)))
 	i := 0
 	for _, v := range argList {
-		argsAttr[v.ArgName] = v.InOutType
-		argsMap[v.ArgName] = call.Args[i]
+		name := strings.ToLower(v.ArgName)
+		argType, err := plan2.GetTypeFromAst(ctx, v.Type)
+		if err != nil {
+			return nil, err
+		}
+		argsAttr[name] = v.InOutType
+		argsMap[name] = call.Args[i]
+		argsType[name] = argType
 		i++
 	}
 
@@ -11619,10 +11677,12 @@ func doInterpretCall(
 	interpreter.fmtctx = fmtctx
 	interpreter.ses = ses
 	interpreter.varScope = &varScope
+	interpreter.varTypeScope = &varTypeScope
 	interpreter.bh = bh
 	interpreter.result = nil
 	interpreter.argsMap = argsMap
 	interpreter.argsAttr = argsAttr
+	interpreter.argsType = argsType
 	interpreter.outParamMap = make(map[string]interface{})
 	interpreter.initialAffectedRows = callerAffectedRows
 
@@ -11804,10 +11864,18 @@ func doRevokePrivilegeImplicitly(
 	return nil
 }
 
-func doSetGlobalSystemVariable(ctx context.Context, ses *Session, varName string, varValue interface{}) (err error) {
+// doSetGlobalSystemVariables persists equivalent compatibility names in one
+// catalog transaction. transaction_isolation uses this to update both the
+// canonical name and tx_isolation so old and new CNs agree during a rolling
+// upgrade.
+func doSetGlobalSystemVariables(
+	ctx context.Context,
+	ses *Session,
+	varNames []string,
+	varValue interface{},
+) (err error) {
 	accountId := uint64(ses.GetTenantInfo().TenantID)
 	accountName := ses.GetTenantName()
-	varName = strings.ToLower(varName)
 	bh := ses.GetBackgroundExec(ctx)
 	defer bh.Close()
 
@@ -11818,24 +11886,29 @@ func doSetGlobalSystemVariable(ctx context.Context, ses *Session, varName string
 		err = finishTxn(ctx, bh, err)
 	}()
 
-	// check if var exists
-	sql := getSqlForGetSysVarWithAccount(accountId, varName)
-	bh.ClearExecResultSet()
-	if err = bh.Exec(ctx, sql); err != nil {
-		return
-	}
+	for _, varName := range varNames {
+		varName = strings.ToLower(varName)
+		// check if var exists
+		sql := getSqlForGetSysVarWithAccount(accountId, varName)
+		bh.ClearExecResultSet()
+		if err = bh.Exec(ctx, sql); err != nil {
+			return
+		}
 
-	var erArray []ExecResult
-	if erArray, err = getResultSet(ctx, bh); err != nil {
-		return
-	}
+		var erArray []ExecResult
+		if erArray, err = getResultSet(ctx, bh); err != nil {
+			return
+		}
 
-	if execResultArrayHasData(erArray) {
-		sql = getSqlForUpdateSysVarValue(getVariableValue(varValue), accountId, varName)
-	} else {
-		sql = getSqlForInsertSysVarWithAccount(accountId, accountName, varName, getVariableValue(varValue))
+		if execResultArrayHasData(erArray) {
+			sql = getSqlForUpdateSysVarValue(getVariableValue(varValue), accountId, varName)
+		} else {
+			sql = getSqlForInsertSysVarWithAccount(accountId, accountName, varName, getVariableValue(varValue))
+		}
+		if err = bh.Exec(ctx, sql); err != nil {
+			return
+		}
 	}
-	err = bh.Exec(ctx, sql)
 	return
 }
 

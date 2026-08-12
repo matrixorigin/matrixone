@@ -194,13 +194,26 @@ func MustVarlenaToInt64Slice(v *Vector) [][3]int64 {
 }
 
 func MustVarlenaRawData(v *Vector) (data []types.Varlena, area []byte) {
-	data = MustFixedColNoTypeCheck[types.Varlena](v)
+	data = ToSliceNoTypeCheck2[types.Varlena](v)
 	area = v.area
 	return
 }
 
 // XXX extend will extend the vector's Data to accommodate rows more entry.
 func extend(v *Vector, rows int, m *mpool.MPool) error {
+	return extendWithBitmaps(v, rows, m, false, false)
+}
+
+func extendWithBitmaps(
+	v *Vector,
+	rows int,
+	m *mpool.MPool,
+	needNulls bool,
+	needGrouping bool,
+) error {
+	if m != nil && v.prepareParamKinds == nil {
+		v.prepareParamKindsMP = m
+	}
 	if rows <= 0 {
 		// we will at least extent by 1.
 		// This is a pure hack to
@@ -208,13 +221,32 @@ func extend(v *Vector, rows int, m *mpool.MPool) error {
 	}
 
 	tgtLen := v.length + rows
+	switch {
+	case needNulls && needGrouping:
+		if err := v.ensureBitmapCapacity(tgtLen, m); err != nil {
+			return err
+		}
+	case needNulls:
+		if err := v.ensureNullCapacity(tgtLen, m); err != nil {
+			return err
+		}
+	case needGrouping:
+		if err := v.ensureGroupingCapacity(tgtLen, m); err != nil {
+			return err
+		}
+	}
 	tgtDataCap := tgtLen * v.typ.TypeSize()
 	if tgtDataCap > cap(v.data) {
-		ndata, err := m.Grow(v.data, tgtDataCap, v.offHeap)
+		ndata, err := v.growData(m, tgtDataCap)
 		if err != nil {
 			return err
 		}
 		v.data = ndata
+	}
+	if v.prepareParamKinds != nil {
+		if err := v.preExtendPrepareParamKinds(tgtLen, m); err != nil {
+			return err
+		}
 	}
 	v.data = v.data[:cap(v.data)]
 	return nil
@@ -263,14 +295,15 @@ func ProtoVectorToVector(vec api.Vector) (*Vector, error) {
 
 func TypeToProtoType(typ types.Type) plan.Type {
 	return plan.Type{
-		Id:    int32(typ.Oid),
-		Width: typ.Width,
-		Scale: typ.Scale,
+		Id:      int32(typ.Oid),
+		Width:   typ.Width,
+		Scale:   typ.Scale,
+		Charset: uint32(typ.Charset),
 	}
 }
 
 func ProtoTypeToType(typ plan.Type) types.Type {
-	return types.New(types.T(typ.Id), typ.Width, typ.Scale)
+	return types.NewWithCharset(types.T(typ.Id), typ.Width, typ.Scale, uint8(typ.Charset))
 }
 
 func appendBytesToFixSized[T types.FixedSizeT](vec *Vector) func([]byte, bool, *mpool.MPool) error {

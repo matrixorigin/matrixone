@@ -453,7 +453,12 @@ func (cwft *TxnComputationWrapper) Compile(any any, fill func(*batch.Batch, *per
 			// the outer EXECUTE fragment, which cannot contain the inner hint.
 			retComp.SetQuerySchedulingIntent(cwft.querySchedulingIntentForPreparedStatement(originSQL))
 			retComp.SetSchedulingTraceRecorder(&cwft.schedulingTrace)
-			if err = retComp.Reset(cwft.proc, getStatementStartAt(execCtx.reqCtx), fill, cwft.ses.GetSql()); err != nil {
+			if err = retComp.Reset(
+				cwft.proc,
+				getStatementStartAt(execCtx.reqCtx),
+				compileOutputCallback(cwft.stmt, fill),
+				cwft.ses.GetSql(),
+			); err != nil {
 				return nil, err
 			}
 			cwft.compile = retComp
@@ -687,6 +692,34 @@ func initExecuteStmtParamWithResolver(
 	return initExecuteStmtParamWithResolverInSession(execCtx, ses, ses, cwft, execPlan, stmtName, resolve)
 }
 
+func binaryProtocolPrepareParamKind(
+	mysqlType defines.MysqlType,
+	isUnsigned bool,
+	value []byte,
+) vector.PrepareParamKind {
+	switch mysqlType {
+	case defines.MYSQL_TYPE_TINY:
+		// The binary protocol has no usable Boolean parameter type. Go's
+		// database/sql MySQL driver sends bool values as signed TINY 0/1, while
+		// other clients can use TINY for integers. Preserve unsigned and other
+		// TINY values as integers and restore the driver's bool values.
+		if !isUnsigned && (bytes.Equal(value, []byte("0")) || bytes.Equal(value, []byte("1"))) {
+			return vector.PrepareParamBoolean
+		}
+		return vector.PrepareParamInteger
+	case defines.MYSQL_TYPE_SHORT, defines.MYSQL_TYPE_INT24,
+		defines.MYSQL_TYPE_LONG, defines.MYSQL_TYPE_LONGLONG, defines.MYSQL_TYPE_BIT,
+		defines.MYSQL_TYPE_YEAR:
+		return vector.PrepareParamInteger
+	case defines.MYSQL_TYPE_FLOAT, defines.MYSQL_TYPE_DOUBLE:
+		return vector.PrepareParamFloat
+	case defines.MYSQL_TYPE_DECIMAL, defines.MYSQL_TYPE_NEWDECIMAL:
+		return vector.PrepareParamDecimal
+	default:
+		return vector.PrepareParamNone
+	}
+}
+
 func initExecuteStmtParamWithResolverInSession(
 	execCtx *ExecCtx,
 	owner *Session,
@@ -707,6 +740,7 @@ func initExecuteStmtParamWithResolverInSession(
 	originSQL := prepareStmt.Sql
 	preparePlan := prepareStmt.PreparePlan.GetDcl().GetPrepare()
 	currentNativeMode := owner.sqlModeHasMatrixOneNative()
+	currentOnlyFullGroupBy := owner.sqlModeHasOnlyFullGroupBy()
 
 	// TODO check if schema change, obj.Obj is zero all the time in 0.6
 	eng := cwft.proc.Base.SessionInfo.StorageEngine
@@ -777,7 +811,8 @@ func initExecuteStmtParamWithResolverInSession(
 	// every EXECUTE so both enabled->disabled and disabled->enabled transitions
 	// observe the current setting.
 	fkSensitive := shouldRebuildPreparePlan(false, preparePlan.Plan)
-	modeMismatch := prepareStmt.NativeMode != currentNativeMode
+	modeMismatch := prepareStmt.NativeMode != currentNativeMode ||
+		prepareStmt.onlyFullGroupBySet && prepareStmt.OnlyFullGroupBy != currentOnlyFullGroupBy
 	protocolVersion := currentProtocolVersion(cwft.proc)
 	protocolMismatch := prepareStmt.protocolVersion != 0 &&
 		prepareStmt.protocolVersion != protocolVersion
@@ -792,7 +827,13 @@ func initExecuteStmtParamWithResolverInSession(
 		}
 		prepareTs := currentTxnSnapshotTSForProcess(cwft.proc)
 		newPreparePlan := newPlan.GetDcl().GetPrepare()
-		columns := plan2.GetResultColumnsFromPlan(newPreparePlan.Plan)
+		var txnHaveDDL bool
+		switch prepareStmt.PrepareStmt.(type) {
+		case *tree.ExplainStmt, *tree.ExplainAnalyze, *tree.ExplainPhyPlan:
+			txnHaveDDL = sessionTxnHaveDDL(executionSes)
+		}
+		columns := getPreparedResultColumnsFromPlan(
+			prepareStmt.PrepareStmt, newPlan, txnHaveDDL)
 		resper := execCtx.resper
 		if executionSes.IsBackgroundSession() {
 			resper = owner.GetResponser()
@@ -809,6 +850,8 @@ func initExecuteStmtParamWithResolverInSession(
 			execCtx.prepareColDef = newColDefData
 		}
 		prepareStmt.NativeMode = currentNativeMode
+		prepareStmt.OnlyFullGroupBy = currentOnlyFullGroupBy
+		prepareStmt.onlyFullGroupBySet = true
 		prepareStmt.Ts = prepareTs
 		prepareStmt.tempTableVersion = currentTempTableVersion
 		prepareStmt.ddlVersion = currentDDLVersion
@@ -862,7 +905,25 @@ func initExecuteStmtParamWithResolverInSession(
 		if prepareStmt.params.Length() != numParams {
 			return nil, nil, nil, originSQL, false, moerr.NewInvalidInput(reqCtx, "Incorrect arguments to EXECUTE")
 		}
-		cwft.proc.SetPrepareParams(prepareStmt.params)
+		paramCount := prepareStmt.params.Length()
+		var kinds []vector.PrepareParamKind
+		for i := 0; i < paramCount && i*2+1 < len(prepareStmt.ParamTypes); i++ {
+			mysqlType := defines.MysqlType(prepareStmt.ParamTypes[i*2])
+			isUnsigned := prepareStmt.ParamTypes[i*2+1]&0x80 != 0
+			kind := binaryProtocolPrepareParamKind(
+				mysqlType, isUnsigned, prepareStmt.params.GetRawBytesAt(i))
+			if kind != vector.PrepareParamNone {
+				if kinds == nil {
+					kinds = make([]vector.PrepareParamKind, paramCount)
+				}
+				kinds[i] = kind
+			}
+		}
+		if kinds == nil {
+			cwft.proc.SetPrepareParams(prepareStmt.params)
+		} else {
+			cwft.proc.SetPrepareParamsWithMeta(prepareStmt.params, nil, kinds)
+		}
 		cwft.paramVals, err = preparedParamValues(cwft.proc)
 		if err != nil {
 			return nil, nil, nil, originSQL, false, err
@@ -871,11 +932,11 @@ func initExecuteStmtParamWithResolverInSession(
 		if len(execPlan.Args) != numParams {
 			return nil, nil, nil, originSQL, false, moerr.NewInvalidInput(reqCtx, "Incorrect arguments to EXECUTE")
 		}
-		params, paramVals, paramIsBin, err := buildExecuteUserParams(cwft.proc, execPlan.Args)
+		params, paramVals, paramIsBin, paramKinds, err := buildExecuteUserParams(cwft.proc, execPlan.Args)
 		if err != nil {
 			return nil, nil, nil, originSQL, false, err
 		}
-		cwft.proc.SetOwnedPrepareParamsWithIsBin(params, paramIsBin)
+		cwft.proc.SetOwnedPrepareParamsWithMeta(params, paramIsBin, paramKinds)
 		cwft.paramVals = paramVals
 	} else {
 		if numParams > 0 {
@@ -1037,7 +1098,13 @@ func preparedParamValues(proc *process.Process) ([]any, error) {
 func buildExecuteUserParams(
 	proc *process.Process,
 	args []*plan.Expr,
-) (params *vector.Vector, paramVals []any, paramIsBin []bool, err error) {
+) (
+	params *vector.Vector,
+	paramVals []any,
+	paramIsBin []bool,
+	paramKinds []vector.PrepareParamKind,
+	err error,
+) {
 	params = vector.NewVec(types.T_text.ToType())
 	defer func() {
 		if err != nil {
@@ -1046,14 +1113,11 @@ func buildExecuteUserParams(
 	}()
 	paramVals = make([]any, len(args))
 	paramIsBin = make([]bool, len(args))
+	paramKinds = make([]vector.PrepareParamKind, len(args))
 	for i, arg := range args {
 		exprImpl := arg.Expr.(*plan.Expr_V)
 		var param any
 		param, err = proc.GetResolveVariableFunc()(exprImpl.V.Name, exprImpl.V.System, exprImpl.V.Global)
-		if err != nil {
-			return
-		}
-		err = util.AppendAnyToStringVector(proc, param, params)
 		if err != nil {
 			return
 		}
@@ -1063,6 +1127,19 @@ func buildExecuteUserParams(
 			if err != nil {
 				return
 			}
+		}
+		resolveKind := proc.GetResolveVariablePrepareParamKindFunc()
+		if resolveKind != nil {
+			paramKinds[i], err = resolveKind(exprImpl.V.Name, exprImpl.V.System, exprImpl.V.Global)
+			if err != nil {
+				return
+			}
+		} else {
+			paramKinds[i] = prepareParamKindFromValue(param)
+		}
+		err = util.AppendAnyToStringVector(proc, param, params)
+		if err != nil {
+			return
 		}
 		paramVals[i] = plan2.ParamValue{Value: param, IsBin: paramIsBin[i]}
 	}
@@ -1188,20 +1265,29 @@ func createCompile(
 			ctx, ses, ses.GetTxnCompileCtx(), stmt, forcePrepare)
 	})
 
-	if _, ok := stmt.(*tree.ExplainAnalyze); ok {
-		fill = func(bat *batch.Batch, crs *perfcounter.CounterSet) error { return nil }
-	}
-
-	if _, ok := stmt.(*tree.ExplainPhyPlan); ok {
-		fill = func(bat *batch.Batch, crs *perfcounter.CounterSet) error { return nil }
-	}
-
-	err = retCompile.Compile(execCtx.reqCtx, plan, fill)
+	err = retCompile.Compile(execCtx.reqCtx, plan, compileOutputCallback(stmt, fill))
 	if err != nil {
 		return
 	}
 	retCompile.SetOriginSQL(originSQL)
 	return
+}
+
+// EXPLAIN ANALYZE and EXPLAIN PHYPLAN execute the inner query only to collect
+// runtime data. Their result rows are constructed by the frontend after the
+// pipeline finishes, so inner-query batches must never reach the client output
+// callback. Apply the same rule both when compiling a fresh pipeline and when
+// resetting a cached prepared pipeline for another execution.
+func compileOutputCallback(
+	stmt tree.Statement,
+	fill func(*batch.Batch, *perfcounter.CounterSet) error,
+) func(*batch.Batch, *perfcounter.CounterSet) error {
+	switch stmt.(type) {
+	case *tree.ExplainAnalyze, *tree.ExplainPhyPlan:
+		return func(*batch.Batch, *perfcounter.CounterSet) error { return nil }
+	default:
+		return fill
+	}
 }
 
 func buildPlanForCompileRetry(

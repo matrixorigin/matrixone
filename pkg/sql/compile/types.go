@@ -21,6 +21,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	icebergapi "github.com/matrixorigin/matrixone/pkg/iceberg/api"
@@ -271,7 +272,9 @@ type Compile struct {
 
 	// fill is a result writer runs a callback function.
 	// fill will be called when result data is ready.
-	fill func(*batch.Batch, *perfcounter.CounterSet) error
+	fill                func(*batch.Batch, *perfcounter.CounterSet) error
+	resultSink          ResultSink
+	executionGeneration uint64
 	// affectRows stores the number of rows affected while insert / update / delete
 	affectRows *atomic.Uint64
 	// cn address
@@ -293,6 +296,10 @@ type Compile struct {
 
 	// proc stores the execution context.
 	proc *process.Process
+	// reusePlanSnapshot is set only when a retry recompiles pipelines from the
+	// same logical plan. Such a retry must retain the plan's original binding
+	// snapshot even if RC lock handling advanced the transaction snapshot.
+	reusePlanSnapshot bool
 	// runSqlToken tracks the current statement in txn operator coordination.
 	runSqlToken uint64
 	// TxnOffset read starting offset position within the transaction during the execute current statement
@@ -343,6 +350,14 @@ type Compile struct {
 	// resourceAttemptOwnerEligible is set only for the top-level statement
 	// Compile. The statement root still arbitrates the single actual owner.
 	resourceAttemptOwnerEligible bool
+	allocationAccountRegistry    *mpool.AllocationAccountRegistry
+	allocationAccountLimit       uint64
+	allocationControllerProvider func() (mpool.AllocationCapacityController, error)
+	allocationTerminalExporter   func(mpool.AllocationAccountTerminalSnapshot)
+	allocationAccountOwners      []executionAllocationAccountOwner
+	allocationAttempt            *statementAllocationAttempt
+	remoteFragmentCounts         map[string]uint32
+	remoteExecutionID            uuid.UUID
 	hasMergeOp                   bool
 
 	// ncpu set as system.GoRoutines() while NewCompile, instead of global static value.
@@ -373,6 +388,10 @@ type fuzzyCheck struct {
 
 	// handle with primary key(a, b, ...) or unique key (a, b, ...)
 	isCompound bool
+
+	// exactFloatKey means the pipeline carries serial(FLOAT/DOUBLE) rather than
+	// the scalar key. This preserves signed zero and NaN payload identity.
+	exactFloatKey bool
 
 	// handle with cases like create a unique index for existed table, or alter add unique key
 	// and the type of unique key is compound
