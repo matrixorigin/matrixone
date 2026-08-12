@@ -1614,7 +1614,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 			remapping.addColRef(globalRef)
 
 			node.ProjectList = append(node.ProjectList, &plan.Expr{
-				Typ: expr.Typ,
+				Typ: groupingFlagOutputType(expr.Typ, node.GroupingFlag, int32(idx)),
 				Expr: &plan.Expr_Col{
 					Col: &ColRef{
 						RelPos: -1,
@@ -1670,7 +1670,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 				remapping.addColRef(globalRef)
 
 				node.ProjectList = append(node.ProjectList, &plan.Expr{
-					Typ: node.GroupBy[0].Typ,
+					Typ: groupingFlagOutputType(node.GroupBy[0].Typ, node.GroupingFlag, 0),
 					Expr: &plan.Expr_Col{
 						Col: &plan.ColRef{
 							RelPos: -1,
@@ -4083,6 +4083,8 @@ func (builder *QueryBuilder) numericSetProjectionTypes(ctx *BindContext, stmts [
 const NameGroupConcat = "group_concat"
 const NameClusterCenters = "cluster_centers"
 const NameApproxPercentile = "approx_percentile"
+const NamePercentileCont = "percentile_cont"
+const NamePercentileDisc = "percentile_disc"
 
 func (builder *QueryBuilder) bindNoRecursiveCte(
 	ctx *BindContext,
@@ -4613,6 +4615,9 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 	ctx.windowTag = builder.genNewBindTag()
 	ctx.sampleTag = builder.genNewBindTag()
 	if astTimeWindow != nil {
+		if err = validateTimeWindowIntervalUnits(builder.GetContext(), astTimeWindow); err != nil {
+			return
+		}
 		ctx.timeTag = builder.genNewBindTag() // ctx.timeTag > 0
 		// GAPFILL uses the same second-stage aggregate state machine as an
 		// explicit sliding window even when its external SQL is a tumbling
@@ -7445,6 +7450,11 @@ func (builder *QueryBuilder) bindGroupBy(
 				ctx.groupingFlag[i] = true
 			}
 		}
+
+		// GROUPING() is meaningful only for grouping extensions. Apart marks an
+		// internally expanded ROLLUP/CUBE/GROUPING SETS branch; GroupingSets also
+		// covers the single-set form, which does not need branch expansion.
+		ctx.groupingFuncAllowed = clause.Apart || clause.Cube || clause.GroupingSets || clause.Rollup
 	}
 
 	if astTimeWindow != nil {
@@ -7552,6 +7562,10 @@ func (builder *QueryBuilder) bindTimeWindow(
 	boundTimeWindowOrderBy *plan.OrderBySpec,
 	err error,
 ) {
+	if err = validateTimeWindowIntervalUnits(builder.GetContext(), astTimeWindow); err != nil {
+		return
+	}
+
 	h := projectionBinder.havingBinder
 	col, err := ctx.qualifyColumnNames(astTimeWindow.Interval.Col, NoAlias)
 	if err != nil {
@@ -8888,6 +8902,36 @@ func makeHelpFuncForTimeWindow(astTimeWindow *tree.TimeWindow) (*helpFunc, error
 	return h, nil
 }
 
+const unsupportedTimeWindowIntervalUnit = "Time Window aggregate only support SECOND, MINUTE, HOUR, DAY as the time unit"
+
+func validateTimeWindowIntervalUnits(ctx context.Context, astTimeWindow *tree.TimeWindow) error {
+	if astTimeWindow == nil {
+		return nil
+	}
+	if err := validateTimeWindowIntervalUnit(ctx, astTimeWindow.Interval.Unit); err != nil {
+		return err
+	}
+	if astTimeWindow.Sliding != nil {
+		if err := validateTimeWindowIntervalUnit(ctx, astTimeWindow.Sliding.Unit); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validateTimeWindowIntervalUnit(ctx context.Context, unit string) error {
+	typ, err := types.IntervalTypeOf(unit)
+	if err != nil {
+		return err
+	}
+	switch typ {
+	case types.Second, types.Minute, types.Hour, types.Day:
+		return nil
+	default:
+		return moerr.NewNotSupported(ctx, unsupportedTimeWindowIntervalUnit)
+	}
+}
+
 func appendSelectList(
 	builder *QueryBuilder,
 	ctx *BindContext,
@@ -9551,6 +9595,14 @@ func (builder *QueryBuilder) bindView(
 			viewCtx.headings[i] = string(colName)
 		}
 	}
+	// Expanding a view removes the view catalog object from the executable
+	// scan nodes. Preserve that object's identity so every plan consumer,
+	// including the ordinary COM_QUERY cache, can validate the complete
+	// catalog dependency closure before reusing the expanded plan.
+	builder.qry.CatalogDependencies = appendPrepareSchemas(
+		builder.qry.CatalogDependencies,
+		prepareSchemaRefWithSnapshot(obj, tableDef, snapshot),
+	)
 	ctx.recordViews([]string{viewDependencyKey})
 	ctx.recordViews(viewCtx.views)
 	return
