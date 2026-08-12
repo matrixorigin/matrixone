@@ -2377,6 +2377,101 @@ func TestGetComputationWrapperRestoresStatementRemapOnPlanCacheHit(t *testing.T)
 	}
 }
 
+func TestRebuildStaleCachedStatementsTransfersOwnership(t *testing.T) {
+	for _, testCase := range []struct {
+		name             string
+		cachedSQL        string
+		rebuildSQL       string
+		wantRebuildError bool
+	}{
+		{name: "single statement", cachedSQL: "select 1"},
+		{name: "multiple statements", cachedSQL: "select 1; select 2"},
+		{
+			name:             "reparse error",
+			cachedSQL:        "select 1",
+			rebuildSQL:       "select from",
+			wantRebuildError: true,
+		},
+		{
+			name:             "statement count mismatch",
+			cachedSQL:        "select 1",
+			rebuildSQL:       "select 1; select 2",
+			wantRebuildError: true,
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			ctx := context.Background()
+			ctrl := gomock.NewController(t)
+			ses := newTestSession(t, ctrl)
+			ses.planCache = newPlanCache(2)
+			proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+			input := &UserInput{sql: testCase.cachedSQL}
+			input.genHash()
+
+			parsed, err := parsers.Parse(ctx, dialect.MYSQL, testCase.cachedSQL, 1)
+			require.NoError(t, err)
+			cachedStmts := make([]tree.Statement, len(parsed))
+			cachedPlans := make([]*plan.Plan, len(parsed))
+			tracked := make([]*trackedStatement, len(parsed))
+			for i := range parsed {
+				parsed[i].Free()
+				tracked[i] = &trackedStatement{}
+				cachedStmts[i] = tracked[i]
+				cachedPlans[i] = &plan.Plan{}
+			}
+			ses.cachePlan(input.getHash(), cachedStmts, cachedPlans)
+			t.Cleanup(ses.planCache.clean)
+
+			execCtx := newTestExecCtx(ctx, ctrl)
+			execCtx.ses = ses
+			execCtx.input = input
+			cws, err := GetComputationWrapper(execCtx, "", "root", nil, proc, ses)
+			require.NoError(t, err)
+			require.Len(t, cws, len(tracked))
+			t.Cleanup(func() {
+				for _, cw := range cws {
+					cw.Free()
+				}
+			})
+			execCtx.cws = cws
+			cacheBorrowed := make([]bool, len(cws))
+
+			for i, cw := range cws {
+				wrapper := cw.(*TxnComputationWrapper)
+				require.Same(t, tracked[i], wrapper.GetAst())
+				cacheBorrowed[i] = wrapper.stmtBorrowed
+			}
+
+			if testCase.rebuildSQL != "" {
+				// Preserve the cache key while varying only the stale-reparse
+				// outcome. This directly exercises cleanup after eviction.
+				input.sql = testCase.rebuildSQL
+			}
+			rebuildErr := rebuildStaleCachedStatements(ses, execCtx)
+			if testCase.wantRebuildError {
+				require.Error(t, rebuildErr)
+			} else {
+				require.NoError(t, rebuildErr)
+			}
+			require.False(t, ses.isCached(input.getHash()))
+			for i, cw := range cws {
+				wrapper := cw.(*TxnComputationWrapper)
+				require.Equal(t, 1, tracked[i].freed, "stale cached statement %d", i)
+				require.True(t, cacheBorrowed[i], "cache must own statement %d", i)
+				if testCase.wantRebuildError {
+					require.True(t, wrapper.stmtBorrowed)
+					require.Same(t, tracked[i], wrapper.GetAst())
+				} else {
+					require.False(t, wrapper.stmtBorrowed)
+					require.NotSame(t, tracked[i], wrapper.GetAst())
+				}
+				wrapper.Free()
+				require.Equal(t, 1, tracked[i].freed, "wrapper must not free stale statement %d again", i)
+			}
+		})
+	}
+}
+
 func TestPrepareStringStatementAppliesRemapPolicy(t *testing.T) {
 	ctx := context.Background()
 	ctrl := gomock.NewController(t)
@@ -7545,6 +7640,93 @@ func Test_checkModify(t *testing.T) {
 			assert.Nil(t, err)
 		}
 	}
+}
+
+func TestCheckModifyValidatesCatalogDependencies(t *testing.T) {
+	snapshot := &plan.Snapshot{
+		TS: &timestamp.Timestamp{PhysicalTime: 42, LogicalTime: 7},
+	}
+	dependency := &plan.ObjectRef{
+		SchemaName: "test_db",
+		ObjName:    "test_view",
+		Server:     3,
+		Obj:        20,
+		Snapshot:   snapshot,
+	}
+	queryPlan := &plan.Plan{
+		Plan: &plan.Plan_Query{
+			Query: &plan.Query{CatalogDependencies: []*plan.ObjectRef{dependency}},
+		},
+	}
+
+	for _, testCase := range []struct {
+		name            string
+		resolved        *plan.TableDef
+		expectedChanged bool
+	}{
+		{
+			name:            "unchanged",
+			resolved:        &plan.TableDef{Version: 3, TblId: 20},
+			expectedChanged: false,
+		},
+		{
+			name:            "missing",
+			expectedChanged: true,
+		},
+		{
+			name:            "version changed",
+			resolved:        &plan.TableDef{Version: 4, TblId: 20},
+			expectedChanged: true,
+		},
+		{
+			name:            "identity changed",
+			resolved:        &plan.TableDef{Version: 3, TblId: 21},
+			expectedChanged: true,
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			changed, err := checkModify(queryPlan, func(
+				databaseName string,
+				tableName string,
+				gotSnapshot *plan.Snapshot,
+			) (*plan.ObjectRef, *plan.TableDef, error) {
+				require.Equal(t, "test_db", databaseName)
+				require.Equal(t, "test_view", tableName)
+				require.Same(t, snapshot, gotSnapshot)
+				return nil, testCase.resolved, nil
+			})
+			require.NoError(t, err)
+			require.Equal(t, testCase.expectedChanged, changed)
+		})
+	}
+
+	t.Run("subscription uses logical database", func(t *testing.T) {
+		subscriptionDependency := &plan.ObjectRef{
+			SchemaName:       "publisher_physical_db",
+			SubscriptionName: "subscriber_alias",
+			ObjName:          "scanless_view",
+			Server:           3,
+			Obj:              20,
+		}
+		subscriptionPlan := &plan.Plan{
+			Plan: &plan.Plan_Query{
+				Query: &plan.Query{CatalogDependencies: []*plan.ObjectRef{subscriptionDependency}},
+			},
+		}
+
+		changed, err := checkModify(subscriptionPlan, func(
+			databaseName string,
+			tableName string,
+			gotSnapshot *plan.Snapshot,
+		) (*plan.ObjectRef, *plan.TableDef, error) {
+			require.Equal(t, "subscriber_alias", databaseName)
+			require.Equal(t, "scanless_view", tableName)
+			require.Nil(t, gotSnapshot)
+			return nil, &plan.TableDef{Version: 3, TblId: 20}, nil
+		})
+		require.NoError(t, err)
+		require.False(t, changed)
+	})
 }
 
 // testMysqlWriterWithError is a test mysql writer that can return error from ParseSendLongData
