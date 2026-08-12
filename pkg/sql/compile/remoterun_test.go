@@ -90,6 +90,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
@@ -3023,6 +3024,295 @@ func Test_prepareRemoteRunSendingData(t *testing.T) {
 	_, withoutOut, _, _, err = prepareRemoteRunSendingData("", s3, proc, nil, uuid.Nil)
 	require.NoError(t, err)
 	require.True(t, withoutOut)
+}
+
+func TestPrepareRemoteRunSendingDataPreservesBlockFilters(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	proc.Ctx = context.WithValue(proc.Ctx, defines.TenantIDKey{}, uint32(0))
+	proc.Base.TxnOperator = fakeTxnOperator{}
+	proc.Base.SessionInfo.TimeZone = time.UTC
+
+	int64Type := types.T_int64.ToType()
+	greaterEqual, err := planfunction.GetFunctionByName(
+		context.Background(), ">=", []types.Type{int64Type, int64Type})
+	require.NoError(t, err)
+	originalFilter := &planpb.Expr{
+		Typ: planpb.Type{Id: int32(types.T_bool), NotNullable: true},
+		Expr: &planpb.Expr_F{F: &planpb.Function{
+			Func: &planpb.ObjectRef{Obj: greaterEqual.GetEncodedOverloadID(), ObjName: ">="},
+			Args: []*planpb.Expr{
+				{
+					Typ:  planpb.Type{Id: int32(types.T_int64), NotNullable: true},
+					Expr: &planpb.Expr_Col{Col: &planpb.ColRef{Name: "a", ColPos: 0}},
+				},
+				plan.MakePlan2Int64ConstExprWithType(42),
+			},
+		}},
+	}
+	compiledFilter := plan.DeepCopyExpr(originalFilter)
+	var executors []colexec.ExpressionExecutor
+	t.Cleanup(func() {
+		for _, executor := range executors {
+			executor.Free()
+		}
+	})
+	_, err = plan.ReplaceFoldExpr(proc, compiledFilter, &executors)
+	require.NoError(t, err)
+	require.True(t, plan.HasFoldExprForList([]*planpb.Expr{compiledFilter}))
+	require.Nil(t, compiledFilter.GetF().Args[1].GetFold().Data)
+
+	s := &Scope{
+		Magic:  Remote,
+		Proc:   proc,
+		RootOp: value_scan.NewArgument(),
+		DataSource: &Source{
+			node: &planpb.Node{
+				BlockFilterList: []*planpb.Expr{originalFilter},
+			},
+			BlockFilterList: []*planpb.Expr{compiledFilter},
+		},
+	}
+
+	scopeData, _, _, _, err := prepareRemoteRunSendingData("", s, proc, nil, uuid.Nil)
+	require.NoError(t, err)
+	require.True(t, plan.HasFoldExprForList(s.DataSource.BlockFilterList))
+	require.Nil(t, compiledFilter.GetF().Args[1].GetFold().Data)
+	require.False(t, plan.HasFoldExprForList(s.DataSource.node.BlockFilterList))
+	restored, err := decodeScope(scopeData, proc, true, nil)
+	require.NoError(t, err)
+
+	require.Len(t, restored.DataSource.BlockFilterList, 1)
+	require.False(t, plan.HasFoldExprForList(restored.DataSource.BlockFilterList))
+	remoteCompile := &Compile{proc: restored.Proc}
+	t.Cleanup(func() {
+		for _, executor := range remoteCompile.filterExprExes {
+			executor.Free()
+		}
+	})
+	filters, err := restored.handleRuntimeFilters(remoteCompile, nil)
+	require.NoError(t, err)
+	require.Len(t, filters, 1)
+	require.True(t, plan.HasFoldExprForList(filters))
+	require.NotEmpty(t, filters[0].GetF().Args[1].GetFold().Data)
+	require.False(t, plan.HasFoldExprForList(restored.DataSource.BlockFilterList))
+	_, _, _, _, _, canCompile, _ := readutil.CompileFilterExprs(filters, &planpb.TableDef{
+		Cols: []*planpb.ColDef{{
+			Name:   "a",
+			Typ:    planpb.Type{Id: int32(types.T_int64)},
+			Seqnum: 0,
+		}},
+		Name2ColIndex: map[string]int32{"a": 0},
+	}, nil)
+	require.True(t, canCompile)
+
+	invalidRemote := &Scope{
+		IsRemote:   true,
+		Proc:       proc,
+		DataSource: &Source{BlockFilterList: []*planpb.Expr{compiledFilter}},
+	}
+	_, err = invalidRemote.handleRuntimeFilters(&Compile{proc: proc}, nil)
+	require.ErrorContains(t, err, "sender-owned Fold value")
+
+	legacyScope := &Scope{
+		Proc:   proc,
+		RootOp: value_scan.NewArgument(),
+		DataSource: &Source{
+			node: &planpb.Node{
+				BlockFilterList: []*planpb.Expr{plan.DeepCopyExpr(originalFilter)},
+			},
+		},
+	}
+	legacyScopeData, err := encodeScope(legacyScope)
+	require.NoError(t, err)
+	legacyRestored, err := decodeScope(legacyScopeData, proc, true, nil)
+	require.NoError(t, err)
+	require.Len(t, legacyRestored.DataSource.BlockFilterList, 1)
+	require.False(t, plan.HasFoldExprForList(legacyRestored.DataSource.BlockFilterList))
+	legacyCompile := &Compile{proc: legacyRestored.Proc}
+	t.Cleanup(func() {
+		for _, executor := range legacyCompile.filterExprExes {
+			executor.Free()
+		}
+	})
+	legacyFilters, err := legacyRestored.handleRuntimeFilters(legacyCompile, nil)
+	require.NoError(t, err)
+	require.Len(t, legacyFilters, 1)
+	require.True(t, plan.HasFoldExprForList(legacyFilters))
+
+	nestedFilter := plan.DeepCopyExpr(originalFilter)
+	_, err = plan.ReplaceFoldExpr(proc, nestedFilter, &executors)
+	require.NoError(t, err)
+	nested := &Scope{
+		Magic:  Remote,
+		Proc:   proc,
+		RootOp: value_scan.NewArgument(),
+		PreScopes: []*Scope{{
+			Proc:   proc,
+			RootOp: value_scan.NewArgument(),
+			DataSource: &Source{
+				node:            &planpb.Node{BlockFilterList: []*planpb.Expr{originalFilter}},
+				BlockFilterList: []*planpb.Expr{nestedFilter},
+			},
+		}},
+	}
+	nestedData, _, _, _, err := prepareRemoteRunSendingData("", nested, proc, nil, uuid.Nil)
+	require.NoError(t, err)
+	nestedRestored, err := decodeScope(nestedData, proc, true, nil)
+	require.NoError(t, err)
+	require.Len(t, nestedRestored.PreScopes, 1)
+	require.False(t, plan.HasFoldExprForList(nestedRestored.PreScopes[0].DataSource.BlockFilterList))
+	require.True(t, plan.HasFoldExprForList(nested.PreScopes[0].DataSource.BlockFilterList))
+}
+
+func TestPrepareRemoteRunSendingDataPreservesEmptyScalarBlockFilter(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	proc.Ctx = context.WithValue(proc.Ctx, defines.TenantIDKey{}, uint32(0))
+	proc.Base.TxnOperator = fakeTxnOperator{}
+	proc.Base.SessionInfo.TimeZone = time.UTC
+
+	varcharType := types.T_varchar.ToType()
+	equal, err := planfunction.GetFunctionByName(
+		context.Background(), "=", []types.Type{varcharType, varcharType})
+	require.NoError(t, err)
+	originalFilter := &planpb.Expr{
+		Typ: planpb.Type{Id: int32(types.T_bool), NotNullable: true},
+		Expr: &planpb.Expr_F{F: &planpb.Function{
+			Func: &planpb.ObjectRef{Obj: equal.GetEncodedOverloadID(), ObjName: "="},
+			Args: []*planpb.Expr{
+				{
+					Typ:  planpb.Type{Id: int32(types.T_varchar), NotNullable: true},
+					Expr: &planpb.Expr_Col{Col: &planpb.ColRef{Name: "a", ColPos: 0}},
+				},
+				plan.MakePlan2StringConstExprWithType(""),
+			},
+		}},
+	}
+	filter := plan.DeepCopyExpr(originalFilter)
+	var executors []colexec.ExpressionExecutor
+	t.Cleanup(func() {
+		for _, executor := range executors {
+			executor.Free()
+		}
+	})
+	_, err = plan.ReplaceFoldExpr(proc, filter, &executors)
+	require.NoError(t, err)
+	s := &Scope{
+		Magic:  Remote,
+		Proc:   proc,
+		RootOp: value_scan.NewArgument(),
+		DataSource: &Source{
+			node:            &planpb.Node{BlockFilterList: []*planpb.Expr{originalFilter}},
+			BlockFilterList: []*planpb.Expr{filter},
+		},
+	}
+	fold := filter.GetF().Args[1].GetFold()
+	require.False(t, fold.IsConst)
+	require.Nil(t, fold.Data)
+
+	scopeData, _, _, _, err := prepareRemoteRunSendingData("", s, proc, nil, uuid.Nil)
+	require.NoError(t, err)
+	restored, err := decodeScope(scopeData, proc, true, nil)
+	require.NoError(t, err)
+	require.False(t, plan.HasFoldExprForList(restored.DataSource.BlockFilterList))
+	restoredCompile := &Compile{proc: restored.Proc}
+	t.Cleanup(func() {
+		for _, executor := range restoredCompile.filterExprExes {
+			executor.Free()
+		}
+	})
+	filters, err := restored.handleRuntimeFilters(restoredCompile, nil)
+	require.NoError(t, err)
+	require.Len(t, filters, 1)
+	restoredFold := filters[0].GetF().Args[1].GetFold()
+	require.True(t, restoredFold.IsConst)
+	require.NotNil(t, restoredFold.Data)
+	require.Empty(t, restoredFold.Data)
+	_, _, _, _, _, canCompile, _ := readutil.CompileFilterExprs(filters, &planpb.TableDef{
+		Cols: []*planpb.ColDef{{
+			Name:   "a",
+			Typ:    planpb.Type{Id: int32(types.T_varchar)},
+			Seqnum: 0,
+		}},
+		Name2ColIndex: map[string]int32{"a": 0},
+	}, nil)
+	require.True(t, canCompile)
+}
+
+func TestPrepareRemoteRunSendingDataFoldsBlockFilterVariables(t *testing.T) {
+	proc := newResolveVariableProcess(t, "ANSI")
+	proc.Ctx = context.WithValue(proc.Ctx, defines.TenantIDKey{}, uint32(0))
+	proc.Base.TxnOperator = fakeTxnOperator{}
+	proc.Base.SessionInfo.TimeZone = time.UTC
+
+	textType := types.T_text.ToType()
+	equal, err := planfunction.GetFunctionByName(
+		context.Background(), "=", []types.Type{textType, textType})
+	require.NoError(t, err)
+	originalFilter := &planpb.Expr{
+		Typ: planpb.Type{Id: int32(types.T_bool), NotNullable: true},
+		Expr: &planpb.Expr_F{F: &planpb.Function{
+			Func: &planpb.ObjectRef{Obj: equal.GetEncodedOverloadID(), ObjName: "="},
+			Args: []*planpb.Expr{
+				{
+					Typ:  planpb.Type{Id: int32(types.T_text), NotNullable: true},
+					Expr: &planpb.Expr_Col{Col: &planpb.ColRef{Name: "a", ColPos: 0}},
+				},
+				makeTestVarExpr("sql_mode"),
+			},
+		}},
+	}
+	compiledFilter := plan.DeepCopyExpr(originalFilter)
+	var executors []colexec.ExpressionExecutor
+	t.Cleanup(func() {
+		for _, executor := range executors {
+			executor.Free()
+		}
+	})
+	_, err = plan.ReplaceFoldExpr(proc, compiledFilter, &executors)
+	require.NoError(t, err)
+
+	s := &Scope{
+		Magic:  Remote,
+		Proc:   proc,
+		RootOp: value_scan.NewArgument(),
+		DataSource: &Source{
+			node:            &planpb.Node{BlockFilterList: []*planpb.Expr{originalFilter}},
+			BlockFilterList: []*planpb.Expr{compiledFilter},
+		},
+	}
+	scopeData, _, _, folded, err := prepareRemoteRunSendingData("", s, proc, nil, uuid.Nil)
+	require.NoError(t, err)
+	require.True(t, folded)
+	require.True(t, containsVarExpr(originalFilter))
+
+	restored, err := decodeScope(scopeData, proc, true, nil)
+	require.NoError(t, err)
+	require.Len(t, restored.DataSource.BlockFilterList, 1)
+	require.False(t, containsVarExpr(restored.DataSource.BlockFilterList[0]))
+	require.Equal(t, "ANSI", restored.DataSource.BlockFilterList[0].GetF().Args[1].GetLit().GetSval())
+
+	// Remote processes do not carry the coordinator's variable resolver. The
+	// serialized block filter must therefore be self-contained before it builds
+	// receiver-owned Fold executors.
+	restored.Proc.SetResolveVariableFunc(nil)
+	remoteCompile := &Compile{proc: restored.Proc}
+	t.Cleanup(func() {
+		for _, executor := range remoteCompile.filterExprExes {
+			executor.Free()
+		}
+	})
+	filters, err := restored.handleRuntimeFilters(remoteCompile, nil)
+	require.NoError(t, err)
+	require.Len(t, filters, 1)
+	_, _, _, _, _, canCompile, _ := readutil.CompileFilterExprs(filters, &planpb.TableDef{
+		Cols: []*planpb.ColDef{{
+			Name:   "a",
+			Typ:    planpb.Type{Id: int32(types.T_text)},
+			Seqnum: 0,
+		}},
+		Name2ColIndex: map[string]int32{"a": 0},
+	}, nil)
+	require.True(t, canCompile)
 }
 
 func TestPrepareRemoteRunSendingDataKeepsConnectorChildTableFunctionParams(t *testing.T) {
