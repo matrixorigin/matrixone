@@ -643,12 +643,25 @@ func TestBindViewRecordsCompleteTableSnapshot(t *testing.T) {
 	}
 	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(false), true, false)
 	bindCtx := NewBindContext(builder, nil)
+	viewRef := &ObjectRef{
+		SchemaName: "db",
+		ObjName:    "v",
+		Obj:        20,
+	}
+	viewDef := &TableDef{
+		DbName:  "db",
+		Name:    "v",
+		DbId:    10,
+		TblId:   20,
+		Version: 30,
+		ViewSql: &planpb.ViewDef{View: string(viewJSON)},
+	}
 
 	_, err = builder.bindView(
 		bindCtx,
-		&TableDef{ViewSql: &planpb.ViewDef{View: string(viewJSON)}},
+		viewDef,
 		snapshot,
-		&ObjectRef{},
+		viewRef,
 		"db",
 		"v",
 	)
@@ -661,6 +674,15 @@ func TestBindViewRecordsCompleteTableSnapshot(t *testing.T) {
 	require.Equal(t, "v", viewName)
 	require.Equal(t, snapshot.TS, recorded.TS)
 	require.Equal(t, snapshot.Tenant, recorded.Tenant)
+	require.Len(t, builder.qry.GetCatalogDependencies(), 1)
+	dependency := builder.qry.GetCatalogDependencies()[0]
+	require.Equal(t, "db", dependency.GetSchemaName())
+	require.Equal(t, "v", dependency.GetObjName())
+	require.Equal(t, int64(10), dependency.GetDb())
+	require.Equal(t, int64(20), dependency.GetObj())
+	require.Equal(t, int64(30), dependency.GetServer())
+	require.Equal(t, snapshot, dependency.GetSnapshot())
+	require.NotSame(t, snapshot, dependency.GetSnapshot())
 
 	nodeID, err := builder.bindView(
 		NewBindContext(builder, nil),
