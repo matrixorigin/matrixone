@@ -62,6 +62,7 @@ var legacyKeywordPolicyExceptions = map[string]string{
 	"temporary":         "legacy parser behavior before incremental keyword policy",
 	"until":             "legacy parser behavior before incremental keyword policy",
 	"upgrade":           "legacy parser behavior before incremental keyword policy",
+	"within":            "contextual keyword: scanner returns WITHIN only for WITHIN GROUP, otherwise ID",
 }
 
 func TestNewKeywordsHaveExplicitIdentifierPolicy(t *testing.T) {

@@ -67,6 +67,8 @@ func TestAggregateExecutorIDs(t *testing.T) {
 		{"hll_add_agg", HLL_ADD_AGG, aggexec.AggIdOfHllAdd},
 		{"hll_merge_agg", HLL_MERGE_AGG, aggexec.AggIdOfHllMerge},
 		{"approx_percentile", APPROX_PERCENTILE, aggexec.AggIdOfApproxPercentile},
+		{"percentile_cont", PERCENTILE_CONT, aggexec.AggIdOfPercentileCont},
+		{"percentile_disc", PERCENTILE_DISC, aggexec.AggIdOfPercentileDisc},
 	}
 
 	for _, test := range tests {
@@ -735,9 +737,11 @@ var predefinedFunids = map[int]int{
 	UUID_V6:                       564,
 	UUID_EXTRACT_VERSION:          565,
 	UUID_EXTRACT_TIMESTAMP:        566,
+	PERCENTILE_CONT:               567,
+	PERCENTILE_DISC:               568,
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
-	FUNCTION_END_NUMBER: 567,
+	FUNCTION_END_NUMBER: 569,
 }
 
 func Test_funids(t *testing.T) {
